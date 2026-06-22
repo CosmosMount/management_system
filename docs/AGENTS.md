@@ -156,9 +156,9 @@
 文档应位于 [`docs/`](docs/) 目录，仅限以下文件：
 
 - [`docs/AGENTS.md`](AGENTS.md) 本文档，你的工作规范
-- [`docs/PLAN.md`](PLAN.md) 存储所有对项目的规划与设计，但不包含具体开发过程
-- [`docs/MEMORY.md`](MEMORY.md) 存储你对项目开发、debug的过程与记忆，防止后续开发遗忘
-- [`docs/USER.md`](USER.md) 给用户查看用，说明功能与所需进行的测试
+- [`docs/TECH.md`](TECH.md) 技术架构、数据模型与实现说明
+
+面向用户的使用说明写在根目录 [`README.md`](../README.md)。
 
 ---
 

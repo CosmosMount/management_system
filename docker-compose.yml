@@ -1,0 +1,33 @@
+services:
+  app:
+    build: .
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: file:/app/data/app.db
+      # 容器内监听全部网卡，供端口映射访问
+      HOSTNAME: 0.0.0.0
+    volumes:
+      - app-data:/app/data
+      - app-uploads:/app/public/uploads
+    restart: unless-stopped
+
+  cron:
+    build: .
+    entrypoint: ["/entrypoint.sh"]
+    command: ["npx", "tsx", "scripts/cron.ts"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: file:/app/data/app.db
+    volumes:
+      - app-data:/app/data
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  app-data:
+  app-uploads:
