@@ -1,0 +1,64 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+enum OrderStatus {
+  DRAFT
+  TECH_REVIEW
+  TEACHER_REVIEW
+  PENDING_REIMBURSE
+  REIMBURSING
+  COMPLETED
+}
+
+enum UserRoleType {
+  TECH
+  TEACHER
+  FINANCE
+}
+
+model User {
+  id        String          @id @default(uuid())
+  openId    String          @unique
+  name      String
+  avatar    String?
+  createdAt DateTime        @default(now())
+  orders    PurchaseOrder[]
+}
+
+model UserRole {
+  id     String       @id @default(uuid())
+  openId String       @unique
+  role   UserRoleType
+}
+
+model PurchaseOrder {
+  id             String         @id @default(uuid())
+  orderNo        String         @unique
+  initiatorId    String
+  initiator      User           @relation(fields: [initiatorId], references: [id])
+  initiatorName  String
+  team           String
+  techGroup      String
+  totalPrice     Float          @default(0)
+  invoicePath    String?
+  screenshotPath String?
+  status         OrderStatus    @default(DRAFT)
+  items          PurchaseItem[]
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+}
+
+model PurchaseItem {
+  id        String        @id @default(uuid())
+  orderId   String
+  order     PurchaseOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  name      String
+  spec      String
+  quantity  Int
+  unitPrice Float
+}
