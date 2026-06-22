@@ -38,6 +38,9 @@ export async function AppHeader() {
           <Link href="/progress" className={navLinkClass}>
             进度管理
           </Link>
+          <Link href="/profile" className={cn(navLinkClass, "hidden sm:inline")}>
+            个人设置
+          </Link>
           {showAdmin && (
             <Link href="/admin" className={navLinkClass}>
               权限管理

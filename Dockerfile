@@ -44,6 +44,7 @@ COPY --from=builder /app/prisma.config.ts ./
 COPY --from=builder /app/scripts ./scripts
 COPY --from=builder /app/lib ./lib
 COPY --from=builder /app/next.config.ts ./
+COPY --from=builder /app/templates ./templates
 
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh \

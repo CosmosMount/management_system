@@ -11,6 +11,8 @@ const INVOICE_TYPES = new Set([
   "image/jpg",
 ]);
 
+const PHOTO_TYPES = INVOICE_TYPES;
+
 const LIST_DOC_TYPES = new Set([
   "application/msword",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -23,6 +25,10 @@ const SCREENSHOT_TYPES = new Set([
   "image/jpeg",
   "image/jpg",
 ]);
+
+const SIGNATURE_TYPES = new Set(["image/png", "image/jpeg", "image/jpg"]);
+
+export const MAX_SIGNATURE_SIZE = 2 * 1024 * 1024;
 
 export async function saveUpload(
   orderId: string,
@@ -48,8 +54,31 @@ export async function saveUpload(
   return `/uploads/${orderId}/${filename}`;
 }
 
+/** 保存用户电子签名（覆盖旧文件） */
+export async function saveUserSignature(
+  openId: string,
+  file: File,
+): Promise<string> {
+  if (!SIGNATURE_TYPES.has(file.type)) {
+    throw new Error("电子签名仅支持 PNG/JPG 图片");
+  }
+  if (file.size > MAX_SIGNATURE_SIZE) {
+    throw new Error("签名图片不能超过 2MB");
+  }
+
+  const ext = path.extname(file.name) || ".png";
+  const dir = path.join(process.cwd(), "public", "uploads", "signatures", openId);
+  await mkdir(dir, { recursive: true });
+
+  const filename = `signature${ext}`;
+  const buffer = Buffer.from(await file.arrayBuffer());
+  await writeFile(path.join(dir, filename), buffer);
+  return `/uploads/signatures/${openId}/${filename}`;
+}
+
 export const uploadTypeSets = {
   invoice: INVOICE_TYPES,
+  itemPhoto: PHOTO_TYPES,
   listDoc: LIST_DOC_TYPES,
   screenshot: SCREENSHOT_TYPES,
 };

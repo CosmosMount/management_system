@@ -4,7 +4,10 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { confirmReimbursement } from "@/app/actions/confirmReimbursement";
-import { uploadApplicantDocs } from "@/app/actions/uploadApplicantDocs";
+import {
+  previewReimbursementListDoc,
+  uploadApplicantDocs,
+} from "@/app/actions/uploadApplicantDocs";
 import { uploadFinanceScreenshot } from "@/app/actions/uploadFinanceScreenshot";
 import { InlineAttachments } from "@/components/order-attachments";
 import {
@@ -152,17 +155,57 @@ function ApplicantDocsDialog({
       return;
     }
 
+    for (const item of items) {
+      const photoInput = form.querySelector(
+        `input[name="photo-${item.id}"]`,
+      ) as HTMLInputElement | null;
+      if (!photoInput?.files?.length) {
+        toast.error(`请为「${item.name}」上传实物照片`);
+        return;
+      }
+    }
+
     setLoading(true);
     try {
       const formData = new FormData(form);
       formData.set("orderId", orderId);
       formData.set("confirmedItems", JSON.stringify(confirmedItems));
       await uploadApplicantDocs(formData);
-      toast.success("凭证已提交，已通知报销员");
+      toast.success("凭证已提交，验收清单已自动生成");
       setOpen(false);
       onDone();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "操作失败");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handlePreview() {
+    if (confirmedItems.length === 0) {
+      toast.error("请先确认采购明细价格");
+      return;
+    }
+    setLoading(true);
+    try {
+      const result = await previewReimbursementListDoc({
+        orderId,
+        confirmedItems,
+      });
+      const blob = Uint8Array.from(atob(result.base64), (c) => c.charCodeAt(0));
+      const url = URL.createObjectURL(
+        new Blob([blob], {
+          type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        }),
+      );
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = result.fileName;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success("预览文件已下载（不含照片，提交后将嵌入照片）");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "生成失败");
     } finally {
       setLoading(false);
     }
@@ -181,13 +224,14 @@ function ApplicantDocsDialog({
         <DialogHeader>
           <DialogTitle>上传报销凭证</DialogTitle>
           <DialogDescription>
-            请核对采购明细价格后上传发票与 Word 清单
+            核对采购明细价格，为每行上传实物照片；系统将按学校模板自动生成 Word 验收清单
           </DialogDescription>
         </DialogHeader>
         <form id={`applicant-docs-${orderId}`} className="space-y-4">
           <PurchaseLineConfirm
             items={items}
             editable
+            showPhotoUpload
             onChange={setConfirmedItems}
           />
           <div className="space-y-2">
@@ -201,19 +245,14 @@ function ApplicantDocsDialog({
               required
             />
           </div>
-          <div className="space-y-2">
-            <Label htmlFor={`list-${orderId}`}>Word 清单</Label>
-            <Input
-              id={`list-${orderId}`}
-              name="listDoc"
-              type="file"
-              accept=".doc,.docx,.pdf"
-              required
-            />
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" disabled={loading} onClick={handlePreview}>
+              预览清单（不含照片）
+            </Button>
+            <Button type="button" disabled={loading} onClick={handleSubmit}>
+              提交给报销员
+            </Button>
           </div>
-          <Button type="button" disabled={loading} onClick={handleSubmit}>
-            提交给报销员
-          </Button>
         </form>
       </DialogContent>
     </Dialog>

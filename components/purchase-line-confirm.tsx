@@ -28,12 +28,14 @@ export type ConfirmedLineItem = {
 type Props = {
   items: PurchaseLineItem[];
   editable?: boolean;
+  showPhotoUpload?: boolean;
   onChange?: (items: ConfirmedLineItem[]) => void;
 };
 
 export function PurchaseLineConfirm({
   items,
   editable = false,
+  showPhotoUpload = false,
   onChange,
 }: Props) {
   const [lineTotals, setLineTotals] = useState<Record<string, number>>(() =>
@@ -83,6 +85,7 @@ export function PurchaseLineConfirm({
               <TableHead className="text-right">数量</TableHead>
               <TableHead className="text-right">行总价</TableHead>
               <TableHead className="text-right">单价</TableHead>
+              {showPhotoUpload && <TableHead>实物照片</TableHead>}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -112,6 +115,17 @@ export function PurchaseLineConfirm({
                 <TableCell className="text-right text-muted-foreground">
                   ¥{row.unitPrice.toFixed(2)}
                 </TableCell>
+                {showPhotoUpload && (
+                  <TableCell>
+                    <Input
+                      name={`photo-${row.id}`}
+                      type="file"
+                      accept=".png,.jpg,.jpeg,.pdf"
+                      className="h-8 max-w-48"
+                      required
+                    />
+                  </TableCell>
+                )}
               </TableRow>
             ))}
           </TableBody>

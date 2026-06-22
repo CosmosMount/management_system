@@ -82,12 +82,13 @@ enum ApprovalDecision {
 }
 
 model User {
-  id        String          @id @default(uuid())
-  openId    String          @unique
-  name      String
-  avatar    String?
-  createdAt DateTime        @default(now())
-  orders    PurchaseOrder[]
+  id            String          @id @default(uuid())
+  openId        String          @unique
+  name          String
+  avatar        String?
+  signaturePath String?
+  createdAt     DateTime        @default(now())
+  orders        PurchaseOrder[]
 }
 
 model UserRole {
@@ -130,6 +131,7 @@ model PurchaseItem {
   purchaseLink String        @default("")
   quantity     Int
   unitPrice    Float
+  photoPath    String?
 }
 
 model Project {

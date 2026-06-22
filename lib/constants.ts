@@ -19,3 +19,6 @@ export const TECH_GROUP_OPTIONS = [
 
 export type TeamOption = (typeof TEAM_OPTIONS)[number];
 export type TechGroupOption = (typeof TECH_GROUP_OPTIONS)[number];
+
+/** 验收清单 Word 模板单次生成上限（超出会自动扩行，直至该值） */
+export const MAX_REIMBURSEMENT_LIST_ROWS = 50;

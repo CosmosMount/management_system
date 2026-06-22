@@ -50,3 +50,4 @@ dev.db
 next-env.d.ts
 
 .cursor/
+.tmp*/

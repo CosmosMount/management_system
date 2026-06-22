@@ -175,6 +175,20 @@ npm run cron         # 启动定时任务（独立进程）
 - 单文件 20MB，Server Actions 总上限 100MB（`next.config.ts` 中 `serverActions.bodySizeLimit`）
 - **无访问鉴权**，适用于本地/内网可信环境
 
+### 验收清单自动生成
+
+采购人上传凭证时，系统根据 `templates/material-acceptance-list-base.docx`（由学校官方模板转换）自动填充表格、**电子签名图片**与日期，并按明细行数扩表；有实物照片时嵌入清单末尾照片区。
+
+- 签名来源：用户在「个人设置」上传的 PNG/JPG（`User.signaturePath`）
+- 验收人 1/2：对应车组、技术组组长；领用人：采购发起人
+- 正式提交凭证前校验三方均已上传签名；预览可不含签名
+
+- 实现：`lib/generate-reimbursement-docx.ts`（docxtemplater + image module）
+- 模板源文件：`templates/material-acceptance-list-source.docx`
+- 生成用 base 模板：`templates/material-acceptance-list-base.docx`（`npm run prepare:template` 产出）
+- 更新官方模板后运行：`npm run prepare:template`
+- 明细最多 50 行（与 Word 模板行数一致，超出会自动扩行直至该上限）
+
 ## 定时任务
 
 `scripts/cron.ts` 使用 `node-cron`：

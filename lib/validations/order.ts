@@ -1,4 +1,4 @@
-import { TEAM_OPTIONS, TECH_GROUP_OPTIONS } from "@/lib/constants";
+import { TEAM_OPTIONS, TECH_GROUP_OPTIONS, MAX_REIMBURSEMENT_LIST_ROWS } from "@/lib/constants";
 import { z } from "zod";
 
 export const purchaseItemSchema = z.object({
@@ -22,7 +22,13 @@ export function toStoredPurchaseItem(item: PurchaseItemInput) {
 export const createOrderSchema = z.object({
   team: z.enum(TEAM_OPTIONS, { message: "请选择车组" }),
   techGroup: z.enum(TECH_GROUP_OPTIONS, { message: "请选择技术组" }),
-  items: z.array(purchaseItemSchema).min(1, "至少添加一条明细"),
+  items: z
+    .array(purchaseItemSchema)
+    .min(1, "至少添加一条明细")
+    .max(
+      MAX_REIMBURSEMENT_LIST_ROWS,
+      `明细最多 ${MAX_REIMBURSEMENT_LIST_ROWS} 行（验收清单上限）`,
+    ),
   submit: z.boolean(),
 });
 
