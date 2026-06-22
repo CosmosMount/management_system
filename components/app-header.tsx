@@ -1,7 +1,12 @@
 import { auth, signOut } from "@/lib/auth";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { APP_NAME } from "@/lib/branding";
 import { isSuperAdmin } from "@/lib/permissions";
+import { cn } from "@/lib/utils";
+
+const navLinkClass =
+  "text-sm text-muted-foreground transition-colors hover:text-foreground";
 
 export async function AppHeader() {
   const session = await auth();
@@ -9,29 +14,29 @@ export async function AppHeader() {
     !!session?.user?.openId && (await isSuperAdmin(session.user.openId));
 
   return (
-    <header className="border-b bg-background">
-      <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
-        <nav className="flex items-center gap-4">
-          <Link href="/orders" className="font-semibold">
-            采购报销系统
-          </Link>
+    <header className="sticky top-0 z-50 border-b border-border/60 bg-background/80 backdrop-blur-md">
+      <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4">
+        <nav className="flex items-center gap-1 sm:gap-4">
           <Link
-            href="/apply"
-            className="text-sm text-muted-foreground hover:text-foreground"
+            href="/"
+            className="mr-2 font-semibold tracking-tight text-foreground"
           >
+            {APP_NAME}
+          </Link>
+          <Link href="/" className={cn(navLinkClass, "hidden sm:inline")}>
+            首页
+          </Link>
+          <Link href="/apply" className={navLinkClass}>
             新建申请
           </Link>
-          <Link
-            href="/orders"
-            className="text-sm text-muted-foreground hover:text-foreground"
-          >
+          <Link href="/orders" className={navLinkClass}>
             订单列表
           </Link>
+          <Link href="/dashboard" className={navLinkClass}>
+            看板
+          </Link>
           {showAdmin && (
-            <Link
-              href="/admin"
-              className="text-sm text-muted-foreground hover:text-foreground"
-            >
+            <Link href="/admin" className={navLinkClass}>
               权限管理
             </Link>
           )}
@@ -43,10 +48,10 @@ export async function AppHeader() {
               <img
                 src={session.user.image}
                 alt={session.user.name ?? ""}
-                className="h-8 w-8 rounded-full"
+                className="h-8 w-8 rounded-full ring-2 ring-primary/10"
               />
             )}
-            <span className="text-sm">{session.user.name}</span>
+            <span className="hidden text-sm sm:inline">{session.user.name}</span>
             <form
               action={async () => {
                 "use server";

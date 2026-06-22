@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
+import { APP_NAME, APP_TAGLINE } from "@/lib/branding";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -14,8 +15,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "采购报销系统",
-  description: "采购申请与报销审批管理",
+  title: APP_NAME,
+  description: APP_TAGLINE,
 };
 
 export default function RootLayout({

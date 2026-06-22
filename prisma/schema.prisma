@@ -65,11 +65,12 @@ model PurchaseOrder {
 }
 
 model PurchaseItem {
-  id        String        @id @default(uuid())
-  orderId   String
-  order     PurchaseOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  name      String
-  spec      String
-  quantity  Int
-  unitPrice Float
+  id           String        @id @default(uuid())
+  orderId      String
+  order        PurchaseOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  name         String
+  spec         String
+  purchaseLink String        @default("")
+  quantity     Int
+  unitPrice    Float
 }

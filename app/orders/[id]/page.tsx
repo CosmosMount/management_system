@@ -5,6 +5,8 @@ import { AppHeader } from "@/components/app-header";
 import { OrderActions } from "@/components/order-actions";
 import { OrderAttachmentsCard } from "@/components/order-attachments";
 import { OrderReimbursementActions } from "@/components/order-reimbursement-actions";
+import { PageShell } from "@/components/page-shell";
+import { PageTitle } from "@/components/page-title";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -68,17 +70,18 @@ export default async function OrderDetailPage({ params }: Props) {
   return (
     <>
       <AppHeader />
-      <main className="mx-auto max-w-4xl flex-1 space-y-6 p-4 py-8">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <Link
-              href="/orders"
-              className="text-sm text-muted-foreground hover:underline"
-            >
-              ← 返回列表
-            </Link>
-            <h1 className="mt-2 text-2xl font-bold">{order.orderNo}</h1>
-          </div>
+      <PageShell>
+        <main className="mx-auto max-w-4xl flex-1 space-y-6 p-4 py-8">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <Link
+                href="/orders"
+                className="text-sm text-muted-foreground hover:text-primary hover:underline"
+              >
+                ← 返回列表
+              </Link>
+              <PageTitle subtitle={`订单 ${order.orderNo}`} />
+            </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
             <Badge>{statusLabels[order.status]}</Badge>
             <OrderActions
@@ -90,7 +93,13 @@ export default async function OrderDetailPage({ params }: Props) {
             />
             <OrderReimbursementActions
               orderId={order.id}
-              totalPrice={order.totalPrice}
+              items={order.items.map((item) => ({
+                id: item.id,
+                name: item.name,
+                spec: item.spec,
+                quantity: item.quantity,
+                unitPrice: item.unitPrice,
+              }))}
               status={order.status}
               orderScope={orderScope}
               userRoles={userRoles}
@@ -159,6 +168,7 @@ export default async function OrderDetailPage({ params }: Props) {
                 <TableRow>
                   <TableHead>物品名称</TableHead>
                   <TableHead>规格</TableHead>
+                  <TableHead>购买链接</TableHead>
                   <TableHead>数量</TableHead>
                   <TableHead>单价</TableHead>
                   <TableHead>小计</TableHead>
@@ -169,6 +179,20 @@ export default async function OrderDetailPage({ params }: Props) {
                   <TableRow key={item.id}>
                     <TableCell>{item.name}</TableCell>
                     <TableCell>{item.spec}</TableCell>
+                    <TableCell>
+                      {item.purchaseLink ? (
+                        <a
+                          href={item.purchaseLink}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-primary hover:underline"
+                        >
+                          查看链接
+                        </a>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
                     <TableCell>{item.quantity}</TableCell>
                     <TableCell>¥{item.unitPrice.toFixed(2)}</TableCell>
                     <TableCell>
@@ -180,7 +204,8 @@ export default async function OrderDetailPage({ params }: Props) {
             </Table>
           </CardContent>
         </Card>
-      </main>
+        </main>
+      </PageShell>
     </>
   );
 }

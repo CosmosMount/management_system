@@ -1,6 +1,8 @@
 import { redirect } from "next/navigation";
 import { AppHeader } from "@/components/app-header";
 import { AdminPanel } from "@/components/admin-panel";
+import { PageShell } from "@/components/page-shell";
+import { PageTitle } from "@/components/page-title";
 import { auth } from "@/lib/auth";
 import { isSuperAdmin } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
@@ -11,7 +13,7 @@ export default async function AdminPage() {
     redirect("/login");
   }
   if (!(await isSuperAdmin(session.user.openId))) {
-    redirect("/orders");
+    redirect("/");
   }
 
   const [users, roles] = await Promise.all([
@@ -22,20 +24,22 @@ export default async function AdminPage() {
   return (
     <>
       <AppHeader />
-      <main className="mx-auto max-w-6xl flex-1 p-4 py-8">
-        <h1 className="mb-6 text-2xl font-bold">权限管理</h1>
-        <AdminPanel
-          users={users.map((u) => ({
-            ...u,
-            createdAt: u.createdAt.toISOString(),
-          }))}
-          roles={roles.map((r) => ({
-            ...r,
-            team: r.team ?? "",
-            techGroup: r.techGroup ?? "",
-          }))}
-        />
-      </main>
+      <PageShell>
+        <main className="mx-auto max-w-6xl flex-1 p-4 py-8">
+          <PageTitle subtitle="权限管理" />
+          <AdminPanel
+            users={users.map((u) => ({
+              ...u,
+              createdAt: u.createdAt.toISOString(),
+            }))}
+            roles={roles.map((r) => ({
+              ...r,
+              team: r.team ?? "",
+              techGroup: r.techGroup ?? "",
+            }))}
+          />
+        </main>
+      </PageShell>
     </>
   );
 }

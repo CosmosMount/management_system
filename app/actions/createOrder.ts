@@ -8,6 +8,7 @@ import { generateOrderNo } from "@/lib/order-no";
 import { prisma } from "@/lib/prisma";
 import {
   createOrderSchema,
+  toStoredPurchaseItem,
   type CreateOrderInput,
 } from "@/lib/validations/order";
 
@@ -25,10 +26,8 @@ export async function createOrder(input: CreateOrderInput) {
     throw new Error("用户不存在");
   }
 
-  const totalPrice = parsed.items.reduce(
-    (sum, item) => sum + item.quantity * item.unitPrice,
-    0,
-  );
+  const storedItems = parsed.items.map(toStoredPurchaseItem);
+  const totalPrice = parsed.items.reduce((sum, item) => sum + item.lineTotal, 0);
   const orderNo = await generateOrderNo();
   const status = parsed.submit
     ? OrderStatus.MANAGEMENT_REVIEW
@@ -45,12 +44,7 @@ export async function createOrder(input: CreateOrderInput) {
         totalPrice,
         status,
         items: {
-          create: parsed.items.map((item) => ({
-            name: item.name,
-            spec: item.spec,
-            quantity: item.quantity,
-            unitPrice: item.unitPrice,
-          })),
+          create: storedItems,
         },
       },
       include: { items: true },
@@ -71,6 +65,8 @@ export async function createOrder(input: CreateOrderInput) {
     });
   }
 
+  revalidatePath("/");
   revalidatePath("/orders");
+  revalidatePath("/dashboard");
   return order;
 }

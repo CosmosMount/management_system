@@ -42,6 +42,7 @@ export type OrderRow = {
     id: string;
     name: string;
     spec: string;
+    purchaseLink: string;
     quantity: number;
     unitPrice: number;
   }[];
@@ -140,7 +141,13 @@ export function OrdersTable({ orders, userRoles, userOpenId }: Props) {
                   />
                   <OrderReimbursementActions
                     orderId={order.id}
-                    totalPrice={order.totalPrice}
+                    items={order.items.map((item) => ({
+                      id: item.id,
+                      name: item.name,
+                      spec: item.spec,
+                      quantity: item.quantity,
+                      unitPrice: item.unitPrice,
+                    }))}
                     status={order.status}
                     orderScope={orderScope}
                     userRoles={userRoles}
@@ -161,6 +168,7 @@ export function OrdersTable({ orders, userRoles, userOpenId }: Props) {
                           <TableRow>
                             <TableHead>物品名称</TableHead>
                             <TableHead>规格</TableHead>
+                            <TableHead>购买链接</TableHead>
                             <TableHead>数量</TableHead>
                             <TableHead>单价</TableHead>
                             <TableHead>小计</TableHead>
@@ -171,6 +179,20 @@ export function OrdersTable({ orders, userRoles, userOpenId }: Props) {
                             <TableRow key={item.id}>
                               <TableCell>{item.name}</TableCell>
                               <TableCell>{item.spec}</TableCell>
+                              <TableCell>
+                                {item.purchaseLink ? (
+                                  <a
+                                    href={item.purchaseLink}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-primary hover:underline"
+                                  >
+                                    链接
+                                  </a>
+                                ) : (
+                                  "—"
+                                )}
+                              </TableCell>
                               <TableCell>{item.quantity}</TableCell>
                               <TableCell>¥{item.unitPrice.toFixed(2)}</TableCell>
                               <TableCell>

@@ -1,12 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { confirmReimbursement } from "@/app/actions/confirmReimbursement";
 import { uploadApplicantDocs } from "@/app/actions/uploadApplicantDocs";
 import { uploadFinanceScreenshot } from "@/app/actions/uploadFinanceScreenshot";
 import { InlineAttachments } from "@/components/order-attachments";
+import {
+  PurchaseLineConfirm,
+  type ConfirmedLineItem,
+  type PurchaseLineItem,
+} from "@/components/purchase-line-confirm";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -30,7 +35,7 @@ import {
 
 type Props = {
   orderId: string;
-  totalPrice: number;
+  items: PurchaseLineItem[];
   status: OrderStatus;
   orderScope: OrderScope;
   userRoles: UserRoleRecord[];
@@ -42,7 +47,7 @@ type Props = {
 
 export function OrderReimbursementActions({
   orderId,
-  totalPrice,
+  items,
   status,
   orderScope,
   userRoles,
@@ -72,25 +77,12 @@ export function OrderReimbursementActions({
 
   if (!showApplicant && !showFinance && !showConfirm) return null;
 
-  async function handleConfirm() {
-    setLoading(true);
-    try {
-      await confirmReimbursement(orderId);
-      toast.success("已确认，报销流程完成");
-      router.refresh();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "操作失败");
-    } finally {
-      setLoading(false);
-    }
-  }
-
   return (
     <div className="flex flex-wrap gap-2">
       {showApplicant && (
         <ApplicantDocsDialog
           orderId={orderId}
-          totalPrice={totalPrice}
+          items={items}
           loading={loading}
           setLoading={setLoading}
           onDone={() => router.refresh()}
@@ -107,9 +99,13 @@ export function OrderReimbursementActions({
         />
       )}
       {showConfirm && (
-        <Button size="sm" disabled={loading} onClick={handleConfirm}>
-          确认报销
-        </Button>
+        <ConfirmReimbursementDialog
+          orderId={orderId}
+          items={items}
+          loading={loading}
+          setLoading={setLoading}
+          onDone={() => router.refresh()}
+        />
       )}
     </div>
   );
@@ -117,19 +113,33 @@ export function OrderReimbursementActions({
 
 function ApplicantDocsDialog({
   orderId,
-  totalPrice,
+  items,
   loading,
   setLoading,
   onDone,
 }: {
   orderId: string;
-  totalPrice: number;
+  items: PurchaseLineItem[];
   loading: boolean;
   setLoading: (v: boolean) => void;
   onDone: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [price, setPrice] = useState(totalPrice);
+  const [confirmedItems, setConfirmedItems] = useState<ConfirmedLineItem[]>(
+    [],
+  );
+
+  useEffect(() => {
+    if (open) {
+      setConfirmedItems(
+        items.map((item) => ({
+          id: item.id,
+          lineTotal:
+            Math.round(item.quantity * item.unitPrice * 100) / 100,
+        })),
+      );
+    }
+  }, [open, items]);
 
   async function handleSubmit() {
     const form = document.getElementById(
@@ -137,11 +147,16 @@ function ApplicantDocsDialog({
     ) as HTMLFormElement | null;
     if (!form) return;
 
+    if (confirmedItems.length === 0) {
+      toast.error("请确认采购明细价格");
+      return;
+    }
+
     setLoading(true);
     try {
       const formData = new FormData(form);
       formData.set("orderId", orderId);
-      formData.set("totalPrice", String(price));
+      formData.set("confirmedItems", JSON.stringify(confirmedItems));
       await uploadApplicantDocs(formData);
       toast.success("凭证已提交，已通知报销员");
       setOpen(false);
@@ -162,25 +177,19 @@ function ApplicantDocsDialog({
           </Button>
         }
       />
-      <DialogContent className="max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>上传报销凭证</DialogTitle>
           <DialogDescription>
-            可上传多张发票（每张不超过 20MB）与一份 Word 清单，提交后由报销员处理
+            请核对采购明细价格后上传发票与 Word 清单
           </DialogDescription>
         </DialogHeader>
         <form id={`applicant-docs-${orderId}`} className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor={`price-${orderId}`}>总价</Label>
-            <Input
-              id={`price-${orderId}`}
-              type="number"
-              min={0}
-              step="0.01"
-              value={price}
-              onChange={(e) => setPrice(Number(e.target.value))}
-            />
-          </div>
+          <PurchaseLineConfirm
+            items={items}
+            editable
+            onChange={setConfirmedItems}
+          />
           <div className="space-y-2">
             <Label htmlFor={`invoices-${orderId}`}>发票（可多选）</Label>
             <Input
@@ -206,6 +215,56 @@ function ApplicantDocsDialog({
             提交给报销员
           </Button>
         </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ConfirmReimbursementDialog({
+  orderId,
+  items,
+  loading,
+  setLoading,
+  onDone,
+}: {
+  orderId: string;
+  items: PurchaseLineItem[];
+  loading: boolean;
+  setLoading: (v: boolean) => void;
+  onDone: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  async function handleConfirm() {
+    setLoading(true);
+    try {
+      await confirmReimbursement(orderId);
+      toast.success("已确认，报销流程完成");
+      setOpen(false);
+      onDone();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "操作失败");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger
+        render={<Button size="sm">确认报销</Button>}
+      />
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>确认报销</DialogTitle>
+          <DialogDescription>
+            请核对以下采购明细价格，确认无误后完成报销
+          </DialogDescription>
+        </DialogHeader>
+        <PurchaseLineConfirm items={items} />
+        <Button disabled={loading} onClick={handleConfirm}>
+          确认无误，完成报销
+        </Button>
       </DialogContent>
     </Dialog>
   );

@@ -13,7 +13,7 @@ export default middlewareAuth((req) => {
 
   if (isPublic) {
     if (isLoggedIn && pathname === "/login") {
-      return NextResponse.redirect(new URL("/orders", req.nextUrl));
+      return NextResponse.redirect(new URL("/", req.nextUrl));
     }
     return NextResponse.next();
   }

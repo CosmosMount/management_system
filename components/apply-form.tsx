@@ -39,7 +39,7 @@ export function ApplyForm() {
     defaultValues: {
       team: undefined,
       techGroup: undefined,
-      items: [{ name: "", spec: "", quantity: 1, unitPrice: 0 }],
+      items: [{ name: "", spec: "", purchaseLink: "", quantity: 1, lineTotal: 0 }],
       submit: true,
     },
   });
@@ -51,7 +51,7 @@ export function ApplyForm() {
 
   const items = form.watch("items");
   const totalPrice = items.reduce(
-    (sum, item) => sum + (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0),
+    (sum, item) => sum + (Number(item.lineTotal) || 0),
     0,
   );
 
@@ -148,7 +148,13 @@ export function ApplyForm() {
             variant="outline"
             size="sm"
             onClick={() =>
-              append({ name: "", spec: "", quantity: 1, unitPrice: 0 })
+              append({
+                name: "",
+                spec: "",
+                purchaseLink: "",
+                quantity: 1,
+                lineTotal: 0,
+              })
             }
           >
             <Plus className="mr-1 h-4 w-4" />
@@ -159,7 +165,7 @@ export function ApplyForm() {
           {fields.map((field, index) => (
             <div
               key={field.id}
-              className="grid gap-3 rounded-lg border p-4 sm:grid-cols-5"
+              className="grid gap-3 rounded-lg border border-border/60 bg-muted/30 p-4 sm:grid-cols-6"
             >
               <div className="space-y-2 sm:col-span-2">
                 <Label>物品名称</Label>
@@ -168,6 +174,13 @@ export function ApplyForm() {
               <div className="space-y-2 sm:col-span-2">
                 <Label>规格</Label>
                 <Input {...form.register(`items.${index}.spec`)} />
+              </div>
+              <div className="space-y-2 sm:col-span-2">
+                <Label>购买链接</Label>
+                <Input
+                  placeholder="https://"
+                  {...form.register(`items.${index}.purchaseLink`)}
+                />
               </div>
               <div className="space-y-2">
                 <Label>数量</Label>
@@ -180,17 +193,27 @@ export function ApplyForm() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>单价</Label>
+                <Label>行总价</Label>
                 <Input
                   type="number"
                   min={0}
                   step="0.01"
-                  {...form.register(`items.${index}.unitPrice`, {
+                  {...form.register(`items.${index}.lineTotal`, {
                     valueAsNumber: true,
                   })}
                 />
               </div>
-              <div className="flex items-end sm:col-span-5">
+              <div className="space-y-2 sm:col-span-6">
+                <p className="text-sm text-muted-foreground">
+                  单价（自动计算）：¥
+                  {(() => {
+                    const qty = Number(items[index]?.quantity) || 0;
+                    const total = Number(items[index]?.lineTotal) || 0;
+                    return qty > 0 ? (total / qty).toFixed(2) : "0.00";
+                  })()}
+                </p>
+              </div>
+              <div className="flex items-end sm:col-span-6">
                 <Button
                   type="button"
                   variant="ghost"

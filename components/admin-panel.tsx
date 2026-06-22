@@ -200,7 +200,7 @@ export function AdminPanel({ users, roles }: Props) {
               {TEAM_OPTIONS.map((team) => (
                 <TableRow key={team}>
                   <TableCell className="font-medium">{team}</TableCell>
-                  <TableCell>
+                  <TableCell className="min-w-[14rem]">
                     <RoleCell
                       entries={teamRoles(team, "TEAM_ADMIN")}
                       users={users}
@@ -211,7 +211,7 @@ export function AdminPanel({ users, roles }: Props) {
                       onQuickAssign={handleQuickAssign}
                     />
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="min-w-[14rem]">
                     <RoleCell
                       entries={teamRoles(team, "FINANCE")}
                       users={users}
@@ -248,7 +248,7 @@ export function AdminPanel({ users, roles }: Props) {
               {TECH_GROUP_OPTIONS.map((techGroup) => (
                 <TableRow key={techGroup}>
                   <TableCell className="font-medium">{techGroup}</TableCell>
-                  <TableCell>
+                  <TableCell className="min-w-[14rem]">
                     <TechGroupRoleCell
                       entries={techGroupRoles(techGroup, "TECH_GROUP_ADMIN")}
                       users={users}
@@ -454,6 +454,44 @@ export function AdminPanel({ users, roles }: Props) {
   );
 }
 
+function UserChip({
+  user,
+  pending,
+  onRemove,
+}: {
+  user?: AdminUser;
+  pending: boolean;
+  onRemove: () => void;
+}) {
+  const displayName = user?.name ?? "未知用户";
+
+  return (
+    <div className="inline-flex items-center gap-2 rounded-full border bg-background py-1 pl-1 pr-2 shadow-sm">
+      {user?.avatar ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={user.avatar}
+          alt={displayName}
+          className="h-7 w-7 rounded-full object-cover"
+        />
+      ) : (
+        <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-xs font-medium text-primary">
+          {displayName.slice(0, 1)}
+        </div>
+      )}
+      <span className="max-w-[8rem] truncate text-sm">{displayName}</span>
+      <button
+        type="button"
+        className="rounded-full p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+        disabled={pending}
+        onClick={onRemove}
+      >
+        <X className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
+}
+
 function TechGroupRoleCell({
   entries,
   users,
@@ -478,28 +516,13 @@ function TechGroupRoleCell({
   }
 
   return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap gap-1">
-        {entries.map((entry) => (
-          <Badge key={entry.id} variant="outline" className="gap-1">
-            {users.find((u) => u.openId === entry.openId)?.name ?? entry.openId}
-            <button
-              type="button"
-              className="rounded hover:bg-muted"
-              disabled={pending}
-              onClick={() => onRemove(entry.id)}
-            >
-              <X className="h-3 w-3" />
-            </button>
-          </Badge>
-        ))}
-      </div>
-      <div className="flex gap-1">
+    <div className="flex min-h-[2.5rem] items-center justify-between gap-4">
+      <div className="flex shrink-0 items-center gap-1">
         <Select
           value={addOpenId}
           onValueChange={(v) => setAddOpenId(v ?? "")}
         >
-          <SelectTrigger className="h-7 w-28" size="sm">
+          <SelectTrigger className="h-8 w-28" size="sm">
             <SelectValue placeholder="添加" />
           </SelectTrigger>
           <SelectContent>
@@ -519,6 +542,16 @@ function TechGroupRoleCell({
         >
           确定
         </Button>
+      </div>
+      <div className="flex flex-1 flex-wrap items-center justify-end gap-2">
+        {entries.map((entry) => (
+          <UserChip
+            key={entry.id}
+            user={users.find((u) => u.openId === entry.openId)}
+            pending={pending}
+            onRemove={() => onRemove(entry.id)}
+          />
+        ))}
       </div>
     </div>
   );
@@ -550,28 +583,13 @@ function RoleCell({
   }
 
   return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap gap-1">
-        {entries.map((entry) => (
-          <Badge key={entry.id} variant="outline" className="gap-1">
-            {users.find((u) => u.openId === entry.openId)?.name ?? entry.openId}
-            <button
-              type="button"
-              className="rounded hover:bg-muted"
-              disabled={pending}
-              onClick={() => onRemove(entry.id)}
-            >
-              <X className="h-3 w-3" />
-            </button>
-          </Badge>
-        ))}
-      </div>
-      <div className="flex gap-1">
+    <div className="flex min-h-[2.5rem] items-center justify-between gap-4">
+      <div className="flex shrink-0 items-center gap-1">
         <Select
           value={addOpenId}
           onValueChange={(v) => setAddOpenId(v ?? "")}
         >
-          <SelectTrigger className="h-7 w-28" size="sm">
+          <SelectTrigger className="h-8 w-28" size="sm">
             <SelectValue placeholder="添加" />
           </SelectTrigger>
           <SelectContent>
@@ -591,6 +609,16 @@ function RoleCell({
         >
           确定
         </Button>
+      </div>
+      <div className="flex flex-1 flex-wrap items-center justify-end gap-2">
+        {entries.map((entry) => (
+          <UserChip
+            key={entry.id}
+            user={users.find((u) => u.openId === entry.openId)}
+            pending={pending}
+            onRemove={() => onRemove(entry.id)}
+          />
+        ))}
       </div>
     </div>
   );

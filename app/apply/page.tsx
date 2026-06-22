@@ -1,14 +1,18 @@
 import { ApplyForm } from "@/components/apply-form";
 import { AppHeader } from "@/components/app-header";
+import { PageShell } from "@/components/page-shell";
+import { PageTitle } from "@/components/page-title";
 
 export default function ApplyPage() {
   return (
     <>
       <AppHeader />
-      <main className="mx-auto max-w-4xl flex-1 p-4 py-8">
-        <h1 className="mb-6 text-2xl font-bold">采购申请</h1>
-        <ApplyForm />
-      </main>
+      <PageShell>
+        <main className="mx-auto max-w-4xl flex-1 p-4 py-8">
+          <PageTitle subtitle="采购申请" />
+          <ApplyForm />
+        </main>
+      </PageShell>
     </>
   );
 }

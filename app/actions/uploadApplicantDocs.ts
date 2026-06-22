@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { OrderStatus } from "@prisma/client";
 import { sendOrderNotification } from "@/lib/feishu";
@@ -13,6 +14,11 @@ import { serializeFilePaths } from "@/lib/order-attachments";
 import { prisma } from "@/lib/prisma";
 import { canUploadApplicantDocs } from "@/lib/permissions";
 
+const confirmedItemSchema = z.object({
+  id: z.string(),
+  lineTotal: z.number().min(0),
+});
+
 export async function uploadApplicantDocs(formData: FormData) {
   const session = await auth();
   if (!session?.user?.openId) {
@@ -20,15 +26,29 @@ export async function uploadApplicantDocs(formData: FormData) {
   }
 
   const orderId = String(formData.get("orderId") ?? "");
-  const totalPrice = Number(formData.get("totalPrice"));
+  const confirmedRaw = String(formData.get("confirmedItems") ?? "[]");
 
-  if (!orderId || Number.isNaN(totalPrice)) {
+  if (!orderId) {
     throw new Error("参数无效");
+  }
+
+  let confirmedItems: z.infer<typeof confirmedItemSchema>[];
+  try {
+    const parsed = z.array(confirmedItemSchema).parse(JSON.parse(confirmedRaw));
+    if (parsed.length === 0) {
+      throw new Error("请确认采购明细价格");
+    }
+    confirmedItems = parsed;
+  } catch {
+    throw new Error("采购明细价格数据无效");
   }
 
   const order = await prisma.purchaseOrder.findUnique({
     where: { id: orderId },
-    include: { initiator: { select: { openId: true } } },
+    include: {
+      initiator: { select: { openId: true } },
+      items: true,
+    },
   });
   if (!order) {
     throw new Error("订单不存在");
@@ -42,6 +62,13 @@ export async function uploadApplicantDocs(formData: FormData) {
     )
   ) {
     throw new Error("无上传权限");
+  }
+
+  const orderItemIds = new Set(order.items.map((item) => item.id));
+  for (const item of confirmedItems) {
+    if (!orderItemIds.has(item.id)) {
+      throw new Error("采购明细与订单不匹配");
+    }
   }
 
   const invoices = formData
@@ -77,15 +104,29 @@ export async function uploadApplicantDocs(formData: FormData) {
     uploadTypeSets.listDoc,
   );
 
-  const updated = await prisma.purchaseOrder.update({
-    where: { id: orderId },
-    data: {
-      totalPrice,
-      invoicePaths: serializeFilePaths(invoicePaths),
-      invoicePath: invoicePaths[0] ?? null,
-      listDocPath,
-      status: OrderStatus.PENDING_FINANCE_REVIEW,
-    },
+  const itemMap = new Map(order.items.map((item) => [item.id, item]));
+  const totalPrice = confirmedItems.reduce((sum, c) => sum + c.lineTotal, 0);
+
+  const updated = await prisma.$transaction(async (tx) => {
+    for (const confirmed of confirmedItems) {
+      const dbItem = itemMap.get(confirmed.id);
+      if (!dbItem || dbItem.quantity <= 0) continue;
+      await tx.purchaseItem.update({
+        where: { id: confirmed.id },
+        data: { unitPrice: confirmed.lineTotal / dbItem.quantity },
+      });
+    }
+
+    return tx.purchaseOrder.update({
+      where: { id: orderId },
+      data: {
+        totalPrice,
+        invoicePaths: serializeFilePaths(invoicePaths),
+        invoicePath: invoicePaths[0] ?? null,
+        listDocPath,
+        status: OrderStatus.PENDING_FINANCE_REVIEW,
+      },
+    });
   });
 
   await sendOrderNotification({
@@ -102,5 +143,6 @@ export async function uploadApplicantDocs(formData: FormData) {
 
   revalidatePath("/orders");
   revalidatePath(`/orders/${orderId}`);
+  revalidatePath("/dashboard");
   return updated;
 }

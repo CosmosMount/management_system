@@ -1,6 +1,8 @@
 import { auth } from "@/lib/auth";
 import { AppHeader } from "@/components/app-header";
 import { OrdersTable } from "@/components/orders-table";
+import { PageShell } from "@/components/page-shell";
+import { PageTitle } from "@/components/page-title";
 import { prisma } from "@/lib/prisma";
 import { getUserRoles } from "@/lib/permissions";
 
@@ -40,14 +42,16 @@ export default async function OrdersPage() {
   return (
     <>
       <AppHeader />
-      <main className="mx-auto max-w-6xl flex-1 p-4 py-8">
-        <h1 className="mb-6 text-2xl font-bold">订单列表</h1>
-        <OrdersTable
-          orders={rows}
-          userRoles={userRoles}
-          userOpenId={session?.user?.openId}
-        />
-      </main>
+      <PageShell>
+        <main className="mx-auto max-w-6xl flex-1 p-4 py-8">
+          <PageTitle subtitle="订单列表" />
+          <OrdersTable
+            orders={rows}
+            userRoles={userRoles}
+            userOpenId={session?.user?.openId}
+          />
+        </main>
+      </PageShell>
     </>
   );
 }

@@ -4,9 +4,20 @@ import { z } from "zod";
 export const purchaseItemSchema = z.object({
   name: z.string().min(1, "请输入物品名称"),
   spec: z.string().min(1, "请输入规格"),
+  purchaseLink: z.string().min(1, "请输入购买链接"),
   quantity: z.number().int().min(1, "数量至少为 1"),
-  unitPrice: z.number().min(0, "单价不能为负"),
+  lineTotal: z.number().min(0, "总价不能为负"),
 });
+
+export function toStoredPurchaseItem(item: PurchaseItemInput) {
+  return {
+    name: item.name,
+    spec: item.spec,
+    purchaseLink: item.purchaseLink,
+    quantity: item.quantity,
+    unitPrice: item.lineTotal / item.quantity,
+  };
+}
 
 export const createOrderSchema = z.object({
   team: z.enum(TEAM_OPTIONS, { message: "请选择车组" }),
