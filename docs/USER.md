@@ -28,8 +28,15 @@ npm run dev
 
 1. 在[飞书开放平台](https://open.feishu.cn/)创建**企业自建应用**
 2. 开启能力：**网页应用**（OAuth）+ **机器人**（群消息）
-3. 安全设置 → 重定向 URL：`{AUTH_URL}/api/auth/callback/feishu`
-4. 权限管理：开通 `contact:user.base:readonly`（读取用户基本信息）
+3. **安全设置** → **重定向 URL** 添加（须与下方完全一致，多一个斜杠也会 20029）：
+
+   ```
+   http://localhost:3000/api/auth/callback/feishu
+   ```
+
+   也可在登录页 `/login` 底部查看当前系统使用的地址。
+
+4. 权限管理：开通 **`contact:user.base:readonly`**（获取用户基本信息，用于登录）
 5. 将应用机器人拉入采购通知群
 6. 获取该机器人的 Webhook 地址，填入 `FEISHU_WEBHOOK_URL`
 

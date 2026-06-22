@@ -1,13 +1,22 @@
 import type { NextAuthConfig } from "next-auth";
 
+const FEISHU_SCOPES = "contact:user.base:readonly";
+
 const feishuProvider = {
   id: "feishu",
   name: "飞书",
   type: "oauth" as const,
+  clientId: process.env.FEISHU_APP_ID,
+  clientSecret: process.env.FEISHU_APP_SECRET,
+  // 飞书不支持 OIDC 默认 scope（openid/profile/email），且无需 PKCE
+  checks: ["state"] as ("state" | "pkce" | "none")[],
   authorization: {
-    url: "https://open.feishu.cn/open-apis/authen/v1/authorize",
+    url: "https://accounts.feishu.cn/open-apis/authen/v1/authorize",
     params: {
-      app_id: process.env.FEISHU_APP_ID,
+      client_id: process.env.FEISHU_APP_ID,
+      response_type: "code",
+      // 必须显式指定，否则 Auth.js 会拼接 openid profile email 导致 20043
+      scope: FEISHU_SCOPES,
     },
   },
   token: {
