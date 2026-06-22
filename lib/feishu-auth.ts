@@ -14,12 +14,40 @@ export async function getFeishuAppAccessToken(): Promise<string> {
     code?: number;
     msg?: string;
     app_access_token?: string;
+    tenant_access_token?: string;
   };
 
   if (!data.app_access_token) {
     throw new Error(data.msg ?? "获取飞书 app_access_token 失败");
   }
   return data.app_access_token;
+}
+
+/** 发消息 Open API 使用 tenant_access_token */
+export async function getFeishuTenantAccessToken(): Promise<string> {
+  const res = await fetch(
+    "https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+      body: JSON.stringify({
+        app_id: process.env.FEISHU_APP_ID,
+        app_secret: process.env.FEISHU_APP_SECRET,
+      }),
+    },
+  );
+  const data = (await res.json()) as {
+    code?: number;
+    msg?: string;
+    tenant_access_token?: string;
+    app_access_token?: string;
+  };
+
+  const token = data.tenant_access_token ?? data.app_access_token;
+  if (!token) {
+    throw new Error(data.msg ?? "获取飞书 tenant_access_token 失败");
+  }
+  return token;
 }
 
 function extractCodeFromBody(body: RequestInit["body"]): string | null {

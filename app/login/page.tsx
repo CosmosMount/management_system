@@ -30,15 +30,6 @@ export default function LoginPage() {
               飞书登录
             </Button>
           </form>
-          <p className="text-xs text-muted-foreground leading-relaxed">
-            若飞书报 20029，请在开放平台 → 该应用 →{" "}
-            <strong>开发配置 → 安全设置 → 重定向 URL</strong>{" "}
-            中添加（须完全一致）：
-            <br />
-            <code className="mt-1 block break-all rounded bg-muted px-2 py-1 text-[11px]">
-              {redirectUri}
-            </code>
-          </p>
         </CardContent>
       </Card>
     </div>

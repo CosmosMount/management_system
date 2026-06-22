@@ -35,3 +35,11 @@ export const roleLabels: Record<UserRoleType, string> = {
   TEACHER: "指导老师",
   FINANCE: "报销员",
 };
+
+/** 订单处于该状态时，应私信通知的审批角色 */
+export const statusApproverRole: Partial<Record<OrderStatus, UserRoleType>> = {
+  TECH_REVIEW: "TECH",
+  TEACHER_REVIEW: "TEACHER",
+  PENDING_REIMBURSE: "FINANCE",
+  REIMBURSING: "FINANCE",
+};

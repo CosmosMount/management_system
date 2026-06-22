@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
 import { OrderStatus } from "@prisma/client";
-import { sendFeishuCard } from "@/lib/feishu";
+import { sendOrderNotification } from "@/lib/feishu";
 import { generateOrderNo } from "@/lib/order-no";
 import { prisma } from "@/lib/prisma";
 import {
@@ -56,7 +56,7 @@ export async function createOrder(input: CreateOrderInput) {
   });
 
   if (status === OrderStatus.TECH_REVIEW) {
-    await sendFeishuCard({
+    await sendOrderNotification({
       id: order.id,
       orderNo: order.orderNo,
       initiatorName: order.initiatorName,

@@ -56,17 +56,19 @@ npm run db:studio
 
 ### 2. 写入角色
 
-编辑 [`prisma/seed.ts`](../prisma/seed.ts)，把占位符换成真实 open_id：
+**重要：`openId` 必须从 `User` 表复制**（审批人先登录本系统一次），不要手写占位符或从飞书后台其他地方复制，否则会报 `open_id cross app`。
+
+编辑 [`prisma/seed.ts`](../prisma/seed.ts)：
 
 ```typescript
 const seedRoles = [
-  { openId: "ou_技术组张三", role: UserRoleType.TECH },
-  { openId: "ou_指导老师李四", role: UserRoleType.TEACHER },
-  { openId: "ou_报销员王五", role: UserRoleType.FINANCE },
+  { openId: "ou_xxx", role: UserRoleType.TECH },   // 从 User 表复制
+  { openId: "ou_yyy", role: UserRoleType.TEACHER },
+  { openId: "ou_zzz", role: UserRoleType.FINANCE },
 ];
 ```
 
-执行：
+执行 `npm run db:studio` 删除 `UserRole` 表中旧的占位符记录（如 `ou_tech_placeholder`）。
 
 ```bash
 npm run db:seed
@@ -91,32 +93,29 @@ npm run db:seed
 
 ---
 
-## 飞书群通知（可选）
+## 飞书通知
 
-在 `.env` 填写 `FEISHU_WEBHOOK_URL` 后，提交申请会向**群**推送卡片。未配置时仅跳过通知，不影响审批。
+### 群 Webhook（可选）
 
-1. 应用机器人拉入通知群
-2. 复制群机器人 Webhook 填入 `.env`
-3. 重启 `npm run dev`
+在 `.env` 填写 `FEISHU_WEBHOOK_URL` 后，状态变更时会向**群**推送卡片。未配置则跳过群通知。
 
----
+### 审批人私信（已实现）
 
-## 飞书私信（当前未实现，但可行）
+开通权限 **`im:message:send_as_bot`** 后，系统会在状态变更时向对应角色的**所有** `UserRole` 用户私发卡片：
 
-| 方式 | 能发给谁 | 现状 |
-|------|----------|------|
-| **Webhook** | 仅群聊 | 已实现（`lib/feishu.ts`） |
-| **应用 Open API** | 指定用户的私聊 | 未实现，需额外开发 |
+| 订单状态 | 私信通知角色 |
+|----------|-------------|
+| 技术组审核 | TECH |
+| 老师审核 | TEACHER |
+| 待报销 / 报销中 | FINANCE |
 
-Webhook **不能**单独给某个用户发私信。若要给审批人私发提醒，需用同一应用的 Open API：
+前提：
 
-- 权限：`im:message:send_as_bot`
-- 接口：`POST /open-apis/im/v1/messages`，`receive_id_type=open_id`
-- 用户须已与机器人有过交互（例如登录过本系统）
+1. 审批人已在 `UserRole` 表中配置正确的 `open_id`
+2. 审批人至少登录过本系统一次（与机器人建立会话）
+3. `.env` 中 `FEISHU_APP_ID` / `FEISHU_APP_SECRET` 有效
 
-如需「提交后私信通知技术组审批人」，可后续在 `createOrder` 里按 `UserRole` 查 open_id 并调用发消息 API。
-
----
+群 Webhook 与私信**独立**：只配 App 凭证也可发私信；Webhook 仅影响群消息。
 
 ## 功能测试流程
 

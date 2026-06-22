@@ -3,16 +3,24 @@ import { UserRoleType } from "@prisma/client";
 import { prisma } from "../lib/prisma";
 
 /**
- * 将下方 openId 替换为实际飞书用户的 open_id 后执行: npm run db:seed
+ * 配置说明：
+ * 1. 让审批人先用飞书登录本系统一次
+ * 2. npm run db:studio → User 表复制其 openId
+ * 3. 填入下方数组后执行 npm run db:seed
+ *
+ * 切勿使用占位符或从其他应用复制的 open_id，否则会报 cross app 错误。
  */
 const seedRoles: { openId: string; role: UserRoleType }[] = [
-  { openId: "ou_tech_placeholder", role: UserRoleType.TECH },
-  { openId: "ou_857a80572f2753f38ed8588deed2ff6c", role: UserRoleType.TECH },
-  { openId: "ou_teacher_placeholder", role: UserRoleType.TEACHER },
-  { openId: "ou_finance_placeholder", role: UserRoleType.FINANCE },
+  // { openId: "ou_从User表复制", role: UserRoleType.TECH },
+  // { openId: "ou_从User表复制", role: UserRoleType.TEACHER },
+  // { openId: "ou_从User表复制", role: UserRoleType.FINANCE },
 ];
 
 async function main() {
+  if (seedRoles.length === 0) {
+    console.log("seedRoles 为空，请在 prisma/seed.ts 填入 User 表中的 openId 后重试");
+    return;
+  }
   for (const entry of seedRoles) {
     await prisma.userRole.upsert({
       where: { openId: entry.openId },
@@ -20,7 +28,7 @@ async function main() {
       create: entry,
     });
   }
-  console.log("UserRole seed 完成，请替换为真实 open_id");
+  console.log(`UserRole seed 完成，共 ${seedRoles.length} 条`);
 }
 
 main()

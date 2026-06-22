@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
 import { OrderStatus } from "@prisma/client";
-import { sendFeishuCard } from "@/lib/feishu";
+import { sendOrderNotification } from "@/lib/feishu";
 import { prisma } from "@/lib/prisma";
 import {
   getStatusTransition,
@@ -38,8 +38,12 @@ export async function updateOrderStatus(orderId: string) {
     data: { status: transition.next },
   });
 
-  if (transition.next === OrderStatus.PENDING_REIMBURSE) {
-    await sendFeishuCard({
+  const notifyStatuses: OrderStatus[] = [
+    OrderStatus.TEACHER_REVIEW,
+    OrderStatus.PENDING_REIMBURSE,
+  ];
+  if (notifyStatuses.includes(updated.status)) {
+    await sendOrderNotification({
       id: updated.id,
       orderNo: updated.orderNo,
       initiatorName: updated.initiatorName,
