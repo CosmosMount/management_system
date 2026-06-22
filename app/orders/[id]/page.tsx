@@ -3,7 +3,8 @@ import { notFound } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { AppHeader } from "@/components/app-header";
 import { OrderActions } from "@/components/order-actions";
-import { ReimbursementDialog } from "@/components/reimbursement-dialog";
+import { OrderAttachmentsCard } from "@/components/order-attachments";
+import { OrderReimbursementActions } from "@/components/order-reimbursement-actions";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -20,9 +21,10 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { prisma } from "@/lib/prisma";
+import { groupOrderAttachments } from "@/lib/order-attachments";
 import {
-  canUploadReimbursement,
-  getUserRole,
+  canViewReimbursementAttachments,
+  getUserRoles,
   statusLabels,
 } from "@/lib/permissions";
 
@@ -33,24 +35,41 @@ type Props = {
 export default async function OrderDetailPage({ params }: Props) {
   const { id } = await params;
   const session = await auth();
-  const userRole = session?.user?.openId
-    ? await getUserRole(session.user.openId)
-    : null;
+  const userRoles = session?.user?.openId
+    ? await getUserRoles(session.user.openId)
+    : [];
 
   const order = await prisma.purchaseOrder.findUnique({
     where: { id },
-    include: { items: true },
+    include: {
+      items: true,
+      initiator: { select: { openId: true } },
+    },
   });
 
   if (!order) {
     notFound();
   }
 
+  const orderScope = { team: order.team, techGroup: order.techGroup };
+  const managementState = {
+    teamApproved: order.teamApproved,
+    techGroupApproved: order.techGroupApproved,
+  };
+  const attachments = groupOrderAttachments(order);
+  const canViewAttachments = canViewReimbursementAttachments(
+    order.status,
+    userRoles,
+    orderScope,
+    session?.user?.openId,
+    order.initiator.openId,
+  );
+
   return (
     <>
       <AppHeader />
       <main className="mx-auto max-w-4xl flex-1 space-y-6 p-4 py-8">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-4">
           <div>
             <Link
               href="/orders"
@@ -60,20 +79,41 @@ export default async function OrderDetailPage({ params }: Props) {
             </Link>
             <h1 className="mt-2 text-2xl font-bold">{order.orderNo}</h1>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <Badge>{statusLabels[order.status]}</Badge>
             <OrderActions
               orderId={order.id}
               status={order.status}
-              userRole={userRole}
+              order={orderScope}
+              userRoles={userRoles}
+              managementState={managementState}
             />
-            <ReimbursementDialog
+            <OrderReimbursementActions
               orderId={order.id}
               totalPrice={order.totalPrice}
-              canOperate={canUploadReimbursement(order.status, userRole)}
+              status={order.status}
+              orderScope={orderScope}
+              userRoles={userRoles}
+              userOpenId={session?.user?.openId}
+              initiatorOpenId={order.initiator.openId}
+              attachments={attachments}
+              canViewAttachments={canViewAttachments}
             />
           </div>
         </div>
+
+        {order.status === "MANAGEMENT_REVIEW" && (
+          <Card>
+            <CardContent className="flex gap-4 pt-6 text-sm">
+              <span>
+                车组组长：{order.teamApproved ? "已通过" : "待审核"}
+              </span>
+              <span>
+                技术组组长：{order.techGroupApproved ? "已通过" : "待审核"}
+              </span>
+            </CardContent>
+          </Card>
+        )}
 
         <Card>
           <CardHeader>
@@ -107,6 +147,8 @@ export default async function OrderDetailPage({ params }: Props) {
           </CardContent>
         </Card>
 
+        <OrderAttachmentsCard order={order} canView={canViewAttachments} />
+
         <Card>
           <CardHeader>
             <CardTitle>采购明细</CardTitle>
@@ -138,42 +180,6 @@ export default async function OrderDetailPage({ params }: Props) {
             </Table>
           </CardContent>
         </Card>
-
-        {(order.invoicePath || order.screenshotPath) && (
-          <Card>
-            <CardHeader>
-              <CardTitle>报销凭证</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {order.invoicePath && (
-                <p>
-                  <span className="text-muted-foreground">发票：</span>
-                  <a
-                    href={order.invoicePath}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-primary hover:underline"
-                  >
-                    查看文件
-                  </a>
-                </p>
-              )}
-              {order.screenshotPath && (
-                <p>
-                  <span className="text-muted-foreground">系统截图：</span>
-                  <a
-                    href={order.screenshotPath}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-primary hover:underline"
-                  >
-                    查看文件
-                  </a>
-                </p>
-              )}
-            </CardContent>
-          </Card>
-        )}
       </main>
     </>
   );

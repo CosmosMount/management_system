@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -H 0.0.0.0",
+    "dev:local": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
@@ -11,6 +12,9 @@
     "postinstall": "prisma generate",
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
+    "db:fix-roles": "tsx scripts/fix-user-roles.ts && tsx prisma/seed.ts",
+    "db:migrate-status": "tsx scripts/migrate-order-status.ts",
+    "db:migrate-invoices": "tsx scripts/migrate-invoice-paths.ts",
     "db:studio": "prisma studio"
   },
   "dependencies": {

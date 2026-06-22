@@ -1,45 +1,185 @@
 import type { OrderStatus, UserRoleType } from "@prisma/client";
 
+export type UserRoleRecord = {
+  role: UserRoleType;
+  team: string;
+  techGroup: string;
+};
+
+export type OrderScope = {
+  team: string;
+  techGroup: string;
+};
+
+export type ManagementApprovalState = {
+  teamApproved: boolean;
+  techGroupApproved: boolean;
+};
+
 export function getStatusTransition(status: OrderStatus) {
   const statusTransitions: Partial<
     Record<OrderStatus, { role: UserRoleType; next: OrderStatus }>
   > = {
-    TECH_REVIEW: { role: "TECH", next: "TEACHER_REVIEW" },
-    TEACHER_REVIEW: { role: "TEACHER", next: "PENDING_REIMBURSE" },
-    PENDING_REIMBURSE: { role: "FINANCE", next: "REIMBURSING" },
+    TEACHER_REVIEW: { role: "TEACHER", next: "PENDING_APPLICANT_DOCS" },
   };
   return statusTransitions[status] ?? null;
 }
 
-export function canUploadReimbursement(
+function roleMatchesOrder(
+  record: UserRoleRecord,
+  requiredRole: UserRoleType,
+  order: OrderScope,
+): boolean {
+  if (record.role !== requiredRole) return false;
+  if (requiredRole === "TEAM_ADMIN" || requiredRole === "FINANCE") {
+    return record.team === order.team;
+  }
+  if (requiredRole === "TECH_GROUP_ADMIN") {
+    return record.techGroup === order.techGroup;
+  }
+  return record.team === "" && record.techGroup === "";
+}
+
+export function canApproveTeamManagement(
+  userRoles: UserRoleRecord[],
+  order: OrderScope,
+  state: ManagementApprovalState,
+): boolean {
+  if (state.teamApproved) return false;
+  return userRoles.some(
+    (r) => r.role === "TEAM_ADMIN" && r.team === order.team,
+  );
+}
+
+export function canApproveTechGroupManagement(
+  userRoles: UserRoleRecord[],
+  order: OrderScope,
+  state: ManagementApprovalState,
+): boolean {
+  if (state.techGroupApproved) return false;
+  return userRoles.some(
+    (r) => r.role === "TECH_GROUP_ADMIN" && r.techGroup === order.techGroup,
+  );
+}
+
+export function canApproveOrder(
   status: OrderStatus,
-  role: UserRoleType | null,
+  userRoles: UserRoleRecord[],
+  order: OrderScope,
+  managementState?: ManagementApprovalState,
+): boolean {
+  if (status === "MANAGEMENT_REVIEW" && managementState) {
+    return (
+      canApproveTeamManagement(userRoles, order, managementState) ||
+      canApproveTechGroupManagement(userRoles, order, managementState)
+    );
+  }
+
+  const transition = getStatusTransition(status);
+  if (!transition) return false;
+  return userRoles.some((r) =>
+    roleMatchesOrder(r, transition.role, order),
+  );
+}
+
+export function isOrderInitiator(
+  userOpenId: string | undefined,
+  initiatorOpenId: string,
+): boolean {
+  return !!userOpenId && userOpenId === initiatorOpenId;
+}
+
+export function canUploadApplicantDocs(
+  status: OrderStatus,
+  userOpenId: string | undefined,
+  initiatorOpenId: string,
 ): boolean {
   return (
-    role === "FINANCE" &&
-    (status === "PENDING_REIMBURSE" || status === "REIMBURSING")
+    status === "PENDING_APPLICANT_DOCS" &&
+    isOrderInitiator(userOpenId, initiatorOpenId)
   );
+}
+
+export function canUploadFinanceScreenshot(
+  status: OrderStatus,
+  userRoles: UserRoleRecord[],
+  order: OrderScope,
+): boolean {
+  return (
+    status === "PENDING_FINANCE_REVIEW" &&
+    userRoles.some((r) => r.role === "FINANCE" && r.team === order.team)
+  );
+}
+
+export function canConfirmReimbursement(
+  status: OrderStatus,
+  userOpenId: string | undefined,
+  initiatorOpenId: string,
+): boolean {
+  return (
+    status === "PENDING_APPLICANT_CONFIRM" &&
+    isOrderInitiator(userOpenId, initiatorOpenId)
+  );
+}
+
+/** 报销相关附件：采购人、对应车组报销员、超级管理员可查看 */
+export function canViewReimbursementAttachments(
+  status: OrderStatus,
+  userRoles: UserRoleRecord[],
+  order: OrderScope,
+  userOpenId: string | undefined,
+  initiatorOpenId: string,
+): boolean {
+  const financeStages: OrderStatus[] = [
+    "PENDING_FINANCE_REVIEW",
+    "PENDING_APPLICANT_CONFIRM",
+    "COMPLETED",
+  ];
+  if (!financeStages.includes(status)) {
+    return isOrderInitiator(userOpenId, initiatorOpenId);
+  }
+  if (isOrderInitiator(userOpenId, initiatorOpenId)) return true;
+  if (isSuperAdmin(userRoles)) return true;
+  return userRoles.some(
+    (r) => r.role === "FINANCE" && r.team === order.team,
+  );
+}
+
+export function isSuperAdmin(userRoles: UserRoleRecord[]): boolean {
+  return userRoles.some((r) => r.role === "SUPER_ADMIN");
 }
 
 export const statusLabels: Record<OrderStatus, string> = {
   DRAFT: "草稿",
-  TECH_REVIEW: "技术组审核",
+  MANAGEMENT_REVIEW: "管理审核",
   TEACHER_REVIEW: "老师审核",
-  PENDING_REIMBURSE: "待报销",
-  REIMBURSING: "报销中",
+  PENDING_APPLICANT_DOCS: "待上传凭证",
+  PENDING_FINANCE_REVIEW: "待报销截图",
+  PENDING_APPLICANT_CONFIRM: "待确认",
   COMPLETED: "已完成",
 };
 
 export const roleLabels: Record<UserRoleType, string> = {
-  TECH: "技术组",
+  SUPER_ADMIN: "超级管理员",
+  TEAM_ADMIN: "车组组长",
+  TECH_GROUP_ADMIN: "技术组组长",
   TEACHER: "指导老师",
   FINANCE: "报销员",
 };
 
-/** 订单处于该状态时，应私信通知的审批角色 */
+/** 订单处于该状态时，应私信通知的审批角色（管理审核单独处理） */
 export const statusApproverRole: Partial<Record<OrderStatus, UserRoleType>> = {
-  TECH_REVIEW: "TECH",
   TEACHER_REVIEW: "TEACHER",
-  PENDING_REIMBURSE: "FINANCE",
-  REIMBURSING: "FINANCE",
+  PENDING_FINANCE_REVIEW: "FINANCE",
 };
+
+export function formatRoleLabel(record: UserRoleRecord): string {
+  const base = roleLabels[record.role];
+  if (record.role === "TECH_GROUP_ADMIN" && record.techGroup) {
+    return `${base}（${record.techGroup}）`;
+  }
+  if (record.team) {
+    return `${base}（${record.team}）`;
+  }
+  return base;
+}

@@ -77,9 +77,11 @@ export const authConfig = {
       return token;
     },
     async session({ session, token }) {
-      if (token.openId) {
-        session.user.openId = token.openId as string;
-        session.user.id = token.sub ?? (token.openId as string);
+      const openId =
+        (token.openId as string | undefined) ?? token.sub ?? undefined;
+      if (openId) {
+        session.user.openId = openId;
+        session.user.id = openId;
       }
       return session;
     },

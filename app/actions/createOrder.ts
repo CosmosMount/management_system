@@ -30,7 +30,9 @@ export async function createOrder(input: CreateOrderInput) {
     0,
   );
   const orderNo = await generateOrderNo();
-  const status = parsed.submit ? OrderStatus.TECH_REVIEW : OrderStatus.DRAFT;
+  const status = parsed.submit
+    ? OrderStatus.MANAGEMENT_REVIEW
+    : OrderStatus.DRAFT;
 
   const order = await prisma.$transaction(async (tx) => {
     return tx.purchaseOrder.create({
@@ -55,13 +57,15 @@ export async function createOrder(input: CreateOrderInput) {
     });
   });
 
-  if (status === OrderStatus.TECH_REVIEW) {
+  if (status === OrderStatus.MANAGEMENT_REVIEW) {
     await sendOrderNotification({
       id: order.id,
       orderNo: order.orderNo,
       initiatorName: order.initiatorName,
       totalPrice: order.totalPrice,
       status: order.status,
+      team: order.team,
+      techGroup: order.techGroup,
     }).catch((err) => {
       console.error("[createOrder] 飞书通知失败:", err);
     });

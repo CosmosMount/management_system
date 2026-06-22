@@ -3,32 +3,99 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { approveManagementReview } from "@/app/actions/approveManagementReview";
 import { updateOrderStatus } from "@/app/actions/updateOrderStatus";
 import { Button } from "@/components/ui/button";
-import type { UserRoleType } from "@prisma/client";
 import { OrderStatus } from "@prisma/client";
-import { getStatusTransition, roleLabels } from "@/lib/permissions-client";
+import {
+  canApproveOrder,
+  canApproveTeamManagement,
+  canApproveTechGroupManagement,
+  getStatusTransition,
+  roleLabels,
+  type ManagementApprovalState,
+  type OrderScope,
+  type UserRoleRecord,
+} from "@/lib/permissions-client";
 
 type Props = {
   orderId: string;
   status: OrderStatus;
-  userRole: UserRoleType | null;
+  order: OrderScope;
+  userRoles: UserRoleRecord[];
+  managementState: ManagementApprovalState;
 };
 
-export function OrderActions({ orderId, status, userRole }: Props) {
+export function OrderActions({
+  orderId,
+  status,
+  order,
+  userRoles,
+  managementState,
+}: Props) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [loading, setLoading] = useState(false);
 
-  const transition = getStatusTransition(status);
-  if (!transition || transition.role !== userRole) {
+  if (status === OrderStatus.MANAGEMENT_REVIEW) {
+    const showTeam = canApproveTeamManagement(
+      userRoles,
+      order,
+      managementState,
+    );
+    const showTech = canApproveTechGroupManagement(
+      userRoles,
+      order,
+      managementState,
+    );
+
+    if (!showTeam && !showTech) return null;
+
+    function handleManagementApprove() {
+      setLoading(true);
+      startTransition(async () => {
+        try {
+          await approveManagementReview(orderId);
+          toast.success("管理审核已通过");
+          router.refresh();
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : "操作失败");
+        } finally {
+          setLoading(false);
+        }
+      });
+    }
+
+    return (
+      <div className="flex flex-wrap gap-2">
+        {showTeam && (
+          <Button
+            onClick={handleManagementApprove}
+            disabled={pending || loading}
+            size="sm"
+          >
+            {roleLabels.TEAM_ADMIN}通过
+          </Button>
+        )}
+        {showTech && (
+          <Button
+            onClick={handleManagementApprove}
+            disabled={pending || loading}
+            size="sm"
+          >
+            {roleLabels.TECH_GROUP_ADMIN}通过
+          </Button>
+        )}
+      </div>
+    );
+  }
+
+  if (!canApproveOrder(status, userRoles, order, managementState)) {
     return null;
   }
 
-  const label =
-    status === OrderStatus.PENDING_REIMBURSE
-      ? "接单报销"
-      : `${roleLabels[transition.role]}通过`;
+  const transition = getStatusTransition(status)!;
+  const label = `${roleLabels[transition.role]}通过`;
 
   function handleApprove() {
     setLoading(true);

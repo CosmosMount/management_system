@@ -6,54 +6,56 @@ import { OrderStatus } from "@prisma/client";
 import { sendOrderNotification } from "@/lib/feishu";
 import { prisma } from "@/lib/prisma";
 import {
-  canApproveOrder,
-  getStatusTransition,
+  canApproveTeamManagement,
+  canApproveTechGroupManagement,
   getUserRoles,
 } from "@/lib/permissions";
 
-export async function updateOrderStatus(orderId: string) {
+export async function approveManagementReview(orderId: string) {
   const session = await auth();
   if (!session?.user?.openId) {
     throw new Error("未登录");
   }
 
   const userRoles = await getUserRoles(session.user.openId);
-  if (userRoles.length === 0) {
-    throw new Error("无操作权限");
-  }
-
   const order = await prisma.purchaseOrder.findUnique({
     where: { id: orderId },
   });
   if (!order) {
     throw new Error("订单不存在");
   }
+  if (order.status !== OrderStatus.MANAGEMENT_REVIEW) {
+    throw new Error("当前状态不允许此操作");
+  }
 
   const scope = { team: order.team, techGroup: order.techGroup };
+  const state = {
+    teamApproved: order.teamApproved,
+    techGroupApproved: order.techGroupApproved,
+  };
 
-  if (
-    !canApproveOrder(order.status, userRoles, scope, {
-      teamApproved: order.teamApproved,
-      techGroupApproved: order.techGroupApproved,
-    })
-  ) {
-    throw new Error("当前状态不允许此操作");
+  const canTeam = canApproveTeamManagement(userRoles, scope, state);
+  const canTech = canApproveTechGroupManagement(userRoles, scope, state);
+
+  if (!canTeam && !canTech) {
+    throw new Error("无操作权限或已审核");
   }
 
-  const transition = getStatusTransition(order.status);
-  if (!transition) {
-    throw new Error("当前状态不允许此操作");
-  }
+  const teamApproved = order.teamApproved || canTeam;
+  const techGroupApproved = order.techGroupApproved || canTech;
+
+  const allApproved = teamApproved && techGroupApproved;
 
   const updated = await prisma.purchaseOrder.update({
     where: { id: orderId },
-    data: { status: transition.next },
+    data: {
+      teamApproved,
+      techGroupApproved,
+      ...(allApproved ? { status: OrderStatus.TEACHER_REVIEW } : {}),
+    },
   });
 
-  const notifyStatuses: OrderStatus[] = [
-    OrderStatus.PENDING_APPLICANT_DOCS,
-  ];
-  if (notifyStatuses.includes(updated.status)) {
+  if (allApproved) {
     await sendOrderNotification({
       id: updated.id,
       orderNo: updated.orderNo,
@@ -63,7 +65,7 @@ export async function updateOrderStatus(orderId: string) {
       team: updated.team,
       techGroup: updated.techGroup,
     }).catch((err) => {
-      console.error("[updateOrderStatus] 飞书通知失败:", err);
+      console.error("[approveManagementReview] 飞书通知失败:", err);
     });
   }
 

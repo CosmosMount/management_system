@@ -1,6 +1,6 @@
 "use client";
 
-import { useFieldArray, useForm } from "react-hook-form";
+import { useFieldArray, useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Plus, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -18,6 +18,14 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { TEAM_OPTIONS, TECH_GROUP_OPTIONS } from "@/lib/constants";
+import {
   createOrderSchema,
   type CreateOrderInput,
 } from "@/lib/validations/order";
@@ -29,8 +37,8 @@ export function ApplyForm() {
   const form = useForm<CreateOrderInput>({
     resolver: zodResolver(createOrderSchema),
     defaultValues: {
-      team: "",
-      techGroup: "",
+      team: undefined,
+      techGroup: undefined,
       items: [{ name: "", spec: "", quantity: 1, unitPrice: 0 }],
       submit: true,
     },
@@ -65,12 +73,32 @@ export function ApplyForm() {
       <Card>
         <CardHeader>
           <CardTitle>基本信息</CardTitle>
-          <CardDescription>填写车组与技术组信息</CardDescription>
+          <CardDescription>选择车组与技术组</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">
-            <Label htmlFor="team">车组</Label>
-            <Input id="team" {...form.register("team")} />
+            <Label>车组</Label>
+            <Controller
+              control={form.control}
+              name="team"
+              render={({ field }) => (
+                <Select
+                  value={field.value}
+                  onValueChange={(v) => field.onChange(v ?? undefined)}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="请选择车组" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {TEAM_OPTIONS.map((team) => (
+                      <SelectItem key={team} value={team}>
+                        {team}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            />
             {form.formState.errors.team && (
               <p className="text-sm text-destructive">
                 {form.formState.errors.team.message}
@@ -78,8 +106,28 @@ export function ApplyForm() {
             )}
           </div>
           <div className="space-y-2">
-            <Label htmlFor="techGroup">技术组</Label>
-            <Input id="techGroup" {...form.register("techGroup")} />
+            <Label>技术组</Label>
+            <Controller
+              control={form.control}
+              name="techGroup"
+              render={({ field }) => (
+                <Select
+                  value={field.value}
+                  onValueChange={(v) => field.onChange(v ?? undefined)}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="请选择技术组" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {TECH_GROUP_OPTIONS.map((group) => (
+                      <SelectItem key={group} value={group}>
+                        {group}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            />
             {form.formState.errors.techGroup && (
               <p className="text-sm text-destructive">
                 {form.formState.errors.techGroup.message}

@@ -8,15 +8,18 @@ datasource db {
 
 enum OrderStatus {
   DRAFT
-  TECH_REVIEW
+  MANAGEMENT_REVIEW
   TEACHER_REVIEW
-  PENDING_REIMBURSE
-  REIMBURSING
+  PENDING_APPLICANT_DOCS
+  PENDING_FINANCE_REVIEW
+  PENDING_APPLICANT_CONFIRM
   COMPLETED
 }
 
 enum UserRoleType {
-  TECH
+  SUPER_ADMIN
+  TEAM_ADMIN
+  TECH_GROUP_ADMIN
   TEACHER
   FINANCE
 }
@@ -31,26 +34,34 @@ model User {
 }
 
 model UserRole {
-  id     String       @id @default(uuid())
-  openId String       @unique
-  role   UserRoleType
+  id         String       @id @default(uuid())
+  openId     String
+  role       UserRoleType
+  team       String       @default("")
+  techGroup  String       @default("")
+
+  @@unique([openId, role, team, techGroup])
 }
 
 model PurchaseOrder {
-  id             String         @id @default(uuid())
-  orderNo        String         @unique
-  initiatorId    String
-  initiator      User           @relation(fields: [initiatorId], references: [id])
-  initiatorName  String
-  team           String
-  techGroup      String
-  totalPrice     Float          @default(0)
-  invoicePath    String?
-  screenshotPath String?
-  status         OrderStatus    @default(DRAFT)
-  items          PurchaseItem[]
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
+  id                  String         @id @default(uuid())
+  orderNo             String         @unique
+  initiatorId         String
+  initiator           User           @relation(fields: [initiatorId], references: [id])
+  initiatorName       String
+  team                String
+  techGroup           String
+  totalPrice          Float          @default(0)
+  teamApproved        Boolean        @default(false)
+  techGroupApproved   Boolean        @default(false)
+  invoicePaths        String         @default("[]")
+  invoicePath         String?
+  listDocPath         String?
+  screenshotPath      String?
+  status              OrderStatus    @default(DRAFT)
+  items               PurchaseItem[]
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
 }
 
 model PurchaseItem {

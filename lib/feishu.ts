@@ -1,6 +1,7 @@
 import type { OrderStatus, UserRoleType } from "@prisma/client";
 import { getFeishuTenantAccessToken } from "@/lib/feishu-auth";
 import { getOpenIdsByRole } from "@/lib/permissions";
+import { prisma } from "@/lib/prisma";
 import {
   roleLabels,
   statusApproverRole,
@@ -18,6 +19,8 @@ export type OrderCardPayload = {
   initiatorName: string;
   totalPrice: number;
   status: OrderStatus;
+  team: string;
+  techGroup: string;
 };
 
 function buildSign(timestamp: string, secret: string): string {
@@ -30,6 +33,12 @@ function buildSign(timestamp: string, secret: string): string {
 function buildOrderCard(order: OrderCardPayload) {
   const detailUrl = `${APP_URL}/orders/${order.id}`;
   const statusLabel = statusLabels[order.status];
+  const attachmentHint =
+    order.status === "PENDING_FINANCE_REVIEW"
+      ? "\n**附件**：发票与清单已在订单详情页「流程附件」中，请先查看再上传截图"
+      : order.status === "PENDING_APPLICANT_CONFIRM"
+        ? "\n**附件**：请打开详情页核对发票、清单与报销截图后确认"
+        : "";
 
   return {
     config: { wide_screen_mode: true },
@@ -46,7 +55,7 @@ function buildOrderCard(order: OrderCardPayload) {
             `**当前状态**：${statusLabel}`,
             `**申请人**：${order.initiatorName}`,
             `**单号**：${order.orderNo}`,
-            `**总金额**：¥${order.totalPrice.toFixed(2)}`,
+            `**总金额**：¥${order.totalPrice.toFixed(2)}${attachmentHint}`,
           ].join("\n"),
         },
       },
@@ -92,7 +101,10 @@ async function postToWebhook(body: Record<string, unknown>) {
   }
 }
 
-async function sendDirectCard(openId: string, card: ReturnType<typeof buildOrderCard>) {
+async function sendDirectCard(
+  openId: string,
+  card: ReturnType<typeof buildOrderCard>,
+) {
   const token = await getFeishuTenantAccessToken();
   const url = new URL("https://open.feishu.cn/open-apis/im/v1/messages");
   url.searchParams.set("receive_id_type", "open_id");
@@ -111,27 +123,6 @@ async function sendDirectCard(openId: string, card: ReturnType<typeof buildOrder
   });
 
   const data = (await res.json()) as { code: number; msg?: string };
-  // #region agent log
-  fetch("http://127.0.0.1:7797/ingest/c199d5e2-69f6-40ac-aea6-e151b57e40b3", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Debug-Session-Id": "de9726",
-    },
-    body: JSON.stringify({
-      sessionId: "de9726",
-      hypothesisId: "B",
-      location: "feishu.ts:sendDirectCard",
-      message: "dm api response",
-      data: {
-        feishuCode: data.code,
-        success: data.code === 0,
-        openIdSuffix: openId.slice(-6),
-      },
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-  // #endregion
   if (data.code !== 0) {
     throw new Error(
       `飞书私信发送失败(${openId}): ${data.msg ?? res.status}`,
@@ -143,7 +134,10 @@ async function notifyApproversByRole(
   role: UserRoleType,
   order: OrderCardPayload,
 ) {
-  const openIds = await getOpenIdsByRole(role);
+  const openIds = await getOpenIdsByRole(role, {
+    team: order.team,
+    techGroup: order.techGroup,
+  });
   if (openIds.length === 0) {
     console.warn(
       `[feishu] 角色 ${roleLabels[role]} 无可通知用户（请确保审批人已飞书登录本系统，且 UserRole.openId 与 User 表一致）`,
@@ -163,8 +157,8 @@ async function notifyApproversByRole(
   }
 }
 
-/** 群 Webhook + 私信通知当前状态对应的审批角色 */
-export async function sendOrderNotification(order: OrderCardPayload) {
+/** 管理审核：分别私信车组组长与技术组组长 */
+export async function sendManagementReviewNotification(order: OrderCardPayload) {
   const card = buildOrderCard(order);
 
   await postToWebhook({
@@ -174,15 +168,51 @@ export async function sendOrderNotification(order: OrderCardPayload) {
     console.error("[feishu] Webhook 通知失败:", err);
   });
 
+  await notifyApproversByRole("TEAM_ADMIN", order);
+  await notifyApproversByRole("TECH_GROUP_ADMIN", order);
+}
+
+async function notifyInitiator(order: OrderCardPayload) {
+  const record = await prisma.purchaseOrder.findUnique({
+    where: { id: order.id },
+    include: { initiator: { select: { openId: true } } },
+  });
+  if (!record?.initiator.openId) return;
+
+  const card = buildOrderCard(order);
+  await sendDirectCard(record.initiator.openId, card).catch((err) => {
+    console.error("[feishu] 发起人私信通知失败:", err);
+  });
+}
+
+/** 群 Webhook + 私信通知当前状态对应的处理人 */
+export async function sendOrderNotification(order: OrderCardPayload) {
+  if (order.status === "MANAGEMENT_REVIEW") {
+    await sendManagementReviewNotification(order);
+    return;
+  }
+
+  const card = buildOrderCard(order);
+
+  await postToWebhook({
+    msg_type: "interactive",
+    card,
+  }).catch((err) => {
+    console.error("[feishu] Webhook 通知失败:", err);
+  });
+
+  if (
+    order.status === "PENDING_APPLICANT_DOCS" ||
+    order.status === "PENDING_APPLICANT_CONFIRM"
+  ) {
+    await notifyInitiator(order);
+    return;
+  }
+
   const approverRole = statusApproverRole[order.status];
   if (approverRole) {
     await notifyApproversByRole(approverRole, order);
   }
-}
-
-/** @deprecated 使用 sendOrderNotification */
-export async function sendFeishuCard(order: OrderCardPayload) {
-  await sendOrderNotification(order);
 }
 
 export async function sendFeishuDailySummary(
