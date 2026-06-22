@@ -3,12 +3,13 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { X } from "lucide-react";
+import { RefreshCw, X } from "lucide-react";
 import type { UserRoleType } from "@prisma/client";
 import {
   assignUserRole,
   removeUserRole,
 } from "@/app/actions/adminRoles";
+import { syncFeishuUsers } from "@/app/actions/syncFeishuUsers";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -159,6 +160,20 @@ export function AdminPanel({ users, roles }: Props) {
         router.refresh();
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "添加失败");
+      }
+    });
+  }
+
+  function handleSyncFeishu() {
+    startTransition(async () => {
+      try {
+        const result = await syncFeishuUsers();
+        toast.success(
+          `已同步 ${result.total} 人（新增 ${result.created}，更新 ${result.updated}）`,
+        );
+        router.refresh();
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "同步失败");
       }
     });
   }
@@ -347,22 +362,36 @@ export function AdminPanel({ users, roles }: Props) {
       </Card>
 
       <Card>
-        <CardHeader>
-          <CardTitle>已登录用户</CardTitle>
-          <CardDescription>
-            飞书登录后自动同步姓名与头像；openId 用于排查权限问题
-          </CardDescription>
+        <CardHeader className="flex flex-row items-start justify-between gap-4">
+          <div>
+            <CardTitle>人员列表</CardTitle>
+            <CardDescription>
+              可从飞书通讯录同步全员，无需对方先登录；登录过的用户会更新资料
+            </CardDescription>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={pending}
+            onClick={handleSyncFeishu}
+          >
+            <RefreshCw className="mr-1 h-4 w-4" />
+            同步飞书通讯录
+          </Button>
         </CardHeader>
         <CardContent>
           {users.length === 0 ? (
-            <p className="text-sm text-muted-foreground">暂无用户</p>
+            <div className="space-y-3 text-sm text-muted-foreground">
+              <p>暂无用户，请先点击「同步飞书通讯录」</p>
+            </div>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>用户</TableHead>
                   <TableHead>openId</TableHead>
-                  <TableHead>首次登录</TableHead>
+                  <TableHead>入库时间</TableHead>
                   <TableHead>当前角色</TableHead>
                 </TableRow>
               </TableHeader>

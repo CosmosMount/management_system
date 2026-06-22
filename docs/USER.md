@@ -49,10 +49,23 @@ npm run dev
 1. 自己先用飞书登录一次
 2. 在 [`prisma/seed.ts`](../prisma/seed.ts) 填入自己的 `openId` 为 `SUPER_ADMIN`，执行 `npm run db:seed`
 3. 登录后访问 **`/admin` 权限管理**：
+   - 点击 **「同步飞书通讯录」** 将企业全员录入系统（无需对方先登录）
    - **车组组长配置**：为每个车组指定组长与报销员
    - **技术组组长配置**：为每个技术组指定组长
 
-用户必须先飞书登录本系统一次，才会出现在用户列表中（`User` 表由 OAuth 自动写入）。
+用户也可通过飞书登录自动写入/更新 `User` 表；分配角色前需先完成通讯录同步或让对方登录一次。
+
+### 飞书通讯录权限（同步全员）
+
+在应用 **权限管理** 中开通并由企业管理员授权（应用身份、全部成员）：
+
+| 权限 | scope |
+|------|--------|
+| 获取用户基本信息 | `contact:user.base:readonly` |
+| 获取部门基础信息 | `contact:department.base:readonly` |
+| 获取通讯录部门组织架构信息 | `contact:department.organize:readonly` |
+
+同步使用 `tenant_access_token` 调用通讯录 API，将 `open_id`、姓名、头像写入 `User` 表。
 
 ### 角色说明
 

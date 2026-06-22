@@ -15,7 +15,7 @@ export default async function AdminPage() {
   }
 
   const [users, roles] = await Promise.all([
-    prisma.user.findMany({ orderBy: { createdAt: "desc" } }),
+    prisma.user.findMany({ orderBy: { name: "asc" } }),
     prisma.userRole.findMany({ orderBy: { role: "asc" } }),
   ]);
 

@@ -60,7 +60,7 @@ export async function assignUserRole(input: {
 
   const user = await prisma.user.findUnique({ where: { openId: input.openId } });
   if (!user) {
-    throw new Error("用户尚未登录过本系统，无法分配角色");
+    throw new Error("用户不存在，请先在权限管理页同步飞书通讯录");
   }
 
   await prisma.userRole.upsert({
