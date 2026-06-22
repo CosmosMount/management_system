@@ -1,6 +1,7 @@
 import {
   ClipboardList,
   FilePlus2,
+  FolderKanban,
   LayoutDashboard,
   Shield,
 } from "lucide-react";
@@ -43,9 +44,22 @@ export default async function HomePage() {
               <NavCard
                 variant="wide"
                 href="/dashboard"
-                title="看板"
+                title="采购看板"
                 description="采购汇总表，一览全部采购记录"
                 icon={LayoutDashboard}
+              />
+            </div>
+          </section>
+
+          <section className="mb-12">
+            <h2 className="mb-5 text-xl font-semibold">进度管理</h2>
+            <div className="flex w-full flex-col gap-4">
+              <NavCard
+                variant="wide"
+                href="/progress"
+                title="进度管理"
+                description="项目与任务跟踪、周报、验收与归档"
+                icon={FolderKanban}
               />
             </div>
           </section>

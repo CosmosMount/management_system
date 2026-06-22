@@ -47,6 +47,9 @@ export async function getOpenIdsByRole(
     if (!order.techGroup) return [];
     where.techGroup = order.techGroup;
     where.team = "";
+  } else if (role === "PROJECT_MANAGER" || role === "TEACHER" || role === "SUPER_ADMIN") {
+    where.team = "";
+    where.techGroup = "";
   } else {
     where.team = "";
     where.techGroup = "";

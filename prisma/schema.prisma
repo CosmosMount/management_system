@@ -22,6 +22,63 @@ enum UserRoleType {
   TECH_GROUP_ADMIN
   TEACHER
   FINANCE
+  PROJECT_MANAGER
+}
+
+enum ProjectStatus {
+  DRAFT
+  IN_PROGRESS
+  NORMAL
+  ABNORMAL
+  UNDER_INTERVENTION
+  OUTCOME_GOOD
+  OUTCOME_POOR
+  ARCHIVED
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  PENDING_ACCEPTANCE
+  COMPLETED
+  ARCHIVED
+}
+
+enum TaskCategory {
+  TEST
+  ASSEMBLY
+  RND
+  DEBUG
+  REVIEW_DRAWING
+  ITERATION
+}
+
+enum Urgency {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum Importance {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum SubmissionType {
+  DELIVERY
+  MILESTONE
+}
+
+enum MilestoneStatus {
+  PENDING
+  PASSED
+  FAILED
+}
+
+enum ApprovalDecision {
+  APPROVED
+  REJECTED
 }
 
 model User {
@@ -44,24 +101,24 @@ model UserRole {
 }
 
 model PurchaseOrder {
-  id                  String         @id @default(uuid())
-  orderNo             String         @unique
-  initiatorId         String
-  initiator           User           @relation(fields: [initiatorId], references: [id])
-  initiatorName       String
-  team                String
-  techGroup           String
-  totalPrice          Float          @default(0)
-  teamApproved        Boolean        @default(false)
-  techGroupApproved   Boolean        @default(false)
-  invoicePaths        String         @default("[]")
-  invoicePath         String?
-  listDocPath         String?
-  screenshotPath      String?
-  status              OrderStatus    @default(DRAFT)
-  items               PurchaseItem[]
-  createdAt           DateTime       @default(now())
-  updatedAt           DateTime       @updatedAt
+  id                String         @id @default(uuid())
+  orderNo           String         @unique
+  initiatorId       String
+  initiator         User           @relation(fields: [initiatorId], references: [id])
+  initiatorName     String
+  team              String
+  techGroup         String
+  totalPrice        Float          @default(0)
+  teamApproved      Boolean        @default(false)
+  techGroupApproved Boolean        @default(false)
+  invoicePaths      String         @default("[]")
+  invoicePath       String?
+  listDocPath       String?
+  screenshotPath    String?
+  status            OrderStatus    @default(DRAFT)
+  items             PurchaseItem[]
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
 }
 
 model PurchaseItem {
@@ -73,4 +130,116 @@ model PurchaseItem {
   purchaseLink String        @default("")
   quantity     Int
   unitPrice    Float
+}
+
+model Project {
+  id            String              @id @default(uuid())
+  name          String
+  description   String              @default("")
+  team          String
+  techGroup     String
+  status        ProjectStatus       @default(DRAFT)
+  ownerOpenId   String
+  ownerName     String
+  milestones    ProjectMilestone[]
+  tasks         Task[]
+  activityLogs  ProgressActivityLog[]
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  archivedAt    DateTime?
+}
+
+model ProjectMilestone {
+  id           String          @id @default(uuid())
+  projectId    String
+  project      Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name         String
+  sortOrder    Int
+  status       MilestoneStatus @default(PENDING)
+  feishuDocUrl String          @default("")
+  submissionId String?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+}
+
+model Task {
+  id              String              @id @default(uuid())
+  projectId       String
+  project         Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title           String
+  goal            String              @default("")
+  category        TaskCategory        @default(RND)
+  urgency         Urgency             @default(MEDIUM)
+  importance      Importance          @default(MEDIUM)
+  assigneeOpenId  String
+  assigneeName    String
+  team            String
+  techGroup       String
+  metrics         String              @default("")
+  dueAt           DateTime
+  status          TaskStatus          @default(TODO)
+  isOverdue       Boolean             @default(false)
+  failureReason   String              @default("")
+  submissions     TaskSubmission[]
+  weeklyReports   WeeklyReport[]
+  activityLogs    ProgressActivityLog[]
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  archivedAt      DateTime?
+}
+
+model TaskSubmission {
+  id            String           @id @default(uuid())
+  taskId        String?
+  task          Task?            @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  projectId     String?
+  type          SubmissionType
+  feishuDocUrl  String
+  videoUrl      String           @default("")
+  note          String           @default("")
+  failureReason String           @default("")
+  submittedBy   String
+  submitterName String
+  submittedAt   DateTime         @default(now())
+  approvals     ApprovalRecord[]
+}
+
+model WeeklyReport {
+  id            String   @id @default(uuid())
+  taskId        String
+  task          Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  weekStart     DateTime
+  progress      String
+  risks         String   @default("")
+  nextPlan      String   @default("")
+  feishuDocUrl  String   @default("")
+  submittedBy   String
+  submitterName String
+  submittedAt   DateTime @default(now())
+}
+
+model ApprovalRecord {
+  id              String           @id @default(uuid())
+  submissionId    String
+  submission      TaskSubmission   @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  approverOpenId  String
+  approverName    String
+  approverRole    UserRoleType
+  decision        ApprovalDecision
+  docViewVerified Boolean          @default(false)
+  comment         String           @default("")
+  createdAt       DateTime         @default(now())
+}
+
+model ProgressActivityLog {
+  id         String   @id @default(uuid())
+  projectId  String?
+  project    Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  taskId     String?
+  task       Task?    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  action     String
+  actorOpenId String
+  actorName  String
+  payload    String   @default("{}")
+  createdAt  DateTime @default(now())
 }

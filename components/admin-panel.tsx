@@ -312,6 +312,9 @@ export function AdminPanel({ users, roles }: Props) {
                   {roleLabels.TECH_GROUP_ADMIN}
                 </SelectItem>
                 <SelectItem value="FINANCE">{roleLabels.FINANCE}</SelectItem>
+                <SelectItem value="PROJECT_MANAGER">
+                  {roleLabels.PROJECT_MANAGER}
+                </SelectItem>
               </SelectContent>
             </Select>
           </div>

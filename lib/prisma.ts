@@ -11,17 +11,30 @@ function resolveSqlitePath(): string {
   return path.join(process.cwd(), raw.replace(/^\.\//, ""));
 }
 
-const globalForPrisma = globalThis as unknown as { prisma: PrismaClient };
+const globalForPrisma = globalThis as unknown as { prisma: PrismaClient | undefined };
 
-function createPrismaClient() {
+function createPrismaClient(): PrismaClient {
   const adapter = new PrismaBetterSqlite3({
     url: resolveSqlitePath(),
   });
   return new PrismaClient({ adapter });
 }
 
-export const prisma = globalForPrisma.prisma ?? createPrismaClient();
-
-if (process.env.NODE_ENV !== "production") {
-  globalForPrisma.prisma = prisma;
+function isPrismaClientStale(client: PrismaClient): boolean {
+  // schema 变更后 dev 热更新可能仍持有旧 client，缺少新 model delegate
+  return typeof client.project?.findMany !== "function";
 }
+
+function getPrismaClient(): PrismaClient {
+  const cached = globalForPrisma.prisma;
+  if (cached && !isPrismaClientStale(cached)) {
+    return cached;
+  }
+  const client = createPrismaClient();
+  if (process.env.NODE_ENV !== "production") {
+    globalForPrisma.prisma = client;
+  }
+  return client;
+}
+
+export const prisma = getPrismaClient();

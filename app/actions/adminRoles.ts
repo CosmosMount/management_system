@@ -8,7 +8,11 @@ import { prisma } from "@/lib/prisma";
 
 const TEAM_SCOPED_ROLES = new Set<UserRoleType>(["TEAM_ADMIN", "FINANCE"]);
 const TECH_GROUP_SCOPED_ROLES = new Set<UserRoleType>(["TECH_GROUP_ADMIN"]);
-const GLOBAL_ROLES = new Set<UserRoleType>(["SUPER_ADMIN", "TEACHER"]);
+const GLOBAL_ROLES = new Set<UserRoleType>([
+  "SUPER_ADMIN",
+  "TEACHER",
+  "PROJECT_MANAGER",
+]);
 
 function resolveRoleScope(
   role: UserRoleType,

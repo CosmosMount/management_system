@@ -165,6 +165,7 @@ export const roleLabels: Record<UserRoleType, string> = {
   TECH_GROUP_ADMIN: "技术组组长",
   TEACHER: "指导老师",
   FINANCE: "报销员",
+  PROJECT_MANAGER: "项管",
 };
 
 /** 订单处于该状态时，应私信通知的审批角色（管理审核单独处理） */

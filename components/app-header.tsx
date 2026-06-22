@@ -33,7 +33,10 @@ export async function AppHeader() {
             订单列表
           </Link>
           <Link href="/dashboard" className={navLinkClass}>
-            看板
+            采购看板
+          </Link>
+          <Link href="/progress" className={navLinkClass}>
+            进度管理
           </Link>
           {showAdmin && (
             <Link href="/admin" className={navLinkClass}>
