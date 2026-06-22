@@ -7,6 +7,7 @@ import { prisma } from "../lib/prisma";
  */
 const seedRoles: { openId: string; role: UserRoleType }[] = [
   { openId: "ou_tech_placeholder", role: UserRoleType.TECH },
+  { openId: "ou_857a80572f2753f38ed8588deed2ff6c", role: UserRoleType.TECH },
   { openId: "ou_teacher_placeholder", role: UserRoleType.TEACHER },
   { openId: "ou_finance_placeholder", role: UserRoleType.FINANCE },
 ];
