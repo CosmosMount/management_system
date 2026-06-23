@@ -147,7 +147,7 @@ TODO → IN_PROGRESS →（提交交付）→ PENDING_ACCEPTANCE →（验收）
 - **OAuth 回调**：`/api/auth/callback/feishu`，须与 `AUTH_URL` 完全一致
 - **Webhook 签名**：`HmacSHA256("", timestamp + "\n" + secret)` 后 Base64
 - **私信**：`im:message:send_as_bot`，收件人须曾登录以建立机器人会话
-- **通讯录同步**：`app/actions/syncFeishuUsers.ts`，需 `contact:*` 只读权限
+- **通讯录同步**：手动入口 `app/actions/syncFeishuUsers.ts`，定时入口 `scripts/cron.ts`，共用 `lib/feishu-user-sync.ts`；需 `contact:*` 只读权限
 
 进度模块交付物以飞书文档 URL 形式提交，审批人在飞书中打开核对；系统不做文档访问记录 API 校验。
 
@@ -195,6 +195,7 @@ npm run cron         # 启动定时任务（独立进程）
 
 | 调度 | 内容 |
 |------|------|
+| 默认每日 08:30 | 从飞书通讯录扫描并同步本地人员（可用 `FEISHU_CONTACT_SYNC_CRON` 调整） |
 | 每日 09:00 | 采购日报、任务逾期警报、当日截止提醒 |
 | 每周一 09:00 | 活跃任务周报填写提醒（私信负责人） |
 

@@ -15,6 +15,10 @@ import {
   canSubmitDelivery,
 } from "@/lib/permissions-progress";
 import {
+  getTaskAssigneeNames,
+  getTaskAssigneeOpenIds,
+} from "@/lib/progress-assignees";
+import {
   taskStatusLabels,
   taskCategoryLabels,
   urgencyLabels,
@@ -34,6 +38,8 @@ export default async function TaskDetailPage({ params }: Props) {
     where: { id },
     include: {
       project: true,
+      stage: true,
+      assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       submissions: {
         orderBy: { submittedAt: "desc" },
         include: { approvals: true },
@@ -46,7 +52,10 @@ export default async function TaskDetailPage({ params }: Props) {
   if (!task) notFound();
 
   const scope = { team: task.team, techGroup: task.techGroup };
-  const isAssignee = canSubmitDelivery(userOpenId, task.assigneeOpenId);
+  const isAssignee = canSubmitDelivery(
+    userOpenId,
+    getTaskAssigneeOpenIds(task),
+  );
   const canApprove = canApproveTask(roles, scope);
   const canManage = canManageProject(
     roles,
@@ -87,7 +96,7 @@ export default async function TaskDetailPage({ params }: Props) {
               <CardContent className="grid gap-3 text-sm md:grid-cols-2">
                 <p>
                   <span className="text-muted-foreground">负责人：</span>
-                  {task.assigneeName}
+                  {getTaskAssigneeNames(task)}
                 </p>
                 <p>
                   <span className="text-muted-foreground">截止：</span>
@@ -97,10 +106,28 @@ export default async function TaskDetailPage({ params }: Props) {
                   <span className="text-muted-foreground">车组/技术组：</span>
                   {task.team} / {task.techGroup}
                 </p>
+                <p>
+                  <span className="text-muted-foreground">所属阶段：</span>
+                  {task.stage?.name ?? "无阶段"}
+                </p>
+                <p>
+                  <span className="text-muted-foreground">线下确认：</span>
+                  {task.needsOfflineConfirmation ? "需要" : "不需要"}
+                </p>
+                <p>
+                  <span className="text-muted-foreground">定期周报：</span>
+                  {task.needsWeeklyReport ? "需要" : "不需要"}
+                </p>
                 <p className="md:col-span-2">
                   <span className="text-muted-foreground">指标：</span>
                   {task.metrics}
                 </p>
+                {task.riskNote && (
+                  <p className="md:col-span-2">
+                    <span className="text-muted-foreground">最新风险：</span>
+                    {task.riskNote}
+                  </p>
+                )}
                 {task.goal && (
                   <p className="md:col-span-2">
                     <span className="text-muted-foreground">说明：</span>
@@ -117,9 +144,12 @@ export default async function TaskDetailPage({ params }: Props) {
               isAssignee={isAssignee}
               canApprove={canApprove}
               canManage={canManage}
+              needsOfflineConfirmation={task.needsOfflineConfirmation}
+              needsWeeklyReport={task.needsWeeklyReport}
               submissions={task.submissions.map((s) => ({
                 ...s,
                 submittedAt: s.submittedAt.toISOString(),
+                keyDataUrl: s.keyDataUrl,
                 approvals: s.approvals.map((a) => ({
                   ...a,
                   createdAt: a.createdAt.toISOString(),

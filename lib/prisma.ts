@@ -22,7 +22,11 @@ function createPrismaClient(): PrismaClient {
 
 function isPrismaClientStale(client: PrismaClient): boolean {
   // schema 变更后 dev 热更新可能仍持有旧 client，缺少新 model delegate
-  return typeof client.project?.findMany !== "function";
+  return (
+    typeof client.project?.findMany !== "function" ||
+    typeof client.projectStage?.findMany !== "function" ||
+    typeof client.taskAssignee?.findMany !== "function"
+  );
 }
 
 function getPrismaClient(): PrismaClient {

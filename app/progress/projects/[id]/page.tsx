@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AppHeader } from "@/components/app-header";
 import { ProgressPageLayout } from "@/components/progress/progress-page-layout";
-import { ProjectMilestonePanel } from "@/components/progress/project-milestone-panel";
+import { ProjectStagePanel } from "@/components/progress/project-stage-panel";
 import { TaskForm } from "@/components/progress/task-form";
 import { PageShell } from "@/components/page-shell";
 import { PageTitle } from "@/components/page-title";
@@ -11,14 +11,17 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { auth } from "@/lib/auth";
 import { getUserRoles } from "@/lib/permissions";
 import {
-  canApproveTask,
   canManageProject,
+  canApproveStage as canApproveStagePermission,
+  canSubmitStage as canSubmitStagePermission,
+  canUpdateProjectLifecycle,
 } from "@/lib/permissions-progress";
 import {
   projectStatusLabels,
   taskStatusLabels,
   taskCategoryLabels,
 } from "@/lib/progress-labels";
+import { getTaskAssigneeNames } from "@/lib/progress-assignees";
 import { prisma } from "@/lib/prisma";
 
 type Props = { params: Promise<{ id: string }> };
@@ -32,8 +35,22 @@ export default async function ProjectDetailPage({ params }: Props) {
   const project = await prisma.project.findUnique({
     where: { id },
     include: {
-      milestones: { orderBy: { sortOrder: "asc" } },
-      tasks: { orderBy: { createdAt: "desc" } },
+      stages: {
+        orderBy: { sortOrder: "asc" },
+        include: {
+          submissions: {
+            orderBy: { submittedAt: "desc" },
+            include: { approvals: true },
+          },
+        },
+      },
+      tasks: {
+        orderBy: { createdAt: "desc" },
+        include: {
+          stage: { select: { name: true } },
+          assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        },
+      },
       activityLogs: { orderBy: { createdAt: "desc" }, take: 10 },
     },
   });
@@ -47,11 +64,15 @@ export default async function ProjectDetailPage({ params }: Props) {
     project.ownerOpenId,
     userOpenId,
   );
-  const canApprove = canApproveTask(roles, scope);
+  const canUpdateLifecycle = canUpdateProjectLifecycle(
+    roles,
+    project.ownerOpenId,
+    userOpenId,
+  );
 
   const users = await prisma.user.findMany({
     orderBy: { name: "asc" },
-    select: { openId: true, name: true },
+    select: { openId: true, name: true, avatar: true },
   });
 
   return (
@@ -78,15 +99,35 @@ export default async function ProjectDetailPage({ params }: Props) {
           </div>
 
           <div className="grid gap-8 xl:grid-cols-[1.2fr_1fr]">
-            <ProjectMilestonePanel
+            <ProjectStagePanel
               projectId={project.id}
               status={project.status}
-              milestones={project.milestones.map((m) => ({
-                ...m,
-                submissionId: m.submissionId,
+              stages={project.stages.map((s) => ({
+                ...s,
+                canSubmit: canSubmitStagePermission(
+                  roles,
+                  s.ownerOpenId,
+                  userOpenId,
+                ),
+                dueAt: s.dueAt ? s.dueAt.toISOString() : null,
+                submissions: s.submissions.map((sub) => ({
+                  ...sub,
+                  canApprove: canApproveStagePermission(
+                    roles,
+                    scope,
+                    project.ownerOpenId,
+                    sub.submittedBy,
+                    project.allowOwnerSelfApproval,
+                    userOpenId,
+                  ),
+                  submittedAt: sub.submittedAt.toISOString(),
+                  approvals: sub.approvals.map((a) => ({
+                    ...a,
+                    createdAt: a.createdAt.toISOString(),
+                  })),
+                })),
               }))}
-              canManage={canManage}
-              canApprove={canApprove}
+              canUpdateLifecycle={canUpdateLifecycle}
             />
 
             <div className="space-y-6">
@@ -105,7 +146,12 @@ export default async function ProjectDetailPage({ params }: Props) {
                             href={`/progress/tasks/${t.id}`}
                             className="flex items-center justify-between rounded-lg border p-3 hover:border-primary/30"
                           >
-                            <span className="font-medium">{t.title}</span>
+                            <div>
+                              <span className="font-medium">{t.title}</span>
+                              <p className="text-sm text-muted-foreground">
+                                负责人：{getTaskAssigneeNames(t)}
+                              </p>
+                            </div>
                             <div className="flex gap-2">
                               {t.isOverdue && (
                                 <Badge variant="destructive">逾期</Badge>
@@ -116,18 +162,32 @@ export default async function ProjectDetailPage({ params }: Props) {
                               <Badge variant="outline">
                                 {taskCategoryLabels[t.category]}
                               </Badge>
+                              {t.stage && (
+                                <Badge variant="outline">
+                                  {t.stage.name}
+                                </Badge>
+                              )}
                             </div>
                           </Link>
                         </li>
                       ))}
                     </ul>
                   )}
-                  {canManage && project.status !== "ARCHIVED" && (
-                    <div className="border-t pt-4">
-                      <p className="mb-3 font-medium">新建任务</p>
-                      <TaskForm projectId={project.id} users={users} />
-                    </div>
-                  )}
+                  {canManage &&
+                    project.status !== "COMPLETED" &&
+                    project.status !== "CANCELED" && (
+                      <div className="border-t pt-4">
+                        <p className="mb-3 font-medium">新建任务</p>
+                        <TaskForm
+                          projectId={project.id}
+                          users={users}
+                          stages={project.stages.map((s) => ({
+                            id: s.id,
+                            name: s.name,
+                          }))}
+                        />
+                      </div>
+                    )}
                 </CardContent>
               </Card>
 

@@ -9,6 +9,8 @@ import {
   canManageProject,
   canSubmitDelivery,
 } from "@/lib/permissions-progress";
+import { assertProjectActive } from "@/lib/progress-guards";
+import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { prisma } from "@/lib/prisma";
 import { getUserRoles } from "@/lib/permissions";
 
@@ -19,10 +21,11 @@ export async function updateTaskStatus(taskId: string, status: TaskStatus) {
 
   const task = await prisma.task.findUnique({
     where: { id: taskId },
-    include: { project: true },
+    include: { project: true, assignees: true },
   });
   if (!task) throw new Error("任务不存在");
   if (task.status === "ARCHIVED") throw new Error("任务已归档");
+  assertProjectActive(task.project.status);
 
   const canManage = canManageProject(
     roles,
@@ -30,7 +33,10 @@ export async function updateTaskStatus(taskId: string, status: TaskStatus) {
     task.project.ownerOpenId,
     user.openId,
   );
-  const canAssignee = canSubmitDelivery(user.openId, task.assigneeOpenId);
+  const canAssignee = canSubmitDelivery(
+    user.openId,
+    getTaskAssigneeOpenIds(task),
+  );
 
   if (!canManage && !canAssignee) {
     throw new Error("无权限更新任务状态");
@@ -74,6 +80,7 @@ export async function archiveTask(taskId: string) {
     include: { project: true },
   });
   if (!task) throw new Error("任务不存在");
+  assertProjectActive(task.project.status);
   if (task.status !== "COMPLETED") {
     throw new Error("仅「已完成」的任务可归档");
   }

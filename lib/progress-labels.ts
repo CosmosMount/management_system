@@ -1,6 +1,6 @@
 import type {
-  MilestoneStatus,
   ProjectStatus,
+  StageStatus,
   TaskCategory,
   TaskStatus,
   Urgency,
@@ -8,21 +8,18 @@ import type {
   UserRoleType,
 } from "@prisma/client";
 
-export const milestoneStatusLabels: Record<MilestoneStatus, string> = {
-  PENDING: "待验收",
-  PASSED: "已通过",
-  FAILED: "未通过",
+export const stageStatusLabels: Record<StageStatus, string> = {
+  NOT_STARTED: "未开始",
+  IN_PROGRESS: "进行中",
+  PENDING_ACCEPTANCE: "待审批",
+  COMPLETED: "已完成",
 };
 
 export const projectStatusLabels: Record<ProjectStatus, string> = {
-  DRAFT: "草稿",
-  IN_PROGRESS: "项目进行中",
-  NORMAL: "正常",
-  ABNORMAL: "异常",
-  UNDER_INTERVENTION: "负责人介入",
-  OUTCOME_GOOD: "结果理想",
-  OUTCOME_POOR: "结果不理想",
-  ARCHIVED: "已归档",
+  NOT_STARTED: "未开始",
+  IN_PROGRESS: "进行中",
+  COMPLETED: "已完成",
+  CANCELED: "已取消",
 };
 
 export const taskStatusLabels: Record<TaskStatus, string> = {
@@ -65,11 +62,9 @@ export const progressRoleLabels: Record<UserRoleType, string> = {
 
 /** 项目状态线性推进顺序（不含分支状态） */
 export const projectStatusFlow: ProjectStatus[] = [
-  "DRAFT",
+  "NOT_STARTED",
   "IN_PROGRESS",
-  "NORMAL",
-  "OUTCOME_GOOD",
-  "ARCHIVED",
+  "COMPLETED",
 ];
 
 export const kanbanColumns: TaskStatus[] = [

@@ -6,7 +6,7 @@ import { auth } from "@/lib/auth";
 import { sendProgressNotification } from "@/lib/feishu-progress";
 import { logProgressActivity, requireSessionUser } from "@/lib/progress-activity";
 import { assertProjectTransition } from "@/lib/progress-flow";
-import { canManageProject } from "@/lib/permissions-progress";
+import { canUpdateProjectLifecycle } from "@/lib/permissions-progress";
 import { prisma } from "@/lib/prisma";
 import { getUserRoles } from "@/lib/permissions";
 
@@ -18,47 +18,52 @@ export async function updateProjectStatus(
   const user = await requireSessionUser(session?.user?.openId);
   const roles = await getUserRoles(user.openId);
 
-  const project = await prisma.project.findUnique({ where: { id: projectId } });
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    include: { stages: { orderBy: { sortOrder: "asc" } } },
+  });
   if (!project) throw new Error("项目不存在");
-  if (project.status === "ARCHIVED") throw new Error("项目已归档");
+  if (project.status === "COMPLETED") throw new Error("项目已完成");
+  if (project.status === "CANCELED") throw new Error("项目已取消");
 
-  if (
-    !canManageProject(
-      roles,
-      { team: project.team, techGroup: project.techGroup },
-      project.ownerOpenId,
-      user.openId,
-    )
-  ) {
+  if (!canUpdateProjectLifecycle(roles, project.ownerOpenId, user.openId)) {
     throw new Error("无权限更新项目状态");
   }
 
   assertProjectTransition(project.status, status);
 
-  if (status === "ARCHIVED") {
-    const milestones = await prisma.projectMilestone.findMany({
-      where: { projectId },
-    });
-    const allPassed =
-      milestones.length > 0 &&
-      milestones.every((m) => m.status === "PASSED");
-    if (
-      project.status !== "OUTCOME_GOOD" &&
-      project.status !== "OUTCOME_POOR"
-    ) {
-      throw new Error("仅可在「结果理想」或「结果不理想」后归档项目");
-    }
-    if (!allPassed && milestones.length > 0) {
-      throw new Error("请先完成全部里程碑验收后再归档");
-    }
+  if (status === "COMPLETED") {
+    const allCompleted =
+      project.stages.length > 0 &&
+      project.stages.every((s) => s.status === "COMPLETED");
+    if (!allCompleted) throw new Error("请先完成全部项目阶段后再完成项目");
   }
 
-  const updated = await prisma.project.update({
-    where: { id: projectId },
-    data: {
-      status,
-      archivedAt: status === "ARCHIVED" ? new Date() : null,
-    },
+  const updated = await prisma.$transaction(async (tx) => {
+    const record = await tx.project.update({
+      where: { id: projectId },
+      data: {
+        status,
+        completedAt: status === "COMPLETED" ? new Date() : null,
+        canceledAt: status === "CANCELED" ? new Date() : null,
+        archivedAt:
+          status === "COMPLETED" || status === "CANCELED" ? new Date() : null,
+      },
+    });
+
+    if (status === "IN_PROGRESS") {
+      const firstStage = project.stages.find(
+        (s) => s.status === "NOT_STARTED",
+      );
+      if (firstStage) {
+        await tx.projectStage.update({
+          where: { id: firstStage.id },
+          data: { status: "IN_PROGRESS" },
+        });
+      }
+    }
+
+    return record;
   });
 
   await logProgressActivity({
@@ -69,16 +74,20 @@ export async function updateProjectStatus(
     payload: { from: project.status, to: status },
   });
 
-  if (status === "ABNORMAL") {
-    await sendProgressNotification({
-      type: "project_abnormal",
-      projectId: project.id,
-      projectName: project.name,
-      team: project.team,
-      techGroup: project.techGroup,
-      ownerName: project.ownerName,
-    }).catch(console.error);
-  }
+  await sendProgressNotification({
+    type:
+      status === "IN_PROGRESS"
+        ? "project_started"
+        : status === "COMPLETED"
+          ? "project_completed"
+          : "project_canceled",
+    projectId: project.id,
+    projectName: project.name,
+    team: project.team,
+    techGroup: project.techGroup,
+    ownerOpenId: project.ownerOpenId,
+    ownerName: project.ownerName,
+  }).catch(console.error);
 
   revalidatePath(`/progress/projects/${projectId}`);
   revalidatePath("/progress");

@@ -9,17 +9,21 @@ import {
   projectStatusLabels,
   taskStatusLabels,
 } from "@/lib/progress-labels";
+import { getTaskAssigneeNames } from "@/lib/progress-assignees";
 import { prisma } from "@/lib/prisma";
 
 export default async function ArchivePage() {
   const [projects, tasks] = await Promise.all([
     prisma.project.findMany({
-      where: { status: "ARCHIVED" },
+      where: { status: { in: ["COMPLETED", "CANCELED"] } },
       orderBy: { archivedAt: "desc" },
     }),
     prisma.task.findMany({
       where: { status: "ARCHIVED" },
-      include: { project: { select: { name: true } } },
+      include: {
+        project: { select: { name: true } },
+        assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      },
       orderBy: { archivedAt: "desc" },
     }),
   ]);
@@ -33,7 +37,7 @@ export default async function ArchivePage() {
 
           <Card>
             <CardHeader>
-              <CardTitle>已归档项目 ({projects.length})</CardTitle>
+              <CardTitle>已结束项目 ({projects.length})</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2">
               {projects.length === 0 ? (
@@ -77,7 +81,7 @@ export default async function ArchivePage() {
                     <div>
                       <p className="font-medium">{t.title}</p>
                       <p className="text-sm text-muted-foreground">
-                        {t.project.name} · {t.assigneeName}
+                        {t.project.name} · {getTaskAssigneeNames(t)}
                       </p>
                     </div>
                     <Badge variant="secondary">

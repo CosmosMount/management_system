@@ -8,7 +8,10 @@ import {
   rejectTaskSubmission,
 } from "@/app/actions/progress/approveTaskSubmission";
 import { submitTaskDelivery } from "@/app/actions/progress/submitTaskDelivery";
-import { submitWeeklyReport } from "@/app/actions/progress/submitWeeklyReport";
+import {
+  submitWeeklyReport,
+  syncTaskRisk,
+} from "@/app/actions/progress/submitWeeklyReport";
 import { updateTaskStatus, archiveTask } from "@/app/actions/progress/updateTask";
 import { StatusStepper } from "@/components/progress/status-stepper";
 import { Button } from "@/components/ui/button";
@@ -21,7 +24,7 @@ import { getTaskStepperDisplay } from "@/lib/progress-flow";
 type Submission = {
   id: string;
   feishuDocUrl: string;
-  videoUrl: string;
+  keyDataUrl: string;
   note: string;
   failureReason: string;
   submittedAt: string;
@@ -40,6 +43,8 @@ type Props = {
   isAssignee: boolean;
   canApprove: boolean;
   canManage: boolean;
+  needsOfflineConfirmation: boolean;
+  needsWeeklyReport: boolean;
   submissions: Submission[];
 };
 
@@ -49,17 +54,21 @@ export function TaskActionsPanel({
   isAssignee,
   canApprove,
   canManage,
+  needsOfflineConfirmation,
+  needsWeeklyReport,
   submissions,
 }: Props) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [docUrl, setDocUrl] = useState("");
-  const [videoUrl, setVideoUrl] = useState("");
+  const [keyDataUrl, setKeyDataUrl] = useState("");
   const [note, setNote] = useState("");
   const [failureReason, setFailureReason] = useState("");
   const [progress, setProgress] = useState("");
   const [risks, setRisks] = useState("");
   const [nextPlan, setNextPlan] = useState("");
+  const [riskNote, setRiskNote] = useState("");
+  const [offlineConfirmed, setOfflineConfirmed] = useState(false);
 
   const { steps, currentIndex } = getTaskStepperDisplay(status);
 
@@ -86,7 +95,7 @@ export function TaskActionsPanel({
       await submitTaskDelivery({
         taskId,
         feishuDocUrl: docUrl,
-        videoUrl,
+        keyDataUrl,
         note,
         failureReason,
       });
@@ -94,6 +103,19 @@ export function TaskActionsPanel({
       router.refresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "提交失败");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleRiskSync() {
+    setLoading(true);
+    try {
+      await syncTaskRisk({ taskId, riskNote });
+      toast.success("风险已同步");
+      router.refresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "同步失败");
     } finally {
       setLoading(false);
     }
@@ -123,10 +145,16 @@ export function TaskActionsPanel({
     setLoading(true);
     try {
       if (approve) {
-        await approveTaskSubmission({ submissionId: pendingSubmission.id });
+        await approveTaskSubmission({
+          submissionId: pendingSubmission.id,
+          offlineConfirmed,
+        });
         toast.success("验收通过");
       } else {
-        await rejectTaskSubmission({ submissionId: pendingSubmission.id });
+        await rejectTaskSubmission({
+          submissionId: pendingSubmission.id,
+          offlineConfirmed,
+        });
         toast.success("已驳回");
       }
       router.refresh();
@@ -175,7 +203,7 @@ export function TaskActionsPanel({
         </CardContent>
       </Card>
 
-      {isAssignee && (status === "IN_PROGRESS" || status === "PENDING_ACCEPTANCE") && (
+      {isAssignee && status === "IN_PROGRESS" && (
         <Card>
           <CardHeader>
             <CardTitle>提交交付</CardTitle>
@@ -190,8 +218,12 @@ export function TaskActionsPanel({
               />
             </div>
             <div className="space-y-2">
-              <Label>关键数据视频链接</Label>
-              <Input value={videoUrl} onChange={(e) => setVideoUrl(e.target.value)} />
+              <Label>关键数据链接（必填）</Label>
+              <Input
+                value={keyDataUrl}
+                onChange={(e) => setKeyDataUrl(e.target.value)}
+                placeholder="视频、照片、曲线或归档材料链接"
+              />
             </div>
             <div className="space-y-2">
               <Label>说明</Label>
@@ -216,7 +248,9 @@ export function TaskActionsPanel({
       {isAssignee && status !== "ARCHIVED" && status !== "COMPLETED" && (
         <Card>
           <CardHeader>
-            <CardTitle>本周进度周报</CardTitle>
+            <CardTitle>
+              本周进度周报{needsWeeklyReport ? "（必填）" : "（可选）"}
+            </CardTitle>
           </CardHeader>
           <CardContent className="grid gap-4 md:grid-cols-3">
             <Input
@@ -243,6 +277,29 @@ export function TaskActionsPanel({
         </Card>
       )}
 
+      {isAssignee && status !== "ARCHIVED" && status !== "COMPLETED" && (
+        <Card>
+          <CardHeader>
+            <CardTitle>风险同步</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+            <Input
+              placeholder="说明风险、阻塞或需要组长/项管介入的问题"
+              value={riskNote}
+              onChange={(e) => setRiskNote(e.target.value)}
+            />
+            <Button
+              className="w-fit"
+              variant="destructive"
+              disabled={loading}
+              onClick={handleRiskSync}
+            >
+              同步风险
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
       {canApprove && pendingSubmission && status === "PENDING_ACCEPTANCE" && (
         <Card>
           <CardHeader>
@@ -260,12 +317,40 @@ export function TaskActionsPanel({
                 在飞书中打开
               </a>
             </p>
+            {pendingSubmission.keyDataUrl && (
+              <p className="text-sm">
+                关键数据：
+                <a
+                  href={pendingSubmission.keyDataUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="ml-1 text-primary hover:underline"
+                >
+                  打开材料
+                </a>
+              </p>
+            )}
             <p className="text-sm text-muted-foreground">
               提交人：{pendingSubmission.submitterName} ·{" "}
               {new Date(pendingSubmission.submittedAt).toLocaleString("zh-CN")}
             </p>
+            {needsOfflineConfirmation && (
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={offlineConfirmed}
+                  onChange={(e) => setOfflineConfirmed(e.target.checked)}
+                />
+                已完成线下确认
+              </label>
+            )}
             <div className="flex gap-3">
-              <Button disabled={loading} onClick={() => handleApprove(true)}>
+              <Button
+                disabled={
+                  loading || (needsOfflineConfirmation && !offlineConfirmed)
+                }
+                onClick={() => handleApprove(true)}
+              >
                 通过验收
               </Button>
               <Button
@@ -300,6 +385,16 @@ export function TaskActionsPanel({
                   {s.submitterName} ·{" "}
                   {new Date(s.submittedAt).toLocaleString("zh-CN")}
                 </span>
+                {s.keyDataUrl && (
+                  <a
+                    href={s.keyDataUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="ml-2 text-primary hover:underline"
+                  >
+                    关键数据
+                  </a>
+                )}
                 {s.approvals.map((a) => (
                   <p key={a.id} className="mt-1 text-muted-foreground">
                     {a.approverName}：

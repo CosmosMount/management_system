@@ -9,6 +9,8 @@ import {
   canApproveTask,
   getApproverRole,
 } from "@/lib/permissions-progress";
+import { assertProjectActive } from "@/lib/progress-guards";
+import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { prisma } from "@/lib/prisma";
 import { getUserRoles } from "@/lib/permissions";
 import { approvalSchema } from "@/lib/validations/progress";
@@ -16,6 +18,7 @@ import { approvalSchema } from "@/lib/validations/progress";
 export async function approveTaskSubmission(input: {
   submissionId: string;
   comment?: string;
+  offlineConfirmed?: boolean;
 }) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
@@ -25,7 +28,7 @@ export async function approveTaskSubmission(input: {
   const submission = await prisma.taskSubmission.findUnique({
     where: { id: parsed.submissionId },
     include: {
-      task: { include: { project: true } },
+      task: { include: { project: true, assignees: true } },
       approvals: true,
     },
   });
@@ -33,6 +36,25 @@ export async function approveTaskSubmission(input: {
 
   const task = submission.task;
   if (!task) throw new Error("关联任务不存在");
+  assertProjectActive(task.project.status);
+  if (submission.type !== "DELIVERY") throw new Error("提交类型无效");
+  if (task.status !== "PENDING_ACCEPTANCE") {
+    throw new Error("任务不在待验收状态");
+  }
+  if (submission.approvals.length > 0) {
+    throw new Error("该提交已审批");
+  }
+  const latestSubmission = await prisma.taskSubmission.findFirst({
+    where: { taskId: task.id, type: "DELIVERY" },
+    orderBy: { submittedAt: "desc" },
+    select: { id: true },
+  });
+  if (latestSubmission?.id !== submission.id) {
+    throw new Error("只能审批当前最新提交");
+  }
+  if (task.needsOfflineConfirmation && !parsed.offlineConfirmed) {
+    throw new Error("该任务需要先完成线下确认");
+  }
 
   if (
     !canApproveTask(roles, {
@@ -58,6 +80,7 @@ export async function approveTaskSubmission(input: {
         approverRole,
         decision: ApprovalDecision.APPROVED,
         docViewVerified: false,
+        offlineConfirmed: parsed.offlineConfirmed,
         comment: parsed.comment ?? "",
       },
     });
@@ -84,7 +107,7 @@ export async function approveTaskSubmission(input: {
     taskId: task.id,
     taskTitle: task.title,
     projectName: task.project.name,
-    assigneeOpenId: task.assigneeOpenId,
+    assigneeOpenIds: getTaskAssigneeOpenIds(task),
   }).catch(console.error);
 
   revalidatePath(`/progress/tasks/${task.id}`);
@@ -95,6 +118,7 @@ export async function approveTaskSubmission(input: {
 export async function rejectTaskSubmission(input: {
   submissionId: string;
   comment?: string;
+  offlineConfirmed?: boolean;
 }) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
@@ -108,6 +132,24 @@ export async function rejectTaskSubmission(input: {
   if (!submission?.task) throw new Error("提交记录不存在");
 
   const task = submission.task;
+  assertProjectActive(task.project.status);
+  if (submission.type !== "DELIVERY") throw new Error("提交类型无效");
+  if (task.status !== "PENDING_ACCEPTANCE") {
+    throw new Error("任务不在待验收状态");
+  }
+  const existingApproval = await prisma.approvalRecord.findFirst({
+    where: { submissionId: submission.id },
+    select: { id: true },
+  });
+  if (existingApproval) throw new Error("该提交已审批");
+  const latestSubmission = await prisma.taskSubmission.findFirst({
+    where: { taskId: task.id, type: "DELIVERY" },
+    orderBy: { submittedAt: "desc" },
+    select: { id: true },
+  });
+  if (latestSubmission?.id !== submission.id) {
+    throw new Error("只能审批当前最新提交");
+  }
 
   if (
     !canApproveTask(roles, {
@@ -133,6 +175,7 @@ export async function rejectTaskSubmission(input: {
         approverRole,
         decision: ApprovalDecision.REJECTED,
         docViewVerified: false,
+        offlineConfirmed: parsed.offlineConfirmed,
         comment: parsed.comment ?? "",
       },
     });

@@ -29,9 +29,13 @@ export function isTechGroupLead(
 
 export function isAssignee(
   userOpenId: string | undefined,
-  assigneeOpenId: string,
+  assigneeOpenIds: string | string[],
 ): boolean {
-  return !!userOpenId && userOpenId === assigneeOpenId;
+  if (!userOpenId) return false;
+  const openIds = Array.isArray(assigneeOpenIds)
+    ? assigneeOpenIds
+    : [assigneeOpenIds];
+  return openIds.includes(userOpenId);
 }
 
 export function canManageProject(
@@ -46,6 +50,15 @@ export function canManageProject(
   if (isTeamLead(roles, scope.team)) return true;
   if (isTechGroupLead(roles, scope.techGroup)) return true;
   return false;
+}
+
+export function canUpdateProjectLifecycle(
+  roles: UserRoleRecord[],
+  ownerOpenId: string,
+  userOpenId?: string,
+): boolean {
+  if (isProgressSuperAdmin(roles)) return true;
+  return !!userOpenId && userOpenId === ownerOpenId;
 }
 
 export function canCreateProject(roles: UserRoleRecord[]): boolean {
@@ -69,6 +82,39 @@ export function canApproveTask(
   return false;
 }
 
+export function canSubmitStage(
+  roles: UserRoleRecord[],
+  stageOwnerOpenId: string,
+  userOpenId?: string,
+): boolean {
+  if (isProgressSuperAdmin(roles)) return true;
+  return !!userOpenId && userOpenId === stageOwnerOpenId;
+}
+
+export function canApproveStage(
+  roles: UserRoleRecord[],
+  scope: ProgressScope,
+  projectOwnerOpenId: string,
+  submitterOpenId: string,
+  allowOwnerSelfApproval: boolean,
+  userOpenId?: string,
+): boolean {
+  if (!userOpenId) return false;
+  if (userOpenId === submitterOpenId) {
+    return (
+      allowOwnerSelfApproval &&
+      userOpenId === projectOwnerOpenId &&
+      submitterOpenId === projectOwnerOpenId
+    );
+  }
+  if (userOpenId === projectOwnerOpenId) return true;
+  if (isProgressSuperAdmin(roles)) return true;
+  if (isProjectManager(roles)) return true;
+  if (isTeamLead(roles, scope.team)) return true;
+  if (isTechGroupLead(roles, scope.techGroup)) return true;
+  return false;
+}
+
 export function getApproverRole(
   roles: UserRoleRecord[],
   scope: ProgressScope,
@@ -82,14 +128,14 @@ export function getApproverRole(
 
 export function canSubmitDelivery(
   userOpenId: string | undefined,
-  assigneeOpenId: string,
+  assigneeOpenIds: string | string[],
 ): boolean {
-  return isAssignee(userOpenId, assigneeOpenId);
+  return isAssignee(userOpenId, assigneeOpenIds);
 }
 
 export function canSubmitWeeklyReport(
   userOpenId: string | undefined,
-  assigneeOpenId: string,
+  assigneeOpenIds: string | string[],
 ): boolean {
-  return isAssignee(userOpenId, assigneeOpenId);
+  return isAssignee(userOpenId, assigneeOpenIds);
 }
