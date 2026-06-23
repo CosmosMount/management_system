@@ -121,6 +121,8 @@ model PurchaseOrder {
   rejectionReason   String?
   rejectedAt        DateTime?
   rejectedByName    String?
+  lastReminderAt    DateTime?
+  statusEnteredAt   DateTime       @default(now())
   items             PurchaseItem[]
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt

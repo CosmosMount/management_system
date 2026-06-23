@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
 import { OrderStatus } from "@prisma/client";
 import { sendOrderNotification, mapOrderItems } from "@/lib/feishu";
+import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { saveUpload, uploadTypeSets } from "@/lib/file-upload";
 import { prisma } from "@/lib/prisma";
 import { canUploadFinanceScreenshot, getUserRoles } from "@/lib/permissions";
@@ -51,6 +52,7 @@ export async function uploadFinanceScreenshot(formData: FormData) {
     data: {
       screenshotPath,
       status: OrderStatus.PENDING_APPLICANT_CONFIRM,
+      ...stepTimerResetFields(),
     },
   });
 

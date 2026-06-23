@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
 import { OrderStatus } from "@prisma/client";
 import { sendOrderNotification, mapOrderItems } from "@/lib/feishu";
+import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";
 import {
   canApproveOrder,
@@ -48,7 +49,7 @@ export async function updateOrderStatus(orderId: string) {
 
   const updated = await prisma.purchaseOrder.update({
     where: { id: orderId },
-    data: { status: transition.next },
+    data: { status: transition.next, ...stepTimerResetFields() },
   });
 
   const notifyStatuses: OrderStatus[] = [

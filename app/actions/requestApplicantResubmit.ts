@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { sendApplicantResubmitNotification } from "@/lib/feishu";
+import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";
 import {
   canRequestApplicantResubmit,
@@ -66,6 +67,7 @@ export async function requestApplicantResubmit(input: {
         rejectionReason: reason,
         rejectedAt: new Date(),
         rejectedByName,
+        ...stepTimerResetFields(),
       },
     });
   });

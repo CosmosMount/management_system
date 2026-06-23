@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
 import { OrderStatus } from "@prisma/client";
 import { sendOrderNotification, mapOrderItems } from "@/lib/feishu";
+import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";
 import {
   canApproveTeamManagement,
@@ -52,6 +53,7 @@ export async function approveManagementReview(orderId: string) {
     data: {
       teamApproved,
       techGroupApproved,
+      ...stepTimerResetFields(),
       ...(allApproved ? { status: OrderStatus.TEACHER_REVIEW } : {}),
     },
   });

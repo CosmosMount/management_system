@@ -20,6 +20,7 @@ import {
   type ReimbursementDocItem,
 } from "@/lib/generate-reimbursement-docx";
 import { serializeFilePaths } from "@/lib/order-attachments";
+import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";
 import { canUploadApplicantDocs } from "@/lib/permissions";
 
@@ -264,6 +265,7 @@ export async function uploadApplicantDocs(formData: FormData) {
         rejectionReason: null,
         rejectedAt: null,
         rejectedByName: null,
+        ...stepTimerResetFields(),
       },
     });
   });

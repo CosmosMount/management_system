@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
 import { OrderStatus } from "@prisma/client";
+import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";
 import { resolveInvoicePaths } from "@/lib/order-attachments";
 import { canConfirmReimbursement } from "@/lib/permissions";
@@ -42,7 +43,7 @@ export async function confirmReimbursement(orderId: string) {
 
   const updated = await prisma.purchaseOrder.update({
     where: { id: orderId },
-    data: { status: OrderStatus.COMPLETED },
+    data: { status: OrderStatus.COMPLETED, ...stepTimerResetFields() },
   });
 
   revalidatePath("/orders");

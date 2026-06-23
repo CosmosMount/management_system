@@ -2,6 +2,7 @@ import "dotenv/config";
 import cron from "node-cron";
 import { OrderStatus } from "@prisma/client";
 import { sendFeishuDailySummary } from "../lib/feishu";
+import { runProcurementStaleReminders } from "../lib/procurement-reminders";
 import {
   runProgressDailyReminders,
   runProgressOverdueCheck,
@@ -23,7 +24,11 @@ async function runProcurementDaily() {
   }
 
   await sendFeishuDailySummary(ordersByStatus);
-  console.log(`[cron] 采购日报已发送，共 ${orders.length} 条未完结单据`);
+
+  const reminded = await runProcurementStaleReminders();
+  console.log(
+    `[cron] 采购日报已发送，共 ${orders.length} 条未完结；催办 ${reminded} 单`,
+  );
 }
 
 async function runProgressDaily() {
@@ -55,5 +60,5 @@ cron.schedule("0 9 * * 1", () => {
 });
 
 console.log(
-  "[cron] 定时任务已启动：每日 09:00 采购+进度，每周一 09:00 周报提醒",
+  "[cron] 定时任务已启动：每日 09:00 采购日报+催办+进度，每周一 09:00 周报提醒",
 );
