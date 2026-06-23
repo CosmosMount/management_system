@@ -150,19 +150,40 @@ function replaceCellContent(
   let i = 0;
   let result = "";
   let lastIndex = 0;
+  let replaced = false;
   while ((match = cellRegex.exec(rowXml)) !== null) {
     if (i === cellIndex) {
       const cell = match[0];
       const openEnd = cell.indexOf(">") + 1;
       const closeStart = cell.lastIndexOf("</w:tc>");
-      const replaced =
+      const nextCell =
         cell.slice(0, openEnd) + newInner + cell.slice(closeStart);
-      result += rowXml.slice(lastIndex, match.index) + replaced;
+      result += rowXml.slice(lastIndex, match.index) + nextCell;
       lastIndex = match.index + match[0].length;
+      replaced = true;
     }
     i++;
   }
+  if (!replaced) {
+    throw new Error(`表格行缺少第 ${cellIndex + 1} 列，无法写入合计`);
+  }
   return result + rowXml.slice(lastIndex);
+}
+
+/** 定位「总计」行中应填入合计金额的单元格（模板中为占位 0） */
+function findTotalValueCellIndex(totalRowXml: string): number {
+  const cells = [...totalRowXml.matchAll(/<w:tc[\s\S]*?<\/w:tc>/g)];
+  for (let i = 0; i < cells.length; i++) {
+    const text = [...cells[i][0].matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)]
+      .map((m) => m[1])
+      .join("")
+      .trim();
+    if (text === "0" || text === "0.0" || text === "0.00") {
+      return i;
+    }
+  }
+  if (cells.length >= 3) return 2;
+  throw new Error("未找到总计金额单元格");
 }
 
 function buildDataRow(templateRow: string, item: ReimbursementDocItem, index: number): string {
@@ -226,7 +247,7 @@ function expandDocumentXml(
   const dataRows = items.map((item, i) => buildDataRow(dataTemplate, item, i + 1));
   const totalRow = replaceCellContent(
     totalRowTemplate,
-    5,
+    findTotalValueCellIndex(totalRowTemplate),
     boldTextParagraph(formatMoney(sumTotal)),
   );
 

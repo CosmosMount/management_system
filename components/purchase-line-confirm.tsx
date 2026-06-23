@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Table,
   TableBody,
@@ -46,6 +46,17 @@ export function PurchaseLineConfirm({
       ]),
     ),
   );
+
+  useEffect(() => {
+    onChange?.(
+      items.map((item) => ({
+        id: item.id,
+        lineTotal:
+          lineTotals[item.id] ??
+          Math.round(item.quantity * item.unitPrice * 100) / 100,
+      })),
+    );
+  }, [items, lineTotals, onChange]);
 
   const rows = useMemo(
     () =>
