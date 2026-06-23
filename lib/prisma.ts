@@ -25,7 +25,8 @@ function isPrismaClientStale(client: PrismaClient): boolean {
   return (
     typeof client.project?.findMany !== "function" ||
     typeof client.projectStage?.findMany !== "function" ||
-    typeof client.taskAssignee?.findMany !== "function"
+    typeof client.taskAssignee?.findMany !== "function" ||
+    typeof client.feedback?.findMany !== "function"
   );
 }
 

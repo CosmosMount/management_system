@@ -79,6 +79,12 @@ enum ApprovalDecision {
   REJECTED
 }
 
+enum FeedbackStatus {
+  OPEN
+  IN_PROGRESS
+  CLOSED
+}
+
 model User {
   id            String          @id @default(uuid())
   openId        String          @unique
@@ -280,4 +286,44 @@ model ProgressActivityLog {
   actorName  String
   payload    String   @default("{}")
   createdAt  DateTime @default(now())
+}
+
+model Feedback {
+  id              String            @id @default(uuid())
+  submitterOpenId String
+  submitterName   String
+  status          FeedbackStatus    @default(OPEN)
+  lastMessageAt   DateTime          @default(now())
+  closedAt        DateTime?
+  messages        FeedbackMessage[]
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@index([submitterOpenId])
+  @@index([status, lastMessageAt])
+}
+
+model FeedbackMessage {
+  id           String               @id @default(uuid())
+  feedbackId   String
+  feedback     Feedback             @relation(fields: [feedbackId], references: [id], onDelete: Cascade)
+  authorOpenId String
+  authorName   String
+  body         String               @default("")
+  attachments  FeedbackAttachment[]
+  createdAt    DateTime             @default(now())
+
+  @@index([feedbackId, createdAt])
+}
+
+model FeedbackAttachment {
+  id        String          @id @default(uuid())
+  messageId String
+  message   FeedbackMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  path      String
+  fileName  String
+  mimeType  String
+  size      Int
+  sortOrder Int             @default(0)
+  createdAt DateTime        @default(now())
 }

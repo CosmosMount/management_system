@@ -1,6 +1,6 @@
 import { auth, signOut } from "@/lib/auth";
 import Link from "next/link";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { APP_NAME } from "@/lib/branding";
 import { isSuperAdmin } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
@@ -49,6 +49,12 @@ export async function AppHeader() {
         </nav>
         {session?.user && (
           <div className="flex items-center gap-3">
+            <Link
+              href="/feedback?new=1"
+              className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+            >
+              反馈
+            </Link>
             {session.user.image && (
               // eslint-disable-next-line @next/next/no-img-element
               <img
