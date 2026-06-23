@@ -11,7 +11,9 @@ import { prisma } from "../lib/prisma";
 
 async function runProcurementDaily() {
   const orders = await prisma.purchaseOrder.findMany({
-    where: { status: { not: OrderStatus.COMPLETED } },
+    where: {
+      status: { notIn: [OrderStatus.COMPLETED, OrderStatus.REJECTED] },
+    },
     select: { status: true },
   });
 

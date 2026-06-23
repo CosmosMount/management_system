@@ -16,6 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { UserSearchSelect } from "@/components/user-search-select";
 import {
   createTaskSchema,
   type CreateTaskInput,
@@ -156,21 +157,12 @@ export function TaskForm({ projectId, users }: Props) {
           control={form.control}
           name="assigneeOpenId"
           render={({ field }) => (
-            <Select
+            <UserSearchSelect
+              users={users}
               value={field.value ?? ""}
-              onValueChange={(v) => field.onChange(v ?? undefined)}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="选择负责人" />
-              </SelectTrigger>
-              <SelectContent>
-                {users.map((u) => (
-                  <SelectItem key={u.openId} value={u.openId}>
-                    {u.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              onChange={(v) => field.onChange(v || undefined)}
+              placeholder="搜索负责人姓名"
+            />
           )}
         />
       </div>

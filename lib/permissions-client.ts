@@ -68,6 +68,9 @@ export function canApproveOrder(
   order: OrderScope,
   managementState?: ManagementApprovalState,
 ): boolean {
+  if (status === "REJECTED" || status === "COMPLETED" || status === "DRAFT") {
+    return false;
+  }
   if (status === "MANAGEMENT_REVIEW" && managementState) {
     return (
       canApproveTeamManagement(userRoles, order, managementState) ||
@@ -149,6 +152,40 @@ export function isSuperAdmin(userRoles: UserRoleRecord[]): boolean {
   return userRoles.some((r) => r.role === "SUPER_ADMIN");
 }
 
+/** 采购审批阶段（管理/老师）是否可驳回 */
+export function canRejectProcurement(
+  status: OrderStatus,
+  userRoles: UserRoleRecord[],
+  order: OrderScope,
+): boolean {
+  if (isSuperAdmin(userRoles)) {
+    return status === "MANAGEMENT_REVIEW" || status === "TEACHER_REVIEW";
+  }
+  if (status === "MANAGEMENT_REVIEW") {
+    return userRoles.some(
+      (r) =>
+        (r.role === "TEAM_ADMIN" && r.team === order.team) ||
+        (r.role === "TECH_GROUP_ADMIN" && r.techGroup === order.techGroup),
+    );
+  }
+  if (status === "TEACHER_REVIEW") {
+    return userRoles.some((r) => r.role === "TEACHER");
+  }
+  return false;
+}
+
+/** 报销员要求采购人重新提交凭证 */
+export function canRequestApplicantResubmit(
+  status: OrderStatus,
+  userRoles: UserRoleRecord[],
+  order: OrderScope,
+): boolean {
+  return (
+    status === "PENDING_FINANCE_REVIEW" &&
+    userRoles.some((r) => r.role === "FINANCE" && r.team === order.team)
+  );
+}
+
 export const statusLabels: Record<OrderStatus, string> = {
   DRAFT: "草稿",
   MANAGEMENT_REVIEW: "管理审核",
@@ -157,6 +194,7 @@ export const statusLabels: Record<OrderStatus, string> = {
   PENDING_FINANCE_REVIEW: "待报销截图",
   PENDING_APPLICANT_CONFIRM: "待确认",
   COMPLETED: "已完成",
+  REJECTED: "已驳回",
 };
 
 export const roleLabels: Record<UserRoleType, string> = {

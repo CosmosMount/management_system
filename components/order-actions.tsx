@@ -4,13 +4,16 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { approveManagementReview } from "@/app/actions/approveManagementReview";
+import { rejectProcurementOrder } from "@/app/actions/rejectOrder";
 import { updateOrderStatus } from "@/app/actions/updateOrderStatus";
+import { ReasonConfirmDialog } from "@/components/reason-confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { OrderStatus } from "@prisma/client";
 import {
   canApproveOrder,
   canApproveTeamManagement,
   canApproveTechGroupManagement,
+  canRejectProcurement,
   getStatusTransition,
   roleLabels,
   type ManagementApprovalState,
@@ -37,6 +40,8 @@ export function OrderActions({
   const [pending, startTransition] = useTransition();
   const [loading, setLoading] = useState(false);
 
+  const canReject = canRejectProcurement(status, userRoles, order);
+
   if (status === OrderStatus.MANAGEMENT_REVIEW) {
     const showTeam = canApproveTeamManagement(
       userRoles,
@@ -49,7 +54,7 @@ export function OrderActions({
       managementState,
     );
 
-    if (!showTeam && !showTech) return null;
+    if (!showTeam && !showTech && !canReject) return null;
 
     function handleManagementApprove() {
       setLoading(true);
@@ -64,6 +69,12 @@ export function OrderActions({
           setLoading(false);
         }
       });
+    }
+
+    async function handleReject(reason: string) {
+      await rejectProcurementOrder({ orderId, reason });
+      toast.success("已驳回，已通知采购人");
+      router.refresh();
     }
 
     return (
@@ -86,16 +97,34 @@ export function OrderActions({
             {roleLabels.TECH_GROUP_ADMIN}通过
           </Button>
         )}
+        {canReject && (
+          <ReasonConfirmDialog
+            triggerLabel="驳回"
+            title="驳回采购申请"
+            description="驳回后本次采购终止，不计入采购汇总，原因将发送给采购人。"
+            reasonLabel="驳回原因"
+            confirmLabel="确认驳回"
+            disabled={pending || loading}
+            onConfirm={handleReject}
+          />
+        )}
       </div>
     );
   }
 
-  if (!canApproveOrder(status, userRoles, order, managementState)) {
-    return null;
-  }
+  const canApprove = canApproveOrder(
+    status,
+    userRoles,
+    order,
+    managementState,
+  );
 
-  const transition = getStatusTransition(status)!;
-  const label = `${roleLabels[transition.role]}通过`;
+  if (!canApprove && !canReject) return null;
+
+  const transition = getStatusTransition(status);
+  const label = transition
+    ? `${roleLabels[transition.role]}通过`
+    : "通过";
 
   function handleApprove() {
     setLoading(true);
@@ -112,9 +141,30 @@ export function OrderActions({
     });
   }
 
+  async function handleReject(reason: string) {
+    await rejectProcurementOrder({ orderId, reason });
+    toast.success("已驳回，已通知采购人");
+    router.refresh();
+  }
+
   return (
-    <Button onClick={handleApprove} disabled={pending || loading} size="sm">
-      {label}
-    </Button>
+    <div className="flex flex-wrap gap-2">
+      {canApprove && (
+        <Button onClick={handleApprove} disabled={pending || loading} size="sm">
+          {label}
+        </Button>
+      )}
+      {canReject && (
+        <ReasonConfirmDialog
+          triggerLabel="驳回"
+          title="驳回采购申请"
+          description="驳回后本次采购终止，不计入采购汇总，原因将发送给采购人。"
+          reasonLabel="驳回原因"
+          confirmLabel="确认驳回"
+          disabled={pending || loading}
+          onConfirm={handleReject}
+        />
+      )}
+    </div>
   );
 }

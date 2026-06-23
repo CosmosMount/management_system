@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
 import { OrderStatus } from "@prisma/client";
-import { sendOrderNotification } from "@/lib/feishu";
+import { sendOrderNotification, mapOrderItems } from "@/lib/feishu";
 import { generateOrderNo } from "@/lib/order-no";
 import { prisma } from "@/lib/prisma";
 import {
@@ -60,6 +60,7 @@ export async function createOrder(input: CreateOrderInput) {
       status: order.status,
       team: order.team,
       techGroup: order.techGroup,
+      items: mapOrderItems(order.items),
     }).catch((err) => {
       console.error("[createOrder] 飞书通知失败:", err);
     });

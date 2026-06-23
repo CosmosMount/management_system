@@ -8,8 +8,10 @@ import {
   previewReimbursementListDoc,
   uploadApplicantDocs,
 } from "@/app/actions/uploadApplicantDocs";
+import { requestApplicantResubmit } from "@/app/actions/requestApplicantResubmit";
 import { uploadFinanceScreenshot } from "@/app/actions/uploadFinanceScreenshot";
 import { InlineAttachments } from "@/components/order-attachments";
+import { ReasonConfirmDialog } from "@/components/reason-confirm-dialog";
 import {
   PurchaseLineConfirm,
   type ConfirmedLineItem,
@@ -30,6 +32,7 @@ import type { OrderStatus } from "@prisma/client";
 import type { OrderAttachmentGroups } from "@/lib/order-attachments";
 import {
   canConfirmReimbursement,
+  canRequestApplicantResubmit,
   canUploadApplicantDocs,
   canUploadFinanceScreenshot,
   type OrderScope,
@@ -72,24 +75,33 @@ export function OrderReimbursementActions({
     userRoles,
     orderScope,
   );
+  const showFinanceResubmit = canRequestApplicantResubmit(
+    status,
+    userRoles,
+    orderScope,
+  );
   const showConfirm = canConfirmReimbursement(
     status,
     userOpenId,
     initiatorOpenId,
   );
 
-  if (!showApplicant && !showFinance && !showConfirm) return null;
+  if (!showApplicant && !showFinance && !showFinanceResubmit && !showConfirm) {
+    return null;
+  }
 
   return (
     <div className="flex flex-wrap gap-2">
       {showApplicant && (
-        <ApplicantDocsDialog
+        <div id="upload">
+          <ApplicantDocsDialog
           orderId={orderId}
           items={items}
           loading={loading}
           setLoading={setLoading}
           onDone={() => router.refresh()}
         />
+        </div>
       )}
       {showFinance && (
         <FinanceScreenshotDialog
@@ -101,14 +113,40 @@ export function OrderReimbursementActions({
           onDone={() => router.refresh()}
         />
       )}
+      {showFinanceResubmit && (
+        <ReasonConfirmDialog
+          triggerLabel="要求重提资料"
+          title="要求重新提交报销资料"
+          description="订单将退回「待上传凭证」，已上传的发票、清单与照片将清空，采购人需重新提交。"
+          reasonLabel="需补充说明"
+          confirmLabel="确认退回"
+          variant="outline"
+          disabled={loading}
+          onConfirm={async (reason) => {
+            setLoading(true);
+            try {
+              await requestApplicantResubmit({ orderId, reason });
+              toast.success("已通知采购人重新提交资料");
+              router.refresh();
+            } catch (err) {
+              toast.error(err instanceof Error ? err.message : "操作失败");
+              throw err;
+            } finally {
+              setLoading(false);
+            }
+          }}
+        />
+      )}
       {showConfirm && (
-        <ConfirmReimbursementDialog
+        <div id="confirm">
+          <ConfirmReimbursementDialog
           orderId={orderId}
           items={items}
           loading={loading}
           setLoading={setLoading}
           onDone={() => router.refresh()}
         />
+        </div>
       )}
     </div>
   );

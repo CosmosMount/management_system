@@ -9,7 +9,21 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 
-export default function LoginPage() {
+function sanitizeCallbackUrl(url?: string): string {
+  if (!url || !url.startsWith("/") || url.startsWith("//")) {
+    return "/orders";
+  }
+  return url;
+}
+
+type Props = {
+  searchParams: Promise<{ callbackUrl?: string }>;
+};
+
+export default async function LoginPage({ searchParams }: Props) {
+  const { callbackUrl } = await searchParams;
+  const redirectTo = sanitizeCallbackUrl(callbackUrl);
+
   return (
     <div className="relative flex flex-1 items-center justify-center p-4">
       <div
@@ -28,7 +42,7 @@ export default function LoginPage() {
           <form
             action={async () => {
               "use server";
-              await signIn("feishu", { redirectTo: "/" });
+              await signIn("feishu", { redirectTo });
             }}
           >
             <Button type="submit" className="w-full">

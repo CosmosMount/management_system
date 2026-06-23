@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
 import { OrderStatus } from "@prisma/client";
-import { sendOrderNotification } from "@/lib/feishu";
+import { sendOrderNotification, mapOrderItems } from "@/lib/feishu";
 import { prisma } from "@/lib/prisma";
 import {
   canApproveOrder,
@@ -24,6 +24,7 @@ export async function updateOrderStatus(orderId: string) {
 
   const order = await prisma.purchaseOrder.findUnique({
     where: { id: orderId },
+    include: { items: true },
   });
   if (!order) {
     throw new Error("订单不存在");
@@ -62,6 +63,7 @@ export async function updateOrderStatus(orderId: string) {
       status: updated.status,
       team: updated.team,
       techGroup: updated.techGroup,
+      items: mapOrderItems(order.items),
     }).catch((err) => {
       console.error("[updateOrderStatus] 飞书通知失败:", err);
     });

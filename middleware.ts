@@ -20,7 +20,8 @@ export default middlewareAuth((req) => {
 
   if (!isLoggedIn) {
     const loginUrl = new URL("/login", req.nextUrl);
-    loginUrl.searchParams.set("callbackUrl", pathname);
+    const returnPath = `${req.nextUrl.pathname}${req.nextUrl.search}`;
+    loginUrl.searchParams.set("callbackUrl", returnPath);
     return NextResponse.redirect(loginUrl);
   }
 

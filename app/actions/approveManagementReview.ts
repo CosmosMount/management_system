@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
 import { OrderStatus } from "@prisma/client";
-import { sendOrderNotification } from "@/lib/feishu";
+import { sendOrderNotification, mapOrderItems } from "@/lib/feishu";
 import { prisma } from "@/lib/prisma";
 import {
   canApproveTeamManagement,
@@ -20,6 +20,7 @@ export async function approveManagementReview(orderId: string) {
   const userRoles = await getUserRoles(session.user.openId);
   const order = await prisma.purchaseOrder.findUnique({
     where: { id: orderId },
+    include: { items: true },
   });
   if (!order) {
     throw new Error("订单不存在");
@@ -64,6 +65,7 @@ export async function approveManagementReview(orderId: string) {
       status: updated.status,
       team: updated.team,
       techGroup: updated.techGroup,
+      items: mapOrderItems(order.items),
     }).catch((err) => {
       console.error("[approveManagementReview] 飞书通知失败:", err);
     });

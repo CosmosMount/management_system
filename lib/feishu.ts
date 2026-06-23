@@ -13,6 +13,22 @@ const WEBHOOK_URL = process.env.FEISHU_WEBHOOK_URL;
 const WEBHOOK_SECRET = process.env.FEISHU_WEBHOOK_SECRET;
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
 
+export type OrderItemSummary = {
+  name: string;
+  quantity: number;
+  unitPrice: number;
+};
+
+export function mapOrderItems(
+  items: { name: string; quantity: number; unitPrice: number }[],
+): OrderItemSummary[] {
+  return items.map((item) => ({
+    name: item.name,
+    quantity: item.quantity,
+    unitPrice: item.unitPrice,
+  }));
+}
+
 export type OrderCardPayload = {
   id: string;
   orderNo: string;
@@ -21,6 +37,15 @@ export type OrderCardPayload = {
   status: OrderStatus;
   team: string;
   techGroup: string;
+  items?: OrderItemSummary[];
+};
+
+type CardOptions = {
+  headerTitle?: string;
+  headerTemplate?: "blue" | "red" | "orange" | "green";
+  extraLines?: string[];
+  detailFocus?: "approval" | "upload" | "confirm";
+  primaryButtonText?: string;
 };
 
 function buildSign(timestamp: string, secret: string): string {
@@ -30,43 +55,103 @@ function buildSign(timestamp: string, secret: string): string {
     .digest("base64");
 }
 
-function buildOrderCard(order: OrderCardPayload) {
-  const detailUrl = `${APP_URL}/orders/${order.id}`;
+function formatItemsSummary(items?: OrderItemSummary[]): string {
+  if (!items || items.length === 0) return "";
+  const lines = items.slice(0, 5).map(
+    (item) =>
+      `- ${item.name} ×${item.quantity}（¥${(item.quantity * item.unitPrice).toFixed(2)}）`,
+  );
+  if (items.length > 5) {
+    lines.push(`- …共 ${items.length} 项`);
+  }
+  return `\n**采购明细**\n${lines.join("\n")}`;
+}
+
+function buildDetailUrl(orderId: string, focus?: CardOptions["detailFocus"]) {
+  const base = `${APP_URL}/orders/${orderId}`;
+  const notify = "from=notify";
+  if (focus === "approval") return `${base}?focus=approval&${notify}#approval`;
+  if (focus === "upload") return `${base}?focus=upload&${notify}#upload`;
+  if (focus === "confirm") return `${base}?focus=confirm&${notify}#confirm`;
+  return `${base}?${notify}#approval`;
+}
+
+function defaultDetailFocus(
+  status: OrderStatus,
+): CardOptions["detailFocus"] | undefined {
+  if (
+    status === "MANAGEMENT_REVIEW" ||
+    status === "TEACHER_REVIEW" ||
+    status === "PENDING_FINANCE_REVIEW"
+  ) {
+    return "approval";
+  }
+  if (status === "PENDING_APPLICANT_DOCS") return "upload";
+  if (status === "PENDING_APPLICANT_CONFIRM") return "confirm";
+  return undefined;
+}
+
+function buildOrderCard(order: OrderCardPayload, options: CardOptions = {}) {
   const statusLabel = statusLabels[order.status];
+  const focus = options.detailFocus ?? defaultDetailFocus(order.status);
+  const detailUrl = buildDetailUrl(order.id, focus);
+
   const attachmentHint =
     order.status === "PENDING_FINANCE_REVIEW"
-      ? "\n**附件**：发票与清单已在订单详情页「流程附件」中，请先查看再上传截图"
+      ? "\n**操作提示**：请打开详情页查看发票与清单，确认无误后上传报销截图；资料不全可要求采购人重新提交"
       : order.status === "PENDING_APPLICANT_CONFIRM"
-        ? "\n**附件**：请打开详情页核对发票、清单与报销截图后确认"
-        : "";
+        ? "\n**操作提示**：请核对发票、清单与报销截图后确认"
+        : order.status === "PENDING_APPLICANT_DOCS"
+          ? "\n**操作提示**：请重新上传发票、实物照片，系统将自动生成验收清单"
+          : order.status === "MANAGEMENT_REVIEW" ||
+              order.status === "TEACHER_REVIEW"
+            ? "\n**操作提示**：请在详情页「审批操作」区域通过或驳回"
+            : "";
+
+  const content = [
+    `**当前状态**：${statusLabel}`,
+    `**申请人**：${order.initiatorName}`,
+    `**车组 / 技术组**：${order.team} / ${order.techGroup}`,
+    `**单号**：${order.orderNo}`,
+    `**总金额**：¥${order.totalPrice.toFixed(2)}`,
+    formatItemsSummary(order.items),
+    attachmentHint,
+    ...(options.extraLines ?? []),
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   return {
     config: { wide_screen_mode: true },
     header: {
-      title: { tag: "plain_text", content: "采购报销审批提醒" },
-      template: "blue",
+      title: {
+        tag: "plain_text",
+        content: options.headerTitle ?? "采购报销审批提醒",
+      },
+      template: options.headerTemplate ?? "blue",
     },
     elements: [
       {
         tag: "div",
-        text: {
-          tag: "lark_md",
-          content: [
-            `**当前状态**：${statusLabel}`,
-            `**申请人**：${order.initiatorName}`,
-            `**单号**：${order.orderNo}`,
-            `**总金额**：¥${order.totalPrice.toFixed(2)}${attachmentHint}`,
-          ].join("\n"),
-        },
+        text: { tag: "lark_md", content },
       },
       {
         tag: "action",
         actions: [
           {
             tag: "button",
-            text: { tag: "plain_text", content: "查看详情" },
+            text: {
+              tag: "plain_text",
+              content: options.primaryButtonText ?? "前往处理",
+            },
             url: detailUrl,
             type: "primary",
+          },
+          {
+            tag: "button",
+            text: { tag: "plain_text", content: "订单列表" },
+            url: `${APP_URL}/orders`,
+            type: "default",
           },
         ],
       },
@@ -133,6 +218,7 @@ async function sendDirectCard(
 async function notifyApproversByRole(
   role: UserRoleType,
   order: OrderCardPayload,
+  cardOptions?: CardOptions,
 ) {
   const openIds = await getOpenIdsByRole(role, {
     team: order.team,
@@ -145,7 +231,7 @@ async function notifyApproversByRole(
     return;
   }
 
-  const card = buildOrderCard(order);
+  const card = buildOrderCard(order, cardOptions);
   const results = await Promise.allSettled(
     openIds.map((openId) => sendDirectCard(openId, card)),
   );
@@ -159,7 +245,10 @@ async function notifyApproversByRole(
 
 /** 管理审核：分别私信车组组长与技术组组长 */
 export async function sendManagementReviewNotification(order: OrderCardPayload) {
-  const card = buildOrderCard(order);
+  const card = buildOrderCard(order, {
+    detailFocus: "approval",
+    primaryButtonText: "前往审批",
+  });
 
   await postToWebhook({
     msg_type: "interactive",
@@ -168,20 +257,95 @@ export async function sendManagementReviewNotification(order: OrderCardPayload) 
     console.error("[feishu] Webhook 通知失败:", err);
   });
 
-  await notifyApproversByRole("TEAM_ADMIN", order);
-  await notifyApproversByRole("TECH_GROUP_ADMIN", order);
+  await notifyApproversByRole("TEAM_ADMIN", order, {
+    detailFocus: "approval",
+    primaryButtonText: "前往审批",
+  });
+  await notifyApproversByRole("TECH_GROUP_ADMIN", order, {
+    detailFocus: "approval",
+    primaryButtonText: "前往审批",
+  });
 }
 
-async function notifyInitiator(order: OrderCardPayload) {
+async function notifyInitiator(
+  order: OrderCardPayload,
+  cardOptions?: CardOptions,
+) {
   const record = await prisma.purchaseOrder.findUnique({
     where: { id: order.id },
     include: { initiator: { select: { openId: true } } },
   });
   if (!record?.initiator.openId) return;
 
-  const card = buildOrderCard(order);
+  const card = buildOrderCard(order, cardOptions);
   await sendDirectCard(record.initiator.openId, card).catch((err) => {
     console.error("[feishu] 发起人私信通知失败:", err);
+  });
+}
+
+/** 采购审批驳回：通知采购人 */
+export async function sendProcurementRejectedNotification(
+  order: OrderCardPayload,
+  reason: string,
+  rejectedByName: string,
+) {
+  const card = buildOrderCard(order, {
+    headerTitle: "采购申请已驳回",
+    headerTemplate: "red",
+    primaryButtonText: "查看详情",
+    extraLines: [
+      `**驳回人**：${rejectedByName}`,
+      `**驳回原因**：${reason}`,
+      "**说明**：本次采购已终止，不计入采购汇总数据",
+    ],
+  });
+
+  await postToWebhook({ msg_type: "interactive", card }).catch((err) => {
+    console.error("[feishu] Webhook 通知失败:", err);
+  });
+  await notifyInitiator(order, {
+    headerTitle: "采购申请已驳回",
+    headerTemplate: "red",
+    primaryButtonText: "查看详情",
+    extraLines: [
+      `**驳回人**：${rejectedByName}`,
+      `**驳回原因**：${reason}`,
+      "**说明**：本次采购已终止，不计入采购汇总数据",
+    ],
+  });
+}
+
+/** 报销员要求重新提交凭证 */
+export async function sendApplicantResubmitNotification(
+  order: OrderCardPayload,
+  reason: string,
+  financeName: string,
+) {
+  const card = buildOrderCard(order, {
+    headerTitle: "请重新提交报销资料",
+    headerTemplate: "orange",
+    detailFocus: "upload",
+    primaryButtonText: "重新上传凭证",
+    extraLines: [
+      `**报销员**：${financeName}`,
+      `**补充说明**：${reason}`,
+      "**说明**：请重新上传发票、实物照片，系统将重新生成验收清单",
+    ],
+  });
+
+  await postToWebhook({ msg_type: "interactive", card }).catch((err) => {
+    console.error("[feishu] Webhook 通知失败:", err);
+  });
+  await notifyInitiator(order, {
+    headerTitle: "请重新提交报销资料",
+    headerTemplate: "orange",
+    detailFocus: "upload",
+    primaryButtonText: "重新上传凭证",
+    extraLines: [
+      `**报销员**：${financeName}`,
+      `**补充说明**：${reason}`,
+      "**说明**：请重新上传发票、实物照片，系统将重新生成验收清单",
+    ],
   });
 }
 
@@ -192,7 +356,20 @@ export async function sendOrderNotification(order: OrderCardPayload) {
     return;
   }
 
-  const card = buildOrderCard(order);
+  const focus = defaultDetailFocus(order.status);
+  const buttonText =
+    focus === "approval"
+      ? "前往审批"
+      : focus === "upload"
+        ? "上传凭证"
+        : focus === "confirm"
+          ? "前往确认"
+          : "查看详情";
+
+  const card = buildOrderCard(order, {
+    detailFocus: focus,
+    primaryButtonText: buttonText,
+  });
 
   await postToWebhook({
     msg_type: "interactive",
@@ -205,13 +382,19 @@ export async function sendOrderNotification(order: OrderCardPayload) {
     order.status === "PENDING_APPLICANT_DOCS" ||
     order.status === "PENDING_APPLICANT_CONFIRM"
   ) {
-    await notifyInitiator(order);
+    await notifyInitiator(order, {
+      detailFocus: focus ?? undefined,
+      primaryButtonText: buttonText,
+    });
     return;
   }
 
   const approverRole = statusApproverRole[order.status];
   if (approverRole) {
-    await notifyApproversByRole(approverRole, order);
+    await notifyApproversByRole(approverRole, order, {
+      detailFocus: focus ?? undefined,
+      primaryButtonText: buttonText,
+    });
   }
 }
 
@@ -243,7 +426,7 @@ export async function sendFeishuDailySummary(
           tag: "div",
           text: {
             tag: "lark_md",
-            content: `**未完结单据统计**\n${content}`,
+            content: `**未完结单据统计**（不含已驳回）\n${content}`,
           },
         },
         {

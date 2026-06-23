@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
 import { OrderStatus } from "@prisma/client";
-import { sendOrderNotification } from "@/lib/feishu";
+import { sendOrderNotification, mapOrderItems } from "@/lib/feishu";
 import { saveUpload, uploadTypeSets } from "@/lib/file-upload";
 import { prisma } from "@/lib/prisma";
 import { canUploadFinanceScreenshot, getUserRoles } from "@/lib/permissions";
@@ -23,6 +23,7 @@ export async function uploadFinanceScreenshot(formData: FormData) {
 
   const order = await prisma.purchaseOrder.findUnique({
     where: { id: orderId },
+    include: { items: true },
   });
   if (!order) {
     throw new Error("订单不存在");
@@ -61,6 +62,7 @@ export async function uploadFinanceScreenshot(formData: FormData) {
     status: updated.status,
     team: updated.team,
     techGroup: updated.techGroup,
+    items: mapOrderItems(order.items),
   }).catch((err) => {
     console.error("[uploadFinanceScreenshot] 飞书通知失败:", err);
   });

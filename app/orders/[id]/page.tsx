@@ -4,6 +4,7 @@ import { auth } from "@/lib/auth";
 import { AppHeader } from "@/components/app-header";
 import { OrderActions } from "@/components/order-actions";
 import { OrderAttachmentsCard } from "@/components/order-attachments";
+import { OrderPageFocus } from "@/components/order-page-focus";
 import { OrderReimbursementActions } from "@/components/order-reimbursement-actions";
 import { PageShell } from "@/components/page-shell";
 import { PageTitle } from "@/components/page-title";
@@ -32,10 +33,12 @@ import {
 
 type Props = {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ focus?: string; from?: string }>;
 };
 
-export default async function OrderDetailPage({ params }: Props) {
+export default async function OrderDetailPage({ params, searchParams }: Props) {
   const { id } = await params;
+  const { focus, from } = await searchParams;
   const session = await auth();
   const userRoles = session?.user?.openId
     ? await getUserRoles(session.user.openId)
@@ -70,6 +73,7 @@ export default async function OrderDetailPage({ params }: Props) {
   return (
     <>
       <AppHeader />
+      <OrderPageFocus focus={focus ?? null} fromNotify={from === "notify"} />
       <PageShell>
         <main className="mx-auto max-w-4xl flex-1 space-y-6 p-4 py-8">
           <div className="flex items-start justify-between gap-4">
@@ -82,9 +86,14 @@ export default async function OrderDetailPage({ params }: Props) {
               </Link>
               <PageTitle subtitle={`订单 ${order.orderNo}`} />
             </div>
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <Badge>{statusLabels[order.status]}</Badge>
-            <OrderActions
+            <div
+              id="approval"
+              className="flex flex-wrap items-center justify-end gap-2 scroll-mt-20"
+            >
+              <Badge variant={order.status === "REJECTED" ? "destructive" : "default"}>
+                {statusLabels[order.status]}
+              </Badge>
+              <OrderActions
               orderId={order.id}
               status={order.status}
               order={orderScope}
@@ -110,6 +119,25 @@ export default async function OrderDetailPage({ params }: Props) {
             />
           </div>
         </div>
+
+        {order.rejectionReason && (
+          <Card className="border-amber-200 bg-amber-50/80 dark:border-amber-900 dark:bg-amber-950/30">
+            <CardContent className="space-y-1 pt-6 text-sm">
+              <p className="font-medium text-amber-900 dark:text-amber-100">
+                {order.status === "REJECTED" ? "驳回说明" : "退回补充说明"}
+              </p>
+              <p>{order.rejectionReason}</p>
+              {order.rejectedByName && (
+                <p className="text-muted-foreground">
+                  {order.rejectedByName}
+                  {order.rejectedAt
+                    ? ` · ${order.rejectedAt.toLocaleString("zh-CN")}`
+                    : ""}
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         {order.status === "MANAGEMENT_REVIEW" && (
           <Card>

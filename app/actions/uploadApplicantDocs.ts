@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { OrderStatus, UserRoleType } from "@prisma/client";
-import { sendOrderNotification } from "@/lib/feishu";
+import { sendOrderNotification, mapOrderItems } from "@/lib/feishu";
 import {
   MAX_FILE_SIZE,
   MAX_INVOICE_COUNT,
@@ -261,6 +261,9 @@ export async function uploadApplicantDocs(formData: FormData) {
         invoicePath: invoicePaths[0] ?? null,
         listDocPath,
         status: OrderStatus.PENDING_FINANCE_REVIEW,
+        rejectionReason: null,
+        rejectedAt: null,
+        rejectedByName: null,
       },
     });
   });
@@ -273,6 +276,11 @@ export async function uploadApplicantDocs(formData: FormData) {
     status: updated.status,
     team: updated.team,
     techGroup: updated.techGroup,
+    items: mapOrderItems(docItems.map((item) => ({
+      name: item.name,
+      quantity: item.quantity,
+      unitPrice: item.unitPrice,
+    }))),
   }).catch((err) => {
     console.error("[uploadApplicantDocs] 飞书通知失败:", err);
   });

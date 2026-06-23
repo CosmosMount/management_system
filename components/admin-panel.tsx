@@ -26,6 +26,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { UserSearchSelect } from "@/components/user-search-select";
 import {
   Table,
   TableBody,
@@ -275,21 +276,12 @@ export function AdminPanel({ users, roles }: Props) {
         <CardContent className="flex flex-wrap items-end gap-3">
           <div className="space-y-2">
             <p className="text-sm font-medium">用户</p>
-            <Select
+            <UserSearchSelect
+              users={users.map((u) => ({ openId: u.openId, name: u.name }))}
               value={assignOpenId}
-              onValueChange={(v) => setAssignOpenId(v ?? "")}
-            >
-              <SelectTrigger className="w-48">
-                <SelectValue placeholder="选择用户" />
-              </SelectTrigger>
-              <SelectContent>
-                {users.map((user) => (
-                  <SelectItem key={user.openId} value={user.openId}>
-                    {user.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              onChange={setAssignOpenId}
+              className="w-48"
+            />
           </div>
           <div className="space-y-2">
             <p className="text-sm font-medium">角色</p>
@@ -521,21 +513,14 @@ function TechGroupRoleCell({
   return (
     <div className="flex min-h-[2.5rem] items-center justify-between gap-4">
       <div className="flex shrink-0 items-center gap-1">
-        <Select
+        <UserSearchSelect
+          users={users.map((u) => ({ openId: u.openId, name: u.name }))}
           value={addOpenId}
-          onValueChange={(v) => setAddOpenId(v ?? "")}
-        >
-          <SelectTrigger className="h-8 w-28" size="sm">
-            <SelectValue placeholder="添加" />
-          </SelectTrigger>
-          <SelectContent>
-            {users.map((user) => (
-              <SelectItem key={user.openId} value={user.openId}>
-                {user.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+          onChange={setAddOpenId}
+          placeholder="搜索添加"
+          className="w-36"
+          inputClassName="h-8 text-sm"
+        />
         <Button
           type="button"
           size="sm"
@@ -588,21 +573,14 @@ function RoleCell({
   return (
     <div className="flex min-h-[2.5rem] items-center justify-between gap-4">
       <div className="flex shrink-0 items-center gap-1">
-        <Select
+        <UserSearchSelect
+          users={users.map((u) => ({ openId: u.openId, name: u.name }))}
           value={addOpenId}
-          onValueChange={(v) => setAddOpenId(v ?? "")}
-        >
-          <SelectTrigger className="h-8 w-28" size="sm">
-            <SelectValue placeholder="添加" />
-          </SelectTrigger>
-          <SelectContent>
-            {users.map((user) => (
-              <SelectItem key={user.openId} value={user.openId}>
-                {user.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+          onChange={setAddOpenId}
+          placeholder="搜索添加"
+          className="w-36"
+          inputClassName="h-8 text-sm"
+        />
         <Button
           type="button"
           size="sm"

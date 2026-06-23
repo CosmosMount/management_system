@@ -14,6 +14,7 @@ enum OrderStatus {
   PENDING_FINANCE_REVIEW
   PENDING_APPLICANT_CONFIRM
   COMPLETED
+  REJECTED
 }
 
 enum UserRoleType {
@@ -117,6 +118,9 @@ model PurchaseOrder {
   listDocPath       String?
   screenshotPath    String?
   status            OrderStatus    @default(DRAFT)
+  rejectionReason   String?
+  rejectedAt        DateTime?
+  rejectedByName    String?
   items             PurchaseItem[]
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt

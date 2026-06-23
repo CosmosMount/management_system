@@ -9,6 +9,7 @@ import { prisma } from "@/lib/prisma";
 
 export default async function DashboardPage() {
   const orders = await prisma.purchaseOrder.findMany({
+    where: { status: { not: "REJECTED" } },
     include: { items: true },
     orderBy: { createdAt: "desc" },
   });
