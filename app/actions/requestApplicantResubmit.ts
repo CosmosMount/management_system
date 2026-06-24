@@ -6,6 +6,7 @@ import { auth } from "@/lib/auth";
 import { sendApplicantResubmitNotification } from "@/lib/feishu";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";
+import { getNotificationContext } from "@/lib/request-origin";
 import {
   canRequestApplicantResubmit,
   getUserRoles,
@@ -89,6 +90,7 @@ export async function requestApplicantResubmit(input: {
     },
     reason,
     rejectedByName,
+    await getNotificationContext(),
   ).catch((err) => {
     console.error("[requestApplicantResubmit] 飞书通知失败:", err);
   });

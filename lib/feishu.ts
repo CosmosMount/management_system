@@ -1,6 +1,7 @@
 import type { OrderStatus, UserRoleType } from "@prisma/client";
 import { getFeishuTenantAccessToken } from "@/lib/feishu-auth";
 import { getOpenIdsByRole } from "@/lib/permissions";
+import { buildAppUrl, type NotificationContext } from "@/lib/app-origin";
 import { prisma } from "@/lib/prisma";
 import {
   roleLabels,
@@ -11,7 +12,6 @@ import crypto from "crypto";
 
 const WEBHOOK_URL = process.env.FEISHU_WEBHOOK_URL;
 const WEBHOOK_SECRET = process.env.FEISHU_WEBHOOK_SECRET;
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
 
 export type OrderItemSummary = {
   name: string;
@@ -46,6 +46,7 @@ type CardOptions = {
   extraLines?: string[];
   detailFocus?: "approval" | "upload" | "confirm";
   primaryButtonText?: string;
+  appOrigin?: string | null;
 };
 
 function buildSign(timestamp: string, secret: string): string {
@@ -67,8 +68,12 @@ function formatItemsSummary(items?: OrderItemSummary[]): string {
   return `\n**采购明细**\n${lines.join("\n")}`;
 }
 
-function buildDetailUrl(orderId: string, focus?: CardOptions["detailFocus"]) {
-  const base = `${APP_URL}/orders/${orderId}`;
+function buildDetailUrl(
+  orderId: string,
+  focus?: CardOptions["detailFocus"],
+  appOrigin?: string | null,
+) {
+  const base = buildAppUrl(`/orders/${orderId}`, appOrigin);
   const notify = "from=notify";
   if (focus === "approval") return `${base}?focus=approval&${notify}#approval`;
   if (focus === "upload") return `${base}?focus=upload&${notify}#upload`;
@@ -94,7 +99,7 @@ function defaultDetailFocus(
 function buildOrderCard(order: OrderCardPayload, options: CardOptions = {}) {
   const statusLabel = statusLabels[order.status];
   const focus = options.detailFocus ?? defaultDetailFocus(order.status);
-  const detailUrl = buildDetailUrl(order.id, focus);
+  const detailUrl = buildDetailUrl(order.id, focus, options.appOrigin);
 
   const attachmentHint =
     order.status === "PENDING_FINANCE_REVIEW"
@@ -150,7 +155,7 @@ function buildOrderCard(order: OrderCardPayload, options: CardOptions = {}) {
           {
             tag: "button",
             text: { tag: "plain_text", content: "订单列表" },
-            url: `${APP_URL}/orders`,
+            url: buildAppUrl("/orders", options.appOrigin),
             type: "default",
           },
         ],
@@ -244,10 +249,14 @@ async function notifyApproversByRole(
 }
 
 /** 管理审核：分别私信车组组长与技术组组长 */
-export async function sendManagementReviewNotification(order: OrderCardPayload) {
+export async function sendManagementReviewNotification(
+  order: OrderCardPayload,
+  context?: NotificationContext,
+) {
   const card = buildOrderCard(order, {
     detailFocus: "approval",
     primaryButtonText: "前往审批",
+    appOrigin: context?.appOrigin,
   });
 
   await postToWebhook({
@@ -260,10 +269,12 @@ export async function sendManagementReviewNotification(order: OrderCardPayload) 
   await notifyApproversByRole("TEAM_ADMIN", order, {
     detailFocus: "approval",
     primaryButtonText: "前往审批",
+    appOrigin: context?.appOrigin,
   });
   await notifyApproversByRole("TECH_GROUP_ADMIN", order, {
     detailFocus: "approval",
     primaryButtonText: "前往审批",
+    appOrigin: context?.appOrigin,
   });
 }
 
@@ -288,11 +299,13 @@ export async function sendProcurementRejectedNotification(
   order: OrderCardPayload,
   reason: string,
   rejectedByName: string,
+  context?: NotificationContext,
 ) {
   const card = buildOrderCard(order, {
     headerTitle: "采购申请已驳回",
     headerTemplate: "red",
     primaryButtonText: "查看详情",
+    appOrigin: context?.appOrigin,
     extraLines: [
       `**驳回人**：${rejectedByName}`,
       `**驳回原因**：${reason}`,
@@ -307,6 +320,7 @@ export async function sendProcurementRejectedNotification(
     headerTitle: "采购申请已驳回",
     headerTemplate: "red",
     primaryButtonText: "查看详情",
+    appOrigin: context?.appOrigin,
     extraLines: [
       `**驳回人**：${rejectedByName}`,
       `**驳回原因**：${reason}`,
@@ -320,12 +334,14 @@ export async function sendApplicantResubmitNotification(
   order: OrderCardPayload,
   reason: string,
   financeName: string,
+  context?: NotificationContext,
 ) {
   const card = buildOrderCard(order, {
     headerTitle: "请重新提交报销资料",
     headerTemplate: "orange",
     detailFocus: "upload",
     primaryButtonText: "重新上传凭证",
+    appOrigin: context?.appOrigin,
     extraLines: [
       `**报销员**：${financeName}`,
       `**补充说明**：${reason}`,
@@ -341,6 +357,7 @@ export async function sendApplicantResubmitNotification(
     headerTemplate: "orange",
     detailFocus: "upload",
     primaryButtonText: "重新上传凭证",
+    appOrigin: context?.appOrigin,
     extraLines: [
       `**报销员**：${financeName}`,
       `**补充说明**：${reason}`,
@@ -350,9 +367,12 @@ export async function sendApplicantResubmitNotification(
 }
 
 /** 群 Webhook + 私信通知当前状态对应的处理人 */
-export async function sendOrderNotification(order: OrderCardPayload) {
+export async function sendOrderNotification(
+  order: OrderCardPayload,
+  context?: NotificationContext,
+) {
   if (order.status === "MANAGEMENT_REVIEW") {
-    await sendManagementReviewNotification(order);
+    await sendManagementReviewNotification(order, context);
     return;
   }
 
@@ -369,6 +389,7 @@ export async function sendOrderNotification(order: OrderCardPayload) {
   const card = buildOrderCard(order, {
     detailFocus: focus,
     primaryButtonText: buttonText,
+    appOrigin: context?.appOrigin,
   });
 
   await postToWebhook({
@@ -385,6 +406,7 @@ export async function sendOrderNotification(order: OrderCardPayload) {
     await notifyInitiator(order, {
       detailFocus: focus ?? undefined,
       primaryButtonText: buttonText,
+      appOrigin: context?.appOrigin,
     });
     return;
   }
@@ -394,12 +416,14 @@ export async function sendOrderNotification(order: OrderCardPayload) {
     await notifyApproversByRole(approverRole, order, {
       detailFocus: focus ?? undefined,
       primaryButtonText: buttonText,
+      appOrigin: context?.appOrigin,
     });
   }
 }
 
 export async function sendFeishuDailySummary(
   ordersByStatus: Partial<Record<OrderStatus, number>>,
+  context?: NotificationContext,
 ) {
   const lines = Object.entries(ordersByStatus)
     .filter(([, count]) => (count ?? 0) > 0)
@@ -435,7 +459,7 @@ export async function sendFeishuDailySummary(
             {
               tag: "button",
               text: { tag: "plain_text", content: "打开系统" },
-              url: `${APP_URL}/orders`,
+              url: buildAppUrl("/orders", context?.appOrigin),
               type: "default",
             },
           ],

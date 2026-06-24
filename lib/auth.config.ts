@@ -1,5 +1,11 @@
 import { customFetch } from "next-auth";
 import { feishuCustomFetch } from "@/lib/feishu-auth";
+import {
+  buildAppUrl,
+  isAllowedAppOrigin,
+  parseAppUrl,
+  resolveAppOrigin,
+} from "@/lib/app-origin";
 import type { NextAuthConfig } from "next-auth";
 
 const FEISHU_SCOPES = "contact:user.base:readonly";
@@ -70,6 +76,20 @@ export const authConfig = {
     signIn: "/login",
   },
   callbacks: {
+    async redirect({ url, baseUrl }) {
+      const base = resolveAppOrigin(baseUrl);
+
+      if (url.startsWith("/")) {
+        return buildAppUrl(url, base);
+      }
+
+      const target = parseAppUrl(url);
+      if (!target || !isAllowedAppOrigin(target.origin)) {
+        return buildAppUrl("/", base);
+      }
+
+      return target.toString();
+    },
     async jwt({ token, user }) {
       if (user?.openId) {
         token.openId = user.openId;

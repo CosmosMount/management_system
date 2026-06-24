@@ -1,24 +1,27 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AppHeader } from "@/components/app-header";
-import { ProgressPageLayout } from "@/components/progress/progress-page-layout";
-import { ProjectMilestonePanel } from "@/components/progress/project-milestone-panel";
-import { TaskForm } from "@/components/progress/task-form";
+import {
+  ProjectDetailWorkspace,
+  type ProjectDetailView,
+} from "@/components/progress/project-detail-workspace";
 import { PageShell } from "@/components/page-shell";
-import { PageTitle } from "@/components/page-title";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { auth } from "@/lib/auth";
 import { getUserRoles } from "@/lib/permissions";
 import {
-  canApproveTask,
   canManageProject,
+  canApproveStage as canApproveStagePermission,
+  canSubmitStage as canSubmitStagePermission,
+  canUpdateProjectLifecycle,
 } from "@/lib/permissions-progress";
 import {
-  projectStatusLabels,
-  taskStatusLabels,
-  taskCategoryLabels,
-} from "@/lib/progress-labels";
+  getTaskAssigneeNames,
+  getTaskAssigneeOpenIds,
+} from "@/lib/progress-assignees";
+import {
+  getProjectOwnerNames,
+  getProjectOwnerOpenIds,
+} from "@/lib/progress-project-owners";
+import { getRecentActivityCutoff } from "@/lib/progress-activity-window";
 import { prisma } from "@/lib/prisma";
 
 type Props = { params: Promise<{ id: string }> };
@@ -28,127 +31,153 @@ export default async function ProjectDetailPage({ params }: Props) {
   const session = await auth();
   const userOpenId = session?.user?.openId;
   const roles = userOpenId ? await getUserRoles(userOpenId) : [];
+  const recentActivityCutoff = getRecentActivityCutoff();
 
   const project = await prisma.project.findUnique({
     where: { id },
     include: {
-      milestones: { orderBy: { sortOrder: "asc" } },
-      tasks: { orderBy: { createdAt: "desc" } },
-      activityLogs: { orderBy: { createdAt: "desc" }, take: 10 },
+      owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      stages: {
+        orderBy: { sortOrder: "asc" },
+        include: {
+          submissions: {
+            orderBy: { submittedAt: "desc" },
+            include: { approvals: { orderBy: { createdAt: "asc" } } },
+          },
+        },
+      },
+      tasks: {
+        orderBy: { createdAt: "desc" },
+        include: {
+          stage: { select: { name: true } },
+          assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+          _count: { select: { submissions: true } },
+        },
+      },
+      activityLogs: {
+        where: { createdAt: { gte: recentActivityCutoff } },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      },
     },
   });
 
   if (!project) notFound();
 
   const scope = { team: project.team, techGroup: project.techGroup };
+  const projectOwnerOpenIds = getProjectOwnerOpenIds(project);
   const canManage = canManageProject(
     roles,
     scope,
-    project.ownerOpenId,
+    projectOwnerOpenIds,
     userOpenId,
   );
-  const canApprove = canApproveTask(roles, scope);
+  const canUpdateLifecycle = canUpdateProjectLifecycle(
+    roles,
+    scope,
+    projectOwnerOpenIds,
+    userOpenId,
+  );
 
   const users = await prisma.user.findMany({
     orderBy: { name: "asc" },
-    select: { openId: true, name: true },
+    select: { openId: true, name: true, avatar: true },
   });
+  const activityLogCount = await prisma.progressActivityLog.count({
+    where: { projectId: project.id },
+  });
+
+  const projectView: ProjectDetailView = {
+    id: project.id,
+    name: project.name,
+    description: project.description,
+    status: project.status,
+    team: project.team,
+    techGroup: project.techGroup,
+    ownerOpenId: project.ownerOpenId,
+    ownerName: project.ownerName,
+    ownerOpenIds: projectOwnerOpenIds,
+    ownerNames: getProjectOwnerNames(project),
+    allowOwnerSelfApproval: project.allowOwnerSelfApproval,
+    createdAt: project.createdAt.toISOString(),
+    updatedAt: project.updatedAt.toISOString(),
+    completedAt: project.completedAt?.toISOString() ?? null,
+    canceledAt: project.canceledAt?.toISOString() ?? null,
+    stages: project.stages.map((stage) => ({
+      id: stage.id,
+      name: stage.name,
+      goal: stage.goal,
+      sortOrder: stage.sortOrder,
+      status: stage.status,
+      evidenceUrl: stage.evidenceUrl,
+      ownerOpenId: stage.ownerOpenId,
+      ownerName: stage.ownerName,
+      dueAt: stage.dueAt?.toISOString() ?? null,
+      currentSubmissionId: stage.currentSubmissionId,
+      canSubmit: canSubmitStagePermission(roles, stage.ownerOpenId, userOpenId),
+      submissions: stage.submissions.map((submission) => ({
+        id: submission.id,
+        feishuDocUrl: submission.feishuDocUrl,
+        note: submission.note,
+        submittedBy: submission.submittedBy,
+        submitterName: submission.submitterName,
+        submittedAt: submission.submittedAt.toISOString(),
+        canApprove: canApproveStagePermission(
+          roles,
+          scope,
+          projectOwnerOpenIds,
+          submission.submittedBy,
+          project.allowOwnerSelfApproval,
+          userOpenId,
+        ),
+        approvals: submission.approvals.map((approval) => ({
+          id: approval.id,
+          decision: approval.decision,
+          approverName: approval.approverName,
+          comment: approval.comment,
+          createdAt: approval.createdAt.toISOString(),
+        })),
+      })),
+    })),
+    tasks: project.tasks.map((task) => ({
+      id: task.id,
+      title: task.title,
+      goal: task.goal,
+      category: task.category,
+      urgency: task.urgency,
+      importance: task.importance,
+      status: task.status,
+      isOverdue: task.isOverdue,
+      assigneeNames: getTaskAssigneeNames(task),
+      assigneeOpenIds: getTaskAssigneeOpenIds(task),
+      stageId: task.stageId,
+      stageName: task.stage?.name ?? null,
+      metrics: task.metrics,
+      dueAt: task.dueAt.toISOString(),
+      riskNote: task.riskNote,
+      submissionsCount: task._count.submissions,
+    })),
+    activityLogs: project.activityLogs.map((log) => ({
+      id: log.id,
+      action: log.action,
+      taskId: log.taskId,
+      actorName: log.actorName,
+      payload: log.payload,
+      createdAt: log.createdAt.toISOString(),
+    })),
+    hasMoreActivityLogs: activityLogCount > project.activityLogs.length,
+  };
 
   return (
     <>
       <AppHeader />
       <PageShell>
-        <ProgressPageLayout className="space-y-8">
-          <div>
-            <Link
-              href="/progress"
-              className="text-sm text-muted-foreground hover:underline"
-            >
-              ← 返回进度管理
-            </Link>
-            <PageTitle subtitle={project.name} />
-            <div className="mt-3 flex flex-wrap gap-2">
-              <Badge>{projectStatusLabels[project.status]}</Badge>
-              <Badge variant="outline">{project.team}</Badge>
-              <Badge variant="outline">{project.techGroup}</Badge>
-            </div>
-            {project.description && (
-              <p className="mt-3 text-muted-foreground">{project.description}</p>
-            )}
-          </div>
-
-          <div className="grid gap-8 xl:grid-cols-[1.2fr_1fr]">
-            <ProjectMilestonePanel
-              projectId={project.id}
-              status={project.status}
-              milestones={project.milestones.map((m) => ({
-                ...m,
-                submissionId: m.submissionId,
-              }))}
-              canManage={canManage}
-              canApprove={canApprove}
-            />
-
-            <div className="space-y-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle>挂载任务</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  {project.tasks.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">暂无任务</p>
-                  ) : (
-                    <ul className="space-y-2">
-                      {project.tasks.map((t) => (
-                        <li key={t.id}>
-                          <Link
-                            href={`/progress/tasks/${t.id}`}
-                            className="flex items-center justify-between rounded-lg border p-3 hover:border-primary/30"
-                          >
-                            <span className="font-medium">{t.title}</span>
-                            <div className="flex gap-2">
-                              {t.isOverdue && (
-                                <Badge variant="destructive">逾期</Badge>
-                              )}
-                              <Badge variant="secondary">
-                                {taskStatusLabels[t.status]}
-                              </Badge>
-                              <Badge variant="outline">
-                                {taskCategoryLabels[t.category]}
-                              </Badge>
-                            </div>
-                          </Link>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                  {canManage && project.status !== "ARCHIVED" && (
-                    <div className="border-t pt-4">
-                      <p className="mb-3 font-medium">新建任务</p>
-                      <TaskForm projectId={project.id} users={users} />
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-
-              {project.activityLogs.length > 0 && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle>最近动态</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-1 text-sm">
-                    {project.activityLogs.map((log) => (
-                      <p key={log.id} className="text-muted-foreground">
-                        {log.actorName} · {log.action} ·{" "}
-                        {new Date(log.createdAt).toLocaleString("zh-CN")}
-                      </p>
-                    ))}
-                  </CardContent>
-                </Card>
-              )}
-            </div>
-          </div>
-        </ProgressPageLayout>
+        <ProjectDetailWorkspace
+          project={projectView}
+          users={users}
+          canManage={canManage}
+          canUpdateLifecycle={canUpdateLifecycle}
+          userOpenId={userOpenId}
+        />
       </PageShell>
     </>
   );

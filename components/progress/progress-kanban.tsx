@@ -12,13 +12,15 @@ export type KanbanTask = {
   id: string;
   title: string;
   projectName: string;
-  assigneeName: string;
+  stageName: string | null;
+  assigneeNames: string;
   team: string;
   techGroup: string;
   category: string;
   urgency: string;
   status: TaskStatus;
   isOverdue: boolean;
+  hasRisk: boolean;
   dueAt: string;
 };
 
@@ -65,6 +67,11 @@ export function ProgressKanban({ tasks, columns = defaultColumns }: Props) {
                         逾期
                       </Badge>
                     )}
+                    {task.hasRisk && (
+                      <Badge variant="destructive" className="text-xs">
+                        风险
+                      </Badge>
+                    )}
                     <Badge variant="outline" className="text-xs">
                       {taskCategoryLabels[task.category as keyof typeof taskCategoryLabels] ?? task.category}
                     </Badge>
@@ -73,7 +80,9 @@ export function ProgressKanban({ tasks, columns = defaultColumns }: Props) {
                     </Badge>
                   </div>
                   <p className="mt-2 text-xs text-muted-foreground">
-                    {task.assigneeName} · 截止 {new Date(task.dueAt).toLocaleDateString("zh-CN")}
+                    {task.assigneeNames}
+                    {task.stageName ? ` · ${task.stageName}` : ""} · 截止{" "}
+                    {new Date(task.dueAt).toLocaleDateString("zh-CN")}
                   </p>
                 </Link>
               ))}

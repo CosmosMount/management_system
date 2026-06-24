@@ -6,13 +6,16 @@ import { auth } from "@/lib/auth";
 import { sendProgressNotification } from "@/lib/feishu-progress";
 import { logProgressActivity, requireSessionUser } from "@/lib/progress-activity";
 import { canSubmitDelivery } from "@/lib/permissions-progress";
+import { assertProjectActive } from "@/lib/progress-guards";
+import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { prisma } from "@/lib/prisma";
+import { getNotificationContext } from "@/lib/request-origin";
 import { submitDeliverySchema } from "@/lib/validations/progress";
 
 export async function submitTaskDelivery(input: {
   taskId: string;
   feishuDocUrl: string;
-  videoUrl?: string;
+  keyDataUrl: string;
   note?: string;
   failureReason?: string;
 }) {
@@ -22,11 +25,15 @@ export async function submitTaskDelivery(input: {
 
   const task = await prisma.task.findUnique({
     where: { id: parsed.taskId },
-    include: { project: true },
+    include: { project: true, assignees: true },
   });
   if (!task) throw new Error("任务不存在");
+  assertProjectActive(task.project.status);
+  if (task.status !== "IN_PROGRESS") {
+    throw new Error("仅进行中的任务可提交交付");
+  }
 
-  if (!canSubmitDelivery(user.openId, task.assigneeOpenId)) {
+  if (!canSubmitDelivery(user.openId, getTaskAssigneeOpenIds(task))) {
     throw new Error("仅任务负责人可提交交付");
   }
 
@@ -37,7 +44,7 @@ export async function submitTaskDelivery(input: {
         projectId: task.projectId,
         type: SubmissionType.DELIVERY,
         feishuDocUrl: parsed.feishuDocUrl,
-        videoUrl: parsed.videoUrl ?? "",
+        keyDataUrl: parsed.keyDataUrl,
         note: parsed.note ?? "",
         failureReason: parsed.failureReason ?? "",
         submittedBy: user.openId,
@@ -70,7 +77,8 @@ export async function submitTaskDelivery(input: {
     team: task.team,
     techGroup: task.techGroup,
     feishuDocUrl: parsed.feishuDocUrl,
-  }).catch(console.error);
+    keyDataUrl: parsed.keyDataUrl,
+  }, await getNotificationContext()).catch(console.error);
 
   revalidatePath(`/progress/tasks/${task.id}`);
   revalidatePath("/progress/kanban");

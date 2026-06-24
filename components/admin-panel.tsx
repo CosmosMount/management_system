@@ -273,86 +273,120 @@ export function AdminPanel({ users, roles }: Props) {
             超级管理员可管理全部角色；指导老师为全局审批角色
           </CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-wrap items-end gap-3">
-          <div className="space-y-2">
-            <p className="text-sm font-medium">用户</p>
-            <UserSearchSelect
-              users={users.map((u) => ({ openId: u.openId, name: u.name }))}
-              value={assignOpenId}
-              onChange={setAssignOpenId}
-              className="w-48"
-            />
-          </div>
-          <div className="space-y-2">
-            <p className="text-sm font-medium">角色</p>
-            <Select
-              value={assignRole}
-              onValueChange={(v) => setAssignRole((v as UserRoleType) ?? "")}
+        <CardContent>
+          <div className="grid gap-3 sm:grid-cols-[12rem_10rem_8rem_auto] sm:items-end">
+            <div className="space-y-2">
+              <p className="h-5 text-sm font-medium leading-5">用户</p>
+              <UserSearchSelect
+                users={users.map((u) => ({
+                  openId: u.openId,
+                  name: u.name,
+                  avatar: u.avatar,
+                }))}
+                value={assignOpenId}
+                onChange={setAssignOpenId}
+                className="w-full"
+              />
+            </div>
+            <div className="space-y-2">
+              <p className="h-5 text-sm font-medium leading-5">角色</p>
+              <div>
+                <Select
+                  value={assignRole}
+                  onValueChange={(v) =>
+                    setAssignRole((v as UserRoleType) ?? "")
+                  }
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue>
+                      {(value) =>
+                        roleLabels[value as keyof typeof roleLabels] ??
+                        "选择角色"
+                      }
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="SUPER_ADMIN">
+                      {roleLabels.SUPER_ADMIN}
+                    </SelectItem>
+                    <SelectItem value="TEACHER">
+                      {roleLabels.TEACHER}
+                    </SelectItem>
+                    <SelectItem value="TEAM_ADMIN">
+                      {roleLabels.TEAM_ADMIN}
+                    </SelectItem>
+                    <SelectItem value="TECH_GROUP_ADMIN">
+                      {roleLabels.TECH_GROUP_ADMIN}
+                    </SelectItem>
+                    <SelectItem value="FINANCE">
+                      {roleLabels.FINANCE}
+                    </SelectItem>
+                    <SelectItem value="PROJECT_MANAGER">
+                      {roleLabels.PROJECT_MANAGER}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-2">
+              {assignRole === "TEAM_ADMIN" || assignRole === "FINANCE" ? (
+                <>
+                  <p className="h-5 text-sm font-medium leading-5">车组</p>
+                  <div>
+                    <Select
+                      value={assignTeam}
+                      onValueChange={(v) => setAssignTeam(v ?? "")}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue>
+                          {(value) => (value ? String(value) : "选择车组")}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        {TEAM_OPTIONS.map((team) => (
+                          <SelectItem key={team} value={team}>
+                            {team}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </>
+              ) : assignRole === "TECH_GROUP_ADMIN" ? (
+                <>
+                  <p className="h-5 text-sm font-medium leading-5">技术组</p>
+                  <div>
+                    <Select
+                      value={assignTechGroup}
+                      onValueChange={(v) => setAssignTechGroup(v ?? "")}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue>
+                          {(value) => (value ? String(value) : "选择技术组")}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        {TECH_GROUP_OPTIONS.map((group) => (
+                          <SelectItem key={group} value={group}>
+                            {group}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </>
+              ) : (
+                <div className="hidden h-[3.25rem] sm:block" />
+              )}
+            </div>
+            <Button
+              className="w-full sm:w-auto"
+              onClick={handleAssign}
+              disabled={pending}
             >
-              <SelectTrigger className="w-40">
-                <SelectValue placeholder="选择角色" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="SUPER_ADMIN">
-                  {roleLabels.SUPER_ADMIN}
-                </SelectItem>
-                <SelectItem value="TEACHER">{roleLabels.TEACHER}</SelectItem>
-                <SelectItem value="TEAM_ADMIN">
-                  {roleLabels.TEAM_ADMIN}
-                </SelectItem>
-                <SelectItem value="TECH_GROUP_ADMIN">
-                  {roleLabels.TECH_GROUP_ADMIN}
-                </SelectItem>
-                <SelectItem value="FINANCE">{roleLabels.FINANCE}</SelectItem>
-                <SelectItem value="PROJECT_MANAGER">
-                  {roleLabels.PROJECT_MANAGER}
-                </SelectItem>
-              </SelectContent>
-            </Select>
+              添加
+            </Button>
           </div>
-          {(assignRole === "TEAM_ADMIN" || assignRole === "FINANCE") && (
-            <div className="space-y-2">
-              <p className="text-sm font-medium">车组</p>
-              <Select
-                value={assignTeam}
-                onValueChange={(v) => setAssignTeam(v ?? "")}
-              >
-                <SelectTrigger className="w-32">
-                  <SelectValue placeholder="选择车组" />
-                </SelectTrigger>
-                <SelectContent>
-                  {TEAM_OPTIONS.map((team) => (
-                    <SelectItem key={team} value={team}>
-                      {team}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-          {assignRole === "TECH_GROUP_ADMIN" && (
-            <div className="space-y-2">
-              <p className="text-sm font-medium">技术组</p>
-              <Select
-                value={assignTechGroup}
-                onValueChange={(v) => setAssignTechGroup(v ?? "")}
-              >
-                <SelectTrigger className="w-32">
-                  <SelectValue placeholder="选择技术组" />
-                </SelectTrigger>
-                <SelectContent>
-                  {TECH_GROUP_OPTIONS.map((group) => (
-                    <SelectItem key={group} value={group}>
-                      {group}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-          <Button onClick={handleAssign} disabled={pending}>
-            添加
-          </Button>
         </CardContent>
       </Card>
 
@@ -514,7 +548,11 @@ function TechGroupRoleCell({
     <div className="flex min-h-[2.5rem] items-center justify-between gap-4">
       <div className="flex shrink-0 items-center gap-1">
         <UserSearchSelect
-          users={users.map((u) => ({ openId: u.openId, name: u.name }))}
+          users={users.map((u) => ({
+            openId: u.openId,
+            name: u.name,
+            avatar: u.avatar,
+          }))}
           value={addOpenId}
           onChange={setAddOpenId}
           placeholder="搜索添加"
@@ -574,7 +612,11 @@ function RoleCell({
     <div className="flex min-h-[2.5rem] items-center justify-between gap-4">
       <div className="flex shrink-0 items-center gap-1">
         <UserSearchSelect
-          users={users.map((u) => ({ openId: u.openId, name: u.name }))}
+          users={users.map((u) => ({
+            openId: u.openId,
+            name: u.name,
+            avatar: u.avatar,
+          }))}
           value={addOpenId}
           onChange={setAddOpenId}
           placeholder="搜索添加"

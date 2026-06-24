@@ -26,7 +26,7 @@ export default async function ProgressHomePage() {
   const showCreate = canCreateProject(roles);
 
   const projects = await prisma.project.findMany({
-    where: { status: { not: "ARCHIVED" } },
+    where: { status: { notIn: ["COMPLETED", "CANCELED"] } },
     include: { _count: { select: { tasks: true } } },
     orderBy: { updatedAt: "desc" },
     take: 20,
@@ -45,7 +45,7 @@ export default async function ProgressHomePage() {
                 variant="wide"
                 href="/progress/projects/new"
                 title="新建项目"
-                description="创建项目并配置验收里程碑"
+                description="创建项目并配置生命周期阶段"
                 icon={Plus}
               />
             )}
@@ -60,7 +60,7 @@ export default async function ProgressHomePage() {
               variant="wide"
               href="/progress/archive"
               title="归档检索"
-              description="查看已归档的项目与任务"
+              description="查看已完成、已取消项目与已归档任务"
               icon={Archive}
             />
           </div>
@@ -69,7 +69,7 @@ export default async function ProgressHomePage() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <FolderKanban className="h-5 w-5" />
-                进行中的项目
+                活跃项目
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -86,7 +86,8 @@ export default async function ProgressHomePage() {
                         <div>
                           <p className="font-medium">{p.name}</p>
                           <p className="text-sm text-muted-foreground">
-                            {p.team} / {p.techGroup} · {p._count.tasks} 个任务
+                            {formatScopeItem(p.team)} /{" "}
+                            {formatScopeItem(p.techGroup)} · {p._count.tasks} 个任务
                           </p>
                         </div>
                         <Badge variant="secondary">
@@ -103,4 +104,8 @@ export default async function ProgressHomePage() {
       </PageShell>
     </>
   );
+}
+
+function formatScopeItem(value: string): string {
+  return value || "未指定";
 }

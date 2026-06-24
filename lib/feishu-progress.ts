@@ -1,9 +1,10 @@
 import { getFeishuTenantAccessToken } from "@/lib/feishu-auth";
 import { getOpenIdsByRole } from "@/lib/permissions";
+import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
+import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
+import { buildAppUrl, type NotificationContext } from "@/lib/app-origin";
 import { prisma } from "@/lib/prisma";
 import type { UserRoleType } from "@prisma/client";
-
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
 
 export type ProgressNotifyPayload =
   | {
@@ -12,15 +13,48 @@ export type ProgressNotifyPayload =
       projectName: string;
       team: string;
       techGroup: string;
-      ownerName: string;
+      ownerOpenIds: string[];
+      ownerNames: string;
     }
   | {
-      type: "project_abnormal";
+      type: "project_started" | "project_completed" | "project_canceled";
       projectId: string;
       projectName: string;
       team: string;
       techGroup: string;
-      ownerName: string;
+      ownerOpenIds: string[];
+      ownerNames: string;
+    }
+  | {
+      type: "project_updated";
+      projectId: string;
+      projectName: string;
+      actorName: string;
+      changes: string[];
+      team: string;
+      techGroup: string;
+      oldTeam: string;
+      oldTechGroup: string;
+      ownerOpenIds: string[];
+      oldOwnerOpenIds: string[];
+    }
+  | {
+      type: "stage_pending_acceptance";
+      projectId: string;
+      projectName: string;
+      stageName: string;
+      team: string;
+      techGroup: string;
+      ownerOpenIds: string[];
+      submitterOpenId: string;
+      evidenceUrl: string;
+    }
+  | {
+      type: "stage_approved" | "stage_rejected";
+      projectId: string;
+      projectName: string;
+      stageName: string;
+      stageOwnerOpenId: string;
     }
   | {
       type: "task_assigned";
@@ -29,7 +63,22 @@ export type ProgressNotifyPayload =
       projectName: string;
       team: string;
       techGroup: string;
-      assigneeOpenId: string;
+      assigneeOpenIds: string[];
+    }
+  | {
+      type: "task_updated";
+      taskId: string;
+      taskTitle: string;
+      projectName: string;
+      actorName: string;
+      changes: string[];
+      team: string;
+      techGroup: string;
+      oldTeam: string;
+      oldTechGroup: string;
+      assigneeOpenIds: string[];
+      oldAssigneeOpenIds: string[];
+      projectOwnerOpenIds: string[];
     }
   | {
       type: "task_pending_acceptance";
@@ -39,13 +88,22 @@ export type ProgressNotifyPayload =
       team: string;
       techGroup: string;
       feishuDocUrl: string;
+      keyDataUrl: string;
     }
   | {
       type: "task_approved";
       taskId: string;
       taskTitle: string;
       projectName: string;
-      assigneeOpenId: string;
+      assigneeOpenIds: string[];
+    }
+  | {
+      type: "task_rejected";
+      taskId: string;
+      taskTitle: string;
+      projectName: string;
+      assigneeOpenIds: string[];
+      comment?: string;
     }
   | {
       type: "task_overdue";
@@ -54,13 +112,24 @@ export type ProgressNotifyPayload =
       projectName: string;
       team: string;
       techGroup: string;
-      assigneeOpenId: string;
+      assigneeOpenIds: string[];
+    }
+  | {
+      type: "task_risk_synced";
+      taskId: string;
+      taskTitle: string;
+      projectName: string;
+      team: string;
+      techGroup: string;
+      assigneeOpenIds: string[];
+      projectOwnerOpenIds: string[];
+      riskNote: string;
     }
   | {
       type: "weekly_report_reminder";
       taskId: string;
       taskTitle: string;
-      assigneeOpenId: string;
+      assigneeOpenIds: string[];
     };
 
 function buildCard(
@@ -134,53 +203,194 @@ async function notifyRoles(
   );
 }
 
-export async function sendProgressNotification(payload: ProgressNotifyPayload) {
+async function notifyOpenIdsAndRoles(
+  openIds: string[],
+  roles: UserRoleType[],
+  scope: { team: string; techGroup: string },
+  card: ReturnType<typeof buildCard>,
+) {
+  const openIdSet = new Set(openIds.filter(Boolean));
+  for (const role of roles) {
+    const ids = await getOpenIdsByRole(role, scope);
+    ids.forEach((id) => openIdSet.add(id));
+  }
+  await Promise.allSettled(
+    [...openIdSet].map((id) => sendDirectCard(id, card)),
+  );
+}
+
+async function notifyOpenIdsAndRoleScopes(
+  openIds: string[],
+  roles: UserRoleType[],
+  scopes: Array<{ team: string; techGroup: string }>,
+  card: ReturnType<typeof buildCard>,
+) {
+  const openIdSet = new Set(openIds.filter(Boolean));
+  for (const role of roles) {
+    for (const scope of scopes) {
+      const ids = await getOpenIdsByRole(role, scope);
+      ids.forEach((id) => openIdSet.add(id));
+    }
+  }
+  await Promise.allSettled(
+    [...openIdSet].map((id) => sendDirectCard(id, card)),
+  );
+}
+
+async function notifyOpenIds(
+  openIds: string[],
+  card: ReturnType<typeof buildCard>,
+) {
+  const openIdSet = new Set(openIds.filter(Boolean));
+  await Promise.allSettled(
+    [...openIdSet].map((id) => sendDirectCard(id, card)),
+  );
+}
+
+export async function sendProgressNotification(
+  payload: ProgressNotifyPayload,
+  context?: NotificationContext,
+) {
+  const appOrigin = context?.appOrigin;
+
   switch (payload.type) {
     case "project_created": {
       const card = buildCard(
         "新项目已创建",
-        `**项目**：${payload.projectName}\n**负责人**：${payload.ownerName}\n**车组/技术组**：${payload.team} / ${payload.techGroup}`,
-        `${APP_URL}/progress/projects/${payload.projectId}`,
+        `**项目**：${payload.projectName}\n**负责人**：${payload.ownerNames}\n**车组/技术组**：${formatScope(payload.team, payload.techGroup)}`,
+        buildAppUrl(`/progress/projects/${payload.projectId}`, appOrigin),
       );
-      await notifyRoles(
-        ["TEAM_ADMIN", "TECH_GROUP_ADMIN", "PROJECT_MANAGER"],
+      await notifyOpenIdsAndRoles(
+        payload.ownerOpenIds,
+        ["TEAM_ADMIN", "TECH_GROUP_ADMIN", "PROJECT_MANAGER", "SUPER_ADMIN"],
         { team: payload.team, techGroup: payload.techGroup },
         card,
       );
       break;
     }
-    case "project_abnormal": {
+    case "project_started":
+    case "project_completed":
+    case "project_canceled": {
+      const title =
+        payload.type === "project_started"
+          ? "项目已启动"
+          : payload.type === "project_completed"
+            ? "项目已完成"
+            : "项目已取消";
+      const template = payload.type === "project_canceled" ? "red" : "green";
       const card = buildCard(
-        "项目异常 — 请介入",
-        `**项目**：${payload.projectName}\n**负责人**：${payload.ownerName}\n请及时组会确认并介入处理。`,
-        `${APP_URL}/progress/projects/${payload.projectId}`,
-        "red",
+        title,
+        `**项目**：${payload.projectName}\n**负责人**：${payload.ownerNames}\n**车组/技术组**：${formatScope(payload.team, payload.techGroup)}`,
+        buildAppUrl(`/progress/projects/${payload.projectId}`, appOrigin),
+        template,
       );
-      await notifyRoles(
-        ["TEAM_ADMIN", "TECH_GROUP_ADMIN", "PROJECT_MANAGER"],
+      await notifyOpenIdsAndRoles(
+        payload.ownerOpenIds,
+        ["TEAM_ADMIN", "TECH_GROUP_ADMIN", "PROJECT_MANAGER", "SUPER_ADMIN"],
         { team: payload.team, techGroup: payload.techGroup },
         card,
       );
+      break;
+    }
+    case "project_updated": {
+      const card = buildCard(
+        "项目信息已更新",
+        `**项目**：${payload.projectName}\n**修改人**：${payload.actorName}\n${formatChangeList(payload.changes)}`,
+        buildAppUrl(`/progress/projects/${payload.projectId}`, appOrigin),
+      );
+      await notifyOpenIdsAndRoleScopes(
+        [...payload.ownerOpenIds, ...payload.oldOwnerOpenIds],
+        ["TEAM_ADMIN", "TECH_GROUP_ADMIN", "PROJECT_MANAGER", "SUPER_ADMIN"],
+        [
+          { team: payload.team, techGroup: payload.techGroup },
+          { team: payload.oldTeam, techGroup: payload.oldTechGroup },
+        ],
+        card,
+      );
+      break;
+    }
+    case "stage_pending_acceptance": {
+      const card = buildCard(
+        "项目阶段待审批",
+        `**项目**：${payload.projectName}\n**阶段**：${payload.stageName}\n**归档链接**：[打开材料](${payload.evidenceUrl})`,
+        buildAppUrl(`/progress/projects/${payload.projectId}`, appOrigin),
+        "orange",
+      );
+      await notifyOpenIdsAndRoles(
+        [...payload.ownerOpenIds, payload.submitterOpenId],
+        ["TEAM_ADMIN", "TECH_GROUP_ADMIN", "PROJECT_MANAGER", "SUPER_ADMIN"],
+        { team: payload.team, techGroup: payload.techGroup },
+        card,
+      );
+      break;
+    }
+    case "stage_approved":
+    case "stage_rejected": {
+      const pass = payload.type === "stage_approved";
+      const card = buildCard(
+        pass ? "项目阶段审批通过" : "项目阶段审批驳回",
+        `**项目**：${payload.projectName}\n**阶段**：${payload.stageName}`,
+        buildAppUrl(`/progress/projects/${payload.projectId}`, appOrigin),
+        pass ? "green" : "red",
+      );
+      await sendDirectCard(payload.stageOwnerOpenId, card);
       break;
     }
     case "task_assigned": {
       const card = buildCard(
         "新任务指派",
         `**任务**：${payload.taskTitle}\n**项目**：${payload.projectName}`,
-        `${APP_URL}/progress/tasks/${payload.taskId}`,
+        buildAppUrl(`/progress/tasks/${payload.taskId}`, appOrigin),
       );
-      await sendDirectCard(payload.assigneeOpenId, card);
+      await notifyOpenIds(payload.assigneeOpenIds, card);
+      break;
+    }
+    case "task_updated": {
+      const card = buildCard(
+        "任务信息已更新",
+        `**任务**：${payload.taskTitle}\n**项目**：${payload.projectName}\n**修改人**：${payload.actorName}\n${formatChangeList(payload.changes)}`,
+        buildAppUrl(`/progress/tasks/${payload.taskId}`, appOrigin),
+      );
+      await notifyOpenIdsAndRoleScopes(
+        [
+          ...payload.assigneeOpenIds,
+          ...payload.oldAssigneeOpenIds,
+          ...payload.projectOwnerOpenIds,
+        ],
+        ["TEAM_ADMIN", "TECH_GROUP_ADMIN", "PROJECT_MANAGER", "SUPER_ADMIN"],
+        [
+          { team: payload.team, techGroup: payload.techGroup },
+          { team: payload.oldTeam, techGroup: payload.oldTechGroup },
+        ],
+        card,
+      );
       break;
     }
     case "task_pending_acceptance": {
       const card = buildCard(
         "任务待验收",
-        `**任务**：${payload.taskTitle}\n**项目**：${payload.projectName}\n**文档**：[打开飞书文档](${payload.feishuDocUrl})\n请先阅读文档后再在系统中审批。`,
-        `${APP_URL}/progress/tasks/${payload.taskId}`,
+        `**任务**：${payload.taskTitle}\n**项目**：${payload.projectName}\n**交付文档**：[打开文档](${payload.feishuDocUrl})\n**关键数据**：[打开材料](${payload.keyDataUrl})\n请先阅读材料后再在系统中审批。`,
+        buildAppUrl(`/progress/tasks/${payload.taskId}`, appOrigin),
         "orange",
       );
       await notifyRoles(
-        ["TEAM_ADMIN", "TECH_GROUP_ADMIN", "PROJECT_MANAGER"],
+        ["TEAM_ADMIN", "TECH_GROUP_ADMIN", "PROJECT_MANAGER", "SUPER_ADMIN"],
+        { team: payload.team, techGroup: payload.techGroup },
+        card,
+      );
+      break;
+    }
+    case "task_risk_synced": {
+      const card = buildCard(
+        "任务风险同步",
+        `**任务**：${payload.taskTitle}\n**项目**：${payload.projectName}\n**风险**：${payload.riskNote}`,
+        buildAppUrl(`/progress/tasks/${payload.taskId}`, appOrigin),
+        "red",
+      );
+      await notifyOpenIds(payload.assigneeOpenIds, card).catch(console.error);
+      await notifyOpenIds(payload.projectOwnerOpenIds, card).catch(console.error);
+      await notifyRoles(
+        ["TEAM_ADMIN", "TECH_GROUP_ADMIN", "PROJECT_MANAGER", "SUPER_ADMIN"],
         { team: payload.team, techGroup: payload.techGroup },
         card,
       );
@@ -190,22 +400,35 @@ export async function sendProgressNotification(payload: ProgressNotifyPayload) {
       const card = buildCard(
         "任务验收通过",
         `**任务**：${payload.taskTitle}\n**项目**：${payload.projectName}`,
-        `${APP_URL}/progress/tasks/${payload.taskId}`,
+        buildAppUrl(`/progress/tasks/${payload.taskId}`, appOrigin),
         "green",
       );
-      await sendDirectCard(payload.assigneeOpenId, card);
+      await notifyOpenIds(payload.assigneeOpenIds, card);
+      break;
+    }
+    case "task_rejected": {
+      const content = `**任务**：${payload.taskTitle}\n**项目**：${payload.projectName}${
+        payload.comment ? `\n**驳回理由**：${payload.comment}` : ""
+      }`;
+      const card = buildCard(
+        "任务验收驳回",
+        content,
+        buildAppUrl(`/progress/tasks/${payload.taskId}`, appOrigin),
+        "red",
+      );
+      await notifyOpenIds(payload.assigneeOpenIds, card);
       break;
     }
     case "task_overdue": {
       const card = buildCard(
         "任务逾期警报",
         `**任务**：${payload.taskTitle}\n**项目**：${payload.projectName}\n请负责人尽快推进，组长/项管请关注。`,
-        `${APP_URL}/progress/tasks/${payload.taskId}`,
+        buildAppUrl(`/progress/tasks/${payload.taskId}`, appOrigin),
         "red",
       );
-      await sendDirectCard(payload.assigneeOpenId, card);
+      await notifyOpenIds(payload.assigneeOpenIds, card);
       await notifyRoles(
-        ["TEAM_ADMIN", "TECH_GROUP_ADMIN", "PROJECT_MANAGER"],
+        ["TEAM_ADMIN", "TECH_GROUP_ADMIN", "PROJECT_MANAGER", "SUPER_ADMIN"],
         { team: payload.team, techGroup: payload.techGroup },
         card,
       );
@@ -215,13 +438,22 @@ export async function sendProgressNotification(payload: ProgressNotifyPayload) {
       const card = buildCard(
         "周报填写提醒",
         `**任务**：${payload.taskTitle}\n请在系统中提交本周进度周报。`,
-        `${APP_URL}/progress/tasks/${payload.taskId}`,
+        buildAppUrl(`/progress/tasks/${payload.taskId}`, appOrigin),
         "orange",
       );
-      await sendDirectCard(payload.assigneeOpenId, card);
+      await notifyOpenIds(payload.assigneeOpenIds, card);
       break;
     }
   }
+}
+
+function formatScope(team: string, techGroup: string): string {
+  return `${team || "未指定"} / ${techGroup || "未指定"}`;
+}
+
+function formatChangeList(changes: string[]): string {
+  if (changes.length === 0) return "**变更**：无字段变化";
+  return `**变更**：\n${changes.map((change) => `- ${change}`).join("\n")}`;
 }
 
 export async function runProgressOverdueCheck() {
@@ -232,7 +464,7 @@ export async function runProgressOverdueCheck() {
       status: { in: ["TODO", "IN_PROGRESS", "PENDING_ACCEPTANCE"] },
       isOverdue: false,
     },
-    include: { project: true },
+    include: { project: true, assignees: true },
   });
 
   for (const task of overdueTasks) {
@@ -248,7 +480,7 @@ export async function runProgressOverdueCheck() {
       projectName: task.project.name,
       team: task.team,
       techGroup: task.techGroup,
-      assigneeOpenId: task.assigneeOpenId,
+      assigneeOpenIds: getTaskAssigneeOpenIds(task),
     }).catch(console.error);
   }
 
@@ -257,7 +489,11 @@ export async function runProgressOverdueCheck() {
 
 export async function runWeeklyReportReminders() {
   const activeTasks = await prisma.task.findMany({
-    where: { status: { in: ["TODO", "IN_PROGRESS", "PENDING_ACCEPTANCE"] } },
+    where: {
+      status: { in: ["TODO", "IN_PROGRESS", "PENDING_ACCEPTANCE"] },
+      needsWeeklyReport: true,
+    },
+    include: { assignees: true },
   });
 
   for (const task of activeTasks) {
@@ -265,7 +501,7 @@ export async function runWeeklyReportReminders() {
       type: "weekly_report_reminder",
       taskId: task.id,
       taskTitle: task.title,
-      assigneeOpenId: task.assigneeOpenId,
+      assigneeOpenIds: getTaskAssigneeOpenIds(task),
     }).catch(console.error);
   }
 
@@ -273,22 +509,39 @@ export async function runWeeklyReportReminders() {
 }
 
 export async function runProgressDailyReminders() {
-  const todayTasks = await prisma.task.findMany({
+  const activeTasks = await prisma.task.findMany({
     where: {
-      status: { in: ["TODO", "IN_PROGRESS"] },
-      dueAt: { gte: new Date(new Date().setHours(0, 0, 0, 0)) },
+      status: { in: ["TODO", "IN_PROGRESS", "PENDING_ACCEPTANCE"] },
     },
-    include: { project: true },
+    include: {
+      project: {
+        include: {
+          owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        },
+      },
+      assignees: true,
+    },
   });
 
-  for (const task of todayTasks) {
+  for (const task of activeTasks) {
     const card = buildCard(
       "今日任务提醒",
       `**任务**：${task.title}\n**项目**：${task.project.name}\n**截止**：${task.dueAt.toLocaleString("zh-CN")}`,
-      `${APP_URL}/progress/tasks/${task.id}`,
+      buildAppUrl(`/progress/tasks/${task.id}`),
     );
-    await sendDirectCard(task.assigneeOpenId, card).catch(console.error);
+    await notifyOpenIds(
+      getTaskAssigneeOpenIds(task),
+      card,
+    ).catch(console.error);
+    await notifyOpenIds(getProjectOwnerOpenIds(task.project), card).catch(
+      console.error,
+    );
+    await notifyRoles(
+      ["TEAM_ADMIN", "TECH_GROUP_ADMIN", "PROJECT_MANAGER"],
+      { team: task.team, techGroup: task.techGroup },
+      card,
+    );
   }
 
-  return todayTasks.length;
+  return activeTasks.length;
 }

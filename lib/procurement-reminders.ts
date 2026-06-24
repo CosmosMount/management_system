@@ -2,11 +2,11 @@ import type { OrderStatus } from "@prisma/client";
 import { mapOrderItems, type OrderCardPayload } from "@/lib/feishu";
 import { getFeishuTenantAccessToken } from "@/lib/feishu-auth";
 import { getOpenIdsByRole } from "@/lib/permissions";
+import { buildAppUrl, type NotificationContext } from "@/lib/app-origin";
 import { prisma } from "@/lib/prisma";
 import { statusApproverRole, statusLabels } from "@/lib/permissions-client";
 
 const REMINDER_INTERVAL_MS = 24 * 60 * 60 * 1000;
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
 
 const REMINDABLE_STATUSES: OrderStatus[] = [
   "MANAGEMENT_REVIEW",
@@ -32,14 +32,18 @@ function shouldSendReminder(order: {
   return Date.now() - order.lastReminderAt.getTime() >= REMINDER_INTERVAL_MS;
 }
 
-function orderDetailUrl(orderId: string, status: OrderStatus): string {
+function orderDetailUrl(
+  orderId: string,
+  status: OrderStatus,
+  appOrigin?: string | null,
+): string {
   const focus =
     status === "PENDING_APPLICANT_DOCS"
       ? "upload"
       : status === "PENDING_APPLICANT_CONFIRM"
         ? "confirm"
         : "approval";
-  return `${APP_URL}/orders/${orderId}?focus=${focus}&from=notify#${focus}`;
+  return `${buildAppUrl(`/orders/${orderId}`, appOrigin)}?focus=${focus}&from=notify#${focus}`;
 }
 
 function toCardPayload(order: {
@@ -93,7 +97,11 @@ async function sendDirectStaleCard(
   }
 }
 
-function buildStaleCard(order: OrderCardPayload, stuckDays: number) {
+function buildStaleCard(
+  order: OrderCardPayload,
+  stuckDays: number,
+  context?: NotificationContext,
+) {
   const statusLabel = statusLabels[order.status];
 
   return {
@@ -123,7 +131,7 @@ function buildStaleCard(order: OrderCardPayload, stuckDays: number) {
           {
             tag: "button",
             text: { tag: "plain_text", content: "前往处理" },
-            url: orderDetailUrl(order.id, order.status),
+            url: orderDetailUrl(order.id, order.status, context?.appOrigin),
             type: "primary",
           },
         ],
@@ -166,8 +174,9 @@ async function sendStaleOrderReminder(
     techGroupApproved: boolean;
   },
   stuckDays: number,
+  context?: NotificationContext,
 ) {
-  const card = buildStaleCard(order, stuckDays);
+  const card = buildStaleCard(order, stuckDays, context);
 
   if (order.status === "MANAGEMENT_REVIEW") {
     const tasks: Promise<void>[] = [];
@@ -196,7 +205,9 @@ async function sendStaleOrderReminder(
 }
 
 /** 在途订单当前环节停留超过 24h 且距上次催办已满 24h 时，私信该环节处理人 */
-export async function runProcurementStaleReminders(): Promise<number> {
+export async function runProcurementStaleReminders(
+  context?: NotificationContext,
+): Promise<number> {
   const orders = await prisma.purchaseOrder.findMany({
     where: { status: { in: REMINDABLE_STATUSES } },
     include: { items: true },
@@ -225,6 +236,7 @@ export async function runProcurementStaleReminders(): Promise<number> {
           techGroupApproved: order.techGroupApproved,
         },
         stuck,
+        context,
       );
       await prisma.purchaseOrder.update({
         where: { id: order.id },

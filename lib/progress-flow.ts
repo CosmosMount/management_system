@@ -1,16 +1,23 @@
-import type { ProjectStatus, TaskStatus } from "@prisma/client";
-import { projectStatusLabels, taskStatusLabels } from "@/lib/progress-labels";
+import type { ProjectStatus, StageStatus, TaskStatus } from "@prisma/client";
+import {
+  projectStatusLabels,
+  stageStatusLabels,
+  taskStatusLabels,
+} from "@/lib/progress-labels";
 
 /** 项目允许的状态迁移（不可跳跃） */
 const PROJECT_TRANSITIONS: Record<ProjectStatus, ProjectStatus[]> = {
-  DRAFT: ["IN_PROGRESS"],
-  IN_PROGRESS: ["NORMAL", "ABNORMAL"],
-  NORMAL: ["OUTCOME_GOOD"],
-  ABNORMAL: ["UNDER_INTERVENTION"],
-  UNDER_INTERVENTION: ["NORMAL", "OUTCOME_GOOD", "OUTCOME_POOR"],
-  OUTCOME_GOOD: ["ARCHIVED"],
-  OUTCOME_POOR: ["ARCHIVED"],
-  ARCHIVED: [],
+  NOT_STARTED: ["IN_PROGRESS", "CANCELED"],
+  IN_PROGRESS: ["COMPLETED", "CANCELED"],
+  COMPLETED: [],
+  CANCELED: [],
+};
+
+const STAGE_TRANSITIONS: Record<StageStatus, StageStatus[]> = {
+  NOT_STARTED: ["IN_PROGRESS"],
+  IN_PROGRESS: ["PENDING_ACCEPTANCE"],
+  PENDING_ACCEPTANCE: ["COMPLETED", "IN_PROGRESS"],
+  COMPLETED: [],
 };
 
 /** 任务允许的状态迁移 */
@@ -33,6 +40,13 @@ export function canTransitionTask(from: TaskStatus, to: TaskStatus): boolean {
   return TASK_TRANSITIONS[from]?.includes(to) ?? false;
 }
 
+export function canTransitionStage(
+  from: StageStatus,
+  to: StageStatus,
+): boolean {
+  return STAGE_TRANSITIONS[from]?.includes(to) ?? false;
+}
+
 export function assertProjectTransition(
   from: ProjectStatus,
   to: ProjectStatus,
@@ -52,6 +66,14 @@ export function assertTaskTransition(from: TaskStatus, to: TaskStatus): void {
   }
 }
 
+export function assertStageTransition(from: StageStatus, to: StageStatus): void {
+  if (!canTransitionStage(from, to)) {
+    throw new Error(
+      `无法从「${stageStatusLabels[from]}」直接变更为「${stageStatusLabels[to]}」，请按流程逐步推进`,
+    );
+  }
+}
+
 export function getNextProjectStatuses(
   current: ProjectStatus,
 ): { status: ProjectStatus; label: string }[] {
@@ -63,25 +85,15 @@ export function getNextProjectStatuses(
 
 const projectActionLabels: Partial<Record<ProjectStatus, string>> = {
   IN_PROGRESS: "启动项目",
-  NORMAL: "确认正常",
-  ABNORMAL: "标记异常",
-  UNDER_INTERVENTION: "负责人介入",
-  OUTCOME_GOOD: "确认结果理想",
-  OUTCOME_POOR: "确认结果不理想",
-  ARCHIVED: "归档项目",
+  COMPLETED: "完成项目",
+  CANCELED: "取消项目",
 };
 
 /** 项目主流程展示顺序（桌面端步骤条） */
 export const projectFlowSteps: ProjectStatus[] = [
+  "NOT_STARTED",
   "IN_PROGRESS",
-  "NORMAL",
-  "OUTCOME_GOOD",
-  "ARCHIVED",
-];
-
-export const projectBranchSteps: ProjectStatus[] = [
-  "ABNORMAL",
-  "UNDER_INTERVENTION",
+  "COMPLETED",
 ];
 
 export const taskFlowSteps: TaskStatus[] = [
@@ -93,12 +105,6 @@ export const taskFlowSteps: TaskStatus[] = [
 ];
 
 export function projectStepIndex(status: ProjectStatus): number {
-  if (status === "ABNORMAL" || status === "UNDER_INTERVENTION") {
-    return 1;
-  }
-  if (status === "OUTCOME_POOR") {
-    return 2;
-  }
   const idx = projectFlowSteps.indexOf(status);
   return idx >= 0 ? idx : 0;
 }
@@ -113,25 +119,17 @@ export function getProjectStepperDisplay(status: ProjectStatus): {
   currentIndex: number;
   branchNote: string | null;
 } {
-  const outcomeLabel =
-    status === "OUTCOME_POOR"
-      ? projectStatusLabels.OUTCOME_POOR
-      : projectStatusLabels.OUTCOME_GOOD;
-
   const steps = [
+    { key: "NOT_STARTED", label: projectStatusLabels.NOT_STARTED },
     { key: "IN_PROGRESS", label: projectStatusLabels.IN_PROGRESS },
-    { key: "NORMAL", label: projectStatusLabels.NORMAL },
-    { key: "OUTCOME", label: outcomeLabel },
-    { key: "ARCHIVED", label: projectStatusLabels.ARCHIVED },
+    { key: "COMPLETED", label: projectStatusLabels.COMPLETED },
   ];
 
   let branchNote: string | null = null;
-  if (status === "ABNORMAL") {
-    branchNote = `当前处于「${projectStatusLabels.ABNORMAL}」分支，请先标记异常或推进至负责人介入`;
-  } else if (status === "UNDER_INTERVENTION") {
-    branchNote = `当前处于「${projectStatusLabels.UNDER_INTERVENTION}」，可恢复为正常或确认最终结果`;
-  } else if (status === "DRAFT") {
+  if (status === "NOT_STARTED") {
     branchNote = "项目尚未启动，请先启动项目";
+  } else if (status === "CANCELED") {
+    branchNote = "项目已取消，不能继续推进";
   }
 
   return {

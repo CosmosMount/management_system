@@ -1,12 +1,12 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { ProjectStatus } from "@prisma/client";
 import { auth } from "@/lib/auth";
 import { sendProgressNotification } from "@/lib/feishu-progress";
-import { logProgressActivity, requireSessionUser } from "@/lib/progress-activity";
-import { canCreateProject } from "@/lib/permissions-progress";
+import { requireSessionUser } from "@/lib/progress-activity";
+import { canCreateProject, canCreateProjectInScope } from "@/lib/permissions-progress";
 import { prisma } from "@/lib/prisma";
+import { getNotificationContext } from "@/lib/request-origin";
 import { getUserRoles } from "@/lib/permissions";
 import { createProjectSchema, type CreateProjectInput } from "@/lib/validations/progress";
 
@@ -20,25 +20,79 @@ export async function createProject(input: CreateProjectInput) {
   }
 
   const parsed = createProjectSchema.parse(input);
+  const projectScope = { team: parsed.team ?? "", techGroup: parsed.techGroup ?? "" };
+  if (!canCreateProjectInScope(roles, projectScope)) {
+    throw new Error("无权限在该车组/技术组下创建项目");
+  }
+  const ownerOpenIds = [
+    ...new Set(
+      parsed.ownerOpenIds?.filter(Boolean) ??
+        (parsed.ownerOpenId ? [parsed.ownerOpenId] : []),
+    ),
+  ];
+  if (ownerOpenIds.length === 0) {
+    throw new Error("请选择项目负责人");
+  }
+
+  const [owners, stageOwners] = await Promise.all([
+    prisma.user.findMany({
+      where: { openId: { in: ownerOpenIds } },
+      select: { openId: true, name: true },
+    }),
+    prisma.user.findMany({
+      where: { openId: { in: parsed.stages.map((s) => s.ownerOpenId) } },
+      select: { openId: true, name: true },
+    }),
+  ]);
+  const ownerByOpenId = new Map(owners.map((owner) => [owner.openId, owner]));
+  const missingOwner = ownerOpenIds.find((openId) => !ownerByOpenId.has(openId));
+  if (missingOwner) throw new Error("项目负责人不存在，请先同步飞书通讯录");
+  const orderedOwners = ownerOpenIds.map((openId) => {
+    const owner = ownerByOpenId.get(openId);
+    if (!owner) throw new Error("项目负责人不存在，请先同步飞书通讯录");
+    return owner;
+  });
+  const primaryOwner = orderedOwners[0];
+  if (!primaryOwner) throw new Error("请选择项目负责人");
+
+  const stageOwnerByOpenId = new Map(
+    stageOwners.map((u) => [u.openId, u.name]),
+  );
+  for (const stage of parsed.stages) {
+    if (!stageOwnerByOpenId.has(stage.ownerOpenId)) {
+      throw new Error(`阶段「${stage.name}」负责人不存在，请先同步飞书通讯录`);
+    }
+  }
 
   const project = await prisma.$transaction(async (tx) => {
     const created = await tx.project.create({
       data: {
         name: parsed.name,
         description: parsed.description ?? "",
-        team: parsed.team,
-        techGroup: parsed.techGroup,
-        status: ProjectStatus.IN_PROGRESS,
-        ownerOpenId: user.openId,
-        ownerName: user.name,
-        milestones: {
-          create: parsed.milestones.map((m, i) => ({
-            name: m.name,
+        team: parsed.team ?? "",
+        techGroup: parsed.techGroup ?? "",
+        ownerOpenId: primaryOwner.openId,
+        ownerName: primaryOwner.name,
+        allowOwnerSelfApproval: parsed.allowOwnerSelfApproval,
+        owners: {
+          create: orderedOwners.map((owner, index) => ({
+            openId: owner.openId,
+            name: owner.name,
+            sortOrder: index,
+          })),
+        },
+        stages: {
+          create: parsed.stages.map((s, i) => ({
+            name: s.name,
+            goal: s.goal,
             sortOrder: i,
+            ownerOpenId: s.ownerOpenId,
+            ownerName: stageOwnerByOpenId.get(s.ownerOpenId) ?? "",
+            dueAt: new Date(s.dueAt),
           })),
         },
       },
-      include: { milestones: true },
+      include: { stages: true },
     });
 
     await tx.progressActivityLog.create({
@@ -47,7 +101,12 @@ export async function createProject(input: CreateProjectInput) {
         action: "project.created",
         actorOpenId: user.openId,
         actorName: user.name,
-        payload: JSON.stringify({ name: created.name }),
+        payload: JSON.stringify({
+          name: created.name,
+          ownerOpenIds: orderedOwners.map((owner) => owner.openId),
+          owners: orderedOwners.map((owner) => owner.name),
+          stageCount: created.stages.length,
+        }),
       },
     });
 
@@ -60,8 +119,9 @@ export async function createProject(input: CreateProjectInput) {
     projectName: project.name,
     team: project.team,
     techGroup: project.techGroup,
-    ownerName: project.ownerName,
-  }).catch(console.error);
+    ownerOpenIds: orderedOwners.map((owner) => owner.openId),
+    ownerNames: orderedOwners.map((owner) => owner.name).join("、"),
+  }, await getNotificationContext()).catch(console.error);
 
   revalidatePath("/progress");
   return project;

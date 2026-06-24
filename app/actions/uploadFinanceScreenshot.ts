@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
 import { OrderStatus } from "@prisma/client";
 import { sendOrderNotification, mapOrderItems } from "@/lib/feishu";
+import { getNotificationContext } from "@/lib/request-origin";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { saveUpload, uploadTypeSets } from "@/lib/file-upload";
 import { prisma } from "@/lib/prisma";
@@ -65,7 +66,7 @@ export async function uploadFinanceScreenshot(formData: FormData) {
     team: updated.team,
     techGroup: updated.techGroup,
     items: mapOrderItems(order.items),
-  }).catch((err) => {
+  }, await getNotificationContext()).catch((err) => {
     console.error("[uploadFinanceScreenshot] 飞书通知失败:", err);
   });
 

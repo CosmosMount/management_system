@@ -1,4 +1,4 @@
-import { signIn } from "@/lib/auth";
+import { signInFeishu } from "@/lib/auth-actions";
 import { APP_NAME, APP_TAGLINE } from "@/lib/branding";
 import { Button } from "@/components/ui/button";
 import {
@@ -42,7 +42,7 @@ export default async function LoginPage({ searchParams }: Props) {
           <form
             action={async () => {
               "use server";
-              await signIn("feishu", { redirectTo });
+              await signInFeishu(redirectTo);
             }}
           >
             <Button type="submit" className="w-full">

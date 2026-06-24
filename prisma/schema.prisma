@@ -27,14 +27,10 @@ enum UserRoleType {
 }
 
 enum ProjectStatus {
-  DRAFT
+  NOT_STARTED
   IN_PROGRESS
-  NORMAL
-  ABNORMAL
-  UNDER_INTERVENTION
-  OUTCOME_GOOD
-  OUTCOME_POOR
-  ARCHIVED
+  COMPLETED
+  CANCELED
 }
 
 enum TaskStatus {
@@ -68,18 +64,25 @@ enum Importance {
 
 enum SubmissionType {
   DELIVERY
-  MILESTONE
+  STAGE
 }
 
-enum MilestoneStatus {
-  PENDING
-  PASSED
-  FAILED
+enum StageStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  PENDING_ACCEPTANCE
+  COMPLETED
 }
 
 enum ApprovalDecision {
   APPROVED
   REJECTED
+}
+
+enum FeedbackStatus {
+  OPEN
+  IN_PROGRESS
+  CLOSED
 }
 
 model User {
@@ -146,34 +149,60 @@ model Project {
   description   String              @default("")
   team          String
   techGroup     String
-  status        ProjectStatus       @default(DRAFT)
+  status        ProjectStatus       @default(NOT_STARTED)
   ownerOpenId   String
   ownerName     String
-  milestones    ProjectMilestone[]
+  allowOwnerSelfApproval Boolean     @default(false)
+  owners        ProjectOwner[]
+  stages        ProjectStage[]
   tasks         Task[]
   activityLogs  ProgressActivityLog[]
   createdAt     DateTime            @default(now())
   updatedAt     DateTime            @updatedAt
   archivedAt    DateTime?
+  completedAt   DateTime?
+  canceledAt    DateTime?
 }
 
-model ProjectMilestone {
-  id           String          @id @default(uuid())
-  projectId    String
-  project      Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  name         String
-  sortOrder    Int
-  status       MilestoneStatus @default(PENDING)
-  feishuDocUrl String          @default("")
-  submissionId String?
-  createdAt    DateTime        @default(now())
-  updatedAt    DateTime        @updatedAt
+model ProjectOwner {
+  id        String   @id @default(uuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  openId    String
+  name      String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@unique([projectId, openId])
+}
+
+model ProjectStage {
+  id                  String           @id @default(uuid())
+  projectId           String
+  project             Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name                String
+  goal                String           @default("")
+  sortOrder           Int
+  status              StageStatus      @default(NOT_STARTED)
+  evidenceUrl         String           @default("") @map("feishuDocUrl")
+  ownerOpenId         String           @default("")
+  ownerName           String           @default("")
+  dueAt               DateTime?
+  currentSubmissionId String?          @map("submissionId")
+  tasks               Task[]
+  submissions         TaskSubmission[]
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  @@map("ProjectMilestone")
 }
 
 model Task {
   id              String              @id @default(uuid())
   projectId       String
   project         Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  stageId         String?
+  stage           ProjectStage?       @relation(fields: [stageId], references: [id], onDelete: SetNull)
   title           String
   goal            String              @default("")
   category        TaskCategory        @default(RND)
@@ -181,12 +210,17 @@ model Task {
   importance      Importance          @default(MEDIUM)
   assigneeOpenId  String
   assigneeName    String
+  assignees       TaskAssignee[]
   team            String
   techGroup       String
   metrics         String              @default("")
   dueAt           DateTime
   status          TaskStatus          @default(TODO)
   isOverdue       Boolean             @default(false)
+  needsOfflineConfirmation Boolean     @default(false)
+  needsWeeklyReport Boolean            @default(false)
+  riskNote        String              @default("")
+  riskUpdatedAt   DateTime?
   failureReason   String              @default("")
   submissions     TaskSubmission[]
   weeklyReports   WeeklyReport[]
@@ -196,14 +230,28 @@ model Task {
   archivedAt      DateTime?
 }
 
+model TaskAssignee {
+  id        String   @id @default(uuid())
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  openId    String
+  name      String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@unique([taskId, openId])
+}
+
 model TaskSubmission {
   id            String           @id @default(uuid())
   taskId        String?
   task          Task?            @relation(fields: [taskId], references: [id], onDelete: Cascade)
   projectId     String?
+  stageId       String?
+  stage         ProjectStage?     @relation(fields: [stageId], references: [id], onDelete: Cascade)
   type          SubmissionType
   feishuDocUrl  String
-  videoUrl      String           @default("")
+  keyDataUrl    String           @default("") @map("videoUrl")
   note          String           @default("")
   failureReason String           @default("")
   submittedBy   String
@@ -235,6 +283,7 @@ model ApprovalRecord {
   approverRole    UserRoleType
   decision        ApprovalDecision
   docViewVerified Boolean          @default(false)
+  offlineConfirmed Boolean         @default(false)
   comment         String           @default("")
   createdAt       DateTime         @default(now())
 }
@@ -250,4 +299,44 @@ model ProgressActivityLog {
   actorName  String
   payload    String   @default("{}")
   createdAt  DateTime @default(now())
+}
+
+model Feedback {
+  id              String            @id @default(uuid())
+  submitterOpenId String
+  submitterName   String
+  status          FeedbackStatus    @default(OPEN)
+  lastMessageAt   DateTime          @default(now())
+  closedAt        DateTime?
+  messages        FeedbackMessage[]
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@index([submitterOpenId])
+  @@index([status, lastMessageAt])
+}
+
+model FeedbackMessage {
+  id           String               @id @default(uuid())
+  feedbackId   String
+  feedback     Feedback             @relation(fields: [feedbackId], references: [id], onDelete: Cascade)
+  authorOpenId String
+  authorName   String
+  body         String               @default("")
+  attachments  FeedbackAttachment[]
+  createdAt    DateTime             @default(now())
+
+  @@index([feedbackId, createdAt])
+}
+
+model FeedbackAttachment {
+  id        String          @id @default(uuid())
+  messageId String
+  message   FeedbackMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  path      String
+  fileName  String
+  mimeType  String
+  size      Int
+  sortOrder Int             @default(0)
+  createdAt DateTime        @default(now())
 }

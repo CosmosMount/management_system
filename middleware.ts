@@ -1,7 +1,13 @@
 import { middlewareAuth } from "@/lib/auth-edge";
+import {
+  appOriginFromHostHeaders,
+  buildAppUrl,
+  isAllowedAppOrigin,
+} from "@/lib/app-origin";
 import { NextResponse } from "next/server";
+import type { NextFetchEvent, NextRequest } from "next/server";
 
-export default middlewareAuth((req) => {
+const authMiddleware = middlewareAuth((req) => {
   const { pathname } = req.nextUrl;
   const isLoggedIn = !!req.auth;
   const isPublic =
@@ -27,6 +33,20 @@ export default middlewareAuth((req) => {
 
   return NextResponse.next();
 });
+
+export default function middleware(req: NextRequest, event: NextFetchEvent) {
+  const origin = appOriginFromHostHeaders(req.headers);
+
+  if (!origin || !isAllowedAppOrigin(origin)) {
+    const returnPath = `${req.nextUrl.pathname}${req.nextUrl.search}`;
+    return NextResponse.redirect(buildAppUrl(returnPath));
+  }
+
+  return authMiddleware(
+    req,
+    event as unknown as Parameters<typeof authMiddleware>[1],
+  );
+}
 
 export const config = {
   matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],

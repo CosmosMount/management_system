@@ -6,6 +6,7 @@ import { OrderStatus } from "@prisma/client";
 import { sendOrderNotification, mapOrderItems } from "@/lib/feishu";
 import { generateOrderNo } from "@/lib/order-no";
 import { prisma } from "@/lib/prisma";
+import { getNotificationContext } from "@/lib/request-origin";
 import {
   createOrderSchema,
   toStoredPurchaseItem,
@@ -61,7 +62,7 @@ export async function createOrder(input: CreateOrderInput) {
       team: order.team,
       techGroup: order.techGroup,
       items: mapOrderItems(order.items),
-    }).catch((err) => {
+    }, await getNotificationContext()).catch((err) => {
       console.error("[createOrder] 飞书通知失败:", err);
     });
   }

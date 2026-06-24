@@ -1,5 +1,11 @@
-import { mkdir, writeFile } from "fs/promises";
+import { mkdir, rm, writeFile } from "fs/promises";
 import path from "path";
+import {
+  FEEDBACK_IMAGE_ALLOWED_TYPES,
+  MAX_FEEDBACK_IMAGE_SIZE,
+} from "@/lib/feedback-upload-limits";
+
+export { MAX_FEEDBACK_IMAGE_COUNT, MAX_FEEDBACK_IMAGE_SIZE } from "@/lib/feedback-upload-limits";
 
 export const MAX_FILE_SIZE = 20 * 1024 * 1024;
 export const MAX_INVOICE_COUNT = 20;
@@ -27,8 +33,58 @@ const SCREENSHOT_TYPES = new Set([
 ]);
 
 const SIGNATURE_TYPES = new Set(["image/png", "image/jpeg", "image/jpg"]);
+const FEEDBACK_IMAGE_TYPES: ReadonlySet<string> = new Set(
+  FEEDBACK_IMAGE_ALLOWED_TYPES,
+);
 
 export const MAX_SIGNATURE_SIZE = 2 * 1024 * 1024;
+
+export type SavedFeedbackImage = {
+  path: string;
+  fileName: string;
+  mimeType: string;
+  size: number;
+};
+
+type DetectedFeedbackImage = {
+  ext: ".png" | ".jpg" | ".webp";
+  mimeType: "image/png" | "image/jpeg" | "image/webp";
+};
+
+function detectFeedbackImage(buffer: Buffer): DetectedFeedbackImage | null {
+  if (
+    buffer.length >= 8 &&
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47 &&
+    buffer[4] === 0x0d &&
+    buffer[5] === 0x0a &&
+    buffer[6] === 0x1a &&
+    buffer[7] === 0x0a
+  ) {
+    return { ext: ".png", mimeType: "image/png" };
+  }
+
+  if (
+    buffer.length >= 3 &&
+    buffer[0] === 0xff &&
+    buffer[1] === 0xd8 &&
+    buffer[2] === 0xff
+  ) {
+    return { ext: ".jpg", mimeType: "image/jpeg" };
+  }
+
+  if (
+    buffer.length >= 12 &&
+    buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
+    buffer.subarray(8, 12).toString("ascii") === "WEBP"
+  ) {
+    return { ext: ".webp", mimeType: "image/webp" };
+  }
+
+  return null;
+}
 
 export async function saveUpload(
   orderId: string,
@@ -76,9 +132,52 @@ export async function saveUserSignature(
   return `/uploads/signatures/${openId}/${filename}`;
 }
 
+export async function saveFeedbackImage(
+  feedbackId: string,
+  file: File,
+  sortOrder: number,
+): Promise<SavedFeedbackImage> {
+  if (!FEEDBACK_IMAGE_TYPES.has(file.type)) {
+    throw new Error("反馈图片仅支持 PNG/JPG/WebP");
+  }
+  if (file.size > MAX_FEEDBACK_IMAGE_SIZE) {
+    throw new Error("单张反馈图片不能超过 100MB");
+  }
+
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const detected = detectFeedbackImage(buffer);
+  if (!detected) {
+    throw new Error("反馈图片仅支持 PNG/JPG/WebP");
+  }
+
+  const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const filename = `image-${sortOrder}-${unique}${detected.ext}`;
+  const dir = path.join(process.cwd(), "public", "uploads", "feedback", feedbackId);
+  await mkdir(dir, { recursive: true });
+
+  await writeFile(path.join(dir, filename), buffer);
+  return {
+    path: `/uploads/feedback/${feedbackId}/${filename}`,
+    fileName: file.name || filename,
+    mimeType: detected.mimeType,
+    size: file.size,
+  };
+}
+
+export async function removeFeedbackUpload(publicPath: string): Promise<void> {
+  if (!publicPath.startsWith("/uploads/feedback/")) return;
+  const fullPath = path.join(
+    process.cwd(),
+    "public",
+    publicPath.replace(/^\/+/, ""),
+  );
+  await rm(fullPath, { force: true });
+}
+
 export const uploadTypeSets = {
   invoice: INVOICE_TYPES,
   itemPhoto: PHOTO_TYPES,
   listDoc: LIST_DOC_TYPES,
   screenshot: SCREENSHOT_TYPES,
+  feedbackImage: FEEDBACK_IMAGE_TYPES,
 };
