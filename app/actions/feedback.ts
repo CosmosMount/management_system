@@ -15,6 +15,7 @@ import {
 } from "@/lib/feishu-feedback";
 import { isSuperAdmin } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
+import { getNotificationContext } from "@/lib/request-origin";
 
 const MAX_FEEDBACK_TEXT_LENGTH = 5000;
 const feedbackStatuses: FeedbackStatus[] = ["OPEN", "IN_PROGRESS", "CLOSED"];
@@ -130,7 +131,7 @@ export async function createFeedback(formData: FormData) {
     feedbackId: feedback.id,
     submitterName: user.name,
     body: notificationBody(body, files.length),
-  }).catch((err) => {
+  }, await getNotificationContext()).catch((err) => {
     console.error("[feedback] 飞书新反馈通知失败:", err);
   });
 
@@ -201,7 +202,7 @@ export async function replyFeedback(formData: FormData) {
     actorIsAdmin,
     recipientOpenIds,
     body: notificationBody(body, files.length),
-  }).catch((err) => {
+  }, await getNotificationContext()).catch((err) => {
     console.error("[feedback] 飞书反馈回复通知失败:", err);
   });
 
@@ -243,7 +244,7 @@ export async function updateFeedbackStatus(formData: FormData) {
     actorName: user.name,
     status: updated.status,
     submitterOpenId: updated.submitterOpenId,
-  }).catch((err) => {
+  }, await getNotificationContext()).catch((err) => {
     console.error("[feedback] 飞书反馈状态通知失败:", err);
   });
 

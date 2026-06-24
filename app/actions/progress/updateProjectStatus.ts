@@ -8,6 +8,7 @@ import { logProgressActivity, requireSessionUser } from "@/lib/progress-activity
 import { assertProjectTransition } from "@/lib/progress-flow";
 import { canUpdateProjectLifecycle } from "@/lib/permissions-progress";
 import { prisma } from "@/lib/prisma";
+import { getNotificationContext } from "@/lib/request-origin";
 import { getUserRoles } from "@/lib/permissions";
 
 export async function updateProjectStatus(
@@ -87,7 +88,7 @@ export async function updateProjectStatus(
     techGroup: project.techGroup,
     ownerOpenId: project.ownerOpenId,
     ownerName: project.ownerName,
-  }).catch(console.error);
+  }, await getNotificationContext()).catch(console.error);
 
   revalidatePath(`/progress/projects/${projectId}`);
   revalidatePath("/progress");

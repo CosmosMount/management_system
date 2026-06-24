@@ -8,6 +8,7 @@ import { prisma } from "@/lib/prisma";
 import { sendProgressNotification } from "@/lib/feishu-progress";
 import { assertProjectActive } from "@/lib/progress-guards";
 import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
+import { getNotificationContext } from "@/lib/request-origin";
 import { riskSyncSchema, submitWeeklyReportSchema } from "@/lib/validations/progress";
 
 function getWeekStart(date = new Date()): Date {
@@ -126,7 +127,7 @@ export async function syncTaskRisk(input: { taskId: string; riskNote: string }) 
     assigneeOpenIds: getTaskAssigneeOpenIds(task),
     projectOwnerOpenId: task.project.ownerOpenId,
     riskNote: parsed.riskNote,
-  }).catch(console.error);
+  }, await getNotificationContext()).catch(console.error);
 
   revalidatePath(`/progress/tasks/${task.id}`);
   revalidatePath("/progress/kanban");

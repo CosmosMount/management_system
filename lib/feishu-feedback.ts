@@ -1,9 +1,8 @@
 import type { FeedbackStatus } from "@prisma/client";
 import { feedbackStatusLabels, feedbackStatusTone } from "@/lib/feedback-labels";
 import { getFeishuTenantAccessToken } from "@/lib/feishu-auth";
+import { buildAppUrl, type NotificationContext } from "@/lib/app-origin";
 import { prisma } from "@/lib/prisma";
-
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
 
 type FeedbackCard = ReturnType<typeof buildFeedbackCard>;
 
@@ -13,8 +12,11 @@ function truncate(value: string, maxLength = 260): string {
   return `${text.slice(0, maxLength)}...`;
 }
 
-function feedbackUrl(feedbackId: string): string {
-  return `${APP_URL}/feedback?selected=${feedbackId}&from=notify`;
+function feedbackUrl(feedbackId: string, appOrigin?: string | null): string {
+  return buildAppUrl(
+    `/feedback?selected=${feedbackId}&from=notify`,
+    appOrigin,
+  );
 }
 
 function buildFeedbackCard({
@@ -22,11 +24,13 @@ function buildFeedbackCard({
   content,
   feedbackId,
   template = "blue",
+  appOrigin,
 }: {
   title: string;
   content: string;
   feedbackId: string;
   template?: "blue" | "red" | "orange" | "green";
+  appOrigin?: string | null;
 }) {
   return {
     config: { wide_screen_mode: true },
@@ -45,7 +49,7 @@ function buildFeedbackCard({
           {
             tag: "button",
             text: { tag: "plain_text", content: "打开反馈" },
-            url: feedbackUrl(feedbackId),
+            url: feedbackUrl(feedbackId, appOrigin),
             type: "primary",
           },
         ],
@@ -108,11 +112,12 @@ export async function sendFeedbackCreatedNotification({
   feedbackId: string;
   submitterName: string;
   body: string;
-}) {
+}, context?: NotificationContext) {
   const card = buildFeedbackCard({
     title: "收到新的系统反馈",
     feedbackId,
     template: "orange",
+    appOrigin: context?.appOrigin,
     content: `**提交人**：${submitterName}\n**内容**：${truncate(body)}`,
   });
   await notifyOpenIds(await getSuperAdminOpenIds(), card);
@@ -130,11 +135,12 @@ export async function sendFeedbackReplyNotification({
   body: string;
   recipientOpenIds?: string[];
   actorIsAdmin: boolean;
-}) {
+}, context?: NotificationContext) {
   const card = buildFeedbackCard({
     title: actorIsAdmin ? "你的反馈有新的回复" : "反馈收到新的补充",
     feedbackId,
     template: actorIsAdmin ? "blue" : "orange",
+    appOrigin: context?.appOrigin,
     content: `**回复人**：${actorName}\n**内容**：${truncate(body)}`,
   });
   const recipients = actorIsAdmin
@@ -153,11 +159,12 @@ export async function sendFeedbackStatusNotification({
   actorName: string;
   status: FeedbackStatus;
   submitterOpenId: string;
-}) {
+}, context?: NotificationContext) {
   const card = buildFeedbackCard({
     title: "反馈状态已更新",
     feedbackId,
     template: feedbackStatusTone[status],
+    appOrigin: context?.appOrigin,
     content: `**处理人**：${actorName}\n**当前状态**：${feedbackStatusLabels[status]}`,
   });
   await notifyOpenIds([submitterOpenId], card);

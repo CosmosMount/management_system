@@ -12,6 +12,7 @@ import {
 import { assertProjectActive } from "@/lib/progress-guards";
 import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { prisma } from "@/lib/prisma";
+import { getNotificationContext } from "@/lib/request-origin";
 import { getUserRoles } from "@/lib/permissions";
 import { approvalSchema } from "@/lib/validations/progress";
 
@@ -108,7 +109,7 @@ export async function approveTaskSubmission(input: {
     taskTitle: task.title,
     projectName: task.project.name,
     assigneeOpenIds: getTaskAssigneeOpenIds(task),
-  }).catch(console.error);
+  }, await getNotificationContext()).catch(console.error);
 
   revalidatePath(`/progress/tasks/${task.id}`);
   revalidatePath("/progress/kanban");

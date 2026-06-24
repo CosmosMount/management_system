@@ -7,6 +7,7 @@ import { sendProgressNotification } from "@/lib/feishu-progress";
 import { logProgressActivity, requireSessionUser } from "@/lib/progress-activity";
 import { canManageProject } from "@/lib/permissions-progress";
 import { prisma } from "@/lib/prisma";
+import { getNotificationContext } from "@/lib/request-origin";
 import { getUserRoles } from "@/lib/permissions";
 import { createTaskSchema, type CreateTaskInput } from "@/lib/validations/progress";
 
@@ -126,7 +127,7 @@ export async function createTask(input: CreateTaskInput) {
     team: task.team,
     techGroup: task.techGroup,
     assigneeOpenIds: orderedAssignees.map((assignee) => assignee.openId),
-  }).catch(console.error);
+  }, await getNotificationContext()).catch(console.error);
 
   revalidatePath(`/progress/projects/${project.id}`);
   revalidatePath("/progress/kanban");

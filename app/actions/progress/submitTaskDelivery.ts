@@ -9,6 +9,7 @@ import { canSubmitDelivery } from "@/lib/permissions-progress";
 import { assertProjectActive } from "@/lib/progress-guards";
 import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { prisma } from "@/lib/prisma";
+import { getNotificationContext } from "@/lib/request-origin";
 import { submitDeliverySchema } from "@/lib/validations/progress";
 
 export async function submitTaskDelivery(input: {
@@ -77,7 +78,7 @@ export async function submitTaskDelivery(input: {
     techGroup: task.techGroup,
     feishuDocUrl: parsed.feishuDocUrl,
     keyDataUrl: parsed.keyDataUrl,
-  }).catch(console.error);
+  }, await getNotificationContext()).catch(console.error);
 
   revalidatePath(`/progress/tasks/${task.id}`);
   revalidatePath("/progress/kanban");

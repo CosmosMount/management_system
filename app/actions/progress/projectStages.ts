@@ -12,6 +12,7 @@ import {
 } from "@/lib/permissions-progress";
 import { assertProjectActive } from "@/lib/progress-guards";
 import { prisma } from "@/lib/prisma";
+import { getNotificationContext } from "@/lib/request-origin";
 import { getUserRoles } from "@/lib/permissions";
 import { approvalSchema, stageSubmitSchema } from "@/lib/validations/progress";
 
@@ -94,7 +95,7 @@ export async function submitStageEvidence(input: {
     ownerOpenId: project.ownerOpenId,
     submitterOpenId: user.openId,
     evidenceUrl: parsed.evidenceUrl,
-  }).catch(console.error);
+  }, await getNotificationContext()).catch(console.error);
 
   revalidatePath(`/progress/projects/${project.id}`);
   return submission;
@@ -214,7 +215,7 @@ async function reviewStageSubmission(
     projectName: project.name,
     stageName: stage.name,
     stageOwnerOpenId: stage.ownerOpenId,
-  }).catch(console.error);
+  }, await getNotificationContext()).catch(console.error);
 
   revalidatePath(`/progress/projects/${project.id}`);
   return { success: true };

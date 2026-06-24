@@ -5,6 +5,7 @@ import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { sendProcurementRejectedNotification } from "@/lib/feishu";
 import { prisma } from "@/lib/prisma";
+import { getNotificationContext } from "@/lib/request-origin";
 import {
   canRejectProcurement,
   getUserRoles,
@@ -82,6 +83,7 @@ export async function rejectProcurementOrder(input: {
     },
     reason,
     rejectedByName,
+    await getNotificationContext(),
   ).catch((err) => {
     console.error("[rejectProcurementOrder] 飞书通知失败:", err);
   });

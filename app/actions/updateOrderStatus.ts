@@ -6,6 +6,7 @@ import { OrderStatus } from "@prisma/client";
 import { sendOrderNotification, mapOrderItems } from "@/lib/feishu";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";
+import { getNotificationContext } from "@/lib/request-origin";
 import {
   canApproveOrder,
   getStatusTransition,
@@ -65,7 +66,7 @@ export async function updateOrderStatus(orderId: string) {
       team: updated.team,
       techGroup: updated.techGroup,
       items: mapOrderItems(order.items),
-    }).catch((err) => {
+    }, await getNotificationContext()).catch((err) => {
       console.error("[updateOrderStatus] 飞书通知失败:", err);
     });
   }

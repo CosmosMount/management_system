@@ -30,12 +30,14 @@ cp .env.example .env
 
 - `AUTH_SECRET`
 - `FEISHU_APP_ID` / `FEISHU_APP_SECRET`
-- `AUTH_URL` / `NEXT_PUBLIC_APP_URL` — **填对外访问地址**（如 `http://192.168.1.10:3000` 或 `https://your-domain.com`）
+- `NEXT_PUBLIC_APP_URL` — 后台任务默认生成的系统地址（如 `https://pnx.demonmaster.cn`）
+- `APP_ALLOWED_ORIGINS` — 允许访问和登录跳转的完整 origin 列表
 
-飞书后台「重定向 URL」须与 `AUTH_URL` 对应：
+双入口访问时不要设置 `AUTH_URL` / `NEXTAUTH_URL`。飞书后台「重定向 URL」需要同时添加域名和内网 IP 对应的回调：
 
 ```
-http://<你的地址>:3000/api/auth/callback/feishu
+https://pnx.demonmaster.cn/api/auth/callback/feishu
+http://10.4.150.222:3000/api/auth/callback/feishu
 ```
 
 `DATABASE_URL` 无需修改，`docker-compose.yml` 会自动设为 `file:/app/data/app.db`。
@@ -106,12 +108,14 @@ docker compose exec app cat /app/data/app.db > backup-$(date +%F).db
 |------|------|
 | `DATABASE_URL` | SQLite 路径，默认 `file:./dev.db`（数据库文件在仓库根目录） |
 | `AUTH_SECRET` | Auth.js 密钥，可用 `openssl rand -hex 32` 生成 |
-| `AUTH_URL` | 应用地址，如 `http://localhost:3000` |
 | `FEISHU_APP_ID` | 飞书自建应用 App ID |
 | `FEISHU_APP_SECRET` | 飞书自建应用 App Secret |
 | `FEISHU_WEBHOOK_URL` | 应用机器人在通知群的 Webhook 地址 |
 | `FEISHU_WEBHOOK_SECRET` | 可选，Webhook 签名校验密钥 |
-| `NEXT_PUBLIC_APP_URL` | 前端可访问的系统地址（飞书卡片按钮跳转用） |
+| `NEXT_PUBLIC_APP_URL` | 后台任务默认系统地址（cron 飞书卡片按钮跳转用） |
+| `APP_ALLOWED_ORIGINS` | 允许登录跳转和飞书按钮生成的完整 origin 列表 |
+| `LAN_HOST` | dev server 局域网访问 IP |
+| `ALLOWED_DEV_ORIGINS` | Next dev 允许访问资源的额外 host 列表 |
 
 ## 飞书应用配置
 
@@ -120,6 +124,8 @@ docker compose exec app cat /app/data/app.db > backup-$(date +%F).db
 3. **安全设置** → **重定向 URL** 添加（须与下方完全一致，多一个斜杠也会 20029）：
 
    ```
+   https://pnx.demonmaster.cn/api/auth/callback/feishu
+   http://10.4.150.222:3000/api/auth/callback/feishu
    http://localhost:3000/api/auth/callback/feishu
    ```
 
@@ -300,30 +306,79 @@ Server Actions 总上传上限 100MB（多张发票合计）。
 npm run dev
 ```
 
-默认监听 `0.0.0.0:3000`，局域网内其他设备可访问 `http://<本机IP>:3000`（如 `http://10.7.165.65:3000`）。
+默认监听 `0.0.0.0:3000`，局域网内其他设备可访问 `http://<本机IP>:3000`（如 `http://10.4.150.222:3000`）。
 
 仅本机调试可用 `npm run dev:local`（只绑定 localhost）。
 
 ### 2. 修改 `.env`
 
-从手机或其他电脑访问时，需把地址改成局域网 IP（飞书 OAuth 回调必须与访问地址一致）：
+从手机或其他电脑访问时，保留 `AUTH_URL` / `NEXTAUTH_URL` 未设置，并配置允许的入口：
 
 ```env
-AUTH_URL="http://10.7.165.65:3000"
-NEXT_PUBLIC_APP_URL="http://10.7.165.65:3000"
+NEXT_PUBLIC_APP_URL="https://pnx.demonmaster.cn"
+LAN_HOST=10.4.150.222
+ALLOWED_DEV_ORIGINS=pnx.demonmaster.cn,10.4.150.222,localhost,127.0.0.1
+APP_ALLOWED_ORIGINS="https://pnx.demonmaster.cn,http://10.4.150.222:3000,http://localhost:3000,http://127.0.0.1:3000"
 ```
 
 ### 3. 飞书后台
 
-在应用「安全设置 → 重定向 URL」中**追加**（不要删 localhost，方便本机继续用）：
+在应用「安全设置 → 重定向 URL」中**追加**：
 
 ```
-http://10.7.165.65:3000/api/auth/callback/feishu
+https://pnx.demonmaster.cn/api/auth/callback/feishu
+http://10.4.150.222:3000/api/auth/callback/feishu
+http://localhost:3000/api/auth/callback/feishu
 ```
 
 ### 4. 重启 dev server
 
 修改 `next.config.ts` 或 `.env` 后需重启 `npm run dev`。
+
+### 5. Nginx Proxy Manager 反代域名
+
+如果通过 Nginx Proxy Manager 将 `https://pnx.demonmaster.cn` 反代到本服务，`Details` 页建议：
+
+- `Scheme`: `http`
+- `Forward Hostname / IP`: 实际能访问到 Next 服务的上游地址
+- `Forward Port`: 实际上游端口，例如直连本机服务用 `3000`；经 frp 时用 frp 暴露业务的 `remotePort`
+- 打开 `Websockets Support`
+- 打开 `Block Common Exploits` 可保留
+- `Custom Nginx Configuration` 默认留空
+
+Nginx Proxy Manager 打开 `Websockets Support` 后会自动写入 Upgrade 相关代理配置，通常不需要在 `Custom Nginx Configuration` 里重复设置 `proxy_set_header Upgrade` / `Connection`。如果你不是用 Nginx Proxy Manager，而是手写 Nginx/OpenResty 配置，才需要类似下面的 location 配置：
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:3000;
+
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Real-IP $remote_addr;
+
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+}
+```
+
+保存后可以验证 WebSocket 是否被正确透传：
+
+```bash
+curl -i --http1.1 \
+  -H 'Connection: Upgrade' \
+  -H 'Upgrade: websocket' \
+  -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+  -H 'Sec-WebSocket-Version: 13' \
+  'https://pnx.demonmaster.cn/_next/webpack-hmr?id=manual-test'
+```
+
+期望看到 `HTTP/1.1 101 Switching Protocols`。如果返回 `404 Not Found`，说明域名反代没有透传 WebSocket，`next dev` 下客户端组件可能无法正常接管页面，表现为搜索框、下拉框、按钮等交互异常。长期使用域名访问时更推荐生产模式：`npm run build` 后用 `next start -H 0.0.0.0` 运行。
 
 ---
 
@@ -350,7 +405,7 @@ http://10.7.165.65:3000/api/auth/callback/feishu
 |------|----------|------|
 | **学校/实验室内网服务器** | 长期、仅校内使用 | `npm run build && npm start`，PM2 保活 + cron；飞书回调填内网域名或 IP |
 | **Vercel / Railway / Fly.io** | 需要公网访问 | 需把 SQLite 换成 PostgreSQL 等托管数据库；cron 用平台定时任务或单独 worker |
-| **内网穿透（ngrok / frp / Tailscale）** | 临时给外网或手机测 | 获得公网 URL 后写入飞书重定向与 `AUTH_URL` |
+| **内网穿透（ngrok / frp / Tailscale）** | 临时给外网或手机测 | 获得公网 URL 后写入飞书重定向与 `APP_ALLOWED_ORIGINS` |
 | **自有 VPS** | 完全自控 | 同内网服务器，可绑域名 + HTTPS（飞书生产环境建议 HTTPS） |
 
 ### 本机构建运行
@@ -363,8 +418,8 @@ npm start
 生产环境 `.env` 示例：
 
 ```env
-AUTH_URL="https://your-domain.example.com"
 NEXT_PUBLIC_APP_URL="https://your-domain.example.com"
+APP_ALLOWED_ORIGINS="https://your-domain.example.com,http://10.4.150.222:3000"
 ```
 
 飞书重定向 URL：

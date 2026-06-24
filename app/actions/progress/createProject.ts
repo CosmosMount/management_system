@@ -6,6 +6,7 @@ import { sendProgressNotification } from "@/lib/feishu-progress";
 import { requireSessionUser } from "@/lib/progress-activity";
 import { canCreateProject } from "@/lib/permissions-progress";
 import { prisma } from "@/lib/prisma";
+import { getNotificationContext } from "@/lib/request-origin";
 import { getUserRoles } from "@/lib/permissions";
 import { createProjectSchema, type CreateProjectInput } from "@/lib/validations/progress";
 
@@ -86,7 +87,7 @@ export async function createProject(input: CreateProjectInput) {
     techGroup: project.techGroup,
     ownerOpenId: project.ownerOpenId,
     ownerName: project.ownerName,
-  }).catch(console.error);
+  }, await getNotificationContext()).catch(console.error);
 
   revalidatePath("/progress");
   return project;

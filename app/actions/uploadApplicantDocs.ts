@@ -5,6 +5,7 @@ import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { OrderStatus, UserRoleType } from "@prisma/client";
 import { sendOrderNotification, mapOrderItems } from "@/lib/feishu";
+import { getNotificationContext } from "@/lib/request-origin";
 import {
   MAX_FILE_SIZE,
   MAX_INVOICE_COUNT,
@@ -283,7 +284,7 @@ export async function uploadApplicantDocs(formData: FormData) {
       quantity: item.quantity,
       unitPrice: item.unitPrice,
     }))),
-  }).catch((err) => {
+  }, await getNotificationContext()).catch((err) => {
     console.error("[uploadApplicantDocs] 飞书通知失败:", err);
   });
 

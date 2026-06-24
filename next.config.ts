@@ -1,6 +1,9 @@
 import type { NextConfig } from "next";
 
-const lanHost = process.env.LAN_HOST ?? "10.7.165.65";
+const configuredDevOrigins = [
+  process.env.LAN_HOST,
+  ...(process.env.ALLOWED_DEV_ORIGINS?.split(",").map((s) => s.trim()) ?? []),
+].filter((origin): origin is string => Boolean(origin));
 
 const nextConfig: NextConfig = {
   experimental: {
@@ -9,14 +12,14 @@ const nextConfig: NextConfig = {
     },
     proxyClientMaxBodySize: "100mb",
   },
-  // 允许局域网 IP 访问 dev 资源（如从手机访问 http://10.7.165.65:3000）
-  allowedDevOrigins: [
-    lanHost,
-    "localhost",
-    "127.0.0.1",
-    ...(process.env.ALLOWED_DEV_ORIGINS?.split(",").map((s) => s.trim()) ??
-      []),
-  ],
+  // 允许局域网 IP/域名访问 dev 资源（如从手机访问 http://<本机IP>:3000）
+  allowedDevOrigins: Array.from(
+    new Set([
+      ...configuredDevOrigins,
+      "localhost",
+      "127.0.0.1",
+    ]),
+  ),
 };
 
 export default nextConfig;
