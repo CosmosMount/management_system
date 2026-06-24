@@ -8,6 +8,7 @@ import { canCreateProject, canCreateProjectInScope } from "@/lib/permissions-pro
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import { getUserRoles } from "@/lib/permissions";
+import { routes } from "@/lib/routes";
 import { createProjectSchema, type CreateProjectInput } from "@/lib/validations/progress";
 
 export async function createProject(input: CreateProjectInput) {
@@ -123,6 +124,6 @@ export async function createProject(input: CreateProjectInput) {
     ownerNames: orderedOwners.map((owner) => owner.name).join("、"),
   }, await getNotificationContext()).catch(console.error);
 
-  revalidatePath("/progress");
+  revalidatePath(routes.progress.root);
   return project;
 }

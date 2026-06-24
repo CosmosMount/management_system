@@ -7,6 +7,7 @@ import {
   urgencyLabels,
 } from "@/lib/progress-labels";
 import type { TaskStatus } from "@prisma/client";
+import { routes } from "@/lib/routes";
 
 export type KanbanTask = {
   id: string;
@@ -56,7 +57,7 @@ export function ProgressKanban({ tasks, columns = defaultColumns }: Props) {
               {colTasks.map((task) => (
                 <Link
                   key={task.id}
-                  href={`/progress/tasks/${task.id}`}
+                  href={`${routes.progress.task(task.id)}`}
                   className="block rounded-lg border border-border/60 bg-background p-3 shadow-sm transition hover:border-primary/30"
                 >
                   <p className="font-medium leading-snug">{task.title}</p>

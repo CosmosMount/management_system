@@ -10,6 +10,7 @@ import {
   replyFeedback,
   updateFeedbackStatus,
 } from "@/app/actions/feedback";
+import { ImagePreview } from "@/components/image-preview";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -279,30 +280,33 @@ function AttachmentPreview({
 }) {
   const [failed, setFailed] = useState(false);
 
-  return (
-    <a
-      href={attachment.path}
-      target="_blank"
-      rel="noreferrer"
-      className="flex aspect-square min-w-0 items-center justify-center overflow-hidden rounded-md border bg-muted"
-      title={attachment.fileName}
-    >
-      {failed ? (
+  if (failed) {
+    return (
+      <div className="flex aspect-square min-w-0 items-center justify-center overflow-hidden rounded-md border bg-muted">
         <span className="flex h-full w-full flex-col items-center justify-center gap-2 p-2 text-center text-xs text-muted-foreground">
           <ImageIcon className="h-5 w-5" />
           <span className="line-clamp-2 break-all">{attachment.fileName}</span>
         </span>
-      ) : (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={attachment.path}
-          alt={attachment.fileName}
-          loading="lazy"
-          onError={() => setFailed(true)}
-          className="h-full w-full object-cover"
-        />
-      )}
-    </a>
+      </div>
+    );
+  }
+
+  return (
+    <ImagePreview
+      src={attachment.path}
+      alt={attachment.fileName}
+      wrapperClassName="flex aspect-square min-w-0 items-center justify-center overflow-hidden rounded-md border bg-muted"
+      className="h-full w-full object-cover"
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={attachment.path}
+        alt={attachment.fileName}
+        loading="lazy"
+        onError={() => setFailed(true)}
+        className="h-full w-full object-cover"
+      />
+    </ImagePreview>
   );
 }
 
@@ -392,10 +396,10 @@ function FeedbackImagePreview({
         compact ? "h-16 w-16 shrink-0" : "aspect-square",
       )}
     >
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
+      <ImagePreview
         src={image.previewUrl}
         alt={image.file.name}
+        wrapperClassName="block h-full w-full"
         className="h-full w-full object-cover"
       />
       <Button

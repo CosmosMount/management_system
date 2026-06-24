@@ -17,6 +17,7 @@ import { prisma } from "@/lib/prisma";
 import { canCreateProject } from "@/lib/permissions-progress";
 import { auth } from "@/lib/auth";
 import { getUserRoles } from "@/lib/permissions";
+import { routes } from "@/lib/routes";
 
 export default async function ProgressHomePage() {
   const session = await auth();
@@ -43,7 +44,7 @@ export default async function ProgressHomePage() {
             {showCreate && (
               <NavCard
                 variant="wide"
-                href="/progress/projects/new"
+                href={routes.progress.new}
                 title="新建项目"
                 description="创建项目并配置生命周期阶段"
                 icon={Plus}
@@ -51,14 +52,21 @@ export default async function ProgressHomePage() {
             )}
             <NavCard
               variant="wide"
-              href="/progress/kanban"
+              href={routes.progress.list}
+              title="项目列表"
+              description="查看全部进行中的项目"
+              icon={FolderKanban}
+            />
+            <NavCard
+              variant="wide"
+              href={routes.progress.dashboard}
               title="任务看板"
               description="按状态查看全部任务，发现逾期与待验收"
               icon={LayoutDashboard}
             />
             <NavCard
               variant="wide"
-              href="/progress/archive"
+              href={routes.progress.archive}
               title="归档检索"
               description="查看已完成、已取消项目与已归档任务"
               icon={Archive}
@@ -66,11 +74,17 @@ export default async function ProgressHomePage() {
           </div>
 
           <Card>
-            <CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0">
               <CardTitle className="flex items-center gap-2">
                 <FolderKanban className="h-5 w-5" />
                 活跃项目
               </CardTitle>
+              <Link
+                href={routes.progress.list}
+                className="text-sm text-primary hover:underline"
+              >
+                查看全部
+              </Link>
             </CardHeader>
             <CardContent>
               {projects.length === 0 ? (
@@ -80,7 +94,7 @@ export default async function ProgressHomePage() {
                   {projects.map((p) => (
                     <li key={p.id}>
                       <Link
-                        href={`/progress/projects/${p.id}`}
+                        href={routes.progress.project(p.id)}
                         className="flex items-center justify-between rounded-lg border p-3 hover:border-primary/30"
                       >
                         <div>

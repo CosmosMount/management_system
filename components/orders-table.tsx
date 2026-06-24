@@ -4,8 +4,12 @@ import { Fragment, useState } from "react";
 import Link from "next/link";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { OrderActions } from "@/components/order-actions";
+import { OrderDraftActions } from "@/components/order-draft-actions";
+import { PurchaseOrderDeleteButton } from "@/components/admin-delete-actions";
 import { OrderReimbursementActions } from "@/components/order-reimbursement-actions";
 import { Badge } from "@/components/ui/badge";
+import { PurchaseItemReferenceCell } from "@/components/purchase-item-reference-cell";
+import { formatPurchaseItemKind } from "@/lib/purchase-item-kind";
 import {
   Table,
   TableBody,
@@ -16,6 +20,7 @@ import {
 } from "@/components/ui/table";
 import type { OrderStatus } from "@prisma/client";
 import { groupOrderAttachments } from "@/lib/order-attachments";
+import { routes } from "@/lib/routes";
 import {
   canViewReimbursementAttachments,
   statusLabels,
@@ -42,7 +47,9 @@ export type OrderRow = {
     id: string;
     name: string;
     spec: string;
+    itemKind: import("@prisma/client").PurchaseItemKind;
     purchaseLink: string;
+    referenceImagePath: string | null;
     quantity: number;
     unitPrice: number;
   }[];
@@ -52,9 +59,15 @@ type Props = {
   orders: OrderRow[];
   userRoles: UserRoleRecord[];
   userOpenId?: string;
+  hasSignature: boolean;
 };
 
-export function OrdersTable({ orders, userRoles, userOpenId }: Props) {
+export function OrdersTable({
+  orders,
+  userRoles,
+  userOpenId,
+  hasSignature,
+}: Props) {
   const [expanded, setExpanded] = useState<string | null>(null);
 
   if (orders.length === 0) {
@@ -115,7 +128,7 @@ export function OrdersTable({ orders, userRoles, userOpenId }: Props) {
                 </TableCell>
                 <TableCell>
                   <Link
-                    href={`/orders/${order.id}`}
+                    href={`${routes.procurement.detail(order.id)}`}
                     className="font-medium hover:underline"
                   >
                     {order.orderNo}
@@ -132,12 +145,19 @@ export function OrdersTable({ orders, userRoles, userOpenId }: Props) {
                   {new Date(order.createdAt).toLocaleString("zh-CN")}
                 </TableCell>
                 <TableCell className="space-x-2">
+                  <OrderDraftActions
+                    orderId={order.id}
+                    status={order.status}
+                    userOpenId={userOpenId}
+                    initiatorOpenId={order.initiatorOpenId}
+                  />
                   <OrderActions
                     orderId={order.id}
                     status={order.status}
                     order={orderScope}
                     userRoles={userRoles}
                     managementState={managementState}
+                    hasSignature={hasSignature}
                   />
                   <OrderReimbursementActions
                     orderId={order.id}
@@ -156,6 +176,7 @@ export function OrdersTable({ orders, userRoles, userOpenId }: Props) {
                     attachments={attachments}
                     canViewAttachments={canViewAttachments}
                   />
+                  <PurchaseOrderDeleteButton orderId={order.id} userRoles={userRoles} />
                 </TableCell>
               </TableRow>
               {expanded === order.id && (
@@ -168,7 +189,8 @@ export function OrdersTable({ orders, userRoles, userOpenId }: Props) {
                           <TableRow>
                             <TableHead>物品名称</TableHead>
                             <TableHead>规格</TableHead>
-                            <TableHead>购买链接</TableHead>
+                            <TableHead>种类</TableHead>
+                            <TableHead>链接/图片</TableHead>
                             <TableHead>数量</TableHead>
                             <TableHead>单价</TableHead>
                             <TableHead>小计</TableHead>
@@ -180,18 +202,14 @@ export function OrdersTable({ orders, userRoles, userOpenId }: Props) {
                               <TableCell>{item.name}</TableCell>
                               <TableCell>{item.spec}</TableCell>
                               <TableCell>
-                                {item.purchaseLink ? (
-                                  <a
-                                    href={item.purchaseLink}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="text-primary hover:underline"
-                                  >
-                                    链接
-                                  </a>
-                                ) : (
-                                  "—"
-                                )}
+                                {formatPurchaseItemKind(item.itemKind)}
+                              </TableCell>
+                              <TableCell>
+                                <PurchaseItemReferenceCell
+                                  itemKind={item.itemKind}
+                                  purchaseLink={item.purchaseLink}
+                                  referenceImagePath={item.referenceImagePath}
+                                />
                               </TableCell>
                               <TableCell>{item.quantity}</TableCell>
                               <TableCell>¥{item.unitPrice.toFixed(2)}</TableCell>

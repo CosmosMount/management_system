@@ -7,6 +7,7 @@ import { sendOrderNotification, mapOrderItems } from "@/lib/feishu";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
+import { routes } from "@/lib/routes";
 import {
   canApproveOrder,
   getStatusTransition,
@@ -71,7 +72,7 @@ export async function updateOrderStatus(orderId: string) {
     });
   }
 
-  revalidatePath("/orders");
-  revalidatePath(`/orders/${orderId}`);
+  revalidatePath(routes.procurement.list);
+  revalidatePath(`${routes.procurement.detail(orderId)}`);
   return updated;
 }

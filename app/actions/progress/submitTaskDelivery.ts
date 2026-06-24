@@ -11,6 +11,7 @@ import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import { submitDeliverySchema } from "@/lib/validations/progress";
+import { routes } from "@/lib/routes";
 
 export async function submitTaskDelivery(input: {
   taskId: string;
@@ -80,7 +81,7 @@ export async function submitTaskDelivery(input: {
     keyDataUrl: parsed.keyDataUrl,
   }, await getNotificationContext()).catch(console.error);
 
-  revalidatePath(`/progress/tasks/${task.id}`);
-  revalidatePath("/progress/kanban");
+  revalidatePath(`${routes.progress.task(task.id)}`);
+  revalidatePath(routes.progress.dashboard);
   return submission;
 }

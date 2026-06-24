@@ -24,6 +24,7 @@ import { serializeFilePaths } from "@/lib/order-attachments";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";
 import { canUploadApplicantDocs } from "@/lib/permissions";
+import { routes } from "@/lib/routes";
 
 const confirmedItemSchema = z.object({
   id: z.string(),
@@ -102,7 +103,7 @@ function assertListSignaturesReady(
   }
   if (missing.length > 0) {
     throw new Error(
-      `以下人员尚未上传电子签名，请先在「个人设置」上传：${missing.join("、")}`,
+      `以下人员尚未上传电子签名，请先在「个人中心」上传：${missing.join("、")}`,
     );
   }
 }
@@ -288,9 +289,9 @@ export async function uploadApplicantDocs(formData: FormData) {
     console.error("[uploadApplicantDocs] 飞书通知失败:", err);
   });
 
-  revalidatePath("/orders");
-  revalidatePath(`/orders/${orderId}`);
-  revalidatePath("/dashboard");
+  revalidatePath(routes.procurement.list);
+  revalidatePath(`${routes.procurement.detail(orderId)}`);
+  revalidatePath(routes.procurement.dashboard);
   return updated;
 }
 

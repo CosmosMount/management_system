@@ -11,6 +11,7 @@ import { getNotificationContext } from "@/lib/request-origin";
 import { getUserRoles } from "@/lib/permissions";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { createTaskSchema, type CreateTaskInput } from "@/lib/validations/progress";
+import { routes } from "@/lib/routes";
 
 export async function createTask(input: CreateTaskInput) {
   const session = await auth();
@@ -133,7 +134,7 @@ export async function createTask(input: CreateTaskInput) {
     assigneeOpenIds: orderedAssignees.map((assignee) => assignee.openId),
   }, await getNotificationContext()).catch(console.error);
 
-  revalidatePath(`/progress/projects/${project.id}`);
-  revalidatePath("/progress/kanban");
+  revalidatePath(`${routes.progress.project(project.id)}`);
+  revalidatePath(routes.progress.dashboard);
   return task;
 }

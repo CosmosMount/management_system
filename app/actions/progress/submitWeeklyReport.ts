@@ -11,6 +11,7 @@ import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { getNotificationContext } from "@/lib/request-origin";
 import { riskSyncSchema, submitWeeklyReportSchema } from "@/lib/validations/progress";
+import { routes } from "@/lib/routes";
 
 function getWeekStart(date = new Date()): Date {
   const d = new Date(date);
@@ -89,7 +90,7 @@ export async function submitWeeklyReport(input: {
     actorName: user.name,
   });
 
-  revalidatePath(`/progress/tasks/${task.id}`);
+  revalidatePath(`${routes.progress.task(task.id)}`);
   return report;
 }
 
@@ -144,7 +145,7 @@ export async function syncTaskRisk(input: { taskId: string; riskNote: string }) 
     riskNote: parsed.riskNote,
   }, await getNotificationContext()).catch(console.error);
 
-  revalidatePath(`/progress/tasks/${task.id}`);
-  revalidatePath("/progress/kanban");
+  revalidatePath(`${routes.progress.task(task.id)}`);
+  revalidatePath(routes.progress.dashboard);
   return updated;
 }

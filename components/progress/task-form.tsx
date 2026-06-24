@@ -24,6 +24,7 @@ import {
   type CreateTaskInput,
   updateTaskSchema,
 } from "@/lib/validations/progress";
+import { routes } from "@/lib/routes";
 import {
   taskCategoryLabels,
   urgencyLabels,
@@ -122,7 +123,7 @@ export function TaskForm({
         const task = await createTask(data);
         toast.success("任务已创建");
         if (redirectOnCreate) {
-          router.push(`/progress/tasks/${task.id}`);
+          router.push(`${routes.progress.task(task.id)}`);
         }
         onCreated?.(task.id);
       }

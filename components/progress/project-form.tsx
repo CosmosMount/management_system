@@ -34,6 +34,7 @@ import {
 import { UserMultiSearchSelect, UserSearchSelect } from "@/components/user-search-select";
 import { getActionErrorMessage } from "@/lib/action-error-message";
 import { Textarea } from "@/components/ui/textarea";
+import { routes } from "@/lib/routes";
 
 type UserOption = { openId: string; name: string; avatar?: string | null };
 type TeamFormValue = (typeof TEAM_OPTIONS)[number] | "";
@@ -173,7 +174,7 @@ export function ProjectForm({
           stages: data.stages,
         });
         toast.success("项目已创建");
-        router.push(`/progress/projects/${project.id}`);
+        router.push(`${routes.progress.project(project.id)}`);
       }
     } catch (err) {
       toast.error(getActionErrorMessage(err, editing ? "更新失败" : "创建失败"));

@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  ArrowLeft,
   ArrowUpRight,
   Archive,
   History,
@@ -21,8 +20,10 @@ import type {
   Urgency,
 } from "@prisma/client";
 import { TaskActionsPanel } from "@/components/progress/task-actions-panel";
+import { ArchivedTaskDeleteButton } from "@/components/admin-delete-actions";
 import { TaskForm } from "@/components/progress/task-form";
 import { loadMoreTaskActivityLogs } from "@/app/actions/progress/activityLogs";
+import { BackLink } from "@/components/back-link";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -35,6 +36,7 @@ import {
 } from "@/components/ui/dialog";
 import { updateTaskStatus, archiveTask } from "@/app/actions/progress/updateTask";
 import { getActionErrorMessage } from "@/lib/action-error-message";
+import { routes } from "@/lib/routes";
 import {
   importanceLabels,
   taskCategoryLabels,
@@ -117,6 +119,7 @@ type Props = {
   isAssignee: boolean;
   canApprove: boolean;
   canManage: boolean;
+  isSuperAdmin?: boolean;
 };
 
 type UserOption = { openId: string; name: string; avatar?: string | null };
@@ -145,6 +148,7 @@ export function TaskDetailWorkspace({
   isAssignee,
   canApprove,
   canManage,
+  isSuperAdmin = false,
 }: Props) {
   const projectHref = projectStageHref(task.projectId, task.stageId);
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
@@ -156,21 +160,14 @@ export function TaskDetailWorkspace({
 
   return (
     <main className="mx-auto w-full max-w-[1440px] flex-1 px-4 py-6 sm:px-6 lg:px-8">
-      <div className="mb-4">
-        <Link
-          href={projectHref}
-          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          返回项目 {task.projectName}
-        </Link>
-      </div>
+      <BackLink href={projectHref} label={`返回项目 ${task.projectName}`} />
 
       <TaskOverview
         task={task}
         isAssignee={isAssignee}
         canManage={canManage}
         canEdit={canEdit}
+        isSuperAdmin={isSuperAdmin}
         onOpenEdit={() => setTaskDialogOpen(true)}
       />
 
@@ -235,12 +232,14 @@ function TaskOverview({
   isAssignee,
   canManage,
   canEdit,
+  isSuperAdmin,
   onOpenEdit,
 }: {
   task: TaskDetailView;
   isAssignee: boolean;
   canManage: boolean;
   canEdit: boolean;
+  isSuperAdmin: boolean;
   onOpenEdit: () => void;
 }) {
   const canStart = task.status === "TODO" && (isAssignee || canManage);
@@ -292,7 +291,7 @@ function TaskOverview({
           )}
         </div>
 
-        {(canEdit || canStart || canArchive) && (
+        {(canEdit || canStart || canArchive || isSuperAdmin) && (
           <div className="flex shrink-0 flex-wrap gap-2">
             {canEdit && (
               <Button type="button" variant="outline" onClick={onOpenEdit}>
@@ -302,6 +301,11 @@ function TaskOverview({
             )}
             {canStart && <StartTaskButton taskId={task.id} />}
             {canArchive && <ArchiveTaskButton taskId={task.id} />}
+            <ArchivedTaskDeleteButton
+              taskId={task.id}
+              status={task.status}
+              isSuperAdmin={isSuperAdmin}
+            />
           </div>
         )}
       </CardContent>
@@ -817,8 +821,8 @@ function isTaskStatus(value: string): value is TaskStatus {
 
 function projectStageHref(projectId: string, stageId: string | null): string {
   return stageId
-    ? `/progress/projects/${projectId}?stage=${stageId}`
-    : `/progress/projects/${projectId}`;
+    ? routes.progress.projectStage(projectId, stageId)
+    : routes.progress.project(projectId);
 }
 
 function formatDate(value: string): string {

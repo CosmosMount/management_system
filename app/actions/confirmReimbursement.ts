@@ -7,6 +7,7 @@ import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";
 import { resolveInvoicePaths } from "@/lib/order-attachments";
 import { canConfirmReimbursement } from "@/lib/permissions";
+import { routes } from "@/lib/routes";
 
 export async function confirmReimbursement(orderId: string) {
   const session = await auth();
@@ -46,7 +47,7 @@ export async function confirmReimbursement(orderId: string) {
     data: { status: OrderStatus.COMPLETED, ...stepTimerResetFields() },
   });
 
-  revalidatePath("/orders");
-  revalidatePath(`/orders/${orderId}`);
+  revalidatePath(routes.procurement.list);
+  revalidatePath(`${routes.procurement.detail(orderId)}`);
   return updated;
 }

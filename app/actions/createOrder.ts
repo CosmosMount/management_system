@@ -5,21 +5,28 @@ import { auth } from "@/lib/auth";
 import { OrderStatus } from "@prisma/client";
 import { sendOrderNotification, mapOrderItems } from "@/lib/feishu";
 import { generateOrderNo } from "@/lib/order-no";
+import { attachItemReferenceImages } from "@/lib/order-item-images";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
+import { routes } from "@/lib/routes";
 import {
+  assertItemImagesPresent,
   createOrderSchema,
+  parseOrderFormData,
   toStoredPurchaseItem,
-  type CreateOrderInput,
 } from "@/lib/validations/order";
 
-export async function createOrder(input: CreateOrderInput) {
+export async function createOrder(formData: FormData) {
   const session = await auth();
   if (!session?.user?.openId) {
     throw new Error("未登录");
   }
 
-  const parsed = createOrderSchema.parse(input);
+  const payload = JSON.parse(String(formData.get("payload") ?? "{}"));
+  const parsed = createOrderSchema.parse(payload);
+  const { itemImages } = parseOrderFormData(formData);
+  assertItemImagesPresent(parsed.items, itemImages);
+
   const user = await prisma.user.findUnique({
     where: { openId: session.user.openId },
   });
@@ -52,23 +59,42 @@ export async function createOrder(input: CreateOrderInput) {
     });
   });
 
+  await attachItemReferenceImages(
+    order.id,
+    order.items.map((item) => ({ id: item.id, itemKind: item.itemKind })),
+    itemImages,
+    parsed.items.map((item) => item.referenceImagePath ?? null),
+  );
+
+  const refreshed = await prisma.purchaseOrder.findUnique({
+    where: { id: order.id },
+    include: { items: true },
+  });
+  if (!refreshed) {
+    throw new Error("订单创建失败");
+  }
+
   if (status === OrderStatus.MANAGEMENT_REVIEW) {
-    await sendOrderNotification({
-      id: order.id,
-      orderNo: order.orderNo,
-      initiatorName: order.initiatorName,
-      totalPrice: order.totalPrice,
-      status: order.status,
-      team: order.team,
-      techGroup: order.techGroup,
-      items: mapOrderItems(order.items),
-    }, await getNotificationContext()).catch((err) => {
+    await sendOrderNotification(
+      {
+        id: refreshed.id,
+        orderNo: refreshed.orderNo,
+        initiatorName: refreshed.initiatorName,
+        totalPrice: refreshed.totalPrice,
+        status: refreshed.status,
+        team: refreshed.team,
+        techGroup: refreshed.techGroup,
+        items: mapOrderItems(refreshed.items),
+      },
+      await getNotificationContext(),
+    ).catch((err) => {
       console.error("[createOrder] 飞书通知失败:", err);
     });
   }
 
   revalidatePath("/");
-  revalidatePath("/orders");
-  revalidatePath("/dashboard");
-  return order;
+  revalidatePath(routes.procurement.root);
+  revalidatePath(routes.procurement.list);
+  revalidatePath(routes.procurement.dashboard);
+  return refreshed;
 }

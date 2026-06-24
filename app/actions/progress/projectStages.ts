@@ -16,6 +16,7 @@ import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import { getUserRoles } from "@/lib/permissions";
 import { approvalSchema, stageSubmitSchema } from "@/lib/validations/progress";
+import { routes } from "@/lib/routes";
 
 export async function submitStageEvidence(input: {
   projectId: string;
@@ -101,7 +102,7 @@ export async function submitStageEvidence(input: {
     evidenceUrl: parsed.evidenceUrl,
   }, await getNotificationContext()).catch(console.error);
 
-  revalidatePath(`/progress/projects/${project.id}`);
+  revalidatePath(`${routes.progress.project(project.id)}`);
   return submission;
 }
 
@@ -230,6 +231,6 @@ async function reviewStageSubmission(
     stageOwnerOpenId: stage.ownerOpenId,
   }, await getNotificationContext()).catch(console.error);
 
-  revalidatePath(`/progress/projects/${project.id}`);
+  revalidatePath(`${routes.progress.project(project.id)}`);
   return { success: true };
 }

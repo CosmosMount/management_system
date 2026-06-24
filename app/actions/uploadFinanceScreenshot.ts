@@ -9,6 +9,7 @@ import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { saveUpload, uploadTypeSets } from "@/lib/file-upload";
 import { prisma } from "@/lib/prisma";
 import { canUploadFinanceScreenshot, getUserRoles } from "@/lib/permissions";
+import { routes } from "@/lib/routes";
 
 export async function uploadFinanceScreenshot(formData: FormData) {
   const session = await auth();
@@ -70,7 +71,7 @@ export async function uploadFinanceScreenshot(formData: FormData) {
     console.error("[uploadFinanceScreenshot] 飞书通知失败:", err);
   });
 
-  revalidatePath("/orders");
-  revalidatePath(`/orders/${orderId}`);
+  revalidatePath(routes.procurement.list);
+  revalidatePath(`${routes.procurement.detail(orderId)}`);
   return updated;
 }
