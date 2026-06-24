@@ -85,7 +85,13 @@ export default async function FeedbackPage() {
     <>
       <AppHeader />
       <PageShell>
-        <main className="mx-auto max-w-7xl flex-1 space-y-6 p-4 py-8">
+        <main
+          className="mx-auto flex min-h-0 w-full max-w-7xl shrink-0 flex-col overflow-hidden p-4 py-6"
+          style={{
+            height: "calc(100dvh - 3.5rem - 1px)",
+            minHeight: 0,
+          }}
+        >
           <PageTitle subtitle="反馈中心" />
           <FeedbackCenter
             feedbacks={feedbacks.map(serializeFeedback)}

@@ -1,8 +1,8 @@
 "use client";
 
-import type { FormEvent } from "react";
-import { useMemo, useState } from "react";
-import { ImageIcon, MessageSquare, Plus, Send } from "lucide-react";
+import type { ChangeEvent, ClipboardEvent, FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ImageIcon, MessageSquare, Plus, Send, X } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { FeedbackStatus } from "@prisma/client";
 import {
@@ -23,6 +23,12 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  FEEDBACK_IMAGE_ACCEPT,
+  FEEDBACK_IMAGE_ALLOWED_TYPES,
+  MAX_FEEDBACK_IMAGE_COUNT,
+  MAX_FEEDBACK_IMAGE_SIZE,
+} from "@/lib/feedback-upload-limits";
 import { feedbackStatusLabels } from "@/lib/feedback-labels";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -64,6 +70,131 @@ type Props = {
 };
 
 const statusOptions: FeedbackStatus[] = ["OPEN", "IN_PROGRESS", "CLOSED"];
+const feedbackImageTypeSet = new Set<string>(FEEDBACK_IMAGE_ALLOWED_TYPES);
+
+type FeedbackImageFiles = {
+  files: FeedbackImageFile[];
+  setFiles: (files: FeedbackImageFile[]) => void;
+};
+
+type FeedbackImageFile = {
+  id: string;
+  file: File;
+  previewUrl: string;
+};
+
+function hasClipboardImage(event: ClipboardEvent): boolean {
+  return Array.from(event.clipboardData.items).some((item) => {
+    if (item.kind !== "file") return false;
+    return item.type.startsWith("image/");
+  });
+}
+
+function clipboardImageFiles(event: ClipboardEvent): File[] {
+  return Array.from(event.clipboardData.items)
+    .filter((item) => item.kind === "file")
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => !!file && file.type.startsWith("image/"));
+}
+
+function acceptedFeedbackImages(files: File[], showErrors = true): File[] {
+  const accepted: File[] = [];
+  for (const file of files) {
+    if (!feedbackImageTypeSet.has(file.type)) {
+      if (showErrors) toast.error("反馈图片仅支持 PNG/JPG/WebP");
+      continue;
+    }
+    if (file.size > MAX_FEEDBACK_IMAGE_SIZE) {
+      if (showErrors) toast.error("单张反馈图片不能超过 100MB");
+      continue;
+    }
+    accepted.push(file);
+  }
+  return accepted;
+}
+
+function addAcceptedFeedbackImages(
+  currentFiles: FeedbackImageFile[],
+  accepted: File[],
+  setFiles: (files: FeedbackImageFile[]) => void,
+) {
+  if (accepted.length === 0) return;
+
+  const remaining = MAX_FEEDBACK_IMAGE_COUNT - currentFiles.length;
+  if (remaining <= 0) {
+    toast.error(`最多上传 ${MAX_FEEDBACK_IMAGE_COUNT} 张图片`);
+    return;
+  }
+
+  if (accepted.length > remaining) {
+    toast.error(`最多上传 ${MAX_FEEDBACK_IMAGE_COUNT} 张图片`);
+  }
+
+  setFiles([
+    ...currentFiles,
+    ...accepted.slice(0, remaining).map(createFeedbackImageFile),
+  ]);
+}
+
+function addFeedbackImages(
+  currentFiles: FeedbackImageFile[],
+  nextFiles: File[],
+  setFiles: (files: FeedbackImageFile[]) => void,
+) {
+  addAcceptedFeedbackImages(
+    currentFiles,
+    acceptedFeedbackImages(nextFiles),
+    setFiles,
+  );
+}
+
+function handleFeedbackPaste(
+  event: ClipboardEvent,
+  { files, setFiles }: FeedbackImageFiles,
+) {
+  if (!hasClipboardImage(event)) return;
+  const images = clipboardImageFiles(event);
+  const accepted = acceptedFeedbackImages(images, false);
+  if (accepted.length === 0) {
+    if (!event.clipboardData.getData("text/plain")) {
+      acceptedFeedbackImages(images);
+    }
+    return;
+  }
+
+  event.preventDefault();
+  addAcceptedFeedbackImages(files, accepted, setFiles);
+}
+
+function buildFeedbackFormData(
+  form: HTMLFormElement,
+  imageFiles: FeedbackImageFile[],
+): FormData {
+  const formData = new FormData(form);
+  formData.delete("images");
+  for (const image of imageFiles) {
+    formData.append("images", image.file, image.file.name);
+  }
+  return formData;
+}
+
+function createFeedbackImageFile(file: File): FeedbackImageFile {
+  const id =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${file.name}-${file.size}-${file.lastModified}-${Date.now()}`;
+  return {
+    id,
+    file,
+    previewUrl: URL.createObjectURL(file),
+  };
+}
+
+function revokeFeedbackImages(images: FeedbackImageFile[]) {
+  for (const image of images) {
+    URL.revokeObjectURL(image.previewUrl);
+  }
+}
 
 function formatTime(value: string): string {
   return new Date(value).toLocaleString("zh-CN", {
@@ -133,6 +264,147 @@ function Avatar({
   );
 }
 
+function AttachmentPreview({
+  attachment,
+}: {
+  attachment: FeedbackAttachmentView;
+}) {
+  const [failed, setFailed] = useState(false);
+
+  return (
+    <a
+      href={attachment.path}
+      target="_blank"
+      rel="noreferrer"
+      className="flex aspect-square min-w-0 items-center justify-center overflow-hidden rounded-md border bg-muted"
+      title={attachment.fileName}
+    >
+      {failed ? (
+        <span className="flex h-full w-full flex-col items-center justify-center gap-2 p-2 text-center text-xs text-muted-foreground">
+          <ImageIcon className="h-5 w-5" />
+          <span className="line-clamp-2 break-all">{attachment.fileName}</span>
+        </span>
+      ) : (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={attachment.path}
+          alt={attachment.fileName}
+          loading="lazy"
+          onError={() => setFailed(true)}
+          className="h-full w-full object-cover"
+        />
+      )}
+    </a>
+  );
+}
+
+function FeedbackImageInput({
+  files,
+  setFiles,
+  disabled,
+  compact = false,
+}: FeedbackImageFiles & {
+  disabled: boolean;
+  compact?: boolean;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (files.length === 0 && inputRef.current) {
+      inputRef.current.value = "";
+    }
+  }, [files.length]);
+
+  function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    addFeedbackImages(files, Array.from(event.target.files ?? []), setFiles);
+    event.target.value = "";
+  }
+
+  function removeFile(index: number) {
+    const removed = files[index];
+    if (removed) {
+      URL.revokeObjectURL(removed.previewUrl);
+    }
+    setFiles(files.filter((_, fileIndex) => fileIndex !== index));
+  }
+
+  return (
+    <div className="space-y-2">
+      {files.length > 0 && (
+        <div
+          className={cn(
+            compact
+              ? "flex gap-2 overflow-x-auto pb-1 [scrollbar-gutter:stable]"
+              : "grid grid-cols-3 gap-2 sm:grid-cols-4",
+          )}
+        >
+          {files.map((file, index) => (
+            <FeedbackImagePreview
+              key={file.id}
+              image={file}
+              compact={compact}
+              disabled={disabled}
+              onRemove={() => removeFile(index)}
+            />
+          ))}
+        </div>
+      )}
+      <Input
+        ref={inputRef}
+        type="file"
+        accept={FEEDBACK_IMAGE_ACCEPT}
+        multiple
+        disabled={disabled}
+        className={cn(compact ? "max-w-full" : "max-w-md")}
+        onChange={handleFileChange}
+      />
+      <p className="text-xs text-muted-foreground">
+        支持 PNG/JPG/WebP，可选择文件或在输入框中粘贴截图；最多{" "}
+        {MAX_FEEDBACK_IMAGE_COUNT} 张，每张不超过 100MB。
+      </p>
+    </div>
+  );
+}
+
+function FeedbackImagePreview({
+  image,
+  compact,
+  disabled,
+  onRemove,
+}: {
+  image: FeedbackImageFile;
+  compact: boolean;
+  disabled: boolean;
+  onRemove: () => void;
+}) {
+  return (
+    <div
+      className={cn(
+        "group relative overflow-hidden rounded-md border bg-muted",
+        compact ? "h-16 w-16 shrink-0" : "aspect-square",
+      )}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={image.previewUrl}
+        alt={image.file.name}
+        className="h-full w-full object-cover"
+      />
+      <Button
+        type="button"
+        size="icon-xs"
+        variant="destructive"
+        className="absolute right-1 top-1"
+        disabled={disabled}
+        aria-label={`移除 ${image.file.name}`}
+        onClick={onRemove}
+      >
+        <X className="h-3 w-3" />
+      </Button>
+    </div>
+  );
+}
+
 export function FeedbackCenter({
   feedbacks,
   avatarByOpenId,
@@ -152,7 +424,29 @@ export function FeedbackCenter({
   const [createPending, setCreatePending] = useState(false);
   const [replyPending, setReplyPending] = useState(false);
   const [statusPending, setStatusPending] = useState(false);
+  const [createImages, setCreateImages] = useState<FeedbackImageFile[]>([]);
+  const [replyImageState, setReplyImageState] = useState<{
+    feedbackId: string;
+    files: FeedbackImageFile[];
+  }>({ feedbackId: "", files: [] });
+  const createImagesRef = useRef<FeedbackImageFile[]>([]);
+  const replyImagesRef = useRef<FeedbackImageFile[]>([]);
   const newOpen = newOpenState || newFromUrl;
+
+  useEffect(() => {
+    createImagesRef.current = createImages;
+  }, [createImages]);
+
+  useEffect(() => {
+    replyImagesRef.current = replyImageState.files;
+  }, [replyImageState.files]);
+
+  useEffect(() => {
+    return () => {
+      revokeFeedbackImages(createImagesRef.current);
+      revokeFeedbackImages(replyImagesRef.current);
+    };
+  }, []);
 
   const filteredFeedbacks = useMemo(() => {
     if (!isSuperAdmin || statusFilter === "ALL") return feedbacks;
@@ -165,9 +459,30 @@ export function FeedbackCenter({
   const canReply =
     !!selectedFeedback &&
     (isSuperAdmin || selectedFeedback.status !== "CLOSED");
+  const replyImages =
+    selectedFeedback?.id === replyImageState.feedbackId
+      ? replyImageState.files
+      : [];
+
+  function clearCreateImages() {
+    revokeFeedbackImages(createImages);
+    setCreateImages([]);
+  }
+
+  function setReplyImages(files: FeedbackImageFile[]) {
+    setReplyImageState({ feedbackId: selectedFeedback?.id ?? "", files });
+  }
+
+  function clearReplyImages() {
+    revokeFeedbackImages(replyImageState.files);
+    setReplyImageState({ feedbackId: "", files: [] });
+  }
 
   function handleNewOpenChange(open: boolean) {
     setNewOpenState(open);
+    if (!open) {
+      clearCreateImages();
+    }
     if (!open && newFromUrl) {
       const selected = selectedFeedback?.id;
       router.replace(selected ? `/feedback?selected=${selected}` : "/feedback");
@@ -179,9 +494,12 @@ export function FeedbackCenter({
     setCreatePending(true);
     try {
       const form = event.currentTarget;
-      const result = await createFeedback(new FormData(form));
+      const result = await createFeedback(
+        buildFeedbackFormData(form, createImages),
+      );
       toast.success("反馈已提交");
       form.reset();
+      clearCreateImages();
       setNewOpenState(false);
       setSelectedId(result.id);
       router.push(`/feedback?selected=${result.id}`);
@@ -199,9 +517,10 @@ export function FeedbackCenter({
     setReplyPending(true);
     try {
       const form = event.currentTarget;
-      await replyFeedback(new FormData(form));
+      await replyFeedback(buildFeedbackFormData(form, replyImages));
       toast.success("回复已发送");
       form.reset();
+      clearReplyImages();
       router.refresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "发送失败");
@@ -228,9 +547,9 @@ export function FeedbackCenter({
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[22rem_1fr]">
-      <Card className="min-h-[32rem]">
-        <CardHeader className="border-b">
+    <div className="grid min-h-0 flex-1 gap-4 overflow-y-auto [scrollbar-gutter:stable] lg:h-full lg:grid-cols-[22rem_minmax(0,1fr)] lg:overflow-hidden">
+      <Card className="flex min-h-[32rem] min-w-0 flex-col overflow-hidden lg:h-full lg:min-h-0">
+        <CardHeader className="shrink-0 border-b">
           <div className="flex items-center justify-between gap-3">
             <CardTitle>{isSuperAdmin ? "反馈清单" : "我的反馈"}</CardTitle>
             <Button size="sm" onClick={() => setNewOpenState(true)}>
@@ -262,7 +581,7 @@ export function FeedbackCenter({
             </div>
           )}
         </CardHeader>
-        <CardContent className="p-0">
+        <CardContent className="min-h-0 flex-1 overflow-y-auto p-0 [scrollbar-gutter:stable]">
           {filteredFeedbacks.length === 0 ? (
             <div className="flex min-h-[20rem] flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted-foreground">
               <MessageSquare className="h-8 w-8" />
@@ -281,11 +600,14 @@ export function FeedbackCenter({
                     className={cn(
                       "block w-full px-4 py-3 text-left transition-colors hover:bg-muted/60",
                       active && "bg-muted",
-                    )}
-                    onClick={() => {
-                      setSelectedId(feedback.id);
-                      router.push(`/feedback?selected=${feedback.id}`);
-                    }}
+	                    )}
+	                    onClick={() => {
+	                      if (feedback.id !== selectedFeedback?.id) {
+	                        clearReplyImages();
+	                      }
+	                      setSelectedId(feedback.id);
+	                      router.push(`/feedback?selected=${feedback.id}`);
+	                    }}
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
@@ -318,10 +640,10 @@ export function FeedbackCenter({
         </CardContent>
       </Card>
 
-      <Card className="min-h-[32rem]">
+      <Card className="flex min-h-[32rem] min-w-0 flex-col overflow-hidden lg:h-full lg:min-h-0">
         {selectedFeedback ? (
           <>
-            <CardHeader className="border-b">
+            <CardHeader className="shrink-0 border-b">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <CardTitle>反馈详情</CardTitle>
@@ -356,8 +678,8 @@ export function FeedbackCenter({
               )}
             </CardHeader>
 
-            <CardContent className="space-y-5">
-              <div className="max-h-[34rem] space-y-4 overflow-auto pr-1">
+            <CardContent className="flex min-h-0 flex-1 flex-col gap-5">
+              <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1 [scrollbar-gutter:stable]">
                 {selectedFeedback.messages.map((message) => {
                   const mine = message.authorOpenId === currentUserOpenId;
                   return (
@@ -375,7 +697,7 @@ export function FeedbackCenter({
                       />
                       <div
                         className={cn(
-                          "max-w-[min(42rem,85%)] rounded-lg border bg-background p-3 text-left",
+                          "min-w-0 max-w-[min(42rem,85%)] rounded-lg border bg-background p-3 text-left",
                           mine && "bg-primary/5",
                         )}
                       >
@@ -393,20 +715,10 @@ export function FeedbackCenter({
                         {message.attachments.length > 0 && (
                           <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
                             {message.attachments.map((attachment) => (
-                              <a
+                              <AttachmentPreview
                                 key={attachment.id}
-                                href={attachment.path}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="block overflow-hidden rounded-md border bg-muted"
-                              >
-                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                <img
-                                  src={attachment.path}
-                                  alt={attachment.fileName}
-                                  className="aspect-square w-full object-cover"
-                                />
-                              </a>
+                                attachment={attachment}
+                              />
                             ))}
                           </div>
                         )}
@@ -417,7 +729,10 @@ export function FeedbackCenter({
               </div>
 
               {canReply ? (
-                <form onSubmit={handleReply} className="space-y-3 border-t pt-4">
+                <form
+                  onSubmit={handleReply}
+                  className="shrink-0 space-y-3 border-t pt-4"
+                >
                   <input
                     type="hidden"
                     name="feedbackId"
@@ -428,16 +743,21 @@ export function FeedbackCenter({
                     placeholder="继续补充情况，或回复处理结果"
                     rows={3}
                     disabled={replyPending}
+                    className="max-h-24 resize-none overflow-y-auto"
+                    onPaste={(event) =>
+                      handleFeedbackPaste(event, {
+                        files: replyImages,
+                        setFiles: setReplyImages,
+                      })
+                    }
                   />
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <Input
-                      type="file"
-                      name="images"
-                      accept="image/png,image/jpeg,image/webp"
-                      multiple
-                      disabled={replyPending}
-                      className="max-w-md"
-                    />
+                  <FeedbackImageInput
+                    files={replyImages}
+                    setFiles={setReplyImages}
+                    disabled={replyPending}
+                    compact
+                  />
+                  <div className="flex justify-end">
                     <Button type="submit" disabled={replyPending}>
                       <Send className="h-4 w-4" />
                       发送回复
@@ -452,7 +772,7 @@ export function FeedbackCenter({
             </CardContent>
           </>
         ) : (
-          <CardContent className="flex min-h-[32rem] flex-col items-center justify-center gap-3 text-center text-sm text-muted-foreground">
+          <CardContent className="flex min-h-[32rem] flex-1 flex-col items-center justify-center gap-3 text-center text-sm text-muted-foreground">
             <MessageSquare className="h-8 w-8" />
             选择一条反馈查看详情
           </CardContent>
@@ -460,7 +780,7 @@ export function FeedbackCenter({
       </Card>
 
       <Dialog open={newOpen} onOpenChange={handleNewOpenChange}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="max-h-[90vh] overflow-y-auto [scrollbar-gutter:stable] sm:max-w-lg">
           <form onSubmit={handleCreate} className="space-y-4">
             <DialogHeader>
               <DialogTitle>提交反馈</DialogTitle>
@@ -474,17 +794,18 @@ export function FeedbackCenter({
               rows={5}
               required
               disabled={createPending}
+              onPaste={(event) =>
+                handleFeedbackPaste(event, {
+                  files: createImages,
+                  setFiles: setCreateImages,
+                })
+              }
             />
-            <Input
-              type="file"
-              name="images"
-              accept="image/png,image/jpeg,image/webp"
-              multiple
+            <FeedbackImageInput
+              files={createImages}
+              setFiles={setCreateImages}
               disabled={createPending}
             />
-            <p className="text-xs text-muted-foreground">
-              支持 PNG/JPG/WebP，最多 9 张，每张不超过 10MB。
-            </p>
             <DialogFooter>
               <Button
                 type="button"

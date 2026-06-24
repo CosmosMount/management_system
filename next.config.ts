@@ -8,9 +8,9 @@ const configuredDevOrigins = [
 const nextConfig: NextConfig = {
   experimental: {
     serverActions: {
-      bodySizeLimit: "100mb",
+      bodySizeLimit: "1gb",
     },
-    proxyClientMaxBodySize: "100mb",
+    proxyClientMaxBodySize: "1gb",
   },
   // 允许局域网 IP/域名访问 dev 资源（如从手机访问 http://<本机IP>:3000）
   allowedDevOrigins: Array.from(

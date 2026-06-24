@@ -6,6 +6,7 @@ import type { FeedbackStatus } from "@prisma/client";
 import { auth } from "@/lib/auth";
 import {
   MAX_FEEDBACK_IMAGE_COUNT,
+  removeFeedbackUpload,
   saveFeedbackImage,
 } from "@/lib/file-upload";
 import {
@@ -24,6 +25,14 @@ type FeedbackActionUser = {
   openId: string;
   name: string;
   avatar: string | null;
+};
+
+type SavedFeedbackAttachment = {
+  path: string;
+  fileName: string;
+  mimeType: string;
+  size: number;
+  sortOrder: number;
 };
 
 function parseText(formData: FormData, key = "body"): string {
@@ -75,17 +84,28 @@ async function requireFeedbackUser(): Promise<FeedbackActionUser> {
   });
 }
 
-async function saveAttachments(feedbackId: string, files: File[]) {
-  const attachments = [];
-  for (const [index, file] of files.entries()) {
-    const path = await saveFeedbackImage(feedbackId, file, index);
-    attachments.push({
-      path,
-      fileName: file.name,
-      mimeType: file.type,
-      size: file.size,
-      sortOrder: index,
-    });
+async function cleanupAttachments(attachments: SavedFeedbackAttachment[]) {
+  await Promise.allSettled(
+    attachments.map((attachment) => removeFeedbackUpload(attachment.path)),
+  );
+}
+
+async function saveAttachments(
+  feedbackId: string,
+  files: File[],
+): Promise<SavedFeedbackAttachment[]> {
+  const attachments: SavedFeedbackAttachment[] = [];
+  try {
+    for (const [index, file] of files.entries()) {
+      const saved = await saveFeedbackImage(feedbackId, file, index);
+      attachments.push({
+        ...saved,
+        sortOrder: index,
+      });
+    }
+  } catch (err) {
+    await cleanupAttachments(attachments);
+    throw err;
   }
   return attachments;
 }
@@ -107,25 +127,31 @@ export async function createFeedback(formData: FormData) {
   const now = new Date();
   const attachments = await saveAttachments(feedbackId, files);
 
-  const feedback = await prisma.feedback.create({
-    data: {
-      id: feedbackId,
-      submitterOpenId: user.openId,
-      submitterName: user.name,
-      status: "OPEN",
-      lastMessageAt: now,
-      messages: {
-        create: {
-          authorOpenId: user.openId,
-          authorName: user.name,
-          body,
-          createdAt: now,
-          attachments: { create: attachments },
+  let feedback: { id: string };
+  try {
+    feedback = await prisma.feedback.create({
+      data: {
+        id: feedbackId,
+        submitterOpenId: user.openId,
+        submitterName: user.name,
+        status: "OPEN",
+        lastMessageAt: now,
+        messages: {
+          create: {
+            authorOpenId: user.openId,
+            authorName: user.name,
+            body,
+            createdAt: now,
+            attachments: { create: attachments },
+          },
         },
       },
-    },
-    select: { id: true },
-  });
+      select: { id: true },
+    });
+  } catch (err) {
+    await cleanupAttachments(attachments);
+    throw err;
+  }
 
   await sendFeedbackCreatedNotification({
     feedbackId: feedback.id,
@@ -177,21 +203,26 @@ export async function replyFeedback(formData: FormData) {
 
   const now = new Date();
   const attachments = await saveAttachments(feedbackId, files);
-  await prisma.feedback.update({
-    where: { id: feedbackId },
-    data: {
-      lastMessageAt: now,
-      messages: {
-        create: {
-          authorOpenId: user.openId,
-          authorName: user.name,
-          body,
-          createdAt: now,
-          attachments: { create: attachments },
+  try {
+    await prisma.feedback.update({
+      where: { id: feedbackId },
+      data: {
+        lastMessageAt: now,
+        messages: {
+          create: {
+            authorOpenId: user.openId,
+            authorName: user.name,
+            body,
+            createdAt: now,
+            attachments: { create: attachments },
+          },
         },
       },
-    },
-  });
+    });
+  } catch (err) {
+    await cleanupAttachments(attachments);
+    throw err;
+  }
 
   const recipientOpenIds = actorIsAdmin
     ? [feedback.submitterOpenId].filter((openId) => openId !== user.openId)
