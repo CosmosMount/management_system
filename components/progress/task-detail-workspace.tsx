@@ -67,6 +67,8 @@ export type TaskDetailView = {
   dueAt: string;
   needsOfflineConfirmation: boolean;
   needsWeeklyReport: boolean;
+  acceptanceChecklistItems: TaskAcceptanceChecklistItemView[];
+  acceptanceChecklistLocked: boolean;
   riskNote: string;
   submissions: TaskSubmissionView[];
   weeklyReports: TaskWeeklyReportView[];
@@ -91,6 +93,19 @@ export type TaskApprovalView = {
   decision: ApprovalDecision;
   comment: string;
   createdAt: string;
+  checklistConfirmations: TaskChecklistConfirmationView[];
+};
+
+export type TaskAcceptanceChecklistItemView = {
+  id: string;
+  content: string;
+  sortOrder: number;
+};
+
+export type TaskChecklistConfirmationView = {
+  id: string;
+  content: string;
+  sortOrder: number;
 };
 
 export type TaskWeeklyReportView = {
@@ -116,6 +131,7 @@ type Props = {
   task: TaskDetailView;
   users: UserOption[];
   stages: StageOption[];
+  acceptanceChecklistTemplates: AcceptanceChecklistTemplateOption[];
   isAssignee: boolean;
   canApprove: boolean;
   canManage: boolean;
@@ -124,6 +140,7 @@ type Props = {
 
 type UserOption = { openId: string; name: string; avatar?: string | null };
 type StageOption = { id: string; name: string };
+type AcceptanceChecklistTemplateOption = { id: string; content: string };
 
 type ActivityFilter = "ALL" | "STATUS" | "DELIVERY" | "REVIEW" | "WEEKLY" | "RISK";
 type ActivityHistoryState = {
@@ -145,6 +162,7 @@ export function TaskDetailWorkspace({
   task,
   users,
   stages,
+  acceptanceChecklistTemplates,
   isAssignee,
   canApprove,
   canManage,
@@ -181,6 +199,7 @@ export function TaskDetailWorkspace({
             canManage={canManage}
             needsOfflineConfirmation={task.needsOfflineConfirmation}
             needsWeeklyReport={task.needsWeeklyReport}
+            acceptanceChecklistItems={task.acceptanceChecklistItems}
             submissions={task.submissions}
             showFlowActions={false}
           />
@@ -204,6 +223,7 @@ export function TaskDetailWorkspace({
             projectId={task.projectId}
             users={users}
             stages={stages}
+            acceptanceChecklistTemplates={acceptanceChecklistTemplates}
             initialTask={{
               id: task.id,
               stageId: task.stageId,
@@ -217,6 +237,8 @@ export function TaskDetailWorkspace({
               dueAt: task.dueAt,
               needsOfflineConfirmation: task.needsOfflineConfirmation,
               needsWeeklyReport: task.needsWeeklyReport,
+              acceptanceChecklistItems: task.acceptanceChecklistItems,
+              acceptanceChecklistLocked: task.acceptanceChecklistLocked,
             }}
             submitLabel="保存修改"
             onSaved={() => setTaskDialogOpen(false)}
@@ -281,6 +303,14 @@ function TaskOverview({
             <OverviewItem
               label="定期周报"
               value={task.needsWeeklyReport ? "需要" : "不需要"}
+            />
+            <OverviewItem
+              label="验收清单"
+              value={
+                task.acceptanceChecklistItems.length > 0
+                  ? `${task.acceptanceChecklistItems.length} 条`
+                  : "未配置"
+              }
             />
             <OverviewItem label="指标" value={task.metrics || "未填写"} />
           </dl>

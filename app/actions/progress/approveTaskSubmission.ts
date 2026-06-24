@@ -21,6 +21,7 @@ export async function approveTaskSubmission(input: {
   submissionId: string;
   comment?: string;
   offlineConfirmed?: boolean;
+  checkedChecklistItemIds?: string[];
 }) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
@@ -30,7 +31,15 @@ export async function approveTaskSubmission(input: {
   const submission = await prisma.taskSubmission.findUnique({
     where: { id: parsed.submissionId },
     include: {
-      task: { include: { project: true, assignees: true } },
+      task: {
+        include: {
+          project: true,
+          assignees: true,
+          acceptanceChecklistItems: {
+            orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+          },
+        },
+      },
       approvals: true,
     },
   });
@@ -57,6 +66,14 @@ export async function approveTaskSubmission(input: {
   if (task.needsOfflineConfirmation && !parsed.offlineConfirmed) {
     throw new Error("该任务需要先完成线下确认");
   }
+  const checklistItems = task.acceptanceChecklistItems;
+  if (checklistItems.length > 0) {
+    const checkedIds = new Set(parsed.checkedChecklistItemIds ?? []);
+    const missingItem = checklistItems.find((item) => !checkedIds.has(item.id));
+    if (missingItem) {
+      throw new Error("请逐项确认全部验收清单后再通过");
+    }
+  }
 
   if (
     !canApproveTask(roles, {
@@ -74,7 +91,21 @@ export async function approveTaskSubmission(input: {
   if (!approverRole) throw new Error("无法确定审批角色");
 
   await prisma.$transaction(async (tx) => {
-    await tx.approvalRecord.create({
+    const existingApproval = await tx.approvalRecord.findFirst({
+      where: { submissionId: submission.id },
+      select: { id: true },
+    });
+    if (existingApproval) throw new Error("该提交已审批");
+
+    const statusUpdate = await tx.task.updateMany({
+      where: { id: task.id, status: TaskStatus.PENDING_ACCEPTANCE },
+      data: { status: TaskStatus.COMPLETED },
+    });
+    if (statusUpdate.count !== 1) {
+      throw new Error("该提交已审批");
+    }
+
+    const approval = await tx.approvalRecord.create({
       data: {
         submissionId: submission.id,
         approverOpenId: user.openId,
@@ -87,10 +118,14 @@ export async function approveTaskSubmission(input: {
       },
     });
 
-    if (submission.type === "DELIVERY" && task.status === "PENDING_ACCEPTANCE") {
-      await tx.task.update({
-        where: { id: task.id },
-        data: { status: TaskStatus.COMPLETED },
+    if (checklistItems.length > 0) {
+      await tx.approvalChecklistConfirmation.createMany({
+        data: checklistItems.map((item) => ({
+          approvalId: approval.id,
+          checklistItemId: item.id,
+          content: item.content,
+          sortOrder: item.sortOrder,
+        })),
       });
     }
   });
@@ -101,7 +136,10 @@ export async function approveTaskSubmission(input: {
     action: "task.approved",
     actorOpenId: user.openId,
     actorName: user.name,
-    payload: { submissionId: submission.id },
+    payload: {
+      submissionId: submission.id,
+      checklistConfirmationCount: checklistItems.length,
+    },
   });
 
   await sendProgressNotification({
@@ -169,6 +207,20 @@ export async function rejectTaskSubmission(input: {
   if (!approverRole) throw new Error("无法确定审批角色");
 
   await prisma.$transaction(async (tx) => {
+    const existingApprovalInTx = await tx.approvalRecord.findFirst({
+      where: { submissionId: submission.id },
+      select: { id: true },
+    });
+    if (existingApprovalInTx) throw new Error("该提交已审批");
+
+    const statusUpdate = await tx.task.updateMany({
+      where: { id: task.id, status: TaskStatus.PENDING_ACCEPTANCE },
+      data: { status: TaskStatus.IN_PROGRESS },
+    });
+    if (statusUpdate.count !== 1) {
+      throw new Error("该提交已审批");
+    }
+
     await tx.approvalRecord.create({
       data: {
         submissionId: submission.id,
@@ -180,11 +232,6 @@ export async function rejectTaskSubmission(input: {
         offlineConfirmed: parsed.offlineConfirmed,
         comment: parsed.comment ?? "",
       },
-    });
-
-    await tx.task.update({
-      where: { id: task.id },
-      data: { status: TaskStatus.IN_PROGRESS },
     });
   });
 

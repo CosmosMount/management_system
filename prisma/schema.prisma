@@ -234,6 +234,7 @@ model Task {
   submissions     TaskSubmission[]
   weeklyReports   WeeklyReport[]
   activityLogs    ProgressActivityLog[]
+  acceptanceChecklistItems TaskAcceptanceChecklistItem[]
   createdAt       DateTime            @default(now())
   updatedAt       DateTime            @updatedAt
   archivedAt      DateTime?
@@ -269,6 +270,25 @@ model TaskSubmission {
   approvals     ApprovalRecord[]
 }
 
+model AcceptanceChecklistTemplate {
+  id        String   @id @default(uuid())
+  content   String   @unique
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model TaskAcceptanceChecklistItem {
+  id        String   @id @default(uuid())
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  content   String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([taskId, sortOrder])
+}
+
 model WeeklyReport {
   id            String   @id @default(uuid())
   taskId        String
@@ -294,7 +314,20 @@ model ApprovalRecord {
   docViewVerified Boolean          @default(false)
   offlineConfirmed Boolean         @default(false)
   comment         String           @default("")
+  checklistConfirmations ApprovalChecklistConfirmation[]
   createdAt       DateTime         @default(now())
+}
+
+model ApprovalChecklistConfirmation {
+  id              String         @id @default(uuid())
+  approvalId      String
+  approval        ApprovalRecord @relation(fields: [approvalId], references: [id], onDelete: Cascade)
+  checklistItemId String
+  content         String
+  sortOrder       Int            @default(0)
+  createdAt       DateTime       @default(now())
+
+  @@index([approvalId, sortOrder])
 }
 
 model ProgressActivityLog {

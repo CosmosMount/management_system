@@ -10,6 +10,7 @@ import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import { getUserRoles } from "@/lib/permissions";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
+import { normalizeAcceptanceChecklistItems } from "@/lib/progress-acceptance-checklists";
 import { createTaskSchema, type CreateTaskInput } from "@/lib/validations/progress";
 import { routes } from "@/lib/routes";
 
@@ -83,6 +84,9 @@ export async function createTask(input: CreateTaskInput) {
   const needsWeeklyReport =
     parsed.needsWeeklyReport ||
     dueAt.getTime() - Date.now() > 14 * 24 * 60 * 60 * 1000;
+  const acceptanceChecklistItems = normalizeAcceptanceChecklistItems(
+    parsed.acceptanceChecklistItems,
+  );
 
   const task = await prisma.task.create({
     data: {
@@ -109,6 +113,12 @@ export async function createTask(input: CreateTaskInput) {
       status: TaskStatus.TODO,
       needsOfflineConfirmation: parsed.needsOfflineConfirmation,
       needsWeeklyReport,
+      acceptanceChecklistItems: {
+        create: acceptanceChecklistItems.map((item, index) => ({
+          content: item.content,
+          sortOrder: index,
+        })),
+      },
     },
   });
 
@@ -121,6 +131,7 @@ export async function createTask(input: CreateTaskInput) {
     payload: {
       title: task.title,
       assignees: orderedAssignees.map((assignee) => assignee.name),
+      acceptanceChecklistCount: acceptanceChecklistItems.length,
     },
   });
 

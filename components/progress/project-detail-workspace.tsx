@@ -166,10 +166,12 @@ export type ActivityLogView = {
 };
 
 type UserOption = { openId: string; name: string; avatar?: string | null };
+type AcceptanceChecklistTemplateOption = { id: string; content: string };
 
 type Props = {
   project: ProjectDetailView;
   users: UserOption[];
+  acceptanceChecklistTemplates: AcceptanceChecklistTemplateOption[];
   canManage: boolean;
   canUpdateLifecycle: boolean;
   isSuperAdmin?: boolean;
@@ -212,6 +214,7 @@ const activityFilters: Array<{ value: ActivityFilter; label: string }> = [
 export function ProjectDetailWorkspace({
   project,
   users,
+  acceptanceChecklistTemplates,
   canManage,
   canUpdateLifecycle,
   isSuperAdmin = false,
@@ -383,6 +386,7 @@ export function ProjectDetailWorkspace({
               key={selectedStage.id}
               projectId={project.id}
               users={users}
+              acceptanceChecklistTemplates={acceptanceChecklistTemplates}
               stages={project.stages.map((stage) => ({
                 id: stage.id,
                 name: stage.name,

@@ -40,9 +40,21 @@ export default async function TaskDetailPage({ params }: Props) {
       },
       stage: true,
       assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      acceptanceChecklistItems: {
+        orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+      },
       submissions: {
         orderBy: { submittedAt: "desc" },
-        include: { approvals: { orderBy: { createdAt: "asc" } } },
+        include: {
+          approvals: {
+            orderBy: { createdAt: "asc" },
+            include: {
+              checklistConfirmations: {
+                orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+              },
+            },
+          },
+        },
       },
       weeklyReports: { orderBy: { submittedAt: "desc" }, take: 8 },
       activityLogs: {
@@ -76,6 +88,11 @@ export default async function TaskDetailPage({ params }: Props) {
     orderBy: { name: "asc" },
     select: { openId: true, name: true, avatar: true },
   });
+  const acceptanceChecklistTemplates =
+    await prisma.acceptanceChecklistTemplate.findMany({
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+      select: { id: true, content: true },
+    });
 
   const taskView: TaskDetailView = {
     id: task.id,
@@ -100,6 +117,16 @@ export default async function TaskDetailPage({ params }: Props) {
     dueAt: task.dueAt.toISOString(),
     needsOfflineConfirmation: task.needsOfflineConfirmation,
     needsWeeklyReport: task.needsWeeklyReport,
+    acceptanceChecklistItems: task.acceptanceChecklistItems.map((item) => ({
+      id: item.id,
+      content: item.content,
+      sortOrder: item.sortOrder,
+    })),
+    acceptanceChecklistLocked:
+      task.submissions.length > 0 ||
+      task.status === "PENDING_ACCEPTANCE" ||
+      task.status === "COMPLETED" ||
+      task.status === "ARCHIVED",
     riskNote: task.riskNote,
     submissions: task.submissions.map((submission) => ({
       id: submission.id,
@@ -109,14 +136,21 @@ export default async function TaskDetailPage({ params }: Props) {
       failureReason: submission.failureReason,
       submittedAt: submission.submittedAt.toISOString(),
       submitterName: submission.submitterName,
-      approvals: submission.approvals.map((approval) => ({
-        id: approval.id,
-        approverName: approval.approverName,
-        decision: approval.decision,
-        comment: approval.comment,
-        createdAt: approval.createdAt.toISOString(),
+        approvals: submission.approvals.map((approval) => ({
+          id: approval.id,
+          approverName: approval.approverName,
+          decision: approval.decision,
+          comment: approval.comment,
+          createdAt: approval.createdAt.toISOString(),
+          checklistConfirmations: approval.checklistConfirmations.map(
+            (item) => ({
+              id: item.id,
+              content: item.content,
+              sortOrder: item.sortOrder,
+            }),
+          ),
+        })),
       })),
-    })),
     weeklyReports: task.weeklyReports.map((report) => ({
       id: report.id,
       weekStart: report.weekStart.toISOString(),
@@ -148,6 +182,7 @@ export default async function TaskDetailPage({ params }: Props) {
             id: stage.id,
             name: stage.name,
           }))}
+          acceptanceChecklistTemplates={acceptanceChecklistTemplates}
           isAssignee={isAssignee}
           canApprove={canApprove}
           canManage={canManage}

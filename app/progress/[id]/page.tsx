@@ -83,6 +83,11 @@ export default async function ProjectDetailPage({ params }: Props) {
     orderBy: { name: "asc" },
     select: { openId: true, name: true, avatar: true },
   });
+  const acceptanceChecklistTemplates =
+    await prisma.acceptanceChecklistTemplate.findMany({
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+      select: { id: true, content: true },
+    });
   const activityLogCount = await prisma.progressActivityLog.count({
     where: { projectId: project.id },
   });
@@ -175,6 +180,7 @@ export default async function ProjectDetailPage({ params }: Props) {
         <ProjectDetailWorkspace
           project={projectView}
           users={users}
+          acceptanceChecklistTemplates={acceptanceChecklistTemplates}
           canManage={canManage}
           canUpdateLifecycle={canUpdateLifecycle}
           isSuperAdmin={admin}

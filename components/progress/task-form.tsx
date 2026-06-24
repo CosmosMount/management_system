@@ -1,9 +1,10 @@
 "use client";
 
-import { useForm, Controller } from "react-hook-form";
+import { useForm, Controller, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { Plus, X } from "lucide-react";
 import { toast } from "sonner";
 import { createTask } from "@/app/actions/progress/createTask";
 import { updateTask } from "@/app/actions/progress/updateTask";
@@ -21,6 +22,7 @@ import { UserMultiSearchSelect } from "@/components/user-search-select";
 import { getActionErrorMessage } from "@/lib/action-error-message";
 import {
   createTaskSchema,
+  MAX_ACCEPTANCE_CHECKLIST_ITEMS,
   type CreateTaskInput,
   updateTaskSchema,
 } from "@/lib/validations/progress";
@@ -33,12 +35,14 @@ import {
 
 type UserOption = { openId: string; name: string; avatar?: string | null };
 type StageOption = { id: string; name: string };
+type AcceptanceChecklistTemplateOption = { id: string; content: string };
 type TaskFormValues = CreateTaskInput & { taskId?: string };
 
 type Props = {
   projectId: string;
   users: UserOption[];
   stages?: StageOption[];
+  acceptanceChecklistTemplates?: AcceptanceChecklistTemplateOption[];
   defaultStageId?: string;
   mode?: "create" | "edit";
   initialTask?: {
@@ -54,6 +58,8 @@ type Props = {
     dueAt: string;
     needsOfflineConfirmation: boolean;
     needsWeeklyReport: boolean;
+    acceptanceChecklistItems: { id?: string; content: string }[];
+    acceptanceChecklistLocked?: boolean;
   };
   redirectOnCreate?: boolean;
   submitLabel?: string;
@@ -65,6 +71,7 @@ export function TaskForm({
   projectId,
   users,
   stages = [],
+  acceptanceChecklistTemplates = [],
   defaultStageId = "",
   mode = "create",
   initialTask,
@@ -94,8 +101,32 @@ export function TaskForm({
       needsOfflineConfirmation:
         initialTask?.needsOfflineConfirmation ?? false,
       needsWeeklyReport: initialTask?.needsWeeklyReport ?? false,
+      acceptanceChecklistItems: initialTask?.acceptanceChecklistItems ?? [],
     },
   });
+  const checklistFields = useFieldArray({
+    control: form.control,
+    name: "acceptanceChecklistItems",
+  });
+  const checklistReadOnly =
+    editing && !!initialTask?.acceptanceChecklistLocked;
+
+  function addChecklistItem(content = "") {
+    const current = form.getValues("acceptanceChecklistItems") ?? [];
+    const normalized = content.trim().replace(/\s+/g, " ");
+    if (current.length >= MAX_ACCEPTANCE_CHECKLIST_ITEMS) {
+      toast.error(`验收条例最多 ${MAX_ACCEPTANCE_CHECKLIST_ITEMS} 条`);
+      return;
+    }
+    if (
+      normalized &&
+      current.some((item) => item.content.trim() === normalized)
+    ) {
+      toast.error("该验收条例已在清单中");
+      return;
+    }
+    checklistFields.append({ content: normalized });
+  }
 
   async function onSubmit(data: TaskFormValues) {
     setSubmitting(true);
@@ -116,6 +147,7 @@ export function TaskForm({
           dueAt: data.dueAt,
           needsOfflineConfirmation: data.needsOfflineConfirmation,
           needsWeeklyReport: data.needsWeeklyReport,
+          acceptanceChecklistItems: data.acceptanceChecklistItems,
         });
         toast.success("任务已更新");
         onSaved?.();
@@ -302,6 +334,84 @@ export function TaskForm({
           <input type="checkbox" {...form.register("needsWeeklyReport")} />
           需要定期周报
         </label>
+      </div>
+      <div className="space-y-3 rounded-lg border p-4">
+        <div className="space-y-1">
+          <Label>验收清单</Label>
+          <p className="text-xs text-muted-foreground">
+            可为空；配置后验收人必须逐项手动确认才能通过。
+          </p>
+          {checklistReadOnly && (
+            <p className="text-xs text-amber-700">
+              该任务已有交付记录，验收清单已锁定。
+            </p>
+          )}
+        </div>
+
+        {acceptanceChecklistTemplates.length > 0 && !checklistReadOnly && (
+          <div className="flex flex-wrap gap-2">
+            {acceptanceChecklistTemplates.map((template) => (
+              <Button
+                key={template.id}
+                type="button"
+                size="xs"
+                variant="outline"
+                onClick={() => addChecklistItem(template.content)}
+              >
+                <Plus className="h-3 w-3" />
+                {template.content}
+              </Button>
+            ))}
+          </div>
+        )}
+
+        <div className="space-y-2">
+          {checklistFields.fields.length === 0 ? (
+            <p className="rounded-md border border-dashed px-3 py-4 text-sm text-muted-foreground">
+              暂未配置验收清单。
+            </p>
+          ) : (
+            checklistFields.fields.map((field, index) => (
+              <div key={field.id} className="flex gap-2">
+                <Input
+                  {...form.register(
+                    `acceptanceChecklistItems.${index}.content`,
+                  )}
+                  disabled={checklistReadOnly}
+                  placeholder={`验收条例 ${index + 1}`}
+                />
+                {!checklistReadOnly && (
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="outline"
+                    aria-label="删除验收条例"
+                    onClick={() => checklistFields.remove(index)}
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+
+        {!checklistReadOnly && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => addChecklistItem()}
+          >
+            <Plus className="h-4 w-4" />
+            添加自定义条例
+          </Button>
+        )}
+        {form.formState.errors.acceptanceChecklistItems?.message && (
+          <p className="text-sm text-destructive">
+            {form.formState.errors.acceptanceChecklistItems.message}
+          </p>
+        )}
       </div>
       <Button type="submit" disabled={submitting}>
         {editing ? (submitLabel ?? "保存修改") : submitLabel}

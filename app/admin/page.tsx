@@ -17,9 +17,12 @@ export default async function AdminPage() {
     redirect("/");
   }
 
-  const [users, roles] = await Promise.all([
+  const [users, roles, acceptanceChecklistTemplates] = await Promise.all([
     prisma.user.findMany({ orderBy: { name: "asc" } }),
     prisma.userRole.findMany({ orderBy: { role: "asc" } }),
+    prisma.acceptanceChecklistTemplate.findMany({
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+    }),
   ]);
 
   return (
@@ -39,6 +42,13 @@ export default async function AdminPage() {
               team: r.team ?? "",
               techGroup: r.techGroup ?? "",
             }))}
+            acceptanceChecklistTemplates={acceptanceChecklistTemplates.map(
+              (template) => ({
+                ...template,
+                createdAt: template.createdAt.toISOString(),
+                updatedAt: template.updatedAt.toISOString(),
+              }),
+            )}
           />
         </main>
       </PageShell>

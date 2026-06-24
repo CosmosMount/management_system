@@ -45,7 +45,18 @@ type Submission = {
     decision: string;
     comment: string;
     createdAt: string;
+    checklistConfirmations: {
+      id: string;
+      content: string;
+      sortOrder: number;
+    }[];
   }[];
+};
+
+type AcceptanceChecklistItem = {
+  id: string;
+  content: string;
+  sortOrder: number;
 };
 
 type Props = {
@@ -56,6 +67,7 @@ type Props = {
   canManage: boolean;
   needsOfflineConfirmation: boolean;
   needsWeeklyReport: boolean;
+  acceptanceChecklistItems: AcceptanceChecklistItem[];
   submissions: Submission[];
   className?: string;
   showFlowActions?: boolean;
@@ -69,6 +81,7 @@ export function TaskActionsPanel({
   canManage,
   needsOfflineConfirmation,
   needsWeeklyReport,
+  acceptanceChecklistItems,
   submissions,
   className,
   showFlowActions = true,
@@ -86,12 +99,18 @@ export function TaskActionsPanel({
   const [nextPlan, setNextPlan] = useState("");
   const [riskNote, setRiskNote] = useState("");
   const [offlineConfirmed, setOfflineConfirmed] = useState(false);
+  const [checkedChecklistItemIds, setCheckedChecklistItemIds] = useState<string[]>([]);
 
   const pendingSubmission = submissions.find(
     (s) => !s.approvals.some((a) => a.decision === "APPROVED"),
   );
   const canStartTask = (isAssignee || canManage) && status === "TODO";
   const canArchiveTask = canManage && status === "COMPLETED";
+  const allChecklistItemsChecked =
+    acceptanceChecklistItems.length === 0 ||
+    acceptanceChecklistItems.every((item) =>
+      checkedChecklistItemIds.includes(item.id),
+    );
 
   async function handleStatus(next: TaskStatus) {
     setLoading(true);
@@ -165,6 +184,7 @@ export function TaskActionsPanel({
         await approveTaskSubmission({
           submissionId: pendingSubmission.id,
           offlineConfirmed,
+          checkedChecklistItemIds,
         });
         toast.success("验收通过");
       } else {
@@ -176,6 +196,7 @@ export function TaskActionsPanel({
         toast.success("已驳回");
       }
       setRejectComment("");
+      setCheckedChecklistItemIds([]);
       router.refresh();
     } catch (err) {
       toast.error(getActionErrorMessage(err, "操作失败"));
@@ -371,6 +392,33 @@ export function TaskActionsPanel({
                 已完成线下确认
               </label>
             )}
+            {acceptanceChecklistItems.length > 0 && (
+              <div className="space-y-2 rounded-lg border p-3">
+                <p className="text-sm font-medium">验收清单</p>
+                <div className="space-y-2">
+                  {acceptanceChecklistItems.map((item) => (
+                    <label
+                      key={item.id}
+                      className="flex items-start gap-2 text-sm"
+                    >
+                      <input
+                        type="checkbox"
+                        className="mt-1"
+                        checked={checkedChecklistItemIds.includes(item.id)}
+                        onChange={(event) => {
+                          setCheckedChecklistItemIds((current) =>
+                            event.target.checked
+                              ? [...new Set([...current, item.id])]
+                              : current.filter((id) => id !== item.id),
+                          );
+                        }}
+                      />
+                      <span>{item.content}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
             <Textarea
               placeholder="驳回理由（驳回时会通知任务负责人）"
               value={rejectComment}
@@ -379,7 +427,9 @@ export function TaskActionsPanel({
             <div className="flex gap-3">
               <Button
                 disabled={
-                  loading || (needsOfflineConfirmation && !offlineConfirmed)
+                  loading ||
+                  (needsOfflineConfirmation && !offlineConfirmed) ||
+                  !allChecklistItemsChecked
                 }
                 onClick={() => handleApprove(true)}
               >
@@ -432,11 +482,20 @@ export function TaskActionsPanel({
                   </a>
                 )}
                 {s.approvals.map((a) => (
-                  <p key={a.id} className="mt-1 text-muted-foreground">
-                    {a.approverName}：
-                    {a.decision === "APPROVED" ? "通过" : "驳回"}
-                    {a.comment ? ` · ${a.comment}` : ""}
-                  </p>
+                  <div key={a.id} className="mt-2 text-muted-foreground">
+                    <p>
+                      {a.approverName}：
+                      {a.decision === "APPROVED" ? "通过" : "驳回"}
+                      {a.comment ? ` · ${a.comment}` : ""}
+                    </p>
+                    {a.checklistConfirmations.length > 0 && (
+                      <ul className="mt-1 space-y-1 rounded-md bg-muted/50 px-3 py-2 text-xs">
+                        {a.checklistConfirmations.map((item) => (
+                          <li key={item.id}>已确认：{item.content}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
                 ))}
               </div>
             ))

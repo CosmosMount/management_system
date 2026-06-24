@@ -16,6 +16,11 @@ import {
   getTaskAssigneeNames,
   getTaskAssigneeOpenIds,
 } from "@/lib/progress-assignees";
+import {
+  areAcceptanceChecklistsEqual,
+  formatAcceptanceChecklistSummary,
+  normalizeAcceptanceChecklistItems,
+} from "@/lib/progress-acceptance-checklists";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { prisma } from "@/lib/prisma";
 import { getUserRoles } from "@/lib/permissions";
@@ -156,6 +161,10 @@ export async function updateTask(input: UpdateTaskInput) {
       },
       stage: true,
       assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      acceptanceChecklistItems: {
+        orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+      },
+      submissions: { select: { id: true }, take: 1 },
     },
   });
   if (!task) throw new Error("任务不存在");
@@ -219,6 +228,21 @@ export async function updateTask(input: UpdateTaskInput) {
     .map((assignee) => assignee.name)
     .join("、");
   const oldAssigneeOpenIds = getTaskAssigneeOpenIds(task);
+  const nextAcceptanceChecklistItems =
+    parsed.acceptanceChecklistItems === undefined
+      ? task.acceptanceChecklistItems.map((item) => ({ content: item.content }))
+      : normalizeAcceptanceChecklistItems(parsed.acceptanceChecklistItems);
+  const checklistLocked =
+    task.submissions.length > 0 ||
+    task.status === "PENDING_ACCEPTANCE" ||
+    task.status === "COMPLETED";
+  const checklistChanged = !areAcceptanceChecklistsEqual(
+    task.acceptanceChecklistItems,
+    nextAcceptanceChecklistItems,
+  );
+  if (checklistLocked && checklistChanged) {
+    throw new Error("任务已有交付记录，验收清单不可修改");
+  }
   const changes = buildTaskChangeSummary({
     before: {
       title: task.title,
@@ -232,6 +256,9 @@ export async function updateTask(input: UpdateTaskInput) {
       dueAt: task.dueAt.toISOString(),
       needsOfflineConfirmation: task.needsOfflineConfirmation,
       needsWeeklyReport: task.needsWeeklyReport,
+      acceptanceChecklistSummary: formatAcceptanceChecklistSummary(
+        task.acceptanceChecklistItems,
+      ),
     },
     after: {
       title: parsed.title,
@@ -245,10 +272,32 @@ export async function updateTask(input: UpdateTaskInput) {
       dueAt: dueAt.toISOString(),
       needsOfflineConfirmation: parsed.needsOfflineConfirmation,
       needsWeeklyReport: parsed.needsWeeklyReport,
+      acceptanceChecklistSummary: formatAcceptanceChecklistSummary(
+        nextAcceptanceChecklistItems,
+      ),
     },
   });
 
   const updated = await prisma.$transaction(async (tx) => {
+    if (checklistChanged) {
+      const latestLockState = await tx.task.findUnique({
+        where: { id: task.id },
+        select: {
+          status: true,
+          _count: { select: { submissions: true } },
+        },
+      });
+      if (!latestLockState) throw new Error("任务不存在");
+      const latestLocked =
+        latestLockState._count.submissions > 0 ||
+        latestLockState.status === "PENDING_ACCEPTANCE" ||
+        latestLockState.status === "COMPLETED" ||
+        latestLockState.status === "ARCHIVED";
+      if (latestLocked) {
+        throw new Error("任务已有交付记录，验收清单不可修改");
+      }
+    }
+
     const record = await tx.task.update({
       where: { id: task.id },
       data: {
@@ -276,6 +325,21 @@ export async function updateTask(input: UpdateTaskInput) {
         sortOrder: index,
       })),
     });
+
+    if (!checklistLocked && checklistChanged) {
+      await tx.taskAcceptanceChecklistItem.deleteMany({
+        where: { taskId: task.id },
+      });
+      if (nextAcceptanceChecklistItems.length > 0) {
+        await tx.taskAcceptanceChecklistItem.createMany({
+          data: nextAcceptanceChecklistItems.map((item, index) => ({
+            taskId: task.id,
+            content: item.content,
+            sortOrder: index,
+          })),
+        });
+      }
+    }
 
     if (changes.length > 0) {
       await tx.progressActivityLog.create({
@@ -343,6 +407,7 @@ function buildTaskChangeSummary({
     ["dueAt", "截止时间", formatDateTime],
     ["needsOfflineConfirmation", "线下确认", formatBoolean],
     ["needsWeeklyReport", "定期周报", formatBoolean],
+    ["acceptanceChecklistSummary", "验收清单", String],
   ];
   return labels.flatMap(([key, label, format]) => {
     if (before[key] === after[key]) return [];
@@ -362,6 +427,7 @@ type TaskChangeComparable = {
   dueAt: string;
   needsOfflineConfirmation: boolean;
   needsWeeklyReport: boolean;
+  acceptanceChecklistSummary: string;
 };
 
 function formatOptional(value: unknown): string {

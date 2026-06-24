@@ -11,6 +11,7 @@ Next.js 全栈管理系统，包含 **采购报销** 与 **进度管理** 两大
 cp .env.example .env   # 填写飞书凭证与 AUTH_SECRET
 npm install
 npm run db:push
+npm run db:seed-acceptance-checklists
 npm run dev
 ```
 
@@ -174,6 +175,18 @@ docker compose exec app cat /app/data/app.db > backup-$(date +%F).db
 | PROJECT_MANAGER | 全局 | 项管：进度汇总、项目异常介入、任务/里程碑验收 |
 
 同一人可拥有多个角色（如同时担任「英雄」管理员与「工程」报销员）。
+
+## 任务验收清单
+
+进度管理中的任务可配置“验收清单”。清单允许为空；如果配置了清单，任务进入验收时审批人必须逐项勾选后才能通过。任务产生任意交付记录后，清单会锁定为只读，保证验收口径可追溯。
+
+超级管理员可在 `/admin` 的 **常用验收条例** 卡片中新增或删除模板。模板只用于任务创建/编辑时快捷加入；加入任务后会保存为该任务自己的快照，后续删除模板不会影响已有任务。
+
+首次部署或 schema 同步后可写入默认常用条例：
+
+```bash
+npm run db:seed-acceptance-checklists
+```
 
 ### 导航栏没有「权限管理」？
 

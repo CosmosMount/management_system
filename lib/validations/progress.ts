@@ -12,6 +12,28 @@ const techGroupSchema = z
   .or(z.literal(""));
 
 const projectOwnerOpenIdsSchema = z.array(z.string()).optional();
+export const MAX_ACCEPTANCE_CHECKLIST_ITEMS = 20;
+export const MAX_ACCEPTANCE_CHECKLIST_ITEM_LENGTH = 200;
+
+const acceptanceChecklistItemSchema = z.object({
+  content: z
+    .string()
+    .trim()
+    .min(1, "验收条例不能为空")
+    .max(
+      MAX_ACCEPTANCE_CHECKLIST_ITEM_LENGTH,
+      `验收条例不能超过 ${MAX_ACCEPTANCE_CHECKLIST_ITEM_LENGTH} 个字符`,
+    ),
+});
+
+const acceptanceChecklistItemsSchema = z
+  .array(acceptanceChecklistItemSchema)
+  .max(
+    MAX_ACCEPTANCE_CHECKLIST_ITEMS,
+    `验收条例最多 ${MAX_ACCEPTANCE_CHECKLIST_ITEMS} 条`,
+  )
+  .optional();
+
 const dateTimeStringSchema = (message: string) =>
   z.string().min(1, message).refine(
     (value) => !Number.isNaN(new Date(value).getTime()),
@@ -110,6 +132,7 @@ const taskBaseSchema = z.object({
   dueAt: dateTimeStringSchema("请选择截止时间"),
   needsOfflineConfirmation: z.boolean().default(false),
   needsWeeklyReport: z.boolean().default(false),
+  acceptanceChecklistItems: acceptanceChecklistItemsSchema,
 });
 
 export const createTaskSchema = taskBaseSchema.superRefine((value, ctx) => {
@@ -149,6 +172,7 @@ export const approvalSchema = z.object({
   submissionId: z.string().min(1),
   comment: z.string().optional(),
   offlineConfirmed: z.boolean().default(false),
+  checkedChecklistItemIds: z.array(z.string()).optional(),
 });
 
 export const riskSyncSchema = z.object({
