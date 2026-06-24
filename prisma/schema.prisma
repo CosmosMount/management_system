@@ -153,6 +153,7 @@ model Project {
   ownerOpenId   String
   ownerName     String
   allowOwnerSelfApproval Boolean     @default(false)
+  owners        ProjectOwner[]
   stages        ProjectStage[]
   tasks         Task[]
   activityLogs  ProgressActivityLog[]
@@ -161,6 +162,18 @@ model Project {
   archivedAt    DateTime?
   completedAt   DateTime?
   canceledAt    DateTime?
+}
+
+model ProjectOwner {
+  id        String   @id @default(uuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  openId    String
+  name      String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@unique([projectId, openId])
 }
 
 model ProjectStage {

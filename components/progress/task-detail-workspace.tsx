@@ -8,21 +8,31 @@ import {
   ArrowUpRight,
   Archive,
   History,
+  Pencil,
   Play,
 } from "lucide-react";
 import { toast } from "sonner";
 import type {
   ApprovalDecision,
   Importance,
+  ProjectStatus,
   TaskCategory,
   TaskStatus,
   Urgency,
 } from "@prisma/client";
 import { TaskActionsPanel } from "@/components/progress/task-actions-panel";
+import { TaskForm } from "@/components/progress/task-form";
 import { loadMoreTaskActivityLogs } from "@/app/actions/progress/activityLogs";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { updateTaskStatus, archiveTask } from "@/app/actions/progress/updateTask";
 import { getActionErrorMessage } from "@/lib/action-error-message";
 import {
@@ -45,7 +55,8 @@ export type TaskDetailView = {
   assigneeOpenIds: string[];
   projectId: string;
   projectName: string;
-  projectOwnerOpenId: string;
+  projectStatus: ProjectStatus;
+  projectOwnerOpenIds: string[];
   stageId: string | null;
   stageName: string | null;
   team: string;
@@ -101,10 +112,15 @@ export type TaskActivityLogView = {
 
 type Props = {
   task: TaskDetailView;
+  users: UserOption[];
+  stages: StageOption[];
   isAssignee: boolean;
   canApprove: boolean;
   canManage: boolean;
 };
+
+type UserOption = { openId: string; name: string; avatar?: string | null };
+type StageOption = { id: string; name: string };
 
 type ActivityFilter = "ALL" | "STATUS" | "DELIVERY" | "REVIEW" | "WEEKLY" | "RISK";
 type ActivityHistoryState = {
@@ -124,11 +140,19 @@ const activityFilters: Array<{ value: ActivityFilter; label: string }> = [
 
 export function TaskDetailWorkspace({
   task,
+  users,
+  stages,
   isAssignee,
   canApprove,
   canManage,
 }: Props) {
   const projectHref = projectStageHref(task.projectId, task.stageId);
+  const [taskDialogOpen, setTaskDialogOpen] = useState(false);
+  const canEdit =
+    canManage &&
+    task.status !== "ARCHIVED" &&
+    task.projectStatus !== "COMPLETED" &&
+    task.projectStatus !== "CANCELED";
 
   return (
     <main className="mx-auto w-full max-w-[1440px] flex-1 px-4 py-6 sm:px-6 lg:px-8">
@@ -146,6 +170,8 @@ export function TaskDetailWorkspace({
         task={task}
         isAssignee={isAssignee}
         canManage={canManage}
+        canEdit={canEdit}
+        onOpenEdit={() => setTaskDialogOpen(true)}
       />
 
       <div className="mt-6 grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
@@ -167,6 +193,39 @@ export function TaskDetailWorkspace({
 
         <TaskSidePanel task={task} />
       </div>
+
+      <Dialog open={taskDialogOpen} onOpenChange={setTaskDialogOpen}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[760px]">
+          <DialogHeader>
+            <DialogTitle>编辑任务</DialogTitle>
+            <DialogDescription>
+              修改任务基础信息后，系统会通知相关负责人和管理角色。
+            </DialogDescription>
+          </DialogHeader>
+          <TaskForm
+            mode="edit"
+            projectId={task.projectId}
+            users={users}
+            stages={stages}
+            initialTask={{
+              id: task.id,
+              stageId: task.stageId,
+              title: task.title,
+              goal: task.goal,
+              category: task.category,
+              urgency: task.urgency,
+              importance: task.importance,
+              assigneeOpenIds: task.assigneeOpenIds,
+              metrics: task.metrics,
+              dueAt: task.dueAt,
+              needsOfflineConfirmation: task.needsOfflineConfirmation,
+              needsWeeklyReport: task.needsWeeklyReport,
+            }}
+            submitLabel="保存修改"
+            onSaved={() => setTaskDialogOpen(false)}
+          />
+        </DialogContent>
+      </Dialog>
     </main>
   );
 }
@@ -175,10 +234,14 @@ function TaskOverview({
   task,
   isAssignee,
   canManage,
+  canEdit,
+  onOpenEdit,
 }: {
   task: TaskDetailView;
   isAssignee: boolean;
   canManage: boolean;
+  canEdit: boolean;
+  onOpenEdit: () => void;
 }) {
   const canStart = task.status === "TODO" && (isAssignee || canManage);
   const canArchive = task.status === "COMPLETED" && canManage;
@@ -208,7 +271,10 @@ function TaskOverview({
             <OverviewItem label="截止时间" value={formatDateTime(task.dueAt)} />
             <OverviewItem label="所属项目" value={task.projectName} />
             <OverviewItem label="所属阶段" value={task.stageName ?? "无阶段"} />
-            <OverviewItem label="车组/技术组" value={`${task.team} / ${task.techGroup}`} />
+            <OverviewItem
+              label="车组/技术组"
+              value={`${formatScopeItem(task.team)} / ${formatScopeItem(task.techGroup)}`}
+            />
             <OverviewItem
               label="线下确认"
               value={task.needsOfflineConfirmation ? "需要" : "不需要"}
@@ -226,8 +292,14 @@ function TaskOverview({
           )}
         </div>
 
-        {(canStart || canArchive) && (
+        {(canEdit || canStart || canArchive) && (
           <div className="flex shrink-0 flex-wrap gap-2">
+            {canEdit && (
+              <Button type="button" variant="outline" onClick={onOpenEdit}>
+                <Pencil className="h-4 w-4" />
+                编辑任务
+              </Button>
+            )}
             {canStart && <StartTaskButton taskId={task.id} />}
             {canArchive && <ArchiveTaskButton taskId={task.id} />}
           </div>
@@ -581,6 +653,19 @@ function ActivityDetails({
     }
   }
 
+  const changes = Array.isArray(payload.changes)
+    ? payload.changes.filter((change): change is string => typeof change === "string")
+    : [];
+  if (changes.length > 0) {
+    return (
+      <ul className="mt-2 space-y-1 rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+        {changes.map((change, index) => (
+          <li key={`${change}-${index}`}>{change}</li>
+        ))}
+      </ul>
+    );
+  }
+
   if (comment) {
     return (
       <p className="mt-2 rounded-md bg-destructive/5 px-2 py-1 text-xs text-destructive">
@@ -672,7 +757,11 @@ function TaskStatusBadges({ task }: { task: TaskDetailView }) {
 }
 
 function getActivityType(action: string): ActivityFilter {
-  if (action === "task.status_changed" || action === "task.archived") return "STATUS";
+  if (
+    action === "task.status_changed" ||
+    action === "task.updated" ||
+    action === "task.archived"
+  ) return "STATUS";
   if (action === "task.delivery_submitted") return "DELIVERY";
   if (action === "task.approved" || action === "task.rejected") return "REVIEW";
   if (action === "task.weekly_report") return "WEEKLY";
@@ -683,6 +772,7 @@ function getActivityType(action: string): ActivityFilter {
 function activityLabel(action: string): string {
   const labels: Record<string, string> = {
     "task.created": "创建了任务",
+    "task.updated": "更新了任务信息",
     "task.status_changed": "更新了任务状态",
     "task.delivery_submitted": "提交了任务交付",
     "task.approved": "通过了任务验收",
@@ -737,6 +827,10 @@ function formatDate(value: string): string {
 
 function formatDateTime(value: string): string {
   return new Date(value).toLocaleString("zh-CN");
+}
+
+function formatScopeItem(value: string): string {
+  return value || "未指定";
 }
 
 function mergeActivityLogs<T extends { id: string }>(

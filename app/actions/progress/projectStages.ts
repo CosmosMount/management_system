@@ -11,6 +11,7 @@ import {
   getApproverRole,
 } from "@/lib/permissions-progress";
 import { assertProjectActive } from "@/lib/progress-guards";
+import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import { getUserRoles } from "@/lib/permissions";
@@ -29,7 +30,10 @@ export async function submitStageEvidence(input: {
 
   const project = await prisma.project.findUnique({
     where: { id: parsed.projectId },
-    include: { stages: { orderBy: { sortOrder: "asc" } } },
+    include: {
+      owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      stages: { orderBy: { sortOrder: "asc" } },
+    },
   });
   if (!project) throw new Error("项目不存在");
   assertProjectActive(project.status);
@@ -92,7 +96,7 @@ export async function submitStageEvidence(input: {
     stageName: stage.name,
     team: project.team,
     techGroup: project.techGroup,
-    ownerOpenId: project.ownerOpenId,
+    ownerOpenIds: getProjectOwnerOpenIds(project),
     submitterOpenId: user.openId,
     evidenceUrl: parsed.evidenceUrl,
   }, await getNotificationContext()).catch(console.error);
@@ -129,7 +133,16 @@ async function reviewStageSubmission(
   const submission = await prisma.taskSubmission.findUnique({
     where: { id: parsed.submissionId },
     include: {
-      stage: { include: { project: { include: { stages: true } } } },
+      stage: {
+        include: {
+          project: {
+            include: {
+              owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+              stages: true,
+            },
+          },
+        },
+      },
     },
   });
   if (!submission?.stage) throw new Error("阶段提交记录不存在");
@@ -154,7 +167,7 @@ async function reviewStageSubmission(
     !canApproveStage(
       roles,
       { team: project.team, techGroup: project.techGroup },
-      project.ownerOpenId,
+      getProjectOwnerOpenIds(project),
       submission.submittedBy,
       project.allowOwnerSelfApproval,
       user.openId,
@@ -166,7 +179,7 @@ async function reviewStageSubmission(
   const approverRole = getApproverRole(roles, {
     team: project.team,
     techGroup: project.techGroup,
-  }) ?? (user.openId === project.ownerOpenId ? "PROJECT_MANAGER" : null);
+  }) ?? (getProjectOwnerOpenIds(project).includes(user.openId) ? "PROJECT_MANAGER" : null);
   if (!approverRole) throw new Error("无法确定审批角色");
 
   await prisma.$transaction(async (tx) => {

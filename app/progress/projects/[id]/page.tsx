@@ -17,6 +17,10 @@ import {
   getTaskAssigneeNames,
   getTaskAssigneeOpenIds,
 } from "@/lib/progress-assignees";
+import {
+  getProjectOwnerNames,
+  getProjectOwnerOpenIds,
+} from "@/lib/progress-project-owners";
 import { getRecentActivityCutoff } from "@/lib/progress-activity-window";
 import { prisma } from "@/lib/prisma";
 
@@ -32,6 +36,7 @@ export default async function ProjectDetailPage({ params }: Props) {
   const project = await prisma.project.findUnique({
     where: { id },
     include: {
+      owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       stages: {
         orderBy: { sortOrder: "asc" },
         include: {
@@ -59,15 +64,17 @@ export default async function ProjectDetailPage({ params }: Props) {
   if (!project) notFound();
 
   const scope = { team: project.team, techGroup: project.techGroup };
+  const projectOwnerOpenIds = getProjectOwnerOpenIds(project);
   const canManage = canManageProject(
     roles,
     scope,
-    project.ownerOpenId,
+    projectOwnerOpenIds,
     userOpenId,
   );
   const canUpdateLifecycle = canUpdateProjectLifecycle(
     roles,
-    project.ownerOpenId,
+    scope,
+    projectOwnerOpenIds,
     userOpenId,
   );
 
@@ -88,6 +95,9 @@ export default async function ProjectDetailPage({ params }: Props) {
     techGroup: project.techGroup,
     ownerOpenId: project.ownerOpenId,
     ownerName: project.ownerName,
+    ownerOpenIds: projectOwnerOpenIds,
+    ownerNames: getProjectOwnerNames(project),
+    allowOwnerSelfApproval: project.allowOwnerSelfApproval,
     createdAt: project.createdAt.toISOString(),
     updatedAt: project.updatedAt.toISOString(),
     completedAt: project.completedAt?.toISOString() ?? null,
@@ -114,7 +124,7 @@ export default async function ProjectDetailPage({ params }: Props) {
         canApprove: canApproveStagePermission(
           roles,
           scope,
-          project.ownerOpenId,
+          projectOwnerOpenIds,
           submission.submittedBy,
           project.allowOwnerSelfApproval,
           userOpenId,

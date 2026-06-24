@@ -52,7 +52,8 @@ export default async function ArchivePage() {
                     <div>
                       <p className="font-medium">{p.name}</p>
                       <p className="text-sm text-muted-foreground">
-                        {p.team} / {p.techGroup}
+                        {formatScopeItem(p.team)} /{" "}
+                        {formatScopeItem(p.techGroup)}
                         {p.archivedAt &&
                           ` · ${p.archivedAt.toLocaleDateString("zh-CN")}`}
                       </p>
@@ -96,4 +97,8 @@ export default async function ArchivePage() {
       </PageShell>
     </>
   );
+}
+
+function formatScopeItem(value: string): string {
+  return value || "未指定";
 }

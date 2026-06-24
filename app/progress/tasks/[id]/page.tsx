@@ -16,6 +16,7 @@ import {
   getTaskAssigneeNames,
   getTaskAssigneeOpenIds,
 } from "@/lib/progress-assignees";
+import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { getRecentActivityCutoff } from "@/lib/progress-activity-window";
 import { prisma } from "@/lib/prisma";
 
@@ -31,7 +32,12 @@ export default async function TaskDetailPage({ params }: Props) {
   const task = await prisma.task.findUnique({
     where: { id },
     include: {
-      project: true,
+      project: {
+        include: {
+          owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+          stages: { orderBy: { sortOrder: "asc" } },
+        },
+      },
       stage: true,
       assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       submissions: {
@@ -51,6 +57,8 @@ export default async function TaskDetailPage({ params }: Props) {
     where: { taskId: task.id },
   });
 
+  const projectOwnerOpenIds = getProjectOwnerOpenIds(task.project);
+
   const scope = { team: task.team, techGroup: task.techGroup };
   const isAssignee = canSubmitDelivery(
     userOpenId,
@@ -60,9 +68,13 @@ export default async function TaskDetailPage({ params }: Props) {
   const canManage = canManageProject(
     roles,
     scope,
-    task.project.ownerOpenId,
+    projectOwnerOpenIds,
     userOpenId,
   );
+  const users = await prisma.user.findMany({
+    orderBy: { name: "asc" },
+    select: { openId: true, name: true, avatar: true },
+  });
 
   const taskView: TaskDetailView = {
     id: task.id,
@@ -77,7 +89,8 @@ export default async function TaskDetailPage({ params }: Props) {
     assigneeOpenIds: getTaskAssigneeOpenIds(task),
     projectId: task.projectId,
     projectName: task.project.name,
-    projectOwnerOpenId: task.project.ownerOpenId,
+    projectStatus: task.project.status,
+    projectOwnerOpenIds,
     stageId: task.stageId,
     stageName: task.stage?.name ?? null,
     team: task.team,
@@ -129,6 +142,11 @@ export default async function TaskDetailPage({ params }: Props) {
       <PageShell>
         <TaskDetailWorkspace
           task={taskView}
+          users={users}
+          stages={task.project.stages.map((stage) => ({
+            id: stage.id,
+            name: stage.name,
+          }))}
           isAssignee={isAssignee}
           canApprove={canApprove}
           canManage={canManage}

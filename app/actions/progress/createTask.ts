@@ -9,6 +9,7 @@ import { canManageProject } from "@/lib/permissions-progress";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import { getUserRoles } from "@/lib/permissions";
+import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { createTaskSchema, type CreateTaskInput } from "@/lib/validations/progress";
 
 export async function createTask(input: CreateTaskInput) {
@@ -19,7 +20,10 @@ export async function createTask(input: CreateTaskInput) {
   const parsed = createTaskSchema.parse(input);
   const project = await prisma.project.findUnique({
     where: { id: parsed.projectId },
-    include: { stages: true },
+    include: {
+      owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      stages: true,
+    },
   });
   if (!project) throw new Error("项目不存在");
   if (project.status === "COMPLETED") throw new Error("项目已完成");
@@ -29,7 +33,7 @@ export async function createTask(input: CreateTaskInput) {
     !canManageProject(
       roles,
       { team: project.team, techGroup: project.techGroup },
-      project.ownerOpenId,
+      getProjectOwnerOpenIds(project),
       user.openId,
     )
   ) {

@@ -86,7 +86,8 @@ export default async function ProgressHomePage() {
                         <div>
                           <p className="font-medium">{p.name}</p>
                           <p className="text-sm text-muted-foreground">
-                            {p.team} / {p.techGroup} · {p._count.tasks} 个任务
+                            {formatScopeItem(p.team)} /{" "}
+                            {formatScopeItem(p.techGroup)} · {p._count.tasks} 个任务
                           </p>
                         </div>
                         <Badge variant="secondary">
@@ -103,4 +104,8 @@ export default async function ProgressHomePage() {
       </PageShell>
     </>
   );
+}
+
+function formatScopeItem(value: string): string {
+  return value || "未指定";
 }

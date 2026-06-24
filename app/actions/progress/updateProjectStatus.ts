@@ -7,6 +7,7 @@ import { sendProgressNotification } from "@/lib/feishu-progress";
 import { logProgressActivity, requireSessionUser } from "@/lib/progress-activity";
 import { assertProjectTransition } from "@/lib/progress-flow";
 import { canUpdateProjectLifecycle } from "@/lib/permissions-progress";
+import { getProjectOwnerOpenIds, getProjectOwnerNames } from "@/lib/progress-project-owners";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import { getUserRoles } from "@/lib/permissions";
@@ -21,13 +22,23 @@ export async function updateProjectStatus(
 
   const project = await prisma.project.findUnique({
     where: { id: projectId },
-    include: { stages: { orderBy: { sortOrder: "asc" } } },
+    include: {
+      owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      stages: { orderBy: { sortOrder: "asc" } },
+    },
   });
   if (!project) throw new Error("项目不存在");
   if (project.status === "COMPLETED") throw new Error("项目已完成");
   if (project.status === "CANCELED") throw new Error("项目已取消");
 
-  if (!canUpdateProjectLifecycle(roles, project.ownerOpenId, user.openId)) {
+  if (
+    !canUpdateProjectLifecycle(
+      roles,
+      { team: project.team, techGroup: project.techGroup },
+      getProjectOwnerOpenIds(project),
+      user.openId,
+    )
+  ) {
     throw new Error("无权限更新项目状态");
   }
 
@@ -86,8 +97,8 @@ export async function updateProjectStatus(
     projectName: project.name,
     team: project.team,
     techGroup: project.techGroup,
-    ownerOpenId: project.ownerOpenId,
-    ownerName: project.ownerName,
+    ownerOpenIds: getProjectOwnerOpenIds(project),
+    ownerNames: getProjectOwnerNames(project),
   }, await getNotificationContext()).catch(console.error);
 
   revalidatePath(`/progress/projects/${projectId}`);

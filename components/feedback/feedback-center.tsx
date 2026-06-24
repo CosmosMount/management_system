@@ -70,6 +70,14 @@ type Props = {
 };
 
 const statusOptions: FeedbackStatus[] = ["OPEN", "IN_PROGRESS", "CLOSED"];
+type FeedbackFilter = "ACTIVE" | FeedbackStatus | "ALL";
+const filterOptions: Array<{ value: FeedbackFilter; label: string }> = [
+  { value: "ACTIVE", label: "活动" },
+  { value: "OPEN", label: feedbackStatusLabels.OPEN },
+  { value: "IN_PROGRESS", label: feedbackStatusLabels.IN_PROGRESS },
+  { value: "CLOSED", label: feedbackStatusLabels.CLOSED },
+  { value: "ALL", label: "全部" },
+];
 const feedbackImageTypeSet = new Set<string>(FEEDBACK_IMAGE_ALLOWED_TYPES);
 
 type FeedbackImageFiles = {
@@ -414,12 +422,20 @@ export function FeedbackCenter({
   const router = useRouter();
   const searchParams = useSearchParams();
   const newFromUrl = searchParams.get("new") === "1";
+  const selectedFromUrl = searchParams.get("selected");
+  const selectedFromUrlFeedback = selectedFromUrl
+    ? feedbacks.find((feedback) => feedback.id === selectedFromUrl)
+    : undefined;
   const [newOpenState, setNewOpenState] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<FeedbackStatus | "ALL">(
-    "ALL",
+  const [statusFilter, setStatusFilter] = useState<FeedbackFilter>(
+    selectedFromUrlFeedback
+      ? selectedFromUrlFeedback.status === "CLOSED"
+        ? "CLOSED"
+        : "ACTIVE"
+      : "ACTIVE",
   );
   const [selectedId, setSelectedId] = useState(
-    searchParams.get("selected") ?? feedbacks[0]?.id ?? "",
+    selectedFromUrl ?? feedbacks[0]?.id ?? "",
   );
   const [createPending, setCreatePending] = useState(false);
   const [replyPending, setReplyPending] = useState(false);
@@ -448,13 +464,26 @@ export function FeedbackCenter({
     };
   }, []);
 
+  const effectiveStatusFilter =
+    selectedFromUrlFeedback && selectedFromUrl
+      ? selectedFromUrlFeedback.status === "CLOSED"
+        ? "CLOSED"
+        : "ACTIVE"
+      : statusFilter;
+  const effectiveSelectedId = selectedFromUrlFeedback?.id ?? selectedId;
+
   const filteredFeedbacks = useMemo(() => {
-    if (!isSuperAdmin || statusFilter === "ALL") return feedbacks;
-    return feedbacks.filter((feedback) => feedback.status === statusFilter);
-  }, [feedbacks, isSuperAdmin, statusFilter]);
+    if (effectiveStatusFilter === "ALL") return feedbacks;
+    if (effectiveStatusFilter === "ACTIVE") {
+      return feedbacks.filter((feedback) => feedback.status !== "CLOSED");
+    }
+    return feedbacks.filter(
+      (feedback) => feedback.status === effectiveStatusFilter,
+    );
+  }, [effectiveStatusFilter, feedbacks]);
 
   const selectedFeedback =
-    filteredFeedbacks.find((feedback) => feedback.id === selectedId) ??
+    filteredFeedbacks.find((feedback) => feedback.id === effectiveSelectedId) ??
     filteredFeedbacks[0];
   const canReply =
     !!selectedFeedback &&
@@ -476,6 +505,12 @@ export function FeedbackCenter({
   function clearReplyImages() {
     revokeFeedbackImages(replyImageState.files);
     setReplyImageState({ feedbackId: "", files: [] });
+  }
+
+  function handleFilterChange(filter: FeedbackFilter) {
+    clearReplyImages();
+    setStatusFilter(filter);
+    router.replace("/feedback", { scroll: false });
   }
 
   function handleNewOpenChange(open: boolean) {
@@ -501,6 +536,7 @@ export function FeedbackCenter({
       form.reset();
       clearCreateImages();
       setNewOpenState(false);
+      setStatusFilter("ACTIVE");
       setSelectedId(result.id);
       router.push(`/feedback?selected=${result.id}`);
       router.refresh();
@@ -557,29 +593,21 @@ export function FeedbackCenter({
               新反馈
             </Button>
           </div>
-          {isSuperAdmin && (
-            <div className="flex flex-wrap gap-2 pt-2">
-              <Button
-                type="button"
-                size="sm"
-                variant={statusFilter === "ALL" ? "default" : "outline"}
-                onClick={() => setStatusFilter("ALL")}
-              >
-                全部
-              </Button>
-              {statusOptions.map((status) => (
+          <div className="flex flex-wrap gap-2 pt-2">
+            {filterOptions.map((option) => (
                 <Button
-                  key={status}
+                  key={option.value}
                   type="button"
-                  size="sm"
-                  variant={statusFilter === status ? "default" : "outline"}
-                  onClick={() => setStatusFilter(status)}
-                >
-                  {feedbackStatusLabels[status]}
+	                  size="sm"
+	                  variant={
+	                    effectiveStatusFilter === option.value ? "default" : "outline"
+	                  }
+	                  onClick={() => handleFilterChange(option.value)}
+	                >
+                  {option.label}
                 </Button>
               ))}
-            </div>
-          )}
+          </div>
         </CardHeader>
         <CardContent className="min-h-0 flex-1 overflow-y-auto p-0 [scrollbar-gutter:stable]">
           {filteredFeedbacks.length === 0 ? (

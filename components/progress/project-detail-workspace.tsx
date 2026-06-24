@@ -19,6 +19,7 @@ import {
   Search,
   XCircle,
   ArrowUpRight,
+  Pencil,
 } from "lucide-react";
 import { toast } from "sonner";
 import type {
@@ -38,6 +39,7 @@ import {
 import { loadMoreProjectActivityLogs } from "@/app/actions/progress/activityLogs";
 import { updateProjectStatus } from "@/app/actions/progress/updateProjectStatus";
 import { updateTaskStatus } from "@/app/actions/progress/updateTask";
+import { ProjectForm } from "@/components/progress/project-form";
 import { TaskForm } from "@/components/progress/task-form";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -86,6 +88,9 @@ export type ProjectDetailView = {
   techGroup: string;
   ownerOpenId: string;
   ownerName: string;
+  ownerOpenIds: string[];
+  ownerNames: string;
+  allowOwnerSelfApproval: boolean;
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
@@ -225,6 +230,7 @@ export function ProjectDetailWorkspace({
     unfinished: false,
   });
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
+  const [projectDialogOpen, setProjectDialogOpen] = useState(false);
 
   const selectedStage =
     project.stages.find((stage) => stage.id === selectedStageId) ??
@@ -289,6 +295,8 @@ export function ProjectDetailWorkspace({
         currentStage={currentStage}
         allStagesCompleted={allStagesCompleted}
         canUpdateLifecycle={canUpdateLifecycle}
+        canEdit={canManage && project.status !== "COMPLETED" && project.status !== "CANCELED"}
+        onOpenEdit={() => setProjectDialogOpen(true)}
       />
 
       <div className="mt-6 grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
@@ -393,6 +401,32 @@ export function ProjectDetailWorkspace({
           )}
         </DialogContent>
       </Dialog>
+
+      <Dialog open={projectDialogOpen} onOpenChange={setProjectDialogOpen}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[760px]">
+          <DialogHeader>
+            <DialogTitle>编辑项目</DialogTitle>
+            <DialogDescription>
+              本次只编辑项目基础信息；阶段结构保持不变。
+            </DialogDescription>
+          </DialogHeader>
+          <ProjectForm
+            mode="edit"
+            users={users}
+            initialProject={{
+              id: project.id,
+              name: project.name,
+              description: project.description,
+              team: project.team,
+              techGroup: project.techGroup,
+              ownerOpenIds: project.ownerOpenIds,
+              allowOwnerSelfApproval: project.allowOwnerSelfApproval,
+            }}
+            submitLabel="保存修改"
+            onSaved={() => setProjectDialogOpen(false)}
+          />
+        </DialogContent>
+      </Dialog>
     </main>
   );
 }
@@ -402,11 +436,15 @@ function ProjectOverview({
   currentStage,
   allStagesCompleted,
   canUpdateLifecycle,
+  canEdit,
+  onOpenEdit,
 }: {
   project: ProjectDetailView;
   currentStage: StageView | null;
   allStagesCompleted: boolean;
   canUpdateLifecycle: boolean;
+  canEdit: boolean;
+  onOpenEdit: () => void;
 }) {
   const router = useRouter();
   const [loadingStatus, setLoadingStatus] = useState<ProjectStatus | null>(null);
@@ -452,8 +490,8 @@ function ProjectOverview({
               {project.name}
             </h1>
             <Badge>{projectStatusLabels[project.status]}</Badge>
-            <Badge variant="outline">{project.team}</Badge>
-            <Badge variant="outline">{project.techGroup}</Badge>
+            <Badge variant="outline">{formatScopeItem(project.team)}</Badge>
+            <Badge variant="outline">{formatScopeItem(project.techGroup)}</Badge>
           </div>
           {project.description && (
             <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
@@ -461,7 +499,7 @@ function ProjectOverview({
             </p>
           )}
           <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
-            <OverviewItem label="负责人" value={project.ownerName} />
+            <OverviewItem label="负责人" value={project.ownerNames} />
             <OverviewItem label="当前阶段" value={currentStage?.name ?? "未配置"} />
             <OverviewItem
               label="项目截止"
@@ -474,8 +512,14 @@ function ProjectOverview({
           </dl>
         </div>
 
-        {canUpdateLifecycle && (
+        {(canEdit || canUpdateLifecycle) && (
           <div className="flex shrink-0 flex-wrap gap-2">
+            {canEdit && (
+              <Button type="button" variant="outline" onClick={onOpenEdit}>
+                <Pencil className="h-4 w-4" />
+                编辑项目
+              </Button>
+            )}
             {project.status === "NOT_STARTED" && (
               <Button
                 type="button"
@@ -1293,6 +1337,7 @@ function ActivityItem({
       {stage && (
         <p className="mt-1 text-xs text-muted-foreground">阶段：{stage.name}</p>
       )}
+      <ActivityChangeList payload={payload} />
       <div className="mt-3 flex flex-wrap gap-2">
         {stage && (
           <Button
@@ -1337,6 +1382,20 @@ function FilterToggle({
       <Filter className="h-3 w-3" />
       {children}
     </Button>
+  );
+}
+
+function ActivityChangeList({ payload }: { payload: Record<string, unknown> }) {
+  const changes = Array.isArray(payload.changes)
+    ? payload.changes.filter((change): change is string => typeof change === "string")
+    : [];
+  if (changes.length === 0) return null;
+  return (
+    <ul className="mt-2 space-y-1 rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+      {changes.map((change, index) => (
+        <li key={`${change}-${index}`}>{change}</li>
+      ))}
+    </ul>
   );
 }
 
@@ -1495,11 +1554,13 @@ function getActivityTargetLabel(
 function activityLabel(action: string): string {
   const labels: Record<string, string> = {
     "project.created": "创建了项目",
+    "project.updated": "更新了项目信息",
     "project.status_changed": "更新了项目状态",
     "stage.evidence_submitted": "提交了阶段材料",
     "stage.approved": "通过了阶段审核",
     "stage.rejected": "驳回了阶段审核",
     "task.created": "创建了任务",
+    "task.updated": "更新了任务信息",
     "task.status_changed": "更新了任务状态",
     "task.delivery_submitted": "提交了任务交付",
     "task.approved": "通过了任务验收",
@@ -1522,6 +1583,10 @@ function formatDateTime(value: string): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function formatScopeItem(value: string): string {
+  return value || "未指定";
 }
 
 function mergeActivityLogs<T extends { id: string }>(

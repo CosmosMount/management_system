@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { createTask } from "@/app/actions/progress/createTask";
+import { updateTask } from "@/app/actions/progress/updateTask";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -21,6 +22,7 @@ import { getActionErrorMessage } from "@/lib/action-error-message";
 import {
   createTaskSchema,
   type CreateTaskInput,
+  updateTaskSchema,
 } from "@/lib/validations/progress";
 import {
   taskCategoryLabels,
@@ -30,15 +32,32 @@ import {
 
 type UserOption = { openId: string; name: string; avatar?: string | null };
 type StageOption = { id: string; name: string };
+type TaskFormValues = CreateTaskInput & { taskId?: string };
 
 type Props = {
   projectId: string;
   users: UserOption[];
   stages?: StageOption[];
   defaultStageId?: string;
+  mode?: "create" | "edit";
+  initialTask?: {
+    id: string;
+    stageId: string | null;
+    title: string;
+    goal: string;
+    category: CreateTaskInput["category"];
+    urgency: CreateTaskInput["urgency"];
+    importance: CreateTaskInput["importance"];
+    assigneeOpenIds: string[];
+    metrics: string;
+    dueAt: string;
+    needsOfflineConfirmation: boolean;
+    needsWeeklyReport: boolean;
+  };
   redirectOnCreate?: boolean;
   submitLabel?: string;
   onCreated?: (taskId: string) => void;
+  onSaved?: () => void;
 };
 
 export function TaskForm({
@@ -46,43 +65,70 @@ export function TaskForm({
   users,
   stages = [],
   defaultStageId = "",
+  mode = "create",
+  initialTask,
   redirectOnCreate = true,
   submitLabel = "创建任务",
   onCreated,
+  onSaved,
 }: Props) {
   const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
+  const editing = mode === "edit";
 
-  const form = useForm<CreateTaskInput>({
-    resolver: zodResolver(createTaskSchema),
+  const form = useForm<TaskFormValues>({
+    resolver: zodResolver(editing ? updateTaskSchema : createTaskSchema),
     defaultValues: {
+      taskId: initialTask?.id,
       projectId,
-      stageId: defaultStageId,
-      title: "",
-      goal: "",
-      category: "RND",
-      urgency: "MEDIUM",
-      importance: "MEDIUM",
-      assigneeOpenIds: [],
-      metrics: "",
-      dueAt: "",
-      needsOfflineConfirmation: false,
-      needsWeeklyReport: false,
+      stageId: initialTask?.stageId ?? defaultStageId,
+      title: initialTask?.title ?? "",
+      goal: initialTask?.goal ?? "",
+      category: initialTask?.category ?? "RND",
+      urgency: initialTask?.urgency ?? "MEDIUM",
+      importance: initialTask?.importance ?? "MEDIUM",
+      assigneeOpenIds: initialTask?.assigneeOpenIds ?? [],
+      metrics: initialTask?.metrics ?? "",
+      dueAt: initialTask ? toDatetimeLocal(initialTask.dueAt) : "",
+      needsOfflineConfirmation:
+        initialTask?.needsOfflineConfirmation ?? false,
+      needsWeeklyReport: initialTask?.needsWeeklyReport ?? false,
     },
   });
 
-  async function onSubmit(data: CreateTaskInput) {
+  async function onSubmit(data: TaskFormValues) {
     setSubmitting(true);
     try {
-      const task = await createTask(data);
-      toast.success("任务已创建");
-      if (redirectOnCreate) {
-        router.push(`/progress/tasks/${task.id}`);
+      if (editing) {
+        await updateTask({
+          taskId: data.taskId ?? "",
+          projectId: data.projectId,
+          stageId: data.stageId,
+          title: data.title,
+          goal: data.goal,
+          category: data.category,
+          urgency: data.urgency,
+          importance: data.importance,
+          assigneeOpenId: data.assigneeOpenId,
+          assigneeOpenIds: data.assigneeOpenIds,
+          metrics: data.metrics,
+          dueAt: data.dueAt,
+          needsOfflineConfirmation: data.needsOfflineConfirmation,
+          needsWeeklyReport: data.needsWeeklyReport,
+        });
+        toast.success("任务已更新");
+        onSaved?.();
+      } else {
+        const task = await createTask(data);
+        toast.success("任务已创建");
+        if (redirectOnCreate) {
+          router.push(`/progress/tasks/${task.id}`);
+        }
+        onCreated?.(task.id);
       }
-      onCreated?.(task.id);
       router.refresh();
     } catch (err) {
-      toast.error(getActionErrorMessage(err, "创建失败"));
+      toast.error(getActionErrorMessage(err, editing ? "更新失败" : "创建失败"));
     } finally {
       setSubmitting(false);
     }
@@ -257,8 +303,15 @@ export function TaskForm({
         </label>
       </div>
       <Button type="submit" disabled={submitting}>
-        {submitLabel}
+        {editing ? (submitLabel ?? "保存修改") : submitLabel}
       </Button>
     </form>
   );
+}
+
+function toDatetimeLocal(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const offsetMs = date.getTimezoneOffset() * 60 * 1000;
+  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
 }

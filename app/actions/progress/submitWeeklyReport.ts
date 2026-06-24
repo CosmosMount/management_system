@@ -8,6 +8,7 @@ import { prisma } from "@/lib/prisma";
 import { sendProgressNotification } from "@/lib/feishu-progress";
 import { assertProjectActive } from "@/lib/progress-guards";
 import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
+import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { getNotificationContext } from "@/lib/request-origin";
 import { riskSyncSchema, submitWeeklyReportSchema } from "@/lib/validations/progress";
 
@@ -33,7 +34,14 @@ export async function submitWeeklyReport(input: {
 
   const task = await prisma.task.findUnique({
     where: { id: parsed.taskId },
-    include: { project: true, assignees: true },
+    include: {
+      project: {
+        include: {
+          owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        },
+      },
+      assignees: true,
+    },
   });
   if (!task) throw new Error("任务不存在");
   assertProjectActive(task.project.status);
@@ -92,7 +100,14 @@ export async function syncTaskRisk(input: { taskId: string; riskNote: string }) 
 
   const task = await prisma.task.findUnique({
     where: { id: parsed.taskId },
-    include: { project: true, assignees: true },
+    include: {
+      project: {
+        include: {
+          owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        },
+      },
+      assignees: true,
+    },
   });
   if (!task) throw new Error("任务不存在");
   assertProjectActive(task.project.status);
@@ -125,7 +140,7 @@ export async function syncTaskRisk(input: { taskId: string; riskNote: string }) 
     team: task.team,
     techGroup: task.techGroup,
     assigneeOpenIds: getTaskAssigneeOpenIds(task),
-    projectOwnerOpenId: task.project.ownerOpenId,
+    projectOwnerOpenIds: getProjectOwnerOpenIds(task.project),
     riskNote: parsed.riskNote,
   }, await getNotificationContext()).catch(console.error);
 
