@@ -6,7 +6,6 @@ import { useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   AlertCircle,
-  ArrowLeft,
   Check,
   CheckCircle2,
   Circle,
@@ -39,7 +38,9 @@ import {
 import { loadMoreProjectActivityLogs } from "@/app/actions/progress/activityLogs";
 import { updateProjectStatus } from "@/app/actions/progress/updateProjectStatus";
 import { updateTaskStatus } from "@/app/actions/progress/updateTask";
+import { BackLink } from "@/components/back-link";
 import { ProjectForm } from "@/components/progress/project-form";
+import { ArchivedProjectDeleteButton } from "@/components/admin-delete-actions";
 import { TaskForm } from "@/components/progress/task-form";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -70,6 +71,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { getActionErrorMessage } from "@/lib/action-error-message";
 import { cn } from "@/lib/utils";
+import { routes } from "@/lib/routes";
 import {
   importanceLabels,
   projectStatusLabels,
@@ -170,6 +172,7 @@ type Props = {
   users: UserOption[];
   canManage: boolean;
   canUpdateLifecycle: boolean;
+  isSuperAdmin?: boolean;
   userOpenId?: string;
 };
 
@@ -211,6 +214,7 @@ export function ProjectDetailWorkspace({
   users,
   canManage,
   canUpdateLifecycle,
+  isSuperAdmin = false,
   userOpenId,
 }: Props) {
   const router = useRouter();
@@ -280,15 +284,7 @@ export function ProjectDetailWorkspace({
 
   return (
     <main className="mx-auto w-full max-w-[1440px] flex-1 px-4 py-6 sm:px-6 lg:px-8">
-      <div className="mb-4">
-        <Link
-          href="/progress"
-          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          返回进度管理
-        </Link>
-      </div>
+      <BackLink href={routes.progress.root} label="返回进度管理" />
 
       <ProjectOverview
         project={project}
@@ -296,6 +292,7 @@ export function ProjectDetailWorkspace({
         allStagesCompleted={allStagesCompleted}
         canUpdateLifecycle={canUpdateLifecycle}
         canEdit={canManage && project.status !== "COMPLETED" && project.status !== "CANCELED"}
+        isSuperAdmin={isSuperAdmin}
         onOpenEdit={() => setProjectDialogOpen(true)}
       />
 
@@ -437,6 +434,7 @@ function ProjectOverview({
   allStagesCompleted,
   canUpdateLifecycle,
   canEdit,
+  isSuperAdmin,
   onOpenEdit,
 }: {
   project: ProjectDetailView;
@@ -444,6 +442,7 @@ function ProjectOverview({
   allStagesCompleted: boolean;
   canUpdateLifecycle: boolean;
   canEdit: boolean;
+  isSuperAdmin: boolean;
   onOpenEdit: () => void;
 }) {
   const router = useRouter();
@@ -512,7 +511,7 @@ function ProjectOverview({
           </dl>
         </div>
 
-        {(canEdit || canUpdateLifecycle) && (
+        {(canEdit || canUpdateLifecycle || isSuperAdmin) && (
           <div className="flex shrink-0 flex-wrap gap-2">
             {canEdit && (
               <Button type="button" variant="outline" onClick={onOpenEdit}>
@@ -553,6 +552,11 @@ function ProjectOverview({
                 取消项目
               </Button>
             )}
+            <ArchivedProjectDeleteButton
+              projectId={project.id}
+              status={project.status}
+              isSuperAdmin={isSuperAdmin}
+            />
           </div>
         )}
       </CardContent>
@@ -1090,7 +1094,7 @@ function TaskTableRow({
     <TableRow>
       <TableCell className="whitespace-normal">
         <Link
-          href={`/progress/tasks/${task.id}`}
+          href={`${routes.progress.task(task.id)}`}
           className="font-medium text-primary hover:underline"
         >
           {task.title}
@@ -1123,7 +1127,7 @@ function TaskMobileCard({ task, canStart }: { task: TaskView; canStart: boolean 
     <div className="rounded-md border p-3">
       <div className="flex items-start justify-between gap-3">
         <Link
-          href={`/progress/tasks/${task.id}`}
+          href={`${routes.progress.task(task.id)}`}
           className="font-medium text-primary hover:underline"
         >
           {task.title}
@@ -1351,7 +1355,7 @@ function ActivityItem({
         )}
         {task && (
           <Link
-            href={`/progress/tasks/${task.id}`}
+            href={`${routes.progress.task(task.id)}`}
             className={buttonVariants({ size: "xs", variant: "outline" })}
           >
             打开任务

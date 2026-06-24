@@ -1,4 +1,5 @@
 import type { OrderStatus } from "@prisma/client";
+import { routes } from "@/lib/routes";
 
 export type ChartSlice = {
   label: string;
@@ -147,7 +148,7 @@ export function buildDashboardChartsData(
         label: order.orderNo,
         sublabel: `${statusLabels[order.status]} · ${order.initiatorName}`,
         value: daysSince(order.statusEnteredAt),
-        href: `/orders/${order.id}?focus=${focus}&from=notify#${focus}`,
+        href: `${routes.procurement.detail(order.id)}?focus=${focus}&from=notify#${focus}`,
       };
     });
 

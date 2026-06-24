@@ -9,6 +9,7 @@ import {
   statusLabels,
 } from "@/lib/permissions-client";
 import crypto from "crypto";
+import { routes } from "@/lib/routes";
 
 const WEBHOOK_URL = process.env.FEISHU_WEBHOOK_URL;
 const WEBHOOK_SECRET = process.env.FEISHU_WEBHOOK_SECRET;
@@ -73,7 +74,7 @@ function buildDetailUrl(
   focus?: CardOptions["detailFocus"],
   appOrigin?: string | null,
 ) {
-  const base = buildAppUrl(`/orders/${orderId}`, appOrigin);
+  const base = buildAppUrl(`${routes.procurement.detail(orderId)}`, appOrigin);
   const notify = "from=notify";
   if (focus === "approval") return `${base}?focus=approval&${notify}#approval`;
   if (focus === "upload") return `${base}?focus=upload&${notify}#upload`;
@@ -155,7 +156,7 @@ function buildOrderCard(order: OrderCardPayload, options: CardOptions = {}) {
           {
             tag: "button",
             text: { tag: "plain_text", content: "订单列表" },
-            url: buildAppUrl("/orders", options.appOrigin),
+            url: buildAppUrl(routes.procurement.list, options.appOrigin),
             type: "default",
           },
         ],
@@ -459,7 +460,7 @@ export async function sendFeishuDailySummary(
             {
               tag: "button",
               text: { tag: "plain_text", content: "打开系统" },
-              url: buildAppUrl("/orders", context?.appOrigin),
+              url: buildAppUrl(routes.procurement.list, context?.appOrigin),
               type: "default",
             },
           ],

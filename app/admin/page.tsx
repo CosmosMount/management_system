@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { AppHeader } from "@/components/app-header";
 import { AdminPanel } from "@/components/admin-panel";
+import { BackLink } from "@/components/back-link";
 import { PageShell } from "@/components/page-shell";
 import { PageTitle } from "@/components/page-title";
 import { auth } from "@/lib/auth";
@@ -26,6 +27,7 @@ export default async function AdminPage() {
       <AppHeader />
       <PageShell>
         <main className="mx-auto max-w-6xl flex-1 p-4 py-8">
+          <BackLink href="/" label="返回首页" />
           <PageTitle subtitle="权限管理" />
           <AdminPanel
             users={users.map((u) => ({

@@ -86,6 +86,14 @@ function detectFeedbackImage(buffer: Buffer): DetectedFeedbackImage | null {
   return null;
 }
 
+export async function saveItemReferenceImage(
+  orderId: string,
+  index: number,
+  file: File,
+): Promise<string> {
+  return saveUpload(orderId, file, `item-ref-${index}`, uploadTypeSets.itemPhoto);
+}
+
 export async function saveUpload(
   orderId: string,
   file: File,
@@ -172,6 +180,11 @@ export async function removeFeedbackUpload(publicPath: string): Promise<void> {
     publicPath.replace(/^\/+/, ""),
   );
   await rm(fullPath, { force: true });
+}
+
+export async function removeOrderUploads(orderId: string): Promise<void> {
+  const dir = path.join(process.cwd(), "public", "uploads", orderId);
+  await rm(dir, { recursive: true, force: true });
 }
 
 export const uploadTypeSets = {

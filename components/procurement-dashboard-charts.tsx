@@ -32,7 +32,7 @@ function DonutChart({
   const total = slices.reduce((s, x) => s + x.value, 0);
   if (total <= 0) {
     return (
-      <p className="flex h-44 items-center justify-center text-sm text-muted-foreground">
+      <p className="flex min-h-44 flex-1 items-center justify-center text-sm text-muted-foreground">
         {emptyLabel}
       </p>
     );
@@ -92,7 +92,7 @@ function HorizontalBarChart({
 }) {
   if (rows.length === 0) {
     return (
-      <p className="flex h-44 items-center justify-center text-sm text-muted-foreground">
+      <p className="flex min-h-44 flex-1 items-center justify-center text-sm text-muted-foreground">
         {emptyLabel}
       </p>
     );
@@ -144,7 +144,7 @@ function HorizontalBarChart({
 export function ProcurementDashboardCharts({ data }: Props) {
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2">
         <Card>
           <CardHeader className="pb-2">
             <CardDescription>已完成支出</CardDescription>
@@ -161,13 +161,13 @@ export function ProcurementDashboardCharts({ data }: Props) {
         </Card>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card>
+      <div className="grid gap-4 md:grid-cols-2">
+        <Card className="flex h-full flex-col">
           <CardHeader>
             <CardTitle className="text-base">车组支出占比</CardTitle>
             <CardDescription>已完成报销订单，按车组汇总</CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="flex min-h-52 flex-1 flex-col">
             <DonutChart
               slices={data.teamSpending}
               emptyLabel="暂无已完成订单"
@@ -175,12 +175,12 @@ export function ProcurementDashboardCharts({ data }: Props) {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="flex h-full flex-col">
           <CardHeader>
             <CardTitle className="text-base">在途状态分布</CardTitle>
             <CardDescription>未完结订单各环节数量</CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="flex min-h-52 flex-1 flex-col">
             <DonutChart
               slices={data.statusDistribution}
               emptyLabel="暂无在途订单"
@@ -188,12 +188,12 @@ export function ProcurementDashboardCharts({ data }: Props) {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="flex h-full flex-col">
           <CardHeader>
             <CardTitle className="text-base">采购人支出排行</CardTitle>
             <CardDescription>已完成订单金额 Top 8</CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="flex min-h-52 flex-1 flex-col">
             <HorizontalBarChart
               rows={data.initiatorRanking}
               valueFormatter={formatMoney}
@@ -202,12 +202,12 @@ export function ProcurementDashboardCharts({ data }: Props) {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="flex h-full flex-col">
           <CardHeader>
             <CardTitle className="text-base">处理拖延排行</CardTitle>
             <CardDescription>当前环节停留天数 Top 8（越久越靠前）</CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="flex min-h-52 flex-1 flex-col">
             <HorizontalBarChart
               rows={data.delayRanking}
               valueFormatter={(d) => `${d} 天`}

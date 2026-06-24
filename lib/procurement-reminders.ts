@@ -5,6 +5,7 @@ import { getOpenIdsByRole } from "@/lib/permissions";
 import { buildAppUrl, type NotificationContext } from "@/lib/app-origin";
 import { prisma } from "@/lib/prisma";
 import { statusApproverRole, statusLabels } from "@/lib/permissions-client";
+import { routes } from "@/lib/routes";
 
 const REMINDER_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
@@ -43,7 +44,7 @@ function orderDetailUrl(
       : status === "PENDING_APPLICANT_CONFIRM"
         ? "confirm"
         : "approval";
-  return `${buildAppUrl(`/orders/${orderId}`, appOrigin)}?focus=${focus}&from=notify#${focus}`;
+  return `${buildAppUrl(`${routes.procurement.detail(orderId)}`, appOrigin)}?focus=${focus}&from=notify#${focus}`;
 }
 
 function toCardPayload(order: {

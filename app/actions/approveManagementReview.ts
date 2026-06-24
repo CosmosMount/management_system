@@ -7,11 +7,13 @@ import { sendOrderNotification, mapOrderItems } from "@/lib/feishu";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
+import { routes } from "@/lib/routes";
 import {
   canApproveTeamManagement,
   canApproveTechGroupManagement,
   getUserRoles,
 } from "@/lib/permissions";
+import { requireApproverSignature } from "@/lib/user-signature";
 
 export async function approveManagementReview(orderId: string) {
   const session = await auth();
@@ -44,6 +46,8 @@ export async function approveManagementReview(orderId: string) {
     throw new Error("无操作权限或已审核");
   }
 
+  await requireApproverSignature(session.user.openId);
+
   const teamApproved = order.teamApproved || canTeam;
   const techGroupApproved = order.techGroupApproved || canTech;
 
@@ -74,7 +78,7 @@ export async function approveManagementReview(orderId: string) {
     });
   }
 
-  revalidatePath("/orders");
-  revalidatePath(`/orders/${orderId}`);
+  revalidatePath(routes.procurement.list);
+  revalidatePath(`${routes.procurement.detail(orderId)}`);
   return updated;
 }

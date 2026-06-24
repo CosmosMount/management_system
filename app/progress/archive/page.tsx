@@ -1,18 +1,21 @@
-import Link from "next/link";
 import { AppHeader } from "@/components/app-header";
+import { ArchivedProjectList, ArchivedTaskList } from "@/components/progress/archive-record-lists";
+import { ProgressBackLink } from "@/components/progress/progress-back-link";
 import { ProgressPageLayout } from "@/components/progress/progress-page-layout";
 import { PageShell } from "@/components/page-shell";
 import { PageTitle } from "@/components/page-title";
-import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  projectStatusLabels,
-  taskStatusLabels,
-} from "@/lib/progress-labels";
+import { auth } from "@/lib/auth";
 import { getTaskAssigneeNames } from "@/lib/progress-assignees";
+import { isSuperAdmin } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 
 export default async function ArchivePage() {
+  const session = await auth();
+  const admin = session?.user?.openId
+    ? await isSuperAdmin(session.user.openId)
+    : false;
+
   const [projects, tasks] = await Promise.all([
     prisma.project.findMany({
       where: { status: { in: ["COMPLETED", "CANCELED"] } },
@@ -28,40 +31,42 @@ export default async function ArchivePage() {
     }),
   ]);
 
+  const projectRows = projects.map((project) => ({
+    id: project.id,
+    name: project.name,
+    team: project.team,
+    techGroup: project.techGroup,
+    status: project.status,
+    archivedAtLabel: project.archivedAt
+      ? project.archivedAt.toLocaleDateString("zh-CN")
+      : null,
+  }));
+
+  const taskRows = tasks.map((task) => ({
+    id: task.id,
+    title: task.title,
+    projectName: task.project.name,
+    assigneeNames: getTaskAssigneeNames(task),
+    status: task.status,
+  }));
+
   return (
     <>
       <AppHeader />
       <PageShell>
         <ProgressPageLayout className="space-y-8">
+          <ProgressBackLink />
           <PageTitle subtitle="归档检索" />
 
           <Card>
             <CardHeader>
               <CardTitle>已结束项目 ({projects.length})</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-2">
-              {projects.length === 0 ? (
-                <p className="text-muted-foreground">暂无</p>
-              ) : (
-                projects.map((p) => (
-                  <Link
-                    key={p.id}
-                    href={`/progress/projects/${p.id}`}
-                    className="flex items-center justify-between rounded border p-3 hover:border-primary/30"
-                  >
-                    <div>
-                      <p className="font-medium">{p.name}</p>
-                      <p className="text-sm text-muted-foreground">
-                        {formatScopeItem(p.team)} /{" "}
-                        {formatScopeItem(p.techGroup)}
-                        {p.archivedAt &&
-                          ` · ${p.archivedAt.toLocaleDateString("zh-CN")}`}
-                      </p>
-                    </div>
-                    <Badge>{projectStatusLabels[p.status]}</Badge>
-                  </Link>
-                ))
-              )}
+            <CardContent>
+              <ArchivedProjectList
+                projects={projectRows}
+                isSuperAdmin={admin}
+              />
             </CardContent>
           </Card>
 
@@ -69,36 +74,12 @@ export default async function ArchivePage() {
             <CardHeader>
               <CardTitle>已归档任务 ({tasks.length})</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-2">
-              {tasks.length === 0 ? (
-                <p className="text-muted-foreground">暂无</p>
-              ) : (
-                tasks.map((t) => (
-                  <Link
-                    key={t.id}
-                    href={`/progress/tasks/${t.id}`}
-                    className="flex items-center justify-between rounded border p-3 hover:border-primary/30"
-                  >
-                    <div>
-                      <p className="font-medium">{t.title}</p>
-                      <p className="text-sm text-muted-foreground">
-                        {t.project.name} · {getTaskAssigneeNames(t)}
-                      </p>
-                    </div>
-                    <Badge variant="secondary">
-                      {taskStatusLabels[t.status]}
-                    </Badge>
-                  </Link>
-                ))
-              )}
+            <CardContent>
+              <ArchivedTaskList tasks={taskRows} isSuperAdmin={admin} />
             </CardContent>
           </Card>
         </ProgressPageLayout>
       </PageShell>
     </>
   );
-}
-
-function formatScopeItem(value: string): string {
-  return value || "未指定";
 }

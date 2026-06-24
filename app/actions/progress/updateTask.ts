@@ -19,6 +19,7 @@ import {
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { prisma } from "@/lib/prisma";
 import { getUserRoles } from "@/lib/permissions";
+import { routes } from "@/lib/routes";
 import {
   updateTaskSchema,
   type UpdateTaskInput,
@@ -81,9 +82,9 @@ export async function updateTaskStatus(taskId: string, status: TaskStatus) {
     payload: { from: task.status, to: status },
   });
 
-  revalidatePath(`/progress/tasks/${taskId}`);
-  revalidatePath(`/progress/projects/${task.projectId}`);
-  revalidatePath("/progress/kanban");
+  revalidatePath(`${routes.progress.task(taskId)}`);
+  revalidatePath(`${routes.progress.project(task.projectId)}`);
+  revalidatePath(routes.progress.dashboard);
   return updated;
 }
 
@@ -132,9 +133,9 @@ export async function archiveTask(taskId: string) {
     actorName: user.name,
   });
 
-  revalidatePath(`/progress/tasks/${taskId}`);
-  revalidatePath("/progress/archive");
-  revalidatePath("/progress/kanban");
+  revalidatePath(`${routes.progress.task(taskId)}`);
+  revalidatePath(routes.progress.archive);
+  revalidatePath(routes.progress.dashboard);
   return updated;
 }
 
@@ -317,9 +318,9 @@ export async function updateTask(input: UpdateTaskInput) {
     ).catch(console.error);
   }
 
-  revalidatePath(`/progress/tasks/${task.id}`);
-  revalidatePath(`/progress/projects/${task.projectId}`);
-  revalidatePath("/progress/kanban");
+  revalidatePath(`${routes.progress.task(task.id)}`);
+  revalidatePath(`${routes.progress.project(task.projectId)}`);
+  revalidatePath(routes.progress.dashboard);
   return updated;
 }
 

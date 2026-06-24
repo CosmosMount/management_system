@@ -11,6 +11,7 @@ import {
   getUserRoles,
 } from "@/lib/permissions";
 import { OrderStatus } from "@prisma/client";
+import { routes } from "@/lib/routes";
 
 const inputSchema = z.object({
   orderId: z.string().min(1),
@@ -88,8 +89,8 @@ export async function rejectProcurementOrder(input: {
     console.error("[rejectProcurementOrder] 飞书通知失败:", err);
   });
 
-  revalidatePath("/orders");
-  revalidatePath(`/orders/${orderId}`);
-  revalidatePath("/dashboard");
+  revalidatePath(routes.procurement.list);
+  revalidatePath(`${routes.procurement.detail(orderId)}`);
+  revalidatePath(routes.procurement.dashboard);
   return updated;
 }

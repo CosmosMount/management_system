@@ -7,6 +7,7 @@ import { approveManagementReview } from "@/app/actions/approveManagementReview";
 import { rejectProcurementOrder } from "@/app/actions/rejectOrder";
 import { updateOrderStatus } from "@/app/actions/updateOrderStatus";
 import { ReasonConfirmDialog } from "@/components/reason-confirm-dialog";
+import { SignatureRequiredDialog } from "@/components/signature-required-dialog";
 import { Button } from "@/components/ui/button";
 import { OrderStatus } from "@prisma/client";
 import {
@@ -15,6 +16,7 @@ import {
   canApproveTechGroupManagement,
   canRejectProcurement,
   getStatusTransition,
+  needsSignatureForProcurementApproval,
   roleLabels,
   type ManagementApprovalState,
   type OrderScope,
@@ -27,6 +29,7 @@ type Props = {
   order: OrderScope;
   userRoles: UserRoleRecord[];
   managementState: ManagementApprovalState;
+  hasSignature: boolean;
 };
 
 export function OrderActions({
@@ -35,12 +38,28 @@ export function OrderActions({
   order,
   userRoles,
   managementState,
+  hasSignature,
 }: Props) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [loading, setLoading] = useState(false);
+  const [signatureDialogOpen, setSignatureDialogOpen] = useState(false);
 
   const canReject = canRejectProcurement(status, userRoles, order);
+  const signatureRequired = needsSignatureForProcurementApproval(
+    status,
+    userRoles,
+    order,
+    managementState,
+  );
+
+  function guardApprove(action: () => void) {
+    if (signatureRequired && !hasSignature) {
+      setSignatureDialogOpen(true);
+      return;
+    }
+    action();
+  }
 
   if (status === OrderStatus.MANAGEMENT_REVIEW) {
     const showTeam = canApproveTeamManagement(
@@ -78,37 +97,43 @@ export function OrderActions({
     }
 
     return (
-      <div className="flex flex-wrap gap-2">
-        {showTeam && (
-          <Button
-            onClick={handleManagementApprove}
-            disabled={pending || loading}
-            size="sm"
-          >
-            {roleLabels.TEAM_ADMIN}通过
-          </Button>
-        )}
-        {showTech && (
-          <Button
-            onClick={handleManagementApprove}
-            disabled={pending || loading}
-            size="sm"
-          >
-            {roleLabels.TECH_GROUP_ADMIN}通过
-          </Button>
-        )}
-        {canReject && (
-          <ReasonConfirmDialog
-            triggerLabel="驳回"
-            title="驳回采购申请"
-            description="驳回后本次采购终止，不计入采购汇总，原因将发送给采购人。"
-            reasonLabel="驳回原因"
-            confirmLabel="确认驳回"
-            disabled={pending || loading}
-            onConfirm={handleReject}
-          />
-        )}
-      </div>
+      <>
+        <div className="flex flex-wrap gap-2">
+          {showTeam && (
+            <Button
+              onClick={() => guardApprove(handleManagementApprove)}
+              disabled={pending || loading}
+              size="sm"
+            >
+              {roleLabels.TEAM_ADMIN}通过
+            </Button>
+          )}
+          {showTech && (
+            <Button
+              onClick={() => guardApprove(handleManagementApprove)}
+              disabled={pending || loading}
+              size="sm"
+            >
+              {roleLabels.TECH_GROUP_ADMIN}通过
+            </Button>
+          )}
+          {canReject && (
+            <ReasonConfirmDialog
+              triggerLabel="驳回"
+              title="驳回采购申请"
+              description="驳回后本次采购终止，不计入采购汇总，原因将发送给采购人。"
+              reasonLabel="驳回原因"
+              confirmLabel="确认驳回"
+              disabled={pending || loading}
+              onConfirm={handleReject}
+            />
+          )}
+        </div>
+        <SignatureRequiredDialog
+          open={signatureDialogOpen}
+          onOpenChange={setSignatureDialogOpen}
+        />
+      </>
     );
   }
 
@@ -148,23 +173,33 @@ export function OrderActions({
   }
 
   return (
-    <div className="flex flex-wrap gap-2">
-      {canApprove && (
-        <Button onClick={handleApprove} disabled={pending || loading} size="sm">
-          {label}
-        </Button>
-      )}
-      {canReject && (
-        <ReasonConfirmDialog
-          triggerLabel="驳回"
-          title="驳回采购申请"
-          description="驳回后本次采购终止，不计入采购汇总，原因将发送给采购人。"
-          reasonLabel="驳回原因"
-          confirmLabel="确认驳回"
-          disabled={pending || loading}
-          onConfirm={handleReject}
-        />
-      )}
-    </div>
+    <>
+      <div className="flex flex-wrap gap-2">
+        {canApprove && (
+          <Button
+            onClick={() => guardApprove(handleApprove)}
+            disabled={pending || loading}
+            size="sm"
+          >
+            {label}
+          </Button>
+        )}
+        {canReject && (
+          <ReasonConfirmDialog
+            triggerLabel="驳回"
+            title="驳回采购申请"
+            description="驳回后本次采购终止，不计入采购汇总，原因将发送给采购人。"
+            reasonLabel="驳回原因"
+            confirmLabel="确认驳回"
+            disabled={pending || loading}
+            onConfirm={handleReject}
+          />
+        )}
+      </div>
+      <SignatureRequiredDialog
+        open={signatureDialogOpen}
+        onOpenChange={setSignatureDialogOpen}
+      />
+    </>
   );
 }

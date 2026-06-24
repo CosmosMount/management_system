@@ -5,6 +5,7 @@ import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { buildAppUrl, type NotificationContext } from "@/lib/app-origin";
 import { prisma } from "@/lib/prisma";
 import type { UserRoleType } from "@prisma/client";
+import { routes } from "@/lib/routes";
 
 export type ProgressNotifyPayload =
   | {
@@ -258,7 +259,7 @@ export async function sendProgressNotification(
       const card = buildCard(
         "新项目已创建",
         `**项目**：${payload.projectName}\n**负责人**：${payload.ownerNames}\n**车组/技术组**：${formatScope(payload.team, payload.techGroup)}`,
-        buildAppUrl(`/progress/projects/${payload.projectId}`, appOrigin),
+        buildAppUrl(`${routes.progress.project(payload.projectId)}`, appOrigin),
       );
       await notifyOpenIdsAndRoles(
         payload.ownerOpenIds,
@@ -281,7 +282,7 @@ export async function sendProgressNotification(
       const card = buildCard(
         title,
         `**项目**：${payload.projectName}\n**负责人**：${payload.ownerNames}\n**车组/技术组**：${formatScope(payload.team, payload.techGroup)}`,
-        buildAppUrl(`/progress/projects/${payload.projectId}`, appOrigin),
+        buildAppUrl(`${routes.progress.project(payload.projectId)}`, appOrigin),
         template,
       );
       await notifyOpenIdsAndRoles(
@@ -296,7 +297,7 @@ export async function sendProgressNotification(
       const card = buildCard(
         "项目信息已更新",
         `**项目**：${payload.projectName}\n**修改人**：${payload.actorName}\n${formatChangeList(payload.changes)}`,
-        buildAppUrl(`/progress/projects/${payload.projectId}`, appOrigin),
+        buildAppUrl(`${routes.progress.project(payload.projectId)}`, appOrigin),
       );
       await notifyOpenIdsAndRoleScopes(
         [...payload.ownerOpenIds, ...payload.oldOwnerOpenIds],
@@ -313,7 +314,7 @@ export async function sendProgressNotification(
       const card = buildCard(
         "项目阶段待审批",
         `**项目**：${payload.projectName}\n**阶段**：${payload.stageName}\n**归档链接**：[打开材料](${payload.evidenceUrl})`,
-        buildAppUrl(`/progress/projects/${payload.projectId}`, appOrigin),
+        buildAppUrl(`${routes.progress.project(payload.projectId)}`, appOrigin),
         "orange",
       );
       await notifyOpenIdsAndRoles(
@@ -330,7 +331,7 @@ export async function sendProgressNotification(
       const card = buildCard(
         pass ? "项目阶段审批通过" : "项目阶段审批驳回",
         `**项目**：${payload.projectName}\n**阶段**：${payload.stageName}`,
-        buildAppUrl(`/progress/projects/${payload.projectId}`, appOrigin),
+        buildAppUrl(`${routes.progress.project(payload.projectId)}`, appOrigin),
         pass ? "green" : "red",
       );
       await sendDirectCard(payload.stageOwnerOpenId, card);
@@ -340,7 +341,7 @@ export async function sendProgressNotification(
       const card = buildCard(
         "新任务指派",
         `**任务**：${payload.taskTitle}\n**项目**：${payload.projectName}`,
-        buildAppUrl(`/progress/tasks/${payload.taskId}`, appOrigin),
+        buildAppUrl(`${routes.progress.task(payload.taskId)}`, appOrigin),
       );
       await notifyOpenIds(payload.assigneeOpenIds, card);
       break;
@@ -349,7 +350,7 @@ export async function sendProgressNotification(
       const card = buildCard(
         "任务信息已更新",
         `**任务**：${payload.taskTitle}\n**项目**：${payload.projectName}\n**修改人**：${payload.actorName}\n${formatChangeList(payload.changes)}`,
-        buildAppUrl(`/progress/tasks/${payload.taskId}`, appOrigin),
+        buildAppUrl(`${routes.progress.task(payload.taskId)}`, appOrigin),
       );
       await notifyOpenIdsAndRoleScopes(
         [
@@ -370,7 +371,7 @@ export async function sendProgressNotification(
       const card = buildCard(
         "任务待验收",
         `**任务**：${payload.taskTitle}\n**项目**：${payload.projectName}\n**交付文档**：[打开文档](${payload.feishuDocUrl})\n**关键数据**：[打开材料](${payload.keyDataUrl})\n请先阅读材料后再在系统中审批。`,
-        buildAppUrl(`/progress/tasks/${payload.taskId}`, appOrigin),
+        buildAppUrl(`${routes.progress.task(payload.taskId)}`, appOrigin),
         "orange",
       );
       await notifyRoles(
@@ -384,7 +385,7 @@ export async function sendProgressNotification(
       const card = buildCard(
         "任务风险同步",
         `**任务**：${payload.taskTitle}\n**项目**：${payload.projectName}\n**风险**：${payload.riskNote}`,
-        buildAppUrl(`/progress/tasks/${payload.taskId}`, appOrigin),
+        buildAppUrl(`${routes.progress.task(payload.taskId)}`, appOrigin),
         "red",
       );
       await notifyOpenIds(payload.assigneeOpenIds, card).catch(console.error);
@@ -400,7 +401,7 @@ export async function sendProgressNotification(
       const card = buildCard(
         "任务验收通过",
         `**任务**：${payload.taskTitle}\n**项目**：${payload.projectName}`,
-        buildAppUrl(`/progress/tasks/${payload.taskId}`, appOrigin),
+        buildAppUrl(`${routes.progress.task(payload.taskId)}`, appOrigin),
         "green",
       );
       await notifyOpenIds(payload.assigneeOpenIds, card);
@@ -413,7 +414,7 @@ export async function sendProgressNotification(
       const card = buildCard(
         "任务验收驳回",
         content,
-        buildAppUrl(`/progress/tasks/${payload.taskId}`, appOrigin),
+        buildAppUrl(`${routes.progress.task(payload.taskId)}`, appOrigin),
         "red",
       );
       await notifyOpenIds(payload.assigneeOpenIds, card);
@@ -423,7 +424,7 @@ export async function sendProgressNotification(
       const card = buildCard(
         "任务逾期警报",
         `**任务**：${payload.taskTitle}\n**项目**：${payload.projectName}\n请负责人尽快推进，组长/项管请关注。`,
-        buildAppUrl(`/progress/tasks/${payload.taskId}`, appOrigin),
+        buildAppUrl(`${routes.progress.task(payload.taskId)}`, appOrigin),
         "red",
       );
       await notifyOpenIds(payload.assigneeOpenIds, card);
@@ -438,7 +439,7 @@ export async function sendProgressNotification(
       const card = buildCard(
         "周报填写提醒",
         `**任务**：${payload.taskTitle}\n请在系统中提交本周进度周报。`,
-        buildAppUrl(`/progress/tasks/${payload.taskId}`, appOrigin),
+        buildAppUrl(`${routes.progress.task(payload.taskId)}`, appOrigin),
         "orange",
       );
       await notifyOpenIds(payload.assigneeOpenIds, card);
@@ -527,7 +528,7 @@ export async function runProgressDailyReminders() {
     const card = buildCard(
       "今日任务提醒",
       `**任务**：${task.title}\n**项目**：${task.project.name}\n**截止**：${task.dueAt.toLocaleString("zh-CN")}`,
-      buildAppUrl(`/progress/tasks/${task.id}`),
+      buildAppUrl(`${routes.progress.task(task.id)}`),
     );
     await notifyOpenIds(
       getTaskAssigneeOpenIds(task),

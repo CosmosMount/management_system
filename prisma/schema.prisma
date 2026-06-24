@@ -121,6 +121,7 @@ model PurchaseOrder {
   listDocPath       String?
   screenshotPath    String?
   status            OrderStatus    @default(DRAFT)
+  isWorkshopFee     Boolean        @default(false)
   rejectionReason   String?
   rejectedAt        DateTime?
   rejectedByName    String?
@@ -131,16 +132,24 @@ model PurchaseOrder {
   updatedAt         DateTime       @updatedAt
 }
 
+enum PurchaseItemKind {
+  COMPONENT
+  STANDARD_PART
+  PROCESSING_FEE
+}
+
 model PurchaseItem {
-  id           String        @id @default(uuid())
-  orderId      String
-  order        PurchaseOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  name         String
-  spec         String
-  purchaseLink String        @default("")
-  quantity     Int
-  unitPrice    Float
-  photoPath    String?
+  id                 String            @id @default(uuid())
+  orderId            String
+  order              PurchaseOrder     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  name               String
+  spec               String
+  itemKind           PurchaseItemKind  @default(COMPONENT)
+  purchaseLink       String            @default("")
+  referenceImagePath String?
+  quantity           Int
+  unitPrice          Float
+  photoPath          String?
 }
 
 model Project {

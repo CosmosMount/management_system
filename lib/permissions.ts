@@ -74,6 +74,7 @@ export {
   canApproveTeamManagement,
   canApproveTechGroupManagement,
   canConfirmReimbursement,
+  canEditDraftOrder,
   canRejectProcurement,
   canRequestApplicantResubmit,
   canUploadApplicantDocs,

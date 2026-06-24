@@ -125,10 +125,11 @@ TODO → IN_PROGRESS →（提交交付）→ PENDING_ACCEPTANCE →（验收）
 |------|------|
 | `/` | 首页导航 |
 | `/login` | 飞书登录 |
-| `/apply` | 采购申请 |
-| `/orders` | 订单列表 |
-| `/orders/[id]` | 订单详情与审批 |
-| `/dashboard` | 采购汇总看板 |
+| `/procurement` | 采购管理首页 |
+| `/procurement/new` | 采购申请 |
+| `/procurement/list` | 订单列表 |
+| `/procurement/[id]` | 订单详情与审批 |
+| `/procurement/dashboard` | 采购汇总看板 |
 | `/admin` | 角色与通讯录管理 |
 
 ### 进度管理
@@ -136,10 +137,11 @@ TODO → IN_PROGRESS →（提交交付）→ PENDING_ACCEPTANCE →（验收）
 | 路径 | 功能 |
 |------|------|
 | `/progress` | 进度首页 |
-| `/progress/projects/new` | 新建项目 |
-| `/progress/projects/[id]` | 项目详情 |
-| `/progress/tasks/[id]` | 任务详情 |
-| `/progress/kanban` | 任务看板 |
+| `/progress/new` | 新建项目 |
+| `/progress/list` | 项目列表 |
+| `/progress/[id]` | 项目详情 |
+| `/progress/task/[id]` | 任务详情 |
+| `/progress/dashboard` | 任务看板 |
 | `/progress/archive` | 归档检索 |
 
 ## 飞书集成要点

@@ -1,19 +1,51 @@
+import {
+  itemKindNeedsImage,
+  itemKindNeedsLink,
+  PURCHASE_ITEM_KINDS,
+} from "@/lib/purchase-item-kind";
 import { TEAM_OPTIONS, TECH_GROUP_OPTIONS, MAX_REIMBURSEMENT_LIST_ROWS } from "@/lib/constants";
 import { z } from "zod";
 
-export const purchaseItemSchema = z.object({
-  name: z.string().min(1, "请输入物品名称"),
-  spec: z.string().min(1, "请输入规格"),
-  purchaseLink: z.string().min(1, "请输入购买链接"),
-  quantity: z.number().int().min(1, "数量至少为 1"),
-  lineTotal: z.number().min(0, "总价不能为负"),
-});
+export const purchaseItemSchema = z
+  .object({
+    name: z.string().min(1, "请输入物品名称"),
+    spec: z.string().min(1, "请输入规格"),
+    itemKind: z.enum(PURCHASE_ITEM_KINDS, { message: "请选择物品种类" }),
+    purchaseLink: z.string().optional().default(""),
+    referenceImagePath: z.string().nullable().optional(),
+    quantity: z.number().int().min(1, "数量至少为 1"),
+    lineTotal: z.number().min(0, "总价不能为负"),
+  })
+  .superRefine((item, ctx) => {
+    if (itemKindNeedsLink(item.itemKind)) {
+      const link = item.purchaseLink?.trim() ?? "";
+      if (!link) {
+        ctx.addIssue({
+          code: "custom",
+          message: "请输入采购链接",
+          path: ["purchaseLink"],
+        });
+      } else if (!/^https?:\/\//i.test(link)) {
+        ctx.addIssue({
+          code: "custom",
+          message: "请输入以 http:// 或 https:// 开头的链接",
+          path: ["purchaseLink"],
+        });
+      }
+    }
+  });
 
 export function toStoredPurchaseItem(item: PurchaseItemInput) {
   return {
     name: item.name,
     spec: item.spec,
-    purchaseLink: item.purchaseLink,
+    itemKind: item.itemKind,
+    purchaseLink: itemKindNeedsLink(item.itemKind)
+      ? (item.purchaseLink?.trim() ?? "")
+      : "",
+    referenceImagePath: itemKindNeedsImage(item.itemKind)
+      ? (item.referenceImagePath ?? null)
+      : null,
     quantity: item.quantity,
     unitPrice: item.lineTotal / item.quantity,
   };
@@ -32,5 +64,65 @@ export const createOrderSchema = z.object({
   submit: z.boolean(),
 });
 
+export const updateOrderSchema = createOrderSchema.extend({
+  orderId: z.string().min(1, "订单不存在"),
+});
+
 export type CreateOrderInput = z.infer<typeof createOrderSchema>;
+export type UpdateOrderInput = z.infer<typeof updateOrderSchema>;
 export type PurchaseItemInput = z.infer<typeof purchaseItemSchema>;
+
+export function toOrderFormInput(order: {
+  team: string;
+  techGroup: string;
+  items: {
+    name: string;
+    spec: string;
+    itemKind: PurchaseItemInput["itemKind"];
+    purchaseLink: string;
+    referenceImagePath: string | null;
+    quantity: number;
+    unitPrice: number;
+  }[];
+}): Omit<CreateOrderInput, "submit"> {
+  return {
+    team: order.team as CreateOrderInput["team"],
+    techGroup: order.techGroup as CreateOrderInput["techGroup"],
+    items: order.items.map((item) => ({
+      name: item.name,
+      spec: item.spec,
+      itemKind: item.itemKind,
+      purchaseLink: item.purchaseLink,
+      referenceImagePath: item.referenceImagePath,
+      quantity: item.quantity,
+      lineTotal: item.quantity * item.unitPrice,
+    })),
+  };
+}
+
+export function parseOrderFormData(formData: FormData): {
+  itemImages: Map<number, File>;
+} {
+  const itemImages = new Map<number, File>();
+  for (const [key, value] of formData.entries()) {
+    const match = key.match(/^itemImage-(\d+)$/);
+    if (match && value instanceof File && value.size > 0) {
+      itemImages.set(Number(match[1]), value);
+    }
+  }
+  return { itemImages };
+}
+
+export function assertItemImagesPresent(
+  items: PurchaseItemInput[],
+  itemImages: Map<number, File>,
+): void {
+  items.forEach((item, index) => {
+    if (!itemKindNeedsImage(item.itemKind)) return;
+    const hasFile = itemImages.has(index);
+    const hasExisting = !!item.referenceImagePath;
+    if (!hasFile && !hasExisting) {
+      throw new Error(`请为「${item.name || `第 ${index + 1} 条明细`}」上传图片`);
+    }
+  });
+}

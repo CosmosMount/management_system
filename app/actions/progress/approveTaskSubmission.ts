@@ -15,6 +15,7 @@ import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import { getUserRoles } from "@/lib/permissions";
 import { approvalSchema } from "@/lib/validations/progress";
+import { routes } from "@/lib/routes";
 
 export async function approveTaskSubmission(input: {
   submissionId: string;
@@ -111,8 +112,8 @@ export async function approveTaskSubmission(input: {
     assigneeOpenIds: getTaskAssigneeOpenIds(task),
   }, await getNotificationContext()).catch(console.error);
 
-  revalidatePath(`/progress/tasks/${task.id}`);
-  revalidatePath("/progress/kanban");
+  revalidatePath(`${routes.progress.task(task.id)}`);
+  revalidatePath(routes.progress.dashboard);
   return { success: true };
 }
 
@@ -205,7 +206,7 @@ export async function rejectTaskSubmission(input: {
     comment: parsed.comment ?? "",
   }, await getNotificationContext()).catch(console.error);
 
-  revalidatePath(`/progress/tasks/${task.id}`);
-  revalidatePath("/progress/kanban");
+  revalidatePath(`${routes.progress.task(task.id)}`);
+  revalidatePath(routes.progress.dashboard);
   return { success: true };
 }

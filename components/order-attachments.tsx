@@ -5,8 +5,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { AttachmentFileLink } from "@/components/attachment-file-link";
 import {
-  displayFileName,
   groupOrderAttachments,
   hasReimbursementAttachments,
   type OrderAttachmentGroups,
@@ -36,14 +36,7 @@ function AttachmentLinks({
       <ul className="space-y-1">
         {paths.map((filePath) => (
           <li key={filePath}>
-            <a
-              href={filePath}
-              target="_blank"
-              rel="noreferrer"
-              className="text-sm text-primary hover:underline"
-            >
-              {displayFileName(filePath)}
-            </a>
+            <AttachmentFileLink filePath={filePath} />
           </li>
         ))}
       </ul>
@@ -58,27 +51,13 @@ function InlineAttachments({ groups }: { groups: OrderAttachmentGroups }) {
       {groups.listDoc && (
         <div className="space-y-1">
           <p className="font-medium text-muted-foreground">采购清单</p>
-          <a
-            href={groups.listDoc}
-            target="_blank"
-            rel="noreferrer"
-            className="text-primary hover:underline"
-          >
-            {displayFileName(groups.listDoc)}
-          </a>
+          <AttachmentFileLink filePath={groups.listDoc} />
         </div>
       )}
       {groups.screenshot && (
         <div className="space-y-1">
           <p className="font-medium text-muted-foreground">报销截图</p>
-          <a
-            href={groups.screenshot}
-            target="_blank"
-            rel="noreferrer"
-            className="text-primary hover:underline"
-          >
-            {displayFileName(groups.screenshot)}
-          </a>
+          <AttachmentFileLink filePath={groups.screenshot} />
         </div>
       )}
     </div>

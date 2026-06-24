@@ -6,6 +6,19 @@ const configuredDevOrigins = [
 ].filter((origin): origin is string => Boolean(origin));
 
 const nextConfig: NextConfig = {
+  async redirects() {
+    return [
+      { source: "/apply", destination: "/procurement/new", permanent: true },
+      { source: "/orders", destination: "/procurement/list", permanent: true },
+      { source: "/orders/:id/edit", destination: "/procurement/:id/edit", permanent: true },
+      { source: "/orders/:id", destination: "/procurement/:id", permanent: true },
+      { source: "/dashboard", destination: "/procurement/dashboard", permanent: true },
+      { source: "/progress/projects/new", destination: "/progress/new", permanent: true },
+      { source: "/progress/projects/:id", destination: "/progress/:id", permanent: true },
+      { source: "/progress/tasks/:id", destination: "/progress/task/:id", permanent: true },
+      { source: "/progress/kanban", destination: "/progress/dashboard", permanent: true },
+    ];
+  },
   experimental: {
     serverActions: {
       bodySizeLimit: "1gb",

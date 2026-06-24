@@ -62,6 +62,20 @@ export function canApproveTechGroupManagement(
   );
 }
 
+/** 管理审核通过前须已上传电子签名（签名将填入验收清单） */
+export function needsSignatureForProcurementApproval(
+  status: OrderStatus,
+  userRoles: UserRoleRecord[],
+  order: OrderScope,
+  managementState: ManagementApprovalState,
+): boolean {
+  if (status !== "MANAGEMENT_REVIEW") return false;
+  return (
+    canApproveTeamManagement(userRoles, order, managementState) ||
+    canApproveTechGroupManagement(userRoles, order, managementState)
+  );
+}
+
 export function canApproveOrder(
   status: OrderStatus,
   userRoles: UserRoleRecord[],
@@ -90,6 +104,14 @@ export function isOrderInitiator(
   initiatorOpenId: string,
 ): boolean {
   return !!userOpenId && userOpenId === initiatorOpenId;
+}
+
+export function canEditDraftOrder(
+  status: OrderStatus,
+  userOpenId: string | undefined,
+  initiatorOpenId: string,
+): boolean {
+  return status === "DRAFT" && isOrderInitiator(userOpenId, initiatorOpenId);
 }
 
 export function canUploadApplicantDocs(

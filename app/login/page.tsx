@@ -1,5 +1,6 @@
 import { signInFeishu } from "@/lib/auth-actions";
 import { APP_NAME, APP_TAGLINE } from "@/lib/branding";
+import { routes } from "@/lib/routes";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -11,7 +12,7 @@ import {
 
 function sanitizeCallbackUrl(url?: string): string {
   if (!url || !url.startsWith("/") || url.startsWith("//")) {
-    return "/orders";
+    return routes.procurement.root;
   }
   return url;
 }

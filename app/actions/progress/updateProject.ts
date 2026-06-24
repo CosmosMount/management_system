@@ -12,6 +12,7 @@ import { getProjectOwnerOpenIds, getProjectOwnerNames } from "@/lib/progress-pro
 import { requireSessionUser } from "@/lib/progress-activity";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
+import { routes } from "@/lib/routes";
 import {
   updateProjectSchema,
   type UpdateProjectInput,
@@ -173,10 +174,10 @@ export async function updateProject(input: UpdateProjectInput) {
     await getNotificationContext(),
   ).catch(console.error);
 
-  revalidatePath(`/progress/projects/${project.id}`);
-  revalidatePath("/progress");
+  revalidatePath(`${routes.progress.project(project.id)}`);
+  revalidatePath(routes.progress.root);
   if (scopeChanged) {
-    revalidatePath("/progress/kanban");
+    revalidatePath(routes.progress.dashboard);
   }
   return updated;
 }

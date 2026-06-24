@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { APP_NAME } from "@/lib/branding";
 import { isSuperAdmin } from "@/lib/permissions";
+import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
 const navLinkClass =
@@ -26,20 +27,14 @@ export async function AppHeader() {
           <Link href="/" className={cn(navLinkClass, "hidden sm:inline")}>
             首页
           </Link>
-          <Link href="/apply" className={navLinkClass}>
-            新建申请
+          <Link href={routes.procurement.root} className={navLinkClass}>
+            采购管理
           </Link>
-          <Link href="/orders" className={navLinkClass}>
-            订单列表
-          </Link>
-          <Link href="/dashboard" className={navLinkClass}>
-            采购看板
-          </Link>
-          <Link href="/progress" className={navLinkClass}>
+          <Link href={routes.progress.root} className={navLinkClass}>
             进度管理
           </Link>
           <Link href="/profile" className={cn(navLinkClass, "hidden sm:inline")}>
-            个人设置
+            个人中心
           </Link>
           {showAdmin && (
             <Link href="/admin" className={navLinkClass}>
@@ -55,15 +50,21 @@ export async function AppHeader() {
             >
               反馈
             </Link>
-            {session.user.image && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={session.user.image}
-                alt={session.user.name ?? ""}
-                className="h-8 w-8 rounded-full ring-2 ring-primary/10"
-              />
-            )}
-            <span className="hidden text-sm sm:inline">{session.user.name}</span>
+            <Link
+              href="/profile"
+              className="flex items-center gap-2 rounded-full transition-opacity hover:opacity-80"
+              title="个人中心"
+            >
+              {session.user.image && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={session.user.image}
+                  alt={session.user.name ?? ""}
+                  className="h-8 w-8 rounded-full ring-2 ring-primary/10"
+                />
+              )}
+              <span className="hidden text-sm sm:inline">{session.user.name}</span>
+            </Link>
             <form
               action={async () => {
                 "use server";

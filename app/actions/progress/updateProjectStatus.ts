@@ -11,6 +11,7 @@ import { getProjectOwnerOpenIds, getProjectOwnerNames } from "@/lib/progress-pro
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import { getUserRoles } from "@/lib/permissions";
+import { routes } from "@/lib/routes";
 
 export async function updateProjectStatus(
   projectId: string,
@@ -101,7 +102,7 @@ export async function updateProjectStatus(
     ownerNames: getProjectOwnerNames(project),
   }, await getNotificationContext()).catch(console.error);
 
-  revalidatePath(`/progress/projects/${projectId}`);
-  revalidatePath("/progress");
+  revalidatePath(`${routes.progress.project(projectId)}`);
+  revalidatePath(routes.progress.root);
   return updated;
 }
