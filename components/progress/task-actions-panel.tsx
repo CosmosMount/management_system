@@ -2,6 +2,13 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import {
+  Archive,
+  CheckCircle2,
+  Circle,
+  Clock3,
+  Play,
+} from "lucide-react";
 import { toast } from "sonner";
 import {
   approveTaskSubmission,
@@ -13,13 +20,16 @@ import {
   syncTaskRisk,
 } from "@/app/actions/progress/submitWeeklyReport";
 import { updateTaskStatus, archiveTask } from "@/app/actions/progress/updateTask";
-import { StatusStepper } from "@/components/progress/status-stepper";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Textarea } from "@/components/ui/textarea";
+import { getActionErrorMessage } from "@/lib/action-error-message";
+import { cn } from "@/lib/utils";
 import type { TaskStatus } from "@prisma/client";
-import { getTaskStepperDisplay } from "@/lib/progress-flow";
+import { taskFlowSteps } from "@/lib/progress-flow";
+import { taskStatusLabels } from "@/lib/progress-labels";
 
 type Submission = {
   id: string;
@@ -33,6 +43,7 @@ type Submission = {
     id: string;
     approverName: string;
     decision: string;
+    comment: string;
     createdAt: string;
   }[];
 };
@@ -46,6 +57,8 @@ type Props = {
   needsOfflineConfirmation: boolean;
   needsWeeklyReport: boolean;
   submissions: Submission[];
+  className?: string;
+  showFlowActions?: boolean;
 };
 
 export function TaskActionsPanel({
@@ -57,24 +70,28 @@ export function TaskActionsPanel({
   needsOfflineConfirmation,
   needsWeeklyReport,
   submissions,
+  className,
+  showFlowActions = true,
 }: Props) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [docUrl, setDocUrl] = useState("");
+  const [weeklyDocUrl, setWeeklyDocUrl] = useState("");
   const [keyDataUrl, setKeyDataUrl] = useState("");
   const [note, setNote] = useState("");
   const [failureReason, setFailureReason] = useState("");
+  const [rejectComment, setRejectComment] = useState("");
   const [progress, setProgress] = useState("");
   const [risks, setRisks] = useState("");
   const [nextPlan, setNextPlan] = useState("");
   const [riskNote, setRiskNote] = useState("");
   const [offlineConfirmed, setOfflineConfirmed] = useState(false);
 
-  const { steps, currentIndex } = getTaskStepperDisplay(status);
-
   const pendingSubmission = submissions.find(
     (s) => !s.approvals.some((a) => a.decision === "APPROVED"),
   );
+  const canStartTask = (isAssignee || canManage) && status === "TODO";
+  const canArchiveTask = canManage && status === "COMPLETED";
 
   async function handleStatus(next: TaskStatus) {
     setLoading(true);
@@ -83,7 +100,7 @@ export function TaskActionsPanel({
       toast.success("状态已更新");
       router.refresh();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "操作失败");
+      toast.error(getActionErrorMessage(err, "操作失败"));
     } finally {
       setLoading(false);
     }
@@ -102,7 +119,7 @@ export function TaskActionsPanel({
       toast.success("交付已提交，等待验收");
       router.refresh();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "提交失败");
+      toast.error(getActionErrorMessage(err, "提交失败"));
     } finally {
       setLoading(false);
     }
@@ -115,7 +132,7 @@ export function TaskActionsPanel({
       toast.success("风险已同步");
       router.refresh();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "同步失败");
+      toast.error(getActionErrorMessage(err, "同步失败"));
     } finally {
       setLoading(false);
     }
@@ -129,12 +146,12 @@ export function TaskActionsPanel({
         progress,
         risks,
         nextPlan,
-        feishuDocUrl: docUrl,
+        feishuDocUrl: weeklyDocUrl,
       });
       toast.success("周报已提交");
       router.refresh();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "提交失败");
+      toast.error(getActionErrorMessage(err, "提交失败"));
     } finally {
       setLoading(false);
     }
@@ -154,32 +171,35 @@ export function TaskActionsPanel({
         await rejectTaskSubmission({
           submissionId: pendingSubmission.id,
           offlineConfirmed,
+          comment: rejectComment,
         });
         toast.success("已驳回");
       }
+      setRejectComment("");
       router.refresh();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "操作失败");
+      toast.error(getActionErrorMessage(err, "操作失败"));
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <div className="space-y-6">
+    <div className={cn("space-y-5", className)}>
       <Card>
-        <CardHeader>
+        <CardHeader className="pb-3">
           <CardTitle>任务流程</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <StatusStepper steps={steps} currentIndex={currentIndex} />
-          <div className="flex flex-wrap gap-3 border-t pt-4">
-            {isAssignee && status === "TODO" && (
+          <TaskFlowTimeline status={status} />
+          {showFlowActions && (canStartTask || canArchiveTask) && (
+            <div className="flex flex-wrap gap-3 border-t pt-4">
+            {canStartTask && (
               <Button disabled={loading} onClick={() => handleStatus("IN_PROGRESS")}>
                 开始任务
               </Button>
             )}
-            {canManage && status === "COMPLETED" && (
+            {canArchiveTask && (
               <Button
                 variant="outline"
                 disabled={loading}
@@ -190,7 +210,7 @@ export function TaskActionsPanel({
                     toast.success("已归档");
                     router.refresh();
                   } catch (err) {
-                    toast.error(err instanceof Error ? err.message : "操作失败");
+                    toast.error(getActionErrorMessage(err, "操作失败"));
                   } finally {
                     setLoading(false);
                   }
@@ -199,7 +219,8 @@ export function TaskActionsPanel({
                 归档任务
               </Button>
             )}
-          </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -218,11 +239,11 @@ export function TaskActionsPanel({
               />
             </div>
             <div className="space-y-2">
-              <Label>关键数据链接（必填）</Label>
+              <Label>关键数据/材料链接（必填）</Label>
               <Input
                 value={keyDataUrl}
                 onChange={(e) => setKeyDataUrl(e.target.value)}
-                placeholder="视频、照片、曲线或归档材料链接"
+                placeholder="视频、照片、曲线或归档材料链接，需为 URL"
               />
             </div>
             <div className="space-y-2">
@@ -253,6 +274,12 @@ export function TaskActionsPanel({
             </CardTitle>
           </CardHeader>
           <CardContent className="grid gap-4 md:grid-cols-3">
+            <Input
+              className="md:col-span-3"
+              placeholder="周报飞书文档链接（可选）"
+              value={weeklyDocUrl}
+              onChange={(e) => setWeeklyDocUrl(e.target.value)}
+            />
             <Input
               placeholder="本周完成情况"
               value={progress}
@@ -344,6 +371,11 @@ export function TaskActionsPanel({
                 已完成线下确认
               </label>
             )}
+            <Textarea
+              placeholder="驳回理由（驳回时会通知任务负责人）"
+              value={rejectComment}
+              onChange={(e) => setRejectComment(e.target.value)}
+            />
             <div className="flex gap-3">
               <Button
                 disabled={
@@ -365,13 +397,17 @@ export function TaskActionsPanel({
         </Card>
       )}
 
-      {submissions.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>交付历史</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm">
-            {submissions.map((s) => (
+      <Card>
+        <CardHeader>
+          <CardTitle>交付历史</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          {submissions.length === 0 ? (
+            <p className="rounded-md border border-dashed px-4 py-8 text-center text-muted-foreground">
+              暂无交付记录。
+            </p>
+          ) : (
+            submissions.map((s) => (
               <div key={s.id} className="rounded-lg border p-4">
                 <a
                   href={s.feishuDocUrl}
@@ -399,13 +435,81 @@ export function TaskActionsPanel({
                   <p key={a.id} className="mt-1 text-muted-foreground">
                     {a.approverName}：
                     {a.decision === "APPROVED" ? "通过" : "驳回"}
+                    {a.comment ? ` · ${a.comment}` : ""}
                   </p>
                 ))}
               </div>
-            ))}
-          </CardContent>
-        </Card>
-      )}
+            ))
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
+}
+
+function TaskFlowTimeline({ status }: { status: TaskStatus }) {
+  const currentIndex = Math.max(taskFlowSteps.indexOf(status), 0);
+
+  return (
+    <div className="w-full overflow-x-auto pb-2">
+      <ol className="flex min-w-max items-start gap-0">
+        {taskFlowSteps.map((step, index) => {
+          const isDone = index < currentIndex;
+          const isCurrent = index === currentIndex;
+          const isLast = index === taskFlowSteps.length - 1;
+
+          return (
+            <li key={step} className="flex items-start">
+              <div className="group flex w-28 flex-col items-center gap-2 rounded-md px-2 py-1 text-center">
+                <span
+                  className={cn(
+                    "flex h-9 w-9 items-center justify-center rounded-full border-2 bg-background text-sm font-semibold",
+                    isDone && "border-green-600 bg-green-50 text-green-700",
+                    isCurrent &&
+                      "border-primary bg-primary/10 text-primary ring-4 ring-primary/15",
+                    !isDone &&
+                      !isCurrent &&
+                      "border-muted-foreground/30 text-muted-foreground",
+                  )}
+                >
+                  <TaskFlowStepIcon step={step} index={index} isDone={isDone} />
+                </span>
+                <span className="max-w-full truncate text-sm font-medium">
+                  {taskStatusLabels[step]}
+                </span>
+                <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                  {isCurrent && <Circle className="h-2 w-2 fill-primary text-primary" />}
+                  {isCurrent ? "当前状态" : isDone ? "已完成" : "未开始"}
+                </span>
+              </div>
+              {!isLast && (
+                <div
+                  className={cn(
+                    "mt-5 h-0.5 w-12 shrink-0",
+                    isDone ? "bg-green-600" : "bg-border",
+                  )}
+                />
+              )}
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
+function TaskFlowStepIcon({
+  step,
+  index,
+  isDone,
+}: {
+  step: TaskStatus;
+  index: number;
+  isDone: boolean;
+}) {
+  if (isDone) return <CheckCircle2 className="h-5 w-5" />;
+  if (step === "IN_PROGRESS") return <Play className="h-4 w-4" />;
+  if (step === "PENDING_ACCEPTANCE") return <Clock3 className="h-5 w-5" />;
+  if (step === "ARCHIVED") return <Archive className="h-5 w-5" />;
+  return <>{index + 1}</>;
 }

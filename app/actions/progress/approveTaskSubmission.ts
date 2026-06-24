@@ -128,7 +128,7 @@ export async function rejectTaskSubmission(input: {
 
   const submission = await prisma.taskSubmission.findUnique({
     where: { id: parsed.submissionId },
-    include: { task: { include: { project: true } } },
+    include: { task: { include: { project: true, assignees: true } } },
   });
   if (!submission?.task) throw new Error("提交记录不存在");
 
@@ -193,8 +193,17 @@ export async function rejectTaskSubmission(input: {
     action: "task.rejected",
     actorOpenId: user.openId,
     actorName: user.name,
-    payload: { submissionId: submission.id },
+    payload: { submissionId: submission.id, comment: parsed.comment ?? "" },
   });
+
+  await sendProgressNotification({
+    type: "task_rejected",
+    taskId: task.id,
+    taskTitle: task.title,
+    projectName: task.project.name,
+    assigneeOpenIds: getTaskAssigneeOpenIds(task),
+    comment: parsed.comment ?? "",
+  }, await getNotificationContext()).catch(console.error);
 
   revalidatePath(`/progress/tasks/${task.id}`);
   revalidatePath("/progress/kanban");

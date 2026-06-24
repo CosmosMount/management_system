@@ -11,7 +11,7 @@ export function ProgressPageLayout({ children, className }: Props) {
   return (
     <main
       className={cn(
-        "mx-auto w-full max-w-[min(1400px,96vw)] flex-1 px-8 py-10",
+        "mx-auto w-full max-w-[1440px] flex-1 px-4 py-8 sm:px-6 lg:px-8",
         className,
       )}
     >

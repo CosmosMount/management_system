@@ -17,6 +17,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { UserMultiSearchSelect } from "@/components/user-search-select";
+import { getActionErrorMessage } from "@/lib/action-error-message";
 import {
   createTaskSchema,
   type CreateTaskInput,
@@ -34,9 +35,21 @@ type Props = {
   projectId: string;
   users: UserOption[];
   stages?: StageOption[];
+  defaultStageId?: string;
+  redirectOnCreate?: boolean;
+  submitLabel?: string;
+  onCreated?: (taskId: string) => void;
 };
 
-export function TaskForm({ projectId, users, stages = [] }: Props) {
+export function TaskForm({
+  projectId,
+  users,
+  stages = [],
+  defaultStageId = "",
+  redirectOnCreate = true,
+  submitLabel = "创建任务",
+  onCreated,
+}: Props) {
   const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
 
@@ -44,7 +57,7 @@ export function TaskForm({ projectId, users, stages = [] }: Props) {
     resolver: zodResolver(createTaskSchema),
     defaultValues: {
       projectId,
-      stageId: "",
+      stageId: defaultStageId,
       title: "",
       goal: "",
       category: "RND",
@@ -63,10 +76,13 @@ export function TaskForm({ projectId, users, stages = [] }: Props) {
     try {
       const task = await createTask(data);
       toast.success("任务已创建");
-      router.push(`/progress/tasks/${task.id}`);
+      if (redirectOnCreate) {
+        router.push(`/progress/tasks/${task.id}`);
+      }
+      onCreated?.(task.id);
       router.refresh();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "创建失败");
+      toast.error(getActionErrorMessage(err, "创建失败"));
     } finally {
       setSubmitting(false);
     }
@@ -241,7 +257,7 @@ export function TaskForm({ projectId, users, stages = [] }: Props) {
         </label>
       </div>
       <Button type="submit" disabled={submitting}>
-        创建任务
+        {submitLabel}
       </Button>
     </form>
   );

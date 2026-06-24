@@ -69,6 +69,14 @@ export type ProgressNotifyPayload =
       assigneeOpenIds: string[];
     }
   | {
+      type: "task_rejected";
+      taskId: string;
+      taskTitle: string;
+      projectName: string;
+      assigneeOpenIds: string[];
+      comment?: string;
+    }
+  | {
       type: "task_overdue";
       taskId: string;
       taskTitle: string;
@@ -309,6 +317,19 @@ export async function sendProgressNotification(
         `**任务**：${payload.taskTitle}\n**项目**：${payload.projectName}`,
         buildAppUrl(`/progress/tasks/${payload.taskId}`, appOrigin),
         "green",
+      );
+      await notifyOpenIds(payload.assigneeOpenIds, card);
+      break;
+    }
+    case "task_rejected": {
+      const content = `**任务**：${payload.taskTitle}\n**项目**：${payload.projectName}${
+        payload.comment ? `\n**驳回理由**：${payload.comment}` : ""
+      }`;
+      const card = buildCard(
+        "任务验收驳回",
+        content,
+        buildAppUrl(`/progress/tasks/${payload.taskId}`, appOrigin),
+        "red",
       );
       await notifyOpenIds(payload.assigneeOpenIds, card);
       break;
