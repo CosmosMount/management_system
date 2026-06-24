@@ -25,6 +25,10 @@ const authMiddleware = middlewareAuth((req) => {
   }
 
   if (!isLoggedIn) {
+    if (pathname === "/api/live-version") {
+      return NextResponse.json({ error: "未登录" }, { status: 401 });
+    }
+
     const loginUrl = new URL("/login", req.nextUrl);
     const returnPath = `${req.nextUrl.pathname}${req.nextUrl.search}`;
     loginUrl.searchParams.set("callbackUrl", returnPath);

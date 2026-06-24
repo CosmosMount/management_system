@@ -1,14 +1,14 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { AppHeader } from "@/components/app-header";
+import { LiveAutoRefresh } from "@/components/live-auto-refresh";
 import { OrderActions } from "@/components/order-actions";
 import { OrderDraftActions } from "@/components/order-draft-actions";
 import { PurchaseOrderDeleteByAdminButton } from "@/components/admin-delete-actions";
 import { OrderAttachmentsCard } from "@/components/order-attachments";
 import { OrderPageFocus } from "@/components/order-page-focus";
 import { OrderReimbursementActions } from "@/components/order-reimbursement-actions";
-import { ProcurementBackLink, OrdersBackLink } from "@/components/procurement/procurement-back-link";
+import { OrdersBackLink } from "@/components/procurement/procurement-back-link";
 import { ProcurementPageLayout } from "@/components/procurement/procurement-page-layout";
 import { PageShell } from "@/components/page-shell";
 import { PageTitle } from "@/components/page-title";
@@ -30,6 +30,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { prisma } from "@/lib/prisma";
+import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { groupOrderAttachments } from "@/lib/order-attachments";
 import {
   canViewReimbursementAttachments,
@@ -47,6 +48,7 @@ type Props = {
 
 export default async function OrderDetailPage({ params, searchParams }: Props) {
   const { id } = await params;
+  const liveVersion = await getCurrentUserLiveVersion("procurement-order", id);
   const { focus, from } = await searchParams;
   const session = await auth();
   const userRoles = session?.user?.openId
@@ -99,6 +101,12 @@ export default async function OrderDetailPage({ params, searchParams }: Props) {
   return (
     <>
       <AppHeader />
+      <LiveAutoRefresh
+        scope="procurement-order"
+        resourceId={order.id}
+        initialVersion={liveVersion}
+        intervalMs={5000}
+      />
       <OrderPageFocus focus={focus ?? null} fromNotify={from === "notify"} />
       <PageShell>
         <ProcurementPageLayout className="max-w-4xl space-y-6">

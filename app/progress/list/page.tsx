@@ -1,15 +1,18 @@
 import Link from "next/link";
 import { AppHeader } from "@/components/app-header";
+import { LiveAutoRefresh } from "@/components/live-auto-refresh";
 import { ProgressBackLink } from "@/components/progress/progress-back-link";
 import { ProgressPageLayout } from "@/components/progress/progress-page-layout";
 import { PageShell } from "@/components/page-shell";
 import { PageTitle } from "@/components/page-title";
 import { Badge } from "@/components/ui/badge";
 import { projectStatusLabels } from "@/lib/progress-labels";
+import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { prisma } from "@/lib/prisma";
 import { routes } from "@/lib/routes";
 
 export default async function ProgressListPage() {
+  const liveVersion = await getCurrentUserLiveVersion("progress");
   const projects = await prisma.project.findMany({
     where: { status: { notIn: ["COMPLETED", "CANCELED"] } },
     include: { _count: { select: { tasks: true } } },
@@ -19,6 +22,11 @@ export default async function ProgressListPage() {
   return (
     <>
       <AppHeader />
+      <LiveAutoRefresh
+        scope="progress"
+        initialVersion={liveVersion}
+        intervalMs={10000}
+      />
       <PageShell>
         <ProgressPageLayout>
           <ProgressBackLink />

@@ -4,9 +4,11 @@ import {
   FeedbackCenter,
   type FeedbackView,
 } from "@/components/feedback/feedback-center";
+import { LiveAutoRefresh } from "@/components/live-auto-refresh";
 import { PageShell } from "@/components/page-shell";
 import { PageTitle } from "@/components/page-title";
 import { auth } from "@/lib/auth";
+import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { isSuperAdmin } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 
@@ -55,6 +57,7 @@ async function getFeedbacks(openId: string, admin: boolean) {
 }
 
 export default async function FeedbackPage() {
+  const liveVersion = await getCurrentUserLiveVersion("feedback");
   const session = await auth();
   if (!session?.user?.openId) {
     redirect("/login");
@@ -84,6 +87,11 @@ export default async function FeedbackPage() {
   return (
     <>
       <AppHeader />
+      <LiveAutoRefresh
+        scope="feedback"
+        initialVersion={liveVersion}
+        intervalMs={5000}
+      />
       <PageShell>
         <main
           className="mx-auto flex min-h-0 w-full max-w-7xl shrink-0 flex-col overflow-hidden p-4 py-6"

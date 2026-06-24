@@ -1,13 +1,16 @@
 import { AppHeader } from "@/components/app-header";
+import { LiveAutoRefresh } from "@/components/live-auto-refresh";
 import { ProgressKanban } from "@/components/progress/progress-kanban";
 import { ProgressBackLink } from "@/components/progress/progress-back-link";
 import { ProgressPageLayout } from "@/components/progress/progress-page-layout";
 import { PageShell } from "@/components/page-shell";
 import { PageTitle } from "@/components/page-title";
+import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { getTaskAssigneeNames } from "@/lib/progress-assignees";
 import { prisma } from "@/lib/prisma";
 
 export default async function ProgressDashboardPage() {
+  const liveVersion = await getCurrentUserLiveVersion("progress");
   const tasks = await prisma.task.findMany({
     where: { status: { not: "ARCHIVED" } },
     include: {
@@ -37,6 +40,11 @@ export default async function ProgressDashboardPage() {
   return (
     <>
       <AppHeader />
+      <LiveAutoRefresh
+        scope="progress"
+        initialVersion={liveVersion}
+        intervalMs={6000}
+      />
       <PageShell>
         <ProgressPageLayout>
           <ProgressBackLink />

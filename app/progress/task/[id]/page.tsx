@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { AppHeader } from "@/components/app-header";
+import { LiveAutoRefresh } from "@/components/live-auto-refresh";
 import {
   TaskDetailWorkspace,
   type TaskDetailView,
@@ -17,6 +18,7 @@ import {
   getTaskAssigneeOpenIds,
 } from "@/lib/progress-assignees";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
+import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { getRecentActivityCutoff } from "@/lib/progress-activity-window";
 import { prisma } from "@/lib/prisma";
 
@@ -24,6 +26,7 @@ type Props = { params: Promise<{ id: string }> };
 
 export default async function TaskDetailPage({ params }: Props) {
   const { id } = await params;
+  const liveVersion = await getCurrentUserLiveVersion("progress-task", id);
   const session = await auth();
   const userOpenId = session?.user?.openId;
   const roles = userOpenId ? await getUserRoles(userOpenId) : [];
@@ -174,6 +177,12 @@ export default async function TaskDetailPage({ params }: Props) {
   return (
     <>
       <AppHeader />
+      <LiveAutoRefresh
+        scope="progress-task"
+        resourceId={task.id}
+        initialVersion={liveVersion}
+        intervalMs={5000}
+      />
       <PageShell>
         <TaskDetailWorkspace
           task={taskView}

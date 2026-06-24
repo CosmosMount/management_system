@@ -2,13 +2,16 @@ import { redirect } from "next/navigation";
 import { AppHeader } from "@/components/app-header";
 import { AdminPanel } from "@/components/admin-panel";
 import { BackLink } from "@/components/back-link";
+import { LiveAutoRefresh } from "@/components/live-auto-refresh";
 import { PageShell } from "@/components/page-shell";
 import { PageTitle } from "@/components/page-title";
 import { auth } from "@/lib/auth";
+import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { isSuperAdmin } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 
 export default async function AdminPage() {
+  const liveVersion = await getCurrentUserLiveVersion("admin");
   const session = await auth();
   if (!session?.user?.openId) {
     redirect("/login");
@@ -28,6 +31,11 @@ export default async function AdminPage() {
   return (
     <>
       <AppHeader />
+      <LiveAutoRefresh
+        scope="admin"
+        initialVersion={liveVersion}
+        intervalMs={10000}
+      />
       <PageShell>
         <main className="mx-auto max-w-6xl flex-1 p-4 py-8">
           <BackLink href="/" label="返回首页" />

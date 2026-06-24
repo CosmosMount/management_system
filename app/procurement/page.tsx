@@ -6,6 +6,7 @@ import {
   LayoutDashboard,
 } from "lucide-react";
 import { AppHeader } from "@/components/app-header";
+import { LiveAutoRefresh } from "@/components/live-auto-refresh";
 import { NavCard } from "@/components/nav-card";
 import { ProcurementPageLayout } from "@/components/procurement/procurement-page-layout";
 import { PageShell } from "@/components/page-shell";
@@ -19,11 +20,13 @@ import {
 } from "@/components/ui/card";
 import { statusLabels } from "@/lib/permissions";
 import { procurementListWhere } from "@/lib/procurement-visibility";
+import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { prisma } from "@/lib/prisma";
 import { routes } from "@/lib/routes";
 import { auth } from "@/lib/auth";
 
 export default async function ProcurementHomePage() {
+  const liveVersion = await getCurrentUserLiveVersion("procurement");
   const session = await auth();
   const orders = await prisma.purchaseOrder.findMany({
     where: procurementListWhere(session?.user?.openId),
@@ -34,6 +37,11 @@ export default async function ProcurementHomePage() {
   return (
     <>
       <AppHeader />
+      <LiveAutoRefresh
+        scope="procurement"
+        initialVersion={liveVersion}
+        intervalMs={10000}
+      />
       <PageShell>
         <ProcurementPageLayout>
           <PageTitle subtitle="采购管理" />

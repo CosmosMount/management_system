@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { AppHeader } from "@/components/app-header";
+import { LiveAutoRefresh } from "@/components/live-auto-refresh";
 import {
   ProfileOrderList,
   ProfileProjectList,
@@ -9,10 +10,12 @@ import { PageShell } from "@/components/page-shell";
 import { PageTitle } from "@/components/page-title";
 import { SignatureUploadForm } from "@/components/signature-upload-form";
 import { auth } from "@/lib/auth";
+import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { getUserProfileRecords } from "@/lib/profile-records";
 import { prisma } from "@/lib/prisma";
 
 export default async function ProfilePage() {
+  const liveVersion = await getCurrentUserLiveVersion("profile");
   const session = await auth();
   if (!session?.user?.openId) {
     redirect("/login");
@@ -31,6 +34,11 @@ export default async function ProfilePage() {
   return (
     <>
       <AppHeader />
+      <LiveAutoRefresh
+        scope="profile"
+        initialVersion={liveVersion}
+        intervalMs={10000}
+      />
       <PageShell>
         <main className="mx-auto max-w-3xl flex-1 space-y-8 p-4 py-8">
           <PageTitle subtitle={`${user.name} · 个人中心`} />

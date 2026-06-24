@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { FolderKanban, LayoutDashboard, Plus, Archive } from "lucide-react";
 import { AppHeader } from "@/components/app-header";
+import { LiveAutoRefresh } from "@/components/live-auto-refresh";
 import { NavCard } from "@/components/nav-card";
 import { ProgressPageLayout } from "@/components/progress/progress-page-layout";
 import { PageShell } from "@/components/page-shell";
@@ -16,10 +17,12 @@ import { projectStatusLabels } from "@/lib/progress-labels";
 import { prisma } from "@/lib/prisma";
 import { canCreateProject } from "@/lib/permissions-progress";
 import { auth } from "@/lib/auth";
+import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { getUserRoles } from "@/lib/permissions";
 import { routes } from "@/lib/routes";
 
 export default async function ProgressHomePage() {
+  const liveVersion = await getCurrentUserLiveVersion("progress");
   const session = await auth();
   const roles = session?.user?.openId
     ? await getUserRoles(session.user.openId)
@@ -36,6 +39,11 @@ export default async function ProgressHomePage() {
   return (
     <>
       <AppHeader />
+      <LiveAutoRefresh
+        scope="progress"
+        initialVersion={liveVersion}
+        intervalMs={10000}
+      />
       <PageShell>
         <ProgressPageLayout>
           <PageTitle subtitle="进度管理" />

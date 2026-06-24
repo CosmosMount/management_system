@@ -1,4 +1,5 @@
 import { AppHeader } from "@/components/app-header";
+import { LiveAutoRefresh } from "@/components/live-auto-refresh";
 import { ProcurementDashboardCharts } from "@/components/procurement-dashboard-charts";
 import {
   ProcurementSummaryTable,
@@ -8,11 +9,13 @@ import { ProcurementBackLink } from "@/components/procurement/procurement-back-l
 import { ProcurementPageLayout } from "@/components/procurement/procurement-page-layout";
 import { PageShell } from "@/components/page-shell";
 import { PageTitle } from "@/components/page-title";
+import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { buildDashboardChartsData } from "@/lib/procurement-dashboard-stats";
 import { procurementSummaryWhere } from "@/lib/procurement-visibility";
 import { prisma } from "@/lib/prisma";
 
 export default async function DashboardPage() {
+  const liveVersion = await getCurrentUserLiveVersion("procurement-dashboard");
   const orders = await prisma.purchaseOrder.findMany({
     where: procurementSummaryWhere(),
     include: { items: true },
@@ -56,6 +59,11 @@ export default async function DashboardPage() {
   return (
     <>
       <AppHeader />
+      <LiveAutoRefresh
+        scope="procurement-dashboard"
+        initialVersion={liveVersion}
+        intervalMs={10000}
+      />
       <PageShell>
         <ProcurementPageLayout className="space-y-8">
           <div>

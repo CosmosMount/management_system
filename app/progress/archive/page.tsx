@@ -1,16 +1,19 @@
 import { AppHeader } from "@/components/app-header";
 import { ArchivedProjectList, ArchivedTaskList } from "@/components/progress/archive-record-lists";
+import { LiveAutoRefresh } from "@/components/live-auto-refresh";
 import { ProgressBackLink } from "@/components/progress/progress-back-link";
 import { ProgressPageLayout } from "@/components/progress/progress-page-layout";
 import { PageShell } from "@/components/page-shell";
 import { PageTitle } from "@/components/page-title";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { auth } from "@/lib/auth";
+import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { getTaskAssigneeNames } from "@/lib/progress-assignees";
 import { isSuperAdmin } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 
 export default async function ArchivePage() {
+  const liveVersion = await getCurrentUserLiveVersion("progress");
   const session = await auth();
   const admin = session?.user?.openId
     ? await isSuperAdmin(session.user.openId)
@@ -53,6 +56,11 @@ export default async function ArchivePage() {
   return (
     <>
       <AppHeader />
+      <LiveAutoRefresh
+        scope="progress"
+        initialVersion={liveVersion}
+        intervalMs={10000}
+      />
       <PageShell>
         <ProgressPageLayout className="space-y-8">
           <ProgressBackLink />

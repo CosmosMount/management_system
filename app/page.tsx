@@ -1,13 +1,16 @@
 import { FolderKanban, Shield, ShoppingCart } from "lucide-react";
 import { AppHeader } from "@/components/app-header";
+import { LiveAutoRefresh } from "@/components/live-auto-refresh";
 import { NavCard } from "@/components/nav-card";
 import { PageShell } from "@/components/page-shell";
 import { PageTitle } from "@/components/page-title";
 import { auth } from "@/lib/auth";
+import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { isSuperAdmin } from "@/lib/permissions";
 import { routes } from "@/lib/routes";
 
 export default async function HomePage() {
+  const liveVersion = await getCurrentUserLiveVersion("profile");
   const session = await auth();
   const showAdmin =
     !!session?.user?.openId && (await isSuperAdmin(session.user.openId));
@@ -15,6 +18,11 @@ export default async function HomePage() {
   return (
     <>
       <AppHeader />
+      <LiveAutoRefresh
+        scope="profile"
+        initialVersion={liveVersion}
+        intervalMs={10000}
+      />
       <PageShell>
         <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-10">
           <PageTitle />
