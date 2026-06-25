@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   AlertCircle,
@@ -782,8 +782,10 @@ function StageDetailPanel({
   isCurrentStage: boolean;
 }) {
   const router = useRouter();
+  const evidenceUrlInputRef = useRef<HTMLInputElement>(null);
   const [loading, setLoading] = useState(false);
   const [evidenceUrl, setEvidenceUrl] = useState("");
+  const [evidenceUrlError, setEvidenceUrlError] = useState("");
   const [note, setNote] = useState("");
   const [comments, setComments] = useState<Record<string, string>>({});
   const pendingSubmission = stage.submissions.find(
@@ -799,20 +801,30 @@ function StageDetailPanel({
     pendingSubmission?.canApprove && stage.status === "PENDING_ACCEPTANCE";
 
   async function handleStageSubmit() {
-    if (!evidenceUrl.trim()) {
-      toast.error("请填写文档或归档链接");
+    const error = validateRequiredUrl(
+      evidenceUrl,
+      "请填写文档或归档链接",
+      "请输入有效的文档或归档链接",
+    );
+    if (error) {
+      setEvidenceUrlError(error);
+      toast.error(error);
+      focusInput(evidenceUrlInputRef.current);
       return;
     }
+
+    setEvidenceUrlError("");
     setLoading(true);
     try {
       await submitStageEvidence({
         projectId,
         stageId: stage.id,
-        evidenceUrl,
-        note,
+        evidenceUrl: evidenceUrl.trim(),
+        note: note.trim(),
       });
       toast.success("阶段材料已提交");
       setEvidenceUrl("");
+      setEvidenceUrlError("");
       setNote("");
       router.refresh();
     } catch (err) {
@@ -909,10 +921,27 @@ function StageDetailPanel({
             <h3 className="text-sm font-medium">提交阶段材料</h3>
             <div className="mt-3 grid gap-3">
               <Input
+                ref={evidenceUrlInputRef}
                 placeholder="文档或文件归档链接"
                 value={evidenceUrl}
-                onChange={(event) => setEvidenceUrl(event.target.value)}
+                onChange={(event) => {
+                  setEvidenceUrl(event.target.value);
+                  if (evidenceUrlError) setEvidenceUrlError("");
+                }}
+                inputMode="url"
+                aria-invalid={!!evidenceUrlError}
+                aria-describedby={
+                  evidenceUrlError ? "stage-evidence-url-error" : undefined
+                }
               />
+              {evidenceUrlError && (
+                <p
+                  id="stage-evidence-url-error"
+                  className="text-sm text-destructive"
+                >
+                  {evidenceUrlError}
+                </p>
+              )}
               <Textarea
                 placeholder="提交说明（可选）"
                 value={note}
@@ -1808,6 +1837,27 @@ function formatDateTime(value: string): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function validateRequiredUrl(
+  value: string,
+  emptyMessage: string,
+  invalidMessage: string,
+): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return emptyMessage;
+
+  try {
+    new URL(trimmed);
+    return null;
+  } catch {
+    return invalidMessage;
+  }
+}
+
+function focusInput(input: HTMLInputElement | null) {
+  input?.scrollIntoView({ behavior: "smooth", block: "center" });
+  input?.focus();
 }
 
 function formatScopeItem(value: string): string {

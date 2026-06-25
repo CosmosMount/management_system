@@ -2,7 +2,9 @@
 
 import { X } from "lucide-react";
 import {
+  type ComponentProps,
   type CSSProperties,
+  type Ref,
   type RefObject,
   useCallback,
   useEffect,
@@ -28,6 +30,11 @@ type Props = {
   placeholder?: string;
   className?: string;
   inputClassName?: string;
+  inputProps?: Pick<
+    ComponentProps<"input">,
+    "aria-describedby" | "aria-invalid"
+  >;
+  inputRef?: Ref<HTMLInputElement>;
   disabled?: boolean;
 };
 
@@ -38,6 +45,11 @@ type MultiProps = {
   placeholder?: string;
   className?: string;
   inputClassName?: string;
+  inputProps?: Pick<
+    ComponentProps<"input">,
+    "aria-describedby" | "aria-invalid"
+  >;
+  inputRef?: Ref<HTMLInputElement>;
   disabled?: boolean;
 };
 
@@ -183,6 +195,8 @@ export function UserSearchSelect({
   placeholder = "搜索姓名…",
   className,
   inputClassName,
+  inputProps,
+  inputRef,
   disabled,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -222,6 +236,7 @@ export function UserSearchSelect({
         />
       )}
       <Input
+        ref={inputRef}
         className={cn(selected && !open && "pl-8", inputClassName)}
         disabled={disabled}
         placeholder={selected ? selected.name : placeholder}
@@ -234,6 +249,7 @@ export function UserSearchSelect({
           setQuery(selected?.name ?? "");
           setOpen(true);
         }}
+        {...inputProps}
       />
       {open &&
         !disabled &&
@@ -284,6 +300,8 @@ export function UserMultiSearchSelect({
   placeholder = "搜索姓名…",
   className,
   inputClassName,
+  inputProps,
+  inputRef,
   disabled,
 }: MultiProps) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -354,6 +372,7 @@ export function UserMultiSearchSelect({
         </div>
       )}
       <Input
+        ref={inputRef}
         className={inputClassName}
         disabled={disabled}
         placeholder={placeholder}
@@ -363,6 +382,7 @@ export function UserMultiSearchSelect({
           setOpen(true);
         }}
         onFocus={() => setOpen(true)}
+        {...inputProps}
       />
       {open &&
         !disabled &&

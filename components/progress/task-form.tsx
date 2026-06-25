@@ -1,6 +1,11 @@
 "use client";
 
-import { useForm, Controller, useFieldArray } from "react-hook-form";
+import {
+  useForm,
+  Controller,
+  useFieldArray,
+  type SubmitErrorHandler,
+} from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -110,6 +115,7 @@ export function TaskForm({
       acceptanceChecklistItems: initialTask?.acceptanceChecklistItems ?? [],
     },
   });
+  const errors = form.formState.errors;
   const checklistFields = useFieldArray({
     control: form.control,
     name: "acceptanceChecklistItems",
@@ -186,8 +192,15 @@ export function TaskForm({
     }
   }
 
+  const onInvalid: SubmitErrorHandler<TaskFormValues> = (_errors, event) => {
+    toast.error("请先补全任务表单中的必填项");
+    const formElement =
+      event?.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+    window.setTimeout(() => focusFirstInvalidControl(formElement), 0);
+  };
+
   return (
-    <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+    <form onSubmit={form.handleSubmit(onSubmit, onInvalid)} className="space-y-4">
       {liveRefreshPending && (
         <div
           data-testid="live-refresh-pending-alert"
@@ -199,7 +212,12 @@ export function TaskForm({
       )}
       <div className="space-y-2">
         <Label>任务目标</Label>
-        <Input {...form.register("title")} />
+        <Input
+          {...form.register("title")}
+          aria-invalid={!!errors.title}
+          aria-describedby={errors.title ? "task-title-error" : undefined}
+        />
+        <FormFieldError id="task-title-error" message={errors.title?.message} />
       </div>
       <div className="space-y-2">
         <Label>详细说明</Label>
@@ -236,6 +254,10 @@ export function TaskForm({
                 </SelectContent>
               </Select>
             )}
+          />
+          <FormFieldError
+            id="task-stage-error"
+            message={errors.stageId?.message}
           />
         </div>
       )}
@@ -341,17 +363,38 @@ export function TaskForm({
               value={field.value ?? []}
               onChange={field.onChange}
               placeholder="搜索负责人姓名"
+              inputProps={{
+                "aria-invalid": !!errors.assigneeOpenIds,
+                "aria-describedby": errors.assigneeOpenIds
+                  ? "task-assignees-error"
+                  : undefined,
+              }}
             />
           )}
+        />
+        <FormFieldError
+          id="task-assignees-error"
+          message={errors.assigneeOpenIds?.message}
         />
       </div>
       <div className="space-y-2">
         <Label>定量/定性指标</Label>
-        <Input {...form.register("metrics")} />
+        <Input
+          {...form.register("metrics")}
+          aria-invalid={!!errors.metrics}
+          aria-describedby={errors.metrics ? "task-metrics-error" : undefined}
+        />
+        <FormFieldError id="task-metrics-error" message={errors.metrics?.message} />
       </div>
       <div className="space-y-2">
         <Label>最晚完成时间</Label>
-        <Input type="datetime-local" {...form.register("dueAt")} />
+        <Input
+          type="datetime-local"
+          {...form.register("dueAt")}
+          aria-invalid={!!errors.dueAt}
+          aria-describedby={errors.dueAt ? "task-due-at-error" : undefined}
+        />
+        <FormFieldError id="task-due-at-error" message={errors.dueAt?.message} />
       </div>
       <div className="flex flex-wrap gap-4 text-sm">
         <label className="flex items-center gap-2">
@@ -401,13 +444,29 @@ export function TaskForm({
           ) : (
             checklistFields.fields.map((field, index) => (
               <div key={field.id} className="flex gap-2">
-                <Input
-                  {...form.register(
-                    `acceptanceChecklistItems.${index}.content`,
-                  )}
-                  disabled={checklistReadOnly}
-                  placeholder={`验收条例 ${index + 1}`}
-                />
+                <div className="min-w-0 flex-1 space-y-2">
+                  <Input
+                    {...form.register(
+                      `acceptanceChecklistItems.${index}.content`,
+                    )}
+                    disabled={checklistReadOnly}
+                    placeholder={`验收条例 ${index + 1}`}
+                    aria-invalid={
+                      !!errors.acceptanceChecklistItems?.[index]?.content
+                    }
+                    aria-describedby={
+                      errors.acceptanceChecklistItems?.[index]?.content
+                        ? `task-checklist-${index}-error`
+                        : undefined
+                    }
+                  />
+                  <FormFieldError
+                    id={`task-checklist-${index}-error`}
+                    message={
+                      errors.acceptanceChecklistItems?.[index]?.content?.message
+                    }
+                  />
+                </div>
                 {!checklistReadOnly && (
                   <Button
                     type="button"
@@ -435,10 +494,8 @@ export function TaskForm({
             添加自定义条例
           </Button>
         )}
-        {form.formState.errors.acceptanceChecklistItems?.message && (
-          <p className="text-sm text-destructive">
-            {form.formState.errors.acceptanceChecklistItems.message}
-          </p>
+        {typeof errors.acceptanceChecklistItems?.message === "string" && (
+          <FormFieldError message={errors.acceptanceChecklistItems.message} />
         )}
       </div>
       <Button type="submit" disabled={submitting}>
@@ -446,6 +503,30 @@ export function TaskForm({
       </Button>
     </form>
   );
+}
+
+function FormFieldError({
+  id,
+  message,
+}: {
+  id?: string;
+  message?: string;
+}) {
+  if (!message) return null;
+
+  return (
+    <p id={id} className="text-sm text-destructive">
+      {message}
+    </p>
+  );
+}
+
+function focusFirstInvalidControl(container: HTMLElement | null) {
+  const target = container?.querySelector<HTMLElement>(
+    'input[aria-invalid="true"], textarea[aria-invalid="true"], button[aria-invalid="true"], [role="button"][aria-invalid="true"]',
+  );
+  target?.scrollIntoView({ behavior: "smooth", block: "center" });
+  target?.focus();
 }
 
 function toDatetimeLocal(value: string): string {

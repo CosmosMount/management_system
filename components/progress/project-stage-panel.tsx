@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
@@ -65,8 +65,12 @@ export function ProjectStagePanel({
   canUpdateLifecycle,
 }: Props) {
   const router = useRouter();
+  const evidenceInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const [loading, setLoading] = useState(false);
   const [evidenceUrls, setEvidenceUrls] = useState<Record<string, string>>({});
+  const [evidenceUrlErrors, setEvidenceUrlErrors] = useState<
+    Record<string, string>
+  >({});
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [comments, setComments] = useState<Record<string, string>>({});
 
@@ -98,20 +102,34 @@ export function ProjectStagePanel({
   }
 
   async function handleStageSubmit(stageId: string) {
-    const evidenceUrl = evidenceUrls[stageId];
-    if (!evidenceUrl) {
-      toast.error("请填写文档或归档链接");
+    const evidenceUrl = evidenceUrls[stageId] ?? "";
+    const error = validateRequiredUrl(
+      evidenceUrl,
+      "请填写文档或归档链接",
+      "请输入有效的文档或归档链接",
+    );
+    if (error) {
+      setEvidenceUrlErrors((prev) => ({ ...prev, [stageId]: error }));
+      toast.error(error);
+      const input = evidenceInputRefs.current[stageId];
+      input?.scrollIntoView({ behavior: "smooth", block: "center" });
+      input?.focus();
       return;
     }
+
+    setEvidenceUrlErrors((prev) => ({ ...prev, [stageId]: "" }));
     setLoading(true);
     try {
       await submitStageEvidence({
         projectId,
         stageId,
-        evidenceUrl,
-        note: notes[stageId] ?? "",
+        evidenceUrl: evidenceUrl.trim(),
+        note: (notes[stageId] ?? "").trim(),
       });
       toast.success("阶段材料已提交");
+      setEvidenceUrls((prev) => ({ ...prev, [stageId]: "" }));
+      setEvidenceUrlErrors((prev) => ({ ...prev, [stageId]: "" }));
+      setNotes((prev) => ({ ...prev, [stageId]: "" }));
       router.refresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "提交失败");
@@ -215,14 +233,24 @@ export function ProjectStagePanel({
               status={status}
               loading={loading}
               evidenceUrl={evidenceUrls[currentStage.id] ?? ""}
+              evidenceUrlError={evidenceUrlErrors[currentStage.id] ?? ""}
+              evidenceInputRef={(element) => {
+                evidenceInputRefs.current[currentStage.id] = element;
+              }}
               note={notes[currentStage.id] ?? ""}
               comments={comments}
-              onEvidenceChange={(value) =>
+              onEvidenceChange={(value) => {
                 setEvidenceUrls((prev) => ({
                   ...prev,
                   [currentStage.id]: value,
-                }))
-              }
+                }));
+                if (evidenceUrlErrors[currentStage.id]) {
+                  setEvidenceUrlErrors((prev) => ({
+                    ...prev,
+                    [currentStage.id]: "",
+                  }));
+                }
+              }}
               onNoteChange={(value) =>
                 setNotes((prev) => ({
                   ...prev,
@@ -252,6 +280,8 @@ function CurrentStageCard({
   status,
   loading,
   evidenceUrl,
+  evidenceUrlError,
+  evidenceInputRef,
   note,
   comments,
   onEvidenceChange,
@@ -264,6 +294,8 @@ function CurrentStageCard({
   status: ProjectStatus;
   loading: boolean;
   evidenceUrl: string;
+  evidenceUrlError: string;
+  evidenceInputRef: (element: HTMLInputElement | null) => void;
   note: string;
   comments: Record<string, string>;
   onEvidenceChange: (value: string) => void;
@@ -310,10 +342,24 @@ function CurrentStageCard({
       {canSubmit && (
         <div className="mt-4 grid gap-3">
           <Input
+            ref={evidenceInputRef}
             placeholder="文档或文件归档链接"
             value={evidenceUrl}
             onChange={(e) => onEvidenceChange(e.target.value)}
+            inputMode="url"
+            aria-invalid={!!evidenceUrlError}
+            aria-describedby={
+              evidenceUrlError ? "legacy-stage-evidence-url-error" : undefined
+            }
           />
+          {evidenceUrlError && (
+            <p
+              id="legacy-stage-evidence-url-error"
+              className="text-sm text-destructive"
+            >
+              {evidenceUrlError}
+            </p>
+          )}
           <Textarea
             placeholder="提交说明（可选）"
             value={note}
@@ -402,4 +448,20 @@ function CurrentStageCard({
       )}
     </div>
   );
+}
+
+function validateRequiredUrl(
+  value: string,
+  emptyMessage: string,
+  invalidMessage: string,
+): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return emptyMessage;
+
+  try {
+    new URL(trimmed);
+    return null;
+  } catch {
+    return invalidMessage;
+  }
 }

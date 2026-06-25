@@ -3,6 +3,7 @@
 import {
   Controller,
   type Resolver,
+  type SubmitErrorHandler,
   useFieldArray,
   useForm,
   useWatch,
@@ -35,6 +36,7 @@ import { UserMultiSearchSelect, UserSearchSelect } from "@/components/user-searc
 import { getActionErrorMessage } from "@/lib/action-error-message";
 import { Textarea } from "@/components/ui/textarea";
 import { routes } from "@/lib/routes";
+import { cn } from "@/lib/utils";
 
 type UserOption = { openId: string; name: string; avatar?: string | null };
 type TeamFormValue = (typeof TEAM_OPTIONS)[number] | "";
@@ -128,6 +130,7 @@ export function ProjectForm({
       stages: editing ? [] : realCarStages(),
     },
   });
+  const errors = form.formState.errors;
 
   const { fields, append, remove } = useFieldArray({
     control: form.control,
@@ -141,6 +144,7 @@ export function ProjectForm({
   const team = useWatch({ control: form.control, name: "team" });
   const techGroup = useWatch({ control: form.control, name: "techGroup" });
   const primaryOwnerOpenId = ownerOpenIds?.[0] ?? "";
+  const scopeErrorMessage = errors.team?.message ?? errors.techGroup?.message;
   const scopeWarning =
     team && !techGroup
       ? "仅选择车组时，只有该车组组长和全局管理角色会参与管理/审批。"
@@ -200,13 +204,20 @@ export function ProjectForm({
     }
   }
 
+  const onInvalid: SubmitErrorHandler<ProjectFormValues> = (_errors, event) => {
+    toast.error("请先补全项目表单中的必填项");
+    const formElement =
+      event?.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+    window.setTimeout(() => focusFirstInvalidControl(formElement), 0);
+  };
+
   function applyRealCarTemplate() {
     form.setValue("template", "real-car");
     form.setValue("stages", realCarStages(primaryOwnerOpenId));
   }
 
   return (
-    <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+    <form onSubmit={form.handleSubmit(onSubmit, onInvalid)} className="space-y-6">
       {liveRefreshPending && (
         <div
           data-testid="live-refresh-pending-alert"
@@ -223,7 +234,12 @@ export function ProjectForm({
         <CardContent className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2 sm:col-span-2">
             <Label>项目名称</Label>
-            <Input {...form.register("name")} />
+            <Input
+              {...form.register("name")}
+              aria-invalid={!!errors.name}
+              aria-describedby={errors.name ? "project-name-error" : undefined}
+            />
+            <FormFieldError id="project-name-error" message={errors.name?.message} />
           </div>
           <div className="space-y-2 sm:col-span-2">
             <Label>描述</Label>
@@ -251,8 +267,18 @@ export function ProjectForm({
                     );
                   }}
                   placeholder="搜索项目负责人"
+                  inputProps={{
+                    "aria-invalid": !!errors.ownerOpenIds,
+                    "aria-describedby": errors.ownerOpenIds
+                      ? "project-owners-error"
+                      : undefined,
+                  }}
                 />
               )}
+            />
+            <FormFieldError
+              id="project-owners-error"
+              message={errors.ownerOpenIds?.message}
             />
           </div>
           <div className="space-y-2">
@@ -265,7 +291,13 @@ export function ProjectForm({
                   value={field.value || "none"}
                   onValueChange={(v) => field.onChange(v === "none" ? "" : v)}
                 >
-                  <SelectTrigger className="w-full">
+                  <SelectTrigger
+                    className="w-full"
+                    aria-invalid={!!scopeErrorMessage}
+                    aria-describedby={
+                      scopeErrorMessage ? "project-scope-error" : undefined
+                    }
+                  >
                     <SelectValue placeholder="选择车组或未指定" />
                   </SelectTrigger>
                   <SelectContent>
@@ -290,7 +322,13 @@ export function ProjectForm({
                   value={field.value || "none"}
                   onValueChange={(v) => field.onChange(v === "none" ? "" : v)}
                 >
-                  <SelectTrigger className="w-full">
+                  <SelectTrigger
+                    className="w-full"
+                    aria-invalid={!!scopeErrorMessage}
+                    aria-describedby={
+                      scopeErrorMessage ? "project-scope-error" : undefined
+                    }
+                  >
                     <SelectValue placeholder="选择技术组或未指定" />
                   </SelectTrigger>
                   <SelectContent>
@@ -311,6 +349,11 @@ export function ProjectForm({
               <span>{scopeWarning}</span>
             </div>
           )}
+          <FormFieldError
+            className="sm:col-span-2"
+            id="project-scope-error"
+            message={scopeErrorMessage}
+          />
         </CardContent>
       </Card>
 
@@ -351,13 +394,35 @@ export function ProjectForm({
                 <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
                   <div className="space-y-2">
                     <Label>阶段名称</Label>
-                    <Input {...form.register(`stages.${index}.name`)} />
+                    <Input
+                      {...form.register(`stages.${index}.name`)}
+                      aria-invalid={!!errors.stages?.[index]?.name}
+                      aria-describedby={
+                        errors.stages?.[index]?.name
+                          ? `project-stage-${index}-name-error`
+                          : undefined
+                      }
+                    />
+                    <FormFieldError
+                      id={`project-stage-${index}-name-error`}
+                      message={errors.stages?.[index]?.name?.message}
+                    />
                   </div>
                   <div className="space-y-2">
                     <Label>DDL</Label>
                     <Input
                       type="datetime-local"
                       {...form.register(`stages.${index}.dueAt`)}
+                      aria-invalid={!!errors.stages?.[index]?.dueAt}
+                      aria-describedby={
+                        errors.stages?.[index]?.dueAt
+                          ? `project-stage-${index}-due-error`
+                          : undefined
+                      }
+                    />
+                    <FormFieldError
+                      id={`project-stage-${index}-due-error`}
+                      message={errors.stages?.[index]?.dueAt?.message}
                     />
                   </div>
                   <div className="flex items-end">
@@ -374,7 +439,19 @@ export function ProjectForm({
                 </div>
                 <div className="mt-3 space-y-2">
                   <Label>阶段目标</Label>
-                  <Textarea {...form.register(`stages.${index}.goal`)} />
+                  <Textarea
+                    {...form.register(`stages.${index}.goal`)}
+                    aria-invalid={!!errors.stages?.[index]?.goal}
+                    aria-describedby={
+                      errors.stages?.[index]?.goal
+                        ? `project-stage-${index}-goal-error`
+                        : undefined
+                    }
+                  />
+                  <FormFieldError
+                    id={`project-stage-${index}-goal-error`}
+                    message={errors.stages?.[index]?.goal?.message}
+                  />
                 </div>
                 <div className="mt-3 space-y-2">
                   <Label>阶段负责人</Label>
@@ -387,12 +464,25 @@ export function ProjectForm({
                         value={field.value ?? ""}
                         onChange={(v) => field.onChange(v || undefined)}
                         placeholder="搜索阶段负责人"
+                        inputProps={{
+                          "aria-invalid": !!errors.stages?.[index]?.ownerOpenId,
+                          "aria-describedby": errors.stages?.[index]?.ownerOpenId
+                            ? `project-stage-${index}-owner-error`
+                            : undefined,
+                        }}
                       />
                     )}
+                  />
+                  <FormFieldError
+                    id={`project-stage-${index}-owner-error`}
+                    message={errors.stages?.[index]?.ownerOpenId?.message}
                   />
                 </div>
               </div>
             ))}
+            {typeof errors.stages?.message === "string" && (
+              <FormFieldError message={errors.stages.message} />
+            )}
           </CardContent>
         </Card>
       )}
@@ -413,5 +503,31 @@ export function ProjectForm({
         {submitLabel ?? (editing ? "保存修改" : "创建项目")}
       </Button>
     </form>
+  );
+}
+
+function focusFirstInvalidControl(container: HTMLElement | null) {
+  const target = container?.querySelector<HTMLElement>(
+    'input[aria-invalid="true"], textarea[aria-invalid="true"], button[aria-invalid="true"], [role="button"][aria-invalid="true"]',
+  );
+  target?.scrollIntoView({ behavior: "smooth", block: "center" });
+  target?.focus();
+}
+
+function FormFieldError({
+  id,
+  message,
+  className,
+}: {
+  id?: string;
+  message?: string;
+  className?: string;
+}) {
+  if (!message) return null;
+
+  return (
+    <p id={id} className={cn("text-sm text-destructive", className)}>
+      {message}
+    </p>
   );
 }

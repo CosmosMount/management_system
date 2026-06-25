@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { useRouter } from "next/navigation";
 import {
   Archive,
@@ -59,6 +59,16 @@ type AcceptanceChecklistItem = {
   sortOrder: number;
 };
 
+type DeliveryErrors = {
+  docUrl?: string;
+  keyDataUrl?: string;
+};
+
+type WeeklyErrors = {
+  weeklyDocUrl?: string;
+  progress?: string;
+};
+
 type Props = {
   taskId: string;
   status: TaskStatus;
@@ -91,6 +101,10 @@ export function TaskActionsPanel({
   showFlowActions = true,
 }: Props) {
   const router = useRouter();
+  const docUrlInputRef = useRef<HTMLInputElement>(null);
+  const keyDataUrlInputRef = useRef<HTMLInputElement>(null);
+  const weeklyDocUrlInputRef = useRef<HTMLInputElement>(null);
+  const weeklyProgressInputRef = useRef<HTMLInputElement>(null);
   const [loading, setLoading] = useState(false);
   const [docUrl, setDocUrl] = useState("");
   const [weeklyDocUrl, setWeeklyDocUrl] = useState("");
@@ -104,6 +118,8 @@ export function TaskActionsPanel({
   const [riskNote, setRiskNote] = useState("");
   const [offlineConfirmed, setOfflineConfirmed] = useState(false);
   const [checkedChecklistItemIds, setCheckedChecklistItemIds] = useState<string[]>([]);
+  const [deliveryErrors, setDeliveryErrors] = useState<DeliveryErrors>({});
+  const [weeklyErrors, setWeeklyErrors] = useState<WeeklyErrors>({});
 
   const pendingSubmission = submissions.find(
     (s) => !s.approvals.some((a) => a.decision === "APPROVED"),
@@ -133,16 +149,43 @@ export function TaskActionsPanel({
   }
 
   async function handleDelivery() {
+    const nextErrors: DeliveryErrors = {};
+    const docUrlError = validateRequiredUrl(
+      docUrl,
+      "请填写飞书文档链接",
+      "请输入有效的飞书文档链接",
+    );
+    const keyDataUrlError = validateRequiredUrl(
+      keyDataUrl,
+      "请填写关键数据/材料链接",
+      "请输入有效的关键数据/材料链接",
+    );
+
+    if (docUrlError) nextErrors.docUrl = docUrlError;
+    if (keyDataUrlError) nextErrors.keyDataUrl = keyDataUrlError;
+
+    if (nextErrors.docUrl || nextErrors.keyDataUrl) {
+      setDeliveryErrors(nextErrors);
+      toast.error("请先补全交付表单中的必填链接");
+      focusInput(nextErrors.docUrl ? docUrlInputRef.current : keyDataUrlInputRef.current);
+      return;
+    }
+
+    setDeliveryErrors({});
     setLoading(true);
     try {
       await submitTaskDelivery({
         taskId,
-        feishuDocUrl: docUrl,
-        keyDataUrl,
-        note,
-        failureReason,
+        feishuDocUrl: docUrl.trim(),
+        keyDataUrl: keyDataUrl.trim(),
+        note: note.trim(),
+        failureReason: failureReason.trim(),
       });
       toast.success("交付已提交，等待验收");
+      setDocUrl("");
+      setKeyDataUrl("");
+      setNote("");
+      setFailureReason("");
       router.refresh();
     } catch (err) {
       toast.error(getActionErrorMessage(err, "提交失败"));
@@ -165,16 +208,41 @@ export function TaskActionsPanel({
   }
 
   async function handleWeekly() {
+    const nextErrors: WeeklyErrors = {};
+    const weeklyDocUrlError = validateOptionalUrl(
+      weeklyDocUrl,
+      "请输入有效的周报飞书文档链接",
+    );
+
+    if (weeklyDocUrlError) nextErrors.weeklyDocUrl = weeklyDocUrlError;
+    if (!progress.trim()) nextErrors.progress = "请填写本周完成情况";
+
+    if (nextErrors.weeklyDocUrl || nextErrors.progress) {
+      setWeeklyErrors(nextErrors);
+      toast.error("请先补全周报表单中的必填项");
+      focusInput(
+        nextErrors.weeklyDocUrl
+          ? weeklyDocUrlInputRef.current
+          : weeklyProgressInputRef.current,
+      );
+      return;
+    }
+
+    setWeeklyErrors({});
     setLoading(true);
     try {
       await submitWeeklyReport({
         taskId,
-        progress,
-        risks,
-        nextPlan,
-        feishuDocUrl: weeklyDocUrl,
+        progress: progress.trim(),
+        risks: risks.trim(),
+        nextPlan: nextPlan.trim(),
+        feishuDocUrl: weeklyDocUrl.trim(),
       });
       toast.success("周报已提交");
+      setWeeklyDocUrl("");
+      setProgress("");
+      setRisks("");
+      setNextPlan("");
       router.refresh();
     } catch (err) {
       toast.error(getActionErrorMessage(err, "提交失败"));
@@ -261,18 +329,54 @@ export function TaskActionsPanel({
             <div className="space-y-2 md:col-span-2">
               <Label>飞书文档链接（必填）</Label>
               <Input
+                ref={docUrlInputRef}
                 value={docUrl}
-                onChange={(e) => setDocUrl(e.target.value)}
+                onChange={(e) => {
+                  setDocUrl(e.target.value);
+                  clearDeliveryError("docUrl", setDeliveryErrors);
+                }}
                 placeholder="https://xxx.feishu.cn/docx/..."
+                inputMode="url"
+                aria-invalid={!!deliveryErrors.docUrl}
+                aria-describedby={
+                  deliveryErrors.docUrl ? "task-delivery-doc-url-error" : undefined
+                }
               />
+              {deliveryErrors.docUrl && (
+                <p
+                  id="task-delivery-doc-url-error"
+                  className="text-sm text-destructive"
+                >
+                  {deliveryErrors.docUrl}
+                </p>
+              )}
             </div>
             <div className="space-y-2">
               <Label>关键数据/材料链接（必填）</Label>
               <Input
+                ref={keyDataUrlInputRef}
                 value={keyDataUrl}
-                onChange={(e) => setKeyDataUrl(e.target.value)}
+                onChange={(e) => {
+                  setKeyDataUrl(e.target.value);
+                  clearDeliveryError("keyDataUrl", setDeliveryErrors);
+                }}
                 placeholder="视频、照片、曲线或归档材料链接，需为 URL"
+                inputMode="url"
+                aria-invalid={!!deliveryErrors.keyDataUrl}
+                aria-describedby={
+                  deliveryErrors.keyDataUrl
+                    ? "task-delivery-key-data-url-error"
+                    : undefined
+                }
               />
+              {deliveryErrors.keyDataUrl && (
+                <p
+                  id="task-delivery-key-data-url-error"
+                  className="text-sm text-destructive"
+                >
+                  {deliveryErrors.keyDataUrl}
+                </p>
+              )}
             </div>
             <div className="space-y-2">
               <Label>说明</Label>
@@ -286,7 +390,7 @@ export function TaskActionsPanel({
               />
             </div>
             <div className="md:col-span-2">
-              <Button disabled={loading} onClick={handleDelivery}>
+              <Button type="button" disabled={loading} onClick={handleDelivery}>
                 提交验收
               </Button>
             </div>
@@ -304,17 +408,55 @@ export function TaskActionsPanel({
             </CardTitle>
           </CardHeader>
           <CardContent className="grid gap-4 md:grid-cols-3">
-            <Input
-              className="md:col-span-3"
-              placeholder="周报飞书文档链接（可选）"
-              value={weeklyDocUrl}
-              onChange={(e) => setWeeklyDocUrl(e.target.value)}
-            />
-            <Input
-              placeholder="本周完成情况"
-              value={progress}
-              onChange={(e) => setProgress(e.target.value)}
-            />
+            <div className="space-y-2 md:col-span-3">
+              <Input
+                ref={weeklyDocUrlInputRef}
+                placeholder="周报飞书文档链接（可选）"
+                value={weeklyDocUrl}
+                onChange={(e) => {
+                  setWeeklyDocUrl(e.target.value);
+                  clearWeeklyError("weeklyDocUrl", setWeeklyErrors);
+                }}
+                inputMode="url"
+                aria-invalid={!!weeklyErrors.weeklyDocUrl}
+                aria-describedby={
+                  weeklyErrors.weeklyDocUrl
+                    ? "task-weekly-doc-url-error"
+                    : undefined
+                }
+              />
+              {weeklyErrors.weeklyDocUrl && (
+                <p
+                  id="task-weekly-doc-url-error"
+                  className="text-sm text-destructive"
+                >
+                  {weeklyErrors.weeklyDocUrl}
+                </p>
+              )}
+            </div>
+            <div className="space-y-2">
+              <Input
+                ref={weeklyProgressInputRef}
+                placeholder="本周完成情况"
+                value={progress}
+                onChange={(e) => {
+                  setProgress(e.target.value);
+                  clearWeeklyError("progress", setWeeklyErrors);
+                }}
+                aria-invalid={!!weeklyErrors.progress}
+                aria-describedby={
+                  weeklyErrors.progress ? "task-weekly-progress-error" : undefined
+                }
+              />
+              {weeklyErrors.progress && (
+                <p
+                  id="task-weekly-progress-error"
+                  className="text-sm text-destructive"
+                >
+                  {weeklyErrors.progress}
+                </p>
+              )}
+            </div>
             <Input
               placeholder="风险同步"
               value={risks}
@@ -326,7 +468,12 @@ export function TaskActionsPanel({
               onChange={(e) => setNextPlan(e.target.value)}
             />
             <div className="md:col-span-3">
-              <Button variant="secondary" disabled={loading} onClick={handleWeekly}>
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={loading}
+                onClick={handleWeekly}
+              >
                 提交周报
               </Button>
             </div>
@@ -513,6 +660,59 @@ export function TaskActionsPanel({
       </Card>
     </div>
   );
+}
+
+function validateRequiredUrl(
+  value: string,
+  emptyMessage: string,
+  invalidMessage: string,
+): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return emptyMessage;
+  return isValidAbsoluteUrl(trimmed) ? null : invalidMessage;
+}
+
+function validateOptionalUrl(
+  value: string,
+  invalidMessage: string,
+): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return isValidAbsoluteUrl(trimmed) ? null : invalidMessage;
+}
+
+function isValidAbsoluteUrl(value: string): boolean {
+  try {
+    new URL(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function focusInput(input: HTMLInputElement | null) {
+  input?.scrollIntoView({ behavior: "smooth", block: "center" });
+  input?.focus();
+}
+
+function clearDeliveryError(
+  field: keyof DeliveryErrors,
+  setErrors: Dispatch<SetStateAction<DeliveryErrors>>,
+) {
+  setErrors((current) => {
+    if (!current[field]) return current;
+    return { ...current, [field]: undefined };
+  });
+}
+
+function clearWeeklyError(
+  field: keyof WeeklyErrors,
+  setErrors: Dispatch<SetStateAction<WeeklyErrors>>,
+) {
+  setErrors((current) => {
+    if (!current[field]) return current;
+    return { ...current, [field]: undefined };
+  });
 }
 
 function TaskFlowTimeline({ status }: { status: TaskStatus }) {
