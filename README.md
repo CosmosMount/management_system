@@ -49,6 +49,14 @@ http://10.4.150.222:3000/api/auth/callback/feishu
 docker compose up -d --build
 ```
 
+如果当前用户没有 Docker socket 权限，可在 `.env` 或当前 shell 设置 `SUDO_PASSWORD`，然后使用仓库提供的辅助脚本：
+
+```bash
+./scripts/docker-compose-sudo.sh up -d --build
+```
+
+`SUDO_PASSWORD` 只用于宿主机 `sudo docker compose ...`，不会传入 app/cron 容器。
+
 - **app**：Next.js 应用，默认映射端口 `3000`（可通过 `.env` 设置 `APP_PORT=8080` 改宿主机端口）
 - **cron**：定时任务（采购日报、进度提醒、周报），与 app 共用数据库卷
 

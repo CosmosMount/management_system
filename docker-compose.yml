@@ -1,14 +1,29 @@
+name: management-system
+
+x-app-environment: &app-environment
+  DATABASE_URL: file:/app/data/app.db
+  AUTH_SECRET: ${AUTH_SECRET:?AUTH_SECRET is required}
+  FEISHU_APP_ID: ${FEISHU_APP_ID:?FEISHU_APP_ID is required}
+  FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:?FEISHU_APP_SECRET is required}
+  FEISHU_WEBHOOK_URL: ${FEISHU_WEBHOOK_URL:-}
+  FEISHU_WEBHOOK_SECRET: ${FEISHU_WEBHOOK_SECRET:-}
+  FEISHU_CONTACT_SYNC_CRON: ${FEISHU_CONTACT_SYNC_CRON:-30 8 * * *}
+  NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:?NEXT_PUBLIC_APP_URL is required}
+  APP_ALLOWED_ORIGINS: ${APP_ALLOWED_ORIGINS:?APP_ALLOWED_ORIGINS is required}
+  LAN_HOST: ${LAN_HOST:-}
+  ALLOWED_DEV_ORIGINS: ${ALLOWED_DEV_ORIGINS:-}
+  UPLOAD_STORAGE_DIR: ${UPLOAD_STORAGE_DIR:-/app/storage/uploads}
+
 services:
   app:
     build: .
     ports:
       - "${APP_PORT:-3000}:3000"
-    env_file:
-      - .env
     environment:
-      DATABASE_URL: file:/app/data/app.db
+      <<: *app-environment
       # 容器内监听全部网卡，供端口映射访问
       HOSTNAME: 0.0.0.0
+      RUN_DB_SEED: ${RUN_DB_SEED:-false}
     volumes:
       - app-data:/app/data
       - app-uploads:/app/storage/uploads
@@ -18,11 +33,10 @@ services:
     build: .
     entrypoint: ["/entrypoint.sh"]
     command: ["npx", "tsx", "scripts/cron.ts"]
-    env_file:
-      - .env
     environment:
-      DATABASE_URL: file:/app/data/app.db
+      <<: *app-environment
       SKIP_DB_PUSH: "true"
+      RUN_DB_SEED: "false"
     volumes:
       - app-data:/app/data
       - app-uploads:/app/storage/uploads

@@ -211,6 +211,14 @@ npm run cron         # 启动定时任务（独立进程）
 docker compose up -d --build
 ```
 
+当前用户没有 Docker socket 权限时，可在 `.env` 或当前 shell 设置 `SUDO_PASSWORD` 后执行：
+
+```bash
+./scripts/docker-compose-sudo.sh up -d --build
+```
+
+`SUDO_PASSWORD` 仅在宿主机侧供 `sudo -S docker compose ...` 使用，不会注入容器运行时环境。
+
 ### 镜像说明
 
 - 基础镜像 `node:20-bookworm-slim`（兼容 `better-sqlite3` 原生模块）
@@ -226,7 +234,7 @@ docker compose up -d --build
 
 ### 环境变量
 
-Compose 将 `DATABASE_URL` 固定为 `file:/app/data/app.db`。其余变量从宿主机 `.env` 注入（见 `.env.example`）。
+Compose 将 `DATABASE_URL` 固定为 `file:/app/data/app.db`。应用所需变量通过 `${VAR}` 从宿主机 `.env` 读取后显式注入容器（见 `.env.example`）；宿主机辅助变量如 `SUDO_PASSWORD` 不会传入容器。
 
 | 变量 | 说明 |
 |------|------|
