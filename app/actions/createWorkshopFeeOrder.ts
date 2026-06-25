@@ -4,7 +4,6 @@ import { auth } from "@/lib/auth";
 import { OrderStatus } from "@prisma/client";
 import { attachItemReferenceImages } from "@/lib/order-item-images";
 import { removeOrderUploads } from "@/lib/file-upload";
-import { getUserRoles } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { revalidateProcurement } from "@/lib/revalidate";
 import {
@@ -12,7 +11,6 @@ import {
   createWorkshopFeeSchema,
   parseWorkshopFeeFormData,
 } from "@/lib/validations/workshop-fee";
-import { canCreateWorkshopFeeForTeam } from "@/lib/workshop-fee-permissions";
 import { generateWorkshopOrderNo } from "@/lib/workshop-order-no";
 
 export async function createWorkshopFeeOrder(formData: FormData) {
@@ -23,10 +21,6 @@ export async function createWorkshopFeeOrder(formData: FormData) {
 
   const payload = JSON.parse(String(formData.get("payload") ?? "{}"));
   const parsed = createWorkshopFeeSchema.parse(payload);
-  const roles = await getUserRoles(session.user.openId);
-  if (!canCreateWorkshopFeeForTeam(roles, parsed.team)) {
-    throw new Error("仅超级管理员或对应车组报销员可录入工坊加工费");
-  }
   const { itemImages } = parseWorkshopFeeFormData(formData);
   assertWorkshopFeeImages(parsed.items, itemImages);
 
