@@ -165,6 +165,7 @@ export default async function ProjectDetailPage({ params }: Props) {
       }),
       getRelevantTaskCreationRequests(project.id, canManage, userOpenId),
     ]);
+  const visibleTaskIds = new Set(project.tasks.map((task) => task.id));
 
   const projectView: ProjectDetailView = {
     id: project.id,
@@ -276,18 +277,28 @@ export default async function ProjectDetailPage({ params }: Props) {
         reviewerName: request.reviewerName,
         reviewComment: request.reviewComment,
         reviewedAt: request.reviewedAt?.toISOString() ?? null,
-        createdTaskId: request.createdTaskId || null,
+        createdTaskId:
+          request.createdTaskId && visibleTaskIds.has(request.createdTaskId)
+            ? request.createdTaskId
+            : null,
         createdAt: request.createdAt.toISOString(),
         draft: draft
           ? {
               title: draft.title,
+              goal: draft.goal,
               stageName: draft.stageName,
+              category: draft.category,
+              urgency: draft.urgency,
+              importance: draft.importance,
               assigneeNames:
                 draft.assigneeNames.length > 0
                   ? draft.assigneeNames.join("、")
                   : draft.assigneeOpenIds.join("、"),
               dueAt: draft.dueAt,
               metrics: draft.metrics,
+              needsOfflineConfirmation: draft.needsOfflineConfirmation,
+              needsWeeklyReport: draft.needsWeeklyReport,
+              acceptanceChecklistItems: draft.acceptanceChecklistItems,
               summary: formatTaskCreationDraftSummary(draft),
             }
           : null,

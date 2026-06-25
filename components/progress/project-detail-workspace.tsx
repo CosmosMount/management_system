@@ -182,10 +182,17 @@ export type TaskCreationRequestView = {
   createdAt: string;
   draft: {
     title: string;
+    goal: string;
     stageName: string;
+    category: TaskCategory;
+    urgency: Urgency;
+    importance: Importance;
     assigneeNames: string;
     dueAt: string;
     metrics: string;
+    needsOfflineConfirmation: boolean;
+    needsWeeklyReport: boolean;
+    acceptanceChecklistItems: Array<{ content: string }>;
     summary: string;
   } | null;
 };
@@ -1341,6 +1348,8 @@ function TaskCreationRequestPanel({
   const router = useRouter();
   const [comments, setComments] = useState<Record<string, string>>({});
   const [loadingId, setLoadingId] = useState<string | null>(null);
+  const [detailRequest, setDetailRequest] =
+    useState<TaskCreationRequestView | null>(null);
 
   async function handleReview(
     request: TaskCreationRequestView,
@@ -1368,88 +1377,111 @@ function TaskCreationRequestPanel({
   }
 
   return (
-    <Card>
-      <CardHeader className="pb-3">
-        <CardTitle>任务申请</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {requests.map((request) => (
-          <div key={request.id} className="rounded-lg border p-3 text-sm">
-            <div className="flex flex-wrap items-start justify-between gap-2">
-              <div className="min-w-0">
-                <p className="font-medium">
-                  {request.draft?.summary ?? "任务申请内容无法解析"}
-                </p>
-                <p className="mt-1 text-muted-foreground">
-                  申请人：{request.requesterName} ·{" "}
-                  {formatDateTime(request.createdAt)}
-                </p>
-                {request.draft && (
-                  <p className="mt-1 text-muted-foreground">
-                    指标：{request.draft.metrics || "未填写"} · 截止{" "}
-                    {formatDateTime(request.draft.dueAt)}
+    <>
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle>任务申请</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {requests.map((request) => (
+            <div key={request.id} className="rounded-lg border p-3 text-sm">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="font-medium">
+                    {request.draft?.summary ?? "任务申请内容无法解析"}
                   </p>
+                  <p className="mt-1 text-muted-foreground">
+                    申请人：{request.requesterName} ·{" "}
+                    {formatDateTime(request.createdAt)}
+                  </p>
+                  {request.draft && (
+                    <p className="mt-1 text-muted-foreground">
+                      指标：{request.draft.metrics || "未填写"} · 截止{" "}
+                      {request.draft.dueAt
+                        ? formatDateTime(request.draft.dueAt)
+                        : "未填写"}
+                    </p>
+                  )}
+                </div>
+                <Badge
+                  variant={request.status === "PENDING" ? "secondary" : "outline"}
+                >
+                  {request.status === "PENDING"
+                    ? "待审核"
+                    : request.status === "APPROVED"
+                      ? "已通过"
+                      : "已驳回"}
+                </Badge>
+              </div>
+              {request.reviewComment && (
+                <p className="mt-2 rounded-md bg-muted px-3 py-2 text-muted-foreground">
+                  审核意见：{request.reviewComment}
+                </p>
+              )}
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setDetailRequest(request)}
+                >
+                  查看申请详情
+                </Button>
+                {request.createdTaskId && (
+                  <Link
+                    href={routes.progress.task(request.createdTaskId)}
+                    className={buttonVariants({ size: "sm", variant: "outline" })}
+                    data-testid="task-creation-request-task-link"
+                  >
+                    查看任务详情
+                    <ArrowUpRight className="h-3.5 w-3.5" />
+                  </Link>
                 )}
               </div>
-              <Badge
-                variant={request.status === "PENDING" ? "secondary" : "outline"}
-              >
-                {request.status === "PENDING"
-                  ? "待审核"
-                  : request.status === "APPROVED"
-                    ? "已通过"
-                    : "已驳回"}
-              </Badge>
-            </div>
-            {request.reviewComment && (
-              <p className="mt-2 rounded-md bg-muted px-3 py-2 text-muted-foreground">
-                审核意见：{request.reviewComment}
-              </p>
-            )}
-            {request.createdTaskId && (
-              <Link
-                href={routes.progress.task(request.createdTaskId)}
-                className="mt-2 inline-flex text-primary hover:underline"
-              >
-                查看已创建任务
-              </Link>
-            )}
-            {canManage && request.status === "PENDING" && (
-              <div className="mt-3 space-y-2">
-                <Textarea
-                  value={comments[request.id] ?? ""}
-                  onChange={(event) =>
-                    setComments({
-                      ...comments,
-                      [request.id]: event.target.value,
-                    })
-                  }
-                  placeholder="审核意见；驳回时必填"
-                  className="min-h-20"
-                />
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    type="button"
-                    disabled={loadingId === request.id}
-                    onClick={() => handleReview(request, "APPROVED")}
-                  >
-                    通过并创建任务
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={loadingId === request.id}
-                    onClick={() => handleReview(request, "REJECTED")}
-                  >
-                    驳回申请
-                  </Button>
+              {canManage && request.status === "PENDING" && (
+                <div className="mt-3 space-y-2">
+                  <Textarea
+                    value={comments[request.id] ?? ""}
+                    onChange={(event) =>
+                      setComments({
+                        ...comments,
+                        [request.id]: event.target.value,
+                      })
+                    }
+                    placeholder="审核意见；驳回时必填"
+                    className="min-h-20"
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      disabled={loadingId === request.id}
+                      onClick={() => handleReview(request, "APPROVED")}
+                    >
+                      通过并创建任务
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={loadingId === request.id}
+                      onClick={() => handleReview(request, "REJECTED")}
+                    >
+                      驳回申请
+                    </Button>
+                  </div>
                 </div>
-              </div>
-            )}
-          </div>
-        ))}
-      </CardContent>
-    </Card>
+              )}
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      <TaskCreationRequestDetailDialog
+        request={detailRequest}
+        onOpenChange={(open) => {
+          if (!open) setDetailRequest(null);
+        }}
+      />
+    </>
   );
 }
 
@@ -1493,7 +1525,16 @@ function TaskTableRow({
       <TableCell>{formatDate(task.dueAt)}</TableCell>
       <TableCell>{getTaskMaterialStatus(task)}</TableCell>
       <TableCell className="text-right">
-        {canStart ? <StartTaskButton taskId={task.id} /> : null}
+        <div className="flex justify-end gap-2">
+          {canStart ? <StartTaskButton taskId={task.id} /> : null}
+          <Link
+            href={routes.progress.task(task.id)}
+            className={buttonVariants({ size: "sm", variant: "outline" })}
+            data-testid="task-detail-link"
+          >
+            查看详情
+          </Link>
+        </div>
       </TableCell>
     </TableRow>
   );
@@ -1529,6 +1570,129 @@ function TaskMobileCard({ task, canStart }: { task: TaskView; canStart: boolean 
           <StartTaskButton taskId={task.id} />
         </div>
       )}
+      <div className="mt-3">
+        <Link
+          href={routes.progress.task(task.id)}
+          className={buttonVariants({ size: "sm", variant: "outline" })}
+          data-testid="task-detail-link"
+        >
+          查看详情
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+function TaskCreationRequestDetailDialog({
+  request,
+  onOpenChange,
+}: {
+  request: TaskCreationRequestView | null;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const draft = request?.draft ?? null;
+
+  return (
+    <Dialog open={!!request} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[640px]">
+        <DialogHeader>
+          <DialogTitle>任务申请详情</DialogTitle>
+          <DialogDescription>
+            通过前这是任务草案；审核通过后会生成正式任务详情页。
+          </DialogDescription>
+        </DialogHeader>
+        {!request ? null : draft ? (
+          <div className="space-y-4 text-sm">
+            <div>
+              <p className="text-xs text-muted-foreground">任务名称</p>
+              <p className="mt-1 font-medium">{draft.title}</p>
+            </div>
+            {draft.goal && (
+              <div>
+                <p className="text-xs text-muted-foreground">任务说明</p>
+                <p className="mt-1 whitespace-pre-wrap">{draft.goal}</p>
+              </div>
+            )}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <RequestDetailItem label="所属阶段" value={draft.stageName} />
+              <RequestDetailItem label="负责人" value={draft.assigneeNames} />
+              <RequestDetailItem
+                label="任务类别"
+                value={taskCategoryLabels[draft.category] ?? "未填写"}
+              />
+              <RequestDetailItem
+                label="优先级"
+                value={`${urgencyLabels[draft.urgency] ?? "未填写"} / ${importanceLabels[draft.importance] ?? "未填写"}`}
+              />
+              <RequestDetailItem
+                label="截止时间"
+                value={draft.dueAt ? formatDateTime(draft.dueAt) : "未填写"}
+              />
+              <RequestDetailItem
+                label="线下确认"
+                value={draft.needsOfflineConfirmation ? "需要" : "不需要"}
+              />
+              <RequestDetailItem
+                label="定期周报"
+                value={draft.needsWeeklyReport ? "需要" : "不需要"}
+              />
+              <RequestDetailItem
+                label="验收清单"
+                value={
+                  draft.acceptanceChecklistItems.length > 0
+                    ? `${draft.acceptanceChecklistItems.length} 条`
+                    : "未配置"
+                }
+              />
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">验收指标</p>
+              <p className="mt-1 whitespace-pre-wrap">
+                {draft.metrics || "未填写"}
+              </p>
+            </div>
+            {draft.acceptanceChecklistItems.length > 0 && (
+              <div>
+                <p className="text-xs text-muted-foreground">验收条例</p>
+                <ul className="mt-2 space-y-1 rounded-md bg-muted/50 px-3 py-2">
+                  {draft.acceptanceChecklistItems.map((item, index) => (
+                    <li key={`${item.content}-${index}`}>
+                      {index + 1}. {item.content}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <div className="rounded-md bg-muted px-3 py-2 text-muted-foreground">
+              申请人：{request.requesterName} · 提交时间：
+              {formatDateTime(request.createdAt)}
+            </div>
+            {request.createdTaskId && (
+              <Link
+                href={routes.progress.task(request.createdTaskId)}
+                className={buttonVariants({ size: "sm", variant: "outline" })}
+                data-testid="task-creation-request-dialog-task-link"
+              >
+                查看任务详情
+                <ArrowUpRight className="h-3.5 w-3.5" />
+              </Link>
+            )}
+          </div>
+        ) : (
+          <p className="rounded-md border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
+            任务申请内容无法解析。
+          </p>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function RequestDetailItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="mt-1 font-medium">{value}</p>
     </div>
   );
 }
