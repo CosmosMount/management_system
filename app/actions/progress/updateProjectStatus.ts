@@ -47,14 +47,27 @@ export async function updateProjectStatus(
 
   assertProjectTransition(project.status, status);
 
-  if (status === "COMPLETED") {
-    const allCompleted =
-      project.stages.length > 0 &&
-      project.stages.every((s) => s.status === "COMPLETED");
-    if (!allCompleted) throw new Error("请先完成全部项目阶段后再完成项目");
-  }
-
   const updated = await prisma.$transaction(async (tx) => {
+    const lockedCurrentState = await tx.project.updateMany({
+      where: { id: projectId, status: project.status },
+      data: { status: project.status },
+    });
+    if (lockedCurrentState.count !== 1) {
+      throw new Error("项目状态已更新，请刷新后重试");
+    }
+
+    if (status === "COMPLETED") {
+      const [stageCount, incompleteStageCount] = await Promise.all([
+        tx.projectStage.count({ where: { projectId } }),
+        tx.projectStage.count({
+          where: { projectId, status: { not: "COMPLETED" } },
+        }),
+      ]);
+      if (stageCount === 0 || incompleteStageCount > 0) {
+        throw new Error("请先完成全部项目阶段后再完成项目");
+      }
+    }
+
     const locked = await tx.project.updateMany({
       where: { id: projectId, status: project.status },
       data: {

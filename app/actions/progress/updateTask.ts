@@ -28,6 +28,7 @@ import { prisma } from "@/lib/prisma";
 import { getUserRoles } from "@/lib/permissions";
 import { revalidateProgress } from "@/lib/revalidate";
 import {
+  taskRestartSchema,
   updateTaskSchema,
   type UpdateTaskInput,
 } from "@/lib/validations/progress";
@@ -150,6 +151,114 @@ export async function archiveTask(taskId: string) {
 
   revalidateProgress(task.projectId, taskId);
   return updated;
+}
+
+export async function restartTask(input: { taskId: string; reason: string }) {
+  const session = await auth();
+  const user = await requireSessionUser(session?.user?.openId);
+  const roles = await getUserRoles(user.openId);
+  const parsed = taskRestartSchema.parse(input);
+
+  const result = await prisma.$transaction(async (tx) => {
+    const task = await tx.task.findUnique({
+      where: { id: parsed.taskId },
+      include: {
+        project: {
+          include: {
+            owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+          },
+        },
+        stage: true,
+        assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      },
+    });
+    if (!task) throw new Error("任务不存在");
+    if (task.deletedAt) throw new Error("任务已删除");
+    if (task.project.status !== "IN_PROGRESS") {
+      throw new Error("仅进行中的项目可重启任务；已完成项目请先回退项目流程");
+    }
+    if (task.status !== "PENDING_ACCEPTANCE" && task.status !== "COMPLETED") {
+      if (task.status === "ARCHIVED") {
+        throw new Error("已归档任务不可重启");
+      }
+      throw new Error("仅待验收或已完成任务可重启");
+    }
+
+    const projectOwnerOpenIds = getProjectOwnerOpenIds(task.project);
+    if (
+      !canManageProject(
+        roles,
+        { team: task.team, techGroup: task.techGroup },
+        projectOwnerOpenIds,
+        user.openId,
+      )
+    ) {
+      throw new Error("无任务重启权限");
+    }
+
+    const locked = await tx.task.updateMany({
+      where: {
+        id: task.id,
+        status: task.status,
+        deletedAt: null,
+        project: { status: "IN_PROGRESS" },
+      },
+      data: {
+        status: "IN_PROGRESS",
+        archivedAt: null,
+      },
+    });
+    if (locked.count !== 1) {
+      throw new Error("任务状态已更新，请刷新后重试");
+    }
+
+    const record = await tx.task.findUnique({
+      where: { id: task.id },
+      select: { updatedAt: true },
+    });
+    if (!record) throw new Error("任务不存在");
+    return { task, projectOwnerOpenIds, updatedAt: record.updatedAt };
+  });
+
+  await logProgressActivity({
+    projectId: result.task.projectId,
+    taskId: result.task.id,
+    action: "task.restarted",
+    actorOpenId: user.openId,
+    actorName: user.name,
+    payload: {
+      from: result.task.status,
+      to: "IN_PROGRESS",
+      reason: parsed.reason,
+      stageId: result.task.stageId,
+      stageName: result.task.stage?.name ?? null,
+    },
+  });
+
+  await enqueueProgressNotification(
+    `progress:task_restarted:${result.task.id}:${result.updatedAt.toISOString()}`,
+    {
+      type: "task_restarted",
+      taskId: result.task.id,
+      taskTitle: result.task.title,
+      projectId: result.task.projectId,
+      projectName: result.task.project.name,
+      stageId: result.task.stageId,
+      stageName: result.task.stage?.name ?? "无阶段",
+      actorName: user.name,
+      reason: parsed.reason,
+      fromStatus: result.task.status,
+      team: result.task.team,
+      techGroup: result.task.techGroup,
+      assigneeOpenIds: getTaskAssigneeOpenIds(result.task),
+      projectOwnerOpenIds: result.projectOwnerOpenIds,
+    },
+    await getNotificationContext(),
+  );
+  drainNotificationOutboxSoon();
+
+  revalidateProgress(result.task.projectId, result.task.id);
+  return { success: true };
 }
 
 export async function updateTask(input: UpdateTaskInput) {

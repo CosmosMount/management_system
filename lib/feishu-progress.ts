@@ -4,8 +4,9 @@ import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { buildAppUrl, type NotificationContext } from "@/lib/app-origin";
 import { prisma } from "@/lib/prisma";
-import type { UserRoleType } from "@prisma/client";
+import type { TaskStatus, UserRoleType } from "@prisma/client";
 import { routes } from "@/lib/routes";
+import { taskStatusLabels } from "@/lib/progress-labels";
 
 export type ProgressNotifyPayload =
   | {
@@ -38,6 +39,20 @@ export type ProgressNotifyPayload =
       oldTechGroup: string;
       ownerOpenIds: string[];
       oldOwnerOpenIds: string[];
+    }
+  | {
+      type: "project_stage_rollback";
+      projectId: string;
+      projectName: string;
+      stageId: string;
+      stageName: string;
+      actorName: string;
+      reason: string;
+      team: string;
+      techGroup: string;
+      ownerOpenIds: string[];
+      ownerNames: string;
+      stageOwnerOpenIds: string[];
     }
   | {
       type: "stage_pending_acceptance";
@@ -79,6 +94,22 @@ export type ProgressNotifyPayload =
       oldTechGroup: string;
       assigneeOpenIds: string[];
       oldAssigneeOpenIds: string[];
+      projectOwnerOpenIds: string[];
+    }
+  | {
+      type: "task_restarted";
+      taskId: string;
+      taskTitle: string;
+      projectId: string;
+      projectName: string;
+      stageId: string | null;
+      stageName: string;
+      actorName: string;
+      reason: string;
+      fromStatus: TaskStatus;
+      team: string;
+      techGroup: string;
+      assigneeOpenIds: string[];
       projectOwnerOpenIds: string[];
     }
   | {
@@ -377,6 +408,24 @@ export async function sendProgressNotification(
       );
       break;
     }
+    case "project_stage_rollback": {
+      const card = buildCard(
+        "项目流程已回退",
+        `**项目**：${payload.projectName}\n**回退阶段**：${payload.stageName}\n**操作人**：${payload.actorName}\n**原因**：${payload.reason}`,
+        buildAppUrl(
+          routes.progress.projectStage(payload.projectId, payload.stageId),
+          appOrigin,
+        ),
+        "orange",
+      );
+      await notifyOpenIdsAndRoles(
+        [...payload.ownerOpenIds, ...payload.stageOwnerOpenIds],
+        ["TEAM_ADMIN", "TECH_GROUP_ADMIN", "PROJECT_MANAGER", "SUPER_ADMIN"],
+        { team: payload.team, techGroup: payload.techGroup },
+        card,
+      );
+      break;
+    }
     case "stage_pending_acceptance": {
       const card = buildCard(
         "项目阶段待审批",
@@ -430,6 +479,21 @@ export async function sendProgressNotification(
           { team: payload.team, techGroup: payload.techGroup },
           { team: payload.oldTeam, techGroup: payload.oldTechGroup },
         ],
+        card,
+      );
+      break;
+    }
+    case "task_restarted": {
+      const card = buildCard(
+        "任务已重启",
+        `**任务**：${payload.taskTitle}\n**项目**：${payload.projectName}\n**阶段**：${payload.stageName}\n**操作人**：${payload.actorName}\n**状态**：${taskStatusLabels[payload.fromStatus]} -> ${taskStatusLabels.IN_PROGRESS}\n**原因**：${payload.reason}`,
+        buildAppUrl(`${routes.progress.task(payload.taskId)}`, appOrigin),
+        "orange",
+      );
+      await notifyOpenIdsAndRoles(
+        [...payload.assigneeOpenIds, ...payload.projectOwnerOpenIds],
+        ["TEAM_ADMIN", "TECH_GROUP_ADMIN", "PROJECT_MANAGER", "SUPER_ADMIN"],
+        { team: payload.team, techGroup: payload.techGroup },
         card,
       );
       break;

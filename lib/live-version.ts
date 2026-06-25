@@ -501,10 +501,16 @@ async function getProgressProjectVersion(
             ...(visibleTaskIdList.length > 0
               ? [{ taskId: { in: visibleTaskIdList } }]
               : []),
-            ...ownedStageIds.map((stageId) => ({
-              projectId,
-              payload: { contains: `"stageId":"${stageId}"` },
-            })),
+            ...ownedStageIds.flatMap((stageId) => [
+              {
+                projectId,
+                payload: { contains: `"stageId":"${stageId}"` },
+              },
+              {
+                projectId,
+                payload: { contains: `"fromStageId":"${stageId}"` },
+              },
+            ]),
           ],
         }
       : { id: "__none__" };

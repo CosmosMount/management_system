@@ -149,16 +149,26 @@ export default async function ProjectDetailPage({ params }: Props) {
     if (log.taskId && visibleTaskIds.has(log.taskId)) return true;
     const payload = parseActivityPayload(log.payload);
     const stageId = getPayloadString(payload.stageId);
-    return !!stageId && ownedStageIds.has(stageId);
+    const fromStageId = getPayloadString(payload.fromStageId);
+    return (
+      (!!stageId && ownedStageIds.has(stageId)) ||
+      (!!fromStageId && ownedStageIds.has(fromStageId))
+    );
   });
   const limitedActivityFilters = [
     ...(visibleTaskIds.size > 0
       ? [{ taskId: { in: [...visibleTaskIds] } }]
       : []),
-    ...[...ownedStageIds].map((stageId) => ({
-      projectId: project.id,
-      payload: { contains: `"stageId":"${stageId}"` },
-    })),
+    ...[...ownedStageIds].flatMap((stageId) => [
+      {
+        projectId: project.id,
+        payload: { contains: `"stageId":"${stageId}"` },
+      },
+      {
+        projectId: project.id,
+        payload: { contains: `"fromStageId":"${stageId}"` },
+      },
+    ]),
   ];
   const activityLogWhere = canManage
     ? { projectId: project.id }

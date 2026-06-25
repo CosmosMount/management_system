@@ -36,6 +36,7 @@ import {
   submitStageEvidence,
 } from "@/app/actions/progress/projectStages";
 import { loadMoreProjectActivityLogs } from "@/app/actions/progress/activityLogs";
+import { rollbackProjectStage } from "@/app/actions/progress/rollbackProjectStage";
 import { updateProjectStatus } from "@/app/actions/progress/updateProjectStatus";
 import { updateTaskStatus } from "@/app/actions/progress/updateTask";
 import { BackLink } from "@/components/back-link";
@@ -50,6 +51,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -198,6 +200,11 @@ type ActivityHistoryState = {
   sourceKey: string;
   extraLogs: ActivityLogView[];
   hasMore: boolean;
+};
+type ProjectRollbackPreview = {
+  targetStage: StageView;
+  fromStage: StageView | null;
+  description: string;
 };
 
 const taskStatusOptions: Array<TaskStatus | "ALL"> = [
@@ -466,6 +473,7 @@ function ProjectOverview({
 }) {
   const router = useRouter();
   const [loadingStatus, setLoadingStatus] = useState<ProjectStatus | null>(null);
+  const rollbackPreview = getProjectRollbackPreview(project);
   const completedStages = project.stages.filter(
     (stage) => stage.status === "COMPLETED",
   ).length;
@@ -545,6 +553,12 @@ function ProjectOverview({
                 label="催促项目"
               />
             )}
+            {canUpdateLifecycle && rollbackPreview && (
+              <ProjectRollbackButton
+                projectId={project.id}
+                preview={rollbackPreview}
+              />
+            )}
             {project.status === "NOT_STARTED" && (
               <Button
                 type="button"
@@ -596,6 +610,84 @@ function OverviewItem({ label, value }: { label: string; value: string }) {
       <dt className="text-muted-foreground">{label}</dt>
       <dd className="mt-1 font-medium">{value}</dd>
     </div>
+  );
+}
+
+function ProjectRollbackButton({
+  projectId,
+  preview,
+}: {
+  projectId: string;
+  preview: ProjectRollbackPreview;
+}) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function handleRollback() {
+    if (!reason.trim()) {
+      toast.error("请填写回退原因");
+      return;
+    }
+    setLoading(true);
+    try {
+      const result = await rollbackProjectStage({ projectId, reason });
+      toast.success(`已回退到「${result.targetStageName}」`);
+      setOpen(false);
+      setReason("");
+      router.push(routes.progress.projectStage(projectId, result.targetStageId));
+      router.refresh();
+    } catch (err) {
+      toast.error(getActionErrorMessage(err, "回退流程失败"));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <>
+      <Button type="button" variant="outline" onClick={() => setOpen(true)}>
+        <RotateCcw className="h-4 w-4" />
+        回退流程
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>回退项目流程</DialogTitle>
+            <DialogDescription>
+              历史提交和审批记录会保留，本次操作只调整当前流程位置。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            <div className="rounded-md border bg-muted/40 px-3 py-2">
+              <p className="font-medium">目标阶段：{preview.targetStage.name}</p>
+              <p className="mt-1 text-muted-foreground">{preview.description}</p>
+            </div>
+            <Textarea
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+              placeholder="填写回退原因"
+              className="min-h-28"
+              maxLength={1000}
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={loading}
+              onClick={() => setOpen(false)}
+            >
+              取消
+            </Button>
+            <Button type="button" disabled={loading} onClick={handleRollback}>
+              {loading ? "回退中..." : "确认回退"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
@@ -1431,9 +1523,27 @@ function ActivityChangeList({ payload }: { payload: Record<string, unknown> }) {
     : [];
   const reason = getPayloadString(payload.reason);
   const reviewComment = getPayloadString(payload.reviewComment);
-  if (changes.length === 0 && !reason && !reviewComment) return null;
+  const fromProjectStatus = getPayloadString(payload.fromProjectStatus);
+  const toProjectStatus = getPayloadString(payload.toProjectStatus);
+  const fromStageName = getPayloadString(payload.fromStageName);
+  const projectStatusChange =
+    fromProjectStatus &&
+    toProjectStatus &&
+    isProjectStatus(fromProjectStatus) &&
+    isProjectStatus(toProjectStatus)
+      ? `项目状态：${projectStatusLabels[fromProjectStatus]} -> ${projectStatusLabels[toProjectStatus]}`
+      : null;
+  if (
+    changes.length === 0 &&
+    !reason &&
+    !reviewComment &&
+    !projectStatusChange &&
+    !fromStageName
+  ) return null;
   return (
     <ul className="mt-2 space-y-1 rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+      {projectStatusChange && <li>{projectStatusChange}</li>}
+      {fromStageName && <li>原阶段：{fromStageName}</li>}
       {changes.map((change, index) => (
         <li key={`${change}-${index}`}>{change}</li>
       ))}
@@ -1577,6 +1687,10 @@ function getPayloadString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
 }
 
+function isProjectStatus(value: string): value is ProjectStatus {
+  return value in projectStatusLabels;
+}
+
 function getActivityTargetLabel(
   action: string,
   task: TaskView | null | undefined,
@@ -1601,6 +1715,7 @@ function activityLabel(action: string): string {
     "project.created": "创建了项目",
     "project.updated": "更新了项目信息",
     "project.status_changed": "更新了项目状态",
+    "project.stage_rollback": "回退了项目流程",
     "project.reminded": "发送了项目催促提醒",
     "stage.evidence_submitted": "提交了阶段材料",
     "stage.approved": "通过了阶段审核",
@@ -1620,6 +1735,66 @@ function activityLabel(action: string): string {
     "task.reminded": "发送了任务催促提醒",
   };
   return labels[action] ?? action;
+}
+
+function getProjectRollbackPreview(
+  project: ProjectDetailView,
+): ProjectRollbackPreview | null {
+  if (project.stages.length === 0) return null;
+
+  if (project.status === "COMPLETED") {
+    const targetStage = [...project.stages]
+      .reverse()
+      .find((stage) => stage.status === "COMPLETED");
+    if (!targetStage) return null;
+    return {
+      targetStage,
+      fromStage: null,
+      description: `项目会重新变为进行中，「${targetStage.name}」会变为当前进行阶段。`,
+    };
+  }
+
+  if (project.status !== "IN_PROGRESS") return null;
+
+  const pendingStage = project.stages.find(
+    (stage) => stage.status === "PENDING_ACCEPTANCE",
+  );
+  if (pendingStage) {
+    return {
+      targetStage: pendingStage,
+      fromStage: pendingStage,
+      description: `「${pendingStage.name}」会从待审批退回到进行中，当前提交材料不再作为待审批材料。`,
+    };
+  }
+
+  const activeStage = project.stages.find(
+    (stage) => stage.status === "IN_PROGRESS",
+  );
+  if (activeStage) {
+    const previousCompletedStage = [...project.stages]
+      .filter(
+        (stage) =>
+          stage.sortOrder < activeStage.sortOrder &&
+          stage.status === "COMPLETED",
+      )
+      .at(-1);
+    if (!previousCompletedStage) return null;
+    return {
+      targetStage: previousCompletedStage,
+      fromStage: activeStage,
+      description: `当前阶段「${activeStage.name}」及后续阶段会回到未开始，「${previousCompletedStage.name}」会重新变为进行中。`,
+    };
+  }
+
+  const lastCompletedStage = [...project.stages]
+    .reverse()
+    .find((stage) => stage.status === "COMPLETED");
+  if (!lastCompletedStage) return null;
+  return {
+    targetStage: lastCompletedStage,
+    fromStage: null,
+    description: `「${lastCompletedStage.name}」会重新变为进行中，后续流程需重新提交审批。`,
+  };
 }
 
 function formatDate(value: string): string {

@@ -213,6 +213,22 @@ export const taskDeletionReviewSchema = z
     }
   });
 
+const rollbackReasonSchema = z
+  .string()
+  .trim()
+  .min(1, "请填写操作原因")
+  .max(1000, "操作原因不能超过 1000 个字符");
+
+export const projectStageRollbackSchema = z.object({
+  projectId: z.string().min(1),
+  reason: rollbackReasonSchema,
+});
+
+export const taskRestartSchema = z.object({
+  taskId: z.string().min(1),
+  reason: rollbackReasonSchema,
+});
+
 export type CreateProjectInput = z.input<typeof createProjectSchema>;
 export type UpdateProjectInput = z.input<typeof updateProjectSchema>;
 export type CreateTaskInput = z.input<typeof createTaskSchema>;

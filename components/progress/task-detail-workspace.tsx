@@ -9,6 +9,7 @@ import {
   History,
   Pencil,
   Play,
+  RotateCcw,
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -42,7 +43,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { updateTaskStatus, archiveTask } from "@/app/actions/progress/updateTask";
+import {
+  archiveTask,
+  restartTask,
+  updateTaskStatus,
+} from "@/app/actions/progress/updateTask";
 import { getActionErrorMessage } from "@/lib/action-error-message";
 import { routes } from "@/lib/routes";
 import {
@@ -319,6 +324,10 @@ function TaskOverview({
 }) {
   const canStart = task.status === "TODO" && (isAssignee || canManage);
   const canArchive = task.status === "COMPLETED" && canManage;
+  const canRestart =
+    canManage &&
+    task.projectStatus === "IN_PROGRESS" &&
+    (task.status === "PENDING_ACCEPTANCE" || task.status === "COMPLETED");
   const pendingDeletionRequest = task.deletionRequests.find(
     (request) => request.status === "PENDING",
   );
@@ -391,6 +400,7 @@ function TaskOverview({
               label="催促任务"
             />
           )}
+          {canRestart && <RestartTaskButton task={task} />}
           {canStart && <StartTaskButton taskId={task.id} />}
           {canArchive && <ArchiveTaskButton taskId={task.id} />}
           {canManage ? (
@@ -413,6 +423,79 @@ function OverviewItem({ label, value }: { label: string; value: string }) {
       <dt className="text-muted-foreground">{label}</dt>
       <dd className="mt-1 font-medium">{value}</dd>
     </div>
+  );
+}
+
+function RestartTaskButton({ task }: { task: TaskDetailView }) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function handleRestart() {
+    if (!reason.trim()) {
+      toast.error("请填写重启原因");
+      return;
+    }
+    setLoading(true);
+    try {
+      await restartTask({ taskId: task.id, reason });
+      toast.success("任务已重启");
+      setOpen(false);
+      setReason("");
+      router.refresh();
+    } catch (err) {
+      toast.error(getActionErrorMessage(err, "重启任务失败"));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <>
+      <Button type="button" variant="outline" onClick={() => setOpen(true)}>
+        <RotateCcw className="h-4 w-4" />
+        重启任务
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>重启任务</DialogTitle>
+            <DialogDescription>
+              任务会回到进行中，历史交付、审批和验收记录会保留。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            <div className="rounded-md border bg-muted/40 px-3 py-2">
+              <p className="font-medium">任务：{task.title}</p>
+              <p className="mt-1 text-muted-foreground">
+                {taskStatusLabels[task.status]} {"->"} {taskStatusLabels.IN_PROGRESS}
+              </p>
+            </div>
+            <Textarea
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+              placeholder="填写重启原因"
+              className="min-h-28"
+              maxLength={1000}
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={loading}
+              onClick={() => setOpen(false)}
+            >
+              取消
+            </Button>
+            <Button type="button" disabled={loading} onClick={handleRestart}>
+              {loading ? "重启中..." : "确认重启"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
@@ -990,14 +1073,18 @@ function ActivityDetails({
   payload: Record<string, unknown>;
   comment: string | null;
 }) {
-  if (log.action === "task.status_changed") {
+  if (log.action === "task.status_changed" || log.action === "task.restarted") {
     const from = getPayloadString(payload.from);
     const to = getPayloadString(payload.to);
     if (from && to && isTaskStatus(from) && isTaskStatus(to)) {
+      const reason = getPayloadString(payload.reason);
       return (
-        <p className="mt-2 text-xs text-muted-foreground">
-          {taskStatusLabels[from]} {"->"} {taskStatusLabels[to]}
-        </p>
+        <div className="mt-2 space-y-1 rounded-md bg-muted/50 px-2 py-2 text-xs text-muted-foreground">
+          <p>
+            {taskStatusLabels[from]} {"->"} {taskStatusLabels[to]}
+          </p>
+          {reason && <p>原因：{reason}</p>}
+        </div>
       );
     }
   }
@@ -1121,7 +1208,8 @@ function getActivityType(action: string): ActivityFilter {
     action === "task.status_changed" ||
     action === "task.updated" ||
     action === "task.archived" ||
-    action === "task.deleted"
+    action === "task.deleted" ||
+    action === "task.restarted"
   ) return "STATUS";
   if (action === "task.delivery_submitted") return "DELIVERY";
   if (
@@ -1140,6 +1228,7 @@ function activityLabel(action: string): string {
     "task.created": "创建了任务",
     "task.updated": "更新了任务信息",
     "task.status_changed": "更新了任务状态",
+    "task.restarted": "重启了任务",
     "task.delivery_submitted": "提交了任务交付",
     "task.approved": "通过了任务验收",
     "task.rejected": "驳回了任务验收",

@@ -86,10 +86,16 @@ export async function loadMoreProjectActivityLogs(
     ...(visibleTaskIds.length > 0
       ? [{ taskId: { in: visibleTaskIds } }]
       : []),
-    ...[...ownedStageIds].map((stageId) => ({
-      projectId,
-      payload: { contains: `"stageId":"${stageId}"` },
-    })),
+    ...[...ownedStageIds].flatMap((stageId) => [
+      {
+        projectId,
+        payload: { contains: `"stageId":"${stageId}"` },
+      },
+      {
+        projectId,
+        payload: { contains: `"fromStageId":"${stageId}"` },
+      },
+    ]),
   ];
   const where = canManage
     ? { projectId }
