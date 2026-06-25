@@ -9,8 +9,8 @@ const teamOrder = new Map<string, number>(
 );
 
 function formatReference(row: SummaryRow): string {
-  if (row.itemKind === "COMPONENT") {
-    return row.purchaseLink || "";
+  if (row.purchaseLink) {
+    return row.purchaseLink;
   }
   return row.referenceImagePath || "";
 }

@@ -12,11 +12,13 @@ import { PageTitle } from "@/components/page-title";
 import { auth } from "@/lib/auth";
 import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { getUserRoles } from "@/lib/permissions";
+import { getTaskDeadlineState } from "@/lib/progress-deadline";
 import {
   progressTaskMineWhere,
   progressTaskReadableWhere,
 } from "@/lib/permissions-progress";
 import { getTaskAssigneeNames } from "@/lib/progress-assignees";
+import { getProgressReminderRuleViews } from "@/lib/progress-reminders";
 import { prisma } from "@/lib/prisma";
 
 type Props = {
@@ -27,10 +29,15 @@ export default async function ProgressDashboardPage({ searchParams }: Props) {
   const session = await auth();
   const userOpenId = session?.user?.openId;
   const mine = await readMineSearchParam(searchParams);
-  const [liveVersion, roles] = await Promise.all([
+  const [liveVersion, roles, reminderRules] = await Promise.all([
     getCurrentUserLiveVersion("progress-board", undefined, { mine }),
     userOpenId ? getUserRoles(userOpenId) : Promise.resolve([]),
+    getProgressReminderRuleViews(),
   ]);
+  const dueSoonDays =
+    reminderRules.find((rule) => rule.kind === "TASK_DUE_SOON")?.params
+      .dueSoonDays ?? 2;
+  const now = new Date();
   const tasks = await prisma.task.findMany({
     where: {
       AND: [
@@ -47,21 +54,38 @@ export default async function ProgressDashboardPage({ searchParams }: Props) {
     orderBy: [{ isOverdue: "desc" }, { dueAt: "asc" }],
   });
 
-  const rows = tasks.map((t) => ({
-    id: t.id,
-    title: t.title,
-    projectName: t.project.name,
-    stageName: t.stage?.name ?? null,
-    assigneeNames: getTaskAssigneeNames(t),
-    team: t.team,
-    techGroup: t.techGroup,
-    category: t.category,
-    urgency: t.urgency,
-    status: t.status,
-    isOverdue: t.isOverdue,
-    hasRisk: !!t.riskNote,
-    dueAt: t.dueAt.toISOString(),
-  }));
+  const rows = tasks.map((t) => {
+    const deadline = getTaskDeadlineState(
+      {
+        dueAt: t.dueAt,
+        status: t.status,
+        isOverdue: t.isOverdue,
+      },
+      now,
+      dueSoonDays,
+    );
+
+    return {
+      id: t.id,
+      title: t.title,
+      projectName: t.project.name,
+      stageName: t.stage?.name ?? null,
+      assigneeNames: getTaskAssigneeNames(t),
+      team: t.team,
+      techGroup: t.techGroup,
+      category: t.category,
+      urgency: t.urgency,
+      importance: t.importance,
+      status: t.status,
+      isOverdue: deadline.state === "overdue",
+      hasRisk: !!t.riskNote,
+      dueAt: t.dueAt.toISOString(),
+      updatedAt: t.updatedAt.toISOString(),
+      deadlineState: deadline.state,
+      deadlineLabel: deadline.label,
+      daysDelta: deadline.daysDelta,
+    };
+  });
 
   return (
     <>
@@ -81,7 +105,7 @@ export default async function ProgressDashboardPage({ searchParams }: Props) {
             mine={mine}
             className="mb-6"
           />
-          <ProgressKanban tasks={rows} />
+          <ProgressKanban tasks={rows} dueSoonDays={dueSoonDays} />
         </ProgressPageLayout>
       </PageShell>
     </>

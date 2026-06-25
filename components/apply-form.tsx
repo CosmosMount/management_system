@@ -14,6 +14,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { createOrder } from "@/app/actions/createOrder";
 import { updateOrder } from "@/app/actions/updateOrder";
+import { SignatureRequiredDialog } from "@/components/signature-required-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -57,6 +58,7 @@ type OrderFormPayload = CreateOrderInput & {
 type Props = {
   orderId?: string;
   initialValues?: Omit<CreateOrderInput, "submit">;
+  hasSignature?: boolean;
 };
 
 const defaultItem = {
@@ -69,9 +71,14 @@ const defaultItem = {
   lineTotal: 0,
 };
 
-export function ApplyForm({ orderId, initialValues }: Props = {}) {
+export function ApplyForm({
+  orderId,
+  initialValues,
+  hasSignature = true,
+}: Props = {}) {
   const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
+  const [signatureDialogOpen, setSignatureDialogOpen] = useState(false);
   const [itemImageFiles, setItemImageFiles] = useState<
     Record<number, File | undefined>
   >({});
@@ -111,6 +118,11 @@ export function ApplyForm({ orderId, initialValues }: Props = {}) {
   }
 
   async function onSubmit(data: CreateOrderInput, submit: boolean) {
+    if (!hasSignature && submit) {
+      setSignatureDialogOpen(true);
+      return;
+    }
+
     setSubmitting(true);
     try {
       const payload: OrderFormPayload = editing
@@ -218,7 +230,7 @@ export function ApplyForm({ orderId, initialValues }: Props = {}) {
           <div>
             <CardTitle>采购明细</CardTitle>
             <CardDescription>
-              选择物品种类后填写采购链接或上传图片
+              元器件与标准件填写采购链接，加工费上传图片
             </CardDescription>
           </div>
           <Button
@@ -423,6 +435,11 @@ export function ApplyForm({ orderId, initialValues }: Props = {}) {
           保存草稿
         </Button>
       </div>
+      <SignatureRequiredDialog
+        open={signatureDialogOpen}
+        onOpenChange={setSignatureDialogOpen}
+        purpose="initiate"
+      />
     </form>
   );
 }

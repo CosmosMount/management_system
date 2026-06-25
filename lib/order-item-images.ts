@@ -22,7 +22,7 @@ export async function attachItemReferenceImages(
     }
 
     if (!referenceImagePath) {
-      throw new Error("标准件与加工费须上传对应图片");
+      throw new Error("加工费须上传对应图片");
     }
 
     await prisma.purchaseItem.update({

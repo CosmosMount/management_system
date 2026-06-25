@@ -20,9 +20,9 @@ export function formatPurchaseItemKind(
 }
 
 export function itemKindNeedsLink(kind: PurchaseItemKind): boolean {
-  return kind === "COMPONENT";
+  return kind === "COMPONENT" || kind === "STANDARD_PART";
 }
 
 export function itemKindNeedsImage(kind: PurchaseItemKind): boolean {
-  return kind === "STANDARD_PART" || kind === "PROCESSING_FEE";
+  return kind === "PROCESSING_FEE";
 }

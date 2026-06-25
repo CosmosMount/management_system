@@ -14,6 +14,7 @@ import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import { canEditDraftOrder } from "@/lib/permissions";
 import { routes } from "@/lib/routes";
+import { requireInitiatorSignature } from "@/lib/user-signature";
 import {
   assertItemImagesPresent,
   createOrderSchema,
@@ -57,6 +58,14 @@ export async function updateOrder(formData: FormData) {
   const parsed = updateOrderSchema.parse(payload);
   const { itemImages } = parseOrderFormData(formData);
   assertItemImagesPresent(parsed.items, itemImages);
+
+  const session = await auth();
+  if (!session?.user?.openId) {
+    throw new Error("未登录");
+  }
+  if (parsed.submit) {
+    await requireInitiatorSignature(session.user.openId);
+  }
 
   await requireDraftOrder(parsed.orderId);
 
@@ -126,6 +135,12 @@ export async function updateOrder(formData: FormData) {
 }
 
 export async function submitDraftOrder(orderId: string) {
+  const session = await auth();
+  if (!session?.user?.openId) {
+    throw new Error("未登录");
+  }
+  await requireInitiatorSignature(session.user.openId);
+
   const order = await requireDraftOrder(orderId);
   const formInput = toOrderFormInput(order);
   createOrderSchema.parse({ ...formInput, submit: true });

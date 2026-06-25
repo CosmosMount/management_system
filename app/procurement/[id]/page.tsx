@@ -140,6 +140,7 @@ export default async function OrderDetailPage({ params, searchParams }: Props) {
                     status={order.status}
                     userOpenId={session?.user?.openId}
                     initiatorOpenId={order.initiator.openId}
+                    hasSignature={hasSignature}
                   />
                   <OrderReimbursementActions
                     orderId={order.id}

@@ -150,6 +150,7 @@ export function OrdersTable({
                     status={order.status}
                     userOpenId={userOpenId}
                     initiatorOpenId={order.initiatorOpenId}
+                    hasSignature={hasSignature}
                   />
                   <OrderActions
                     orderId={order.id}

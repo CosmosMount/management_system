@@ -13,6 +13,7 @@ import { attachItemReferenceImages } from "@/lib/order-item-images";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import { routes } from "@/lib/routes";
+import { requireInitiatorSignature } from "@/lib/user-signature";
 import {
   assertItemImagesPresent,
   createOrderSchema,
@@ -25,6 +26,8 @@ export async function createOrder(formData: FormData) {
   if (!session?.user?.openId) {
     throw new Error("未登录");
   }
+
+  await requireInitiatorSignature(session.user.openId);
 
   const payload = JSON.parse(String(formData.get("payload") ?? "{}"));
   const parsed = createOrderSchema.parse(payload);

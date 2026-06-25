@@ -10,6 +10,7 @@ import { canEditDraftOrder } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { toOrderFormInput } from "@/lib/validations/order";
 import { routes } from "@/lib/routes";
+import { userHasSignature } from "@/lib/user-signature";
 
 type Props = {
   params: Promise<{ id: string }>;
@@ -44,6 +45,8 @@ export default async function EditOrderPage({ params }: Props) {
     notFound();
   }
 
+  const hasSignature = await userHasSignature(session.user.openId);
+
   return (
     <>
       <AppHeader />
@@ -57,6 +60,7 @@ export default async function EditOrderPage({ params }: Props) {
           <ApplyForm
             orderId={order.id}
             initialValues={toOrderFormInput(order)}
+            hasSignature={hasSignature}
           />
         </ProcurementPageLayout>
       </PageShell>

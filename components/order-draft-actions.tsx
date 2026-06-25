@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { submitDraftOrder } from "@/app/actions/updateOrder";
+import { SignatureRequiredDialog } from "@/components/signature-required-dialog";
 import { Button, buttonVariants } from "@/components/ui/button";
 import type { OrderStatus } from "@prisma/client";
 import { getActionErrorMessage } from "@/lib/action-error-message";
@@ -17,6 +18,7 @@ type Props = {
   status: OrderStatus;
   userOpenId?: string;
   initiatorOpenId: string;
+  hasSignature: boolean;
 };
 
 export function OrderDraftActions({
@@ -24,16 +26,23 @@ export function OrderDraftActions({
   status,
   userOpenId,
   initiatorOpenId,
+  hasSignature,
 }: Props) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [loading, setLoading] = useState(false);
+  const [signatureDialogOpen, setSignatureDialogOpen] = useState(false);
 
   if (!canEditDraftOrder(status, userOpenId, initiatorOpenId)) {
     return null;
   }
 
   function handleSubmit() {
+    if (!hasSignature) {
+      setSignatureDialogOpen(true);
+      return;
+    }
+
     setLoading(true);
     startTransition(async () => {
       try {
@@ -63,6 +72,11 @@ export function OrderDraftActions({
       >
         提交申请
       </Button>
+      <SignatureRequiredDialog
+        open={signatureDialogOpen}
+        onOpenChange={setSignatureDialogOpen}
+        purpose="initiate"
+      />
     </div>
   );
 }

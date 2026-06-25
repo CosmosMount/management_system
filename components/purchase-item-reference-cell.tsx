@@ -1,6 +1,5 @@
 import { AttachmentFileLink } from "@/components/attachment-file-link";
 import type { PurchaseItemKind } from "@/lib/purchase-item-kind";
-import { itemKindNeedsImage } from "@/lib/purchase-item-kind";
 
 type Props = {
   itemKind: PurchaseItemKind;
@@ -13,10 +12,7 @@ export function PurchaseItemReferenceCell({
   purchaseLink,
   referenceImagePath,
 }: Props) {
-  if (itemKindNeedsImage(itemKind)) {
-    if (!referenceImagePath) {
-      return <span className="text-muted-foreground">—</span>;
-    }
+  if (referenceImagePath) {
     return (
       <AttachmentFileLink
         filePath={referenceImagePath}
