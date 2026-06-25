@@ -95,6 +95,16 @@ async function taskVersion(where?: Prisma.TaskWhereInput): Promise<string> {
   return encodePart("tasks", aggregate._max.updatedAt, count);
 }
 
+async function taskDeletionRequestVersion(
+  where?: Prisma.TaskDeletionRequestWhereInput,
+): Promise<string> {
+  const [aggregate, count] = await Promise.all([
+    prisma.taskDeletionRequest.aggregate({ where, _max: { updatedAt: true } }),
+    prisma.taskDeletionRequest.count({ where }),
+  ]);
+  return encodePart("taskDeletionRequests", aggregate._max.updatedAt, count);
+}
+
 async function activityVersion(
   where?: Prisma.ProgressActivityLogWhereInput,
 ): Promise<string> {
@@ -160,9 +170,9 @@ async function visibleProjectTaskCountVersion({
     where: { id: { in: projectIds } },
     include: {
       owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
-      _count: { select: { tasks: true } },
     },
   });
+  const managedProjectIds: string[] = [];
   const limitedProjectIds: string[] = [];
   const countParts: string[] = [];
   for (const project of projects) {
@@ -178,9 +188,23 @@ async function visibleProjectTaskCountVersion({
         userOpenId,
       )
     ) {
-      countParts.push(`${project.id}:${project._count.tasks}`);
+      managedProjectIds.push(project.id);
     } else {
       limitedProjectIds.push(project.id);
+    }
+  }
+
+  if (managedProjectIds.length > 0) {
+    const grouped = await prisma.task.groupBy({
+      by: ["projectId"],
+      where: { projectId: { in: managedProjectIds }, deletedAt: null },
+      _count: { _all: true },
+    });
+    const managedCounts = new Map(
+      grouped.map((row) => [row.projectId, row._count._all]),
+    );
+    for (const projectId of managedProjectIds) {
+      countParts.push(`${projectId}:${managedCounts.get(projectId) ?? 0}`);
     }
   }
 
@@ -396,6 +420,7 @@ async function getProgressProjectVersion(
       owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       stages: { select: { id: true, ownerOpenId: true } },
       tasks: {
+        where: { deletedAt: null },
         include: {
           assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
         },
@@ -509,6 +534,11 @@ async function getProgressProjectVersion(
         ? { taskId: { in: visibleTaskIdList } }
         : { id: "__none__" },
     ),
+    taskDeletionRequestVersion(
+      visibleTaskIdList.length > 0
+        ? { taskId: { in: visibleTaskIdList } }
+        : { id: "__none__" },
+    ),
     projectOwnerVersion({ projectId }),
     approvalChecklistVersion(
       submissionIdList.length > 0
@@ -552,6 +582,7 @@ async function getProgressTaskVersion(
     approvalVersion(approvalWhere),
     weeklyReportVersion({ taskId }),
     taskAssigneeVersion({ taskId }),
+    taskDeletionRequestVersion({ taskId }),
     checklistItemVersion({ taskId }),
     checklistTemplateVersion(),
     approvalChecklistVersion(
@@ -699,6 +730,7 @@ async function getProfileVersion(userOpenId: string): Promise<string> {
     ],
   };
   const taskWhere: Prisma.TaskWhereInput = {
+    deletedAt: null,
     OR: [
       { assigneeOpenId: userOpenId },
       { assignees: { some: { openId: userOpenId } } },

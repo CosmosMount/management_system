@@ -63,6 +63,8 @@ type Props = {
   taskId: string;
   status: TaskStatus;
   isAssignee: boolean;
+  canSubmitDelivery?: boolean;
+  canSubmitWeeklyReport?: boolean;
   canApprove: boolean;
   canManage: boolean;
   needsOfflineConfirmation: boolean;
@@ -77,6 +79,8 @@ export function TaskActionsPanel({
   taskId,
   status,
   isAssignee,
+  canSubmitDelivery,
+  canSubmitWeeklyReport,
   canApprove,
   canManage,
   needsOfflineConfirmation,
@@ -106,6 +110,9 @@ export function TaskActionsPanel({
   );
   const canStartTask = (isAssignee || canManage) && status === "TODO";
   const canArchiveTask = canManage && status === "COMPLETED";
+  const canSubmitTaskDelivery = canSubmitDelivery ?? isAssignee;
+  const canSubmitTaskWeeklyReport =
+    needsWeeklyReport && (canSubmitWeeklyReport ?? isAssignee);
   const allChecklistItemsChecked =
     acceptanceChecklistItems.length === 0 ||
     acceptanceChecklistItems.every((item) =>
@@ -245,7 +252,7 @@ export function TaskActionsPanel({
         </CardContent>
       </Card>
 
-      {isAssignee && status === "IN_PROGRESS" && (
+      {canSubmitTaskDelivery && status === "IN_PROGRESS" && (
         <Card>
           <CardHeader>
             <CardTitle>提交交付</CardTitle>
@@ -287,11 +294,13 @@ export function TaskActionsPanel({
         </Card>
       )}
 
-      {isAssignee && status !== "ARCHIVED" && status !== "COMPLETED" && (
+      {canSubmitTaskWeeklyReport &&
+        status !== "ARCHIVED" &&
+        status !== "COMPLETED" && (
         <Card>
           <CardHeader>
             <CardTitle>
-              本周进度周报{needsWeeklyReport ? "（必填）" : "（可选）"}
+              本周进度周报（必填）
             </CardTitle>
           </CardHeader>
           <CardContent className="grid gap-4 md:grid-cols-3">

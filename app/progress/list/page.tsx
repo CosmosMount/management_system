@@ -34,7 +34,6 @@ export default async function ProgressListPage() {
     },
     include: {
       owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
-      _count: { select: { tasks: true } },
     },
     orderBy: { updatedAt: "desc" },
   });
@@ -95,12 +94,12 @@ async function getVisibleTaskCounts(
     techGroup: string;
     ownerOpenId: string;
     owners: Array<{ openId: string }>;
-    _count: { tasks: number };
   }>,
   roles: Awaited<ReturnType<typeof getUserRoles>>,
   userOpenId?: string,
 ): Promise<Map<string, number>> {
   const counts = new Map<string, number>();
+  const managedProjectIds: string[] = [];
   const limitedProjectIds: string[] = [];
   for (const project of projects) {
     if (
@@ -113,27 +112,39 @@ async function getVisibleTaskCounts(
         userOpenId,
       )
     ) {
-      counts.set(project.id, project._count.tasks);
+      managedProjectIds.push(project.id);
     } else {
       limitedProjectIds.push(project.id);
     }
   }
 
-  if (limitedProjectIds.length === 0) return counts;
-  const grouped = await prisma.task.groupBy({
-    by: ["projectId"],
-    where: {
-      AND: [
-        progressTaskReadableWhere(roles, userOpenId),
-        { projectId: { in: limitedProjectIds } },
-      ],
-    },
-    _count: { _all: true },
-  });
-  for (const projectId of limitedProjectIds) {
+  for (const projectId of [...managedProjectIds, ...limitedProjectIds]) {
     counts.set(projectId, 0);
   }
-  for (const row of grouped) {
+
+  const managedGrouped =
+    managedProjectIds.length > 0
+      ? await prisma.task.groupBy({
+          by: ["projectId"],
+          where: { projectId: { in: managedProjectIds }, deletedAt: null },
+          _count: { _all: true },
+        })
+      : [];
+  const limitedGrouped =
+    limitedProjectIds.length > 0
+      ? await prisma.task.groupBy({
+          by: ["projectId"],
+          where: {
+            AND: [
+              progressTaskReadableWhere(roles, userOpenId),
+              { projectId: { in: limitedProjectIds } },
+            ],
+          },
+          _count: { _all: true },
+        })
+      : [];
+
+  for (const row of [...managedGrouped, ...limitedGrouped]) {
     counts.set(row.projectId, row._count._all);
   }
   return counts;

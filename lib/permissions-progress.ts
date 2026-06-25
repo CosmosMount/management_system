@@ -106,8 +106,15 @@ export function progressProjectReadableWhere(
       { ownerOpenId: userOpenId },
       { owners: { some: { openId: userOpenId } } },
       { stages: { some: { ownerOpenId: userOpenId } } },
-      { tasks: { some: { assignees: { some: { openId: userOpenId } } } } },
-      { tasks: { some: { assigneeOpenId: userOpenId } } },
+      {
+        tasks: {
+          some: {
+            deletedAt: null,
+            assignees: { some: { openId: userOpenId } },
+          },
+        },
+      },
+      { tasks: { some: { deletedAt: null, assigneeOpenId: userOpenId } } },
     );
   }
 
@@ -118,7 +125,8 @@ export function progressTaskReadableWhere(
   roles: UserRoleRecord[],
   userOpenId?: string,
 ): Prisma.TaskWhereInput {
-  if (isProgressSuperAdmin(roles) || isProjectManager(roles)) return {};
+  const notDeleted: Prisma.TaskWhereInput = { deletedAt: null };
+  if (isProgressSuperAdmin(roles) || isProjectManager(roles)) return notDeleted;
 
   const teamScopes = roles
     .filter((role) => role.role === "TEAM_ADMIN" && role.team)
@@ -139,7 +147,7 @@ export function progressTaskReadableWhere(
     );
   }
 
-  return OR.length > 0 ? { OR } : { id: "__none__" };
+  return OR.length > 0 ? { AND: [notDeleted, { OR }] } : { id: "__none__" };
 }
 
 export function canUpdateProjectLifecycle(

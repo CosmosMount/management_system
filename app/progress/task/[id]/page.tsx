@@ -65,6 +65,10 @@ export default async function TaskDetailPage({ params }: Props) {
         },
       },
       weeklyReports: { orderBy: { submittedAt: "desc" }, take: 8 },
+      deletionRequests: {
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: 5,
+      },
       activityLogs: {
         where: { createdAt: { gte: recentActivityCutoff } },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -186,6 +190,16 @@ export default async function TaskDetailPage({ params }: Props) {
       feishuDocUrl: report.feishuDocUrl,
       submitterName: report.submitterName,
       submittedAt: report.submittedAt.toISOString(),
+    })),
+    deletionRequests: task.deletionRequests.map((request) => ({
+      id: request.id,
+      requesterName: request.requesterName,
+      reason: request.reason,
+      status: request.status,
+      reviewerName: request.reviewerName,
+      reviewComment: request.reviewComment,
+      createdAt: request.createdAt.toISOString(),
+      reviewedAt: request.reviewedAt?.toISOString() ?? null,
     })),
     activityLogs: task.activityLogs.map((log) => ({
       id: log.id,

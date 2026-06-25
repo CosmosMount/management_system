@@ -154,6 +154,11 @@ export type TaskView = {
   dueAt: string;
   riskNote: string;
   submissionsCount: number;
+  pendingDeletionRequest: {
+    id: string;
+    requesterName: string;
+    createdAt: string;
+  } | null;
 };
 
 export type ActivityLogView = {
@@ -1110,6 +1115,11 @@ function TaskTableRow({
             风险
           </Badge>
         )}
+        {task.pendingDeletionRequest && (
+          <Badge variant="outline" className="ml-2 align-middle">
+            删除待审
+          </Badge>
+        )}
       </TableCell>
       <TableCell>
         <TaskStatusBadge task={task} />
@@ -1151,6 +1161,7 @@ function TaskMobileCard({ task, canStart }: { task: TaskView; canStart: boolean 
         </Badge>
         <span>{getTaskMaterialStatus(task)}</span>
         {task.riskNote && <Badge variant="destructive">风险</Badge>}
+        {task.pendingDeletionRequest && <Badge variant="outline">删除待审</Badge>}
       </div>
       {canStart && (
         <div className="mt-3">
@@ -1403,12 +1414,16 @@ function ActivityChangeList({ payload }: { payload: Record<string, unknown> }) {
   const changes = Array.isArray(payload.changes)
     ? payload.changes.filter((change): change is string => typeof change === "string")
     : [];
-  if (changes.length === 0) return null;
+  const reason = getPayloadString(payload.reason);
+  const reviewComment = getPayloadString(payload.reviewComment);
+  if (changes.length === 0 && !reason && !reviewComment) return null;
   return (
     <ul className="mt-2 space-y-1 rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
       {changes.map((change, index) => (
         <li key={`${change}-${index}`}>{change}</li>
       ))}
+      {reason && <li>原因：{reason}</li>}
+      {reviewComment && <li>审核意见：{reviewComment}</li>}
     </ul>
   );
 }
@@ -1556,7 +1571,8 @@ function getActivityTargetLabel(
   if (task) return `任务：${task.title}`;
   if (stage) return `阶段：${stage.name}`;
 
-  const title = getPayloadString(payload.title);
+  const title =
+    getPayloadString(payload.taskTitle) ?? getPayloadString(payload.title);
   if (action.startsWith("task.") && title) return `任务：${title}`;
 
   const projectName = getPayloadString(payload.name);
@@ -1582,6 +1598,9 @@ function activityLabel(action: string): string {
     "task.weekly_report": "提交了任务周报",
     "task.risk_synced": "同步了任务风险",
     "task.archived": "归档了任务",
+    "task.delete_requested": "申请删除任务",
+    "task.delete_rejected": "驳回了删除申请",
+    "task.deleted": "删除了任务",
   };
   return labels[action] ?? action;
 }

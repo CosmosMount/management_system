@@ -82,6 +82,43 @@ export type ProgressNotifyPayload =
       projectOwnerOpenIds: string[];
     }
   | {
+      type: "task_delete_requested";
+      taskId: string;
+      taskTitle: string;
+      projectName: string;
+      requesterName: string;
+      reason: string;
+      team: string;
+      techGroup: string;
+      projectOwnerOpenIds: string[];
+    }
+  | {
+      type: "task_deleted";
+      taskId: string;
+      taskTitle: string;
+      projectId: string;
+      projectName: string;
+      stageId: string | null;
+      stageName: string;
+      actorName: string;
+      reason: string;
+      team: string;
+      techGroup: string;
+      assigneeOpenIds: string[];
+      projectOwnerOpenIds: string[];
+    }
+  | {
+      type: "task_delete_rejected";
+      taskId: string;
+      taskTitle: string;
+      projectName: string;
+      reviewerName: string;
+      reason: string;
+      comment: string;
+      requesterOpenId: string;
+      assigneeOpenIds: string[];
+    }
+  | {
       type: "task_pending_acceptance";
       taskId: string;
       taskTitle: string;
@@ -367,6 +404,54 @@ export async function sendProgressNotification(
       );
       break;
     }
+    case "task_delete_requested": {
+      const card = buildCard(
+        "任务删除申请待审核",
+        `**任务**：${payload.taskTitle}\n**项目**：${payload.projectName}\n**申请人**：${payload.requesterName}\n**原因**：${payload.reason}`,
+        buildAppUrl(`${routes.progress.task(payload.taskId)}`, appOrigin),
+        "orange",
+      );
+      await notifyOpenIdsAndRoles(
+        payload.projectOwnerOpenIds,
+        ["TEAM_ADMIN", "TECH_GROUP_ADMIN", "PROJECT_MANAGER", "SUPER_ADMIN"],
+        { team: payload.team, techGroup: payload.techGroup },
+        card,
+      );
+      break;
+    }
+    case "task_deleted": {
+      const card = buildCard(
+        "任务已删除",
+        `**任务**：${payload.taskTitle}\n**项目**：${payload.projectName}\n**阶段**：${payload.stageName}\n**操作人**：${payload.actorName}\n**原因**：${payload.reason}`,
+        buildAppUrl(
+          payload.stageId
+            ? routes.progress.projectStage(payload.projectId, payload.stageId)
+            : routes.progress.project(payload.projectId),
+          appOrigin,
+        ),
+        "red",
+      );
+      await notifyOpenIdsAndRoles(
+        [...payload.assigneeOpenIds, ...payload.projectOwnerOpenIds],
+        ["TEAM_ADMIN", "TECH_GROUP_ADMIN", "PROJECT_MANAGER", "SUPER_ADMIN"],
+        { team: payload.team, techGroup: payload.techGroup },
+        card,
+      );
+      break;
+    }
+    case "task_delete_rejected": {
+      const card = buildCard(
+        "任务删除申请已驳回",
+        `**任务**：${payload.taskTitle}\n**项目**：${payload.projectName}\n**审核人**：${payload.reviewerName}\n**申请原因**：${payload.reason}\n**审核意见**：${payload.comment}`,
+        buildAppUrl(`${routes.progress.task(payload.taskId)}`, appOrigin),
+        "red",
+      );
+      await notifyOpenIds(
+        [payload.requesterOpenId, ...payload.assigneeOpenIds],
+        card,
+      );
+      break;
+    }
     case "task_pending_acceptance": {
       const card = buildCard(
         "任务待验收",
@@ -388,9 +473,8 @@ export async function sendProgressNotification(
         buildAppUrl(`${routes.progress.task(payload.taskId)}`, appOrigin),
         "red",
       );
-      await notifyOpenIds(payload.assigneeOpenIds, card).catch(console.error);
-      await notifyOpenIds(payload.projectOwnerOpenIds, card).catch(console.error);
-      await notifyRoles(
+      await notifyOpenIdsAndRoles(
+        [...payload.assigneeOpenIds, ...payload.projectOwnerOpenIds],
         ["TEAM_ADMIN", "TECH_GROUP_ADMIN", "PROJECT_MANAGER", "SUPER_ADMIN"],
         { team: payload.team, techGroup: payload.techGroup },
         card,
@@ -427,8 +511,8 @@ export async function sendProgressNotification(
         buildAppUrl(`${routes.progress.task(payload.taskId)}`, appOrigin),
         "red",
       );
-      await notifyOpenIds(payload.assigneeOpenIds, card);
-      await notifyRoles(
+      await notifyOpenIdsAndRoles(
+        payload.assigneeOpenIds,
         ["TEAM_ADMIN", "TECH_GROUP_ADMIN", "PROJECT_MANAGER", "SUPER_ADMIN"],
         { team: payload.team, techGroup: payload.techGroup },
         card,
@@ -464,6 +548,7 @@ export async function runProgressOverdueCheck() {
       dueAt: { lt: now },
       status: { in: ["TODO", "IN_PROGRESS", "PENDING_ACCEPTANCE"] },
       isOverdue: false,
+      deletedAt: null,
     },
     include: { project: true, assignees: true },
   });
@@ -493,6 +578,7 @@ export async function runWeeklyReportReminders() {
     where: {
       status: { in: ["TODO", "IN_PROGRESS", "PENDING_ACCEPTANCE"] },
       needsWeeklyReport: true,
+      deletedAt: null,
     },
     include: { assignees: true },
   });
@@ -513,6 +599,7 @@ export async function runProgressDailyReminders() {
   const activeTasks = await prisma.task.findMany({
     where: {
       status: { in: ["TODO", "IN_PROGRESS", "PENDING_ACCEPTANCE"] },
+      deletedAt: null,
     },
     include: {
       project: {
@@ -530,14 +617,8 @@ export async function runProgressDailyReminders() {
       `**任务**：${task.title}\n**项目**：${task.project.name}\n**截止**：${task.dueAt.toLocaleString("zh-CN")}`,
       buildAppUrl(`${routes.progress.task(task.id)}`),
     );
-    await notifyOpenIds(
-      getTaskAssigneeOpenIds(task),
-      card,
-    ).catch(console.error);
-    await notifyOpenIds(getProjectOwnerOpenIds(task.project), card).catch(
-      console.error,
-    );
-    await notifyRoles(
+    await notifyOpenIdsAndRoles(
+      [...getTaskAssigneeOpenIds(task), ...getProjectOwnerOpenIds(task.project)],
       ["TEAM_ADMIN", "TECH_GROUP_ADMIN", "PROJECT_MANAGER"],
       { team: task.team, techGroup: task.techGroup },
       card,

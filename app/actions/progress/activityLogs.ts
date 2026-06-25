@@ -52,6 +52,7 @@ export async function loadMoreProjectActivityLogs(
       owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       stages: { select: { id: true, ownerOpenId: true } },
       tasks: {
+        where: { deletedAt: null },
         include: {
           assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
         },

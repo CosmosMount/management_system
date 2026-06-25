@@ -9,6 +9,7 @@ import {
   History,
   Pencil,
   Play,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import type {
@@ -20,17 +21,23 @@ import type {
   Urgency,
 } from "@prisma/client";
 import { TaskActionsPanel } from "@/components/progress/task-actions-panel";
-import { ArchivedTaskDeleteButton } from "@/components/admin-delete-actions";
 import { TaskForm } from "@/components/progress/task-form";
 import { loadMoreTaskActivityLogs } from "@/app/actions/progress/activityLogs";
+import {
+  deleteTaskDirectly,
+  requestTaskDeletion,
+  reviewTaskDeletionRequest,
+} from "@/app/actions/progress/deleteTask";
 import { BackLink } from "@/components/back-link";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -73,8 +80,20 @@ export type TaskDetailView = {
   riskNote: string;
   submissions: TaskSubmissionView[];
   weeklyReports: TaskWeeklyReportView[];
+  deletionRequests: TaskDeletionRequestView[];
   activityLogs: TaskActivityLogView[];
   hasMoreActivityLogs: boolean;
+};
+
+export type TaskDeletionRequestView = {
+  id: string;
+  requesterName: string;
+  reason: string;
+  status: "PENDING" | "APPROVED" | "REJECTED";
+  reviewerName: string;
+  reviewComment: string;
+  createdAt: string;
+  reviewedAt: string | null;
 };
 
 export type TaskSubmissionView = {
@@ -171,11 +190,16 @@ export function TaskDetailWorkspace({
 }: Props) {
   const projectHref = projectStageHref(task.projectId, task.stageId);
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
+  const pendingDeletionRequest = task.deletionRequests.find(
+    (request) => request.status === "PENDING",
+  );
   const canEdit =
     canManage &&
     task.status !== "ARCHIVED" &&
     task.projectStatus !== "COMPLETED" &&
     task.projectStatus !== "CANCELED";
+  const isProjectActive =
+    task.projectStatus !== "COMPLETED" && task.projectStatus !== "CANCELED";
 
   return (
     <main
@@ -189,9 +213,18 @@ export function TaskDetailWorkspace({
         isAssignee={isAssignee}
         canManage={canManage}
         canEdit={canEdit}
-        isSuperAdmin={isSuperAdmin}
+        projectHref={projectHref}
         onOpenEdit={() => setTaskDialogOpen(true)}
       />
+
+      {pendingDeletionRequest && (
+        <TaskDeletionRequestPanel
+          request={pendingDeletionRequest}
+          taskTitle={task.title}
+          canManage={canManage}
+          redirectTo={projectHref}
+        />
+      )}
 
       <div className="mt-6 grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="min-w-0 space-y-5">
@@ -199,6 +232,12 @@ export function TaskDetailWorkspace({
             taskId={task.id}
             status={task.status}
             isAssignee={isAssignee}
+            canSubmitDelivery={isAssignee || isSuperAdmin}
+            canSubmitWeeklyReport={
+              isProjectActive &&
+              task.needsWeeklyReport &&
+              (isAssignee || canManage)
+            }
             canApprove={canApprove}
             canManage={canManage}
             needsOfflineConfirmation={task.needsOfflineConfirmation}
@@ -259,18 +298,21 @@ function TaskOverview({
   isAssignee,
   canManage,
   canEdit,
-  isSuperAdmin,
+  projectHref,
   onOpenEdit,
 }: {
   task: TaskDetailView;
   isAssignee: boolean;
   canManage: boolean;
   canEdit: boolean;
-  isSuperAdmin: boolean;
+  projectHref: string;
   onOpenEdit: () => void;
 }) {
   const canStart = task.status === "TODO" && (isAssignee || canManage);
   const canArchive = task.status === "COMPLETED" && canManage;
+  const pendingDeletionRequest = task.deletionRequests.find(
+    (request) => request.status === "PENDING",
+  );
 
   return (
     <Card data-testid="task-overview">
@@ -326,23 +368,24 @@ function TaskOverview({
           )}
         </div>
 
-        {(canEdit || canStart || canArchive || isSuperAdmin) && (
-          <div className="flex shrink-0 flex-wrap gap-2">
-            {canEdit && (
-              <Button type="button" variant="outline" onClick={onOpenEdit}>
-                <Pencil className="h-4 w-4" />
-                编辑任务
-              </Button>
-            )}
-            {canStart && <StartTaskButton taskId={task.id} />}
-            {canArchive && <ArchiveTaskButton taskId={task.id} />}
-            <ArchivedTaskDeleteButton
+        <div className="flex shrink-0 flex-wrap gap-2">
+          {canEdit && (
+            <Button type="button" variant="outline" onClick={onOpenEdit}>
+              <Pencil className="h-4 w-4" />
+              编辑任务
+            </Button>
+          )}
+          {canStart && <StartTaskButton taskId={task.id} />}
+          {canArchive && <ArchiveTaskButton taskId={task.id} />}
+          {canManage ? (
+            <TaskDirectDeleteButton taskId={task.id} redirectTo={projectHref} />
+          ) : (
+            <TaskDeletionRequestButton
               taskId={task.id}
-              status={task.status}
-              isSuperAdmin={isSuperAdmin}
+              disabled={!!pendingDeletionRequest}
             />
-          </div>
-        )}
+          )}
+        </div>
       </CardContent>
     </Card>
   );
@@ -354,6 +397,253 @@ function OverviewItem({ label, value }: { label: string; value: string }) {
       <dt className="text-muted-foreground">{label}</dt>
       <dd className="mt-1 font-medium">{value}</dd>
     </div>
+  );
+}
+
+function TaskDirectDeleteButton({
+  taskId,
+  redirectTo,
+}: {
+  taskId: string;
+  redirectTo: string;
+}) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function handleDelete() {
+    if (!reason.trim()) {
+      toast.error("请填写删除原因");
+      return;
+    }
+    setLoading(true);
+    try {
+      await deleteTaskDirectly({ taskId, reason });
+      toast.success("任务已删除");
+      setOpen(false);
+      router.push(redirectTo);
+      router.refresh();
+    } catch (err) {
+      toast.error(getActionErrorMessage(err, "删除任务失败"));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="destructive"
+        onClick={() => setOpen(true)}
+      >
+        <Trash2 className="h-4 w-4" />
+        删除任务
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>删除任务</DialogTitle>
+            <DialogDescription>
+              任务会从业务列表隐藏，但交付、周报和动态记录会保留用于审计。
+            </DialogDescription>
+          </DialogHeader>
+          <Textarea
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            placeholder="填写删除原因"
+            className="min-h-28"
+          />
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={loading}
+              onClick={() => setOpen(false)}
+            >
+              取消
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={loading}
+              onClick={handleDelete}
+            >
+              {loading ? "删除中..." : "确认删除"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+function TaskDeletionRequestButton({
+  taskId,
+  disabled,
+}: {
+  taskId: string;
+  disabled: boolean;
+}) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function handleRequest() {
+    if (!reason.trim()) {
+      toast.error("请填写删除原因");
+      return;
+    }
+    setLoading(true);
+    try {
+      await requestTaskDeletion({ taskId, reason });
+      toast.success("删除申请已提交");
+      setOpen(false);
+      setReason("");
+      router.refresh();
+    } catch (err) {
+      toast.error(getActionErrorMessage(err, "提交删除申请失败"));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        disabled={disabled}
+        onClick={() => setOpen(true)}
+      >
+        <Trash2 className="h-4 w-4" />
+        {disabled ? "删除待审核" : "申请删除"}
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>申请删除任务</DialogTitle>
+            <DialogDescription>
+              申请会通知项目负责人和对应管理角色，审核通过后任务会从业务列表隐藏。
+            </DialogDescription>
+          </DialogHeader>
+          <Textarea
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            placeholder="填写删除原因"
+            className="min-h-28"
+          />
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={loading}
+              onClick={() => setOpen(false)}
+            >
+              取消
+            </Button>
+            <Button type="button" disabled={loading} onClick={handleRequest}>
+              {loading ? "提交中..." : "提交申请"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+function TaskDeletionRequestPanel({
+  request,
+  taskTitle,
+  canManage,
+  redirectTo,
+}: {
+  request: TaskDeletionRequestView;
+  taskTitle: string;
+  canManage: boolean;
+  redirectTo: string;
+}) {
+  const router = useRouter();
+  const [comment, setComment] = useState("");
+  const [loading, setLoading] = useState<"APPROVED" | "REJECTED" | null>(null);
+
+  async function handleReview(decision: "APPROVED" | "REJECTED") {
+    if (decision === "REJECTED" && !comment.trim()) {
+      toast.error("驳回删除申请时请填写审核意见");
+      return;
+    }
+    setLoading(decision);
+    try {
+      await reviewTaskDeletionRequest({
+        requestId: request.id,
+        decision,
+        comment,
+      });
+      toast.success(decision === "APPROVED" ? "任务已删除" : "已驳回删除申请");
+      if (decision === "APPROVED") {
+        router.push(redirectTo);
+      }
+      router.refresh();
+    } catch (err) {
+      toast.error(getActionErrorMessage(err, "审核删除申请失败"));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  return (
+    <Card className="mt-4 border-orange-200 bg-orange-50/60">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base">删除申请待审核</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        <p>
+          <span className="text-muted-foreground">任务：</span>
+          {taskTitle}
+        </p>
+        <p>
+          <span className="text-muted-foreground">申请人：</span>
+          {request.requesterName}
+        </p>
+        <p className="whitespace-pre-wrap">
+          <span className="text-muted-foreground">原因：</span>
+          {request.reason}
+        </p>
+        <p className="text-xs text-muted-foreground">
+          提交时间：{formatDateTime(request.createdAt)}
+        </p>
+        {canManage && (
+          <div className="space-y-3 pt-2">
+            <Textarea
+              value={comment}
+              onChange={(event) => setComment(event.target.value)}
+              placeholder="审核意见；驳回时必填"
+              className="min-h-24 bg-background"
+            />
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={!!loading}
+                onClick={() => handleReview("APPROVED")}
+              >
+                {loading === "APPROVED" ? "处理中..." : "通过并删除"}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={!!loading}
+                onClick={() => handleReview("REJECTED")}
+              >
+                {loading === "REJECTED" ? "处理中..." : "驳回申请"}
+              </Button>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -726,6 +1016,17 @@ function ActivityDetails({
     );
   }
 
+  const reason = getPayloadString(payload.reason);
+  const reviewComment = getPayloadString(payload.reviewComment);
+  if (reason || reviewComment) {
+    return (
+      <div className="mt-2 space-y-1 rounded-md bg-muted/50 px-2 py-2 text-xs text-muted-foreground">
+        {reason && <p>原因：{reason}</p>}
+        {reviewComment && <p>审核意见：{reviewComment}</p>}
+      </div>
+    );
+  }
+
   const assignees = Array.isArray(payload.assignees)
     ? payload.assignees.filter((name): name is string => typeof name === "string")
     : [];
@@ -803,10 +1104,16 @@ function getActivityType(action: string): ActivityFilter {
   if (
     action === "task.status_changed" ||
     action === "task.updated" ||
-    action === "task.archived"
+    action === "task.archived" ||
+    action === "task.deleted"
   ) return "STATUS";
   if (action === "task.delivery_submitted") return "DELIVERY";
-  if (action === "task.approved" || action === "task.rejected") return "REVIEW";
+  if (
+    action === "task.approved" ||
+    action === "task.rejected" ||
+    action === "task.delete_requested" ||
+    action === "task.delete_rejected"
+  ) return "REVIEW";
   if (action === "task.weekly_report") return "WEEKLY";
   if (action === "task.risk_synced") return "RISK";
   return "STATUS";
@@ -823,6 +1130,9 @@ function activityLabel(action: string): string {
     "task.weekly_report": "提交了任务周报",
     "task.risk_synced": "同步了任务风险",
     "task.archived": "归档了任务",
+    "task.delete_requested": "申请删除任务",
+    "task.delete_rejected": "驳回了删除申请",
+    "task.deleted": "删除了任务",
   };
   return labels[action] ?? action;
 }

@@ -41,6 +41,12 @@ enum TaskStatus {
   ARCHIVED
 }
 
+enum TaskDeletionRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 enum TaskCategory {
   TEST
   ASSEMBLY
@@ -251,9 +257,35 @@ model Task {
   weeklyReports   WeeklyReport[]
   activityLogs    ProgressActivityLog[]
   acceptanceChecklistItems TaskAcceptanceChecklistItem[]
+  deletionRequests TaskDeletionRequest[]
   createdAt       DateTime            @default(now())
   updatedAt       DateTime            @updatedAt
   archivedAt      DateTime?
+  deletedAt       DateTime?
+  deletedByOpenId String              @default("")
+  deletedByName   String              @default("")
+  deleteReason    String              @default("")
+}
+
+model TaskDeletionRequest {
+  id              String                    @id @default(uuid())
+  taskId          String
+  task            Task                      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  requesterOpenId String
+  requesterName   String
+  reason          String
+  status          TaskDeletionRequestStatus @default(PENDING)
+  pendingKey      String                    @default("")
+  reviewerOpenId  String                    @default("")
+  reviewerName    String                    @default("")
+  reviewComment   String                    @default("")
+  reviewedAt      DateTime?
+  createdAt       DateTime                  @default(now())
+  updatedAt       DateTime                  @updatedAt
+
+  @@index([taskId, status])
+  @@index([requesterOpenId])
+  @@unique([taskId, pendingKey])
 }
 
 model TaskAssignee {

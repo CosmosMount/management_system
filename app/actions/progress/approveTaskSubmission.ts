@@ -49,6 +49,7 @@ export async function approveTaskSubmission(input: {
 
   const task = submission.task;
   if (!task) throw new Error("关联任务不存在");
+  if (task.deletedAt) throw new Error("任务已删除");
   assertProjectActive(task.project.status);
   if (submission.type !== "DELIVERY") throw new Error("提交类型无效");
   if (task.status !== "PENDING_ACCEPTANCE") {
@@ -100,7 +101,11 @@ export async function approveTaskSubmission(input: {
     if (existingApproval) throw new Error("该提交已审批");
 
     const statusUpdate = await tx.task.updateMany({
-      where: { id: task.id, status: TaskStatus.PENDING_ACCEPTANCE },
+      where: {
+        id: task.id,
+        status: TaskStatus.PENDING_ACCEPTANCE,
+        deletedAt: null,
+      },
       data: { status: TaskStatus.COMPLETED },
     });
     if (statusUpdate.count !== 1) {
@@ -178,6 +183,7 @@ export async function rejectTaskSubmission(input: {
   if (!submission?.task) throw new Error("提交记录不存在");
 
   const task = submission.task;
+  if (task.deletedAt) throw new Error("任务已删除");
   assertProjectActive(task.project.status);
   if (submission.type !== "DELIVERY") throw new Error("提交类型无效");
   if (task.status !== "PENDING_ACCEPTANCE") {
@@ -220,7 +226,11 @@ export async function rejectTaskSubmission(input: {
     if (existingApprovalInTx) throw new Error("该提交已审批");
 
     const statusUpdate = await tx.task.updateMany({
-      where: { id: task.id, status: TaskStatus.PENDING_ACCEPTANCE },
+      where: {
+        id: task.id,
+        status: TaskStatus.PENDING_ACCEPTANCE,
+        deletedAt: null,
+      },
       data: { status: TaskStatus.IN_PROGRESS },
     });
     if (statusUpdate.count !== 1) {

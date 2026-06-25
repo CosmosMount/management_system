@@ -49,6 +49,7 @@ export async function updateTaskStatus(taskId: string, status: TaskStatus) {
     },
   });
   if (!task) throw new Error("任务不存在");
+  if (task.deletedAt) throw new Error("任务已删除");
   if (task.status === "ARCHIVED") throw new Error("任务已归档");
   assertProjectActive(task.project.status);
 
@@ -75,10 +76,14 @@ export async function updateTaskStatus(taskId: string, status: TaskStatus) {
     assertTaskTransition(task.status, status);
   }
 
-  const updated = await prisma.task.update({
-    where: { id: taskId },
+  const locked = await prisma.task.updateMany({
+    where: { id: taskId, deletedAt: null },
     data: { status },
   });
+  if (locked.count !== 1) {
+    throw new Error("任务已被删除，请刷新后重试");
+  }
+  const updated = await prisma.task.findUniqueOrThrow({ where: { id: taskId } });
 
   await logProgressActivity({
     projectId: task.projectId,
@@ -109,6 +114,7 @@ export async function archiveTask(taskId: string) {
     },
   });
   if (!task) throw new Error("任务不存在");
+  if (task.deletedAt) throw new Error("任务已删除");
   assertProjectActive(task.project.status);
   if (task.status !== "COMPLETED") {
     throw new Error("仅「已完成」的任务可归档");
@@ -125,10 +131,14 @@ export async function archiveTask(taskId: string) {
     throw new Error("无归档权限");
   }
 
-  const updated = await prisma.task.update({
-    where: { id: taskId },
+  const locked = await prisma.task.updateMany({
+    where: { id: taskId, deletedAt: null, status: "COMPLETED" },
     data: { status: "ARCHIVED", archivedAt: new Date() },
   });
+  if (locked.count !== 1) {
+    throw new Error("任务已被删除，请刷新后重试");
+  }
+  const updated = await prisma.task.findUniqueOrThrow({ where: { id: taskId } });
 
   await logProgressActivity({
     projectId: task.projectId,
@@ -166,6 +176,7 @@ export async function updateTask(input: UpdateTaskInput) {
     },
   });
   if (!task) throw new Error("任务不存在");
+  if (task.deletedAt) throw new Error("任务已删除");
   if (task.updatedAt.toISOString() !== parsed.expectedUpdatedAt) {
     throw new Error("数据已被更新，请刷新后重试");
   }
@@ -300,7 +311,11 @@ export async function updateTask(input: UpdateTaskInput) {
     }
 
     const locked = await tx.task.updateMany({
-      where: { id: task.id, updatedAt: new Date(parsed.expectedUpdatedAt) },
+      where: {
+        id: task.id,
+        updatedAt: new Date(parsed.expectedUpdatedAt),
+        deletedAt: null,
+      },
       data: {
         stageId,
         title: parsed.title,

@@ -2,7 +2,10 @@
 
 import { auth } from "@/lib/auth";
 import { logProgressActivity, requireSessionUser } from "@/lib/progress-activity";
-import { canSubmitWeeklyReport } from "@/lib/permissions-progress";
+import {
+  canManageProject,
+  canSubmitWeeklyReport,
+} from "@/lib/permissions-progress";
 import { prisma } from "@/lib/prisma";
 import {
   drainNotificationOutboxSoon,
@@ -13,6 +16,7 @@ import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { getNotificationContext } from "@/lib/request-origin";
 import { revalidateProgress } from "@/lib/revalidate";
+import { getUserRoles } from "@/lib/permissions";
 import { riskSyncSchema, submitWeeklyReportSchema } from "@/lib/validations/progress";
 
 function getWeekStart(date = new Date()): Date {
@@ -33,6 +37,7 @@ export async function submitWeeklyReport(input: {
 }) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  const roles = await getUserRoles(user.openId);
   const parsed = submitWeeklyReportSchema.parse(input);
 
   const task = await prisma.task.findUnique({
@@ -47,11 +52,26 @@ export async function submitWeeklyReport(input: {
     },
   });
   if (!task) throw new Error("任务不存在");
+  if (task.deletedAt) throw new Error("任务已删除");
   assertProjectActive(task.project.status);
-  if (task.status === "ARCHIVED") throw new Error("任务已归档");
+  if (task.status === "ARCHIVED" || task.status === "COMPLETED") {
+    throw new Error("已结束任务不能提交周报");
+  }
+  if (!task.needsWeeklyReport) throw new Error("该任务当前未要求提交周报");
 
-  if (!canSubmitWeeklyReport(user.openId, getTaskAssigneeOpenIds(task))) {
-    throw new Error("仅任务负责人可提交周报");
+  const canSubmitAsAssignee = canSubmitWeeklyReport(
+    user.openId,
+    getTaskAssigneeOpenIds(task),
+  );
+  const canSubmitAsManager =
+    canManageProject(
+      roles,
+      { team: task.team, techGroup: task.techGroup },
+      getProjectOwnerOpenIds(task.project),
+      user.openId,
+    );
+  if (!canSubmitAsAssignee && !canSubmitAsManager) {
+    throw new Error("仅任务负责人或任务管理者可提交必填周报");
   }
 
   const weekStart = getWeekStart();
@@ -64,6 +84,8 @@ export async function submitWeeklyReport(input: {
       nextPlan: parsed.nextPlan ?? "",
       feishuDocUrl: parsed.feishuDocUrl ?? "",
       submittedAt: new Date(),
+      submittedBy: user.openId,
+      submitterName: user.name,
     },
     create: {
       taskId: task.id,
@@ -106,6 +128,7 @@ export async function syncTaskRisk(input: { taskId: string; riskNote: string }) 
     },
   });
   if (!task) throw new Error("任务不存在");
+  if (task.deletedAt) throw new Error("任务已删除");
   assertProjectActive(task.project.status);
   if (task.status === "ARCHIVED" || task.status === "COMPLETED") {
     throw new Error("已结束任务不能同步风险");
@@ -114,10 +137,15 @@ export async function syncTaskRisk(input: { taskId: string; riskNote: string }) 
     throw new Error("仅任务负责人可同步风险");
   }
 
-  const updated = await prisma.task.update({
-    where: { id: task.id },
-    data: { riskNote: parsed.riskNote, riskUpdatedAt: new Date() },
+  const riskUpdatedAt = new Date();
+  const locked = await prisma.task.updateMany({
+    where: { id: task.id, deletedAt: null },
+    data: { riskNote: parsed.riskNote, riskUpdatedAt },
   });
+  if (locked.count !== 1) {
+    throw new Error("任务已被删除，请刷新后重试");
+  }
+  const updated = await prisma.task.findUniqueOrThrow({ where: { id: task.id } });
 
   await logProgressActivity({
     projectId: task.projectId,

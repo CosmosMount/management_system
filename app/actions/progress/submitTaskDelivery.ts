@@ -7,11 +7,15 @@ import {
   drainNotificationOutboxSoon,
   enqueueProgressNotification,
 } from "@/lib/notification-outbox";
-import { canSubmitDelivery } from "@/lib/permissions-progress";
+import {
+  canSubmitDelivery,
+  isProgressSuperAdmin,
+} from "@/lib/permissions-progress";
 import { assertProjectActive } from "@/lib/progress-guards";
 import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
+import { getUserRoles } from "@/lib/permissions";
 import { revalidateProgress } from "@/lib/revalidate";
 import { submitDeliverySchema } from "@/lib/validations/progress";
 
@@ -24,6 +28,7 @@ export async function submitTaskDelivery(input: {
 }) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  const roles = await getUserRoles(user.openId);
   const parsed = submitDeliverySchema.parse(input);
 
   const task = await prisma.task.findUnique({
@@ -31,18 +36,22 @@ export async function submitTaskDelivery(input: {
     include: { project: true, assignees: true },
   });
   if (!task) throw new Error("任务不存在");
+  if (task.deletedAt) throw new Error("任务已删除");
   assertProjectActive(task.project.status);
   if (task.status !== "IN_PROGRESS") {
     throw new Error("仅进行中的任务可提交交付");
   }
 
-  if (!canSubmitDelivery(user.openId, getTaskAssigneeOpenIds(task))) {
-    throw new Error("仅任务负责人可提交交付");
+  if (
+    !canSubmitDelivery(user.openId, getTaskAssigneeOpenIds(task)) &&
+    !isProgressSuperAdmin(roles)
+  ) {
+    throw new Error("仅任务负责人或超级管理员可提交交付");
   }
 
   const submission = await prisma.$transaction(async (tx) => {
     const locked = await tx.task.updateMany({
-      where: { id: task.id, status: TaskStatus.IN_PROGRESS },
+      where: { id: task.id, status: TaskStatus.IN_PROGRESS, deletedAt: null },
       data: { status: TaskStatus.PENDING_ACCEPTANCE },
     });
     if (locked.count !== 1) {

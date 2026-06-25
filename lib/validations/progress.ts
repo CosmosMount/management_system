@@ -182,6 +182,37 @@ export const riskSyncSchema = z.object({
   riskNote: z.string().trim().min(1, "请填写风险说明").max(1000),
 });
 
+export const taskDeletionRequestSchema = z.object({
+  taskId: z.string().min(1),
+  reason: z
+    .string()
+    .trim()
+    .min(1, "请填写删除原因")
+    .max(1000, "删除原因不能超过 1000 个字符"),
+});
+
+export const taskDirectDeleteSchema = taskDeletionRequestSchema;
+
+export const taskDeletionReviewSchema = z
+  .object({
+    requestId: z.string().min(1),
+    decision: z.enum(["APPROVED", "REJECTED"]),
+    comment: z
+      .string()
+      .trim()
+      .max(1000, "审核意见不能超过 1000 个字符")
+      .optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.decision === "REJECTED" && !value.comment?.trim()) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["comment"],
+        message: "驳回删除申请时请填写审核意见",
+      });
+    }
+  });
+
 export type CreateProjectInput = z.input<typeof createProjectSchema>;
 export type UpdateProjectInput = z.input<typeof updateProjectSchema>;
 export type CreateTaskInput = z.input<typeof createTaskSchema>;

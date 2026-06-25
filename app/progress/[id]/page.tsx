@@ -55,10 +55,16 @@ export default async function ProjectDetailPage({ params }: Props) {
         },
       },
       tasks: {
+        where: { deletedAt: null },
         orderBy: { createdAt: "desc" },
         include: {
           stage: { select: { name: true } },
           assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+          deletionRequests: {
+            where: { status: "PENDING" },
+            orderBy: { createdAt: "desc" },
+            take: 1,
+          },
           _count: { select: { submissions: true } },
         },
       },
@@ -248,6 +254,13 @@ export default async function ProjectDetailPage({ params }: Props) {
       dueAt: task.dueAt.toISOString(),
       riskNote: task.riskNote,
       submissionsCount: task._count.submissions,
+      pendingDeletionRequest: task.deletionRequests[0]
+        ? {
+            id: task.deletionRequests[0].id,
+            requesterName: task.deletionRequests[0].requesterName,
+            createdAt: task.deletionRequests[0].createdAt.toISOString(),
+          }
+        : null,
     })),
     activityLogs: visibleActivityLogs.map((log) => ({
       id: log.id,

@@ -102,6 +102,7 @@ export async function getUserProfileRecords(
     }),
     prisma.task.findMany({
       where: {
+        deletedAt: null,
         OR: [{ assigneeOpenId: openId }, { assignees: { some: { openId } } }],
       },
       select: {
