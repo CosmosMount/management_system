@@ -40,6 +40,7 @@ import { updateProjectStatus } from "@/app/actions/progress/updateProjectStatus"
 import { updateTaskStatus } from "@/app/actions/progress/updateTask";
 import { BackLink } from "@/components/back-link";
 import { ProjectForm } from "@/components/progress/project-form";
+import { ManualReminderButton } from "@/components/progress/manual-reminder-button";
 import { ArchivedProjectDeleteButton } from "@/components/admin-delete-actions";
 import { TaskForm } from "@/components/progress/task-form";
 import { Badge } from "@/components/ui/badge";
@@ -301,6 +302,11 @@ export function ProjectDetailWorkspace({
         allStagesCompleted={allStagesCompleted}
         canUpdateLifecycle={canUpdateLifecycle}
         canEdit={canManage && project.status !== "COMPLETED" && project.status !== "CANCELED"}
+        canRemind={
+          canManage &&
+          project.status !== "COMPLETED" &&
+          project.status !== "CANCELED"
+        }
         isSuperAdmin={isSuperAdmin}
         onOpenEdit={() => setProjectDialogOpen(true)}
       />
@@ -445,6 +451,7 @@ function ProjectOverview({
   allStagesCompleted,
   canUpdateLifecycle,
   canEdit,
+  canRemind,
   isSuperAdmin,
   onOpenEdit,
 }: {
@@ -453,6 +460,7 @@ function ProjectOverview({
   allStagesCompleted: boolean;
   canUpdateLifecycle: boolean;
   canEdit: boolean;
+  canRemind: boolean;
   isSuperAdmin: boolean;
   onOpenEdit: () => void;
 }) {
@@ -522,13 +530,20 @@ function ProjectOverview({
           </dl>
         </div>
 
-        {(canEdit || canUpdateLifecycle || isSuperAdmin) && (
+        {(canEdit || canUpdateLifecycle || canRemind || isSuperAdmin) && (
           <div className="flex shrink-0 flex-wrap gap-2">
             {canEdit && (
               <Button type="button" variant="outline" onClick={onOpenEdit}>
                 <Pencil className="h-4 w-4" />
                 编辑项目
               </Button>
+            )}
+            {canRemind && (
+              <ManualReminderButton
+                targetType="PROJECT"
+                targetId={project.id}
+                label="催促项目"
+              />
             )}
             {project.status === "NOT_STARTED" && (
               <Button
@@ -1586,6 +1601,7 @@ function activityLabel(action: string): string {
     "project.created": "创建了项目",
     "project.updated": "更新了项目信息",
     "project.status_changed": "更新了项目状态",
+    "project.reminded": "发送了项目催促提醒",
     "stage.evidence_submitted": "提交了阶段材料",
     "stage.approved": "通过了阶段审核",
     "stage.rejected": "驳回了阶段审核",
@@ -1601,6 +1617,7 @@ function activityLabel(action: string): string {
     "task.delete_requested": "申请删除任务",
     "task.delete_rejected": "驳回了删除申请",
     "task.deleted": "删除了任务",
+    "task.reminded": "发送了任务催促提醒",
   };
   return labels[action] ?? action;
 }

@@ -3,17 +3,14 @@ import cron from "node-cron";
 import { OrderStatus } from "@prisma/client";
 import { sendFeishuDailySummary } from "../lib/feishu";
 import { runProcurementStaleReminders } from "../lib/procurement-reminders";
-import {
-  runProgressDailyReminders,
-  runProgressOverdueCheck,
-  runWeeklyReportReminders,
-} from "../lib/feishu-progress";
+import { runDueProgressReminderRules } from "../lib/progress-reminders";
 import { syncFeishuContactUsers } from "../lib/feishu-user-sync";
 import { drainNotificationOutbox } from "../lib/notification-outbox";
 import { prisma } from "../lib/prisma";
 
 const CONTACT_SYNC_CRON = process.env.FEISHU_CONTACT_SYNC_CRON ?? "30 8 * * *";
 let contactSyncRunning = false;
+let progressScanRunning = false;
 
 async function runProcurementDaily() {
   const orders = await prisma.purchaseOrder.findMany({
@@ -37,16 +34,24 @@ async function runProcurementDaily() {
 }
 
 async function runProgressDaily() {
-  const overdue = await runProgressOverdueCheck();
-  const reminders = await runProgressDailyReminders();
-  console.log(
-    `[cron] 进度日报：${overdue} 条新逾期，${reminders} 条今日提醒`,
-  );
-}
+  if (progressScanRunning) {
+    console.warn("[cron] 进度提醒扫描仍在运行，跳过本次扫描");
+    return;
+  }
 
-async function runWeeklyReminders() {
-  const count = await runWeeklyReportReminders();
-  console.log(`[cron] 周报提醒已发送，共 ${count} 个活跃任务`);
+  progressScanRunning = true;
+  try {
+    const result = await runDueProgressReminderRules();
+    if (result.skipped) {
+      console.warn("[cron] 进度提醒扫描已由其他入口执行，跳过本次扫描");
+      return;
+    }
+    console.log(
+      `[cron] 进度提醒扫描：执行 ${result.rulesRun} 条规则，入队 ${result.queued} 条通知`,
+    );
+  } finally {
+    progressScanRunning = false;
+  }
 }
 
 async function runFeishuContactSync() {
@@ -85,21 +90,18 @@ cron.schedule("*/2 * * * *", () => {
   );
 });
 
+cron.schedule("*/10 * * * *", () => {
+  runProgressDaily().catch((err) =>
+    console.error("[cron] 进度提醒扫描失败:", err),
+  );
+});
+
 cron.schedule("0 9 * * *", () => {
   runProcurementDaily().catch((err) =>
     console.error("[cron] 采购日报失败:", err),
   );
-  runProgressDaily().catch((err) =>
-    console.error("[cron] 进度日报失败:", err),
-  );
-});
-
-cron.schedule("0 9 * * 1", () => {
-  runWeeklyReminders().catch((err) =>
-    console.error("[cron] 周报提醒失败:", err),
-  );
 });
 
 console.log(
-  `[cron] 定时任务已启动：飞书人员同步(${CONTACT_SYNC_CRON})，每日 09:00 采购日报+催办+进度，每周一 09:00 周报提醒`,
+  `[cron] 定时任务已启动：飞书人员同步(${CONTACT_SYNC_CRON})，每日 09:00 采购日报+催办，每 10 分钟扫描进度提醒，每 2 分钟发送通知 outbox`,
 );

@@ -168,6 +168,22 @@ export type ProgressNotifyPayload =
       taskId: string;
       taskTitle: string;
       assigneeOpenIds: string[];
+    }
+  | {
+      type: "progress_reminder";
+      targetType: "PROJECT" | "TASK";
+      targetId: string;
+      projectId?: string;
+      taskId?: string;
+      projectName: string;
+      taskTitle?: string;
+      stageName?: string;
+      title: string;
+      reason: string;
+      actorName?: string;
+      message?: string;
+      recipientOpenIds: string[];
+      linkPath: string;
     };
 
 function buildCard(
@@ -236,9 +252,7 @@ async function notifyRoles(
     const ids = await getOpenIdsByRole(role, scope);
     ids.forEach((id) => openIdSet.add(id));
   }
-  await Promise.allSettled(
-    [...openIdSet].map((id) => sendDirectCard(id, card)),
-  );
+  await sendCardToOpenIds([...openIdSet], card);
 }
 
 async function notifyOpenIdsAndRoles(
@@ -252,9 +266,7 @@ async function notifyOpenIdsAndRoles(
     const ids = await getOpenIdsByRole(role, scope);
     ids.forEach((id) => openIdSet.add(id));
   }
-  await Promise.allSettled(
-    [...openIdSet].map((id) => sendDirectCard(id, card)),
-  );
+  await sendCardToOpenIds([...openIdSet], card);
 }
 
 async function notifyOpenIdsAndRoleScopes(
@@ -270,9 +282,7 @@ async function notifyOpenIdsAndRoleScopes(
       ids.forEach((id) => openIdSet.add(id));
     }
   }
-  await Promise.allSettled(
-    [...openIdSet].map((id) => sendDirectCard(id, card)),
-  );
+  await sendCardToOpenIds([...openIdSet], card);
 }
 
 async function notifyOpenIds(
@@ -280,9 +290,29 @@ async function notifyOpenIds(
   card: ReturnType<typeof buildCard>,
 ) {
   const openIdSet = new Set(openIds.filter(Boolean));
-  await Promise.allSettled(
-    [...openIdSet].map((id) => sendDirectCard(id, card)),
+  await sendCardToOpenIds([...openIdSet], card);
+}
+
+async function sendCardToOpenIds(
+  openIds: string[],
+  card: ReturnType<typeof buildCard>,
+) {
+  const recipients = [...new Set(openIds.filter(Boolean))];
+  if (recipients.length === 0) return;
+
+  const results = await Promise.allSettled(
+    recipients.map((id) => sendDirectCard(id, card)),
   );
+  const failures = results.filter(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (failures.length > 0) {
+    const reason = failures[0]?.reason;
+    const message = reason instanceof Error ? reason.message : String(reason);
+    throw new Error(
+      `飞书通知发送失败：${failures.length}/${results.length} 个收件人失败；${message}`,
+    );
+  }
 }
 
 export async function sendProgressNotification(
@@ -527,6 +557,24 @@ export async function sendProgressNotification(
         "orange",
       );
       await notifyOpenIds(payload.assigneeOpenIds, card);
+      break;
+    }
+    case "progress_reminder": {
+      const lines = [
+        `**项目**：${payload.projectName}`,
+        payload.taskTitle ? `**任务**：${payload.taskTitle}` : null,
+        payload.stageName ? `**阶段**：${payload.stageName}` : null,
+        payload.actorName ? `**发起人**：${payload.actorName}` : null,
+        `**提醒原因**：\n${payload.reason}`,
+        payload.message ? `**补充说明**：${payload.message}` : null,
+      ].filter(Boolean);
+      const card = buildCard(
+        payload.title,
+        lines.join("\n"),
+        buildAppUrl(payload.linkPath, appOrigin),
+        "orange",
+      );
+      await notifyOpenIds(payload.recipientOpenIds, card);
       break;
     }
   }

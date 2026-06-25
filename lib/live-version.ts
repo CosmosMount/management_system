@@ -749,7 +749,16 @@ async function getProfileVersion(userOpenId: string): Promise<string> {
 }
 
 async function getAdminVersion(): Promise<string> {
-  const [users, roles, templateAggregate, templateCount] = await Promise.all([
+  const [
+    users,
+    roles,
+    templateAggregate,
+    templateCount,
+    reminderAggregate,
+    reminderCount,
+    outboxAggregate,
+    outboxCount,
+  ] = await Promise.all([
     prisma.user.findMany({
       orderBy: { openId: "asc" },
       select: {
@@ -773,6 +782,17 @@ async function getAdminVersion(): Promise<string> {
       _max: { updatedAt: true },
     }),
     prisma.acceptanceChecklistTemplate.count(),
+    prisma.progressReminderRule.aggregate({
+      _max: { updatedAt: true },
+    }),
+    prisma.progressReminderRule.count(),
+    prisma.notificationOutbox.aggregate({
+      where: { channel: "progress", type: "progress_reminder" },
+      _max: { updatedAt: true },
+    }),
+    prisma.notificationOutbox.count({
+      where: { channel: "progress", type: "progress_reminder" },
+    }),
   ]);
 
   return encodeVersion([
@@ -788,6 +808,8 @@ async function getAdminVersion(): Promise<string> {
       templateAggregate._max.updatedAt,
       templateCount,
     ),
+    encodePart("reminders", reminderAggregate._max.updatedAt, reminderCount),
+    encodePart("reminderOutbox", outboxAggregate._max.updatedAt, outboxCount),
   ]);
 }
 

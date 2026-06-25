@@ -8,6 +8,7 @@ import { PageTitle } from "@/components/page-title";
 import { auth } from "@/lib/auth";
 import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { isSuperAdmin } from "@/lib/permissions";
+import { getProgressReminderRuleViews } from "@/lib/progress-reminders";
 import { prisma } from "@/lib/prisma";
 
 export default async function AdminPage() {
@@ -20,11 +21,23 @@ export default async function AdminPage() {
     redirect("/");
   }
 
-  const [users, roles, acceptanceChecklistTemplates] = await Promise.all([
+  const [
+    users,
+    roles,
+    acceptanceChecklistTemplates,
+    progressReminderRules,
+    progressReminderOutbox,
+  ] = await Promise.all([
     prisma.user.findMany({ orderBy: { name: "asc" } }),
     prisma.userRole.findMany({ orderBy: { role: "asc" } }),
     prisma.acceptanceChecklistTemplate.findMany({
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+    }),
+    getProgressReminderRuleViews(),
+    prisma.notificationOutbox.findMany({
+      where: { channel: "progress", type: "progress_reminder" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: 20,
     }),
   ]);
 
@@ -57,6 +70,16 @@ export default async function AdminPage() {
                 updatedAt: template.updatedAt.toISOString(),
               }),
             )}
+            progressReminderRules={progressReminderRules}
+            progressReminderOutbox={progressReminderOutbox.map((row) => ({
+              id: row.id,
+              type: row.type,
+              status: row.status,
+              attempts: row.attempts,
+              lastError: row.lastError,
+              createdAt: row.createdAt.toISOString(),
+              sentAt: row.sentAt?.toISOString() ?? null,
+            }))}
           />
         </main>
       </PageShell>

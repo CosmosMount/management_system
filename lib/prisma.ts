@@ -32,6 +32,7 @@ function isPrismaClientStale(client: PrismaClient): boolean {
     typeof client.approvalChecklistConfirmation?.findMany !== "function" ||
     typeof client.fileAsset?.findMany !== "function" ||
     typeof client.notificationOutbox?.findMany !== "function" ||
+    typeof client.progressReminderRule?.findMany !== "function" ||
     typeof client.feedback?.findMany !== "function"
   );
 }

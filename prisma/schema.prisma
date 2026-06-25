@@ -106,6 +106,15 @@ enum NotificationOutboxStatus {
   FAILED
 }
 
+enum ProgressReminderKind {
+  TASK_OVERDUE
+  TASK_DUE_SOON
+  TASK_PENDING_ACCEPTANCE_STALE
+  WEEKLY_REPORT_MISSING
+  TASK_STALE_ACTIVITY
+  STAGE_STALE_OR_DUE_SOON
+}
+
 model User {
   id            String          @id @default(uuid())
   openId        String          @unique
@@ -470,4 +479,16 @@ model NotificationOutbox {
   updatedAt   DateTime                 @updatedAt
 
   @@index([status, nextRunAt])
+}
+
+model ProgressReminderRule {
+  id                  String               @id @default(uuid())
+  kind                ProgressReminderKind @unique
+  enabled             Boolean              @default(true)
+  scheduleTime        String               @default("09:00")
+  paramsJson          String               @default("{}")
+  recipientConfigJson String               @default("{}")
+  lastRunAt           DateTime?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
 }

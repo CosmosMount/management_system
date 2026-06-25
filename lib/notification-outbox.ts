@@ -73,6 +73,10 @@ type FeedbackOutboxPayload =
 
 const MAX_ATTEMPTS = 8;
 
+export type EnqueueNotificationResult = {
+  created: boolean;
+};
+
 export async function enqueueNotification({
   eventKey,
   channel,
@@ -83,21 +87,62 @@ export async function enqueueNotification({
   channel: string;
   type: string;
   payload: unknown;
-}) {
+}): Promise<EnqueueNotificationResult> {
   const payloadText = JSON.stringify(payload);
-  await prisma.notificationOutbox.upsert({
-    where: { eventKey },
-    create: {
-      eventKey,
+  try {
+    await prisma.notificationOutbox.create({
+      data: {
+        eventKey,
+        channel,
+        type,
+        payload: payloadText,
+        status: "PENDING",
+        attempts: 0,
+        lastError: "",
+        nextRunAt: new Date(),
+      },
+    });
+    return { created: true };
+  } catch (err) {
+    if (isUniqueConstraintError(err)) {
+      return { created: false };
+    }
+    throw err;
+  }
+}
+
+function isUniqueConstraintError(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err as { code?: string }).code === "P2002"
+  );
+}
+
+export async function resetNotificationOutboxForRetry({
+  id,
+  channel,
+  type,
+}: {
+  id: string;
+  channel: string;
+  type: string;
+}) {
+  return prisma.notificationOutbox.updateMany({
+    where: {
+      id,
       channel,
       type,
-      payload: payloadText,
+      status: "FAILED",
+    },
+    data: {
       status: "PENDING",
       attempts: 0,
-      lastError: "",
       nextRunAt: new Date(),
+      lockedUntil: null,
+      lastError: "",
     },
-    update: {},
   });
 }
 
@@ -106,7 +151,7 @@ export async function enqueueProgressNotification(
   payload: ProgressNotifyPayload,
   context?: NotificationContext,
 ) {
-  await enqueueNotification({
+  return enqueueNotification({
     eventKey,
     channel: "progress",
     type: payload.type,

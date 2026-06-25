@@ -18,6 +18,7 @@
     "db:migrate-progress": "tsx scripts/migrate-progress-lifecycle.ts",
     "db:backfill-project-owners": "tsx scripts/backfill-project-owners.ts",
     "db:seed-acceptance-checklists": "tsx scripts/seed-acceptance-checklists.ts",
+    "db:seed-progress-reminders": "tsx scripts/seed-progress-reminder-rules.ts",
     "db:dedupe-approval-records": "tsx scripts/dedupe-approval-records.ts",
     "db:dedupe-weekly-reports": "tsx scripts/dedupe-weekly-reports.ts",
     "db:migrate-private-uploads": "tsx scripts/migrate-private-uploads.ts",

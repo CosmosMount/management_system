@@ -22,6 +22,7 @@ import type {
 } from "@prisma/client";
 import { TaskActionsPanel } from "@/components/progress/task-actions-panel";
 import { TaskForm } from "@/components/progress/task-form";
+import { ManualReminderButton } from "@/components/progress/manual-reminder-button";
 import { loadMoreTaskActivityLogs } from "@/app/actions/progress/activityLogs";
 import {
   deleteTaskDirectly,
@@ -213,6 +214,12 @@ export function TaskDetailWorkspace({
         isAssignee={isAssignee}
         canManage={canManage}
         canEdit={canEdit}
+        canRemind={
+          canManage &&
+          isProjectActive &&
+          task.status !== "COMPLETED" &&
+          task.status !== "ARCHIVED"
+        }
         projectHref={projectHref}
         onOpenEdit={() => setTaskDialogOpen(true)}
       />
@@ -298,6 +305,7 @@ function TaskOverview({
   isAssignee,
   canManage,
   canEdit,
+  canRemind,
   projectHref,
   onOpenEdit,
 }: {
@@ -305,6 +313,7 @@ function TaskOverview({
   isAssignee: boolean;
   canManage: boolean;
   canEdit: boolean;
+  canRemind: boolean;
   projectHref: string;
   onOpenEdit: () => void;
 }) {
@@ -374,6 +383,13 @@ function TaskOverview({
               <Pencil className="h-4 w-4" />
               编辑任务
             </Button>
+          )}
+          {canRemind && (
+            <ManualReminderButton
+              targetType="TASK"
+              targetId={task.id}
+              label="催促任务"
+            />
           )}
           {canStart && <StartTaskButton taskId={task.id} />}
           {canArchive && <ArchiveTaskButton taskId={task.id} />}
@@ -1133,6 +1149,7 @@ function activityLabel(action: string): string {
     "task.delete_requested": "申请删除任务",
     "task.delete_rejected": "驳回了删除申请",
     "task.deleted": "删除了任务",
+    "task.reminded": "发送了任务催促提醒",
   };
   return labels[action] ?? action;
 }
