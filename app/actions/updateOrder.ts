@@ -3,7 +3,11 @@
 import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
 import { OrderStatus } from "@prisma/client";
-import { sendOrderNotification, mapOrderItems } from "@/lib/feishu";
+import { mapOrderItems } from "@/lib/feishu";
+import {
+  drainNotificationOutboxSoon,
+  enqueueOrderNotification,
+} from "@/lib/notification-outbox";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { attachItemReferenceImages } from "@/lib/order-item-images";
 import { prisma } from "@/lib/prisma";
@@ -96,7 +100,8 @@ export async function updateOrder(formData: FormData) {
   }
 
   if (nextStatus === OrderStatus.MANAGEMENT_REVIEW) {
-    await sendOrderNotification(
+    await enqueueOrderNotification(
+      `procurement:order:${refreshed.id}:${refreshed.status}:${refreshed.updatedAt.toISOString()}`,
       {
         id: refreshed.id,
         orderNo: refreshed.orderNo,
@@ -108,9 +113,8 @@ export async function updateOrder(formData: FormData) {
         items: mapOrderItems(refreshed.items),
       },
       await getNotificationContext(),
-    ).catch((err) => {
-      console.error("[updateOrder] 飞书通知失败:", err);
-    });
+    );
+    drainNotificationOutboxSoon();
   }
 
   revalidatePath("/");
@@ -136,7 +140,8 @@ export async function submitDraftOrder(orderId: string) {
     include: { items: true },
   });
 
-  await sendOrderNotification(
+  await enqueueOrderNotification(
+    `procurement:order:${updated.id}:${updated.status}:${updated.updatedAt.toISOString()}`,
     {
       id: updated.id,
       orderNo: updated.orderNo,
@@ -148,9 +153,8 @@ export async function submitDraftOrder(orderId: string) {
       items: mapOrderItems(updated.items),
     },
     await getNotificationContext(),
-  ).catch((err) => {
-    console.error("[submitDraftOrder] 飞书通知失败:", err);
-  });
+  );
+  drainNotificationOutboxSoon();
 
   revalidatePath("/");
   revalidatePath(routes.procurement.list);

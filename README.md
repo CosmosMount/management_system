@@ -91,7 +91,7 @@ docker compose up -d --build    # 更新代码后重新构建
 | 内容 | Docker Volume |
 |------|----------------|
 | SQLite 数据库 | `app-data` → 容器内 `/app/data/app.db` |
-| 采购附件 | `app-uploads` → 容器内 `/app/public/uploads/` |
+| 上传附件 | `app-uploads` → 容器内 `/app/storage/uploads/` |
 
 ```bash
 # 查看 volume 名称
@@ -272,17 +272,17 @@ const seedRoles = [
 
 ### 存储位置
 
-上传文件保存在项目目录下：
+上传文件保存在私有目录下，浏览器仍使用 `/uploads/...` 兼容链接，实际读取由鉴权 route 校验权限后返回：
 
 ```
-public/uploads/<订单ID>/<文件名>
+storage/uploads/<订单ID>/<文件名>
 ```
 
-例如：`public/uploads/a1b2c3.../invoice-1-1712345678-abc.pdf`
+例如：`storage/uploads/a1b2c3.../invoice-1-1712345678-abc.pdf`
 
 - 通过浏览器访问：`http://localhost:3000/uploads/<订单ID>/<文件名>`
-- 服务器上直接查看：进入项目根目录，打开 `public/uploads/` 文件夹
-- 生产环境备份时请一并备份 `public/uploads/` 与 SQLite 数据库
+- 服务器上直接查看：进入项目根目录，打开 `storage/uploads/` 文件夹
+- 生产环境备份时请一并备份 `storage/uploads/` 与 SQLite 数据库
 
 ### 限制
 

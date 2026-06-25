@@ -11,7 +11,7 @@ services:
       HOSTNAME: 0.0.0.0
     volumes:
       - app-data:/app/data
-      - app-uploads:/app/public/uploads
+      - app-uploads:/app/storage/uploads
     restart: unless-stopped
 
   cron:
@@ -22,8 +22,10 @@ services:
       - .env
     environment:
       DATABASE_URL: file:/app/data/app.db
+      SKIP_DB_PUSH: "true"
     volumes:
       - app-data:/app/data
+      - app-uploads:/app/storage/uploads
     depends_on:
       - app
     restart: unless-stopped

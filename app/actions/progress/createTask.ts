@@ -1,18 +1,20 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { TaskStatus } from "@prisma/client";
 import { auth } from "@/lib/auth";
-import { sendProgressNotification } from "@/lib/feishu-progress";
 import { logProgressActivity, requireSessionUser } from "@/lib/progress-activity";
+import {
+  drainNotificationOutboxSoon,
+  enqueueProgressNotification,
+} from "@/lib/notification-outbox";
 import { canManageProject } from "@/lib/permissions-progress";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import { getUserRoles } from "@/lib/permissions";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { normalizeAcceptanceChecklistItems } from "@/lib/progress-acceptance-checklists";
+import { revalidateProgress } from "@/lib/revalidate";
 import { createTaskSchema, type CreateTaskInput } from "@/lib/validations/progress";
-import { routes } from "@/lib/routes";
 
 export async function createTask(input: CreateTaskInput) {
   const session = await auth();
@@ -135,17 +137,21 @@ export async function createTask(input: CreateTaskInput) {
     },
   });
 
-  await sendProgressNotification({
-    type: "task_assigned",
-    taskId: task.id,
-    taskTitle: task.title,
-    projectName: project.name,
-    team: task.team,
-    techGroup: task.techGroup,
-    assigneeOpenIds: orderedAssignees.map((assignee) => assignee.openId),
-  }, await getNotificationContext()).catch(console.error);
+  await enqueueProgressNotification(
+    `progress:task_assigned:${task.id}`,
+    {
+      type: "task_assigned",
+      taskId: task.id,
+      taskTitle: task.title,
+      projectName: project.name,
+      team: task.team,
+      techGroup: task.techGroup,
+      assigneeOpenIds: orderedAssignees.map((assignee) => assignee.openId),
+    },
+    await getNotificationContext(),
+  );
+  drainNotificationOutboxSoon();
 
-  revalidatePath(`${routes.progress.project(project.id)}`);
-  revalidatePath(routes.progress.dashboard);
+  revalidateProgress(project.id, task.id);
   return task;
 }

@@ -1,13 +1,16 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
 import { OrderStatus } from "@prisma/client";
-import { sendOrderNotification, mapOrderItems } from "@/lib/feishu";
+import { mapOrderItems } from "@/lib/feishu";
+import {
+  drainNotificationOutboxSoon,
+  enqueueOrderNotification,
+} from "@/lib/notification-outbox";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";
+import { revalidateProcurement } from "@/lib/revalidate";
 import { getNotificationContext } from "@/lib/request-origin";
-import { routes } from "@/lib/routes";
 import {
   canApproveTeamManagement,
   canApproveTechGroupManagement,
@@ -48,37 +51,74 @@ export async function approveManagementReview(orderId: string) {
 
   await requireApproverSignature(session.user.openId);
 
-  const teamApproved = order.teamApproved || canTeam;
-  const techGroupApproved = order.techGroupApproved || canTech;
+  const { updated, advancedToTeacherReview } = await prisma.$transaction(
+    async (tx) => {
+      const approvalTargets = [
+        ...(canTeam ? [{ teamApproved: false }] : []),
+        ...(canTech ? [{ techGroupApproved: false }] : []),
+      ];
 
-  const allApproved = teamApproved && techGroupApproved;
+      const approved = await tx.purchaseOrder.updateMany({
+        where: {
+          id: orderId,
+          status: OrderStatus.MANAGEMENT_REVIEW,
+          OR: approvalTargets,
+        },
+        data: {
+          ...(canTeam ? { teamApproved: true } : {}),
+          ...(canTech ? { techGroupApproved: true } : {}),
+          ...stepTimerResetFields(),
+        },
+      });
+      if (approved.count !== 1) {
+        throw new Error("无操作权限或已审核");
+      }
 
-  const updated = await prisma.purchaseOrder.update({
-    where: { id: orderId },
-    data: {
-      teamApproved,
-      techGroupApproved,
-      ...stepTimerResetFields(),
-      ...(allApproved ? { status: OrderStatus.TEACHER_REVIEW } : {}),
+      const latest = await tx.purchaseOrder.findUnique({
+        where: { id: orderId },
+      });
+      if (!latest) throw new Error("订单不存在");
+
+      if (!latest.teamApproved || !latest.techGroupApproved) {
+        return { updated: latest, advancedToTeacherReview: false };
+      }
+
+      const advanced = await tx.purchaseOrder.updateMany({
+        where: { id: orderId, status: OrderStatus.MANAGEMENT_REVIEW },
+        data: {
+          status: OrderStatus.TEACHER_REVIEW,
+          ...stepTimerResetFields(),
+        },
+      });
+      const finalOrder = await tx.purchaseOrder.findUnique({
+        where: { id: orderId },
+      });
+      if (!finalOrder) throw new Error("订单不存在");
+      return {
+        updated: finalOrder,
+        advancedToTeacherReview: advanced.count === 1,
+      };
     },
-  });
+  );
 
-  if (allApproved) {
-    await sendOrderNotification({
-      id: updated.id,
-      orderNo: updated.orderNo,
-      initiatorName: updated.initiatorName,
-      totalPrice: updated.totalPrice,
-      status: updated.status,
-      team: updated.team,
-      techGroup: updated.techGroup,
-      items: mapOrderItems(order.items),
-    }, await getNotificationContext()).catch((err) => {
-      console.error("[approveManagementReview] 飞书通知失败:", err);
-    });
+  if (advancedToTeacherReview) {
+    await enqueueOrderNotification(
+      `procurement:order:${updated.id}:${updated.status}:${updated.updatedAt.toISOString()}`,
+      {
+        id: updated.id,
+        orderNo: updated.orderNo,
+        initiatorName: updated.initiatorName,
+        totalPrice: updated.totalPrice,
+        status: updated.status,
+        team: updated.team,
+        techGroup: updated.techGroup,
+        items: mapOrderItems(order.items),
+      },
+      await getNotificationContext(),
+    );
+    drainNotificationOutboxSoon();
   }
 
-  revalidatePath(routes.procurement.list);
-  revalidatePath(`${routes.procurement.detail(orderId)}`);
+  revalidateProcurement(orderId);
   return updated;
 }

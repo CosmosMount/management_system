@@ -5,14 +5,27 @@ import { ProgressBackLink } from "@/components/progress/progress-back-link";
 import { ProgressPageLayout } from "@/components/progress/progress-page-layout";
 import { PageShell } from "@/components/page-shell";
 import { PageTitle } from "@/components/page-title";
+import { auth } from "@/lib/auth";
 import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
+import { getUserRoles } from "@/lib/permissions";
+import { progressTaskReadableWhere } from "@/lib/permissions-progress";
 import { getTaskAssigneeNames } from "@/lib/progress-assignees";
 import { prisma } from "@/lib/prisma";
 
 export default async function ProgressDashboardPage() {
-  const liveVersion = await getCurrentUserLiveVersion("progress");
+  const session = await auth();
+  const userOpenId = session?.user?.openId;
+  const [liveVersion, roles] = await Promise.all([
+    getCurrentUserLiveVersion("progress-board"),
+    userOpenId ? getUserRoles(userOpenId) : Promise.resolve([]),
+  ]);
   const tasks = await prisma.task.findMany({
-    where: { status: { not: "ARCHIVED" } },
+    where: {
+      AND: [
+        progressTaskReadableWhere(roles, userOpenId),
+        { status: { not: "ARCHIVED" } },
+      ],
+    },
     include: {
       project: { select: { name: true } },
       stage: { select: { name: true } },
@@ -41,7 +54,7 @@ export default async function ProgressDashboardPage() {
     <>
       <AppHeader />
       <LiveAutoRefresh
-        scope="progress"
+        scope="progress-board"
         initialVersion={liveVersion}
         intervalMs={6000}
       />

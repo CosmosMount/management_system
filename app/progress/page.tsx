@@ -15,32 +15,51 @@ import {
 } from "@/components/ui/card";
 import { projectStatusLabels } from "@/lib/progress-labels";
 import { prisma } from "@/lib/prisma";
-import { canCreateProject } from "@/lib/permissions-progress";
+import {
+  canCreateProject,
+  canManageProject,
+  progressProjectReadableWhere,
+  progressTaskReadableWhere,
+} from "@/lib/permissions-progress";
 import { auth } from "@/lib/auth";
 import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { getUserRoles } from "@/lib/permissions";
 import { routes } from "@/lib/routes";
 
 export default async function ProgressHomePage() {
-  const liveVersion = await getCurrentUserLiveVersion("progress");
   const session = await auth();
-  const roles = session?.user?.openId
-    ? await getUserRoles(session.user.openId)
-    : [];
+  const userOpenId = session?.user?.openId;
+  const [liveVersion, roles] = await Promise.all([
+    getCurrentUserLiveVersion("progress-list"),
+    userOpenId ? getUserRoles(userOpenId) : Promise.resolve([]),
+  ]);
   const showCreate = canCreateProject(roles);
 
   const projects = await prisma.project.findMany({
-    where: { status: { notIn: ["COMPLETED", "CANCELED"] } },
-    include: { _count: { select: { tasks: true } } },
+    where: {
+      AND: [
+        progressProjectReadableWhere(roles, userOpenId),
+        { status: { notIn: ["COMPLETED", "CANCELED"] } },
+      ],
+    },
+    include: {
+      owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      _count: { select: { tasks: true } },
+    },
     orderBy: { updatedAt: "desc" },
     take: 20,
   });
+  const visibleTaskCounts = await getVisibleTaskCounts(
+    projects,
+    roles,
+    userOpenId,
+  );
 
   return (
     <>
       <AppHeader />
       <LiveAutoRefresh
-        scope="progress"
+        scope="progress-list"
         initialVersion={liveVersion}
         intervalMs={10000}
       />
@@ -109,7 +128,8 @@ export default async function ProgressHomePage() {
                           <p className="font-medium">{p.name}</p>
                           <p className="text-sm text-muted-foreground">
                             {formatScopeItem(p.team)} /{" "}
-                            {formatScopeItem(p.techGroup)} · {p._count.tasks} 个任务
+                            {formatScopeItem(p.techGroup)} ·{" "}
+                            {visibleTaskCounts.get(p.id) ?? 0} 个任务
                           </p>
                         </div>
                         <Badge variant="secondary">
@@ -126,6 +146,57 @@ export default async function ProgressHomePage() {
       </PageShell>
     </>
   );
+}
+
+async function getVisibleTaskCounts(
+  projects: Array<{
+    id: string;
+    team: string;
+    techGroup: string;
+    ownerOpenId: string;
+    owners: Array<{ openId: string }>;
+    _count: { tasks: number };
+  }>,
+  roles: Awaited<ReturnType<typeof getUserRoles>>,
+  userOpenId?: string,
+): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  const limitedProjectIds: string[] = [];
+  for (const project of projects) {
+    if (
+        canManageProject(
+        roles,
+        { team: project.team, techGroup: project.techGroup },
+        project.owners.length > 0
+          ? project.owners.map((owner) => owner.openId)
+          : [project.ownerOpenId],
+        userOpenId,
+      )
+    ) {
+      counts.set(project.id, project._count.tasks);
+    } else {
+      limitedProjectIds.push(project.id);
+    }
+  }
+
+  if (limitedProjectIds.length === 0) return counts;
+  const grouped = await prisma.task.groupBy({
+    by: ["projectId"],
+    where: {
+      AND: [
+        progressTaskReadableWhere(roles, userOpenId),
+        { projectId: { in: limitedProjectIds } },
+      ],
+    },
+    _count: { _all: true },
+  });
+  for (const projectId of limitedProjectIds) {
+    counts.set(projectId, 0);
+  }
+  for (const row of grouped) {
+    counts.set(row.projectId, row._count._all);
+  }
+  return counts;
 }
 
 function formatScopeItem(value: string): string {

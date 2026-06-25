@@ -9,23 +9,39 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { auth } from "@/lib/auth";
 import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { getTaskAssigneeNames } from "@/lib/progress-assignees";
-import { isSuperAdmin } from "@/lib/permissions";
+import { getUserRoles, isSuperAdmin } from "@/lib/permissions";
+import {
+  progressProjectReadableWhere,
+  progressTaskReadableWhere,
+} from "@/lib/permissions-progress";
 import { prisma } from "@/lib/prisma";
 
 export default async function ArchivePage() {
-  const liveVersion = await getCurrentUserLiveVersion("progress");
   const session = await auth();
-  const admin = session?.user?.openId
-    ? await isSuperAdmin(session.user.openId)
-    : false;
+  const userOpenId = session?.user?.openId;
+  const [liveVersion, roles, admin] = await Promise.all([
+    getCurrentUserLiveVersion("progress-archive"),
+    userOpenId ? getUserRoles(userOpenId) : Promise.resolve([]),
+    userOpenId ? isSuperAdmin(userOpenId) : Promise.resolve(false),
+  ]);
 
   const [projects, tasks] = await Promise.all([
     prisma.project.findMany({
-      where: { status: { in: ["COMPLETED", "CANCELED"] } },
+      where: {
+        AND: [
+          progressProjectReadableWhere(roles, userOpenId),
+          { status: { in: ["COMPLETED", "CANCELED"] } },
+        ],
+      },
       orderBy: { archivedAt: "desc" },
     }),
     prisma.task.findMany({
-      where: { status: "ARCHIVED" },
+      where: {
+        AND: [
+          progressTaskReadableWhere(roles, userOpenId),
+          { status: "ARCHIVED" },
+        ],
+      },
       include: {
         project: { select: { name: true } },
         assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
@@ -57,7 +73,7 @@ export default async function ArchivePage() {
     <>
       <AppHeader />
       <LiveAutoRefresh
-        scope="progress"
+        scope="progress-archive"
         initialVersion={liveVersion}
         intervalMs={10000}
       />

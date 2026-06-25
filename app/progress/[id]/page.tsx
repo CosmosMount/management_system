@@ -10,9 +10,11 @@ import { auth } from "@/lib/auth";
 import { getUserRoles, isSuperAdmin } from "@/lib/permissions";
 import {
   canManageProject,
+  canViewProject,
   canApproveStage as canApproveStagePermission,
   canSubmitStage as canSubmitStagePermission,
   canUpdateProjectLifecycle,
+  progressProjectReadableWhere,
 } from "@/lib/permissions-progress";
 import {
   getTaskAssigneeNames,
@@ -36,8 +38,11 @@ export default async function ProjectDetailPage({ params }: Props) {
   const roles = userOpenId ? await getUserRoles(userOpenId) : [];
   const recentActivityCutoff = getRecentActivityCutoff();
 
-  const project = await prisma.project.findUnique({
-    where: { id },
+  const project = await prisma.project.findFirst({
+    where: {
+      id,
+      AND: progressProjectReadableWhere(roles, userOpenId),
+    },
     include: {
       owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       stages: {
@@ -68,6 +73,24 @@ export default async function ProjectDetailPage({ params }: Props) {
 
   const scope = { team: project.team, techGroup: project.techGroup };
   const projectOwnerOpenIds = getProjectOwnerOpenIds(project);
+  const stageOwnerOpenIds = project.stages
+    .map((stage) => stage.ownerOpenId)
+    .filter(Boolean);
+  const taskAssigneeOpenIds = [
+    ...new Set(project.tasks.flatMap((task) => getTaskAssigneeOpenIds(task))),
+  ];
+  if (
+    !canViewProject(
+      roles,
+      scope,
+      projectOwnerOpenIds,
+      stageOwnerOpenIds,
+      taskAssigneeOpenIds,
+      userOpenId,
+    )
+  ) {
+    notFound();
+  }
   const canManage = canManageProject(
     roles,
     scope,
@@ -82,18 +105,79 @@ export default async function ProjectDetailPage({ params }: Props) {
   );
   const admin = userOpenId ? await isSuperAdmin(userOpenId) : false;
 
-  const users = await prisma.user.findMany({
-    orderBy: { name: "asc" },
-    select: { openId: true, name: true, avatar: true },
+  const ownedStageIds = new Set(
+    project.stages
+      .filter((stage) => stage.ownerOpenId === userOpenId)
+      .map((stage) => stage.id),
+  );
+  const visibleTasks = canManage
+    ? project.tasks
+    : project.tasks.filter(
+        (task) =>
+          getTaskAssigneeOpenIds(task).includes(userOpenId ?? "") ||
+          (!!task.stageId && ownedStageIds.has(task.stageId)),
+      );
+  const visibleTaskIds = new Set(visibleTasks.map((task) => task.id));
+  const visibleStageIds = new Set([
+    ...ownedStageIds,
+    ...visibleTasks
+      .map((task) => task.stageId)
+      .filter((stageId): stageId is string => !!stageId),
+  ]);
+  const visibleStages = canManage
+    ? project.stages
+    : project.stages
+        .filter((stage) => visibleStageIds.has(stage.id))
+        .map((stage) =>
+          ownedStageIds.has(stage.id)
+            ? stage
+            : {
+                ...stage,
+                evidenceUrl: "",
+                currentSubmissionId: null,
+                submissions: [],
+              },
+        );
+  const visibleActivityLogs = project.activityLogs.filter((log) => {
+    if (canManage) return true;
+    if (log.taskId && visibleTaskIds.has(log.taskId)) return true;
+    const payload = parseActivityPayload(log.payload);
+    const stageId = getPayloadString(payload.stageId);
+    return !!stageId && ownedStageIds.has(stageId);
   });
-  const acceptanceChecklistTemplates =
-    await prisma.acceptanceChecklistTemplate.findMany({
-      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-      select: { id: true, content: true },
-    });
-  const activityLogCount = await prisma.progressActivityLog.count({
-    where: { projectId: project.id },
-  });
+  const limitedActivityFilters = [
+    ...(visibleTaskIds.size > 0
+      ? [{ taskId: { in: [...visibleTaskIds] } }]
+      : []),
+    ...[...ownedStageIds].map((stageId) => ({
+      projectId: project.id,
+      payload: { contains: `"stageId":"${stageId}"` },
+    })),
+  ];
+  const activityLogWhere = canManage
+    ? { projectId: project.id }
+    : limitedActivityFilters.length > 0
+      ? { OR: limitedActivityFilters }
+      : { id: "__none__" };
+
+  const [users, acceptanceChecklistTemplates, activityLogCount] =
+    await Promise.all([
+      canManage
+        ? prisma.user.findMany({
+            orderBy: { name: "asc" },
+            select: { openId: true, name: true, avatar: true },
+          })
+        : Promise.resolve([]),
+      canManage
+        ? prisma.acceptanceChecklistTemplate.findMany({
+            orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+            select: { id: true, content: true },
+          })
+        : Promise.resolve([]),
+      prisma.progressActivityLog.count({
+        where: activityLogWhere,
+      }),
+    ]);
 
   const projectView: ProjectDetailView = {
     id: project.id,
@@ -111,7 +195,7 @@ export default async function ProjectDetailPage({ params }: Props) {
     updatedAt: project.updatedAt.toISOString(),
     completedAt: project.completedAt?.toISOString() ?? null,
     canceledAt: project.canceledAt?.toISOString() ?? null,
-    stages: project.stages.map((stage) => ({
+    stages: visibleStages.map((stage) => ({
       id: stage.id,
       name: stage.name,
       goal: stage.goal,
@@ -147,7 +231,7 @@ export default async function ProjectDetailPage({ params }: Props) {
         })),
       })),
     })),
-    tasks: project.tasks.map((task) => ({
+    tasks: visibleTasks.map((task) => ({
       id: task.id,
       title: task.title,
       goal: task.goal,
@@ -165,7 +249,7 @@ export default async function ProjectDetailPage({ params }: Props) {
       riskNote: task.riskNote,
       submissionsCount: task._count.submissions,
     })),
-    activityLogs: project.activityLogs.map((log) => ({
+    activityLogs: visibleActivityLogs.map((log) => ({
       id: log.id,
       action: log.action,
       taskId: log.taskId,
@@ -198,4 +282,19 @@ export default async function ProjectDetailPage({ params }: Props) {
       </PageShell>
     </>
   );
+}
+
+function parseActivityPayload(payload: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(payload) as unknown;
+    return typeof parsed === "object" && parsed !== null
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function getPayloadString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
 }

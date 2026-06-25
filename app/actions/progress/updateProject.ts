@@ -1,9 +1,11 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
-import { sendProgressNotification } from "@/lib/feishu-progress";
 import { getUserRoles } from "@/lib/permissions";
+import {
+  drainNotificationOutboxSoon,
+  enqueueProgressNotification,
+} from "@/lib/notification-outbox";
 import {
   canChangeProjectScope,
   canManageProject,
@@ -12,7 +14,7 @@ import { getProjectOwnerOpenIds, getProjectOwnerNames } from "@/lib/progress-pro
 import { requireSessionUser } from "@/lib/progress-activity";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
-import { routes } from "@/lib/routes";
+import { revalidateProgress } from "@/lib/revalidate";
 import {
   updateProjectSchema,
   type UpdateProjectInput,
@@ -31,6 +33,9 @@ export async function updateProject(input: UpdateProjectInput) {
     },
   });
   if (!project) throw new Error("项目不存在");
+  if (project.updatedAt.toISOString() !== parsed.expectedUpdatedAt) {
+    throw new Error("数据已被更新，请刷新后重试");
+  }
   if (project.status === "COMPLETED") throw new Error("已完成项目不可编辑");
   if (project.status === "CANCELED") throw new Error("已取消项目不可编辑");
 
@@ -110,8 +115,8 @@ export async function updateProject(input: UpdateProjectInput) {
   }
 
   const updated = await prisma.$transaction(async (tx) => {
-    const record = await tx.project.update({
-      where: { id: project.id },
+    const locked = await tx.project.updateMany({
+      where: { id: project.id, updatedAt: new Date(parsed.expectedUpdatedAt) },
       data: {
         name: parsed.name,
         description: parsed.description ?? "",
@@ -122,6 +127,9 @@ export async function updateProject(input: UpdateProjectInput) {
         allowOwnerSelfApproval: parsed.allowOwnerSelfApproval,
       },
     });
+    if (locked.count !== 1) {
+      throw new Error("数据已被更新，请刷新后重试");
+    }
 
     await tx.projectOwner.deleteMany({ where: { projectId: project.id } });
     await tx.projectOwner.createMany({
@@ -140,6 +148,9 @@ export async function updateProject(input: UpdateProjectInput) {
       });
     }
 
+    const record = await tx.project.findUnique({ where: { id: project.id } });
+    if (!record) throw new Error("项目不存在");
+
     await tx.progressActivityLog.create({
       data: {
         projectId: project.id,
@@ -157,7 +168,8 @@ export async function updateProject(input: UpdateProjectInput) {
     return record;
   });
 
-  await sendProgressNotification(
+  await enqueueProgressNotification(
+    `progress:project_updated:${project.id}:${updated.updatedAt.toISOString()}`,
     {
       type: "project_updated",
       projectId: project.id,
@@ -172,13 +184,10 @@ export async function updateProject(input: UpdateProjectInput) {
       oldOwnerOpenIds,
     },
     await getNotificationContext(),
-  ).catch(console.error);
+  );
+  drainNotificationOutboxSoon();
 
-  revalidatePath(`${routes.progress.project(project.id)}`);
-  revalidatePath(routes.progress.root);
-  if (scopeChanged) {
-    revalidatePath(routes.progress.dashboard);
-  }
+  revalidateProgress(project.id);
   return updated;
 }
 

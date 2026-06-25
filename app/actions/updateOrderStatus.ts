@@ -3,7 +3,11 @@
 import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
 import { OrderStatus } from "@prisma/client";
-import { sendOrderNotification, mapOrderItems } from "@/lib/feishu";
+import { mapOrderItems } from "@/lib/feishu";
+import {
+  drainNotificationOutboxSoon,
+  enqueueOrderNotification,
+} from "@/lib/notification-outbox";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
@@ -58,18 +62,21 @@ export async function updateOrderStatus(orderId: string) {
     OrderStatus.PENDING_APPLICANT_DOCS,
   ];
   if (notifyStatuses.includes(updated.status)) {
-    await sendOrderNotification({
-      id: updated.id,
-      orderNo: updated.orderNo,
-      initiatorName: updated.initiatorName,
-      totalPrice: updated.totalPrice,
-      status: updated.status,
-      team: updated.team,
-      techGroup: updated.techGroup,
-      items: mapOrderItems(order.items),
-    }, await getNotificationContext()).catch((err) => {
-      console.error("[updateOrderStatus] 飞书通知失败:", err);
-    });
+    await enqueueOrderNotification(
+      `procurement:order:${updated.id}:${updated.status}:${updated.updatedAt.toISOString()}`,
+      {
+        id: updated.id,
+        orderNo: updated.orderNo,
+        initiatorName: updated.initiatorName,
+        totalPrice: updated.totalPrice,
+        status: updated.status,
+        team: updated.team,
+        techGroup: updated.techGroup,
+        items: mapOrderItems(order.items),
+      },
+      await getNotificationContext(),
+    );
+    drainNotificationOutboxSoon();
   }
 
   revalidatePath(routes.procurement.list);

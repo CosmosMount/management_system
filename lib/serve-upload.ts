@@ -1,10 +1,14 @@
-import { createReadStream } from "fs";
-import { stat } from "fs/promises";
+import { readFile, stat } from "fs/promises";
 import path from "path";
-import { Readable } from "stream";
 import { NextResponse } from "next/server";
-
-const UPLOADS_ROOT = path.join(process.cwd(), "public", "uploads");
+import { auth } from "@/lib/auth";
+import { canViewFileAsset } from "@/lib/file-asset-permissions";
+import { getUserRoles } from "@/lib/permissions";
+import { prisma } from "@/lib/prisma";
+import {
+  publicPathToStoragePath,
+  storagePathToAbsolute,
+} from "@/lib/file-upload";
 
 const MIME_TYPES: Record<string, string> = {
   ".png": "image/png",
@@ -20,22 +24,12 @@ const MIME_TYPES: Record<string, string> = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 };
 
-function isInsideUploadsRoot(filePath: string): boolean {
-  const relative = path.relative(UPLOADS_ROOT, filePath);
-  return relative !== ".." && !relative.startsWith(`..${path.sep}`);
-}
-
-export function resolveUploadFile(segments: string[]): string | null {
+export function resolveUploadPublicPath(segments: string[]): string | null {
   if (segments.length === 0) return null;
   if (segments.some((segment) => !segment || segment === "." || segment === "..")) {
     return null;
   }
-
-  const fullPath = path.resolve(UPLOADS_ROOT, ...segments);
-  if (!isInsideUploadsRoot(fullPath)) {
-    return null;
-  }
-  return fullPath;
+  return `/uploads/${segments.join("/")}`;
 }
 
 function contentDisposition(filename: string, attachment: boolean): string {
@@ -48,10 +42,35 @@ export async function serveUploadFile(
   segments: string[],
   options?: { download?: boolean },
 ): Promise<NextResponse> {
-  const filePath = resolveUploadFile(segments);
-  if (!filePath) {
+  const session = await auth();
+  const userOpenId = session?.user?.openId;
+  if (!userOpenId) {
+    return new NextResponse("Unauthorized", { status: 401 });
+  }
+
+  const publicPath = resolveUploadPublicPath(segments);
+  if (!publicPath) {
     return new NextResponse("Bad Request", { status: 400 });
   }
+
+  const asset = await prisma.fileAsset.findUnique({
+    where: { publicPath },
+  });
+  if (!asset) {
+    return new NextResponse("Not Found", { status: 404 });
+  }
+
+  const roles = await getUserRoles(userOpenId);
+  if (!(await canViewFileAsset({ asset, userOpenId, roles }))) {
+    return new NextResponse("Not Found", { status: 404 });
+  }
+
+  const storagePath =
+    asset.storagePath || publicPathToStoragePath(asset.publicPath);
+  if (!storagePath) {
+    return new NextResponse("Not Found", { status: 404 });
+  }
+  const filePath = storagePathToAbsolute(storagePath);
 
   let fileStat;
   try {
@@ -65,13 +84,12 @@ export async function serveUploadFile(
   }
 
   const ext = path.extname(filePath).toLowerCase();
-  const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
+  const contentType = asset.mimeType || MIME_TYPES[ext] || "application/octet-stream";
   const filename = path.basename(filePath);
   const forceDownload =
     options?.download || ext === ".doc" || ext === ".docx" || ext === ".pdf";
 
-  const stream = createReadStream(filePath);
-  const body = Readable.toWeb(stream) as ReadableStream;
+  const body = await readFile(filePath);
 
   return new NextResponse(body, {
     status: 200,

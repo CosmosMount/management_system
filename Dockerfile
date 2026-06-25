@@ -48,8 +48,8 @@ COPY --from=builder /app/templates ./templates
 
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh \
-  && mkdir -p /app/data /app/public/uploads \
-  && chown -R nextjs:nodejs /app/data /app/public/uploads /app/public
+  && mkdir -p /app/data /app/storage/uploads /app/public/uploads \
+  && chown -R nextjs:nodejs /app/data /app/storage /app/public/uploads /app/public
 
 USER nextjs
 

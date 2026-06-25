@@ -1,0 +1,353 @@
+import type { FeedbackStatus, NotificationOutbox } from "@prisma/client";
+import {
+  sendApplicantResubmitNotification,
+  sendOrderNotification,
+  sendProcurementRejectedNotification,
+  type OrderCardPayload,
+} from "@/lib/feishu";
+import {
+  sendFeedbackCreatedNotification,
+  sendFeedbackReplyNotification,
+  sendFeedbackStatusNotification,
+} from "@/lib/feishu-feedback";
+import {
+  sendProgressNotification,
+  type ProgressNotifyPayload,
+} from "@/lib/feishu-progress";
+import type { NotificationContext } from "@/lib/app-origin";
+import { prisma } from "@/lib/prisma";
+
+type ProgressOutboxPayload = {
+  payload: ProgressNotifyPayload;
+  appOrigin?: string | null;
+};
+
+type OrderOutboxPayload =
+  | {
+      kind: "order";
+      order: OrderCardPayload;
+      appOrigin?: string | null;
+    }
+  | {
+      kind: "procurement_rejected";
+      order: OrderCardPayload;
+      reason: string;
+      rejectedByName: string;
+      appOrigin?: string | null;
+    }
+  | {
+      kind: "applicant_resubmit";
+      order: OrderCardPayload;
+      reason: string;
+      financeName: string;
+      appOrigin?: string | null;
+    };
+
+type FeedbackOutboxPayload =
+  | {
+      kind: "created";
+      payload: { feedbackId: string; submitterName: string; body: string };
+      appOrigin?: string | null;
+    }
+  | {
+      kind: "reply";
+      payload: {
+        feedbackId: string;
+        actorName: string;
+        body: string;
+        recipientOpenIds?: string[];
+        actorIsAdmin: boolean;
+      };
+      appOrigin?: string | null;
+    }
+  | {
+      kind: "status";
+      payload: {
+        feedbackId: string;
+        actorName: string;
+        status: FeedbackStatus;
+        submitterOpenId: string;
+      };
+      appOrigin?: string | null;
+    };
+
+const MAX_ATTEMPTS = 8;
+
+export async function enqueueNotification({
+  eventKey,
+  channel,
+  type,
+  payload,
+}: {
+  eventKey: string;
+  channel: string;
+  type: string;
+  payload: unknown;
+}) {
+  const payloadText = JSON.stringify(payload);
+  await prisma.notificationOutbox.upsert({
+    where: { eventKey },
+    create: {
+      eventKey,
+      channel,
+      type,
+      payload: payloadText,
+      status: "PENDING",
+      attempts: 0,
+      lastError: "",
+      nextRunAt: new Date(),
+    },
+    update: {},
+  });
+}
+
+export async function enqueueProgressNotification(
+  eventKey: string,
+  payload: ProgressNotifyPayload,
+  context?: NotificationContext,
+) {
+  await enqueueNotification({
+    eventKey,
+    channel: "progress",
+    type: payload.type,
+    payload: {
+      payload,
+      appOrigin: context?.appOrigin ?? null,
+    } satisfies ProgressOutboxPayload,
+  });
+}
+
+export async function enqueueOrderNotification(
+  eventKey: string,
+  order: OrderCardPayload,
+  context?: NotificationContext,
+) {
+  await enqueueNotification({
+    eventKey,
+    channel: "procurement",
+    type: "order",
+    payload: {
+      kind: "order",
+      order,
+      appOrigin: context?.appOrigin ?? null,
+    } satisfies OrderOutboxPayload,
+  });
+}
+
+export async function enqueueProcurementRejectedNotification(
+  eventKey: string,
+  order: OrderCardPayload,
+  reason: string,
+  rejectedByName: string,
+  context?: NotificationContext,
+) {
+  await enqueueNotification({
+    eventKey,
+    channel: "procurement",
+    type: "procurement_rejected",
+    payload: {
+      kind: "procurement_rejected",
+      order,
+      reason,
+      rejectedByName,
+      appOrigin: context?.appOrigin ?? null,
+    } satisfies OrderOutboxPayload,
+  });
+}
+
+export async function enqueueApplicantResubmitNotification(
+  eventKey: string,
+  order: OrderCardPayload,
+  reason: string,
+  financeName: string,
+  context?: NotificationContext,
+) {
+  await enqueueNotification({
+    eventKey,
+    channel: "procurement",
+    type: "applicant_resubmit",
+    payload: {
+      kind: "applicant_resubmit",
+      order,
+      reason,
+      financeName,
+      appOrigin: context?.appOrigin ?? null,
+    } satisfies OrderOutboxPayload,
+  });
+}
+
+export async function enqueueFeedbackCreatedNotification(
+  eventKey: string,
+  payload: Extract<FeedbackOutboxPayload, { kind: "created" }>["payload"],
+  context?: NotificationContext,
+) {
+  await enqueueNotification({
+    eventKey,
+    channel: "feedback",
+    type: "created",
+    payload: {
+      kind: "created",
+      payload,
+      appOrigin: context?.appOrigin ?? null,
+    } satisfies FeedbackOutboxPayload,
+  });
+}
+
+export async function enqueueFeedbackReplyNotification(
+  eventKey: string,
+  payload: Extract<FeedbackOutboxPayload, { kind: "reply" }>["payload"],
+  context?: NotificationContext,
+) {
+  await enqueueNotification({
+    eventKey,
+    channel: "feedback",
+    type: "reply",
+    payload: {
+      kind: "reply",
+      payload,
+      appOrigin: context?.appOrigin ?? null,
+    } satisfies FeedbackOutboxPayload,
+  });
+}
+
+export async function enqueueFeedbackStatusNotification(
+  eventKey: string,
+  payload: Extract<FeedbackOutboxPayload, { kind: "status" }>["payload"],
+  context?: NotificationContext,
+) {
+  await enqueueNotification({
+    eventKey,
+    channel: "feedback",
+    type: "status",
+    payload: {
+      kind: "status",
+      payload,
+      appOrigin: context?.appOrigin ?? null,
+    } satisfies FeedbackOutboxPayload,
+  });
+}
+
+export function drainNotificationOutboxSoon(limit = 5) {
+  void drainNotificationOutbox(limit).catch((err) => {
+    console.error("[notification-outbox] drain failed:", err);
+  });
+}
+
+export async function drainNotificationOutbox(limit = 20): Promise<number> {
+  const now = new Date();
+  const rows = await prisma.notificationOutbox.findMany({
+    where: {
+      attempts: { lt: MAX_ATTEMPTS },
+      OR: [
+        { status: { in: ["PENDING", "FAILED"] }, nextRunAt: { lte: now } },
+        { status: "PROCESSING", lockedUntil: { lte: now } },
+      ],
+    },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    take: limit,
+  });
+
+  let sent = 0;
+  for (const row of rows) {
+    const lockedUntil = new Date(Date.now() + 2 * 60 * 1000);
+    const claimed = await prisma.notificationOutbox.updateMany({
+      where: {
+        id: row.id,
+        status: row.status,
+        attempts: row.attempts,
+      },
+      data: {
+        status: "PROCESSING",
+        attempts: { increment: 1 },
+        lastError: "",
+        lockedUntil,
+      },
+    });
+    if (claimed.count !== 1) continue;
+
+    try {
+      await sendOutboxNotification(row);
+      await prisma.notificationOutbox.update({
+        where: { id: row.id },
+        data: {
+          status: "SENT",
+          sentAt: new Date(),
+          lastError: "",
+          lockedUntil: null,
+        },
+      });
+      sent++;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const attempts = row.attempts + 1;
+      await prisma.notificationOutbox.update({
+        where: { id: row.id },
+        data: {
+          status: "FAILED",
+          lastError: message.slice(0, 1000),
+          nextRunAt: nextRetryAt(attempts),
+          lockedUntil: null,
+        },
+      });
+    }
+  }
+
+  return sent;
+}
+
+async function sendOutboxNotification(row: NotificationOutbox) {
+  if (row.channel === "progress") {
+    const data = JSON.parse(row.payload) as ProgressOutboxPayload;
+    await sendProgressNotification(data.payload, {
+      appOrigin: data.appOrigin ?? undefined,
+    });
+    return;
+  }
+
+  if (row.channel === "procurement") {
+    const data = JSON.parse(row.payload) as OrderOutboxPayload;
+    const context = { appOrigin: data.appOrigin ?? undefined };
+    if (data.kind === "order") {
+      await sendOrderNotification(data.order, context);
+      return;
+    }
+    if (data.kind === "procurement_rejected") {
+      await sendProcurementRejectedNotification(
+        data.order,
+        data.reason,
+        data.rejectedByName,
+        context,
+      );
+      return;
+    }
+    await sendApplicantResubmitNotification(
+      data.order,
+      data.reason,
+      data.financeName,
+      context,
+    );
+    return;
+  }
+
+  if (row.channel === "feedback") {
+    const data = JSON.parse(row.payload) as FeedbackOutboxPayload;
+    const context = { appOrigin: data.appOrigin ?? undefined };
+    if (data.kind === "created") {
+      await sendFeedbackCreatedNotification(data.payload, context);
+      return;
+    }
+    if (data.kind === "reply") {
+      await sendFeedbackReplyNotification(data.payload, context);
+      return;
+    }
+    await sendFeedbackStatusNotification(data.payload, context);
+    return;
+  }
+
+  throw new Error(`未知通知通道: ${row.channel}`);
+}
+
+function nextRetryAt(attempts: number): Date {
+  const delaySeconds = Math.min(3600, 30 * 2 ** Math.max(0, attempts - 1));
+  return new Date(Date.now() + delaySeconds * 1000);
+}

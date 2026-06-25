@@ -3,7 +3,11 @@
 import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
 import { OrderStatus } from "@prisma/client";
-import { sendOrderNotification, mapOrderItems } from "@/lib/feishu";
+import { mapOrderItems } from "@/lib/feishu";
+import {
+  drainNotificationOutboxSoon,
+  enqueueOrderNotification,
+} from "@/lib/notification-outbox";
 import { generateOrderNo } from "@/lib/order-no";
 import { attachItemReferenceImages } from "@/lib/order-item-images";
 import { prisma } from "@/lib/prisma";
@@ -75,7 +79,8 @@ export async function createOrder(formData: FormData) {
   }
 
   if (status === OrderStatus.MANAGEMENT_REVIEW) {
-    await sendOrderNotification(
+    await enqueueOrderNotification(
+      `procurement:order:${refreshed.id}:${refreshed.status}:${refreshed.updatedAt.toISOString()}`,
       {
         id: refreshed.id,
         orderNo: refreshed.orderNo,
@@ -87,9 +92,8 @@ export async function createOrder(formData: FormData) {
         items: mapOrderItems(refreshed.items),
       },
       await getNotificationContext(),
-    ).catch((err) => {
-      console.error("[createOrder] 飞书通知失败:", err);
-    });
+    );
+    drainNotificationOutboxSoon();
   }
 
   revalidatePath("/");

@@ -1,10 +1,12 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import type { TaskStatus } from "@prisma/client";
 import { auth } from "@/lib/auth";
-import { sendProgressNotification } from "@/lib/feishu-progress";
 import { logProgressActivity, requireSessionUser } from "@/lib/progress-activity";
+import {
+  drainNotificationOutboxSoon,
+  enqueueProgressNotification,
+} from "@/lib/notification-outbox";
 import { assertTaskTransition } from "@/lib/progress-flow";
 import {
   canManageProject,
@@ -24,7 +26,7 @@ import {
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { prisma } from "@/lib/prisma";
 import { getUserRoles } from "@/lib/permissions";
-import { routes } from "@/lib/routes";
+import { revalidateProgress } from "@/lib/revalidate";
 import {
   updateTaskSchema,
   type UpdateTaskInput,
@@ -87,9 +89,7 @@ export async function updateTaskStatus(taskId: string, status: TaskStatus) {
     payload: { from: task.status, to: status },
   });
 
-  revalidatePath(`${routes.progress.task(taskId)}`);
-  revalidatePath(`${routes.progress.project(task.projectId)}`);
-  revalidatePath(routes.progress.dashboard);
+  revalidateProgress(task.projectId, taskId);
   return updated;
 }
 
@@ -138,9 +138,7 @@ export async function archiveTask(taskId: string) {
     actorName: user.name,
   });
 
-  revalidatePath(`${routes.progress.task(taskId)}`);
-  revalidatePath(routes.progress.archive);
-  revalidatePath(routes.progress.dashboard);
+  revalidateProgress(task.projectId, taskId);
   return updated;
 }
 
@@ -168,6 +166,9 @@ export async function updateTask(input: UpdateTaskInput) {
     },
   });
   if (!task) throw new Error("任务不存在");
+  if (task.updatedAt.toISOString() !== parsed.expectedUpdatedAt) {
+    throw new Error("数据已被更新，请刷新后重试");
+  }
   if (task.status === "ARCHIVED") throw new Error("已归档任务不可编辑");
   assertProjectActive(task.project.status);
 
@@ -298,8 +299,8 @@ export async function updateTask(input: UpdateTaskInput) {
       }
     }
 
-    const record = await tx.task.update({
-      where: { id: task.id },
+    const locked = await tx.task.updateMany({
+      where: { id: task.id, updatedAt: new Date(parsed.expectedUpdatedAt) },
       data: {
         stageId,
         title: parsed.title,
@@ -315,6 +316,9 @@ export async function updateTask(input: UpdateTaskInput) {
         needsWeeklyReport: parsed.needsWeeklyReport,
       },
     });
+    if (locked.count !== 1) {
+      throw new Error("数据已被更新，请刷新后重试");
+    }
 
     await tx.taskAssignee.deleteMany({ where: { taskId: task.id } });
     await tx.taskAssignee.createMany({
@@ -341,6 +345,9 @@ export async function updateTask(input: UpdateTaskInput) {
       }
     }
 
+    const record = await tx.task.findUnique({ where: { id: task.id } });
+    if (!record) throw new Error("任务不存在");
+
     if (changes.length > 0) {
       await tx.progressActivityLog.create({
         data: {
@@ -362,7 +369,8 @@ export async function updateTask(input: UpdateTaskInput) {
   });
 
   if (changes.length > 0) {
-    await sendProgressNotification(
+    await enqueueProgressNotification(
+      `progress:task_updated:${task.id}:${updated.updatedAt.toISOString()}`,
       {
         type: "task_updated",
         taskId: task.id,
@@ -379,12 +387,11 @@ export async function updateTask(input: UpdateTaskInput) {
         projectOwnerOpenIds: getProjectOwnerOpenIds(task.project),
       },
       await getNotificationContext(),
-    ).catch(console.error);
+    );
+    drainNotificationOutboxSoon();
   }
 
-  revalidatePath(`${routes.progress.task(task.id)}`);
-  revalidatePath(`${routes.progress.project(task.projectId)}`);
-  revalidatePath(routes.progress.dashboard);
+  revalidateProgress(task.projectId, task.id);
   return updated;
 }
 

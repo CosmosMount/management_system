@@ -3,7 +3,10 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
-import { sendApplicantResubmitNotification } from "@/lib/feishu";
+import {
+  drainNotificationOutboxSoon,
+  enqueueApplicantResubmitNotification,
+} from "@/lib/notification-outbox";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
@@ -74,7 +77,8 @@ export async function requestApplicantResubmit(input: {
     });
   });
 
-  await sendApplicantResubmitNotification(
+  await enqueueApplicantResubmitNotification(
+    `procurement:resubmit:${updated.id}:${updated.updatedAt.toISOString()}`,
     {
       id: updated.id,
       orderNo: updated.orderNo,
@@ -92,9 +96,8 @@ export async function requestApplicantResubmit(input: {
     reason,
     rejectedByName,
     await getNotificationContext(),
-  ).catch((err) => {
-    console.error("[requestApplicantResubmit] 飞书通知失败:", err);
-  });
+  );
+  drainNotificationOutboxSoon();
 
   revalidatePath(routes.procurement.list);
   revalidatePath(`${routes.procurement.detail(orderId)}`);

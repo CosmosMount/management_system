@@ -4,7 +4,11 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { OrderStatus, UserRoleType } from "@prisma/client";
-import { sendOrderNotification, mapOrderItems } from "@/lib/feishu";
+import { mapOrderItems } from "@/lib/feishu";
+import {
+  drainNotificationOutboxSoon,
+  enqueueOrderNotification,
+} from "@/lib/notification-outbox";
 import { getNotificationContext } from "@/lib/request-origin";
 import {
   MAX_FILE_SIZE,
@@ -272,22 +276,27 @@ export async function uploadApplicantDocs(formData: FormData) {
     });
   });
 
-  await sendOrderNotification({
-    id: updated.id,
-    orderNo: updated.orderNo,
-    initiatorName: updated.initiatorName,
-    totalPrice: updated.totalPrice,
-    status: updated.status,
-    team: updated.team,
-    techGroup: updated.techGroup,
-    items: mapOrderItems(docItems.map((item) => ({
-      name: item.name,
-      quantity: item.quantity,
-      unitPrice: item.unitPrice,
-    }))),
-  }, await getNotificationContext()).catch((err) => {
-    console.error("[uploadApplicantDocs] 飞书通知失败:", err);
-  });
+  await enqueueOrderNotification(
+    `procurement:order:${updated.id}:${updated.status}:${updated.updatedAt.toISOString()}`,
+    {
+      id: updated.id,
+      orderNo: updated.orderNo,
+      initiatorName: updated.initiatorName,
+      totalPrice: updated.totalPrice,
+      status: updated.status,
+      team: updated.team,
+      techGroup: updated.techGroup,
+      items: mapOrderItems(
+        docItems.map((item) => ({
+          name: item.name,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+        })),
+      ),
+    },
+    await getNotificationContext(),
+  );
+  drainNotificationOutboxSoon();
 
   revalidatePath(routes.procurement.list);
   revalidatePath(`${routes.procurement.detail(orderId)}`);

@@ -82,12 +82,13 @@ export function LiveAutoRefresh({
         return;
       }
 
-      if (pauseWhenEditing && pendingVersionRef.current) {
-        currentVersionRef.current = pendingVersionRef.current;
-        pendingVersionRef.current = null;
-        router.refresh();
-        return;
-      }
+        if (pauseWhenEditing && pendingVersionRef.current) {
+          currentVersionRef.current = pendingVersionRef.current;
+          pendingVersionRef.current = null;
+          window.dispatchEvent(new CustomEvent("pnx-live-refresh-clear"));
+          router.refresh();
+          return;
+        }
 
       inFlightRef.current = true;
       try {
@@ -116,11 +117,17 @@ export function LiveAutoRefresh({
 
         if (pauseWhenEditing && isEditingOrDialogOpen()) {
           pendingVersionRef.current = nextVersion;
+          window.dispatchEvent(
+            new CustomEvent("pnx-live-refresh-pending", {
+              detail: { scope, resourceId },
+            }),
+          );
           return;
         }
 
         currentVersionRef.current = nextVersion;
         pendingVersionRef.current = null;
+        window.dispatchEvent(new CustomEvent("pnx-live-refresh-clear"));
         router.refresh();
       } catch (error) {
         if (process.env.NODE_ENV === "development") {

@@ -3,8 +3,8 @@
 import { useForm, Controller, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
-import { Plus, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { AlertCircle, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 import { createTask } from "@/app/actions/progress/createTask";
 import { updateTask } from "@/app/actions/progress/updateTask";
@@ -36,7 +36,10 @@ import {
 type UserOption = { openId: string; name: string; avatar?: string | null };
 type StageOption = { id: string; name: string };
 type AcceptanceChecklistTemplateOption = { id: string; content: string };
-type TaskFormValues = CreateTaskInput & { taskId?: string };
+type TaskFormValues = CreateTaskInput & {
+  taskId?: string;
+  expectedUpdatedAt?: string;
+};
 
 type Props = {
   projectId: string;
@@ -47,6 +50,7 @@ type Props = {
   mode?: "create" | "edit";
   initialTask?: {
     id: string;
+    updatedAt: string;
     stageId: string | null;
     title: string;
     goal: string;
@@ -82,12 +86,14 @@ export function TaskForm({
 }: Props) {
   const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
+  const [liveRefreshPending, setLiveRefreshPending] = useState(false);
   const editing = mode === "edit";
 
   const form = useForm<TaskFormValues>({
     resolver: zodResolver(editing ? updateTaskSchema : createTaskSchema),
     defaultValues: {
       taskId: initialTask?.id,
+      expectedUpdatedAt: initialTask?.updatedAt,
       projectId,
       stageId: initialTask?.stageId ?? defaultStageId,
       title: initialTask?.title ?? "",
@@ -110,6 +116,18 @@ export function TaskForm({
   });
   const checklistReadOnly =
     editing && !!initialTask?.acceptanceChecklistLocked;
+
+  useEffect(() => {
+    if (!editing) return;
+    const onPending = () => setLiveRefreshPending(true);
+    const onClear = () => setLiveRefreshPending(false);
+    window.addEventListener("pnx-live-refresh-pending", onPending);
+    window.addEventListener("pnx-live-refresh-clear", onClear);
+    return () => {
+      window.removeEventListener("pnx-live-refresh-pending", onPending);
+      window.removeEventListener("pnx-live-refresh-clear", onClear);
+    };
+  }, [editing]);
 
   function addChecklistItem(content = "") {
     const current = form.getValues("acceptanceChecklistItems") ?? [];
@@ -134,6 +152,7 @@ export function TaskForm({
       if (editing) {
         await updateTask({
           taskId: data.taskId ?? "",
+          expectedUpdatedAt: data.expectedUpdatedAt ?? "",
           projectId: data.projectId,
           stageId: data.stageId,
           title: data.title,
@@ -169,6 +188,15 @@ export function TaskForm({
 
   return (
     <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+      {liveRefreshPending && (
+        <div
+          data-testid="live-refresh-pending-alert"
+          className="sticky top-0 z-10 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800"
+        >
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>页面数据已更新，保存旧表单可能会失败；建议刷新后再编辑。</span>
+        </div>
+      )}
       <div className="space-y-2">
         <Label>任务目标</Label>
         <Input {...form.register("title")} />

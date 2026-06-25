@@ -9,6 +9,7 @@ import {
   runWeeklyReportReminders,
 } from "../lib/feishu-progress";
 import { syncFeishuContactUsers } from "../lib/feishu-user-sync";
+import { drainNotificationOutbox } from "../lib/notification-outbox";
 import { prisma } from "../lib/prisma";
 
 const CONTACT_SYNC_CRON = process.env.FEISHU_CONTACT_SYNC_CRON ?? "30 8 * * *";
@@ -65,9 +66,22 @@ async function runFeishuContactSync() {
   }
 }
 
+async function runNotificationOutboxDrain() {
+  const sent = await drainNotificationOutbox(50);
+  if (sent > 0) {
+    console.log(`[cron] 通知 outbox 已发送 ${sent} 条`);
+  }
+}
+
 cron.schedule(CONTACT_SYNC_CRON, () => {
   runFeishuContactSync().catch((err) =>
     console.error("[cron] 飞书人员同步失败:", err),
+  );
+});
+
+cron.schedule("*/2 * * * *", () => {
+  runNotificationOutboxDrain().catch((err) =>
+    console.error("[cron] 通知 outbox 发送失败:", err),
   );
 });
 

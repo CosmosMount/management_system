@@ -1,14 +1,16 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
-import { sendProgressNotification } from "@/lib/feishu-progress";
 import { requireSessionUser } from "@/lib/progress-activity";
+import {
+  drainNotificationOutboxSoon,
+  enqueueProgressNotification,
+} from "@/lib/notification-outbox";
 import { canCreateProject, canCreateProjectInScope } from "@/lib/permissions-progress";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import { getUserRoles } from "@/lib/permissions";
-import { routes } from "@/lib/routes";
+import { revalidateProgress } from "@/lib/revalidate";
 import { createProjectSchema, type CreateProjectInput } from "@/lib/validations/progress";
 
 export async function createProject(input: CreateProjectInput) {
@@ -114,16 +116,21 @@ export async function createProject(input: CreateProjectInput) {
     return created;
   });
 
-  await sendProgressNotification({
-    type: "project_created",
-    projectId: project.id,
-    projectName: project.name,
-    team: project.team,
-    techGroup: project.techGroup,
-    ownerOpenIds: orderedOwners.map((owner) => owner.openId),
-    ownerNames: orderedOwners.map((owner) => owner.name).join("、"),
-  }, await getNotificationContext()).catch(console.error);
+  await enqueueProgressNotification(
+    `progress:project_created:${project.id}`,
+    {
+      type: "project_created",
+      projectId: project.id,
+      projectName: project.name,
+      team: project.team,
+      techGroup: project.techGroup,
+      ownerOpenIds: orderedOwners.map((owner) => owner.openId),
+      ownerNames: orderedOwners.map((owner) => owner.name).join("、"),
+    },
+    await getNotificationContext(),
+  );
+  drainNotificationOutboxSoon();
 
-  revalidatePath(routes.progress.root);
+  revalidateProgress(project.id);
   return project;
 }

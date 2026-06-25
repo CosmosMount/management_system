@@ -1,10 +1,12 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { ApprovalDecision, SubmissionType } from "@prisma/client";
 import { auth } from "@/lib/auth";
-import { sendProgressNotification } from "@/lib/feishu-progress";
 import { logProgressActivity, requireSessionUser } from "@/lib/progress-activity";
+import {
+  drainNotificationOutboxSoon,
+  enqueueProgressNotification,
+} from "@/lib/notification-outbox";
 import {
   canApproveStage,
   canSubmitStage,
@@ -14,9 +16,9 @@ import { assertProjectActive } from "@/lib/progress-guards";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
+import { revalidateProgress } from "@/lib/revalidate";
 import { getUserRoles } from "@/lib/permissions";
 import { approvalSchema, stageSubmitSchema } from "@/lib/validations/progress";
-import { routes } from "@/lib/routes";
 
 export async function submitStageEvidence(input: {
   projectId: string;
@@ -70,14 +72,17 @@ export async function submitStageEvidence(input: {
       },
     });
 
-    await tx.projectStage.update({
-      where: { id: stage.id },
+    const locked = await tx.projectStage.updateMany({
+      where: { id: stage.id, status: "IN_PROGRESS" },
       data: {
         evidenceUrl: parsed.evidenceUrl,
         currentSubmissionId: sub.id,
         status: "PENDING_ACCEPTANCE",
       },
     });
+    if (locked.count !== 1) {
+      throw new Error("阶段状态已更新，请刷新后重试");
+    }
 
     return sub;
   });
@@ -90,19 +95,24 @@ export async function submitStageEvidence(input: {
     payload: { stageId: stage.id, submissionId: submission.id },
   });
 
-  await sendProgressNotification({
-    type: "stage_pending_acceptance",
-    projectId: project.id,
-    projectName: project.name,
-    stageName: stage.name,
-    team: project.team,
-    techGroup: project.techGroup,
-    ownerOpenIds: getProjectOwnerOpenIds(project),
-    submitterOpenId: user.openId,
-    evidenceUrl: parsed.evidenceUrl,
-  }, await getNotificationContext()).catch(console.error);
+  await enqueueProgressNotification(
+    `progress:stage_pending_acceptance:${submission.id}`,
+    {
+      type: "stage_pending_acceptance",
+      projectId: project.id,
+      projectName: project.name,
+      stageName: stage.name,
+      team: project.team,
+      techGroup: project.techGroup,
+      ownerOpenIds: getProjectOwnerOpenIds(project),
+      submitterOpenId: user.openId,
+      evidenceUrl: parsed.evidenceUrl,
+    },
+    await getNotificationContext(),
+  );
+  drainNotificationOutboxSoon();
 
-  revalidatePath(`${routes.progress.project(project.id)}`);
+  revalidateProgress(project.id);
   return submission;
 }
 
@@ -184,6 +194,18 @@ async function reviewStageSubmission(
   if (!approverRole) throw new Error("无法确定审批角色");
 
   await prisma.$transaction(async (tx) => {
+    const locked = await tx.projectStage.updateMany({
+      where: {
+        id: stage.id,
+        status: "PENDING_ACCEPTANCE",
+        currentSubmissionId: submission.id,
+      },
+      data: { status: pass ? "COMPLETED" : "IN_PROGRESS" },
+    });
+    if (locked.count !== 1) {
+      throw new Error("该提交已审批");
+    }
+
     await tx.approvalRecord.create({
       data: {
         submissionId: submission.id,
@@ -194,11 +216,6 @@ async function reviewStageSubmission(
         offlineConfirmed: parsed.offlineConfirmed,
         comment: parsed.comment ?? "",
       },
-    });
-
-    await tx.projectStage.update({
-      where: { id: stage.id },
-      data: { status: pass ? "COMPLETED" : "IN_PROGRESS" },
     });
 
     if (pass) {
@@ -223,14 +240,19 @@ async function reviewStageSubmission(
     payload: { stageId: stage.id, submissionId: submission.id },
   });
 
-  await sendProgressNotification({
-    type: pass ? "stage_approved" : "stage_rejected",
-    projectId: project.id,
-    projectName: project.name,
-    stageName: stage.name,
-    stageOwnerOpenId: stage.ownerOpenId,
-  }, await getNotificationContext()).catch(console.error);
+  await enqueueProgressNotification(
+    `progress:${pass ? "stage_approved" : "stage_rejected"}:${submission.id}`,
+    {
+      type: pass ? "stage_approved" : "stage_rejected",
+      projectId: project.id,
+      projectName: project.name,
+      stageName: stage.name,
+      stageOwnerOpenId: stage.ownerOpenId,
+    },
+    await getNotificationContext(),
+  );
+  drainNotificationOutboxSoon();
 
-  revalidatePath(`${routes.progress.project(project.id)}`);
+  revalidateProgress(project.id);
   return { success: true };
 }

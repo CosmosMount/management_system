@@ -3,7 +3,10 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
-import { sendProcurementRejectedNotification } from "@/lib/feishu";
+import {
+  drainNotificationOutboxSoon,
+  enqueueProcurementRejectedNotification,
+} from "@/lib/notification-outbox";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import {
@@ -67,7 +70,8 @@ export async function rejectProcurementOrder(input: {
     },
   });
 
-  await sendProcurementRejectedNotification(
+  await enqueueProcurementRejectedNotification(
+    `procurement:rejected:${updated.id}:${updated.updatedAt.toISOString()}`,
     {
       id: updated.id,
       orderNo: updated.orderNo,
@@ -85,9 +89,8 @@ export async function rejectProcurementOrder(input: {
     reason,
     rejectedByName,
     await getNotificationContext(),
-  ).catch((err) => {
-    console.error("[rejectProcurementOrder] 飞书通知失败:", err);
-  });
+  );
+  drainNotificationOutboxSoon();
 
   revalidatePath(routes.procurement.list);
   revalidatePath(`${routes.procurement.detail(orderId)}`);

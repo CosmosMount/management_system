@@ -1,5 +1,7 @@
-import { mkdir, rm, writeFile } from "fs/promises";
+import { mkdir, rm, stat, writeFile } from "fs/promises";
 import path from "path";
+import type { FileAssetKind } from "@prisma/client";
+import { prisma } from "@/lib/prisma";
 import {
   FEEDBACK_IMAGE_ALLOWED_TYPES,
   MAX_FEEDBACK_IMAGE_SIZE,
@@ -9,6 +11,9 @@ export { MAX_FEEDBACK_IMAGE_COUNT, MAX_FEEDBACK_IMAGE_SIZE } from "@/lib/feedbac
 
 export const MAX_FILE_SIZE = 20 * 1024 * 1024;
 export const MAX_INVOICE_COUNT = 20;
+export const UPLOAD_PUBLIC_PREFIX = "/uploads/";
+
+const DEFAULT_UPLOAD_STORAGE_DIR = path.join(process.cwd(), "storage", "uploads");
 
 const INVOICE_TYPES = new Set([
   "application/pdf",
@@ -51,6 +56,142 @@ type DetectedFeedbackImage = {
   mimeType: "image/png" | "image/jpeg" | "image/webp";
 };
 
+type SaveAssetOptions = {
+  kind: FileAssetKind;
+  orderId?: string | null;
+  feedbackId?: string | null;
+  signatureOwnerOpenId?: string | null;
+  ownerOpenId?: string | null;
+};
+
+export function uploadStorageRoot(): string {
+  const configured = process.env.UPLOAD_STORAGE_DIR;
+  if (!configured) return DEFAULT_UPLOAD_STORAGE_DIR;
+  return path.isAbsolute(configured)
+    ? configured
+    : path.join(process.cwd(), configured);
+}
+
+export function publicPathToStoragePath(publicPath: string): string | null {
+  if (!publicPath.startsWith(UPLOAD_PUBLIC_PREFIX)) return null;
+  const relative = publicPath.slice(UPLOAD_PUBLIC_PREFIX.length);
+  const segments = relative.split("/");
+  if (
+    segments.length === 0 ||
+    segments.some((segment) => !segment || segment === "." || segment === "..")
+  ) {
+    return null;
+  }
+  return segments.join("/");
+}
+
+export function storagePathToAbsolute(storagePath: string): string {
+  const fullPath = path.resolve(uploadStorageRoot(), storagePath);
+  const root = uploadStorageRoot();
+  const relative = path.relative(root, fullPath);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`)) {
+    throw new Error("上传文件路径无效");
+  }
+  return fullPath;
+}
+
+export function publicPathToAbsolute(publicPath: string): string {
+  const storagePath = publicPathToStoragePath(publicPath);
+  if (!storagePath) {
+    throw new Error("上传文件路径无效");
+  }
+  return storagePathToAbsolute(storagePath);
+}
+
+async function writeAssetFile({
+  storagePath,
+  publicPath,
+  buffer,
+  mimeType,
+  options,
+}: {
+  storagePath: string;
+  publicPath: string;
+  buffer: Buffer;
+  mimeType: string;
+  options: SaveAssetOptions;
+}) {
+  const fullPath = storagePathToAbsolute(storagePath);
+  await mkdir(path.dirname(fullPath), { recursive: true });
+  await writeFile(fullPath, buffer);
+  await prisma.fileAsset.upsert({
+    where: { publicPath },
+    update: {
+      storagePath,
+      kind: options.kind,
+      mimeType,
+      size: buffer.length,
+      orderId: options.orderId ?? null,
+      feedbackId: options.feedbackId ?? null,
+      signatureOwnerOpenId: options.signatureOwnerOpenId ?? null,
+      ownerOpenId: options.ownerOpenId ?? null,
+    },
+    create: {
+      publicPath,
+      storagePath,
+      kind: options.kind,
+      mimeType,
+      size: buffer.length,
+      orderId: options.orderId ?? null,
+      feedbackId: options.feedbackId ?? null,
+      signatureOwnerOpenId: options.signatureOwnerOpenId ?? null,
+      ownerOpenId: options.ownerOpenId ?? null,
+    },
+  });
+}
+
+export async function registerExistingFileAsset({
+  publicPath,
+  storagePath,
+  kind,
+  mimeType,
+  size,
+  orderId,
+  feedbackId,
+  signatureOwnerOpenId,
+  ownerOpenId,
+}: {
+  publicPath: string;
+  storagePath: string;
+  kind: FileAssetKind;
+  mimeType: string;
+  size: number;
+  orderId?: string | null;
+  feedbackId?: string | null;
+  signatureOwnerOpenId?: string | null;
+  ownerOpenId?: string | null;
+}) {
+  await prisma.fileAsset.upsert({
+    where: { publicPath },
+    update: {
+      storagePath,
+      kind,
+      mimeType,
+      size,
+      orderId: orderId ?? null,
+      feedbackId: feedbackId ?? null,
+      signatureOwnerOpenId: signatureOwnerOpenId ?? null,
+      ownerOpenId: ownerOpenId ?? null,
+    },
+    create: {
+      publicPath,
+      storagePath,
+      kind,
+      mimeType,
+      size,
+      orderId: orderId ?? null,
+      feedbackId: feedbackId ?? null,
+      signatureOwnerOpenId: signatureOwnerOpenId ?? null,
+      ownerOpenId: ownerOpenId ?? null,
+    },
+  });
+}
+
 function detectFeedbackImage(buffer: Buffer): DetectedFeedbackImage | null {
   if (
     buffer.length >= 8 &&
@@ -91,7 +232,10 @@ export async function saveItemReferenceImage(
   index: number,
   file: File,
 ): Promise<string> {
-  return saveUpload(orderId, file, `item-ref-${index}`, uploadTypeSets.itemPhoto);
+  return saveUpload(orderId, file, `item-ref-${index}`, uploadTypeSets.itemPhoto, {
+    kind: "ORDER_ITEM_IMAGE",
+    orderId,
+  });
 }
 
 export async function saveUpload(
@@ -99,6 +243,7 @@ export async function saveUpload(
   file: File,
   prefix: string,
   allowedTypes: Set<string>,
+  options?: Partial<SaveAssetOptions>,
 ): Promise<string> {
   if (!allowedTypes.has(file.type)) {
     throw new Error(`不支持的文件类型: ${file.type}`);
@@ -110,12 +255,24 @@ export async function saveUpload(
   const ext = path.extname(file.name) || ".bin";
   const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const filename = `${prefix}-${unique}${ext}`;
-  const dir = path.join(process.cwd(), "public", "uploads", orderId);
-  await mkdir(dir, { recursive: true });
+  const publicPath = `/uploads/${orderId}/${filename}`;
+  const storagePath = `${orderId}/${filename}`;
 
   const buffer = Buffer.from(await file.arrayBuffer());
-  await writeFile(path.join(dir, filename), buffer);
-  return `/uploads/${orderId}/${filename}`;
+  await writeAssetFile({
+    storagePath,
+    publicPath,
+    buffer,
+    mimeType: file.type || "application/octet-stream",
+    options: {
+      kind: options?.kind ?? "ORDER_ATTACHMENT",
+      orderId: options?.orderId ?? orderId,
+      feedbackId: options?.feedbackId,
+      signatureOwnerOpenId: options?.signatureOwnerOpenId,
+      ownerOpenId: options?.ownerOpenId,
+    },
+  });
+  return publicPath;
 }
 
 /** 保存用户电子签名（覆盖旧文件） */
@@ -131,13 +288,21 @@ export async function saveUserSignature(
   }
 
   const ext = path.extname(file.name) || ".png";
-  const dir = path.join(process.cwd(), "public", "uploads", "signatures", openId);
-  await mkdir(dir, { recursive: true });
-
   const filename = `signature${ext}`;
   const buffer = Buffer.from(await file.arrayBuffer());
-  await writeFile(path.join(dir, filename), buffer);
-  return `/uploads/signatures/${openId}/${filename}`;
+  const publicPath = `/uploads/signatures/${openId}/${filename}`;
+  await writeAssetFile({
+    storagePath: `signatures/${openId}/${filename}`,
+    publicPath,
+    buffer,
+    mimeType: file.type || "image/png",
+    options: {
+      kind: "USER_SIGNATURE",
+      signatureOwnerOpenId: openId,
+      ownerOpenId: openId,
+    },
+  });
+  return publicPath;
 }
 
 export async function saveFeedbackImage(
@@ -160,12 +325,19 @@ export async function saveFeedbackImage(
 
   const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const filename = `image-${sortOrder}-${unique}${detected.ext}`;
-  const dir = path.join(process.cwd(), "public", "uploads", "feedback", feedbackId);
-  await mkdir(dir, { recursive: true });
-
-  await writeFile(path.join(dir, filename), buffer);
+  const publicPath = `/uploads/feedback/${feedbackId}/${filename}`;
+  await writeAssetFile({
+    storagePath: `feedback/${feedbackId}/${filename}`,
+    publicPath,
+    buffer,
+    mimeType: detected.mimeType,
+    options: {
+      kind: "FEEDBACK_ATTACHMENT",
+      feedbackId,
+    },
+  });
   return {
-    path: `/uploads/feedback/${feedbackId}/${filename}`,
+    path: publicPath,
     fileName: file.name || filename,
     mimeType: detected.mimeType,
     size: file.size,
@@ -174,17 +346,35 @@ export async function saveFeedbackImage(
 
 export async function removeFeedbackUpload(publicPath: string): Promise<void> {
   if (!publicPath.startsWith("/uploads/feedback/")) return;
-  const fullPath = path.join(
-    process.cwd(),
-    "public",
-    publicPath.replace(/^\/+/, ""),
-  );
+  const storagePath = publicPathToStoragePath(publicPath);
+  if (!storagePath) return;
+  const fullPath = storagePathToAbsolute(storagePath);
   await rm(fullPath, { force: true });
+  await prisma.fileAsset.deleteMany({ where: { publicPath } });
 }
 
 export async function removeOrderUploads(orderId: string): Promise<void> {
-  const dir = path.join(process.cwd(), "public", "uploads", orderId);
+  const dir = storagePathToAbsolute(orderId);
   await rm(dir, { recursive: true, force: true });
+  await prisma.fileAsset.deleteMany({ where: { orderId } });
+}
+
+export async function removeUploadByPublicPath(publicPath: string): Promise<void> {
+  const storagePath = publicPathToStoragePath(publicPath);
+  if (!storagePath) return;
+  await rm(storagePathToAbsolute(storagePath), { force: true });
+  await prisma.fileAsset.deleteMany({ where: { publicPath } });
+}
+
+export async function fileAssetExists(publicPath: string): Promise<boolean> {
+  const storagePath = publicPathToStoragePath(publicPath);
+  if (!storagePath) return false;
+  try {
+    await stat(storagePathToAbsolute(storagePath));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export const uploadTypeSets = {

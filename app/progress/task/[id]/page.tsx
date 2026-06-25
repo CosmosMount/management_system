@@ -12,6 +12,8 @@ import {
   canApproveTask,
   canManageProject,
   canSubmitDelivery,
+  canViewTask,
+  progressTaskReadableWhere,
 } from "@/lib/permissions-progress";
 import {
   getTaskAssigneeNames,
@@ -32,8 +34,11 @@ export default async function TaskDetailPage({ params }: Props) {
   const roles = userOpenId ? await getUserRoles(userOpenId) : [];
   const recentActivityCutoff = getRecentActivityCutoff();
 
-  const task = await prisma.task.findUnique({
-    where: { id },
+  const task = await prisma.task.findFirst({
+    where: {
+      id,
+      AND: progressTaskReadableWhere(roles, userOpenId),
+    },
     include: {
       project: {
         include: {
@@ -75,6 +80,18 @@ export default async function TaskDetailPage({ params }: Props) {
   const projectOwnerOpenIds = getProjectOwnerOpenIds(task.project);
 
   const scope = { team: task.team, techGroup: task.techGroup };
+  if (
+    !canViewTask(
+      roles,
+      scope,
+      projectOwnerOpenIds,
+      getTaskAssigneeOpenIds(task),
+      userOpenId,
+      task.stage?.ownerOpenId,
+    )
+  ) {
+    notFound();
+  }
   const isAssignee = canSubmitDelivery(
     userOpenId,
     getTaskAssigneeOpenIds(task),
@@ -87,15 +104,20 @@ export default async function TaskDetailPage({ params }: Props) {
     userOpenId,
   );
   const admin = userOpenId ? await isSuperAdmin(userOpenId) : false;
-  const users = await prisma.user.findMany({
-    orderBy: { name: "asc" },
-    select: { openId: true, name: true, avatar: true },
-  });
-  const acceptanceChecklistTemplates =
-    await prisma.acceptanceChecklistTemplate.findMany({
-      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-      select: { id: true, content: true },
-    });
+  const [users, acceptanceChecklistTemplates] = await Promise.all([
+    canManage
+      ? prisma.user.findMany({
+          orderBy: { name: "asc" },
+          select: { openId: true, name: true, avatar: true },
+        })
+      : Promise.resolve([]),
+    canManage
+      ? prisma.acceptanceChecklistTemplate.findMany({
+          orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+          select: { id: true, content: true },
+        })
+      : Promise.resolve([]),
+  ]);
 
   const taskView: TaskDetailView = {
     id: task.id,
@@ -112,6 +134,7 @@ export default async function TaskDetailPage({ params }: Props) {
     projectName: task.project.name,
     projectStatus: task.project.status,
     projectOwnerOpenIds,
+    updatedAt: task.updatedAt.toISOString(),
     stageId: task.stageId,
     stageName: task.stage?.name ?? null,
     team: task.team,

@@ -10,10 +10,11 @@ import {
   saveFeedbackImage,
 } from "@/lib/file-upload";
 import {
-  sendFeedbackCreatedNotification,
-  sendFeedbackReplyNotification,
-  sendFeedbackStatusNotification,
-} from "@/lib/feishu-feedback";
+  drainNotificationOutboxSoon,
+  enqueueFeedbackCreatedNotification,
+  enqueueFeedbackReplyNotification,
+  enqueueFeedbackStatusNotification,
+} from "@/lib/notification-outbox";
 import { isSuperAdmin } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
@@ -153,13 +154,16 @@ export async function createFeedback(formData: FormData) {
     throw err;
   }
 
-  await sendFeedbackCreatedNotification({
-    feedbackId: feedback.id,
-    submitterName: user.name,
-    body: notificationBody(body, files.length),
-  }, await getNotificationContext()).catch((err) => {
-    console.error("[feedback] 飞书新反馈通知失败:", err);
-  });
+  await enqueueFeedbackCreatedNotification(
+    `feedback:created:${feedback.id}`,
+    {
+      feedbackId: feedback.id,
+      submitterName: user.name,
+      body: notificationBody(body, files.length),
+    },
+    await getNotificationContext(),
+  );
+  drainNotificationOutboxSoon();
 
   revalidatePath("/feedback");
   return feedback;
@@ -227,15 +231,18 @@ export async function replyFeedback(formData: FormData) {
   const recipientOpenIds = actorIsAdmin
     ? [feedback.submitterOpenId].filter((openId) => openId !== user.openId)
     : undefined;
-  await sendFeedbackReplyNotification({
-    feedbackId,
-    actorName: user.name,
-    actorIsAdmin,
-    recipientOpenIds,
-    body: notificationBody(body, files.length),
-  }, await getNotificationContext()).catch((err) => {
-    console.error("[feedback] 飞书反馈回复通知失败:", err);
-  });
+  await enqueueFeedbackReplyNotification(
+    `feedback:reply:${feedbackId}:${now.toISOString()}:${user.openId}`,
+    {
+      feedbackId,
+      actorName: user.name,
+      actorIsAdmin,
+      recipientOpenIds,
+      body: notificationBody(body, files.length),
+    },
+    await getNotificationContext(),
+  );
+  drainNotificationOutboxSoon();
 
   revalidatePath("/feedback");
   return { id: feedbackId };
@@ -270,14 +277,17 @@ export async function updateFeedbackStatus(formData: FormData) {
     select: { id: true, status: true, submitterOpenId: true },
   });
 
-  await sendFeedbackStatusNotification({
-    feedbackId: updated.id,
-    actorName: user.name,
-    status: updated.status,
-    submitterOpenId: updated.submitterOpenId,
-  }, await getNotificationContext()).catch((err) => {
-    console.error("[feedback] 飞书反馈状态通知失败:", err);
-  });
+  await enqueueFeedbackStatusNotification(
+    `feedback:status:${updated.id}:${updated.status}`,
+    {
+      feedbackId: updated.id,
+      actorName: user.name,
+      status: updated.status,
+      submitterOpenId: updated.submitterOpenId,
+    },
+    await getNotificationContext(),
+  );
+  drainNotificationOutboxSoon();
 
   revalidatePath("/feedback");
   return updated;

@@ -22,7 +22,7 @@
 ```
 
 - 无独立后端服务，业务逻辑集中在 `app/actions/` 与 `lib/`
-- 文件上传写入 `public/uploads/`，由 Next.js 静态托管
+- 文件上传写入私有目录 `storage/uploads/`，通过 `/uploads/...` 鉴权 route 返回
 - 飞书集成拆分为 OAuth（`lib/feishu-oauth.ts`）、通讯录（`lib/feishu-contact.ts`）、消息（`lib/feishu.ts`）、进度通知（`lib/feishu-progress.ts`）
 
 ## 目录结构
@@ -40,7 +40,7 @@ prisma/
   schema.prisma     # 数据模型
   seed.ts           # 初始角色 seed
 scripts/            # cron、数据迁移/fix 脚本
-public/uploads/     # 采购附件（运行时生成）
+storage/uploads/    # 私有上传附件（运行时生成）
 ```
 
 ## 认证与中间件
@@ -173,9 +173,9 @@ npm run cron         # 启动定时任务（独立进程）
 ## 文件上传
 
 - 实现：`lib/file-upload.ts`，采购附件元数据：`lib/order-attachments.ts`
-- 存储：`public/uploads/<订单ID>/`
+- 存储：`storage/uploads/<订单ID>/`
 - 单文件 20MB，Server Actions 总上限 100MB（`next.config.ts` 中 `serverActions.bodySizeLimit`）
-- **无访问鉴权**，适用于本地/内网可信环境
+- 访问：浏览器 URL 保持 `/uploads/...`，由 `app/uploads/[...path]/route.ts` 校验登录和 FileAsset 权限后读取
 
 ### 验收清单自动生成
 
@@ -222,7 +222,7 @@ docker compose up -d --build
 | 挂载点 | 用途 |
 |--------|------|
 | `app-data` → `/app/data` | SQLite（`app.db`） |
-| `app-uploads` → `/app/public/uploads` | 采购附件 |
+| `app-uploads` → `/app/storage/uploads` | 私有上传附件 |
 
 ### 环境变量
 

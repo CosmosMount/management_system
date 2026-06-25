@@ -1,4 +1,4 @@
-import type { UserRoleType } from "@prisma/client";
+import type { Prisma, UserRoleType } from "@prisma/client";
 import type { UserRoleRecord } from "@/lib/permissions-client";
 
 export type ProgressScope = {
@@ -52,6 +52,94 @@ export function canManageProject(
   if (isTeamLead(roles, scope.team)) return true;
   if (isTechGroupLead(roles, scope.techGroup)) return true;
   return false;
+}
+
+export function canViewProject(
+  roles: UserRoleRecord[],
+  scope: ProgressScope,
+  projectOwnerOpenIds: string | string[],
+  stageOwnerOpenIds: string | string[],
+  taskAssigneeOpenIds: string | string[],
+  userOpenId?: string,
+): boolean {
+  if (canManageProject(roles, scope, projectOwnerOpenIds, userOpenId)) {
+    return true;
+  }
+  if (isAssignee(userOpenId, stageOwnerOpenIds)) return true;
+  if (isAssignee(userOpenId, taskAssigneeOpenIds)) return true;
+  return false;
+}
+
+export function canViewTask(
+  roles: UserRoleRecord[],
+  scope: ProgressScope,
+  projectOwnerOpenIds: string | string[],
+  taskAssigneeOpenIds: string | string[],
+  userOpenId?: string,
+  stageOwnerOpenId?: string | null,
+): boolean {
+  if (canManageProject(roles, scope, projectOwnerOpenIds, userOpenId)) {
+    return true;
+  }
+  if (isAssignee(userOpenId, taskAssigneeOpenIds)) return true;
+  if (stageOwnerOpenId && userOpenId === stageOwnerOpenId) return true;
+  return false;
+}
+
+export function progressProjectReadableWhere(
+  roles: UserRoleRecord[],
+  userOpenId?: string,
+): Prisma.ProjectWhereInput {
+  if (isProgressSuperAdmin(roles) || isProjectManager(roles)) return {};
+
+  const teamScopes = roles
+    .filter((role) => role.role === "TEAM_ADMIN" && role.team)
+    .map((role) => role.team);
+  const techScopes = roles
+    .filter((role) => role.role === "TECH_GROUP_ADMIN" && role.techGroup)
+    .map((role) => role.techGroup);
+  const OR: Prisma.ProjectWhereInput[] = [];
+  if (teamScopes.length > 0) OR.push({ team: { in: teamScopes } });
+  if (techScopes.length > 0) OR.push({ techGroup: { in: techScopes } });
+  if (userOpenId) {
+    OR.push(
+      { ownerOpenId: userOpenId },
+      { owners: { some: { openId: userOpenId } } },
+      { stages: { some: { ownerOpenId: userOpenId } } },
+      { tasks: { some: { assignees: { some: { openId: userOpenId } } } } },
+      { tasks: { some: { assigneeOpenId: userOpenId } } },
+    );
+  }
+
+  return OR.length > 0 ? { OR } : { id: "__none__" };
+}
+
+export function progressTaskReadableWhere(
+  roles: UserRoleRecord[],
+  userOpenId?: string,
+): Prisma.TaskWhereInput {
+  if (isProgressSuperAdmin(roles) || isProjectManager(roles)) return {};
+
+  const teamScopes = roles
+    .filter((role) => role.role === "TEAM_ADMIN" && role.team)
+    .map((role) => role.team);
+  const techScopes = roles
+    .filter((role) => role.role === "TECH_GROUP_ADMIN" && role.techGroup)
+    .map((role) => role.techGroup);
+  const OR: Prisma.TaskWhereInput[] = [];
+  if (teamScopes.length > 0) OR.push({ team: { in: teamScopes } });
+  if (techScopes.length > 0) OR.push({ techGroup: { in: techScopes } });
+  if (userOpenId) {
+    OR.push(
+      { assigneeOpenId: userOpenId },
+      { assignees: { some: { openId: userOpenId } } },
+      { project: { ownerOpenId: userOpenId } },
+      { project: { owners: { some: { openId: userOpenId } } } },
+      { stage: { ownerOpenId: userOpenId } },
+    );
+  }
+
+  return OR.length > 0 ? { OR } : { id: "__none__" };
 }
 
 export function canUpdateProjectLifecycle(

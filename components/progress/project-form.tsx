@@ -10,7 +10,7 @@ import {
 import { zodResolver } from "@hookform/resolvers/zod";
 import { AlertCircle, Plus, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { createProject } from "@/app/actions/progress/createProject";
 import { updateProject } from "@/app/actions/progress/updateProject";
@@ -41,6 +41,7 @@ type TeamFormValue = (typeof TEAM_OPTIONS)[number] | "";
 type TechGroupFormValue = (typeof TECH_GROUP_OPTIONS)[number] | "";
 type ProjectFormValues = {
   projectId?: string;
+  expectedUpdatedAt?: string;
   name: string;
   description?: string;
   team?: TeamFormValue;
@@ -62,6 +63,7 @@ type Props = {
   mode?: "create" | "edit";
   initialProject?: {
     id: string;
+    updatedAt: string;
     name: string;
     description: string;
     team: string;
@@ -103,6 +105,7 @@ export function ProjectForm({
 }: Props) {
   const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
+  const [liveRefreshPending, setLiveRefreshPending] = useState(false);
   const editing = mode === "edit";
   const initialOwnerOpenIds = initialProject?.ownerOpenIds ?? [];
   const primaryInitialOwner = initialOwnerOpenIds[0] ?? "";
@@ -113,6 +116,7 @@ export function ProjectForm({
     ) as unknown as Resolver<ProjectFormValues>,
     defaultValues: {
       projectId: initialProject?.id,
+      expectedUpdatedAt: initialProject?.updatedAt,
       name: initialProject?.name ?? "",
       description: initialProject?.description ?? "",
       team: toTeamFormValue(initialProject?.team),
@@ -144,12 +148,25 @@ export function ProjectForm({
         ? "仅选择技术组时，只有该技术组组长和全局管理角色会参与管理/审批。"
         : "";
 
+  useEffect(() => {
+    if (!editing) return;
+    const onPending = () => setLiveRefreshPending(true);
+    const onClear = () => setLiveRefreshPending(false);
+    window.addEventListener("pnx-live-refresh-pending", onPending);
+    window.addEventListener("pnx-live-refresh-clear", onClear);
+    return () => {
+      window.removeEventListener("pnx-live-refresh-pending", onPending);
+      window.removeEventListener("pnx-live-refresh-clear", onClear);
+    };
+  }, [editing]);
+
   async function onSubmit(data: ProjectFormValues) {
     setSubmitting(true);
     try {
       if (editing) {
         await updateProject({
           projectId: data.projectId ?? "",
+          expectedUpdatedAt: data.expectedUpdatedAt ?? "",
           name: data.name,
           description: data.description,
           team: data.team ?? "",
@@ -190,6 +207,15 @@ export function ProjectForm({
 
   return (
     <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+      {liveRefreshPending && (
+        <div
+          data-testid="live-refresh-pending-alert"
+          className="sticky top-0 z-10 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800"
+        >
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>页面数据已更新，保存旧表单可能会失败；建议刷新后再编辑。</span>
+        </div>
+      )}
       <Card>
         <CardHeader>
           <CardTitle>基本信息</CardTitle>

@@ -5,6 +5,11 @@ import Docxtemplater from "docxtemplater";
 const ImageModule = require("docxtemplater-image-module-free");
 import PizZip from "pizzip";
 import { MAX_REIMBURSEMENT_LIST_ROWS } from "@/lib/constants";
+import {
+  publicPathToAbsolute as uploadPublicPathToAbsolute,
+  registerExistingFileAsset,
+  storagePathToAbsolute,
+} from "@/lib/file-upload";
 
 const BASE_TEMPLATE_PATH = path.join(
   process.cwd(),
@@ -359,19 +364,29 @@ export function generateReimbursementListDocx(
 }
 
 export function publicPathToAbsolute(publicPath: string): string {
-  return path.join(process.cwd(), "public", publicPath.replace(/^\//, ""));
+  return uploadPublicPathToAbsolute(publicPath);
 }
 
 export async function saveGeneratedListDoc(
   orderId: string,
   buffer: Buffer,
 ): Promise<string> {
-  const dir = path.join(process.cwd(), "public", "uploads", orderId);
+  const dir = storagePathToAbsolute(orderId);
   await fs.promises.mkdir(dir, { recursive: true });
   const filename = `list-generated-${Date.now()}.docx`;
   const fullPath = path.join(dir, filename);
   await fs.promises.writeFile(fullPath, buffer);
-  return `/uploads/${orderId}/${filename}`;
+  const publicPath = `/uploads/${orderId}/${filename}`;
+  await registerExistingFileAsset({
+    publicPath,
+    storagePath: `${orderId}/${filename}`,
+    kind: "ORDER_ATTACHMENT",
+    mimeType:
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    size: buffer.length,
+    orderId,
+  });
+  return publicPath;
 }
 
 export { formatDocDate };

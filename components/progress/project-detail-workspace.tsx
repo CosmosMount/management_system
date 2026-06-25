@@ -224,9 +224,8 @@ export function ProjectDetailWorkspace({
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const currentStage = getCurrentStage(project.stages);
-  const initialStageId =
+  const selectedStageId =
     searchParams.get("stage") ?? currentStage?.id ?? project.stages[0]?.id ?? "";
-  const [selectedStageId, setSelectedStageId] = useState(initialStageId);
   const [taskScope, setTaskScope] = useState<TaskScope>("stage");
   const [taskFilters, setTaskFilters] = useState<TaskFilters>({
     search: "",
@@ -275,7 +274,6 @@ export function ProjectDetailWorkspace({
     selectedStage.status !== "COMPLETED";
 
   function selectStage(stageId: string) {
-    setSelectedStageId(stageId);
     const next = new URLSearchParams(searchParams.toString());
     next.set("stage", stageId);
     router.replace(`${pathname}?${next.toString()}`, { scroll: false });
@@ -286,7 +284,10 @@ export function ProjectDetailWorkspace({
   }
 
   return (
-    <main className="mx-auto w-full max-w-[1440px] flex-1 px-4 py-6 sm:px-6 lg:px-8">
+    <main
+      data-testid="project-detail-workspace"
+      className="mx-auto w-full max-w-[1440px] flex-1 px-4 py-6 sm:px-6 lg:px-8"
+    >
       <BackLink href={routes.progress.root} label="返回进度管理" />
 
       <ProjectOverview
@@ -416,6 +417,7 @@ export function ProjectDetailWorkspace({
             users={users}
             initialProject={{
               id: project.id,
+              updatedAt: project.updatedAt,
               name: project.name,
               description: project.description,
               team: project.team,
@@ -485,7 +487,7 @@ function ProjectOverview({
   }
 
   return (
-    <Card>
+    <Card data-testid="project-overview">
       <CardContent className="flex flex-col gap-5 p-5 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -1219,7 +1221,11 @@ function ProjectActivityPanel({
   const effectiveHistoryState =
     historyState.sourceKey === logsKey
       ? historyState
-      : { sourceKey: logsKey, extraLogs: [], hasMore: hasMoreLogs };
+      : {
+          sourceKey: logsKey,
+          extraLogs: historyState.extraLogs,
+          hasMore: historyState.hasMore || hasMoreLogs,
+        };
   const activityLogs = mergeActivityLogs(logs, effectiveHistoryState.extraLogs);
   const hasMoreActivityLogs = effectiveHistoryState.hasMore;
 
@@ -1255,7 +1261,7 @@ function ProjectActivityPanel({
 
   return (
     <aside className="min-w-0 xl:sticky xl:top-24 xl:self-start">
-      <Card>
+      <Card data-testid="project-activity-panel">
         <CardHeader className="pb-3">
           <CardTitle>最近动态</CardTitle>
           <p className="text-xs text-muted-foreground">

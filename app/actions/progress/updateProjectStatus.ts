@@ -1,17 +1,19 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import type { ProjectStatus } from "@prisma/client";
 import { auth } from "@/lib/auth";
-import { sendProgressNotification } from "@/lib/feishu-progress";
 import { logProgressActivity, requireSessionUser } from "@/lib/progress-activity";
+import {
+  drainNotificationOutboxSoon,
+  enqueueProgressNotification,
+} from "@/lib/notification-outbox";
 import { assertProjectTransition } from "@/lib/progress-flow";
 import { canUpdateProjectLifecycle } from "@/lib/permissions-progress";
 import { getProjectOwnerOpenIds, getProjectOwnerNames } from "@/lib/progress-project-owners";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
+import { revalidateProgress } from "@/lib/revalidate";
 import { getUserRoles } from "@/lib/permissions";
-import { routes } from "@/lib/routes";
 
 export async function updateProjectStatus(
   projectId: string,
@@ -53,8 +55,8 @@ export async function updateProjectStatus(
   }
 
   const updated = await prisma.$transaction(async (tx) => {
-    const record = await tx.project.update({
-      where: { id: projectId },
+    const locked = await tx.project.updateMany({
+      where: { id: projectId, status: project.status },
       data: {
         status,
         completedAt: status === "COMPLETED" ? new Date() : null,
@@ -63,6 +65,9 @@ export async function updateProjectStatus(
           status === "COMPLETED" || status === "CANCELED" ? new Date() : null,
       },
     });
+    if (locked.count !== 1) {
+      throw new Error("项目状态已更新，请刷新后重试");
+    }
 
     if (status === "IN_PROGRESS") {
       const firstStage = project.stages.find(
@@ -76,6 +81,8 @@ export async function updateProjectStatus(
       }
     }
 
+    const record = await tx.project.findUnique({ where: { id: projectId } });
+    if (!record) throw new Error("项目不存在");
     return record;
   });
 
@@ -87,22 +94,27 @@ export async function updateProjectStatus(
     payload: { from: project.status, to: status },
   });
 
-  await sendProgressNotification({
-    type:
-      status === "IN_PROGRESS"
-        ? "project_started"
-        : status === "COMPLETED"
-          ? "project_completed"
-          : "project_canceled",
-    projectId: project.id,
-    projectName: project.name,
-    team: project.team,
-    techGroup: project.techGroup,
-    ownerOpenIds: getProjectOwnerOpenIds(project),
-    ownerNames: getProjectOwnerNames(project),
-  }, await getNotificationContext()).catch(console.error);
+  const type =
+    status === "IN_PROGRESS"
+      ? "project_started"
+      : status === "COMPLETED"
+        ? "project_completed"
+        : "project_canceled";
+  await enqueueProgressNotification(
+    `progress:${type}:${project.id}:${updated.updatedAt.toISOString()}`,
+    {
+      type,
+      projectId: project.id,
+      projectName: project.name,
+      team: project.team,
+      techGroup: project.techGroup,
+      ownerOpenIds: getProjectOwnerOpenIds(project),
+      ownerNames: getProjectOwnerNames(project),
+    },
+    await getNotificationContext(),
+  );
+  drainNotificationOutboxSoon();
 
-  revalidatePath(`${routes.progress.project(projectId)}`);
-  revalidatePath(routes.progress.root);
+  revalidateProgress(projectId);
   return updated;
 }

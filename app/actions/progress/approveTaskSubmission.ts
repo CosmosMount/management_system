@@ -1,10 +1,12 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { ApprovalDecision, TaskStatus } from "@prisma/client";
 import { auth } from "@/lib/auth";
-import { sendProgressNotification } from "@/lib/feishu-progress";
 import { logProgressActivity, requireSessionUser } from "@/lib/progress-activity";
+import {
+  drainNotificationOutboxSoon,
+  enqueueProgressNotification,
+} from "@/lib/notification-outbox";
 import {
   canApproveTask,
   getApproverRole,
@@ -13,9 +15,9 @@ import { assertProjectActive } from "@/lib/progress-guards";
 import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
+import { revalidateProgress } from "@/lib/revalidate";
 import { getUserRoles } from "@/lib/permissions";
 import { approvalSchema } from "@/lib/validations/progress";
-import { routes } from "@/lib/routes";
 
 export async function approveTaskSubmission(input: {
   submissionId: string;
@@ -142,16 +144,20 @@ export async function approveTaskSubmission(input: {
     },
   });
 
-  await sendProgressNotification({
-    type: "task_approved",
-    taskId: task.id,
-    taskTitle: task.title,
-    projectName: task.project.name,
-    assigneeOpenIds: getTaskAssigneeOpenIds(task),
-  }, await getNotificationContext()).catch(console.error);
+  await enqueueProgressNotification(
+    `progress:task_approved:${submission.id}`,
+    {
+      type: "task_approved",
+      taskId: task.id,
+      taskTitle: task.title,
+      projectName: task.project.name,
+      assigneeOpenIds: getTaskAssigneeOpenIds(task),
+    },
+    await getNotificationContext(),
+  );
+  drainNotificationOutboxSoon();
 
-  revalidatePath(`${routes.progress.task(task.id)}`);
-  revalidatePath(routes.progress.dashboard);
+  revalidateProgress(task.projectId, task.id);
   return { success: true };
 }
 
@@ -244,16 +250,20 @@ export async function rejectTaskSubmission(input: {
     payload: { submissionId: submission.id, comment: parsed.comment ?? "" },
   });
 
-  await sendProgressNotification({
-    type: "task_rejected",
-    taskId: task.id,
-    taskTitle: task.title,
-    projectName: task.project.name,
-    assigneeOpenIds: getTaskAssigneeOpenIds(task),
-    comment: parsed.comment ?? "",
-  }, await getNotificationContext()).catch(console.error);
+  await enqueueProgressNotification(
+    `progress:task_rejected:${submission.id}`,
+    {
+      type: "task_rejected",
+      taskId: task.id,
+      taskTitle: task.title,
+      projectName: task.project.name,
+      assigneeOpenIds: getTaskAssigneeOpenIds(task),
+      comment: parsed.comment ?? "",
+    },
+    await getNotificationContext(),
+  );
+  drainNotificationOutboxSoon();
 
-  revalidatePath(`${routes.progress.task(task.id)}`);
-  revalidatePath(routes.progress.dashboard);
+  revalidateProgress(task.projectId, task.id);
   return { success: true };
 }

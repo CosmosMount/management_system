@@ -91,6 +91,7 @@ export const createProjectSchema = projectBaseSchema.extend({
 
 export const updateProjectSchema = projectBaseSchema.extend({
   projectId: z.string().min(1),
+  expectedUpdatedAt: z.string().min(1, "缺少项目版本信息"),
 }).superRefine((value, ctx) => {
   validateProjectScopeAndOwners(value, ctx);
 });
@@ -141,6 +142,7 @@ export const createTaskSchema = taskBaseSchema.superRefine((value, ctx) => {
 
 export const updateTaskSchema = taskBaseSchema.extend({
   taskId: z.string().min(1),
+  expectedUpdatedAt: z.string().min(1, "缺少任务版本信息"),
 }).superRefine((value, ctx) => {
   validateTaskAssignees(value, ctx);
 });

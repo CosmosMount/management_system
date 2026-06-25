@@ -59,6 +59,7 @@ export type TaskDetailView = {
   projectName: string;
   projectStatus: ProjectStatus;
   projectOwnerOpenIds: string[];
+  updatedAt: string;
   stageId: string | null;
   stageName: string | null;
   team: string;
@@ -177,7 +178,10 @@ export function TaskDetailWorkspace({
     task.projectStatus !== "CANCELED";
 
   return (
-    <main className="mx-auto w-full max-w-[1440px] flex-1 px-4 py-6 sm:px-6 lg:px-8">
+    <main
+      data-testid="task-detail-workspace"
+      className="mx-auto w-full max-w-[1440px] flex-1 px-4 py-6 sm:px-6 lg:px-8"
+    >
       <BackLink href={projectHref} label={`返回项目 ${task.projectName}`} />
 
       <TaskOverview
@@ -226,6 +230,7 @@ export function TaskDetailWorkspace({
             acceptanceChecklistTemplates={acceptanceChecklistTemplates}
             initialTask={{
               id: task.id,
+              updatedAt: task.updatedAt,
               stageId: task.stageId,
               title: task.title,
               goal: task.goal,
@@ -268,7 +273,7 @@ function TaskOverview({
   const canArchive = task.status === "COMPLETED" && canManage;
 
   return (
-    <Card>
+    <Card data-testid="task-overview">
       <CardContent className="flex flex-col gap-5 p-5 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -506,7 +511,11 @@ function TaskActivityPanel({ task }: { task: TaskDetailView }) {
   const effectiveHistoryState =
     historyState.sourceKey === logsKey
       ? historyState
-      : { sourceKey: logsKey, extraLogs: [], hasMore: task.hasMoreActivityLogs };
+      : {
+          sourceKey: logsKey,
+          extraLogs: historyState.extraLogs,
+          hasMore: historyState.hasMore || task.hasMoreActivityLogs,
+        };
   const activityLogs = mergeActivityLogs(
     task.activityLogs,
     effectiveHistoryState.extraLogs,
@@ -547,7 +556,7 @@ function TaskActivityPanel({ task }: { task: TaskDetailView }) {
   }
 
   return (
-    <Card>
+    <Card data-testid="task-activity-panel">
       <CardHeader className="pb-3">
         <CardTitle>任务动态</CardTitle>
         <p className="text-xs text-muted-foreground">

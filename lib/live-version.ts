@@ -5,9 +5,17 @@ import {
   procurementListWhere,
   procurementSummaryWhere,
 } from "@/lib/procurement-visibility";
+import {
+  canManageProject,
+  progressProjectReadableWhere,
+  progressTaskReadableWhere,
+} from "@/lib/permissions-progress";
 
 export type LiveVersionScope =
   | "progress"
+  | "progress-list"
+  | "progress-board"
+  | "progress-archive"
   | "progress-project"
   | "progress-task"
   | "feedback"
@@ -137,6 +145,68 @@ async function taskAssigneeVersion(
   return encodePart("taskAssignees", aggregate._max.createdAt, count);
 }
 
+async function visibleProjectTaskCountVersion({
+  projectIds,
+  roles,
+  userOpenId,
+}: {
+  projectIds: string[];
+  roles: Awaited<ReturnType<typeof getProgressUserRoles>>;
+  userOpenId: string;
+}): Promise<string> {
+  if (projectIds.length === 0) return encodePart("projectTaskCount", "", 0);
+
+  const projects = await prisma.project.findMany({
+    where: { id: { in: projectIds } },
+    include: {
+      owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      _count: { select: { tasks: true } },
+    },
+  });
+  const limitedProjectIds: string[] = [];
+  const countParts: string[] = [];
+  for (const project of projects) {
+    const ownerOpenIds =
+      project.owners.length > 0
+        ? project.owners.map((owner) => owner.openId)
+        : [project.ownerOpenId];
+    if (
+      canManageProject(
+        roles,
+        { team: project.team, techGroup: project.techGroup },
+        ownerOpenIds,
+        userOpenId,
+      )
+    ) {
+      countParts.push(`${project.id}:${project._count.tasks}`);
+    } else {
+      limitedProjectIds.push(project.id);
+    }
+  }
+
+  if (limitedProjectIds.length > 0) {
+    const grouped = await prisma.task.groupBy({
+      by: ["projectId"],
+      where: {
+        AND: [
+          progressTaskReadableWhere(roles, userOpenId),
+          { projectId: { in: limitedProjectIds } },
+        ],
+      },
+      _count: { _all: true },
+    });
+    const limitedCounts = new Map(
+      grouped.map((row) => [row.projectId, row._count._all]),
+    );
+    for (const projectId of limitedProjectIds) {
+      countParts.push(`${projectId}:${limitedCounts.get(projectId) ?? 0}`);
+    }
+  }
+
+  countParts.sort();
+  return `projectTaskCount:${countParts.join(",")}`;
+}
+
 async function projectOwnerVersion(
   where?: Prisma.ProjectOwnerWhereInput,
 ): Promise<string> {
@@ -145,6 +215,14 @@ async function projectOwnerVersion(
     prisma.projectOwner.count({ where }),
   ]);
   return encodePart("projectOwners", aggregate._max.createdAt, count);
+}
+
+async function projectIdList(where: Prisma.ProjectWhereInput): Promise<string[]> {
+  const rows = await prisma.project.findMany({
+    where,
+    select: { id: true },
+  });
+  return rows.map((row) => row.id);
 }
 
 async function userRoleVersion(openId: string): Promise<string> {
@@ -200,52 +278,182 @@ async function approvalChecklistVersion(
   return encodePart("approvalChecklist", aggregate._max.createdAt, count);
 }
 
-async function getProgressVersion(): Promise<string> {
+async function getProgressUserRoles(userOpenId: string) {
+  return prisma.userRole.findMany({
+    where: { openId: userOpenId },
+    select: { role: true, team: true, techGroup: true },
+  });
+}
+
+async function getProgressListVersion({
+  userOpenId,
+}: Pick<LiveVersionContext, "userOpenId">): Promise<string> {
+  const roles = await getProgressUserRoles(userOpenId);
+  const projectWhere: Prisma.ProjectWhereInput = {
+    AND: [
+      progressProjectReadableWhere(roles, userOpenId),
+      { status: { notIn: ["COMPLETED", "CANCELED"] } },
+    ],
+  };
+  const projectIds = await projectIdList(projectWhere);
   const parts = await Promise.all([
-    projectUpdatedAtVersion("projects"),
-    projectStageVersion(),
-    taskVersion(),
-    activityVersion(),
-    submissionVersion(),
-    approvalVersion(),
-    weeklyReportVersion(),
-    taskAssigneeVersion(),
-    projectOwnerVersion(),
-    checklistItemVersion(),
-    checklistTemplateVersion(),
-    approvalChecklistVersion(),
+    projectUpdatedAtVersion("projects", projectWhere),
+    visibleProjectTaskCountVersion({ projectIds, roles, userOpenId }),
   ]);
   return encodeVersion(parts);
 }
 
-async function getProgressProjectVersion(projectId: string): Promise<string> {
-  const project = await prisma.project.findUnique({
-    where: { id: projectId },
-    select: { id: true },
+async function getProgressBoardVersion({
+  userOpenId,
+}: Pick<LiveVersionContext, "userOpenId">): Promise<string> {
+  const roles = await getProgressUserRoles(userOpenId);
+  const taskWhere: Prisma.TaskWhereInput = {
+    AND: [
+      progressTaskReadableWhere(roles, userOpenId),
+      { status: { not: "ARCHIVED" } },
+    ],
+  };
+  const taskRows = await prisma.task.findMany({
+    where: taskWhere,
+    select: { id: true, projectId: true, stageId: true },
+  });
+  const taskIds = taskRows.map((task) => task.id);
+  const projectIds = [...new Set(taskRows.map((task) => task.projectId))];
+  const stageIds = [
+    ...new Set(
+      taskRows
+        .map((task) => task.stageId)
+        .filter((stageId): stageId is string => !!stageId),
+    ),
+  ];
+  const parts = await Promise.all([
+    taskVersion(taskWhere),
+    taskAssigneeVersion(
+      taskIds.length > 0 ? { taskId: { in: taskIds } } : { id: "__none__" },
+    ),
+    projectUpdatedAtVersion(
+      "taskProjects",
+      projectIds.length > 0 ? { id: { in: projectIds } } : { id: "__none__" },
+    ),
+    projectStageVersion(
+      stageIds.length > 0 ? { id: { in: stageIds } } : { id: "__none__" },
+    ),
+  ]);
+  return encodeVersion(parts);
+}
+
+async function getProgressArchiveVersion({
+  userOpenId,
+}: Pick<LiveVersionContext, "userOpenId">): Promise<string> {
+  const roles = await getProgressUserRoles(userOpenId);
+  const projectWhere: Prisma.ProjectWhereInput = {
+    AND: [
+      progressProjectReadableWhere(roles, userOpenId),
+      { status: { in: ["COMPLETED", "CANCELED"] } },
+    ],
+  };
+  const taskWhere: Prisma.TaskWhereInput = {
+    AND: [
+      progressTaskReadableWhere(roles, userOpenId),
+      { status: "ARCHIVED" },
+    ],
+  };
+  const archivedTaskRows = await prisma.task.findMany({
+    where: taskWhere,
+    select: { id: true, projectId: true },
+  });
+  const taskIds = archivedTaskRows.map((task) => task.id);
+  const archivedTaskProjectIds = [
+    ...new Set(archivedTaskRows.map((task) => task.projectId)),
+  ];
+  const parts = await Promise.all([
+    projectUpdatedAtVersion("archivedProjects", projectWhere),
+    taskVersion(taskWhere),
+    taskAssigneeVersion(
+      taskIds.length > 0 ? { taskId: { in: taskIds } } : { id: "__none__" },
+    ),
+    projectUpdatedAtVersion(
+      "archivedTaskProjects",
+      archivedTaskProjectIds.length > 0
+        ? { id: { in: archivedTaskProjectIds } }
+        : { id: "__none__" },
+    ),
+  ]);
+  return encodeVersion(parts);
+}
+
+async function getProgressProjectVersion(
+  projectId: string,
+  { userOpenId }: Pick<LiveVersionContext, "userOpenId">,
+): Promise<string> {
+  const roles = await getProgressUserRoles(userOpenId);
+  const project = await prisma.project.findFirst({
+    where: {
+      id: projectId,
+      AND: progressProjectReadableWhere(roles, userOpenId),
+    },
+    include: {
+      owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      stages: { select: { id: true, ownerOpenId: true } },
+      tasks: {
+        include: {
+          assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        },
+      },
+    },
   });
   if (!project) return `missing:progress-project:${projectId}`;
 
-  const [taskIds, stageIds] = await Promise.all([
-    prisma.task.findMany({
-      where: { projectId },
-      select: { id: true },
-    }),
-    prisma.projectStage.findMany({
-      where: { projectId },
-      select: { id: true },
-    }),
-  ]);
-  const taskIdList = taskIds.map((task) => task.id);
-  const stageIdList = stageIds.map((stage) => stage.id);
+  const projectOwnerOpenIds =
+    project.owners.length > 0
+      ? project.owners.map((owner) => owner.openId)
+      : [project.ownerOpenId];
+  const canManage = canManageProject(
+    roles,
+    { team: project.team, techGroup: project.techGroup },
+    projectOwnerOpenIds,
+    userOpenId,
+  );
+  const ownedStageIds = project.stages
+    .filter((stage) => stage.ownerOpenId === userOpenId)
+    .map((stage) => stage.id);
+  const visibleTaskIdList = canManage
+    ? project.tasks.map((task) => task.id)
+    : project.tasks
+        .filter(
+          (task) =>
+            task.assigneeOpenId === userOpenId ||
+            task.assignees.some((assignee) => assignee.openId === userOpenId) ||
+            (!!task.stageId && ownedStageIds.includes(task.stageId)),
+        )
+        .map((task) => task.id);
+  const visibleStageIdList = canManage
+    ? project.stages.map((stage) => stage.id)
+    : [
+        ...new Set([
+          ...ownedStageIds,
+          ...project.tasks
+            .filter((task) => visibleTaskIdList.includes(task.id))
+            .map((task) => task.stageId)
+            .filter((stageId): stageId is string => !!stageId),
+        ]),
+      ];
+  const stageSubmissionIds = canManage ? visibleStageIdList : ownedStageIds;
   const submissionWhere: Prisma.TaskSubmissionWhereInput = {
     OR: [
-      { projectId },
-      ...(taskIdList.length > 0 ? [{ taskId: { in: taskIdList } }] : []),
-      ...(stageIdList.length > 0 ? [{ stageId: { in: stageIdList } }] : []),
+      ...(canManage ? [{ projectId }] : []),
+      ...(visibleTaskIdList.length > 0
+        ? [{ taskId: { in: visibleTaskIdList } }]
+        : []),
+      ...(stageSubmissionIds.length > 0
+        ? [{ stageId: { in: stageSubmissionIds } }]
+        : []),
     ],
   };
+  const effectiveSubmissionWhere =
+    submissionWhere.OR?.length ? submissionWhere : { id: "__none__" };
   const submissionIds = await prisma.taskSubmission.findMany({
-    where: submissionWhere,
+    where: effectiveSubmissionWhere,
     select: { id: true },
   });
   const submissionIdList = submissionIds.map((submission) => submission.id);
@@ -253,30 +461,55 @@ async function getProgressProjectVersion(projectId: string): Promise<string> {
     submissionIdList.length > 0
       ? { submissionId: { in: submissionIdList } }
       : { id: "__none__" };
+  const activityWhere: Prisma.ProgressActivityLogWhereInput = canManage
+    ? {
+        OR: [
+          { projectId },
+          ...(visibleTaskIdList.length > 0
+            ? [{ taskId: { in: visibleTaskIdList } }]
+            : []),
+        ],
+      }
+    : visibleTaskIdList.length > 0 || ownedStageIds.length > 0
+      ? {
+          OR: [
+            ...(visibleTaskIdList.length > 0
+              ? [{ taskId: { in: visibleTaskIdList } }]
+              : []),
+            ...ownedStageIds.map((stageId) => ({
+              projectId,
+              payload: { contains: `"stageId":"${stageId}"` },
+            })),
+          ],
+        }
+      : { id: "__none__" };
 
   const parts = await Promise.all([
     projectUpdatedAtVersion("projects", { id: projectId }),
-    projectStageVersion({ projectId }),
-    taskVersion({ projectId }),
-    activityVersion({
-      OR: [
-        { projectId },
-        ...(taskIdList.length > 0 ? [{ taskId: { in: taskIdList } }] : []),
-      ],
-    }),
-    submissionVersion(submissionWhere),
+    projectStageVersion(
+      visibleStageIdList.length > 0
+        ? { id: { in: visibleStageIdList } }
+        : { id: "__none__" },
+    ),
+    taskVersion(
+      visibleTaskIdList.length > 0
+        ? { id: { in: visibleTaskIdList } }
+        : { id: "__none__" },
+    ),
+    activityVersion(activityWhere),
+    submissionVersion(effectiveSubmissionWhere),
     approvalVersion(approvalWhere),
     weeklyReportVersion(
-      taskIdList.length > 0 ? { taskId: { in: taskIdList } } : { id: "__none__" },
+      visibleTaskIdList.length > 0
+        ? { taskId: { in: visibleTaskIdList } }
+        : { id: "__none__" },
     ),
     taskAssigneeVersion(
-      taskIdList.length > 0 ? { taskId: { in: taskIdList } } : { id: "__none__" },
+      visibleTaskIdList.length > 0
+        ? { taskId: { in: visibleTaskIdList } }
+        : { id: "__none__" },
     ),
     projectOwnerVersion({ projectId }),
-    checklistItemVersion(
-      taskIdList.length > 0 ? { taskId: { in: taskIdList } } : { id: "__none__" },
-    ),
-    checklistTemplateVersion(),
     approvalChecklistVersion(
       submissionIdList.length > 0
         ? { approval: { submissionId: { in: submissionIdList } } }
@@ -286,9 +519,16 @@ async function getProgressProjectVersion(projectId: string): Promise<string> {
   return encodeVersion(parts);
 }
 
-async function getProgressTaskVersion(taskId: string): Promise<string> {
-  const task = await prisma.task.findUnique({
-    where: { id: taskId },
+async function getProgressTaskVersion(
+  taskId: string,
+  { userOpenId }: Pick<LiveVersionContext, "userOpenId">,
+): Promise<string> {
+  const roles = await getProgressUserRoles(userOpenId);
+  const task = await prisma.task.findFirst({
+    where: {
+      id: taskId,
+      AND: progressTaskReadableWhere(roles, userOpenId),
+    },
     select: { id: true, projectId: true },
   });
   if (!task) return `missing:progress-task:${taskId}`;
@@ -383,8 +623,11 @@ async function getFeedbackVersion({
 async function purchaseItemVersion(
   where?: Prisma.PurchaseItemWhereInput,
 ): Promise<string> {
-  const count = await prisma.purchaseItem.count({ where });
-  return encodePart("items", "", count);
+  const [aggregate, count] = await Promise.all([
+    prisma.purchaseItem.aggregate({ where, _max: { updatedAt: true } }),
+    prisma.purchaseItem.count({ where }),
+  ]);
+  return encodePart("items", aggregate._max.updatedAt, count);
 }
 
 async function getProcurementVersion(userOpenId: string): Promise<string> {
@@ -524,15 +767,28 @@ export async function getLiveVersion(
     encodeVersion([version, userVersion]);
 
   if (context.scope === "progress") {
-    return withUserVersion(await getProgressVersion());
+    return withUserVersion(await getProgressListVersion(context));
+  }
+  if (context.scope === "progress-list") {
+    return withUserVersion(await getProgressListVersion(context));
+  }
+  if (context.scope === "progress-board") {
+    return withUserVersion(await getProgressBoardVersion(context));
+  }
+  if (context.scope === "progress-archive") {
+    return withUserVersion(await getProgressArchiveVersion(context));
   }
   if (context.scope === "progress-project") {
     if (!context.resourceId) return "missing:progress-project";
-    return withUserVersion(await getProgressProjectVersion(context.resourceId));
+    return withUserVersion(
+      await getProgressProjectVersion(context.resourceId, context),
+    );
   }
   if (context.scope === "progress-task") {
     if (!context.resourceId) return "missing:progress-task";
-    return withUserVersion(await getProgressTaskVersion(context.resourceId));
+    return withUserVersion(
+      await getProgressTaskVersion(context.resourceId, context),
+    );
   }
   if (context.scope === "feedback") {
     return withUserVersion(await getFeedbackVersion(context));
@@ -567,6 +823,9 @@ export async function getLiveVersion(
 export function isLiveVersionScope(value: string): value is LiveVersionScope {
   return [
     "progress",
+    "progress-list",
+    "progress-board",
+    "progress-archive",
     "progress-project",
     "progress-task",
     "feedback",

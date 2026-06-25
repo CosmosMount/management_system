@@ -1,17 +1,19 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { SubmissionType, TaskStatus } from "@prisma/client";
 import { auth } from "@/lib/auth";
-import { sendProgressNotification } from "@/lib/feishu-progress";
 import { logProgressActivity, requireSessionUser } from "@/lib/progress-activity";
+import {
+  drainNotificationOutboxSoon,
+  enqueueProgressNotification,
+} from "@/lib/notification-outbox";
 import { canSubmitDelivery } from "@/lib/permissions-progress";
 import { assertProjectActive } from "@/lib/progress-guards";
 import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
+import { revalidateProgress } from "@/lib/revalidate";
 import { submitDeliverySchema } from "@/lib/validations/progress";
-import { routes } from "@/lib/routes";
 
 export async function submitTaskDelivery(input: {
   taskId: string;
@@ -39,6 +41,14 @@ export async function submitTaskDelivery(input: {
   }
 
   const submission = await prisma.$transaction(async (tx) => {
+    const locked = await tx.task.updateMany({
+      where: { id: task.id, status: TaskStatus.IN_PROGRESS },
+      data: { status: TaskStatus.PENDING_ACCEPTANCE },
+    });
+    if (locked.count !== 1) {
+      throw new Error("任务状态已更新，请刷新后重试");
+    }
+
     const sub = await tx.taskSubmission.create({
       data: {
         taskId: task.id,
@@ -53,11 +63,6 @@ export async function submitTaskDelivery(input: {
       },
     });
 
-    await tx.task.update({
-      where: { id: task.id },
-      data: { status: TaskStatus.PENDING_ACCEPTANCE },
-    });
-
     return sub;
   });
 
@@ -70,18 +75,22 @@ export async function submitTaskDelivery(input: {
     payload: { submissionId: submission.id },
   });
 
-  await sendProgressNotification({
-    type: "task_pending_acceptance",
-    taskId: task.id,
-    taskTitle: task.title,
-    projectName: task.project.name,
-    team: task.team,
-    techGroup: task.techGroup,
-    feishuDocUrl: parsed.feishuDocUrl,
-    keyDataUrl: parsed.keyDataUrl,
-  }, await getNotificationContext()).catch(console.error);
+  await enqueueProgressNotification(
+    `progress:task_pending_acceptance:${submission.id}`,
+    {
+      type: "task_pending_acceptance",
+      taskId: task.id,
+      taskTitle: task.title,
+      projectName: task.project.name,
+      team: task.team,
+      techGroup: task.techGroup,
+      feishuDocUrl: parsed.feishuDocUrl,
+      keyDataUrl: parsed.keyDataUrl,
+    },
+    await getNotificationContext(),
+  );
+  drainNotificationOutboxSoon();
 
-  revalidatePath(`${routes.progress.task(task.id)}`);
-  revalidatePath(routes.progress.dashboard);
+  revalidateProgress(task.projectId, task.id);
   return submission;
 }

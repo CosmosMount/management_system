@@ -1,17 +1,19 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
 import { logProgressActivity, requireSessionUser } from "@/lib/progress-activity";
 import { canSubmitWeeklyReport } from "@/lib/permissions-progress";
 import { prisma } from "@/lib/prisma";
-import { sendProgressNotification } from "@/lib/feishu-progress";
+import {
+  drainNotificationOutboxSoon,
+  enqueueProgressNotification,
+} from "@/lib/notification-outbox";
 import { assertProjectActive } from "@/lib/progress-guards";
 import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { getNotificationContext } from "@/lib/request-origin";
+import { revalidateProgress } from "@/lib/revalidate";
 import { riskSyncSchema, submitWeeklyReportSchema } from "@/lib/validations/progress";
-import { routes } from "@/lib/routes";
 
 function getWeekStart(date = new Date()): Date {
   const d = new Date(date);
@@ -54,33 +56,26 @@ export async function submitWeeklyReport(input: {
 
   const weekStart = getWeekStart();
 
-  const existing = await prisma.weeklyReport.findFirst({
-    where: { taskId: task.id, weekStart },
+  const report = await prisma.weeklyReport.upsert({
+    where: { taskId_weekStart: { taskId: task.id, weekStart } },
+    update: {
+      progress: parsed.progress,
+      risks: parsed.risks ?? "",
+      nextPlan: parsed.nextPlan ?? "",
+      feishuDocUrl: parsed.feishuDocUrl ?? "",
+      submittedAt: new Date(),
+    },
+    create: {
+      taskId: task.id,
+      weekStart,
+      progress: parsed.progress,
+      risks: parsed.risks ?? "",
+      nextPlan: parsed.nextPlan ?? "",
+      feishuDocUrl: parsed.feishuDocUrl ?? "",
+      submittedBy: user.openId,
+      submitterName: user.name,
+    },
   });
-
-  const report = existing
-    ? await prisma.weeklyReport.update({
-        where: { id: existing.id },
-        data: {
-          progress: parsed.progress,
-          risks: parsed.risks ?? "",
-          nextPlan: parsed.nextPlan ?? "",
-          feishuDocUrl: parsed.feishuDocUrl ?? "",
-          submittedAt: new Date(),
-        },
-      })
-    : await prisma.weeklyReport.create({
-        data: {
-          taskId: task.id,
-          weekStart,
-          progress: parsed.progress,
-          risks: parsed.risks ?? "",
-          nextPlan: parsed.nextPlan ?? "",
-          feishuDocUrl: parsed.feishuDocUrl ?? "",
-          submittedBy: user.openId,
-          submitterName: user.name,
-        },
-      });
 
   await logProgressActivity({
     projectId: task.projectId,
@@ -90,7 +85,7 @@ export async function submitWeeklyReport(input: {
     actorName: user.name,
   });
 
-  revalidatePath(`${routes.progress.task(task.id)}`);
+  revalidateProgress(task.projectId, task.id);
   return report;
 }
 
@@ -133,19 +128,23 @@ export async function syncTaskRisk(input: { taskId: string; riskNote: string }) 
     payload: { riskNote: parsed.riskNote },
   });
 
-  await sendProgressNotification({
-    type: "task_risk_synced",
-    taskId: task.id,
-    taskTitle: task.title,
-    projectName: task.project.name,
-    team: task.team,
-    techGroup: task.techGroup,
-    assigneeOpenIds: getTaskAssigneeOpenIds(task),
-    projectOwnerOpenIds: getProjectOwnerOpenIds(task.project),
-    riskNote: parsed.riskNote,
-  }, await getNotificationContext()).catch(console.error);
+  await enqueueProgressNotification(
+    `progress:task_risk_synced:${task.id}:${updated.riskUpdatedAt?.toISOString() ?? updated.updatedAt.toISOString()}`,
+    {
+      type: "task_risk_synced",
+      taskId: task.id,
+      taskTitle: task.title,
+      projectName: task.project.name,
+      team: task.team,
+      techGroup: task.techGroup,
+      assigneeOpenIds: getTaskAssigneeOpenIds(task),
+      projectOwnerOpenIds: getProjectOwnerOpenIds(task.project),
+      riskNote: parsed.riskNote,
+    },
+    await getNotificationContext(),
+  );
+  drainNotificationOutboxSoon();
 
-  revalidatePath(`${routes.progress.task(task.id)}`);
-  revalidatePath(routes.progress.dashboard);
+  revalidateProgress(task.projectId, task.id);
   return updated;
 }

@@ -85,6 +85,21 @@ enum FeedbackStatus {
   CLOSED
 }
 
+enum FileAssetKind {
+  ORDER_ATTACHMENT
+  ORDER_ITEM_IMAGE
+  FEEDBACK_ATTACHMENT
+  USER_SIGNATURE
+  TEMP_UPLOAD
+}
+
+enum NotificationOutboxStatus {
+  PENDING
+  PROCESSING
+  SENT
+  FAILED
+}
+
 model User {
   id            String          @id @default(uuid())
   openId        String          @unique
@@ -150,6 +165,7 @@ model PurchaseItem {
   quantity           Int
   unitPrice          Float
   photoPath          String?
+  updatedAt          DateTime          @default(now()) @updatedAt
 }
 
 model Project {
@@ -301,6 +317,8 @@ model WeeklyReport {
   submittedBy   String
   submitterName String
   submittedAt   DateTime @default(now())
+
+  @@unique([taskId, weekStart])
 }
 
 model ApprovalRecord {
@@ -316,6 +334,8 @@ model ApprovalRecord {
   comment         String           @default("")
   checklistConfirmations ApprovalChecklistConfirmation[]
   createdAt       DateTime         @default(now())
+
+  @@unique([submissionId])
 }
 
 model ApprovalChecklistConfirmation {
@@ -381,4 +401,41 @@ model FeedbackAttachment {
   size      Int
   sortOrder Int             @default(0)
   createdAt DateTime        @default(now())
+}
+
+model FileAsset {
+  id                   String        @id @default(uuid())
+  publicPath           String        @unique
+  storagePath          String
+  kind                 FileAssetKind
+  mimeType             String
+  size                 Int
+  orderId              String?
+  feedbackId           String?
+  signatureOwnerOpenId String?
+  ownerOpenId          String?
+  createdAt            DateTime      @default(now())
+
+  @@index([orderId])
+  @@index([feedbackId])
+  @@index([signatureOwnerOpenId])
+  @@index([ownerOpenId])
+}
+
+model NotificationOutbox {
+  id          String                   @id @default(uuid())
+  eventKey    String                   @unique
+  channel     String
+  type        String
+  payload     String
+  status      NotificationOutboxStatus @default(PENDING)
+  attempts    Int                      @default(0)
+  lastError   String                   @default("")
+  nextRunAt   DateTime                 @default(now())
+  lockedUntil DateTime?
+  sentAt      DateTime?
+  createdAt   DateTime                 @default(now())
+  updatedAt   DateTime                 @updatedAt
+
+  @@index([status, nextRunAt])
 }
