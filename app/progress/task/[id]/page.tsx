@@ -11,6 +11,7 @@ import { getUserRoles, isSuperAdmin } from "@/lib/permissions";
 import {
   canApproveTask,
   canManageProject,
+  canRequestTaskDeletion,
   canSubmitDelivery,
   canViewTask,
   progressTaskReadableWhere,
@@ -20,6 +21,7 @@ import {
   getTaskAssigneeOpenIds,
 } from "@/lib/progress-assignees";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
+import { getProjectParticipantOpenIds } from "@/lib/progress-project-participants";
 import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { getRecentActivityCutoff } from "@/lib/progress-activity-window";
 import { prisma } from "@/lib/prisma";
@@ -43,6 +45,9 @@ export default async function TaskDetailPage({ params }: Props) {
       project: {
         include: {
           owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+          participants: {
+            orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+          },
           stages: { orderBy: { sortOrder: "asc" } },
         },
       },
@@ -107,6 +112,17 @@ export default async function TaskDetailPage({ params }: Props) {
     projectOwnerOpenIds,
     userOpenId,
   );
+  const canRequestDeletion =
+    !canManage &&
+    canRequestTaskDeletion({
+      roles,
+      scope,
+      ownerOpenIds: projectOwnerOpenIds,
+      participantOpenIds: getProjectParticipantOpenIds(task.project),
+      stageOwnerOpenId: task.stage?.ownerOpenId,
+      taskAssigneeOpenIds: getTaskAssigneeOpenIds(task),
+      userOpenId,
+    });
   const admin = userOpenId ? await isSuperAdmin(userOpenId) : false;
   const [users, acceptanceChecklistTemplates] = await Promise.all([
     canManage
@@ -232,6 +248,7 @@ export default async function TaskDetailPage({ params }: Props) {
           isAssignee={isAssignee}
           canApprove={canApprove}
           canManage={canManage}
+          canRequestDeletion={canRequestDeletion}
           isSuperAdmin={admin}
         />
       </PageShell>

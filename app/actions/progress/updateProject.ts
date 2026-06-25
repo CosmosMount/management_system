@@ -11,6 +11,10 @@ import {
   canManageProject,
 } from "@/lib/permissions-progress";
 import { getProjectOwnerOpenIds, getProjectOwnerNames } from "@/lib/progress-project-owners";
+import {
+  getProjectParticipantNames,
+  getProjectParticipantOpenIds,
+} from "@/lib/progress-project-participants";
 import { requireSessionUser } from "@/lib/progress-activity";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
@@ -30,6 +34,7 @@ export async function updateProject(input: UpdateProjectInput) {
     where: { id: parsed.projectId },
     include: {
       owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
     },
   });
   if (!project) throw new Error("项目不存在");
@@ -41,6 +46,8 @@ export async function updateProject(input: UpdateProjectInput) {
 
   const oldOwnerOpenIds = getProjectOwnerOpenIds(project);
   const oldOwnerNames = getProjectOwnerNames(project);
+  const oldParticipantOpenIds = getProjectParticipantOpenIds(project);
+  const oldParticipantNames = getProjectParticipantNames(project);
   if (
     !canManageProject(
       roles,
@@ -61,9 +68,12 @@ export async function updateProject(input: UpdateProjectInput) {
   if (ownerOpenIds.length === 0) {
     throw new Error("请选择项目负责人");
   }
+  const participantOpenIds = [
+    ...new Set((parsed.participantOpenIds ?? []).filter(Boolean)),
+  ].filter((openId) => !ownerOpenIds.includes(openId));
 
   const owners = await prisma.user.findMany({
-    where: { openId: { in: ownerOpenIds } },
+    where: { openId: { in: [...ownerOpenIds, ...participantOpenIds] } },
     select: { openId: true, name: true },
   });
   const ownerByOpenId = new Map(owners.map((owner) => [owner.openId, owner]));
@@ -76,6 +86,15 @@ export async function updateProject(input: UpdateProjectInput) {
   });
   const primaryOwner = orderedOwners[0];
   if (!primaryOwner) throw new Error("请选择项目负责人");
+  const missingParticipant = participantOpenIds.find(
+    (openId) => !ownerByOpenId.has(openId),
+  );
+  if (missingParticipant) throw new Error("参与人员不存在，请先同步飞书通讯录");
+  const orderedParticipants = participantOpenIds.map((openId) => {
+    const participant = ownerByOpenId.get(openId);
+    if (!participant) throw new Error("参与人员不存在，请先同步飞书通讯录");
+    return participant;
+  });
 
   const nextTeam = parsed.team ?? "";
   const nextTechGroup = parsed.techGroup ?? "";
@@ -91,6 +110,9 @@ export async function updateProject(input: UpdateProjectInput) {
     throw new Error("无权限将项目切换到该车组/技术组");
   }
   const ownerNames = orderedOwners.map((owner) => owner.name).join("、");
+  const participantNames = orderedParticipants
+    .map((participant) => participant.name)
+    .join("、");
   const changes = buildProjectChangeSummary({
     before: {
       name: project.name,
@@ -98,6 +120,7 @@ export async function updateProject(input: UpdateProjectInput) {
       team: project.team,
       techGroup: project.techGroup,
       ownerNames: oldOwnerNames,
+      participantNames: oldParticipantNames,
       allowOwnerSelfApproval: project.allowOwnerSelfApproval,
     },
     after: {
@@ -106,6 +129,7 @@ export async function updateProject(input: UpdateProjectInput) {
       team: nextTeam,
       techGroup: nextTechGroup,
       ownerNames,
+      participantNames,
       allowOwnerSelfApproval: parsed.allowOwnerSelfApproval,
     },
   });
@@ -140,6 +164,17 @@ export async function updateProject(input: UpdateProjectInput) {
         sortOrder: index,
       })),
     });
+    await tx.projectParticipant.deleteMany({ where: { projectId: project.id } });
+    if (orderedParticipants.length > 0) {
+      await tx.projectParticipant.createMany({
+        data: orderedParticipants.map((participant, index) => ({
+          projectId: project.id,
+          openId: participant.openId,
+          name: participant.name,
+          sortOrder: index,
+        })),
+      });
+    }
 
     if (scopeChanged) {
       await tx.task.updateMany({
@@ -161,6 +196,10 @@ export async function updateProject(input: UpdateProjectInput) {
           changes,
           oldOwnerOpenIds,
           ownerOpenIds: orderedOwners.map((owner) => owner.openId),
+          oldParticipantOpenIds,
+          participantOpenIds: orderedParticipants.map(
+            (participant) => participant.openId,
+          ),
         }),
       },
     });
@@ -182,6 +221,10 @@ export async function updateProject(input: UpdateProjectInput) {
       oldTechGroup: project.techGroup,
       ownerOpenIds: orderedOwners.map((owner) => owner.openId),
       oldOwnerOpenIds,
+      participantOpenIds: orderedParticipants.map(
+        (participant) => participant.openId,
+      ),
+      oldParticipantOpenIds,
     },
     await getNotificationContext(),
   );
@@ -204,6 +247,7 @@ function buildProjectChangeSummary({
     ["team", "车组", formatOptional],
     ["techGroup", "技术组", formatOptional],
     ["ownerNames", "项目负责人", String],
+    ["participantNames", "参与人员", formatOptional],
     ["allowOwnerSelfApproval", "负责人自审", formatBoolean],
   ];
   return labels.flatMap(([key, label, format]) => {
@@ -218,6 +262,7 @@ type ProjectChangeComparable = {
   team: string;
   techGroup: string;
   ownerNames: string;
+  participantNames: string;
   allowOwnerSelfApproval: boolean;
 };
 

@@ -11,6 +11,7 @@ type LiveAutoRefreshProps = {
   intervalMs?: number;
   disabled?: boolean;
   pauseWhenEditing?: boolean;
+  mine?: boolean;
 };
 
 const DEFAULT_INTERVAL_MS = 6000;
@@ -34,10 +35,17 @@ function isEditingOrDialogOpen(): boolean {
   );
 }
 
-function buildVersionUrl(scope: LiveVersionScope, resourceId?: string): string {
+function buildVersionUrl(
+  scope: LiveVersionScope,
+  resourceId?: string,
+  mine?: boolean,
+): string {
   const params = new URLSearchParams({ scope });
   if (resourceId) {
     params.set("resourceId", resourceId);
+  }
+  if (mine) {
+    params.set("mine", "1");
   }
   return `/api/live-version?${params.toString()}`;
 }
@@ -49,6 +57,7 @@ export function LiveAutoRefresh({
   intervalMs = DEFAULT_INTERVAL_MS,
   disabled = false,
   pauseWhenEditing = true,
+  mine = false,
 }: LiveAutoRefreshProps) {
   const router = useRouter();
   const currentVersionRef = useRef<string | null>(null);
@@ -68,7 +77,7 @@ export function LiveAutoRefresh({
       };
     }
 
-    const url = buildVersionUrl(scope, resourceId);
+    const url = buildVersionUrl(scope, resourceId, mine);
 
     async function poll() {
       if (!mountedRef.current || inFlightRef.current) return;
@@ -162,6 +171,7 @@ export function LiveAutoRefresh({
     resourceId,
     router,
     scope,
+    mine,
   ]);
 
   return null;

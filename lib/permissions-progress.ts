@@ -62,12 +62,12 @@ export function canViewProject(
   taskAssigneeOpenIds: string | string[],
   userOpenId?: string,
 ): boolean {
-  if (canManageProject(roles, scope, projectOwnerOpenIds, userOpenId)) {
-    return true;
-  }
-  if (isAssignee(userOpenId, stageOwnerOpenIds)) return true;
-  if (isAssignee(userOpenId, taskAssigneeOpenIds)) return true;
-  return false;
+  void roles;
+  void scope;
+  void projectOwnerOpenIds;
+  void stageOwnerOpenIds;
+  void taskAssigneeOpenIds;
+  return !!userOpenId;
 }
 
 export function canViewTask(
@@ -78,76 +78,130 @@ export function canViewTask(
   userOpenId?: string,
   stageOwnerOpenId?: string | null,
 ): boolean {
-  if (canManageProject(roles, scope, projectOwnerOpenIds, userOpenId)) {
-    return true;
-  }
-  if (isAssignee(userOpenId, taskAssigneeOpenIds)) return true;
-  if (stageOwnerOpenId && userOpenId === stageOwnerOpenId) return true;
-  return false;
+  void roles;
+  void scope;
+  void projectOwnerOpenIds;
+  void taskAssigneeOpenIds;
+  void stageOwnerOpenId;
+  return !!userOpenId;
 }
 
 export function progressProjectReadableWhere(
   roles: UserRoleRecord[],
   userOpenId?: string,
 ): Prisma.ProjectWhereInput {
-  if (isProgressSuperAdmin(roles) || isProjectManager(roles)) return {};
-
-  const teamScopes = roles
-    .filter((role) => role.role === "TEAM_ADMIN" && role.team)
-    .map((role) => role.team);
-  const techScopes = roles
-    .filter((role) => role.role === "TECH_GROUP_ADMIN" && role.techGroup)
-    .map((role) => role.techGroup);
-  const OR: Prisma.ProjectWhereInput[] = [];
-  if (teamScopes.length > 0) OR.push({ team: { in: teamScopes } });
-  if (techScopes.length > 0) OR.push({ techGroup: { in: techScopes } });
-  if (userOpenId) {
-    OR.push(
-      { ownerOpenId: userOpenId },
-      { owners: { some: { openId: userOpenId } } },
-      { stages: { some: { ownerOpenId: userOpenId } } },
-      {
-        tasks: {
-          some: {
-            deletedAt: null,
-            assignees: { some: { openId: userOpenId } },
-          },
-        },
-      },
-      { tasks: { some: { deletedAt: null, assigneeOpenId: userOpenId } } },
-    );
-  }
-
-  return OR.length > 0 ? { OR } : { id: "__none__" };
+  void roles;
+  return userOpenId ? {} : { id: "__none__" };
 }
 
 export function progressTaskReadableWhere(
   roles: UserRoleRecord[],
   userOpenId?: string,
 ): Prisma.TaskWhereInput {
-  const notDeleted: Prisma.TaskWhereInput = { deletedAt: null };
-  if (isProgressSuperAdmin(roles) || isProjectManager(roles)) return notDeleted;
+  void roles;
+  return userOpenId ? { deletedAt: null } : { id: "__none__" };
+}
 
-  const teamScopes = roles
-    .filter((role) => role.role === "TEAM_ADMIN" && role.team)
-    .map((role) => role.team);
-  const techScopes = roles
-    .filter((role) => role.role === "TECH_GROUP_ADMIN" && role.techGroup)
-    .map((role) => role.techGroup);
-  const OR: Prisma.TaskWhereInput[] = [];
-  if (teamScopes.length > 0) OR.push({ team: { in: teamScopes } });
-  if (techScopes.length > 0) OR.push({ techGroup: { in: techScopes } });
-  if (userOpenId) {
-    OR.push(
+export function progressProjectMineWhere(userOpenId?: string): Prisma.ProjectWhereInput {
+  if (!userOpenId) return { id: "__none__" };
+  return {
+    OR: [
+      { ownerOpenId: userOpenId },
+      { owners: { some: { openId: userOpenId } } },
+      { participants: { some: { openId: userOpenId } } },
+      { stages: { some: { ownerOpenId: userOpenId } } },
+      {
+        tasks: {
+          some: {
+            deletedAt: null,
+            OR: [
+              { assigneeOpenId: userOpenId },
+              { assignees: { some: { openId: userOpenId } } },
+              { deletionRequests: { some: { requesterOpenId: userOpenId } } },
+            ],
+          },
+        },
+      },
+      { taskCreationRequests: { some: { requesterOpenId: userOpenId } } },
+    ],
+  };
+}
+
+export function progressTaskMineWhere(userOpenId?: string): Prisma.TaskWhereInput {
+  if (!userOpenId) return { id: "__none__" };
+  return {
+    deletedAt: null,
+    OR: [
       { assigneeOpenId: userOpenId },
       { assignees: { some: { openId: userOpenId } } },
+      { stage: { ownerOpenId: userOpenId } },
+      { deletionRequests: { some: { requesterOpenId: userOpenId } } },
       { project: { ownerOpenId: userOpenId } },
       { project: { owners: { some: { openId: userOpenId } } } },
-      { stage: { ownerOpenId: userOpenId } },
-    );
-  }
+      { creationRequests: { some: { requesterOpenId: userOpenId } } },
+    ],
+  };
+}
 
-  return OR.length > 0 ? { AND: [notDeleted, { OR }] } : { id: "__none__" };
+export function canOperateProject(
+  roles: UserRoleRecord[],
+  scope: ProgressScope,
+  ownerOpenIds: string | string[],
+  participantOpenIds: string | string[],
+  userOpenId?: string,
+): boolean {
+  if (canManageProject(roles, scope, ownerOpenIds, userOpenId)) return true;
+  return isAssignee(userOpenId, participantOpenIds);
+}
+
+export function canRequestTaskCreation({
+  roles,
+  scope,
+  ownerOpenIds,
+  participantOpenIds,
+  stageOwnerOpenIds,
+  taskAssigneeOpenIds,
+  userOpenId,
+}: {
+  roles: UserRoleRecord[];
+  scope: ProgressScope;
+  ownerOpenIds: string | string[];
+  participantOpenIds: string | string[];
+  stageOwnerOpenIds: string | string[];
+  taskAssigneeOpenIds: string | string[];
+  userOpenId?: string;
+}): boolean {
+  if (!userOpenId) return false;
+  if (canManageProject(roles, scope, ownerOpenIds, userOpenId)) return true;
+  if (isAssignee(userOpenId, participantOpenIds)) return true;
+  if (isAssignee(userOpenId, stageOwnerOpenIds)) return true;
+  if (isAssignee(userOpenId, taskAssigneeOpenIds)) return true;
+  return false;
+}
+
+export function canRequestTaskDeletion({
+  roles,
+  scope,
+  ownerOpenIds,
+  participantOpenIds,
+  stageOwnerOpenId,
+  taskAssigneeOpenIds,
+  userOpenId,
+}: {
+  roles: UserRoleRecord[];
+  scope: ProgressScope;
+  ownerOpenIds: string | string[];
+  participantOpenIds: string | string[];
+  stageOwnerOpenId?: string | null;
+  taskAssigneeOpenIds: string | string[];
+  userOpenId?: string;
+}): boolean {
+  if (!userOpenId) return false;
+  if (canManageProject(roles, scope, ownerOpenIds, userOpenId)) return true;
+  if (isAssignee(userOpenId, participantOpenIds)) return true;
+  if (stageOwnerOpenId && userOpenId === stageOwnerOpenId) return true;
+  if (isAssignee(userOpenId, taskAssigneeOpenIds)) return true;
+  return false;
 }
 
 export function canUpdateProjectLifecycle(

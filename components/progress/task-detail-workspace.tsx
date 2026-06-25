@@ -161,6 +161,7 @@ type Props = {
   isAssignee: boolean;
   canApprove: boolean;
   canManage: boolean;
+  canRequestDeletion: boolean;
   isSuperAdmin?: boolean;
 };
 
@@ -192,6 +193,7 @@ export function TaskDetailWorkspace({
   isAssignee,
   canApprove,
   canManage,
+  canRequestDeletion,
   isSuperAdmin = false,
 }: Props) {
   const projectHref = projectStageHref(task.projectId, task.stageId);
@@ -219,6 +221,7 @@ export function TaskDetailWorkspace({
         isAssignee={isAssignee}
         canManage={canManage}
         canEdit={canEdit}
+        canRequestDeletion={canRequestDeletion}
         canRemind={
           canManage &&
           isProjectActive &&
@@ -310,6 +313,7 @@ function TaskOverview({
   isAssignee,
   canManage,
   canEdit,
+  canRequestDeletion,
   canRemind,
   projectHref,
   onOpenEdit,
@@ -318,6 +322,7 @@ function TaskOverview({
   isAssignee: boolean;
   canManage: boolean;
   canEdit: boolean;
+  canRequestDeletion: boolean;
   canRemind: boolean;
   projectHref: string;
   onOpenEdit: () => void;
@@ -405,12 +410,12 @@ function TaskOverview({
           {canArchive && <ArchiveTaskButton taskId={task.id} />}
           {canManage ? (
             <TaskDirectDeleteButton taskId={task.id} redirectTo={projectHref} />
-          ) : (
+          ) : canRequestDeletion ? (
             <TaskDeletionRequestButton
               taskId={task.id}
               disabled={!!pendingDeletionRequest}
             />
-          )}
+          ) : null}
         </div>
       </CardContent>
     </Card>
@@ -1209,12 +1214,15 @@ function getActivityType(action: string): ActivityFilter {
     action === "task.updated" ||
     action === "task.archived" ||
     action === "task.deleted" ||
-    action === "task.restarted"
+    action === "task.restarted" ||
+    action === "task.creation_approved"
   ) return "STATUS";
   if (action === "task.delivery_submitted") return "DELIVERY";
   if (
     action === "task.approved" ||
     action === "task.rejected" ||
+    action === "task.creation_requested" ||
+    action === "task.creation_rejected" ||
     action === "task.delete_requested" ||
     action === "task.delete_rejected"
   ) return "REVIEW";
@@ -1235,6 +1243,9 @@ function activityLabel(action: string): string {
     "task.weekly_report": "提交了任务周报",
     "task.risk_synced": "同步了任务风险",
     "task.archived": "归档了任务",
+    "task.creation_requested": "申请创建任务",
+    "task.creation_approved": "通过了任务创建申请",
+    "task.creation_rejected": "驳回了任务创建申请",
     "task.delete_requested": "申请删除任务",
     "task.delete_rejected": "驳回了删除申请",
     "task.deleted": "删除了任务",

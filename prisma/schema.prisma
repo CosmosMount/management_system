@@ -47,6 +47,12 @@ enum TaskDeletionRequestStatus {
   REJECTED
 }
 
+enum TaskCreationRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 enum TaskCategory {
   TEST
   ASSEMBLY
@@ -194,8 +200,10 @@ model Project {
   ownerName     String
   allowOwnerSelfApproval Boolean     @default(false)
   owners        ProjectOwner[]
+  participants  ProjectParticipant[]
   stages        ProjectStage[]
   tasks         Task[]
+  taskCreationRequests TaskCreationRequest[]
   activityLogs  ProgressActivityLog[]
   createdAt     DateTime            @default(now())
   updatedAt     DateTime            @updatedAt
@@ -205,6 +213,18 @@ model Project {
 }
 
 model ProjectOwner {
+  id        String   @id @default(uuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  openId    String
+  name      String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@unique([projectId, openId])
+}
+
+model ProjectParticipant {
   id        String   @id @default(uuid())
   projectId String
   project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
@@ -267,6 +287,7 @@ model Task {
   activityLogs    ProgressActivityLog[]
   acceptanceChecklistItems TaskAcceptanceChecklistItem[]
   deletionRequests TaskDeletionRequest[]
+  creationRequests TaskCreationRequest[]
   createdAt       DateTime            @default(now())
   updatedAt       DateTime            @updatedAt
   archivedAt      DateTime?
@@ -295,6 +316,28 @@ model TaskDeletionRequest {
   @@index([taskId, status])
   @@index([requesterOpenId])
   @@unique([taskId, pendingKey])
+}
+
+model TaskCreationRequest {
+  id              String                    @id @default(uuid())
+  projectId       String
+  project         Project                   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  requesterOpenId String
+  requesterName   String
+  draftPayload    String
+  status          TaskCreationRequestStatus @default(PENDING)
+  reviewerOpenId  String                    @default("")
+  reviewerName    String                    @default("")
+  reviewComment   String                    @default("")
+  reviewedAt      DateTime?
+  createdTaskId   String?
+  createdTask     Task?                     @relation(fields: [createdTaskId], references: [id], onDelete: SetNull)
+  createdAt       DateTime                  @default(now())
+  updatedAt       DateTime                  @updatedAt
+
+  @@index([projectId, status])
+  @@index([requesterOpenId])
+  @@index([createdTaskId])
 }
 
 model TaskAssignee {

@@ -12,6 +12,7 @@ import { useEffect, useState } from "react";
 import { AlertCircle, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 import { createTask } from "@/app/actions/progress/createTask";
+import { requestTaskCreation } from "@/app/actions/progress/requestTaskCreation";
 import { updateTask } from "@/app/actions/progress/updateTask";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -71,8 +72,10 @@ type Props = {
     acceptanceChecklistLocked?: boolean;
   };
   redirectOnCreate?: boolean;
+  createVariant?: "direct" | "request";
   submitLabel?: string;
   onCreated?: (taskId: string) => void;
+  onSubmitted?: () => void;
   onSaved?: () => void;
 };
 
@@ -85,8 +88,10 @@ export function TaskForm({
   mode = "create",
   initialTask,
   redirectOnCreate = true,
+  createVariant = "direct",
   submitLabel = "创建任务",
   onCreated,
+  onSubmitted,
   onSaved,
 }: Props) {
   const router = useRouter();
@@ -177,12 +182,18 @@ export function TaskForm({
         toast.success("任务已更新");
         onSaved?.();
       } else {
-        const task = await createTask(data);
-        toast.success("任务已创建");
-        if (redirectOnCreate) {
-          router.push(`${routes.progress.task(task.id)}`);
+        if (createVariant === "request") {
+          await requestTaskCreation(data);
+          toast.success("任务申请已提交");
+          onSubmitted?.();
+        } else {
+          const task = await createTask(data);
+          toast.success("任务已创建");
+          if (redirectOnCreate) {
+            router.push(`${routes.progress.task(task.id)}`);
+          }
+          onCreated?.(task.id);
         }
-        onCreated?.(task.id);
       }
       router.refresh();
     } catch (err) {

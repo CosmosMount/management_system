@@ -36,10 +36,13 @@ export async function createProject(input: CreateProjectInput) {
   if (ownerOpenIds.length === 0) {
     throw new Error("请选择项目负责人");
   }
+  const participantOpenIds = [
+    ...new Set((parsed.participantOpenIds ?? []).filter(Boolean)),
+  ].filter((openId) => !ownerOpenIds.includes(openId));
 
-  const [owners, stageOwners] = await Promise.all([
+  const [projectUsers, stageOwners] = await Promise.all([
     prisma.user.findMany({
-      where: { openId: { in: ownerOpenIds } },
+      where: { openId: { in: [...ownerOpenIds, ...participantOpenIds] } },
       select: { openId: true, name: true },
     }),
     prisma.user.findMany({
@@ -47,13 +50,22 @@ export async function createProject(input: CreateProjectInput) {
       select: { openId: true, name: true },
     }),
   ]);
-  const ownerByOpenId = new Map(owners.map((owner) => [owner.openId, owner]));
+  const ownerByOpenId = new Map(projectUsers.map((owner) => [owner.openId, owner]));
   const missingOwner = ownerOpenIds.find((openId) => !ownerByOpenId.has(openId));
   if (missingOwner) throw new Error("项目负责人不存在，请先同步飞书通讯录");
   const orderedOwners = ownerOpenIds.map((openId) => {
     const owner = ownerByOpenId.get(openId);
     if (!owner) throw new Error("项目负责人不存在，请先同步飞书通讯录");
     return owner;
+  });
+  const missingParticipant = participantOpenIds.find(
+    (openId) => !ownerByOpenId.has(openId),
+  );
+  if (missingParticipant) throw new Error("参与人员不存在，请先同步飞书通讯录");
+  const orderedParticipants = participantOpenIds.map((openId) => {
+    const participant = ownerByOpenId.get(openId);
+    if (!participant) throw new Error("参与人员不存在，请先同步飞书通讯录");
+    return participant;
   });
   const primaryOwner = orderedOwners[0];
   if (!primaryOwner) throw new Error("请选择项目负责人");
@@ -84,6 +96,13 @@ export async function createProject(input: CreateProjectInput) {
             sortOrder: index,
           })),
         },
+        participants: {
+          create: orderedParticipants.map((participant, index) => ({
+            openId: participant.openId,
+            name: participant.name,
+            sortOrder: index,
+          })),
+        },
         stages: {
           create: parsed.stages.map((s, i) => ({
             name: s.name,
@@ -108,6 +127,12 @@ export async function createProject(input: CreateProjectInput) {
           name: created.name,
           ownerOpenIds: orderedOwners.map((owner) => owner.openId),
           owners: orderedOwners.map((owner) => owner.name),
+          participantOpenIds: orderedParticipants.map(
+            (participant) => participant.openId,
+          ),
+          participants: orderedParticipants.map(
+            (participant) => participant.name,
+          ),
           stageCount: created.stages.length,
         }),
       },
@@ -126,6 +151,12 @@ export async function createProject(input: CreateProjectInput) {
       techGroup: project.techGroup,
       ownerOpenIds: orderedOwners.map((owner) => owner.openId),
       ownerNames: orderedOwners.map((owner) => owner.name).join("、"),
+      participantOpenIds: orderedParticipants.map(
+        (participant) => participant.openId,
+      ),
+      participantNames: orderedParticipants
+        .map((participant) => participant.name)
+        .join("、"),
     },
     await getNotificationContext(),
   );

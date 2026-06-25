@@ -10,6 +10,7 @@ import { auth } from "@/lib/auth";
 import { getUserRoles, isSuperAdmin } from "@/lib/permissions";
 import {
   canManageProject,
+  canRequestTaskCreation,
   canViewProject,
   canApproveStage as canApproveStagePermission,
   canSubmitStage as canSubmitStagePermission,
@@ -24,6 +25,14 @@ import {
   getProjectOwnerNames,
   getProjectOwnerOpenIds,
 } from "@/lib/progress-project-owners";
+import {
+  getProjectParticipantNames,
+  getProjectParticipantOpenIds,
+} from "@/lib/progress-project-participants";
+import {
+  parseTaskCreationDraft,
+  formatTaskCreationDraftSummary,
+} from "@/lib/progress-task-creation-requests";
 import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { getRecentActivityCutoff } from "@/lib/progress-activity-window";
 import { prisma } from "@/lib/prisma";
@@ -45,6 +54,7 @@ export default async function ProjectDetailPage({ params }: Props) {
     },
     include: {
       owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       stages: {
         orderBy: { sortOrder: "asc" },
         include: {
@@ -61,9 +71,17 @@ export default async function ProjectDetailPage({ params }: Props) {
           stage: { select: { name: true } },
           assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
           deletionRequests: {
-            where: { status: "PENDING" },
             orderBy: { createdAt: "desc" },
-            take: 1,
+            select: {
+              id: true,
+              status: true,
+              requesterOpenId: true,
+              requesterName: true,
+              createdAt: true,
+            },
+          },
+          creationRequests: {
+            select: { requesterOpenId: true },
           },
           _count: { select: { submissions: true } },
         },
@@ -79,6 +97,7 @@ export default async function ProjectDetailPage({ params }: Props) {
 
   const scope = { team: project.team, techGroup: project.techGroup };
   const projectOwnerOpenIds = getProjectOwnerOpenIds(project);
+  const projectParticipantOpenIds = getProjectParticipantOpenIds(project);
   const stageOwnerOpenIds = project.stages
     .map((stage) => stage.ownerOpenId)
     .filter(Boolean);
@@ -103,6 +122,17 @@ export default async function ProjectDetailPage({ params }: Props) {
     projectOwnerOpenIds,
     userOpenId,
   );
+  const canRequestTask =
+    !canManage &&
+    canRequestTaskCreation({
+      roles,
+      scope,
+      ownerOpenIds: projectOwnerOpenIds,
+      participantOpenIds: projectParticipantOpenIds,
+      stageOwnerOpenIds,
+      taskAssigneeOpenIds,
+      userOpenId,
+    });
   const canUpdateLifecycle = canUpdateProjectLifecycle(
     roles,
     scope,
@@ -111,88 +141,29 @@ export default async function ProjectDetailPage({ params }: Props) {
   );
   const admin = userOpenId ? await isSuperAdmin(userOpenId) : false;
 
-  const ownedStageIds = new Set(
-    project.stages
-      .filter((stage) => stage.ownerOpenId === userOpenId)
-      .map((stage) => stage.id),
-  );
-  const visibleTasks = canManage
-    ? project.tasks
-    : project.tasks.filter(
-        (task) =>
-          getTaskAssigneeOpenIds(task).includes(userOpenId ?? "") ||
-          (!!task.stageId && ownedStageIds.has(task.stageId)),
-      );
-  const visibleTaskIds = new Set(visibleTasks.map((task) => task.id));
-  const visibleStageIds = new Set([
-    ...ownedStageIds,
-    ...visibleTasks
-      .map((task) => task.stageId)
-      .filter((stageId): stageId is string => !!stageId),
-  ]);
-  const visibleStages = canManage
-    ? project.stages
-    : project.stages
-        .filter((stage) => visibleStageIds.has(stage.id))
-        .map((stage) =>
-          ownedStageIds.has(stage.id)
-            ? stage
-            : {
-                ...stage,
-                evidenceUrl: "",
-                currentSubmissionId: null,
-                submissions: [],
-              },
-        );
-  const visibleActivityLogs = project.activityLogs.filter((log) => {
-    if (canManage) return true;
-    if (log.taskId && visibleTaskIds.has(log.taskId)) return true;
-    const payload = parseActivityPayload(log.payload);
-    const stageId = getPayloadString(payload.stageId);
-    const fromStageId = getPayloadString(payload.fromStageId);
-    return (
-      (!!stageId && ownedStageIds.has(stageId)) ||
-      (!!fromStageId && ownedStageIds.has(fromStageId))
-    );
-  });
-  const limitedActivityFilters = [
-    ...(visibleTaskIds.size > 0
-      ? [{ taskId: { in: [...visibleTaskIds] } }]
-      : []),
-    ...[...ownedStageIds].flatMap((stageId) => [
-      {
-        projectId: project.id,
-        payload: { contains: `"stageId":"${stageId}"` },
-      },
-      {
-        projectId: project.id,
-        payload: { contains: `"fromStageId":"${stageId}"` },
-      },
-    ]),
-  ];
-  const activityLogWhere = canManage
-    ? { projectId: project.id }
-    : limitedActivityFilters.length > 0
-      ? { OR: limitedActivityFilters }
-      : { id: "__none__" };
-
-  const [users, acceptanceChecklistTemplates, activityLogCount] =
+  const [
+    users,
+    acceptanceChecklistTemplates,
+    activityLogCount,
+    taskCreationRequests,
+  ] =
     await Promise.all([
-      canManage
+      canManage || canRequestTask
         ? prisma.user.findMany({
             orderBy: { name: "asc" },
             select: { openId: true, name: true, avatar: true },
           })
         : Promise.resolve([]),
-      canManage
+      canManage || canRequestTask
         ? prisma.acceptanceChecklistTemplate.findMany({
             orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
             select: { id: true, content: true },
           })
         : Promise.resolve([]),
       prisma.progressActivityLog.count({
-        where: activityLogWhere,
+        where: { projectId: project.id },
       }),
+      getRelevantTaskCreationRequests(project.id, canManage, userOpenId),
     ]);
 
   const projectView: ProjectDetailView = {
@@ -206,12 +177,14 @@ export default async function ProjectDetailPage({ params }: Props) {
     ownerName: project.ownerName,
     ownerOpenIds: projectOwnerOpenIds,
     ownerNames: getProjectOwnerNames(project),
+    participantOpenIds: projectParticipantOpenIds,
+    participantNames: getProjectParticipantNames(project),
     allowOwnerSelfApproval: project.allowOwnerSelfApproval,
     createdAt: project.createdAt.toISOString(),
     updatedAt: project.updatedAt.toISOString(),
     completedAt: project.completedAt?.toISOString() ?? null,
     canceledAt: project.canceledAt?.toISOString() ?? null,
-    stages: visibleStages.map((stage) => ({
+    stages: project.stages.map((stage) => ({
       id: stage.id,
       name: stage.name,
       goal: stage.goal,
@@ -247,32 +220,45 @@ export default async function ProjectDetailPage({ params }: Props) {
         })),
       })),
     })),
-    tasks: visibleTasks.map((task) => ({
-      id: task.id,
-      title: task.title,
-      goal: task.goal,
-      category: task.category,
-      urgency: task.urgency,
-      importance: task.importance,
-      status: task.status,
-      isOverdue: task.isOverdue,
-      assigneeNames: getTaskAssigneeNames(task),
-      assigneeOpenIds: getTaskAssigneeOpenIds(task),
-      stageId: task.stageId,
-      stageName: task.stage?.name ?? null,
-      metrics: task.metrics,
-      dueAt: task.dueAt.toISOString(),
-      riskNote: task.riskNote,
-      submissionsCount: task._count.submissions,
-      pendingDeletionRequest: task.deletionRequests[0]
-        ? {
-            id: task.deletionRequests[0].id,
-            requesterName: task.deletionRequests[0].requesterName,
-            createdAt: task.deletionRequests[0].createdAt.toISOString(),
-          }
-        : null,
-    })),
-    activityLogs: visibleActivityLogs.map((log) => ({
+    tasks: project.tasks.map((task) => {
+      const assigneeOpenIds = getTaskAssigneeOpenIds(task);
+      const pendingDeletionRequest = task.deletionRequests.find(
+        (request) => request.status === "PENDING",
+      );
+      return {
+        id: task.id,
+        title: task.title,
+        goal: task.goal,
+        category: task.category,
+        urgency: task.urgency,
+        importance: task.importance,
+        status: task.status,
+        isOverdue: task.isOverdue,
+        assigneeNames: getTaskAssigneeNames(task),
+        assigneeOpenIds,
+        relatedOpenIds: [
+          ...new Set([
+            ...assigneeOpenIds,
+            ...task.deletionRequests.map((request) => request.requesterOpenId),
+            ...task.creationRequests.map((request) => request.requesterOpenId),
+          ]),
+        ],
+        stageId: task.stageId,
+        stageName: task.stage?.name ?? null,
+        metrics: task.metrics,
+        dueAt: task.dueAt.toISOString(),
+        riskNote: task.riskNote,
+        submissionsCount: task._count.submissions,
+        pendingDeletionRequest: pendingDeletionRequest
+          ? {
+              id: pendingDeletionRequest.id,
+              requesterName: pendingDeletionRequest.requesterName,
+              createdAt: pendingDeletionRequest.createdAt.toISOString(),
+            }
+          : null,
+      };
+    }),
+    activityLogs: project.activityLogs.map((log) => ({
       id: log.id,
       action: log.action,
       taskId: log.taskId,
@@ -280,6 +266,33 @@ export default async function ProjectDetailPage({ params }: Props) {
       payload: log.payload,
       createdAt: log.createdAt.toISOString(),
     })),
+    taskCreationRequests: taskCreationRequests.map((request) => {
+      const draft = parseTaskCreationDraft(request.draftPayload);
+      return {
+        id: request.id,
+        requesterOpenId: request.requesterOpenId,
+        requesterName: request.requesterName,
+        status: request.status,
+        reviewerName: request.reviewerName,
+        reviewComment: request.reviewComment,
+        reviewedAt: request.reviewedAt?.toISOString() ?? null,
+        createdTaskId: request.createdTaskId || null,
+        createdAt: request.createdAt.toISOString(),
+        draft: draft
+          ? {
+              title: draft.title,
+              stageName: draft.stageName,
+              assigneeNames:
+                draft.assigneeNames.length > 0
+                  ? draft.assigneeNames.join("、")
+                  : draft.assigneeOpenIds.join("、"),
+              dueAt: draft.dueAt,
+              metrics: draft.metrics,
+              summary: formatTaskCreationDraftSummary(draft),
+            }
+          : null,
+      };
+    }),
     hasMoreActivityLogs: activityLogCount > project.activityLogs.length,
   };
 
@@ -298,6 +311,7 @@ export default async function ProjectDetailPage({ params }: Props) {
           users={users}
           acceptanceChecklistTemplates={acceptanceChecklistTemplates}
           canManage={canManage}
+          canRequestTaskCreation={canRequestTask}
           canUpdateLifecycle={canUpdateLifecycle}
           isSuperAdmin={admin}
           userOpenId={userOpenId}
@@ -307,17 +321,29 @@ export default async function ProjectDetailPage({ params }: Props) {
   );
 }
 
-function parseActivityPayload(payload: string): Record<string, unknown> {
-  try {
-    const parsed = JSON.parse(payload) as unknown;
-    return typeof parsed === "object" && parsed !== null
-      ? (parsed as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
+async function getRelevantTaskCreationRequests(
+  projectId: string,
+  canManage: boolean,
+  userOpenId?: string,
+) {
+  if (canManage) {
+    const [pending, recentReviewed] = await Promise.all([
+      prisma.taskCreationRequest.findMany({
+        where: { projectId, status: "PENDING" },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      }),
+      prisma.taskCreationRequest.findMany({
+        where: { projectId, status: { not: "PENDING" } },
+        orderBy: [{ reviewedAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+        take: 30,
+      }),
+    ]);
+    return [...pending, ...recentReviewed];
   }
-}
 
-function getPayloadString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value : null;
+  if (!userOpenId) return [];
+  return prisma.taskCreationRequest.findMany({
+    where: { projectId, requesterOpenId: userOpenId },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+  });
 }

@@ -17,6 +17,8 @@ export type ProgressNotifyPayload =
       techGroup: string;
       ownerOpenIds: string[];
       ownerNames: string;
+      participantOpenIds?: string[];
+      participantNames?: string;
     }
   | {
       type: "project_started" | "project_completed" | "project_canceled";
@@ -39,6 +41,8 @@ export type ProgressNotifyPayload =
       oldTechGroup: string;
       ownerOpenIds: string[];
       oldOwnerOpenIds: string[];
+      participantOpenIds?: string[];
+      oldParticipantOpenIds?: string[];
     }
   | {
       type: "project_stage_rollback";
@@ -148,6 +152,41 @@ export type ProgressNotifyPayload =
       comment: string;
       requesterOpenId: string;
       assigneeOpenIds: string[];
+    }
+  | {
+      type: "task_creation_requested";
+      requestId: string;
+      projectId: string;
+      projectName: string;
+      taskTitle: string;
+      requesterName: string;
+      team: string;
+      techGroup: string;
+      projectOwnerOpenIds: string[];
+    }
+  | {
+      type: "task_creation_approved";
+      requestId: string;
+      taskId: string;
+      projectId: string;
+      projectName: string;
+      taskTitle: string;
+      reviewerName: string;
+      requesterOpenId: string;
+      assigneeOpenIds: string[];
+      team: string;
+      techGroup: string;
+      projectOwnerOpenIds: string[];
+    }
+  | {
+      type: "task_creation_rejected";
+      requestId: string;
+      projectId: string;
+      projectName: string;
+      taskTitle: string;
+      reviewerName: string;
+      requesterOpenId: string;
+      comment: string;
     }
   | {
       type: "task_pending_acceptance";
@@ -360,7 +399,7 @@ export async function sendProgressNotification(
         buildAppUrl(`${routes.progress.project(payload.projectId)}`, appOrigin),
       );
       await notifyOpenIdsAndRoles(
-        payload.ownerOpenIds,
+        [...payload.ownerOpenIds, ...(payload.participantOpenIds ?? [])],
         ["TEAM_ADMIN", "TECH_GROUP_ADMIN", "PROJECT_MANAGER", "SUPER_ADMIN"],
         { team: payload.team, techGroup: payload.techGroup },
         card,
@@ -398,7 +437,12 @@ export async function sendProgressNotification(
         buildAppUrl(`${routes.progress.project(payload.projectId)}`, appOrigin),
       );
       await notifyOpenIdsAndRoleScopes(
-        [...payload.ownerOpenIds, ...payload.oldOwnerOpenIds],
+        [
+          ...payload.ownerOpenIds,
+          ...payload.oldOwnerOpenIds,
+          ...(payload.participantOpenIds ?? []),
+          ...(payload.oldParticipantOpenIds ?? []),
+        ],
         ["TEAM_ADMIN", "TECH_GROUP_ADMIN", "PROJECT_MANAGER", "SUPER_ADMIN"],
         [
           { team: payload.team, techGroup: payload.techGroup },
@@ -544,6 +588,50 @@ export async function sendProgressNotification(
         [payload.requesterOpenId, ...payload.assigneeOpenIds],
         card,
       );
+      break;
+    }
+    case "task_creation_requested": {
+      const card = buildCard(
+        "新任务申请待审核",
+        `**项目**：${payload.projectName}\n**任务**：${payload.taskTitle}\n**申请人**：${payload.requesterName}`,
+        buildAppUrl(`${routes.progress.project(payload.projectId)}`, appOrigin),
+        "orange",
+      );
+      await notifyOpenIdsAndRoles(
+        payload.projectOwnerOpenIds,
+        ["TEAM_ADMIN", "TECH_GROUP_ADMIN", "PROJECT_MANAGER", "SUPER_ADMIN"],
+        { team: payload.team, techGroup: payload.techGroup },
+        card,
+      );
+      break;
+    }
+    case "task_creation_approved": {
+      const card = buildCard(
+        "任务申请已通过",
+        `**项目**：${payload.projectName}\n**任务**：${payload.taskTitle}\n**审核人**：${payload.reviewerName}`,
+        buildAppUrl(`${routes.progress.task(payload.taskId)}`, appOrigin),
+        "green",
+      );
+      await notifyOpenIdsAndRoles(
+        [
+          payload.requesterOpenId,
+          ...payload.assigneeOpenIds,
+          ...payload.projectOwnerOpenIds,
+        ],
+        ["TEAM_ADMIN", "TECH_GROUP_ADMIN", "PROJECT_MANAGER", "SUPER_ADMIN"],
+        { team: payload.team, techGroup: payload.techGroup },
+        card,
+      );
+      break;
+    }
+    case "task_creation_rejected": {
+      const card = buildCard(
+        "任务申请已驳回",
+        `**项目**：${payload.projectName}\n**任务**：${payload.taskTitle}\n**审核人**：${payload.reviewerName}\n**审核意见**：${payload.comment}`,
+        buildAppUrl(`${routes.progress.project(payload.projectId)}`, appOrigin),
+        "red",
+      );
+      await sendDirectCard(payload.requesterOpenId, card);
       break;
     }
     case "task_pending_acceptance": {

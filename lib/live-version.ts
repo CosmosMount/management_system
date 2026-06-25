@@ -6,8 +6,9 @@ import {
   procurementSummaryWhere,
 } from "@/lib/procurement-visibility";
 import {
-  canManageProject,
+  progressProjectMineWhere,
   progressProjectReadableWhere,
+  progressTaskMineWhere,
   progressTaskReadableWhere,
 } from "@/lib/permissions-progress";
 
@@ -30,6 +31,7 @@ export type LiveVersionContext = {
   resourceId?: string;
   userOpenId: string;
   isSuperAdmin: boolean;
+  mine?: boolean;
 };
 
 type VersionPart = string | number | Date | null | undefined;
@@ -105,6 +107,16 @@ async function taskDeletionRequestVersion(
   return encodePart("taskDeletionRequests", aggregate._max.updatedAt, count);
 }
 
+async function taskCreationRequestVersion(
+  where?: Prisma.TaskCreationRequestWhereInput,
+): Promise<string> {
+  const [aggregate, count] = await Promise.all([
+    prisma.taskCreationRequest.aggregate({ where, _max: { updatedAt: true } }),
+    prisma.taskCreationRequest.count({ where }),
+  ]);
+  return encodePart("taskCreationRequests", aggregate._max.updatedAt, count);
+}
+
 async function activityVersion(
   where?: Prisma.ProgressActivityLogWhereInput,
 ): Promise<string> {
@@ -159,72 +171,32 @@ async function visibleProjectTaskCountVersion({
   projectIds,
   roles,
   userOpenId,
+  mine,
 }: {
   projectIds: string[];
   roles: Awaited<ReturnType<typeof getProgressUserRoles>>;
   userOpenId: string;
+  mine?: boolean;
 }): Promise<string> {
   if (projectIds.length === 0) return encodePart("projectTaskCount", "", 0);
 
-  const projects = await prisma.project.findMany({
-    where: { id: { in: projectIds } },
-    include: {
-      owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
-    },
-  });
-  const managedProjectIds: string[] = [];
-  const limitedProjectIds: string[] = [];
   const countParts: string[] = [];
-  for (const project of projects) {
-    const ownerOpenIds =
-      project.owners.length > 0
-        ? project.owners.map((owner) => owner.openId)
-        : [project.ownerOpenId];
-    if (
-      canManageProject(
-        roles,
-        { team: project.team, techGroup: project.techGroup },
-        ownerOpenIds,
-        userOpenId,
-      )
-    ) {
-      managedProjectIds.push(project.id);
-    } else {
-      limitedProjectIds.push(project.id);
-    }
-  }
-
-  if (managedProjectIds.length > 0) {
-    const grouped = await prisma.task.groupBy({
-      by: ["projectId"],
-      where: { projectId: { in: managedProjectIds }, deletedAt: null },
-      _count: { _all: true },
-    });
-    const managedCounts = new Map(
-      grouped.map((row) => [row.projectId, row._count._all]),
-    );
-    for (const projectId of managedProjectIds) {
-      countParts.push(`${projectId}:${managedCounts.get(projectId) ?? 0}`);
-    }
-  }
-
-  if (limitedProjectIds.length > 0) {
-    const grouped = await prisma.task.groupBy({
-      by: ["projectId"],
-      where: {
-        AND: [
-          progressTaskReadableWhere(roles, userOpenId),
-          { projectId: { in: limitedProjectIds } },
-        ],
-      },
-      _count: { _all: true },
-    });
-    const limitedCounts = new Map(
-      grouped.map((row) => [row.projectId, row._count._all]),
-    );
-    for (const projectId of limitedProjectIds) {
-      countParts.push(`${projectId}:${limitedCounts.get(projectId) ?? 0}`);
-    }
+  const grouped = await prisma.task.groupBy({
+    by: ["projectId"],
+    where: {
+      AND: [
+        progressTaskReadableWhere(roles, userOpenId),
+        mine ? progressTaskMineWhere(userOpenId) : {},
+        { projectId: { in: projectIds } },
+      ],
+    },
+    _count: { _all: true },
+  });
+  const groupedCounts = new Map(
+    grouped.map((row) => [row.projectId, row._count._all]),
+  );
+  for (const projectId of projectIds) {
+    countParts.push(`${projectId}:${groupedCounts.get(projectId) ?? 0}`);
   }
 
   countParts.sort();
@@ -239,6 +211,16 @@ async function projectOwnerVersion(
     prisma.projectOwner.count({ where }),
   ]);
   return encodePart("projectOwners", aggregate._max.createdAt, count);
+}
+
+async function projectParticipantVersion(
+  where?: Prisma.ProjectParticipantWhereInput,
+): Promise<string> {
+  const [aggregate, count] = await Promise.all([
+    prisma.projectParticipant.aggregate({ where, _max: { createdAt: true } }),
+    prisma.projectParticipant.count({ where }),
+  ]);
+  return encodePart("projectParticipants", aggregate._max.createdAt, count);
 }
 
 async function projectIdList(where: Prisma.ProjectWhereInput): Promise<string[]> {
@@ -311,29 +293,39 @@ async function getProgressUserRoles(userOpenId: string) {
 
 async function getProgressListVersion({
   userOpenId,
-}: Pick<LiveVersionContext, "userOpenId">): Promise<string> {
+  mine,
+}: Pick<LiveVersionContext, "userOpenId" | "mine">): Promise<string> {
   const roles = await getProgressUserRoles(userOpenId);
   const projectWhere: Prisma.ProjectWhereInput = {
     AND: [
       progressProjectReadableWhere(roles, userOpenId),
+      mine ? progressProjectMineWhere(userOpenId) : {},
       { status: { notIn: ["COMPLETED", "CANCELED"] } },
     ],
   };
   const projectIds = await projectIdList(projectWhere);
   const parts = await Promise.all([
     projectUpdatedAtVersion("projects", projectWhere),
-    visibleProjectTaskCountVersion({ projectIds, roles, userOpenId }),
+    visibleProjectTaskCountVersion({ projectIds, roles, userOpenId, mine }),
+    projectParticipantVersion(
+      projectIds.length > 0 ? { projectId: { in: projectIds } } : { id: "__none__" },
+    ),
+    taskCreationRequestVersion(
+      projectIds.length > 0 ? { projectId: { in: projectIds } } : { id: "__none__" },
+    ),
   ]);
   return encodeVersion(parts);
 }
 
 async function getProgressBoardVersion({
   userOpenId,
-}: Pick<LiveVersionContext, "userOpenId">): Promise<string> {
+  mine,
+}: Pick<LiveVersionContext, "userOpenId" | "mine">): Promise<string> {
   const roles = await getProgressUserRoles(userOpenId);
   const taskWhere: Prisma.TaskWhereInput = {
     AND: [
       progressTaskReadableWhere(roles, userOpenId),
+      mine ? progressTaskMineWhere(userOpenId) : {},
       { status: { not: "ARCHIVED" } },
     ],
   };
@@ -362,23 +354,32 @@ async function getProgressBoardVersion({
     projectStageVersion(
       stageIds.length > 0 ? { id: { in: stageIds } } : { id: "__none__" },
     ),
+    projectParticipantVersion(
+      projectIds.length > 0 ? { projectId: { in: projectIds } } : { id: "__none__" },
+    ),
+    taskCreationRequestVersion(
+      projectIds.length > 0 ? { projectId: { in: projectIds } } : { id: "__none__" },
+    ),
   ]);
   return encodeVersion(parts);
 }
 
 async function getProgressArchiveVersion({
   userOpenId,
-}: Pick<LiveVersionContext, "userOpenId">): Promise<string> {
+  mine,
+}: Pick<LiveVersionContext, "userOpenId" | "mine">): Promise<string> {
   const roles = await getProgressUserRoles(userOpenId);
   const projectWhere: Prisma.ProjectWhereInput = {
     AND: [
       progressProjectReadableWhere(roles, userOpenId),
+      mine ? progressProjectMineWhere(userOpenId) : {},
       { status: { in: ["COMPLETED", "CANCELED"] } },
     ],
   };
   const taskWhere: Prisma.TaskWhereInput = {
     AND: [
       progressTaskReadableWhere(roles, userOpenId),
+      mine ? progressTaskMineWhere(userOpenId) : {},
       { status: "ARCHIVED" },
     ],
   };
@@ -400,6 +401,11 @@ async function getProgressArchiveVersion({
       "archivedTaskProjects",
       archivedTaskProjectIds.length > 0
         ? { id: { in: archivedTaskProjectIds } }
+        : { id: "__none__" },
+    ),
+    projectParticipantVersion(
+      archivedTaskProjectIds.length > 0
+        ? { projectId: { in: archivedTaskProjectIds } }
         : { id: "__none__" },
     ),
   ]);
@@ -429,49 +435,16 @@ async function getProgressProjectVersion(
   });
   if (!project) return `missing:progress-project:${projectId}`;
 
-  const projectOwnerOpenIds =
-    project.owners.length > 0
-      ? project.owners.map((owner) => owner.openId)
-      : [project.ownerOpenId];
-  const canManage = canManageProject(
-    roles,
-    { team: project.team, techGroup: project.techGroup },
-    projectOwnerOpenIds,
-    userOpenId,
-  );
-  const ownedStageIds = project.stages
-    .filter((stage) => stage.ownerOpenId === userOpenId)
-    .map((stage) => stage.id);
-  const visibleTaskIdList = canManage
-    ? project.tasks.map((task) => task.id)
-    : project.tasks
-        .filter(
-          (task) =>
-            task.assigneeOpenId === userOpenId ||
-            task.assignees.some((assignee) => assignee.openId === userOpenId) ||
-            (!!task.stageId && ownedStageIds.includes(task.stageId)),
-        )
-        .map((task) => task.id);
-  const visibleStageIdList = canManage
-    ? project.stages.map((stage) => stage.id)
-    : [
-        ...new Set([
-          ...ownedStageIds,
-          ...project.tasks
-            .filter((task) => visibleTaskIdList.includes(task.id))
-            .map((task) => task.stageId)
-            .filter((stageId): stageId is string => !!stageId),
-        ]),
-      ];
-  const stageSubmissionIds = canManage ? visibleStageIdList : ownedStageIds;
+  const visibleTaskIdList = project.tasks.map((task) => task.id);
+  const visibleStageIdList = project.stages.map((stage) => stage.id);
   const submissionWhere: Prisma.TaskSubmissionWhereInput = {
     OR: [
-      ...(canManage ? [{ projectId }] : []),
+      { projectId },
       ...(visibleTaskIdList.length > 0
         ? [{ taskId: { in: visibleTaskIdList } }]
         : []),
-      ...(stageSubmissionIds.length > 0
-        ? [{ stageId: { in: stageSubmissionIds } }]
+      ...(visibleStageIdList.length > 0
+        ? [{ stageId: { in: visibleStageIdList } }]
         : []),
     ],
   };
@@ -486,34 +459,7 @@ async function getProgressProjectVersion(
     submissionIdList.length > 0
       ? { submissionId: { in: submissionIdList } }
       : { id: "__none__" };
-  const activityWhere: Prisma.ProgressActivityLogWhereInput = canManage
-    ? {
-        OR: [
-          { projectId },
-          ...(visibleTaskIdList.length > 0
-            ? [{ taskId: { in: visibleTaskIdList } }]
-            : []),
-        ],
-      }
-    : visibleTaskIdList.length > 0 || ownedStageIds.length > 0
-      ? {
-          OR: [
-            ...(visibleTaskIdList.length > 0
-              ? [{ taskId: { in: visibleTaskIdList } }]
-              : []),
-            ...ownedStageIds.flatMap((stageId) => [
-              {
-                projectId,
-                payload: { contains: `"stageId":"${stageId}"` },
-              },
-              {
-                projectId,
-                payload: { contains: `"fromStageId":"${stageId}"` },
-              },
-            ]),
-          ],
-        }
-      : { id: "__none__" };
+  const activityWhere: Prisma.ProgressActivityLogWhereInput = { projectId };
 
   const parts = await Promise.all([
     projectUpdatedAtVersion("projects", { id: projectId }),
@@ -546,6 +492,8 @@ async function getProgressProjectVersion(
         : { id: "__none__" },
     ),
     projectOwnerVersion({ projectId }),
+    projectParticipantVersion({ projectId }),
+    taskCreationRequestVersion({ projectId }),
     approvalChecklistVersion(
       submissionIdList.length > 0
         ? { approval: { submissionId: { in: submissionIdList } } }
@@ -589,6 +537,8 @@ async function getProgressTaskVersion(
     weeklyReportVersion({ taskId }),
     taskAssigneeVersion({ taskId }),
     taskDeletionRequestVersion({ taskId }),
+    taskCreationRequestVersion({ createdTaskId: taskId }),
+    projectParticipantVersion({ projectId: task.projectId }),
     checklistItemVersion({ taskId }),
     checklistTemplateVersion(),
     approvalChecklistVersion(

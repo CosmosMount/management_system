@@ -8,6 +8,7 @@ import { isSuperAdmin } from "@/lib/permissions";
 export async function getCurrentUserLiveVersion(
   scope: LiveVersionScope,
   resourceId?: string,
+  options?: { mine?: boolean },
 ): Promise<string | undefined> {
   const session = await auth();
   const userOpenId = session?.user?.openId;
@@ -20,5 +21,6 @@ export async function getCurrentUserLiveVersion(
     resourceId,
     userOpenId,
     isSuperAdmin: await isSuperAdmin(userOpenId),
+    mine: options?.mine ?? false,
   });
 }

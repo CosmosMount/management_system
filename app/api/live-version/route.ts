@@ -21,11 +21,13 @@ export async function GET(request: NextRequest) {
   }
 
   const resourceId = request.nextUrl.searchParams.get("resourceId") ?? undefined;
+  const mine = request.nextUrl.searchParams.get("mine") === "1";
   const version = await getLiveVersion({
     scope,
     resourceId,
     userOpenId,
     isSuperAdmin: await isSuperAdmin(userOpenId),
+    mine,
   });
 
   return NextResponse.json(

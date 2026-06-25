@@ -27,6 +27,7 @@ import type {
   ProjectStatus,
   StageStatus,
   TaskCategory,
+  TaskCreationRequestStatus,
   TaskStatus,
   Urgency,
 } from "@prisma/client";
@@ -36,6 +37,7 @@ import {
   submitStageEvidence,
 } from "@/app/actions/progress/projectStages";
 import { loadMoreProjectActivityLogs } from "@/app/actions/progress/activityLogs";
+import { reviewTaskCreationRequest } from "@/app/actions/progress/requestTaskCreation";
 import { rollbackProjectStage } from "@/app/actions/progress/rollbackProjectStage";
 import { updateProjectStatus } from "@/app/actions/progress/updateProjectStatus";
 import { updateTaskStatus } from "@/app/actions/progress/updateTask";
@@ -95,6 +97,8 @@ export type ProjectDetailView = {
   ownerName: string;
   ownerOpenIds: string[];
   ownerNames: string;
+  participantOpenIds: string[];
+  participantNames: string;
   allowOwnerSelfApproval: boolean;
   createdAt: string;
   updatedAt: string;
@@ -102,6 +106,7 @@ export type ProjectDetailView = {
   canceledAt: string | null;
   stages: StageView[];
   tasks: TaskView[];
+  taskCreationRequests: TaskCreationRequestView[];
   activityLogs: ActivityLogView[];
   hasMoreActivityLogs: boolean;
 };
@@ -151,6 +156,7 @@ export type TaskView = {
   isOverdue: boolean;
   assigneeNames: string;
   assigneeOpenIds: string[];
+  relatedOpenIds: string[];
   stageId: string | null;
   stageName: string | null;
   metrics: string;
@@ -161,6 +167,26 @@ export type TaskView = {
     id: string;
     requesterName: string;
     createdAt: string;
+  } | null;
+};
+
+export type TaskCreationRequestView = {
+  id: string;
+  requesterOpenId: string;
+  requesterName: string;
+  status: TaskCreationRequestStatus;
+  reviewerName: string;
+  reviewComment: string;
+  reviewedAt: string | null;
+  createdTaskId: string | null;
+  createdAt: string;
+  draft: {
+    title: string;
+    stageName: string;
+    assigneeNames: string;
+    dueAt: string;
+    metrics: string;
+    summary: string;
   } | null;
 };
 
@@ -181,6 +207,7 @@ type Props = {
   users: UserOption[];
   acceptanceChecklistTemplates: AcceptanceChecklistTemplateOption[];
   canManage: boolean;
+  canRequestTaskCreation: boolean;
   canUpdateLifecycle: boolean;
   isSuperAdmin?: boolean;
   userOpenId?: string;
@@ -229,6 +256,7 @@ export function ProjectDetailWorkspace({
   users,
   acceptanceChecklistTemplates,
   canManage,
+  canRequestTaskCreation,
   canUpdateLifecycle,
   isSuperAdmin = false,
   userOpenId,
@@ -249,6 +277,7 @@ export function ProjectDetailWorkspace({
     unfinished: false,
   });
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
+  const [taskRequestDialogOpen, setTaskRequestDialogOpen] = useState(false);
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
 
   const selectedStage =
@@ -265,7 +294,11 @@ export function ProjectDetailWorkspace({
       taskScope === "stage" && selectedStage
         ? project.tasks.filter((task) => task.stageId === selectedStage.id)
         : project.tasks;
-    return applyTaskFilters(scoped, taskFilters, userOpenId);
+    return applyTaskFilters(
+      scoped,
+      taskFilters,
+      userOpenId,
+    );
   }, [project.tasks, selectedStage, taskFilters, taskScope, userOpenId]);
 
   const scopedTasks = useMemo(
@@ -281,6 +314,20 @@ export function ProjectDetailWorkspace({
     project.stages.every((stage) => stage.status === "COMPLETED");
   const canCreateTask =
     canManage &&
+    selectedStage &&
+    project.status !== "COMPLETED" &&
+    project.status !== "CANCELED" &&
+    selectedStage.status !== "COMPLETED";
+  const canRequestTaskForSelectedStage =
+    !!userOpenId &&
+    !!selectedStage &&
+    (project.ownerOpenIds.includes(userOpenId) ||
+      project.participantOpenIds.includes(userOpenId) ||
+      selectedStage.ownerOpenId === userOpenId ||
+      project.tasks.some((task) => task.assigneeOpenIds.includes(userOpenId)));
+  const canRequestNewTask =
+    canRequestTaskCreation &&
+    canRequestTaskForSelectedStage &&
     selectedStage &&
     project.status !== "COMPLETED" &&
     project.status !== "CANCELED" &&
@@ -367,11 +414,19 @@ export function ProjectDetailWorkspace({
                 filters={taskFilters}
                 canManage={canManage}
                 canCreateTask={!!canCreateTask}
+                canRequestTaskCreation={!!canRequestNewTask}
                 userOpenId={userOpenId}
                 onTaskScopeChange={setTaskScope}
                 onFiltersChange={setTaskFilters}
                 onOpenTaskDialog={() => setTaskDialogOpen(true)}
+                onOpenTaskRequestDialog={() => setTaskRequestDialogOpen(true)}
               />
+              {project.taskCreationRequests.length > 0 && (
+                <TaskCreationRequestPanel
+                  requests={project.taskCreationRequests}
+                  canManage={canManage}
+                />
+              )}
             </>
           ) : (
             <Card>
@@ -422,6 +477,37 @@ export function ProjectDetailWorkspace({
         </DialogContent>
       </Dialog>
 
+      <Dialog open={taskRequestDialogOpen} onOpenChange={setTaskRequestDialogOpen}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[760px]">
+          <DialogHeader>
+            <DialogTitle>申请新任务</DialogTitle>
+            <DialogDescription>
+              申请提交后会通知项目管理者审核，通过后才会创建真实任务。
+            </DialogDescription>
+          </DialogHeader>
+          {selectedStage && (
+            <TaskForm
+              key={`request-${selectedStage.id}`}
+              projectId={project.id}
+              users={users}
+              acceptanceChecklistTemplates={acceptanceChecklistTemplates}
+              stages={project.stages.map((stage) => ({
+                id: stage.id,
+                name: stage.name,
+              }))}
+              defaultStageId={selectedStage.id}
+              redirectOnCreate={false}
+              createVariant="request"
+              submitLabel="提交任务申请"
+              onSubmitted={() => {
+                setTaskRequestDialogOpen(false);
+                router.refresh();
+              }}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={projectDialogOpen} onOpenChange={setProjectDialogOpen}>
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[760px]">
           <DialogHeader>
@@ -441,6 +527,7 @@ export function ProjectDetailWorkspace({
               team: project.team,
               techGroup: project.techGroup,
               ownerOpenIds: project.ownerOpenIds,
+              participantOpenIds: project.participantOpenIds,
               allowOwnerSelfApproval: project.allowOwnerSelfApproval,
             }}
             submitLabel="保存修改"
@@ -526,6 +613,10 @@ function ProjectOverview({
           )}
           <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
             <OverviewItem label="负责人" value={project.ownerNames} />
+            <OverviewItem
+              label="参与人员"
+              value={project.participantNames || "未配置"}
+            />
             <OverviewItem label="当前阶段" value={currentStage?.name ?? "未配置"} />
             <OverviewItem
               label="项目截止"
@@ -1048,10 +1139,12 @@ function StageTaskList({
   filters,
   canManage,
   canCreateTask,
+  canRequestTaskCreation,
   userOpenId,
   onTaskScopeChange,
   onFiltersChange,
   onOpenTaskDialog,
+  onOpenTaskRequestDialog,
 }: {
   tasks: TaskView[];
   scopedTasks: TaskView[];
@@ -1060,10 +1153,12 @@ function StageTaskList({
   filters: TaskFilters;
   canManage: boolean;
   canCreateTask: boolean;
+  canRequestTaskCreation: boolean;
   userOpenId?: string;
   onTaskScopeChange: (scope: TaskScope) => void;
   onFiltersChange: (filters: TaskFilters) => void;
   onOpenTaskDialog: () => void;
+  onOpenTaskRequestDialog: () => void;
 }) {
   const stats = getTaskStats(scopedTasks);
 
@@ -1087,12 +1182,20 @@ function StageTaskList({
               <span>已逾期 {stats.overdue}</span>
             </div>
           </div>
-          {canCreateTask && (
-            <Button type="button" onClick={onOpenTaskDialog}>
-              <Plus className="h-4 w-4" />
-              新增任务
-            </Button>
-          )}
+          <div className="flex flex-wrap gap-2">
+            {canCreateTask && (
+              <Button type="button" onClick={onOpenTaskDialog}>
+                <Plus className="h-4 w-4" />
+                新增任务
+              </Button>
+            )}
+            {!canCreateTask && canRequestTaskCreation && (
+              <Button type="button" variant="outline" onClick={onOpenTaskRequestDialog}>
+                <Plus className="h-4 w-4" />
+                申请新任务
+              </Button>
+            )}
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -1223,6 +1326,128 @@ function StageTaskList({
             </div>
           </>
         )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function TaskCreationRequestPanel({
+  requests,
+  canManage,
+}: {
+  requests: TaskCreationRequestView[];
+  canManage: boolean;
+}) {
+  const router = useRouter();
+  const [comments, setComments] = useState<Record<string, string>>({});
+  const [loadingId, setLoadingId] = useState<string | null>(null);
+
+  async function handleReview(
+    request: TaskCreationRequestView,
+    decision: "APPROVED" | "REJECTED",
+  ) {
+    const comment = comments[request.id] ?? "";
+    if (decision === "REJECTED" && !comment.trim()) {
+      toast.error("驳回任务申请时请填写审核意见");
+      return;
+    }
+    setLoadingId(request.id);
+    try {
+      await reviewTaskCreationRequest({
+        requestId: request.id,
+        decision,
+        comment,
+      });
+      toast.success(decision === "APPROVED" ? "任务申请已通过" : "任务申请已驳回");
+      router.refresh();
+    } catch (err) {
+      toast.error(getActionErrorMessage(err, "审核任务申请失败"));
+    } finally {
+      setLoadingId(null);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle>任务申请</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {requests.map((request) => (
+          <div key={request.id} className="rounded-lg border p-3 text-sm">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="font-medium">
+                  {request.draft?.summary ?? "任务申请内容无法解析"}
+                </p>
+                <p className="mt-1 text-muted-foreground">
+                  申请人：{request.requesterName} ·{" "}
+                  {formatDateTime(request.createdAt)}
+                </p>
+                {request.draft && (
+                  <p className="mt-1 text-muted-foreground">
+                    指标：{request.draft.metrics || "未填写"} · 截止{" "}
+                    {formatDateTime(request.draft.dueAt)}
+                  </p>
+                )}
+              </div>
+              <Badge
+                variant={request.status === "PENDING" ? "secondary" : "outline"}
+              >
+                {request.status === "PENDING"
+                  ? "待审核"
+                  : request.status === "APPROVED"
+                    ? "已通过"
+                    : "已驳回"}
+              </Badge>
+            </div>
+            {request.reviewComment && (
+              <p className="mt-2 rounded-md bg-muted px-3 py-2 text-muted-foreground">
+                审核意见：{request.reviewComment}
+              </p>
+            )}
+            {request.createdTaskId && (
+              <Link
+                href={routes.progress.task(request.createdTaskId)}
+                className="mt-2 inline-flex text-primary hover:underline"
+              >
+                查看已创建任务
+              </Link>
+            )}
+            {canManage && request.status === "PENDING" && (
+              <div className="mt-3 space-y-2">
+                <Textarea
+                  value={comments[request.id] ?? ""}
+                  onChange={(event) =>
+                    setComments({
+                      ...comments,
+                      [request.id]: event.target.value,
+                    })
+                  }
+                  placeholder="审核意见；驳回时必填"
+                  className="min-h-20"
+                />
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    disabled={loadingId === request.id}
+                    onClick={() => handleReview(request, "APPROVED")}
+                  >
+                    通过并创建任务
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={loadingId === request.id}
+                    onClick={() => handleReview(request, "REJECTED")}
+                  >
+                    驳回申请
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
       </CardContent>
     </Card>
   );
@@ -1661,7 +1886,10 @@ function applyTaskFilters(
   return tasks.filter((task) => {
     if (search && !task.title.toLowerCase().includes(search)) return false;
     if (filters.status !== "ALL" && task.status !== filters.status) return false;
-    if (filters.mine && (!userOpenId || !task.assigneeOpenIds.includes(userOpenId))) {
+    if (
+      filters.mine &&
+      (!userOpenId || !task.relatedOpenIds.includes(userOpenId))
+    ) {
       return false;
     }
     if (filters.overdue && !task.isOverdue) return false;
@@ -1758,6 +1986,9 @@ function activityLabel(action: string): string {
     "task.weekly_report": "提交了任务周报",
     "task.risk_synced": "同步了任务风险",
     "task.archived": "归档了任务",
+    "task.creation_requested": "申请创建任务",
+    "task.creation_approved": "通过了任务创建申请",
+    "task.creation_rejected": "驳回了任务创建申请",
     "task.delete_requested": "申请删除任务",
     "task.delete_rejected": "驳回了删除申请",
     "task.deleted": "删除了任务",

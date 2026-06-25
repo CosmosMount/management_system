@@ -12,6 +12,7 @@ const techGroupSchema = z
   .or(z.literal(""));
 
 const projectOwnerOpenIdsSchema = z.array(z.string()).optional();
+const projectParticipantOpenIdsSchema = z.array(z.string()).optional();
 export const MAX_ACCEPTANCE_CHECKLIST_ITEMS = 20;
 export const MAX_ACCEPTANCE_CHECKLIST_ITEM_LENGTH = 200;
 
@@ -70,6 +71,7 @@ const projectBaseSchema = z.object({
   techGroup: techGroupSchema,
   ownerOpenId: z.string().optional(),
   ownerOpenIds: projectOwnerOpenIdsSchema,
+  participantOpenIds: projectParticipantOpenIdsSchema,
   allowOwnerSelfApproval: z.boolean().default(false),
 });
 
@@ -209,6 +211,26 @@ export const taskDeletionReviewSchema = z
         code: "custom",
         path: ["comment"],
         message: "驳回删除申请时请填写审核意见",
+      });
+    }
+  });
+
+export const taskCreationReviewSchema = z
+  .object({
+    requestId: z.string().min(1),
+    decision: z.enum(["APPROVED", "REJECTED"]),
+    comment: z
+      .string()
+      .trim()
+      .max(1000, "审核意见不能超过 1000 个字符")
+      .optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.decision === "REJECTED" && !value.comment?.trim()) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["comment"],
+        message: "驳回任务申请时请填写审核意见",
       });
     }
   });

@@ -50,6 +50,7 @@ type ProjectFormValues = {
   techGroup?: TechGroupFormValue;
   ownerOpenId?: string;
   ownerOpenIds?: string[];
+  participantOpenIds?: string[];
   allowOwnerSelfApproval: boolean;
   template?: "real-car" | "custom";
   stages: Array<{
@@ -71,6 +72,7 @@ type Props = {
     team: string;
     techGroup: string;
     ownerOpenIds: string[];
+    participantOpenIds: string[];
     allowOwnerSelfApproval: boolean;
   };
   submitLabel?: string;
@@ -110,6 +112,7 @@ export function ProjectForm({
   const [liveRefreshPending, setLiveRefreshPending] = useState(false);
   const editing = mode === "edit";
   const initialOwnerOpenIds = initialProject?.ownerOpenIds ?? [];
+  const initialParticipantOpenIds = initialProject?.participantOpenIds ?? [];
   const primaryInitialOwner = initialOwnerOpenIds[0] ?? "";
 
   const form = useForm<ProjectFormValues>({
@@ -125,6 +128,7 @@ export function ProjectForm({
       techGroup: toTechGroupFormValue(initialProject?.techGroup),
       ownerOpenId: primaryInitialOwner,
       ownerOpenIds: initialOwnerOpenIds,
+      participantOpenIds: initialParticipantOpenIds,
       allowOwnerSelfApproval: initialProject?.allowOwnerSelfApproval ?? false,
       template: "real-car",
       stages: editing ? [] : realCarStages(),
@@ -177,6 +181,7 @@ export function ProjectForm({
           techGroup: data.techGroup ?? "",
           ownerOpenId: data.ownerOpenId,
           ownerOpenIds: data.ownerOpenIds ?? [],
+          participantOpenIds: data.participantOpenIds ?? [],
           allowOwnerSelfApproval: data.allowOwnerSelfApproval,
         });
         toast.success("项目已更新");
@@ -190,6 +195,7 @@ export function ProjectForm({
           techGroup: data.techGroup,
           ownerOpenId: data.ownerOpenId,
           ownerOpenIds: data.ownerOpenIds,
+          participantOpenIds: data.participantOpenIds,
           allowOwnerSelfApproval: data.allowOwnerSelfApproval,
           template: data.template,
           stages: data.stages,
@@ -280,6 +286,24 @@ export function ProjectForm({
               id="project-owners-error"
               message={errors.ownerOpenIds?.message}
             />
+          </div>
+          <div className="space-y-2 sm:col-span-2">
+            <Label>参与人员</Label>
+            <Controller
+              control={form.control}
+              name="participantOpenIds"
+              render={({ field }) => (
+                <UserMultiSearchSelect
+                  users={users}
+                  value={field.value ?? []}
+                  onChange={field.onChange}
+                  placeholder="搜索参与人员"
+                />
+              )}
+            />
+            <p className="text-xs text-muted-foreground">
+              参与人员可以查看项目并提交任务创建/撤销申请；项目负责人无需重复加入。
+            </p>
           </div>
           <div className="space-y-2">
             <Label>车组</Label>

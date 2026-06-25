@@ -25,8 +25,10 @@ function isPrismaClientStale(client: PrismaClient): boolean {
   return (
     typeof client.project?.findMany !== "function" ||
     typeof client.projectOwner?.findMany !== "function" ||
+    typeof client.projectParticipant?.findMany !== "function" ||
     typeof client.projectStage?.findMany !== "function" ||
     typeof client.taskAssignee?.findMany !== "function" ||
+    typeof client.taskCreationRequest?.findMany !== "function" ||
     typeof client.acceptanceChecklistTemplate?.findMany !== "function" ||
     typeof client.taskAcceptanceChecklistItem?.findMany !== "function" ||
     typeof client.approvalChecklistConfirmation?.findMany !== "function" ||

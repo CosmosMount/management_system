@@ -8,12 +8,14 @@ import {
 } from "@/lib/notification-outbox";
 import {
   canManageProject,
+  canRequestTaskDeletion,
   progressTaskReadableWhere,
 } from "@/lib/permissions-progress";
 import { getUserRoles } from "@/lib/permissions";
 import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { requireSessionUser } from "@/lib/progress-activity";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
+import { getProjectParticipantOpenIds } from "@/lib/progress-project-participants";
 import { getNotificationContext } from "@/lib/request-origin";
 import { prisma } from "@/lib/prisma";
 import { revalidateProgress } from "@/lib/revalidate";
@@ -39,6 +41,9 @@ export async function deleteTaskDirectly(input: DirectDeleteInput) {
       project: {
         include: {
           owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+          participants: {
+            orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+          },
         },
       },
       stage: true,
@@ -155,6 +160,9 @@ export async function requestTaskDeletion(input: { taskId: string; reason: strin
       project: {
         include: {
           owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+          participants: {
+            orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+          },
         },
       },
       stage: true,
@@ -177,6 +185,19 @@ export async function requestTaskDeletion(input: { taskId: string; reason: strin
     )
   ) {
     throw new Error("管理员可直接删除任务，无需提交申请");
+  }
+  if (
+    !canRequestTaskDeletion({
+      roles,
+      scope: { team: task.team, techGroup: task.techGroup },
+      ownerOpenIds: projectOwnerOpenIds,
+      participantOpenIds: getProjectParticipantOpenIds(task.project),
+      stageOwnerOpenId: task.stage?.ownerOpenId,
+      taskAssigneeOpenIds: getTaskAssigneeOpenIds(task),
+      userOpenId: user.openId,
+    })
+  ) {
+    throw new Error("无任务删除申请权限");
   }
   if (task.deletionRequests.length > 0) {
     throw new Error("该任务已有待审核的删除申请");

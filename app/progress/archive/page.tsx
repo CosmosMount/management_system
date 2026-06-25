@@ -1,6 +1,10 @@
 import { AppHeader } from "@/components/app-header";
 import { ArchivedProjectList, ArchivedTaskList } from "@/components/progress/archive-record-lists";
 import { LiveAutoRefresh } from "@/components/live-auto-refresh";
+import {
+  MineScopeToggle,
+  readMineSearchParam,
+} from "@/components/progress/mine-scope-toggle";
 import { ProgressBackLink } from "@/components/progress/progress-back-link";
 import { ProgressPageLayout } from "@/components/progress/progress-page-layout";
 import { PageShell } from "@/components/page-shell";
@@ -11,16 +15,24 @@ import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { getTaskAssigneeNames } from "@/lib/progress-assignees";
 import { getUserRoles, isSuperAdmin } from "@/lib/permissions";
 import {
+  progressProjectMineWhere,
   progressProjectReadableWhere,
+  progressTaskMineWhere,
   progressTaskReadableWhere,
 } from "@/lib/permissions-progress";
 import { prisma } from "@/lib/prisma";
+import { routes } from "@/lib/routes";
 
-export default async function ArchivePage() {
+type Props = {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+};
+
+export default async function ArchivePage({ searchParams }: Props) {
   const session = await auth();
   const userOpenId = session?.user?.openId;
+  const mine = await readMineSearchParam(searchParams);
   const [liveVersion, roles, admin] = await Promise.all([
-    getCurrentUserLiveVersion("progress-archive"),
+    getCurrentUserLiveVersion("progress-archive", undefined, { mine }),
     userOpenId ? getUserRoles(userOpenId) : Promise.resolve([]),
     userOpenId ? isSuperAdmin(userOpenId) : Promise.resolve(false),
   ]);
@@ -30,6 +42,7 @@ export default async function ArchivePage() {
       where: {
         AND: [
           progressProjectReadableWhere(roles, userOpenId),
+          mine ? progressProjectMineWhere(userOpenId) : {},
           { status: { in: ["COMPLETED", "CANCELED"] } },
         ],
       },
@@ -39,6 +52,7 @@ export default async function ArchivePage() {
       where: {
         AND: [
           progressTaskReadableWhere(roles, userOpenId),
+          mine ? progressTaskMineWhere(userOpenId) : {},
           { status: "ARCHIVED" },
         ],
       },
@@ -76,11 +90,13 @@ export default async function ArchivePage() {
         scope="progress-archive"
         initialVersion={liveVersion}
         intervalMs={10000}
+        mine={mine}
       />
       <PageShell>
         <ProgressPageLayout className="space-y-8">
           <ProgressBackLink />
           <PageTitle subtitle="归档检索" />
+          <MineScopeToggle basePath={routes.progress.archive} mine={mine} />
 
           <Card>
             <CardHeader>
