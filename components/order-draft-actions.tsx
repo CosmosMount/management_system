@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { submitDraftOrder } from "@/app/actions/updateOrder";
 import { Button, buttonVariants } from "@/components/ui/button";
 import type { OrderStatus } from "@prisma/client";
+import { getActionErrorMessage } from "@/lib/action-error-message";
 import { canEditDraftOrder } from "@/lib/permissions-client";
 import { cn } from "@/lib/utils";
 import { routes } from "@/lib/routes";
@@ -40,7 +41,7 @@ export function OrderDraftActions({
         toast.success("申请已提交");
         router.refresh();
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : "提交失败");
+        toast.error(getActionErrorMessage(err, "提交失败"));
       } finally {
         setLoading(false);
       }

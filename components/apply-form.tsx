@@ -1,6 +1,12 @@
 "use client";
 
-import { useFieldArray, useForm, Controller, type Resolver } from "react-hook-form";
+import {
+  useFieldArray,
+  useForm,
+  useWatch,
+  Controller,
+  type Resolver,
+} from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Plus, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -26,8 +32,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { TEAM_OPTIONS, TECH_GROUP_OPTIONS } from "@/lib/constants";
+import { getActionErrorMessage } from "@/lib/action-error-message";
 import {
-  itemKindNeedsImage,
   itemKindNeedsLink,
   formatPurchaseItemKind,
   purchaseItemKindLabels,
@@ -42,6 +48,10 @@ import {
 type ApplyFormValues = Omit<CreateOrderInput, "team" | "techGroup"> & {
   team: CreateOrderInput["team"] | "";
   techGroup: CreateOrderInput["techGroup"] | "";
+};
+
+type OrderFormPayload = CreateOrderInput & {
+  orderId?: string;
 };
 
 type Props = {
@@ -83,13 +93,13 @@ export function ApplyForm({ orderId, initialValues }: Props = {}) {
     name: "items",
   });
 
-  const items = form.watch("items");
+  const items = useWatch({ control: form.control, name: "items" }) ?? [];
   const totalPrice = items.reduce(
     (sum, item) => sum + (Number(item.lineTotal) || 0),
     0,
   );
 
-  function buildFormData(data: CreateOrderInput): FormData {
+  function buildFormData(data: OrderFormPayload): FormData {
     const formData = new FormData();
     formData.set("payload", JSON.stringify(data));
     for (const [index, file] of Object.entries(itemImageFiles)) {
@@ -103,7 +113,9 @@ export function ApplyForm({ orderId, initialValues }: Props = {}) {
   async function onSubmit(data: CreateOrderInput, submit: boolean) {
     setSubmitting(true);
     try {
-      const payload = { ...data, submit };
+      const payload: OrderFormPayload = editing
+        ? { ...data, submit, orderId }
+        : { ...data, submit };
       const formData = buildFormData(payload);
       const order = editing
         ? await updateOrder(formData)
@@ -112,7 +124,7 @@ export function ApplyForm({ orderId, initialValues }: Props = {}) {
       router.push(`${routes.procurement.detail(order.id)}`);
       router.refresh();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "提交失败");
+      toast.error(getActionErrorMessage(err, "提交失败"));
     } finally {
       setSubmitting(false);
     }
