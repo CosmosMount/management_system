@@ -53,9 +53,27 @@ export function allowedAppOrigins(): Set<string> {
   return new Set(configured.length > 0 ? configured : [defaultAppOrigin()]);
 }
 
+function parseHostname(value?: string | null): string | null {
+  const raw = value?.trim();
+  if (!raw) return null;
+  const url = parseAppUrl(raw.includes("://") ? raw : `http://${raw}`);
+  return url?.hostname.toLowerCase() ?? null;
+}
+
+function allowedDevHostnames(): Set<string> {
+  if (process.env.NODE_ENV === "production") return new Set();
+  return new Set(
+    splitCsv(process.env.ALLOWED_DEV_ORIGINS)
+      .map(parseHostname)
+      .filter((hostname): hostname is string => Boolean(hostname)),
+  );
+}
+
 export function isAllowedAppOrigin(value?: string | null): boolean {
-  const origin = parseAppOrigin(value);
-  return Boolean(origin && allowedAppOrigins().has(origin));
+  const url = parseAppUrl(value);
+  if (!url) return false;
+  if (allowedAppOrigins().has(url.origin)) return true;
+  return allowedDevHostnames().has(url.hostname.toLowerCase());
 }
 
 export function resolveAppOrigin(value?: string | null): string {

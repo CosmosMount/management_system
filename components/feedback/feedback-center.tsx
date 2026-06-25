@@ -235,6 +235,14 @@ function lastMessage(feedback: FeedbackView): FeedbackMessageView | undefined {
   return feedback.messages.at(-1);
 }
 
+function pushSelectedFeedbackUrl(feedbackId: string) {
+  const params = new URLSearchParams(window.location.search);
+  params.delete("new");
+  params.set("selected", feedbackId);
+  const query = params.toString();
+  window.history.pushState(null, "", query ? `/feedback?${query}` : "/feedback");
+}
+
 function messagePreview(feedback: FeedbackView): string {
   const message = firstMessage(feedback);
   if (!message) return "暂无内容";
@@ -438,6 +446,7 @@ export function FeedbackCenter({
         : "ACTIVE"
       : "ACTIVE",
   );
+  const [hasManualFilter, setHasManualFilter] = useState(false);
   const [selectedId, setSelectedId] = useState(
     selectedFromUrl ?? feedbacks[0]?.id ?? "",
   );
@@ -468,12 +477,14 @@ export function FeedbackCenter({
     };
   }, []);
 
-  const effectiveStatusFilter =
+  const urlStatusFilter =
     selectedFromUrlFeedback && selectedFromUrl
       ? selectedFromUrlFeedback.status === "CLOSED"
         ? "CLOSED"
         : "ACTIVE"
-      : statusFilter;
+      : undefined;
+  const effectiveStatusFilter =
+    !hasManualFilter && urlStatusFilter ? urlStatusFilter : statusFilter;
   const effectiveSelectedId = selectedFromUrlFeedback?.id ?? selectedId;
 
   const filteredFeedbacks = useMemo(() => {
@@ -513,6 +524,7 @@ export function FeedbackCenter({
 
   function handleFilterChange(filter: FeedbackFilter) {
     clearReplyImages();
+    setHasManualFilter(true);
     setStatusFilter(filter);
     router.replace("/feedback", { scroll: false });
   }
@@ -540,9 +552,10 @@ export function FeedbackCenter({
       form.reset();
       clearCreateImages();
       setNewOpenState(false);
+      setHasManualFilter(false);
       setStatusFilter("ACTIVE");
       setSelectedId(result.id);
-      router.push(`/feedback?selected=${result.id}`);
+      router.push(`/feedback?selected=${result.id}`, { scroll: false });
       router.refresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "提交失败");
@@ -599,18 +612,18 @@ export function FeedbackCenter({
           </div>
           <div className="flex flex-wrap gap-2 pt-2">
             {filterOptions.map((option) => (
-                <Button
-                  key={option.value}
-                  type="button"
-	                  size="sm"
-	                  variant={
-	                    effectiveStatusFilter === option.value ? "default" : "outline"
-	                  }
-	                  onClick={() => handleFilterChange(option.value)}
-	                >
-                  {option.label}
-                </Button>
-              ))}
+              <Button
+                key={option.value}
+                type="button"
+                size="sm"
+                variant={
+                  effectiveStatusFilter === option.value ? "default" : "outline"
+                }
+                onClick={() => handleFilterChange(option.value)}
+              >
+                {option.label}
+              </Button>
+            ))}
           </div>
         </CardHeader>
         <CardContent className="min-h-0 flex-1 overflow-y-auto p-0 [scrollbar-gutter:stable]">
@@ -632,14 +645,14 @@ export function FeedbackCenter({
                     className={cn(
                       "block w-full px-4 py-3 text-left transition-colors hover:bg-muted/60",
                       active && "bg-muted",
-	                    )}
-	                    onClick={() => {
-	                      if (feedback.id !== selectedFeedback?.id) {
-	                        clearReplyImages();
-	                      }
-	                      setSelectedId(feedback.id);
-	                      router.push(`/feedback?selected=${feedback.id}`);
-	                    }}
+                    )}
+                    onClick={() => {
+                      if (feedback.id !== selectedFeedback?.id) {
+                        clearReplyImages();
+                      }
+                      setSelectedId(feedback.id);
+                      pushSelectedFeedbackUrl(feedback.id);
+                    }}
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
