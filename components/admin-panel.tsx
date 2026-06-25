@@ -1,9 +1,17 @@
 "use client";
 
+import type { ComponentType } from "react";
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { RefreshCw, X } from "lucide-react";
+import {
+  ClipboardCheck,
+  RefreshCw,
+  ShieldCheck,
+  UserCog,
+  Users,
+  X,
+} from "lucide-react";
 import type { UserRoleType } from "@prisma/client";
 import {
   createAcceptanceChecklistTemplate,
@@ -73,6 +81,14 @@ type Props = {
   acceptanceChecklistTemplates: AdminAcceptanceChecklistTemplate[];
 };
 
+type UserOption = {
+  openId: string;
+  name: string;
+  avatar: string | null;
+};
+
+type AdminIcon = ComponentType<{ className?: string }>;
+
 export function AdminPanel({
   users,
   roles,
@@ -91,6 +107,22 @@ export function AdminPanel({
     acc[role.openId].push(role);
     return acc;
   }, {});
+  const assignedUserCount = Object.keys(rolesByOpenId).length;
+  const superAdminCount = roles.filter((role) => role.role === "SUPER_ADMIN").length;
+  const teamAdminCount = roles.filter((role) => role.role === "TEAM_ADMIN").length;
+  const techGroupAdminCount = roles.filter(
+    (role) => role.role === "TECH_GROUP_ADMIN",
+  ).length;
+  const financeCount = roles.filter((role) => role.role === "FINANCE").length;
+  const projectManagerCount = roles.filter(
+    (role) => role.role === "PROJECT_MANAGER",
+  ).length;
+  const teacherCount = roles.filter((role) => role.role === "TEACHER").length;
+  const userOptions = users.map((user) => ({
+    openId: user.openId,
+    name: user.name,
+    avatar: user.avatar,
+  }));
 
   function teamRoles(team: string, role: UserRoleType) {
     return roles.filter((r) => r.team === team && r.role === role);
@@ -230,109 +262,178 @@ export function AdminPanel({
   }
 
   return (
-    <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle>车组组长配置</CardTitle>
-          <CardDescription>
-            为每个车组指定组长与报销员；用户需先飞书登录本系统
-          </CardDescription>
+    <div className="min-w-0 space-y-6">
+      <section className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <AdminMetric
+          icon={Users}
+          label="通讯录用户"
+          value={users.length}
+          detail={`${assignedUserCount} 人已有角色`}
+        />
+        <AdminMetric
+          icon={ShieldCheck}
+          label="全局管理"
+          value={superAdminCount + projectManagerCount + teacherCount}
+          detail={`超管 ${superAdminCount} · 项管 ${projectManagerCount} · 老师 ${teacherCount}`}
+        />
+        <AdminMetric
+          icon={UserCog}
+          label="组级角色"
+          value={teamAdminCount + techGroupAdminCount + financeCount}
+          detail={`车组 ${teamAdminCount} · 技术组 ${techGroupAdminCount} · 报销 ${financeCount}`}
+        />
+        <AdminMetric
+          icon={ClipboardCheck}
+          label="验收条例"
+          value={acceptanceChecklistTemplates.length}
+          detail="任务创建时可快捷加入"
+        />
+      </section>
+
+      <nav className="grid min-w-0 gap-2 sm:grid-cols-4">
+        <AdminNavLink href="#system" icon={RefreshCw} label="系统同步" />
+        <AdminNavLink href="#roles" icon={ShieldCheck} label="职责配置" />
+        <AdminNavLink href="#users" icon={Users} label="用户与角色" />
+        <AdminNavLink
+          href="#acceptance"
+          icon={ClipboardCheck}
+          label="验收条例"
+        />
+      </nav>
+
+      <Card id="system" className="scroll-mt-20">
+        <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <CardTitle>系统同步</CardTitle>
+            <CardDescription>
+              从飞书通讯录更新用户资料，后续角色分配和负责人选择会使用这里的用户数据
+            </CardDescription>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={pending}
+            onClick={handleSyncFeishu}
+          >
+            <RefreshCw className="mr-1 h-4 w-4" />
+            同步飞书通讯录
+          </Button>
         </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>车组</TableHead>
-                <TableHead>组长</TableHead>
-                <TableHead>报销员</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {TEAM_OPTIONS.map((team) => (
-                <TableRow key={team}>
-                  <TableCell className="font-medium">{team}</TableCell>
-                  <TableCell className="min-w-[14rem]">
-                    <RoleCell
-                      entries={teamRoles(team, "TEAM_ADMIN")}
-                      users={users}
-                      team={team}
-                      role="TEAM_ADMIN"
-                      pending={pending}
-                      onRemove={handleRemove}
-                      onQuickAssign={handleQuickAssign}
-                    />
-                  </TableCell>
-                  <TableCell className="min-w-[14rem]">
-                    <RoleCell
-                      entries={teamRoles(team, "FINANCE")}
-                      users={users}
-                      team={team}
-                      role="FINANCE"
-                      pending={pending}
-                      onRemove={handleRemove}
-                      onQuickAssign={handleQuickAssign}
-                    />
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+        <CardContent className="min-w-0">
+          <div className="grid min-w-0 gap-3 sm:grid-cols-3">
+            <SystemStat label="当前用户" value={`${users.length} 人`} />
+            <SystemStat label="已分配角色" value={`${roles.length} 条`} />
+            <SystemStat
+              label="未配置角色"
+              value={`${Math.max(users.length - assignedUserCount, 0)} 人`}
+            />
+          </div>
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>技术组组长配置</CardTitle>
-          <CardDescription>
-            为每个技术组指定组长，参与管理审核（与车组组长分别私信通知）
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>技术组</TableHead>
-                <TableHead>组长</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {TECH_GROUP_OPTIONS.map((techGroup) => (
-                <TableRow key={techGroup}>
-                  <TableCell className="font-medium">{techGroup}</TableCell>
-                  <TableCell className="min-w-[14rem]">
-                    <TechGroupRoleCell
-                      entries={techGroupRoles(techGroup, "TECH_GROUP_ADMIN")}
-                      users={users}
-                      techGroup={techGroup}
-                      pending={pending}
-                      onRemove={handleRemove}
-                      onQuickAssign={handleQuickAssignTechGroup}
-                    />
-                  </TableCell>
+      <section id="roles" className="min-w-0 scroll-mt-20 space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>车组职责配置</CardTitle>
+            <CardDescription>
+              为每个车组指定组长与报销员；用户需先飞书登录本系统
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="min-w-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>车组</TableHead>
+                  <TableHead>组长</TableHead>
+                  <TableHead>报销员</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+              </TableHeader>
+              <TableBody>
+                {TEAM_OPTIONS.map((team) => (
+                  <TableRow key={team}>
+                    <TableCell className="font-medium">{team}</TableCell>
+                    <TableCell className="min-w-[14rem]">
+                      <RoleCell
+                        entries={teamRoles(team, "TEAM_ADMIN")}
+                        users={users}
+                        userOptions={userOptions}
+                        team={team}
+                        role="TEAM_ADMIN"
+                        pending={pending}
+                        onRemove={handleRemove}
+                        onQuickAssign={handleQuickAssign}
+                      />
+                    </TableCell>
+                    <TableCell className="min-w-[14rem]">
+                      <RoleCell
+                        entries={teamRoles(team, "FINANCE")}
+                        users={users}
+                        userOptions={userOptions}
+                        team={team}
+                        role="FINANCE"
+                        pending={pending}
+                        onRemove={handleRemove}
+                        onQuickAssign={handleQuickAssign}
+                      />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
 
-      <Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>技术组职责配置</CardTitle>
+            <CardDescription>
+              为每个技术组指定组长，参与管理审核（与车组组长分别私信通知）
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="min-w-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>技术组</TableHead>
+                  <TableHead>组长</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {TECH_GROUP_OPTIONS.map((techGroup) => (
+                  <TableRow key={techGroup}>
+                    <TableCell className="font-medium">{techGroup}</TableCell>
+                    <TableCell className="min-w-[14rem]">
+                      <TechGroupRoleCell
+                        entries={techGroupRoles(techGroup, "TECH_GROUP_ADMIN")}
+                        users={users}
+                        userOptions={userOptions}
+                        techGroup={techGroup}
+                        pending={pending}
+                        onRemove={handleRemove}
+                        onQuickAssign={handleQuickAssignTechGroup}
+                      />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      </section>
+
+      <Card id="users" className="scroll-mt-20">
         <CardHeader>
-          <CardTitle>分配角色</CardTitle>
+          <CardTitle>用户与角色</CardTitle>
           <CardDescription>
-            超级管理员可管理全部角色；指导老师为全局审批角色
+            手动分配全局角色或范围角色；用户表展示当前角色并支持快速移除
           </CardDescription>
         </CardHeader>
-        <CardContent>
-          <div className="grid gap-3 sm:grid-cols-[12rem_10rem_8rem_auto] sm:items-end">
+        <CardContent className="min-w-0 space-y-6">
+          <div className="grid min-w-0 gap-3 sm:grid-cols-[12rem_10rem_8rem_auto] sm:items-end">
             <div className="space-y-2">
               <p className="h-5 text-sm font-medium leading-5">用户</p>
               <UserSearchSelect
-                users={users.map((u) => ({
-                  openId: u.openId,
-                  name: u.name,
-                  avatar: u.avatar,
-                }))}
+                users={userOptions}
                 value={assignOpenId}
                 onChange={setAssignOpenId}
                 className="w-full"
@@ -437,17 +538,86 @@ export function AdminPanel({
               添加
             </Button>
           </div>
+
+          {users.length === 0 ? (
+            <div className="space-y-3 text-sm text-muted-foreground">
+              <p>暂无用户，请先点击「同步飞书通讯录」</p>
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>用户</TableHead>
+                  <TableHead>openId</TableHead>
+                  <TableHead>入库时间</TableHead>
+                  <TableHead>当前角色</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {users.map((user) => (
+                  <TableRow key={user.id}>
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        {user.avatar && (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={user.avatar}
+                            alt={user.name}
+                            className="h-8 w-8 rounded-full"
+                          />
+                        )}
+                        <span>{user.name}</span>
+                      </div>
+                    </TableCell>
+                    <TableCell className="max-w-[200px] truncate font-mono text-xs">
+                      {user.openId}
+                    </TableCell>
+                    <TableCell>
+                      {new Date(user.createdAt).toLocaleString("zh-CN")}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-wrap gap-1">
+                        {(rolesByOpenId[user.openId] ?? []).map((role) => (
+                          <Badge
+                            key={role.id}
+                            variant="secondary"
+                            className="gap-1"
+                          >
+                            {formatRoleLabel(role)}
+                            <button
+                              type="button"
+                              className="rounded hover:bg-muted"
+                              aria-label={`移除 ${user.name} 的 ${formatRoleLabel(role)} 角色`}
+                              disabled={pending}
+                              onClick={() => handleRemove(role.id)}
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </Badge>
+                        ))}
+                        {(rolesByOpenId[user.openId] ?? []).length === 0 && (
+                          <span className="text-sm text-muted-foreground">
+                            无
+                          </span>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
         </CardContent>
       </Card>
 
-      <Card>
+      <Card id="acceptance" className="scroll-mt-20">
         <CardHeader>
           <CardTitle>常用验收条例</CardTitle>
           <CardDescription>
             任务创建/编辑时可快捷加入这些条例；删除模板不会影响已有任务。
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="min-w-0 space-y-4">
           <div className="flex flex-col gap-2 sm:flex-row">
             <Input
               value={templateContent}
@@ -500,96 +670,6 @@ export function AdminPanel({
           )}
         </CardContent>
       </Card>
-
-      <Card>
-        <CardHeader className="flex flex-row items-start justify-between gap-4">
-          <div>
-            <CardTitle>人员列表</CardTitle>
-            <CardDescription>
-              可从飞书通讯录同步全员，无需对方先登录；登录过的用户会更新资料
-            </CardDescription>
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={pending}
-            onClick={handleSyncFeishu}
-          >
-            <RefreshCw className="mr-1 h-4 w-4" />
-            同步飞书通讯录
-          </Button>
-        </CardHeader>
-        <CardContent>
-          {users.length === 0 ? (
-            <div className="space-y-3 text-sm text-muted-foreground">
-              <p>暂无用户，请先点击「同步飞书通讯录」</p>
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>用户</TableHead>
-                  <TableHead>openId</TableHead>
-                  <TableHead>入库时间</TableHead>
-                  <TableHead>当前角色</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {users.map((user) => (
-                  <TableRow key={user.id}>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        {user.avatar && (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={user.avatar}
-                            alt={user.name}
-                            className="h-8 w-8 rounded-full"
-                          />
-                        )}
-                        <span>{user.name}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell className="max-w-[200px] truncate font-mono text-xs">
-                      {user.openId}
-                    </TableCell>
-                    <TableCell>
-                      {new Date(user.createdAt).toLocaleString("zh-CN")}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-wrap gap-1">
-                        {(rolesByOpenId[user.openId] ?? []).map((role) => (
-                          <Badge
-                            key={role.id}
-                            variant="secondary"
-                            className="gap-1"
-                          >
-                            {formatRoleLabel(role)}
-                            <button
-                              type="button"
-                              className="rounded hover:bg-muted"
-                              disabled={pending}
-                              onClick={() => handleRemove(role.id)}
-                            >
-                              <X className="h-3 w-3" />
-                            </button>
-                          </Badge>
-                        ))}
-                        {(rolesByOpenId[user.openId] ?? []).length === 0 && (
-                          <span className="text-sm text-muted-foreground">
-                            无
-                          </span>
-                        )}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
     </div>
   );
 }
@@ -623,6 +703,7 @@ function UserChip({
       <button
         type="button"
         className="rounded-full p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+        aria-label={`移除 ${displayName} 的角色`}
         disabled={pending}
         onClick={onRemove}
       >
@@ -632,9 +713,66 @@ function UserChip({
   );
 }
 
+function AdminMetric({
+  icon: Icon,
+  label,
+  value,
+  detail,
+}: {
+  icon: AdminIcon;
+  label: string;
+  value: number;
+  detail: string;
+}) {
+  return (
+    <div className="min-w-0 rounded-lg border bg-card p-4 shadow-sm">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm text-muted-foreground">{label}</p>
+          <p className="mt-1 text-2xl font-semibold tabular-nums">{value}</p>
+        </div>
+        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+          <Icon className="h-5 w-5" />
+        </div>
+      </div>
+      <p className="mt-3 break-words text-xs text-muted-foreground">{detail}</p>
+    </div>
+  );
+}
+
+function AdminNavLink({
+  href,
+  icon: Icon,
+  label,
+}: {
+  href: string;
+  icon: AdminIcon;
+  label: string;
+}) {
+  return (
+    <a
+      href={href}
+      className="flex h-10 min-w-0 items-center justify-center gap-2 rounded-lg border bg-background px-3 text-sm font-medium transition-colors hover:border-primary/30 hover:bg-muted"
+    >
+      <Icon className="h-4 w-4 text-muted-foreground" />
+      <span className="truncate">{label}</span>
+    </a>
+  );
+}
+
+function SystemStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 rounded-lg border bg-background px-4 py-3">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="mt-1 text-lg font-semibold">{value}</p>
+    </div>
+  );
+}
+
 function TechGroupRoleCell({
   entries,
   users,
+  userOptions,
   techGroup,
   pending,
   onRemove,
@@ -642,6 +780,7 @@ function TechGroupRoleCell({
 }: {
   entries: AdminRole[];
   users: AdminUser[];
+  userOptions: UserOption[];
   techGroup: string;
   pending: boolean;
   onRemove: (id: string) => void;
@@ -659,11 +798,7 @@ function TechGroupRoleCell({
     <div className="flex min-h-[2.5rem] items-center justify-between gap-4">
       <div className="flex shrink-0 items-center gap-1">
         <UserSearchSelect
-          users={users.map((u) => ({
-            openId: u.openId,
-            name: u.name,
-            avatar: u.avatar,
-          }))}
+          users={userOptions}
           value={addOpenId}
           onChange={setAddOpenId}
           placeholder="搜索添加"
@@ -697,6 +832,7 @@ function TechGroupRoleCell({
 function RoleCell({
   entries,
   users,
+  userOptions,
   team,
   role,
   pending,
@@ -705,6 +841,7 @@ function RoleCell({
 }: {
   entries: AdminRole[];
   users: AdminUser[];
+  userOptions: UserOption[];
   team: string;
   role: UserRoleType;
   pending: boolean;
@@ -723,11 +860,7 @@ function RoleCell({
     <div className="flex min-h-[2.5rem] items-center justify-between gap-4">
       <div className="flex shrink-0 items-center gap-1">
         <UserSearchSelect
-          users={users.map((u) => ({
-            openId: u.openId,
-            name: u.name,
-            avatar: u.avatar,
-          }))}
+          users={userOptions}
           value={addOpenId}
           onChange={setAddOpenId}
           placeholder="搜索添加"

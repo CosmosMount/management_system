@@ -38,7 +38,7 @@ export async function AppHeader() {
           </Link>
           {showAdmin && (
             <Link href="/admin" className={navLinkClass}>
-              权限管理
+              管理员面板
             </Link>
           )}
         </nav>

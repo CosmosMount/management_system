@@ -46,8 +46,8 @@ export default async function HomePage() {
               <NavCard
                 variant="wide"
                 href="/admin"
-                title="权限管理"
-                description="分配角色与同步飞书通讯录"
+                title="管理员面板"
+                description="角色权限、通讯录同步与验收条例"
                 icon={Shield}
               />
             )}
