@@ -78,11 +78,11 @@ export async function updateTaskStatus(taskId: string, status: TaskStatus) {
   }
 
   const locked = await prisma.task.updateMany({
-    where: { id: taskId, deletedAt: null },
+    where: { id: taskId, status: task.status, deletedAt: null },
     data: { status },
   });
   if (locked.count !== 1) {
-    throw new Error("任务已被删除，请刷新后重试");
+    throw new Error("任务状态已更新，请刷新后重试");
   }
   const updated = await prisma.task.findUniqueOrThrow({ where: { id: taskId } });
 

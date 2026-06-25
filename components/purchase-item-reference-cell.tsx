@@ -8,7 +8,6 @@ type Props = {
 };
 
 export function PurchaseItemReferenceCell({
-  itemKind,
   purchaseLink,
   referenceImagePath,
 }: Props) {

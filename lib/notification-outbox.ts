@@ -1,4 +1,4 @@
-import type { FeedbackStatus, NotificationOutbox } from "@prisma/client";
+import type { FeedbackStatus, NotificationOutbox, Prisma } from "@prisma/client";
 import {
   sendApplicantResubmitNotification,
   sendOrderNotification,
@@ -111,6 +111,43 @@ export async function enqueueNotification({
   }
 }
 
+export async function enqueueNotificationTx(
+  tx: Prisma.TransactionClient,
+  {
+    eventKey,
+    channel,
+    type,
+    payload,
+  }: {
+    eventKey: string;
+    channel: string;
+    type: string;
+    payload: unknown;
+  },
+): Promise<EnqueueNotificationResult> {
+  const payloadText = JSON.stringify(payload);
+  try {
+    await tx.notificationOutbox.create({
+      data: {
+        eventKey,
+        channel,
+        type,
+        payload: payloadText,
+        status: "PENDING",
+        attempts: 0,
+        lastError: "",
+        nextRunAt: new Date(),
+      },
+    });
+    return { created: true };
+  } catch (err) {
+    if (isUniqueConstraintError(err)) {
+      return { created: false };
+    }
+    throw err;
+  }
+}
+
 function isUniqueConstraintError(err: unknown): boolean {
   return (
     typeof err === "object" &&
@@ -162,12 +199,47 @@ export async function enqueueProgressNotification(
   });
 }
 
+export async function enqueueProgressNotificationTx(
+  tx: Prisma.TransactionClient,
+  eventKey: string,
+  payload: ProgressNotifyPayload,
+  context?: NotificationContext,
+) {
+  return enqueueNotificationTx(tx, {
+    eventKey,
+    channel: "progress",
+    type: payload.type,
+    payload: {
+      payload,
+      appOrigin: context?.appOrigin ?? null,
+    } satisfies ProgressOutboxPayload,
+  });
+}
+
 export async function enqueueOrderNotification(
   eventKey: string,
   order: OrderCardPayload,
   context?: NotificationContext,
 ) {
   await enqueueNotification({
+    eventKey,
+    channel: "procurement",
+    type: "order",
+    payload: {
+      kind: "order",
+      order,
+      appOrigin: context?.appOrigin ?? null,
+    } satisfies OrderOutboxPayload,
+  });
+}
+
+export async function enqueueOrderNotificationTx(
+  tx: Prisma.TransactionClient,
+  eventKey: string,
+  order: OrderCardPayload,
+  context?: NotificationContext,
+) {
+  return enqueueNotificationTx(tx, {
     eventKey,
     channel: "procurement",
     type: "order",
@@ -187,6 +259,28 @@ export async function enqueueProcurementRejectedNotification(
   context?: NotificationContext,
 ) {
   await enqueueNotification({
+    eventKey,
+    channel: "procurement",
+    type: "procurement_rejected",
+    payload: {
+      kind: "procurement_rejected",
+      order,
+      reason,
+      rejectedByName,
+      appOrigin: context?.appOrigin ?? null,
+    } satisfies OrderOutboxPayload,
+  });
+}
+
+export async function enqueueProcurementRejectedNotificationTx(
+  tx: Prisma.TransactionClient,
+  eventKey: string,
+  order: OrderCardPayload,
+  reason: string,
+  rejectedByName: string,
+  context?: NotificationContext,
+) {
+  return enqueueNotificationTx(tx, {
     eventKey,
     channel: "procurement",
     type: "procurement_rejected",

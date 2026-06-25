@@ -6,7 +6,7 @@ import { OrderStatus } from "@prisma/client";
 import { mapOrderItems } from "@/lib/feishu";
 import {
   drainNotificationOutboxSoon,
-  enqueueOrderNotification,
+  enqueueOrderNotificationTx,
 } from "@/lib/notification-outbox";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";
@@ -53,29 +53,44 @@ export async function updateOrderStatus(orderId: string) {
     throw new Error("当前状态不允许此操作");
   }
 
-  const updated = await prisma.purchaseOrder.update({
-    where: { id: orderId },
-    data: { status: transition.next, ...stepTimerResetFields() },
-  });
-
+  const context = await getNotificationContext();
   const notifyStatuses: OrderStatus[] = [
     OrderStatus.PENDING_APPLICANT_DOCS,
   ];
-  if (notifyStatuses.includes(updated.status)) {
-    await enqueueOrderNotification(
-      `procurement:order:${updated.id}:${updated.status}:${updated.updatedAt.toISOString()}`,
-      {
-        id: updated.id,
-        orderNo: updated.orderNo,
-        initiatorName: updated.initiatorName,
-        totalPrice: updated.totalPrice,
-        status: updated.status,
-        team: updated.team,
-        techGroup: updated.techGroup,
-        items: mapOrderItems(order.items),
-      },
-      await getNotificationContext(),
-    );
+  const { updated, shouldDrain } = await prisma.$transaction(async (tx) => {
+    const locked = await tx.purchaseOrder.updateMany({
+      where: { id: orderId, status: order.status },
+      data: { status: transition.next, ...stepTimerResetFields() },
+    });
+    if (locked.count !== 1) {
+      throw new Error("订单状态已更新，请刷新后重试");
+    }
+
+    const record = await tx.purchaseOrder.findUniqueOrThrow({
+      where: { id: orderId },
+    });
+    if (notifyStatuses.includes(record.status)) {
+      await enqueueOrderNotificationTx(
+        tx,
+        `procurement:order:${record.id}:${record.status}:${record.updatedAt.toISOString()}`,
+        {
+          id: record.id,
+          orderNo: record.orderNo,
+          initiatorName: record.initiatorName,
+          totalPrice: record.totalPrice,
+          status: record.status,
+          team: record.team,
+          techGroup: record.techGroup,
+          items: mapOrderItems(order.items),
+        },
+        context,
+      );
+      return { updated: record, shouldDrain: true };
+    }
+    return { updated: record, shouldDrain: false };
+  });
+
+  if (shouldDrain) {
     drainNotificationOutboxSoon();
   }
 

@@ -21,9 +21,9 @@ const nextConfig: NextConfig = {
   },
   experimental: {
     serverActions: {
-      bodySizeLimit: "1gb",
+      bodySizeLimit: "256mb",
     },
-    proxyClientMaxBodySize: "1gb",
+    proxyClientMaxBodySize: "256mb",
   },
   // 允许局域网 IP/域名访问 dev 资源（如从手机访问 http://<本机IP>:3000）
   allowedDevOrigins: Array.from(

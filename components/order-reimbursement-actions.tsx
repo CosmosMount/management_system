@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { confirmReimbursement } from "@/app/actions/confirmReimbursement";
@@ -170,17 +170,16 @@ function ApplicantDocsDialog({
     [],
   );
 
-  useEffect(() => {
-    if (open) {
-      setConfirmedItems(
-        items.map((item) => ({
-          id: item.id,
-          lineTotal:
-            Math.round(item.quantity * item.unitPrice * 100) / 100,
-        })),
-      );
-    }
-  }, [open, items]);
+  function handleOpenChange(nextOpen: boolean) {
+    setOpen(nextOpen);
+    if (!nextOpen) return;
+    setConfirmedItems(
+      items.map((item) => ({
+        id: item.id,
+        lineTotal: Math.round(item.quantity * item.unitPrice * 100) / 100,
+      })),
+    );
+  }
 
   async function handleSubmit() {
     const form = document.getElementById(
@@ -250,7 +249,7 @@ function ApplicantDocsDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger
         render={
           <Button size="sm" variant="secondary">

@@ -5,7 +5,7 @@ import { OrderStatus } from "@prisma/client";
 import { mapOrderItems } from "@/lib/feishu";
 import {
   drainNotificationOutboxSoon,
-  enqueueOrderNotification,
+  enqueueOrderNotificationTx,
 } from "@/lib/notification-outbox";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";
@@ -51,6 +51,7 @@ export async function approveManagementReview(orderId: string) {
 
   await requireApproverSignature(session.user.openId);
 
+  const context = await getNotificationContext();
   const { updated, advancedToTeacherReview } = await prisma.$transaction(
     async (tx) => {
       const approvalTargets = [
@@ -94,6 +95,23 @@ export async function approveManagementReview(orderId: string) {
         where: { id: orderId },
       });
       if (!finalOrder) throw new Error("订单不存在");
+      if (advanced.count === 1) {
+        await enqueueOrderNotificationTx(
+          tx,
+          `procurement:order:${finalOrder.id}:${finalOrder.status}:${finalOrder.updatedAt.toISOString()}`,
+          {
+            id: finalOrder.id,
+            orderNo: finalOrder.orderNo,
+            initiatorName: finalOrder.initiatorName,
+            totalPrice: finalOrder.totalPrice,
+            status: finalOrder.status,
+            team: finalOrder.team,
+            techGroup: finalOrder.techGroup,
+            items: mapOrderItems(order.items),
+          },
+          context,
+        );
+      }
       return {
         updated: finalOrder,
         advancedToTeacherReview: advanced.count === 1,
@@ -102,20 +120,6 @@ export async function approveManagementReview(orderId: string) {
   );
 
   if (advancedToTeacherReview) {
-    await enqueueOrderNotification(
-      `procurement:order:${updated.id}:${updated.status}:${updated.updatedAt.toISOString()}`,
-      {
-        id: updated.id,
-        orderNo: updated.orderNo,
-        initiatorName: updated.initiatorName,
-        totalPrice: updated.totalPrice,
-        status: updated.status,
-        team: updated.team,
-        techGroup: updated.techGroup,
-        items: mapOrderItems(order.items),
-      },
-      await getNotificationContext(),
-    );
     drainNotificationOutboxSoon();
   }
 

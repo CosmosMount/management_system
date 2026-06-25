@@ -99,9 +99,19 @@ async function getSuperAdminOpenIds(): Promise<string[]> {
 
 async function notifyOpenIds(openIds: string[], card: FeedbackCard) {
   const uniqueOpenIds = [...new Set(openIds.filter(Boolean))];
-  await Promise.allSettled(
+  const results = await Promise.allSettled(
     uniqueOpenIds.map((openId) => sendDirectCard(openId, card)),
   );
+  const failures = results.filter(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (failures.length > 0) {
+    const reason = failures[0]?.reason;
+    const message = reason instanceof Error ? reason.message : String(reason);
+    throw new Error(
+      `反馈飞书通知失败：${failures.length}/${results.length} 个收件人失败；${message}`,
+    );
+  }
 }
 
 export async function sendFeedbackCreatedNotification({

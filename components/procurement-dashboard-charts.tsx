@@ -38,12 +38,13 @@ function DonutChart({
     );
   }
 
-  let cursor = 0;
-  const gradientParts = slices.map((slice) => {
+  const gradientParts = slices.map((slice, index) => {
+    const start = slices
+      .slice(0, index)
+      .reduce((sum, item) => sum + (item.value / total) * 100, 0);
     const pct = (slice.value / total) * 100;
-    const start = cursor;
-    cursor += pct;
-    return `${slice.color} ${start}% ${cursor}%`;
+    const end = start + pct;
+    return `${slice.color} ${start}% ${end}%`;
   });
 
   return (

@@ -6,7 +6,6 @@ import { useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   AlertCircle,
-  Check,
   CheckCircle2,
   Circle,
   Clock3,
@@ -16,7 +15,6 @@ import {
   Plus,
   RotateCcw,
   Search,
-  XCircle,
   ArrowUpRight,
   Pencil,
 } from "lucide-react";
@@ -42,6 +40,7 @@ import { rollbackProjectStage } from "@/app/actions/progress/rollbackProjectStag
 import { updateProjectStatus } from "@/app/actions/progress/updateProjectStatus";
 import { updateTaskStatus } from "@/app/actions/progress/updateTask";
 import { BackLink } from "@/components/back-link";
+import { ReasonConfirmDialog } from "@/components/reason-confirm-dialog";
 import { ProjectForm } from "@/components/progress/project-form";
 import { ManualReminderButton } from "@/components/progress/manual-reminder-button";
 import { ArchivedProjectDeleteButton } from "@/components/admin-delete-actions";
@@ -576,22 +575,16 @@ function ProjectOverview({
       .reverse()
       .find((stage) => !!stage.dueAt)?.dueAt ?? null;
 
-  async function handleProjectStatus(next: ProjectStatus) {
+  async function handleProjectStatus(next: ProjectStatus, reason = "") {
     const actionLabel =
       next === "IN_PROGRESS"
         ? "启动项目"
         : next === "COMPLETED"
           ? "完成项目"
           : "取消项目";
-    if (
-      (next === "COMPLETED" || next === "CANCELED") &&
-      !window.confirm(`确认${actionLabel}？`)
-    ) {
-      return;
-    }
     setLoadingStatus(next);
     try {
-      await updateProjectStatus(project.id, next);
+      await updateProjectStatus(project.id, next, reason);
       toast.success(`${actionLabel}成功`);
       router.refresh();
     } catch (err) {
@@ -668,27 +661,29 @@ function ProjectOverview({
               </Button>
             )}
             {project.status === "IN_PROGRESS" && (
-              <Button
-                type="button"
+              <ReasonConfirmDialog
+                triggerLabel="完成项目"
+                title="确认完成项目"
+                description="项目完成后将进入归档状态。请确认所有阶段和相关任务已经处理完毕。"
+                reasonLabel="完成说明"
+                confirmLabel="确认完成"
                 variant="outline"
                 disabled={loadingStatus !== null || !allStagesCompleted}
-                onClick={() => handleProjectStatus("COMPLETED")}
-              >
-                <Check className="h-4 w-4" />
-                完成项目
-              </Button>
+                onConfirm={(reason) => handleProjectStatus("COMPLETED", reason)}
+              />
             )}
             {(project.status === "NOT_STARTED" ||
               project.status === "IN_PROGRESS") && (
-              <Button
-                type="button"
+              <ReasonConfirmDialog
+                triggerLabel="取消项目"
+                title="确认取消项目"
+                description="项目取消后将进入归档状态，后续不能继续推进阶段。"
+                reasonLabel="取消原因"
+                confirmLabel="确认取消"
                 variant="destructive"
                 disabled={loadingStatus !== null}
-                onClick={() => handleProjectStatus("CANCELED")}
-              >
-                <XCircle className="h-4 w-4" />
-                取消项目
-              </Button>
+                onConfirm={(reason) => handleProjectStatus("CANCELED", reason)}
+              />
             )}
             <ArchivedProjectDeleteButton
               projectId={project.id}

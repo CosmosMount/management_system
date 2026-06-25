@@ -1,6 +1,12 @@
 "use client";
 
-import { useFieldArray, useForm, Controller, type Resolver } from "react-hook-form";
+import {
+  Controller,
+  useFieldArray,
+  useForm,
+  useWatch,
+  type Resolver,
+} from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Plus, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -64,7 +70,7 @@ export function WorkshopFeeForm() {
     name: "items",
   });
 
-  const items = form.watch("items");
+  const items = useWatch({ control: form.control, name: "items" }) ?? [];
   const totalPrice = items.reduce(
     (sum, item) => sum + (Number(item.lineTotal) || 0),
     0,

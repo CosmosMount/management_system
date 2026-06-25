@@ -1,7 +1,7 @@
 "use server";
 
 import { auth } from "@/lib/auth";
-import { OrderStatus } from "@prisma/client";
+import { OrderStatus, type PurchaseItemKind } from "@prisma/client";
 import { attachItemReferenceImages } from "@/lib/order-item-images";
 import { removeOrderUploads } from "@/lib/file-upload";
 import { prisma } from "@/lib/prisma";
@@ -12,6 +12,15 @@ import {
   parseWorkshopFeeFormData,
 } from "@/lib/validations/workshop-fee";
 import { generateWorkshopOrderNo } from "@/lib/workshop-order-no";
+
+function isUniqueConstraintError(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err as { code?: string }).code === "P2002"
+  );
+}
 
 export async function createWorkshopFeeOrder(formData: FormData) {
   const session = await auth();
@@ -32,35 +41,51 @@ export async function createWorkshopFeeOrder(formData: FormData) {
   }
 
   const totalPrice = parsed.items.reduce((sum, item) => sum + item.lineTotal, 0);
-  const orderNo = await generateWorkshopOrderNo();
 
-  const order = await prisma.$transaction(async (tx) => {
-    return tx.purchaseOrder.create({
-      data: {
-        orderNo,
-        initiatorId: user.id,
-        initiatorName: user.name,
-        team: parsed.team,
-        techGroup: parsed.techGroup,
-        totalPrice,
-        status: OrderStatus.COMPLETED,
-        isWorkshopFee: true,
-        teamApproved: true,
-        techGroupApproved: true,
-        items: {
-          create: parsed.items.map((item) => ({
-            name: item.name,
-            spec: item.spec,
-            itemKind: "PROCESSING_FEE",
-            purchaseLink: "",
-            quantity: item.quantity,
-            unitPrice: item.lineTotal / item.quantity,
-          })),
-        },
-      },
-      include: { items: true },
-    });
-  });
+  let order: {
+    id: string;
+    items: Array<{ id: string; itemKind: PurchaseItemKind }>;
+  } | null = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const orderNo = await generateWorkshopOrderNo();
+      order = await prisma.$transaction(async (tx) => {
+        return tx.purchaseOrder.create({
+          data: {
+            orderNo,
+            initiatorId: user.id,
+            initiatorName: user.name,
+            team: parsed.team,
+            techGroup: parsed.techGroup,
+            totalPrice,
+            status: OrderStatus.COMPLETED,
+            isWorkshopFee: true,
+            teamApproved: true,
+            techGroupApproved: true,
+            items: {
+              create: parsed.items.map((item) => ({
+                name: item.name,
+                spec: item.spec,
+                itemKind: "PROCESSING_FEE",
+                purchaseLink: "",
+                quantity: item.quantity,
+                unitPrice: item.lineTotal / item.quantity,
+              })),
+            },
+          },
+          include: { items: true },
+        });
+      });
+      break;
+    } catch (err) {
+      if (!isUniqueConstraintError(err) || attempt === 4) {
+        throw err;
+      }
+    }
+  }
+  if (!order) {
+    throw new Error("订单创建失败，请重试");
+  }
 
   try {
     await attachItemReferenceImages(

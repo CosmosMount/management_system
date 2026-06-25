@@ -42,9 +42,15 @@ export async function confirmReimbursement(orderId: string) {
     throw new Error("凭证不完整，无法确认");
   }
 
-  const updated = await prisma.purchaseOrder.update({
-    where: { id: orderId },
-    data: { status: OrderStatus.COMPLETED, ...stepTimerResetFields() },
+  const updated = await prisma.$transaction(async (tx) => {
+    const locked = await tx.purchaseOrder.updateMany({
+      where: { id: orderId, status: order.status },
+      data: { status: OrderStatus.COMPLETED, ...stepTimerResetFields() },
+    });
+    if (locked.count !== 1) {
+      throw new Error("订单状态已更新，请刷新后重试");
+    }
+    return tx.purchaseOrder.findUniqueOrThrow({ where: { id: orderId } });
   });
 
   revalidatePath(routes.procurement.list);

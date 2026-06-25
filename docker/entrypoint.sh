@@ -11,8 +11,8 @@ echo "[entrypoint] DATABASE_URL=$DATABASE_URL"
 if [ "$SKIP_DB_PUSH" = "true" ]; then
   echo "[entrypoint] 跳过数据库 schema 同步（SKIP_DB_PUSH=true）"
 else
-  echo "[entrypoint] 同步数据库 schema..."
-  npx prisma db push --skip-generate
+  echo "[entrypoint] 应用数据库迁移..."
+  npm run db:deploy
 fi
 
 if [ "$RUN_DB_SEED" = "true" ]; then

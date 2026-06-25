@@ -68,18 +68,15 @@ export function ProfileOrderList({ orders }: { orders: ProfileOrderRow[] }) {
   }
 
   const activeCount = orders.filter((order) => order.isActive).length;
-  let shownInactiveDivider = false;
+  const firstInactiveIndex = orders.findIndex((order) => !order.isActive);
 
   return (
     <>
       <SectionIntro activeCount={activeCount} totalCount={orders.length} />
       <ul className="space-y-2">
-        {orders.map((order) => {
+        {orders.map((order, index) => {
           const showDivider =
-            !order.isActive && !shownInactiveDivider && activeCount > 0;
-          if (showDivider) {
-            shownInactiveDivider = true;
-          }
+            index === firstInactiveIndex && activeCount > 0;
           return (
             <li key={order.id}>
               <ActiveDivider show={showDivider} label="其他状态" />
@@ -121,18 +118,15 @@ export function ProfileProjectList({
   }
 
   const activeCount = projects.filter((project) => project.isActive).length;
-  let shownInactiveDivider = false;
+  const firstInactiveIndex = projects.findIndex((project) => !project.isActive);
 
   return (
     <>
       <SectionIntro activeCount={activeCount} totalCount={projects.length} />
       <ul className="space-y-2">
-        {projects.map((project) => {
+        {projects.map((project, index) => {
           const showDivider =
-            !project.isActive && !shownInactiveDivider && activeCount > 0;
-          if (showDivider) {
-            shownInactiveDivider = true;
-          }
+            index === firstInactiveIndex && activeCount > 0;
           return (
             <li key={project.id}>
               <ActiveDivider show={showDivider} label="已结束" />
@@ -169,18 +163,15 @@ export function ProfileTaskList({ tasks }: { tasks: ProfileTaskRow[] }) {
   }
 
   const activeCount = tasks.filter((task) => task.isActive).length;
-  let shownInactiveDivider = false;
+  const firstInactiveIndex = tasks.findIndex((task) => !task.isActive);
 
   return (
     <>
       <SectionIntro activeCount={activeCount} totalCount={tasks.length} />
       <ul className="space-y-2">
-        {tasks.map((task) => {
+        {tasks.map((task, index) => {
           const showDivider =
-            !task.isActive && !shownInactiveDivider && activeCount > 0;
-          if (showDivider) {
-            shownInactiveDivider = true;
-          }
+            index === firstInactiveIndex && activeCount > 0;
           return (
             <li key={task.id}>
               <ActiveDivider show={showDivider} label="已完成 / 已归档" />

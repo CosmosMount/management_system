@@ -227,6 +227,67 @@ function detectFeedbackImage(buffer: Buffer): DetectedFeedbackImage | null {
   return null;
 }
 
+function detectUploadMime(buffer: Buffer): string | null {
+  const image = detectFeedbackImage(buffer);
+  if (image) return image.mimeType;
+
+  if (
+    buffer.length >= 5 &&
+    buffer.subarray(0, 5).toString("ascii") === "%PDF-"
+  ) {
+    return "application/pdf";
+  }
+
+  if (
+    buffer.length >= 4 &&
+    buffer[0] === 0x50 &&
+    buffer[1] === 0x4b &&
+    buffer[2] === 0x03 &&
+    buffer[3] === 0x04
+  ) {
+    return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  }
+
+  if (
+    buffer.length >= 8 &&
+    buffer[0] === 0xd0 &&
+    buffer[1] === 0xcf &&
+    buffer[2] === 0x11 &&
+    buffer[3] === 0xe0 &&
+    buffer[4] === 0xa1 &&
+    buffer[5] === 0xb1 &&
+    buffer[6] === 0x1a &&
+    buffer[7] === 0xe1
+  ) {
+    return "application/msword";
+  }
+
+  return null;
+}
+
+function normalizeMimeType(mimeType: string): string {
+  return mimeType === "image/jpg" ? "image/jpeg" : mimeType;
+}
+
+function assertDetectedMimeAllowed(
+  buffer: Buffer,
+  allowedTypes: Set<string> | ReadonlySet<string>,
+  fallbackType: string,
+) {
+  const detected = detectUploadMime(buffer);
+  if (!detected) {
+    throw new Error("文件内容与支持的文件类型不匹配");
+  }
+  const allowed = new Set([...allowedTypes].map(normalizeMimeType));
+  if (!allowed.has(normalizeMimeType(detected))) {
+    throw new Error("文件内容与支持的文件类型不匹配");
+  }
+  if (fallbackType && normalizeMimeType(fallbackType) !== normalizeMimeType(detected)) {
+    throw new Error("文件内容与声明的文件类型不一致");
+  }
+  return detected;
+}
+
 export async function saveItemReferenceImage(
   orderId: string,
   index: number,
@@ -259,11 +320,16 @@ export async function saveUpload(
   const storagePath = `${orderId}/${filename}`;
 
   const buffer = Buffer.from(await file.arrayBuffer());
+  const detectedMimeType = assertDetectedMimeAllowed(
+    buffer,
+    allowedTypes,
+    file.type,
+  );
   await writeAssetFile({
     storagePath,
     publicPath,
     buffer,
-    mimeType: file.type || "application/octet-stream",
+    mimeType: detectedMimeType,
     options: {
       kind: options?.kind ?? "ORDER_ATTACHMENT",
       orderId: options?.orderId ?? orderId,
@@ -290,12 +356,17 @@ export async function saveUserSignature(
   const ext = path.extname(file.name) || ".png";
   const filename = `signature${ext}`;
   const buffer = Buffer.from(await file.arrayBuffer());
+  const detectedMimeType = assertDetectedMimeAllowed(
+    buffer,
+    SIGNATURE_TYPES,
+    file.type,
+  );
   const publicPath = `/uploads/signatures/${openId}/${filename}`;
   await writeAssetFile({
     storagePath: `signatures/${openId}/${filename}`,
     publicPath,
     buffer,
-    mimeType: file.type || "image/png",
+    mimeType: detectedMimeType,
     options: {
       kind: "USER_SIGNATURE",
       signatureOwnerOpenId: openId,

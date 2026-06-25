@@ -11,6 +11,7 @@
     "cron": "tsx scripts/cron.ts",
     "postinstall": "prisma generate",
     "db:push": "prisma db push",
+    "db:deploy": "tsx scripts/deploy-db.ts",
     "db:seed": "tsx prisma/seed.ts",
     "db:fix-roles": "tsx scripts/fix-user-roles.ts && tsx prisma/seed.ts",
     "db:migrate-status": "tsx scripts/migrate-order-status.ts",

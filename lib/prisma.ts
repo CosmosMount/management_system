@@ -1,4 +1,5 @@
 import path from "path";
+import Database from "better-sqlite3";
 import { PrismaClient } from "@prisma/client";
 import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 
@@ -13,9 +14,22 @@ function resolveSqlitePath(): string {
 
 const globalForPrisma = globalThis as unknown as { prisma: PrismaClient | undefined };
 
+function initializeSqliteRuntime(): void {
+  const db = new Database(resolveSqlitePath(), { timeout: 5000 });
+  try {
+    db.pragma("journal_mode = WAL");
+    db.pragma("busy_timeout = 5000");
+    db.pragma("foreign_keys = ON");
+  } finally {
+    db.close();
+  }
+}
+
 function createPrismaClient(): PrismaClient {
+  initializeSqliteRuntime();
   const adapter = new PrismaBetterSqlite3({
     url: resolveSqlitePath(),
+    timeout: 5000,
   });
   return new PrismaClient({ adapter });
 }

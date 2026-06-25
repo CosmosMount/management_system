@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
-import { OrderStatus } from "@prisma/client";
+import { OrderStatus, type PurchaseItemKind } from "@prisma/client";
 import { mapOrderItems } from "@/lib/feishu";
 import {
   drainNotificationOutboxSoon,
@@ -11,6 +11,7 @@ import {
 import { generateOrderNo } from "@/lib/order-no";
 import { attachItemReferenceImages } from "@/lib/order-item-images";
 import { prisma } from "@/lib/prisma";
+import { removeOrderUploads } from "@/lib/file-upload";
 import { getNotificationContext } from "@/lib/request-origin";
 import { routes } from "@/lib/routes";
 import { requireInitiatorSignature } from "@/lib/user-signature";
@@ -20,6 +21,15 @@ import {
   parseOrderFormData,
   toStoredPurchaseItem,
 } from "@/lib/validations/order";
+
+function isUniqueConstraintError(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err as { code?: string }).code === "P2002"
+  );
+}
 
 export async function createOrder(formData: FormData) {
   const session = await auth();
@@ -43,35 +53,57 @@ export async function createOrder(formData: FormData) {
 
   const storedItems = parsed.items.map(toStoredPurchaseItem);
   const totalPrice = parsed.items.reduce((sum, item) => sum + item.lineTotal, 0);
-  const orderNo = await generateOrderNo();
   const status = parsed.submit
     ? OrderStatus.MANAGEMENT_REVIEW
     : OrderStatus.DRAFT;
 
-  const order = await prisma.$transaction(async (tx) => {
-    return tx.purchaseOrder.create({
-      data: {
-        orderNo,
-        initiatorId: user.id,
-        initiatorName: user.name,
-        team: parsed.team,
-        techGroup: parsed.techGroup,
-        totalPrice,
-        status,
-        items: {
-          create: storedItems,
-        },
-      },
-      include: { items: true },
-    });
-  });
+  let order: {
+    id: string;
+    items: Array<{ id: string; itemKind: PurchaseItemKind }>;
+  } | null = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const orderNo = await generateOrderNo();
+      order = await prisma.$transaction(async (tx) => {
+        return tx.purchaseOrder.create({
+          data: {
+            orderNo,
+            initiatorId: user.id,
+            initiatorName: user.name,
+            team: parsed.team,
+            techGroup: parsed.techGroup,
+            totalPrice,
+            status,
+            items: {
+              create: storedItems,
+            },
+          },
+          include: { items: true },
+        });
+      });
+      break;
+    } catch (err) {
+      if (!isUniqueConstraintError(err) || attempt === 4) {
+        throw err;
+      }
+    }
+  }
+  if (!order) {
+    throw new Error("订单创建失败，请重试");
+  }
 
-  await attachItemReferenceImages(
-    order.id,
-    order.items.map((item) => ({ id: item.id, itemKind: item.itemKind })),
-    itemImages,
-    parsed.items.map((item) => item.referenceImagePath ?? null),
-  );
+  try {
+    await attachItemReferenceImages(
+      order.id,
+      order.items.map((item) => ({ id: item.id, itemKind: item.itemKind })),
+      itemImages,
+      parsed.items.map((item) => item.referenceImagePath ?? null),
+    );
+  } catch (err) {
+    await prisma.purchaseOrder.deleteMany({ where: { id: order.id } });
+    await removeOrderUploads(order.id);
+    throw err;
+  }
 
   const refreshed = await prisma.purchaseOrder.findUnique({
     where: { id: order.id },

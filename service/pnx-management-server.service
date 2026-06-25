@@ -17,7 +17,7 @@ Environment="PORT=__PORT__"
 Environment="HOSTNAME=0.0.0.0"
 Environment="PATH=__NODE_BIN_DIR__:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-ExecStartPre=__NPM_BIN__ run db:push
+ExecStartPre=__NPM_BIN__ run db:deploy
 ExecStart=__NPM_BIN__ start
 
 KillSignal=SIGTERM

@@ -7,12 +7,13 @@ import { OrderStatus, UserRoleType } from "@prisma/client";
 import { mapOrderItems } from "@/lib/feishu";
 import {
   drainNotificationOutboxSoon,
-  enqueueOrderNotification,
+  enqueueOrderNotificationTx,
 } from "@/lib/notification-outbox";
 import { getNotificationContext } from "@/lib/request-origin";
 import {
   MAX_FILE_SIZE,
   MAX_INVOICE_COUNT,
+  removeUploadByPublicPath,
   saveUpload,
   uploadTypeSets,
 } from "@/lib/file-upload";
@@ -247,55 +248,74 @@ export async function uploadApplicantDocs(formData: FormData) {
 
   const totalPrice = confirmedItems.reduce((sum, c) => sum + c.lineTotal, 0);
 
-  const updated = await prisma.$transaction(async (tx) => {
-    for (const confirmed of confirmedItems) {
-      const dbItem = itemMap.get(confirmed.id);
-      if (!dbItem || dbItem.quantity <= 0) continue;
-      await tx.purchaseItem.update({
-        where: { id: confirmed.id },
+  const context = await getNotificationContext();
+  let updated;
+  try {
+    updated = await prisma.$transaction(async (tx) => {
+      for (const confirmed of confirmedItems) {
+        const dbItem = itemMap.get(confirmed.id);
+        if (!dbItem || dbItem.quantity <= 0) continue;
+        await tx.purchaseItem.update({
+          where: { id: confirmed.id },
+          data: {
+            unitPrice: confirmed.lineTotal / dbItem.quantity,
+            photoPath: photoPaths.get(confirmed.id) ?? null,
+          },
+        });
+      }
+
+      const locked = await tx.purchaseOrder.updateMany({
+        where: { id: orderId, status: order.status },
         data: {
-          unitPrice: confirmed.lineTotal / dbItem.quantity,
-          photoPath: photoPaths.get(confirmed.id) ?? null,
+          totalPrice,
+          invoicePaths: serializeFilePaths(invoicePaths),
+          invoicePath: invoicePaths[0] ?? null,
+          listDocPath,
+          status: OrderStatus.PENDING_FINANCE_REVIEW,
+          rejectionReason: null,
+          rejectedAt: null,
+          rejectedByName: null,
+          ...stepTimerResetFields(),
         },
       });
-    }
+      if (locked.count !== 1) {
+        throw new Error("订单状态已更新，请刷新后重试");
+      }
+      const record = await tx.purchaseOrder.findUniqueOrThrow({
+        where: { id: orderId },
+      });
 
-    return tx.purchaseOrder.update({
-      where: { id: orderId },
-      data: {
-        totalPrice,
-        invoicePaths: serializeFilePaths(invoicePaths),
-        invoicePath: invoicePaths[0] ?? null,
-        listDocPath,
-        status: OrderStatus.PENDING_FINANCE_REVIEW,
-        rejectionReason: null,
-        rejectedAt: null,
-        rejectedByName: null,
-        ...stepTimerResetFields(),
-      },
+      await enqueueOrderNotificationTx(
+        tx,
+        `procurement:order:${record.id}:${record.status}:${record.updatedAt.toISOString()}`,
+        {
+          id: record.id,
+          orderNo: record.orderNo,
+          initiatorName: record.initiatorName,
+          totalPrice: record.totalPrice,
+          status: record.status,
+          team: record.team,
+          techGroup: record.techGroup,
+          items: mapOrderItems(
+            docItems.map((item) => ({
+              name: item.name,
+              quantity: item.quantity,
+              unitPrice: item.unitPrice,
+            })),
+          ),
+        },
+        context,
+      );
+      return record;
     });
-  });
-
-  await enqueueOrderNotification(
-    `procurement:order:${updated.id}:${updated.status}:${updated.updatedAt.toISOString()}`,
-    {
-      id: updated.id,
-      orderNo: updated.orderNo,
-      initiatorName: updated.initiatorName,
-      totalPrice: updated.totalPrice,
-      status: updated.status,
-      team: updated.team,
-      techGroup: updated.techGroup,
-      items: mapOrderItems(
-        docItems.map((item) => ({
-          name: item.name,
-          quantity: item.quantity,
-          unitPrice: item.unitPrice,
-        })),
+  } catch (err) {
+    await Promise.allSettled(
+      [...photoPaths.values(), ...invoicePaths, listDocPath].map((publicPath) =>
+        removeUploadByPublicPath(publicPath),
       ),
-    },
-    await getNotificationContext(),
-  );
+    );
+    throw err;
+  }
   drainNotificationOutboxSoon();
 
   revalidatePath(routes.procurement.list);

@@ -13,7 +13,6 @@ const authMiddleware = middlewareAuth((req) => {
   const isPublic =
     pathname === "/login" ||
     pathname.startsWith("/api/auth") ||
-    pathname.startsWith("/uploads") ||
     pathname.startsWith("/_next") ||
     pathname === "/favicon.ico";
 

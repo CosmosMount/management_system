@@ -5,7 +5,7 @@ import { z } from "zod";
 import { auth } from "@/lib/auth";
 import {
   drainNotificationOutboxSoon,
-  enqueueProcurementRejectedNotification,
+  enqueueProcurementRejectedNotificationTx,
 } from "@/lib/notification-outbox";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
@@ -58,38 +58,48 @@ export async function rejectProcurementOrder(input: {
   });
   const rejectedByName = user?.name ?? session.user.name ?? "审批人";
 
-  const updated = await prisma.purchaseOrder.update({
-    where: { id: orderId },
-    data: {
-      status: OrderStatus.REJECTED,
-      teamApproved: false,
-      techGroupApproved: false,
-      rejectionReason: reason,
-      rejectedAt: new Date(),
+  const context = await getNotificationContext();
+  const updated = await prisma.$transaction(async (tx) => {
+    const locked = await tx.purchaseOrder.updateMany({
+      where: { id: orderId, status: order.status },
+      data: {
+        status: OrderStatus.REJECTED,
+        teamApproved: false,
+        techGroupApproved: false,
+        rejectionReason: reason,
+        rejectedAt: new Date(),
+        rejectedByName,
+      },
+    });
+    if (locked.count !== 1) {
+      throw new Error("订单状态已更新，请刷新后重试");
+    }
+    const record = await tx.purchaseOrder.findUniqueOrThrow({
+      where: { id: orderId },
+    });
+    await enqueueProcurementRejectedNotificationTx(
+      tx,
+      `procurement:rejected:${record.id}:${record.updatedAt.toISOString()}`,
+      {
+        id: record.id,
+        orderNo: record.orderNo,
+        initiatorName: record.initiatorName,
+        totalPrice: record.totalPrice,
+        status: record.status,
+        team: record.team,
+        techGroup: record.techGroup,
+        items: order.items.map((item) => ({
+          name: item.name,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+        })),
+      },
+      reason,
       rejectedByName,
-    },
+      context,
+    );
+    return record;
   });
-
-  await enqueueProcurementRejectedNotification(
-    `procurement:rejected:${updated.id}:${updated.updatedAt.toISOString()}`,
-    {
-      id: updated.id,
-      orderNo: updated.orderNo,
-      initiatorName: updated.initiatorName,
-      totalPrice: updated.totalPrice,
-      status: updated.status,
-      team: updated.team,
-      techGroup: updated.techGroup,
-      items: order.items.map((item) => ({
-        name: item.name,
-        quantity: item.quantity,
-        unitPrice: item.unitPrice,
-      })),
-    },
-    reason,
-    rejectedByName,
-    await getNotificationContext(),
-  );
   drainNotificationOutboxSoon();
 
   revalidatePath(routes.procurement.list);

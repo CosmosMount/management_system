@@ -241,11 +241,16 @@ async function notifyApproversByRole(
   const results = await Promise.allSettled(
     openIds.map((openId) => sendDirectCard(openId, card)),
   );
+  const failures = results.filter(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
 
-  for (const result of results) {
-    if (result.status === "rejected") {
-      console.error("[feishu] 私信通知失败:", result.reason);
-    }
+  if (failures.length > 0) {
+    const reason = failures[0]?.reason;
+    const message = reason instanceof Error ? reason.message : String(reason);
+    throw new Error(
+      `飞书私信通知失败：${failures.length}/${results.length} 个收件人失败；${message}`,
+    );
   }
 }
 
@@ -290,9 +295,7 @@ async function notifyInitiator(
   if (!record?.initiator.openId) return;
 
   const card = buildOrderCard(order, cardOptions);
-  await sendDirectCard(record.initiator.openId, card).catch((err) => {
-    console.error("[feishu] 发起人私信通知失败:", err);
-  });
+  await sendDirectCard(record.initiator.openId, card);
 }
 
 /** 采购审批驳回：通知采购人 */

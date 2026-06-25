@@ -4,7 +4,7 @@ import { auth } from "@/lib/auth";
 import { requireSessionUser } from "@/lib/progress-activity";
 import {
   drainNotificationOutboxSoon,
-  enqueueProgressNotification,
+  enqueueProgressNotificationTx,
 } from "@/lib/notification-outbox";
 import { canCreateProject, canCreateProjectInScope } from "@/lib/permissions-progress";
 import { prisma } from "@/lib/prisma";
@@ -79,6 +79,7 @@ export async function createProject(input: CreateProjectInput) {
     }
   }
 
+  const context = await getNotificationContext();
   const project = await prisma.$transaction(async (tx) => {
     const created = await tx.project.create({
       data: {
@@ -138,28 +139,29 @@ export async function createProject(input: CreateProjectInput) {
       },
     });
 
+    await enqueueProgressNotificationTx(
+      tx,
+      `progress:project_created:${created.id}`,
+      {
+        type: "project_created",
+        projectId: created.id,
+        projectName: created.name,
+        team: created.team,
+        techGroup: created.techGroup,
+        ownerOpenIds: orderedOwners.map((owner) => owner.openId),
+        ownerNames: orderedOwners.map((owner) => owner.name).join("、"),
+        participantOpenIds: orderedParticipants.map(
+          (participant) => participant.openId,
+        ),
+        participantNames: orderedParticipants
+          .map((participant) => participant.name)
+          .join("、"),
+      },
+      context,
+    );
+
     return created;
   });
-
-  await enqueueProgressNotification(
-    `progress:project_created:${project.id}`,
-    {
-      type: "project_created",
-      projectId: project.id,
-      projectName: project.name,
-      team: project.team,
-      techGroup: project.techGroup,
-      ownerOpenIds: orderedOwners.map((owner) => owner.openId),
-      ownerNames: orderedOwners.map((owner) => owner.name).join("、"),
-      participantOpenIds: orderedParticipants.map(
-        (participant) => participant.openId,
-      ),
-      participantNames: orderedParticipants
-        .map((participant) => participant.name)
-        .join("、"),
-    },
-    await getNotificationContext(),
-  );
   drainNotificationOutboxSoon();
 
   revalidateProgress(project.id);

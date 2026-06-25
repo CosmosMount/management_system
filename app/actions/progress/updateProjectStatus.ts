@@ -2,10 +2,10 @@
 
 import type { ProjectStatus } from "@prisma/client";
 import { auth } from "@/lib/auth";
-import { logProgressActivity, requireSessionUser } from "@/lib/progress-activity";
+import { requireSessionUser } from "@/lib/progress-activity";
 import {
   drainNotificationOutboxSoon,
-  enqueueProgressNotification,
+  enqueueProgressNotificationTx,
 } from "@/lib/notification-outbox";
 import { assertProjectTransition } from "@/lib/progress-flow";
 import { canUpdateProjectLifecycle } from "@/lib/permissions-progress";
@@ -18,6 +18,7 @@ import { getUserRoles } from "@/lib/permissions";
 export async function updateProjectStatus(
   projectId: string,
   status: ProjectStatus,
+  reason = "",
 ) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
@@ -47,6 +48,13 @@ export async function updateProjectStatus(
 
   assertProjectTransition(project.status, status);
 
+  const context = await getNotificationContext();
+  const type =
+    status === "IN_PROGRESS"
+      ? "project_started"
+      : status === "COMPLETED"
+        ? "project_completed"
+        : "project_canceled";
   const updated = await prisma.$transaction(async (tx) => {
     const lockedCurrentState = await tx.project.updateMany({
       where: { id: projectId, status: project.status },
@@ -96,36 +104,31 @@ export async function updateProjectStatus(
 
     const record = await tx.project.findUnique({ where: { id: projectId } });
     if (!record) throw new Error("项目不存在");
+    await tx.progressActivityLog.create({
+      data: {
+        projectId,
+        action: "project.status_changed",
+        actorOpenId: user.openId,
+        actorName: user.name,
+        payload: JSON.stringify({ from: project.status, to: status, reason }),
+      },
+    });
+    await enqueueProgressNotificationTx(
+      tx,
+      `progress:${type}:${project.id}:${record.updatedAt.toISOString()}`,
+      {
+        type,
+        projectId: project.id,
+        projectName: project.name,
+        team: project.team,
+        techGroup: project.techGroup,
+        ownerOpenIds: getProjectOwnerOpenIds(project),
+        ownerNames: getProjectOwnerNames(project),
+      },
+      context,
+    );
     return record;
   });
-
-  await logProgressActivity({
-    projectId,
-    action: "project.status_changed",
-    actorOpenId: user.openId,
-    actorName: user.name,
-    payload: { from: project.status, to: status },
-  });
-
-  const type =
-    status === "IN_PROGRESS"
-      ? "project_started"
-      : status === "COMPLETED"
-        ? "project_completed"
-        : "project_canceled";
-  await enqueueProgressNotification(
-    `progress:${type}:${project.id}:${updated.updatedAt.toISOString()}`,
-    {
-      type,
-      projectId: project.id,
-      projectName: project.name,
-      team: project.team,
-      techGroup: project.techGroup,
-      ownerOpenIds: getProjectOwnerOpenIds(project),
-      ownerNames: getProjectOwnerNames(project),
-    },
-    await getNotificationContext(),
-  );
   drainNotificationOutboxSoon();
 
   revalidateProgress(projectId);

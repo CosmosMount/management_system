@@ -1,5 +1,5 @@
 export const MAX_FEEDBACK_IMAGE_COUNT = 9;
-export const MAX_FEEDBACK_IMAGE_SIZE = 100 * 1024 * 1024;
+export const MAX_FEEDBACK_IMAGE_SIZE = 20 * 1024 * 1024;
 
 export const FEEDBACK_IMAGE_ALLOWED_TYPES = [
   "image/png",

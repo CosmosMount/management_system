@@ -1,5 +1,7 @@
-import { readFile, stat } from "fs/promises";
+import { createReadStream } from "fs";
+import { stat } from "fs/promises";
 import path from "path";
+import { Readable } from "stream";
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { canViewFileAsset } from "@/lib/file-asset-permissions";
@@ -89,15 +91,16 @@ export async function serveUploadFile(
   const forceDownload =
     options?.download || ext === ".doc" || ext === ".docx" || ext === ".pdf";
 
-  const body = await readFile(filePath);
+  const body = Readable.toWeb(createReadStream(filePath));
 
-  return new NextResponse(body, {
+  return new NextResponse(body as unknown as BodyInit, {
     status: 200,
     headers: {
       "Content-Type": contentType,
       "Content-Length": String(fileStat.size),
       "Content-Disposition": contentDisposition(filename, forceDownload),
       "Cache-Control": "private, max-age=3600",
+      "X-Content-Type-Options": "nosniff",
     },
   });
 }
