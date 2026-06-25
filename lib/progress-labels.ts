@@ -28,6 +28,7 @@ export const taskStatusLabels: Record<TaskStatus, string> = {
   PENDING_ACCEPTANCE: "待验收",
   COMPLETED: "已完成",
   ARCHIVED: "已归档",
+  PROJECT_CANCELED: "项目已取消",
 };
 
 export const taskCategoryLabels: Record<TaskCategory, string> = {

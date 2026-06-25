@@ -27,6 +27,7 @@ const TASK_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   PENDING_ACCEPTANCE: [],
   COMPLETED: ["ARCHIVED"],
   ARCHIVED: [],
+  PROJECT_CANCELED: [],
 };
 
 export function canTransitionProject(
@@ -143,6 +144,13 @@ export function getTaskStepperDisplay(status: TaskStatus): {
   steps: { key: string; label: string }[];
   currentIndex: number;
 } {
+  if (status === "PROJECT_CANCELED") {
+    return {
+      steps: [{ key: "PROJECT_CANCELED", label: taskStatusLabels.PROJECT_CANCELED }],
+      currentIndex: 0,
+    };
+  }
+
   return {
     steps: taskFlowSteps.map((s) => ({
       key: s,

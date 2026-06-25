@@ -54,7 +54,11 @@ export async function submitWeeklyReport(input: {
   if (!task) throw new Error("任务不存在");
   if (task.deletedAt) throw new Error("任务已删除");
   assertProjectActive(task.project.status);
-  if (task.status === "ARCHIVED" || task.status === "COMPLETED") {
+  if (
+    task.status === "ARCHIVED" ||
+    task.status === "COMPLETED" ||
+    task.status === "PROJECT_CANCELED"
+  ) {
     throw new Error("已结束任务不能提交周报");
   }
   if (!task.needsWeeklyReport) throw new Error("该任务当前未要求提交周报");
@@ -76,27 +80,43 @@ export async function submitWeeklyReport(input: {
 
   const weekStart = getWeekStart();
 
-  const report = await prisma.weeklyReport.upsert({
-    where: { taskId_weekStart: { taskId: task.id, weekStart } },
-    update: {
-      progress: parsed.progress,
-      risks: parsed.risks ?? "",
-      nextPlan: parsed.nextPlan ?? "",
-      feishuDocUrl: parsed.feishuDocUrl ?? "",
-      submittedAt: new Date(),
-      submittedBy: user.openId,
-      submitterName: user.name,
-    },
-    create: {
-      taskId: task.id,
-      weekStart,
-      progress: parsed.progress,
-      risks: parsed.risks ?? "",
-      nextPlan: parsed.nextPlan ?? "",
-      feishuDocUrl: parsed.feishuDocUrl ?? "",
-      submittedBy: user.openId,
-      submitterName: user.name,
-    },
+  const report = await prisma.$transaction(async (tx) => {
+    const liveTask = await tx.task.updateMany({
+      where: {
+        id: task.id,
+        deletedAt: null,
+        needsWeeklyReport: true,
+        status: { notIn: ["COMPLETED", "ARCHIVED", "PROJECT_CANCELED"] },
+        project: { status: { notIn: ["COMPLETED", "CANCELED"] } },
+      },
+      data: { status: task.status },
+    });
+    if (liveTask.count !== 1) {
+      throw new Error("任务状态已更新，请刷新后重试");
+    }
+
+    return tx.weeklyReport.upsert({
+      where: { taskId_weekStart: { taskId: task.id, weekStart } },
+      update: {
+        progress: parsed.progress,
+        risks: parsed.risks ?? "",
+        nextPlan: parsed.nextPlan ?? "",
+        feishuDocUrl: parsed.feishuDocUrl ?? "",
+        submittedAt: new Date(),
+        submittedBy: user.openId,
+        submitterName: user.name,
+      },
+      create: {
+        taskId: task.id,
+        weekStart,
+        progress: parsed.progress,
+        risks: parsed.risks ?? "",
+        nextPlan: parsed.nextPlan ?? "",
+        feishuDocUrl: parsed.feishuDocUrl ?? "",
+        submittedBy: user.openId,
+        submitterName: user.name,
+      },
+    });
   });
 
   await logProgressActivity({
@@ -130,7 +150,11 @@ export async function syncTaskRisk(input: { taskId: string; riskNote: string }) 
   if (!task) throw new Error("任务不存在");
   if (task.deletedAt) throw new Error("任务已删除");
   assertProjectActive(task.project.status);
-  if (task.status === "ARCHIVED" || task.status === "COMPLETED") {
+  if (
+    task.status === "ARCHIVED" ||
+    task.status === "COMPLETED" ||
+    task.status === "PROJECT_CANCELED"
+  ) {
     throw new Error("已结束任务不能同步风险");
   }
   if (!canSubmitWeeklyReport(user.openId, getTaskAssigneeOpenIds(task))) {
@@ -139,11 +163,16 @@ export async function syncTaskRisk(input: { taskId: string; riskNote: string }) 
 
   const riskUpdatedAt = new Date();
   const locked = await prisma.task.updateMany({
-    where: { id: task.id, deletedAt: null },
+    where: {
+      id: task.id,
+      deletedAt: null,
+      status: { notIn: ["COMPLETED", "ARCHIVED", "PROJECT_CANCELED"] },
+      project: { status: { notIn: ["COMPLETED", "CANCELED"] } },
+    },
     data: { riskNote: parsed.riskNote, riskUpdatedAt },
   });
   if (locked.count !== 1) {
-    throw new Error("任务已被删除，请刷新后重试");
+    throw new Error("任务状态已更新，请刷新后重试");
   }
   const updated = await prisma.task.findUniqueOrThrow({ where: { id: task.id } });
 

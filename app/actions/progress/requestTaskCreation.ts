@@ -310,6 +310,14 @@ export async function reviewTaskCreationRequest(input: {
     dueAt.getTime() - Date.now() > 14 * 24 * 60 * 60 * 1000;
 
   const task = await prisma.$transaction(async (tx) => {
+    const activeProject = await tx.project.updateMany({
+      where: { id: project.id, status: "IN_PROGRESS" },
+      data: { status: "IN_PROGRESS" },
+    });
+    if (activeProject.count !== 1) {
+      throw new Error("项目状态已更新，请刷新后重试");
+    }
+
     const locked = await tx.taskCreationRequest.updateMany({
       where: { id: request.id, status: "PENDING" },
       data: {

@@ -1,0 +1,2 @@
+-- SQLite stores Prisma enums as TEXT in this schema.
+-- This migration records the TaskStatus enum addition: PROJECT_CANCELED.

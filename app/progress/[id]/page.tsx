@@ -234,7 +234,7 @@ export default async function ProjectDetailPage({ params }: Props) {
         urgency: task.urgency,
         importance: task.importance,
         status: task.status,
-        isOverdue: task.isOverdue,
+        isOverdue: task.status === "PROJECT_CANCELED" ? false : task.isOverdue,
         assigneeNames: getTaskAssigneeNames(task),
         assigneeOpenIds,
         relatedOpenIds: [

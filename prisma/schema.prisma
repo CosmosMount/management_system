@@ -39,6 +39,7 @@ enum TaskStatus {
   PENDING_ACCEPTANCE
   COMPLETED
   ARCHIVED
+  PROJECT_CANCELED
 }
 
 enum TaskDeletionRequestStatus {

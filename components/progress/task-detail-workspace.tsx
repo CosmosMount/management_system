@@ -201,9 +201,11 @@ export function TaskDetailWorkspace({
   const pendingDeletionRequest = task.deletionRequests.find(
     (request) => request.status === "PENDING",
   );
+  const isProjectCanceledTask = task.status === "PROJECT_CANCELED";
   const canEdit =
     canManage &&
     task.status !== "ARCHIVED" &&
+    !isProjectCanceledTask &&
     task.projectStatus !== "COMPLETED" &&
     task.projectStatus !== "CANCELED";
   const isProjectActive =
@@ -226,13 +228,14 @@ export function TaskDetailWorkspace({
           canManage &&
           isProjectActive &&
           task.status !== "COMPLETED" &&
-          task.status !== "ARCHIVED"
+          task.status !== "ARCHIVED" &&
+          !isProjectCanceledTask
         }
         projectHref={projectHref}
         onOpenEdit={() => setTaskDialogOpen(true)}
       />
 
-      {pendingDeletionRequest && (
+      {pendingDeletionRequest && !isProjectCanceledTask && (
         <TaskDeletionRequestPanel
           request={pendingDeletionRequest}
           taskTitle={task.title}
@@ -329,6 +332,7 @@ function TaskOverview({
 }) {
   const canStart = task.status === "TODO" && (isAssignee || canManage);
   const canArchive = task.status === "COMPLETED" && canManage;
+  const isProjectCanceledTask = task.status === "PROJECT_CANCELED";
   const canRestart =
     canManage &&
     task.projectStatus === "IN_PROGRESS" &&
@@ -408,9 +412,13 @@ function TaskOverview({
           {canRestart && <RestartTaskButton task={task} />}
           {canStart && <StartTaskButton taskId={task.id} />}
           {canArchive && <ArchiveTaskButton taskId={task.id} />}
-          {canManage ? (
+          {task.projectStatus === "IN_PROGRESS" &&
+          !isProjectCanceledTask &&
+          canManage ? (
             <TaskDirectDeleteButton taskId={task.id} redirectTo={projectHref} />
-          ) : canRequestDeletion ? (
+          ) : task.projectStatus === "IN_PROGRESS" &&
+            !isProjectCanceledTask &&
+            canRequestDeletion ? (
             <TaskDeletionRequestButton
               taskId={task.id}
               disabled={!!pendingDeletionRequest}
@@ -1202,7 +1210,9 @@ function ArchiveTaskButton({ taskId }: { taskId: string }) {
 function TaskStatusBadges({ task }: { task: TaskDetailView }) {
   return (
     <>
-      <Badge>{taskStatusLabels[task.status]}</Badge>
+      <Badge variant={task.status === "PROJECT_CANCELED" ? "destructive" : "default"}>
+        {taskStatusLabels[task.status]}
+      </Badge>
       {task.isOverdue && <Badge variant="destructive">逾期</Badge>}
     </>
   );
@@ -1215,6 +1225,7 @@ function getActivityType(action: string): ActivityFilter {
     action === "task.archived" ||
     action === "task.deleted" ||
     action === "task.restarted" ||
+    action === "task.project_canceled" ||
     action === "task.creation_approved"
   ) return "STATUS";
   if (action === "task.delivery_submitted") return "DELIVERY";
@@ -1237,6 +1248,7 @@ function activityLabel(action: string): string {
     "task.updated": "更新了任务信息",
     "task.status_changed": "更新了任务状态",
     "task.restarted": "重启了任务",
+    "task.project_canceled": "项目取消后同步取消了任务",
     "task.delivery_submitted": "提交了任务交付",
     "task.approved": "通过了任务验收",
     "task.rejected": "驳回了任务验收",

@@ -43,7 +43,7 @@ export default async function ProgressDashboardPage({ searchParams }: Props) {
       AND: [
         progressTaskReadableWhere(roles, userOpenId),
         mine ? progressTaskMineWhere(userOpenId) : {},
-        { status: { not: "ARCHIVED" } },
+        { status: { notIn: ["ARCHIVED", "PROJECT_CANCELED"] } },
       ],
     },
     include: {

@@ -15,6 +15,14 @@ import { getNotificationContext } from "@/lib/request-origin";
 import { revalidateProgress } from "@/lib/revalidate";
 import { getUserRoles } from "@/lib/permissions";
 
+const PROJECT_CANCELABLE_TASK_STATUSES = [
+  "TODO",
+  "IN_PROGRESS",
+  "PENDING_ACCEPTANCE",
+] as const;
+
+const PROJECT_COMPLETION_TASK_STATUSES = ["COMPLETED", "ARCHIVED"] as const;
+
 export async function updateProjectStatus(
   projectId: string,
   status: ProjectStatus,
@@ -65,14 +73,82 @@ export async function updateProjectStatus(
     }
 
     if (status === "COMPLETED") {
-      const [stageCount, incompleteStageCount] = await Promise.all([
+      const [stageCount, incompleteStageCount, unfinishedTaskCount] =
+        await Promise.all([
         tx.projectStage.count({ where: { projectId } }),
         tx.projectStage.count({
           where: { projectId, status: { not: "COMPLETED" } },
         }),
+        tx.task.count({
+          where: {
+            projectId,
+            deletedAt: null,
+            status: { notIn: [...PROJECT_COMPLETION_TASK_STATUSES] },
+          },
+        }),
       ]);
       if (stageCount === 0 || incompleteStageCount > 0) {
         throw new Error("请先完成全部项目阶段后再完成项目");
+      }
+      if (unfinishedTaskCount > 0) {
+        throw new Error(
+          `请先完成全部任务后再完成项目：还有 ${unfinishedTaskCount} 个未完成任务`,
+        );
+      }
+    }
+
+    const canceledAt = status === "CANCELED" ? new Date() : null;
+    let canceledTaskCount = 0;
+    if (canceledAt) {
+      const cancelableTasks = await tx.task.findMany({
+        where: {
+          projectId,
+          deletedAt: null,
+          status: { in: [...PROJECT_CANCELABLE_TASK_STATUSES] },
+        },
+        select: {
+          id: true,
+          title: true,
+          status: true,
+          stageId: true,
+          stage: { select: { name: true } },
+        },
+      });
+
+      if (cancelableTasks.length > 0) {
+        const taskIds = cancelableTasks.map((task) => task.id);
+        const canceledTasks = await tx.task.updateMany({
+          where: {
+            id: { in: taskIds },
+            projectId,
+            deletedAt: null,
+            status: { in: [...PROJECT_CANCELABLE_TASK_STATUSES] },
+          },
+          data: {
+            status: "PROJECT_CANCELED",
+            isOverdue: false,
+            archivedAt: canceledAt,
+          },
+        });
+        canceledTaskCount = canceledTasks.count;
+
+        await tx.progressActivityLog.createMany({
+          data: cancelableTasks.map((task) => ({
+            projectId,
+            taskId: task.id,
+            action: "task.project_canceled",
+            actorOpenId: user.openId,
+            actorName: user.name,
+            payload: JSON.stringify({
+              taskTitle: task.title,
+              from: task.status,
+              to: "PROJECT_CANCELED",
+              stageId: task.stageId,
+              stageName: task.stage?.name ?? "无阶段",
+              reason,
+            }),
+          })),
+        });
       }
     }
 
@@ -81,9 +157,11 @@ export async function updateProjectStatus(
       data: {
         status,
         completedAt: status === "COMPLETED" ? new Date() : null,
-        canceledAt: status === "CANCELED" ? new Date() : null,
+        canceledAt,
         archivedAt:
-          status === "COMPLETED" || status === "CANCELED" ? new Date() : null,
+          status === "COMPLETED" || status === "CANCELED"
+            ? (canceledAt ?? new Date())
+            : null,
       },
     });
     if (locked.count !== 1) {
@@ -110,7 +188,12 @@ export async function updateProjectStatus(
         action: "project.status_changed",
         actorOpenId: user.openId,
         actorName: user.name,
-        payload: JSON.stringify({ from: project.status, to: status, reason }),
+        payload: JSON.stringify({
+          from: project.status,
+          to: status,
+          reason,
+          canceledTaskCount,
+        }),
       },
     });
     await enqueueProgressNotificationTx(
@@ -124,6 +207,7 @@ export async function updateProjectStatus(
         techGroup: project.techGroup,
         ownerOpenIds: getProjectOwnerOpenIds(project),
         ownerNames: getProjectOwnerNames(project),
+        canceledTaskCount,
       },
       context,
     );

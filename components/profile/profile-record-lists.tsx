@@ -174,7 +174,7 @@ export function ProfileTaskList({ tasks }: { tasks: ProfileTaskRow[] }) {
             index === firstInactiveIndex && activeCount > 0;
           return (
             <li key={task.id}>
-              <ActiveDivider show={showDivider} label="已完成 / 已归档" />
+              <ActiveDivider show={showDivider} label="已结束" />
               <Link
                 href={routes.progress.task(task.id)}
                 className={cn(

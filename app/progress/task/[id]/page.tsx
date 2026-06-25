@@ -113,6 +113,7 @@ export default async function TaskDetailPage({ params }: Props) {
     userOpenId,
   );
   const canRequestDeletion =
+    task.status !== "PROJECT_CANCELED" &&
     !canManage &&
     canRequestTaskDeletion({
       roles,
@@ -147,7 +148,7 @@ export default async function TaskDetailPage({ params }: Props) {
     urgency: task.urgency,
     importance: task.importance,
     status: task.status,
-    isOverdue: task.isOverdue,
+    isOverdue: task.status === "PROJECT_CANCELED" ? false : task.isOverdue,
     assigneeNames: getTaskAssigneeNames(task),
     assigneeOpenIds: getTaskAssigneeOpenIds(task),
     projectId: task.projectId,
@@ -172,7 +173,8 @@ export default async function TaskDetailPage({ params }: Props) {
       task.submissions.length > 0 ||
       task.status === "PENDING_ACCEPTANCE" ||
       task.status === "COMPLETED" ||
-      task.status === "ARCHIVED",
+      task.status === "ARCHIVED" ||
+      task.status === "PROJECT_CANCELED",
     riskNote: task.riskNote,
     submissions: task.submissions.map((submission) => ({
       id: submission.id,

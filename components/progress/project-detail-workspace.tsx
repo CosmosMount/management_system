@@ -247,6 +247,7 @@ const taskStatusOptions: Array<TaskStatus | "ALL"> = [
   "PENDING_ACCEPTANCE",
   "COMPLETED",
   "ARCHIVED",
+  "PROJECT_CANCELED",
 ];
 
 const activityFilters: Array<{ value: ActivityFilter; label: string }> = [
@@ -318,6 +319,12 @@ export function ProjectDetailWorkspace({
   const allStagesCompleted =
     project.stages.length > 0 &&
     project.stages.every((stage) => stage.status === "COMPLETED");
+  const unfinishedStageCount = project.stages.filter(
+    (stage) => stage.status !== "COMPLETED",
+  ).length;
+  const unfinishedTaskCount = project.tasks.filter(
+    (task) => !isCompletedOrArchivedTaskStatus(task.status),
+  ).length;
   const canCreateTask =
     canManage &&
     selectedStage &&
@@ -360,6 +367,8 @@ export function ProjectDetailWorkspace({
         project={project}
         currentStage={currentStage}
         allStagesCompleted={allStagesCompleted}
+        unfinishedStageCount={unfinishedStageCount}
+        unfinishedTaskCount={unfinishedTaskCount}
         canUpdateLifecycle={canUpdateLifecycle}
         canEdit={canManage && project.status !== "COMPLETED" && project.status !== "CANCELED"}
         canRemind={
@@ -549,6 +558,8 @@ function ProjectOverview({
   project,
   currentStage,
   allStagesCompleted,
+  unfinishedStageCount,
+  unfinishedTaskCount,
   canUpdateLifecycle,
   canEdit,
   canRemind,
@@ -558,6 +569,8 @@ function ProjectOverview({
   project: ProjectDetailView;
   currentStage: StageView | null;
   allStagesCompleted: boolean;
+  unfinishedStageCount: number;
+  unfinishedTaskCount: number;
   canUpdateLifecycle: boolean;
   canEdit: boolean;
   canRemind: boolean;
@@ -574,6 +587,13 @@ function ProjectOverview({
     [...project.stages]
       .reverse()
       .find((stage) => !!stage.dueAt)?.dueAt ?? null;
+  const completeDisabledReason = getProjectCompleteDisabledReason({
+    loadingStatus,
+    stageCount: project.stages.length,
+    allStagesCompleted,
+    unfinishedStageCount,
+    unfinishedTaskCount,
+  });
 
   async function handleProjectStatus(next: ProjectStatus, reason = "") {
     const actionLabel =
@@ -661,16 +681,37 @@ function ProjectOverview({
               </Button>
             )}
             {project.status === "IN_PROGRESS" && (
-              <ReasonConfirmDialog
-                triggerLabel="完成项目"
-                title="确认完成项目"
-                description="项目完成后将进入归档状态。请确认所有阶段和相关任务已经处理完毕。"
-                reasonLabel="完成说明"
-                confirmLabel="确认完成"
-                variant="outline"
-                disabled={loadingStatus !== null || !allStagesCompleted}
-                onConfirm={(reason) => handleProjectStatus("COMPLETED", reason)}
-              />
+              completeDisabledReason ? (
+                <div className="flex max-w-52 flex-col gap-1">
+                  <span className="inline-flex" title={completeDisabledReason}>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled
+                      aria-describedby="project-complete-disabled-reason"
+                    >
+                      完成项目
+                    </Button>
+                  </span>
+                  <p
+                    id="project-complete-disabled-reason"
+                    className="text-xs text-muted-foreground"
+                  >
+                    {completeDisabledReason}
+                  </p>
+                </div>
+              ) : (
+                <ReasonConfirmDialog
+                  triggerLabel="完成项目"
+                  title="确认完成项目"
+                  description="项目完成后将进入归档状态。需完成全部阶段和全部任务后才能完成项目。"
+                  reasonLabel="完成说明"
+                  confirmLabel="确认完成"
+                  variant="outline"
+                  onConfirm={(reason) => handleProjectStatus("COMPLETED", reason)}
+                />
+              )
             )}
             {(project.status === "NOT_STARTED" ||
               project.status === "IN_PROGRESS") && (
@@ -1179,6 +1220,7 @@ function StageTaskList({
             <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
               <span>任务 {stats.total}</span>
               <span>已完成 {stats.completed}</span>
+              <span>项目已取消 {stats.projectCanceled}</span>
               <span>进行中 {stats.inProgress}</span>
               <span>待审核 {stats.pending}</span>
               <span>已逾期 {stats.overdue}</span>
@@ -2002,7 +2044,15 @@ function StageBadge({ stage }: { stage: StageView }) {
 function TaskStatusBadge({ task }: { task: TaskView }) {
   return (
     <div className="flex flex-wrap gap-1">
-      <Badge variant={task.status === "COMPLETED" ? "default" : "secondary"}>
+      <Badge
+        variant={
+          task.status === "PROJECT_CANCELED"
+            ? "destructive"
+            : task.status === "COMPLETED"
+              ? "default"
+              : "secondary"
+        }
+      >
         {taskStatusLabels[task.status]}
       </Badge>
       {task.isOverdue && <Badge variant="destructive">逾期</Badge>}
@@ -2055,7 +2105,7 @@ function applyTaskFilters(
     if (filters.pending && task.status !== "PENDING_ACCEPTANCE") return false;
     if (
       filters.unfinished &&
-      (task.status === "COMPLETED" || task.status === "ARCHIVED")
+      isEndedTaskStatus(task.status)
     ) {
       return false;
     }
@@ -2066,7 +2116,11 @@ function applyTaskFilters(
 function getTaskStats(tasks: TaskView[]) {
   return {
     total: tasks.length,
-    completed: tasks.filter((task) => task.status === "COMPLETED").length,
+    completed: tasks.filter((task) =>
+      isCompletedOrArchivedTaskStatus(task.status),
+    ).length,
+    projectCanceled: tasks.filter((task) => task.status === "PROJECT_CANCELED")
+      .length,
     inProgress: tasks.filter((task) => task.status === "IN_PROGRESS").length,
     pending: tasks.filter((task) => task.status === "PENDING_ACCEPTANCE").length,
     overdue: tasks.filter((task) => task.isOverdue).length,
@@ -2074,10 +2128,43 @@ function getTaskStats(tasks: TaskView[]) {
 }
 
 function getTaskMaterialStatus(task: TaskView): string {
+  if (task.status === "PROJECT_CANCELED") return "项目已取消";
   if (task.status === "PENDING_ACCEPTANCE") return "已提交";
   if (task.status === "COMPLETED" && task.submissionsCount > 0) return "已验收";
   if (task.submissionsCount > 0) return "有历史提交";
   return "未提交";
+}
+
+function isCompletedOrArchivedTaskStatus(status: TaskStatus): boolean {
+  return status === "COMPLETED" || status === "ARCHIVED";
+}
+
+function isEndedTaskStatus(status: TaskStatus): boolean {
+  return (
+    isCompletedOrArchivedTaskStatus(status) || status === "PROJECT_CANCELED"
+  );
+}
+
+function getProjectCompleteDisabledReason({
+  loadingStatus,
+  stageCount,
+  allStagesCompleted,
+  unfinishedStageCount,
+  unfinishedTaskCount,
+}: {
+  loadingStatus: ProjectStatus | null;
+  stageCount: number;
+  allStagesCompleted: boolean;
+  unfinishedStageCount: number;
+  unfinishedTaskCount: number;
+}): string | null {
+  if (loadingStatus !== null) return "正在处理，请稍候";
+  if (stageCount === 0) return "请先配置并完成项目阶段";
+  if (!allStagesCompleted) return `还有 ${unfinishedStageCount} 个阶段未完成`;
+  if (unfinishedTaskCount > 0) {
+    return `还有 ${unfinishedTaskCount} 个任务未完成`;
+  }
+  return null;
 }
 
 function getActivityType(action: string): ActivityFilter {
@@ -2139,6 +2226,7 @@ function activityLabel(action: string): string {
     "task.created": "创建了任务",
     "task.updated": "更新了任务信息",
     "task.status_changed": "更新了任务状态",
+    "task.project_canceled": "项目取消后同步取消了任务",
     "task.delivery_submitted": "提交了任务交付",
     "task.approved": "通过了任务验收",
     "task.rejected": "驳回了任务验收",

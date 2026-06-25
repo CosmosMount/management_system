@@ -4,6 +4,7 @@ import { useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { useRouter } from "next/navigation";
 import {
   Archive,
+  Ban,
   CheckCircle2,
   Circle,
   Clock3,
@@ -129,6 +130,7 @@ export function TaskActionsPanel({
   const canSubmitTaskDelivery = canSubmitDelivery ?? isAssignee;
   const canSubmitTaskWeeklyReport =
     needsWeeklyReport && (canSubmitWeeklyReport ?? isAssignee);
+  const isTerminalTask = isTerminalTaskStatus(status);
   const allChecklistItemsChecked =
     acceptanceChecklistItems.length === 0 ||
     acceptanceChecklistItems.every((item) =>
@@ -398,9 +400,7 @@ export function TaskActionsPanel({
         </Card>
       )}
 
-      {canSubmitTaskWeeklyReport &&
-        status !== "ARCHIVED" &&
-        status !== "COMPLETED" && (
+      {canSubmitTaskWeeklyReport && !isTerminalTask && (
         <Card>
           <CardHeader>
             <CardTitle>
@@ -481,7 +481,7 @@ export function TaskActionsPanel({
         </Card>
       )}
 
-      {isAssignee && status !== "ARCHIVED" && status !== "COMPLETED" && (
+      {isAssignee && !isTerminalTask && (
         <Card>
           <CardHeader>
             <CardTitle>风险同步</CardTitle>
@@ -716,15 +716,17 @@ function clearWeeklyError(
 }
 
 function TaskFlowTimeline({ status }: { status: TaskStatus }) {
-  const currentIndex = Math.max(taskFlowSteps.indexOf(status), 0);
+  const steps =
+    status === "PROJECT_CANCELED" ? (["PROJECT_CANCELED"] as TaskStatus[]) : taskFlowSteps;
+  const currentIndex = Math.max(steps.indexOf(status), 0);
 
   return (
     <div className="w-full overflow-x-auto pb-2">
       <ol className="flex min-w-max items-start gap-0">
-        {taskFlowSteps.map((step, index) => {
+        {steps.map((step, index) => {
           const isDone = index < currentIndex;
           const isCurrent = index === currentIndex;
-          const isLast = index === taskFlowSteps.length - 1;
+          const isLast = index === steps.length - 1;
 
           return (
             <li key={step} className="flex items-start">
@@ -776,8 +778,17 @@ function TaskFlowStepIcon({
   isDone: boolean;
 }) {
   if (isDone) return <CheckCircle2 className="h-5 w-5" />;
+  if (step === "PROJECT_CANCELED") return <Ban className="h-5 w-5" />;
   if (step === "IN_PROGRESS") return <Play className="h-4 w-4" />;
   if (step === "PENDING_ACCEPTANCE") return <Clock3 className="h-5 w-5" />;
   if (step === "ARCHIVED") return <Archive className="h-5 w-5" />;
   return <>{index + 1}</>;
+}
+
+function isTerminalTaskStatus(status: TaskStatus): boolean {
+  return (
+    status === "COMPLETED" ||
+    status === "ARCHIVED" ||
+    status === "PROJECT_CANCELED"
+  );
 }

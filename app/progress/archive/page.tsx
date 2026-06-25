@@ -53,7 +53,7 @@ export default async function ArchivePage({ searchParams }: Props) {
         AND: [
           progressTaskReadableWhere(roles, userOpenId),
           mine ? progressTaskMineWhere(userOpenId) : {},
-          { status: "ARCHIVED" },
+          { status: { in: ["ARCHIVED", "PROJECT_CANCELED"] } },
         ],
       },
       include: {
@@ -112,7 +112,7 @@ export default async function ArchivePage({ searchParams }: Props) {
 
           <Card>
             <CardHeader>
-              <CardTitle>已归档任务 ({tasks.length})</CardTitle>
+              <CardTitle>已结束任务 ({tasks.length})</CardTitle>
             </CardHeader>
             <CardContent>
               <ArchivedTaskList tasks={taskRows} isSuperAdmin={admin} />

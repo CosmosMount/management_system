@@ -52,6 +52,7 @@ export async function updateTaskStatus(taskId: string, status: TaskStatus) {
   if (!task) throw new Error("任务不存在");
   if (task.deletedAt) throw new Error("任务已删除");
   if (task.status === "ARCHIVED") throw new Error("任务已归档");
+  if (task.status === "PROJECT_CANCELED") throw new Error("任务所属项目已取消");
   assertProjectActive(task.project.status);
 
   const canManage = canManageProject(
@@ -181,6 +182,9 @@ export async function restartTask(input: { taskId: string; reason: string }) {
       if (task.status === "ARCHIVED") {
         throw new Error("已归档任务不可重启");
       }
+      if (task.status === "PROJECT_CANCELED") {
+        throw new Error("项目已取消任务不可重启");
+      }
       throw new Error("仅待验收或已完成任务可重启");
     }
 
@@ -290,6 +294,9 @@ export async function updateTask(input: UpdateTaskInput) {
     throw new Error("数据已被更新，请刷新后重试");
   }
   if (task.status === "ARCHIVED") throw new Error("已归档任务不可编辑");
+  if (task.status === "PROJECT_CANCELED") {
+    throw new Error("项目已取消任务不可编辑");
+  }
   assertProjectActive(task.project.status);
 
   if (
@@ -413,7 +420,8 @@ export async function updateTask(input: UpdateTaskInput) {
         latestLockState._count.submissions > 0 ||
         latestLockState.status === "PENDING_ACCEPTANCE" ||
         latestLockState.status === "COMPLETED" ||
-        latestLockState.status === "ARCHIVED";
+        latestLockState.status === "ARCHIVED" ||
+        latestLockState.status === "PROJECT_CANCELED";
       if (latestLocked) {
         throw new Error("任务已有交付记录，验收清单不可修改");
       }

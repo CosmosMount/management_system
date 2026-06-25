@@ -28,6 +28,7 @@ export type ProgressNotifyPayload =
       techGroup: string;
       ownerOpenIds: string[];
       ownerNames: string;
+      canceledTaskCount?: number;
     }
   | {
       type: "project_updated";
@@ -416,9 +417,13 @@ export async function sendProgressNotification(
             ? "项目已完成"
             : "项目已取消";
       const template = payload.type === "project_canceled" ? "red" : "green";
+      const canceledTaskLine =
+        payload.type === "project_canceled"
+          ? `\n**同步取消任务**：${payload.canceledTaskCount ?? 0} 个`
+          : "";
       const card = buildCard(
         title,
-        `**项目**：${payload.projectName}\n**负责人**：${payload.ownerNames}\n**车组/技术组**：${formatScope(payload.team, payload.techGroup)}`,
+        `**项目**：${payload.projectName}\n**负责人**：${payload.ownerNames}\n**车组/技术组**：${formatScope(payload.team, payload.techGroup)}${canceledTaskLine}`,
         buildAppUrl(`${routes.progress.project(payload.projectId)}`, appOrigin),
         template,
       );

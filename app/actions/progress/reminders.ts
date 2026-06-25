@@ -141,7 +141,11 @@ export async function sendManualProgressReminder(input: unknown) {
   if (task.project.status === "COMPLETED" || task.project.status === "CANCELED") {
     throw new Error("已结束项目下的任务不能催促");
   }
-  if (task.status === "COMPLETED" || task.status === "ARCHIVED") {
+  if (
+    task.status === "COMPLETED" ||
+    task.status === "ARCHIVED" ||
+    task.status === "PROJECT_CANCELED"
+  ) {
     throw new Error("已结束任务不能催促");
   }
   if (

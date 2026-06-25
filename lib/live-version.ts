@@ -326,7 +326,7 @@ async function getProgressBoardVersion({
     AND: [
       progressTaskReadableWhere(roles, userOpenId),
       mine ? progressTaskMineWhere(userOpenId) : {},
-      { status: { not: "ARCHIVED" } },
+      { status: { notIn: ["ARCHIVED", "PROJECT_CANCELED"] } },
     ],
   };
   const taskRows = await prisma.task.findMany({
@@ -380,7 +380,7 @@ async function getProgressArchiveVersion({
     AND: [
       progressTaskReadableWhere(roles, userOpenId),
       mine ? progressTaskMineWhere(userOpenId) : {},
-      { status: "ARCHIVED" },
+      { status: { in: ["ARCHIVED", "PROJECT_CANCELED"] } },
     ],
   };
   const archivedTaskRows = await prisma.task.findMany({

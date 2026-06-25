@@ -26,10 +26,14 @@ export function getTaskDeadlineState(
   now: Date,
   dueSoonDays: number,
 ): TaskDeadlineInfo {
-  if (task.status === "COMPLETED" || task.status === "ARCHIVED") {
+  if (
+    task.status === "COMPLETED" ||
+    task.status === "ARCHIVED" ||
+    task.status === "PROJECT_CANCELED"
+  ) {
     return {
       state: "completed",
-      label: "已完成",
+      label: task.status === "PROJECT_CANCELED" ? "项目已取消" : "已完成",
       daysDelta: 0,
     };
   }

@@ -90,38 +90,48 @@ export async function createTask(input: CreateTaskInput) {
     parsed.acceptanceChecklistItems,
   );
 
-  const task = await prisma.task.create({
-    data: {
-      projectId: project.id,
-      stageId,
-      title: parsed.title,
-      goal: parsed.goal ?? "",
-      category: parsed.category,
-      urgency: parsed.urgency,
-      importance: parsed.importance,
-      assigneeOpenId: primaryAssignee.openId,
-      assigneeName: primaryAssignee.name,
-      assignees: {
-        create: orderedAssignees.map((assignee, index) => ({
-          openId: assignee.openId,
-          name: assignee.name,
-          sortOrder: index,
-        })),
+  const task = await prisma.$transaction(async (tx) => {
+    const activeProject = await tx.project.updateMany({
+      where: { id: project.id, status: "IN_PROGRESS" },
+      data: { status: "IN_PROGRESS" },
+    });
+    if (activeProject.count !== 1) {
+      throw new Error("项目状态已更新，请刷新后重试");
+    }
+
+    return tx.task.create({
+      data: {
+        projectId: project.id,
+        stageId,
+        title: parsed.title,
+        goal: parsed.goal ?? "",
+        category: parsed.category,
+        urgency: parsed.urgency,
+        importance: parsed.importance,
+        assigneeOpenId: primaryAssignee.openId,
+        assigneeName: primaryAssignee.name,
+        assignees: {
+          create: orderedAssignees.map((assignee, index) => ({
+            openId: assignee.openId,
+            name: assignee.name,
+            sortOrder: index,
+          })),
+        },
+        team: project.team,
+        techGroup: project.techGroup,
+        metrics: parsed.metrics,
+        dueAt,
+        status: TaskStatus.TODO,
+        needsOfflineConfirmation: parsed.needsOfflineConfirmation,
+        needsWeeklyReport,
+        acceptanceChecklistItems: {
+          create: acceptanceChecklistItems.map((item, index) => ({
+            content: item.content,
+            sortOrder: index,
+          })),
+        },
       },
-      team: project.team,
-      techGroup: project.techGroup,
-      metrics: parsed.metrics,
-      dueAt,
-      status: TaskStatus.TODO,
-      needsOfflineConfirmation: parsed.needsOfflineConfirmation,
-      needsWeeklyReport,
-      acceptanceChecklistItems: {
-        create: acceptanceChecklistItems.map((item, index) => ({
-          content: item.content,
-          sortOrder: index,
-        })),
-      },
-    },
+    });
   });
 
   await logProgressActivity({

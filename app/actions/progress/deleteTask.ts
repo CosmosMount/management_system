@@ -51,6 +51,9 @@ export async function deleteTaskDirectly(input: DirectDeleteInput) {
     },
   });
   if (!task || task.deletedAt) throw new Error("任务不存在");
+  if (task.status === "PROJECT_CANCELED") {
+    throw new Error("项目已取消任务不能删除");
+  }
 
   const projectOwnerOpenIds = getProjectOwnerOpenIds(task.project);
   if (
@@ -72,7 +75,12 @@ export async function deleteTaskDirectly(input: DirectDeleteInput) {
     });
 
     const updated = await tx.task.updateMany({
-      where: { id: task.id, deletedAt: null },
+      where: {
+        id: task.id,
+        deletedAt: null,
+        status: { not: "PROJECT_CANCELED" },
+        project: { status: "IN_PROGRESS" },
+      },
       data: {
         deletedAt,
         deletedByOpenId: user.openId,
@@ -81,7 +89,7 @@ export async function deleteTaskDirectly(input: DirectDeleteInput) {
       },
     });
     if (updated.count !== 1) {
-      throw new Error("任务已被删除，请刷新后重试");
+      throw new Error("任务或项目状态已更新，请刷新后重试");
     }
 
     for (const request of pendingRequests) {
@@ -174,6 +182,9 @@ export async function requestTaskDeletion(input: { taskId: string; reason: strin
     },
   });
   if (!task) throw new Error("任务不存在或无权限查看");
+  if (task.status === "PROJECT_CANCELED") {
+    throw new Error("项目已取消任务不能申请删除");
+  }
 
   const projectOwnerOpenIds = getProjectOwnerOpenIds(task.project);
   if (
@@ -207,10 +218,20 @@ export async function requestTaskDeletion(input: { taskId: string; reason: strin
     .$transaction(async (tx) => {
       const liveTask = await tx.task.findUnique({
         where: { id: task.id },
-        select: { deletedAt: true },
+        select: {
+          deletedAt: true,
+          status: true,
+          project: { select: { status: true } },
+        },
       });
       if (!liveTask || liveTask.deletedAt) {
         throw new Error("任务已被删除，请刷新后重试");
+      }
+      if (liveTask.project.status !== "IN_PROGRESS") {
+        throw new Error("已结束项目下的任务不能申请删除");
+      }
+      if (liveTask.status === "PROJECT_CANCELED") {
+        throw new Error("项目已取消任务不能申请删除");
       }
 
       const created = await tx.taskDeletionRequest.create({
@@ -296,7 +317,12 @@ export async function reviewTaskDeletionRequest(input: {
       },
     },
   });
-  if (!request || request.status !== "PENDING" || request.task.deletedAt) {
+  if (
+    !request ||
+    request.status !== "PENDING" ||
+    request.task.deletedAt ||
+    request.task.status === "PROJECT_CANCELED"
+  ) {
     throw new Error("删除申请不存在或已处理");
   }
 
@@ -332,7 +358,12 @@ export async function reviewTaskDeletionRequest(input: {
       }
 
       const deletedTask = await tx.task.updateMany({
-        where: { id: task.id, deletedAt: null },
+        where: {
+          id: task.id,
+          deletedAt: null,
+          status: { not: "PROJECT_CANCELED" },
+          project: { status: "IN_PROGRESS" },
+        },
         data: {
           deletedAt: reviewedAt,
           deletedByOpenId: user.openId,
@@ -341,7 +372,7 @@ export async function reviewTaskDeletionRequest(input: {
         },
       });
       if (deletedTask.count !== 1) {
-        throw new Error("任务已被删除，请刷新后重试");
+        throw new Error("任务或项目状态已更新，请刷新后重试");
       }
 
       await tx.progressActivityLog.create({
