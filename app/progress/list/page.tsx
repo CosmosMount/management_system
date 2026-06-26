@@ -355,6 +355,7 @@ function deadlineBadgeTone(state: ProjectStageDeadlineState): string {
 
 function formatDateTime(value: Date): string {
   return value.toLocaleString("zh-CN", {
+    year: "numeric",
     month: "numeric",
     day: "numeric",
     hour: "2-digit",

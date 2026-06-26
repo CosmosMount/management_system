@@ -54,6 +54,17 @@ enum TaskCreationRequestStatus {
   REJECTED
 }
 
+enum ProjectDdlChangeRequestType {
+  CASCADE_EXTENSION
+  SINGLE_STAGE_ADJUSTMENT
+}
+
+enum ProjectDdlChangeRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 enum TaskCategory {
   TEST
   ASSEMBLY
@@ -210,6 +221,7 @@ model Project {
   owners        ProjectOwner[]
   participants  ProjectParticipant[]
   stages        ProjectStage[]
+  ddlChangeRequests ProjectDdlChangeRequest[]
   tasks         Task[]
   taskCreationRequests TaskCreationRequest[]
   activityLogs  ProgressActivityLog[]
@@ -256,13 +268,46 @@ model ProjectStage {
   ownerOpenId         String           @default("")
   ownerName           String           @default("")
   dueAt               DateTime?
+  extensionCount      Int              @default(0)
+  benignExtensionCount Int             @default(0)
   currentSubmissionId String?          @map("submissionId")
   tasks               Task[]
   submissions         TaskSubmission[]
+  ddlChangeRequests   ProjectDdlChangeRequest[]
   createdAt           DateTime         @default(now())
   updatedAt           DateTime         @updatedAt
 
   @@map("ProjectMilestone")
+}
+
+model ProjectDdlChangeRequest {
+  id              String                        @id @default(uuid())
+  projectId       String
+  project         Project                       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  stageId         String
+  stage           ProjectStage                  @relation(fields: [stageId], references: [id], onDelete: Cascade)
+  type            ProjectDdlChangeRequestType
+  status          ProjectDdlChangeRequestStatus @default(PENDING)
+  pendingKey      String                        @default("")
+  requesterOpenId String
+  requesterName   String
+  reason          String
+  oldDueAt        DateTime?
+  newDueAt        DateTime?
+  durationDays    Int?
+  requestedIsBenign Boolean?
+  finalIsBenign   Boolean?
+  reviewerOpenId  String                        @default("")
+  reviewerName    String                        @default("")
+  reviewComment   String                        @default("")
+  reviewedAt      DateTime?
+  createdAt       DateTime                      @default(now())
+  updatedAt       DateTime                      @updatedAt
+
+  @@index([projectId, status])
+  @@index([stageId, status])
+  @@index([requesterOpenId])
+  @@unique([stageId, pendingKey])
 }
 
 model Task {

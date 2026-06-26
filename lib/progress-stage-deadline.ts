@@ -171,6 +171,7 @@ export function compareProjectStageDeadlines(
 
 function formatDueDate(date: Date): string {
   return `${date.toLocaleDateString("zh-CN", {
+    year: "numeric",
     month: "numeric",
     day: "numeric",
     timeZone: TIME_ZONE,

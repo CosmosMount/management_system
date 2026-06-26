@@ -204,6 +204,61 @@ export function canRequestTaskDeletion({
   return false;
 }
 
+export function canRequestProjectStageExtension(
+  ownerOpenIds: string | string[],
+  userOpenId?: string,
+): boolean {
+  return isAssignee(userOpenId, ownerOpenIds);
+}
+
+export function canReviewProjectStageExtension(
+  roles: UserRoleRecord[],
+  requesterOpenId: string,
+  userOpenId?: string,
+): boolean {
+  if (!userOpenId || userOpenId === requesterOpenId) return false;
+  return isProgressSuperAdmin(roles) || isProjectManager(roles);
+}
+
+export function canRequestProjectStageDueDateChange({
+  roles,
+  scope,
+  ownerOpenIds,
+  participantOpenIds,
+  stageOwnerOpenId,
+  userOpenId,
+}: {
+  roles: UserRoleRecord[];
+  scope: ProgressScope;
+  ownerOpenIds: string | string[];
+  participantOpenIds: string | string[];
+  stageOwnerOpenId?: string | null;
+  userOpenId?: string;
+}): boolean {
+  if (!userOpenId) return false;
+  if (canManageProject(roles, scope, ownerOpenIds, userOpenId)) return true;
+  if (isAssignee(userOpenId, participantOpenIds)) return true;
+  if (stageOwnerOpenId && userOpenId === stageOwnerOpenId) return true;
+  return false;
+}
+
+export function canReviewProjectStageDueDateChange({
+  roles,
+  ownerOpenIds,
+  requesterOpenId,
+  userOpenId,
+}: {
+  roles: UserRoleRecord[];
+  ownerOpenIds: string | string[];
+  requesterOpenId: string;
+  userOpenId?: string;
+}): boolean {
+  if (!userOpenId || userOpenId === requesterOpenId) return false;
+  if (isProgressSuperAdmin(roles) || isProjectManager(roles)) return true;
+  if (isAssignee(requesterOpenId, ownerOpenIds)) return false;
+  return isAssignee(userOpenId, ownerOpenIds);
+}
+
 export function canUpdateProjectLifecycle(
   roles: UserRoleRecord[],
   scope: ProgressScope,

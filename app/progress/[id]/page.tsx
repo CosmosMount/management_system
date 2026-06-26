@@ -10,7 +10,11 @@ import { auth } from "@/lib/auth";
 import { getUserRoles, isSuperAdmin } from "@/lib/permissions";
 import {
   canManageProject,
+  canRequestProjectStageDueDateChange,
+  canRequestProjectStageExtension,
   canRequestTaskCreation,
+  canReviewProjectStageDueDateChange,
+  canReviewProjectStageExtension,
   canViewProject,
   canApproveStage as canApproveStagePermission,
   canSubmitStage as canSubmitStagePermission,
@@ -62,6 +66,12 @@ export default async function ProjectDetailPage({ params }: Props) {
             orderBy: { submittedAt: "desc" },
             include: { approvals: { orderBy: { createdAt: "asc" } } },
           },
+        },
+      },
+      ddlChangeRequests: {
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        include: {
+          stage: { select: { id: true, name: true, sortOrder: true } },
         },
       },
       tasks: {
@@ -139,6 +149,8 @@ export default async function ProjectDetailPage({ params }: Props) {
     projectOwnerOpenIds,
     userOpenId,
   );
+  const projectAllowsDdlChange =
+    project.status === "NOT_STARTED" || project.status === "IN_PROGRESS";
   const admin = userOpenId ? await isSuperAdmin(userOpenId) : false;
 
   const [
@@ -195,8 +207,25 @@ export default async function ProjectDetailPage({ params }: Props) {
       ownerOpenId: stage.ownerOpenId,
       ownerName: stage.ownerName,
       dueAt: stage.dueAt?.toISOString() ?? null,
+      extensionCount: stage.extensionCount,
+      benignExtensionCount: stage.benignExtensionCount,
       currentSubmissionId: stage.currentSubmissionId,
       canSubmit: canSubmitStagePermission(roles, stage.ownerOpenId, userOpenId),
+      canRequestExtension:
+        projectAllowsDdlChange &&
+        stage.status !== "COMPLETED" &&
+        canRequestProjectStageExtension(projectOwnerOpenIds, userOpenId),
+      canRequestDueDateChange:
+        projectAllowsDdlChange &&
+        stage.status !== "COMPLETED" &&
+        canRequestProjectStageDueDateChange({
+          roles,
+          scope,
+          ownerOpenIds: projectOwnerOpenIds,
+          participantOpenIds: projectParticipantOpenIds,
+          stageOwnerOpenId: stage.ownerOpenId,
+          userOpenId,
+        }),
       submissions: stage.submissions.map((submission) => ({
         id: submission.id,
         feishuDocUrl: submission.feishuDocUrl,
@@ -259,6 +288,38 @@ export default async function ProjectDetailPage({ params }: Props) {
           : null,
       };
     }),
+    ddlChangeRequests: project.ddlChangeRequests.map((request) => ({
+      id: request.id,
+      type: request.type,
+      status: request.status,
+      stageId: request.stageId,
+      stageName: request.stage.name,
+      requesterOpenId: request.requesterOpenId,
+      requesterName: request.requesterName,
+      reason: request.reason,
+      oldDueAt: request.oldDueAt?.toISOString() ?? null,
+      newDueAt: request.newDueAt?.toISOString() ?? null,
+      durationDays: request.durationDays,
+      requestedIsBenign: request.requestedIsBenign,
+      finalIsBenign: request.finalIsBenign,
+      reviewerName: request.reviewerName,
+      reviewComment: request.reviewComment,
+      reviewedAt: request.reviewedAt?.toISOString() ?? null,
+      createdAt: request.createdAt.toISOString(),
+      canReview:
+        request.type === "CASCADE_EXTENSION"
+          ? canReviewProjectStageExtension(
+              roles,
+              request.requesterOpenId,
+              userOpenId,
+            )
+          : canReviewProjectStageDueDateChange({
+              roles,
+              ownerOpenIds: projectOwnerOpenIds,
+              requesterOpenId: request.requesterOpenId,
+              userOpenId,
+            }),
+    })),
     activityLogs: project.activityLogs.map((log) => ({
       id: log.id,
       action: log.action,

@@ -241,6 +241,18 @@ const rollbackReasonSchema = z
   .min(1, "请填写操作原因")
   .max(1000, "操作原因不能超过 1000 个字符");
 
+const ddlChangeReasonSchema = z
+  .string()
+  .trim()
+  .min(1, "请填写 DDL 变更原因")
+  .max(1000, "DDL 变更原因不能超过 1000 个字符");
+
+const reviewCommentRequiredSchema = z
+  .string()
+  .trim()
+  .min(1, "请填写审批意见")
+  .max(1000, "审批意见不能超过 1000 个字符");
+
 export const projectStageRollbackSchema = z.object({
   projectId: z.string().min(1),
   reason: rollbackReasonSchema,
@@ -249,6 +261,38 @@ export const projectStageRollbackSchema = z.object({
 export const taskRestartSchema = z.object({
   taskId: z.string().min(1),
   reason: rollbackReasonSchema,
+});
+
+export const projectStageExtensionRequestSchema = z.object({
+  projectId: z.string().min(1),
+  stageId: z.string().min(1),
+  reason: ddlChangeReasonSchema,
+  durationDays: z.coerce
+    .number()
+    .int("延期时长必须是整数天")
+    .min(1, "延期时长至少 1 天")
+    .max(365, "延期时长不能超过 365 天"),
+  isBenign: z.boolean().default(false),
+});
+
+export const projectStageExtensionReviewSchema = z.object({
+  requestId: z.string().min(1),
+  decision: z.enum(["APPROVED", "REJECTED"]),
+  comment: reviewCommentRequiredSchema,
+  finalIsBenign: z.boolean().optional(),
+});
+
+export const projectStageDueDateChangeRequestSchema = z.object({
+  projectId: z.string().min(1),
+  stageId: z.string().min(1),
+  proposedDueAt: dateTimeStringSchema("请选择新的阶段 DDL"),
+  reason: ddlChangeReasonSchema,
+});
+
+export const projectStageDueDateChangeReviewSchema = z.object({
+  requestId: z.string().min(1),
+  decision: z.enum(["APPROVED", "REJECTED"]),
+  comment: reviewCommentRequiredSchema,
 });
 
 export type CreateProjectInput = z.input<typeof createProjectSchema>;
