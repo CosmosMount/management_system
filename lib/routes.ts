@@ -7,6 +7,7 @@ export const routes = {
     reminders: "/admin/reminders",
     projectTemplates: "/admin/project-templates",
     acceptance: "/admin/acceptance",
+    budgetPools: "/admin/budget-pools",
   },
   procurement: {
     root: "/procurement",

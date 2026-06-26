@@ -8,12 +8,13 @@ import {
   type Resolver,
 } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, FileSpreadsheet } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { createOrder } from "@/app/actions/createOrder";
 import { updateOrder } from "@/app/actions/updateOrder";
+import { ProcurementItemsImportDialog } from "@/components/procurement-items-import-dialog";
 import { SignatureRequiredDialog } from "@/components/signature-required-dialog";
 import { Button } from "@/components/ui/button";
 import {
@@ -46,6 +47,7 @@ import { routes } from "@/lib/routes";
 import {
   createOrderSchema,
   type CreateOrderInput,
+  type PurchaseItemInput,
 } from "@/lib/validations/order";
 
 type ApplyFormValues = Omit<CreateOrderInput, "team" | "techGroup"> & {
@@ -81,6 +83,7 @@ export function ApplyForm({
 }: Props = {}) {
   const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [signatureDialogOpen, setSignatureDialogOpen] = useState(false);
   const [itemImageFiles, setItemImageFiles] = useState<
     Record<number, File | undefined>
@@ -169,6 +172,21 @@ export function ApplyForm({
     }
   }
 
+  function handleImportItems(
+    imported: PurchaseItemInput[],
+    mode: "replace" | "append",
+  ) {
+    const current = form.getValues("items");
+    const merged =
+      mode === "append"
+        ? [...current, ...imported]
+        : imported;
+
+    form.setValue("items", merged, { shouldValidate: true });
+    setItemImageFiles({});
+    toast.success(`已导入 ${imported.length} 条明细`);
+  }
+
   return (
     <form className="space-y-6">
       <Card>
@@ -246,15 +264,26 @@ export function ApplyForm({
               元器件与标准件填写采购链接；加工费须选择加工商并上传图片
             </CardDescription>
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => append(defaultItem)}
-          >
-            <Plus className="mr-1 h-4 w-4" />
-            添加条目
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setImportDialogOpen(true)}
+            >
+              <FileSpreadsheet className="mr-1 h-4 w-4" />
+              从 Excel 导入
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => append(defaultItem)}
+            >
+              <Plus className="mr-1 h-4 w-4" />
+              添加条目
+            </Button>
+          </div>
         </CardHeader>
         <CardContent className="space-y-4">
           {fields.map((field, index) => {
@@ -268,7 +297,11 @@ export function ApplyForm({
             return (
               <div
                 key={field.id}
-                className="grid gap-3 rounded-lg border border-border/60 bg-muted/30 p-4 sm:grid-cols-6"
+                className={`grid gap-3 rounded-lg border p-4 sm:grid-cols-6 ${
+                  itemKindNeedsImage(itemKind) && !previewUrl
+                    ? "border-amber-500/60 bg-amber-50/50 dark:bg-amber-950/20"
+                    : "border-border/60 bg-muted/30"
+                }`}
               >
                 <div className="space-y-2 sm:col-span-2">
                   <Label>物品名称</Label>
@@ -474,6 +507,12 @@ export function ApplyForm({
         open={signatureDialogOpen}
         onOpenChange={setSignatureDialogOpen}
         purpose="initiate"
+      />
+      <ProcurementItemsImportDialog
+        open={importDialogOpen}
+        onOpenChange={setImportDialogOpen}
+        existingItemCount={fields.length}
+        onConfirm={handleImportItems}
       />
     </form>
   );

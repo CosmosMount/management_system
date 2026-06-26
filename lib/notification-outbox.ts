@@ -1,8 +1,10 @@
 import type { FeedbackStatus, NotificationOutbox, Prisma } from "@prisma/client";
 import {
   sendApplicantResubmitNotification,
+  sendBudgetThresholdNotification,
   sendOrderNotification,
   sendProcurementRejectedNotification,
+  type BudgetThresholdPayload,
   type OrderCardPayload,
 } from "@/lib/feishu";
 import {
@@ -40,6 +42,11 @@ type OrderOutboxPayload =
       order: OrderCardPayload;
       reason: string;
       financeName: string;
+      appOrigin?: string | null;
+    }
+  | {
+      kind: "budget_threshold";
+      budget: BudgetThresholdPayload;
       appOrigin?: string | null;
     };
 
@@ -315,6 +322,23 @@ export async function enqueueApplicantResubmitNotification(
   });
 }
 
+export async function enqueueBudgetThresholdNotification(
+  eventKey: string,
+  budget: BudgetThresholdPayload,
+  context?: NotificationContext,
+) {
+  return enqueueNotification({
+    eventKey,
+    channel: "procurement",
+    type: "budget_threshold",
+    payload: {
+      kind: "budget_threshold",
+      budget,
+      appOrigin: context?.appOrigin ?? null,
+    } satisfies OrderOutboxPayload,
+  });
+}
+
 export async function enqueueFeedbackCreatedNotification(
   eventKey: string,
   payload: Extract<FeedbackOutboxPayload, { kind: "created" }>["payload"],
@@ -457,6 +481,10 @@ async function sendOutboxNotification(row: NotificationOutbox) {
         data.rejectedByName,
         context,
       );
+      return;
+    }
+    if (data.kind === "budget_threshold") {
+      await sendBudgetThresholdNotification(data.budget, context);
       return;
     }
     await sendApplicantResubmitNotification(

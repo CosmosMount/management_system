@@ -6,9 +6,11 @@ import {
   RefreshCw,
   ShieldCheck,
   Users,
+  Wallet,
 } from "lucide-react";
 import { AdminMetric } from "@/components/admin/admin-metric";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { currentBudgetPeriod } from "@/lib/import-procurement-budget";
 import { prisma } from "@/lib/prisma";
 import { routes } from "@/lib/routes";
 
@@ -24,6 +26,7 @@ export default async function AdminPage() {
     enabledReminderCount,
     templateCount,
     enabledTemplateCount,
+    budgetPoolCount,
   ] = await Promise.all([
     prisma.user.count(),
     prisma.userRole.findMany({
@@ -38,11 +41,14 @@ export default async function AdminPage() {
     prisma.progressReminderRule.count({ where: { enabled: true } }),
     prisma.projectTemplate.count(),
     prisma.projectTemplate.count({ where: { enabled: true } }),
+    prisma.procurementBudgetPool.count({
+      where: { period: currentBudgetPeriod() },
+    }),
   ]);
 
   return (
     <div className="min-w-0 space-y-6">
-      <section className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      <section className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-6">
         <AdminMetric
           icon={Users}
           label="通讯录用户"
@@ -54,6 +60,12 @@ export default async function AdminPage() {
           label="全局管理"
           value={superAdminCount + projectManagerCount}
           detail={`超管 ${superAdminCount} · 项管 ${projectManagerCount}`}
+        />
+        <AdminMetric
+          icon={Wallet}
+          label="采购预算池"
+          value={budgetPoolCount}
+          detail={`${currentBudgetPeriod()} 周期`}
         />
         <AdminMetric
           icon={ClipboardCheck}
@@ -87,6 +99,12 @@ export default async function AdminPage() {
           icon={ShieldCheck}
           title="用户与角色"
           detail={`当前共有 ${roleCount} 条角色配置。`}
+        />
+        <AdminEntryCard
+          href={routes.admin.budgetPools}
+          icon={Wallet}
+          title="采购预算池"
+          detail={`导入车组+技术组预算，当前 ${budgetPoolCount} 条。`}
         />
         <AdminEntryCard
           href={routes.admin.reminders}

@@ -20,6 +20,14 @@
 
    至少配置 `AUTH_SECRET`、`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`NEXT_PUBLIC_APP_URL`、`APP_ALLOWED_ORIGINS`、`DATABASE_URL`。本地调试通常使用 `http://127.0.0.1:3000` 或 `http://localhost:3000`，Playwright 测试必须使用独立端口。
 
+   **在 3005 端口开发**（与默认 3000 隔离，适合并行调试）：
+
+   ```bash
+   npm run dev -- -p 3005
+   ```
+
+   在 `.env` 的 `APP_ALLOWED_ORIGINS` 中追加 `http://localhost:3005` 与 `http://127.0.0.1:3005`（局域网则加 `http://<LAN_HOST>:3005`）。飞书开放平台需注册重定向 URL：`http://localhost:3005/api/auth/callback/feishu` 等。登录 cookie 按 `host:port` 隔离，3000 上已登录不能自动用于 3005，需在该端口重新飞书登录，或将 Playwright `storageState` 保存为 `.tmp/playwright-*-3005.json` 并针对 `http://127.0.0.1:3005` 加载。
+
 3. 启动 PostgreSQL 并同步数据库：
 
    ```bash

@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import {
   Card,
@@ -8,11 +9,23 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import type {
   BarRow,
+  BudgetPoolRow,
   ChartSlice,
   DashboardChartsData,
 } from "@/lib/procurement-dashboard-stats";
+import { TEAM_OPTIONS, TECH_GROUP_OPTIONS } from "@/lib/constants";
+
+const ALL_TEAMS_VALUE = "__all_teams__";
+const ALL_TECH_GROUPS_VALUE = "__all_tech_groups__";
 
 type Props = {
   data: DashboardChartsData;
@@ -142,7 +155,86 @@ function HorizontalBarChart({
   );
 }
 
+function usageBarColor(usagePercent: number): string {
+  if (usagePercent >= 100) return "bg-destructive";
+  if (usagePercent >= 90) return "bg-orange-500";
+  if (usagePercent >= 70) return "bg-amber-500";
+  return "bg-primary/80";
+}
+
+function BudgetPoolChart({
+  rows,
+  emptyLabel,
+}: {
+  rows: BudgetPoolRow[];
+  emptyLabel: string;
+}) {
+  if (rows.length === 0) {
+    return (
+      <p className="flex min-h-44 flex-1 items-center justify-center text-sm text-muted-foreground">
+        {emptyLabel}
+      </p>
+    );
+  }
+
+  return (
+    <ul className="space-y-4">
+      {rows.map((row) => {
+        const width = Math.min(100, Math.max(0, row.usagePercent));
+        return (
+          <li key={`${row.team}-${row.techGroup}`} className="space-y-1">
+            <div className="flex items-baseline justify-between gap-2 text-sm">
+              <div className="min-w-0">
+                <span className="truncate font-medium">{row.name}</span>
+                {row.description ? (
+                  <p className="truncate text-xs text-muted-foreground">
+                    {row.description}
+                  </p>
+                ) : null}
+              </div>
+              <span
+                className={`shrink-0 ${
+                  row.usagePercent >= 70
+                    ? "font-medium text-amber-600 dark:text-amber-400"
+                    : "text-muted-foreground"
+                }`}
+              >
+                {formatMoney(row.used)} / {formatMoney(row.budget)} (
+                {row.usagePercent.toFixed(1)}%)
+              </span>
+            </div>
+            <div className="h-2.5 overflow-hidden rounded-full bg-muted">
+              <div
+                className={`h-full rounded-full transition-all ${usageBarColor(row.usagePercent)}`}
+                style={{ width: `${width}%` }}
+              />
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 export function ProcurementDashboardCharts({ data }: Props) {
+  const [teamFilter, setTeamFilter] = useState(ALL_TEAMS_VALUE);
+  const [techGroupFilter, setTechGroupFilter] = useState(ALL_TECH_GROUPS_VALUE);
+
+  const filteredBudgetPools = useMemo(() => {
+    return data.budgetPools.filter((row) => {
+      if (teamFilter !== ALL_TEAMS_VALUE && row.team !== teamFilter) {
+        return false;
+      }
+      if (
+        techGroupFilter !== ALL_TECH_GROUPS_VALUE &&
+        row.techGroup !== techGroupFilter
+      ) {
+        return false;
+      }
+      return true;
+    });
+  }, [data.budgetPools, teamFilter, techGroupFilter]);
+
   return (
     <div className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-2">
@@ -161,6 +253,71 @@ export function ProcurementDashboardCharts({ data }: Props) {
           </CardHeader>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <CardTitle className="text-base">预算池使用率</CardTitle>
+            <CardDescription>
+              {data.budgetPeriod
+                ? `${data.budgetPeriod} 周期 · 按车组+技术组分别统计已提交订单占用`
+                : "按车组+技术组分别统计已提交订单占用"}
+            </CardDescription>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Select
+              value={teamFilter}
+              onValueChange={(value) => setTeamFilter(value ?? ALL_TEAMS_VALUE)}
+            >
+              <SelectTrigger className="w-36">
+                <SelectValue>
+                  {(value) =>
+                    value === ALL_TEAMS_VALUE ? "全部车组" : String(value ?? "")
+                  }
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL_TEAMS_VALUE}>全部车组</SelectItem>
+                {TEAM_OPTIONS.map((team) => (
+                  <SelectItem key={team} value={team}>
+                    {team}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select
+              value={techGroupFilter}
+              onValueChange={(value) =>
+                setTechGroupFilter(value ?? ALL_TECH_GROUPS_VALUE)
+              }
+            >
+              <SelectTrigger className="w-36">
+                <SelectValue>
+                  {(value) =>
+                    value === ALL_TECH_GROUPS_VALUE
+                      ? "全部技术组"
+                      : String(value ?? "")
+                  }
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL_TECH_GROUPS_VALUE}>全部技术组</SelectItem>
+                {TECH_GROUP_OPTIONS.map((group) => (
+                  <SelectItem key={group} value={group}>
+                    {group}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <BudgetPoolChart
+            rows={filteredBudgetPools}
+            emptyLabel="暂无预算池，请由超级管理员导入"
+          />
+        </CardContent>
+      </Card>
 
       <div className="grid gap-4 md:grid-cols-2">
         <Card className="flex h-full flex-col">

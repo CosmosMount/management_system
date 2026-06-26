@@ -9,6 +9,7 @@ import {
   LayoutDashboard,
   RefreshCw,
   ShieldCheck,
+  Wallet,
 } from "lucide-react";
 import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";
@@ -17,6 +18,7 @@ const adminNavItems = [
   { href: routes.admin.root, label: "概览", icon: LayoutDashboard },
   { href: routes.admin.system, label: "系统同步", icon: RefreshCw },
   { href: routes.admin.roles, label: "用户与角色", icon: ShieldCheck },
+  { href: routes.admin.budgetPools, label: "采购预算池", icon: Wallet },
   { href: routes.admin.reminders, label: "进度提醒", icon: BellRing },
   { href: routes.admin.projectTemplates, label: "项目模板", icon: FolderKanban },
   { href: routes.admin.acceptance, label: "验收条例", icon: ClipboardCheck },
@@ -26,7 +28,7 @@ export function AdminNav() {
   const pathname = usePathname();
 
   return (
-    <nav className="grid min-w-0 gap-2 sm:grid-cols-2 lg:grid-cols-6">
+    <nav className="grid min-w-0 gap-2 sm:grid-cols-2 lg:grid-cols-7">
       {adminNavItems.map((item) => {
         const Icon = item.icon;
         const active = pathname === item.href;

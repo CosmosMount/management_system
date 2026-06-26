@@ -169,6 +169,20 @@ model UserRole {
   @@unique([openId, role, team, techGroup])
 }
 
+model ProcurementBudgetPool {
+  id                 String   @id @default(uuid())
+  description        String   @default("")
+  team               String
+  techGroup          String
+  period             String
+  budgetAmount       Float
+  lastAlertThreshold Int      @default(0)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([team, techGroup, period])
+}
+
 model PurchaseOrder {
   id                String         @id @default(uuid())
   orderNo           String         @unique
