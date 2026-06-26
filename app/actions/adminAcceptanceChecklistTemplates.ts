@@ -1,8 +1,8 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { requireSuperAdmin } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
+import { revalidateAdmin } from "@/lib/revalidate";
 import { MAX_ACCEPTANCE_CHECKLIST_ITEM_LENGTH } from "@/lib/validations/progress";
 
 export async function createAcceptanceChecklistTemplate(content: string) {
@@ -30,11 +30,11 @@ export async function createAcceptanceChecklistTemplate(content: string) {
     },
   });
 
-  revalidatePath("/admin");
+  revalidateAdmin();
 }
 
 export async function deleteAcceptanceChecklistTemplate(id: string) {
   await requireSuperAdmin();
   await prisma.acceptanceChecklistTemplate.delete({ where: { id } });
-  revalidatePath("/admin");
+  revalidateAdmin();
 }

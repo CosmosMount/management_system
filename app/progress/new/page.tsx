@@ -18,10 +18,19 @@ export default async function NewProjectPage() {
     notFound();
   }
 
-  const users = await prisma.user.findMany({
-    orderBy: { name: "asc" },
-    select: { openId: true, name: true, avatar: true },
-  });
+  const [users, projectTemplates] = await Promise.all([
+    prisma.user.findMany({
+      orderBy: { name: "asc" },
+      select: { openId: true, name: true, avatar: true },
+    }),
+    prisma.projectTemplate.findMany({
+      where: { enabled: true },
+      include: {
+        stages: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      },
+      orderBy: [{ isDefault: "desc" }, { sortOrder: "asc" }],
+    }),
+  ]);
 
   return (
     <>
@@ -30,7 +39,20 @@ export default async function NewProjectPage() {
         <ProgressPageLayout className="max-w-4xl">
           <ProgressBackLink />
           <PageTitle subtitle="新建项目" />
-          <ProjectForm users={users} />
+          <ProjectForm
+            users={users}
+            projectTemplates={projectTemplates.map((template) => ({
+              id: template.id,
+              name: template.name,
+              description: template.description,
+              isDefault: template.isDefault,
+              stages: template.stages.map((stage) => ({
+                name: stage.name,
+                goal: stage.goal,
+                dueOffsetDays: stage.dueOffsetDays,
+              })),
+            }))}
+          />
         </ProgressPageLayout>
       </PageShell>
     </>

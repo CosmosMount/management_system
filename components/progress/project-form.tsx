@@ -27,7 +27,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { TEAM_OPTIONS, TECH_GROUP_OPTIONS } from "@/lib/constants";
-import { getDefaultStageDueAt, REAL_CAR_STAGE_TEMPLATE } from "@/lib/progress-templates";
+import {
+  getDefaultStageDueAt,
+  getStageDueAtByOffsetDays,
+  REAL_CAR_STAGE_TEMPLATE,
+} from "@/lib/progress-templates";
 import {
   createProjectSchema,
   updateProjectSchema,
@@ -39,6 +43,17 @@ import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
 type UserOption = { openId: string; name: string; avatar?: string | null };
+type ProjectTemplateOption = {
+  id: string;
+  name: string;
+  description: string;
+  isDefault: boolean;
+  stages: Array<{
+    name: string;
+    goal: string;
+    dueOffsetDays: number;
+  }>;
+};
 type TeamFormValue = (typeof TEAM_OPTIONS)[number] | "";
 type TechGroupFormValue = (typeof TECH_GROUP_OPTIONS)[number] | "";
 type ProjectFormValues = {
@@ -63,6 +78,7 @@ type ProjectFormValues = {
 
 type Props = {
   users: UserOption[];
+  projectTemplates?: ProjectTemplateOption[];
   mode?: "create" | "edit";
   initialProject?: {
     id: string;
@@ -88,6 +104,18 @@ function realCarStages(defaultOwner = "") {
   }));
 }
 
+function stagesFromTemplate(
+  template: ProjectTemplateOption,
+  defaultOwner = "",
+) {
+  return template.stages.map((stage) => ({
+    name: stage.name,
+    goal: stage.goal,
+    ownerOpenId: defaultOwner,
+    dueAt: getStageDueAtByOffsetDays(stage.dueOffsetDays),
+  }));
+}
+
 function toTeamFormValue(value: string | undefined): TeamFormValue {
   return (TEAM_OPTIONS as readonly string[]).includes(value ?? "")
     ? (value as TeamFormValue)
@@ -102,6 +130,7 @@ function toTechGroupFormValue(value: string | undefined): TechGroupFormValue {
 
 export function ProjectForm({
   users,
+  projectTemplates = [],
   mode = "create",
   initialProject,
   submitLabel,
@@ -114,6 +143,13 @@ export function ProjectForm({
   const initialOwnerOpenIds = initialProject?.ownerOpenIds ?? [];
   const initialParticipantOpenIds = initialProject?.participantOpenIds ?? [];
   const primaryInitialOwner = initialOwnerOpenIds[0] ?? "";
+  const defaultProjectTemplate =
+    projectTemplates.find((template) => template.isDefault) ??
+    projectTemplates[0] ??
+    null;
+  const [selectedTemplateId, setSelectedTemplateId] = useState(
+    defaultProjectTemplate?.id ?? "real-car",
+  );
 
   const form = useForm<ProjectFormValues>({
     resolver: zodResolver(
@@ -131,7 +167,11 @@ export function ProjectForm({
       participantOpenIds: initialParticipantOpenIds,
       allowOwnerSelfApproval: initialProject?.allowOwnerSelfApproval ?? false,
       template: "real-car",
-      stages: editing ? [] : realCarStages(),
+      stages: editing
+        ? []
+        : defaultProjectTemplate
+          ? stagesFromTemplate(defaultProjectTemplate)
+          : realCarStages(),
     },
   });
   const errors = form.formState.errors;
@@ -149,6 +189,9 @@ export function ProjectForm({
   const techGroup = useWatch({ control: form.control, name: "techGroup" });
   const primaryOwnerOpenId = ownerOpenIds?.[0] ?? "";
   const scopeErrorMessage = errors.team?.message ?? errors.techGroup?.message;
+  const selectedTemplateLabel =
+    projectTemplates.find((template) => template.id === selectedTemplateId)
+      ?.name ?? "实车模板";
   const scopeWarning =
     team && !techGroup
       ? "仅选择车组时，只有该车组组长和全局管理角色会参与管理/审批。"
@@ -217,9 +260,20 @@ export function ProjectForm({
     window.setTimeout(() => focusFirstInvalidControl(formElement), 0);
   };
 
-  function applyRealCarTemplate() {
+  function applySelectedTemplate() {
+    const template = projectTemplates.find(
+      (item) => item.id === selectedTemplateId,
+    );
+    if (template) {
+      form.setValue("template", "custom");
+      form.setValue("stages", stagesFromTemplate(template, primaryOwnerOpenId));
+      toast.success(`已套用「${template.name}」`);
+      return;
+    }
+
     form.setValue("template", "real-car");
     form.setValue("stages", realCarStages(primaryOwnerOpenId));
+    toast.success("已套用实车模板");
   }
 
   return (
@@ -383,16 +437,42 @@ export function ProjectForm({
 
       {!editing && (
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle>项目阶段</CardTitle>
-            <div className="flex gap-2">
+          <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <CardTitle>项目阶段</CardTitle>
+              <p className="mt-1 text-sm text-muted-foreground">
+                可套用管理员维护的模板；套用后仍可手动调整阶段和 DDL。
+              </p>
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Select
+                value={selectedTemplateId}
+                onValueChange={(value) => setSelectedTemplateId(value ?? "")}
+              >
+                <SelectTrigger className="w-full sm:w-44" aria-label="项目模板">
+                  <SelectValue placeholder="选择项目模板">
+                    {() => selectedTemplateLabel}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {projectTemplates.map((template) => (
+                    <SelectItem key={template.id} value={template.id}>
+                      {template.name}
+                      {template.isDefault ? "（默认）" : ""}
+                    </SelectItem>
+                  ))}
+                  {projectTemplates.length === 0 && (
+                    <SelectItem value="real-car">实车模板</SelectItem>
+                  )}
+                </SelectContent>
+              </Select>
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
-                onClick={applyRealCarTemplate}
+                onClick={applySelectedTemplate}
               >
-                实车模板
+                套用模板
               </Button>
               <Button
                 type="button"

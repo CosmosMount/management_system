@@ -256,6 +256,34 @@ model ProjectParticipant {
   @@unique([projectId, openId])
 }
 
+model ProjectTemplate {
+  id          String                 @id @default(uuid())
+  name        String                 @unique
+  description String                 @default("")
+  /// Only one default template is enforced by the raw PostgreSQL partial unique index
+  /// ProjectTemplate_single_default_idx in migrations/20260626220000_add_project_templates.
+  isDefault   Boolean                @default(false)
+  enabled     Boolean                @default(true)
+  sortOrder   Int                    @default(0)
+  stages      ProjectTemplateStage[]
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
+}
+
+model ProjectTemplateStage {
+  id            String          @id @default(uuid())
+  templateId    String
+  template      ProjectTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  name          String
+  goal          String          @default("")
+  dueOffsetDays Int
+  sortOrder     Int             @default(0)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@index([templateId, sortOrder])
+}
+
 model ProjectStage {
   id                  String           @id @default(uuid())
   projectId           String

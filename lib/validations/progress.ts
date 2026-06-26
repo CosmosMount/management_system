@@ -41,6 +41,33 @@ const dateTimeStringSchema = (message: string) =>
     "请输入有效时间",
   );
 
+function validateNonDecreasingValues(
+  values: Array<string | number>,
+  ctx: z.RefinementCtx,
+  pathPrefix: string,
+  pathKey: string,
+  message: string,
+) {
+  for (let index = 1; index < values.length; index += 1) {
+    const previousRaw = values[index - 1];
+    const currentRaw = values[index];
+    const previous =
+      typeof previousRaw === "number"
+        ? previousRaw
+        : new Date(previousRaw).getTime();
+    const current =
+      typeof currentRaw === "number" ? currentRaw : new Date(currentRaw).getTime();
+    if (Number.isNaN(previous) || Number.isNaN(current)) continue;
+    if (current < previous) {
+      ctx.addIssue({
+        code: "custom",
+        path: [pathPrefix, index, pathKey],
+        message,
+      });
+    }
+  }
+}
+
 function validateProjectScopeAndOwners(
   value: { team?: string; techGroup?: string; ownerOpenId?: string; ownerOpenIds?: string[] },
   ctx: z.RefinementCtx,
@@ -89,6 +116,54 @@ export const createProjectSchema = projectBaseSchema.extend({
     .min(1, "至少添加一个阶段"),
 }).superRefine((value, ctx) => {
   validateProjectScopeAndOwners(value, ctx);
+  validateNonDecreasingValues(
+    value.stages.map((stage) => stage.dueAt),
+    ctx,
+    "stages",
+    "dueAt",
+    "阶段 DDL 需要按顺序递增或相同，后续阶段不能早于前一阶段",
+  );
+});
+
+export const projectTemplateStageSchema = z.object({
+  name: z.string().trim().min(1, "阶段名称不能为空").max(100, "阶段名称不能超过 100 个字符"),
+  goal: z.string().trim().min(1, "请填写阶段目标").max(1000, "阶段目标不能超过 1000 个字符"),
+  dueOffsetDays: z.coerce
+    .number()
+    .int("相对 DDL 天数必须是整数")
+    .min(0, "相对 DDL 天数不能小于 0")
+    .max(3650, "相对 DDL 天数不能超过 3650 天"),
+});
+
+const projectTemplateBaseSchema = z.object({
+  name: z.string().trim().min(1, "请输入模板名称").max(100, "模板名称不能超过 100 个字符"),
+  description: z.string().trim().max(1000, "模板描述不能超过 1000 个字符").optional(),
+  enabled: z.boolean().default(true),
+  isDefault: z.boolean().default(false),
+  stages: z.array(projectTemplateStageSchema).min(1, "至少添加一个阶段"),
+}).superRefine((value, ctx) => {
+  validateNonDecreasingValues(
+    value.stages.map((stage) => stage.dueOffsetDays),
+    ctx,
+    "stages",
+    "dueOffsetDays",
+    "阶段相对 DDL 天数需要按顺序递增或相同",
+  );
+});
+
+export const createProjectTemplateSchema = projectTemplateBaseSchema;
+
+export const updateProjectTemplateSchema = projectTemplateBaseSchema.extend({
+  templateId: z.string().min(1, "缺少模板 ID"),
+});
+
+export const projectTemplateIdSchema = z.object({
+  templateId: z.string().min(1, "缺少模板 ID"),
+});
+
+export const projectTemplateEnabledSchema = z.object({
+  templateId: z.string().min(1, "缺少模板 ID"),
+  enabled: z.boolean(),
 });
 
 export const updateProjectSchema = projectBaseSchema.extend({
@@ -299,3 +374,5 @@ export type CreateProjectInput = z.input<typeof createProjectSchema>;
 export type UpdateProjectInput = z.input<typeof updateProjectSchema>;
 export type CreateTaskInput = z.input<typeof createTaskSchema>;
 export type UpdateTaskInput = z.input<typeof updateTaskSchema>;
+export type CreateProjectTemplateInput = z.input<typeof createProjectTemplateSchema>;
+export type UpdateProjectTemplateInput = z.input<typeof updateProjectTemplateSchema>;
