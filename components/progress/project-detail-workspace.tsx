@@ -732,25 +732,7 @@ function ProjectOverview({
             )}
             {project.status === "IN_PROGRESS" && (
               completeDisabledReason ? (
-                <div className="flex max-w-52 flex-col gap-1">
-                  <span className="inline-flex" title={completeDisabledReason}>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled
-                      aria-describedby="project-complete-disabled-reason"
-                    >
-                      完成项目
-                    </Button>
-                  </span>
-                  <p
-                    id="project-complete-disabled-reason"
-                    className="text-xs text-muted-foreground"
-                  >
-                    {completeDisabledReason}
-                  </p>
-                </div>
+                <DisabledCompleteProjectButton reason={completeDisabledReason} />
               ) : (
                 <ReasonConfirmDialog
                   triggerLabel="完成项目"
@@ -785,6 +767,34 @@ function ProjectOverview({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function DisabledCompleteProjectButton({ reason }: { reason: string }) {
+  return (
+    <span
+      className="group relative inline-flex outline-none"
+      title={reason}
+      tabIndex={0}
+      aria-describedby="project-complete-disabled-reason"
+    >
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled
+        aria-describedby="project-complete-disabled-reason"
+      >
+        完成项目
+      </Button>
+      <span
+        id="project-complete-disabled-reason"
+        role="tooltip"
+        className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 w-max max-w-72 -translate-x-1/2 rounded-md border bg-popover px-3 py-2 text-xs leading-relaxed text-popover-foreground opacity-0 shadow-md transition-opacity group-hover:opacity-100 group-focus:opacity-100"
+      >
+        {reason}
+      </span>
+    </span>
   );
 }
 
@@ -2806,10 +2816,11 @@ function getProjectCompleteDisabledReason({
   unfinishedTaskCount: number;
 }): string | null {
   if (loadingStatus !== null) return "正在处理，请稍候";
-  if (stageCount === 0) return "请先配置并完成项目阶段";
-  if (!allStagesCompleted) return `还有 ${unfinishedStageCount} 个阶段未完成`;
-  if (unfinishedTaskCount > 0) {
-    return `还有 ${unfinishedTaskCount} 个任务未完成`;
+  if (stageCount === 0) {
+    return `请先配置项目阶段；还有 ${unfinishedStageCount} 个阶段未完成，${unfinishedTaskCount} 个任务未完成`;
+  }
+  if (!allStagesCompleted || unfinishedTaskCount > 0) {
+    return `还有 ${unfinishedStageCount} 个阶段未完成，${unfinishedTaskCount} 个任务未完成`;
   }
   return null;
 }
