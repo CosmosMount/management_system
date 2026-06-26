@@ -22,3 +22,6 @@ export type TechGroupOption = (typeof TECH_GROUP_OPTIONS)[number];
 
 /** 验收清单 Word 模板单次生成上限（超出会自动扩行，直至该值） */
 export const MAX_REIMBURSEMENT_LIST_ROWS = 50;
+
+/** 预算池 Excel 单次导入行数上限 */
+export const MAX_BUDGET_POOL_IMPORT_ROWS = 300;

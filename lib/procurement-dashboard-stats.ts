@@ -1,4 +1,5 @@
 import type { OrderStatus } from "@prisma/client";
+import type { BudgetPoolView } from "@/lib/procurement-budget";
 import { routes } from "@/lib/routes";
 
 export type ChartSlice = {
@@ -14,6 +15,16 @@ export type BarRow = {
   href?: string;
 };
 
+export type BudgetPoolRow = {
+  name: string;
+  description: string;
+  team: string;
+  techGroup: string;
+  budget: number;
+  used: number;
+  usagePercent: number;
+};
+
 export type DashboardChartsData = {
   teamSpending: ChartSlice[];
   statusDistribution: ChartSlice[];
@@ -21,6 +32,8 @@ export type DashboardChartsData = {
   delayRanking: BarRow[];
   completedTotal: number;
   activeOrderCount: number;
+  budgetPools: BudgetPoolRow[];
+  budgetPeriod: string;
 };
 
 const CHART_COLORS = [
@@ -73,6 +86,8 @@ function daysSince(date: Date): number {
 /** 已完成订单计入支出；活跃单计入状态与拖延统计 */
 export function buildDashboardChartsData(
   orders: OrderForStats[],
+  poolViews: BudgetPoolView[] = [],
+  budgetPeriod = "",
 ): DashboardChartsData {
   const completed = orders.filter((o) => o.status === "COMPLETED");
   const active = orders.filter(
@@ -152,6 +167,16 @@ export function buildDashboardChartsData(
       };
     });
 
+  const budgetPools = poolViews.map((pool) => ({
+    name: pool.label,
+    description: pool.description,
+    team: pool.team,
+    techGroup: pool.techGroup,
+    budget: pool.budgetAmount,
+    used: pool.usedAmount,
+    usagePercent: pool.usagePercent,
+  }));
+
   return {
     teamSpending,
     statusDistribution,
@@ -159,6 +184,8 @@ export function buildDashboardChartsData(
     delayRanking,
     completedTotal: completed.reduce((s, o) => s + o.totalPrice, 0),
     activeOrderCount: active.length,
+    budgetPools,
+    budgetPeriod,
   };
 }
 

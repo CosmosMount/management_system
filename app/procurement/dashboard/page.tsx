@@ -11,16 +11,23 @@ import { PageShell } from "@/components/page-shell";
 import { PageTitle } from "@/components/page-title";
 import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { buildDashboardChartsData } from "@/lib/procurement-dashboard-stats";
+import { listBudgetPoolViews } from "@/lib/procurement-budget";
+import { currentBudgetPeriod } from "@/lib/import-procurement-budget";
 import { procurementSummaryWhere } from "@/lib/procurement-visibility";
 import { prisma } from "@/lib/prisma";
 
 export default async function DashboardPage() {
   const liveVersion = await getCurrentUserLiveVersion("procurement-dashboard");
-  const orders = await prisma.purchaseOrder.findMany({
-    where: procurementSummaryWhere(),
-    include: { items: true },
-    orderBy: { createdAt: "desc" },
-  });
+  const [orders, budgetPools] = await Promise.all([
+    prisma.purchaseOrder.findMany({
+      where: procurementSummaryWhere(),
+      include: { items: true },
+      orderBy: { createdAt: "desc" },
+    }),
+    listBudgetPoolViews(),
+  ]);
+
+  const budgetPeriod = currentBudgetPeriod();
 
   const chartData = buildDashboardChartsData(
     orders.map((o) => ({
@@ -33,6 +40,8 @@ export default async function DashboardPage() {
       totalPrice: o.totalPrice,
       statusEnteredAt: o.statusEnteredAt,
     })),
+    budgetPools,
+    budgetPeriod,
   );
 
   const rows: SummaryRow[] = orders.flatMap((order) =>

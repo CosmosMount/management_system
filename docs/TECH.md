@@ -75,6 +75,16 @@ Auth.js 不能在中件件中 import 含 Prisma 的模块，因此拆分：
 | `UserRole` | 角色分配（可带 team / techGroup 范围） |
 | `PurchaseOrder` | 采购主单 |
 | `PurchaseItem` | 明细（含购买链接） |
+| `ProcurementBudgetPool` | 车组+技术组配对采购预算池（按周期，含描述） |
+
+**采购明细 Excel 导入**（`lib/import-procurement-items.ts`）：采购申请页支持从 Excel 导入条目，列包括物品名称、规格、种类、采购链接、加工商、数量、行总价。加工费条目导入后仍需手动上传图片。
+
+**预算池**（`lib/procurement-budget.ts`、`lib/procurement-budget-alerts.ts`）：
+
+- 超级管理员在 `/admin` 通过 Excel 导入预算（描述、车组、技术组、预算、周期默认 2026）；每行一条车组+技术组配对，单次最多 300 行；支持追加或覆盖同周期数据
+- 已使用金额 = 同一车组且同一技术组、状态非 `DRAFT`/`REJECTED` 的订单 `totalPrice` 之和
+- 使用率首次达到 70%、80%、90%、100% 时向对应车组组长或技术组组长发送飞书私信
+- 采购看板 `/procurement/dashboard` 按车组/技术组 Tab 展示预算使用率
 
 **状态机：**
 

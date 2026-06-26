@@ -8,11 +8,12 @@ import {
   type Resolver,
 } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, FileSpreadsheet } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { createWorkshopFeeOrder } from "@/app/actions/createWorkshopFeeOrder";
+import { ProcurementItemsImportDialog } from "@/components/procurement-items-import-dialog";
 import { ProcessingVendorSelect } from "@/components/processing-vendor-select";
 import { Button } from "@/components/ui/button";
 import {
@@ -37,6 +38,7 @@ import {
   createWorkshopFeeSchema,
   type CreateWorkshopFeeInput,
 } from "@/lib/validations/workshop-fee";
+import type { PurchaseItemInput } from "@/lib/validations/order";
 
 type FormValues = Omit<CreateWorkshopFeeInput, "team" | "techGroup"> & {
   team: CreateWorkshopFeeInput["team"] | "";
@@ -54,6 +56,7 @@ const defaultItem = {
 export function WorkshopFeeForm() {
   const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [itemImageFiles, setItemImageFiles] = useState<
     Record<number, File | undefined>
   >({});
@@ -97,6 +100,24 @@ export function WorkshopFeeForm() {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  function handleImportItems(
+    imported: PurchaseItemInput[],
+    mode: "replace" | "append",
+  ) {
+    const mapped = imported.map((item) => ({
+      name: item.name,
+      spec: item.spec,
+      processingVendor: item.processingVendor,
+      quantity: item.quantity,
+      lineTotal: item.lineTotal,
+    }));
+    const current = form.getValues("items");
+    const merged = mode === "append" ? [...current, ...mapped] : mapped;
+    form.setValue("items", merged, { shouldValidate: true });
+    setItemImageFiles({});
+    toast.success(`已导入 ${mapped.length} 条加工费明细`);
   }
 
   return (
@@ -170,15 +191,26 @@ export function WorkshopFeeForm() {
               种类固定为加工费，每条须上传对应图片，提交后直接计入采购汇总
             </CardDescription>
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => append(defaultItem)}
-          >
-            <Plus className="mr-1 h-4 w-4" />
-            添加条目
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setImportDialogOpen(true)}
+            >
+              <FileSpreadsheet className="mr-1 h-4 w-4" />
+              从 Excel 导入
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => append(defaultItem)}
+            >
+              <Plus className="mr-1 h-4 w-4" />
+              添加条目
+            </Button>
+          </div>
         </CardHeader>
         <CardContent className="space-y-4">
           {fields.map((field, index) => {
@@ -306,6 +338,13 @@ export function WorkshopFeeForm() {
       >
         {submitting ? "提交中…" : "提交并计入汇总"}
       </Button>
+      <ProcurementItemsImportDialog
+        open={importDialogOpen}
+        onOpenChange={setImportDialogOpen}
+        existingItemCount={fields.length}
+        processingFeeOnly
+        onConfirm={handleImportItems}
+      />
     </form>
   );
 }

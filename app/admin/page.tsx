@@ -8,6 +8,7 @@ import { PageTitle } from "@/components/page-title";
 import { auth } from "@/lib/auth";
 import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { isSuperAdmin } from "@/lib/permissions";
+import { currentBudgetPeriod } from "@/lib/import-procurement-budget";
 import { getProgressReminderRuleViews } from "@/lib/progress-reminders";
 import { prisma } from "@/lib/prisma";
 
@@ -27,6 +28,7 @@ export default async function AdminPage() {
     acceptanceChecklistTemplates,
     progressReminderRules,
     progressReminderOutbox,
+    budgetPools,
   ] = await Promise.all([
     prisma.user.findMany({ orderBy: { name: "asc" } }),
     prisma.userRole.findMany({ orderBy: { role: "asc" } }),
@@ -38,6 +40,10 @@ export default async function AdminPage() {
       where: { channel: "progress", type: "progress_reminder" },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: 20,
+    }),
+    prisma.procurementBudgetPool.findMany({
+      where: { period: currentBudgetPeriod() },
+      orderBy: [{ team: "asc" }, { techGroup: "asc" }],
     }),
   ]);
 
@@ -79,6 +85,16 @@ export default async function AdminPage() {
               lastError: row.lastError,
               createdAt: row.createdAt.toISOString(),
               sentAt: row.sentAt?.toISOString() ?? null,
+            }))}
+            budgetPools={budgetPools.map((pool) => ({
+              id: pool.id,
+              description: pool.description,
+              team: pool.team,
+              techGroup: pool.techGroup,
+              period: pool.period,
+              budgetAmount: pool.budgetAmount,
+              lastAlertThreshold: pool.lastAlertThreshold,
+              updatedAt: pool.updatedAt.toISOString(),
             }))}
           />
         </main>

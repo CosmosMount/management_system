@@ -12,6 +12,7 @@ import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { attachItemReferenceImages } from "@/lib/order-item-images";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
+import { checkBudgetAlertsForOrder } from "@/lib/procurement-budget-alerts";
 import { canEditDraftOrder } from "@/lib/permissions";
 import { routes } from "@/lib/routes";
 import { requireInitiatorSignature } from "@/lib/user-signature";
@@ -124,6 +125,11 @@ export async function updateOrder(formData: FormData) {
       await getNotificationContext(),
     );
     drainNotificationOutboxSoon();
+    await checkBudgetAlertsForOrder(
+      refreshed.team,
+      refreshed.techGroup,
+      await getNotificationContext(),
+    );
   }
 
   revalidatePath("/");
@@ -170,6 +176,11 @@ export async function submitDraftOrder(orderId: string) {
     await getNotificationContext(),
   );
   drainNotificationOutboxSoon();
+  await checkBudgetAlertsForOrder(
+    updated.team,
+    updated.techGroup,
+    await getNotificationContext(),
+  );
 
   revalidatePath("/");
   revalidatePath(routes.procurement.list);

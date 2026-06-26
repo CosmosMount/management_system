@@ -1,6 +1,7 @@
 "use client";
 
 import type { ComponentType } from "react";
+import { AdminBudgetPoolsPanel, type AdminBudgetPool } from "@/components/admin-budget-pools-panel";
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -118,6 +119,7 @@ type Props = {
   acceptanceChecklistTemplates: AdminAcceptanceChecklistTemplate[];
   progressReminderRules: AdminProgressReminderRule[];
   progressReminderOutbox: AdminReminderOutbox[];
+  budgetPools: AdminBudgetPool[];
 };
 
 type UserOption = {
@@ -134,6 +136,7 @@ export function AdminPanel({
   acceptanceChecklistTemplates,
   progressReminderRules,
   progressReminderOutbox,
+  budgetPools,
 }: Props) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -405,10 +408,11 @@ export function AdminPanel({
         />
       </section>
 
-      <nav className="grid min-w-0 gap-2 sm:grid-cols-5">
+      <nav className="grid min-w-0 gap-2 sm:grid-cols-6">
         <AdminNavLink href="#system" icon={RefreshCw} label="系统同步" />
         <AdminNavLink href="#roles" icon={ShieldCheck} label="职责配置" />
         <AdminNavLink href="#users" icon={Users} label="用户与角色" />
+        <AdminNavLink href="#budget" icon={ShieldCheck} label="采购预算池" />
         <AdminNavLink href="#reminders" icon={BellRing} label="进度提醒" />
         <AdminNavLink
           href="#acceptance"
@@ -741,6 +745,10 @@ export function AdminPanel({
           )}
         </CardContent>
       </Card>
+
+      <div id="budget" className="scroll-mt-20">
+        <AdminBudgetPoolsPanel pools={budgetPools} />
+      </div>
 
       <Card id="reminders" className="scroll-mt-20">
         <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">

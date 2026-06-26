@@ -6,6 +6,8 @@ import { attachItemReferenceImages } from "@/lib/order-item-images";
 import { removeOrderUploads } from "@/lib/file-upload";
 import { prisma } from "@/lib/prisma";
 import { revalidateProcurement } from "@/lib/revalidate";
+import { getNotificationContext } from "@/lib/request-origin";
+import { checkBudgetAlertsForOrder } from "@/lib/procurement-budget-alerts";
 import {
   assertWorkshopFeeImages,
   createWorkshopFeeSchema,
@@ -102,6 +104,12 @@ export async function createWorkshopFeeOrder(formData: FormData) {
   }
 
   revalidateProcurement(order.id);
+
+  await checkBudgetAlertsForOrder(
+    parsed.team,
+    parsed.techGroup,
+    await getNotificationContext(),
+  );
 
   return order;
 }

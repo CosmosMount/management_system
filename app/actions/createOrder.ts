@@ -13,6 +13,7 @@ import { attachItemReferenceImages } from "@/lib/order-item-images";
 import { prisma } from "@/lib/prisma";
 import { removeOrderUploads } from "@/lib/file-upload";
 import { getNotificationContext } from "@/lib/request-origin";
+import { checkBudgetAlertsForOrder } from "@/lib/procurement-budget-alerts";
 import { routes } from "@/lib/routes";
 import { requireInitiatorSignature } from "@/lib/user-signature";
 import {
@@ -129,6 +130,11 @@ export async function createOrder(formData: FormData) {
       await getNotificationContext(),
     );
     drainNotificationOutboxSoon();
+    await checkBudgetAlertsForOrder(
+      refreshed.team,
+      refreshed.techGroup,
+      await getNotificationContext(),
+    );
   }
 
   revalidatePath("/");
