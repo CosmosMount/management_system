@@ -41,6 +41,7 @@ dev.db
 *.db-journal
 *.db-wal
 *.db-shm
+data/
 
 # generated prisma client artifacts
 /lib/generated/prisma/
