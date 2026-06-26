@@ -13,6 +13,7 @@ import {
 } from "@/lib/permissions-progress";
 import { assertProjectActive } from "@/lib/progress-guards";
 import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
+import { collectTaskNotificationRecipients } from "@/lib/progress-task-notifications";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import { revalidateProgress } from "@/lib/revalidate";
@@ -35,8 +36,16 @@ export async function approveTaskSubmission(input: {
     include: {
       task: {
         include: {
-          project: true,
-          assignees: true,
+          project: {
+            include: {
+              owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+              participants: {
+                orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+              },
+            },
+          },
+          assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+          techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
           acceptanceChecklistItems: {
             orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
           },
@@ -157,6 +166,7 @@ export async function approveTaskSubmission(input: {
       taskTitle: task.title,
       projectName: task.project.name,
       assigneeOpenIds: getTaskAssigneeOpenIds(task),
+      recipientOpenIds: await collectTaskNotificationRecipients(task),
     },
     await getNotificationContext(),
   );
@@ -178,7 +188,22 @@ export async function rejectTaskSubmission(input: {
 
   const submission = await prisma.taskSubmission.findUnique({
     where: { id: parsed.submissionId },
-    include: { task: { include: { project: true, assignees: true } } },
+    include: {
+      task: {
+        include: {
+          project: {
+            include: {
+              owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+              participants: {
+                orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+              },
+            },
+          },
+          assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+          techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        },
+      },
+    },
   });
   if (!submission?.task) throw new Error("提交记录不存在");
 
@@ -269,6 +294,7 @@ export async function rejectTaskSubmission(input: {
       projectName: task.project.name,
       assigneeOpenIds: getTaskAssigneeOpenIds(task),
       comment: parsed.comment ?? "",
+      recipientOpenIds: await collectTaskNotificationRecipients(task),
     },
     await getNotificationContext(),
   );

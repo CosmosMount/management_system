@@ -13,6 +13,7 @@ import {
 } from "@/lib/permissions-progress";
 import { getUserRoles } from "@/lib/permissions";
 import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
+import { collectTaskNotificationRecipients } from "@/lib/progress-task-notifications";
 import { requireSessionUser } from "@/lib/progress-activity";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { getProjectParticipantOpenIds } from "@/lib/progress-project-participants";
@@ -48,6 +49,7 @@ export async function deleteTaskDirectly(input: DirectDeleteInput) {
       },
       stage: true,
       assignees: true,
+      techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
     },
   });
   if (!task || task.deletedAt) throw new Error("任务不存在");
@@ -145,6 +147,12 @@ export async function deleteTaskDirectly(input: DirectDeleteInput) {
         ...getTaskAssigneeOpenIds(task),
       ],
       projectOwnerOpenIds,
+      recipientOpenIds: [
+        ...new Set([
+          ...pendingRequesterOpenIds,
+          ...(await collectTaskNotificationRecipients(task)),
+        ]),
+      ],
     },
     await getNotificationContext(),
   );
@@ -175,6 +183,7 @@ export async function requestTaskDeletion(input: { taskId: string; reason: strin
       },
       stage: true,
       assignees: true,
+      techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       deletionRequests: {
         where: { status: "PENDING" },
         take: 1,
@@ -282,6 +291,7 @@ export async function requestTaskDeletion(input: { taskId: string; reason: strin
       team: task.team,
       techGroup: task.techGroup,
       projectOwnerOpenIds,
+      recipientOpenIds: await collectTaskNotificationRecipients(task),
     },
     await getNotificationContext(),
   );
@@ -309,10 +319,14 @@ export async function reviewTaskDeletionRequest(input: {
           project: {
             include: {
               owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+              participants: {
+                orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+              },
             },
           },
           stage: true,
           assignees: true,
+          techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
         },
       },
     },
@@ -414,6 +428,12 @@ export async function reviewTaskDeletionRequest(input: {
           ...getTaskAssigneeOpenIds(task),
         ],
         projectOwnerOpenIds,
+        recipientOpenIds: [
+          ...new Set([
+            request.requesterOpenId,
+            ...(await collectTaskNotificationRecipients(task)),
+          ]),
+        ],
       },
       await getNotificationContext(),
     );
@@ -466,6 +486,12 @@ export async function reviewTaskDeletionRequest(input: {
         comment: parsed.comment ?? "",
         requesterOpenId: request.requesterOpenId,
         assigneeOpenIds: getTaskAssigneeOpenIds(task),
+        recipientOpenIds: [
+          ...new Set([
+            request.requesterOpenId,
+            ...(await collectTaskNotificationRecipients(task)),
+          ]),
+        ],
       },
       await getNotificationContext(),
     );

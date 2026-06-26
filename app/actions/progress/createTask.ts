@@ -13,6 +13,8 @@ import { getNotificationContext } from "@/lib/request-origin";
 import { getUserRoles } from "@/lib/permissions";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { normalizeAcceptanceChecklistItems } from "@/lib/progress-acceptance-checklists";
+import { collectTaskNotificationRecipients } from "@/lib/progress-task-notifications";
+import { normalizeTaskTechGroups } from "@/lib/progress-task-tech-groups";
 import { revalidateProgress } from "@/lib/revalidate";
 import { createTaskSchema, type CreateTaskInput } from "@/lib/validations/progress";
 
@@ -26,6 +28,7 @@ export async function createTask(input: CreateTaskInput) {
     where: { id: parsed.projectId },
     include: {
       owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       stages: true,
     },
   });
@@ -83,6 +86,8 @@ export async function createTask(input: CreateTaskInput) {
   }
 
   const dueAt = new Date(parsed.dueAt);
+  const taskTechGroups = normalizeTaskTechGroups(parsed.taskTechGroups);
+  if (taskTechGroups.length === 0) throw new Error("请选择任务技术组");
   const needsWeeklyReport =
     parsed.needsWeeklyReport ||
     dueAt.getTime() - Date.now() > 14 * 24 * 60 * 60 * 1000;
@@ -105,7 +110,7 @@ export async function createTask(input: CreateTaskInput) {
         stageId,
         title: parsed.title,
         goal: parsed.goal ?? "",
-        category: parsed.category,
+        category: parsed.category ?? "RND",
         urgency: parsed.urgency,
         importance: parsed.importance,
         assigneeOpenId: primaryAssignee.openId,
@@ -114,6 +119,12 @@ export async function createTask(input: CreateTaskInput) {
           create: orderedAssignees.map((assignee, index) => ({
             openId: assignee.openId,
             name: assignee.name,
+            sortOrder: index,
+          })),
+        },
+        techGroups: {
+          create: taskTechGroups.map((techGroup, index) => ({
+            techGroup,
             sortOrder: index,
           })),
         },
@@ -131,6 +142,16 @@ export async function createTask(input: CreateTaskInput) {
           })),
         },
       },
+      include: {
+        assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        project: {
+          include: {
+            owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+            participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+          },
+        },
+      },
     });
   });
 
@@ -143,10 +164,12 @@ export async function createTask(input: CreateTaskInput) {
     payload: {
       title: task.title,
       assignees: orderedAssignees.map((assignee) => assignee.name),
+      taskTechGroups,
       acceptanceChecklistCount: acceptanceChecklistItems.length,
     },
   });
 
+  const recipientOpenIds = await collectTaskNotificationRecipients(task);
   await enqueueProgressNotification(
     `progress:task_assigned:${task.id}`,
     {
@@ -157,6 +180,7 @@ export async function createTask(input: CreateTaskInput) {
       team: task.team,
       techGroup: task.techGroup,
       assigneeOpenIds: orderedAssignees.map((assignee) => assignee.openId),
+      recipientOpenIds,
     },
     await getNotificationContext(),
   );

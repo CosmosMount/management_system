@@ -17,6 +17,7 @@ import {
 } from "@/app/actions/progress/approveTaskSubmission";
 import { submitTaskDelivery } from "@/app/actions/progress/submitTaskDelivery";
 import {
+  resolveTaskRisk,
   submitWeeklyReport,
   syncTaskRisk,
 } from "@/app/actions/progress/submitWeeklyReport";
@@ -60,6 +61,18 @@ type AcceptanceChecklistItem = {
   sortOrder: number;
 };
 
+type RiskRecord = {
+  id: string;
+  content: string;
+  source: "MANUAL" | "WEEKLY";
+  status: "ACTIVE" | "RESOLVED";
+  createdByName: string;
+  resolvedByName: string;
+  resolveNote: string;
+  createdAt: string;
+  resolvedAt: string | null;
+};
+
 type DeliveryErrors = {
   docUrl?: string;
   keyDataUrl?: string;
@@ -76,12 +89,15 @@ type Props = {
   isAssignee: boolean;
   canSubmitDelivery?: boolean;
   canSubmitWeeklyReport?: boolean;
+  canSyncRisk?: boolean;
   canApprove: boolean;
   canManage: boolean;
   needsOfflineConfirmation: boolean;
   needsWeeklyReport: boolean;
+  weeklyReportDueLabel?: string;
   acceptanceChecklistItems: AcceptanceChecklistItem[];
   submissions: Submission[];
+  riskRecords?: RiskRecord[];
   className?: string;
   showFlowActions?: boolean;
 };
@@ -92,12 +108,15 @@ export function TaskActionsPanel({
   isAssignee,
   canSubmitDelivery,
   canSubmitWeeklyReport,
+  canSyncRisk,
   canApprove,
   canManage,
   needsOfflineConfirmation,
   needsWeeklyReport,
+  weeklyReportDueLabel,
   acceptanceChecklistItems,
   submissions,
+  riskRecords = [],
   className,
   showFlowActions = true,
 }: Props) {
@@ -114,9 +133,9 @@ export function TaskActionsPanel({
   const [failureReason, setFailureReason] = useState("");
   const [rejectComment, setRejectComment] = useState("");
   const [progress, setProgress] = useState("");
-  const [risks, setRisks] = useState("");
   const [nextPlan, setNextPlan] = useState("");
   const [riskNote, setRiskNote] = useState("");
+  const [riskResolveNotes, setRiskResolveNotes] = useState<Record<string, string>>({});
   const [offlineConfirmed, setOfflineConfirmed] = useState(false);
   const [checkedChecklistItemIds, setCheckedChecklistItemIds] = useState<string[]>([]);
   const [deliveryErrors, setDeliveryErrors] = useState<DeliveryErrors>({});
@@ -130,7 +149,11 @@ export function TaskActionsPanel({
   const canSubmitTaskDelivery = canSubmitDelivery ?? isAssignee;
   const canSubmitTaskWeeklyReport =
     needsWeeklyReport && (canSubmitWeeklyReport ?? isAssignee);
+  const canSyncTaskRisk = canSyncRisk ?? isAssignee;
   const isTerminalTask = isTerminalTaskStatus(status);
+  const canMutateRisk = canSyncTaskRisk && !isTerminalTask;
+  const activeRisks = riskRecords.filter((risk) => risk.status === "ACTIVE");
+  const resolvedRisks = riskRecords.filter((risk) => risk.status === "RESOLVED");
   const allChecklistItemsChecked =
     acceptanceChecklistItems.length === 0 ||
     acceptanceChecklistItems.every((item) =>
@@ -197,13 +220,37 @@ export function TaskActionsPanel({
   }
 
   async function handleRiskSync() {
+    if (!riskNote.trim()) {
+      toast.error("请填写风险说明");
+      return;
+    }
     setLoading(true);
     try {
-      await syncTaskRisk({ taskId, riskNote });
+      await syncTaskRisk({ taskId, content: riskNote.trim() });
       toast.success("风险已同步");
+      setRiskNote("");
       router.refresh();
     } catch (err) {
       toast.error(getActionErrorMessage(err, "同步失败"));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleRiskResolve(riskId: string) {
+    const resolveNote = riskResolveNotes[riskId]?.trim();
+    if (!resolveNote) {
+      toast.error("请填写风险解除说明");
+      return;
+    }
+    setLoading(true);
+    try {
+      await resolveTaskRisk({ riskId, resolveNote });
+      toast.success("风险已解除");
+      setRiskResolveNotes((current) => ({ ...current, [riskId]: "" }));
+      router.refresh();
+    } catch (err) {
+      toast.error(getActionErrorMessage(err, "解除失败"));
     } finally {
       setLoading(false);
     }
@@ -236,14 +283,12 @@ export function TaskActionsPanel({
       await submitWeeklyReport({
         taskId,
         progress: progress.trim(),
-        risks: risks.trim(),
         nextPlan: nextPlan.trim(),
         feishuDocUrl: weeklyDocUrl.trim(),
       });
       toast.success("周报已提交");
       setWeeklyDocUrl("");
       setProgress("");
-      setRisks("");
       setNextPlan("");
       router.refresh();
     } catch (err) {
@@ -406,9 +451,14 @@ export function TaskActionsPanel({
             <CardTitle>
               本周进度周报（必填）
             </CardTitle>
+            {weeklyReportDueLabel && (
+              <p className="text-sm text-muted-foreground">
+                {weeklyReportDueLabel}
+              </p>
+            )}
           </CardHeader>
-          <CardContent className="grid gap-4 md:grid-cols-3">
-            <div className="space-y-2 md:col-span-3">
+          <CardContent className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2 md:col-span-2">
               <Input
                 ref={weeklyDocUrlInputRef}
                 placeholder="周报飞书文档链接（可选）"
@@ -458,16 +508,11 @@ export function TaskActionsPanel({
               )}
             </div>
             <Input
-              placeholder="风险同步"
-              value={risks}
-              onChange={(e) => setRisks(e.target.value)}
-            />
-            <Input
               placeholder="下周计划"
               value={nextPlan}
               onChange={(e) => setNextPlan(e.target.value)}
             />
-            <div className="md:col-span-3">
+            <div className="md:col-span-2">
               <Button
                 type="button"
                 variant="secondary"
@@ -481,25 +526,90 @@ export function TaskActionsPanel({
         </Card>
       )}
 
-      {isAssignee && !isTerminalTask && (
+      {(canMutateRisk || activeRisks.length > 0 || resolvedRisks.length > 0) && (
         <Card>
           <CardHeader>
             <CardTitle>风险同步</CardTitle>
           </CardHeader>
-          <CardContent className="grid gap-4">
-            <Input
-              placeholder="说明风险、阻塞或需要组长/项管介入的问题"
-              value={riskNote}
-              onChange={(e) => setRiskNote(e.target.value)}
-            />
-            <Button
-              className="w-fit"
-              variant="destructive"
-              disabled={loading}
-              onClick={handleRiskSync}
-            >
-              同步风险
-            </Button>
+          <CardContent className="space-y-4">
+            {activeRisks.length > 0 && (
+              <div className="space-y-3">
+                <p className="text-sm font-medium">当前未解决风险</p>
+                {activeRisks.map((risk) => (
+                  <div
+                    key={risk.id}
+                    className="space-y-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm"
+                  >
+                    <p className="whitespace-pre-wrap text-destructive">
+                      {risk.content}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {formatRiskSource(risk.source)} · {risk.createdByName} ·{" "}
+                      {new Date(risk.createdAt).toLocaleString("zh-CN")}
+                    </p>
+                    {canMutateRisk && (
+                      <div className="space-y-2 border-t pt-2">
+                        <Input
+                          placeholder="风险解除说明"
+                          value={riskResolveNotes[risk.id] ?? ""}
+                          onChange={(event) =>
+                            setRiskResolveNotes((current) => ({
+                              ...current,
+                              [risk.id]: event.target.value,
+                            }))
+                          }
+                        />
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={loading}
+                          onClick={() => handleRiskResolve(risk.id)}
+                        >
+                          解除风险
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {canMutateRisk && (
+              <div className="grid gap-3">
+                <Input
+                  placeholder="说明风险、阻塞或需要组长/项管介入的问题"
+                  value={riskNote}
+                  onChange={(e) => setRiskNote(e.target.value)}
+                />
+                <Button
+                  className="w-fit"
+                  variant="destructive"
+                  disabled={loading}
+                  onClick={handleRiskSync}
+                >
+                  同步风险
+                </Button>
+              </div>
+            )}
+
+            {resolvedRisks.length > 0 && (
+              <div className="space-y-2 border-t pt-3">
+                <p className="text-sm font-medium">已解除风险</p>
+                {resolvedRisks.map((risk) => (
+                  <div key={risk.id} className="rounded-lg border p-3 text-sm">
+                    <p className="whitespace-pre-wrap">{risk.content}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {risk.resolvedByName || "未知"} ·{" "}
+                      {risk.resolvedAt
+                        ? new Date(risk.resolvedAt).toLocaleString("zh-CN")
+                        : "未记录时间"}
+                      {risk.resolveNote ? ` · ${risk.resolveNote}` : ""}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
@@ -791,4 +901,8 @@ function isTerminalTaskStatus(status: TaskStatus): boolean {
     status === "ARCHIVED" ||
     status === "PROJECT_CANCELED"
   );
+}
+
+function formatRiskSource(source: "MANUAL" | "WEEKLY"): string {
+  return source === "WEEKLY" ? "周报同步" : "手动同步";
 }

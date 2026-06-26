@@ -54,6 +54,22 @@ enum TaskCreationRequestStatus {
   REJECTED
 }
 
+enum TaskDdlChangeRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum TaskRiskStatus {
+  ACTIVE
+  RESOLVED
+}
+
+enum TaskRiskSource {
+  MANUAL
+  WEEKLY
+}
+
 enum TaskCategory {
   TEST
   ASSEMBLY
@@ -279,6 +295,7 @@ model Task {
   assigneeOpenId  String
   assigneeName    String
   assignees       TaskAssignee[]
+  techGroups      TaskTechGroup[]
   team            String
   techGroup       String
   metrics         String              @default("")
@@ -296,6 +313,8 @@ model Task {
   acceptanceChecklistItems TaskAcceptanceChecklistItem[]
   deletionRequests TaskDeletionRequest[]
   creationRequests TaskCreationRequest[]
+  ddlChangeRequests TaskDdlChangeRequest[]
+  riskRecords     TaskRiskRecord[]
   createdAt       DateTime            @default(now())
   updatedAt       DateTime            @updatedAt
   archivedAt      DateTime?
@@ -303,6 +322,18 @@ model Task {
   deletedByOpenId String              @default("")
   deletedByName   String              @default("")
   deleteReason    String              @default("")
+}
+
+model TaskTechGroup {
+  id        String   @id @default(uuid())
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  techGroup String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@unique([taskId, techGroup])
+  @@index([techGroup])
 }
 
 model TaskDeletionRequest {
@@ -320,6 +351,29 @@ model TaskDeletionRequest {
   reviewedAt      DateTime?
   createdAt       DateTime                  @default(now())
   updatedAt       DateTime                  @updatedAt
+
+  @@index([taskId, status])
+  @@index([requesterOpenId])
+  @@unique([taskId, pendingKey])
+}
+
+model TaskDdlChangeRequest {
+  id              String                     @id @default(uuid())
+  taskId          String
+  task            Task                       @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  requesterOpenId String
+  requesterName   String
+  oldDueAt        DateTime
+  newDueAt        DateTime
+  reason          String
+  status          TaskDdlChangeRequestStatus @default(PENDING)
+  pendingKey      String                     @default("")
+  reviewerOpenId  String                     @default("")
+  reviewerName    String                     @default("")
+  reviewComment   String                     @default("")
+  reviewedAt      DateTime?
+  createdAt       DateTime                   @default(now())
+  updatedAt       DateTime                   @updatedAt
 
   @@index([taskId, status])
   @@index([requesterOpenId])
@@ -346,6 +400,26 @@ model TaskCreationRequest {
   @@index([projectId, status])
   @@index([requesterOpenId])
   @@index([createdTaskId])
+}
+
+model TaskRiskRecord {
+  id               String         @id @default(uuid())
+  taskId           String
+  task             Task           @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  content          String
+  source           TaskRiskSource @default(MANUAL)
+  status           TaskRiskStatus @default(ACTIVE)
+  createdByOpenId  String
+  createdByName    String
+  resolvedByOpenId String         @default("")
+  resolvedByName   String         @default("")
+  resolveNote      String         @default("")
+  resolvedAt       DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  @@index([taskId, status])
+  @@index([createdByOpenId])
 }
 
 model TaskAssignee {

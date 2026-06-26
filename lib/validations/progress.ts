@@ -1,4 +1,8 @@
-import { TEAM_OPTIONS, TECH_GROUP_OPTIONS } from "@/lib/constants";
+import {
+  normalizeTechGroupName,
+  TEAM_OPTIONS,
+  TECH_GROUP_OPTIONS,
+} from "@/lib/constants";
 import { z } from "zod";
 
 const teamSchema = z
@@ -6,10 +10,27 @@ const teamSchema = z
   .optional()
   .or(z.literal(""));
 
-const techGroupSchema = z
-  .enum(TECH_GROUP_OPTIONS, { message: "请选择有效技术组" })
-  .optional()
-  .or(z.literal(""));
+const techGroupSchema = z.preprocess(
+  normalizeTechGroupInput,
+  z.enum(TECH_GROUP_OPTIONS, { message: "请选择有效技术组" }).optional().or(z.literal("")),
+);
+
+const taskTechGroupsSchema = z.preprocess(
+  (value) =>
+    Array.isArray(value)
+      ? value.map((item) =>
+          typeof item === "string" ? normalizeTechGroupName(item) : item,
+        )
+      : value,
+  z.array(z.enum(TECH_GROUP_OPTIONS, { message: "请选择有效任务技术组" })).min(
+    1,
+    "请选择任务技术组",
+  ),
+);
+
+function normalizeTechGroupInput(value: unknown) {
+  return typeof value === "string" ? normalizeTechGroupName(value) : value;
+}
 
 const projectOwnerOpenIdsSchema = z.array(z.string()).optional();
 const projectParticipantOpenIdsSchema = z.array(z.string()).optional();
@@ -114,35 +135,39 @@ function validateTaskAssignees(
   }
 }
 
-const taskBaseSchema = z.object({
+const taskEditableBaseSchema = z.object({
   projectId: z.string().min(1),
   stageId: z.string().optional().or(z.literal("")),
   title: z.string().min(1, "请输入任务目标"),
   goal: z.string().optional(),
-  category: z.enum([
+  category: z
+    .enum([
     "TEST",
     "ASSEMBLY",
     "RND",
     "DEBUG",
     "REVIEW_DRAWING",
     "ITERATION",
-  ]),
+    ])
+    .default("RND"),
+  taskTechGroups: taskTechGroupsSchema,
   urgency: z.enum(["HIGH", "MEDIUM", "LOW"]),
   importance: z.enum(["HIGH", "MEDIUM", "LOW"]),
   assigneeOpenId: z.string().optional(),
   assigneeOpenIds: z.array(z.string()).optional(),
   metrics: z.string().min(1, "请填写指标"),
-  dueAt: dateTimeStringSchema("请选择截止时间"),
   needsOfflineConfirmation: z.boolean().default(false),
   needsWeeklyReport: z.boolean().default(false),
   acceptanceChecklistItems: acceptanceChecklistItemsSchema,
 });
 
-export const createTaskSchema = taskBaseSchema.superRefine((value, ctx) => {
+export const createTaskSchema = taskEditableBaseSchema.extend({
+  dueAt: dateTimeStringSchema("请选择截止时间"),
+}).superRefine((value, ctx) => {
   validateTaskAssignees(value, ctx);
 });
 
-export const updateTaskSchema = taskBaseSchema.extend({
+export const updateTaskSchema = taskEditableBaseSchema.extend({
   taskId: z.string().min(1),
   expectedUpdatedAt: z.string().min(1, "缺少任务版本信息"),
 }).superRefine((value, ctx) => {
@@ -181,8 +206,47 @@ export const approvalSchema = z.object({
 
 export const riskSyncSchema = z.object({
   taskId: z.string().min(1),
-  riskNote: z.string().trim().min(1, "请填写风险说明").max(1000),
+  content: z.string().trim().min(1, "请填写风险说明").max(1000),
 });
+
+export const taskRiskResolveSchema = z.object({
+  riskId: z.string().min(1),
+  resolveNote: z
+    .string()
+    .trim()
+    .min(1, "请填写风险解除说明")
+    .max(1000, "风险解除说明不能超过 1000 个字符"),
+});
+
+export const taskDdlChangeRequestSchema = z.object({
+  taskId: z.string().min(1),
+  newDueAt: dateTimeStringSchema("请选择新的最晚完成时间"),
+  reason: z
+    .string()
+    .trim()
+    .min(1, "请填写修改原因")
+    .max(1000, "修改原因不能超过 1000 个字符"),
+});
+
+export const taskDdlChangeReviewSchema = z
+  .object({
+    requestId: z.string().min(1),
+    decision: z.enum(["APPROVED", "REJECTED"]),
+    comment: z
+      .string()
+      .trim()
+      .max(1000, "审核意见不能超过 1000 个字符")
+      .optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.decision === "REJECTED" && !value.comment?.trim()) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["comment"],
+        message: "驳回 DDL 修改申请时请填写审核意见",
+      });
+    }
+  });
 
 export const taskDeletionRequestSchema = z.object({
   taskId: z.string().min(1),

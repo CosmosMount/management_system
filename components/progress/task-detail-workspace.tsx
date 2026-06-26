@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowUpRight,
@@ -17,7 +17,9 @@ import type {
   ApprovalDecision,
   Importance,
   ProjectStatus,
-  TaskCategory,
+  TaskDdlChangeRequestStatus,
+  TaskRiskSource,
+  TaskRiskStatus,
   TaskStatus,
   Urgency,
 } from "@prisma/client";
@@ -35,6 +37,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
@@ -48,11 +51,14 @@ import {
   restartTask,
   updateTaskStatus,
 } from "@/app/actions/progress/updateTask";
+import {
+  requestTaskDdlChange,
+  reviewTaskDdlChange,
+} from "@/app/actions/progress/taskDdl";
 import { getActionErrorMessage } from "@/lib/action-error-message";
 import { routes } from "@/lib/routes";
 import {
   importanceLabels,
-  taskCategoryLabels,
   taskStatusLabels,
   urgencyLabels,
 } from "@/lib/progress-labels";
@@ -61,7 +67,7 @@ export type TaskDetailView = {
   id: string;
   title: string;
   goal: string;
-  category: TaskCategory;
+  taskTechGroups: string[];
   urgency: Urgency;
   importance: Importance;
   status: TaskStatus;
@@ -81,14 +87,43 @@ export type TaskDetailView = {
   dueAt: string;
   needsOfflineConfirmation: boolean;
   needsWeeklyReport: boolean;
+  weeklyReportDueLabel: string;
   acceptanceChecklistItems: TaskAcceptanceChecklistItemView[];
   acceptanceChecklistLocked: boolean;
   riskNote: string;
+  riskRecords: TaskRiskRecordView[];
   submissions: TaskSubmissionView[];
   weeklyReports: TaskWeeklyReportView[];
   deletionRequests: TaskDeletionRequestView[];
+  ddlChangeRequests: TaskDdlChangeRequestView[];
   activityLogs: TaskActivityLogView[];
   hasMoreActivityLogs: boolean;
+};
+
+export type TaskDdlChangeRequestView = {
+  id: string;
+  requesterOpenId: string;
+  requesterName: string;
+  oldDueAt: string;
+  newDueAt: string;
+  reason: string;
+  status: TaskDdlChangeRequestStatus;
+  reviewerName: string;
+  reviewComment: string;
+  createdAt: string;
+  reviewedAt: string | null;
+};
+
+export type TaskRiskRecordView = {
+  id: string;
+  content: string;
+  source: TaskRiskSource;
+  status: TaskRiskStatus;
+  createdByName: string;
+  resolvedByName: string;
+  resolveNote: string;
+  createdAt: string;
+  resolvedAt: string | null;
 };
 
 export type TaskDeletionRequestView = {
@@ -162,6 +197,10 @@ type Props = {
   canApprove: boolean;
   canManage: boolean;
   canRequestDeletion: boolean;
+  canSubmitWeeklyReport: boolean;
+  canSyncRisk: boolean;
+  canRequestDdlChange: boolean;
+  canReviewDdlChange: boolean;
   isSuperAdmin?: boolean;
 };
 
@@ -194,10 +233,15 @@ export function TaskDetailWorkspace({
   canApprove,
   canManage,
   canRequestDeletion,
+  canSubmitWeeklyReport,
+  canSyncRisk,
+  canRequestDdlChange,
+  canReviewDdlChange,
   isSuperAdmin = false,
 }: Props) {
   const projectHref = projectStageHref(task.projectId, task.stageId);
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
+  const [ddlDialogOpen, setDdlDialogOpen] = useState(false);
   const pendingDeletionRequest = task.deletionRequests.find(
     (request) => request.status === "PENDING",
   );
@@ -224,6 +268,7 @@ export function TaskDetailWorkspace({
         canManage={canManage}
         canEdit={canEdit}
         canRequestDeletion={canRequestDeletion}
+        canRequestDdlChange={canRequestDdlChange}
         canRemind={
           canManage &&
           isProjectActive &&
@@ -233,6 +278,14 @@ export function TaskDetailWorkspace({
         }
         projectHref={projectHref}
         onOpenEdit={() => setTaskDialogOpen(true)}
+        onOpenDdlChange={() => setDdlDialogOpen(true)}
+      />
+
+      <TaskDdlChangePanel
+        task={task}
+        canReview={canReviewDdlChange}
+        canRequest={canRequestDdlChange}
+        onOpenRequest={() => setDdlDialogOpen(true)}
       />
 
       {pendingDeletionRequest && !isProjectCanceledTask && (
@@ -251,17 +304,16 @@ export function TaskDetailWorkspace({
             status={task.status}
             isAssignee={isAssignee}
             canSubmitDelivery={isAssignee || isSuperAdmin}
-            canSubmitWeeklyReport={
-              isProjectActive &&
-              task.needsWeeklyReport &&
-              (isAssignee || canManage)
-            }
+            canSubmitWeeklyReport={canSubmitWeeklyReport}
+            canSyncRisk={canSyncRisk}
             canApprove={canApprove}
             canManage={canManage}
             needsOfflineConfirmation={task.needsOfflineConfirmation}
             needsWeeklyReport={task.needsWeeklyReport}
+            weeklyReportDueLabel={task.weeklyReportDueLabel}
             acceptanceChecklistItems={task.acceptanceChecklistItems}
             submissions={task.submissions}
+            riskRecords={task.riskRecords}
             showFlowActions={false}
           />
 
@@ -291,7 +343,7 @@ export function TaskDetailWorkspace({
               stageId: task.stageId,
               title: task.title,
               goal: task.goal,
-              category: task.category,
+              taskTechGroups: task.taskTechGroups,
               urgency: task.urgency,
               importance: task.importance,
               assigneeOpenIds: task.assigneeOpenIds,
@@ -307,6 +359,11 @@ export function TaskDetailWorkspace({
           />
         </DialogContent>
       </Dialog>
+      <TaskDdlRequestDialog
+        task={task}
+        open={ddlDialogOpen}
+        onOpenChange={setDdlDialogOpen}
+      />
     </main>
   );
 }
@@ -317,18 +374,22 @@ function TaskOverview({
   canManage,
   canEdit,
   canRequestDeletion,
+  canRequestDdlChange,
   canRemind,
   projectHref,
   onOpenEdit,
+  onOpenDdlChange,
 }: {
   task: TaskDetailView;
   isAssignee: boolean;
   canManage: boolean;
   canEdit: boolean;
   canRequestDeletion: boolean;
+  canRequestDdlChange: boolean;
   canRemind: boolean;
   projectHref: string;
   onOpenEdit: () => void;
+  onOpenDdlChange: () => void;
 }) {
   const canStart = task.status === "TODO" && (isAssignee || canManage);
   const canArchive = task.status === "COMPLETED" && canManage;
@@ -350,7 +411,11 @@ function TaskOverview({
               {task.title}
             </h1>
             <TaskStatusBadges task={task} />
-            <Badge variant="outline">{taskCategoryLabels[task.category]}</Badge>
+            {task.taskTechGroups.map((group) => (
+              <Badge key={group} variant="outline">
+                {group}
+              </Badge>
+            ))}
             <Badge variant="secondary">
               紧急 {urgencyLabels[task.urgency]} / 重要{" "}
               {importanceLabels[task.importance]}
@@ -409,6 +474,12 @@ function TaskOverview({
               label="催促任务"
             />
           )}
+          {canRequestDdlChange && (
+            <Button type="button" variant="outline" onClick={onOpenDdlChange}>
+              <History className="h-4 w-4" />
+              申请修改 DDL
+            </Button>
+          )}
           {canRestart && <RestartTaskButton task={task} />}
           {canStart && <StartTaskButton taskId={task.id} />}
           {canArchive && <ArchiveTaskButton taskId={task.id} />}
@@ -437,6 +508,236 @@ function OverviewItem({ label, value }: { label: string; value: string }) {
       <dd className="mt-1 font-medium">{value}</dd>
     </div>
   );
+}
+
+function TaskDdlChangePanel({
+  task,
+  canReview,
+  canRequest,
+  onOpenRequest,
+}: {
+  task: TaskDetailView;
+  canReview: boolean;
+  canRequest: boolean;
+  onOpenRequest: () => void;
+}) {
+  const router = useRouter();
+  const [loading, setLoading] = useState(false);
+  const [comment, setComment] = useState("");
+  const pendingRequest = task.ddlChangeRequests.find(
+    (request) => request.status === "PENDING",
+  );
+  if (!pendingRequest && task.ddlChangeRequests.length === 0) return null;
+
+  async function handleReview(decision: "APPROVED" | "REJECTED") {
+    if (!pendingRequest) return;
+    if (decision === "REJECTED" && !comment.trim()) {
+      toast.error("驳回时请填写审核意见");
+      return;
+    }
+    setLoading(true);
+    try {
+      await reviewTaskDdlChange({
+        requestId: pendingRequest.id,
+        decision,
+        comment: comment.trim(),
+      });
+      toast.success(decision === "APPROVED" ? "DDL 修改已通过" : "DDL 修改已驳回");
+      setComment("");
+      router.refresh();
+    } catch (err) {
+      toast.error(getActionErrorMessage(err, "审核失败"));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <Card className="mt-5">
+      <CardHeader>
+        <CardTitle>DDL 修改记录</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {pendingRequest ? (
+          <div className="space-y-3 rounded-lg border border-orange-200 bg-orange-50/70 p-3 text-sm dark:border-orange-900/60 dark:bg-orange-950/20">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="secondary">待审批</Badge>
+              <span className="font-medium">{pendingRequest.requesterName}</span>
+              <span className="text-muted-foreground">
+                {formatDateTime(pendingRequest.createdAt)}
+              </span>
+            </div>
+            <p>
+              {formatDateTime(pendingRequest.oldDueAt)} -&gt;{" "}
+              {formatDateTime(pendingRequest.newDueAt)}
+            </p>
+            <p className="whitespace-pre-wrap text-muted-foreground">
+              {pendingRequest.reason}
+            </p>
+            {canReview && (
+              <div className="space-y-2 border-t pt-3">
+                <Textarea
+                  value={comment}
+                  onChange={(event) => setComment(event.target.value)}
+                  placeholder="审核意见；驳回时必填"
+                />
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    disabled={loading}
+                    onClick={() => handleReview("APPROVED")}
+                  >
+                    通过
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    disabled={loading}
+                    onClick={() => handleReview("REJECTED")}
+                  >
+                    驳回
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : canRequest ? (
+          <Button type="button" variant="outline" onClick={onOpenRequest}>
+            申请修改 DDL
+          </Button>
+        ) : null}
+
+        {task.ddlChangeRequests.length > 0 && (
+          <div className="space-y-2">
+            {task.ddlChangeRequests.map((request) => (
+              <div key={request.id} className="rounded-lg border p-3 text-sm">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant={request.status === "APPROVED" ? "default" : "outline"}>
+                    {formatDdlRequestStatus(request.status)}
+                  </Badge>
+                  <span>{request.requesterName}</span>
+                  <span className="text-muted-foreground">
+                    {formatDateTime(request.createdAt)}
+                  </span>
+                </div>
+                <p className="mt-2">
+                  {formatDateTime(request.oldDueAt)} -&gt;{" "}
+                  {formatDateTime(request.newDueAt)}
+                </p>
+                <p className="mt-1 whitespace-pre-wrap text-muted-foreground">
+                  {request.reason}
+                </p>
+                {request.reviewedAt && (
+                  <p className="mt-1 text-muted-foreground">
+                    审核：{request.reviewerName || "未知"} ·{" "}
+                    {formatDateTime(request.reviewedAt)}
+                    {request.reviewComment ? ` · ${request.reviewComment}` : ""}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function TaskDdlRequestDialog({
+  task,
+  open,
+  onOpenChange,
+}: {
+  task: TaskDetailView;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const router = useRouter();
+  const [newDueAt, setNewDueAt] = useState("");
+  const [reason, setReason] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function handleSubmit() {
+    if (!newDueAt) {
+      toast.error("请选择新的最晚完成时间");
+      return;
+    }
+    if (!reason.trim()) {
+      toast.error("请填写修改原因");
+      return;
+    }
+    setLoading(true);
+    try {
+      await requestTaskDdlChange({
+        taskId: task.id,
+        newDueAt,
+        reason: reason.trim(),
+      });
+      toast.success("DDL 修改申请已提交");
+      setNewDueAt("");
+      setReason("");
+      onOpenChange(false);
+      router.refresh();
+    } catch (err) {
+      toast.error(getActionErrorMessage(err, "提交失败"));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>申请修改 DDL</DialogTitle>
+          <DialogDescription>
+            当前最晚完成时间：{formatDateTime(task.dueAt)}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <LabelLike>新的最晚完成时间</LabelLike>
+            <Input
+              type="datetime-local"
+              value={newDueAt}
+              onChange={(event) => setNewDueAt(event.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <LabelLike>修改原因</LabelLike>
+            <Textarea
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+              placeholder="说明为什么需要调整任务最晚完成时间"
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={loading}
+            onClick={() => onOpenChange(false)}
+          >
+            取消
+          </Button>
+          <Button type="button" disabled={loading} onClick={handleSubmit}>
+            提交申请
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function LabelLike({ children }: { children: ReactNode }) {
+  return <p className="text-sm font-medium leading-none">{children}</p>;
+}
+
+function formatDdlRequestStatus(status: TaskDdlChangeRequestStatus): string {
+  if (status === "PENDING") return "待审批";
+  if (status === "APPROVED") return "已通过";
+  return "已驳回";
 }
 
 function RestartTaskButton({ task }: { task: TaskDetailView }) {

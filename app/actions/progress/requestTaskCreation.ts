@@ -16,6 +16,8 @@ import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { requireSessionUser } from "@/lib/progress-activity";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { getProjectParticipantOpenIds } from "@/lib/progress-project-participants";
+import { collectTaskNotificationRecipients } from "@/lib/progress-task-notifications";
+import { normalizeTaskTechGroups } from "@/lib/progress-task-tech-groups";
 import {
   parseTaskCreationDraft,
   type TaskCreationDraft,
@@ -110,6 +112,8 @@ export async function requestTaskCreation(input: CreateTaskInput) {
   });
 
   const dueAt = new Date(parsed.dueAt);
+  const taskTechGroups = normalizeTaskTechGroups(parsed.taskTechGroups);
+  if (taskTechGroups.length === 0) throw new Error("请选择任务技术组");
   const acceptanceChecklistItems = normalizeAcceptanceChecklistItems(
     parsed.acceptanceChecklistItems,
   );
@@ -122,6 +126,7 @@ export async function requestTaskCreation(input: CreateTaskInput) {
     stageId,
     stageName,
     category: parsed.category,
+    taskTechGroups,
     urgency: parsed.urgency,
     importance: parsed.importance,
     assigneeOpenIds,
@@ -151,11 +156,12 @@ export async function requestTaskCreation(input: CreateTaskInput) {
         actorName: user.name,
         payload: JSON.stringify({
           requestId: created.id,
-          taskTitle: draft.title,
-          stageId: draft.stageId,
-          stageName: draft.stageName,
-          requesterName: user.name,
-        }),
+        taskTitle: draft.title,
+        stageId: draft.stageId,
+        stageName: draft.stageName,
+        taskTechGroups,
+        requesterName: user.name,
+      }),
       },
     });
 
@@ -305,6 +311,10 @@ export async function reviewTaskCreationRequest(input: {
   if (!primaryAssignee) throw new Error("请选择负责人");
 
   const dueAt = new Date(draft.dueAt);
+  const taskTechGroups =
+    draft.taskTechGroups.length > 0
+      ? normalizeTaskTechGroups(draft.taskTechGroups)
+      : normalizeTaskTechGroups([project.techGroup || "通用"]);
   const needsWeeklyReport =
     draft.needsWeeklyReport ||
     dueAt.getTime() - Date.now() > 14 * 24 * 60 * 60 * 1000;
@@ -338,7 +348,13 @@ export async function reviewTaskCreationRequest(input: {
         stageId: draft.stageId,
         title: draft.title,
         goal: draft.goal,
-        category: draft.category,
+        category: draft.category ?? "RND",
+        techGroups: {
+          create: taskTechGroups.map((techGroup, index) => ({
+            techGroup,
+            sortOrder: index,
+          })),
+        },
         urgency: draft.urgency,
         importance: draft.importance,
         assigneeOpenId: primaryAssignee.openId,
@@ -364,6 +380,16 @@ export async function reviewTaskCreationRequest(input: {
           })),
         },
       },
+      include: {
+        assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        project: {
+          include: {
+            owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+            participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+          },
+        },
+      },
     });
 
     await tx.taskCreationRequest.update({
@@ -381,6 +407,7 @@ export async function reviewTaskCreationRequest(input: {
           requestId: request.id,
           taskTitle: draft.title,
           requesterName: request.requesterName,
+          taskTechGroups,
           assignees: orderedAssignees.map((assignee) => assignee.name),
         }),
       },
@@ -389,6 +416,7 @@ export async function reviewTaskCreationRequest(input: {
     return created;
   });
 
+  const recipientOpenIds = await collectTaskNotificationRecipients(task);
   await enqueueProgressNotification(
     `progress:task_creation_approved:${request.id}`,
     {
@@ -404,6 +432,7 @@ export async function reviewTaskCreationRequest(input: {
       team: project.team,
       techGroup: project.techGroup,
       projectOwnerOpenIds,
+      recipientOpenIds,
     },
     await getNotificationContext(),
   );
