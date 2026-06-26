@@ -25,6 +25,7 @@ import {
   getTaskAssigneeNames,
   getTaskAssigneeOpenIds,
 } from "@/lib/progress-assignees";
+import { getTaskTechGroups } from "@/lib/progress-task-tech-groups";
 import {
   getProjectOwnerNames,
   getProjectOwnerOpenIds,
@@ -80,6 +81,7 @@ export default async function ProjectDetailPage({ params }: Props) {
         include: {
           stage: { select: { name: true } },
           assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+          techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
           deletionRequests: {
             orderBy: { createdAt: "desc" },
             select: {
@@ -259,7 +261,7 @@ export default async function ProjectDetailPage({ params }: Props) {
         id: task.id,
         title: task.title,
         goal: task.goal,
-        category: task.category,
+        taskTechGroups: getTaskTechGroups(task),
         urgency: task.urgency,
         importance: task.importance,
         status: task.status,
@@ -348,7 +350,7 @@ export default async function ProjectDetailPage({ params }: Props) {
               title: draft.title,
               goal: draft.goal,
               stageName: draft.stageName,
-              category: draft.category,
+              taskTechGroups: draft.taskTechGroups,
               urgency: draft.urgency,
               importance: draft.importance,
               assigneeNames:

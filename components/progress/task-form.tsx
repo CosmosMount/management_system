@@ -4,6 +4,7 @@ import {
   useForm,
   Controller,
   useFieldArray,
+  type Resolver,
   type SubmitErrorHandler,
 } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -26,6 +27,7 @@ import {
 } from "@/components/ui/select";
 import { UserMultiSearchSelect } from "@/components/user-search-select";
 import { getActionErrorMessage } from "@/lib/action-error-message";
+import { TECH_GROUP_OPTIONS } from "@/lib/constants";
 import {
   createTaskSchema,
   MAX_ACCEPTANCE_CHECKLIST_ITEMS,
@@ -34,7 +36,6 @@ import {
 } from "@/lib/validations/progress";
 import { routes } from "@/lib/routes";
 import {
-  taskCategoryLabels,
   urgencyLabels,
   importanceLabels,
 } from "@/lib/progress-labels";
@@ -42,7 +43,9 @@ import {
 type UserOption = { openId: string; name: string; avatar?: string | null };
 type StageOption = { id: string; name: string };
 type AcceptanceChecklistTemplateOption = { id: string; content: string };
-type TaskFormValues = CreateTaskInput & {
+type TaskFormValues = Omit<CreateTaskInput, "dueAt" | "taskTechGroups"> & {
+  dueAt?: string;
+  taskTechGroups: string[];
   taskId?: string;
   expectedUpdatedAt?: string;
 };
@@ -60,7 +63,7 @@ type Props = {
     stageId: string | null;
     title: string;
     goal: string;
-    category: CreateTaskInput["category"];
+    taskTechGroups: string[];
     urgency: CreateTaskInput["urgency"];
     importance: CreateTaskInput["importance"];
     assigneeOpenIds: string[];
@@ -100,7 +103,9 @@ export function TaskForm({
   const editing = mode === "edit";
 
   const form = useForm<TaskFormValues>({
-    resolver: zodResolver(editing ? updateTaskSchema : createTaskSchema),
+    resolver: zodResolver(
+      editing ? updateTaskSchema : createTaskSchema,
+    ) as Resolver<TaskFormValues>,
     defaultValues: {
       taskId: initialTask?.id,
       expectedUpdatedAt: initialTask?.updatedAt,
@@ -108,7 +113,8 @@ export function TaskForm({
       stageId: initialTask?.stageId ?? defaultStageId,
       title: initialTask?.title ?? "",
       goal: initialTask?.goal ?? "",
-      category: initialTask?.category ?? "RND",
+      category: "RND",
+      taskTechGroups: initialTask?.taskTechGroups ?? ["通用"],
       urgency: initialTask?.urgency ?? "MEDIUM",
       importance: initialTask?.importance ?? "MEDIUM",
       assigneeOpenIds: initialTask?.assigneeOpenIds ?? [],
@@ -168,13 +174,12 @@ export function TaskForm({
           stageId: data.stageId,
           title: data.title,
           goal: data.goal,
-          category: data.category,
+          taskTechGroups: data.taskTechGroups as CreateTaskInput["taskTechGroups"],
           urgency: data.urgency,
           importance: data.importance,
           assigneeOpenId: data.assigneeOpenId,
           assigneeOpenIds: data.assigneeOpenIds,
           metrics: data.metrics,
-          dueAt: data.dueAt,
           needsOfflineConfirmation: data.needsOfflineConfirmation,
           needsWeeklyReport: data.needsWeeklyReport,
           acceptanceChecklistItems: data.acceptanceChecklistItems,
@@ -183,11 +188,19 @@ export function TaskForm({
         onSaved?.();
       } else {
         if (createVariant === "request") {
-          await requestTaskCreation(data);
+          await requestTaskCreation({
+            ...data,
+            dueAt: data.dueAt ?? "",
+            taskTechGroups: data.taskTechGroups as CreateTaskInput["taskTechGroups"],
+          });
           toast.success("任务申请已提交");
           onSubmitted?.();
         } else {
-          const task = await createTask(data);
+          const task = await createTask({
+            ...data,
+            dueAt: data.dueAt ?? "",
+            taskTechGroups: data.taskTechGroups as CreateTaskInput["taskTechGroups"],
+          });
           toast.success("任务已创建");
           if (redirectOnCreate) {
             router.push(`${routes.progress.task(task.id)}`);
@@ -272,37 +285,52 @@ export function TaskForm({
           />
         </div>
       )}
-      <div className="grid gap-4 sm:grid-cols-3">
-        <div className="space-y-2">
-          <Label>类别</Label>
-          <Controller
-            control={form.control}
-            name="category"
-            render={({ field }) => (
-              <Select
-                value={field.value ?? ""}
-                onValueChange={(v) => field.onChange(v ?? undefined)}
+      <div className="space-y-2">
+        <Label>任务技术组</Label>
+        <Controller
+          control={form.control}
+          name="taskTechGroups"
+          render={({ field }) => {
+            const selected = new Set(field.value ?? []);
+            return (
+              <div
+                className="grid gap-2 rounded-lg border p-3 sm:grid-cols-3"
+                aria-invalid={!!errors.taskTechGroups}
+                aria-describedby={
+                  errors.taskTechGroups ? "task-tech-groups-error" : undefined
+                }
               >
-                <SelectTrigger className="w-full">
-                  <SelectValue>
-                    {(value) =>
-                      taskCategoryLabels[
-                        value as keyof typeof taskCategoryLabels
-                      ] ?? "选择类别"
-                    }
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {Object.entries(taskCategoryLabels).map(([k, v]) => (
-                    <SelectItem key={k} value={k}>
-                      {v}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          />
-        </div>
+                {TECH_GROUP_OPTIONS.map((group) => (
+                  <label
+                    key={group}
+                    className="flex items-center gap-2 text-sm"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selected.has(group)}
+                      onChange={(event) => {
+                        const next = new Set(selected);
+                        if (event.target.checked) {
+                          next.add(group);
+                        } else {
+                          next.delete(group);
+                        }
+                        field.onChange([...next]);
+                      }}
+                    />
+                    {group}
+                  </label>
+                ))}
+              </div>
+            );
+          }}
+        />
+        <FormFieldError
+          id="task-tech-groups-error"
+          message={errors.taskTechGroups?.message}
+        />
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-2">
           <Label>紧急程度</Label>
           <Controller
@@ -397,16 +425,30 @@ export function TaskForm({
         />
         <FormFieldError id="task-metrics-error" message={errors.metrics?.message} />
       </div>
-      <div className="space-y-2">
-        <Label>最晚完成时间</Label>
-        <Input
-          type="datetime-local"
-          {...form.register("dueAt")}
-          aria-invalid={!!errors.dueAt}
-          aria-describedby={errors.dueAt ? "task-due-at-error" : undefined}
-        />
-        <FormFieldError id="task-due-at-error" message={errors.dueAt?.message} />
-      </div>
+      {editing ? (
+        <div className="space-y-2 rounded-lg border bg-muted/20 p-3">
+          <Label>最晚完成时间</Label>
+          <p className="text-sm font-medium">
+            {initialTask?.dueAt
+              ? new Date(initialTask.dueAt).toLocaleString("zh-CN")
+              : "未设置"}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            如需修改最晚完成时间，请在任务详情页使用“申请修改 DDL”。
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <Label>最晚完成时间</Label>
+          <Input
+            type="datetime-local"
+            {...form.register("dueAt")}
+            aria-invalid={!!errors.dueAt}
+            aria-describedby={errors.dueAt ? "task-due-at-error" : undefined}
+          />
+          <FormFieldError id="task-due-at-error" message={errors.dueAt?.message} />
+        </div>
+      )}
       <div className="flex flex-wrap gap-4 text-sm">
         <label className="flex items-center gap-2">
           <input type="checkbox" {...form.register("needsOfflineConfirmation")} />

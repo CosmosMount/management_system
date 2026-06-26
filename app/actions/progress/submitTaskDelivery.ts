@@ -13,6 +13,7 @@ import {
 } from "@/lib/permissions-progress";
 import { assertProjectActive } from "@/lib/progress-guards";
 import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
+import { collectTaskNotificationRecipients } from "@/lib/progress-task-notifications";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import { getUserRoles } from "@/lib/permissions";
@@ -33,7 +34,16 @@ export async function submitTaskDelivery(input: {
 
   const task = await prisma.task.findUnique({
     where: { id: parsed.taskId },
-    include: { project: true, assignees: true },
+    include: {
+      project: {
+        include: {
+          owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+          participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        },
+      },
+      assignees: true,
+      techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+    },
   });
   if (!task) throw new Error("任务不存在");
   if (task.deletedAt) throw new Error("任务已删除");
@@ -95,6 +105,7 @@ export async function submitTaskDelivery(input: {
       techGroup: task.techGroup,
       feishuDocUrl: parsed.feishuDocUrl,
       keyDataUrl: parsed.keyDataUrl,
+      recipientOpenIds: await collectTaskNotificationRecipients(task),
     },
     await getNotificationContext(),
   );

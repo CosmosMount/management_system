@@ -27,7 +27,6 @@ import type {
   ProjectDdlChangeRequestType,
   ProjectStatus,
   StageStatus,
-  TaskCategory,
   TaskCreationRequestStatus,
   TaskStatus,
   Urgency,
@@ -90,7 +89,6 @@ import {
   importanceLabels,
   projectStatusLabels,
   stageStatusLabels,
-  taskCategoryLabels,
   taskStatusLabels,
   urgencyLabels,
 } from "@/lib/progress-labels";
@@ -163,7 +161,7 @@ export type TaskView = {
   id: string;
   title: string;
   goal: string;
-  category: TaskCategory;
+  taskTechGroups: string[];
   urgency: Urgency;
   importance: Importance;
   status: TaskStatus;
@@ -198,7 +196,7 @@ export type TaskCreationRequestView = {
     title: string;
     goal: string;
     stageName: string;
-    category: TaskCategory;
+    taskTechGroups: string[];
     urgency: Urgency;
     importance: Importance;
     assigneeNames: string;
@@ -2229,7 +2227,11 @@ function TaskMobileCard({ task, canStart }: { task: TaskView; canStart: boolean 
         {formatDate(task.dueAt)}
       </p>
       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        <Badge variant="outline">{taskCategoryLabels[task.category]}</Badge>
+        {task.taskTechGroups.map((group) => (
+          <Badge key={group} variant="outline">
+            {group}
+          </Badge>
+        ))}
         <Badge variant="secondary">
           {urgencyLabels[task.urgency]} / {importanceLabels[task.importance]}
         </Badge>
@@ -2289,8 +2291,12 @@ function TaskCreationRequestDetailDialog({
               <RequestDetailItem label="所属阶段" value={draft.stageName} />
               <RequestDetailItem label="负责人" value={draft.assigneeNames} />
               <RequestDetailItem
-                label="任务类别"
-                value={taskCategoryLabels[draft.category] ?? "未填写"}
+                label="任务技术组"
+                value={
+                  draft.taskTechGroups.length > 0
+                    ? draft.taskTechGroups.join("、")
+                    : "未填写"
+                }
               />
               <RequestDetailItem
                 label="优先级"
