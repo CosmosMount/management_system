@@ -1,41 +1,13 @@
-import path from "path";
-import Database from "better-sqlite3";
 import { PrismaClient } from "@prisma/client";
-import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
+import { PrismaPg } from "@prisma/adapter-pg";
+import { Pool } from "pg";
 
-function resolveSqlitePath(): string {
-  const url = process.env.DATABASE_URL ?? "file:./dev.db";
-  const raw = url.replace(/^file:/, "");
-  if (path.isAbsolute(raw)) {
-    return raw;
-  }
-  return path.join(process.cwd(), raw.replace(/^\.\//, ""));
-}
-
-const globalForPrisma = globalThis as unknown as { prisma: PrismaClient | undefined };
-
-function initializeSqliteRuntime(): void {
-  const db = new Database(resolveSqlitePath(), { timeout: 5000 });
-  try {
-    db.pragma("journal_mode = WAL");
-    db.pragma("busy_timeout = 5000");
-    db.pragma("foreign_keys = ON");
-  } finally {
-    db.close();
-  }
-}
-
-function createPrismaClient(): PrismaClient {
-  initializeSqliteRuntime();
-  const adapter = new PrismaBetterSqlite3({
-    url: resolveSqlitePath(),
-    timeout: 5000,
-  });
-  return new PrismaClient({ adapter });
-}
+const globalForPrisma = globalThis as unknown as {
+  prisma: PrismaClient | undefined;
+  pgPool: Pool | undefined;
+};
 
 function isPrismaClientStale(client: PrismaClient): boolean {
-  // schema 变更后 dev 热更新可能仍持有旧 client，缺少新 model delegate
   return (
     typeof client.project?.findMany !== "function" ||
     typeof client.projectOwner?.findMany !== "function" ||
@@ -49,8 +21,37 @@ function isPrismaClientStale(client: PrismaClient): boolean {
     typeof client.fileAsset?.findMany !== "function" ||
     typeof client.notificationOutbox?.findMany !== "function" ||
     typeof client.progressReminderRule?.findMany !== "function" ||
-    typeof client.feedback?.findMany !== "function"
+    typeof client.feedback?.findMany !== "function" ||
+    typeof client.processingVendor?.findMany !== "function"
   );
+}
+
+function createPrismaClient(): PrismaClient {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) {
+    throw new Error("DATABASE_URL is required");
+  }
+  if (
+    !connectionString.startsWith("postgresql://") &&
+    !connectionString.startsWith("postgres://")
+  ) {
+    throw new Error("DATABASE_URL must be a PostgreSQL connection string");
+  }
+
+  const pool =
+    globalForPrisma.pgPool ??
+    new Pool({
+      connectionString,
+      connectionTimeoutMillis: 5_000,
+      max: 10,
+    });
+
+  if (process.env.NODE_ENV !== "production") {
+    globalForPrisma.pgPool = pool;
+  }
+
+  const adapter = new PrismaPg(pool);
+  return new PrismaClient({ adapter });
 }
 
 function getPrismaClient(): PrismaClient {

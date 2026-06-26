@@ -18,23 +18,21 @@
    cp .env.example .env
    ```
 
-   至少配置 `AUTH_SECRET`、`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`NEXT_PUBLIC_APP_URL`、`APP_ALLOWED_ORIGINS`。本地调试通常使用 `http://127.0.0.1:3000` 或 `http://localhost:3000`。
+   至少配置 `AUTH_SECRET`、`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`NEXT_PUBLIC_APP_URL`、`APP_ALLOWED_ORIGINS`、`DATABASE_URL`。本地调试通常使用 `http://127.0.0.1:3000` 或 `http://localhost:3000`，Playwright 测试必须使用独立端口。
 
-3. 同步数据库：
+3. 启动 PostgreSQL 并同步数据库：
 
    ```bash
+   docker compose up -d postgres
+   createdb management_system_shadow 2>/dev/null || true
    npx prisma generate
-   npm run db:push
+   npm run db:deploy
    npm run db:seed
    npm run db:seed-acceptance-checklists
    npm run db:seed-progress-reminders
    ```
 
-   生产或 systemd 服务环境优先使用：
-
-   ```bash
-   npm run db:deploy
-   ```
+   本项目不再支持 SQLite，也不迁移旧 SQLite 数据；首次部署从空 PostgreSQL 库开始。
 
 4. 启动 Web：
 
@@ -42,7 +40,7 @@
    npm run dev
    ```
 
-   如果测试的是 `next start` 或 3000 端口上的生产构建，源码变更不会热更新，需要先 `npm run build` 并重启服务。
+   如果测试的是 `next start` 或 3000 端口上的生产构建，源码变更不会热更新，需要先 `npm run build` 并重启服务。自动化 Playwright 不允许默认访问 3000。
 
 5. 如需测试定时提醒，单独启动 cron：
 
@@ -52,10 +50,17 @@
 
 ### Playwright 登录态
 
-- 项目已安装 `@playwright/test`，但没有固定 Playwright 配置文件。
+- 项目已安装 `@playwright/test`，固定配置文件为 `playwright.config.ts`。
 - 推荐把登录态保存到 `.tmp/playwright-liqixuan-storage.json`、`.tmp/playwright-admin-storage.json` 等本地文件。
 - `.tmp/` 已被 git 忽略，不要把 cookie、storage state 或请求头写入仓库。
-- 默认测试地址为 `http://127.0.0.1:3000`。
+- 默认测试地址为 `http://127.0.0.1:3100`。配置中包含端口保护，禁止默认打到 3000。
+- 推荐设置独立测试库，例如：
+
+  ```bash
+  createdb management_system_test
+  export PLAYWRIGHT_DATABASE_URL="postgresql://postgres:<密码>@127.0.0.1:5432/management_system_test"
+  npm run test:e2e
+  ```
 
 可用临时脚本加载登录态，例如放在 `.tmp/check.mjs`：
 
@@ -73,7 +78,7 @@ page.on("console", (message) => {
     console.log(`[console:${message.type()}] ${message.text()}`);
   }
 });
-await page.goto("http://127.0.0.1:3000", { waitUntil: "networkidle" });
+await page.goto("http://127.0.0.1:3100", { waitUntil: "networkidle" });
 await page.screenshot({ path: ".tmp/home.png", fullPage: true });
 await browser.close();
 ```
@@ -84,6 +89,8 @@ await browser.close();
 
 ```bash
 npx prisma generate
+DATABASE_URL="postgresql://..." npm run db:deploy
+SHADOW_DATABASE_URL="postgresql://..._shadow" npx prisma migrate diff --from-migrations prisma/migrations --to-schema prisma/schema.prisma --exit-code
 npx tsc --noEmit --incremental false
 npx eslint app components lib scripts --max-warnings=0
 npm run build
@@ -91,12 +98,6 @@ git diff --check
 ```
 
 数据库相关改动额外执行：
-
-```bash
-npm run db:push
-```
-
-如果当前环境是生产迁移流程，执行：
 
 ```bash
 npm run db:deploy
@@ -327,7 +328,7 @@ docker compose logs -f cron
 
 - app 监听端口可访问。
 - cron 独立运行。
-- SQLite 和上传目录挂载到持久化 volume。
+- PostgreSQL 和上传目录挂载到持久化 volume。
 - `SUDO_PASSWORD` 不进入容器环境。
 - `/uploads/...` 仍通过鉴权 route 访问。
 
@@ -350,7 +351,7 @@ sudo systemctl status pnx-management-cron
 ### 测试执行 subagent
 
 ```text
-请在当前仓库按 docs/TESTING.md 执行测试。先记录 commit、Node/npm 版本、数据库路径、Web 端口和登录态文件。按“基础代码测试 → Playwright 通用检查 → 采购模块 → 进度模块 → 反馈中心 → 管理员面板 → 实时同步 → 通知/cron → 部署冒烟”的顺序执行。不要修改代码。每个场景输出 PASS/FAIL/SKIP，FAIL 必须包含复现步骤、实际结果、期望结果、截图或 HTML 保存路径。不要输出 cookie、token、.env 密钥或完整用户敏感信息。
+请在当前仓库按 docs/TESTING.md 执行测试。先记录 commit、Node/npm 版本、PostgreSQL 连接目标（脱敏）、Web 端口和登录态文件。按“基础代码测试 → Playwright 通用检查 → 采购模块 → 进度模块 → 反馈中心 → 管理员面板 → 实时同步 → 通知/cron → 部署冒烟”的顺序执行。不要修改代码。每个场景输出 PASS/FAIL/SKIP，FAIL 必须包含复现步骤、实际结果、期望结果、截图或 HTML 保存路径。不要输出 cookie、token、.env 密钥或完整用户敏感信息。
 ```
 
 ### 代码审查 subagent
@@ -372,7 +373,7 @@ sudo systemctl status pnx-management-cron
 
 命令结果：
 - prisma generate:
-- db push/deploy:
+- db deploy:
 - tsc:
 - eslint:
 - build:

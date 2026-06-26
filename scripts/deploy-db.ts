@@ -1,18 +1,9 @@
 import "dotenv/config";
-import { existsSync } from "fs";
-import path from "path";
 import { spawnSync } from "child_process";
-import Database from "better-sqlite3";
 
-const INITIAL_MIGRATION = "20260625160000_init";
 const passthroughArgs = process.argv.slice(2);
-
-function resolveSqlitePath(): string {
-  const url = process.env.DATABASE_URL ?? "file:./dev.db";
-  const raw = url.replace(/^file:/, "");
-  if (path.isAbsolute(raw)) return raw;
-  return path.join(process.cwd(), raw.replace(/^\.\//, ""));
-}
+const maxWaitMs = Number(process.env.DB_WAIT_MS ?? 60_000);
+const pollMs = 2_000;
 
 function runPrisma(args: string[]) {
   const result = spawnSync("npx", ["prisma", ...args], {
@@ -25,40 +16,44 @@ function runPrisma(args: string[]) {
   }
 }
 
-function tableExists(db: Database.Database, tableName: string): boolean {
-  const row = db
-    .prepare(
-      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
-    )
-    .get(tableName);
-  return !!row;
-}
-
-function shouldBaselineExistingSqlite(): boolean {
-  const dbPath = resolveSqlitePath();
-  if (!existsSync(dbPath)) return false;
-
-  const db = new Database(dbPath, { readonly: true });
-  try {
-    const hasMigrationTable = tableExists(db, "_prisma_migrations");
-    const hasApplicationTables =
-      tableExists(db, "User") && tableExists(db, "PurchaseOrder");
-    return hasApplicationTables && !hasMigrationTable;
-  } finally {
-    db.close();
+async function waitForPostgres(): Promise<void> {
+  const url = process.env.DATABASE_URL ?? "";
+  if (!url.startsWith("postgresql://") && !url.startsWith("postgres://")) {
+    throw new Error("DATABASE_URL must be a PostgreSQL connection string");
   }
+
+  const { default: pg } = await import("pg");
+  const started = Date.now();
+
+  while (Date.now() - started < maxWaitMs) {
+    const client = new pg.Client({ connectionString: url });
+    try {
+      await client.connect();
+      await client.end();
+      console.log("[db:deploy] PostgreSQL is ready");
+      return;
+    } catch {
+      await client.end().catch(() => undefined);
+      console.log("[db:deploy] waiting for PostgreSQL...");
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+    }
+  }
+
+  throw new Error(`PostgreSQL not ready after ${maxWaitMs}ms`);
 }
 
-if (passthroughArgs.length > 0) {
-  runPrisma(["migrate", "deploy", ...passthroughArgs]);
-  process.exit(0);
+async function main() {
+  await waitForPostgres();
+
+  if (passthroughArgs.length > 0) {
+    runPrisma(["migrate", "deploy", ...passthroughArgs]);
+    return;
+  }
+
+  runPrisma(["migrate", "deploy"]);
 }
 
-if (shouldBaselineExistingSqlite()) {
-  console.log(
-    `[db:deploy] existing SQLite schema detected; baselining ${INITIAL_MIGRATION}`,
-  );
-  runPrisma(["migrate", "resolve", "--applied", INITIAL_MIGRATION]);
-}
-
-runPrisma(["migrate", "deploy"]);
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

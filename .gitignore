@@ -12,6 +12,8 @@
 
 # testing
 /coverage
+/test-results/
+/playwright-report/
 
 # next.js
 /.next/
@@ -34,7 +36,7 @@ yarn-error.log*
 .env*
 !.env.example
 
-# local sqlite database
+# legacy local database files, kept ignored to avoid accidental commits
 dev.db
 *.db-journal
 *.db-wal
@@ -58,3 +60,6 @@ next-env.d.ts
 
 .cursor/
 .tmp*/
+
+
+data/

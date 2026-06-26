@@ -1,15 +1,26 @@
 #!/bin/sh
 set -e
 
-mkdir -p /app/data /app/storage/uploads /app/public/uploads
+mkdir -p /app/storage/uploads /app/public/uploads
 
 if [ -z "$DATABASE_URL" ]; then
-  export DATABASE_URL="file:/app/data/app.db"
+  echo "[entrypoint] ERROR: DATABASE_URL is required (PostgreSQL connection string)"
+  exit 1
 fi
 
-echo "[entrypoint] DATABASE_URL=$DATABASE_URL"
-if [ "$SKIP_DB_PUSH" = "true" ]; then
-  echo "[entrypoint] 跳过数据库 schema 同步（SKIP_DB_PUSH=true）"
+case "$DATABASE_URL" in
+  postgresql://*|postgres://*)
+    ;;
+  *)
+    echo "[entrypoint] ERROR: DATABASE_URL must be a PostgreSQL connection string"
+    exit 1
+    ;;
+esac
+
+node -e 'const url = new URL(process.env.DATABASE_URL); if (url.password) url.password = "***"; console.log(`[entrypoint] DATABASE_URL=${url.toString()}`);'
+
+if [ "$SKIP_DB_DEPLOY" = "true" ]; then
+  echo "[entrypoint] 跳过数据库迁移（SKIP_DB_DEPLOY=true）"
 else
   echo "[entrypoint] 应用数据库迁移..."
   npm run db:deploy

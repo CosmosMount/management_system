@@ -1,7 +1,7 @@
 name: management-system
 
 x-app-environment: &app-environment
-  DATABASE_URL: file:/app/data/app.db
+  DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-management_system}
   AUTH_SECRET: ${AUTH_SECRET:?AUTH_SECRET is required}
   FEISHU_APP_ID: ${FEISHU_APP_ID:?FEISHU_APP_ID is required}
   FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:?FEISHU_APP_SECRET is required}
@@ -15,6 +15,23 @@ x-app-environment: &app-environment
   UPLOAD_STORAGE_DIR: ${UPLOAD_STORAGE_DIR:-/app/storage/uploads}
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-management_system}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-management_system}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
   app:
     build: .
     ports:
@@ -25,8 +42,10 @@ services:
       HOSTNAME: 0.0.0.0
       RUN_DB_SEED: ${RUN_DB_SEED:-false}
     volumes:
-      - app-data:/app/data
       - app-uploads:/app/storage/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
   cron:
@@ -35,15 +54,14 @@ services:
     command: ["npx", "tsx", "scripts/cron.ts"]
     environment:
       <<: *app-environment
-      SKIP_DB_PUSH: "true"
+      SKIP_DB_DEPLOY: "true"
       RUN_DB_SEED: "false"
     volumes:
-      - app-data:/app/data
       - app-uploads:/app/storage/uploads
     depends_on:
-      - app
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
-  app-data:
   app-uploads:

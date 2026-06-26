@@ -9,14 +9,36 @@ Next.js 全栈管理系统，包含 **采购报销** 与 **进度管理** 两大
 ## 快速启动
 
 ```bash
-cp .env.example .env   # 填写飞书凭证与 AUTH_SECRET
+cp .env.example .env   # 填写飞书凭证、AUTH_SECRET、POSTGRES_PASSWORD
 npm install
-npm run db:push
+
+# 本地开发只启动 PostgreSQL，应用在宿主机运行
+docker compose up -d postgres
+
+npm run db:deploy
 npm run db:seed-acceptance-checklists
 npm run dev
 ```
 
+本轮起不迁移旧 SQLite 数据；首次部署从空 PostgreSQL 库开始，通过 seed 初始化角色和规则。
+
 访问 http://localhost:3000 ，使用飞书登录。
+
+| 服务 | 运行位置 | 端口 |
+|------|----------|------|
+| PostgreSQL | Docker `postgres` | **5432** |
+| Next.js | Docker `app` 或宿主机 `npm run dev` | **3000** |
+| cron | Docker `cron` 或宿主机 `npm run cron` | 无 HTTP 端口 |
+
+宿主机本地开发也使用同一个 PostgreSQL：
+
+```bash
+docker compose up -d postgres
+npm run db:deploy   # schema 有更新时
+npm run dev
+```
+
+若本机 5432 已被占用，在 `.env` 设置 `POSTGRES_PORT=5433`，并同步修改 `DATABASE_URL` 中的端口。
 
 ## Docker 快速部署（推荐）
 
@@ -42,7 +64,7 @@ https://pnx.demonmaster.cn/api/auth/callback/feishu
 http://10.4.150.222:3000/api/auth/callback/feishu
 ```
 
-`DATABASE_URL` 无需修改，`docker-compose.yml` 会自动设为 `file:/app/data/app.db`。
+`DATABASE_URL` 无需修改，`docker-compose.yml` 会为容器内 app/cron 自动设置 PostgreSQL 连接串。
 
 ### 2. 启动
 
@@ -59,9 +81,10 @@ docker compose up -d --build
 `SUDO_PASSWORD` 只用于宿主机 `sudo docker compose ...`，不会传入 app/cron 容器。
 
 - **app**：Next.js 应用，默认映射端口 `3000`（可通过 `.env` 设置 `APP_PORT=8080` 改宿主机端口）
-- **cron**：定时任务（采购日报、进度提醒、周报），与 app 共用数据库卷
+- **postgres**：PostgreSQL 16 数据库
+- **cron**：定时任务（采购日报、进度提醒、周报），与 app 共用 PostgreSQL
 
-首次启动会自动执行 `prisma db push` 创建/同步表结构。
+首次启动会自动执行 `npm run db:deploy` 应用 PostgreSQL migration。
 
 ### 3. 初始化管理员（首次）
 
@@ -99,15 +122,15 @@ docker compose up -d --build    # 更新代码后重新构建
 
 | 内容 | Docker Volume |
 |------|----------------|
-| SQLite 数据库 | `app-data` → 容器内 `/app/data/app.db` |
+| PostgreSQL 数据 | `postgres-data` → 容器内 `/var/lib/postgresql/data` |
 | 上传附件 | `app-uploads` → 容器内 `/app/storage/uploads/` |
 
 ```bash
-# 查看 volume 名称
-docker volume ls | grep app-data
+# 备份数据库到当前目录（会提示输入 POSTGRES_PASSWORD）
+docker compose exec postgres pg_dump -U "${POSTGRES_USER:-postgres}" "${POSTGRES_DB:-management_system}" > backup-$(date +%F).sql
 
-# 备份数据库到当前目录
-docker compose exec app cat /app/data/app.db > backup-$(date +%F).db
+# 恢复到空库
+docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES_DB:-management_system}" < backup.sql
 ```
 
 更完整的 Docker 说明见 [`docs/TECH.md`](docs/TECH.md#docker-部署)。
@@ -116,7 +139,9 @@ docker compose exec app cat /app/data/app.db > backup-$(date +%F).db
 
 | 变量 | 说明 |
 |------|------|
-| `DATABASE_URL` | SQLite 路径，默认 `file:./dev.db`（数据库文件在仓库根目录） |
+| `DATABASE_URL` | PostgreSQL 连接串，如 `postgresql://postgres:<密码>@localhost:5432/management_system` |
+| `SHADOW_DATABASE_URL` | Prisma migration diff 使用的 shadow 库，建议库名以 `_shadow` 结尾 |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` / `POSTGRES_PORT` | Docker PostgreSQL 用，见 `.env.example` |
 | `AUTH_SECRET` | Auth.js 密钥，可用 `openssl rand -hex 32` 生成 |
 | `FEISHU_APP_ID` | 飞书自建应用 App ID |
 | `FEISHU_APP_SECRET` | 飞书自建应用 App Secret |
@@ -291,7 +316,7 @@ storage/uploads/<订单ID>/<文件名>
 
 - 通过浏览器访问：`http://localhost:3000/uploads/<订单ID>/<文件名>`
 - 服务器上直接查看：进入项目根目录，打开 `storage/uploads/` 文件夹
-- 生产环境备份时请一并备份 `storage/uploads/` 与 SQLite 数据库
+- 生产环境备份时请一并备份 `storage/uploads/` 与 PostgreSQL 数据库
 
 ### 限制
 
@@ -415,7 +440,7 @@ curl -i --http1.1 \
 **不能。** GitHub Pages 只托管静态 HTML/JS，本项目需要：
 
 - Node.js 运行时（Server Actions、API Routes）
-- SQLite 数据库文件持久化
+- PostgreSQL 数据库持久化
 - 服务端飞书 OAuth 与文件上传
 - 独立 cron 进程
 
@@ -426,7 +451,7 @@ curl -i --http1.1 \
 | 方案 | 适用场景 | 说明 |
 |------|----------|------|
 | **学校/实验室内网服务器** | 长期、仅校内使用 | `npm run build && npm start`，PM2 保活 + cron；飞书回调填内网域名或 IP |
-| **Vercel / Railway / Fly.io** | 需要公网访问 | 需把 SQLite 换成 PostgreSQL 等托管数据库；cron 用平台定时任务或单独 worker |
+| **Vercel / Railway / Fly.io** | 需要公网访问 | 使用托管 PostgreSQL；cron 用平台定时任务或单独 worker |
 | **内网穿透（ngrok / frp / Tailscale）** | 临时给外网或手机测 | 获得公网 URL 后写入飞书重定向与 `APP_ALLOWED_ORIGINS` |
 | **自有 VPS** | 完全自控 | 同内网服务器，可绑域名 + HTTPS（飞书生产环境建议 HTTPS） |
 

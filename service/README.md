@@ -32,7 +32,9 @@ It renders and installs:
 
 Then it runs `systemctl daemon-reload`, enables both services, and starts them.
 
-The web service runs `npm run db:push` before `npm start`, so database schema sync happens during service startup. It does not run `npm run build`; build the app before installing or restarting the service after code changes.
+The web service runs `npm run db:deploy` before `npm start`, so PostgreSQL migrations are applied during service startup. It does not run `npm run build`; build the app before installing or restarting the service after code changes.
+
+`DATABASE_URL` is required and must be a PostgreSQL connection string. SQLite is not supported.
 
 If the current user needs sudo and cannot use passwordless sudo, set `SUDO_PASSWORD` in `.env` or in the shell before running the script. The generated runtime env file excludes `SUDO_PASSWORD`.
 
@@ -60,4 +62,4 @@ To remove the generated runtime env file as well:
 REMOVE_ENV_FILE=true ./service/uninstall.sh
 ```
 
-Application data in the repository, SQLite database files, and uploaded files are not removed.
+Application data in PostgreSQL and uploaded files are not removed.
