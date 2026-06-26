@@ -35,11 +35,13 @@ import {
 import { TEAM_OPTIONS, TECH_GROUP_OPTIONS } from "@/lib/constants";
 import { getActionErrorMessage } from "@/lib/action-error-message";
 import {
+  itemKindNeedsImage,
   itemKindNeedsLink,
   formatPurchaseItemKind,
   purchaseItemKindLabels,
   type PurchaseItemKind,
 } from "@/lib/purchase-item-kind";
+import { ProcessingVendorSelect } from "@/components/processing-vendor-select";
 import { routes } from "@/lib/routes";
 import {
   createOrderSchema,
@@ -67,6 +69,7 @@ const defaultItem = {
   itemKind: "COMPONENT" as PurchaseItemKind,
   purchaseLink: "",
   referenceImagePath: null as string | null,
+  processingVendor: "",
   quantity: 1,
   lineTotal: 0,
 };
@@ -146,13 +149,23 @@ export function ApplyForm({
     form.setValue(`items.${index}.itemKind`, kind);
     if (itemKindNeedsLink(kind)) {
       form.setValue(`items.${index}.referenceImagePath`, null);
+      form.setValue(`items.${index}.processingVendor`, "");
       setItemImageFiles((prev) => {
         const next = { ...prev };
         delete next[index];
         return next;
       });
+    } else if (kind === "PROCESSING_FEE") {
+      form.setValue(`items.${index}.purchaseLink`, "");
     } else {
       form.setValue(`items.${index}.purchaseLink`, "");
+      form.setValue(`items.${index}.processingVendor`, "");
+      form.setValue(`items.${index}.referenceImagePath`, null);
+      setItemImageFiles((prev) => {
+        const next = { ...prev };
+        delete next[index];
+        return next;
+      });
     }
   }
 
@@ -230,7 +243,7 @@ export function ApplyForm({
           <div>
             <CardTitle>采购明细</CardTitle>
             <CardDescription>
-              元器件与标准件填写采购链接，加工费上传图片
+              元器件与标准件填写采购链接；加工费须选择加工商并上传图片
             </CardDescription>
           </div>
           <Button
@@ -319,7 +332,29 @@ export function ApplyForm({
                       </p>
                     )}
                   </div>
-                ) : (
+                ) : null}
+
+                {itemKind === "PROCESSING_FEE" ? (
+                  <div className="space-y-2 sm:col-span-6">
+                    <Label>加工商</Label>
+                    <Controller
+                      control={form.control}
+                      name={`items.${index}.processingVendor`}
+                      render={({ field }) => (
+                        <ProcessingVendorSelect
+                          value={field.value ?? ""}
+                          onChange={field.onChange}
+                          error={
+                            form.formState.errors.items?.[index]
+                              ?.processingVendor?.message
+                          }
+                        />
+                      )}
+                    />
+                  </div>
+                ) : null}
+
+                {itemKindNeedsImage(itemKind) ? (
                   <div className="space-y-2 sm:col-span-6">
                     <Label>参考图片</Label>
                     <Input
@@ -344,7 +379,7 @@ export function ApplyForm({
                       </div>
                     )}
                   </div>
-                )}
+                ) : null}
 
                 <div className="space-y-2">
                   <Label>数量</Label>

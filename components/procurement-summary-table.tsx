@@ -176,6 +176,7 @@ export function ProcurementSummaryTable({ rows }: Props) {
               <TableHead>物品</TableHead>
               <TableHead>规格</TableHead>
               <TableHead>种类</TableHead>
+              <TableHead>加工商</TableHead>
               <TableHead>链接/图片</TableHead>
               <TableHead className="text-right">数量</TableHead>
               <TableHead className="text-right">单价</TableHead>
@@ -188,7 +189,7 @@ export function ProcurementSummaryTable({ rows }: Props) {
             {filteredRows.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={14}
+                  colSpan={15}
                   className="h-24 text-center text-muted-foreground"
                 >
                   {hasActiveFilter ? "当前筛选条件下暂无记录" : "暂无采购记录"}
@@ -218,6 +219,7 @@ export function ProcurementSummaryTable({ rows }: Props) {
                     {row.spec}
                   </TableCell>
                   <TableCell>{formatPurchaseItemKind(row.itemKind)}</TableCell>
+                  <TableCell>{row.processingVendor || "—"}</TableCell>
                   <TableCell>
                     <PurchaseItemReferenceCell
                       itemKind={row.itemKind}

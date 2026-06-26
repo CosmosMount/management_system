@@ -6,15 +6,17 @@ export function MineScopeToggle({
   basePath,
   mine,
   className,
+  extraParams,
 }: {
   basePath: string;
   mine: boolean;
   className?: string;
+  extraParams?: Record<string, string | undefined>;
 }) {
   return (
     <div className={cn("flex flex-wrap gap-2", className)}>
       <Link
-        href={basePath}
+        href={buildMineHref(basePath, false, extraParams)}
         className={cn(
           buttonVariants({ size: "sm", variant: mine ? "outline" : "default" }),
         )}
@@ -22,7 +24,7 @@ export function MineScopeToggle({
         全队
       </Link>
       <Link
-        href={`${basePath}?mine=1`}
+        href={buildMineHref(basePath, true, extraParams)}
         className={cn(
           buttonVariants({ size: "sm", variant: mine ? "default" : "outline" }),
         )}
@@ -45,4 +47,18 @@ export async function readMineSearchParam(
 
 export function withMine(path: string, mine: boolean): string {
   return mine ? `${path}?mine=1` : path;
+}
+
+function buildMineHref(
+  basePath: string,
+  mine: boolean,
+  extraParams?: Record<string, string | undefined>,
+): string {
+  const params = new URLSearchParams();
+  if (mine) params.set("mine", "1");
+  for (const [key, value] of Object.entries(extraParams ?? {})) {
+    if (value) params.set(key, value);
+  }
+  const query = params.toString();
+  return query ? `${basePath}?${query}` : basePath;
 }

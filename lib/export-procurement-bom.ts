@@ -24,6 +24,7 @@ function toSheetRow(row: SummaryRow) {
     物品名称: row.itemName,
     规格: row.spec,
     种类: formatPurchaseItemKind(row.itemKind),
+    加工商: row.processingVendor || "",
     "链接/图片": formatReference(row),
     数量: row.quantity,
     单价: row.unitPrice,

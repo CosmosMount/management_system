@@ -3,6 +3,7 @@ import {
   type ProgressReminderKind,
   type Project,
   type ProjectOwner,
+  type ProjectParticipant,
   type ProjectStage,
   type Task,
   type TaskAssignee,
@@ -12,6 +13,10 @@ import { enqueueProgressNotification } from "@/lib/notification-outbox";
 import { getOpenIdsByRole } from "@/lib/permissions";
 import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
+import {
+  DEFAULT_STAGE_DUE_SOON_DAYS,
+  getStageDeadlineState,
+} from "@/lib/progress-stage-deadline";
 import { prisma } from "@/lib/prisma";
 import { routes } from "@/lib/routes";
 import type { NotificationContext } from "@/lib/app-origin";
@@ -73,6 +78,7 @@ export type ProgressReminderScanResult = {
 type ReminderRecipientConfig = {
   assignees: boolean;
   projectOwners: boolean;
+  projectParticipants: boolean;
   stageOwners: boolean;
   managers: boolean;
 };
@@ -144,15 +150,14 @@ export const PROGRESS_REMINDER_DEFINITIONS: ReminderDefinition[] = [
   },
   {
     kind: REMINDER_KIND.STAGE_STALE_OR_DUE_SOON,
-    label: "当前阶段临期/停滞",
-    description: "进行中阶段临近截止或长时间没有阶段动态时提醒。",
+    label: "当前阶段临期/逾期/停滞",
+    description: "进行中或待验收阶段临近截止、已经超期或长时间没有阶段动态时提醒。",
     defaultEnabled: true,
     defaultScheduleTime: "09:00",
-    defaultParams: { dueSoonDays: 3, staleDays: 5, cooldownHours: 24 },
+    defaultParams: { dueSoonDays: DEFAULT_STAGE_DUE_SOON_DAYS, staleDays: 5 },
     paramDefinitions: [
       { key: "dueSoonDays", label: "截止前提醒", min: 1, max: 30, unit: "天" },
       { key: "staleDays", label: "无动态超过", min: 1, max: 60, unit: "天" },
-      { key: "cooldownHours", label: "同阶段提醒冷却", min: 1, max: 168, unit: "小时" },
     ],
   },
 ];
@@ -223,6 +228,17 @@ export async function saveProgressReminderRules(
       },
     });
   }
+}
+
+export async function getStageReminderDueSoonDays(): Promise<number> {
+  const definition = definitionByKind.get(REMINDER_KIND.STAGE_STALE_OR_DUE_SOON);
+  if (!definition) return DEFAULT_STAGE_DUE_SOON_DAYS;
+  const record = await prisma.progressReminderRule.findUnique({
+    where: { kind: REMINDER_KIND.STAGE_STALE_OR_DUE_SOON },
+    select: { paramsJson: true },
+  });
+  const params = sanitizeParams(definition, parseJsonRecord(record?.paramsJson));
+  return params.dueSoonDays ?? DEFAULT_STAGE_DUE_SOON_DAYS;
 }
 
 export async function seedDefaultProgressReminderRules() {
@@ -307,6 +323,7 @@ export async function sendManualProjectReminder({
     where: { id: projectId },
     include: {
       owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       stages: { orderBy: { sortOrder: "asc" } },
       tasks: {
         where: { deletedAt: null },
@@ -636,7 +653,6 @@ async function enqueueStageReminders(
   now: Date,
   context?: NotificationContext,
 ): Promise<number> {
-  const dueSoonAt = addDays(now, params.dueSoonDays);
   const staleCutoff = addDays(now, -params.staleDays);
   const stages = await prisma.projectStage.findMany({
     where: {
@@ -647,6 +663,7 @@ async function enqueueStageReminders(
       project: {
         include: {
           owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+          participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
           tasks: {
             where: { deletedAt: null },
             include: { assignees: true },
@@ -659,9 +676,18 @@ async function enqueueStageReminders(
   let queued = 0;
   for (const stage of stages) {
     const reasons: string[] = [];
-    if (stage.dueAt && stage.dueAt >= now && stage.dueAt <= dueSoonAt) {
+    const deadline = getStageDeadlineState(stage, now, params.dueSoonDays);
+    if (deadline.state === "overdue" && deadline.dueAt) {
       reasons.push(
-        `阶段将在 ${params.dueSoonDays} 天内截止：${stage.dueAt.toLocaleString("zh-CN")}`,
+        `当前阶段已超期 ${deadline.daysDelta} 天：${deadline.dueAt.toLocaleString("zh-CN")}`,
+      );
+    } else if (deadline.state === "today" && deadline.dueAt) {
+      reasons.push(
+        `当前阶段今天截止：${deadline.dueAt.toLocaleString("zh-CN")}`,
+      );
+    } else if (deadline.state === "dueSoon" && deadline.dueAt) {
+      reasons.push(
+        `当前阶段将在 ${deadline.daysDelta} 天后截止：${deadline.dueAt.toLocaleString("zh-CN")}`,
       );
     }
     const recentStageActivity = await prisma.progressActivityLog.findFirst({
@@ -683,11 +709,10 @@ async function enqueueStageReminders(
       recipientConfig,
     );
     const enqueued = await enqueueReminder({
-      eventKey: reminderEventKey(
+      eventKey: dailyReminderEventKey(
         REMINDER_KIND.STAGE_STALE_OR_DUE_SOON,
         stage.id,
         now,
-        params.cooldownHours,
       ),
       targetType: "PROJECT",
       targetId: stage.projectId,
@@ -869,6 +894,7 @@ async function collectTaskRecipientOpenIds(
 async function collectProjectRecipientOpenIds(
   project: Project & {
     owners: ProjectOwner[];
+    participants?: ProjectParticipant[];
     stages: ProjectStage[];
     tasks: Array<Task & { assignees: TaskAssignee[] }>;
   },
@@ -880,6 +906,9 @@ async function collectProjectRecipientOpenIds(
   const openIds: string[] = [];
   if (config.projectOwners) {
     openIds.push(...getProjectOwnerOpenIds(project));
+  }
+  if (config.projectParticipants) {
+    openIds.push(...(project.participants ?? []).map((item) => item.openId));
   }
   if (config.stageOwners) {
     openIds.push(...project.stages.map((stage) => stage.ownerOpenId).filter(Boolean));
@@ -901,6 +930,7 @@ async function collectStageRecipientOpenIds(
   stage: ProjectStage & {
     project: Project & {
       owners: ProjectOwner[];
+      participants: ProjectParticipant[];
       tasks: Array<Task & { assignees: TaskAssignee[] }>;
     };
   },
@@ -919,6 +949,9 @@ async function collectStageRecipientOpenIds(
   }
   if (config.projectOwners) {
     openIds.push(...getProjectOwnerOpenIds(stage.project));
+  }
+  if (config.projectParticipants) {
+    openIds.push(...stage.project.participants.map((item) => item.openId));
   }
   if (config.assignees) {
     openIds.push(...stageTasks.flatMap((task) => getTaskAssigneeOpenIds(task)));
@@ -980,6 +1013,10 @@ function sanitizeRecipientConfig(
       typeof value?.projectOwners === "boolean"
         ? value.projectOwners
         : defaults.projectOwners,
+    projectParticipants:
+      typeof value?.projectParticipants === "boolean"
+        ? value.projectParticipants
+        : defaults.projectParticipants,
     stageOwners:
       typeof value?.stageOwners === "boolean"
         ? value.stageOwners
@@ -993,6 +1030,7 @@ function defaultRecipientConfig(): ReminderRecipientConfig {
   return {
     assignees: true,
     projectOwners: true,
+    projectParticipants: true,
     stageOwners: true,
     managers: true,
   };
@@ -1074,6 +1112,14 @@ function reminderEventKey(
   const bucketMs = cooldownHours * 60 * 60 * 1000;
   const bucket = Math.floor(now.getTime() / bucketMs);
   return `progress:reminder:${kind}:${targetId}:${bucket}`;
+}
+
+function dailyReminderEventKey(
+  kind: ProgressReminderKind,
+  targetId: string,
+  now: Date,
+) {
+  return `progress:reminder:${kind}:${targetId}:day:${localDateKey(now)}`;
 }
 
 function weeklyReminderEventKey(

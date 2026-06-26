@@ -13,6 +13,7 @@ export const purchaseItemSchema = z
     itemKind: z.enum(PURCHASE_ITEM_KINDS, { message: "请选择物品种类" }),
     purchaseLink: z.string().optional().default(""),
     referenceImagePath: z.string().nullable().optional(),
+    processingVendor: z.string().optional().default(""),
     quantity: z.number().int().min(1, "数量至少为 1"),
     lineTotal: z.number().min(0, "总价不能为负"),
   })
@@ -33,6 +34,16 @@ export const purchaseItemSchema = z
         });
       }
     }
+    if (item.itemKind === "PROCESSING_FEE") {
+      const vendor = item.processingVendor?.trim() ?? "";
+      if (!vendor) {
+        ctx.addIssue({
+          code: "custom",
+          message: "请选择加工商",
+          path: ["processingVendor"],
+        });
+      }
+    }
   });
 
 export function toStoredPurchaseItem(item: PurchaseItemInput) {
@@ -46,6 +57,10 @@ export function toStoredPurchaseItem(item: PurchaseItemInput) {
     referenceImagePath: itemKindNeedsImage(item.itemKind)
       ? (item.referenceImagePath ?? null)
       : null,
+    processingVendor:
+      item.itemKind === "PROCESSING_FEE"
+        ? (item.processingVendor?.trim() ?? "")
+        : "",
     quantity: item.quantity,
     unitPrice: item.lineTotal / item.quantity,
   };
@@ -81,6 +96,7 @@ export function toOrderFormInput(order: {
     itemKind: PurchaseItemInput["itemKind"];
     purchaseLink: string;
     referenceImagePath: string | null;
+    processingVendor: string;
     quantity: number;
     unitPrice: number;
   }[];
@@ -94,6 +110,7 @@ export function toOrderFormInput(order: {
       itemKind: item.itemKind,
       purchaseLink: item.purchaseLink,
       referenceImagePath: item.referenceImagePath,
+      processingVendor: item.processingVendor,
       quantity: item.quantity,
       lineTotal: item.quantity * item.unitPrice,
     })),

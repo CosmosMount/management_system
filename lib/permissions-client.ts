@@ -31,10 +31,14 @@ function roleMatchesOrder(
   order: OrderScope,
 ): boolean {
   if (record.role !== requiredRole) return false;
-  if (requiredRole === "TEAM_ADMIN" || requiredRole === "FINANCE") {
+  if (requiredRole === "TEAM_ADMIN") {
     return record.team === order.team;
   }
-  if (requiredRole === "TECH_GROUP_ADMIN") {
+  if (
+    requiredRole === "TECH_GROUP_ADMIN" ||
+    requiredRole === "TEACHER" ||
+    requiredRole === "FINANCE"
+  ) {
     return record.techGroup === order.techGroup;
   }
   return record.team === "" && record.techGroup === "";
@@ -132,7 +136,9 @@ export function canUploadFinanceScreenshot(
 ): boolean {
   return (
     status === "PENDING_FINANCE_REVIEW" &&
-    userRoles.some((r) => r.role === "FINANCE" && r.team === order.team)
+    userRoles.some(
+      (r) => r.role === "FINANCE" && r.techGroup === order.techGroup,
+    )
   );
 }
 
@@ -166,7 +172,7 @@ export function canViewReimbursementAttachments(
   if (isOrderInitiator(userOpenId, initiatorOpenId)) return true;
   if (isSuperAdmin(userRoles)) return true;
   return userRoles.some(
-    (r) => r.role === "FINANCE" && r.team === order.team,
+    (r) => r.role === "FINANCE" && r.techGroup === order.techGroup,
   );
 }
 
@@ -191,7 +197,9 @@ export function canRejectProcurement(
     );
   }
   if (status === "TEACHER_REVIEW") {
-    return userRoles.some((r) => r.role === "TEACHER");
+    return userRoles.some(
+      (r) => r.role === "TEACHER" && r.techGroup === order.techGroup,
+    );
   }
   return false;
 }
@@ -204,7 +212,9 @@ export function canRequestApplicantResubmit(
 ): boolean {
   return (
     status === "PENDING_FINANCE_REVIEW" &&
-    userRoles.some((r) => r.role === "FINANCE" && r.team === order.team)
+    userRoles.some(
+      (r) => r.role === "FINANCE" && r.techGroup === order.techGroup,
+    )
   );
 }
 
@@ -236,7 +246,12 @@ export const statusApproverRole: Partial<Record<OrderStatus, UserRoleType>> = {
 
 export function formatRoleLabel(record: UserRoleRecord): string {
   const base = roleLabels[record.role];
-  if (record.role === "TECH_GROUP_ADMIN" && record.techGroup) {
+  if (
+    (record.role === "TECH_GROUP_ADMIN" ||
+      record.role === "TEACHER" ||
+      record.role === "FINANCE") &&
+    record.techGroup
+  ) {
     return `${base}（${record.techGroup}）`;
   }
   if (record.team) {

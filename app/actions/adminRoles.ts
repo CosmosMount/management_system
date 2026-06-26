@@ -6,13 +6,13 @@ import { TEAM_OPTIONS, TECH_GROUP_OPTIONS } from "@/lib/constants";
 import { requireSuperAdmin } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 
-const TEAM_SCOPED_ROLES = new Set<UserRoleType>(["TEAM_ADMIN", "FINANCE"]);
-const TECH_GROUP_SCOPED_ROLES = new Set<UserRoleType>(["TECH_GROUP_ADMIN"]);
-const GLOBAL_ROLES = new Set<UserRoleType>([
-  "SUPER_ADMIN",
+const TEAM_SCOPED_ROLES = new Set<UserRoleType>(["TEAM_ADMIN"]);
+const TECH_GROUP_SCOPED_ROLES = new Set<UserRoleType>([
+  "TECH_GROUP_ADMIN",
   "TEACHER",
-  "PROJECT_MANAGER",
+  "FINANCE",
 ]);
+const GLOBAL_ROLES = new Set<UserRoleType>(["SUPER_ADMIN", "PROJECT_MANAGER"]);
 
 function resolveRoleScope(
   role: UserRoleType,
@@ -22,7 +22,7 @@ function resolveRoleScope(
   if (TEAM_SCOPED_ROLES.has(role)) {
     const resolvedTeam = team ?? "";
     if (!resolvedTeam || !(TEAM_OPTIONS as readonly string[]).includes(resolvedTeam)) {
-      throw new Error("车组管理员/报销员必须指定有效车组");
+      throw new Error("车组组长必须指定有效车组");
     }
     return { team: resolvedTeam, techGroup: "" };
   }
@@ -33,7 +33,7 @@ function resolveRoleScope(
       !resolvedTechGroup ||
       !(TECH_GROUP_OPTIONS as readonly string[]).includes(resolvedTechGroup)
     ) {
-      throw new Error("技术组管理员必须指定有效技术组");
+      throw new Error("技术组角色必须指定有效技术组");
     }
     return { team: "", techGroup: resolvedTechGroup };
   }

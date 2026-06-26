@@ -13,6 +13,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { createWorkshopFeeOrder } from "@/app/actions/createWorkshopFeeOrder";
+import { ProcessingVendorSelect } from "@/components/processing-vendor-select";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -45,6 +46,7 @@ type FormValues = Omit<CreateWorkshopFeeInput, "team" | "techGroup"> & {
 const defaultItem = {
   name: "",
   spec: "",
+  processingVendor: "",
   quantity: 1,
   lineTotal: 0,
 };
@@ -201,6 +203,23 @@ export function WorkshopFeeForm() {
                 <div className="space-y-2 sm:col-span-2">
                   <Label>种类</Label>
                   <Input value="加工费" disabled className="bg-muted" />
+                </div>
+                <div className="space-y-2 sm:col-span-6">
+                  <Label>加工商</Label>
+                  <Controller
+                    control={form.control}
+                    name={`items.${index}.processingVendor`}
+                    render={({ field }) => (
+                      <ProcessingVendorSelect
+                        value={field.value ?? ""}
+                        onChange={field.onChange}
+                        error={
+                          form.formState.errors.items?.[index]?.processingVendor
+                            ?.message
+                        }
+                      />
+                    )}
+                  />
                 </div>
                 <div className="space-y-2 sm:col-span-6">
                   <Label>图片</Label>

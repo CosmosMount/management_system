@@ -185,14 +185,16 @@ export function AdminPanel({
       toast.error("请选择用户和角色");
       return;
     }
-    if (
-      (assignRole === "TEAM_ADMIN" || assignRole === "FINANCE") &&
-      !assignTeam
-    ) {
+    if (assignRole === "TEAM_ADMIN" && !assignTeam) {
       toast.error("请选择车组");
       return;
     }
-    if (assignRole === "TECH_GROUP_ADMIN" && !assignTechGroup) {
+    if (
+      (assignRole === "TECH_GROUP_ADMIN" ||
+        assignRole === "TEACHER" ||
+        assignRole === "FINANCE") &&
+      !assignTechGroup
+    ) {
       toast.error("请选择技术组");
       return;
     }
@@ -202,12 +204,13 @@ export function AdminPanel({
         await assignUserRole({
           openId: assignOpenId,
           role: assignRole,
-          team:
-            assignRole === "TEAM_ADMIN" || assignRole === "FINANCE"
-              ? assignTeam
-              : undefined,
+          team: assignRole === "TEAM_ADMIN" ? assignTeam : undefined,
           techGroup:
-            assignRole === "TECH_GROUP_ADMIN" ? assignTechGroup : undefined,
+            assignRole === "TECH_GROUP_ADMIN" ||
+            assignRole === "TEACHER" ||
+            assignRole === "FINANCE"
+              ? assignTechGroup
+              : undefined,
         });
         toast.success("角色已分配");
         setAssignRole("");
@@ -248,12 +251,16 @@ export function AdminPanel({
     });
   }
 
-  function handleQuickAssignTechGroup(openId: string, techGroup: string) {
+  function handleQuickAssignTechGroup(
+    openId: string,
+    techGroup: string,
+    role: UserRoleType,
+  ) {
     startTransition(async () => {
       try {
         await assignUserRole({
           openId,
-          role: "TECH_GROUP_ADMIN",
+          role,
           techGroup,
         });
         toast.success("已添加");
@@ -382,7 +389,7 @@ export function AdminPanel({
           icon={UserCog}
           label="组级角色"
           value={teamAdminCount + techGroupAdminCount + financeCount}
-          detail={`车组 ${teamAdminCount} · 技术组 ${techGroupAdminCount} · 报销 ${financeCount}`}
+          detail={`车组 ${teamAdminCount} · 技术组 ${techGroupAdminCount} · 老师 ${teacherCount} · 报销 ${financeCount}`}
         />
         <AdminMetric
           icon={ClipboardCheck}
@@ -445,7 +452,7 @@ export function AdminPanel({
           <CardHeader>
             <CardTitle>车组职责配置</CardTitle>
             <CardDescription>
-              为每个车组指定组长与报销员；用户需先飞书登录本系统
+              为每个车组指定组长；用户需先飞书登录本系统
             </CardDescription>
           </CardHeader>
           <CardContent className="min-w-0">
@@ -454,7 +461,6 @@ export function AdminPanel({
                 <TableRow>
                   <TableHead>车组</TableHead>
                   <TableHead>组长</TableHead>
-                  <TableHead>报销员</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -473,18 +479,6 @@ export function AdminPanel({
                         onQuickAssign={handleQuickAssign}
                       />
                     </TableCell>
-                    <TableCell className="min-w-[14rem]">
-                      <RoleCell
-                        entries={teamRoles(team, "FINANCE")}
-                        users={users}
-                        userOptions={userOptions}
-                        team={team}
-                        role="FINANCE"
-                        pending={pending}
-                        onRemove={handleRemove}
-                        onQuickAssign={handleQuickAssign}
-                      />
-                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -496,7 +490,7 @@ export function AdminPanel({
           <CardHeader>
             <CardTitle>技术组职责配置</CardTitle>
             <CardDescription>
-              为每个技术组指定组长，参与管理审核（与车组组长分别私信通知）
+              为每个技术组指定组长、指导老师与报销员，参与采购审批与报销流程
             </CardDescription>
           </CardHeader>
           <CardContent className="min-w-0">
@@ -505,6 +499,8 @@ export function AdminPanel({
                 <TableRow>
                   <TableHead>技术组</TableHead>
                   <TableHead>组长</TableHead>
+                  <TableHead>指导老师</TableHead>
+                  <TableHead>报销员</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -517,6 +513,31 @@ export function AdminPanel({
                         users={users}
                         userOptions={userOptions}
                         techGroup={techGroup}
+                        role="TECH_GROUP_ADMIN"
+                        pending={pending}
+                        onRemove={handleRemove}
+                        onQuickAssign={handleQuickAssignTechGroup}
+                      />
+                    </TableCell>
+                    <TableCell className="min-w-[14rem]">
+                      <TechGroupRoleCell
+                        entries={techGroupRoles(techGroup, "TEACHER")}
+                        users={users}
+                        userOptions={userOptions}
+                        techGroup={techGroup}
+                        role="TEACHER"
+                        pending={pending}
+                        onRemove={handleRemove}
+                        onQuickAssign={handleQuickAssignTechGroup}
+                      />
+                    </TableCell>
+                    <TableCell className="min-w-[14rem]">
+                      <TechGroupRoleCell
+                        entries={techGroupRoles(techGroup, "FINANCE")}
+                        users={users}
+                        userOptions={userOptions}
+                        techGroup={techGroup}
+                        role="FINANCE"
                         pending={pending}
                         onRemove={handleRemove}
                         onQuickAssign={handleQuickAssignTechGroup}
@@ -589,7 +610,7 @@ export function AdminPanel({
               </div>
             </div>
             <div className="space-y-2">
-              {assignRole === "TEAM_ADMIN" || assignRole === "FINANCE" ? (
+              {assignRole === "TEAM_ADMIN" ? (
                 <>
                   <p className="h-5 text-sm font-medium leading-5">车组</p>
                   <div>
@@ -612,7 +633,9 @@ export function AdminPanel({
                     </Select>
                   </div>
                 </>
-              ) : assignRole === "TECH_GROUP_ADMIN" ? (
+              ) : assignRole === "TECH_GROUP_ADMIN" ||
+                assignRole === "TEACHER" ||
+                assignRole === "FINANCE" ? (
                 <>
                   <p className="h-5 text-sm font-medium leading-5">技术组</p>
                   <div>
@@ -1064,6 +1087,7 @@ function TechGroupRoleCell({
   users,
   userOptions,
   techGroup,
+  role,
   pending,
   onRemove,
   onQuickAssign,
@@ -1072,15 +1096,20 @@ function TechGroupRoleCell({
   users: AdminUser[];
   userOptions: UserOption[];
   techGroup: string;
+  role: UserRoleType;
   pending: boolean;
   onRemove: (id: string) => void;
-  onQuickAssign: (openId: string, techGroup: string) => void;
+  onQuickAssign: (
+    openId: string,
+    techGroup: string,
+    role: UserRoleType,
+  ) => void;
 }) {
   const [addOpenId, setAddOpenId] = useState("");
 
   function handleQuickAdd() {
     if (!addOpenId) return;
-    onQuickAssign(addOpenId, techGroup);
+    onQuickAssign(addOpenId, techGroup, role);
     setAddOpenId("");
   }
 

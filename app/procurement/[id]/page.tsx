@@ -245,6 +245,7 @@ export default async function OrderDetailPage({ params, searchParams }: Props) {
                   <TableHead>物品名称</TableHead>
                   <TableHead>规格</TableHead>
                   <TableHead>种类</TableHead>
+                  <TableHead>加工商</TableHead>
                   <TableHead>链接/图片</TableHead>
                   <TableHead>数量</TableHead>
                   <TableHead>单价</TableHead>
@@ -259,6 +260,7 @@ export default async function OrderDetailPage({ params, searchParams }: Props) {
                     <TableCell>
                       {formatPurchaseItemKind(item.itemKind)}
                     </TableCell>
+                    <TableCell>{item.processingVendor || "—"}</TableCell>
                     <TableCell>
                       <PurchaseItemReferenceCell
                         itemKind={item.itemKind}

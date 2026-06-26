@@ -175,6 +175,12 @@ enum PurchaseItemKind {
   PROCESSING_FEE
 }
 
+model ProcessingVendor {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+}
+
 model PurchaseItem {
   id                 String            @id @default(uuid())
   orderId            String
@@ -184,6 +190,7 @@ model PurchaseItem {
   itemKind           PurchaseItemKind  @default(COMPONENT)
   purchaseLink       String            @default("")
   referenceImagePath String?
+  processingVendor   String            @default("")
   quantity           Int
   unitPrice          Float
   photoPath          String?

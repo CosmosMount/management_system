@@ -68,6 +68,7 @@ export async function createWorkshopFeeOrder(formData: FormData) {
                 spec: item.spec,
                 itemKind: "PROCESSING_FEE",
                 purchaseLink: "",
+                processingVendor: item.processingVendor,
                 quantity: item.quantity,
                 unitPrice: item.lineTotal / item.quantity,
               })),

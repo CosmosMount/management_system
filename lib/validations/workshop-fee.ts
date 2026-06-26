@@ -4,6 +4,7 @@ import { z } from "zod";
 export const workshopFeeItemSchema = z.object({
   name: z.string().min(1, "请输入费用名称"),
   spec: z.string().min(1, "请输入说明"),
+  processingVendor: z.string().min(1, "请选择加工商"),
   quantity: z.number().int().min(1, "数量至少为 1"),
   lineTotal: z.number().min(0, "金额不能为负"),
 });

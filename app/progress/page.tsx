@@ -30,7 +30,14 @@ import {
 import { auth } from "@/lib/auth";
 import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { getUserRoles } from "@/lib/permissions";
+import { getStageReminderDueSoonDays } from "@/lib/progress-reminders";
+import {
+  compareProjectStageDeadlines,
+  getProjectStageDeadlineState,
+  type ProjectStageDeadlineState,
+} from "@/lib/progress-stage-deadline";
 import { routes } from "@/lib/routes";
+import { cn } from "@/lib/utils";
 
 type Props = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -40,9 +47,10 @@ export default async function ProgressHomePage({ searchParams }: Props) {
   const session = await auth();
   const userOpenId = session?.user?.openId;
   const mine = await readMineSearchParam(searchParams);
-  const [liveVersion, roles] = await Promise.all([
+  const [liveVersion, roles, dueSoonDays] = await Promise.all([
     getCurrentUserLiveVersion("progress-list", undefined, { mine }),
     userOpenId ? getUserRoles(userOpenId) : Promise.resolve([]),
+    getStageReminderDueSoonDays(),
   ]);
   const showCreate = canCreateProject(roles);
 
@@ -56,9 +64,9 @@ export default async function ProgressHomePage({ searchParams }: Props) {
     },
     include: {
       owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      stages: { orderBy: { sortOrder: "asc" } },
     },
     orderBy: { updatedAt: "desc" },
-    take: 20,
   });
   const visibleTaskCounts = await getVisibleTaskCounts(
     projects,
@@ -66,6 +74,19 @@ export default async function ProgressHomePage({ searchParams }: Props) {
     userOpenId,
     mine,
   );
+  const now = new Date();
+  const projectViews = projects
+    .map((project) => ({
+      project,
+      deadline: getProjectStageDeadlineState(project, now, dueSoonDays),
+      taskCount: visibleTaskCounts.get(project.id) ?? 0,
+    }))
+    .sort((a, b) => {
+      const deadlineDiff = compareProjectStageDeadlines(a.deadline, b.deadline);
+      if (deadlineDiff !== 0) return deadlineDiff;
+      return b.project.updatedAt.getTime() - a.project.updatedAt.getTime();
+    })
+    .slice(0, 20);
 
   return (
     <>
@@ -134,22 +155,33 @@ export default async function ProgressHomePage({ searchParams }: Props) {
                 <p className="text-muted-foreground">暂无项目</p>
               ) : (
                 <ul className="space-y-2">
-                  {projects.map((p) => (
-                    <li key={p.id}>
+                  {projectViews.map(({ project, deadline, taskCount }) => (
+                    <li key={project.id}>
                       <Link
-                        href={routes.progress.project(p.id)}
-                        className="flex items-center justify-between rounded-lg border p-3 hover:border-primary/30"
+                        href={routes.progress.project(project.id)}
+                        className={cn(
+                          "flex flex-col gap-3 rounded-lg border border-l-4 p-3 transition hover:border-primary/30 sm:flex-row sm:items-center sm:justify-between",
+                          deadlineCardTone(deadline.state),
+                        )}
                       >
-                        <div>
-                          <p className="font-medium">{p.name}</p>
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="truncate font-medium">{project.name}</p>
+                            <DeadlineBadge
+                              state={deadline.state}
+                              label={deadline.label}
+                            />
+                          </div>
                           <p className="text-sm text-muted-foreground">
-                            {formatScopeItem(p.team)} /{" "}
-                            {formatScopeItem(p.techGroup)} ·{" "}
-                            {visibleTaskCounts.get(p.id) ?? 0} 个任务
+                            {formatScopeItem(project.team)} /{" "}
+                            {formatScopeItem(project.techGroup)} · {taskCount} 个任务
+                          </p>
+                          <p className="truncate text-xs text-muted-foreground">
+                            当前阶段：{deadline.stage?.name ?? "无"}
                           </p>
                         </div>
-                        <Badge variant="secondary">
-                          {projectStatusLabels[p.status]}
+                        <Badge variant="secondary" className="self-start sm:self-center">
+                          {projectStatusLabels[project.status]}
                         </Badge>
                       </Link>
                     </li>
@@ -201,4 +233,51 @@ async function getVisibleTaskCounts(
 
 function formatScopeItem(value: string): string {
   return value || "未指定";
+}
+
+function DeadlineBadge({
+  state,
+  label,
+}: {
+  state: ProjectStageDeadlineState;
+  label: string;
+}) {
+  return (
+    <Badge
+      variant={state === "overdue" ? "destructive" : "outline"}
+      className={deadlineBadgeTone(state)}
+    >
+      {label}
+    </Badge>
+  );
+}
+
+function deadlineCardTone(state: ProjectStageDeadlineState): string {
+  switch (state) {
+    case "overdue":
+      return "border-l-destructive bg-destructive/5 hover:border-l-destructive";
+    case "today":
+      return "border-l-orange-500 bg-orange-50/70 dark:bg-orange-950/20";
+    case "dueSoon":
+      return "border-l-amber-500 bg-amber-50/60 dark:bg-amber-950/20";
+    case "normal":
+      return "border-l-emerald-500 bg-background";
+    case "none":
+      return "border-l-border bg-background";
+  }
+}
+
+function deadlineBadgeTone(state: ProjectStageDeadlineState): string {
+  switch (state) {
+    case "overdue":
+      return "border-destructive/30 bg-destructive/10 text-destructive";
+    case "today":
+      return "border-orange-300 bg-orange-100 text-orange-800 dark:border-orange-900/70 dark:bg-orange-950/40 dark:text-orange-200";
+    case "dueSoon":
+      return "border-amber-300 bg-amber-100 text-amber-800 dark:border-amber-900/70 dark:bg-amber-950/40 dark:text-amber-200";
+    case "normal":
+      return "border-emerald-300 bg-emerald-100 text-emerald-800 dark:border-emerald-900/70 dark:bg-emerald-950/40 dark:text-emerald-200";
+    case "none":
+      return "border-border bg-muted/50 text-muted-foreground";
+  }
 }

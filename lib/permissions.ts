@@ -39,15 +39,19 @@ export async function getOpenIdsByRole(
     techGroup?: string;
   } = { role };
 
-  if (role === "TEAM_ADMIN" || role === "FINANCE") {
+  if (role === "TEAM_ADMIN") {
     if (!order.team) return [];
     where.team = order.team;
     where.techGroup = "";
-  } else if (role === "TECH_GROUP_ADMIN") {
+  } else if (
+    role === "TECH_GROUP_ADMIN" ||
+    role === "TEACHER" ||
+    role === "FINANCE"
+  ) {
     if (!order.techGroup) return [];
     where.techGroup = order.techGroup;
     where.team = "";
-  } else if (role === "PROJECT_MANAGER" || role === "TEACHER" || role === "SUPER_ADMIN") {
+  } else if (role === "PROJECT_MANAGER" || role === "SUPER_ADMIN") {
     where.team = "";
     where.techGroup = "";
   } else {

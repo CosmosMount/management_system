@@ -48,6 +48,7 @@ export default async function DashboardPage() {
       itemKind: item.itemKind,
       purchaseLink: item.purchaseLink,
       referenceImagePath: item.referenceImagePath,
+      processingVendor: item.processingVendor,
       quantity: item.quantity,
       unitPrice: item.unitPrice,
       lineTotal: item.quantity * item.unitPrice,
