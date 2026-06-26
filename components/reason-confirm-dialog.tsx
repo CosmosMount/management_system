@@ -22,6 +22,8 @@ type Props = {
   confirmLabel: string;
   variant?: "default" | "destructive" | "outline" | "secondary";
   disabled?: boolean;
+  triggerClassName?: string;
+  triggerSize?: "default" | "sm";
   onConfirm: (reason: string) => Promise<void>;
 };
 
@@ -33,6 +35,8 @@ export function ReasonConfirmDialog({
   confirmLabel,
   variant = "destructive",
   disabled,
+  triggerClassName,
+  triggerSize = "sm",
   onConfirm,
 }: Props) {
   const [open, setOpen] = useState(false);
@@ -55,7 +59,13 @@ export function ReasonConfirmDialog({
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger
         render={
-          <Button type="button" variant={variant} size="sm" disabled={disabled}>
+          <Button
+            type="button"
+            variant={variant}
+            size={triggerSize}
+            className={triggerClassName}
+            disabled={disabled}
+          >
             {triggerLabel}
           </Button>
         }

@@ -93,6 +93,8 @@ import {
   urgencyLabels,
 } from "@/lib/progress-labels";
 
+const projectHeaderActionButtonClassName = "h-8 min-w-24 gap-1.5 px-3 text-sm";
+
 export type ProjectDetailView = {
   id: string;
   name: string;
@@ -700,7 +702,12 @@ function ProjectOverview({
         {(canEdit || canUpdateLifecycle || canRemind || isSuperAdmin) && (
           <div className="flex shrink-0 flex-wrap gap-2">
             {canEdit && (
-              <Button type="button" variant="outline" onClick={onOpenEdit}>
+              <Button
+                type="button"
+                variant="outline"
+                className={projectHeaderActionButtonClassName}
+                onClick={onOpenEdit}
+              >
                 <Pencil className="h-4 w-4" />
                 编辑项目
               </Button>
@@ -710,6 +717,7 @@ function ProjectOverview({
                 targetType="PROJECT"
                 targetId={project.id}
                 label="催促项目"
+                buttonClassName={projectHeaderActionButtonClassName}
               />
             )}
             {canUpdateLifecycle && rollbackPreview && (
@@ -721,6 +729,7 @@ function ProjectOverview({
             {project.status === "NOT_STARTED" && (
               <Button
                 type="button"
+                className={projectHeaderActionButtonClassName}
                 disabled={loadingStatus !== null}
                 onClick={() => handleProjectStatus("IN_PROGRESS")}
               >
@@ -739,6 +748,8 @@ function ProjectOverview({
                   reasonLabel="完成说明"
                   confirmLabel="确认完成"
                   variant="outline"
+                  triggerSize="default"
+                  triggerClassName={projectHeaderActionButtonClassName}
                   onConfirm={(reason) => handleProjectStatus("COMPLETED", reason)}
                 />
               )
@@ -753,6 +764,8 @@ function ProjectOverview({
                 confirmLabel="确认取消"
                 variant="destructive"
                 disabled={loadingStatus !== null}
+                triggerSize="default"
+                triggerClassName={projectHeaderActionButtonClassName}
                 onConfirm={(reason) => handleProjectStatus("CANCELED", reason)}
               />
             )}
@@ -779,7 +792,8 @@ function DisabledCompleteProjectButton({ reason }: { reason: string }) {
       <Button
         type="button"
         variant="outline"
-        size="sm"
+        size="default"
+        className={projectHeaderActionButtonClassName}
         disabled
         aria-describedby="project-complete-disabled-reason"
       >
@@ -839,7 +853,12 @@ function ProjectRollbackButton({
 
   return (
     <>
-      <Button type="button" variant="outline" onClick={() => setOpen(true)}>
+      <Button
+        type="button"
+        variant="outline"
+        className={projectHeaderActionButtonClassName}
+        onClick={() => setOpen(true)}
+      >
         <RotateCcw className="h-4 w-4" />
         回退流程
       </Button>

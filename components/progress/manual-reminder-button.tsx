@@ -21,12 +21,16 @@ type Props = {
   targetType: "PROJECT" | "TASK";
   targetId: string;
   label?: string;
+  buttonClassName?: string;
+  buttonSize?: "default" | "sm";
 };
 
 export function ManualReminderButton({
   targetType,
   targetId,
   label = "催促",
+  buttonClassName,
+  buttonSize = "default",
 }: Props) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -54,7 +58,13 @@ export function ManualReminderButton({
 
   return (
     <>
-      <Button type="button" variant="outline" onClick={() => setOpen(true)}>
+      <Button
+        type="button"
+        variant="outline"
+        size={buttonSize}
+        className={buttonClassName}
+        onClick={() => setOpen(true)}
+      >
         <BellRing className="h-4 w-4" />
         {label}
       </Button>
