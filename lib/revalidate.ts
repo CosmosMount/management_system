@@ -26,5 +26,10 @@ export function revalidateProgress(projectId?: string, taskId?: string) {
 }
 
 export function revalidateAdmin() {
-  revalidatePath("/admin");
+  revalidatePath(routes.admin.root);
+  revalidatePath(routes.admin.system);
+  revalidatePath(routes.admin.roles);
+  revalidatePath(routes.admin.reminders);
+  revalidatePath(routes.admin.projectTemplates);
+  revalidatePath(routes.admin.acceptance);
 }

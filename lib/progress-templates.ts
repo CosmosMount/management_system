@@ -13,8 +13,27 @@ export const REAL_CAR_STAGE_TEMPLATE = [
 export type StageTemplateKey = "real-car" | "custom";
 
 export function getDefaultStageDueAt(index: number): string {
+  return getStageDueAtByOffsetDays((index + 1) * 7);
+}
+
+export function getStageDueAtByOffsetDays(offsetDays: number): string {
   const date = new Date();
-  date.setDate(date.getDate() + (index + 1) * 7);
+  date.setDate(date.getDate() + offsetDays);
   date.setHours(18, 0, 0, 0);
-  return date.toISOString().slice(0, 16);
+  return toDateTimeLocalInputValue(date);
+}
+
+function toDateTimeLocalInputValue(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return [
+    date.getFullYear(),
+    "-",
+    pad(date.getMonth() + 1),
+    "-",
+    pad(date.getDate()),
+    "T",
+    pad(date.getHours()),
+    ":",
+    pad(date.getMinutes()),
+  ].join("");
 }

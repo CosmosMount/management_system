@@ -1,10 +1,10 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import type { UserRoleType } from "@prisma/client";
 import { TEAM_OPTIONS, TECH_GROUP_OPTIONS } from "@/lib/constants";
 import { requireSuperAdmin } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
+import { revalidateAdmin } from "@/lib/revalidate";
 
 const TEAM_SCOPED_ROLES = new Set<UserRoleType>(["TEAM_ADMIN"]);
 const TECH_GROUP_SCOPED_ROLES = new Set<UserRoleType>([
@@ -85,7 +85,7 @@ export async function assignUserRole(input: {
     },
   });
 
-  revalidatePath("/admin");
+  revalidateAdmin();
 }
 
 export async function removeUserRole(roleId: string) {
@@ -109,5 +109,5 @@ export async function removeUserRole(roleId: string) {
   }
 
   await prisma.userRole.delete({ where: { id: roleId } });
-  revalidatePath("/admin");
+  revalidateAdmin();
 }

@@ -714,6 +714,10 @@ async function getAdminVersion(): Promise<string> {
     reminderCount,
     outboxAggregate,
     outboxCount,
+    projectTemplateAggregate,
+    projectTemplateCount,
+    projectTemplateStageAggregate,
+    projectTemplateStageCount,
   ] = await Promise.all([
     prisma.user.findMany({
       orderBy: { openId: "asc" },
@@ -749,6 +753,14 @@ async function getAdminVersion(): Promise<string> {
     prisma.notificationOutbox.count({
       where: { channel: "progress", type: "progress_reminder" },
     }),
+    prisma.projectTemplate.aggregate({
+      _max: { updatedAt: true },
+    }),
+    prisma.projectTemplate.count(),
+    prisma.projectTemplateStage.aggregate({
+      _max: { updatedAt: true },
+    }),
+    prisma.projectTemplateStage.count(),
   ]);
 
   return encodeVersion([
@@ -766,6 +778,16 @@ async function getAdminVersion(): Promise<string> {
     ),
     encodePart("reminders", reminderAggregate._max.updatedAt, reminderCount),
     encodePart("reminderOutbox", outboxAggregate._max.updatedAt, outboxCount),
+    encodePart(
+      "projectTemplates",
+      projectTemplateAggregate._max.updatedAt,
+      projectTemplateCount,
+    ),
+    encodePart(
+      "projectTemplateStages",
+      projectTemplateStageAggregate._max.updatedAt,
+      projectTemplateStageCount,
+    ),
   ]);
 }
 

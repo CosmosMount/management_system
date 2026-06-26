@@ -24,6 +24,11 @@ import {
   normalizeAcceptanceChecklistItems,
 } from "@/lib/progress-acceptance-checklists";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
+import { collectTaskNotificationRecipients } from "@/lib/progress-task-notifications";
+import {
+  formatTaskTechGroups,
+  normalizeTaskTechGroups,
+} from "@/lib/progress-task-tech-groups";
 import { prisma } from "@/lib/prisma";
 import { getUserRoles } from "@/lib/permissions";
 import { revalidateProgress } from "@/lib/revalidate";
@@ -167,10 +172,14 @@ export async function restartTask(input: { taskId: string; reason: string }) {
         project: {
           include: {
             owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+            participants: {
+              orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+            },
           },
         },
         stage: true,
         assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       },
     });
     if (!task) throw new Error("任务不存在");
@@ -256,6 +265,7 @@ export async function restartTask(input: { taskId: string; reason: string }) {
       techGroup: result.task.techGroup,
       assigneeOpenIds: getTaskAssigneeOpenIds(result.task),
       projectOwnerOpenIds: result.projectOwnerOpenIds,
+      recipientOpenIds: await collectTaskNotificationRecipients(result.task),
     },
     await getNotificationContext(),
   );
@@ -277,11 +287,15 @@ export async function updateTask(input: UpdateTaskInput) {
       project: {
         include: {
           owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+          participants: {
+            orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+          },
           stages: true,
         },
       },
       stage: true,
       assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       acceptanceChecklistItems: {
         orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
       },
@@ -347,7 +361,8 @@ export async function updateTask(input: UpdateTaskInput) {
     throw new Error("任务阶段不属于当前项目");
   }
 
-  const dueAt = new Date(parsed.dueAt);
+  const taskTechGroups = normalizeTaskTechGroups(parsed.taskTechGroups);
+  if (taskTechGroups.length === 0) throw new Error("请选择任务技术组");
   const nextStageName =
     stageId
       ? task.project.stages.find((stage) => stage.id === stageId)?.name ?? "无阶段"
@@ -376,12 +391,11 @@ export async function updateTask(input: UpdateTaskInput) {
       title: task.title,
       goal: task.goal,
       stageName: task.stage?.name ?? "无阶段",
-      category: task.category,
+      taskTechGroups: formatTaskTechGroups(task),
       urgency: task.urgency,
       importance: task.importance,
       assigneeNames: getTaskAssigneeNames(task),
       metrics: task.metrics,
-      dueAt: task.dueAt.toISOString(),
       needsOfflineConfirmation: task.needsOfflineConfirmation,
       needsWeeklyReport: task.needsWeeklyReport,
       acceptanceChecklistSummary: formatAcceptanceChecklistSummary(
@@ -392,12 +406,11 @@ export async function updateTask(input: UpdateTaskInput) {
       title: parsed.title,
       goal: parsed.goal ?? "",
       stageName: nextStageName,
-      category: parsed.category,
+      taskTechGroups: taskTechGroups.join("、"),
       urgency: parsed.urgency,
       importance: parsed.importance,
       assigneeNames: nextAssigneeNames,
       metrics: parsed.metrics,
-      dueAt: dueAt.toISOString(),
       needsOfflineConfirmation: parsed.needsOfflineConfirmation,
       needsWeeklyReport: parsed.needsWeeklyReport,
       acceptanceChecklistSummary: formatAcceptanceChecklistSummary(
@@ -437,13 +450,11 @@ export async function updateTask(input: UpdateTaskInput) {
         stageId,
         title: parsed.title,
         goal: parsed.goal ?? "",
-        category: parsed.category,
         urgency: parsed.urgency,
         importance: parsed.importance,
         assigneeOpenId: primaryAssignee.openId,
         assigneeName: primaryAssignee.name,
         metrics: parsed.metrics,
-        dueAt,
         needsOfflineConfirmation: parsed.needsOfflineConfirmation,
         needsWeeklyReport: parsed.needsWeeklyReport,
       },
@@ -458,6 +469,14 @@ export async function updateTask(input: UpdateTaskInput) {
         taskId: task.id,
         openId: assignee.openId,
         name: assignee.name,
+        sortOrder: index,
+      })),
+    });
+    await tx.taskTechGroup.deleteMany({ where: { taskId: task.id } });
+    await tx.taskTechGroup.createMany({
+      data: taskTechGroups.map((techGroup, index) => ({
+        taskId: task.id,
+        techGroup,
         sortOrder: index,
       })),
     });
@@ -477,7 +496,19 @@ export async function updateTask(input: UpdateTaskInput) {
       }
     }
 
-    const record = await tx.task.findUnique({ where: { id: task.id } });
+    const record = await tx.task.findUnique({
+      where: { id: task.id },
+      include: {
+        assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        project: {
+          include: {
+            owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+            participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+          },
+        },
+      },
+    });
     if (!record) throw new Error("任务不存在");
 
     if (changes.length > 0) {
@@ -501,6 +532,12 @@ export async function updateTask(input: UpdateTaskInput) {
   });
 
   if (changes.length > 0) {
+    const recipientOpenIds = [
+      ...new Set([
+        ...(await collectTaskNotificationRecipients(task)),
+        ...(await collectTaskNotificationRecipients(updated)),
+      ]),
+    ];
     await enqueueProgressNotification(
       `progress:task_updated:${task.id}:${updated.updatedAt.toISOString()}`,
       {
@@ -517,6 +554,7 @@ export async function updateTask(input: UpdateTaskInput) {
         assigneeOpenIds: orderedAssignees.map((assignee) => assignee.openId),
         oldAssigneeOpenIds,
         projectOwnerOpenIds: getProjectOwnerOpenIds(task.project),
+        recipientOpenIds,
       },
       await getNotificationContext(),
     );
@@ -538,12 +576,11 @@ function buildTaskChangeSummary({
     ["title", "任务名称", String],
     ["goal", "详细说明", formatOptional],
     ["stageName", "所属阶段", String],
-    ["category", "类别", String],
+    ["taskTechGroups", "任务技术组", String],
     ["urgency", "紧急程度", String],
     ["importance", "重要程度", String],
     ["assigneeNames", "负责人", String],
     ["metrics", "指标", String],
-    ["dueAt", "截止时间", formatDateTime],
     ["needsOfflineConfirmation", "线下确认", formatBoolean],
     ["needsWeeklyReport", "定期周报", formatBoolean],
     ["acceptanceChecklistSummary", "验收清单", String],
@@ -558,12 +595,11 @@ type TaskChangeComparable = {
   title: string;
   goal: string;
   stageName: string;
-  category: string;
+  taskTechGroups: string;
   urgency: string;
   importance: string;
   assigneeNames: string;
   metrics: string;
-  dueAt: string;
   needsOfflineConfirmation: boolean;
   needsWeeklyReport: boolean;
   acceptanceChecklistSummary: string;
@@ -571,12 +607,6 @@ type TaskChangeComparable = {
 
 function formatOptional(value: unknown): string {
   return typeof value === "string" && value ? value : "未填写";
-}
-
-function formatDateTime(value: unknown): string {
-  return typeof value === "string"
-    ? new Date(value).toLocaleString("zh-CN")
-    : "未设置";
 }
 
 function formatBoolean(value: unknown): string {

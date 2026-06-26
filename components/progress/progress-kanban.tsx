@@ -14,7 +14,6 @@ import {
 } from "lucide-react";
 import type {
   Importance,
-  TaskCategory,
   TaskStatus,
   Urgency,
 } from "@prisma/client";
@@ -23,7 +22,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   taskStatusLabels,
-  taskCategoryLabels,
   urgencyLabels,
   importanceLabels,
 } from "@/lib/progress-labels";
@@ -42,7 +40,7 @@ export type KanbanTask = {
   assigneeNames: string;
   team: string;
   techGroup: string;
-  category: TaskCategory;
+  taskTechGroups: string[];
   urgency: Urgency;
   importance: Importance;
   status: TaskStatus;
@@ -379,9 +377,11 @@ function TaskCard({
           <Badge variant="secondary" className="text-xs">
             {taskStatusLabels[task.status]}
           </Badge>
-          <Badge variant="outline" className="text-xs">
-            {taskCategoryLabels[task.category]}
-          </Badge>
+          {task.taskTechGroups.map((group) => (
+            <Badge key={group} variant="outline" className="text-xs">
+              {group}
+            </Badge>
+          ))}
           <Badge variant="outline" className="text-xs">
             紧急 {urgencyLabels[task.urgency]}
           </Badge>

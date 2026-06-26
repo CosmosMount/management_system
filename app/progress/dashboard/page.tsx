@@ -13,6 +13,7 @@ import { auth } from "@/lib/auth";
 import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { getUserRoles } from "@/lib/permissions";
 import { getTaskDeadlineState } from "@/lib/progress-deadline";
+import { getTaskTechGroups } from "@/lib/progress-task-tech-groups";
 import {
   progressTaskMineWhere,
   progressTaskReadableWhere,
@@ -50,6 +51,7 @@ export default async function ProgressDashboardPage({ searchParams }: Props) {
       project: { select: { name: true } },
       stage: { select: { name: true } },
       assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
     },
     orderBy: [{ isOverdue: "desc" }, { dueAt: "asc" }],
   });
@@ -73,7 +75,7 @@ export default async function ProgressDashboardPage({ searchParams }: Props) {
       assigneeNames: getTaskAssigneeNames(t),
       team: t.team,
       techGroup: t.techGroup,
-      category: t.category,
+      taskTechGroups: getTaskTechGroups(t),
       urgency: t.urgency,
       importance: t.importance,
       status: t.status,

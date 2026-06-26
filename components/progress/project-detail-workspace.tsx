@@ -6,6 +6,7 @@ import { useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   AlertCircle,
+  CalendarClock,
   CheckCircle2,
   Circle,
   Clock3,
@@ -22,9 +23,10 @@ import { toast } from "sonner";
 import type {
   ApprovalDecision,
   Importance,
+  ProjectDdlChangeRequestStatus,
+  ProjectDdlChangeRequestType,
   ProjectStatus,
   StageStatus,
-  TaskCategory,
   TaskCreationRequestStatus,
   TaskStatus,
   Urgency,
@@ -34,6 +36,12 @@ import {
   rejectStageSubmission,
   submitStageEvidence,
 } from "@/app/actions/progress/projectStages";
+import {
+  requestProjectStageDueDateChange,
+  requestProjectStageExtension,
+  reviewProjectStageDueDateChangeRequest,
+  reviewProjectStageExtensionRequest,
+} from "@/app/actions/progress/projectDdlChanges";
 import { loadMoreProjectActivityLogs } from "@/app/actions/progress/activityLogs";
 import { reviewTaskCreationRequest } from "@/app/actions/progress/requestTaskCreation";
 import { rollbackProjectStage } from "@/app/actions/progress/rollbackProjectStage";
@@ -57,6 +65,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -80,7 +89,6 @@ import {
   importanceLabels,
   projectStatusLabels,
   stageStatusLabels,
-  taskCategoryLabels,
   taskStatusLabels,
   urgencyLabels,
 } from "@/lib/progress-labels";
@@ -105,6 +113,7 @@ export type ProjectDetailView = {
   canceledAt: string | null;
   stages: StageView[];
   tasks: TaskView[];
+  ddlChangeRequests: DdlChangeRequestView[];
   taskCreationRequests: TaskCreationRequestView[];
   activityLogs: ActivityLogView[];
   hasMoreActivityLogs: boolean;
@@ -120,8 +129,12 @@ export type StageView = {
   ownerOpenId: string;
   ownerName: string;
   dueAt: string | null;
+  extensionCount: number;
+  benignExtensionCount: number;
   currentSubmissionId: string | null;
   canSubmit: boolean;
+  canRequestExtension: boolean;
+  canRequestDueDateChange: boolean;
   submissions: StageSubmissionView[];
 };
 
@@ -148,7 +161,7 @@ export type TaskView = {
   id: string;
   title: string;
   goal: string;
-  category: TaskCategory;
+  taskTechGroups: string[];
   urgency: Urgency;
   importance: Importance;
   status: TaskStatus;
@@ -183,7 +196,7 @@ export type TaskCreationRequestView = {
     title: string;
     goal: string;
     stageName: string;
-    category: TaskCategory;
+    taskTechGroups: string[];
     urgency: Urgency;
     importance: Importance;
     assigneeNames: string;
@@ -194,6 +207,27 @@ export type TaskCreationRequestView = {
     acceptanceChecklistItems: Array<{ content: string }>;
     summary: string;
   } | null;
+};
+
+export type DdlChangeRequestView = {
+  id: string;
+  type: ProjectDdlChangeRequestType;
+  status: ProjectDdlChangeRequestStatus;
+  stageId: string;
+  stageName: string;
+  requesterOpenId: string;
+  requesterName: string;
+  reason: string;
+  oldDueAt: string | null;
+  newDueAt: string | null;
+  durationDays: number | null;
+  requestedIsBenign: boolean | null;
+  finalIsBenign: boolean | null;
+  reviewerName: string;
+  reviewComment: string;
+  reviewedAt: string | null;
+  createdAt: string;
+  canReview: boolean;
 };
 
 export type ActivityLogView = {
@@ -257,6 +291,17 @@ const activityFilters: Array<{ value: ActivityFilter; label: string }> = [
   { value: "TASK", label: "任务" },
   { value: "REVIEW", label: "审核" },
 ];
+
+const ddlChangeTypeLabels: Record<ProjectDdlChangeRequestType, string> = {
+  CASCADE_EXTENSION: "级联延期",
+  SINGLE_STAGE_ADJUSTMENT: "单阶段 DDL 修改",
+};
+
+const ddlChangeStatusLabels: Record<ProjectDdlChangeRequestStatus, string> = {
+  PENDING: "待审批",
+  APPROVED: "已通过",
+  REJECTED: "已驳回",
+};
 
 export function ProjectDetailWorkspace({
   project,
@@ -419,6 +464,8 @@ export function ProjectDetailWorkspace({
                 projectId={project.id}
                 projectStatus={project.status}
                 stage={selectedStage}
+                stages={project.stages}
+                ddlChangeRequests={project.ddlChangeRequests}
                 isCurrentStage={isViewingCurrentStage}
               />
               <StageTaskList
@@ -442,6 +489,7 @@ export function ProjectDetailWorkspace({
                   canManage={canManage}
                 />
               )}
+              <ProjectDdlChangeHistoryPanel requests={project.ddlChangeRequests} />
             </>
           ) : (
             <Card>
@@ -682,25 +730,7 @@ function ProjectOverview({
             )}
             {project.status === "IN_PROGRESS" && (
               completeDisabledReason ? (
-                <div className="flex max-w-52 flex-col gap-1">
-                  <span className="inline-flex" title={completeDisabledReason}>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled
-                      aria-describedby="project-complete-disabled-reason"
-                    >
-                      完成项目
-                    </Button>
-                  </span>
-                  <p
-                    id="project-complete-disabled-reason"
-                    className="text-xs text-muted-foreground"
-                  >
-                    {completeDisabledReason}
-                  </p>
-                </div>
+                <DisabledCompleteProjectButton reason={completeDisabledReason} />
               ) : (
                 <ReasonConfirmDialog
                   triggerLabel="完成项目"
@@ -735,6 +765,34 @@ function ProjectOverview({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function DisabledCompleteProjectButton({ reason }: { reason: string }) {
+  return (
+    <span
+      className="group relative inline-flex outline-none"
+      title={reason}
+      tabIndex={0}
+      aria-describedby="project-complete-disabled-reason"
+    >
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled
+        aria-describedby="project-complete-disabled-reason"
+      >
+        完成项目
+      </Button>
+      <span
+        id="project-complete-disabled-reason"
+        role="tooltip"
+        className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 w-max max-w-72 -translate-x-1/2 rounded-md border bg-popover px-3 py-2 text-xs leading-relaxed text-popover-foreground opacity-0 shadow-md transition-opacity group-hover:opacity-100 group-focus:opacity-100"
+      >
+        {reason}
+      </span>
+    </span>
   );
 }
 
@@ -848,7 +906,7 @@ function StageTimeline({
             <li key={stage.id} className="flex items-start">
               <button
                 type="button"
-                className="group flex w-32 flex-col items-center gap-2 rounded-md px-2 py-1 text-center outline-none transition hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+                className="group flex w-40 flex-col items-center gap-2 rounded-md px-2 py-1 text-center outline-none transition hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
                 onClick={() => onSelectStage(stage.id)}
               >
                 <span
@@ -887,6 +945,17 @@ function StageTimeline({
                     ? "需修改"
                     : stageStatusLabels[stage.status]}
                 </span>
+                <span className="max-w-full truncate text-[11px] text-muted-foreground">
+                  DDL {stage.dueAt ? formatDate(stage.dueAt) : "未设置"}
+                </span>
+                <span className="flex max-w-full flex-wrap justify-center gap-1">
+                  <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
+                    延期 {stage.extensionCount}
+                  </Badge>
+                  <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
+                    良性 {stage.benignExtensionCount}
+                  </Badge>
+                </span>
               </button>
               {!isLast && (
                 <div
@@ -908,11 +977,15 @@ function StageDetailPanel({
   projectId,
   projectStatus,
   stage,
+  stages,
+  ddlChangeRequests,
   isCurrentStage,
 }: {
   projectId: string;
   projectStatus: ProjectStatus;
   stage: StageView;
+  stages: StageView[];
+  ddlChangeRequests: DdlChangeRequestView[];
   isCurrentStage: boolean;
 }) {
   const router = useRouter();
@@ -924,6 +997,12 @@ function StageDetailPanel({
   const [comments, setComments] = useState<Record<string, string>>({});
   const pendingSubmission = stage.submissions.find(
     (submission) => submission.id === stage.currentSubmissionId,
+  );
+  const stageDdlRequests = ddlChangeRequests.filter(
+    (request) => request.stageId === stage.id,
+  );
+  const pendingDdlRequests = stageDdlRequests.filter(
+    (request) => request.status === "PENDING",
   );
   const latestApproval = getLatestApproval(stage);
   const canSubmit =
@@ -1000,17 +1079,36 @@ function StageDetailPanel({
             <div className="mt-2 flex flex-wrap gap-2">
               <StageBadge stage={stage} />
               <Badge variant="outline">负责人 {stage.ownerName || "未设置"}</Badge>
-              {stage.dueAt && (
-                <Badge variant="outline">DDL {formatDateTime(stage.dueAt)}</Badge>
-              )}
+              <Badge variant="outline">
+                <CalendarClock className="h-3 w-3" />
+                DDL {stage.dueAt ? formatDateTime(stage.dueAt) : "未设置"}
+              </Badge>
+              <Badge variant="outline">延期 {stage.extensionCount} 次</Badge>
+              <Badge variant="outline">良性 {stage.benignExtensionCount} 次</Badge>
             </div>
           </div>
-          {!isCurrentStage && (
-            <Badge variant="secondary">
-              <History className="h-3 w-3" />
-              历史/规划视图
-            </Badge>
-          )}
+          <div className="flex flex-wrap justify-end gap-2">
+            {stage.canRequestExtension && stage.dueAt && (
+              <ProjectStageExtensionDialog
+                projectId={projectId}
+                stage={stage}
+                stages={stages}
+              />
+            )}
+            {stage.canRequestDueDateChange && (
+              <ProjectStageDueDateChangeDialog
+                projectId={projectId}
+                stage={stage}
+                stages={stages}
+              />
+            )}
+            {!isCurrentStage && (
+              <Badge variant="secondary">
+                <History className="h-3 w-3" />
+                历史/规划视图
+              </Badge>
+            )}
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-5">
@@ -1020,6 +1118,10 @@ function StageDetailPanel({
             {stage.goal || "该阶段暂未配置详细目标。"}
           </p>
         </section>
+
+        {pendingDdlRequests.length > 0 && (
+          <PendingDdlChangeRequestPanel requests={pendingDdlRequests} />
+        )}
 
         <section>
           <h3 className="text-sm font-medium">阶段材料</h3>
@@ -1168,6 +1270,537 @@ function StageDetailPanel({
               ))}
             </div>
           </section>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ProjectStageExtensionDialog({
+  projectId,
+  stage,
+  stages,
+}: {
+  projectId: string;
+  stage: StageView;
+  stages: StageView[];
+}) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  const [durationDays, setDurationDays] = useState("");
+  const [isBenign, setIsBenign] = useState("true");
+  const [loading, setLoading] = useState(false);
+  const [errors, setErrors] = useState<{
+    reason?: string;
+    durationDays?: string;
+    ddlOrder?: string;
+  }>({});
+  const parsedDurationDays = Number.parseInt(durationDays, 10);
+  const durationIsValid =
+    Number.isInteger(parsedDurationDays) &&
+    parsedDurationDays >= 1 &&
+    parsedDurationDays <= 365;
+  const affectedStages = stages.filter(
+    (item) => item.sortOrder >= stage.sortOrder,
+  );
+  const ddlOrderError = durationIsValid
+    ? getStageDdlOrderError(
+        stages,
+        new Map(
+          affectedStages.map((item) => [
+            item.id,
+            item.dueAt ? addDaysToIso(item.dueAt, parsedDurationDays) : null,
+          ]),
+        ),
+      )
+    : "";
+
+  async function handleSubmit() {
+    const nextErrors: typeof errors = {};
+    if (!reason.trim()) nextErrors.reason = "请填写延期原因";
+    if (!durationIsValid) nextErrors.durationDays = "延期时长需为 1-365 天";
+    if (ddlOrderError) nextErrors.ddlOrder = ddlOrderError;
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) {
+      toast.error("请完善延期申请信息");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await requestProjectStageExtension({
+        projectId,
+        stageId: stage.id,
+        reason: reason.trim(),
+        durationDays: parsedDurationDays,
+        isBenign: isBenign === "true",
+      });
+      toast.success("延期申请已提交");
+      setOpen(false);
+      setReason("");
+      setDurationDays("");
+      setIsBenign("true");
+      setErrors({});
+      router.refresh();
+    } catch (err) {
+      toast.error(getActionErrorMessage(err, "提交延期申请失败"));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <>
+      <Button type="button" size="sm" variant="outline" onClick={() => setOpen(true)}>
+        申请延期
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[680px]">
+          <DialogHeader>
+            <DialogTitle>申请阶段延期</DialogTitle>
+            <DialogDescription>
+              通过后会顺延该阶段及后续阶段的 DDL。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4">
+            <div className="grid gap-2">
+              <Label htmlFor="stage-extension-stage">延期阶段</Label>
+              <Input id="stage-extension-stage" value={stage.name} readOnly />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="stage-extension-reason">延期原因</Label>
+              <Textarea
+                id="stage-extension-reason"
+                value={reason}
+                onChange={(event) => {
+                  setReason(event.target.value);
+                  if (errors.reason) setErrors((prev) => ({ ...prev, reason: "" }));
+                }}
+                className="min-h-24"
+                aria-invalid={!!errors.reason}
+              />
+              {errors.reason && (
+                <p className="text-sm text-destructive">{errors.reason}</p>
+              )}
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div className="grid gap-2">
+                <Label htmlFor="stage-extension-duration">延期时长（天）</Label>
+                <Input
+                  id="stage-extension-duration"
+                  type="number"
+                  min={1}
+                  max={365}
+                  value={durationDays}
+                  onChange={(event) => {
+                    setDurationDays(event.target.value);
+                    if (errors.durationDays) {
+                      setErrors((prev) => ({ ...prev, durationDays: "" }));
+                    }
+                    if (errors.ddlOrder) {
+                      setErrors((prev) => ({ ...prev, ddlOrder: "" }));
+                    }
+                  }}
+                  aria-invalid={!!errors.durationDays}
+                />
+                {errors.durationDays && (
+                  <p className="text-sm text-destructive">
+                    {errors.durationDays}
+                  </p>
+                )}
+              </div>
+              <div className="grid gap-2">
+                <Label>延期是否良性</Label>
+                <Select
+                  value={isBenign}
+                  onValueChange={(value) => setIsBenign(value ?? "false")}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="true">良性延期</SelectItem>
+                    <SelectItem value="false">非良性延期</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="rounded-md border bg-muted/30 p-3 text-sm">
+              <p className="font-medium">影响预览</p>
+              <div className="mt-2 space-y-1 text-muted-foreground">
+                {affectedStages.map((item) => (
+                  <p key={item.id}>
+                    {item.name}：{item.dueAt ? formatDateTime(item.dueAt) : "未设置"}{" "}
+                    {durationIsValid && item.dueAt
+                      ? `-> ${formatDateTime(addDaysToIso(item.dueAt, parsedDurationDays))}`
+                      : ""}
+                  </p>
+                ))}
+              </div>
+              {(errors.ddlOrder || ddlOrderError) && (
+                <p className="mt-2 text-sm text-destructive">
+                  {errors.ddlOrder || ddlOrderError}
+                </p>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={loading}
+              onClick={() => setOpen(false)}
+            >
+              取消
+            </Button>
+            <Button type="button" disabled={loading} onClick={handleSubmit}>
+              {loading ? "提交中..." : "提交延期申请"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+function ProjectStageDueDateChangeDialog({
+  projectId,
+  stage,
+  stages,
+}: {
+  projectId: string;
+  stage: StageView;
+  stages: StageView[];
+}) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [proposedDueAt, setProposedDueAt] = useState(
+    stage.dueAt ? formatDateTimeInputValue(stage.dueAt) : "",
+  );
+  const [reason, setReason] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [errors, setErrors] = useState<{ proposedDueAt?: string; reason?: string }>({});
+  const ddlOrderError = proposedDueAt
+    ? getStageDdlOrderError(stages, new Map([[stage.id, proposedDueAt]]))
+    : "";
+
+  async function handleSubmit() {
+    const nextErrors: typeof errors = {};
+    if (!proposedDueAt) nextErrors.proposedDueAt = "请选择新的阶段 DDL";
+    if (ddlOrderError) nextErrors.proposedDueAt = ddlOrderError;
+    if (!reason.trim()) nextErrors.reason = "请填写修改原因";
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) {
+      toast.error("请完善 DDL 修改申请信息");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await requestProjectStageDueDateChange({
+        projectId,
+        stageId: stage.id,
+        proposedDueAt,
+        reason: reason.trim(),
+      });
+      toast.success("DDL 修改申请已提交");
+      setOpen(false);
+      setReason("");
+      setErrors({});
+      router.refresh();
+    } catch (err) {
+      toast.error(getActionErrorMessage(err, "提交 DDL 修改申请失败"));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <>
+      <Button type="button" size="sm" variant="outline" onClick={() => setOpen(true)}>
+        申请修改 DDL
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>申请修改阶段 DDL</DialogTitle>
+            <DialogDescription>
+              该申请只修改当前阶段，不顺延后续阶段。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4">
+            <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
+              <p className="font-medium">{stage.name}</p>
+              <p className="mt-1 text-muted-foreground">
+                当前 DDL：{stage.dueAt ? formatDateTime(stage.dueAt) : "未设置"}
+              </p>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="stage-due-change-new">新的阶段 DDL</Label>
+              <Input
+                id="stage-due-change-new"
+                type="datetime-local"
+                value={proposedDueAt}
+                onChange={(event) => {
+                  setProposedDueAt(event.target.value);
+                  if (errors.proposedDueAt) {
+                    setErrors((prev) => ({ ...prev, proposedDueAt: "" }));
+                  }
+                }}
+                aria-invalid={!!errors.proposedDueAt}
+              />
+              {errors.proposedDueAt && (
+                <p className="text-sm text-destructive">
+                  {errors.proposedDueAt}
+                </p>
+              )}
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="stage-due-change-reason">修改原因</Label>
+              <Textarea
+                id="stage-due-change-reason"
+                value={reason}
+                onChange={(event) => {
+                  setReason(event.target.value);
+                  if (errors.reason) setErrors((prev) => ({ ...prev, reason: "" }));
+                }}
+                className="min-h-24"
+                aria-invalid={!!errors.reason}
+              />
+              {errors.reason && (
+                <p className="text-sm text-destructive">{errors.reason}</p>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={loading}
+              onClick={() => setOpen(false)}
+            >
+              取消
+            </Button>
+            <Button type="button" disabled={loading} onClick={handleSubmit}>
+              {loading ? "提交中..." : "提交修改申请"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+function PendingDdlChangeRequestPanel({
+  requests,
+}: {
+  requests: DdlChangeRequestView[];
+}) {
+  return (
+    <section className="rounded-md border bg-orange-50/50 p-4">
+      <h3 className="text-sm font-medium">待审批 DDL 变更</h3>
+      <div className="mt-3 space-y-3">
+        {requests.map((request) => (
+          <PendingDdlChangeRequestCard key={request.id} request={request} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function PendingDdlChangeRequestCard({
+  request,
+}: {
+  request: DdlChangeRequestView;
+}) {
+  const router = useRouter();
+  const [comment, setComment] = useState("");
+  const [finalIsBenign, setFinalIsBenign] = useState(
+    request.requestedIsBenign ? "true" : "false",
+  );
+  const [loadingDecision, setLoadingDecision] =
+    useState<ProjectDdlChangeRequestStatus | null>(null);
+  const [commentError, setCommentError] = useState("");
+
+  async function handleReview(decision: "APPROVED" | "REJECTED") {
+    if (!comment.trim()) {
+      setCommentError("请填写审批意见");
+      toast.error("请填写审批意见");
+      return;
+    }
+    setLoadingDecision(decision);
+    try {
+      if (request.type === "CASCADE_EXTENSION") {
+        await reviewProjectStageExtensionRequest({
+          requestId: request.id,
+          decision,
+          comment: comment.trim(),
+          finalIsBenign: finalIsBenign === "true",
+        });
+      } else {
+        await reviewProjectStageDueDateChangeRequest({
+          requestId: request.id,
+          decision,
+          comment: comment.trim(),
+        });
+      }
+      toast.success(decision === "APPROVED" ? "DDL 变更已通过" : "DDL 变更已驳回");
+      router.refresh();
+    } catch (err) {
+      toast.error(getActionErrorMessage(err, "审核 DDL 变更失败"));
+    } finally {
+      setLoadingDecision(null);
+    }
+  }
+
+  return (
+    <div className="rounded-md border bg-background p-3 text-sm">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="font-medium">{ddlChangeTypeLabels[request.type]}</p>
+          <p className="mt-1 text-muted-foreground">
+            申请人：{request.requesterName} · {formatDateTime(request.createdAt)}
+          </p>
+        </div>
+        <Badge variant="secondary">{ddlChangeStatusLabels[request.status]}</Badge>
+      </div>
+      <div className="mt-2 grid gap-2 text-muted-foreground sm:grid-cols-2">
+        <p>原 DDL：{formatNullableDateTime(request.oldDueAt)}</p>
+        <p>新 DDL：{formatNullableDateTime(request.newDueAt)}</p>
+        {request.durationDays ? <p>延期：{request.durationDays} 天</p> : null}
+        {request.requestedIsBenign !== null ? (
+          <p>申请良性：{request.requestedIsBenign ? "是" : "否"}</p>
+        ) : null}
+      </div>
+      <p className="mt-2 rounded-md bg-muted px-3 py-2 text-muted-foreground">
+        原因：{request.reason}
+      </p>
+      {request.canReview ? (
+        <div className="mt-3 grid gap-2">
+          {request.type === "CASCADE_EXTENSION" && (
+            <div className="grid gap-2 sm:max-w-48">
+              <Label>最终是否良性</Label>
+              <Select
+                value={finalIsBenign}
+                onValueChange={(value) => setFinalIsBenign(value ?? "false")}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="true">良性延期</SelectItem>
+                  <SelectItem value="false">非良性延期</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          <Textarea
+            value={comment}
+            onChange={(event) => {
+              setComment(event.target.value);
+              if (commentError) setCommentError("");
+            }}
+            placeholder="审批意见（通过和驳回都必填）"
+            className="min-h-20"
+            aria-invalid={!!commentError}
+          />
+          {commentError && (
+            <p className="text-sm text-destructive">{commentError}</p>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              size="sm"
+              disabled={loadingDecision !== null}
+              onClick={() => handleReview("APPROVED")}
+            >
+              通过
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={loadingDecision !== null}
+              onClick={() => handleReview("REJECTED")}
+            >
+              驳回
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <p className="mt-3 text-xs text-muted-foreground">等待有权限人员审批。</p>
+      )}
+    </div>
+  );
+}
+
+function ProjectDdlChangeHistoryPanel({
+  requests,
+}: {
+  requests: DdlChangeRequestView[];
+}) {
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle>DDL 变动历史</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {requests.length === 0 ? (
+          <p className="rounded-md border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
+            暂无 DDL 变动记录。
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {requests.map((request) => (
+              <div key={request.id} className="rounded-md border p-3 text-sm">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-medium">
+                      {request.stageName} · {ddlChangeTypeLabels[request.type]}
+                    </p>
+                    <p className="mt-1 text-muted-foreground">
+                      {request.requesterName} · {formatDateTime(request.createdAt)}
+                    </p>
+                  </div>
+                  <Badge
+                    variant={
+                      request.status === "APPROVED"
+                        ? "default"
+                        : request.status === "REJECTED"
+                          ? "destructive"
+                          : "secondary"
+                    }
+                  >
+                    {ddlChangeStatusLabels[request.status]}
+                  </Badge>
+                </div>
+                <div className="mt-2 grid gap-2 text-muted-foreground sm:grid-cols-2 lg:grid-cols-4">
+                  <p>原 DDL：{formatNullableDateTime(request.oldDueAt)}</p>
+                  <p>新 DDL：{formatNullableDateTime(request.newDueAt)}</p>
+                  <p>
+                    延期：
+                    {request.durationDays ? `${request.durationDays} 天` : "不适用"}
+                  </p>
+                  <p>
+                    良性：
+                    {formatBenignFlag(
+                      request.finalIsBenign,
+                      request.requestedIsBenign,
+                    )}
+                  </p>
+                </div>
+                <p className="mt-2 text-muted-foreground">原因：{request.reason}</p>
+                {request.reviewedAt && (
+                  <p className="mt-1 text-muted-foreground">
+                    审批：{request.reviewerName || "未知"} ·{" "}
+                    {formatDateTime(request.reviewedAt)}
+                    {request.reviewComment ? ` · ${request.reviewComment}` : ""}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
         )}
       </CardContent>
     </Card>
@@ -1594,7 +2227,11 @@ function TaskMobileCard({ task, canStart }: { task: TaskView; canStart: boolean 
         {formatDate(task.dueAt)}
       </p>
       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        <Badge variant="outline">{taskCategoryLabels[task.category]}</Badge>
+        {task.taskTechGroups.map((group) => (
+          <Badge key={group} variant="outline">
+            {group}
+          </Badge>
+        ))}
         <Badge variant="secondary">
           {urgencyLabels[task.urgency]} / {importanceLabels[task.importance]}
         </Badge>
@@ -1654,8 +2291,12 @@ function TaskCreationRequestDetailDialog({
               <RequestDetailItem label="所属阶段" value={draft.stageName} />
               <RequestDetailItem label="负责人" value={draft.assigneeNames} />
               <RequestDetailItem
-                label="任务类别"
-                value={taskCategoryLabels[draft.category] ?? "未填写"}
+                label="任务技术组"
+                value={
+                  draft.taskTechGroups.length > 0
+                    ? draft.taskTechGroups.join("、")
+                    : "未填写"
+                }
               />
               <RequestDetailItem
                 label="优先级"
@@ -1981,6 +2622,16 @@ function ActivityChangeList({ payload }: { payload: Record<string, unknown> }) {
   const fromProjectStatus = getPayloadString(payload.fromProjectStatus);
   const toProjectStatus = getPayloadString(payload.toProjectStatus);
   const fromStageName = getPayloadString(payload.fromStageName);
+  const oldDueAt = getPayloadString(payload.oldDueAt);
+  const newDueAt = getPayloadString(payload.newDueAt);
+  const durationDays =
+    typeof payload.durationDays === "number" ? payload.durationDays : null;
+  const finalIsBenign =
+    typeof payload.finalIsBenign === "boolean" ? payload.finalIsBenign : null;
+  const requestedIsBenign =
+    typeof payload.requestedIsBenign === "boolean"
+      ? payload.requestedIsBenign
+      : null;
   const projectStatusChange =
     fromProjectStatus &&
     toProjectStatus &&
@@ -1993,12 +2644,24 @@ function ActivityChangeList({ payload }: { payload: Record<string, unknown> }) {
     !reason &&
     !reviewComment &&
     !projectStatusChange &&
-    !fromStageName
+    !fromStageName &&
+    !oldDueAt &&
+    !newDueAt &&
+    durationDays === null &&
+    finalIsBenign === null &&
+    requestedIsBenign === null
   ) return null;
   return (
     <ul className="mt-2 space-y-1 rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
       {projectStatusChange && <li>{projectStatusChange}</li>}
       {fromStageName && <li>原阶段：{fromStageName}</li>}
+      {oldDueAt && <li>原 DDL：{formatNullableDateTime(oldDueAt)}</li>}
+      {newDueAt && <li>新 DDL：{formatNullableDateTime(newDueAt)}</li>}
+      {durationDays !== null && <li>延期时长：{durationDays} 天</li>}
+      {requestedIsBenign !== null && (
+        <li>申请良性：{requestedIsBenign ? "是" : "否"}</li>
+      )}
+      {finalIsBenign !== null && <li>最终良性：{finalIsBenign ? "是" : "否"}</li>}
       {changes.map((change, index) => (
         <li key={`${change}-${index}`}>{change}</li>
       ))}
@@ -2159,10 +2822,11 @@ function getProjectCompleteDisabledReason({
   unfinishedTaskCount: number;
 }): string | null {
   if (loadingStatus !== null) return "正在处理，请稍候";
-  if (stageCount === 0) return "请先配置并完成项目阶段";
-  if (!allStagesCompleted) return `还有 ${unfinishedStageCount} 个阶段未完成`;
-  if (unfinishedTaskCount > 0) {
-    return `还有 ${unfinishedTaskCount} 个任务未完成`;
+  if (stageCount === 0) {
+    return `请先配置项目阶段；还有 ${unfinishedStageCount} 个阶段未完成，${unfinishedTaskCount} 个任务未完成`;
+  }
+  if (!allStagesCompleted || unfinishedTaskCount > 0) {
+    return `还有 ${unfinishedStageCount} 个阶段未完成，${unfinishedTaskCount} 个任务未完成`;
   }
   return null;
 }
@@ -2219,6 +2883,12 @@ function activityLabel(action: string): string {
     "project.updated": "更新了项目信息",
     "project.status_changed": "更新了项目状态",
     "project.stage_rollback": "回退了项目流程",
+    "project.ddl_extension_requested": "申请了阶段延期",
+    "project.ddl_extension_approved": "通过了阶段延期申请",
+    "project.ddl_extension_rejected": "驳回了阶段延期申请",
+    "project.stage_due_change_requested": "申请修改阶段 DDL",
+    "project.stage_due_change_approved": "通过了阶段 DDL 修改",
+    "project.stage_due_change_rejected": "驳回了阶段 DDL 修改",
     "project.reminded": "发送了项目催促提醒",
     "stage.evidence_submitted": "提交了阶段材料",
     "stage.approved": "通过了阶段审核",
@@ -2305,16 +2975,73 @@ function getProjectRollbackPreview(
 }
 
 function formatDate(value: string): string {
-  return new Date(value).toLocaleDateString("zh-CN");
+  return new Date(value).toLocaleDateString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
 }
 
 function formatDateTime(value: string): string {
   return new Date(value).toLocaleString("zh-CN", {
+    year: "numeric",
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function formatNullableDateTime(value: string | null): string {
+  return value ? formatDateTime(value) : "未设置";
+}
+
+function formatBenignFlag(
+  finalIsBenign: boolean | null,
+  requestedIsBenign: boolean | null,
+): string {
+  const value = finalIsBenign ?? requestedIsBenign;
+  if (value === null) return "不适用";
+  return value ? "是" : "否";
+}
+
+function formatDateTimeInputValue(value: string): string {
+  const date = new Date(value);
+  date.setMinutes(date.getMinutes() - date.getTimezoneOffset());
+  return date.toISOString().slice(0, 16);
+}
+
+function addDaysToIso(value: string, days: number): string {
+  const date = new Date(value);
+  date.setDate(date.getDate() + days);
+  return date.toISOString();
+}
+
+function getStageDdlOrderError(
+  stages: StageView[],
+  dueAtOverrides: Map<string, string | null>,
+): string {
+  const sortedStages = [...stages].sort((a, b) => a.sortOrder - b.sortOrder);
+  let previous: { name: string; dueAt: Date } | null = null;
+
+  for (const stage of sortedStages) {
+    const dueAtValue = dueAtOverrides.has(stage.id)
+      ? dueAtOverrides.get(stage.id) ?? null
+      : stage.dueAt;
+    if (!dueAtValue) {
+      return `阶段「${stage.name}」未设置 DDL，无法提交 DDL 变更申请`;
+    }
+    const dueAt = new Date(dueAtValue);
+    if (Number.isNaN(dueAt.getTime())) {
+      return `阶段「${stage.name}」DDL 无效`;
+    }
+    if (previous && previous.dueAt.getTime() > dueAt.getTime()) {
+      return `阶段 DDL 必须按流程非严格递增：「${previous.name}」不能晚于「${stage.name}」`;
+    }
+    previous = { name: stage.name, dueAt };
+  }
+
+  return "";
 }
 
 function validateRequiredUrl(

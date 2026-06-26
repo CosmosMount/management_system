@@ -3,8 +3,8 @@
 import { auth } from "@/lib/auth";
 import { logProgressActivity, requireSessionUser } from "@/lib/progress-activity";
 import {
-  canManageProject,
-  canSubmitWeeklyReport,
+  canSyncTaskRisk,
+  canSubmitTaskWeeklyReport,
 } from "@/lib/permissions-progress";
 import { prisma } from "@/lib/prisma";
 import {
@@ -14,19 +14,17 @@ import {
 import { assertProjectActive } from "@/lib/progress-guards";
 import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
+import { collectTaskNotificationRecipients } from "@/lib/progress-task-notifications";
+import { getTaskTechGroups } from "@/lib/progress-task-tech-groups";
+import { getWeekStart } from "@/lib/progress-weekly";
 import { getNotificationContext } from "@/lib/request-origin";
 import { revalidateProgress } from "@/lib/revalidate";
 import { getUserRoles } from "@/lib/permissions";
-import { riskSyncSchema, submitWeeklyReportSchema } from "@/lib/validations/progress";
-
-function getWeekStart(date = new Date()): Date {
-  const d = new Date(date);
-  const day = d.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  d.setDate(d.getDate() + diff);
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
+import {
+  riskSyncSchema,
+  submitWeeklyReportSchema,
+  taskRiskResolveSchema,
+} from "@/lib/validations/progress";
 
 export async function submitWeeklyReport(input: {
   taskId: string;
@@ -46,9 +44,13 @@ export async function submitWeeklyReport(input: {
       project: {
         include: {
           owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+          participants: {
+            orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+          },
         },
       },
       assignees: true,
+      techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
     },
   });
   if (!task) throw new Error("任务不存在");
@@ -63,22 +65,22 @@ export async function submitWeeklyReport(input: {
   }
   if (!task.needsWeeklyReport) throw new Error("该任务当前未要求提交周报");
 
-  const canSubmitAsAssignee = canSubmitWeeklyReport(
-    user.openId,
-    getTaskAssigneeOpenIds(task),
-  );
-  const canSubmitAsManager =
-    canManageProject(
+  if (
+    !canSubmitTaskWeeklyReport({
       roles,
-      { team: task.team, techGroup: task.techGroup },
-      getProjectOwnerOpenIds(task.project),
-      user.openId,
-    );
-  if (!canSubmitAsAssignee && !canSubmitAsManager) {
-    throw new Error("仅任务负责人或任务管理者可提交必填周报");
+      scope: { team: task.team, techGroup: task.techGroup },
+      projectOwnerOpenIds: getProjectOwnerOpenIds(task.project),
+      taskAssigneeOpenIds: getTaskAssigneeOpenIds(task),
+      taskTechGroups: getTaskTechGroups(task),
+      userOpenId: user.openId,
+    })
+  ) {
+    throw new Error("无周报提交权限");
   }
 
   const weekStart = getWeekStart();
+  const riskContent = parsed.risks?.trim();
+  const riskUpdatedAt = new Date();
 
   const report = await prisma.$transaction(async (tx) => {
     const liveTask = await tx.task.updateMany({
@@ -95,11 +97,11 @@ export async function submitWeeklyReport(input: {
       throw new Error("任务状态已更新，请刷新后重试");
     }
 
-    return tx.weeklyReport.upsert({
+    const savedReport = await tx.weeklyReport.upsert({
       where: { taskId_weekStart: { taskId: task.id, weekStart } },
       update: {
         progress: parsed.progress,
-        risks: parsed.risks ?? "",
+        risks: "",
         nextPlan: parsed.nextPlan ?? "",
         feishuDocUrl: parsed.feishuDocUrl ?? "",
         submittedAt: new Date(),
@@ -110,13 +112,32 @@ export async function submitWeeklyReport(input: {
         taskId: task.id,
         weekStart,
         progress: parsed.progress,
-        risks: parsed.risks ?? "",
+        risks: "",
         nextPlan: parsed.nextPlan ?? "",
         feishuDocUrl: parsed.feishuDocUrl ?? "",
         submittedBy: user.openId,
         submitterName: user.name,
       },
     });
+
+    if (riskContent) {
+      await tx.taskRiskRecord.create({
+        data: {
+          taskId: task.id,
+          content: riskContent,
+          source: "WEEKLY",
+          status: "ACTIVE",
+          createdByOpenId: user.openId,
+          createdByName: user.name,
+        },
+      });
+      await tx.task.update({
+        where: { id: task.id },
+        data: { riskNote: riskContent, riskUpdatedAt },
+      });
+    }
+
+    return savedReport;
   });
 
   await logProgressActivity({
@@ -127,14 +148,50 @@ export async function submitWeeklyReport(input: {
     actorName: user.name,
   });
 
+  if (riskContent) {
+    await logProgressActivity({
+      projectId: task.projectId,
+      taskId: task.id,
+      action: "task.risk_synced",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      payload: { riskNote: riskContent, source: "WEEKLY" },
+    });
+
+    await enqueueProgressNotification(
+      `progress:task_risk_synced:${task.id}:${riskUpdatedAt.toISOString()}`,
+      {
+        type: "task_risk_synced",
+        taskId: task.id,
+        taskTitle: task.title,
+        projectName: task.project.name,
+        team: task.team,
+        techGroup: task.techGroup,
+        assigneeOpenIds: getTaskAssigneeOpenIds(task),
+        projectOwnerOpenIds: getProjectOwnerOpenIds(task.project),
+        riskNote: riskContent,
+        recipientOpenIds: await collectTaskNotificationRecipients(task),
+      },
+      await getNotificationContext(),
+    );
+    drainNotificationOutboxSoon();
+  }
+
   revalidateProgress(task.projectId, task.id);
   return report;
 }
 
-export async function syncTaskRisk(input: { taskId: string; riskNote: string }) {
+export async function syncTaskRisk(input: {
+  taskId: string;
+  content?: string;
+  riskNote?: string;
+}) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
-  const parsed = riskSyncSchema.parse(input);
+  const parsed = riskSyncSchema.parse({
+    taskId: input.taskId,
+    content: "content" in input ? input.content : input.riskNote,
+  });
 
   const task = await prisma.task.findUnique({
     where: { id: parsed.taskId },
@@ -142,9 +199,13 @@ export async function syncTaskRisk(input: { taskId: string; riskNote: string }) 
       project: {
         include: {
           owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+          participants: {
+            orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+          },
         },
       },
       assignees: true,
+      techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
     },
   });
   if (!task) throw new Error("任务不存在");
@@ -157,24 +218,46 @@ export async function syncTaskRisk(input: { taskId: string; riskNote: string }) 
   ) {
     throw new Error("已结束任务不能同步风险");
   }
-  if (!canSubmitWeeklyReport(user.openId, getTaskAssigneeOpenIds(task))) {
-    throw new Error("仅任务负责人可同步风险");
+  const roles = await getUserRoles(user.openId);
+  if (
+    !canSyncTaskRisk({
+      roles,
+      scope: { team: task.team, techGroup: task.techGroup },
+      projectOwnerOpenIds: getProjectOwnerOpenIds(task.project),
+      taskAssigneeOpenIds: getTaskAssigneeOpenIds(task),
+      taskTechGroups: getTaskTechGroups(task),
+      userOpenId: user.openId,
+    })
+  ) {
+    throw new Error("无风险同步权限");
   }
 
   const riskUpdatedAt = new Date();
-  const locked = await prisma.task.updateMany({
-    where: {
-      id: task.id,
-      deletedAt: null,
-      status: { notIn: ["COMPLETED", "ARCHIVED", "PROJECT_CANCELED"] },
-      project: { status: { notIn: ["COMPLETED", "CANCELED"] } },
-    },
-    data: { riskNote: parsed.riskNote, riskUpdatedAt },
+  const updated = await prisma.$transaction(async (tx) => {
+    const locked = await tx.task.updateMany({
+      where: {
+        id: task.id,
+        deletedAt: null,
+        status: { notIn: ["COMPLETED", "ARCHIVED", "PROJECT_CANCELED"] },
+        project: { status: { notIn: ["COMPLETED", "CANCELED"] } },
+      },
+      data: { riskNote: parsed.content, riskUpdatedAt },
+    });
+    if (locked.count !== 1) {
+      throw new Error("任务状态已更新，请刷新后重试");
+    }
+    await tx.taskRiskRecord.create({
+      data: {
+        taskId: task.id,
+        content: parsed.content,
+        source: "MANUAL",
+        status: "ACTIVE",
+        createdByOpenId: user.openId,
+        createdByName: user.name,
+      },
+    });
+    return tx.task.findUniqueOrThrow({ where: { id: task.id } });
   });
-  if (locked.count !== 1) {
-    throw new Error("任务状态已更新，请刷新后重试");
-  }
-  const updated = await prisma.task.findUniqueOrThrow({ where: { id: task.id } });
 
   await logProgressActivity({
     projectId: task.projectId,
@@ -182,9 +265,10 @@ export async function syncTaskRisk(input: { taskId: string; riskNote: string }) 
     action: "task.risk_synced",
     actorOpenId: user.openId,
     actorName: user.name,
-    payload: { riskNote: parsed.riskNote },
+    payload: { riskNote: parsed.content },
   });
 
+  const recipientOpenIds = await collectTaskNotificationRecipients(task);
   await enqueueProgressNotification(
     `progress:task_risk_synced:${task.id}:${updated.riskUpdatedAt?.toISOString() ?? updated.updatedAt.toISOString()}`,
     {
@@ -196,7 +280,8 @@ export async function syncTaskRisk(input: { taskId: string; riskNote: string }) 
       techGroup: task.techGroup,
       assigneeOpenIds: getTaskAssigneeOpenIds(task),
       projectOwnerOpenIds: getProjectOwnerOpenIds(task.project),
-      riskNote: parsed.riskNote,
+      riskNote: parsed.content,
+      recipientOpenIds,
     },
     await getNotificationContext(),
   );
@@ -204,4 +289,122 @@ export async function syncTaskRisk(input: { taskId: string; riskNote: string }) 
 
   revalidateProgress(task.projectId, task.id);
   return updated;
+}
+
+export async function resolveTaskRisk(input: {
+  riskId: string;
+  resolveNote: string;
+}) {
+  const session = await auth();
+  const user = await requireSessionUser(session?.user?.openId);
+  const roles = await getUserRoles(user.openId);
+  const parsed = taskRiskResolveSchema.parse(input);
+
+  const risk = await prisma.taskRiskRecord.findUnique({
+    where: { id: parsed.riskId },
+    include: {
+      task: {
+        include: {
+          project: {
+            include: {
+              owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+              participants: {
+                orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+              },
+            },
+          },
+          assignees: true,
+          techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        },
+      },
+    },
+  });
+  if (!risk) throw new Error("风险记录不存在");
+  if (risk.status !== "ACTIVE") throw new Error("该风险已解除");
+  const task = risk.task;
+  if (task.deletedAt) throw new Error("任务已删除");
+  assertProjectActive(task.project.status);
+  if (
+    task.status === "ARCHIVED" ||
+    task.status === "COMPLETED" ||
+    task.status === "PROJECT_CANCELED"
+  ) {
+    throw new Error("已结束任务不能解除风险");
+  }
+  if (
+    !canSyncTaskRisk({
+      roles,
+      scope: { team: task.team, techGroup: task.techGroup },
+      projectOwnerOpenIds: getProjectOwnerOpenIds(task.project),
+      taskAssigneeOpenIds: getTaskAssigneeOpenIds(task),
+      taskTechGroups: getTaskTechGroups(task),
+      userOpenId: user.openId,
+    })
+  ) {
+    throw new Error("无风险解除权限");
+  }
+
+  const resolvedAt = new Date();
+  await prisma.$transaction(async (tx) => {
+    const locked = await tx.taskRiskRecord.updateMany({
+      where: { id: risk.id, status: "ACTIVE" },
+      data: {
+        status: "RESOLVED",
+        resolvedByOpenId: user.openId,
+        resolvedByName: user.name,
+        resolveNote: parsed.resolveNote,
+        resolvedAt,
+      },
+    });
+    if (locked.count !== 1) throw new Error("风险状态已更新，请刷新后重试");
+
+    const latestActive = await tx.taskRiskRecord.findFirst({
+      where: { taskId: task.id, status: "ACTIVE" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      select: { content: true },
+    });
+    const updatedTask = await tx.task.updateMany({
+      where: {
+        id: task.id,
+        deletedAt: null,
+        status: { notIn: ["COMPLETED", "ARCHIVED", "PROJECT_CANCELED"] },
+        project: { status: { notIn: ["COMPLETED", "CANCELED"] } },
+      },
+      data: {
+        riskNote: latestActive?.content ?? "",
+        riskUpdatedAt: resolvedAt,
+      },
+    });
+    if (updatedTask.count !== 1) {
+      throw new Error("任务状态已更新，请刷新后重试");
+    }
+  });
+
+  await logProgressActivity({
+    projectId: task.projectId,
+    taskId: task.id,
+    action: "task.risk_resolved",
+    actorOpenId: user.openId,
+    actorName: user.name,
+    payload: { riskId: risk.id, riskNote: risk.content, resolveNote: parsed.resolveNote },
+  });
+
+  await enqueueProgressNotification(
+    `progress:task_risk_resolved:${risk.id}:${resolvedAt.toISOString()}`,
+    {
+      type: "task_risk_resolved",
+      taskId: task.id,
+      taskTitle: task.title,
+      projectName: task.project.name,
+      riskNote: risk.content,
+      resolveNote: parsed.resolveNote,
+      resolverName: user.name,
+      recipientOpenIds: await collectTaskNotificationRecipients(task),
+    },
+    await getNotificationContext(),
+  );
+  drainNotificationOutboxSoon();
+
+  revalidateProgress(task.projectId, task.id);
+  return { success: true };
 }

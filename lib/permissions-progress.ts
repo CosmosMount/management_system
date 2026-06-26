@@ -29,6 +29,17 @@ export function isTechGroupLead(
   );
 }
 
+export function isAnyTechGroupLead(
+  roles: UserRoleRecord[],
+  techGroups: string[],
+): boolean {
+  const groupSet = new Set(techGroups.filter(Boolean));
+  if (groupSet.size === 0) return false;
+  return roles.some(
+    (r) => r.role === "TECH_GROUP_ADMIN" && groupSet.has(r.techGroup),
+  );
+}
+
 export function isAssignee(
   userOpenId: string | undefined,
   assigneeOpenIds: string | string[],
@@ -204,6 +215,61 @@ export function canRequestTaskDeletion({
   return false;
 }
 
+export function canRequestProjectStageExtension(
+  ownerOpenIds: string | string[],
+  userOpenId?: string,
+): boolean {
+  return isAssignee(userOpenId, ownerOpenIds);
+}
+
+export function canReviewProjectStageExtension(
+  roles: UserRoleRecord[],
+  requesterOpenId: string,
+  userOpenId?: string,
+): boolean {
+  if (!userOpenId || userOpenId === requesterOpenId) return false;
+  return isProgressSuperAdmin(roles) || isProjectManager(roles);
+}
+
+export function canRequestProjectStageDueDateChange({
+  roles,
+  scope,
+  ownerOpenIds,
+  participantOpenIds,
+  stageOwnerOpenId,
+  userOpenId,
+}: {
+  roles: UserRoleRecord[];
+  scope: ProgressScope;
+  ownerOpenIds: string | string[];
+  participantOpenIds: string | string[];
+  stageOwnerOpenId?: string | null;
+  userOpenId?: string;
+}): boolean {
+  if (!userOpenId) return false;
+  if (canManageProject(roles, scope, ownerOpenIds, userOpenId)) return true;
+  if (isAssignee(userOpenId, participantOpenIds)) return true;
+  if (stageOwnerOpenId && userOpenId === stageOwnerOpenId) return true;
+  return false;
+}
+
+export function canReviewProjectStageDueDateChange({
+  roles,
+  ownerOpenIds,
+  requesterOpenId,
+  userOpenId,
+}: {
+  roles: UserRoleRecord[];
+  ownerOpenIds: string | string[];
+  requesterOpenId: string;
+  userOpenId?: string;
+}): boolean {
+  if (!userOpenId || userOpenId === requesterOpenId) return false;
+  if (isProgressSuperAdmin(roles) || isProjectManager(roles)) return true;
+  if (isAssignee(requesterOpenId, ownerOpenIds)) return false;
+  return isAssignee(userOpenId, ownerOpenIds);
+}
+
 export function canUpdateProjectLifecycle(
   roles: UserRoleRecord[],
   scope: ProgressScope,
@@ -308,4 +374,80 @@ export function canSubmitWeeklyReport(
   assigneeOpenIds: string | string[],
 ): boolean {
   return isAssignee(userOpenId, assigneeOpenIds);
+}
+
+export function canSubmitTaskWeeklyReport({
+  roles,
+  scope,
+  projectOwnerOpenIds,
+  taskAssigneeOpenIds,
+  taskTechGroups,
+  userOpenId,
+}: {
+  roles: UserRoleRecord[];
+  scope: ProgressScope;
+  projectOwnerOpenIds: string | string[];
+  taskAssigneeOpenIds: string | string[];
+  taskTechGroups: string[];
+  userOpenId?: string;
+}): boolean {
+  if (!userOpenId) return false;
+  if (isProgressSuperAdmin(roles)) return true;
+  if (isProjectManager(roles)) return true;
+  if (isTeamLead(roles, scope.team)) return true;
+  if (isTechGroupLead(roles, scope.techGroup)) return true;
+  if (isAnyTechGroupLead(roles, taskTechGroups)) return true;
+  if (isAssignee(userOpenId, projectOwnerOpenIds)) return true;
+  if (isAssignee(userOpenId, taskAssigneeOpenIds)) return true;
+  return false;
+}
+
+export function canSyncTaskRisk(input: {
+  roles: UserRoleRecord[];
+  scope: ProgressScope;
+  projectOwnerOpenIds: string | string[];
+  taskAssigneeOpenIds: string | string[];
+  taskTechGroups: string[];
+  userOpenId?: string;
+}): boolean {
+  return canSubmitTaskWeeklyReport(input);
+}
+
+export function canRequestTaskDdlChange({
+  projectOwnerOpenIds,
+  taskAssigneeOpenIds,
+  userOpenId,
+}: {
+  projectOwnerOpenIds: string | string[];
+  taskAssigneeOpenIds: string | string[];
+  userOpenId?: string;
+}): boolean {
+  if (!userOpenId) return false;
+  return (
+    isAssignee(userOpenId, projectOwnerOpenIds) ||
+    isAssignee(userOpenId, taskAssigneeOpenIds)
+  );
+}
+
+export function canReviewTaskDdlChange({
+  roles,
+  scope,
+  projectOwnerOpenIds,
+  taskTechGroups,
+  userOpenId,
+}: {
+  roles: UserRoleRecord[];
+  scope: ProgressScope;
+  projectOwnerOpenIds: string | string[];
+  taskTechGroups: string[];
+  userOpenId?: string;
+}): boolean {
+  if (!userOpenId) return false;
+  if (isProgressSuperAdmin(roles)) return true;
+  if (isProjectManager(roles)) return true;
+  if (isTeamLead(roles, scope.team)) return true;
+  if (isTechGroupLead(roles, scope.techGroup)) return true;
+  if (isAnyTechGroupLead(roles, taskTechGroups)) return true;
+  if (isAssignee(userOpenId, projectOwnerOpenIds)) return true;
+  return false;
 }

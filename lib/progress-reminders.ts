@@ -13,10 +13,12 @@ import { enqueueProgressNotification } from "@/lib/notification-outbox";
 import { getOpenIdsByRole } from "@/lib/permissions";
 import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
+import { getTaskTechGroups } from "@/lib/progress-task-tech-groups";
 import {
   DEFAULT_STAGE_DUE_SOON_DAYS,
   getStageDeadlineState,
 } from "@/lib/progress-stage-deadline";
+import { getWeekStart } from "@/lib/progress-weekly";
 import { prisma } from "@/lib/prisma";
 import { routes } from "@/lib/routes";
 import type { NotificationContext } from "@/lib/app-origin";
@@ -393,8 +395,10 @@ export async function sendManualTaskReminder({
       project: {
         include: {
           owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+          participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
         },
       },
+      techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
     },
   });
   if (!task || task.deletedAt) throw new Error("任务不存在");
@@ -731,9 +735,10 @@ async function enqueueStageReminders(
 }
 
 type ReminderTask = Task & {
-  project: Project & { owners: ProjectOwner[] };
+  project: Project & { owners: ProjectOwner[]; participants: ProjectParticipant[] };
   stage: ProjectStage | null;
   assignees: TaskAssignee[];
+  techGroups: Array<{ techGroup: string; sortOrder: number }>;
   submissions?: TaskSubmission[];
   weeklyReports?: Array<{ id: string }>;
   activityLogs?: Array<{ createdAt: Date }>;
@@ -753,10 +758,12 @@ async function findReminderTasks(
       project: {
         include: {
           owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+          participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
         },
       },
       stage: true,
       assignees: true,
+      techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       ...extraInclude,
     },
     orderBy: [{ dueAt: "asc" }, { createdAt: "asc" }],
@@ -867,9 +874,10 @@ async function enqueueReminder({
 
 async function collectTaskRecipientOpenIds(
   task: Task & {
-    project: Project & { owners: ProjectOwner[] };
+    project: Project & { owners: ProjectOwner[]; participants?: ProjectParticipant[] };
     stage?: ProjectStage | null;
     assignees: TaskAssignee[];
+    techGroups?: Array<{ techGroup: string; sortOrder?: number }>;
   },
   config: ReminderRecipientConfig,
 ): Promise<string[]> {
@@ -880,6 +888,9 @@ async function collectTaskRecipientOpenIds(
   if (config.projectOwners) {
     openIds.push(...getProjectOwnerOpenIds(task.project));
   }
+  if (config.projectParticipants) {
+    openIds.push(...(task.project.participants ?? []).map((item) => item.openId));
+  }
   if (config.stageOwners && task.stage?.ownerOpenId) {
     openIds.push(task.stage.ownerOpenId);
   }
@@ -887,6 +898,9 @@ async function collectTaskRecipientOpenIds(
     openIds.push(
       ...(await roleOpenIds({ team: task.team, techGroup: task.techGroup })),
     );
+    for (const techGroup of getTaskTechGroups(task)) {
+      openIds.push(...(await getOpenIdsByRole("TECH_GROUP_ADMIN", { team: "", techGroup })));
+    }
   }
   return openIds;
 }
@@ -1092,15 +1106,6 @@ function localDateParts(date: Date) {
 
 function addDays(date: Date, days: number): Date {
   return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
-}
-
-function getWeekStart(date = new Date()): Date {
-  const d = new Date(date);
-  const day = d.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  d.setDate(d.getDate() + diff);
-  d.setHours(0, 0, 0, 0);
-  return d;
 }
 
 function reminderEventKey(

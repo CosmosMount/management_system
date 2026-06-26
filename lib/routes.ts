@@ -1,5 +1,14 @@
 /** 应用内路由路径（采购 / 进度模块统一层级：new · list · dashboard） */
 export const routes = {
+  admin: {
+    root: "/admin",
+    system: "/admin/system",
+    roles: "/admin/roles",
+    reminders: "/admin/reminders",
+    projectTemplates: "/admin/project-templates",
+    acceptance: "/admin/acceptance",
+    budgetPools: "/admin/budget-pools",
+  },
   procurement: {
     root: "/procurement",
     new: "/procurement/new",

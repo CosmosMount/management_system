@@ -1,4 +1,5 @@
 import type { Importance, TaskCategory, Urgency } from "@prisma/client";
+import { normalizeTaskTechGroups } from "@/lib/progress-task-tech-groups";
 
 export type TaskCreationDraft = {
   title: string;
@@ -6,6 +7,7 @@ export type TaskCreationDraft = {
   stageId: string | null;
   stageName: string;
   category: TaskCategory;
+  taskTechGroups: string[];
   urgency: Urgency;
   importance: Importance;
   assigneeOpenIds: string[];
@@ -27,7 +29,10 @@ export function parseTaskCreationDraft(payload: string): TaskCreationDraft | nul
       goal: typeof parsed.goal === "string" ? parsed.goal : "",
       stageId: typeof parsed.stageId === "string" ? parsed.stageId : null,
       stageName: typeof parsed.stageName === "string" ? parsed.stageName : "无阶段",
-      category: parsed.category as TaskCategory,
+      category: (parsed.category as TaskCategory) ?? "RND",
+      taskTechGroups: Array.isArray(parsed.taskTechGroups)
+        ? normalizeTaskTechGroups(parsed.taskTechGroups.map(String))
+        : [],
       urgency: parsed.urgency as Urgency,
       importance: parsed.importance as Importance,
       assigneeOpenIds: parsed.assigneeOpenIds.map(String),
@@ -60,5 +65,7 @@ export function formatTaskCreationDraftSummary(
     draft.assigneeNames.length > 0
       ? draft.assigneeNames.join("、")
       : draft.assigneeOpenIds.join("、");
-  return `${draft.title} · ${draft.stageName} · ${assignees}`;
+  const taskTechGroups =
+    draft.taskTechGroups.length > 0 ? draft.taskTechGroups.join("、") : "未选技术组";
+  return `${draft.title} · ${draft.stageName} · ${taskTechGroups} · ${assignees}`;
 }
