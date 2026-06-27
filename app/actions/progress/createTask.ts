@@ -2,10 +2,10 @@
 
 import { TaskStatus } from "@prisma/client";
 import { auth } from "@/lib/auth";
-import { logProgressActivity, requireSessionUser } from "@/lib/progress-activity";
+import { requireSessionUser } from "@/lib/progress-activity";
 import {
   drainNotificationOutboxSoon,
-  enqueueProgressNotification,
+  enqueueProgressNotificationTx,
 } from "@/lib/notification-outbox";
 import { canManageProject } from "@/lib/permissions-progress";
 import { prisma } from "@/lib/prisma";
@@ -94,6 +94,19 @@ export async function createTask(input: CreateTaskInput) {
   const acceptanceChecklistItems = normalizeAcceptanceChecklistItems(
     parsed.acceptanceChecklistItems,
   );
+  const context = await getNotificationContext();
+  const recipientOpenIds = await collectTaskNotificationRecipients({
+    team: project.team,
+    techGroup: project.techGroup,
+    assigneeOpenId: primaryAssignee.openId,
+    assigneeName: primaryAssignee.name,
+    assignees: orderedAssignees,
+    techGroups: taskTechGroups.map((techGroup, index) => ({
+      techGroup,
+      sortOrder: index,
+    })),
+    project,
+  });
 
   const task = await prisma.$transaction(async (tx) => {
     const activeProject = await tx.project.updateMany({
@@ -104,13 +117,12 @@ export async function createTask(input: CreateTaskInput) {
       throw new Error("项目状态已更新，请刷新后重试");
     }
 
-    return tx.task.create({
+    const created = await tx.task.create({
       data: {
         projectId: project.id,
         stageId,
         title: parsed.title,
         goal: parsed.goal ?? "",
-        category: parsed.category ?? "RND",
         urgency: parsed.urgency,
         importance: parsed.importance,
         assigneeOpenId: primaryAssignee.openId,
@@ -153,37 +165,42 @@ export async function createTask(input: CreateTaskInput) {
         },
       },
     });
+
+    await tx.progressActivityLog.create({
+      data: {
+        projectId: project.id,
+        taskId: created.id,
+        action: "task.created",
+        actorOpenId: user.openId,
+        actorName: user.name,
+        payload: JSON.stringify({
+          title: created.title,
+          assignees: orderedAssignees.map((assignee) => assignee.name),
+          taskTechGroups,
+          acceptanceChecklistCount: acceptanceChecklistItems.length,
+        }),
+      },
+    });
+
+    await enqueueProgressNotificationTx(
+      tx,
+      `progress:task_assigned:${created.id}`,
+      {
+        type: "task_assigned",
+        taskId: created.id,
+        taskTitle: created.title,
+        projectName: project.name,
+        team: created.team,
+        techGroup: created.techGroup,
+        assigneeOpenIds: orderedAssignees.map((assignee) => assignee.openId),
+        recipientOpenIds,
+      },
+      context,
+    );
+
+    return created;
   });
 
-  await logProgressActivity({
-    projectId: project.id,
-    taskId: task.id,
-    action: "task.created",
-    actorOpenId: user.openId,
-    actorName: user.name,
-    payload: {
-      title: task.title,
-      assignees: orderedAssignees.map((assignee) => assignee.name),
-      taskTechGroups,
-      acceptanceChecklistCount: acceptanceChecklistItems.length,
-    },
-  });
-
-  const recipientOpenIds = await collectTaskNotificationRecipients(task);
-  await enqueueProgressNotification(
-    `progress:task_assigned:${task.id}`,
-    {
-      type: "task_assigned",
-      taskId: task.id,
-      taskTitle: task.title,
-      projectName: project.name,
-      team: task.team,
-      techGroup: task.techGroup,
-      assigneeOpenIds: orderedAssignees.map((assignee) => assignee.openId),
-      recipientOpenIds,
-    },
-    await getNotificationContext(),
-  );
   drainNotificationOutboxSoon();
 
   revalidateProgress(project.id, task.id);

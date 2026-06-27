@@ -1,7 +1,6 @@
 import type {
   ProjectStatus,
   StageStatus,
-  TaskCategory,
   TaskStatus,
   Urgency,
   Importance,
@@ -29,15 +28,6 @@ export const taskStatusLabels: Record<TaskStatus, string> = {
   COMPLETED: "已完成",
   ARCHIVED: "已归档",
   PROJECT_CANCELED: "项目已取消",
-};
-
-export const taskCategoryLabels: Record<TaskCategory, string> = {
-  TEST: "测试",
-  ASSEMBLY: "装车",
-  RND: "研发",
-  DEBUG: "调试",
-  REVIEW_DRAWING: "审图",
-  ITERATION: "迭代",
 };
 
 export const urgencyLabels: Record<Urgency, string> = {

@@ -1,19 +1,29 @@
-import { mkdir, rm, stat, writeFile } from "fs/promises";
+import { mkdir, rename, rm, stat, writeFile } from "fs/promises";
 import path from "path";
 import type { FileAssetKind } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
+  FEEDBACK_IMAGE_SIZE_LABEL,
   FEEDBACK_IMAGE_ALLOWED_TYPES,
   MAX_FEEDBACK_IMAGE_SIZE,
 } from "@/lib/feedback-upload-limits";
 
 export { MAX_FEEDBACK_IMAGE_COUNT, MAX_FEEDBACK_IMAGE_SIZE } from "@/lib/feedback-upload-limits";
+export {
+  FEEDBACK_IMAGE_SIZE_LABEL,
+  FEEDBACK_IMAGE_TOTAL_SIZE_LABEL,
+  MAX_FEEDBACK_IMAGE_TOTAL_SIZE,
+} from "@/lib/feedback-upload-limits";
 
 export const MAX_FILE_SIZE = 20 * 1024 * 1024;
 export const MAX_INVOICE_COUNT = 20;
 export const UPLOAD_PUBLIC_PREFIX = "/uploads/";
 
-const DEFAULT_UPLOAD_STORAGE_DIR = path.join(process.cwd(), "storage", "uploads");
+const DEFAULT_UPLOAD_STORAGE_DIR = path.join(
+  /*turbopackIgnore: true*/ process.cwd(),
+  "storage",
+  "uploads",
+);
 
 const INVOICE_TYPES = new Set([
   "application/pdf",
@@ -69,7 +79,7 @@ export function uploadStorageRoot(): string {
   if (!configured) return DEFAULT_UPLOAD_STORAGE_DIR;
   return path.isAbsolute(configured)
     ? configured
-    : path.join(process.cwd(), configured);
+    : path.join(/*turbopackIgnore: true*/ process.cwd(), configured);
 }
 
 export function publicPathToStoragePath(publicPath: string): string | null {
@@ -86,7 +96,10 @@ export function publicPathToStoragePath(publicPath: string): string | null {
 }
 
 export function storagePathToAbsolute(storagePath: string): string {
-  const fullPath = path.resolve(uploadStorageRoot(), storagePath);
+  const fullPath = path.resolve(
+    /*turbopackIgnore: true*/ uploadStorageRoot(),
+    storagePath,
+  );
   const root = uploadStorageRoot();
   const relative = path.relative(root, fullPath);
   if (relative === ".." || relative.startsWith(`..${path.sep}`)) {
@@ -118,31 +131,81 @@ async function writeAssetFile({
 }) {
   const fullPath = storagePathToAbsolute(storagePath);
   await mkdir(path.dirname(fullPath), { recursive: true });
-  await writeFile(fullPath, buffer);
-  await prisma.fileAsset.upsert({
-    where: { publicPath },
-    update: {
-      storagePath,
-      kind: options.kind,
-      mimeType,
-      size: buffer.length,
-      orderId: options.orderId ?? null,
-      feedbackId: options.feedbackId ?? null,
-      signatureOwnerOpenId: options.signatureOwnerOpenId ?? null,
-      ownerOpenId: options.ownerOpenId ?? null,
-    },
-    create: {
-      publicPath,
-      storagePath,
-      kind: options.kind,
-      mimeType,
-      size: buffer.length,
-      orderId: options.orderId ?? null,
-      feedbackId: options.feedbackId ?? null,
-      signatureOwnerOpenId: options.signatureOwnerOpenId ?? null,
-      ownerOpenId: options.ownerOpenId ?? null,
-    },
-  });
+  const tempPath = `${fullPath}.tmp-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
+  const backupPath = `${fullPath}.bak-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
+  let backupCreated = false;
+  try {
+    await writeFile(tempPath, buffer);
+    try {
+      await rename(fullPath, backupPath);
+      backupCreated = true;
+    } catch (err) {
+      if (!isErrnoCode(err, "ENOENT")) {
+        throw err;
+      }
+    }
+    await rename(tempPath, fullPath);
+  } catch (err) {
+    await rm(tempPath, { force: true });
+    if (backupCreated) {
+      await rename(backupPath, fullPath).catch((restoreErr: unknown) => {
+        console.error("[upload] restore backup failed:", restoreErr);
+      });
+    }
+    throw err;
+  }
+  try {
+    await prisma.fileAsset.upsert({
+      where: { publicPath },
+      update: {
+        storagePath,
+        kind: options.kind,
+        mimeType,
+        size: buffer.length,
+        orderId: options.orderId ?? null,
+        feedbackId: options.feedbackId ?? null,
+        signatureOwnerOpenId: options.signatureOwnerOpenId ?? null,
+        ownerOpenId: options.ownerOpenId ?? null,
+      },
+      create: {
+        publicPath,
+        storagePath,
+        kind: options.kind,
+        mimeType,
+        size: buffer.length,
+        orderId: options.orderId ?? null,
+        feedbackId: options.feedbackId ?? null,
+        signatureOwnerOpenId: options.signatureOwnerOpenId ?? null,
+        ownerOpenId: options.ownerOpenId ?? null,
+      },
+    });
+    if (backupCreated) {
+      await rm(backupPath, { force: true }).catch((cleanupErr: unknown) => {
+        console.error("[upload] cleanup backup failed:", cleanupErr);
+      });
+    }
+  } catch (err) {
+    await rm(fullPath, { force: true });
+    if (backupCreated) {
+      await rename(backupPath, fullPath).catch((restoreErr: unknown) => {
+        console.error("[upload] restore backup failed:", restoreErr);
+      });
+    }
+    throw err;
+  }
+}
+
+function isErrnoCode(err: unknown, code: string): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err as { code?: string }).code === code
+  );
 }
 
 export async function registerExistingFileAsset({
@@ -385,7 +448,7 @@ export async function saveFeedbackImage(
     throw new Error("反馈图片仅支持 PNG/JPG/WebP");
   }
   if (file.size > MAX_FEEDBACK_IMAGE_SIZE) {
-    throw new Error("单张反馈图片不能超过 100MB");
+    throw new Error(`单张反馈图片不能超过 ${FEEDBACK_IMAGE_SIZE_LABEL}`);
   }
 
   const buffer = Buffer.from(await file.arrayBuffer());

@@ -293,7 +293,6 @@ export default async function TaskDetailPage({ params }: Props) {
       id: report.id,
       weekStart: report.weekStart.toISOString(),
       progress: report.progress,
-      risks: report.risks,
       nextPlan: report.nextPlan,
       feishuDocUrl: report.feishuDocUrl,
       submitterName: report.submitterName,

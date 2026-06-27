@@ -5,7 +5,9 @@ import { revalidatePath } from "next/cache";
 import type { FeedbackStatus } from "@prisma/client";
 import { auth } from "@/lib/auth";
 import {
+  FEEDBACK_IMAGE_TOTAL_SIZE_LABEL,
   MAX_FEEDBACK_IMAGE_COUNT,
+  MAX_FEEDBACK_IMAGE_TOTAL_SIZE,
   removeFeedbackUpload,
   saveFeedbackImage,
 } from "@/lib/file-upload";
@@ -55,6 +57,10 @@ function parseImages(formData: FormData): File[] {
     .filter((entry): entry is File => entry instanceof File && entry.size > 0);
   if (files.length > MAX_FEEDBACK_IMAGE_COUNT) {
     throw new Error(`最多上传 ${MAX_FEEDBACK_IMAGE_COUNT} 张图片`);
+  }
+  const totalSize = files.reduce((sum, file) => sum + file.size, 0);
+  if (totalSize > MAX_FEEDBACK_IMAGE_TOTAL_SIZE) {
+    throw new Error(`反馈图片总大小不能超过 ${FEEDBACK_IMAGE_TOTAL_SIZE_LABEL}`);
   }
   return files;
 }

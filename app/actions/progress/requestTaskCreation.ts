@@ -4,7 +4,7 @@ import { TaskStatus } from "@prisma/client";
 import { auth } from "@/lib/auth";
 import {
   drainNotificationOutboxSoon,
-  enqueueProgressNotification,
+  enqueueProgressNotificationTx,
 } from "@/lib/notification-outbox";
 import {
   canManageProject,
@@ -125,7 +125,6 @@ export async function requestTaskCreation(input: CreateTaskInput) {
     goal: parsed.goal ?? "",
     stageId,
     stageName,
-    category: parsed.category,
     taskTechGroups,
     urgency: parsed.urgency,
     importance: parsed.importance,
@@ -138,6 +137,7 @@ export async function requestTaskCreation(input: CreateTaskInput) {
     acceptanceChecklistItems,
   };
 
+  const context = await getNotificationContext();
   const request = await prisma.$transaction(async (tx) => {
     const created = await tx.taskCreationRequest.create({
       data: {
@@ -161,28 +161,30 @@ export async function requestTaskCreation(input: CreateTaskInput) {
         stageName: draft.stageName,
         taskTechGroups,
         requesterName: user.name,
-      }),
+        }),
       },
     });
+
+    await enqueueProgressNotificationTx(
+      tx,
+      `progress:task_creation_requested:${created.id}`,
+      {
+        type: "task_creation_requested",
+        requestId: created.id,
+        projectId: project.id,
+        projectName: project.name,
+        taskTitle: draft.title,
+        requesterName: user.name,
+        team: project.team,
+        techGroup: project.techGroup,
+        projectOwnerOpenIds,
+      },
+      context,
+    );
 
     return created;
   });
 
-  await enqueueProgressNotification(
-    `progress:task_creation_requested:${request.id}`,
-    {
-      type: "task_creation_requested",
-      requestId: request.id,
-      projectId: project.id,
-      projectName: project.name,
-      taskTitle: draft.title,
-      requesterName: user.name,
-      team: project.team,
-      techGroup: project.techGroup,
-      projectOwnerOpenIds,
-    },
-    await getNotificationContext(),
-  );
   drainNotificationOutboxSoon();
 
   revalidateProgress(project.id);
@@ -245,6 +247,7 @@ export async function reviewTaskCreationRequest(input: {
   }
 
   const reviewedAt = new Date();
+  const context = await getNotificationContext();
   if (parsed.decision === "REJECTED") {
     await prisma.$transaction(async (tx) => {
       const locked = await tx.taskCreationRequest.updateMany({
@@ -274,22 +277,24 @@ export async function reviewTaskCreationRequest(input: {
           }),
         },
       });
+
+      await enqueueProgressNotificationTx(
+        tx,
+        `progress:task_creation_rejected:${request.id}`,
+        {
+          type: "task_creation_rejected",
+          requestId: request.id,
+          projectId: project.id,
+          projectName: project.name,
+          taskTitle: draft.title,
+          reviewerName: user.name,
+          requesterOpenId: request.requesterOpenId,
+          comment: parsed.comment ?? "",
+        },
+        context,
+      );
     });
 
-    await enqueueProgressNotification(
-      `progress:task_creation_rejected:${request.id}`,
-      {
-        type: "task_creation_rejected",
-        requestId: request.id,
-        projectId: project.id,
-        projectName: project.name,
-        taskTitle: draft.title,
-        reviewerName: user.name,
-        requesterOpenId: request.requesterOpenId,
-        comment: parsed.comment ?? "",
-      },
-      await getNotificationContext(),
-    );
     drainNotificationOutboxSoon();
     revalidateProgress(project.id);
     return { success: true };
@@ -318,6 +323,18 @@ export async function reviewTaskCreationRequest(input: {
   const needsWeeklyReport =
     draft.needsWeeklyReport ||
     dueAt.getTime() - Date.now() > 14 * 24 * 60 * 60 * 1000;
+  const recipientOpenIds = await collectTaskNotificationRecipients({
+    team: project.team,
+    techGroup: project.techGroup,
+    assigneeOpenId: primaryAssignee.openId,
+    assigneeName: primaryAssignee.name,
+    assignees: orderedAssignees,
+    techGroups: taskTechGroups.map((techGroup, index) => ({
+      techGroup,
+      sortOrder: index,
+    })),
+    project,
+  });
 
   const task = await prisma.$transaction(async (tx) => {
     const activeProject = await tx.project.updateMany({
@@ -348,7 +365,6 @@ export async function reviewTaskCreationRequest(input: {
         stageId: draft.stageId,
         title: draft.title,
         goal: draft.goal,
-        category: draft.category ?? "RND",
         techGroups: {
           create: taskTechGroups.map((techGroup, index) => ({
             techGroup,
@@ -413,29 +429,30 @@ export async function reviewTaskCreationRequest(input: {
       },
     });
 
+    await enqueueProgressNotificationTx(
+      tx,
+      `progress:task_creation_approved:${request.id}`,
+      {
+        type: "task_creation_approved",
+        requestId: request.id,
+        taskId: created.id,
+        projectId: project.id,
+        projectName: project.name,
+        taskTitle: created.title,
+        reviewerName: user.name,
+        requesterOpenId: request.requesterOpenId,
+        assigneeOpenIds: orderedAssignees.map((assignee) => assignee.openId),
+        team: project.team,
+        techGroup: project.techGroup,
+        projectOwnerOpenIds,
+        recipientOpenIds,
+      },
+      context,
+    );
+
     return created;
   });
 
-  const recipientOpenIds = await collectTaskNotificationRecipients(task);
-  await enqueueProgressNotification(
-    `progress:task_creation_approved:${request.id}`,
-    {
-      type: "task_creation_approved",
-      requestId: request.id,
-      taskId: task.id,
-      projectId: project.id,
-      projectName: project.name,
-      taskTitle: task.title,
-      reviewerName: user.name,
-      requesterOpenId: request.requesterOpenId,
-      assigneeOpenIds: orderedAssignees.map((assignee) => assignee.openId),
-      team: project.team,
-      techGroup: project.techGroup,
-      projectOwnerOpenIds,
-      recipientOpenIds,
-    },
-    await getNotificationContext(),
-  );
   drainNotificationOutboxSoon();
 
   revalidateProgress(project.id, task.id);

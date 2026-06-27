@@ -40,7 +40,7 @@ export default defineConfig({
   webServer: process.env.PLAYWRIGHT_SKIP_WEBSERVER
     ? undefined
     : {
-        command: `PLAYWRIGHT_DATABASE_URL=${shellQuote(testDatabaseUrl)} npx tsx scripts/setup-playwright-db.ts && DATABASE_URL=${shellQuote(testDatabaseUrl)} npm run db:deploy && DATABASE_URL=${shellQuote(testDatabaseUrl)} npm run dev -- -p ${parsedBaseUrl.port || "3100"}`,
+        command: `PLAYWRIGHT_DATABASE_URL=${shellQuote(testDatabaseUrl)} npx tsx scripts/setup-playwright-db.ts && DATABASE_URL=${shellQuote(testDatabaseUrl)} npm run db:deploy && DATABASE_URL=${shellQuote(testDatabaseUrl)} npm run db:seed && DATABASE_URL=${shellQuote(testDatabaseUrl)} npm run db:seed-acceptance-checklists && DATABASE_URL=${shellQuote(testDatabaseUrl)} npm run db:seed-progress-reminders && DATABASE_URL=${shellQuote(testDatabaseUrl)} npm run dev -- -p ${parsedBaseUrl.port || "3100"}`,
         url: baseURL,
         reuseExistingServer: process.env.PLAYWRIGHT_REUSE_SERVER === "true",
         timeout: 120_000,

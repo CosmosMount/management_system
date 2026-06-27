@@ -95,6 +95,9 @@ export default async function ProjectDetailPage({ params }: Props) {
           creationRequests: {
             select: { requesterOpenId: true },
           },
+          ddlChangeRequests: {
+            select: { requesterOpenId: true },
+          },
           _count: { select: { submissions: true } },
         },
       },
@@ -270,10 +273,18 @@ export default async function ProjectDetailPage({ params }: Props) {
         assigneeOpenIds,
         relatedOpenIds: [
           ...new Set([
+            ...projectOwnerOpenIds,
+            ...projectParticipantOpenIds,
+            ...(task.stageId
+              ? project.stages
+                  .filter((stage) => stage.id === task.stageId)
+                  .map((stage) => stage.ownerOpenId)
+              : []),
             ...assigneeOpenIds,
             ...task.deletionRequests.map((request) => request.requesterOpenId),
             ...task.creationRequests.map((request) => request.requesterOpenId),
-          ]),
+            ...task.ddlChangeRequests.map((request) => request.requesterOpenId),
+          ].filter(Boolean)),
         ],
         stageId: task.stageId,
         stageName: task.stage?.name ?? null,

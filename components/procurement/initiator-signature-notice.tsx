@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -18,9 +18,9 @@ export function InitiatorSignatureNotice() {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <Button type="button" render={<Link href="/profile" />}>
+        <Link href="/profile" className={buttonVariants()}>
           前往个人中心上传
-        </Button>
+        </Link>
       </CardContent>
     </Card>
   );

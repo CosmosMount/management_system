@@ -2,10 +2,10 @@
 
 import { SubmissionType, TaskStatus } from "@prisma/client";
 import { auth } from "@/lib/auth";
-import { logProgressActivity, requireSessionUser } from "@/lib/progress-activity";
+import { requireSessionUser } from "@/lib/progress-activity";
 import {
   drainNotificationOutboxSoon,
-  enqueueProgressNotification,
+  enqueueProgressNotificationTx,
 } from "@/lib/notification-outbox";
 import {
   canSubmitDelivery,
@@ -59,6 +59,8 @@ export async function submitTaskDelivery(input: {
     throw new Error("仅任务负责人或超级管理员可提交交付");
   }
 
+  const context = await getNotificationContext();
+  const recipientOpenIds = await collectTaskNotificationRecipients(task);
   const submission = await prisma.$transaction(async (tx) => {
     const locked = await tx.task.updateMany({
       where: { id: task.id, status: TaskStatus.IN_PROGRESS, deletedAt: null },
@@ -82,33 +84,37 @@ export async function submitTaskDelivery(input: {
       },
     });
 
+    await tx.progressActivityLog.create({
+      data: {
+        projectId: task.projectId,
+        taskId: task.id,
+        action: "task.delivery_submitted",
+        actorOpenId: user.openId,
+        actorName: user.name,
+        payload: JSON.stringify({ submissionId: sub.id }),
+      },
+    });
+
+    await enqueueProgressNotificationTx(
+      tx,
+      `progress:task_pending_acceptance:${sub.id}`,
+      {
+        type: "task_pending_acceptance",
+        taskId: task.id,
+        taskTitle: task.title,
+        projectName: task.project.name,
+        team: task.team,
+        techGroup: task.techGroup,
+        feishuDocUrl: parsed.feishuDocUrl,
+        keyDataUrl: parsed.keyDataUrl,
+        recipientOpenIds,
+      },
+      context,
+    );
+
     return sub;
   });
 
-  await logProgressActivity({
-    projectId: task.projectId,
-    taskId: task.id,
-    action: "task.delivery_submitted",
-    actorOpenId: user.openId,
-    actorName: user.name,
-    payload: { submissionId: submission.id },
-  });
-
-  await enqueueProgressNotification(
-    `progress:task_pending_acceptance:${submission.id}`,
-    {
-      type: "task_pending_acceptance",
-      taskId: task.id,
-      taskTitle: task.title,
-      projectName: task.project.name,
-      team: task.team,
-      techGroup: task.techGroup,
-      feishuDocUrl: parsed.feishuDocUrl,
-      keyDataUrl: parsed.keyDataUrl,
-      recipientOpenIds: await collectTaskNotificationRecipients(task),
-    },
-    await getNotificationContext(),
-  );
   drainNotificationOutboxSoon();
 
   revalidateProgress(task.projectId, task.id);

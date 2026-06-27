@@ -215,16 +215,6 @@ const taskEditableBaseSchema = z.object({
   stageId: z.string().optional().or(z.literal("")),
   title: z.string().min(1, "请输入任务目标"),
   goal: z.string().optional(),
-  category: z
-    .enum([
-    "TEST",
-    "ASSEMBLY",
-    "RND",
-    "DEBUG",
-    "REVIEW_DRAWING",
-    "ITERATION",
-    ])
-    .default("RND"),
   taskTechGroups: taskTechGroupsSchema,
   urgency: z.enum(["HIGH", "MEDIUM", "LOW"]),
   importance: z.enum(["HIGH", "MEDIUM", "LOW"]),
@@ -260,7 +250,6 @@ export const submitDeliverySchema = z.object({
 export const submitWeeklyReportSchema = z.object({
   taskId: z.string().min(1),
   progress: z.string().min(1, "请填写本周进度"),
-  risks: z.string().optional(),
   nextPlan: z.string().optional(),
   feishuDocUrl: z.string().url().optional().or(z.literal("")),
 });

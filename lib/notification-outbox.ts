@@ -25,6 +25,10 @@ type ProgressOutboxPayload = {
   appOrigin?: string | null;
 };
 
+type ProgressPayloadWithRecipients = ProgressNotifyPayload & {
+  recipientOpenIds?: string[];
+};
+
 type OrderOutboxPayload =
   | {
       kind: "order";
@@ -104,9 +108,9 @@ export async function enqueueNotification({
   payload: unknown;
 }): Promise<EnqueueNotificationResult> {
   const payloadText = JSON.stringify(payload);
-  try {
-    await prisma.notificationOutbox.create({
-      data: {
+  const result = await prisma.notificationOutbox.createMany({
+    data: [
+      {
         eventKey,
         channel,
         type,
@@ -116,14 +120,10 @@ export async function enqueueNotification({
         lastError: "",
         nextRunAt: new Date(),
       },
-    });
-    return { created: true };
-  } catch (err) {
-    if (isUniqueConstraintError(err)) {
-      return { created: false };
-    }
-    throw err;
-  }
+    ],
+    skipDuplicates: true,
+  });
+  return { created: result.count > 0 };
 }
 
 export async function enqueueNotificationTx(
@@ -141,9 +141,9 @@ export async function enqueueNotificationTx(
   },
 ): Promise<EnqueueNotificationResult> {
   const payloadText = JSON.stringify(payload);
-  try {
-    await tx.notificationOutbox.create({
-      data: {
+  const result = await tx.notificationOutbox.createMany({
+    data: [
+      {
         eventKey,
         channel,
         type,
@@ -153,23 +153,10 @@ export async function enqueueNotificationTx(
         lastError: "",
         nextRunAt: new Date(),
       },
-    });
-    return { created: true };
-  } catch (err) {
-    if (isUniqueConstraintError(err)) {
-      return { created: false };
-    }
-    throw err;
-  }
-}
-
-function isUniqueConstraintError(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "code" in err &&
-    (err as { code?: string }).code === "P2002"
-  );
+    ],
+    skipDuplicates: true,
+  });
+  return { created: result.count > 0 };
 }
 
 export async function resetNotificationOutboxForRetry({
@@ -203,15 +190,20 @@ export async function enqueueProgressNotification(
   payload: ProgressNotifyPayload,
   context?: NotificationContext,
 ) {
-  return enqueueNotification({
-    eventKey,
-    channel: "progress",
-    type: payload.type,
-    payload: {
-      payload,
-      appOrigin: context?.appOrigin ?? null,
-    } satisfies ProgressOutboxPayload,
-  });
+  let created = false;
+  for (const entry of splitProgressNotificationByRecipient(eventKey, payload)) {
+    const result = await enqueueNotification({
+      eventKey: entry.eventKey,
+      channel: "progress",
+      type: entry.payload.type,
+      payload: {
+        payload: entry.payload,
+        appOrigin: context?.appOrigin ?? null,
+      } satisfies ProgressOutboxPayload,
+    });
+    created ||= result.created;
+  }
+  return { created };
 }
 
 export async function enqueueProgressNotificationTx(
@@ -220,15 +212,42 @@ export async function enqueueProgressNotificationTx(
   payload: ProgressNotifyPayload,
   context?: NotificationContext,
 ) {
-  return enqueueNotificationTx(tx, {
-    eventKey,
-    channel: "progress",
-    type: payload.type,
+  let created = false;
+  for (const entry of splitProgressNotificationByRecipient(eventKey, payload)) {
+    const result = await enqueueNotificationTx(tx, {
+      eventKey: entry.eventKey,
+      channel: "progress",
+      type: entry.payload.type,
+      payload: {
+        payload: entry.payload,
+        appOrigin: context?.appOrigin ?? null,
+      } satisfies ProgressOutboxPayload,
+    });
+    created ||= result.created;
+  }
+  return { created };
+}
+
+function splitProgressNotificationByRecipient(
+  eventKey: string,
+  payload: ProgressNotifyPayload,
+): Array<{ eventKey: string; payload: ProgressNotifyPayload }> {
+  const recipientOpenIds =
+    "recipientOpenIds" in payload && Array.isArray(payload.recipientOpenIds)
+      ? [...new Set(payload.recipientOpenIds.filter(Boolean))]
+      : null;
+
+  if (!recipientOpenIds || recipientOpenIds.length <= 1) {
+    return [{ eventKey, payload }];
+  }
+
+  return recipientOpenIds.map((recipientOpenId) => ({
+    eventKey: `${eventKey}:recipient:${recipientOpenId}`,
     payload: {
-      payload,
-      appOrigin: context?.appOrigin ?? null,
-    } satisfies ProgressOutboxPayload,
-  });
+      ...(payload as ProgressPayloadWithRecipients),
+      recipientOpenIds: [recipientOpenId],
+    } as ProgressNotifyPayload,
+  }));
 }
 
 export async function enqueueOrderNotification(

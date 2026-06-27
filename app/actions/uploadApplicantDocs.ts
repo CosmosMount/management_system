@@ -109,75 +109,75 @@ export async function uploadApplicantDocs(formData: FormData) {
 
   const itemMap = new Map(order.items.map((item) => [item.id, item]));
   const photoPaths = new Map<string, string>();
-
-  for (const confirmed of confirmedItems) {
-    const photo = formData.get(`photo-${confirmed.id}`);
-    if (!(photo instanceof File) || photo.size === 0) {
-      const dbItem = itemMap.get(confirmed.id);
-      throw new Error(`请为「${dbItem?.name ?? "明细"}」上传实物照片`);
-    }
-    if (photo.size > MAX_FILE_SIZE) {
-      throw new Error("单张照片不能超过 20MB");
-    }
-    const saved = await saveUpload(
-      orderId,
-      photo,
-      `item-photo-${confirmed.id.slice(0, 8)}`,
-      uploadTypeSets.itemPhoto,
-    );
-    photoPaths.set(confirmed.id, saved);
-  }
-
   const invoicePaths: string[] = [];
-  for (let i = 0; i < invoices.length; i++) {
-    const saved = await saveUpload(
-      orderId,
-      invoices[i],
-      `invoice-${i + 1}`,
-      uploadTypeSets.invoice,
-    );
-    invoicePaths.push(saved);
-  }
-
-  const docItems: ReimbursementDocItem[] = confirmedItems.map((confirmed) => {
-    const dbItem = itemMap.get(confirmed.id)!;
-    const unitPrice =
-      dbItem.quantity > 0 ? confirmed.lineTotal / dbItem.quantity : 0;
-    const photoPath = photoPaths.get(confirmed.id);
-    return {
-      name: dbItem.name,
-      spec: dbItem.spec,
-      quantity: dbItem.quantity,
-      unitPrice,
-      lineTotal: confirmed.lineTotal,
-      photoAbsolutePath: photoPath
-        ? publicPathToAbsolute(photoPath)
-        : null,
-    };
-  });
-
-  const signatures = await resolveReimbursementListSignatures({
-    team: order.team,
-    techGroup: order.techGroup,
-    teamApproverOpenId: order.teamApproverOpenId,
-    techGroupApproverOpenId: order.techGroupApproverOpenId,
-    initiator: order.initiator,
-  });
-  assertListSignaturesReady(signatures, true);
-  const docDate = formatDocDate();
-  const listBuffer = generateReimbursementListDocx(docItems, {
-    acceptor1Path: signatures.acceptor1Path,
-    acceptor2Path: signatures.acceptor2Path,
-    receiverPath: signatures.receiverPath,
-    acceptDate: docDate,
-    receiveDate: docDate,
-  });
-  const listDocPath = await saveGeneratedListDoc(orderId, listBuffer);
-
-  const totalPrice = confirmedItems.reduce((sum, c) => sum + c.lineTotal, 0);
-
-  const context = await getNotificationContext();
+  let listDocPath = "";
   try {
+    for (const confirmed of confirmedItems) {
+      const photo = formData.get(`photo-${confirmed.id}`);
+      if (!(photo instanceof File) || photo.size === 0) {
+        const dbItem = itemMap.get(confirmed.id);
+        throw new Error(`请为「${dbItem?.name ?? "明细"}」上传实物照片`);
+      }
+      if (photo.size > MAX_FILE_SIZE) {
+        throw new Error("单张照片不能超过 20MB");
+      }
+      const saved = await saveUpload(
+        orderId,
+        photo,
+        `item-photo-${confirmed.id.slice(0, 8)}`,
+        uploadTypeSets.itemPhoto,
+      );
+      photoPaths.set(confirmed.id, saved);
+    }
+
+    for (let i = 0; i < invoices.length; i++) {
+      const saved = await saveUpload(
+        orderId,
+        invoices[i],
+        `invoice-${i + 1}`,
+        uploadTypeSets.invoice,
+      );
+      invoicePaths.push(saved);
+    }
+
+    const docItems: ReimbursementDocItem[] = confirmedItems.map((confirmed) => {
+      const dbItem = itemMap.get(confirmed.id)!;
+      const unitPrice =
+        dbItem.quantity > 0 ? confirmed.lineTotal / dbItem.quantity : 0;
+      const photoPath = photoPaths.get(confirmed.id);
+      return {
+        name: dbItem.name,
+        spec: dbItem.spec,
+        quantity: dbItem.quantity,
+        unitPrice,
+        lineTotal: confirmed.lineTotal,
+        photoAbsolutePath: photoPath
+          ? publicPathToAbsolute(photoPath)
+          : null,
+      };
+    });
+
+    const signatures = await resolveReimbursementListSignatures({
+      team: order.team,
+      techGroup: order.techGroup,
+      teamApproverOpenId: order.teamApproverOpenId,
+      techGroupApproverOpenId: order.techGroupApproverOpenId,
+      initiator: order.initiator,
+    });
+    assertListSignaturesReady(signatures, true);
+    const docDate = formatDocDate();
+    const listBuffer = generateReimbursementListDocx(docItems, {
+      acceptor1Path: signatures.acceptor1Path,
+      acceptor2Path: signatures.acceptor2Path,
+      receiverPath: signatures.receiverPath,
+      acceptDate: docDate,
+      receiveDate: docDate,
+    });
+    listDocPath = await saveGeneratedListDoc(orderId, listBuffer);
+
+    const totalPrice = confirmedItems.reduce((sum, c) => sum + c.lineTotal, 0);
+    const context = await getNotificationContext();
+
     await prisma.$transaction(async (tx) => {
       for (const confirmed of confirmedItems) {
         const dbItem = itemMap.get(confirmed.id);

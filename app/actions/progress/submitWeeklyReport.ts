@@ -1,7 +1,7 @@
 "use server";
 
 import { auth } from "@/lib/auth";
-import { logProgressActivity, requireSessionUser } from "@/lib/progress-activity";
+import { requireSessionUser } from "@/lib/progress-activity";
 import {
   canSyncTaskRisk,
   canSubmitTaskWeeklyReport,
@@ -9,7 +9,7 @@ import {
 import { prisma } from "@/lib/prisma";
 import {
   drainNotificationOutboxSoon,
-  enqueueProgressNotification,
+  enqueueProgressNotificationTx,
 } from "@/lib/notification-outbox";
 import { assertProjectActive } from "@/lib/progress-guards";
 import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
@@ -29,7 +29,6 @@ import {
 export async function submitWeeklyReport(input: {
   taskId: string;
   progress: string;
-  risks?: string;
   nextPlan?: string;
   feishuDocUrl?: string;
 }) {
@@ -79,8 +78,6 @@ export async function submitWeeklyReport(input: {
   }
 
   const weekStart = getWeekStart();
-  const riskContent = parsed.risks?.trim();
-  const riskUpdatedAt = new Date();
 
   const report = await prisma.$transaction(async (tx) => {
     const liveTask = await tx.task.updateMany({
@@ -101,7 +98,6 @@ export async function submitWeeklyReport(input: {
       where: { taskId_weekStart: { taskId: task.id, weekStart } },
       update: {
         progress: parsed.progress,
-        risks: "",
         nextPlan: parsed.nextPlan ?? "",
         feishuDocUrl: parsed.feishuDocUrl ?? "",
         submittedAt: new Date(),
@@ -112,7 +108,6 @@ export async function submitWeeklyReport(input: {
         taskId: task.id,
         weekStart,
         progress: parsed.progress,
-        risks: "",
         nextPlan: parsed.nextPlan ?? "",
         feishuDocUrl: parsed.feishuDocUrl ?? "",
         submittedBy: user.openId,
@@ -120,62 +115,18 @@ export async function submitWeeklyReport(input: {
       },
     });
 
-    if (riskContent) {
-      await tx.taskRiskRecord.create({
-        data: {
-          taskId: task.id,
-          content: riskContent,
-          source: "WEEKLY",
-          status: "ACTIVE",
-          createdByOpenId: user.openId,
-          createdByName: user.name,
-        },
-      });
-      await tx.task.update({
-        where: { id: task.id },
-        data: { riskNote: riskContent, riskUpdatedAt },
-      });
-    }
+    await tx.progressActivityLog.create({
+      data: {
+        projectId: task.projectId,
+        taskId: task.id,
+        action: "task.weekly_report",
+        actorOpenId: user.openId,
+        actorName: user.name,
+      },
+    });
 
     return savedReport;
   });
-
-  await logProgressActivity({
-    projectId: task.projectId,
-    taskId: task.id,
-    action: "task.weekly_report",
-    actorOpenId: user.openId,
-    actorName: user.name,
-  });
-
-  if (riskContent) {
-    await logProgressActivity({
-      projectId: task.projectId,
-      taskId: task.id,
-      action: "task.risk_synced",
-      actorOpenId: user.openId,
-      actorName: user.name,
-      payload: { riskNote: riskContent, source: "WEEKLY" },
-    });
-
-    await enqueueProgressNotification(
-      `progress:task_risk_synced:${task.id}:${riskUpdatedAt.toISOString()}`,
-      {
-        type: "task_risk_synced",
-        taskId: task.id,
-        taskTitle: task.title,
-        projectName: task.project.name,
-        team: task.team,
-        techGroup: task.techGroup,
-        assigneeOpenIds: getTaskAssigneeOpenIds(task),
-        projectOwnerOpenIds: getProjectOwnerOpenIds(task.project),
-        riskNote: riskContent,
-        recipientOpenIds: await collectTaskNotificationRecipients(task),
-      },
-      await getNotificationContext(),
-    );
-    drainNotificationOutboxSoon();
-  }
 
   revalidateProgress(task.projectId, task.id);
   return report;
@@ -233,6 +184,8 @@ export async function syncTaskRisk(input: {
   }
 
   const riskUpdatedAt = new Date();
+  const context = await getNotificationContext();
+  const recipientOpenIds = await collectTaskNotificationRecipients(task);
   const updated = await prisma.$transaction(async (tx) => {
     const locked = await tx.task.updateMany({
       where: {
@@ -256,35 +209,39 @@ export async function syncTaskRisk(input: {
         createdByName: user.name,
       },
     });
+
+    await tx.progressActivityLog.create({
+      data: {
+        projectId: task.projectId,
+        taskId: task.id,
+        action: "task.risk_synced",
+        actorOpenId: user.openId,
+        actorName: user.name,
+        payload: JSON.stringify({ riskNote: parsed.content }),
+      },
+    });
+
+    await enqueueProgressNotificationTx(
+      tx,
+      `progress:task_risk_synced:${task.id}:${riskUpdatedAt.toISOString()}`,
+      {
+        type: "task_risk_synced",
+        taskId: task.id,
+        taskTitle: task.title,
+        projectName: task.project.name,
+        team: task.team,
+        techGroup: task.techGroup,
+        assigneeOpenIds: getTaskAssigneeOpenIds(task),
+        projectOwnerOpenIds: getProjectOwnerOpenIds(task.project),
+        riskNote: parsed.content,
+        recipientOpenIds,
+      },
+      context,
+    );
+
     return tx.task.findUniqueOrThrow({ where: { id: task.id } });
   });
 
-  await logProgressActivity({
-    projectId: task.projectId,
-    taskId: task.id,
-    action: "task.risk_synced",
-    actorOpenId: user.openId,
-    actorName: user.name,
-    payload: { riskNote: parsed.content },
-  });
-
-  const recipientOpenIds = await collectTaskNotificationRecipients(task);
-  await enqueueProgressNotification(
-    `progress:task_risk_synced:${task.id}:${updated.riskUpdatedAt?.toISOString() ?? updated.updatedAt.toISOString()}`,
-    {
-      type: "task_risk_synced",
-      taskId: task.id,
-      taskTitle: task.title,
-      projectName: task.project.name,
-      team: task.team,
-      techGroup: task.techGroup,
-      assigneeOpenIds: getTaskAssigneeOpenIds(task),
-      projectOwnerOpenIds: getProjectOwnerOpenIds(task.project),
-      riskNote: parsed.content,
-      recipientOpenIds,
-    },
-    await getNotificationContext(),
-  );
   drainNotificationOutboxSoon();
 
   revalidateProgress(task.projectId, task.id);
@@ -345,6 +302,8 @@ export async function resolveTaskRisk(input: {
   }
 
   const resolvedAt = new Date();
+  const context = await getNotificationContext();
+  const recipientOpenIds = await collectTaskNotificationRecipients(task);
   await prisma.$transaction(async (tx) => {
     const locked = await tx.taskRiskRecord.updateMany({
       where: { id: risk.id, status: "ACTIVE" },
@@ -378,31 +337,39 @@ export async function resolveTaskRisk(input: {
     if (updatedTask.count !== 1) {
       throw new Error("任务状态已更新，请刷新后重试");
     }
+
+    await tx.progressActivityLog.create({
+      data: {
+        projectId: task.projectId,
+        taskId: task.id,
+        action: "task.risk_resolved",
+        actorOpenId: user.openId,
+        actorName: user.name,
+        payload: JSON.stringify({
+          riskId: risk.id,
+          riskNote: risk.content,
+          resolveNote: parsed.resolveNote,
+        }),
+      },
+    });
+
+    await enqueueProgressNotificationTx(
+      tx,
+      `progress:task_risk_resolved:${risk.id}:${resolvedAt.toISOString()}`,
+      {
+        type: "task_risk_resolved",
+        taskId: task.id,
+        taskTitle: task.title,
+        projectName: task.project.name,
+        riskNote: risk.content,
+        resolveNote: parsed.resolveNote,
+        resolverName: user.name,
+        recipientOpenIds,
+      },
+      context,
+    );
   });
 
-  await logProgressActivity({
-    projectId: task.projectId,
-    taskId: task.id,
-    action: "task.risk_resolved",
-    actorOpenId: user.openId,
-    actorName: user.name,
-    payload: { riskId: risk.id, riskNote: risk.content, resolveNote: parsed.resolveNote },
-  });
-
-  await enqueueProgressNotification(
-    `progress:task_risk_resolved:${risk.id}:${resolvedAt.toISOString()}`,
-    {
-      type: "task_risk_resolved",
-      taskId: task.id,
-      taskTitle: task.title,
-      projectName: task.project.name,
-      riskNote: risk.content,
-      resolveNote: parsed.resolveNote,
-      resolverName: user.name,
-      recipientOpenIds: await collectTaskNotificationRecipients(task),
-    },
-    await getNotificationContext(),
-  );
   drainNotificationOutboxSoon();
 
   revalidateProgress(task.projectId, task.id);

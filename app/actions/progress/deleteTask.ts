@@ -4,7 +4,7 @@ import { Prisma } from "@prisma/client";
 import { auth } from "@/lib/auth";
 import {
   drainNotificationOutboxSoon,
-  enqueueProgressNotification,
+  enqueueProgressNotificationTx,
 } from "@/lib/notification-outbox";
 import {
   canManageProject,
@@ -70,11 +70,16 @@ export async function deleteTaskDirectly(input: DirectDeleteInput) {
   }
 
   const deletedAt = new Date();
-  const pendingRequesterOpenIds = await prisma.$transaction(async (tx) => {
+  const context = await getNotificationContext();
+  const taskRecipientOpenIds = await collectTaskNotificationRecipients(task);
+  await prisma.$transaction(async (tx) => {
     const pendingRequests = await tx.taskDeletionRequest.findMany({
       where: { taskId: task.id, status: "PENDING" },
       select: { id: true, requesterOpenId: true },
     });
+    const pendingRequesterOpenIds = pendingRequests.map(
+      (request) => request.requesterOpenId,
+    );
 
     const updated = await tx.task.updateMany({
       where: {
@@ -125,37 +130,34 @@ export async function deleteTaskDirectly(input: DirectDeleteInput) {
       },
     });
 
-    return pendingRequests.map((request) => request.requesterOpenId);
+    await enqueueProgressNotificationTx(
+      tx,
+      `progress:task_deleted:${task.id}:${deletedAt.toISOString()}`,
+      {
+        type: "task_deleted",
+        taskId: task.id,
+        taskTitle: task.title,
+        projectId: task.projectId,
+        projectName: task.project.name,
+        stageId: task.stageId,
+        stageName: task.stage?.name ?? "无阶段",
+        actorName: user.name,
+        reason: parsed.reason,
+        team: task.team,
+        techGroup: task.techGroup,
+        assigneeOpenIds: [
+          ...pendingRequesterOpenIds,
+          ...getTaskAssigneeOpenIds(task),
+        ],
+        projectOwnerOpenIds,
+        recipientOpenIds: [
+          ...new Set([...pendingRequesterOpenIds, ...taskRecipientOpenIds]),
+        ],
+      },
+      context,
+    );
   });
 
-  await enqueueProgressNotification(
-    `progress:task_deleted:${task.id}:${deletedAt.toISOString()}`,
-    {
-      type: "task_deleted",
-      taskId: task.id,
-      taskTitle: task.title,
-      projectId: task.projectId,
-      projectName: task.project.name,
-      stageId: task.stageId,
-      stageName: task.stage?.name ?? "无阶段",
-      actorName: user.name,
-      reason: parsed.reason,
-      team: task.team,
-      techGroup: task.techGroup,
-      assigneeOpenIds: [
-        ...pendingRequesterOpenIds,
-        ...getTaskAssigneeOpenIds(task),
-      ],
-      projectOwnerOpenIds,
-      recipientOpenIds: [
-        ...new Set([
-          ...pendingRequesterOpenIds,
-          ...(await collectTaskNotificationRecipients(task)),
-        ]),
-      ],
-    },
-    await getNotificationContext(),
-  );
   drainNotificationOutboxSoon();
 
   revalidateProgress(task.projectId, task.id);
@@ -223,6 +225,8 @@ export async function requestTaskDeletion(input: { taskId: string; reason: strin
     throw new Error("该任务已有待审核的删除申请");
   }
 
+  const context = await getNotificationContext();
+  const recipientOpenIds = await collectTaskNotificationRecipients(task);
   const request = await prisma
     .$transaction(async (tx) => {
       const liveTask = await tx.task.findUnique({
@@ -270,6 +274,24 @@ export async function requestTaskDeletion(input: { taskId: string; reason: strin
         },
       });
 
+      await enqueueProgressNotificationTx(
+        tx,
+        `progress:task_delete_requested:${created.id}`,
+        {
+          type: "task_delete_requested",
+          taskId: task.id,
+          taskTitle: task.title,
+          projectName: task.project.name,
+          requesterName: user.name,
+          reason: parsed.reason,
+          team: task.team,
+          techGroup: task.techGroup,
+          projectOwnerOpenIds,
+          recipientOpenIds,
+        },
+        context,
+      );
+
       return created;
     })
     .catch((err: unknown) => {
@@ -279,22 +301,6 @@ export async function requestTaskDeletion(input: { taskId: string; reason: strin
       throw err;
     });
 
-  await enqueueProgressNotification(
-    `progress:task_delete_requested:${request.id}`,
-    {
-      type: "task_delete_requested",
-      taskId: task.id,
-      taskTitle: task.title,
-      projectName: task.project.name,
-      requesterName: user.name,
-      reason: parsed.reason,
-      team: task.team,
-      techGroup: task.techGroup,
-      projectOwnerOpenIds,
-      recipientOpenIds: await collectTaskNotificationRecipients(task),
-    },
-    await getNotificationContext(),
-  );
   drainNotificationOutboxSoon();
 
   revalidateProgress(task.projectId, task.id);
@@ -354,6 +360,13 @@ export async function reviewTaskDeletionRequest(input: {
   }
 
   const reviewedAt = new Date();
+  const context = await getNotificationContext();
+  const reviewRecipientOpenIds = [
+    ...new Set([
+      request.requesterOpenId,
+      ...(await collectTaskNotificationRecipients(task)),
+    ]),
+  ];
   if (parsed.decision === "APPROVED") {
     await prisma.$transaction(async (tx) => {
       const lockedRequest = await tx.taskDeletionRequest.updateMany({
@@ -407,36 +420,32 @@ export async function reviewTaskDeletionRequest(input: {
           }),
         },
       });
-    });
 
-    await enqueueProgressNotification(
-      `progress:task_deleted:${task.id}:${reviewedAt.toISOString()}`,
-      {
-        type: "task_deleted",
-        taskId: task.id,
-        taskTitle: task.title,
-        projectId: task.projectId,
-        projectName: task.project.name,
-        stageId: task.stageId,
-        stageName: task.stage?.name ?? "无阶段",
-        actorName: user.name,
-        reason: request.reason,
-        team: task.team,
-        techGroup: task.techGroup,
-        assigneeOpenIds: [
-          request.requesterOpenId,
-          ...getTaskAssigneeOpenIds(task),
-        ],
-        projectOwnerOpenIds,
-        recipientOpenIds: [
-          ...new Set([
+      await enqueueProgressNotificationTx(
+        tx,
+        `progress:task_deleted:${task.id}:${reviewedAt.toISOString()}`,
+        {
+          type: "task_deleted",
+          taskId: task.id,
+          taskTitle: task.title,
+          projectId: task.projectId,
+          projectName: task.project.name,
+          stageId: task.stageId,
+          stageName: task.stage?.name ?? "无阶段",
+          actorName: user.name,
+          reason: request.reason,
+          team: task.team,
+          techGroup: task.techGroup,
+          assigneeOpenIds: [
             request.requesterOpenId,
-            ...(await collectTaskNotificationRecipients(task)),
-          ]),
-        ],
-      },
-      await getNotificationContext(),
-    );
+            ...getTaskAssigneeOpenIds(task),
+          ],
+          projectOwnerOpenIds,
+          recipientOpenIds: reviewRecipientOpenIds,
+        },
+        context,
+      );
+    });
   } else {
     await prisma.$transaction(async (tx) => {
       const lockedRequest = await tx.taskDeletionRequest.updateMany({
@@ -472,29 +481,25 @@ export async function reviewTaskDeletionRequest(input: {
           }),
         },
       });
-    });
 
-    await enqueueProgressNotification(
-      `progress:task_delete_rejected:${request.id}`,
-      {
-        type: "task_delete_rejected",
-        taskId: task.id,
-        taskTitle: task.title,
-        projectName: task.project.name,
-        reviewerName: user.name,
-        reason: request.reason,
-        comment: parsed.comment ?? "",
-        requesterOpenId: request.requesterOpenId,
-        assigneeOpenIds: getTaskAssigneeOpenIds(task),
-        recipientOpenIds: [
-          ...new Set([
-            request.requesterOpenId,
-            ...(await collectTaskNotificationRecipients(task)),
-          ]),
-        ],
-      },
-      await getNotificationContext(),
-    );
+      await enqueueProgressNotificationTx(
+        tx,
+        `progress:task_delete_rejected:${request.id}`,
+        {
+          type: "task_delete_rejected",
+          taskId: task.id,
+          taskTitle: task.title,
+          projectName: task.project.name,
+          reviewerName: user.name,
+          reason: request.reason,
+          comment: parsed.comment ?? "",
+          requesterOpenId: request.requesterOpenId,
+          assigneeOpenIds: getTaskAssigneeOpenIds(task),
+          recipientOpenIds: reviewRecipientOpenIds,
+        },
+        context,
+      );
+    });
   }
 
   drainNotificationOutboxSoon();

@@ -1,4 +1,4 @@
-import type { Importance, TaskCategory, Urgency } from "@prisma/client";
+import type { Importance, Urgency } from "@prisma/client";
 import { normalizeTaskTechGroups } from "@/lib/progress-task-tech-groups";
 
 export type TaskCreationDraft = {
@@ -6,7 +6,6 @@ export type TaskCreationDraft = {
   goal: string;
   stageId: string | null;
   stageName: string;
-  category: TaskCategory;
   taskTechGroups: string[];
   urgency: Urgency;
   importance: Importance;
@@ -29,7 +28,6 @@ export function parseTaskCreationDraft(payload: string): TaskCreationDraft | nul
       goal: typeof parsed.goal === "string" ? parsed.goal : "",
       stageId: typeof parsed.stageId === "string" ? parsed.stageId : null,
       stageName: typeof parsed.stageName === "string" ? parsed.stageName : "无阶段",
-      category: (parsed.category as TaskCategory) ?? "RND",
       taskTechGroups: Array.isArray(parsed.taskTechGroups)
         ? normalizeTaskTechGroups(parsed.taskTechGroups.map(String))
         : [],

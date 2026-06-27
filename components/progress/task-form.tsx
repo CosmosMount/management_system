@@ -113,7 +113,6 @@ export function TaskForm({
       stageId: initialTask?.stageId ?? defaultStageId,
       title: initialTask?.title ?? "",
       goal: initialTask?.goal ?? "",
-      category: "RND",
       taskTechGroups: initialTask?.taskTechGroups ?? ["通用"],
       urgency: initialTask?.urgency ?? "MEDIUM",
       importance: initialTask?.importance ?? "MEDIUM",

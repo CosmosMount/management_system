@@ -27,8 +27,11 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   FEEDBACK_IMAGE_ACCEPT,
   FEEDBACK_IMAGE_ALLOWED_TYPES,
+  FEEDBACK_IMAGE_SIZE_LABEL,
+  FEEDBACK_IMAGE_TOTAL_SIZE_LABEL,
   MAX_FEEDBACK_IMAGE_COUNT,
   MAX_FEEDBACK_IMAGE_SIZE,
+  MAX_FEEDBACK_IMAGE_TOTAL_SIZE,
 } from "@/lib/feedback-upload-limits";
 import { feedbackStatusLabels } from "@/lib/feedback-labels";
 import { cn } from "@/lib/utils";
@@ -114,7 +117,9 @@ function acceptedFeedbackImages(files: File[], showErrors = true): File[] {
       continue;
     }
     if (file.size > MAX_FEEDBACK_IMAGE_SIZE) {
-      if (showErrors) toast.error("单张反馈图片不能超过 100MB");
+      if (showErrors) {
+        toast.error(`单张反馈图片不能超过 ${FEEDBACK_IMAGE_SIZE_LABEL}`);
+      }
       continue;
     }
     accepted.push(file);
@@ -137,6 +142,13 @@ function addAcceptedFeedbackImages(
 
   if (accepted.length > remaining) {
     toast.error(`最多上传 ${MAX_FEEDBACK_IMAGE_COUNT} 张图片`);
+  }
+  const totalSize = [...currentFiles.map((image) => image.file), ...accepted]
+    .slice(0, currentFiles.length + remaining)
+    .reduce((sum, file) => sum + file.size, 0);
+  if (totalSize > MAX_FEEDBACK_IMAGE_TOTAL_SIZE) {
+    toast.error(`反馈图片总大小不能超过 ${FEEDBACK_IMAGE_TOTAL_SIZE_LABEL}`);
+    return;
   }
 
   setFiles([
@@ -380,7 +392,8 @@ function FeedbackImageInput({
       />
       <p className="text-xs text-muted-foreground">
         支持 PNG/JPG/WebP，可选择文件或在输入框中粘贴截图；最多{" "}
-        {MAX_FEEDBACK_IMAGE_COUNT} 张，每张不超过 100MB。
+        {MAX_FEEDBACK_IMAGE_COUNT} 张，单张不超过 {FEEDBACK_IMAGE_SIZE_LABEL}，
+        合计不超过 {FEEDBACK_IMAGE_TOTAL_SIZE_LABEL}。
       </p>
     </div>
   );

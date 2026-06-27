@@ -100,7 +100,7 @@ DRAFT → MANAGEMENT_REVIEW → TEACHER_REVIEW → PENDING_APPLICANT_DOCS
 | 模型 | 说明 |
 |------|------|
 | `Project` | 项目（车组、技术组、宏观状态） |
-| `ProjectMilestone` | 验收里程碑（飞书文档链接） |
+| `ProjectStage` | 验收阶段（材料链接与 DDL） |
 | `Task` | 任务（负责人、指标、截止、类别） |
 | `TaskSubmission` | 交付 / 里程碑提交 |
 | `WeeklyReport` | 周报 |
@@ -193,7 +193,7 @@ npm run cron                   # 启动定时任务（独立进程）
 
 - 实现：`lib/file-upload.ts`，采购附件元数据：`lib/order-attachments.ts`
 - 存储：`storage/uploads/<订单ID>/`
-- 单文件 20MB，Server Actions 总上限 100MB（`next.config.ts` 中 `serverActions.bodySizeLimit`）
+- 单文件 20MB；反馈图片单次合计 50MB；Server Actions 总上限 100MB（`next.config.ts` 中 `serverActions.bodySizeLimit`）
 - 访问：浏览器 URL 保持 `/uploads/...`，由 `app/uploads/[...path]/route.ts` 校验登录和 FileAsset 权限后读取
 
 ### 验收清单自动生成
@@ -283,7 +283,6 @@ docker compose up -d --build
 - 附件需手动备份；PostgreSQL 使用 `postgres-data` 卷或 `pg_dump`
 - `UserRole` 不会随首次登录自动分配，须 seed 或 `/admin` 配置
 - Serverless 部署需将 cron 迁出
-- `lib/feishu-doc.ts` 保留 URL 解析工具，当前审批流未使用访问记录 API
 
 ## 环境变量
 

@@ -4,7 +4,7 @@ import { Prisma } from "@prisma/client";
 import { auth } from "@/lib/auth";
 import {
   drainNotificationOutboxSoon,
-  enqueueProgressNotification,
+  enqueueProgressNotificationTx,
 } from "@/lib/notification-outbox";
 import {
   canRequestTaskDdlChange,
@@ -76,6 +76,8 @@ export async function requestTaskDdlChange(input: {
     throw new Error("新的最晚完成时间与当前时间一致");
   }
 
+  const context = await getNotificationContext();
+  const recipientOpenIds = await collectTaskNotificationRecipients(task);
   const request = await prisma
     .$transaction(async (tx) => {
       const liveTask = await tx.task.findUnique({
@@ -132,6 +134,24 @@ export async function requestTaskDdlChange(input: {
         },
       });
 
+      await enqueueProgressNotificationTx(
+        tx,
+        `progress:task_ddl_change_requested:${created.id}`,
+        {
+          type: "task_ddl_change_requested",
+          requestId: created.id,
+          taskId: task.id,
+          taskTitle: task.title,
+          projectName: task.project.name,
+          requesterName: user.name,
+          oldDueAt: task.dueAt.toISOString(),
+          newDueAt: newDueAt.toISOString(),
+          reason: parsed.reason,
+          recipientOpenIds,
+        },
+        context,
+      );
+
       return created;
     })
     .catch((err: unknown) => {
@@ -141,22 +161,6 @@ export async function requestTaskDdlChange(input: {
       throw err;
     });
 
-  await enqueueProgressNotification(
-    `progress:task_ddl_change_requested:${request.id}`,
-    {
-      type: "task_ddl_change_requested",
-      requestId: request.id,
-      taskId: task.id,
-      taskTitle: task.title,
-      projectName: task.project.name,
-      requesterName: user.name,
-      oldDueAt: task.dueAt.toISOString(),
-      newDueAt: newDueAt.toISOString(),
-      reason: parsed.reason,
-      recipientOpenIds: await collectTaskNotificationRecipients(task),
-    },
-    await getNotificationContext(),
-  );
   drainNotificationOutboxSoon();
 
   revalidateProgress(task.projectId, task.id);
@@ -212,6 +216,14 @@ export async function reviewTaskDdlChange(input: {
   }
 
   const reviewedAt = new Date();
+  const context = await getNotificationContext();
+  const approved = parsed.decision === "APPROVED";
+  const recipientOpenIds = [
+    ...new Set([
+      request.requesterOpenId,
+      ...(await collectTaskNotificationRecipients(task)),
+    ]),
+  ];
   await prisma.$transaction(async (tx) => {
     const locked = await tx.taskDdlChangeRequest.updateMany({
       where: { id: request.id, status: "PENDING" },
@@ -266,35 +278,30 @@ export async function reviewTaskDdlChange(input: {
         }),
       },
     });
+
+    await enqueueProgressNotificationTx(
+      tx,
+      `progress:task_ddl_change_${approved ? "approved" : "rejected"}:${request.id}`,
+      {
+        type: approved
+          ? "task_ddl_change_approved"
+          : "task_ddl_change_rejected",
+        requestId: request.id,
+        taskId: task.id,
+        taskTitle: task.title,
+        projectName: task.project.name,
+        reviewerName: user.name,
+        requesterOpenId: request.requesterOpenId,
+        oldDueAt: request.oldDueAt.toISOString(),
+        newDueAt: request.newDueAt.toISOString(),
+        reason: request.reason,
+        comment: parsed.comment ?? "",
+        recipientOpenIds,
+      },
+      context,
+    );
   });
 
-  const approved = parsed.decision === "APPROVED";
-  const recipientOpenIds = [
-    ...new Set([
-      request.requesterOpenId,
-      ...(await collectTaskNotificationRecipients(task)),
-    ]),
-  ];
-  await enqueueProgressNotification(
-    `progress:task_ddl_change_${approved ? "approved" : "rejected"}:${request.id}`,
-    {
-      type: approved
-        ? "task_ddl_change_approved"
-        : "task_ddl_change_rejected",
-      requestId: request.id,
-      taskId: task.id,
-      taskTitle: task.title,
-      projectName: task.project.name,
-      reviewerName: user.name,
-      requesterOpenId: request.requesterOpenId,
-      oldDueAt: request.oldDueAt.toISOString(),
-      newDueAt: request.newDueAt.toISOString(),
-      reason: request.reason,
-      comment: parsed.comment ?? "",
-      recipientOpenIds,
-    },
-    await getNotificationContext(),
-  );
   drainNotificationOutboxSoon();
 
   revalidateProgress(task.projectId, task.id);

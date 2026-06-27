@@ -81,15 +81,6 @@ enum TaskRiskSource {
   WEEKLY
 }
 
-enum TaskCategory {
-  TEST
-  ASSEMBLY
-  RND
-  DEBUG
-  REVIEW_DRAWING
-  ITERATION
-}
-
 enum Urgency {
   HIGH
   MEDIUM
@@ -324,20 +315,18 @@ model ProjectStage {
   goal                String           @default("")
   sortOrder           Int
   status              StageStatus      @default(NOT_STARTED)
-  evidenceUrl         String           @default("") @map("feishuDocUrl")
+  evidenceUrl         String           @default("")
   ownerOpenId         String           @default("")
   ownerName           String           @default("")
   dueAt               DateTime?
   extensionCount      Int              @default(0)
   benignExtensionCount Int             @default(0)
-  currentSubmissionId String?          @map("submissionId")
+  currentSubmissionId String?
   tasks               Task[]
   submissions         TaskSubmission[]
   ddlChangeRequests   ProjectDdlChangeRequest[]
   createdAt           DateTime         @default(now())
   updatedAt           DateTime         @updatedAt
-
-  @@map("ProjectMilestone")
 }
 
 model ProjectDdlChangeRequest {
@@ -378,7 +367,6 @@ model Task {
   stage           ProjectStage?       @relation(fields: [stageId], references: [id], onDelete: SetNull)
   title           String
   goal            String              @default("")
-  category        TaskCategory        @default(RND)
   urgency         Urgency             @default(MEDIUM)
   importance      Importance          @default(MEDIUM)
   assigneeOpenId  String
@@ -566,7 +554,6 @@ model WeeklyReport {
   task          Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
   weekStart     DateTime
   progress      String
-  risks         String   @default("")
   nextPlan      String   @default("")
   feishuDocUrl  String   @default("")
   submittedBy   String
@@ -584,7 +571,6 @@ model ApprovalRecord {
   approverName    String
   approverRole    UserRoleType
   decision        ApprovalDecision
-  docViewVerified Boolean          @default(false)
   offlineConfirmed Boolean         @default(false)
   comment         String           @default("")
   checklistConfirmations ApprovalChecklistConfirmation[]

@@ -173,7 +173,6 @@ export type TaskWeeklyReportView = {
   id: string;
   weekStart: string;
   progress: string;
-  risks: string;
   nextPlan: string;
   feishuDocUrl: string;
   submitterName: string;
@@ -1084,9 +1083,6 @@ function TaskWeeklyReports({ reports }: { reports: TaskWeeklyReportView[] }) {
                   </span>
                 </div>
                 <p className="mt-2">{report.progress}</p>
-                {report.risks && (
-                  <p className="mt-1 text-muted-foreground">风险：{report.risks}</p>
-                )}
                 {report.nextPlan && (
                   <p className="mt-1 text-muted-foreground">
                     下周：{report.nextPlan}

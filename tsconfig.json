@@ -39,6 +39,11 @@
   ],
   "exclude": [
     "node_modules",
-    "scripts"
+    "scripts",
+    ".tmp",
+    "test-results",
+    "playwright-report",
+    "public/uploads",
+    "storage/uploads"
   ]
 }

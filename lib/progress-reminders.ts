@@ -170,6 +170,7 @@ const definitionByKind = new Map(
     definition,
   ]),
 );
+const PROGRESS_REMINDER_SCAN_LOCK_ID = 2026062701;
 let progressReminderScanRunning = false;
 
 export function isProgressReminderKind(value: string): value is ProgressReminderKind {
@@ -273,7 +274,16 @@ export async function runDueProgressReminderRules({
   }
 
   progressReminderScanRunning = true;
+  let databaseLockAcquired = false;
   try {
+    const lockRows = await prisma.$queryRaw<Array<{ locked: boolean }>>`
+      SELECT pg_try_advisory_lock(${PROGRESS_REMINDER_SCAN_LOCK_ID}) AS locked
+    `;
+    databaseLockAcquired = lockRows[0]?.locked === true;
+    if (!databaseLockAcquired) {
+      return { rulesRun: 0, queued: 0, skipped: true };
+    }
+
     await seedDefaultProgressReminderRules();
     const rules = await prisma.progressReminderRule.findMany();
     let rulesRun = 0;
@@ -306,6 +316,11 @@ export async function runDueProgressReminderRules({
 
     return { rulesRun, queued };
   } finally {
+    if (databaseLockAcquired) {
+      await prisma.$executeRaw`
+        SELECT pg_advisory_unlock(${PROGRESS_REMINDER_SCAN_LOCK_ID})
+      `;
+    }
     progressReminderScanRunning = false;
   }
 }

@@ -2,10 +2,10 @@
 
 import { ApprovalDecision, TaskStatus } from "@prisma/client";
 import { auth } from "@/lib/auth";
-import { logProgressActivity, requireSessionUser } from "@/lib/progress-activity";
+import { requireSessionUser } from "@/lib/progress-activity";
 import {
   drainNotificationOutboxSoon,
-  enqueueProgressNotification,
+  enqueueProgressNotificationTx,
 } from "@/lib/notification-outbox";
 import {
   canApproveTask,
@@ -102,6 +102,8 @@ export async function approveTaskSubmission(input: {
   });
   if (!approverRole) throw new Error("无法确定审批角色");
 
+  const context = await getNotificationContext();
+  const recipientOpenIds = await collectTaskNotificationRecipients(task);
   await prisma.$transaction(async (tx) => {
     const existingApproval = await tx.approvalRecord.findFirst({
       where: { submissionId: submission.id },
@@ -128,7 +130,6 @@ export async function approveTaskSubmission(input: {
         approverName: user.name,
         approverRole,
         decision: ApprovalDecision.APPROVED,
-        docViewVerified: false,
         offlineConfirmed: parsed.offlineConfirmed,
         comment: parsed.comment ?? "",
       },
@@ -144,32 +145,36 @@ export async function approveTaskSubmission(input: {
         })),
       });
     }
+
+    await tx.progressActivityLog.create({
+      data: {
+        projectId: task.projectId,
+        taskId: task.id,
+        action: "task.approved",
+        actorOpenId: user.openId,
+        actorName: user.name,
+        payload: JSON.stringify({
+          submissionId: submission.id,
+          checklistConfirmationCount: checklistItems.length,
+        }),
+      },
+    });
+
+    await enqueueProgressNotificationTx(
+      tx,
+      `progress:task_approved:${submission.id}`,
+      {
+        type: "task_approved",
+        taskId: task.id,
+        taskTitle: task.title,
+        projectName: task.project.name,
+        assigneeOpenIds: getTaskAssigneeOpenIds(task),
+        recipientOpenIds,
+      },
+      context,
+    );
   });
 
-  await logProgressActivity({
-    projectId: task.projectId,
-    taskId: task.id,
-    action: "task.approved",
-    actorOpenId: user.openId,
-    actorName: user.name,
-    payload: {
-      submissionId: submission.id,
-      checklistConfirmationCount: checklistItems.length,
-    },
-  });
-
-  await enqueueProgressNotification(
-    `progress:task_approved:${submission.id}`,
-    {
-      type: "task_approved",
-      taskId: task.id,
-      taskTitle: task.title,
-      projectName: task.project.name,
-      assigneeOpenIds: getTaskAssigneeOpenIds(task),
-      recipientOpenIds: await collectTaskNotificationRecipients(task),
-    },
-    await getNotificationContext(),
-  );
   drainNotificationOutboxSoon();
 
   revalidateProgress(task.projectId, task.id);
@@ -243,6 +248,8 @@ export async function rejectTaskSubmission(input: {
   });
   if (!approverRole) throw new Error("无法确定审批角色");
 
+  const context = await getNotificationContext();
+  const recipientOpenIds = await collectTaskNotificationRecipients(task);
   await prisma.$transaction(async (tx) => {
     const existingApprovalInTx = await tx.approvalRecord.findFirst({
       where: { submissionId: submission.id },
@@ -269,35 +276,41 @@ export async function rejectTaskSubmission(input: {
         approverName: user.name,
         approverRole,
         decision: ApprovalDecision.REJECTED,
-        docViewVerified: false,
         offlineConfirmed: parsed.offlineConfirmed,
         comment: parsed.comment ?? "",
       },
     });
+
+    await tx.progressActivityLog.create({
+      data: {
+        projectId: task.projectId,
+        taskId: task.id,
+        action: "task.rejected",
+        actorOpenId: user.openId,
+        actorName: user.name,
+        payload: JSON.stringify({
+          submissionId: submission.id,
+          comment: parsed.comment ?? "",
+        }),
+      },
+    });
+
+    await enqueueProgressNotificationTx(
+      tx,
+      `progress:task_rejected:${submission.id}`,
+      {
+        type: "task_rejected",
+        taskId: task.id,
+        taskTitle: task.title,
+        projectName: task.project.name,
+        assigneeOpenIds: getTaskAssigneeOpenIds(task),
+        comment: parsed.comment ?? "",
+        recipientOpenIds,
+      },
+      context,
+    );
   });
 
-  await logProgressActivity({
-    projectId: task.projectId,
-    taskId: task.id,
-    action: "task.rejected",
-    actorOpenId: user.openId,
-    actorName: user.name,
-    payload: { submissionId: submission.id, comment: parsed.comment ?? "" },
-  });
-
-  await enqueueProgressNotification(
-    `progress:task_rejected:${submission.id}`,
-    {
-      type: "task_rejected",
-      taskId: task.id,
-      taskTitle: task.title,
-      projectName: task.project.name,
-      assigneeOpenIds: getTaskAssigneeOpenIds(task),
-      comment: parsed.comment ?? "",
-      recipientOpenIds: await collectTaskNotificationRecipients(task),
-    },
-    await getNotificationContext(),
-  );
   drainNotificationOutboxSoon();
 
   revalidateProgress(task.projectId, task.id);

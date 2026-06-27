@@ -2,6 +2,8 @@
 
 本文档用于人工测试、Playwright 仿真测试和 subagent 测试执行。执行测试时不要提交本地 cookie、截图、HTML 快照、数据库文件或 `.tmp/` 内容。
 
+完整业务回归范围见 [全功能测试规划](./FULL_FUNCTIONAL_TEST_PLAN.md)。本文档中的 Playwright smoke 只覆盖主要页面入口和少量浅交互，不能等同于全功能通过。
+
 ## 测试前准备
 
 ### 环境
@@ -70,6 +72,13 @@
   npm run test:e2e
   ```
 
+  如需执行登录后的功能冒烟，额外指定本地登录态：
+
+  ```bash
+  export PLAYWRIGHT_STORAGE_STATE=".tmp/playwright-liqixuan-storage.json"
+  npm run test:e2e
+  ```
+
 可用临时脚本加载登录态，例如放在 `.tmp/check.mjs`：
 
 ```js
@@ -96,13 +105,15 @@ await browser.close();
 每次提交前至少执行：
 
 ```bash
-npx prisma generate
+npm run check
+```
+
+`npm run check` 会依次执行 Prisma validate、Prisma generate + TypeScript、脚本 TypeScript、全量 ESLint（含 Playwright tests）和 `git diff --check`。数据库或生产构建相关改动再额外执行：
+
+```bash
 DATABASE_URL="postgresql://..." npm run db:deploy
 SHADOW_DATABASE_URL="postgresql://..._shadow" npx prisma migrate diff --from-migrations prisma/migrations --to-schema prisma/schema.prisma --exit-code
-npx tsc --noEmit --incremental false
-npx eslint app components lib scripts --max-warnings=0
 npm run build
-git diff --check
 ```
 
 数据库相关改动额外执行：
@@ -286,7 +297,7 @@ npm run db:deploy
 6. 再点击开放或处理中反馈，仍保持“全部”。
 7. 直接打开 `/feedback?selected=<closedId>`，初始应自动进入“已关闭”视图并显示详情。
 8. 新建反馈后应跳到新反馈详情，新反馈出现在“活动”中。
-9. 上传图片超过数量、类型或大小限制时显示中文错误。
+9. 上传图片超过数量、类型、单张 20MB 或合计 50MB 限制时显示中文错误。
 10. 有权限用户可回复、修改状态；无权限用户不能执行管理操作。
 
 ## 管理员面板测试

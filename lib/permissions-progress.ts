@@ -147,8 +147,10 @@ export function progressTaskMineWhere(userOpenId?: string): Prisma.TaskWhereInpu
       { assignees: { some: { openId: userOpenId } } },
       { stage: { ownerOpenId: userOpenId } },
       { deletionRequests: { some: { requesterOpenId: userOpenId } } },
+      { ddlChangeRequests: { some: { requesterOpenId: userOpenId } } },
       { project: { ownerOpenId: userOpenId } },
       { project: { owners: { some: { openId: userOpenId } } } },
+      { project: { participants: { some: { openId: userOpenId } } } },
       { creationRequests: { some: { requesterOpenId: userOpenId } } },
     ],
   };
