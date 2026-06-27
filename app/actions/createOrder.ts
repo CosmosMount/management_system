@@ -1,20 +1,13 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
 import { OrderStatus, type PurchaseItemKind } from "@prisma/client";
-import { mapOrderItems } from "@/lib/feishu";
-import {
-  drainNotificationOutboxSoon,
-  enqueueOrderNotification,
-} from "@/lib/notification-outbox";
 import { generateOrderNo } from "@/lib/order-no";
 import { attachItemReferenceImages } from "@/lib/order-item-images";
 import { prisma } from "@/lib/prisma";
 import { removeOrderUploads } from "@/lib/file-upload";
-import { getNotificationContext } from "@/lib/request-origin";
-import { checkBudgetAlertsForOrder } from "@/lib/procurement-budget-alerts";
-import { routes } from "@/lib/routes";
+import { runProcurementSubmitSideEffects } from "@/lib/procurement-order-side-effects";
+import { revalidateProcurement } from "@/lib/revalidate";
 import { requireInitiatorSignature } from "@/lib/user-signature";
 import {
   assertItemImagesPresent,
@@ -38,10 +31,11 @@ export async function createOrder(formData: FormData) {
     throw new Error("未登录");
   }
 
-  await requireInitiatorSignature(session.user.openId);
-
   const payload = JSON.parse(String(formData.get("payload") ?? "{}"));
   const parsed = createOrderSchema.parse(payload);
+  if (parsed.submit) {
+    await requireInitiatorSignature(session.user.openId);
+  }
   const { itemImages } = parseOrderFormData(formData);
   assertItemImagesPresent(parsed.items, itemImages);
 
@@ -75,6 +69,9 @@ export async function createOrder(formData: FormData) {
             techGroup: parsed.techGroup,
             totalPrice,
             status,
+            ...(parsed.submit
+              ? { statusEnteredAt: new Date(), lastReminderAt: null }
+              : {}),
             items: {
               create: storedItems,
             },
@@ -115,31 +112,9 @@ export async function createOrder(formData: FormData) {
   }
 
   if (status === OrderStatus.MANAGEMENT_REVIEW) {
-    await enqueueOrderNotification(
-      `procurement:order:${refreshed.id}:${refreshed.status}:${refreshed.updatedAt.toISOString()}`,
-      {
-        id: refreshed.id,
-        orderNo: refreshed.orderNo,
-        initiatorName: refreshed.initiatorName,
-        totalPrice: refreshed.totalPrice,
-        status: refreshed.status,
-        team: refreshed.team,
-        techGroup: refreshed.techGroup,
-        items: mapOrderItems(refreshed.items),
-      },
-      await getNotificationContext(),
-    );
-    drainNotificationOutboxSoon();
-    await checkBudgetAlertsForOrder(
-      refreshed.team,
-      refreshed.techGroup,
-      await getNotificationContext(),
-    );
+    await runProcurementSubmitSideEffects(refreshed);
   }
 
-  revalidatePath("/");
-  revalidatePath(routes.procurement.root);
-  revalidatePath(routes.procurement.list);
-  revalidatePath(routes.procurement.dashboard);
-  return refreshed;
+  revalidateProcurement(refreshed.id);
+  return { id: refreshed.id };
 }

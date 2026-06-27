@@ -333,7 +333,7 @@ export async function sendProcurementRejectedNotification(
   });
 }
 
-/** 报销员要求重新提交凭证 */
+/** 报销员要求采购人重新提交凭证 */
 export async function sendApplicantResubmitNotification(
   order: OrderCardPayload,
   reason: string,
@@ -366,6 +366,41 @@ export async function sendApplicantResubmitNotification(
       `**报销员**：${financeName}`,
       `**补充说明**：${reason}`,
       "**说明**：请重新上传发票、实物照片，系统将重新生成验收清单",
+    ],
+  });
+}
+
+/** 审批退回草稿：通知采购人修改后重新提交 */
+export async function sendProcurementReturnDraftNotification(
+  order: OrderCardPayload,
+  reason: string,
+  returnedByName: string,
+  context?: NotificationContext,
+) {
+  const card = buildOrderCard(order, {
+    headerTitle: "请修改后重新提交采购申请",
+    headerTemplate: "orange",
+    primaryButtonText: "继续编辑",
+    appOrigin: context?.appOrigin,
+    extraLines: [
+      `**退回人**：${returnedByName}`,
+      `**补充说明**：${reason}`,
+      "**说明**：订单已退回草稿，请修改采购明细后重新提交",
+    ],
+  });
+
+  await postToWebhook({ msg_type: "interactive", card }).catch((err) => {
+    console.error("[feishu] Webhook 通知失败:", err);
+  });
+  await notifyInitiator(order, {
+    headerTitle: "请修改后重新提交采购申请",
+    headerTemplate: "orange",
+    primaryButtonText: "继续编辑",
+    appOrigin: context?.appOrigin,
+    extraLines: [
+      `**退回人**：${returnedByName}`,
+      `**补充说明**：${reason}`,
+      "**说明**：订单已退回草稿，请修改采购明细后重新提交",
     ],
   });
 }

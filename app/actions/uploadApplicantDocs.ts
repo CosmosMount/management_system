@@ -1,9 +1,8 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
-import { OrderStatus, UserRoleType } from "@prisma/client";
+import { OrderStatus } from "@prisma/client";
 import { mapOrderItems } from "@/lib/feishu";
 import {
   drainNotificationOutboxSoon,
@@ -29,89 +28,16 @@ import { serializeFilePaths } from "@/lib/order-attachments";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";
 import { canUploadApplicantDocs } from "@/lib/permissions";
-import { routes } from "@/lib/routes";
+import {
+  assertListSignaturesReady,
+  resolveReimbursementListSignatures,
+} from "@/lib/reimbursement-list-signatures";
+import { revalidateProcurement } from "@/lib/revalidate";
 
 const confirmedItemSchema = z.object({
   id: z.string(),
   lineTotal: z.number().min(0),
 });
-
-type ListSignatureContext = {
-  acceptor1Path: string | null;
-  acceptor2Path: string | null;
-  receiverPath: string | null;
-  acceptor1Label: string;
-  acceptor2Label: string;
-  receiverLabel: string;
-};
-
-async function resolveListSignatures(
-  team: string,
-  techGroup: string,
-  initiator: { name: string; signaturePath: string | null },
-): Promise<ListSignatureContext> {
-  const roles = await prisma.userRole.findMany({
-    where: {
-      OR: [
-        { role: UserRoleType.TEAM_ADMIN, team },
-        { role: UserRoleType.TECH_GROUP_ADMIN, techGroup },
-      ],
-    },
-  });
-
-  const openIds = roles.map((r) => r.openId);
-  const users =
-    openIds.length === 0
-      ? []
-      : await prisma.user.findMany({
-          where: { openId: { in: openIds } },
-          select: { openId: true, name: true, signaturePath: true },
-        });
-  const userByOpenId = new Map(users.map((u) => [u.openId, u]));
-
-  const teamAdmin = roles.find((r) => r.role === UserRoleType.TEAM_ADMIN);
-  const techAdmin = roles.find((r) => r.role === UserRoleType.TECH_GROUP_ADMIN);
-  const teamUser = teamAdmin ? userByOpenId.get(teamAdmin.openId) : undefined;
-  const techUser = techAdmin ? userByOpenId.get(techAdmin.openId) : undefined;
-
-  return {
-    acceptor1Path: teamUser?.signaturePath
-      ? publicPathToAbsolute(teamUser.signaturePath)
-      : null,
-    acceptor2Path: techUser?.signaturePath
-      ? publicPathToAbsolute(techUser.signaturePath)
-      : null,
-    receiverPath: initiator.signaturePath
-      ? publicPathToAbsolute(initiator.signaturePath)
-      : null,
-    acceptor1Label: teamUser?.name ?? "车组组长",
-    acceptor2Label: techUser?.name ?? "技术组组长",
-    receiverLabel: initiator.name,
-  };
-}
-
-function assertListSignaturesReady(
-  signatures: ListSignatureContext,
-  requireAll: boolean,
-): void {
-  if (!requireAll) return;
-
-  const missing: string[] = [];
-  if (!signatures.acceptor1Path) {
-    missing.push(`验收人 1（${signatures.acceptor1Label}）`);
-  }
-  if (!signatures.acceptor2Path) {
-    missing.push(`验收人 2（${signatures.acceptor2Label}）`);
-  }
-  if (!signatures.receiverPath) {
-    missing.push(`领用人（${signatures.receiverLabel}）`);
-  }
-  if (missing.length > 0) {
-    throw new Error(
-      `以下人员尚未上传电子签名，请先在「个人中心」上传：${missing.join("、")}`,
-    );
-  }
-}
 
 export async function uploadApplicantDocs(formData: FormData) {
   const session = await auth();
@@ -230,11 +156,13 @@ export async function uploadApplicantDocs(formData: FormData) {
     };
   });
 
-  const signatures = await resolveListSignatures(
-    order.team,
-    order.techGroup,
-    order.initiator,
-  );
+  const signatures = await resolveReimbursementListSignatures({
+    team: order.team,
+    techGroup: order.techGroup,
+    teamApproverOpenId: order.teamApproverOpenId,
+    techGroupApproverOpenId: order.techGroupApproverOpenId,
+    initiator: order.initiator,
+  });
   assertListSignaturesReady(signatures, true);
   const docDate = formatDocDate();
   const listBuffer = generateReimbursementListDocx(docItems, {
@@ -249,9 +177,8 @@ export async function uploadApplicantDocs(formData: FormData) {
   const totalPrice = confirmedItems.reduce((sum, c) => sum + c.lineTotal, 0);
 
   const context = await getNotificationContext();
-  let updated;
   try {
-    updated = await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(async (tx) => {
       for (const confirmed of confirmedItems) {
         const dbItem = itemMap.get(confirmed.id);
         if (!dbItem || dbItem.quantity <= 0) continue;
@@ -306,7 +233,6 @@ export async function uploadApplicantDocs(formData: FormData) {
         },
         context,
       );
-      return record;
     });
   } catch (err) {
     await Promise.allSettled(
@@ -316,12 +242,14 @@ export async function uploadApplicantDocs(formData: FormData) {
     );
     throw err;
   }
-  drainNotificationOutboxSoon();
+  try {
+    drainNotificationOutboxSoon();
+  } catch (err) {
+    console.error("[procurement] drain notification outbox failed:", err);
+  }
 
-  revalidatePath(routes.procurement.list);
-  revalidatePath(`${routes.procurement.detail(orderId)}`);
-  revalidatePath(routes.procurement.dashboard);
-  return updated;
+  revalidateProcurement(orderId);
+  return { id: orderId };
 }
 
 /** 提交前预览生成的验收清单（不落库） */
@@ -369,11 +297,13 @@ export async function previewReimbursementListDoc(input: {
     },
   );
 
-  const signatures = await resolveListSignatures(
-    order.team,
-    order.techGroup,
-    order.initiator,
-  );
+  const signatures = await resolveReimbursementListSignatures({
+    team: order.team,
+    techGroup: order.techGroup,
+    teamApproverOpenId: order.teamApproverOpenId,
+    techGroupApproverOpenId: order.techGroupApproverOpenId,
+    initiator: order.initiator,
+  });
   const docDate = formatDocDate();
   const buffer = generateReimbursementListDocx(docItems, {
     acceptor1Path: signatures.acceptor1Path,

@@ -1,3 +1,4 @@
+import { Paperclip } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -70,8 +71,11 @@ export function OrderAttachmentsCard({ order, canView }: Props) {
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle>流程附件</CardTitle>
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Paperclip className="h-4 w-4 text-primary" />
+          流程附件
+        </CardTitle>
         <CardDescription>
           各步骤上传的文件，可在对应环节查看与下载
         </CardDescription>

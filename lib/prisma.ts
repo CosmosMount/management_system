@@ -2,12 +2,18 @@ import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
 
+const PRISMA_SCHEMA_REVISION = "procurement-approver-open-ids-v1";
+
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
   pgPool: Pool | undefined;
+  prismaSchemaRevision?: string;
 };
 
 function isPrismaClientStale(client: PrismaClient): boolean {
+  if (globalForPrisma.prismaSchemaRevision !== PRISMA_SCHEMA_REVISION) {
+    return true;
+  }
   return (
     typeof client.project?.findMany !== "function" ||
     typeof client.projectOwner?.findMany !== "function" ||
@@ -66,6 +72,7 @@ function getPrismaClient(): PrismaClient {
   const client = createPrismaClient();
   if (process.env.NODE_ENV !== "production") {
     globalForPrisma.prisma = client;
+    globalForPrisma.prismaSchemaRevision = PRISMA_SCHEMA_REVISION;
   }
   return client;
 }

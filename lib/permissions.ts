@@ -80,6 +80,7 @@ export {
   canConfirmReimbursement,
   canEditDraftOrder,
   canRejectProcurement,
+  canRejectProcurementOrder,
   canRequestApplicantResubmit,
   canUploadApplicantDocs,
   canUploadFinanceScreenshot,

@@ -8,10 +8,17 @@ import {
   previewReimbursementListDoc,
   uploadApplicantDocs,
 } from "@/app/actions/uploadApplicantDocs";
-import { requestApplicantResubmit } from "@/app/actions/requestApplicantResubmit";
+import { rejectProcurementOrder } from "@/app/actions/rejectOrder";
 import { uploadFinanceScreenshot } from "@/app/actions/uploadFinanceScreenshot";
 import { InlineAttachments } from "@/components/order-attachments";
-import { ReasonConfirmDialog } from "@/components/reason-confirm-dialog";
+import { OrderRejectionNotice } from "@/components/procurement/order-rejection-notice";
+import { ProcurementRejectDialog } from "@/components/procurement-reject-dialog";
+import {
+  procurementDialogContentClass,
+  procurementDialogDescriptionClass,
+  procurementDialogHeaderClass,
+  procurementDialogTitleClass,
+} from "@/components/procurement/procurement-dialog-styles";
 import {
   PurchaseLineConfirm,
   type ConfirmedLineItem,
@@ -49,6 +56,10 @@ type Props = {
   initiatorOpenId: string;
   attachments: OrderAttachmentGroups;
   canViewAttachments: boolean;
+  rejectionReason?: string | null;
+  orderStatus?: OrderStatus;
+  rejectedByName?: string | null;
+  rejectedAt?: Date | null;
 };
 
 export function OrderReimbursementActions({
@@ -61,6 +72,10 @@ export function OrderReimbursementActions({
   initiatorOpenId,
   attachments,
   canViewAttachments,
+  rejectionReason,
+  orderStatus,
+  rejectedByName,
+  rejectedAt,
 }: Props) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -95,12 +110,16 @@ export function OrderReimbursementActions({
       {showApplicant && (
         <div id="upload">
           <ApplicantDocsDialog
-          orderId={orderId}
-          items={items}
-          loading={loading}
-          setLoading={setLoading}
-          onDone={() => router.refresh()}
-        />
+            orderId={orderId}
+            items={items}
+            loading={loading}
+            setLoading={setLoading}
+            onDone={() => router.refresh()}
+            rejectionReason={rejectionReason}
+            orderStatus={orderStatus}
+            rejectedByName={rejectedByName}
+            rejectedAt={rejectedAt}
+          />
         </div>
       )}
       {showFinance && (
@@ -114,19 +133,20 @@ export function OrderReimbursementActions({
         />
       )}
       {showFinanceResubmit && (
-        <ReasonConfirmDialog
-          triggerLabel="要求重提资料"
-          title="要求重新提交报销资料"
-          description="订单将退回「待上传凭证」，已上传的发票、清单与照片将清空，采购人需重新提交。"
-          reasonLabel="需补充说明"
-          confirmLabel="确认退回"
-          variant="outline"
+        <ProcurementRejectDialog
+          stage="finance"
+          title="驳回报销资料"
+          reasonLabel="说明"
           disabled={loading}
-          onConfirm={async (reason) => {
+          onConfirm={async (reason, outcome) => {
             setLoading(true);
             try {
-              await requestApplicantResubmit({ orderId, reason });
-              toast.success("已通知采购人重新提交资料");
+              await rejectProcurementOrder({ orderId, reason, outcome });
+              toast.success(
+                outcome === "terminate"
+                  ? "已终止报销流程"
+                  : "已通知采购人重新提交资料",
+              );
               router.refresh();
             } catch (err) {
               toast.error(err instanceof Error ? err.message : "操作失败");
@@ -158,12 +178,20 @@ function ApplicantDocsDialog({
   loading,
   setLoading,
   onDone,
+  rejectionReason,
+  orderStatus,
+  rejectedByName,
+  rejectedAt,
 }: {
   orderId: string;
   items: PurchaseLineItem[];
   loading: boolean;
   setLoading: (v: boolean) => void;
   onDone: () => void;
+  rejectionReason?: string | null;
+  orderStatus?: OrderStatus;
+  rejectedByName?: string | null;
+  rejectedAt?: Date | null;
 }) {
   const [open, setOpen] = useState(false);
   const [confirmedItems, setConfirmedItems] = useState<ConfirmedLineItem[]>(
@@ -189,6 +217,14 @@ function ApplicantDocsDialog({
 
     if (confirmedItems.length === 0) {
       toast.error("请确认采购明细价格");
+      return;
+    }
+
+    const invoiceInput = form.querySelector(
+      'input[name="invoices"]',
+    ) as HTMLInputElement | null;
+    if (!invoiceInput?.files?.length) {
+      toast.error("请至少上传一张发票");
       return;
     }
 
@@ -257,14 +293,25 @@ function ApplicantDocsDialog({
           </Button>
         }
       />
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>上传报销凭证</DialogTitle>
-          <DialogDescription>
+      <DialogContent className={procurementDialogContentClass}>
+        <DialogHeader className={procurementDialogHeaderClass}>
+          <DialogTitle className={procurementDialogTitleClass}>
+            上传报销凭证
+          </DialogTitle>
+          <DialogDescription className={procurementDialogDescriptionClass}>
             核对采购明细价格，为每行上传实物照片；系统将按学校模板自动生成 Word 验收清单
           </DialogDescription>
         </DialogHeader>
-        <form id={`applicant-docs-${orderId}`} className="space-y-4">
+        <form id={`applicant-docs-${orderId}`} className="space-y-3">
+          {rejectionReason ? (
+            <OrderRejectionNotice
+              variant="inline"
+              reason={rejectionReason}
+              status={orderStatus}
+              rejectedByName={rejectedByName}
+              rejectedAt={rejectedAt}
+            />
+          ) : null}
           <PurchaseLineConfirm
             items={items}
             editable
@@ -330,10 +377,12 @@ function ConfirmReimbursementDialog({
       <DialogTrigger
         render={<Button size="sm">确认报销</Button>}
       />
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>确认报销</DialogTitle>
-          <DialogDescription>
+      <DialogContent className={procurementDialogContentClass}>
+        <DialogHeader className={procurementDialogHeaderClass}>
+          <DialogTitle className={procurementDialogTitleClass}>
+            确认报销
+          </DialogTitle>
+          <DialogDescription className={procurementDialogDescriptionClass}>
             请核对以下采购明细价格，确认无误后完成报销
           </DialogDescription>
         </DialogHeader>
@@ -393,17 +442,19 @@ function FinanceScreenshotDialog({
           </Button>
         }
       />
-      <DialogContent className="max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>报销截图</DialogTitle>
-          <DialogDescription>
+      <DialogContent className={procurementDialogContentClass}>
+        <DialogHeader className={procurementDialogHeaderClass}>
+          <DialogTitle className={procurementDialogTitleClass}>
+            报销截图
+          </DialogTitle>
+          <DialogDescription className={procurementDialogDescriptionClass}>
             请先查看采购人上传的发票与清单，再上传报销系统截图
           </DialogDescription>
         </DialogHeader>
         {canViewAttachments && (
           <InlineAttachments groups={attachments} />
         )}
-        <form id={`finance-shot-${orderId}`} className="space-y-4">
+        <form id={`finance-shot-${orderId}`} className="space-y-3">
           <div className="space-y-2">
             <Label htmlFor={`screenshot-${orderId}`}>报销截图</Label>
             <Input

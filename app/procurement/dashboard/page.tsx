@@ -5,10 +5,10 @@ import {
   ProcurementSummaryTable,
   type SummaryRow,
 } from "@/components/procurement-summary-table";
-import { ProcurementBackLink } from "@/components/procurement/procurement-back-link";
+import { ProcurementDashboardHeader } from "@/components/procurement/procurement-back-link";
 import { ProcurementPageLayout } from "@/components/procurement/procurement-page-layout";
 import { PageShell } from "@/components/page-shell";
-import { PageTitle } from "@/components/page-title";
+import { Table2 } from "lucide-react";
 import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { buildDashboardChartsData } from "@/lib/procurement-dashboard-stats";
 import { listBudgetPoolViews } from "@/lib/procurement-budget";
@@ -75,14 +75,14 @@ export default async function DashboardPage() {
         intervalMs={10000}
       />
       <PageShell>
-        <ProcurementPageLayout className="space-y-8">
-          <div>
-            <ProcurementBackLink />
-            <PageTitle subtitle="采购看板" />
-          </div>
+        <ProcurementPageLayout className="space-y-6">
+          <ProcurementDashboardHeader />
           <ProcurementDashboardCharts data={chartData} />
           <div>
-            <h2 className="mb-4 text-lg font-semibold">明细汇总表</h2>
+            <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold">
+              <Table2 className="h-5 w-5 text-primary" />
+              明细汇总表
+            </h2>
             <ProcurementSummaryTable rows={rows} />
           </div>
         </ProcurementPageLayout>

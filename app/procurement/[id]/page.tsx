@@ -8,11 +8,17 @@ import { PurchaseOrderDeleteByAdminButton } from "@/components/admin-delete-acti
 import { OrderAttachmentsCard } from "@/components/order-attachments";
 import { OrderPageFocus } from "@/components/order-page-focus";
 import { OrderReimbursementActions } from "@/components/order-reimbursement-actions";
-import { OrdersBackLink } from "@/components/procurement/procurement-back-link";
+import { OrderRejectionNotice } from "@/components/procurement/order-rejection-notice";
+import { OrdersBackHeader } from "@/components/procurement/procurement-back-link";
 import { ProcurementPageLayout } from "@/components/procurement/procurement-page-layout";
 import { PageShell } from "@/components/page-shell";
-import { PageTitle } from "@/components/page-title";
 import { Badge } from "@/components/ui/badge";
+import {
+  CheckCircle2,
+  CircleDashed,
+  Info,
+  ListOrdered,
+} from "lucide-react";
 import { PurchaseItemReferenceCell } from "@/components/purchase-item-reference-cell";
 import { formatPurchaseItemKind } from "@/lib/purchase-item-kind";
 import {
@@ -109,16 +115,18 @@ export default async function OrderDetailPage({ params, searchParams }: Props) {
       />
       <OrderPageFocus focus={focus ?? null} fromNotify={from === "notify"} />
       <PageShell>
-        <ProcurementPageLayout className="max-w-4xl space-y-6">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <OrdersBackLink />
-              <PageTitle subtitle={`订单 ${order.orderNo}`} />
-            </div>
-            <div
-              id="approval"
-              className="flex flex-wrap items-center justify-end gap-2 scroll-mt-20"
-            >
+        <ProcurementPageLayout className="max-w-4xl space-y-3">
+          <div className="space-y-2">
+            <div className="flex items-start justify-between gap-4">
+              <OrdersBackHeader
+                className="mb-0 min-w-0 flex-1"
+                title={`订单 ${order.orderNo}`}
+                description={`${order.initiatorName} · ${order.team} / ${order.techGroup}`}
+              />
+              <div
+                id="approval"
+                className="flex flex-wrap items-center justify-end gap-2 scroll-mt-20"
+              >
               <Badge variant={order.status === "REJECTED" ? "destructive" : "default"}>
                 {statusLabels[order.status]}
               </Badge>
@@ -158,6 +166,10 @@ export default async function OrderDetailPage({ params, searchParams }: Props) {
                     initiatorOpenId={order.initiator.openId}
                     attachments={attachments}
                     canViewAttachments={canViewAttachments}
+                    rejectionReason={order.rejectionReason}
+                    orderStatus={order.status}
+                    rejectedByName={order.rejectedByName}
+                    rejectedAt={order.rejectedAt}
                   />
                 </>
               )}
@@ -165,35 +177,35 @@ export default async function OrderDetailPage({ params, searchParams }: Props) {
               orderId={order.id}
               isSuperAdmin={admin}
             />
+            </div>
+            </div>
+            {order.rejectionReason ? (
+              <OrderRejectionNotice
+                reason={order.rejectionReason}
+                status={order.status}
+                rejectedByName={order.rejectedByName}
+                rejectedAt={order.rejectedAt}
+              />
+            ) : null}
           </div>
-        </div>
-
-        {order.rejectionReason && (
-          <Card className="border-amber-200 bg-amber-50/80 dark:border-amber-900 dark:bg-amber-950/30">
-            <CardContent className="space-y-1 pt-6 text-sm">
-              <p className="font-medium text-amber-900 dark:text-amber-100">
-                {order.status === "REJECTED" ? "驳回说明" : "退回补充说明"}
-              </p>
-              <p>{order.rejectionReason}</p>
-              {order.rejectedByName && (
-                <p className="text-muted-foreground">
-                  {order.rejectedByName}
-                  {order.rejectedAt
-                    ? ` · ${order.rejectedAt.toLocaleString("zh-CN")}`
-                    : ""}
-                </p>
-              )}
-            </CardContent>
-          </Card>
-        )}
 
         {order.status === "MANAGEMENT_REVIEW" && (
-          <Card>
-            <CardContent className="flex gap-4 pt-6 text-sm">
-              <span>
+          <Card className="gap-0 py-0">
+            <CardContent className="flex flex-wrap gap-4 py-3 text-sm">
+              <span className="inline-flex items-center gap-1.5">
+                {order.teamApproved ? (
+                  <CheckCircle2 className="h-4 w-4 text-green-600" />
+                ) : (
+                  <CircleDashed className="h-4 w-4 text-muted-foreground" />
+                )}
                 车组组长：{order.teamApproved ? "已通过" : "待审核"}
               </span>
-              <span>
+              <span className="inline-flex items-center gap-1.5">
+                {order.techGroupApproved ? (
+                  <CheckCircle2 className="h-4 w-4 text-green-600" />
+                ) : (
+                  <CircleDashed className="h-4 w-4 text-muted-foreground" />
+                )}
                 技术组组长：{order.techGroupApproved ? "已通过" : "待审核"}
               </span>
             </CardContent>
@@ -201,8 +213,11 @@ export default async function OrderDetailPage({ params, searchParams }: Props) {
         )}
 
         <Card>
-          <CardHeader>
-            <CardTitle>基本信息</CardTitle>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Info className="h-4 w-4 text-primary" />
+              基本信息
+            </CardTitle>
           </CardHeader>
           <CardContent className="grid gap-2 sm:grid-cols-2">
             <p>
@@ -235,8 +250,11 @@ export default async function OrderDetailPage({ params, searchParams }: Props) {
         <OrderAttachmentsCard order={order} canView={canViewAttachments} />
 
         <Card>
-          <CardHeader>
-            <CardTitle>采购明细</CardTitle>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <ListOrdered className="h-4 w-4 text-primary" />
+              采购明细
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <Table>

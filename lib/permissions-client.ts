@@ -204,6 +204,18 @@ export function canRejectProcurement(
   return false;
 }
 
+/** 各审批环节是否可驳回（含报销员退回凭证） */
+export function canRejectProcurementOrder(
+  status: OrderStatus,
+  userRoles: UserRoleRecord[],
+  order: OrderScope,
+): boolean {
+  return (
+    canRejectProcurement(status, userRoles, order) ||
+    canRequestApplicantResubmit(status, userRoles, order)
+  );
+}
+
 /** 报销员要求采购人重新提交凭证 */
 export function canRequestApplicantResubmit(
   status: OrderStatus,

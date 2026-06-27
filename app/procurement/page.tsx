@@ -1,16 +1,18 @@
 import Link from "next/link";
 import {
+  ArrowRight,
   ClipboardList,
   FilePlus2,
+  FileText,
   Hammer,
   LayoutDashboard,
 } from "lucide-react";
 import { AppHeader } from "@/components/app-header";
 import { LiveAutoRefresh } from "@/components/live-auto-refresh";
 import { NavCard } from "@/components/nav-card";
+import { ProcurementHomeHeader } from "@/components/procurement/procurement-back-link";
 import { ProcurementPageLayout } from "@/components/procurement/procurement-page-layout";
 import { PageShell } from "@/components/page-shell";
-import { PageTitle } from "@/components/page-title";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -44,7 +46,7 @@ export default async function ProcurementHomePage() {
       />
       <PageShell>
         <ProcurementPageLayout>
-          <PageTitle subtitle="采购管理" />
+          <ProcurementHomeHeader />
 
           <div className="mb-10 flex w-full flex-col gap-4">
             <NavCard
@@ -99,18 +101,24 @@ export default async function ProcurementHomePage() {
                     <li key={order.id}>
                       <Link
                         href={routes.procurement.detail(order.id)}
-                        className="flex items-center justify-between rounded-lg border p-3 hover:border-primary/30"
+                        className="flex items-center justify-between rounded-lg border p-3 transition-colors hover:border-primary/30 hover:bg-muted/30"
                       >
-                        <div>
-                          <p className="font-medium">{order.orderNo}</p>
+                        <div className="min-w-0">
+                          <p className="flex items-center gap-1.5 font-medium">
+                            <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                            {order.orderNo}
+                          </p>
                           <p className="text-sm text-muted-foreground">
                             {order.initiatorName} · {order.team} /{" "}
                             {order.techGroup} · ¥{order.totalPrice.toFixed(2)}
                           </p>
                         </div>
-                        <Badge variant="secondary">
-                          {statusLabels[order.status]}
-                        </Badge>
+                        <div className="flex shrink-0 items-center gap-2 pl-3">
+                          <Badge variant="secondary">
+                            {statusLabels[order.status]}
+                          </Badge>
+                          <ArrowRight className="h-4 w-4 text-muted-foreground" />
+                        </div>
                       </Link>
                     </li>
                   ))}

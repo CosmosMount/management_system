@@ -66,8 +66,18 @@ export async function approveManagementReview(orderId: string) {
           OR: approvalTargets,
         },
         data: {
-          ...(canTeam ? { teamApproved: true } : {}),
-          ...(canTech ? { techGroupApproved: true } : {}),
+          ...(canTeam
+            ? {
+                teamApproved: true,
+                teamApproverOpenId: session.user.openId,
+              }
+            : {}),
+          ...(canTech
+            ? {
+                techGroupApproved: true,
+                techGroupApproverOpenId: session.user.openId,
+              }
+            : {}),
           ...stepTimerResetFields(),
         },
       });

@@ -4,6 +4,7 @@ import {
   sendBudgetThresholdNotification,
   sendOrderNotification,
   sendProcurementRejectedNotification,
+  sendProcurementReturnDraftNotification,
   type BudgetThresholdPayload,
   type OrderCardPayload,
 } from "@/lib/feishu";
@@ -42,6 +43,13 @@ type OrderOutboxPayload =
       order: OrderCardPayload;
       reason: string;
       financeName: string;
+      appOrigin?: string | null;
+    }
+  | {
+      kind: "procurement_return_draft";
+      order: OrderCardPayload;
+      reason: string;
+      returnedByName: string;
       appOrigin?: string | null;
     }
   | {
@@ -322,6 +330,27 @@ export async function enqueueApplicantResubmitNotification(
   });
 }
 
+export async function enqueueProcurementReturnDraftNotification(
+  eventKey: string,
+  order: OrderCardPayload,
+  reason: string,
+  returnedByName: string,
+  context?: NotificationContext,
+) {
+  await enqueueNotification({
+    eventKey,
+    channel: "procurement",
+    type: "procurement_return_draft",
+    payload: {
+      kind: "procurement_return_draft",
+      order,
+      reason,
+      returnedByName,
+      appOrigin: context?.appOrigin ?? null,
+    } satisfies OrderOutboxPayload,
+  });
+}
+
 export async function enqueueBudgetThresholdNotification(
   eventKey: string,
   budget: BudgetThresholdPayload,
@@ -485,6 +514,15 @@ async function sendOutboxNotification(row: NotificationOutbox) {
     }
     if (data.kind === "budget_threshold") {
       await sendBudgetThresholdNotification(data.budget, context);
+      return;
+    }
+    if (data.kind === "procurement_return_draft") {
+      await sendProcurementReturnDraftNotification(
+        data.order,
+        data.reason,
+        data.returnedByName,
+        context,
+      );
       return;
     }
     await sendApplicantResubmitNotification(

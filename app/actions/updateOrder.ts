@@ -1,20 +1,13 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
 import { OrderStatus } from "@prisma/client";
-import { mapOrderItems } from "@/lib/feishu";
-import {
-  drainNotificationOutboxSoon,
-  enqueueOrderNotification,
-} from "@/lib/notification-outbox";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { attachItemReferenceImages } from "@/lib/order-item-images";
 import { prisma } from "@/lib/prisma";
-import { getNotificationContext } from "@/lib/request-origin";
-import { checkBudgetAlertsForOrder } from "@/lib/procurement-budget-alerts";
 import { canEditDraftOrder } from "@/lib/permissions";
-import { routes } from "@/lib/routes";
+import { runProcurementSubmitSideEffects } from "@/lib/procurement-order-side-effects";
+import { revalidateProcurement } from "@/lib/revalidate";
 import { requireInitiatorSignature } from "@/lib/user-signature";
 import {
   assertItemImagesPresent,
@@ -110,34 +103,11 @@ export async function updateOrder(formData: FormData) {
   }
 
   if (nextStatus === OrderStatus.MANAGEMENT_REVIEW) {
-    await enqueueOrderNotification(
-      `procurement:order:${refreshed.id}:${refreshed.status}:${refreshed.updatedAt.toISOString()}`,
-      {
-        id: refreshed.id,
-        orderNo: refreshed.orderNo,
-        initiatorName: refreshed.initiatorName,
-        totalPrice: refreshed.totalPrice,
-        status: refreshed.status,
-        team: refreshed.team,
-        techGroup: refreshed.techGroup,
-        items: mapOrderItems(refreshed.items),
-      },
-      await getNotificationContext(),
-    );
-    drainNotificationOutboxSoon();
-    await checkBudgetAlertsForOrder(
-      refreshed.team,
-      refreshed.techGroup,
-      await getNotificationContext(),
-    );
+    await runProcurementSubmitSideEffects(refreshed);
   }
 
-  revalidatePath("/");
-  revalidatePath(routes.procurement.list);
-  revalidatePath(routes.procurement.dashboard);
-  revalidatePath(`${routes.procurement.detail(order.id)}`);
-  revalidatePath(`${routes.procurement.edit(order.id)}`);
-  return refreshed;
+  revalidateProcurement(refreshed.id);
+  return { id: refreshed.id };
 }
 
 export async function submitDraftOrder(orderId: string) {
@@ -161,31 +131,8 @@ export async function submitDraftOrder(orderId: string) {
     include: { items: true },
   });
 
-  await enqueueOrderNotification(
-    `procurement:order:${updated.id}:${updated.status}:${updated.updatedAt.toISOString()}`,
-    {
-      id: updated.id,
-      orderNo: updated.orderNo,
-      initiatorName: updated.initiatorName,
-      totalPrice: updated.totalPrice,
-      status: updated.status,
-      team: updated.team,
-      techGroup: updated.techGroup,
-      items: mapOrderItems(updated.items),
-    },
-    await getNotificationContext(),
-  );
-  drainNotificationOutboxSoon();
-  await checkBudgetAlertsForOrder(
-    updated.team,
-    updated.techGroup,
-    await getNotificationContext(),
-  );
+  await runProcurementSubmitSideEffects(updated);
 
-  revalidatePath("/");
-  revalidatePath(routes.procurement.list);
-  revalidatePath(routes.procurement.dashboard);
-  revalidatePath(`${routes.procurement.detail(orderId)}`);
-  revalidatePath(`${routes.procurement.edit(orderId)}`);
-  return updated;
+  revalidateProcurement(orderId);
+  return { id: updated.id };
 }

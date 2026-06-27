@@ -2,7 +2,7 @@
 
 import { Fragment, useState } from "react";
 import Link from "next/link";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, FileText } from "lucide-react";
 import { OrderActions } from "@/components/order-actions";
 import { OrderDraftActions } from "@/components/order-draft-actions";
 import { PurchaseOrderDeleteButton } from "@/components/admin-delete-actions";
@@ -129,8 +129,9 @@ export function OrdersTable({
                 <TableCell>
                   <Link
                     href={`${routes.procurement.detail(order.id)}`}
-                    className="font-medium hover:underline"
+                    className="inline-flex items-center gap-1.5 font-medium hover:underline"
                   >
+                    <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                     {order.orderNo}
                   </Link>
                 </TableCell>

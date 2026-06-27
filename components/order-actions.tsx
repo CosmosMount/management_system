@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { approveManagementReview } from "@/app/actions/approveManagementReview";
 import { rejectProcurementOrder } from "@/app/actions/rejectOrder";
 import { updateOrderStatus } from "@/app/actions/updateOrderStatus";
-import { ReasonConfirmDialog } from "@/components/reason-confirm-dialog";
+import { ProcurementRejectDialog } from "@/components/procurement-reject-dialog";
 import { SignatureRequiredDialog } from "@/components/signature-required-dialog";
 import { Button } from "@/components/ui/button";
 import { OrderStatus } from "@prisma/client";
@@ -90,10 +90,17 @@ export function OrderActions({
       });
     }
 
-    async function handleReject(reason: string) {
-      await rejectProcurementOrder({ orderId, reason });
-      toast.success("已驳回，已通知采购人");
-      router.refresh();
+    async function handleReject(reason: string, outcome: "terminate" | "resubmit") {
+      try {
+        await rejectProcurementOrder({ orderId, reason, outcome });
+        toast.success(
+          outcome === "terminate" ? "已驳回，已通知采购人" : "已退回草稿，已通知采购人修改",
+        );
+        router.refresh();
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "操作失败");
+        throw err;
+      }
     }
 
     return (
@@ -118,12 +125,10 @@ export function OrderActions({
             </Button>
           )}
           {canReject && (
-            <ReasonConfirmDialog
-              triggerLabel="驳回"
+            <ProcurementRejectDialog
+              stage="approval"
               title="驳回采购申请"
-              description="驳回后本次采购终止，不计入采购汇总，原因将发送给采购人。"
-              reasonLabel="驳回原因"
-              confirmLabel="确认驳回"
+              reasonLabel="驳回说明"
               disabled={pending || loading}
               onConfirm={handleReject}
             />
@@ -166,10 +171,17 @@ export function OrderActions({
     });
   }
 
-  async function handleReject(reason: string) {
-    await rejectProcurementOrder({ orderId, reason });
-    toast.success("已驳回，已通知采购人");
-    router.refresh();
+  async function handleReject(reason: string, outcome: "terminate" | "resubmit") {
+    try {
+      await rejectProcurementOrder({ orderId, reason, outcome });
+      toast.success(
+        outcome === "terminate" ? "已驳回，已通知采购人" : "已退回草稿，已通知采购人修改",
+      );
+      router.refresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "操作失败");
+      throw err;
+    }
   }
 
   return (
@@ -185,12 +197,10 @@ export function OrderActions({
           </Button>
         )}
         {canReject && (
-          <ReasonConfirmDialog
-            triggerLabel="驳回"
+          <ProcurementRejectDialog
+            stage="approval"
             title="驳回采购申请"
-            description="驳回后本次采购终止，不计入采购汇总，原因将发送给采购人。"
-            reasonLabel="驳回原因"
-            confirmLabel="确认驳回"
+            reasonLabel="驳回说明"
             disabled={pending || loading}
             onConfirm={handleReject}
           />

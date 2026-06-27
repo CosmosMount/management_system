@@ -1,15 +1,14 @@
 import { notFound, redirect } from "next/navigation";
 import { ApplyForm } from "@/components/apply-form";
 import { AppHeader } from "@/components/app-header";
-import { BackLink } from "@/components/back-link";
+import { EditDraftHeader } from "@/components/procurement/procurement-back-link";
+import { OrderRejectionNotice } from "@/components/procurement/order-rejection-notice";
 import { ProcurementPageLayout } from "@/components/procurement/procurement-page-layout";
 import { PageShell } from "@/components/page-shell";
-import { PageTitle } from "@/components/page-title";
 import { auth } from "@/lib/auth";
 import { canEditDraftOrder } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { toOrderFormInput } from "@/lib/validations/order";
-import { routes } from "@/lib/routes";
 import { userHasSignature } from "@/lib/user-signature";
 
 type Props = {
@@ -51,12 +50,16 @@ export default async function EditOrderPage({ params }: Props) {
     <>
       <AppHeader />
       <PageShell>
-        <ProcurementPageLayout className="max-w-4xl space-y-4">
-          <BackLink
-            href={routes.procurement.detail(order.id)}
-            label="返回订单详情"
-          />
-          <PageTitle subtitle={`编辑草稿 ${order.orderNo}`} />
+        <ProcurementPageLayout className="max-w-4xl space-y-3">
+          <EditDraftHeader orderNo={order.orderNo} />
+          {order.rejectionReason ? (
+            <OrderRejectionNotice
+              reason={order.rejectionReason}
+              status={order.status}
+              rejectedByName={order.rejectedByName}
+              rejectedAt={order.rejectedAt}
+            />
+          ) : null}
           <ApplyForm
             orderId={order.id}
             initialValues={toOrderFormInput(order)}

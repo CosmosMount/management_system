@@ -192,8 +192,10 @@ model PurchaseOrder {
   team              String
   techGroup         String
   totalPrice        Float          @default(0)
-  teamApproved      Boolean        @default(false)
-  techGroupApproved Boolean        @default(false)
+  teamApproved            Boolean        @default(false)
+  techGroupApproved       Boolean        @default(false)
+  teamApproverOpenId      String?
+  techGroupApproverOpenId String?
   invoicePaths      String         @default("[]")
   invoicePath       String?
   listDocPath       String?

@@ -2,10 +2,9 @@ import { auth } from "@/lib/auth";
 import { AppHeader } from "@/components/app-header";
 import { LiveAutoRefresh } from "@/components/live-auto-refresh";
 import { OrdersTable } from "@/components/orders-table";
-import { ProcurementBackLink } from "@/components/procurement/procurement-back-link";
+import { ProcurementListHeader } from "@/components/procurement/procurement-back-link";
 import { ProcurementPageLayout } from "@/components/procurement/procurement-page-layout";
 import { PageShell } from "@/components/page-shell";
-import { PageTitle } from "@/components/page-title";
 import { prisma } from "@/lib/prisma";
 import { getUserRoles } from "@/lib/permissions";
 import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
@@ -62,8 +61,7 @@ export default async function OrdersPage() {
       />
       <PageShell>
         <ProcurementPageLayout>
-          <ProcurementBackLink />
-          <PageTitle subtitle="订单列表" />
+          <ProcurementListHeader />
           <OrdersTable
             orders={rows}
             userRoles={userRoles}

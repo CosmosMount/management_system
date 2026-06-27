@@ -10,12 +10,12 @@ type Props = {
 
 export function BackLink({ href, label, className }: Props) {
   return (
-    <div className={cn("mb-4", className)}>
+    <div className={cn("mb-2", className)}>
       <Link
         href={href}
-        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+        className="-ml-1 inline-flex items-center gap-1 rounded-md px-1 py-0.5 text-sm text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
       >
-        <ArrowLeft className="h-4 w-4" />
+        <ArrowLeft className="h-3.5 w-3.5 shrink-0" />
         {label}
       </Link>
     </div>

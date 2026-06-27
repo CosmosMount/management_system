@@ -49,6 +49,11 @@
 }
 
 :root {
+  --font-geist-sans: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji",
+    "Segoe UI Emoji";
+  --font-geist-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
+  --font-sans: var(--font-geist-sans);
   --background: oklch(0.99 0.005 264);
   --foreground: oklch(0.18 0.02 264);
   --card: oklch(1 0 0);
