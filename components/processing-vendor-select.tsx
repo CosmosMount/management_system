@@ -101,7 +101,7 @@ export function ProcessingVendorSelect({ value, onChange, error }: Props) {
 
   return (
     <>
-      <Select value={value || undefined} onValueChange={handleSelectChange}>
+      <Select value={value || ""} onValueChange={handleSelectChange}>
         <SelectTrigger className="w-full">
           <SelectValue placeholder={loading ? "加载中…" : "请选择加工商"} />
         </SelectTrigger>

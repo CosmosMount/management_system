@@ -127,19 +127,6 @@ export async function createTask(input: CreateTaskInput) {
         importance: parsed.importance,
         assigneeOpenId: primaryAssignee.openId,
         assigneeName: primaryAssignee.name,
-        assignees: {
-          create: orderedAssignees.map((assignee, index) => ({
-            openId: assignee.openId,
-            name: assignee.name,
-            sortOrder: index,
-          })),
-        },
-        techGroups: {
-          create: taskTechGroups.map((techGroup, index) => ({
-            techGroup,
-            sortOrder: index,
-          })),
-        },
         team: project.team,
         techGroup: project.techGroup,
         metrics: parsed.metrics,
@@ -147,24 +134,33 @@ export async function createTask(input: CreateTaskInput) {
         status: TaskStatus.TODO,
         needsOfflineConfirmation: parsed.needsOfflineConfirmation,
         needsWeeklyReport,
-        acceptanceChecklistItems: {
-          create: acceptanceChecklistItems.map((item, index) => ({
-            content: item.content,
-            sortOrder: index,
-          })),
-        },
-      },
-      include: {
-        assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
-        techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
-        project: {
-          include: {
-            owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
-            participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
-          },
-        },
       },
     });
+
+    await tx.taskAssignee.createMany({
+      data: orderedAssignees.map((assignee, index) => ({
+        taskId: created.id,
+        openId: assignee.openId,
+        name: assignee.name,
+        sortOrder: index,
+      })),
+    });
+    await tx.taskTechGroup.createMany({
+      data: taskTechGroups.map((techGroup, index) => ({
+        taskId: created.id,
+        techGroup,
+        sortOrder: index,
+      })),
+    });
+    if (acceptanceChecklistItems.length > 0) {
+      await tx.taskAcceptanceChecklistItem.createMany({
+        data: acceptanceChecklistItems.map((item, index) => ({
+          taskId: created.id,
+          content: item.content,
+          sortOrder: index,
+        })),
+      });
+    }
 
     await tx.progressActivityLog.create({
       data: {

@@ -9,8 +9,8 @@ import { getUserRoles } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import {
   publicPathToStoragePath,
-  storagePathToAbsolute,
 } from "@/lib/file-upload";
+import { storagePathToAbsolute } from "@/lib/upload-paths";
 
 const MIME_TYPES: Record<string, string> = {
   ".png": "image/png",

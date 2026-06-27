@@ -23,7 +23,7 @@
     "db:dedupe-weekly-reports": "tsx scripts/dedupe-weekly-reports.ts",
     "db:studio": "prisma studio",
     "prepare:template": "tsx scripts/prepare-reimbursement-template.ts",
-    "test:e2e": "playwright test"
+    "test:e2e": "tsx scripts/run-playwright.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",

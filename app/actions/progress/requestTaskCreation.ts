@@ -365,23 +365,10 @@ export async function reviewTaskCreationRequest(input: {
         stageId: draft.stageId,
         title: draft.title,
         goal: draft.goal,
-        techGroups: {
-          create: taskTechGroups.map((techGroup, index) => ({
-            techGroup,
-            sortOrder: index,
-          })),
-        },
         urgency: draft.urgency,
         importance: draft.importance,
         assigneeOpenId: primaryAssignee.openId,
         assigneeName: primaryAssignee.name,
-        assignees: {
-          create: orderedAssignees.map((assignee, index) => ({
-            openId: assignee.openId,
-            name: assignee.name,
-            sortOrder: index,
-          })),
-        },
         team: project.team,
         techGroup: project.techGroup,
         metrics: draft.metrics,
@@ -389,24 +376,33 @@ export async function reviewTaskCreationRequest(input: {
         status: TaskStatus.TODO,
         needsOfflineConfirmation: draft.needsOfflineConfirmation,
         needsWeeklyReport,
-        acceptanceChecklistItems: {
-          create: draft.acceptanceChecklistItems.map((item, index) => ({
-            content: item.content,
-            sortOrder: index,
-          })),
-        },
-      },
-      include: {
-        assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
-        techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
-        project: {
-          include: {
-            owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
-            participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
-          },
-        },
       },
     });
+
+    await tx.taskTechGroup.createMany({
+      data: taskTechGroups.map((techGroup, index) => ({
+        taskId: created.id,
+        techGroup,
+        sortOrder: index,
+      })),
+    });
+    await tx.taskAssignee.createMany({
+      data: orderedAssignees.map((assignee, index) => ({
+        taskId: created.id,
+        openId: assignee.openId,
+        name: assignee.name,
+        sortOrder: index,
+      })),
+    });
+    if (draft.acceptanceChecklistItems.length > 0) {
+      await tx.taskAcceptanceChecklistItem.createMany({
+        data: draft.acceptanceChecklistItems.map((item, index) => ({
+          taskId: created.id,
+          content: item.content,
+          sortOrder: index,
+        })),
+      });
+    }
 
     await tx.taskCreationRequest.update({
       where: { id: request.id },

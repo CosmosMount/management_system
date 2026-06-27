@@ -165,10 +165,18 @@ test.describe("authenticated smoke", () => {
     expect(response?.status() ?? 0).toBeLessThan(500);
     await expectHealthyPage(page);
 
-    const overdueFilter = page.getByRole("link", { name: /已超期/ }).first();
+    const overdueFilter = page
+      .locator('a[href="/progress/list?deadline=overdue"]')
+      .filter({ hasText: "当前阶段已过 DDL" })
+      .first();
     if (await overdueFilter.isVisible()) {
-      await overdueFilter.click();
-      await page.waitForLoadState("networkidle");
+      await expect(overdueFilter).toHaveAttribute(
+        "href",
+        "/progress/list?deadline=overdue",
+      );
+      await page.goto("/progress/list?deadline=overdue", {
+        waitUntil: "networkidle",
+      });
       expect(new URL(page.url()).searchParams.get("deadline")).toBe("overdue");
       await expectHealthyPage(page);
     }

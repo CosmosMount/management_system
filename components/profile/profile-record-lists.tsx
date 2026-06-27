@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -78,29 +79,31 @@ export function ProfileOrderList({ orders }: { orders: ProfileOrderRow[] }) {
           const showDivider =
             index === firstInactiveIndex && activeCount > 0;
           return (
-            <li key={order.id}>
+            <Fragment key={order.id}>
               <ActiveDivider show={showDivider} label="其他状态" />
-              <Link
-                href={routes.procurement.detail(order.id)}
-                className={cn(
-                  "flex items-center justify-between rounded-lg border p-3 transition-colors hover:border-primary/30",
-                  order.isActive && "border-primary/20 bg-primary/5",
-                )}
-              >
-                <div className="min-w-0 pr-3">
-                  <p className="font-medium">{order.orderNo}</p>
-                  <p className="text-sm text-muted-foreground">
-                    {formatScopeItem(order.team)} /{" "}
-                    {formatScopeItem(order.techGroup)} · ¥
-                    {order.totalPrice.toFixed(2)} ·{" "}
-                    {formatUpdatedAt(order.updatedAt)}
-                  </p>
-                </div>
-                <Badge variant={order.isActive ? "default" : "secondary"}>
-                  {statusLabels[order.status]}
-                </Badge>
-              </Link>
-            </li>
+              <li>
+                <Link
+                  href={routes.procurement.detail(order.id)}
+                  className={cn(
+                    "flex items-center justify-between rounded-lg border p-3 transition-colors hover:border-primary/30",
+                    order.isActive && "border-primary/20 bg-primary/5",
+                  )}
+                >
+                  <div className="min-w-0 pr-3">
+                    <p className="font-medium">{order.orderNo}</p>
+                    <p className="text-sm text-muted-foreground">
+                      {formatScopeItem(order.team)} /{" "}
+                      {formatScopeItem(order.techGroup)} · ¥
+                      {order.totalPrice.toFixed(2)} ·{" "}
+                      {formatUpdatedAt(order.updatedAt)}
+                    </p>
+                  </div>
+                  <Badge variant={order.isActive ? "default" : "secondary"}>
+                    {statusLabels[order.status]}
+                  </Badge>
+                </Link>
+              </li>
+            </Fragment>
           );
         })}
       </ul>
@@ -128,28 +131,30 @@ export function ProfileProjectList({
           const showDivider =
             index === firstInactiveIndex && activeCount > 0;
           return (
-            <li key={project.id}>
+            <Fragment key={project.id}>
               <ActiveDivider show={showDivider} label="已结束" />
-              <Link
-                href={routes.progress.project(project.id)}
-                className={cn(
-                  "flex items-center justify-between rounded-lg border p-3 transition-colors hover:border-primary/30",
-                  project.isActive && "border-primary/20 bg-primary/5",
-                )}
-              >
-                <div className="min-w-0 pr-3">
-                  <p className="font-medium">{project.name}</p>
-                  <p className="text-sm text-muted-foreground">
-                    {formatScopeItem(project.team)} /{" "}
-                    {formatScopeItem(project.techGroup)} ·{" "}
-                    {formatUpdatedAt(project.updatedAt)}
-                  </p>
-                </div>
-                <Badge variant={project.isActive ? "default" : "secondary"}>
-                  {projectStatusLabels[project.status]}
-                </Badge>
-              </Link>
-            </li>
+              <li>
+                <Link
+                  href={routes.progress.project(project.id)}
+                  className={cn(
+                    "flex items-center justify-between rounded-lg border p-3 transition-colors hover:border-primary/30",
+                    project.isActive && "border-primary/20 bg-primary/5",
+                  )}
+                >
+                  <div className="min-w-0 pr-3">
+                    <p className="font-medium">{project.name}</p>
+                    <p className="text-sm text-muted-foreground">
+                      {formatScopeItem(project.team)} /{" "}
+                      {formatScopeItem(project.techGroup)} ·{" "}
+                      {formatUpdatedAt(project.updatedAt)}
+                    </p>
+                  </div>
+                  <Badge variant={project.isActive ? "default" : "secondary"}>
+                    {projectStatusLabels[project.status]}
+                  </Badge>
+                </Link>
+              </li>
+            </Fragment>
           );
         })}
       </ul>
@@ -173,28 +178,30 @@ export function ProfileTaskList({ tasks }: { tasks: ProfileTaskRow[] }) {
           const showDivider =
             index === firstInactiveIndex && activeCount > 0;
           return (
-            <li key={task.id}>
+            <Fragment key={task.id}>
               <ActiveDivider show={showDivider} label="已结束" />
-              <Link
-                href={routes.progress.task(task.id)}
-                className={cn(
-                  "flex items-center justify-between rounded-lg border p-3 transition-colors hover:border-primary/30",
-                  task.isActive && "border-primary/20 bg-primary/5",
-                )}
-              >
-                <div className="min-w-0 pr-3">
-                  <p className="font-medium">{task.title}</p>
-                  <p className="text-sm text-muted-foreground">
-                    {task.projectName}
-                    {task.isOverdue ? " · 已逾期" : ""} ·{" "}
-                    {formatUpdatedAt(task.updatedAt)}
-                  </p>
-                </div>
-                <Badge variant={task.isActive ? "default" : "secondary"}>
-                  {taskStatusLabels[task.status]}
-                </Badge>
-              </Link>
-            </li>
+              <li>
+                <Link
+                  href={routes.progress.task(task.id)}
+                  className={cn(
+                    "flex items-center justify-between rounded-lg border p-3 transition-colors hover:border-primary/30",
+                    task.isActive && "border-primary/20 bg-primary/5",
+                  )}
+                >
+                  <div className="min-w-0 pr-3">
+                    <p className="font-medium">{task.title}</p>
+                    <p className="text-sm text-muted-foreground">
+                      {task.projectName}
+                      {task.isOverdue ? " · 已逾期" : ""} ·{" "}
+                      {formatUpdatedAt(task.updatedAt)}
+                    </p>
+                  </div>
+                  <Badge variant={task.isActive ? "default" : "secondary"}>
+                    {taskStatusLabels[task.status]}
+                  </Badge>
+                </Link>
+              </li>
+            </Fragment>
           );
         })}
       </ul>

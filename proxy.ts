@@ -37,7 +37,7 @@ const authMiddleware = middlewareAuth((req) => {
   return NextResponse.next();
 });
 
-export default function middleware(req: NextRequest, event: NextFetchEvent) {
+export default function proxy(req: NextRequest, event: NextFetchEvent) {
   const origin = appOriginFromHostHeaders(req.headers);
 
   if (!origin || !isAllowedAppOrigin(origin)) {

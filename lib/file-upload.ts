@@ -3,6 +3,10 @@ import path from "path";
 import type { FileAssetKind } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
+  storagePathToAbsolute,
+  uploadStorageRoot,
+} from "@/lib/upload-paths";
+import {
   FEEDBACK_IMAGE_SIZE_LABEL,
   FEEDBACK_IMAGE_ALLOWED_TYPES,
   MAX_FEEDBACK_IMAGE_SIZE,
@@ -18,12 +22,6 @@ export {
 export const MAX_FILE_SIZE = 20 * 1024 * 1024;
 export const MAX_INVOICE_COUNT = 20;
 export const UPLOAD_PUBLIC_PREFIX = "/uploads/";
-
-const DEFAULT_UPLOAD_STORAGE_DIR = path.join(
-  /*turbopackIgnore: true*/ process.cwd(),
-  "storage",
-  "uploads",
-);
 
 const INVOICE_TYPES = new Set([
   "application/pdf",
@@ -74,13 +72,7 @@ type SaveAssetOptions = {
   ownerOpenId?: string | null;
 };
 
-export function uploadStorageRoot(): string {
-  const configured = process.env.UPLOAD_STORAGE_DIR;
-  if (!configured) return DEFAULT_UPLOAD_STORAGE_DIR;
-  return path.isAbsolute(configured)
-    ? configured
-    : path.join(/*turbopackIgnore: true*/ process.cwd(), configured);
-}
+export { storagePathToAbsolute, uploadStorageRoot };
 
 export function publicPathToStoragePath(publicPath: string): string | null {
   if (!publicPath.startsWith(UPLOAD_PUBLIC_PREFIX)) return null;
@@ -93,19 +85,6 @@ export function publicPathToStoragePath(publicPath: string): string | null {
     return null;
   }
   return segments.join("/");
-}
-
-export function storagePathToAbsolute(storagePath: string): string {
-  const fullPath = path.resolve(
-    /*turbopackIgnore: true*/ uploadStorageRoot(),
-    storagePath,
-  );
-  const root = uploadStorageRoot();
-  const relative = path.relative(root, fullPath);
-  if (relative === ".." || relative.startsWith(`..${path.sep}`)) {
-    throw new Error("上传文件路径无效");
-  }
-  return fullPath;
 }
 
 export function publicPathToAbsolute(publicPath: string): string {

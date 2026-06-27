@@ -18,6 +18,12 @@ if (!targetDatabase.endsWith("_test")) {
   throw new Error("PLAYWRIGHT_DATABASE_URL must point to a database ending with _test");
 }
 
+if (process.env.PLAYWRIGHT_CONFIRM_RECREATE_DB !== targetDatabase) {
+  throw new Error(
+    `Refusing to recreate ${targetDatabase}. Set PLAYWRIGHT_CONFIRM_RECREATE_DB=${targetDatabase} to confirm.`,
+  );
+}
+
 const maintenanceUrl = new URL(databaseUrl);
 maintenanceUrl.pathname = "/postgres";
 
@@ -25,28 +31,25 @@ function quoteIdentifier(value: string): string {
   return `"${value.replace(/"/g, '""')}"`;
 }
 
-async function ensureDatabase(databaseName: string) {
+async function recreateDatabase(databaseName: string) {
   const client = new pg.Client({ connectionString: maintenanceUrl.toString() });
   await client.connect();
   try {
-    const existing = await client.query<{ exists: boolean }>(
-      "SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1) AS exists",
+    await client.query(
+      "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()",
       [databaseName],
     );
-    if (!existing.rows[0]?.exists) {
-      await client.query(`CREATE DATABASE ${quoteIdentifier(databaseName)}`);
-      console.log(`[playwright-db] created database ${databaseName}`);
-    } else {
-      console.log(`[playwright-db] database ${databaseName} already exists`);
-    }
+    await client.query(`DROP DATABASE IF EXISTS ${quoteIdentifier(databaseName)}`);
+    await client.query(`CREATE DATABASE ${quoteIdentifier(databaseName)}`);
+    console.log(`[playwright-db] recreated database ${databaseName}`);
   } finally {
     await client.end();
   }
 }
 
 async function main() {
-  await ensureDatabase(targetDatabase);
-  await ensureDatabase(`${targetDatabase}_shadow`);
+  await recreateDatabase(targetDatabase);
+  await recreateDatabase(`${targetDatabase}_shadow`);
 }
 
 main().catch((error) => {

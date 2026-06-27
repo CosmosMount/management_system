@@ -8,8 +8,8 @@ import { MAX_REIMBURSEMENT_LIST_ROWS } from "@/lib/constants";
 import {
   publicPathToAbsolute as uploadPublicPathToAbsolute,
   registerExistingFileAsset,
-  storagePathToAbsolute,
 } from "@/lib/file-upload";
+import { storagePathToAbsolute } from "@/lib/upload-paths";
 
 const BASE_TEMPLATE_PATH = path.join(
   process.cwd(),
