@@ -16,6 +16,7 @@ import { getUserRoles } from "@/lib/permissions";
 import { requireSessionUser } from "@/lib/progress-activity";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { getProjectParticipantOpenIds } from "@/lib/progress-project-participants";
+import { collectProjectNotificationRecipients } from "@/lib/progress-project-notifications";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import { revalidateProgress } from "@/lib/revalidate";
@@ -43,7 +44,15 @@ export async function requestProjectStageExtension(input: {
     where: { id: parsed.projectId },
     include: {
       owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       stages: { orderBy: { sortOrder: "asc" } },
+      tasks: {
+        where: { deletedAt: null },
+        include: {
+          assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+          techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        },
+      },
     },
   });
   if (!project) throw new Error("项目不存在");
@@ -89,6 +98,7 @@ export async function requestProjectStageExtension(input: {
 
   const newDueAt = addDays(stage.dueAt, parsed.durationDays);
   const context = await getNotificationContext();
+  const recipientOpenIds = await collectProjectNotificationRecipients(project);
   const request = await prisma.$transaction(async (tx) => {
     const created = await tx.projectDdlChangeRequest.create({
       data: {
@@ -144,6 +154,7 @@ export async function requestProjectStageExtension(input: {
         newDueAt: newDueAt.toISOString(),
         team: project.team,
         techGroup: project.techGroup,
+        recipientOpenIds,
       },
       context,
     );
@@ -179,7 +190,21 @@ export async function reviewProjectStageExtensionRequest(input: {
       project: {
         include: {
           owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+          participants: {
+            orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+          },
           stages: { orderBy: { sortOrder: "asc" } },
+          tasks: {
+            where: { deletedAt: null },
+            include: {
+              assignees: {
+                orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+              },
+              techGroups: {
+                orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+              },
+            },
+          },
         },
       },
     },
@@ -229,6 +254,7 @@ export async function reviewProjectStageExtensionRequest(input: {
   }
 
   const context = await getNotificationContext();
+  const recipientOpenIds = await collectProjectNotificationRecipients(project);
   const reviewedAt = new Date();
   await prisma.$transaction(async (tx) => {
     const locked = await tx.projectDdlChangeRequest.updateMany({
@@ -307,12 +333,15 @@ export async function reviewProjectStageExtensionRequest(input: {
         comment: parsed.comment,
         durationDays: request.durationDays ?? 0,
         finalIsBenign: finalIsBenign ?? false,
+        oldDueAt: request.oldDueAt?.toISOString() ?? null,
+        newDueAt: request.newDueAt?.toISOString() ?? null,
         team: project.team,
         techGroup: project.techGroup,
         ownerOpenIds: getProjectOwnerOpenIds(project),
         stageOwnerOpenIds: uniqueOpenIds(
           affectedStages.map((stage) => stage.ownerOpenId),
         ),
+        recipientOpenIds,
       },
       context,
     );
@@ -340,6 +369,13 @@ export async function requestProjectStageDueDateChange(input: {
       owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       stages: { orderBy: { sortOrder: "asc" } },
+      tasks: {
+        where: { deletedAt: null },
+        include: {
+          assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+          techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        },
+      },
     },
   });
   if (!project) throw new Error("项目不存在");
@@ -386,6 +422,7 @@ export async function requestProjectStageDueDateChange(input: {
   }
 
   const context = await getNotificationContext();
+  const recipientOpenIds = await collectProjectNotificationRecipients(project);
   const request = await prisma.$transaction(async (tx) => {
     const created = await tx.projectDdlChangeRequest.create({
       data: {
@@ -436,6 +473,7 @@ export async function requestProjectStageDueDateChange(input: {
         team: project.team,
         techGroup: project.techGroup,
         ownerOpenIds,
+        recipientOpenIds,
       },
       context,
     );
@@ -470,7 +508,21 @@ export async function reviewProjectStageDueDateChangeRequest(input: {
       project: {
         include: {
           owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+          participants: {
+            orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+          },
           stages: { orderBy: { sortOrder: "asc" } },
+          tasks: {
+            where: { deletedAt: null },
+            include: {
+              assignees: {
+                orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+              },
+              techGroups: {
+                orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+              },
+            },
+          },
         },
       },
     },
@@ -513,6 +565,7 @@ export async function reviewProjectStageDueDateChangeRequest(input: {
   }
 
   const context = await getNotificationContext();
+  const recipientOpenIds = await collectProjectNotificationRecipients(project);
   const reviewedAt = new Date();
   const shouldCountAsExtension =
     parsed.decision === "APPROVED" &&
@@ -591,6 +644,7 @@ export async function reviewProjectStageDueDateChangeRequest(input: {
         oldDueAt: request.oldDueAt?.toISOString() ?? null,
         newDueAt: request.newDueAt?.toISOString() ?? null,
         stageOwnerOpenId: request.stage.ownerOpenId,
+        recipientOpenIds,
       },
       context,
     );

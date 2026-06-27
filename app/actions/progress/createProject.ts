@@ -7,6 +7,7 @@ import {
   enqueueProgressNotificationTx,
 } from "@/lib/notification-outbox";
 import { canCreateProject, canCreateProjectInScope } from "@/lib/permissions-progress";
+import { collectProjectNotificationRecipients } from "@/lib/progress-project-notifications";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import { getUserRoles } from "@/lib/permissions";
@@ -80,6 +81,17 @@ export async function createProject(input: CreateProjectInput) {
   }
 
   const context = await getNotificationContext();
+  const recipientOpenIds = await collectProjectNotificationRecipients({
+    team: parsed.team ?? "",
+    techGroup: parsed.techGroup ?? "",
+    ownerOpenId: primaryOwner.openId,
+    ownerName: primaryOwner.name,
+    owners: orderedOwners,
+    participants: orderedParticipants,
+    stages: parsed.stages.map((stage) => ({
+      ownerOpenId: stage.ownerOpenId,
+    })),
+  });
   const project = await prisma.$transaction(async (tx) => {
     const created = await tx.project.create({
       data: {
@@ -156,6 +168,7 @@ export async function createProject(input: CreateProjectInput) {
         participantNames: orderedParticipants
           .map((participant) => participant.name)
           .join("、"),
+        recipientOpenIds,
       },
       context,
     );

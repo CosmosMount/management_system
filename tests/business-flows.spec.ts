@@ -1055,9 +1055,11 @@ test("项目单阶段 DDL 修改申请只更新当前阶段", async ({
             where: { id: request.id },
             select: { status: true, reviewerOpenId: true },
           }),
-          prisma.notificationOutbox.findUnique({
+          prisma.notificationOutbox.findFirst({
             where: {
-              eventKey: `progress:project_stage_due_change_approved:${request.id}`,
+              eventKey: {
+                startsWith: `progress:project_stage_due_change_approved:${request.id}`,
+              },
             },
             select: { id: true },
           }),
@@ -1262,6 +1264,107 @@ test("项目参与人的新任务申请可由管理员驳回且不创建任务",
   await expectHealthyPage(page);
 });
 
+test("项目模板耗时会累加为阶段 DDL 且创建通知包含参与人", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  await loginAsAdminUser(context, baseURL);
+  const templateName = `PW全功能-耗时模板-${Date.now()}`;
+  const projectName = `PW全功能-模板项目-${Date.now()}`;
+  await prisma.projectTemplate.deleteMany({ where: { name: templateName } });
+  await prisma.projectTemplate.create({
+    data: {
+      name: templateName,
+      description: "PW全功能-耗时模板",
+      enabled: true,
+      stages: {
+        create: [
+          { name: "阶段一", goal: "阶段一目标", dueOffsetDays: 2, sortOrder: 0 },
+          { name: "阶段二", goal: "阶段二目标", dueOffsetDays: 5, sortOrder: 1 },
+          { name: "阶段三", goal: "阶段三目标", dueOffsetDays: 1, sortOrder: 2 },
+        ],
+      },
+    },
+  });
+
+  await page.goto("/progress/new", { waitUntil: "networkidle" });
+  await page.getByLabel("项目模板").click();
+  await page.getByRole("option", { name: templateName }).click();
+  await page.getByRole("button", { name: "套用模板" }).click();
+  await page.getByText("项目名称").locator("xpath=following::input[1]").fill(projectName);
+  await selectUserFromSearch(page, "搜索项目负责人", "李棋轩");
+  await selectUserFromSearch(page, "搜索参与人员", "Playwright 管理员");
+  await page.getByText("车组").locator("xpath=following::button[1]").click();
+  await page.getByRole("option", { name: "工程" }).click();
+  await page.getByText("技术组", { exact: true }).locator("xpath=following::button[1]").click();
+  await page.getByRole("option", { name: "宣运" }).click();
+  await page.getByRole("button", { name: "创建项目" }).click();
+
+  await expect
+    .poll(async () => {
+      const project = await prisma.project.findFirst({
+        where: { name: projectName },
+        include: {
+          participants: true,
+          stages: { orderBy: { sortOrder: "asc" } },
+        },
+      });
+      if (!project) return null;
+      const outbox = await prisma.notificationOutbox.findFirst({
+        where: {
+          eventKey: { startsWith: `progress:project_created:${project.id}` },
+        },
+        select: { payload: true },
+      });
+      const firstDueAt = project.stages[0]?.dueAt;
+      return {
+        stageNames: project.stages.map((stage) => stage.name),
+        dayDeltas: firstDueAt
+          ? project.stages.map((stage) =>
+              Math.round(
+                ((stage.dueAt?.getTime() ?? firstDueAt.getTime()) -
+                  firstDueAt.getTime()) /
+                  (24 * 60 * 60 * 1000),
+              ),
+            )
+          : [],
+        participantNames: project.participants.map((participant) => participant.name),
+        payload: outbox?.payload ?? "",
+      };
+    })
+    .toMatchObject({
+      stageNames: ["阶段一", "阶段二", "阶段三"],
+      dayDeltas: [0, 5, 6],
+      participantNames: ["Playwright 管理员"],
+    });
+
+  const project = await prisma.project.findFirstOrThrow({
+    where: { name: projectName },
+    select: { id: true },
+  });
+  const outbox = await prisma.notificationOutbox.findFirstOrThrow({
+    where: {
+      eventKey: { startsWith: `progress:project_created:${project.id}` },
+    },
+    select: { payload: true },
+  });
+  const projectCreatedOutboxes = await prisma.notificationOutbox.findMany({
+    where: {
+      eventKey: { startsWith: `progress:project_created:${project.id}` },
+    },
+    select: { eventKey: true },
+  });
+  expect(projectCreatedOutboxes).toHaveLength(1);
+  expect(projectCreatedOutboxes[0]?.eventKey).toBe(
+    `progress:project_created:${project.id}`,
+  );
+  expect(outbox.payload).toContain("participantNames");
+  expect(outbox.payload).toContain("Playwright 管理员");
+  expect(outbox.payload).toContain("recipientOpenIds");
+  await expectHealthyPage(page);
+});
+
 function formatDateTimeLocal(date: Date): string {
   const pad = (value: number) => String(value).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
@@ -1348,4 +1451,14 @@ async function fillTaskCreationRequestDialog(page: Page, title: string) {
   await dialog
     .locator('input[type="datetime-local"]')
     .fill(formatDateTimeLocal(addDays(new Date(), 5)));
+}
+
+async function selectUserFromSearch(
+  page: Page,
+  placeholder: string,
+  name: string,
+  index = 0,
+) {
+  await page.getByPlaceholder(placeholder).nth(index).fill(name);
+  await page.getByRole("button", { name: new RegExp(name) }).last().click();
 }

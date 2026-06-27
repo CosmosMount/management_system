@@ -1,5 +1,4 @@
 import type { UserRoleType } from "@prisma/client";
-import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import type { OrderScope, UserRoleRecord } from "@/lib/permissions-client";
 
@@ -19,6 +18,7 @@ export async function isSuperAdmin(openId: string): Promise<boolean> {
 }
 
 export async function requireSuperAdmin() {
+  const { auth } = await import("@/lib/auth");
   const session = await auth();
   if (!session?.user?.openId) {
     throw new Error("未登录");

@@ -149,11 +149,11 @@ export const createProjectSchema = projectBaseSchema.extend({
 export const projectTemplateStageSchema = z.object({
   name: z.string().trim().min(1, "阶段名称不能为空").max(100, "阶段名称不能超过 100 个字符"),
   goal: z.string().trim().min(1, "请填写阶段目标").max(1000, "阶段目标不能超过 1000 个字符"),
-  dueOffsetDays: z.coerce
+  durationDays: z.coerce
     .number()
-    .int("相对 DDL 天数必须是整数")
-    .min(0, "相对 DDL 天数不能小于 0")
-    .max(3650, "相对 DDL 天数不能超过 3650 天"),
+    .int("阶段耗时必须是整数")
+    .min(1, "阶段耗时不能小于 1 天")
+    .max(3650, "阶段耗时不能超过 3650 天"),
 });
 
 const projectTemplateBaseSchema = z.object({
@@ -163,13 +163,17 @@ const projectTemplateBaseSchema = z.object({
   isDefault: z.boolean().default(false),
   stages: z.array(projectTemplateStageSchema).min(1, "至少添加一个阶段"),
 }).superRefine((value, ctx) => {
-  validateNonDecreasingValues(
-    value.stages.map((stage) => stage.dueOffsetDays),
-    ctx,
-    "stages",
-    "dueOffsetDays",
-    "阶段相对 DDL 天数需要按顺序递增或相同",
+  const totalDurationDays = value.stages.reduce(
+    (total, stage) => total + stage.durationDays,
+    0,
   );
+  if (totalDurationDays > 3650) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["stages"],
+      message: "模板总耗时不能超过 3650 天",
+    });
+  }
 });
 
 export const createProjectTemplateSchema = projectTemplateBaseSchema;
@@ -181,6 +185,8 @@ export const updateProjectTemplateSchema = projectTemplateBaseSchema.extend({
 export const projectTemplateIdSchema = z.object({
   templateId: z.string().min(1, "缺少模板 ID"),
 });
+
+export const deleteProjectTemplateSchema = projectTemplateIdSchema;
 
 export const projectTemplateEnabledSchema = z.object({
   templateId: z.string().min(1, "缺少模板 ID"),

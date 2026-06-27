@@ -10,6 +10,8 @@ import {
 import { assertProjectTransition } from "@/lib/progress-flow";
 import { canUpdateProjectLifecycle } from "@/lib/permissions-progress";
 import { getProjectOwnerOpenIds, getProjectOwnerNames } from "@/lib/progress-project-owners";
+import { collectProjectNotificationRecipients } from "@/lib/progress-project-notifications";
+import { getProjectParticipantNames, getProjectParticipantOpenIds } from "@/lib/progress-project-participants";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import { revalidateProgress } from "@/lib/revalidate";
@@ -36,7 +38,15 @@ export async function updateProjectStatus(
     where: { id: projectId },
     include: {
       owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       stages: { orderBy: { sortOrder: "asc" } },
+      tasks: {
+        where: { deletedAt: null },
+        include: {
+          assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+          techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        },
+      },
     },
   });
   if (!project) throw new Error("项目不存在");
@@ -57,6 +67,7 @@ export async function updateProjectStatus(
   assertProjectTransition(project.status, status);
 
   const context = await getNotificationContext();
+  const recipientOpenIds = await collectProjectNotificationRecipients(project);
   const type =
     status === "IN_PROGRESS"
       ? "project_started"
@@ -207,6 +218,9 @@ export async function updateProjectStatus(
         techGroup: project.techGroup,
         ownerOpenIds: getProjectOwnerOpenIds(project),
         ownerNames: getProjectOwnerNames(project),
+        participantOpenIds: getProjectParticipantOpenIds(project),
+        participantNames: getProjectParticipantNames(project),
+        recipientOpenIds,
         canceledTaskCount,
       },
       context,

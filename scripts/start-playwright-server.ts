@@ -2,7 +2,7 @@ import { spawn } from "child_process";
 import path from "path";
 
 const databaseUrl = process.env.PLAYWRIGHT_DATABASE_URL;
-const port = process.env.PLAYWRIGHT_SERVER_PORT ?? "3100";
+const port = process.env.PLAYWRIGHT_SERVER_PORT ?? "3002";
 
 if (!databaseUrl) {
   throw new Error("PLAYWRIGHT_DATABASE_URL is required");

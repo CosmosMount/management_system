@@ -454,6 +454,16 @@ test("取消项目会级联取消未结束任务并保留已完成和已归档�
         [fixtures.cancelArchivedTaskId]: "ARCHIVED",
       },
   });
+  const canceledOutboxes = await prisma.notificationOutbox.findMany({
+    where: {
+      eventKey: {
+        startsWith: `progress:project_canceled:${fixtures.cancelProjectId}:`,
+      },
+    },
+    select: { eventKey: true },
+  });
+  expect(canceledOutboxes).toHaveLength(1);
+  expect(canceledOutboxes[0]?.eventKey).not.toContain(":recipient:");
   await expectHealthyPage(page);
 });
 

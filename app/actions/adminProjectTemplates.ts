@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { revalidateAdmin } from "@/lib/revalidate";
 import {
   createProjectTemplateSchema,
+  deleteProjectTemplateSchema,
   projectTemplateEnabledSchema,
   projectTemplateIdSchema,
   updateProjectTemplateSchema,
@@ -40,7 +41,7 @@ export async function createProjectTemplate(input: CreateProjectTemplateInput) {
             create: parsed.stages.map((stage, index) => ({
               name: stage.name,
               goal: stage.goal,
-              dueOffsetDays: stage.dueOffsetDays,
+              dueOffsetDays: stage.durationDays,
               sortOrder: index,
             })),
           },
@@ -94,7 +95,7 @@ export async function updateProjectTemplate(input: UpdateProjectTemplateInput) {
             create: parsed.stages.map((stage, index) => ({
               name: stage.name,
               goal: stage.goal,
-              dueOffsetDays: stage.dueOffsetDays,
+              dueOffsetDays: stage.durationDays,
               sortOrder: index,
             })),
           },
@@ -154,6 +155,35 @@ export async function updateProjectTemplateEnabled(input: {
       where: { id: template.id },
       data: { enabled: parsed.enabled },
     });
+  });
+
+  revalidateAdmin();
+}
+
+export async function deleteProjectTemplate(input: { templateId: string }) {
+  await requireSuperAdmin();
+  const parsed = deleteProjectTemplateSchema.parse(input);
+
+  await prisma.$transaction(async (tx) => {
+    const template = await tx.projectTemplate.findUnique({
+      where: { id: parsed.templateId },
+      select: { id: true, name: true, isDefault: true, enabled: true },
+    });
+    if (!template) throw new Error("项目模板不存在");
+    if (template.isDefault) {
+      throw new Error("默认模板不能删除，请先将其他模板设为默认");
+    }
+
+    if (template.enabled) {
+      const enabledCount = await tx.projectTemplate.count({
+        where: { enabled: true },
+      });
+      if (enabledCount <= 1) {
+        throw new Error("至少需要保留一个启用模板");
+      }
+    }
+
+    await tx.projectTemplate.delete({ where: { id: template.id } });
   });
 
   revalidateAdmin();

@@ -1,11 +1,29 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import {
+  type PointerEvent as ReactPointerEvent,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 import { useRouter } from "next/navigation";
-import { Check, Pencil, Plus, Power, PowerOff, Trash2 } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  Check,
+  GripVertical,
+  Pencil,
+  Plus,
+  Power,
+  PowerOff,
+  Trash2,
+} from "lucide-react";
 import { toast } from "sonner";
 import {
   createProjectTemplate,
+  deleteProjectTemplate,
   setDefaultProjectTemplate,
   updateProjectTemplate,
   updateProjectTemplateEnabled,
@@ -38,7 +56,7 @@ type StageDraft = {
   key: string;
   name: string;
   goal: string;
-  dueOffsetDays: string;
+  durationDays: string;
 };
 
 type TemplateDraft = {
@@ -60,8 +78,12 @@ export function ProjectTemplatesPanel({
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [editingTemplate, setEditingTemplate] =
     useState<AdminProjectTemplate | null>(null);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(
+    templates[0]?.id ?? null,
+  );
   const [draft, setDraft] = useState<TemplateDraft>(() => createEmptyDraft());
   const [errors, setErrors] = useState<DraftErrors>({});
 
@@ -76,6 +98,10 @@ export function ProjectTemplatesPanel({
       ),
     [templates],
   );
+  const selectedTemplate =
+    sortedTemplates.find((template) => template.id === selectedTemplateId) ??
+    sortedTemplates[0] ??
+    null;
 
   function openCreateDialog() {
     setEditingTemplate(null);
@@ -89,6 +115,11 @@ export function ProjectTemplatesPanel({
     setDraft(createDraftFromTemplate(template));
     setErrors({});
     setDialogOpen(true);
+  }
+
+  function requestDelete(template: AdminProjectTemplate) {
+    setSelectedTemplateId(template.id);
+    setDeleteDialogOpen(true);
   }
 
   function handleSubmit() {
@@ -148,6 +179,20 @@ export function ProjectTemplatesPanel({
     });
   }
 
+  function handleDelete(template: AdminProjectTemplate) {
+    startTransition(async () => {
+      try {
+        await deleteProjectTemplate({ templateId: template.id });
+        toast.success("项目模板已删除");
+        setDeleteDialogOpen(false);
+        setSelectedTemplateId(null);
+        router.refresh();
+      } catch (error) {
+        toast.error(getActionErrorMessage(error, "删除失败"));
+      }
+    });
+  }
+
   return (
     <div className="min-w-0 space-y-4">
       <Card>
@@ -155,7 +200,7 @@ export function ProjectTemplatesPanel({
           <div>
             <CardTitle>项目模板</CardTitle>
             <CardDescription>
-              管理新建项目时可套用的阶段模板；相对 DDL 表示创建项目后第 N 天截止。
+              管理新建项目时可套用的阶段模板；阶段耗时会按顺序累加为项目 DDL。
             </CardDescription>
           </div>
           <Button type="button" onClick={openCreateDialog}>
@@ -169,17 +214,32 @@ export function ProjectTemplatesPanel({
               暂无项目模板，请先创建一个模板。
             </p>
           ) : (
-            <div className="grid min-w-0 gap-3 lg:grid-cols-2">
-              {sortedTemplates.map((template) => (
-                <TemplateCard
-                  key={template.id}
-                  template={template}
+            <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(15rem,0.75fr)_minmax(0,1.25fr)]">
+              <div
+                className="min-w-0 space-y-2"
+                aria-label="项目模板列表"
+                data-testid="project-template-list"
+              >
+                {sortedTemplates.map((template) => (
+                  <TemplateSummaryButton
+                    key={template.id}
+                    template={template}
+                    selected={selectedTemplate?.id === template.id}
+                    onSelect={() => setSelectedTemplateId(template.id)}
+                  />
+                ))}
+              </div>
+
+              {selectedTemplate && (
+                <TemplateDetailCard
+                  template={selectedTemplate}
                   pending={pending}
-                  onEdit={() => openEditDialog(template)}
-                  onSetDefault={() => handleSetDefault(template.id)}
-                  onToggleEnabled={() => handleToggleEnabled(template)}
+                  onEdit={() => openEditDialog(selectedTemplate)}
+                  onSetDefault={() => handleSetDefault(selectedTemplate.id)}
+                  onToggleEnabled={() => handleToggleEnabled(selectedTemplate)}
+                  onDelete={() => requestDelete(selectedTemplate)}
                 />
-              ))}
+              )}
             </div>
           )}
         </CardContent>
@@ -195,36 +255,91 @@ export function ProjectTemplatesPanel({
         onDraftChange={setDraft}
         onSubmit={handleSubmit}
       />
+
+      <DeleteTemplateDialog
+        open={deleteDialogOpen}
+        pending={pending}
+        template={selectedTemplate}
+        onOpenChange={setDeleteDialogOpen}
+        onConfirm={handleDelete}
+      />
     </div>
   );
 }
 
-function TemplateCard({
+function TemplateSummaryButton({
+  template,
+  selected,
+  onSelect,
+}: {
+  template: AdminProjectTemplate;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      data-testid="project-template-summary"
+      aria-pressed={selected}
+      onClick={onSelect}
+      className={cn(
+        "flex w-full min-w-0 items-start justify-between gap-3 rounded-lg border bg-background px-3 py-3 text-left transition-colors hover:bg-muted/50",
+        selected && "border-primary/50 bg-primary/5",
+        !template.enabled && "opacity-70",
+      )}
+    >
+      <span className="min-w-0">
+        <span className="flex min-w-0 flex-wrap items-center gap-2">
+          <span className="truncate font-medium">{template.name}</span>
+          {template.isDefault && <Badge>默认</Badge>}
+          <Badge variant={template.enabled ? "secondary" : "outline"}>
+            {template.enabled ? "启用" : "停用"}
+          </Badge>
+        </span>
+        <span className="mt-1 block truncate text-sm text-muted-foreground">
+          {template.description || "未填写描述"}
+        </span>
+      </span>
+      <span className="shrink-0 text-xs text-muted-foreground">
+        {template.stages.length} 阶段
+      </span>
+    </button>
+  );
+}
+
+function TemplateDetailCard({
   template,
   pending,
   onEdit,
   onSetDefault,
   onToggleEnabled,
+  onDelete,
 }: {
   template: AdminProjectTemplate;
   pending: boolean;
   onEdit: () => void;
   onSetDefault: () => void;
   onToggleEnabled: () => void;
+  onDelete: () => void;
 }) {
+  const totalDurationDays = template.stages.reduce(
+    (total, stage) => total + stage.durationDays,
+    0,
+  );
+
   return (
-    <div
-      data-testid="project-template-card"
+    <section
+      data-testid="project-template-detail-card"
       className={cn(
         "min-w-0 rounded-lg border bg-background p-4",
         template.isDefault && "border-primary/40 bg-primary/5",
-        !template.enabled && "opacity-70",
       )}
+      aria-label={`项目模板详情：${template.name}`}
     >
-      <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div className="flex min-w-0 flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 className="truncate text-base font-semibold">{template.name}</h2>
+            <h2 className="truncate text-lg font-semibold">{template.name}</h2>
             {template.isDefault && (
               <Badge data-testid="project-template-default-badge">默认</Badge>
             )}
@@ -232,11 +347,12 @@ function TemplateCard({
               {template.enabled ? "启用" : "停用"}
             </Badge>
           </div>
-          {template.description && (
-            <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
-              {template.description}
-            </p>
-          )}
+          <p className="mt-1 text-sm text-muted-foreground">
+            {template.description || "未填写模板描述"}
+          </p>
+          <p className="mt-2 text-xs text-muted-foreground">
+            共 {template.stages.length} 个阶段，预计耗时 {totalDurationDays} 天。
+          </p>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2">
           <Button
@@ -281,26 +397,95 @@ function TemplateCard({
             )}
             {template.enabled ? "停用" : "启用"}
           </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="destructive"
+            disabled={pending || template.isDefault}
+            onClick={onDelete}
+            title={template.isDefault ? "默认模板不能删除" : undefined}
+          >
+            <Trash2 className="h-4 w-4" />
+            删除
+          </Button>
         </div>
       </div>
 
       <div className="mt-4 space-y-2">
-        {template.stages.map((stage) => (
-          <div
-            key={stage.id}
-            className="grid min-w-0 gap-2 rounded-md border px-3 py-2 text-sm sm:grid-cols-[minmax(0,1fr)_5rem]"
-          >
-            <div className="min-w-0">
-              <p className="truncate font-medium">{stage.name}</p>
-              <p className="truncate text-muted-foreground">{stage.goal}</p>
+        {template.stages.map((stage, index) => {
+          const cumulativeDays = template.stages
+            .slice(0, index + 1)
+            .reduce((total, item) => total + item.durationDays, 0);
+          return (
+            <div
+              key={stage.id}
+              className="grid min-w-0 gap-2 rounded-md border px-3 py-2 text-sm sm:grid-cols-[minmax(0,1fr)_8rem]"
+            >
+              <div className="min-w-0">
+                <p className="truncate font-medium">
+                  {index + 1}. {stage.name}
+                </p>
+                <p className="truncate text-muted-foreground">{stage.goal}</p>
+              </div>
+              <p className="text-left font-medium tabular-nums sm:text-right">
+                耗时 {stage.durationDays} 天
+                <span className="block text-xs font-normal text-muted-foreground">
+                  累计第 {cumulativeDays} 天
+                </span>
+              </p>
             </div>
-            <p className="text-right font-medium tabular-nums">
-              第 {stage.dueOffsetDays} 天
-            </p>
-          </div>
-        ))}
+          );
+        })}
       </div>
-    </div>
+    </section>
+  );
+}
+
+function DeleteTemplateDialog({
+  open,
+  pending,
+  template,
+  onOpenChange,
+  onConfirm,
+}: {
+  open: boolean;
+  pending: boolean;
+  template: AdminProjectTemplate | null;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: (template: AdminProjectTemplate) => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>删除项目模板</DialogTitle>
+          <DialogDescription>
+            删除模板不会影响已创建项目，但该模板将无法再被新项目套用。
+          </DialogDescription>
+        </DialogHeader>
+        <p className="text-sm">
+          确认删除「<span className="font-medium">{template?.name}</span>」？
+        </p>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={pending}
+            onClick={() => onOpenChange(false)}
+          >
+            取消
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            disabled={pending || !template || template.isDefault}
+            onClick={() => template && onConfirm(template)}
+          >
+            删除模板
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -323,6 +508,64 @@ function TemplateEditorDialog({
   onDraftChange: (draft: TemplateDraft) => void;
   onSubmit: () => void;
 }) {
+  const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
+  const [moveAnnouncement, setMoveAnnouncement] = useState("");
+  const stageElementRefs = useRef<Array<HTMLLIElement | null>>([]);
+  const previousStageRectsRef = useRef<Map<string, DOMRect>>(new Map());
+
+  useLayoutEffect(() => {
+    const previousRects = previousStageRectsRef.current;
+    if (previousRects.size === 0) return;
+
+    previousStageRectsRef.current = new Map();
+
+    stageElementRefs.current.forEach((element, index) => {
+      const stage = draft.stages[index];
+      if (!element || !stage) return;
+
+      const previousRect = previousRects.get(stage.key);
+      if (!previousRect) return;
+
+      element.getAnimations().forEach((animation) => animation.cancel());
+      const nextRect = element.getBoundingClientRect();
+      const translateX = previousRect.left - nextRect.left;
+      const translateY = previousRect.top - nextRect.top;
+
+      if (Math.abs(translateX) < 1 && Math.abs(translateY) < 1) return;
+
+      element.animate(
+        [
+          {
+            transform: `translate(${translateX}px, ${translateY}px)`,
+            boxShadow: "0 12px 30px rgb(15 23 42 / 0.12)",
+          },
+          {
+            transform: "translate(0, 0)",
+            boxShadow: "0 0 0 rgb(15 23 42 / 0)",
+          },
+        ],
+        {
+          duration: 220,
+          easing: "cubic-bezier(0.2, 0, 0, 1)",
+        },
+      );
+    });
+  }, [draft.stages]);
+
+  function captureStagePositions() {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      previousStageRectsRef.current = new Map();
+      return;
+    }
+
+    previousStageRectsRef.current = new Map(
+      draft.stages.flatMap((stage, index) => {
+        const element = stageElementRefs.current[index];
+        return element ? [[stage.key, element.getBoundingClientRect()]] : [];
+      }),
+    );
+  }
+
   function updateStage(index: number, patch: Partial<StageDraft>) {
     onDraftChange({
       ...draft,
@@ -333,22 +576,60 @@ function TemplateEditorDialog({
   }
 
   function addStage() {
-    const last = draft.stages.at(-1);
-    const nextOffset = Number(last?.dueOffsetDays || 0) + 7;
+    captureStagePositions();
     onDraftChange({
       ...draft,
       stages: [
         ...draft.stages,
-        createEmptyStage(draft.stages.length, String(nextOffset)),
+        createEmptyStage(draft.stages.length, "7"),
       ],
     });
   }
 
   function removeStage(index: number) {
+    captureStagePositions();
     onDraftChange({
       ...draft,
       stages: draft.stages.filter((_, stageIndex) => stageIndex !== index),
     });
+  }
+
+  function moveStage(from: number, to: number) {
+    if (from === to || to < 0 || to >= draft.stages.length) return;
+    captureStagePositions();
+    const nextStages = [...draft.stages];
+    const [stage] = nextStages.splice(from, 1);
+    if (!stage) return;
+    nextStages.splice(to, 0, stage);
+    onDraftChange({ ...draft, stages: nextStages });
+    setMoveAnnouncement(`「${stage.name || "未命名阶段"}」已移动到第 ${to + 1} 位`);
+    window.setTimeout(() => {
+      stageElementRefs.current[to]?.querySelector<HTMLElement>(
+        "[data-stage-grip]",
+      )?.focus();
+    }, 0);
+  }
+
+  function handleDragStart(index: number, event: ReactPointerEvent<HTMLButtonElement>) {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDraggingIndex(index);
+  }
+
+  function handleDragMove(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (draggingIndex === null) return;
+    const targetIndex = stageElementRefs.current.findIndex((element) => {
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      return event.clientY >= rect.top && event.clientY <= rect.bottom;
+    });
+    if (targetIndex >= 0 && targetIndex !== draggingIndex) {
+      moveStage(draggingIndex, targetIndex);
+      setDraggingIndex(targetIndex);
+    }
+  }
+
+  function handleDragEnd() {
+    setDraggingIndex(null);
   }
 
   return (
@@ -366,6 +647,7 @@ function TemplateEditorDialog({
             <div className="space-y-2">
               <Label>模板名称</Label>
               <Input
+                aria-label="模板名称"
                 value={draft.name}
                 aria-invalid={!!errors.name}
                 aria-describedby={errors.name ? "template-name-error" : undefined}
@@ -405,6 +687,7 @@ function TemplateEditorDialog({
           <div className="space-y-2">
             <Label>模板描述</Label>
             <Textarea
+              aria-label="模板描述"
               value={draft.description}
               onChange={(event) =>
                 onDraftChange({ ...draft, description: event.target.value })
@@ -418,7 +701,7 @@ function TemplateEditorDialog({
               <div>
                 <p className="font-medium">模板阶段</p>
                 <p className="text-sm text-muted-foreground">
-                  相对 DDL 天数允许相同，但后续阶段不能早于前一阶段。
+                  每个阶段填写本阶段预计消耗天数，系统会按顺序累加为项目 DDL。
                 </p>
               </div>
               <Button type="button" variant="outline" onClick={addStage}>
@@ -427,87 +710,150 @@ function TemplateEditorDialog({
               </Button>
             </div>
             <FormFieldError message={errors.stages} />
+            <p className="sr-only" aria-live="polite">
+              {moveAnnouncement}
+            </p>
 
-            {draft.stages.map((stage, index) => (
-              <div key={stage.key} className="rounded-lg border p-3">
-                <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_8rem_auto]">
-                  <div className="space-y-2">
-                    <Label>阶段名称</Label>
-                    <Input
-                      value={stage.name}
-                      aria-invalid={!!errors[`stages.${index}.name`]}
-                      aria-describedby={
-                        errors[`stages.${index}.name`]
-                          ? `template-stage-${index}-name-error`
-                          : undefined
-                      }
-                      onChange={(event) =>
-                        updateStage(index, { name: event.target.value })
-                      }
-                    />
-                    <FormFieldError
-                      id={`template-stage-${index}-name-error`}
-                      message={errors[`stages.${index}.name`]}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>第 N 天截止</Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      max={3650}
-                      value={stage.dueOffsetDays}
-                      aria-invalid={!!errors[`stages.${index}.dueOffsetDays`]}
-                      aria-describedby={
-                        errors[`stages.${index}.dueOffsetDays`]
-                          ? `template-stage-${index}-due-error`
-                          : undefined
-                      }
-                      onChange={(event) =>
-                        updateStage(index, {
-                          dueOffsetDays: event.target.value,
-                        })
-                      }
-                    />
-                    <FormFieldError
-                      id={`template-stage-${index}-due-error`}
-                      message={errors[`stages.${index}.dueOffsetDays`]}
-                    />
-                  </div>
-                  <div className="flex items-end">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      disabled={draft.stages.length <= 1}
-                      onClick={() => removeStage(index)}
-                      aria-label="删除阶段"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-                <div className="mt-3 space-y-2">
-                  <Label>阶段目标</Label>
-                  <Textarea
-                    value={stage.goal}
-                    aria-invalid={!!errors[`stages.${index}.goal`]}
-                    aria-describedby={
-                      errors[`stages.${index}.goal`]
-                        ? `template-stage-${index}-goal-error`
-                        : undefined
-                    }
-                    onChange={(event) =>
-                      updateStage(index, { goal: event.target.value })
-                    }
-                  />
-                  <FormFieldError
-                    id={`template-stage-${index}-goal-error`}
-                    message={errors[`stages.${index}.goal`]}
-                  />
-                </div>
-              </div>
-            ))}
+            <ol className="space-y-3" aria-label="模板阶段排序">
+              {draft.stages.map((stage, index) => {
+                const cumulativeDays = draft.stages
+                  .slice(0, index + 1)
+                  .reduce((total, item) => total + (Number(item.durationDays) || 0), 0);
+                return (
+                  <li
+                    key={stage.key}
+                    data-testid="project-template-stage-editor"
+                    ref={(element) => {
+                      stageElementRefs.current[index] = element;
+                    }}
+                    className={cn(
+                      "rounded-lg border p-3 will-change-transform",
+                      draggingIndex === index &&
+                        "border-primary/50 bg-primary/5 shadow-sm",
+                    )}
+                  >
+                    <div className="mb-3 flex items-center justify-between gap-3 border-b pb-3">
+                      <button
+                        type="button"
+                        data-stage-grip
+                        className="inline-flex h-8 cursor-grab items-center gap-2 rounded-md px-2 text-sm text-muted-foreground hover:bg-muted active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        aria-label={`拖动阶段 ${index + 1}`}
+                        style={{ touchAction: "none" }}
+                        onPointerDown={(event) => handleDragStart(index, event)}
+                        onPointerMove={handleDragMove}
+                        onPointerUp={handleDragEnd}
+                        onPointerCancel={handleDragEnd}
+                      >
+                        <GripVertical className="h-4 w-4" />
+                        阶段 {index + 1}
+                      </button>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          disabled={index === 0}
+                          onClick={() => moveStage(index, index - 1)}
+                          aria-label="上移阶段"
+                        >
+                          <ArrowUp className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          disabled={index === draft.stages.length - 1}
+                          onClick={() => moveStage(index, index + 1)}
+                          aria-label="下移阶段"
+                        >
+                          <ArrowDown className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          disabled={draft.stages.length <= 1}
+                          onClick={() => removeStage(index)}
+                          aria-label="删除阶段"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_9rem]">
+                      <div className="space-y-2">
+                        <Label>阶段名称</Label>
+                        <Input
+                          aria-label={`阶段 ${index + 1} 名称`}
+                          value={stage.name}
+                          aria-invalid={!!errors[`stages.${index}.name`]}
+                          aria-describedby={
+                            errors[`stages.${index}.name`]
+                              ? `template-stage-${index}-name-error`
+                              : undefined
+                          }
+                          onChange={(event) =>
+                            updateStage(index, { name: event.target.value })
+                          }
+                        />
+                        <FormFieldError
+                          id={`template-stage-${index}-name-error`}
+                          message={errors[`stages.${index}.name`]}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>本阶段耗时（天）</Label>
+                        <Input
+                          aria-label={`阶段 ${index + 1} 耗时`}
+                          type="number"
+                          min={1}
+                          max={3650}
+                          value={stage.durationDays}
+                          aria-invalid={!!errors[`stages.${index}.durationDays`]}
+                          aria-describedby={
+                            errors[`stages.${index}.durationDays`]
+                              ? `template-stage-${index}-duration-error`
+                              : undefined
+                          }
+                          onChange={(event) =>
+                            updateStage(index, {
+                              durationDays: event.target.value,
+                            })
+                          }
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          累计第 {cumulativeDays} 天截止
+                        </p>
+                        <FormFieldError
+                          id={`template-stage-${index}-duration-error`}
+                          message={errors[`stages.${index}.durationDays`]}
+                        />
+                      </div>
+                    </div>
+                    <div className="mt-3 space-y-2">
+                      <Label>阶段目标</Label>
+                      <Textarea
+                        aria-label={`阶段 ${index + 1} 目标`}
+                        value={stage.goal}
+                        aria-invalid={!!errors[`stages.${index}.goal`]}
+                        aria-describedby={
+                          errors[`stages.${index}.goal`]
+                            ? `template-stage-${index}-goal-error`
+                            : undefined
+                        }
+                        onChange={(event) =>
+                          updateStage(index, { goal: event.target.value })
+                        }
+                      />
+                      <FormFieldError
+                        id={`template-stage-${index}-goal-error`}
+                        message={errors[`stages.${index}.goal`]}
+                      />
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
           </div>
         </div>
 
@@ -537,8 +883,8 @@ function createEmptyDraft(): TemplateDraft {
     isDefault: false,
     stages: [
       createEmptyStage(0, "7"),
-      createEmptyStage(1, "14"),
-      createEmptyStage(2, "21"),
+      createEmptyStage(1, "7"),
+      createEmptyStage(2, "7"),
     ],
   };
 }
@@ -554,17 +900,17 @@ function createDraftFromTemplate(template: AdminProjectTemplate): TemplateDraft 
       key: stage.id || `stage-${index}`,
       name: stage.name,
       goal: stage.goal,
-      dueOffsetDays: String(stage.dueOffsetDays),
+      durationDays: String(stage.durationDays),
     })),
   };
 }
 
-function createEmptyStage(index: number, dueOffsetDays: string): StageDraft {
+function createEmptyStage(index: number, durationDays: string): StageDraft {
   return {
     key: `new-${Date.now()}-${index}-${Math.random().toString(36).slice(2)}`,
     name: "",
     goal: "",
-    dueOffsetDays,
+    durationDays,
   };
 }
 
@@ -577,7 +923,7 @@ function normalizeDraft(draft: TemplateDraft) {
     stages: draft.stages.map((stage) => ({
       name: stage.name.trim(),
       goal: stage.goal.trim(),
-      dueOffsetDays: Number(stage.dueOffsetDays),
+      durationDays: Number(stage.durationDays),
     })),
   };
 }
@@ -597,7 +943,7 @@ function validateDraft(draft: TemplateDraft): DraftErrors {
     errors.stages = "至少添加一个阶段";
   }
 
-  let previousOffset: number | null = null;
+  let totalDurationDays = 0;
   draft.stages.forEach((stage, index) => {
     if (!stage.name.trim()) {
       errors[`stages.${index}.name`] = "阶段名称不能为空";
@@ -605,22 +951,21 @@ function validateDraft(draft: TemplateDraft): DraftErrors {
     if (!stage.goal.trim()) {
       errors[`stages.${index}.goal`] = "请填写阶段目标";
     }
-    const offset = Number(stage.dueOffsetDays);
-    if (!stage.dueOffsetDays.trim() || !Number.isInteger(offset)) {
-      errors[`stages.${index}.dueOffsetDays`] = "相对 DDL 天数必须是整数";
+    const durationDays = Number(stage.durationDays);
+    if (!stage.durationDays.trim() || !Number.isInteger(durationDays)) {
+      errors[`stages.${index}.durationDays`] = "阶段耗时必须是整数";
       return;
     }
-    if (offset < 0 || offset > 3650) {
-      errors[`stages.${index}.dueOffsetDays`] =
-        "相对 DDL 天数需要在 0 到 3650 天之间";
+    if (durationDays < 1 || durationDays > 3650) {
+      errors[`stages.${index}.durationDays`] =
+        "阶段耗时需要在 1 到 3650 天之间";
       return;
     }
-    if (previousOffset !== null && offset < previousOffset) {
-      errors[`stages.${index}.dueOffsetDays`] =
-        "阶段相对 DDL 天数需要按顺序递增或相同";
-    }
-    previousOffset = offset;
+    totalDurationDays += durationDays;
   });
+  if (totalDurationDays > 3650) {
+    errors.stages = "模板总耗时不能超过 3650 天";
+  }
 
   return errors;
 }

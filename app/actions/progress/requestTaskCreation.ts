@@ -136,6 +136,23 @@ export async function requestTaskCreation(input: CreateTaskInput) {
     needsWeeklyReport: parsed.needsWeeklyReport,
     acceptanceChecklistItems,
   };
+  const baseRecipientOpenIds = await collectTaskNotificationRecipients({
+    team: project.team,
+    techGroup: project.techGroup,
+    assigneeOpenId: orderedAssignees[0]?.openId ?? "",
+    assigneeName: orderedAssignees[0]?.name ?? "",
+    assignees: orderedAssignees,
+    techGroups: taskTechGroups.map((techGroup, index) => ({
+      techGroup,
+      sortOrder: index,
+    })),
+    project,
+  });
+  const recipientOpenIds = normalizeOpenIds([
+    ...baseRecipientOpenIds,
+    user.openId,
+    ...(selectedStage?.ownerOpenId ? [selectedStage.ownerOpenId] : []),
+  ]);
 
   const context = await getNotificationContext();
   const request = await prisma.$transaction(async (tx) => {
@@ -178,6 +195,11 @@ export async function requestTaskCreation(input: CreateTaskInput) {
         team: project.team,
         techGroup: project.techGroup,
         projectOwnerOpenIds,
+        stageName: draft.stageName,
+        assigneeNames: draft.assigneeNames.join("、"),
+        taskTechGroups,
+        dueAt: draft.dueAt,
+        recipientOpenIds,
       },
       context,
     );
@@ -323,7 +345,7 @@ export async function reviewTaskCreationRequest(input: {
   const needsWeeklyReport =
     draft.needsWeeklyReport ||
     dueAt.getTime() - Date.now() > 14 * 24 * 60 * 60 * 1000;
-  const recipientOpenIds = await collectTaskNotificationRecipients({
+  const baseRecipientOpenIds = await collectTaskNotificationRecipients({
     team: project.team,
     techGroup: project.techGroup,
     assigneeOpenId: primaryAssignee.openId,
@@ -335,6 +357,11 @@ export async function reviewTaskCreationRequest(input: {
     })),
     project,
   });
+  const recipientOpenIds = normalizeOpenIds([
+    ...baseRecipientOpenIds,
+    request.requesterOpenId,
+    ...(selectedStage?.ownerOpenId ? [selectedStage.ownerOpenId] : []),
+  ]);
 
   const task = await prisma.$transaction(async (tx) => {
     const activeProject = await tx.project.updateMany({

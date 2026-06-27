@@ -49,7 +49,7 @@ export default async function NewProjectPage() {
               stages: template.stages.map((stage) => ({
                 name: stage.name,
                 goal: stage.goal,
-                dueOffsetDays: stage.dueOffsetDays,
+                durationDays: stage.dueOffsetDays,
               })),
             }))}
           />

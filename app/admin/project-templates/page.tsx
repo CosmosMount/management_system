@@ -24,7 +24,7 @@ export default async function AdminProjectTemplatesPage() {
           id: stage.id,
           name: stage.name,
           goal: stage.goal,
-          dueOffsetDays: stage.dueOffsetDays,
+          durationDays: stage.dueOffsetDays,
           sortOrder: stage.sortOrder,
         })),
       }))}

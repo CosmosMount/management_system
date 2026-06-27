@@ -12,12 +12,15 @@ export const REAL_CAR_STAGE_TEMPLATE = [
 
 export type StageTemplateKey = "real-car" | "custom";
 
-export function getDefaultStageDueAt(index: number): string {
-  return getStageDueAtByOffsetDays((index + 1) * 7);
+export function getDefaultStageDueAt(index: number, baseDate = new Date()): string {
+  return getStageDueAtByOffsetDays((index + 1) * 7, baseDate);
 }
 
-export function getStageDueAtByOffsetDays(offsetDays: number): string {
-  const date = new Date();
+export function getStageDueAtByOffsetDays(
+  offsetDays: number,
+  baseDate = new Date(),
+): string {
+  const date = new Date(baseDate);
   date.setDate(date.getDate() + offsetDays);
   date.setHours(18, 0, 0, 0);
   return toDateTimeLocalInputValue(date);

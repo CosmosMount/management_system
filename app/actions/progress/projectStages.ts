@@ -13,6 +13,7 @@ import {
   getApproverRole,
 } from "@/lib/permissions-progress";
 import { assertProjectActive } from "@/lib/progress-guards";
+import { collectProjectNotificationRecipients } from "@/lib/progress-project-notifications";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
@@ -35,7 +36,15 @@ export async function submitStageEvidence(input: {
     where: { id: parsed.projectId },
     include: {
       owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       stages: { orderBy: { sortOrder: "asc" } },
+      tasks: {
+        where: { deletedAt: null },
+        include: {
+          assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+          techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        },
+      },
     },
   });
   if (!project) throw new Error("项目不存在");
@@ -95,6 +104,7 @@ export async function submitStageEvidence(input: {
     payload: { stageId: stage.id, submissionId: submission.id },
   });
 
+  const recipientOpenIds = await collectProjectNotificationRecipients(project);
   await enqueueProgressNotification(
     `progress:stage_pending_acceptance:${submission.id}`,
     {
@@ -106,7 +116,9 @@ export async function submitStageEvidence(input: {
       techGroup: project.techGroup,
       ownerOpenIds: getProjectOwnerOpenIds(project),
       submitterOpenId: user.openId,
+      submitterName: user.name,
       evidenceUrl: parsed.evidenceUrl,
+      recipientOpenIds,
     },
     await getNotificationContext(),
   );
@@ -149,7 +161,21 @@ async function reviewStageSubmission(
           project: {
             include: {
               owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+              participants: {
+                orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+              },
               stages: true,
+              tasks: {
+                where: { deletedAt: null },
+                include: {
+                  assignees: {
+                    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+                  },
+                  techGroups: {
+                    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+                  },
+                },
+              },
             },
           },
         },
@@ -240,6 +266,7 @@ async function reviewStageSubmission(
     payload: { stageId: stage.id, submissionId: submission.id },
   });
 
+  const recipientOpenIds = await collectProjectNotificationRecipients(project);
   await enqueueProgressNotification(
     `progress:${pass ? "stage_approved" : "stage_rejected"}:${submission.id}`,
     {
@@ -248,6 +275,9 @@ async function reviewStageSubmission(
       projectName: project.name,
       stageName: stage.name,
       stageOwnerOpenId: stage.ownerOpenId,
+      reviewerName: user.name,
+      comment: parsed.comment ?? "",
+      recipientOpenIds,
     },
     await getNotificationContext(),
   );

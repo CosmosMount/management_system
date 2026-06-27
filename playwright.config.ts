@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { defineConfig, devices } from "@playwright/test";
 
-const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:3100";
+const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:3002";
 const parsedBaseUrl = new URL(baseURL);
 
 if (parsedBaseUrl.port === "3000") {
@@ -73,7 +73,7 @@ export default defineConfig({
           ...process.env,
           DATABASE_URL: testDatabaseUrl,
           PLAYWRIGHT_DATABASE_URL: testDatabaseUrl,
-          PLAYWRIGHT_SERVER_PORT: parsedBaseUrl.port || "3100",
+          PLAYWRIGHT_SERVER_PORT: parsedBaseUrl.port || "3002",
           PLAYWRIGHT_CONFIRM_RECREATE_DB:
             new URL(testDatabaseUrl).pathname.replace(/^\//, ""),
         },

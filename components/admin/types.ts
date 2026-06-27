@@ -63,7 +63,7 @@ export type AdminProjectTemplateStage = {
   id: string;
   name: string;
   goal: string;
-  dueOffsetDays: number;
+  durationDays: number;
   sortOrder: number;
 };
 

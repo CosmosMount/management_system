@@ -51,7 +51,7 @@ type ProjectTemplateOption = {
   stages: Array<{
     name: string;
     goal: string;
-    dueOffsetDays: number;
+    durationDays: number;
   }>;
 };
 type TeamFormValue = (typeof TEAM_OPTIONS)[number] | "";
@@ -96,11 +96,12 @@ type Props = {
 };
 
 function realCarStages(defaultOwner = "") {
+  const baseDate = new Date();
   return REAL_CAR_STAGE_TEMPLATE.map((stage, index) => ({
     name: stage.name,
     goal: stage.goal,
     ownerOpenId: defaultOwner,
-    dueAt: getDefaultStageDueAt(index),
+    dueAt: getDefaultStageDueAt(index, baseDate),
   }));
 }
 
@@ -108,11 +109,16 @@ function stagesFromTemplate(
   template: ProjectTemplateOption,
   defaultOwner = "",
 ) {
+  const baseDate = new Date();
+  let elapsedDays = 0;
   return template.stages.map((stage) => ({
     name: stage.name,
     goal: stage.goal,
     ownerOpenId: defaultOwner,
-    dueAt: getStageDueAtByOffsetDays(stage.dueOffsetDays),
+    dueAt: getStageDueAtByOffsetDays(
+      (elapsedDays += stage.durationDays),
+      baseDate,
+    ),
   }));
 }
 

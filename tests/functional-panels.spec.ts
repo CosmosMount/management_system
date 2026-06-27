@@ -291,6 +291,77 @@ test.describe("管理员面板", () => {
     await expectHealthyPage(page);
   });
 
+  test("管理员可查看详情、排序并删除非默认项目模板", async ({ page }) => {
+    const templateName = `PW全功能-模板管理-${Date.now()}`;
+    await prisma.projectTemplate.deleteMany({ where: { name: templateName } });
+
+    await page.goto("/admin/project-templates", { waitUntil: "networkidle" });
+    await expect(page.getByTestId("project-template-list")).toBeVisible();
+    await expect(page.getByTestId("project-template-detail-card")).toBeVisible();
+    await expect(page.getByRole("button", { name: /删除/ }).first()).toBeDisabled();
+
+    await page.getByRole("button", { name: "新建模板" }).click();
+    await page.getByLabel("模板名称").fill(templateName);
+    await page.getByLabel("模板描述").fill("PW全功能-模板管理描述");
+    await page.getByLabel("阶段 1 名称").fill("模板阶段 A");
+    await page.getByLabel("阶段 1 耗时").fill("2");
+    await page.getByLabel("阶段 1 目标").fill("A goal");
+    await page.getByLabel("阶段 2 名称").fill("模板阶段 B");
+    await page.getByLabel("阶段 2 耗时").fill("5");
+    await page.getByLabel("阶段 2 目标").fill("B goal");
+    await page.getByLabel("阶段 3 名称").fill("模板阶段 C");
+    await page.getByLabel("阶段 3 耗时").fill("1");
+    await page.getByLabel("阶段 3 目标").fill("C goal");
+    await page.getByRole("button", { name: "创建模板" }).click();
+    await expect(page.getByRole("button", { name: new RegExp(templateName) })).toBeVisible();
+
+    await page.getByRole("button", { name: new RegExp(templateName) }).click();
+    await page.getByRole("button", { name: "编辑" }).click();
+    await page
+      .getByTestId("project-template-stage-editor")
+      .nth(2)
+      .getByRole("button", { name: "上移阶段" })
+      .click();
+    await page
+      .getByTestId("project-template-stage-editor")
+      .nth(1)
+      .getByRole("button", { name: "上移阶段" })
+      .click();
+    await page.getByRole("button", { name: "保存模板" }).click();
+
+    await expect
+      .poll(async () => {
+        const template = await prisma.projectTemplate.findUnique({
+          where: { name: templateName },
+          include: { stages: { orderBy: { sortOrder: "asc" } } },
+        });
+        return template?.stages.map((stage) => ({
+          name: stage.name,
+          durationDays: stage.dueOffsetDays,
+        }));
+      })
+      .toEqual([
+        { name: "模板阶段 C", durationDays: 1 },
+        { name: "模板阶段 A", durationDays: 2 },
+        { name: "模板阶段 B", durationDays: 5 },
+      ]);
+
+    await page.getByRole("button", { name: new RegExp(templateName) }).click();
+    await expect(page.getByTestId("project-template-detail-card")).toContainText(
+      "耗时 1 天",
+    );
+    await page.getByRole("button", { name: "删除" }).click();
+    await page.getByRole("button", { name: "删除模板" }).click();
+
+    await expect
+      .poll(async () =>
+        prisma.projectTemplate.count({ where: { name: templateName } }),
+      )
+      .toBe(0);
+    await expect(page.getByRole("button", { name: new RegExp(templateName) })).toHaveCount(0);
+    await expectHealthyPage(page);
+  });
+
   test("管理员可手动扫描进度提醒且同日重复扫描不重复入队", async ({
     page,
   }, testInfo) => {
