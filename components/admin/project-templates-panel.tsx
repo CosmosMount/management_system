@@ -1,10 +1,7 @@
 "use client";
 
 import {
-  type PointerEvent as ReactPointerEvent,
-  useLayoutEffect,
   useMemo,
-  useRef,
   useState,
   useTransition,
 } from "react";
@@ -48,6 +45,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { SortableCardList } from "@/components/ui/sortable-card-list";
 import { Textarea } from "@/components/ui/textarea";
 import { getActionErrorMessage } from "@/lib/action-error-message";
 import { cn } from "@/lib/utils";
@@ -508,64 +506,6 @@ function TemplateEditorDialog({
   onDraftChange: (draft: TemplateDraft) => void;
   onSubmit: () => void;
 }) {
-  const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
-  const [moveAnnouncement, setMoveAnnouncement] = useState("");
-  const stageElementRefs = useRef<Array<HTMLLIElement | null>>([]);
-  const previousStageRectsRef = useRef<Map<string, DOMRect>>(new Map());
-
-  useLayoutEffect(() => {
-    const previousRects = previousStageRectsRef.current;
-    if (previousRects.size === 0) return;
-
-    previousStageRectsRef.current = new Map();
-
-    stageElementRefs.current.forEach((element, index) => {
-      const stage = draft.stages[index];
-      if (!element || !stage) return;
-
-      const previousRect = previousRects.get(stage.key);
-      if (!previousRect) return;
-
-      element.getAnimations().forEach((animation) => animation.cancel());
-      const nextRect = element.getBoundingClientRect();
-      const translateX = previousRect.left - nextRect.left;
-      const translateY = previousRect.top - nextRect.top;
-
-      if (Math.abs(translateX) < 1 && Math.abs(translateY) < 1) return;
-
-      element.animate(
-        [
-          {
-            transform: `translate(${translateX}px, ${translateY}px)`,
-            boxShadow: "0 12px 30px rgb(15 23 42 / 0.12)",
-          },
-          {
-            transform: "translate(0, 0)",
-            boxShadow: "0 0 0 rgb(15 23 42 / 0)",
-          },
-        ],
-        {
-          duration: 220,
-          easing: "cubic-bezier(0.2, 0, 0, 1)",
-        },
-      );
-    });
-  }, [draft.stages]);
-
-  function captureStagePositions() {
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      previousStageRectsRef.current = new Map();
-      return;
-    }
-
-    previousStageRectsRef.current = new Map(
-      draft.stages.flatMap((stage, index) => {
-        const element = stageElementRefs.current[index];
-        return element ? [[stage.key, element.getBoundingClientRect()]] : [];
-      }),
-    );
-  }
-
   function updateStage(index: number, patch: Partial<StageDraft>) {
     onDraftChange({
       ...draft,
@@ -576,7 +516,6 @@ function TemplateEditorDialog({
   }
 
   function addStage() {
-    captureStagePositions();
     onDraftChange({
       ...draft,
       stages: [
@@ -587,49 +526,10 @@ function TemplateEditorDialog({
   }
 
   function removeStage(index: number) {
-    captureStagePositions();
     onDraftChange({
       ...draft,
       stages: draft.stages.filter((_, stageIndex) => stageIndex !== index),
     });
-  }
-
-  function moveStage(from: number, to: number) {
-    if (from === to || to < 0 || to >= draft.stages.length) return;
-    captureStagePositions();
-    const nextStages = [...draft.stages];
-    const [stage] = nextStages.splice(from, 1);
-    if (!stage) return;
-    nextStages.splice(to, 0, stage);
-    onDraftChange({ ...draft, stages: nextStages });
-    setMoveAnnouncement(`「${stage.name || "未命名阶段"}」已移动到第 ${to + 1} 位`);
-    window.setTimeout(() => {
-      stageElementRefs.current[to]?.querySelector<HTMLElement>(
-        "[data-stage-grip]",
-      )?.focus();
-    }, 0);
-  }
-
-  function handleDragStart(index: number, event: ReactPointerEvent<HTMLButtonElement>) {
-    event.currentTarget.setPointerCapture(event.pointerId);
-    setDraggingIndex(index);
-  }
-
-  function handleDragMove(event: ReactPointerEvent<HTMLButtonElement>) {
-    if (draggingIndex === null) return;
-    const targetIndex = stageElementRefs.current.findIndex((element) => {
-      if (!element) return false;
-      const rect = element.getBoundingClientRect();
-      return event.clientY >= rect.top && event.clientY <= rect.bottom;
-    });
-    if (targetIndex >= 0 && targetIndex !== draggingIndex) {
-      moveStage(draggingIndex, targetIndex);
-      setDraggingIndex(targetIndex);
-    }
-  }
-
-  function handleDragEnd() {
-    setDraggingIndex(null);
   }
 
   return (
@@ -710,39 +610,35 @@ function TemplateEditorDialog({
               </Button>
             </div>
             <FormFieldError message={errors.stages} />
-            <p className="sr-only" aria-live="polite">
-              {moveAnnouncement}
-            </p>
 
-            <ol className="space-y-3" aria-label="模板阶段排序">
-              {draft.stages.map((stage, index) => {
+            <SortableCardList
+              items={draft.stages}
+              getKey={(stage) => stage.key}
+              getItemLabel={(stage) => stage.name || "未命名阶段"}
+              ariaLabel="模板阶段排序"
+              className="space-y-3"
+              itemTestId="project-template-stage-editor"
+              itemClassName={(_stage, _index, isDragging) =>
+                cn(
+                  "rounded-lg border p-3 bg-card",
+                  isDragging && "border-primary/50 bg-primary/5",
+                )
+              }
+              onReorder={(nextStages) =>
+                onDraftChange({ ...draft, stages: nextStages })
+              }
+              renderItem={(stage, { index, dragHandleProps, moveItem }) => {
                 const cumulativeDays = draft.stages
                   .slice(0, index + 1)
                   .reduce((total, item) => total + (Number(item.durationDays) || 0), 0);
                 return (
-                  <li
-                    key={stage.key}
-                    data-testid="project-template-stage-editor"
-                    ref={(element) => {
-                      stageElementRefs.current[index] = element;
-                    }}
-                    className={cn(
-                      "rounded-lg border p-3 will-change-transform",
-                      draggingIndex === index &&
-                        "border-primary/50 bg-primary/5 shadow-sm",
-                    )}
-                  >
+                  <>
                     <div className="mb-3 flex items-center justify-between gap-3 border-b pb-3">
                       <button
                         type="button"
-                        data-stage-grip
+                        {...dragHandleProps}
                         className="inline-flex h-8 cursor-grab items-center gap-2 rounded-md px-2 text-sm text-muted-foreground hover:bg-muted active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         aria-label={`拖动阶段 ${index + 1}`}
-                        style={{ touchAction: "none" }}
-                        onPointerDown={(event) => handleDragStart(index, event)}
-                        onPointerMove={handleDragMove}
-                        onPointerUp={handleDragEnd}
-                        onPointerCancel={handleDragEnd}
                       >
                         <GripVertical className="h-4 w-4" />
                         阶段 {index + 1}
@@ -753,7 +649,7 @@ function TemplateEditorDialog({
                           variant="ghost"
                           size="icon-sm"
                           disabled={index === 0}
-                          onClick={() => moveStage(index, index - 1)}
+                          onClick={() => moveItem(index - 1)}
                           aria-label="上移阶段"
                         >
                           <ArrowUp className="h-4 w-4" />
@@ -763,7 +659,7 @@ function TemplateEditorDialog({
                           variant="ghost"
                           size="icon-sm"
                           disabled={index === draft.stages.length - 1}
-                          onClick={() => moveStage(index, index + 1)}
+                          onClick={() => moveItem(index + 1)}
                           aria-label="下移阶段"
                         >
                           <ArrowDown className="h-4 w-4" />
@@ -850,10 +746,10 @@ function TemplateEditorDialog({
                         message={errors[`stages.${index}.goal`]}
                       />
                     </div>
-                  </li>
+                  </>
                 );
-              })}
-            </ol>
+              }}
+            />
           </div>
         </div>
 

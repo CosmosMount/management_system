@@ -442,8 +442,8 @@ export async function drainNotificationOutbox(limit = 20): Promise<number> {
 
     try {
       await sendOutboxNotification(row);
-      await prisma.notificationOutbox.update({
-        where: { id: row.id },
+      const markedSent = await prisma.notificationOutbox.updateMany({
+        where: { id: row.id, status: "PROCESSING" },
         data: {
           status: "SENT",
           sentAt: new Date(),
@@ -451,12 +451,12 @@ export async function drainNotificationOutbox(limit = 20): Promise<number> {
           lockedUntil: null,
         },
       });
-      sent++;
+      if (markedSent.count === 1) sent++;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const attempts = row.attempts + 1;
-      await prisma.notificationOutbox.update({
-        where: { id: row.id },
+      await prisma.notificationOutbox.updateMany({
+        where: { id: row.id, status: "PROCESSING" },
         data: {
           status: "FAILED",
           lastError: message.slice(0, 1000),

@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { prisma } from "../lib/prisma";
+import { createProjectSchema } from "../lib/validations/progress";
 import {
   expectHealthyPage,
   formatPrismaError,
@@ -1299,6 +1300,7 @@ test("项目模板耗时会累加为阶段 DDL 且创建通知包含参与人", 
   await page.getByRole("option", { name: "工程" }).click();
   await page.getByText("技术组", { exact: true }).locator("xpath=following::button[1]").click();
   await page.getByRole("option", { name: "宣运" }).click();
+  const submittedAt = new Date();
   await page.getByRole("button", { name: "创建项目" }).click();
 
   await expect
@@ -1320,6 +1322,9 @@ test("项目模板耗时会累加为阶段 DDL 且创建通知包含参与人", 
       const firstDueAt = project.stages[0]?.dueAt;
       return {
         stageNames: project.stages.map((stage) => stage.name),
+        dayOffsets: project.stages.map((stage) =>
+          localDayNumber(stage.dueAt ?? new Date(0)) - localDayNumber(submittedAt),
+        ),
         dayDeltas: firstDueAt
           ? project.stages.map((stage) =>
               Math.round(
@@ -1335,9 +1340,28 @@ test("项目模板耗时会累加为阶段 DDL 且创建通知包含参与人", 
     })
     .toMatchObject({
       stageNames: ["阶段一", "阶段二", "阶段三"],
+      dayOffsets: [2, 7, 8],
       dayDeltas: [0, 5, 6],
       participantNames: ["Playwright 管理员"],
     });
+
+  const parsedPayload = createProjectSchema.parse({
+    name: "PW全功能-恶意 DDL 字段校验",
+    team: "工程",
+    techGroup: "宣运",
+    ownerOpenIds: ["fixture-owner"],
+    allowOwnerSelfApproval: false,
+    stages: [
+      {
+        name: "恶意阶段",
+        goal: "服务端不应读取客户端 dueAt",
+        ownerOpenId: "fixture-owner",
+        durationDays: 2,
+        dueAt: "2000-01-01T00:00",
+      },
+    ],
+  });
+  expect("dueAt" in parsedPayload.stages[0]).toBe(false);
 
   const project = await prisma.project.findFirstOrThrow({
     where: { name: projectName },
@@ -1379,6 +1403,13 @@ function addDays(date: Date, days: number): Date {
   const next = new Date(date);
   next.setDate(next.getDate() + days);
   return next;
+}
+
+function localDayNumber(date: Date): number {
+  return Math.floor(
+    new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime() /
+      (24 * 60 * 60 * 1000),
+  );
 }
 
 function pngUpload(name: string) {

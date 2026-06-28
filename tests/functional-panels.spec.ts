@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 import { prisma } from "../lib/prisma";
 import {
   expectHealthyPage,
@@ -286,6 +286,22 @@ test.describe("管理员面板", () => {
     await page.goto("/progress/new", { waitUntil: "networkidle" });
     await expect(page.getByText("新建项目", { exact: true })).toBeVisible();
     await expect(page.getByText("项目名称", { exact: true })).toBeVisible();
+    await expect(page.getByText("本阶段耗时（天）").first()).toBeVisible();
+    await expect(page.locator('input[type="datetime-local"]')).toHaveCount(0);
+
+    const stageCards = page.getByTestId("project-stage-editor");
+    await stageCards.nth(0).getByLabel("阶段 1 耗时").fill("2");
+    await stageCards.nth(1).getByLabel("阶段 2 耗时").fill("5");
+    await stageCards.nth(2).getByLabel("阶段 3 耗时").fill("1");
+    await expect(stageCards.nth(0)).toContainText("累计第 2 天");
+    await expect(stageCards.nth(1)).toContainText("累计第 7 天");
+    await expect(stageCards.nth(2)).toContainText("累计第 8 天");
+
+    await dragCardTo(page, stageCards.nth(2), stageCards.nth(0));
+    await expect(stageCards.nth(0)).toContainText("累计第 1 天");
+    await expect(stageCards.nth(1)).toContainText("累计第 3 天");
+    await expect(stageCards.nth(2)).toContainText("累计第 8 天");
+
     await page.getByRole("button", { name: /创建项目|保存/ }).first().click();
     await expect(page.getByText(/项目名称|负责人|阶段|请选择/).first()).toBeVisible();
     await expectHealthyPage(page);
@@ -317,16 +333,11 @@ test.describe("管理员面板", () => {
 
     await page.getByRole("button", { name: new RegExp(templateName) }).click();
     await page.getByRole("button", { name: "编辑" }).click();
-    await page
-      .getByTestId("project-template-stage-editor")
-      .nth(2)
-      .getByRole("button", { name: "上移阶段" })
-      .click();
-    await page
-      .getByTestId("project-template-stage-editor")
-      .nth(1)
-      .getByRole("button", { name: "上移阶段" })
-      .click();
+    const templateStageCards = page.getByTestId("project-template-stage-editor");
+    await dragCardTo(page, templateStageCards.nth(2), templateStageCards.nth(0));
+    await expect(templateStageCards.nth(0).getByLabel("阶段 1 名称")).toHaveValue(
+      "模板阶段 C",
+    );
     await page.getByRole("button", { name: "保存模板" }).click();
 
     await expect
@@ -406,6 +417,28 @@ test.describe("管理员面板", () => {
     await expectHealthyPage(page);
   });
 });
+
+async function dragCardTo(page: Page, source: Locator, target: Locator) {
+  const handle = source.locator("[data-sortable-grip]").first();
+  await handle.scrollIntoViewIfNeeded();
+  const sourceBox = await handle.boundingBox();
+  const targetBox = await target.boundingBox();
+  if (!sourceBox || !targetBox) {
+    throw new Error("无法定位拖拽阶段卡片");
+  }
+
+  await page.mouse.move(
+    sourceBox.x + sourceBox.width / 2,
+    sourceBox.y + sourceBox.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    targetBox.x + targetBox.width / 2,
+    targetBox.y + Math.min(12, targetBox.height / 4),
+    { steps: 14 },
+  );
+  await page.mouse.up();
+}
 
 async function countEnabledRulesNotRunSince(since: Date): Promise<number> {
   const [enabledCount, scannedCount] = await Promise.all([

@@ -62,33 +62,6 @@ const dateTimeStringSchema = (message: string) =>
     "请输入有效时间",
   );
 
-function validateNonDecreasingValues(
-  values: Array<string | number>,
-  ctx: z.RefinementCtx,
-  pathPrefix: string,
-  pathKey: string,
-  message: string,
-) {
-  for (let index = 1; index < values.length; index += 1) {
-    const previousRaw = values[index - 1];
-    const currentRaw = values[index];
-    const previous =
-      typeof previousRaw === "number"
-        ? previousRaw
-        : new Date(previousRaw).getTime();
-    const current =
-      typeof currentRaw === "number" ? currentRaw : new Date(currentRaw).getTime();
-    if (Number.isNaN(previous) || Number.isNaN(current)) continue;
-    if (current < previous) {
-      ctx.addIssue({
-        code: "custom",
-        path: [pathPrefix, index, pathKey],
-        message,
-      });
-    }
-  }
-}
-
 function validateProjectScopeAndOwners(
   value: { team?: string; techGroup?: string; ownerOpenId?: string; ownerOpenIds?: string[] },
   ctx: z.RefinementCtx,
@@ -131,19 +104,27 @@ export const createProjectSchema = projectBaseSchema.extend({
         name: z.string().min(1, "阶段名称不能为空"),
         goal: z.string().min(1, "请填写阶段目标"),
         ownerOpenId: z.string().min(1, "请选择阶段负责人"),
-        dueAt: dateTimeStringSchema("请选择阶段 DDL"),
+        durationDays: z.coerce
+          .number()
+          .int("阶段耗时必须是整数")
+          .min(1, "阶段耗时不能小于 1 天")
+          .max(3650, "阶段耗时不能超过 3650 天"),
       }),
     )
     .min(1, "至少添加一个阶段"),
 }).superRefine((value, ctx) => {
   validateProjectScopeAndOwners(value, ctx);
-  validateNonDecreasingValues(
-    value.stages.map((stage) => stage.dueAt),
-    ctx,
-    "stages",
-    "dueAt",
-    "阶段 DDL 需要按顺序递增或相同，后续阶段不能早于前一阶段",
+  const totalDurationDays = value.stages.reduce(
+    (total, stage) => total + stage.durationDays,
+    0,
   );
+  if (totalDurationDays > 3650) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["stages"],
+      message: "项目阶段总耗时不能超过 3650 天",
+    });
+  }
 });
 
 export const projectTemplateStageSchema = z.object({

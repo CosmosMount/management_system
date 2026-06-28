@@ -79,6 +79,15 @@ export async function createProject(input: CreateProjectInput) {
       throw new Error(`阶段「${stage.name}」负责人不存在，请先同步飞书通讯录`);
     }
   }
+  const projectStartDate = new Date();
+  let elapsedDurationDays = 0;
+  const stagesWithDueAt = parsed.stages.map((stage) => {
+    elapsedDurationDays += stage.durationDays;
+    return {
+      ...stage,
+      dueAt: getStageDueAtFromDuration(elapsedDurationDays, projectStartDate),
+    };
+  });
 
   const context = await getNotificationContext();
   const recipientOpenIds = await collectProjectNotificationRecipients({
@@ -88,7 +97,7 @@ export async function createProject(input: CreateProjectInput) {
     ownerName: primaryOwner.name,
     owners: orderedOwners,
     participants: orderedParticipants,
-    stages: parsed.stages.map((stage) => ({
+    stages: stagesWithDueAt.map((stage) => ({
       ownerOpenId: stage.ownerOpenId,
     })),
   });
@@ -117,13 +126,13 @@ export async function createProject(input: CreateProjectInput) {
           })),
         },
         stages: {
-          create: parsed.stages.map((s, i) => ({
+          create: stagesWithDueAt.map((s, i) => ({
             name: s.name,
             goal: s.goal,
             sortOrder: i,
             ownerOpenId: s.ownerOpenId,
             ownerName: stageOwnerByOpenId.get(s.ownerOpenId) ?? "",
-            dueAt: new Date(s.dueAt),
+            dueAt: s.dueAt,
           })),
         },
       },
@@ -179,4 +188,11 @@ export async function createProject(input: CreateProjectInput) {
 
   revalidateProgress(project.id);
   return project;
+}
+
+function getStageDueAtFromDuration(durationDays: number, baseDate: Date) {
+  const dueAt = new Date(baseDate);
+  dueAt.setDate(dueAt.getDate() + durationDays);
+  dueAt.setHours(18, 0, 0, 0);
+  return dueAt;
 }

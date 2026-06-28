@@ -9,7 +9,14 @@ import {
   useWatch,
 } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { AlertCircle, Plus, Trash2 } from "lucide-react";
+import {
+  AlertCircle,
+  ArrowDown,
+  ArrowUp,
+  GripVertical,
+  Plus,
+  Trash2,
+} from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -19,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { SortableCardList } from "@/components/ui/sortable-card-list";
 import {
   Select,
   SelectContent,
@@ -28,7 +36,6 @@ import {
 } from "@/components/ui/select";
 import { TEAM_OPTIONS, TECH_GROUP_OPTIONS } from "@/lib/constants";
 import {
-  getDefaultStageDueAt,
   getStageDueAtByOffsetDays,
   REAL_CAR_STAGE_TEMPLATE,
 } from "@/lib/progress-templates";
@@ -72,7 +79,7 @@ type ProjectFormValues = {
     name: string;
     goal: string;
     ownerOpenId: string;
-    dueAt: string;
+    durationDays: string;
   }>;
 };
 
@@ -95,13 +102,14 @@ type Props = {
   onSaved?: () => void;
 };
 
+const DEFAULT_STAGE_DURATION_DAYS = 7;
+
 function realCarStages(defaultOwner = "") {
-  const baseDate = new Date();
-  return REAL_CAR_STAGE_TEMPLATE.map((stage, index) => ({
+  return REAL_CAR_STAGE_TEMPLATE.map((stage) => ({
     name: stage.name,
     goal: stage.goal,
     ownerOpenId: defaultOwner,
-    dueAt: getDefaultStageDueAt(index, baseDate),
+    durationDays: String(DEFAULT_STAGE_DURATION_DAYS),
   }));
 }
 
@@ -109,16 +117,11 @@ function stagesFromTemplate(
   template: ProjectTemplateOption,
   defaultOwner = "",
 ) {
-  const baseDate = new Date();
-  let elapsedDays = 0;
   return template.stages.map((stage) => ({
     name: stage.name,
     goal: stage.goal,
     ownerOpenId: defaultOwner,
-    dueAt: getStageDueAtByOffsetDays(
-      (elapsedDays += stage.durationDays),
-      baseDate,
-    ),
+    durationDays: String(stage.durationDays),
   }));
 }
 
@@ -145,6 +148,7 @@ export function ProjectForm({
   const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
   const [liveRefreshPending, setLiveRefreshPending] = useState(false);
+  const [stagePlanBaseDate] = useState(() => new Date());
   const editing = mode === "edit";
   const initialOwnerOpenIds = initialProject?.ownerOpenIds ?? [];
   const initialParticipantOpenIds = initialProject?.participantOpenIds ?? [];
@@ -182,7 +186,7 @@ export function ProjectForm({
   });
   const errors = form.formState.errors;
 
-  const { fields, append, remove } = useFieldArray({
+  const { fields, append, remove, move } = useFieldArray({
     control: form.control,
     name: "stages",
   });
@@ -191,6 +195,11 @@ export function ProjectForm({
     control: form.control,
     name: "ownerOpenIds",
   });
+  const watchedStages =
+    useWatch({
+      control: form.control,
+      name: "stages",
+    }) ?? [];
   const team = useWatch({ control: form.control, name: "team" });
   const techGroup = useWatch({ control: form.control, name: "techGroup" });
   const primaryOwnerOpenId = ownerOpenIds?.[0] ?? "";
@@ -280,6 +289,20 @@ export function ProjectForm({
     form.setValue("template", "real-car");
     form.setValue("stages", realCarStages(primaryOwnerOpenId));
     toast.success("已套用实车模板");
+  }
+
+  function getCumulativeDurationDays(index: number) {
+    return watchedStages
+      .slice(0, index + 1)
+      .reduce((total, stage) => total + (Number(stage?.durationDays) || 0), 0);
+  }
+
+  function getStageDuePreview(index: number) {
+    const cumulativeDays = getCumulativeDurationDays(index);
+    if (cumulativeDays <= 0) return "请先填写有效耗时";
+    return formatDateTimeLocal(
+      getStageDueAtByOffsetDays(cumulativeDays, stagePlanBaseDate),
+    );
   }
 
   return (
@@ -489,7 +512,7 @@ export function ProjectForm({
                     name: "",
                     goal: "",
                     ownerOpenId: primaryOwnerOpenId,
-                    dueAt: getDefaultStageDueAt(fields.length),
+                    durationDays: String(DEFAULT_STAGE_DURATION_DAYS),
                   })
                 }
               >
@@ -499,97 +522,159 @@ export function ProjectForm({
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
-            {fields.map((field, index) => (
-              <div key={field.id} className="rounded-lg border p-4">
-                <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
-                  <div className="space-y-2">
-                    <Label>阶段名称</Label>
-                    <Input
-                      {...form.register(`stages.${index}.name`)}
-                      aria-invalid={!!errors.stages?.[index]?.name}
-                      aria-describedby={
-                        errors.stages?.[index]?.name
-                          ? `project-stage-${index}-name-error`
-                          : undefined
-                      }
-                    />
-                    <FormFieldError
-                      id={`project-stage-${index}-name-error`}
-                      message={errors.stages?.[index]?.name?.message}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>DDL</Label>
-                    <Input
-                      type="datetime-local"
-                      {...form.register(`stages.${index}.dueAt`)}
-                      aria-invalid={!!errors.stages?.[index]?.dueAt}
-                      aria-describedby={
-                        errors.stages?.[index]?.dueAt
-                          ? `project-stage-${index}-due-error`
-                          : undefined
-                      }
-                    />
-                    <FormFieldError
-                      id={`project-stage-${index}-due-error`}
-                      message={errors.stages?.[index]?.dueAt?.message}
-                    />
-                  </div>
-                  <div className="flex items-end">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      disabled={fields.length <= 1}
-                      onClick={() => remove(index)}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-                <div className="mt-3 space-y-2">
-                  <Label>阶段目标</Label>
-                  <Textarea
-                    {...form.register(`stages.${index}.goal`)}
-                    aria-invalid={!!errors.stages?.[index]?.goal}
-                    aria-describedby={
-                      errors.stages?.[index]?.goal
-                        ? `project-stage-${index}-goal-error`
-                        : undefined
-                    }
-                  />
-                  <FormFieldError
-                    id={`project-stage-${index}-goal-error`}
-                    message={errors.stages?.[index]?.goal?.message}
-                  />
-                </div>
-                <div className="mt-3 space-y-2">
-                  <Label>阶段负责人</Label>
-                  <Controller
-                    control={form.control}
-                    name={`stages.${index}.ownerOpenId`}
-                    render={({ field }) => (
-                      <UserSearchSelect
-                        users={users}
-                        value={field.value ?? ""}
-                        onChange={(v) => field.onChange(v || undefined)}
-                        placeholder="搜索阶段负责人"
-                        inputProps={{
-                          "aria-invalid": !!errors.stages?.[index]?.ownerOpenId,
-                          "aria-describedby": errors.stages?.[index]?.ownerOpenId
-                            ? `project-stage-${index}-owner-error`
-                            : undefined,
-                        }}
+            <SortableCardList
+              items={fields}
+              getKey={(field) => field.id}
+              getItemLabel={(_field, index) =>
+                watchedStages[index]?.name || `阶段 ${index + 1}`
+              }
+              ariaLabel="项目阶段排序"
+              className="space-y-3"
+              itemTestId="project-stage-editor"
+              itemClassName={(_field, _index, isDragging) =>
+                cn(
+                  "rounded-lg border bg-card p-4",
+                  isDragging && "border-primary/50 bg-primary/5",
+                )
+              }
+              onReorder={(_nextFields, _movedField, fromIndex, toIndex) =>
+                move(fromIndex, toIndex)
+              }
+              renderItem={(_field, { index, dragHandleProps, moveItem }) => {
+                const cumulativeDays = getCumulativeDurationDays(index);
+                return (
+                  <>
+                    <div className="mb-3 flex items-center justify-between gap-3 border-b pb-3">
+                      <button
+                        type="button"
+                        {...dragHandleProps}
+                        className="inline-flex h-8 cursor-grab items-center gap-2 rounded-md px-2 text-sm text-muted-foreground hover:bg-muted active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        aria-label={`拖动阶段 ${index + 1}`}
+                      >
+                        <GripVertical className="h-4 w-4" />
+                        阶段 {index + 1}
+                      </button>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          disabled={index === 0}
+                          onClick={() => moveItem(index - 1)}
+                          aria-label="上移阶段"
+                        >
+                          <ArrowUp className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          disabled={index === fields.length - 1}
+                          onClick={() => moveItem(index + 1)}
+                          aria-label="下移阶段"
+                        >
+                          <ArrowDown className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          disabled={fields.length <= 1}
+                          onClick={() => remove(index)}
+                          aria-label="删除阶段"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_11rem]">
+                      <div className="space-y-2">
+                        <Label>阶段名称</Label>
+                        <Input
+                          {...form.register(`stages.${index}.name`)}
+                          aria-invalid={!!errors.stages?.[index]?.name}
+                          aria-describedby={
+                            errors.stages?.[index]?.name
+                              ? `project-stage-${index}-name-error`
+                              : undefined
+                          }
+                        />
+                        <FormFieldError
+                          id={`project-stage-${index}-name-error`}
+                          message={errors.stages?.[index]?.name?.message}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>本阶段耗时（天）</Label>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={3650}
+                          {...form.register(`stages.${index}.durationDays`)}
+                          aria-label={`阶段 ${index + 1} 耗时`}
+                          aria-invalid={!!errors.stages?.[index]?.durationDays}
+                          aria-describedby={
+                            errors.stages?.[index]?.durationDays
+                              ? `project-stage-${index}-duration-error`
+                              : undefined
+                          }
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          预计 {getStageDuePreview(index)} 截止
+                          {cumulativeDays > 0 ? ` / 累计第 ${cumulativeDays} 天` : ""}
+                        </p>
+                        <FormFieldError
+                          id={`project-stage-${index}-duration-error`}
+                          message={errors.stages?.[index]?.durationDays?.message}
+                        />
+                      </div>
+                    </div>
+                    <div className="mt-3 space-y-2">
+                      <Label>阶段目标</Label>
+                      <Textarea
+                        {...form.register(`stages.${index}.goal`)}
+                        aria-invalid={!!errors.stages?.[index]?.goal}
+                        aria-describedby={
+                          errors.stages?.[index]?.goal
+                            ? `project-stage-${index}-goal-error`
+                            : undefined
+                        }
                       />
-                    )}
-                  />
-                  <FormFieldError
-                    id={`project-stage-${index}-owner-error`}
-                    message={errors.stages?.[index]?.ownerOpenId?.message}
-                  />
-                </div>
-              </div>
-            ))}
+                      <FormFieldError
+                        id={`project-stage-${index}-goal-error`}
+                        message={errors.stages?.[index]?.goal?.message}
+                      />
+                    </div>
+                    <div className="mt-3 space-y-2">
+                      <Label>阶段负责人</Label>
+                      <Controller
+                        control={form.control}
+                        name={`stages.${index}.ownerOpenId`}
+                        render={({ field }) => (
+                          <UserSearchSelect
+                            users={users}
+                            value={field.value ?? ""}
+                            onChange={(v) => field.onChange(v || undefined)}
+                            placeholder="搜索阶段负责人"
+                            inputProps={{
+                              "aria-invalid":
+                                !!errors.stages?.[index]?.ownerOpenId,
+                              "aria-describedby": errors.stages?.[index]?.ownerOpenId
+                                ? `project-stage-${index}-owner-error`
+                                : undefined,
+                            }}
+                          />
+                        )}
+                      />
+                      <FormFieldError
+                        id={`project-stage-${index}-owner-error`}
+                        message={errors.stages?.[index]?.ownerOpenId?.message}
+                      />
+                    </div>
+                  </>
+                );
+              }}
+            />
             {typeof errors.stages?.message === "string" && (
               <FormFieldError message={errors.stages.message} />
             )}
@@ -622,6 +707,14 @@ function focusFirstInvalidControl(container: HTMLElement | null) {
   );
   target?.scrollIntoView({ behavior: "smooth", block: "center" });
   target?.focus();
+}
+
+function formatDateTimeLocal(value: string) {
+  const [datePart, timePart = ""] = value.split("T");
+  const [year, month, day] = (datePart ?? "").split("-");
+  const [hour = "00", minute = "00"] = timePart.split(":");
+  if (!year || !month || !day) return value;
+  return `${year}/${month}/${day} ${hour}:${minute}`;
 }
 
 function FormFieldError({
