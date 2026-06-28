@@ -1,4 +1,5 @@
 import {
+  MAX_TASK_IMPORT_ROWS,
   normalizeTechGroupName,
   TEAM_OPTIONS,
   TECH_GROUP_OPTIONS,
@@ -219,6 +220,24 @@ export const createTaskSchema = taskEditableBaseSchema.extend({
   validateTaskAssignees(value, ctx);
 });
 
+export const batchTaskImportSchema = z.object({
+  projectId: z.string().min(1, "缺少项目 ID"),
+  defaultStageId: z.string().min(1, "请选择项目阶段"),
+  mode: z.enum(["create", "request"]),
+  tasks: z
+    .array(
+      taskEditableBaseSchema.omit({ projectId: true }).extend({
+        importId: z.string().optional(),
+        stageId: z.string().optional().or(z.literal("")),
+        dueAt: dateTimeStringSchema("请选择截止时间"),
+        needsOfflineConfirmation: z.boolean().default(false),
+        ignored: z.boolean().optional(),
+      }),
+    )
+    .min(1, "至少导入 1 条任务")
+    .max(MAX_TASK_IMPORT_ROWS, `单次最多导入 ${MAX_TASK_IMPORT_ROWS} 条任务`),
+});
+
 export const updateTaskSchema = taskEditableBaseSchema.extend({
   taskId: z.string().min(1),
   expectedUpdatedAt: z.string().min(1, "缺少任务版本信息"),
@@ -413,6 +432,7 @@ export const projectStageDueDateChangeReviewSchema = z.object({
 export type CreateProjectInput = z.input<typeof createProjectSchema>;
 export type UpdateProjectInput = z.input<typeof updateProjectSchema>;
 export type CreateTaskInput = z.input<typeof createTaskSchema>;
+export type BatchTaskImportInput = z.input<typeof batchTaskImportSchema>;
 export type UpdateTaskInput = z.input<typeof updateTaskSchema>;
 export type CreateProjectTemplateInput = z.input<typeof createProjectTemplateSchema>;
 export type UpdateProjectTemplateInput = z.input<typeof updateProjectTemplateSchema>;

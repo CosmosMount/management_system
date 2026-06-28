@@ -88,6 +88,87 @@ test("项目取消通知只入队一次并发送完整取消内容", async () =>
   expect(captured[0]?.cardText).toContain("3 个");
 });
 
+test("批量任务导入通知只入队一次并发送汇总内容", async () => {
+  const eventKey = `playwright:progress-notify:task_bulk_imported:${Date.now()}`;
+  const payload: ProgressNotifyPayload = {
+    type: "task_bulk_imported",
+    batchId: "pw-batch-imported",
+    projectId: "pw-project-imported",
+    projectName: "PW通知-批量导入项目",
+    actorName: "李棋轩",
+    taskCount: 6,
+    tasks: Array.from({ length: 6 }, (_, index) => ({
+      title: `导入任务 ${index + 1}`,
+      stageName: "当前阶段",
+      assigneeNames: "李棋轩",
+      taskTechGroups: ["机械", "电控"],
+      dueAt: "2026-06-29T18:00:00.000Z",
+    })),
+    team: "工程",
+    techGroup: "宣运",
+    recipientOpenIds: ["ou_owner", "ou_assignee", "ou_owner", ""],
+  };
+
+  const captured = await enqueueAndDrainProgressNotification(eventKey, payload);
+
+  expect(captured.map((message) => message.receiveId).sort()).toEqual([
+    "ou_assignee",
+    "ou_owner",
+  ]);
+  expect(captured).toHaveLength(2);
+  expect(captured.every((message) => message.title === "批量任务已导入")).toBe(true);
+  expect(captured[0]?.cardText).toContain("PW通知-批量导入项目");
+  expect(captured[0]?.cardText).toContain("任务数量");
+  expect(captured[0]?.cardText).toContain("6 条");
+  expect(captured[0]?.cardText).toContain("导入任务 1");
+  expect(captured[0]?.cardText).toContain("还有 1 条");
+});
+
+test("批量任务申请通知只入队一次并发送汇总内容", async () => {
+  const eventKey = `playwright:progress-notify:task_bulk_creation_requested:${Date.now()}`;
+  const payload: ProgressNotifyPayload = {
+    type: "task_bulk_creation_requested",
+    batchId: "pw-batch-requested",
+    projectId: "pw-project-requested",
+    projectName: "PW通知-批量申请项目",
+    actorName: "李棋轩",
+    taskCount: 2,
+    tasks: [
+      {
+        title: "申请任务 A",
+        stageName: "当前阶段",
+        assigneeNames: "李棋轩",
+        taskTechGroups: ["通用"],
+        dueAt: "2026-06-29T18:00:00.000Z",
+      },
+      {
+        title: "申请任务 B",
+        stageName: "当前阶段",
+        assigneeNames: "李棋轩",
+        taskTechGroups: ["宣运"],
+        dueAt: "2026-06-29T18:00:00.000Z",
+      },
+    ],
+    team: "工程",
+    techGroup: "宣运",
+    recipientOpenIds: ["ou_owner", "ou_requester"],
+  };
+
+  const captured = await enqueueAndDrainProgressNotification(eventKey, payload);
+
+  expect(captured.map((message) => message.receiveId).sort()).toEqual([
+    "ou_owner",
+    "ou_requester",
+  ]);
+  expect(captured).toHaveLength(2);
+  expect(captured.every((message) => message.title === "批量任务申请待审核")).toBe(
+    true,
+  );
+  expect(captured[0]?.cardText).toContain("PW通知-批量申请项目");
+  expect(captured[0]?.cardText).toContain("申请任务 A");
+  expect(captured[0]?.cardText).toContain("申请人");
+});
+
 async function enqueueAndDrainProgressNotification(
   eventKey: string,
   payload: ProgressNotifyPayload,

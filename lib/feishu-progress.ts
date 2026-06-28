@@ -309,6 +309,24 @@ export type ProgressNotifyPayload =
       comment: string;
     }
   | {
+      type: "task_bulk_imported" | "task_bulk_creation_requested";
+      batchId: string;
+      projectId: string;
+      projectName: string;
+      actorName: string;
+      taskCount: number;
+      tasks: Array<{
+        title: string;
+        stageName: string;
+        assigneeNames: string;
+        taskTechGroups: string[];
+        dueAt: string;
+      }>;
+      team: string;
+      techGroup: string;
+      recipientOpenIds: string[];
+    }
+  | {
       type: "task_pending_acceptance";
       taskId: string;
       taskTitle: string;
@@ -960,6 +978,26 @@ export async function sendProgressNotification(
       await sendDirectCard(payload.requesterOpenId, card);
       break;
     }
+    case "task_bulk_imported":
+    case "task_bulk_creation_requested": {
+      const isRequest = payload.type === "task_bulk_creation_requested";
+      const taskLines = formatBulkTaskLines(payload.tasks);
+      const card = buildCard(
+        isRequest ? "批量任务申请待审核" : "批量任务已导入",
+        [
+          `**项目**：${payload.projectName}`,
+          `**${isRequest ? "申请人" : "导入人"}**：${payload.actorName}`,
+          `**任务数量**：${payload.taskCount} 条`,
+          taskLines,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        buildAppUrl(`${routes.progress.project(payload.projectId)}`, appOrigin),
+        isRequest ? "orange" : "blue",
+      );
+      await notifyOpenIds(payload.recipientOpenIds, card);
+      break;
+    }
     case "task_pending_acceptance": {
       const card = buildCard(
         "任务待验收",
@@ -1089,6 +1127,29 @@ function formatDateTime(value: string): string {
 function formatChangeList(changes: string[]): string {
   if (changes.length === 0) return "**变更**：无字段变化";
   return `**变更**：\n${changes.map((change) => `- ${change}`).join("\n")}`;
+}
+
+function formatBulkTaskLines(
+  tasks: Array<{
+    title: string;
+    stageName: string;
+    assigneeNames: string;
+    taskTechGroups: string[];
+    dueAt: string;
+  }>,
+): string {
+  const visibleTasks = tasks.slice(0, 5);
+  const lines = visibleTasks.map((task, index) => {
+    const groups =
+      task.taskTechGroups.length > 0 ? task.taskTechGroups.join("、") : "通用";
+    return `${index + 1}. ${task.title}（${task.stageName} / ${groups} / ${
+      task.assigneeNames || "未指定"
+    } / ${formatDateTime(task.dueAt)}）`;
+  });
+  if (tasks.length > visibleTasks.length) {
+    lines.push(`…还有 ${tasks.length - visibleTasks.length} 条`);
+  }
+  return lines.length > 0 ? `**任务概览**：\n${lines.join("\n")}` : "";
 }
 
 function formatNotificationDateTime(value: string | null): string {

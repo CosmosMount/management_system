@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   Circle,
   Clock3,
+  FileSpreadsheet,
   Filter,
   History,
   Play,
@@ -53,6 +54,7 @@ import { ProjectForm } from "@/components/progress/project-form";
 import { ManualReminderButton } from "@/components/progress/manual-reminder-button";
 import { ArchivedProjectDeleteButton } from "@/components/admin-delete-actions";
 import { TaskForm } from "@/components/progress/task-form";
+import { TaskImportDialog } from "@/components/progress/task-import-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -332,6 +334,7 @@ export function ProjectDetailWorkspace({
   });
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [taskRequestDialogOpen, setTaskRequestDialogOpen] = useState(false);
+  const [taskImportDialogOpen, setTaskImportDialogOpen] = useState(false);
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
 
   const selectedStage =
@@ -385,6 +388,25 @@ export function ProjectDetailWorkspace({
       project.participantOpenIds.includes(userOpenId) ||
       selectedStage.ownerOpenId === userOpenId ||
       project.tasks.some((task) => task.assigneeOpenIds.includes(userOpenId)));
+  const importableStages = useMemo(() => {
+    if (canCreateTask) return project.stages;
+    if (!userOpenId || !canRequestTaskCreation) return [];
+    const canRequestAnyStage =
+      project.ownerOpenIds.includes(userOpenId) ||
+      project.participantOpenIds.includes(userOpenId) ||
+      project.tasks.some((task) => task.assigneeOpenIds.includes(userOpenId));
+    return project.stages.filter(
+      (stage) => canRequestAnyStage || stage.ownerOpenId === userOpenId,
+    );
+  }, [
+    canCreateTask,
+    canRequestTaskCreation,
+    project.ownerOpenIds,
+    project.participantOpenIds,
+    project.stages,
+    project.tasks,
+    userOpenId,
+  ]);
   const canRequestNewTask =
     canRequestTaskCreation &&
     canRequestTaskForSelectedStage &&
@@ -423,8 +445,10 @@ export function ProjectDetailWorkspace({
           project.status !== "COMPLETED" &&
           project.status !== "CANCELED"
         }
+        canImportTasks={!!canCreateTask || !!canRequestNewTask}
         isSuperAdmin={isSuperAdmin}
         onOpenEdit={() => setProjectDialogOpen(true)}
+        onOpenTaskImportDialog={() => setTaskImportDialogOpen(true)}
       />
 
       <div className="mt-6 grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
@@ -573,6 +597,16 @@ export function ProjectDetailWorkspace({
         </DialogContent>
       </Dialog>
 
+      <TaskImportDialog
+        open={taskImportDialogOpen}
+        onOpenChange={setTaskImportDialogOpen}
+        projectId={project.id}
+        users={users}
+        stages={importableStages.map((stage) => ({ id: stage.id, name: stage.name }))}
+        mode={canCreateTask ? "create" : "request"}
+        onImported={() => router.refresh()}
+      />
+
       <Dialog open={projectDialogOpen} onOpenChange={setProjectDialogOpen}>
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[760px]">
           <DialogHeader>
@@ -613,8 +647,10 @@ function ProjectOverview({
   canUpdateLifecycle,
   canEdit,
   canRemind,
+  canImportTasks,
   isSuperAdmin,
   onOpenEdit,
+  onOpenTaskImportDialog,
 }: {
   project: ProjectDetailView;
   currentStage: StageView | null;
@@ -624,8 +660,10 @@ function ProjectOverview({
   canUpdateLifecycle: boolean;
   canEdit: boolean;
   canRemind: boolean;
+  canImportTasks: boolean;
   isSuperAdmin: boolean;
   onOpenEdit: () => void;
+  onOpenTaskImportDialog: () => void;
 }) {
   const router = useRouter();
   const [loadingStatus, setLoadingStatus] = useState<ProjectStatus | null>(null);
@@ -699,7 +737,7 @@ function ProjectOverview({
           </dl>
         </div>
 
-        {(canEdit || canUpdateLifecycle || canRemind || isSuperAdmin) && (
+        {(canEdit || canUpdateLifecycle || canRemind || canImportTasks || isSuperAdmin) && (
           <div className="flex shrink-0 flex-wrap gap-2">
             {canEdit && (
               <Button
@@ -710,6 +748,17 @@ function ProjectOverview({
               >
                 <Pencil className="h-4 w-4" />
                 编辑项目
+              </Button>
+            )}
+            {canImportTasks && (
+              <Button
+                type="button"
+                variant="outline"
+                className={projectHeaderActionButtonClassName}
+                onClick={onOpenTaskImportDialog}
+              >
+                <FileSpreadsheet className="h-4 w-4" />
+                导入任务
               </Button>
             )}
             {canRemind && (
@@ -2651,6 +2700,11 @@ function ActivityChangeList({ payload }: { payload: Record<string, unknown> }) {
     typeof payload.requestedIsBenign === "boolean"
       ? payload.requestedIsBenign
       : null;
+  const importedTaskCount =
+    typeof payload.count === "number" ? payload.count : null;
+  const importedTaskTitles = Array.isArray(payload.titles)
+    ? payload.titles.filter((title): title is string => typeof title === "string")
+    : [];
   const projectStatusChange =
     fromProjectStatus &&
     toProjectStatus &&
@@ -2668,10 +2722,22 @@ function ActivityChangeList({ payload }: { payload: Record<string, unknown> }) {
     !newDueAt &&
     durationDays === null &&
     finalIsBenign === null &&
-    requestedIsBenign === null
+    requestedIsBenign === null &&
+    importedTaskCount === null &&
+    importedTaskTitles.length === 0
   ) return null;
   return (
     <ul className="mt-2 space-y-1 rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+      {importedTaskCount !== null && <li>任务数量：{importedTaskCount} 条</li>}
+      {importedTaskTitles.length > 0 && (
+        <li>
+          任务列表：
+          {importedTaskTitles.slice(0, 5).join("、")}
+          {importedTaskTitles.length > 5
+            ? ` 等 ${importedTaskTitles.length} 条`
+            : ""}
+        </li>
+      )}
       {projectStatusChange && <li>{projectStatusChange}</li>}
       {fromStageName && <li>原阶段：{fromStageName}</li>}
       {oldDueAt && <li>原 DDL：{formatNullableDateTime(oldDueAt)}</li>}
@@ -2925,6 +2991,8 @@ function activityLabel(action: string): string {
     "task.creation_requested": "申请创建任务",
     "task.creation_approved": "通过了任务创建申请",
     "task.creation_rejected": "驳回了任务创建申请",
+    "task.bulk_imported": "批量导入了任务",
+    "task.bulk_creation_requested": "批量申请创建任务",
     "task.delete_requested": "申请删除任务",
     "task.delete_rejected": "驳回了删除申请",
     "task.deleted": "删除了任务",

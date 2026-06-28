@@ -1265,6 +1265,231 @@ test("项目参与人的新任务申请可由管理员驳回且不创建任务",
   await expectHealthyPage(page);
 });
 
+test("项目负责人可从验收标准 CSV 批量导入任务且只发送汇总通知", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  await loginAsNormalUser(context, baseURL, normalAuth);
+  const importedTitle = `PW全功能-验收导入任务-${Date.now()}`;
+  const editedTitle = `${importedTitle}-已编辑`;
+  const secondTitle = `${importedTitle}-多组`;
+  const dueDate = formatDateOnly(addDays(new Date(), 5));
+
+  await page.goto(`/progress/${fixtures.projectId}`, { waitUntil: "networkidle" });
+  await page.getByRole("button", { name: "导入任务" }).click();
+  const dialog = page.getByRole("dialog", { name: "从验收标准导入任务" });
+  await expect(dialog).toBeVisible();
+
+  await page.getByTestId("progress-task-import-file").setInputFiles(
+    csvTaskImportUpload([
+      "测试/验收内容,负责组别,负责人,参考/要求,是否需要定期周报,测试类型,紧急程度,重要程度,最晚完成时间",
+      `${importedTitle},宣运,李棋轩,完成导入验收,否,导入测试,低,高,${dueDate}`,
+      `"${secondTitle}","机械, 电控","李棋轩,Playwright 管理员","连续稳定成功",是,压力测试,高,高,${dueDate}`,
+    ].join("\n")),
+  );
+  await expect(
+    dialog.getByTestId("progress-task-import-row").filter({ hasText: importedTitle }).first(),
+  ).toBeVisible();
+  await dialog.getByLabel("批量所属阶段").click();
+  await page.getByRole("option", { name: "PW全功能-当前阶段" }).click();
+
+  await dialog.getByTestId("progress-task-import-detail").getByLabel("导入任务目标").fill(editedTitle);
+  await dialog.getByTestId("progress-task-import-submit").click();
+
+  const currentStage = await prisma.projectStage.findFirstOrThrow({
+    where: { projectId: fixtures.projectId, name: "PW全功能-当前阶段" },
+    select: { id: true },
+  });
+  await expect
+    .poll(async () => {
+      const tasks = await prisma.task.findMany({
+        where: {
+          projectId: fixtures.projectId,
+          title: { in: [editedTitle, secondTitle] },
+        },
+        include: {
+          assignees: { orderBy: { sortOrder: "asc" } },
+          techGroups: { orderBy: { sortOrder: "asc" } },
+        },
+        orderBy: { title: "asc" },
+      });
+      const bulkOutboxCount = await prisma.notificationOutbox.count({
+        where: {
+          eventKey: { startsWith: "progress:task_bulk_imported:" },
+          payload: { contains: editedTitle },
+        },
+      });
+      const individualNotificationCount = await prisma.notificationOutbox.count({
+        where: {
+          eventKey: {
+            in: tasks.map((task) => `progress:task_assigned:${task.id}`),
+          },
+        },
+      });
+      return {
+        taskCount: tasks.length,
+        stageIds: tasks.map((task) => task.stageId),
+        firstGoal: tasks.find((task) => task.title === editedTitle)?.goal ?? "",
+        secondGroups:
+          tasks
+            .find((task) => task.title === secondTitle)
+            ?.techGroups.map((group) => group.techGroup) ?? [],
+        secondAssignees:
+          tasks
+            .find((task) => task.title === secondTitle)
+            ?.assignees.map((assignee) => assignee.name) ?? [],
+        secondNeedsWeeklyReport:
+          tasks.find((task) => task.title === secondTitle)?.needsWeeklyReport ?? false,
+        secondUrgency: tasks.find((task) => task.title === secondTitle)?.urgency ?? "",
+        bulkOutboxCount,
+        individualNotificationCount,
+      };
+    })
+    .toEqual({
+      taskCount: 2,
+      stageIds: [currentStage.id, currentStage.id],
+      firstGoal: "测试类型：导入测试",
+      secondGroups: ["机械", "电控"],
+      secondAssignees: ["李棋轩", "Playwright 管理员"],
+      secondNeedsWeeklyReport: true,
+      secondUrgency: "HIGH",
+      bulkOutboxCount: 1,
+      individualNotificationCount: 0,
+    });
+  await expectHealthyPage(page);
+});
+
+test("项目参与人可从验收标准 CSV 批量提交任务申请", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  await loginAsNormalUser(context, baseURL, normalAuth);
+  const title = `PW全功能-验收导入申请-${Date.now()}`;
+  const dueDate = formatDateOnly(addDays(new Date(), 6));
+
+  await page.goto(`/progress/${fixtures.taskRequestProjectId}`, {
+    waitUntil: "networkidle",
+  });
+  await page.getByRole("button", { name: "导入任务" }).click();
+  const dialog = page.getByRole("dialog", { name: "从验收标准导入任务" });
+  await expect(dialog).toBeVisible();
+
+  await page.getByTestId("progress-task-import-file").setInputFiles(
+    csvTaskImportUpload([
+      "测试/验收内容,负责组别,负责人,参考/要求,是否需要定期周报,备注,紧急程度,重要程度,最晚完成时间",
+      `${title},通用,李棋轩,完成申请导入验收,否,申请导入备注,中,高,${dueDate}`,
+    ].join("\n")),
+  );
+  await dialog.getByLabel("批量所属阶段").click();
+  await page.getByRole("option", { name: "PW全功能-任务申请阶段" }).click();
+  await dialog.getByTestId("progress-task-import-submit").click();
+
+  await expect
+    .poll(async () => {
+      const [request, task, outbox] = await Promise.all([
+        prisma.taskCreationRequest.findFirst({
+          where: {
+            projectId: fixtures.taskRequestProjectId,
+            draftPayload: { contains: title },
+          },
+          select: { status: true, draftPayload: true },
+        }),
+        prisma.task.findFirst({
+          where: { projectId: fixtures.taskRequestProjectId, title },
+          select: { id: true },
+        }),
+        prisma.notificationOutbox.count({
+          where: {
+            eventKey: { startsWith: "progress:task_bulk_creation_requested:" },
+            payload: { contains: title },
+          },
+        }),
+      ]);
+      return {
+        requestStatus: request?.status ?? "",
+        draftContainsGoal: request?.draftPayload.includes("申请导入备注") ?? false,
+        taskCreated: !!task,
+        bulkOutboxCount: outbox,
+      };
+    })
+    .toEqual({
+      requestStatus: "PENDING",
+      draftContainsGoal: true,
+      taskCreated: false,
+      bulkOutboxCount: 1,
+  });
+  await expectHealthyPage(page);
+});
+
+test("阶段负责人导入任务申请时不能选择无权限阶段", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  await loginAsNormalUser(context, baseURL, normalAuth);
+  const ownedStageName = `PW全功能-可申请阶段-${Date.now()}`;
+  const blockedStageName = `PW全功能-不可申请阶段-${Date.now()}`;
+  const project = await prisma.project.create({
+    data: {
+      name: `PW全功能-阶段权限导入-${Date.now()}`,
+      description: "验证阶段负责人不能跨阶段导入申请",
+      team: "英雄",
+      techGroup: "电控",
+      status: "IN_PROGRESS",
+      ownerOpenId: fixtures.adminOpenId,
+      ownerName: "Playwright 管理员",
+      owners: {
+        create: [
+          {
+            openId: fixtures.adminOpenId,
+            name: "Playwright 管理员",
+            sortOrder: 0,
+          },
+        ],
+      },
+      stages: {
+        create: [
+          {
+            name: ownedStageName,
+            goal: "normal user owned stage",
+            sortOrder: 0,
+            status: "IN_PROGRESS",
+            ownerOpenId: normalAuth.openId,
+            ownerName: normalAuth.name,
+            dueAt: addDays(new Date(), 5),
+          },
+          {
+            name: blockedStageName,
+            goal: "admin owned stage",
+            sortOrder: 1,
+            status: "NOT_STARTED",
+            ownerOpenId: fixtures.adminOpenId,
+            ownerName: "Playwright 管理员",
+            dueAt: addDays(new Date(), 10),
+          },
+        ],
+      },
+    },
+  });
+
+  await page.goto(`/progress/${project.id}`, { waitUntil: "networkidle" });
+  await page.getByRole("button", { name: "导入任务" }).click();
+  const dialog = page.getByRole("dialog", { name: "从验收标准导入任务" });
+  await expect(dialog).toBeVisible();
+  await page.getByTestId("progress-task-import-file").setInputFiles(
+    csvTaskImportUpload([
+      "测试/验收内容,负责组别,负责人,参考/要求,是否需要定期周报,紧急程度,重要程度,最晚完成时间",
+      `PW全功能-阶段权限任务,通用,李棋轩,验证阶段权限,否,中,高,${formatDateOnly(addDays(new Date(), 5))}`,
+    ].join("\n")),
+  );
+  await dialog.getByLabel("批量所属阶段").click();
+  await expect(page.getByRole("option", { name: ownedStageName })).toBeVisible();
+  await expect(page.getByRole("option", { name: blockedStageName })).toHaveCount(0);
+  await expectHealthyPage(page);
+});
+
 test("项目模板耗时会累加为阶段 DDL 且创建通知包含参与人", async ({
   page,
   context,
@@ -1420,6 +1645,14 @@ function pngUpload(name: string) {
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
       "base64",
     ),
+  };
+}
+
+function csvTaskImportUpload(content: string) {
+  return {
+    name: "progress-task-import.csv",
+    mimeType: "text/csv",
+    buffer: Buffer.from(`\uFEFF${content}`, "utf8"),
   };
 }
 

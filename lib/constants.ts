@@ -30,3 +30,6 @@ export const MAX_REIMBURSEMENT_LIST_ROWS = 50;
 
 /** 预算池 Excel 单次导入行数上限 */
 export const MAX_BUDGET_POOL_IMPORT_ROWS = 300;
+
+/** 验收标准导入任务单次行数上限 */
+export const MAX_TASK_IMPORT_ROWS = 100;
