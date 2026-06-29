@@ -21,6 +21,7 @@ export const routes = {
   progress: {
     root: "/progress",
     new: "/progress/new",
+    approvals: "/progress/approvals",
     list: "/progress/list",
     dashboard: "/progress/dashboard",
     archive: "/progress/archive",

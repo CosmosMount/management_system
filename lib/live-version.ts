@@ -15,6 +15,7 @@ import {
 export type LiveVersionScope =
   | "progress"
   | "progress-list"
+  | "progress-approvals"
   | "progress-board"
   | "progress-archive"
   | "progress-project"
@@ -117,6 +118,19 @@ async function taskCreationRequestVersion(
   return encodePart("taskCreationRequests", aggregate._max.updatedAt, count);
 }
 
+async function projectDdlChangeRequestVersion(
+  where?: Prisma.ProjectDdlChangeRequestWhereInput,
+): Promise<string> {
+  const [aggregate, count] = await Promise.all([
+    prisma.projectDdlChangeRequest.aggregate({
+      where,
+      _max: { updatedAt: true },
+    }),
+    prisma.projectDdlChangeRequest.count({ where }),
+  ]);
+  return encodePart("projectDdlChangeRequests", aggregate._max.updatedAt, count);
+}
+
 async function activityVersion(
   where?: Prisma.ProgressActivityLogWhereInput,
 ): Promise<string> {
@@ -165,6 +179,16 @@ async function taskAssigneeVersion(
     prisma.taskAssignee.count({ where }),
   ]);
   return encodePart("taskAssignees", aggregate._max.createdAt, count);
+}
+
+async function taskTechGroupVersion(
+  where?: Prisma.TaskTechGroupWhereInput,
+): Promise<string> {
+  const [aggregate, count] = await Promise.all([
+    prisma.taskTechGroup.aggregate({ where, _max: { createdAt: true } }),
+    prisma.taskTechGroup.count({ where }),
+  ]);
+  return encodePart("taskTechGroups", aggregate._max.createdAt, count);
 }
 
 async function visibleProjectTaskCountVersion({
@@ -362,6 +386,106 @@ async function getProgressBoardVersion({
     ),
   ]);
   return encodeVersion(parts);
+}
+
+async function getProgressApprovalsVersion(): Promise<string> {
+  const pendingProjectWhere: Prisma.ProjectWhereInput = {
+    status: "ESTABLISHING",
+  };
+  const activeProjectWhere: Prisma.ProjectWhereInput = {
+    status: { in: ["NOT_STARTED", "IN_PROGRESS"] },
+  };
+  const pendingApprovalTaskWhere: Prisma.TaskWhereInput = {
+    deletedAt: null,
+    project: activeProjectWhere,
+    OR: [
+      { status: "PENDING_ACCEPTANCE" },
+      { deletionRequests: { some: { status: "PENDING" } } },
+      { ddlChangeRequests: { some: { status: "PENDING" } } },
+    ],
+  };
+  const taskSubmissionWhere: Prisma.TaskSubmissionWhereInput = {
+    OR: [
+      {
+        type: "STAGE",
+        stage: {
+          status: "PENDING_ACCEPTANCE",
+          project: activeProjectWhere,
+        },
+      },
+      {
+        type: "DELIVERY",
+        task: {
+          status: "PENDING_ACCEPTANCE",
+          deletedAt: null,
+          project: activeProjectWhere,
+        },
+      },
+    ],
+  };
+
+  const parts = await Promise.all([
+    projectUpdatedAtVersion("establishingProjects", pendingProjectWhere),
+    projectUpdatedAtVersion("activeProjects", activeProjectWhere),
+    projectOwnerVersion({
+      project: {
+        OR: [pendingProjectWhere, activeProjectWhere],
+      },
+    }),
+    projectParticipantVersion({
+      project: {
+        OR: [pendingProjectWhere, activeProjectWhere],
+      },
+    }),
+    projectStageVersion({
+      status: "PENDING_ACCEPTANCE",
+      project: activeProjectWhere,
+    }),
+    taskVersion(pendingApprovalTaskWhere),
+    taskTechGroupVersion({ task: pendingApprovalTaskWhere }),
+    projectDdlChangeRequestVersion({
+      status: "PENDING",
+      project: activeProjectWhere,
+    }),
+    taskCreationRequestVersion({
+      status: "PENDING",
+      project: activeProjectWhere,
+    }),
+    taskDeletionRequestVersion({
+      status: "PENDING",
+      task: {
+        deletedAt: null,
+        status: { not: "PROJECT_CANCELED" },
+        project: { status: "IN_PROGRESS" },
+      },
+    }),
+    taskDdlChangeRequestVersion({
+      status: "PENDING",
+      task: {
+        deletedAt: null,
+        status: { notIn: ["COMPLETED", "ARCHIVED", "PROJECT_CANCELED"] },
+        project: activeProjectWhere,
+      },
+    }),
+    submissionVersion(taskSubmissionWhere),
+    approvalVersion({
+      submission: taskSubmissionWhere,
+    }),
+  ]);
+  return encodeVersion(parts);
+}
+
+async function taskDdlChangeRequestVersion(
+  where?: Prisma.TaskDdlChangeRequestWhereInput,
+): Promise<string> {
+  const [aggregate, count] = await Promise.all([
+    prisma.taskDdlChangeRequest.aggregate({
+      where,
+      _max: { updatedAt: true },
+    }),
+    prisma.taskDdlChangeRequest.count({ where }),
+  ]);
+  return encodePart("taskDdlChangeRequests", aggregate._max.updatedAt, count);
 }
 
 async function getProgressArchiveVersion({
@@ -804,6 +928,9 @@ export async function getLiveVersion(
   if (context.scope === "progress-list") {
     return withUserVersion(await getProgressListVersion(context));
   }
+  if (context.scope === "progress-approvals") {
+    return withUserVersion(await getProgressApprovalsVersion());
+  }
   if (context.scope === "progress-board") {
     return withUserVersion(await getProgressBoardVersion(context));
   }
@@ -856,6 +983,7 @@ export function isLiveVersionScope(value: string): value is LiveVersionScope {
   return [
     "progress",
     "progress-list",
+    "progress-approvals",
     "progress-board",
     "progress-archive",
     "progress-project",

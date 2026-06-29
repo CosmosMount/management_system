@@ -1,6 +1,12 @@
 import Link from "next/link";
 import type { Prisma } from "@prisma/client";
-import { FolderKanban, LayoutDashboard, Plus, Archive } from "lucide-react";
+import {
+  Archive,
+  ClipboardCheck,
+  FolderKanban,
+  LayoutDashboard,
+  Plus,
+} from "lucide-react";
 import { AppHeader } from "@/components/app-header";
 import { LiveAutoRefresh } from "@/components/live-auto-refresh";
 import { NavCard } from "@/components/nav-card";
@@ -133,6 +139,13 @@ export default async function ProgressHomePage({ searchParams }: Props) {
                 icon={Plus}
               />
             )}
+            <NavCard
+              variant="wide"
+              href={routes.progress.approvals}
+              title="审批看板"
+              description="集中查看当前账号需要处理的项目审批"
+              icon={ClipboardCheck}
+            />
             <NavCard
               variant="wide"
               href={withMine(routes.progress.list, mine)}
