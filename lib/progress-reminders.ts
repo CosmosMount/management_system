@@ -766,7 +766,16 @@ async function findReminderTasks(
   const tasks = await prisma.task.findMany({
     where: {
       deletedAt: null,
-      project: { status: { notIn: ["COMPLETED", "CANCELED"] } },
+      project: {
+        status: {
+          notIn: [
+            "ESTABLISHING",
+            "ESTABLISHMENT_REJECTED",
+            "COMPLETED",
+            "CANCELED",
+          ],
+        },
+      },
       ...where,
     },
     include: {

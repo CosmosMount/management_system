@@ -284,7 +284,7 @@ test.describe("管理员面板", () => {
 
   test("管理员可进入新建项目页并触发表单校验", async ({ page }) => {
     await page.goto("/progress/new", { waitUntil: "networkidle" });
-    await expect(page.getByText("新建项目", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "提交立项" })).toBeVisible();
     await expect(page.getByText("项目名称", { exact: true })).toBeVisible();
     await expect(page.getByText("本阶段耗时（天）").first()).toBeVisible();
     await expect(page.locator('input[type="datetime-local"]')).toHaveCount(0);
@@ -302,7 +302,7 @@ test.describe("管理员面板", () => {
     await expect(stageCards.nth(1)).toContainText("累计第 3 天");
     await expect(stageCards.nth(2)).toContainText("累计第 8 天");
 
-    await page.getByRole("button", { name: /创建项目|保存/ }).first().click();
+    await page.getByRole("button", { name: /提交立项|保存/ }).first().click();
     await expect(page.getByText(/项目名称|负责人|阶段|请选择/).first()).toBeVisible();
     await expectHealthyPage(page);
   });

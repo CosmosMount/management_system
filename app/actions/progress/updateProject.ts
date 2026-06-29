@@ -16,6 +16,7 @@ import {
   getProjectParticipantOpenIds,
 } from "@/lib/progress-project-participants";
 import { requireSessionUser } from "@/lib/progress-activity";
+import { assertProjectActive } from "@/lib/progress-guards";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import { revalidateProgress } from "@/lib/revalidate";
@@ -41,8 +42,7 @@ export async function updateProject(input: UpdateProjectInput) {
   if (project.updatedAt.toISOString() !== parsed.expectedUpdatedAt) {
     throw new Error("数据已被更新，请刷新后重试");
   }
-  if (project.status === "COMPLETED") throw new Error("已完成项目不可编辑");
-  if (project.status === "CANCELED") throw new Error("已取消项目不可编辑");
+  assertProjectActive(project.status);
 
   const oldOwnerOpenIds = getProjectOwnerOpenIds(project);
   const oldOwnerNames = getProjectOwnerNames(project);

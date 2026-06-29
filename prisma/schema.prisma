@@ -27,6 +27,8 @@ enum UserRoleType {
 }
 
 enum ProjectStatus {
+  ESTABLISHING
+  ESTABLISHMENT_REJECTED
   NOT_STARTED
   IN_PROGRESS
   COMPLETED
@@ -237,9 +239,16 @@ model Project {
   description   String              @default("")
   team          String
   techGroup     String
-  status        ProjectStatus       @default(NOT_STARTED)
+  status        ProjectStatus       @default(ESTABLISHING)
   ownerOpenId   String
   ownerName     String
+  requesterOpenId String            @default("")
+  requesterName String              @default("")
+  submittedAt   DateTime?
+  reviewerOpenId String             @default("")
+  reviewerName  String              @default("")
+  reviewComment String              @default("")
+  reviewedAt    DateTime?
   allowOwnerSelfApproval Boolean     @default(false)
   owners        ProjectOwner[]
   participants  ProjectParticipant[]
@@ -253,6 +262,10 @@ model Project {
   archivedAt    DateTime?
   completedAt   DateTime?
   canceledAt    DateTime?
+
+  @@index([status])
+  @@index([requesterOpenId])
+  @@index([team, techGroup, status])
 }
 
 model ProjectOwner {

@@ -15,6 +15,7 @@ import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { normalizeAcceptanceChecklistItems } from "@/lib/progress-acceptance-checklists";
 import { collectTaskNotificationRecipients } from "@/lib/progress-task-notifications";
 import { normalizeTaskTechGroups } from "@/lib/progress-task-tech-groups";
+import { assertProjectActive } from "@/lib/progress-guards";
 import { revalidateProgress } from "@/lib/revalidate";
 import { createTaskSchema, type CreateTaskInput } from "@/lib/validations/progress";
 
@@ -33,8 +34,7 @@ export async function createTask(input: CreateTaskInput) {
     },
   });
   if (!project) throw new Error("项目不存在");
-  if (project.status === "COMPLETED") throw new Error("项目已完成");
-  if (project.status === "CANCELED") throw new Error("项目已取消");
+  assertProjectActive(project.status);
 
   if (
     !canManageProject(

@@ -20,7 +20,10 @@ import {
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { createProject } from "@/app/actions/progress/createProject";
+import {
+  createProject,
+  resubmitProjectEstablishment,
+} from "@/app/actions/progress/createProject";
 import { updateProject } from "@/app/actions/progress/updateProject";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -42,6 +45,7 @@ import {
 import {
   createProjectSchema,
   updateProjectSchema,
+  type ParsedCreateProjectInput,
 } from "@/lib/validations/progress";
 import { UserMultiSearchSelect, UserSearchSelect } from "@/components/user-search-select";
 import { getActionErrorMessage } from "@/lib/action-error-message";
@@ -98,6 +102,8 @@ type Props = {
     participantOpenIds: string[];
     allowOwnerSelfApproval: boolean;
   };
+  initialDraft?: ParsedCreateProjectInput;
+  sourceProjectId?: string;
   submitLabel?: string;
   onSaved?: () => void;
 };
@@ -125,6 +131,15 @@ function stagesFromTemplate(
   }));
 }
 
+function stagesFromDraft(draft: ParsedCreateProjectInput) {
+  return draft.stages.map((stage) => ({
+    name: stage.name,
+    goal: stage.goal,
+    ownerOpenId: stage.ownerOpenId,
+    durationDays: String(stage.durationDays),
+  }));
+}
+
 function toTeamFormValue(value: string | undefined): TeamFormValue {
   return (TEAM_OPTIONS as readonly string[]).includes(value ?? "")
     ? (value as TeamFormValue)
@@ -142,6 +157,8 @@ export function ProjectForm({
   projectTemplates = [],
   mode = "create",
   initialProject,
+  initialDraft,
+  sourceProjectId,
   submitLabel,
   onSaved,
 }: Props) {
@@ -150,8 +167,12 @@ export function ProjectForm({
   const [liveRefreshPending, setLiveRefreshPending] = useState(false);
   const [stagePlanBaseDate] = useState(() => new Date());
   const editing = mode === "edit";
-  const initialOwnerOpenIds = initialProject?.ownerOpenIds ?? [];
-  const initialParticipantOpenIds = initialProject?.participantOpenIds ?? [];
+  const draftOwnerOpenIds =
+    initialDraft?.ownerOpenIds?.filter(Boolean) ??
+    (initialDraft?.ownerOpenId ? [initialDraft.ownerOpenId] : []);
+  const initialOwnerOpenIds = initialProject?.ownerOpenIds ?? draftOwnerOpenIds;
+  const initialParticipantOpenIds =
+    initialProject?.participantOpenIds ?? initialDraft?.participantOpenIds ?? [];
   const primaryInitialOwner = initialOwnerOpenIds[0] ?? "";
   const defaultProjectTemplate =
     projectTemplates.find((template) => template.isDefault) ??
@@ -168,18 +189,25 @@ export function ProjectForm({
     defaultValues: {
       projectId: initialProject?.id,
       expectedUpdatedAt: initialProject?.updatedAt,
-      name: initialProject?.name ?? "",
-      description: initialProject?.description ?? "",
-      team: toTeamFormValue(initialProject?.team),
-      techGroup: toTechGroupFormValue(initialProject?.techGroup),
+      name: initialProject?.name ?? initialDraft?.name ?? "",
+      description: initialProject?.description ?? initialDraft?.description ?? "",
+      team: toTeamFormValue(initialProject?.team ?? initialDraft?.team),
+      techGroup: toTechGroupFormValue(
+        initialProject?.techGroup ?? initialDraft?.techGroup,
+      ),
       ownerOpenId: primaryInitialOwner,
       ownerOpenIds: initialOwnerOpenIds,
       participantOpenIds: initialParticipantOpenIds,
-      allowOwnerSelfApproval: initialProject?.allowOwnerSelfApproval ?? false,
-      template: "real-car",
+      allowOwnerSelfApproval:
+        initialProject?.allowOwnerSelfApproval ??
+        initialDraft?.allowOwnerSelfApproval ??
+        false,
+      template: initialDraft?.template ?? "real-car",
       stages: editing
         ? []
-        : defaultProjectTemplate
+        : initialDraft
+          ? stagesFromDraft(initialDraft)
+          : defaultProjectTemplate
           ? stagesFromTemplate(defaultProjectTemplate)
           : realCarStages(),
     },
@@ -246,7 +274,7 @@ export function ProjectForm({
         onSaved?.();
         router.refresh();
       } else {
-        const project = await createProject({
+        const projectEstablishmentInput = {
           name: data.name,
           description: data.description,
           team: data.team,
@@ -257,12 +285,21 @@ export function ProjectForm({
           allowOwnerSelfApproval: data.allowOwnerSelfApproval,
           template: data.template,
           stages: data.stages,
-        });
-        toast.success("项目已创建");
-        router.push(`${routes.progress.project(project.id)}`);
+        };
+        if (sourceProjectId) {
+          await resubmitProjectEstablishment({
+            projectId: sourceProjectId,
+            input: projectEstablishmentInput,
+          });
+          toast.success("立项已重新提交，等待审批");
+        } else {
+          await createProject(projectEstablishmentInput);
+          toast.success("立项已提交，等待审批");
+        }
+        router.push(routes.progress.root);
       }
     } catch (err) {
-      toast.error(getActionErrorMessage(err, editing ? "更新失败" : "创建失败"));
+      toast.error(getActionErrorMessage(err, editing ? "更新失败" : "提交申请失败"));
     } finally {
       setSubmitting(false);
     }
@@ -317,8 +354,8 @@ export function ProjectForm({
         </div>
       )}
       <Card>
-        <CardHeader>
-          <CardTitle>基本信息</CardTitle>
+          <CardHeader>
+          <CardTitle>{editing ? "基本信息" : "立项信息"}</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2 sm:col-span-2">
@@ -695,7 +732,7 @@ export function ProjectForm({
       </Card>
 
       <Button type="submit" disabled={submitting}>
-        {submitLabel ?? (editing ? "保存修改" : "创建项目")}
+        {submitLabel ?? (editing ? "保存修改" : "提交立项")}
       </Button>
     </form>
   );

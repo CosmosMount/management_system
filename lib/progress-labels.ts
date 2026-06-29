@@ -15,6 +15,8 @@ export const stageStatusLabels: Record<StageStatus, string> = {
 };
 
 export const projectStatusLabels: Record<ProjectStatus, string> = {
+  ESTABLISHING: "立项中",
+  ESTABLISHMENT_REJECTED: "立项已驳回",
   NOT_STARTED: "未开始",
   IN_PROGRESS: "进行中",
   COMPLETED: "已完成",
@@ -53,6 +55,7 @@ export const progressRoleLabels: Record<UserRoleType, string> = {
 
 /** 项目状态线性推进顺序（不含分支状态） */
 export const projectStatusFlow: ProjectStatus[] = [
+  "ESTABLISHING",
   "NOT_STARTED",
   "IN_PROGRESS",
   "COMPLETED",

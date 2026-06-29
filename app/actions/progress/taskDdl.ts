@@ -247,7 +247,16 @@ export async function reviewTaskDdlChange(input: {
           dueAt: request.oldDueAt,
           deletedAt: null,
           status: { notIn: ["COMPLETED", "ARCHIVED", "PROJECT_CANCELED"] },
-          project: { status: { notIn: ["COMPLETED", "CANCELED"] } },
+          project: {
+            status: {
+              notIn: [
+                "ESTABLISHING",
+                "ESTABLISHMENT_REJECTED",
+                "COMPLETED",
+                "CANCELED",
+              ],
+            },
+          },
         },
         data: {
           dueAt: request.newDueAt,

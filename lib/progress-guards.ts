@@ -1,6 +1,12 @@
 import type { ProjectStatus } from "@prisma/client";
 
 export function assertProjectActive(status: ProjectStatus): void {
+  if (status === "ESTABLISHING") {
+    throw new Error("项目正在立项审批，通过后才能继续操作");
+  }
+  if (status === "ESTABLISHMENT_REJECTED") {
+    throw new Error("项目立项已驳回，不能继续操作");
+  }
   if (status === "COMPLETED") {
     throw new Error("项目已完成，不能继续操作");
   }

@@ -15,6 +15,7 @@ import {
   canRequestTaskCreation,
   canReviewProjectStageBatchDdlChange,
   canReviewProjectStageDueDateChange,
+  canReviewProjectEstablishment,
   canViewProject,
   canApproveStage as canApproveStagePermission,
   canSubmitStage as canSubmitStagePermission,
@@ -154,6 +155,9 @@ export default async function ProjectDetailPage({ params }: Props) {
     projectOwnerOpenIds,
     userOpenId,
   );
+  const canReviewEstablishment =
+    project.status === "ESTABLISHING" &&
+    canReviewProjectEstablishment(roles, scope);
   const projectAllowsDdlChange =
     project.status === "NOT_STARTED" || project.status === "IN_PROGRESS";
   const admin = userOpenId ? await isSuperAdmin(userOpenId) : false;
@@ -201,6 +205,13 @@ export default async function ProjectDetailPage({ params }: Props) {
     ownerNames: getProjectOwnerNames(project),
     participantOpenIds: projectParticipantOpenIds,
     participantNames: getProjectParticipantNames(project),
+    requesterOpenId: project.requesterOpenId,
+    requesterName: project.requesterName,
+    submittedAt: project.submittedAt?.toISOString() ?? null,
+    reviewerOpenId: project.reviewerOpenId,
+    reviewerName: project.reviewerName,
+    reviewComment: project.reviewComment,
+    reviewedAt: project.reviewedAt?.toISOString() ?? null,
     allowOwnerSelfApproval: project.allowOwnerSelfApproval,
     createdAt: project.createdAt.toISOString(),
     updatedAt: project.updatedAt.toISOString(),
@@ -412,6 +423,7 @@ export default async function ProjectDetailPage({ params }: Props) {
           canManage={canManage}
           canRequestTaskCreation={canRequestTask}
           canUpdateLifecycle={canUpdateLifecycle}
+          canReviewEstablishment={canReviewEstablishment}
           isSuperAdmin={admin}
           userOpenId={userOpenId}
         />

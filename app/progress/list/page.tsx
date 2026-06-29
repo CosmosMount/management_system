@@ -71,7 +71,16 @@ export default async function ProgressListPage({ searchParams }: Props) {
       AND: [
         progressProjectReadableWhere(roles, userOpenId),
         mine ? progressProjectMineWhere(userOpenId) : {},
-        { status: { notIn: ["COMPLETED", "CANCELED"] } },
+        {
+          status: {
+            notIn: [
+              "ESTABLISHING",
+              "ESTABLISHMENT_REJECTED",
+              "COMPLETED",
+              "CANCELED",
+            ],
+          },
+        },
       ],
     },
     include: {

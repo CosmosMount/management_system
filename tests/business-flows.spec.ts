@@ -1415,6 +1415,15 @@ test("项目参与人可申请新任务并由管理员审批创建", async ({
       .getByPlaceholder("审核意见；驳回时必填")
       .fill("PW全功能-同意创建任务");
     await requestCard.getByRole("button", { name: "通过并创建任务" }).click();
+    await expect
+      .poll(async () => {
+        const updatedRequest = await prisma.taskCreationRequest.findUniqueOrThrow({
+          where: { id: request.id },
+          select: { status: true },
+        });
+        return updatedRequest.status;
+      })
+      .toBe("APPROVED");
   } finally {
     await adminContext.close();
   }
@@ -1504,6 +1513,15 @@ test("项目参与人的新任务申请可由管理员驳回且不创建任务",
       .getByPlaceholder("审核意见；驳回时必填")
       .fill(comment);
     await requestCard.getByRole("button", { name: "驳回申请" }).click();
+    await expect
+      .poll(async () => {
+        const updatedRequest = await prisma.taskCreationRequest.findUniqueOrThrow({
+          where: { id: request.id },
+          select: { status: true },
+        });
+        return updatedRequest.status;
+      })
+      .toBe("REJECTED");
   } finally {
     await adminContext.close();
   }
@@ -1769,14 +1787,251 @@ test("阶段负责人导入任务申请时不能选择无权限阶段", async ({
   await expectHealthyPage(page);
 });
 
-test("项目模板耗时会累加为阶段 DDL 且创建通知包含参与人", async ({
+test("普通用户提交立项后创建立项中项目且不能直接启动", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  await loginAsNormalUser(context, baseURL, normalAuth);
+  const projectName = `PW全功能-普通立项-${Date.now()}`;
+  await page.goto("/progress/new", { waitUntil: "networkidle" });
+  await page.getByText("项目名称").locator("xpath=following::input[1]").fill(projectName);
+  await selectUserFromSearch(page, "搜索项目负责人", "李棋轩");
+  await page.getByText("车组").locator("xpath=following::button[1]").click();
+  await page.getByRole("option", { name: "英雄" }).click();
+  await page.getByText("技术组", { exact: true }).locator("xpath=following::button[1]").click();
+  await page.getByRole("option", { name: "电控" }).click();
+  await page.getByRole("button", { name: "提交立项" }).click();
+  await expect(page).toHaveURL(/\/progress$/);
+  await expect(page.getByText("立项审批")).toBeVisible();
+  await expect(page.getByText(projectName)).toBeVisible();
+
+  await expect
+    .poll(async () => {
+      const project = await prisma.project.findFirst({
+        where: { name: projectName },
+        select: { id: true, status: true, requesterOpenId: true },
+      });
+      const outboxCount = project
+        ? await prisma.notificationOutbox.count({
+            where: {
+              eventKey: {
+                startsWith: `progress:project_establishment_requested:${project.id}:`,
+              },
+            },
+          })
+        : 0;
+      return project
+        ? {
+            status: project.status,
+            requesterOpenId: project.requesterOpenId,
+            outboxCount,
+          }
+        : null;
+    })
+    .toEqual({
+      status: "ESTABLISHING",
+      requesterOpenId: normalAuth.openId,
+      outboxCount: 1,
+    });
+  const project = await prisma.project.findFirstOrThrow({
+    where: { name: projectName },
+    select: { id: true },
+  });
+  await page.goto(`/progress/${project.id}`, { waitUntil: "networkidle" });
+  await expect(page.getByText("立项中")).toBeVisible();
+  await expect(page.getByRole("button", { name: "编辑项目" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "启动项目" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "导入任务" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /新增任务|申请新任务/ })).toHaveCount(0);
+  await expectHealthyPage(page);
+});
+
+test("立项被驳回后可基于原项目修改并重新提交", async ({
+  page,
+  context,
+  browser,
+  baseURL,
+}) => {
+  await loginAsNormalUser(context, baseURL, normalAuth);
+  const projectName = `PW全功能-驳回重提立项-${Date.now()}`;
+  const resubmittedProjectName = `${projectName}-重提`;
+  await page.goto("/progress/new", { waitUntil: "networkidle" });
+  await page.getByText("项目名称").locator("xpath=following::input[1]").fill(projectName);
+  await selectUserFromSearch(page, "搜索项目负责人", "李棋轩");
+  await selectUserFromSearch(page, "搜索参与人员", "Playwright 管理员");
+  await page.getByText("车组").locator("xpath=following::button[1]").click();
+  await page.getByRole("option", { name: "英雄" }).click();
+  await page.getByText("技术组", { exact: true }).locator("xpath=following::button[1]").click();
+  await page.getByRole("option", { name: "电控" }).click();
+  await page.getByLabel("阶段 1 耗时").fill("2");
+  await page.getByRole("button", { name: "提交立项" }).click();
+  await expect(page).toHaveURL(/\/progress$/);
+
+  await expect
+    .poll(async () =>
+      prisma.project.findFirst({
+        where: { name: projectName },
+        select: { id: true, status: true },
+      }),
+    )
+    .toMatchObject({ status: "ESTABLISHING" });
+  const sourceProject = await prisma.project.findFirstOrThrow({
+    where: { name: projectName },
+    select: { id: true },
+  });
+  const sourceProjectId = sourceProject.id;
+  await page.goto(`/progress/new?fromProject=${sourceProjectId}`, {
+    waitUntil: "networkidle",
+  });
+  await expect(
+    page.getByText(/页面不存在或无权访问|404|This page could not be found|找不到/),
+  ).toBeVisible();
+
+  const adminContext = await browser.newContext();
+  const adminPage = await adminContext.newPage();
+  try {
+    await loginAsAdminUser(adminContext, baseURL);
+    await adminPage.goto("/progress", { waitUntil: "networkidle" });
+    const adminRequestCard = adminPage.locator("li").filter({ hasText: projectName });
+    await adminRequestCard
+      .getByPlaceholder("审核意见；驳回时必填")
+      .fill("补充阶段计划后重新提交");
+    await adminRequestCard.getByRole("button", { name: "驳回立项" }).click();
+    await expect
+      .poll(async () => {
+        const project = await prisma.project.findUnique({
+          where: { id: sourceProjectId },
+          select: { status: true, reviewComment: true },
+        });
+        return project;
+      })
+      .toEqual({
+        status: "ESTABLISHMENT_REJECTED",
+        reviewComment: "补充阶段计划后重新提交",
+      });
+  } finally {
+    await adminContext.close();
+  }
+
+  const otherContext = await browser.newContext();
+  const otherPage = await otherContext.newPage();
+  try {
+    await loginAsOtherUser(otherContext, baseURL);
+    await otherPage.goto(`/progress/new?fromProject=${sourceProjectId}`, {
+      waitUntil: "networkidle",
+    });
+    await expect(
+      otherPage.getByText(/页面不存在或无权访问|404|This page could not be found|找不到/),
+    ).toBeVisible();
+  } finally {
+    await otherContext.close();
+  }
+
+  await page.goto("/progress", { waitUntil: "networkidle" });
+  const rejectedCard = page.locator("li").filter({ hasText: projectName });
+  await expect(rejectedCard.getByText("补充阶段计划后重新提交")).toBeVisible();
+  await page.goto(`/progress/${sourceProjectId}`, { waitUntil: "networkidle" });
+  await expect(page.getByText("驳回了项目立项")).toBeVisible();
+  await expect(
+    page.getByText("审核意见：补充阶段计划后重新提交"),
+  ).toBeVisible();
+  await page.goto("/progress", { waitUntil: "networkidle" });
+  await rejectedCard.getByRole("link", { name: "修改后重新提交" }).click();
+  await expect(page).toHaveURL(new RegExp(`/progress/new\\?fromProject=${sourceProjectId}`));
+  await expect(
+    page.getByText("项目名称").locator("xpath=following::input[1]"),
+  ).toHaveValue(projectName);
+  await expect(page.getByText("Playwright 管理员")).toBeVisible();
+
+  await page
+    .getByText("项目名称")
+    .locator("xpath=following::input[1]")
+    .fill(resubmittedProjectName);
+  await page.getByLabel("阶段 1 耗时").fill("3");
+  await page.getByRole("button", { name: "重新提交立项" }).click();
+  await expect(page).toHaveURL(/\/progress$/);
+
+  await expect
+    .poll(async () => {
+      const project = await prisma.project.findUnique({
+        where: { id: sourceProjectId },
+        include: { stages: { orderBy: { sortOrder: "asc" } } },
+      });
+      const outboxCount = project
+        ? await prisma.notificationOutbox.count({
+            where: {
+              eventKey: {
+                startsWith: `progress:project_establishment_requested:${project.id}:`,
+              },
+            },
+          })
+        : 0;
+      return project
+        ? {
+            id: project.id,
+            status: project.status,
+            name: project.name,
+            firstStageDurationDays: project.stages[0]?.dueAt
+              ? localDayNumber(project.stages[0].dueAt) -
+                localDayNumber(project.submittedAt ?? project.createdAt)
+              : 0,
+            outboxCount,
+          }
+        : null;
+    })
+    .toMatchObject({
+      id: sourceProjectId,
+      status: "ESTABLISHING",
+      name: resubmittedProjectName,
+      firstStageDurationDays: 3,
+      outboxCount: 2,
+    });
+
+  const approvalContext = await browser.newContext();
+  const approvalPage = await approvalContext.newPage();
+  try {
+    await loginAsAdminUser(approvalContext, baseURL);
+    await approvalPage.goto("/progress", { waitUntil: "networkidle" });
+    await approvalPage
+      .locator("li")
+      .filter({ hasText: resubmittedProjectName })
+      .getByRole("button", { name: "通过立项" })
+      .click();
+  } finally {
+    await approvalContext.close();
+  }
+
+  await expect
+    .poll(async () => {
+      const project = await prisma.project.findUnique({
+        where: { id: sourceProjectId },
+        include: { stages: { orderBy: { sortOrder: "asc" } } },
+      });
+      return project
+        ? {
+            status: project.status,
+            stageCount: project.stages.length,
+            firstStageDueHour: project.stages[0]?.dueAt?.getHours(),
+          }
+        : null;
+    })
+    .toMatchObject({
+      status: "NOT_STARTED",
+      firstStageDueHour: 18,
+    });
+  await page.goto("/progress", { waitUntil: "networkidle" });
+  await expectHealthyPage(page);
+});
+
+test("立项通过后按模板耗时生成阶段 DDL 且通知包含参与人", async ({
   page,
   context,
   baseURL,
 }) => {
   await loginAsAdminUser(context, baseURL);
   const templateName = `PW全功能-耗时模板-${Date.now()}`;
-  const projectName = `PW全功能-模板项目-${Date.now()}`;
+  const projectName = `PW全功能-模板立项-${Date.now()}`;
   await prisma.projectTemplate.deleteMany({ where: { name: templateName } });
   await prisma.projectTemplate.create({
     data: {
@@ -1804,8 +2059,42 @@ test("项目模板耗时会累加为阶段 DDL 且创建通知包含参与人", 
   await page.getByRole("option", { name: "工程" }).click();
   await page.getByText("技术组", { exact: true }).locator("xpath=following::button[1]").click();
   await page.getByRole("option", { name: "宣运" }).click();
-  const submittedAt = new Date();
-  await page.getByRole("button", { name: "创建项目" }).click();
+  await page.getByRole("button", { name: "提交立项" }).click();
+  await expect(page).toHaveURL(/\/progress$/);
+
+  await expect
+    .poll(async () =>
+      prisma.project.findFirst({
+        where: { name: projectName },
+        select: { id: true, status: true, requesterName: true },
+      }),
+    )
+    .toMatchObject({ status: "ESTABLISHING", requesterName: "Playwright 管理员" });
+
+  const projectRecord = await prisma.project.findFirstOrThrow({
+    where: { name: projectName },
+    select: { id: true },
+  });
+  const requestedOutboxes = await prisma.notificationOutbox.findMany({
+    where: {
+      eventKey: {
+        startsWith: `progress:project_establishment_requested:${projectRecord.id}:`,
+      },
+    },
+    select: { eventKey: true, payload: true },
+  });
+  expect(requestedOutboxes).toHaveLength(1);
+  expect(requestedOutboxes[0]?.payload).toContain("project_establishment_requested");
+  expect(requestedOutboxes[0]?.payload).toContain("Playwright 管理员");
+
+  await expect(page.getByText("立项审批")).toBeVisible();
+  await expect(page.getByText(projectName)).toBeVisible();
+  const approvedAt = new Date();
+  const approvalCard = page.locator("li").filter({ hasText: projectName });
+  await approvalCard
+    .getByPlaceholder("审核意见；驳回时必填")
+    .fill("立项材料完整，同意进入未开始");
+  await approvalCard.getByRole("button", { name: "通过立项" }).click();
 
   await expect
     .poll(async () => {
@@ -1819,15 +2108,18 @@ test("项目模板耗时会累加为阶段 DDL 且创建通知包含参与人", 
       if (!project) return null;
       const outbox = await prisma.notificationOutbox.findFirst({
         where: {
-          eventKey: { startsWith: `progress:project_created:${project.id}` },
+          eventKey: {
+            startsWith: `progress:project_establishment_approved:${project.id}:`,
+          },
         },
         select: { payload: true },
       });
       const firstDueAt = project.stages[0]?.dueAt;
       return {
+        projectStatus: project.status,
         stageNames: project.stages.map((stage) => stage.name),
         dayOffsets: project.stages.map((stage) =>
-          localDayNumber(stage.dueAt ?? new Date(0)) - localDayNumber(submittedAt),
+          localDayNumber(stage.dueAt ?? new Date(0)) - localDayNumber(approvedAt),
         ),
         dayDeltas: firstDueAt
           ? project.stages.map((stage) =>
@@ -1843,6 +2135,7 @@ test("项目模板耗时会累加为阶段 DDL 且创建通知包含参与人", 
       };
     })
     .toMatchObject({
+      projectStatus: "NOT_STARTED",
       stageNames: ["阶段一", "阶段二", "阶段三"],
       dayOffsets: [2, 7, 8],
       dayDeltas: [0, 5, 6],
@@ -1873,23 +2166,70 @@ test("项目模板耗时会累加为阶段 DDL 且创建通知包含参与人", 
   });
   const outbox = await prisma.notificationOutbox.findFirstOrThrow({
     where: {
-      eventKey: { startsWith: `progress:project_created:${project.id}` },
+      eventKey: {
+        startsWith: `progress:project_establishment_approved:${project.id}:`,
+      },
     },
     select: { payload: true },
   });
-  const projectCreatedOutboxes = await prisma.notificationOutbox.findMany({
+  const projectApprovedOutboxes = await prisma.notificationOutbox.findMany({
     where: {
-      eventKey: { startsWith: `progress:project_created:${project.id}` },
+      eventKey: {
+        startsWith: `progress:project_establishment_approved:${project.id}:`,
+      },
     },
     select: { eventKey: true },
   });
-  expect(projectCreatedOutboxes).toHaveLength(1);
-  expect(projectCreatedOutboxes[0]?.eventKey).toBe(
-    `progress:project_created:${project.id}`,
-  );
+  const legacyProjectCreatedOutboxes = await prisma.notificationOutbox.count({
+    where: { eventKey: { startsWith: `progress:project_created:${project.id}` } },
+  });
+  expect(projectApprovedOutboxes).toHaveLength(1);
+  expect(legacyProjectCreatedOutboxes).toBe(0);
   expect(outbox.payload).toContain("participantNames");
   expect(outbox.payload).toContain("Playwright 管理员");
   expect(outbox.payload).toContain("recipientOpenIds");
+  await page.goto(`/progress/${project.id}`, { waitUntil: "networkidle" });
+  await expect(page.getByText("通过了项目立项")).toBeVisible();
+  await expect(
+    page.getByText("审核意见：立项材料完整，同意进入未开始"),
+  ).toBeVisible();
+  await expectHealthyPage(page);
+});
+
+test("无关用户看不到立项审批按钮且未立项项目无法推进工作流", async ({
+  page,
+  context,
+  browser,
+  baseURL,
+}) => {
+  await loginAsNormalUser(context, baseURL, normalAuth);
+  const projectName = `PW全功能-立项权限-${Date.now()}`;
+  await page.goto("/progress/new", { waitUntil: "networkidle" });
+  await page.getByText("项目名称").locator("xpath=following::input[1]").fill(projectName);
+  await selectUserFromSearch(page, "搜索项目负责人", "李棋轩");
+  await page.getByText("车组").locator("xpath=following::button[1]").click();
+  await page.getByRole("option", { name: "英雄" }).click();
+  await page.getByText("技术组", { exact: true }).locator("xpath=following::button[1]").click();
+  await page.getByRole("option", { name: "电控" }).click();
+  await page.getByRole("button", { name: "提交立项" }).click();
+  await expect(page).toHaveURL(/\/progress$/);
+
+  const project = await prisma.project.findFirstOrThrow({
+    where: { name: projectName },
+    include: { stages: { orderBy: { sortOrder: "asc" } } },
+  });
+
+  const otherContext = await browser.newContext();
+  const otherPage = await otherContext.newPage();
+  try {
+    await loginAsOtherUser(otherContext, baseURL);
+    await otherPage.goto(`/progress/${project.id}`, { waitUntil: "networkidle" });
+    await expect(otherPage.getByRole("button", { name: "通过立项" })).toHaveCount(0);
+    await expect(otherPage.getByRole("button", { name: "驳回立项" })).toHaveCount(0);
+  } finally {
+    await otherContext.close();
+  }
+
   await expectHealthyPage(page);
 });
 

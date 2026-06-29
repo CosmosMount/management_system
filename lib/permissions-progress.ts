@@ -118,6 +118,7 @@ export function progressProjectMineWhere(userOpenId?: string): Prisma.ProjectWhe
   return {
     OR: [
       { ownerOpenId: userOpenId },
+      { requesterOpenId: userOpenId },
       { owners: { some: { openId: userOpenId } } },
       { participants: { some: { openId: userOpenId } } },
       { stages: { some: { ownerOpenId: userOpenId } } },
@@ -346,6 +347,20 @@ export function canCreateProjectInScope(
   if (scope.team && !isTeamLead(roles, scope.team)) return false;
   if (scope.techGroup && !isTechGroupLead(roles, scope.techGroup)) return false;
   return !!scope.team || !!scope.techGroup;
+}
+
+export function canRequestProjectEstablishment(userOpenId?: string): boolean {
+  return !!userOpenId;
+}
+
+export function canReviewProjectEstablishment(
+  roles: UserRoleRecord[],
+  scope: ProgressScope,
+): boolean {
+  if (isProgressSuperAdmin(roles) || isProjectManager(roles)) return true;
+  if (scope.team && isTeamLead(roles, scope.team)) return true;
+  if (scope.techGroup && isTechGroupLead(roles, scope.techGroup)) return true;
+  return false;
 }
 
 export function canChangeProjectScope(

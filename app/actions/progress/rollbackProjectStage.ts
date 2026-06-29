@@ -1,5 +1,6 @@
 "use server";
 
+import type { ProjectStatus } from "@prisma/client";
 import { auth } from "@/lib/auth";
 import { logProgressActivity, requireSessionUser } from "@/lib/progress-activity";
 import {
@@ -29,7 +30,7 @@ type RollbackStage = {
 type ProjectForRollback = {
   id: string;
   name: string;
-  status: "NOT_STARTED" | "IN_PROGRESS" | "COMPLETED" | "CANCELED";
+  status: ProjectStatus;
   team: string;
   techGroup: string;
   stages: RollbackStage[];
@@ -60,6 +61,12 @@ export async function rollbackProjectStage(input: {
       },
     });
     if (!project) throw new Error("项目不存在");
+    if (project.status === "ESTABLISHING") {
+      throw new Error("项目正在立项审批，无法回退");
+    }
+    if (project.status === "ESTABLISHMENT_REJECTED") {
+      throw new Error("项目立项已驳回，无法回退");
+    }
     if (project.status === "NOT_STARTED") {
       throw new Error("项目尚未启动，无法回退");
     }

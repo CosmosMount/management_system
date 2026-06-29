@@ -7,6 +7,8 @@ import {
 
 /** 项目允许的状态迁移（不可跳跃） */
 const PROJECT_TRANSITIONS: Record<ProjectStatus, ProjectStatus[]> = {
+  ESTABLISHING: [],
+  ESTABLISHMENT_REJECTED: [],
   NOT_STARTED: ["IN_PROGRESS", "CANCELED"],
   IN_PROGRESS: ["COMPLETED", "CANCELED"],
   COMPLETED: [],
@@ -92,6 +94,7 @@ const projectActionLabels: Partial<Record<ProjectStatus, string>> = {
 
 /** 项目主流程展示顺序（桌面端步骤条） */
 export const projectFlowSteps: ProjectStatus[] = [
+  "ESTABLISHING",
   "NOT_STARTED",
   "IN_PROGRESS",
   "COMPLETED",
@@ -121,13 +124,18 @@ export function getProjectStepperDisplay(status: ProjectStatus): {
   branchNote: string | null;
 } {
   const steps = [
+    { key: "ESTABLISHING", label: projectStatusLabels.ESTABLISHING },
     { key: "NOT_STARTED", label: projectStatusLabels.NOT_STARTED },
     { key: "IN_PROGRESS", label: projectStatusLabels.IN_PROGRESS },
     { key: "COMPLETED", label: projectStatusLabels.COMPLETED },
   ];
 
   let branchNote: string | null = null;
-  if (status === "NOT_STARTED") {
+  if (status === "ESTABLISHING") {
+    branchNote = "项目正在立项审批，通过后才能启动项目";
+  } else if (status === "ESTABLISHMENT_REJECTED") {
+    branchNote = "项目立项已驳回，可修改后重新提交";
+  } else if (status === "NOT_STARTED") {
     branchNote = "项目尚未启动，请先启动项目";
   } else if (status === "CANCELED") {
     branchNote = "项目已取消，不能继续推进";

@@ -81,6 +81,25 @@ export async function collectProjectNotificationRecipients(
   return [...openIds];
 }
 
+export async function collectProjectEstablishmentReviewRecipients(scope: {
+  team: string;
+  techGroup: string;
+}): Promise<string[]> {
+  const openIds = new Set<string>();
+  const roleGroups = await Promise.all([
+    getOpenIdsByRole("TEAM_ADMIN", { team: scope.team, techGroup: "" }),
+    getOpenIdsByRole("TECH_GROUP_ADMIN", { team: "", techGroup: scope.techGroup }),
+    getOpenIdsByRole("PROJECT_MANAGER", { team: "", techGroup: "" }),
+    getOpenIdsByRole("SUPER_ADMIN", { team: "", techGroup: "" }),
+  ]);
+
+  for (const group of roleGroups) {
+    for (const openId of group) add(openIds, openId);
+  }
+
+  return [...openIds];
+}
+
 function add(openIds: Set<string>, openId?: string | null) {
   if (openId) openIds.add(openId);
 }

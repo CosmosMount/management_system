@@ -4,8 +4,14 @@ import { defineConfig, devices } from "@playwright/test";
 const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:3002";
 const parsedBaseUrl = new URL(baseURL);
 
-if (parsedBaseUrl.port === "3000") {
-  throw new Error("Playwright must not target port 3000. Use PLAYWRIGHT_BASE_URL with an isolated test port.");
+if (
+  parsedBaseUrl.protocol !== "http:" ||
+  !["127.0.0.1", "localhost", "::1"].includes(parsedBaseUrl.hostname) ||
+  parsedBaseUrl.port !== "3002"
+) {
+  throw new Error(
+    "Playwright must target http://127.0.0.1:3002 or http://localhost:3002 only.",
+  );
 }
 
 function deriveDatabaseUrl(baseUrl: string | undefined, suffix: string): string | undefined {

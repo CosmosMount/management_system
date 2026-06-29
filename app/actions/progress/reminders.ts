@@ -10,6 +10,7 @@ import {
 import { getUserRoles, requireSuperAdmin } from "@/lib/permissions";
 import { canManageProject } from "@/lib/permissions-progress";
 import { logProgressActivity, requireSessionUser } from "@/lib/progress-activity";
+import { assertProjectActive } from "@/lib/progress-guards";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import {
   isProgressReminderKind,
@@ -93,9 +94,7 @@ export async function sendManualProgressReminder(input: unknown) {
       },
     });
     if (!project) throw new Error("项目不存在");
-    if (project.status === "COMPLETED" || project.status === "CANCELED") {
-      throw new Error("已结束项目不能催促");
-    }
+    assertProjectActive(project.status);
     if (
       !canManageProject(
         roles,
@@ -138,9 +137,7 @@ export async function sendManualProgressReminder(input: unknown) {
     },
   });
   if (!task || task.deletedAt) throw new Error("任务不存在");
-  if (task.project.status === "COMPLETED" || task.project.status === "CANCELED") {
-    throw new Error("已结束项目下的任务不能催促");
-  }
+  assertProjectActive(task.project.status);
   if (
     task.status === "COMPLETED" ||
     task.status === "ARCHIVED" ||

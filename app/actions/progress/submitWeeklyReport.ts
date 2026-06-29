@@ -86,7 +86,16 @@ export async function submitWeeklyReport(input: {
         deletedAt: null,
         needsWeeklyReport: true,
         status: { notIn: ["COMPLETED", "ARCHIVED", "PROJECT_CANCELED"] },
-        project: { status: { notIn: ["COMPLETED", "CANCELED"] } },
+        project: {
+          status: {
+            notIn: [
+              "ESTABLISHING",
+              "ESTABLISHMENT_REJECTED",
+              "COMPLETED",
+              "CANCELED",
+            ],
+          },
+        },
       },
       data: { status: task.status },
     });
@@ -192,7 +201,16 @@ export async function syncTaskRisk(input: {
         id: task.id,
         deletedAt: null,
         status: { notIn: ["COMPLETED", "ARCHIVED", "PROJECT_CANCELED"] },
-        project: { status: { notIn: ["COMPLETED", "CANCELED"] } },
+        project: {
+          status: {
+            notIn: [
+              "ESTABLISHING",
+              "ESTABLISHMENT_REJECTED",
+              "COMPLETED",
+              "CANCELED",
+            ],
+          },
+        },
       },
       data: { riskNote: parsed.content, riskUpdatedAt },
     });
@@ -327,7 +345,16 @@ export async function resolveTaskRisk(input: {
         id: task.id,
         deletedAt: null,
         status: { notIn: ["COMPLETED", "ARCHIVED", "PROJECT_CANCELED"] },
-        project: { status: { notIn: ["COMPLETED", "CANCELED"] } },
+        project: {
+          status: {
+            notIn: [
+              "ESTABLISHING",
+              "ESTABLISHMENT_REJECTED",
+              "COMPLETED",
+              "CANCELED",
+            ],
+          },
+        },
       },
       data: {
         riskNote: latestActive?.content ?? "",

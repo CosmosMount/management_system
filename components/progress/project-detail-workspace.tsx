@@ -47,6 +47,7 @@ import { loadMoreProjectActivityLogs } from "@/app/actions/progress/activityLogs
 import { reviewTaskCreationRequest } from "@/app/actions/progress/requestTaskCreation";
 import { rollbackProjectStage } from "@/app/actions/progress/rollbackProjectStage";
 import { updateProjectStatus } from "@/app/actions/progress/updateProjectStatus";
+import { reviewProjectEstablishment } from "@/app/actions/progress/createProject";
 import { updateTaskStatus } from "@/app/actions/progress/updateTask";
 import { BackLink } from "@/components/back-link";
 import { ReasonConfirmDialog } from "@/components/reason-confirm-dialog";
@@ -110,6 +111,13 @@ export type ProjectDetailView = {
   ownerNames: string;
   participantOpenIds: string[];
   participantNames: string;
+  requesterOpenId: string;
+  requesterName: string;
+  submittedAt: string | null;
+  reviewerOpenId: string;
+  reviewerName: string;
+  reviewComment: string;
+  reviewedAt: string | null;
   allowOwnerSelfApproval: boolean;
   createdAt: string;
   updatedAt: string;
@@ -254,6 +262,7 @@ type Props = {
   canManage: boolean;
   canRequestTaskCreation: boolean;
   canUpdateLifecycle: boolean;
+  canReviewEstablishment: boolean;
   isSuperAdmin?: boolean;
   userOpenId?: string;
 };
@@ -315,6 +324,7 @@ export function ProjectDetailWorkspace({
   canManage,
   canRequestTaskCreation,
   canUpdateLifecycle,
+  canReviewEstablishment,
   isSuperAdmin = false,
   userOpenId,
 }: Props) {
@@ -376,11 +386,12 @@ export function ProjectDetailWorkspace({
   const unfinishedTaskCount = project.tasks.filter(
     (task) => !isCompletedOrArchivedTaskStatus(task.status),
   ).length;
+  const projectCanAcceptWork =
+    project.status === "NOT_STARTED" || project.status === "IN_PROGRESS";
   const canCreateTask =
     canManage &&
     selectedStage &&
-    project.status !== "COMPLETED" &&
-    project.status !== "CANCELED" &&
+    projectCanAcceptWork &&
     selectedStage.status !== "COMPLETED";
   const canRequestTaskForSelectedStage =
     !!userOpenId &&
@@ -412,8 +423,7 @@ export function ProjectDetailWorkspace({
     canRequestTaskCreation &&
     canRequestTaskForSelectedStage &&
     selectedStage &&
-    project.status !== "COMPLETED" &&
-    project.status !== "CANCELED" &&
+    projectCanAcceptWork &&
     selectedStage.status !== "COMPLETED";
 
   function selectStage(stageId: string) {
@@ -440,11 +450,19 @@ export function ProjectDetailWorkspace({
         unfinishedStageCount={unfinishedStageCount}
         unfinishedTaskCount={unfinishedTaskCount}
         canUpdateLifecycle={canUpdateLifecycle}
-        canEdit={canManage && project.status !== "COMPLETED" && project.status !== "CANCELED"}
+        canReviewEstablishment={canReviewEstablishment}
+        canResubmitEstablishment={
+          project.status === "ESTABLISHMENT_REJECTED" &&
+          !!userOpenId &&
+          project.requesterOpenId === userOpenId
+        }
+        canEdit={
+          canManage &&
+          (project.status === "NOT_STARTED" || project.status === "IN_PROGRESS")
+        }
         canRemind={
           canManage &&
-          project.status !== "COMPLETED" &&
-          project.status !== "CANCELED"
+          (project.status === "NOT_STARTED" || project.status === "IN_PROGRESS")
         }
         canImportTasks={!!canCreateTask || !!canRequestNewTask}
         isSuperAdmin={isSuperAdmin}
@@ -646,6 +664,8 @@ function ProjectOverview({
   unfinishedStageCount,
   unfinishedTaskCount,
   canUpdateLifecycle,
+  canReviewEstablishment,
+  canResubmitEstablishment,
   canEdit,
   canRemind,
   canImportTasks,
@@ -659,6 +679,8 @@ function ProjectOverview({
   unfinishedStageCount: number;
   unfinishedTaskCount: number;
   canUpdateLifecycle: boolean;
+  canReviewEstablishment: boolean;
+  canResubmitEstablishment: boolean;
   canEdit: boolean;
   canRemind: boolean;
   canImportTasks: boolean;
@@ -668,6 +690,7 @@ function ProjectOverview({
 }) {
   const router = useRouter();
   const [loadingStatus, setLoadingStatus] = useState<ProjectStatus | null>(null);
+  const [reviewingEstablishment, setReviewingEstablishment] = useState(false);
   const rollbackPreview = getProjectRollbackPreview(project);
   const completedStages = project.stages.filter(
     (stage) => stage.status === "COMPLETED",
@@ -703,6 +726,26 @@ function ProjectOverview({
     }
   }
 
+  async function handleEstablishmentReview(
+    decision: "APPROVED" | "REJECTED",
+    comment = "",
+  ) {
+    setReviewingEstablishment(true);
+    try {
+      await reviewProjectEstablishment({
+        projectId: project.id,
+        decision,
+        comment,
+      });
+      toast.success(decision === "APPROVED" ? "立项已通过" : "立项已驳回");
+      router.refresh();
+    } catch (err) {
+      toast.error(getActionErrorMessage(err, "审核立项失败"));
+    } finally {
+      setReviewingEstablishment(false);
+    }
+  }
+
   return (
     <Card data-testid="project-overview">
       <CardContent className="flex flex-col gap-5 p-5 lg:flex-row lg:items-start lg:justify-between">
@@ -735,11 +778,77 @@ function ProjectOverview({
               label="项目进度"
               value={`${completedStages} / ${project.stages.length} 阶段`}
             />
+            {(project.status === "ESTABLISHING" ||
+              project.status === "ESTABLISHMENT_REJECTED") && (
+              <>
+                <OverviewItem
+                  label="立项申请人"
+                  value={project.requesterName || "未知"}
+                />
+                <OverviewItem
+                  label="提交时间"
+                  value={
+                    project.submittedAt ? formatDateTime(project.submittedAt) : "未记录"
+                  }
+                />
+                {project.reviewComment && (
+                  <OverviewItem label="审核意见" value={project.reviewComment} />
+                )}
+              </>
+            )}
           </dl>
         </div>
 
-        {(canEdit || canUpdateLifecycle || canRemind || canImportTasks || isSuperAdmin) && (
+        {(canEdit ||
+          canUpdateLifecycle ||
+          canReviewEstablishment ||
+          canResubmitEstablishment ||
+          canRemind ||
+          canImportTasks ||
+          isSuperAdmin) && (
           <div className="flex shrink-0 flex-wrap gap-2">
+            {canReviewEstablishment && project.status === "ESTABLISHING" && (
+              <>
+                <Button
+                  type="button"
+                  className={projectHeaderActionButtonClassName}
+                  disabled={reviewingEstablishment}
+                  onClick={() => handleEstablishmentReview("APPROVED")}
+                >
+                  <CheckCircle2 className="h-4 w-4" />
+                  通过立项
+                </Button>
+                <ReasonConfirmDialog
+                  triggerLabel="驳回立项"
+                  title="确认驳回立项"
+                  description="驳回后申请人可以在原项目基础上修改并重新提交。"
+                  reasonLabel="审核意见"
+                  confirmLabel="确认驳回"
+                  variant="destructive"
+                  disabled={reviewingEstablishment}
+                  triggerSize="default"
+                  triggerClassName={projectHeaderActionButtonClassName}
+                  onConfirm={(reason) =>
+                    handleEstablishmentReview("REJECTED", reason)
+                  }
+                />
+              </>
+            )}
+            {canResubmitEstablishment && (
+              <Link
+                href={`${routes.progress.new}?fromProject=${encodeURIComponent(
+                  project.id,
+                )}`}
+                className={buttonVariants({
+                  variant: "outline",
+                  size: "default",
+                  className: projectHeaderActionButtonClassName,
+                })}
+              >
+                <Pencil className="h-4 w-4" />
+                修改后重提
+              </Link>
+            )}
             {canEdit && (
               <Button
                 type="button"
@@ -2739,7 +2848,8 @@ function ActivityChangeList({ payload }: { payload: Record<string, unknown> }) {
     ? payload.changes.filter((change): change is string => typeof change === "string")
     : [];
   const reason = getPayloadString(payload.reason);
-  const reviewComment = getPayloadString(payload.reviewComment);
+  const reviewComment =
+    getPayloadString(payload.reviewComment) ?? getPayloadString(payload.comment);
   const fromProjectStatus = getPayloadString(payload.fromProjectStatus);
   const toProjectStatus = getPayloadString(payload.toProjectStatus);
   const fromStageName = getPayloadString(payload.fromStageName);
@@ -3018,6 +3128,10 @@ function getActivityTargetLabel(
 function activityLabel(action: string): string {
   const labels: Record<string, string> = {
     "project.created": "创建了项目",
+    "project.establishment_requested": "提交了项目立项",
+    "project.establishment_resubmitted": "重新提交了项目立项",
+    "project.establishment_approved": "通过了项目立项",
+    "project.establishment_rejected": "驳回了项目立项",
     "project.updated": "更新了项目信息",
     "project.status_changed": "更新了项目状态",
     "project.stage_rollback": "回退了项目流程",

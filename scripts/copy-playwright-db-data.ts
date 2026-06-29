@@ -1,5 +1,8 @@
 import "dotenv/config";
+import { access, mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import pg from "pg";
+import { storagePathToAbsolute } from "../lib/upload-paths";
 
 const sourceDatabaseUrl = process.env.PLAYWRIGHT_SOURCE_DATABASE_URL;
 const targetDatabaseUrl = process.env.PLAYWRIGHT_DATABASE_URL;
@@ -23,6 +26,10 @@ if (sameDatabaseUrl(sourceDatabaseUrl, targetDatabaseUrl)) {
 const BATCH_SIZE = 100;
 const EXCLUDED_TABLES = new Set(["_prisma_migrations", "NotificationOutbox"]);
 const TABLES_TO_CLEAR_ONLY = ["NotificationOutbox"];
+const ONE_BY_ONE_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+  "base64",
+);
 
 function sameDatabaseUrl(left: string, right: string): boolean {
   const leftUrl = new URL(left);
@@ -84,6 +91,19 @@ async function loadColumnNames(client: pg.Client, tableName: string): Promise<st
   return result.rows.map((row) => row.column_name);
 }
 
+async function loadCommonColumnNames(
+  source: pg.Client,
+  target: pg.Client,
+  tableName: string,
+): Promise<string[]> {
+  const [sourceColumns, targetColumns] = await Promise.all([
+    loadColumnNames(source, tableName),
+    loadColumnNames(target, tableName),
+  ]);
+  const targetColumnSet = new Set(targetColumns);
+  return sourceColumns.filter((column) => targetColumnSet.has(column));
+}
+
 async function copyTable({
   source,
   target,
@@ -132,7 +152,8 @@ async function main() {
 
   try {
     await assertDifferentPhysicalDatabases(source, target);
-    const tableNames = await loadTableNames(source);
+    const sourceTableNames = await loadTableNames(source);
+    const tableNames = await loadExistingTables(target, sourceTableNames);
     if (tableNames.length === 0) {
       console.log("[playwright-db] source database has no public data tables");
       return;
@@ -151,7 +172,7 @@ async function main() {
 
       let copiedRows = 0;
       for (const tableName of tableNames) {
-        const columns = await loadColumnNames(source, tableName);
+        const columns = await loadCommonColumnNames(source, target, tableName);
         const tableRows = await copyTable({ source, target, tableName, columns });
         copiedRows += tableRows;
         console.log(`[playwright-db] copied ${tableRows} rows from ${tableName}`);
@@ -159,6 +180,7 @@ async function main() {
 
       await target.query("SET session_replication_role = origin");
       await target.query("COMMIT");
+      await ensureCopiedUploadFiles(target);
       console.log(
         `[playwright-db] copied ${copiedRows} rows into ${targetDatabase}`,
       );
@@ -170,6 +192,56 @@ async function main() {
     await source.end();
     await target.end();
   }
+}
+
+async function ensureCopiedUploadFiles(target: pg.Client) {
+  const tableExists = await target.query<{ table_name: string | null }>(
+    `SELECT to_regclass('public."FileAsset"')::text AS table_name`,
+  );
+  if (!tableExists.rows[0]?.table_name) return;
+
+  const assets = await target.query<{
+    publicPath: string;
+    storagePath: string;
+    mimeType: string;
+  }>(
+    `SELECT "publicPath", "storagePath", "mimeType" FROM "FileAsset"`,
+  );
+  let created = 0;
+  for (const asset of assets.rows) {
+    const storagePath = asset.storagePath || publicPathToStoragePath(asset.publicPath);
+    if (!storagePath) continue;
+    const absolutePath = storagePathToAbsolute(storagePath);
+    try {
+      await access(absolutePath);
+      continue;
+    } catch {
+      await mkdir(path.dirname(absolutePath), { recursive: true });
+      await writeFile(absolutePath, placeholderBuffer(asset.mimeType));
+      created += 1;
+    }
+  }
+  if (created > 0) {
+    console.log(`[playwright-db] created ${created} placeholder upload files`);
+  }
+}
+
+function publicPathToStoragePath(publicPath: string): string | null {
+  if (!publicPath.startsWith("/uploads/")) return null;
+  const relative = publicPath.slice("/uploads/".length);
+  const segments = relative.split("/");
+  if (
+    segments.length === 0 ||
+    segments.some((segment) => !segment || segment === "." || segment === "..")
+  ) {
+    return null;
+  }
+  return segments.join("/");
+}
+
+function placeholderBuffer(mimeType: string): Buffer {
+  if (mimeType.startsWith("image/")) return ONE_BY_ONE_PNG;
+  return Buffer.from("Playwright placeholder upload file\n", "utf8");
 }
 
 async function assertDifferentPhysicalDatabases(

@@ -128,6 +128,27 @@ export const createProjectSchema = projectBaseSchema.extend({
   }
 });
 
+export const projectEstablishmentReviewSchema = z
+  .object({
+    projectId: z.string().min(1, "立项项目不存在"),
+    decision: z.enum(["APPROVED", "REJECTED"]),
+    comment: z.string().trim().optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.decision === "REJECTED" && !value.comment?.trim()) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["comment"],
+        message: "驳回立项时请填写审核意见",
+      });
+    }
+  });
+
+export const projectEstablishmentResubmitSchema = z.object({
+  projectId: z.string().min(1, "立项项目不存在"),
+  input: createProjectSchema,
+});
+
 export const projectTemplateStageSchema = z.object({
   name: z.string().trim().min(1, "阶段名称不能为空").max(100, "阶段名称不能超过 100 个字符"),
   goal: z.string().trim().min(1, "请填写阶段目标").max(1000, "阶段目标不能超过 1000 个字符"),
@@ -439,6 +460,7 @@ export const projectStageDueDateChangeReviewSchema = z.object({
 });
 
 export type CreateProjectInput = z.input<typeof createProjectSchema>;
+export type ParsedCreateProjectInput = z.output<typeof createProjectSchema>;
 export type UpdateProjectInput = z.input<typeof updateProjectSchema>;
 export type CreateTaskInput = z.input<typeof createTaskSchema>;
 export type BatchTaskImportInput = z.input<typeof batchTaskImportSchema>;

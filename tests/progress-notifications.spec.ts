@@ -1,5 +1,8 @@
 import { expect, test } from "@playwright/test";
-import type { ProgressNotifyPayload } from "../lib/feishu-progress";
+import {
+  sendProgressNotification,
+  type ProgressNotifyPayload,
+} from "../lib/feishu-progress";
 import {
   drainNotificationOutbox,
   enqueueProgressNotification,
@@ -12,31 +15,30 @@ type CapturedFeishuMessage = {
   cardText: string;
 };
 
+const notificationDeliveryDisabled =
+  process.env.NOTIFICATION_DELIVERY_DISABLED === "true";
+
 test.describe.configure({ mode: "serial" });
 
 test.beforeEach(async () => {
+  expect(notificationDeliveryDisabled).toBe(true);
   await prisma.notificationOutbox.deleteMany();
 });
 
-test("项目创建通知只入队一次并发送给唯一收件人", async () => {
-  const eventKey = `playwright:progress-notify:project_created:${Date.now()}`;
+test("项目立项通知发送给审批人并使用明确中文", async () => {
+  const eventKey = `playwright:progress-notify:project_establishment_requested:${Date.now()}`;
   const payload: ProgressNotifyPayload = {
-    type: "project_created",
-    projectId: "pw-project-created",
-    projectName: "PW通知-创建项目",
+    type: "project_establishment_requested",
+    projectId: "pw-project-establishment",
+    projectName: "PW通知-项目立项",
+    requesterName: "李棋轩",
+    requesterOpenId: "ou_requester",
     team: "工程",
     techGroup: "宣运",
-    ownerOpenIds: ["ou_owner"],
     ownerNames: "项目负责人",
-    participantOpenIds: ["ou_participant"],
     participantNames: "项目参与人",
-    recipientOpenIds: [
-      "ou_owner",
-      "ou_participant",
-      "ou_manager",
-      "ou_owner",
-      "",
-    ],
+    stageCount: 3,
+    recipientOpenIds: ["ou_manager", "ou_owner", "ou_manager", ""],
   };
 
   const captured = await enqueueAndDrainProgressNotification(eventKey, payload);
@@ -44,16 +46,74 @@ test("项目创建通知只入队一次并发送给唯一收件人", async () =>
   expect(captured.map((message) => message.receiveId).sort()).toEqual([
     "ou_manager",
     "ou_owner",
-    "ou_participant",
   ]);
-  expect(captured).toHaveLength(3);
-  expect(captured.every((message) => message.title === "新项目已创建")).toBe(
+  expect(captured).toHaveLength(2);
+  expect(captured.every((message) => message.title === "项目立项待审批")).toBe(
     true,
   );
-  expect(captured[0]?.cardText).toContain("PW通知-创建项目");
-  expect(captured[0]?.cardText).toContain("项目负责人");
+  expect(captured[0]?.cardText).toContain("PW通知-项目立项");
+  expect(captured[0]?.cardText).toContain("申请人");
   expect(captured[0]?.cardText).toContain("项目参与人");
-  expect(captured[0]?.cardText).toContain("工程 / 宣运");
+  expect(captured[0]?.cardText).toContain("阶段数量");
+});
+
+test("项目立项审批结果通知中文清晰且不重复", async () => {
+  const approvedEventKey = `playwright:progress-notify:project_establishment_approved:${Date.now()}`;
+  const approvedPayload: ProgressNotifyPayload = {
+    type: "project_establishment_approved",
+    projectId: "pw-project-approved",
+    projectName: "PW通知-项目立项通过",
+    requesterOpenId: "ou_requester",
+    requesterName: "李棋轩",
+    reviewerName: "项目管理员",
+    comment: "同意立项",
+    team: "工程",
+    techGroup: "宣运",
+    ownerOpenIds: ["ou_owner"],
+    ownerNames: "项目负责人",
+    participantOpenIds: ["ou_participant"],
+    participantNames: "项目参与人",
+    stageCount: 2,
+    recipientOpenIds: ["ou_requester", "ou_owner", "ou_participant", "ou_owner"],
+  };
+  const rejectedEventKey = `playwright:progress-notify:project_establishment_rejected:${Date.now()}`;
+  const rejectedPayload: ProgressNotifyPayload = {
+    type: "project_establishment_rejected",
+    projectId: "pw-project-rejected",
+    projectName: "PW通知-项目立项驳回",
+    requesterOpenId: "ou_requester",
+    requesterName: "李棋轩",
+    reviewerName: "项目管理员",
+    comment: "目标不清晰",
+    team: "工程",
+    techGroup: "宣运",
+    recipientOpenIds: ["ou_requester"],
+  };
+
+  const approved = await enqueueAndDrainProgressNotification(
+    approvedEventKey,
+    approvedPayload,
+  );
+  const rejected = await enqueueAndDrainProgressNotification(
+    rejectedEventKey,
+    rejectedPayload,
+  );
+
+  expect(approved.map((message) => message.receiveId).sort()).toEqual([
+    "ou_owner",
+    "ou_participant",
+    "ou_requester",
+  ]);
+  expect(approved.every((message) => message.title === "项目立项已通过")).toBe(
+    true,
+  );
+  expect(approved[0]?.cardText).toContain("同意立项");
+  expect(approved[0]?.cardText).toContain("项目参与人");
+  expect(approved[0]?.cardText).toContain("未开始");
+  expect(rejected).toHaveLength(1);
+  expect(rejected[0]?.receiveId).toBe("ou_requester");
+  expect(rejected[0]?.title).toBe("项目立项已驳回");
+  expect(rejected[0]?.cardText).toContain("目标不清晰");
 });
 
 test("项目取消通知只入队一次并发送完整取消内容", async () => {
@@ -269,17 +329,28 @@ async function enqueueAndDrainProgressNotification(
     expect(outboxes[0]?.payload).toContain("recipientOpenIds");
 
     const sentCount = await drainNotificationOutbox(10);
-    expect(sentCount).toBe(1);
+    expect(sentCount).toBe(notificationDeliveryDisabled ? 0 : 1);
 
     const stored = await prisma.notificationOutbox.findUniqueOrThrow({
       where: { eventKey },
       select: { status: true, attempts: true, lastError: true },
     });
-    expect(stored).toMatchObject({
-      status: "SENT",
-      attempts: 1,
-      lastError: "",
-    });
+    if (notificationDeliveryDisabled) {
+      expect(stored).toMatchObject({
+        status: "PENDING",
+        attempts: 0,
+        lastError: "",
+      });
+      await sendProgressNotification(payload, {
+        appOrigin: "http://127.0.0.1:3002",
+      });
+    } else {
+      expect(stored).toMatchObject({
+        status: "SENT",
+        attempts: 1,
+        lastError: "",
+      });
+    }
 
     return capturedMessages;
   } finally {

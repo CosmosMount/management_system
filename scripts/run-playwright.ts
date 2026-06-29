@@ -4,6 +4,7 @@ import path from "path";
 const env = { ...process.env };
 delete env.NO_COLOR;
 delete env.FORCE_COLOR;
+env.NOTIFICATION_DELIVERY_DISABLED = "true";
 
 const playwrightCli = path.join(
   process.cwd(),

@@ -4,6 +4,10 @@ import { AppHeader } from "@/components/app-header";
 import { LiveAutoRefresh } from "@/components/live-auto-refresh";
 import { NavCard } from "@/components/nav-card";
 import {
+  ProjectEstablishmentPanel,
+  type ProjectEstablishmentView,
+} from "@/components/progress/project-establishment-panel";
+import {
   MineScopeToggle,
   readMineSearchParam,
   withMine,
@@ -21,7 +25,8 @@ import {
 import { projectStatusLabels } from "@/lib/progress-labels";
 import { prisma } from "@/lib/prisma";
 import {
-  canCreateProject,
+  canRequestProjectEstablishment,
+  canReviewProjectEstablishment,
   progressProjectMineWhere,
   progressProjectReadableWhere,
   progressTaskMineWhere,
@@ -52,22 +57,34 @@ export default async function ProgressHomePage({ searchParams }: Props) {
     userOpenId ? getUserRoles(userOpenId) : Promise.resolve([]),
     getStageReminderDueSoonDays(),
   ]);
-  const showCreate = canCreateProject(roles);
+  const showCreate = canRequestProjectEstablishment(userOpenId);
 
-  const projects = await prisma.project.findMany({
-    where: {
-      AND: [
-        progressProjectReadableWhere(roles, userOpenId),
-        mine ? progressProjectMineWhere(userOpenId) : {},
-        { status: { notIn: ["COMPLETED", "CANCELED"] } },
-      ],
-    },
-    include: {
-      owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
-      stages: { orderBy: { sortOrder: "asc" } },
-    },
-    orderBy: { updatedAt: "desc" },
-  });
+  const [projects, establishmentViews] = await Promise.all([
+    prisma.project.findMany({
+      where: {
+        AND: [
+          progressProjectReadableWhere(roles, userOpenId),
+          mine ? progressProjectMineWhere(userOpenId) : {},
+          {
+            status: {
+              notIn: [
+                "ESTABLISHING",
+                "ESTABLISHMENT_REJECTED",
+                "COMPLETED",
+                "CANCELED",
+              ],
+            },
+          },
+        ],
+      },
+      include: {
+        owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        stages: { orderBy: { sortOrder: "asc" } },
+      },
+      orderBy: { updatedAt: "desc" },
+    }),
+    getProjectEstablishmentViews(roles, userOpenId),
+  ]);
   const visibleTaskCounts = await getVisibleTaskCounts(
     projects,
     roles,
@@ -109,8 +126,8 @@ export default async function ProgressHomePage({ searchParams }: Props) {
               <NavCard
                 variant="wide"
                 href={routes.progress.new}
-                title="新建项目"
-                description="创建项目并配置生命周期阶段"
+                title="提交立项"
+                description="提交项目计划，通过立项后再启动项目"
                 icon={Plus}
               />
             )}
@@ -136,6 +153,8 @@ export default async function ProgressHomePage({ searchParams }: Props) {
               icon={Archive}
             />
           </div>
+
+          <ProjectEstablishmentPanel projects={establishmentViews} />
 
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0">
@@ -194,6 +213,108 @@ export default async function ProgressHomePage({ searchParams }: Props) {
       </PageShell>
     </>
   );
+}
+
+async function getProjectEstablishmentViews(
+  roles: Awaited<ReturnType<typeof getUserRoles>>,
+  userOpenId?: string,
+): Promise<ProjectEstablishmentView[]> {
+  if (!userOpenId) return [];
+  const projects = await prisma.project.findMany({
+    where: {
+      OR: [
+        { requesterOpenId: userOpenId },
+        { status: "ESTABLISHING" },
+      ],
+      status: { in: ["ESTABLISHING", "ESTABLISHMENT_REJECTED"] },
+    },
+    include: {
+      owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      stages: { orderBy: { sortOrder: "asc" } },
+    },
+    orderBy: { createdAt: "desc" },
+    take: 80,
+  });
+  return projects
+    .map((project): ProjectEstablishmentView | null => {
+      const scope = {
+        team: project.team,
+        techGroup: project.techGroup,
+      };
+      const canReview =
+        project.status === "ESTABLISHING" &&
+        canReviewProjectEstablishment(roles, scope);
+      const isMine = project.requesterOpenId === userOpenId;
+      if (!canReview && !isMine) return null;
+
+      return {
+        id: project.id,
+        status:
+          project.status === "ESTABLISHMENT_REJECTED"
+            ? "ESTABLISHMENT_REJECTED"
+            : "ESTABLISHING",
+        requesterName: project.requesterName,
+        projectName: project.name,
+        team: scope.team,
+        techGroup: scope.techGroup,
+        ownerNames: project.owners.map((owner) => owner.name).join("、"),
+        participantNames: project.participants
+          .map((participant) => participant.name)
+          .join("、"),
+        stageCount: project.stages.length,
+        stages: project.stages.map((stage, index) => {
+          const previousDueAt = index > 0 ? project.stages[index - 1]?.dueAt : null;
+          return {
+            name: stage.name,
+            goal: stage.goal,
+            ownerName: stage.ownerName,
+            durationDays: getStageDurationDays(
+              project.submittedAt ?? project.createdAt,
+              previousDueAt,
+              stage.dueAt,
+            ),
+            duePreview: stage.dueAt ? formatDateTime(stage.dueAt) : "未设置",
+          };
+        }),
+        submittedAt: (project.submittedAt ?? project.createdAt).toISOString(),
+        reviewerName: project.reviewerName,
+        reviewComment: project.reviewComment,
+        reviewedAt: project.reviewedAt?.toISOString() ?? null,
+        canResubmit: project.status === "ESTABLISHMENT_REJECTED" && isMine,
+        canReview,
+      };
+    })
+    .filter((project): project is ProjectEstablishmentView => !!project)
+    .slice(0, 20);
+}
+
+function getStageDurationDays(
+  submittedAt: Date,
+  previousDueAt: Date | null | undefined,
+  dueAt: Date | null,
+) {
+  if (!dueAt) return 0;
+  const base = previousDueAt ?? submittedAt;
+  return Math.max(1, localDayNumber(dueAt) - localDayNumber(base));
+}
+
+function localDayNumber(date: Date): number {
+  return Math.floor(
+    new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime() /
+      86_400_000,
+  );
+}
+
+function formatDateTime(date: Date): string {
+  return date.toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
 }
 
 async function getVisibleTaskCounts(

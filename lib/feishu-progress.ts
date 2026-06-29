@@ -10,16 +10,46 @@ import { taskStatusLabels } from "@/lib/progress-labels";
 
 export type ProgressNotifyPayload =
   | {
-      type: "project_created";
+      type: "project_establishment_requested";
       projectId: string;
       projectName: string;
+      requesterName: string;
+      requesterOpenId: string;
+      team: string;
+      techGroup: string;
+      ownerNames: string;
+      participantNames?: string;
+      stageCount: number;
+      recipientOpenIds: string[];
+    }
+  | {
+      type: "project_establishment_approved";
+      projectId: string;
+      projectName: string;
+      requesterOpenId: string;
+      requesterName: string;
+      reviewerName: string;
+      comment: string;
       team: string;
       techGroup: string;
       ownerOpenIds: string[];
       ownerNames: string;
       participantOpenIds?: string[];
       participantNames?: string;
-      recipientOpenIds?: string[];
+      stageCount: number;
+      recipientOpenIds: string[];
+    }
+  | {
+      type: "project_establishment_rejected";
+      projectId: string;
+      projectName: string;
+      requesterOpenId: string;
+      requesterName: string;
+      reviewerName: string;
+      comment: string;
+      team: string;
+      techGroup: string;
+      recipientOpenIds: string[];
     }
   | {
       type: "project_started" | "project_completed" | "project_canceled";
@@ -605,23 +635,39 @@ export async function sendProgressNotification(
   const appOrigin = context?.appOrigin;
 
   switch (payload.type) {
-    case "project_created": {
+    case "project_establishment_requested": {
       const participantLine = `\n**参与人**：${payload.participantNames || "无"}`;
       const card = buildCard(
-        "新项目已创建",
-        `**项目**：${payload.projectName}\n**负责人**：${payload.ownerNames}${participantLine}\n**车组/技术组**：${formatScope(payload.team, payload.techGroup)}`,
-        buildAppUrl(`${routes.progress.project(payload.projectId)}`, appOrigin),
+        "项目立项待审批",
+        `**项目**：${payload.projectName}\n**申请人**：${payload.requesterName}\n**负责人**：${payload.ownerNames || "未设置"}${participantLine}\n**车组/技术组**：${formatScope(payload.team, payload.techGroup)}\n**阶段数量**：${payload.stageCount} 个`,
+        buildAppUrl(routes.progress.project(payload.projectId), appOrigin),
+        "orange",
       );
-      if (payload.recipientOpenIds) {
-        await notifyOpenIds(payload.recipientOpenIds, card);
-      } else {
-        await notifyOpenIdsAndRoles(
-          [...payload.ownerOpenIds, ...(payload.participantOpenIds ?? [])],
-          ["TEAM_ADMIN", "TECH_GROUP_ADMIN", "PROJECT_MANAGER", "SUPER_ADMIN"],
-          { team: payload.team, techGroup: payload.techGroup },
-          card,
-        );
-      }
+      await notifyOpenIds(payload.recipientOpenIds, card);
+      break;
+    }
+    case "project_establishment_approved": {
+      const participantLine = `\n**参与人**：${payload.participantNames || "无"}`;
+      const commentLine = payload.comment
+        ? `\n**审核意见**：${payload.comment}`
+        : "";
+      const card = buildCard(
+        "项目立项已通过",
+        `**项目**：${payload.projectName}\n**申请人**：${payload.requesterName}\n**审核人**：${payload.reviewerName}\n**负责人**：${payload.ownerNames || "未设置"}${participantLine}\n**车组/技术组**：${formatScope(payload.team, payload.techGroup)}\n**阶段数量**：${payload.stageCount} 个\n**当前状态**：未开始，可启动项目${commentLine}`,
+        buildAppUrl(routes.progress.project(payload.projectId), appOrigin),
+        "green",
+      );
+      await notifyOpenIds(payload.recipientOpenIds, card);
+      break;
+    }
+    case "project_establishment_rejected": {
+      const card = buildCard(
+        "项目立项已驳回",
+        `**项目**：${payload.projectName}\n**申请人**：${payload.requesterName}\n**审核人**：${payload.reviewerName}\n**车组/技术组**：${formatScope(payload.team, payload.techGroup)}\n**审核意见**：${payload.comment}`,
+        buildAppUrl(routes.progress.project(payload.projectId), appOrigin),
+        "red",
+      );
+      await notifyOpenIds(payload.recipientOpenIds ?? [payload.requesterOpenId], card);
       break;
     }
     case "project_started":
@@ -1280,6 +1326,7 @@ export async function runProgressOverdueCheck() {
       status: { in: ["TODO", "IN_PROGRESS", "PENDING_ACCEPTANCE"] },
       isOverdue: false,
       deletedAt: null,
+      project: { status: "IN_PROGRESS" },
     },
     include: { project: true, assignees: true },
   });
@@ -1310,6 +1357,7 @@ export async function runWeeklyReportReminders() {
       status: { in: ["TODO", "IN_PROGRESS", "PENDING_ACCEPTANCE"] },
       needsWeeklyReport: true,
       deletedAt: null,
+      project: { status: "IN_PROGRESS" },
     },
     include: { assignees: true },
   });
@@ -1331,6 +1379,7 @@ export async function runProgressDailyReminders() {
     where: {
       status: { in: ["TODO", "IN_PROGRESS", "PENDING_ACCEPTANCE"] },
       deletedAt: null,
+      project: { status: "IN_PROGRESS" },
     },
     include: {
       project: {
