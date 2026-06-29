@@ -52,6 +52,7 @@ import { updateTaskStatus } from "@/app/actions/progress/updateTask";
 import { BackLink } from "@/components/back-link";
 import { ReasonConfirmDialog } from "@/components/reason-confirm-dialog";
 import { ProjectForm } from "@/components/progress/project-form";
+import { RejectedProjectEstablishmentDeleteButton } from "@/components/progress/rejected-project-establishment-delete-button";
 import { ManualReminderButton } from "@/components/progress/manual-reminder-button";
 import { ArchivedProjectDeleteButton } from "@/components/admin-delete-actions";
 import { TaskForm } from "@/components/progress/task-form";
@@ -347,6 +348,9 @@ export function ProjectDetailWorkspace({
   const [taskRequestDialogOpen, setTaskRequestDialogOpen] = useState(false);
   const [taskImportDialogOpen, setTaskImportDialogOpen] = useState(false);
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
+  const canDeleteRejectedEstablishment =
+    project.status === "ESTABLISHMENT_REJECTED" &&
+    (isSuperAdmin || (!!userOpenId && project.requesterOpenId === userOpenId));
 
   const selectedStage =
     project.stages.find((stage) => stage.id === selectedStageId) ??
@@ -456,6 +460,7 @@ export function ProjectDetailWorkspace({
           !!userOpenId &&
           project.requesterOpenId === userOpenId
         }
+        canDeleteRejectedEstablishment={canDeleteRejectedEstablishment}
         canEdit={
           canManage &&
           (project.status === "NOT_STARTED" || project.status === "IN_PROGRESS")
@@ -666,6 +671,7 @@ function ProjectOverview({
   canUpdateLifecycle,
   canReviewEstablishment,
   canResubmitEstablishment,
+  canDeleteRejectedEstablishment,
   canEdit,
   canRemind,
   canImportTasks,
@@ -681,6 +687,7 @@ function ProjectOverview({
   canUpdateLifecycle: boolean;
   canReviewEstablishment: boolean;
   canResubmitEstablishment: boolean;
+  canDeleteRejectedEstablishment: boolean;
   canEdit: boolean;
   canRemind: boolean;
   canImportTasks: boolean;
@@ -803,6 +810,7 @@ function ProjectOverview({
           canUpdateLifecycle ||
           canReviewEstablishment ||
           canResubmitEstablishment ||
+          canDeleteRejectedEstablishment ||
           canRemind ||
           canImportTasks ||
           isSuperAdmin) && (
@@ -848,6 +856,14 @@ function ProjectOverview({
                 <Pencil className="h-4 w-4" />
                 修改后重提
               </Link>
+            )}
+            {canDeleteRejectedEstablishment && (
+              <RejectedProjectEstablishmentDeleteButton
+                projectId={project.id}
+                canDelete={canDeleteRejectedEstablishment}
+                className={projectHeaderActionButtonClassName}
+                redirectTo={routes.progress.root}
+              />
             )}
             {canEdit && (
               <Button

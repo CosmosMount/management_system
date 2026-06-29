@@ -10,6 +10,7 @@ import {
 import {
   canRequestProjectEstablishment,
   canReviewProjectEstablishment,
+  isProgressSuperAdmin,
 } from "@/lib/permissions-progress";
 import {
   collectProjectEstablishmentReviewRecipients,
@@ -436,6 +437,38 @@ export async function reviewProjectEstablishment(input: {
   drainNotificationOutboxSoon();
   revalidateProgress(project.id);
   return { success: true, projectId: updated.id };
+}
+
+export async function deleteRejectedProjectEstablishment(projectId: string) {
+  const session = await auth();
+  const user = await requireSessionUser(session?.user?.openId);
+  const roles = await getUserRoles(user.openId);
+
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    include: {
+      tasks: { select: { id: true }, take: 1 },
+    },
+  });
+  if (!project) {
+    throw new Error("立项项目不存在");
+  }
+  if (project.status !== "ESTABLISHMENT_REJECTED") {
+    throw new Error("仅可删除已驳回的立项项目");
+  }
+  if (
+    project.requesterOpenId !== user.openId &&
+    !isProgressSuperAdmin(roles)
+  ) {
+    throw new Error("无权限删除该立项项目");
+  }
+  if (project.tasks.length > 0) {
+    throw new Error("该项目已有任务，不能作为立项草案删除");
+  }
+
+  await prisma.project.delete({ where: { id: project.id } });
+  revalidateProgress(project.id);
+  return { success: true };
 }
 
 async function resolveProjectDraft(

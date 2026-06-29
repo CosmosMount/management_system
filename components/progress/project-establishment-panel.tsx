@@ -6,6 +6,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { CheckCircle2, Clock3, FileText, PencilLine, XCircle } from "lucide-react";
 import { reviewProjectEstablishment } from "@/app/actions/progress/createProject";
+import { RejectedProjectEstablishmentDeleteButton } from "@/components/progress/rejected-project-establishment-delete-button";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -50,11 +51,14 @@ export type ProjectEstablishmentView = {
   reviewedAt: string | null;
   canResubmit: boolean;
   canReview: boolean;
+  canDelete: boolean;
 };
 
 type Props = {
   projects: ProjectEstablishmentView[];
 };
+
+const establishmentActionButtonClassName = "h-8 min-w-24 gap-1.5 px-3 text-sm";
 
 export function ProjectEstablishmentPanel({ projects }: Props) {
   const router = useRouter();
@@ -146,7 +150,8 @@ export function ProjectEstablishmentPanel({ projects }: Props) {
                   <Button
                     type="button"
                     variant="outline"
-                    size="sm"
+                    size="default"
+                    className={establishmentActionButtonClassName}
                     onClick={() => setSelected(project)}
                   >
                     查看详情
@@ -156,31 +161,44 @@ export function ProjectEstablishmentPanel({ projects }: Props) {
                       href={`${routes.progress.new}?fromProject=${encodeURIComponent(
                         project.id,
                       )}`}
-                      className={buttonVariants({ variant: "outline", size: "sm" })}
+                      className={buttonVariants({
+                        variant: "outline",
+                        size: "default",
+                        className: establishmentActionButtonClassName,
+                      })}
                     >
-                      <PencilLine className="mr-1 h-4 w-4" />
+                      <PencilLine className="h-4 w-4" />
                       修改后重新提交
                     </Link>
+                  )}
+                  {project.status === "ESTABLISHMENT_REJECTED" && (
+                    <RejectedProjectEstablishmentDeleteButton
+                      projectId={project.id}
+                      canDelete={project.canDelete}
+                      className={establishmentActionButtonClassName}
+                    />
                   )}
                   {project.canReview && project.status === "ESTABLISHING" && (
                     <>
                       <Button
                         type="button"
-                        size="sm"
+                        size="default"
+                        className={establishmentActionButtonClassName}
                         onClick={() => handleReview(project, "APPROVED")}
                         disabled={loadingId !== null}
                       >
-                        <CheckCircle2 className="mr-1 h-4 w-4" />
+                        <CheckCircle2 className="h-4 w-4" />
                         通过立项
                       </Button>
                       <Button
                         type="button"
                         variant="destructive"
-                        size="sm"
+                        size="default"
+                        className={establishmentActionButtonClassName}
                         onClick={() => handleReview(project, "REJECTED")}
                         disabled={loadingId !== null}
                       >
-                        <XCircle className="mr-1 h-4 w-4" />
+                        <XCircle className="h-4 w-4" />
                         驳回立项
                       </Button>
                     </>

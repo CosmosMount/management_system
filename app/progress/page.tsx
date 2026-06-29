@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { Prisma } from "@prisma/client";
 import { FolderKanban, LayoutDashboard, Plus, Archive } from "lucide-react";
 import { AppHeader } from "@/components/app-header";
 import { LiveAutoRefresh } from "@/components/live-auto-refresh";
@@ -27,6 +28,7 @@ import { prisma } from "@/lib/prisma";
 import {
   canRequestProjectEstablishment,
   canReviewProjectEstablishment,
+  isProgressSuperAdmin,
   progressProjectMineWhere,
   progressProjectReadableWhere,
   progressTaskMineWhere,
@@ -220,12 +222,17 @@ async function getProjectEstablishmentViews(
   userOpenId?: string,
 ): Promise<ProjectEstablishmentView[]> {
   if (!userOpenId) return [];
+  const canViewRejectedDrafts = isProgressSuperAdmin(roles);
+  const visibilityWhere: Prisma.ProjectWhereInput[] = [
+    { requesterOpenId: userOpenId },
+    { status: "ESTABLISHING" },
+  ];
+  if (canViewRejectedDrafts) {
+    visibilityWhere.push({ status: "ESTABLISHMENT_REJECTED" });
+  }
   const projects = await prisma.project.findMany({
     where: {
-      OR: [
-        { requesterOpenId: userOpenId },
-        { status: "ESTABLISHING" },
-      ],
+      OR: visibilityWhere,
       status: { in: ["ESTABLISHING", "ESTABLISHMENT_REJECTED"] },
     },
     include: {
@@ -246,7 +253,10 @@ async function getProjectEstablishmentViews(
         project.status === "ESTABLISHING" &&
         canReviewProjectEstablishment(roles, scope);
       const isMine = project.requesterOpenId === userOpenId;
-      if (!canReview && !isMine) return null;
+      const canDelete =
+        project.status === "ESTABLISHMENT_REJECTED" &&
+        (isMine || isProgressSuperAdmin(roles));
+      if (!canReview && !isMine && !canDelete) return null;
 
       return {
         id: project.id,
@@ -283,6 +293,7 @@ async function getProjectEstablishmentViews(
         reviewedAt: project.reviewedAt?.toISOString() ?? null,
         canResubmit: project.status === "ESTABLISHMENT_REJECTED" && isMine,
         canReview,
+        canDelete,
       };
     })
     .filter((project): project is ProjectEstablishmentView => !!project)

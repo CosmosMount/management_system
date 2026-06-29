@@ -1936,6 +1936,7 @@ test("立项被驳回后可基于原项目修改并重新提交", async ({
   await expect(
     page.getByText("审核意见：补充阶段计划后重新提交"),
   ).toBeVisible();
+  await expect(page.getByRole("button", { name: "删除立项" })).toBeVisible();
   await page.goto("/progress", { waitUntil: "networkidle" });
   await rejectedCard.getByRole("link", { name: "修改后重新提交" }).click();
   await expect(page).toHaveURL(new RegExp(`/progress/new\\?fromProject=${sourceProjectId}`));
@@ -2021,6 +2022,70 @@ test("立项被驳回后可基于原项目修改并重新提交", async ({
       firstStageDueHour: 18,
     });
   await page.goto("/progress", { waitUntil: "networkidle" });
+  await expectHealthyPage(page);
+});
+
+test("被驳回立项可由申请人在审批面板删除", async ({
+  page,
+  context,
+  browser,
+  baseURL,
+}) => {
+  await loginAsNormalUser(context, baseURL, normalAuth);
+  const projectName = `PW全功能-删除驳回立项-${Date.now()}`;
+  await page.goto("/progress/new", { waitUntil: "networkidle" });
+  await page.getByText("项目名称").locator("xpath=following::input[1]").fill(projectName);
+  await selectUserFromSearch(page, "搜索项目负责人", "李棋轩");
+  await page.getByText("车组").locator("xpath=following::button[1]").click();
+  await page.getByRole("option", { name: "英雄" }).click();
+  await page.getByText("技术组", { exact: true }).locator("xpath=following::button[1]").click();
+  await page.getByRole("option", { name: "电控" }).click();
+  await page.getByRole("button", { name: "提交立项" }).click();
+  await expect(page).toHaveURL(/\/progress$/);
+
+  const project = await prisma.project.findFirstOrThrow({
+    where: { name: projectName },
+    select: { id: true },
+  });
+
+  const adminContext = await browser.newContext();
+  const adminPage = await adminContext.newPage();
+  try {
+    await loginAsAdminUser(adminContext, baseURL);
+    await adminPage.goto("/progress", { waitUntil: "networkidle" });
+    const adminRequestCard = adminPage.locator("li").filter({ hasText: projectName });
+    await adminRequestCard
+      .getByPlaceholder("审核意见；驳回时必填")
+      .fill("不予立项，可删除草案");
+    await adminRequestCard.getByRole("button", { name: "驳回立项" }).click();
+    await expect
+      .poll(async () => {
+        const record = await prisma.project.findUnique({
+          where: { id: project.id },
+          select: { status: true },
+        });
+        return record?.status ?? null;
+      })
+      .toBe("ESTABLISHMENT_REJECTED");
+  } finally {
+    await adminContext.close();
+  }
+
+  await page.goto("/progress", { waitUntil: "networkidle" });
+  const rejectedCard = page.locator("li").filter({ hasText: projectName });
+  await expect(rejectedCard.getByRole("button", { name: "删除立项" })).toBeVisible();
+  await rejectedCard.getByRole("button", { name: "删除立项" }).click();
+  await expect(page.getByRole("dialog", { name: "删除被驳回立项" })).toBeVisible();
+  await page.getByRole("button", { name: "确认删除" }).click();
+  await expect
+    .poll(async () =>
+      prisma.project.findUnique({
+        where: { id: project.id },
+        select: { id: true },
+      }),
+    )
+    .toBeNull();
+  await expect(page.getByText(projectName)).toHaveCount(0);
   await expectHealthyPage(page);
 });
 

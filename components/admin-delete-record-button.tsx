@@ -23,6 +23,7 @@ type Props = {
   redirectTo?: string;
   size?: "sm" | "default";
   triggerLabel?: string;
+  className?: string;
 };
 
 export function AdminDeleteRecordButton({
@@ -33,6 +34,7 @@ export function AdminDeleteRecordButton({
   redirectTo,
   size = "sm",
   triggerLabel = "删除",
+  className,
 }: Props) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -60,7 +62,7 @@ export function AdminDeleteRecordButton({
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger
         render={
-          <Button type="button" variant="destructive" size={size}>
+          <Button type="button" variant="destructive" size={size} className={className}>
             <Trash2 className="h-4 w-4" />
             {triggerLabel}
           </Button>
