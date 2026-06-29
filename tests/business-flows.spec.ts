@@ -6,6 +6,7 @@ import {
   formatPrismaError,
   loginAsAdminUser,
   loginAsNormalUser,
+  loginAsOtherUser,
   prepareFunctionalFixtures,
   resolveNormalAuthMaterial,
   type FunctionalFixtureIds,
@@ -873,11 +874,13 @@ test("项目阶段延期申请可由 UI 提交并审批通过", async ({
   await page
     .getByText("阶段 1：PW全功能-当前阶段")
     .locator("xpath=ancestor::*[contains(@class,'rounded')][1]")
-    .getByRole("button", { name: "申请延期" })
+    .getByRole("button", { name: "申请批量延期/提前" })
     .click();
+  const dialog = page.getByRole("dialog", { name: "申请批量延期/提前" });
+  await expect(dialog).toBeVisible();
   await page.locator("#stage-extension-reason").fill(reason);
   await page.locator("#stage-extension-duration").fill("2");
-  await page.getByRole("button", { name: "提交延期申请" }).click();
+  await page.getByRole("button", { name: "提交批量调整申请" }).click();
 
   await expect
     .poll(async () => {
@@ -897,7 +900,6 @@ test("项目阶段延期申请可由 UI 提交并审批通过", async ({
     where: { projectId: fixtures.projectId, reason },
     select: { id: true },
   });
-
   const adminContext = await browser.newContext();
   await loginAsAdminUser(adminContext, baseURL);
   const adminPage = await adminContext.newPage();
@@ -919,7 +921,7 @@ test("项目阶段延期申请可由 UI 提交并审批通过", async ({
 
   await expect
     .poll(async () => {
-      const [updatedCurrentStage, updatedNextStage, updatedRequest] =
+      const [updatedCurrentStage, updatedNextStage, updatedRequest, outbox] =
         await Promise.all([
           prisma.projectStage.findUniqueOrThrow({
             where: { id: currentStage.id },
@@ -932,6 +934,14 @@ test("项目阶段延期申请可由 UI 提交并审批通过", async ({
           prisma.projectDdlChangeRequest.findUniqueOrThrow({
             where: { id: request.id },
             select: { status: true, reviewerOpenId: true, finalIsBenign: true },
+          }),
+          prisma.notificationOutbox.findFirst({
+            where: {
+              eventKey: {
+                startsWith: `progress:project_stage_batch_due_change_approved:${request.id}`,
+              },
+            },
+            select: { payload: true },
           }),
         ]);
       return {
@@ -948,6 +958,7 @@ test("项目阶段延期申请可由 UI 提交并审批通过", async ({
         nextExtensionCount: updatedNextStage.extensionCount,
         currentBenignCount: updatedCurrentStage.benignExtensionCount,
         nextBenignCount: updatedNextStage.benignExtensionCount,
+        outboxPayload: outbox?.payload ?? "",
       };
     })
     .toEqual({
@@ -960,7 +971,275 @@ test("项目阶段延期申请可由 UI 提交并审批通过", async ({
       nextExtensionCount: nextStage.extensionCount + 1,
       currentBenignCount: 1,
       nextBenignCount: 1,
+      outboxPayload: expect.stringContaining("project_stage_batch_due_change_approved"),
     });
+  await expectHealthyPage(page);
+});
+
+test("项目阶段批量提前申请可由 UI 提交并审批通过", async ({
+  page,
+  context,
+  browser,
+  baseURL,
+}) => {
+  const beforeStages = await prisma.projectStage.findMany({
+    where: { projectId: fixtures.projectId },
+    orderBy: { sortOrder: "asc" },
+    select: { id: true, dueAt: true, extensionCount: true, benignExtensionCount: true },
+  });
+  const [currentStage, nextStage] = beforeStages;
+  if (!currentStage?.dueAt || !nextStage?.dueAt) {
+    throw new Error("项目阶段提前测试缺少带 DDL 的 fixture 阶段");
+  }
+
+  await loginAsNormalUser(context, baseURL, normalAuth);
+  const reason = `PW全功能-阶段提前-${Date.now()}`;
+  await page.goto(`/progress/${fixtures.projectId}`, {
+    waitUntil: "networkidle",
+  });
+  await page
+    .getByText("阶段 1：PW全功能-当前阶段")
+    .locator("xpath=ancestor::*[contains(@class,'rounded')][1]")
+    .getByRole("button", { name: "申请批量延期/提前" })
+    .click();
+  const dialog = page.getByRole("dialog", { name: "申请批量延期/提前" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByLabel("调整类型").click();
+  await page.getByRole("option", { name: "提前" }).click();
+  await page.locator("#stage-extension-reason").fill(reason);
+  await page.locator("#stage-extension-duration").fill("1");
+  await page.getByRole("button", { name: "提交批量调整申请" }).click();
+
+  await expect
+    .poll(async () => {
+      const request = await prisma.projectDdlChangeRequest.findFirst({
+        where: {
+          projectId: fixtures.projectId,
+          reason,
+          status: "PENDING",
+          type: "CASCADE_EXTENSION",
+          durationDays: -1,
+        },
+        select: { id: true },
+      });
+      return request?.id ?? "";
+    })
+    .not.toBe("");
+  const request = await prisma.projectDdlChangeRequest.findFirstOrThrow({
+    where: { projectId: fixtures.projectId, reason },
+    select: { id: true },
+  });
+  const adminContext = await browser.newContext();
+  await loginAsAdminUser(adminContext, baseURL);
+  const adminPage = await adminContext.newPage();
+  try {
+    await adminPage.goto(`/progress/${fixtures.projectId}`, {
+      waitUntil: "networkidle",
+    });
+    await expect(adminPage.getByText(reason).first()).toBeVisible();
+    await adminPage
+      .getByPlaceholder("审批意见（通过和驳回都必填）")
+      .fill("PW全功能-同意阶段提前");
+    await adminPage
+      .getByPlaceholder("审批意见（通过和驳回都必填）")
+      .locator("xpath=following::button[normalize-space(.)='通过'][1]")
+      .click();
+  } finally {
+    await adminContext.close();
+  }
+
+  await expect
+    .poll(async () => {
+      const [updatedCurrentStage, updatedNextStage, updatedRequest, outbox] =
+        await Promise.all([
+          prisma.projectStage.findUniqueOrThrow({
+            where: { id: currentStage.id },
+            select: { dueAt: true, extensionCount: true, benignExtensionCount: true },
+          }),
+          prisma.projectStage.findUniqueOrThrow({
+            where: { id: nextStage.id },
+            select: { dueAt: true, extensionCount: true, benignExtensionCount: true },
+          }),
+          prisma.projectDdlChangeRequest.findUniqueOrThrow({
+            where: { id: request.id },
+            select: { status: true, reviewerOpenId: true, finalIsBenign: true },
+          }),
+          prisma.notificationOutbox.findFirst({
+            where: {
+              eventKey: {
+                startsWith: `progress:project_stage_batch_due_change_approved:${request.id}`,
+              },
+            },
+            select: { payload: true },
+          }),
+        ]);
+      return {
+        status: updatedRequest.status,
+        reviewerOpenId: updatedRequest.reviewerOpenId,
+        finalIsBenign: updatedRequest.finalIsBenign,
+        currentDueAt: updatedCurrentStage.dueAt
+          ? formatDateOnly(updatedCurrentStage.dueAt)
+          : "",
+        nextDueAt: updatedNextStage.dueAt
+          ? formatDateOnly(updatedNextStage.dueAt)
+          : "",
+        currentExtensionCount: updatedCurrentStage.extensionCount,
+        nextExtensionCount: updatedNextStage.extensionCount,
+        currentBenignCount: updatedCurrentStage.benignExtensionCount,
+        nextBenignCount: updatedNextStage.benignExtensionCount,
+        outboxPayload: outbox?.payload ?? "",
+      };
+    })
+    .toEqual({
+      status: "APPROVED",
+      reviewerOpenId: fixtures.adminOpenId,
+      finalIsBenign: null,
+      currentDueAt: formatDateOnly(addDays(currentStage.dueAt, -1)),
+      nextDueAt: formatDateOnly(addDays(nextStage.dueAt, -1)),
+      currentExtensionCount: currentStage.extensionCount,
+      nextExtensionCount: nextStage.extensionCount,
+      currentBenignCount: currentStage.benignExtensionCount,
+      nextBenignCount: nextStage.benignExtensionCount,
+      outboxPayload: expect.stringContaining("\"durationDays\":-1"),
+    });
+  await page.reload({ waitUntil: "networkidle" });
+  await expect(page.getByText("提前 1 次", { exact: true })).toBeVisible();
+  await expectHealthyPage(page);
+});
+
+test("项目阶段批量延期只影响所选阶段及后续阶段", async ({
+  page,
+  context,
+  browser,
+  baseURL,
+}) => {
+  const beforeStages = await prisma.projectStage.findMany({
+    where: { projectId: fixtures.projectId },
+    orderBy: { sortOrder: "asc" },
+    select: { id: true, dueAt: true, extensionCount: true },
+  });
+  const [previousStage, selectedStage, followingStage] = beforeStages;
+  if (!previousStage?.dueAt || !selectedStage?.dueAt || !followingStage?.dueAt) {
+    throw new Error("批量 DDL 范围测试缺少三段带 DDL 的 fixture 阶段");
+  }
+
+  await loginAsNormalUser(context, baseURL, normalAuth);
+  const reason = `PW全功能-阶段范围延期-${Date.now()}`;
+  await page.goto(`/progress/${fixtures.projectId}`, {
+    waitUntil: "networkidle",
+  });
+  await page
+    .getByRole("button", { name: /2 PW全功能-后续阶段/ })
+    .click();
+  await expect(page.getByText("阶段 2：PW全功能-后续阶段")).toBeVisible();
+  await page
+    .getByText("阶段 2：PW全功能-后续阶段")
+    .locator("xpath=ancestor::*[contains(@class,'rounded')][1]")
+    .getByRole("button", { name: "申请批量延期/提前" })
+    .click();
+  const dialog = page.getByRole("dialog", { name: "申请批量延期/提前" });
+  await expect(dialog).toBeVisible();
+  await page.locator("#stage-extension-reason").fill(reason);
+  await page.locator("#stage-extension-duration").fill("3");
+  await page.getByRole("button", { name: "提交批量调整申请" }).click();
+
+  await expect
+    .poll(async () => {
+      const request = await prisma.projectDdlChangeRequest.findFirst({
+        where: {
+          projectId: fixtures.projectId,
+          stageId: selectedStage.id,
+          reason,
+          status: "PENDING",
+          type: "CASCADE_EXTENSION",
+          durationDays: 3,
+        },
+        select: { id: true },
+      });
+      return request?.id ?? "";
+    })
+    .not.toBe("");
+  const adminContext = await browser.newContext();
+  await loginAsAdminUser(adminContext, baseURL);
+  const adminPage = await adminContext.newPage();
+  try {
+    await adminPage.goto(`/progress/${fixtures.projectId}`, {
+      waitUntil: "networkidle",
+    });
+    await adminPage
+      .getByRole("button", { name: /2 PW全功能-后续阶段/ })
+      .click();
+    await expect(
+      adminPage.getByText("阶段 2：PW全功能-后续阶段"),
+    ).toBeVisible();
+    await expect(adminPage.getByText(reason).first()).toBeVisible();
+    await adminPage
+      .getByPlaceholder("审批意见（通过和驳回都必填）")
+      .fill("PW全功能-同意范围延期");
+    await adminPage
+      .getByPlaceholder("审批意见（通过和驳回都必填）")
+      .locator("xpath=following::button[normalize-space(.)='通过'][1]")
+      .click();
+  } finally {
+    await adminContext.close();
+  }
+
+  await expect
+    .poll(async () => {
+      const [updatedPreviousStage, updatedSelectedStage, updatedFollowingStage] =
+        await Promise.all([
+          prisma.projectStage.findUniqueOrThrow({
+            where: { id: previousStage.id },
+            select: { dueAt: true, extensionCount: true },
+          }),
+          prisma.projectStage.findUniqueOrThrow({
+            where: { id: selectedStage.id },
+            select: { dueAt: true, extensionCount: true },
+          }),
+          prisma.projectStage.findUniqueOrThrow({
+            where: { id: followingStage.id },
+            select: { dueAt: true, extensionCount: true },
+          }),
+        ]);
+      return {
+        previousDueAt: updatedPreviousStage.dueAt
+          ? formatDateOnly(updatedPreviousStage.dueAt)
+          : "",
+        selectedDueAt: updatedSelectedStage.dueAt
+          ? formatDateOnly(updatedSelectedStage.dueAt)
+          : "",
+        followingDueAt: updatedFollowingStage.dueAt
+          ? formatDateOnly(updatedFollowingStage.dueAt)
+          : "",
+        previousExtensionCount: updatedPreviousStage.extensionCount,
+        selectedExtensionCount: updatedSelectedStage.extensionCount,
+        followingExtensionCount: updatedFollowingStage.extensionCount,
+      };
+    })
+    .toEqual({
+      previousDueAt: formatDateOnly(previousStage.dueAt),
+      selectedDueAt: formatDateOnly(addDays(selectedStage.dueAt, 3)),
+      followingDueAt: formatDateOnly(addDays(followingStage.dueAt, 3)),
+      previousExtensionCount: previousStage.extensionCount,
+      selectedExtensionCount: selectedStage.extensionCount + 1,
+      followingExtensionCount: followingStage.extensionCount + 1,
+    });
+  await expectHealthyPage(page);
+});
+
+test("无关用户不能在项目详情申请批量 DDL 调整", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  await loginAsOtherUser(context, baseURL);
+  await page.goto(`/progress/${fixtures.projectId}`, {
+    waitUntil: "networkidle",
+  });
+  await expect(page.getByText("PW全功能-逾期项目")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "申请批量延期/提前" }),
+  ).toHaveCount(0);
   await expectHealthyPage(page);
 });
 

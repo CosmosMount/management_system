@@ -156,6 +156,10 @@ export async function prepareFunctionalFixtures(
     },
   });
 
+  await prisma.userRole.deleteMany({
+    where: { openId: { in: [normalOpenId, FALLBACK_OTHER_OPEN_ID] } },
+  });
+
   await prisma.userRole.createMany({
     data: [
       { openId: adminOpenId, role: UserRoleType.SUPER_ADMIN },
@@ -351,6 +355,19 @@ export async function prepareFunctionalFixtures(
       ownerOpenId: normalOpenId,
       ownerName: FALLBACK_NORMAL_NAME,
       dueAt: nextWeek,
+    },
+  });
+
+  await prisma.projectStage.create({
+    data: {
+      projectId: project.id,
+      name: `${TEST_PREFIX}-第三阶段`,
+      goal: "验证批量 DDL 调整范围",
+      sortOrder: 2,
+      status: StageStatus.NOT_STARTED,
+      ownerOpenId: normalOpenId,
+      ownerName: FALLBACK_NORMAL_NAME,
+      dueAt: addDays(nextWeek, 7),
     },
   });
 

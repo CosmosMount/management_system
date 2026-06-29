@@ -38,10 +38,10 @@ import {
   submitStageEvidence,
 } from "@/app/actions/progress/projectStages";
 import {
+  requestProjectStageBatchDdlChange,
   requestProjectStageDueDateChange,
-  requestProjectStageExtension,
+  reviewProjectStageBatchDdlChangeRequest,
   reviewProjectStageDueDateChangeRequest,
-  reviewProjectStageExtensionRequest,
 } from "@/app/actions/progress/projectDdlChanges";
 import { loadMoreProjectActivityLogs } from "@/app/actions/progress/activityLogs";
 import { reviewTaskCreationRequest } from "@/app/actions/progress/requestTaskCreation";
@@ -134,6 +134,7 @@ export type StageView = {
   ownerName: string;
   dueAt: string | null;
   extensionCount: number;
+  advanceCount: number;
   benignExtensionCount: number;
   currentSubmissionId: string | null;
   canSubmit: boolean;
@@ -297,7 +298,7 @@ const activityFilters: Array<{ value: ActivityFilter; label: string }> = [
 ];
 
 const ddlChangeTypeLabels: Record<ProjectDdlChangeRequestType, string> = {
-  CASCADE_EXTENSION: "级联延期",
+  CASCADE_EXTENSION: "批量 DDL 调整",
   SINGLE_STAGE_ADJUSTMENT: "单阶段 DDL 修改",
 };
 
@@ -1021,6 +1022,9 @@ function StageTimeline({
                     延期 {stage.extensionCount}
                   </Badge>
                   <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
+                    提前 {stage.advanceCount}
+                  </Badge>
+                  <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
                     良性 {stage.benignExtensionCount}
                   </Badge>
                 </span>
@@ -1152,12 +1156,13 @@ function StageDetailPanel({
                 DDL {stage.dueAt ? formatDateTime(stage.dueAt) : "未设置"}
               </Badge>
               <Badge variant="outline">延期 {stage.extensionCount} 次</Badge>
+              <Badge variant="outline">提前 {stage.advanceCount} 次</Badge>
               <Badge variant="outline">良性 {stage.benignExtensionCount} 次</Badge>
             </div>
           </div>
           <div className="flex flex-wrap justify-end gap-2">
             {stage.canRequestExtension && stage.dueAt && (
-              <ProjectStageExtensionDialog
+              <ProjectStageBatchDdlChangeDialog
                 projectId={projectId}
                 stage={stage}
                 stages={stages}
@@ -1344,7 +1349,7 @@ function StageDetailPanel({
   );
 }
 
-function ProjectStageExtensionDialog({
+function ProjectStageBatchDdlChangeDialog({
   projectId,
   stage,
   stages,
@@ -1355,6 +1360,7 @@ function ProjectStageExtensionDialog({
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
+  const [direction, setDirection] = useState<"DELAY" | "ADVANCE">("DELAY");
   const [reason, setReason] = useState("");
   const [durationDays, setDurationDays] = useState("");
   const [isBenign, setIsBenign] = useState("true");
@@ -1369,6 +1375,8 @@ function ProjectStageExtensionDialog({
     Number.isInteger(parsedDurationDays) &&
     parsedDurationDays >= 1 &&
     parsedDurationDays <= 365;
+  const signedDurationDays =
+    direction === "DELAY" ? parsedDurationDays : -parsedDurationDays;
   const affectedStages = stages.filter(
     (item) => item.sortOrder >= stage.sortOrder,
   );
@@ -1378,7 +1386,9 @@ function ProjectStageExtensionDialog({
         new Map(
           affectedStages.map((item) => [
             item.id,
-            item.dueAt ? addDaysToIso(item.dueAt, parsedDurationDays) : null,
+            item.dueAt && durationIsValid
+              ? addDaysToIso(item.dueAt, signedDurationDays)
+              : null,
           ]),
         ),
       )
@@ -1386,33 +1396,37 @@ function ProjectStageExtensionDialog({
 
   async function handleSubmit() {
     const nextErrors: typeof errors = {};
-    if (!reason.trim()) nextErrors.reason = "请填写延期原因";
-    if (!durationIsValid) nextErrors.durationDays = "延期时长需为 1-365 天";
+    if (!reason.trim()) nextErrors.reason = "请填写调整原因";
+    if (!durationIsValid) nextErrors.durationDays = "调整时长需为 1-365 天";
     if (ddlOrderError) nextErrors.ddlOrder = ddlOrderError;
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) {
-      toast.error("请完善延期申请信息");
+      toast.error("请完善批量 DDL 调整申请信息");
       return;
     }
 
     setLoading(true);
     try {
-      await requestProjectStageExtension({
+      await requestProjectStageBatchDdlChange({
         projectId,
         stageId: stage.id,
+        direction,
         reason: reason.trim(),
         durationDays: parsedDurationDays,
-        isBenign: isBenign === "true",
+        isBenign: direction === "DELAY" && isBenign === "true",
       });
-      toast.success("延期申请已提交");
+      toast.success(
+        direction === "DELAY" ? "批量延期申请已提交" : "批量提前申请已提交",
+      );
       setOpen(false);
+      setDirection("DELAY");
       setReason("");
       setDurationDays("");
       setIsBenign("true");
       setErrors({});
       router.refresh();
     } catch (err) {
-      toast.error(getActionErrorMessage(err, "提交延期申请失败"));
+      toast.error(getActionErrorMessage(err, "提交批量 DDL 调整申请失败"));
     } finally {
       setLoading(false);
     }
@@ -1421,23 +1435,45 @@ function ProjectStageExtensionDialog({
   return (
     <>
       <Button type="button" size="sm" variant="outline" onClick={() => setOpen(true)}>
-        申请延期
+        申请批量延期/提前
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[680px]">
           <DialogHeader>
-            <DialogTitle>申请阶段延期</DialogTitle>
+            <DialogTitle>申请批量延期/提前</DialogTitle>
             <DialogDescription>
-              通过后会顺延该阶段及后续阶段的 DDL。
+              通过后会按当前阶段及后续阶段一起调整 DDL。
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4">
             <div className="grid gap-2">
-              <Label htmlFor="stage-extension-stage">延期阶段</Label>
+              <Label htmlFor="stage-extension-stage">调整起始阶段</Label>
               <Input id="stage-extension-stage" value={stage.name} readOnly />
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="stage-extension-reason">延期原因</Label>
+              <Label htmlFor="stage-adjust-direction">调整类型</Label>
+              <Select
+                value={direction}
+                onValueChange={(value) => {
+                  setDirection(value === "ADVANCE" ? "ADVANCE" : "DELAY");
+                  if (errors.ddlOrder) {
+                    setErrors((prev) => ({ ...prev, ddlOrder: "" }));
+                  }
+                }}
+              >
+                <SelectTrigger id="stage-adjust-direction">
+                  <SelectValue>
+                    {direction === "DELAY" ? "延期" : "提前"}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="DELAY">延期</SelectItem>
+                  <SelectItem value="ADVANCE">提前</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="stage-extension-reason">调整原因</Label>
               <Textarea
                 id="stage-extension-reason"
                 value={reason}
@@ -1454,7 +1490,7 @@ function ProjectStageExtensionDialog({
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
               <div className="grid gap-2">
-                <Label htmlFor="stage-extension-duration">延期时长（天）</Label>
+                <Label htmlFor="stage-extension-duration">调整时长（天）</Label>
                 <Input
                   id="stage-extension-duration"
                   type="number"
@@ -1478,30 +1514,39 @@ function ProjectStageExtensionDialog({
                   </p>
                 )}
               </div>
-              <div className="grid gap-2">
-                <Label>延期是否良性</Label>
-                <Select
-                  value={isBenign}
-                  onValueChange={(value) => setIsBenign(value ?? "false")}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="true">良性延期</SelectItem>
-                    <SelectItem value="false">非良性延期</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+              {direction === "DELAY" && (
+                <div className="grid gap-2">
+                  <Label>延期是否良性</Label>
+                  <Select
+                    value={isBenign}
+                    onValueChange={(value) => setIsBenign(value ?? "false")}
+                  >
+                    <SelectTrigger>
+                      <SelectValue>
+                        {isBenign === "true" ? "良性延期" : "非良性延期"}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="true">良性延期</SelectItem>
+                      <SelectItem value="false">非良性延期</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
             </div>
             <div className="rounded-md border bg-muted/30 p-3 text-sm">
               <p className="font-medium">影响预览</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                当前阶段及后续阶段会一起
+                {direction === "DELAY" ? "延期" : "提前"}
+                {durationIsValid ? ` ${parsedDurationDays} 天` : ""}。
+              </p>
               <div className="mt-2 space-y-1 text-muted-foreground">
                 {affectedStages.map((item) => (
                   <p key={item.id}>
                     {item.name}：{item.dueAt ? formatDateTime(item.dueAt) : "未设置"}{" "}
                     {durationIsValid && item.dueAt
-                      ? `-> ${formatDateTime(addDaysToIso(item.dueAt, parsedDurationDays))}`
+                      ? `-> ${formatDateTime(addDaysToIso(item.dueAt, signedDurationDays))}`
                       : ""}
                   </p>
                 ))}
@@ -1523,7 +1568,7 @@ function ProjectStageExtensionDialog({
               取消
             </Button>
             <Button type="button" disabled={loading} onClick={handleSubmit}>
-              {loading ? "提交中..." : "提交延期申请"}
+              {loading ? "提交中..." : "提交批量调整申请"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1700,7 +1745,7 @@ function PendingDdlChangeRequestCard({
     setLoadingDecision(decision);
     try {
       if (request.type === "CASCADE_EXTENSION") {
-        await reviewProjectStageExtensionRequest({
+        await reviewProjectStageBatchDdlChangeRequest({
           requestId: request.id,
           decision,
           comment: comment.trim(),
@@ -1736,8 +1781,10 @@ function PendingDdlChangeRequestCard({
       <div className="mt-2 grid gap-2 text-muted-foreground sm:grid-cols-2">
         <p>原 DDL：{formatNullableDateTime(request.oldDueAt)}</p>
         <p>新 DDL：{formatNullableDateTime(request.newDueAt)}</p>
-        {request.durationDays ? <p>延期：{request.durationDays} 天</p> : null}
-        {request.requestedIsBenign !== null ? (
+        {request.durationDays ? (
+          <p>调整：{formatDdlAdjustment(request.durationDays)}</p>
+        ) : null}
+        {isBatchDdlDelay(request) && request.requestedIsBenign !== null ? (
           <p>申请良性：{request.requestedIsBenign ? "是" : "否"}</p>
         ) : null}
       </div>
@@ -1746,7 +1793,7 @@ function PendingDdlChangeRequestCard({
       </p>
       {request.canReview ? (
         <div className="mt-3 grid gap-2">
-          {request.type === "CASCADE_EXTENSION" && (
+          {isBatchDdlDelay(request) && (
             <div className="grid gap-2 sm:max-w-48">
               <Label>最终是否良性</Label>
               <Select
@@ -1754,7 +1801,9 @@ function PendingDdlChangeRequestCard({
                 onValueChange={(value) => setFinalIsBenign(value ?? "false")}
               >
                 <SelectTrigger>
-                  <SelectValue />
+                  <SelectValue>
+                    {finalIsBenign === "true" ? "良性延期" : "非良性延期"}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="true">良性延期</SelectItem>
@@ -1847,15 +1896,19 @@ function ProjectDdlChangeHistoryPanel({
                   <p>原 DDL：{formatNullableDateTime(request.oldDueAt)}</p>
                   <p>新 DDL：{formatNullableDateTime(request.newDueAt)}</p>
                   <p>
-                    延期：
-                    {request.durationDays ? `${request.durationDays} 天` : "不适用"}
+                    调整：
+                    {request.durationDays
+                      ? formatDdlAdjustment(request.durationDays)
+                      : "不适用"}
                   </p>
                   <p>
                     良性：
-                    {formatBenignFlag(
-                      request.finalIsBenign,
-                      request.requestedIsBenign,
-                    )}
+                    {isBatchDdlDelay(request)
+                      ? formatBenignFlag(
+                          request.finalIsBenign,
+                          request.requestedIsBenign,
+                        )
+                      : "不适用"}
                   </p>
                 </div>
                 <p className="mt-2 text-muted-foreground">原因：{request.reason}</p>
@@ -2742,7 +2795,7 @@ function ActivityChangeList({ payload }: { payload: Record<string, unknown> }) {
       {fromStageName && <li>原阶段：{fromStageName}</li>}
       {oldDueAt && <li>原 DDL：{formatNullableDateTime(oldDueAt)}</li>}
       {newDueAt && <li>新 DDL：{formatNullableDateTime(newDueAt)}</li>}
-      {durationDays !== null && <li>延期时长：{durationDays} 天</li>}
+      {durationDays !== null && <li>调整：{formatDdlAdjustment(durationDays)}</li>}
       {requestedIsBenign !== null && (
         <li>申请良性：{requestedIsBenign ? "是" : "否"}</li>
       )}
@@ -2971,6 +3024,9 @@ function activityLabel(action: string): string {
     "project.ddl_extension_requested": "申请了阶段延期",
     "project.ddl_extension_approved": "通过了阶段延期申请",
     "project.ddl_extension_rejected": "驳回了阶段延期申请",
+    "project.stage_batch_due_change_requested": "申请了批量 DDL 调整",
+    "project.stage_batch_due_change_approved": "通过了批量 DDL 调整",
+    "project.stage_batch_due_change_rejected": "驳回了批量 DDL 调整",
     "project.stage_due_change_requested": "申请修改阶段 DDL",
     "project.stage_due_change_approved": "通过了阶段 DDL 修改",
     "project.stage_due_change_rejected": "驳回了阶段 DDL 修改",
@@ -3090,6 +3146,15 @@ function formatBenignFlag(
   const value = finalIsBenign ?? requestedIsBenign;
   if (value === null) return "不适用";
   return value ? "是" : "否";
+}
+
+function formatDdlAdjustment(durationDays: number): string {
+  const label = durationDays < 0 ? "提前" : "延期";
+  return `${label} ${Math.abs(durationDays)} 天`;
+}
+
+function isBatchDdlDelay(request: DdlChangeRequestView): boolean {
+  return request.type === "CASCADE_EXTENSION" && (request.durationDays ?? 0) > 0;
 }
 
 function formatDateTimeInputValue(value: string): string {

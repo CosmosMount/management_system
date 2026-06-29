@@ -10,11 +10,11 @@ import { auth } from "@/lib/auth";
 import { getUserRoles, isSuperAdmin } from "@/lib/permissions";
 import {
   canManageProject,
+  canRequestProjectStageBatchDdlChange,
   canRequestProjectStageDueDateChange,
-  canRequestProjectStageExtension,
   canRequestTaskCreation,
+  canReviewProjectStageBatchDdlChange,
   canReviewProjectStageDueDateChange,
-  canReviewProjectStageExtension,
   canViewProject,
   canApproveStage as canApproveStagePermission,
   canSubmitStage as canSubmitStagePermission,
@@ -157,6 +157,10 @@ export default async function ProjectDetailPage({ params }: Props) {
   const projectAllowsDdlChange =
     project.status === "NOT_STARTED" || project.status === "IN_PROGRESS";
   const admin = userOpenId ? await isSuperAdmin(userOpenId) : false;
+  const stageAdvanceCounts = getStageAdvanceCounts(
+    project.stages,
+    project.ddlChangeRequests,
+  );
 
   const [
     users,
@@ -213,13 +217,22 @@ export default async function ProjectDetailPage({ params }: Props) {
       ownerName: stage.ownerName,
       dueAt: stage.dueAt?.toISOString() ?? null,
       extensionCount: stage.extensionCount,
+      advanceCount: stageAdvanceCounts.get(stage.id) ?? 0,
       benignExtensionCount: stage.benignExtensionCount,
       currentSubmissionId: stage.currentSubmissionId,
       canSubmit: canSubmitStagePermission(roles, stage.ownerOpenId, userOpenId),
       canRequestExtension:
         projectAllowsDdlChange &&
         stage.status !== "COMPLETED" &&
-        canRequestProjectStageExtension(projectOwnerOpenIds, userOpenId),
+        canRequestProjectStageBatchDdlChange({
+          roles,
+          scope,
+          ownerOpenIds: projectOwnerOpenIds,
+          participantOpenIds: projectParticipantOpenIds,
+          stageOwnerOpenIds,
+          taskAssigneeOpenIds,
+          userOpenId,
+        }),
       canRequestDueDateChange:
         projectAllowsDdlChange &&
         stage.status !== "COMPLETED" &&
@@ -321,11 +334,12 @@ export default async function ProjectDetailPage({ params }: Props) {
       createdAt: request.createdAt.toISOString(),
       canReview:
         request.type === "CASCADE_EXTENSION"
-          ? canReviewProjectStageExtension(
+          ? canReviewProjectStageBatchDdlChange({
               roles,
-              request.requesterOpenId,
+              scope,
+              requesterOpenId: request.requesterOpenId,
               userOpenId,
-            )
+            })
           : canReviewProjectStageDueDateChange({
               roles,
               ownerOpenIds: projectOwnerOpenIds,
@@ -404,6 +418,44 @@ export default async function ProjectDetailPage({ params }: Props) {
       </PageShell>
     </>
   );
+}
+
+function getStageAdvanceCounts(
+  stages: Array<{ id: string; sortOrder: number }>,
+  requests: Array<{
+    type: "CASCADE_EXTENSION" | "SINGLE_STAGE_ADJUSTMENT";
+    status: string;
+    stageId: string;
+    durationDays: number | null;
+    oldDueAt: Date | null;
+    newDueAt: Date | null;
+    stage: { sortOrder: number };
+  }>,
+): Map<string, number> {
+  const counts = new Map(stages.map((stage) => [stage.id, 0]));
+  for (const request of requests) {
+    if (request.status !== "APPROVED") continue;
+
+    if (request.type === "CASCADE_EXTENSION") {
+      if ((request.durationDays ?? 0) >= 0) continue;
+      for (const stage of stages) {
+        if (stage.sortOrder >= request.stage.sortOrder) {
+          counts.set(stage.id, (counts.get(stage.id) ?? 0) + 1);
+        }
+      }
+      continue;
+    }
+
+    if (
+      request.type === "SINGLE_STAGE_ADJUSTMENT" &&
+      request.oldDueAt &&
+      request.newDueAt &&
+      request.newDueAt.getTime() < request.oldDueAt.getTime()
+    ) {
+      counts.set(request.stageId, (counts.get(request.stageId) ?? 0) + 1);
+    }
+  }
+  return counts;
 }
 
 async function getRelevantTaskCreationRequests(

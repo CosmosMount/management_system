@@ -87,6 +87,8 @@ type FeedbackOutboxPayload =
     };
 
 const MAX_ATTEMPTS = 8;
+const NOTIFICATION_DELIVERY_DISABLED =
+  process.env.NOTIFICATION_DELIVERY_DISABLED === "true";
 
 export type EnqueueNotificationResult = {
   created: boolean;
@@ -403,12 +405,14 @@ export async function enqueueFeedbackStatusNotification(
 }
 
 export function drainNotificationOutboxSoon(limit = 5) {
+  if (NOTIFICATION_DELIVERY_DISABLED) return;
   void drainNotificationOutbox(limit).catch((err) => {
     console.error("[notification-outbox] drain failed:", err);
   });
 }
 
 export async function drainNotificationOutbox(limit = 20): Promise<number> {
+  if (NOTIFICATION_DELIVERY_DISABLED) return 0;
   const now = new Date();
   const rows = await prisma.notificationOutbox.findMany({
     where: {

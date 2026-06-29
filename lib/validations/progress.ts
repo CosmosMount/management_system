@@ -397,24 +397,33 @@ export const taskRestartSchema = z.object({
   reason: rollbackReasonSchema,
 });
 
-export const projectStageExtensionRequestSchema = z.object({
+export const projectStageBatchDdlChangeRequestSchema = z.object({
   projectId: z.string().min(1),
   stageId: z.string().min(1),
+  direction: z.enum(["DELAY", "ADVANCE"]).default("DELAY"),
   reason: ddlChangeReasonSchema,
   durationDays: z.coerce
     .number()
-    .int("延期时长必须是整数天")
-    .min(1, "延期时长至少 1 天")
-    .max(365, "延期时长不能超过 365 天"),
+    .int("调整时长必须是整数天")
+    .min(1, "调整时长至少 1 天")
+    .max(365, "调整时长不能超过 365 天"),
   isBenign: z.boolean().default(false),
 });
 
-export const projectStageExtensionReviewSchema = z.object({
+export const projectStageExtensionRequestSchema =
+  projectStageBatchDdlChangeRequestSchema.extend({
+    direction: z.literal("DELAY").default("DELAY"),
+  });
+
+export const projectStageBatchDdlChangeReviewSchema = z.object({
   requestId: z.string().min(1),
   decision: z.enum(["APPROVED", "REJECTED"]),
   comment: reviewCommentRequiredSchema,
   finalIsBenign: z.boolean().optional(),
 });
+
+export const projectStageExtensionReviewSchema =
+  projectStageBatchDdlChangeReviewSchema;
 
 export const projectStageDueDateChangeRequestSchema = z.object({
   projectId: z.string().min(1),

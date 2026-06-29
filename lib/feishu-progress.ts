@@ -82,6 +82,25 @@ export type ProgressNotifyPayload =
       recipientOpenIds?: string[];
     }
   | {
+      type: "project_stage_batch_due_change_requested";
+      requestId: string;
+      projectId: string;
+      projectName: string;
+      stageId: string;
+      stageName: string;
+      requesterName: string;
+      requesterOpenId: string;
+      reason: string;
+      durationDays: number;
+      requestedIsBenign: boolean | null;
+      oldDueAt: string | null;
+      newDueAt: string;
+      affectedStageNames: string[];
+      team: string;
+      techGroup: string;
+      recipientOpenIds?: string[];
+    }
+  | {
       type: "project_stage_extension_approved" | "project_stage_extension_rejected";
       requestId: string;
       projectId: string;
@@ -96,6 +115,30 @@ export type ProgressNotifyPayload =
       finalIsBenign: boolean;
       oldDueAt?: string | null;
       newDueAt?: string | null;
+      team: string;
+      techGroup: string;
+      ownerOpenIds: string[];
+      stageOwnerOpenIds: string[];
+      recipientOpenIds?: string[];
+    }
+  | {
+      type:
+        | "project_stage_batch_due_change_approved"
+        | "project_stage_batch_due_change_rejected";
+      requestId: string;
+      projectId: string;
+      projectName: string;
+      stageId: string;
+      stageName: string;
+      reviewerName: string;
+      requesterOpenId: string;
+      reason: string;
+      comment: string;
+      durationDays: number;
+      finalIsBenign: boolean;
+      oldDueAt?: string | null;
+      newDueAt?: string | null;
+      affectedStageNames: string[];
       team: string;
       techGroup: string;
       ownerOpenIds: string[];
@@ -682,12 +725,62 @@ export async function sendProgressNotification(
       }
       break;
     }
+    case "project_stage_batch_due_change_requested": {
+      const adjustment = formatBatchDueChangeAdjustment(payload.durationDays);
+      const benignLine =
+        payload.durationDays > 0
+          ? `\n**是否良性**：${payload.requestedIsBenign ? "是" : "否"}`
+          : "";
+      const card = buildCard(
+        `批量${adjustment.directionLabel}申请待审批`,
+        `**项目**：${payload.projectName}\n**起始阶段**：${payload.stageName}\n**影响范围**：${formatAffectedStageNames(payload.affectedStageNames)}\n**申请人**：${payload.requesterName}\n**调整方向**：${adjustment.directionLabel}\n**调整时长**：${adjustment.days} 天${benignLine}\n**当前 DDL**：${formatNotificationDateTime(payload.oldDueAt)}\n**调整后 DDL**：${formatNotificationDateTime(payload.newDueAt)}\n**原因**：${payload.reason}`,
+        buildAppUrl(
+          routes.progress.projectStage(payload.projectId, payload.stageId),
+          appOrigin,
+        ),
+        "orange",
+      );
+      await notifyOpenIds(
+        (payload.recipientOpenIds ?? []).filter(
+          (openId) => openId !== payload.requesterOpenId,
+        ),
+        card,
+      );
+      break;
+    }
     case "project_stage_extension_approved":
     case "project_stage_extension_rejected": {
       const pass = payload.type === "project_stage_extension_approved";
       const card = buildCard(
         pass ? "阶段延期申请已通过" : "阶段延期申请已驳回",
         `**项目**：${payload.projectName}\n**阶段**：${payload.stageName}\n**审核人**：${payload.reviewerName}\n**延期时长**：${payload.durationDays} 天\n**最终良性**：${payload.finalIsBenign ? "是" : "否"}\n**原 DDL**：${formatNotificationDateTime(payload.oldDueAt ?? null)}\n**新 DDL**：${formatNotificationDateTime(payload.newDueAt ?? null)}\n**申请原因**：${payload.reason}\n**审批意见**：${payload.comment}`,
+        buildAppUrl(
+          routes.progress.projectStage(payload.projectId, payload.stageId),
+          appOrigin,
+        ),
+        pass ? "green" : "red",
+      );
+      await notifyOpenIds(
+        payload.recipientOpenIds ?? [
+          payload.requesterOpenId,
+          ...payload.ownerOpenIds,
+          ...payload.stageOwnerOpenIds,
+        ],
+        card,
+      );
+      break;
+    }
+    case "project_stage_batch_due_change_approved":
+    case "project_stage_batch_due_change_rejected": {
+      const pass = payload.type === "project_stage_batch_due_change_approved";
+      const adjustment = formatBatchDueChangeAdjustment(payload.durationDays);
+      const benignLine =
+        payload.durationDays > 0
+          ? `\n**最终良性**：${payload.finalIsBenign ? "是" : "否"}`
+          : "";
+      const card = buildCard(
+        `批量${adjustment.directionLabel}${pass ? "已通过" : "已驳回"}`,
+        `**项目**：${payload.projectName}\n**起始阶段**：${payload.stageName}\n**影响范围**：${formatAffectedStageNames(payload.affectedStageNames)}\n**审核人**：${payload.reviewerName}\n**调整方向**：${adjustment.directionLabel}\n**调整时长**：${adjustment.days} 天${benignLine}\n**原 DDL**：${formatNotificationDateTime(payload.oldDueAt ?? null)}\n**新 DDL**：${formatNotificationDateTime(payload.newDueAt ?? null)}\n**申请原因**：${payload.reason}\n**审批意见**：${payload.comment}`,
         buildAppUrl(
           routes.progress.projectStage(payload.projectId, payload.stageId),
           appOrigin,
@@ -1150,6 +1243,22 @@ function formatBulkTaskLines(
     lines.push(`…还有 ${tasks.length - visibleTasks.length} 条`);
   }
   return lines.length > 0 ? `**任务概览**：\n${lines.join("\n")}` : "";
+}
+
+function formatBatchDueChangeAdjustment(durationDays: number): {
+  directionLabel: "延期" | "提前";
+  days: number;
+} {
+  return {
+    directionLabel: durationDays < 0 ? "提前" : "延期",
+    days: Math.abs(durationDays),
+  };
+}
+
+function formatAffectedStageNames(stageNames: string[]): string {
+  if (stageNames.length === 0) return "当前阶段及后续阶段";
+  if (stageNames.length <= 4) return stageNames.join("、");
+  return `${stageNames.slice(0, 4).join("、")} 等 ${stageNames.length} 个阶段`;
 }
 
 function formatNotificationDateTime(value: string | null): string {

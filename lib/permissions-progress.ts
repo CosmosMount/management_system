@@ -217,6 +217,31 @@ export function canRequestTaskDeletion({
   return false;
 }
 
+export function canRequestProjectStageBatchDdlChange({
+  roles,
+  scope,
+  ownerOpenIds,
+  participantOpenIds,
+  stageOwnerOpenIds,
+  taskAssigneeOpenIds,
+  userOpenId,
+}: {
+  roles: UserRoleRecord[];
+  scope: ProgressScope;
+  ownerOpenIds: string | string[];
+  participantOpenIds: string | string[];
+  stageOwnerOpenIds: string | string[];
+  taskAssigneeOpenIds: string | string[];
+  userOpenId?: string;
+}): boolean {
+  if (!userOpenId) return false;
+  if (canManageProject(roles, scope, ownerOpenIds, userOpenId)) return true;
+  if (isAssignee(userOpenId, participantOpenIds)) return true;
+  if (isAssignee(userOpenId, stageOwnerOpenIds)) return true;
+  if (isAssignee(userOpenId, taskAssigneeOpenIds)) return true;
+  return false;
+}
+
 export function canRequestProjectStageExtension(
   ownerOpenIds: string | string[],
   userOpenId?: string,
@@ -224,13 +249,34 @@ export function canRequestProjectStageExtension(
   return isAssignee(userOpenId, ownerOpenIds);
 }
 
+export function canReviewProjectStageBatchDdlChange({
+  roles,
+  scope,
+  requesterOpenId,
+  userOpenId,
+}: {
+  roles: UserRoleRecord[];
+  scope: ProgressScope;
+  requesterOpenId: string;
+  userOpenId?: string;
+}): boolean {
+  if (!userOpenId || userOpenId === requesterOpenId) return false;
+  if (isProgressSuperAdmin(roles) || isProjectManager(roles)) return true;
+  if (isTeamLead(roles, scope.team)) return true;
+  return isTechGroupLead(roles, scope.techGroup);
+}
+
 export function canReviewProjectStageExtension(
   roles: UserRoleRecord[],
   requesterOpenId: string,
   userOpenId?: string,
 ): boolean {
-  if (!userOpenId || userOpenId === requesterOpenId) return false;
-  return isProgressSuperAdmin(roles) || isProjectManager(roles);
+  return canReviewProjectStageBatchDdlChange({
+    roles,
+    scope: { team: "", techGroup: "" },
+    requesterOpenId,
+    userOpenId,
+  });
 }
 
 export function canRequestProjectStageDueDateChange({

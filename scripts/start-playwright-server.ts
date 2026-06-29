@@ -27,6 +27,7 @@ function runStep(
         DATABASE_URL: databaseUrl,
         PLAYWRIGHT_DATABASE_URL: databaseUrl,
         PLAYWRIGHT_CONFIRM_RECREATE_DB: targetDatabase,
+        NOTIFICATION_DELIVERY_DISABLED: "true",
         ...extraEnv,
       },
       stdio: "inherit",
@@ -52,6 +53,9 @@ async function main() {
 
   await runStep(process.execPath, [tsxBin, "scripts/setup-playwright-db.ts"]);
   await runStep(npmCommand, ["run", "db:deploy"]);
+  if (process.env.PLAYWRIGHT_DB_SETUP_MODE === "clone") {
+    await runStep(process.execPath, [tsxBin, "scripts/copy-playwright-db-data.ts"]);
+  }
   await runStep(npmCommand, ["run", "db:seed"]);
   await runStep(npmCommand, ["run", "db:seed-acceptance-checklists"]);
   await runStep(npmCommand, ["run", "db:seed-progress-reminders"]);

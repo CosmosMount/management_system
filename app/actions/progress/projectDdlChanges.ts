@@ -1,19 +1,20 @@
 "use server";
 
-import type { ProjectDdlChangeRequestStatus } from "@prisma/client";
+import type { Prisma, ProjectDdlChangeRequestStatus } from "@prisma/client";
 import { auth } from "@/lib/auth";
 import {
   drainNotificationOutboxSoon,
   enqueueProgressNotificationTx,
 } from "@/lib/notification-outbox";
 import {
+  canRequestProjectStageBatchDdlChange,
   canRequestProjectStageDueDateChange,
-  canRequestProjectStageExtension,
+  canReviewProjectStageBatchDdlChange,
   canReviewProjectStageDueDateChange,
-  canReviewProjectStageExtension,
 } from "@/lib/permissions-progress";
 import { getUserRoles } from "@/lib/permissions";
 import { requireSessionUser } from "@/lib/progress-activity";
+import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { getProjectParticipantOpenIds } from "@/lib/progress-project-participants";
 import { collectProjectNotificationRecipients } from "@/lib/progress-project-notifications";
@@ -21,10 +22,10 @@ import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import { revalidateProgress } from "@/lib/revalidate";
 import {
+  projectStageBatchDdlChangeRequestSchema,
+  projectStageBatchDdlChangeReviewSchema,
   projectStageDueDateChangeRequestSchema,
   projectStageDueDateChangeReviewSchema,
-  projectStageExtensionRequestSchema,
-  projectStageExtensionReviewSchema,
 } from "@/lib/validations/progress";
 
 const PENDING_DDL_CHANGE_KEY = "PENDING";
@@ -36,9 +37,23 @@ export async function requestProjectStageExtension(input: {
   durationDays: number;
   isBenign: boolean;
 }) {
+  return requestProjectStageBatchDdlChange({ ...input, direction: "DELAY" });
+}
+
+export async function requestProjectStageBatchDdlChange(input: {
+  projectId: string;
+  stageId: string;
+  direction: "DELAY" | "ADVANCE";
+  reason: string;
+  durationDays: number;
+  isBenign: boolean;
+}) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
-  const parsed = projectStageExtensionRequestSchema.parse(input);
+  const parsed = projectStageBatchDdlChangeRequestSchema.parse(input);
+  const roles = await getUserRoles(user.openId);
+  const signedDurationDays =
+    parsed.direction === "DELAY" ? parsed.durationDays : -parsed.durationDays;
 
   const project = await prisma.project.findUnique({
     where: { id: parsed.projectId },
@@ -57,49 +72,77 @@ export async function requestProjectStageExtension(input: {
   });
   if (!project) throw new Error("项目不存在");
   if (!isProjectDdlMutableStatus(project.status)) {
-    throw new Error("已完成或已取消项目不可申请延期");
+    throw new Error("已完成或已取消项目不可申请批量 DDL 调整");
   }
 
   const ownerOpenIds = getProjectOwnerOpenIds(project);
-  if (!canRequestProjectStageExtension(ownerOpenIds, user.openId)) {
-    throw new Error("仅项目负责人可申请阶段延期");
+  const participantOpenIds = getProjectParticipantOpenIds(project);
+  const stageOwnerOpenIds = uniqueOpenIds(
+    project.stages.map((item) => item.ownerOpenId),
+  );
+  const taskAssigneeOpenIds = uniqueOpenIds(
+    project.tasks.flatMap((task) => getTaskAssigneeOpenIds(task)),
+  );
+  if (
+    !canRequestProjectStageBatchDdlChange({
+      roles,
+      scope: { team: project.team, techGroup: project.techGroup },
+      ownerOpenIds,
+      participantOpenIds,
+      stageOwnerOpenIds,
+      taskAssigneeOpenIds,
+      userOpenId: user.openId,
+    })
+  ) {
+    throw new Error("无批量 DDL 调整申请权限");
   }
 
   const stage = project.stages.find((item) => item.id === parsed.stageId);
   if (!stage) throw new Error("阶段不存在");
   if (stage.status === "COMPLETED") {
-    throw new Error("已完成阶段不可申请延期");
+    throw new Error("已完成阶段不可申请批量 DDL 调整");
   }
   if (!stage.dueAt) {
-    throw new Error("阶段未设置 DDL，无法申请延期");
+    throw new Error("阶段未设置 DDL，无法申请批量 DDL 调整");
   }
   const affectedStages = project.stages.filter(
     (item) => item.sortOrder >= stage.sortOrder,
   );
+  const completedAffectedStage = affectedStages.find(
+    (item) => item.status === "COMPLETED",
+  );
+  if (completedAffectedStage) {
+    throw new Error(
+      `阶段「${completedAffectedStage.name}」已完成，不可申请批量 DDL 调整`,
+    );
+  }
   assertProjectStageDdlOrder(
     project.stages,
     new Map(
       affectedStages.map((item) => [
         item.id,
-        item.dueAt ? addDays(item.dueAt, parsed.durationDays) : null,
+        item.dueAt ? addDays(item.dueAt, signedDurationDays) : null,
       ]),
     ),
   );
 
-  const pendingCount = await prisma.projectDdlChangeRequest.count({
-    where: {
-      stageId: stage.id,
-      status: "PENDING",
-    },
-  });
-  if (pendingCount > 0) {
-    throw new Error("该阶段已有待审批 DDL 变更申请");
-  }
-
-  const newDueAt = addDays(stage.dueAt, parsed.durationDays);
+  const newDueAt = addDays(stage.dueAt, signedDurationDays);
   const context = await getNotificationContext();
   const recipientOpenIds = await collectProjectNotificationRecipients(project);
   const request = await prisma.$transaction(async (tx) => {
+    await lockProjectDdlChanges(tx, project.id);
+    const affectedStageIds = affectedStages.map((item) => item.id);
+    const pendingCount = await tx.projectDdlChangeRequest.count({
+      where: overlappingPendingDdlChangeWhere({
+        projectId: project.id,
+        affectedStageIds,
+        overlappingBatchStartStageIds: project.stages.map((item) => item.id),
+      }),
+    });
+    if (pendingCount > 0) {
+      throw new Error("该项目受影响阶段已有待审批 DDL 变更申请");
+    }
+
     const created = await tx.projectDdlChangeRequest.create({
       data: {
         projectId: project.id,
@@ -111,15 +154,16 @@ export async function requestProjectStageExtension(input: {
         reason: parsed.reason,
         oldDueAt: stage.dueAt,
         newDueAt,
-        durationDays: parsed.durationDays,
-        requestedIsBenign: parsed.isBenign,
+        durationDays: signedDurationDays,
+        requestedIsBenign:
+          parsed.direction === "DELAY" ? parsed.isBenign : null,
       },
     });
 
     await tx.progressActivityLog.create({
       data: {
         projectId: project.id,
-        action: "project.ddl_extension_requested",
+        action: "project.stage_batch_due_change_requested",
         actorOpenId: user.openId,
         actorName: user.name,
         payload: JSON.stringify({
@@ -127,19 +171,23 @@ export async function requestProjectStageExtension(input: {
           stageId: stage.id,
           stageName: stage.name,
           reason: parsed.reason,
-          durationDays: parsed.durationDays,
-          requestedIsBenign: parsed.isBenign,
+          direction: parsed.direction,
+          durationDays: signedDurationDays,
+          requestedIsBenign:
+            parsed.direction === "DELAY" ? parsed.isBenign : null,
           oldDueAt: stage.dueAt?.toISOString() ?? null,
           newDueAt: newDueAt.toISOString(),
+          affectedStageIds: affectedStages.map((item) => item.id),
+          affectedStageNames: affectedStages.map((item) => item.name),
         }),
       },
     });
 
     await enqueueProgressNotificationTx(
       tx,
-      `progress:project_stage_extension_requested:${created.id}`,
+      `progress:project_stage_batch_due_change_requested:${created.id}`,
       {
-        type: "project_stage_extension_requested",
+        type: "project_stage_batch_due_change_requested",
         requestId: created.id,
         projectId: project.id,
         projectName: project.name,
@@ -148,10 +196,12 @@ export async function requestProjectStageExtension(input: {
         requesterName: user.name,
         requesterOpenId: user.openId,
         reason: parsed.reason,
-        durationDays: parsed.durationDays,
-        requestedIsBenign: parsed.isBenign,
+        durationDays: signedDurationDays,
+        requestedIsBenign:
+          parsed.direction === "DELAY" ? parsed.isBenign : null,
         oldDueAt: stage.dueAt?.toISOString() ?? null,
         newDueAt: newDueAt.toISOString(),
+        affectedStageNames: affectedStages.map((item) => item.name),
         team: project.team,
         techGroup: project.techGroup,
         recipientOpenIds,
@@ -178,9 +228,18 @@ export async function reviewProjectStageExtensionRequest(input: {
   comment: string;
   finalIsBenign?: boolean;
 }) {
+  return reviewProjectStageBatchDdlChangeRequest(input);
+}
+
+export async function reviewProjectStageBatchDdlChangeRequest(input: {
+  requestId: string;
+  decision: ProjectDdlChangeRequestStatus;
+  comment: string;
+  finalIsBenign?: boolean;
+}) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
-  const parsed = projectStageExtensionReviewSchema.parse(input);
+  const parsed = projectStageBatchDdlChangeReviewSchema.parse(input);
   const roles = await getUserRoles(user.openId);
 
   const request = await prisma.projectDdlChangeRequest.findUnique({
@@ -210,44 +269,55 @@ export async function reviewProjectStageExtensionRequest(input: {
     },
   });
   if (!request || request.type !== "CASCADE_EXTENSION" || request.status !== "PENDING") {
-    throw new Error("延期申请不存在或已处理");
+    throw new Error("批量 DDL 调整申请不存在或已处理");
   }
   const project = request.project;
   if (!isProjectDdlMutableStatus(project.status)) {
-    throw new Error("已完成或已取消项目不可审批延期");
+    throw new Error("已完成或已取消项目不可审批批量 DDL 调整");
   }
   if (
-    !canReviewProjectStageExtension(
+    !canReviewProjectStageBatchDdlChange({
       roles,
-      request.requesterOpenId,
-      user.openId,
-    )
+      scope: { team: project.team, techGroup: project.techGroup },
+      requesterOpenId: request.requesterOpenId,
+      userOpenId: user.openId,
+    })
   ) {
-    throw new Error("无延期申请审批权限");
+    throw new Error("无批量 DDL 调整审批权限");
   }
 
+  const signedDurationDays = request.durationDays ?? 0;
+  const isDelay = signedDurationDays > 0;
   const finalIsBenign =
-    parsed.decision === "APPROVED"
+    parsed.decision === "APPROVED" && isDelay
       ? (parsed.finalIsBenign ?? request.requestedIsBenign ?? false)
       : null;
   const affectedStages = project.stages.filter(
     (stage) => stage.sortOrder >= request.stage.sortOrder,
   );
   if (parsed.decision === "APPROVED") {
-    if (!request.durationDays) throw new Error("延期申请缺少延期时长");
+    if (!signedDurationDays) throw new Error("批量 DDL 调整申请缺少调整时长");
+    const completedAffectedStage = affectedStages.find(
+      (stage) => stage.status === "COMPLETED",
+    );
+    if (completedAffectedStage) {
+      throw new Error(
+        `阶段「${completedAffectedStage.name}」已完成，不可审批批量 DDL 调整`,
+      );
+    }
     if (!sameDueAt(request.stage.dueAt, request.oldDueAt)) {
       throw new Error("阶段 DDL 已变化，请驳回后重新申请");
     }
     const missingDueAt = affectedStages.find((stage) => !stage.dueAt);
     if (missingDueAt) {
-      throw new Error(`阶段「${missingDueAt.name}」未设置 DDL，无法级联延期`);
+      throw new Error(`阶段「${missingDueAt.name}」未设置 DDL，无法批量调整`);
     }
     assertProjectStageDdlOrder(
       project.stages,
       new Map(
         affectedStages.map((stage) => [
           stage.id,
-          stage.dueAt ? addDays(stage.dueAt, request.durationDays ?? 0) : null,
+          stage.dueAt ? addDays(stage.dueAt, signedDurationDays) : null,
         ]),
       ),
     );
@@ -257,6 +327,33 @@ export async function reviewProjectStageExtensionRequest(input: {
   const recipientOpenIds = await collectProjectNotificationRecipients(project);
   const reviewedAt = new Date();
   await prisma.$transaction(async (tx) => {
+    await lockProjectDdlChanges(tx, project.id);
+    const affectedStageIds = affectedStages.map((stage) => stage.id);
+    if (parsed.decision === "APPROVED") {
+      const [completedStage, overlappingPendingCount] = await Promise.all([
+        tx.projectStage.findFirst({
+          where: { id: { in: affectedStageIds }, status: "COMPLETED" },
+          select: { name: true },
+        }),
+        tx.projectDdlChangeRequest.count({
+          where: overlappingPendingDdlChangeWhere({
+            projectId: project.id,
+            affectedStageIds,
+            overlappingBatchStartStageIds: project.stages.map((stage) => stage.id),
+            excludeRequestId: request.id,
+          }),
+        }),
+      ]);
+      if (completedStage) {
+        throw new Error(
+          `阶段「${completedStage.name}」已完成，不可审批批量 DDL 调整`,
+        );
+      }
+      if (overlappingPendingCount > 0) {
+        throw new Error("该项目受影响阶段存在其他待审批 DDL 变更申请");
+      }
+    }
+
     const locked = await tx.projectDdlChangeRequest.updateMany({
       where: { id: request.id, status: "PENDING" },
       data: {
@@ -275,13 +372,14 @@ export async function reviewProjectStageExtensionRequest(input: {
 
     if (parsed.decision === "APPROVED") {
       for (const stage of affectedStages) {
-        if (!stage.dueAt || !request.durationDays) continue;
+        if (!stage.dueAt || !signedDurationDays) continue;
         const updatedStage = await tx.projectStage.updateMany({
           where: { id: stage.id, dueAt: stage.dueAt },
           data: {
-            dueAt: addDays(stage.dueAt, request.durationDays),
-            extensionCount: { increment: 1 },
-            benignExtensionCount: finalIsBenign ? { increment: 1 } : undefined,
+            dueAt: addDays(stage.dueAt, signedDurationDays),
+            extensionCount: isDelay ? { increment: 1 } : undefined,
+            benignExtensionCount:
+              isDelay && finalIsBenign ? { increment: 1 } : undefined,
           },
         });
         if (updatedStage.count !== 1) {
@@ -295,8 +393,8 @@ export async function reviewProjectStageExtensionRequest(input: {
         projectId: project.id,
         action:
           parsed.decision === "APPROVED"
-            ? "project.ddl_extension_approved"
-            : "project.ddl_extension_rejected",
+            ? "project.stage_batch_due_change_approved"
+            : "project.stage_batch_due_change_rejected",
         actorOpenId: user.openId,
         actorName: user.name,
         payload: JSON.stringify({
@@ -305,7 +403,8 @@ export async function reviewProjectStageExtensionRequest(input: {
           stageName: request.stage.name,
           reason: request.reason,
           reviewComment: parsed.comment,
-          durationDays: request.durationDays,
+          direction: signedDurationDays < 0 ? "ADVANCE" : "DELAY",
+          durationDays: signedDurationDays,
           requestedIsBenign: request.requestedIsBenign,
           finalIsBenign,
           affectedStageIds: affectedStages.map((stage) => stage.id),
@@ -316,12 +415,12 @@ export async function reviewProjectStageExtensionRequest(input: {
 
     await enqueueProgressNotificationTx(
       tx,
-      `progress:${parsed.decision === "APPROVED" ? "project_stage_extension_approved" : "project_stage_extension_rejected"}:${request.id}`,
+      `progress:${parsed.decision === "APPROVED" ? "project_stage_batch_due_change_approved" : "project_stage_batch_due_change_rejected"}:${request.id}`,
       {
         type:
           parsed.decision === "APPROVED"
-            ? "project_stage_extension_approved"
-            : "project_stage_extension_rejected",
+            ? "project_stage_batch_due_change_approved"
+            : "project_stage_batch_due_change_rejected",
         requestId: request.id,
         projectId: project.id,
         projectName: project.name,
@@ -331,10 +430,11 @@ export async function reviewProjectStageExtensionRequest(input: {
         requesterOpenId: request.requesterOpenId,
         reason: request.reason,
         comment: parsed.comment,
-        durationDays: request.durationDays ?? 0,
+        durationDays: signedDurationDays,
         finalIsBenign: finalIsBenign ?? false,
         oldDueAt: request.oldDueAt?.toISOString() ?? null,
         newDueAt: request.newDueAt?.toISOString() ?? null,
+        affectedStageNames: affectedStages.map((stage) => stage.name),
         team: project.team,
         techGroup: project.techGroup,
         ownerOpenIds: getProjectOwnerOpenIds(project),
@@ -411,19 +511,24 @@ export async function requestProjectStageDueDateChange(input: {
     new Map([[stage.id, proposedDueAt]]),
   );
 
-  const pendingCount = await prisma.projectDdlChangeRequest.count({
-    where: {
-      stageId: stage.id,
-      status: "PENDING",
-    },
-  });
-  if (pendingCount > 0) {
-    throw new Error("该阶段已有待审批 DDL 变更申请");
-  }
-
   const context = await getNotificationContext();
   const recipientOpenIds = await collectProjectNotificationRecipients(project);
   const request = await prisma.$transaction(async (tx) => {
+    await lockProjectDdlChanges(tx, project.id);
+    const pendingCount = await tx.projectDdlChangeRequest.count({
+      where: overlappingPendingDdlChangeWhere({
+        projectId: project.id,
+        affectedStageIds: [stage.id],
+        overlappingBatchStartStageIds: getBatchStartStageIdsAffectingStage(
+          project.stages,
+          stage.sortOrder,
+        ),
+      }),
+    });
+    if (pendingCount > 0) {
+      throw new Error("该阶段已有待审批 DDL 变更申请");
+    }
+
     const created = await tx.projectDdlChangeRequest.create({
       data: {
         projectId: project.id,
@@ -573,6 +678,33 @@ export async function reviewProjectStageDueDateChangeRequest(input: {
     (!request.oldDueAt || request.newDueAt.getTime() > request.oldDueAt.getTime());
 
   await prisma.$transaction(async (tx) => {
+    await lockProjectDdlChanges(tx, project.id);
+    if (parsed.decision === "APPROVED") {
+      const [completedStage, overlappingPendingCount] = await Promise.all([
+        tx.projectStage.findFirst({
+          where: { id: request.stageId, status: "COMPLETED" },
+          select: { name: true },
+        }),
+        tx.projectDdlChangeRequest.count({
+          where: overlappingPendingDdlChangeWhere({
+            projectId: project.id,
+            affectedStageIds: [request.stageId],
+            overlappingBatchStartStageIds: getBatchStartStageIdsAffectingStage(
+              project.stages,
+              request.stage.sortOrder,
+            ),
+            excludeRequestId: request.id,
+          }),
+        }),
+      ]);
+      if (completedStage) {
+        throw new Error("已完成阶段不可审批 DDL 修改");
+      }
+      if (overlappingPendingCount > 0) {
+        throw new Error("该阶段存在其他待审批 DDL 变更申请");
+      }
+    }
+
     const locked = await tx.projectDdlChangeRequest.updateMany({
       where: { id: request.id, status: "PENDING" },
       data: {
@@ -693,6 +825,50 @@ function assertProjectStageDdlOrder(
     }
     previous = { name: stage.name, dueAt };
   }
+}
+
+async function lockProjectDdlChanges(
+  tx: Prisma.TransactionClient,
+  projectId: string,
+) {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${projectId})::bigint)`;
+}
+
+function overlappingPendingDdlChangeWhere({
+  projectId,
+  affectedStageIds,
+  overlappingBatchStartStageIds,
+  excludeRequestId,
+}: {
+  projectId: string;
+  affectedStageIds: string[];
+  overlappingBatchStartStageIds: string[];
+  excludeRequestId?: string;
+}): Prisma.ProjectDdlChangeRequestWhereInput {
+  return {
+    projectId,
+    status: "PENDING",
+    id: excludeRequestId ? { not: excludeRequestId } : undefined,
+    OR: [
+      {
+        type: "CASCADE_EXTENSION",
+        stageId: { in: overlappingBatchStartStageIds },
+      },
+      {
+        type: "SINGLE_STAGE_ADJUSTMENT",
+        stageId: { in: affectedStageIds },
+      },
+    ],
+  };
+}
+
+function getBatchStartStageIdsAffectingStage(
+  stages: Array<{ id: string; sortOrder: number }>,
+  stageSortOrder: number,
+): string[] {
+  return stages
+    .filter((stage) => stage.sortOrder <= stageSortOrder)
+    .map((stage) => stage.id);
 }
 
 function uniqueOpenIds(openIds: Array<string | null | undefined>): string[] {

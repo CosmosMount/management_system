@@ -22,28 +22,15 @@ const testDatabaseUrl =
   deriveDatabaseUrl(process.env.DATABASE_URL, "_test") ??
   "postgresql://postgres:replace-with-a-strong-password@127.0.0.1:5432/management_system_test";
 
-const canReuseExistingServer =
-  process.env.PLAYWRIGHT_REUSE_SERVER === "true" &&
-  process.env.PLAYWRIGHT_ALLOW_REUSE_SERVER === "true";
-const skipWebServer =
-  !!process.env.PLAYWRIGHT_SKIP_WEBSERVER &&
-  process.env.PLAYWRIGHT_ALLOW_SKIP_WEBSERVER === "true";
-
-if (
-  process.env.PLAYWRIGHT_REUSE_SERVER === "true" &&
-  process.env.PLAYWRIGHT_ALLOW_REUSE_SERVER !== "true"
-) {
+if (process.env.PLAYWRIGHT_REUSE_SERVER === "true") {
   throw new Error(
-    "PLAYWRIGHT_REUSE_SERVER is disabled for full functional tests. Set PLAYWRIGHT_ALLOW_REUSE_SERVER=true only for explicit smoke/debug runs against a verified _test server.",
+    "PLAYWRIGHT_REUSE_SERVER is disabled because tests must start a controlled server with NOTIFICATION_DELIVERY_DISABLED=true.",
   );
 }
 
-if (
-  process.env.PLAYWRIGHT_SKIP_WEBSERVER &&
-  process.env.PLAYWRIGHT_ALLOW_SKIP_WEBSERVER !== "true"
-) {
+if (process.env.PLAYWRIGHT_SKIP_WEBSERVER) {
   throw new Error(
-    "PLAYWRIGHT_SKIP_WEBSERVER is disabled for full functional tests. Set PLAYWRIGHT_ALLOW_SKIP_WEBSERVER=true only for explicit smoke/debug runs against a verified _test server.",
+    "PLAYWRIGHT_SKIP_WEBSERVER is disabled because tests must start a controlled server with NOTIFICATION_DELIVERY_DISABLED=true.",
   );
 }
 
@@ -65,22 +52,21 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
-  webServer: skipWebServer
-    ? undefined
-    : {
-        command: `tsx scripts/start-playwright-server.ts`,
-        env: {
-          ...process.env,
-          DATABASE_URL: testDatabaseUrl,
-          PLAYWRIGHT_DATABASE_URL: testDatabaseUrl,
-          PLAYWRIGHT_SERVER_PORT: parsedBaseUrl.port || "3002",
-          PLAYWRIGHT_CONFIRM_RECREATE_DB:
-            new URL(testDatabaseUrl).pathname.replace(/^\//, ""),
-        },
-        url: baseURL,
-        reuseExistingServer: canReuseExistingServer,
-        timeout: 120_000,
-      },
+  webServer: {
+    command: `tsx scripts/start-playwright-server.ts`,
+    env: {
+      ...process.env,
+      DATABASE_URL: testDatabaseUrl,
+      PLAYWRIGHT_DATABASE_URL: testDatabaseUrl,
+      PLAYWRIGHT_SERVER_PORT: parsedBaseUrl.port || "3002",
+      PLAYWRIGHT_CONFIRM_RECREATE_DB:
+        new URL(testDatabaseUrl).pathname.replace(/^\//, ""),
+      NOTIFICATION_DELIVERY_DISABLED: "true",
+    },
+    url: baseURL,
+    reuseExistingServer: false,
+    timeout: 120_000,
+  },
   projects: [
     {
       name: "desktop",
