@@ -1,6 +1,12 @@
 import type { OrderStatus, UserRoleType } from "@prisma/client";
 import { getFeishuTenantAccessToken } from "@/lib/feishu-auth";
-import { buildProcurementNotificationCard } from "@/lib/feishu-procurement-card";
+import {
+  buildProcurementCardKitCard,
+  buildProcurementWebhookCard,
+} from "@/lib/feishu-procurement-card";
+import {
+  sendInteractiveCardKitDm,
+} from "@/lib/feishu-cardkit";
 import {
   getProcurementWebhookConfig,
   postToFeishuWebhook,
@@ -76,6 +82,12 @@ async function sendDirectCard(
   openId: string,
   card: Record<string, unknown>,
 ) {
+  if (card.schema === "2.0") {
+    await sendInteractiveCardKitDm(openId, card);
+    console.log(`[feishu] CardKit 审批卡已发送 openId=${openId}`);
+    return;
+  }
+
   const token = await getFeishuTenantAccessToken();
   const url = new URL("https://open.feishu.cn/open-apis/im/v1/messages");
   url.searchParams.set("receive_id_type", "open_id");
@@ -99,13 +111,14 @@ async function sendDirectCard(
       `飞书私信发送失败(${openId}): ${data.msg ?? res.status}`,
     );
   }
+}
 
-  const hasCallbackButtons = JSON.stringify(card).includes(
-    "procurement_approve",
-  );
-  if (hasCallbackButtons) {
-    console.log(`[feishu] 已发送含审批回调按钮的私信 openId=${openId}`);
-  }
+function buildApprovalDmCard(order: OrderCardPayload, options: CardOptions = {}) {
+  return buildProcurementCardKitCard(order, options);
+}
+
+function buildReadonlyDmCard(order: OrderCardPayload, options: CardOptions = {}) {
+  return buildProcurementWebhookCard(order, options);
 }
 
 async function notifyApproversByRole(
@@ -124,7 +137,7 @@ async function notifyApproversByRole(
     return;
   }
 
-  const card = buildProcurementNotificationCard(order, cardOptions);
+  const card = buildReadonlyDmCard(order, cardOptions);
   const results = await Promise.allSettled(
     openIds.map((openId) => sendDirectCard(openId, card)),
   );
@@ -146,9 +159,8 @@ export async function sendManagementReviewNotification(
   order: OrderCardPayload,
   context?: NotificationContext,
 ) {
-  const groupCard = buildProcurementNotificationCard(order, {
+  const groupCard = buildProcurementWebhookCard(order, {
     detailFocus: "approval",
-    readOnly: true,
     appOrigin: context?.appOrigin,
   });
 
@@ -159,7 +171,7 @@ export async function sendManagementReviewNotification(
     console.error("[feishu] Webhook 通知失败:", err);
   });
 
-  const approvalCard = buildProcurementNotificationCard(order, {
+  const approvalCard = buildApprovalDmCard(order, {
     detailFocus: "approval",
     appOrigin: context?.appOrigin,
   });
@@ -198,7 +210,7 @@ async function notifyInitiator(
   });
   if (!record?.initiator.openId) return;
 
-  const card = buildProcurementNotificationCard(order, cardOptions);
+  const card = buildReadonlyDmCard(order, cardOptions);
   await sendDirectCard(record.initiator.openId, card);
 }
 
@@ -209,7 +221,7 @@ export async function sendProcurementRejectedNotification(
   rejectedByName: string,
   context?: NotificationContext,
 ) {
-  const card = buildProcurementNotificationCard(order, {
+  const card = buildProcurementWebhookCard(order, {
     headerTitle: "采购申请已驳回",
     headerTemplate: "red",
     primaryButtonText: "查看详情",
@@ -248,7 +260,7 @@ export async function sendApplicantResubmitNotification(
   financeName: string,
   context?: NotificationContext,
 ) {
-  const card = buildProcurementNotificationCard(order, {
+  const card = buildProcurementWebhookCard(order, {
     headerTitle: "请重新提交报销资料",
     headerTemplate: "orange",
     detailFocus: "upload",
@@ -289,7 +301,7 @@ export async function sendProcurementReturnDraftNotification(
   returnedByName: string,
   context?: NotificationContext,
 ) {
-  const card = buildProcurementNotificationCard(order, {
+  const card = buildProcurementWebhookCard(order, {
     headerTitle: "请修改后重新提交采购申请",
     headerTemplate: "orange",
     primaryButtonText: "继续编辑",
@@ -342,11 +354,10 @@ export async function sendOrderNotification(
           : "查看详情";
 
   const isTeacherApproval = order.status === "TEACHER_REVIEW";
-  const groupCard = buildProcurementNotificationCard(order, {
+  const groupCard = buildProcurementWebhookCard(order, {
     detailFocus: focus,
     primaryButtonText: buttonText,
     appOrigin: context?.appOrigin,
-    readOnly: isTeacherApproval,
   });
 
   await postProcurementWebhook({
@@ -356,12 +367,17 @@ export async function sendOrderNotification(
     console.error("[feishu] Webhook 通知失败:", err);
   });
 
-  const dmCard = buildProcurementNotificationCard(order, {
-    detailFocus: focus,
-    primaryButtonText: buttonText,
-    appOrigin: context?.appOrigin,
-    readOnly: !isTeacherApproval,
-  });
+  const dmCard = isTeacherApproval
+    ? buildApprovalDmCard(order, {
+        detailFocus: focus,
+        primaryButtonText: buttonText,
+        appOrigin: context?.appOrigin,
+      })
+    : buildReadonlyDmCard(order, {
+        detailFocus: focus,
+        primaryButtonText: buttonText,
+        appOrigin: context?.appOrigin,
+      });
 
   if (
     order.status === "PENDING_APPLICANT_DOCS" ||

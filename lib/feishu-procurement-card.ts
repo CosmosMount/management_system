@@ -12,7 +12,6 @@ type CardOptions = {
   detailFocus?: "approval" | "upload" | "confirm";
   primaryButtonText?: string;
   appOrigin?: string | null;
-  /** 催办等场景：仅展示信息，不带审批按钮 */
   readOnly?: boolean;
 };
 
@@ -50,7 +49,6 @@ export function supportsProcurementCardApproval(status: OrderStatus): boolean {
   return status === "MANAGEMENT_REVIEW" || status === "TEACHER_REVIEW";
 }
 
-/** IM 私信 API 使用消息卡片 1.0：回调按钮用 value，链接按钮用 url */
 function callbackButton(
   label: string,
   type: "primary" | "default" | "danger",
@@ -60,11 +58,37 @@ function callbackButton(
     tag: "button",
     text: { tag: "plain_text", content: label },
     type,
-    value,
+    behaviors: [
+      {
+        type: "callback",
+        value,
+      },
+    ],
   };
 }
 
 function linkButton(
+  label: string,
+  url: string,
+  type: "primary" | "default" = "default",
+) {
+  return {
+    tag: "button",
+    text: { tag: "plain_text", content: label },
+    type,
+    behaviors: [
+      {
+        type: "open_url",
+        default_url: url,
+        pc_url: url,
+        ios_url: url,
+        android_url: url,
+      },
+    ],
+  };
+}
+
+function legacyLinkButton(
   label: string,
   url: string,
   type: "primary" | "default" = "default",
@@ -129,7 +153,8 @@ function buildSummaryMarkdown(
     .join("\n");
 }
 
-export function buildProcurementNotificationCard(
+/** CardKit + JSON 2.0，用于应用机器人私信（支持回调按钮） */
+export function buildProcurementCardKitCard(
   order: OrderCardPayload,
   options: CardOptions = {},
 ) {
@@ -139,15 +164,15 @@ export function buildProcurementNotificationCard(
   const useApprovalActions =
     !options.readOnly && supportsProcurementCardApproval(order.status);
 
-  const elements: Record<string, unknown>[] = [
+  const bodyElements: Record<string, unknown>[] = [
     {
-      tag: "div",
-      text: { tag: "lark_md", content: summary },
+      tag: "markdown",
+      content: summary,
     },
   ];
 
   if (useApprovalActions) {
-    elements.push({
+    bodyElements.push({
       tag: "form",
       name: `procurement_approval_${order.id}`,
       elements: [
@@ -166,16 +191,22 @@ export function buildProcurementNotificationCard(
           },
         },
         {
-          tag: "action",
-          actions: buildApprovalActions(order),
+          tag: "column_set",
+          flex_mode: "flow",
+          columns: buildApprovalActions(order).map((button) => ({
+            tag: "column",
+            width: "auto",
+            elements: [button],
+          })),
         },
       ],
     });
   }
 
-  elements.push({
-    tag: "action",
-    actions: [
+  bodyElements.push({
+    tag: "column_set",
+    flex_mode: "flow",
+    columns: [
       linkButton(
         options.primaryButtonText ?? "查看详情",
         detailUrl,
@@ -186,10 +217,15 @@ export function buildProcurementNotificationCard(
         buildAppUrl(routes.procurement.list, options.appOrigin),
         "default",
       ),
-    ],
+    ].map((button) => ({
+      tag: "column",
+      width: "auto",
+      elements: [button],
+    })),
   });
 
   return {
+    schema: "2.0",
     config: {
       wide_screen_mode: true,
       update_multi: true,
@@ -201,8 +237,65 @@ export function buildProcurementNotificationCard(
       },
       template: options.headerTemplate ?? "blue",
     },
-    elements,
+    body: {
+      elements: bodyElements,
+    },
   };
+}
+
+/** 群 Webhook 用旧版只读卡片（仅 URL 按钮） */
+export function buildProcurementWebhookCard(
+  order: OrderCardPayload,
+  options: CardOptions = {},
+) {
+  const focus = options.detailFocus ?? defaultDetailFocus(order.status);
+  const detailUrl = buildDetailUrl(order.id, focus, options.appOrigin);
+  const summary = buildSummaryMarkdown(order, options);
+
+  return {
+    config: { wide_screen_mode: true },
+    header: {
+      title: {
+        tag: "plain_text",
+        content: options.headerTitle ?? "采购报销审批提醒",
+      },
+      template: options.headerTemplate ?? "blue",
+    },
+    elements: [
+      {
+        tag: "div",
+        text: { tag: "lark_md", content: summary },
+      },
+      {
+        tag: "action",
+        actions: [
+          legacyLinkButton(
+            options.primaryButtonText ?? "查看详情",
+            detailUrl,
+            "primary",
+          ),
+          legacyLinkButton(
+            "订单列表",
+            buildAppUrl(routes.procurement.list, options.appOrigin),
+            "default",
+          ),
+        ],
+      },
+    ],
+  };
+}
+
+/** @deprecated 使用 buildProcurementCardKitCard 或 buildProcurementWebhookCard */
+export function buildProcurementNotificationCard(
+  order: OrderCardPayload,
+  options: CardOptions = {},
+) {
+  const readOnly =
+    options.readOnly || !supportsProcurementCardApproval(order.status);
+  if (readOnly) {
+    return buildProcurementWebhookCard(order, options);
+  }
+  return buildProcurementCardKitCard(order, options);
 }
 
 export function extractRejectReasonFromForm(

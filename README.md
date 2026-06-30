@@ -185,7 +185,7 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 4. 订阅事件（如 `im.message.receive_v1`）；在 **回调配置** 启用 `card.action.trigger`（采购审批按钮依赖此回调）
 5. 若后台启用了加密策略，将 `Encrypt Key` / `Verification Token` 填入 `FEISHU_EVENT_ENCRYPT_KEY`、`FEISHU_VERIFICATION_TOKEN`
 
-**采购审批私信**使用卡片 JSON 2.0，含 Markdown 明细表与「通过 / 驳回终止 / 退回修改」回调按钮；须在飞书后台启用 `card.action.trigger` 回调且 `feishu:ws` 在线。**群 Webhook 仅推送只读摘要**（自定义 Webhook 机器人不支持回调按钮，审批请在应用机器人私信中操作）。
+在飞书开放平台为应用开通 **`cardkit:card:write`**（卡片写权限），否则私信里的审批回调按钮无法发送。
 
 长连接进程由 `service/pnx-management-feishu-ws.service` 管理，与 Web 服务、定时任务一并可通过 `./service/install.sh` 安装。
 

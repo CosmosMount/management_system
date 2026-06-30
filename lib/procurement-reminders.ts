@@ -2,9 +2,10 @@ import type { OrderStatus } from "@prisma/client";
 import { mapOrderItems, type OrderCardPayload } from "@/lib/feishu";
 import { getFeishuTenantAccessToken } from "@/lib/feishu-auth";
 import {
-  buildProcurementNotificationCard,
+  buildProcurementCardKitCard,
   supportsProcurementCardApproval,
 } from "@/lib/feishu-procurement-card";
+import { sendInteractiveCardKitDm } from "@/lib/feishu-cardkit";
 import { getOpenIdsByRole } from "@/lib/permissions";
 import { buildAppUrl, type NotificationContext } from "@/lib/app-origin";
 import { prisma } from "@/lib/prisma";
@@ -77,6 +78,11 @@ async function sendDirectStaleCard(
   openId: string,
   card: Record<string, unknown>,
 ) {
+  if (card.schema === "2.0") {
+    await sendInteractiveCardKitDm(openId, card);
+    return;
+  }
+
   const token = await getFeishuTenantAccessToken();
   const url = new URL("https://open.feishu.cn/open-apis/im/v1/messages");
   url.searchParams.set("receive_id_type", "open_id");
@@ -115,7 +121,7 @@ function buildStaleCard(
   ];
 
   if (supportsProcurementCardApproval(order.status)) {
-    return buildProcurementNotificationCard(order, {
+    return buildProcurementCardKitCard(order, {
       headerTitle: "采购待办催办",
       headerTemplate: "orange",
       detailFocus: "approval",
