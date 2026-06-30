@@ -50,6 +50,7 @@ export function supportsProcurementCardApproval(status: OrderStatus): boolean {
   return status === "MANAGEMENT_REVIEW" || status === "TEACHER_REVIEW";
 }
 
+/** IM 私信 API 使用消息卡片 1.0：回调按钮用 value，链接按钮用 url */
 function callbackButton(
   label: string,
   type: "primary" | "default" | "danger",
@@ -59,12 +60,7 @@ function callbackButton(
     tag: "button",
     text: { tag: "plain_text", content: label },
     type,
-    behaviors: [
-      {
-        type: "callback",
-        value,
-      },
-    ],
+    value,
   };
 }
 
@@ -77,15 +73,7 @@ function linkButton(
     tag: "button",
     text: { tag: "plain_text", content: label },
     type,
-    behaviors: [
-      {
-        type: "open_url",
-        default_url: url,
-        pc_url: url,
-        ios_url: url,
-        android_url: url,
-      },
-    ],
+    url,
   };
 }
 
@@ -148,18 +136,18 @@ export function buildProcurementNotificationCard(
   const focus = options.detailFocus ?? defaultDetailFocus(order.status);
   const detailUrl = buildDetailUrl(order.id, focus, options.appOrigin);
   const summary = buildSummaryMarkdown(order, options);
-  const useApprovalForm =
+  const useApprovalActions =
     !options.readOnly && supportsProcurementCardApproval(order.status);
 
-  const bodyElements: Record<string, unknown>[] = [
+  const elements: Record<string, unknown>[] = [
     {
-      tag: "markdown",
-      content: summary,
+      tag: "div",
+      text: { tag: "lark_md", content: summary },
     },
   ];
 
-  if (useApprovalForm) {
-    bodyElements.push({
+  if (useApprovalActions) {
+    elements.push({
       tag: "form",
       name: `procurement_approval_${order.id}`,
       elements: [
@@ -185,13 +173,13 @@ export function buildProcurementNotificationCard(
     });
   }
 
-  bodyElements.push({
+  elements.push({
     tag: "action",
     actions: [
       linkButton(
         options.primaryButtonText ?? "查看详情",
         detailUrl,
-        useApprovalForm ? "default" : "primary",
+        useApprovalActions ? "default" : "primary",
       ),
       linkButton(
         "订单列表",
@@ -202,7 +190,6 @@ export function buildProcurementNotificationCard(
   });
 
   return {
-    schema: "2.0",
     config: {
       wide_screen_mode: true,
       update_multi: true,
@@ -214,9 +201,7 @@ export function buildProcurementNotificationCard(
       },
       template: options.headerTemplate ?? "blue",
     },
-    body: {
-      elements: bodyElements,
-    },
+    elements,
   };
 }
 

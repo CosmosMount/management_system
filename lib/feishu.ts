@@ -99,6 +99,13 @@ async function sendDirectCard(
       `飞书私信发送失败(${openId}): ${data.msg ?? res.status}`,
     );
   }
+
+  const hasCallbackButtons = JSON.stringify(card).includes(
+    "procurement_approve",
+  );
+  if (hasCallbackButtons) {
+    console.log(`[feishu] 已发送含审批回调按钮的私信 openId=${openId}`);
+  }
 }
 
 async function notifyApproversByRole(
