@@ -58,12 +58,7 @@ function callbackButton(
     tag: "button",
     text: { tag: "plain_text", content: label },
     type,
-    behaviors: [
-      {
-        type: "callback",
-        value,
-      },
-    ],
+    behaviors: [{ type: "callback", value }],
   };
 }
 
@@ -136,7 +131,7 @@ function buildSummaryMarkdown(
         : order.status === "PENDING_APPLICANT_DOCS"
           ? "\n**操作提示**：请重新上传发票、实物照片"
           : supportsProcurementCardApproval(order.status)
-            ? "\n**操作提示**：可在下方直接审批；驳回或退回时请填写原因"
+            ? "\n**操作提示**：可在下方直接审批；驳回/退回请打开系统填写原因"
             : "";
 
   return [
@@ -172,57 +167,23 @@ export function buildProcurementCardKitCard(
   ];
 
   if (useApprovalActions) {
-    bodyElements.push({
-      tag: "form",
-      name: `procurement_approval_${order.id}`,
-      elements: [
-        {
-          tag: "input",
-          name: REJECT_REASON_FIELD,
-          required: false,
-          max_length: 500,
-          placeholder: {
-            tag: "plain_text",
-            content: "驳回或退回时请填写原因（通过可留空）",
-          },
-          label: {
-            tag: "plain_text",
-            content: "审批说明",
-          },
-        },
-        {
-          tag: "column_set",
-          flex_mode: "flow",
-          columns: buildApprovalActions(order).map((button) => ({
-            tag: "column",
-            width: "auto",
-            elements: [button],
-          })),
-        },
-      ],
-    });
+    for (const button of buildApprovalActions(order)) {
+      bodyElements.push(button);
+    }
   }
 
-  bodyElements.push({
-    tag: "column_set",
-    flex_mode: "flow",
-    columns: [
-      linkButton(
-        options.primaryButtonText ?? "查看详情",
-        detailUrl,
-        useApprovalActions ? "default" : "primary",
-      ),
-      linkButton(
-        "订单列表",
-        buildAppUrl(routes.procurement.list, options.appOrigin),
-        "default",
-      ),
-    ].map((button) => ({
-      tag: "column",
-      width: "auto",
-      elements: [button],
-    })),
-  });
+  bodyElements.push(
+    linkButton(
+      options.primaryButtonText ?? "查看详情",
+      detailUrl,
+      useApprovalActions ? "default" : "primary",
+    ),
+    linkButton(
+      "订单列表",
+      buildAppUrl(routes.procurement.list, options.appOrigin),
+      "default",
+    ),
+  );
 
   return {
     schema: "2.0",
