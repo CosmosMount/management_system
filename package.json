@@ -12,6 +12,7 @@
     "typecheck:scripts": "tsc --noEmit --incremental false -p tsconfig.scripts.json",
     "check": "prisma validate && npm run typecheck && npm run typecheck:scripts && eslint app components lib scripts tests --max-warnings=0 && git diff --check",
     "cron": "tsx scripts/cron.ts",
+    "feishu:ws": "tsx scripts/feishu-ws.ts",
     "postinstall": "prisma generate",
     "db:deploy": "tsx scripts/deploy-db.ts",
     "db:seed": "tsx prisma/seed.ts",
@@ -28,6 +29,7 @@
   "dependencies": {
     "@base-ui/react": "^1.6.0",
     "@hookform/resolvers": "^5.4.0",
+    "@larksuiteoapi/node-sdk": "^1.68.0",
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "class-variance-authority": "^0.7.1",

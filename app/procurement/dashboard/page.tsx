@@ -11,6 +11,7 @@ import { PageShell } from "@/components/page-shell";
 import { Table2 } from "lucide-react";
 import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { buildDashboardChartsData } from "@/lib/procurement-dashboard-stats";
+import { resolveProcurementHandlerNames } from "@/lib/procurement-order-handlers";
 import { listBudgetPoolViews } from "@/lib/procurement-budget";
 import { currentBudgetPeriod } from "@/lib/import-procurement-budget";
 import { procurementSummaryWhere } from "@/lib/procurement-visibility";
@@ -29,6 +30,24 @@ export default async function DashboardPage() {
 
   const budgetPeriod = currentBudgetPeriod();
 
+  const activeOrders = orders.filter(
+    (o) =>
+      o.status !== "COMPLETED" &&
+      o.status !== "REJECTED" &&
+      o.status !== "DRAFT",
+  );
+  const handlerNamesByOrderId = await resolveProcurementHandlerNames(
+    activeOrders.map((o) => ({
+      id: o.id,
+      status: o.status,
+      team: o.team,
+      techGroup: o.techGroup,
+      initiatorName: o.initiatorName,
+      teamApproved: o.teamApproved,
+      techGroupApproved: o.techGroupApproved,
+    })),
+  );
+
   const chartData = buildDashboardChartsData(
     orders.map((o) => ({
       id: o.id,
@@ -42,6 +61,7 @@ export default async function DashboardPage() {
     })),
     budgetPools,
     budgetPeriod,
+    handlerNamesByOrderId,
   );
 
   const rows: SummaryRow[] = orders.flatMap((order) =>

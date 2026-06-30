@@ -3,6 +3,7 @@ set -eu
 
 SERVER_SERVICE_NAME="pnx-management-server.service"
 CRON_SERVICE_NAME="pnx-management-cron.service"
+FEISHU_WS_SERVICE_NAME="pnx-management-feishu-ws.service"
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PROJECT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
@@ -147,10 +148,12 @@ trap cleanup EXIT INT TERM
 
 server_unit="$tmp_dir/$SERVER_SERVICE_NAME"
 cron_unit="$tmp_dir/$CRON_SERVICE_NAME"
+feishu_ws_unit="$tmp_dir/$FEISHU_WS_SERVICE_NAME"
 runtime_env="$tmp_dir/pnx-management.env"
 
 render_template "$SCRIPT_DIR/$SERVER_SERVICE_NAME" "$server_unit"
 render_template "$SCRIPT_DIR/$CRON_SERVICE_NAME" "$cron_unit"
+render_template "$SCRIPT_DIR/$FEISHU_WS_SERVICE_NAME" "$feishu_ws_unit"
 write_runtime_env "$runtime_env"
 
 if [ "${DRY_RUN:-false}" = "true" ]; then
@@ -158,6 +161,7 @@ if [ "${DRY_RUN:-false}" = "true" ]; then
   mkdir -p "$dry_run_dir/systemd" "$dry_run_dir/env"
   install -m 0644 "$server_unit" "$dry_run_dir/systemd/$SERVER_SERVICE_NAME"
   install -m 0644 "$cron_unit" "$dry_run_dir/systemd/$CRON_SERVICE_NAME"
+  install -m 0644 "$feishu_ws_unit" "$dry_run_dir/systemd/$FEISHU_WS_SERVICE_NAME"
   install -m 0600 "$runtime_env" "$dry_run_dir/env/pnx-management.env"
   echo "Dry run rendered files to $dry_run_dir"
   echo "No systemd service was installed or started."
@@ -168,16 +172,21 @@ run_root install -d -m 0755 "$ENV_DIR"
 run_root install -m 0600 "$runtime_env" "$ENV_FILE"
 run_root install -m 0644 "$server_unit" "$SYSTEMD_DIR/$SERVER_SERVICE_NAME"
 run_root install -m 0644 "$cron_unit" "$SYSTEMD_DIR/$CRON_SERVICE_NAME"
+run_root install -m 0644 "$feishu_ws_unit" "$SYSTEMD_DIR/$FEISHU_WS_SERVICE_NAME"
 run_root systemctl daemon-reload
 run_root systemctl enable --now "$SERVER_SERVICE_NAME"
 run_root systemctl enable --now "$CRON_SERVICE_NAME"
+run_root systemctl enable --now "$FEISHU_WS_SERVICE_NAME"
 
 echo "Installed and enabled:"
 echo "  $SERVER_SERVICE_NAME"
 echo "  $CRON_SERVICE_NAME"
+echo "  $FEISHU_WS_SERVICE_NAME"
 echo
 echo "Useful commands:"
 echo "  systemctl status $SERVER_SERVICE_NAME --no-pager"
 echo "  systemctl status $CRON_SERVICE_NAME --no-pager"
+echo "  systemctl status $FEISHU_WS_SERVICE_NAME --no-pager"
 echo "  journalctl -u $SERVER_SERVICE_NAME -f"
 echo "  journalctl -u $CRON_SERVICE_NAME -f"
+echo "  journalctl -u $FEISHU_WS_SERVICE_NAME -f"

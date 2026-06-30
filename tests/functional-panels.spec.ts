@@ -105,6 +105,7 @@ test.describe("普通用户主功能面板", () => {
 
     await page.goto("/procurement/dashboard", { waitUntil: "networkidle" });
     await expect(page.getByRole("heading", { name: "采购看板" })).toBeVisible();
+    await expect(page.getByText(/处理人：/).first()).toBeVisible();
     await expectHealthyPage(page);
 
     await page.goto("/procurement/workshop-fee", { waitUntil: "networkidle" });

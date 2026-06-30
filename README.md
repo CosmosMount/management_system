@@ -145,8 +145,12 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 | `AUTH_SECRET` | Auth.js 密钥，可用 `openssl rand -hex 32` 生成 |
 | `FEISHU_APP_ID` | 飞书自建应用 App ID |
 | `FEISHU_APP_SECRET` | 飞书自建应用 App Secret |
-| `FEISHU_WEBHOOK_URL` | 应用机器人在通知群的 Webhook 地址 |
+| `FEISHU_WEBHOOK_URL` | 采购通知群 Webhook（与 `FEISHU_PROCUREMENT_WEBHOOK_URL` 二选一，后者优先） |
+| `FEISHU_PROCUREMENT_WEBHOOK_URL` | 采购专用群 Webhook |
 | `FEISHU_WEBHOOK_SECRET` | 可选，Webhook 签名校验密钥 |
+| `FEISHU_PROCUREMENT_WEBHOOK_SECRET` | 可选，采购 Webhook 签名（未配置时回退 `FEISHU_WEBHOOK_SECRET`） |
+| `FEISHU_EVENT_ENCRYPT_KEY` | 可选，事件订阅加密密钥（飞书后台「事件与回调」） |
+| `FEISHU_VERIFICATION_TOKEN` | 可选，事件订阅校验 Token |
 | `NEXT_PUBLIC_APP_URL` | 后台任务默认系统地址（cron 飞书卡片按钮跳转用） |
 | `APP_ALLOWED_ORIGINS` | 允许登录跳转和飞书按钮生成的完整 origin 列表 |
 | `LAN_HOST` | dev server 局域网访问 IP |
@@ -167,8 +171,23 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
    也可在登录页 `/login` 底部查看当前系统使用的地址。
 
 4. 权限管理：开通 **`contact:user.base:readonly`**（获取用户基本信息，用于登录）
-5. 将应用机器人拉入采购通知群
-6. 获取该机器人的 Webhook 地址，填入 `FEISHU_WEBHOOK_URL`
+5. 将**采购**应用机器人拉入采购通知群
+6. 获取采购机器人的 Webhook，填入 `FEISHU_WEBHOOK_URL` 或 `FEISHU_PROCUREMENT_WEBHOOK_URL`
+7. 采购与项目通知暂**共用同一飞书应用**（`FEISHU_APP_ID`）；群 Webhook 可用 `FEISHU_PROCUREMENT_WEBHOOK_URL` 指向采购群
+
+### 事件订阅（长连接，推荐）
+
+若飞书后台「事件与回调」要求配置 Request URL，**不要**填网站首页；本项目使用官方 SDK **长连接**接收事件，无需公网回调地址。
+
+1. 确保 `.env` 已配置 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`
+2. 启动长连接进程（开发：`npm run feishu:ws`；生产：`systemctl start pnx-management-feishu-ws`）
+3. 日志出现「长连接已建立」后，在飞书开放平台 **事件与回调** → 选择 **使用长连接接收事件/回调**
+4. 订阅事件（如 `im.message.receive_v1`）；在 **回调配置** 启用 `card.action.trigger`（采购审批按钮依赖此回调）
+5. 若后台启用了加密策略，将 `Encrypt Key` / `Verification Token` 填入 `FEISHU_EVENT_ENCRYPT_KEY`、`FEISHU_VERIFICATION_TOKEN`
+
+**采购审批私信**使用卡片 JSON 2.0，含 Markdown 明细表与「通过 / 驳回终止 / 退回修改」回调按钮；须在飞书后台启用 `card.action.trigger` 回调且 `feishu:ws` 在线。**群 Webhook 仅推送只读摘要**（自定义 Webhook 机器人不支持回调按钮，审批请在应用机器人私信中操作）。
+
+长连接进程由 `service/pnx-management-feishu-ws.service` 管理，与 Web 服务、定时任务一并可通过 `./service/install.sh` 安装。
 
 ## 角色配置（审批必做）
 

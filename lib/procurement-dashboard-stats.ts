@@ -88,6 +88,7 @@ export function buildDashboardChartsData(
   orders: OrderForStats[],
   poolViews: BudgetPoolView[] = [],
   budgetPeriod = "",
+  handlerNamesByOrderId: ReadonlyMap<string, string> = new Map(),
 ): DashboardChartsData {
   const completed = orders.filter((o) => o.status === "COMPLETED");
   const active = orders.filter(
@@ -159,9 +160,10 @@ export function buildDashboardChartsData(
           : order.status === "PENDING_APPLICANT_CONFIRM"
             ? "confirm"
             : "approval";
+      const handlerName = handlerNamesByOrderId.get(order.id) ?? "—";
       return {
         label: order.orderNo,
-        sublabel: `${statusLabels[order.status]} · ${order.initiatorName}`,
+        sublabel: `${statusLabels[order.status]} · 处理人：${handlerName} · 采购人：${order.initiatorName}`,
         value: daysSince(order.statusEnteredAt),
         href: `${routes.procurement.detail(order.id)}?focus=${focus}&from=notify#${focus}`,
       };

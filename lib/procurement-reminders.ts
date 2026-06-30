@@ -1,6 +1,10 @@
 import type { OrderStatus } from "@prisma/client";
 import { mapOrderItems, type OrderCardPayload } from "@/lib/feishu";
 import { getFeishuTenantAccessToken } from "@/lib/feishu-auth";
+import {
+  buildProcurementNotificationCard,
+  supportsProcurementCardApproval,
+} from "@/lib/feishu-procurement-card";
 import { getOpenIdsByRole } from "@/lib/permissions";
 import { buildAppUrl, type NotificationContext } from "@/lib/app-origin";
 import { prisma } from "@/lib/prisma";
@@ -104,6 +108,21 @@ function buildStaleCard(
   context?: NotificationContext,
 ) {
   const statusLabel = statusLabels[order.status];
+  const extraLines = [
+    `**当前环节**：${statusLabel}`,
+    `**已停留**：${stuckDays} 天未处理`,
+    "**请尽快处理，避免影响报销进度**",
+  ];
+
+  if (supportsProcurementCardApproval(order.status)) {
+    return buildProcurementNotificationCard(order, {
+      headerTitle: "采购待办催办",
+      headerTemplate: "orange",
+      detailFocus: "approval",
+      appOrigin: context?.appOrigin,
+      extraLines,
+    });
+  }
 
   return {
     config: { wide_screen_mode: true },

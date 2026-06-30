@@ -29,6 +29,7 @@ It renders and installs:
 
 - `pnx-management-server.service`
 - `pnx-management-cron.service`
+- `pnx-management-feishu-ws.service`（飞书事件长连接，需在飞书后台选择「使用长连接接收事件」）
 
 Then it runs `systemctl daemon-reload`, enables both services, and starts them.
 
