@@ -9,7 +9,10 @@ import { SignatureRequiredDialog } from "@/components/signature-required-dialog"
 import { Button, buttonVariants } from "@/components/ui/button";
 import type { OrderStatus } from "@prisma/client";
 import { getActionErrorMessage } from "@/lib/action-error-message";
-import { canEditDraftOrder } from "@/lib/permissions-client";
+import {
+  canEditProcurementOrder,
+  canWithdrawProcurementOrder,
+} from "@/lib/permissions-client";
 import { cn } from "@/lib/utils";
 import { routes } from "@/lib/routes";
 
@@ -33,9 +36,16 @@ export function OrderDraftActions({
   const [loading, setLoading] = useState(false);
   const [signatureDialogOpen, setSignatureDialogOpen] = useState(false);
 
-  if (!canEditDraftOrder(status, userOpenId, initiatorOpenId)) {
+  if (!canEditProcurementOrder(status, userOpenId, initiatorOpenId)) {
     return null;
   }
+
+  const isDraft = status === "DRAFT";
+  const isInReview = canWithdrawProcurementOrder(
+    status,
+    userOpenId,
+    initiatorOpenId,
+  );
 
   function handleSubmit() {
     if (!hasSignature) {
@@ -60,18 +70,20 @@ export function OrderDraftActions({
   return (
     <div className="flex flex-wrap gap-2">
       <Link
-        href={`${routes.procurement.edit(orderId)}`}
+        href={routes.procurement.edit(orderId)}
         className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
       >
-        继续编辑
+        {isInReview ? "修改清单" : "继续编辑"}
       </Link>
-      <Button
-        size="sm"
-        onClick={handleSubmit}
-        disabled={pending || loading}
-      >
-        提交申请
-      </Button>
+      {isDraft ? (
+        <Button
+          size="sm"
+          onClick={handleSubmit}
+          disabled={pending || loading}
+        >
+          提交申请
+        </Button>
+      ) : null}
       <SignatureRequiredDialog
         open={signatureDialogOpen}
         onOpenChange={setSignatureDialogOpen}

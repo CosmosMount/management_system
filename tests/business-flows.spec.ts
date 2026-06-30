@@ -199,6 +199,56 @@ test("采购草稿从列表进入编辑后可再次保存草稿并提交", async
   await expectHealthyPage(page);
 });
 
+test("采购人可在管理审核阶段修改清单并重新提交", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  await loginAsNormalUser(context, baseURL, normalAuth);
+  const editedItemName = `PW全功能-审核中改单物料-${Date.now()}`;
+
+  await page.goto(`/procurement/${fixtures.reviewOrderId}`, {
+    waitUntil: "networkidle",
+  });
+  await expect(page.getByRole("link", { name: "修改清单" })).toBeVisible();
+  await page.getByRole("link", { name: "修改清单" }).click();
+  await expect(page).toHaveURL(
+    new RegExp(`/procurement/${fixtures.reviewOrderId}/edit$`),
+  );
+
+  await expect
+    .poll(async () => {
+      const order = await prisma.purchaseOrder.findUniqueOrThrow({
+        where: { id: fixtures.reviewOrderId },
+        select: { status: true },
+      });
+      return order.status;
+    })
+    .toBe("DRAFT");
+
+  await fillProcurementItemFields(page, editedItemName, "320");
+  await page.getByRole("button", { name: "提交申请" }).click();
+
+  await expect
+    .poll(async () => {
+      const order = await prisma.purchaseOrder.findUniqueOrThrow({
+        where: { id: fixtures.reviewOrderId },
+        include: { items: { select: { name: true } } },
+      });
+      return {
+        status: order.status,
+        totalPrice: order.totalPrice,
+        itemName: order.items[0]?.name ?? "",
+      };
+    })
+    .toEqual({
+      status: "MANAGEMENT_REVIEW",
+      totalPrice: 320,
+      itemName: editedItemName,
+    });
+  await expectHealthyPage(page);
+});
+
 test("采购管理审核可终止驳回", async ({ page, context, baseURL }) => {
   await loginAsAdminUser(context, baseURL);
   const reason = `PW全功能-管理审核终止驳回-${Date.now()}`;

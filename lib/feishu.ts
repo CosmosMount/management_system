@@ -84,7 +84,7 @@ async function sendDirectCard(
 ) {
   if (card.schema === "2.0") {
     await sendInteractiveCardKitDm(openId, card);
-    console.log(`[feishu] CardKit 审批卡已发送 openId=${openId}`);
+    console.log(`[feishu] CardKit 卡片已发送 openId=${openId}`);
     return;
   }
 
@@ -118,7 +118,7 @@ function buildApprovalDmCard(order: OrderCardPayload, options: CardOptions = {})
 }
 
 function buildReadonlyDmCard(order: OrderCardPayload, options: CardOptions = {}) {
-  return buildProcurementWebhookCard(order, options);
+  return buildProcurementCardKitCard(order, { ...options, readOnly: true });
 }
 
 async function notifyApproversByRole(
@@ -177,26 +177,34 @@ export async function sendManagementReviewNotification(
   });
 
   const roles: UserRoleType[] = ["TEAM_ADMIN", "TECH_GROUP_ADMIN"];
+  const openIdSet = new Set<string>();
   for (const role of roles) {
     const openIds = await getOpenIdsByRole(role, {
       team: order.team,
       techGroup: order.techGroup,
     });
-    if (openIds.length === 0) continue;
-    const results = await Promise.allSettled(
-      openIds.map((openId) => sendDirectCard(openId, approvalCard)),
+    openIds.forEach((id) => openIdSet.add(id));
+  }
+
+  if (openIdSet.size === 0) {
+    console.warn(
+      "[feishu] 管理审核无可通知审批人（请确保车组/技术组组长已飞书登录本系统）",
     );
-    const failures = results.filter(
-      (result): result is PromiseRejectedResult => result.status === "rejected",
+    return;
+  }
+
+  const results = await Promise.allSettled(
+    [...openIdSet].map((openId) => sendDirectCard(openId, approvalCard)),
+  );
+  const failures = results.filter(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (failures.length > 0) {
+    const reason = failures[0]?.reason;
+    const message = reason instanceof Error ? reason.message : String(reason);
+    throw new Error(
+      `飞书私信通知失败：${failures.length}/${results.length} 个收件人失败；${message}`,
     );
-    if (failures.length > 0) {
-      const reason = failures[0]?.reason;
-      const message =
-        reason instanceof Error ? reason.message : String(reason);
-      throw new Error(
-        `飞书私信通知失败：${failures.length}/${results.length} 个收件人失败；${message}`,
-      );
-    }
   }
 }
 
@@ -354,18 +362,24 @@ export async function sendOrderNotification(
           : "查看详情";
 
   const isTeacherApproval = order.status === "TEACHER_REVIEW";
-  const groupCard = buildProcurementWebhookCard(order, {
-    detailFocus: focus,
-    primaryButtonText: buttonText,
-    appOrigin: context?.appOrigin,
-  });
+  const initiatorOnly =
+    order.status === "PENDING_APPLICANT_DOCS" ||
+    order.status === "PENDING_APPLICANT_CONFIRM";
 
-  await postProcurementWebhook({
-    msg_type: "interactive",
-    card: groupCard,
-  }).catch((err) => {
-    console.error("[feishu] Webhook 通知失败:", err);
-  });
+  if (!initiatorOnly) {
+    const groupCard = buildProcurementWebhookCard(order, {
+      detailFocus: focus,
+      primaryButtonText: buttonText,
+      appOrigin: context?.appOrigin,
+    });
+
+    await postProcurementWebhook({
+      msg_type: "interactive",
+      card: groupCard,
+    }).catch((err) => {
+      console.error("[feishu] Webhook 通知失败:", err);
+    });
+  }
 
   const dmCard = isTeacherApproval
     ? buildApprovalDmCard(order, {

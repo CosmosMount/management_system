@@ -18,6 +18,7 @@ import {
   type ProgressNotifyPayload,
 } from "@/lib/feishu-progress";
 import type { NotificationContext } from "@/lib/app-origin";
+import { defaultAppOrigin } from "@/lib/app-origin";
 import { prisma } from "@/lib/prisma";
 
 type ProgressOutboxPayload = {
@@ -485,7 +486,9 @@ async function sendOutboxNotification(row: NotificationOutbox) {
 
   if (row.channel === "procurement") {
     const data = JSON.parse(row.payload) as OrderOutboxPayload;
-    const context = { appOrigin: data.appOrigin ?? undefined };
+    const context = {
+      appOrigin: data.appOrigin ?? defaultAppOrigin(),
+    };
     if (data.kind === "order") {
       await sendOrderNotification(data.order, context);
       return;
@@ -523,7 +526,9 @@ async function sendOutboxNotification(row: NotificationOutbox) {
 
   if (row.channel === "feedback") {
     const data = JSON.parse(row.payload) as FeedbackOutboxPayload;
-    const context = { appOrigin: data.appOrigin ?? undefined };
+    const context = {
+      appOrigin: data.appOrigin ?? defaultAppOrigin(),
+    };
     if (data.kind === "created") {
       await sendFeedbackCreatedNotification(data.payload, context);
       return;

@@ -4,6 +4,7 @@ import {
   drainNotificationOutboxSoon,
   enqueueOrderNotificationTx,
 } from "@/lib/notification-outbox";
+import { getDefaultNotificationContext } from "@/lib/request-origin";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";
 import {
@@ -55,6 +56,7 @@ export async function approveProcurementByOpenId(
 
     await requireApproverSignature(openId);
 
+    const notifyContext = getDefaultNotificationContext();
     const { advancedToTeacherReview } = await prisma.$transaction(async (tx) => {
       const approvalTargets = [
         ...(canTeam ? [{ teamApproved: false }] : []),
@@ -118,6 +120,7 @@ export async function approveProcurementByOpenId(
             techGroup: finalOrder.techGroup,
             items: mapOrderItems(order.items),
           },
+          notifyContext,
         );
       }
       return { advancedToTeacherReview: advanced.count === 1 };
@@ -149,6 +152,7 @@ export async function approveProcurementByOpenId(
 
     await requireApproverSignature(openId);
 
+    const notifyContext = getDefaultNotificationContext();
     const updated = await prisma.$transaction(async (tx) => {
       const locked = await tx.purchaseOrder.updateMany({
         where: { id: orderId, status: OrderStatus.TEACHER_REVIEW },
@@ -176,6 +180,7 @@ export async function approveProcurementByOpenId(
           techGroup: record.techGroup,
           items: mapOrderItems(order.items),
         },
+        notifyContext,
       );
       return record;
     });

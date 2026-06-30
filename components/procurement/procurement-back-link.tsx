@@ -94,8 +94,8 @@ export function OrdersBackHeader({
 export function EditDraftHeader({ orderNo }: { orderNo: string }) {
   return (
     <OrdersBackHeader
-      title={`编辑草稿 ${orderNo}`}
-      description="修改后保存或重新提交申请"
+      title={`编辑采购清单 ${orderNo}`}
+      description="老师审核通过前可修改明细，保存或重新提交申请"
     />
   );
 }

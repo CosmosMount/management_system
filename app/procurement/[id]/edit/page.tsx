@@ -6,7 +6,8 @@ import { OrderRejectionNotice } from "@/components/procurement/order-rejection-n
 import { ProcurementPageLayout } from "@/components/procurement/procurement-page-layout";
 import { PageShell } from "@/components/page-shell";
 import { auth } from "@/lib/auth";
-import { canEditDraftOrder } from "@/lib/permissions";
+import { canEditProcurementOrder } from "@/lib/permissions";
+import { ensureProcurementOrderEditableDraft } from "@/lib/procurement-order-draft";
 import { prisma } from "@/lib/prisma";
 import { toOrderFormInput } from "@/lib/validations/order";
 import { userHasSignature } from "@/lib/user-signature";
@@ -35,7 +36,7 @@ export default async function EditOrderPage({ params }: Props) {
   }
 
   if (
-    !canEditDraftOrder(
+    !canEditProcurementOrder(
       order.status,
       session.user.openId,
       order.initiator.openId,
@@ -44,6 +45,11 @@ export default async function EditOrderPage({ params }: Props) {
     notFound();
   }
 
+  const editableOrder = await ensureProcurementOrderEditableDraft(
+    id,
+    session.user.openId,
+  );
+
   const hasSignature = await userHasSignature(session.user.openId);
 
   return (
@@ -51,18 +57,18 @@ export default async function EditOrderPage({ params }: Props) {
       <AppHeader />
       <PageShell>
         <ProcurementPageLayout className="max-w-4xl space-y-3">
-          <EditDraftHeader orderNo={order.orderNo} />
-          {order.rejectionReason ? (
+          <EditDraftHeader orderNo={editableOrder.orderNo} />
+          {editableOrder.rejectionReason ? (
             <OrderRejectionNotice
-              reason={order.rejectionReason}
-              status={order.status}
-              rejectedByName={order.rejectedByName}
-              rejectedAt={order.rejectedAt}
+              reason={editableOrder.rejectionReason}
+              status={editableOrder.status}
+              rejectedByName={editableOrder.rejectedByName}
+              rejectedAt={editableOrder.rejectedAt}
             />
           ) : null}
           <ApplyForm
-            orderId={order.id}
-            initialValues={toOrderFormInput(order)}
+            orderId={editableOrder.id}
+            initialValues={toOrderFormInput(editableOrder)}
             hasSignature={hasSignature}
           />
         </ProcurementPageLayout>

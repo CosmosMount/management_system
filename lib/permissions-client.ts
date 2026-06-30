@@ -118,6 +118,33 @@ export function canEditDraftOrder(
   return status === "DRAFT" && isOrderInitiator(userOpenId, initiatorOpenId);
 }
 
+/** 老师审核通过前，采购人可编辑清单并重新提交 */
+export function canEditProcurementOrder(
+  status: OrderStatus,
+  userOpenId: string | undefined,
+  initiatorOpenId: string,
+): boolean {
+  if (!isOrderInitiator(userOpenId, initiatorOpenId)) {
+    return false;
+  }
+  return (
+    status === "DRAFT" ||
+    status === "MANAGEMENT_REVIEW" ||
+    status === "TEACHER_REVIEW"
+  );
+}
+
+export function canWithdrawProcurementOrder(
+  status: OrderStatus,
+  userOpenId: string | undefined,
+  initiatorOpenId: string,
+): boolean {
+  if (!isOrderInitiator(userOpenId, initiatorOpenId)) {
+    return false;
+  }
+  return status === "MANAGEMENT_REVIEW" || status === "TEACHER_REVIEW";
+}
+
 export function canUploadApplicantDocs(
   status: OrderStatus,
   userOpenId: string | undefined,

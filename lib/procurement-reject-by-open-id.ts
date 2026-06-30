@@ -5,6 +5,7 @@ import {
   enqueueProcurementRejectedNotificationTx,
   enqueueProcurementReturnDraftNotification,
 } from "@/lib/notification-outbox";
+import { getDefaultNotificationContext } from "@/lib/request-origin";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";
 import {
@@ -136,6 +137,7 @@ export async function rejectProcurementByOpenId(
     { ...orderPayload, status: OrderStatus.DRAFT },
     trimmedReason,
     actorName,
+    getDefaultNotificationContext(),
   );
   drainNotificationOutboxSoon();
   return { message: `已退回修改，已通知采购人 ${order.initiatorName}` };

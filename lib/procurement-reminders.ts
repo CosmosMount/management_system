@@ -7,10 +7,10 @@ import {
 } from "@/lib/feishu-procurement-card";
 import { sendInteractiveCardKitDm } from "@/lib/feishu-cardkit";
 import { getOpenIdsByRole } from "@/lib/permissions";
-import { buildAppUrl, type NotificationContext } from "@/lib/app-origin";
+import type { NotificationContext } from "@/lib/app-origin";
+
 import { prisma } from "@/lib/prisma";
 import { statusApproverRole, statusLabels } from "@/lib/permissions-client";
-import { routes } from "@/lib/routes";
 
 const REMINDER_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
@@ -36,20 +36,6 @@ function shouldSendReminder(order: {
   if (stuckMs < REMINDER_INTERVAL_MS) return false;
   if (!order.lastReminderAt) return true;
   return Date.now() - order.lastReminderAt.getTime() >= REMINDER_INTERVAL_MS;
-}
-
-function orderDetailUrl(
-  orderId: string,
-  status: OrderStatus,
-  appOrigin?: string | null,
-): string {
-  const focus =
-    status === "PENDING_APPLICANT_DOCS"
-      ? "upload"
-      : status === "PENDING_APPLICANT_CONFIRM"
-        ? "confirm"
-        : "approval";
-  return `${buildAppUrl(`${routes.procurement.detail(orderId)}`, appOrigin)}?focus=${focus}&from=notify#${focus}`;
 }
 
 function toCardPayload(order: {
@@ -130,40 +116,20 @@ function buildStaleCard(
     });
   }
 
-  return {
-    config: { wide_screen_mode: true },
-    header: {
-      title: { tag: "plain_text", content: "采购待办催办" },
-      template: "orange",
-    },
-    elements: [
-      {
-        tag: "div",
-        text: {
-          tag: "lark_md",
-          content: [
-            `**当前环节**：${statusLabel}`,
-            `**已停留**：${stuckDays} 天未处理`,
-            `**申请人**：${order.initiatorName}`,
-            `**单号**：${order.orderNo}`,
-            `**金额**：¥${order.totalPrice.toFixed(2)}`,
-            "**请尽快处理，避免影响报销进度**",
-          ].join("\n"),
-        },
-      },
-      {
-        tag: "action",
-        actions: [
-          {
-            tag: "button",
-            text: { tag: "plain_text", content: "前往处理" },
-            url: orderDetailUrl(order.id, order.status, context?.appOrigin),
-            type: "primary",
-          },
-        ],
-      },
-    ],
-  };
+  return buildProcurementCardKitCard(order, {
+    headerTitle: "采购待办催办",
+    headerTemplate: "orange",
+    detailFocus:
+      order.status === "PENDING_APPLICANT_DOCS"
+        ? "upload"
+        : order.status === "PENDING_APPLICANT_CONFIRM"
+          ? "confirm"
+          : "approval",
+    primaryButtonText: "前往处理",
+    appOrigin: context?.appOrigin,
+    extraLines,
+    readOnly: true,
+  });
 }
 
 async function notifyInitiatorStale(

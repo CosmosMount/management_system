@@ -40,6 +40,7 @@ import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { groupOrderAttachments } from "@/lib/order-attachments";
 import {
   canViewReimbursementAttachments,
+  canWithdrawProcurementOrder,
   getUserRoles,
   isSuperAdmin,
   statusLabels,
@@ -100,6 +101,12 @@ export default async function OrderDetailPage({ params, searchParams }: Props) {
     order.status,
     userRoles,
     orderScope,
+    session?.user?.openId,
+    order.initiator.openId,
+  );
+
+  const canWithdrawForEdit = canWithdrawProcurementOrder(
+    order.status,
     session?.user?.openId,
     order.initiator.openId,
   );
@@ -186,6 +193,11 @@ export default async function OrderDetailPage({ params, searchParams }: Props) {
                 rejectedByName={order.rejectedByName}
                 rejectedAt={order.rejectedAt}
               />
+            ) : null}
+            {canWithdrawForEdit ? (
+              <p className="text-sm text-muted-foreground">
+                老师审核通过前，你可点击「修改清单」编辑采购明细并重新提交，已进行的审批将清零。
+              </p>
             ) : null}
           </div>
 
