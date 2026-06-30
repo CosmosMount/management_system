@@ -1,11 +1,24 @@
 import { OrderStatus } from "@prisma/client";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
+import { revalidateProcurement } from "@/lib/revalidate";
 import { canEditProcurementOrder } from "@/lib/permissions-client";
 import { prisma } from "@/lib/prisma";
 
 export function procurementWithdrawToDraftFields() {
   return {
     status: OrderStatus.DRAFT,
+    teamApproved: false,
+    techGroupApproved: false,
+    teamApproverOpenId: null,
+    techGroupApproverOpenId: null,
+    ...stepTimerResetFields(),
+  };
+}
+
+/** 草稿/退回后重新提交进入管理审核 */
+export function procurementResubmitFields() {
+  return {
+    status: OrderStatus.MANAGEMENT_REVIEW,
     teamApproved: false,
     techGroupApproved: false,
     teamApproverOpenId: null,
@@ -56,6 +69,8 @@ export async function ensureProcurementOrderEditableDraft(
   if (updated.count !== 1) {
     throw new Error("订单状态已更新，请刷新后重试");
   }
+
+  revalidateProcurement(orderId);
 
   return prisma.purchaseOrder.findUniqueOrThrow({
     where: { id: orderId },

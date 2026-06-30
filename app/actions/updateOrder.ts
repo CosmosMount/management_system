@@ -2,10 +2,12 @@
 
 import { auth } from "@/lib/auth";
 import { OrderStatus } from "@prisma/client";
-import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { attachItemReferenceImages } from "@/lib/order-item-images";
 import { prisma } from "@/lib/prisma";
 import { canEditDraftOrder } from "@/lib/permissions";
+import {
+  procurementResubmitFields,
+} from "@/lib/procurement-order-draft";
 import { runProcurementSubmitSideEffects } from "@/lib/procurement-order-side-effects";
 import { revalidateProcurement } from "@/lib/revalidate";
 import { requireInitiatorSignature } from "@/lib/user-signature";
@@ -65,9 +67,6 @@ export async function updateOrder(formData: FormData) {
 
   const storedItems = parsed.items.map(toStoredPurchaseItem);
   const totalPrice = parsed.items.reduce((sum, item) => sum + item.lineTotal, 0);
-  const nextStatus = parsed.submit
-    ? OrderStatus.MANAGEMENT_REVIEW
-    : OrderStatus.DRAFT;
 
   const order = await prisma.$transaction(async (tx) => {
     return tx.purchaseOrder.update({
@@ -76,8 +75,7 @@ export async function updateOrder(formData: FormData) {
         team: parsed.team,
         techGroup: parsed.techGroup,
         totalPrice,
-        status: nextStatus,
-        ...(parsed.submit ? stepTimerResetFields() : {}),
+        ...(parsed.submit ? procurementResubmitFields() : { status: OrderStatus.DRAFT }),
         items: {
           deleteMany: {},
           create: storedItems,
@@ -102,7 +100,7 @@ export async function updateOrder(formData: FormData) {
     throw new Error("订单更新失败");
   }
 
-  if (nextStatus === OrderStatus.MANAGEMENT_REVIEW) {
+  if (parsed.submit) {
     await runProcurementSubmitSideEffects(refreshed);
   }
 
@@ -124,10 +122,7 @@ export async function submitDraftOrder(orderId: string) {
 
   const updated = await prisma.purchaseOrder.update({
     where: { id: orderId },
-    data: {
-      status: OrderStatus.MANAGEMENT_REVIEW,
-      ...stepTimerResetFields(),
-    },
+    data: procurementResubmitFields(),
     include: { items: true },
   });
 

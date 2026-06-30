@@ -213,7 +213,7 @@ test("采购人可在管理审核阶段修改清单并重新提交", async ({
   await expect(page.getByRole("link", { name: "修改清单" })).toBeVisible();
   await page.getByRole("link", { name: "修改清单" }).click();
   await expect(page).toHaveURL(
-    new RegExp(`/procurement/${fixtures.reviewOrderId}/edit$`),
+    new RegExp(`/procurement/${fixtures.reviewOrderId}/edit\\?withdraw=1$`),
   );
 
   await expect

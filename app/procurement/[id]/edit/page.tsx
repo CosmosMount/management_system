@@ -9,15 +9,19 @@ import { auth } from "@/lib/auth";
 import { canEditProcurementOrder } from "@/lib/permissions";
 import { ensureProcurementOrderEditableDraft } from "@/lib/procurement-order-draft";
 import { prisma } from "@/lib/prisma";
+import { routes } from "@/lib/routes";
 import { toOrderFormInput } from "@/lib/validations/order";
 import { userHasSignature } from "@/lib/user-signature";
 
 type Props = {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ withdraw?: string }>;
 };
 
-export default async function EditOrderPage({ params }: Props) {
+export default async function EditOrderPage({ params, searchParams }: Props) {
   const { id } = await params;
+  const { withdraw } = await searchParams;
+  const wantsWithdraw = withdraw === "1";
   const session = await auth();
   if (!session?.user?.openId) {
     redirect("/login");
@@ -45,10 +49,20 @@ export default async function EditOrderPage({ params }: Props) {
     notFound();
   }
 
-  const editableOrder = await ensureProcurementOrderEditableDraft(
-    id,
-    session.user.openId,
-  );
+  let editableOrder = order;
+  if (order.status === "DRAFT") {
+    editableOrder = order;
+  } else if (
+    wantsWithdraw &&
+    (order.status === "MANAGEMENT_REVIEW" || order.status === "TEACHER_REVIEW")
+  ) {
+    editableOrder = await ensureProcurementOrderEditableDraft(
+      id,
+      session.user.openId,
+    );
+  } else {
+    redirect(routes.procurement.detail(id));
+  }
 
   const hasSignature = await userHasSignature(session.user.openId);
 

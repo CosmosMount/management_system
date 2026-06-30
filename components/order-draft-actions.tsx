@@ -58,6 +58,9 @@ export function OrderDraftActions({
       try {
         await submitDraftOrder(orderId);
         toast.success("申请已提交");
+        router.replace(
+          `${routes.procurement.detail(orderId)}?focus=approval&from=submit#approval`,
+        );
         router.refresh();
       } catch (err) {
         toast.error(getActionErrorMessage(err, "提交失败"));
@@ -70,7 +73,11 @@ export function OrderDraftActions({
   return (
     <div className="flex flex-wrap gap-2">
       <Link
-        href={routes.procurement.edit(orderId)}
+        href={
+          isInReview
+            ? `${routes.procurement.edit(orderId)}?withdraw=1`
+            : routes.procurement.edit(orderId)
+        }
         className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
       >
         {isInReview ? "修改清单" : "继续编辑"}

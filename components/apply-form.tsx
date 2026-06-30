@@ -139,7 +139,13 @@ export function ApplyForm({
         ? await updateOrder(formData)
         : await createOrder(formData);
       toast.success(submit ? "申请已提交" : "草稿已保存");
-      router.push(`${routes.procurement.detail(order.id)}`);
+      if (submit) {
+        router.replace(
+          `${routes.procurement.detail(order.id)}?focus=approval&from=submit#approval`,
+        );
+      } else {
+        router.push(`${routes.procurement.detail(order.id)}`);
+      }
       router.refresh();
     } catch (err) {
       toast.error(getActionErrorMessage(err, "提交失败"));
