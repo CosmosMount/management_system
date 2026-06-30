@@ -1,5 +1,6 @@
 import { cardToast } from "@/lib/feishu-card-response";
 import { extractRejectReasonFromForm } from "@/lib/feishu-procurement-card";
+import { prisma } from "@/lib/prisma";
 import { approveProcurementByOpenId } from "@/lib/procurement-approve-by-open-id";
 import { rejectProcurementByOpenId } from "@/lib/procurement-reject-by-open-id";
 
@@ -143,11 +144,31 @@ export async function handleFeishuCardAction(data: CardActionPayload) {
   const { action, orderId, reason } = resolved;
 
   if (action === "procurement_approve_management") {
+    const order = await prisma.purchaseOrder.findUnique({
+      where: { id: orderId },
+      select: { status: true },
+    });
+    if (!order) {
+      return cardToast("error", "订单不存在");
+    }
+    if (order.status !== "MANAGEMENT_REVIEW") {
+      return cardToast("info", "该管理审核卡片已失效，请打开系统查看最新状态");
+    }
     const result = await approveProcurementByOpenId(openId, orderId);
     return cardToast("success", result.message);
   }
 
   if (action === "procurement_approve_teacher") {
+    const order = await prisma.purchaseOrder.findUnique({
+      where: { id: orderId },
+      select: { status: true },
+    });
+    if (!order) {
+      return cardToast("error", "订单不存在");
+    }
+    if (order.status !== "TEACHER_REVIEW") {
+      return cardToast("info", "该老师审核卡片已失效，请打开系统查看最新状态");
+    }
     const result = await approveProcurementByOpenId(openId, orderId, {
       teacherOnly: true,
     });
@@ -159,6 +180,19 @@ export async function handleFeishuCardAction(data: CardActionPayload) {
     action === "procurement_reject_resubmit" ||
     action === "procurement_reject_terminate"
   ) {
+    const order = await prisma.purchaseOrder.findUnique({
+      where: { id: orderId },
+      select: { status: true },
+    });
+    if (!order) {
+      return cardToast("error", "订单不存在");
+    }
+    if (
+      order.status !== "MANAGEMENT_REVIEW" &&
+      order.status !== "TEACHER_REVIEW"
+    ) {
+      return cardToast("info", "该审批卡片已失效，请打开系统查看最新状态");
+    }
     if (!reason) {
       console.log("[feishu-ws] 驳回缺少原因", {
         formValue: data.action?.form_value,
@@ -170,7 +204,7 @@ export async function handleFeishuCardAction(data: CardActionPayload) {
       openId,
       orderId,
       reason,
-      "resubmit",
+      action === "procurement_reject_terminate" ? "terminate" : "resubmit",
     );
     return cardToast("success", result.message);
   }

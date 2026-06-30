@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { submitDraftOrder } from "@/app/actions/updateOrder";
+import { withdrawProcurementOrderForEdit } from "@/app/actions/withdrawProcurementOrder";
 import { SignatureRequiredDialog } from "@/components/signature-required-dialog";
 import { Button, buttonVariants } from "@/components/ui/button";
 import type { OrderStatus } from "@prisma/client";
@@ -70,18 +71,42 @@ export function OrderDraftActions({
     });
   }
 
+  function handleWithdrawForEdit() {
+    setLoading(true);
+    startTransition(async () => {
+      try {
+        await withdrawProcurementOrderForEdit(orderId);
+        toast.success("已撤回为草稿，可修改后重新提交");
+        router.push(routes.procurement.edit(orderId));
+        router.refresh();
+      } catch (err) {
+        toast.error(getActionErrorMessage(err, "撤回失败"));
+      } finally {
+        setLoading(false);
+      }
+    });
+  }
+
   return (
     <div className="flex flex-wrap gap-2">
-      <Link
-        href={
-          isInReview
-            ? `${routes.procurement.edit(orderId)}?withdraw=1`
-            : routes.procurement.edit(orderId)
-        }
-        className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
-      >
-        {isInReview ? "修改清单" : "继续编辑"}
-      </Link>
+      {isInReview ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={handleWithdrawForEdit}
+          disabled={pending || loading}
+        >
+          修改清单
+        </Button>
+      ) : (
+        <Link
+          href={routes.procurement.edit(orderId)}
+          className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+        >
+          继续编辑
+        </Link>
+      )}
       {isDraft ? (
         <Button
           size="sm"

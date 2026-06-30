@@ -7,7 +7,7 @@ import {
   drainNotificationOutboxSoon,
   enqueueApplicantResubmitNotification,
   enqueueProcurementRejectedNotificationTx,
-  enqueueProcurementReturnDraftNotification,
+  enqueueProcurementReturnDraftNotificationTx,
 } from "@/lib/notification-outbox";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";
@@ -141,30 +141,36 @@ export async function rejectProcurementOrder(input: {
         );
       });
     } else {
-      const updated = await prisma.purchaseOrder.updateMany({
-        where: { id: orderId, status: order.status },
-        data: {
-          status: OrderStatus.DRAFT,
-          teamApproved: false,
-          techGroupApproved: false,
-          teamApproverOpenId: null,
-          techGroupApproverOpenId: null,
-          rejectionReason: reason,
-          rejectedAt: new Date(),
-          rejectedByName: actorName,
-          ...stepTimerResetFields(),
-        },
+      await prisma.$transaction(async (tx) => {
+        const updated = await tx.purchaseOrder.updateMany({
+          where: { id: orderId, status: order.status },
+          data: {
+            status: OrderStatus.DRAFT,
+            teamApproved: false,
+            techGroupApproved: false,
+            teamApproverOpenId: null,
+            techGroupApproverOpenId: null,
+            rejectionReason: reason,
+            rejectedAt: new Date(),
+            rejectedByName: actorName,
+            ...stepTimerResetFields(),
+          },
+        });
+        if (updated.count !== 1) {
+          throw new Error("订单状态已更新，请刷新后重试");
+        }
+        const record = await tx.purchaseOrder.findUniqueOrThrow({
+          where: { id: orderId },
+        });
+        await enqueueProcurementReturnDraftNotificationTx(
+          tx,
+          `procurement:return_draft:${record.id}:${record.updatedAt.toISOString()}`,
+          { ...orderPayload, status: record.status },
+          reason,
+          actorName,
+          context,
+        );
       });
-      if (updated.count !== 1) {
-        throw new Error("订单状态已更新，请刷新后重试");
-      }
-      await enqueueProcurementReturnDraftNotification(
-        `procurement:return_draft:${orderId}:${Date.now()}`,
-        { ...orderPayload, status: OrderStatus.DRAFT },
-        reason,
-        actorName,
-        context,
-      );
     }
   } else if (order.status === OrderStatus.PENDING_FINANCE_REVIEW) {
     if (outcome === "terminate") {

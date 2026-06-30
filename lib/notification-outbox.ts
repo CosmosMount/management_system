@@ -337,6 +337,28 @@ export async function enqueueProcurementReturnDraftNotification(
   });
 }
 
+export async function enqueueProcurementReturnDraftNotificationTx(
+  tx: Prisma.TransactionClient,
+  eventKey: string,
+  order: OrderCardPayload,
+  reason: string,
+  returnedByName: string,
+  context?: NotificationContext,
+) {
+  return enqueueNotificationTx(tx, {
+    eventKey,
+    channel: "procurement",
+    type: "procurement_return_draft",
+    payload: {
+      kind: "procurement_return_draft",
+      order,
+      reason,
+      returnedByName,
+      appOrigin: context?.appOrigin ?? null,
+    } satisfies OrderOutboxPayload,
+  });
+}
+
 export async function enqueueBudgetThresholdNotification(
   eventKey: string,
   budget: BudgetThresholdPayload,

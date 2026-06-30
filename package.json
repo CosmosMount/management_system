@@ -13,7 +13,7 @@
     "check": "prisma validate && npm run typecheck && npm run typecheck:scripts && eslint app components lib scripts tests --max-warnings=0 && git diff --check",
     "cron": "tsx scripts/cron.ts",
     "feishu:ws": "tsx scripts/feishu-ws.ts",
-    "test:feishu-card": "tsx scripts/test-feishu-approval-card.ts",
+    "feishu:card-preview": "tsx scripts/test-feishu-approval-card.ts",
     "postinstall": "prisma generate",
     "db:deploy": "tsx scripts/deploy-db.ts",
     "db:seed": "tsx prisma/seed.ts",

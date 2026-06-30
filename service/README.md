@@ -29,9 +29,9 @@ It renders and installs:
 
 - `pnx-management-server.service`
 - `pnx-management-cron.service`
-- `pnx-management-feishu-ws.service`（飞书事件长连接，需在飞书后台选择「使用长连接接收事件」）
+- `pnx-management-feishu-ws.service`（可选；设置 `ENABLE_FEISHU_WS=true` 才安装并启动）
 
-Then it runs `systemctl daemon-reload`, enables both services, and starts them.
+Then it runs `systemctl daemon-reload`, enables the selected services, and starts them. By default only the web and cron services are installed; the Feishu WS worker is opt-in to avoid accidentally consuming production card callbacks.
 
 The web service runs `npm run db:deploy` before `npm start`, so PostgreSQL migrations are applied during service startup. It does not run `npm run build`; build the app before installing or restarting the service after code changes.
 

@@ -44,6 +44,7 @@ delete process.env.NO_COLOR;
 delete process.env.FORCE_COLOR;
 process.env.DATABASE_URL = testDatabaseUrl;
 process.env.PLAYWRIGHT_DATABASE_URL = testDatabaseUrl;
+process.env.NOTIFICATION_DELIVERY_DISABLED = "true";
 
 export default defineConfig({
   testDir: "./tests",

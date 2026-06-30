@@ -5,6 +5,13 @@ import { mapOrderItems } from "@/lib/feishu";
 import { prisma } from "@/lib/prisma";
 import { writeFileSync } from "fs";
 
+function canSendFeishu(): boolean {
+  return (
+    process.env.CONFIRM_SEND_FEISHU === "true" &&
+    process.env.NOTIFICATION_DELIVERY_DISABLED !== "true"
+  );
+}
+
 async function sendCard(openId: string, card: Record<string, unknown>, label: string) {
   const token = await getFeishuTenantAccessToken();
   const url = new URL("https://open.feishu.cn/open-apis/im/v1/messages");
@@ -151,16 +158,18 @@ async function createAndSendCardKit(
 
 async function main() {
   const openId = process.argv[2];
-  if (!openId) {
-    throw new Error("用法: tsx scripts/debug-feishu-card.ts <openId>");
+  const orderId = process.argv[3];
+  if (!openId || !orderId) {
+    throw new Error(
+      "用法: tsx scripts/debug-feishu-card.ts <openId> <orderId>。默认 dry-run；真实发送需设置 CONFIRM_SEND_FEISHU=true。",
+    );
   }
 
-  const order = await prisma.purchaseOrder.findFirst({
-    where: { status: "MANAGEMENT_REVIEW" },
+  const order = await prisma.purchaseOrder.findUnique({
+    where: { id: orderId },
     include: { items: true },
-    orderBy: { updatedAt: "desc" },
   });
-  if (!order) throw new Error("无 MANAGEMENT_REVIEW 订单");
+  if (!order) throw new Error("订单不存在");
 
   const cardV2 = {
     schema: "2.0",
@@ -244,6 +253,14 @@ async function main() {
     JSON.stringify(fullCard, null, 2),
   );
   console.log("完整卡片已写入 /tmp/feishu-card-full.json");
+
+  if (!canSendFeishu()) {
+    console.log(
+      "[debug-feishu-card] dry-run：不会发送飞书消息。若确需发送，设置 CONFIRM_SEND_FEISHU=true 且不要设置 NOTIFICATION_DELIVERY_DISABLED=true。",
+    );
+    console.log(`目标 openId=${openId} orderNo=${order.orderNo} id=${order.id}`);
+    return;
+  }
 
   await sendCard(openId, minimalCallbackCard(order.id), "v1 value 测试卡");
   await sendCard(openId, cardV2, "v2 behaviors 直接发");

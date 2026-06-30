@@ -121,39 +121,6 @@ function buildReadonlyDmCard(order: OrderCardPayload, options: CardOptions = {})
   return buildProcurementCardKitCard(order, { ...options, readOnly: true });
 }
 
-async function notifyApproversByRole(
-  role: UserRoleType,
-  order: OrderCardPayload,
-  cardOptions?: CardOptions,
-) {
-  const openIds = await getOpenIdsByRole(role, {
-    team: order.team,
-    techGroup: order.techGroup,
-  });
-  if (openIds.length === 0) {
-    console.warn(
-      `[feishu] 角色 ${roleLabels[role]} 无可通知用户（请确保审批人已飞书登录本系统，且 UserRole.openId 与 User 表一致）`,
-    );
-    return;
-  }
-
-  const card = buildReadonlyDmCard(order, cardOptions);
-  const results = await Promise.allSettled(
-    openIds.map((openId) => sendDirectCard(openId, card)),
-  );
-  const failures = results.filter(
-    (result): result is PromiseRejectedResult => result.status === "rejected",
-  );
-
-  if (failures.length > 0) {
-    const reason = failures[0]?.reason;
-    const message = reason instanceof Error ? reason.message : String(reason);
-    throw new Error(
-      `飞书私信通知失败：${failures.length}/${results.length} 个收件人失败；${message}`,
-    );
-  }
-}
-
 /** 管理审核：群摘要 + 私信审批人（含明细表与审批按钮） */
 export async function sendManagementReviewNotification(
   order: OrderCardPayload,

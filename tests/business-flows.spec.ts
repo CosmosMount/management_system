@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { handleFeishuCardAction } from "../lib/feishu-card-action-handler";
 import { prisma } from "../lib/prisma";
 import { createProjectSchema } from "../lib/validations/progress";
 import {
@@ -206,23 +207,43 @@ test("采购人可在管理审核阶段修改清单并重新提交", async ({
 }) => {
   await loginAsNormalUser(context, baseURL, normalAuth);
   const editedItemName = `PW全功能-审核中改单物料-${Date.now()}`;
+  const order = await createProcurementOrderForNormalUser({
+    orderNo: `PW-FULL-WITHDRAW-${Date.now()}`,
+    itemName: `PW全功能-待撤回修改物料-${Date.now()}`,
+    totalPrice: 256,
+    status: "MANAGEMENT_REVIEW",
+  });
 
-  await page.goto(`/procurement/${fixtures.reviewOrderId}`, {
+  await page.goto(`/procurement/${order.id}/edit?withdraw=1`, {
     waitUntil: "networkidle",
   });
-  await expect(page.getByRole("link", { name: "修改清单" })).toBeVisible();
-  await page.getByRole("link", { name: "修改清单" }).click();
+  await expect(page).toHaveURL(new RegExp(`/procurement/${order.id}$`));
+  await expect
+    .poll(async () => {
+      const latest = await prisma.purchaseOrder.findUniqueOrThrow({
+        where: { id: order.id },
+        select: { status: true },
+      });
+      return latest.status;
+    })
+    .toBe("MANAGEMENT_REVIEW");
+
+  await page.goto(`/procurement/${order.id}`, {
+    waitUntil: "networkidle",
+  });
+  await expect(page.getByRole("button", { name: "修改清单" })).toBeVisible();
+  await page.getByRole("button", { name: "修改清单" }).click();
   await expect(page).toHaveURL(
-    new RegExp(`/procurement/${fixtures.reviewOrderId}/edit\\?withdraw=1$`),
+    new RegExp(`/procurement/${order.id}/edit$`),
   );
 
   await expect
     .poll(async () => {
-      const order = await prisma.purchaseOrder.findUniqueOrThrow({
-        where: { id: fixtures.reviewOrderId },
+      const latest = await prisma.purchaseOrder.findUniqueOrThrow({
+        where: { id: order.id },
         select: { status: true },
       });
-      return order.status;
+      return latest.status;
     })
     .toBe("DRAFT");
 
@@ -231,14 +252,14 @@ test("采购人可在管理审核阶段修改清单并重新提交", async ({
 
   await expect
     .poll(async () => {
-      const order = await prisma.purchaseOrder.findUniqueOrThrow({
-        where: { id: fixtures.reviewOrderId },
+      const latest = await prisma.purchaseOrder.findUniqueOrThrow({
+        where: { id: order.id },
         include: { items: { select: { name: true } } },
       });
       return {
-        status: order.status,
-        totalPrice: order.totalPrice,
-        itemName: order.items[0]?.name ?? "",
+        status: latest.status,
+        totalPrice: latest.totalPrice,
+        itemName: latest.items[0]?.name ?? "",
       };
     })
     .toEqual({
@@ -247,6 +268,139 @@ test("采购人可在管理审核阶段修改清单并重新提交", async ({
       itemName: editedItemName,
     });
   await expectHealthyPage(page);
+});
+
+test("飞书采购卡片回调区分退回修改和终止采购", async () => {
+  const returnReason = `PW全功能-飞书退回修改-${Date.now()}`;
+  const terminateReason = `PW全功能-飞书终止采购-${Date.now()}`;
+  const returnOrder = await createProcurementOrderForNormalUser({
+    orderNo: `PW-FULL-CARD-RETURN-${Date.now()}`,
+    itemName: `PW全功能-飞书退回物料-${Date.now()}`,
+    totalPrice: 188,
+    status: "MANAGEMENT_REVIEW",
+  });
+  const terminateOrder = await createProcurementOrderForNormalUser({
+    orderNo: `PW-FULL-CARD-TERMINATE-${Date.now()}`,
+    itemName: `PW全功能-飞书终止物料-${Date.now()}`,
+    totalPrice: 199,
+    status: "MANAGEMENT_REVIEW",
+  });
+
+  await handleFeishuCardAction({
+    operator: { open_id: fixtures.adminOpenId, name: "Playwright 管理员" },
+    action: {
+      value: {
+        action: "procurement_reject_resubmit",
+        orderId: returnOrder.id,
+      },
+      form_value: {
+        Input_procurement_reject_reason: returnReason,
+      },
+    },
+  });
+  await handleFeishuCardAction({
+    operator: { open_id: fixtures.adminOpenId, name: "Playwright 管理员" },
+    action: {
+      value: {
+        action: "procurement_reject_terminate",
+        orderId: terminateOrder.id,
+      },
+      form_value: {
+        Input_procurement_reject_reason: terminateReason,
+      },
+    },
+  });
+
+  await expect
+    .poll(async () => {
+      const [returned, terminated, returnOutbox, terminateOutbox] =
+        await Promise.all([
+          prisma.purchaseOrder.findUniqueOrThrow({
+            where: { id: returnOrder.id },
+            select: { status: true, rejectionReason: true },
+          }),
+          prisma.purchaseOrder.findUniqueOrThrow({
+            where: { id: terminateOrder.id },
+            select: { status: true, rejectionReason: true },
+          }),
+          prisma.notificationOutbox.findFirst({
+            where: {
+              channel: "procurement",
+              type: "procurement_return_draft",
+              payload: { contains: returnOrder.id },
+            },
+            select: { id: true },
+          }),
+          prisma.notificationOutbox.findFirst({
+            where: {
+              channel: "procurement",
+              type: "procurement_rejected",
+              payload: { contains: terminateOrder.id },
+            },
+            select: { id: true },
+          }),
+        ]);
+      return {
+        returned,
+        terminated,
+        hasReturnOutbox: Boolean(returnOutbox),
+        hasTerminateOutbox: Boolean(terminateOutbox),
+      };
+    })
+    .toEqual({
+      returned: {
+        status: "DRAFT",
+        rejectionReason: returnReason,
+      },
+      terminated: {
+        status: "REJECTED",
+        rejectionReason: terminateReason,
+      },
+      hasReturnOutbox: true,
+      hasTerminateOutbox: true,
+    });
+});
+
+test("飞书过期管理审核卡片不能推进老师审核", async () => {
+  const order = await createProcurementOrderForNormalUser({
+    orderNo: `PW-FULL-CARD-STALE-${Date.now()}`,
+    itemName: `PW全功能-飞书过期卡片物料-${Date.now()}`,
+    totalPrice: 211,
+    status: "MANAGEMENT_REVIEW",
+  });
+  const payload = {
+    operator: { open_id: fixtures.adminOpenId, name: "Playwright 管理员" },
+    action: {
+      value: {
+        action: "procurement_approve_management",
+        orderId: order.id,
+      },
+    },
+  };
+
+  await handleFeishuCardAction(payload);
+  await expect
+    .poll(async () => {
+      const latest = await prisma.purchaseOrder.findUniqueOrThrow({
+        where: { id: order.id },
+        select: { status: true },
+      });
+      return latest.status;
+    })
+    .toBe("TEACHER_REVIEW");
+
+  const staleResult = await handleFeishuCardAction(payload);
+
+  await expect
+    .poll(async () => {
+      const latest = await prisma.purchaseOrder.findUniqueOrThrow({
+        where: { id: order.id },
+        select: { status: true },
+      });
+      return latest.status;
+    })
+    .toBe("TEACHER_REVIEW");
+  expect(JSON.stringify(staleResult)).toContain("已失效");
 });
 
 test("采购管理审核可终止驳回", async ({ page, context, baseURL }) => {
@@ -2400,6 +2554,47 @@ async function fillNewProcurementApplication(
   await page.getByText("请选择技术组").click();
   await page.getByRole("option", { name: "电控" }).click();
   await fillProcurementItemFields(page, itemName, lineTotal);
+}
+
+async function createProcurementOrderForNormalUser({
+  orderNo,
+  itemName,
+  totalPrice,
+  status,
+}: {
+  orderNo: string;
+  itemName: string;
+  totalPrice: number;
+  status: "MANAGEMENT_REVIEW" | "TEACHER_REVIEW";
+}) {
+  const initiator = await prisma.user.findUniqueOrThrow({
+    where: { openId: normalAuth.openId },
+    select: { id: true },
+  });
+  return prisma.purchaseOrder.create({
+    data: {
+      orderNo,
+      initiatorId: initiator.id,
+      initiatorName: normalAuth.name,
+      team: "英雄",
+      techGroup: "电控",
+      totalPrice,
+      status,
+      teamApproved: status === "TEACHER_REVIEW",
+      techGroupApproved: status === "TEACHER_REVIEW",
+      items: {
+        create: [
+          {
+            name: itemName,
+            spec: "PW-SPEC",
+            purchaseLink: "https://example.com/playwright-card-item",
+            quantity: 1,
+            unitPrice: totalPrice,
+          },
+        ],
+      },
+    },
+  });
 }
 
 async function fillProcurementItemFields(
