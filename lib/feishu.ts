@@ -3,7 +3,11 @@ import { getFeishuTenantAccessTokenByBotKind } from "@/lib/feishu-auth";
 import type { FeishuBotKind } from "@/lib/feishu-app-config";
 import { resolveProcurementBotKind } from "@/lib/feishu-bot-routing";
 import { isFeishuDirectMessageAllowed } from "@/lib/feishu-delivery-guard";
-import { resolveDirectMessageTarget } from "@/lib/feishu-recipient";
+import {
+  resolveDirectMessageTarget,
+  shouldFallbackApprovalBotUnavailable,
+  type FeishuDirectMessageTarget,
+} from "@/lib/feishu-recipient";
 import {
   buildProcurementCardKitCard,
   buildProcurementWebhookCard,
@@ -99,6 +103,23 @@ async function sendDirectCard(
   }
 
   const target = await resolveDirectMessageTarget(openId, botKind);
+  try {
+    await postDirectCard(target, card);
+  } catch (error) {
+    if (!shouldFallbackApprovalBotUnavailable(target.botKind, error)) {
+      throw error;
+    }
+    console.warn(
+      `[feishu] 审批机器人对用户不可用，改用通知机器人发送 openId=${openId}`,
+    );
+    await postDirectCard(await resolveDirectMessageTarget(openId, "notification"), card);
+  }
+}
+
+async function postDirectCard(
+  target: FeishuDirectMessageTarget,
+  card: Record<string, unknown>,
+) {
   const token = await getFeishuTenantAccessTokenByBotKind(target.botKind);
   const url = new URL("https://open.feishu.cn/open-apis/im/v1/messages");
   url.searchParams.set("receive_id_type", target.receiveIdType);

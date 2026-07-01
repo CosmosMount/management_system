@@ -15,10 +15,24 @@ export type FeishuDirectMessageTarget = {
   botKind: FeishuBotKind;
 };
 
+const BOT_UNAVAILABLE_PATTERNS = [
+  "Bot has NO availability to this user",
+  "bot has no availability to this user",
+];
+
 const unionIdCache = new Map<string, Promise<string | null>>();
 
 function shouldUseUnionId(botKind: FeishuBotKind): boolean {
   return botKind === "approval" && usesSeparateApprovalBot();
+}
+
+export function shouldFallbackApprovalBotUnavailable(
+  botKind: FeishuBotKind,
+  error: unknown,
+): boolean {
+  if (botKind !== "approval" || !usesSeparateApprovalBot()) return false;
+  const message = error instanceof Error ? error.message : String(error);
+  return BOT_UNAVAILABLE_PATTERNS.some((pattern) => message.includes(pattern));
 }
 
 async function fetchUnionIdByOpenId(

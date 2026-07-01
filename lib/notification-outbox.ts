@@ -107,6 +107,7 @@ const MAX_ATTEMPTS = 8;
 const NOTIFICATION_DELIVERY_DISABLED =
   process.env.NOTIFICATION_DELIVERY_DISABLED === "true";
 const RECIPIENT_LOCK_MS = 2 * 60 * 1000;
+const FROZEN_NEXT_RUN_AT = new Date("9999-12-31T00:00:00.000Z");
 
 type DrainNotificationOutboxOptions = {
   ignoreDeliveryDisabled?: boolean;
@@ -586,6 +587,27 @@ async function sendOutboxNotificationByRecipient(
   const plan = await resolveOutboxRecipientPlan(row);
   if (!plan.supported) return { supported: false };
 
+  if (
+    row.status === "FAILED" &&
+    row.attempts > 0 &&
+    isLegacyProjectEstablishmentRequestedEventKey(row.eventKey)
+  ) {
+    await freezeLegacyCompositeOutbox(row.id);
+    return { supported: true, completed: false };
+  }
+
+  const existingRecipientCount = await prisma.notificationOutboxRecipient.count({
+    where: { outboxId: row.id },
+  });
+  if (
+    existingRecipientCount === 0 &&
+    row.status === "FAILED" &&
+    row.attempts > 0
+  ) {
+    await freezeLegacyCompositeOutbox(row.id);
+    return { supported: true, completed: false };
+  }
+
   await ensureOutboxRecipients(row.id, plan.openIds);
 
   const now = new Date();
@@ -607,6 +629,26 @@ async function sendOutboxNotificationByRecipient(
 
   const summary = await updateOutboxStatusFromRecipients(row.id);
   return { supported: true, completed: summary.completed };
+}
+
+async function freezeLegacyCompositeOutbox(outboxId: string) {
+  await prisma.notificationOutbox.updateMany({
+    where: { id: outboxId, status: "PROCESSING" },
+    data: {
+      status: "FAILED",
+      attempts: MAX_ATTEMPTS,
+      nextRunAt: FROZEN_NEXT_RUN_AT,
+      lockedUntil: null,
+      lastError:
+        "历史审批 outbox 已停止自动重试：该记录使用旧幂等 key 或在收件人级状态上线前已失败，可能已有部分收件人收到；请人工确认后再处理。",
+    },
+  });
+}
+
+function isLegacyProjectEstablishmentRequestedEventKey(eventKey: string): boolean {
+  return /^progress:project_establishment_requested:[^:]+:\d{4}-\d{2}-\d{2}T/.test(
+    eventKey,
+  );
 }
 
 async function sendOutboxRecipient(

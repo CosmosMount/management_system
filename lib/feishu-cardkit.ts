@@ -3,6 +3,7 @@ import type { FeishuBotKind } from "@/lib/feishu-app-config";
 import { isFeishuDirectMessageAllowed } from "@/lib/feishu-delivery-guard";
 import {
   resolveDirectMessageTarget,
+  shouldFallbackApprovalBotUnavailable,
   type FeishuDirectMessageTarget,
 } from "@/lib/feishu-recipient";
 
@@ -102,6 +103,18 @@ export async function sendInteractiveCardKitDm(
   if (!(await isFeishuDirectMessageAllowed(openId))) return;
 
   const target = await resolveDirectMessageTarget(openId, botKind);
-  const cardId = await createCardKitInstance(card, target.botKind);
-  await sendCardKitMessageToTarget(target, cardId);
+  try {
+    const cardId = await createCardKitInstance(card, target.botKind);
+    await sendCardKitMessageToTarget(target, cardId);
+  } catch (error) {
+    if (!shouldFallbackApprovalBotUnavailable(target.botKind, error)) {
+      throw error;
+    }
+    console.warn(
+      `[feishu] 审批机器人对用户不可用，改用通知机器人发送 CardKit openId=${openId}`,
+    );
+    const fallbackTarget = await resolveDirectMessageTarget(openId, "notification");
+    const fallbackCardId = await createCardKitInstance(card, fallbackTarget.botKind);
+    await sendCardKitMessageToTarget(fallbackTarget, fallbackCardId);
+  }
 }

@@ -2,7 +2,7 @@ import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
 
-const PRISMA_SCHEMA_REVISION = "feishu-user-union-id-v1";
+const PRISMA_SCHEMA_REVISION = "notification-outbox-recipient-v1";
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
@@ -29,6 +29,7 @@ function isPrismaClientStale(client: PrismaClient): boolean {
     typeof client.approvalChecklistConfirmation?.findMany !== "function" ||
     typeof client.fileAsset?.findMany !== "function" ||
     typeof client.notificationOutbox?.findMany !== "function" ||
+    typeof client.notificationOutboxRecipient?.findMany !== "function" ||
     typeof client.progressReminderRule?.findMany !== "function" ||
     typeof client.feedback?.findMany !== "function" ||
     typeof client.processingVendor?.findMany !== "function" ||

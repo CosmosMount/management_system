@@ -499,6 +499,63 @@ test("独立审批机器人缺少 union_id 时不会回退通知机器人", asyn
   );
 });
 
+test("审批机器人对用户不可用时该收件人回退通知机器人", async () => {
+  await withFeishuBotEnv(
+    {
+      FEISHU_APP_ID: "oauth-app",
+      FEISHU_APP_SECRET: "oauth-secret",
+      FEISHU_NOTIFICATION_APP_ID: "notification-app",
+      FEISHU_NOTIFICATION_APP_SECRET: "notification-secret",
+      FEISHU_APPROVAL_APP_ID: "approval-app",
+      FEISHU_APPROVAL_APP_SECRET: "approval-secret",
+    },
+    async () => {
+      const openId = `ou_approval_unavailable_${Date.now()}`;
+      const unionId = `on_${openId.replace(/^ou_/, "")}`;
+      const capturedMessages: CapturedFeishuMessage[] = [];
+      const capturedAuthRequests: CapturedFeishuAuthRequest[] = [];
+      const restoreFetch = mockFeishuFetch(
+        capturedMessages,
+        capturedAuthRequests,
+        {
+          failMessageReceiveIds: new Set([unionId]),
+          failMessageText: "Bot has NO availability to this user.",
+        },
+      );
+      try {
+        await sendProgressNotification({
+          type: "project_establishment_requested",
+          projectId: "pw-project-approval-unavailable",
+          projectName: "PW审批机器人不可用回退",
+          requesterName: "李棋轩",
+          requesterOpenId: "ou_requester",
+          team: "工程",
+          techGroup: "宣运",
+          ownerNames: "项目负责人",
+          participantNames: "",
+          stageCount: 1,
+          recipientOpenIds: [openId],
+        });
+      } finally {
+        restoreFetch();
+      }
+
+      expect(capturedMessages).toHaveLength(1);
+      expect(capturedMessages[0]).toMatchObject({
+        receiveId: openId,
+        receiveIdType: "open_id",
+        token: "notification-token",
+        title: "项目立项待审批",
+      });
+      expect(capturedAuthRequests.map((request) => request.appId)).toEqual([
+        "notification-app",
+        "approval-app",
+        "notification-app",
+      ]);
+    },
+  );
+});
+
 test("审批 outbox 部分收件人失败后只重试失败收件人", async () => {
   await withFeishuBotEnv(
     {
@@ -803,6 +860,80 @@ test("手动重试审批 outbox 只恢复失败收件人不重发已成功收件
       expect(retryMessages.map((message) => message.receiveId)).toEqual([
         "on_manual_retry_fail",
       ]);
+    },
+  );
+});
+
+test("历史复合失败 outbox 不会自动拆分重发给已成功收件人", async () => {
+  await withFeishuBotEnv(
+    {
+      FEISHU_APP_ID: "oauth-app",
+      FEISHU_APP_SECRET: "oauth-secret",
+      FEISHU_NOTIFICATION_APP_ID: "notification-app",
+      FEISHU_NOTIFICATION_APP_SECRET: "notification-secret",
+      FEISHU_APPROVAL_APP_ID: "approval-app",
+      FEISHU_APPROVAL_APP_SECRET: "approval-secret",
+    },
+    async () => {
+      const eventKey = `playwright:legacy-composite-failed:${Date.now()}`;
+      await enqueueProgressNotification(
+        eventKey,
+        {
+          type: "project_establishment_requested",
+          projectId: "pw-project-legacy-composite",
+          projectName: "PW历史复合失败",
+          requesterName: "李棋轩",
+          requesterOpenId: "ou_requester",
+          team: "工程",
+          techGroup: "宣运",
+          ownerNames: "项目负责人",
+          participantNames: "",
+          stageCount: 1,
+          recipientOpenIds: ["ou_legacy_sent", "ou_legacy_failed"],
+        },
+        { appOrigin: "http://127.0.0.1:3002" },
+      );
+      const outbox = await prisma.notificationOutbox.findUniqueOrThrow({
+        where: { eventKey },
+      });
+      await prisma.notificationOutbox.update({
+        where: { id: outbox.id },
+        data: {
+          status: "FAILED",
+          attempts: 2,
+          lastError:
+            "飞书通知发送失败：1/2 个收件人失败；历史整批发送可能已有收件人成功",
+          nextRunAt: new Date(),
+        },
+      });
+
+      const capturedMessages: CapturedFeishuMessage[] = [];
+      const restoreFetch = mockFeishuFetch(capturedMessages);
+      try {
+        await expect(
+          drainNotificationOutbox(10, { ignoreDeliveryDisabled: true }),
+        ).resolves.toBe(0);
+      } finally {
+        restoreFetch();
+      }
+
+      expect(capturedMessages).toHaveLength(0);
+      await expect(
+        prisma.notificationOutbox.findUniqueOrThrow({
+          where: { eventKey },
+          select: {
+            status: true,
+            attempts: true,
+            lastError: true,
+            recipients: { select: { id: true } },
+          },
+        }),
+      ).resolves.toMatchObject({
+        status: "FAILED",
+        attempts: 8,
+        lastError: expect.stringContaining("历史复合 outbox 已停止自动重试"),
+        recipients: [],
+      });
     },
   );
 });
@@ -1482,6 +1613,7 @@ function mockFeishuFetch(
   options: {
     failContactOpenIds?: Set<string>;
     failMessageReceiveIds?: Set<string>;
+    failMessageText?: string;
   } = {},
 ): () => void {
   const originalFetch = globalThis.fetch;
@@ -1513,7 +1645,10 @@ function mockFeishuFetch(
       const body = parseJsonRecord(init?.body);
       const receiveId = readString(body.receive_id);
       if (options.failMessageReceiveIds?.has(receiveId)) {
-        return Response.json({ code: 230006, msg: "mock message failure" });
+        return Response.json({
+          code: 230006,
+          msg: options.failMessageText ?? "mock message failure",
+        });
       }
       const card = parseJsonRecord(body.content);
       capturedMessages.push({
