@@ -1,5 +1,11 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { UserRoleType } from "@prisma/client";
 import { handleFeishuCardAction } from "../lib/feishu-card-action-handler";
+import { approveProcurementByOpenId } from "../lib/procurement-approve-by-open-id";
+import {
+  enqueueOrderNotification,
+  orderNotificationEventKey,
+} from "../lib/notification-outbox";
 import { prisma } from "../lib/prisma";
 import { createProjectSchema } from "../lib/validations/progress";
 import {
@@ -79,6 +85,100 @@ test("采购管理审核和老师审核能通过 UI 推进状态", async ({
     })
     .toBe("PENDING_APPLICANT_DOCS");
   await expectHealthyPage(page);
+});
+
+test("采购管理审核部分通过不刷新审批轮次时间", async () => {
+  const teamOnlyOpenId = `ou_pw_team_only_${Date.now()}`;
+  await prisma.user.upsert({
+    where: { openId: teamOnlyOpenId },
+    update: {
+      name: "PW车组审批人",
+      signaturePath: "/uploads/playwright/signature-admin.png",
+    },
+    create: {
+      openId: teamOnlyOpenId,
+      name: "PW车组审批人",
+      signaturePath: "/uploads/playwright/signature-admin.png",
+    },
+  });
+  await prisma.userRole.create({
+    data: {
+      openId: teamOnlyOpenId,
+      role: UserRoleType.TEAM_ADMIN,
+      team: "英雄",
+    },
+  });
+
+  const order = await createProcurementOrderForNormalUser({
+    orderNo: `PW-FULL-MGMT-PARTIAL-${Date.now()}`,
+    itemName: `PW全功能-管理审核部分通过-${Date.now()}`,
+    totalPrice: 166,
+    status: "MANAGEMENT_REVIEW",
+  });
+  const originalStatusEnteredAt = new Date("2026-06-29T08:00:00.000Z");
+  await prisma.purchaseOrder.update({
+    where: { id: order.id },
+    data: { statusEnteredAt: originalStatusEnteredAt },
+  });
+  const original = await prisma.purchaseOrder.findUniqueOrThrow({
+    where: { id: order.id },
+    include: { items: true },
+  });
+  const managementReviewKey = orderNotificationEventKey(original);
+
+  await enqueueOrderNotification(managementReviewKey, {
+    id: original.id,
+    orderNo: original.orderNo,
+    initiatorName: original.initiatorName,
+    totalPrice: original.totalPrice,
+    status: original.status,
+    team: original.team,
+    techGroup: original.techGroup,
+    items: [],
+  });
+
+  await approveProcurementByOpenId(teamOnlyOpenId, order.id);
+
+  const partiallyApproved = await prisma.purchaseOrder.findUniqueOrThrow({
+    where: { id: order.id },
+    include: { items: true },
+  });
+  expect(partiallyApproved).toMatchObject({
+    status: "MANAGEMENT_REVIEW",
+    teamApproved: true,
+    techGroupApproved: false,
+    teamApproverOpenId: teamOnlyOpenId,
+  });
+  expect(partiallyApproved.statusEnteredAt.toISOString()).toBe(
+    original.statusEnteredAt.toISOString(),
+  );
+
+  await enqueueOrderNotification(orderNotificationEventKey(partiallyApproved), {
+    id: partiallyApproved.id,
+    orderNo: partiallyApproved.orderNo,
+    initiatorName: partiallyApproved.initiatorName,
+    totalPrice: partiallyApproved.totalPrice,
+    status: partiallyApproved.status,
+    team: partiallyApproved.team,
+    techGroup: partiallyApproved.techGroup,
+    items: [],
+  });
+  await expect(
+    prisma.notificationOutbox.count({ where: { eventKey: managementReviewKey } }),
+  ).resolves.toBe(1);
+
+  await approveProcurementByOpenId(fixtures.adminOpenId, order.id);
+  const advanced = await prisma.purchaseOrder.findUniqueOrThrow({
+    where: { id: order.id },
+  });
+  expect(advanced.status).toBe("TEACHER_REVIEW");
+  expect(advanced.statusEnteredAt.getTime()).toBeGreaterThan(
+    original.statusEnteredAt.getTime(),
+  );
+  const teacherReviewKey = orderNotificationEventKey(advanced);
+  await expect(
+    prisma.notificationOutbox.count({ where: { eventKey: teacherReviewKey } }),
+  ).resolves.toBe(1);
 });
 
 test("采购草稿可从详情页直接提交到管理审核", async ({

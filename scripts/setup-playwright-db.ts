@@ -152,6 +152,7 @@ function pipeDumpToRestore(sourceDatabaseUrl: string, targetDatabaseUrl: string)
         "--no-privileges",
         "--format=custom",
         '--exclude-table-data=public."NotificationOutbox"',
+        '--exclude-table-data=public."NotificationOutboxRecipient"',
         `--dbname=${sourceDatabaseUrl}`,
       ],
       { stdio: ["ignore", "pipe", "inherit"] },
@@ -222,8 +223,8 @@ async function clearRestoredNotificationOutbox() {
       `SELECT to_regclass('public."NotificationOutbox"')::text AS table_name`,
     );
     if (!result.rows[0]?.table_name) return;
-    await client.query('TRUNCATE TABLE "NotificationOutbox"');
-    console.log("[playwright-db] cleared NotificationOutbox in cloned database");
+    await client.query('TRUNCATE TABLE "NotificationOutbox" CASCADE');
+    console.log("[playwright-db] cleared NotificationOutbox tables in cloned database");
   } finally {
     await client.end();
   }

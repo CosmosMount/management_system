@@ -85,7 +85,7 @@ export async function createProject(input: CreateProjectInput) {
 
     await enqueueProgressNotificationTx(
       tx,
-      `progress:project_establishment_requested:${created.id}:${submittedAt.toISOString()}`,
+      projectEstablishmentRequestedEventKey(created.id, created.establishmentSubmitVersion),
       {
         type: "project_establishment_requested",
         projectId: created.id,
@@ -167,6 +167,7 @@ export async function resubmitProjectEstablishment(input: {
         requesterOpenId: user.openId,
         requesterName: user.name,
         submittedAt,
+        establishmentSubmitVersion: { increment: 1 },
         reviewerOpenId: "",
         reviewerName: "",
         reviewComment: "",
@@ -238,7 +239,10 @@ export async function resubmitProjectEstablishment(input: {
 
     await enqueueProgressNotificationTx(
       tx,
-      `progress:project_establishment_requested:${updated.id}:${submittedAt.toISOString()}`,
+      projectEstablishmentRequestedEventKey(
+        updated.id,
+        updated.establishmentSubmitVersion,
+      ),
       {
         type: "project_establishment_requested",
         projectId: updated.id,
@@ -604,6 +608,13 @@ function buildStagesWithDueAt(parsed: ParsedCreateProjectInput, baseDate: Date) 
       dueAt: getStageDueAtFromDuration(elapsedDurationDays, baseDate),
     };
   });
+}
+
+function projectEstablishmentRequestedEventKey(
+  projectId: string,
+  submitVersion: number,
+): string {
+  return `progress:project_establishment_requested:${projectId}:${submitVersion}`;
 }
 
 function buildApprovedStageDueAtUpdates(

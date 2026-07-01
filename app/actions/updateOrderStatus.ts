@@ -7,6 +7,7 @@ import { mapOrderItems } from "@/lib/feishu";
 import {
   drainNotificationOutboxSoon,
   enqueueOrderNotificationTx,
+  orderNotificationEventKey,
 } from "@/lib/notification-outbox";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";
@@ -72,7 +73,7 @@ export async function updateOrderStatus(orderId: string) {
     if (notifyStatuses.includes(record.status)) {
       await enqueueOrderNotificationTx(
         tx,
-        `procurement:order:${record.id}:${record.status}:${record.updatedAt.toISOString()}`,
+        orderNotificationEventKey(record),
         {
           id: record.id,
           orderNo: record.orderNo,

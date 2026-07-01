@@ -3,6 +3,7 @@ import { mapOrderItems } from "@/lib/feishu";
 import {
   drainNotificationOutboxSoon,
   enqueueOrderNotification,
+  orderNotificationEventKey,
 } from "@/lib/notification-outbox";
 import { checkBudgetAlertsForOrder } from "@/lib/procurement-budget-alerts";
 import { getNotificationContext } from "@/lib/request-origin";
@@ -15,6 +16,7 @@ type SubmittedOrder = {
   status: OrderStatus;
   team: string;
   techGroup: string;
+  statusEnteredAt: Date;
   updatedAt: Date;
   items: { name: string; quantity: number; unitPrice: number }[];
 };
@@ -26,7 +28,7 @@ export async function runProcurementSubmitSideEffects(
   try {
     const context = await getNotificationContext();
     await enqueueOrderNotification(
-      `procurement:order:${order.id}:${order.status}:${order.updatedAt.toISOString()}`,
+      orderNotificationEventKey(order),
       {
         id: order.id,
         orderNo: order.orderNo,

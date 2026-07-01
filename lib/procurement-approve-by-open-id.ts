@@ -3,6 +3,7 @@ import { mapOrderItems } from "@/lib/feishu";
 import {
   drainNotificationOutboxSoon,
   enqueueOrderNotificationTx,
+  orderNotificationEventKey,
 } from "@/lib/notification-outbox";
 import { getDefaultNotificationContext } from "@/lib/request-origin";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
@@ -82,7 +83,6 @@ export async function approveProcurementByOpenId(
                 techGroupApproverOpenId: openId,
               }
             : {}),
-          ...stepTimerResetFields(),
         },
       });
       if (approved.count !== 1) {
@@ -109,7 +109,7 @@ export async function approveProcurementByOpenId(
       if (advanced.count === 1) {
         await enqueueOrderNotificationTx(
           tx,
-          `procurement:order:${finalOrder.id}:${finalOrder.status}:${finalOrder.updatedAt.toISOString()}`,
+          orderNotificationEventKey(finalOrder),
           {
             id: finalOrder.id,
             orderNo: finalOrder.orderNo,
@@ -169,7 +169,7 @@ export async function approveProcurementByOpenId(
       });
       await enqueueOrderNotificationTx(
         tx,
-        `procurement:order:${record.id}:${record.status}:${record.updatedAt.toISOString()}`,
+        orderNotificationEventKey(record),
         {
           id: record.id,
           orderNo: record.orderNo,

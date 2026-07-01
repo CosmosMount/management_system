@@ -246,6 +246,7 @@ model Project {
   requesterOpenId String            @default("")
   requesterName String              @default("")
   submittedAt   DateTime?
+  establishmentSubmitVersion Int     @default(1)
   reviewerOpenId String             @default("")
   reviewerName  String              @default("")
   reviewComment String              @default("")
@@ -690,9 +691,31 @@ model NotificationOutbox {
   nextRunAt   DateTime                 @default(now())
   lockedUntil DateTime?
   sentAt      DateTime?
+  recipients  NotificationOutboxRecipient[]
   createdAt   DateTime                 @default(now())
   updatedAt   DateTime                 @updatedAt
 
+  @@index([status, nextRunAt])
+}
+
+model NotificationOutboxRecipient {
+  id          String                   @id @default(uuid())
+  outboxId    String
+  outbox      NotificationOutbox       @relation(fields: [outboxId], references: [id], onDelete: Cascade)
+  openId      String
+  receiveId   String                   @default("")
+  receiveIdType String                 @default("")
+  status      NotificationOutboxStatus @default(PENDING)
+  attempts    Int                      @default(0)
+  lastError   String                   @default("")
+  nextRunAt   DateTime                 @default(now())
+  lockedUntil DateTime?
+  sentAt      DateTime?
+  createdAt   DateTime                 @default(now())
+  updatedAt   DateTime                 @updatedAt
+
+  @@unique([outboxId, openId])
+  @@index([outboxId, status])
   @@index([status, nextRunAt])
 }
 

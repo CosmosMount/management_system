@@ -1271,6 +1271,19 @@ export async function sendProgressNotification(
   });
 }
 
+export async function sendProgressNotificationToOpenId(
+  payload: ProgressNotifyPayload,
+  openId: string,
+  context?: NotificationContext,
+  botKind: FeishuBotKind = resolveProgressBotKind(payload.type),
+) {
+  return sendProgressNotification(
+    { ...payload, recipientOpenIds: [openId] } as ProgressNotifyPayload,
+    context,
+    botKind,
+  );
+}
+
 function formatScope(team: string, techGroup: string): string {
   return `${team || "未指定"} / ${techGroup || "未指定"}`;
 }

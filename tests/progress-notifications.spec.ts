@@ -9,6 +9,8 @@ import {
   drainNotificationOutbox,
   enqueueOrderNotification,
   enqueueProgressNotification,
+  orderNotificationEventKey,
+  resetNotificationOutboxForRetry,
 } from "../lib/notification-outbox";
 import { resolveProgressBotKind } from "../lib/feishu-bot-routing";
 import { prisma } from "../lib/prisma";
@@ -497,6 +499,366 @@ test("独立审批机器人缺少 union_id 时不会回退通知机器人", asyn
   );
 });
 
+test("审批 outbox 部分收件人失败后只重试失败收件人", async () => {
+  await withFeishuBotEnv(
+    {
+      FEISHU_APP_ID: "oauth-app",
+      FEISHU_APP_SECRET: "oauth-secret",
+      FEISHU_NOTIFICATION_APP_ID: "notification-app",
+      FEISHU_NOTIFICATION_APP_SECRET: "notification-secret",
+      FEISHU_APPROVAL_APP_ID: "approval-app",
+      FEISHU_APPROVAL_APP_SECRET: "approval-secret",
+    },
+    async () => {
+      const eventKey = `playwright:recipient-retry:${Date.now()}`;
+      await enqueueProgressNotification(
+        eventKey,
+        {
+          type: "task_ddl_change_requested",
+          requestId: "pw-recipient-retry-request",
+          taskId: "pw-recipient-retry-task",
+          taskTitle: "PW收件人重试任务",
+          projectName: "PW收件人重试项目",
+          requesterName: "李棋轩",
+          reason: "验证失败收件人单独重试",
+          oldDueAt: "2026-06-29T18:00:00.000Z",
+          newDueAt: "2026-06-30T18:00:00.000Z",
+          recipientOpenIds: ["ou_retry_ok", "ou_retry_fail", "ou_retry_other"],
+        },
+        { appOrigin: "http://127.0.0.1:3002" },
+      );
+
+      const firstMessages: CapturedFeishuMessage[] = [];
+      const restoreFirstFetch = mockFeishuFetch(firstMessages, [], {
+        failMessageReceiveIds: new Set(["on_retry_fail"]),
+      });
+      try {
+        await expect(
+          drainNotificationOutbox(10, { ignoreDeliveryDisabled: true }),
+        ).resolves.toBe(0);
+      } finally {
+        restoreFirstFetch();
+      }
+
+      expect(firstMessages.map((message) => message.receiveId).sort()).toEqual([
+        "on_retry_ok",
+        "on_retry_other",
+      ]);
+
+      const firstState = await prisma.notificationOutbox.findUniqueOrThrow({
+        where: { eventKey },
+        include: {
+          recipients: {
+            select: { openId: true, status: true, attempts: true, lastError: true },
+            orderBy: { openId: "asc" },
+          },
+        },
+      });
+      expect(firstState.status).toBe("FAILED");
+      expect(firstState.recipients).toEqual([
+        expect.objectContaining({
+          openId: "ou_retry_fail",
+          status: "FAILED",
+          attempts: 1,
+        }),
+        expect.objectContaining({
+          openId: "ou_retry_ok",
+          status: "SENT",
+          attempts: 1,
+        }),
+        expect.objectContaining({
+          openId: "ou_retry_other",
+          status: "SENT",
+          attempts: 1,
+        }),
+      ]);
+
+      await prisma.notificationOutbox.update({
+        where: { eventKey },
+        data: { nextRunAt: new Date() },
+      });
+      await prisma.notificationOutboxRecipient.updateMany({
+        where: { outboxId: firstState.id, status: "FAILED" },
+        data: { nextRunAt: new Date() },
+      });
+
+      const secondMessages: CapturedFeishuMessage[] = [];
+      const restoreSecondFetch = mockFeishuFetch(secondMessages);
+      try {
+        await expect(
+          drainNotificationOutbox(10, { ignoreDeliveryDisabled: true }),
+        ).resolves.toBe(1);
+      } finally {
+        restoreSecondFetch();
+      }
+
+      expect(secondMessages.map((message) => message.receiveId)).toEqual([
+        "on_retry_fail",
+      ]);
+      await expect(
+        prisma.notificationOutbox.findUniqueOrThrow({
+          where: { eventKey },
+          select: {
+            status: true,
+            recipients: { select: { status: true } },
+          },
+        }),
+      ).resolves.toEqual({
+        status: "SENT",
+        recipients: [{ status: "SENT" }, { status: "SENT" }, { status: "SENT" }],
+      });
+    },
+  );
+});
+
+test("审批 outbox 子收件人锁未过期时父 outbox 不空转重试", async () => {
+  const eventKey = `playwright:recipient-lock:${Date.now()}`;
+  await enqueueProgressNotification(
+    eventKey,
+    {
+      type: "task_ddl_change_requested",
+      requestId: "pw-recipient-lock-request",
+      taskId: "pw-recipient-lock-task",
+      taskTitle: "PW收件人锁任务",
+      projectName: "PW收件人锁项目",
+      requesterName: "李棋轩",
+      reason: "验证子收件人锁调度",
+      oldDueAt: "2026-06-29T18:00:00.000Z",
+      newDueAt: "2026-06-30T18:00:00.000Z",
+      recipientOpenIds: ["ou_locked_recipient"],
+    },
+    { appOrigin: "http://127.0.0.1:3002" },
+  );
+
+  const outbox = await prisma.notificationOutbox.findUniqueOrThrow({
+    where: { eventKey },
+  });
+  const past = new Date(Date.now() - 60_000);
+  const childLockedUntil = new Date(Date.now() + 60_000);
+  await prisma.notificationOutbox.update({
+    where: { id: outbox.id },
+    data: {
+      status: "FAILED",
+      attempts: 2,
+      nextRunAt: past,
+      lockedUntil: null,
+    },
+  });
+  await prisma.notificationOutboxRecipient.create({
+    data: {
+      outboxId: outbox.id,
+      openId: "ou_locked_recipient",
+      status: "PROCESSING",
+      attempts: 1,
+      nextRunAt: past,
+      lockedUntil: childLockedUntil,
+    },
+  });
+
+  const capturedMessages: CapturedFeishuMessage[] = [];
+  const restoreFetch = mockFeishuFetch(capturedMessages);
+  try {
+    await expect(
+      drainNotificationOutbox(10, { ignoreDeliveryDisabled: true }),
+    ).resolves.toBe(0);
+  } finally {
+    restoreFetch();
+  }
+
+  expect(capturedMessages).toHaveLength(0);
+  const afterFirstDrain = await prisma.notificationOutbox.findUniqueOrThrow({
+    where: { id: outbox.id },
+    select: { status: true, attempts: true, nextRunAt: true },
+  });
+  expect(afterFirstDrain.status).toBe("FAILED");
+  expect(afterFirstDrain.attempts).toBe(3);
+  expect(afterFirstDrain.nextRunAt.getTime()).toBeGreaterThanOrEqual(
+    childLockedUntil.getTime(),
+  );
+
+  await expect(
+    drainNotificationOutbox(10, { ignoreDeliveryDisabled: true }),
+  ).resolves.toBe(0);
+  await expect(
+    prisma.notificationOutbox.findUniqueOrThrow({
+      where: { id: outbox.id },
+      select: { attempts: true },
+    }),
+  ).resolves.toEqual({ attempts: 3 });
+});
+
+test("手动重试审批 outbox 只恢复失败收件人不重发已成功收件人", async () => {
+  await withFeishuBotEnv(
+    {
+      FEISHU_APP_ID: "oauth-app",
+      FEISHU_APP_SECRET: "oauth-secret",
+      FEISHU_NOTIFICATION_APP_ID: "notification-app",
+      FEISHU_NOTIFICATION_APP_SECRET: "notification-secret",
+      FEISHU_APPROVAL_APP_ID: "approval-app",
+      FEISHU_APPROVAL_APP_SECRET: "approval-secret",
+    },
+    async () => {
+      const eventKey = `playwright:recipient-manual-retry:${Date.now()}`;
+      await enqueueProgressNotification(
+        eventKey,
+        {
+          type: "task_ddl_change_requested",
+          requestId: "pw-recipient-manual-retry-request",
+          taskId: "pw-recipient-manual-retry-task",
+          taskTitle: "PW手动重试任务",
+          projectName: "PW手动重试项目",
+          requesterName: "李棋轩",
+          reason: "验证手动重试不重发成功收件人",
+          oldDueAt: "2026-06-29T18:00:00.000Z",
+          newDueAt: "2026-06-30T18:00:00.000Z",
+          recipientOpenIds: ["ou_manual_retry_ok", "ou_manual_retry_fail"],
+        },
+        { appOrigin: "http://127.0.0.1:3002" },
+      );
+
+      const firstMessages: CapturedFeishuMessage[] = [];
+      const restoreFirstFetch = mockFeishuFetch(firstMessages, [], {
+        failMessageReceiveIds: new Set(["on_manual_retry_fail"]),
+      });
+      try {
+        await drainNotificationOutbox(10, { ignoreDeliveryDisabled: true });
+      } finally {
+        restoreFirstFetch();
+      }
+      expect(firstMessages.map((message) => message.receiveId)).toEqual([
+        "on_manual_retry_ok",
+      ]);
+
+      const failedState = await prisma.notificationOutbox.findUniqueOrThrow({
+        where: { eventKey },
+        include: {
+          recipients: {
+            orderBy: { openId: "asc" },
+            select: { openId: true, status: true, attempts: true },
+          },
+        },
+      });
+      expect(failedState.status).toBe("FAILED");
+      expect(failedState.recipients).toEqual([
+        expect.objectContaining({
+          openId: "ou_manual_retry_fail",
+          status: "FAILED",
+          attempts: 1,
+        }),
+        expect.objectContaining({
+          openId: "ou_manual_retry_ok",
+          status: "SENT",
+          attempts: 1,
+        }),
+      ]);
+
+      await prisma.notificationOutboxRecipient.updateMany({
+        where: { outboxId: failedState.id, status: "FAILED" },
+        data: {
+          attempts: 8,
+          nextRunAt: new Date(Date.now() + 60 * 60 * 1000),
+          lastError: "mock exhausted",
+        },
+      });
+
+      await expect(
+        resetNotificationOutboxForRetry({
+          id: failedState.id,
+          channel: "progress",
+          type: "task_ddl_change_requested",
+        }),
+      ).resolves.toEqual({ count: 1 });
+
+      await expect(
+        prisma.notificationOutboxRecipient.findMany({
+          where: { outboxId: failedState.id },
+          orderBy: { openId: "asc" },
+          select: { openId: true, status: true, attempts: true, lastError: true },
+        }),
+      ).resolves.toEqual([
+        {
+          openId: "ou_manual_retry_fail",
+          status: "PENDING",
+          attempts: 0,
+          lastError: "",
+        },
+        {
+          openId: "ou_manual_retry_ok",
+          status: "SENT",
+          attempts: 1,
+          lastError: "",
+        },
+      ]);
+
+      const retryMessages: CapturedFeishuMessage[] = [];
+      const restoreRetryFetch = mockFeishuFetch(retryMessages);
+      try {
+        await expect(
+          drainNotificationOutbox(10, { ignoreDeliveryDisabled: true }),
+        ).resolves.toBe(1);
+      } finally {
+        restoreRetryFetch();
+      }
+
+      expect(retryMessages.map((message) => message.receiveId)).toEqual([
+        "on_manual_retry_fail",
+      ]);
+    },
+  );
+});
+
+test("审批 outbox 收件人去重且空收件人不落库", async () => {
+  await withFeishuBotEnv(
+    {
+      FEISHU_APP_ID: "oauth-app",
+      FEISHU_APP_SECRET: "oauth-secret",
+      FEISHU_NOTIFICATION_APP_ID: "notification-app",
+      FEISHU_NOTIFICATION_APP_SECRET: "notification-secret",
+      FEISHU_APPROVAL_APP_ID: "approval-app",
+      FEISHU_APPROVAL_APP_SECRET: "approval-secret",
+    },
+    async () => {
+      const eventKey = `playwright:recipient-dedupe:${Date.now()}`;
+      await enqueueProgressNotification(
+        eventKey,
+        {
+          type: "project_establishment_requested",
+          projectId: "pw-project-recipient-dedupe",
+          projectName: "PW收件人去重",
+          requesterName: "李棋轩",
+          requesterOpenId: "ou_requester",
+          team: "工程",
+          techGroup: "宣运",
+          ownerNames: "项目负责人",
+          participantNames: "",
+          stageCount: 1,
+          recipientOpenIds: ["ou_duplicate", "ou_duplicate", ""],
+        },
+        { appOrigin: "http://127.0.0.1:3002" },
+      );
+
+      const capturedMessages: CapturedFeishuMessage[] = [];
+      const restoreFetch = mockFeishuFetch(capturedMessages);
+      try {
+        await drainNotificationOutbox(10, { ignoreDeliveryDisabled: true });
+      } finally {
+        restoreFetch();
+      }
+
+      const outbox = await prisma.notificationOutbox.findUniqueOrThrow({
+        where: { eventKey },
+        include: { recipients: true },
+      });
+      expect(capturedMessages).toHaveLength(1);
+      expect(capturedMessages[0]?.receiveId).toBe("on_duplicate");
+      expect(outbox.recipients.map((recipient) => recipient.openId)).toEqual([
+        "ou_duplicate",
+      ]);
+      expect(outbox.status).toBe("SENT");
+    },
+  );
+});
+
 test("通知机器人未配置时普通消息回退 OAuth 主应用", async () => {
   await withFeishuBotEnv(
     {
@@ -540,6 +902,46 @@ test("通知机器人未配置时普通消息回退 OAuth 主应用", async () =
       ]);
     },
   );
+});
+
+test("采购审批待办 eventKey 使用状态进入时间保持稳定", async () => {
+  const statusEnteredAt = new Date("2026-06-29T08:00:00.000Z");
+  const firstKey = orderNotificationEventKey({
+    id: "pw-order-stable-key",
+    status: "MANAGEMENT_REVIEW",
+    statusEnteredAt,
+  });
+  const secondKey = orderNotificationEventKey({
+    id: "pw-order-stable-key",
+    status: "MANAGEMENT_REVIEW",
+    statusEnteredAt,
+  });
+  expect(firstKey).toBe(secondKey);
+
+  await enqueueOrderNotification(firstKey, {
+    id: "pw-order-stable-key",
+    orderNo: "PW-STABLE-KEY",
+    initiatorName: "李棋轩",
+    totalPrice: 100,
+    status: "MANAGEMENT_REVIEW",
+    team: "工程",
+    techGroup: "宣运",
+    items: [],
+  });
+  await enqueueOrderNotification(secondKey, {
+    id: "pw-order-stable-key",
+    orderNo: "PW-STABLE-KEY",
+    initiatorName: "李棋轩",
+    totalPrice: 120,
+    status: "MANAGEMENT_REVIEW",
+    team: "工程",
+    techGroup: "宣运",
+    items: [],
+  });
+
+  await expect(
+    prisma.notificationOutbox.count({ where: { eventKey: firstKey } }),
+  ).resolves.toBe(1);
 });
 
 test("测试收件人 allowlist 只放行李棋轩", async () => {
@@ -1077,7 +1479,10 @@ async function enqueueAndDrainProgressNotification(
 function mockFeishuFetch(
   capturedMessages: CapturedFeishuMessage[],
   capturedAuthRequests: CapturedFeishuAuthRequest[] = [],
-  options: { failContactOpenIds?: Set<string> } = {},
+  options: {
+    failContactOpenIds?: Set<string>;
+    failMessageReceiveIds?: Set<string>;
+  } = {},
 ): () => void {
   const originalFetch = globalThis.fetch;
 
@@ -1106,9 +1511,13 @@ function mockFeishuFetch(
 
     if (url.includes("/im/v1/messages")) {
       const body = parseJsonRecord(init?.body);
+      const receiveId = readString(body.receive_id);
+      if (options.failMessageReceiveIds?.has(receiveId)) {
+        return Response.json({ code: 230006, msg: "mock message failure" });
+      }
       const card = parseJsonRecord(body.content);
       capturedMessages.push({
-        receiveId: readString(body.receive_id),
+        receiveId,
         receiveIdType:
           new URL(url).searchParams.get("receive_id_type") ?? "open_id",
         title:

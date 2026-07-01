@@ -6,6 +6,7 @@ import { mapOrderItems } from "@/lib/feishu";
 import {
   drainNotificationOutboxSoon,
   enqueueOrderNotificationTx,
+  orderNotificationEventKey,
 } from "@/lib/notification-outbox";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";
@@ -78,7 +79,6 @@ export async function approveManagementReview(orderId: string) {
                 techGroupApproverOpenId: session.user.openId,
               }
             : {}),
-          ...stepTimerResetFields(),
         },
       });
       if (approved.count !== 1) {
@@ -108,7 +108,7 @@ export async function approveManagementReview(orderId: string) {
       if (advanced.count === 1) {
         await enqueueOrderNotificationTx(
           tx,
-          `procurement:order:${finalOrder.id}:${finalOrder.status}:${finalOrder.updatedAt.toISOString()}`,
+          orderNotificationEventKey(finalOrder),
           {
             id: finalOrder.id,
             orderNo: finalOrder.orderNo,

@@ -52,6 +52,9 @@ export type OrderCardPayload = {
   items?: OrderItemSummary[];
 };
 
+export const PROCUREMENT_ORDER_WEBHOOK_RECIPIENT_OPEN_ID =
+  "__procurement_order_webhook__";
+
 type CardOptions = {
   headerTitle?: string;
   headerTemplate?: "blue" | "red" | "orange" | "green";
@@ -131,40 +134,129 @@ function buildReadonlyDmCard(order: OrderCardPayload, options: CardOptions = {})
   return buildProcurementCardKitCard(order, { ...options, readOnly: true });
 }
 
-/** 管理审核：群摘要 + 私信审批人（含明细表与审批按钮） */
-export async function sendManagementReviewNotification(
+function orderButtonText(focus: CardOptions["detailFocus"]): string {
+  if (focus === "approval") return "前往审批";
+  if (focus === "upload") return "上传凭证";
+  if (focus === "confirm") return "前往确认";
+  return "查看详情";
+}
+
+function isInitiatorOnlyOrderNotification(status: OrderStatus): boolean {
+  return (
+    status === "PENDING_APPLICANT_DOCS" ||
+    status === "PENDING_APPLICANT_CONFIRM"
+  );
+}
+
+function shouldSendOrderGroupWebhook(status: OrderStatus): boolean {
+  return !isInitiatorOnlyOrderNotification(status);
+}
+
+export async function sendOrderGroupWebhook(
   order: OrderCardPayload,
   context?: NotificationContext,
-  botKind: FeishuBotKind = "approval",
 ) {
+  if (!shouldSendOrderGroupWebhook(order.status)) return;
+
+  const focus = defaultDetailFocus(order.status);
   const groupCard = buildProcurementWebhookCard(order, {
-    detailFocus: "approval",
+    detailFocus: focus,
+    primaryButtonText: orderButtonText(focus),
     appOrigin: context?.appOrigin,
   });
 
   await postProcurementWebhook({
     msg_type: "interactive",
     card: groupCard,
-  }).catch((err) => {
+  });
+}
+
+function buildOrderDirectMessageCard(
+  order: OrderCardPayload,
+  context?: NotificationContext,
+) {
+  const focus = defaultDetailFocus(order.status);
+  const buttonText = orderButtonText(focus);
+  const isApprovalCard =
+    order.status === "MANAGEMENT_REVIEW" || order.status === "TEACHER_REVIEW";
+
+  return isApprovalCard
+    ? buildApprovalDmCard(order, {
+        detailFocus: focus,
+        primaryButtonText: buttonText,
+        appOrigin: context?.appOrigin,
+      })
+    : buildReadonlyDmCard(order, {
+        detailFocus: focus,
+        primaryButtonText: buttonText,
+        appOrigin: context?.appOrigin,
+        readOnly: true,
+      });
+}
+
+export async function collectOrderNotificationRecipientOpenIds(
+  order: OrderCardPayload,
+): Promise<string[]> {
+  if (isInitiatorOnlyOrderNotification(order.status)) {
+    const record = await prisma.purchaseOrder.findUnique({
+      where: { id: order.id },
+      include: { initiator: { select: { openId: true } } },
+    });
+    return record?.initiator.openId ? [record.initiator.openId] : [];
+  }
+
+  if (order.status === "MANAGEMENT_REVIEW") {
+    const roles: UserRoleType[] = ["TEAM_ADMIN", "TECH_GROUP_ADMIN"];
+    const openIdSet = new Set<string>();
+    for (const role of roles) {
+      const openIds = await getOpenIdsByRole(role, {
+        team: order.team,
+        techGroup: order.techGroup,
+      });
+      openIds.forEach((id) => openIdSet.add(id));
+    }
+    return [...openIdSet];
+  }
+
+  const approverRole = statusApproverRole[order.status];
+  if (!approverRole) return [];
+  return getOpenIdsByRole(approverRole, {
+    team: order.team,
+    techGroup: order.techGroup,
+  });
+}
+
+export async function sendOrderNotificationToOpenId(
+  order: OrderCardPayload,
+  openId: string,
+  context?: NotificationContext,
+  botKind: FeishuBotKind = resolveProcurementBotKind(order.status),
+) {
+  if (openId === PROCUREMENT_ORDER_WEBHOOK_RECIPIENT_OPEN_ID) {
+    await sendOrderGroupWebhook(order, context);
+    return;
+  }
+
+  await sendDirectCard(
+    openId,
+    buildOrderDirectMessageCard(order, context),
+    botKind,
+  );
+}
+
+/** 管理审核：群摘要 + 私信审批人（含明细表与审批按钮） */
+export async function sendManagementReviewNotification(
+  order: OrderCardPayload,
+  context?: NotificationContext,
+  botKind: FeishuBotKind = "approval",
+) {
+  await sendOrderGroupWebhook(order, context).catch((err) => {
     console.error("[feishu] Webhook 通知失败:", err);
   });
 
-  const approvalCard = buildApprovalDmCard(order, {
-    detailFocus: "approval",
-    appOrigin: context?.appOrigin,
-  });
+  const openIds = await collectOrderNotificationRecipientOpenIds(order);
 
-  const roles: UserRoleType[] = ["TEAM_ADMIN", "TECH_GROUP_ADMIN"];
-  const openIdSet = new Set<string>();
-  for (const role of roles) {
-    const openIds = await getOpenIdsByRole(role, {
-      team: order.team,
-      techGroup: order.techGroup,
-    });
-    openIds.forEach((id) => openIdSet.add(id));
-  }
-
-  if (openIdSet.size === 0) {
+  if (openIds.length === 0) {
     console.warn(
       "[feishu] 管理审核无可通知审批人（请确保车组/技术组组长已飞书登录本系统）",
     );
@@ -172,8 +264,8 @@ export async function sendManagementReviewNotification(
   }
 
   const results = await Promise.allSettled(
-    [...openIdSet].map((openId) =>
-      sendDirectCard(openId, approvalCard, botKind),
+    openIds.map((openId) =>
+      sendOrderNotificationToOpenId(order, openId, context, botKind),
     ),
   );
   const failures = results.filter(
@@ -336,91 +428,33 @@ export async function sendOrderNotification(
     return;
   }
 
-  const focus = defaultDetailFocus(order.status);
-  const buttonText =
-    focus === "approval"
-      ? "前往审批"
-      : focus === "upload"
-        ? "上传凭证"
-        : focus === "confirm"
-          ? "前往确认"
-          : "查看详情";
+  await sendOrderGroupWebhook(order, context).catch((err) => {
+    console.error("[feishu] Webhook 通知失败:", err);
+  });
 
-  const isTeacherApproval = order.status === "TEACHER_REVIEW";
-  const initiatorOnly =
-    order.status === "PENDING_APPLICANT_DOCS" ||
-    order.status === "PENDING_APPLICANT_CONFIRM";
-
-  if (!initiatorOnly) {
-    const groupCard = buildProcurementWebhookCard(order, {
-      detailFocus: focus,
-      primaryButtonText: buttonText,
-      appOrigin: context?.appOrigin,
-    });
-
-    await postProcurementWebhook({
-      msg_type: "interactive",
-      card: groupCard,
-    }).catch((err) => {
-      console.error("[feishu] Webhook 通知失败:", err);
-    });
-  }
-
-  const dmCard = isTeacherApproval
-    ? buildApprovalDmCard(order, {
-        detailFocus: focus,
-        primaryButtonText: buttonText,
-        appOrigin: context?.appOrigin,
-      })
-    : buildReadonlyDmCard(order, {
-        detailFocus: focus,
-        primaryButtonText: buttonText,
-        appOrigin: context?.appOrigin,
-      });
-
-  if (
-    order.status === "PENDING_APPLICANT_DOCS" ||
-    order.status === "PENDING_APPLICANT_CONFIRM"
-  ) {
-    await notifyInitiator(
-      order,
-      {
-        detailFocus: focus ?? undefined,
-        primaryButtonText: buttonText,
-        appOrigin: context?.appOrigin,
-        readOnly: true,
-      },
-      botKind,
-    );
+  const openIds = await collectOrderNotificationRecipientOpenIds(order);
+  if (openIds.length === 0) {
+    const approverRole = statusApproverRole[order.status];
+    if (approverRole) {
+      console.warn(`[feishu] 角色 ${roleLabels[approverRole]} 无可通知用户`);
+    }
     return;
   }
-
-  const approverRole = statusApproverRole[order.status];
-  if (approverRole) {
-    const openIds = await getOpenIdsByRole(approverRole, {
-      team: order.team,
-      techGroup: order.techGroup,
-    });
-    if (openIds.length === 0) {
-      console.warn(
-        `[feishu] 角色 ${roleLabels[approverRole]} 无可通知用户`,
-      );
-      return;
-    }
-    const results = await Promise.allSettled(
-      openIds.map((openId) => sendDirectCard(openId, dmCard, botKind)),
+  const results = await Promise.allSettled(
+    openIds.map((openId) =>
+      sendOrderNotificationToOpenId(order, openId, context, botKind),
+    ),
+  );
+  const failures = results.filter(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (failures.length > 0) {
+    const reason = failures[0]?.reason;
+    const message =
+      reason instanceof Error ? reason.message : String(reason);
+    throw new Error(
+      `飞书私信通知失败：${failures.length}/${results.length} 个收件人失败；${message}`,
     );
-    const failures = results.filter(
-      (result): result is PromiseRejectedResult => result.status === "rejected",
-    );
-    if (failures.length > 0) {
-      const reason = failures[0]?.reason;
-      const message =
-        reason instanceof Error ? reason.message : String(reason);
-      throw new Error(
-        `飞书私信通知失败：${failures.length}/${results.length} 个收件人失败；${message}`,
-      );
-    }
   }
 }
 

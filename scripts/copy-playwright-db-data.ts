@@ -24,8 +24,15 @@ if (sameDatabaseUrl(sourceDatabaseUrl, targetDatabaseUrl)) {
 }
 
 const BATCH_SIZE = 100;
-const EXCLUDED_TABLES = new Set(["_prisma_migrations", "NotificationOutbox"]);
-const TABLES_TO_CLEAR_ONLY = ["NotificationOutbox"];
+const EXCLUDED_TABLES = new Set([
+  "_prisma_migrations",
+  "NotificationOutbox",
+  "NotificationOutboxRecipient",
+]);
+const TABLES_TO_CLEAR_ONLY = [
+  "NotificationOutboxRecipient",
+  "NotificationOutbox",
+];
 const ONE_BY_ONE_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
   "base64",

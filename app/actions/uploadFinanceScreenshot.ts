@@ -7,6 +7,7 @@ import { mapOrderItems } from "@/lib/feishu";
 import {
   drainNotificationOutboxSoon,
   enqueueOrderNotificationTx,
+  orderNotificationEventKey,
 } from "@/lib/notification-outbox";
 import { getNotificationContext } from "@/lib/request-origin";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
@@ -77,7 +78,7 @@ export async function uploadFinanceScreenshot(formData: FormData) {
       });
       await enqueueOrderNotificationTx(
         tx,
-        `procurement:order:${record.id}:${record.status}:${record.updatedAt.toISOString()}`,
+        orderNotificationEventKey(record),
         {
           id: record.id,
           orderNo: record.orderNo,

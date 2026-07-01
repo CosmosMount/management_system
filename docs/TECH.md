@@ -24,6 +24,7 @@
 - 无独立后端服务，业务逻辑集中在 `app/actions/` 与 `lib/`
 - 文件上传写入私有目录 `storage/uploads/`，通过 `/uploads/...` 鉴权 route 返回
 - 飞书集成拆分为 OAuth、通讯录、消息发送与通知 outbox。`NotificationOutbox.channel` 表示业务域，`botKind` 表示发送机器人：`notification` 发送普通通知，`approval` 只发送审批/验收/确认待办。
+- 通知 outbox 分两层：`NotificationOutbox` 表示业务事件，`NotificationOutboxRecipient` 表示单个收件人的投递状态。drain 只能重试失败收件人，不能把已成功收件人再次发送。
 
 ## 目录结构
 
