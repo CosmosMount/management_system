@@ -46,6 +46,7 @@ const feishuProvider = {
         msg?: string;
         data?: {
           open_id: string;
+          union_id?: string;
           name: string;
           avatar_url?: string;
         };
@@ -58,6 +59,7 @@ const feishuProvider = {
   },
   profile(profile: {
     open_id: string;
+    union_id?: string;
     name: string;
     avatar_url?: string;
   }) {
@@ -66,6 +68,7 @@ const feishuProvider = {
       name: profile.name,
       image: profile.avatar_url,
       openId: profile.open_id,
+      unionId: profile.union_id,
     };
   },
 };
@@ -93,6 +96,9 @@ export const authConfig = {
     async jwt({ token, user }) {
       if (user?.openId) {
         token.openId = user.openId;
+      }
+      if (user?.unionId) {
+        token.unionId = user.unionId;
       }
       return token;
     },

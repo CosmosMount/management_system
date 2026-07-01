@@ -1,6 +1,7 @@
 import {
+  getFeishuCredentialsByBotKind,
   getProcurementFeishuCredentials,
-  getProgressFeishuCredentials,
+  type FeishuBotKind,
   type FeishuAppCredentials,
 } from "@/lib/feishu-app-config";
 
@@ -63,9 +64,11 @@ export async function getFeishuTenantAccessToken(): Promise<string> {
   return fetchTenantAccessToken(getProcurementFeishuCredentials());
 }
 
-/** 项目通知机器人发消息 */
-export async function getProgressFeishuTenantAccessToken(): Promise<string> {
-  return fetchTenantAccessToken(getProgressFeishuCredentials());
+/** 消息机器人发消息 */
+export async function getFeishuTenantAccessTokenByBotKind(
+  botKind: FeishuBotKind,
+): Promise<string> {
+  return fetchTenantAccessToken(getFeishuCredentialsByBotKind(botKind));
 }
 
 function extractCodeFromBody(body: RequestInit["body"]): string | null {

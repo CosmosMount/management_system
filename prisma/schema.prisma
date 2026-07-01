@@ -145,6 +145,7 @@ enum ProgressReminderKind {
 model User {
   id            String          @id @default(uuid())
   openId        String          @unique
+  unionId       String?         @unique
   name          String
   avatar        String?
   signaturePath String?
@@ -680,6 +681,7 @@ model NotificationOutbox {
   id          String                   @id @default(uuid())
   eventKey    String                   @unique
   channel     String
+  botKind     String                   @default("notification")
   type        String
   payload     String
   status      NotificationOutboxStatus @default(PENDING)

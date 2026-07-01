@@ -4,6 +4,7 @@ set -eu
 SERVER_SERVICE_NAME="pnx-management-server.service"
 CRON_SERVICE_NAME="pnx-management-cron.service"
 FEISHU_WS_SERVICE_NAME="pnx-management-feishu-ws.service"
+FEISHU_APPROVAL_WS_SERVICE_NAME="pnx-management-feishu-approval-ws.service"
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PROJECT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
@@ -149,13 +150,22 @@ trap cleanup EXIT INT TERM
 server_unit="$tmp_dir/$SERVER_SERVICE_NAME"
 cron_unit="$tmp_dir/$CRON_SERVICE_NAME"
 feishu_ws_unit="$tmp_dir/$FEISHU_WS_SERVICE_NAME"
+feishu_approval_ws_unit="$tmp_dir/$FEISHU_APPROVAL_WS_SERVICE_NAME"
 runtime_env="$tmp_dir/pnx-management.env"
 enable_feishu_ws=${ENABLE_FEISHU_WS:-false}
+approval_bot_configured=false
+if [ -n "${FEISHU_APPROVAL_APP_ID:-}" ] && [ -n "${FEISHU_APPROVAL_APP_SECRET:-}" ]; then
+  approval_bot_configured=true
+fi
+enable_feishu_approval_ws=${ENABLE_FEISHU_APPROVAL_WS:-$approval_bot_configured}
 
 render_template "$SCRIPT_DIR/$SERVER_SERVICE_NAME" "$server_unit"
 render_template "$SCRIPT_DIR/$CRON_SERVICE_NAME" "$cron_unit"
 if [ "$enable_feishu_ws" = "true" ]; then
   render_template "$SCRIPT_DIR/$FEISHU_WS_SERVICE_NAME" "$feishu_ws_unit"
+  if [ "$enable_feishu_approval_ws" = "true" ]; then
+    render_template "$SCRIPT_DIR/$FEISHU_APPROVAL_WS_SERVICE_NAME" "$feishu_approval_ws_unit"
+  fi
 fi
 write_runtime_env "$runtime_env"
 
@@ -166,6 +176,9 @@ if [ "${DRY_RUN:-false}" = "true" ]; then
   install -m 0644 "$cron_unit" "$dry_run_dir/systemd/$CRON_SERVICE_NAME"
   if [ "$enable_feishu_ws" = "true" ]; then
     install -m 0644 "$feishu_ws_unit" "$dry_run_dir/systemd/$FEISHU_WS_SERVICE_NAME"
+    if [ "$enable_feishu_approval_ws" = "true" ]; then
+      install -m 0644 "$feishu_approval_ws_unit" "$dry_run_dir/systemd/$FEISHU_APPROVAL_WS_SERVICE_NAME"
+    fi
   fi
   install -m 0600 "$runtime_env" "$dry_run_dir/env/pnx-management.env"
   echo "Dry run rendered files to $dry_run_dir"
@@ -182,12 +195,18 @@ run_root install -m 0644 "$server_unit" "$SYSTEMD_DIR/$SERVER_SERVICE_NAME"
 run_root install -m 0644 "$cron_unit" "$SYSTEMD_DIR/$CRON_SERVICE_NAME"
 if [ "$enable_feishu_ws" = "true" ]; then
   run_root install -m 0644 "$feishu_ws_unit" "$SYSTEMD_DIR/$FEISHU_WS_SERVICE_NAME"
+  if [ "$enable_feishu_approval_ws" = "true" ]; then
+    run_root install -m 0644 "$feishu_approval_ws_unit" "$SYSTEMD_DIR/$FEISHU_APPROVAL_WS_SERVICE_NAME"
+  fi
 fi
 run_root systemctl daemon-reload
 run_root systemctl enable --now "$SERVER_SERVICE_NAME"
 run_root systemctl enable --now "$CRON_SERVICE_NAME"
 if [ "$enable_feishu_ws" = "true" ]; then
   run_root systemctl enable --now "$FEISHU_WS_SERVICE_NAME"
+  if [ "$enable_feishu_approval_ws" = "true" ]; then
+    run_root systemctl enable --now "$FEISHU_APPROVAL_WS_SERVICE_NAME"
+  fi
 fi
 
 echo "Installed and enabled:"
@@ -195,6 +214,11 @@ echo "  $SERVER_SERVICE_NAME"
 echo "  $CRON_SERVICE_NAME"
 if [ "$enable_feishu_ws" = "true" ]; then
   echo "  $FEISHU_WS_SERVICE_NAME"
+  if [ "$enable_feishu_approval_ws" = "true" ]; then
+    echo "  $FEISHU_APPROVAL_WS_SERVICE_NAME"
+  else
+    echo "  Approval Feishu WS service skipped. Configure FEISHU_APPROVAL_APP_ID/SECRET or set ENABLE_FEISHU_APPROVAL_WS=true to install it."
+  fi
 else
   echo "Feishu WS service skipped. Set ENABLE_FEISHU_WS=true to install and start it."
 fi
@@ -207,4 +231,8 @@ echo "  journalctl -u $CRON_SERVICE_NAME -f"
 if [ "$enable_feishu_ws" = "true" ]; then
   echo "  systemctl status $FEISHU_WS_SERVICE_NAME --no-pager"
   echo "  journalctl -u $FEISHU_WS_SERVICE_NAME -f"
+  if [ "$enable_feishu_approval_ws" = "true" ]; then
+    echo "  systemctl status $FEISHU_APPROVAL_WS_SERVICE_NAME --no-pager"
+    echo "  journalctl -u $FEISHU_APPROVAL_WS_SERVICE_NAME -f"
+  fi
 fi

@@ -143,14 +143,20 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 | `SHADOW_DATABASE_URL` | Prisma migration diff 使用的 shadow 库，建议库名以 `_shadow` 结尾 |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` / `POSTGRES_PORT` | Docker PostgreSQL 用，见 `.env.example` |
 | `AUTH_SECRET` | Auth.js 密钥，可用 `openssl rand -hex 32` 生成 |
-| `FEISHU_APP_ID` | 飞书自建应用 App ID |
-| `FEISHU_APP_SECRET` | 飞书自建应用 App Secret |
+| `FEISHU_APP_ID` | 飞书 OAuth / 通讯录主应用 App ID，也是消息机器人的兼容默认值 |
+| `FEISHU_APP_SECRET` | 飞书 OAuth / 通讯录主应用 App Secret |
+| `FEISHU_NOTIFICATION_APP_ID` | 可选，通知机器人 App ID；普通私信通知、状态结果、提醒、反馈使用它发送 |
+| `FEISHU_NOTIFICATION_APP_SECRET` | 可选，通知机器人 App Secret；未配置时回退 `FEISHU_APP_ID` / `FEISHU_APP_SECRET` |
+| `FEISHU_APPROVAL_APP_ID` | 可选，审批机器人 App ID；只发送审批、验收、确认等待处理消息 |
+| `FEISHU_APPROVAL_APP_SECRET` | 可选，审批机器人 App Secret；未配置时回退通知机器人 |
+| `FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES` / `FEISHU_DIRECT_MESSAGE_ALLOWED_OPEN_IDS` / `FEISHU_DIRECT_MESSAGE_ALLOWED_UNION_IDS` | 可选，飞书私信收件人临时 allowlist；用于测试或演练防误发，未配置时不限制。Playwright 启动的应用服务默认只允许 `李棋轩` |
 | `FEISHU_WEBHOOK_URL` | 采购通知群 Webhook（与 `FEISHU_PROCUREMENT_WEBHOOK_URL` 二选一，后者优先） |
 | `FEISHU_PROCUREMENT_WEBHOOK_URL` | 采购专用群 Webhook |
 | `FEISHU_WEBHOOK_SECRET` | 可选，Webhook 签名校验密钥 |
 | `FEISHU_PROCUREMENT_WEBHOOK_SECRET` | 可选，采购 Webhook 签名（未配置时回退 `FEISHU_WEBHOOK_SECRET`） |
 | `FEISHU_EVENT_ENCRYPT_KEY` | 可选，事件订阅加密密钥（飞书后台「事件与回调」） |
 | `FEISHU_VERIFICATION_TOKEN` | 可选，事件订阅校验 Token |
+| `FEISHU_WS_BOT_KIND` | 可选，长连接使用的机器人，`notification` 或 `approval`，默认 `notification` |
 | `NEXT_PUBLIC_APP_URL` | 后台任务默认系统地址（cron 飞书卡片按钮跳转用） |
 | `APP_ALLOWED_ORIGINS` | 允许登录跳转和飞书按钮生成的完整 origin 列表 |
 | `LAN_HOST` | dev server 局域网访问 IP |
@@ -171,23 +177,27 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
    也可在登录页 `/login` 底部查看当前系统使用的地址。
 
 4. 权限管理：开通 **`contact:user.base:readonly`**（获取用户基本信息，用于登录）
-5. 将**采购**应用机器人拉入采购通知群
-6. 获取采购机器人的 Webhook，填入 `FEISHU_WEBHOOK_URL` 或 `FEISHU_PROCUREMENT_WEBHOOK_URL`
-7. 采购与项目通知暂**共用同一飞书应用**（`FEISHU_APP_ID`）；群 Webhook 可用 `FEISHU_PROCUREMENT_WEBHOOK_URL` 指向采购群
+5. 配置两个消息机器人：
+   - **通知机器人**：发送普通私信通知、状态结果、提醒、反馈等。
+   - **审批机器人**：只发送需要处理的审批、验收、确认待办；未单独配置时自动回退通知机器人。
+   - 若审批机器人是独立飞书应用，系统会用 `union_id` 发送审批私信；请确保用户登录过系统或执行过通讯录同步，否则审批私信会失败并等待 outbox 重试，不会降级到通知机器人。
+6. 将采购群 Webhook 对应的机器人拉入采购通知群；群 Webhook 是独立的群通知入口，不参与 `notification/approval` 私信分流
+7. 获取采购机器人的 Webhook，填入 `FEISHU_WEBHOOK_URL` 或 `FEISHU_PROCUREMENT_WEBHOOK_URL`
+8. OAuth 登录和通讯录同步继续使用 `FEISHU_APP_ID`；消息发送优先使用 `FEISHU_NOTIFICATION_*`，审批待办优先使用 `FEISHU_APPROVAL_*`
 
 ### 事件订阅（长连接，推荐）
 
 若飞书后台「事件与回调」要求配置 Request URL，**不要**填网站首页；本项目使用官方 SDK **长连接**接收事件，无需公网回调地址。
 
-1. 确保 `.env` 已配置 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`
-2. 启动长连接进程（开发：`npm run feishu:ws`；生产安装时设置 `ENABLE_FEISHU_WS=true ./service/install.sh` 后再 `systemctl start pnx-management-feishu-ws`）
+1. 确保 `.env` 已配置 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`，或已配置当前长连接机器人对应的消息应用凭证
+2. 启动长连接进程（开发：`npm run feishu:ws`；生产安装时设置 `ENABLE_FEISHU_WS=true ./service/install.sh` 后再 `systemctl start pnx-management-feishu-ws`）。若配置了独立审批机器人，安装脚本会同时安装 `pnx-management-feishu-approval-ws.service`；手动运行时可用 `FEISHU_WS_BOT_KIND=approval npm run feishu:ws` 启动审批机器人长连接。
 3. 日志出现「长连接已建立」后，在飞书开放平台 **事件与回调** → 选择 **使用长连接接收事件/回调**
 4. 订阅事件（如 `im.message.receive_v1`）；在 **回调配置** 启用 `card.action.trigger`（采购审批按钮依赖此回调）
 5. 若后台启用了加密策略，将 `Encrypt Key` / `Verification Token` 填入 `FEISHU_EVENT_ENCRYPT_KEY`、`FEISHU_VERIFICATION_TOKEN`
 
 在飞书开放平台为应用开通 **`cardkit:card:write`**（卡片写权限），否则私信里的审批回调按钮无法发送。
 
-长连接进程由 `service/pnx-management-feishu-ws.service` 管理；为避免误消费线上回调，`./service/install.sh` 默认不会安装或启动它，需显式设置 `ENABLE_FEISHU_WS=true`。
+长连接进程由 `service/pnx-management-feishu-ws.service` 管理；独立审批机器人回调由 `service/pnx-management-feishu-approval-ws.service` 管理。为避免误消费线上回调，`./service/install.sh` 默认不会安装或启动它们，需显式设置 `ENABLE_FEISHU_WS=true`。
 
 采购审批卡片可用 `npm run feishu:card-preview -- <orderId>` 预览。该脚本默认 dry-run；真实发送必须额外设置 `CONFIRM_SEND_FEISHU=true`，且不能设置 `NOTIFICATION_DELIVERY_DISABLED=true`。
 
@@ -290,11 +300,15 @@ const seedRoles = [
 
 ### 群 Webhook（可选）
 
-在 `.env` 填写 `FEISHU_WEBHOOK_URL` 后，状态变更时会向**群**推送卡片。未配置则跳过群通知。
+在 `.env` 填写 `FEISHU_WEBHOOK_URL` 后，状态变更和采购日报会向**群**推送卡片。未配置则跳过群通知。群 Webhook 独立于私信机器人，不受 `botKind` 控制。
 
 ### 审批人私信（已实现）
 
-开通权限 **`im:message:send_as_bot`** 后，系统会在状态变更时向对应角色的**所有** `UserRole` 用户私发卡片：
+开通权限 **`im:message:send_as_bot`** 后，系统会在状态变更时向对应角色的**所有** `UserRole` 用户私发卡片。发送机器人按消息性质区分：
+
+- **审批机器人**：只发待审批、待验收、待确认等需要处理的消息。
+- **通知机器人**：发审批结果、普通状态变更、提醒、反馈等其他私信消息。
+- 未配置审批机器人时，审批消息自动回退通知机器人。
 
 | 订单状态 | 私信通知 |
 |----------|----------|
@@ -306,8 +320,8 @@ const seedRoles = [
 前提：
 
 1. 审批人已在 `UserRole` 表中配置正确的 `open_id`
-2. 审批人至少登录过本系统一次（与机器人建立会话）
-3. `.env` 中 `FEISHU_APP_ID` / `FEISHU_APP_SECRET` 有效
+2. 审批人至少登录过本系统一次，或已通过通讯录同步写入 `User.unionId`
+3. `.env` 中通知机器人和审批机器人凭证有效；未单独配置时至少 `FEISHU_APP_ID` / `FEISHU_APP_SECRET` 有效
 
 群 Webhook 与私信**独立**：只配 App 凭证也可发私信；Webhook 仅影响群消息。
 

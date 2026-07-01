@@ -69,6 +69,8 @@ export default defineConfig({
       PLAYWRIGHT_CONFIRM_RECREATE_DB:
         new URL(testDatabaseUrl).pathname.replace(/^\//, ""),
       NOTIFICATION_DELIVERY_DISABLED: "true",
+      FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES:
+        process.env.FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES?.trim() || "李棋轩",
     },
     url: baseURL,
     reuseExistingServer: false,

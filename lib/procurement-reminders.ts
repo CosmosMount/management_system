@@ -1,6 +1,10 @@
 import type { OrderStatus } from "@prisma/client";
 import { mapOrderItems, type OrderCardPayload } from "@/lib/feishu";
-import { getFeishuTenantAccessToken } from "@/lib/feishu-auth";
+import { getFeishuTenantAccessTokenByBotKind } from "@/lib/feishu-auth";
+import type { FeishuBotKind } from "@/lib/feishu-app-config";
+import { resolveProcurementBotKind } from "@/lib/feishu-bot-routing";
+import { isFeishuDirectMessageAllowed } from "@/lib/feishu-delivery-guard";
+import { resolveDirectMessageTarget } from "@/lib/feishu-recipient";
 import {
   buildProcurementCardKitCard,
   supportsProcurementCardApproval,
@@ -63,15 +67,19 @@ function toCardPayload(order: {
 async function sendDirectStaleCard(
   openId: string,
   card: Record<string, unknown>,
-) {
+  botKind: FeishuBotKind = "notification",
+): Promise<boolean> {
+  if (!(await isFeishuDirectMessageAllowed(openId))) return false;
+
   if (card.schema === "2.0") {
-    await sendInteractiveCardKitDm(openId, card);
-    return;
+    await sendInteractiveCardKitDm(openId, card, botKind);
+    return true;
   }
 
-  const token = await getFeishuTenantAccessToken();
+  const target = await resolveDirectMessageTarget(openId, botKind);
+  const token = await getFeishuTenantAccessTokenByBotKind(target.botKind);
   const url = new URL("https://open.feishu.cn/open-apis/im/v1/messages");
-  url.searchParams.set("receive_id_type", "open_id");
+  url.searchParams.set("receive_id_type", target.receiveIdType);
 
   const res = await fetch(url, {
     method: "POST",
@@ -80,7 +88,7 @@ async function sendDirectStaleCard(
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({
-      receive_id: openId,
+      receive_id: target.receiveId,
       msg_type: "interactive",
       content: JSON.stringify(card),
     }),
@@ -89,9 +97,12 @@ async function sendDirectStaleCard(
   const data = (await res.json()) as { code: number; msg?: string };
   if (data.code !== 0) {
     throw new Error(
-      `飞书催办私信失败(${openId}): ${data.msg ?? res.status}`,
+      `飞书催办私信失败(${target.receiveIdType}:${target.receiveId}): ${
+        data.msg ?? res.status
+      }`,
     );
   }
+  return true;
 }
 
 function buildStaleCard(
@@ -135,29 +146,51 @@ function buildStaleCard(
 async function notifyInitiatorStale(
   orderId: string,
   card: Record<string, unknown>,
-) {
+  botKind: FeishuBotKind,
+): Promise<number> {
   const record = await prisma.purchaseOrder.findUnique({
     where: { id: orderId },
     include: { initiator: { select: { openId: true } } },
   });
-  if (!record?.initiator.openId) return;
-  await sendDirectStaleCard(record.initiator.openId, card);
+  if (!record?.initiator.openId) return 0;
+  return (await sendDirectStaleCard(record.initiator.openId, card, botKind))
+    ? 1
+    : 0;
 }
 
 async function notifyRoleStale(
   role: Parameters<typeof getOpenIdsByRole>[0],
   order: OrderCardPayload,
   card: Record<string, unknown>,
-) {
+): Promise<number> {
+  const botKind = resolveProcurementBotKind(order.status);
   const openIds = await getOpenIdsByRole(role, {
     team: order.team,
     techGroup: order.techGroup,
   });
+  let successCount = 0;
+  let failureCount = 0;
+  let firstFailure: unknown = null;
+
   for (const openId of openIds) {
-    await sendDirectStaleCard(openId, card).catch((err) => {
+    try {
+      if (await sendDirectStaleCard(openId, card, botKind)) {
+        successCount++;
+      }
+    } catch (err) {
+      failureCount++;
+      firstFailure ??= err;
       console.error("[reminder] 私信失败:", openId, err);
-    });
+    }
   }
+
+  if (openIds.length > 0 && successCount === 0 && failureCount > 0) {
+    const message =
+      firstFailure instanceof Error ? firstFailure.message : String(firstFailure);
+    throw new Error(`飞书催办私信全部失败：${message}`);
+  }
+
+  return successCount;
 }
 
 async function sendStaleOrderReminder(
@@ -167,33 +200,37 @@ async function sendStaleOrderReminder(
   },
   stuckDays: number,
   context?: NotificationContext,
-) {
+): Promise<number> {
   const card = buildStaleCard(order, stuckDays, context);
 
   if (order.status === "MANAGEMENT_REVIEW") {
-    const tasks: Promise<void>[] = [];
+    const tasks: Promise<number>[] = [];
     if (!order.teamApproved) {
       tasks.push(notifyRoleStale("TEAM_ADMIN", order, card));
     }
     if (!order.techGroupApproved) {
       tasks.push(notifyRoleStale("TECH_GROUP_ADMIN", order, card));
     }
-    await Promise.all(tasks);
-    return;
+    const counts = await Promise.all(tasks);
+    return counts.reduce((total, count) => total + count, 0);
   }
 
   if (
     order.status === "PENDING_APPLICANT_DOCS" ||
     order.status === "PENDING_APPLICANT_CONFIRM"
   ) {
-    await notifyInitiatorStale(order.id, card);
-    return;
+    return notifyInitiatorStale(
+      order.id,
+      card,
+      resolveProcurementBotKind(order.status),
+    );
   }
 
   const role = statusApproverRole[order.status];
   if (role) {
-    await notifyRoleStale(role, order, card);
+    return notifyRoleStale(role, order, card);
   }
+  return 0;
 }
 
 /** 在途订单当前环节停留超过 24h 且距上次催办已满 24h 时，私信该环节处理人 */
@@ -221,7 +258,7 @@ export async function runProcurementStaleReminders(
     const stuck = daysStuck(order.statusEnteredAt);
 
     try {
-      await sendStaleOrderReminder(
+      const deliveryCount = await sendStaleOrderReminder(
         {
           ...payload,
           teamApproved: order.teamApproved,
@@ -230,6 +267,7 @@ export async function runProcurementStaleReminders(
         stuck,
         context,
       );
+      if (deliveryCount === 0) continue;
       await prisma.purchaseOrder.update({
         where: { id: order.id },
         data: { lastReminderAt: new Date() },

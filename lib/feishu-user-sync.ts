@@ -26,9 +26,11 @@ export async function syncFeishuContactUsers(): Promise<SyncFeishuUsersResult> {
       update: {
         name: contact.name,
         avatar: contact.avatar,
+        unionId: contact.unionId ?? undefined,
       },
       create: {
         openId: contact.openId,
+        unionId: contact.unionId,
         name: contact.name,
         avatar: contact.avatar,
       },

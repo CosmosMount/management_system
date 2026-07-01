@@ -4,6 +4,7 @@ set -eu
 SERVER_SERVICE_NAME="pnx-management-server.service"
 CRON_SERVICE_NAME="pnx-management-cron.service"
 FEISHU_WS_SERVICE_NAME="pnx-management-feishu-ws.service"
+FEISHU_APPROVAL_WS_SERVICE_NAME="pnx-management-feishu-approval-ws.service"
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PROJECT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
@@ -38,19 +39,21 @@ run_root() {
   sudo "$@"
 }
 
-for service_name in "$FEISHU_WS_SERVICE_NAME" "$CRON_SERVICE_NAME" "$SERVER_SERVICE_NAME"; do
+for service_name in "$FEISHU_APPROVAL_WS_SERVICE_NAME" "$FEISHU_WS_SERVICE_NAME" "$CRON_SERVICE_NAME" "$SERVER_SERVICE_NAME"; do
   run_root systemctl disable --now "$service_name" >/dev/null 2>&1 || true
 done
 
 run_root rm -f \
   "$SYSTEMD_DIR/$SERVER_SERVICE_NAME" \
   "$SYSTEMD_DIR/$CRON_SERVICE_NAME" \
-  "$SYSTEMD_DIR/$FEISHU_WS_SERVICE_NAME"
+  "$SYSTEMD_DIR/$FEISHU_WS_SERVICE_NAME" \
+  "$SYSTEMD_DIR/$FEISHU_APPROVAL_WS_SERVICE_NAME"
 run_root systemctl daemon-reload
 run_root systemctl reset-failed \
   "$SERVER_SERVICE_NAME" \
   "$CRON_SERVICE_NAME" \
-  "$FEISHU_WS_SERVICE_NAME" >/dev/null 2>&1 || true
+  "$FEISHU_WS_SERVICE_NAME" \
+  "$FEISHU_APPROVAL_WS_SERVICE_NAME" >/dev/null 2>&1 || true
 
 if [ "${REMOVE_ENV_FILE:-false}" = "true" ]; then
   run_root rm -f "$ENV_FILE"
@@ -61,6 +64,7 @@ echo "Uninstalled systemd services:"
 echo "  $SERVER_SERVICE_NAME"
 echo "  $CRON_SERVICE_NAME"
 echo "  $FEISHU_WS_SERVICE_NAME"
+echo "  $FEISHU_APPROVAL_WS_SERVICE_NAME"
 echo
 echo "Runtime env kept at $ENV_FILE"
 echo "Set REMOVE_ENV_FILE=true to remove it during uninstall."

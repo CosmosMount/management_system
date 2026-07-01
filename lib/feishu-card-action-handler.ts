@@ -1,5 +1,7 @@
 import { cardToast } from "@/lib/feishu-card-response";
+import type { FeishuBotKind } from "@/lib/feishu-app-config";
 import { extractRejectReasonFromForm } from "@/lib/feishu-procurement-card";
+import { resolveSystemOpenIdFromFeishuOperator } from "@/lib/feishu-recipient";
 import { prisma } from "@/lib/prisma";
 import { approveProcurementByOpenId } from "@/lib/procurement-approve-by-open-id";
 import { rejectProcurementByOpenId } from "@/lib/procurement-reject-by-open-id";
@@ -7,6 +9,7 @@ import { rejectProcurementByOpenId } from "@/lib/procurement-reject-by-open-id";
 type CardActionPayload = {
   operator?: {
     open_id?: string;
+    union_id?: string;
     name?: string;
   };
   action?: {
@@ -113,11 +116,19 @@ function resolveProcurementCardAction(
   return null;
 }
 
-export async function handleFeishuCardAction(data: CardActionPayload) {
-  const openId = data.operator?.open_id;
-  if (!openId) {
+export async function handleFeishuCardAction(
+  data: CardActionPayload,
+  options?: { botKind?: FeishuBotKind },
+) {
+  const operatorOpenId = data.operator?.open_id;
+  if (!operatorOpenId) {
     return cardToast("error", "无法识别操作人");
   }
+  const openId = await resolveSystemOpenIdFromFeishuOperator({
+    openId: operatorOpenId,
+    unionId: data.operator?.union_id,
+    botKind: options?.botKind,
+  });
 
   const resolved = resolveProcurementCardAction(data);
   if (!resolved) {
@@ -136,7 +147,7 @@ export async function handleFeishuCardAction(data: CardActionPayload) {
       name: data.action?.name,
       value: data.action?.value,
       formValue: data.action?.form_value,
-      operator: data.operator?.name ?? openId,
+      operator: data.operator?.name ?? operatorOpenId,
     });
     return cardToast("info", "已收到操作，请使用系统页面完成处理");
   }

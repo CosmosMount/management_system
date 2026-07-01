@@ -15,6 +15,7 @@ type DepartmentItem = {
 
 type UserItem = {
   open_id?: string;
+  union_id?: string;
   name?: string;
   avatar?: {
     avatar_72?: string;
@@ -24,6 +25,7 @@ type UserItem = {
 
 export type FeishuContactUser = {
   openId: string;
+  unionId: string | null;
   name: string;
   avatar: string | null;
 };
@@ -129,6 +131,7 @@ async function listUsersInDepartment(
       .filter((u): u is UserItem & { open_id: string } => !!u.open_id)
       .map((u) => ({
         openId: u.open_id,
+        unionId: u.union_id ?? null,
         name: u.name?.trim() || "未知用户",
         avatar: u.avatar?.avatar_72 ?? u.avatar?.avatar_origin ?? null,
       })),
@@ -148,8 +151,16 @@ export async function fetchAllFeishuContactUsers(): Promise<FeishuContactUser[]>
         byOpenId.set(user.openId, user);
         continue;
       }
-      if (existing.name === "未知用户" && user.name !== "未知用户") {
-        byOpenId.set(user.openId, user);
+      if (
+        (existing.name === "未知用户" && user.name !== "未知用户") ||
+        (!existing.unionId && user.unionId)
+      ) {
+        byOpenId.set(user.openId, {
+          ...existing,
+          name: existing.name === "未知用户" ? user.name : existing.name,
+          avatar: user.avatar ?? existing.avatar,
+          unionId: user.unionId ?? existing.unionId,
+        });
       }
     }
   }

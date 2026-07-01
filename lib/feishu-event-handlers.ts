@@ -1,11 +1,17 @@
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { cardToast } from "@/lib/feishu-card-response";
+import type { FeishuBotKind } from "@/lib/feishu-app-config";
 import { handleFeishuCardAction } from "@/lib/feishu-card-action-handler";
 
-export function createFeishuEventDispatcher(): Lark.EventDispatcher {
+export function createFeishuEventDispatcher(options?: {
+  encryptKey?: string;
+  verificationToken?: string;
+  botKind?: FeishuBotKind;
+}): Lark.EventDispatcher {
   const dispatcher = new Lark.EventDispatcher({
-    encryptKey: process.env.FEISHU_EVENT_ENCRYPT_KEY,
-    verificationToken: process.env.FEISHU_VERIFICATION_TOKEN,
+    encryptKey: options?.encryptKey ?? process.env.FEISHU_EVENT_ENCRYPT_KEY,
+    verificationToken:
+      options?.verificationToken ?? process.env.FEISHU_VERIFICATION_TOKEN,
     loggerLevel: Lark.LoggerLevel.info,
   });
 
@@ -14,7 +20,9 @@ export function createFeishuEventDispatcher(): Lark.EventDispatcher {
       data: Parameters<typeof handleFeishuCardAction>[0],
     ) => {
       try {
-        return await handleFeishuCardAction(data);
+        return await handleFeishuCardAction(data, {
+          botKind: options?.botKind,
+        });
       } catch (error) {
         console.error("[feishu-ws] 卡片回调处理失败:", error);
         return cardToast(

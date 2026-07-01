@@ -1,4 +1,9 @@
-import { getFeishuTenantAccessToken } from "@/lib/feishu-auth";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { getFeishuTenantAccessTokenByBotKind } from "@/lib/feishu-auth";
+import type { FeishuBotKind } from "@/lib/feishu-app-config";
+import { resolveProgressBotKind } from "@/lib/feishu-bot-routing";
+import { isFeishuDirectMessageAllowed } from "@/lib/feishu-delivery-guard";
+import { resolveDirectMessageTarget } from "@/lib/feishu-recipient";
 import { getOpenIdsByRole } from "@/lib/permissions";
 import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
@@ -7,6 +12,8 @@ import { prisma } from "@/lib/prisma";
 import type { TaskStatus, UserRoleType } from "@prisma/client";
 import { routes } from "@/lib/routes";
 import { taskStatusLabels } from "@/lib/progress-labels";
+
+const progressBotKindStorage = new AsyncLocalStorage<FeishuBotKind>();
 
 export type ProgressNotifyPayload =
   | {
@@ -515,9 +522,15 @@ async function sendDirectCard(
   openId: string,
   card: ReturnType<typeof buildCard>,
 ) {
-  const token = await getFeishuTenantAccessToken();
+  if (!(await isFeishuDirectMessageAllowed(openId))) return;
+
+  const target = await resolveDirectMessageTarget(
+    openId,
+    progressBotKindStorage.getStore() ?? "notification",
+  );
+  const token = await getFeishuTenantAccessTokenByBotKind(target.botKind);
   const url = new URL("https://open.feishu.cn/open-apis/im/v1/messages");
-  url.searchParams.set("receive_id_type", "open_id");
+  url.searchParams.set("receive_id_type", target.receiveIdType);
 
   const res = await fetch(url, {
     method: "POST",
@@ -526,7 +539,7 @@ async function sendDirectCard(
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({
-      receive_id: openId,
+      receive_id: target.receiveId,
       msg_type: "interactive",
       content: JSON.stringify(card),
     }),
@@ -534,7 +547,9 @@ async function sendDirectCard(
 
   const data = (await res.json()) as { code: number; msg?: string };
   if (data.code !== 0) {
-    throw new Error(`飞书私信失败(${openId}): ${data.msg}`);
+    throw new Error(
+      `飞书私信失败(${target.receiveIdType}:${target.receiveId}): ${data.msg}`,
+    );
   }
 }
 
@@ -631,7 +646,9 @@ async function sendCardToOpenIds(
 export async function sendProgressNotification(
   payload: ProgressNotifyPayload,
   context?: NotificationContext,
+  botKind: FeishuBotKind = resolveProgressBotKind(payload.type),
 ) {
+  return progressBotKindStorage.run(botKind, async () => {
   const appOrigin = context?.appOrigin;
 
   switch (payload.type) {
@@ -1251,6 +1268,7 @@ export async function sendProgressNotification(
       break;
     }
   }
+  });
 }
 
 function formatScope(team: string, techGroup: string): string {

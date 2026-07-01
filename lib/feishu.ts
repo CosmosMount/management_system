@@ -1,5 +1,9 @@
 import type { OrderStatus, UserRoleType } from "@prisma/client";
-import { getFeishuTenantAccessToken } from "@/lib/feishu-auth";
+import { getFeishuTenantAccessTokenByBotKind } from "@/lib/feishu-auth";
+import type { FeishuBotKind } from "@/lib/feishu-app-config";
+import { resolveProcurementBotKind } from "@/lib/feishu-bot-routing";
+import { isFeishuDirectMessageAllowed } from "@/lib/feishu-delivery-guard";
+import { resolveDirectMessageTarget } from "@/lib/feishu-recipient";
 import {
   buildProcurementCardKitCard,
   buildProcurementWebhookCard,
@@ -81,16 +85,20 @@ async function postProcurementWebhook(body: Record<string, unknown>) {
 async function sendDirectCard(
   openId: string,
   card: Record<string, unknown>,
+  botKind: FeishuBotKind = "notification",
 ) {
+  if (!(await isFeishuDirectMessageAllowed(openId))) return;
+
   if (card.schema === "2.0") {
-    await sendInteractiveCardKitDm(openId, card);
+    await sendInteractiveCardKitDm(openId, card, botKind);
     console.log(`[feishu] CardKit 卡片已发送 openId=${openId}`);
     return;
   }
 
-  const token = await getFeishuTenantAccessToken();
+  const target = await resolveDirectMessageTarget(openId, botKind);
+  const token = await getFeishuTenantAccessTokenByBotKind(target.botKind);
   const url = new URL("https://open.feishu.cn/open-apis/im/v1/messages");
-  url.searchParams.set("receive_id_type", "open_id");
+  url.searchParams.set("receive_id_type", target.receiveIdType);
 
   const res = await fetch(url, {
     method: "POST",
@@ -99,7 +107,7 @@ async function sendDirectCard(
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({
-      receive_id: openId,
+      receive_id: target.receiveId,
       msg_type: "interactive",
       content: JSON.stringify(card),
     }),
@@ -108,7 +116,9 @@ async function sendDirectCard(
   const data = (await res.json()) as { code: number; msg?: string };
   if (data.code !== 0) {
     throw new Error(
-      `飞书私信发送失败(${openId}): ${data.msg ?? res.status}`,
+      `飞书私信发送失败(${target.receiveIdType}:${target.receiveId}): ${
+        data.msg ?? res.status
+      }`,
     );
   }
 }
@@ -125,6 +135,7 @@ function buildReadonlyDmCard(order: OrderCardPayload, options: CardOptions = {})
 export async function sendManagementReviewNotification(
   order: OrderCardPayload,
   context?: NotificationContext,
+  botKind: FeishuBotKind = "approval",
 ) {
   const groupCard = buildProcurementWebhookCard(order, {
     detailFocus: "approval",
@@ -161,7 +172,9 @@ export async function sendManagementReviewNotification(
   }
 
   const results = await Promise.allSettled(
-    [...openIdSet].map((openId) => sendDirectCard(openId, approvalCard)),
+    [...openIdSet].map((openId) =>
+      sendDirectCard(openId, approvalCard, botKind),
+    ),
   );
   const failures = results.filter(
     (result): result is PromiseRejectedResult => result.status === "rejected",
@@ -178,6 +191,7 @@ export async function sendManagementReviewNotification(
 async function notifyInitiator(
   order: OrderCardPayload,
   cardOptions?: CardOptions,
+  botKind: FeishuBotKind = "notification",
 ) {
   const record = await prisma.purchaseOrder.findUnique({
     where: { id: order.id },
@@ -186,7 +200,7 @@ async function notifyInitiator(
   if (!record?.initiator.openId) return;
 
   const card = buildReadonlyDmCard(order, cardOptions);
-  await sendDirectCard(record.initiator.openId, card);
+  await sendDirectCard(record.initiator.openId, card, botKind);
 }
 
 /** 采购审批驳回：通知采购人 */
@@ -195,6 +209,7 @@ export async function sendProcurementRejectedNotification(
   reason: string,
   rejectedByName: string,
   context?: NotificationContext,
+  botKind: FeishuBotKind = "notification",
 ) {
   const card = buildProcurementWebhookCard(order, {
     headerTitle: "采购申请已驳回",
@@ -225,7 +240,7 @@ export async function sendProcurementRejectedNotification(
       `**驳回原因**：${reason}`,
       "**说明**：本次采购已终止，不计入采购汇总数据",
     ],
-  });
+  }, botKind);
 }
 
 /** 报销员要求采购人重新提交凭证 */
@@ -234,6 +249,7 @@ export async function sendApplicantResubmitNotification(
   reason: string,
   financeName: string,
   context?: NotificationContext,
+  botKind: FeishuBotKind = "notification",
 ) {
   const card = buildProcurementWebhookCard(order, {
     headerTitle: "请重新提交报销资料",
@@ -266,7 +282,7 @@ export async function sendApplicantResubmitNotification(
       `**补充说明**：${reason}`,
       "**说明**：请重新上传发票、实物照片，系统将重新生成验收清单",
     ],
-  });
+  }, botKind);
 }
 
 /** 审批退回草稿：通知采购人修改后重新提交 */
@@ -275,6 +291,7 @@ export async function sendProcurementReturnDraftNotification(
   reason: string,
   returnedByName: string,
   context?: NotificationContext,
+  botKind: FeishuBotKind = "notification",
 ) {
   const card = buildProcurementWebhookCard(order, {
     headerTitle: "请修改后重新提交采购申请",
@@ -305,16 +322,17 @@ export async function sendProcurementReturnDraftNotification(
       `**补充说明**：${reason}`,
       "**说明**：订单已退回草稿，请修改采购明细后重新提交",
     ],
-  });
+  }, botKind);
 }
 
 /** 群 Webhook + 私信通知当前状态对应的处理人 */
 export async function sendOrderNotification(
   order: OrderCardPayload,
   context?: NotificationContext,
+  botKind: FeishuBotKind = resolveProcurementBotKind(order.status),
 ) {
   if (order.status === "MANAGEMENT_REVIEW") {
-    await sendManagementReviewNotification(order, context);
+    await sendManagementReviewNotification(order, context, botKind);
     return;
   }
 
@@ -364,12 +382,16 @@ export async function sendOrderNotification(
     order.status === "PENDING_APPLICANT_DOCS" ||
     order.status === "PENDING_APPLICANT_CONFIRM"
   ) {
-    await notifyInitiator(order, {
-      detailFocus: focus ?? undefined,
-      primaryButtonText: buttonText,
-      appOrigin: context?.appOrigin,
-      readOnly: true,
-    });
+    await notifyInitiator(
+      order,
+      {
+        detailFocus: focus ?? undefined,
+        primaryButtonText: buttonText,
+        appOrigin: context?.appOrigin,
+        readOnly: true,
+      },
+      botKind,
+    );
     return;
   }
 
@@ -386,7 +408,7 @@ export async function sendOrderNotification(
       return;
     }
     const results = await Promise.allSettled(
-      openIds.map((openId) => sendDirectCard(openId, dmCard)),
+      openIds.map((openId) => sendDirectCard(openId, dmCard, botKind)),
     );
     const failures = results.filter(
       (result): result is PromiseRejectedResult => result.status === "rejected",
@@ -465,6 +487,7 @@ export type BudgetThresholdPayload = {
 export async function sendBudgetThresholdNotification(
   payload: BudgetThresholdPayload,
   context?: NotificationContext,
+  botKind: FeishuBotKind = "notification",
 ) {
   const headerColor: "red" | "orange" =
     payload.threshold >= 100 ? "red" : "orange";
@@ -512,7 +535,9 @@ export async function sendBudgetThresholdNotification(
   };
 
   const results = await Promise.allSettled(
-    payload.recipientOpenIds.map((openId) => sendDirectCard(openId, card)),
+    payload.recipientOpenIds.map((openId) =>
+      sendDirectCard(openId, card, botKind),
+    ),
   );
   const failures = results.filter(
     (result): result is PromiseRejectedResult => result.status === "rejected",

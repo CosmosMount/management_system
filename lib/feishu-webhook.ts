@@ -50,12 +50,3 @@ export function getProcurementWebhookConfig(): {
     process.env.FEISHU_WEBHOOK_SECRET?.trim();
   return { url, secret };
 }
-
-export function getProgressWebhookConfig(): {
-  url?: string;
-  secret?: string;
-} {
-  const url = process.env.FEISHU_PROGRESS_WEBHOOK_URL?.trim();
-  const secret = process.env.FEISHU_PROGRESS_WEBHOOK_SECRET?.trim();
-  return { url, secret };
-}

@@ -1,5 +1,10 @@
 import type { FeedbackStatus, NotificationOutbox, Prisma } from "@prisma/client";
 import {
+  resolveProcurementBotKind,
+  resolveProgressBotKind,
+} from "@/lib/feishu-bot-routing";
+import type { FeishuBotKind } from "@/lib/feishu-app-config";
+import {
   sendApplicantResubmitNotification,
   sendBudgetThresholdNotification,
   sendOrderNotification,
@@ -98,11 +103,13 @@ export type EnqueueNotificationResult = {
 export async function enqueueNotification({
   eventKey,
   channel,
+  botKind = "notification",
   type,
   payload,
 }: {
   eventKey: string;
   channel: string;
+  botKind?: FeishuBotKind;
   type: string;
   payload: unknown;
 }): Promise<EnqueueNotificationResult> {
@@ -112,6 +119,7 @@ export async function enqueueNotification({
       {
         eventKey,
         channel,
+        botKind,
         type,
         payload: payloadText,
         status: "PENDING",
@@ -130,11 +138,13 @@ export async function enqueueNotificationTx(
   {
     eventKey,
     channel,
+    botKind = "notification",
     type,
     payload,
   }: {
     eventKey: string;
     channel: string;
+    botKind?: FeishuBotKind;
     type: string;
     payload: unknown;
   },
@@ -145,6 +155,7 @@ export async function enqueueNotificationTx(
       {
         eventKey,
         channel,
+        botKind,
         type,
         payload: payloadText,
         status: "PENDING",
@@ -192,6 +203,7 @@ export async function enqueueProgressNotification(
   return enqueueNotification({
     eventKey,
     channel: "progress",
+    botKind: resolveProgressBotKind(payload.type),
     type: payload.type,
     payload: {
       payload,
@@ -209,6 +221,7 @@ export async function enqueueProgressNotificationTx(
   return enqueueNotificationTx(tx, {
     eventKey,
     channel: "progress",
+    botKind: resolveProgressBotKind(payload.type),
     type: payload.type,
     payload: {
       payload,
@@ -225,6 +238,7 @@ export async function enqueueOrderNotification(
   await enqueueNotification({
     eventKey,
     channel: "procurement",
+    botKind: resolveProcurementBotKind(order.status),
     type: "order",
     payload: {
       kind: "order",
@@ -243,6 +257,7 @@ export async function enqueueOrderNotificationTx(
   return enqueueNotificationTx(tx, {
     eventKey,
     channel: "procurement",
+    botKind: resolveProcurementBotKind(order.status),
     type: "order",
     payload: {
       kind: "order",
@@ -262,6 +277,7 @@ export async function enqueueProcurementRejectedNotification(
   await enqueueNotification({
     eventKey,
     channel: "procurement",
+    botKind: "notification",
     type: "procurement_rejected",
     payload: {
       kind: "procurement_rejected",
@@ -284,6 +300,7 @@ export async function enqueueProcurementRejectedNotificationTx(
   return enqueueNotificationTx(tx, {
     eventKey,
     channel: "procurement",
+    botKind: "notification",
     type: "procurement_rejected",
     payload: {
       kind: "procurement_rejected",
@@ -305,6 +322,7 @@ export async function enqueueApplicantResubmitNotification(
   await enqueueNotification({
     eventKey,
     channel: "procurement",
+    botKind: "notification",
     type: "applicant_resubmit",
     payload: {
       kind: "applicant_resubmit",
@@ -326,6 +344,7 @@ export async function enqueueProcurementReturnDraftNotification(
   await enqueueNotification({
     eventKey,
     channel: "procurement",
+    botKind: "notification",
     type: "procurement_return_draft",
     payload: {
       kind: "procurement_return_draft",
@@ -348,6 +367,7 @@ export async function enqueueProcurementReturnDraftNotificationTx(
   return enqueueNotificationTx(tx, {
     eventKey,
     channel: "procurement",
+    botKind: "notification",
     type: "procurement_return_draft",
     payload: {
       kind: "procurement_return_draft",
@@ -367,6 +387,7 @@ export async function enqueueBudgetThresholdNotification(
   return enqueueNotification({
     eventKey,
     channel: "procurement",
+    botKind: "notification",
     type: "budget_threshold",
     payload: {
       kind: "budget_threshold",
@@ -384,6 +405,7 @@ export async function enqueueFeedbackCreatedNotification(
   await enqueueNotification({
     eventKey,
     channel: "feedback",
+    botKind: "notification",
     type: "created",
     payload: {
       kind: "created",
@@ -401,6 +423,7 @@ export async function enqueueFeedbackReplyNotification(
   await enqueueNotification({
     eventKey,
     channel: "feedback",
+    botKind: "notification",
     type: "reply",
     payload: {
       kind: "reply",
@@ -418,6 +441,7 @@ export async function enqueueFeedbackStatusNotification(
   await enqueueNotification({
     eventKey,
     channel: "feedback",
+    botKind: "notification",
     type: "status",
     payload: {
       kind: "status",
@@ -498,11 +522,12 @@ export async function drainNotificationOutbox(limit = 20): Promise<number> {
 }
 
 async function sendOutboxNotification(row: NotificationOutbox) {
+  const botKind = normalizeBotKind(row.botKind);
   if (row.channel === "progress") {
     const data = JSON.parse(row.payload) as ProgressOutboxPayload;
     await sendProgressNotification(data.payload, {
       appOrigin: data.appOrigin ?? undefined,
-    });
+    }, botKind);
     return;
   }
 
@@ -512,7 +537,7 @@ async function sendOutboxNotification(row: NotificationOutbox) {
       appOrigin: data.appOrigin ?? defaultAppOrigin(),
     };
     if (data.kind === "order") {
-      await sendOrderNotification(data.order, context);
+      await sendOrderNotification(data.order, context, botKind);
       return;
     }
     if (data.kind === "procurement_rejected") {
@@ -521,11 +546,12 @@ async function sendOutboxNotification(row: NotificationOutbox) {
         data.reason,
         data.rejectedByName,
         context,
+        botKind,
       );
       return;
     }
     if (data.kind === "budget_threshold") {
-      await sendBudgetThresholdNotification(data.budget, context);
+      await sendBudgetThresholdNotification(data.budget, context, botKind);
       return;
     }
     if (data.kind === "procurement_return_draft") {
@@ -534,6 +560,7 @@ async function sendOutboxNotification(row: NotificationOutbox) {
         data.reason,
         data.returnedByName,
         context,
+        botKind,
       );
       return;
     }
@@ -542,6 +569,7 @@ async function sendOutboxNotification(row: NotificationOutbox) {
       data.reason,
       data.financeName,
       context,
+      botKind,
     );
     return;
   }
@@ -552,18 +580,22 @@ async function sendOutboxNotification(row: NotificationOutbox) {
       appOrigin: data.appOrigin ?? defaultAppOrigin(),
     };
     if (data.kind === "created") {
-      await sendFeedbackCreatedNotification(data.payload, context);
+      await sendFeedbackCreatedNotification(data.payload, context, botKind);
       return;
     }
     if (data.kind === "reply") {
-      await sendFeedbackReplyNotification(data.payload, context);
+      await sendFeedbackReplyNotification(data.payload, context, botKind);
       return;
     }
-    await sendFeedbackStatusNotification(data.payload, context);
+    await sendFeedbackStatusNotification(data.payload, context, botKind);
     return;
   }
 
   throw new Error(`未知通知通道: ${row.channel}`);
+}
+
+function normalizeBotKind(value: string): FeishuBotKind {
+  return value === "approval" ? "approval" : "notification";
 }
 
 function nextRetryAt(attempts: number): Date {

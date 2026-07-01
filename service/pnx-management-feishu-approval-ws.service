@@ -2,7 +2,7 @@
 # Run ./service/install.sh to render placeholders and install the unit.
 
 [Unit]
-Description=PnX Management Feishu WebSocket Worker
+Description=PnX Management Feishu Approval WebSocket Worker
 After=network-online.target pnx-management-server.service
 Wants=network-online.target
 
@@ -13,7 +13,7 @@ Group=__SERVICE_GROUP__
 WorkingDirectory=__PROJECT_DIR__
 EnvironmentFile=__ENV_FILE__
 Environment="NODE_ENV=production"
-Environment="FEISHU_WS_BOT_KIND=notification"
+Environment="FEISHU_WS_BOT_KIND=approval"
 Environment="PATH=__NODE_BIN_DIR__:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 ExecStart=__NPM_BIN__ run feishu:ws
@@ -24,7 +24,7 @@ RestartSec=10
 TimeoutStartSec=120
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=pnx-management-feishu-ws
+SyslogIdentifier=pnx-management-feishu-approval-ws
 
 [Install]
 WantedBy=multi-user.target

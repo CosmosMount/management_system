@@ -1,0 +1,209 @@
+import {
+  getFeishuTenantAccessTokenByBotKind,
+} from "@/lib/feishu-auth";
+import {
+  usesSeparateApprovalBot,
+  type FeishuBotKind,
+} from "@/lib/feishu-app-config";
+import { prisma } from "@/lib/prisma";
+
+export type FeishuReceiveIdType = "open_id" | "union_id";
+
+export type FeishuDirectMessageTarget = {
+  receiveId: string;
+  receiveIdType: FeishuReceiveIdType;
+  botKind: FeishuBotKind;
+};
+
+const unionIdCache = new Map<string, Promise<string | null>>();
+
+function shouldUseUnionId(botKind: FeishuBotKind): boolean {
+  return botKind === "approval" && usesSeparateApprovalBot();
+}
+
+async function fetchUnionIdByOpenId(
+  openId: string,
+  lookupBotKind: FeishuBotKind,
+): Promise<string | null> {
+  const token = await getFeishuTenantAccessTokenByBotKind(lookupBotKind);
+  const url = new URL(
+    `https://open.feishu.cn/open-apis/contact/v3/users/${encodeURIComponent(
+      openId,
+    )}`,
+  );
+  url.searchParams.set("user_id_type", "open_id");
+  url.searchParams.set("department_id_type", "open_department_id");
+
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+  });
+  const body = (await res.json()) as {
+    code?: number;
+    msg?: string;
+    data?: {
+      user?: {
+        union_id?: string;
+      };
+      union_id?: string;
+    };
+  };
+
+  if (body.code !== 0) {
+    console.warn(
+      `[feishu] 无法查询用户 union_id openId=${openId}: ${
+        body.msg ?? res.status
+      }`,
+    );
+    return null;
+  }
+
+  const unionId = body.data?.user?.union_id ?? body.data?.union_id ?? null;
+  if (!unionId) {
+    console.warn(`[feishu] 飞书用户缺少 union_id openId=${openId}`);
+    return null;
+  }
+
+  if (lookupBotKind === "notification") {
+    await prisma.user
+      .update({
+        where: { openId },
+        data: { unionId },
+      })
+      .catch(() => undefined);
+  }
+  return unionId;
+}
+
+async function resolveUnionIdForOpenId(openId: string): Promise<string | null> {
+  if (openId.startsWith("on_")) return openId;
+
+  const user = await prisma.user.findUnique({
+    where: { openId },
+    select: { unionId: true },
+  });
+  if (user?.unionId) return user.unionId;
+
+  let pending = unionIdCache.get(openId);
+  if (!pending) {
+    pending = fetchUnionIdByOpenId(openId, "notification").catch((error) => {
+      console.warn(
+        `[feishu] 查询用户 union_id 失败 openId=${openId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return null;
+    });
+    unionIdCache.set(openId, pending);
+  }
+  return pending;
+}
+
+async function fetchSystemOpenIdByUnionId(
+  unionId: string,
+): Promise<string | null> {
+  const token = await getFeishuTenantAccessTokenByBotKind("notification");
+  const url = new URL(
+    `https://open.feishu.cn/open-apis/contact/v3/users/${encodeURIComponent(
+      unionId,
+    )}`,
+  );
+  url.searchParams.set("user_id_type", "union_id");
+  url.searchParams.set("department_id_type", "open_department_id");
+
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+  });
+  const body = (await res.json()) as {
+    code?: number;
+    msg?: string;
+    data?: {
+      user?: {
+        open_id?: string;
+      };
+      open_id?: string;
+    };
+  };
+
+  if (body.code !== 0) {
+    console.warn(
+      `[feishu] 无法用 union_id 查询系统 openId unionId=${unionId}: ${
+        body.msg ?? res.status
+      }`,
+    );
+    return null;
+  }
+
+  const openId = body.data?.user?.open_id ?? body.data?.open_id ?? null;
+  if (!openId) return null;
+
+  await prisma.user
+    .update({
+      where: { openId },
+      data: { unionId },
+    })
+    .catch(() => undefined);
+  return openId;
+}
+
+export async function resolveDirectMessageTarget(
+  openId: string,
+  botKind: FeishuBotKind,
+): Promise<FeishuDirectMessageTarget> {
+  if (openId.startsWith("on_")) {
+    return { receiveId: openId, receiveIdType: "union_id", botKind };
+  }
+  if (!shouldUseUnionId(botKind)) {
+    return { receiveId: openId, receiveIdType: "open_id", botKind };
+  }
+
+  const unionId = await resolveUnionIdForOpenId(openId);
+  if (unionId) {
+    return { receiveId: unionId, receiveIdType: "union_id", botKind };
+  }
+
+  console.warn(
+    `[feishu] 独立审批机器人无法解析 union_id，拒绝回退通知机器人发送 openId=${openId}`,
+  );
+  throw new Error(
+    "独立审批机器人无法解析收件人 union_id，请先让该用户登录系统或执行飞书通讯录同步",
+  );
+}
+
+export async function resolveSystemOpenIdFromFeishuOperator({
+  openId,
+  unionId,
+  botKind,
+}: {
+  openId: string;
+  unionId?: string | null;
+  botKind?: FeishuBotKind;
+}): Promise<string> {
+  if (unionId) {
+    const user = await prisma.user.findUnique({
+      where: { unionId },
+      select: { openId: true },
+    });
+    if (user?.openId) return user.openId;
+
+    const fetchedOpenId = await fetchSystemOpenIdByUnionId(unionId);
+    if (fetchedOpenId) return fetchedOpenId;
+  }
+
+  if (botKind === "approval" && shouldUseUnionId("approval")) {
+    const resolvedUnionId = await fetchUnionIdByOpenId(openId, "approval");
+    if (resolvedUnionId) {
+      const user = await prisma.user.findUnique({
+        where: { unionId: resolvedUnionId },
+        select: { openId: true },
+      });
+      if (user?.openId) return user.openId;
+
+      const fetchedOpenId = await fetchSystemOpenIdByUnionId(resolvedUnionId);
+      if (fetchedOpenId) return fetchedOpenId;
+    }
+  }
+
+  return openId;
+}

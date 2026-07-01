@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { handleFeishuCardAction } from "../lib/feishu-card-action-handler";
 import { prisma } from "../lib/prisma";
 import { createProjectSchema } from "../lib/validations/progress";
@@ -401,6 +401,51 @@ test("飞书过期管理审核卡片不能推进老师审核", async () => {
     })
     .toBe("TEACHER_REVIEW");
   expect(JSON.stringify(staleResult)).toContain("已失效");
+});
+
+test("独立审批机器人卡片回调用 union_id 映射系统审批人", async () => {
+  const order = await createProcurementOrderForNormalUser({
+    orderNo: `PW-FULL-CARD-UNION-${Date.now()}`,
+    itemName: `PW全功能-审批机器人映射物料-${Date.now()}`,
+    totalPrice: 233,
+    status: "MANAGEMENT_REVIEW",
+  });
+  const unionId = `on_pw_admin_${Date.now()}`;
+  await prisma.user.update({
+    where: { openId: fixtures.adminOpenId },
+    data: { unionId },
+  });
+
+  const result = await handleFeishuCardAction(
+    {
+      operator: {
+        open_id: `ou_approval_scoped_${Date.now()}`,
+        union_id: unionId,
+        name: "Playwright 管理员",
+      },
+      action: {
+        value: {
+          action: "procurement_approve_management",
+          orderId: order.id,
+        },
+      },
+    },
+    { botKind: "approval" },
+  );
+
+  expect(JSON.stringify(result)).toContain("已");
+  await expect
+    .poll(async () => {
+      const latest = await prisma.purchaseOrder.findUniqueOrThrow({
+        where: { id: order.id },
+        select: { status: true, teamApproverOpenId: true },
+      });
+      return latest;
+    })
+    .toEqual({
+      status: "TEACHER_REVIEW",
+      teamApproverOpenId: fixtures.adminOpenId,
+    });
 });
 
 test("采购管理审核可终止驳回", async ({ page, context, baseURL }) => {
@@ -1795,7 +1840,10 @@ test("项目负责人可从验收标准 CSV 批量导入任务且只发送汇总
   await dialog.getByLabel("批量所属阶段").click();
   await page.getByRole("option", { name: "PW全功能-当前阶段" }).click();
 
+  await selectImportedTaskAssigneeIfNeeded(page, dialog, "李棋轩");
   await dialog.getByTestId("progress-task-import-detail").getByLabel("导入任务目标").fill(editedTitle);
+  await dialog.getByRole("button", { name: "查看第 3 行任务详情" }).click();
+  await selectImportedTaskAssigneeIfNeeded(page, dialog, "李棋轩");
   await dialog.getByTestId("progress-task-import-submit").click();
 
   const currentStage = await prisma.projectStage.findFirstOrThrow({
@@ -1839,7 +1887,8 @@ test("项目负责人可从验收标准 CSV 批量导入任务且只发送汇总
         secondAssignees:
           tasks
             .find((task) => task.title === secondTitle)
-            ?.assignees.map((assignee) => assignee.name) ?? [],
+            ?.assignees.map((assignee) => assignee.name)
+            .sort() ?? [],
         secondNeedsWeeklyReport:
           tasks.find((task) => task.title === secondTitle)?.needsWeeklyReport ?? false,
         secondUrgency: tasks.find((task) => task.title === secondTitle)?.urgency ?? "",
@@ -1852,7 +1901,7 @@ test("项目负责人可从验收标准 CSV 批量导入任务且只发送汇总
       stageIds: [currentStage.id, currentStage.id],
       firstGoal: "测试类型：导入测试",
       secondGroups: ["机械", "电控"],
-      secondAssignees: ["李棋轩", "Playwright 管理员"],
+      secondAssignees: ["Playwright 管理员", "李棋轩"],
       secondNeedsWeeklyReport: true,
       secondUrgency: "HIGH",
       bulkOutboxCount: 1,
@@ -1885,6 +1934,7 @@ test("项目参与人可从验收标准 CSV 批量提交任务申请", async ({
   );
   await dialog.getByLabel("批量所属阶段").click();
   await page.getByRole("option", { name: "PW全功能-任务申请阶段" }).click();
+  await selectImportedTaskAssigneeIfNeeded(page, dialog, "李棋轩");
   await dialog.getByTestId("progress-task-import-submit").click();
 
   await expect
@@ -2653,5 +2703,21 @@ async function selectUserFromSearch(
   index = 0,
 ) {
   await page.getByPlaceholder(placeholder).nth(index).fill(name);
+  await page.getByRole("button", { name: new RegExp(name) }).last().click();
+}
+
+async function selectImportedTaskAssigneeIfNeeded(
+  page: Page,
+  dialog: Locator,
+  name: string,
+) {
+  const detail = dialog.getByTestId("progress-task-import-detail");
+  const hasDuplicateWarning =
+    (await detail.getByText(`负责人“${name}”存在重名`).count()) > 0;
+  const hasMissingWarning =
+    (await detail.getByText("请选择负责人").count()) > 0;
+  if (!hasDuplicateWarning && !hasMissingWarning) return;
+
+  await detail.getByPlaceholder("搜索负责人姓名").fill(name);
   await page.getByRole("button", { name: new RegExp(name) }).last().click();
 }

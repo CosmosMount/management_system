@@ -1,4 +1,10 @@
-import { getFeishuTenantAccessToken } from "@/lib/feishu-auth";
+import { getFeishuTenantAccessTokenByBotKind } from "@/lib/feishu-auth";
+import type { FeishuBotKind } from "@/lib/feishu-app-config";
+import { isFeishuDirectMessageAllowed } from "@/lib/feishu-delivery-guard";
+import {
+  resolveDirectMessageTarget,
+  type FeishuDirectMessageTarget,
+} from "@/lib/feishu-recipient";
 
 export class FeishuCardKitPermissionError extends Error {
   constructor(message: string) {
@@ -9,8 +15,9 @@ export class FeishuCardKitPermissionError extends Error {
 
 export async function createCardKitInstance(
   card: Record<string, unknown>,
+  botKind: FeishuBotKind = "notification",
 ): Promise<string> {
-  const token = await getFeishuTenantAccessToken();
+  const token = await getFeishuTenantAccessTokenByBotKind(botKind);
   const res = await fetch("https://open.feishu.cn/open-apis/cardkit/v1/cards", {
     method: "POST",
     headers: {
@@ -45,10 +52,21 @@ export async function createCardKitInstance(
 export async function sendCardKitMessage(
   openId: string,
   cardId: string,
+  botKind: FeishuBotKind = "notification",
 ): Promise<void> {
-  const token = await getFeishuTenantAccessToken();
+  if (!(await isFeishuDirectMessageAllowed(openId))) return;
+
+  const target = await resolveDirectMessageTarget(openId, botKind);
+  await sendCardKitMessageToTarget(target, cardId);
+}
+
+async function sendCardKitMessageToTarget(
+  target: FeishuDirectMessageTarget,
+  cardId: string,
+): Promise<void> {
+  const token = await getFeishuTenantAccessTokenByBotKind(target.botKind);
   const url = new URL("https://open.feishu.cn/open-apis/im/v1/messages");
-  url.searchParams.set("receive_id_type", "open_id");
+  url.searchParams.set("receive_id_type", target.receiveIdType);
 
   const res = await fetch(url, {
     method: "POST",
@@ -57,7 +75,7 @@ export async function sendCardKitMessage(
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({
-      receive_id: openId,
+      receive_id: target.receiveId,
       msg_type: "interactive",
       content: JSON.stringify({
         type: "card",
@@ -68,14 +86,22 @@ export async function sendCardKitMessage(
 
   const data = (await res.json()) as { code: number; msg?: string };
   if (data.code !== 0) {
-    throw new Error(`发送飞书卡片消息失败(${openId}): ${data.msg ?? res.status}`);
+    throw new Error(
+      `发送飞书卡片消息失败(${target.receiveIdType}:${target.receiveId}): ${
+        data.msg ?? res.status
+      }`,
+    );
   }
 }
 
 export async function sendInteractiveCardKitDm(
   openId: string,
   card: Record<string, unknown>,
+  botKind: FeishuBotKind = "notification",
 ): Promise<void> {
-  const cardId = await createCardKitInstance(card);
-  await sendCardKitMessage(openId, cardId);
+  if (!(await isFeishuDirectMessageAllowed(openId))) return;
+
+  const target = await resolveDirectMessageTarget(openId, botKind);
+  const cardId = await createCardKitInstance(card, target.botKind);
+  await sendCardKitMessageToTarget(target, cardId);
 }

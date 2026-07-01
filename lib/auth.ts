@@ -9,11 +9,13 @@ declare module "next-auth" {
       name?: string | null;
       image?: string | null;
       openId: string;
+      unionId?: string | null;
     };
   }
 
   interface User {
     openId?: string;
+    unionId?: string;
   }
 }
 
@@ -28,9 +30,11 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         update: {
           name: user.name ?? "未知用户",
           avatar: user.image ?? null,
+          unionId: user.unionId ?? undefined,
         },
         create: {
           openId: user.openId,
+          unionId: user.unionId ?? null,
           name: user.name ?? "未知用户",
           avatar: user.image ?? null,
         },
@@ -41,6 +45,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (user?.openId) {
         token.openId = user.openId;
       }
+      if (user?.unionId) {
+        token.unionId = user.unionId;
+      }
       return token;
     },
     async session({ session, token }) {
@@ -50,6 +57,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         session.user.openId = openId;
         session.user.id = openId;
       }
+      session.user.unionId = token.unionId as string | undefined;
       return session;
     },
   },

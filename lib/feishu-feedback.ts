@@ -1,6 +1,9 @@
 import type { FeedbackStatus } from "@prisma/client";
 import { feedbackStatusLabels, feedbackStatusTone } from "@/lib/feedback-labels";
-import { getFeishuTenantAccessToken } from "@/lib/feishu-auth";
+import { getFeishuTenantAccessTokenByBotKind } from "@/lib/feishu-auth";
+import type { FeishuBotKind } from "@/lib/feishu-app-config";
+import { isFeishuDirectMessageAllowed } from "@/lib/feishu-delivery-guard";
+import { resolveDirectMessageTarget } from "@/lib/feishu-recipient";
 import { buildAppUrl, type NotificationContext } from "@/lib/app-origin";
 import { prisma } from "@/lib/prisma";
 
@@ -58,10 +61,17 @@ function buildFeedbackCard({
   };
 }
 
-async function sendDirectCard(openId: string, card: FeedbackCard) {
-  const token = await getFeishuTenantAccessToken();
+async function sendDirectCard(
+  openId: string,
+  card: FeedbackCard,
+  botKind: FeishuBotKind = "notification",
+) {
+  if (!(await isFeishuDirectMessageAllowed(openId))) return;
+
+  const target = await resolveDirectMessageTarget(openId, botKind);
+  const token = await getFeishuTenantAccessTokenByBotKind(target.botKind);
   const url = new URL("https://open.feishu.cn/open-apis/im/v1/messages");
-  url.searchParams.set("receive_id_type", "open_id");
+  url.searchParams.set("receive_id_type", target.receiveIdType);
 
   const res = await fetch(url, {
     method: "POST",
@@ -70,7 +80,7 @@ async function sendDirectCard(openId: string, card: FeedbackCard) {
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({
-      receive_id: openId,
+      receive_id: target.receiveId,
       msg_type: "interactive",
       content: JSON.stringify(card),
     }),
@@ -78,7 +88,11 @@ async function sendDirectCard(openId: string, card: FeedbackCard) {
 
   const data = (await res.json()) as { code: number; msg?: string };
   if (data.code !== 0) {
-    throw new Error(`反馈飞书私信失败(${openId}): ${data.msg ?? res.status}`);
+    throw new Error(
+      `反馈飞书私信失败(${target.receiveIdType}:${target.receiveId}): ${
+        data.msg ?? res.status
+      }`,
+    );
   }
 }
 
@@ -97,10 +111,14 @@ async function getSuperAdminOpenIds(): Promise<string[]> {
   return users.map((user) => user.openId);
 }
 
-async function notifyOpenIds(openIds: string[], card: FeedbackCard) {
+async function notifyOpenIds(
+  openIds: string[],
+  card: FeedbackCard,
+  botKind: FeishuBotKind = "notification",
+) {
   const uniqueOpenIds = [...new Set(openIds.filter(Boolean))];
   const results = await Promise.allSettled(
-    uniqueOpenIds.map((openId) => sendDirectCard(openId, card)),
+    uniqueOpenIds.map((openId) => sendDirectCard(openId, card, botKind)),
   );
   const failures = results.filter(
     (result): result is PromiseRejectedResult => result.status === "rejected",
@@ -122,7 +140,7 @@ export async function sendFeedbackCreatedNotification({
   feedbackId: string;
   submitterName: string;
   body: string;
-}, context?: NotificationContext) {
+}, context?: NotificationContext, botKind: FeishuBotKind = "notification") {
   const card = buildFeedbackCard({
     title: "收到新的系统反馈",
     feedbackId,
@@ -130,7 +148,7 @@ export async function sendFeedbackCreatedNotification({
     appOrigin: context?.appOrigin,
     content: `**提交人**：${submitterName}\n**内容**：${truncate(body)}`,
   });
-  await notifyOpenIds(await getSuperAdminOpenIds(), card);
+  await notifyOpenIds(await getSuperAdminOpenIds(), card, botKind);
 }
 
 export async function sendFeedbackReplyNotification({
@@ -145,7 +163,7 @@ export async function sendFeedbackReplyNotification({
   body: string;
   recipientOpenIds?: string[];
   actorIsAdmin: boolean;
-}, context?: NotificationContext) {
+}, context?: NotificationContext, botKind: FeishuBotKind = "notification") {
   const card = buildFeedbackCard({
     title: actorIsAdmin ? "你的反馈有新的回复" : "反馈收到新的补充",
     feedbackId,
@@ -156,7 +174,7 @@ export async function sendFeedbackReplyNotification({
   const recipients = actorIsAdmin
     ? (recipientOpenIds ?? [])
     : await getSuperAdminOpenIds();
-  await notifyOpenIds(recipients, card);
+  await notifyOpenIds(recipients, card, botKind);
 }
 
 export async function sendFeedbackStatusNotification({
@@ -169,7 +187,7 @@ export async function sendFeedbackStatusNotification({
   actorName: string;
   status: FeedbackStatus;
   submitterOpenId: string;
-}, context?: NotificationContext) {
+}, context?: NotificationContext, botKind: FeishuBotKind = "notification") {
   const card = buildFeedbackCard({
     title: "反馈状态已更新",
     feedbackId,
@@ -177,5 +195,5 @@ export async function sendFeedbackStatusNotification({
     appOrigin: context?.appOrigin,
     content: `**处理人**：${actorName}\n**当前状态**：${feedbackStatusLabels[status]}`,
   });
-  await notifyOpenIds([submitterOpenId], card);
+  await notifyOpenIds([submitterOpenId], card, botKind);
 }
