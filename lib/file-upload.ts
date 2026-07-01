@@ -43,6 +43,7 @@ const SCREENSHOT_TYPES = new Set([
   "image/png",
   "image/jpeg",
   "image/jpg",
+  "image/webp",
 ]);
 
 const SIGNATURE_TYPES = new Set(["image/png", "image/jpeg", "image/jpg"]);

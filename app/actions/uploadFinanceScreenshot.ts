@@ -48,7 +48,7 @@ export async function uploadFinanceScreenshot(formData: FormData) {
 
   const screenshot = formData.get("screenshot");
   if (!(screenshot instanceof File) || screenshot.size === 0) {
-    throw new Error("请上传报销截图");
+    throw new Error("请上传报销截图或文件");
   }
 
   const screenshotPath = await saveUpload(
@@ -88,6 +88,7 @@ export async function uploadFinanceScreenshot(formData: FormData) {
           team: record.team,
           techGroup: record.techGroup,
           items: mapOrderItems(order.items),
+          screenshotPath: record.screenshotPath,
         },
         context,
       );

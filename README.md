@@ -157,6 +157,8 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 | `FEISHU_EVENT_ENCRYPT_KEY` | 可选，事件订阅加密密钥（飞书后台「事件与回调」） |
 | `FEISHU_VERIFICATION_TOKEN` | 可选，事件订阅校验 Token |
 | `FEISHU_WS_BOT_KIND` | 可选，长连接使用的机器人，`notification` 或 `approval`，默认 `notification` |
+| `ENABLE_FEISHU_WS` | 可选，是否安装通知机器人长连接，默认 `false` |
+| `ENABLE_FEISHU_APPROVAL_WS` | 可选，是否安装审批机器人长连接，默认 `true` |
 | `NEXT_PUBLIC_APP_URL` | 后台任务默认系统地址（cron 飞书卡片按钮跳转用） |
 | `APP_ALLOWED_ORIGINS` | 允许登录跳转和飞书按钮生成的完整 origin 列表 |
 | `LAN_HOST` | dev server 局域网访问 IP |
@@ -190,14 +192,16 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 若飞书后台「事件与回调」要求配置 Request URL，**不要**填网站首页；本项目使用官方 SDK **长连接**接收事件，无需公网回调地址。
 
 1. 确保 `.env` 已配置 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`，或已配置当前长连接机器人对应的消息应用凭证
-2. 启动长连接进程（开发：`npm run feishu:ws`；生产安装时设置 `ENABLE_FEISHU_WS=true ./service/install.sh` 后再 `systemctl start pnx-management-feishu-ws`）。若配置了独立审批机器人，安装脚本会同时安装 `pnx-management-feishu-approval-ws.service`；手动运行时可用 `FEISHU_WS_BOT_KIND=approval npm run feishu:ws` 启动审批机器人长连接。
+2. 启动长连接进程（开发：`npm run feishu:ws`；审批机器人生产环境由 `./service/install.sh` 默认安装 `pnx-management-feishu-approval-ws.service` 并自动启动）。通知机器人长连接需设置 `ENABLE_FEISHU_WS=true` 后再安装；手动运行审批长连接可用 `FEISHU_WS_BOT_KIND=approval npm run feishu:ws`。
 3. 日志出现「长连接已建立」后，在飞书开放平台 **事件与回调** → 选择 **使用长连接接收事件/回调**
 4. 订阅事件（如 `im.message.receive_v1`）；在 **回调配置** 启用 `card.action.trigger`（采购审批按钮依赖此回调）
 5. 若后台启用了加密策略，将 `Encrypt Key` / `Verification Token` 填入 `FEISHU_EVENT_ENCRYPT_KEY`、`FEISHU_VERIFICATION_TOKEN`
 
 在飞书开放平台为应用开通 **`cardkit:card:write`**（卡片写权限），否则私信里的审批回调按钮无法发送。
 
-长连接进程由 `service/pnx-management-feishu-ws.service` 管理；独立审批机器人回调由 `service/pnx-management-feishu-approval-ws.service` 管理。为避免误消费线上回调，`./service/install.sh` 默认不会安装或启动它们，需显式设置 `ENABLE_FEISHU_WS=true`。
+待确认卡片嵌入报销截图还需审批应用开通 **`im:resource`** 或 **`im:resource:upload`**（上传图片资源）。未开通时会改为卡片内「点击在系统中查看」链接。
+
+审批机器人长连接由 `service/pnx-management-feishu-approval-ws.service` 管理，安装脚本默认安装并启动；通知机器人长连接由 `service/pnx-management-feishu-ws.service` 管理，需显式设置 `ENABLE_FEISHU_WS=true`。不需要审批回调时可设置 `ENABLE_FEISHU_APPROVAL_WS=false`。
 
 采购审批卡片可用 `npm run feishu:card-preview -- <orderId>` 预览。该脚本默认 dry-run；真实发送必须额外设置 `CONFIRM_SEND_FEISHU=true`，且不能设置 `NOTIFICATION_DELIVERY_DISABLED=true`。
 

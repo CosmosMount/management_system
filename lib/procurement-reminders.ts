@@ -1,4 +1,5 @@
 import type { OrderStatus } from "@prisma/client";
+import { enrichOrderCardPayloadFromDb } from "@/lib/feishu-order-card-payload";
 import { mapOrderItems, type OrderCardPayload } from "@/lib/feishu";
 import { getFeishuTenantAccessTokenByBotKind } from "@/lib/feishu-auth";
 import type { FeishuBotKind } from "@/lib/feishu-app-config";
@@ -8,7 +9,12 @@ import { resolveDirectMessageTarget } from "@/lib/feishu-recipient";
 import {
   buildProcurementCardKitCard,
   supportsProcurementCardApproval,
+  supportsProcurementCardConfirm,
 } from "@/lib/feishu-procurement-card";
+import {
+  resolveProcurementCardScreenshotOptions,
+  resolveProcurementFinanceReviewAttachmentOptions,
+} from "@/lib/feishu-procurement-card-assets";
 import { sendInteractiveCardKitDm } from "@/lib/feishu-cardkit";
 import { getOpenIdsByRole } from "@/lib/permissions";
 import type { NotificationContext } from "@/lib/app-origin";
@@ -50,6 +56,7 @@ function toCardPayload(order: {
   status: OrderStatus;
   team: string;
   techGroup: string;
+  screenshotPath?: string | null;
   items: { name: string; quantity: number; unitPrice: number }[];
 }): OrderCardPayload {
   return {
@@ -60,8 +67,65 @@ function toCardPayload(order: {
     status: order.status,
     team: order.team,
     techGroup: order.techGroup,
+    screenshotPath: order.screenshotPath,
     items: mapOrderItems(order.items),
   };
+}
+
+async function buildStaleCard(
+  order: OrderCardPayload,
+  stuckDays: number,
+  context?: NotificationContext,
+) {
+  const statusLabel = statusLabels[order.status];
+  const extraLines = [
+    `**当前环节**：${statusLabel}`,
+    `**已停留**：${stuckDays} 天未处理`,
+    "**请尽快处理，避免影响报销进度**",
+  ];
+  const botKind = resolveProcurementBotKind(order.status);
+  const screenshotOptions = supportsProcurementCardConfirm(order.status)
+    ? await resolveProcurementCardScreenshotOptions(
+        order,
+        botKind,
+        context?.appOrigin,
+      )
+    : {};
+  const financeAttachmentOptions =
+    order.status === "PENDING_FINANCE_REVIEW"
+      ? await resolveProcurementFinanceReviewAttachmentOptions(
+          order,
+          botKind,
+          context?.appOrigin,
+        )
+      : {};
+
+  if (supportsProcurementCardApproval(order.status)) {
+    return buildProcurementCardKitCard(order, {
+      headerTitle: "采购待办催办",
+      headerTemplate: "orange",
+      detailFocus: "approval",
+      appOrigin: context?.appOrigin,
+      extraLines,
+    });
+  }
+
+  return buildProcurementCardKitCard(order, {
+    headerTitle: "采购待办催办",
+    headerTemplate: "orange",
+    detailFocus:
+      order.status === "PENDING_APPLICANT_DOCS"
+        ? "upload"
+        : order.status === "PENDING_APPLICANT_CONFIRM"
+          ? "confirm"
+          : "approval",
+    primaryButtonText: "前往处理",
+    appOrigin: context?.appOrigin,
+    extraLines,
+    readOnly: !supportsProcurementCardConfirm(order.status),
+    ...financeAttachmentOptions,
+    ...screenshotOptions,
+  });
 }
 
 async function sendDirectStaleCard(
@@ -103,44 +167,6 @@ async function sendDirectStaleCard(
     );
   }
   return true;
-}
-
-function buildStaleCard(
-  order: OrderCardPayload,
-  stuckDays: number,
-  context?: NotificationContext,
-) {
-  const statusLabel = statusLabels[order.status];
-  const extraLines = [
-    `**当前环节**：${statusLabel}`,
-    `**已停留**：${stuckDays} 天未处理`,
-    "**请尽快处理，避免影响报销进度**",
-  ];
-
-  if (supportsProcurementCardApproval(order.status)) {
-    return buildProcurementCardKitCard(order, {
-      headerTitle: "采购待办催办",
-      headerTemplate: "orange",
-      detailFocus: "approval",
-      appOrigin: context?.appOrigin,
-      extraLines,
-    });
-  }
-
-  return buildProcurementCardKitCard(order, {
-    headerTitle: "采购待办催办",
-    headerTemplate: "orange",
-    detailFocus:
-      order.status === "PENDING_APPLICANT_DOCS"
-        ? "upload"
-        : order.status === "PENDING_APPLICANT_CONFIRM"
-          ? "confirm"
-          : "approval",
-    primaryButtonText: "前往处理",
-    appOrigin: context?.appOrigin,
-    extraLines,
-    readOnly: true,
-  });
 }
 
 async function notifyInitiatorStale(
@@ -201,7 +227,8 @@ async function sendStaleOrderReminder(
   stuckDays: number,
   context?: NotificationContext,
 ): Promise<number> {
-  const card = buildStaleCard(order, stuckDays, context);
+  const enrichedOrder = await enrichOrderCardPayloadFromDb(order);
+  const card = await buildStaleCard(enrichedOrder, stuckDays, context);
 
   if (order.status === "MANAGEMENT_REVIEW") {
     const tasks: Promise<number>[] = [];

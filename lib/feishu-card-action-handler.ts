@@ -4,6 +4,7 @@ import { extractRejectReasonFromForm } from "@/lib/feishu-procurement-card";
 import { resolveSystemOpenIdFromFeishuOperator } from "@/lib/feishu-recipient";
 import { prisma } from "@/lib/prisma";
 import { approveProcurementByOpenId } from "@/lib/procurement-approve-by-open-id";
+import { confirmProcurementByOpenId } from "@/lib/procurement-confirm-by-open-id";
 import { rejectProcurementByOpenId } from "@/lib/procurement-reject-by-open-id";
 
 type CardActionPayload = {
@@ -24,6 +25,7 @@ type CardActionPayload = {
 type CardActionValue = {
   action?: string;
   orderId?: string;
+  order_id?: string;
 };
 
 type ResolvedCardAction = {
@@ -72,6 +74,20 @@ function normalizeFormValue(
   return undefined;
 }
 
+function readOrderIdFromAction(
+  parsed: CardActionValue | null,
+  formValue: Record<string, unknown> | undefined,
+): string {
+  const fromParsed = parsed?.orderId ?? parsed?.order_id;
+  if (typeof fromParsed === "string" && fromParsed.trim()) {
+    return fromParsed.trim();
+  }
+  return (
+    readFormString(formValue, "order_id") ||
+    readFormString(formValue, "orderId")
+  );
+}
+
 function resolveProcurementCardAction(
   data: CardActionPayload,
 ): ResolvedCardAction | null {
@@ -84,15 +100,18 @@ function resolveProcurementCardAction(
     (typeof action.input_value === "string" ? action.input_value.trim() : "");
 
   const parsed = parseActionValue(action.value);
-  if (parsed?.action && parsed.orderId) {
+  const orderId = readOrderIdFromAction(parsed, formValue);
+  const actionName =
+    typeof parsed?.action === "string" ? parsed.action.trim() : "";
+
+  if (actionName && orderId) {
     return {
-      action: parsed.action,
-      orderId: parsed.orderId,
+      action: actionName,
+      orderId,
       reason,
     };
   }
 
-  const orderId = readFormString(formValue, "order_id");
   const buttonName = action.name;
 
   if (buttonName === "approve_btn" && orderId) {
@@ -110,6 +129,14 @@ function resolveProcurementCardAction(
       action: "procurement_reject",
       orderId,
       reason,
+    };
+  }
+
+  if (buttonName === "confirm_btn" && orderId) {
+    return {
+      action: actionName || "procurement_confirm_reimbursement",
+      orderId,
+      reason: "",
     };
   }
 
@@ -217,6 +244,21 @@ export async function handleFeishuCardAction(
       reason,
       action === "procurement_reject_terminate" ? "terminate" : "resubmit",
     );
+    return cardToast("success", result.message);
+  }
+
+  if (action === "procurement_confirm_reimbursement") {
+    const order = await prisma.purchaseOrder.findUnique({
+      where: { id: orderId },
+      select: { status: true },
+    });
+    if (!order) {
+      return cardToast("error", "订单不存在");
+    }
+    if (order.status !== "PENDING_APPLICANT_CONFIRM") {
+      return cardToast("info", "该确认卡片已失效，请打开系统查看最新状态");
+    }
+    const result = await confirmProcurementByOpenId(openId, orderId);
     return cardToast("success", result.message);
   }
 
