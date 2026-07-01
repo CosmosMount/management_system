@@ -448,7 +448,7 @@ function FinanceScreenshotDialog({
             报销截图
           </DialogTitle>
           <DialogDescription className={procurementDialogDescriptionClass}>
-            请先查看采购人上传的发票与清单，再上传报销系统截图
+            请先查看采购人上传的发票与清单，再上传报销截图或文件（图片/PDF）
           </DialogDescription>
         </DialogHeader>
         {canViewAttachments && (
@@ -456,12 +456,12 @@ function FinanceScreenshotDialog({
         )}
         <form id={`finance-shot-${orderId}`} className="space-y-3">
           <div className="space-y-2">
-            <Label htmlFor={`screenshot-${orderId}`}>报销截图</Label>
+            <Label htmlFor={`screenshot-${orderId}`}>报销截图或文件</Label>
             <Input
               id={`screenshot-${orderId}`}
               name="screenshot"
               type="file"
-              accept=".pdf,.png,.jpg,.jpeg"
+              accept=".pdf,.png,.jpg,.jpeg,.webp"
               required
             />
           </div>

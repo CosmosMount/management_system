@@ -11,7 +11,14 @@ import {
 import {
   buildProcurementCardKitCard,
   buildProcurementWebhookCard,
+  supportsProcurementCardApproval,
+  supportsProcurementCardConfirm,
 } from "@/lib/feishu-procurement-card";
+import {
+  resolveProcurementCardScreenshotOptions,
+  resolveProcurementFinanceReviewAttachmentOptions,
+} from "@/lib/feishu-procurement-card-assets";
+import { enrichOrderCardPayloadFromDb } from "@/lib/feishu-order-card-payload";
 import {
   sendInteractiveCardKitDm,
 } from "@/lib/feishu-cardkit";
@@ -54,6 +61,10 @@ export type OrderCardPayload = {
   team: string;
   techGroup: string;
   items?: OrderItemSummary[];
+  screenshotPath?: string | null;
+  invoicePaths?: string | null;
+  invoicePath?: string | null;
+  listDocPath?: string | null;
 };
 
 export const PROCUREMENT_ORDER_WEBHOOK_RECIPIENT_OPEN_ID =
@@ -67,6 +78,10 @@ type CardOptions = {
   primaryButtonText?: string;
   appOrigin?: string | null;
   readOnly?: boolean;
+  screenshotImgKey?: string;
+  screenshotIsPdf?: boolean;
+  screenshotViewUrl?: string;
+  applicantAttachments?: import("@/lib/feishu-procurement-card-assets").ApplicantAttachmentCardItem[];
 };
 
 function defaultDetailFocus(
@@ -192,27 +207,48 @@ export async function sendOrderGroupWebhook(
   });
 }
 
-function buildOrderDirectMessageCard(
+async function buildOrderDirectMessageCard(
   order: OrderCardPayload,
   context?: NotificationContext,
+  botKind: FeishuBotKind = resolveProcurementBotKind(order.status),
 ) {
-  const focus = defaultDetailFocus(order.status);
+  const enrichedOrder = await enrichOrderCardPayloadFromDb(order);
+  const focus = defaultDetailFocus(enrichedOrder.status);
   const buttonText = orderButtonText(focus);
-  const isApprovalCard =
-    order.status === "MANAGEMENT_REVIEW" || order.status === "TEACHER_REVIEW";
+  const isApprovalCard = supportsProcurementCardApproval(enrichedOrder.status);
+  const isConfirmCard = supportsProcurementCardConfirm(enrichedOrder.status);
 
-  return isApprovalCard
-    ? buildApprovalDmCard(order, {
-        detailFocus: focus,
-        primaryButtonText: buttonText,
-        appOrigin: context?.appOrigin,
-      })
-    : buildReadonlyDmCard(order, {
-        detailFocus: focus,
-        primaryButtonText: buttonText,
-        appOrigin: context?.appOrigin,
-        readOnly: true,
-      });
+  let screenshotOptions: Partial<CardOptions> = {};
+  if (isConfirmCard) {
+    screenshotOptions = await resolveProcurementCardScreenshotOptions(
+      enrichedOrder,
+      botKind,
+      context?.appOrigin,
+    );
+  }
+
+  const financeAttachmentOptions =
+    enrichedOrder.status === "PENDING_FINANCE_REVIEW"
+      ? await resolveProcurementFinanceReviewAttachmentOptions(
+          enrichedOrder,
+          botKind,
+          context?.appOrigin,
+        )
+      : {};
+
+  const cardOptions: CardOptions = {
+    detailFocus: focus,
+    primaryButtonText: buttonText,
+    appOrigin: context?.appOrigin,
+    ...financeAttachmentOptions,
+    ...screenshotOptions,
+  };
+
+  if (isApprovalCard || isConfirmCard) {
+    return buildApprovalDmCard(enrichedOrder, cardOptions);
+  }
+
+  return buildReadonlyDmCard(enrichedOrder, cardOptions);
 }
 
 export async function collectOrderNotificationRecipientOpenIds(
@@ -258,9 +294,11 @@ export async function sendOrderNotificationToOpenId(
     return;
   }
 
+  const enrichedOrder = await enrichOrderCardPayloadFromDb(order);
+
   await sendDirectCard(
     openId,
-    buildOrderDirectMessageCard(order, context),
+    await buildOrderDirectMessageCard(enrichedOrder, context, botKind),
     botKind,
   );
 }

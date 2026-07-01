@@ -30,9 +30,9 @@ It renders and installs:
 - `pnx-management-server.service`
 - `pnx-management-cron.service`
 - `pnx-management-feishu-ws.service`（可选；设置 `ENABLE_FEISHU_WS=true` 才安装并启动）
-- `pnx-management-feishu-approval-ws.service`（可选；`ENABLE_FEISHU_WS=true` 且配置独立审批机器人时自动安装，或设置 `ENABLE_FEISHU_APPROVAL_WS=true`）
+- `pnx-management-feishu-approval-ws.service`（默认安装并启动；设置 `ENABLE_FEISHU_APPROVAL_WS=false` 可跳过）
 
-Then it runs `systemctl daemon-reload`, enables the selected services, and starts them. By default only the web and cron services are installed; the Feishu WS workers are opt-in to avoid accidentally consuming production card callbacks.
+Then it runs `systemctl daemon-reload`, enables the selected services, and starts them. By default the web, cron, and approval Feishu WS services are installed; the notification Feishu WS worker remains opt-in via `ENABLE_FEISHU_WS=true`.
 
 The web service runs `npm run db:deploy` before `npm start`, so PostgreSQL migrations are applied during service startup. It does not run `npm run build`; build the app before installing or restarting the service after code changes.
 

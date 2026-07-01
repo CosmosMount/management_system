@@ -1,6 +1,7 @@
 import type { OrderStatus } from "@prisma/client";
 import { buildAppUrl } from "@/lib/app-origin";
 import type { OrderCardPayload } from "@/lib/feishu";
+import type { ApplicantAttachmentCardItem } from "@/lib/feishu-procurement-card-assets";
 import {
   buildOrderItemsTableElement,
   formatOrderItemsPlainList,
@@ -16,6 +17,10 @@ type CardOptions = {
   primaryButtonText?: string;
   appOrigin?: string | null;
   readOnly?: boolean;
+  screenshotImgKey?: string;
+  screenshotIsPdf?: boolean;
+  screenshotViewUrl?: string;
+  applicantAttachments?: ApplicantAttachmentCardItem[];
 };
 
 const REJECT_REASON_FIELD = "Input_procurement_reject_reason";
@@ -52,6 +57,10 @@ export function supportsProcurementCardApproval(status: OrderStatus): boolean {
   return status === "MANAGEMENT_REVIEW" || status === "TEACHER_REVIEW";
 }
 
+export function supportsProcurementCardConfirm(status: OrderStatus): boolean {
+  return status === "PENDING_APPLICANT_CONFIRM";
+}
+
 function formSubmitButton(
   name: string,
   label: string,
@@ -66,6 +75,122 @@ function formSubmitButton(
     type,
     behaviors: [{ type: "callback", value }],
   };
+}
+
+function buildConfirmActionRow(
+  order: OrderCardPayload,
+  detailUrl: string,
+  detailLabel: string,
+) {
+  return {
+    tag: "form",
+    name: `procurement_confirm_${order.id}`,
+    elements: [
+      {
+        tag: "column_set",
+        flex_mode: "flow",
+        horizontal_spacing: "8px",
+        columns: [
+          {
+            tag: "column",
+            width: "auto",
+            elements: [
+              formSubmitButton("confirm_btn", "完成报销", "primary", {
+                action: "procurement_confirm_reimbursement",
+                orderId: order.id,
+              }),
+            ],
+          },
+          {
+            tag: "column",
+            width: "auto",
+            elements: [linkButton(detailLabel, detailUrl, "default")],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function appendApplicantAttachmentsToCardKitBody(
+  bodyElements: Record<string, unknown>[],
+  attachments?: ApplicantAttachmentCardItem[],
+) {
+  if (!attachments?.length) return;
+
+  bodyElements.push({
+    tag: "markdown",
+    content: "**发票与清单**",
+  });
+
+  for (const attachment of attachments) {
+    if (attachment.imgKey) {
+      bodyElements.push({
+        tag: "markdown",
+        content: `**${attachment.label}**`,
+      });
+      bodyElements.push({
+        tag: "img",
+        img_key: attachment.imgKey,
+        alt: { tag: "plain_text", content: attachment.label },
+        mode: "fit_horizontal",
+        compact_width: true,
+        preview: true,
+      });
+      continue;
+    }
+
+    if (attachment.viewUrl) {
+      bodyElements.push({
+        tag: "markdown",
+        content: `**${attachment.label}**：[点击查看附件](${attachment.viewUrl})`,
+      });
+      continue;
+    }
+
+    bodyElements.push({
+      tag: "markdown",
+      content: `**${attachment.label}**：请点击「查看详情」在系统中查看`,
+    });
+  }
+}
+
+function appendScreenshotToCardKitBody(
+  bodyElements: Record<string, unknown>[],
+  options: CardOptions,
+) {
+  if (options.screenshotImgKey) {
+    bodyElements.push({
+      tag: "markdown",
+      content: "**报销截图**",
+    });
+    bodyElements.push({
+      tag: "img",
+      img_key: options.screenshotImgKey,
+      alt: { tag: "plain_text", content: "报销截图" },
+      mode: "fit_horizontal",
+      compact_width: true,
+      preview: true,
+    });
+    return;
+  }
+
+  if (options.screenshotViewUrl) {
+    bodyElements.push({
+      tag: "markdown",
+      content: options.screenshotIsPdf
+        ? `**报销截图**：[点击查看 PDF](${options.screenshotViewUrl})`
+        : `**报销截图**：[点击在系统中查看](${options.screenshotViewUrl})`,
+    });
+    return;
+  }
+
+  if (options.screenshotIsPdf) {
+    bodyElements.push({
+      tag: "markdown",
+      content: "**报销截图**：PDF 文件，请点击「查看详情」在系统中查看",
+    });
+  }
 }
 
 function buildApprovalActionRow(
@@ -173,11 +298,14 @@ function buildSummaryMarkdown(
   options: CardOptions,
 ): string {
   const statusLabel = statusLabels[order.status];
+  const hasApplicantAttachments = (options.applicantAttachments?.length ?? 0) > 0;
   const attachmentHint =
     order.status === "PENDING_FINANCE_REVIEW"
-      ? "\n**操作提示**：请打开详情页查看发票与清单"
+      ? hasApplicantAttachments
+        ? "\n**操作提示**：请核对下方发票与清单，上传报销截图"
+        : "\n**操作提示**：请打开详情页查看发票与清单"
       : order.status === "PENDING_APPLICANT_CONFIRM"
-        ? "\n**操作提示**：请核对发票、清单与报销截图后确认"
+        ? "\n**操作提示**：请核对下方报销截图，确认无误后点击「完成报销」"
         : order.status === "PENDING_APPLICANT_DOCS"
           ? "\n**操作提示**：请重新上传发票、实物照片"
           : supportsProcurementCardApproval(order.status)
@@ -229,6 +357,8 @@ export function buildProcurementCardKitCard(
   const summary = buildSummaryMarkdown(order, options);
   const useApprovalActions =
     !options.readOnly && supportsProcurementCardApproval(order.status);
+  const useConfirmActions =
+    !options.readOnly && supportsProcurementCardConfirm(order.status);
 
   const bodyElements: Record<string, unknown>[] = [
     {
@@ -238,10 +368,20 @@ export function buildProcurementCardKitCard(
   ];
 
   appendOrderItemsToCardKitBody(bodyElements, order.items);
+  appendApplicantAttachmentsToCardKitBody(bodyElements, options.applicantAttachments);
+  appendScreenshotToCardKitBody(bodyElements, options);
 
   if (useApprovalActions) {
     bodyElements.push(
       buildApprovalActionRow(
+        order,
+        detailUrl,
+        options.primaryButtonText ?? "查看详情",
+      ),
+    );
+  } else if (useConfirmActions) {
+    bodyElements.push(
+      buildConfirmActionRow(
         order,
         detailUrl,
         options.primaryButtonText ?? "查看详情",

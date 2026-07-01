@@ -161,7 +161,7 @@ TODO → IN_PROGRESS →（提交交付）→ PENDING_ACCEPTANCE →（验收）
 - **Webhook 签名**：`HmacSHA256("", timestamp + "\n" + secret)` 后 Base64
 - **私信**：`im:message:send_as_bot`，收件人须曾登录以建立机器人会话；审批待办走审批机器人，其他消息走通知机器人，审批机器人未配置时回退通知机器人。独立审批应用不能复用通知/OAuth 应用的 `open_id`，系统会通过 `User.unionId` 使用 `receive_id_type=union_id` 发送；缺少 `union_id` 时审批私信失败并等待 outbox 重试，不降级到通知机器人。
 - **私信防误发**：`FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES / OPEN_IDS / UNION_IDS` 为空时不限制；配置后只允许匹配收件人，其他私信会被记录并拦截。Playwright 启动的应用服务默认只允许 `李棋轩`。
-- **CardKit 回调**：采购审批卡若由审批机器人发送，需要运行审批机器人长连接；生产安装 `ENABLE_FEISHU_WS=true` 且配置 `FEISHU_APPROVAL_APP_ID/SECRET` 时会安装 `pnx-management-feishu-approval-ws.service`。审批机器人回调中的操作人也会通过 `union_id` 映射回系统 `openId` 后再校验权限。
+- **CardKit 回调**：采购审批卡若由审批机器人发送，需要运行审批机器人长连接；生产 `./service/install.sh` 默认安装并启动 `pnx-management-feishu-approval-ws.service`。通知机器人长连接仍可通过 `ENABLE_FEISHU_WS=true` 单独启用。审批机器人回调中的操作人也会通过 `union_id` 映射回系统 `openId` 后再校验权限。
 - **群 Webhook**：采购群通知和日报仍使用 Webhook，独立于私信 `botKind`
 - **通讯录同步**：手动入口 `app/actions/syncFeishuUsers.ts`，定时入口 `scripts/cron.ts`，共用 `lib/feishu-user-sync.ts`；需 `contact:*` 只读权限
 
