@@ -180,6 +180,22 @@ export function canConfirmReimbursement(
   );
 }
 
+/** 采购人可催促当前环节审批人（不含需本人处理的环节） */
+export function canNotifyProcurementApprover(
+  status: OrderStatus,
+  userOpenId: string | undefined,
+  initiatorOpenId: string,
+): boolean {
+  if (!isOrderInitiator(userOpenId, initiatorOpenId)) {
+    return false;
+  }
+  return (
+    status === "MANAGEMENT_REVIEW" ||
+    status === "TEACHER_REVIEW" ||
+    status === "PENDING_FINANCE_REVIEW"
+  );
+}
+
 /** 报销相关附件：采购人、对应车组报销员、超级管理员可查看 */
 export function canViewReimbursementAttachments(
   status: OrderStatus,
