@@ -23,27 +23,32 @@ export const MAX_FILE_SIZE = 20 * 1024 * 1024;
 export const MAX_INVOICE_COUNT = 20;
 export const UPLOAD_PUBLIC_PREFIX = "/uploads/";
 
-const INVOICE_TYPES = new Set([
-  "application/pdf",
-  "image/png",
-  "image/jpeg",
-  "image/jpg",
-]);
+const INVOICE_TYPES = new Set(["application/pdf"]);
 
-const PHOTO_TYPES = INVOICE_TYPES;
-
-const LIST_DOC_TYPES = new Set([
-  "application/msword",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  ...INVOICE_TYPES,
-]);
-
-const SCREENSHOT_TYPES = new Set([
-  "application/pdf",
+const IMAGE_UPLOAD_TYPES = new Set([
   "image/png",
   "image/jpeg",
   "image/jpg",
   "image/webp",
+  "image/gif",
+  "image/bmp",
+  "image/tiff",
+  "image/heic",
+  "image/heif",
+  "image/avif",
+]);
+
+const PHOTO_TYPES = IMAGE_UPLOAD_TYPES;
+
+const LIST_DOC_TYPES = new Set([
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/pdf",
+]);
+
+const SCREENSHOT_TYPES = new Set([
+  "application/pdf",
+  ...IMAGE_UPLOAD_TYPES,
 ]);
 
 const SIGNATURE_TYPES = new Set(["image/png", "image/jpeg", "image/jpg"]);
@@ -61,8 +66,8 @@ export type SavedFeedbackImage = {
 };
 
 type DetectedFeedbackImage = {
-  ext: ".png" | ".jpg" | ".webp";
-  mimeType: "image/png" | "image/jpeg" | "image/webp";
+  ext: string;
+  mimeType: string;
 };
 
 type SaveAssetOptions = {
@@ -267,6 +272,34 @@ function detectFeedbackImage(buffer: Buffer): DetectedFeedbackImage | null {
     return { ext: ".webp", mimeType: "image/webp" };
   }
 
+  if (buffer.length >= 6) {
+    const gifHeader = buffer.subarray(0, 6).toString("ascii");
+    if (gifHeader === "GIF87a" || gifHeader === "GIF89a") {
+      return { ext: ".gif", mimeType: "image/gif" };
+    }
+  }
+
+  if (buffer.length >= 2 && buffer.subarray(0, 2).toString("ascii") === "BM") {
+    return { ext: ".bmp", mimeType: "image/bmp" };
+  }
+
+  if (buffer.length >= 4) {
+    const tiffHeader = buffer.subarray(0, 4).toString("ascii");
+    if (tiffHeader === "II*\0" || tiffHeader === "MM\0*") {
+      return { ext: ".tiff", mimeType: "image/tiff" };
+    }
+  }
+
+  if (buffer.length >= 12 && buffer.subarray(4, 8).toString("ascii") === "ftyp") {
+    const brand = buffer.subarray(8, 12).toString("ascii");
+    if (["heic", "heix", "hevc", "hevx", "mif1", "msf1"].includes(brand)) {
+      return { ext: ".heic", mimeType: "image/heic" };
+    }
+    if (brand === "avif") {
+      return { ext: ".avif", mimeType: "image/avif" };
+    }
+  }
+
   return null;
 }
 
@@ -309,7 +342,58 @@ function detectUploadMime(buffer: Buffer): string | null {
 }
 
 function normalizeMimeType(mimeType: string): string {
-  return mimeType === "image/jpg" ? "image/jpeg" : mimeType;
+  const normalized = mimeType.trim().toLowerCase();
+  if (!normalized) return "";
+  if (normalized === "image/jpg" || normalized === "image/pjpeg") {
+    return "image/jpeg";
+  }
+  if (normalized === "image/x-png") return "image/png";
+  return normalized;
+}
+
+function isImageMimeType(mimeType: string): boolean {
+  return normalizeMimeType(mimeType).startsWith("image/");
+}
+
+function isIgnorableDeclaredMimeType(mimeType: string): boolean {
+  const normalized = normalizeMimeType(mimeType);
+  return !normalized || normalized === "application/octet-stream";
+}
+
+function declaredTypeAllowed(
+  mimeType: string,
+  allowedTypes: Set<string> | ReadonlySet<string>,
+): boolean {
+  const normalized = normalizeMimeType(mimeType);
+  if (isIgnorableDeclaredMimeType(normalized)) return true;
+  const allowed = new Set([...allowedTypes].map(normalizeMimeType));
+  return allowed.has(normalized);
+}
+
+function extensionForMime(mimeType: string): string {
+  switch (normalizeMimeType(mimeType)) {
+    case "image/png":
+      return ".png";
+    case "image/jpeg":
+      return ".jpg";
+    case "image/webp":
+      return ".webp";
+    case "image/gif":
+      return ".gif";
+    case "image/bmp":
+      return ".bmp";
+    case "image/tiff":
+      return ".tiff";
+    case "image/heic":
+    case "image/heif":
+      return ".heic";
+    case "image/avif":
+      return ".avif";
+    case "application/pdf":
+      return ".pdf";
+    default:
+      return "";
+  }
 }
 
 function assertDetectedMimeAllowed(
@@ -322,10 +406,18 @@ function assertDetectedMimeAllowed(
     throw new Error("文件内容与支持的文件类型不匹配");
   }
   const allowed = new Set([...allowedTypes].map(normalizeMimeType));
-  if (!allowed.has(normalizeMimeType(detected))) {
+  const normalizedDetected = normalizeMimeType(detected);
+  if (!allowed.has(normalizedDetected)) {
     throw new Error("文件内容与支持的文件类型不匹配");
   }
-  if (fallbackType && normalizeMimeType(fallbackType) !== normalizeMimeType(detected)) {
+
+  const normalizedFallback = normalizeMimeType(fallbackType);
+  if (
+    normalizedFallback &&
+    !isIgnorableDeclaredMimeType(normalizedFallback) &&
+    normalizedFallback !== normalizedDetected &&
+    !(isImageMimeType(normalizedFallback) && isImageMimeType(normalizedDetected))
+  ) {
     throw new Error("文件内容与声明的文件类型不一致");
   }
   return detected;
@@ -349,18 +441,12 @@ export async function saveUpload(
   allowedTypes: Set<string>,
   options?: Partial<SaveAssetOptions>,
 ): Promise<string> {
-  if (!allowedTypes.has(file.type)) {
-    throw new Error(`不支持的文件类型: ${file.type}`);
+  if (!declaredTypeAllowed(file.type, allowedTypes)) {
+    throw new Error(`不支持的文件类型: ${file.type || "未知类型"}`);
   }
   if (file.size > MAX_FILE_SIZE) {
     throw new Error("文件大小不能超过 20MB");
   }
-
-  const ext = path.extname(file.name) || ".bin";
-  const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const filename = `${prefix}-${unique}${ext}`;
-  const publicPath = `/uploads/${orderId}/${filename}`;
-  const storagePath = `${orderId}/${filename}`;
 
   const buffer = Buffer.from(await file.arrayBuffer());
   const detectedMimeType = assertDetectedMimeAllowed(
@@ -368,6 +454,15 @@ export async function saveUpload(
     allowedTypes,
     file.type,
   );
+  const ext =
+    extensionForMime(detectedMimeType) ||
+    path.extname(file.name).toLowerCase() ||
+    ".bin";
+  const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const filename = `${prefix}-${unique}${ext}`;
+  const publicPath = `/uploads/${orderId}/${filename}`;
+  const storagePath = `${orderId}/${filename}`;
+
   await writeAssetFile({
     storagePath,
     publicPath,

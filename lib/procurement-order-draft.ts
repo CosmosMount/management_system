@@ -1,4 +1,5 @@
 import { OrderStatus } from "@prisma/client";
+import { clearProcurementRejectionFields } from "@/lib/procurement-rejection";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { revalidateProcurement } from "@/lib/revalidate";
 import { canEditProcurementOrder } from "@/lib/permissions-client";
@@ -23,6 +24,7 @@ export function procurementResubmitFields() {
     techGroupApproved: false,
     teamApproverOpenId: null,
     techGroupApproverOpenId: null,
+    ...clearProcurementRejectionFields(),
     ...stepTimerResetFields(),
   };
 }

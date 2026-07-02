@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { IMAGE_UPLOAD_ACCEPT } from "@/lib/upload-accept";
 
 export type PurchaseLineItem = {
   id: string;
@@ -131,7 +132,7 @@ export function PurchaseLineConfirm({
                     <Input
                       name={`photo-${row.id}`}
                       type="file"
-                      accept=".png,.jpg,.jpeg,.pdf"
+                      accept={IMAGE_UPLOAD_ACCEPT}
                       className="h-8 max-w-48"
                       required
                     />

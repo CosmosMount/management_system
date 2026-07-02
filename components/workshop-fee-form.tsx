@@ -12,6 +12,7 @@ import { Plus, Trash2, FileSpreadsheet } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
+import { IMAGE_UPLOAD_ACCEPT } from "@/lib/upload-accept";
 import { createWorkshopFeeOrder } from "@/app/actions/createWorkshopFeeOrder";
 import { ProcurementItemsImportDialog } from "@/components/procurement-items-import-dialog";
 import { ProcessingVendorSelect } from "@/components/processing-vendor-select";
@@ -257,7 +258,7 @@ export function WorkshopFeeForm() {
                   <Label>图片</Label>
                   <Input
                     type="file"
-                    accept="image/png,image/jpeg,image/jpg"
+                    accept={IMAGE_UPLOAD_ACCEPT}
                     required
                     onChange={(event) => {
                       const file = event.target.files?.[0];

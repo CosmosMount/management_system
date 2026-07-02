@@ -24,6 +24,11 @@ import {
   type ConfirmedLineItem,
   type PurchaseLineItem,
 } from "@/components/purchase-line-confirm";
+import {
+  IMAGE_UPLOAD_ACCEPT,
+  INVOICE_UPLOAD_ACCEPT,
+} from "@/lib/upload-accept";
+import { shouldShowProcurementRejectionNotice } from "@/lib/procurement-rejection";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -303,10 +308,11 @@ function ApplicantDocsDialog({
           </DialogDescription>
         </DialogHeader>
         <form id={`applicant-docs-${orderId}`} className="space-y-3">
-          {rejectionReason ? (
+          {orderStatus &&
+          shouldShowProcurementRejectionNotice(orderStatus, rejectionReason) ? (
             <OrderRejectionNotice
               variant="inline"
-              reason={rejectionReason}
+              reason={rejectionReason!}
               status={orderStatus}
               rejectedByName={rejectedByName}
               rejectedAt={rejectedAt}
@@ -324,7 +330,7 @@ function ApplicantDocsDialog({
               id={`invoices-${orderId}`}
               name="invoices"
               type="file"
-              accept=".pdf,.png,.jpg,.jpeg"
+              accept={INVOICE_UPLOAD_ACCEPT}
               multiple
               required
             />
@@ -461,7 +467,7 @@ function FinanceScreenshotDialog({
               id={`screenshot-${orderId}`}
               name="screenshot"
               type="file"
-              accept=".pdf,.png,.jpg,.jpeg,.webp"
+              accept={`${INVOICE_UPLOAD_ACCEPT},${IMAGE_UPLOAD_ACCEPT}`}
               required
             />
           </div>

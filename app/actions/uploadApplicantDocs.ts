@@ -27,6 +27,7 @@ import {
 } from "@/lib/generate-reimbursement-docx";
 import { serializeFilePaths } from "@/lib/order-attachments";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
+import { clearProcurementRejectionFields } from "@/lib/procurement-rejection";
 import { prisma } from "@/lib/prisma";
 import { canUploadApplicantDocs } from "@/lib/permissions";
 import {
@@ -200,9 +201,7 @@ export async function uploadApplicantDocs(formData: FormData) {
           invoicePath: invoicePaths[0] ?? null,
           listDocPath,
           status: OrderStatus.PENDING_FINANCE_REVIEW,
-          rejectionReason: null,
-          rejectedAt: null,
-          rejectedByName: null,
+          ...clearProcurementRejectionFields(),
           ...stepTimerResetFields(),
         },
       });

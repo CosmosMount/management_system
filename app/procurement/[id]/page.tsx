@@ -49,6 +49,7 @@ import {
 } from "@/lib/permissions";
 import { canViewProcurementOrder } from "@/lib/procurement-visibility";
 import { resolveProcurementHandlerNames } from "@/lib/procurement-order-handlers";
+import { shouldShowProcurementRejectionNotice } from "@/lib/procurement-rejection";
 import { userHasSignature } from "@/lib/user-signature";
 
 type Props = {
@@ -215,9 +216,12 @@ export default async function OrderDetailPage({ params, searchParams }: Props) {
             />
             </div>
             </div>
-            {order.rejectionReason ? (
+            {shouldShowProcurementRejectionNotice(
+              order.status,
+              order.rejectionReason,
+            ) ? (
               <OrderRejectionNotice
-                reason={order.rejectionReason}
+                reason={order.rejectionReason!}
                 status={order.status}
                 rejectedByName={order.rejectedByName}
                 rejectedAt={order.rejectedAt}

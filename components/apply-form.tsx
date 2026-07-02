@@ -42,6 +42,7 @@ import {
   purchaseItemKindLabels,
   type PurchaseItemKind,
 } from "@/lib/purchase-item-kind";
+import { IMAGE_UPLOAD_ACCEPT } from "@/lib/upload-accept";
 import { ProcessingVendorSelect } from "@/components/processing-vendor-select";
 import { routes } from "@/lib/routes";
 import {
@@ -398,7 +399,7 @@ export function ApplyForm({
                     <Label>参考图片</Label>
                     <Input
                       type="file"
-                      accept="image/png,image/jpeg,image/jpg"
+                      accept={IMAGE_UPLOAD_ACCEPT}
                       onChange={(event) => {
                         const file = event.target.files?.[0];
                         setItemImageFiles((prev) => ({
