@@ -147,6 +147,7 @@ model User {
   openId        String          @unique
   unionId       String?         @unique
   name          String
+  email         String?
   avatar        String?
   signaturePath String?
   createdAt     DateTime        @default(now())

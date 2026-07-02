@@ -1,5 +1,6 @@
 import type { OrderStatus } from "@prisma/client";
 import { enrichOrderCardPayloadFromDb } from "@/lib/feishu-order-card-payload";
+import { sendTeacherReviewEmails } from "@/lib/procurement-teacher-email";
 import { mapOrderItems, type OrderCardPayload } from "@/lib/feishu";
 import { getFeishuTenantAccessTokenByBotKind } from "@/lib/feishu-auth";
 import type { FeishuBotKind } from "@/lib/feishu-app-config";
@@ -388,6 +389,13 @@ export async function sendManualProcurementApproverReminder({
   if (deliveryCount === 0) {
     return { ok: false, message: "当前环节没有可通知的审批人" };
   }
+
+  if (order.status === "TEACHER_REVIEW") {
+    await sendTeacherReviewEmails(enrichedOrder, context).catch((err) => {
+      console.error("[email] 手动催促时老师审核邮件失败:", err);
+    });
+  }
+
   return { ok: true, message: "已通知当前审批人" };
 }
 
