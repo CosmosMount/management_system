@@ -9,6 +9,7 @@ import {
   enqueueProcurementRejectedNotificationTx,
   enqueueProcurementReturnDraftNotificationTx,
 } from "@/lib/notification-outbox";
+import { refreshProcurementFeishuCards } from "@/lib/feishu-procurement-card-sync";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";
 import {
@@ -235,6 +236,17 @@ export async function rejectProcurementOrder(input: {
   }
 
   try {
+    if (
+      order.status === OrderStatus.MANAGEMENT_REVIEW ||
+      order.status === OrderStatus.TEACHER_REVIEW
+    ) {
+      await refreshProcurementFeishuCards(
+        orderId,
+        outcome === "terminate"
+          ? `已驳回终止，订单 ${order.orderNo} 已结束`
+          : `已退回修改，已通知采购人 ${order.initiatorName}`,
+      );
+    }
     drainNotificationOutboxSoon();
   } catch (err) {
     console.error("[procurement] drain notification outbox failed:", err);

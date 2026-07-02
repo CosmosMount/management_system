@@ -1,7 +1,8 @@
+import type { OrderStatus } from "@prisma/client";
 import { cardActionResponse, cardToast } from "@/lib/feishu-card-response";
 import type { FeishuBotKind } from "@/lib/feishu-app-config";
 import { extractRejectReasonFromForm } from "@/lib/feishu-procurement-card";
-import { buildProcessedProcurementCard } from "@/lib/feishu-procurement-processed-card";
+import { buildStageAwareProcurementCard } from "@/lib/feishu-procurement-card-sync";
 import { resolveSystemOpenIdFromFeishuOperator } from "@/lib/feishu-recipient";
 import { prisma } from "@/lib/prisma";
 import { approveProcurementByOpenId } from "@/lib/procurement-approve-by-open-id";
@@ -40,10 +41,13 @@ async function respondWithProcessedCard(
   message: string,
   orderId: string,
   botKind?: FeishuBotKind,
+  cardStage?: OrderStatus,
 ) {
-  const card = await buildProcessedProcurementCard(orderId, message, {
+  const card = await buildStageAwareProcurementCard(orderId, {
     botKind,
     headerTemplate: toastType === "success" ? "green" : "orange",
+    notice: message,
+    cardStage,
   });
   return cardActionResponse(toastType, message, card);
 }
@@ -205,7 +209,7 @@ export async function handleFeishuCardAction(
     }
     if (order.status !== "MANAGEMENT_REVIEW") {
       const message = "该管理审核卡片已失效，请打开系统查看最新状态";
-      return respondWithProcessedCard("info", message, orderId, options?.botKind);
+      return respondWithProcessedCard("info", message, orderId, options?.botKind, "MANAGEMENT_REVIEW");
     }
     const result = await approveProcurementByOpenId(openId, orderId);
     return respondWithProcessedCard(
@@ -213,6 +217,7 @@ export async function handleFeishuCardAction(
       result.message,
       orderId,
       options?.botKind,
+      "MANAGEMENT_REVIEW",
     );
   }
 
@@ -226,7 +231,7 @@ export async function handleFeishuCardAction(
     }
     if (order.status !== "TEACHER_REVIEW") {
       const message = "该老师审核卡片已失效，请打开系统查看最新状态";
-      return respondWithProcessedCard("info", message, orderId, options?.botKind);
+      return respondWithProcessedCard("info", message, orderId, options?.botKind, "TEACHER_REVIEW");
     }
     const result = await approveProcurementByOpenId(openId, orderId, {
       teacherOnly: true,
@@ -236,6 +241,7 @@ export async function handleFeishuCardAction(
       result.message,
       orderId,
       options?.botKind,
+      "TEACHER_REVIEW",
     );
   }
 
@@ -256,8 +262,15 @@ export async function handleFeishuCardAction(
       order.status !== "TEACHER_REVIEW"
     ) {
       const message = "该审批卡片已失效，请打开系统查看最新状态";
-      return respondWithProcessedCard("info", message, orderId, options?.botKind);
+      return respondWithProcessedCard(
+        "info",
+        message,
+        orderId,
+        options?.botKind,
+        order.status,
+      );
     }
+    const rejectCardStage = order.status;
     if (!reason) {
       console.log("[feishu-ws] 驳回缺少原因", {
         formValue: data.action?.form_value,
@@ -276,6 +289,7 @@ export async function handleFeishuCardAction(
       result.message,
       orderId,
       options?.botKind,
+      rejectCardStage,
     );
   }
 
@@ -289,7 +303,13 @@ export async function handleFeishuCardAction(
     }
     if (order.status !== "PENDING_APPLICANT_CONFIRM") {
       const message = "该确认卡片已失效，请打开系统查看最新状态";
-      return respondWithProcessedCard("info", message, orderId, options?.botKind);
+      return respondWithProcessedCard(
+        "info",
+        message,
+        orderId,
+        options?.botKind,
+        "PENDING_APPLICANT_CONFIRM",
+      );
     }
     const result = await confirmProcurementByOpenId(openId, orderId);
     return respondWithProcessedCard(
@@ -297,6 +317,7 @@ export async function handleFeishuCardAction(
       result.message,
       orderId,
       options?.botKind,
+      "PENDING_APPLICANT_CONFIRM",
     );
   }
 

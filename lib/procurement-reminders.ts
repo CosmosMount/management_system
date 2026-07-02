@@ -1,6 +1,6 @@
 import type { OrderStatus } from "@prisma/client";
 import { enrichOrderCardPayloadFromDb } from "@/lib/feishu-order-card-payload";
-import { sendTeacherReviewEmails } from "@/lib/procurement-teacher-email";
+import { sendTeacherReviewEmailsOnce } from "@/lib/procurement-teacher-email";
 import { mapOrderItems, type OrderCardPayload } from "@/lib/feishu";
 import { getFeishuTenantAccessTokenByBotKind } from "@/lib/feishu-auth";
 import type { FeishuBotKind } from "@/lib/feishu-app-config";
@@ -16,7 +16,7 @@ import {
   resolveProcurementCardScreenshotOptions,
   resolveProcurementFinanceReviewAttachmentOptions,
 } from "@/lib/feishu-procurement-card-assets";
-import { sendInteractiveCardKitDm } from "@/lib/feishu-cardkit";
+import { sendTrackedProcurementCardKitDm } from "@/lib/feishu-procurement-card-sync";
 import { getOpenIdsByRole } from "@/lib/permissions";
 import type { NotificationContext } from "@/lib/app-origin";
 
@@ -151,11 +151,19 @@ async function sendDirectStaleCard(
   openId: string,
   card: Record<string, unknown>,
   botKind: FeishuBotKind = "notification",
+  orderId?: string,
+  cardStage?: OrderStatus,
 ): Promise<boolean> {
   if (!(await isFeishuDirectMessageAllowed(openId))) return false;
 
   if (card.schema === "2.0") {
-    await sendInteractiveCardKitDm(openId, card, botKind);
+    await sendTrackedProcurementCardKitDm(
+      openId,
+      card,
+      botKind,
+      orderId,
+      cardStage,
+    );
     return true;
   }
 
@@ -198,7 +206,13 @@ async function notifyInitiatorStale(
     include: { initiator: { select: { openId: true } } },
   });
   if (!record?.initiator.openId) return 0;
-  return (await sendDirectStaleCard(record.initiator.openId, card, botKind))
+  return (await sendDirectStaleCard(
+    record.initiator.openId,
+    card,
+    botKind,
+    orderId,
+    record.status,
+  ))
     ? 1
     : 0;
 }
@@ -219,7 +233,9 @@ async function notifyRoleStale(
 
   for (const openId of openIds) {
     try {
-      if (await sendDirectStaleCard(openId, card, botKind)) {
+      if (
+        await sendDirectStaleCard(openId, card, botKind, order.id, order.status)
+      ) {
         successCount++;
       }
     } catch (err) {
@@ -391,9 +407,11 @@ export async function sendManualProcurementApproverReminder({
   }
 
   if (order.status === "TEACHER_REVIEW") {
-    await sendTeacherReviewEmails(enrichedOrder, context).catch((err) => {
-      console.error("[email] 手动催促时老师审核邮件失败:", err);
-    });
+    await sendTeacherReviewEmailsOnce(
+      enrichedOrder,
+      context,
+      `procurement:manual_reminder:${order.id}:${Date.now()}`,
+    );
   }
 
   return { ok: true, message: "已通知当前审批人" };

@@ -19,10 +19,10 @@ import {
   resolveProcurementFinanceReviewAttachmentOptions,
 } from "@/lib/feishu-procurement-card-assets";
 import { enrichOrderCardPayloadFromDb } from "@/lib/feishu-order-card-payload";
-import { sendTeacherReviewEmails } from "@/lib/procurement-teacher-email";
+import { sendTeacherReviewEmailsOnce } from "@/lib/procurement-teacher-email";
 import {
-  sendInteractiveCardKitDm,
-} from "@/lib/feishu-cardkit";
+  sendTrackedProcurementCardKitDm,
+} from "@/lib/feishu-procurement-card-sync";
 import {
   getProcurementWebhookConfig,
   postToFeishuWebhook,
@@ -109,11 +109,18 @@ async function sendDirectCard(
   openId: string,
   card: Record<string, unknown>,
   botKind: FeishuBotKind = "notification",
+  options?: { trackOrderId?: string; trackCardStage?: OrderCardPayload["status"] },
 ) {
   if (!(await isFeishuDirectMessageAllowed(openId))) return;
 
   if (card.schema === "2.0") {
-    await sendInteractiveCardKitDm(openId, card, botKind);
+    await sendTrackedProcurementCardKitDm(
+      openId,
+      card,
+      botKind,
+      options?.trackOrderId,
+      options?.trackCardStage,
+    );
     console.log(`[feishu] CardKit 卡片已发送 openId=${openId}`);
     return;
   }
@@ -296,11 +303,18 @@ export async function sendOrderNotificationToOpenId(
   }
 
   const enrichedOrder = await enrichOrderCardPayloadFromDb(order);
+  const shouldTrackCard =
+    supportsProcurementCardApproval(enrichedOrder.status) ||
+    supportsProcurementCardConfirm(enrichedOrder.status);
 
   await sendDirectCard(
     openId,
     await buildOrderDirectMessageCard(enrichedOrder, context, botKind),
     botKind,
+    {
+      trackOrderId: shouldTrackCard ? order.id : undefined,
+      trackCardStage: shouldTrackCard ? enrichedOrder.status : undefined,
+    },
   );
 }
 
@@ -482,6 +496,7 @@ export async function sendOrderNotification(
   order: OrderCardPayload,
   context?: NotificationContext,
   botKind: FeishuBotKind = resolveProcurementBotKind(order.status),
+  options?: { outboxEventKey?: string },
 ) {
   if (order.status === "MANAGEMENT_REVIEW") {
     await sendManagementReviewNotification(order, context, botKind);
@@ -493,10 +508,8 @@ export async function sendOrderNotification(
   });
 
   const emailTask =
-    order.status === "TEACHER_REVIEW"
-      ? sendTeacherReviewEmails(order, context).catch((err) => {
-          console.error("[email] 老师审核邮件失败:", err);
-        })
+    order.status === "TEACHER_REVIEW" && options?.outboxEventKey
+      ? sendTeacherReviewEmailsOnce(order, context, options.outboxEventKey)
       : Promise.resolve();
 
   const openIds = await collectOrderNotificationRecipientOpenIds(order);

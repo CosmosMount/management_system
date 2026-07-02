@@ -3,6 +3,7 @@ import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { resolveInvoicePaths } from "@/lib/order-attachments";
 import { prisma } from "@/lib/prisma";
 import { canConfirmReimbursement } from "@/lib/permissions";
+import { refreshProcurementFeishuCards } from "@/lib/feishu-procurement-card-sync";
 
 export async function confirmProcurementByOpenId(
   openId: string,
@@ -45,5 +46,6 @@ export async function confirmProcurementByOpenId(
     }
   });
 
+  await refreshProcurementFeishuCards(orderId, "报销已确认完成");
   return { message: "报销已确认完成" };
 }

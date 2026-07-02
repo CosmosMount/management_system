@@ -5,6 +5,7 @@ import {
   enqueueOrderNotificationTx,
   orderNotificationEventKey,
 } from "@/lib/notification-outbox";
+import { refreshProcurementFeishuCards } from "@/lib/feishu-procurement-card-sync";
 import { getDefaultNotificationContext } from "@/lib/request-origin";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";
@@ -127,6 +128,10 @@ export async function approveProcurementByOpenId(
     });
 
     if (advancedToTeacherReview) {
+      await refreshProcurementFeishuCards(
+        orderId,
+        "管理审核已全部通过，已进入老师审核",
+      );
       drainNotificationOutboxSoon();
       return { message: "管理审核已全部通过，已进入老师审核" };
     }
@@ -185,6 +190,10 @@ export async function approveProcurementByOpenId(
       return record;
     });
 
+    await refreshProcurementFeishuCards(
+      orderId,
+      `老师审核已通过，订单 ${updated.orderNo} 待上传凭证`,
+    );
     drainNotificationOutboxSoon();
     return { message: `老师审核已通过，订单 ${updated.orderNo} 待上传凭证` };
   }

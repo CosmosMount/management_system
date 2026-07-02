@@ -134,3 +134,33 @@ export async function sendTeacherReviewEmails(
 
   return { sent, skipped };
 }
+
+/** 同一订单进入老师审核时只发一次邮件（outbox 按收件人发送时补发） */
+export async function sendTeacherReviewEmailsOnce(
+  order: OrderCardPayload,
+  context: NotificationContext | undefined,
+  dedupeEventKey: string,
+): Promise<void> {
+  if (order.status !== "TEACHER_REVIEW") return;
+
+  const emailEventKey = `${dedupeEventKey}:teacher_email`;
+  const reserved = await prisma.notificationOutbox.createMany({
+    data: [
+      {
+        eventKey: emailEventKey,
+        channel: "procurement",
+        type: "teacher_email_sent",
+        botKind: "notification",
+        payload: JSON.stringify({ orderId: order.id }),
+        status: "SENT",
+        sentAt: new Date(),
+      },
+    ],
+    skipDuplicates: true,
+  });
+  if (reserved.count === 0) return;
+
+  await sendTeacherReviewEmails(order, context).catch((error) => {
+    console.error("[email] 老师审核邮件失败:", error);
+  });
+}

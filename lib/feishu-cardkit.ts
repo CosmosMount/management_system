@@ -50,6 +50,66 @@ export async function createCardKitInstance(
   return data.data.card_id;
 }
 
+export async function updateCardKitInstance(
+  cardId: string,
+  card: Record<string, unknown>,
+  sequence: number,
+  botKind: FeishuBotKind = "notification",
+): Promise<void> {
+  const token = await getFeishuTenantAccessTokenByBotKind(botKind);
+  const res = await fetch(
+    `https://open.feishu.cn/open-apis/cardkit/v1/cards/${cardId}`,
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        card: {
+          type: "card_json",
+          data: JSON.stringify(card),
+        },
+        sequence,
+      }),
+    },
+  );
+
+  const data = (await res.json()) as { code: number; msg?: string };
+  if (data.code !== 0) {
+    throw new Error(`更新飞书卡片失败(${cardId}): ${data.msg ?? res.status}`);
+  }
+}
+
+function isCardKitSequenceError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes("sequence number compare failed")
+  );
+}
+
+export async function updateCardKitInstanceResilient(
+  cardId: string,
+  card: Record<string, unknown>,
+  startSequence: number,
+  botKind: FeishuBotKind = "notification",
+  maxAttempts = 6,
+): Promise<number> {
+  let sequence = startSequence;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      await updateCardKitInstance(cardId, card, sequence, botKind);
+      return sequence;
+    } catch (error) {
+      if (!isCardKitSequenceError(error) || attempt === maxAttempts - 1) {
+        throw error;
+      }
+      sequence += 1;
+    }
+  }
+  return sequence;
+}
+
 export async function sendCardKitMessage(
   openId: string,
   cardId: string,
@@ -99,13 +159,14 @@ export async function sendInteractiveCardKitDm(
   openId: string,
   card: Record<string, unknown>,
   botKind: FeishuBotKind = "notification",
-): Promise<void> {
-  if (!(await isFeishuDirectMessageAllowed(openId))) return;
+): Promise<string | null> {
+  if (!(await isFeishuDirectMessageAllowed(openId))) return null;
 
   const target = await resolveDirectMessageTarget(openId, botKind);
   try {
     const cardId = await createCardKitInstance(card, target.botKind);
     await sendCardKitMessageToTarget(target, cardId);
+    return cardId;
   } catch (error) {
     if (!shouldFallbackApprovalBotUnavailable(target.botKind, error)) {
       throw error;
@@ -116,5 +177,6 @@ export async function sendInteractiveCardKitDm(
     const fallbackTarget = await resolveDirectMessageTarget(openId, "notification");
     const fallbackCardId = await createCardKitInstance(card, fallbackTarget.botKind);
     await sendCardKitMessageToTarget(fallbackTarget, fallbackCardId);
+    return fallbackCardId;
   }
 }

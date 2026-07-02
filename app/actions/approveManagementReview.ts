@@ -8,6 +8,7 @@ import {
   enqueueOrderNotificationTx,
   orderNotificationEventKey,
 } from "@/lib/notification-outbox";
+import { refreshProcurementFeishuCards } from "@/lib/feishu-procurement-card-sync";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";
 import { revalidateProcurement } from "@/lib/revalidate";
@@ -130,6 +131,10 @@ export async function approveManagementReview(orderId: string) {
   );
 
   if (advancedToTeacherReview) {
+    await refreshProcurementFeishuCards(
+      orderId,
+      "管理审核已全部通过，已进入老师审核",
+    );
     drainNotificationOutboxSoon();
   }
 

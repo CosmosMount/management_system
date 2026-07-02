@@ -154,6 +154,21 @@ model User {
   orders        PurchaseOrder[]
 }
 
+model ProcurementFeishuCard {
+  id        String   @id @default(uuid())
+  orderId   String
+  openId    String
+  cardId    String
+  botKind   String
+  cardStage String   @default("")
+  sequence  Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orderId, openId])
+  @@index([orderId])
+}
+
 model UserRole {
   id         String       @id @default(uuid())
   openId     String

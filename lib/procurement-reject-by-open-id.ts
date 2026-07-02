@@ -13,6 +13,7 @@ import {
   getUserRoles,
 } from "@/lib/permissions";
 import type { ProcurementRejectOutcome } from "@/lib/procurement-reject-outcome";
+import { refreshProcurementFeishuCards } from "@/lib/feishu-procurement-card-sync";
 import { requireApproverSignature } from "@/lib/user-signature";
 
 function toOrderCardPayload(order: {
@@ -110,6 +111,10 @@ export async function rejectProcurementByOpenId(
         actorName,
       );
     });
+    await refreshProcurementFeishuCards(
+      orderId,
+      `已驳回终止，订单 ${order.orderNo} 已结束`,
+    );
     drainNotificationOutboxSoon();
     return { message: `已驳回终止，订单 ${order.orderNo} 已结束` };
   }
@@ -144,6 +149,10 @@ export async function rejectProcurementByOpenId(
       getDefaultNotificationContext(),
     );
   });
+  await refreshProcurementFeishuCards(
+    orderId,
+    `已退回修改，已通知采购人 ${order.initiatorName}`,
+  );
   drainNotificationOutboxSoon();
   return { message: `已退回修改，已通知采购人 ${order.initiatorName}` };
 }

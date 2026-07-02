@@ -35,6 +35,7 @@ import { isFeishuDirectMessageAllowed } from "@/lib/feishu-delivery-guard";
 import { resolveDirectMessageTarget } from "@/lib/feishu-recipient";
 import type { NotificationContext } from "@/lib/app-origin";
 import { defaultAppOrigin } from "@/lib/app-origin";
+import { sendTeacherReviewEmailsOnce } from "@/lib/procurement-teacher-email";
 import { prisma } from "@/lib/prisma";
 
 type ProgressOutboxPayload = {
@@ -610,6 +611,17 @@ async function sendOutboxNotificationByRecipient(
 
   await ensureOutboxRecipients(row.id, plan.openIds);
 
+  if (row.channel === "procurement" && row.type === "order") {
+    const data = JSON.parse(row.payload) as OrderOutboxPayload;
+    if (data.kind === "order") {
+      await sendTeacherReviewEmailsOnce(
+        data.order,
+        { appOrigin: data.appOrigin ?? defaultAppOrigin() },
+        row.eventKey,
+      );
+    }
+  }
+
   const now = new Date();
   const recipients = await prisma.notificationOutboxRecipient.findMany({
     where: {
@@ -927,7 +939,9 @@ async function sendOutboxNotification(row: NotificationOutbox) {
       appOrigin: data.appOrigin ?? defaultAppOrigin(),
     };
     if (data.kind === "order") {
-      await sendOrderNotification(data.order, context, botKind);
+      await sendOrderNotification(data.order, context, botKind, {
+        outboxEventKey: row.eventKey,
+      });
       return;
     }
     if (data.kind === "procurement_rejected") {
