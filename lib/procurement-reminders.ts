@@ -310,7 +310,7 @@ export async function runProcurementStaleReminders(
   return sent;
 }
 
-async function reserveManualReminderSlot(orderId: string): Promise<void> {
+async function reserveManualReminderSlot(orderId: string): Promise<boolean> {
   const rateKey = `procurement:manual_reminder:${orderId}:${minuteBucket(new Date())}`;
   const reserved = await prisma.notificationOutbox.createMany({
     data: [
@@ -326,10 +326,12 @@ async function reserveManualReminderSlot(orderId: string): Promise<void> {
     ],
     skipDuplicates: true,
   });
-  if (reserved.count === 0) {
-    throw new Error("刚刚已经通知过当前审批人，请稍后再试");
-  }
+  return reserved.count > 0;
 }
+
+export type ManualProcurementReminderResult =
+  | { ok: true; message: string }
+  | { ok: false; message: string };
 
 /** 采购人手动通知当前环节审批人 */
 export async function sendManualProcurementApproverReminder({
@@ -342,15 +344,20 @@ export async function sendManualProcurementApproverReminder({
   actorName: string;
   message?: string;
   context?: NotificationContext;
-}): Promise<number> {
-  await reserveManualReminderSlot(orderId);
+}): Promise<ManualProcurementReminderResult> {
+  if (!(await reserveManualReminderSlot(orderId))) {
+    return {
+      ok: false,
+      message: "刚刚已经通知过当前审批人，请稍后再试",
+    };
+  }
 
   const order = await prisma.purchaseOrder.findUnique({
     where: { id: orderId },
     include: { items: true },
   });
   if (!order) {
-    throw new Error("订单不存在");
+    return { ok: false, message: "订单不存在" };
   }
 
   const payload = toCardPayload(order);
@@ -379,9 +386,9 @@ export async function sendManualProcurementApproverReminder({
     card,
   );
   if (deliveryCount === 0) {
-    throw new Error("当前环节没有可通知的审批人");
+    return { ok: false, message: "当前环节没有可通知的审批人" };
   }
-  return deliveryCount;
+  return { ok: true, message: "已通知当前审批人" };
 }
 
 async function deliverApproverReminderCard(

@@ -17,21 +17,31 @@ const notifySchema = z.object({
     .optional(),
 });
 
-export async function notifyProcurementApprover(input: unknown) {
+export type NotifyProcurementApproverResult = {
+  ok: boolean;
+  message: string;
+};
+
+export async function notifyProcurementApprover(
+  input: unknown,
+): Promise<NotifyProcurementApproverResult> {
   const session = await auth();
   if (!session?.user?.openId) {
-    throw new Error("未登录");
+    return { ok: false, message: "未登录" };
   }
 
-  const parsed = notifySchema.parse(input);
-  const message = parsed.message?.trim() || undefined;
+  const parsed = notifySchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, message: "请求参数无效" };
+  }
+  const message = parsed.data.message?.trim() || undefined;
 
   const order = await prisma.purchaseOrder.findUnique({
-    where: { id: parsed.orderId },
+    where: { id: parsed.data.orderId },
     include: { initiator: { select: { openId: true } } },
   });
   if (!order) {
-    throw new Error("订单不存在");
+    return { ok: false, message: "订单不存在" };
   }
 
   if (
@@ -41,15 +51,19 @@ export async function notifyProcurementApprover(input: unknown) {
       order.initiator.openId,
     )
   ) {
-    throw new Error("当前状态不可通知审批人");
+    return { ok: false, message: "当前状态不可通知审批人" };
   }
 
-  await sendManualProcurementApproverReminder({
+  const result = await sendManualProcurementApproverReminder({
     orderId: order.id,
     actorName: session.user.name ?? order.initiatorName,
     message,
     context: await getNotificationContext(),
   });
 
-  revalidateProcurement(order.id);
+  if (result.ok) {
+    revalidateProcurement(order.id);
+  }
+
+  return result;
 }

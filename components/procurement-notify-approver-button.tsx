@@ -34,11 +34,15 @@ export function ProcurementNotifyApproverButton({
   async function handleSend() {
     setLoading(true);
     try {
-      await notifyProcurementApprover({ orderId, message });
-      toast.success("已通知当前审批人");
-      setOpen(false);
-      setMessage("");
-      router.refresh();
+      const result = await notifyProcurementApprover({ orderId, message });
+      if (result.ok) {
+        toast.success(result.message);
+        setOpen(false);
+        setMessage("");
+        router.refresh();
+        return;
+      }
+      toast.message(result.message);
     } catch (err) {
       toast.error(getActionErrorMessage(err, "通知失败"));
     } finally {
