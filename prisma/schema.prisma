@@ -194,7 +194,6 @@ model PurchaseOrder {
   invoicePath       String?
   listDocPath       String?
   screenshotPath    String?
-  financeAttachmentPaths String @default("[]")
   status            OrderStatus    @default(DRAFT)
   isWorkshopFee     Boolean        @default(false)
   rejectionReason   String?
