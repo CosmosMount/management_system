@@ -23,6 +23,11 @@ import { prisma } from "@/lib/prisma";
 import { statusApproverRole, statusLabels } from "@/lib/permissions-client";
 
 const REMINDER_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const MANUAL_REMINDER_COOLDOWN_MS = 60 * 1000;
+
+function minuteBucket(date: Date): string {
+  return String(Math.floor(date.getTime() / MANUAL_REMINDER_COOLDOWN_MS));
+}
 
 const REMINDABLE_STATUSES: OrderStatus[] = [
   "MANAGEMENT_REVIEW",
@@ -72,17 +77,14 @@ function toCardPayload(order: {
   };
 }
 
-async function buildStaleCard(
+async function buildReminderCard(
   order: OrderCardPayload,
-  stuckDays: number,
-  context?: NotificationContext,
+  context: NotificationContext | undefined,
+  options: {
+    headerTitle: string;
+    extraLines: string[];
+  },
 ) {
-  const statusLabel = statusLabels[order.status];
-  const extraLines = [
-    `**当前环节**：${statusLabel}`,
-    `**已停留**：${stuckDays} 天未处理`,
-    "**请尽快处理，避免影响报销进度**",
-  ];
   const botKind = resolveProcurementBotKind(order.status);
   const screenshotOptions = supportsProcurementCardConfirm(order.status)
     ? await resolveProcurementCardScreenshotOptions(
@@ -102,16 +104,16 @@ async function buildStaleCard(
 
   if (supportsProcurementCardApproval(order.status)) {
     return buildProcurementCardKitCard(order, {
-      headerTitle: "采购待办催办",
+      headerTitle: options.headerTitle,
       headerTemplate: "orange",
       detailFocus: "approval",
       appOrigin: context?.appOrigin,
-      extraLines,
+      extraLines: options.extraLines,
     });
   }
 
   return buildProcurementCardKitCard(order, {
-    headerTitle: "采购待办催办",
+    headerTitle: options.headerTitle,
     headerTemplate: "orange",
     detailFocus:
       order.status === "PENDING_APPLICANT_DOCS"
@@ -121,10 +123,26 @@ async function buildStaleCard(
           : "approval",
     primaryButtonText: "前往处理",
     appOrigin: context?.appOrigin,
-    extraLines,
+    extraLines: options.extraLines,
     readOnly: !supportsProcurementCardConfirm(order.status),
     ...financeAttachmentOptions,
     ...screenshotOptions,
+  });
+}
+
+async function buildStaleCard(
+  order: OrderCardPayload,
+  stuckDays: number,
+  context?: NotificationContext,
+) {
+  const statusLabel = statusLabels[order.status];
+  return buildReminderCard(order, context, {
+    headerTitle: "采购待办催办",
+    extraLines: [
+      `**当前环节**：${statusLabel}`,
+      `**已停留**：${stuckDays} 天未处理`,
+      "**请尽快处理，避免影响报销进度**",
+    ],
   });
 }
 
@@ -230,18 +248,6 @@ async function sendStaleOrderReminder(
   const enrichedOrder = await enrichOrderCardPayloadFromDb(order);
   const card = await buildStaleCard(enrichedOrder, stuckDays, context);
 
-  if (order.status === "MANAGEMENT_REVIEW") {
-    const tasks: Promise<number>[] = [];
-    if (!order.teamApproved) {
-      tasks.push(notifyRoleStale("TEAM_ADMIN", order, card));
-    }
-    if (!order.techGroupApproved) {
-      tasks.push(notifyRoleStale("TECH_GROUP_ADMIN", order, card));
-    }
-    const counts = await Promise.all(tasks);
-    return counts.reduce((total, count) => total + count, 0);
-  }
-
   if (
     order.status === "PENDING_APPLICANT_DOCS" ||
     order.status === "PENDING_APPLICANT_CONFIRM"
@@ -253,11 +259,7 @@ async function sendStaleOrderReminder(
     );
   }
 
-  const role = statusApproverRole[order.status];
-  if (role) {
-    return notifyRoleStale(role, order, card);
-  }
-  return 0;
+  return deliverApproverReminderCard(order, card);
 }
 
 /** 在途订单当前环节停留超过 24h 且距上次催办已满 24h 时，私信该环节处理人 */
@@ -306,4 +308,104 @@ export async function runProcurementStaleReminders(
   }
 
   return sent;
+}
+
+async function reserveManualReminderSlot(orderId: string): Promise<void> {
+  const rateKey = `procurement:manual_reminder:${orderId}:${minuteBucket(new Date())}`;
+  const reserved = await prisma.notificationOutbox.createMany({
+    data: [
+      {
+        eventKey: rateKey,
+        channel: "procurement",
+        type: "manual_reminder",
+        botKind: "notification",
+        payload: JSON.stringify({ orderId }),
+        status: "SENT",
+        sentAt: new Date(),
+      },
+    ],
+    skipDuplicates: true,
+  });
+  if (reserved.count === 0) {
+    throw new Error("刚刚已经通知过当前审批人，请稍后再试");
+  }
+}
+
+/** 采购人手动通知当前环节审批人 */
+export async function sendManualProcurementApproverReminder({
+  orderId,
+  actorName,
+  message,
+  context,
+}: {
+  orderId: string;
+  actorName: string;
+  message?: string;
+  context?: NotificationContext;
+}): Promise<number> {
+  await reserveManualReminderSlot(orderId);
+
+  const order = await prisma.purchaseOrder.findUnique({
+    where: { id: orderId },
+    include: { items: true },
+  });
+  if (!order) {
+    throw new Error("订单不存在");
+  }
+
+  const payload = toCardPayload(order);
+  const enrichedOrder = await enrichOrderCardPayloadFromDb(payload);
+  const stuckDays = daysStuck(order.statusEnteredAt);
+  const statusLabel = statusLabels[order.status];
+  const extraLines = [
+    `**采购人催促**：${actorName}`,
+    ...(message ? [`**补充说明**：${message}`] : []),
+    `**当前环节**：${statusLabel}`,
+    ...(stuckDays > 0 ? [`**已停留**：${stuckDays} 天`] : []),
+    "**请尽快处理，避免影响报销进度**",
+  ];
+
+  const card = await buildReminderCard(enrichedOrder, context, {
+    headerTitle: "采购催促提醒",
+    extraLines,
+  });
+
+  const deliveryCount = await deliverApproverReminderCard(
+    {
+      ...payload,
+      teamApproved: order.teamApproved,
+      techGroupApproved: order.techGroupApproved,
+    },
+    card,
+  );
+  if (deliveryCount === 0) {
+    throw new Error("当前环节没有可通知的审批人");
+  }
+  return deliveryCount;
+}
+
+async function deliverApproverReminderCard(
+  order: OrderCardPayload & {
+    teamApproved: boolean;
+    techGroupApproved: boolean;
+  },
+  card: Record<string, unknown>,
+): Promise<number> {
+  if (order.status === "MANAGEMENT_REVIEW") {
+    const tasks: Promise<number>[] = [];
+    if (!order.teamApproved) {
+      tasks.push(notifyRoleStale("TEAM_ADMIN", order, card));
+    }
+    if (!order.techGroupApproved) {
+      tasks.push(notifyRoleStale("TECH_GROUP_ADMIN", order, card));
+    }
+    const counts = await Promise.all(tasks);
+    return counts.reduce((total, count) => total + count, 0);
+  }
+
+  const role = statusApproverRole[order.status];
+  if (role) {
+    return notifyRoleStale(role, order, card);
+  }
+  return 0;
 }

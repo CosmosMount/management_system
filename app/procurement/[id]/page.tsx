@@ -8,6 +8,7 @@ import { PurchaseOrderDeleteByAdminButton } from "@/components/admin-delete-acti
 import { OrderAttachmentsCard } from "@/components/order-attachments";
 import { OrderPageFocus } from "@/components/order-page-focus";
 import { OrderReimbursementActions } from "@/components/order-reimbursement-actions";
+import { ProcurementNotifyApproverButton } from "@/components/procurement-notify-approver-button";
 import { OrderRejectionNotice } from "@/components/procurement/order-rejection-notice";
 import { OrdersBackHeader } from "@/components/procurement/procurement-back-link";
 import { ProcurementPageLayout } from "@/components/procurement/procurement-page-layout";
@@ -41,11 +42,13 @@ import { groupOrderAttachments } from "@/lib/order-attachments";
 import {
   canViewReimbursementAttachments,
   canWithdrawProcurementOrder,
+  canNotifyProcurementApprover,
   getUserRoles,
   isSuperAdmin,
   statusLabels,
 } from "@/lib/permissions";
 import { canViewProcurementOrder } from "@/lib/procurement-visibility";
+import { resolveProcurementHandlerNames } from "@/lib/procurement-order-handlers";
 import { userHasSignature } from "@/lib/user-signature";
 
 type Props = {
@@ -110,6 +113,26 @@ export default async function OrderDetailPage({ params, searchParams }: Props) {
     session?.user?.openId,
     order.initiator.openId,
   );
+  const canNotifyApprover = canNotifyProcurementApprover(
+    order.status,
+    session?.user?.openId,
+    order.initiator.openId,
+  );
+  const currentHandler = canNotifyApprover
+    ? (
+        await resolveProcurementHandlerNames([
+          {
+            id: order.id,
+            status: order.status,
+            team: order.team,
+            techGroup: order.techGroup,
+            initiatorName: order.initiatorName,
+            teamApproved: order.teamApproved,
+            techGroupApproved: order.techGroupApproved,
+          },
+        ])
+      ).get(order.id)
+    : undefined;
 
   return (
     <>
@@ -157,6 +180,12 @@ export default async function OrderDetailPage({ params, searchParams }: Props) {
                     initiatorOpenId={order.initiator.openId}
                     hasSignature={hasSignature}
                   />
+                  {canNotifyApprover ? (
+                    <ProcurementNotifyApproverButton
+                      orderId={order.id}
+                      currentHandler={currentHandler}
+                    />
+                  ) : null}
                   <OrderReimbursementActions
                     orderId={order.id}
                     items={order.items.map((item) => ({
