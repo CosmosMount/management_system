@@ -1,6 +1,7 @@
-import { cardToast } from "@/lib/feishu-card-response";
+import { cardActionResponse, cardToast } from "@/lib/feishu-card-response";
 import type { FeishuBotKind } from "@/lib/feishu-app-config";
 import { extractRejectReasonFromForm } from "@/lib/feishu-procurement-card";
+import { buildProcessedProcurementCard } from "@/lib/feishu-procurement-processed-card";
 import { resolveSystemOpenIdFromFeishuOperator } from "@/lib/feishu-recipient";
 import { prisma } from "@/lib/prisma";
 import { approveProcurementByOpenId } from "@/lib/procurement-approve-by-open-id";
@@ -33,6 +34,19 @@ type ResolvedCardAction = {
   orderId: string;
   reason: string;
 };
+
+async function respondWithProcessedCard(
+  toastType: "success" | "info",
+  message: string,
+  orderId: string,
+  botKind?: FeishuBotKind,
+) {
+  const card = await buildProcessedProcurementCard(orderId, message, {
+    botKind,
+    headerTemplate: toastType === "success" ? "green" : "orange",
+  });
+  return cardActionResponse(toastType, message, card);
+}
 
 function parseActionValue(raw: unknown): CardActionValue | null {
   if (!raw) return null;
@@ -190,10 +204,16 @@ export async function handleFeishuCardAction(
       return cardToast("error", "订单不存在");
     }
     if (order.status !== "MANAGEMENT_REVIEW") {
-      return cardToast("info", "该管理审核卡片已失效，请打开系统查看最新状态");
+      const message = "该管理审核卡片已失效，请打开系统查看最新状态";
+      return respondWithProcessedCard("info", message, orderId, options?.botKind);
     }
     const result = await approveProcurementByOpenId(openId, orderId);
-    return cardToast("success", result.message);
+    return respondWithProcessedCard(
+      "success",
+      result.message,
+      orderId,
+      options?.botKind,
+    );
   }
 
   if (action === "procurement_approve_teacher") {
@@ -205,12 +225,18 @@ export async function handleFeishuCardAction(
       return cardToast("error", "订单不存在");
     }
     if (order.status !== "TEACHER_REVIEW") {
-      return cardToast("info", "该老师审核卡片已失效，请打开系统查看最新状态");
+      const message = "该老师审核卡片已失效，请打开系统查看最新状态";
+      return respondWithProcessedCard("info", message, orderId, options?.botKind);
     }
     const result = await approveProcurementByOpenId(openId, orderId, {
       teacherOnly: true,
     });
-    return cardToast("success", result.message);
+    return respondWithProcessedCard(
+      "success",
+      result.message,
+      orderId,
+      options?.botKind,
+    );
   }
 
   if (
@@ -229,7 +255,8 @@ export async function handleFeishuCardAction(
       order.status !== "MANAGEMENT_REVIEW" &&
       order.status !== "TEACHER_REVIEW"
     ) {
-      return cardToast("info", "该审批卡片已失效，请打开系统查看最新状态");
+      const message = "该审批卡片已失效，请打开系统查看最新状态";
+      return respondWithProcessedCard("info", message, orderId, options?.botKind);
     }
     if (!reason) {
       console.log("[feishu-ws] 驳回缺少原因", {
@@ -244,7 +271,12 @@ export async function handleFeishuCardAction(
       reason,
       action === "procurement_reject_terminate" ? "terminate" : "resubmit",
     );
-    return cardToast("success", result.message);
+    return respondWithProcessedCard(
+      "success",
+      result.message,
+      orderId,
+      options?.botKind,
+    );
   }
 
   if (action === "procurement_confirm_reimbursement") {
@@ -256,10 +288,16 @@ export async function handleFeishuCardAction(
       return cardToast("error", "订单不存在");
     }
     if (order.status !== "PENDING_APPLICANT_CONFIRM") {
-      return cardToast("info", "该确认卡片已失效，请打开系统查看最新状态");
+      const message = "该确认卡片已失效，请打开系统查看最新状态";
+      return respondWithProcessedCard("info", message, orderId, options?.botKind);
     }
     const result = await confirmProcurementByOpenId(openId, orderId);
-    return cardToast("success", result.message);
+    return respondWithProcessedCard(
+      "success",
+      result.message,
+      orderId,
+      options?.botKind,
+    );
   }
 
   return cardToast("info", "暂不支持该卡片操作");

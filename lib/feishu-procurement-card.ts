@@ -38,7 +38,7 @@ function buildDetailUrl(
   return `${base}?${notify}#approval`;
 }
 
-function defaultDetailFocus(
+export function defaultDetailFocus(
   status: OrderStatus,
 ): CardOptions["detailFocus"] | undefined {
   if (
@@ -299,8 +299,9 @@ function buildSummaryMarkdown(
 ): string {
   const statusLabel = statusLabels[order.status];
   const hasApplicantAttachments = (options.applicantAttachments?.length ?? 0) > 0;
-  const attachmentHint =
-    order.status === "PENDING_FINANCE_REVIEW"
+  const attachmentHint = options.readOnly
+    ? ""
+    : order.status === "PENDING_FINANCE_REVIEW"
       ? hasApplicantAttachments
         ? "\n**操作提示**：请核对下方发票与清单，上传报销截图"
         : "\n**操作提示**：请打开详情页查看发票与清单"
@@ -345,6 +346,21 @@ function appendOrderItemsToCardKitBody(
     content: "**采购明细**",
   });
   bodyElements.push(table);
+}
+
+/** 操作完成后只读卡片：隐藏通过/退回/完成报销按钮，仅保留查看详情 */
+export function buildClosedProcurementCardKitCard(
+  order: OrderCardPayload,
+  resultMessage: string,
+  options: Omit<CardOptions, "readOnly"> = {},
+) {
+  return buildProcurementCardKitCard(order, {
+    ...options,
+    readOnly: true,
+    headerTemplate: options.headerTemplate ?? "green",
+    extraLines: [`**处理结果**：${resultMessage}`, ...(options.extraLines ?? [])],
+    primaryButtonText: options.primaryButtonText ?? "查看详情",
+  });
 }
 
 /** CardKit + JSON 2.0，用于应用机器人私信（支持回调按钮） */

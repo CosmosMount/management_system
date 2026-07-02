@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import {
+  buildClosedProcurementCardKitCard,
   buildProcurementCardKitCard,
   supportsProcurementCardConfirm,
 } from "../lib/feishu-procurement-card";
@@ -61,6 +62,29 @@ test("待确认卡片 PDF 截图在卡片内展示链接", () => {
   const serialized = JSON.stringify(card);
   expect(serialized).toContain("点击查看 PDF");
   expect(serialized).not.toContain("见上方文件消息");
+});
+
+test("操作完成后卡片变为只读，隐藏审批按钮", () => {
+  const card = buildClosedProcurementCardKitCard(
+    {
+      id: "order-1",
+      orderNo: "PO-001",
+      initiatorName: "测试用户",
+      totalPrice: 100,
+      status: "MANAGEMENT_REVIEW",
+      team: "英雄",
+      techGroup: "RM",
+    },
+    "管理审核已通过",
+  );
+
+  const serialized = JSON.stringify(card);
+  expect(serialized).toContain("处理结果");
+  expect(serialized).toContain("管理审核已通过");
+  expect(serialized).toContain("查看详情");
+  expect(serialized).not.toContain("approve_btn");
+  expect(serialized).not.toContain("reject_btn");
+  expect(serialized).not.toContain("完成报销");
 });
 
 test("待确认卡片包含完成报销按钮与报销截图区域", () => {
@@ -129,6 +153,9 @@ test("飞书完成报销卡片回调可将订单标记为已完成", async () =>
   );
 
   expect(JSON.stringify(result)).toContain("完成");
+  expect(JSON.stringify(result)).toContain('"card"');
+  expect(JSON.stringify(result)).not.toContain("完成报销");
+  expect(JSON.stringify(result)).not.toContain("confirm_btn");
   await expect
     .poll(async () => {
       const latest = await prisma.purchaseOrder.findUniqueOrThrow({
