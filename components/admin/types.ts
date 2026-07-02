@@ -9,6 +9,7 @@ export type AdminUser = {
   id: string;
   openId: string;
   name: string;
+  email: string | null;
   avatar: string | null;
   createdAt: string;
 };

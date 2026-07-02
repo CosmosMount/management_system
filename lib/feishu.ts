@@ -19,6 +19,7 @@ import {
   resolveProcurementFinanceReviewAttachmentOptions,
 } from "@/lib/feishu-procurement-card-assets";
 import { enrichOrderCardPayloadFromDb } from "@/lib/feishu-order-card-payload";
+import { sendTeacherReviewEmails } from "@/lib/procurement-teacher-email";
 import {
   sendInteractiveCardKitDm,
 } from "@/lib/feishu-cardkit";
@@ -491,20 +492,30 @@ export async function sendOrderNotification(
     console.error("[feishu] Webhook 通知失败:", err);
   });
 
+  const emailTask =
+    order.status === "TEACHER_REVIEW"
+      ? sendTeacherReviewEmails(order, context).catch((err) => {
+          console.error("[email] 老师审核邮件失败:", err);
+        })
+      : Promise.resolve();
+
   const openIds = await collectOrderNotificationRecipientOpenIds(order);
   if (openIds.length === 0) {
+    await emailTask;
     const approverRole = statusApproverRole[order.status];
     if (approverRole) {
       console.warn(`[feishu] 角色 ${roleLabels[approverRole]} 无可通知用户`);
     }
     return;
   }
-  const results = await Promise.allSettled(
-    openIds.map((openId) =>
+  const results = await Promise.allSettled([
+    ...openIds.map((openId) =>
       sendOrderNotificationToOpenId(order, openId, context, botKind),
     ),
-  );
-  const failures = results.filter(
+    emailTask,
+  ]);
+  const feishuResults = results.slice(0, openIds.length);
+  const failures = feishuResults.filter(
     (result): result is PromiseRejectedResult => result.status === "rejected",
   );
   if (failures.length > 0) {
@@ -512,7 +523,7 @@ export async function sendOrderNotification(
     const message =
       reason instanceof Error ? reason.message : String(reason);
     throw new Error(
-      `飞书私信通知失败：${failures.length}/${results.length} 个收件人失败；${message}`,
+      `飞书私信通知失败：${failures.length}/${openIds.length} 个收件人失败；${message}`,
     );
   }
 }

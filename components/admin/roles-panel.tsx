@@ -6,6 +6,7 @@ import { X } from "lucide-react";
 import type { UserRoleType } from "@prisma/client";
 import { toast } from "sonner";
 import { assignUserRole, removeUserRole } from "@/app/actions/adminRoles";
+import { updateTeacherEmail } from "@/app/actions/adminTeacherEmail";
 import type { AdminRole, AdminUser } from "@/components/admin/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,6 +17,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -216,7 +218,7 @@ export function RolesPanel({
           <CardHeader>
             <CardTitle>技术组职责配置</CardTitle>
             <CardDescription>
-              为每个技术组指定组长、指导老师与报销员，参与审批与报销流程。
+              为每个技术组指定组长、指导老师与报销员，参与审批与报销流程。指导老师需配置 Outlook 邮箱，进入老师审核时将收到审批邮件。
             </CardDescription>
           </CardHeader>
           <CardContent className="min-w-0">
@@ -245,7 +247,7 @@ export function RolesPanel({
                         onQuickAssign={handleQuickAssignTechGroup}
                       />
                     </TableCell>
-                    <TableCell className="min-w-[14rem]">
+                    <TableCell className="min-w-[18rem]">
                       <TechGroupRoleCell
                         entries={techGroupRoles(techGroup, "TEACHER")}
                         users={users}
@@ -255,6 +257,7 @@ export function RolesPanel({
                         pending={pending}
                         onRemove={handleRemove}
                         onQuickAssign={handleQuickAssignTechGroup}
+                        showTeacherEmail
                       />
                     </TableCell>
                     <TableCell className="min-w-[14rem]">
@@ -482,6 +485,7 @@ function TechGroupRoleCell({
   pending,
   onRemove,
   onQuickAssign,
+  showTeacherEmail = false,
 }: {
   entries: AdminRole[];
   users: AdminUser[];
@@ -495,6 +499,7 @@ function TechGroupRoleCell({
     techGroup: string,
     role: UserRoleType,
   ) => void;
+  showTeacherEmail?: boolean;
 }) {
   const [addOpenId, setAddOpenId] = useState("");
 
@@ -525,15 +530,26 @@ function TechGroupRoleCell({
           确定
         </Button>
       </div>
-      <div className="flex flex-1 flex-wrap items-center justify-end gap-2">
-        {entries.map((entry) => (
-          <UserChip
-            key={entry.id}
-            user={users.find((item) => item.openId === entry.openId)}
-            pending={pending}
-            onRemove={() => onRemove(entry.id)}
-          />
-        ))}
+      <div className="flex flex-1 flex-col items-end gap-2">
+        {entries.map((entry) => {
+          const user = users.find((item) => item.openId === entry.openId);
+          return (
+            <div key={entry.id} className="flex flex-col items-end gap-1">
+              <UserChip
+                user={user}
+                pending={pending}
+                onRemove={() => onRemove(entry.id)}
+              />
+              {showTeacherEmail && user ? (
+                <TeacherEmailEditor
+                  openId={user.openId}
+                  initialEmail={user.email ?? ""}
+                  pending={pending}
+                />
+              ) : null}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -597,6 +613,55 @@ function RoleCell({
           />
         ))}
       </div>
+    </div>
+  );
+}
+
+function TeacherEmailEditor({
+  openId,
+  initialEmail,
+  pending,
+}: {
+  openId: string;
+  initialEmail: string;
+  pending: boolean;
+}) {
+  const router = useRouter();
+  const [email, setEmail] = useState(initialEmail);
+  const [saving, startSaving] = useTransition();
+
+  function handleSave() {
+    startSaving(async () => {
+      try {
+        await updateTeacherEmail({ openId, email });
+        toast.success(email.trim() ? "审批邮箱已保存" : "审批邮箱已清除");
+        router.refresh();
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "保存失败");
+      }
+    });
+  }
+
+  return (
+    <div className="flex w-full max-w-[16rem] items-center gap-1">
+      <Input
+        type="email"
+        value={email}
+        onChange={(event) => setEmail(event.target.value)}
+        placeholder="Outlook 邮箱"
+        className="h-8 text-xs"
+        disabled={pending || saving}
+      />
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="h-8 shrink-0 px-2 text-xs"
+        disabled={pending || saving}
+        onClick={handleSave}
+      >
+        保存
+      </Button>
     </div>
   );
 }
