@@ -136,6 +136,7 @@ export default async function TaskDetailPage({ params }: Props) {
     task.project.status !== "COMPLETED" &&
     task.project.status !== "CANCELED" &&
     task.needsWeeklyReport &&
+    (task.status === "IN_PROGRESS" || task.status === "PENDING_ACCEPTANCE") &&
     canSubmitTaskWeeklyReport({
       roles,
       scope,
@@ -240,7 +241,9 @@ export default async function TaskDetailPage({ params }: Props) {
     dueAt: task.dueAt.toISOString(),
     needsOfflineConfirmation: task.needsOfflineConfirmation,
     needsWeeklyReport: task.needsWeeklyReport,
-    weeklyReportDueLabel: task.needsWeeklyReport
+    weeklyReportDueLabel:
+      task.needsWeeklyReport &&
+      (task.status === "IN_PROGRESS" || task.status === "PENDING_ACCEPTANCE")
       ? weeklyReportDueState.label
       : "",
     acceptanceChecklistItems: task.acceptanceChecklistItems.map((item) => ({

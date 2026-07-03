@@ -1179,6 +1179,7 @@ async function createCompletableProjectFixture({
       ownerOpenId: normalOpenId,
       ownerName: FALLBACK_NORMAL_NAME,
       dueAt: tomorrow,
+      completedAt: now,
     },
   });
   await Promise.all([

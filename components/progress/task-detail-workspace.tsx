@@ -440,7 +440,13 @@ function TaskOverview({
             />
             <OverviewItem
               label="定期周报"
-              value={task.needsWeeklyReport ? "需要" : "不需要"}
+              value={
+                task.needsWeeklyReport
+                  ? task.status === "TODO"
+                    ? "需要，开始后生效"
+                    : "需要"
+                  : "不需要"
+              }
             />
             <OverviewItem
               label="验收清单"

@@ -62,6 +62,9 @@ export async function submitWeeklyReport(input: {
   ) {
     throw new Error("已结束任务不能提交周报");
   }
+  if (task.status === "TODO") {
+    throw new Error("未开始任务无需提交周报，请先开始任务");
+  }
   if (!task.needsWeeklyReport) throw new Error("该任务当前未要求提交周报");
 
   if (
@@ -85,7 +88,7 @@ export async function submitWeeklyReport(input: {
         id: task.id,
         deletedAt: null,
         needsWeeklyReport: true,
-        status: { notIn: ["COMPLETED", "ARCHIVED", "PROJECT_CANCELED"] },
+        status: task.status,
         project: {
           status: {
             notIn: [

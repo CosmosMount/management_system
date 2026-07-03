@@ -220,13 +220,17 @@ async function reviewStageSubmission(
   if (!approverRole) throw new Error("无法确定审批角色");
 
   await prisma.$transaction(async (tx) => {
+    const reviewedAt = new Date();
     const locked = await tx.projectStage.updateMany({
       where: {
         id: stage.id,
         status: "PENDING_ACCEPTANCE",
         currentSubmissionId: submission.id,
       },
-      data: { status: pass ? "COMPLETED" : "IN_PROGRESS" },
+      data: {
+        status: pass ? "COMPLETED" : "IN_PROGRESS",
+        completedAt: pass ? reviewedAt : null,
+      },
     });
     if (locked.count !== 1) {
       throw new Error("该提交已审批");
@@ -241,6 +245,7 @@ async function reviewStageSubmission(
         decision: pass ? ApprovalDecision.APPROVED : ApprovalDecision.REJECTED,
         offlineConfirmed: parsed.offlineConfirmed,
         comment: parsed.comment ?? "",
+        createdAt: reviewedAt,
       },
     });
 

@@ -1,5 +1,10 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { UserRoleType } from "@prisma/client";
+import {
+  ProjectStatus,
+  StageStatus,
+  SubmissionType,
+  UserRoleType,
+} from "@prisma/client";
 import { handleFeishuCardAction } from "../lib/feishu-card-action-handler";
 import { approveProcurementByOpenId } from "../lib/procurement-approve-by-open-id";
 import {
@@ -7,6 +12,7 @@ import {
   orderNotificationEventKey,
 } from "../lib/notification-outbox";
 import { prisma } from "../lib/prisma";
+import { collectTaskNotificationRecipients } from "../lib/progress-task-notifications";
 import { createProjectSchema } from "../lib/validations/progress";
 import {
   expectHealthyPage,
@@ -555,7 +561,7 @@ test("采购管理审核可终止驳回", async ({ page, context, baseURL }) => 
     waitUntil: "networkidle",
   });
   await expect(page.getByText("PW全功能-管理驳回物料")).toBeVisible();
-  await page.getByRole("button", { name: "驳回" }).click();
+  await page.getByRole("button", { name: "驳回", exact: true }).click();
   await page.getByRole("button", { name: "终止采购" }).click();
   await page.getByPlaceholder("请填写具体原因，将通知相关人员").fill(reason);
   await page.getByRole("button", { name: "确认终止" }).click();
@@ -583,7 +589,7 @@ test("采购老师审核可终止驳回", async ({ page, context, baseURL }) => 
     waitUntil: "networkidle",
   });
   await expect(page.getByText("PW全功能-老师驳回物料")).toBeVisible();
-  await page.getByRole("button", { name: "驳回" }).click();
+  await page.getByRole("button", { name: "驳回", exact: true }).click();
   await page.getByRole("button", { name: "终止采购" }).click();
   await page.getByPlaceholder("请填写具体原因，将通知相关人员").fill(reason);
   await page.getByRole("button", { name: "确认终止" }).click();
@@ -1112,11 +1118,17 @@ test("任务可通过 UI 开始、提交周报、解除风险并新增风险", a
   context,
   baseURL,
 }) => {
+  await prisma.task.update({
+    where: { id: fixtures.todoTaskId },
+    data: { needsWeeklyReport: true },
+  });
   await loginAsNormalUser(context, baseURL, normalAuth);
   await page.goto(`/progress/task/${fixtures.todoTaskId}`, {
     waitUntil: "networkidle",
   });
   await expect(page.getByText("PW全功能-待开始任务")).toBeVisible();
+  await expect(page.getByText("需要，开始后生效")).toBeVisible();
+  await expect(page.getByRole("button", { name: "提交周报" })).toHaveCount(0);
   await page.getByRole("button", { name: "开始任务" }).click();
 
   await expect
@@ -1128,6 +1140,7 @@ test("任务可通过 UI 开始、提交周报、解除风险并新增风险", a
       return task.status;
     })
     .toBe("IN_PROGRESS");
+  await expect(page.getByRole("button", { name: "提交周报" })).toBeVisible();
 
   await page.goto(`/progress/task/${fixtures.taskId}`, {
     waitUntil: "networkidle",
@@ -1195,6 +1208,191 @@ test("任务可通过 UI 开始、提交周报、解除风险并新增风险", a
       return { riskNote: task.riskNote, activeRiskCount };
     })
     .toEqual({ riskNote: newRisk, activeRiskCount: 1 });
+  await expectHealthyPage(page);
+});
+
+test("阶段审批通过后显示完成时间且回退后清空", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  const suffix = Date.now();
+  const project = await prisma.project.create({
+    data: {
+      name: `PW全功能-阶段完成时间-${suffix}`,
+      description: "验证阶段完成时间展示和回退清空",
+      team: "英雄",
+      techGroup: "电控",
+      status: ProjectStatus.IN_PROGRESS,
+      ownerOpenId: fixtures.normalOpenId,
+      ownerName: "李棋轩",
+      owners: {
+        create: [
+          {
+            openId: fixtures.normalOpenId,
+            name: "李棋轩",
+            sortOrder: 0,
+          },
+        ],
+      },
+      participants: {
+        create: [
+          {
+            openId: fixtures.normalOpenId,
+            name: "李棋轩",
+            sortOrder: 0,
+          },
+        ],
+      },
+    },
+  });
+  const stage = await prisma.projectStage.create({
+    data: {
+      projectId: project.id,
+      name: `PW全功能-完成时间阶段-${suffix}`,
+      goal: "验证完成时间",
+      sortOrder: 0,
+      status: StageStatus.PENDING_ACCEPTANCE,
+      ownerOpenId: fixtures.normalOpenId,
+      ownerName: "李棋轩",
+      dueAt: addDays(new Date(), 3),
+      evidenceUrl: "https://example.feishu.cn/docx/stage-completed-at",
+    },
+  });
+  const submission = await prisma.taskSubmission.create({
+    data: {
+      projectId: project.id,
+      stageId: stage.id,
+      type: SubmissionType.STAGE,
+      feishuDocUrl: "https://example.feishu.cn/docx/stage-completed-at",
+      note: "PW全功能-阶段完成时间提交",
+      submittedBy: fixtures.normalOpenId,
+      submitterName: "李棋轩",
+    },
+  });
+  await prisma.projectStage.update({
+    where: { id: stage.id },
+    data: { currentSubmissionId: submission.id },
+  });
+
+  await loginAsAdminUser(context, baseURL);
+  await page.goto(`/progress/${project.id}?stage=${stage.id}`, {
+    waitUntil: "networkidle",
+  });
+  await expect(page.getByText(stage.name).first()).toBeVisible();
+  await page.getByRole("button", { name: "通过" }).click();
+
+  await expect
+    .poll(async () => {
+      const updated = await prisma.projectStage.findUniqueOrThrow({
+        where: { id: stage.id },
+        select: { status: true, completedAt: true },
+      });
+      return {
+        status: updated.status,
+        completed: !!updated.completedAt,
+      };
+    })
+    .toEqual({ status: "COMPLETED", completed: true });
+
+  await page.reload({ waitUntil: "networkidle" });
+  await expect(page.getByText(/完成于/).first()).toBeVisible();
+
+  await page.getByRole("button", { name: "回退流程" }).click();
+  const rollbackDialog = page.getByRole("dialog", { name: "回退项目流程" });
+  await rollbackDialog
+    .getByPlaceholder("填写回退原因")
+    .fill("PW全功能-验证完成时间回退清空");
+  await rollbackDialog.getByRole("button", { name: "确认回退" }).click();
+
+  await expect
+    .poll(async () => {
+      const updated = await prisma.projectStage.findUniqueOrThrow({
+        where: { id: stage.id },
+        select: { status: true, completedAt: true },
+      });
+      return {
+        status: updated.status,
+        completed: !!updated.completedAt,
+      };
+    })
+    .toEqual({ status: "IN_PROGRESS", completed: false });
+
+  await expect(page.getByText(/完成于/)).toHaveCount(0);
+  await expectHealthyPage(page);
+});
+
+test("阶段审批驳回会清空完成时间", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  const suffix = Date.now();
+  const project = await prisma.project.create({
+    data: {
+      name: `PW全功能-阶段驳回清空完成时间-${suffix}`,
+      description: "验证阶段驳回时清空完成时间",
+      team: "英雄",
+      techGroup: "电控",
+      status: ProjectStatus.IN_PROGRESS,
+      ownerOpenId: fixtures.normalOpenId,
+      ownerName: "李棋轩",
+      owners: {
+        create: [{ openId: fixtures.normalOpenId, name: "李棋轩", sortOrder: 0 }],
+      },
+    },
+  });
+  const stage = await prisma.projectStage.create({
+    data: {
+      projectId: project.id,
+      name: `PW全功能-驳回清空完成时间阶段-${suffix}`,
+      goal: "验证驳回清空完成时间",
+      sortOrder: 0,
+      status: StageStatus.PENDING_ACCEPTANCE,
+      ownerOpenId: fixtures.normalOpenId,
+      ownerName: "李棋轩",
+      dueAt: addDays(new Date(), 3),
+      evidenceUrl: "https://example.feishu.cn/docx/stage-reject-completed-at",
+      completedAt: new Date(),
+    },
+  });
+  const submission = await prisma.taskSubmission.create({
+    data: {
+      projectId: project.id,
+      stageId: stage.id,
+      type: SubmissionType.STAGE,
+      feishuDocUrl: "https://example.feishu.cn/docx/stage-reject-completed-at",
+      note: "PW全功能-阶段驳回清空完成时间提交",
+      submittedBy: fixtures.normalOpenId,
+      submitterName: "李棋轩",
+    },
+  });
+  await prisma.projectStage.update({
+    where: { id: stage.id },
+    data: { currentSubmissionId: submission.id },
+  });
+
+  await loginAsAdminUser(context, baseURL);
+  await page.goto(`/progress/${project.id}?stage=${stage.id}`, {
+    waitUntil: "networkidle",
+  });
+  await page.getByRole("button", { name: "驳回", exact: true }).click();
+
+  await expect
+    .poll(async () => {
+      const updated = await prisma.projectStage.findUniqueOrThrow({
+        where: { id: stage.id },
+        select: { status: true, completedAt: true },
+      });
+      return {
+        status: updated.status,
+        completed: !!updated.completedAt,
+      };
+    })
+    .toEqual({ status: "IN_PROGRESS", completed: false });
+
+  await page.reload({ waitUntil: "networkidle" });
+  await expect(page.getByText(/完成于/)).toHaveCount(0);
   await expectHealthyPage(page);
 });
 
@@ -1897,6 +2095,141 @@ test("项目单阶段 DDL 修改申请只更新当前阶段", async ({
   await expectHealthyPage(page);
 });
 
+test("管理员直接创建任务会入队完整任务指派通知", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  await loginAsAdminUser(context, baseURL);
+  const title = `PW全功能-直接创建任务-${Date.now()}`;
+  await page.goto(`/progress/${fixtures.projectId}`, {
+    waitUntil: "networkidle",
+  });
+  await page.getByRole("button", { name: "新增任务" }).click();
+  const dialog = page.getByRole("dialog", { name: "新增任务" });
+  await expect(dialog).toBeVisible();
+  await dialog
+    .getByText("任务目标")
+    .locator("xpath=following::input[1]")
+    .fill(title);
+  await dialog
+    .getByText("详细说明")
+    .locator("xpath=following::input[1]")
+    .fill("PW全功能-直接创建任务说明");
+  await dialog.getByLabel("宣运").check();
+  await dialog.getByPlaceholder("搜索负责人姓名").fill("李棋轩");
+  await page.getByRole("button", { name: /李棋轩/ }).last().click();
+  await dialog
+    .getByText("定量/定性指标")
+    .locator("xpath=following::input[1]")
+    .fill("PW全功能-直接创建任务指标");
+  await dialog
+    .locator('input[type="datetime-local"]')
+    .fill(formatDateTimeLocal(addDays(new Date(), 5)));
+  await dialog.getByLabel("需要线下确认").check();
+  await dialog.getByLabel("需要定期周报").check();
+  await dialog.getByRole("button", { name: "添加自定义条例" }).click();
+  await dialog
+    .getByPlaceholder("验收条例 1")
+    .fill("PW全功能-直接创建任务验收条例");
+  await dialog.getByRole("button", { name: "创建任务" }).click();
+
+  await expect
+    .poll(async () => {
+      const task = await prisma.task.findFirst({
+        where: { projectId: fixtures.projectId, title },
+        select: {
+          id: true,
+          projectId: true,
+          status: true,
+          dueAt: true,
+          team: true,
+          techGroup: true,
+          assigneeOpenId: true,
+          assigneeName: true,
+          assignees: { select: { openId: true, name: true } },
+          techGroups: { select: { techGroup: true, sortOrder: true } },
+          project: {
+            select: {
+              ownerOpenId: true,
+              ownerName: true,
+              owners: { select: { openId: true, name: true } },
+              participants: { select: { openId: true } },
+            },
+          },
+        },
+      });
+      if (!task) return null;
+      const outbox = await prisma.notificationOutbox.findUnique({
+        where: { eventKey: `progress:task_assigned:${task.id}` },
+        select: { botKind: true, payload: true },
+      });
+      if (!outbox) return null;
+      const payload = readProgressOutboxPayload(outbox.payload);
+      const recipientOpenIds = stringArray(payload.recipientOpenIds);
+      const expectedRecipientOpenIds = await collectTaskNotificationRecipients(task);
+      return {
+        payloadType: payload.type,
+        taskId: payload.taskId,
+        taskIdMatchesTask: payload.taskId === task.id,
+        taskTitle: payload.taskTitle,
+        projectId: payload.projectId,
+        projectName: payload.projectName,
+        actorName: payload.actorName,
+        team: payload.team,
+        techGroup: payload.techGroup,
+        taskStatus: task.status,
+        botKind: outbox.botKind,
+        stageName: payload.stageName,
+        assigneeNames: payload.assigneeNames,
+        assigneeOpenIds: uniqueSorted(stringArray(payload.assigneeOpenIds)),
+        taskTechGroups: payload.taskTechGroups,
+        urgency: payload.urgency,
+        importance: payload.importance,
+        dueAtMatchesTask: payload.dueAt === task.dueAt.toISOString(),
+        metrics: payload.metrics,
+        goal: payload.goal,
+        needsWeeklyReport: payload.needsWeeklyReport,
+        needsOfflineConfirmation: payload.needsOfflineConfirmation,
+        acceptanceChecklistItems: payload.acceptanceChecklistItems,
+        recipientOpenIds: uniqueSorted(recipientOpenIds),
+        expectedRecipientOpenIds: uniqueSorted(expectedRecipientOpenIds),
+        recipientOpenIdsMatch:
+          JSON.stringify(uniqueSorted(recipientOpenIds)) ===
+          JSON.stringify(uniqueSorted(expectedRecipientOpenIds)),
+        recipientOpenIdsDeduped:
+          recipientOpenIds.length === uniqueSorted(recipientOpenIds).length,
+      };
+    })
+    .toMatchObject({
+      payloadType: "task_assigned",
+      projectId: fixtures.projectId,
+      projectName: "PW全功能-逾期项目",
+      taskIdMatchesTask: true,
+      taskTitle: title,
+      actorName: "Playwright 管理员",
+      team: "英雄",
+      techGroup: "电控",
+      taskStatus: "TODO",
+      botKind: "notification",
+      stageName: "PW全功能-当前阶段",
+      assigneeNames: "李棋轩",
+      assigneeOpenIds: [fixtures.normalOpenId],
+      taskTechGroups: ["通用", "宣运"],
+      urgency: "MEDIUM",
+      importance: "MEDIUM",
+      dueAtMatchesTask: true,
+      metrics: "PW全功能-直接创建任务指标",
+      goal: "PW全功能-直接创建任务说明",
+      needsWeeklyReport: true,
+      needsOfflineConfirmation: true,
+      acceptanceChecklistItems: ["PW全功能-直接创建任务验收条例"],
+      recipientOpenIdsMatch: true,
+      recipientOpenIdsDeduped: true,
+    });
+  await expectHealthyPage(page);
+});
+
 test("项目参与人可申请新任务并由管理员审批创建", async ({
   page,
   context,
@@ -1911,6 +2244,13 @@ test("项目参与人可申请新任务并由管理员审批创建", async ({
   await expect(page.getByText("PW全功能-任务申请项目")).toBeVisible();
   await page.getByRole("button", { name: "申请新任务" }).click();
   await fillTaskCreationRequestDialog(page, title);
+  const requestDialog = page.getByRole("dialog", { name: "申请新任务" });
+  await requestDialog.getByLabel("需要线下确认").check();
+  await requestDialog.getByLabel("需要定期周报").check();
+  await requestDialog.getByRole("button", { name: "添加自定义条例" }).click();
+  await requestDialog
+    .getByPlaceholder("验收条例 1")
+    .fill("PW全功能-申请创建任务验收条例");
   await page.getByRole("button", { name: "提交任务申请" }).click();
 
   await expect
@@ -1960,7 +2300,12 @@ test("项目参与人可申请新任务并由管理员审批创建", async ({
       const [updatedRequest, outbox] = await Promise.all([
         prisma.taskCreationRequest.findUniqueOrThrow({
           where: { id: request.id },
-          select: { status: true, createdTaskId: true, reviewerOpenId: true },
+          select: {
+            status: true,
+            createdTaskId: true,
+            requesterOpenId: true,
+            reviewerOpenId: true,
+          },
         }),
         prisma.notificationOutbox.findFirst({
           where: {
@@ -1968,29 +2313,115 @@ test("项目参与人可申请新任务并由管理员审批创建", async ({
               startsWith: `progress:task_creation_approved:${request.id}`,
             },
           },
-          select: { id: true },
+          select: { id: true, botKind: true, payload: true },
         }),
       ]);
       const createdTask = updatedRequest.createdTaskId
         ? await prisma.task.findUnique({
             where: { id: updatedRequest.createdTaskId },
-            select: { title: true, status: true },
+            select: {
+              id: true,
+              projectId: true,
+              title: true,
+              status: true,
+              dueAt: true,
+              team: true,
+              techGroup: true,
+              assigneeOpenId: true,
+              assigneeName: true,
+              assignees: { select: { openId: true, name: true } },
+              techGroups: { select: { techGroup: true, sortOrder: true } },
+              stage: { select: { ownerOpenId: true } },
+              project: {
+                select: {
+                  ownerOpenId: true,
+                  ownerName: true,
+                  owners: { select: { openId: true, name: true } },
+                  participants: { select: { openId: true } },
+                },
+              },
+            },
           })
         : null;
+      const payload = outbox ? readProgressOutboxPayload(outbox.payload) : null;
+      const recipientOpenIds = stringArray(payload?.recipientOpenIds);
+      const expectedRecipientOpenIds = createdTask
+        ? uniqueSorted([
+            ...(await collectTaskNotificationRecipients(createdTask)),
+            updatedRequest.requesterOpenId,
+            ...(createdTask.stage?.ownerOpenId ? [createdTask.stage.ownerOpenId] : []),
+          ])
+        : [];
       return {
+        payloadType: payload?.type ?? "",
+        requestId: payload?.requestId ?? "",
         requestStatus: updatedRequest.status,
+        requesterOpenId: updatedRequest.requesterOpenId,
         reviewerOpenId: updatedRequest.reviewerOpenId,
+        taskId: payload?.taskId ?? "",
+        taskIdMatchesTask: !!createdTask && payload?.taskId === createdTask.id,
+        projectId: payload?.projectId ?? "",
+        projectName: payload?.projectName ?? "",
+        taskTitleInPayload: payload?.taskTitle ?? "",
+        reviewerName: payload?.reviewerName ?? "",
+        team: payload?.team ?? "",
+        techGroup: payload?.techGroup ?? "",
+        assigneeOpenIds: uniqueSorted(stringArray(payload?.assigneeOpenIds)),
+        projectOwnerOpenIds: uniqueSorted(
+          stringArray(payload?.projectOwnerOpenIds),
+        ),
         taskTitle: createdTask?.title ?? "",
         taskStatus: createdTask?.status ?? "",
+        dueAtMatchesTask:
+          !!createdTask && payload?.dueAt === createdTask.dueAt.toISOString(),
         hasOutbox: !!outbox,
+        botKind: outbox?.botKind ?? "",
+        recipientOpenIds: uniqueSorted(recipientOpenIds),
+        expectedRecipientOpenIds,
+        recipientOpenIdsMatch:
+          JSON.stringify(uniqueSorted(recipientOpenIds)) ===
+          JSON.stringify(expectedRecipientOpenIds),
+        recipientOpenIdsDeduped:
+          recipientOpenIds.length === uniqueSorted(recipientOpenIds).length,
+        payload,
       };
     })
-    .toEqual({
+    .toMatchObject({
+      payloadType: "task_creation_approved",
+      requestId: request.id,
       requestStatus: "APPROVED",
+      requesterOpenId: fixtures.normalOpenId,
       reviewerOpenId: fixtures.adminOpenId,
+      projectId: fixtures.taskRequestProjectId,
+      projectName: "PW全功能-任务申请项目",
+      taskIdMatchesTask: true,
+      taskTitleInPayload: title,
       taskTitle: title,
+      reviewerName: "Playwright 管理员",
+      team: "英雄",
+      techGroup: "电控",
+      assigneeOpenIds: [fixtures.normalOpenId],
+      projectOwnerOpenIds: [fixtures.adminOpenId],
       taskStatus: "TODO",
+      dueAtMatchesTask: true,
       hasOutbox: true,
+      botKind: "notification",
+      recipientOpenIdsMatch: true,
+      recipientOpenIdsDeduped: true,
+      payload: {
+        projectId: fixtures.taskRequestProjectId,
+        requesterOpenId: fixtures.normalOpenId,
+        stageName: "PW全功能-任务申请阶段",
+        assigneeNames: "李棋轩",
+        taskTechGroups: ["通用", "宣运"],
+        urgency: "MEDIUM",
+        importance: "MEDIUM",
+        metrics: "PW全功能-创建申请指标",
+        goal: "PW全功能-任务创建申请说明",
+        needsWeeklyReport: true,
+        needsOfflineConfirmation: true,
+        acceptanceChecklistItems: ["PW全功能-申请创建任务验收条例"],
+      },
     });
   await expectHealthyPage(page);
 });
@@ -2851,6 +3282,20 @@ function localDayNumber(date: Date): number {
     new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime() /
       (24 * 60 * 60 * 1000),
   );
+}
+
+function readProgressOutboxPayload(rawPayload: string): Record<string, unknown> {
+  const parsed = JSON.parse(rawPayload) as { payload?: Record<string, unknown> };
+  return parsed.payload ?? {};
+}
+
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string");
+}
+
+function uniqueSorted(values: string[]): string[] {
+  return [...new Set(values.filter(Boolean))].sort();
 }
 
 function pngUpload(name: string) {

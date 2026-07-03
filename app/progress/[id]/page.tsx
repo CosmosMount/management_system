@@ -234,6 +234,7 @@ export default async function ProjectDetailPage({ params }: Props) {
       ownerOpenId: stage.ownerOpenId,
       ownerName: stage.ownerName,
       dueAt: stage.dueAt?.toISOString() ?? null,
+      completedAt: stage.completedAt?.toISOString() ?? null,
       extensionCount: stage.extensionCount,
       advanceCount: stageAdvanceCounts.get(stage.id) ?? 0,
       benignExtensionCount: stage.benignExtensionCount,

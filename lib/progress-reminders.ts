@@ -260,6 +260,30 @@ export async function seedDefaultProgressReminderRules() {
   }
 }
 
+export async function runSingleProgressReminderRule({
+  kind,
+  params,
+  recipientConfig,
+  now = new Date(),
+  context,
+}: {
+  kind: ProgressReminderKind;
+  params?: Record<string, unknown>;
+  recipientConfig?: Record<string, unknown>;
+  now?: Date;
+  context?: NotificationContext;
+}): Promise<number> {
+  const definition = definitionByKind.get(kind);
+  if (!definition) throw new Error(`未知进度提醒规则：${kind}`);
+  return runReminderRule(
+    kind,
+    sanitizeParams(definition, params),
+    sanitizeRecipientConfig(recipientConfig),
+    now,
+    context,
+  );
+}
+
 export async function runDueProgressReminderRules({
   force = false,
   now = new Date(),
@@ -599,7 +623,7 @@ async function enqueueWeeklyReportMissingReminders(
   const tasks = await findReminderTasks(
     {
       needsWeeklyReport: true,
-      status: { in: [...ACTIVE_TASK_STATUSES] },
+      status: { in: ["IN_PROGRESS", "PENDING_ACCEPTANCE"] },
     },
     {
       weeklyReports: {

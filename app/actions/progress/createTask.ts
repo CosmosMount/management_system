@@ -84,6 +84,9 @@ export async function createTask(input: CreateTaskInput) {
   if (stageId && !project.stages.some((s) => s.id === stageId)) {
     throw new Error("任务阶段不属于当前项目");
   }
+  const stageName = stageId
+    ? project.stages.find((stage) => stage.id === stageId)?.name ?? "无阶段"
+    : "无阶段";
 
   const dueAt = new Date(parsed.dueAt);
   const taskTechGroups = normalizeTaskTechGroups(parsed.taskTechGroups);
@@ -185,7 +188,20 @@ export async function createTask(input: CreateTaskInput) {
         type: "task_assigned",
         taskId: created.id,
         taskTitle: created.title,
+        projectId: project.id,
         projectName: project.name,
+        actorName: user.name,
+        stageName,
+        assigneeNames: orderedAssignees.map((assignee) => assignee.name).join("、"),
+        taskTechGroups,
+        urgency: created.urgency,
+        importance: created.importance,
+        dueAt: created.dueAt.toISOString(),
+        metrics: created.metrics,
+        goal: created.goal,
+        needsWeeklyReport: created.needsWeeklyReport,
+        needsOfflineConfirmation: created.needsOfflineConfirmation,
+        acceptanceChecklistItems: acceptanceChecklistItems.map((item) => item.content),
         team: created.team,
         techGroup: created.techGroup,
         assigneeOpenIds: orderedAssignees.map((assignee) => assignee.openId),

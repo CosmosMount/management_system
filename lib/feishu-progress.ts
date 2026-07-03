@@ -13,11 +13,29 @@ import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { buildAppUrl, type NotificationContext } from "@/lib/app-origin";
 import { prisma } from "@/lib/prisma";
-import type { TaskStatus, UserRoleType } from "@prisma/client";
+import type { Importance, TaskStatus, Urgency, UserRoleType } from "@prisma/client";
 import { routes } from "@/lib/routes";
-import { taskStatusLabels } from "@/lib/progress-labels";
+import {
+  importanceLabels,
+  taskStatusLabels,
+  urgencyLabels,
+} from "@/lib/progress-labels";
 
 const progressBotKindStorage = new AsyncLocalStorage<FeishuBotKind>();
+
+type TaskNotificationDetails = {
+  stageName?: string | null;
+  assigneeNames?: string;
+  taskTechGroups?: string[];
+  urgency?: Urgency;
+  importance?: Importance;
+  dueAt?: string;
+  metrics?: string;
+  goal?: string;
+  needsWeeklyReport?: boolean;
+  needsOfflineConfirmation?: boolean;
+  acceptanceChecklistItems?: string[];
+};
 
 export type ProgressNotifyPayload =
   | {
@@ -271,12 +289,14 @@ export type ProgressNotifyPayload =
       type: "task_assigned";
       taskId: string;
       taskTitle: string;
+      projectId: string;
       projectName: string;
+      actorName?: string;
       team: string;
       techGroup: string;
       assigneeOpenIds: string[];
       recipientOpenIds?: string[];
-    }
+    } & TaskNotificationDetails
   | {
       type: "task_updated";
       taskId: string;
@@ -406,7 +426,7 @@ export type ProgressNotifyPayload =
       techGroup: string;
       projectOwnerOpenIds: string[];
       recipientOpenIds?: string[];
-    }
+    } & TaskNotificationDetails
   | {
       type: "task_creation_rejected";
       requestId: string;
@@ -1012,7 +1032,14 @@ export async function sendProgressNotification(
     case "task_assigned": {
       const card = buildCard(
         "新任务指派",
-        `**任务**：${payload.taskTitle}\n**项目**：${payload.projectName}`,
+        [
+          `**任务**：${payload.taskTitle}`,
+          `**项目**：${payload.projectName}`,
+          payload.actorName ? `**创建人**：${payload.actorName}` : null,
+          ...formatTaskNotificationDetailLines(payload),
+        ]
+          .filter(Boolean)
+          .join("\n"),
         buildAppUrl(`${routes.progress.task(payload.taskId)}`, appOrigin),
       );
       await notifyOpenIds(payload.recipientOpenIds ?? payload.assigneeOpenIds, card);
@@ -1177,7 +1204,14 @@ export async function sendProgressNotification(
     case "task_creation_approved": {
       const card = buildCard(
         "任务申请已通过",
-        `**项目**：${payload.projectName}\n**任务**：${payload.taskTitle}\n**审核人**：${payload.reviewerName}`,
+        [
+          `**项目**：${payload.projectName}`,
+          `**任务**：${payload.taskTitle}`,
+          `**审核人**：${payload.reviewerName}`,
+          ...formatTaskNotificationDetailLines(payload),
+        ]
+          .filter(Boolean)
+          .join("\n"),
         buildAppUrl(`${routes.progress.task(payload.taskId)}`, appOrigin),
         "green",
       );
@@ -1372,6 +1406,65 @@ function formatChangeList(changes: string[]): string {
   return `**变更**：\n${changes.map((change) => `- ${change}`).join("\n")}`;
 }
 
+function formatTaskNotificationDetailLines(
+  details: TaskNotificationDetails,
+): string[] {
+  const checklistSummary = formatAcceptanceChecklistSummary(
+    details.acceptanceChecklistItems,
+  );
+  const lines = [
+    details.stageName !== undefined
+      ? `**阶段**：${details.stageName || "无阶段"}`
+      : null,
+    details.assigneeNames ? `**负责人**：${details.assigneeNames}` : null,
+    details.taskTechGroups
+      ? `**任务技术组**：${
+          details.taskTechGroups.length > 0
+            ? details.taskTechGroups.join("、")
+            : "通用"
+        }`
+      : null,
+    details.urgency || details.importance
+      ? `**紧急/重要**：${
+          details.urgency ? urgencyLabels[details.urgency] : "未设置"
+        } / ${details.importance ? importanceLabels[details.importance] : "未设置"}`
+      : null,
+    details.dueAt ? `**DDL**：${formatNotificationDateTime(details.dueAt)}` : null,
+    typeof details.needsWeeklyReport === "boolean"
+      ? `**定期周报**：${
+          details.needsWeeklyReport ? "需要（任务开始后生效）" : "不需要"
+        }`
+      : null,
+    typeof details.needsOfflineConfirmation === "boolean"
+      ? `**线下确认**：${details.needsOfflineConfirmation ? "需要" : "不需要"}`
+      : null,
+    details.metrics
+      ? `**指标**：${compactCardText(details.metrics)}`
+      : null,
+    details.goal ? `**详细说明**：${compactCardText(details.goal)}` : null,
+    checklistSummary,
+  ];
+  return lines.filter((line): line is string => !!line);
+}
+
+function compactCardText(value: string, maxLength = 260): string {
+  const normalized = value.trim().replace(/\s+/g, " ");
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength)}...`;
+}
+
+function formatAcceptanceChecklistSummary(items?: string[]): string | null {
+  const normalized = items?.map((item) => item.trim()).filter(Boolean) ?? [];
+  if (normalized.length === 0) return null;
+  const visible = normalized
+    .slice(0, 3)
+    .map((item, index) => `${index + 1}. ${compactCardText(item, 80)}`);
+  if (normalized.length > visible.length) {
+    visible.push(`...还有 ${normalized.length - visible.length} 条`);
+  }
+  return `**验收清单**：\n${visible.join("\n")}`;
+}
+
 function formatBulkTaskLines(
   tasks: Array<{
     title: string;
@@ -1458,7 +1551,7 @@ export async function runProgressOverdueCheck() {
 export async function runWeeklyReportReminders() {
   const activeTasks = await prisma.task.findMany({
     where: {
-      status: { in: ["TODO", "IN_PROGRESS", "PENDING_ACCEPTANCE"] },
+      status: { in: ["IN_PROGRESS", "PENDING_ACCEPTANCE"] },
       needsWeeklyReport: true,
       deletedAt: null,
       project: { status: "IN_PROGRESS" },

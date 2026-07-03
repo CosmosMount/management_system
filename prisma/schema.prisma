@@ -350,6 +350,7 @@ model ProjectStage {
   ownerOpenId         String           @default("")
   ownerName           String           @default("")
   dueAt               DateTime?
+  completedAt         DateTime?
   extensionCount      Int              @default(0)
   benignExtensionCount Int             @default(0)
   currentSubmissionId String?

@@ -148,6 +148,7 @@ export type StageView = {
   ownerOpenId: string;
   ownerName: string;
   dueAt: string | null;
+  completedAt: string | null;
   extensionCount: number;
   advanceCount: number;
   benignExtensionCount: number;
@@ -1166,8 +1167,15 @@ function StageTimeline({
                   {isCurrent && <Circle className="h-2 w-2 fill-primary text-primary" />}
                   {reviewState === "REJECTED"
                     ? "需修改"
-                    : stageStatusLabels[stage.status]}
+                    : stage.status === "COMPLETED" && stage.completedAt
+                      ? "已完成"
+                      : stageStatusLabels[stage.status]}
                 </span>
+                {stage.status === "COMPLETED" && stage.completedAt && (
+                  <span className="max-w-full truncate text-[11px] text-muted-foreground">
+                    完成于 {formatDateTime(stage.completedAt)}
+                  </span>
+                )}
                 {stage.riskNote && (
                   <Badge variant="destructive" className="px-1.5 py-0 text-[10px]">
                     风险
@@ -3381,7 +3389,11 @@ function StageBadge({ stage }: { stage: StageView }) {
     return <Badge variant="secondary">待审批</Badge>;
   }
   if (stage.status === "COMPLETED") {
-    return <Badge className="bg-green-600 text-white">已完成</Badge>;
+    return (
+      <Badge className="bg-green-600 text-white">
+        {stage.completedAt ? `完成于 ${formatDateTime(stage.completedAt)}` : "已完成"}
+      </Badge>
+    );
   }
   return <Badge variant={stage.status === "IN_PROGRESS" ? "default" : "outline"}>{stageStatusLabels[stage.status]}</Badge>;
 }

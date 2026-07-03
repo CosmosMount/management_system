@@ -124,6 +124,7 @@ export async function rollbackProjectStage(input: {
           status: "IN_PROGRESS",
           currentSubmissionId: null,
           evidenceUrl: "",
+          completedAt: null,
         },
       });
       if (lockedStage.count !== 1) {
@@ -141,6 +142,7 @@ export async function rollbackProjectStage(input: {
           status: "IN_PROGRESS",
           currentSubmissionId: null,
           evidenceUrl: "",
+          completedAt: null,
         },
       });
       if (lockedTarget.count !== 1) {
@@ -160,6 +162,7 @@ export async function rollbackProjectStage(input: {
           status: "NOT_STARTED",
           currentSubmissionId: null,
           evidenceUrl: "",
+          completedAt: null,
         },
       });
       if (lockedAffectedStage.count !== 1) {

@@ -151,6 +151,10 @@ export function TaskActionsPanel({
     needsWeeklyReport && (canSubmitWeeklyReport ?? isAssignee);
   const canSyncTaskRisk = canSyncRisk ?? isAssignee;
   const isTerminalTask = isTerminalTaskStatus(status);
+  const isWeeklyReportActive =
+    status === "IN_PROGRESS" || status === "PENDING_ACCEPTANCE";
+  const canShowWeeklyReport =
+    canSubmitTaskWeeklyReport && isWeeklyReportActive && !isTerminalTask;
   const canMutateRisk = canSyncTaskRisk && !isTerminalTask;
   const activeRisks = riskRecords.filter((risk) => risk.status === "ACTIVE");
   const resolvedRisks = riskRecords.filter((risk) => risk.status === "RESOLVED");
@@ -445,7 +449,7 @@ export function TaskActionsPanel({
         </Card>
       )}
 
-      {canSubmitTaskWeeklyReport && !isTerminalTask && (
+      {canShowWeeklyReport && (
         <Card>
           <CardHeader>
             <CardTitle>

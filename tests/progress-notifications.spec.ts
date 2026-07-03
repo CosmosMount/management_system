@@ -1,10 +1,12 @@
 import { expect, test } from "@playwright/test";
 import {
+  runWeeklyReportReminders,
   sendProgressNotification,
   type ProgressNotifyPayload,
 } from "../lib/feishu-progress";
 import { sendOrderNotification } from "../lib/feishu";
 import { runProcurementStaleReminders } from "../lib/procurement-reminders";
+import { runSingleProgressReminderRule } from "../lib/progress-reminders";
 import {
   drainNotificationOutbox,
   enqueueOrderNotification,
@@ -325,6 +327,291 @@ test("批量任务申请通知只入队一次并发送汇总内容", async () =>
   expect(captured[0]?.cardText).toContain("PW通知-批量申请项目");
   expect(captured[0]?.cardText).toContain("申请任务 A");
   expect(captured[0]?.cardText).toContain("申请人");
+});
+
+test("新任务指派通知包含任务完整摘要", async () => {
+  const eventKey = `playwright:progress-notify:task_assigned:${Date.now()}`;
+  const payload: ProgressNotifyPayload = {
+    type: "task_assigned",
+    taskId: "pw-task-assigned",
+    taskTitle: "PW通知-完整任务指派",
+    projectId: "pw-task-assigned-project",
+    projectName: "PW通知-任务项目",
+    actorName: "项目管理员",
+    stageName: "联调阶段",
+    assigneeNames: "李棋轩、张宇山",
+    taskTechGroups: ["机械", "电控"],
+    urgency: "HIGH",
+    importance: "MEDIUM",
+    dueAt: "2026-07-12T10:00:00.000Z",
+    metrics: "完成文档评审并输出结论",
+    goal: "补全测试方案文档",
+    needsWeeklyReport: true,
+    needsOfflineConfirmation: true,
+    acceptanceChecklistItems: ["文档链接可访问", "指标说明完整"],
+    team: "工程",
+    techGroup: "宣运",
+    assigneeOpenIds: ["ou_assignee"],
+    recipientOpenIds: ["ou_assignee"],
+  };
+
+  const captured = await enqueueAndDrainProgressNotification(eventKey, payload);
+
+  expect(captured).toHaveLength(1);
+  expect(captured[0]?.title).toBe("新任务指派");
+  expect(captured[0]?.cardText).toContain("PW通知-完整任务指派");
+  expect(captured[0]?.cardText).toContain("创建人");
+  expect(captured[0]?.cardText).toContain("阶段");
+  expect(captured[0]?.cardText).toContain("负责人");
+  expect(captured[0]?.cardText).toContain("任务技术组");
+  expect(captured[0]?.cardText).toContain("紧急/重要");
+  expect(captured[0]?.cardText).toContain("DDL");
+  expect(captured[0]?.cardText).toContain("定期周报");
+  expect(captured[0]?.cardText).toContain("任务开始后生效");
+  expect(captured[0]?.cardText).toContain("线下确认");
+  expect(captured[0]?.cardText).toContain("指标");
+  expect(captured[0]?.cardText).toContain("详细说明");
+  expect(captured[0]?.cardText).toContain("验收清单");
+});
+
+test("任务申请通过通知包含任务完整摘要且使用通知机器人", async () => {
+  const eventKey = `playwright:progress-notify:task_creation_approved:${Date.now()}`;
+  const payload: ProgressNotifyPayload = {
+    type: "task_creation_approved",
+    requestId: "pw-task-request-approved",
+    taskId: "pw-task-created-from-request",
+    projectId: "pw-project-task-request",
+    projectName: "PW通知-任务申请项目",
+    taskTitle: "PW通知-申请通过任务",
+    reviewerName: "项目管理员",
+    requesterOpenId: "ou_requester",
+    stageName: "研发阶段",
+    assigneeNames: "李棋轩",
+    taskTechGroups: ["宣运"],
+    urgency: "MEDIUM",
+    importance: "HIGH",
+    dueAt: "2026-07-13T10:00:00.000Z",
+    metrics: "完成样件验收",
+    goal: "对样件进行验收并记录问题",
+    needsWeeklyReport: false,
+    needsOfflineConfirmation: false,
+    acceptanceChecklistItems: ["验收记录完整"],
+    assigneeOpenIds: ["ou_assignee"],
+    team: "工程",
+    techGroup: "宣运",
+    projectOwnerOpenIds: ["ou_owner"],
+    recipientOpenIds: ["ou_requester", "ou_assignee"],
+  };
+
+  const captured = await enqueueAndDrainProgressNotification(eventKey, payload);
+  const stored = await prisma.notificationOutbox.findUniqueOrThrow({
+    where: { eventKey },
+    select: { botKind: true },
+  });
+
+  expect(stored.botKind).toBe("notification");
+  expect(captured).toHaveLength(2);
+  expect(captured.every((message) => message.title === "任务申请已通过")).toBe(
+    true,
+  );
+  expect(captured[0]?.cardText).toContain("审核人");
+  expect(captured[0]?.cardText).toContain("阶段");
+  expect(captured[0]?.cardText).toContain("负责人");
+  expect(captured[0]?.cardText).toContain("任务技术组");
+  expect(captured[0]?.cardText).toContain("紧急/重要");
+  expect(captured[0]?.cardText).toContain("DDL");
+  expect(captured[0]?.cardText).toContain("定期周报");
+  expect(captured[0]?.cardText).toContain("不需要");
+  expect(captured[0]?.cardText).toContain("验收清单");
+});
+
+test("周报填写提醒排除未开始任务", async () => {
+  const suffix = Date.now();
+  const assigneeOpenId = `ou_pw_weekly_${suffix}`;
+  const inProgressTitle = `PW通知-进行中周报-${suffix}`;
+  const todoTitle = `PW通知-未开始周报-${suffix}`;
+
+  await prisma.user.create({
+    data: {
+      openId: assigneeOpenId,
+      unionId: `on_pw_weekly_${suffix}`,
+      name: "李棋轩",
+    },
+  });
+  const project = await prisma.project.create({
+    data: {
+      name: `PW通知-周报提醒项目-${suffix}`,
+      description: "验证周报提醒不催未开始任务",
+      team: "工程",
+      techGroup: "宣运",
+      status: "IN_PROGRESS",
+      ownerOpenId: assigneeOpenId,
+      ownerName: "李棋轩",
+      owners: {
+        create: [{ openId: assigneeOpenId, name: "李棋轩", sortOrder: 0 }],
+      },
+    },
+  });
+  await prisma.task.createMany({
+    data: [
+      {
+        projectId: project.id,
+        title: todoTitle,
+        goal: "未开始任务不需要交周报",
+        urgency: "LOW",
+        importance: "MEDIUM",
+        assigneeOpenId,
+        assigneeName: "李棋轩",
+        team: "工程",
+        techGroup: "宣运",
+        dueAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        status: "TODO",
+        needsWeeklyReport: true,
+      },
+      {
+        projectId: project.id,
+        title: inProgressTitle,
+        goal: "进行中任务需要交周报",
+        urgency: "LOW",
+        importance: "MEDIUM",
+        assigneeOpenId,
+        assigneeName: "李棋轩",
+        team: "工程",
+        techGroup: "宣运",
+        dueAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        status: "IN_PROGRESS",
+        needsWeeklyReport: true,
+      },
+    ],
+  });
+  const tasks = await prisma.task.findMany({
+    where: { projectId: project.id },
+    select: { id: true, title: true },
+  });
+  await prisma.taskAssignee.createMany({
+    data: tasks.map((task) => ({
+      taskId: task.id,
+      openId: assigneeOpenId,
+      name: "李棋轩",
+      sortOrder: 0,
+    })),
+  });
+
+  const capturedMessages: CapturedFeishuMessage[] = [];
+  const restoreFetch = mockFeishuFetch(capturedMessages);
+  try {
+    await runWeeklyReportReminders();
+  } finally {
+    restoreFetch();
+  }
+
+  const cardText = capturedMessages.map((message) => message.cardText).join("\n");
+  expect(cardText).toContain(inProgressTitle);
+  expect(cardText).not.toContain(todoTitle);
+});
+
+test("规则化周报未交提醒排除未开始任务", async () => {
+  const suffix = Date.now();
+  const assigneeOpenId = `ou_pw_rule_weekly_${suffix}`;
+  const inProgressTitle = `PW通知-规则进行中周报-${suffix}`;
+  const todoTitle = `PW通知-规则未开始周报-${suffix}`;
+
+  await prisma.notificationOutbox.deleteMany();
+  await prisma.user.create({
+    data: {
+      openId: assigneeOpenId,
+      unionId: `on_pw_rule_weekly_${suffix}`,
+      name: "李棋轩",
+    },
+  });
+  const project = await prisma.project.create({
+    data: {
+      name: `PW通知-规则周报项目-${suffix}`,
+      description: "验证规则化周报提醒不催未开始任务",
+      team: "工程",
+      techGroup: "宣运",
+      status: "IN_PROGRESS",
+      ownerOpenId: assigneeOpenId,
+      ownerName: "李棋轩",
+      owners: {
+        create: [{ openId: assigneeOpenId, name: "李棋轩", sortOrder: 0 }],
+      },
+    },
+  });
+  await prisma.task.createMany({
+    data: [
+      {
+        projectId: project.id,
+        title: todoTitle,
+        goal: "未开始任务不应触发规则化周报提醒",
+        urgency: "LOW",
+        importance: "MEDIUM",
+        assigneeOpenId,
+        assigneeName: "李棋轩",
+        team: "工程",
+        techGroup: "宣运",
+        dueAt: new Date("2026-07-10T10:00:00.000Z"),
+        status: "TODO",
+        needsWeeklyReport: true,
+      },
+      {
+        projectId: project.id,
+        title: inProgressTitle,
+        goal: "进行中任务应触发规则化周报提醒",
+        urgency: "LOW",
+        importance: "MEDIUM",
+        assigneeOpenId,
+        assigneeName: "李棋轩",
+        team: "工程",
+        techGroup: "宣运",
+        dueAt: new Date("2026-07-10T10:00:00.000Z"),
+        status: "IN_PROGRESS",
+        needsWeeklyReport: true,
+      },
+    ],
+  });
+  const tasks = await prisma.task.findMany({
+    where: { projectId: project.id },
+    select: { id: true },
+  });
+  await prisma.taskAssignee.createMany({
+    data: tasks.map((task) => ({
+      taskId: task.id,
+      openId: assigneeOpenId,
+      name: "李棋轩",
+      sortOrder: 0,
+    })),
+  });
+
+  const queued = await runSingleProgressReminderRule({
+    kind: "WEEKLY_REPORT_MISSING",
+    params: { weekday: 5, cooldownHours: 24 },
+    recipientConfig: {
+      assignees: true,
+      projectOwners: false,
+      projectParticipants: false,
+      stageOwners: false,
+      managers: false,
+    },
+    now: new Date("2026-07-03T12:00:00+08:00"),
+    context: { appOrigin: "http://127.0.0.1:3002" },
+  });
+
+  const [inProgressOutbox, todoOutbox] = await Promise.all([
+    prisma.notificationOutbox.findFirst({
+      where: { type: "progress_reminder", payload: { contains: inProgressTitle } },
+      select: { botKind: true, payload: true },
+    }),
+    prisma.notificationOutbox.findFirst({
+      where: { type: "progress_reminder", payload: { contains: todoTitle } },
+      select: { id: true },
+    }),
+  ]);
+
+  expect(queued).toBeGreaterThanOrEqual(1);
+  expect(inProgressOutbox?.botKind).toBe("notification");
+  expect(inProgressOutbox?.payload).toContain("周报未交提醒");
+  expect(todoOutbox).toBeNull();
 });
 
 test("项目阶段风险通知使用普通通知机器人并发送明确内容", async () => {
