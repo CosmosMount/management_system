@@ -300,6 +300,11 @@ export const riskSyncSchema = z.object({
   content: z.string().trim().min(1, "请填写风险说明").max(1000),
 });
 
+export const projectStageRiskSyncSchema = z.object({
+  stageId: z.string().min(1),
+  content: z.string().trim().min(1, "请填写风险说明").max(1000),
+});
+
 export const taskRiskResolveSchema = z.object({
   riskId: z.string().min(1),
   resolveNote: z
@@ -307,6 +312,15 @@ export const taskRiskResolveSchema = z.object({
     .trim()
     .min(1, "请填写风险解除说明")
     .max(1000, "风险解除说明不能超过 1000 个字符"),
+});
+
+export const projectStageRiskResolveSchema = z.object({
+  riskId: z.string().min(1),
+  resolveNote: z
+    .string()
+    .trim()
+    .min(1, "请填写风险取消说明")
+    .max(1000, "风险取消说明不能超过 1000 个字符"),
 });
 
 export const taskDdlChangeRequestSchema = z.object({

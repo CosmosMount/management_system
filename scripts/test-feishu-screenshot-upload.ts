@@ -1,9 +1,6 @@
 import "dotenv/config";
 import { prisma } from "../lib/prisma";
-import {
-  uploadFeishuMessageFile,
-  uploadFeishuMessageImage,
-} from "../lib/feishu-im-upload";
+import { uploadFeishuMessageImage } from "../lib/feishu-im-upload";
 
 async function main() {
   const order = await prisma.purchaseOrder.findFirst({

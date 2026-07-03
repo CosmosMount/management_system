@@ -27,6 +27,8 @@ import type {
   ProjectDdlChangeRequestStatus,
   ProjectDdlChangeRequestType,
   ProjectStatus,
+  TaskRiskSource,
+  TaskRiskStatus,
   StageStatus,
   TaskCreationRequestStatus,
   TaskStatus,
@@ -49,6 +51,10 @@ import { rollbackProjectStage } from "@/app/actions/progress/rollbackProjectStag
 import { updateProjectStatus } from "@/app/actions/progress/updateProjectStatus";
 import { reviewProjectEstablishment } from "@/app/actions/progress/createProject";
 import { updateTaskStatus } from "@/app/actions/progress/updateTask";
+import {
+  resolveProjectStageRisk,
+  syncProjectStageRisk,
+} from "@/app/actions/progress/projectStageRisks";
 import { BackLink } from "@/components/back-link";
 import { ReasonConfirmDialog } from "@/components/reason-confirm-dialog";
 import { ProjectForm } from "@/components/progress/project-form";
@@ -149,6 +155,10 @@ export type StageView = {
   canSubmit: boolean;
   canRequestExtension: boolean;
   canRequestDueDateChange: boolean;
+  canSyncRisk: boolean;
+  riskNote: string;
+  riskUpdatedAt: string | null;
+  riskRecords: RiskRecordView[];
   submissions: StageSubmissionView[];
 };
 
@@ -188,12 +198,25 @@ export type TaskView = {
   metrics: string;
   dueAt: string;
   riskNote: string;
+  riskRecords: RiskRecordView[];
   submissionsCount: number;
   pendingDeletionRequest: {
     id: string;
     requesterName: string;
     createdAt: string;
   } | null;
+};
+
+export type RiskRecordView = {
+  id: string;
+  content: string;
+  source: TaskRiskSource;
+  status: TaskRiskStatus;
+  createdByName: string;
+  resolvedByName: string;
+  resolveNote: string;
+  createdAt: string;
+  resolvedAt: string | null;
 };
 
 export type TaskCreationRequestView = {
@@ -507,6 +530,12 @@ export function ProjectDetailWorkspace({
               )}
             </CardContent>
           </Card>
+
+          <ProjectRiskOverview
+            stages={project.stages}
+            tasks={project.tasks}
+            onSelectStage={selectStage}
+          />
 
           {selectedStage ? (
             <>
@@ -1139,6 +1168,11 @@ function StageTimeline({
                     ? "需修改"
                     : stageStatusLabels[stage.status]}
                 </span>
+                {stage.riskNote && (
+                  <Badge variant="destructive" className="px-1.5 py-0 text-[10px]">
+                    风险
+                  </Badge>
+                )}
                 <span className="max-w-full truncate text-[11px] text-muted-foreground">
                   DDL {stage.dueAt ? formatDate(stage.dueAt) : "未设置"}
                 </span>
@@ -1166,6 +1200,222 @@ function StageTimeline({
           );
         })}
       </ol>
+    </div>
+  );
+}
+
+function ProjectRiskOverview({
+  stages,
+  tasks,
+  onSelectStage,
+}: {
+  stages: StageView[];
+  tasks: TaskView[];
+  onSelectStage: (stageId: string) => void;
+}) {
+  const activeStageRisks = stages.flatMap((stage) =>
+    stage.riskRecords
+      .filter((risk) => risk.status === "ACTIVE")
+      .map((risk) => ({ risk, stage })),
+  );
+  const resolvedStageRisks = stages.flatMap((stage) =>
+    stage.riskRecords
+      .filter((risk) => risk.status === "RESOLVED")
+      .map((risk) => ({ risk, stage })),
+  );
+  const activeTaskRisks = tasks.flatMap((task) =>
+    task.riskRecords
+      .filter((risk) => risk.status === "ACTIVE")
+      .map((risk) => ({ risk, task })),
+  );
+  const resolvedTaskRisks = tasks.flatMap((task) =>
+    task.riskRecords
+      .filter((risk) => risk.status === "RESOLVED")
+      .map((risk) => ({ risk, task })),
+  );
+  const activeCount = activeStageRisks.length + activeTaskRisks.length;
+  const resolvedCount = resolvedStageRisks.length + resolvedTaskRisks.length;
+
+  return (
+    <Card data-testid="project-risk-overview">
+      <CardHeader className="pb-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <CardTitle>项目风险总览</CardTitle>
+          <Badge variant={activeCount > 0 ? "destructive" : "outline"}>
+            未解决 {activeCount}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {activeCount === 0 ? (
+          <div className="rounded-md border border-dashed px-4 py-6 text-sm text-muted-foreground">
+            当前项目暂无未解决风险。
+          </div>
+        ) : (
+          <div className="grid gap-4 lg:grid-cols-2">
+            <RiskGroup title="项目阶段风险" count={activeStageRisks.length}>
+              {activeStageRisks.length === 0 ? (
+                <RiskEmptyText>暂无未解决阶段风险。</RiskEmptyText>
+              ) : (
+                activeStageRisks.map(({ risk, stage }) => (
+                  <StageRiskSummaryRow
+                    key={risk.id}
+                    risk={risk}
+                    stage={stage}
+                    onSelectStage={onSelectStage}
+                  />
+                ))
+              )}
+            </RiskGroup>
+            <RiskGroup title="任务风险" count={activeTaskRisks.length}>
+              {activeTaskRisks.length === 0 ? (
+                <RiskEmptyText>暂无未解决任务风险。</RiskEmptyText>
+              ) : (
+                activeTaskRisks.map(({ risk, task }) => (
+                  <TaskRiskSummaryRow key={risk.id} risk={risk} task={task} />
+                ))
+              )}
+            </RiskGroup>
+          </div>
+        )}
+
+        {resolvedCount > 0 && (
+          <details className="border-t pt-3">
+            <summary className="cursor-pointer text-sm font-medium">
+              已取消/已解除风险历史（{resolvedCount}）
+            </summary>
+            <div className="mt-3 grid gap-4 lg:grid-cols-2">
+              <RiskGroup title="项目阶段风险" count={resolvedStageRisks.length}>
+                {resolvedStageRisks.map(({ risk, stage }) => (
+                  <StageRiskSummaryRow
+                    key={risk.id}
+                    risk={risk}
+                    stage={stage}
+                    onSelectStage={onSelectStage}
+                    resolved
+                  />
+                ))}
+              </RiskGroup>
+              <RiskGroup title="任务风险" count={resolvedTaskRisks.length}>
+                {resolvedTaskRisks.map(({ risk, task }) => (
+                  <TaskRiskSummaryRow
+                    key={risk.id}
+                    risk={risk}
+                    task={task}
+                    resolved
+                  />
+                ))}
+              </RiskGroup>
+            </div>
+          </details>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function RiskGroup({
+  title,
+  count,
+  children,
+}: {
+  title: string;
+  count: number;
+  children: ReactNode;
+}) {
+  return (
+    <section className="min-w-0 space-y-2">
+      <div className="flex items-center gap-2">
+        <h3 className="text-sm font-medium">{title}</h3>
+        <Badge variant="outline">{count}</Badge>
+      </div>
+      <div className="space-y-2">{children}</div>
+    </section>
+  );
+}
+
+function RiskEmptyText({ children }: { children: ReactNode }) {
+  return (
+    <p className="rounded-md border border-dashed px-3 py-4 text-sm text-muted-foreground">
+      {children}
+    </p>
+  );
+}
+
+function StageRiskSummaryRow({
+  risk,
+  stage,
+  onSelectStage,
+  resolved = false,
+}: {
+  risk: RiskRecordView;
+  stage: StageView;
+  onSelectStage: (stageId: string) => void;
+  resolved?: boolean;
+}) {
+  return (
+    <div className="rounded-md border p-3 text-sm">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <button
+          type="button"
+          className="min-w-0 text-left font-medium text-primary hover:underline"
+          onClick={() => onSelectStage(stage.id)}
+        >
+          阶段：{stage.name}
+        </button>
+        <Badge variant={resolved ? "outline" : "destructive"}>
+          {resolved ? "已取消" : "风险"}
+        </Badge>
+      </div>
+      <p className="mt-2 whitespace-pre-wrap text-muted-foreground">{risk.content}</p>
+      <p className="mt-2 text-xs text-muted-foreground">
+        {resolved
+          ? `${risk.resolvedByName || "未知"} · ${
+              risk.resolvedAt ? formatDateTime(risk.resolvedAt) : "未记录时间"
+            }${risk.resolveNote ? ` · ${risk.resolveNote}` : ""}`
+          : `${formatRiskSource(risk.source)} · ${risk.createdByName} · ${formatDateTime(
+              risk.createdAt,
+            )}`}
+      </p>
+    </div>
+  );
+}
+
+function TaskRiskSummaryRow({
+  risk,
+  task,
+  resolved = false,
+}: {
+  risk: RiskRecordView;
+  task: TaskView;
+  resolved?: boolean;
+}) {
+  return (
+    <div className="rounded-md border p-3 text-sm">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <Link
+          href={routes.progress.task(task.id)}
+          className="min-w-0 font-medium text-primary hover:underline"
+        >
+          任务：{task.title}
+        </Link>
+        <Badge variant={resolved ? "outline" : "destructive"}>
+          {resolved ? "已解除" : "风险"}
+        </Badge>
+      </div>
+      <p className="mt-1 text-xs text-muted-foreground">
+        所属阶段：{task.stageName ?? "无阶段"}
+      </p>
+      <p className="mt-2 whitespace-pre-wrap text-muted-foreground">{risk.content}</p>
+      <p className="mt-2 text-xs text-muted-foreground">
+        {resolved
+          ? `${risk.resolvedByName || "未知"} · ${
+              risk.resolvedAt ? formatDateTime(risk.resolvedAt) : "未记录时间"
+            }${risk.resolveNote ? ` · ${risk.resolveNote}` : ""}`
+          : `${formatRiskSource(risk.source)} · ${risk.createdByName} · ${formatDateTime(
+              risk.createdAt,
+            )}`}
+      </p>
     </div>
   );
 }
@@ -1275,6 +1525,7 @@ function StageDetailPanel({
             </CardTitle>
             <div className="mt-2 flex flex-wrap gap-2">
               <StageBadge stage={stage} />
+              {stage.riskNote && <Badge variant="destructive">风险</Badge>}
               <Badge variant="outline">负责人 {stage.ownerName || "未设置"}</Badge>
               <Badge variant="outline">
                 <CalendarClock className="h-3 w-3" />
@@ -1320,6 +1571,8 @@ function StageDetailPanel({
         {pendingDdlRequests.length > 0 && (
           <PendingDdlChangeRequestPanel requests={pendingDdlRequests} />
         )}
+
+        <StageRiskPanel stage={stage} projectStatus={projectStatus} />
 
         <section>
           <h3 className="text-sm font-medium">阶段材料</h3>
@@ -1471,6 +1724,165 @@ function StageDetailPanel({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function StageRiskPanel({
+  stage,
+  projectStatus,
+}: {
+  stage: StageView;
+  projectStatus: ProjectStatus;
+}) {
+  const router = useRouter();
+  const [loadingRiskId, setLoadingRiskId] = useState<string | null>(null);
+  const [riskNote, setRiskNote] = useState("");
+  const [riskResolveNotes, setRiskResolveNotes] = useState<Record<string, string>>({});
+  const activeRisks = stage.riskRecords.filter((risk) => risk.status === "ACTIVE");
+  const resolvedRisks = stage.riskRecords.filter((risk) => risk.status === "RESOLVED");
+  const canCreateRisk =
+    stage.canSyncRisk &&
+    (projectStatus === "NOT_STARTED" || projectStatus === "IN_PROGRESS") &&
+    stage.status !== "COMPLETED";
+  const canResolveRisk =
+    stage.canSyncRisk &&
+    (projectStatus === "NOT_STARTED" || projectStatus === "IN_PROGRESS");
+
+  async function handleRiskSync() {
+    if (!riskNote.trim()) {
+      toast.error("请填写风险说明");
+      return;
+    }
+    setLoadingRiskId("new");
+    try {
+      await syncProjectStageRisk({
+        stageId: stage.id,
+        content: riskNote.trim(),
+      });
+      toast.success("阶段风险已同步");
+      setRiskNote("");
+      router.refresh();
+    } catch (err) {
+      toast.error(getActionErrorMessage(err, "同步阶段风险失败"));
+    } finally {
+      setLoadingRiskId(null);
+    }
+  }
+
+  async function handleRiskResolve(riskId: string) {
+    const resolveNote = riskResolveNotes[riskId]?.trim();
+    if (!resolveNote) {
+      toast.error("请填写风险取消说明");
+      return;
+    }
+    setLoadingRiskId(riskId);
+    try {
+      await resolveProjectStageRisk({ riskId, resolveNote });
+      toast.success("阶段风险已取消");
+      setRiskResolveNotes((current) => ({ ...current, [riskId]: "" }));
+      router.refresh();
+    } catch (err) {
+      toast.error(getActionErrorMessage(err, "取消阶段风险失败"));
+    } finally {
+      setLoadingRiskId(null);
+    }
+  }
+
+  if (!canCreateRisk && activeRisks.length === 0 && resolvedRisks.length === 0) {
+    return null;
+  }
+
+  return (
+    <section className="rounded-md border bg-muted/10 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-medium">阶段风险</h3>
+        {stage.riskNote && <Badge variant="destructive">当前有风险</Badge>}
+      </div>
+
+      <div className="mt-3 space-y-4">
+        {activeRisks.length > 0 && (
+          <div className="space-y-3">
+            <p className="text-sm font-medium">当前未取消风险</p>
+            {activeRisks.map((risk) => (
+              <div
+                key={risk.id}
+                className="space-y-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm"
+              >
+                <p className="whitespace-pre-wrap text-destructive">
+                  {risk.content}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {formatRiskSource(risk.source)} · {risk.createdByName} ·{" "}
+                  {formatDateTime(risk.createdAt)}
+                </p>
+                {canResolveRisk && (
+                  <div className="space-y-2 border-t pt-2">
+                    <Input
+                      placeholder="风险取消说明"
+                      value={riskResolveNotes[risk.id] ?? ""}
+                      onChange={(event) =>
+                        setRiskResolveNotes((current) => ({
+                          ...current,
+                          [risk.id]: event.target.value,
+                        }))
+                      }
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={loadingRiskId === risk.id}
+                      onClick={() => handleRiskResolve(risk.id)}
+                    >
+                      取消风险
+                    </Button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {canCreateRisk && (
+          <div className="grid gap-3">
+            <Input
+              placeholder="说明阶段风险、阻塞或需要组长/项管介入的问题"
+              value={riskNote}
+              onChange={(event) => setRiskNote(event.target.value)}
+            />
+            <Button
+              type="button"
+              className="w-fit"
+              variant="destructive"
+              disabled={loadingRiskId === "new"}
+              onClick={handleRiskSync}
+            >
+              同步阶段风险
+            </Button>
+          </div>
+        )}
+
+        {resolvedRisks.length > 0 && (
+          <details className="space-y-2 border-t pt-3">
+            <summary className="cursor-pointer text-sm font-medium">
+              已取消风险（{resolvedRisks.length}）
+            </summary>
+            <div className="mt-2 space-y-2">
+              {resolvedRisks.map((risk) => (
+                <div key={risk.id} className="rounded-lg border p-3 text-sm">
+                  <p className="whitespace-pre-wrap">{risk.content}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {risk.resolvedByName || "未知"} ·{" "}
+                    {risk.resolvedAt ? formatDateTime(risk.resolvedAt) : "未记录时间"}
+                    {risk.resolveNote ? ` · ${risk.resolveNote}` : ""}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </details>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -2871,6 +3283,8 @@ function ActivityChangeList({ payload }: { payload: Record<string, unknown> }) {
   const fromStageName = getPayloadString(payload.fromStageName);
   const oldDueAt = getPayloadString(payload.oldDueAt);
   const newDueAt = getPayloadString(payload.newDueAt);
+  const riskNote = getPayloadString(payload.riskNote);
+  const resolveNote = getPayloadString(payload.resolveNote);
   const durationDays =
     typeof payload.durationDays === "number" ? payload.durationDays : null;
   const finalIsBenign =
@@ -2899,6 +3313,8 @@ function ActivityChangeList({ payload }: { payload: Record<string, unknown> }) {
     !fromStageName &&
     !oldDueAt &&
     !newDueAt &&
+    !riskNote &&
+    !resolveNote &&
     durationDays === null &&
     finalIsBenign === null &&
     requestedIsBenign === null &&
@@ -2921,6 +3337,8 @@ function ActivityChangeList({ payload }: { payload: Record<string, unknown> }) {
       {fromStageName && <li>原阶段：{fromStageName}</li>}
       {oldDueAt && <li>原 DDL：{formatNullableDateTime(oldDueAt)}</li>}
       {newDueAt && <li>新 DDL：{formatNullableDateTime(newDueAt)}</li>}
+      {riskNote && <li>风险：{riskNote}</li>}
+      {resolveNote && <li>取消说明：{resolveNote}</li>}
       {durationDays !== null && <li>调整：{formatDdlAdjustment(durationDays)}</li>}
       {requestedIsBenign !== null && (
         <li>申请良性：{requestedIsBenign ? "是" : "否"}</li>
@@ -3164,6 +3582,8 @@ function activityLabel(action: string): string {
     "stage.evidence_submitted": "提交了阶段材料",
     "stage.approved": "通过了阶段审核",
     "stage.rejected": "驳回了阶段审核",
+    "stage.risk_synced": "同步了阶段风险",
+    "stage.risk_resolved": "取消了阶段风险",
     "task.created": "创建了任务",
     "task.updated": "更新了任务信息",
     "task.status_changed": "更新了任务状态",
@@ -3267,6 +3687,10 @@ function formatDateTime(value: string): string {
 
 function formatNullableDateTime(value: string | null): string {
   return value ? formatDateTime(value) : "未设置";
+}
+
+function formatRiskSource(source: TaskRiskSource): string {
+  return source === "WEEKLY" ? "周报同步" : "手动同步";
 }
 
 function formatBenignFlag(

@@ -2,7 +2,7 @@ import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
 
-const PRISMA_SCHEMA_REVISION = "procurement-feishu-card-stage-v1";
+const PRISMA_SCHEMA_REVISION = "project-stage-risks-v1";
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
@@ -21,6 +21,7 @@ function isPrismaClientStale(client: PrismaClient): boolean {
     typeof client.projectTemplate?.findMany !== "function" ||
     typeof client.projectTemplateStage?.findMany !== "function" ||
     typeof client.projectStage?.findMany !== "function" ||
+    typeof client.projectStageRiskRecord?.findMany !== "function" ||
     typeof client.projectDdlChangeRequest?.findMany !== "function" ||
     typeof client.taskAssignee?.findMany !== "function" ||
     typeof client.taskCreationRequest?.findMany !== "function" ||

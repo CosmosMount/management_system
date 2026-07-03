@@ -12,6 +12,7 @@ import {
   canManageProject,
   canRequestProjectStageBatchDdlChange,
   canRequestProjectStageDueDateChange,
+  canSyncProjectStageRisk,
   canRequestTaskCreation,
   canReviewProjectStageBatchDdlChange,
   canReviewProjectStageDueDateChange,
@@ -68,6 +69,9 @@ export default async function ProjectDetailPage({ params }: Props) {
             orderBy: { submittedAt: "desc" },
             include: { approvals: { orderBy: { createdAt: "asc" } } },
           },
+          riskRecords: {
+            orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          },
         },
       },
       ddlChangeRequests: {
@@ -98,6 +102,9 @@ export default async function ProjectDetailPage({ params }: Props) {
           },
           ddlChangeRequests: {
             select: { requesterOpenId: true },
+          },
+          riskRecords: {
+            orderBy: [{ createdAt: "desc" }, { id: "desc" }],
           },
           _count: { select: { submissions: true } },
         },
@@ -255,6 +262,27 @@ export default async function ProjectDetailPage({ params }: Props) {
           stageOwnerOpenId: stage.ownerOpenId,
           userOpenId,
         }),
+      canSyncRisk: canSyncProjectStageRisk({
+        roles,
+        scope,
+        projectOwnerOpenIds,
+        projectParticipantOpenIds,
+        stageOwnerOpenId: stage.ownerOpenId,
+        userOpenId,
+      }),
+      riskNote: stage.riskNote,
+      riskUpdatedAt: stage.riskUpdatedAt?.toISOString() ?? null,
+      riskRecords: stage.riskRecords.map((risk) => ({
+        id: risk.id,
+        content: risk.content,
+        source: risk.source,
+        status: risk.status,
+        createdByName: risk.createdByName,
+        resolvedByName: risk.resolvedByName,
+        resolveNote: risk.resolveNote,
+        createdAt: risk.createdAt.toISOString(),
+        resolvedAt: risk.resolvedAt?.toISOString() ?? null,
+      })),
       submissions: stage.submissions.map((submission) => ({
         id: submission.id,
         feishuDocUrl: submission.feishuDocUrl,
@@ -315,6 +343,17 @@ export default async function ProjectDetailPage({ params }: Props) {
         metrics: task.metrics,
         dueAt: task.dueAt.toISOString(),
         riskNote: task.riskNote,
+        riskRecords: task.riskRecords.map((risk) => ({
+          id: risk.id,
+          content: risk.content,
+          source: risk.source,
+          status: risk.status,
+          createdByName: risk.createdByName,
+          resolvedByName: risk.resolvedByName,
+          resolveNote: risk.resolveNote,
+          createdAt: risk.createdAt.toISOString(),
+          resolvedAt: risk.resolvedAt?.toISOString() ?? null,
+        })),
         submissionsCount: task._count.submissions,
         pendingDeletionRequest: pendingDeletionRequest
           ? {

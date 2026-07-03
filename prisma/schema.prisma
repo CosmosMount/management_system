@@ -353,9 +353,12 @@ model ProjectStage {
   extensionCount      Int              @default(0)
   benignExtensionCount Int             @default(0)
   currentSubmissionId String?
+  riskNote            String           @default("")
+  riskUpdatedAt       DateTime?
   tasks               Task[]
   submissions         TaskSubmission[]
   ddlChangeRequests   ProjectDdlChangeRequest[]
+  riskRecords         ProjectStageRiskRecord[]
   createdAt           DateTime         @default(now())
   updatedAt           DateTime         @updatedAt
 }
@@ -527,6 +530,26 @@ model TaskRiskRecord {
   updatedAt        DateTime       @updatedAt
 
   @@index([taskId, status])
+  @@index([createdByOpenId])
+}
+
+model ProjectStageRiskRecord {
+  id               String         @id @default(uuid())
+  stageId          String
+  stage            ProjectStage   @relation(fields: [stageId], references: [id], onDelete: Cascade)
+  content          String
+  source           TaskRiskSource @default(MANUAL)
+  status           TaskRiskStatus @default(ACTIVE)
+  createdByOpenId  String
+  createdByName    String
+  resolvedByOpenId String         @default("")
+  resolvedByName   String         @default("")
+  resolveNote      String         @default("")
+  resolvedAt       DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  @@index([stageId, status])
   @@index([createdByOpenId])
 }
 

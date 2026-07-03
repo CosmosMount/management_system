@@ -327,6 +327,67 @@ test("批量任务申请通知只入队一次并发送汇总内容", async () =>
   expect(captured[0]?.cardText).toContain("申请人");
 });
 
+test("项目阶段风险通知使用普通通知机器人并发送明确内容", async () => {
+  const syncEventKey = `playwright:progress-notify:project_stage_risk_synced:${Date.now()}`;
+  const syncPayload: ProgressNotifyPayload = {
+    type: "project_stage_risk_synced",
+    projectId: "pw-project-stage-risk",
+    projectName: "PW通知-阶段风险项目",
+    stageId: "pw-stage-risk",
+    stageName: "联调阶段",
+    team: "工程",
+    techGroup: "宣运",
+    ownerNames: "项目负责人",
+    stageOwnerName: "阶段负责人",
+    actorName: "李棋轩",
+    riskNote: "机械臂联调阻塞",
+    recipientOpenIds: ["ou_owner", "ou_participant", "ou_owner", ""],
+  };
+
+  const syncCaptured = await enqueueAndDrainProgressNotification(
+    syncEventKey,
+    syncPayload,
+  );
+
+  expect(resolveProgressBotKind(syncPayload.type)).toBe("notification");
+  expect(syncCaptured.map((message) => message.receiveId).sort()).toEqual([
+    "ou_owner",
+    "ou_participant",
+  ]);
+  expect(syncCaptured).toHaveLength(2);
+  expect(syncCaptured.every((message) => message.title === "项目阶段风险同步"))
+    .toBe(true);
+  expect(syncCaptured[0]?.cardText).toContain("PW通知-阶段风险项目");
+  expect(syncCaptured[0]?.cardText).toContain("联调阶段");
+  expect(syncCaptured[0]?.cardText).toContain("机械臂联调阻塞");
+
+  const resolvedEventKey = `playwright:progress-notify:project_stage_risk_resolved:${Date.now()}`;
+  const resolvedPayload: ProgressNotifyPayload = {
+    type: "project_stage_risk_resolved",
+    projectId: "pw-project-stage-risk",
+    projectName: "PW通知-阶段风险项目",
+    stageId: "pw-stage-risk",
+    stageName: "联调阶段",
+    riskNote: "机械臂联调阻塞",
+    resolveNote: "已完成参数修正",
+    resolverName: "李棋轩",
+    recipientOpenIds: ["ou_owner", "ou_participant"],
+  };
+
+  const resolvedCaptured = await enqueueAndDrainProgressNotification(
+    resolvedEventKey,
+    resolvedPayload,
+  );
+
+  expect(resolveProgressBotKind(resolvedPayload.type)).toBe("notification");
+  expect(resolvedCaptured).toHaveLength(2);
+  expect(
+    resolvedCaptured.every((message) => message.title === "项目阶段风险已取消"),
+  ).toBe(true);
+  expect(resolvedCaptured[0]?.cardText).toContain("取消说明");
+  expect(resolvedCaptured[0]?.cardText).toContain("已完成参数修正");
+});
+
 test("进度审批待办使用审批机器人，普通进度通知使用通知机器人", async () => {
   await withFeishuBotEnv(
     {
@@ -931,7 +992,7 @@ test("历史复合失败 outbox 不会自动拆分重发给已成功收件人", 
       ).resolves.toMatchObject({
         status: "FAILED",
         attempts: 8,
-        lastError: expect.stringContaining("历史复合 outbox 已停止自动重试"),
+        lastError: expect.stringContaining("历史审批 outbox 已停止自动重试"),
         recipients: [],
       });
     },
@@ -1075,13 +1136,30 @@ test("采购审批待办 eventKey 使用状态进入时间保持稳定", async (
   ).resolves.toBe(1);
 });
 
-test("测试收件人 allowlist 只放行李棋轩", async () => {
-  const allowedOpenId = `ou_allow_liqixuan_${Date.now()}`;
+test("测试收件人 allowlist 只放行指定三人", async () => {
+  const suffix = Date.now();
+  const allowedOpenId = `ou_allow_liqixuan_${suffix}`;
+  const secondAllowedOpenId = `ou_allow_zhangyushan_${suffix}`;
+  const thirdAllowedOpenId = `ou_allow_chenyanlin_${suffix}`;
   const blockedOpenId = `ou_allow_blocked_${Date.now()}`;
   await prisma.user.createMany({
     data: [
-      { openId: allowedOpenId, name: "李棋轩", unionId: `on_allow_liqixuan_${Date.now()}` },
-      { openId: blockedOpenId, name: "其他测试用户", unionId: `on_allow_blocked_${Date.now()}` },
+      { openId: allowedOpenId, name: "李棋轩", unionId: `on_allow_liqixuan_${suffix}` },
+      {
+        openId: secondAllowedOpenId,
+        name: "张宇山",
+        unionId: `on_allow_zhangyushan_${suffix}`,
+      },
+      {
+        openId: thirdAllowedOpenId,
+        name: "陈彦霖",
+        unionId: `on_allow_chenyanlin_${suffix}`,
+      },
+      {
+        openId: blockedOpenId,
+        name: "其他测试用户",
+        unionId: `on_allow_blocked_${suffix}`,
+      },
     ],
     skipDuplicates: true,
   });
@@ -1094,7 +1172,7 @@ test("测试收件人 allowlist 只放行李棋轩", async () => {
       FEISHU_NOTIFICATION_APP_SECRET: "notification-secret",
       FEISHU_APPROVAL_APP_ID: undefined,
       FEISHU_APPROVAL_APP_SECRET: undefined,
-      FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES: "李棋轩",
+      FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES: "李棋轩,张宇山,陈彦霖",
       FEISHU_DIRECT_MESSAGE_ALLOWED_OPEN_IDS: undefined,
       FEISHU_DIRECT_MESSAGE_ALLOWED_UNION_IDS: undefined,
     },
@@ -1114,21 +1192,34 @@ test("测试收件人 allowlist 只放行李棋轩", async () => {
           techGroup: "宣运",
           ownerOpenIds: [allowedOpenId],
           ownerNames: "李棋轩",
-          participantOpenIds: [blockedOpenId],
-          participantNames: "其他测试用户",
-          recipientOpenIds: [allowedOpenId, blockedOpenId],
+          participantOpenIds: [
+            secondAllowedOpenId,
+            thirdAllowedOpenId,
+            blockedOpenId,
+          ],
+          participantNames: "张宇山、陈彦霖、其他测试用户",
+          recipientOpenIds: [
+            allowedOpenId,
+            secondAllowedOpenId,
+            thirdAllowedOpenId,
+            blockedOpenId,
+          ],
           canceledTaskCount: 0,
         });
       } finally {
         restoreFetch();
       }
 
-      expect(capturedAuthRequests.map((request) => request.appId)).toEqual([
-        "notification-app",
-      ]);
-      expect(capturedMessages).toHaveLength(1);
-      expect(capturedMessages[0]?.receiveId).toBe(allowedOpenId);
-      expect(capturedMessages[0]?.token).toBe("notification-token");
+      expect(
+        capturedAuthRequests.every((request) => request.appId === "notification-app"),
+      ).toBe(true);
+      expect(capturedMessages.map((message) => message.receiveId).sort()).toEqual([
+        allowedOpenId,
+        secondAllowedOpenId,
+        thirdAllowedOpenId,
+      ].sort());
+      expect(capturedMessages.every((message) => message.token === "notification-token"))
+        .toBe(true);
     },
   );
 });
@@ -1548,63 +1639,65 @@ async function enqueueAndDrainProgressNotification(
   eventKey: string,
   payload: ProgressNotifyPayload,
 ): Promise<CapturedFeishuMessage[]> {
-  const capturedMessages: CapturedFeishuMessage[] = [];
-  const restoreFetch = mockFeishuFetch(capturedMessages);
+  return withFeishuBotEnv({}, async () => {
+    const capturedMessages: CapturedFeishuMessage[] = [];
+    const restoreFetch = mockFeishuFetch(capturedMessages);
 
-  try {
-    const result = await enqueueProgressNotification(eventKey, payload, {
-      appOrigin: "http://127.0.0.1:3002",
-    });
-    expect(result.created).toBe(true);
-
-    const outboxes = await prisma.notificationOutbox.findMany({
-      where: { eventKey: { startsWith: eventKey } },
-      select: {
-        eventKey: true,
-        channel: true,
-        botKind: true,
-        type: true,
-        payload: true,
-        status: true,
-      },
-    });
-    expect(outboxes).toHaveLength(1);
-    expect(outboxes[0]?.eventKey).toBe(eventKey);
-    expect(outboxes[0]?.eventKey).not.toContain(":recipient:");
-    expect(outboxes[0]?.channel).toBe("progress");
-    expect(outboxes[0]?.type).toBe(payload.type);
-    expect(outboxes[0]?.botKind).toBe(resolveProgressBotKind(payload.type));
-    expect(outboxes[0]?.status).toBe("PENDING");
-    expect(outboxes[0]?.payload).toContain("recipientOpenIds");
-
-    const sentCount = await drainNotificationOutbox(10);
-    expect(sentCount).toBe(notificationDeliveryDisabled ? 0 : 1);
-
-    const stored = await prisma.notificationOutbox.findUniqueOrThrow({
-      where: { eventKey },
-      select: { status: true, attempts: true, lastError: true },
-    });
-    if (notificationDeliveryDisabled) {
-      expect(stored).toMatchObject({
-        status: "PENDING",
-        attempts: 0,
-        lastError: "",
-      });
-      await sendProgressNotification(payload, {
+    try {
+      const result = await enqueueProgressNotification(eventKey, payload, {
         appOrigin: "http://127.0.0.1:3002",
       });
-    } else {
-      expect(stored).toMatchObject({
-        status: "SENT",
-        attempts: 1,
-        lastError: "",
-      });
-    }
+      expect(result.created).toBe(true);
 
-    return capturedMessages;
-  } finally {
-    restoreFetch();
-  }
+      const outboxes = await prisma.notificationOutbox.findMany({
+        where: { eventKey: { startsWith: eventKey } },
+        select: {
+          eventKey: true,
+          channel: true,
+          botKind: true,
+          type: true,
+          payload: true,
+          status: true,
+        },
+      });
+      expect(outboxes).toHaveLength(1);
+      expect(outboxes[0]?.eventKey).toBe(eventKey);
+      expect(outboxes[0]?.eventKey).not.toContain(":recipient:");
+      expect(outboxes[0]?.channel).toBe("progress");
+      expect(outboxes[0]?.type).toBe(payload.type);
+      expect(outboxes[0]?.botKind).toBe(resolveProgressBotKind(payload.type));
+      expect(outboxes[0]?.status).toBe("PENDING");
+      expect(outboxes[0]?.payload).toContain("recipientOpenIds");
+
+      const sentCount = await drainNotificationOutbox(10);
+      expect(sentCount).toBe(notificationDeliveryDisabled ? 0 : 1);
+
+      const stored = await prisma.notificationOutbox.findUniqueOrThrow({
+        where: { eventKey },
+        select: { status: true, attempts: true, lastError: true },
+      });
+      if (notificationDeliveryDisabled) {
+        expect(stored).toMatchObject({
+          status: "PENDING",
+          attempts: 0,
+          lastError: "",
+        });
+        await sendProgressNotification(payload, {
+          appOrigin: "http://127.0.0.1:3002",
+        });
+      } else {
+        expect(stored).toMatchObject({
+          status: "SENT",
+          attempts: 1,
+          lastError: "",
+        });
+      }
+
+      return capturedMessages;
+    } finally {
+      restoreFetch();
+    }
+  });
 }
 
 function mockFeishuFetch(
@@ -1693,12 +1786,20 @@ function mockFeishuFetch(
   };
 }
 
-async function withFeishuBotEnv(
+async function withFeishuBotEnv<T>(
   values: Record<string, string | undefined>,
-  callback: () => Promise<void>,
-) {
+  callback: () => Promise<T>,
+): Promise<T> {
+  const effectiveValues = { ...values };
+  for (const key of [
+    "FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES",
+    "FEISHU_DIRECT_MESSAGE_ALLOWED_OPEN_IDS",
+    "FEISHU_DIRECT_MESSAGE_ALLOWED_UNION_IDS",
+  ]) {
+    if (!(key in effectiveValues)) effectiveValues[key] = undefined;
+  }
   const previous = new Map<string, string | undefined>();
-  for (const [key, value] of Object.entries(values)) {
+  for (const [key, value] of Object.entries(effectiveValues)) {
     previous.set(key, process.env[key]);
     if (value === undefined) {
       delete process.env[key];
@@ -1707,7 +1808,7 @@ async function withFeishuBotEnv(
     }
   }
   try {
-    await callback();
+    return await callback();
   } finally {
     for (const [key, value] of previous) {
       if (value === undefined) {

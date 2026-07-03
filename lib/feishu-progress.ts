@@ -243,6 +243,31 @@ export type ProgressNotifyPayload =
       recipientOpenIds?: string[];
     }
   | {
+      type: "project_stage_risk_synced";
+      projectId: string;
+      projectName: string;
+      stageId: string;
+      stageName: string;
+      team: string;
+      techGroup: string;
+      ownerNames: string;
+      stageOwnerName: string;
+      actorName: string;
+      riskNote: string;
+      recipientOpenIds: string[];
+    }
+  | {
+      type: "project_stage_risk_resolved";
+      projectId: string;
+      projectName: string;
+      stageId: string;
+      stageName: string;
+      riskNote: string;
+      resolveNote: string;
+      resolverName: string;
+      recipientOpenIds: string[];
+    }
+  | {
       type: "task_assigned";
       taskId: string;
       taskTitle: string;
@@ -956,6 +981,32 @@ export async function sendProgressNotification(
         pass ? "green" : "red",
       );
       await notifyOpenIds(payload.recipientOpenIds ?? [payload.stageOwnerOpenId], card);
+      break;
+    }
+    case "project_stage_risk_synced": {
+      const card = buildCard(
+        "项目阶段风险同步",
+        `**项目**：${payload.projectName}\n**阶段**：${payload.stageName}\n**同步人**：${payload.actorName}\n**项目负责人**：${payload.ownerNames || "未设置"}\n**阶段负责人**：${payload.stageOwnerName || "未设置"}\n**风险**：${payload.riskNote}`,
+        buildAppUrl(
+          routes.progress.projectStage(payload.projectId, payload.stageId),
+          appOrigin,
+        ),
+        "red",
+      );
+      await notifyOpenIds(payload.recipientOpenIds, card);
+      break;
+    }
+    case "project_stage_risk_resolved": {
+      const card = buildCard(
+        "项目阶段风险已取消",
+        `**项目**：${payload.projectName}\n**阶段**：${payload.stageName}\n**取消人**：${payload.resolverName}\n**原风险**：${payload.riskNote}\n**取消说明**：${payload.resolveNote}`,
+        buildAppUrl(
+          routes.progress.projectStage(payload.projectId, payload.stageId),
+          appOrigin,
+        ),
+        "green",
+      );
+      await notifyOpenIds(payload.recipientOpenIds, card);
       break;
     }
     case "task_assigned": {

@@ -476,6 +476,27 @@ export function canSyncTaskRisk(input: {
   return canSubmitTaskWeeklyReport(input);
 }
 
+export function canSyncProjectStageRisk({
+  roles,
+  scope,
+  projectOwnerOpenIds,
+  projectParticipantOpenIds,
+  stageOwnerOpenId,
+  userOpenId,
+}: {
+  roles: UserRoleRecord[];
+  scope: ProgressScope;
+  projectOwnerOpenIds: string | string[];
+  projectParticipantOpenIds: string | string[];
+  stageOwnerOpenId?: string | null;
+  userOpenId?: string;
+}): boolean {
+  if (!userOpenId) return false;
+  if (canManageProject(roles, scope, projectOwnerOpenIds, userOpenId)) return true;
+  if (isAssignee(userOpenId, projectParticipantOpenIds)) return true;
+  return !!stageOwnerOpenId && userOpenId === stageOwnerOpenId;
+}
+
 export function canRequestTaskDdlChange({
   projectOwnerOpenIds,
   taskAssigneeOpenIds,

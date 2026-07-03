@@ -52,6 +52,7 @@ export type FunctionalFixtureIds = {
   teacherRejectOrderId: string;
   reimbursementOrderId: string;
   projectId: string;
+  projectCurrentStageId: string;
   taskId: string;
   taskRequestProjectId: string;
   stageDueChangeProjectId: string;
@@ -679,6 +680,7 @@ export async function prepareFunctionalFixtures(
     teacherRejectOrderId: teacherRejectOrder.id,
     reimbursementOrderId: reimbursementOrder.id,
     projectId: project.id,
+    projectCurrentStageId: overdueStage.id,
     taskId: task.id,
     taskRequestProjectId: taskCreationRequestFixture.projectId,
     stageDueChangeProjectId: stageDueChangeFixture.projectId,

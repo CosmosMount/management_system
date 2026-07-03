@@ -81,6 +81,36 @@ export async function collectProjectNotificationRecipients(
   return [...openIds];
 }
 
+export async function collectProjectStageRiskNotificationRecipients(
+  project: Pick<
+    ProjectNotificationSubject,
+    "team" | "techGroup" | "ownerOpenId" | "ownerName" | "owners" | "participants"
+  >,
+  stage: ProjectStageLike,
+): Promise<string[]> {
+  const openIds = new Set<string>();
+
+  for (const openId of getProjectOwnerOpenIds(project)) add(openIds, openId);
+  for (const participant of project.participants ?? []) add(openIds, participant.openId);
+  add(openIds, stage.ownerOpenId);
+
+  const roleGroups = await Promise.all([
+    getOpenIdsByRole("TEAM_ADMIN", { team: project.team, techGroup: project.techGroup }),
+    getOpenIdsByRole("TECH_GROUP_ADMIN", {
+      team: project.team,
+      techGroup: project.techGroup,
+    }),
+    getOpenIdsByRole("PROJECT_MANAGER", { team: "", techGroup: "" }),
+    getOpenIdsByRole("SUPER_ADMIN", { team: "", techGroup: "" }),
+  ]);
+
+  for (const group of roleGroups) {
+    for (const openId of group) add(openIds, openId);
+  }
+
+  return [...openIds];
+}
+
 export async function collectProjectEstablishmentReviewRecipients(scope: {
   team: string;
   techGroup: string;
