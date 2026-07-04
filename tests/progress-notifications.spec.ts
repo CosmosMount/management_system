@@ -11,6 +11,7 @@ import {
   drainNotificationOutbox,
   enqueueOrderNotification,
   enqueueProgressNotification,
+  enqueueProgressNotificationTx,
   orderNotificationEventKey,
   resetNotificationOutboxForRetry,
 } from "../lib/notification-outbox";
@@ -937,13 +938,29 @@ test("审批 outbox 部分收件人失败后只重试失败收件人", async () 
       const restoreFirstFetch = mockFeishuFetch(firstMessages, [], {
         failMessageReceiveIds: new Set(["on_retry_fail"]),
       });
+      let firstDrainLogs: string[] = [];
       try {
-        await expect(
-          drainNotificationOutbox(10, { ignoreDeliveryDisabled: true }),
-        ).resolves.toBe(0);
+        firstDrainLogs = await captureLogLines(async () => {
+          await expect(
+            drainNotificationOutbox(10, { ignoreDeliveryDisabled: true }),
+          ).resolves.toBe(0);
+        });
       } finally {
         restoreFirstFetch();
       }
+
+      const failedRecipientLog = firstDrainLogs
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .find((entry) => entry.event === "notification.outbox.recipient.failed");
+      expect(failedRecipientLog).toMatchObject({
+        event: "notification.outbox.recipient.failed",
+        eventKey,
+        recipientOpenId: "ou_retry_fail",
+        botKind: "approval",
+        attempts: 1,
+      });
+      expect(firstDrainLogs.join("\n")).not.toContain("approval-secret");
+      expect(firstDrainLogs.join("\n")).not.toContain("notification-secret");
 
       expect(firstMessages.map((message) => message.receiveId).sort()).toEqual([
         "on_retry_ok",
@@ -1014,6 +1031,56 @@ test("审批 outbox 部分收件人失败后只重试失败收件人", async () 
       });
     },
   );
+});
+
+test("事务内通知入队日志使用 prepared 语义且回滚后不留下 outbox", async () => {
+  const eventKey = `playwright:tx-prepared:${Date.now()}`;
+
+  const logs = await captureLogLines(async () => {
+    await expect(
+      prisma.$transaction(async (tx) => {
+        await enqueueProgressNotificationTx(
+          tx,
+          eventKey,
+          {
+            type: "task_ddl_change_requested",
+            requestId: "pw-tx-prepared-request",
+            taskId: "pw-tx-prepared-task",
+            taskTitle: "PW事务日志任务",
+            projectName: "PW事务日志项目",
+            requesterName: "李棋轩",
+            reason: "验证事务内日志语义",
+            oldDueAt: "2026-06-29T18:00:00.000Z",
+            newDueAt: "2026-06-30T18:00:00.000Z",
+            recipientOpenIds: ["ou_tx_prepared"],
+          },
+          { appOrigin: "http://127.0.0.1:3002" },
+        );
+        throw new Error("rollback for prepared log test");
+      }),
+    ).rejects.toThrow("rollback for prepared log test");
+  });
+
+  const entries = logs.map((line) => JSON.parse(line) as Record<string, unknown>);
+  expect(entries).toContainEqual(
+    expect.objectContaining({
+      event: "notification.outbox.enqueue_tx.prepared",
+      action: "enqueueNotificationTx",
+      eventKey,
+      result: "prepared",
+      transactional: true,
+    }),
+  );
+  expect(entries).not.toContainEqual(
+    expect.objectContaining({
+      event: "notification.outbox.enqueue",
+      action: "enqueueNotificationTx",
+      eventKey,
+    }),
+  );
+  await expect(
+    prisma.notificationOutbox.findUnique({ where: { eventKey } }),
+  ).resolves.toBeNull();
 });
 
 test("审批 outbox 子收件人锁未过期时父 outbox 不空转重试", async () => {
@@ -2071,6 +2138,46 @@ function mockFeishuFetch(
   return () => {
     globalThis.fetch = originalFetch;
   };
+}
+
+async function captureLogLines(callback: () => Promise<void>): Promise<string[]> {
+  const previousFormat = process.env.LOG_FORMAT;
+  const previousLevel = process.env.LOG_LEVEL;
+  process.env.LOG_FORMAT = "json";
+  process.env.LOG_LEVEL = "debug";
+  const original = {
+    log: console.log,
+    warn: console.warn,
+    error: console.error,
+  };
+  const lines: string[] = [];
+  console.log = (...args: unknown[]) => {
+    lines.push(args.map(String).join(" "));
+  };
+  console.warn = (...args: unknown[]) => {
+    lines.push(args.map(String).join(" "));
+  };
+  console.error = (...args: unknown[]) => {
+    lines.push(args.map(String).join(" "));
+  };
+  try {
+    await callback();
+    return lines.filter((line) => line.trim().startsWith("{"));
+  } finally {
+    console.log = original.log;
+    console.warn = original.warn;
+    console.error = original.error;
+    if (previousFormat === undefined) {
+      delete process.env.LOG_FORMAT;
+    } else {
+      process.env.LOG_FORMAT = previousFormat;
+    }
+    if (previousLevel === undefined) {
+      delete process.env.LOG_LEVEL;
+    } else {
+      process.env.LOG_LEVEL = previousLevel;
+    }
+  }
 }
 
 async function withFeishuBotEnv<T>(

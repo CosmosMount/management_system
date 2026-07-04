@@ -19,6 +19,7 @@ import { updateCardKitInstanceResilient } from "@/lib/feishu-cardkit";
 import { statusLabels } from "@/lib/permissions-client";
 import { prisma } from "@/lib/prisma";
 import { getDefaultNotificationContext } from "@/lib/request-origin";
+import { logger } from "@/lib/logger";
 
 function isActionableProcurementStatus(status: OrderStatus): boolean {
   return (
@@ -230,7 +231,12 @@ export async function refreshProcurementFeishuCards(
     where: { orderId },
   });
   if (snapshots.length === 0) {
-    console.warn(`[feishu] 无可刷新的采购卡片记录 order=${orderId}`);
+    logger.warn("feishu.procurement.card.refresh.empty", {
+      module: "feishu",
+      action: "refreshProcurementFeishuCards",
+      entityType: "PurchaseOrder",
+      entityId: orderId,
+    });
     return;
   }
 
@@ -252,14 +258,27 @@ export async function refreshProcurementFeishuCards(
         where: { id: snapshot.id },
         data: { sequence },
       });
-      console.log(
-        `[feishu] 已按当前阶段刷新采购卡片 order=${orderId} stage=${cardStage} openId=${snapshot.openId}`,
-      );
+      logger.info("feishu.procurement.card.refresh.success", {
+        module: "feishu",
+        action: "refreshProcurementFeishuCards",
+        entityType: "ProcurementFeishuCard",
+        entityId: snapshot.id,
+        orderId,
+        cardStage,
+        recipientOpenId: snapshot.openId,
+        sequence,
+      });
     } catch (error) {
-      console.error(
-        `[feishu] 刷新采购卡片失败 order=${orderId} card=${snapshot.cardId}:`,
+      logger.error("feishu.procurement.card.refresh.failed", {
+        module: "feishu",
+        action: "refreshProcurementFeishuCards",
+        entityType: "ProcurementFeishuCard",
+        entityId: snapshot.id,
+        orderId,
+        cardStage,
+        cardId: snapshot.cardId,
         error,
-      );
+      });
     }
   }
 }

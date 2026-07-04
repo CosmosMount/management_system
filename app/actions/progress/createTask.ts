@@ -18,10 +18,28 @@ import { normalizeTaskTechGroups } from "@/lib/progress-task-tech-groups";
 import { assertProjectActive } from "@/lib/progress-guards";
 import { revalidateProgress } from "@/lib/revalidate";
 import { createTaskSchema, type CreateTaskInput } from "@/lib/validations/progress";
+import { withActionLogging } from "@/lib/logger";
 
 export async function createTask(input: CreateTaskInput) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.task.create",
+      module: "progress",
+      action: "createTask",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "Task",
+    },
+    async () => createTaskLogged(input, user),
+  );
+}
+
+async function createTaskLogged(
+  input: CreateTaskInput,
+  user: { openId: string; name: string },
+) {
   const roles = await getUserRoles(user.openId);
 
   const parsed = createTaskSchema.parse(input);

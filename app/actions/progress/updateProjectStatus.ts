@@ -16,6 +16,7 @@ import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import { revalidateProgress } from "@/lib/revalidate";
 import { getUserRoles } from "@/lib/permissions";
+import { withActionLogging } from "@/lib/logger";
 
 const PROJECT_CANCELABLE_TASK_STATUSES = [
   "TODO",
@@ -32,6 +33,27 @@ export async function updateProjectStatus(
 ) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.project.status.update",
+      module: "progress",
+      action: "updateProjectStatus",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "Project",
+      entityId: projectId,
+      targetStatus: status,
+    },
+    async () => updateProjectStatusLogged(projectId, status, reason, user),
+  );
+}
+
+async function updateProjectStatusLogged(
+  projectId: string,
+  status: ProjectStatus,
+  reason: string,
+  user: { openId: string; name: string },
+) {
   const roles = await getUserRoles(user.openId);
 
   const project = await prisma.project.findUnique({

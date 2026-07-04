@@ -19,6 +19,7 @@ import { getNotificationContext } from "@/lib/request-origin";
 import { getUserRoles } from "@/lib/permissions";
 import { revalidateProgress } from "@/lib/revalidate";
 import { submitDeliverySchema } from "@/lib/validations/progress";
+import { withActionLogging } from "@/lib/logger";
 
 export async function submitTaskDelivery(input: {
   taskId: string;
@@ -29,6 +30,30 @@ export async function submitTaskDelivery(input: {
 }) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.task.delivery.submit",
+      module: "progress",
+      action: "submitTaskDelivery",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "Task",
+      entityId: input.taskId,
+    },
+    async () => submitTaskDeliveryLogged(input, user),
+  );
+}
+
+async function submitTaskDeliveryLogged(
+  input: {
+    taskId: string;
+    feishuDocUrl: string;
+    keyDataUrl: string;
+    note?: string;
+    failureReason?: string;
+  },
+  user: { openId: string; name: string },
+) {
   const roles = await getUserRoles(user.openId);
   const parsed = submitDeliverySchema.parse(input);
 

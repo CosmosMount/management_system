@@ -32,6 +32,7 @@ import {
 import { prisma } from "@/lib/prisma";
 import { getUserRoles } from "@/lib/permissions";
 import { revalidateProgress } from "@/lib/revalidate";
+import { withActionLogging } from "@/lib/logger";
 import {
   taskRestartSchema,
   updateTaskSchema,
@@ -41,6 +42,26 @@ import {
 export async function updateTaskStatus(taskId: string, status: TaskStatus) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.task.status.update",
+      module: "progress",
+      action: "updateTaskStatus",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "Task",
+      entityId: taskId,
+      targetStatus: status,
+    },
+    async () => updateTaskStatusLogged(taskId, status, user),
+  );
+}
+
+async function updateTaskStatusLogged(
+  taskId: string,
+  status: TaskStatus,
+  user: { openId: string; name: string },
+) {
   const roles = await getUserRoles(user.openId);
 
   const task = await prisma.task.findUnique({
@@ -108,6 +129,24 @@ export async function updateTaskStatus(taskId: string, status: TaskStatus) {
 export async function archiveTask(taskId: string) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.task.archive",
+      module: "progress",
+      action: "archiveTask",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "Task",
+      entityId: taskId,
+    },
+    async () => archiveTaskLogged(taskId, user),
+  );
+}
+
+async function archiveTaskLogged(
+  taskId: string,
+  user: { openId: string; name: string },
+) {
   const roles = await getUserRoles(user.openId);
 
   const task = await prisma.task.findUnique({
@@ -162,6 +201,24 @@ export async function archiveTask(taskId: string) {
 export async function restartTask(input: { taskId: string; reason: string }) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.task.restart",
+      module: "progress",
+      action: "restartTask",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "Task",
+      entityId: input.taskId,
+    },
+    async () => restartTaskLogged(input, user),
+  );
+}
+
+async function restartTaskLogged(
+  input: { taskId: string; reason: string },
+  user: { openId: string; name: string },
+) {
   const roles = await getUserRoles(user.openId);
   const parsed = taskRestartSchema.parse(input);
 
@@ -278,6 +335,24 @@ export async function restartTask(input: { taskId: string; reason: string }) {
 export async function updateTask(input: UpdateTaskInput) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.task.update",
+      module: "progress",
+      action: "updateTask",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "Task",
+      entityId: input.taskId,
+    },
+    async () => updateTaskLogged(input, user),
+  );
+}
+
+async function updateTaskLogged(
+  input: UpdateTaskInput,
+  user: { openId: string; name: string },
+) {
   const roles = await getUserRoles(user.openId);
   const parsed = updateTaskSchema.parse(input);
 

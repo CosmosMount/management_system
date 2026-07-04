@@ -20,6 +20,7 @@ import { getProjectParticipantOpenIds } from "@/lib/progress-project-participant
 import { getNotificationContext } from "@/lib/request-origin";
 import { prisma } from "@/lib/prisma";
 import { revalidateProgress } from "@/lib/revalidate";
+import { withActionLogging } from "@/lib/logger";
 import {
   taskDirectDeleteSchema,
   taskDeletionRequestSchema,
@@ -33,6 +34,24 @@ type DirectDeleteInput = { taskId: string; reason: string };
 export async function deleteTaskDirectly(input: DirectDeleteInput) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.task.delete.direct",
+      module: "progress",
+      action: "deleteTaskDirectly",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "Task",
+      entityId: input.taskId,
+    },
+    async () => deleteTaskDirectlyLogged(input, user),
+  );
+}
+
+async function deleteTaskDirectlyLogged(
+  input: DirectDeleteInput,
+  user: { openId: string; name: string },
+) {
   const roles = await getUserRoles(user.openId);
   const parsed = taskDirectDeleteSchema.parse(input);
 
@@ -166,6 +185,24 @@ export async function deleteTaskDirectly(input: DirectDeleteInput) {
 export async function requestTaskDeletion(input: { taskId: string; reason: string }) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.task.delete.request",
+      module: "progress",
+      action: "requestTaskDeletion",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "Task",
+      entityId: input.taskId,
+    },
+    async () => requestTaskDeletionLogged(input, user),
+  );
+}
+
+async function requestTaskDeletionLogged(
+  input: { taskId: string; reason: string },
+  user: { openId: string; name: string },
+) {
   const roles = await getUserRoles(user.openId);
   const parsed = taskDeletionRequestSchema.parse(input);
 
@@ -314,6 +351,29 @@ export async function reviewTaskDeletionRequest(input: {
 }) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.task.delete.review",
+      module: "progress",
+      action: "reviewTaskDeletionRequest",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "TaskDeletionRequest",
+      entityId: input.requestId,
+      decision: input.decision,
+    },
+    async () => reviewTaskDeletionRequestLogged(input, user),
+  );
+}
+
+async function reviewTaskDeletionRequestLogged(
+  input: {
+    requestId: string;
+    decision: "APPROVED" | "REJECTED";
+    comment?: string;
+  },
+  user: { openId: string; name: string },
+) {
   const roles = await getUserRoles(user.openId);
   const parsed = taskDeletionReviewSchema.parse(input);
 

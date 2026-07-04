@@ -25,6 +25,7 @@ import {
   submitWeeklyReportSchema,
   taskRiskResolveSchema,
 } from "@/lib/validations/progress";
+import { withActionLogging } from "@/lib/logger";
 
 export async function submitWeeklyReport(input: {
   taskId: string;
@@ -34,6 +35,29 @@ export async function submitWeeklyReport(input: {
 }) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.task.weekly_report.submit",
+      module: "progress",
+      action: "submitWeeklyReport",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "Task",
+      entityId: input.taskId,
+    },
+    async () => submitWeeklyReportLogged(input, user),
+  );
+}
+
+async function submitWeeklyReportLogged(
+  input: {
+    taskId: string;
+    progress: string;
+    nextPlan?: string;
+    feishuDocUrl?: string;
+  },
+  user: { openId: string; name: string },
+) {
   const roles = await getUserRoles(user.openId);
   const parsed = submitWeeklyReportSchema.parse(input);
 
@@ -151,6 +175,28 @@ export async function syncTaskRisk(input: {
 }) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.task.risk.sync",
+      module: "progress",
+      action: "syncTaskRisk",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "Task",
+      entityId: input.taskId,
+    },
+    async () => syncTaskRiskLogged(input, user),
+  );
+}
+
+async function syncTaskRiskLogged(
+  input: {
+    taskId: string;
+    content?: string;
+    riskNote?: string;
+  },
+  user: { openId: string; name: string },
+) {
   const parsed = riskSyncSchema.parse({
     taskId: input.taskId,
     content: "content" in input ? input.content : input.riskNote,
@@ -275,6 +321,27 @@ export async function resolveTaskRisk(input: {
 }) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.task.risk.resolve",
+      module: "progress",
+      action: "resolveTaskRisk",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "TaskRiskRecord",
+      entityId: input.riskId,
+    },
+    async () => resolveTaskRiskLogged(input, user),
+  );
+}
+
+async function resolveTaskRiskLogged(
+  input: {
+    riskId: string;
+    resolveNote: string;
+  },
+  user: { openId: string; name: string },
+) {
   const roles = await getUserRoles(user.openId);
   const parsed = taskRiskResolveSchema.parse(input);
 

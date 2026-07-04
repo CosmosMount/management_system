@@ -7,6 +7,7 @@ import {
 } from "@/lib/notification-outbox";
 import { checkBudgetAlertsForOrder } from "@/lib/procurement-budget-alerts";
 import { getNotificationContext } from "@/lib/request-origin";
+import { logger } from "@/lib/logger";
 
 type SubmittedOrder = {
   id: string;
@@ -44,7 +45,14 @@ export async function runProcurementSubmitSideEffects(
     drainNotificationOutboxSoon();
     await checkBudgetAlertsForOrder(order.team, order.techGroup, context);
   } catch (err) {
-    console.error("[procurement] post-submit side effects failed:", err);
+    logger.error("procurement.order.side_effects.submit.failed", {
+      module: "procurement",
+      action: "runProcurementSubmitSideEffects",
+      entityType: "PurchaseOrder",
+      entityId: order.id,
+      status: order.status,
+      error: err,
+    });
   }
 }
 
@@ -56,6 +64,12 @@ export async function runProcurementBudgetAlertSideEffects(
     const context = await getNotificationContext();
     await checkBudgetAlertsForOrder(team, techGroup, context);
   } catch (err) {
-    console.error("[procurement] budget alert side effects failed:", err);
+    logger.error("procurement.order.side_effects.budget_alert.failed", {
+      module: "procurement",
+      action: "runProcurementBudgetAlertSideEffects",
+      team,
+      techGroup,
+      error: err,
+    });
   }
 }

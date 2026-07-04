@@ -22,6 +22,7 @@ import {
   projectStageRiskResolveSchema,
   projectStageRiskSyncSchema,
 } from "@/lib/validations/progress";
+import { withActionLogging } from "@/lib/logger";
 
 const inactiveProjectStatuses = [
   "ESTABLISHING",
@@ -36,6 +37,27 @@ export async function syncProjectStageRisk(input: {
 }) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.stage.risk.sync",
+      module: "progress",
+      action: "syncProjectStageRisk",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "ProjectStage",
+      entityId: input.stageId,
+    },
+    async () => syncProjectStageRiskLogged(input, user),
+  );
+}
+
+async function syncProjectStageRiskLogged(
+  input: {
+    stageId: string;
+    content: string;
+  },
+  user: { openId: string; name: string },
+) {
   const parsed = projectStageRiskSyncSchema.parse(input);
 
   const stage = await prisma.projectStage.findUnique({
@@ -156,6 +178,27 @@ export async function resolveProjectStageRisk(input: {
 }) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.stage.risk.resolve",
+      module: "progress",
+      action: "resolveProjectStageRisk",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "ProjectStageRiskRecord",
+      entityId: input.riskId,
+    },
+    async () => resolveProjectStageRiskLogged(input, user),
+  );
+}
+
+async function resolveProjectStageRiskLogged(
+  input: {
+    riskId: string;
+    resolveNote: string;
+  },
+  user: { openId: string; name: string },
+) {
   const parsed = projectStageRiskResolveSchema.parse(input);
 
   const risk = await prisma.projectStageRiskRecord.findUnique({

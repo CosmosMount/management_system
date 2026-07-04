@@ -24,6 +24,8 @@ npm run dev
 
 访问 http://localhost:3000 ，使用飞书登录。
 
+日志默认输出到 stdout/stderr，生产和测试为 JSON line，开发可设置 `LOG_FORMAT=pretty`。常用级别为 `LOG_LEVEL=debug|info|warn|error|silent`；敏感字段会自动脱敏，详细规范见 [`docs/TECH.md`](docs/TECH.md#结构化日志)。
+
 | 服务 | 运行位置 | 端口 |
 |------|----------|------|
 | PostgreSQL | Docker `postgres` | **5432** |

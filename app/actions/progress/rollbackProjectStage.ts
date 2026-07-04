@@ -17,6 +17,7 @@ import { getNotificationContext } from "@/lib/request-origin";
 import { revalidateProgress } from "@/lib/revalidate";
 import { getUserRoles } from "@/lib/permissions";
 import { projectStageRollbackSchema } from "@/lib/validations/progress";
+import { withActionLogging } from "@/lib/logger";
 
 type RollbackStage = {
   id: string;
@@ -49,6 +50,27 @@ export async function rollbackProjectStage(input: {
 }) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.project.stage.rollback",
+      module: "progress",
+      action: "rollbackProjectStage",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "Project",
+      entityId: input.projectId,
+    },
+    async () => rollbackProjectStageLogged(input, user),
+  );
+}
+
+async function rollbackProjectStageLogged(
+  input: {
+    projectId: string;
+    reason: string;
+  },
+  user: { openId: string; name: string },
+) {
   const roles = await getUserRoles(user.openId);
   const parsed = projectStageRollbackSchema.parse(input);
 

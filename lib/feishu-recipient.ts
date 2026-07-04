@@ -6,6 +6,7 @@ import {
   type FeishuBotKind,
 } from "@/lib/feishu-app-config";
 import { prisma } from "@/lib/prisma";
+import { logger } from "@/lib/logger";
 
 export type FeishuReceiveIdType = "open_id" | "union_id";
 
@@ -64,17 +65,27 @@ async function fetchUnionIdByOpenId(
   };
 
   if (body.code !== 0) {
-    console.warn(
-      `[feishu] 无法查询用户 union_id openId=${openId}: ${
-        body.msg ?? res.status
-      }`,
-    );
+    logger.warn("feishu.recipient.union_id_lookup.failed", {
+      module: "feishu",
+      action: "fetchUnionIdByOpenId",
+      recipientOpenId: openId,
+      lookupBotKind,
+      feishuCode: body.code,
+      feishuMessage: body.msg ?? String(res.status),
+      result: "failure",
+    });
     return null;
   }
 
   const unionId = body.data?.user?.union_id ?? body.data?.union_id ?? null;
   if (!unionId) {
-    console.warn(`[feishu] 飞书用户缺少 union_id openId=${openId}`);
+    logger.warn("feishu.recipient.union_id_missing", {
+      module: "feishu",
+      action: "fetchUnionIdByOpenId",
+      recipientOpenId: openId,
+      lookupBotKind,
+      result: "failure",
+    });
     return null;
   }
 
@@ -101,11 +112,12 @@ async function resolveUnionIdForOpenId(openId: string): Promise<string | null> {
   let pending = unionIdCache.get(openId);
   if (!pending) {
     pending = fetchUnionIdByOpenId(openId, "notification").catch((error) => {
-      console.warn(
-        `[feishu] 查询用户 union_id 失败 openId=${openId}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
+      logger.error("feishu.recipient.union_id_lookup.error", {
+        module: "feishu",
+        action: "resolveUnionIdForOpenId",
+        recipientOpenId: openId,
+        error,
+      });
       return null;
     });
     unionIdCache.set(openId, pending);
@@ -141,11 +153,14 @@ async function fetchSystemOpenIdByUnionId(
   };
 
   if (body.code !== 0) {
-    console.warn(
-      `[feishu] 无法用 union_id 查询系统 openId unionId=${unionId}: ${
-        body.msg ?? res.status
-      }`,
-    );
+    logger.warn("feishu.recipient.open_id_lookup.failed", {
+      module: "feishu",
+      action: "fetchSystemOpenIdByUnionId",
+      recipientUnionId: unionId,
+      feishuCode: body.code,
+      feishuMessage: body.msg ?? String(res.status),
+      result: "failure",
+    });
     return null;
   }
 
@@ -177,9 +192,13 @@ export async function resolveDirectMessageTarget(
     return { receiveId: unionId, receiveIdType: "union_id", botKind };
   }
 
-  console.warn(
-    `[feishu] 独立审批机器人无法解析 union_id，拒绝回退通知机器人发送 openId=${openId}`,
-  );
+  logger.warn("feishu.recipient.approval_union_id_unresolved", {
+    module: "feishu",
+    action: "resolveDirectMessageTarget",
+    recipientOpenId: openId,
+    botKind,
+    result: "failure",
+  });
   throw new Error(
     "独立审批机器人无法解析收件人 union_id，请先让该用户登录系统或执行飞书通讯录同步",
   );

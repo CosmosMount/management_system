@@ -1,6 +1,8 @@
 import { prisma } from "@/lib/prisma";
+import { logger, withScriptLogging } from "@/lib/logger";
 
 async function main() {
+  return withScriptLogging("backfill-project-owners", async () => {
   const projects = await prisma.project.findMany({
     select: {
       id: true,
@@ -24,12 +26,21 @@ async function main() {
     created += 1;
   }
 
-  console.log(`Backfilled ${created} project owner records.`);
+  logger.audit("script.backfill_project_owners.completed", {
+    module: "script",
+    action: "backfillProjectOwners",
+    createdCount: created,
+  });
+  });
 }
 
 main()
   .catch((err) => {
-    console.error(err);
+    logger.error("script.backfill_project_owners.failed", {
+      module: "script",
+      action: "backfillProjectOwners",
+      error: err,
+    });
     process.exitCode = 1;
   })
   .finally(async () => {

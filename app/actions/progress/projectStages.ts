@@ -20,6 +20,7 @@ import { getNotificationContext } from "@/lib/request-origin";
 import { revalidateProgress } from "@/lib/revalidate";
 import { getUserRoles } from "@/lib/permissions";
 import { approvalSchema, stageSubmitSchema } from "@/lib/validations/progress";
+import { withActionLogging } from "@/lib/logger";
 
 export async function submitStageEvidence(input: {
   projectId: string;
@@ -29,6 +30,29 @@ export async function submitStageEvidence(input: {
 }) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.stage.evidence.submit",
+      module: "progress",
+      action: "submitStageEvidence",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "ProjectStage",
+      entityId: input.stageId,
+    },
+    async () => submitStageEvidenceLogged(input, user),
+  );
+}
+
+async function submitStageEvidenceLogged(
+  input: {
+    projectId: string;
+    stageId: string;
+    evidenceUrl: string;
+    note?: string;
+  },
+  user: { openId: string; name: string },
+) {
   const parsed = stageSubmitSchema.parse(input);
   const roles = await getUserRoles(user.openId);
 
@@ -150,6 +174,26 @@ async function reviewStageSubmission(
 ) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.stage.submission.review",
+      module: "progress",
+      action: "reviewStageSubmission",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "TaskSubmission",
+      entityId: input.submissionId,
+      decision: pass ? "APPROVED" : "REJECTED",
+    },
+    async () => reviewStageSubmissionLogged(input, pass, user),
+  );
+}
+
+async function reviewStageSubmissionLogged(
+  input: { submissionId: string; comment?: string; offlineConfirmed?: boolean },
+  pass: boolean,
+  user: { openId: string; name: string },
+) {
   const roles = await getUserRoles(user.openId);
   const parsed = approvalSchema.parse(input);
 

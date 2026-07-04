@@ -24,6 +24,7 @@ import {
   taskDdlChangeRequestSchema,
   taskDdlChangeReviewSchema,
 } from "@/lib/validations/progress";
+import { withActionLogging } from "@/lib/logger";
 
 const PENDING_DDL_CHANGE_KEY = "PENDING";
 
@@ -34,6 +35,28 @@ export async function requestTaskDdlChange(input: {
 }) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.task.ddl.request",
+      module: "progress",
+      action: "requestTaskDdlChange",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "Task",
+      entityId: input.taskId,
+    },
+    async () => requestTaskDdlChangeLogged(input, user),
+  );
+}
+
+async function requestTaskDdlChangeLogged(
+  input: {
+    taskId: string;
+    newDueAt: string;
+    reason: string;
+  },
+  user: { openId: string; name: string },
+) {
   const parsed = taskDdlChangeRequestSchema.parse(input);
 
   const task = await prisma.task.findUnique({
@@ -174,6 +197,29 @@ export async function reviewTaskDdlChange(input: {
 }) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.task.ddl.review",
+      module: "progress",
+      action: "reviewTaskDdlChange",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "TaskDdlChangeRequest",
+      entityId: input.requestId,
+      decision: input.decision,
+    },
+    async () => reviewTaskDdlChangeLogged(input, user),
+  );
+}
+
+async function reviewTaskDdlChangeLogged(
+  input: {
+    requestId: string;
+    decision: "APPROVED" | "REJECTED";
+    comment?: string;
+  },
+  user: { openId: string; name: string },
+) {
   const roles = await getUserRoles(user.openId);
   const parsed = taskDdlChangeReviewSchema.parse(input);
 

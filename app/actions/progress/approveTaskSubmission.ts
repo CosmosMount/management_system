@@ -19,6 +19,7 @@ import { getNotificationContext } from "@/lib/request-origin";
 import { revalidateProgress } from "@/lib/revalidate";
 import { getUserRoles } from "@/lib/permissions";
 import { approvalSchema } from "@/lib/validations/progress";
+import { withActionLogging } from "@/lib/logger";
 
 export async function approveTaskSubmission(input: {
   submissionId: string;
@@ -28,6 +29,30 @@ export async function approveTaskSubmission(input: {
 }) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.task.submission.approve",
+      module: "progress",
+      action: "approveTaskSubmission",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "TaskSubmission",
+      entityId: input.submissionId,
+      decision: "APPROVED",
+    },
+    async () => approveTaskSubmissionLogged(input, user),
+  );
+}
+
+async function approveTaskSubmissionLogged(
+  input: {
+    submissionId: string;
+    comment?: string;
+    offlineConfirmed?: boolean;
+    checkedChecklistItemIds?: string[];
+  },
+  user: { openId: string; name: string },
+) {
   const roles = await getUserRoles(user.openId);
   const parsed = approvalSchema.parse(input);
 
@@ -188,6 +213,29 @@ export async function rejectTaskSubmission(input: {
 }) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.task.submission.reject",
+      module: "progress",
+      action: "rejectTaskSubmission",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "TaskSubmission",
+      entityId: input.submissionId,
+      decision: "REJECTED",
+    },
+    async () => rejectTaskSubmissionLogged(input, user),
+  );
+}
+
+async function rejectTaskSubmissionLogged(
+  input: {
+    submissionId: string;
+    comment?: string;
+    offlineConfirmed?: boolean;
+  },
+  user: { openId: string; name: string },
+) {
   const roles = await getUserRoles(user.openId);
   const parsed = approvalSchema.parse(input);
 

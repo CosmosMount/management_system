@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import { logger } from "@/lib/logger";
 
 export function isSmtpConfigured(): boolean {
   return Boolean(
@@ -48,7 +49,10 @@ export async function sendEmail(options: {
   text?: string;
 }): Promise<{ sent: boolean; skipped: boolean }> {
   if (!isSmtpConfigured()) {
-    console.warn("[email] SMTP 未配置，跳过发送");
+    logger.warn("email.smtp.skipped_not_configured", {
+      module: "email",
+      action: "sendEmail",
+    });
     return { sent: false, skipped: true };
   }
 

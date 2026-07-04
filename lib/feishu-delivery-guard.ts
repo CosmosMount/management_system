@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { logger } from "@/lib/logger";
 
 function splitList(value: string | undefined): string[] {
   return (value ?? "")
@@ -43,9 +44,14 @@ export async function isFeishuDirectMessageAllowed(
       });
 
   if (!user) {
-    console.warn(
-      `[feishu] 私信收件人不在 allowlist，已拦截 openId=${openIdOrUnionId}`,
-    );
+    logger.warn("feishu.delivery.allowlist.blocked", {
+      module: "feishu",
+      action: "isFeishuDirectMessageAllowed",
+      recipientOpenId: openIdOrUnionId.startsWith("on_") ? undefined : openIdOrUnionId,
+      recipientUnionId: openIdOrUnionId.startsWith("on_") ? openIdOrUnionId : undefined,
+      reason: "user_not_found",
+      result: "skipped",
+    });
     return false;
   }
 
@@ -57,8 +63,14 @@ export async function isFeishuDirectMessageAllowed(
     return true;
   }
 
-  console.warn(
-    `[feishu] 私信收件人不在 allowlist，已拦截 openId=${user.openId} name=${user.name}`,
-  );
+  logger.warn("feishu.delivery.allowlist.blocked", {
+    module: "feishu",
+    action: "isFeishuDirectMessageAllowed",
+    recipientOpenId: user.openId,
+    recipientUnionId: user.unionId,
+    recipientName: user.name,
+    reason: "not_in_allowlist",
+    result: "skipped",
+  });
   return false;
 }

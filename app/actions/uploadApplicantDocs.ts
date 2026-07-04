@@ -29,6 +29,7 @@ import { serializeFilePaths } from "@/lib/order-attachments";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { clearProcurementRejectionFields } from "@/lib/procurement-rejection";
 import { prisma } from "@/lib/prisma";
+import { logger } from "@/lib/logger";
 import { canUploadApplicantDocs } from "@/lib/permissions";
 import {
   assertListSignaturesReady,
@@ -245,7 +246,13 @@ export async function uploadApplicantDocs(formData: FormData) {
   try {
     drainNotificationOutboxSoon();
   } catch (err) {
-    console.error("[procurement] drain notification outbox failed:", err);
+    logger.error("procurement.notification.drain_soon.failed", {
+      module: "procurement",
+      action: "uploadApplicantDocs",
+      entityType: "PurchaseOrder",
+      entityId: orderId,
+      error: err,
+    });
   }
 
   revalidateProcurement(orderId);

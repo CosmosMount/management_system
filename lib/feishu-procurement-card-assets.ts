@@ -4,6 +4,7 @@ import { buildAppUrl } from "@/lib/app-origin";
 import { uploadFeishuMessageImage } from "@/lib/feishu-im-upload";
 import { isImagePath } from "@/lib/image-path";
 import { resolveInvoicePaths } from "@/lib/order-attachments";
+import { logger } from "@/lib/logger";
 
 export type ApplicantAttachmentCardItem = {
   label: string;
@@ -49,9 +50,13 @@ export async function resolveApplicantAttachmentCardItems(
         items.push({ label, imgKey });
         continue;
       }
-      console.warn(
-        `[feishu] 卡片嵌入${label}失败，将改为系统链接 path=${path}`,
-      );
+      logger.warn("feishu.procurement.card.asset_embed_fallback", {
+        module: "feishu",
+        action: "resolveApplicantAttachmentCardItems",
+        label,
+        path,
+        botKind,
+      });
       items.push({ label, viewUrl: buildAppUrl(path, appOrigin) });
       continue;
     }
@@ -115,9 +120,12 @@ export async function resolveProcurementCardScreenshotOptions(
     if (screenshotImgKey) {
       return { screenshotImgKey };
     }
-    console.warn(
-      `[feishu] 卡片嵌入报销截图失败，将改为系统链接 path=${order.screenshotPath}`,
-    );
+    logger.warn("feishu.procurement.card.screenshot_embed_fallback", {
+      module: "feishu",
+      action: "resolveProcurementCardScreenshotOptions",
+      path: order.screenshotPath,
+      botKind,
+    });
     return {
       screenshotPath: order.screenshotPath,
       screenshotViewUrl: buildScreenshotViewUrl(order.screenshotPath, appOrigin),

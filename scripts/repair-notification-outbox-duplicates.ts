@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { logger, withScriptLogging } from "@/lib/logger";
 
 const MAX_ATTEMPTS = 8;
 const APPLY = process.env.APPLY_NOTIFICATION_OUTBOX_REPAIR === "true";
@@ -11,6 +12,7 @@ type DuplicateGroup = {
 };
 
 async function main() {
+  return withScriptLogging("repair-notification-outbox-duplicates", async () => {
   const legacyCompositeRows = await prisma.notificationOutbox.findMany({
     where: {
       botKind: "approval",
@@ -77,54 +79,103 @@ async function main() {
   }
 
   if (duplicateGroups.length === 0) {
-    console.log("[repair-notification-outbox] 没有发现待冻结的重复审批 outbox");
+    logger.info("notification.outbox.repair.duplicates.none", {
+      module: "script",
+      action: "repairNotificationOutboxDuplicates",
+    });
   } else {
-    console.log(
-      `[repair-notification-outbox] 发现 ${duplicateGroups.length} 组重复审批 outbox，` +
-        `${duplicateGroups.reduce((sum, group) => sum + group.freezeIds.length, 0)} 条可冻结。`,
-    );
+    logger.warn("notification.outbox.repair.duplicates.found", {
+      module: "script",
+      action: "repairNotificationOutboxDuplicates",
+      duplicateGroupCount: duplicateGroups.length,
+      freezeCount: duplicateGroups.reduce(
+        (sum, group) => sum + group.freezeIds.length,
+        0,
+      ),
+      groups: duplicateGroups,
+    });
     for (const group of duplicateGroups) {
-      console.log(
-        `- ${group.businessKey}: keep=${group.keepId}, freeze=${group.freezeIds.join(",")}`,
-      );
+      logger.info("notification.outbox.repair.duplicate_group", {
+        module: "script",
+        action: "repairNotificationOutboxDuplicates",
+        businessKey: group.businessKey,
+        keepId: group.keepId,
+        freezeIds: group.freezeIds,
+      });
     }
   }
 
   if (legacyCompositeRows.length > 0) {
-    console.log(
-      `[repair-notification-outbox] 发现 ${legacyCompositeRows.length} 条历史复合失败审批 outbox，` +
-        "这些记录没有 recipient 子行，自动重试可能重复发送给已成功收件人。",
-    );
+    logger.warn("notification.outbox.repair.legacy_composite.found", {
+      module: "script",
+      action: "repairNotificationOutboxDuplicates",
+      count: legacyCompositeRows.length,
+      rows: legacyCompositeRows.map((row) => ({
+        id: row.id,
+        eventKey: row.eventKey,
+        createdAt: row.createdAt,
+        attempts: row.attempts,
+      })),
+    });
     for (const row of legacyCompositeRows) {
-      console.log(
-        `- legacy-composite id=${row.id} attempts=${row.attempts} created=${row.createdAt.toISOString()} key=${row.eventKey}`,
-      );
+      logger.info("notification.outbox.repair.legacy_composite.row", {
+        module: "script",
+        action: "repairNotificationOutboxDuplicates",
+        entityType: "NotificationOutbox",
+        entityId: row.id,
+        eventKey: row.eventKey,
+        attempts: row.attempts,
+        createdAt: row.createdAt,
+      });
     }
   } else {
-    console.log("[repair-notification-outbox] 没有发现历史复合失败审批 outbox");
+    logger.info("notification.outbox.repair.legacy_composite.none", {
+      module: "script",
+      action: "repairNotificationOutboxDuplicates",
+    });
   }
 
   const legacyProjectRows = legacyProjectEstablishmentRows.filter((row) =>
     isLegacyProjectEstablishmentRequestedEventKey(row.eventKey),
   );
   if (legacyProjectRows.length > 0) {
-    console.log(
-      `[repair-notification-outbox] 发现 ${legacyProjectRows.length} 条旧幂等 key 的立项审批 outbox，` +
-        "这些记录使用 submittedAt 时间戳，重试可能造成重复通知。",
-    );
+    logger.warn("notification.outbox.repair.legacy_project_establishment.found", {
+      module: "script",
+      action: "repairNotificationOutboxDuplicates",
+      count: legacyProjectRows.length,
+      rows: legacyProjectRows.map((row) => ({
+        id: row.id,
+        eventKey: row.eventKey,
+        createdAt: row.createdAt,
+        attempts: row.attempts,
+      })),
+    });
     for (const row of legacyProjectRows) {
-      console.log(
-        `- legacy-project-establishment id=${row.id} attempts=${row.attempts} created=${row.createdAt.toISOString()} key=${row.eventKey}`,
-      );
+      logger.info("notification.outbox.repair.legacy_project_establishment.row", {
+        module: "script",
+        action: "repairNotificationOutboxDuplicates",
+        entityType: "NotificationOutbox",
+        entityId: row.id,
+        eventKey: row.eventKey,
+        attempts: row.attempts,
+        createdAt: row.createdAt,
+      });
     }
   } else {
-    console.log("[repair-notification-outbox] 没有发现旧幂等 key 的立项审批 outbox");
+    logger.info("notification.outbox.repair.legacy_project_establishment.none", {
+      module: "script",
+      action: "repairNotificationOutboxDuplicates",
+    });
   }
 
   if (!APPLY) {
-    console.log(
-      "[repair-notification-outbox] 当前为 dry-run；设置 APPLY_NOTIFICATION_OUTBOX_REPAIR=true 后才会写入数据库。",
-    );
+    logger.info("notification.outbox.repair.dry_run", {
+      module: "script",
+      action: "repairNotificationOutboxDuplicates",
+      duplicateGroupCount: duplicateGroups.length,
+      legacyCompositeCount: legacyCompositeRows.length,
+      legacyProjectEstablishmentCount: legacyProjectRows.length,
+    });
     return;
   }
 
@@ -156,7 +207,12 @@ async function main() {
     });
   }
 
-  console.log("[repair-notification-outbox] 已冻结历史重复审批 outbox。");
+  logger.audit("notification.outbox.repair.applied", {
+    module: "script",
+    action: "repairNotificationOutboxDuplicates",
+    freezeCount: freezeIds.size,
+  });
+  });
 }
 
 function approvalTodoBusinessKey(eventKey: string): string | null {
@@ -179,7 +235,11 @@ function isLegacyProjectEstablishmentRequestedEventKey(eventKey: string): boolea
 
 main()
   .catch((error) => {
-    console.error("[repair-notification-outbox] failed:", error);
+    logger.error("notification.outbox.repair.failed", {
+      module: "script",
+      action: "repairNotificationOutboxDuplicates",
+      error,
+    });
     process.exitCode = 1;
   })
   .finally(async () => {

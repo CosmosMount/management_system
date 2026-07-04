@@ -21,6 +21,7 @@ import { collectProjectNotificationRecipients } from "@/lib/progress-project-not
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import { revalidateProgress } from "@/lib/revalidate";
+import { withActionLogging } from "@/lib/logger";
 import {
   projectStageBatchDdlChangeRequestSchema,
   projectStageBatchDdlChangeReviewSchema,
@@ -29,6 +30,35 @@ import {
 } from "@/lib/validations/progress";
 
 const PENDING_DDL_CHANGE_KEY = "PENDING";
+
+type ProjectStageBatchDdlChangeInput = {
+  projectId: string;
+  stageId: string;
+  direction: "DELAY" | "ADVANCE";
+  reason: string;
+  durationDays: number;
+  isBenign: boolean;
+};
+
+type ProjectStageBatchDdlChangeReviewInput = {
+  requestId: string;
+  decision: ProjectDdlChangeRequestStatus;
+  comment: string;
+  finalIsBenign?: boolean;
+};
+
+type ProjectStageDueDateChangeInput = {
+  projectId: string;
+  stageId: string;
+  proposedDueAt: string;
+  reason: string;
+};
+
+type ProjectStageDueDateChangeReviewInput = {
+  requestId: string;
+  decision: ProjectDdlChangeRequestStatus;
+  comment: string;
+};
 
 export async function requestProjectStageExtension(input: {
   projectId: string;
@@ -40,16 +70,31 @@ export async function requestProjectStageExtension(input: {
   return requestProjectStageBatchDdlChange({ ...input, direction: "DELAY" });
 }
 
-export async function requestProjectStageBatchDdlChange(input: {
-  projectId: string;
-  stageId: string;
-  direction: "DELAY" | "ADVANCE";
-  reason: string;
-  durationDays: number;
-  isBenign: boolean;
-}) {
+export async function requestProjectStageBatchDdlChange(
+  input: ProjectStageBatchDdlChangeInput,
+) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.project.ddl.batch.request",
+      module: "progress",
+      action: "requestProjectStageBatchDdlChange",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "ProjectStage",
+      entityId: input.stageId,
+      projectId: input.projectId,
+      direction: input.direction,
+    },
+    async () => requestProjectStageBatchDdlChangeLogged(input, user),
+  );
+}
+
+async function requestProjectStageBatchDdlChangeLogged(
+  input: ProjectStageBatchDdlChangeInput,
+  user: { openId: string; name: string },
+) {
   const parsed = projectStageBatchDdlChangeRequestSchema.parse(input);
   const roles = await getUserRoles(user.openId);
   const signedDurationDays =
@@ -231,14 +276,30 @@ export async function reviewProjectStageExtensionRequest(input: {
   return reviewProjectStageBatchDdlChangeRequest(input);
 }
 
-export async function reviewProjectStageBatchDdlChangeRequest(input: {
-  requestId: string;
-  decision: ProjectDdlChangeRequestStatus;
-  comment: string;
-  finalIsBenign?: boolean;
-}) {
+export async function reviewProjectStageBatchDdlChangeRequest(
+  input: ProjectStageBatchDdlChangeReviewInput,
+) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.project.ddl.batch.review",
+      module: "progress",
+      action: "reviewProjectStageBatchDdlChangeRequest",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "ProjectDdlChangeRequest",
+      entityId: input.requestId,
+      decision: input.decision,
+    },
+    async () => reviewProjectStageBatchDdlChangeRequestLogged(input, user),
+  );
+}
+
+async function reviewProjectStageBatchDdlChangeRequestLogged(
+  input: ProjectStageBatchDdlChangeReviewInput,
+  user: { openId: string; name: string },
+) {
   const parsed = projectStageBatchDdlChangeReviewSchema.parse(input);
   const roles = await getUserRoles(user.openId);
 
@@ -452,14 +513,30 @@ export async function reviewProjectStageBatchDdlChangeRequest(input: {
   return { success: true };
 }
 
-export async function requestProjectStageDueDateChange(input: {
-  projectId: string;
-  stageId: string;
-  proposedDueAt: string;
-  reason: string;
-}) {
+export async function requestProjectStageDueDateChange(
+  input: ProjectStageDueDateChangeInput,
+) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.project.ddl.stage.request",
+      module: "progress",
+      action: "requestProjectStageDueDateChange",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "ProjectStage",
+      entityId: input.stageId,
+      projectId: input.projectId,
+    },
+    async () => requestProjectStageDueDateChangeLogged(input, user),
+  );
+}
+
+async function requestProjectStageDueDateChangeLogged(
+  input: ProjectStageDueDateChangeInput,
+  user: { openId: string; name: string },
+) {
   const parsed = projectStageDueDateChangeRequestSchema.parse(input);
   const roles = await getUserRoles(user.openId);
 
@@ -596,13 +673,30 @@ export async function requestProjectStageDueDateChange(input: {
   return request;
 }
 
-export async function reviewProjectStageDueDateChangeRequest(input: {
-  requestId: string;
-  decision: ProjectDdlChangeRequestStatus;
-  comment: string;
-}) {
+export async function reviewProjectStageDueDateChangeRequest(
+  input: ProjectStageDueDateChangeReviewInput,
+) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.project.ddl.stage.review",
+      module: "progress",
+      action: "reviewProjectStageDueDateChangeRequest",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "ProjectDdlChangeRequest",
+      entityId: input.requestId,
+      decision: input.decision,
+    },
+    async () => reviewProjectStageDueDateChangeRequestLogged(input, user),
+  );
+}
+
+async function reviewProjectStageDueDateChangeRequestLogged(
+  input: ProjectStageDueDateChangeReviewInput,
+  user: { openId: string; name: string },
+) {
   const parsed = projectStageDueDateChangeReviewSchema.parse(input);
   const roles = await getUserRoles(user.openId);
 

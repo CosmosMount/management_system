@@ -26,6 +26,23 @@
 - 飞书集成拆分为 OAuth、通讯录、消息发送与通知 outbox。`NotificationOutbox.channel` 表示业务域，`botKind` 表示发送机器人：`notification` 发送普通通知，`approval` 只发送审批/验收/确认待办。
 - 通知 outbox 分两层：`NotificationOutbox` 表示业务事件，`NotificationOutboxRecipient` 表示单个收件人的投递状态。drain 只能重试失败收件人，不能把已成功收件人再次发送。
 
+## 结构化日志
+
+- 统一入口为 `lib/logger.ts`，默认输出 JSON line；开发环境可通过 `LOG_FORMAT=pretty` 使用可读格式，`LOG_LEVEL=debug|info|warn|error|silent` 控制级别。
+- 标准字段：`timestamp、level、event、requestId、actorOpenId、module、action、entityType、entityId、durationMs、result、errorCode、errorMessage`。排查时优先按 `requestId/event/entityId/eventKey` 串联。
+- 日志会自动脱敏 `password、secret、token、cookie、authorization、appSecret、DATABASE_URL` 等字段。不要把完整飞书卡片、请求 cookie、数据库连接串、文件正文或大体量导入内容写进日志。
+- 业务可见历史继续写 `ProgressActivityLog`；工程排障写结构化日志。两者职责分开，不能用 stdout 日志替代业务审计记录。
+- 关键接入点：进度立项/阶段/任务/风险/周报 action、通知 outbox 入队与收件人级投递、飞书 WS/卡片回调、cron、Playwright DB setup、Prisma 连接池错误。
+- 事务内 outbox 入队日志使用 `notification.outbox.enqueue_tx.prepared` 和 `result=prepared`，只表示事务中已准备写入；只有事务提交后数据库里的 outbox 行才代表可投递事件。
+- 本地和测试验证默认设置 `NOTIFICATION_DELIVERY_DISABLED=true`，只检查 outbox 和日志，不发送真实飞书消息。
+
+### 已知框架治理项
+
+- Web 进程里仍存在 `drainNotificationOutboxSoon()`，当前已具备结构化日志，但后续应收口为“Web 只入队，cron/worker 统一投递”。
+- outbox claim 当前以乐观 `updateMany` 抢占为主；后续建议改为 PostgreSQL `FOR UPDATE SKIP LOCKED` 原子 claim，并记录 `lockOwner`/心跳。
+- feedback、部分采购退回/重提通知仍可能走复合发送 fallback；后续应让所有通知类型在入队时固化 recipient plan。
+- 维护脚本应逐步统一 dry-run/confirm 约定，写操作脚本必须要求显式 `APPLY_*=true` 和目标数据库确认。
+
 ## 目录结构
 
 ```

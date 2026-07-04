@@ -24,6 +24,7 @@ import type { TaskCreationDraft } from "@/lib/progress-task-creation-requests";
 import { getNotificationContext } from "@/lib/request-origin";
 import { prisma } from "@/lib/prisma";
 import { revalidateProgress } from "@/lib/revalidate";
+import { withActionLogging } from "@/lib/logger";
 import {
   batchTaskImportSchema,
   createTaskSchema,
@@ -50,6 +51,26 @@ type PreparedImportTask = {
 export async function importProgressTasks(input: BatchTaskImportInput) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.task.import",
+      module: "progress",
+      action: "importProgressTasks",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "Project",
+      entityId: input.projectId,
+      mode: input.mode,
+      taskCount: input.tasks.length,
+    },
+    async () => importProgressTasksLogged(input, user),
+  );
+}
+
+async function importProgressTasksLogged(
+  input: BatchTaskImportInput,
+  user: { openId: string; name: string },
+) {
   const roles = await getUserRoles(user.openId);
   const parsed = batchTaskImportSchema.parse(input);
   const rawTasks = parsed.tasks.filter((task) => !task.ignored);

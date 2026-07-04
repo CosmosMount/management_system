@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { spawn } from "node:child_process";
 import pg from "pg";
+import { logger, withScriptLogging } from "../lib/logger";
 
 const databaseUrl = process.env.PLAYWRIGHT_DATABASE_URL;
 const setupMode = process.env.PLAYWRIGHT_DB_SETUP_MODE ?? "recreate";
@@ -44,7 +45,12 @@ async function recreateDatabase(databaseName: string) {
     );
     await client.query(`DROP DATABASE IF EXISTS ${quoteIdentifier(databaseName)}`);
     await client.query(`CREATE DATABASE ${quoteIdentifier(databaseName)}`);
-    console.log(`[playwright-db] recreated database ${databaseName}`);
+    logger.info("playwright.db.recreated", {
+      module: "playwright",
+      action: "recreateDatabase",
+      databaseName,
+      isTestDatabase: databaseName.endsWith("_test"),
+    });
   } finally {
     await client.end();
   }
@@ -224,7 +230,11 @@ async function clearRestoredNotificationOutbox() {
     );
     if (!result.rows[0]?.table_name) return;
     await client.query('TRUNCATE TABLE "NotificationOutbox" CASCADE');
-    console.log("[playwright-db] cleared NotificationOutbox tables in cloned database");
+    logger.info("playwright.db.notification_outbox_cleared", {
+      module: "playwright",
+      action: "clearRestoredNotificationOutbox",
+      databaseName: targetDatabase,
+    });
   } finally {
     await client.end();
   }
@@ -237,18 +247,35 @@ async function cloneDatabase(sourceDatabaseUrl: string) {
     await recreateDatabase(targetDatabase);
     await pipeDumpToRestore(sourceDatabaseUrl, targetDatabaseUrl);
     await clearRestoredNotificationOutbox();
-    console.log(`[playwright-db] cloned source database into ${targetDatabase}`);
+    logger.info("playwright.db.cloned", {
+      module: "playwright",
+      action: "cloneDatabase",
+      databaseName: targetDatabase,
+      usedPgDump: true,
+    });
     return;
   }
 
   assertSamePostgresServer(sourceDatabaseUrl);
   await recreateDatabase(targetDatabase);
-  console.log(
-    "[playwright-db] pg_dump/pg_restore not found; created empty target for logical clone after migrations",
-  );
+  logger.warn("playwright.db.clone_without_pg_dump", {
+    module: "playwright",
+    action: "cloneDatabase",
+    databaseName: targetDatabase,
+    usedPgDump: false,
+  });
 }
 
 async function main() {
+  logger.info("playwright.db.setup.start", {
+    module: "playwright",
+    action: "setupPlaywrightDb",
+    setupMode,
+    databaseName: targetDatabase,
+    isTestDatabase: targetDatabase.endsWith("_test"),
+    notificationDeliveryDisabled:
+      process.env.NOTIFICATION_DELIVERY_DISABLED === "true",
+  });
   if (setupMode === "clone") {
     const sourceDatabaseUrl = process.env.PLAYWRIGHT_SOURCE_DATABASE_URL;
     if (!sourceDatabaseUrl) {
@@ -270,7 +297,12 @@ async function main() {
   await recreateDatabase(`${targetDatabase}_shadow`);
 }
 
-main().catch((error) => {
-  console.error(error);
+withScriptLogging("setup-playwright-db", main).catch((error) => {
+  logger.error("playwright.db.setup.failed", {
+    module: "playwright",
+    action: "setupPlaywrightDb",
+    databaseName: targetDatabase,
+    error,
+  });
   process.exit(1);
 });

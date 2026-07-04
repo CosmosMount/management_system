@@ -20,6 +20,7 @@ import {
   taskStatusLabels,
   urgencyLabels,
 } from "@/lib/progress-labels";
+import { logger } from "@/lib/logger";
 
 const progressBotKindStorage = new AsyncLocalStorage<FeishuBotKind>();
 
@@ -571,23 +572,60 @@ async function sendDirectCard(
   openId: string,
   card: ReturnType<typeof buildCard>,
 ) {
-  if (!(await isFeishuDirectMessageAllowed(openId))) return;
+  if (!(await isFeishuDirectMessageAllowed(openId))) {
+    logger.info("feishu.progress.direct_message.skipped_by_allowlist", {
+      module: "feishu",
+      action: "sendProgressDirectCard",
+      recipientOpenId: openId,
+      result: "skipped",
+    });
+    return;
+  }
 
   const botKind = progressBotKindStorage.getStore() ?? "notification";
   const target = await resolveDirectMessageTarget(openId, botKind);
   try {
     await postDirectCard(target, card);
+    logger.info("feishu.progress.direct_message.sent", {
+      module: "feishu",
+      action: "sendProgressDirectCard",
+      recipientOpenId: openId,
+      botKind: target.botKind,
+      receiveIdType: target.receiveIdType,
+      result: "success",
+    });
   } catch (error) {
     if (!shouldFallbackApprovalBotUnavailable(target.botKind, error)) {
+      logger.error("feishu.progress.direct_message.failed", {
+        module: "feishu",
+        action: "sendProgressDirectCard",
+        recipientOpenId: openId,
+        botKind: target.botKind,
+        receiveIdType: target.receiveIdType,
+        error,
+      });
       throw error;
     }
-    console.warn(
-      `[feishu] 审批机器人对用户不可用，改用通知机器人发送 openId=${openId}`,
-    );
+    logger.warn("feishu.progress.approval_bot_fallback", {
+      module: "feishu",
+      action: "sendProgressDirectCard",
+      recipientOpenId: openId,
+      botKind: target.botKind,
+      receiveIdType: target.receiveIdType,
+      error,
+    });
     await postDirectCard(
       await resolveDirectMessageTarget(openId, "notification"),
       card,
     );
+    logger.info("feishu.progress.direct_message.sent", {
+      module: "feishu",
+      action: "sendProgressDirectCard",
+      recipientOpenId: openId,
+      botKind: "notification",
+      result: "success",
+      fallback: true,
+    });
   }
 }
 
@@ -695,6 +733,12 @@ async function sendCardToOpenIds(
   const recipients = [...new Set(openIds.filter(Boolean))];
   if (recipients.length === 0) return;
 
+  logger.info("feishu.progress.direct_message.batch.start", {
+    module: "feishu",
+    action: "sendProgressCards",
+    recipientCount: recipients.length,
+    botKind: progressBotKindStorage.getStore() ?? "notification",
+  });
   const results = await Promise.allSettled(
     recipients.map((id) => sendDirectCard(id, card)),
   );
@@ -708,6 +752,12 @@ async function sendCardToOpenIds(
       `飞书通知发送失败：${failures.length}/${results.length} 个收件人失败；${message}`,
     );
   }
+  logger.info("feishu.progress.direct_message.batch.completed", {
+    module: "feishu",
+    action: "sendProgressCards",
+    recipientCount: recipients.length,
+    result: "success",
+  });
 }
 
 export async function sendProgressNotification(
@@ -1542,7 +1592,15 @@ export async function runProgressOverdueCheck() {
       team: task.team,
       techGroup: task.techGroup,
       assigneeOpenIds: getTaskAssigneeOpenIds(task),
-    }).catch(console.error);
+    }).catch((error) => {
+      logger.error("progress.overdue_notification.failed", {
+        module: "progress",
+        action: "runProgressOverdueCheck",
+        entityType: "Task",
+        entityId: task.id,
+        error,
+      });
+    });
   }
 
   return overdueTasks.length;
@@ -1565,7 +1623,15 @@ export async function runWeeklyReportReminders() {
       taskId: task.id,
       taskTitle: task.title,
       assigneeOpenIds: getTaskAssigneeOpenIds(task),
-    }).catch(console.error);
+    }).catch((error) => {
+      logger.error("progress.weekly_report_reminder.failed", {
+        module: "progress",
+        action: "runWeeklyReportReminders",
+        entityType: "Task",
+        entityId: task.id,
+        error,
+      });
+    });
   }
 
   return activeTasks.length;

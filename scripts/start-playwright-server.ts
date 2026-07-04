@@ -1,5 +1,6 @@
 import { spawn } from "child_process";
 import path from "path";
+import { logger, withScriptLogging } from "../lib/logger";
 
 const databaseUrl = process.env.PLAYWRIGHT_DATABASE_URL;
 const port = process.env.PLAYWRIGHT_SERVER_PORT ?? "3002";
@@ -53,6 +54,14 @@ function runStep(
 async function main() {
   const tsxBin = path.join(process.cwd(), "node_modules", ".bin", "tsx");
   const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+  logger.info("playwright.server.start", {
+    module: "playwright",
+    action: "startPlaywrightServer",
+    port,
+    databaseName: targetDatabase,
+    isTestDatabase: targetDatabase.endsWith("_test"),
+    notificationDeliveryDisabled: true,
+  });
 
   await runStep(process.execPath, [tsxBin, "scripts/setup-playwright-db.ts"]);
   await runStep(npmCommand, ["run", "db:deploy"]);
@@ -68,7 +77,13 @@ async function main() {
   });
 }
 
-main().catch((error) => {
-  console.error(error);
+withScriptLogging("start-playwright-server", main).catch((error) => {
+  logger.error("playwright.server.failed", {
+    module: "playwright",
+    action: "startPlaywrightServer",
+    port,
+    databaseName: targetDatabase,
+    error,
+  });
   process.exit(1);
 });

@@ -36,6 +36,7 @@ import {
   statusLabels,
 } from "@/lib/permissions-client";
 import { routes } from "@/lib/routes";
+import { logger } from "@/lib/logger";
 
 export type OrderItemSummary = {
   name: string;
@@ -111,7 +112,16 @@ async function sendDirectCard(
   botKind: FeishuBotKind = "notification",
   options?: { trackOrderId?: string; trackCardStage?: OrderCardPayload["status"] },
 ) {
-  if (!(await isFeishuDirectMessageAllowed(openId))) return;
+  if (!(await isFeishuDirectMessageAllowed(openId))) {
+    logger.info("feishu.procurement.direct_message.skipped_by_allowlist", {
+      module: "feishu",
+      action: "sendProcurementDirectCard",
+      recipientOpenId: openId,
+      botKind,
+      result: "skipped",
+    });
+    return;
+  }
 
   if (card.schema === "2.0") {
     await sendTrackedProcurementCardKitDm(
@@ -121,21 +131,59 @@ async function sendDirectCard(
       options?.trackOrderId,
       options?.trackCardStage,
     );
-    console.log(`[feishu] CardKit 卡片已发送 openId=${openId}`);
+    logger.info("feishu.procurement.cardkit_direct_message.sent", {
+      module: "feishu",
+      action: "sendProcurementDirectCard",
+      entityType: options?.trackOrderId ? "PurchaseOrder" : undefined,
+      entityId: options?.trackOrderId,
+      recipientOpenId: openId,
+      botKind,
+      cardStage: options?.trackCardStage,
+      result: "success",
+    });
     return;
   }
 
   const target = await resolveDirectMessageTarget(openId, botKind);
   try {
     await postDirectCard(target, card);
+    logger.info("feishu.procurement.direct_message.sent", {
+      module: "feishu",
+      action: "sendProcurementDirectCard",
+      recipientOpenId: openId,
+      botKind: target.botKind,
+      receiveIdType: target.receiveIdType,
+      result: "success",
+    });
   } catch (error) {
     if (!shouldFallbackApprovalBotUnavailable(target.botKind, error)) {
+      logger.error("feishu.procurement.direct_message.failed", {
+        module: "feishu",
+        action: "sendProcurementDirectCard",
+        recipientOpenId: openId,
+        botKind: target.botKind,
+        receiveIdType: target.receiveIdType,
+        error,
+      });
       throw error;
     }
-    console.warn(
-      `[feishu] 审批机器人对用户不可用，改用通知机器人发送 openId=${openId}`,
-    );
+    logger.warn("feishu.procurement.approval_bot_fallback", {
+      module: "feishu",
+      action: "sendProcurementDirectCard",
+      recipientOpenId: openId,
+      botKind: target.botKind,
+      receiveIdType: target.receiveIdType,
+      error,
+    });
     await postDirectCard(await resolveDirectMessageTarget(openId, "notification"), card);
+    logger.info("feishu.procurement.direct_message.sent", {
+      module: "feishu",
+      action: "sendProcurementDirectCard",
+      recipientOpenId: openId,
+      botKind: "notification",
+      result: "success",
+      fallback: true,
+    });
   }
 }
 
@@ -325,15 +373,28 @@ export async function sendManagementReviewNotification(
   botKind: FeishuBotKind = "approval",
 ) {
   await sendOrderGroupWebhook(order, context).catch((err) => {
-    console.error("[feishu] Webhook 通知失败:", err);
+    logger.error("feishu.procurement.webhook.failed", {
+      module: "feishu",
+      action: "sendManagementReviewNotification",
+      entityType: "PurchaseOrder",
+      entityId: order.id,
+      status: order.status,
+      error: err,
+    });
   });
 
   const openIds = await collectOrderNotificationRecipientOpenIds(order);
 
   if (openIds.length === 0) {
-    console.warn(
-      "[feishu] 管理审核无可通知审批人（请确保车组/技术组组长已飞书登录本系统）",
-    );
+    logger.warn("feishu.procurement.approver.empty", {
+      module: "feishu",
+      action: "sendManagementReviewNotification",
+      entityType: "PurchaseOrder",
+      entityId: order.id,
+      status: order.status,
+      team: order.team,
+      techGroup: order.techGroup,
+    });
     return;
   }
 
@@ -392,7 +453,14 @@ export async function sendProcurementRejectedNotification(
 
   await postProcurementWebhook({ msg_type: "interactive", card }).catch(
     (err) => {
-      console.error("[feishu] Webhook 通知失败:", err);
+      logger.error("feishu.procurement.webhook.failed", {
+        module: "feishu",
+        action: "sendProcurementRejectedNotification",
+        entityType: "PurchaseOrder",
+        entityId: order.id,
+        status: order.status,
+        error: err,
+      });
     },
   );
   await notifyInitiator(order, {
@@ -433,7 +501,14 @@ export async function sendApplicantResubmitNotification(
 
   await postProcurementWebhook({ msg_type: "interactive", card }).catch(
     (err) => {
-      console.error("[feishu] Webhook 通知失败:", err);
+      logger.error("feishu.procurement.webhook.failed", {
+        module: "feishu",
+        action: "sendApplicantResubmitNotification",
+        entityType: "PurchaseOrder",
+        entityId: order.id,
+        status: order.status,
+        error: err,
+      });
     },
   );
   await notifyInitiator(order, {
@@ -474,7 +549,14 @@ export async function sendProcurementReturnDraftNotification(
 
   await postProcurementWebhook({ msg_type: "interactive", card }).catch(
     (err) => {
-      console.error("[feishu] Webhook 通知失败:", err);
+      logger.error("feishu.procurement.webhook.failed", {
+        module: "feishu",
+        action: "sendProcurementReturnDraftNotification",
+        entityType: "PurchaseOrder",
+        entityId: order.id,
+        status: order.status,
+        error: err,
+      });
     },
   );
   await notifyInitiator(order, {
@@ -504,7 +586,14 @@ export async function sendOrderNotification(
   }
 
   await sendOrderGroupWebhook(order, context).catch((err) => {
-    console.error("[feishu] Webhook 通知失败:", err);
+    logger.error("feishu.procurement.webhook.failed", {
+      module: "feishu",
+      action: "sendOrderNotification",
+      entityType: "PurchaseOrder",
+      entityId: order.id,
+      status: order.status,
+      error: err,
+    });
   });
 
   const emailTask =
@@ -517,7 +606,17 @@ export async function sendOrderNotification(
     await emailTask;
     const approverRole = statusApproverRole[order.status];
     if (approverRole) {
-      console.warn(`[feishu] 角色 ${roleLabels[approverRole]} 无可通知用户`);
+      logger.warn("feishu.procurement.approver.empty", {
+        module: "feishu",
+        action: "sendOrderNotification",
+        entityType: "PurchaseOrder",
+        entityId: order.id,
+        status: order.status,
+        approverRole,
+        approverRoleLabel: roleLabels[approverRole],
+        team: order.team,
+        techGroup: order.techGroup,
+      });
     }
     return;
   }

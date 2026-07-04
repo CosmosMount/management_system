@@ -22,6 +22,7 @@ import {
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import { revalidateAdmin, revalidateProgress } from "@/lib/revalidate";
+import { withActionLogging } from "@/lib/logger";
 
 const reminderRuleUpdateSchema = z.object({
   rules: z.array(
@@ -44,14 +45,40 @@ const manualReminderSchema = z.object({
 });
 
 export async function updateProgressReminderRules(input: unknown) {
-  await requireSuperAdmin();
+  const session = await requireSuperAdmin();
+  return withActionLogging(
+    {
+      event: "progress.reminder.rules.update",
+      module: "progress",
+      action: "updateProgressReminderRules",
+      actorOpenId: session.user.openId,
+      actorName: session.user.name ?? undefined,
+    },
+    async () => updateProgressReminderRulesLogged(input),
+  );
+}
+
+async function updateProgressReminderRulesLogged(input: unknown) {
   const parsed = reminderRuleUpdateSchema.parse(input);
   await saveProgressReminderRules(parsed.rules);
   revalidateAdmin();
 }
 
 export async function runProgressReminderScanNow() {
-  await requireSuperAdmin();
+  const session = await requireSuperAdmin();
+  return withActionLogging(
+    {
+      event: "progress.reminder.scan.run",
+      module: "progress",
+      action: "runProgressReminderScanNow",
+      actorOpenId: session.user.openId,
+      actorName: session.user.name ?? undefined,
+    },
+    async () => runProgressReminderScanNowLogged(),
+  );
+}
+
+async function runProgressReminderScanNowLogged() {
   const result = await runDueProgressReminderRules({
     force: true,
     context: await getNotificationContext(),
@@ -65,7 +92,22 @@ export async function runProgressReminderScanNow() {
 }
 
 export async function retryProgressReminderOutbox(id: string) {
-  await requireSuperAdmin();
+  const session = await requireSuperAdmin();
+  return withActionLogging(
+    {
+      event: "progress.reminder.outbox.retry",
+      module: "progress",
+      action: "retryProgressReminderOutbox",
+      actorOpenId: session.user.openId,
+      actorName: session.user.name ?? undefined,
+      entityType: "NotificationOutbox",
+      entityId: id,
+    },
+    async () => retryProgressReminderOutboxLogged(id),
+  );
+}
+
+async function retryProgressReminderOutboxLogged(id: string) {
   const updated = await resetNotificationOutboxForRetry({
     id,
     channel: "progress",
@@ -81,6 +123,22 @@ export async function retryProgressReminderOutbox(id: string) {
 export async function sendManualProgressReminder(input: unknown) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.reminder.manual.send",
+      module: "progress",
+      action: "sendManualProgressReminder",
+      actorOpenId: user.openId,
+      actorName: user.name,
+    },
+    async () => sendManualProgressReminderLogged(input, user),
+  );
+}
+
+async function sendManualProgressReminderLogged(
+  input: unknown,
+  user: { openId: string; name: string },
+) {
   const roles = await getUserRoles(user.openId);
   const parsed = manualReminderSchema.parse(input);
   const message = parsed.message?.trim() || undefined;

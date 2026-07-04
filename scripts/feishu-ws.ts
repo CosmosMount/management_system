@@ -5,6 +5,7 @@ import {
   getFeishuCredentialsByBotKind,
   type FeishuBotKind,
 } from "../lib/feishu-app-config";
+import { logger, withScriptLogging } from "../lib/logger";
 
 function resolveWsBotKind(): FeishuBotKind {
   const raw = process.env.FEISHU_WS_BOT_KIND?.trim();
@@ -35,6 +36,7 @@ function resolveEventConfig(botKind: FeishuBotKind): {
 async function main() {
   const botKind = resolveWsBotKind();
   const credentials = getFeishuCredentialsByBotKind(botKind);
+  const eventConfig = resolveEventConfig(botKind);
 
   const wsClient = new Lark.WSClient({
     appId: credentials.appId,
@@ -43,7 +45,12 @@ async function main() {
   });
 
   const shutdown = (signal: string) => {
-    console.log(`[feishu-ws] 收到 ${signal}，正在关闭长连接…`);
+    logger.info("feishu.ws.shutdown", {
+      module: "feishu-ws",
+      action: "shutdown",
+      botKind,
+      signal,
+    });
     wsClient.close();
     process.exit(0);
   };
@@ -53,17 +60,25 @@ async function main() {
 
   await wsClient.start({
     eventDispatcher: createFeishuEventDispatcher({
-      ...resolveEventConfig(botKind),
+      ...eventConfig,
       botKind,
     }),
   });
 
-  console.log(
-    `[feishu-ws] ${botKind} 机器人长连接已建立。现在可在飞书开放平台「事件与回调」选择「使用长连接接收事件」并保存。`,
-  );
+  logger.info("feishu.ws.started", {
+    module: "feishu-ws",
+    action: "start",
+    botKind,
+    hasEncryptKey: Boolean(eventConfig.encryptKey),
+    hasVerificationToken: Boolean(eventConfig.verificationToken),
+  });
 }
 
-main().catch((error) => {
-  console.error("[feishu-ws] 启动失败:", error);
+withScriptLogging("feishu-ws", main).catch((error) => {
+  logger.error("feishu.ws.start.failed", {
+    module: "feishu-ws",
+    action: "start",
+    error,
+  });
   process.exit(1);
 });

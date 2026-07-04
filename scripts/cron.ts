@@ -8,6 +8,7 @@ import { runDueProgressReminderRules } from "../lib/progress-reminders";
 import { syncFeishuContactUsers } from "../lib/feishu-user-sync";
 import { drainNotificationOutbox } from "../lib/notification-outbox";
 import { prisma } from "../lib/prisma";
+import { logger } from "../lib/logger";
 
 const CONTACT_SYNC_CRON = process.env.FEISHU_CONTACT_SYNC_CRON ?? "30 8 * * *";
 let contactSyncRunning = false;
@@ -30,14 +31,21 @@ async function runProcurementDaily() {
   await sendFeishuDailySummary(ordersByStatus);
 
   const reminded = await runProcurementStaleReminders();
-  console.log(
-    `[cron] 采购日报已发送，共 ${orders.length} 条未完结；催办 ${reminded} 单`,
-  );
+  logger.info("cron.procurement_daily.completed", {
+    module: "cron",
+    action: "runProcurementDaily",
+    openOrderCount: orders.length,
+    remindedCount: reminded,
+  });
 }
 
 async function runProgressDaily() {
   if (progressScanRunning) {
-    console.warn("[cron] 进度提醒扫描仍在运行，跳过本次扫描");
+    logger.warn("cron.progress_reminders.skipped_running", {
+      module: "cron",
+      action: "runProgressDaily",
+      result: "skipped",
+    });
     return;
   }
 
@@ -45,12 +53,19 @@ async function runProgressDaily() {
   try {
     const result = await runDueProgressReminderRules();
     if (result.skipped) {
-      console.warn("[cron] 进度提醒扫描已由其他入口执行，跳过本次扫描");
+      logger.warn("cron.progress_reminders.skipped_lock", {
+        module: "cron",
+        action: "runProgressDaily",
+        result: "skipped",
+      });
       return;
     }
-    console.log(
-      `[cron] 进度提醒扫描：执行 ${result.rulesRun} 条规则，入队 ${result.queued} 条通知`,
-    );
+    logger.info("cron.progress_reminders.completed", {
+      module: "cron",
+      action: "runProgressDaily",
+      rulesRun: result.rulesRun,
+      queued: result.queued,
+    });
   } finally {
     progressScanRunning = false;
   }
@@ -58,16 +73,24 @@ async function runProgressDaily() {
 
 async function runFeishuContactSync() {
   if (contactSyncRunning) {
-    console.warn("[cron] 飞书人员同步仍在运行，跳过本次扫描");
+    logger.warn("cron.feishu_contact_sync.skipped_running", {
+      module: "cron",
+      action: "runFeishuContactSync",
+      result: "skipped",
+    });
     return;
   }
 
   contactSyncRunning = true;
   try {
     const result = await syncFeishuContactUsers();
-    console.log(
-      `[cron] 飞书人员同步完成：总计 ${result.total} 人，新增 ${result.created} 人，更新 ${result.updated} 人`,
-    );
+    logger.info("cron.feishu_contact_sync.completed", {
+      module: "cron",
+      action: "runFeishuContactSync",
+      total: result.total,
+      created: result.created,
+      updated: result.updated,
+    });
   } finally {
     contactSyncRunning = false;
   }
@@ -75,7 +98,11 @@ async function runFeishuContactSync() {
 
 async function runProcurementBudgetScan() {
   if (budgetScanRunning) {
-    console.warn("[cron] 采购预算预警扫描仍在运行，跳过本次扫描");
+    logger.warn("cron.procurement_budget_scan.skipped_running", {
+      module: "cron",
+      action: "runProcurementBudgetScan",
+      result: "skipped",
+    });
     return;
   }
 
@@ -83,7 +110,11 @@ async function runProcurementBudgetScan() {
   try {
     const queued = await runProcurementBudgetAlerts();
     if (queued > 0) {
-      console.log(`[cron] 采购预算预警：入队 ${queued} 条通知`);
+      logger.info("cron.procurement_budget_scan.completed", {
+        module: "cron",
+        action: "runProcurementBudgetScan",
+        queued,
+      });
     }
   } finally {
     budgetScanRunning = false;
@@ -93,37 +124,69 @@ async function runProcurementBudgetScan() {
 async function runNotificationOutboxDrain() {
   const sent = await drainNotificationOutbox(50);
   if (sent > 0) {
-    console.log(`[cron] 通知 outbox 已发送 ${sent} 条`);
+    logger.info("cron.notification_outbox_drain.completed", {
+      module: "cron",
+      action: "runNotificationOutboxDrain",
+      sent,
+    });
   }
 }
 
 cron.schedule(CONTACT_SYNC_CRON, () => {
   runFeishuContactSync().catch((err) =>
-    console.error("[cron] 飞书人员同步失败:", err),
+    logger.error("cron.feishu_contact_sync.failed", {
+      module: "cron",
+      action: "runFeishuContactSync",
+      error: err,
+    }),
   );
 });
 
 cron.schedule("*/2 * * * *", () => {
   runNotificationOutboxDrain().catch((err) =>
-    console.error("[cron] 通知 outbox 发送失败:", err),
+    logger.error("cron.notification_outbox_drain.failed", {
+      module: "cron",
+      action: "runNotificationOutboxDrain",
+      error: err,
+    }),
   );
 });
 
 cron.schedule("*/10 * * * *", () => {
   runProgressDaily().catch((err) =>
-    console.error("[cron] 进度提醒扫描失败:", err),
+    logger.error("cron.progress_reminders.failed", {
+      module: "cron",
+      action: "runProgressDaily",
+      error: err,
+    }),
   );
   runProcurementBudgetScan().catch((err) =>
-    console.error("[cron] 采购预算预警扫描失败:", err),
+    logger.error("cron.procurement_budget_scan.failed", {
+      module: "cron",
+      action: "runProcurementBudgetScan",
+      error: err,
+    }),
   );
 });
 
 cron.schedule("0 9 * * *", () => {
   runProcurementDaily().catch((err) =>
-    console.error("[cron] 采购日报失败:", err),
+    logger.error("cron.procurement_daily.failed", {
+      module: "cron",
+      action: "runProcurementDaily",
+      error: err,
+    }),
   );
 });
 
-console.log(
-  `[cron] 定时任务已启动：飞书人员同步(${CONTACT_SYNC_CRON})，每日 09:00 采购日报+催办，每 10 分钟扫描进度提醒与采购预算预警，每 2 分钟发送通知 outbox`,
-);
+logger.info("cron.started", {
+  module: "cron",
+  action: "startup",
+  contactSyncCron: CONTACT_SYNC_CRON,
+  notificationOutboxCron: "*/2 * * * *",
+  progressReminderCron: "*/10 * * * *",
+  procurementBudgetCron: "*/10 * * * *",
+  procurementDailyCron: "0 9 * * *",
+  notificationDeliveryDisabled:
+    process.env.NOTIFICATION_DELIVERY_DISABLED === "true",
+});

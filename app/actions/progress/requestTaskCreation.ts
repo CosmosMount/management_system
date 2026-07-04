@@ -26,6 +26,7 @@ import {
 import { getNotificationContext } from "@/lib/request-origin";
 import { prisma } from "@/lib/prisma";
 import { revalidateProgress } from "@/lib/revalidate";
+import { withActionLogging } from "@/lib/logger";
 import {
   createTaskSchema,
   taskCreationReviewSchema,
@@ -35,6 +36,25 @@ import {
 export async function requestTaskCreation(input: CreateTaskInput) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.task.creation.request",
+      module: "progress",
+      action: "requestTaskCreation",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "Project",
+      entityId: input.projectId,
+      stageId: input.stageId,
+    },
+    async () => requestTaskCreationLogged(input, user),
+  );
+}
+
+async function requestTaskCreationLogged(
+  input: CreateTaskInput,
+  user: { openId: string; name: string },
+) {
   const roles = await getUserRoles(user.openId);
   const parsed = createTaskSchema.parse(input);
 
@@ -220,6 +240,29 @@ export async function reviewTaskCreationRequest(input: {
 }) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.task.creation.review",
+      module: "progress",
+      action: "reviewTaskCreationRequest",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "TaskCreationRequest",
+      entityId: input.requestId,
+      decision: input.decision,
+    },
+    async () => reviewTaskCreationRequestLogged(input, user),
+  );
+}
+
+async function reviewTaskCreationRequestLogged(
+  input: {
+    requestId: string;
+    decision: "APPROVED" | "REJECTED";
+    comment?: string;
+  },
+  user: { openId: string; name: string },
+) {
   const roles = await getUserRoles(user.openId);
   const parsed = taskCreationReviewSchema.parse(input);
 

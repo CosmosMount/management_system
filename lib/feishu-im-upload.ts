@@ -7,13 +7,18 @@ import {
   storagePathToAbsolute,
 } from "@/lib/file-upload";
 import { isImagePath } from "@/lib/image-path";
+import { logger } from "@/lib/logger";
 
 async function readLocalUpload(
   publicPath: string,
 ): Promise<{ buffer: Buffer; fileName: string } | null> {
   const storagePath = publicPathToStoragePath(publicPath);
   if (!storagePath) {
-    console.warn(`[feishu] 无效上传路径 publicPath=${publicPath}`);
+    logger.warn("feishu.im_upload.invalid_path", {
+      module: "feishu",
+      action: "readLocalUpload",
+      publicPath,
+    });
     return null;
   }
 
@@ -22,10 +27,12 @@ async function readLocalUpload(
     const buffer = await readFile(absolutePath);
     return { buffer, fileName: path.basename(absolutePath) };
   } catch (error) {
-    console.warn(
-      `[feishu] 读取本地文件失败 path=${publicPath}:`,
-      error instanceof Error ? error.message : error,
-    );
+    logger.warn("feishu.im_upload.read_failed", {
+      module: "feishu",
+      action: "readLocalUpload",
+      publicPath,
+      error,
+    });
     return null;
   }
 }
@@ -85,9 +92,15 @@ export async function uploadFeishuMessageImage(
   };
 
   if (data.code !== 0 || !data.data?.image_key) {
-    console.warn(
-      `[feishu] 上传卡片图片失败 path=${publicPath} bot=${botKind}: ${data.msg ?? res.status}`,
-    );
+    logger.warn("feishu.im_upload.image_failed", {
+      module: "feishu",
+      action: "uploadFeishuMessageImage",
+      publicPath,
+      botKind,
+      feishuCode: data.code,
+      feishuMessage: data.msg,
+      status: res.status,
+    });
     return null;
   }
 
@@ -127,9 +140,15 @@ export async function uploadFeishuMessageFile(
   };
 
   if (data.code !== 0 || !data.data?.file_key) {
-    console.warn(
-      `[feishu] 上传飞书文件失败 path=${publicPath} bot=${botKind}: ${data.msg ?? res.status}`,
-    );
+    logger.warn("feishu.im_upload.file_failed", {
+      module: "feishu",
+      action: "uploadFeishuMessageFile",
+      publicPath,
+      botKind,
+      feishuCode: data.code,
+      feishuMessage: data.msg,
+      status: res.status,
+    });
     return null;
   }
 

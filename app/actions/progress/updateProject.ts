@@ -20,6 +20,7 @@ import { assertProjectActive } from "@/lib/progress-guards";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import { revalidateProgress } from "@/lib/revalidate";
+import { withActionLogging } from "@/lib/logger";
 import {
   updateProjectSchema,
   type UpdateProjectInput,
@@ -28,6 +29,24 @@ import {
 export async function updateProject(input: UpdateProjectInput) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.project.update",
+      module: "progress",
+      action: "updateProject",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "Project",
+      entityId: input.projectId,
+    },
+    async () => updateProjectLogged(input, user),
+  );
+}
+
+async function updateProjectLogged(
+  input: UpdateProjectInput,
+  user: { openId: string; name: string },
+) {
   const roles = await getUserRoles(user.openId);
   const parsed = updateProjectSchema.parse(input);
 

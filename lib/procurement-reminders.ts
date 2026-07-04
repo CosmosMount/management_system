@@ -22,6 +22,7 @@ import type { NotificationContext } from "@/lib/app-origin";
 
 import { prisma } from "@/lib/prisma";
 import { statusApproverRole, statusLabels } from "@/lib/permissions-client";
+import { logger } from "@/lib/logger";
 
 const REMINDER_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const MANUAL_REMINDER_COOLDOWN_MS = 60 * 1000;
@@ -241,7 +242,18 @@ async function notifyRoleStale(
     } catch (err) {
       failureCount++;
       firstFailure ??= err;
-      console.error("[reminder] 私信失败:", openId, err);
+      logger.error("procurement.reminder.direct_message.failed", {
+        module: "procurement",
+        action: "notifyRoleStale",
+        entityType: "PurchaseOrder",
+        entityId: order.id,
+        orderNo: order.orderNo,
+        status: order.status,
+        role,
+        recipientOpenId: openId,
+        botKind,
+        error: err,
+      });
     }
   }
 
@@ -320,7 +332,15 @@ export async function runProcurementStaleReminders(
       });
       sent++;
     } catch (err) {
-      console.error(`[reminder] 订单 ${order.orderNo} 催办失败:`, err);
+      logger.error("procurement.reminder.order.failed", {
+        module: "procurement",
+        action: "runProcurementStaleReminders",
+        entityType: "PurchaseOrder",
+        entityId: order.id,
+        orderNo: order.orderNo,
+        status: order.status,
+        error: err,
+      });
     }
   }
 

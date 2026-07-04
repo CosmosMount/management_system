@@ -27,6 +27,7 @@ import {
   type CreateProjectInput,
   type ParsedCreateProjectInput,
 } from "@/lib/validations/progress";
+import { withActionLogging } from "@/lib/logger";
 
 type ProjectDraftResolution = {
   parsed: ParsedCreateProjectInput;
@@ -41,6 +42,23 @@ type ProjectDraftResolution = {
 export async function createProject(input: CreateProjectInput) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.project.establishment.request",
+      module: "progress",
+      action: "createProject",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "Project",
+    },
+    async () => createProjectLogged(input, user),
+  );
+}
+
+async function createProjectLogged(
+  input: CreateProjectInput,
+  user: { openId: string; name: string },
+) {
   if (!canRequestProjectEstablishment(user.openId)) {
     throw new Error("无项目立项权限");
   }
@@ -118,6 +136,27 @@ export async function resubmitProjectEstablishment(input: {
 }) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.project.establishment.resubmit",
+      module: "progress",
+      action: "resubmitProjectEstablishment",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "Project",
+      entityId: input.projectId,
+    },
+    async () => resubmitProjectEstablishmentLogged(input, user),
+  );
+}
+
+async function resubmitProjectEstablishmentLogged(
+  input: {
+    projectId: string;
+    input: CreateProjectInput;
+  },
+  user: { openId: string; name: string },
+) {
   if (!canRequestProjectEstablishment(user.openId)) {
     throw new Error("无项目立项权限");
   }
@@ -276,6 +315,29 @@ export async function reviewProjectEstablishment(input: {
 }) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.project.establishment.review",
+      module: "progress",
+      action: "reviewProjectEstablishment",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "Project",
+      entityId: input.projectId,
+      decision: input.decision,
+    },
+    async () => reviewProjectEstablishmentLogged(input, user),
+  );
+}
+
+async function reviewProjectEstablishmentLogged(
+  input: {
+    projectId: string;
+    decision: "APPROVED" | "REJECTED";
+    comment?: string;
+  },
+  user: { openId: string; name: string },
+) {
   const roles = await getUserRoles(user.openId);
   const parsedReview = projectEstablishmentReviewSchema.parse(input);
 
@@ -446,6 +508,24 @@ export async function reviewProjectEstablishment(input: {
 export async function deleteRejectedProjectEstablishment(projectId: string) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
+  return withActionLogging(
+    {
+      event: "progress.project.establishment.delete_rejected",
+      module: "progress",
+      action: "deleteRejectedProjectEstablishment",
+      actorOpenId: user.openId,
+      actorName: user.name,
+      entityType: "Project",
+      entityId: projectId,
+    },
+    async () => deleteRejectedProjectEstablishmentLogged(projectId, user),
+  );
+}
+
+async function deleteRejectedProjectEstablishmentLogged(
+  projectId: string,
+  user: { openId: string; name: string },
+) {
   const roles = await getUserRoles(user.openId);
 
   const project = await prisma.project.findUnique({

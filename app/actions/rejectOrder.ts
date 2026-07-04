@@ -20,6 +20,7 @@ import {
 import type { ProcurementRejectOutcome } from "@/lib/procurement-reject-outcome";
 import { getNotificationContext } from "@/lib/request-origin";
 import { revalidateProcurement } from "@/lib/revalidate";
+import { logger } from "@/lib/logger";
 import { OrderStatus } from "@prisma/client";
 
 const inputSchema = z.object({
@@ -249,7 +250,14 @@ export async function rejectProcurementOrder(input: {
     }
     drainNotificationOutboxSoon();
   } catch (err) {
-    console.error("[procurement] drain notification outbox failed:", err);
+    logger.error("procurement.notification.drain_soon.failed", {
+      module: "procurement",
+      action: "rejectOrder",
+      entityType: "PurchaseOrder",
+      entityId: orderId,
+      outcome,
+      error: err,
+    });
   }
 
   revalidateProcurement(orderId);
