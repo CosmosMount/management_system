@@ -14,7 +14,10 @@ import { getUserRoles } from "@/lib/permissions";
 import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { requireSessionUser } from "@/lib/progress-activity";
 import { assertProjectActive } from "@/lib/progress-guards";
-import { collectTaskNotificationRecipients } from "@/lib/progress-task-notifications";
+import {
+  collectTaskDdlReviewRecipients,
+  collectTaskNotificationRecipients,
+} from "@/lib/progress-task-notifications";
 import { getTaskTechGroups } from "@/lib/progress-task-tech-groups";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { prisma } from "@/lib/prisma";
@@ -100,7 +103,7 @@ async function requestTaskDdlChangeLogged(
   }
 
   const context = await getNotificationContext();
-  const recipientOpenIds = await collectTaskNotificationRecipients(task);
+  const recipientOpenIds = await collectTaskDdlReviewRecipients(task);
   const request = await prisma
     .$transaction(async (tx) => {
       const liveTask = await tx.task.findUnique({

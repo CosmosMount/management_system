@@ -16,7 +16,10 @@ import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { requireSessionUser } from "@/lib/progress-activity";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { getProjectParticipantOpenIds } from "@/lib/progress-project-participants";
-import { collectTaskNotificationRecipients } from "@/lib/progress-task-notifications";
+import {
+  collectTaskManagementReviewRecipients,
+  collectTaskNotificationRecipients,
+} from "@/lib/progress-task-notifications";
 import { normalizeTaskTechGroups } from "@/lib/progress-task-tech-groups";
 import { assertProjectActive } from "@/lib/progress-guards";
 import {
@@ -156,7 +159,7 @@ async function requestTaskCreationLogged(
     needsWeeklyReport: parsed.needsWeeklyReport,
     acceptanceChecklistItems,
   };
-  const baseRecipientOpenIds = await collectTaskNotificationRecipients({
+  const baseRecipientOpenIds = await collectTaskManagementReviewRecipients({
     team: project.team,
     techGroup: project.techGroup,
     assigneeOpenId: orderedAssignees[0]?.openId ?? "",
@@ -168,11 +171,7 @@ async function requestTaskCreationLogged(
     })),
     project,
   });
-  const recipientOpenIds = normalizeOpenIds([
-    ...baseRecipientOpenIds,
-    user.openId,
-    ...(selectedStage?.ownerOpenId ? [selectedStage.ownerOpenId] : []),
-  ]);
+  const recipientOpenIds = normalizeOpenIds(baseRecipientOpenIds);
 
   const context = await getNotificationContext();
   const request = await prisma.$transaction(async (tx) => {
@@ -354,6 +353,7 @@ async function reviewTaskCreationRequestLogged(
           reviewerName: user.name,
           requesterOpenId: request.requesterOpenId,
           comment: parsed.comment ?? "",
+          recipientOpenIds: [request.requesterOpenId],
         },
         context,
       );

@@ -110,6 +110,7 @@ const NOTIFICATION_DELIVERY_DISABLED =
   process.env.NOTIFICATION_DELIVERY_DISABLED === "true";
 const RECIPIENT_LOCK_MS = 2 * 60 * 1000;
 const FROZEN_NEXT_RUN_AT = new Date("9999-12-31T00:00:00.000Z");
+const NO_RECIPIENTS_APPROVAL_ERROR_PREFIX = "NO_RECIPIENTS_APPROVAL:";
 
 type DrainNotificationOutboxOptions = {
   ignoreDeliveryDisabled?: boolean;
@@ -697,9 +698,19 @@ async function sendOutboxNotificationByRecipient(
   if (
     existingRecipientCount === 0 &&
     row.status === "FAILED" &&
-    row.attempts > 0
+    row.attempts > 0 &&
+    !isNoRecipientsApprovalFailure(row)
   ) {
     await freezeLegacyCompositeOutbox(row.id);
+    return { supported: true, completed: false };
+  }
+
+  if (
+    existingRecipientCount === 0 &&
+    plan.openIds.map((id) => id.trim()).filter(Boolean).length === 0 &&
+    requiresAtLeastOneRecipient(row)
+  ) {
+    await failOutboxWithNoRecipients(row);
     return { supported: true, completed: false };
   }
 
@@ -735,6 +746,41 @@ async function sendOutboxNotificationByRecipient(
 
   const summary = await updateOutboxStatusFromRecipients(row.id);
   return { supported: true, completed: summary.completed };
+}
+
+async function failOutboxWithNoRecipients(row: NotificationOutbox) {
+  const attempts = row.attempts + 1;
+  const message = `${NO_RECIPIENTS_APPROVAL_ERROR_PREFIX} 审批待办没有可投递收件人，已停止本轮发送；请检查关注过滤和审批权限配置。`;
+  logger.error("notification.outbox.recipient.empty", {
+    module: "notification",
+    action: "sendOutboxNotificationByRecipient",
+    entityType: "NotificationOutbox",
+    entityId: row.id,
+    eventKey: row.eventKey,
+    channel: row.channel,
+    type: row.type,
+    botKind: row.botKind,
+    attempts,
+    result: "failure",
+    errorMessage: message,
+  });
+  await prisma.notificationOutbox.updateMany({
+    where: { id: row.id, status: "PROCESSING" },
+    data: {
+      status: "FAILED",
+      lastError: message,
+      nextRunAt: nextRetryAt(attempts),
+      lockedUntil: null,
+    },
+  });
+}
+
+function requiresAtLeastOneRecipient(row: NotificationOutbox): boolean {
+  return row.channel === "progress" && normalizeBotKind(row.botKind) === "approval";
+}
+
+function isNoRecipientsApprovalFailure(row: NotificationOutbox): boolean {
+  return row.lastError.startsWith(NO_RECIPIENTS_APPROVAL_ERROR_PREFIX);
 }
 
 async function freezeLegacyCompositeOutbox(outboxId: string) {
@@ -1039,10 +1085,6 @@ function extractProgressRecipientOpenIds(
   if (payload.type === "project_establishment_rejected") {
     return [payload.requesterOpenId];
   }
-  if (payload.type === "task_creation_rejected") {
-    return [payload.requesterOpenId];
-  }
-
   return null;
 }
 

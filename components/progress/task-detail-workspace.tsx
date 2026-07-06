@@ -18,6 +18,7 @@ import type {
   Importance,
   ProjectStatus,
   TaskDdlChangeRequestStatus,
+  ProgressFollowPreferenceState,
   TaskRiskSource,
   TaskRiskStatus,
   TaskStatus,
@@ -26,6 +27,7 @@ import type {
 import { TaskActionsPanel } from "@/components/progress/task-actions-panel";
 import { TaskForm } from "@/components/progress/task-form";
 import { ManualReminderButton } from "@/components/progress/manual-reminder-button";
+import { FollowToggleButton } from "@/components/progress/follow-toggle-button";
 import { loadMoreTaskActivityLogs } from "@/app/actions/progress/activityLogs";
 import {
   deleteTaskDirectly,
@@ -51,6 +53,7 @@ import {
   restartTask,
   updateTaskStatus,
 } from "@/app/actions/progress/updateTask";
+import { followTask, unfollowTask } from "@/app/actions/progress/following";
 import {
   requestTaskDdlChange,
   reviewTaskDdlChange,
@@ -79,6 +82,7 @@ export type TaskDetailView = {
   projectStatus: ProjectStatus;
   projectOwnerOpenIds: string[];
   updatedAt: string;
+  follow: FollowStateView;
   stageId: string | null;
   stageName: string | null;
   team: string;
@@ -98,6 +102,15 @@ export type TaskDetailView = {
   ddlChangeRequests: TaskDdlChangeRequestView[];
   activityLogs: TaskActivityLogView[];
   hasMoreActivityLogs: boolean;
+};
+
+export type FollowStateView = {
+  followedByCurrentUser: boolean;
+  manualState: ProgressFollowPreferenceState | null;
+  forcedFollowedByCurrentUser: boolean;
+  canFollow: boolean;
+  canUnfollow: boolean;
+  forcedFollowReasons: string[];
 };
 
 export type TaskDdlChangeRequestView = {
@@ -222,6 +235,8 @@ const activityFilters: Array<{ value: ActivityFilter; label: string }> = [
   { value: "WEEKLY", label: "周报" },
   { value: "RISK", label: "风险" },
 ];
+
+const taskHeaderActionButtonClassName = "h-8 min-w-24 gap-1.5 px-3 text-sm";
 
 export function TaskDetailWorkspace({
   task,
@@ -390,6 +405,7 @@ function TaskOverview({
   onOpenEdit: () => void;
   onOpenDdlChange: () => void;
 }) {
+  const router = useRouter();
   const canStart = task.status === "TODO" && (isAssignee || canManage);
   const canArchive = task.status === "COMPLETED" && canManage;
   const isProjectCanceledTask = task.status === "PROJECT_CANCELED";
@@ -466,8 +482,39 @@ function TaskOverview({
         </div>
 
         <div className="flex shrink-0 flex-wrap gap-2">
+          <FollowToggleButton
+            noun="任务"
+            followed={task.follow.followedByCurrentUser}
+            canFollow={task.follow.canFollow}
+            canUnfollow={task.follow.canUnfollow}
+            disabledReasons={task.follow.forcedFollowReasons}
+            className={taskHeaderActionButtonClassName}
+            onFollow={async () => {
+              try {
+                await followTask(task.id);
+                toast.success("已关注任务");
+                router.refresh();
+              } catch (err) {
+                toast.error(getActionErrorMessage(err, "关注任务失败"));
+              }
+            }}
+            onUnfollow={async () => {
+              try {
+                await unfollowTask(task.id);
+                toast.success("已取消关注任务");
+                router.refresh();
+              } catch (err) {
+                toast.error(getActionErrorMessage(err, "取消关注任务失败"));
+              }
+            }}
+          />
           {canEdit && (
-            <Button type="button" variant="outline" onClick={onOpenEdit}>
+            <Button
+              type="button"
+              variant="outline"
+              className={taskHeaderActionButtonClassName}
+              onClick={onOpenEdit}
+            >
               <Pencil className="h-4 w-4" />
               编辑任务
             </Button>
@@ -477,27 +524,53 @@ function TaskOverview({
               targetType="TASK"
               targetId={task.id}
               label="催促任务"
+              buttonClassName={taskHeaderActionButtonClassName}
             />
           )}
           {canRequestDdlChange && (
-            <Button type="button" variant="outline" onClick={onOpenDdlChange}>
+            <Button
+              type="button"
+              variant="outline"
+              className={taskHeaderActionButtonClassName}
+              onClick={onOpenDdlChange}
+            >
               <History className="h-4 w-4" />
               申请修改 DDL
             </Button>
           )}
-          {canRestart && <RestartTaskButton task={task} />}
-          {canStart && <StartTaskButton taskId={task.id} />}
-          {canArchive && <ArchiveTaskButton taskId={task.id} />}
+          {canRestart && (
+            <RestartTaskButton
+              task={task}
+              className={taskHeaderActionButtonClassName}
+            />
+          )}
+          {canStart && (
+            <StartTaskButton
+              taskId={task.id}
+              className={taskHeaderActionButtonClassName}
+            />
+          )}
+          {canArchive && (
+            <ArchiveTaskButton
+              taskId={task.id}
+              className={taskHeaderActionButtonClassName}
+            />
+          )}
           {task.projectStatus === "IN_PROGRESS" &&
           !isProjectCanceledTask &&
           canManage ? (
-            <TaskDirectDeleteButton taskId={task.id} redirectTo={projectHref} />
+            <TaskDirectDeleteButton
+              taskId={task.id}
+              redirectTo={projectHref}
+              className={taskHeaderActionButtonClassName}
+            />
           ) : task.projectStatus === "IN_PROGRESS" &&
             !isProjectCanceledTask &&
             canRequestDeletion ? (
             <TaskDeletionRequestButton
               taskId={task.id}
               disabled={!!pendingDeletionRequest}
+              className={taskHeaderActionButtonClassName}
             />
           ) : null}
         </div>
@@ -745,7 +818,13 @@ function formatDdlRequestStatus(status: TaskDdlChangeRequestStatus): string {
   return "已驳回";
 }
 
-function RestartTaskButton({ task }: { task: TaskDetailView }) {
+function RestartTaskButton({
+  task,
+  className,
+}: {
+  task: TaskDetailView;
+  className?: string;
+}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState("");
@@ -772,7 +851,12 @@ function RestartTaskButton({ task }: { task: TaskDetailView }) {
 
   return (
     <>
-      <Button type="button" variant="outline" onClick={() => setOpen(true)}>
+      <Button
+        type="button"
+        variant="outline"
+        className={className}
+        onClick={() => setOpen(true)}
+      >
         <RotateCcw className="h-4 w-4" />
         重启任务
       </Button>
@@ -821,9 +905,11 @@ function RestartTaskButton({ task }: { task: TaskDetailView }) {
 function TaskDirectDeleteButton({
   taskId,
   redirectTo,
+  className,
 }: {
   taskId: string;
   redirectTo: string;
+  className?: string;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -854,6 +940,7 @@ function TaskDirectDeleteButton({
       <Button
         type="button"
         variant="destructive"
+        className={className}
         onClick={() => setOpen(true)}
       >
         <Trash2 className="h-4 w-4" />
@@ -900,9 +987,11 @@ function TaskDirectDeleteButton({
 function TaskDeletionRequestButton({
   taskId,
   disabled,
+  className,
 }: {
   taskId: string;
   disabled: boolean;
+  className?: string;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -933,6 +1022,7 @@ function TaskDeletionRequestButton({
       <Button
         type="button"
         variant="outline"
+        className={className}
         disabled={disabled}
         onClick={() => setOpen(true)}
       >
@@ -1460,7 +1550,13 @@ function ActivityDetails({
   return null;
 }
 
-function StartTaskButton({ taskId }: { taskId: string }) {
+function StartTaskButton({
+  taskId,
+  className,
+}: {
+  taskId: string;
+  className?: string;
+}) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
 
@@ -1478,14 +1574,20 @@ function StartTaskButton({ taskId }: { taskId: string }) {
   }
 
   return (
-    <Button type="button" disabled={loading} onClick={handleStart}>
+    <Button type="button" className={className} disabled={loading} onClick={handleStart}>
       <Play className="h-4 w-4" />
       开始任务
     </Button>
   );
 }
 
-function ArchiveTaskButton({ taskId }: { taskId: string }) {
+function ArchiveTaskButton({
+  taskId,
+  className,
+}: {
+  taskId: string;
+  className?: string;
+}) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
 
@@ -1503,7 +1605,13 @@ function ArchiveTaskButton({ taskId }: { taskId: string }) {
   }
 
   return (
-    <Button type="button" variant="outline" disabled={loading} onClick={handleArchive}>
+    <Button
+      type="button"
+      variant="outline"
+      className={className}
+      disabled={loading}
+      onClick={handleArchive}
+    >
       <Archive className="h-4 w-4" />
       归档任务
     </Button>
@@ -1549,6 +1657,8 @@ function activityLabel(action: string): string {
   const labels: Record<string, string> = {
     "task.created": "创建了任务",
     "task.updated": "更新了任务信息",
+    "task.followed": "关注了任务通知",
+    "task.unfollowed": "取消关注了任务通知",
     "task.status_changed": "更新了任务状态",
     "task.restarted": "重启了任务",
     "task.project_canceled": "项目取消后同步取消了任务",

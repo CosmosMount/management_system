@@ -14,6 +14,8 @@ import { getOpenIdsByRole } from "@/lib/permissions";
 import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { getTaskTechGroups } from "@/lib/progress-task-tech-groups";
+import { filterProjectNotificationRecipients } from "@/lib/progress-project-notifications";
+import { filterTaskNotificationRecipients } from "@/lib/progress-task-notifications";
 import {
   DEFAULT_STAGE_DUE_SOON_DAYS,
   getStageDeadlineState,
@@ -950,7 +952,9 @@ async function collectTaskRecipientOpenIds(
       openIds.push(...(await getOpenIdsByRole("TECH_GROUP_ADMIN", { team: "", techGroup })));
     }
   }
-  return openIds;
+  return filterTaskNotificationRecipients(task, [
+    ...new Set(openIds.filter(Boolean)),
+  ]);
 }
 
 async function collectProjectRecipientOpenIds(
@@ -983,9 +987,9 @@ async function collectProjectRecipientOpenIds(
       ...(await roleOpenIds({ team: project.team, techGroup: project.techGroup })),
     );
   }
-  return [
+  return filterProjectNotificationRecipients(project, [
     ...new Set(openIds.filter(Boolean)),
-  ];
+  ]);
 }
 
 async function collectStageRecipientOpenIds(
@@ -1026,7 +1030,13 @@ async function collectStageRecipientOpenIds(
       })),
     );
   }
-  return [...new Set(openIds.filter(Boolean))];
+  return filterProjectNotificationRecipients(
+    {
+      ...stage.project,
+      stages: [stage],
+    },
+    [...new Set(openIds.filter(Boolean))],
+  );
 }
 
 async function roleOpenIds(scope: { team: string; techGroup: string }) {

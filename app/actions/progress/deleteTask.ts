@@ -13,7 +13,10 @@ import {
 } from "@/lib/permissions-progress";
 import { getUserRoles } from "@/lib/permissions";
 import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
-import { collectTaskNotificationRecipients } from "@/lib/progress-task-notifications";
+import {
+  collectTaskManagementReviewRecipients,
+  collectTaskNotificationRecipients,
+} from "@/lib/progress-task-notifications";
 import { requireSessionUser } from "@/lib/progress-activity";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { getProjectParticipantOpenIds } from "@/lib/progress-project-participants";
@@ -263,7 +266,7 @@ async function requestTaskDeletionLogged(
   }
 
   const context = await getNotificationContext();
-  const recipientOpenIds = await collectTaskNotificationRecipients(task);
+  const recipientOpenIds = await collectTaskManagementReviewRecipients(task);
   const request = await prisma
     .$transaction(async (tx) => {
       const liveTask = await tx.task.findUnique({

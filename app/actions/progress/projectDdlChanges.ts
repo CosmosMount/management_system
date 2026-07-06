@@ -17,7 +17,11 @@ import { requireSessionUser } from "@/lib/progress-activity";
 import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { getProjectParticipantOpenIds } from "@/lib/progress-project-participants";
-import { collectProjectNotificationRecipients } from "@/lib/progress-project-notifications";
+import {
+  collectProjectBatchDdlReviewRecipients,
+  collectProjectNotificationRecipients,
+  collectProjectStageDdlReviewRecipients,
+} from "@/lib/progress-project-notifications";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import { revalidateProgress } from "@/lib/revalidate";
@@ -173,7 +177,10 @@ async function requestProjectStageBatchDdlChangeLogged(
 
   const newDueAt = addDays(stage.dueAt, signedDurationDays);
   const context = await getNotificationContext();
-  const recipientOpenIds = await collectProjectNotificationRecipients(project);
+  const recipientOpenIds = await collectProjectBatchDdlReviewRecipients(
+    project,
+    user.openId,
+  );
   const request = await prisma.$transaction(async (tx) => {
     await lockProjectDdlChanges(tx, project.id);
     const affectedStageIds = affectedStages.map((item) => item.id);
@@ -385,7 +392,12 @@ async function reviewProjectStageBatchDdlChangeRequestLogged(
   }
 
   const context = await getNotificationContext();
-  const recipientOpenIds = await collectProjectNotificationRecipients(project);
+  const recipientOpenIds = [
+    ...new Set([
+      request.requesterOpenId,
+      ...(await collectProjectNotificationRecipients(project)),
+    ]),
+  ];
   const reviewedAt = new Date();
   await prisma.$transaction(async (tx) => {
     await lockProjectDdlChanges(tx, project.id);
@@ -589,7 +601,10 @@ async function requestProjectStageDueDateChangeLogged(
   );
 
   const context = await getNotificationContext();
-  const recipientOpenIds = await collectProjectNotificationRecipients(project);
+  const recipientOpenIds = await collectProjectStageDdlReviewRecipients(
+    project,
+    user.openId,
+  );
   const request = await prisma.$transaction(async (tx) => {
     await lockProjectDdlChanges(tx, project.id);
     const pendingCount = await tx.projectDdlChangeRequest.count({
@@ -764,7 +779,12 @@ async function reviewProjectStageDueDateChangeRequestLogged(
   }
 
   const context = await getNotificationContext();
-  const recipientOpenIds = await collectProjectNotificationRecipients(project);
+  const recipientOpenIds = [
+    ...new Set([
+      request.requesterOpenId,
+      ...(await collectProjectNotificationRecipients(project)),
+    ]),
+  ];
   const reviewedAt = new Date();
   const shouldCountAsExtension =
     parsed.decision === "APPROVED" &&

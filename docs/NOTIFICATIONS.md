@@ -13,6 +13,7 @@
 | 邮件 | 老师审核采购时额外发送 SMTP 邮件，不属于飞书机器人。 |
 | Outbox | `NotificationOutbox` 表示业务事件，`NotificationOutboxRecipient` 表示单个收件人投递状态。已成功收件人不会因其他人失败而重复发送。 |
 | CardKit 回调 | 采购审批/确认卡片的按钮回调由飞书 WS worker 接收，回调处理不产生新通知，除非业务状态变更后重新入队。 |
+| 进度关注 | 项目/任务关注只影响进度模块飞书推送收件人，不改变页面可见性、审批权限或审批看板。 |
 
 机器人配置规则：
 
@@ -60,27 +61,32 @@
 
 实现入口主要在 `app/actions/progress/*`、`lib/feishu-progress.ts`、`lib/progress-reminders.ts`、`lib/notification-outbox.ts`。
 
+进度模块通知会先计算业务候选收件人，再套用项目/任务关注偏好。普通动态候选人来自项目或任务的有效关注者；审批待办候选人只来自现有审批权限规则，再经过关注过滤。关注只影响飞书/outbox 私信，不影响页面可见性、审批权限或 `/progress/approvals` 审批看板。
+
+项目默认关注人包括项目负责人、参与人、阶段负责人、项目下未删除任务负责人、项管、匹配车组组长、匹配技术组组长和超管。其中项管、匹配车组组长、匹配技术组组长、项目内成员不可取消关注；仅“与该项目没有直接关系的超管”等非强制身份可以取关。任务默认关注继承项目有效关注，并额外包含任务负责人、项目负责人、项管、匹配车组组长、匹配技术组组长和超管；任务负责人、项目负责人、项管、匹配车组组长、匹配技术组组长不可取消关注，其他人可自由关注/取关单个任务。
+
 ### 项目消息
 
 | 场景 | 类型 | 机器人 | 渠道 | 收件人 |
 |---|---|---|---|---|
-| 提交立项或驳回后重提 | `project_establishment_requested` | 审批 | outbox 私信 | 匹配车组组长、匹配技术组组长、项管、超管。 |
-| 立项通过 | `project_establishment_approved` | 通知 | outbox 私信 | 申请人 + 项目相关人 + 管理角色；项目相关人包括项目负责人、参与人、阶段负责人、任务负责人，管理角色包括匹配车组/技术组组长、任务技术组组长、项管、超管。 |
+| 提交立项或驳回后重提 | `project_establishment_requested` | 审批 | outbox 私信 | 匹配车组组长、匹配技术组组长、项管、超管；重提会额外尊重该项目已有关注偏好。 |
+| 立项通过 | `project_establishment_approved` | 通知 | outbox 私信 | 申请人 + 项目有效关注者；申请人不会因取关漏收审批结果。 |
 | 立项驳回 | `project_establishment_rejected` | 通知 | outbox 私信 | 申请人。 |
-| 项目启动/完成/取消 | `project_started` / `project_completed` / `project_canceled` | 通知 | outbox 私信 | payload 显式收件人；缺省为项目负责人、参与人、匹配车组组长、匹配技术组组长、项管、超管。 |
-| 项目信息更新 | `project_updated` | 通知 | outbox 私信 | 新旧项目负责人、新旧参与人、新旧 scope 下的车组组长、技术组组长、项管、超管。 |
-| 项目流程回退 | `project_stage_rollback` | 通知 | outbox 私信 | 项目负责人、被回退阶段负责人、匹配车组组长、匹配技术组组长、项管、超管。 |
+| 项目启动/完成/取消 | `project_started` / `project_completed` / `project_canceled` | 通知 | outbox 私信 | 项目有效关注者。 |
+| 项目信息更新 | `project_updated` | 通知 | outbox 私信 | 新旧项目有效关注者合并去重。 |
+| 项目流程回退 | `project_stage_rollback` | 通知 | outbox 私信 | 项目有效关注者。 |
+| 关注/取消关注项目 | `project_followed` / `project_unfollowed` | 通知 | outbox 私信 | 仅操作人。 |
 
 ### 阶段消息
 
 | 场景 | 类型 | 机器人 | 渠道 | 收件人 |
 |---|---|---|---|---|
-| 阶段提交验收 | `stage_pending_acceptance` | 审批 | outbox 私信 | payload 显式收件人；缺省为项目负责人、提交人、匹配车组组长、匹配技术组组长、项管、超管。 |
+| 阶段提交验收 | `stage_pending_acceptance` | 审批 | outbox 私信 | 可审批人经过项目关注过滤；提交人仅在允许负责人自审且具备审批资格时收到。 |
 | 阶段验收通过/驳回 | `stage_approved` / `stage_rejected` | 通知 | outbox 私信 | payload 显式收件人；缺省为阶段负责人。 |
 | 阶段延期申请 | `project_stage_extension_requested` | 审批 | outbox 私信 | payload 显式审批人并排除申请人；缺省为项管、超管并排除申请人。 |
-| 阶段批量提前/延期申请 | `project_stage_batch_due_change_requested` | 审批 | outbox 私信 | payload 显式审批人并排除申请人。 |
-| 单阶段 DDL 修改申请 | `project_stage_due_change_requested` | 审批 | outbox 私信 | payload 显式审批人并排除申请人；缺省为项目负责人，若申请人就是负责人则改发项管/超管并排除申请人。 |
-| 阶段 DDL/延期申请通过或驳回 | `project_stage_extension_approved` / `project_stage_extension_rejected` / `project_stage_batch_due_change_approved` / `project_stage_batch_due_change_rejected` / `project_stage_due_change_approved` / `project_stage_due_change_rejected` | 通知 | outbox 私信 | 申请人、项目负责人、阶段负责人或 payload 显式收件人。 |
+| 阶段批量提前/延期申请 | `project_stage_batch_due_change_requested` | 审批 | outbox 私信 | 可审批管理角色经过项目关注过滤，并排除申请人。 |
+| 单阶段 DDL 修改申请 | `project_stage_due_change_requested` | 审批 | outbox 私信 | 可审批项目负责人/项管/超管经过项目关注过滤，并排除申请人。 |
+| 阶段 DDL/延期申请通过或驳回 | `project_stage_extension_approved` / `project_stage_extension_rejected` / `project_stage_batch_due_change_approved` / `project_stage_batch_due_change_rejected` / `project_stage_due_change_approved` / `project_stage_due_change_rejected` | 通知 | outbox 私信 | 申请人 + 项目有效关注者；申请人不会因取关漏收审批结果。 |
 | 阶段风险新增/同步 | `project_stage_risk_synced` | 通知 | outbox 私信 | 项目负责人、项目参与人、阶段负责人、匹配车组组长、匹配技术组组长、项管、超管。 |
 | 阶段风险取消 | `project_stage_risk_resolved` | 通知 | outbox 私信 | 与阶段风险新增相同，由 payload 固化。 |
 
@@ -89,19 +95,20 @@
 | 场景 | 类型 | 机器人 | 渠道 | 收件人 |
 |---|---|---|---|---|
 | 直接创建任务 | `task_assigned` | 通知 | outbox 私信 | payload 显式收件人；缺省为任务负责人。卡片包含阶段、负责人、技术组、紧急/重要、DDL、指标、说明、周报、线下确认、验收清单摘要。 |
+| 关注/取消关注任务 | `task_followed` / `task_unfollowed` | 通知 | outbox 私信 | 仅操作人。 |
 | 任务信息更新 | `task_updated` | 通知 | outbox 私信 | payload 显式收件人；缺省为新旧任务负责人、项目负责人、新旧 scope 下的车组组长/技术组组长、项管、超管。 |
 | 任务重启 | `task_restarted` | 通知 | outbox 私信 | payload 显式收件人；缺省为任务负责人、项目负责人、匹配车组组长、匹配技术组组长、项管、超管。 |
-| 任务 DDL 修改申请 | `task_ddl_change_requested` | 审批 | outbox 私信 | payload 显式审批人。 |
-| 任务 DDL 修改通过/驳回 | `task_ddl_change_approved` / `task_ddl_change_rejected` | 通知 | outbox 私信 | payload 显式收件人。 |
-| 任务删除申请 | `task_delete_requested` | 审批 | outbox 私信 | payload 显式审批人；缺省为项目负责人、匹配车组组长、匹配技术组组长、项管、超管。 |
+| 任务 DDL 修改申请 | `task_ddl_change_requested` | 审批 | outbox 私信 | 可审批人经过任务关注过滤。 |
+| 任务 DDL 修改通过/驳回 | `task_ddl_change_approved` / `task_ddl_change_rejected` | 通知 | outbox 私信 | 申请人 + 任务有效关注者；申请人不会因取关漏收审批结果。 |
+| 任务删除申请 | `task_delete_requested` | 审批 | outbox 私信 | 可审批项目管理者经过任务关注过滤。 |
 | 任务已删除 | `task_deleted` | 通知 | outbox 私信 | payload 显式收件人；缺省为任务负责人、项目负责人、匹配车组组长、匹配技术组组长、项管、超管。 |
 | 任务删除驳回 | `task_delete_rejected` | 通知 | outbox 私信 | payload 显式收件人；缺省为申请人和任务负责人。 |
-| 新任务申请 | `task_creation_requested` | 审批 | outbox 私信 | payload 显式审批人；缺省为项目负责人、匹配车组组长、匹配技术组组长、项管、超管。 |
+| 新任务申请 | `task_creation_requested` | 审批 | outbox 私信 | 可审批项目管理者经过任务关注过滤。 |
 | 任务申请通过 | `task_creation_approved` | 通知 | outbox 私信 | payload 显式收件人；缺省为申请人、任务负责人、项目负责人、匹配车组组长、匹配技术组组长、项管、超管。 |
-| 任务申请驳回 | `task_creation_rejected` | 通知 | outbox 私信 | 申请人。 |
+| 任务申请驳回 | `task_creation_rejected` | 通知 | outbox 私信 | payload 显式收件人，通常为申请人。 |
 | 批量导入真实任务 | `task_bulk_imported` | 通知 | outbox 私信 | payload 显式收件人，通常为项目相关人和管理角色。 |
-| 批量任务创建申请 | `task_bulk_creation_requested` | 审批 | outbox 私信 | payload 显式审批人。 |
-| 任务提交验收 | `task_pending_acceptance` | 审批 | outbox 私信 | payload 显式审批人；缺省为匹配车组组长、匹配技术组组长、项管、超管。 |
+| 批量任务创建申请 | `task_bulk_creation_requested` | 审批 | outbox 私信 | 可审批项目管理者经过任务关注过滤。 |
+| 任务提交验收 | `task_pending_acceptance` | 审批 | outbox 私信 | 可审批人经过任务关注过滤。 |
 | 任务验收通过/驳回 | `task_approved` / `task_rejected` | 通知 | outbox 私信 | payload 显式收件人；缺省为任务负责人。 |
 | 任务风险新增/同步 | `task_risk_synced` | 通知 | outbox 私信 | payload 显式收件人；缺省为任务负责人、项目负责人、匹配车组组长、匹配技术组组长、项管、超管。 |
 | 任务风险解除 | `task_risk_resolved` | 通知 | outbox 私信 | payload 显式收件人。 |
@@ -119,7 +126,7 @@
 | 手动项目催促 | `progress_reminder` | 通知 | outbox 私信 | 项目负责人、项目参与人、阶段负责人、活跃任务负责人、管理角色。 |
 | 手动任务催促 | `progress_reminder` | 通知 | outbox 私信 | 任务负责人、项目负责人、项目参与人、阶段负责人、管理角色。 |
 
-历史/兼容函数 `runProgressOverdueCheck()`、`runWeeklyReportReminders()`、`runProgressDailyReminders()` 会直接调用 `sendProgressNotification()` 发送普通通知机器人私信；当前 cron 使用的是 `runDueProgressReminderRules()` 的 outbox 路径。
+历史/兼容函数 `runProgressOverdueCheck()`、`runWeeklyReportReminders()`、`runProgressDailyReminders()` 已废弃并会直接报错，避免绕过关注过滤和 outbox。当前 cron 使用 `runDueProgressReminderRules()` 的 outbox 路径。
 
 ## 采购报销消息
 
@@ -196,6 +203,18 @@
 
 ## 收件人规则附录
 
+### 进度关注过滤
+
+进度模块项目/任务通知在入队前统一经过关注过滤，最终 payload 中保存过滤后的 `recipientOpenIds`：
+
+- 项目强制关注：项管、匹配项目车组组长、匹配项目技术组组长、项目负责人、参与人、阶段负责人、项目下未删除任务负责人。
+- 项目默认关注：强制关注人 + 超管。非直接相关超管可以取消关注项目。
+- 任务强制关注：任务负责人、项目负责人、项管、匹配任务车组组长、匹配任务技术组/任务多技术组组长。
+- 任务默认关注：继承项目有效关注 + 任务强制关注。项目取关会静音任务继承通知；用户可再显式关注单个任务。
+- 显式 `FOLLOWING` 会订阅对应项目/任务；显式 `MUTED` 会静音对应项目/任务，但不能覆盖强制关注。
+- 审批待办飞书也会经过关注过滤；审批权限和 `/progress/approvals` 审批看板不受关注状态影响。
+- 申请人、审批结果接收人等个人结果通知可以显式保留，不因关注过滤丢失。
+
 ### 项目相关人
 
 `collectProjectNotificationRecipients(project)` 汇总并去重：
@@ -206,9 +225,9 @@
 - 项目下未删除任务负责人。
 - 匹配项目车组的车组组长。
 - 匹配项目技术组的技术组组长。
-- 匹配任务技术组的技术组组长。
 - 项管。
 - 超管。
+- 显式关注项目的人；显式取关且非强制关注的人会被过滤。
 
 ### 任务相关人
 
@@ -220,7 +239,8 @@
 - 匹配任务车组的车组组长。
 - 匹配任务技术组和任务多技术组的技术组组长。
 - 项管。
-- 超管。
+- 继承项目有效关注的人。
+- 显式关注任务的人；显式取关且非强制关注的人会被过滤。
 
 ### 阶段风险相关人
 
@@ -247,7 +267,7 @@
 
 - 大多数通知先写 `NotificationOutbox`；cron 或 `drainNotificationOutboxSoon()` 负责 drain。
 - 支持收件人级投递的 outbox 会先生成 `NotificationOutboxRecipient`，每个收件人独立 claim、重试和标记成功。
-- 进度通知只要 payload 中有 `recipientOpenIds` 就支持收件人级投递；`project_establishment_rejected` 和 `task_creation_rejected` 会回退到申请人。
+- 进度通知只要 payload 中有 `recipientOpenIds` 就支持收件人级投递；`project_establishment_rejected` 兼容旧事件回退到申请人，`task_creation_rejected` 必须显式写入申请人收件人。
 - 采购订单通知会把采购群 Webhook 建模为特殊伪收件人 `__procurement_order_webhook__`；待上传凭证和待申请人确认不生成该伪收件人。
 - `procurement_rejected`、`applicant_resubmit`、`procurement_return_draft`、`feedback` 目前仍是复合发送 fallback，失败会按整条 outbox 重试。
 - allowlist 拦截会把该收件人视为已处理并记录日志，不会真实发送私信。

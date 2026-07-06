@@ -15,6 +15,7 @@ import {
 import {
   collectProjectEstablishmentReviewRecipients,
   collectProjectNotificationRecipients,
+  filterProjectNotificationRecipients,
 } from "@/lib/progress-project-notifications";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
@@ -71,6 +72,20 @@ async function createProjectLogged(
     team: parsed.team ?? "",
     techGroup: parsed.techGroup ?? "",
   });
+  const filteredReviewerOpenIds = await filterProjectNotificationRecipients(
+    {
+      team: parsed.team ?? "",
+      techGroup: parsed.techGroup ?? "",
+      ownerOpenId: resolution.primaryOwner.openId,
+      ownerName: resolution.primaryOwner.name,
+      owners: resolution.orderedOwners,
+      participants: resolution.orderedParticipants,
+      stages: stagesWithDueAt,
+      tasks: [],
+      followPreferences: [],
+    },
+    reviewerOpenIds,
+  );
   const context = await getNotificationContext();
 
   const project = await prisma.$transaction(async (tx) => {
@@ -117,7 +132,7 @@ async function createProjectLogged(
           .map((participant) => participant.name)
           .join("、"),
         stageCount: created.stages.length,
-        recipientOpenIds: reviewerOpenIds,
+        recipientOpenIds: filteredReviewerOpenIds,
       },
       context,
     );
@@ -170,6 +185,7 @@ async function resubmitProjectEstablishmentLogged(
     },
     include: {
       tasks: { where: { deletedAt: null }, select: { id: true } },
+      followPreferences: true,
     },
   });
   if (!existingProject) {
@@ -186,6 +202,21 @@ async function resubmitProjectEstablishmentLogged(
     team: resolution.parsed.team ?? "",
     techGroup: resolution.parsed.techGroup ?? "",
   });
+  const filteredReviewerOpenIds = await filterProjectNotificationRecipients(
+    {
+      id: existingProject.id,
+      team: resolution.parsed.team ?? "",
+      techGroup: resolution.parsed.techGroup ?? "",
+      ownerOpenId: resolution.primaryOwner.openId,
+      ownerName: resolution.primaryOwner.name,
+      owners: resolution.orderedOwners,
+      participants: resolution.orderedParticipants,
+      stages: stagesWithDueAt,
+      tasks: [],
+      followPreferences: existingProject.followPreferences,
+    },
+    reviewerOpenIds,
+  );
   const context = await getNotificationContext();
 
   const project = await prisma.$transaction(async (tx) => {
@@ -295,7 +326,7 @@ async function resubmitProjectEstablishmentLogged(
           .map((participant) => participant.name)
           .join("、"),
         stageCount: updated.stages.length,
-        recipientOpenIds: reviewerOpenIds,
+        recipientOpenIds: filteredReviewerOpenIds,
       },
       context,
     );

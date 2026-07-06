@@ -13,7 +13,10 @@ import {
   getApproverRole,
 } from "@/lib/permissions-progress";
 import { assertProjectActive } from "@/lib/progress-guards";
-import { collectProjectNotificationRecipients } from "@/lib/progress-project-notifications";
+import {
+  collectProjectNotificationRecipients,
+  collectStageAcceptanceReviewRecipients,
+} from "@/lib/progress-project-notifications";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
@@ -128,7 +131,10 @@ async function submitStageEvidenceLogged(
     payload: { stageId: stage.id, submissionId: submission.id },
   });
 
-  const recipientOpenIds = await collectProjectNotificationRecipients(project);
+  const recipientOpenIds = await collectStageAcceptanceReviewRecipients(
+    project,
+    user.openId,
+  );
   await enqueueProgressNotification(
     `progress:stage_pending_acceptance:${submission.id}`,
     {
@@ -315,7 +321,12 @@ async function reviewStageSubmissionLogged(
     payload: { stageId: stage.id, submissionId: submission.id },
   });
 
-  const recipientOpenIds = await collectProjectNotificationRecipients(project);
+  const recipientOpenIds = [
+    ...new Set([
+      submission.submittedBy,
+      ...(await collectProjectNotificationRecipients(project)),
+    ]),
+  ];
   await enqueueProgressNotification(
     `progress:${pass ? "stage_approved" : "stage_rejected"}:${submission.id}`,
     {

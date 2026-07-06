@@ -1,117 +1,104 @@
 import { getOpenIdsByRole } from "@/lib/permissions";
-import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
-import { getTaskTechGroups } from "@/lib/progress-task-tech-groups";
+import {
+  collectProjectNotificationRecipients as collectProjectFollowers,
+  filterProjectNotificationRecipients,
+  type ProjectFollowSubject,
+} from "@/lib/progress-following";
 
-type ProjectOwnerLike = {
-  openId: string;
-  name: string;
-};
-
-type ProjectParticipantLike = {
-  openId: string;
-};
-
-type ProjectStageLike = {
-  ownerOpenId: string;
-};
-
-type TaskAssigneeLike = {
-  openId: string;
-  name: string;
-};
-
-type TaskTechGroupLike = {
-  techGroup: string;
-  sortOrder?: number;
-};
-
-type ProjectTaskLike = {
-  team: string;
-  techGroup: string;
-  assigneeOpenId: string;
-  assigneeName: string;
-  assignees?: TaskAssigneeLike[];
-  techGroups?: TaskTechGroupLike[];
-};
-
-export type ProjectNotificationSubject = {
-  team: string;
-  techGroup: string;
-  ownerOpenId: string;
-  ownerName: string;
-  owners?: ProjectOwnerLike[];
-  participants?: ProjectParticipantLike[];
-  stages?: ProjectStageLike[];
-  tasks?: ProjectTaskLike[];
-};
+export type ProjectNotificationSubject = ProjectFollowSubject;
 
 export async function collectProjectNotificationRecipients(
   project: ProjectNotificationSubject,
 ): Promise<string[]> {
-  const openIds = new Set<string>();
-
-  for (const openId of getProjectOwnerOpenIds(project)) add(openIds, openId);
-  for (const participant of project.participants ?? []) add(openIds, participant.openId);
-  for (const stage of project.stages ?? []) add(openIds, stage.ownerOpenId);
-  for (const task of project.tasks ?? []) {
-    for (const openId of getTaskAssigneeOpenIds(task)) add(openIds, openId);
-  }
-
-  const taskTechGroups = [
-    ...new Set((project.tasks ?? []).flatMap((task) => getTaskTechGroups(task))),
-  ];
-  const roleGroups = await Promise.all([
-    getOpenIdsByRole("TEAM_ADMIN", { team: project.team, techGroup: project.techGroup }),
-    getOpenIdsByRole("TECH_GROUP_ADMIN", {
-      team: project.team,
-      techGroup: project.techGroup,
-    }),
-    ...taskTechGroups.map((techGroup) =>
-      getOpenIdsByRole("TECH_GROUP_ADMIN", { team: "", techGroup }),
-    ),
-    getOpenIdsByRole("PROJECT_MANAGER", { team: "", techGroup: "" }),
-    getOpenIdsByRole("SUPER_ADMIN", { team: "", techGroup: "" }),
-  ]);
-
-  for (const group of roleGroups) {
-    for (const openId of group) add(openIds, openId);
-  }
-
-  return [...openIds];
+  return collectProjectFollowers(project);
 }
 
 export async function collectProjectStageRiskNotificationRecipients(
   project: Pick<
     ProjectNotificationSubject,
-    "team" | "techGroup" | "ownerOpenId" | "ownerName" | "owners" | "participants"
+    | "id"
+    | "team"
+    | "techGroup"
+    | "ownerOpenId"
+    | "ownerName"
+    | "owners"
+    | "participants"
+    | "followPreferences"
   >,
-  stage: ProjectStageLike,
+  stage: { ownerOpenId: string },
 ): Promise<string[]> {
-  const openIds = new Set<string>();
-
-  for (const openId of getProjectOwnerOpenIds(project)) add(openIds, openId);
-  for (const participant of project.participants ?? []) add(openIds, participant.openId);
-  add(openIds, stage.ownerOpenId);
-
-  const roleGroups = await Promise.all([
-    getOpenIdsByRole("TEAM_ADMIN", { team: project.team, techGroup: project.techGroup }),
-    getOpenIdsByRole("TECH_GROUP_ADMIN", {
-      team: project.team,
-      techGroup: project.techGroup,
-    }),
-    getOpenIdsByRole("PROJECT_MANAGER", { team: "", techGroup: "" }),
-    getOpenIdsByRole("SUPER_ADMIN", { team: "", techGroup: "" }),
-  ]);
-
-  for (const group of roleGroups) {
-    for (const openId of group) add(openIds, openId);
-  }
-
-  return [...openIds];
+  return collectProjectFollowers({
+    ...project,
+    stages: [stage],
+  });
 }
 
 export async function collectProjectEstablishmentReviewRecipients(scope: {
+  team: string;
+  techGroup: string;
+}): Promise<string[]> {
+  return collectProjectRoleReviewCandidateOpenIds(scope);
+}
+
+export async function collectProjectBatchDdlReviewRecipients(
+  project: ProjectNotificationSubject,
+  requesterOpenId: string,
+): Promise<string[]> {
+  const candidates = await collectProjectRoleReviewCandidateOpenIds({
+    team: project.team ?? "",
+    techGroup: project.techGroup ?? "",
+  });
+  return filterProjectNotificationRecipients(
+    project,
+    candidates.filter((openId) => openId !== requesterOpenId),
+  );
+}
+
+export async function collectProjectStageDdlReviewRecipients(
+  project: ProjectNotificationSubject,
+  requesterOpenId: string,
+): Promise<string[]> {
+  const requesterIsOwner = getProjectOwnerOpenIds(project).includes(requesterOpenId);
+  const roleGroups = await Promise.all([
+    getOpenIdsByRole("PROJECT_MANAGER", { team: "", techGroup: "" }),
+    getOpenIdsByRole("SUPER_ADMIN", { team: "", techGroup: "" }),
+  ]);
+  const candidates = new Set<string>();
+  if (!requesterIsOwner) {
+    for (const openId of getProjectOwnerOpenIds(project)) add(candidates, openId);
+  }
+  for (const group of roleGroups) {
+    for (const openId of group) add(candidates, openId);
+  }
+  return filterProjectNotificationRecipients(
+    project,
+    [...candidates].filter((openId) => openId !== requesterOpenId),
+  );
+}
+
+export async function collectStageAcceptanceReviewRecipients(
+  project: ProjectNotificationSubject & { allowOwnerSelfApproval?: boolean },
+  submitterOpenId: string,
+): Promise<string[]> {
+  const roleCandidates = await collectProjectRoleReviewCandidateOpenIds({
+    team: project.team ?? "",
+    techGroup: project.techGroup ?? "",
+  });
+  const ownerOpenIds = getProjectOwnerOpenIds(project);
+  const candidates = new Set([...roleCandidates, ...ownerOpenIds]);
+  return filterProjectNotificationRecipients(
+    project,
+    [...candidates].filter((openId) => {
+      if (openId !== submitterOpenId) return true;
+      return !!project.allowOwnerSelfApproval && ownerOpenIds.includes(openId);
+    }),
+  );
+}
+
+export { filterProjectNotificationRecipients };
+
+async function collectProjectRoleReviewCandidateOpenIds(scope: {
   team: string;
   techGroup: string;
 }): Promise<string[]> {

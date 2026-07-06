@@ -12,6 +12,7 @@ import {
   getProjectOwnerNames,
   getProjectOwnerOpenIds,
 } from "@/lib/progress-project-owners";
+import { collectProjectNotificationRecipients } from "@/lib/progress-project-notifications";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import { revalidateProgress } from "@/lib/revalidate";
@@ -245,6 +246,7 @@ async function rollbackProjectStageLogged(
           ),
         ),
       ],
+      recipientOpenIds: await collectProjectNotificationRecipients(result.project),
     },
     await getNotificationContext(),
   );

@@ -438,6 +438,7 @@ async function updateTaskLogged(
 
   const taskTechGroups = normalizeTaskTechGroups(parsed.taskTechGroups);
   if (taskTechGroups.length === 0) throw new Error("请选择任务技术组");
+  const primaryTaskTechGroup = taskTechGroups[0] ?? task.techGroup;
   const nextStageName =
     stageId
       ? task.project.stages.find((stage) => stage.id === stageId)?.name ?? "无阶段"
@@ -529,6 +530,7 @@ async function updateTaskLogged(
         importance: parsed.importance,
         assigneeOpenId: primaryAssignee.openId,
         assigneeName: primaryAssignee.name,
+        techGroup: primaryTaskTechGroup,
         metrics: parsed.metrics,
         needsOfflineConfirmation: parsed.needsOfflineConfirmation,
         needsWeeklyReport: parsed.needsWeeklyReport,
@@ -623,7 +625,7 @@ async function updateTaskLogged(
         actorName: user.name,
         changes,
         team: task.team,
-        techGroup: task.techGroup,
+        techGroup: updated.techGroup,
         oldTeam: task.team,
         oldTechGroup: task.techGroup,
         assigneeOpenIds: orderedAssignees.map((assignee) => assignee.openId),

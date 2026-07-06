@@ -13,7 +13,7 @@ import {
 } from "@/lib/permissions-progress";
 import { assertProjectActive } from "@/lib/progress-guards";
 import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
-import { collectTaskNotificationRecipients } from "@/lib/progress-task-notifications";
+import { collectTaskAcceptanceReviewRecipients } from "@/lib/progress-task-notifications";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import { getUserRoles } from "@/lib/permissions";
@@ -85,7 +85,7 @@ async function submitTaskDeliveryLogged(
   }
 
   const context = await getNotificationContext();
-  const recipientOpenIds = await collectTaskNotificationRecipients(task);
+  const recipientOpenIds = await collectTaskAcceptanceReviewRecipients(task);
   const submission = await prisma.$transaction(async (tx) => {
     const locked = await tx.task.updateMany({
       where: { id: task.id, status: TaskStatus.IN_PROGRESS, deletedAt: null },

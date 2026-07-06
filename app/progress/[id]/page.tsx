@@ -40,6 +40,7 @@ import {
   parseTaskCreationDraft,
   formatTaskCreationDraftSummary,
 } from "@/lib/progress-task-creation-requests";
+import { getProjectFollowPolicy } from "@/lib/progress-following";
 import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { getRecentActivityCutoff } from "@/lib/progress-activity-window";
 import { prisma } from "@/lib/prisma";
@@ -113,6 +114,7 @@ export default async function ProjectDetailPage({ params }: Props) {
         where: { createdAt: { gte: recentActivityCutoff } },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       },
+      followPreferences: true,
     },
   });
 
@@ -172,6 +174,11 @@ export default async function ProjectDetailPage({ params }: Props) {
     project.stages,
     project.ddlChangeRequests,
   );
+  const projectFollowPolicy = await getProjectFollowPolicy({
+    project,
+    userOpenId,
+    roles,
+  });
 
   const [
     users,
@@ -224,6 +231,7 @@ export default async function ProjectDetailPage({ params }: Props) {
     updatedAt: project.updatedAt.toISOString(),
     completedAt: project.completedAt?.toISOString() ?? null,
     canceledAt: project.canceledAt?.toISOString() ?? null,
+    follow: projectFollowPolicy,
     stages: project.stages.map((stage) => ({
       id: stage.id,
       name: stage.name,

@@ -17,7 +17,10 @@ import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { requireSessionUser } from "@/lib/progress-activity";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { getProjectParticipantOpenIds } from "@/lib/progress-project-participants";
-import { collectTaskNotificationRecipients } from "@/lib/progress-task-notifications";
+import {
+  collectTaskManagementReviewRecipients,
+  collectTaskNotificationRecipients,
+} from "@/lib/progress-task-notifications";
 import { normalizeTaskTechGroups } from "@/lib/progress-task-tech-groups";
 import { assertProjectActive } from "@/lib/progress-guards";
 import type { TaskCreationDraft } from "@/lib/progress-task-creation-requests";
@@ -208,11 +211,16 @@ async function importProgressTasksLogged(
     };
   });
 
-  const recipientOpenIds = await collectBatchRecipients(preparedTasks, project, user.openId);
   const context = await getNotificationContext();
   const batchId = randomUUID();
 
   if (parsed.mode === "request") {
+    const recipientOpenIds = await collectBatchRecipients({
+      tasks: preparedTasks,
+      project,
+      actorOpenId: user.openId,
+      reviewOnly: true,
+    });
     const requestIds = await prisma.$transaction(async (tx) => {
       await assertProjectAndStagesStillWritable(tx, {
         projectId: project.id,
@@ -288,6 +296,12 @@ async function importProgressTasksLogged(
     return { mode: "request" as const, count: requestIds.length, requestIds };
   }
 
+  const recipientOpenIds = await collectBatchRecipients({
+    tasks: preparedTasks,
+    project,
+    actorOpenId: user.openId,
+    reviewOnly: false,
+  });
   const taskIds = await prisma.$transaction(async (tx) => {
     await assertProjectAndStagesStillWritable(tx, {
       projectId: project.id,
@@ -436,19 +450,25 @@ async function assertProjectAndStagesStillWritable(
   }
 }
 
-async function collectBatchRecipients(
-  tasks: PreparedImportTask[],
+async function collectBatchRecipients({
+  tasks,
+  project,
+  actorOpenId,
+  reviewOnly,
+}: {
+  tasks: PreparedImportTask[];
   project: Parameters<typeof collectTaskNotificationRecipients>[0]["project"] & {
     team: string;
     techGroup: string;
     stages?: Array<{ id: string; ownerOpenId: string }>;
-  },
-  actorOpenId: string,
-) {
-  const openIds = new Set<string>([actorOpenId]);
+  };
+  actorOpenId: string;
+  reviewOnly: boolean;
+}) {
+  const openIds = new Set<string>(reviewOnly ? [] : [actorOpenId]);
   const stageOwnerById = new Map((project.stages ?? []).map((stage) => [stage.id, stage.ownerOpenId]));
   for (const task of tasks) {
-    const recipients = await collectTaskNotificationRecipients({
+    const taskSubject = {
       team: project.team,
       techGroup: project.techGroup,
       assigneeOpenId: task.assignees[0]?.openId ?? "",
@@ -459,10 +479,13 @@ async function collectBatchRecipients(
         sortOrder,
       })),
       project,
-    });
+    };
+    const recipients = reviewOnly
+      ? await collectTaskManagementReviewRecipients(taskSubject)
+      : await collectTaskNotificationRecipients(taskSubject);
     recipients.forEach((openId) => openIds.add(openId));
     const stageOwnerOpenId = stageOwnerById.get(task.stageId);
-    if (stageOwnerOpenId) openIds.add(stageOwnerOpenId);
+    if (!reviewOnly && stageOwnerOpenId) openIds.add(stageOwnerOpenId);
   }
   return [...openIds];
 }

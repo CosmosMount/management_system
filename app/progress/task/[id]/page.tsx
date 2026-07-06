@@ -31,6 +31,7 @@ import {
   getWeekStart,
   getWeeklyReportDueState,
 } from "@/lib/progress-weekly";
+import { getTaskFollowPolicy } from "@/lib/progress-following";
 import { getProgressReminderRuleViews } from "@/lib/progress-reminders";
 import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { getRecentActivityCutoff } from "@/lib/progress-activity-window";
@@ -59,6 +60,15 @@ export default async function TaskDetailPage({ params }: Props) {
             orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
           },
           stages: { orderBy: { sortOrder: "asc" } },
+          tasks: {
+            where: { deletedAt: null },
+            include: {
+              assignees: {
+                orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+              },
+            },
+          },
+          followPreferences: true,
         },
       },
       stage: true,
@@ -93,6 +103,7 @@ export default async function TaskDetailPage({ params }: Props) {
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: 5,
       },
+      followPreferences: true,
       activityLogs: {
         where: { createdAt: { gte: recentActivityCutoff } },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -190,6 +201,11 @@ export default async function TaskDetailPage({ params }: Props) {
       userOpenId,
     });
   const admin = userOpenId ? await isSuperAdmin(userOpenId) : false;
+  const taskFollowPolicy = await getTaskFollowPolicy({
+    task,
+    userOpenId,
+    roles,
+  });
   const [users, acceptanceChecklistTemplates, reminderRules] = await Promise.all([
     canManage
       ? prisma.user.findMany({
@@ -233,6 +249,7 @@ export default async function TaskDetailPage({ params }: Props) {
     projectStatus: task.project.status,
     projectOwnerOpenIds,
     updatedAt: task.updatedAt.toISOString(),
+    follow: taskFollowPolicy,
     stageId: task.stageId,
     stageName: task.stage?.name ?? null,
     team: task.team,

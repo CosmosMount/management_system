@@ -15,6 +15,7 @@ import {
   getProjectParticipantNames,
   getProjectParticipantOpenIds,
 } from "@/lib/progress-project-participants";
+import { collectProjectNotificationRecipients } from "@/lib/progress-project-notifications";
 import { requireSessionUser } from "@/lib/progress-activity";
 import { assertProjectActive } from "@/lib/progress-guards";
 import { prisma } from "@/lib/prisma";
@@ -226,6 +227,21 @@ async function updateProjectLogged(
     return record;
   });
 
+  const recipientOpenIds = [
+    ...new Set([
+      ...(await collectProjectNotificationRecipients(project)),
+      ...(await collectProjectNotificationRecipients({
+        ...project,
+        team: nextTeam,
+        techGroup: nextTechGroup,
+        ownerOpenId: primaryOwner.openId,
+        ownerName: primaryOwner.name,
+        owners: orderedOwners,
+        participants: orderedParticipants,
+      })),
+    ]),
+  ];
+
   await enqueueProgressNotification(
     `progress:project_updated:${project.id}:${updated.updatedAt.toISOString()}`,
     {
@@ -244,6 +260,7 @@ async function updateProjectLogged(
         (participant) => participant.openId,
       ),
       oldParticipantOpenIds,
+      recipientOpenIds,
     },
     await getNotificationContext(),
   );

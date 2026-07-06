@@ -2227,6 +2227,43 @@ test("管理员直接创建任务会入队完整任务指派通知", async ({
       recipientOpenIdsMatch: true,
       recipientOpenIdsDeduped: true,
     });
+
+  const createdTask = await prisma.task.findFirstOrThrow({
+    where: { projectId: fixtures.projectId, title },
+    select: { id: true },
+  });
+  await page.goto(`/progress/task/${createdTask.id}`, { waitUntil: "networkidle" });
+  await page.getByRole("button", { name: "编辑任务" }).click();
+  const editDialog = page.getByRole("dialog", { name: "编辑任务" });
+  await expect(editDialog).toBeVisible();
+  await editDialog.getByLabel("通用", { exact: true }).uncheck();
+  await editDialog.getByLabel("宣运", { exact: true }).uncheck();
+  await editDialog.getByLabel("机械", { exact: true }).check();
+  await editDialog.getByRole("button", { name: "保存修改" }).click();
+  await expect(editDialog).toBeHidden();
+
+  await expect
+    .poll(async () => {
+      const task = await prisma.task.findUniqueOrThrow({
+        where: { id: createdTask.id },
+        select: {
+          techGroup: true,
+          techGroups: {
+            orderBy: { sortOrder: "asc" },
+            select: { techGroup: true },
+          },
+        },
+      });
+      return {
+        techGroup: task.techGroup,
+        taskTechGroups: task.techGroups.map((group) => group.techGroup),
+      };
+    })
+    .toEqual({
+      techGroup: "机械",
+      taskTechGroups: ["机械"],
+    });
+  await expect(page.getByText("英雄 / 机械")).toBeVisible();
   await expectHealthyPage(page);
 });
 

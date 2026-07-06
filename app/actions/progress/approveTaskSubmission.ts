@@ -12,7 +12,11 @@ import {
   getApproverRole,
 } from "@/lib/permissions-progress";
 import { assertProjectActive } from "@/lib/progress-guards";
-import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
+import {
+  getTaskAssigneeNames,
+  getTaskAssigneeOpenIds,
+} from "@/lib/progress-assignees";
+import { getTaskTechGroups } from "@/lib/progress-task-tech-groups";
 import { collectTaskNotificationRecipients } from "@/lib/progress-task-notifications";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
@@ -128,7 +132,12 @@ async function approveTaskSubmissionLogged(
   if (!approverRole) throw new Error("无法确定审批角色");
 
   const context = await getNotificationContext();
-  const recipientOpenIds = await collectTaskNotificationRecipients(task);
+  const recipientOpenIds = [
+    ...new Set([
+      submission.submittedBy,
+      ...(await collectTaskNotificationRecipients(task)),
+    ]),
+  ];
   await prisma.$transaction(async (tx) => {
     const existingApproval = await tx.approvalRecord.findFirst({
       where: { submissionId: submission.id },
@@ -252,6 +261,7 @@ async function rejectTaskSubmissionLogged(
               },
             },
           },
+          stage: true,
           assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
           techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
         },
@@ -297,7 +307,12 @@ async function rejectTaskSubmissionLogged(
   if (!approverRole) throw new Error("无法确定审批角色");
 
   const context = await getNotificationContext();
-  const recipientOpenIds = await collectTaskNotificationRecipients(task);
+  const recipientOpenIds = [
+    ...new Set([
+      submission.submittedBy,
+      ...(await collectTaskNotificationRecipients(task)),
+    ]),
+  ];
   await prisma.$transaction(async (tx) => {
     const existingApprovalInTx = await tx.approvalRecord.findFirst({
       where: { submissionId: submission.id },
@@ -351,6 +366,13 @@ async function rejectTaskSubmissionLogged(
         taskId: task.id,
         taskTitle: task.title,
         projectName: task.project.name,
+        stageName: task.stage?.name ?? "无阶段",
+        assigneeNames: getTaskAssigneeNames(task),
+        taskTechGroups: getTaskTechGroups(task),
+        reviewerName: user.name,
+        submitterName: submission.submitterName,
+        feishuDocUrl: submission.feishuDocUrl,
+        keyDataUrl: submission.keyDataUrl,
         assigneeOpenIds: getTaskAssigneeOpenIds(task),
         comment: parsed.comment ?? "",
         recipientOpenIds,

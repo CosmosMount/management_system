@@ -142,6 +142,11 @@ enum ProgressReminderKind {
   STAGE_STALE_OR_DUE_SOON
 }
 
+enum ProgressFollowPreferenceState {
+  FOLLOWING
+  MUTED
+}
+
 model User {
   id            String          @id @default(uuid())
   openId        String          @unique
@@ -275,6 +280,7 @@ model Project {
   tasks         Task[]
   taskCreationRequests TaskCreationRequest[]
   activityLogs  ProgressActivityLog[]
+  followPreferences ProjectFollowPreference[]
   createdAt     DateTime            @default(now())
   updatedAt     DateTime            @updatedAt
   archivedAt    DateTime?
@@ -427,6 +433,7 @@ model Task {
   creationRequests TaskCreationRequest[]
   ddlChangeRequests TaskDdlChangeRequest[]
   riskRecords     TaskRiskRecord[]
+  followPreferences TaskFollowPreference[]
   createdAt       DateTime            @default(now())
   updatedAt       DateTime            @updatedAt
   archivedAt      DateTime?
@@ -657,6 +664,32 @@ model ProgressActivityLog {
   actorName  String
   payload    String   @default("{}")
   createdAt  DateTime @default(now())
+}
+
+model ProjectFollowPreference {
+  id        String                        @id @default(uuid())
+  projectId String
+  project   Project                       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  openId    String
+  state     ProgressFollowPreferenceState
+  createdAt DateTime                      @default(now())
+  updatedAt DateTime                      @updatedAt
+
+  @@unique([projectId, openId])
+  @@index([openId, state])
+}
+
+model TaskFollowPreference {
+  id        String                        @id @default(uuid())
+  taskId    String
+  task      Task                          @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  openId    String
+  state     ProgressFollowPreferenceState
+  createdAt DateTime                      @default(now())
+  updatedAt DateTime                      @updatedAt
+
+  @@unique([taskId, openId])
+  @@index([openId, state])
 }
 
 model Feedback {

@@ -740,6 +740,17 @@ export async function loginAsOtherUser(
   ]);
 }
 
+export async function loginAsTestUser(
+  context: BrowserContext,
+  baseURL: string | undefined,
+  user: { openId: string; name: string },
+) {
+  await context.clearCookies();
+  await context.addCookies([
+    await createSessionCookie(user.openId, user.name, baseURL),
+  ]);
+}
+
 export async function expectHealthyPage(page: Page) {
   await expect(
     page.getByText(/Application error|Internal Server Error|Unhandled Runtime Error/i),

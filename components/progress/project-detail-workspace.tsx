@@ -27,6 +27,7 @@ import type {
   ProjectDdlChangeRequestStatus,
   ProjectDdlChangeRequestType,
   ProjectStatus,
+  ProgressFollowPreferenceState,
   TaskRiskSource,
   TaskRiskStatus,
   StageStatus,
@@ -51,6 +52,7 @@ import { rollbackProjectStage } from "@/app/actions/progress/rollbackProjectStag
 import { updateProjectStatus } from "@/app/actions/progress/updateProjectStatus";
 import { reviewProjectEstablishment } from "@/app/actions/progress/createProject";
 import { updateTaskStatus } from "@/app/actions/progress/updateTask";
+import { followProject, unfollowProject } from "@/app/actions/progress/following";
 import {
   resolveProjectStageRisk,
   syncProjectStageRisk,
@@ -60,6 +62,7 @@ import { ReasonConfirmDialog } from "@/components/reason-confirm-dialog";
 import { ProjectForm } from "@/components/progress/project-form";
 import { RejectedProjectEstablishmentDeleteButton } from "@/components/progress/rejected-project-establishment-delete-button";
 import { ManualReminderButton } from "@/components/progress/manual-reminder-button";
+import { FollowToggleButton } from "@/components/progress/follow-toggle-button";
 import { ArchivedProjectDeleteButton } from "@/components/admin-delete-actions";
 import { TaskForm } from "@/components/progress/task-form";
 import { TaskImportDialog } from "@/components/progress/task-import-dialog";
@@ -130,12 +133,22 @@ export type ProjectDetailView = {
   updatedAt: string;
   completedAt: string | null;
   canceledAt: string | null;
+  follow: FollowStateView;
   stages: StageView[];
   tasks: TaskView[];
   ddlChangeRequests: DdlChangeRequestView[];
   taskCreationRequests: TaskCreationRequestView[];
   activityLogs: ActivityLogView[];
   hasMoreActivityLogs: boolean;
+};
+
+export type FollowStateView = {
+  followedByCurrentUser: boolean;
+  manualState: ProgressFollowPreferenceState | null;
+  forcedFollowedByCurrentUser: boolean;
+  canFollow: boolean;
+  canUnfollow: boolean;
+  forcedFollowReasons: string[];
 };
 
 export type StageView = {
@@ -843,8 +856,37 @@ function ProjectOverview({
           canDeleteRejectedEstablishment ||
           canRemind ||
           canImportTasks ||
+          project.follow.canFollow ||
+          project.follow.canUnfollow ||
+          project.follow.followedByCurrentUser ||
           isSuperAdmin) && (
           <div className="flex shrink-0 flex-wrap gap-2">
+            <FollowToggleButton
+              noun="项目"
+              followed={project.follow.followedByCurrentUser}
+              canFollow={project.follow.canFollow}
+              canUnfollow={project.follow.canUnfollow}
+              disabledReasons={project.follow.forcedFollowReasons}
+              className={projectHeaderActionButtonClassName}
+              onFollow={async () => {
+                try {
+                  await followProject(project.id);
+                  toast.success("已关注项目");
+                  router.refresh();
+                } catch (err) {
+                  toast.error(getActionErrorMessage(err, "关注项目失败"));
+                }
+              }}
+              onUnfollow={async () => {
+                try {
+                  await unfollowProject(project.id);
+                  toast.success("已取消关注项目");
+                  router.refresh();
+                } catch (err) {
+                  toast.error(getActionErrorMessage(err, "取消关注项目失败"));
+                }
+              }}
+            />
             {canReviewEstablishment && project.status === "ESTABLISHING" && (
               <>
                 <Button
@@ -3579,6 +3621,8 @@ function activityLabel(action: string): string {
     "project.establishment_approved": "通过了项目立项",
     "project.establishment_rejected": "驳回了项目立项",
     "project.updated": "更新了项目信息",
+    "project.followed": "关注了项目通知",
+    "project.unfollowed": "取消关注了项目通知",
     "project.status_changed": "更新了项目状态",
     "project.stage_rollback": "回退了项目流程",
     "project.ddl_extension_requested": "申请了阶段延期",
@@ -3598,6 +3642,8 @@ function activityLabel(action: string): string {
     "stage.risk_resolved": "取消了阶段风险",
     "task.created": "创建了任务",
     "task.updated": "更新了任务信息",
+    "task.followed": "关注了任务通知",
+    "task.unfollowed": "取消关注了任务通知",
     "task.status_changed": "更新了任务状态",
     "task.project_canceled": "项目取消后同步取消了任务",
     "task.delivery_submitted": "提交了任务交付",
