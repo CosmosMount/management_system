@@ -177,7 +177,7 @@ TODO → IN_PROGRESS →（提交交付）→ PENDING_ACCEPTANCE →（验收）
 - **OAuth 回调**：`/api/auth/callback/feishu`，须在飞书后台为每个允许入口分别配置完整 URL
 - **Webhook 签名**：`HmacSHA256("", timestamp + "\n" + secret)` 后 Base64
 - **私信**：`im:message:send_as_bot`，收件人须曾登录以建立机器人会话；审批待办走审批机器人，其他消息走通知机器人，审批机器人未配置时回退通知机器人。独立审批应用不能复用通知/OAuth 应用的 `open_id`，系统会通过 `User.unionId` 使用 `receive_id_type=union_id` 发送；缺少 `union_id` 时审批私信失败并等待 outbox 重试，不降级到通知机器人。
-- **私信防误发**：`FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES / OPEN_IDS / UNION_IDS` 为空时不限制；配置后只允许匹配收件人，其他私信会被记录并拦截。Playwright 启动的应用服务默认只允许 `李棋轩、张宇山、陈彦霖`。
+- **私信防误发**：`FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES / OPEN_IDS / UNION_IDS` 为空时不限制；配置后只允许匹配收件人，其他私信会被记录并拦截。Playwright 启动的应用服务默认只允许 `李棋轩`。Docker Compose 默认 `NOTIFICATION_DELIVERY_DISABLED=true` 且 allowlist 为 `李棋轩`；生产真实投递需要显式设置 `NOTIFICATION_DELIVERY_DISABLED=false`，并按需配置或清空 allowlist。
 - **CardKit 回调**：采购审批卡若由审批机器人发送，需要运行审批机器人长连接；生产 `./service/install.sh` 默认安装并启动 `pnx-management-feishu-approval-ws.service`。通知机器人长连接仍可通过 `ENABLE_FEISHU_WS=true` 单独启用。审批机器人回调中的操作人也会通过 `union_id` 映射回系统 `openId` 后再校验权限。
 - **群 Webhook**：采购群通知和日报仍使用 Webhook，独立于私信 `botKind`
 - **通讯录同步**：手动入口 `app/actions/syncFeishuUsers.ts`，定时入口 `scripts/cron.ts`，共用 `lib/feishu-user-sync.ts`；需 `contact:*` 只读权限
@@ -238,8 +238,10 @@ npm run cron                   # 启动定时任务（独立进程）
 | 调度 | 内容 |
 |------|------|
 | 默认每日 08:30 | 从飞书通讯录扫描并同步本地人员（可用 `FEISHU_CONTACT_SYNC_CRON` 调整） |
-| 每日 09:00 | 采购日报、任务逾期警报、当日截止提醒 |
-| 每周一 09:00 | 活跃任务周报填写提醒（私信负责人） |
+| 每日 09:00 | 采购日报、采购停留催办；进度规则型提醒由每 10 分钟扫描器按规则时间判断 |
+| 默认每日 19:00 | 进度个人摘要（可用 `PROGRESS_DAILY_SUMMARY_CRON` 调整），汇总任务列表、关注项目状态和未来 7 天/逾期 DDL |
+| 每 10 分钟 | 进度规则型提醒、采购预算阈值扫描 |
+| 每 2 分钟 | drain `NotificationOutbox` |
 
 与 Next.js 主进程分离，生产环境用 PM2、systemd 或下文 **Docker** 中的 `cron` 服务单独拉起。
 

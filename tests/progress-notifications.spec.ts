@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 import {
   runWeeklyReportReminders,
@@ -6,6 +7,7 @@ import {
 } from "../lib/feishu-progress";
 import { sendOrderNotification } from "../lib/feishu";
 import { runProcurementStaleReminders } from "../lib/procurement-reminders";
+import { runProgressDailySummaries } from "../lib/progress-daily-summary";
 import { runSingleProgressReminderRule } from "../lib/progress-reminders";
 import {
   drainNotificationOutbox,
@@ -493,6 +495,384 @@ test("任务申请驳回通知显式发送给申请人并使用通知机器人",
   expect(captured[0]?.title).toBe("任务申请已驳回");
   expect(captured[0]?.cardText).toContain("PW通知-被驳回任务");
   expect(captured[0]?.cardText).toContain("任务内容不完整");
+});
+
+test("每日进度摘要为指定用户入队任务、项目和 DDL 汇总", async () => {
+  const suffix = Date.now();
+  const liOpenId = `ou_pw_daily_li_${suffix}`;
+  const otherOpenId = `ou_pw_daily_other_${suffix}`;
+  const projectName = `PW通知-每日摘要项目-${suffix}`;
+  const taskTitle = `PW通知-每日摘要任务-${suffix}`;
+  const overdueTaskTitle = `PW通知-每日摘要已逾期任务-${suffix}`;
+  const taskOnlyProjectName = `PW通知-单任务关注项目-${suffix}`;
+  const taskOnlyTitle = `PW通知-单任务关注任务-${suffix}`;
+  const now = new Date("2026-07-06T19:00:00+08:00");
+
+  await prisma.user.createMany({
+    data: [
+      { openId: liOpenId, name: "李棋轩", unionId: `on_pw_daily_li_${suffix}` },
+      {
+        openId: otherOpenId,
+        name: "其他摘要用户",
+        unionId: `on_pw_daily_other_${suffix}`,
+      },
+    ],
+    skipDuplicates: true,
+  });
+  const project = await prisma.project.create({
+    data: {
+      name: projectName,
+      description: "验证每日进度摘要",
+      team: "英雄",
+      techGroup: "电控",
+      status: "IN_PROGRESS",
+      ownerOpenId: liOpenId,
+      ownerName: "李棋轩",
+      owners: {
+        create: [{ openId: liOpenId, name: "李棋轩", sortOrder: 0 }],
+      },
+      participants: {
+        create: [{ openId: otherOpenId, name: "其他摘要用户", sortOrder: 0 }],
+      },
+    },
+  });
+  const stage = await prisma.projectStage.create({
+    data: {
+      projectId: project.id,
+      name: "摘要联调阶段",
+      goal: "验证阶段 DDL 展示",
+      sortOrder: 0,
+      status: "IN_PROGRESS",
+      ownerOpenId: liOpenId,
+      ownerName: "李棋轩",
+      dueAt: new Date("2026-07-07T18:00:00+08:00"),
+      riskNote: "阶段联调存在阻塞",
+    },
+  });
+  await prisma.task.create({
+    data: {
+      projectId: project.id,
+      stageId: stage.id,
+      title: taskTitle,
+      goal: "验证每日摘要任务列表",
+      urgency: "HIGH",
+      importance: "HIGH",
+      assigneeOpenId: liOpenId,
+      assigneeName: "李棋轩",
+      team: "英雄",
+      techGroup: "电控",
+      dueAt: new Date("2026-07-06T21:00:00+08:00"),
+      status: "IN_PROGRESS",
+      needsWeeklyReport: true,
+      riskNote: "任务风险需要关注",
+      assignees: {
+        create: [{ openId: liOpenId, name: "李棋轩", sortOrder: 0 }],
+      },
+      techGroups: {
+        create: [{ techGroup: "电控", sortOrder: 0 }],
+      },
+    },
+  });
+  await prisma.task.create({
+    data: {
+      projectId: project.id,
+      stageId: stage.id,
+      title: overdueTaskTitle,
+      goal: "验证当天已经过期的 DDL",
+      urgency: "MEDIUM",
+      importance: "HIGH",
+      assigneeOpenId: liOpenId,
+      assigneeName: "李棋轩",
+      team: "英雄",
+      techGroup: "电控",
+      dueAt: new Date("2026-07-06T18:00:00+08:00"),
+      status: "IN_PROGRESS",
+      assignees: {
+        create: [{ openId: liOpenId, name: "李棋轩", sortOrder: 0 }],
+      },
+      techGroups: {
+        create: [{ techGroup: "电控", sortOrder: 0 }],
+      },
+    },
+  });
+  const taskOnlyProject = await prisma.project.create({
+    data: {
+      name: taskOnlyProjectName,
+      description: "验证只关注单个任务时不附带项目状态",
+      team: "英雄",
+      techGroup: "机械",
+      status: "IN_PROGRESS",
+      ownerOpenId: otherOpenId,
+      ownerName: "其他摘要用户",
+      owners: {
+        create: [{ openId: otherOpenId, name: "其他摘要用户", sortOrder: 0 }],
+      },
+    },
+  });
+  const taskOnlyStage = await prisma.projectStage.create({
+    data: {
+      projectId: taskOnlyProject.id,
+      name: "只关注任务阶段",
+      goal: "验证单任务关注",
+      sortOrder: 0,
+      status: "IN_PROGRESS",
+      ownerOpenId: otherOpenId,
+      ownerName: "其他摘要用户",
+      dueAt: new Date("2026-07-12T18:00:00+08:00"),
+    },
+  });
+  const taskOnly = await prisma.task.create({
+    data: {
+      projectId: taskOnlyProject.id,
+      stageId: taskOnlyStage.id,
+      title: taskOnlyTitle,
+      goal: "李棋轩只关注该任务",
+      urgency: "LOW",
+      importance: "MEDIUM",
+      assigneeOpenId: otherOpenId,
+      assigneeName: "其他摘要用户",
+      team: "英雄",
+      techGroup: "机械",
+      dueAt: new Date("2026-07-08T18:00:00+08:00"),
+      status: "IN_PROGRESS",
+      assignees: {
+        create: [{ openId: otherOpenId, name: "其他摘要用户", sortOrder: 0 }],
+      },
+      techGroups: {
+        create: [{ techGroup: "机械", sortOrder: 0 }],
+      },
+    },
+  });
+  await prisma.taskFollowPreference.create({
+    data: { taskId: taskOnly.id, openId: liOpenId, state: "FOLLOWING" },
+  });
+
+  const first = await runProgressDailySummaries({
+    now,
+    recipientOpenIds: [liOpenId],
+    context: { appOrigin: "http://127.0.0.1:3002" },
+  });
+  const second = await runProgressDailySummaries({
+    now,
+    recipientOpenIds: [liOpenId],
+    context: { appOrigin: "http://127.0.0.1:3002" },
+  });
+
+  expect(first).toMatchObject({
+    summaryDate: "2026-07-06",
+    recipients: 1,
+    queued: 1,
+  });
+  expect(second).toMatchObject({
+    summaryDate: "2026-07-06",
+    recipients: 1,
+    queued: 0,
+  });
+
+  const outbox = await prisma.notificationOutbox.findUniqueOrThrow({
+    where: { eventKey: `progress:daily_summary:${liOpenId}:2026-07-06` },
+    select: { botKind: true, type: true, payload: true },
+  });
+  const payload = readProgressOutboxPayload(outbox.payload);
+  const tasks = payload.tasks as Array<Record<string, unknown>>;
+  const projects = payload.projects as Array<Record<string, unknown>>;
+  const ddlItems = payload.ddlItems as Array<Record<string, unknown>>;
+  const taskTitles = tasks.map((task) => task.title);
+  const projectNames = projects.map((project) => project.name);
+
+  expect(outbox.botKind).toBe("notification");
+  expect(outbox.type).toBe("progress_daily_summary");
+  expect(payload.recipientOpenIds).toEqual([liOpenId]);
+  expect(payload.recipientName).toBe("李棋轩");
+  expect(tasks.find((task) => task.title === taskTitle)).toMatchObject({
+    title: taskTitle,
+    projectName,
+    stageName: "摘要联调阶段",
+    dueLabel: "今天截止",
+    needsWeeklyReport: true,
+    riskNote: "任务风险需要关注",
+  });
+  expect(tasks.find((task) => task.title === overdueTaskTitle)).toMatchObject({
+    title: overdueTaskTitle,
+    dueLabel: "今日已逾期",
+    isOverdue: true,
+  });
+  expect(taskTitles).toContain(taskOnlyTitle);
+  expect(projectNames).not.toContain(taskOnlyProjectName);
+  expect(projects.find((project) => project.name === projectName)).toMatchObject({
+    name: projectName,
+    statusLabel: "进行中",
+    currentStageName: "摘要联调阶段",
+  });
+  expect(ddlItems.some((item) => item.kind === "TASK" && item.title === taskTitle))
+    .toBe(true);
+  expect(ddlItems.some((item) => item.kind === "TASK" && item.title === overdueTaskTitle))
+    .toBe(true);
+  expect(ddlItems.some((item) => item.kind === "STAGE" && item.title === "摘要联调阶段"))
+    .toBe(true);
+  expect(payload.overview).toMatchObject({
+    overdueTaskCount: 1,
+    overdueDdlCount: 1,
+  });
+  expect(payload.linkPath).toBe("/progress");
+  expect(payload.approvalsLinkPath).toBe("/progress/approvals");
+});
+
+test("每日进度摘要 cron 默认北京时间 19 点且测试安全栏只放行李棋轩", async () => {
+  const [cronSource, dockerCompose, playwrightConfig, playwrightServer] =
+    await Promise.all([
+      readFile("scripts/cron.ts", "utf8"),
+      readFile("docker-compose.yml", "utf8"),
+      readFile("playwright.config.ts", "utf8"),
+      readFile("scripts/start-playwright-server.ts", "utf8"),
+    ]);
+
+  expect(cronSource).toContain(
+    'process.env.PROGRESS_DAILY_SUMMARY_CRON ?? "0 19 * * *"',
+  );
+  expect(cronSource).toContain('const CRON_TIMEZONE = "Asia/Shanghai"');
+  expect(cronSource).toMatch(
+    /cron\.schedule\(\s*PROGRESS_DAILY_SUMMARY_CRON,[\s\S]*\{\s*timezone:\s*CRON_TIMEZONE\s*\},\s*\);/,
+  );
+  expect(dockerCompose).toContain(
+    "NOTIFICATION_DELIVERY_DISABLED: ${NOTIFICATION_DELIVERY_DISABLED:-true}",
+  );
+  expect(dockerCompose).toContain(
+    "FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES: ${FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES-李棋轩}",
+  );
+  expect(playwrightConfig).toContain(
+    'process.env.FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES?.trim() || "李棋轩"',
+  );
+  expect(playwrightServer).toContain(
+    'process.env.FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES?.trim() || "李棋轩"',
+  );
+});
+
+test("每日进度摘要卡片包含链接并在测试 allowlist 下只投递给李棋轩", async () => {
+  const suffix = Date.now();
+  const liOpenId = `ou_pw_daily_card_li_${suffix}`;
+  const blockedOpenId = `ou_pw_daily_card_blocked_${suffix}`;
+  await prisma.user.createMany({
+    data: [
+      { openId: liOpenId, name: "李棋轩", unionId: `on_pw_daily_card_li_${suffix}` },
+      {
+        openId: blockedOpenId,
+        name: "其他摘要用户",
+        unionId: `on_pw_daily_card_blocked_${suffix}`,
+      },
+    ],
+    skipDuplicates: true,
+  });
+
+  await withFeishuBotEnv(
+    {
+      FEISHU_APP_ID: "oauth-app",
+      FEISHU_APP_SECRET: "oauth-secret",
+      FEISHU_NOTIFICATION_APP_ID: "notification-app",
+      FEISHU_NOTIFICATION_APP_SECRET: "notification-secret",
+      FEISHU_APPROVAL_APP_ID: undefined,
+      FEISHU_APPROVAL_APP_SECRET: undefined,
+      FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES: "李棋轩",
+      FEISHU_DIRECT_MESSAGE_ALLOWED_OPEN_IDS: undefined,
+      FEISHU_DIRECT_MESSAGE_ALLOWED_UNION_IDS: undefined,
+    },
+    async () => {
+      const capturedMessages: CapturedFeishuMessage[] = [];
+      const restoreFetch = mockFeishuFetch(capturedMessages);
+      try {
+        await sendProgressNotification(
+          {
+            type: "progress_daily_summary",
+            summaryDate: "2026-07-06",
+            generatedAt: "2026-07-06T11:00:00.000Z",
+            recipientOpenIds: [liOpenId, blockedOpenId],
+            recipientName: "李棋轩",
+            overview: {
+              taskCount: 1,
+              projectCount: 1,
+              ddlCount: 1,
+              overdueTaskCount: 0,
+              pendingAcceptanceTaskCount: 0,
+              riskTaskCount: 1,
+              overdueDdlCount: 0,
+            },
+            tasks: [
+              {
+                taskId: "pw-daily-task",
+                title: "PW卡片-摘要任务",
+                projectName: "PW卡片-摘要项目",
+                stageName: "联调阶段",
+                statusLabel: "进行中",
+                assigneeNames: "李棋轩",
+                taskTechGroups: ["电控"],
+                urgencyLabel: "高",
+                importanceLabel: "高",
+                dueAt: "2026-07-06T13:00:00.000Z",
+                dueLabel: "今天截止",
+                isOverdue: false,
+                riskNote: "需要关注接口风险",
+                needsWeeklyReport: true,
+                linkPath: "/progress/task/pw-daily-task",
+              },
+            ],
+            taskTotalCount: 1,
+            projects: [
+              {
+                projectId: "pw-daily-project",
+                name: "PW卡片-摘要项目",
+                statusLabel: "进行中",
+                team: "英雄",
+                techGroup: "电控",
+                ownerNames: "李棋轩",
+                currentStageName: "联调阶段",
+                currentStageStatusLabel: "进行中",
+                projectDueAt: "2026-07-07T10:00:00.000Z",
+                projectDueLabel: "明天截止",
+                activeTaskCount: 1,
+                overdueTaskCount: 0,
+                pendingAcceptanceTaskCount: 0,
+                riskCount: 1,
+                linkPath: "/progress/pw-daily-project",
+              },
+            ],
+            projectTotalCount: 1,
+            ddlItems: [
+              {
+                kind: "TASK",
+                id: "task:pw-daily-task",
+                title: "PW卡片-摘要任务",
+                projectName: "PW卡片-摘要项目",
+                stageName: "联调阶段",
+                dueAt: "2026-07-06T13:00:00.000Z",
+                dueLabel: "今天截止",
+                isOverdue: false,
+                linkPath: "/progress/task/pw-daily-task",
+              },
+            ],
+            ddlTotalCount: 1,
+            linkPath: "/progress",
+            approvalsLinkPath: "/progress/approvals",
+          },
+          { appOrigin: "http://127.0.0.1:3002" },
+        );
+      } finally {
+        restoreFetch();
+      }
+
+      expect(capturedMessages).toHaveLength(1);
+      expect(capturedMessages[0]?.receiveId).toBe(liOpenId);
+      expect(capturedMessages[0]?.token).toBe("notification-token");
+      expect(capturedMessages[0]?.title).toBe("每日进度摘要 · 2026-07-06");
+      expect(capturedMessages[0]?.cardText).toContain("今日概览");
+      expect(capturedMessages[0]?.cardText).toContain("任务列表");
+      expect(capturedMessages[0]?.cardText).toContain("项目状态");
+      expect(capturedMessages[0]?.cardText).toContain("DDL 提醒");
+      expect(capturedMessages[0]?.cardText).toContain("PW卡片-摘要任务");
+      expect(capturedMessages[0]?.cardText).toContain("http://127.0.0.1:3002/progress/task/pw-daily-task");
+      expect(capturedMessages[0]?.cardText).toContain("打开进度首页");
+      expect(capturedMessages[0]?.cardText).toContain("查看审批看板");
+    },
+  );
 });
 
 test("旧周报直发提醒入口已废弃", async () => {
@@ -2328,6 +2708,11 @@ function parseJsonRecord(value: unknown): Record<string, unknown> {
     throw new Error("Expected JSON object body");
   }
   return parsed;
+}
+
+function readProgressOutboxPayload(rawPayload: string): Record<string, unknown> {
+  const parsed = JSON.parse(rawPayload) as { payload?: Record<string, unknown> };
+  return parsed.payload ?? {};
 }
 
 function readString(value: unknown): string {

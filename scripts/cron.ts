@@ -4,6 +4,7 @@ import { OrderStatus } from "@prisma/client";
 import { sendFeishuDailySummary } from "../lib/feishu";
 import { runProcurementStaleReminders } from "../lib/procurement-reminders";
 import { runProcurementBudgetAlerts } from "../lib/procurement-budget-alerts";
+import { runProgressDailySummaries } from "../lib/progress-daily-summary";
 import { runDueProgressReminderRules } from "../lib/progress-reminders";
 import { syncFeishuContactUsers } from "../lib/feishu-user-sync";
 import { drainNotificationOutbox } from "../lib/notification-outbox";
@@ -11,8 +12,12 @@ import { prisma } from "../lib/prisma";
 import { logger } from "../lib/logger";
 
 const CONTACT_SYNC_CRON = process.env.FEISHU_CONTACT_SYNC_CRON ?? "30 8 * * *";
+const PROGRESS_DAILY_SUMMARY_CRON =
+  process.env.PROGRESS_DAILY_SUMMARY_CRON ?? "0 19 * * *";
+const CRON_TIMEZONE = "Asia/Shanghai";
 let contactSyncRunning = false;
 let progressScanRunning = false;
+let progressSummaryRunning = false;
 let budgetScanRunning = false;
 
 async function runProcurementDaily() {
@@ -68,6 +73,32 @@ async function runProgressDaily() {
     });
   } finally {
     progressScanRunning = false;
+  }
+}
+
+async function runProgressDailySummary() {
+  if (progressSummaryRunning) {
+    logger.warn("cron.progress_daily_summary.skipped_running", {
+      module: "cron",
+      action: "runProgressDailySummary",
+      result: "skipped",
+    });
+    return;
+  }
+
+  progressSummaryRunning = true;
+  try {
+    const result = await runProgressDailySummaries();
+    logger.info("cron.progress_daily_summary.completed", {
+      module: "cron",
+      action: "runProgressDailySummary",
+      summaryDate: result.summaryDate,
+      recipients: result.recipients,
+      queued: result.queued,
+      skipped: result.skipped,
+    });
+  } finally {
+    progressSummaryRunning = false;
   }
 }
 
@@ -132,59 +163,91 @@ async function runNotificationOutboxDrain() {
   }
 }
 
-cron.schedule(CONTACT_SYNC_CRON, () => {
-  runFeishuContactSync().catch((err) =>
-    logger.error("cron.feishu_contact_sync.failed", {
-      module: "cron",
-      action: "runFeishuContactSync",
-      error: err,
-    }),
-  );
-});
+cron.schedule(
+  CONTACT_SYNC_CRON,
+  () => {
+    runFeishuContactSync().catch((err) =>
+      logger.error("cron.feishu_contact_sync.failed", {
+        module: "cron",
+        action: "runFeishuContactSync",
+        error: err,
+      }),
+    );
+  },
+  { timezone: CRON_TIMEZONE },
+);
 
-cron.schedule("*/2 * * * *", () => {
-  runNotificationOutboxDrain().catch((err) =>
-    logger.error("cron.notification_outbox_drain.failed", {
-      module: "cron",
-      action: "runNotificationOutboxDrain",
-      error: err,
-    }),
-  );
-});
+cron.schedule(
+  "*/2 * * * *",
+  () => {
+    runNotificationOutboxDrain().catch((err) =>
+      logger.error("cron.notification_outbox_drain.failed", {
+        module: "cron",
+        action: "runNotificationOutboxDrain",
+        error: err,
+      }),
+    );
+  },
+  { timezone: CRON_TIMEZONE },
+);
 
-cron.schedule("*/10 * * * *", () => {
-  runProgressDaily().catch((err) =>
-    logger.error("cron.progress_reminders.failed", {
-      module: "cron",
-      action: "runProgressDaily",
-      error: err,
-    }),
-  );
-  runProcurementBudgetScan().catch((err) =>
-    logger.error("cron.procurement_budget_scan.failed", {
-      module: "cron",
-      action: "runProcurementBudgetScan",
-      error: err,
-    }),
-  );
-});
+cron.schedule(
+  "*/10 * * * *",
+  () => {
+    runProgressDaily().catch((err) =>
+      logger.error("cron.progress_reminders.failed", {
+        module: "cron",
+        action: "runProgressDaily",
+        error: err,
+      }),
+    );
+    runProcurementBudgetScan().catch((err) =>
+      logger.error("cron.procurement_budget_scan.failed", {
+        module: "cron",
+        action: "runProcurementBudgetScan",
+        error: err,
+      }),
+    );
+  },
+  { timezone: CRON_TIMEZONE },
+);
 
-cron.schedule("0 9 * * *", () => {
-  runProcurementDaily().catch((err) =>
-    logger.error("cron.procurement_daily.failed", {
-      module: "cron",
-      action: "runProcurementDaily",
-      error: err,
-    }),
-  );
-});
+cron.schedule(
+  "0 9 * * *",
+  () => {
+    runProcurementDaily().catch((err) =>
+      logger.error("cron.procurement_daily.failed", {
+        module: "cron",
+        action: "runProcurementDaily",
+        error: err,
+      }),
+    );
+  },
+  { timezone: CRON_TIMEZONE },
+);
+
+cron.schedule(
+  PROGRESS_DAILY_SUMMARY_CRON,
+  () => {
+    runProgressDailySummary().catch((err) =>
+      logger.error("cron.progress_daily_summary.failed", {
+        module: "cron",
+        action: "runProgressDailySummary",
+        error: err,
+      }),
+    );
+  },
+  { timezone: CRON_TIMEZONE },
+);
 
 logger.info("cron.started", {
   module: "cron",
   action: "startup",
+  timezone: CRON_TIMEZONE,
   contactSyncCron: CONTACT_SYNC_CRON,
   notificationOutboxCron: "*/2 * * * *",
   progressReminderCron: "*/10 * * * *",
+  progressDailySummaryCron: PROGRESS_DAILY_SUMMARY_CRON,
   procurementBudgetCron: "*/10 * * * *",
   procurementDailyCron: "0 9 * * *",
   notificationDeliveryDisabled:

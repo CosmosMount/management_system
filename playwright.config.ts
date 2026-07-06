@@ -70,8 +70,7 @@ export default defineConfig({
         new URL(testDatabaseUrl).pathname.replace(/^\//, ""),
       NOTIFICATION_DELIVERY_DISABLED: "true",
       FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES:
-        process.env.FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES?.trim() ||
-        "李棋轩,张宇山,陈彦霖",
+        process.env.FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES?.trim() || "李棋轩",
     },
     url: baseURL,
     reuseExistingServer: false,

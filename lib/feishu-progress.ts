@@ -56,6 +56,7 @@ const EXPLICIT_RECIPIENT_REQUIRED_TYPES = new Set<string>([
   "task_rejected",
   "task_overdue",
   "weekly_report_reminder",
+  "progress_daily_summary",
 ]);
 
 type TaskNotificationDetails = {
@@ -616,14 +617,90 @@ export type ProgressNotifyPayload =
       message?: string;
       recipientOpenIds: string[];
       linkPath: string;
+    }
+  | {
+      type: "progress_daily_summary";
+      summaryDate: string;
+      generatedAt: string;
+      recipientOpenIds: string[];
+      recipientName?: string;
+      overview: {
+        taskCount: number;
+        projectCount: number;
+        ddlCount: number;
+        overdueTaskCount: number;
+        pendingAcceptanceTaskCount: number;
+        riskTaskCount: number;
+        overdueDdlCount: number;
+      };
+      tasks: Array<{
+        taskId: string;
+        title: string;
+        projectName: string;
+        stageName: string;
+        statusLabel: string;
+        assigneeNames: string;
+        taskTechGroups: string[];
+        urgencyLabel: string;
+        importanceLabel: string;
+        dueAt: string;
+        dueLabel: string;
+        isOverdue: boolean;
+        riskNote: string;
+        needsWeeklyReport: boolean;
+        linkPath: string;
+      }>;
+      taskTotalCount: number;
+      projects: Array<{
+        projectId: string;
+        name: string;
+        statusLabel: string;
+        team: string;
+        techGroup: string;
+        ownerNames: string;
+        currentStageName: string;
+        currentStageStatusLabel: string;
+        projectDueAt: string | null;
+        projectDueLabel: string;
+        activeTaskCount: number;
+        overdueTaskCount: number;
+        pendingAcceptanceTaskCount: number;
+        riskCount: number;
+        linkPath: string;
+      }>;
+      projectTotalCount: number;
+      ddlItems: Array<{
+        kind: "PROJECT" | "STAGE" | "TASK";
+        id: string;
+        title: string;
+        projectName: string;
+        stageName?: string;
+        dueAt: string;
+        dueLabel: string;
+        isOverdue: boolean;
+        linkPath: string;
+      }>;
+      ddlTotalCount: number;
+      linkPath: string;
+      approvalsLinkPath: string;
     };
+
+type CardAction = {
+  text: string;
+  url: string;
+  type?: "default" | "primary" | "danger";
+};
 
 function buildCard(
   title: string,
   content: string,
   url: string,
   template: "blue" | "red" | "orange" | "green" = "blue",
+  actions?: CardAction[],
 ) {
+  const resolvedActions = actions ?? [
+    { text: "打开系统", url, type: "primary" as const },
+  ];
   return {
     config: { wide_screen_mode: true },
     header: { title: { tag: "plain_text", content: title }, template },
@@ -634,14 +711,12 @@ function buildCard(
       },
       {
         tag: "action",
-        actions: [
-          {
-            tag: "button",
-            text: { tag: "plain_text", content: "打开系统" },
-            url,
-            type: "primary",
-          },
-        ],
+        actions: resolvedActions.map((action) => ({
+          tag: "button",
+          text: { tag: "plain_text", content: action.text },
+          url: action.url,
+          type: action.type ?? "default",
+        })),
       },
     ],
   };
@@ -1583,6 +1658,24 @@ export async function sendProgressNotification(
       await notifyOpenIds(payload.recipientOpenIds, card);
       break;
     }
+    case "progress_daily_summary": {
+      const progressUrl = buildAppUrl(payload.linkPath, appOrigin);
+      const approvalsUrl = buildAppUrl(payload.approvalsLinkPath, appOrigin);
+      const card = buildCard(
+        `每日进度摘要 · ${payload.summaryDate}`,
+        formatDailySummaryCard(payload, appOrigin),
+        progressUrl,
+        payload.overview.overdueTaskCount > 0 || payload.overview.overdueDdlCount > 0
+          ? "orange"
+          : "blue",
+        [
+          { text: "打开进度首页", url: progressUrl, type: "primary" },
+          { text: "查看审批看板", url: approvalsUrl },
+        ],
+      );
+      await notifyOpenIds(payload.recipientOpenIds, card);
+      break;
+    }
   }
   });
 }
@@ -1623,6 +1716,94 @@ function formatDateTime(value: string): string {
 function formatChangeList(changes: string[]): string {
   if (changes.length === 0) return "**变更**：无字段变化";
   return `**变更**：\n${changes.map((change) => `- ${change}`).join("\n")}`;
+}
+
+function formatDailySummaryCard(
+  payload: Extract<ProgressNotifyPayload, { type: "progress_daily_summary" }>,
+  appOrigin?: string | null,
+): string {
+  const overview = [
+    `任务 ${payload.overview.taskCount} 个`,
+    `项目 ${payload.overview.projectCount} 个`,
+    `DDL ${payload.overview.ddlCount} 个`,
+    payload.overview.overdueTaskCount > 0
+      ? `逾期任务 ${payload.overview.overdueTaskCount} 个`
+      : null,
+    payload.overview.pendingAcceptanceTaskCount > 0
+      ? `待验收 ${payload.overview.pendingAcceptanceTaskCount} 个`
+      : null,
+    payload.overview.riskTaskCount > 0
+      ? `风险任务 ${payload.overview.riskTaskCount} 个`
+      : null,
+  ].filter(Boolean);
+
+  return [
+    payload.recipientName ? `**收件人**：${payload.recipientName}` : null,
+    `**生成时间**：${formatNotificationDateTime(payload.generatedAt)}`,
+    `**今日概览**：${overview.join(" / ") || "暂无待跟进事项"}`,
+    formatDailySummaryTaskSection(payload, appOrigin),
+    formatDailySummaryProjectSection(payload, appOrigin),
+    formatDailySummaryDdlSection(payload, appOrigin),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function formatDailySummaryTaskSection(
+  payload: Extract<ProgressNotifyPayload, { type: "progress_daily_summary" }>,
+  appOrigin?: string | null,
+): string {
+  if (payload.tasks.length === 0) return "**任务列表**：暂无需要跟进的任务";
+  const lines = payload.tasks.map((task, index) => {
+    const groups =
+      task.taskTechGroups.length > 0 ? task.taskTechGroups.join("、") : "通用";
+    const risk = task.riskNote ? `｜风险：${compactCardText(task.riskNote, 60)}` : "";
+    const weekly = task.needsWeeklyReport ? "｜周报：需要" : "";
+    return `${index + 1}. ${cardLink(task.title, task.linkPath, appOrigin)}｜${task.projectName} / ${task.stageName}｜${task.statusLabel}｜DDL：${formatNotificationDateTime(task.dueAt)}（${task.dueLabel}）｜紧急/重要：${task.urgencyLabel}/${task.importanceLabel}｜负责人：${task.assigneeNames || "未设置"}｜技术组：${groups}${weekly}${risk}`;
+  });
+  appendMoreLine(lines, payload.taskTotalCount, payload.tasks.length);
+  return `**任务列表**：\n${lines.join("\n")}`;
+}
+
+function formatDailySummaryProjectSection(
+  payload: Extract<ProgressNotifyPayload, { type: "progress_daily_summary" }>,
+  appOrigin?: string | null,
+): string {
+  if (payload.projects.length === 0) return "**项目状态**：暂无关注项目";
+  const lines = payload.projects.map((project, index) => {
+    const risk = project.riskCount > 0 ? `｜风险 ${project.riskCount}` : "";
+    return `${index + 1}. ${cardLink(project.name, project.linkPath, appOrigin)}｜${project.statusLabel}｜当前阶段：${project.currentStageName}（${project.currentStageStatusLabel}）｜项目 DDL：${project.projectDueAt ? `${formatNotificationDateTime(project.projectDueAt)}（${project.projectDueLabel}）` : "未设置"}｜负责人：${project.ownerNames || "未设置"}｜活跃任务 ${project.activeTaskCount} / 逾期 ${project.overdueTaskCount} / 待验收 ${project.pendingAcceptanceTaskCount}${risk}`;
+  });
+  appendMoreLine(lines, payload.projectTotalCount, payload.projects.length);
+  return `**项目状态**：\n${lines.join("\n")}`;
+}
+
+function formatDailySummaryDdlSection(
+  payload: Extract<ProgressNotifyPayload, { type: "progress_daily_summary" }>,
+  appOrigin?: string | null,
+): string {
+  if (payload.ddlItems.length === 0) {
+    return "**DDL 提醒**：未来 7 天暂无临期或逾期 DDL";
+  }
+  const lines = payload.ddlItems.map((item, index) => {
+    const prefix =
+      item.kind === "TASK" ? "任务" : item.kind === "STAGE" ? "阶段" : "项目";
+    const stage = item.stageName ? `｜阶段：${item.stageName}` : "";
+    return `${index + 1}. ${prefix}：${cardLink(item.title, item.linkPath, appOrigin)}｜${item.projectName}${stage}｜${formatNotificationDateTime(item.dueAt)}（${item.dueLabel}）`;
+  });
+  appendMoreLine(lines, payload.ddlTotalCount, payload.ddlItems.length);
+  return `**DDL 提醒**：\n${lines.join("\n")}`;
+}
+
+function cardLink(label: string, path: string, appOrigin?: string | null): string {
+  return `[${label.replace(/]/g, "\\]")} ](${buildAppUrl(path, appOrigin)})`.replace(
+    " ](",
+    "](",
+  );
+}
+
+function appendMoreLine(lines: string[], total: number, visible: number) {
+  if (total > visible) lines.push(`...还有 ${total - visible} 条，请打开系统查看`);
 }
 
 function formatTaskNotificationDetailLines(
@@ -1726,6 +1907,7 @@ function formatAffectedStageNames(stageNames: string[]): string {
 function formatNotificationDateTime(value: string | null): string {
   if (!value) return "未设置";
   return new Date(value).toLocaleString("zh-CN", {
+    timeZone: "Asia/Shanghai",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
