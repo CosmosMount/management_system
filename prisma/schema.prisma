@@ -822,3 +822,12 @@ model ProgressReminderRule {
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
 }
+
+model ProgressDailySummarySetting {
+  id           String    @id @default("default")
+  enabled      Boolean   @default(true)
+  scheduleTime String    @default("19:00")
+  lastRunAt    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}

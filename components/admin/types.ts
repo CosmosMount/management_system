@@ -53,11 +53,28 @@ export type AdminProgressReminderRule = {
 export type AdminReminderOutbox = {
   id: string;
   type: string;
+  eventKey: string;
+  sourceLabel?: string;
+  recipientSummary?: string;
   status: NotificationOutboxStatus;
   attempts: number;
   lastError: string;
   createdAt: string;
   sentAt: string | null;
+};
+
+export type AdminProgressDailySummarySetting = {
+  enabled: boolean;
+  scheduleTime: string;
+  lastRunAt: string | null;
+  updatedAt: string | null;
+};
+
+export type AdminDailySummaryUserOption = {
+  openId: string;
+  name: string;
+  email: string | null;
+  avatar: string | null;
 };
 
 export type AdminProjectTemplateStage = {

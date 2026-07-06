@@ -1,6 +1,7 @@
 import type {
   Importance,
   Prisma,
+  ProgressDailySummarySetting,
   ProjectStatus,
   TaskStatus,
   Urgency,
@@ -40,6 +41,9 @@ const DDL_LOOKAHEAD_DAYS = 7;
 const TASK_SUMMARY_LIMIT = 12;
 const PROJECT_SUMMARY_LIMIT = 8;
 const DDL_SUMMARY_LIMIT = 12;
+const DAILY_SUMMARY_SETTING_ID = "default";
+const DEFAULT_DAILY_SUMMARY_SCHEDULE_TIME = "19:00";
+const SCHEDULE_TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 const projectSummaryInclude = {
   owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
@@ -78,6 +82,38 @@ type RunProgressDailySummariesOptions = {
   now?: Date;
   context?: NotificationContext;
   recipientOpenIds?: string[];
+};
+
+type ProgressDailySummaryCollection = {
+  summaries: Map<string, MutableSummary>;
+  userNames: Map<string, string>;
+};
+
+export type ProgressDailySummarySettingView = {
+  enabled: boolean;
+  scheduleTime: string;
+  lastRunAt: string | null;
+  updatedAt: string | null;
+};
+
+export type ProgressDailySummaryScheduleRunResult =
+  | {
+      ran: false;
+      reason: "disabled" | "not_due" | "already_ran";
+      summaryDate: string;
+      scheduleTime: string;
+      lastRunAt: string | null;
+    }
+  | ({
+      ran: true;
+      scheduleTime: string;
+      lastRunAt: string | null;
+    } & ProgressDailySummaryResult);
+
+export type ProgressDailySummaryTestResult = {
+  summaryDate: string;
+  eventKey: string;
+  created: boolean;
 };
 
 type MutableSummary = {
@@ -140,6 +176,116 @@ export type ProgressDailySummaryDdlItem = {
   linkPath: string;
 };
 
+export async function getProgressDailySummarySetting(): Promise<ProgressDailySummarySettingView> {
+  return toSettingView(await ensureProgressDailySummarySetting());
+}
+
+export async function saveProgressDailySummarySetting(input: {
+  enabled: boolean;
+  scheduleTime: string;
+}): Promise<ProgressDailySummarySettingView> {
+  const scheduleTime = normalizeScheduleTime(input.scheduleTime);
+  const saved = await prisma.progressDailySummarySetting.upsert({
+    where: { id: DAILY_SUMMARY_SETTING_ID },
+    create: {
+      id: DAILY_SUMMARY_SETTING_ID,
+      enabled: input.enabled,
+      scheduleTime,
+    },
+    update: {
+      enabled: input.enabled,
+      scheduleTime,
+    },
+  });
+  return toSettingView(saved);
+}
+
+export async function runProgressDailySummariesIfDue(
+  options: Pick<RunProgressDailySummariesOptions, "now" | "context"> = {},
+): Promise<ProgressDailySummaryScheduleRunResult> {
+  const now = options.now ?? new Date();
+  const summaryDate = localDateKey(now);
+  const setting = await ensureProgressDailySummarySetting();
+  const scheduleTime = normalizeScheduleTime(setting.scheduleTime);
+  const lastRunAt = setting.lastRunAt?.toISOString() ?? null;
+
+  if (!setting.enabled) {
+    return {
+      ran: false,
+      reason: "disabled",
+      summaryDate,
+      scheduleTime,
+      lastRunAt,
+    };
+  }
+  if (setting.lastRunAt && localDateKey(setting.lastRunAt) === summaryDate) {
+    return {
+      ran: false,
+      reason: "already_ran",
+      summaryDate,
+      scheduleTime,
+      lastRunAt,
+    };
+  }
+  if (localTimeMinutes(now) < scheduleTimeMinutes(scheduleTime)) {
+    return {
+      ran: false,
+      reason: "not_due",
+      summaryDate,
+      scheduleTime,
+      lastRunAt,
+    };
+  }
+
+  const result = await runProgressDailySummaries({
+    now,
+    context: options.context,
+  });
+  await prisma.progressDailySummarySetting.update({
+    where: { id: DAILY_SUMMARY_SETTING_ID },
+    data: { lastRunAt: now },
+  });
+  return {
+    ran: true,
+    scheduleTime,
+    lastRunAt,
+    ...result,
+  };
+}
+
+export async function sendProgressDailySummaryTest({
+  openId,
+  now = new Date(),
+  context = getDefaultNotificationContext(),
+}: {
+  openId: string;
+  now?: Date;
+  context?: NotificationContext;
+}): Promise<ProgressDailySummaryTestResult> {
+  const user = await prisma.user.findUnique({
+    where: { openId },
+    select: { openId: true, name: true },
+  });
+  if (!user) throw new Error("用户不存在，无法发送每日卡片测试");
+
+  const summaryDate = localDateKey(now);
+  const { summaries } = await collectDailySummaries({
+    now,
+    recipientFilter: new Set([user.openId]),
+    ensureOpenIds: [user.openId],
+  });
+  const summary = summaries.get(user.openId) ?? ensureSummary(summaries, user.openId);
+  const payload = buildSummaryPayload({
+    summary,
+    recipientName: user.name,
+    summaryDate,
+    now,
+  });
+  const eventKey = `progress:daily_summary:test:${user.openId}:${Date.now()}`;
+  const result = await enqueueProgressNotification(eventKey, payload, context);
+  return { summaryDate, eventKey, created: result.created };
+}
+
 export async function runProgressDailySummaries(
   options: RunProgressDailySummariesOptions = {},
 ): Promise<ProgressDailySummaryResult> {
@@ -147,6 +293,57 @@ export async function runProgressDailySummaries(
   const summaryDate = localDateKey(now);
   const context = options.context ?? getDefaultNotificationContext();
   const recipientFilter = new Set(options.recipientOpenIds?.filter(Boolean) ?? []);
+  const { summaries, userNames } = await collectDailySummaries({
+    now,
+    recipientFilter,
+  });
+  let queued = 0;
+  let skipped = 0;
+  for (const summary of summaries.values()) {
+    const payload = buildSummaryPayload({
+      summary,
+      recipientName: userNames.get(summary.openId) ?? "",
+      summaryDate,
+      now,
+    });
+    if (
+      payload.overview.taskCount === 0 &&
+      payload.overview.projectCount === 0 &&
+      payload.overview.ddlCount === 0
+    ) {
+      skipped += 1;
+      continue;
+    }
+    const result = await enqueueProgressNotification(
+      `progress:daily_summary:${summary.openId}:${summaryDate}`,
+      payload,
+      context,
+    );
+    if (result.created) queued += 1;
+    else skipped += 1;
+  }
+
+  logger.info("progress.daily_summary.completed", {
+    module: "progress",
+    action: "runProgressDailySummaries",
+    summaryDate,
+    recipients: summaries.size,
+    queued,
+    skipped,
+  });
+
+  return { summaryDate, recipients: summaries.size, queued, skipped };
+}
+
+async function collectDailySummaries({
+  now,
+  recipientFilter,
+  ensureOpenIds = [],
+}: {
+  now: Date;
+  recipientFilter: Set<string>;
+  ensureOpenIds?: string[];
+}): Promise<ProgressDailySummaryCollection> {
   const summaries = new Map<string, MutableSummary>();
 
   const [projects, tasks] = await Promise.all([
@@ -184,43 +381,37 @@ export async function runProgressDailySummaries(
     }
   }
 
-  const userNames = await loadUserNames([...summaries.keys()]);
-  let queued = 0;
-  let skipped = 0;
-  for (const summary of summaries.values()) {
-    const payload = buildSummaryPayload({
-      summary,
-      recipientName: userNames.get(summary.openId) ?? "",
-      summaryDate,
-      now,
-    });
-    if (
-      payload.overview.taskCount === 0 &&
-      payload.overview.projectCount === 0 &&
-      payload.overview.ddlCount === 0
-    ) {
-      skipped += 1;
-      continue;
+  for (const openId of ensureOpenIds) {
+    if (shouldIncludeRecipient(openId, recipientFilter)) {
+      ensureSummary(summaries, openId);
     }
-    const result = await enqueueProgressNotification(
-      `progress:daily_summary:${summary.openId}:${summaryDate}`,
-      payload,
-      context,
-    );
-    if (result.created) queued += 1;
-    else skipped += 1;
   }
 
-  logger.info("progress.daily_summary.completed", {
-    module: "progress",
-    action: "runProgressDailySummaries",
-    summaryDate,
-    recipients: summaries.size,
-    queued,
-    skipped,
-  });
+  const userNames = await loadUserNames([...summaries.keys()]);
+  return { summaries, userNames };
+}
 
-  return { summaryDate, recipients: summaries.size, queued, skipped };
+async function ensureProgressDailySummarySetting(): Promise<ProgressDailySummarySetting> {
+  return prisma.progressDailySummarySetting.upsert({
+    where: { id: DAILY_SUMMARY_SETTING_ID },
+    create: {
+      id: DAILY_SUMMARY_SETTING_ID,
+      enabled: true,
+      scheduleTime: getDefaultDailySummaryScheduleTime(),
+    },
+    update: {},
+  });
+}
+
+function toSettingView(
+  setting: ProgressDailySummarySetting,
+): ProgressDailySummarySettingView {
+  return {
+    enabled: setting.enabled,
+    scheduleTime: normalizeScheduleTime(setting.scheduleTime),
+    lastRunAt: setting.lastRunAt?.toISOString() ?? null,
+    updatedAt: setting.updatedAt?.toISOString() ?? null,
+  };
 }
 
 async function loadActiveProjects(): Promise<LoadedProject[]> {
@@ -520,6 +711,65 @@ function importancePriority(value: Importance): number {
 
 function shouldIncludeRecipient(openId: string, filter: Set<string>): boolean {
   return !!openId && (filter.size === 0 || filter.has(openId));
+}
+
+function normalizeScheduleTime(value: string): string {
+  const trimmed = value.trim();
+  return SCHEDULE_TIME_PATTERN.test(trimmed)
+    ? trimmed
+    : DEFAULT_DAILY_SUMMARY_SCHEDULE_TIME;
+}
+
+function getDefaultDailySummaryScheduleTime(): string {
+  return (
+    parseLegacyDailySummaryCron(process.env.PROGRESS_DAILY_SUMMARY_CRON) ??
+    DEFAULT_DAILY_SUMMARY_SCHEDULE_TIME
+  );
+}
+
+function parseLegacyDailySummaryCron(value: string | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  const [minute, hour, dayOfMonth, month, dayOfWeek, ...rest] =
+    trimmed.split(/\s+/);
+  if (rest.length > 0 || dayOfMonth !== "*" || month !== "*" || dayOfWeek !== "*") {
+    return null;
+  }
+  if (!/^\d{1,2}$/.test(hour ?? "") || !/^\d{1,2}$/.test(minute ?? "")) {
+    return null;
+  }
+  const hourNumber = Number(hour);
+  const minuteNumber = Number(minute);
+  if (
+    !Number.isInteger(hourNumber) ||
+    !Number.isInteger(minuteNumber) ||
+    hourNumber < 0 ||
+    hourNumber > 23 ||
+    minuteNumber < 0 ||
+    minuteNumber > 59
+  ) {
+    return null;
+  }
+  return `${String(hourNumber).padStart(2, "0")}:${String(minuteNumber).padStart(
+    2,
+    "0",
+  )}`;
+}
+
+function scheduleTimeMinutes(value: string): number {
+  const [hour = "19", minute = "00"] = normalizeScheduleTime(value).split(":");
+  return Number(hour) * 60 + Number(minute);
+}
+
+function localTimeMinutes(date: Date): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: TIME_ZONE,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const byType = new Map(parts.map((part) => [part.type, part.value]));
+  return Number(byType.get("hour")) * 60 + Number(byType.get("minute"));
 }
 
 function buildDueLabel(date: Date, now: Date) {

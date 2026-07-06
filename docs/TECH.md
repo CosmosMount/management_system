@@ -239,7 +239,7 @@ npm run cron                   # 启动定时任务（独立进程）
 |------|------|
 | 默认每日 08:30 | 从飞书通讯录扫描并同步本地人员（可用 `FEISHU_CONTACT_SYNC_CRON` 调整） |
 | 每日 09:00 | 采购日报、采购停留催办；进度规则型提醒由每 10 分钟扫描器按规则时间判断 |
-| 默认每日 19:00 | 进度个人摘要（可用 `PROGRESS_DAILY_SUMMARY_CRON` 调整），汇总任务列表、关注项目状态和未来 7 天/逾期 DDL |
+| 每 5 分钟 | 检查进度个人摘要 DB 设置；默认 19:00 发送，可在管理员面板 `/admin/reminders` 的“每日卡片”中启停、改时间和单人测试发送。`PROGRESS_DAILY_SUMMARY_CHECK_CRON` 只控制检查频率；旧 `PROGRESS_DAILY_SUMMARY_CRON` 仅在首次创建 DB 设置时用于兼容推导初始发送时间 |
 | 每 10 分钟 | 进度规则型提醒、采购预算阈值扫描 |
 | 每 2 分钟 | drain `NotificationOutbox` |
 

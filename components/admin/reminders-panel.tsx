@@ -8,12 +8,17 @@ import { toast } from "sonner";
 import {
   retryProgressReminderOutbox,
   runProgressReminderScanNow,
+  sendProgressDailySummaryTest,
+  updateProgressDailySummarySetting,
   updateProgressReminderRules,
 } from "@/app/actions/progress/reminders";
 import type {
+  AdminDailySummaryUserOption,
+  AdminProgressDailySummarySetting,
   AdminProgressReminderRule,
   AdminReminderOutbox,
 } from "@/components/admin/types";
+import { UserSearchSelect } from "@/components/user-search-select";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -43,13 +48,24 @@ import {
 export function RemindersPanel({
   progressReminderRules,
   progressReminderOutbox,
+  progressDailySummarySetting,
+  progressDailySummaryOutbox,
+  users,
 }: {
   progressReminderRules: AdminProgressReminderRule[];
   progressReminderOutbox: AdminReminderOutbox[];
+  progressDailySummarySetting: AdminProgressDailySummarySetting;
+  progressDailySummaryOutbox: AdminReminderOutbox[];
+  users: AdminDailySummaryUserOption[];
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  const [activeTab, setActiveTab] = useState<"rules" | "daily">("rules");
   const [reminderDrafts, setReminderDrafts] = useState(progressReminderRules);
+  const [dailyDraft, setDailyDraft] = useState(progressDailySummarySetting);
+  const [selectedDailyUserOpenId, setSelectedDailyUserOpenId] = useState(
+    users[0]?.openId ?? "",
+  );
   const reminderRuleMetaByKind = new Map(
     progressReminderRules.map((rule) => [rule.kind, rule]),
   );
@@ -108,8 +124,69 @@ export function RemindersPanel({
     });
   }
 
+  function handleSaveDailySummarySetting() {
+    startTransition(async () => {
+      try {
+        const saved = await updateProgressDailySummarySetting({
+          enabled: dailyDraft.enabled,
+          scheduleTime: dailyDraft.scheduleTime,
+        });
+        setDailyDraft(saved);
+        toast.success("每日卡片设置已保存");
+        router.refresh();
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "保存失败");
+      }
+    });
+  }
+
+  function handleSendDailySummaryTest() {
+    if (!selectedDailyUserOpenId) {
+      toast.error("请选择测试收件人");
+      return;
+    }
+    startTransition(async () => {
+      try {
+        const result = await sendProgressDailySummaryTest({
+          openId: selectedDailyUserOpenId,
+        });
+        toast.success(`测试卡片已入队：${result.summaryDate}`);
+        router.refresh();
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "测试发送失败");
+      }
+    });
+  }
+
   return (
-    <Card>
+    <div className="space-y-4">
+      <div
+        role="tablist"
+        aria-label="进度提醒设置分类"
+        className="grid min-w-0 gap-2 sm:grid-cols-2"
+      >
+        <Button
+          type="button"
+          variant={activeTab === "rules" ? "default" : "outline"}
+          className="h-10"
+          onClick={() => setActiveTab("rules")}
+          data-testid="admin-reminder-rules-tab"
+        >
+          规则提醒
+        </Button>
+        <Button
+          type="button"
+          variant={activeTab === "daily" ? "default" : "outline"}
+          className="h-10"
+          onClick={() => setActiveTab("daily")}
+          data-testid="admin-daily-summary-tab"
+        >
+          每日卡片
+        </Button>
+      </div>
+
+      {activeTab === "rules" ? (
+        <Card>
       <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <CardTitle>进度提醒</CardTitle>
@@ -163,22 +240,20 @@ export function RemindersPanel({
                   </div>
                   <div className="grid min-w-0 gap-2 sm:grid-cols-[7rem_8rem]">
                     <Select
-                      value={rule.enabled ? "true" : "false"}
+                      value={rule.enabled ? "启用" : "停用"}
                       onValueChange={(value) =>
                         updateReminderDraft(rule.kind, (draft) => ({
                           ...draft,
-                          enabled: value === "true",
+                          enabled: value === "启用",
                         }))
                       }
                     >
                       <SelectTrigger className="w-full">
-                        <SelectValue>
-                          {(value) => (value === "true" ? "启用" : "停用")}
-                        </SelectValue>
+                        <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="true">启用</SelectItem>
-                        <SelectItem value="false">停用</SelectItem>
+                        <SelectItem value="启用">启用</SelectItem>
+                        <SelectItem value="停用">停用</SelectItem>
                       </SelectContent>
                     </Select>
                     <Input
@@ -284,7 +359,176 @@ export function RemindersPanel({
           )}
         </div>
       </CardContent>
-    </Card>
+        </Card>
+      ) : (
+        <Card data-testid="admin-daily-summary-panel">
+          <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <CardTitle>每日卡片</CardTitle>
+              <CardDescription>
+                配置每天发送给个人的进度摘要；测试发送只给选中的单个用户入队。
+              </CardDescription>
+            </div>
+            <Button
+              type="button"
+              disabled={pending}
+              onClick={handleSaveDailySummarySetting}
+              data-testid="admin-daily-summary-save"
+            >
+              保存设置
+            </Button>
+          </CardHeader>
+          <CardContent className="min-w-0 space-y-6">
+            <div className="grid gap-3 md:grid-cols-[10rem_12rem_1fr]">
+              <label className="space-y-1 text-sm">
+                <span className="text-muted-foreground">发送状态</span>
+                <Select
+                  value={dailyDraft.enabled ? "启用" : "停用"}
+                  onValueChange={(value) =>
+                    setDailyDraft((draft) => ({
+                      ...draft,
+                      enabled: value === "启用",
+                    }))
+                  }
+                >
+                  <SelectTrigger
+                    className="w-full"
+                    data-testid="admin-daily-summary-enabled"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="启用">启用</SelectItem>
+                    <SelectItem value="停用">停用</SelectItem>
+                  </SelectContent>
+                </Select>
+              </label>
+              <label className="space-y-1 text-sm">
+                <span className="text-muted-foreground">发送时间</span>
+                <Input
+                  type="time"
+                  value={dailyDraft.scheduleTime}
+                  onChange={(event) =>
+                    setDailyDraft((draft) => ({
+                      ...draft,
+                      scheduleTime: event.target.value,
+                    }))
+                  }
+                  data-testid="admin-daily-summary-time"
+                />
+              </label>
+              <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
+                <p className="font-medium">运行状态</p>
+                <p className="mt-1 text-muted-foreground">
+                  上次正式发送：
+                  {dailyDraft.lastRunAt
+                    ? new Date(dailyDraft.lastRunAt).toLocaleString("zh-CN")
+                    : "尚未执行"}
+                </p>
+                <p className="mt-1 text-muted-foreground">
+                  设置更新时间：
+                  {dailyDraft.updatedAt
+                    ? new Date(dailyDraft.updatedAt).toLocaleString("zh-CN")
+                    : "尚未保存"}
+                </p>
+              </div>
+            </div>
+
+            <div className="rounded-lg border p-3">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                <div className="min-w-0 flex-1 space-y-1">
+                  <p className="font-medium">测试发送给单个用户</p>
+                  <p className="text-sm text-muted-foreground">
+                    使用真实每日卡片内容生成一条测试 outbox；无待办用户也会收到“暂无待跟进事项”的测试卡。
+                  </p>
+                  <div
+                    className="mt-2 w-full lg:max-w-md"
+                    data-testid="admin-daily-summary-test-user"
+                  >
+                    <UserSearchSelect
+                      users={users.map((user) => ({
+                        openId: user.openId,
+                        name: user.name || user.openId,
+                        avatar: user.avatar,
+                      }))}
+                      value={selectedDailyUserOpenId}
+                      onChange={setSelectedDailyUserOpenId}
+                      placeholder="搜索测试收件人"
+                      disabled={users.length === 0}
+                    />
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={pending || !selectedDailyUserOpenId}
+                  onClick={handleSendDailySummaryTest}
+                  data-testid="admin-daily-summary-test-send"
+                >
+                  <Send className="h-4 w-4" />
+                  发送测试卡片
+                </Button>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <p className="font-medium">最近每日卡片</p>
+                <p className="text-sm text-muted-foreground">
+                  展示最近的每日卡片通知队列，包含正式发送和测试发送。
+                </p>
+              </div>
+              {progressDailySummaryOutbox.length === 0 ? (
+                <p className="rounded-md border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
+                  暂无每日卡片通知记录。
+                </p>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>创建时间</TableHead>
+                      <TableHead>类型</TableHead>
+                      <TableHead>收件人</TableHead>
+                      <TableHead>状态</TableHead>
+                      <TableHead>尝试</TableHead>
+                      <TableHead>错误</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {progressDailySummaryOutbox.map((row) => (
+                      <TableRow key={row.id}>
+                        <TableCell className="whitespace-nowrap">
+                          {new Date(row.createdAt).toLocaleString("zh-CN")}
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap">
+                          {row.sourceLabel ?? "每日卡片"}
+                        </TableCell>
+                        <TableCell className="max-w-[14rem] truncate">
+                          {row.recipientSummary ?? "未记录收件人"}
+                        </TableCell>
+                        <TableCell>
+                          <Badge
+                            variant={
+                              row.status === "SENT" ? "default" : "secondary"
+                            }
+                          >
+                            {formatOutboxStatus(row.status)}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>{row.attempts}</TableCell>
+                        <TableCell className="max-w-[20rem] truncate">
+                          {row.lastError || "无"}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
   );
 }
 

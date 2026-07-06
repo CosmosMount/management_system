@@ -3,7 +3,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
 import { logger } from "@/lib/logger";
 
-const PRISMA_SCHEMA_REVISION = "project-comments-v1";
+const PRISMA_SCHEMA_REVISION = "progress-daily-summary-setting-v1";
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
@@ -37,6 +37,7 @@ function isPrismaClientStale(client: PrismaClient): boolean {
     typeof client.projectFollowPreference?.findMany !== "function" ||
     typeof client.taskFollowPreference?.findMany !== "function" ||
     typeof client.progressReminderRule?.findMany !== "function" ||
+    typeof client.progressDailySummarySetting?.findMany !== "function" ||
     typeof client.feedback?.findMany !== "function" ||
     typeof client.processingVendor?.findMany !== "function" ||
     typeof client.procurementBudgetPool?.findMany !== "function" ||

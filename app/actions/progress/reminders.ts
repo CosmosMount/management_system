@@ -9,6 +9,10 @@ import {
 } from "@/lib/notification-outbox";
 import { getUserRoles, requireSuperAdmin } from "@/lib/permissions";
 import { canManageProject } from "@/lib/permissions-progress";
+import {
+  saveProgressDailySummarySetting,
+  sendProgressDailySummaryTest as enqueueProgressDailySummaryTest,
+} from "@/lib/progress-daily-summary";
 import { logProgressActivity, requireSessionUser } from "@/lib/progress-activity";
 import { assertProjectActive } from "@/lib/progress-guards";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
@@ -38,6 +42,15 @@ const reminderRuleUpdateSchema = z.object({
   ),
 });
 
+const dailySummarySettingSchema = z.object({
+  enabled: z.boolean(),
+  scheduleTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "请输入有效时间"),
+});
+
+const dailySummaryTestSchema = z.object({
+  openId: z.string().trim().min(1, "请选择测试收件人"),
+});
+
 const manualReminderSchema = z.object({
   targetType: z.enum(["PROJECT", "TASK"]),
   targetId: z.string().min(1),
@@ -62,6 +75,52 @@ async function updateProgressReminderRulesLogged(input: unknown) {
   const parsed = reminderRuleUpdateSchema.parse(input);
   await saveProgressReminderRules(parsed.rules);
   revalidateAdmin();
+}
+
+export async function updateProgressDailySummarySetting(input: unknown) {
+  const session = await requireSuperAdmin();
+  return withActionLogging(
+    {
+      event: "progress.daily_summary.setting.update",
+      module: "progress",
+      action: "updateProgressDailySummarySetting",
+      actorOpenId: session.user.openId,
+      actorName: session.user.name ?? undefined,
+    },
+    async () => updateProgressDailySummarySettingLogged(input),
+  );
+}
+
+async function updateProgressDailySummarySettingLogged(input: unknown) {
+  const parsed = dailySummarySettingSchema.parse(input);
+  const setting = await saveProgressDailySummarySetting(parsed);
+  revalidateAdmin();
+  return setting;
+}
+
+export async function sendProgressDailySummaryTest(input: unknown) {
+  const session = await requireSuperAdmin();
+  return withActionLogging(
+    {
+      event: "progress.daily_summary.test.send",
+      module: "progress",
+      action: "sendProgressDailySummaryTest",
+      actorOpenId: session.user.openId,
+      actorName: session.user.name ?? undefined,
+    },
+    async () => sendProgressDailySummaryTestLogged(input),
+  );
+}
+
+async function sendProgressDailySummaryTestLogged(input: unknown) {
+  const parsed = dailySummaryTestSchema.parse(input);
+  const result = await enqueueProgressDailySummaryTest({
+    openId: parsed.openId,
+    context: await getNotificationContext(),
+  });
+  drainNotificationOutboxSoon(10);
+  revalidateAdmin();
+  return result;
 }
 
 export async function runProgressReminderScanNow() {

@@ -838,6 +838,10 @@ async function getAdminVersion(): Promise<string> {
     reminderCount,
     outboxAggregate,
     outboxCount,
+    dailySummarySettingAggregate,
+    dailySummarySettingCount,
+    dailySummaryOutboxAggregate,
+    dailySummaryOutboxCount,
     projectTemplateAggregate,
     projectTemplateCount,
     projectTemplateStageAggregate,
@@ -877,6 +881,17 @@ async function getAdminVersion(): Promise<string> {
     prisma.notificationOutbox.count({
       where: { channel: "progress", type: "progress_reminder" },
     }),
+    prisma.progressDailySummarySetting.aggregate({
+      _max: { updatedAt: true },
+    }),
+    prisma.progressDailySummarySetting.count(),
+    prisma.notificationOutbox.aggregate({
+      where: { channel: "progress", type: "progress_daily_summary" },
+      _max: { updatedAt: true },
+    }),
+    prisma.notificationOutbox.count({
+      where: { channel: "progress", type: "progress_daily_summary" },
+    }),
     prisma.projectTemplate.aggregate({
       _max: { updatedAt: true },
     }),
@@ -902,6 +917,16 @@ async function getAdminVersion(): Promise<string> {
     ),
     encodePart("reminders", reminderAggregate._max.updatedAt, reminderCount),
     encodePart("reminderOutbox", outboxAggregate._max.updatedAt, outboxCount),
+    encodePart(
+      "dailySummarySetting",
+      dailySummarySettingAggregate._max.updatedAt,
+      dailySummarySettingCount,
+    ),
+    encodePart(
+      "dailySummaryOutbox",
+      dailySummaryOutboxAggregate._max.updatedAt,
+      dailySummaryOutboxCount,
+    ),
     encodePart(
       "projectTemplates",
       projectTemplateAggregate._max.updatedAt,

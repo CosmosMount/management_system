@@ -4,7 +4,7 @@ import { OrderStatus } from "@prisma/client";
 import { sendFeishuDailySummary } from "../lib/feishu";
 import { runProcurementStaleReminders } from "../lib/procurement-reminders";
 import { runProcurementBudgetAlerts } from "../lib/procurement-budget-alerts";
-import { runProgressDailySummaries } from "../lib/progress-daily-summary";
+import { runProgressDailySummariesIfDue } from "../lib/progress-daily-summary";
 import { runDueProgressReminderRules } from "../lib/progress-reminders";
 import { syncFeishuContactUsers } from "../lib/feishu-user-sync";
 import { drainNotificationOutbox } from "../lib/notification-outbox";
@@ -12,8 +12,8 @@ import { prisma } from "../lib/prisma";
 import { logger } from "../lib/logger";
 
 const CONTACT_SYNC_CRON = process.env.FEISHU_CONTACT_SYNC_CRON ?? "30 8 * * *";
-const PROGRESS_DAILY_SUMMARY_CRON =
-  process.env.PROGRESS_DAILY_SUMMARY_CRON ?? "0 19 * * *";
+const PROGRESS_DAILY_SUMMARY_CHECK_CRON =
+  process.env.PROGRESS_DAILY_SUMMARY_CHECK_CRON ?? "*/5 * * * *";
 const CRON_TIMEZONE = "Asia/Shanghai";
 let contactSyncRunning = false;
 let progressScanRunning = false;
@@ -88,7 +88,19 @@ async function runProgressDailySummary() {
 
   progressSummaryRunning = true;
   try {
-    const result = await runProgressDailySummaries();
+    const result = await runProgressDailySummariesIfDue();
+    if (!result.ran) {
+      logger.info("cron.progress_daily_summary.skipped", {
+        module: "cron",
+        action: "runProgressDailySummary",
+        reason: result.reason,
+        summaryDate: result.summaryDate,
+        scheduleTime: result.scheduleTime,
+        lastRunAt: result.lastRunAt,
+        result: "skipped",
+      });
+      return;
+    }
     logger.info("cron.progress_daily_summary.completed", {
       module: "cron",
       action: "runProgressDailySummary",
@@ -227,7 +239,7 @@ cron.schedule(
 );
 
 cron.schedule(
-  PROGRESS_DAILY_SUMMARY_CRON,
+  PROGRESS_DAILY_SUMMARY_CHECK_CRON,
   () => {
     runProgressDailySummary().catch((err) =>
       logger.error("cron.progress_daily_summary.failed", {
@@ -247,7 +259,7 @@ logger.info("cron.started", {
   contactSyncCron: CONTACT_SYNC_CRON,
   notificationOutboxCron: "*/2 * * * *",
   progressReminderCron: "*/10 * * * *",
-  progressDailySummaryCron: PROGRESS_DAILY_SUMMARY_CRON,
+  progressDailySummaryCheckCron: PROGRESS_DAILY_SUMMARY_CHECK_CRON,
   procurementBudgetCron: "*/10 * * * *",
   procurementDailyCron: "0 9 * * *",
   notificationDeliveryDisabled:

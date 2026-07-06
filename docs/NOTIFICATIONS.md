@@ -126,7 +126,7 @@
 | 当前阶段临期/逾期/停滞 | `progress_reminder`，kind `STAGE_STALE_OR_DUE_SOON` | 通知 | outbox 私信 | 阶段负责人、项目负责人、项目参与人、阶段内任务负责人、管理角色。 |
 | 手动项目催促 | `progress_reminder` | 通知 | outbox 私信 | 项目负责人、项目参与人、阶段负责人、活跃任务负责人、管理角色。 |
 | 手动任务催促 | `progress_reminder` | 通知 | outbox 私信 | 任务负责人、项目负责人、项目参与人、阶段负责人、管理角色。 |
-| 每日个人进度摘要 | `progress_daily_summary` | 通知 | outbox 私信 | 每天 19:00 默认入队；按项目/任务关注规则为每个用户汇总自己的任务列表、关注项目状态、未来 7 天和逾期 DDL。 |
+| 每日个人进度摘要 | `progress_daily_summary` | 通知 | outbox 私信 | 默认每天 19:00 入队，可在 `/admin/reminders` 的“每日卡片”页内设置启停、时间和单人测试发送；按项目/任务关注规则为每个用户汇总自己的任务列表、关注项目状态、未来 7 天和逾期 DDL。 |
 
 历史/兼容函数 `runProgressOverdueCheck()`、`runWeeklyReportReminders()`、`runProgressDailyReminders()` 已废弃并会直接报错，避免绕过关注过滤和 outbox。当前 cron 使用 `runDueProgressReminderRules()` 的 outbox 路径。
 
@@ -281,7 +281,7 @@
 |---|---|---|
 | `scripts/cron.ts` -> `drainNotificationOutbox` | 每 2 分钟 | 发送 outbox 中待投递的进度、采购、反馈消息。 |
 | `scripts/cron.ts` -> `runDueProgressReminderRules` | 每 10 分钟扫描到期规则 | 进度规则型提醒，入队 `progress_reminder`。 |
-| `scripts/cron.ts` -> `runProgressDailySummaries` | 默认每天 19:00，可用 `PROGRESS_DAILY_SUMMARY_CRON` 覆盖 | 个人进度摘要，入队 `progress_daily_summary`，走通知机器人。 |
+| `scripts/cron.ts` -> `runProgressDailySummariesIfDue` | 每 5 分钟检查一次 DB 设置 | 个人进度摘要，默认 19:00，可在管理员面板“每日卡片”中启停、改时间和单人测试发送，入队 `progress_daily_summary`，走通知机器人；`PROGRESS_DAILY_SUMMARY_CHECK_CRON` 只控制检查频率，旧 `PROGRESS_DAILY_SUMMARY_CRON` 仅用于首次初始化兼容。 |
 | `scripts/cron.ts` -> `runProcurementBudgetAlerts` | 每 10 分钟 | 采购预算阈值预警，入队 `budget_threshold`。 |
 | `scripts/cron.ts` -> `sendFeishuDailySummary` | 每天 09:00 | 采购日报，直接发采购群 Webhook。 |
 | `scripts/cron.ts` -> `runProcurementStaleReminders` | 每天 09:00 | 在途采购停留超 24 小时催办，直接私信当前环节处理人。 |

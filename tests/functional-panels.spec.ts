@@ -2,6 +2,7 @@ import { expect, type Locator, type Page, test } from "@playwright/test";
 import { prisma } from "../lib/prisma";
 import {
   expectHealthyPage,
+  expectNoHorizontalOverflow,
   formatPrismaError,
   loginAsAdminUser,
   loginAsNormalUser,
@@ -419,6 +420,101 @@ test.describe("管理员面板", () => {
         });
       })
       .toBe(afterFirstScanCount);
+    await expectHealthyPage(page);
+  });
+
+  test("管理员可配置每日卡片并给单个用户发送测试卡", async ({
+    page,
+  }, testInfo) => {
+    const testOpenId = `ou_pw_daily_ui_${testInfo.project.name}`;
+    const testUserName = `PW每日卡片测试-${testInfo.project.name}`;
+    await prisma.user.upsert({
+      where: { openId: testOpenId },
+      create: { openId: testOpenId, name: testUserName },
+      update: { name: testUserName },
+    });
+    await prisma.progressDailySummarySetting.upsert({
+      where: { id: "default" },
+      create: {
+        id: "default",
+        enabled: true,
+        scheduleTime: "19:00",
+      },
+      update: {
+        enabled: true,
+        scheduleTime: "19:00",
+        lastRunAt: null,
+      },
+    });
+    await prisma.notificationOutbox.deleteMany({
+      where: { channel: "progress", type: "progress_daily_summary" },
+    });
+
+    await page.goto("/admin/reminders", { waitUntil: "networkidle" });
+    await expect(page.getByTestId("admin-reminder-rules-tab")).toBeVisible();
+    await page.getByTestId("admin-daily-summary-tab").click();
+    await expect(page.getByTestId("admin-daily-summary-panel")).toBeVisible();
+    await expect(page.getByText("测试发送给单个用户")).toBeVisible();
+
+    await page.getByTestId("admin-daily-summary-enabled").click();
+    await page.getByRole("option", { name: "停用" }).click();
+    await page.getByTestId("admin-daily-summary-time").fill("20:15");
+    await page.getByTestId("admin-daily-summary-save").click();
+    await expect
+      .poll(async () => {
+        const setting = await prisma.progressDailySummarySetting.findUnique({
+          where: { id: "default" },
+          select: { enabled: true, scheduleTime: true },
+        });
+        return setting;
+      })
+      .toEqual({ enabled: false, scheduleTime: "20:15" });
+
+    await page.reload({ waitUntil: "networkidle" });
+    await page.getByTestId("admin-daily-summary-tab").click();
+    await expect(page.getByTestId("admin-daily-summary-time")).toHaveValue("20:15");
+    const dailyUserSearch = page
+      .getByTestId("admin-daily-summary-test-user")
+      .locator("input");
+    await dailyUserSearch.fill(testUserName);
+    await page
+      .getByTestId("user-search-option")
+      .filter({ hasText: testUserName })
+      .click();
+    await page.getByTestId("admin-daily-summary-test-send").click();
+
+    await expect
+      .poll(async () => {
+        const outbox = await prisma.notificationOutbox.findFirst({
+          where: {
+            channel: "progress",
+            type: "progress_daily_summary",
+            eventKey: { startsWith: `progress:daily_summary:test:${testOpenId}:` },
+          },
+          orderBy: { createdAt: "desc" },
+        });
+        if (!outbox) return null;
+        const stored = JSON.parse(outbox.payload) as {
+          payload?: { recipientOpenIds?: string[] };
+        };
+        return {
+          botKind: outbox.botKind,
+          recipientOpenIds: stored.payload?.recipientOpenIds ?? [],
+        };
+      })
+      .toEqual({
+        botKind: "notification",
+        recipientOpenIds: [testOpenId],
+      });
+
+    await page.reload({ waitUntil: "networkidle" });
+    await page.getByTestId("admin-daily-summary-tab").click();
+    await expect(page.getByText("最近每日卡片")).toBeVisible();
+    await expect(page.getByText("测试发送").first()).toBeVisible();
+    await expect(page.getByText(testUserName).first()).toBeVisible();
+    if (testInfo.project.name === "mobile") {
+      await expectNoHorizontalOverflow(page);
+    }
     await expectHealthyPage(page);
   });
 });

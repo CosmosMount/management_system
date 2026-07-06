@@ -7,7 +7,13 @@ import {
 } from "../lib/feishu-progress";
 import { sendOrderNotification } from "../lib/feishu";
 import { runProcurementStaleReminders } from "../lib/procurement-reminders";
-import { runProgressDailySummaries } from "../lib/progress-daily-summary";
+import {
+  getProgressDailySummarySetting,
+  runProgressDailySummaries,
+  runProgressDailySummariesIfDue,
+  saveProgressDailySummarySetting,
+  sendProgressDailySummaryTest,
+} from "../lib/progress-daily-summary";
 import { runSingleProgressReminderRule } from "../lib/progress-reminders";
 import {
   drainNotificationOutbox,
@@ -762,7 +768,167 @@ test("每日进度摘要为指定用户入队任务、项目和 DDL 汇总", asy
   expect(payload.approvalsLinkPath).toBe("/progress/approvals");
 });
 
-test("每日进度摘要 cron 默认北京时间 19 点且测试安全栏只放行李棋轩", async () => {
+test("每日进度摘要设置控制启停、到点和同日幂等", async () => {
+  await prisma.notificationOutbox.deleteMany({
+    where: { channel: "progress", type: "progress_daily_summary" },
+  });
+  await prisma.progressDailySummarySetting.deleteMany();
+
+  const defaultSetting = await getProgressDailySummarySetting();
+  expect(defaultSetting).toMatchObject({
+    enabled: true,
+    scheduleTime: "19:00",
+    lastRunAt: null,
+  });
+
+  await saveProgressDailySummarySetting({ enabled: false, scheduleTime: "19:00" });
+  const disabled = await runProgressDailySummariesIfDue({
+    now: new Date("2026-07-06T20:00:00+08:00"),
+  });
+  expect(disabled).toMatchObject({
+    ran: false,
+    reason: "disabled",
+    scheduleTime: "19:00",
+  });
+
+  await saveProgressDailySummarySetting({ enabled: true, scheduleTime: "23:00" });
+  const notDue = await runProgressDailySummariesIfDue({
+    now: new Date("2026-07-06T20:00:00+08:00"),
+  });
+  expect(notDue).toMatchObject({
+    ran: false,
+    reason: "not_due",
+    scheduleTime: "23:00",
+  });
+
+  await saveProgressDailySummarySetting({ enabled: true, scheduleTime: "19:00" });
+  await prisma.progressDailySummarySetting.update({
+    where: { id: "default" },
+    data: { lastRunAt: new Date("2026-07-06T19:01:00+08:00") },
+  });
+  const alreadyRan = await runProgressDailySummariesIfDue({
+    now: new Date("2026-07-06T20:00:00+08:00"),
+  });
+  expect(alreadyRan).toMatchObject({
+    ran: false,
+    reason: "already_ran",
+    scheduleTime: "19:00",
+  });
+
+  await prisma.progressDailySummarySetting.update({
+    where: { id: "default" },
+    data: { lastRunAt: new Date("2026-07-05T19:01:00+08:00") },
+  });
+  const due = await runProgressDailySummariesIfDue({
+    now: new Date("2026-07-06T20:00:00+08:00"),
+    context: { appOrigin: "http://127.0.0.1:3002" },
+  });
+  expect(due.ran).toBe(true);
+  const saved = await getProgressDailySummarySetting();
+  expect(saved.lastRunAt).toBe("2026-07-06T12:00:00.000Z");
+});
+
+test("每日进度摘要首次设置兼容旧 cron 环境变量", async () => {
+  const previous = process.env.PROGRESS_DAILY_SUMMARY_CRON;
+  await prisma.progressDailySummarySetting.deleteMany();
+  process.env.PROGRESS_DAILY_SUMMARY_CRON = "30 21 * * *";
+  try {
+    const defaultSetting = await getProgressDailySummarySetting();
+    expect(defaultSetting).toMatchObject({
+      enabled: true,
+      scheduleTime: "21:30",
+      lastRunAt: null,
+    });
+  } finally {
+    if (previous === undefined) {
+      delete process.env.PROGRESS_DAILY_SUMMARY_CRON;
+    } else {
+      process.env.PROGRESS_DAILY_SUMMARY_CRON = previous;
+    }
+    await prisma.progressDailySummarySetting.deleteMany();
+  }
+});
+
+test("每日进度摘要单人测试为空用户也入队且不更新正式运行时间", async () => {
+  const suffix = Date.now();
+  const openId = `ou_pw_daily_empty_${suffix}`;
+  await prisma.notificationOutbox.deleteMany({
+    where: { channel: "progress", type: "progress_daily_summary" },
+  });
+  await prisma.progressDailySummarySetting.deleteMany();
+  await prisma.user.create({
+    data: { openId, name: `PW空摘要用户-${suffix}` },
+  });
+  await saveProgressDailySummarySetting({ enabled: true, scheduleTime: "19:00" });
+  await prisma.progressDailySummarySetting.update({
+    where: { id: "default" },
+    data: { lastRunAt: new Date("2026-07-05T19:01:00+08:00") },
+  });
+
+  const result = await sendProgressDailySummaryTest({
+    openId,
+    now: new Date("2026-07-06T20:00:00+08:00"),
+    context: { appOrigin: "http://127.0.0.1:3002" },
+  });
+  expect(result.eventKey).toContain(`progress:daily_summary:test:${openId}:`);
+  expect(result.created).toBe(true);
+
+  const outbox = await prisma.notificationOutbox.findUniqueOrThrow({
+    where: { eventKey: result.eventKey },
+  });
+  expect(outbox.botKind).toBe("notification");
+  expect(outbox.type).toBe("progress_daily_summary");
+  const payload = readProgressOutboxPayload(outbox.payload) as {
+    recipientOpenIds: string[];
+    overview: {
+      taskCount: number;
+      projectCount: number;
+      ddlCount: number;
+    };
+  };
+  expect(payload.recipientOpenIds).toEqual([openId]);
+  expect(payload.overview).toMatchObject({
+    taskCount: 0,
+    projectCount: 0,
+    ddlCount: 0,
+  });
+  const setting = await getProgressDailySummarySetting();
+  expect(setting.lastRunAt).toBe("2026-07-05T11:01:00.000Z");
+});
+
+test("正式每日进度摘要跳过没有待跟进内容的用户", async () => {
+  const suffix = Date.now();
+  const openId = `ou_pw_daily_formal_empty_${suffix}`;
+  await prisma.notificationOutbox.deleteMany({
+    where: { channel: "progress", type: "progress_daily_summary" },
+  });
+  await prisma.user.create({
+    data: { openId, name: `PW正式空摘要用户-${suffix}` },
+  });
+
+  const result = await runProgressDailySummaries({
+    recipientOpenIds: [openId],
+    now: new Date("2026-07-06T20:00:00+08:00"),
+    context: { appOrigin: "http://127.0.0.1:3002" },
+  });
+
+  expect(result).toMatchObject({
+    recipients: 0,
+    queued: 0,
+    skipped: 0,
+  });
+  await expect(
+    prisma.notificationOutbox.count({
+      where: {
+        channel: "progress",
+        type: "progress_daily_summary",
+        eventKey: { contains: openId },
+      },
+    }),
+  ).resolves.toBe(0);
+});
+
+test("每日进度摘要 cron 按数据库设置检查且测试安全栏只放行李棋轩", async () => {
   const [cronSource, dockerCompose, playwrightConfig, playwrightServer] =
     await Promise.all([
       readFile("scripts/cron.ts", "utf8"),
@@ -772,14 +938,17 @@ test("每日进度摘要 cron 默认北京时间 19 点且测试安全栏只放�
     ]);
 
   expect(cronSource).toContain(
-    'process.env.PROGRESS_DAILY_SUMMARY_CRON ?? "0 19 * * *"',
+    'process.env.PROGRESS_DAILY_SUMMARY_CHECK_CRON ?? "*/5 * * * *"',
   );
   expect(cronSource).toContain('const CRON_TIMEZONE = "Asia/Shanghai"');
   expect(cronSource).toMatch(
-    /cron\.schedule\(\s*PROGRESS_DAILY_SUMMARY_CRON,[\s\S]*\{\s*timezone:\s*CRON_TIMEZONE\s*\},\s*\);/,
+    /cron\.schedule\(\s*PROGRESS_DAILY_SUMMARY_CHECK_CRON,[\s\S]*\{\s*timezone:\s*CRON_TIMEZONE\s*\},\s*\);/,
   );
   expect(dockerCompose).toContain(
     "NOTIFICATION_DELIVERY_DISABLED: ${NOTIFICATION_DELIVERY_DISABLED:-true}",
+  );
+  expect(dockerCompose).toContain(
+    'PROGRESS_DAILY_SUMMARY_CHECK_CRON: "${PROGRESS_DAILY_SUMMARY_CHECK_CRON:-*/5 * * * *}"',
   );
   expect(dockerCompose).toContain(
     "FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES: ${FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES-李棋轩}",
