@@ -36,6 +36,7 @@ import { resolveDirectMessageTarget } from "@/lib/feishu-recipient";
 import type { NotificationContext } from "@/lib/app-origin";
 import { defaultAppOrigin } from "@/lib/app-origin";
 import { sendTeacherReviewEmailsOnce } from "@/lib/procurement-teacher-email";
+import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 
 type ProgressOutboxPayload = {
