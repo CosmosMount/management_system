@@ -26,9 +26,7 @@ function roleScopeKey(scope: RoleScope): string {
 function roleFallbackLabel(scope: RoleScope): string {
   const base = roleLabels[scope.role];
   if (
-    (scope.role === "TECH_GROUP_ADMIN" ||
-      scope.role === "TEACHER" ||
-      scope.role === "FINANCE") &&
+    (scope.role === "TECH_GROUP_ADMIN" || scope.role === "TEACHER") &&
     scope.techGroup
   ) {
     return `${base}（${scope.techGroup}）`;
@@ -69,7 +67,7 @@ function collectRoleScopes(order: OrderForHandlerLookup): RoleScope[] {
   const role = statusApproverRole[order.status];
   if (!role) return [];
 
-  if (role === "TEAM_ADMIN") {
+  if (role === "TEAM_ADMIN" || role === "FINANCE") {
     return [{ role, team: order.team, techGroup: "" }];
   }
   return [{ role, team: "", techGroup: order.techGroup }];

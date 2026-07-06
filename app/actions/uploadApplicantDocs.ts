@@ -25,11 +25,10 @@ import {
   saveGeneratedListDoc,
   type ReimbursementDocItem,
 } from "@/lib/generate-reimbursement-docx";
-import { serializeFilePaths } from "@/lib/order-attachments";
+import { serializeFilePaths, resolveInvoicePaths } from "@/lib/order-attachments";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { clearProcurementRejectionFields } from "@/lib/procurement-rejection";
 import { prisma } from "@/lib/prisma";
-import { logger } from "@/lib/logger";
 import { canUploadApplicantDocs } from "@/lib/permissions";
 import {
   assertListSignaturesReady,
@@ -103,45 +102,64 @@ export async function uploadApplicantDocs(formData: FormData) {
   const invoices = formData
     .getAll("invoices")
     .filter((f): f is File => f instanceof File && f.size > 0);
-  if (invoices.length === 0) {
+  const existingInvoices = resolveInvoicePaths(
+    order.invoicePaths,
+    order.invoicePath,
+  );
+  if (invoices.length === 0 && existingInvoices.length === 0) {
     throw new Error("请至少上传一张发票");
   }
-  if (invoices.length > MAX_INVOICE_COUNT) {
+  if (existingInvoices.length + invoices.length > MAX_INVOICE_COUNT) {
     throw new Error(`发票最多上传 ${MAX_INVOICE_COUNT} 张`);
   }
 
   const itemMap = new Map(order.items.map((item) => [item.id, item]));
   const photoPaths = new Map<string, string>();
   const invoicePaths: string[] = [];
+  const newlyUploadedPaths: string[] = [];
+  const replacedPhotoPaths: string[] = [];
+  const previousListDocPath = order.listDocPath;
   let listDocPath = "";
   try {
     for (const confirmed of confirmedItems) {
+      const dbItem = itemMap.get(confirmed.id);
+      if (!dbItem) {
+        throw new Error("采购明细与订单不匹配");
+      }
       const photo = formData.get(`photo-${confirmed.id}`);
-      if (!(photo instanceof File) || photo.size === 0) {
-        const dbItem = itemMap.get(confirmed.id);
-        throw new Error(`请为「${dbItem?.name ?? "明细"}」上传实物照片`);
+      if (photo instanceof File && photo.size > 0) {
+        if (photo.size > MAX_FILE_SIZE) {
+          throw new Error("单张照片不能超过 20MB");
+        }
+        const saved = await saveUpload(
+          orderId,
+          photo,
+          `item-photo-${confirmed.id.slice(0, 8)}`,
+          uploadTypeSets.itemPhoto,
+        );
+        photoPaths.set(confirmed.id, saved);
+        newlyUploadedPaths.push(saved);
+        if (dbItem.photoPath) {
+          replacedPhotoPaths.push(dbItem.photoPath);
+        }
+      } else if (dbItem.photoPath) {
+        photoPaths.set(confirmed.id, dbItem.photoPath);
+      } else {
+        throw new Error(`请为「${dbItem.name}」上传实物照片`);
       }
-      if (photo.size > MAX_FILE_SIZE) {
-        throw new Error("单张照片不能超过 20MB");
-      }
-      const saved = await saveUpload(
-        orderId,
-        photo,
-        `item-photo-${confirmed.id.slice(0, 8)}`,
-        uploadTypeSets.itemPhoto,
-      );
-      photoPaths.set(confirmed.id, saved);
     }
 
     for (let i = 0; i < invoices.length; i++) {
       const saved = await saveUpload(
         orderId,
         invoices[i],
-        `invoice-${i + 1}`,
+        `invoice-${existingInvoices.length + i + 1}`,
         uploadTypeSets.invoice,
       );
       invoicePaths.push(saved);
+      newlyUploadedPaths.push(saved);
     }
+    const finalInvoicePaths = [...existingInvoices, ...invoicePaths];
 
     const docItems: ReimbursementDocItem[] = confirmedItems.map((confirmed) => {
       const dbItem = itemMap.get(confirmed.id)!;
@@ -177,6 +195,7 @@ export async function uploadApplicantDocs(formData: FormData) {
       receiveDate: docDate,
     });
     listDocPath = await saveGeneratedListDoc(orderId, listBuffer);
+    newlyUploadedPaths.push(listDocPath);
 
     const totalPrice = confirmedItems.reduce((sum, c) => sum + c.lineTotal, 0);
     const context = await getNotificationContext();
@@ -198,8 +217,8 @@ export async function uploadApplicantDocs(formData: FormData) {
         where: { id: orderId, status: order.status },
         data: {
           totalPrice,
-          invoicePaths: serializeFilePaths(invoicePaths),
-          invoicePath: invoicePaths[0] ?? null,
+          invoicePaths: serializeFilePaths(finalInvoicePaths),
+          invoicePath: finalInvoicePaths[0] ?? null,
           listDocPath,
           status: OrderStatus.PENDING_FINANCE_REVIEW,
           ...clearProcurementRejectionFields(),
@@ -235,24 +254,24 @@ export async function uploadApplicantDocs(formData: FormData) {
         context,
       );
     });
+    await Promise.allSettled(
+      [
+        ...replacedPhotoPaths,
+        ...(previousListDocPath && previousListDocPath !== listDocPath
+          ? [previousListDocPath]
+          : []),
+      ].map((publicPath) => removeUploadByPublicPath(publicPath)),
+    );
   } catch (err) {
     await Promise.allSettled(
-      [...photoPaths.values(), ...invoicePaths, listDocPath].map((publicPath) =>
-        removeUploadByPublicPath(publicPath),
-      ),
+      newlyUploadedPaths.map((publicPath) => removeUploadByPublicPath(publicPath)),
     );
     throw err;
   }
   try {
     drainNotificationOutboxSoon();
   } catch (err) {
-    logger.error("procurement.notification.drain_soon.failed", {
-      module: "procurement",
-      action: "uploadApplicantDocs",
-      entityType: "PurchaseOrder",
-      entityId: orderId,
-      error: err,
-    });
+    console.error("[procurement] drain notification outbox failed:", err);
   }
 
   revalidateProcurement(orderId);
@@ -300,6 +319,9 @@ export async function previewReimbursementListDoc(input: {
         unitPrice:
           dbItem.quantity > 0 ? confirmed.lineTotal / dbItem.quantity : 0,
         lineTotal: confirmed.lineTotal,
+        photoAbsolutePath: dbItem.photoPath
+          ? publicPathToAbsolute(dbItem.photoPath)
+          : null,
       };
     },
   );

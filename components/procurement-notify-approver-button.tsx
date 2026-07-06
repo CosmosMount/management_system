@@ -44,7 +44,7 @@ export function ProcurementNotifyApproverButton({
       }
       toast.message(result.message);
     } catch (err) {
-      toast.error(getActionErrorMessage(err, "通知失败"));
+      toast.error(getActionErrorMessage(err, "催促失败"));
     } finally {
       setLoading(false);
     }
@@ -59,12 +59,12 @@ export function ProcurementNotifyApproverButton({
         onClick={() => setOpen(true)}
       >
         <BellRing className="h-4 w-4" />
-        通知审批人
+        催促
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>通知当前审批人</DialogTitle>
+            <DialogTitle>催促当前审批人</DialogTitle>
             <DialogDescription>
               系统将通过飞书私信提醒当前环节处理人。
               {currentHandler ? `当前处理人：${currentHandler}` : ""}
@@ -87,7 +87,7 @@ export function ProcurementNotifyApproverButton({
               取消
             </Button>
             <Button type="button" disabled={loading} onClick={handleSend}>
-              {loading ? "发送中..." : "发送通知"}
+              {loading ? "发送中..." : "发送催促"}
             </Button>
           </DialogFooter>
         </DialogContent>

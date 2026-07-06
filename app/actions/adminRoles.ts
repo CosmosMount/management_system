@@ -6,11 +6,10 @@ import { requireSuperAdmin } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { revalidateAdmin } from "@/lib/revalidate";
 
-const TEAM_SCOPED_ROLES = new Set<UserRoleType>(["TEAM_ADMIN"]);
+const TEAM_SCOPED_ROLES = new Set<UserRoleType>(["TEAM_ADMIN", "FINANCE"]);
 const TECH_GROUP_SCOPED_ROLES = new Set<UserRoleType>([
   "TECH_GROUP_ADMIN",
   "TEACHER",
-  "FINANCE",
 ]);
 const GLOBAL_ROLES = new Set<UserRoleType>(["SUPER_ADMIN", "PROJECT_MANAGER"]);
 
@@ -22,7 +21,7 @@ function resolveRoleScope(
   if (TEAM_SCOPED_ROLES.has(role)) {
     const resolvedTeam = team ?? "";
     if (!resolvedTeam || !(TEAM_OPTIONS as readonly string[]).includes(resolvedTeam)) {
-      throw new Error("车组组长必须指定有效车组");
+      throw new Error("车组角色必须指定有效车组");
     }
     return { team: resolvedTeam, techGroup: "" };
   }

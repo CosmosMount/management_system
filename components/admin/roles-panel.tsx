@@ -91,14 +91,14 @@ export function RolesPanel({
       toast.error("请选择用户和角色");
       return;
     }
-    if (assignRole === "TEAM_ADMIN" && !assignTeam) {
-      toast.error("请选择车组");
-      return;
+    if (assignRole === "TEAM_ADMIN" || assignRole === "FINANCE") {
+      if (!assignTeam) {
+        toast.error("请选择车组");
+        return;
+      }
     }
     if (
-      (assignRole === "TECH_GROUP_ADMIN" ||
-        assignRole === "TEACHER" ||
-        assignRole === "FINANCE") &&
+      (assignRole === "TECH_GROUP_ADMIN" || assignRole === "TEACHER") &&
       !assignTechGroup
     ) {
       toast.error("请选择技术组");
@@ -110,11 +110,12 @@ export function RolesPanel({
         await assignUserRole({
           openId: assignOpenId,
           role: assignRole,
-          team: assignRole === "TEAM_ADMIN" ? assignTeam : undefined,
+          team:
+            assignRole === "TEAM_ADMIN" || assignRole === "FINANCE"
+              ? assignTeam
+              : undefined,
           techGroup:
-            assignRole === "TECH_GROUP_ADMIN" ||
-            assignRole === "TEACHER" ||
-            assignRole === "FINANCE"
+            assignRole === "TECH_GROUP_ADMIN" || assignRole === "TEACHER"
               ? assignTechGroup
               : undefined,
         });
@@ -180,7 +181,7 @@ export function RolesPanel({
           <CardHeader>
             <CardTitle>车组职责配置</CardTitle>
             <CardDescription>
-              为每个车组指定组长；用户需先飞书登录本系统。
+              为每个车组指定组长与报销员；用户需先飞书登录本系统。
             </CardDescription>
           </CardHeader>
           <CardContent className="min-w-0">
@@ -189,6 +190,7 @@ export function RolesPanel({
                 <TableRow>
                   <TableHead>车组</TableHead>
                   <TableHead>组长</TableHead>
+                  <TableHead>报销员</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -207,6 +209,18 @@ export function RolesPanel({
                         onQuickAssign={handleQuickAssign}
                       />
                     </TableCell>
+                    <TableCell className="min-w-[14rem]">
+                      <RoleCell
+                        entries={teamRoles(team, "FINANCE")}
+                        users={users}
+                        userOptions={userOptions}
+                        team={team}
+                        role="FINANCE"
+                        pending={pending}
+                        onRemove={handleRemove}
+                        onQuickAssign={handleQuickAssign}
+                      />
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -218,7 +232,7 @@ export function RolesPanel({
           <CardHeader>
             <CardTitle>技术组职责配置</CardTitle>
             <CardDescription>
-              为每个技术组指定组长、指导老师与报销员，参与审批与报销流程。指导老师需配置 Outlook 邮箱，进入老师审核时将收到审批邮件。
+              为每个技术组指定组长与指导老师，参与审批流程。指导老师需配置 Outlook 邮箱，进入老师审核时将收到审批邮件。
             </CardDescription>
           </CardHeader>
           <CardContent className="min-w-0">
@@ -228,7 +242,6 @@ export function RolesPanel({
                   <TableHead>技术组</TableHead>
                   <TableHead>组长</TableHead>
                   <TableHead>指导老师</TableHead>
-                  <TableHead>报销员</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -258,18 +271,6 @@ export function RolesPanel({
                         onRemove={handleRemove}
                         onQuickAssign={handleQuickAssignTechGroup}
                         showTeacherEmail
-                      />
-                    </TableCell>
-                    <TableCell className="min-w-[14rem]">
-                      <TechGroupRoleCell
-                        entries={techGroupRoles(techGroup, "FINANCE")}
-                        users={users}
-                        userOptions={userOptions}
-                        techGroup={techGroup}
-                        role="FINANCE"
-                        pending={pending}
-                        onRemove={handleRemove}
-                        onQuickAssign={handleQuickAssignTechGroup}
                       />
                     </TableCell>
                   </TableRow>
@@ -419,7 +420,7 @@ function RoleScopeSelect({
   onTeamChange: (value: string) => void;
   onTechGroupChange: (value: string) => void;
 }) {
-  if (assignRole === "TEAM_ADMIN") {
+  if (assignRole === "TEAM_ADMIN" || assignRole === "FINANCE") {
     return (
       <div className="space-y-2">
         <p className="h-5 text-sm font-medium leading-5">车组</p>
@@ -444,11 +445,7 @@ function RoleScopeSelect({
     );
   }
 
-  if (
-    assignRole === "TECH_GROUP_ADMIN" ||
-    assignRole === "TEACHER" ||
-    assignRole === "FINANCE"
-  ) {
+  if (assignRole === "TECH_GROUP_ADMIN" || assignRole === "TEACHER") {
     return (
       <div className="space-y-2">
         <p className="h-5 text-sm font-medium leading-5">技术组</p>

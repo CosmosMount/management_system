@@ -171,7 +171,7 @@ export async function prepareFunctionalFixtures(
         role: UserRoleType.TECH_GROUP_ADMIN,
         techGroup: "电控",
       },
-      { openId: adminOpenId, role: UserRoleType.FINANCE, techGroup: "电控" },
+      { openId: adminOpenId, role: UserRoleType.FINANCE, team: "英雄" },
       { openId: adminOpenId, role: UserRoleType.TEACHER, techGroup: "电控" },
     ],
     skipDuplicates: true,

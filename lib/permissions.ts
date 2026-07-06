@@ -39,15 +39,11 @@ export async function getOpenIdsByRole(
     techGroup?: string;
   } = { role };
 
-  if (role === "TEAM_ADMIN") {
+  if (role === "TEAM_ADMIN" || role === "FINANCE") {
     if (!order.team) return [];
     where.team = order.team;
     where.techGroup = "";
-  } else if (
-    role === "TECH_GROUP_ADMIN" ||
-    role === "TEACHER" ||
-    role === "FINANCE"
-  ) {
+  } else if (role === "TECH_GROUP_ADMIN" || role === "TEACHER") {
     if (!order.techGroup) return [];
     where.techGroup = order.techGroup;
     where.team = "";

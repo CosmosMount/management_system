@@ -1,7 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
-import { logger } from "@/lib/logger";
 
 const PRISMA_SCHEMA_REVISION = "project-stage-completed-at-v1";
 
@@ -9,7 +8,6 @@ const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
   pgPool: Pool | undefined;
   prismaSchemaRevision?: string;
-  prismaConnectionLogged?: boolean;
 };
 
 function isPrismaClientStale(client: PrismaClient): boolean {
@@ -52,20 +50,6 @@ function createPrismaClient(): PrismaClient {
   ) {
     throw new Error("DATABASE_URL must be a PostgreSQL connection string");
   }
-  if (!globalForPrisma.prismaConnectionLogged) {
-    const url = new URL(connectionString);
-    const databaseName = url.pathname.replace(/^\//, "");
-    logger.info("database.prisma.client.create", {
-      module: "database",
-      action: "createPrismaClient",
-      databaseName,
-      databaseHost: url.hostname,
-      databasePort: url.port || "5432",
-      isTestDatabase: databaseName.endsWith("_test"),
-      schemaRevision: PRISMA_SCHEMA_REVISION,
-    });
-    globalForPrisma.prismaConnectionLogged = true;
-  }
 
   const pool =
     globalForPrisma.pgPool ??
@@ -74,15 +58,6 @@ function createPrismaClient(): PrismaClient {
       connectionTimeoutMillis: 5_000,
       max: 10,
     });
-  if (!globalForPrisma.pgPool) {
-    pool.on("error", (error) => {
-      logger.error("database.pg_pool.error", {
-        module: "database",
-        action: "pgPool",
-        error,
-      });
-    });
-  }
 
   if (process.env.NODE_ENV !== "production") {
     globalForPrisma.pgPool = pool;

@@ -8,7 +8,6 @@ import { prisma } from "@/lib/prisma";
 import { approveProcurementByOpenId } from "@/lib/procurement-approve-by-open-id";
 import { confirmProcurementByOpenId } from "@/lib/procurement-confirm-by-open-id";
 import { rejectProcurementByOpenId } from "@/lib/procurement-reject-by-open-id";
-import { logger } from "@/lib/logger";
 
 type CardActionPayload = {
   operator?: {
@@ -36,58 +35,6 @@ type ResolvedCardAction = {
   orderId: string;
   reason: string;
 };
-
-async function runCardAction<T>(
-  details: {
-    action: string;
-    orderId: string;
-    operatorOpenId: string;
-    systemOpenId: string;
-    botKind?: FeishuBotKind;
-  },
-  callback: () => Promise<T>,
-): Promise<T> {
-  const startedAt = Date.now();
-  logger.info("feishu.card_action.start", {
-    module: "feishu-ws",
-    action: details.action,
-    entityType: "PurchaseOrder",
-    entityId: details.orderId,
-    operatorOpenId: details.operatorOpenId,
-    actorOpenId: details.systemOpenId,
-    botKind: details.botKind ?? "notification",
-    result: "start",
-  });
-  try {
-    const result = await callback();
-    logger.audit("feishu.card_action.completed", {
-      module: "feishu-ws",
-      action: details.action,
-      entityType: "PurchaseOrder",
-      entityId: details.orderId,
-      operatorOpenId: details.operatorOpenId,
-      actorOpenId: details.systemOpenId,
-      botKind: details.botKind ?? "notification",
-      durationMs: Date.now() - startedAt,
-      result: "success",
-    });
-    return result;
-  } catch (error) {
-    logger.error("feishu.card_action.failed", {
-      module: "feishu-ws",
-      action: details.action,
-      entityType: "PurchaseOrder",
-      entityId: details.orderId,
-      operatorOpenId: details.operatorOpenId,
-      actorOpenId: details.systemOpenId,
-      botKind: details.botKind ?? "notification",
-      durationMs: Date.now() - startedAt,
-      result: "failure",
-      error,
-    });
-    throw error;
-  }
-}
 
 async function respondWithProcessedCard(
   toastType: "success" | "info",
@@ -240,16 +187,12 @@ export async function handleFeishuCardAction(
       return {};
     }
 
-    logger.warn("feishu.card_action.unrecognized", {
-      module: "feishu-ws",
-      action: "unknown",
-      operatorOpenId,
+    console.log("[feishu-ws] 未识别的卡片操作", {
       tag: data.action?.tag,
       name: data.action?.name,
-      hasValue: Boolean(data.action?.value),
-      hasFormValue: Boolean(data.action?.form_value),
-      operatorName: data.operator?.name,
-      result: "skipped",
+      value: data.action?.value,
+      formValue: data.action?.form_value,
+      operator: data.operator?.name ?? operatorOpenId,
     });
     return cardToast("info", "已收到操作，请使用系统页面完成处理");
   }
@@ -257,82 +200,48 @@ export async function handleFeishuCardAction(
   const { action, orderId, reason } = resolved;
 
   if (action === "procurement_approve_management") {
-    return runCardAction(
-      {
-        action,
-        orderId,
-        operatorOpenId,
-        systemOpenId: openId,
-        botKind: options?.botKind,
-      },
-      async () => {
-        const order = await prisma.purchaseOrder.findUnique({
-          where: { id: orderId },
-          select: { status: true },
-        });
-        if (!order) {
-          return cardToast("error", "订单不存在");
-        }
-        if (order.status !== "MANAGEMENT_REVIEW") {
-          const message = "该管理审核卡片已失效，请打开系统查看最新状态";
-          return respondWithProcessedCard(
-            "info",
-            message,
-            orderId,
-            options?.botKind,
-            "MANAGEMENT_REVIEW",
-          );
-        }
-        const result = await approveProcurementByOpenId(openId, orderId);
-        return respondWithProcessedCard(
-          "success",
-          result.message,
-          orderId,
-          options?.botKind,
-          "MANAGEMENT_REVIEW",
-        );
-      },
+    const order = await prisma.purchaseOrder.findUnique({
+      where: { id: orderId },
+      select: { status: true },
+    });
+    if (!order) {
+      return cardToast("error", "订单不存在");
+    }
+    if (order.status !== "MANAGEMENT_REVIEW") {
+      const message = "该管理审核卡片已失效，请打开系统查看最新状态";
+      return respondWithProcessedCard("info", message, orderId, options?.botKind, "MANAGEMENT_REVIEW");
+    }
+    const result = await approveProcurementByOpenId(openId, orderId);
+    return respondWithProcessedCard(
+      "success",
+      result.message,
+      orderId,
+      options?.botKind,
+      "MANAGEMENT_REVIEW",
     );
   }
 
   if (action === "procurement_approve_teacher") {
-    return runCardAction(
-      {
-        action,
-        orderId,
-        operatorOpenId,
-        systemOpenId: openId,
-        botKind: options?.botKind,
-      },
-      async () => {
-        const order = await prisma.purchaseOrder.findUnique({
-          where: { id: orderId },
-          select: { status: true },
-        });
-        if (!order) {
-          return cardToast("error", "订单不存在");
-        }
-        if (order.status !== "TEACHER_REVIEW") {
-          const message = "该老师审核卡片已失效，请打开系统查看最新状态";
-          return respondWithProcessedCard(
-            "info",
-            message,
-            orderId,
-            options?.botKind,
-            "TEACHER_REVIEW",
-          );
-        }
-        const result = await approveProcurementByOpenId(openId, orderId, {
-          teacherOnly: true,
-        });
-        return respondWithProcessedCard(
-          "success",
-          result.message,
-          orderId,
-          options?.botKind,
-          "TEACHER_REVIEW",
-        );
-      },
+    const order = await prisma.purchaseOrder.findUnique({
+      where: { id: orderId },
+      select: { status: true },
+    });
+    if (!order) {
+      return cardToast("error", "订单不存在");
+    }
+    if (order.status !== "TEACHER_REVIEW") {
+      const message = "该老师审核卡片已失效，请打开系统查看最新状态";
+      return respondWithProcessedCard("info", message, orderId, options?.botKind, "TEACHER_REVIEW");
+    }
+    const result = await approveProcurementByOpenId(openId, orderId, {
+      teacherOnly: true,
+    });
+    return respondWithProcessedCard(
+      "success",
+      result.message,
+      orderId,
+      options?.botKind,
+      "TEACHER_REVIEW",
     );
   }
 
@@ -341,103 +250,74 @@ export async function handleFeishuCardAction(
     action === "procurement_reject_resubmit" ||
     action === "procurement_reject_terminate"
   ) {
-    return runCardAction(
-      {
-        action,
+    const order = await prisma.purchaseOrder.findUnique({
+      where: { id: orderId },
+      select: { status: true },
+    });
+    if (!order) {
+      return cardToast("error", "订单不存在");
+    }
+    if (
+      order.status !== "MANAGEMENT_REVIEW" &&
+      order.status !== "TEACHER_REVIEW"
+    ) {
+      const message = "该审批卡片已失效，请打开系统查看最新状态";
+      return respondWithProcessedCard(
+        "info",
+        message,
         orderId,
-        operatorOpenId,
-        systemOpenId: openId,
-        botKind: options?.botKind,
-      },
-      async () => {
-        const order = await prisma.purchaseOrder.findUnique({
-          where: { id: orderId },
-          select: { status: true },
-        });
-        if (!order) {
-          return cardToast("error", "订单不存在");
-        }
-        if (
-          order.status !== "MANAGEMENT_REVIEW" &&
-          order.status !== "TEACHER_REVIEW"
-        ) {
-          const message = "该审批卡片已失效，请打开系统查看最新状态";
-          return respondWithProcessedCard(
-            "info",
-            message,
-            orderId,
-            options?.botKind,
-            order.status,
-          );
-        }
-        const rejectCardStage = order.status;
-        if (!reason) {
-          logger.warn("feishu.card_action.reject_reason_missing", {
-            module: "feishu-ws",
-            action,
-            entityType: "PurchaseOrder",
-            entityId: orderId,
-            operatorOpenId,
-            actorOpenId: openId,
-            buttonName: data.action?.name,
-            hasFormValue: Boolean(data.action?.form_value),
-            result: "skipped",
-          });
-          return cardToast("error", "请填写退回原因");
-        }
-        const result = await rejectProcurementByOpenId(
-          openId,
-          orderId,
-          reason,
-          action === "procurement_reject_terminate" ? "terminate" : "resubmit",
-        );
-        return respondWithProcessedCard(
-          "success",
-          result.message,
-          orderId,
-          options?.botKind,
-          rejectCardStage,
-        );
-      },
+        options?.botKind,
+        order.status,
+      );
+    }
+    const rejectCardStage = order.status;
+    if (!reason) {
+      console.log("[feishu-ws] 驳回缺少原因", {
+        formValue: data.action?.form_value,
+        buttonName: data.action?.name,
+      });
+      return cardToast("error", "请填写退回原因");
+    }
+    const result = await rejectProcurementByOpenId(
+      openId,
+      orderId,
+      reason,
+      action === "procurement_reject_terminate" ? "terminate" : "resubmit",
+    );
+    return respondWithProcessedCard(
+      "success",
+      result.message,
+      orderId,
+      options?.botKind,
+      rejectCardStage,
     );
   }
 
   if (action === "procurement_confirm_reimbursement") {
-    return runCardAction(
-      {
-        action,
+    const order = await prisma.purchaseOrder.findUnique({
+      where: { id: orderId },
+      select: { status: true },
+    });
+    if (!order) {
+      return cardToast("error", "订单不存在");
+    }
+    if (order.status !== "PENDING_APPLICANT_CONFIRM") {
+      const message = "该确认卡片已失效，请打开系统查看最新状态";
+      return respondWithProcessedCard(
+        "info",
+        message,
         orderId,
-        operatorOpenId,
-        systemOpenId: openId,
-        botKind: options?.botKind,
-      },
-      async () => {
-        const order = await prisma.purchaseOrder.findUnique({
-          where: { id: orderId },
-          select: { status: true },
-        });
-        if (!order) {
-          return cardToast("error", "订单不存在");
-        }
-        if (order.status !== "PENDING_APPLICANT_CONFIRM") {
-          const message = "该确认卡片已失效，请打开系统查看最新状态";
-          return respondWithProcessedCard(
-            "info",
-            message,
-            orderId,
-            options?.botKind,
-            "PENDING_APPLICANT_CONFIRM",
-          );
-        }
-        const result = await confirmProcurementByOpenId(openId, orderId);
-        return respondWithProcessedCard(
-          "success",
-          result.message,
-          orderId,
-          options?.botKind,
-          "PENDING_APPLICANT_CONFIRM",
-        );
-      },
+        options?.botKind,
+        "PENDING_APPLICANT_CONFIRM",
+      );
+    }
+    const result = await confirmProcurementByOpenId(openId, orderId);
+    return respondWithProcessedCard(
+      "success",
+      result.message,
+      orderId,
+      options?.botKind,
+      "PENDING_APPLICANT_CONFIRM",
     );
   }
 

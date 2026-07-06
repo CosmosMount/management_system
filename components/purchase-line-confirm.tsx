@@ -12,6 +12,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { IMAGE_UPLOAD_ACCEPT } from "@/lib/upload-accept";
+import { AttachmentFileLink } from "@/components/attachment-file-link";
 
 export type PurchaseLineItem = {
   id: string;
@@ -19,6 +20,7 @@ export type PurchaseLineItem = {
   spec: string;
   quantity: number;
   unitPrice: number;
+  photoPath?: string | null;
 };
 
 export type ConfirmedLineItem = {
@@ -86,10 +88,16 @@ export function PurchaseLineConfirm({
   }
 
   return (
-    <div className="space-y-3">
+    <div className={showPhotoUpload ? "w-fit max-w-full space-y-3" : "space-y-3"}>
       <Label>采购明细价格确认</Label>
-      <div className="overflow-x-auto rounded-lg border">
-        <Table>
+      <div
+        className={
+          showPhotoUpload
+            ? "w-fit max-w-full rounded-lg border"
+            : "overflow-x-auto rounded-lg border"
+        }
+      >
+        <Table fitContent={showPhotoUpload}>
           <TableHeader>
             <TableRow>
               <TableHead>物品</TableHead>
@@ -129,13 +137,24 @@ export function PurchaseLineConfirm({
                 </TableCell>
                 {showPhotoUpload && (
                   <TableCell>
-                    <Input
-                      name={`photo-${row.id}`}
-                      type="file"
-                      accept={IMAGE_UPLOAD_ACCEPT}
-                      className="h-8 max-w-48"
-                      required
-                    />
+                    <div className="space-y-1">
+                      {row.photoPath ? (
+                        <div className="space-y-1">
+                          <p className="text-xs text-muted-foreground">已上传</p>
+                          <AttachmentFileLink
+                            filePath={row.photoPath}
+                            previewClassName="max-h-24 rounded-md border object-contain"
+                          />
+                        </div>
+                      ) : null}
+                      <Input
+                        name={`photo-${row.id}`}
+                        type="file"
+                        accept={IMAGE_UPLOAD_ACCEPT}
+                        className="h-8 w-auto min-w-[14rem]"
+                        required={!row.photoPath}
+                      />
+                    </div>
                   </TableCell>
                 )}
               </TableRow>
