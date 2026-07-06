@@ -3,6 +3,7 @@
 Next.js 全栈管理系统，包含 **采购报销** 与 **进度管理** 两大模块，共用飞书 OAuth、角色体系与通知基础设施。
 
 - 技术文档：[`docs/TECH.md`](docs/TECH.md)
+- 消息发送矩阵：[`docs/NOTIFICATIONS.md`](docs/NOTIFICATIONS.md)
 - 测试手册：[`docs/TESTING.md`](docs/TESTING.md)
 - 工作规范：[`docs/AGENTS.md`](docs/AGENTS.md)
 
