@@ -2101,7 +2101,16 @@ test("管理员直接创建任务会入队完整任务指派通知", async ({
   baseURL,
 }) => {
   await loginAsAdminUser(context, baseURL);
-  const title = `PW全功能-直接创建任务-${Date.now()}`;
+  const suffix = Date.now();
+  const title = `PW全功能-直接创建任务-${suffix}`;
+  const assigneeOpenId = `ou_pw_direct_task_assignee_${suffix}`;
+  const assigneeName = `PW直接任务负责人-${suffix}`;
+  await prisma.user.create({
+    data: {
+      openId: assigneeOpenId,
+      name: assigneeName,
+    },
+  });
   await page.goto(`/progress/${fixtures.projectId}`, {
     waitUntil: "networkidle",
   });
@@ -2117,8 +2126,8 @@ test("管理员直接创建任务会入队完整任务指派通知", async ({
     .locator("xpath=following::input[1]")
     .fill("PW全功能-直接创建任务说明");
   await dialog.getByLabel("宣运").check();
-  await dialog.getByPlaceholder("搜索负责人姓名").fill("李棋轩");
-  await page.getByRole("button", { name: /李棋轩/ }).last().click();
+  await dialog.getByPlaceholder("搜索负责人姓名").fill(assigneeName);
+  await page.getByRole("button", { name: new RegExp(assigneeName) }).click();
   await dialog
     .getByText("定量/定性指标")
     .locator("xpath=following::input[1]")
@@ -2213,8 +2222,8 @@ test("管理员直接创建任务会入队完整任务指派通知", async ({
       taskStatus: "TODO",
       botKind: "notification",
       stageName: "PW全功能-当前阶段",
-      assigneeNames: "李棋轩",
-      assigneeOpenIds: [fixtures.normalOpenId],
+      assigneeNames: assigneeName,
+      assigneeOpenIds: [assigneeOpenId],
       taskTechGroups: ["通用", "宣运"],
       urgency: "MEDIUM",
       importance: "MEDIUM",

@@ -175,11 +175,11 @@ model ProcurementFeishuCard {
 }
 
 model UserRole {
-  id         String       @id @default(uuid())
-  openId     String
-  role       UserRoleType
-  team       String       @default("")
-  techGroup  String       @default("")
+  id        String       @id @default(uuid())
+  openId    String
+  role      UserRoleType
+  team      String       @default("")
+  techGroup String       @default("")
 
   @@unique([openId, role, team, techGroup])
 }
@@ -199,32 +199,32 @@ model ProcurementBudgetPool {
 }
 
 model PurchaseOrder {
-  id                String         @id @default(uuid())
-  orderNo           String         @unique
-  initiatorId       String
-  initiator         User           @relation(fields: [initiatorId], references: [id])
-  initiatorName     String
-  team              String
-  techGroup         String
-  totalPrice        Float          @default(0)
+  id                      String         @id @default(uuid())
+  orderNo                 String         @unique
+  initiatorId             String
+  initiator               User           @relation(fields: [initiatorId], references: [id])
+  initiatorName           String
+  team                    String
+  techGroup               String
+  totalPrice              Float          @default(0)
   teamApproved            Boolean        @default(false)
   techGroupApproved       Boolean        @default(false)
   teamApproverOpenId      String?
   techGroupApproverOpenId String?
-  invoicePaths      String         @default("[]")
-  invoicePath       String?
-  listDocPath       String?
-  screenshotPath    String?
-  status            OrderStatus    @default(DRAFT)
-  isWorkshopFee     Boolean        @default(false)
-  rejectionReason   String?
-  rejectedAt        DateTime?
-  rejectedByName    String?
-  lastReminderAt    DateTime?
-  statusEnteredAt   DateTime       @default(now())
-  items             PurchaseItem[]
-  createdAt         DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
+  invoicePaths            String         @default("[]")
+  invoicePath             String?
+  listDocPath             String?
+  screenshotPath          String?
+  status                  OrderStatus    @default(DRAFT)
+  isWorkshopFee           Boolean        @default(false)
+  rejectionReason         String?
+  rejectedAt              DateTime?
+  rejectedByName          String?
+  lastReminderAt          DateTime?
+  statusEnteredAt         DateTime       @default(now())
+  items                   PurchaseItem[]
+  createdAt               DateTime       @default(now())
+  updatedAt               DateTime       @updatedAt
 }
 
 enum PurchaseItemKind {
@@ -240,52 +240,53 @@ model ProcessingVendor {
 }
 
 model PurchaseItem {
-  id                 String            @id @default(uuid())
+  id                 String           @id @default(uuid())
   orderId            String
-  order              PurchaseOrder     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  order              PurchaseOrder    @relation(fields: [orderId], references: [id], onDelete: Cascade)
   name               String
   spec               String
-  itemKind           PurchaseItemKind  @default(COMPONENT)
-  purchaseLink       String            @default("")
+  itemKind           PurchaseItemKind @default(COMPONENT)
+  purchaseLink       String           @default("")
   referenceImagePath String?
-  processingVendor   String            @default("")
+  processingVendor   String           @default("")
   quantity           Int
   unitPrice          Float
   photoPath          String?
-  updatedAt          DateTime          @default(now()) @updatedAt
+  updatedAt          DateTime         @default(now()) @updatedAt
 }
 
 model Project {
-  id            String              @id @default(uuid())
-  name          String
-  description   String              @default("")
-  team          String
-  techGroup     String
-  status        ProjectStatus       @default(ESTABLISHING)
-  ownerOpenId   String
-  ownerName     String
-  requesterOpenId String            @default("")
-  requesterName String              @default("")
-  submittedAt   DateTime?
-  establishmentSubmitVersion Int     @default(1)
-  reviewerOpenId String             @default("")
-  reviewerName  String              @default("")
-  reviewComment String              @default("")
-  reviewedAt    DateTime?
-  allowOwnerSelfApproval Boolean     @default(false)
-  owners        ProjectOwner[]
-  participants  ProjectParticipant[]
-  stages        ProjectStage[]
-  ddlChangeRequests ProjectDdlChangeRequest[]
-  tasks         Task[]
-  taskCreationRequests TaskCreationRequest[]
-  activityLogs  ProgressActivityLog[]
-  followPreferences ProjectFollowPreference[]
-  createdAt     DateTime            @default(now())
-  updatedAt     DateTime            @updatedAt
-  archivedAt    DateTime?
-  completedAt   DateTime?
-  canceledAt    DateTime?
+  id                         String                    @id @default(uuid())
+  name                       String
+  description                String                    @default("")
+  team                       String
+  techGroup                  String
+  status                     ProjectStatus             @default(ESTABLISHING)
+  ownerOpenId                String
+  ownerName                  String
+  requesterOpenId            String                    @default("")
+  requesterName              String                    @default("")
+  submittedAt                DateTime?
+  establishmentSubmitVersion Int                       @default(1)
+  reviewerOpenId             String                    @default("")
+  reviewerName               String                    @default("")
+  reviewComment              String                    @default("")
+  reviewedAt                 DateTime?
+  allowOwnerSelfApproval     Boolean                   @default(false)
+  owners                     ProjectOwner[]
+  participants               ProjectParticipant[]
+  stages                     ProjectStage[]
+  ddlChangeRequests          ProjectDdlChangeRequest[]
+  tasks                      Task[]
+  taskCreationRequests       TaskCreationRequest[]
+  activityLogs               ProgressActivityLog[]
+  comments                   ProjectComment[]
+  followPreferences          ProjectFollowPreference[]
+  createdAt                  DateTime                  @default(now())
+  updatedAt                  DateTime                  @updatedAt
+  archivedAt                 DateTime?
+  completedAt                DateTime?
+  canceledAt                 DateTime?
 
   @@index([status])
   @@index([requesterOpenId])
@@ -345,102 +346,102 @@ model ProjectTemplateStage {
 }
 
 model ProjectStage {
-  id                  String           @id @default(uuid())
-  projectId           String
-  project             Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  name                String
-  goal                String           @default("")
-  sortOrder           Int
-  status              StageStatus      @default(NOT_STARTED)
-  evidenceUrl         String           @default("")
-  ownerOpenId         String           @default("")
-  ownerName           String           @default("")
-  dueAt               DateTime?
-  completedAt         DateTime?
-  extensionCount      Int              @default(0)
-  benignExtensionCount Int             @default(0)
-  currentSubmissionId String?
-  riskNote            String           @default("")
-  riskUpdatedAt       DateTime?
-  tasks               Task[]
-  submissions         TaskSubmission[]
-  ddlChangeRequests   ProjectDdlChangeRequest[]
-  riskRecords         ProjectStageRiskRecord[]
-  createdAt           DateTime         @default(now())
-  updatedAt           DateTime         @updatedAt
+  id                   String                    @id @default(uuid())
+  projectId            String
+  project              Project                   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name                 String
+  goal                 String                    @default("")
+  sortOrder            Int
+  status               StageStatus               @default(NOT_STARTED)
+  evidenceUrl          String                    @default("")
+  ownerOpenId          String                    @default("")
+  ownerName            String                    @default("")
+  dueAt                DateTime?
+  completedAt          DateTime?
+  extensionCount       Int                       @default(0)
+  benignExtensionCount Int                       @default(0)
+  currentSubmissionId  String?
+  riskNote             String                    @default("")
+  riskUpdatedAt        DateTime?
+  tasks                Task[]
+  submissions          TaskSubmission[]
+  ddlChangeRequests    ProjectDdlChangeRequest[]
+  riskRecords          ProjectStageRiskRecord[]
+  createdAt            DateTime                  @default(now())
+  updatedAt            DateTime                  @updatedAt
 }
 
 model ProjectDdlChangeRequest {
-  id              String                        @id @default(uuid())
-  projectId       String
-  project         Project                       @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  stageId         String
-  stage           ProjectStage                  @relation(fields: [stageId], references: [id], onDelete: Cascade)
-  type            ProjectDdlChangeRequestType
-  status          ProjectDdlChangeRequestStatus @default(PENDING)
-  pendingKey      String                        @default("")
-  requesterOpenId String
-  requesterName   String
-  reason          String
-  oldDueAt        DateTime?
-  newDueAt        DateTime?
-  durationDays    Int?
+  id                String                        @id @default(uuid())
+  projectId         String
+  project           Project                       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  stageId           String
+  stage             ProjectStage                  @relation(fields: [stageId], references: [id], onDelete: Cascade)
+  type              ProjectDdlChangeRequestType
+  status            ProjectDdlChangeRequestStatus @default(PENDING)
+  pendingKey        String                        @default("")
+  requesterOpenId   String
+  requesterName     String
+  reason            String
+  oldDueAt          DateTime?
+  newDueAt          DateTime?
+  durationDays      Int?
   requestedIsBenign Boolean?
-  finalIsBenign   Boolean?
-  reviewerOpenId  String                        @default("")
-  reviewerName    String                        @default("")
-  reviewComment   String                        @default("")
-  reviewedAt      DateTime?
-  createdAt       DateTime                      @default(now())
-  updatedAt       DateTime                      @updatedAt
+  finalIsBenign     Boolean?
+  reviewerOpenId    String                        @default("")
+  reviewerName      String                        @default("")
+  reviewComment     String                        @default("")
+  reviewedAt        DateTime?
+  createdAt         DateTime                      @default(now())
+  updatedAt         DateTime                      @updatedAt
 
+  @@unique([stageId, pendingKey])
   @@index([projectId, status])
   @@index([stageId, status])
   @@index([requesterOpenId])
-  @@unique([stageId, pendingKey])
 }
 
 model Task {
-  id              String              @id @default(uuid())
-  projectId       String
-  project         Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  stageId         String?
-  stage           ProjectStage?       @relation(fields: [stageId], references: [id], onDelete: SetNull)
-  title           String
-  goal            String              @default("")
-  urgency         Urgency             @default(MEDIUM)
-  importance      Importance          @default(MEDIUM)
-  assigneeOpenId  String
-  assigneeName    String
-  assignees       TaskAssignee[]
-  techGroups      TaskTechGroup[]
-  team            String
-  techGroup       String
-  metrics         String              @default("")
-  dueAt           DateTime
-  status          TaskStatus          @default(TODO)
-  isOverdue       Boolean             @default(false)
-  needsOfflineConfirmation Boolean     @default(false)
-  needsWeeklyReport Boolean            @default(false)
-  riskNote        String              @default("")
-  riskUpdatedAt   DateTime?
-  failureReason   String              @default("")
-  submissions     TaskSubmission[]
-  weeklyReports   WeeklyReport[]
-  activityLogs    ProgressActivityLog[]
+  id                       String                        @id @default(uuid())
+  projectId                String
+  project                  Project                       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  stageId                  String?
+  stage                    ProjectStage?                 @relation(fields: [stageId], references: [id], onDelete: SetNull)
+  title                    String
+  goal                     String                        @default("")
+  urgency                  Urgency                       @default(MEDIUM)
+  importance               Importance                    @default(MEDIUM)
+  assigneeOpenId           String
+  assigneeName             String
+  assignees                TaskAssignee[]
+  techGroups               TaskTechGroup[]
+  team                     String
+  techGroup                String
+  metrics                  String                        @default("")
+  dueAt                    DateTime
+  status                   TaskStatus                    @default(TODO)
+  isOverdue                Boolean                       @default(false)
+  needsOfflineConfirmation Boolean                       @default(false)
+  needsWeeklyReport        Boolean                       @default(false)
+  riskNote                 String                        @default("")
+  riskUpdatedAt            DateTime?
+  failureReason            String                        @default("")
+  submissions              TaskSubmission[]
+  weeklyReports            WeeklyReport[]
+  activityLogs             ProgressActivityLog[]
   acceptanceChecklistItems TaskAcceptanceChecklistItem[]
-  deletionRequests TaskDeletionRequest[]
-  creationRequests TaskCreationRequest[]
-  ddlChangeRequests TaskDdlChangeRequest[]
-  riskRecords     TaskRiskRecord[]
-  followPreferences TaskFollowPreference[]
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
-  archivedAt      DateTime?
-  deletedAt       DateTime?
-  deletedByOpenId String              @default("")
-  deletedByName   String              @default("")
-  deleteReason    String              @default("")
+  deletionRequests         TaskDeletionRequest[]
+  creationRequests         TaskCreationRequest[]
+  ddlChangeRequests        TaskDdlChangeRequest[]
+  riskRecords              TaskRiskRecord[]
+  followPreferences        TaskFollowPreference[]
+  createdAt                DateTime                      @default(now())
+  updatedAt                DateTime                      @updatedAt
+  archivedAt               DateTime?
+  deletedAt                DateTime?
+  deletedByOpenId          String                        @default("")
+  deletedByName            String                        @default("")
+  deleteReason             String                        @default("")
 }
 
 model TaskTechGroup {
@@ -471,9 +472,9 @@ model TaskDeletionRequest {
   createdAt       DateTime                  @default(now())
   updatedAt       DateTime                  @updatedAt
 
+  @@unique([taskId, pendingKey])
   @@index([taskId, status])
   @@index([requesterOpenId])
-  @@unique([taskId, pendingKey])
 }
 
 model TaskDdlChangeRequest {
@@ -494,9 +495,9 @@ model TaskDdlChangeRequest {
   createdAt       DateTime                   @default(now())
   updatedAt       DateTime                   @updatedAt
 
+  @@unique([taskId, pendingKey])
   @@index([taskId, status])
   @@index([requesterOpenId])
-  @@unique([taskId, pendingKey])
 }
 
 model TaskCreationRequest {
@@ -579,7 +580,7 @@ model TaskSubmission {
   task          Task?            @relation(fields: [taskId], references: [id], onDelete: Cascade)
   projectId     String?
   stageId       String?
-  stage         ProjectStage?     @relation(fields: [stageId], references: [id], onDelete: Cascade)
+  stage         ProjectStage?    @relation(fields: [stageId], references: [id], onDelete: Cascade)
   type          SubmissionType
   feishuDocUrl  String
   keyDataUrl    String           @default("") @map("videoUrl")
@@ -626,17 +627,17 @@ model WeeklyReport {
 }
 
 model ApprovalRecord {
-  id              String           @id @default(uuid())
-  submissionId    String
-  submission      TaskSubmission   @relation(fields: [submissionId], references: [id], onDelete: Cascade)
-  approverOpenId  String
-  approverName    String
-  approverRole    UserRoleType
-  decision        ApprovalDecision
-  offlineConfirmed Boolean         @default(false)
-  comment         String           @default("")
+  id                     String                          @id @default(uuid())
+  submissionId           String
+  submission             TaskSubmission                  @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  approverOpenId         String
+  approverName           String
+  approverRole           UserRoleType
+  decision               ApprovalDecision
+  offlineConfirmed       Boolean                         @default(false)
+  comment                String                          @default("")
   checklistConfirmations ApprovalChecklistConfirmation[]
-  createdAt       DateTime         @default(now())
+  createdAt              DateTime                        @default(now())
 
   @@unique([submissionId])
 }
@@ -654,16 +655,34 @@ model ApprovalChecklistConfirmation {
 }
 
 model ProgressActivityLog {
-  id         String   @id @default(uuid())
-  projectId  String?
-  project    Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  taskId     String?
-  task       Task?    @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  action     String
+  id          String   @id @default(uuid())
+  projectId   String?
+  project     Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  taskId      String?
+  task        Task?    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  action      String
   actorOpenId String
-  actorName  String
-  payload    String   @default("{}")
-  createdAt  DateTime @default(now())
+  actorName   String
+  payload     String   @default("{}")
+  createdAt   DateTime @default(now())
+}
+
+model ProjectComment {
+  id              String    @id @default(uuid())
+  projectId       String
+  project         Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  authorOpenId    String
+  authorName      String
+  authorAvatar    String?
+  content         String
+  deletedAt       DateTime?
+  deletedByOpenId String    @default("")
+  deletedByName   String    @default("")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([projectId, deletedAt, createdAt])
+  @@index([authorOpenId])
 }
 
 model ProjectFollowPreference {
@@ -752,40 +771,40 @@ model FileAsset {
 }
 
 model NotificationOutbox {
-  id          String                   @id @default(uuid())
-  eventKey    String                   @unique
+  id          String                        @id @default(uuid())
+  eventKey    String                        @unique
   channel     String
-  botKind     String                   @default("notification")
+  botKind     String                        @default("notification")
   type        String
   payload     String
-  status      NotificationOutboxStatus @default(PENDING)
-  attempts    Int                      @default(0)
-  lastError   String                   @default("")
-  nextRunAt   DateTime                 @default(now())
+  status      NotificationOutboxStatus      @default(PENDING)
+  attempts    Int                           @default(0)
+  lastError   String                        @default("")
+  nextRunAt   DateTime                      @default(now())
   lockedUntil DateTime?
   sentAt      DateTime?
   recipients  NotificationOutboxRecipient[]
-  createdAt   DateTime                 @default(now())
-  updatedAt   DateTime                 @updatedAt
+  createdAt   DateTime                      @default(now())
+  updatedAt   DateTime                      @updatedAt
 
   @@index([status, nextRunAt])
 }
 
 model NotificationOutboxRecipient {
-  id          String                   @id @default(uuid())
-  outboxId    String
-  outbox      NotificationOutbox       @relation(fields: [outboxId], references: [id], onDelete: Cascade)
-  openId      String
-  receiveId   String                   @default("")
-  receiveIdType String                 @default("")
-  status      NotificationOutboxStatus @default(PENDING)
-  attempts    Int                      @default(0)
-  lastError   String                   @default("")
-  nextRunAt   DateTime                 @default(now())
-  lockedUntil DateTime?
-  sentAt      DateTime?
-  createdAt   DateTime                 @default(now())
-  updatedAt   DateTime                 @updatedAt
+  id            String                   @id @default(uuid())
+  outboxId      String
+  outbox        NotificationOutbox       @relation(fields: [outboxId], references: [id], onDelete: Cascade)
+  openId        String
+  receiveId     String                   @default("")
+  receiveIdType String                   @default("")
+  status        NotificationOutboxStatus @default(PENDING)
+  attempts      Int                      @default(0)
+  lastError     String                   @default("")
+  nextRunAt     DateTime                 @default(now())
+  lockedUntil   DateTime?
+  sentAt        DateTime?
+  createdAt     DateTime                 @default(now())
+  updatedAt     DateTime                 @updatedAt
 
   @@unique([outboxId, openId])
   @@index([outboxId, status])

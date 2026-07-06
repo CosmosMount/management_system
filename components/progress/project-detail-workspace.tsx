@@ -13,12 +13,15 @@ import {
   FileSpreadsheet,
   Filter,
   History,
+  MessageSquare,
   Play,
   Plus,
   RotateCcw,
   Search,
+  Send,
   ArrowUpRight,
   Pencil,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import type {
@@ -57,6 +60,10 @@ import {
   resolveProjectStageRisk,
   syncProjectStageRisk,
 } from "@/app/actions/progress/projectStageRisks";
+import {
+  createProjectComment,
+  deleteProjectComment,
+} from "@/app/actions/progress/projectComments";
 import { BackLink } from "@/components/back-link";
 import { ReasonConfirmDialog } from "@/components/reason-confirm-dialog";
 import { ProjectForm } from "@/components/progress/project-form";
@@ -138,6 +145,7 @@ export type ProjectDetailView = {
   tasks: TaskView[];
   ddlChangeRequests: DdlChangeRequestView[];
   taskCreationRequests: TaskCreationRequestView[];
+  comments: ProjectCommentView[];
   activityLogs: ActivityLogView[];
   hasMoreActivityLogs: boolean;
 };
@@ -258,6 +266,17 @@ export type TaskCreationRequestView = {
     acceptanceChecklistItems: Array<{ content: string }>;
     summary: string;
   } | null;
+};
+
+export type ProjectCommentView = {
+  id: string;
+  authorOpenId: string;
+  authorName: string;
+  authorAvatar: string | null;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+  canDelete: boolean;
 };
 
 export type DdlChangeRequestView = {
@@ -550,6 +569,8 @@ export function ProjectDetailWorkspace({
             tasks={project.tasks}
             onSelectStage={selectStage}
           />
+
+          <ProjectCommentsPanel projectId={project.id} comments={project.comments} />
 
           {selectedStage ? (
             <>
@@ -1467,6 +1488,155 @@ function TaskRiskSummaryRow({
             )}`}
       </p>
     </div>
+  );
+}
+
+function ProjectCommentsPanel({
+  projectId,
+  comments,
+}: {
+  projectId: string;
+  comments: ProjectCommentView[];
+}) {
+  const router = useRouter();
+  const [draft, setDraft] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const trimmedDraft = draft.trim();
+  const isOverLimit = draft.length > 1000;
+
+  async function handleSubmit() {
+    if (!trimmedDraft) {
+      toast.error("请输入评论内容");
+      return;
+    }
+    if (isOverLimit) {
+      toast.error("评论不能超过 1000 个字符");
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      await createProjectComment({ projectId, content: trimmedDraft });
+      setDraft("");
+      toast.success("评论已发布");
+      router.refresh();
+    } catch (err) {
+      toast.error(getActionErrorMessage(err, "发布评论失败"));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleDelete(commentId: string) {
+    setDeletingId(commentId);
+    try {
+      await deleteProjectComment({ commentId });
+      toast.success("评论已删除");
+      router.refresh();
+    } catch (err) {
+      toast.error(getActionErrorMessage(err, "删除评论失败"));
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
+  return (
+    <Card data-testid="project-comments-panel">
+      <CardHeader className="pb-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <MessageSquare className="h-5 w-5" />
+              项目评论
+            </CardTitle>
+            <p className="mt-1 text-sm text-muted-foreground">
+              面向项目上下文的讨论记录，最近评论在上方显示。
+            </p>
+          </div>
+          <Badge variant="outline">{comments.length} 条</Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-2 rounded-md border bg-muted/30 p-3">
+          <Textarea
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            placeholder="输入项目评论，补充背景、问题或结论"
+            className="min-h-24 resize-y bg-background"
+            data-testid="project-comment-input"
+            aria-invalid={isOverLimit}
+          />
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span
+              className={cn(
+                "text-xs",
+                isOverLimit ? "text-destructive" : "text-muted-foreground",
+              )}
+            >
+              {draft.length}/1000
+            </span>
+            <Button
+              type="button"
+              size="sm"
+              disabled={submitting || !trimmedDraft || isOverLimit}
+              onClick={handleSubmit}
+              data-testid="project-comment-submit"
+            >
+              <Send className="h-4 w-4" />
+              {submitting ? "发布中..." : "发布评论"}
+            </Button>
+          </div>
+        </div>
+
+        {comments.length === 0 ? (
+          <p className="rounded-md border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
+            暂无项目评论。
+          </p>
+        ) : (
+          <div className="max-h-[32rem] space-y-3 overflow-y-auto pr-1">
+            {comments.map((comment) => (
+              <article
+                key={comment.id}
+                className="rounded-md border p-3 text-sm"
+                data-testid="project-comment-item"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-medium text-primary">
+                      {getNameInitial(comment.authorName)}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="truncate font-medium">{comment.authorName}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {formatDateTime(comment.createdAt)}
+                      </p>
+                    </div>
+                  </div>
+                  {comment.canDelete && (
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="ghost"
+                      className="shrink-0 text-muted-foreground hover:text-destructive"
+                      disabled={deletingId === comment.id}
+                      onClick={() => handleDelete(comment.id)}
+                      data-testid="project-comment-delete"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      删除
+                    </Button>
+                  )}
+                </div>
+                <p className="mt-3 whitespace-pre-wrap break-words leading-6 text-foreground">
+                  {comment.content}
+                </p>
+              </article>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -3335,6 +3505,8 @@ function ActivityChangeList({ payload }: { payload: Record<string, unknown> }) {
   const newDueAt = getPayloadString(payload.newDueAt);
   const riskNote = getPayloadString(payload.riskNote);
   const resolveNote = getPayloadString(payload.resolveNote);
+  const commentPreview = getPayloadString(payload.commentPreview);
+  const authorName = getPayloadString(payload.authorName);
   const durationDays =
     typeof payload.durationDays === "number" ? payload.durationDays : null;
   const finalIsBenign =
@@ -3365,6 +3537,8 @@ function ActivityChangeList({ payload }: { payload: Record<string, unknown> }) {
     !newDueAt &&
     !riskNote &&
     !resolveNote &&
+    !commentPreview &&
+    !authorName &&
     durationDays === null &&
     finalIsBenign === null &&
     requestedIsBenign === null &&
@@ -3389,6 +3563,8 @@ function ActivityChangeList({ payload }: { payload: Record<string, unknown> }) {
       {newDueAt && <li>新 DDL：{formatNullableDateTime(newDueAt)}</li>}
       {riskNote && <li>风险：{riskNote}</li>}
       {resolveNote && <li>取消说明：{resolveNote}</li>}
+      {commentPreview && <li>评论：{commentPreview}</li>}
+      {authorName && <li>原评论人：{authorName}</li>}
       {durationDays !== null && <li>调整：{formatDdlAdjustment(durationDays)}</li>}
       {requestedIsBenign !== null && (
         <li>申请良性：{requestedIsBenign ? "是" : "否"}</li>
@@ -3623,6 +3799,8 @@ function activityLabel(action: string): string {
     "project.updated": "更新了项目信息",
     "project.followed": "关注了项目通知",
     "project.unfollowed": "取消关注了项目通知",
+    "project.comment_created": "发布了项目评论",
+    "project.comment_deleted": "删除了项目评论",
     "project.status_changed": "更新了项目状态",
     "project.stage_rollback": "回退了项目流程",
     "project.ddl_extension_requested": "申请了阶段延期",
@@ -3663,6 +3841,11 @@ function activityLabel(action: string): string {
     "task.reminded": "发送了任务催促提醒",
   };
   return labels[action] ?? action;
+}
+
+function getNameInitial(name: string): string {
+  const trimmed = name.trim();
+  return trimmed ? trimmed.slice(0, 1).toUpperCase() : "?";
 }
 
 function getProjectRollbackPreview(

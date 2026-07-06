@@ -114,6 +114,11 @@ export default async function ProjectDetailPage({ params }: Props) {
         where: { createdAt: { gte: recentActivityCutoff } },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       },
+      comments: {
+        where: { deletedAt: null },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: 50,
+      },
       followPreferences: true,
     },
   });
@@ -451,6 +456,17 @@ export default async function ProjectDetailPage({ params }: Props) {
           : null,
       };
     }),
+    comments: project.comments.map((comment) => ({
+      id: comment.id,
+      authorOpenId: comment.authorOpenId,
+      authorName: comment.authorName,
+      authorAvatar: comment.authorAvatar,
+      content: comment.content,
+      createdAt: comment.createdAt.toISOString(),
+      updatedAt: comment.updatedAt.toISOString(),
+      canDelete:
+        !!userOpenId && (comment.authorOpenId === userOpenId || canManage),
+    })),
     hasMoreActivityLogs: activityLogCount > project.activityLogs.length,
   };
 
