@@ -25,6 +25,7 @@ function runStep(
         ...process.env,
         NO_COLOR: undefined,
         FORCE_COLOR: undefined,
+        CONFIRM_SEND_FEISHU: undefined,
         DATABASE_URL: databaseUrl,
         PLAYWRIGHT_DATABASE_URL: databaseUrl,
         PLAYWRIGHT_CONFIRM_RECREATE_DB: targetDatabase,

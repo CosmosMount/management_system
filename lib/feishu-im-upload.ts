@@ -1,6 +1,11 @@
 import { readFile } from "fs/promises";
 import path from "path";
 import type { FeishuBotKind } from "@/lib/feishu-app-config";
+import {
+  isNotificationDeliveryDisabled,
+  logFeishuDeliveryDisabled,
+  type FeishuDeliveryBypassOptions,
+} from "@/lib/feishu-delivery-guard";
 import { getFeishuTenantAccessTokenByBotKind } from "@/lib/feishu-auth";
 import {
   publicPathToStoragePath,
@@ -62,8 +67,18 @@ function feishuFileTypeForPath(filePath: string): string {
 export async function uploadFeishuMessageImage(
   publicPath: string,
   botKind: FeishuBotKind,
+  options?: FeishuDeliveryBypassOptions,
 ): Promise<string | null> {
   if (!isImagePath(publicPath)) return null;
+  if (isNotificationDeliveryDisabled(options)) {
+    logFeishuDeliveryDisabled({
+      action: "uploadFeishuMessageImage",
+      channel: "im_upload",
+      botKind,
+      target: publicPath,
+    });
+    return null;
+  }
 
   const local = await readLocalUpload(publicPath);
   if (!local) return null;
@@ -111,8 +126,18 @@ export async function uploadFeishuMessageImage(
 export async function uploadFeishuMessageFile(
   publicPath: string,
   botKind: FeishuBotKind,
+  options?: FeishuDeliveryBypassOptions,
 ): Promise<string | null> {
   if (isImagePath(publicPath)) return null;
+  if (isNotificationDeliveryDisabled(options)) {
+    logFeishuDeliveryDisabled({
+      action: "uploadFeishuMessageFile",
+      channel: "im_upload",
+      botKind,
+      target: publicPath,
+    });
+    return null;
+  }
 
   const local = await readLocalUpload(publicPath);
   if (!local) return null;

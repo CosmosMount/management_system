@@ -268,6 +268,8 @@ export function UserSearchSelect({
                 <li key={user.openId}>
                   <button
                     type="button"
+                    data-testid="user-search-option"
+                    data-open-id={user.openId}
                     className={cn(
                       "w-full px-3 py-2 text-left hover:bg-muted",
                       user.openId === value && "bg-muted",
@@ -401,6 +403,8 @@ export function UserMultiSearchSelect({
                 <li key={user.openId}>
                   <button
                     type="button"
+                    data-testid="user-search-option"
+                    data-open-id={user.openId}
                     className="w-full px-3 py-2 text-left hover:bg-muted"
                     onClick={() => add(user.openId)}
                   >

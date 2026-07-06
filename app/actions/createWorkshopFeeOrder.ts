@@ -4,6 +4,7 @@ import { auth } from "@/lib/auth";
 import { OrderStatus, type PurchaseItemKind } from "@prisma/client";
 import { attachItemReferenceImages } from "@/lib/order-item-images";
 import { removeOrderUploads } from "@/lib/file-upload";
+import { withActionLogging } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 import { revalidateProcurement } from "@/lib/revalidate";
 import { runProcurementBudgetAlertSideEffects } from "@/lib/procurement-order-side-effects";
@@ -28,14 +29,27 @@ export async function createWorkshopFeeOrder(formData: FormData) {
   if (!session?.user?.openId) {
     throw new Error("未登录");
   }
+  return withActionLogging(
+    {
+      event: "procurement.workshop_fee.create",
+      module: "procurement",
+      action: "createWorkshopFeeOrder",
+      actorOpenId: session.user.openId,
+      actorName: session.user.name ?? "",
+      entityType: "PurchaseOrder",
+    },
+    async () => createWorkshopFeeOrderLogged(formData, session.user.openId),
+  );
+}
 
+async function createWorkshopFeeOrderLogged(formData: FormData, userOpenId: string) {
   const payload = JSON.parse(String(formData.get("payload") ?? "{}"));
   const parsed = createWorkshopFeeSchema.parse(payload);
   const { itemImages } = parseWorkshopFeeFormData(formData);
   assertWorkshopFeeImages(parsed.items, itemImages);
 
   const user = await prisma.user.findUnique({
-    where: { openId: session.user.openId },
+    where: { openId: userOpenId },
   });
   if (!user) {
     throw new Error("用户不存在");

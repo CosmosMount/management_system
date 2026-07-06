@@ -13,6 +13,7 @@ import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";
 import { revalidateProcurement } from "@/lib/revalidate";
 import { getNotificationContext } from "@/lib/request-origin";
+import { withActionLogging } from "@/lib/logger";
 import {
   canApproveTeamManagement,
   canApproveTechGroupManagement,
@@ -25,8 +26,22 @@ export async function approveManagementReview(orderId: string) {
   if (!session?.user?.openId) {
     throw new Error("未登录");
   }
+  return withActionLogging(
+    {
+      event: "procurement.management_review.approve",
+      module: "procurement",
+      action: "approveManagementReview",
+      actorOpenId: session.user.openId,
+      actorName: session.user.name ?? "",
+      entityType: "PurchaseOrder",
+      entityId: orderId,
+    },
+    async () => approveManagementReviewLogged(orderId, session.user.openId),
+  );
+}
 
-  const userRoles = await getUserRoles(session.user.openId);
+async function approveManagementReviewLogged(orderId: string, userOpenId: string) {
+  const userRoles = await getUserRoles(userOpenId);
   const order = await prisma.purchaseOrder.findUnique({
     where: { id: orderId },
     include: { items: true },
@@ -51,7 +66,7 @@ export async function approveManagementReview(orderId: string) {
     throw new Error("无操作权限或已审核");
   }
 
-  await requireApproverSignature(session.user.openId);
+  await requireApproverSignature(userOpenId);
 
   const context = await getNotificationContext();
   const { updated, advancedToTeacherReview } = await prisma.$transaction(
@@ -71,13 +86,13 @@ export async function approveManagementReview(orderId: string) {
           ...(canTeam
             ? {
                 teamApproved: true,
-                teamApproverOpenId: session.user.openId,
+                teamApproverOpenId: userOpenId,
               }
             : {}),
           ...(canTech
             ? {
                 techGroupApproved: true,
-                techGroupApproverOpenId: session.user.openId,
+                techGroupApproverOpenId: userOpenId,
               }
             : {}),
         },

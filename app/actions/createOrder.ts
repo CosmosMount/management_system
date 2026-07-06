@@ -6,6 +6,7 @@ import { generateOrderNo } from "@/lib/order-no";
 import { attachItemReferenceImages } from "@/lib/order-item-images";
 import { prisma } from "@/lib/prisma";
 import { removeOrderUploads } from "@/lib/file-upload";
+import { withActionLogging } from "@/lib/logger";
 import { runProcurementSubmitSideEffects } from "@/lib/procurement-order-side-effects";
 import { revalidateProcurement } from "@/lib/revalidate";
 import { requireInitiatorSignature } from "@/lib/user-signature";
@@ -30,17 +31,30 @@ export async function createOrder(formData: FormData) {
   if (!session?.user?.openId) {
     throw new Error("未登录");
   }
+  return withActionLogging(
+    {
+      event: "procurement.order.create",
+      module: "procurement",
+      action: "createOrder",
+      actorOpenId: session.user.openId,
+      actorName: session.user.name ?? "",
+      entityType: "PurchaseOrder",
+    },
+    async () => createOrderLogged(formData, session.user.openId),
+  );
+}
 
+async function createOrderLogged(formData: FormData, userOpenId: string) {
   const payload = JSON.parse(String(formData.get("payload") ?? "{}"));
   const parsed = createOrderSchema.parse(payload);
   if (parsed.submit) {
-    await requireInitiatorSignature(session.user.openId);
+    await requireInitiatorSignature(userOpenId);
   }
   const { itemImages } = parseOrderFormData(formData);
   assertItemImagesPresent(parsed.items, itemImages);
 
   const user = await prisma.user.findUnique({
-    where: { openId: session.user.openId },
+    where: { openId: userOpenId },
   });
   if (!user) {
     throw new Error("用户不存在");

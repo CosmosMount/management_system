@@ -21,7 +21,7 @@
 - 审批机器人：`FEISHU_APPROVAL_APP_ID / FEISHU_APPROVAL_APP_SECRET`；未配置时回退普通通知机器人。
 - 独立审批机器人发送私信时优先使用 `union_id`。缺少 `union_id` 会导致审批私信失败并等待 outbox 重试；用户登录或通讯录同步可补齐。
 - `FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES / OPEN_IDS / UNION_IDS` 是真实投递安全栏；业务 payload 和 outbox 仍保留完整收件人列表，投递层再拦截不在 allowlist 的人。
-- `NOTIFICATION_DELIVERY_DISABLED=true` 会阻止 outbox drain 和 `drainNotificationOutboxSoon()` 触发真实投递。
+- `NOTIFICATION_DELIVERY_DISABLED=true` 会阻止 outbox drain 和 `drainNotificationOutboxSoon()` 触发真实投递，也会让飞书群 Webhook 和 IM 素材上传在底层直接跳过 `fetch`。只有代码显式传入 bypass 且处于 Playwright 测试或 `CONFIRM_SEND_FEISHU=true` 人工确认场景，才允许越过这道禁发闸。
 
 ## 机器人路由
 

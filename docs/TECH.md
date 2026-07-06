@@ -34,14 +34,14 @@
 - 业务可见历史继续写 `ProgressActivityLog`；工程排障写结构化日志。两者职责分开，不能用 stdout 日志替代业务审计记录。
 - 关键接入点：进度立项/阶段/任务/风险/周报 action、通知 outbox 入队与收件人级投递、飞书 WS/卡片回调、cron、Playwright DB setup、Prisma 连接池错误。
 - 事务内 outbox 入队日志使用 `notification.outbox.enqueue_tx.prepared` 和 `result=prepared`，只表示事务中已准备写入；只有事务提交后数据库里的 outbox 行才代表可投递事件。
-- 本地和测试验证默认设置 `NOTIFICATION_DELIVERY_DISABLED=true`，只检查 outbox 和日志，不发送真实飞书消息。
+- 本地和测试验证默认设置 `NOTIFICATION_DELIVERY_DISABLED=true`，只检查 outbox 和日志，不发送真实飞书消息。该开关同时覆盖 outbox drain、飞书群 Webhook、IM 图片/文件素材上传等直连出口；人工调试脚本如确需真实发送或上传，代码必须显式传入禁发 bypass，运行时还必须设置 `CONFIRM_SEND_FEISHU=true`。普通应用进程即使误传 bypass，也会继续被禁发闸拦截。
 
 ### 已知框架治理项
 
 - Web 进程里仍存在 `drainNotificationOutboxSoon()`，当前已具备结构化日志，但后续应收口为“Web 只入队，cron/worker 统一投递”。
 - outbox claim 当前以乐观 `updateMany` 抢占为主；后续建议改为 PostgreSQL `FOR UPDATE SKIP LOCKED` 原子 claim，并记录 `lockOwner`/心跳。
 - feedback、部分采购退回/重提通知仍可能走复合发送 fallback；后续应让所有通知类型在入队时固化 recipient plan。
-- 维护脚本应逐步统一 dry-run/confirm 约定，写操作脚本必须要求显式 `APPLY_*=true` 和目标数据库确认。
+- 维护脚本应逐步统一 dry-run/confirm 约定，写操作脚本必须要求显式 `APPLY_*=true` 和目标数据库确认；会触达飞书的脚本必须要求 `CONFIRM_SEND_FEISHU=true`，并默认尊重 `NOTIFICATION_DELIVERY_DISABLED=true`。
 
 ## 目录结构
 

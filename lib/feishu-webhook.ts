@@ -1,4 +1,9 @@
 import crypto from "crypto";
+import {
+  isNotificationDeliveryDisabled,
+  logFeishuDeliveryDisabled,
+  type FeishuDeliveryBypassOptions,
+} from "@/lib/feishu-delivery-guard";
 
 function buildSign(timestamp: string, secret: string): string {
   return crypto
@@ -11,8 +16,17 @@ export async function postToFeishuWebhook(
   webhookUrl: string | undefined,
   webhookSecret: string | undefined,
   body: Record<string, unknown>,
+  options?: FeishuDeliveryBypassOptions,
 ): Promise<void> {
   if (!webhookUrl) return;
+  if (isNotificationDeliveryDisabled(options)) {
+    logFeishuDeliveryDisabled({
+      action: "postToFeishuWebhook",
+      channel: "webhook",
+      target: webhookUrl,
+    });
+    return;
+  }
 
   const payload: Record<string, unknown> = { ...body };
   if (webhookSecret) {
