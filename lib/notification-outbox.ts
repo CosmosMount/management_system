@@ -37,7 +37,6 @@ import type { NotificationContext } from "@/lib/app-origin";
 import { defaultAppOrigin } from "@/lib/app-origin";
 import { sendTeacherReviewEmailsOnce } from "@/lib/procurement-teacher-email";
 import { prisma } from "@/lib/prisma";
-import { logger } from "@/lib/logger";
 
 type ProgressOutboxPayload = {
   payload: ProgressNotifyPayload;
@@ -159,16 +158,6 @@ export async function enqueueNotification({
     ],
     skipDuplicates: true,
   });
-  logger.info("notification.outbox.enqueue", {
-    module: "notification",
-    action: "enqueueNotification",
-    entityType: "NotificationOutbox",
-    eventKey,
-    channel,
-    botKind,
-    type,
-    result: result.count > 0 ? "success" : "skipped",
-  });
   return { created: result.count > 0 };
 }
 
@@ -204,17 +193,6 @@ export async function enqueueNotificationTx(
       },
     ],
     skipDuplicates: true,
-  });
-  logger.info("notification.outbox.enqueue_tx.prepared", {
-    module: "notification",
-    action: "enqueueNotificationTx",
-    entityType: "NotificationOutbox",
-    eventKey,
-    channel,
-    botKind,
-    type,
-    result: result.count > 0 ? "prepared" : "skipped",
-    transactional: true,
   });
   return { created: result.count > 0 };
 }
@@ -528,22 +506,9 @@ export async function enqueueFeedbackStatusNotification(
 }
 
 export function drainNotificationOutboxSoon(limit = 5) {
-  if (NOTIFICATION_DELIVERY_DISABLED) {
-    logger.debug("notification.outbox.drain_scheduled.skipped", {
-      module: "notification",
-      action: "drainNotificationOutboxSoon",
-      result: "skipped",
-      reason: "NOTIFICATION_DELIVERY_DISABLED",
-      limit,
-    });
-    return;
-  }
+  if (NOTIFICATION_DELIVERY_DISABLED) return;
   void drainNotificationOutbox(limit).catch((err) => {
-    logger.error("notification.outbox.drain_scheduled.failed", {
-      module: "notification",
-      action: "drainNotificationOutboxSoon",
-      error: err,
-    });
+    console.error("[notification-outbox] drain failed:", err);
   });
 }
 
@@ -551,16 +516,7 @@ export async function drainNotificationOutbox(
   limit = 20,
   options: DrainNotificationOutboxOptions = {},
 ): Promise<number> {
-  if (NOTIFICATION_DELIVERY_DISABLED && !options.ignoreDeliveryDisabled) {
-    logger.debug("notification.outbox.drain.skipped", {
-      module: "notification",
-      action: "drainNotificationOutbox",
-      result: "skipped",
-      reason: "NOTIFICATION_DELIVERY_DISABLED",
-      limit,
-    });
-    return 0;
-  }
+  if (NOTIFICATION_DELIVERY_DISABLED && !options.ignoreDeliveryDisabled) return 0;
   const now = new Date();
   const rows = await prisma.notificationOutbox.findMany({
     where: {
@@ -572,13 +528,6 @@ export async function drainNotificationOutbox(
     },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     take: limit,
-  });
-
-  logger.info("notification.outbox.drain.start", {
-    module: "notification",
-    action: "drainNotificationOutbox",
-    rowCount: rows.length,
-    limit,
   });
 
   let sent = 0;
@@ -597,32 +546,7 @@ export async function drainNotificationOutbox(
         lockedUntil,
       },
     });
-    if (claimed.count !== 1) {
-      logger.debug("notification.outbox.claim.skipped", {
-        module: "notification",
-        action: "drainNotificationOutbox",
-        entityType: "NotificationOutbox",
-        entityId: row.id,
-        eventKey: row.eventKey,
-        channel: row.channel,
-        type: row.type,
-        botKind: row.botKind,
-        result: "skipped",
-      });
-      continue;
-    }
-
-    logger.info("notification.outbox.claimed", {
-      module: "notification",
-      action: "drainNotificationOutbox",
-      entityType: "NotificationOutbox",
-      entityId: row.id,
-      eventKey: row.eventKey,
-      channel: row.channel,
-      type: row.type,
-      botKind: row.botKind,
-      attempts: row.attempts + 1,
-    });
+    if (claimed.count !== 1) continue;
 
     try {
       const recipientResult = await sendOutboxNotificationByRecipient(row);
@@ -644,18 +568,6 @@ export async function drainNotificationOutbox(
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const attempts = row.attempts + 1;
-      logger.error("notification.outbox.send.failed", {
-        module: "notification",
-        action: "drainNotificationOutbox",
-        entityType: "NotificationOutbox",
-        entityId: row.id,
-        eventKey: row.eventKey,
-        channel: row.channel,
-        type: row.type,
-        botKind: row.botKind,
-        attempts,
-        error: err,
-      });
       await prisma.notificationOutbox.updateMany({
         where: { id: row.id, status: "PROCESSING" },
         data: {
@@ -668,12 +580,6 @@ export async function drainNotificationOutbox(
     }
   }
 
-  logger.info("notification.outbox.drain.completed", {
-    module: "notification",
-    action: "drainNotificationOutbox",
-    rowCount: rows.length,
-    sent,
-  });
   return sent;
 }
 
@@ -784,13 +690,6 @@ function isNoRecipientsApprovalFailure(row: NotificationOutbox): boolean {
 }
 
 async function freezeLegacyCompositeOutbox(outboxId: string) {
-  logger.warn("notification.outbox.legacy_frozen", {
-    module: "notification",
-    action: "freezeLegacyCompositeOutbox",
-    entityType: "NotificationOutbox",
-    entityId: outboxId,
-    result: "skipped",
-  });
   await prisma.notificationOutbox.updateMany({
     where: { id: outboxId, status: "PROCESSING" },
     data: {
@@ -844,37 +743,8 @@ async function sendOutboxRecipient(
         lockedUntil: null,
       },
     });
-    logger.info("notification.outbox.recipient.sent", {
-      module: "notification",
-      action: "sendOutboxRecipient",
-      entityType: "NotificationOutboxRecipient",
-      entityId: recipient.id,
-      outboxId: row.id,
-      eventKey: row.eventKey,
-      channel: row.channel,
-      type: row.type,
-      botKind: row.botKind,
-      recipientOpenId: recipient.openId,
-      receiveIdType: target?.receiveIdType ?? recipient.receiveIdType,
-      attempts,
-      result: "success",
-    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    logger.error("notification.outbox.recipient.failed", {
-      module: "notification",
-      action: "sendOutboxRecipient",
-      entityType: "NotificationOutboxRecipient",
-      entityId: recipient.id,
-      outboxId: row.id,
-      eventKey: row.eventKey,
-      channel: row.channel,
-      type: row.type,
-      botKind: row.botKind,
-      recipientOpenId: recipient.openId,
-      attempts,
-      error: err,
-    });
     await prisma.notificationOutboxRecipient.updateMany({
       where: { id: recipient.id, status: "PROCESSING" },
       data: {
@@ -894,21 +764,7 @@ async function sendOutboxNotificationToRecipient(
 ): Promise<{ receiveId: string; receiveIdType: string } | null> {
   const botKind = normalizeBotKind(row.botKind);
   const target = await resolveRecipientTarget(openId, botKind);
-  if (target.skipped) {
-    logger.info("notification.outbox.recipient.skipped_by_allowlist", {
-      module: "notification",
-      action: "sendOutboxNotificationToRecipient",
-      entityType: "NotificationOutbox",
-      entityId: row.id,
-      eventKey: row.eventKey,
-      channel: row.channel,
-      type: row.type,
-      botKind,
-      recipientOpenId: openId,
-      result: "skipped",
-    });
-    return null;
-  }
+  if (target.skipped) return null;
 
   if (row.channel === "progress") {
     const data = JSON.parse(row.payload) as ProgressOutboxPayload;

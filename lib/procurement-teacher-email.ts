@@ -5,7 +5,6 @@ import { getOpenIdsByRole } from "@/lib/permissions";
 import { statusLabels } from "@/lib/permissions-client";
 import { prisma } from "@/lib/prisma";
 import { routes } from "@/lib/routes";
-import { logger } from "@/lib/logger";
 
 export type TeacherEmailRecipient = {
   openId: string;
@@ -82,15 +81,9 @@ export async function sendTeacherReviewEmails(
 ): Promise<{ sent: number; skipped: number }> {
   const recipients = await collectTeacherReviewEmailRecipients(order);
   if (recipients.length === 0) {
-    logger.warn("email.teacher_review.recipient.empty", {
-      module: "email",
-      action: "sendTeacherReviewEmails",
-      entityType: "PurchaseOrder",
-      entityId: order.id,
-      status: order.status,
-      team: order.team,
-      techGroup: order.techGroup,
-    });
+    console.warn(
+      "[email] 老师审核无可邮件通知的指导老师（请先在权限管理配置邮箱）",
+    );
     return { sent: 0, skipped: 0 };
   }
 
@@ -120,14 +113,9 @@ export async function sendTeacherReviewEmails(
         return;
       }
       sent += 1;
-      logger.info("email.teacher_review.sent", {
-        module: "email",
-        action: "sendTeacherReviewEmails",
-        entityType: "PurchaseOrder",
-        entityId: order.id,
-        orderNo: order.orderNo,
-        recipientOpenId: recipient.openId,
-      });
+      console.log(
+        `[email] 老师审核邮件已发送 order=${order.orderNo} to=${recipient.email}`,
+      );
     }),
   );
 
@@ -173,13 +161,6 @@ export async function sendTeacherReviewEmailsOnce(
   if (reserved.count === 0) return;
 
   await sendTeacherReviewEmails(order, context).catch((error) => {
-    logger.error("email.teacher_review.failed", {
-      module: "email",
-      action: "sendTeacherReviewEmailsOnce",
-      entityType: "PurchaseOrder",
-      entityId: order.id,
-      eventKey: emailEventKey,
-      error,
-    });
+    console.error("[email] 老师审核邮件失败:", error);
   });
 }

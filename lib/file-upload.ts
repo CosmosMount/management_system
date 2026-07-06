@@ -11,7 +11,6 @@ import {
   FEEDBACK_IMAGE_ALLOWED_TYPES,
   MAX_FEEDBACK_IMAGE_SIZE,
 } from "@/lib/feedback-upload-limits";
-import { logger } from "@/lib/logger";
 
 export { MAX_FEEDBACK_IMAGE_COUNT, MAX_FEEDBACK_IMAGE_SIZE } from "@/lib/feedback-upload-limits";
 export {
@@ -139,13 +138,7 @@ async function writeAssetFile({
     await rm(tempPath, { force: true });
     if (backupCreated) {
       await rename(backupPath, fullPath).catch((restoreErr: unknown) => {
-        logger.error("upload.backup.restore_failed", {
-          module: "upload",
-          action: "saveUpload",
-          storagePath,
-          publicPath,
-          error: restoreErr,
-        });
+        console.error("[upload] restore backup failed:", restoreErr);
       });
     }
     throw err;
@@ -177,26 +170,14 @@ async function writeAssetFile({
     });
     if (backupCreated) {
       await rm(backupPath, { force: true }).catch((cleanupErr: unknown) => {
-        logger.warn("upload.backup.cleanup_failed", {
-          module: "upload",
-          action: "saveUpload",
-          storagePath,
-          publicPath,
-          error: cleanupErr,
-        });
+        console.error("[upload] cleanup backup failed:", cleanupErr);
       });
     }
   } catch (err) {
     await rm(fullPath, { force: true });
     if (backupCreated) {
       await rename(backupPath, fullPath).catch((restoreErr: unknown) => {
-        logger.error("upload.backup.restore_failed", {
-          module: "upload",
-          action: "saveUpload",
-          storagePath,
-          publicPath,
-          error: restoreErr,
-        });
+        console.error("[upload] restore backup failed:", restoreErr);
       });
     }
     throw err;

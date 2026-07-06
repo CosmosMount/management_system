@@ -6,7 +6,6 @@ import {
   shouldFallbackApprovalBotUnavailable,
   type FeishuDirectMessageTarget,
 } from "@/lib/feishu-recipient";
-import { logger } from "@/lib/logger";
 
 export class FeishuCardKitPermissionError extends Error {
   constructor(message: string) {
@@ -172,14 +171,9 @@ export async function sendInteractiveCardKitDm(
     if (!shouldFallbackApprovalBotUnavailable(target.botKind, error)) {
       throw error;
     }
-    logger.warn("feishu.cardkit.approval_bot_fallback", {
-      module: "feishu",
-      action: "sendInteractiveCardKitDm",
-      recipientOpenId: openId,
-      botKind: target.botKind,
-      receiveIdType: target.receiveIdType,
-      error,
-    });
+    console.warn(
+      `[feishu] 审批机器人对用户不可用，改用通知机器人发送 CardKit openId=${openId}`,
+    );
     const fallbackTarget = await resolveDirectMessageTarget(openId, "notification");
     const fallbackCardId = await createCardKitInstance(card, fallbackTarget.botKind);
     await sendCardKitMessageToTarget(fallbackTarget, fallbackCardId);

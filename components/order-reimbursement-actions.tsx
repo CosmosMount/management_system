@@ -11,6 +11,7 @@ import {
 import { rejectProcurementOrder } from "@/app/actions/rejectOrder";
 import { uploadFinanceScreenshot } from "@/app/actions/uploadFinanceScreenshot";
 import { InlineAttachments } from "@/components/order-attachments";
+import { AttachmentFileLink } from "@/components/attachment-file-link";
 import { OrderRejectionNotice } from "@/components/procurement/order-rejection-notice";
 import { ProcurementRejectDialog } from "@/components/procurement-reject-dialog";
 import {
@@ -18,6 +19,7 @@ import {
   procurementDialogDescriptionClass,
   procurementDialogHeaderClass,
   procurementDialogTitleClass,
+  procurementVoucherDialogContentClass,
 } from "@/components/procurement/procurement-dialog-styles";
 import {
   PurchaseLineConfirm,
@@ -117,6 +119,7 @@ export function OrderReimbursementActions({
           <ApplicantDocsDialog
             orderId={orderId}
             items={items}
+            savedInvoices={attachments.invoices}
             loading={loading}
             setLoading={setLoading}
             onDone={() => router.refresh()}
@@ -180,6 +183,7 @@ export function OrderReimbursementActions({
 function ApplicantDocsDialog({
   orderId,
   items,
+  savedInvoices,
   loading,
   setLoading,
   onDone,
@@ -190,6 +194,7 @@ function ApplicantDocsDialog({
 }: {
   orderId: string;
   items: PurchaseLineItem[];
+  savedInvoices: string[];
   loading: boolean;
   setLoading: (v: boolean) => void;
   onDone: () => void;
@@ -202,6 +207,8 @@ function ApplicantDocsDialog({
   const [confirmedItems, setConfirmedItems] = useState<ConfirmedLineItem[]>(
     [],
   );
+  const hasSavedDocs =
+    savedInvoices.length > 0 || items.some((item) => item.photoPath);
 
   function handleOpenChange(nextOpen: boolean) {
     setOpen(nextOpen);
@@ -228,7 +235,8 @@ function ApplicantDocsDialog({
     const invoiceInput = form.querySelector(
       'input[name="invoices"]',
     ) as HTMLInputElement | null;
-    if (!invoiceInput?.files?.length) {
+    const hasNewInvoices = (invoiceInput?.files?.length ?? 0) > 0;
+    if (!hasNewInvoices && savedInvoices.length === 0) {
       toast.error("请至少上传一张发票");
       return;
     }
@@ -237,7 +245,8 @@ function ApplicantDocsDialog({
       const photoInput = form.querySelector(
         `input[name="photo-${item.id}"]`,
       ) as HTMLInputElement | null;
-      if (!photoInput?.files?.length) {
+      const hasNewPhoto = (photoInput?.files?.length ?? 0) > 0;
+      if (!hasNewPhoto && !item.photoPath) {
         toast.error(`请为「${item.name}」上传实物照片`);
         return;
       }
@@ -294,20 +303,22 @@ function ApplicantDocsDialog({
       <DialogTrigger
         render={
           <Button size="sm" variant="secondary">
-            上传凭证
+            {hasSavedDocs ? "修改凭证" : "上传凭证"}
           </Button>
         }
       />
-      <DialogContent className={procurementDialogContentClass}>
+      <DialogContent className={procurementVoucherDialogContentClass}>
         <DialogHeader className={procurementDialogHeaderClass}>
           <DialogTitle className={procurementDialogTitleClass}>
-            上传报销凭证
+            {hasSavedDocs ? "修改报销凭证" : "上传报销凭证"}
           </DialogTitle>
           <DialogDescription className={procurementDialogDescriptionClass}>
-            核对采购明细价格，为每行上传实物照片；系统将按学校模板自动生成 Word 验收清单
+            {hasSavedDocs
+              ? "已保存的凭证会保留，只需修改需要调整的价格、照片或发票后重新提交"
+              : "核对采购明细价格，为每行上传实物照片；系统将按学校模板自动生成 Word 验收清单"}
           </DialogDescription>
         </DialogHeader>
-        <form id={`applicant-docs-${orderId}`} className="space-y-3">
+        <form id={`applicant-docs-${orderId}`} className="w-fit max-w-full space-y-3">
           {orderStatus &&
           shouldShowProcurementRejectionNotice(orderStatus, rejectionReason) ? (
             <OrderRejectionNotice
@@ -325,14 +336,25 @@ function ApplicantDocsDialog({
             onChange={setConfirmedItems}
           />
           <div className="space-y-2">
-            <Label htmlFor={`invoices-${orderId}`}>发票（可多选）</Label>
+            <Label htmlFor={`invoices-${orderId}`}>
+              发票（可多选{savedInvoices.length > 0 ? "，不选则保留已上传" : ""}）
+            </Label>
+            {savedInvoices.length > 0 ? (
+              <ul className="space-y-1 rounded-md border bg-muted/30 p-2">
+                {savedInvoices.map((filePath) => (
+                  <li key={filePath}>
+                    <AttachmentFileLink filePath={filePath} />
+                  </li>
+                ))}
+              </ul>
+            ) : null}
             <Input
               id={`invoices-${orderId}`}
               name="invoices"
               type="file"
               accept={INVOICE_UPLOAD_ACCEPT}
               multiple
-              required
+              required={savedInvoices.length === 0}
             />
           </div>
           <div className="flex flex-wrap gap-2">

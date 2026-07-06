@@ -20,7 +20,6 @@ import {
 import type { ProcurementRejectOutcome } from "@/lib/procurement-reject-outcome";
 import { getNotificationContext } from "@/lib/request-origin";
 import { revalidateProcurement } from "@/lib/revalidate";
-import { logger } from "@/lib/logger";
 import { OrderStatus } from "@prisma/client";
 
 const inputSchema = z.object({
@@ -203,17 +202,10 @@ export async function rejectProcurementOrder(input: {
       });
     } else {
       const updated = await prisma.$transaction(async (tx) => {
-        await tx.purchaseItem.updateMany({
-          where: { orderId },
-          data: { photoPath: null },
-        });
         const locked = await tx.purchaseOrder.updateMany({
           where: { id: orderId, status: order.status },
           data: {
             status: OrderStatus.PENDING_APPLICANT_DOCS,
-            invoicePaths: "[]",
-            invoicePath: null,
-            listDocPath: null,
             screenshotPath: null,
             rejectionReason: reason,
             rejectedAt: new Date(),
@@ -250,14 +242,7 @@ export async function rejectProcurementOrder(input: {
     }
     drainNotificationOutboxSoon();
   } catch (err) {
-    logger.error("procurement.notification.drain_soon.failed", {
-      module: "procurement",
-      action: "rejectOrder",
-      entityType: "PurchaseOrder",
-      entityId: orderId,
-      outcome,
-      error: err,
-    });
+    console.error("[procurement] drain notification outbox failed:", err);
   }
 
   revalidateProcurement(orderId);

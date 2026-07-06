@@ -4,15 +4,26 @@ import * as React from "react"
 
 import { cn } from "@/lib/utils"
 
-function Table({ className, ...props }: React.ComponentProps<"table">) {
+function Table({
+  className,
+  fitContent = false,
+  ...props
+}: React.ComponentProps<"table"> & { fitContent?: boolean }) {
   return (
     <div
       data-slot="table-container"
-      className="relative w-full overflow-x-auto"
+      className={cn(
+        "relative",
+        fitContent ? "w-fit max-w-full" : "w-full overflow-x-auto",
+      )}
     >
       <table
         data-slot="table"
-        className={cn("w-full caption-bottom text-sm", className)}
+        className={cn(
+          "caption-bottom text-sm",
+          fitContent ? "w-auto" : "w-full",
+          className,
+        )}
         {...props}
       />
     </div>

@@ -2,7 +2,7 @@
 
 import { z } from "zod";
 import { auth } from "@/lib/auth";
-import { canNotifyProcurementApprover } from "@/lib/permissions-client";
+import { canNotifyProcurementApprover, getUserRoles } from "@/lib/permissions";
 import { sendManualProcurementApproverReminder } from "@/lib/procurement-reminders";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
@@ -44,14 +44,17 @@ export async function notifyProcurementApprover(
     return { ok: false, message: "订单不存在" };
   }
 
+  const userRoles = await getUserRoles(session.user.openId);
+
   if (
     !canNotifyProcurementApprover(
       order.status,
       session.user.openId,
       order.initiator.openId,
+      userRoles,
     )
   ) {
-    return { ok: false, message: "当前状态不可通知审批人" };
+    return { ok: false, message: "当前状态不可催促审批人" };
   }
 
   const result = await sendManualProcurementApproverReminder({

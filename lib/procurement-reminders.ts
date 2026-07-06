@@ -22,7 +22,6 @@ import type { NotificationContext } from "@/lib/app-origin";
 
 import { prisma } from "@/lib/prisma";
 import { statusApproverRole, statusLabels } from "@/lib/permissions-client";
-import { logger } from "@/lib/logger";
 
 const REMINDER_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const MANUAL_REMINDER_COOLDOWN_MS = 60 * 1000;
@@ -242,18 +241,7 @@ async function notifyRoleStale(
     } catch (err) {
       failureCount++;
       firstFailure ??= err;
-      logger.error("procurement.reminder.direct_message.failed", {
-        module: "procurement",
-        action: "notifyRoleStale",
-        entityType: "PurchaseOrder",
-        entityId: order.id,
-        orderNo: order.orderNo,
-        status: order.status,
-        role,
-        recipientOpenId: openId,
-        botKind,
-        error: err,
-      });
+      console.error("[reminder] 私信失败:", openId, err);
     }
   }
 
@@ -332,15 +320,7 @@ export async function runProcurementStaleReminders(
       });
       sent++;
     } catch (err) {
-      logger.error("procurement.reminder.order.failed", {
-        module: "procurement",
-        action: "runProcurementStaleReminders",
-        entityType: "PurchaseOrder",
-        entityId: order.id,
-        orderNo: order.orderNo,
-        status: order.status,
-        error: err,
-      });
+      console.error(`[reminder] 订单 ${order.orderNo} 催办失败:`, err);
     }
   }
 
@@ -370,7 +350,7 @@ export type ManualProcurementReminderResult =
   | { ok: true; message: string }
   | { ok: false; message: string };
 
-/** 采购人手动通知当前环节审批人 */
+/** 采购人或超级管理员手动催促当前环节审批人 */
 export async function sendManualProcurementApproverReminder({
   orderId,
   actorName,
@@ -385,7 +365,7 @@ export async function sendManualProcurementApproverReminder({
   if (!(await reserveManualReminderSlot(orderId))) {
     return {
       ok: false,
-      message: "刚刚已经通知过当前审批人，请稍后再试",
+      message: "刚刚已经催促过当前审批人，请稍后再试",
     };
   }
 
@@ -402,7 +382,7 @@ export async function sendManualProcurementApproverReminder({
   const stuckDays = daysStuck(order.statusEnteredAt);
   const statusLabel = statusLabels[order.status];
   const extraLines = [
-    `**采购人催促**：${actorName}`,
+    `**催促人**：${actorName}`,
     ...(message ? [`**补充说明**：${message}`] : []),
     `**当前环节**：${statusLabel}`,
     ...(stuckDays > 0 ? [`**已停留**：${stuckDays} 天`] : []),
@@ -423,7 +403,7 @@ export async function sendManualProcurementApproverReminder({
     card,
   );
   if (deliveryCount === 0) {
-    return { ok: false, message: "当前环节没有可通知的审批人" };
+    return { ok: false, message: "当前环节没有可催促的审批人" };
   }
 
   if (order.status === "TEACHER_REVIEW") {
@@ -434,7 +414,7 @@ export async function sendManualProcurementApproverReminder({
     );
   }
 
-  return { ok: true, message: "已通知当前审批人" };
+  return { ok: true, message: "已催促当前审批人" };
 }
 
 async function deliverApproverReminderCard(

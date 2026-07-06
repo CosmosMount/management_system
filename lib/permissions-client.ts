@@ -31,13 +31,12 @@ function roleMatchesOrder(
   order: OrderScope,
 ): boolean {
   if (record.role !== requiredRole) return false;
-  if (requiredRole === "TEAM_ADMIN") {
+  if (requiredRole === "TEAM_ADMIN" || requiredRole === "FINANCE") {
     return record.team === order.team;
   }
   if (
     requiredRole === "TECH_GROUP_ADMIN" ||
-    requiredRole === "TEACHER" ||
-    requiredRole === "FINANCE"
+    requiredRole === "TEACHER"
   ) {
     return record.techGroup === order.techGroup;
   }
@@ -164,7 +163,7 @@ export function canUploadFinanceScreenshot(
   return (
     status === "PENDING_FINANCE_REVIEW" &&
     userRoles.some(
-      (r) => r.role === "FINANCE" && r.techGroup === order.techGroup,
+      (r) => r.role === "FINANCE" && r.team === order.team,
     )
   );
 }
@@ -180,19 +179,24 @@ export function canConfirmReimbursement(
   );
 }
 
-/** 采购人可催促当前环节审批人（不含需本人处理的环节） */
+/** 采购人或超级管理员可催促当前环节审批人 */
 export function canNotifyProcurementApprover(
   status: OrderStatus,
   userOpenId: string | undefined,
   initiatorOpenId: string,
+  userRoles: UserRoleRecord[] = [],
 ): boolean {
-  if (!isOrderInitiator(userOpenId, initiatorOpenId)) {
+  const remindableStatuses: OrderStatus[] = [
+    "MANAGEMENT_REVIEW",
+    "TEACHER_REVIEW",
+    "PENDING_FINANCE_REVIEW",
+  ];
+  if (!remindableStatuses.includes(status)) {
     return false;
   }
   return (
-    status === "MANAGEMENT_REVIEW" ||
-    status === "TEACHER_REVIEW" ||
-    status === "PENDING_FINANCE_REVIEW"
+    isOrderInitiator(userOpenId, initiatorOpenId) ||
+    isSuperAdmin(userRoles)
   );
 }
 
@@ -215,7 +219,7 @@ export function canViewReimbursementAttachments(
   if (isOrderInitiator(userOpenId, initiatorOpenId)) return true;
   if (isSuperAdmin(userRoles)) return true;
   return userRoles.some(
-    (r) => r.role === "FINANCE" && r.techGroup === order.techGroup,
+    (r) => r.role === "FINANCE" && r.team === order.team,
   );
 }
 
@@ -268,7 +272,7 @@ export function canRequestApplicantResubmit(
   return (
     status === "PENDING_FINANCE_REVIEW" &&
     userRoles.some(
-      (r) => r.role === "FINANCE" && r.techGroup === order.techGroup,
+      (r) => r.role === "FINANCE" && r.team === order.team,
     )
   );
 }
@@ -302,9 +306,7 @@ export const statusApproverRole: Partial<Record<OrderStatus, UserRoleType>> = {
 export function formatRoleLabel(record: UserRoleRecord): string {
   const base = roleLabels[record.role];
   if (
-    (record.role === "TECH_GROUP_ADMIN" ||
-      record.role === "TEACHER" ||
-      record.role === "FINANCE") &&
+    (record.role === "TECH_GROUP_ADMIN" || record.role === "TEACHER") &&
     record.techGroup
   ) {
     return `${base}（${record.techGroup}）`;

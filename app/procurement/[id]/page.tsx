@@ -118,6 +118,7 @@ export default async function OrderDetailPage({ params, searchParams }: Props) {
     order.status,
     session?.user?.openId,
     order.initiator.openId,
+    userRoles,
   );
   const currentHandler = canNotifyApprover
     ? (
@@ -195,6 +196,7 @@ export default async function OrderDetailPage({ params, searchParams }: Props) {
                       spec: item.spec,
                       quantity: item.quantity,
                       unitPrice: item.unitPrice,
+                      photoPath: item.photoPath,
                     }))}
                     status={order.status}
                     orderScope={orderScope}
