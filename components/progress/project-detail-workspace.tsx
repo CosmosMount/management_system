@@ -826,8 +826,10 @@ function ProjectOverview({
               {project.name}
             </h1>
             <Badge>{projectStatusLabels[project.status]}</Badge>
-            <Badge variant="outline">{formatScopeItem(project.team)}</Badge>
-            <Badge variant="outline">{formatScopeItem(project.techGroup)}</Badge>
+            <Badge variant="outline">车组：{formatScopeItem(project.team)}</Badge>
+            <Badge variant="outline">
+              技术组：{formatScopeItem(project.techGroup)}
+            </Badge>
           </div>
           {project.description && (
             <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
@@ -839,6 +841,10 @@ function ProjectOverview({
             <OverviewItem
               label="参与人员"
               value={project.participantNames || "未配置"}
+            />
+            <OverviewItem
+              label="车组/技术组"
+              value={`${formatScopeItem(project.team)} / ${formatScopeItem(project.techGroup)}`}
             />
             <OverviewItem label="当前阶段" value={currentStage?.name ?? "未配置"} />
             <OverviewItem

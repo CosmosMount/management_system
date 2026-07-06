@@ -152,7 +152,11 @@ test.describe("普通用户主功能面板", () => {
     await page.goto(`/progress/${fixtures.projectId}`, {
       waitUntil: "networkidle",
     });
+    const projectOverview = page.getByTestId("project-overview");
     await expect(page.getByText("PW全功能-逾期项目")).toBeVisible();
+    await expect(projectOverview.getByText("技术组：电控")).toBeVisible();
+    await expect(projectOverview.getByText("车组/技术组")).toBeVisible();
+    await expect(projectOverview.getByText("英雄 / 电控")).toBeVisible();
     await expect(page.getByText("PW全功能-当前阶段").first()).toBeVisible();
     await expect(page.getByText(/DDL|已超期|延期|任务/).first()).toBeVisible();
     await expectHealthyPage(page);
