@@ -26,6 +26,7 @@ const EXPLICIT_RECIPIENT_REQUIRED_TYPES = new Set<string>([
   "project_completed",
   "project_canceled",
   "project_updated",
+  "project_comment_created",
   "project_stage_rollback",
   "project_stage_extension_requested",
   "project_stage_batch_due_change_requested",
@@ -143,6 +144,20 @@ export type ProgressNotifyPayload =
       currentStageName: string;
       projectDueAt: string | null;
       currentStateLabel: string;
+      recipientOpenIds: string[];
+    }
+  | {
+      type: "project_comment_created";
+      projectId: string;
+      projectName: string;
+      authorOpenId: string;
+      authorName: string;
+      content: string;
+      createdAt: string;
+      team: string;
+      techGroup: string;
+      ownerNames: string;
+      currentStageName: string;
       recipientOpenIds: string[];
     }
   | {
@@ -1016,6 +1031,16 @@ export async function sendProgressNotification(
         `**项目**：${payload.projectName}\n**操作人**：${payload.actorName}\n**项目状态**：${formatProjectStatus(payload.projectStatus)}\n**当前阶段**：${payload.currentStageName}\n**项目 DDL**：${formatNotificationDateTime(payload.projectDueAt)}\n**负责人**：${payload.ownerNames || "未设置"}${participantLine}\n**车组/技术组**：${formatScope(payload.team, payload.techGroup)}\n**阶段数量**：${payload.stageCount} 个\n**当前通知状态**：${payload.currentStateLabel}`,
         buildAppUrl(routes.progress.project(payload.projectId), appOrigin),
         followed ? "green" : "orange",
+      );
+      await notifyOpenIds(payload.recipientOpenIds, card);
+      break;
+    }
+    case "project_comment_created": {
+      const card = buildCard(
+        "项目有新评论",
+        `**项目**：${payload.projectName}\n**评论人**：${payload.authorName}\n**评论时间**：${formatNotificationDateTime(payload.createdAt)}\n**当前阶段**：${payload.currentStageName}\n**负责人**：${payload.ownerNames || "未设置"}\n**车组/技术组**：${formatScope(payload.team, payload.techGroup)}\n**评论内容**：\n${payload.content}`,
+        buildAppUrl(routes.progress.project(payload.projectId), appOrigin),
+        "blue",
       );
       await notifyOpenIds(payload.recipientOpenIds, card);
       break;

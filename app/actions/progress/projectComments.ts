@@ -4,11 +4,21 @@ import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { getUserRoles } from "@/lib/permissions";
 import {
+  drainNotificationOutboxSoon,
+  enqueueProgressNotificationTx,
+} from "@/lib/notification-outbox";
+import {
   progressProjectReadableWhere,
 } from "@/lib/permissions-progress";
 import { requireSessionUser } from "@/lib/progress-activity";
 import { canDeleteProjectComment } from "@/lib/progress-project-comments";
+import {
+  collectProjectNotificationRecipients,
+  getProjectFollowPolicy,
+} from "@/lib/progress-following";
+import { getProjectOwnerNames } from "@/lib/progress-project-owners";
 import { prisma } from "@/lib/prisma";
+import { getNotificationContext } from "@/lib/request-origin";
 import { revalidateProgress } from "@/lib/revalidate";
 import { withActionLogging } from "@/lib/logger";
 
@@ -21,6 +31,7 @@ const createProjectCommentSchema = z.object({
     .trim()
     .min(1, "请输入评论内容")
     .max(PROJECT_COMMENT_MAX_LENGTH, `评论不能超过 ${PROJECT_COMMENT_MAX_LENGTH} 个字符`),
+  autoFollowProject: z.boolean().optional().default(false),
 });
 
 const deleteProjectCommentSchema = z.object({
@@ -30,6 +41,7 @@ const deleteProjectCommentSchema = z.object({
 export async function createProjectComment(input: {
   projectId: string;
   content: string;
+  autoFollowProject?: boolean;
 }) {
   const session = await auth();
   const user = await requireSessionUser(session?.user?.openId);
@@ -48,7 +60,7 @@ export async function createProjectComment(input: {
 }
 
 async function createProjectCommentLogged(
-  input: { projectId: string; content: string },
+  input: { projectId: string; content: string; autoFollowProject?: boolean },
   user: { openId: string; name: string; avatar?: string | null },
 ) {
   const parsed = createProjectCommentSchema.parse(input);
@@ -58,9 +70,29 @@ async function createProjectCommentLogged(
       id: parsed.projectId,
       AND: progressProjectReadableWhere(roles, user.openId),
     },
-    select: { id: true, name: true },
+    include: {
+      owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      stages: { orderBy: { sortOrder: "asc" } },
+      tasks: {
+        where: { deletedAt: null },
+        include: {
+          assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        },
+      },
+      followPreferences: true,
+    },
   });
   if (!project) throw new Error("无权限评论该项目");
+
+  const [followPolicy, recipientOpenIds, context] = await Promise.all([
+    getProjectFollowPolicy({ project, userOpenId: user.openId, roles }),
+    collectProjectNotificationRecipients(project),
+    getNotificationContext(),
+  ]);
+  const notificationRecipientOpenIds = recipientOpenIds.filter(
+    (openId) => openId && openId !== user.openId,
+  );
 
   const comment = await prisma.$transaction(async (tx) => {
     const saved = await tx.projectComment.create({
@@ -86,9 +118,48 @@ async function createProjectCommentLogged(
       },
     });
 
+    if (parsed.autoFollowProject && !followPolicy.followedByCurrentUser) {
+      await tx.projectFollowPreference.upsert({
+        where: {
+          projectId_openId: { projectId: project.id, openId: user.openId },
+        },
+        update: { state: "FOLLOWING" },
+        create: {
+          projectId: project.id,
+          openId: user.openId,
+          state: "FOLLOWING",
+        },
+      });
+    }
+
+    if (notificationRecipientOpenIds.length > 0) {
+      await enqueueProgressNotificationTx(
+        tx,
+        `progress:project_comment_created:${saved.id}`,
+        {
+          type: "project_comment_created",
+          projectId: project.id,
+          projectName: project.name,
+          authorOpenId: user.openId,
+          authorName: user.name,
+          content: saved.content,
+          createdAt: saved.createdAt.toISOString(),
+          team: project.team,
+          techGroup: project.techGroup,
+          ownerNames: getProjectOwnerNames(project),
+          currentStageName: getCurrentProjectStageName(project),
+          recipientOpenIds: notificationRecipientOpenIds,
+        },
+        context,
+      );
+    }
+
     return saved;
   });
 
+  if (notificationRecipientOpenIds.length > 0) {
+    drainNotificationOutboxSoon();
+  }
   revalidateProgress(project.id);
   return {
     id: comment.id,
@@ -176,4 +247,17 @@ async function deleteProjectCommentLogged(
 function compactComment(content: string): string {
   const normalized = content.replace(/\s+/g, " ").trim();
   return normalized.length > 80 ? `${normalized.slice(0, 80)}...` : normalized;
+}
+
+function getCurrentProjectStageName(project: {
+  stages: Array<{ name: string; status: string; sortOrder: number }>;
+}): string {
+  const sortedStages = [...project.stages].sort((a, b) => a.sortOrder - b.sortOrder);
+  return (
+    sortedStages.find((stage) =>
+      ["IN_PROGRESS", "PENDING_ACCEPTANCE"].includes(stage.status),
+    )?.name ??
+    sortedStages.find((stage) => stage.status === "NOT_STARTED")?.name ??
+    "无当前阶段"
+  );
 }

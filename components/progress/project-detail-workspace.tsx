@@ -570,7 +570,11 @@ export function ProjectDetailWorkspace({
             onSelectStage={selectStage}
           />
 
-          <ProjectCommentsPanel projectId={project.id} comments={project.comments} />
+          <ProjectCommentsPanel
+            projectId={project.id}
+            comments={project.comments}
+            follow={project.follow}
+          />
 
           {selectedStage ? (
             <>
@@ -1500,16 +1504,20 @@ function TaskRiskSummaryRow({
 function ProjectCommentsPanel({
   projectId,
   comments,
+  follow,
 }: {
   projectId: string;
   comments: ProjectCommentView[];
+  follow: FollowStateView;
 }) {
   const router = useRouter();
   const [draft, setDraft] = useState("");
+  const [autoFollowProject, setAutoFollowProject] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const trimmedDraft = draft.trim();
   const isOverLimit = draft.length > 1000;
+  const autoFollowChecked = follow.followedByCurrentUser || autoFollowProject;
 
   async function handleSubmit() {
     if (!trimmedDraft) {
@@ -1523,8 +1531,13 @@ function ProjectCommentsPanel({
 
     setSubmitting(true);
     try {
-      await createProjectComment({ projectId, content: trimmedDraft });
+      await createProjectComment({
+        projectId,
+        content: trimmedDraft,
+        autoFollowProject: autoFollowChecked,
+      });
       setDraft("");
+      setAutoFollowProject(true);
       toast.success("评论已发布");
       router.refresh();
     } catch (err) {
@@ -1573,7 +1586,7 @@ function ProjectCommentsPanel({
             data-testid="project-comment-input"
             aria-invalid={isOverLimit}
           />
-          <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <span
               className={cn(
                 "text-xs",
@@ -1582,16 +1595,33 @@ function ProjectCommentsPanel({
             >
               {draft.length}/1000
             </span>
-            <Button
-              type="button"
-              size="sm"
-              disabled={submitting || !trimmedDraft || isOverLimit}
-              onClick={handleSubmit}
-              data-testid="project-comment-submit"
-            >
-              <Send className="h-4 w-4" />
-              {submitting ? "发布中..." : "发布评论"}
-            </Button>
+            <div className="flex flex-wrap items-center justify-end gap-3">
+              <label className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 shrink-0 rounded border-border accent-primary"
+                  checked={autoFollowChecked}
+                  disabled={follow.followedByCurrentUser || submitting}
+                  onChange={(event) => setAutoFollowProject(event.target.checked)}
+                  data-testid="project-comment-auto-follow"
+                />
+                <span className="break-words">
+                  {follow.followedByCurrentUser
+                    ? "已关注该项目，将接收后续项目通知"
+                    : "发送评论后自动关注该项目"}
+                </span>
+              </label>
+              <Button
+                type="button"
+                size="sm"
+                disabled={submitting || !trimmedDraft || isOverLimit}
+                onClick={handleSubmit}
+                data-testid="project-comment-submit"
+              >
+                <Send className="h-4 w-4" />
+                {submitting ? "发布中..." : "发布评论"}
+              </Button>
+            </div>
           </div>
         </div>
 

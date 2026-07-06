@@ -169,6 +169,50 @@ test("项目取消通知只入队一次并发送完整取消内容", async () =>
   expect(captured[0]?.cardText).toContain("3 个");
 });
 
+test("项目评论通知使用普通通知机器人并展示完整评论信息", async () => {
+  const eventKey = `playwright:progress-notify:project_comment_created:${Date.now()}`;
+  const payload: ProgressNotifyPayload = {
+    type: "project_comment_created",
+    projectId: "pw-project-comment-notify",
+    projectName: "PW通知-评论项目",
+    authorOpenId: "ou_comment_author",
+    authorName: "评论人",
+    content: "这里是项目评论的完整内容，需要提醒关注者查看。",
+    createdAt: "2026-07-06T11:00:00.000Z",
+    team: "工程",
+    techGroup: "宣运",
+    ownerNames: "项目负责人",
+    currentStageName: "联调阶段",
+    recipientOpenIds: ["ou_owner", "ou_follower", "ou_owner"],
+  };
+
+  const captured = await enqueueAndDrainProgressNotification(eventKey, payload);
+  const stored = await prisma.notificationOutbox.findUniqueOrThrow({
+    where: { eventKey },
+    select: { botKind: true },
+  });
+
+  expect(stored.botKind).toBe("notification");
+  expect(captured.map((message) => message.receiveId).sort()).toEqual([
+    "ou_follower",
+    "ou_owner",
+  ]);
+  expect(captured.every((message) => message.receiveIdType === "open_id")).toBe(
+    true,
+  );
+  expect(captured).toHaveLength(2);
+  expect(captured.every((message) => message.token === "notification-token")).toBe(
+    true,
+  );
+  expect(captured.every((message) => message.title === "项目有新评论")).toBe(true);
+  expect(captured[0]?.cardText).toContain("PW通知-评论项目");
+  expect(captured[0]?.cardText).toContain("评论人");
+  expect(captured[0]?.cardText).toContain("联调阶段");
+  expect(captured[0]?.cardText).toContain("项目负责人");
+  expect(captured[0]?.cardText).toContain("工程 / 宣运");
+  expect(captured[0]?.cardText).toContain("这里是项目评论的完整内容");
+});
+
 test("批量提前申请通知使用明确中文并发送给唯一收件人", async () => {
   const eventKey = `playwright:progress-notify:project_stage_batch_due_change_requested:${Date.now()}`;
   const payload: ProgressNotifyPayload = {

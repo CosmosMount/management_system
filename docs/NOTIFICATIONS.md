@@ -75,6 +75,7 @@
 | 项目启动/完成/取消 | `project_started` / `project_completed` / `project_canceled` | 通知 | outbox 私信 | 项目有效关注者。 |
 | 项目信息更新 | `project_updated` | 通知 | outbox 私信 | 新旧项目有效关注者合并去重。 |
 | 项目流程回退 | `project_stage_rollback` | 通知 | outbox 私信 | 项目有效关注者。 |
+| 项目评论发布 | `project_comment_created` | 通知 | outbox 私信 | 项目有效关注者，排除评论作者；评论发布时可选择自动关注项目，自动关注不额外发送确认通知。 |
 | 关注/取消关注项目 | `project_followed` / `project_unfollowed` | 通知 | outbox 私信 | 仅操作人。 |
 
 ### 阶段消息
