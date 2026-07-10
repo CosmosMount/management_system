@@ -1,6 +1,7 @@
 import Link from "next/link";
 import {
   ArrowRight,
+  ClipboardCheck,
   ClipboardList,
   FilePlus2,
   FileText,
@@ -20,7 +21,11 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { statusLabels } from "@/lib/permissions";
+import { getUserRoles, statusLabels } from "@/lib/permissions";
+import {
+  getProcurementPendingOrders,
+  procurementPendingOrderHref,
+} from "@/lib/procurement-pending-orders";
 import { procurementListWhere } from "@/lib/procurement-visibility";
 import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { prisma } from "@/lib/prisma";
@@ -30,11 +35,16 @@ import { auth } from "@/lib/auth";
 export default async function ProcurementHomePage() {
   const liveVersion = await getCurrentUserLiveVersion("procurement");
   const session = await auth();
-  const orders = await prisma.purchaseOrder.findMany({
-    where: procurementListWhere(session?.user?.openId),
-    orderBy: { updatedAt: "desc" },
-    take: 20,
-  });
+  const userOpenId = session?.user?.openId;
+  const roles = userOpenId ? await getUserRoles(userOpenId) : [];
+  const [pendingOrders, orders] = await Promise.all([
+    getProcurementPendingOrders({ userOpenId, roles }),
+    prisma.purchaseOrder.findMany({
+      where: procurementListWhere(userOpenId),
+      orderBy: { updatedAt: "desc" },
+      take: 20,
+    }),
+  ]);
 
   return (
     <>
@@ -78,6 +88,51 @@ export default async function ProcurementHomePage() {
               icon={LayoutDashboard}
             />
           </div>
+
+          <Card className="mb-6">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0">
+              <CardTitle className="flex items-center gap-2">
+                <ClipboardCheck className="h-5 w-5" />
+                待处理订单
+                {pendingOrders.length > 0 && (
+                  <Badge variant="secondary">{pendingOrders.length}</Badge>
+                )}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {pendingOrders.length === 0 ? (
+                <p className="text-muted-foreground">暂无待处理订单</p>
+              ) : (
+                <ul className="space-y-2" data-testid="procurement-pending-orders">
+                  {pendingOrders.map((order) => (
+                    <li key={order.id}>
+                      <Link
+                        href={procurementPendingOrderHref(order.id, order.status)}
+                        className="flex items-center justify-between rounded-lg border p-3 transition-colors hover:border-primary/30 hover:bg-muted/30"
+                      >
+                        <div className="min-w-0">
+                          <p className="flex items-center gap-1.5 font-medium">
+                            <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                            {order.orderNo}
+                          </p>
+                          <p className="text-sm text-muted-foreground">
+                            {order.initiatorName} · {order.team} /{" "}
+                            {order.techGroup} · ¥{order.totalPrice.toFixed(2)}
+                          </p>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2 pl-3">
+                          <Badge variant="secondary">
+                            {statusLabels[order.status]}
+                          </Badge>
+                          <ArrowRight className="h-4 w-4 text-muted-foreground" />
+                        </div>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </CardContent>
+          </Card>
 
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0">
