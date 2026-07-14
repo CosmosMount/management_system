@@ -37,6 +37,10 @@ import {
   getProjectParticipantOpenIds,
 } from "@/lib/progress-project-participants";
 import {
+  getProjectStageOwnerNames,
+  getProjectStageOwnerOpenIds,
+} from "@/lib/progress-stage-owners";
+import {
   parseTaskCreationDraft,
   formatTaskCreationDraftSummary,
 } from "@/lib/progress-task-creation-requests";
@@ -66,6 +70,7 @@ export default async function ProjectDetailPage({ params }: Props) {
       stages: {
         orderBy: { sortOrder: "asc" },
         include: {
+          owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
           submissions: {
             orderBy: { submittedAt: "desc" },
             include: { approvals: { orderBy: { createdAt: "asc" } } },
@@ -128,9 +133,9 @@ export default async function ProjectDetailPage({ params }: Props) {
   const scope = { team: project.team, techGroup: project.techGroup };
   const projectOwnerOpenIds = getProjectOwnerOpenIds(project);
   const projectParticipantOpenIds = getProjectParticipantOpenIds(project);
-  const stageOwnerOpenIds = project.stages
-    .map((stage) => stage.ownerOpenId)
-    .filter(Boolean);
+  const stageOwnerOpenIds = [
+    ...new Set(project.stages.flatMap((stage) => getProjectStageOwnerOpenIds(stage))),
+  ];
   const taskAssigneeOpenIds = [
     ...new Set(project.tasks.flatMap((task) => getTaskAssigneeOpenIds(task))),
   ];
@@ -246,13 +251,22 @@ export default async function ProjectDetailPage({ params }: Props) {
       evidenceUrl: stage.evidenceUrl,
       ownerOpenId: stage.ownerOpenId,
       ownerName: stage.ownerName,
+      ownerOpenIds: getProjectStageOwnerOpenIds(stage),
+      ownerNames: getProjectStageOwnerNames(stage),
+      updatedAt: stage.updatedAt.toISOString(),
       dueAt: stage.dueAt?.toISOString() ?? null,
       completedAt: stage.completedAt?.toISOString() ?? null,
       extensionCount: stage.extensionCount,
       advanceCount: stageAdvanceCounts.get(stage.id) ?? 0,
       benignExtensionCount: stage.benignExtensionCount,
       currentSubmissionId: stage.currentSubmissionId,
-      canSubmit: canSubmitStagePermission(roles, stage.ownerOpenId, userOpenId),
+      canSubmit: canSubmitStagePermission({
+        roles,
+        stageOwnerOpenIds: getProjectStageOwnerOpenIds(stage),
+        projectOwnerOpenIds,
+        projectParticipantOpenIds,
+        userOpenId,
+      }),
       canRequestExtension:
         projectAllowsDdlChange &&
         stage.status !== "COMPLETED" &&
@@ -273,7 +287,7 @@ export default async function ProjectDetailPage({ params }: Props) {
           scope,
           ownerOpenIds: projectOwnerOpenIds,
           participantOpenIds: projectParticipantOpenIds,
-          stageOwnerOpenId: stage.ownerOpenId,
+          stageOwnerOpenId: getProjectStageOwnerOpenIds(stage),
           userOpenId,
         }),
       canSyncRisk: canSyncProjectStageRisk({
@@ -281,7 +295,7 @@ export default async function ProjectDetailPage({ params }: Props) {
         scope,
         projectOwnerOpenIds,
         projectParticipantOpenIds,
-        stageOwnerOpenId: stage.ownerOpenId,
+        stageOwnerOpenId: getProjectStageOwnerOpenIds(stage),
         userOpenId,
       }),
       riskNote: stage.riskNote,
@@ -344,7 +358,7 @@ export default async function ProjectDetailPage({ params }: Props) {
             ...(task.stageId
               ? project.stages
                   .filter((stage) => stage.id === task.stageId)
-                  .map((stage) => stage.ownerOpenId)
+                  .flatMap((stage) => getProjectStageOwnerOpenIds(stage))
               : []),
             ...assigneeOpenIds,
             ...task.deletionRequests.map((request) => request.requesterOpenId),

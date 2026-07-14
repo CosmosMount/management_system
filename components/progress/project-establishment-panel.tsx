@@ -41,7 +41,7 @@ export type ProjectEstablishmentView = {
   stages: Array<{
     name: string;
     goal: string;
-    ownerName: string;
+    ownerNames: string;
     durationDays: number;
     duePreview: string;
   }>;
@@ -285,7 +285,7 @@ function ProjectEstablishmentDetailDialog({
                       <Badge variant="outline">{stage.durationDays} 天</Badge>
                     </div>
                     <p className="mt-1 text-sm text-muted-foreground">
-                      负责人：{stage.ownerName || "未设置"} · 预计 {stage.duePreview} 截止
+                      负责人：{stage.ownerNames || "未设置"} · 预计 {stage.duePreview} 截止
                     </p>
                     <p className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">
                       {stage.goal}

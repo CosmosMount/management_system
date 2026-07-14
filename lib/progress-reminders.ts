@@ -5,6 +5,7 @@ import {
   type ProjectOwner,
   type ProjectParticipant,
   type ProjectStage,
+  type ProjectStageOwner,
   type Task,
   type TaskAssignee,
   type TaskSubmission,
@@ -13,6 +14,7 @@ import { enqueueProgressNotification } from "@/lib/notification-outbox";
 import { getOpenIdsByRole } from "@/lib/permissions";
 import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
+import { getProjectStageOwnerOpenIds } from "@/lib/progress-stage-owners";
 import { getTaskTechGroups } from "@/lib/progress-task-tech-groups";
 import { filterProjectNotificationRecipients } from "@/lib/progress-project-notifications";
 import { filterTaskNotificationRecipients } from "@/lib/progress-task-notifications";
@@ -367,7 +369,10 @@ export async function sendManualProjectReminder({
     include: {
       owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
-      stages: { orderBy: { sortOrder: "asc" } },
+      stages: {
+        orderBy: { sortOrder: "asc" },
+        include: { owners: { orderBy: { sortOrder: "asc" } } },
+      },
       tasks: {
         where: { deletedAt: null },
         include: { assignees: true },
@@ -432,7 +437,7 @@ export async function sendManualTaskReminder({
     where: { id: taskId },
     include: {
       assignees: true,
-      stage: true,
+      stage: { include: { owners: { orderBy: { sortOrder: "asc" } } } },
       project: {
         include: {
           owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
@@ -705,6 +710,7 @@ async function enqueueStageReminders(
       project: { status: "IN_PROGRESS" },
     },
     include: {
+      owners: { orderBy: { sortOrder: "asc" } },
       project: {
         include: {
           owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
@@ -777,7 +783,7 @@ async function enqueueStageReminders(
 
 type ReminderTask = Task & {
   project: Project & { owners: ProjectOwner[]; participants: ProjectParticipant[] };
-  stage: ProjectStage | null;
+  stage: (ProjectStage & { owners: ProjectStageOwner[] }) | null;
   assignees: TaskAssignee[];
   techGroups: Array<{ techGroup: string; sortOrder: number }>;
   submissions?: TaskSubmission[];
@@ -811,7 +817,7 @@ async function findReminderTasks(
           participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
         },
       },
-      stage: true,
+      stage: { include: { owners: { orderBy: { sortOrder: "asc" } } } },
       assignees: true,
       techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       ...extraInclude,
@@ -925,7 +931,7 @@ async function enqueueReminder({
 async function collectTaskRecipientOpenIds(
   task: Task & {
     project: Project & { owners: ProjectOwner[]; participants?: ProjectParticipant[] };
-    stage?: ProjectStage | null;
+    stage?: (ProjectStage & { owners: ProjectStageOwner[] }) | null;
     assignees: TaskAssignee[];
     techGroups?: Array<{ techGroup: string; sortOrder?: number }>;
   },
@@ -941,8 +947,8 @@ async function collectTaskRecipientOpenIds(
   if (config.projectParticipants) {
     openIds.push(...(task.project.participants ?? []).map((item) => item.openId));
   }
-  if (config.stageOwners && task.stage?.ownerOpenId) {
-    openIds.push(task.stage.ownerOpenId);
+  if (config.stageOwners && task.stage) {
+    openIds.push(...getProjectStageOwnerOpenIds(task.stage));
   }
   if (config.managers) {
     openIds.push(
@@ -961,7 +967,7 @@ async function collectProjectRecipientOpenIds(
   project: Project & {
     owners: ProjectOwner[];
     participants?: ProjectParticipant[];
-    stages: ProjectStage[];
+    stages: Array<ProjectStage & { owners: ProjectStageOwner[] }>;
     tasks: Array<Task & { assignees: TaskAssignee[] }>;
   },
   config: ReminderRecipientConfig,
@@ -977,7 +983,7 @@ async function collectProjectRecipientOpenIds(
     openIds.push(...(project.participants ?? []).map((item) => item.openId));
   }
   if (config.stageOwners) {
-    openIds.push(...project.stages.map((stage) => stage.ownerOpenId).filter(Boolean));
+    openIds.push(...project.stages.flatMap((stage) => getProjectStageOwnerOpenIds(stage)));
   }
   if (config.assignees) {
     openIds.push(...activeTasks.flatMap((task) => getTaskAssigneeOpenIds(task)));
@@ -993,7 +999,7 @@ async function collectProjectRecipientOpenIds(
 }
 
 async function collectStageRecipientOpenIds(
-  stage: ProjectStage & {
+  stage: ProjectStage & { owners: ProjectStageOwner[] } & {
     project: Project & {
       owners: ProjectOwner[];
       participants: ProjectParticipant[];
@@ -1010,8 +1016,8 @@ async function collectStageRecipientOpenIds(
       ),
   );
   const openIds: string[] = [];
-  if (config.stageOwners && stage.ownerOpenId) {
-    openIds.push(stage.ownerOpenId);
+  if (config.stageOwners) {
+    openIds.push(...getProjectStageOwnerOpenIds(stage));
   }
   if (config.projectOwners) {
     openIds.push(...getProjectOwnerOpenIds(stage.project));

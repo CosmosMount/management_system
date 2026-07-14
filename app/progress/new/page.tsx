@@ -8,6 +8,7 @@ import { PageShell } from "@/components/page-shell";
 import { PageTitle } from "@/components/page-title";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { getProjectStageOwnerOpenIds } from "@/lib/progress-stage-owners";
 import {
   createProjectSchema,
   type ParsedCreateProjectInput,
@@ -17,7 +18,7 @@ type SourceProject = Prisma.ProjectGetPayload<{
   include: {
     owners: true;
     participants: true;
-    stages: true;
+    stages: { include: { owners: true } };
   };
 }>;
 
@@ -46,7 +47,12 @@ export default async function NewProjectPage({ searchParams }: Props) {
         include: {
           owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
           participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
-          stages: { orderBy: { sortOrder: "asc" } },
+          stages: {
+            orderBy: { sortOrder: "asc" },
+            include: {
+              owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+            },
+          },
         },
       })
     : null;
@@ -118,6 +124,7 @@ function projectToInitialDraft(project: SourceProject): ParsedCreateProjectInput
       name: stage.name,
       goal: stage.goal,
       ownerOpenId: stage.ownerOpenId,
+      ownerOpenIds: getProjectStageOwnerOpenIds(stage),
       durationDays: getStageDurationDays(
         project.submittedAt ?? project.createdAt,
         index > 0 ? project.stages[index - 1]?.dueAt : null,

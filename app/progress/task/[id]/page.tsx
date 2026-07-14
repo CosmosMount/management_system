@@ -26,6 +26,7 @@ import {
 } from "@/lib/progress-assignees";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { getProjectParticipantOpenIds } from "@/lib/progress-project-participants";
+import { getProjectStageOwnerOpenIds } from "@/lib/progress-stage-owners";
 import { getTaskTechGroups } from "@/lib/progress-task-tech-groups";
 import {
   getWeekStart,
@@ -59,7 +60,10 @@ export default async function TaskDetailPage({ params }: Props) {
           participants: {
             orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
           },
-          stages: { orderBy: { sortOrder: "asc" } },
+          stages: {
+            orderBy: { sortOrder: "asc" },
+            include: { owners: { orderBy: { sortOrder: "asc" } } },
+          },
           tasks: {
             where: { deletedAt: null },
             include: {
@@ -71,7 +75,7 @@ export default async function TaskDetailPage({ params }: Props) {
           followPreferences: true,
         },
       },
-      stage: true,
+      stage: { include: { owners: { orderBy: { sortOrder: "asc" } } } },
       assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       acceptanceChecklistItems: {
@@ -126,7 +130,7 @@ export default async function TaskDetailPage({ params }: Props) {
       projectOwnerOpenIds,
       getTaskAssigneeOpenIds(task),
       userOpenId,
-      task.stage?.ownerOpenId,
+      task.stage ? getProjectStageOwnerOpenIds(task.stage) : [],
     )
   ) {
     notFound();
@@ -196,7 +200,7 @@ export default async function TaskDetailPage({ params }: Props) {
       scope,
       ownerOpenIds: projectOwnerOpenIds,
       participantOpenIds: getProjectParticipantOpenIds(task.project),
-      stageOwnerOpenId: task.stage?.ownerOpenId,
+      stageOwnerOpenId: task.stage ? getProjectStageOwnerOpenIds(task.stage) : [],
       taskAssigneeOpenIds: getTaskAssigneeOpenIds(task),
       userOpenId,
     });

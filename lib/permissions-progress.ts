@@ -87,7 +87,7 @@ export function canViewTask(
   projectOwnerOpenIds: string | string[],
   taskAssigneeOpenIds: string | string[],
   userOpenId?: string,
-  stageOwnerOpenId?: string | null,
+  stageOwnerOpenId?: string | string[] | null,
 ): boolean {
   void roles;
   void scope;
@@ -121,7 +121,16 @@ export function progressProjectMineWhere(userOpenId?: string): Prisma.ProjectWhe
       { requesterOpenId: userOpenId },
       { owners: { some: { openId: userOpenId } } },
       { participants: { some: { openId: userOpenId } } },
-      { stages: { some: { ownerOpenId: userOpenId } } },
+      {
+        stages: {
+          some: {
+            OR: [
+              { ownerOpenId: userOpenId },
+              { owners: { some: { openId: userOpenId } } },
+            ],
+          },
+        },
+      },
       {
         tasks: {
           some: {
@@ -146,7 +155,14 @@ export function progressTaskMineWhere(userOpenId?: string): Prisma.TaskWhereInpu
     OR: [
       { assigneeOpenId: userOpenId },
       { assignees: { some: { openId: userOpenId } } },
-      { stage: { ownerOpenId: userOpenId } },
+      {
+        stage: {
+          OR: [
+            { ownerOpenId: userOpenId },
+            { owners: { some: { openId: userOpenId } } },
+          ],
+        },
+      },
       { deletionRequests: { some: { requesterOpenId: userOpenId } } },
       { ddlChangeRequests: { some: { requesterOpenId: userOpenId } } },
       { project: { ownerOpenId: userOpenId } },
@@ -206,14 +222,14 @@ export function canRequestTaskDeletion({
   scope: ProgressScope;
   ownerOpenIds: string | string[];
   participantOpenIds: string | string[];
-  stageOwnerOpenId?: string | null;
+  stageOwnerOpenId?: string | string[] | null;
   taskAssigneeOpenIds: string | string[];
   userOpenId?: string;
 }): boolean {
   if (!userOpenId) return false;
   if (canManageProject(roles, scope, ownerOpenIds, userOpenId)) return true;
   if (isAssignee(userOpenId, participantOpenIds)) return true;
-  if (stageOwnerOpenId && userOpenId === stageOwnerOpenId) return true;
+  if (stageOwnerOpenId && isAssignee(userOpenId, stageOwnerOpenId)) return true;
   if (isAssignee(userOpenId, taskAssigneeOpenIds)) return true;
   return false;
 }
@@ -292,13 +308,13 @@ export function canRequestProjectStageDueDateChange({
   scope: ProgressScope;
   ownerOpenIds: string | string[];
   participantOpenIds: string | string[];
-  stageOwnerOpenId?: string | null;
+  stageOwnerOpenId?: string | string[] | null;
   userOpenId?: string;
 }): boolean {
   if (!userOpenId) return false;
   if (canManageProject(roles, scope, ownerOpenIds, userOpenId)) return true;
   if (isAssignee(userOpenId, participantOpenIds)) return true;
-  if (stageOwnerOpenId && userOpenId === stageOwnerOpenId) return true;
+  if (stageOwnerOpenId && isAssignee(userOpenId, stageOwnerOpenId)) return true;
   return false;
 }
 
@@ -381,13 +397,26 @@ export function canApproveTask(
   return false;
 }
 
-export function canSubmitStage(
-  roles: UserRoleRecord[],
-  stageOwnerOpenId: string,
-  userOpenId?: string,
-): boolean {
+export function canSubmitStage({
+  roles,
+  stageOwnerOpenIds,
+  projectOwnerOpenIds,
+  projectParticipantOpenIds,
+  userOpenId,
+}: {
+  roles: UserRoleRecord[];
+  stageOwnerOpenIds: string | string[];
+  projectOwnerOpenIds: string | string[];
+  projectParticipantOpenIds: string | string[];
+  userOpenId?: string;
+}): boolean {
+  if (!userOpenId) return false;
   if (isProgressSuperAdmin(roles)) return true;
-  return !!userOpenId && userOpenId === stageOwnerOpenId;
+  return (
+    isAssignee(userOpenId, stageOwnerOpenIds) ||
+    isAssignee(userOpenId, projectOwnerOpenIds) ||
+    isAssignee(userOpenId, projectParticipantOpenIds)
+  );
 }
 
 export function canApproveStage(
@@ -488,13 +517,13 @@ export function canSyncProjectStageRisk({
   scope: ProgressScope;
   projectOwnerOpenIds: string | string[];
   projectParticipantOpenIds: string | string[];
-  stageOwnerOpenId?: string | null;
+  stageOwnerOpenId?: string | string[] | null;
   userOpenId?: string;
 }): boolean {
   if (!userOpenId) return false;
   if (canManageProject(roles, scope, projectOwnerOpenIds, userOpenId)) return true;
   if (isAssignee(userOpenId, projectParticipantOpenIds)) return true;
-  return !!stageOwnerOpenId && userOpenId === stageOwnerOpenId;
+  return !!stageOwnerOpenId && isAssignee(userOpenId, stageOwnerOpenId);
 }
 
 export function canRequestTaskDdlChange({

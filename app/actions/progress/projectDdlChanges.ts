@@ -17,6 +17,7 @@ import { requireSessionUser } from "@/lib/progress-activity";
 import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { getProjectParticipantOpenIds } from "@/lib/progress-project-participants";
+import { getProjectStageOwnerOpenIds } from "@/lib/progress-stage-owners";
 import {
   collectProjectBatchDdlReviewRecipients,
   collectProjectNotificationRecipients,
@@ -109,7 +110,10 @@ async function requestProjectStageBatchDdlChangeLogged(
     include: {
       owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
-      stages: { orderBy: { sortOrder: "asc" } },
+      stages: {
+        orderBy: { sortOrder: "asc" },
+        include: { owners: { orderBy: { sortOrder: "asc" } } },
+      },
       tasks: {
         where: { deletedAt: null },
         include: {
@@ -127,7 +131,7 @@ async function requestProjectStageBatchDdlChangeLogged(
   const ownerOpenIds = getProjectOwnerOpenIds(project);
   const participantOpenIds = getProjectParticipantOpenIds(project);
   const stageOwnerOpenIds = uniqueOpenIds(
-    project.stages.map((item) => item.ownerOpenId),
+    project.stages.flatMap((item) => getProjectStageOwnerOpenIds(item)),
   );
   const taskAssigneeOpenIds = uniqueOpenIds(
     project.tasks.flatMap((task) => getTaskAssigneeOpenIds(task)),
@@ -313,14 +317,17 @@ async function reviewProjectStageBatchDdlChangeRequestLogged(
   const request = await prisma.projectDdlChangeRequest.findUnique({
     where: { id: parsed.requestId },
     include: {
-      stage: true,
+      stage: { include: { owners: { orderBy: { sortOrder: "asc" } } } },
       project: {
         include: {
           owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
           participants: {
             orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
           },
-          stages: { orderBy: { sortOrder: "asc" } },
+          stages: {
+            orderBy: { sortOrder: "asc" },
+            include: { owners: { orderBy: { sortOrder: "asc" } } },
+          },
           tasks: {
             where: { deletedAt: null },
             include: {
@@ -512,7 +519,7 @@ async function reviewProjectStageBatchDdlChangeRequestLogged(
         techGroup: project.techGroup,
         ownerOpenIds: getProjectOwnerOpenIds(project),
         stageOwnerOpenIds: uniqueOpenIds(
-          affectedStages.map((stage) => stage.ownerOpenId),
+          affectedStages.flatMap((stage) => getProjectStageOwnerOpenIds(stage)),
         ),
         recipientOpenIds,
       },
@@ -557,7 +564,10 @@ async function requestProjectStageDueDateChangeLogged(
     include: {
       owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
-      stages: { orderBy: { sortOrder: "asc" } },
+      stages: {
+        orderBy: { sortOrder: "asc" },
+        include: { owners: { orderBy: { sortOrder: "asc" } } },
+      },
       tasks: {
         where: { deletedAt: null },
         include: {
@@ -584,7 +594,7 @@ async function requestProjectStageDueDateChangeLogged(
       scope: { team: project.team, techGroup: project.techGroup },
       ownerOpenIds,
       participantOpenIds: getProjectParticipantOpenIds(project),
-      stageOwnerOpenId: stage.ownerOpenId,
+      stageOwnerOpenId: getProjectStageOwnerOpenIds(stage),
       userOpenId: user.openId,
     })
   ) {
@@ -718,14 +728,17 @@ async function reviewProjectStageDueDateChangeRequestLogged(
   const request = await prisma.projectDdlChangeRequest.findUnique({
     where: { id: parsed.requestId },
     include: {
-      stage: true,
+      stage: { include: { owners: { orderBy: { sortOrder: "asc" } } } },
       project: {
         include: {
           owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
           participants: {
             orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
           },
-          stages: { orderBy: { sortOrder: "asc" } },
+          stages: {
+            orderBy: { sortOrder: "asc" },
+            include: { owners: { orderBy: { sortOrder: "asc" } } },
+          },
           tasks: {
             where: { deletedAt: null },
             include: {
@@ -890,6 +903,7 @@ async function reviewProjectStageDueDateChangeRequestLogged(
         oldDueAt: request.oldDueAt?.toISOString() ?? null,
         newDueAt: request.newDueAt?.toISOString() ?? null,
         stageOwnerOpenId: request.stage.ownerOpenId,
+        stageOwnerOpenIds: getProjectStageOwnerOpenIds(request.stage),
         recipientOpenIds,
       },
       context,

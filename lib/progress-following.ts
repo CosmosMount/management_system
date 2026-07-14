@@ -10,6 +10,7 @@ import {
 } from "@/lib/permissions-progress";
 import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
+import { getProjectStageOwnerOpenIds } from "@/lib/progress-stage-owners";
 import { getTaskTechGroups } from "@/lib/progress-task-tech-groups";
 import { prisma } from "@/lib/prisma";
 
@@ -26,6 +27,8 @@ type ProjectParticipantLike = {
 type ProjectStageLike = {
   id?: string;
   ownerOpenId: string;
+  ownerName?: string;
+  owners?: ProjectOwnerLike[];
 };
 
 type TaskAssigneeLike = {
@@ -242,7 +245,14 @@ export function getProjectForcedFollowReasons(
   if ((project.participants ?? []).some((item) => item.openId === userOpenId)) {
     reasons.push("你是项目参与人，必须接收该项目通知");
   }
-  if ((project.stages ?? []).some((stage) => stage.ownerOpenId === userOpenId)) {
+  if (
+    (project.stages ?? []).some((stage) =>
+      getProjectStageOwnerOpenIds({
+        ...stage,
+        ownerName: stage.ownerName ?? "",
+      }).includes(userOpenId),
+    )
+  ) {
     reasons.push("你是阶段负责人，必须接收该项目通知");
   }
   if (
@@ -311,7 +321,14 @@ async function collectProjectForcedFollowerOpenIds(
   const members = await getProjectFollowMembers(project);
   for (const openId of members.ownerOpenIds) add(openIds, openId);
   for (const participant of members.participants) add(openIds, participant.openId);
-  for (const stage of members.stages) add(openIds, stage.ownerOpenId);
+  for (const stage of members.stages) {
+    for (const openId of getProjectStageOwnerOpenIds({
+      ...stage,
+      ownerName: stage.ownerName ?? "",
+    })) {
+      add(openIds, openId);
+    }
+  }
   for (const task of members.tasks) {
     for (const openId of getTaskAssigneeOpenIds(task)) add(openIds, openId);
   }
@@ -358,10 +375,19 @@ async function getProjectFollowMembers(project: ProjectFollowSubject): Promise<{
           select: { openId: true, name: true },
         })
       : Promise.resolve(project.participants),
-    project.stages === undefined
+    project.stages === undefined ||
+    project.stages.some((stage) => stage.owners === undefined)
       ? prisma.projectStage.findMany({
           where: { projectId: project.id },
-          select: { id: true, ownerOpenId: true },
+          select: {
+            id: true,
+            ownerOpenId: true,
+            ownerName: true,
+            owners: {
+              orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+              select: { openId: true, name: true },
+            },
+          },
         })
       : Promise.resolve(project.stages),
     project.tasks === undefined

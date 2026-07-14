@@ -18,6 +18,11 @@ import {
   collectStageAcceptanceReviewRecipients,
 } from "@/lib/progress-project-notifications";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
+import { getProjectParticipantOpenIds } from "@/lib/progress-project-participants";
+import {
+  getProjectStageOwnerNames,
+  getProjectStageOwnerOpenIds,
+} from "@/lib/progress-stage-owners";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import { revalidateProgress } from "@/lib/revalidate";
@@ -64,7 +69,12 @@ async function submitStageEvidenceLogged(
     include: {
       owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
-      stages: { orderBy: { sortOrder: "asc" } },
+      stages: {
+        orderBy: { sortOrder: "asc" },
+        include: {
+          owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        },
+      },
       tasks: {
         where: { deletedAt: null },
         include: {
@@ -91,8 +101,16 @@ async function submitStageEvidenceLogged(
     .some((s) => s.status !== "COMPLETED");
   if (priorIncomplete) throw new Error("请先完成前一阶段");
 
-  if (!canSubmitStage(roles, stage.ownerOpenId, user.openId)) {
-    throw new Error("仅阶段负责人可提交阶段证据");
+  if (
+    !canSubmitStage({
+      roles,
+      stageOwnerOpenIds: getProjectStageOwnerOpenIds(stage),
+      projectOwnerOpenIds: getProjectOwnerOpenIds(project),
+      projectParticipantOpenIds: getProjectParticipantOpenIds(project),
+      userOpenId: user.openId,
+    })
+  ) {
+    throw new Error("仅阶段负责人、项目负责人或项目参与人员可提交阶段证据");
   }
 
   const submission = await prisma.$transaction(async (tx) => {
@@ -208,13 +226,20 @@ async function reviewStageSubmissionLogged(
     include: {
       stage: {
         include: {
+          owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
           project: {
             include: {
               owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
               participants: {
                 orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
               },
-              stages: true,
+              stages: {
+                include: {
+                  owners: {
+                    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+                  },
+                },
+              },
               tasks: {
                 where: { deletedAt: null },
                 include: {
@@ -335,6 +360,8 @@ async function reviewStageSubmissionLogged(
       projectName: project.name,
       stageName: stage.name,
       stageOwnerOpenId: stage.ownerOpenId,
+      stageOwnerOpenIds: getProjectStageOwnerOpenIds(stage),
+      stageOwnerNames: getProjectStageOwnerNames(stage),
       reviewerName: user.name,
       comment: parsed.comment ?? "",
       recipientOpenIds,

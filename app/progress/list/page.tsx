@@ -25,6 +25,7 @@ import {
   getProjectStageDeadlineState,
   type ProjectStageDeadlineState,
 } from "@/lib/progress-stage-deadline";
+import { getProjectStageOwnerNames } from "@/lib/progress-stage-owners";
 import {
   progressProjectMineWhere,
   progressProjectReadableWhere,
@@ -86,7 +87,12 @@ export default async function ProgressListPage({ searchParams }: Props) {
     include: {
       owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
-      stages: { orderBy: { sortOrder: "asc" } },
+      stages: {
+        orderBy: { sortOrder: "asc" },
+        include: {
+          owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        },
+      },
     },
     orderBy: { updatedAt: "desc" },
   });
@@ -202,7 +208,9 @@ export default async function ProgressListPage({ searchParams }: Props) {
                             </p>
                             <p className="text-sm text-muted-foreground">
                               当前阶段：{deadline.stage?.name ?? "无"} · 负责人{" "}
-                              {deadline.stage?.ownerName || "未设置"}
+                              {deadline.stage
+                                ? getProjectStageOwnerNames(deadline.stage) || "未设置"
+                                : "未设置"}
                             </p>
                             {deadline.dueAt && (
                               <p className="text-xs text-muted-foreground">

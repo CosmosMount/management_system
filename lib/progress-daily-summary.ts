@@ -49,7 +49,12 @@ const projectSummaryInclude = {
   owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
   participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
   followPreferences: true,
-  stages: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+  stages: {
+    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+    include: {
+      owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+    },
+  },
   tasks: {
     where: { deletedAt: null },
     include: {
@@ -62,7 +67,11 @@ const taskSummaryInclude = {
   assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
   techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
   followPreferences: true,
-  stage: true,
+  stage: {
+    include: {
+      owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+    },
+  },
   project: { include: projectSummaryInclude },
 } satisfies Prisma.TaskInclude;
 

@@ -20,6 +20,7 @@ import {
 import { requireSessionUser } from "@/lib/progress-activity";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { getProjectParticipantOpenIds } from "@/lib/progress-project-participants";
+import { getProjectStageOwnerOpenIds } from "@/lib/progress-stage-owners";
 import { getNotificationContext } from "@/lib/request-origin";
 import { prisma } from "@/lib/prisma";
 import { revalidateProgress } from "@/lib/revalidate";
@@ -69,7 +70,7 @@ async function deleteTaskDirectlyLogged(
           },
         },
       },
-      stage: true,
+      stage: { include: { owners: { orderBy: { sortOrder: "asc" } } } },
       assignees: true,
       techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
     },
@@ -223,7 +224,7 @@ async function requestTaskDeletionLogged(
           },
         },
       },
-      stage: true,
+      stage: { include: { owners: { orderBy: { sortOrder: "asc" } } } },
       assignees: true,
       techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       deletionRequests: {
@@ -254,7 +255,7 @@ async function requestTaskDeletionLogged(
       scope: { team: task.team, techGroup: task.techGroup },
       ownerOpenIds: projectOwnerOpenIds,
       participantOpenIds: getProjectParticipantOpenIds(task.project),
-      stageOwnerOpenId: task.stage?.ownerOpenId,
+      stageOwnerOpenId: task.stage ? getProjectStageOwnerOpenIds(task.stage) : [],
       taskAssigneeOpenIds: getTaskAssigneeOpenIds(task),
       userOpenId: user.openId,
     })
@@ -393,7 +394,7 @@ async function reviewTaskDeletionRequestLogged(
               },
             },
           },
-          stage: true,
+          stage: { include: { owners: { orderBy: { sortOrder: "asc" } } } },
           assignees: true,
           techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
         },

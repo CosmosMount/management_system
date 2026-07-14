@@ -22,12 +22,12 @@ export type StageDeadlineInput = {
   ownerOpenId?: string;
 };
 
-export type ProjectStageDeadlineInfo = {
+export type ProjectStageDeadlineInfo<T extends StageDeadlineInput = StageDeadlineInput> = {
   state: ProjectStageDeadlineState;
   label: string;
   daysDelta: number;
   dueAt: Date | null;
-  stage: StageDeadlineInput | null;
+  stage: T | null;
 };
 
 export function getCurrentProjectStage<T extends StageDeadlineInput>(
@@ -46,7 +46,7 @@ export function getStageDeadlineState<T extends StageDeadlineInput>(
   stage: T | null,
   now = new Date(),
   dueSoonDays = DEFAULT_STAGE_DUE_SOON_DAYS,
-): ProjectStageDeadlineInfo {
+): ProjectStageDeadlineInfo<T> {
   if (!stage) {
     return {
       state: "none",
@@ -123,7 +123,7 @@ export function getProjectStageDeadlineState<T extends StageDeadlineInput>(
   project: { stages: T[] },
   now = new Date(),
   dueSoonDays = DEFAULT_STAGE_DUE_SOON_DAYS,
-): ProjectStageDeadlineInfo {
+): ProjectStageDeadlineInfo<T> {
   return getStageDeadlineState(
     getCurrentProjectStage(project.stages),
     now,

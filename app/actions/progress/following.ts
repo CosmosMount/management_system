@@ -295,7 +295,12 @@ async function getProjectForFollow(projectId: string) {
     include: {
       owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
-      stages: { orderBy: { sortOrder: "asc" } },
+      stages: {
+        orderBy: { sortOrder: "asc" },
+        include: {
+          owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        },
+      },
       tasks: {
         where: { deletedAt: null },
         include: {
@@ -311,7 +316,11 @@ async function getTaskForFollow(taskId: string) {
   return prisma.task.findUnique({
     where: { id: taskId },
     include: {
-      stage: true,
+      stage: {
+        include: {
+          owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        },
+      },
       assignees: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       techGroups: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       followPreferences: true,
@@ -321,7 +330,12 @@ async function getTaskForFollow(taskId: string) {
           participants: {
             orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
           },
-          stages: { orderBy: { sortOrder: "asc" } },
+          stages: {
+            orderBy: { sortOrder: "asc" },
+            include: {
+              owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+            },
+          },
           tasks: {
             where: { deletedAt: null },
             include: {

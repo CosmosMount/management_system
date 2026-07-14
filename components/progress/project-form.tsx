@@ -47,7 +47,7 @@ import {
   updateProjectSchema,
   type ParsedCreateProjectInput,
 } from "@/lib/validations/progress";
-import { UserMultiSearchSelect, UserSearchSelect } from "@/components/user-search-select";
+import { UserMultiSearchSelect } from "@/components/user-search-select";
 import { getActionErrorMessage } from "@/lib/action-error-message";
 import { Textarea } from "@/components/ui/textarea";
 import { routes } from "@/lib/routes";
@@ -80,10 +80,13 @@ type ProjectFormValues = {
   allowOwnerSelfApproval: boolean;
   template?: "real-car" | "custom";
   stages: Array<{
+    id?: string;
+    expectedUpdatedAt?: string;
     name: string;
     goal: string;
-    ownerOpenId: string;
-    durationDays: string;
+    ownerOpenId?: string;
+    ownerOpenIds: string[];
+    durationDays?: string;
   }>;
 };
 
@@ -101,6 +104,13 @@ type Props = {
     ownerOpenIds: string[];
     participantOpenIds: string[];
     allowOwnerSelfApproval: boolean;
+    stages: Array<{
+      id: string;
+      updatedAt: string;
+      name: string;
+      goal: string;
+      ownerOpenIds: string[];
+    }>;
   };
   initialDraft?: ParsedCreateProjectInput;
   sourceProjectId?: string;
@@ -115,6 +125,7 @@ function realCarStages(defaultOwner = "") {
     name: stage.name,
     goal: stage.goal,
     ownerOpenId: defaultOwner,
+    ownerOpenIds: defaultOwner ? [defaultOwner] : [],
     durationDays: String(DEFAULT_STAGE_DURATION_DAYS),
   }));
 }
@@ -127,6 +138,7 @@ function stagesFromTemplate(
     name: stage.name,
     goal: stage.goal,
     ownerOpenId: defaultOwner,
+    ownerOpenIds: defaultOwner ? [defaultOwner] : [],
     durationDays: String(stage.durationDays),
   }));
 }
@@ -135,7 +147,10 @@ function stagesFromDraft(draft: ParsedCreateProjectInput) {
   return draft.stages.map((stage) => ({
     name: stage.name,
     goal: stage.goal,
-    ownerOpenId: stage.ownerOpenId,
+    ownerOpenId: stage.ownerOpenIds?.[0] ?? stage.ownerOpenId,
+    ownerOpenIds:
+      stage.ownerOpenIds?.filter(Boolean) ??
+      (stage.ownerOpenId ? [stage.ownerOpenId] : []),
     durationDays: String(stage.durationDays),
   }));
 }
@@ -204,7 +219,13 @@ export function ProjectForm({
         false,
       template: initialDraft?.template ?? "real-car",
       stages: editing
-        ? []
+        ? (initialProject?.stages.map((stage) => ({
+            id: stage.id,
+            expectedUpdatedAt: stage.updatedAt,
+            name: stage.name,
+            goal: stage.goal,
+            ownerOpenIds: stage.ownerOpenIds,
+          })) ?? [])
         : initialDraft
           ? stagesFromDraft(initialDraft)
           : defaultProjectTemplate
@@ -269,6 +290,13 @@ export function ProjectForm({
           ownerOpenIds: data.ownerOpenIds ?? [],
           participantOpenIds: data.participantOpenIds ?? [],
           allowOwnerSelfApproval: data.allowOwnerSelfApproval,
+          stages: data.stages.map((stage) => ({
+            id: stage.id ?? "",
+            expectedUpdatedAt: stage.expectedUpdatedAt ?? "",
+            name: stage.name,
+            goal: stage.goal,
+            ownerOpenIds: stage.ownerOpenIds,
+          })),
         });
         toast.success("项目已更新");
         onSaved?.();
@@ -284,7 +312,13 @@ export function ProjectForm({
           participantOpenIds: data.participantOpenIds,
           allowOwnerSelfApproval: data.allowOwnerSelfApproval,
           template: data.template,
-          stages: data.stages,
+          stages: data.stages.map((stage) => ({
+            name: stage.name,
+            goal: stage.goal,
+            ownerOpenId: stage.ownerOpenId,
+            ownerOpenIds: stage.ownerOpenIds,
+            durationDays: stage.durationDays ?? "",
+          })),
         };
         if (sourceProjectId) {
           await resubmitProjectEstablishment({
@@ -388,7 +422,14 @@ export function ProjectForm({
                       "stages",
                       stages.map((stage) => ({
                         ...stage,
-                        ownerOpenId: stage.ownerOpenId || values[0] || "",
+                        ownerOpenId:
+                          stage.ownerOpenIds[0] || stage.ownerOpenId || values[0] || "",
+                        ownerOpenIds:
+                          stage.ownerOpenIds.length > 0
+                            ? stage.ownerOpenIds
+                            : values[0]
+                              ? [values[0]]
+                              : [],
                       })),
                     );
                   }}
@@ -422,7 +463,7 @@ export function ProjectForm({
               )}
             />
             <p className="text-xs text-muted-foreground">
-              参与人员可以查看项目并提交任务创建/撤销申请；项目负责人无需重复加入。
+              参与人员可以查看项目、提交阶段材料及任务创建/撤销申请；项目负责人无需重复加入。
             </p>
           </div>
           <div className="space-y-2">
@@ -549,6 +590,7 @@ export function ProjectForm({
                     name: "",
                     goal: "",
                     ownerOpenId: primaryOwnerOpenId,
+                    ownerOpenIds: primaryOwnerOpenId ? [primaryOwnerOpenId] : [],
                     durationDays: String(DEFAULT_STAGE_DURATION_DAYS),
                   })
                 }
@@ -686,17 +728,23 @@ export function ProjectForm({
                       <Label>阶段负责人</Label>
                       <Controller
                         control={form.control}
-                        name={`stages.${index}.ownerOpenId`}
+                        name={`stages.${index}.ownerOpenIds`}
                         render={({ field }) => (
-                          <UserSearchSelect
+                          <UserMultiSearchSelect
                             users={users}
-                            value={field.value ?? ""}
-                            onChange={(v) => field.onChange(v || undefined)}
+                            value={field.value ?? []}
+                            onChange={(values) => {
+                              field.onChange(values);
+                              form.setValue(
+                                `stages.${index}.ownerOpenId`,
+                                values[0] ?? "",
+                              );
+                            }}
                             placeholder="搜索阶段负责人"
                             inputProps={{
                               "aria-invalid":
-                                !!errors.stages?.[index]?.ownerOpenId,
-                              "aria-describedby": errors.stages?.[index]?.ownerOpenId
+                                !!errors.stages?.[index]?.ownerOpenIds,
+                              "aria-describedby": errors.stages?.[index]?.ownerOpenIds
                                 ? `project-stage-${index}-owner-error`
                                 : undefined,
                             }}
@@ -705,7 +753,7 @@ export function ProjectForm({
                       />
                       <FormFieldError
                         id={`project-stage-${index}-owner-error`}
-                        message={errors.stages?.[index]?.ownerOpenId?.message}
+                        message={errors.stages?.[index]?.ownerOpenIds?.message}
                       />
                     </div>
                   </>
@@ -715,6 +763,67 @@ export function ProjectForm({
             {typeof errors.stages?.message === "string" && (
               <FormFieldError message={errors.stages.message} />
             )}
+          </CardContent>
+        </Card>
+      )}
+
+      {editing && (
+        <Card>
+          <CardHeader>
+            <CardTitle>项目阶段</CardTitle>
+            <p className="mt-1 text-sm text-muted-foreground">
+              可修改阶段名称、目标和负责人；阶段数量、顺序和 DDL 保持不变。
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {fields.map((field, index) => (
+              <div
+                key={field.id}
+                data-testid="project-stage-editor"
+                className="rounded-lg border bg-card p-4"
+              >
+                <div className="mb-3 border-b pb-3 text-sm font-medium">
+                  阶段 {index + 1}
+                </div>
+                <div className="space-y-2">
+                  <Label>阶段名称</Label>
+                  <Input
+                    {...form.register(`stages.${index}.name`)}
+                    aria-invalid={!!errors.stages?.[index]?.name}
+                  />
+                  <FormFieldError message={errors.stages?.[index]?.name?.message} />
+                </div>
+                <div className="mt-3 space-y-2">
+                  <Label>阶段目标</Label>
+                  <Textarea
+                    {...form.register(`stages.${index}.goal`)}
+                    aria-invalid={!!errors.stages?.[index]?.goal}
+                  />
+                  <FormFieldError message={errors.stages?.[index]?.goal?.message} />
+                </div>
+                <div className="mt-3 space-y-2">
+                  <Label>阶段负责人</Label>
+                  <Controller
+                    control={form.control}
+                    name={`stages.${index}.ownerOpenIds`}
+                    render={({ field: ownerField }) => (
+                      <UserMultiSearchSelect
+                        users={users}
+                        value={ownerField.value ?? []}
+                        onChange={ownerField.onChange}
+                        placeholder="搜索阶段负责人"
+                        inputProps={{
+                          "aria-invalid": !!errors.stages?.[index]?.ownerOpenIds,
+                        }}
+                      />
+                    )}
+                  />
+                  <FormFieldError
+                    message={errors.stages?.[index]?.ownerOpenIds?.message}
+                  />
+                </div>
+              </div>
+            ))}
           </CardContent>
         </Card>
       )}

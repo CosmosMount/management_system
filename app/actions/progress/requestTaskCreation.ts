@@ -16,6 +16,7 @@ import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { requireSessionUser } from "@/lib/progress-activity";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { getProjectParticipantOpenIds } from "@/lib/progress-project-participants";
+import { getProjectStageOwnerOpenIds } from "@/lib/progress-stage-owners";
 import {
   collectTaskManagementReviewRecipients,
   collectTaskNotificationRecipients,
@@ -66,7 +67,7 @@ async function requestTaskCreationLogged(
     include: {
       owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
-      stages: true,
+      stages: { include: { owners: { orderBy: { sortOrder: "asc" } } } },
       tasks: {
         where: { deletedAt: null },
         include: {
@@ -95,8 +96,8 @@ async function requestTaskCreationLogged(
   if (selectedStage?.status === "COMPLETED") {
     throw new Error("已完成阶段不可申请新任务");
   }
-  const stageOwnerOpenIds = selectedStage?.ownerOpenId
-    ? [selectedStage.ownerOpenId]
+  const stageOwnerOpenIds = selectedStage
+    ? getProjectStageOwnerOpenIds(selectedStage)
     : [];
   const taskAssigneeOpenIds = [
     ...new Set(project.tasks.flatMap((task) => getTaskAssigneeOpenIds(task))),
@@ -274,7 +275,7 @@ async function reviewTaskCreationRequestLogged(
           participants: {
             orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
           },
-          stages: true,
+          stages: { include: { owners: { orderBy: { sortOrder: "asc" } } } },
         },
       },
     },
@@ -402,7 +403,7 @@ async function reviewTaskCreationRequestLogged(
   const recipientOpenIds = normalizeOpenIds([
     ...baseRecipientOpenIds,
     request.requesterOpenId,
-    ...(selectedStage?.ownerOpenId ? [selectedStage.ownerOpenId] : []),
+    ...(selectedStage ? getProjectStageOwnerOpenIds(selectedStage) : []),
   ]);
 
   const task = await prisma.$transaction(async (tx) => {

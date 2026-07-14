@@ -13,6 +13,7 @@ import {
   getProjectOwnerOpenIds,
 } from "@/lib/progress-project-owners";
 import { collectProjectNotificationRecipients } from "@/lib/progress-project-notifications";
+import { getProjectStageOwnerOpenIds } from "@/lib/progress-stage-owners";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import { revalidateProgress } from "@/lib/revalidate";
@@ -26,6 +27,8 @@ type RollbackStage = {
   sortOrder: number;
   status: "NOT_STARTED" | "IN_PROGRESS" | "PENDING_ACCEPTANCE" | "COMPLETED";
   ownerOpenId: string;
+  ownerName: string;
+  owners: Array<{ openId: string; name: string }>;
   currentSubmissionId: string | null;
 };
 
@@ -80,7 +83,10 @@ async function rollbackProjectStageLogged(
       where: { id: parsed.projectId },
       include: {
         owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
-        stages: { orderBy: { sortOrder: "asc" } },
+        stages: {
+          orderBy: { sortOrder: "asc" },
+          include: { owners: { orderBy: { sortOrder: "asc" } } },
+        },
       },
     });
     if (!project) throw new Error("项目不存在");
@@ -237,14 +243,12 @@ async function rollbackProjectStageLogged(
       ownerOpenIds: result.ownerOpenIds,
       ownerNames: getProjectOwnerNames(result.project),
       stageOwnerOpenIds: [
-        ...new Set(
-          [
-            result.plan.targetStage.ownerOpenId,
-            result.plan.fromStage?.ownerOpenId,
-          ].filter(
-            (openId): openId is string => !!openId,
-          ),
-        ),
+        ...new Set([
+          ...getProjectStageOwnerOpenIds(result.plan.targetStage),
+          ...(result.plan.fromStage
+            ? getProjectStageOwnerOpenIds(result.plan.fromStage)
+            : []),
+        ]),
       ],
       recipientOpenIds: await collectProjectNotificationRecipients(result.project),
     },

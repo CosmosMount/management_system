@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/card";
 import { projectStatusLabels } from "@/lib/progress-labels";
 import { prisma } from "@/lib/prisma";
+import { getProjectStageOwnerNames } from "@/lib/progress-stage-owners";
 import {
   canRequestProjectEstablishment,
   canReviewProjectEstablishment,
@@ -87,7 +88,12 @@ export default async function ProgressHomePage({ searchParams }: Props) {
       },
       include: {
         owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
-        stages: { orderBy: { sortOrder: "asc" } },
+        stages: {
+          orderBy: { sortOrder: "asc" },
+          include: {
+            owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+          },
+        },
       },
       orderBy: { updatedAt: "desc" },
     }),
@@ -251,7 +257,12 @@ async function getProjectEstablishmentViews(
     include: {
       owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
-      stages: { orderBy: { sortOrder: "asc" } },
+      stages: {
+        orderBy: { sortOrder: "asc" },
+        include: {
+          owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        },
+      },
     },
     orderBy: { createdAt: "desc" },
     take: 80,
@@ -291,7 +302,7 @@ async function getProjectEstablishmentViews(
           return {
             name: stage.name,
             goal: stage.goal,
-            ownerName: stage.ownerName,
+            ownerNames: getProjectStageOwnerNames(stage),
             durationDays: getStageDurationDays(
               project.submittedAt ?? project.createdAt,
               previousDueAt,

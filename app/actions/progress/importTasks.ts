@@ -17,6 +17,7 @@ import { getTaskAssigneeOpenIds } from "@/lib/progress-assignees";
 import { requireSessionUser } from "@/lib/progress-activity";
 import { getProjectOwnerOpenIds } from "@/lib/progress-project-owners";
 import { getProjectParticipantOpenIds } from "@/lib/progress-project-participants";
+import { getProjectStageOwnerOpenIds } from "@/lib/progress-stage-owners";
 import {
   collectTaskManagementReviewRecipients,
   collectTaskNotificationRecipients,
@@ -84,7 +85,12 @@ async function importProgressTasksLogged(
     include: {
       owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
-      stages: { orderBy: { sortOrder: "asc" } },
+      stages: {
+        orderBy: { sortOrder: "asc" },
+        include: {
+          owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        },
+      },
       tasks: {
         where: { deletedAt: null },
         include: {
@@ -100,9 +106,9 @@ async function importProgressTasksLogged(
   const participantOpenIds = getProjectParticipantOpenIds(project);
   const scope = { team: project.team, techGroup: project.techGroup };
   const canManage = canManageProject(roles, scope, projectOwnerOpenIds, user.openId);
-  const stageOwnerOpenIds = project.stages
-    .map((stage) => stage.ownerOpenId)
-    .filter(Boolean);
+  const stageOwnerOpenIds = project.stages.flatMap((stage) =>
+    getProjectStageOwnerOpenIds(stage),
+  );
   const taskAssigneeOpenIds = [
     ...new Set(project.tasks.flatMap((task) => getTaskAssigneeOpenIds(task))),
   ];
@@ -153,7 +159,7 @@ async function importProgressTasksLogged(
         scope,
         ownerOpenIds: projectOwnerOpenIds,
         participantOpenIds,
-        stageOwnerOpenIds: stage.ownerOpenId ? [stage.ownerOpenId] : [],
+        stageOwnerOpenIds: getProjectStageOwnerOpenIds(stage),
         taskAssigneeOpenIds,
         userOpenId: user.openId,
       })
@@ -460,13 +466,23 @@ async function collectBatchRecipients({
   project: Parameters<typeof collectTaskNotificationRecipients>[0]["project"] & {
     team: string;
     techGroup: string;
-    stages?: Array<{ id: string; ownerOpenId: string }>;
+    stages?: Array<{
+      id: string;
+      ownerOpenId: string;
+      ownerName?: string;
+      owners?: Array<{ openId: string; name: string }>;
+    }>;
   };
   actorOpenId: string;
   reviewOnly: boolean;
 }) {
   const openIds = new Set<string>(reviewOnly ? [] : [actorOpenId]);
-  const stageOwnerById = new Map((project.stages ?? []).map((stage) => [stage.id, stage.ownerOpenId]));
+  const stageOwnersById = new Map(
+    (project.stages ?? []).map((stage) => [
+      stage.id,
+      getProjectStageOwnerOpenIds({ ...stage, ownerName: stage.ownerName ?? "" }),
+    ]),
+  );
   for (const task of tasks) {
     const taskSubject = {
       team: project.team,
@@ -484,8 +500,11 @@ async function collectBatchRecipients({
       ? await collectTaskManagementReviewRecipients(taskSubject)
       : await collectTaskNotificationRecipients(taskSubject);
     recipients.forEach((openId) => openIds.add(openId));
-    const stageOwnerOpenId = stageOwnerById.get(task.stageId);
-    if (!reviewOnly && stageOwnerOpenId) openIds.add(stageOwnerOpenId);
+    if (!reviewOnly) {
+      for (const openId of stageOwnersById.get(task.stageId) ?? []) {
+        openIds.add(openId);
+      }
+    }
   }
   return [...openIds];
 }

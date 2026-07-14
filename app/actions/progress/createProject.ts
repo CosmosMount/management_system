@@ -38,6 +38,7 @@ type ProjectDraftResolution = {
   orderedParticipants: Array<{ openId: string; name: string }>;
   primaryOwner: { openId: string; name: string };
   stageOwnerByOpenId: Map<string, string>;
+  orderedStageOwners: Array<Array<{ openId: string; name: string }>>;
 };
 
 export async function createProject(input: CreateProjectInput) {
@@ -80,7 +81,12 @@ async function createProjectLogged(
       ownerName: resolution.primaryOwner.name,
       owners: resolution.orderedOwners,
       participants: resolution.orderedParticipants,
-      stages: stagesWithDueAt,
+      stages: stagesWithDueAt.map((stage, index) => ({
+        ...stage,
+        ownerOpenId: resolution.orderedStageOwners[index]?.[0]?.openId ?? "",
+        ownerName: resolution.orderedStageOwners[index]?.[0]?.name ?? "",
+        owners: resolution.orderedStageOwners[index] ?? [],
+      })),
       tasks: [],
       followPreferences: [],
     },
@@ -211,7 +217,12 @@ async function resubmitProjectEstablishmentLogged(
       ownerName: resolution.primaryOwner.name,
       owners: resolution.orderedOwners,
       participants: resolution.orderedParticipants,
-      stages: stagesWithDueAt,
+      stages: stagesWithDueAt.map((stage, index) => ({
+        ...stage,
+        ownerOpenId: resolution.orderedStageOwners[index]?.[0]?.openId ?? "",
+        ownerName: resolution.orderedStageOwners[index]?.[0]?.name ?? "",
+        owners: resolution.orderedStageOwners[index] ?? [],
+      })),
       tasks: [],
       followPreferences: existingProject.followPreferences,
     },
@@ -276,17 +287,29 @@ async function resubmitProjectEstablishmentLogged(
         })),
       });
     }
-    await tx.projectStage.createMany({
-      data: stagesWithDueAt.map((stage, index) => ({
-        projectId: existingProject.id,
-        name: stage.name,
-        goal: stage.goal,
-        sortOrder: index,
-        ownerOpenId: stage.ownerOpenId,
-        ownerName: resolution.stageOwnerByOpenId.get(stage.ownerOpenId) ?? "",
-        dueAt: stage.dueAt,
-      })),
-    });
+    for (const [index, stage] of stagesWithDueAt.entries()) {
+      const stageOwners = resolution.orderedStageOwners[index] ?? [];
+      const primaryStageOwner = stageOwners[0];
+      if (!primaryStageOwner) throw new Error(`阶段「${stage.name}」缺少负责人`);
+      await tx.projectStage.create({
+        data: {
+          projectId: existingProject.id,
+          name: stage.name,
+          goal: stage.goal,
+          sortOrder: index,
+          ownerOpenId: primaryStageOwner.openId,
+          ownerName: primaryStageOwner.name,
+          dueAt: stage.dueAt,
+          owners: {
+            create: stageOwners.map((owner, ownerIndex) => ({
+              openId: owner.openId,
+              name: owner.name,
+              sortOrder: ownerIndex,
+            })),
+          },
+        },
+      });
+    }
 
     await tx.progressActivityLog.create({
       data: {
@@ -377,7 +400,12 @@ async function reviewProjectEstablishmentLogged(
     include: {
       owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
-      stages: { orderBy: { sortOrder: "asc" } },
+      stages: {
+        orderBy: { sortOrder: "asc" },
+        include: {
+          owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        },
+      },
       tasks: {
         where: { deletedAt: null },
         include: {
@@ -602,13 +630,16 @@ async function resolveProjectDraft(
     ),
   );
 
+  const stageOwnerOpenIds = normalizeOpenIds(
+    parsed.stages.flatMap((stage) => stageInputOwnerOpenIds(stage)),
+  );
   const [projectUsers, stageOwners] = await Promise.all([
     prisma.user.findMany({
       where: { openId: { in: [...ownerOpenIds, ...participantOpenIds] } },
       select: { openId: true, name: true },
     }),
     prisma.user.findMany({
-      where: { openId: { in: parsed.stages.map((stage) => stage.ownerOpenId) } },
+      where: { openId: { in: stageOwnerOpenIds } },
       select: { openId: true, name: true },
     }),
   ]);
@@ -638,11 +669,15 @@ async function resolveProjectDraft(
   const stageOwnerByOpenId = new Map(
     stageOwners.map((stageOwner) => [stageOwner.openId, stageOwner.name]),
   );
-  for (const stage of parsed.stages) {
-    if (!stageOwnerByOpenId.has(stage.ownerOpenId)) {
-      throw new Error(`阶段「${stage.name}」负责人不存在，请先同步飞书通讯录`);
-    }
-  }
+  const orderedStageOwners = parsed.stages.map((stage) =>
+    stageInputOwnerOpenIds(stage).map((openId) => {
+      const name = stageOwnerByOpenId.get(openId);
+      if (!name) {
+        throw new Error(`阶段「${stage.name}」负责人不存在，请先同步飞书通讯录`);
+      }
+      return { openId, name };
+    }),
+  );
 
   return {
     parsed,
@@ -652,6 +687,7 @@ async function resolveProjectDraft(
     orderedParticipants,
     primaryOwner,
     stageOwnerByOpenId,
+    orderedStageOwners,
   };
 }
 
@@ -696,14 +732,26 @@ async function createEstablishingProjectTx(
         })),
       },
       stages: {
-        create: stagesWithDueAt.map((stage, index) => ({
-          name: stage.name,
-          goal: stage.goal,
-          sortOrder: index,
-          ownerOpenId: stage.ownerOpenId,
-          ownerName: resolution.stageOwnerByOpenId.get(stage.ownerOpenId) ?? "",
-          dueAt: stage.dueAt,
-        })),
+        create: stagesWithDueAt.map((stage, index) => {
+          const stageOwners = resolution.orderedStageOwners[index] ?? [];
+          const primaryStageOwner = stageOwners[0];
+          if (!primaryStageOwner) throw new Error(`阶段「${stage.name}」缺少负责人`);
+          return {
+            name: stage.name,
+            goal: stage.goal,
+            sortOrder: index,
+            ownerOpenId: primaryStageOwner.openId,
+            ownerName: primaryStageOwner.name,
+            dueAt: stage.dueAt,
+            owners: {
+              create: stageOwners.map((owner, ownerIndex) => ({
+                openId: owner.openId,
+                name: owner.name,
+                sortOrder: ownerIndex,
+              })),
+            },
+          };
+        }),
       },
     },
     include: { stages: true },
@@ -719,6 +767,16 @@ function buildStagesWithDueAt(parsed: ParsedCreateProjectInput, baseDate: Date) 
       dueAt: getStageDueAtFromDuration(elapsedDurationDays, baseDate),
     };
   });
+}
+
+function stageInputOwnerOpenIds(stage: {
+  ownerOpenId?: string;
+  ownerOpenIds?: string[];
+}): string[] {
+  return normalizeOpenIds(
+    stage.ownerOpenIds?.filter(Boolean) ??
+      (stage.ownerOpenId ? [stage.ownerOpenId] : []),
+  );
 }
 
 function projectEstablishmentRequestedEventKey(

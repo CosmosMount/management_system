@@ -304,6 +304,7 @@ export type ProgressNotifyPayload =
       oldDueAt: string | null;
       newDueAt: string | null;
       stageOwnerOpenId: string;
+      stageOwnerOpenIds?: string[];
       recipientOpenIds?: string[];
     }
   | {
@@ -325,6 +326,8 @@ export type ProgressNotifyPayload =
       projectName: string;
       stageName: string;
       stageOwnerOpenId: string;
+      stageOwnerOpenIds?: string[];
+      stageOwnerNames?: string;
       reviewerName?: string;
       comment?: string;
       recipientOpenIds?: string[];
@@ -1230,7 +1233,10 @@ export async function sendProgressNotification(
         pass ? "green" : "red",
       );
       await notifyOpenIds(
-        payload.recipientOpenIds ?? [payload.requesterOpenId, payload.stageOwnerOpenId],
+        payload.recipientOpenIds ?? [
+          payload.requesterOpenId,
+          ...(payload.stageOwnerOpenIds ?? [payload.stageOwnerOpenId]),
+        ],
         card,
       );
       break;
@@ -1263,7 +1269,11 @@ export async function sendProgressNotification(
         buildAppUrl(`${routes.progress.project(payload.projectId)}`, appOrigin),
         pass ? "green" : "red",
       );
-      await notifyOpenIds(payload.recipientOpenIds ?? [payload.stageOwnerOpenId], card);
+      await notifyOpenIds(
+        payload.recipientOpenIds ??
+          payload.stageOwnerOpenIds ?? [payload.stageOwnerOpenId],
+        card,
+      );
       break;
     }
     case "project_stage_risk_synced": {

@@ -35,6 +35,7 @@ function normalizeTechGroupInput(value: unknown) {
 
 const projectOwnerOpenIdsSchema = z.array(z.string()).optional();
 const projectParticipantOpenIdsSchema = z.array(z.string()).optional();
+const stageOwnerOpenIdsSchema = z.array(z.string()).optional();
 export const MAX_ACCEPTANCE_CHECKLIST_ITEMS = 20;
 export const MAX_ACCEPTANCE_CHECKLIST_ITEM_LENGTH = 200;
 
@@ -86,6 +87,23 @@ function validateProjectScopeAndOwners(
   }
 }
 
+function validateStageOwners(
+  value: { ownerOpenId?: string; ownerOpenIds?: string[] },
+  ctx: z.RefinementCtx,
+  path: Array<string | number> = ["ownerOpenIds"],
+) {
+  const ownerOpenIds =
+    value.ownerOpenIds?.filter(Boolean) ??
+    (value.ownerOpenId ? [value.ownerOpenId] : []);
+  if (ownerOpenIds.length === 0) {
+    ctx.addIssue({
+      code: "custom",
+      path,
+      message: "请选择阶段负责人",
+    });
+  }
+}
+
 const projectBaseSchema = z.object({
   name: z.string().min(1, "请输入项目名称"),
   description: z.string().optional(),
@@ -104,7 +122,8 @@ export const createProjectSchema = projectBaseSchema.extend({
       z.object({
         name: z.string().min(1, "阶段名称不能为空"),
         goal: z.string().min(1, "请填写阶段目标"),
-        ownerOpenId: z.string().min(1, "请选择阶段负责人"),
+        ownerOpenId: z.string().optional(),
+        ownerOpenIds: stageOwnerOpenIdsSchema,
         durationDays: z.coerce
           .number()
           .int("阶段耗时必须是整数")
@@ -115,6 +134,9 @@ export const createProjectSchema = projectBaseSchema.extend({
     .min(1, "至少添加一个阶段"),
 }).superRefine((value, ctx) => {
   validateProjectScopeAndOwners(value, ctx);
+  value.stages.forEach((stage, index) =>
+    validateStageOwners(stage, ctx, ["stages", index, "ownerOpenIds"]),
+  );
   const totalDurationDays = value.stages.reduce(
     (total, stage) => total + stage.durationDays,
     0,
@@ -199,8 +221,31 @@ export const projectTemplateEnabledSchema = z.object({
 export const updateProjectSchema = projectBaseSchema.extend({
   projectId: z.string().min(1),
   expectedUpdatedAt: z.string().min(1, "缺少项目版本信息"),
+  stages: z.array(
+    z
+      .object({
+        id: z.string().min(1, "阶段不存在"),
+        expectedUpdatedAt: z.string().min(1, "缺少阶段版本信息"),
+        name: z.string().trim().min(1, "阶段名称不能为空"),
+        goal: z.string().trim(),
+        ownerOpenIds: z.array(z.string()).min(1, "请选择阶段负责人"),
+      })
+      .strict(),
+  ),
 }).superRefine((value, ctx) => {
   validateProjectScopeAndOwners(value, ctx);
+  value.stages.forEach((stage, index) =>
+    validateStageOwners(stage, ctx, ["stages", index, "ownerOpenIds"]),
+  );
+  value.stages.forEach((stage, index) => {
+    if (new Set(stage.ownerOpenIds).size !== stage.ownerOpenIds.length) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["stages", index, "ownerOpenIds"],
+        message: "阶段负责人不能重复",
+      });
+    }
+  });
 });
 
 function validateTaskAssignees(

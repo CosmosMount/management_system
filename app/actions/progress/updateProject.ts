@@ -1,5 +1,6 @@
 "use server";
 
+import type { Prisma } from "@prisma/client";
 import { auth } from "@/lib/auth";
 import { getUserRoles } from "@/lib/permissions";
 import {
@@ -15,6 +16,9 @@ import {
   getProjectParticipantNames,
   getProjectParticipantOpenIds,
 } from "@/lib/progress-project-participants";
+import {
+  getProjectStageOwnerNames,
+} from "@/lib/progress-stage-owners";
 import { collectProjectNotificationRecipients } from "@/lib/progress-project-notifications";
 import { requireSessionUser } from "@/lib/progress-activity";
 import { assertProjectActive } from "@/lib/progress-guards";
@@ -56,6 +60,12 @@ async function updateProjectLogged(
     include: {
       owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       participants: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      stages: {
+        orderBy: { sortOrder: "asc" },
+        include: {
+          owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        },
+      },
     },
   });
   if (!project) throw new Error("项目不存在");
@@ -63,6 +73,12 @@ async function updateProjectLogged(
     throw new Error("数据已被更新，请刷新后重试");
   }
   assertProjectActive(project.status);
+  if (
+    parsed.stages.length !== project.stages.length ||
+    parsed.stages.some((stage, index) => stage.id !== project.stages[index]?.id)
+  ) {
+    throw new Error("项目阶段结构已更新，请刷新后重试");
+  }
 
   const oldOwnerOpenIds = getProjectOwnerOpenIds(project);
   const oldOwnerNames = getProjectOwnerNames(project);
@@ -91,9 +107,14 @@ async function updateProjectLogged(
   const participantOpenIds = [
     ...new Set((parsed.participantOpenIds ?? []).filter(Boolean)),
   ].filter((openId) => !ownerOpenIds.includes(openId));
+  const stageOwnerOpenIds = [
+    ...new Set(parsed.stages.flatMap((stage) => stage.ownerOpenIds.filter(Boolean))),
+  ];
 
   const owners = await prisma.user.findMany({
-    where: { openId: { in: [...ownerOpenIds, ...participantOpenIds] } },
+    where: {
+      openId: { in: [...ownerOpenIds, ...participantOpenIds, ...stageOwnerOpenIds] },
+    },
     select: { openId: true, name: true },
   });
   const ownerByOpenId = new Map(owners.map((owner) => [owner.openId, owner]));
@@ -115,6 +136,15 @@ async function updateProjectLogged(
     if (!participant) throw new Error("参与人员不存在，请先同步飞书通讯录");
     return participant;
   });
+  const orderedStageOwners = parsed.stages.map((stage) =>
+    stage.ownerOpenIds.map((openId) => {
+      const owner = ownerByOpenId.get(openId);
+      if (!owner) {
+        throw new Error(`阶段「${stage.name}」负责人不存在，请先同步飞书通讯录`);
+      }
+      return owner;
+    }),
+  );
 
   const nextTeam = parsed.team ?? "";
   const nextTechGroup = parsed.techGroup ?? "";
@@ -153,12 +183,43 @@ async function updateProjectLogged(
       allowOwnerSelfApproval: parsed.allowOwnerSelfApproval,
     },
   });
+  project.stages.forEach((stage, index) => {
+    const nextStage = parsed.stages[index];
+    const nextOwners = orderedStageOwners[index] ?? [];
+    if (!nextStage) return;
+    if (stage.name !== nextStage.name) {
+      changes.push(`阶段名称：${stage.name} -> ${nextStage.name}`);
+    }
+    if (stage.goal !== nextStage.goal) {
+      changes.push(`阶段「${stage.name}」目标已修改`);
+    }
+    const oldOwnerNames = getProjectStageOwnerNames(stage);
+    const nextOwnerNames = nextOwners.map((owner) => owner.name).join("、");
+    if (oldOwnerNames !== nextOwnerNames) {
+      changes.push(
+        `阶段「${nextStage.name}」负责人：${oldOwnerNames || "未指定"} -> ${nextOwnerNames}`,
+      );
+    }
+  });
 
   if (changes.length === 0) {
+    await prisma.$transaction(async (tx) => {
+      await lockProjectForStageEdit(tx, project.id);
+      await assertStageEditVersions(tx, project.id, parsed.stages);
+      const currentProject = await tx.project.findUnique({
+        where: { id: project.id },
+        select: { updatedAt: true },
+      });
+      if (currentProject?.updatedAt.toISOString() !== parsed.expectedUpdatedAt) {
+        throw new Error("数据已被更新，请刷新后重试");
+      }
+    });
     return project;
   }
 
   const updated = await prisma.$transaction(async (tx) => {
+    await lockProjectForStageEdit(tx, project.id);
+    await assertStageEditVersions(tx, project.id, parsed.stages);
     const locked = await tx.project.updateMany({
       where: { id: project.id, updatedAt: new Date(parsed.expectedUpdatedAt) },
       data: {
@@ -203,6 +264,38 @@ async function updateProjectLogged(
       });
     }
 
+    for (const [index, stage] of project.stages.entries()) {
+      const nextStage = parsed.stages[index];
+      const nextOwners = orderedStageOwners[index] ?? [];
+      const primaryStageOwner = nextOwners[0];
+      if (!nextStage || !primaryStageOwner) throw new Error("请选择阶段负责人");
+      const stageLocked = await tx.projectStage.updateMany({
+        where: {
+          id: stage.id,
+          projectId: project.id,
+          updatedAt: new Date(nextStage.expectedUpdatedAt),
+        },
+        data: {
+          name: nextStage.name,
+          goal: nextStage.goal,
+          ownerOpenId: primaryStageOwner.openId,
+          ownerName: primaryStageOwner.name,
+        },
+      });
+      if (stageLocked.count !== 1) {
+        throw new Error("项目阶段已被更新，请刷新后重试");
+      }
+      await tx.projectStageOwner.deleteMany({ where: { stageId: stage.id } });
+      await tx.projectStageOwner.createMany({
+        data: nextOwners.map((owner, ownerIndex) => ({
+          stageId: stage.id,
+          openId: owner.openId,
+          name: owner.name,
+          sortOrder: ownerIndex,
+        })),
+      });
+    }
+
     const record = await tx.project.findUnique({ where: { id: project.id } });
     if (!record) throw new Error("项目不存在");
 
@@ -238,6 +331,15 @@ async function updateProjectLogged(
         ownerName: primaryOwner.name,
         owners: orderedOwners,
         participants: orderedParticipants,
+        stages: parsed.stages.map((stage, index) => {
+          const stageOwners = orderedStageOwners[index] ?? [];
+          return {
+            id: stage.id,
+            ownerOpenId: stageOwners[0]?.openId ?? "",
+            ownerName: stageOwners[0]?.name ?? "",
+            owners: stageOwners,
+          };
+        }),
       })),
     ]),
   ];
@@ -268,6 +370,35 @@ async function updateProjectLogged(
 
   revalidateProgress(project.id);
   return updated;
+}
+
+async function lockProjectForStageEdit(
+  tx: Prisma.TransactionClient,
+  projectId: string,
+) {
+  await tx.$queryRaw`SELECT "id" FROM "Project" WHERE "id" = ${projectId} FOR UPDATE`;
+}
+
+async function assertStageEditVersions(
+  tx: Prisma.TransactionClient,
+  projectId: string,
+  expectedStages: Array<{ id: string; expectedUpdatedAt: string }>,
+) {
+  const currentStages = await tx.projectStage.findMany({
+    where: { projectId },
+    orderBy: { sortOrder: "asc" },
+    select: { id: true, updatedAt: true },
+  });
+  if (
+    currentStages.length !== expectedStages.length ||
+    currentStages.some(
+      (stage, index) =>
+        stage.id !== expectedStages[index]?.id ||
+        stage.updatedAt.toISOString() !== expectedStages[index]?.expectedUpdatedAt,
+    )
+  ) {
+    throw new Error("项目阶段已被更新，请刷新后重试");
+  }
 }
 
 function buildProjectChangeSummary({

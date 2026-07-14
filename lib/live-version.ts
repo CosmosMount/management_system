@@ -90,6 +90,16 @@ async function projectStageVersion(
   return encodePart("stages", aggregate._max.updatedAt, count);
 }
 
+async function projectStageOwnerVersion(
+  where?: Prisma.ProjectStageOwnerWhereInput,
+): Promise<string> {
+  const [aggregate, count] = await Promise.all([
+    prisma.projectStageOwner.aggregate({ where, _max: { createdAt: true } }),
+    prisma.projectStageOwner.count({ where }),
+  ]);
+  return encodePart("stageOwners", aggregate._max.createdAt, count);
+}
+
 async function taskVersion(where?: Prisma.TaskWhereInput): Promise<string> {
   const [aggregate, count] = await Promise.all([
     prisma.task.aggregate({ where, _max: { updatedAt: true } }),
@@ -378,6 +388,9 @@ async function getProgressBoardVersion({
     projectStageVersion(
       stageIds.length > 0 ? { id: { in: stageIds } } : { id: "__none__" },
     ),
+    projectStageOwnerVersion(
+      stageIds.length > 0 ? { stageId: { in: stageIds } } : { id: "__none__" },
+    ),
     projectParticipantVersion(
       projectIds.length > 0 ? { projectId: { in: projectIds } } : { id: "__none__" },
     ),
@@ -548,7 +561,7 @@ async function getProgressProjectVersion(
     },
     include: {
       owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
-      stages: { select: { id: true, ownerOpenId: true } },
+      stages: { select: { id: true } },
       tasks: {
         where: { deletedAt: null },
         include: {
@@ -590,6 +603,11 @@ async function getProgressProjectVersion(
     projectStageVersion(
       visibleStageIdList.length > 0
         ? { id: { in: visibleStageIdList } }
+        : { id: "__none__" },
+    ),
+    projectStageOwnerVersion(
+      visibleStageIdList.length > 0
+        ? { stageId: { in: visibleStageIdList } }
         : { id: "__none__" },
     ),
     taskVersion(

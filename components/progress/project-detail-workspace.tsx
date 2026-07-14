@@ -168,6 +168,9 @@ export type StageView = {
   evidenceUrl: string;
   ownerOpenId: string;
   ownerName: string;
+  ownerOpenIds: string[];
+  ownerNames: string;
+  updatedAt: string;
   dueAt: string | null;
   completedAt: string | null;
   extensionCount: number;
@@ -458,7 +461,7 @@ export function ProjectDetailWorkspace({
     !!selectedStage &&
     (project.ownerOpenIds.includes(userOpenId) ||
       project.participantOpenIds.includes(userOpenId) ||
-      selectedStage.ownerOpenId === userOpenId ||
+      selectedStage.ownerOpenIds.includes(userOpenId) ||
       project.tasks.some((task) => task.assigneeOpenIds.includes(userOpenId)));
   const importableStages = useMemo(() => {
     if (canCreateTask) return project.stages;
@@ -468,7 +471,7 @@ export function ProjectDetailWorkspace({
       project.participantOpenIds.includes(userOpenId) ||
       project.tasks.some((task) => task.assigneeOpenIds.includes(userOpenId));
     return project.stages.filter(
-      (stage) => canRequestAnyStage || stage.ownerOpenId === userOpenId,
+      (stage) => canRequestAnyStage || stage.ownerOpenIds.includes(userOpenId),
     );
   }, [
     canCreateTask,
@@ -704,7 +707,8 @@ export function ProjectDetailWorkspace({
           <DialogHeader>
             <DialogTitle>编辑项目</DialogTitle>
             <DialogDescription>
-              本次只编辑项目基础信息；阶段结构保持不变。
+              可编辑项目基础信息及阶段名称、目标和负责人；阶段结构与 DDL
+              保持不变。
             </DialogDescription>
           </DialogHeader>
           <ProjectForm
@@ -720,6 +724,13 @@ export function ProjectDetailWorkspace({
               ownerOpenIds: project.ownerOpenIds,
               participantOpenIds: project.participantOpenIds,
               allowOwnerSelfApproval: project.allowOwnerSelfApproval,
+              stages: project.stages.map((stage) => ({
+                id: stage.id,
+                updatedAt: stage.updatedAt,
+                name: stage.name,
+                goal: stage.goal,
+                ownerOpenIds: stage.ownerOpenIds,
+              })),
             }}
             submitLabel="保存修改"
             onSaved={() => setProjectDialogOpen(false)}
@@ -1782,7 +1793,7 @@ function StageDetailPanel({
             <div className="mt-2 flex flex-wrap gap-2">
               <StageBadge stage={stage} />
               {stage.riskNote && <Badge variant="destructive">风险</Badge>}
-              <Badge variant="outline">负责人 {stage.ownerName || "未设置"}</Badge>
+              <Badge variant="outline">负责人 {stage.ownerNames || "未设置"}</Badge>
               <Badge variant="outline">
                 <CalendarClock className="h-3 w-3" />
                 DDL {stage.dueAt ? formatDateTime(stage.dueAt) : "未设置"}

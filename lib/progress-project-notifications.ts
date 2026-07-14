@@ -26,7 +26,11 @@ export async function collectProjectStageRiskNotificationRecipients(
     | "participants"
     | "followPreferences"
   >,
-  stage: { ownerOpenId: string },
+  stage: {
+    ownerOpenId: string;
+    ownerName: string;
+    owners?: Array<{ openId: string; name: string }>;
+  },
 ): Promise<string[]> {
   return collectProjectFollowers({
     ...project,

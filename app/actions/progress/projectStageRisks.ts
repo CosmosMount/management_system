@@ -15,6 +15,10 @@ import {
   getProjectOwnerOpenIds,
 } from "@/lib/progress-project-owners";
 import { getProjectParticipantOpenIds } from "@/lib/progress-project-participants";
+import {
+  getProjectStageOwnerNames,
+  getProjectStageOwnerOpenIds,
+} from "@/lib/progress-stage-owners";
 import { collectProjectStageRiskNotificationRecipients } from "@/lib/progress-project-notifications";
 import { getNotificationContext } from "@/lib/request-origin";
 import { revalidateProgress } from "@/lib/revalidate";
@@ -63,6 +67,7 @@ async function syncProjectStageRiskLogged(
   const stage = await prisma.projectStage.findUnique({
     where: { id: parsed.stageId },
     include: {
+      owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       project: {
         include: {
           owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
@@ -88,7 +93,7 @@ async function syncProjectStageRiskLogged(
       scope: { team: stage.project.team, techGroup: stage.project.techGroup },
       projectOwnerOpenIds,
       projectParticipantOpenIds,
-      stageOwnerOpenId: stage.ownerOpenId,
+      stageOwnerOpenId: getProjectStageOwnerOpenIds(stage),
       userOpenId: user.openId,
     })
   ) {
@@ -156,7 +161,7 @@ async function syncProjectStageRiskLogged(
         team: stage.project.team,
         techGroup: stage.project.techGroup,
         ownerNames: getProjectOwnerNames(stage.project),
-        stageOwnerName: stage.ownerName,
+        stageOwnerName: getProjectStageOwnerNames(stage),
         actorName: user.name,
         riskNote: parsed.content,
         recipientOpenIds,
@@ -206,6 +211,7 @@ async function resolveProjectStageRiskLogged(
     include: {
       stage: {
         include: {
+          owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
           project: {
             include: {
               owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
@@ -233,7 +239,7 @@ async function resolveProjectStageRiskLogged(
       scope: { team: stage.project.team, techGroup: stage.project.techGroup },
       projectOwnerOpenIds,
       projectParticipantOpenIds,
-      stageOwnerOpenId: stage.ownerOpenId,
+      stageOwnerOpenId: getProjectStageOwnerOpenIds(stage),
       userOpenId: user.openId,
     })
   ) {
