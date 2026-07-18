@@ -47,6 +47,7 @@ import type { OrderAttachmentGroups } from "@/lib/order-attachments";
 import {
   canConfirmReimbursement,
   canRequestApplicantResubmit,
+  canSupplementApplicantDocs,
   canUploadApplicantDocs,
   canUploadFinanceScreenshot,
   type OrderScope,
@@ -92,6 +93,11 @@ export function OrderReimbursementActions({
     userOpenId,
     initiatorOpenId,
   );
+  const showSupplement = canSupplementApplicantDocs(
+    status,
+    userOpenId,
+    initiatorOpenId,
+  );
   const showFinance = canUploadFinanceScreenshot(
     status,
     userRoles,
@@ -108,18 +114,25 @@ export function OrderReimbursementActions({
     initiatorOpenId,
   );
 
-  if (!showApplicant && !showFinance && !showFinanceResubmit && !showConfirm) {
+  if (
+    !showApplicant &&
+    !showSupplement &&
+    !showFinance &&
+    !showFinanceResubmit &&
+    !showConfirm
+  ) {
     return null;
   }
 
   return (
     <div className="flex flex-wrap gap-2">
-      {showApplicant && (
+      {(showApplicant || showSupplement) && (
         <div id="upload">
           <ApplicantDocsDialog
             orderId={orderId}
             items={items}
             savedInvoices={attachments.invoices}
+            mode={showApplicant ? "submit" : "supplement"}
             loading={loading}
             setLoading={setLoading}
             onDone={() => router.refresh()}
@@ -184,6 +197,7 @@ function ApplicantDocsDialog({
   orderId,
   items,
   savedInvoices,
+  mode,
   loading,
   setLoading,
   onDone,
@@ -195,6 +209,7 @@ function ApplicantDocsDialog({
   orderId: string;
   items: PurchaseLineItem[];
   savedInvoices: string[];
+  mode: "submit" | "supplement";
   loading: boolean;
   setLoading: (v: boolean) => void;
   onDone: () => void;
@@ -209,6 +224,26 @@ function ApplicantDocsDialog({
   );
   const hasSavedDocs =
     savedInvoices.length > 0 || items.some((item) => item.photoPath);
+  const isSupplement = mode === "supplement";
+  const triggerLabel = isSupplement
+    ? "修改凭证"
+    : hasSavedDocs
+      ? "修改凭证"
+      : "上传凭证";
+  const title = isSupplement
+    ? "修改 / 补充报销凭证"
+    : hasSavedDocs
+      ? "修改报销凭证"
+      : "上传报销凭证";
+  const description = isSupplement
+    ? "可增删整行、修改名称/规格/数量/价格，并补充发票；每项仅一张实物照片。不会重新走审批"
+    : hasSavedDocs
+      ? "可增删整行并修改物品条目；已有照片每项仅一张，选择新文件将替换"
+      : "可增删整行，核对明细后为每行上传一张实物照片；系统将自动生成 Word 验收清单";
+  const submitLabel = isSupplement ? "保存修改" : "提交给报销员";
+  const successMessage = isSupplement
+    ? "凭证已更新"
+    : "凭证已提交，验收清单已自动生成";
 
   function handleOpenChange(nextOpen: boolean) {
     setOpen(nextOpen);
@@ -216,6 +251,9 @@ function ApplicantDocsDialog({
     setConfirmedItems(
       items.map((item) => ({
         id: item.id,
+        name: item.name,
+        spec: item.spec,
+        quantity: item.quantity,
         lineTotal: Math.round(item.quantity * item.unitPrice * 100) / 100,
       })),
     );
@@ -228,8 +266,23 @@ function ApplicantDocsDialog({
     if (!form) return;
 
     if (confirmedItems.length === 0) {
-      toast.error("请确认采购明细价格");
+      toast.error("请至少保留一行采购明细");
       return;
+    }
+
+    for (const item of confirmedItems) {
+      if (!item.name.trim()) {
+        toast.error("物品名称不能为空");
+        return;
+      }
+      if (!item.spec.trim()) {
+        toast.error(`「${item.name || "未命名物品"}」规格不能为空`);
+        return;
+      }
+      if (!Number.isInteger(item.quantity) || item.quantity < 1) {
+        toast.error(`「${item.name}」数量至少为 1`);
+        return;
+      }
     }
 
     const invoiceInput = form.querySelector(
@@ -241,13 +294,15 @@ function ApplicantDocsDialog({
       return;
     }
 
-    for (const item of items) {
+    const existingById = new Map(items.map((item) => [item.id, item]));
+    for (const item of confirmedItems) {
+      const existing = existingById.get(item.id);
       const photoInput = form.querySelector(
         `input[name="photo-${item.id}"]`,
       ) as HTMLInputElement | null;
       const hasNewPhoto = (photoInput?.files?.length ?? 0) > 0;
-      if (!hasNewPhoto && !item.photoPath) {
-        toast.error(`请为「${item.name}」上传实物照片`);
+      if (!hasNewPhoto && !existing?.photoPath) {
+        toast.error(`请为「${item.name}」上传一张实物照片`);
         return;
       }
     }
@@ -258,7 +313,7 @@ function ApplicantDocsDialog({
       formData.set("orderId", orderId);
       formData.set("confirmedItems", JSON.stringify(confirmedItems));
       await uploadApplicantDocs(formData);
-      toast.success("凭证已提交，验收清单已自动生成");
+      toast.success(successMessage);
       setOpen(false);
       onDone();
     } catch (err) {
@@ -270,7 +325,7 @@ function ApplicantDocsDialog({
 
   async function handlePreview() {
     if (confirmedItems.length === 0) {
-      toast.error("请先确认采购明细价格");
+      toast.error("请先确认采购明细");
       return;
     }
     setLoading(true);
@@ -303,19 +358,17 @@ function ApplicantDocsDialog({
       <DialogTrigger
         render={
           <Button size="sm" variant="secondary">
-            {hasSavedDocs ? "修改凭证" : "上传凭证"}
+            {triggerLabel}
           </Button>
         }
       />
       <DialogContent className={procurementVoucherDialogContentClass}>
         <DialogHeader className={procurementDialogHeaderClass}>
           <DialogTitle className={procurementDialogTitleClass}>
-            {hasSavedDocs ? "修改报销凭证" : "上传报销凭证"}
+            {title}
           </DialogTitle>
           <DialogDescription className={procurementDialogDescriptionClass}>
-            {hasSavedDocs
-              ? "已保存的凭证会保留，只需修改需要调整的价格、照片或发票后重新提交"
-              : "核对采购明细价格，为每行上传实物照片；系统将按学校模板自动生成 Word 验收清单"}
+            {description}
           </DialogDescription>
         </DialogHeader>
         <form id={`applicant-docs-${orderId}`} className="w-fit max-w-full space-y-3">
@@ -333,11 +386,18 @@ function ApplicantDocsDialog({
             items={items}
             editable
             showPhotoUpload
+            allowRowEdit
             onChange={setConfirmedItems}
           />
           <div className="space-y-2">
             <Label htmlFor={`invoices-${orderId}`}>
-              发票（可多选{savedInvoices.length > 0 ? "，不选则保留已上传" : ""}）
+              发票（可多选
+              {savedInvoices.length > 0
+                ? isSupplement
+                  ? "，新增将追加到已上传发票后"
+                  : "，不选则保留已上传"
+                : ""}
+              ）
             </Label>
             {savedInvoices.length > 0 ? (
               <ul className="space-y-1 rounded-md border bg-muted/30 p-2">
@@ -362,7 +422,7 @@ function ApplicantDocsDialog({
               预览清单（不含照片）
             </Button>
             <Button type="button" disabled={loading} onClick={handleSubmit}>
-              提交给报销员
+              {submitLabel}
             </Button>
           </div>
         </form>

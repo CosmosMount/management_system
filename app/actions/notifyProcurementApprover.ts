@@ -52,9 +52,10 @@ export async function notifyProcurementApprover(
       session.user.openId,
       order.initiator.openId,
       userRoles,
+      { team: order.team, techGroup: order.techGroup },
     )
   ) {
-    return { ok: false, message: "当前状态不可催促审批人" };
+    return { ok: false, message: "当前状态不可催促处理人" };
   }
 
   const result = await sendManualProcurementApproverReminder({

@@ -350,7 +350,7 @@ export type ManualProcurementReminderResult =
   | { ok: true; message: string }
   | { ok: false; message: string };
 
-/** 采购人或超级管理员手动催促当前环节审批人 */
+/** 手动催促当前环节处理人（审批人，或待上传凭证环节的采购人） */
 export async function sendManualProcurementApproverReminder({
   orderId,
   actorName,
@@ -365,7 +365,7 @@ export async function sendManualProcurementApproverReminder({
   if (!(await reserveManualReminderSlot(orderId))) {
     return {
       ok: false,
-      message: "刚刚已经催促过当前审批人，请稍后再试",
+      message: "刚刚已经催促过当前处理人，请稍后再试",
     };
   }
 
@@ -381,12 +381,15 @@ export async function sendManualProcurementApproverReminder({
   const enrichedOrder = await enrichOrderCardPayloadFromDb(payload);
   const stuckDays = daysStuck(order.statusEnteredAt);
   const statusLabel = statusLabels[order.status];
+  const remindingApplicant = order.status === "PENDING_APPLICANT_DOCS";
   const extraLines = [
     `**催促人**：${actorName}`,
     ...(message ? [`**补充说明**：${message}`] : []),
     `**当前环节**：${statusLabel}`,
     ...(stuckDays > 0 ? [`**已停留**：${stuckDays} 天`] : []),
-    "**请尽快处理，避免影响报销进度**",
+    remindingApplicant
+      ? "**请尽快上传报销凭证，避免影响报销进度**"
+      : "**请尽快处理，避免影响报销进度**",
   ];
 
   const card = await buildReminderCard(enrichedOrder, context, {
@@ -394,16 +397,27 @@ export async function sendManualProcurementApproverReminder({
     extraLines,
   });
 
-  const deliveryCount = await deliverApproverReminderCard(
-    {
-      ...payload,
-      teamApproved: order.teamApproved,
-      techGroupApproved: order.techGroupApproved,
-    },
-    card,
-  );
+  const deliveryCount = remindingApplicant
+    ? await notifyInitiatorStale(
+        order.id,
+        card,
+        resolveProcurementBotKind(order.status),
+      )
+    : await deliverApproverReminderCard(
+        {
+          ...payload,
+          teamApproved: order.teamApproved,
+          techGroupApproved: order.techGroupApproved,
+        },
+        card,
+      );
   if (deliveryCount === 0) {
-    return { ok: false, message: "当前环节没有可催促的审批人" };
+    return {
+      ok: false,
+      message: remindingApplicant
+        ? "当前无法催促采购人，请稍后重试"
+        : "当前环节没有可催促的审批人",
+    };
   }
 
   if (order.status === "TEACHER_REVIEW") {
@@ -414,7 +428,10 @@ export async function sendManualProcurementApproverReminder({
     );
   }
 
-  return { ok: true, message: "已催促当前审批人" };
+  return {
+    ok: true,
+    message: remindingApplicant ? "已催促采购人上传凭证" : "已催促当前审批人",
+  };
 }
 
 async function deliverApproverReminderCard(

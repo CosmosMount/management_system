@@ -119,6 +119,7 @@ export default async function OrderDetailPage({ params, searchParams }: Props) {
     session?.user?.openId,
     order.initiator.openId,
     userRoles,
+    orderScope,
   );
   const currentHandler = canNotifyApprover
     ? (
@@ -186,6 +187,11 @@ export default async function OrderDetailPage({ params, searchParams }: Props) {
                     <ProcurementNotifyApproverButton
                       orderId={order.id}
                       currentHandler={currentHandler}
+                      targetLabel={
+                        order.status === "PENDING_APPLICANT_DOCS"
+                          ? "applicant"
+                          : "approver"
+                      }
                     />
                   ) : null}
                   <OrderReimbursementActions

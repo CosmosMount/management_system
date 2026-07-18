@@ -155,6 +155,19 @@ export function canUploadApplicantDocs(
   );
 }
 
+/** 报销审核/待确认阶段：采购人可修改凭证、补充发票，不推进也不回退状态 */
+export function canSupplementApplicantDocs(
+  status: OrderStatus,
+  userOpenId: string | undefined,
+  initiatorOpenId: string,
+): boolean {
+  return (
+    (status === "PENDING_FINANCE_REVIEW" ||
+      status === "PENDING_APPLICANT_CONFIRM") &&
+    isOrderInitiator(userOpenId, initiatorOpenId)
+  );
+}
+
 export function canUploadFinanceScreenshot(
   status: OrderStatus,
   userRoles: UserRoleRecord[],
@@ -179,13 +192,25 @@ export function canConfirmReimbursement(
   );
 }
 
-/** 采购人或超级管理员可催促当前环节审批人 */
+/**
+ * 催促当前环节处理人：
+ * - 管理/老师/报销审核：采购人或超级管理员催促审批人
+ * - 待上传凭证：报销员或超级管理员催促采购人
+ */
 export function canNotifyProcurementApprover(
   status: OrderStatus,
   userOpenId: string | undefined,
   initiatorOpenId: string,
   userRoles: UserRoleRecord[] = [],
+  order: OrderScope = { team: "", techGroup: "" },
 ): boolean {
+  if (status === "PENDING_APPLICANT_DOCS") {
+    if (isSuperAdmin(userRoles)) return true;
+    return userRoles.some(
+      (r) => r.role === "FINANCE" && r.team === order.team,
+    );
+  }
+
   const remindableStatuses: OrderStatus[] = [
     "MANAGEMENT_REVIEW",
     "TEACHER_REVIEW",

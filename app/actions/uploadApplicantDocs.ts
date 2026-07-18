@@ -29,7 +29,7 @@ import { serializeFilePaths, resolveInvoicePaths } from "@/lib/order-attachments
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { clearProcurementRejectionFields } from "@/lib/procurement-rejection";
 import { prisma } from "@/lib/prisma";
-import { canUploadApplicantDocs } from "@/lib/permissions";
+import { canSupplementApplicantDocs, canUploadApplicantDocs } from "@/lib/permissions";
 import {
   assertListSignaturesReady,
   resolveReimbursementListSignatures,
@@ -38,8 +38,22 @@ import { revalidateProcurement } from "@/lib/revalidate";
 
 const confirmedItemSchema = z.object({
   id: z.string(),
+  name: z.string().trim().min(1, "物品名称不能为空"),
+  spec: z.string().trim().min(1, "规格不能为空"),
+  quantity: z.coerce.number().int().min(1, "数量至少为 1"),
   lineTotal: z.number().min(0),
 });
+
+function canEditApplicantDocs(
+  status: OrderStatus,
+  userOpenId: string | undefined,
+  initiatorOpenId: string,
+): boolean {
+  return (
+    canUploadApplicantDocs(status, userOpenId, initiatorOpenId) ||
+    canSupplementApplicantDocs(status, userOpenId, initiatorOpenId)
+  );
+}
 
 export async function uploadApplicantDocs(formData: FormData) {
   const session = await auth();
@@ -58,11 +72,14 @@ export async function uploadApplicantDocs(formData: FormData) {
   try {
     const parsed = z.array(confirmedItemSchema).parse(JSON.parse(confirmedRaw));
     if (parsed.length === 0) {
-      throw new Error("请确认采购明细价格");
+      throw new Error("请确认采购明细");
     }
     confirmedItems = parsed;
-  } catch {
-    throw new Error("采购明细价格数据无效");
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      throw new Error(err.issues[0]?.message ?? "采购明细数据无效");
+    }
+    throw new Error("采购明细数据无效");
   }
 
   const order = await prisma.purchaseOrder.findUnique({
@@ -77,7 +94,7 @@ export async function uploadApplicantDocs(formData: FormData) {
   }
 
   if (
-    !canUploadApplicantDocs(
+    !canEditApplicantDocs(
       order.status,
       session.user.openId,
       order.initiator.openId,
@@ -86,15 +103,22 @@ export async function uploadApplicantDocs(formData: FormData) {
     throw new Error("无上传权限");
   }
 
-  if (order.items.length > MAX_REIMBURSEMENT_LIST_ROWS) {
+  const isInitialSubmit = order.status === OrderStatus.PENDING_APPLICANT_DOCS;
+
+  if (confirmedItems.length > MAX_REIMBURSEMENT_LIST_ROWS) {
     throw new Error(
-      `当前明细 ${order.items.length} 行，验收清单最多支持 ${MAX_REIMBURSEMENT_LIST_ROWS} 行`,
+      `当前明细 ${confirmedItems.length} 行，验收清单最多支持 ${MAX_REIMBURSEMENT_LIST_ROWS} 行`,
     );
+  }
+  if (confirmedItems.length === 0) {
+    throw new Error("请至少保留一行采购明细");
   }
 
   const orderItemIds = new Set(order.items.map((item) => item.id));
+  const confirmedIds = new Set(confirmedItems.map((item) => item.id));
   for (const item of confirmedItems) {
-    if (!orderItemIds.has(item.id)) {
+    const isNew = item.id.startsWith("new_");
+    if (!isNew && !orderItemIds.has(item.id)) {
       throw new Error("采购明细与订单不匹配");
     }
   }
@@ -114,18 +138,22 @@ export async function uploadApplicantDocs(formData: FormData) {
   }
 
   const itemMap = new Map(order.items.map((item) => [item.id, item]));
-  const photoPaths = new Map<string, string>();
+  const deletedItems = order.items.filter((item) => !confirmedIds.has(item.id));
+  /** client line id -> saved photo public path */
+  const photoByClientId = new Map<string, string>();
   const invoicePaths: string[] = [];
   const newlyUploadedPaths: string[] = [];
-  const replacedPhotoPaths: string[] = [];
+  const replacedPhotoPaths: string[] = [
+    ...deletedItems
+      .map((item) => item.photoPath)
+      .filter((path): path is string => !!path),
+  ];
   const previousListDocPath = order.listDocPath;
   let listDocPath = "";
   try {
     for (const confirmed of confirmedItems) {
       const dbItem = itemMap.get(confirmed.id);
-      if (!dbItem) {
-        throw new Error("采购明细与订单不匹配");
-      }
+      const isNew = confirmed.id.startsWith("new_");
       const photo = formData.get(`photo-${confirmed.id}`);
       if (photo instanceof File && photo.size > 0) {
         if (photo.size > MAX_FILE_SIZE) {
@@ -134,18 +162,21 @@ export async function uploadApplicantDocs(formData: FormData) {
         const saved = await saveUpload(
           orderId,
           photo,
-          `item-photo-${confirmed.id.slice(0, 8)}`,
+          `item-photo-${confirmed.id.slice(0, 12)}`,
           uploadTypeSets.itemPhoto,
         );
-        photoPaths.set(confirmed.id, saved);
+        photoByClientId.set(confirmed.id, saved);
         newlyUploadedPaths.push(saved);
-        if (dbItem.photoPath) {
+        if (dbItem?.photoPath) {
           replacedPhotoPaths.push(dbItem.photoPath);
         }
-      } else if (dbItem.photoPath) {
-        photoPaths.set(confirmed.id, dbItem.photoPath);
+      } else if (dbItem?.photoPath) {
+        photoByClientId.set(confirmed.id, dbItem.photoPath);
       } else {
-        throw new Error(`请为「${dbItem.name}」上传实物照片`);
+        throw new Error(`请为「${confirmed.name}」上传一张实物照片`);
+      }
+      if (isNew && !photoByClientId.has(confirmed.id)) {
+        throw new Error(`请为「${confirmed.name}」上传一张实物照片`);
       }
     }
 
@@ -162,14 +193,13 @@ export async function uploadApplicantDocs(formData: FormData) {
     const finalInvoicePaths = [...existingInvoices, ...invoicePaths];
 
     const docItems: ReimbursementDocItem[] = confirmedItems.map((confirmed) => {
-      const dbItem = itemMap.get(confirmed.id)!;
       const unitPrice =
-        dbItem.quantity > 0 ? confirmed.lineTotal / dbItem.quantity : 0;
-      const photoPath = photoPaths.get(confirmed.id);
+        confirmed.quantity > 0 ? confirmed.lineTotal / confirmed.quantity : 0;
+      const photoPath = photoByClientId.get(confirmed.id);
       return {
-        name: dbItem.name,
-        spec: dbItem.spec,
-        quantity: dbItem.quantity,
+        name: confirmed.name,
+        spec: confirmed.spec,
+        quantity: confirmed.quantity,
         unitPrice,
         lineTotal: confirmed.lineTotal,
         photoAbsolutePath: photoPath
@@ -198,17 +228,48 @@ export async function uploadApplicantDocs(formData: FormData) {
     newlyUploadedPaths.push(listDocPath);
 
     const totalPrice = confirmedItems.reduce((sum, c) => sum + c.lineTotal, 0);
-    const context = await getNotificationContext();
+    const context = isInitialSubmit ? await getNotificationContext() : null;
 
     await prisma.$transaction(async (tx) => {
+      if (deletedItems.length > 0) {
+        await tx.purchaseItem.deleteMany({
+          where: {
+            orderId,
+            id: { in: deletedItems.map((item) => item.id) },
+          },
+        });
+      }
+
       for (const confirmed of confirmedItems) {
-        const dbItem = itemMap.get(confirmed.id);
-        if (!dbItem || dbItem.quantity <= 0) continue;
+        const unitPrice =
+          confirmed.quantity > 0
+            ? confirmed.lineTotal / confirmed.quantity
+            : 0;
+        const photoPath = photoByClientId.get(confirmed.id) ?? null;
+        const isNew = confirmed.id.startsWith("new_");
+
+        if (isNew) {
+          await tx.purchaseItem.create({
+            data: {
+              orderId,
+              name: confirmed.name,
+              spec: confirmed.spec,
+              quantity: confirmed.quantity,
+              unitPrice,
+              photoPath,
+            },
+          });
+          continue;
+        }
+
         await tx.purchaseItem.update({
           where: { id: confirmed.id },
           data: {
-            unitPrice: confirmed.lineTotal / dbItem.quantity,
-            photoPath: photoPaths.get(confirmed.id) ?? null,
+            name: confirmed.name,
+            spec: confirmed.spec,
+            quantity: confirmed.quantity,
+            unitPrice,
+            photoPath,
           },
         });
       }
@@ -220,14 +281,23 @@ export async function uploadApplicantDocs(formData: FormData) {
           invoicePaths: serializeFilePaths(finalInvoicePaths),
           invoicePath: finalInvoicePaths[0] ?? null,
           listDocPath,
-          status: OrderStatus.PENDING_FINANCE_REVIEW,
-          ...clearProcurementRejectionFields(),
-          ...stepTimerResetFields(),
+          ...(isInitialSubmit
+            ? {
+                status: OrderStatus.PENDING_FINANCE_REVIEW,
+                ...clearProcurementRejectionFields(),
+                ...stepTimerResetFields(),
+              }
+            : {}),
         },
       });
       if (locked.count !== 1) {
         throw new Error("订单状态已更新，请刷新后重试");
       }
+
+      if (!isInitialSubmit || !context) {
+        return;
+      }
+
       const record = await tx.purchaseOrder.findUniqueOrThrow({
         where: { id: orderId },
       });
@@ -268,20 +338,28 @@ export async function uploadApplicantDocs(formData: FormData) {
     );
     throw err;
   }
-  try {
-    drainNotificationOutboxSoon();
-  } catch (err) {
-    console.error("[procurement] drain notification outbox failed:", err);
+  if (isInitialSubmit) {
+    try {
+      drainNotificationOutboxSoon();
+    } catch (err) {
+      console.error("[procurement] drain notification outbox failed:", err);
+    }
   }
 
   revalidateProcurement(orderId);
-  return { id: orderId };
+  return { id: orderId, supplemented: !isInitialSubmit };
 }
 
 /** 提交前预览生成的验收清单（不落库） */
 export async function previewReimbursementListDoc(input: {
   orderId: string;
-  confirmedItems: { id: string; lineTotal: number }[];
+  confirmedItems: {
+    id: string;
+    name: string;
+    spec: string;
+    quantity: number;
+    lineTotal: number;
+  }[];
 }): Promise<{ fileName: string; base64: string }> {
   const session = await auth();
   if (!session?.user?.openId) {
@@ -298,7 +376,7 @@ export async function previewReimbursementListDoc(input: {
   if (!order) throw new Error("订单不存在");
 
   if (
-    !canUploadApplicantDocs(
+    !canEditApplicantDocs(
       order.status,
       session.user.openId,
       order.initiator.openId,
@@ -311,15 +389,17 @@ export async function previewReimbursementListDoc(input: {
   const docItems: ReimbursementDocItem[] = input.confirmedItems.map(
     (confirmed) => {
       const dbItem = itemMap.get(confirmed.id);
-      if (!dbItem) throw new Error("采购明细与订单不匹配");
+      const quantity =
+        confirmed.quantity > 0
+          ? confirmed.quantity
+          : (dbItem?.quantity ?? 1);
       return {
-        name: dbItem.name,
-        spec: dbItem.spec,
-        quantity: dbItem.quantity,
-        unitPrice:
-          dbItem.quantity > 0 ? confirmed.lineTotal / dbItem.quantity : 0,
+        name: confirmed.name || dbItem?.name || "未命名物品",
+        spec: confirmed.spec || dbItem?.spec || "",
+        quantity,
+        unitPrice: quantity > 0 ? confirmed.lineTotal / quantity : 0,
         lineTotal: confirmed.lineTotal,
-        photoAbsolutePath: dbItem.photoPath
+        photoAbsolutePath: dbItem?.photoPath
           ? publicPathToAbsolute(dbItem.photoPath)
           : null,
       };

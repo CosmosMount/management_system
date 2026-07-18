@@ -20,16 +20,20 @@ import { getActionErrorMessage } from "@/lib/action-error-message";
 type Props = {
   orderId: string;
   currentHandler?: string;
+  /** 待上传凭证：催促采购人；其他环节：催促审批人 */
+  targetLabel?: "approver" | "applicant";
 };
 
 export function ProcurementNotifyApproverButton({
   orderId,
   currentHandler,
+  targetLabel = "approver",
 }: Props) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
+  const isApplicant = targetLabel === "applicant";
 
   async function handleSend() {
     setLoading(true);
@@ -64,9 +68,13 @@ export function ProcurementNotifyApproverButton({
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>催促当前审批人</DialogTitle>
+            <DialogTitle>
+              {isApplicant ? "催促采购人上传凭证" : "催促当前审批人"}
+            </DialogTitle>
             <DialogDescription>
-              系统将通过飞书私信提醒当前环节处理人。
+              {isApplicant
+                ? "系统将通过飞书私信提醒采购人尽快上传报销凭证。"
+                : "系统将通过飞书私信提醒当前环节处理人。"}
               {currentHandler ? `当前处理人：${currentHandler}` : ""}
             </DialogDescription>
           </DialogHeader>
