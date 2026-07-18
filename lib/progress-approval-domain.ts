@@ -42,6 +42,7 @@ export type ProgressApprovalStatus =
   | "PENDING"
   | "APPROVED"
   | "REJECTED"
+  | "WITHDRAWN"
   | "SUPERSEDED";
 
 export type ProgressApprovalReference = {
@@ -65,6 +66,7 @@ export type ProgressApprovalListItem = {
   processedAt: string | null;
   href: string;
   canRequestReminder: boolean;
+  canWithdraw: boolean;
 };
 
 export type ProgressApprovalCandidate = {
@@ -101,6 +103,7 @@ export const progressApprovalStatusLabels: Record<ProgressApprovalStatus, string
   PENDING: "待审批",
   APPROVED: "已通过",
   REJECTED: "已驳回",
+  WITHDRAWN: "已撤回",
   SUPERSEDED: "已失效",
 };
 
@@ -495,6 +498,8 @@ function toListItem(
     processedAt: approval.processedAt?.toISOString() ?? null,
     href: approval.href,
     canRequestReminder: canRequestProgressApprovalReminder({ approval, roles, userOpenId }),
+    canWithdraw:
+      approval.status === "PENDING" && approval.submitterOpenId === userOpenId,
   };
 }
 
@@ -502,9 +507,11 @@ function resolveProjectEstablishment(project: ProjectRow): ResolvedProgressAppro
   const status: ProgressApprovalStatus =
     project.status === "ESTABLISHING"
       ? "PENDING"
-      : project.status === "ESTABLISHMENT_REJECTED"
-        ? "REJECTED"
-        : "APPROVED";
+      : project.status === "ESTABLISHMENT_WITHDRAWN"
+        ? "WITHDRAWN"
+        : project.status === "ESTABLISHMENT_REJECTED"
+          ? "REJECTED"
+          : "APPROVED";
   return {
     reference: { kind: "PROJECT_ESTABLISHMENT", id: project.id },
     status,
@@ -514,7 +521,7 @@ function resolveProjectEstablishment(project: ProjectRow): ResolvedProgressAppro
     submitterOpenId: project.requesterOpenId,
     submitterName: project.requesterName,
     submittedAt: project.submittedAt ?? project.createdAt,
-    processedAt: project.reviewedAt,
+    processedAt: project.establishmentWithdrawnAt ?? project.reviewedAt,
     subject: project.name,
     summary: project.description || "项目立项申请",
     href: routes.progress.project(project.id),
@@ -528,11 +535,13 @@ function resolveStageSubmission(submission: StageSubmissionRow): ResolvedProgres
   const isCurrent = stage.currentSubmissionId === submission.id;
   const status = approval
     ? mapDecision(approval.decision)
-    : isCurrent &&
-        stage.status === "PENDING_ACCEPTANCE" &&
-        isProjectApprovalActive(stage.project.status)
-      ? "PENDING"
-      : "SUPERSEDED";
+    : submission.withdrawnAt
+      ? "WITHDRAWN"
+      : isCurrent &&
+          stage.status === "PENDING_ACCEPTANCE" &&
+          isProjectApprovalActive(stage.project.status)
+        ? "PENDING"
+        : "SUPERSEDED";
   return {
     reference: { kind: "STAGE_ACCEPTANCE", id: submission.id },
     status,
@@ -542,7 +551,7 @@ function resolveStageSubmission(submission: StageSubmissionRow): ResolvedProgres
     submitterOpenId: submission.submittedBy,
     submitterName: submission.submitterName,
     submittedAt: submission.submittedAt,
-    processedAt: approval?.createdAt ?? null,
+    processedAt: submission.withdrawnAt ?? approval?.createdAt ?? null,
     subject: stage.name,
     summary: submission.note || "阶段成果验收",
     href: routes.progress.projectStage(stage.project.id, stage.id),
@@ -556,12 +565,14 @@ function resolveTaskSubmission(submission: TaskSubmissionRow): ResolvedProgressA
   const isLatest = task.submissions[0]?.id === submission.id;
   const status = approval
     ? mapDecision(approval.decision)
-    : isLatest &&
-        task.status === "PENDING_ACCEPTANCE" &&
-        !task.deletedAt &&
-        isProjectApprovalActive(task.project.status)
-      ? "PENDING"
-      : "SUPERSEDED";
+    : submission.withdrawnAt
+      ? "WITHDRAWN"
+      : isLatest &&
+          task.status === "PENDING_ACCEPTANCE" &&
+          !task.deletedAt &&
+          isProjectApprovalActive(task.project.status)
+        ? "PENDING"
+        : "SUPERSEDED";
   return {
     reference: { kind: "TASK_ACCEPTANCE", id: submission.id },
     status,
@@ -571,7 +582,7 @@ function resolveTaskSubmission(submission: TaskSubmissionRow): ResolvedProgressA
     submitterOpenId: submission.submittedBy,
     submitterName: submission.submitterName,
     submittedAt: submission.submittedAt,
-    processedAt: approval?.createdAt ?? null,
+    processedAt: submission.withdrawnAt ?? approval?.createdAt ?? null,
     subject: task.title,
     summary: submission.note || "任务成果验收",
     href: task.deletedAt
@@ -595,7 +606,7 @@ function resolveProjectDdl(request: ProjectDdlRow): ResolvedProgressApproval {
     submitterOpenId: request.requesterOpenId,
     submitterName: request.requesterName,
     submittedAt: request.createdAt,
-    processedAt: request.reviewedAt,
+    processedAt: request.withdrawnAt ?? request.reviewedAt,
     subject: request.stage.name,
     summary: request.reason || `${progressApprovalKindLabels[kind]}申请`,
     href: routes.progress.projectStage(request.project.id, request.stage.id),
@@ -617,7 +628,7 @@ function resolveTaskCreation(request: TaskCreationRow): ResolvedProgressApproval
     submitterOpenId: request.requesterOpenId,
     submitterName: request.requesterName,
     submittedAt: request.createdAt,
-    processedAt: request.reviewedAt,
+    processedAt: request.withdrawnAt ?? request.reviewedAt,
     subject: draft?.title ?? "任务创建申请",
     summary: formatTaskCreationDraftSummary(draft),
     href: taskId ? routes.progress.task(taskId) : routes.progress.project(request.project.id),
@@ -637,7 +648,7 @@ function resolveTaskDeletion(request: TaskDeletionRow): ResolvedProgressApproval
     submitterOpenId: request.requesterOpenId,
     submitterName: request.requesterName,
     submittedAt: request.createdAt,
-    processedAt: request.reviewedAt,
+    processedAt: request.withdrawnAt ?? request.reviewedAt,
     subject: request.task.title,
     summary: request.reason || "任务删除申请",
     href: request.task.deletedAt
@@ -659,7 +670,7 @@ function resolveTaskDdl(request: TaskDdlRow): ResolvedProgressApproval {
     submitterOpenId: request.requesterOpenId,
     submitterName: request.requesterName,
     submittedAt: request.createdAt,
-    processedAt: request.reviewedAt,
+    processedAt: request.withdrawnAt ?? request.reviewedAt,
     subject: request.task.title,
     summary: request.reason || "任务 DDL 修改申请",
     href: request.task.deletedAt
@@ -710,6 +721,7 @@ function mapDecision(decision: string): ProgressApprovalStatus {
 
 function mapRequestStatus(status: string): ProgressApprovalStatus {
   if (status === "PENDING") return "PENDING";
+  if (status === "WITHDRAWN") return "WITHDRAWN";
   return status === "APPROVED" ? "APPROVED" : "REJECTED";
 }
 

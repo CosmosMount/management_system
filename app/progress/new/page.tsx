@@ -42,7 +42,9 @@ export default async function NewProjectPage({ searchParams }: Props) {
         where: {
           id: fromProject,
           requesterOpenId: userOpenId,
-          status: "ESTABLISHMENT_REJECTED",
+          status: {
+            in: ["ESTABLISHMENT_REJECTED", "ESTABLISHMENT_WITHDRAWN"],
+          },
         },
         include: {
           owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },

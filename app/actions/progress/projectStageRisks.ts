@@ -31,6 +31,7 @@ import { withActionLogging } from "@/lib/logger";
 const inactiveProjectStatuses = [
   "ESTABLISHING",
   "ESTABLISHMENT_REJECTED",
+  "ESTABLISHMENT_WITHDRAWN",
   "COMPLETED",
   "CANCELED",
 ] as const;

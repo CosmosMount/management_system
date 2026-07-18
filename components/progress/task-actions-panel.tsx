@@ -23,7 +23,9 @@ import {
 } from "@/app/actions/progress/submitWeeklyReport";
 import { updateTaskStatus, archiveTask } from "@/app/actions/progress/updateTask";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { RequestApprovalReminderButton } from "@/components/progress/request-approval-reminder-button";
+import { WithdrawProgressApprovalButton } from "@/components/progress/withdraw-progress-approval-button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -42,6 +44,7 @@ type Submission = {
   note: string;
   failureReason: string;
   submittedAt: string;
+  withdrawnAt: string | null;
   submitterName: string;
   approvals: {
     id: string;
@@ -148,7 +151,9 @@ export function TaskActionsPanel({
   const [weeklyErrors, setWeeklyErrors] = useState<WeeklyErrors>({});
 
   const pendingSubmission = submissions.find(
-    (s) => !s.approvals.some((a) => a.decision === "APPROVED"),
+    (s) =>
+      !s.withdrawnAt &&
+      !s.approvals.some((a) => a.decision === "APPROVED"),
   );
   const canStartTask = (isAssignee || canManage) && status === "TODO";
   const canArchiveTask = canManage && status === "COMPLETED";
@@ -628,14 +633,23 @@ export function TaskActionsPanel({
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
             <CardTitle>验收审批</CardTitle>
-            {(canRequestApprovalReminder ||
-              pendingSubmission.submittedBy === userOpenId) && (
-              <RequestApprovalReminderButton
-                reference={{ kind: "TASK_ACCEPTANCE", id: pendingSubmission.id }}
-                compact
-                subject="任务验收"
-              />
-            )}
+            <div className="flex flex-wrap gap-2">
+              {(canRequestApprovalReminder ||
+                pendingSubmission.submittedBy === userOpenId) && (
+                <RequestApprovalReminderButton
+                  reference={{ kind: "TASK_ACCEPTANCE", id: pendingSubmission.id }}
+                  compact
+                  subject="任务验收"
+                />
+              )}
+              {pendingSubmission.submittedBy === userOpenId && (
+                <WithdrawProgressApprovalButton
+                  reference={{ kind: "TASK_ACCEPTANCE", id: pendingSubmission.id }}
+                  compact
+                  subject="任务验收"
+                />
+              )}
+            </div>
           </CardHeader>
           <CardContent className="space-y-4">
             <p className="text-sm">
@@ -736,11 +750,20 @@ export function TaskActionsPanel({
           <Card>
             <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
               <CardTitle>验收审批</CardTitle>
-              <RequestApprovalReminderButton
-                reference={{ kind: "TASK_ACCEPTANCE", id: pendingSubmission.id }}
-                compact
-                subject="任务验收"
-              />
+              <div className="flex flex-wrap gap-2">
+                <RequestApprovalReminderButton
+                  reference={{ kind: "TASK_ACCEPTANCE", id: pendingSubmission.id }}
+                  compact
+                  subject="任务验收"
+                />
+                {pendingSubmission.submittedBy === userOpenId && (
+                  <WithdrawProgressApprovalButton
+                    reference={{ kind: "TASK_ACCEPTANCE", id: pendingSubmission.id }}
+                    compact
+                    subject="任务验收"
+                  />
+                )}
+              </div>
             </CardHeader>
             <CardContent className="text-sm text-muted-foreground">
               当前交付已提交，正在等待验收。
@@ -772,6 +795,11 @@ export function TaskActionsPanel({
                   {s.submitterName} ·{" "}
                   {new Date(s.submittedAt).toLocaleString("zh-CN")}
                 </span>
+                {s.withdrawnAt && (
+                  <Badge variant="outline" className="ml-2">
+                    已撤回
+                  </Badge>
+                )}
                 {s.keyDataUrl && (
                   <a
                     href={s.keyDataUrl}

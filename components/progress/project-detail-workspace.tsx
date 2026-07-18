@@ -70,6 +70,7 @@ import { ProjectForm } from "@/components/progress/project-form";
 import { RejectedProjectEstablishmentDeleteButton } from "@/components/progress/rejected-project-establishment-delete-button";
 import { ManualReminderButton } from "@/components/progress/manual-reminder-button";
 import { RequestApprovalReminderButton } from "@/components/progress/request-approval-reminder-button";
+import { WithdrawProgressApprovalButton } from "@/components/progress/withdraw-progress-approval-button";
 import { FollowToggleButton } from "@/components/progress/follow-toggle-button";
 import { ArchivedProjectDeleteButton } from "@/components/admin-delete-actions";
 import { TaskForm } from "@/components/progress/task-form";
@@ -195,6 +196,7 @@ export type StageSubmissionView = {
   submittedBy: string;
   submitterName: string;
   submittedAt: string;
+  withdrawnAt: string | null;
   canApprove: boolean;
   approvals: ApprovalView[];
 };
@@ -377,6 +379,7 @@ const ddlChangeStatusLabels: Record<ProjectDdlChangeRequestStatus, string> = {
   PENDING: "待审批",
   APPROVED: "已通过",
   REJECTED: "已驳回",
+  WITHDRAWN: "已撤回",
 };
 
 export function ProjectDetailWorkspace({
@@ -411,7 +414,8 @@ export function ProjectDetailWorkspace({
   const [taskImportDialogOpen, setTaskImportDialogOpen] = useState(false);
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
   const canDeleteRejectedEstablishment =
-    project.status === "ESTABLISHMENT_REJECTED" &&
+    (project.status === "ESTABLISHMENT_REJECTED" ||
+      project.status === "ESTABLISHMENT_WITHDRAWN") &&
     (isSuperAdmin || (!!userOpenId && project.requesterOpenId === userOpenId));
 
   const selectedStage =
@@ -520,8 +524,14 @@ export function ProjectDetailWorkspace({
         canRequestApprovalReminder={
           canRequestApprovalReminder || project.requesterOpenId === userOpenId
         }
+        canWithdrawEstablishment={
+          project.status === "ESTABLISHING" &&
+          !!userOpenId &&
+          project.requesterOpenId === userOpenId
+        }
         canResubmitEstablishment={
-          project.status === "ESTABLISHMENT_REJECTED" &&
+          (project.status === "ESTABLISHMENT_REJECTED" ||
+            project.status === "ESTABLISHMENT_WITHDRAWN") &&
           !!userOpenId &&
           project.requesterOpenId === userOpenId
         }
@@ -760,6 +770,7 @@ function ProjectOverview({
   canUpdateLifecycle,
   canReviewEstablishment,
   canRequestApprovalReminder,
+  canWithdrawEstablishment,
   canResubmitEstablishment,
   canDeleteRejectedEstablishment,
   canEdit,
@@ -777,6 +788,7 @@ function ProjectOverview({
   canUpdateLifecycle: boolean;
   canReviewEstablishment: boolean;
   canRequestApprovalReminder: boolean;
+  canWithdrawEstablishment: boolean;
   canResubmitEstablishment: boolean;
   canDeleteRejectedEstablishment: boolean;
   canEdit: boolean;
@@ -883,7 +895,8 @@ function ProjectOverview({
               value={`${completedStages} / ${project.stages.length} 阶段`}
             />
             {(project.status === "ESTABLISHING" ||
-              project.status === "ESTABLISHMENT_REJECTED") && (
+              project.status === "ESTABLISHMENT_REJECTED" ||
+              project.status === "ESTABLISHMENT_WITHDRAWN") && (
               <>
                 <OverviewItem
                   label="立项申请人"
@@ -907,6 +920,7 @@ function ProjectOverview({
           canUpdateLifecycle ||
           canReviewEstablishment ||
           (canRequestApprovalReminder && project.status === "ESTABLISHING") ||
+          canWithdrawEstablishment ||
           canResubmitEstablishment ||
           canDeleteRejectedEstablishment ||
           canRemind ||
@@ -920,6 +934,14 @@ function ProjectOverview({
               <RequestApprovalReminderButton
                 reference={{ kind: "PROJECT_ESTABLISHMENT", id: project.id }}
                 compact
+                subject={project.name}
+              />
+            )}
+            {canWithdrawEstablishment && (
+              <WithdrawProgressApprovalButton
+                reference={{ kind: "PROJECT_ESTABLISHMENT", id: project.id }}
+                compact
+                className={projectHeaderActionButtonClassName}
                 subject={project.name}
               />
             )}
@@ -1947,15 +1969,24 @@ function StageDetailPanel({
           <section className="rounded-md border bg-orange-50/50 p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-sm font-medium">阶段审核</h3>
-              {(canRequestApprovalReminder ||
-                stage.ownerOpenIds.includes(userOpenId ?? "") ||
-                pendingSubmission.submittedBy === userOpenId) && (
-                <RequestApprovalReminderButton
-                  reference={{ kind: "STAGE_ACCEPTANCE", id: pendingSubmission.id }}
-                  compact
-                  subject={stage.name}
-                />
-              )}
+              <div className="flex flex-wrap items-center gap-2">
+                {(canRequestApprovalReminder ||
+                  stage.ownerOpenIds.includes(userOpenId ?? "") ||
+                  pendingSubmission.submittedBy === userOpenId) && (
+                  <RequestApprovalReminderButton
+                    reference={{ kind: "STAGE_ACCEPTANCE", id: pendingSubmission.id }}
+                    compact
+                    subject={stage.name}
+                  />
+                )}
+                {pendingSubmission.submittedBy === userOpenId && (
+                  <WithdrawProgressApprovalButton
+                    reference={{ kind: "STAGE_ACCEPTANCE", id: pendingSubmission.id }}
+                    compact
+                    subject={stage.name}
+                  />
+                )}
+              </div>
             </div>
             <p className="mt-2 text-sm text-muted-foreground">
               提交人：{pendingSubmission.submitterName} ·{" "}
@@ -2014,6 +2045,9 @@ function StageDetailPanel({
                       {submission.submitterName} ·{" "}
                       {formatDateTime(submission.submittedAt)}
                     </span>
+                    {submission.withdrawnAt && (
+                      <Badge variant="outline">已撤回</Badge>
+                    )}
                   </div>
                   {submission.note && (
                     <p className="mt-1 text-muted-foreground">{submission.note}</p>
@@ -2570,6 +2604,7 @@ function PendingDdlChangeRequestPanel({
             canRequestApprovalReminder={
               canRequestApprovalReminder || request.requesterOpenId === userOpenId
             }
+            canWithdraw={request.requesterOpenId === userOpenId}
           />
         ))}
       </div>
@@ -2580,9 +2615,11 @@ function PendingDdlChangeRequestPanel({
 function PendingDdlChangeRequestCard({
   request,
   canRequestApprovalReminder,
+  canWithdraw,
 }: {
   request: DdlChangeRequestView;
   canRequestApprovalReminder: boolean;
+  canWithdraw: boolean;
 }) {
   const router = useRouter();
   const [comment, setComment] = useState("");
@@ -2637,6 +2674,19 @@ function PendingDdlChangeRequestCard({
           <Badge variant="secondary">{ddlChangeStatusLabels[request.status]}</Badge>
           {canRequestApprovalReminder && (
             <RequestApprovalReminderButton
+              reference={{
+                kind:
+                  request.type === "CASCADE_EXTENSION"
+                    ? "PROJECT_BATCH_DDL"
+                    : "PROJECT_STAGE_DDL",
+                id: request.id,
+              }}
+              compact
+              subject={`${request.stageName} DDL 变更`}
+            />
+          )}
+          {canWithdraw && (
+            <WithdrawProgressApprovalButton
               reference={{
                 kind:
                   request.type === "CASCADE_EXTENSION"
@@ -3077,7 +3127,9 @@ function TaskCreationRequestPanel({
                     ? "待审核"
                     : request.status === "APPROVED"
                       ? "已通过"
-                      : "已驳回"}
+                      : request.status === "WITHDRAWN"
+                        ? "已撤回"
+                        : "已驳回"}
                 </Badge>
               </div>
               {request.reviewComment && (
@@ -3108,6 +3160,14 @@ function TaskCreationRequestPanel({
                   (canRequestApprovalReminder ||
                     request.requesterOpenId === userOpenId) && (
                     <RequestApprovalReminderButton
+                      reference={{ kind: "TASK_CREATION", id: request.id }}
+                      compact
+                      subject={request.draft?.summary ?? "任务创建申请"}
+                    />
+                  )}
+                {request.status === "PENDING" &&
+                  request.requesterOpenId === userOpenId && (
+                    <WithdrawProgressApprovalButton
                       reference={{ kind: "TASK_CREATION", id: request.id }}
                       compact
                       subject={request.draft?.summary ?? "任务创建申请"}
@@ -3886,7 +3946,11 @@ function getProjectCompleteDisabledReason({
 }
 
 function getActivityType(action: string): ActivityFilter {
-  if (action.includes("approved") || action.includes("rejected")) return "REVIEW";
+  if (
+    action.includes("approved") ||
+    action.includes("rejected") ||
+    action === "approval.withdrawn"
+  ) return "REVIEW";
   if (action.startsWith("project.")) return "PROJECT";
   if (action.startsWith("stage.")) return "STAGE";
   if (action.startsWith("task.")) return "TASK";
@@ -3926,7 +3990,11 @@ function getActivityTargetLabel(
   if (action.startsWith("task.") && title) return `任务：${title}`;
 
   const approvalSubject = getPayloadString(payload.approvalSubject);
-  if (action === "approval.reminder_requested" && approvalSubject) {
+  if (
+    (action === "approval.reminder_requested" ||
+      action === "approval.withdrawn") &&
+    approvalSubject
+  ) {
     return `审批事项：${approvalSubject}`;
   }
 
@@ -3961,6 +4029,7 @@ function activityLabel(action: string): string {
     "project.stage_due_change_rejected": "驳回了阶段 DDL 修改",
     "project.reminded": "发送了项目催促提醒",
     "approval.reminder_requested": "请求了审批提醒",
+    "approval.withdrawn": "撤回了审批申请",
     "stage.evidence_submitted": "提交了阶段材料",
     "stage.approved": "通过了阶段审核",
     "stage.rejected": "驳回了阶段审核",

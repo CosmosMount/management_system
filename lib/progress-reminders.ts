@@ -803,6 +803,7 @@ async function findReminderTasks(
           notIn: [
             "ESTABLISHING",
             "ESTABLISHMENT_REJECTED",
+            "ESTABLISHMENT_WITHDRAWN",
             "COMPLETED",
             "CANCELED",
           ],

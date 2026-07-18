@@ -1,9 +1,12 @@
 import { expect, test } from "@playwright/test";
+import { ProjectStatus, TaskStatus } from "@prisma/client";
 import {
   canRequestProgressApprovalReminder,
   canUserApproveProgressApproval,
+  getMyProgressApprovalSubmissions,
   type ResolvedProgressApproval,
 } from "../lib/progress-approval-domain";
+import { prisma } from "../lib/prisma";
 
 function taskDeletionApproval(): ResolvedProgressApproval {
   return {
@@ -117,4 +120,87 @@ test("仅任务 DDL 允许附加技术组组长请求提醒", () => {
       userOpenId: "ou_extra_tech_lead",
     }),
   ).toBe(true);
+});
+
+test("统一审批列表将撤回状态映射为已撤回且只有待审批申请可撤回", async () => {
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const submitterOpenId = `ou_domain_withdraw_${suffix}`;
+  const project = await prisma.project.create({
+    data: {
+      name: `领域撤回状态项目-${suffix}`,
+      team: "测试车组",
+      techGroup: "测试技术组",
+      status: ProjectStatus.IN_PROGRESS,
+      ownerOpenId: submitterOpenId,
+      ownerName: "领域测试提交人",
+      owners: {
+        create: [{ openId: submitterOpenId, name: "领域测试提交人" }],
+      },
+    },
+  });
+
+  try {
+    const task = await prisma.task.create({
+      data: {
+        projectId: project.id,
+        title: `领域撤回状态任务-${suffix}`,
+        assigneeOpenId: submitterOpenId,
+        assigneeName: "领域测试提交人",
+        team: project.team,
+        techGroup: project.techGroup,
+        dueAt: new Date(Date.now() + 86_400_000),
+        status: TaskStatus.IN_PROGRESS,
+      },
+    });
+    const [pending, withdrawn] = await Promise.all([
+      prisma.taskDdlChangeRequest.create({
+        data: {
+          taskId: task.id,
+          requesterOpenId: submitterOpenId,
+          requesterName: "领域测试提交人",
+          oldDueAt: task.dueAt,
+          newDueAt: new Date(task.dueAt.getTime() + 86_400_000),
+          reason: "待审批状态映射",
+          status: "PENDING",
+          pendingKey: "PENDING",
+        },
+      }),
+      prisma.taskDdlChangeRequest.create({
+        data: {
+          taskId: task.id,
+          requesterOpenId: submitterOpenId,
+          requesterName: "领域测试提交人",
+          oldDueAt: task.dueAt,
+          newDueAt: new Date(task.dueAt.getTime() + 172_800_000),
+          reason: "已撤回状态映射",
+          status: "WITHDRAWN",
+          pendingKey: `WITHDRAWN:${suffix}`,
+          withdrawnAt: new Date(),
+          withdrawnByOpenId: submitterOpenId,
+          withdrawnByName: "领域测试提交人",
+        },
+      }),
+    ]);
+
+    const items = await getMyProgressApprovalSubmissions({
+      userOpenId: submitterOpenId,
+      roles: [],
+    });
+    const pendingItem = items.find((item) => item.reference.id === pending.id);
+    const withdrawnItem = items.find((item) => item.reference.id === withdrawn.id);
+
+    expect(pendingItem).toMatchObject({
+      status: "PENDING",
+      statusLabel: "待审批",
+      canWithdraw: true,
+    });
+    expect(withdrawnItem).toMatchObject({
+      status: "WITHDRAWN",
+      statusLabel: "已撤回",
+      canWithdraw: false,
+    });
+    expect(withdrawnItem?.processedAt).not.toBeNull();
+  } finally {
+    await prisma.project.delete({ where: { id: project.id } });
+  }
 });

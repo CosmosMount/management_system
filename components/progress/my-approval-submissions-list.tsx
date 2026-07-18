@@ -11,6 +11,7 @@ import {
   FilterX,
 } from "lucide-react";
 import { RequestApprovalReminderButton } from "@/components/progress/request-approval-reminder-button";
+import { WithdrawProgressApprovalButton } from "@/components/progress/withdraw-progress-approval-button";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -57,6 +58,7 @@ const statusOrder: ProgressApprovalStatus[] = [
   "PENDING",
   "APPROVED",
   "REJECTED",
+  "WITHDRAWN",
   "SUPERSEDED",
 ];
 
@@ -322,6 +324,13 @@ export function MyApprovalSubmissionsList({ items }: Props) {
                             subject={`${item.kindLabel}：${item.subject}`}
                           />
                         ) : null}
+                        {item.canWithdraw && item.status === "PENDING" ? (
+                          <WithdrawProgressApprovalButton
+                            reference={item.reference}
+                            compact
+                            subject={`${item.kindLabel}：${item.subject}`}
+                          />
+                        ) : null}
                         <Link
                           href={item.href}
                           className={buttonVariants({ size: "sm" })}
@@ -518,6 +527,7 @@ function statusLabel(status: ProgressApprovalStatus): string {
   if (status === "PENDING") return "待审批";
   if (status === "APPROVED") return "已通过";
   if (status === "REJECTED") return "已驳回";
+  if (status === "WITHDRAWN") return "已撤回";
   return "已失效";
 }
 

@@ -81,6 +81,40 @@ test("审批提醒使用审批机器人并发送完整中文卡片", async () =>
   );
 });
 
+test("审批撤回使用审批机器人并发送完整中文卡片", async () => {
+  const eventKey = `playwright:progress-notify:approval_withdrawn:${Date.now()}`;
+  const payload: ProgressNotifyPayload = {
+    type: "approval_withdrawn",
+    approvalKindLabel: "阶段验收",
+    projectName: "PW通知-审批撤回项目",
+    subject: "结构设计阶段",
+    submitterName: "李棋轩",
+    withdrawnAt: "2026-07-18T03:30:00.000Z",
+    recipientOpenIds: ["ou_approval_withdrawn"],
+    linkPath: "/progress/pw-approval-withdrawn?stage=pw-stage",
+  };
+
+  const captured = await enqueueAndDrainProgressNotification(eventKey, payload);
+
+  expect(resolveProgressBotKind(payload.type)).toBe("approval");
+  expect(captured).toHaveLength(1);
+  expect(captured[0]?.title).toBe("审批已撤回");
+  expect(captured[0]?.cardText).toContain("审批类型");
+  expect(captured[0]?.cardText).toContain("阶段验收");
+  expect(captured[0]?.cardText).toContain("PW通知-审批撤回项目");
+  expect(captured[0]?.cardText).toContain("审批事项");
+  expect(captured[0]?.cardText).toContain("结构设计阶段");
+  expect(captured[0]?.cardText).toContain("提交人");
+  expect(captured[0]?.cardText).toContain("撤回时间");
+  expect(captured[0]?.cardText).toContain("查看详情");
+  expect(captured[0]?.cardText).toContain(
+    "http://127.0.0.1:3002/progress/pw-approval-withdrawn?stage=pw-stage",
+  );
+  expect(captured[0]?.cardText).not.toMatch(
+    /approval_withdrawn|STAGE_ACCEPTANCE|WITHDRAWN/,
+  );
+});
+
 test("项目立项通知发送给审批人并使用明确中文", async () => {
   const eventKey = `playwright:progress-notify:project_establishment_requested:${Date.now()}`;
   const payload: ProgressNotifyPayload = {

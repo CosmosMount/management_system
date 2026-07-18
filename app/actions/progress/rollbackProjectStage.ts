@@ -96,6 +96,9 @@ async function rollbackProjectStageLogged(
     if (project.status === "ESTABLISHMENT_REJECTED") {
       throw new Error("项目立项已驳回，无法回退");
     }
+    if (project.status === "ESTABLISHMENT_WITHDRAWN") {
+      throw new Error("项目立项已撤回，无法回退");
+    }
     if (project.status === "NOT_STARTED") {
       throw new Error("项目尚未启动，无法回退");
     }

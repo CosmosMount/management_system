@@ -118,6 +118,7 @@ async function submitWeeklyReportLogged(
             notIn: [
               "ESTABLISHING",
               "ESTABLISHMENT_REJECTED",
+              "ESTABLISHMENT_WITHDRAWN",
               "COMPLETED",
               "CANCELED",
             ],
@@ -255,6 +256,7 @@ async function syncTaskRiskLogged(
             notIn: [
               "ESTABLISHING",
               "ESTABLISHMENT_REJECTED",
+              "ESTABLISHMENT_WITHDRAWN",
               "COMPLETED",
               "CANCELED",
             ],
@@ -420,6 +422,7 @@ async function resolveTaskRiskLogged(
             notIn: [
               "ESTABLISHING",
               "ESTABLISHMENT_REJECTED",
+              "ESTABLISHMENT_WITHDRAWN",
               "COMPLETED",
               "CANCELED",
             ],

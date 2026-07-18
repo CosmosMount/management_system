@@ -8,6 +8,7 @@ import { CheckCircle2, Clock3, FileText, PencilLine, XCircle } from "lucide-reac
 import { reviewProjectEstablishment } from "@/app/actions/progress/createProject";
 import { RejectedProjectEstablishmentDeleteButton } from "@/components/progress/rejected-project-establishment-delete-button";
 import { RequestApprovalReminderButton } from "@/components/progress/request-approval-reminder-button";
+import { WithdrawProgressApprovalButton } from "@/components/progress/withdraw-progress-approval-button";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -31,7 +32,10 @@ import { cn } from "@/lib/utils";
 
 export type ProjectEstablishmentView = {
   id: string;
-  status: "ESTABLISHING" | "ESTABLISHMENT_REJECTED";
+  status:
+    | "ESTABLISHING"
+    | "ESTABLISHMENT_REJECTED"
+    | "ESTABLISHMENT_WITHDRAWN";
   requesterName: string;
   projectName: string;
   team: string;
@@ -54,6 +58,7 @@ export type ProjectEstablishmentView = {
   canReview: boolean;
   canDelete: boolean;
   canRequestApprovalReminder: boolean;
+  canWithdraw: boolean;
 };
 
 type Props = {
@@ -114,6 +119,8 @@ export function ProjectEstablishmentPanel({ projects }: Props) {
                 project.status === "ESTABLISHING" && "border-amber-200 bg-amber-50/50",
                 project.status === "ESTABLISHMENT_REJECTED" &&
                   "border-red-200 bg-red-50/40",
+                project.status === "ESTABLISHMENT_WITHDRAWN" &&
+                  "border-border bg-muted/30",
               )}
             >
               <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -173,7 +180,8 @@ export function ProjectEstablishmentPanel({ projects }: Props) {
                       修改后重新提交
                     </Link>
                   )}
-                  {project.status === "ESTABLISHMENT_REJECTED" && (
+                  {(project.status === "ESTABLISHMENT_REJECTED" ||
+                    project.status === "ESTABLISHMENT_WITHDRAWN") && (
                     <RejectedProjectEstablishmentDeleteButton
                       projectId={project.id}
                       canDelete={project.canDelete}
@@ -213,6 +221,13 @@ export function ProjectEstablishmentPanel({ projects }: Props) {
                         subject={project.projectName}
                       />
                     )}
+                  {project.canWithdraw && project.status === "ESTABLISHING" && (
+                    <WithdrawProgressApprovalButton
+                      reference={{ kind: "PROJECT_ESTABLISHMENT", id: project.id }}
+                      className={establishmentActionButtonClassName}
+                      subject={project.projectName}
+                    />
+                  )}
                 </div>
               </div>
               {project.canReview && project.status === "ESTABLISHING" && (

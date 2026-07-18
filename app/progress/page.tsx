@@ -82,7 +82,8 @@ export default async function ProgressHomePage({ searchParams }: Props) {
             status: {
               notIn: [
                 "ESTABLISHING",
-                "ESTABLISHMENT_REJECTED",
+              "ESTABLISHMENT_REJECTED",
+              "ESTABLISHMENT_WITHDRAWN",
                 "COMPLETED",
                 "CANCELED",
               ],
@@ -252,11 +253,18 @@ async function getProjectEstablishmentViews(
   ];
   if (canViewRejectedDrafts) {
     visibilityWhere.push({ status: "ESTABLISHMENT_REJECTED" });
+    visibilityWhere.push({ status: "ESTABLISHMENT_WITHDRAWN" });
   }
   const projects = await prisma.project.findMany({
     where: {
       OR: visibilityWhere,
-      status: { in: ["ESTABLISHING", "ESTABLISHMENT_REJECTED"] },
+      status: {
+        in: [
+          "ESTABLISHING",
+          "ESTABLISHMENT_REJECTED",
+          "ESTABLISHMENT_WITHDRAWN",
+        ],
+      },
     },
     include: {
       owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
@@ -294,7 +302,8 @@ async function getProjectEstablishmentViews(
           isTeamLead(roles, project.team) ||
           isTechGroupLead(roles, project.techGroup));
       const canDelete =
-        project.status === "ESTABLISHMENT_REJECTED" &&
+        (project.status === "ESTABLISHMENT_REJECTED" ||
+          project.status === "ESTABLISHMENT_WITHDRAWN") &&
         (isMine || isProgressSuperAdmin(roles));
       if (!canReview && !isMine && !canDelete && !canRequestApprovalReminder) {
         return null;
@@ -305,7 +314,9 @@ async function getProjectEstablishmentViews(
         status:
           project.status === "ESTABLISHMENT_REJECTED"
             ? "ESTABLISHMENT_REJECTED"
-            : "ESTABLISHING",
+            : project.status === "ESTABLISHMENT_WITHDRAWN"
+              ? "ESTABLISHMENT_WITHDRAWN"
+              : "ESTABLISHING",
         requesterName: project.requesterName,
         projectName: project.name,
         team: scope.team,
@@ -333,10 +344,14 @@ async function getProjectEstablishmentViews(
         reviewerName: project.reviewerName,
         reviewComment: project.reviewComment,
         reviewedAt: project.reviewedAt?.toISOString() ?? null,
-        canResubmit: project.status === "ESTABLISHMENT_REJECTED" && isMine,
+        canResubmit:
+          (project.status === "ESTABLISHMENT_REJECTED" ||
+            project.status === "ESTABLISHMENT_WITHDRAWN") &&
+          isMine,
         canReview,
         canDelete,
         canRequestApprovalReminder,
+        canWithdraw: project.status === "ESTABLISHING" && isMine,
       };
     })
     .filter((project): project is ProjectEstablishmentView => !!project)

@@ -187,7 +187,7 @@ async function resubmitProjectEstablishmentLogged(
     where: {
       id: parsedResubmit.projectId,
       requesterOpenId: user.openId,
-      status: "ESTABLISHMENT_REJECTED",
+      status: { in: ["ESTABLISHMENT_REJECTED", "ESTABLISHMENT_WITHDRAWN"] },
     },
     include: {
       tasks: { where: { deletedAt: null }, select: { id: true } },
@@ -195,7 +195,7 @@ async function resubmitProjectEstablishmentLogged(
     },
   });
   if (!existingProject) {
-    throw new Error("只能修改并重提自己已驳回的立项");
+    throw new Error("只能修改并重提自己已驳回或已撤回的立项");
   }
   if (existingProject.tasks.length > 0) {
     throw new Error("该项目已有任务，不能作为立项草案重提");
@@ -235,7 +235,7 @@ async function resubmitProjectEstablishmentLogged(
       where: {
         id: existingProject.id,
         requesterOpenId: user.openId,
-        status: "ESTABLISHMENT_REJECTED",
+        status: { in: ["ESTABLISHMENT_REJECTED", "ESTABLISHMENT_WITHDRAWN"] },
       },
       data: {
         name: resolution.parsed.name,
@@ -253,6 +253,9 @@ async function resubmitProjectEstablishmentLogged(
         reviewerName: "",
         reviewComment: "",
         reviewedAt: null,
+        establishmentWithdrawnAt: null,
+        establishmentWithdrawnByOpenId: "",
+        establishmentWithdrawnByName: "",
         allowOwnerSelfApproval: resolution.parsed.allowOwnerSelfApproval,
         archivedAt: null,
         completedAt: null,
@@ -596,8 +599,11 @@ async function deleteRejectedProjectEstablishmentLogged(
   if (!project) {
     throw new Error("立项项目不存在");
   }
-  if (project.status !== "ESTABLISHMENT_REJECTED") {
-    throw new Error("仅可删除已驳回的立项项目");
+  if (
+    project.status !== "ESTABLISHMENT_REJECTED" &&
+    project.status !== "ESTABLISHMENT_WITHDRAWN"
+  ) {
+    throw new Error("仅可删除已驳回或已撤回的立项项目");
   }
   if (
     project.requesterOpenId !== user.openId &&
@@ -609,7 +615,17 @@ async function deleteRejectedProjectEstablishmentLogged(
     throw new Error("该项目已有任务，不能作为立项草案删除");
   }
 
-  await prisma.project.delete({ where: { id: project.id } });
+  const deleted = await prisma.project.deleteMany({
+    where: {
+      id: project.id,
+      status: { in: ["ESTABLISHMENT_REJECTED", "ESTABLISHMENT_WITHDRAWN"] },
+      ...(isProgressSuperAdmin(roles) ? {} : { requesterOpenId: user.openId }),
+      tasks: { none: {} },
+    },
+  });
+  if (deleted.count !== 1) {
+    throw new Error("立项状态已更新，请刷新后重试");
+  }
   revalidateProgress(project.id);
   return { success: true };
 }

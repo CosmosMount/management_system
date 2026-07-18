@@ -301,6 +301,7 @@ async function reviewTaskDdlChangeLogged(
               notIn: [
                 "ESTABLISHING",
                 "ESTABLISHMENT_REJECTED",
+                "ESTABLISHMENT_WITHDRAWN",
                 "COMPLETED",
                 "CANCELED",
               ],

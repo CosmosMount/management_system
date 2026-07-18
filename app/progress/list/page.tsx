@@ -77,6 +77,7 @@ export default async function ProgressListPage({ searchParams }: Props) {
             notIn: [
               "ESTABLISHING",
               "ESTABLISHMENT_REJECTED",
+              "ESTABLISHMENT_WITHDRAWN",
               "COMPLETED",
               "CANCELED",
             ],

@@ -59,6 +59,7 @@ const EXPLICIT_RECIPIENT_REQUIRED_TYPES = new Set<string>([
   "weekly_report_reminder",
   "progress_daily_summary",
   "approval_reminder_requested",
+  "approval_withdrawn",
 ]);
 
 type TaskNotificationDetails = {
@@ -629,6 +630,16 @@ export type ProgressNotifyPayload =
       submitterName: string;
       reminderName: string;
       submittedAt: string;
+      recipientOpenIds: string[];
+      linkPath: string;
+    }
+  | {
+      type: "approval_withdrawn";
+      approvalKindLabel: string;
+      projectName: string;
+      subject: string;
+      submitterName: string;
+      withdrawnAt: string;
       recipientOpenIds: string[];
       linkPath: string;
     }
@@ -1702,6 +1713,24 @@ export async function sendProgressNotification(
         approvalUrl,
         "orange",
         [{ text: "查看审批", url: approvalUrl, type: "primary" }],
+      );
+      await notifyOpenIds(payload.recipientOpenIds, card);
+      break;
+    }
+    case "approval_withdrawn": {
+      const detailUrl = buildAppUrl(payload.linkPath, appOrigin);
+      const card = buildCard(
+        "审批已撤回",
+        [
+          `**审批类型**：${payload.approvalKindLabel}`,
+          `**项目**：${payload.projectName}`,
+          `**审批事项**：${payload.subject}`,
+          `**提交人**：${payload.submitterName}`,
+          `**撤回时间**：${formatNotificationDateTime(payload.withdrawnAt)}`,
+        ].join("\n"),
+        detailUrl,
+        "orange",
+        [{ text: "查看详情", url: detailUrl, type: "primary" }],
       );
       await notifyOpenIds(payload.recipientOpenIds, card);
       break;

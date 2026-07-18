@@ -213,6 +213,271 @@ test("提交人可选择有权审批人员发送提醒且冷却阻止重复投�
   expect(deliveriesAfterSecond).toBe(1);
 });
 
+test("提交人可从我的申请撤回八类审批且各业务状态正确回退", async ({
+  page,
+  context,
+  baseURL,
+}, testInfo) => {
+  await loginAsNormalUser(context, baseURL, normalAuth);
+  const startedAt = new Date();
+  const staleReminderEventKey = `playwright:withdrawal:stale-reminder:${Date.now()}`;
+  const staleReminder = await prisma.notificationOutbox.create({
+    data: {
+      eventKey: staleReminderEventKey,
+      channel: "progress",
+      botKind: "approval",
+      type: "approval_reminder_requested",
+      payload: "{}",
+      recipients: { create: { openId: fixtures.adminOpenId } },
+    },
+  });
+  const failedReminderEventKey = `${staleReminderEventKey}:failed`;
+  const failedReminder = await prisma.notificationOutbox.create({
+    data: {
+      eventKey: failedReminderEventKey,
+      channel: "progress",
+      botKind: "approval",
+      type: "approval_reminder_requested",
+      payload: "{}",
+      status: "FAILED",
+      attempts: 1,
+      lastError: "模拟可重试失败",
+      recipients: {
+        create: {
+          openId: fixtures.adminOpenId,
+          status: "FAILED",
+          attempts: 1,
+          lastError: "模拟可重试失败",
+        },
+      },
+    },
+  });
+  const processingReminderEventKey = `${staleReminderEventKey}:processing`;
+  const processingReminder = await prisma.notificationOutbox.create({
+    data: {
+      eventKey: processingReminderEventKey,
+      channel: "progress",
+      botKind: "approval",
+      type: "approval_reminder_requested",
+      payload: "{}",
+      status: "PROCESSING",
+      attempts: 1,
+      lockedUntil: new Date(Date.now() - 1_000),
+      recipients: {
+        create: {
+          openId: fixtures.adminOpenId,
+          status: "PROCESSING",
+          attempts: 1,
+          lockedUntil: new Date(Date.now() - 1_000),
+        },
+      },
+    },
+  });
+  await prisma.progressApprovalReminderDelivery.createMany({
+    data: [
+      staleReminderEventKey,
+      failedReminderEventKey,
+      processingReminderEventKey,
+    ].map(
+      (outboxEventKey, index) => ({
+        approvalKind: "TASK_DDL" as const,
+        approvalId: seeded.taskDdlRequestId,
+        batchId: `withdrawal-stale-${Date.now()}-${index}`,
+        projectId: seeded.approvalProjectId,
+        taskId: seeded.taskDdlId,
+        remindedByOpenId: fixtures.normalOpenId,
+        remindedByName: "李棋轩",
+        recipientOpenId: fixtures.adminOpenId,
+        recipientName: "Playwright 管理员",
+        outboxEventKey,
+      }),
+    ),
+  });
+
+  const approvals = [
+    {
+      kind: "PROJECT_ESTABLISHMENT",
+      label: "项目立项",
+      subject: seeded.establishmentProjectName,
+    },
+    { kind: "STAGE_ACCEPTANCE", label: "阶段验收", subject: seeded.stageApprovalName },
+    {
+      kind: "PROJECT_BATCH_DDL",
+      label: "项目批量 DDL",
+      subject: seeded.batchDdlStageName,
+    },
+    {
+      kind: "PROJECT_STAGE_DDL",
+      label: "项目单阶段 DDL",
+      subject: seeded.singleDdlStageName,
+    },
+    { kind: "TASK_CREATION", label: "任务创建", subject: seeded.taskCreationTitle },
+    { kind: "TASK_DELETION", label: "任务删除", subject: seeded.taskDeletionTitle },
+    { kind: "TASK_DDL", label: "任务 DDL", subject: seeded.taskDdlTitle },
+    { kind: "TASK_ACCEPTANCE", label: "任务验收", subject: seeded.taskAcceptanceTitle },
+  ] as const;
+
+  for (const approval of approvals) {
+    await page.goto(
+      `/progress/approvals?view=submitted&type=${approval.kind}&status=PENDING`,
+      { waitUntil: "networkidle" },
+    );
+    const row = page.getByRole("listitem").filter({ hasText: approval.subject });
+    await expect(row).toHaveCount(1);
+    await expect(row.getByRole("button", { name: "撤回审批" })).toBeVisible();
+    await row.getByRole("button", { name: "撤回审批" }).click();
+    await expect(page.getByRole("heading", { name: "确认撤回审批申请" })).toBeVisible();
+    if (approval.kind === "PROJECT_ESTABLISHMENT") {
+      await page.screenshot({
+        path: testInfo.outputPath("approval-withdrawal-dialog.png"),
+        fullPage: true,
+      });
+    }
+    await page.getByRole("button", { name: "确认撤回" }).click();
+    await expect(page.getByText("审批申请已撤回")).toBeVisible();
+    await expect(row).toHaveCount(0);
+  }
+
+  const [
+    establishment,
+    stage,
+    stageSubmission,
+    batchDdl,
+    singleDdl,
+    taskCreation,
+    taskDeletion,
+    taskDdl,
+    taskAcceptance,
+    taskSubmission,
+  ] = await Promise.all([
+    prisma.project.findUniqueOrThrow({
+      where: { id: seeded.establishmentProjectId },
+      select: {
+        status: true,
+        establishmentWithdrawnAt: true,
+        establishmentWithdrawnByOpenId: true,
+      },
+    }),
+    prisma.projectStage.findUniqueOrThrow({
+      where: { id: seeded.stageApprovalId },
+      select: { status: true, currentSubmissionId: true },
+    }),
+    prisma.taskSubmission.findUniqueOrThrow({
+      where: { id: seeded.stageSubmissionId },
+      select: { withdrawnAt: true, withdrawnByOpenId: true },
+    }),
+    prisma.projectDdlChangeRequest.findUniqueOrThrow({
+      where: { id: seeded.batchDdlRequestId },
+      select: { status: true, pendingKey: true, withdrawnAt: true },
+    }),
+    prisma.projectDdlChangeRequest.findUniqueOrThrow({
+      where: { id: seeded.singleDdlRequestId },
+      select: { status: true, pendingKey: true, withdrawnAt: true },
+    }),
+    prisma.taskCreationRequest.findUniqueOrThrow({
+      where: { id: seeded.taskCreationRequestId },
+      select: { status: true, withdrawnAt: true },
+    }),
+    prisma.taskDeletionRequest.findUniqueOrThrow({
+      where: { id: seeded.taskDeletionRequestId },
+      select: { status: true, pendingKey: true, withdrawnAt: true },
+    }),
+    prisma.taskDdlChangeRequest.findUniqueOrThrow({
+      where: { id: seeded.taskDdlRequestId },
+      select: { status: true, pendingKey: true, withdrawnAt: true },
+    }),
+    prisma.task.findUniqueOrThrow({
+      where: { id: seeded.taskAcceptanceId },
+      select: { status: true },
+    }),
+    prisma.taskSubmission.findUniqueOrThrow({
+      where: { id: seeded.taskSubmissionId },
+      select: { withdrawnAt: true, withdrawnByOpenId: true },
+    }),
+  ]);
+
+  expect(establishment).toMatchObject({
+    status: "ESTABLISHMENT_WITHDRAWN",
+    establishmentWithdrawnByOpenId: fixtures.normalOpenId,
+  });
+  expect(establishment.establishmentWithdrawnAt).not.toBeNull();
+  expect(stage).toEqual({ status: "IN_PROGRESS", currentSubmissionId: null });
+  expect(stageSubmission).toMatchObject({ withdrawnByOpenId: fixtures.normalOpenId });
+  expect(stageSubmission.withdrawnAt).not.toBeNull();
+  for (const request of [batchDdl, singleDdl, taskDeletion, taskDdl]) {
+    expect(request.status).toBe("WITHDRAWN");
+    expect(request.pendingKey).toContain("WITHDRAWN:");
+    expect(request.withdrawnAt).not.toBeNull();
+  }
+  expect(taskCreation.status).toBe("WITHDRAWN");
+  expect(taskCreation.withdrawnAt).not.toBeNull();
+  expect(taskAcceptance.status).toBe("IN_PROGRESS");
+  expect(taskSubmission).toMatchObject({ withdrawnByOpenId: fixtures.normalOpenId });
+  expect(taskSubmission.withdrawnAt).not.toBeNull();
+
+  const [canceledReminders, withdrawalOutboxes, withdrawalActivities] =
+    await Promise.all([
+      prisma.notificationOutbox.findMany({
+        where: {
+          id: { in: [staleReminder.id, failedReminder.id, processingReminder.id] },
+        },
+        include: { recipients: true },
+      }),
+      prisma.notificationOutbox.findMany({
+        where: {
+          eventKey: { startsWith: "progress:approval_withdrawn:" },
+          createdAt: { gte: startedAt },
+        },
+      }),
+      prisma.progressActivityLog.findMany({
+        where: {
+          action: "approval.withdrawn",
+          actorOpenId: fixtures.normalOpenId,
+          createdAt: { gte: startedAt },
+        },
+      }),
+    ]);
+  expect(canceledReminders).toHaveLength(3);
+  for (const canceledReminder of canceledReminders) {
+    expect(canceledReminder).toMatchObject({ status: "FAILED", attempts: 8 });
+    expect(canceledReminder.lastError).toContain("审批已由提交人撤回");
+    expect(canceledReminder.nextRunAt.getUTCFullYear()).toBe(9999);
+    expect(canceledReminder.recipients).toHaveLength(1);
+    expect(canceledReminder.recipients[0]).toMatchObject({
+      status: "FAILED",
+      attempts: 8,
+      openId: fixtures.adminOpenId,
+    });
+  }
+  expect(withdrawalOutboxes).toHaveLength(8);
+  for (const outbox of withdrawalOutboxes) {
+    const envelope = JSON.parse(outbox.payload) as {
+      payload: { recipientOpenIds: string[] };
+    };
+    expect(outbox).toMatchObject({ botKind: "approval", type: "approval_withdrawn" });
+    expect(envelope.payload.recipientOpenIds).not.toContain(fixtures.normalOpenId);
+  }
+  expect(withdrawalActivities).toHaveLength(8);
+  for (const activity of withdrawalActivities) {
+    expect(activity.payload).toContain("approvalKindLabel");
+    expect(activity.payload).not.toMatch(/PROJECT_|TASK_|STAGE_ACCEPTANCE/);
+  }
+
+  await page.goto("/progress/approvals?view=submitted&status=WITHDRAWN", {
+    waitUntil: "networkidle",
+  });
+  const withdrawnList = page.getByRole("list", { name: "我的审批申请" });
+  for (const approval of approvals) {
+    const row = withdrawnList
+      .getByRole("listitem")
+      .filter({ has: page.getByText(approval.label, { exact: true }) })
+      .filter({ hasText: approval.subject });
+    await expect(row).toContainText("已撤回");
+    await expect(row.getByRole("button", { name: "撤回审批" })).toHaveCount(0);
+  }
+  await expectHealthyPage(page);
+});
+
 async function expectApprovalLink(page: Parameters<typeof expectHealthyPage>[0], testId: string, url: string) {
   await page.goto("/progress/approvals", { waitUntil: "networkidle" });
   await page.getByTestId(`progress-approval-link-${testId}`).click();

@@ -8,6 +8,7 @@ import {
 /** 项目允许的状态迁移（不可跳跃） */
 const PROJECT_TRANSITIONS: Record<ProjectStatus, ProjectStatus[]> = {
   ESTABLISHING: [],
+  ESTABLISHMENT_WITHDRAWN: [],
   ESTABLISHMENT_REJECTED: [],
   NOT_STARTED: ["IN_PROGRESS", "CANCELED"],
   IN_PROGRESS: ["COMPLETED", "CANCELED"],
@@ -135,6 +136,8 @@ export function getProjectStepperDisplay(status: ProjectStatus): {
     branchNote = "项目正在立项审批，通过后才能启动项目";
   } else if (status === "ESTABLISHMENT_REJECTED") {
     branchNote = "项目立项已驳回，可修改后重新提交";
+  } else if (status === "ESTABLISHMENT_WITHDRAWN") {
+    branchNote = "项目立项已撤回，可修改后重新提交";
   } else if (status === "NOT_STARTED") {
     branchNote = "项目尚未启动，请先启动项目";
   } else if (status === "CANCELED") {

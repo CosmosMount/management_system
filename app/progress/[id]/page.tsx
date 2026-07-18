@@ -331,6 +331,7 @@ export default async function ProjectDetailPage({ params }: Props) {
         submittedBy: submission.submittedBy,
         submitterName: submission.submitterName,
         submittedAt: submission.submittedAt.toISOString(),
+        withdrawnAt: submission.withdrawnAt?.toISOString() ?? null,
         canApprove: canApproveStagePermission(
           roles,
           scope,

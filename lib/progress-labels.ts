@@ -16,6 +16,7 @@ export const stageStatusLabels: Record<StageStatus, string> = {
 
 export const projectStatusLabels: Record<ProjectStatus, string> = {
   ESTABLISHING: "立项中",
+  ESTABLISHMENT_WITHDRAWN: "立项已撤回",
   ESTABLISHMENT_REJECTED: "立项已驳回",
   NOT_STARTED: "未开始",
   IN_PROGRESS: "进行中",

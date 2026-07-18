@@ -1,7 +1,6 @@
 "use server";
 
 import { randomUUID } from "node:crypto";
-import type { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { withActionLogging } from "@/lib/logger";
@@ -19,6 +18,7 @@ import {
   type ProgressApprovalReference,
 } from "@/lib/progress-approval-domain";
 import { getProgressApprovalReminderSetting } from "@/lib/progress-approval-reminder-settings";
+import { lockProgressApprovalForMutation } from "@/lib/progress-approval-locks";
 import { requireSessionUser } from "@/lib/progress-activity";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
@@ -123,7 +123,7 @@ async function requestProgressApprovalReminderLogged(
     if (!approvalBeforeContextLock) {
       throw new Error("该审批事项已不再待处理");
     }
-    await lockProgressApprovalForReminder(
+    await lockProgressApprovalForMutation(
       tx,
       reference,
       approvalBeforeContextLock,
@@ -156,13 +156,16 @@ async function requestProgressApprovalReminderLogged(
       throw new Error("所选审批人的权限已发生变化，请重新选择");
     }
 
+    const currentSubmissionCooldownStart = new Date(
+      Math.max(cooldownStart.getTime(), currentApproval.submittedAt.getTime()),
+    );
     const recent = setting.cooldownMinutes > 0
       ? await tx.progressApprovalReminderDelivery.findMany({
           where: {
             approvalKind: reference.kind,
             approvalId: reference.id,
             recipientOpenId: { in: recipientOpenIds },
-            createdAt: { gt: cooldownStart },
+            createdAt: { gt: currentSubmissionCooldownStart },
           },
           orderBy: { createdAt: "desc" },
         })
@@ -243,66 +246,6 @@ async function requestProgressApprovalReminderLogged(
   if (result.sentCount > 0) drainNotificationOutboxSoon(10);
   revalidateProgress(approval.project.id, approval.task?.id);
   return result;
-}
-
-async function lockProgressApprovalForReminder(
-  tx: Prisma.TransactionClient,
-  reference: ProgressApprovalReference,
-  approval: NonNullable<Awaited<ReturnType<typeof resolveProgressApproval>>>,
-): Promise<void> {
-  // Match the lock order used by each approval action to avoid deadlock cycles.
-  if (
-    reference.kind === "STAGE_ACCEPTANCE" ||
-    reference.kind === "TASK_ACCEPTANCE" ||
-    reference.kind === "TASK_CREATION"
-  ) {
-    await lockProgressApprovalContextRows(tx, approval);
-    await lockProgressApprovalRow(tx, reference);
-    return;
-  }
-  await lockProgressApprovalRow(tx, reference);
-  await lockProgressApprovalContextRows(tx, approval);
-}
-
-async function lockProgressApprovalContextRows(
-  tx: Prisma.TransactionClient,
-  approval: NonNullable<Awaited<ReturnType<typeof resolveProgressApproval>>>,
-): Promise<void> {
-  await tx.$queryRaw`SELECT id FROM "Project" WHERE id = ${approval.project.id} FOR UPDATE`;
-  if (approval.stage) {
-    await tx.$queryRaw`SELECT id FROM "ProjectStage" WHERE id = ${approval.stage.id} FOR UPDATE`;
-  }
-  if (approval.task) {
-    await tx.$queryRaw`SELECT id FROM "Task" WHERE id = ${approval.task.id} FOR UPDATE`;
-  }
-}
-
-async function lockProgressApprovalRow(
-  tx: Prisma.TransactionClient,
-  reference: ProgressApprovalReference,
-): Promise<void> {
-  switch (reference.kind) {
-    case "PROJECT_ESTABLISHMENT":
-      await tx.$queryRaw`SELECT id FROM "Project" WHERE id = ${reference.id} FOR UPDATE`;
-      return;
-    case "STAGE_ACCEPTANCE":
-    case "TASK_ACCEPTANCE":
-      await tx.$queryRaw`SELECT id FROM "TaskSubmission" WHERE id = ${reference.id} FOR UPDATE`;
-      return;
-    case "PROJECT_BATCH_DDL":
-    case "PROJECT_STAGE_DDL":
-      await tx.$queryRaw`SELECT id FROM "ProjectDdlChangeRequest" WHERE id = ${reference.id} FOR UPDATE`;
-      return;
-    case "TASK_CREATION":
-      await tx.$queryRaw`SELECT id FROM "TaskCreationRequest" WHERE id = ${reference.id} FOR UPDATE`;
-      return;
-    case "TASK_DELETION":
-      await tx.$queryRaw`SELECT id FROM "TaskDeletionRequest" WHERE id = ${reference.id} FOR UPDATE`;
-      return;
-    case "TASK_DDL":
-      await tx.$queryRaw`SELECT id FROM "TaskDdlChangeRequest" WHERE id = ${reference.id} FOR UPDATE`;
-      return;
-  }
 }
 
 function getNextAvailableAt(

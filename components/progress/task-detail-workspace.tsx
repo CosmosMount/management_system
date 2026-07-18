@@ -29,6 +29,7 @@ import { TaskForm } from "@/components/progress/task-form";
 import { ManualReminderButton } from "@/components/progress/manual-reminder-button";
 import { FollowToggleButton } from "@/components/progress/follow-toggle-button";
 import { RequestApprovalReminderButton } from "@/components/progress/request-approval-reminder-button";
+import { WithdrawProgressApprovalButton } from "@/components/progress/withdraw-progress-approval-button";
 import { loadMoreTaskActivityLogs } from "@/app/actions/progress/activityLogs";
 import {
   deleteTaskDirectly,
@@ -145,7 +146,7 @@ export type TaskDeletionRequestView = {
   requesterOpenId: string;
   requesterName: string;
   reason: string;
-  status: "PENDING" | "APPROVED" | "REJECTED";
+  status: "PENDING" | "APPROVED" | "REJECTED" | "WITHDRAWN";
   reviewerName: string;
   reviewComment: string;
   createdAt: string;
@@ -160,6 +161,7 @@ export type TaskSubmissionView = {
   note: string;
   failureReason: string;
   submittedAt: string;
+  withdrawnAt: string | null;
   submitterName: string;
   approvals: TaskApprovalView[];
 };
@@ -323,7 +325,12 @@ export function TaskDetailWorkspace({
             canRequestTaskApprovalReminder ||
             pendingDeletionRequest.requesterOpenId === userOpenId
           }
+          canWithdraw={pendingDeletionRequest.requesterOpenId === userOpenId}
         />
+      )}
+
+      {task.deletionRequests.some((request) => request.status !== "PENDING") && (
+        <TaskDeletionRequestHistory requests={task.deletionRequests} />
       )}
 
       <div className="mt-6 grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
@@ -674,6 +681,13 @@ function TaskDdlChangePanel({
                 subject={`${task.title} DDL 修改`}
               />
             )}
+            {pendingRequest.requesterOpenId === userOpenId && (
+              <WithdrawProgressApprovalButton
+                reference={{ kind: "TASK_DDL", id: pendingRequest.id }}
+                compact
+                subject={`${task.title} DDL 修改`}
+              />
+            )}
             <p>
               {formatDateTime(pendingRequest.oldDueAt)} -&gt;{" "}
               {formatDateTime(pendingRequest.newDueAt)}
@@ -844,6 +858,7 @@ function LabelLike({ children }: { children: ReactNode }) {
 function formatDdlRequestStatus(status: TaskDdlChangeRequestStatus): string {
   if (status === "PENDING") return "待审批";
   if (status === "APPROVED") return "已通过";
+  if (status === "WITHDRAWN") return "已撤回";
   return "已驳回";
 }
 
@@ -1097,12 +1112,14 @@ function TaskDeletionRequestPanel({
   canManage,
   redirectTo,
   canRequestApprovalReminder,
+  canWithdraw,
 }: {
   request: TaskDeletionRequestView;
   taskTitle: string;
   canManage: boolean;
   redirectTo: string;
   canRequestApprovalReminder: boolean;
+  canWithdraw: boolean;
 }) {
   const router = useRouter();
   const [comment, setComment] = useState("");
@@ -1137,13 +1154,22 @@ function TaskDeletionRequestPanel({
       <CardHeader className="pb-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <CardTitle className="text-base">删除申请待审核</CardTitle>
-          {canRequestApprovalReminder && (
-            <RequestApprovalReminderButton
-              reference={{ kind: "TASK_DELETION", id: request.id }}
-              compact
-              subject={`${taskTitle} 删除申请`}
-            />
-          )}
+          <div className="flex flex-wrap items-center gap-2">
+            {canRequestApprovalReminder && (
+              <RequestApprovalReminderButton
+                reference={{ kind: "TASK_DELETION", id: request.id }}
+                compact
+                subject={`${taskTitle} 删除申请`}
+              />
+            )}
+            {canWithdraw && (
+              <WithdrawProgressApprovalButton
+                reference={{ kind: "TASK_DELETION", id: request.id }}
+                compact
+                subject={`${taskTitle} 删除申请`}
+              />
+            )}
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
@@ -1190,6 +1216,57 @@ function TaskDeletionRequestPanel({
             </div>
           </div>
         )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function TaskDeletionRequestHistory({
+  requests,
+}: {
+  requests: TaskDeletionRequestView[];
+}) {
+  const history = requests.filter((request) => request.status !== "PENDING");
+  return (
+    <Card className="mt-4">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base">删除申请记录</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {history.map((request) => (
+          <div key={request.id} className="rounded-lg border p-3 text-sm">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span>
+                {request.requesterName} · {formatDateTime(request.createdAt)}
+              </span>
+              <Badge
+                variant={
+                  request.status === "APPROVED"
+                    ? "default"
+                    : request.status === "REJECTED"
+                      ? "destructive"
+                      : "outline"
+                }
+              >
+                {request.status === "APPROVED"
+                  ? "已通过"
+                  : request.status === "REJECTED"
+                    ? "已驳回"
+                    : "已撤回"}
+              </Badge>
+            </div>
+            <p className="mt-2 whitespace-pre-wrap text-muted-foreground">
+              {request.reason}
+            </p>
+            {request.reviewedAt && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                审核：{request.reviewerName || "未知"} ·{" "}
+                {formatDateTime(request.reviewedAt)}
+                {request.reviewComment ? ` · ${request.reviewComment}` : ""}
+              </p>
+            )}
+          </div>
+        ))}
       </CardContent>
     </Card>
   );
@@ -1525,11 +1602,20 @@ function ActivityDetails({
       )
     : [];
   const approvalKindLabel = getPayloadString(payload.approvalKindLabel);
+  const approvalSubject = getPayloadString(payload.approvalSubject);
   if (recipientNames.length > 0) {
     return (
       <div className="mt-2 space-y-1 rounded-md bg-muted/50 px-2 py-2 text-xs text-muted-foreground">
         {approvalKindLabel && <p>审批类型：{approvalKindLabel}</p>}
         <p>提醒对象：{recipientNames.join("、")}</p>
+      </div>
+    );
+  }
+  if (log.action === "approval.withdrawn" && (approvalKindLabel || approvalSubject)) {
+    return (
+      <div className="mt-2 space-y-1 rounded-md bg-muted/50 px-2 py-2 text-xs text-muted-foreground">
+        {approvalKindLabel && <p>审批类型：{approvalKindLabel}</p>}
+        {approvalSubject && <p>审批事项：{approvalSubject}</p>}
       </div>
     );
   }
@@ -1700,7 +1786,8 @@ function getActivityType(action: string): ActivityFilter {
     action === "task.creation_requested" ||
     action === "task.creation_rejected" ||
     action === "task.delete_requested" ||
-    action === "task.delete_rejected"
+    action === "task.delete_rejected" ||
+    action === "approval.withdrawn"
   ) return "REVIEW";
   if (action === "task.weekly_report") return "WEEKLY";
   if (action === "task.risk_synced") return "RISK";
@@ -1730,6 +1817,7 @@ function activityLabel(action: string): string {
     "task.deleted": "删除了任务",
     "task.reminded": "发送了任务催促提醒",
     "approval.reminder_requested": "请求了审批提醒",
+    "approval.withdrawn": "撤回了审批申请",
   };
   return labels[action] ?? action;
 }

@@ -322,6 +322,7 @@ export default async function TaskDetailPage({ params }: Props) {
       note: submission.note,
       failureReason: submission.failureReason,
       submittedAt: submission.submittedAt.toISOString(),
+      withdrawnAt: submission.withdrawnAt?.toISOString() ?? null,
       submitterName: submission.submitterName,
         approvals: submission.approvals.map((approval) => ({
           id: approval.id,

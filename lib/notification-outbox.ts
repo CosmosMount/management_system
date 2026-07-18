@@ -209,6 +209,50 @@ export async function enqueueNotificationTx(
   return { created: result.count > 0 };
 }
 
+export async function cancelRetryableNotificationOutboxesTx(
+  tx: Prisma.TransactionClient,
+  eventKeys: string[],
+  reason: string,
+): Promise<number> {
+  if (eventKeys.length === 0) return 0;
+  const outboxes = await tx.notificationOutbox.findMany({
+    where: {
+      eventKey: { in: eventKeys },
+      status: { in: ["PENDING", "FAILED", "PROCESSING"] },
+    },
+    select: { id: true },
+  });
+  const outboxIds = outboxes.map((item) => item.id);
+  if (outboxIds.length === 0) return 0;
+  await tx.notificationOutboxRecipient.updateMany({
+    where: {
+      outboxId: { in: outboxIds },
+      status: { in: ["PENDING", "FAILED", "PROCESSING"] },
+    },
+    data: {
+      status: "FAILED",
+      attempts: MAX_ATTEMPTS,
+      nextRunAt: FROZEN_NEXT_RUN_AT,
+      lockedUntil: null,
+      lastError: reason,
+    },
+  });
+  const canceled = await tx.notificationOutbox.updateMany({
+    where: {
+      id: { in: outboxIds },
+      status: { in: ["PENDING", "FAILED", "PROCESSING"] },
+    },
+    data: {
+      status: "FAILED",
+      attempts: MAX_ATTEMPTS,
+      nextRunAt: FROZEN_NEXT_RUN_AT,
+      lockedUntil: null,
+      lastError: reason,
+    },
+  });
+  return canceled.count;
+}
+
 export async function resetNotificationOutboxForRetry({
   id,
   channel,

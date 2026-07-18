@@ -28,6 +28,7 @@ enum UserRoleType {
 
 enum ProjectStatus {
   ESTABLISHING
+  ESTABLISHMENT_WITHDRAWN
   ESTABLISHMENT_REJECTED
   NOT_STARTED
   IN_PROGRESS
@@ -48,12 +49,14 @@ enum TaskDeletionRequestStatus {
   PENDING
   APPROVED
   REJECTED
+  WITHDRAWN
 }
 
 enum TaskCreationRequestStatus {
   PENDING
   APPROVED
   REJECTED
+  WITHDRAWN
 }
 
 enum ProjectDdlChangeRequestType {
@@ -65,12 +68,14 @@ enum ProjectDdlChangeRequestStatus {
   PENDING
   APPROVED
   REJECTED
+  WITHDRAWN
 }
 
 enum TaskDdlChangeRequestStatus {
   PENDING
   APPROVED
   REJECTED
+  WITHDRAWN
 }
 
 enum TaskRiskStatus {
@@ -267,37 +272,40 @@ model PurchaseItem {
 }
 
 model Project {
-  id                         String                    @id @default(uuid())
-  name                       String
-  description                String                    @default("")
-  team                       String
-  techGroup                  String
-  status                     ProjectStatus             @default(ESTABLISHING)
-  ownerOpenId                String
-  ownerName                  String
-  requesterOpenId            String                    @default("")
-  requesterName              String                    @default("")
-  submittedAt                DateTime?
-  establishmentSubmitVersion Int                       @default(1)
-  reviewerOpenId             String                    @default("")
-  reviewerName               String                    @default("")
-  reviewComment              String                    @default("")
-  reviewedAt                 DateTime?
-  allowOwnerSelfApproval     Boolean                   @default(false)
-  owners                     ProjectOwner[]
-  participants               ProjectParticipant[]
-  stages                     ProjectStage[]
-  ddlChangeRequests          ProjectDdlChangeRequest[]
-  tasks                      Task[]
-  taskCreationRequests       TaskCreationRequest[]
-  activityLogs               ProgressActivityLog[]
-  comments                   ProjectComment[]
-  followPreferences          ProjectFollowPreference[]
-  createdAt                  DateTime                  @default(now())
-  updatedAt                  DateTime                  @updatedAt
-  archivedAt                 DateTime?
-  completedAt                DateTime?
-  canceledAt                 DateTime?
+  id                             String                    @id @default(uuid())
+  name                           String
+  description                    String                    @default("")
+  team                           String
+  techGroup                      String
+  status                         ProjectStatus             @default(ESTABLISHING)
+  ownerOpenId                    String
+  ownerName                      String
+  requesterOpenId                String                    @default("")
+  requesterName                  String                    @default("")
+  submittedAt                    DateTime?
+  establishmentSubmitVersion     Int                       @default(1)
+  reviewerOpenId                 String                    @default("")
+  reviewerName                   String                    @default("")
+  reviewComment                  String                    @default("")
+  reviewedAt                     DateTime?
+  establishmentWithdrawnAt       DateTime?
+  establishmentWithdrawnByOpenId String                    @default("")
+  establishmentWithdrawnByName   String                    @default("")
+  allowOwnerSelfApproval         Boolean                   @default(false)
+  owners                         ProjectOwner[]
+  participants                   ProjectParticipant[]
+  stages                         ProjectStage[]
+  ddlChangeRequests              ProjectDdlChangeRequest[]
+  tasks                          Task[]
+  taskCreationRequests           TaskCreationRequest[]
+  activityLogs                   ProgressActivityLog[]
+  comments                       ProjectComment[]
+  followPreferences              ProjectFollowPreference[]
+  createdAt                      DateTime                  @default(now())
+  updatedAt                      DateTime                  @updatedAt
+  archivedAt                     DateTime?
+  completedAt                    DateTime?
+  canceledAt                     DateTime?
 
   @@index([status])
   @@index([requesterOpenId])
@@ -418,6 +426,9 @@ model ProjectDdlChangeRequest {
   reviewerName      String                        @default("")
   reviewComment     String                        @default("")
   reviewedAt        DateTime?
+  withdrawnAt       DateTime?
+  withdrawnByOpenId String                        @default("")
+  withdrawnByName   String                        @default("")
   createdAt         DateTime                      @default(now())
   updatedAt         DateTime                      @updatedAt
 
@@ -483,20 +494,23 @@ model TaskTechGroup {
 }
 
 model TaskDeletionRequest {
-  id              String                    @id @default(uuid())
-  taskId          String
-  task            Task                      @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  requesterOpenId String
-  requesterName   String
-  reason          String
-  status          TaskDeletionRequestStatus @default(PENDING)
-  pendingKey      String                    @default("")
-  reviewerOpenId  String                    @default("")
-  reviewerName    String                    @default("")
-  reviewComment   String                    @default("")
-  reviewedAt      DateTime?
-  createdAt       DateTime                  @default(now())
-  updatedAt       DateTime                  @updatedAt
+  id                String                    @id @default(uuid())
+  taskId            String
+  task              Task                      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  requesterOpenId   String
+  requesterName     String
+  reason            String
+  status            TaskDeletionRequestStatus @default(PENDING)
+  pendingKey        String                    @default("")
+  reviewerOpenId    String                    @default("")
+  reviewerName      String                    @default("")
+  reviewComment     String                    @default("")
+  reviewedAt        DateTime?
+  withdrawnAt       DateTime?
+  withdrawnByOpenId String                    @default("")
+  withdrawnByName   String                    @default("")
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
 
   @@unique([taskId, pendingKey])
   @@index([taskId, status])
@@ -504,22 +518,25 @@ model TaskDeletionRequest {
 }
 
 model TaskDdlChangeRequest {
-  id              String                     @id @default(uuid())
-  taskId          String
-  task            Task                       @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  requesterOpenId String
-  requesterName   String
-  oldDueAt        DateTime
-  newDueAt        DateTime
-  reason          String
-  status          TaskDdlChangeRequestStatus @default(PENDING)
-  pendingKey      String                     @default("")
-  reviewerOpenId  String                     @default("")
-  reviewerName    String                     @default("")
-  reviewComment   String                     @default("")
-  reviewedAt      DateTime?
-  createdAt       DateTime                   @default(now())
-  updatedAt       DateTime                   @updatedAt
+  id                String                     @id @default(uuid())
+  taskId            String
+  task              Task                       @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  requesterOpenId   String
+  requesterName     String
+  oldDueAt          DateTime
+  newDueAt          DateTime
+  reason            String
+  status            TaskDdlChangeRequestStatus @default(PENDING)
+  pendingKey        String                     @default("")
+  reviewerOpenId    String                     @default("")
+  reviewerName      String                     @default("")
+  reviewComment     String                     @default("")
+  reviewedAt        DateTime?
+  withdrawnAt       DateTime?
+  withdrawnByOpenId String                     @default("")
+  withdrawnByName   String                     @default("")
+  createdAt         DateTime                   @default(now())
+  updatedAt         DateTime                   @updatedAt
 
   @@unique([taskId, pendingKey])
   @@index([taskId, status])
@@ -527,21 +544,24 @@ model TaskDdlChangeRequest {
 }
 
 model TaskCreationRequest {
-  id              String                    @id @default(uuid())
-  projectId       String
-  project         Project                   @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  requesterOpenId String
-  requesterName   String
-  draftPayload    String
-  status          TaskCreationRequestStatus @default(PENDING)
-  reviewerOpenId  String                    @default("")
-  reviewerName    String                    @default("")
-  reviewComment   String                    @default("")
-  reviewedAt      DateTime?
-  createdTaskId   String?
-  createdTask     Task?                     @relation(fields: [createdTaskId], references: [id], onDelete: SetNull)
-  createdAt       DateTime                  @default(now())
-  updatedAt       DateTime                  @updatedAt
+  id                String                    @id @default(uuid())
+  projectId         String
+  project           Project                   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  requesterOpenId   String
+  requesterName     String
+  draftPayload      String
+  status            TaskCreationRequestStatus @default(PENDING)
+  reviewerOpenId    String                    @default("")
+  reviewerName      String                    @default("")
+  reviewComment     String                    @default("")
+  reviewedAt        DateTime?
+  withdrawnAt       DateTime?
+  withdrawnByOpenId String                    @default("")
+  withdrawnByName   String                    @default("")
+  createdTaskId     String?
+  createdTask       Task?                     @relation(fields: [createdTaskId], references: [id], onDelete: SetNull)
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
 
   @@index([projectId, status])
   @@index([requesterOpenId])
@@ -601,21 +621,24 @@ model TaskAssignee {
 }
 
 model TaskSubmission {
-  id            String           @id @default(uuid())
-  taskId        String?
-  task          Task?            @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  projectId     String?
-  stageId       String?
-  stage         ProjectStage?    @relation(fields: [stageId], references: [id], onDelete: Cascade)
-  type          SubmissionType
-  feishuDocUrl  String
-  keyDataUrl    String           @default("") @map("videoUrl")
-  note          String           @default("")
-  failureReason String           @default("")
-  submittedBy   String
-  submitterName String
-  submittedAt   DateTime         @default(now())
-  approvals     ApprovalRecord[]
+  id                String           @id @default(uuid())
+  taskId            String?
+  task              Task?            @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  projectId         String?
+  stageId           String?
+  stage             ProjectStage?    @relation(fields: [stageId], references: [id], onDelete: Cascade)
+  type              SubmissionType
+  feishuDocUrl      String
+  keyDataUrl        String           @default("") @map("videoUrl")
+  note              String           @default("")
+  failureReason     String           @default("")
+  submittedBy       String
+  submitterName     String
+  submittedAt       DateTime         @default(now())
+  withdrawnAt       DateTime?
+  withdrawnByOpenId String           @default("")
+  withdrawnByName   String           @default("")
+  approvals         ApprovalRecord[]
 }
 
 model AcceptanceChecklistTemplate {
