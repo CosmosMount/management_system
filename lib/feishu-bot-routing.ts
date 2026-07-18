@@ -12,6 +12,7 @@ const PROGRESS_APPROVAL_NOTIFICATION_TYPES = new Set<string>([
   "task_creation_requested",
   "task_bulk_creation_requested",
   "task_pending_acceptance",
+  "approval_reminder_requested",
 ]);
 
 const PROCUREMENT_APPROVAL_STATUSES = new Set<OrderStatus>([

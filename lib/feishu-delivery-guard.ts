@@ -73,8 +73,18 @@ export async function isFeishuDirectMessageAllowed(
   const allowedOpenIds = buildSet(process.env.FEISHU_DIRECT_MESSAGE_ALLOWED_OPEN_IDS);
   const allowedUnionIds = buildSet(process.env.FEISHU_DIRECT_MESSAGE_ALLOWED_UNION_IDS);
   const allowedNames = buildSet(process.env.FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES);
+  const configuredDimensions = [
+    allowedOpenIds.size > 0,
+    allowedUnionIds.size > 0,
+    allowedNames.size > 0,
+  ].filter(Boolean).length;
 
-  if (allowedOpenIds.has(openIdOrUnionId) || allowedUnionIds.has(openIdOrUnionId)) {
+  // A single ID list can be checked without a user lookup. When multiple
+  // identity dimensions are configured, all of them must match the same user.
+  if (
+    configuredDimensions === 1 &&
+    (allowedOpenIds.has(openIdOrUnionId) || allowedUnionIds.has(openIdOrUnionId))
+  ) {
     return true;
   }
 
@@ -100,11 +110,13 @@ export async function isFeishuDirectMessageAllowed(
     return false;
   }
 
-  if (
-    allowedOpenIds.has(user.openId) ||
-    (user.unionId && allowedUnionIds.has(user.unionId)) ||
-    allowedNames.has(user.name)
-  ) {
+  const matchesOpenId =
+    allowedOpenIds.size === 0 || allowedOpenIds.has(user.openId);
+  const matchesUnionId =
+    allowedUnionIds.size === 0 ||
+    (user.unionId !== null && allowedUnionIds.has(user.unionId));
+  const matchesName = allowedNames.size === 0 || allowedNames.has(user.name);
+  if (matchesOpenId && matchesUnionId && matchesName) {
     return true;
   }
 

@@ -4,6 +4,8 @@ import { AppHeader } from "@/components/app-header";
 import { LiveAutoRefresh } from "@/components/live-auto-refresh";
 import { PageShell } from "@/components/page-shell";
 import { PageTitle } from "@/components/page-title";
+import { ApprovalViewTabs } from "@/components/progress/approval-view-tabs";
+import { MyApprovalSubmissionsList } from "@/components/progress/my-approval-submissions-list";
 import { ProgressPageLayout } from "@/components/progress/progress-page-layout";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
@@ -18,16 +20,31 @@ import { auth } from "@/lib/auth";
 import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { getUserRoles } from "@/lib/permissions";
 import { getProgressApprovalBoard } from "@/lib/progress-approval-board";
+import { getMyProgressApprovalSubmissions } from "@/lib/progress-approval-domain";
 
-export default async function ProgressApprovalsPage() {
+type Props = {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+};
+
+export default async function ProgressApprovalsPage({ searchParams }: Props) {
+  const params = searchParams ? await searchParams : {};
+  const activeView = params.view === "submitted" ? "submitted" : "pending";
   const session = await auth();
   const userOpenId = session?.user?.openId;
   const [liveVersion, roles] = await Promise.all([
     getCurrentUserLiveVersion("progress-approvals"),
     userOpenId ? getUserRoles(userOpenId) : Promise.resolve([]),
   ]);
-  const board = await getProgressApprovalBoard({ roles, userOpenId });
-  const nonEmptyCategories = board.categories.filter(
+  const [board, submissions] = await Promise.all([
+    activeView === "pending"
+      ? getProgressApprovalBoard({ roles, userOpenId })
+      : Promise.resolve(null),
+    activeView === "submitted" && userOpenId
+      ? getMyProgressApprovalSubmissions({ userOpenId, roles })
+      : Promise.resolve([]),
+  ]);
+  const pendingBoard = board ?? { totalCount: 0, categories: [] };
+  const nonEmptyCategories = pendingBoard.categories.filter(
     (category) => category.items.length > 0,
   );
 
@@ -43,14 +60,33 @@ export default async function ProgressApprovalsPage() {
         <ProgressPageLayout>
           <PageTitle subtitle="审批看板" />
 
+          <ApprovalViewTabs activeView={activeView} />
+
+          {activeView === "submitted" ? (
+            <section
+              role="tabpanel"
+              id="approval-submitted-panel"
+              aria-labelledby="approval-submitted-tab"
+              data-testid="progress-approval-submitted-panel"
+            >
+              <MyApprovalSubmissionsList items={submissions} />
+            </section>
+          ) : (
+            <section
+              role="tabpanel"
+              id="approval-pending-panel"
+              aria-labelledby="approval-pending-tab"
+              data-testid="progress-approval-pending-panel"
+            >
+
           <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Card>
               <CardHeader className="space-y-1">
                 <CardDescription>待处理总数</CardDescription>
-                <CardTitle className="text-3xl">{board.totalCount}</CardTitle>
+                <CardTitle className="text-3xl">{pendingBoard.totalCount}</CardTitle>
               </CardHeader>
             </Card>
-            {board.categories.slice(0, 3).map((category) => (
+            {pendingBoard.categories.slice(0, 3).map((category) => (
               <Card key={category.key}>
                 <CardHeader className="space-y-1">
                   <CardDescription>{category.label}</CardDescription>
@@ -74,7 +110,7 @@ export default async function ProgressApprovalsPage() {
             </CardHeader>
             <CardContent>
               <div className="flex flex-wrap gap-2">
-                {board.categories.map((category) => (
+                {pendingBoard.categories.map((category) => (
                   <Badge
                     key={category.key}
                     variant={category.items.length > 0 ? "secondary" : "outline"}
@@ -87,7 +123,7 @@ export default async function ProgressApprovalsPage() {
             </CardContent>
           </Card>
 
-          {board.totalCount === 0 ? (
+          {pendingBoard.totalCount === 0 ? (
             <Card>
               <CardContent className="flex min-h-48 flex-col items-center justify-center gap-3 text-center">
                 <ClipboardCheck className="h-10 w-10 text-muted-foreground" />
@@ -175,6 +211,8 @@ export default async function ProgressApprovalsPage() {
                 </section>
               ))}
             </div>
+          )}
+            </section>
           )}
         </ProgressPageLayout>
       </PageShell>

@@ -12,6 +12,7 @@ import {
   expectHealthyPage,
   formatPrismaError,
   loginAsAdminUser,
+  loginAsNormalUser,
   loginAsOtherUser,
   prepareFunctionalFixtures,
   resolveNormalAuthMaterial,
@@ -101,6 +102,115 @@ test("无审批权限用户在审批看板只看到空状态", async ({
   await expect(page.getByTestId("progress-approval-item")).toHaveCount(0);
   await expect(page.getByText(seeded.establishmentProjectName)).toHaveCount(0);
   await expectHealthyPage(page);
+});
+
+test("我的申请集中展示八类审批并支持筛选排序和分页", async ({
+  page,
+  context,
+  baseURL,
+}, testInfo) => {
+  await loginAsNormalUser(context, baseURL, normalAuth);
+  await page.goto("/progress/approvals", { waitUntil: "networkidle" });
+  await expect(page.getByRole("tab", { name: "待我审批" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await page.getByRole("tab", { name: "我的申请" }).click();
+  await expect(page).toHaveURL(/\/progress\/approvals\?view=submitted/);
+  const submissionList = page.getByRole("list", { name: "我的审批申请" });
+  await expect(page.locator("#approval-status-filter")).toHaveValue("PENDING");
+
+  for (const label of [
+    "项目立项",
+    "阶段验收",
+    "项目批量 DDL",
+    "项目单阶段 DDL",
+    "任务创建",
+    "任务删除",
+    "任务 DDL",
+    "任务验收",
+  ]) {
+    await expect(submissionList.getByText(label, { exact: true }).first()).toBeVisible();
+  }
+  await expect(submissionList.getByText("已失效", { exact: true })).toHaveCount(0);
+  await page.screenshot({
+    path: testInfo.outputPath("my-approval-submissions.png"),
+    fullPage: true,
+  });
+
+  await page.locator("#approval-status-filter").selectOption("SUPERSEDED");
+  await page.getByRole("button", { name: "应用筛选" }).click();
+  await expect(page).toHaveURL(/status=SUPERSEDED/);
+  await expect(page.getByText(seeded.supersededStageName)).toBeVisible();
+
+  await page.getByRole("button", { name: "清除筛选" }).first().click();
+  await expect(page).toHaveURL(/\/progress\/approvals\?view=submitted$/);
+  await expect(page.locator("#approval-status-filter")).toHaveValue("PENDING");
+  await page.locator("#approval-status-filter").selectOption("");
+  await page.locator("#approval-sort-filter").selectOption("project");
+  await page.locator("#approval-sort-direction").selectOption("asc");
+  await page.getByRole("button", { name: "应用筛选" }).click();
+  await expect(page).toHaveURL(/status=ALL/);
+  await expect(page).toHaveURL(/sort=project/);
+  await expect(page).toHaveURL(/direction=asc/);
+  await expect(page.getByText(/第 1 \/ 2 页/)).toBeVisible();
+  await page.getByRole("button", { name: "下一页" }).click();
+  await expect(page).toHaveURL(/page=2/);
+  await expectHealthyPage(page);
+});
+
+test("提交人可选择有权审批人员发送提醒且冷却阻止重复投递", async ({
+  page,
+  context,
+  baseURL,
+}, testInfo) => {
+  await loginAsNormalUser(context, baseURL, normalAuth);
+  await page.goto(
+    "/progress/approvals?view=submitted&type=TASK_DDL&status=PENDING",
+    { waitUntil: "networkidle" },
+  );
+  await expect(page.getByText(seeded.taskDdlTitle)).toBeVisible();
+
+  async function sendReminder() {
+    await page.getByRole("button", { name: "请求审批" }).click();
+    await page.getByPlaceholder("搜索并选择审批人").fill("Playwright 管理员");
+    await page
+      .locator(`[data-testid="user-search-option"][data-open-id="${fixtures.adminOpenId}"]`)
+      .click();
+    if (deliveriesAfterScreenshot === 0) {
+      await page.screenshot({
+        path: testInfo.outputPath("approval-reminder-dialog.png"),
+        fullPage: true,
+      });
+      deliveriesAfterScreenshot++;
+    }
+    await page.getByRole("button", { name: "发送提醒" }).click();
+  }
+
+  let deliveriesAfterScreenshot = 0;
+  await sendReminder();
+  await expect(page.getByText("已向 1 位审批人发送提醒")).toBeVisible();
+  const deliveriesAfterFirst = await prisma.progressApprovalReminderDelivery.count({
+    where: {
+      approvalKind: "TASK_DDL",
+      approvalId: seeded.taskDdlRequestId,
+      recipientOpenId: fixtures.adminOpenId,
+    },
+  });
+  expect(deliveriesAfterFirst).toBe(1);
+
+  await sendReminder();
+  await expect(
+    page.getByText("已提醒 0 人，另有 1 人仍在提醒间隔内"),
+  ).toBeVisible();
+  const deliveriesAfterSecond = await prisma.progressApprovalReminderDelivery.count({
+    where: {
+      approvalKind: "TASK_DDL",
+      approvalId: seeded.taskDdlRequestId,
+      recipientOpenId: fixtures.adminOpenId,
+    },
+  });
+  expect(deliveriesAfterSecond).toBe(1);
 });
 
 async function expectApprovalLink(page: Parameters<typeof expectHealthyPage>[0], testId: string, url: string) {
@@ -355,6 +465,61 @@ async function seedApprovalBoardFixtures(fixtures: FunctionalFixtureIds) {
     }),
   ]);
 
+  const supersededStageName = `PW全功能-审批看板已失效阶段-${suffix}`;
+  const supersededStage = await prisma.projectStage.create({
+    data: {
+      projectId: approvalProject.id,
+      name: supersededStageName,
+      goal: "superseded stage submission fixture",
+      sortOrder: 3,
+      status: StageStatus.IN_PROGRESS,
+      ownerOpenId: fixtures.normalOpenId,
+      ownerName: normalName,
+      dueAt: addDays(nextWeek, 14),
+    },
+  });
+  await prisma.taskSubmission.create({
+    data: {
+      projectId: approvalProject.id,
+      stageId: supersededStage.id,
+      type: SubmissionType.STAGE,
+      feishuDocUrl: "https://example.com/superseded-stage",
+      note: "已被替代的阶段提交",
+      submittedBy: fixtures.normalOpenId,
+      submitterName: normalName,
+      submittedAt: addDays(now, -1),
+    },
+  });
+
+  await prisma.taskCreationRequest.createMany({
+    data: Array.from({ length: 21 }, (_, index) => ({
+      projectId: approvalProject.id,
+      requesterOpenId: fixtures.normalOpenId,
+      requesterName: normalName,
+      draftPayload: JSON.stringify({
+        title: `PW全功能-审批看板历史申请-${suffix}-${index + 1}`,
+        goal: "approval history pagination fixture",
+        stageId: batchDdlStage.id,
+        stageName: batchDdlStage.name,
+        taskTechGroups: ["电控"],
+        urgency: Urgency.MEDIUM,
+        importance: Importance.MEDIUM,
+        assigneeOpenIds: [fixtures.normalOpenId],
+        assigneeNames: [normalName],
+        metrics: "history fixture",
+        dueAt: tomorrow.toISOString(),
+        needsOfflineConfirmation: false,
+        needsWeeklyReport: false,
+        acceptanceChecklistItems: [],
+      }),
+      status: index === 0 ? "REJECTED" as const : "APPROVED" as const,
+      reviewerOpenId: fixtures.adminOpenId,
+      reviewerName: adminName,
+      reviewedAt: addDays(now, -30 - index),
+      createdAt: addDays(now, -30 - index),
+    })),
+  });
+
   return {
     establishmentProjectId: establishment.id,
     establishmentProjectName,
@@ -379,6 +544,7 @@ async function seedApprovalBoardFixtures(fixtures: FunctionalFixtureIds) {
     taskAcceptanceTitle,
     taskAcceptanceId: taskAcceptance.id,
     taskSubmissionId: taskSubmission.id,
+    supersededStageName,
   };
 }
 

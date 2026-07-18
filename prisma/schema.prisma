@@ -142,6 +142,17 @@ enum ProgressReminderKind {
   STAGE_STALE_OR_DUE_SOON
 }
 
+enum ProgressApprovalKind {
+  PROJECT_ESTABLISHMENT
+  STAGE_ACCEPTANCE
+  PROJECT_BATCH_DDL
+  PROJECT_STAGE_DDL
+  TASK_CREATION
+  TASK_DELETION
+  TASK_DDL
+  TASK_ACCEPTANCE
+}
+
 enum ProgressFollowPreferenceState {
   FOLLOWING
   MUTED
@@ -845,4 +856,33 @@ model ProgressDailySummarySetting {
   lastRunAt    DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
+}
+
+model ProgressApprovalReminderSetting {
+  id              String   @id @default("default")
+  cooldownMinutes Int      @default(10)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model ProgressApprovalReminderDelivery {
+  id               String               @id @default(uuid())
+  approvalKind     ProgressApprovalKind
+  approvalId       String
+  batchId          String
+  projectId        String?
+  taskId           String?
+  remindedByOpenId String
+  remindedByName   String
+  recipientOpenId  String
+  recipientName    String
+  outboxEventKey   String
+  createdAt        DateTime             @default(now())
+
+  @@unique([batchId, recipientOpenId])
+  @@index([approvalKind, approvalId, recipientOpenId, createdAt])
+  @@index([batchId])
+  @@index([projectId, createdAt])
+  @@index([taskId, createdAt])
+  @@index([outboxEventKey])
 }

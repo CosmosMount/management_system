@@ -9,6 +9,7 @@ import {
 } from "@/lib/notification-outbox";
 import { getUserRoles, requireSuperAdmin } from "@/lib/permissions";
 import { canManageProject } from "@/lib/permissions-progress";
+import { saveProgressApprovalReminderSetting } from "@/lib/progress-approval-reminder-settings";
 import {
   saveProgressDailySummarySetting,
   sendProgressDailySummaryTest as enqueueProgressDailySummaryTest,
@@ -45,6 +46,14 @@ const reminderRuleUpdateSchema = z.object({
 const dailySummarySettingSchema = z.object({
   enabled: z.boolean(),
   scheduleTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "请输入有效时间"),
+});
+
+const approvalReminderSettingSchema = z.object({
+  cooldownMinutes: z.coerce
+    .number()
+    .int("审批提醒冷却时间必须为整数分钟")
+    .min(0, "审批提醒冷却时间不能小于 0 分钟")
+    .max(1440, "审批提醒冷却时间不能超过 1440 分钟"),
 });
 
 const dailySummaryTestSchema = z.object({
@@ -94,6 +103,27 @@ export async function updateProgressDailySummarySetting(input: unknown) {
 async function updateProgressDailySummarySettingLogged(input: unknown) {
   const parsed = dailySummarySettingSchema.parse(input);
   const setting = await saveProgressDailySummarySetting(parsed);
+  revalidateAdmin();
+  return setting;
+}
+
+export async function updateProgressApprovalReminderSetting(input: unknown) {
+  const session = await requireSuperAdmin();
+  return withActionLogging(
+    {
+      event: "progress.approval_reminder.setting.update",
+      module: "progress",
+      action: "updateProgressApprovalReminderSetting",
+      actorOpenId: session.user.openId,
+      actorName: session.user.name ?? undefined,
+    },
+    async () => updateProgressApprovalReminderSettingLogged(input),
+  );
+}
+
+async function updateProgressApprovalReminderSettingLogged(input: unknown) {
+  const parsed = approvalReminderSettingSchema.parse(input);
+  const setting = await saveProgressApprovalReminderSetting(parsed);
   revalidateAdmin();
   return setting;
 }

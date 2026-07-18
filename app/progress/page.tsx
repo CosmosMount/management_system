@@ -35,7 +35,11 @@ import { getProjectStageOwnerNames } from "@/lib/progress-stage-owners";
 import {
   canRequestProjectEstablishment,
   canReviewProjectEstablishment,
+  isAssignee,
+  isProjectManager,
   isProgressSuperAdmin,
+  isTeamLead,
+  isTechGroupLead,
   progressProjectMineWhere,
   progressProjectReadableWhere,
   progressTaskMineWhere,
@@ -277,10 +281,24 @@ async function getProjectEstablishmentViews(
         project.status === "ESTABLISHING" &&
         canReviewProjectEstablishment(roles, scope);
       const isMine = project.requesterOpenId === userOpenId;
+      const canRequestApprovalReminder =
+        project.status === "ESTABLISHING" &&
+        (isMine ||
+          isAssignee(userOpenId, project.owners.map((owner) => owner.openId)) ||
+          isAssignee(
+            userOpenId,
+            project.participants.map((participant) => participant.openId),
+          ) ||
+          isProgressSuperAdmin(roles) ||
+          isProjectManager(roles) ||
+          isTeamLead(roles, project.team) ||
+          isTechGroupLead(roles, project.techGroup));
       const canDelete =
         project.status === "ESTABLISHMENT_REJECTED" &&
         (isMine || isProgressSuperAdmin(roles));
-      if (!canReview && !isMine && !canDelete) return null;
+      if (!canReview && !isMine && !canDelete && !canRequestApprovalReminder) {
+        return null;
+      }
 
       return {
         id: project.id,
@@ -318,6 +336,7 @@ async function getProjectEstablishmentViews(
         canResubmit: project.status === "ESTABLISHMENT_REJECTED" && isMine,
         canReview,
         canDelete,
+        canRequestApprovalReminder,
       };
     })
     .filter((project): project is ProjectEstablishmentView => !!project)

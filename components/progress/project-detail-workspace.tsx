@@ -69,6 +69,7 @@ import { ReasonConfirmDialog } from "@/components/reason-confirm-dialog";
 import { ProjectForm } from "@/components/progress/project-form";
 import { RejectedProjectEstablishmentDeleteButton } from "@/components/progress/rejected-project-establishment-delete-button";
 import { ManualReminderButton } from "@/components/progress/manual-reminder-button";
+import { RequestApprovalReminderButton } from "@/components/progress/request-approval-reminder-button";
 import { FollowToggleButton } from "@/components/progress/follow-toggle-button";
 import { ArchivedProjectDeleteButton } from "@/components/admin-delete-actions";
 import { TaskForm } from "@/components/progress/task-form";
@@ -325,6 +326,7 @@ type Props = {
   canReviewEstablishment: boolean;
   isSuperAdmin?: boolean;
   userOpenId?: string;
+  canRequestApprovalReminder: boolean;
 };
 
 type TaskScope = "stage" | "project";
@@ -387,6 +389,7 @@ export function ProjectDetailWorkspace({
   canReviewEstablishment,
   isSuperAdmin = false,
   userOpenId,
+  canRequestApprovalReminder,
 }: Props) {
   const router = useRouter();
   const pathname = usePathname();
@@ -514,6 +517,9 @@ export function ProjectDetailWorkspace({
         unfinishedTaskCount={unfinishedTaskCount}
         canUpdateLifecycle={canUpdateLifecycle}
         canReviewEstablishment={canReviewEstablishment}
+        canRequestApprovalReminder={
+          canRequestApprovalReminder || project.requesterOpenId === userOpenId
+        }
         canResubmitEstablishment={
           project.status === "ESTABLISHMENT_REJECTED" &&
           !!userOpenId &&
@@ -588,6 +594,8 @@ export function ProjectDetailWorkspace({
                 stages={project.stages}
                 ddlChangeRequests={project.ddlChangeRequests}
                 isCurrentStage={isViewingCurrentStage}
+                canRequestApprovalReminder={canRequestApprovalReminder}
+                userOpenId={userOpenId}
               />
               <StageTaskList
                 tasks={visibleTasks}
@@ -608,6 +616,8 @@ export function ProjectDetailWorkspace({
                 <TaskCreationRequestPanel
                   requests={project.taskCreationRequests}
                   canManage={canManage}
+                  canRequestApprovalReminder={canRequestApprovalReminder}
+                  userOpenId={userOpenId}
                 />
               )}
               <ProjectDdlChangeHistoryPanel requests={project.ddlChangeRequests} />
@@ -749,6 +759,7 @@ function ProjectOverview({
   unfinishedTaskCount,
   canUpdateLifecycle,
   canReviewEstablishment,
+  canRequestApprovalReminder,
   canResubmitEstablishment,
   canDeleteRejectedEstablishment,
   canEdit,
@@ -765,6 +776,7 @@ function ProjectOverview({
   unfinishedTaskCount: number;
   canUpdateLifecycle: boolean;
   canReviewEstablishment: boolean;
+  canRequestApprovalReminder: boolean;
   canResubmitEstablishment: boolean;
   canDeleteRejectedEstablishment: boolean;
   canEdit: boolean;
@@ -894,6 +906,7 @@ function ProjectOverview({
         {(canEdit ||
           canUpdateLifecycle ||
           canReviewEstablishment ||
+          (canRequestApprovalReminder && project.status === "ESTABLISHING") ||
           canResubmitEstablishment ||
           canDeleteRejectedEstablishment ||
           canRemind ||
@@ -903,6 +916,13 @@ function ProjectOverview({
           project.follow.followedByCurrentUser ||
           isSuperAdmin) && (
           <div className="flex shrink-0 flex-wrap gap-2">
+            {canRequestApprovalReminder && project.status === "ESTABLISHING" && (
+              <RequestApprovalReminderButton
+                reference={{ kind: "PROJECT_ESTABLISHMENT", id: project.id }}
+                compact
+                subject={project.name}
+              />
+            )}
             <FollowToggleButton
               noun="项目"
               followed={project.follow.followedByCurrentUser}
@@ -1694,6 +1714,8 @@ function StageDetailPanel({
   stages,
   ddlChangeRequests,
   isCurrentStage,
+  canRequestApprovalReminder,
+  userOpenId,
 }: {
   projectId: string;
   projectStatus: ProjectStatus;
@@ -1701,6 +1723,8 @@ function StageDetailPanel({
   stages: StageView[];
   ddlChangeRequests: DdlChangeRequestView[];
   isCurrentStage: boolean;
+  canRequestApprovalReminder: boolean;
+  userOpenId?: string;
 }) {
   const router = useRouter();
   const evidenceUrlInputRef = useRef<HTMLInputElement>(null);
@@ -1836,7 +1860,13 @@ function StageDetailPanel({
         </section>
 
         {pendingDdlRequests.length > 0 && (
-          <PendingDdlChangeRequestPanel requests={pendingDdlRequests} />
+          <PendingDdlChangeRequestPanel
+            requests={pendingDdlRequests}
+            canRequestApprovalReminder={
+              canRequestApprovalReminder || stage.ownerOpenIds.includes(userOpenId ?? "")
+            }
+            userOpenId={userOpenId}
+          />
         )}
 
         <StageRiskPanel stage={stage} projectStatus={projectStatus} />
@@ -1915,7 +1945,18 @@ function StageDetailPanel({
 
         {pendingSubmission && stage.status === "PENDING_ACCEPTANCE" && (
           <section className="rounded-md border bg-orange-50/50 p-4">
-            <h3 className="text-sm font-medium">阶段审核</h3>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-sm font-medium">阶段审核</h3>
+              {(canRequestApprovalReminder ||
+                stage.ownerOpenIds.includes(userOpenId ?? "") ||
+                pendingSubmission.submittedBy === userOpenId) && (
+                <RequestApprovalReminderButton
+                  reference={{ kind: "STAGE_ACCEPTANCE", id: pendingSubmission.id }}
+                  compact
+                  subject={stage.name}
+                />
+              )}
+            </div>
             <p className="mt-2 text-sm text-muted-foreground">
               提交人：{pendingSubmission.submitterName} ·{" "}
               {formatDateTime(pendingSubmission.submittedAt)}
@@ -2511,15 +2552,25 @@ function ProjectStageDueDateChangeDialog({
 
 function PendingDdlChangeRequestPanel({
   requests,
+  canRequestApprovalReminder,
+  userOpenId,
 }: {
   requests: DdlChangeRequestView[];
+  canRequestApprovalReminder: boolean;
+  userOpenId?: string;
 }) {
   return (
     <section className="rounded-md border bg-orange-50/50 p-4">
       <h3 className="text-sm font-medium">待审批 DDL 变更</h3>
       <div className="mt-3 space-y-3">
         {requests.map((request) => (
-          <PendingDdlChangeRequestCard key={request.id} request={request} />
+          <PendingDdlChangeRequestCard
+            key={request.id}
+            request={request}
+            canRequestApprovalReminder={
+              canRequestApprovalReminder || request.requesterOpenId === userOpenId
+            }
+          />
         ))}
       </div>
     </section>
@@ -2528,8 +2579,10 @@ function PendingDdlChangeRequestPanel({
 
 function PendingDdlChangeRequestCard({
   request,
+  canRequestApprovalReminder,
 }: {
   request: DdlChangeRequestView;
+  canRequestApprovalReminder: boolean;
 }) {
   const router = useRouter();
   const [comment, setComment] = useState("");
@@ -2580,7 +2633,22 @@ function PendingDdlChangeRequestCard({
             申请人：{request.requesterName} · {formatDateTime(request.createdAt)}
           </p>
         </div>
-        <Badge variant="secondary">{ddlChangeStatusLabels[request.status]}</Badge>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant="secondary">{ddlChangeStatusLabels[request.status]}</Badge>
+          {canRequestApprovalReminder && (
+            <RequestApprovalReminderButton
+              reference={{
+                kind:
+                  request.type === "CASCADE_EXTENSION"
+                    ? "PROJECT_BATCH_DDL"
+                    : "PROJECT_STAGE_DDL",
+                id: request.id,
+              }}
+              compact
+              subject={`${request.stageName} DDL 变更`}
+            />
+          )}
+        </div>
       </div>
       <div className="mt-2 grid gap-2 text-muted-foreground sm:grid-cols-2">
         <p>原 DDL：{formatNullableDateTime(request.oldDueAt)}</p>
@@ -2936,9 +3004,13 @@ function StageTaskList({
 function TaskCreationRequestPanel({
   requests,
   canManage,
+  canRequestApprovalReminder,
+  userOpenId,
 }: {
   requests: TaskCreationRequestView[];
   canManage: boolean;
+  canRequestApprovalReminder: boolean;
+  userOpenId?: string;
 }) {
   const router = useRouter();
   const [comments, setComments] = useState<Record<string, string>>({});
@@ -3032,6 +3104,15 @@ function TaskCreationRequestPanel({
                     <ArrowUpRight className="h-3.5 w-3.5" />
                   </Link>
                 )}
+                {request.status === "PENDING" &&
+                  (canRequestApprovalReminder ||
+                    request.requesterOpenId === userOpenId) && (
+                    <RequestApprovalReminderButton
+                      reference={{ kind: "TASK_CREATION", id: request.id }}
+                      compact
+                      subject={request.draft?.summary ?? "任务创建申请"}
+                    />
+                  )}
               </div>
               {canManage && request.status === "PENDING" && (
                 <div className="mt-3 space-y-2">
@@ -3539,6 +3620,20 @@ function FilterToggle({
 }
 
 function ActivityChangeList({ payload }: { payload: Record<string, unknown> }) {
+  const recipientNames = Array.isArray(payload.recipientNames)
+    ? payload.recipientNames.filter(
+        (name): name is string => typeof name === "string" && !!name,
+      )
+    : [];
+  const approvalKindLabel = getPayloadString(payload.approvalKindLabel);
+  if (recipientNames.length > 0) {
+    return (
+      <div className="mt-2 space-y-1 rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+        {approvalKindLabel && <p>审批类型：{approvalKindLabel}</p>}
+        <p>提醒对象：{recipientNames.join("、")}</p>
+      </div>
+    );
+  }
   const changes = Array.isArray(payload.changes)
     ? payload.changes.filter((change): change is string => typeof change === "string")
     : [];
@@ -3830,6 +3925,11 @@ function getActivityTargetLabel(
     getPayloadString(payload.taskTitle) ?? getPayloadString(payload.title);
   if (action.startsWith("task.") && title) return `任务：${title}`;
 
+  const approvalSubject = getPayloadString(payload.approvalSubject);
+  if (action === "approval.reminder_requested" && approvalSubject) {
+    return `审批事项：${approvalSubject}`;
+  }
+
   const projectName = getPayloadString(payload.name);
   if (action.startsWith("project.") && projectName) return `项目：${projectName}`;
 
@@ -3860,6 +3960,7 @@ function activityLabel(action: string): string {
     "project.stage_due_change_approved": "通过了阶段 DDL 修改",
     "project.stage_due_change_rejected": "驳回了阶段 DDL 修改",
     "project.reminded": "发送了项目催促提醒",
+    "approval.reminder_requested": "请求了审批提醒",
     "stage.evidence_submitted": "提交了阶段材料",
     "stage.approved": "通过了阶段审核",
     "stage.rejected": "驳回了阶段审核",

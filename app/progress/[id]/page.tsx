@@ -21,6 +21,11 @@ import {
   canApproveStage as canApproveStagePermission,
   canSubmitStage as canSubmitStagePermission,
   canUpdateProjectLifecycle,
+  isAssignee,
+  isProjectManager,
+  isProgressSuperAdmin,
+  isTeamLead,
+  isTechGroupLead,
   progressProjectReadableWhere,
 } from "@/lib/permissions-progress";
 import {
@@ -177,6 +182,14 @@ export default async function ProjectDetailPage({ params }: Props) {
   const canReviewEstablishment =
     project.status === "ESTABLISHING" &&
     canReviewProjectEstablishment(roles, scope);
+  const canRequestApprovalReminder =
+    !!userOpenId &&
+    (isAssignee(userOpenId, projectOwnerOpenIds) ||
+      isAssignee(userOpenId, projectParticipantOpenIds) ||
+      isProgressSuperAdmin(roles) ||
+      isProjectManager(roles) ||
+      isTeamLead(roles, project.team) ||
+      isTechGroupLead(roles, project.techGroup));
   const projectAllowsDdlChange =
     project.status === "NOT_STARTED" || project.status === "IN_PROGRESS";
   const admin = userOpenId ? await isSuperAdmin(userOpenId) : false;
@@ -504,6 +517,7 @@ export default async function ProjectDetailPage({ params }: Props) {
           canReviewEstablishment={canReviewEstablishment}
           isSuperAdmin={admin}
           userOpenId={userOpenId}
+          canRequestApprovalReminder={canRequestApprovalReminder}
         />
       </PageShell>
     </>

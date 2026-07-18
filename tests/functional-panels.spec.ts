@@ -517,6 +517,31 @@ test.describe("管理员面板", () => {
     }
     await expectHealthyPage(page);
   });
+
+  test("管理员可配置审批提醒冷却时间", async ({ page }) => {
+    await prisma.progressApprovalReminderSetting.upsert({
+      where: { id: "default" },
+      create: { id: "default", cooldownMinutes: 10 },
+      update: { cooldownMinutes: 10 },
+    });
+    await page.goto("/admin/reminders", { waitUntil: "networkidle" });
+    await expect(page.getByTestId("admin-approval-reminder-setting")).toBeVisible();
+    await page.getByTestId("admin-approval-reminder-cooldown").fill("15");
+    await page.getByTestId("admin-approval-reminder-save").click();
+    await expect
+      .poll(async () => {
+        return prisma.progressApprovalReminderSetting.findUnique({
+          where: { id: "default" },
+          select: { cooldownMinutes: true },
+        });
+      })
+      .toEqual({ cooldownMinutes: 15 });
+    await page.reload({ waitUntil: "networkidle" });
+    await expect(page.getByTestId("admin-approval-reminder-cooldown")).toHaveValue(
+      "15",
+    );
+    await expectHealthyPage(page);
+  });
 });
 
 async function dragCardTo(page: Page, source: Locator, target: Locator) {

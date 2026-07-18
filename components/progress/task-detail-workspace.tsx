@@ -28,6 +28,7 @@ import { TaskActionsPanel } from "@/components/progress/task-actions-panel";
 import { TaskForm } from "@/components/progress/task-form";
 import { ManualReminderButton } from "@/components/progress/manual-reminder-button";
 import { FollowToggleButton } from "@/components/progress/follow-toggle-button";
+import { RequestApprovalReminderButton } from "@/components/progress/request-approval-reminder-button";
 import { loadMoreTaskActivityLogs } from "@/app/actions/progress/activityLogs";
 import {
   deleteTaskDirectly,
@@ -141,6 +142,7 @@ export type TaskRiskRecordView = {
 
 export type TaskDeletionRequestView = {
   id: string;
+  requesterOpenId: string;
   requesterName: string;
   reason: string;
   status: "PENDING" | "APPROVED" | "REJECTED";
@@ -152,6 +154,7 @@ export type TaskDeletionRequestView = {
 
 export type TaskSubmissionView = {
   id: string;
+  submittedBy: string;
   feishuDocUrl: string;
   keyDataUrl: string;
   note: string;
@@ -214,6 +217,9 @@ type Props = {
   canRequestDdlChange: boolean;
   canReviewDdlChange: boolean;
   isSuperAdmin?: boolean;
+  canRequestTaskApprovalReminder: boolean;
+  canRequestTaskDdlApprovalReminder: boolean;
+  userOpenId?: string;
 };
 
 type UserOption = { openId: string; name: string; avatar?: string | null };
@@ -252,6 +258,9 @@ export function TaskDetailWorkspace({
   canRequestDdlChange,
   canReviewDdlChange,
   isSuperAdmin = false,
+  canRequestTaskApprovalReminder,
+  canRequestTaskDdlApprovalReminder,
+  userOpenId,
 }: Props) {
   const projectHref = projectStageHref(task.projectId, task.stageId);
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
@@ -300,6 +309,8 @@ export function TaskDetailWorkspace({
         canReview={canReviewDdlChange}
         canRequest={canRequestDdlChange}
         onOpenRequest={() => setDdlDialogOpen(true)}
+        canRequestApprovalReminder={canRequestTaskDdlApprovalReminder}
+        userOpenId={userOpenId}
       />
 
       {pendingDeletionRequest && !isProjectCanceledTask && (
@@ -308,6 +319,10 @@ export function TaskDetailWorkspace({
           taskTitle={task.title}
           canManage={canManage}
           redirectTo={projectHref}
+          canRequestApprovalReminder={
+            canRequestTaskApprovalReminder ||
+            pendingDeletionRequest.requesterOpenId === userOpenId
+          }
         />
       )}
 
@@ -328,6 +343,8 @@ export function TaskDetailWorkspace({
             acceptanceChecklistItems={task.acceptanceChecklistItems}
             submissions={task.submissions}
             riskRecords={task.riskRecords}
+            canRequestApprovalReminder={canRequestTaskApprovalReminder}
+            userOpenId={userOpenId}
             showFlowActions={false}
           />
 
@@ -593,11 +610,15 @@ function TaskDdlChangePanel({
   canReview,
   canRequest,
   onOpenRequest,
+  canRequestApprovalReminder,
+  userOpenId,
 }: {
   task: TaskDetailView;
   canReview: boolean;
   canRequest: boolean;
   onOpenRequest: () => void;
+  canRequestApprovalReminder: boolean;
+  userOpenId?: string;
 }) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -645,6 +666,14 @@ function TaskDdlChangePanel({
                 {formatDateTime(pendingRequest.createdAt)}
               </span>
             </div>
+            {(canRequestApprovalReminder ||
+              pendingRequest.requesterOpenId === userOpenId) && (
+              <RequestApprovalReminderButton
+                reference={{ kind: "TASK_DDL", id: pendingRequest.id }}
+                compact
+                subject={`${task.title} DDL 修改`}
+              />
+            )}
             <p>
               {formatDateTime(pendingRequest.oldDueAt)} -&gt;{" "}
               {formatDateTime(pendingRequest.newDueAt)}
@@ -1067,11 +1096,13 @@ function TaskDeletionRequestPanel({
   taskTitle,
   canManage,
   redirectTo,
+  canRequestApprovalReminder,
 }: {
   request: TaskDeletionRequestView;
   taskTitle: string;
   canManage: boolean;
   redirectTo: string;
+  canRequestApprovalReminder: boolean;
 }) {
   const router = useRouter();
   const [comment, setComment] = useState("");
@@ -1104,7 +1135,16 @@ function TaskDeletionRequestPanel({
   return (
     <Card className="mt-4 border-orange-200 bg-orange-50/60">
       <CardHeader className="pb-3">
-        <CardTitle className="text-base">删除申请待审核</CardTitle>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <CardTitle className="text-base">删除申请待审核</CardTitle>
+          {canRequestApprovalReminder && (
+            <RequestApprovalReminderButton
+              reference={{ kind: "TASK_DELETION", id: request.id }}
+              compact
+              subject={`${taskTitle} 删除申请`}
+            />
+          )}
+        </div>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
         <p>
@@ -1479,6 +1519,20 @@ function ActivityDetails({
   payload: Record<string, unknown>;
   comment: string | null;
 }) {
+  const recipientNames = Array.isArray(payload.recipientNames)
+    ? payload.recipientNames.filter(
+        (name): name is string => typeof name === "string" && !!name,
+      )
+    : [];
+  const approvalKindLabel = getPayloadString(payload.approvalKindLabel);
+  if (recipientNames.length > 0) {
+    return (
+      <div className="mt-2 space-y-1 rounded-md bg-muted/50 px-2 py-2 text-xs text-muted-foreground">
+        {approvalKindLabel && <p>审批类型：{approvalKindLabel}</p>}
+        <p>提醒对象：{recipientNames.join("、")}</p>
+      </div>
+    );
+  }
   if (log.action === "task.status_changed" || log.action === "task.restarted") {
     const from = getPayloadString(payload.from);
     const to = getPayloadString(payload.to);
@@ -1675,6 +1729,7 @@ function activityLabel(action: string): string {
     "task.delete_rejected": "驳回了删除申请",
     "task.deleted": "删除了任务",
     "task.reminded": "发送了任务催促提醒",
+    "approval.reminder_requested": "请求了审批提醒",
   };
   return labels[action] ?? action;
 }

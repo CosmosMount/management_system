@@ -401,7 +401,9 @@ async function getProgressBoardVersion({
   return encodeVersion(parts);
 }
 
-async function getProgressApprovalsVersion(): Promise<string> {
+async function getProgressApprovalsVersion(
+  context: LiveVersionContext,
+): Promise<string> {
   const pendingProjectWhere: Prisma.ProjectWhereInput = {
     status: "ESTABLISHING",
   };
@@ -436,9 +438,14 @@ async function getProgressApprovalsVersion(): Promise<string> {
       },
     ],
   };
+  const visibleSubmissionWhere: Prisma.TaskSubmissionWhereInput = {
+    OR: [taskSubmissionWhere, { submittedBy: context.userOpenId }],
+  };
 
   const parts = await Promise.all([
-    projectUpdatedAtVersion("establishingProjects", pendingProjectWhere),
+    projectUpdatedAtVersion("establishingProjects", {
+      OR: [pendingProjectWhere, { requesterOpenId: context.userOpenId }],
+    }),
     projectUpdatedAtVersion("activeProjects", activeProjectWhere),
     projectOwnerVersion({
       project: {
@@ -457,32 +464,46 @@ async function getProgressApprovalsVersion(): Promise<string> {
     taskVersion(pendingApprovalTaskWhere),
     taskTechGroupVersion({ task: pendingApprovalTaskWhere }),
     projectDdlChangeRequestVersion({
-      status: "PENDING",
-      project: activeProjectWhere,
+      OR: [
+        { status: "PENDING", project: activeProjectWhere },
+        { requesterOpenId: context.userOpenId },
+      ],
     }),
     taskCreationRequestVersion({
-      status: "PENDING",
-      project: activeProjectWhere,
+      OR: [
+        { status: "PENDING", project: activeProjectWhere },
+        { requesterOpenId: context.userOpenId },
+      ],
     }),
     taskDeletionRequestVersion({
-      status: "PENDING",
-      task: {
-        deletedAt: null,
-        status: { not: "PROJECT_CANCELED" },
-        project: { status: "IN_PROGRESS" },
-      },
+      OR: [
+        {
+          status: "PENDING",
+          task: {
+            deletedAt: null,
+            status: { not: "PROJECT_CANCELED" },
+            project: { status: "IN_PROGRESS" },
+          },
+        },
+        { requesterOpenId: context.userOpenId },
+      ],
     }),
     taskDdlChangeRequestVersion({
-      status: "PENDING",
-      task: {
-        deletedAt: null,
-        status: { notIn: ["COMPLETED", "ARCHIVED", "PROJECT_CANCELED"] },
-        project: activeProjectWhere,
-      },
+      OR: [
+        {
+          status: "PENDING",
+          task: {
+            deletedAt: null,
+            status: { notIn: ["COMPLETED", "ARCHIVED", "PROJECT_CANCELED"] },
+            project: activeProjectWhere,
+          },
+        },
+        { requesterOpenId: context.userOpenId },
+      ],
     }),
-    submissionVersion(taskSubmissionWhere),
+    submissionVersion(visibleSubmissionWhere),
     approvalVersion({
-      submission: taskSubmissionWhere,
+      submission: visibleSubmissionWhere,
     }),
   ]);
   return encodeVersion(parts);
@@ -972,7 +993,7 @@ export async function getLiveVersion(
     return withUserVersion(await getProgressListVersion(context));
   }
   if (context.scope === "progress-approvals") {
-    return withUserVersion(await getProgressApprovalsVersion());
+    return withUserVersion(await getProgressApprovalsVersion(context));
   }
   if (context.scope === "progress-board") {
     return withUserVersion(await getProgressBoardVersion(context));

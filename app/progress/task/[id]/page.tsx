@@ -18,6 +18,12 @@ import {
   canSubmitDelivery,
   canSubmitTaskWeeklyReport,
   canViewTask,
+  isAnyTechGroupLead,
+  isAssignee as isProgressAssignee,
+  isProjectManager,
+  isProgressSuperAdmin,
+  isTeamLead,
+  isTechGroupLead,
   progressTaskReadableWhere,
 } from "@/lib/permissions-progress";
 import {
@@ -147,6 +153,24 @@ export default async function TaskDetailPage({ params }: Props) {
     userOpenId,
   );
   const taskTechGroups = getTaskTechGroups(task);
+  const taskAssigneeOpenIds = getTaskAssigneeOpenIds(task);
+  const stageOwnerOpenIds = task.stage
+    ? getProjectStageOwnerOpenIds(task.stage)
+    : [];
+  const hasTaskApprovalReminderRelationship =
+    !!userOpenId &&
+    (isProgressAssignee(userOpenId, projectOwnerOpenIds) ||
+      isProgressAssignee(userOpenId, getProjectParticipantOpenIds(task.project)) ||
+      isProgressAssignee(userOpenId, stageOwnerOpenIds) ||
+      isProgressAssignee(userOpenId, taskAssigneeOpenIds) ||
+      isProgressSuperAdmin(roles) ||
+      isProjectManager(roles));
+  const canRequestTaskApprovalReminder =
+    hasTaskApprovalReminderRelationship ||
+    isTeamLead(roles, task.team) ||
+    isTechGroupLead(roles, task.techGroup);
+  const canRequestTaskDdlApprovalReminder =
+    canRequestTaskApprovalReminder || isAnyTechGroupLead(roles, taskTechGroups);
   const canSubmitTaskWeekly =
     task.project.status !== "COMPLETED" &&
     task.project.status !== "CANCELED" &&
@@ -292,6 +316,7 @@ export default async function TaskDetailPage({ params }: Props) {
     })),
     submissions: task.submissions.map((submission) => ({
       id: submission.id,
+      submittedBy: submission.submittedBy,
       feishuDocUrl: submission.feishuDocUrl,
       keyDataUrl: submission.keyDataUrl,
       note: submission.note,
@@ -324,6 +349,7 @@ export default async function TaskDetailPage({ params }: Props) {
     })),
     deletionRequests: task.deletionRequests.map((request) => ({
       id: request.id,
+      requesterOpenId: request.requesterOpenId,
       requesterName: request.requesterName,
       reason: request.reason,
       status: request.status,
@@ -382,6 +408,9 @@ export default async function TaskDetailPage({ params }: Props) {
           canRequestDdlChange={canRequestDdlChange}
           canReviewDdlChange={canReviewDdlChange}
           isSuperAdmin={admin}
+          canRequestTaskApprovalReminder={canRequestTaskApprovalReminder}
+          canRequestTaskDdlApprovalReminder={canRequestTaskDdlApprovalReminder}
+          userOpenId={userOpenId}
         />
       </PageShell>
     </>

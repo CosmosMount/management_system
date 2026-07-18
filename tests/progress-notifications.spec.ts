@@ -49,6 +49,38 @@ test.beforeEach(async () => {
   await prisma.notificationOutbox.deleteMany();
 });
 
+test("审批提醒使用审批机器人并发送完整中文卡片", async () => {
+  const eventKey = `playwright:progress-notify:approval_reminder:${Date.now()}`;
+  const payload: ProgressNotifyPayload = {
+    type: "approval_reminder_requested",
+    approvalKindLabel: "任务 DDL",
+    projectName: "PW通知-审批提醒项目",
+    subject: "机械臂联调任务",
+    submitterName: "李棋轩",
+    reminderName: "项目负责人",
+    submittedAt: "2026-07-18T02:30:00.000Z",
+    recipientOpenIds: ["ou_approval_reminder"],
+    linkPath: "/progress/task/pw-approval-reminder-task",
+  };
+
+  const captured = await enqueueAndDrainProgressNotification(eventKey, payload);
+
+  expect(resolveProgressBotKind(payload.type)).toBe("approval");
+  expect(captured).toHaveLength(1);
+  expect(captured[0]?.title).toBe("审批提醒");
+  expect(captured[0]?.cardText).toContain("审批类型");
+  expect(captured[0]?.cardText).toContain("任务 DDL");
+  expect(captured[0]?.cardText).toContain("PW通知-审批提醒项目");
+  expect(captured[0]?.cardText).toContain("审批事项");
+  expect(captured[0]?.cardText).toContain("机械臂联调任务");
+  expect(captured[0]?.cardText).toContain("提交人");
+  expect(captured[0]?.cardText).toContain("提醒人");
+  expect(captured[0]?.cardText).toContain("查看审批");
+  expect(captured[0]?.cardText).toContain(
+    "http://127.0.0.1:3002/progress/task/pw-approval-reminder-task",
+  );
+});
+
 test("项目立项通知发送给审批人并使用明确中文", async () => {
   const eventKey = `playwright:progress-notify:project_establishment_requested:${Date.now()}`;
   const payload: ProgressNotifyPayload = {
@@ -2253,6 +2285,123 @@ test("测试收件人 allowlist 只放行指定三人", async () => {
     );
   } finally {
     await prisma.user.deleteMany({ where: { openId: { in: temporaryOpenIds } } });
+  }
+});
+
+test("测试收件人 allowlist 的多个身份维度必须同时匹配", async () => {
+  const suffix = Date.now();
+  const allowedOpenId = `ou_allow_exact_${suffix}`;
+  const sameNameOpenId = `ou_allow_same_name_${suffix}`;
+  const allowedUnionId = `on_allow_exact_${suffix}`;
+  const temporaryOpenIds = [allowedOpenId, sameNameOpenId];
+  await prisma.user.createMany({
+    data: [
+      { openId: allowedOpenId, name: "李棋轩", unionId: allowedUnionId },
+      {
+        openId: sameNameOpenId,
+        name: "李棋轩",
+        unionId: `on_allow_same_name_${suffix}`,
+      },
+    ],
+  });
+
+  try {
+    await withFeishuBotEnv(
+      {
+        FEISHU_APP_ID: "oauth-app",
+        FEISHU_APP_SECRET: "oauth-secret",
+        FEISHU_NOTIFICATION_APP_ID: "notification-app",
+        FEISHU_NOTIFICATION_APP_SECRET: "notification-secret",
+        FEISHU_APPROVAL_APP_ID: undefined,
+        FEISHU_APPROVAL_APP_SECRET: undefined,
+        FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES: "李棋轩",
+        FEISHU_DIRECT_MESSAGE_ALLOWED_OPEN_IDS: allowedOpenId,
+        FEISHU_DIRECT_MESSAGE_ALLOWED_UNION_IDS: allowedUnionId,
+      },
+      async () => {
+        const capturedMessages: CapturedFeishuMessage[] = [];
+        const restoreFetch = mockFeishuFetch(capturedMessages);
+        try {
+          await sendProgressNotification({
+            type: "project_canceled",
+            projectId: "pw-project-exact-allowlist",
+            projectName: "PW机器人-精确收件人拦截",
+            team: "工程",
+            techGroup: "宣运",
+            ownerOpenIds: temporaryOpenIds,
+            ownerNames: "李棋轩",
+            participantOpenIds: [],
+            participantNames: "",
+            recipientOpenIds: temporaryOpenIds,
+            canceledTaskCount: 0,
+          });
+        } finally {
+          restoreFetch();
+        }
+
+        expect(capturedMessages.map((message) => message.receiveId)).toEqual([
+          allowedOpenId,
+        ]);
+      },
+    );
+  } finally {
+    await prisma.user.deleteMany({ where: { openId: { in: temporaryOpenIds } } });
+  }
+});
+
+test("outbox 收件人被安全名单拦截时不会误标为已发送", async () => {
+  const suffix = Date.now();
+  const blockedOpenId = `ou_outbox_allowlist_blocked_${suffix}`;
+  await prisma.user.create({
+    data: {
+      openId: blockedOpenId,
+      unionId: `on_outbox_allowlist_blocked_${suffix}`,
+      name: "同名测试用户",
+    },
+  });
+  const eventKey = `playwright:outbox-allowlist-blocked:${suffix}`;
+
+  try {
+    await withFeishuBotEnv(
+      {
+        FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES: "李棋轩",
+        FEISHU_DIRECT_MESSAGE_ALLOWED_OPEN_IDS: `ou_real_${suffix}`,
+        FEISHU_DIRECT_MESSAGE_ALLOWED_UNION_IDS: `on_real_${suffix}`,
+      },
+      async () => {
+        await enqueueProgressNotification(eventKey, {
+          type: "approval_reminder_requested",
+          approvalKindLabel: "任务 DDL",
+          projectName: "PW安全名单项目",
+          subject: "安全名单拦截验证",
+          submitterName: "申请人",
+          reminderName: "提醒人",
+          submittedAt: "2026-07-18T08:00:00.000Z",
+          recipientOpenIds: [blockedOpenId],
+          linkPath: "/progress/approvals",
+        });
+        await expect(
+          drainNotificationOutbox(1, { ignoreDeliveryDisabled: true }),
+        ).resolves.toBe(0);
+      },
+    );
+
+    const outbox = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: { eventKey },
+      include: { recipients: true },
+    });
+    expect(outbox.status).toBe("FAILED");
+    expect(outbox.recipients).toEqual([
+      expect.objectContaining({
+        openId: blockedOpenId,
+        status: "FAILED",
+        receiveId: "",
+        receiveIdType: "",
+        sentAt: null,
+      }),
+    ]);
+  } finally {
+    await prisma.user.delete({ where: { openId: blockedOpenId } });
   }
 });
 

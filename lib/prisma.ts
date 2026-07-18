@@ -2,7 +2,7 @@ import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
 
-const PRISMA_SCHEMA_REVISION = "progress-daily-summary-setting-v1";
+const PRISMA_SCHEMA_REVISION = "progress-approval-reminders-v1";
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
@@ -36,6 +36,8 @@ function isPrismaClientStale(client: PrismaClient): boolean {
     typeof client.taskFollowPreference?.findMany !== "function" ||
     typeof client.progressReminderRule?.findMany !== "function" ||
     typeof client.progressDailySummarySetting?.findMany !== "function" ||
+    typeof client.progressApprovalReminderSetting?.findMany !== "function" ||
+    typeof client.progressApprovalReminderDelivery?.findMany !== "function" ||
     typeof client.feedback?.findMany !== "function" ||
     typeof client.processingVendor?.findMany !== "function" ||
     typeof client.procurementBudgetPool?.findMany !== "function" ||

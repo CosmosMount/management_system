@@ -70,6 +70,11 @@ export type AdminProgressDailySummarySetting = {
   updatedAt: string | null;
 };
 
+export type AdminProgressApprovalReminderSetting = {
+  cooldownMinutes: number;
+  updatedAt: string | null;
+};
+
 export type AdminDailySummaryUserOption = {
   openId: string;
   name: string;

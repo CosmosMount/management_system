@@ -152,7 +152,7 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 | `FEISHU_NOTIFICATION_APP_SECRET` | 可选，通知机器人 App Secret；未配置时回退 `FEISHU_APP_ID` / `FEISHU_APP_SECRET` |
 | `FEISHU_APPROVAL_APP_ID` | 可选，审批机器人 App ID；只发送审批、验收、确认等待处理消息 |
 | `FEISHU_APPROVAL_APP_SECRET` | 可选，审批机器人 App Secret；未配置时回退通知机器人 |
-| `FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES` / `FEISHU_DIRECT_MESSAGE_ALLOWED_OPEN_IDS` / `FEISHU_DIRECT_MESSAGE_ALLOWED_UNION_IDS` | 可选，飞书私信收件人临时 allowlist；用于测试或演练防误发，未配置时不限制。Playwright 启动的应用服务默认只允许 `李棋轩、张宇山、陈彦霖` |
+| `FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES` / `FEISHU_DIRECT_MESSAGE_ALLOWED_OPEN_IDS` / `FEISHU_DIRECT_MESSAGE_ALLOWED_UNION_IDS` | 可选，飞书私信收件人临时 allowlist；用于测试或演练防误发，未配置时不限制；同时配置多个身份维度时必须全部匹配。Playwright 启动的应用服务默认只允许 `李棋轩` |
 | `FEISHU_WEBHOOK_URL` | 采购通知群 Webhook（与 `FEISHU_PROCUREMENT_WEBHOOK_URL` 二选一，后者优先） |
 | `FEISHU_PROCUREMENT_WEBHOOK_URL` | 采购专用群 Webhook |
 | `FEISHU_WEBHOOK_SECRET` | 可选，Webhook 签名校验密钥 |

@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { CheckCircle2, Clock3, FileText, PencilLine, XCircle } from "lucide-react";
 import { reviewProjectEstablishment } from "@/app/actions/progress/createProject";
 import { RejectedProjectEstablishmentDeleteButton } from "@/components/progress/rejected-project-establishment-delete-button";
+import { RequestApprovalReminderButton } from "@/components/progress/request-approval-reminder-button";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -52,6 +53,7 @@ export type ProjectEstablishmentView = {
   canResubmit: boolean;
   canReview: boolean;
   canDelete: boolean;
+  canRequestApprovalReminder: boolean;
 };
 
 type Props = {
@@ -203,6 +205,14 @@ export function ProjectEstablishmentPanel({ projects }: Props) {
                       </Button>
                     </>
                   )}
+                  {project.canRequestApprovalReminder &&
+                    project.status === "ESTABLISHING" && (
+                      <RequestApprovalReminderButton
+                        reference={{ kind: "PROJECT_ESTABLISHMENT", id: project.id }}
+                        className={establishmentActionButtonClassName}
+                        subject={project.projectName}
+                      />
+                    )}
                 </div>
               </div>
               {project.canReview && project.status === "ESTABLISHING" && (

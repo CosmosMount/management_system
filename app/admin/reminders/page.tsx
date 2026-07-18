@@ -1,5 +1,6 @@
 import { RemindersPanel } from "@/components/admin/reminders-panel";
 import { getProgressDailySummarySetting } from "@/lib/progress-daily-summary";
+import { getProgressApprovalReminderSetting } from "@/lib/progress-approval-reminder-settings";
 import { getProgressReminderRuleViews } from "@/lib/progress-reminders";
 import { prisma } from "@/lib/prisma";
 
@@ -9,6 +10,7 @@ export default async function AdminRemindersPage() {
     progressReminderOutbox,
     progressDailySummarySetting,
     progressDailySummaryOutbox,
+    progressApprovalReminderSetting,
     users,
   ] = await Promise.all([
     getProgressReminderRuleViews(),
@@ -23,6 +25,7 @@ export default async function AdminRemindersPage() {
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: 20,
     }),
+    getProgressApprovalReminderSetting(),
     prisma.user.findMany({
       orderBy: [{ name: "asc" }, { openId: "asc" }],
       select: { openId: true, name: true, email: true, avatar: true },
@@ -43,6 +46,7 @@ export default async function AdminRemindersPage() {
         sentAt: row.sentAt?.toISOString() ?? null,
       }))}
       progressDailySummarySetting={progressDailySummarySetting}
+      progressApprovalReminderSetting={progressApprovalReminderSetting}
       progressDailySummaryOutbox={progressDailySummaryOutbox.map((row) => {
         const metadata = readDailySummaryOutboxMetadata(
           row.eventKey,

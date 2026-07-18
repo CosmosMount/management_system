@@ -195,6 +195,17 @@ export async function enqueueNotificationTx(
     ],
     skipDuplicates: true,
   });
+  logger.info("notification.outbox.enqueue_tx.prepared", {
+    module: "notification",
+    action: "enqueueNotificationTx",
+    eventKey,
+    channel,
+    type,
+    botKind,
+    created: result.count > 0,
+    transactional: true,
+    result: "prepared",
+  });
   return { created: result.count > 0 };
 }
 
@@ -746,6 +757,20 @@ async function sendOutboxRecipient(
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    logger.error("notification.outbox.recipient.failed", {
+      module: "notification",
+      action: "sendOutboxRecipient",
+      entityType: "NotificationOutbox",
+      entityId: row.id,
+      eventKey: row.eventKey,
+      channel: row.channel,
+      type: row.type,
+      botKind: row.botKind,
+      recipientOpenId: recipient.openId,
+      attempts,
+      result: "failure",
+      errorMessage: message,
+    });
     await prisma.notificationOutboxRecipient.updateMany({
       where: { id: recipient.id, status: "PROCESSING" },
       data: {
@@ -765,7 +790,9 @@ async function sendOutboxNotificationToRecipient(
 ): Promise<{ receiveId: string; receiveIdType: string } | null> {
   const botKind = normalizeBotKind(row.botKind);
   const target = await resolveRecipientTarget(openId, botKind);
-  if (target.skipped) return null;
+  if (target.skipped) {
+    throw new Error("FEISHU_RECIPIENT_NOT_ALLOWED: 收件人不在飞书私信安全名单中");
+  }
 
   if (row.channel === "progress") {
     const data = JSON.parse(row.payload) as ProgressOutboxPayload;

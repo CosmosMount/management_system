@@ -17,6 +17,7 @@ export function revalidateProgress(projectId?: string, taskId?: string) {
   revalidatePath(routes.progress.list);
   revalidatePath(routes.progress.dashboard);
   revalidatePath(routes.progress.archive);
+  revalidatePath(routes.progress.approvals);
   if (projectId) {
     revalidatePath(routes.progress.project(projectId));
   }

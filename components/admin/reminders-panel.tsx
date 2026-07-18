@@ -9,11 +9,13 @@ import {
   retryProgressReminderOutbox,
   runProgressReminderScanNow,
   sendProgressDailySummaryTest,
+  updateProgressApprovalReminderSetting,
   updateProgressDailySummarySetting,
   updateProgressReminderRules,
 } from "@/app/actions/progress/reminders";
 import type {
   AdminDailySummaryUserOption,
+  AdminProgressApprovalReminderSetting,
   AdminProgressDailySummarySetting,
   AdminProgressReminderRule,
   AdminReminderOutbox,
@@ -49,12 +51,14 @@ export function RemindersPanel({
   progressReminderRules,
   progressReminderOutbox,
   progressDailySummarySetting,
+  progressApprovalReminderSetting,
   progressDailySummaryOutbox,
   users,
 }: {
   progressReminderRules: AdminProgressReminderRule[];
   progressReminderOutbox: AdminReminderOutbox[];
   progressDailySummarySetting: AdminProgressDailySummarySetting;
+  progressApprovalReminderSetting: AdminProgressApprovalReminderSetting;
   progressDailySummaryOutbox: AdminReminderOutbox[];
   users: AdminDailySummaryUserOption[];
 }) {
@@ -63,6 +67,9 @@ export function RemindersPanel({
   const [activeTab, setActiveTab] = useState<"rules" | "daily">("rules");
   const [reminderDrafts, setReminderDrafts] = useState(progressReminderRules);
   const [dailyDraft, setDailyDraft] = useState(progressDailySummarySetting);
+  const [approvalReminderDraft, setApprovalReminderDraft] = useState(
+    progressApprovalReminderSetting,
+  );
   const [selectedDailyUserOpenId, setSelectedDailyUserOpenId] = useState(
     users[0]?.openId ?? "",
   );
@@ -108,6 +115,21 @@ export function RemindersPanel({
         router.refresh();
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "扫描失败");
+      }
+    });
+  }
+
+  function handleSaveApprovalReminderSetting() {
+    startTransition(async () => {
+      try {
+        const saved = await updateProgressApprovalReminderSetting({
+          cooldownMinutes: approvalReminderDraft.cooldownMinutes,
+        });
+        setApprovalReminderDraft(saved);
+        toast.success("审批提醒设置已保存");
+        router.refresh();
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "保存失败");
       }
     });
   }
@@ -214,6 +236,48 @@ export function RemindersPanel({
         </div>
       </CardHeader>
       <CardContent className="min-w-0 space-y-6">
+        <div className="rounded-lg border p-3" data-testid="admin-approval-reminder-setting">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <label className="min-w-0 flex-1 space-y-1 text-sm sm:max-w-sm">
+              <span className="font-medium">审批提醒冷却时间（分钟）</span>
+              <Input
+                type="number"
+                min={0}
+                max={1440}
+                step={1}
+                value={approvalReminderDraft.cooldownMinutes}
+                onChange={(event) =>
+                  setApprovalReminderDraft((draft) => ({
+                    ...draft,
+                    cooldownMinutes: Number(event.target.value),
+                  }))
+                }
+                data-testid="admin-approval-reminder-cooldown"
+              />
+              <span className="block text-xs text-muted-foreground">
+                同一审批对同一审批人的再次提醒间隔；填写 0 可关闭冷却，最大 1440 分钟。
+                {approvalReminderDraft.updatedAt
+                  ? ` 上次更新：${new Date(approvalReminderDraft.updatedAt).toLocaleString("zh-CN")}`
+                  : ""}
+              </span>
+            </label>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={
+                pending ||
+                !Number.isInteger(approvalReminderDraft.cooldownMinutes) ||
+                approvalReminderDraft.cooldownMinutes < 0 ||
+                approvalReminderDraft.cooldownMinutes > 1440
+              }
+              onClick={handleSaveApprovalReminderSetting}
+              data-testid="admin-approval-reminder-save"
+            >
+              保存审批提醒设置
+            </Button>
+          </div>
+        </div>
+
         <div className="space-y-3">
           {reminderDrafts.map((rule) => {
             const ruleMeta = reminderRuleMetaByKind.get(rule.kind);

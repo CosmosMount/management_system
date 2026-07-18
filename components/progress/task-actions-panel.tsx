@@ -23,6 +23,7 @@ import {
 } from "@/app/actions/progress/submitWeeklyReport";
 import { updateTaskStatus, archiveTask } from "@/app/actions/progress/updateTask";
 import { Button } from "@/components/ui/button";
+import { RequestApprovalReminderButton } from "@/components/progress/request-approval-reminder-button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -35,6 +36,7 @@ import { taskStatusLabels } from "@/lib/progress-labels";
 
 type Submission = {
   id: string;
+  submittedBy: string;
   feishuDocUrl: string;
   keyDataUrl: string;
   note: string;
@@ -100,6 +102,8 @@ type Props = {
   riskRecords?: RiskRecord[];
   className?: string;
   showFlowActions?: boolean;
+  canRequestApprovalReminder: boolean;
+  userOpenId?: string;
 };
 
 export function TaskActionsPanel({
@@ -119,6 +123,8 @@ export function TaskActionsPanel({
   riskRecords = [],
   className,
   showFlowActions = true,
+  canRequestApprovalReminder,
+  userOpenId,
 }: Props) {
   const router = useRouter();
   const docUrlInputRef = useRef<HTMLInputElement>(null);
@@ -620,8 +626,16 @@ export function TaskActionsPanel({
 
       {canApprove && pendingSubmission && status === "PENDING_ACCEPTANCE" && (
         <Card>
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
             <CardTitle>验收审批</CardTitle>
+            {(canRequestApprovalReminder ||
+              pendingSubmission.submittedBy === userOpenId) && (
+              <RequestApprovalReminderButton
+                reference={{ kind: "TASK_ACCEPTANCE", id: pendingSubmission.id }}
+                compact
+                subject="任务验收"
+              />
+            )}
           </CardHeader>
           <CardContent className="space-y-4">
             <p className="text-sm">
@@ -716,6 +730,23 @@ export function TaskActionsPanel({
           </CardContent>
         </Card>
       )}
+
+      {!canApprove && pendingSubmission && status === "PENDING_ACCEPTANCE" &&
+        (canRequestApprovalReminder || pendingSubmission.submittedBy === userOpenId) && (
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
+              <CardTitle>验收审批</CardTitle>
+              <RequestApprovalReminderButton
+                reference={{ kind: "TASK_ACCEPTANCE", id: pendingSubmission.id }}
+                compact
+                subject="任务验收"
+              />
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">
+              当前交付已提交，正在等待验收。
+            </CardContent>
+          </Card>
+        )}
 
       <Card>
         <CardHeader>

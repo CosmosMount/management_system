@@ -58,6 +58,7 @@ const EXPLICIT_RECIPIENT_REQUIRED_TYPES = new Set<string>([
   "task_overdue",
   "weekly_report_reminder",
   "progress_daily_summary",
+  "approval_reminder_requested",
 ]);
 
 type TaskNotificationDetails = {
@@ -619,6 +620,17 @@ export type ProgressNotifyPayload =
       taskTitle: string;
       assigneeOpenIds: string[];
       recipientOpenIds: string[];
+    }
+  | {
+      type: "approval_reminder_requested";
+      approvalKindLabel: string;
+      projectName: string;
+      subject: string;
+      submitterName: string;
+      reminderName: string;
+      submittedAt: string;
+      recipientOpenIds: string[];
+      linkPath: string;
     }
   | {
       type: "progress_reminder";
@@ -1671,6 +1683,25 @@ export async function sendProgressNotification(
         `**任务**：${payload.taskTitle}\n请在系统中提交本周进度周报。`,
         buildAppUrl(`${routes.progress.task(payload.taskId)}`, appOrigin),
         "orange",
+      );
+      await notifyOpenIds(payload.recipientOpenIds, card);
+      break;
+    }
+    case "approval_reminder_requested": {
+      const approvalUrl = buildAppUrl(payload.linkPath, appOrigin);
+      const card = buildCard(
+        "审批提醒",
+        [
+          `**审批类型**：${payload.approvalKindLabel}`,
+          `**项目**：${payload.projectName}`,
+          `**审批事项**：${payload.subject}`,
+          `**提交人**：${payload.submitterName}`,
+          `**提醒人**：${payload.reminderName}`,
+          `**提交时间**：${formatNotificationDateTime(payload.submittedAt)}`,
+        ].join("\n"),
+        approvalUrl,
+        "orange",
+        [{ text: "查看审批", url: approvalUrl, type: "primary" }],
       );
       await notifyOpenIds(payload.recipientOpenIds, card);
       break;
