@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -67,22 +67,28 @@ export function MyApprovalSubmissionsList({ items }: Props) {
   const searchParams = useSearchParams();
   const queryKey = searchParams.toString();
   const parsed = useMemo(
-    () => readFilters(new URLSearchParams(queryKey)),
-    [queryKey],
+    () => readFilters(new URLSearchParams(queryKey), items),
+    [items, queryKey],
   );
+  const filterContextKey = useMemo(
+    () =>
+      Array.from(new Set(items.map((item) => item.projectId))).sort().join("|"),
+    [items],
+  );
+  const draftKey = `${queryKey}\u0000${filterContextKey}`;
   const [draftState, setDraftState] = useState({
-    queryKey,
+    key: draftKey,
     value: parsed.filters,
   });
   const draft =
-    draftState.queryKey === queryKey ? draftState.value : parsed.filters;
+    draftState.key === draftKey ? draftState.value : parsed.filters;
 
   function setDraft(update: FilterState | ((value: FilterState) => FilterState)) {
     setDraftState((current) => {
       const currentValue =
-        current.queryKey === queryKey ? current.value : parsed.filters;
+        current.key === draftKey ? current.value : parsed.filters;
       return {
-        queryKey,
+        key: draftKey,
         value: typeof update === "function" ? update(currentValue) : update,
       };
     });
@@ -129,22 +135,16 @@ export function MyApprovalSubmissionsList({ items }: Props) {
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const page = Math.min(parsed.page, pageCount);
   const visibleItems = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-  function updateUrl(next: FilterState, nextPage = 1) {
-    const params = new URLSearchParams();
-    params.set("view", "submitted");
-    setOptional(params, "type", next.kind);
-    setOptional(params, "project", next.project);
-    if (!next.status) {
-      params.set("status", "ALL");
-    } else if (next.status !== "PENDING") {
-      params.set("status", next.status);
+  const canonicalQuery = buildQuery(parsed.filters, page).toString();
+
+  useEffect(() => {
+    if (queryKey !== canonicalQuery) {
+      router.replace(`/progress/approvals?${canonicalQuery}`);
     }
-    setOptional(params, "from", next.from);
-    setOptional(params, "to", next.to);
-    if (next.sort !== "submittedAt") params.set("sort", next.sort);
-    if (next.direction !== "desc") params.set("direction", next.direction);
-    if (nextPage > 1) params.set("page", String(nextPage));
-    router.push(`/progress/approvals?${params.toString()}`);
+  }, [canonicalQuery, queryKey, router]);
+
+  function updateUrl(next: FilterState, nextPage = 1) {
+    router.push(`/progress/approvals?${buildQuery(next, nextPage).toString()}`);
   }
 
   function clearFilters() {
@@ -294,7 +294,13 @@ export function MyApprovalSubmissionsList({ items }: Props) {
         <>
           <ul className="space-y-3" aria-label="我的审批申请">
             {visibleItems.map((item) => (
-              <li key={`${item.reference.kind}-${item.reference.id}`}>
+              <li
+                key={`${item.reference.kind}-${item.reference.id}`}
+                data-approval-kind={item.kind}
+                data-approval-status={item.status}
+                data-project-name={item.projectName}
+                data-submitted-at={item.submittedAt}
+              >
                 <Card className="border-border/70">
                   <CardContent className="p-4">
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -302,14 +308,27 @@ export function MyApprovalSubmissionsList({ items }: Props) {
                         <div className="flex flex-wrap items-center gap-2">
                           <Badge variant="outline">{item.kindLabel}</Badge>
                           <StatusBadge status={item.status} label={item.statusLabel} />
-                          <p className="break-words font-medium">{item.subject}</p>
+                          <p
+                            className="line-clamp-2 break-all font-medium"
+                            title={item.subject}
+                          >
+                            {item.subject}
+                          </p>
                         </div>
-                        <p className="text-sm text-muted-foreground">
+                        <p
+                          className="line-clamp-2 break-all text-sm text-muted-foreground"
+                          title={item.projectName}
+                        >
                           项目：{item.projectName}
                         </p>
-                        <p className="break-words text-sm">{item.summary}</p>
+                        <p
+                          className="line-clamp-3 break-all text-sm"
+                          title={item.summary}
+                        >
+                          {item.summary}
+                        </p>
                         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                          <span>提交人：{item.submitterName}</span>
+                          <span className="break-words">提交人：{item.submitterName}</span>
                           <span>提交时间：{formatDateTime(item.submittedAt)}</span>
                           {item.processedAt ? (
                             <span>处理时间：{formatDateTime(item.processedAt)}</span>
@@ -461,23 +480,35 @@ function EmptyState({
   );
 }
 
-function readFilters(searchParams: URLSearchParams): {
+function readFilters(
+  searchParams: URLSearchParams,
+  items: ProgressApprovalListItem[],
+): {
   filters: FilterState;
   page: number;
 } {
   const sort = searchParams.get("sort");
   const direction = searchParams.get("direction");
+  const kind = searchParams.get("type");
+  const status = searchParams.get("status");
+  const project = searchParams.get("project");
+  const rawFrom = validDateInput(searchParams.get("from"));
+  const rawTo = validDateInput(searchParams.get("to"));
+  const dateRangeIsValid = !rawFrom || !rawTo || rawFrom <= rawTo;
   const rawPage = Number(searchParams.get("page"));
   return {
     filters: {
-      kind: searchParams.get("type") ?? "",
-      project: searchParams.get("project") ?? "",
+      kind: progressApprovalKind(kind) ? kind : "",
+      project:
+        project && items.some((item) => item.projectId === project) ? project : "",
       status:
-        searchParams.get("status") === "ALL"
+        status === "ALL"
           ? ""
-          : searchParams.get("status") ?? "PENDING",
-      from: validDateInput(searchParams.get("from")),
-      to: validDateInput(searchParams.get("to")),
+          : progressApprovalStatus(status)
+            ? status
+            : "PENDING",
+      from: dateRangeIsValid ? rawFrom : "",
+      to: dateRangeIsValid ? rawTo : "",
       sort:
         sort === "kind" || sort === "project" || sort === "status"
           ? sort
@@ -516,11 +547,44 @@ function endOfShanghaiDay(value: string): number {
 }
 
 function validDateInput(value: string | null): string {
-  return value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "";
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return "";
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+    ? value
+    : "";
+}
+
+function progressApprovalKind(value: string | null): value is ProgressApprovalKind {
+  return value !== null && kindOrder.includes(value as ProgressApprovalKind);
+}
+
+function progressApprovalStatus(value: string | null): value is ProgressApprovalStatus {
+  return value !== null && statusOrder.includes(value as ProgressApprovalStatus);
 }
 
 function setOptional(params: URLSearchParams, key: string, value: string) {
   if (value) params.set(key, value);
+}
+
+function buildQuery(filters: FilterState, page: number): URLSearchParams {
+  const params = new URLSearchParams();
+  params.set("view", "submitted");
+  setOptional(params, "type", filters.kind);
+  setOptional(params, "project", filters.project);
+  if (!filters.status) {
+    params.set("status", "ALL");
+  } else if (filters.status !== "PENDING") {
+    params.set("status", filters.status);
+  }
+  setOptional(params, "from", filters.from);
+  setOptional(params, "to", filters.to);
+  if (filters.sort !== "submittedAt") params.set("sort", filters.sort);
+  if (filters.direction !== "desc") params.set("direction", filters.direction);
+  if (page > 1) params.set("page", String(page));
+  return params;
 }
 
 function statusLabel(status: ProgressApprovalStatus): string {

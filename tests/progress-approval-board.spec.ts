@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import type { Locator } from "@playwright/test";
 import {
   Importance,
   ProjectStatus,
@@ -133,10 +134,73 @@ test("我的申请集中展示八类审批并支持筛选排序和分页", async
     await expect(submissionList.getByText(label, { exact: true }).first()).toBeVisible();
   }
   await expect(submissionList.getByText("已失效", { exact: true })).toHaveCount(0);
+  const submittedLinks = [
+    [seeded.establishmentProjectName, `/progress/${seeded.establishmentProjectId}`],
+    [seeded.stageApprovalName, `/progress/${seeded.approvalProjectId}?stage=${seeded.stageApprovalId}`],
+    [seeded.batchDdlStageName, `/progress/${seeded.approvalProjectId}?stage=${seeded.batchDdlStageId}`],
+    [seeded.singleDdlStageName, `/progress/${seeded.approvalProjectId}?stage=${seeded.singleDdlStageId}`],
+    [seeded.taskCreationTitle, `/progress/${seeded.approvalProjectId}`],
+    [seeded.taskDeletionTitle, `/progress/task/${seeded.taskDeletionId}`],
+    [seeded.taskDdlTitle, `/progress/task/${seeded.taskDdlId}`],
+    [seeded.taskAcceptanceTitle, `/progress/task/${seeded.taskAcceptanceId}`],
+  ] as const;
+  for (const [subject, href] of submittedLinks) {
+    await expect(
+      submissionList
+        .getByRole("listitem")
+        .filter({ has: page.getByText(subject, { exact: true }) })
+        .getByRole("link", { name: "查看详情" }),
+    ).toHaveAttribute("href", href);
+  }
   await page.screenshot({
     path: testInfo.outputPath("my-approval-submissions.png"),
     fullPage: true,
   });
+
+  const today = formatShanghaiDate(new Date());
+  await page.locator("#approval-kind-filter").selectOption("TASK_DDL");
+  await page.locator("#approval-project-filter").selectOption(seeded.approvalProjectId);
+  await page.locator("#approval-date-from").fill(today);
+  await page.locator("#approval-date-to").fill(today);
+  await page.getByRole("button", { name: "应用筛选" }).click();
+  await expect(page).toHaveURL(/type=TASK_DDL/);
+  await expect(page).toHaveURL(new RegExp(`project=${seeded.approvalProjectId}`));
+  await expect(submissionList.getByRole("listitem")).toHaveCount(1);
+  await expect(submissionList).toContainText(seeded.taskDdlTitle);
+
+  await page.getByRole("button", { name: "清除筛选" }).first().click();
+  await expect(page).toHaveURL(/\/progress\/approvals\?view=submitted$/);
+  await page.locator("#approval-kind-filter").selectOption("TASK_CREATION");
+  await page.locator("#approval-status-filter").selectOption("REJECTED");
+  await page.getByRole("button", { name: "应用筛选" }).click();
+  await expect(page).toHaveURL(/type=TASK_CREATION/);
+  await expect(page).toHaveURL(/status=REJECTED/);
+  await expect(submissionList).toContainText(`${seeded.historyPrefix}-1`);
+  await expect(submissionList.getByText("已驳回", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "清除筛选" }).first().click();
+  await expect(page).toHaveURL(/\/progress\/approvals\?view=submitted$/);
+  await page.locator("#approval-kind-filter").selectOption("TASK_CREATION");
+  await page.locator("#approval-status-filter").selectOption("APPROVED");
+  await page.locator("#approval-date-from").fill("2026-07-18");
+  await page.locator("#approval-date-to").fill("2026-07-18");
+  await page.getByRole("button", { name: "应用筛选" }).click();
+  await expect(page).toHaveURL(/status=APPROVED/);
+  await expect(submissionList).toContainText(seeded.shanghaiBoundaryStartTitle);
+  await expect(submissionList).toContainText(seeded.shanghaiBoundaryEndTitle);
+  await expect(submissionList).not.toContainText(seeded.beforeShanghaiDayTitle);
+  await expect(submissionList).not.toContainText(seeded.afterShanghaiDayTitle);
+
+  await page.getByRole("button", { name: "清除筛选" }).first().click();
+  await expect(page).toHaveURL(/\/progress\/approvals\?view=submitted$/);
+  await page.locator("#approval-date-from").fill("1900-01-01");
+  await page.locator("#approval-date-to").fill("1900-01-01");
+  await page.getByRole("button", { name: "应用筛选" }).click();
+  await expect(page).toHaveURL(/from=1900-01-01/);
+  await expect(page).toHaveURL(/to=1900-01-01/);
+  await expect(page.getByText("没有符合条件的审批申请")).toBeVisible();
+  await page.getByRole("button", { name: "清除筛选" }).last().click();
+  await expect(page).toHaveURL(/\/progress\/approvals\?view=submitted$/);
 
   await page.locator("#approval-status-filter").selectOption("SUPERSEDED");
   await page.getByRole("button", { name: "应用筛选" }).click();
@@ -147,6 +211,23 @@ test("我的申请集中展示八类审批并支持筛选排序和分页", async
   await expect(page).toHaveURL(/\/progress\/approvals\?view=submitted$/);
   await expect(page.locator("#approval-status-filter")).toHaveValue("PENDING");
   await page.locator("#approval-status-filter").selectOption("");
+  for (const sort of ["kind", "project", "status", "submittedAt"] as const) {
+    for (const direction of ["asc", "desc"] as const) {
+      await page.locator("#approval-sort-filter").selectOption(sort);
+      await page.locator("#approval-sort-direction").selectOption(direction);
+      await page.getByRole("button", { name: "应用筛选" }).click();
+      await expect(page).toHaveURL((url) => {
+        const activeSort = url.searchParams.get("sort") ?? "submittedAt";
+        const activeDirection = url.searchParams.get("direction") ?? "desc";
+        return activeSort === sort && activeDirection === direction;
+      });
+      await expectApprovalRowsSorted(
+        submissionList.getByRole("listitem"),
+        sort,
+        direction,
+      );
+    }
+  }
   await page.locator("#approval-sort-filter").selectOption("project");
   await page.locator("#approval-sort-direction").selectOption("asc");
   await page.getByRole("button", { name: "应用筛选" }).click();
@@ -154,8 +235,145 @@ test("我的申请集中展示八类审批并支持筛选排序和分页", async
   await expect(page).toHaveURL(/sort=project/);
   await expect(page).toHaveURL(/direction=asc/);
   await expect(page.getByText(/第 1 \/ 2 页/)).toBeVisible();
+  const resultCountText = await page.getByText(/共 \d+ 条结果/).textContent();
+  const totalResults = Number(resultCountText?.match(/\d+/)?.[0]);
+  expect(totalResults).toBeGreaterThan(20);
+  await expect(submissionList.getByRole("listitem")).toHaveCount(20);
+  await expectApprovalRowsSorted(
+    submissionList.getByRole("listitem"),
+    "project",
+    "asc",
+  );
   await page.getByRole("button", { name: "下一页" }).click();
   await expect(page).toHaveURL(/page=2/);
+  await expect(page.getByRole("button", { name: "下一页" })).toBeDisabled();
+  await expect(submissionList.getByRole("listitem")).toHaveCount(totalResults - 20);
+  await page.getByRole("button", { name: "上一页" }).click();
+  await expect(page).not.toHaveURL(/page=2/);
+  await expectHealthyPage(page);
+});
+
+test("审批看板可处理非法参数、超长内容和输入边界", async ({
+  page,
+  context,
+  baseURL,
+}, testInfo) => {
+  await loginAsNormalUser(context, baseURL, normalAuth);
+  const runtimeErrors: string[] = [];
+  page.on("pageerror", (error) => runtimeErrors.push(error.message));
+  page.on("console", (message) => {
+    if (message.type() === "error") runtimeErrors.push(message.text());
+  });
+
+  await page.goto(
+    "/progress/approvals?view=submitted&type=UNKNOWN&project=UNKNOWN&status=UNKNOWN&from=2026-02-31&to=9999-99-99&sort=UNKNOWN&direction=UNKNOWN&page=999999",
+    { waitUntil: "networkidle" },
+  );
+  await expect(page.locator("#approval-kind-filter")).toHaveValue("");
+  await expect(page.locator("#approval-status-filter")).toHaveValue("PENDING");
+  await expect(page.locator("#approval-project-filter")).toHaveValue("");
+  await expect(page.locator("#approval-date-from")).toHaveValue("");
+  await expect(page.locator("#approval-date-to")).toHaveValue("");
+  await expect(page.locator("#approval-sort-filter")).toHaveValue("submittedAt");
+  await expect(page.locator("#approval-sort-direction")).toHaveValue("desc");
+  await expect(page).toHaveURL(/\/progress\/approvals\?view=submitted$/);
+
+  const longRow = page
+    .getByRole("list", { name: "我的审批申请" })
+    .getByRole("listitem")
+    .filter({ hasText: seeded.longApprovalTitle });
+  await expect(longRow).toHaveCount(1);
+  await expectHealthyPage(page);
+
+  await longRow.getByRole("button", { name: "请求审批" }).click();
+  const sendButton = page.getByRole("button", { name: "发送提醒" });
+  await expect(sendButton).toBeDisabled();
+  const search = page.getByPlaceholder("搜索并选择审批人");
+  await search.fill("无匹配审批人".repeat(100));
+  await expect(search).toHaveValue("无匹配审批人".repeat(100).slice(0, 100));
+  await expect(page.getByText("无匹配用户")).toBeVisible();
+  await expectHealthyPage(page);
+  await expectDialogWithinViewport(page);
+  await page.screenshot({
+    path: testInfo.outputPath("approval-long-content-dialog.png"),
+    fullPage: true,
+  });
+  await page.getByRole("button", { name: "取消" }).click();
+
+  await longRow.getByRole("button", { name: "请求审批" }).click();
+  await page.getByPlaceholder("搜索并选择审批人").fill("Playwright 管理员");
+  await page
+    .locator(`[data-testid="user-search-option"][data-open-id="${fixtures.adminOpenId}"]`)
+    .click();
+  await expect(page.getByRole("button", { name: "发送提醒" })).toBeEnabled();
+  await page.getByRole("button", { name: /移除Playwright 管理员/ }).click();
+  await expect(page.getByRole("button", { name: "发送提醒" })).toBeDisabled();
+  await page.getByRole("button", { name: "取消" }).click();
+
+  await page.route("**/*", async (route) => {
+    if (route.request().method() === "POST") {
+      await new Promise((resolve) => setTimeout(resolve, 600));
+    }
+    await route.continue();
+  });
+  await longRow.getByRole("button", { name: "请求审批" }).click();
+  await page.getByPlaceholder("搜索并选择审批人").fill("Playwright 管理员");
+  await page
+    .locator(`[data-testid="user-search-option"][data-open-id="${fixtures.adminOpenId}"]`)
+    .click();
+  await page.getByRole("button", { name: "发送提醒" }).click();
+  await expect(page.getByRole("button", { name: "发送中..." })).toBeVisible();
+  await expect(page.locator('[data-slot="dialog-close"]')).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("heading", { name: "请求审批" })).toBeVisible();
+  await expect(page.getByText("已向 1 位审批人发送提醒")).toBeVisible();
+
+  await longRow.getByRole("button", { name: "撤回审批" }).click();
+  await expect(page.getByRole("heading", { name: "确认撤回审批申请" })).toBeVisible();
+  await expectHealthyPage(page);
+  await expectDialogWithinViewport(page);
+  await page.getByRole("button", { name: "取消" }).click();
+  await expect(longRow).toBeVisible();
+
+  await longRow.getByRole("button", { name: "撤回审批" }).click();
+  await page.getByRole("button", { name: "确认撤回" }).click();
+  await expect(page.getByRole("button", { name: "撤回中..." })).toBeVisible();
+  await expect(page.locator('[data-slot="dialog-close"]')).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("heading", { name: "确认撤回审批申请" })).toBeVisible();
+  await expect(page.getByText("审批申请已撤回")).toBeVisible();
+  await expect(longRow).toHaveCount(0);
+
+  const from = page.locator("#approval-date-from");
+  const to = page.locator("#approval-date-to");
+  await from.fill("2026-07-18");
+  await expect(to).toHaveAttribute("min", "2026-07-18");
+  await to.fill("2026-07-18");
+  await expect(from).toHaveAttribute("max", "2026-07-18");
+
+  const submittedTab = page.getByRole("tab", { name: "我的申请" });
+  await expect(submittedTab).toHaveAttribute("aria-controls", "approval-submitted-panel");
+  await submittedTab.press("ArrowLeft");
+  await expect(page).toHaveURL(/view=pending/);
+  await expect(page.getByRole("tab", { name: "待我审批" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await page.goBack({ waitUntil: "networkidle" });
+  await expect(page.getByRole("tab", { name: "我的申请" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await page.reload({ waitUntil: "networkidle" });
+  await expect(page.locator("#approval-date-from")).toHaveValue("");
+
+  await page.goto(
+    "/progress/approvals?view=submitted&from=2026-07-19&to=2026-07-18",
+    { waitUntil: "networkidle" },
+  );
+  await expect(page.locator("#approval-date-from")).toHaveValue("");
+  await expect(page.locator("#approval-date-to")).toHaveValue("");
+  expect(runtimeErrors).toEqual([]);
   await expectHealthyPage(page);
 });
 
@@ -545,6 +763,50 @@ async function seedApprovalBoardFixtures(fixtures: FunctionalFixtureIds) {
     },
   });
 
+  const longToken = "LONGUNBROKENAPPROVALCONTENT".repeat(40);
+  const longProject = await prisma.project.create({
+    data: {
+      name: `PW全功能-审批看板边界项目-${longToken}`,
+      description: longToken,
+      team: "英雄",
+      techGroup: "电控",
+      status: ProjectStatus.IN_PROGRESS,
+      ownerOpenId: fixtures.adminOpenId,
+      ownerName: adminName,
+      owners: {
+        create: [{ openId: fixtures.adminOpenId, name: adminName, sortOrder: 0 }],
+      },
+      participants: {
+        create: [{ openId: fixtures.normalOpenId, name: normalName, sortOrder: 0 }],
+      },
+    },
+  });
+  const longApprovalTitle = `PW全功能-审批看板边界任务-${longToken}`;
+  const longApproval = await prisma.taskCreationRequest.create({
+    data: {
+      projectId: longProject.id,
+      requesterOpenId: fixtures.normalOpenId,
+      requesterName: normalName,
+      draftPayload: JSON.stringify({
+        title: longApprovalTitle,
+        goal: longToken,
+        stageId: "",
+        stageName: longToken,
+        taskTechGroups: ["电控"],
+        urgency: Urgency.MEDIUM,
+        importance: Importance.HIGH,
+        assigneeOpenIds: [fixtures.normalOpenId],
+        assigneeNames: [normalName],
+        metrics: longToken,
+        dueAt: tomorrow.toISOString(),
+        needsOfflineConfirmation: false,
+        needsWeeklyReport: false,
+        acceptanceChecklistItems: [],
+      }),
+      status: "PENDING",
+    },
+  });
+
   const stageApprovalName = `PW全功能-审批看板阶段验收-${suffix}`;
   const batchDdlStageName = `PW全功能-审批看板批量 DDL-${suffix}`;
   const singleDdlStageName = `PW全功能-审批看板单阶段 DDL-${suffix}`;
@@ -756,13 +1018,14 @@ async function seedApprovalBoardFixtures(fixtures: FunctionalFixtureIds) {
     },
   });
 
+  const historyPrefix = `PW全功能-审批看板历史申请-${suffix}`;
   await prisma.taskCreationRequest.createMany({
     data: Array.from({ length: 21 }, (_, index) => ({
       projectId: approvalProject.id,
       requesterOpenId: fixtures.normalOpenId,
       requesterName: normalName,
       draftPayload: JSON.stringify({
-        title: `PW全功能-审批看板历史申请-${suffix}-${index + 1}`,
+        title: `${historyPrefix}-${index + 1}`,
         goal: "approval history pagination fixture",
         stageId: batchDdlStage.id,
         stageName: batchDdlStage.name,
@@ -785,10 +1048,51 @@ async function seedApprovalBoardFixtures(fixtures: FunctionalFixtureIds) {
     })),
   });
 
+  const shanghaiBoundaryStartTitle = `PW全功能-上海日期起点-${suffix}`;
+  const shanghaiBoundaryEndTitle = `PW全功能-上海日期终点-${suffix}`;
+  const beforeShanghaiDayTitle = `PW全功能-上海日期前一毫秒-${suffix}`;
+  const afterShanghaiDayTitle = `PW全功能-上海日期后一毫秒-${suffix}`;
+  const boundaryRequests = [
+    [shanghaiBoundaryStartTitle, "2026-07-17T16:00:00.000Z"],
+    [shanghaiBoundaryEndTitle, "2026-07-18T15:59:59.999Z"],
+    [beforeShanghaiDayTitle, "2026-07-17T15:59:59.999Z"],
+    [afterShanghaiDayTitle, "2026-07-18T16:00:00.000Z"],
+  ] as const;
+  await prisma.taskCreationRequest.createMany({
+    data: boundaryRequests.map(([title, createdAt]) => ({
+      projectId: approvalProject.id,
+      requesterOpenId: fixtures.normalOpenId,
+      requesterName: normalName,
+      draftPayload: JSON.stringify({
+        title,
+        goal: "上海时区日期闭区间测试",
+        stageId: batchDdlStage.id,
+        stageName: batchDdlStage.name,
+        taskTechGroups: ["电控"],
+        urgency: Urgency.MEDIUM,
+        importance: Importance.MEDIUM,
+        assigneeOpenIds: [fixtures.normalOpenId],
+        assigneeNames: [normalName],
+        metrics: "上海时区日期闭区间测试",
+        dueAt: tomorrow.toISOString(),
+        needsOfflineConfirmation: false,
+        needsWeeklyReport: false,
+        acceptanceChecklistItems: [],
+      }),
+      status: "APPROVED" as const,
+      reviewerOpenId: fixtures.adminOpenId,
+      reviewerName: adminName,
+      reviewedAt: new Date(createdAt),
+      createdAt: new Date(createdAt),
+    })),
+  });
+
   return {
     establishmentProjectId: establishment.id,
     establishmentProjectName,
     approvalProjectId: approvalProject.id,
+    longApprovalId: longApproval.id,
+    longApprovalTitle,
     stageApprovalId: stageApproval.id,
     stageApprovalName,
     stageSubmissionId: stageSubmission.id,
@@ -810,6 +1114,11 @@ async function seedApprovalBoardFixtures(fixtures: FunctionalFixtureIds) {
     taskAcceptanceId: taskAcceptance.id,
     taskSubmissionId: taskSubmission.id,
     supersededStageName,
+    historyPrefix,
+    shanghaiBoundaryStartTitle,
+    shanghaiBoundaryEndTitle,
+    beforeShanghaiDayTitle,
+    afterShanghaiDayTitle,
   };
 }
 
@@ -863,4 +1172,70 @@ function addDays(date: Date, days: number) {
 
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function formatShanghaiDate(date: Date) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+async function expectApprovalRowsSorted(
+  rows: Locator,
+  sort: "kind" | "project" | "status" | "submittedAt",
+  direction: "asc" | "desc",
+) {
+  const attribute = {
+    kind: "data-approval-kind",
+    project: "data-project-name",
+    status: "data-approval-status",
+    submittedAt: "data-submitted-at",
+  }[sort];
+  const values = await rows.evaluateAll(
+    (elements, name) =>
+      elements.map((element) => element.getAttribute(name) ?? ""),
+    attribute,
+  );
+  const kindOrder = [
+    "PROJECT_ESTABLISHMENT",
+    "STAGE_ACCEPTANCE",
+    "PROJECT_BATCH_DDL",
+    "PROJECT_STAGE_DDL",
+    "TASK_CREATION",
+    "TASK_DELETION",
+    "TASK_DDL",
+    "TASK_ACCEPTANCE",
+  ];
+  const statusOrder = ["PENDING", "APPROVED", "REJECTED", "WITHDRAWN", "SUPERSEDED"];
+  const compare = (a: string, b: string) => {
+    if (sort === "kind") return kindOrder.indexOf(a) - kindOrder.indexOf(b);
+    if (sort === "status") return statusOrder.indexOf(a) - statusOrder.indexOf(b);
+    if (sort === "submittedAt") return new Date(a).getTime() - new Date(b).getTime();
+    return a.localeCompare(b, "zh-CN");
+  };
+  for (let index = 1; index < values.length; index++) {
+    const result = compare(values[index - 1], values[index]);
+    expect(direction === "asc" ? result : -result).toBeLessThanOrEqual(0);
+  }
+}
+
+async function expectDialogWithinViewport(page: Parameters<typeof expectHealthyPage>[0]) {
+  const bounds = await page.locator('[data-slot="dialog-content"]').evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return {
+      top: rect.top,
+      left: rect.left,
+      bottom: rect.bottom,
+      right: rect.right,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+    };
+  });
+  expect(bounds.top).toBeGreaterThanOrEqual(0);
+  expect(bounds.left).toBeGreaterThanOrEqual(0);
+  expect(bounds.bottom).toBeLessThanOrEqual(bounds.viewportHeight);
+  expect(bounds.right).toBeLessThanOrEqual(bounds.viewportWidth);
 }

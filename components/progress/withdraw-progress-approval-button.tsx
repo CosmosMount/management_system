@@ -64,13 +64,23 @@ export function WithdrawProgressApprovalButton({
         <RotateCcw />
         撤回审批
       </Button>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent>
+      <Dialog
+        open={open}
+        onOpenChange={(value) => {
+          if (withdrawing && !value) return;
+          setOpen(value);
+        }}
+      >
+        <DialogContent className="min-w-0" showCloseButton={!withdrawing}>
           <DialogHeader>
             <DialogTitle>确认撤回审批申请</DialogTitle>
             <DialogDescription>
               撤回后，本次提交将不再进入审批流程。
-              {subject ? `当前审批：${subject}。` : ""}
+              {subject ? (
+                <span className="my-1 line-clamp-2 break-all" title={subject}>
+                  当前审批：{subject}。
+                </span>
+              ) : null}
               如仍需审批，请修改后重新提交。
             </DialogDescription>
           </DialogHeader>

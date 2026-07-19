@@ -166,14 +166,27 @@ export default async function ProgressApprovalsPage({ searchParams }: Props) {
                               <div className="min-w-0 space-y-2">
                                 <div className="flex flex-wrap items-center gap-2">
                                   <Badge variant="outline">{item.badge}</Badge>
-                                  <p className="font-medium">{item.title}</p>
+                                  <p
+                                    className="line-clamp-2 min-w-0 break-all font-medium"
+                                    title={item.title}
+                                  >
+                                    {item.title}
+                                  </p>
                                 </div>
-                                <p className="text-sm text-muted-foreground">
+                                <p
+                                  className="line-clamp-2 break-all text-sm text-muted-foreground"
+                                  title={`${item.projectName} · ${item.subject}`}
+                                >
                                   {item.projectName} · {item.subject}
                                 </p>
-                                <p className="text-sm">{item.detail}</p>
+                                <p
+                                  className="line-clamp-3 break-all text-sm"
+                                  title={item.detail}
+                                >
+                                  {item.detail}
+                                </p>
                                 <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                                  <span>提交人：{item.requester}</span>
+                                  <span className="break-words">提交人：{item.requester}</span>
                                   <span className="inline-flex items-center gap-1">
                                     <Clock3 className="h-3.5 w-3.5" />
                                     {formatDateTime(item.submittedAt)}
@@ -184,7 +197,7 @@ export default async function ProgressApprovalsPage({ searchParams }: Props) {
                                     {item.meta.map((meta) => (
                                       <span
                                         key={meta}
-                                        className="rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground"
+                                        className="max-w-full break-all rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground"
                                       >
                                         {meta}
                                       </span>

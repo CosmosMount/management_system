@@ -117,13 +117,23 @@ export function RequestApprovalReminderButton({
         <BellRing />
         请求审批
       </Button>
-      <Dialog open={open} onOpenChange={(value) => void handleOpenChange(value)}>
-        <DialogContent className="sm:max-w-lg">
+      <Dialog
+        open={open}
+        onOpenChange={(value) => {
+          if (sending && !value) return;
+          void handleOpenChange(value);
+        }}
+      >
+        <DialogContent className="min-w-0 sm:max-w-lg" showCloseButton={!sending}>
           <DialogHeader>
             <DialogTitle>请求审批</DialogTitle>
             <DialogDescription>
               选择需要提醒的审批人，系统将向他们发送飞书消息。
-              {subject ? `当前审批：${subject}` : ""}
+              {subject ? (
+                <span className="mt-1 line-clamp-2 break-all" title={subject}>
+                  当前审批：{subject}
+                </span>
+              ) : null}
             </DialogDescription>
           </DialogHeader>
 
@@ -144,7 +154,10 @@ export function RequestApprovalReminderButton({
                 onChange={setRecipientOpenIds}
                 disabled={sending}
                 placeholder="搜索并选择审批人"
-                inputProps={{ "aria-describedby": "approval-reminder-help" }}
+                inputProps={{
+                  "aria-describedby": "approval-reminder-help",
+                  maxLength: 100,
+                }}
               />
               <p id="approval-reminder-help" className="text-xs text-muted-foreground">
                 仅显示当前有权限处理这项审批的人员，默认不选择任何人。

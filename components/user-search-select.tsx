@@ -32,7 +32,7 @@ type Props = {
   inputClassName?: string;
   inputProps?: Pick<
     ComponentProps<"input">,
-    "aria-describedby" | "aria-invalid"
+    "aria-describedby" | "aria-invalid" | "maxLength"
   >;
   inputRef?: Ref<HTMLInputElement>;
   disabled?: boolean;
@@ -47,7 +47,7 @@ type MultiProps = {
   inputClassName?: string;
   inputProps?: Pick<
     ComponentProps<"input">,
-    "aria-describedby" | "aria-invalid"
+    "aria-describedby" | "aria-invalid" | "maxLength"
   >;
   inputRef?: Ref<HTMLInputElement>;
   disabled?: boolean;
@@ -280,7 +280,7 @@ export function UserSearchSelect({
                       setOpen(false);
                     }}
                   >
-                    <span className="flex items-center gap-2">
+                    <span className="flex min-w-0 items-center gap-2">
                       <UserAvatar user={user} />
                       <span className="truncate font-medium">{user.name}</span>
                     </span>
@@ -408,7 +408,7 @@ export function UserMultiSearchSelect({
                     className="w-full px-3 py-2 text-left hover:bg-muted"
                     onClick={() => add(user.openId)}
                   >
-                    <span className="flex items-center gap-2">
+                    <span className="flex min-w-0 items-center gap-2">
                       <UserAvatar user={user} />
                       <span className="truncate font-medium">{user.name}</span>
                     </span>
