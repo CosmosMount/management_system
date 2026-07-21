@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Send } from "lucide-react";
+import { Plus, Send, Trash2 } from "lucide-react";
 import type { NotificationOutboxStatus, ProgressReminderKind } from "@prisma/client";
 import { toast } from "sonner";
 import {
@@ -147,11 +147,20 @@ export function RemindersPanel({
   }
 
   function handleSaveDailySummarySetting() {
+    const scheduleErrors = getDailyScheduleErrors(
+      dailyDraft.schedules.map((schedule) => schedule.scheduleTime),
+    );
+    if (scheduleErrors.some(Boolean)) {
+      toast.error("请先修正发送时间设置");
+      return;
+    }
     startTransition(async () => {
       try {
         const saved = await updateProgressDailySummarySetting({
           enabled: dailyDraft.enabled,
-          scheduleTime: dailyDraft.scheduleTime,
+          scheduleTimes: dailyDraft.schedules.map(
+            (schedule) => schedule.scheduleTime,
+          ),
         });
         setDailyDraft(saved);
         toast.success("每日卡片设置已保存");
@@ -160,6 +169,31 @@ export function RemindersPanel({
         toast.error(err instanceof Error ? err.message : "保存失败");
       }
     });
+  }
+
+  function updateDailyScheduleTime(index: number, scheduleTime: string) {
+    setDailyDraft((draft) => ({
+      ...draft,
+      schedules: draft.schedules.map((schedule, scheduleIndex) =>
+        scheduleIndex === index ? { ...schedule, scheduleTime } : schedule,
+      ),
+    }));
+  }
+
+  function addDailySchedule() {
+    if (dailyDraft.schedules.length >= 8) return;
+    setDailyDraft((draft) => ({
+      ...draft,
+      schedules: [...draft.schedules, { scheduleTime: "", lastRunAt: null }],
+    }));
+  }
+
+  function removeDailySchedule(index: number) {
+    if (dailyDraft.schedules.length <= 1) return;
+    setDailyDraft((draft) => ({
+      ...draft,
+      schedules: draft.schedules.filter((_, scheduleIndex) => scheduleIndex !== index),
+    }));
   }
 
   function handleSendDailySummaryTest() {
@@ -443,7 +477,7 @@ export function RemindersPanel({
             </Button>
           </CardHeader>
           <CardContent className="min-w-0 space-y-6">
-            <div className="grid gap-3 md:grid-cols-[10rem_12rem_1fr]">
+            <div className="grid gap-3 md:grid-cols-[10rem_1fr]">
               <label className="space-y-1 text-sm">
                 <span className="text-muted-foreground">发送状态</span>
                 <Select
@@ -467,34 +501,93 @@ export function RemindersPanel({
                   </SelectContent>
                 </Select>
               </label>
-              <label className="space-y-1 text-sm">
-                <span className="text-muted-foreground">发送时间</span>
-                <Input
-                  type="time"
-                  value={dailyDraft.scheduleTime}
-                  onChange={(event) =>
-                    setDailyDraft((draft) => ({
-                      ...draft,
-                      scheduleTime: event.target.value,
-                    }))
-                  }
-                  data-testid="admin-daily-summary-time"
-                />
-              </label>
               <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
                 <p className="font-medium">运行状态</p>
-                <p className="mt-1 text-muted-foreground">
-                  上次正式发送：
-                  {dailyDraft.lastRunAt
-                    ? new Date(dailyDraft.lastRunAt).toLocaleString("zh-CN")
-                    : "尚未执行"}
-                </p>
                 <p className="mt-1 text-muted-foreground">
                   设置更新时间：
                   {dailyDraft.updatedAt
                     ? new Date(dailyDraft.updatedAt).toLocaleString("zh-CN")
                     : "尚未保存"}
                 </p>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="font-medium">发送时间</p>
+                  <p className="text-sm text-muted-foreground">
+                    每天可配置 1–8 个时间，相邻时间至少间隔 5 分钟。
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={pending || dailyDraft.schedules.length >= 8}
+                  onClick={addDailySchedule}
+                  data-testid="admin-daily-summary-add-time"
+                >
+                  <Plus className="h-4 w-4" />
+                  添加发送时间
+                </Button>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                {dailyDraft.schedules.map((schedule, index) => {
+                  const error = getDailyScheduleErrors(
+                    dailyDraft.schedules.map((row) => row.scheduleTime),
+                  )[index];
+                  return (
+                    <div
+                      key={`${index}-${schedule.lastRunAt ?? "new"}`}
+                      className="min-w-0 rounded-md border p-3"
+                      data-testid="admin-daily-summary-time-row"
+                    >
+                      <div className="flex items-start gap-2">
+                        <label className="min-w-0 flex-1 space-y-1 text-sm">
+                          <span className="text-muted-foreground">
+                            时间 {index + 1}
+                          </span>
+                          <Input
+                            type="time"
+                            value={schedule.scheduleTime}
+                            aria-invalid={!!error}
+                            aria-describedby={error ? `daily-time-error-${index}` : undefined}
+                            onChange={(event) =>
+                              updateDailyScheduleTime(index, event.target.value)
+                            }
+                            data-testid="admin-daily-summary-time"
+                          />
+                        </label>
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant="ghost"
+                          className="mt-5 shrink-0"
+                          disabled={pending || dailyDraft.schedules.length <= 1}
+                          onClick={() => removeDailySchedule(index)}
+                          aria-label={`删除发送时间 ${index + 1}`}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                      {error ? (
+                        <p
+                          id={`daily-time-error-${index}`}
+                          className="mt-1 text-sm text-destructive"
+                        >
+                          {error}
+                        </p>
+                      ) : null}
+                      <p className="mt-2 break-words text-xs text-muted-foreground">
+                        上次正式执行：
+                        {schedule.lastRunAt
+                          ? new Date(schedule.lastRunAt).toLocaleString("zh-CN")
+                          : "尚未执行"}
+                      </p>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
@@ -604,4 +697,42 @@ function formatOutboxStatus(status: NotificationOutboxStatus): string {
     FAILED: "失败",
   };
   return labels[status];
+}
+
+function getDailyScheduleErrors(scheduleTimes: string[]): Array<string | null> {
+  const errors = scheduleTimes.map(() => null as string | null);
+  const validRows: Array<{ index: number; value: string; minutes: number }> = [];
+  const indexesByValue = new Map<string, number[]>();
+
+  scheduleTimes.forEach((rawValue, index) => {
+    const value = rawValue.trim();
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) {
+      errors[index] = "请输入有效的发送时间";
+      return;
+    }
+    const [hour = "0", minute = "0"] = value.split(":");
+    validRows.push({ index, value, minutes: Number(hour) * 60 + Number(minute) });
+    indexesByValue.set(value, [...(indexesByValue.get(value) ?? []), index]);
+  });
+
+  for (const indexes of indexesByValue.values()) {
+    if (indexes.length > 1) {
+      for (const index of indexes) errors[index] = "发送时间不能重复";
+    }
+  }
+
+  const uniqueRows = validRows
+    .filter(({ value }) => (indexesByValue.get(value)?.length ?? 0) === 1)
+    .sort((left, right) => left.minutes - right.minutes);
+  if (uniqueRows.length > 1) {
+    uniqueRows.forEach((row, index) => {
+      const next = uniqueRows[(index + 1) % uniqueRows.length];
+      const gap = (next.minutes - row.minutes + 24 * 60) % (24 * 60);
+      if (gap < 5) {
+        errors[row.index] = errors[row.index] ?? "相邻发送时间至少间隔 5 分钟";
+        errors[next.index] = errors[next.index] ?? "相邻发送时间至少间隔 5 分钟";
+      }
+    });
+  }
+  return errors;
 }

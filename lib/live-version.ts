@@ -879,6 +879,8 @@ async function getAdminVersion(): Promise<string> {
     outboxCount,
     dailySummarySettingAggregate,
     dailySummarySettingCount,
+    dailySummaryScheduleAggregate,
+    dailySummaryScheduleCount,
     dailySummaryOutboxAggregate,
     dailySummaryOutboxCount,
     projectTemplateAggregate,
@@ -924,6 +926,10 @@ async function getAdminVersion(): Promise<string> {
       _max: { updatedAt: true },
     }),
     prisma.progressDailySummarySetting.count(),
+    prisma.progressDailySummarySchedule.aggregate({
+      _max: { updatedAt: true },
+    }),
+    prisma.progressDailySummarySchedule.count(),
     prisma.notificationOutbox.aggregate({
       where: { channel: "progress", type: "progress_daily_summary" },
       _max: { updatedAt: true },
@@ -960,6 +966,11 @@ async function getAdminVersion(): Promise<string> {
       "dailySummarySetting",
       dailySummarySettingAggregate._max.updatedAt,
       dailySummarySettingCount,
+    ),
+    encodePart(
+      "dailySummarySchedules",
+      dailySummaryScheduleAggregate._max.updatedAt,
+      dailySummaryScheduleCount,
     ),
     encodePart(
       "dailySummaryOutbox",

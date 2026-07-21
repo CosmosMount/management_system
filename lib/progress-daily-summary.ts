@@ -1,7 +1,6 @@
 import type {
   Importance,
   Prisma,
-  ProgressDailySummarySetting,
   ProjectStatus,
   TaskStatus,
   Urgency,
@@ -41,6 +40,9 @@ const DDL_LOOKAHEAD_DAYS = 7;
 const DAILY_SUMMARY_SETTING_ID = "default";
 const DEFAULT_DAILY_SUMMARY_SCHEDULE_TIME = "19:00";
 const SCHEDULE_TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
+const MAX_DAILY_SUMMARY_SCHEDULES = 8;
+const MIN_SCHEDULE_GAP_MINUTES = 5;
+const DAY_MILLISECONDS = 24 * 60 * 60 * 1000;
 
 const projectSummaryInclude = {
   owners: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
@@ -76,6 +78,12 @@ type LoadedProject = Prisma.ProjectGetPayload<{
   include: typeof projectSummaryInclude;
 }>;
 type LoadedTask = Prisma.TaskGetPayload<{ include: typeof taskSummaryInclude }>;
+const dailySummarySettingInclude = {
+  schedules: { orderBy: [{ scheduleTime: "asc" }, { createdAt: "asc" }] },
+} satisfies Prisma.ProgressDailySummarySettingInclude;
+type LoadedDailySummarySetting = Prisma.ProgressDailySummarySettingGetPayload<{
+  include: typeof dailySummarySettingInclude;
+}>;
 
 export type ProgressDailySummaryResult = {
   summaryDate: string;
@@ -88,6 +96,8 @@ type RunProgressDailySummariesOptions = {
   now?: Date;
   context?: NotificationContext;
   recipientOpenIds?: string[];
+  scheduledFor: Date;
+  scheduleTime: string;
 };
 
 type ProgressDailySummaryCollection = {
@@ -97,8 +107,10 @@ type ProgressDailySummaryCollection = {
 
 export type ProgressDailySummarySettingView = {
   enabled: boolean;
-  scheduleTime: string;
-  lastRunAt: string | null;
+  schedules: Array<{
+    scheduleTime: string;
+    lastRunAt: string | null;
+  }>;
   updatedAt: string | null;
 };
 
@@ -107,13 +119,13 @@ export type ProgressDailySummaryScheduleRunResult =
       ran: false;
       reason: "disabled" | "not_due" | "already_ran";
       summaryDate: string;
-      scheduleTime: string;
-      lastRunAt: string | null;
+      scheduleTimes: string[];
     }
   | ({
       ran: true;
       scheduleTime: string;
-      lastRunAt: string | null;
+      scheduledFor: string;
+      skippedScheduleTimes: string[];
     } & ProgressDailySummaryResult);
 
 export type ProgressDailySummaryTestResult = {
@@ -188,20 +200,47 @@ export async function getProgressDailySummarySetting(): Promise<ProgressDailySum
 
 export async function saveProgressDailySummarySetting(input: {
   enabled: boolean;
-  scheduleTime: string;
+  scheduleTimes: string[];
 }): Promise<ProgressDailySummarySettingView> {
-  const scheduleTime = normalizeScheduleTime(input.scheduleTime);
-  const saved = await prisma.progressDailySummarySetting.upsert({
-    where: { id: DAILY_SUMMARY_SETTING_ID },
-    create: {
-      id: DAILY_SUMMARY_SETTING_ID,
-      enabled: input.enabled,
-      scheduleTime,
-    },
-    update: {
-      enabled: input.enabled,
-      scheduleTime,
-    },
+  const scheduleTimes = validateDailySummaryScheduleTimes(input.scheduleTimes);
+  const now = new Date();
+  const saved = await prisma.$transaction(async (tx) => {
+    const existing = await tx.progressDailySummarySetting.findUnique({
+      where: { id: DAILY_SUMMARY_SETTING_ID },
+      include: dailySummarySettingInclude,
+    });
+    const setting = existing
+      ? await tx.progressDailySummarySetting.update({
+          where: { id: DAILY_SUMMARY_SETTING_ID },
+          data: { enabled: input.enabled },
+        })
+      : await tx.progressDailySummarySetting.create({
+          data: { id: DAILY_SUMMARY_SETTING_ID, enabled: input.enabled },
+        });
+    await tx.progressDailySummarySchedule.deleteMany({
+      where: {
+        settingId: setting.id,
+        scheduleTime: { notIn: scheduleTimes },
+      },
+    });
+    await tx.progressDailySummarySchedule.createMany({
+      data: scheduleTimes.map((scheduleTime) => ({
+        settingId: setting.id,
+        scheduleTime,
+        activeFrom: now,
+      })),
+      skipDuplicates: true,
+    });
+    if (existing && !existing.enabled && input.enabled) {
+      await tx.progressDailySummarySchedule.updateMany({
+        where: { settingId: setting.id },
+        data: { activeFrom: now },
+      });
+    }
+    return tx.progressDailySummarySetting.findUniqueOrThrow({
+      where: { id: setting.id },
+      include: dailySummarySettingInclude,
+    });
   });
   return toSettingView(saved);
 }
@@ -212,49 +251,67 @@ export async function runProgressDailySummariesIfDue(
   const now = options.now ?? new Date();
   const summaryDate = localDateKey(now);
   const setting = await ensureProgressDailySummarySetting();
-  const scheduleTime = normalizeScheduleTime(setting.scheduleTime);
-  const lastRunAt = setting.lastRunAt?.toISOString() ?? null;
+  const scheduleTimes = setting.schedules.map((row) => row.scheduleTime);
 
   if (!setting.enabled) {
     return {
       ran: false,
       reason: "disabled",
       summaryDate,
-      scheduleTime,
-      lastRunAt,
+      scheduleTimes,
     };
   }
-  if (setting.lastRunAt && localDateKey(setting.lastRunAt) === summaryDate) {
+  const candidates = setting.schedules
+    .map((schedule) => ({
+      schedule,
+      scheduledFor: mostRecentScheduledSlot(schedule.scheduleTime, now),
+    }))
+    .filter(
+      ({ schedule, scheduledFor }) =>
+        schedule.activeFrom.getTime() <= scheduledFor.getTime() &&
+        (!schedule.lastProcessedSlotAt ||
+          schedule.lastProcessedSlotAt.getTime() < scheduledFor.getTime()),
+    )
+    .sort((left, right) => right.scheduledFor.getTime() - left.scheduledFor.getTime());
+
+  if (candidates.length === 0) {
+    const alreadyRan = setting.schedules.some((schedule) => {
+      const scheduledFor = mostRecentScheduledSlot(schedule.scheduleTime, now);
+      return (
+        schedule.lastProcessedSlotAt &&
+        schedule.lastProcessedSlotAt.getTime() >= scheduledFor.getTime()
+      );
+    });
     return {
       ran: false,
-      reason: "already_ran",
+      reason: alreadyRan ? "already_ran" : "not_due",
       summaryDate,
-      scheduleTime,
-      lastRunAt,
-    };
-  }
-  if (localTimeMinutes(now) < scheduleTimeMinutes(scheduleTime)) {
-    return {
-      ran: false,
-      reason: "not_due",
-      summaryDate,
-      scheduleTime,
-      lastRunAt,
+      scheduleTimes,
     };
   }
 
+  const selected = candidates[0];
   const result = await runProgressDailySummaries({
     now,
     context: options.context,
+    scheduledFor: selected.scheduledFor,
+    scheduleTime: selected.schedule.scheduleTime,
   });
-  await prisma.progressDailySummarySetting.update({
-    where: { id: DAILY_SUMMARY_SETTING_ID },
-    data: { lastRunAt: now },
-  });
+  const scheduleUpdates = candidates.map(({ schedule, scheduledFor }, index) =>
+    prisma.progressDailySummarySchedule.update({
+        where: { id: schedule.id },
+        data: {
+          lastProcessedSlotAt: scheduledFor,
+          ...(index === 0 ? { lastRunAt: now } : {}),
+        },
+      }),
+  );
+  await prisma.$transaction(scheduleUpdates);
   return {
     ran: true,
-    scheduleTime,
-    lastRunAt,
+    scheduleTime: selected.schedule.scheduleTime,
+    scheduledFor: selected.scheduledFor.toISOString(),
+    skippedScheduleTimes: candidates.slice(1).map(({ schedule }) => schedule.scheduleTime),
     ...result,
   };
 }
@@ -293,10 +350,11 @@ export async function sendProgressDailySummaryTest({
 }
 
 export async function runProgressDailySummaries(
-  options: RunProgressDailySummariesOptions = {},
+  options: RunProgressDailySummariesOptions,
 ): Promise<ProgressDailySummaryResult> {
   const now = options.now ?? new Date();
   const summaryDate = localDateKey(now);
+  const scheduledDate = localDateKey(options.scheduledFor);
   const context = options.context ?? getDefaultNotificationContext();
   const recipientFilter = new Set(options.recipientOpenIds?.filter(Boolean) ?? []);
   const { summaries, userNames } = await collectDailySummaries({
@@ -321,7 +379,7 @@ export async function runProgressDailySummaries(
       continue;
     }
     const result = await enqueueProgressNotification(
-      `progress:daily_summary:${summary.openId}:${summaryDate}`,
+      `progress:daily_summary:${summary.openId}:${scheduledDate}:${options.scheduleTime}`,
       payload,
       context,
     );
@@ -333,6 +391,8 @@ export async function runProgressDailySummaries(
     module: "progress",
     action: "runProgressDailySummaries",
     summaryDate,
+    scheduledFor: options.scheduledFor.toISOString(),
+    scheduleTime: options.scheduleTime,
     recipients: summaries.size,
     queued,
     skipped,
@@ -397,25 +457,41 @@ async function collectDailySummaries({
   return { summaries, userNames };
 }
 
-async function ensureProgressDailySummarySetting(): Promise<ProgressDailySummarySetting> {
-  return prisma.progressDailySummarySetting.upsert({
-    where: { id: DAILY_SUMMARY_SETTING_ID },
-    create: {
-      id: DAILY_SUMMARY_SETTING_ID,
-      enabled: true,
-      scheduleTime: getDefaultDailySummaryScheduleTime(),
-    },
-    update: {},
+async function ensureProgressDailySummarySetting(): Promise<LoadedDailySummarySetting> {
+  return prisma.$transaction(async (tx) => {
+    const setting = await tx.progressDailySummarySetting.upsert({
+      where: { id: DAILY_SUMMARY_SETTING_ID },
+      create: { id: DAILY_SUMMARY_SETTING_ID, enabled: true },
+      update: {},
+    });
+    const scheduleCount = await tx.progressDailySummarySchedule.count({
+      where: { settingId: setting.id },
+    });
+    if (scheduleCount === 0) {
+      await tx.progressDailySummarySchedule.create({
+        data: {
+          settingId: setting.id,
+          scheduleTime: getDefaultDailySummaryScheduleTime(),
+          activeFrom: setting.createdAt,
+        },
+      });
+    }
+    return tx.progressDailySummarySetting.findUniqueOrThrow({
+      where: { id: setting.id },
+      include: dailySummarySettingInclude,
+    });
   });
 }
 
 function toSettingView(
-  setting: ProgressDailySummarySetting,
+  setting: LoadedDailySummarySetting,
 ): ProgressDailySummarySettingView {
   return {
     enabled: setting.enabled,
-    scheduleTime: normalizeScheduleTime(setting.scheduleTime),
-    lastRunAt: setting.lastRunAt?.toISOString() ?? null,
+    schedules: setting.schedules.map((schedule) => ({
+      scheduleTime: schedule.scheduleTime,
+      lastRunAt: schedule.lastRunAt?.toISOString() ?? null,
+    })),
     updatedAt: setting.updatedAt?.toISOString() ?? null,
   };
 }
@@ -719,11 +795,28 @@ function shouldIncludeRecipient(openId: string, filter: Set<string>): boolean {
   return !!openId && (filter.size === 0 || filter.has(openId));
 }
 
-function normalizeScheduleTime(value: string): string {
-  const trimmed = value.trim();
-  return SCHEDULE_TIME_PATTERN.test(trimmed)
-    ? trimmed
-    : DEFAULT_DAILY_SUMMARY_SCHEDULE_TIME;
+export function validateDailySummaryScheduleTimes(values: string[]): string[] {
+  if (values.length === 0) throw new Error("请至少配置一个发送时间");
+  if (values.length > MAX_DAILY_SUMMARY_SCHEDULES) {
+    throw new Error(`每天最多配置 ${MAX_DAILY_SUMMARY_SCHEDULES} 个发送时间`);
+  }
+  const scheduleTimes = values.map((value) => value.trim());
+  if (scheduleTimes.some((value) => !SCHEDULE_TIME_PATTERN.test(value))) {
+    throw new Error("请输入有效的发送时间");
+  }
+  if (new Set(scheduleTimes).size !== scheduleTimes.length) {
+    throw new Error("发送时间不能重复");
+  }
+  scheduleTimes.sort((left, right) => scheduleTimeMinutes(left) - scheduleTimeMinutes(right));
+  if (scheduleTimes.length > 1) {
+    const minutes = scheduleTimes.map(scheduleTimeMinutes);
+    const gaps = minutes.slice(1).map((value, index) => value - minutes[index]);
+    gaps.push(24 * 60 - minutes[minutes.length - 1] + minutes[0]);
+    if (gaps.some((gap) => gap < MIN_SCHEDULE_GAP_MINUTES)) {
+      throw new Error(`相邻发送时间至少间隔 ${MIN_SCHEDULE_GAP_MINUTES} 分钟`);
+    }
+  }
+  return scheduleTimes;
 }
 
 function getDefaultDailySummaryScheduleTime(): string {
@@ -763,19 +856,15 @@ function parseLegacyDailySummaryCron(value: string | undefined): string | null {
 }
 
 function scheduleTimeMinutes(value: string): number {
-  const [hour = "19", minute = "00"] = normalizeScheduleTime(value).split(":");
+  const [hour = "19", minute = "00"] = value.split(":");
   return Number(hour) * 60 + Number(minute);
 }
 
-function localTimeMinutes(date: Date): number {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: TIME_ZONE,
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(date);
-  const byType = new Map(parts.map((part) => [part.type, part.value]));
-  return Number(byType.get("hour")) * 60 + Number(byType.get("minute"));
+function mostRecentScheduledSlot(scheduleTime: string, now: Date): Date {
+  const todaySlot = new Date(`${localDateKey(now)}T${scheduleTime}:00+08:00`);
+  return todaySlot.getTime() <= now.getTime()
+    ? todaySlot
+    : new Date(todaySlot.getTime() - DAY_MILLISECONDS);
 }
 
 function buildDueLabel(date: Date, now: Date) {

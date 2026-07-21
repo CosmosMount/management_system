@@ -438,12 +438,14 @@ test.describe("管理员面板", () => {
       create: {
         id: "default",
         enabled: true,
-        scheduleTime: "19:00",
+        schedules: { create: { scheduleTime: "19:00" } },
       },
       update: {
         enabled: true,
-        scheduleTime: "19:00",
-        lastRunAt: null,
+        schedules: {
+          deleteMany: {},
+          create: { scheduleTime: "19:00" },
+        },
       },
     });
     await prisma.notificationOutbox.deleteMany({
@@ -459,20 +461,58 @@ test.describe("管理员面板", () => {
     await page.getByTestId("admin-daily-summary-enabled").click();
     await page.getByRole("option", { name: "停用" }).click();
     await page.getByTestId("admin-daily-summary-time").fill("20:15");
+    await page.getByTestId("admin-daily-summary-add-time").click();
+    await page.getByTestId("admin-daily-summary-time").nth(1).fill("20:17");
+    await expect(
+      page.getByText("相邻发送时间至少间隔 5 分钟").first(),
+    ).toBeVisible();
+    await page.getByTestId("admin-daily-summary-time").nth(1).fill("09:30");
     await page.getByTestId("admin-daily-summary-save").click();
     await expect
       .poll(async () => {
         const setting = await prisma.progressDailySummarySetting.findUnique({
           where: { id: "default" },
-          select: { enabled: true, scheduleTime: true },
+          select: {
+            enabled: true,
+            schedules: {
+              orderBy: { scheduleTime: "asc" },
+              select: { scheduleTime: true },
+            },
+          },
         });
         return setting;
       })
-      .toEqual({ enabled: false, scheduleTime: "20:15" });
+      .toEqual({
+        enabled: false,
+        schedules: [{ scheduleTime: "09:30" }, { scheduleTime: "20:15" }],
+      });
 
     await page.reload({ waitUntil: "networkidle" });
     await page.getByTestId("admin-daily-summary-tab").click();
-    await expect(page.getByTestId("admin-daily-summary-time")).toHaveValue("20:15");
+    await expect(page.getByTestId("admin-daily-summary-time").nth(0)).toHaveValue(
+      "09:30",
+    );
+    await expect(page.getByTestId("admin-daily-summary-time").nth(1)).toHaveValue(
+      "20:15",
+    );
+    for (let index = 0; index < 6; index += 1) {
+      await page.getByTestId("admin-daily-summary-add-time").click();
+    }
+    await expect(page.getByTestId("admin-daily-summary-add-time")).toBeDisabled();
+    for (let index = 0; index < 6; index += 1) {
+      await page.getByRole("button", { name: /删除发送时间/ }).last().click();
+    }
+    await page.getByRole("button", { name: "删除发送时间 2" }).click();
+    await page.getByTestId("admin-daily-summary-save").click();
+    await expect
+      .poll(() =>
+        prisma.progressDailySummarySchedule.findMany({
+          where: { settingId: "default" },
+          orderBy: { scheduleTime: "asc" },
+          select: { scheduleTime: true },
+        }),
+      )
+      .toEqual([{ scheduleTime: "09:30" }]);
     const dailyUserSearch = page
       .getByTestId("admin-daily-summary-test-user")
       .locator("input");

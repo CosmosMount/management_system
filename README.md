@@ -162,8 +162,8 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 | `FEISHU_WS_BOT_KIND` | 可选，长连接使用的机器人，`notification` 或 `approval`，默认 `notification` |
 | `ENABLE_FEISHU_WS` | 可选，是否安装通知机器人长连接，默认 `false` |
 | `ENABLE_FEISHU_APPROVAL_WS` | 可选，是否安装审批机器人长连接，默认 `true` |
-| `PROGRESS_DAILY_SUMMARY_CHECK_CRON` | 可选，每日进度摘要 DB 设置检查频率，默认每 5 分钟；实际发送时间在管理员面板 `/admin/reminders` 的“每日卡片”中配置 |
-| `PROGRESS_DAILY_SUMMARY_CRON` | 兼容旧配置，仅在数据库中尚无每日卡片设置时用简单每日 cron 推导初始发送时间；已有设置以后以管理员面板为准 |
+| `PROGRESS_DAILY_SUMMARY_CHECK_CRON` | 可选，每日进度摘要 DB 设置检查频率，默认每 5 分钟；每天 1–8 个实际发送时间在管理员面板 `/admin/reminders` 的“每日卡片”中配置，相邻时间至少间隔 5 分钟 |
+| `PROGRESS_DAILY_SUMMARY_CRON` | 兼容旧配置，仅在数据库中尚无每日卡片设置时用简单每日 cron 推导首个发送时间；已有设置以后以管理员面板为准 |
 | `NEXT_PUBLIC_APP_URL` | 后台任务默认系统地址（cron 飞书卡片按钮跳转用） |
 | `APP_ALLOWED_ORIGINS` | 允许登录跳转和飞书按钮生成的完整 origin 列表 |
 | `LAN_HOST` | dev server 局域网访问 IP |

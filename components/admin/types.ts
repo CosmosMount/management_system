@@ -65,8 +65,10 @@ export type AdminReminderOutbox = {
 
 export type AdminProgressDailySummarySetting = {
   enabled: boolean;
-  scheduleTime: string;
-  lastRunAt: string | null;
+  schedules: Array<{
+    scheduleTime: string;
+    lastRunAt: string | null;
+  }>;
   updatedAt: string | null;
 };
 

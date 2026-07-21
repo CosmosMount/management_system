@@ -95,8 +95,7 @@ async function runProgressDailySummary() {
         action: "runProgressDailySummary",
         reason: result.reason,
         summaryDate: result.summaryDate,
-        scheduleTime: result.scheduleTime,
-        lastRunAt: result.lastRunAt,
+        scheduleTimes: result.scheduleTimes,
         result: "skipped",
       });
       return;
@@ -105,6 +104,10 @@ async function runProgressDailySummary() {
       module: "cron",
       action: "runProgressDailySummary",
       summaryDate: result.summaryDate,
+      scheduleTime: result.scheduleTime,
+      scheduledFor: result.scheduledFor,
+      skippedScheduleTimes: result.skippedScheduleTimes,
+      skippedScheduleCount: result.skippedScheduleTimes.length,
       recipients: result.recipients,
       queued: result.queued,
       skipped: result.skipped,

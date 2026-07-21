@@ -45,7 +45,10 @@ const reminderRuleUpdateSchema = z.object({
 
 const dailySummarySettingSchema = z.object({
   enabled: z.boolean(),
-  scheduleTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "请输入有效时间"),
+  scheduleTimes: z
+    .array(z.string())
+    .min(1, "请至少配置一个发送时间")
+    .max(8, "每天最多配置 8 个发送时间"),
 });
 
 const approvalReminderSettingSchema = z.object({

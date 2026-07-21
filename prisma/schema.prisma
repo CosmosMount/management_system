@@ -873,12 +873,26 @@ model ProgressReminderRule {
 }
 
 model ProgressDailySummarySetting {
-  id           String    @id @default("default")
-  enabled      Boolean   @default(true)
-  scheduleTime String    @default("19:00")
-  lastRunAt    DateTime?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  id        String                         @id @default("default")
+  enabled   Boolean                        @default(true)
+  createdAt DateTime                       @default(now())
+  updatedAt DateTime                       @updatedAt
+  schedules ProgressDailySummarySchedule[]
+}
+
+model ProgressDailySummarySchedule {
+  id                      String                      @id @default(uuid())
+  settingId               String
+  scheduleTime            String
+  activeFrom              DateTime                    @default(now())
+  lastProcessedSlotAt     DateTime?
+  lastRunAt               DateTime?
+  createdAt               DateTime                    @default(now())
+  updatedAt               DateTime                    @updatedAt
+  setting                 ProgressDailySummarySetting @relation(fields: [settingId], references: [id], onDelete: Cascade)
+
+  @@unique([settingId, scheduleTime])
+  @@index([settingId])
 }
 
 model ProgressApprovalReminderSetting {
