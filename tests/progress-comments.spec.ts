@@ -55,6 +55,237 @@ test.describe.serial("progress project comments", () => {
     });
   });
 
+  test("project detail keeps risks and comments in a responsive left sidebar", async ({
+    page,
+    context,
+    baseURL,
+  }, testInfo) => {
+    const longComment = `PW项目评论-侧栏布局-${"LongProjectCommentWithoutSpaces".repeat(20)}`;
+    const longRisk = `PW项目风险-侧栏布局-${"LongProjectRiskWithoutSpaces".repeat(20)}`;
+    const longStageName = `PW阶段-${"LongStageName".repeat(7)}`;
+    const longTaskTitle = `PW任务-${"LongTaskName".repeat(7)}`;
+    const longActorName = `PW用户-${"LongActorName".repeat(7)}`;
+    const longActivityChange = `PW动态-${"LongActivityChangeWithoutSpaces".repeat(12)}`;
+    const originalTask = await prisma.task.findUniqueOrThrow({
+      where: { id: fixtures.taskId },
+      select: {
+        title: true,
+        stage: { select: { id: true, name: true } },
+      },
+    });
+    if (!originalTask.stage) {
+      throw new Error("项目详情侧栏测试任务缺少所属阶段");
+    }
+    const [comment, risk, activity] = await prisma.$transaction([
+      prisma.projectComment.create({
+        data: {
+          projectId: fixtures.projectId,
+          authorOpenId: fixtures.normalOpenId,
+          authorName: "李棋轩",
+          content: longComment,
+        },
+      }),
+      prisma.taskRiskRecord.create({
+        data: {
+          taskId: fixtures.taskId,
+          content: longRisk,
+          source: "MANUAL",
+          status: "ACTIVE",
+          createdByOpenId: fixtures.normalOpenId,
+          createdByName: "李棋轩",
+        },
+      }),
+      prisma.progressActivityLog.create({
+        data: {
+          projectId: fixtures.projectId,
+          taskId: fixtures.taskId,
+          action: "task.updated",
+          actorOpenId: fixtures.normalOpenId,
+          actorName: longActorName,
+          payload: JSON.stringify({ changes: [longActivityChange] }),
+        },
+      }),
+    ]);
+
+    try {
+      await Promise.all([
+        prisma.task.update({
+          where: { id: fixtures.taskId },
+          data: { title: longTaskTitle },
+        }),
+        prisma.projectStage.update({
+          where: { id: originalTask.stage.id },
+          data: { name: longStageName },
+        }),
+      ]);
+      await loginAsNormalUser(context, baseURL, normalAuth);
+      await page.goto(`/progress/${fixtures.projectId}`, {
+        waitUntil: "networkidle",
+      });
+      await expectHealthyPage(page);
+
+      const main = page.getByTestId("project-detail-main");
+      const sidebar = page.getByTestId("project-context-sidebar");
+      const riskPanel = sidebar.getByTestId("project-risk-overview");
+      const commentsPanel = sidebar.getByTestId("project-comments-panel");
+      const activityPanel = page.getByTestId("project-activity-panel");
+      const longCommentItem = commentsPanel
+        .getByTestId("project-comment-item")
+        .filter({ hasText: "PW项目评论-侧栏布局" });
+      const longRiskRow = riskPanel
+        .getByTestId("task-risk-summary-row")
+        .filter({ hasText: longRisk });
+      const longTaskLink = longRiskRow.getByRole("link", {
+        name: `任务：${longTaskTitle}`,
+      });
+      const longStageLabel = longRiskRow.getByText(`所属阶段：${longStageName}`, {
+        exact: true,
+      });
+      const longActivityItem = activityPanel
+        .getByTestId("project-activity-item")
+        .filter({ hasText: longActorName });
+      const longActorLabel = longActivityItem.getByText(longActorName, {
+        exact: true,
+      });
+      const longActivityTarget = longActivityItem.getByText(
+        `任务：${longTaskTitle}`,
+        { exact: true },
+      );
+      const longActivityChangeLabel = longActivityItem.getByText(
+        longActivityChange,
+        { exact: true },
+      );
+
+      await expect(main).toBeVisible();
+      await expect(longRiskRow).toContainText(longRisk);
+      await expect(longTaskLink).toBeVisible();
+      await expect(longStageLabel).toBeVisible();
+      await expect(longCommentItem).toContainText(longComment);
+      await expect(longActorLabel).toBeVisible();
+      await expect(longActivityTarget).toBeVisible();
+      await expect(longActivityChangeLabel).toBeVisible();
+
+      const [mainBox, sidebarBox, riskBox, commentsBox, activityBox] =
+        await Promise.all([
+          main.boundingBox(),
+          sidebar.boundingBox(),
+          riskPanel.boundingBox(),
+          commentsPanel.boundingBox(),
+          activityPanel.boundingBox(),
+        ]);
+      if (!mainBox || !sidebarBox || !riskBox || !commentsBox || !activityBox) {
+        throw new Error("项目详情三栏布局元素缺少可测量边界");
+      }
+
+      const sidebarStyle = await sidebar.evaluate((element) => {
+        const style = window.getComputedStyle(element);
+        return {
+          maxHeight: style.maxHeight,
+          overflowY: style.overflowY,
+          position: style.position,
+        };
+      });
+
+      expect(riskBox.y).toBeLessThan(commentsBox.y);
+      if (testInfo.project.name === "desktop") {
+        expect(sidebarBox.width).toBeCloseTo(320, 0);
+        expect(activityBox.width).toBeCloseTo(320, 0);
+        expect(sidebarBox.x + sidebarBox.width).toBeLessThan(mainBox.x);
+        expect(mainBox.x + mainBox.width).toBeLessThan(activityBox.x);
+        expect(sidebarStyle.position).toBe("sticky");
+        expect(sidebarStyle.overflowY).toBe("auto");
+        expect(sidebarStyle.maxHeight).not.toBe("none");
+
+        const sidebarScroll = await sidebar.evaluate((element) => {
+          element.scrollTop = element.scrollHeight;
+          const result = {
+            clientHeight: element.clientHeight,
+            scrollHeight: element.scrollHeight,
+            scrollTop: element.scrollTop,
+          };
+          element.scrollTop = 0;
+          return result;
+        });
+        expect(sidebarScroll.scrollHeight).toBeGreaterThan(
+          sidebarScroll.clientHeight,
+        );
+        expect(sidebarScroll.scrollTop).toBeGreaterThan(0);
+
+        const [commentInputBox, commentSubmitBox] = await Promise.all([
+          commentsPanel.getByTestId("project-comment-input").boundingBox(),
+          commentsPanel.getByTestId("project-comment-submit").boundingBox(),
+        ]);
+        if (!commentInputBox || !commentSubmitBox) {
+          throw new Error("项目评论表单缺少可测量边界");
+        }
+        expect(Math.abs(commentInputBox.width - commentSubmitBox.width)).toBeLessThanOrEqual(
+          1,
+        );
+      } else {
+        expect(mainBox.y).toBeLessThan(sidebarBox.y);
+        expect(sidebarBox.y).toBeLessThan(activityBox.y);
+        expect(sidebarStyle.position).toBe("static");
+        expect(sidebarStyle.overflowY).toBe("visible");
+        expect(sidebarStyle.maxHeight).toBe("none");
+      }
+
+      const [
+        commentOverflow,
+        taskLinkOverflow,
+        stageLabelOverflow,
+        activityItemOverflow,
+        actorLabelOverflow,
+        activityTargetOverflow,
+        activityChangeOverflow,
+      ] =
+        await Promise.all([
+          longCommentItem.evaluate(
+            (element) => element.scrollWidth - element.clientWidth,
+          ),
+          longTaskLink.evaluate(
+            (element) => element.scrollWidth - element.clientWidth,
+          ),
+          longStageLabel.evaluate(
+            (element) => element.scrollWidth - element.clientWidth,
+          ),
+          longActivityItem.evaluate(
+            (element) => element.scrollWidth - element.clientWidth,
+          ),
+          longActorLabel.evaluate(
+            (element) => element.scrollWidth - element.clientWidth,
+          ),
+          longActivityTarget.evaluate(
+            (element) => element.scrollWidth - element.clientWidth,
+          ),
+          longActivityChangeLabel.evaluate(
+            (element) => element.scrollWidth - element.clientWidth,
+          ),
+        ]);
+      expect(commentOverflow).toBeLessThanOrEqual(1);
+      expect(taskLinkOverflow).toBeLessThanOrEqual(1);
+      expect(stageLabelOverflow).toBeLessThanOrEqual(1);
+      expect(activityItemOverflow).toBeLessThanOrEqual(1);
+      expect(actorLabelOverflow).toBeLessThanOrEqual(1);
+      expect(activityTargetOverflow).toBeLessThanOrEqual(1);
+      expect(activityChangeOverflow).toBeLessThanOrEqual(1);
+      await expectNoHorizontalOverflow(page);
+    } finally {
+      await Promise.all([
+        prisma.projectComment.deleteMany({ where: { id: comment.id } }),
+        prisma.taskRiskRecord.deleteMany({ where: { id: risk.id } }),
+        prisma.progressActivityLog.deleteMany({ where: { id: activity.id } }),
+        prisma.task.update({
+          where: { id: fixtures.taskId },
+          data: { title: originalTask.title },
+        }),
+        prisma.projectStage.update({
+          where: { id: originalTask.stage.id },
+          data: { name: originalTask.stage.name },
+        }),
+      ]);
+    }
+  });
+
   test("project member can publish and delete their own project comment", async ({
     page,
     context,

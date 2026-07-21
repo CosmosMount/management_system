@@ -539,7 +539,7 @@ pm2 start npm --name procurement-cron -- run cron
 | `/progress` | 进度首页 |
 | `/progress/new` | 新建项目（含验收里程碑） |
 | `/progress/list` | 进行中的项目列表 |
-| `/progress/[id]` | 项目详情、里程碑、挂载任务 |
+| `/progress/[id]` | 项目详情、里程碑、挂载任务，以及风险、评论和最近动态侧栏 |
 | `/progress/task/[id]` | 任务详情、交付、周报、验收 |
 | `/progress/dashboard` | 任务看板（待办/进行中/待验收/已完成） |
 | `/progress/archive` | 已归档项目与任务 |

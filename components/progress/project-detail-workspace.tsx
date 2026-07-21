@@ -550,8 +550,11 @@ export function ProjectDetailWorkspace({
         onOpenTaskImportDialog={() => setTaskImportDialogOpen(true)}
       />
 
-      <div className="mt-6 grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="min-w-0 space-y-5">
+      <div className="mt-6 grid min-w-0 gap-6 xl:grid-cols-[320px_minmax(0,1fr)_320px]">
+        <div
+          className="min-w-0 space-y-5 xl:col-start-2 xl:row-start-1"
+          data-testid="project-detail-main"
+        >
           <Card>
             <CardHeader className="pb-3">
               <CardTitle>项目阶段</CardTitle>
@@ -582,18 +585,6 @@ export function ProjectDetailWorkspace({
               )}
             </CardContent>
           </Card>
-
-          <ProjectRiskOverview
-            stages={project.stages}
-            tasks={project.tasks}
-            onSelectStage={selectStage}
-          />
-
-          <ProjectCommentsPanel
-            projectId={project.id}
-            comments={project.comments}
-            follow={project.follow}
-          />
 
           {selectedStage ? (
             <>
@@ -640,6 +631,23 @@ export function ProjectDetailWorkspace({
             </Card>
           )}
         </div>
+
+        <aside
+          className="min-w-0 space-y-5 xl:sticky xl:top-24 xl:col-start-1 xl:row-start-1 xl:max-h-[calc(100vh-7rem)] xl:self-start xl:overflow-y-auto xl:overscroll-contain xl:pr-1"
+          data-testid="project-context-sidebar"
+        >
+          <ProjectRiskOverview
+            stages={project.stages}
+            tasks={project.tasks}
+            onSelectStage={selectStage}
+          />
+
+          <ProjectCommentsPanel
+            projectId={project.id}
+            comments={project.comments}
+            follow={project.follow}
+          />
+        </aside>
 
         <ProjectActivityPanel
           projectId={project.id}
@@ -1386,7 +1394,7 @@ function ProjectRiskOverview({
             当前项目暂无未解决风险。
           </div>
         ) : (
-          <div className="grid gap-4 lg:grid-cols-2">
+          <div className="grid gap-4">
             <RiskGroup title="项目阶段风险" count={activeStageRisks.length}>
               {activeStageRisks.length === 0 ? (
                 <RiskEmptyText>暂无未解决阶段风险。</RiskEmptyText>
@@ -1418,7 +1426,7 @@ function ProjectRiskOverview({
             <summary className="cursor-pointer text-sm font-medium">
               已取消/已解除风险历史（{resolvedCount}）
             </summary>
-            <div className="mt-3 grid gap-4 lg:grid-cols-2">
+            <div className="mt-3 grid gap-4">
               <RiskGroup title="项目阶段风险" count={resolvedStageRisks.length}>
                 {resolvedStageRisks.map(({ risk, stage }) => (
                   <StageRiskSummaryRow
@@ -1492,7 +1500,7 @@ function StageRiskSummaryRow({
       <div className="flex flex-wrap items-start justify-between gap-2">
         <button
           type="button"
-          className="min-w-0 text-left font-medium text-primary hover:underline"
+          className="min-w-0 flex-1 break-words text-left font-medium text-primary hover:underline"
           onClick={() => onSelectStage(stage.id)}
         >
           阶段：{stage.name}
@@ -1501,8 +1509,10 @@ function StageRiskSummaryRow({
           {resolved ? "已取消" : "风险"}
         </Badge>
       </div>
-      <p className="mt-2 whitespace-pre-wrap text-muted-foreground">{risk.content}</p>
-      <p className="mt-2 text-xs text-muted-foreground">
+      <p className="mt-2 whitespace-pre-wrap break-words text-muted-foreground">
+        {risk.content}
+      </p>
+      <p className="mt-2 break-words text-xs text-muted-foreground">
         {resolved
           ? `${risk.resolvedByName || "未知"} · ${
               risk.resolvedAt ? formatDateTime(risk.resolvedAt) : "未记录时间"
@@ -1525,11 +1535,14 @@ function TaskRiskSummaryRow({
   resolved?: boolean;
 }) {
   return (
-    <div className="rounded-md border p-3 text-sm">
+    <div
+      className="rounded-md border p-3 text-sm"
+      data-testid="task-risk-summary-row"
+    >
       <div className="flex flex-wrap items-start justify-between gap-2">
         <Link
           href={routes.progress.task(task.id)}
-          className="min-w-0 font-medium text-primary hover:underline"
+          className="min-w-0 flex-1 break-words font-medium text-primary hover:underline"
         >
           任务：{task.title}
         </Link>
@@ -1537,11 +1550,13 @@ function TaskRiskSummaryRow({
           {resolved ? "已解除" : "风险"}
         </Badge>
       </div>
-      <p className="mt-1 text-xs text-muted-foreground">
+      <p className="mt-1 break-words text-xs text-muted-foreground">
         所属阶段：{task.stageName ?? "无阶段"}
       </p>
-      <p className="mt-2 whitespace-pre-wrap text-muted-foreground">{risk.content}</p>
-      <p className="mt-2 text-xs text-muted-foreground">
+      <p className="mt-2 whitespace-pre-wrap break-words text-muted-foreground">
+        {risk.content}
+      </p>
+      <p className="mt-2 break-words text-xs text-muted-foreground">
         {resolved
           ? `${risk.resolvedByName || "未知"} · ${
               risk.resolvedAt ? formatDateTime(risk.resolvedAt) : "未记录时间"
@@ -1639,7 +1654,7 @@ function ProjectCommentsPanel({
             data-testid="project-comment-input"
             aria-invalid={isOverLimit}
           />
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between xl:flex-col xl:items-stretch">
             <span
               className={cn(
                 "text-xs",
@@ -1648,7 +1663,7 @@ function ProjectCommentsPanel({
             >
               {draft.length}/1000
             </span>
-            <div className="flex flex-wrap items-center justify-end gap-3">
+            <div className="flex min-w-0 flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-end xl:flex-col xl:items-stretch">
               <label className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
                 <input
                   type="checkbox"
@@ -1667,6 +1682,7 @@ function ProjectCommentsPanel({
               <Button
                 type="button"
                 size="sm"
+                className="w-full sm:w-auto xl:w-full"
                 disabled={submitting || !trimmedDraft || isOverLimit}
                 onClick={handleSubmit}
                 data-testid="project-comment-submit"
@@ -1683,7 +1699,7 @@ function ProjectCommentsPanel({
             暂无项目评论。
           </p>
         ) : (
-          <div className="max-h-[32rem] space-y-3 overflow-y-auto pr-1">
+          <div className="max-h-[32rem] space-y-3 overflow-y-auto pr-1 xl:max-h-none xl:overflow-visible xl:pr-0">
             {comments.map((comment) => (
               <article
                 key={comment.id}
@@ -3540,7 +3556,7 @@ function ProjectActivityPanel({
   }
 
   return (
-    <aside className="min-w-0 xl:sticky xl:top-24 xl:self-start">
+    <aside className="min-w-0 xl:sticky xl:top-24 xl:col-start-3 xl:row-start-1 xl:self-start">
       <Card data-testid="project-activity-panel">
         <CardHeader className="pb-3">
           <CardTitle>最近动态</CardTitle>
@@ -3619,17 +3635,24 @@ function ActivityItem({
   const targetLabel = getActivityTargetLabel(log.action, task, stage, payload);
 
   return (
-    <div className="rounded-md border p-3 text-sm">
+    <div
+      className="min-w-0 rounded-md border p-3 text-sm"
+      data-testid="project-activity-item"
+    >
       <div className="flex items-start justify-between gap-3">
-        <p className="font-medium">{log.actorName}</p>
+        <p className="min-w-0 flex-1 break-words font-medium">{log.actorName}</p>
         <span className="shrink-0 text-xs text-muted-foreground">
           {formatDateTime(log.createdAt)}
         </span>
       </div>
       <p className="mt-1 text-muted-foreground">{activityLabel(log.action)}</p>
-      {targetLabel && <p className="mt-2 font-medium">{targetLabel}</p>}
+      {targetLabel && (
+        <p className="mt-2 break-words font-medium">{targetLabel}</p>
+      )}
       {stage && (
-        <p className="mt-1 text-xs text-muted-foreground">阶段：{stage.name}</p>
+        <p className="mt-1 break-words text-xs text-muted-foreground">
+          阶段：{stage.name}
+        </p>
       )}
       <ActivityChangeList payload={payload} />
       <div className="mt-3 flex flex-wrap gap-2">
@@ -3688,7 +3711,7 @@ function ActivityChangeList({ payload }: { payload: Record<string, unknown> }) {
   const approvalKindLabel = getPayloadString(payload.approvalKindLabel);
   if (recipientNames.length > 0) {
     return (
-      <div className="mt-2 space-y-1 rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+      <div className="mt-2 space-y-1 rounded-md bg-muted/50 px-3 py-2 text-xs break-words text-muted-foreground">
         {approvalKindLabel && <p>审批类型：{approvalKindLabel}</p>}
         <p>提醒对象：{recipientNames.join("、")}</p>
       </div>
@@ -3748,7 +3771,7 @@ function ActivityChangeList({ payload }: { payload: Record<string, unknown> }) {
     importedTaskTitles.length === 0
   ) return null;
   return (
-    <ul className="mt-2 space-y-1 rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+    <ul className="mt-2 space-y-1 rounded-md bg-muted/50 px-3 py-2 text-xs break-words text-muted-foreground">
       {importedTaskCount !== null && <li>任务数量：{importedTaskCount} 条</li>}
       {importedTaskTitles.length > 0 && (
         <li>
