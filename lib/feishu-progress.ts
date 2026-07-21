@@ -765,7 +765,7 @@ function buildCard(
 
 async function sendDirectCard(
   openId: string,
-  card: ReturnType<typeof buildCard>,
+  card: Record<string, unknown>,
 ) {
   if (!(await isFeishuDirectMessageAllowed(openId))) {
     logger.info("feishu.progress.direct_message.skipped_by_allowlist", {
@@ -778,6 +778,33 @@ async function sendDirectCard(
   }
 
   const botKind = progressBotKindStorage.getStore() ?? "notification";
+
+  if (card.schema === "2.0") {
+    const { sendInteractiveCardKitDm } = await import("@/lib/feishu-cardkit");
+    try {
+      await sendInteractiveCardKitDm(openId, card, botKind);
+      logger.info("feishu.progress.direct_message.sent", {
+        module: "feishu",
+        action: "sendProgressDirectCard",
+        recipientOpenId: openId,
+        botKind,
+        result: "success",
+        cardkit: true,
+      });
+    } catch (error) {
+      logger.error("feishu.progress.direct_message.failed", {
+        module: "feishu",
+        action: "sendProgressDirectCard",
+        recipientOpenId: openId,
+        botKind,
+        error,
+        cardkit: true,
+      });
+      throw error;
+    }
+    return;
+  }
+
   const target = await resolveDirectMessageTarget(openId, botKind);
   try {
     await postDirectCard(target, card);
@@ -826,7 +853,7 @@ async function sendDirectCard(
 
 async function postDirectCard(
   target: FeishuDirectMessageTarget,
-  card: ReturnType<typeof buildCard>,
+  card: Record<string, unknown>,
 ) {
   const token = await getFeishuTenantAccessTokenByBotKind(target.botKind);
   const url = new URL("https://open.feishu.cn/open-apis/im/v1/messages");
@@ -856,7 +883,7 @@ async function postDirectCard(
 async function notifyRoles(
   roles: UserRoleType[],
   scope: { team: string; techGroup: string },
-  card: ReturnType<typeof buildCard>,
+  card: Record<string, unknown>,
 ) {
   const openIdSet = new Set<string>();
   for (const role of roles) {
@@ -870,7 +897,7 @@ async function notifyRolesExcept(
   roles: UserRoleType[],
   scope: { team: string; techGroup: string },
   excludedOpenIds: string[],
-  card: ReturnType<typeof buildCard>,
+  card: Record<string, unknown>,
 ) {
   const excluded = new Set(excludedOpenIds.filter(Boolean));
   const openIdSet = new Set<string>();
@@ -887,7 +914,7 @@ async function notifyOpenIdsAndRoles(
   openIds: string[],
   roles: UserRoleType[],
   scope: { team: string; techGroup: string },
-  card: ReturnType<typeof buildCard>,
+  card: Record<string, unknown>,
 ) {
   const openIdSet = new Set(openIds.filter(Boolean));
   for (const role of roles) {
@@ -901,7 +928,7 @@ async function notifyOpenIdsAndRoleScopes(
   openIds: string[],
   roles: UserRoleType[],
   scopes: Array<{ team: string; techGroup: string }>,
-  card: ReturnType<typeof buildCard>,
+  card: Record<string, unknown>,
 ) {
   const openIdSet = new Set(openIds.filter(Boolean));
   for (const role of roles) {
@@ -915,7 +942,7 @@ async function notifyOpenIdsAndRoleScopes(
 
 async function notifyOpenIds(
   openIds: string[],
-  card: ReturnType<typeof buildCard>,
+  card: Record<string, unknown>,
 ) {
   const openIdSet = new Set(openIds.filter(Boolean));
   await sendCardToOpenIds([...openIdSet], card);
@@ -923,7 +950,7 @@ async function notifyOpenIds(
 
 async function sendCardToOpenIds(
   openIds: string[],
-  card: ReturnType<typeof buildCard>,
+  card: Record<string, unknown>,
 ) {
   const recipients = [...new Set(openIds.filter(Boolean))];
   if (recipients.length === 0) return;
@@ -1756,18 +1783,10 @@ export async function sendProgressNotification(
     case "progress_daily_summary": {
       const progressUrl = buildAppUrl(payload.linkPath, appOrigin);
       const approvalsUrl = buildAppUrl(payload.approvalsLinkPath, appOrigin);
-      const card = buildCard(
-        `每日进度摘要 · ${payload.summaryDate}`,
-        formatDailySummaryCard(payload, appOrigin),
+      const card = buildDailySummaryCardKitCard(payload, appOrigin, {
         progressUrl,
-        payload.overview.overdueTaskCount > 0 || payload.overview.overdueDdlCount > 0
-          ? "orange"
-          : "blue",
-        [
-          { text: "打开进度首页", url: progressUrl, type: "primary" },
-          { text: "查看审批看板", url: approvalsUrl },
-        ],
-      );
+        approvalsUrl,
+      });
       await notifyOpenIds(payload.recipientOpenIds, card);
       break;
     }
@@ -1813,10 +1832,11 @@ function formatChangeList(changes: string[]): string {
   return `**变更**：\n${changes.map((change) => `- ${change}`).join("\n")}`;
 }
 
-function formatDailySummaryCard(
+function buildDailySummaryCardKitCard(
   payload: Extract<ProgressNotifyPayload, { type: "progress_daily_summary" }>,
-  appOrigin?: string | null,
-): string {
+  appOrigin: string | null | undefined,
+  urls: { progressUrl: string; approvalsUrl: string },
+): Record<string, unknown> {
   const overview = [
     `任务 ${payload.overview.taskCount} 个`,
     `项目 ${payload.overview.projectCount} 个`,
@@ -1832,62 +1852,241 @@ function formatDailySummaryCard(
       : null,
   ].filter(Boolean);
 
-  return [
+  const overviewMarkdown = [
     payload.recipientName ? `**收件人**：${payload.recipientName}` : null,
     `**生成时间**：${formatNotificationDateTime(payload.generatedAt)}`,
     `**今日概览**：${overview.join(" / ") || "暂无待跟进事项"}`,
-    formatDailySummaryTaskSection(payload, appOrigin),
-    formatDailySummaryProjectSection(payload, appOrigin),
-    formatDailySummaryDdlSection(payload, appOrigin),
   ]
     .filter(Boolean)
-    .join("\n\n");
-}
+    .join("\n");
 
-function formatDailySummaryTaskSection(
-  payload: Extract<ProgressNotifyPayload, { type: "progress_daily_summary" }>,
-  appOrigin?: string | null,
-): string {
-  if (payload.tasks.length === 0) return "**任务列表**：暂无需要跟进的任务";
-  const lines = payload.tasks.map((task, index) => {
-    const groups =
-      task.taskTechGroups.length > 0 ? task.taskTechGroups.join("、") : "通用";
-    const risk = task.riskNote ? `｜风险：${compactCardText(task.riskNote, 60)}` : "";
-    const weekly = task.needsWeeklyReport ? "｜周报：需要" : "";
-    return `${index + 1}. ${cardLink(task.title, task.linkPath, appOrigin)}｜${task.projectName} / ${task.stageName}｜${task.statusLabel}｜DDL：${formatNotificationDateTime(task.dueAt)}（${task.dueLabel}）｜紧急/重要：${task.urgencyLabel}/${task.importanceLabel}｜负责人：${task.assigneeNames || "未设置"}｜技术组：${groups}${weekly}${risk}`;
+  const bodyElements: Record<string, unknown>[] = [
+    {
+      tag: "markdown",
+      content: overviewMarkdown,
+    },
+  ];
+
+  appendDailySummaryTaskTable(bodyElements, payload, appOrigin);
+  appendDailySummaryProjectTable(bodyElements, payload, appOrigin);
+  appendDailySummaryDdlTable(bodyElements, payload, appOrigin);
+  bodyElements.push({
+    tag: "column_set",
+    flex_mode: "flow",
+    horizontal_spacing: "8px",
+    columns: [
+      {
+        tag: "column",
+        width: "auto",
+        elements: [
+          cardKitLinkButton("打开进度首页", urls.progressUrl, "primary"),
+        ],
+      },
+      {
+        tag: "column",
+        width: "auto",
+        elements: [
+          cardKitLinkButton("查看审批看板", urls.approvalsUrl, "default"),
+        ],
+      },
+    ],
   });
-  appendMoreLine(lines, payload.taskTotalCount, payload.tasks.length);
-  return `**任务列表**：\n${lines.join("\n")}`;
+
+  return {
+    schema: "2.0",
+    config: {
+      wide_screen_mode: true,
+      update_multi: true,
+    },
+    header: {
+      title: {
+        tag: "plain_text",
+        content: `每日进度摘要 · ${payload.summaryDate}`,
+      },
+      template:
+        payload.overview.overdueTaskCount > 0 ||
+        payload.overview.overdueDdlCount > 0
+          ? "orange"
+          : "blue",
+    },
+    body: {
+      elements: bodyElements,
+    },
+  };
 }
 
-function formatDailySummaryProjectSection(
+function appendDailySummaryTaskTable(
+  bodyElements: Record<string, unknown>[],
   payload: Extract<ProgressNotifyPayload, { type: "progress_daily_summary" }>,
   appOrigin?: string | null,
-): string {
-  if (payload.projects.length === 0) return "**项目状态**：暂无关注项目";
-  const lines = payload.projects.map((project, index) => {
-    const risk = project.riskCount > 0 ? `｜风险 ${project.riskCount}` : "";
-    return `${index + 1}. ${cardLink(project.name, project.linkPath, appOrigin)}｜${project.statusLabel}｜当前阶段：${project.currentStageName}（${project.currentStageStatusLabel}）｜项目 DDL：${project.projectDueAt ? `${formatNotificationDateTime(project.projectDueAt)}（${project.projectDueLabel}）` : "未设置"}｜负责人：${project.ownerNames || "未设置"}｜活跃任务 ${project.activeTaskCount} / 逾期 ${project.overdueTaskCount} / 待验收 ${project.pendingAcceptanceTaskCount}${risk}`;
-  });
-  appendMoreLine(lines, payload.projectTotalCount, payload.projects.length);
-  return `**项目状态**：\n${lines.join("\n")}`;
-}
-
-function formatDailySummaryDdlSection(
-  payload: Extract<ProgressNotifyPayload, { type: "progress_daily_summary" }>,
-  appOrigin?: string | null,
-): string {
-  if (payload.ddlItems.length === 0) {
-    return "**DDL 提醒**：未来 7 天暂无临期或逾期 DDL";
+) {
+  if (payload.tasks.length === 0) {
+    bodyElements.push({
+      tag: "markdown",
+      content: "**任务列表**：暂无需要跟进的任务",
+    });
+    return;
   }
-  const lines = payload.ddlItems.map((item, index) => {
-    const prefix =
-      item.kind === "TASK" ? "任务" : item.kind === "STAGE" ? "阶段" : "项目";
-    const stage = item.stageName ? `｜阶段：${item.stageName}` : "";
-    return `${index + 1}. ${prefix}：${cardLink(item.title, item.linkPath, appOrigin)}｜${item.projectName}${stage}｜${formatNotificationDateTime(item.dueAt)}（${item.dueLabel}）`;
+
+  const rows = payload.tasks.map((task) => {
+    const stage = task.stageName ? ` / ${task.stageName}` : "";
+    const notes = [
+      task.taskTechGroups.length > 0
+        ? `技术组：${task.taskTechGroups.join("、")}`
+        : null,
+      task.needsWeeklyReport ? "周报：需要" : null,
+      task.riskNote ? `风险：${compactCardText(task.riskNote, 40)}` : null,
+    ]
+      .filter(Boolean)
+      .join("；");
+
+    return {
+      title: cardLink(task.title, task.linkPath, appOrigin),
+      project: `${task.projectName}${stage}`,
+      status: task.statusLabel,
+      due: `${formatNotificationDateTime(task.dueAt)}（${task.dueLabel}）`,
+      priority: `${task.urgencyLabel}/${task.importanceLabel}`,
+      assignees: task.assigneeNames || "未设置",
+      notes: notes || "-",
+    };
   });
-  appendMoreLine(lines, payload.ddlTotalCount, payload.ddlItems.length);
-  return `**DDL 提醒**：\n${lines.join("\n")}`;
+
+  appendCardKitSectionTable(bodyElements, "**任务列表**", rows, [
+    { name: "title", display_name: "任务", data_type: "lark_md" },
+    { name: "project", display_name: "项目/阶段" },
+    { name: "status", display_name: "状态" },
+    { name: "due", display_name: "DDL" },
+    { name: "priority", display_name: "紧急/重要" },
+    { name: "assignees", display_name: "负责人" },
+    { name: "notes", display_name: "说明" },
+  ]);
+}
+
+function appendDailySummaryProjectTable(
+  bodyElements: Record<string, unknown>[],
+  payload: Extract<ProgressNotifyPayload, { type: "progress_daily_summary" }>,
+  appOrigin?: string | null,
+) {
+  if (payload.projects.length === 0) {
+    bodyElements.push({
+      tag: "markdown",
+      content: "**项目状态**：暂无关注项目",
+    });
+    return;
+  }
+
+  const rows = payload.projects.map((project) => ({
+    name: cardLink(project.name, project.linkPath, appOrigin),
+    status: project.statusLabel,
+    stage: `${project.currentStageName}（${project.currentStageStatusLabel}）`,
+    due: project.projectDueAt
+      ? `${formatNotificationDateTime(project.projectDueAt)}（${project.projectDueLabel}）`
+      : "未设置",
+    owners: project.ownerNames || "未设置",
+    tasks: `活跃 ${project.activeTaskCount} / 逾期 ${project.overdueTaskCount} / 待验收 ${project.pendingAcceptanceTaskCount}`,
+    risk: project.riskCount > 0 ? String(project.riskCount) : "-",
+  }));
+
+  appendCardKitSectionTable(bodyElements, "**项目状态**", rows, [
+    { name: "name", display_name: "项目", data_type: "lark_md" },
+    { name: "status", display_name: "状态" },
+    { name: "stage", display_name: "当前阶段" },
+    { name: "due", display_name: "项目 DDL" },
+    { name: "owners", display_name: "负责人" },
+    { name: "tasks", display_name: "任务概况" },
+    { name: "risk", display_name: "风险" },
+  ]);
+}
+
+function appendDailySummaryDdlTable(
+  bodyElements: Record<string, unknown>[],
+  payload: Extract<ProgressNotifyPayload, { type: "progress_daily_summary" }>,
+  appOrigin?: string | null,
+) {
+  if (payload.ddlItems.length === 0) {
+    bodyElements.push({
+      tag: "markdown",
+      content: "**DDL 提醒**：未来 7 天暂无临期或逾期 DDL",
+    });
+    return;
+  }
+
+  const rows = payload.ddlItems.map((item) => {
+    const kindLabel =
+      item.kind === "TASK" ? "任务" : item.kind === "STAGE" ? "阶段" : "项目";
+    const stage = item.stageName ? ` / ${item.stageName}` : "";
+    return {
+      kind: kindLabel,
+      title: cardLink(item.title, item.linkPath, appOrigin),
+      project: `${item.projectName}${stage}`,
+      due: `${formatNotificationDateTime(item.dueAt)}（${item.dueLabel}）`,
+    };
+  });
+
+  appendCardKitSectionTable(bodyElements, "**DDL 提醒**", rows, [
+    { name: "kind", display_name: "类型" },
+    { name: "title", display_name: "事项", data_type: "lark_md" },
+    { name: "project", display_name: "项目/阶段" },
+    { name: "due", display_name: "DDL" },
+  ]);
+}
+
+function appendCardKitSectionTable(
+  bodyElements: Record<string, unknown>[],
+  title: string,
+  rows: Record<string, string>[],
+  columns: Array<{
+    name: string;
+    display_name: string;
+    data_type?: "text" | "lark_md";
+  }>,
+) {
+  bodyElements.push({
+    tag: "markdown",
+    content: title,
+  });
+  bodyElements.push({
+    tag: "table",
+    page_size: Math.min(10, Math.max(1, rows.length)),
+    row_height: "low",
+    header_style: {
+      text_align: "left",
+      text_size: "normal",
+      background_style: "grey",
+      text_color: "default",
+      bold: true,
+      lines: 1,
+    },
+    columns: columns.map((column) => ({
+      name: column.name,
+      display_name: column.display_name,
+      data_type: column.data_type ?? "text",
+      width: "auto",
+      horizontal_align: "left",
+    })),
+    rows,
+  });
+}
+
+function cardKitLinkButton(
+  label: string,
+  url: string,
+  type: "primary" | "default" = "default",
+) {
+  return {
+    tag: "button",
+    text: { tag: "plain_text", content: label },
+    type,
+    behaviors: [
+      {
+        type: "open_url",
+        default_url: url,
+        pc_url: url,
+        ios_url: url,
+        android_url: url,
+      },
+    ],
+  };
 }
 
 function cardLink(label: string, path: string, appOrigin?: string | null): string {
@@ -1895,10 +2094,6 @@ function cardLink(label: string, path: string, appOrigin?: string | null): strin
     " ](",
     "](",
   );
-}
-
-function appendMoreLine(lines: string[], total: number, visible: number) {
-  if (total > visible) lines.push(`...还有 ${total - visible} 条，请打开系统查看`);
 }
 
 function formatTaskNotificationDetailLines(

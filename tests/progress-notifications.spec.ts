@@ -1144,12 +1144,23 @@ test("每日进度摘要卡片包含链接并在测试 allowlist 下只投递给
       expect(capturedMessages[0]?.title).toBe("每日进度摘要 · 2026-07-06");
       expect(capturedMessages[0]?.cardText).toContain("今日概览");
       expect(capturedMessages[0]?.cardText).toContain("任务列表");
+      expect(capturedMessages[0]?.cardText).toContain('"tag":"table"');
+      expect(capturedMessages[0]?.cardText).toContain('"display_name":"任务"');
+      expect(capturedMessages[0]?.cardText).toContain('"display_name":"项目/阶段"');
+      expect(capturedMessages[0]?.cardText).toContain('"display_name":"项目"');
+      expect(capturedMessages[0]?.cardText).toContain('"display_name":"当前阶段"');
+      expect(capturedMessages[0]?.cardText).toContain('"display_name":"事项"');
+      expect(capturedMessages[0]?.cardText).toContain('"page_size":1');
       expect(capturedMessages[0]?.cardText).toContain("项目状态");
       expect(capturedMessages[0]?.cardText).toContain("DDL 提醒");
       expect(capturedMessages[0]?.cardText).toContain("PW卡片-摘要任务");
       expect(capturedMessages[0]?.cardText).toContain("http://127.0.0.1:3002/progress/task/pw-daily-task");
       expect(capturedMessages[0]?.cardText).toContain("打开进度首页");
       expect(capturedMessages[0]?.cardText).toContain("查看审批看板");
+      expect(capturedMessages[0]?.cardText).toContain('"schema":"2.0"');
+      expect(
+        (capturedMessages[0]?.cardText.match(/"tag":"table"/g) ?? []).length,
+      ).toBe(3);
     },
   );
 });
@@ -2925,6 +2936,7 @@ function mockFeishuFetch(
   } = {},
 ): () => void {
   const originalFetch = globalThis.fetch;
+  let lastCardKitCard: Record<string, unknown> | null = null;
 
   globalThis.fetch = (async (input, init) => {
     const url = requestUrl(input);
@@ -2942,6 +2954,10 @@ function mockFeishuFetch(
     }
 
     if (url.includes("/cardkit/v1/cards")) {
+      const body = parseJsonRecord(init?.body);
+      const cardData =
+        typeof body.data === "string" ? body.data : JSON.stringify(body.data ?? {});
+      lastCardKitCard = parseJsonRecord(cardData);
       return Response.json({
         code: 0,
         msg: "ok",
@@ -2959,15 +2975,22 @@ function mockFeishuFetch(
         });
       }
       const card = parseJsonRecord(body.content);
+      const isCardKitRef =
+        typeof card.type === "string" && card.type === "card";
       capturedMessages.push({
         receiveId,
         receiveIdType:
           new URL(url).searchParams.get("receive_id_type") ?? "open_id",
-        title:
-          typeof card.type === "string" && card.type === "card"
-            ? "CardKit"
-            : readNestedString(card, ["header", "title", "content"]),
-        cardText: JSON.stringify(card),
+        title: isCardKitRef
+          ? readNestedString(lastCardKitCard ?? {}, [
+              "header",
+              "title",
+              "content",
+            ]) || "CardKit"
+          : readNestedString(card, ["header", "title", "content"]),
+        cardText: JSON.stringify(
+          isCardKitRef && lastCardKitCard ? lastCardKitCard : card,
+        ),
         token: readAuthorizationToken(init?.headers),
       });
       return Response.json({ code: 0, msg: "ok" });

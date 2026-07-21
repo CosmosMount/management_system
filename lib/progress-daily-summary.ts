@@ -38,9 +38,6 @@ const ACTIVE_TASK_STATUSES = [
   "PENDING_ACCEPTANCE",
 ] as const satisfies TaskStatus[];
 const DDL_LOOKAHEAD_DAYS = 7;
-const TASK_SUMMARY_LIMIT = 12;
-const PROJECT_SUMMARY_LIMIT = 8;
-const DDL_SUMMARY_LIMIT = 12;
 const DAILY_SUMMARY_SETTING_ID = "default";
 const DEFAULT_DAILY_SUMMARY_SCHEDULE_TIME = "19:00";
 const SCHEDULE_TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -505,11 +502,11 @@ function buildSummaryPayload({
       riskTaskCount,
       overdueDdlCount,
     },
-    tasks: tasks.slice(0, TASK_SUMMARY_LIMIT),
+    tasks,
     taskTotalCount: tasks.length,
-    projects: projects.slice(0, PROJECT_SUMMARY_LIMIT),
+    projects,
     projectTotalCount: projects.length,
-    ddlItems: ddlItems.slice(0, DDL_SUMMARY_LIMIT),
+    ddlItems,
     ddlTotalCount: ddlItems.length,
     linkPath: routes.progress.root,
     approvalsLinkPath: routes.progress.approvals,
