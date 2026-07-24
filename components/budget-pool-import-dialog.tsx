@@ -146,7 +146,7 @@ export function BudgetPoolImportDialog({
             {result.rows.length > 0 && (
               <ul className="space-y-1 text-muted-foreground">
                 {result.rows.slice(0, 6).map((row) => (
-                  <li key={`${row.team}-${row.techGroup}-${row.period}`}>
+                  <li key={`${row.description}-${row.team}-${row.techGroup}-${row.period}`}>
                     {row.description ? `${row.description} · ` : ""}
                     {formatBudgetPoolLabel(row.team, row.techGroup)} · ¥
                     {row.budgetAmount.toLocaleString("zh-CN")} · {row.period}

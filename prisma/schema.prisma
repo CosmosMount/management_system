@@ -202,16 +202,19 @@ model UserRole {
 
 model ProcurementBudgetPool {
   id                 String   @id @default(uuid())
+  /** 项目名（导入表「项目」列） */
   description        String   @default("")
   team               String
   techGroup          String
   period             String
   budgetAmount       Float
+  /** 看板/管理页展示顺序，与 Excel 导入行序一致 */
+  sortOrder          Int      @default(0)
   lastAlertThreshold Int      @default(0)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
-  @@unique([team, techGroup, period])
+  @@unique([description, team, techGroup, period])
 }
 
 model PurchaseOrder {

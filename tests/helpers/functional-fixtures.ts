@@ -1397,19 +1397,21 @@ async function seedAdminReferenceData() {
 
   await prisma.procurementBudgetPool.upsert({
     where: {
-      team_techGroup_period: {
+      description_team_techGroup_period: {
+        description: `${TEST_PREFIX}-预算池`,
         team: "英雄",
         techGroup: "电控",
         period: "playwright",
       },
     },
-    update: { budgetAmount: 10000 },
+    update: { budgetAmount: 10000, sortOrder: 0 },
     create: {
       team: "英雄",
       techGroup: "电控",
       period: "playwright",
       description: `${TEST_PREFIX}-预算池`,
       budgetAmount: 10000,
+      sortOrder: 0,
     },
   });
 }

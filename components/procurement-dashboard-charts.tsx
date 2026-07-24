@@ -179,42 +179,75 @@ function BudgetPoolChart({
     );
   }
 
+  const totalBudget = rows.reduce((sum, row) => sum + row.budget, 0);
+  const totalUsed = rows.reduce((sum, row) => sum + row.used, 0);
+  const totalUsagePercent =
+    totalBudget > 0 ? (totalUsed / totalBudget) * 100 : 0;
+
   return (
-    <ul className="space-y-4">
-      {rows.map((row) => {
-        const width = Math.min(100, Math.max(0, row.usagePercent));
-        return (
-          <li key={`${row.team}-${row.techGroup}`} className="space-y-1">
-            <div className="flex items-baseline justify-between gap-2 text-sm">
-              <div className="min-w-0">
-                <span className="truncate font-medium">{row.name}</span>
-                {row.description ? (
+    <div className="space-y-4">
+      <div
+        className="rounded-lg border bg-muted/30 px-3 py-2 text-sm"
+        data-testid="procurement-budget-pool-totals"
+      >
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <span className="font-medium">预算池总量</span>
+          <span
+            className={
+              totalUsagePercent >= 70
+                ? "font-medium text-amber-600 dark:text-amber-400"
+                : "text-muted-foreground"
+            }
+          >
+            {formatMoney(totalUsed)} / {formatMoney(totalBudget)}（
+            {totalUsagePercent.toFixed(1)}%）
+          </span>
+        </div>
+        <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-muted">
+          <div
+            className={`h-full rounded-full transition-all ${usageBarColor(totalUsagePercent)}`}
+            style={{ width: `${Math.min(100, Math.max(0, totalUsagePercent))}%` }}
+          />
+        </div>
+      </div>
+      <ul className="space-y-4">
+        {rows.map((row) => {
+          const width = Math.min(100, Math.max(0, row.usagePercent));
+          return (
+            <li
+              key={`${row.name}-${row.team}-${row.techGroup}`}
+              className="space-y-1"
+              data-testid="procurement-budget-pool-row"
+            >
+              <div className="flex items-baseline justify-between gap-2 text-sm">
+                <div className="min-w-0">
+                  <span className="truncate font-medium">{row.name}</span>
                   <p className="truncate text-xs text-muted-foreground">
-                    {row.description}
+                    {row.groupLabel}
                   </p>
-                ) : null}
+                </div>
+                <span
+                  className={`shrink-0 ${
+                    row.usagePercent >= 70
+                      ? "font-medium text-amber-600 dark:text-amber-400"
+                      : "text-muted-foreground"
+                  }`}
+                >
+                  {formatMoney(row.used)} / {formatMoney(row.budget)} (
+                  {row.usagePercent.toFixed(1)}%)
+                </span>
               </div>
-              <span
-                className={`shrink-0 ${
-                  row.usagePercent >= 70
-                    ? "font-medium text-amber-600 dark:text-amber-400"
-                    : "text-muted-foreground"
-                }`}
-              >
-                {formatMoney(row.used)} / {formatMoney(row.budget)} (
-                {row.usagePercent.toFixed(1)}%)
-              </span>
-            </div>
-            <div className="h-2.5 overflow-hidden rounded-full bg-muted">
-              <div
-                className={`h-full rounded-full transition-all ${usageBarColor(row.usagePercent)}`}
-                style={{ width: `${width}%` }}
-              />
-            </div>
-          </li>
-        );
-      })}
-    </ul>
+              <div className="h-2.5 overflow-hidden rounded-full bg-muted">
+                <div
+                  className={`h-full rounded-full transition-all ${usageBarColor(row.usagePercent)}`}
+                  style={{ width: `${width}%` }}
+                />
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
 
@@ -305,8 +338,8 @@ export function ProcurementDashboardCharts({ data }: Props) {
             <CardTitle className="text-base">预算池使用率</CardTitle>
             <CardDescription>
               {data.budgetPeriod
-                ? `${data.budgetPeriod} 周期 · 按车组+技术组分别统计已提交订单占用`
-                : "按车组+技术组分别统计已提交订单占用"}
+                ? `${data.budgetPeriod} 周期 · 按项目展示，顺序与导入表一致`
+                : "按项目展示，顺序与导入表一致"}
             </CardDescription>
           </div>
           <div className="flex flex-wrap gap-2">

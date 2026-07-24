@@ -20,6 +20,8 @@ export type BudgetPoolRow = {
   description: string;
   team: string;
   techGroup: string;
+  /** 展示用组别标签，如「英雄 · 电控」 */
+  groupLabel: string;
   budget: number;
   used: number;
   usagePercent: number;
@@ -190,15 +192,20 @@ export function buildDashboardChartsData(
       };
     });
 
-  const budgetPools = poolViews.map((pool) => ({
-    name: pool.label,
-    description: pool.description,
-    team: pool.team,
-    techGroup: pool.techGroup,
-    budget: pool.budgetAmount,
-    used: pool.usedAmount,
-    usagePercent: pool.usagePercent,
-  }));
+  const budgetPools = poolViews.map((pool) => {
+    const groupLabel = pool.label;
+    const projectName = pool.description.trim() || groupLabel;
+    return {
+      name: projectName,
+      description: pool.description,
+      team: pool.team,
+      techGroup: pool.techGroup,
+      groupLabel,
+      budget: pool.budgetAmount,
+      used: pool.usedAmount,
+      usagePercent: pool.usagePercent,
+    };
+  });
 
   return {
     teamSpending: completedSpend.teamSpending,
