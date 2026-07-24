@@ -25,6 +25,12 @@ export type BudgetPoolRow = {
   usagePercent: number;
 };
 
+export type SpendSeries = {
+  total: number;
+  teamSpending: ChartSlice[];
+  initiatorRanking: BarRow[];
+};
+
 export type DashboardChartsData = {
   teamSpending: ChartSlice[];
   statusDistribution: ChartSlice[];
@@ -34,6 +40,11 @@ export type DashboardChartsData = {
   activeOrderCount: number;
   budgetPools: BudgetPoolRow[];
   budgetPeriod: string;
+  /** 支出口径：已完成 / 全部已提交（非草稿、非驳回） */
+  spendByScope: {
+    completed: SpendSeries;
+    all: SpendSeries;
+  };
 };
 
 const CHART_COLORS = [
@@ -83,7 +94,36 @@ function daysSince(date: Date): number {
   );
 }
 
-/** 已完成订单计入支出；活跃单计入状态与拖延统计 */
+function buildSpendSeries(orders: OrderForStats[]): SpendSeries {
+  const teamTotals = new Map<string, number>();
+  const initiatorTotals = new Map<string, number>();
+  let total = 0;
+
+  for (const order of orders) {
+    total += order.totalPrice;
+    teamTotals.set(
+      order.team,
+      (teamTotals.get(order.team) ?? 0) + order.totalPrice,
+    );
+    initiatorTotals.set(
+      order.initiatorName,
+      (initiatorTotals.get(order.initiatorName) ?? 0) + order.totalPrice,
+    );
+  }
+
+  return {
+    total,
+    teamSpending: toSlices(
+      [...teamTotals.entries()].sort((a, b) => b[1] - a[1]),
+    ),
+    initiatorRanking: [...initiatorTotals.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)
+      .map(([label, value]) => ({ label, value })),
+  };
+}
+
+/** 支出可按已完成 / 全部已提交切换；活跃单计入状态与拖延统计 */
 export function buildDashboardChartsData(
   orders: OrderForStats[],
   poolViews: BudgetPoolView[] = [],
@@ -91,6 +131,9 @@ export function buildDashboardChartsData(
   handlerNamesByOrderId: ReadonlyMap<string, string> = new Map(),
 ): DashboardChartsData {
   const completed = orders.filter((o) => o.status === "COMPLETED");
+  const submitted = orders.filter(
+    (o) => o.status !== "REJECTED" && o.status !== "DRAFT",
+  );
   const active = orders.filter(
     (o) =>
       o.status !== "COMPLETED" &&
@@ -98,27 +141,11 @@ export function buildDashboardChartsData(
       o.status !== "DRAFT",
   );
 
-  const teamTotals = new Map<string, number>();
-  for (const order of completed) {
-    teamTotals.set(
-      order.team,
-      (teamTotals.get(order.team) ?? 0) + order.totalPrice,
-    );
-  }
-
   const statusCounts = new Map<string, number>();
   for (const order of active) {
     statusCounts.set(
       order.status,
       (statusCounts.get(order.status) ?? 0) + 1,
-    );
-  }
-
-  const initiatorTotals = new Map<string, number>();
-  for (const order of completed) {
-    initiatorTotals.set(
-      order.initiatorName,
-      (initiatorTotals.get(order.initiatorName) ?? 0) + order.totalPrice,
     );
   }
 
@@ -133,20 +160,14 @@ export function buildDashboardChartsData(
     REJECTED: "已驳回",
   };
 
-  const teamSpending = toSlices(
-    [...teamTotals.entries()].sort((a, b) => b[1] - a[1]),
-  );
+  const completedSpend = buildSpendSeries(completed);
+  const allSpend = buildSpendSeries(submitted);
 
   const statusDistribution = toSlices(
     [...statusCounts.entries()]
       .sort((a, b) => b[1] - a[1])
       .map(([status, count]) => [statusLabels[status as OrderStatus], count]),
   );
-
-  const initiatorRanking = [...initiatorTotals.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 8)
-    .map(([label, value]) => ({ label, value }));
 
   const delayRanking = [...active]
     .sort(
@@ -180,14 +201,18 @@ export function buildDashboardChartsData(
   }));
 
   return {
-    teamSpending,
+    teamSpending: completedSpend.teamSpending,
     statusDistribution,
-    initiatorRanking,
+    initiatorRanking: completedSpend.initiatorRanking,
     delayRanking,
-    completedTotal: completed.reduce((s, o) => s + o.totalPrice, 0),
+    completedTotal: completedSpend.total,
     activeOrderCount: active.length,
     budgetPools,
     budgetPeriod,
+    spendByScope: {
+      completed: completedSpend,
+      all: allSpend,
+    },
   };
 }
 
