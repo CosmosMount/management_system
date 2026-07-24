@@ -26,6 +26,7 @@ export type BudgetPoolImportResult = {
 };
 
 const HEADER_ALIASES: Record<string, keyof RawRow> = {
+  项目: "description",
   描述: "description",
   说明: "description",
   备注: "description",
@@ -81,11 +82,12 @@ function sheetRowsToRawRows(sheet: XLSX.WorkSheet): RawRow[] {
     resolveHeaderKey(normalizeHeader(cell)),
   );
 
+  const hasDescription = columnKeys.includes("description");
   const hasTeam = columnKeys.includes("team");
   const hasTechGroup = columnKeys.includes("techGroup");
   const hasBudget = columnKeys.includes("budgetAmount");
-  if (!hasTeam || !hasTechGroup || !hasBudget) {
-    throw new Error("Excel 缺少必填列：车组、技术组、预算");
+  if (!hasDescription || !hasTeam || !hasTechGroup || !hasBudget) {
+    throw new Error("Excel 缺少必填列：项目、车组、技术组、预算");
   }
 
   const rows: RawRow[] = [];
@@ -123,6 +125,10 @@ function parseRawRow(
   const period = raw.period?.trim() || DEFAULT_BUDGET_PERIOD;
   const budgetAmount = parseBudgetAmount(raw.budgetAmount);
 
+  if (!description) {
+    errors.push({ row: rowNum, message: "项目不能为空" });
+    return null;
+  }
   if (!team) {
     errors.push({ row: rowNum, message: "车组不能为空" });
     return null;
@@ -147,11 +153,13 @@ function parseRawRow(
   return { description, team, techGroup, budgetAmount, period };
 }
 
-function poolMergeKey(row: Pick<BudgetPoolImportRow, "team" | "techGroup" | "period">): string {
-  return `${row.team}\0${row.techGroup}\0${row.period}`;
+function poolMergeKey(
+  row: Pick<BudgetPoolImportRow, "description" | "team" | "techGroup" | "period">,
+): string {
+  return `${row.description}\0${row.team}\0${row.techGroup}\0${row.period}`;
 }
 
-/** 相同车组+技术组+周期合并：预算求和，描述去重后用「；」拼接 */
+/** 相同项目+车组+技术组+周期合并：预算求和（不同项目即使同组别也分开保留） */
 export function mergeBudgetPoolImportRows(
   rows: BudgetPoolImportRow[],
 ): BudgetPoolImportRow[] {
@@ -166,13 +174,6 @@ export function mergeBudgetPoolImportRows(
     }
 
     existing.budgetAmount += row.budgetAmount;
-    const descriptions = new Set<string>();
-    for (const part of existing.description.split("；")) {
-      const text = part.trim();
-      if (text) descriptions.add(text);
-    }
-    if (row.description) descriptions.add(row.description);
-    existing.description = [...descriptions].join("；");
   }
 
   return [...merged.values()];
@@ -257,21 +258,21 @@ export function formatBudgetPoolLabel(team: string, techGroup: string): string {
 export function downloadBudgetPoolTemplate() {
   const rows = [
     {
-      描述: "英雄队机械方向",
+      项目: "英雄队机械方向",
       车组: "英雄",
       技术组: "机械",
       预算: 20000,
       周期: DEFAULT_BUDGET_PERIOD,
     },
     {
-      描述: "英雄队电控方向",
+      项目: "英雄队电控方向",
       车组: "英雄",
       技术组: "电控",
       预算: 15000,
       周期: DEFAULT_BUDGET_PERIOD,
     },
     {
-      描述: "步兵队硬件方向",
+      项目: "步兵队硬件方向",
       车组: "步兵",
       技术组: "硬件",
       预算: 30000,

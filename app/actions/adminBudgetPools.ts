@@ -38,10 +38,11 @@ export async function importBudgetPoolsFromExcel(formData: FormData) {
   }
 
   let upserted = 0;
-  for (const row of parsed.rows) {
+  for (const [index, row] of parsed.rows.entries()) {
     await prisma.procurementBudgetPool.upsert({
       where: {
-        team_techGroup_period: {
+        description_team_techGroup_period: {
+          description: row.description,
           team: row.team,
           techGroup: row.techGroup,
           period: row.period,
@@ -53,11 +54,12 @@ export async function importBudgetPoolsFromExcel(formData: FormData) {
         techGroup: row.techGroup,
         period: row.period,
         budgetAmount: row.budgetAmount,
+        sortOrder: index,
         lastAlertThreshold: 0,
       },
       update: {
-        description: row.description,
         budgetAmount: row.budgetAmount,
+        sortOrder: index,
         lastAlertThreshold: 0,
       },
     });
@@ -80,7 +82,7 @@ export async function listAdminBudgetPools() {
   const period = currentBudgetPeriod();
   const pools = await prisma.procurementBudgetPool.findMany({
     where: { period },
-    orderBy: [{ team: "asc" }, { techGroup: "asc" }],
+    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
   });
 
   return pools.map((pool) => ({
@@ -90,6 +92,7 @@ export async function listAdminBudgetPools() {
     techGroup: pool.techGroup,
     period: pool.period,
     budgetAmount: pool.budgetAmount,
+    sortOrder: pool.sortOrder,
     lastAlertThreshold: pool.lastAlertThreshold,
     updatedAt: pool.updatedAt.toISOString(),
   }));
