@@ -27,6 +27,8 @@ import { TEAM_OPTIONS, TECH_GROUP_OPTIONS } from "@/lib/constants";
 const ALL_TEAMS_VALUE = "__all_teams__";
 const ALL_TECH_GROUPS_VALUE = "__all_tech_groups__";
 
+type SpendScope = "completed" | "all";
+
 type Props = {
   data: DashboardChartsData;
 };
@@ -219,6 +221,15 @@ function BudgetPoolChart({
 export function ProcurementDashboardCharts({ data }: Props) {
   const [teamFilter, setTeamFilter] = useState(ALL_TEAMS_VALUE);
   const [techGroupFilter, setTechGroupFilter] = useState(ALL_TECH_GROUPS_VALUE);
+  const [spendScope, setSpendScope] = useState<SpendScope>("completed");
+
+  const spend = data.spendByScope[spendScope];
+  const spendScopeLabel =
+    spendScope === "completed" ? "仅已完成" : "全部已提交";
+  const spendTotalLabel =
+    spendScope === "completed" ? "已完成支出" : "全部支出";
+  const spendEmptyLabel =
+    spendScope === "completed" ? "暂无已完成订单" : "暂无已提交订单";
 
   const filteredBudgetPools = useMemo(() => {
     return data.budgetPools.filter((row) => {
@@ -237,12 +248,46 @@ export function ProcurementDashboardCharts({ data }: Props) {
 
   return (
     <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground">
+          支出统计口径：{spendScopeLabel}
+          {spendScope === "all" ? "（含在途，不含草稿/驳回）" : ""}
+        </p>
+        <Select
+          value={spendScope}
+          onValueChange={(value) =>
+            setSpendScope((value as SpendScope | null) ?? "completed")
+          }
+        >
+          <SelectTrigger
+            className="w-40"
+            data-testid="procurement-spend-scope"
+            aria-label="支出统计口径"
+          >
+            <SelectValue>
+              {(value) =>
+                value === "all" ? "全部已提交" : "仅已完成"
+              }
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="completed">仅已完成</SelectItem>
+            <SelectItem value="all">全部已提交</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
       <div className="grid gap-4 sm:grid-cols-2">
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>已完成支出</CardDescription>
-            <CardTitle className="text-2xl">
-              {formatMoney(data.completedTotal)}
+            <CardDescription data-testid="procurement-spend-total-label">
+              {spendTotalLabel}
+            </CardDescription>
+            <CardTitle
+              className="text-2xl"
+              data-testid="procurement-spend-total"
+            >
+              {formatMoney(spend.total)}
             </CardTitle>
           </CardHeader>
         </Card>
@@ -323,12 +368,16 @@ export function ProcurementDashboardCharts({ data }: Props) {
         <Card className="flex h-full flex-col">
           <CardHeader>
             <CardTitle className="text-base">车组支出占比</CardTitle>
-            <CardDescription>已完成报销订单，按车组汇总</CardDescription>
+            <CardDescription>
+              {spendScope === "completed"
+                ? "已完成报销订单，按车组汇总"
+                : "全部已提交订单，按车组汇总"}
+            </CardDescription>
           </CardHeader>
           <CardContent className="flex min-h-52 flex-1 flex-col">
             <DonutChart
-              slices={data.teamSpending}
-              emptyLabel="暂无已完成订单"
+              slices={spend.teamSpending}
+              emptyLabel={spendEmptyLabel}
             />
           </CardContent>
         </Card>
@@ -349,13 +398,17 @@ export function ProcurementDashboardCharts({ data }: Props) {
         <Card className="flex h-full flex-col">
           <CardHeader>
             <CardTitle className="text-base">采购人支出排行</CardTitle>
-            <CardDescription>已完成订单金额 Top 8</CardDescription>
+            <CardDescription>
+              {spendScope === "completed"
+                ? "已完成订单金额 Top 8"
+                : "全部已提交订单金额 Top 8"}
+            </CardDescription>
           </CardHeader>
           <CardContent className="flex min-h-52 flex-1 flex-col">
             <HorizontalBarChart
-              rows={data.initiatorRanking}
+              rows={spend.initiatorRanking}
               valueFormatter={formatMoney}
-              emptyLabel="暂无已完成订单"
+              emptyLabel={spendEmptyLabel}
             />
           </CardContent>
         </Card>
