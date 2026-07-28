@@ -28,7 +28,9 @@ async function fetchTenantAccessToken(
 
   const token = data.tenant_access_token ?? data.app_access_token;
   if (!token) {
-    throw new Error(data.msg ?? "获取飞书 tenant_access_token 失败");
+    throw new Error(
+      `获取飞书 tenant_access_token 失败(${data.code ?? res.status})`,
+    );
   }
   return token;
 }
@@ -54,7 +56,9 @@ export async function getFeishuAppAccessToken(): Promise<string> {
   };
 
   if (!data.app_access_token) {
-    throw new Error(data.msg ?? "获取飞书 app_access_token 失败");
+    throw new Error(
+      `获取飞书 app_access_token 失败(${data.code ?? res.status})`,
+    );
   }
   return data.app_access_token;
 }

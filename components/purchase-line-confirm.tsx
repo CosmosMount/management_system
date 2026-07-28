@@ -119,10 +119,22 @@ export function PurchaseLineConfirm({
   const [lines, setLines] = useState<EditableLine[]>(() =>
     toEditableLines(items),
   );
-
-  useEffect(() => {
+  const itemsRevision = JSON.stringify(
+    items.map(({ id, name, spec, quantity, unitPrice, photoPath }) => [
+      id,
+      name,
+      spec,
+      quantity,
+      unitPrice,
+      photoPath ?? null,
+    ]),
+  );
+  const [previousItemsRevision, setPreviousItemsRevision] =
+    useState(itemsRevision);
+  if (itemsRevision !== previousItemsRevision) {
+    setPreviousItemsRevision(itemsRevision);
     setLines(toEditableLines(items));
-  }, [items]);
+  }
 
   useEffect(() => {
     onChange?.(toConfirmed(lines));

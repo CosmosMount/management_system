@@ -1,129 +1,33 @@
 import type {
-  FeedbackStatus,
   NotificationOutbox,
   NotificationOutboxRecipient,
   Prisma,
 } from "@prisma/client";
-import {
-  resolveProcurementBotKind,
-  resolveProgressBotKind,
-} from "@/lib/feishu-bot-routing";
+import { resolveProcurementBotKind } from "@/lib/feishu-bot-routing";
 import type { FeishuBotKind } from "@/lib/feishu-app-config";
-import {
-  sendApplicantResubmitNotification,
-  sendBudgetThresholdNotification,
-  collectOrderNotificationRecipientOpenIds,
-  PROCUREMENT_ORDER_WEBHOOK_RECIPIENT_OPEN_ID,
-  sendOrderNotification,
-  sendOrderNotificationToOpenId,
-  sendProcurementRejectedNotification,
-  sendProcurementReturnDraftNotification,
-  type BudgetThresholdPayload,
-  type OrderCardPayload,
-} from "@/lib/feishu";
-import {
-  sendFeedbackCreatedNotification,
-  sendFeedbackReplyNotification,
-  sendFeedbackStatusNotification,
+import type { BudgetThresholdPayload, OrderCardPayload } from "@/lib/feishu";
+import type {
+  FeedbackCreatedNotificationPayload,
+  FeedbackReplyNotificationPayload,
+  FeedbackStatusNotificationPayload,
 } from "@/lib/feishu-feedback";
-import {
-  sendProgressNotification,
-  sendProgressNotificationToOpenId,
-  type ProgressNotifyPayload,
-} from "@/lib/feishu-progress";
-import { isFeishuDirectMessageAllowed } from "@/lib/feishu-delivery-guard";
-import { resolveDirectMessageTarget } from "@/lib/feishu-recipient";
 import type { NotificationContext } from "@/lib/app-origin";
-import { defaultAppOrigin } from "@/lib/app-origin";
-import { sendTeacherReviewEmailsOnce } from "@/lib/procurement-teacher-email";
+import { getNotificationChannelAdapter } from "@/lib/notification-channels";
+import { isNonRetryableNotificationError } from "@/lib/notification-channels/types";
+import type { FeedbackOutboxPayload } from "@/lib/notification-channels/feedback";
+import type { OrderOutboxPayload } from "@/lib/notification-channels/procurement";
 import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
-
-type ProgressOutboxPayload = {
-  payload: ProgressNotifyPayload;
-  appOrigin?: string | null;
-};
-
-type OrderOutboxPayload =
-  | {
-      kind: "order";
-      order: OrderCardPayload;
-      appOrigin?: string | null;
-    }
-  | {
-      kind: "procurement_rejected";
-      order: OrderCardPayload;
-      reason: string;
-      rejectedByName: string;
-      appOrigin?: string | null;
-    }
-  | {
-      kind: "applicant_resubmit";
-      order: OrderCardPayload;
-      reason: string;
-      financeName: string;
-      appOrigin?: string | null;
-    }
-  | {
-      kind: "procurement_return_draft";
-      order: OrderCardPayload;
-      reason: string;
-      returnedByName: string;
-      appOrigin?: string | null;
-    }
-  | {
-      kind: "budget_threshold";
-      budget: BudgetThresholdPayload;
-      appOrigin?: string | null;
-    };
-
-type FeedbackOutboxPayload =
-  | {
-      kind: "created";
-      payload: { feedbackId: string; submitterName: string; body: string };
-      appOrigin?: string | null;
-    }
-  | {
-      kind: "reply";
-      payload: {
-        feedbackId: string;
-        actorName: string;
-        body: string;
-        recipientOpenIds?: string[];
-        actorIsAdmin: boolean;
-      };
-      appOrigin?: string | null;
-    }
-  | {
-      kind: "status";
-      payload: {
-        feedbackId: string;
-        actorName: string;
-        status: FeedbackStatus;
-        submitterOpenId: string;
-      };
-      appOrigin?: string | null;
-    };
 
 const MAX_ATTEMPTS = 8;
 const NOTIFICATION_DELIVERY_DISABLED =
   process.env.NOTIFICATION_DELIVERY_DISABLED === "true";
 const RECIPIENT_LOCK_MS = 2 * 60 * 1000;
 const FROZEN_NEXT_RUN_AT = new Date("9999-12-31T00:00:00.000Z");
-const NO_RECIPIENTS_APPROVAL_ERROR_PREFIX = "NO_RECIPIENTS_APPROVAL:";
 
 type DrainNotificationOutboxOptions = {
   ignoreDeliveryDisabled?: boolean;
 };
-
-type OutboxRecipientPlan =
-  | {
-      supported: true;
-      openIds: string[];
-    }
-  | {
-      supported: false;
-    };
 
 export type EnqueueNotificationResult = {
   created: boolean;
@@ -294,41 +198,6 @@ export async function resetNotificationOutboxForRetry({
       });
     }
     return updated;
-  });
-}
-
-export async function enqueueProgressNotification(
-  eventKey: string,
-  payload: ProgressNotifyPayload,
-  context?: NotificationContext,
-) {
-  return enqueueNotification({
-    eventKey,
-    channel: "progress",
-    botKind: resolveProgressBotKind(payload.type),
-    type: payload.type,
-    payload: {
-      payload,
-      appOrigin: context?.appOrigin ?? null,
-    } satisfies ProgressOutboxPayload,
-  });
-}
-
-export async function enqueueProgressNotificationTx(
-  tx: Prisma.TransactionClient,
-  eventKey: string,
-  payload: ProgressNotifyPayload,
-  context?: NotificationContext,
-) {
-  return enqueueNotificationTx(tx, {
-    eventKey,
-    channel: "progress",
-    botKind: resolveProgressBotKind(payload.type),
-    type: payload.type,
-    payload: {
-      payload,
-      appOrigin: context?.appOrigin ?? null,
-    } satisfies ProgressOutboxPayload,
   });
 }
 
@@ -509,7 +378,7 @@ export async function enqueueBudgetThresholdNotification(
 
 export async function enqueueFeedbackCreatedNotification(
   eventKey: string,
-  payload: Extract<FeedbackOutboxPayload, { kind: "created" }>["payload"],
+  payload: FeedbackCreatedNotificationPayload,
   context?: NotificationContext,
 ) {
   await enqueueNotification({
@@ -527,7 +396,7 @@ export async function enqueueFeedbackCreatedNotification(
 
 export async function enqueueFeedbackReplyNotification(
   eventKey: string,
-  payload: Extract<FeedbackOutboxPayload, { kind: "reply" }>["payload"],
+  payload: FeedbackReplyNotificationPayload,
   context?: NotificationContext,
 ) {
   await enqueueNotification({
@@ -545,7 +414,7 @@ export async function enqueueFeedbackReplyNotification(
 
 export async function enqueueFeedbackStatusNotification(
   eventKey: string,
-  payload: Extract<FeedbackOutboxPayload, { kind: "status" }>["payload"],
+  payload: FeedbackStatusNotificationPayload,
   context?: NotificationContext,
 ) {
   await enqueueNotification({
@@ -564,7 +433,12 @@ export async function enqueueFeedbackStatusNotification(
 export function drainNotificationOutboxSoon(limit = 5) {
   if (NOTIFICATION_DELIVERY_DISABLED) return;
   void drainNotificationOutbox(limit).catch((err) => {
-    console.error("[notification-outbox] drain failed:", err);
+    logger.error("notification.outbox.drain.failed", {
+      module: "notification",
+      action: "drainNotificationOutboxSoon",
+      result: "failure",
+      error: err,
+    });
   });
 }
 
@@ -623,13 +497,15 @@ export async function drainNotificationOutbox(
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      const attempts = row.attempts + 1;
+      const nonRetryable = isNonRetryableNotificationError(err);
+      const attempts = nonRetryable ? MAX_ATTEMPTS : row.attempts + 1;
       await prisma.notificationOutbox.updateMany({
         where: { id: row.id, status: "PROCESSING" },
         data: {
           status: "FAILED",
+          attempts,
           lastError: message.slice(0, 1000),
-          nextRunAt: nextRetryAt(attempts),
+          nextRunAt: nonRetryable ? FROZEN_NEXT_RUN_AT : nextRetryAt(attempts),
           lockedUntil: null,
         },
       });
@@ -642,52 +518,22 @@ export async function drainNotificationOutbox(
 async function sendOutboxNotificationByRecipient(
   row: NotificationOutbox,
 ): Promise<{ supported: true; completed: boolean } | { supported: false }> {
-  const plan = await resolveOutboxRecipientPlan(row);
+  const adapter = getNotificationChannelAdapter(row.channel);
+  const plan = await adapter.resolveRecipientPlan(row);
   if (!plan.supported) return { supported: false };
 
   if (
-    row.status === "FAILED" &&
-    row.attempts > 0 &&
-    isLegacyProjectEstablishmentRequestedEventKey(row.eventKey)
-  ) {
-    await freezeLegacyCompositeOutbox(row.id);
-    return { supported: true, completed: false };
-  }
-
-  const existingRecipientCount = await prisma.notificationOutboxRecipient.count({
-    where: { outboxId: row.id },
-  });
-  if (
-    existingRecipientCount === 0 &&
-    row.status === "FAILED" &&
-    row.attempts > 0 &&
-    !isNoRecipientsApprovalFailure(row)
-  ) {
-    await freezeLegacyCompositeOutbox(row.id);
-    return { supported: true, completed: false };
-  }
-
-  if (
-    existingRecipientCount === 0 &&
-    plan.openIds.map((id) => id.trim()).filter(Boolean).length === 0 &&
-    requiresAtLeastOneRecipient(row)
+    plan.requiresDirectRecipient &&
+    (plan.directOpenIds ?? plan.openIds)
+      .map((id) => id.trim())
+      .filter(Boolean).length === 0
   ) {
     await failOutboxWithNoRecipients(row);
     return { supported: true, completed: false };
   }
 
   await ensureOutboxRecipients(row.id, plan.openIds);
-
-  if (row.channel === "procurement" && row.type === "order") {
-    const data = JSON.parse(row.payload) as OrderOutboxPayload;
-    if (data.kind === "order") {
-      await sendTeacherReviewEmailsOnce(
-        data.order,
-        { appOrigin: data.appOrigin ?? defaultAppOrigin() },
-        row.eventKey,
-      );
-    }
-  }
+  await adapter.beforeRecipientDelivery?.(row);
 
   const now = new Date();
   const recipients = await prisma.notificationOutboxRecipient.findMany({
@@ -712,7 +558,8 @@ async function sendOutboxNotificationByRecipient(
 
 async function failOutboxWithNoRecipients(row: NotificationOutbox) {
   const attempts = row.attempts + 1;
-  const message = `${NO_RECIPIENTS_APPROVAL_ERROR_PREFIX} 审批待办没有可投递收件人，已停止本轮发送；请检查关注过滤和审批权限配置。`;
+  const message =
+    "审批通知没有可投递的真实私信收件人，已停止本轮发送；请检查审批角色和用户配置。";
   logger.error("notification.outbox.recipient.empty", {
     module: "notification",
     action: "sendOutboxNotificationByRecipient",
@@ -737,34 +584,6 @@ async function failOutboxWithNoRecipients(row: NotificationOutbox) {
   });
 }
 
-function requiresAtLeastOneRecipient(row: NotificationOutbox): boolean {
-  return row.channel === "progress" && normalizeBotKind(row.botKind) === "approval";
-}
-
-function isNoRecipientsApprovalFailure(row: NotificationOutbox): boolean {
-  return row.lastError.startsWith(NO_RECIPIENTS_APPROVAL_ERROR_PREFIX);
-}
-
-async function freezeLegacyCompositeOutbox(outboxId: string) {
-  await prisma.notificationOutbox.updateMany({
-    where: { id: outboxId, status: "PROCESSING" },
-    data: {
-      status: "FAILED",
-      attempts: MAX_ATTEMPTS,
-      nextRunAt: FROZEN_NEXT_RUN_AT,
-      lockedUntil: null,
-      lastError:
-        "历史审批 outbox 已停止自动重试：该记录使用旧幂等 key 或在收件人级状态上线前已失败，可能已有部分收件人收到；请人工确认后再处理。",
-    },
-  });
-}
-
-function isLegacyProjectEstablishmentRequestedEventKey(eventKey: string): boolean {
-  return /^progress:project_establishment_requested:[^:]+:\d{4}-\d{2}-\d{2}T/.test(
-    eventKey,
-  );
-}
-
 async function sendOutboxRecipient(
   row: NotificationOutbox,
   recipient: NotificationOutboxRecipient,
@@ -787,7 +606,9 @@ async function sendOutboxRecipient(
 
   const attempts = recipient.attempts + 1;
   try {
-    const target = await sendOutboxNotificationToRecipient(row, recipient.openId);
+    const target = await getNotificationChannelAdapter(
+      row.channel,
+    ).sendToRecipient(row, recipient.openId);
     await prisma.notificationOutboxRecipient.updateMany({
       where: { id: recipient.id, status: "PROCESSING" },
       data: {
@@ -801,6 +622,7 @@ async function sendOutboxRecipient(
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    const nonRetryable = isNonRetryableNotificationError(err);
     logger.error("notification.outbox.recipient.failed", {
       module: "notification",
       action: "sendOutboxRecipient",
@@ -811,7 +633,7 @@ async function sendOutboxRecipient(
       type: row.type,
       botKind: row.botKind,
       recipientOpenId: recipient.openId,
-      attempts,
+      attempts: nonRetryable ? MAX_ATTEMPTS : attempts,
       result: "failure",
       errorMessage: message,
     });
@@ -819,75 +641,13 @@ async function sendOutboxRecipient(
       where: { id: recipient.id, status: "PROCESSING" },
       data: {
         status: "FAILED",
-        attempts,
+        attempts: nonRetryable ? MAX_ATTEMPTS : attempts,
         lastError: message.slice(0, 1000),
-        nextRunAt: nextRetryAt(attempts),
+        nextRunAt: nonRetryable ? FROZEN_NEXT_RUN_AT : nextRetryAt(attempts),
         lockedUntil: null,
       },
     });
   }
-}
-
-async function sendOutboxNotificationToRecipient(
-  row: NotificationOutbox,
-  openId: string,
-): Promise<{ receiveId: string; receiveIdType: string } | null> {
-  const botKind = normalizeBotKind(row.botKind);
-  const target = await resolveRecipientTarget(openId, botKind);
-  if (target.skipped) {
-    throw new Error("FEISHU_RECIPIENT_NOT_ALLOWED: 收件人不在飞书私信安全名单中");
-  }
-
-  if (row.channel === "progress") {
-    const data = JSON.parse(row.payload) as ProgressOutboxPayload;
-    await sendProgressNotificationToOpenId(
-      data.payload,
-      openId,
-      { appOrigin: data.appOrigin ?? undefined },
-      botKind,
-    );
-    return target.target;
-  }
-
-  if (row.channel === "procurement") {
-    const data = JSON.parse(row.payload) as OrderOutboxPayload;
-    const context = {
-      appOrigin: data.appOrigin ?? defaultAppOrigin(),
-    };
-    if (data.kind === "order") {
-      await sendOrderNotificationToOpenId(data.order, openId, context, botKind);
-      return target.target;
-    }
-    if (data.kind === "budget_threshold") {
-      await sendBudgetThresholdNotification(
-        { ...data.budget, recipientOpenIds: [openId] },
-        context,
-        botKind,
-      );
-      return target.target;
-    }
-  }
-
-  throw new Error(`通知通道 ${row.channel}/${row.type} 不支持收件人级发送`);
-}
-
-async function resolveRecipientTarget(
-  openId: string,
-  botKind: FeishuBotKind,
-): Promise<
-  | { skipped: true; target: null }
-  | { skipped: false; target: { receiveId: string; receiveIdType: string } | null }
-> {
-  if (openId === PROCUREMENT_ORDER_WEBHOOK_RECIPIENT_OPEN_ID) {
-    return { skipped: false, target: null };
-  }
-  if (!(await isFeishuDirectMessageAllowed(openId))) {
-    return { skipped: true, target: null };
-  }
-  return {
-    skipped: false,
-    target: await resolveDirectMessageTarget(openId, botKind),
-  };
 }
 
 async function ensureOutboxRecipients(outboxId: string, openIds: string[]) {
@@ -937,17 +697,21 @@ async function updateOutboxStatusFromRecipients(outboxId: string): Promise<{
   const retryableRecipients = recipients.filter(
     (item) => item.status !== "SENT" && item.attempts < MAX_ATTEMPTS,
   );
+  const recipientsExhausted = retryableRecipients.length === 0;
   const now = new Date();
   const nextRunAt =
-    retryableRecipients
-      .map((item) =>
-        item.status === "PROCESSING" &&
-        item.lockedUntil &&
-        item.lockedUntil > now
-          ? item.lockedUntil
-          : item.nextRunAt,
-      )
-      .sort((a, b) => a.getTime() - b.getTime())[0] ?? nextRetryAt(MAX_ATTEMPTS);
+    (recipientsExhausted
+      ? FROZEN_NEXT_RUN_AT
+      : retryableRecipients
+          .map((item) =>
+            item.status === "PROCESSING" &&
+            item.lockedUntil &&
+            item.lockedUntil > now
+              ? item.lockedUntil
+              : item.nextRunAt,
+          )
+          .sort((a, b) => a.getTime() - b.getTime())[0]) ??
+    nextRetryAt(MAX_ATTEMPTS);
   const failedCount = recipients.filter((item) => item.status === "FAILED").length;
   const processingCount = recipients.filter(
     (item) => item.status === "PROCESSING",
@@ -959,6 +723,7 @@ async function updateOutboxStatusFromRecipients(outboxId: string): Promise<{
     where: { id: outboxId, status: "PROCESSING" },
     data: {
       status: "FAILED",
+      attempts: recipientsExhausted ? MAX_ATTEMPTS : undefined,
       lastError: [
         `收件人发送未全部成功：${failedCount} 个失败，${processingCount} 个处理中`,
         firstError,
@@ -973,147 +738,8 @@ async function updateOutboxStatusFromRecipients(outboxId: string): Promise<{
   return { completed: false };
 }
 
-async function resolveOutboxRecipientPlan(
-  row: NotificationOutbox,
-): Promise<OutboxRecipientPlan> {
-  if (row.channel === "progress") {
-    const data = JSON.parse(row.payload) as ProgressOutboxPayload;
-    const openIds = extractProgressRecipientOpenIds(data.payload);
-    return openIds ? { supported: true, openIds } : { supported: false };
-  }
-
-  if (row.channel === "procurement") {
-    const data = JSON.parse(row.payload) as OrderOutboxPayload;
-    if (data.kind === "order") {
-      const openIds = await collectOrderNotificationRecipientOpenIds(data.order);
-      if (
-        data.order.status !== "PENDING_APPLICANT_DOCS" &&
-        data.order.status !== "PENDING_APPLICANT_CONFIRM"
-      ) {
-        openIds.unshift(PROCUREMENT_ORDER_WEBHOOK_RECIPIENT_OPEN_ID);
-      }
-      return { supported: true, openIds };
-    }
-    if (data.kind === "budget_threshold") {
-      return { supported: true, openIds: data.budget.recipientOpenIds };
-    }
-  }
-
-  return { supported: false };
-}
-
-function extractProgressRecipientOpenIds(
-  payload: ProgressNotifyPayload,
-): string[] | null {
-  const directRecipients = readRecipientOpenIds(payload);
-  if (directRecipients) {
-    return excludeRequesterForApprovalRequest(payload, directRecipients);
-  }
-
-  if (payload.type === "project_establishment_rejected") {
-    return [payload.requesterOpenId];
-  }
-  return null;
-}
-
-function readRecipientOpenIds(payload: ProgressNotifyPayload): string[] | null {
-  if (!("recipientOpenIds" in payload)) return null;
-  return Array.isArray(payload.recipientOpenIds)
-    ? payload.recipientOpenIds.filter((openId): openId is string => typeof openId === "string")
-    : [];
-}
-
-function excludeRequesterForApprovalRequest(
-  payload: ProgressNotifyPayload,
-  openIds: string[],
-): string[] {
-  if (
-    payload.type !== "project_stage_extension_requested" &&
-    payload.type !== "project_stage_batch_due_change_requested" &&
-    payload.type !== "project_stage_due_change_requested"
-  ) {
-    return openIds;
-  }
-  return openIds.filter((openId) => openId !== payload.requesterOpenId);
-}
-
 async function sendOutboxNotification(row: NotificationOutbox) {
-  const botKind = normalizeBotKind(row.botKind);
-  if (row.channel === "progress") {
-    const data = JSON.parse(row.payload) as ProgressOutboxPayload;
-    await sendProgressNotification(data.payload, {
-      appOrigin: data.appOrigin ?? undefined,
-    }, botKind);
-    return;
-  }
-
-  if (row.channel === "procurement") {
-    const data = JSON.parse(row.payload) as OrderOutboxPayload;
-    const context = {
-      appOrigin: data.appOrigin ?? defaultAppOrigin(),
-    };
-    if (data.kind === "order") {
-      await sendOrderNotification(data.order, context, botKind, {
-        outboxEventKey: row.eventKey,
-      });
-      return;
-    }
-    if (data.kind === "procurement_rejected") {
-      await sendProcurementRejectedNotification(
-        data.order,
-        data.reason,
-        data.rejectedByName,
-        context,
-        botKind,
-      );
-      return;
-    }
-    if (data.kind === "budget_threshold") {
-      await sendBudgetThresholdNotification(data.budget, context, botKind);
-      return;
-    }
-    if (data.kind === "procurement_return_draft") {
-      await sendProcurementReturnDraftNotification(
-        data.order,
-        data.reason,
-        data.returnedByName,
-        context,
-        botKind,
-      );
-      return;
-    }
-    await sendApplicantResubmitNotification(
-      data.order,
-      data.reason,
-      data.financeName,
-      context,
-      botKind,
-    );
-    return;
-  }
-
-  if (row.channel === "feedback") {
-    const data = JSON.parse(row.payload) as FeedbackOutboxPayload;
-    const context = {
-      appOrigin: data.appOrigin ?? defaultAppOrigin(),
-    };
-    if (data.kind === "created") {
-      await sendFeedbackCreatedNotification(data.payload, context, botKind);
-      return;
-    }
-    if (data.kind === "reply") {
-      await sendFeedbackReplyNotification(data.payload, context, botKind);
-      return;
-    }
-    await sendFeedbackStatusNotification(data.payload, context, botKind);
-    return;
-  }
-
-  throw new Error(`未知通知通道: ${row.channel}`);
-}
-
-function normalizeBotKind(value: string): FeishuBotKind {
-  return value === "approval" ? "approval" : "notification";
+  await getNotificationChannelAdapter(row.channel).sendComposite(row);
 }
 
 function nextRetryAt(attempts: number): Date {

@@ -12,25 +12,8 @@ export function revalidateProcurement(orderId?: string) {
   }
 }
 
-export function revalidateProgress(projectId?: string, taskId?: string) {
-  revalidatePath(routes.progress.root);
-  revalidatePath(routes.progress.list);
-  revalidatePath(routes.progress.dashboard);
-  revalidatePath(routes.progress.archive);
-  revalidatePath(routes.progress.approvals);
-  if (projectId) {
-    revalidatePath(routes.progress.project(projectId));
-  }
-  if (taskId) {
-    revalidatePath(routes.progress.task(taskId));
-  }
-}
-
 export function revalidateAdmin() {
   revalidatePath(routes.admin.root);
   revalidatePath(routes.admin.system);
   revalidatePath(routes.admin.roles);
-  revalidatePath(routes.admin.reminders);
-  revalidatePath(routes.admin.projectTemplates);
-  revalidatePath(routes.admin.acceptance);
 }

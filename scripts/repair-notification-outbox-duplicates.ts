@@ -29,21 +29,6 @@ async function main() {
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
   });
-  const legacyProjectEstablishmentRows = await prisma.notificationOutbox.findMany({
-    where: {
-      botKind: "approval",
-      status: { in: ["FAILED", "PROCESSING"] },
-      attempts: { gt: 0 },
-      type: "project_establishment_requested",
-    },
-    select: {
-      id: true,
-      eventKey: true,
-      createdAt: true,
-      attempts: true,
-    },
-    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-  });
   const rows = await prisma.notificationOutbox.findMany({
     where: {
       botKind: "approval",
@@ -135,46 +120,12 @@ async function main() {
     });
   }
 
-  const legacyProjectRows = legacyProjectEstablishmentRows.filter((row) =>
-    isLegacyProjectEstablishmentRequestedEventKey(row.eventKey),
-  );
-  if (legacyProjectRows.length > 0) {
-    logger.warn("notification.outbox.repair.legacy_project_establishment.found", {
-      module: "script",
-      action: "repairNotificationOutboxDuplicates",
-      count: legacyProjectRows.length,
-      rows: legacyProjectRows.map((row) => ({
-        id: row.id,
-        eventKey: row.eventKey,
-        createdAt: row.createdAt,
-        attempts: row.attempts,
-      })),
-    });
-    for (const row of legacyProjectRows) {
-      logger.info("notification.outbox.repair.legacy_project_establishment.row", {
-        module: "script",
-        action: "repairNotificationOutboxDuplicates",
-        entityType: "NotificationOutbox",
-        entityId: row.id,
-        eventKey: row.eventKey,
-        attempts: row.attempts,
-        createdAt: row.createdAt,
-      });
-    }
-  } else {
-    logger.info("notification.outbox.repair.legacy_project_establishment.none", {
-      module: "script",
-      action: "repairNotificationOutboxDuplicates",
-    });
-  }
-
   if (!APPLY) {
     logger.info("notification.outbox.repair.dry_run", {
       module: "script",
       action: "repairNotificationOutboxDuplicates",
       duplicateGroupCount: duplicateGroups.length,
       legacyCompositeCount: legacyCompositeRows.length,
-      legacyProjectEstablishmentCount: legacyProjectRows.length,
     });
     return;
   }
@@ -186,10 +137,6 @@ async function main() {
   for (const row of legacyCompositeRows) {
     freezeIds.add(row.id);
   }
-  for (const row of legacyProjectRows) {
-    freezeIds.add(row.id);
-  }
-
   for (const group of duplicateGroups) {
     for (const id of group.freezeIds) freezeIds.add(id);
   }
@@ -216,21 +163,10 @@ async function main() {
 }
 
 function approvalTodoBusinessKey(eventKey: string): string | null {
-  const establishment = eventKey.match(
-    /^(progress:project_establishment_requested:[^:]+):/,
-  );
-  if (establishment) return establishment[1] ?? null;
-
   const procurement = eventKey.match(/^(procurement:order:[^:]+:[A-Z_]+):/);
   if (procurement) return procurement[1] ?? null;
 
   return null;
-}
-
-function isLegacyProjectEstablishmentRequestedEventKey(eventKey: string): boolean {
-  return /^progress:project_establishment_requested:[^:]+:\d{4}-\d{2}-\d{2}T/.test(
-    eventKey,
-  );
 }
 
 main()

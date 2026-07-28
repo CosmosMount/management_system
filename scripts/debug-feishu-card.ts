@@ -1,6 +1,6 @@
 import "dotenv/config";
-import { getFeishuTenantAccessToken } from "@/lib/feishu-auth";
 import { buildProcurementNotificationCard } from "@/lib/feishu-procurement-card";
+import { sendFeishuDirectMessage } from "@/lib/feishu-message";
 import { mapOrderItems } from "@/lib/feishu";
 import { prisma } from "@/lib/prisma";
 import { writeFileSync } from "fs";
@@ -13,9 +13,6 @@ function canSendFeishu(): boolean {
 }
 
 async function sendCard(openId: string, card: Record<string, unknown>, label: string) {
-  const token = await getFeishuTenantAccessToken();
-  const url = new URL("https://open.feishu.cn/open-apis/im/v1/messages");
-  url.searchParams.set("receive_id_type", "open_id");
   const content = JSON.stringify(card);
 
   console.log(`\n========== ${label} ==========`);
@@ -23,26 +20,15 @@ async function sendCard(openId: string, card: Record<string, unknown>, label: st
   console.log(content.slice(0, 2000));
   if (content.length > 2000) console.log(`... (${content.length} chars total)`);
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({
-      receive_id: openId,
-      msg_type: "interactive",
-      content,
-    }),
+  const result = await sendFeishuDirectMessage({
+    recipientOpenId: openId,
+    botKind: "notification",
+    purpose: "notification",
+    message: { type: "interactive", card },
+    logContext: { action: "debugFeishuCard", channel: "debug" },
   });
-
-  const data = (await res.json()) as {
-    code: number;
-    msg?: string;
-    data?: { message_id?: string };
-  };
-  console.log("API response:", JSON.stringify(data, null, 2));
-  return data;
+  console.log("发送结果:", JSON.stringify(result, null, 2));
+  return result;
 }
 
 function minimalCallbackCard(orderId: string) {
@@ -101,59 +87,16 @@ async function createAndSendCardKit(
   card: Record<string, unknown>,
   label: string,
 ) {
-  const token = await getFeishuTenantAccessToken();
-
-  const createRes = await fetch(
-    "https://open.feishu.cn/open-apis/cardkit/v1/cards",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json; charset=utf-8",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        type: "card_json",
-        data: JSON.stringify(card),
-      }),
-    },
-  );
-  const created = (await createRes.json()) as {
-    code: number;
-    msg?: string;
-    data?: { card_id?: string };
-  };
-  console.log(`\n========== ${label} (cardkit create) ==========`);
-  console.log(JSON.stringify(created, null, 2));
-  if (created.code !== 0 || !created.data?.card_id) {
-    throw new Error(`cardkit create failed: ${created.msg}`);
-  }
-
-  const cardId = created.data.card_id;
-  const sendRes = await fetch(
-    "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json; charset=utf-8",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        receive_id: openId,
-        msg_type: "interactive",
-        content: JSON.stringify({
-          type: "card",
-          data: { card_id: cardId },
-        }),
-      }),
-    },
-  );
-  const sent = (await sendRes.json()) as {
-    code: number;
-    msg?: string;
-    data?: { body?: { content?: string }; message_id?: string };
-  };
-  console.log("cardkit send response:", JSON.stringify(sent, null, 2));
-  return sent;
+  console.log(`\n========== ${label} (cardkit) ==========`);
+  const result = await sendFeishuDirectMessage({
+    recipientOpenId: openId,
+    botKind: "notification",
+    purpose: "notification",
+    message: { type: "cardkit", card },
+    logContext: { action: "debugFeishuCardKit", channel: "debug" },
+  });
+  console.log("发送结果:", JSON.stringify(result, null, 2));
+  return result;
 }
 
 async function main() {

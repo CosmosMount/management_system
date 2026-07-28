@@ -4,20 +4,14 @@ import { OrderStatus } from "@prisma/client";
 import { sendFeishuDailySummary } from "../lib/feishu";
 import { runProcurementStaleReminders } from "../lib/procurement-reminders";
 import { runProcurementBudgetAlerts } from "../lib/procurement-budget-alerts";
-import { runProgressDailySummariesIfDue } from "../lib/progress-daily-summary";
-import { runDueProgressReminderRules } from "../lib/progress-reminders";
 import { syncFeishuContactUsers } from "../lib/feishu-user-sync";
 import { drainNotificationOutbox } from "../lib/notification-outbox";
 import { prisma } from "../lib/prisma";
 import { logger } from "../lib/logger";
 
 const CONTACT_SYNC_CRON = process.env.FEISHU_CONTACT_SYNC_CRON ?? "30 8 * * *";
-const PROGRESS_DAILY_SUMMARY_CHECK_CRON =
-  process.env.PROGRESS_DAILY_SUMMARY_CHECK_CRON ?? "*/5 * * * *";
 const CRON_TIMEZONE = "Asia/Shanghai";
 let contactSyncRunning = false;
-let progressScanRunning = false;
-let progressSummaryRunning = false;
 let budgetScanRunning = false;
 
 async function runProcurementDaily() {
@@ -42,79 +36,6 @@ async function runProcurementDaily() {
     openOrderCount: orders.length,
     remindedCount: reminded,
   });
-}
-
-async function runProgressDaily() {
-  if (progressScanRunning) {
-    logger.warn("cron.progress_reminders.skipped_running", {
-      module: "cron",
-      action: "runProgressDaily",
-      result: "skipped",
-    });
-    return;
-  }
-
-  progressScanRunning = true;
-  try {
-    const result = await runDueProgressReminderRules();
-    if (result.skipped) {
-      logger.warn("cron.progress_reminders.skipped_lock", {
-        module: "cron",
-        action: "runProgressDaily",
-        result: "skipped",
-      });
-      return;
-    }
-    logger.info("cron.progress_reminders.completed", {
-      module: "cron",
-      action: "runProgressDaily",
-      rulesRun: result.rulesRun,
-      queued: result.queued,
-    });
-  } finally {
-    progressScanRunning = false;
-  }
-}
-
-async function runProgressDailySummary() {
-  if (progressSummaryRunning) {
-    logger.warn("cron.progress_daily_summary.skipped_running", {
-      module: "cron",
-      action: "runProgressDailySummary",
-      result: "skipped",
-    });
-    return;
-  }
-
-  progressSummaryRunning = true;
-  try {
-    const result = await runProgressDailySummariesIfDue();
-    if (!result.ran) {
-      logger.info("cron.progress_daily_summary.skipped", {
-        module: "cron",
-        action: "runProgressDailySummary",
-        reason: result.reason,
-        summaryDate: result.summaryDate,
-        scheduleTimes: result.scheduleTimes,
-        result: "skipped",
-      });
-      return;
-    }
-    logger.info("cron.progress_daily_summary.completed", {
-      module: "cron",
-      action: "runProgressDailySummary",
-      summaryDate: result.summaryDate,
-      scheduleTime: result.scheduleTime,
-      scheduledFor: result.scheduledFor,
-      skippedScheduleTimes: result.skippedScheduleTimes,
-      skippedScheduleCount: result.skippedScheduleTimes.length,
-      recipients: result.recipients,
-      queued: result.queued,
-      skipped: result.skipped,
-    });
-  } finally {
-    progressSummaryRunning = false;
-  }
 }
 
 async function runFeishuContactSync() {
@@ -209,13 +130,6 @@ cron.schedule(
 cron.schedule(
   "*/10 * * * *",
   () => {
-    runProgressDaily().catch((err) =>
-      logger.error("cron.progress_reminders.failed", {
-        module: "cron",
-        action: "runProgressDaily",
-        error: err,
-      }),
-    );
     runProcurementBudgetScan().catch((err) =>
       logger.error("cron.procurement_budget_scan.failed", {
         module: "cron",
@@ -241,28 +155,12 @@ cron.schedule(
   { timezone: CRON_TIMEZONE },
 );
 
-cron.schedule(
-  PROGRESS_DAILY_SUMMARY_CHECK_CRON,
-  () => {
-    runProgressDailySummary().catch((err) =>
-      logger.error("cron.progress_daily_summary.failed", {
-        module: "cron",
-        action: "runProgressDailySummary",
-        error: err,
-      }),
-    );
-  },
-  { timezone: CRON_TIMEZONE },
-);
-
 logger.info("cron.started", {
   module: "cron",
   action: "startup",
   timezone: CRON_TIMEZONE,
   contactSyncCron: CONTACT_SYNC_CRON,
   notificationOutboxCron: "*/2 * * * *",
-  progressReminderCron: "*/10 * * * *",
-  progressDailySummaryCheckCron: PROGRESS_DAILY_SUMMARY_CHECK_CRON,
   procurementBudgetCron: "*/10 * * * *",
   procurementDailyCron: "0 9 * * *",
   notificationDeliveryDisabled:

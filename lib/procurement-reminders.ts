@@ -2,11 +2,9 @@ import type { OrderStatus } from "@prisma/client";
 import { enrichOrderCardPayloadFromDb } from "@/lib/feishu-order-card-payload";
 import { sendTeacherReviewEmailsOnce } from "@/lib/procurement-teacher-email";
 import { mapOrderItems, type OrderCardPayload } from "@/lib/feishu";
-import { getFeishuTenantAccessTokenByBotKind } from "@/lib/feishu-auth";
 import type { FeishuBotKind } from "@/lib/feishu-app-config";
 import { resolveProcurementBotKind } from "@/lib/feishu-bot-routing";
-import { isFeishuDirectMessageAllowed } from "@/lib/feishu-delivery-guard";
-import { resolveDirectMessageTarget } from "@/lib/feishu-recipient";
+import { sendFeishuDirectMessage } from "@/lib/feishu-message";
 import {
   buildProcurementCardKitCard,
   supportsProcurementCardApproval,
@@ -21,6 +19,7 @@ import { getOpenIdsByRole } from "@/lib/permissions";
 import type { NotificationContext } from "@/lib/app-origin";
 
 import { prisma } from "@/lib/prisma";
+import { logger } from "@/lib/logger";
 import { statusApproverRole, statusLabels } from "@/lib/permissions-client";
 
 const REMINDER_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -154,46 +153,30 @@ async function sendDirectStaleCard(
   orderId?: string,
   cardStage?: OrderStatus,
 ): Promise<boolean> {
-  if (!(await isFeishuDirectMessageAllowed(openId))) return false;
-
   if (card.schema === "2.0") {
-    await sendTrackedProcurementCardKitDm(
+    const result = await sendTrackedProcurementCardKitDm(
       openId,
       card,
       botKind,
       orderId,
       cardStage,
     );
-    return true;
+    return result.status === "sent";
   }
 
-  const target = await resolveDirectMessageTarget(openId, botKind);
-  const token = await getFeishuTenantAccessTokenByBotKind(target.botKind);
-  const url = new URL("https://open.feishu.cn/open-apis/im/v1/messages");
-  url.searchParams.set("receive_id_type", target.receiveIdType);
-
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      Authorization: `Bearer ${token}`,
+  const result = await sendFeishuDirectMessage({
+    recipientOpenId: openId,
+    botKind,
+    purpose: botKind === "approval" ? "approval_request" : "notification",
+    message: { type: "interactive", card },
+    logContext: {
+      action: "sendProcurementReminder",
+      channel: "procurement",
+      entityType: "PurchaseOrder",
+      entityId: orderId,
     },
-    body: JSON.stringify({
-      receive_id: target.receiveId,
-      msg_type: "interactive",
-      content: JSON.stringify(card),
-    }),
   });
-
-  const data = (await res.json()) as { code: number; msg?: string };
-  if (data.code !== 0) {
-    throw new Error(
-      `飞书催办私信失败(${target.receiveIdType}:${target.receiveId}): ${
-        data.msg ?? res.status
-      }`,
-    );
-  }
-  return true;
+  return result.status === "sent";
 }
 
 async function notifyInitiatorStale(
@@ -241,7 +224,15 @@ async function notifyRoleStale(
     } catch (err) {
       failureCount++;
       firstFailure ??= err;
-      console.error("[reminder] 私信失败:", openId, err);
+      logger.error("procurement.reminder.recipient.failed", {
+        module: "procurement",
+        action: "notifyRoleStale",
+        entityType: "PurchaseOrder",
+        entityId: order.id,
+        recipientOpenId: openId,
+        result: "failure",
+        error: err,
+      });
     }
   }
 
@@ -320,7 +311,15 @@ export async function runProcurementStaleReminders(
       });
       sent++;
     } catch (err) {
-      console.error(`[reminder] 订单 ${order.orderNo} 催办失败:`, err);
+      logger.error("procurement.reminder.order.failed", {
+        module: "procurement",
+        action: "runProcurementStaleReminders",
+        entityType: "PurchaseOrder",
+        entityId: order.id,
+        orderNo: order.orderNo,
+        result: "failure",
+        error: err,
+      });
     }
   }
 

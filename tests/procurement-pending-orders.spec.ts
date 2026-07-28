@@ -11,12 +11,10 @@ import {
   loginAsNormalUser,
   prepareFunctionalFixtures,
   resolveNormalAuthMaterial,
-  type FunctionalFixtureIds,
 } from "./helpers/functional-fixtures";
 
 test.describe.configure({ mode: "serial" });
 
-let fixtures: FunctionalFixtureIds;
 let normalOpenId: string;
 let normalAuth: Awaited<ReturnType<typeof resolveNormalAuthMaterial>>;
 
@@ -24,7 +22,7 @@ test.beforeAll(async () => {
   normalAuth = await resolveNormalAuthMaterial();
   normalOpenId = normalAuth.openId;
   try {
-    fixtures = await prepareFunctionalFixtures(normalAuth);
+    await prepareFunctionalFixtures(normalAuth);
   } catch (error) {
     throw new Error(`采购待处理订单 fixture 准备失败：${formatPrismaError(error)}`);
   }

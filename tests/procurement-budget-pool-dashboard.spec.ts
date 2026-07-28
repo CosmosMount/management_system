@@ -113,12 +113,7 @@ test("预算池导入按项目分行，同组不同项目不合并", () => {
     type: "buffer",
     bookType: "xlsx",
   }) as Buffer;
-  const parsed = parseBudgetPoolsFromBuffer(
-    buffer.buffer.slice(
-      buffer.byteOffset,
-      buffer.byteOffset + buffer.byteLength,
-    ),
-  );
+  const parsed = parseBudgetPoolsFromBuffer(Uint8Array.from(buffer).buffer);
   expect(parsed.errors).toEqual([]);
   expect(parsed.rows.map((row) => row.description)).toEqual([
     "减重+重画",

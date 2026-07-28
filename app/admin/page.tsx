@@ -1,13 +1,5 @@
 import Link from "next/link";
-import {
-  BellRing,
-  ClipboardCheck,
-  FolderKanban,
-  RefreshCw,
-  ShieldCheck,
-  Users,
-  Wallet,
-} from "lucide-react";
+import { RefreshCw, ShieldCheck, Users, Wallet } from "lucide-react";
 import { AdminMetric } from "@/components/admin/admin-metric";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { currentBudgetPeriod } from "@/lib/import-procurement-budget";
@@ -19,13 +11,7 @@ export default async function AdminPage() {
     userCount,
     assignedUserRows,
     superAdminCount,
-    projectManagerCount,
     roleCount,
-    acceptanceCount,
-    reminderCount,
-    enabledReminderCount,
-    templateCount,
-    enabledTemplateCount,
     budgetPoolCount,
   ] = await Promise.all([
     prisma.user.count(),
@@ -34,13 +20,7 @@ export default async function AdminPage() {
       select: { openId: true },
     }),
     prisma.userRole.count({ where: { role: "SUPER_ADMIN" } }),
-    prisma.userRole.count({ where: { role: "PROJECT_MANAGER" } }),
     prisma.userRole.count(),
-    prisma.acceptanceChecklistTemplate.count(),
-    prisma.progressReminderRule.count(),
-    prisma.progressReminderRule.count({ where: { enabled: true } }),
-    prisma.projectTemplate.count(),
-    prisma.projectTemplate.count({ where: { enabled: true } }),
     prisma.procurementBudgetPool.count({
       where: { period: currentBudgetPeriod() },
     }),
@@ -48,7 +28,7 @@ export default async function AdminPage() {
 
   return (
     <div className="min-w-0 space-y-6">
-      <section className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-6">
+      <section className="grid min-w-0 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <AdminMetric
           icon={Users}
           label="通讯录用户"
@@ -58,32 +38,14 @@ export default async function AdminPage() {
         <AdminMetric
           icon={ShieldCheck}
           label="全局管理"
-          value={superAdminCount + projectManagerCount}
-          detail={`超管 ${superAdminCount} · 项管 ${projectManagerCount}`}
+          value={superAdminCount}
+          detail="超级管理员"
         />
         <AdminMetric
           icon={Wallet}
           label="采购预算池"
           value={budgetPoolCount}
           detail={`${currentBudgetPeriod()} 周期`}
-        />
-        <AdminMetric
-          icon={ClipboardCheck}
-          label="验收条例"
-          value={acceptanceCount}
-          detail="任务创建时可快捷加入"
-        />
-        <AdminMetric
-          icon={BellRing}
-          label="进度提醒"
-          value={enabledReminderCount}
-          detail={`共 ${reminderCount} 条规则，可自动或手动催促`}
-        />
-        <AdminMetric
-          icon={FolderKanban}
-          label="项目模板"
-          value={enabledTemplateCount}
-          detail={`共 ${templateCount} 个模板，新建项目时可套用`}
         />
       </section>
 
@@ -105,24 +67,6 @@ export default async function AdminPage() {
           icon={Wallet}
           title="采购预算池"
           detail={`导入车组+技术组预算，当前 ${budgetPoolCount} 条。`}
-        />
-        <AdminEntryCard
-          href={routes.admin.reminders}
-          icon={BellRing}
-          title="进度提醒"
-          detail="配置自动提醒规则并查看最近提醒 outbox。"
-        />
-        <AdminEntryCard
-          href={routes.admin.projectTemplates}
-          icon={FolderKanban}
-          title="项目模板"
-          detail="创建和维护项目阶段模板。"
-        />
-        <AdminEntryCard
-          href={routes.admin.acceptance}
-          icon={ClipboardCheck}
-          title="验收条例"
-          detail="维护任务验收 checklist 快捷项。"
         />
       </section>
     </div>

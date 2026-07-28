@@ -69,8 +69,6 @@ async function main() {
     await runStep(process.execPath, [tsxBin, "scripts/copy-playwright-db-data.ts"]);
   }
   await runStep(npmCommand, ["run", "db:seed"]);
-  await runStep(npmCommand, ["run", "db:seed-acceptance-checklists"]);
-  await runStep(npmCommand, ["run", "db:seed-progress-reminders"]);
 
   await runStep(npmCommand, ["run", "dev", "--", "-p", port], {
     PORT: port,

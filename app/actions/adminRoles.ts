@@ -11,7 +11,7 @@ const TECH_GROUP_SCOPED_ROLES = new Set<UserRoleType>([
   "TECH_GROUP_ADMIN",
   "TEACHER",
 ]);
-const GLOBAL_ROLES = new Set<UserRoleType>(["SUPER_ADMIN", "PROJECT_MANAGER"]);
+const GLOBAL_ROLES = new Set<UserRoleType>(["SUPER_ADMIN"]);
 
 function resolveRoleScope(
   role: UserRoleType,

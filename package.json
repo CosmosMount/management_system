@@ -18,11 +18,6 @@
     "db:deploy": "tsx scripts/deploy-db.ts",
     "db:seed": "tsx prisma/seed.ts",
     "db:fix-roles": "tsx scripts/fix-user-roles.ts && tsx prisma/seed.ts",
-    "db:backfill-project-owners": "tsx scripts/backfill-project-owners.ts",
-    "db:seed-acceptance-checklists": "tsx scripts/seed-acceptance-checklists.ts",
-    "db:seed-progress-reminders": "tsx scripts/seed-progress-reminder-rules.ts",
-    "db:dedupe-approval-records": "tsx scripts/dedupe-approval-records.ts",
-    "db:dedupe-weekly-reports": "tsx scripts/dedupe-weekly-reports.ts",
     "db:studio": "prisma studio",
     "prepare:template": "tsx scripts/prepare-reimbursement-template.ts",
     "test:e2e": "tsx scripts/run-playwright.ts"

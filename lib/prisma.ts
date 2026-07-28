@@ -2,7 +2,7 @@ import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
 
-const PRISMA_SCHEMA_REVISION = "progress-daily-summary-multi-schedule-v1";
+const PRISMA_SCHEMA_REVISION = "legacy-project-management-removed-v1";
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
@@ -15,31 +15,16 @@ function isPrismaClientStale(client: PrismaClient): boolean {
     return true;
   }
   return (
-    typeof client.project?.findMany !== "function" ||
-    typeof client.projectOwner?.findMany !== "function" ||
-    typeof client.projectParticipant?.findMany !== "function" ||
-    typeof client.projectTemplate?.findMany !== "function" ||
-    typeof client.projectTemplateStage?.findMany !== "function" ||
-    typeof client.projectStage?.findMany !== "function" ||
-    typeof client.projectStageRiskRecord?.findMany !== "function" ||
-    typeof client.projectDdlChangeRequest?.findMany !== "function" ||
-    typeof client.taskAssignee?.findMany !== "function" ||
-    typeof client.taskCreationRequest?.findMany !== "function" ||
-    typeof client.acceptanceChecklistTemplate?.findMany !== "function" ||
-    typeof client.taskAcceptanceChecklistItem?.findMany !== "function" ||
-    typeof client.approvalChecklistConfirmation?.findMany !== "function" ||
+    typeof client.user?.findMany !== "function" ||
+    typeof client.userRole?.findMany !== "function" ||
+    typeof client.purchaseOrder?.findMany !== "function" ||
+    typeof client.purchaseItem?.findMany !== "function" ||
     typeof client.fileAsset?.findMany !== "function" ||
     typeof client.notificationOutbox?.findMany !== "function" ||
     typeof client.notificationOutboxRecipient?.findMany !== "function" ||
-    typeof client.projectComment?.findMany !== "function" ||
-    typeof client.projectFollowPreference?.findMany !== "function" ||
-    typeof client.taskFollowPreference?.findMany !== "function" ||
-    typeof client.progressReminderRule?.findMany !== "function" ||
-    typeof client.progressDailySummarySetting?.findMany !== "function" ||
-    typeof client.progressDailySummarySchedule?.findMany !== "function" ||
-    typeof client.progressApprovalReminderSetting?.findMany !== "function" ||
-    typeof client.progressApprovalReminderDelivery?.findMany !== "function" ||
     typeof client.feedback?.findMany !== "function" ||
+    typeof client.feedbackMessage?.findMany !== "function" ||
+    typeof client.feedbackAttachment?.findMany !== "function" ||
     typeof client.processingVendor?.findMany !== "function" ||
     typeof client.procurementBudgetPool?.findMany !== "function" ||
     typeof client.procurementFeishuCard?.findMany !== "function"

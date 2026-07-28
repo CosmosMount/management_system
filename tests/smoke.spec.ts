@@ -4,10 +4,7 @@ import { expect, test } from "@playwright/test";
 const protectedRoutes = [
   "/",
   "/admin",
-  "/admin/acceptance",
   "/admin/budget-pools",
-  "/admin/project-templates",
-  "/admin/reminders",
   "/admin/roles",
   "/admin/system",
   "/feedback",
@@ -18,10 +15,6 @@ const protectedRoutes = [
   "/procurement/workshop-fee",
   "/profile",
   "/progress",
-  "/progress/archive",
-  "/progress/list",
-  "/progress/dashboard",
-  "/progress/new",
 ];
 
 const authenticatedRoutes = [
@@ -34,20 +27,13 @@ const authenticatedRoutes = [
   "/procurement/workshop-fee",
   "/profile",
   "/progress",
-  "/progress/archive",
-  "/progress/list",
-  "/progress/dashboard",
 ];
 
 const privilegedRoutes = [
   "/admin",
-  "/admin/acceptance",
   "/admin/budget-pools",
-  "/admin/project-templates",
-  "/admin/reminders",
   "/admin/roles",
   "/admin/system",
-  "/progress/new",
 ];
 
 const authStorageState = process.env.PLAYWRIGHT_STORAGE_STATE;
@@ -156,43 +142,17 @@ test.describe("authenticated smoke", () => {
     expect(errors).toEqual([]);
   });
 
-  test("progress list keeps mine and deadline filters in the URL", async ({
-    page,
-  }) => {
+  test("progress placeholder and legacy redirects stay healthy", async ({ page }) => {
     const errors = await collectBrowserErrors(page);
-    const response = await page.goto("/progress/list", { waitUntil: "networkidle" });
+    await page.goto("/progress", { waitUntil: "networkidle" });
+    await expect(page.getByRole("heading", { name: "项目管理正在重构" })).toBeVisible();
 
-    expect(response?.status() ?? 0).toBeLessThan(500);
+    await page.goto("/progress/list?deadline=overdue", {
+      waitUntil: "networkidle",
+    });
+    await expect(page).toHaveURL(/\/progress$/);
+    await expect(page.getByRole("heading", { name: "项目管理正在重构" })).toBeVisible();
     await expectHealthyPage(page);
-
-    const overdueFilter = page
-      .locator('a[href="/progress/list?deadline=overdue"]')
-      .filter({ hasText: "当前阶段已过 DDL" })
-      .first();
-    if (await overdueFilter.isVisible()) {
-      await expect(overdueFilter).toHaveAttribute(
-        "href",
-        "/progress/list?deadline=overdue",
-      );
-      await page.goto("/progress/list?deadline=overdue", {
-        waitUntil: "networkidle",
-      });
-      expect(new URL(page.url()).searchParams.get("deadline")).toBe("overdue");
-      await expectHealthyPage(page);
-    }
-
-    const mineToggle = page.getByRole("link", { name: /只看自己/ }).first();
-    if (await mineToggle.isVisible()) {
-      await expect(mineToggle).toHaveAttribute("href", /(?:\?|&)mine=1(?:&|$)/);
-      await mineToggle.click();
-      await expect(page).toHaveURL(/(?:\?|&)mine=1(?:&|$)/);
-      const params = new URL(page.url()).searchParams;
-      expect(params.get("mine")).toBe("1");
-      if (params.has("deadline")) {
-        expect(params.get("deadline")).toBe("overdue");
-      }
-      await expectHealthyPage(page);
-    }
 
     expect(errors).toEqual([]);
   });

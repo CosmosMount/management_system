@@ -1,11 +1,7 @@
 import { redirect } from "next/navigation";
 import { AppHeader } from "@/components/app-header";
 import { LiveAutoRefresh } from "@/components/live-auto-refresh";
-import {
-  ProfileOrderList,
-  ProfileProjectList,
-  ProfileTaskList,
-} from "@/components/profile/profile-record-lists";
+import { ProfileOrderList } from "@/components/profile/profile-record-lists";
 import { PageShell } from "@/components/page-shell";
 import { PageTitle } from "@/components/page-title";
 import { SignatureUploadForm } from "@/components/signature-upload-form";
@@ -57,22 +53,6 @@ export default async function ProfilePage() {
               由您发起的全部采购订单，进行中的条目排在前面。
             </p>
             <ProfileOrderList orders={records.orders} />
-          </section>
-
-          <section className="rounded-xl border border-border bg-card p-6 shadow-sm">
-            <h2 className="mb-1 text-lg font-medium">我的进度项目</h2>
-            <p className="mb-4 text-sm text-muted-foreground">
-              您作为负责人的项目，进行中的条目排在前面。
-            </p>
-            <ProfileProjectList projects={records.projects} />
-          </section>
-
-          <section className="rounded-xl border border-border bg-card p-6 shadow-sm">
-            <h2 className="mb-1 text-lg font-medium">我的任务</h2>
-            <p className="mb-4 text-sm text-muted-foreground">
-              分配给您的全部任务，进行中的条目排在前面。
-            </p>
-            <ProfileTaskList tasks={records.tasks} />
           </section>
         </main>
       </PageShell>

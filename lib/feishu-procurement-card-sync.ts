@@ -16,8 +16,13 @@ import {
   supportsProcurementCardConfirm,
 } from "@/lib/feishu-procurement-card";
 import { updateCardKitInstanceResilient } from "@/lib/feishu-cardkit";
+import {
+  sendFeishuDirectMessage,
+  type FeishuSendResult,
+} from "@/lib/feishu-message";
 import { statusLabels } from "@/lib/permissions-client";
 import { prisma } from "@/lib/prisma";
+import { logger } from "@/lib/logger";
 import { getDefaultNotificationContext } from "@/lib/request-origin";
 
 function isActionableProcurementStatus(status: OrderStatus): boolean {
@@ -230,7 +235,13 @@ export async function refreshProcurementFeishuCards(
     where: { orderId },
   });
   if (snapshots.length === 0) {
-    console.warn(`[feishu] 无可刷新的采购卡片记录 order=${orderId}`);
+    logger.warn("feishu.procurement.card_refresh.empty", {
+      module: "feishu",
+      action: "refreshProcurementFeishuCards",
+      entityType: "PurchaseOrder",
+      entityId: orderId,
+      result: "skipped",
+    });
     return;
   }
 
@@ -252,14 +263,25 @@ export async function refreshProcurementFeishuCards(
         where: { id: snapshot.id },
         data: { sequence },
       });
-      console.log(
-        `[feishu] 已按当前阶段刷新采购卡片 order=${orderId} stage=${cardStage} openId=${snapshot.openId}`,
-      );
+      logger.info("feishu.procurement.card_refresh.completed", {
+        module: "feishu",
+        action: "refreshProcurementFeishuCards",
+        entityType: "PurchaseOrder",
+        entityId: orderId,
+        cardStage,
+        recipientOpenId: snapshot.openId,
+        result: "success",
+      });
     } catch (error) {
-      console.error(
-        `[feishu] 刷新采购卡片失败 order=${orderId} card=${snapshot.cardId}:`,
+      logger.error("feishu.procurement.card_refresh.failed", {
+        module: "feishu",
+        action: "refreshProcurementFeishuCards",
+        entityType: "PurchaseOrder",
+        entityId: orderId,
+        cardId: snapshot.cardId,
+        result: "failure",
         error,
-      );
+      });
     }
   }
 }
@@ -270,17 +292,29 @@ export async function sendTrackedProcurementCardKitDm(
   botKind: FeishuBotKind,
   orderId?: string,
   cardStage?: OrderStatus,
-): Promise<boolean> {
-  const { sendInteractiveCardKitDm } = await import("@/lib/feishu-cardkit");
-  const cardId = await sendInteractiveCardKitDm(openId, card, botKind);
-  if (!cardId || !orderId || !cardStage) return Boolean(cardId);
+): Promise<FeishuSendResult> {
+  const result = await sendFeishuDirectMessage({
+    recipientOpenId: openId,
+    botKind,
+    purpose: botKind === "approval" ? "approval_request" : "notification",
+    message: { type: "cardkit", card },
+    logContext: {
+      action: "sendTrackedProcurementCardKitDm",
+      channel: "procurement",
+      entityType: "PurchaseOrder",
+      entityId: orderId,
+    },
+  });
+  if (result.status === "skipped") return result;
+  const cardId = result.cardId;
+  if (!cardId || !orderId || !cardStage) return result;
 
   await recordProcurementFeishuCard({
     orderId,
     openId,
     cardId,
-    botKind,
+    botKind: result.botKind,
     cardStage,
   });
-  return true;
+  return result;
 }

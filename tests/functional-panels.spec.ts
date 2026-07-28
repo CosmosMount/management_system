@@ -1,8 +1,7 @@
-import { expect, type Locator, type Page, test } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { prisma } from "../lib/prisma";
 import {
   expectHealthyPage,
-  expectNoHorizontalOverflow,
   formatPrismaError,
   loginAsAdminUser,
   loginAsNormalUser,
@@ -38,7 +37,7 @@ test.describe("普通用户主功能面板", () => {
       page.getByRole("link", { name: "采购管理", exact: true }),
     ).toBeVisible();
     await expect(
-      page.getByRole("link", { name: "进度管理", exact: true }),
+      page.getByRole("link", { name: /项目(?:管理（重构中）|重构)/ }).first(),
     ).toBeVisible();
     await expect(page.getByRole("link", { name: /反馈/ })).toBeVisible();
 
@@ -53,13 +52,20 @@ test.describe("普通用户主功能面板", () => {
 
     await page.goto("/", { waitUntil: "networkidle" });
     await page
-      .getByRole("link", { name: /进度管理 项目与任务跟踪、周报、验收与归档/ })
+      .getByRole("link", { name: /项目管理（重构中） 旧版功能已下线/ })
       .click();
     await expect(page).toHaveURL(/\/progress$/);
-    await expect(
-      page.getByRole("link", { name: /项目列表 查看全部进行中的项目/ }),
-    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "项目管理正在重构" })).toBeVisible();
     await expectHealthyPage(page);
+
+    for (const legacyUrl of ["/progress/list", "/progress/task/legacy-task"]) {
+      await page.goto(legacyUrl, { waitUntil: "networkidle" });
+      await expect(page).toHaveURL(/\/progress$/);
+      await expect(
+        page.getByRole("heading", { name: "项目管理正在重构" }),
+      ).toBeVisible();
+      await expectHealthyPage(page);
+    }
 
     await page.goto("/", { waitUntil: "networkidle" });
     await page.getByRole("link", { name: /反馈/ }).first().click();
@@ -136,79 +142,6 @@ test.describe("普通用户主功能面板", () => {
     await expectHealthyPage(page);
   });
 
-  test("进度项目列表、任务看板、详情和归档可操作基础筛选", async ({ page }) => {
-    await page.goto("/progress/list", { waitUntil: "networkidle" });
-    await expect(page.getByText("项目列表")).toBeVisible();
-    await expect(page.getByText("PW全功能-逾期项目")).toBeVisible();
-    await page.locator('a[href="/progress/list?deadline=overdue"]').click();
-    await expect(page).toHaveURL(/deadline=overdue/);
-    await expect(page.getByText("PW全功能-逾期项目")).toBeVisible();
-    await page.locator('a[href="/progress/list"]').first().click();
-    await expect(page).not.toHaveURL(/deadline=overdue/);
-    await page.getByRole("link", { name: /只看自己/ }).click();
-    await expect(page).toHaveURL(/mine=1/);
-    await expect(page.getByText("PW全功能-逾期项目")).toBeVisible();
-    await expectHealthyPage(page);
-
-    await page.goto(`/progress/${fixtures.projectId}`, {
-      waitUntil: "networkidle",
-    });
-    const projectOverview = page.getByTestId("project-overview");
-    await expect(page.getByText("PW全功能-逾期项目")).toBeVisible();
-    await expect(projectOverview.getByText("技术组：电控")).toBeVisible();
-    await expect(projectOverview.getByText("车组/技术组")).toBeVisible();
-    await expect(projectOverview.getByText("英雄 / 电控")).toBeVisible();
-    await expect(page.getByText("PW全功能-当前阶段").first()).toBeVisible();
-    await expect(page.getByText(/DDL|已超期|延期|任务/).first()).toBeVisible();
-    await expectHealthyPage(page);
-
-    await page.goto("/progress/dashboard", { waitUntil: "networkidle" });
-    await expect(page.getByText("任务看板")).toBeVisible();
-    await page.getByRole("button", { name: /已超时/ }).first().click();
-    await expect(
-      page.getByRole("link", { name: /PW全功能-逾期任务/ }).first(),
-    ).toBeVisible();
-    await page.getByRole("button", { name: /^高$/ }).click();
-    await expect(
-      page.getByRole("link", { name: /PW全功能-逾期任务/ }).first(),
-    ).toBeVisible();
-    await expectHealthyPage(page);
-
-    await page.goto(`/progress/task/${fixtures.taskId}`, {
-      waitUntil: "networkidle",
-    });
-    await expect(page.getByText("PW全功能-逾期任务")).toBeVisible();
-    await expect(page.getByText("宣运")).toBeVisible();
-    await expect(page.getByText("风险同步", { exact: true })).toBeVisible();
-    await expect(page.getByText("PW全功能-活动风险", { exact: true })).toBeVisible();
-    await expect(page.getByText(/周报|本周周报/).first()).toBeVisible();
-    await expectHealthyPage(page);
-
-    await page.goto("/progress/archive", { waitUntil: "networkidle" });
-    await expect(page.getByText("归档检索", { exact: true })).toBeVisible();
-    await expectHealthyPage(page);
-  });
-
-  test("任务详情能通过 live refresh 自动看到风险变化", async ({ page }) => {
-    await page.goto(`/progress/task/${fixtures.taskId}`, {
-      waitUntil: "networkidle",
-    });
-    await expect(page.getByText("PW全功能-逾期任务")).toBeVisible();
-    const riskNote = `PW全功能-live风险-${Date.now()}`;
-
-    await prisma.task.update({
-      where: { id: fixtures.taskId },
-      data: {
-        riskNote,
-        riskUpdatedAt: new Date(),
-      },
-    });
-
-    await expect(page.getByText(`最新风险：${riskNote}`)).toBeVisible({
-      timeout: 15000,
-    });
-    await expectHealthyPage(page);
-  });
 
   test("反馈全部筛选下点击关闭和活动反馈不会切换筛选", async ({ page }) => {
     await page.goto("/feedback", { waitUntil: "networkidle" });
@@ -264,7 +197,7 @@ test.describe("管理员面板", () => {
     await loginAsAdminUser(context, baseURL);
   });
 
-  test("管理员首页和六个子面板都能进入", async ({ page }) => {
+  test("管理员首页和三个子面板都能进入", async ({ page }) => {
     await page.goto("/admin", { waitUntil: "networkidle" });
     await expect(page.getByRole("main").getByText("管理员面板")).toBeVisible();
     await expect(page.getByText("通讯录用户")).toBeVisible();
@@ -274,9 +207,6 @@ test.describe("管理员面板", () => {
       { name: /系统同步/, url: /\/admin\/system$/, text: /飞书|同步|通讯录/ },
       { name: /用户与角色/, url: /\/admin\/roles$/, text: /角色|用户/ },
       { name: /采购预算池/, url: /\/admin\/budget-pools$/, text: /预算|导入/ },
-      { name: /进度提醒/, url: /\/admin\/reminders$/, text: /提醒|扫描|outbox/i },
-      { name: /项目模板/, url: /\/admin\/project-templates$/, text: /模板|阶段/ },
-      { name: /验收条例/, url: /\/admin\/acceptance$/, text: /验收|条例/ },
     ];
 
     for (const panel of panels) {
@@ -288,333 +218,7 @@ test.describe("管理员面板", () => {
     }
   });
 
-  test("管理员可进入新建项目页并触发表单校验", async ({ page }) => {
-    await page.goto("/progress/new", { waitUntil: "networkidle" });
-    await expect(page.getByRole("button", { name: "提交立项" })).toBeVisible();
-    await expect(page.getByText("项目名称", { exact: true })).toBeVisible();
-    await expect(page.getByText("本阶段耗时（天）").first()).toBeVisible();
-    await expect(page.locator('input[type="datetime-local"]')).toHaveCount(0);
-
-    const stageCards = page.getByTestId("project-stage-editor");
-    await stageCards.nth(0).getByLabel("阶段 1 耗时").fill("2");
-    await stageCards.nth(1).getByLabel("阶段 2 耗时").fill("5");
-    await stageCards.nth(2).getByLabel("阶段 3 耗时").fill("1");
-    await expect(stageCards.nth(0)).toContainText("累计第 2 天");
-    await expect(stageCards.nth(1)).toContainText("累计第 7 天");
-    await expect(stageCards.nth(2)).toContainText("累计第 8 天");
-
-    await dragCardTo(page, stageCards.nth(2), stageCards.nth(0));
-    await expect(stageCards.nth(0)).toContainText("累计第 1 天");
-    await expect(stageCards.nth(1)).toContainText("累计第 3 天");
-    await expect(stageCards.nth(2)).toContainText("累计第 8 天");
-
-    await page.getByRole("button", { name: /提交立项|保存/ }).first().click();
-    await expect(page.getByText(/项目名称|负责人|阶段|请选择/).first()).toBeVisible();
-    await expectHealthyPage(page);
-  });
-
-  test("管理员可查看详情、排序并删除非默认项目模板", async ({ page }) => {
-    const templateName = `PW全功能-模板管理-${Date.now()}`;
-    await prisma.projectTemplate.deleteMany({ where: { name: templateName } });
-
-    await page.goto("/admin/project-templates", { waitUntil: "networkidle" });
-    await expect(page.getByTestId("project-template-list")).toBeVisible();
-    await expect(page.getByTestId("project-template-detail-card")).toBeVisible();
-    await expect(page.getByRole("button", { name: /删除/ }).first()).toBeDisabled();
-
-    await page.getByRole("button", { name: "新建模板" }).click();
-    await page.getByLabel("模板名称").fill(templateName);
-    await page.getByLabel("模板描述").fill("PW全功能-模板管理描述");
-    await page.getByLabel("阶段 1 名称").fill("模板阶段 A");
-    await page.getByLabel("阶段 1 耗时").fill("2");
-    await page.getByLabel("阶段 1 目标").fill("A goal");
-    await page.getByLabel("阶段 2 名称").fill("模板阶段 B");
-    await page.getByLabel("阶段 2 耗时").fill("5");
-    await page.getByLabel("阶段 2 目标").fill("B goal");
-    await page.getByLabel("阶段 3 名称").fill("模板阶段 C");
-    await page.getByLabel("阶段 3 耗时").fill("1");
-    await page.getByLabel("阶段 3 目标").fill("C goal");
-    await page.getByRole("button", { name: "创建模板" }).click();
-    await expect(page.getByRole("button", { name: new RegExp(templateName) })).toBeVisible();
-
-    await page.getByRole("button", { name: new RegExp(templateName) }).click();
-    await page.getByRole("button", { name: "编辑" }).click();
-    const templateStageCards = page.getByTestId("project-template-stage-editor");
-    await dragCardTo(page, templateStageCards.nth(2), templateStageCards.nth(0));
-    await expect(templateStageCards.nth(0).getByLabel("阶段 1 名称")).toHaveValue(
-      "模板阶段 C",
-    );
-    await page.getByRole("button", { name: "保存模板" }).click();
-
-    await expect
-      .poll(async () => {
-        const template = await prisma.projectTemplate.findUnique({
-          where: { name: templateName },
-          include: { stages: { orderBy: { sortOrder: "asc" } } },
-        });
-        return template?.stages.map((stage) => ({
-          name: stage.name,
-          durationDays: stage.dueOffsetDays,
-        }));
-      })
-      .toEqual([
-        { name: "模板阶段 C", durationDays: 1 },
-        { name: "模板阶段 A", durationDays: 2 },
-        { name: "模板阶段 B", durationDays: 5 },
-      ]);
-
-    await page.getByRole("button", { name: new RegExp(templateName) }).click();
-    await expect(page.getByTestId("project-template-detail-card")).toContainText(
-      "耗时 1 天",
-    );
-    await page.getByRole("button", { name: "删除" }).click();
-    await page.getByRole("button", { name: "删除模板" }).click();
-
-    await expect
-      .poll(async () =>
-        prisma.projectTemplate.count({ where: { name: templateName } }),
-      )
-      .toBe(0);
-    await expect(page.getByRole("button", { name: new RegExp(templateName) })).toHaveCount(0);
-    await expectHealthyPage(page);
-  });
-
-  test("管理员可手动扫描进度提醒且同日重复扫描不重复入队", async ({
-    page,
-  }, testInfo) => {
-    test.skip(
-      testInfo.project.name !== "desktop",
-      "进度提醒扫描使用全局服务端锁，desktop 已覆盖按钮与幂等行为。",
-    );
-
-    const beforeCount = await prisma.notificationOutbox.count({
-      where: { channel: "progress", type: "progress_reminder" },
-    });
-
-    await page.goto("/admin/reminders", { waitUntil: "networkidle" });
-    const firstScanStartedAt = new Date();
-    await page.getByRole("button", { name: "立即扫描一次" }).click();
-
-    await expect
-      .poll(async () => {
-        return countEnabledRulesNotRunSince(firstScanStartedAt);
-      })
-      .toBe(0);
-    await expect
-      .poll(async () => {
-        return prisma.notificationOutbox.count({
-          where: { channel: "progress", type: "progress_reminder" },
-        });
-      })
-      .toBeGreaterThan(beforeCount);
-    const afterFirstScanCount = await prisma.notificationOutbox.count({
-      where: { channel: "progress", type: "progress_reminder" },
-    });
-
-    await expect(page.getByRole("button", { name: "立即扫描一次" })).toBeEnabled();
-    await page.waitForTimeout(500);
-    await expect
-      .poll(async () => {
-        return prisma.notificationOutbox.count({
-          where: { channel: "progress", type: "progress_reminder" },
-        });
-      })
-      .toBe(afterFirstScanCount);
-    await expectHealthyPage(page);
-  });
-
-  test("管理员可配置每日卡片并给单个用户发送测试卡", async ({
-    page,
-  }, testInfo) => {
-    const testOpenId = `ou_pw_daily_ui_${testInfo.project.name}`;
-    const testUserName = `PW每日卡片测试-${testInfo.project.name}`;
-    await prisma.user.upsert({
-      where: { openId: testOpenId },
-      create: { openId: testOpenId, name: testUserName },
-      update: { name: testUserName },
-    });
-    await prisma.progressDailySummarySetting.upsert({
-      where: { id: "default" },
-      create: {
-        id: "default",
-        enabled: true,
-        schedules: { create: { scheduleTime: "19:00" } },
-      },
-      update: {
-        enabled: true,
-        schedules: {
-          deleteMany: {},
-          create: { scheduleTime: "19:00" },
-        },
-      },
-    });
-    await prisma.notificationOutbox.deleteMany({
-      where: { channel: "progress", type: "progress_daily_summary" },
-    });
-
-    await page.goto("/admin/reminders", { waitUntil: "networkidle" });
-    await expect(page.getByTestId("admin-reminder-rules-tab")).toBeVisible();
-    await page.getByTestId("admin-daily-summary-tab").click();
-    await expect(page.getByTestId("admin-daily-summary-panel")).toBeVisible();
-    await expect(page.getByText("测试发送给单个用户")).toBeVisible();
-
-    await page.getByTestId("admin-daily-summary-enabled").click();
-    await page.getByRole("option", { name: "停用" }).click();
-    await page.getByTestId("admin-daily-summary-time").fill("20:15");
-    await page.getByTestId("admin-daily-summary-add-time").click();
-    await page.getByTestId("admin-daily-summary-time").nth(1).fill("20:17");
-    await expect(
-      page.getByText("相邻发送时间至少间隔 5 分钟").first(),
-    ).toBeVisible();
-    await page.getByTestId("admin-daily-summary-time").nth(1).fill("09:30");
-    await page.getByTestId("admin-daily-summary-save").click();
-    await expect
-      .poll(async () => {
-        const setting = await prisma.progressDailySummarySetting.findUnique({
-          where: { id: "default" },
-          select: {
-            enabled: true,
-            schedules: {
-              orderBy: { scheduleTime: "asc" },
-              select: { scheduleTime: true },
-            },
-          },
-        });
-        return setting;
-      })
-      .toEqual({
-        enabled: false,
-        schedules: [{ scheduleTime: "09:30" }, { scheduleTime: "20:15" }],
-      });
-
-    await page.reload({ waitUntil: "networkidle" });
-    await page.getByTestId("admin-daily-summary-tab").click();
-    await expect(page.getByTestId("admin-daily-summary-time").nth(0)).toHaveValue(
-      "09:30",
-    );
-    await expect(page.getByTestId("admin-daily-summary-time").nth(1)).toHaveValue(
-      "20:15",
-    );
-    for (let index = 0; index < 6; index += 1) {
-      await page.getByTestId("admin-daily-summary-add-time").click();
-    }
-    await expect(page.getByTestId("admin-daily-summary-add-time")).toBeDisabled();
-    for (let index = 0; index < 6; index += 1) {
-      await page.getByRole("button", { name: /删除发送时间/ }).last().click();
-    }
-    await page.getByRole("button", { name: "删除发送时间 2" }).click();
-    await page.getByTestId("admin-daily-summary-save").click();
-    await expect
-      .poll(() =>
-        prisma.progressDailySummarySchedule.findMany({
-          where: { settingId: "default" },
-          orderBy: { scheduleTime: "asc" },
-          select: { scheduleTime: true },
-        }),
-      )
-      .toEqual([{ scheduleTime: "09:30" }]);
-    const dailyUserSearch = page
-      .getByTestId("admin-daily-summary-test-user")
-      .locator("input");
-    await dailyUserSearch.fill(testUserName);
-    await page
-      .getByTestId("user-search-option")
-      .filter({ hasText: testUserName })
-      .click();
-    await page.getByTestId("admin-daily-summary-test-send").click();
-
-    await expect
-      .poll(async () => {
-        const outbox = await prisma.notificationOutbox.findFirst({
-          where: {
-            channel: "progress",
-            type: "progress_daily_summary",
-            eventKey: { startsWith: `progress:daily_summary:test:${testOpenId}:` },
-          },
-          orderBy: { createdAt: "desc" },
-        });
-        if (!outbox) return null;
-        const stored = JSON.parse(outbox.payload) as {
-          payload?: { recipientOpenIds?: string[] };
-        };
-        return {
-          botKind: outbox.botKind,
-          recipientOpenIds: stored.payload?.recipientOpenIds ?? [],
-        };
-      })
-      .toEqual({
-        botKind: "notification",
-        recipientOpenIds: [testOpenId],
-      });
-
-    await page.reload({ waitUntil: "networkidle" });
-    await page.getByTestId("admin-daily-summary-tab").click();
-    await expect(page.getByText("最近每日卡片")).toBeVisible();
-    await expect(page.getByText("测试发送").first()).toBeVisible();
-    await expect(page.getByText(testUserName).first()).toBeVisible();
-    if (testInfo.project.name === "mobile") {
-      await expectNoHorizontalOverflow(page);
-    }
-    await expectHealthyPage(page);
-  });
-
-  test("管理员可配置审批提醒冷却时间", async ({ page }) => {
-    await prisma.progressApprovalReminderSetting.upsert({
-      where: { id: "default" },
-      create: { id: "default", cooldownMinutes: 10 },
-      update: { cooldownMinutes: 10 },
-    });
-    await page.goto("/admin/reminders", { waitUntil: "networkidle" });
-    await expect(page.getByTestId("admin-approval-reminder-setting")).toBeVisible();
-    await page.getByTestId("admin-approval-reminder-cooldown").fill("15");
-    await page.getByTestId("admin-approval-reminder-save").click();
-    await expect
-      .poll(async () => {
-        return prisma.progressApprovalReminderSetting.findUnique({
-          where: { id: "default" },
-          select: { cooldownMinutes: true },
-        });
-      })
-      .toEqual({ cooldownMinutes: 15 });
-    await page.reload({ waitUntil: "networkidle" });
-    await expect(page.getByTestId("admin-approval-reminder-cooldown")).toHaveValue(
-      "15",
-    );
-    await expectHealthyPage(page);
-  });
 });
-
-async function dragCardTo(page: Page, source: Locator, target: Locator) {
-  const handle = source.locator("[data-sortable-grip]").first();
-  await handle.scrollIntoViewIfNeeded();
-  const sourceBox = await handle.boundingBox();
-  const targetBox = await target.boundingBox();
-  if (!sourceBox || !targetBox) {
-    throw new Error("无法定位拖拽阶段卡片");
-  }
-
-  await page.mouse.move(
-    sourceBox.x + sourceBox.width / 2,
-    sourceBox.y + sourceBox.height / 2,
-  );
-  await page.mouse.down();
-  await page.mouse.move(
-    targetBox.x + targetBox.width / 2,
-    targetBox.y + Math.min(12, targetBox.height / 4),
-    { steps: 14 },
-  );
-  await page.mouse.up();
-}
-
-async function countEnabledRulesNotRunSince(since: Date): Promise<number> {
-  const [enabledCount, scannedCount] = await Promise.all([
-    prisma.progressReminderRule.count({ where: { enabled: true } }),
-    prisma.progressReminderRule.count({
-      where: { enabled: true, lastRunAt: { gte: since } },
-    }),
-  ]);
-  return enabledCount - scannedCount;
-}
 
 test("非管理员访问管理员面板会被重定向到首页", async ({
   page,

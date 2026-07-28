@@ -8,6 +8,7 @@ import { prisma } from "@/lib/prisma";
 import { approveProcurementByOpenId } from "@/lib/procurement-approve-by-open-id";
 import { confirmProcurementByOpenId } from "@/lib/procurement-confirm-by-open-id";
 import { rejectProcurementByOpenId } from "@/lib/procurement-reject-by-open-id";
+import { logger } from "@/lib/logger";
 
 type CardActionPayload = {
   operator?: {
@@ -187,12 +188,13 @@ export async function handleFeishuCardAction(
       return {};
     }
 
-    console.log("[feishu-ws] 未识别的卡片操作", {
-      tag: data.action?.tag,
-      name: data.action?.name,
-      value: data.action?.value,
-      formValue: data.action?.form_value,
-      operator: data.operator?.name ?? operatorOpenId,
+    logger.warn("feishu.card_action.unknown", {
+      module: "feishu",
+      action: "handleFeishuCardAction",
+      actionTag: data.action?.tag,
+      actionName: data.action?.name,
+      operatorOpenId,
+      result: "skipped",
     });
     return cardToast("info", "已收到操作，请使用系统页面完成处理");
   }
@@ -272,9 +274,13 @@ export async function handleFeishuCardAction(
     }
     const rejectCardStage = order.status;
     if (!reason) {
-      console.log("[feishu-ws] 驳回缺少原因", {
-        formValue: data.action?.form_value,
-        buttonName: data.action?.name,
+      logger.info("feishu.card_action.reject_reason_missing", {
+        module: "feishu",
+        action: "handleFeishuCardAction",
+        entityType: "PurchaseOrder",
+        entityId: orderId,
+        actionName: data.action?.name,
+        result: "failure",
       });
       return cardToast("error", "请填写退回原因");
     }
