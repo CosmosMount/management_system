@@ -18,21 +18,22 @@
 ```
 用户 → Next.js 页面 → Server Actions → Prisma/PostgreSQL
                     ↘ 飞书 Webhook / 私信（卡片通知）
-定时脚本 cron.ts → Prisma → 采购日报 + 进度逾期/周报提醒
+定时脚本 cron.ts → Prisma → 采购日报 + 通知 outbox 投递
 ```
 
 - 无独立后端服务，业务逻辑集中在 `app/actions/` 与 `lib/`
 - 文件上传写入私有目录 `storage/uploads/`，通过 `/uploads/...` 鉴权 route 返回
-- 飞书集成拆分为 OAuth、通讯录、消息发送与通知 outbox。`NotificationOutbox.channel` 表示业务域，`botKind` 表示发送机器人：`notification` 发送普通通知，`approval` 只发送审批/验收/确认待办。完整场景、渠道和收件人见 [`docs/NOTIFICATIONS.md`](NOTIFICATIONS.md)。
-- 通知 outbox 分两层：`NotificationOutbox` 表示业务事件，`NotificationOutboxRecipient` 表示单个收件人的投递状态。drain 只能重试失败收件人，不能把已成功收件人再次发送。
+- 飞书集成拆分为 OAuth、通讯录、Webhook、统一私信传输层和 notification outbox。`lib/feishu-message.ts` 的 `sendFeishuDirectMessage()` 是 IM 私信唯一出口，支持 `text`、交互卡片和 CardKit；Webhook 保持独立。
+- `lib/notification-channels/{procurement,feedback}.ts` 分别实现业务 channel adapter，负责校验持久化 payload、计算并去重收件人、构造完整消息和明确消息用途；传输层不查询业务角色，也不理解采购或反馈状态。
+- 通知 outbox 分两层：`NotificationOutbox` 表示业务事件，`NotificationOutboxRecipient` 表示单个收件人的投递状态。核心 drain 按 `channel` 查找 adapter，只调度和更新状态；重试失败收件人时不能把已成功收件人再次发送。临时解析/网络错误退避重试，损坏 payload、未知 channel、非法 `type/botKind` 等确定性配置错误直接冻结，修正后才可人工重置。
 
 ## 结构化日志
 
 - 统一入口为 `lib/logger.ts`，默认输出 JSON line；开发环境可通过 `LOG_FORMAT=pretty` 使用可读格式，`LOG_LEVEL=debug|info|warn|error|silent` 控制级别。
 - 标准字段：`timestamp、level、event、requestId、actorOpenId、module、action、entityType、entityId、durationMs、result、errorCode、errorMessage`。排查时优先按 `requestId/event/entityId/eventKey` 串联。
 - 日志会自动脱敏 `password、secret、token、cookie、authorization、appSecret、DATABASE_URL` 等字段。不要把完整飞书卡片、请求 cookie、数据库连接串、文件正文或大体量导入内容写进日志。
-- 业务可见历史继续写 `ProgressActivityLog`；工程排障写结构化日志。两者职责分开，不能用 stdout 日志替代业务审计记录。
-- 关键接入点：进度立项/阶段/任务/风险/周报 action、通知 outbox 入队与收件人级投递、飞书 WS/卡片回调、cron、Playwright DB setup、Prisma 连接池错误。
+- 业务可见历史写入对应领域记录；工程排障写结构化日志。两者职责分开，不能用 stdout 日志替代业务审计记录。
+- 关键接入点：采购和反馈 action、通知 outbox 入队与收件人级投递、飞书统一传输层、WS/卡片回调、cron、Playwright DB setup、Prisma 连接池错误。
 - 事务内 outbox 入队日志使用 `notification.outbox.enqueue_tx.prepared` 和 `result=prepared`，只表示事务中已准备写入；只有事务提交后数据库里的 outbox 行才代表可投递事件。
 - 本地和测试验证默认设置 `NOTIFICATION_DELIVERY_DISABLED=true`，只检查 outbox 和日志，不发送真实飞书消息。该开关同时覆盖 outbox drain、飞书群 Webhook、IM 图片/文件素材上传等直连出口；人工调试脚本如确需真实发送或上传，代码必须显式传入禁发 bypass，运行时还必须设置 `CONFIRM_SEND_FEISHU=true`。普通应用进程即使误传 bypass，也会继续被禁发闸拦截。
 
@@ -40,19 +41,19 @@
 
 - Web 进程里仍存在 `drainNotificationOutboxSoon()`，当前已具备结构化日志，但后续应收口为“Web 只入队，cron/worker 统一投递”。
 - outbox claim 当前以乐观 `updateMany` 抢占为主；后续建议改为 PostgreSQL `FOR UPDATE SKIP LOCKED` 原子 claim，并记录 `lockOwner`/心跳。
-- feedback、部分采购退回/重提通知仍可能走复合发送 fallback；后续应让所有通知类型在入队时固化 recipient plan。
+- channel adapter 必须固化业务 payload 与收件人计划；不要在 outbox 核心或飞书传输层增加业务分支。
 - 维护脚本应逐步统一 dry-run/confirm 约定，写操作脚本必须要求显式 `APPLY_*=true` 和目标数据库确认；会触达飞书的脚本必须要求 `CONFIRM_SEND_FEISHU=true`，并默认尊重 `NOTIFICATION_DELIVERY_DISABLED=true`。
 
 ## 目录结构
 
 ```
 app/
-  actions/          # Server Actions（采购 + 进度 + 管理）
+  actions/          # Server Actions（采购 + 反馈 + 管理）
   api/auth/         # Auth.js 路由
   apply/ orders/    # 采购报销页面
-  progress/         # 进度管理页面
+  progress/         # 项目管理重构占位页与旧路由重定向
   admin/            # 角色管理
-components/         # UI 组件（含 progress/ 子目录）
+components/         # UI 组件
 lib/                # 业务逻辑、权限、飞书、校验
 prisma/
   schema.prisma     # 数据模型
@@ -79,9 +80,8 @@ Auth.js 不能在中件件中 import 含 Prisma 的模块，因此拆分：
 |------|------|------|
 | 采购 | `lib/permissions.ts` | 服务端角色查询 |
 | 采购（客户端） | `lib/permissions-client.ts` | 纯函数，无数据库依赖 |
-| 进度 | `lib/permissions-progress.ts` | 项目/任务/验收权限 |
 
-角色类型见 `UserRoleType` enum：`SUPER_ADMIN`、`TEAM_ADMIN`、`TECH_GROUP_ADMIN`、`TEACHER`、`FINANCE`、`PROJECT_MANAGER`。
+角色类型见 `UserRoleType` enum：`SUPER_ADMIN`、`TEAM_ADMIN`、`TECH_GROUP_ADMIN`、`TEACHER`、`FINANCE`。
 
 ## 数据模型
 
@@ -113,37 +113,11 @@ DRAFT → MANAGEMENT_REVIEW → TEACHER_REVIEW → PENDING_APPLICANT_DOCS
 
 状态变更与审批逻辑在 `app/actions/updateOrderStatus.ts`、`approveManagementReview.ts` 等。
 
-### 进度管理
+### 项目管理
 
-| 模型 | 说明 |
-|------|------|
-| `Project` | 项目（车组、技术组、宏观状态） |
-| `ProjectStage` | 验收阶段（材料链接与 DDL） |
-| `Task` | 任务（负责人、指标、截止、类别） |
-| `TaskSubmission` | 交付 / 里程碑提交 |
-| `WeeklyReport` | 周报 |
-| `ApprovalRecord` | 验收记录 |
-| `ProgressActivityLog` | 操作留痕 |
+旧项目管理专用模型和开发数据已通过新增 migration 删除，包括项目、阶段、旧任务及其审批、交付、周报、风险、评论、关注和提醒关系。共享的 `User`、采购/反馈、`FileAsset`、`NotificationOutbox` 与飞书卡片跟踪模型继续保留。
 
-**项目状态流转**（`lib/progress-flow.ts`，服务端强制校验）：
-
-```
-DRAFT → IN_PROGRESS → NORMAL | ABNORMAL
-NORMAL → OUTCOME_GOOD
-ABNORMAL → UNDER_INTERVENTION
-UNDER_INTERVENTION → NORMAL | OUTCOME_GOOD | OUTCOME_POOR
-OUTCOME_GOOD | OUTCOME_POOR → ARCHIVED
-```
-
-**任务状态流转：**
-
-```
-TODO → IN_PROGRESS →（提交交付）→ PENDING_ACCEPTANCE →（验收）→ COMPLETED → ARCHIVED
-```
-
-`IN_PROGRESS → PENDING_ACCEPTANCE` 由 `submitTaskDelivery` 触发；`PENDING_ACCEPTANCE → COMPLETED` 由 `approveTaskSubmission` 触发。UI 通过 `getNextProjectStatuses()` / `StatusStepper` 仅展示允许的下一步。
-
-里程碑须按 `sortOrder` 顺序提交与验收；归档前要求全部里程碑 `PASSED` 且项目处于 `OUTCOME_GOOD` 或 `OUTCOME_POOR`。
+当前没有项目管理业务模型；后续目标模型仅记录在 [`docs/plan/`](plan/) 中，不能作为当前 schema 说明。
 
 ## 路由一览
 
@@ -160,29 +134,24 @@ TODO → IN_PROGRESS →（提交交付）→ PENDING_ACCEPTANCE →（验收）
 | `/procurement/dashboard` | 采购汇总看板 |
 | `/admin` | 角色与通讯录管理 |
 
-### 进度管理
+### 项目管理占位
 
 | 路径 | 功能 |
 |------|------|
-| `/progress` | 进度首页 |
-| `/progress/new` | 新建项目 |
-| `/progress/list` | 项目列表 |
-| `/progress/[id]` | 项目详情 |
-| `/progress/task/[id]` | 任务详情 |
-| `/progress/dashboard` | 任务看板 |
-| `/progress/archive` | 归档检索 |
+| `/progress` | 项目管理重构占位页 |
+| `/progress/*` | 服务端重定向到 `/progress` |
 
 ## 飞书集成要点
 
 - **OAuth 回调**：`/api/auth/callback/feishu`，须在飞书后台为每个允许入口分别配置完整 URL
 - **Webhook 签名**：`HmacSHA256("", timestamp + "\n" + secret)` 后 Base64
-- **私信**：`im:message:send_as_bot`，收件人须曾登录以建立机器人会话；审批待办走审批机器人，其他消息走通知机器人，审批机器人未配置时回退通知机器人。独立审批应用不能复用通知/OAuth 应用的 `open_id`，系统会通过 `User.unionId` 使用 `receive_id_type=union_id` 发送；缺少 `union_id` 时审批私信失败并等待 outbox 重试，不降级到通知机器人。
+- **统一私信传输层**：`lib/feishu-message.ts` 导出 `FeishuMessage`、`FeishuMessagePurpose`、`FeishuSendResult` 和 `sendFeishuDirectMessage()`。调用方传入系统用户 `openId`、明确的 `botKind`、用途和 text/交互卡片/CardKit 消息；传输层统一完成收件人身份解析、机器人凭据、token、HTTP 请求、CardKit 创建、禁发闸、allowlist、结构化日志和错误脱敏。
+- **机器人边界**：普通通知只能使用通知机器人，审批请求才可声明审批用途。审批机器人未独立配置时使用通知机器人凭据；独立审批应用通过 `User.unionId` 使用 `receive_id_type=union_id`，缺少 `union_id` 时失败并由 outbox 重试。保留既有的“用户对审批应用不可用时回退通知机器人”行为，发送结果会标明实际机器人和是否 fallback。
+- **Outbox adapter**：采购和反馈业务只能通过 `lib/notification-channels/` adapter 进入统一私信传输层。adapter 校验 payload 与持久化元数据、计算收件人和构造业务内容；outbox 核心及传输层不包含业务角色查询或状态分支。adapter 的收件人计划可区分真实私信与 Webhook 等独立传输，采购审批必须至少有一个真实私信审批人。后续项目管理也必须使用稳定 `eventKey` 在业务事务中入队，不能从 Server Action 直接发送。
 - **私信防误发**：`FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES / OPEN_IDS / UNION_IDS` 为空时不限制；配置后只允许匹配收件人，其他私信会被记录并拦截。Playwright 启动的应用服务默认只允许 `李棋轩`。Docker Compose 默认 `NOTIFICATION_DELIVERY_DISABLED=true` 且 allowlist 为 `李棋轩`；生产真实投递需要显式设置 `NOTIFICATION_DELIVERY_DISABLED=false`，并按需配置或清空 allowlist。
 - **CardKit 回调**：采购审批卡若由审批机器人发送，需要运行审批机器人长连接；生产 `./service/install.sh` 默认安装并启动 `pnx-management-feishu-approval-ws.service`。通知机器人长连接仍可通过 `ENABLE_FEISHU_WS=true` 单独启用。审批机器人回调中的操作人也会通过 `union_id` 映射回系统 `openId` 后再校验权限。
-- **群 Webhook**：采购群通知和日报仍使用 Webhook，独立于私信 `botKind`
+- **群 Webhook**：采购群通知和日报仍使用 Webhook，独立于统一私信接口
 - **通讯录同步**：手动入口 `app/actions/syncFeishuUsers.ts`，定时入口 `scripts/cron.ts`，共用 `lib/feishu-user-sync.ts`；需 `contact:*` 只读权限
-
-进度模块交付物以飞书文档 URL 形式提交，审批人在飞书中打开核对；系统不做文档访问记录 API 校验。
 
 ## Prisma 与数据库
 
@@ -238,9 +207,8 @@ npm run cron                   # 启动定时任务（独立进程）
 | 调度 | 内容 |
 |------|------|
 | 默认每日 08:30 | 从飞书通讯录扫描并同步本地人员（可用 `FEISHU_CONTACT_SYNC_CRON` 调整） |
-| 每日 09:00 | 采购日报、采购停留催办；进度规则型提醒由每 10 分钟扫描器按规则时间判断 |
-| 每 5 分钟 | 检查进度个人摘要 DB 设置；默认 19:00 发送，可在管理员面板 `/admin/reminders` 的“每日卡片”中启停、配置每天 1–8 个时间和单人测试发送，相邻时间至少间隔 5 分钟。不同时间按计划日期和时刻分别幂等；停机积压多个场次时只执行最近一场。`PROGRESS_DAILY_SUMMARY_CHECK_CRON` 只控制检查频率；旧 `PROGRESS_DAILY_SUMMARY_CRON` 仅在首次创建 DB 设置时用于兼容推导首个发送时间 |
-| 每 10 分钟 | 进度规则型提醒、采购预算阈值扫描 |
+| 每日 09:00 | 采购日报、采购停留催办 |
+| 每 10 分钟 | 采购预算阈值扫描 |
 | 每 2 分钟 | drain `NotificationOutbox` |
 
 与 Next.js 主进程分离，生产环境用 PM2、systemd 或下文 **Docker** 中的 `cron` 服务单独拉起。

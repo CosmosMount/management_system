@@ -15,9 +15,9 @@
 | P0-02 | 固化 Task/Node/Review/Revision 状态表 | BO | TL/QA | P0-01 | 状态矩阵用例 | 1 |
 | P0-03 | 确认 Revision 审批与自审策略 | BO | TL/SEC | P0-02 | 决策记录 | 0.5 |
 | P0-04 | 确认 Task 可见性与组织范围 | BO | TL/SEC | P0-01 | 权限矩阵 | 0.5 |
-| P0-05 | 盘点生产 Project/Task/关系表数量与异常 | DBA | TL/QA | 无 | 只读 JSON 报告 | 1 |
+| P0-05 | 盘点采购/反馈/共享表数量、关系与稳定 hash | DBA | TL/QA | 无 | 只读 JSON 报告 | 1 |
 | P0-06 | 建立采购“不允许改变行为”基线 | QA | TL | 无 | 采购回归清单 | 1 |
-| P0-07 | 确认迁移删除白名单 | TL | BO/DBA/SEC | P0-05 | 表/代码删除清单 | 1 |
+| P0-07 | 确认 schema 发布共享数据保护清单 | TL | BO/DBA/SEC | P0-05 | 模型/FK/数据清单 | 1 |
 | P0-08 | 建 UAT、性能和发布成功标准 | QA | BO/TL/DBA | P0-02 | 签字模板 | 1 |
 
 ## P1 Schema、身份与授权骨架
@@ -35,7 +35,7 @@
 | P1-09 | 实现飞书 User -> Account/Person 解析 | BE-B | TL/SEC | P1-01 | 登录集成测试 | 2 |
 | P1-10 | 实现 action enum 与 authorize 骨架 | BE-B | TL/SEC | P0-04 | 允许/拒绝测试 | 2 |
 | P1-11 | 实现 readableWhere 骨架 | BE-B | TL/SEC | P1-10 | 列表防枚举测试 | 1.5 |
-| P1-12 | 建 migration run/map 表与 dry-run 框架 | BE-A | DBA/TL | P1-02 | 无写入测试 | 1.5 |
+| P1-12 | 建共享身份 backfill dry-run/APPLY 框架 | BE-A/BE-B | DBA/TL/SEC | P1-01 | 幂等/无写入测试 | 1.5 |
 | P1-13 | 更新 Prisma 生成、连接和 stale client 检查 | BE-A | TL | P1-08 | `npm run check` | 1 |
 | P1-14 | 执行采购身份/权限/通知基线回归 | QA | TL | P1-09 | 回归报告 | 1.5 |
 
@@ -120,25 +120,22 @@
 | P6-08 | 改造 outbox claim/worker | BE-B | DBA/TL | P3-12 | recipient 重试 | 2 |
 | P6-09 | 实现 deadline/segment/conflict cron | BE-B | TL/QA | P5-12 | eventKey 幂等 | 2 |
 | P6-10 | 采购 outbox 与飞书完整回归 | QA | TL | P6-08 | 回归报告 | 2 |
+| P6-11 | 实现项目管理 notification channel adapter | BE-B | TL/SEC | P3-12/P6-08 | payload/recipient/purpose 测试 | 2 |
 
-## P7 数据迁移与删除
+## P7 Schema 发布准备
 
 | ID | 工作 | Owner | Review | 依赖 | 交付与测试 | PD |
 |---|---|---|---|---|---|---:|
-| P7-01 | 实现 User -> Account/Person migration | BE-B | TL/SEC | P1 | 冲突/计数 | 2 |
-| P7-02 | 实现 Project -> Task + Tag | BE-A | TL/BO | P2 | 字段/状态测试 | 2 |
-| P7-03 | 实现 old Task -> new Task + Tag | BE-A | TL/QA | P2 | 字段/状态测试 | 2 |
-| P7-04 | 实现成员与组织范围映射 | BE-B | TL/SEC | P7-01~03 | 无 owner 硬失败 | 1.5 |
-| P7-05 | 实现初始 Milestone/Termination 映射 | BE-A | TL/QA | P7-02~03 | 每 Task 1+1 | 1.5 |
-| P7-06 | 实现删除表和共享数据白名单 | DBA/BE-A | TL/SEC | P0-07 | dry-run 删除报告 | 1.5 |
-| P7-07 | 实现全量对账与 JSON 报告 | QA/BE-A | TL/DBA | P7-02~06 | 硬门禁 | 2 |
-| P7-08 | 生产快照演练一 | DBA | TL/QA | P7-07 | 异常/耗时报告 | 2 |
-| P7-09 | 修复演练一问题 | BE-A/BE-B | TL | P7-08 | 回归 | 2 |
-| P7-10 | 生产快照演练二 | DBA | TL/QA/BO | P7-09 | 零手工 DB 操作 | 2 |
-| P7-11 | 删除旧页面/components/actions/lib | FE-A/BE-A | TL/QA | P4/P6/P7-10 | `rg` 零引用 | 3 |
-| P7-12 | 删除旧通知/cron/tests/docs | BE-B/QA | TL | P7-11 | 新回归通过 | 2 |
-| P7-13 | contract migration 删除旧 schema | DBA/BE-A | TL/SEC | P7-10~12 | 空库/快照测试 | 2 |
-| P7-14 | 更新正式 README/TECH/TESTING/NOTIFICATIONS | TL | BO/QA | P7-11~13 | 文档审查 | 2 |
+| P7-01 | 实现 User -> Account/Person 幂等初始化（若需要） | BE-B | TL/SEC | P1 | dry-run/APPLY 冲突与计数 | 2 |
+| P7-02 | 验证新 schema 从空库完整部署 | BE-A/DBA | TL/QA | P1~P6 | migration diff/约束 | 1.5 |
+| P7-03 | 实现共享数据行数/hash 对账报告 | QA/BE-A | TL/DBA | P0-07 | 采购/反馈/附件/outbox | 1.5 |
+| P7-04 | 静态检查禁止 legacy 字段、旧接口和飞书直连 | QA/BE-B | TL/SEC | P6-11 | `rg` 门禁 | 1 |
+| P7-05 | 含共享数据快照发布演练一 | DBA | TL/QA | P7-01~04 | 异常/耗时报告 | 2 |
+| P7-06 | 修复演练一问题 | BE-A/BE-B | TL | P7-05 | 回归 | 2 |
+| P7-07 | 含共享数据快照发布演练二 | DBA | TL/QA/BO | P7-06 | 零手工 DB 操作 | 2 |
+| P7-08 | 整库与上传 volume 恢复演练 | DBA | TL/SEC | P7-07 | 恢复时间/对账 | 1.5 |
+| P7-09 | 更新正式 README/TECH/TESTING/NOTIFICATIONS | TL | BO/QA | P7-07 | 文档审查 | 2 |
+| P7-10 | 清理后基线审计 | QA/TL | SEC/BO | P7-09 | 无旧数据导入或兼容层 | 1 |
 
 ## P8 UAT 与上线
 
@@ -148,9 +145,9 @@
 | P8-02 | 执行领域/集成/E2E 全回归 | QA | TL | P7 | 测试报告 | 2 |
 | P8-03 | 执行性能与安全测试 | DBA/SEC | TL/QA | P7 | p95/安全报告 | 2 |
 | P8-04 | 业务 UAT | BO | PM/QA | P8-02 | 签字 | 2 |
-| P8-05 | 整库备份恢复演练 | DBA | TL/QA | P7-13 | 恢复时长 | 1.5 |
+| P8-05 | 整库备份恢复演练复核 | DBA | TL/QA | P7-08 | 恢复时长 | 1.5 |
 | P8-06 | 发布桌面演练和联系人确认 | PM | TL/DBA/BO | P8-01~05 | runbook 签字 | 1 |
-| P8-07 | 正式维护窗口迁移与发布 | DBA/TL | BO/QA | P8-06 | 发布记录 | 1 |
+| P8-07 | 正式维护窗口 schema 发布 | DBA/TL | BO/QA | P8-06 | 发布记录 | 1 |
 | P8-08 | 上线冒烟与采购回归 | QA | TL/BO | P8-07 | 冒烟报告 | 1 |
 | P8-09 | 7 天值守、完整性巡检和复盘 | TL/DBA | PM/BO | P8-08 | 复盘与遗留项 | 3 |
 
@@ -169,7 +166,7 @@
 幂等与并发：
 自动化测试：
 手工验证：
-迁移/删除影响：
+Schema/共享数据影响：
 文档更新：
 Owner / Reviewer：
 ```
@@ -183,4 +180,3 @@ Owner / Reviewer：
 - [ ] 采购回归通过。
 - [ ] 独立审查完成且问题关闭。
 - [ ] 下一阶段依赖已满足。
-

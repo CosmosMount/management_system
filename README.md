@@ -1,6 +1,6 @@
 # pnx management
 
-Next.js 全栈管理系统，包含 **采购报销** 与 **进度管理** 两大模块，共用飞书 OAuth、角色体系与通知基础设施。
+Next.js 全栈管理系统。采购报销与反馈中心继续使用；项目管理正在重构，旧实现和旧开发数据已清理。
 
 - 技术文档：[`docs/TECH.md`](docs/TECH.md)
 - 消息发送矩阵：[`docs/NOTIFICATIONS.md`](docs/NOTIFICATIONS.md)
@@ -17,7 +17,6 @@ npm install
 docker compose up -d postgres
 
 npm run db:deploy
-npm run db:seed-acceptance-checklists
 npm run dev
 ```
 
@@ -85,7 +84,7 @@ docker compose up -d --build
 
 - **app**：Next.js 应用，默认映射端口 `3000`（可通过 `.env` 设置 `APP_PORT=8080` 改宿主机端口）
 - **postgres**：PostgreSQL 16 数据库
-- **cron**：定时任务（采购日报、进度提醒、周报），与 app 共用 PostgreSQL
+- **cron**：采购日报和通知 outbox 投递等后台任务，与 app 共用 PostgreSQL
 
 首次启动会自动执行 `npm run db:deploy` 应用 PostgreSQL migration。
 
@@ -153,6 +152,8 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 | `FEISHU_APPROVAL_APP_ID` | 可选，审批机器人 App ID；只发送审批、验收、确认等待处理消息 |
 | `FEISHU_APPROVAL_APP_SECRET` | 可选，审批机器人 App Secret；未配置时回退通知机器人 |
 | `FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES` / `FEISHU_DIRECT_MESSAGE_ALLOWED_OPEN_IDS` / `FEISHU_DIRECT_MESSAGE_ALLOWED_UNION_IDS` | 可选，飞书私信收件人临时 allowlist；用于测试或演练防误发，未配置时不限制；同时配置多个身份维度时必须全部匹配。Playwright 启动的应用服务默认只允许 `李棋轩` |
+| `NOTIFICATION_DELIVERY_DISABLED` | 通知总禁发闸；本地、测试和 Docker 默认应为 `true`，生产确认配置与收件人范围后才可显式设为 `false` |
+| `CONFIRM_SEND_FEISHU` | 人工调试脚本真实发送的二次确认；不替代禁发闸或收件人 allowlist |
 | `FEISHU_WEBHOOK_URL` | 采购通知群 Webhook（与 `FEISHU_PROCUREMENT_WEBHOOK_URL` 二选一，后者优先） |
 | `FEISHU_PROCUREMENT_WEBHOOK_URL` | 采购专用群 Webhook |
 | `FEISHU_WEBHOOK_SECRET` | 可选，Webhook 签名校验密钥 |
@@ -162,8 +163,6 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 | `FEISHU_WS_BOT_KIND` | 可选，长连接使用的机器人，`notification` 或 `approval`，默认 `notification` |
 | `ENABLE_FEISHU_WS` | 可选，是否安装通知机器人长连接，默认 `false` |
 | `ENABLE_FEISHU_APPROVAL_WS` | 可选，是否安装审批机器人长连接，默认 `true` |
-| `PROGRESS_DAILY_SUMMARY_CHECK_CRON` | 可选，每日进度摘要 DB 设置检查频率，默认每 5 分钟；每天 1–8 个实际发送时间在管理员面板 `/admin/reminders` 的“每日卡片”中配置，相邻时间至少间隔 5 分钟 |
-| `PROGRESS_DAILY_SUMMARY_CRON` | 兼容旧配置，仅在数据库中尚无每日卡片设置时用简单每日 cron 推导首个发送时间；已有设置以后以管理员面板为准 |
 | `NEXT_PUBLIC_APP_URL` | 后台任务默认系统地址（cron 飞书卡片按钮跳转用） |
 | `APP_ALLOWED_ORIGINS` | 允许登录跳转和飞书按钮生成的完整 origin 列表 |
 | `LAN_HOST` | dev server 局域网访问 IP |
@@ -246,21 +245,8 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 | TECH_GROUP_ADMIN | 指定技术组 | 管理审核阶段，技术组组长通过 |
 | TEACHER | 全局 | 「老师审核」阶段通过 |
 | FINANCE | 指定车组 | 上传报销截图 |
-| PROJECT_MANAGER | 全局 | 项管：进度汇总、项目异常介入、任务/里程碑验收 |
 
 同一人可拥有多个角色（如同时担任「英雄」管理员与「工程」报销员）。
-
-## 任务验收清单
-
-进度管理中的任务可配置“验收清单”。清单允许为空；如果配置了清单，任务进入验收时审批人必须逐项勾选后才能通过。任务产生任意交付记录后，清单会锁定为只读，保证验收口径可追溯。
-
-超级管理员可在 `/admin` 的 **常用验收条例** 卡片中新增或删除模板。模板只用于任务创建/编辑时快捷加入；加入任务后会保存为该任务自己的快照，后续删除模板不会影响已有任务。
-
-首次部署或 schema 同步后可写入默认常用条例：
-
-```bash
-npm run db:seed-acceptance-checklists
-```
 
 ### 导航栏没有「权限管理」？
 
@@ -318,6 +304,8 @@ const seedRoles = [
 - **审批机器人**：只发待审批、待验收、待确认等需要处理的消息。
 - **通知机器人**：发审批结果、普通状态变更、提醒、反馈等其他私信消息。
 - 未配置审批机器人时，审批消息自动回退通知机器人。
+
+采购状态事件和反馈先写入 notification outbox，由各自的 channel adapter 校验 payload、计算并去重收件人、构造消息，再交给统一飞书私信传输层。采购催办等保留的直接发送入口也必须使用同一传输层。传输层统一执行机器人选择、`open_id`/`union_id` 解析、禁发开关、allowlist、CardKit 创建与错误脱敏。群 Webhook 仍是独立出口，不混入私信接口。完整规则见 [`docs/NOTIFICATIONS.md`](docs/NOTIFICATIONS.md)。
 
 | 订单状态 | 私信通知 |
 |----------|----------|
@@ -528,45 +516,11 @@ pm2 start npm --name procurement-cron -- run cron
 
 ---
 
-## 进度管理模块
+## 项目管理重构状态
 
-首页 **「进度管理」** 或导航 `/progress`，与采购报销共用登录与飞书应用。
+旧项目、阶段、任务、审批、周报、风险和提醒实现及其开发数据已直接清理，不提供旧数据迁移或旧接口兼容。
 
-### 功能概览
-
-| 路径 | 功能 |
-|------|------|
-| `/progress` | 进度首页 |
-| `/progress/new` | 新建项目（含验收里程碑） |
-| `/progress/list` | 进行中的项目列表 |
-| `/progress/[id]` | 项目详情、里程碑、挂载任务，以及风险、评论和最近动态侧栏 |
-| `/progress/task/[id]` | 任务详情、交付、周报、验收 |
-| `/progress/dashboard` | 任务看板（待办/进行中/待验收/已完成） |
-| `/progress/archive` | 已归档项目与任务 |
-
-### 项目与任务流程
-
-**项目状态**（须逐步推进，不可跳跃）：
-
-草稿 → 进行中 → 正常 / 异常 → 负责人介入 → 结果理想 / 不理想 → 归档
-
-**任务状态**（须逐步推进）：
-
-待办 → 进行中 → 待验收 → 已完成 → 归档
-
-- 执行人：开始任务、提交交付（飞书文档 + 可选视频）、填写周报
-- 组长 / 项管：验收任务与里程碑；审批前请在飞书中打开文档核对内容
-- 里程碑须按顺序逐一提交与验收，全部通过后项目方可进入「结果理想」并归档
-
-### 定时提醒（`npm run cron`）
-
-| 时间 | 内容 |
-|------|------|
-| 每日 09:00 | 采购日报 + 任务逾期警报 + 当日截止提醒 |
-| 每周一 09:00 | 活跃任务周报填写提醒（私信负责人） |
-
-### 进度相关飞书权限（除通讯录、私信外）
-
-| 权限 | 用途 |
-|------|------|
-| `im:message:send_as_bot` | 任务指派、逾期、周报等私信 |
+- `/progress` 当前只展示“项目管理重构中”的中文占位页。
+- 旧 `/progress/*` 地址统一重定向到 `/progress`。
+- 新项目管理的目标设计位于 [`docs/plan/`](docs/plan/)，其中功能尚未实现，不能作为当前使用说明。
+- 后续项目管理通知必须在业务事务中写入 notification outbox，不允许 Server Action 直接调用飞书传输层。
