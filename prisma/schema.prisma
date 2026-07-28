@@ -558,29 +558,32 @@ model TaskMember {
 }
 
 model TaskPlanVersion {
-  id                 String            @id @default(uuid())
-  taskId             String
-  task               Task              @relation("TaskPlanVersions", fields: [taskId], references: [id], onDelete: Restrict)
-  versionNo          Int
-  status             PlanVersionStatus @default(DRAFT)
-  baseVersionId      String?
-  baseVersion        TaskPlanVersion?  @relation("PlanVersionBase", fields: [baseVersionId], references: [id], onDelete: SetNull)
-  derivedVersions    TaskPlanVersion[] @relation("PlanVersionBase")
-  revisionNodeId     String?           @unique
-  revisionNode       RevisionNode?     @relation("RevisionTargetPlanVersion", fields: [revisionNodeId], references: [id], onDelete: SetNull)
-  reason             String            @default("")
-  createdByAccountId String
-  createdBy          Account           @relation("PlanVersionCreatedBy", fields: [createdByAccountId], references: [id], onDelete: Restrict)
-  activatedAt        DateTime?         @db.Timestamptz(6)
-  snapshotHash       String            @default("")
-  currentForTask     Task?             @relation("CurrentTaskPlanVersion")
-  nodes              PlanVersionNode[]
-  revisionBaseNodes  RevisionNode[]    @relation("RevisionBasePlanVersion")
-  createdAt          DateTime          @default(now()) @db.Timestamptz(6)
-  updatedAt          DateTime          @updatedAt @db.Timestamptz(6)
+  id                  String            @id @default(uuid())
+  taskId              String
+  task                Task              @relation("TaskPlanVersions", fields: [taskId], references: [id], onDelete: Restrict)
+  versionNo           Int
+  status              PlanVersionStatus @default(DRAFT)
+  idempotencyKey      String?
+  creationRequestHash String            @default("")
+  baseVersionId       String?
+  baseVersion         TaskPlanVersion?  @relation("PlanVersionBase", fields: [baseVersionId], references: [id], onDelete: SetNull)
+  derivedVersions     TaskPlanVersion[] @relation("PlanVersionBase")
+  revisionNodeId      String?           @unique
+  revisionNode        RevisionNode?     @relation("RevisionTargetPlanVersion", fields: [revisionNodeId], references: [id], onDelete: SetNull)
+  reason              String            @default("")
+  createdByAccountId  String
+  createdBy           Account           @relation("PlanVersionCreatedBy", fields: [createdByAccountId], references: [id], onDelete: Restrict)
+  activatedAt         DateTime?         @db.Timestamptz(6)
+  snapshotHash        String            @default("")
+  currentForTask      Task?             @relation("CurrentTaskPlanVersion")
+  nodes               PlanVersionNode[]
+  revisionBaseNodes   RevisionNode[]    @relation("RevisionBasePlanVersion")
+  createdAt           DateTime          @default(now()) @db.Timestamptz(6)
+  updatedAt           DateTime          @updatedAt @db.Timestamptz(6)
 
   @@unique([taskId, versionNo])
   @@index([taskId, status])
+  @@index([createdByAccountId, idempotencyKey])
   @@index([baseVersionId])
   @@index([createdByAccountId])
 }
@@ -647,6 +650,7 @@ model RevisionNode {
   revisedFromNode     TaskNode?        @relation("RevisionRevisedFromNode", fields: [revisedFromNodeId], references: [id], onDelete: SetNull)
   basePlanVersionId   String
   basePlanVersion     TaskPlanVersion  @relation("RevisionBasePlanVersion", fields: [basePlanVersionId], references: [id], onDelete: Restrict)
+  baseTaskLockVersion Int              @default(0)
   targetPlanVersion   TaskPlanVersion? @relation("RevisionTargetPlanVersion")
   status              RevisionStatus   @default(DRAFT)
   submittedAt         DateTime?        @db.Timestamptz(6)

@@ -121,10 +121,10 @@ npm run build
 npm run db:deploy
 ```
 
-项目管理 P1 schema、身份和授权底座变更应额外执行：
+项目管理 P1-P3 schema、身份、授权和生命周期变更应额外执行：
 
 ```bash
-npm run test:e2e -- tests/project-management-p1.spec.ts tests/feishu-boundaries.spec.ts
+npm run test:e2e -- tests/project-management-p1.spec.ts tests/project-management-lifecycle.spec.ts tests/feishu-boundaries.spec.ts
 npm run pm:identity-backfill
 ```
 
@@ -252,13 +252,14 @@ npm run pm:identity-backfill
 8. 验证 CardKit fallback 后跟踪表保存实际机器人和最终 `cardId`，远端 CardKit 错误中的敏感字符串不会进入异常或 outbox。
 9. 通过静态搜索确认 IM 消息 API 只在统一传输层、CardKit API 只在 CardKit 模块、Webhook URL 只在 Webhook 模块出现。
 
-## 项目管理 P1 底座测试
+## 项目管理 P1-P3 服务端测试
 
 1. `tests/project-management-p1.spec.ts` 覆盖新增 schema 约束：单 Task 单 Current Plan、有效 Tag 名称唯一、Segment 时间和 allocation 检查、Review 幂等键、Conflict fingerprint。
 2. 身份测试覆盖 `User -> Account/Identity/Person` 首次解析、重复解析幂等、openId fallback 升级为 unionId、冲突硬失败和禁用 Account 拒绝项目管理 actor。
 3. 授权测试覆盖 Task member、范围内/外 Team Administrator、非成员、空 scope Team Administrator 拒绝、Tag 创建人无 Task 权限，以及 `taskReadableWhere` 防枚举。
 4. 通知测试覆盖站内通知事务 helper、审计脱敏、审计 append-only、`channel=project-management` outbox 入队、审批用途 allowlist、adapter 收件人去重和“P1 不真实投递飞书”的边界。
-5. `tests/feishu-boundaries.spec.ts` 必须继续扫描 `app/progress`、`app/actions/project-management`、`components/project-management`、`lib/project-management` 和项目管理 notification adapter，防止直接导入飞书传输层。
+5. `tests/project-management-lifecycle.spec.ts` 覆盖 P2/P3 Task 草稿创建、幂等键冲突、Current Plan 持久化、激活、并发/过期锁拒绝、Revision 提交/驳回/取消/审批/直接生效、Planned Segment 待确认标记、Milestone Review TEXT/LINK 证据、FILE 证据拒绝、审批推进、Termination 四种 outcome、查询防枚举、审计和 `channel=project-management` outbox。
+6. `tests/feishu-boundaries.spec.ts` 必须继续扫描 `app/progress`、`app/actions/project-management`、`components/project-management`、`lib/project-management` 和项目管理 notification adapter，防止直接导入飞书传输层。
 
 ## 部署冒烟测试
 

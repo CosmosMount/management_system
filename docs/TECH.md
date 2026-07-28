@@ -24,7 +24,7 @@
 - 无独立后端服务，业务逻辑集中在 `app/actions/` 与 `lib/`
 - 文件上传写入私有目录 `storage/uploads/`，通过 `/uploads/...` 鉴权 route 返回
 - 飞书集成拆分为 OAuth、通讯录、Webhook、统一私信传输层和 notification outbox。`lib/feishu-message.ts` 的 `sendFeishuDirectMessage()` 是 IM 私信唯一出口，支持 `text`、交互卡片和 CardKit；Webhook 保持独立。
-- `lib/notification-channels/{procurement,feedback,project-management}.ts` 分别实现业务 channel adapter，负责校验持久化 payload、计算并去重收件人、构造完整消息和明确消息用途；传输层不查询业务角色，也不理解采购、反馈或项目管理状态。项目管理 adapter 当前为 P1 骨架，尚不执行真实飞书投递。
+- `lib/notification-channels/{procurement,feedback,project-management}.ts` 分别实现业务 channel adapter，负责校验持久化 payload、计算并去重收件人、构造完整消息和明确消息用途；传输层不查询业务角色，也不理解采购、反馈或项目管理状态。项目管理 adapter 当前校验 P1-P3 payload 与收件人计划，尚不执行真实飞书投递。
 - 通知 outbox 分两层：`NotificationOutbox` 表示业务事件，`NotificationOutboxRecipient` 表示单个收件人的投递状态。核心 drain 按 `channel` 查找 adapter，只调度和更新状态；重试失败收件人时不能把已成功收件人再次发送。临时解析/网络错误退避重试，损坏 payload、未知 channel、非法 `type/botKind` 等确定性配置错误直接冻结，修正后才可人工重置。
 
 ## 结构化日志
@@ -55,7 +55,7 @@ app/
   admin/            # 角色管理
 components/         # UI 组件
 lib/                # 业务逻辑、权限、飞书、校验
-  project-management/ # v2.1 P1 身份、授权、通知和审计底座
+  project-management/ # v2.1 P1-P3 身份、授权、生命周期、通知和审计
 prisma/
   schema.prisma     # 数据模型
   seed.ts           # 初始角色 seed
@@ -81,7 +81,7 @@ Auth.js 不能在中件件中 import 含 Prisma 的模块，因此拆分：
 |------|------|------|
 | 采购 | `lib/permissions.ts` | 服务端角色查询 |
 | 采购（客户端） | `lib/permissions-client.ts` | 纯函数，无数据库依赖 |
-| 项目管理 | `lib/project-management/authorization` | P1 授权骨架、稳定 action 字符串和 readableWhere 查询过滤 |
+| 项目管理 | `lib/project-management/authorization` | P1-P3 授权、稳定 action 字符串、状态机操作鉴权和 readableWhere 查询过滤 |
 
 角色类型见 `UserRoleType` enum：`SUPER_ADMIN`、`TEAM_ADMIN`、`TECH_GROUP_ADMIN`、`TEACHER`、`FINANCE`。
 
@@ -121,7 +121,18 @@ DRAFT → MANAGEMENT_REVIEW → TEACHER_REVIEW → PENDING_APPLICANT_DOCS
 
 旧项目管理专用模型和开发数据已通过 migration 删除，包括项目、阶段、旧任务及其审批、交付、周报、风险、评论、关注和提醒关系。共享的 `User`、采购/反馈、`FileAsset`、`NotificationOutbox` 与飞书卡片跟踪模型继续保留。
 
-P1 已新增 v2.1 底座模型：`Account`、`AccountIdentity`、`Person`、`Tag`、`Task`、`TaskMember`、`TaskPlanVersion`、`TaskNode`、`PlanVersionNode`、Milestone/Revision/Termination 子类型、`MilestoneReview`、`ReviewEvidence`、`WorkSegment`、`WorkSegmentSource`、`WorkSegmentChange`、`ResourceConflict`、`SystemRoleAssignment`、`NotificationPreference`、`InAppNotification` 和 `DomainAuditEvent`。这些表从空项目管理数据集开始，不包含 Project、legacy map 或旧来源字段。`/progress` 仍是占位页，完整 Task 创建、Revision、Review、Segment 和通知中心流程尚未上线。
+P1 已新增 v2.1 底座模型：`Account`、`AccountIdentity`、`Person`、`Tag`、`Task`、`TaskMember`、`TaskPlanVersion`、`TaskNode`、`PlanVersionNode`、Milestone/Revision/Termination 子类型、`MilestoneReview`、`ReviewEvidence`、`WorkSegment`、`WorkSegmentSource`、`WorkSegmentChange`、`ResourceConflict`、`SystemRoleAssignment`、`NotificationPreference`、`InAppNotification` 和 `DomainAuditEvent`。这些表从空项目管理数据集开始，不包含 Project、legacy map 或旧来源字段。
+
+P2/P3 已补齐 Task 计划生命周期的服务端闭环，入口位于 `lib/project-management/application/lifecycle-service.ts`、`app/actions/project-management/{tasks,plans,revisions,milestones,terminations}.ts` 和 `lib/project-management/queries/task-queries.ts`：
+
+- Task 草稿创建在事务中写入 `Task(status=DRAFT)`、初始 `TaskPlanVersion(status=CURRENT, activatedAt=null)`、有序 Milestone、末尾 Termination、成员、Tag、审计、站内通知和 `channel=project-management` outbox；`TaskPlanVersion.idempotencyKey` 与 `creationRequestHash` 支持同账号请求幂等和 payload 冲突检测。
+- `activateTask` 锁定 Task 行，校验 Draft 状态、权限、`expectedLockVersion`、OWNER、Milestone、末尾 Termination 和连续序号后，把首个 Milestone 置为 `ACTIVE` 并递增 `lockVersion`。
+- Revision 只允许基于当前 Current Plan 和匹配的 `RevisionNode.baseTaskLockVersion` 创建；目标计划保留已完成前缀、插入 Revision 节点、替换后续 Milestone 与 Termination。提交后默认待审批，`DIRECT_BY_OWNER` 且具备 `revision.apply` 权限时可直接生效。通过审批会原子历史化旧 Current、启用新 Current、标记被替换节点为 `REVISED`，并把受影响的 Planned Work Segment 标记 `associationNeedsReview=true`。
+- Milestone Review 允许 OWNER/LEAD/MEMBER 和 scoped Team Admin 提交 TEXT/LINK 证据；FILE 证据当前返回中文校验错误。审批仍限 REVIEWER 或 scoped Admin，默认禁止自审。通过后推进到下一 Milestone 或激活 Termination；驳回和要求修订不推进。
+- Termination 确认写入 outcome、reason、summary 和 Task 终态。`SUCCESS` 要求所有前置 Milestone 已完成；`FAILED/CANCELLED/TIMEOUT` 可提前结束但必须填写原因，并取消未完成节点。重复相同确认幂等，不同 outcome 返回状态冲突。
+- 查询 facade `getTaskWorkspace`、`getPlanVersion`、`listTaskPlanVersions` 和 `comparePlanVersions` 都通过 `taskReadableWhere(actor)` 过滤，防止枚举不可读 Task 或 Plan。
+
+`/progress` 仍是占位页，P4 UI、Segment/Conflict 工作流、通知中心页面和真实项目管理飞书卡片投递尚未上线。
 
 `DomainAuditEvent` 由 append-only trigger 保护，应用代码只能追加审计事件，不能更新或删除既有审计行。
 
@@ -153,7 +164,7 @@ P1 已新增 v2.1 底座模型：`Account`、`AccountIdentity`、`Person`、`Tag
 - **Webhook 签名**：`HmacSHA256("", timestamp + "\n" + secret)` 后 Base64
 - **统一私信传输层**：`lib/feishu-message.ts` 导出 `FeishuMessage`、`FeishuMessagePurpose`、`FeishuSendResult` 和 `sendFeishuDirectMessage()`。调用方传入系统用户 `openId`、明确的 `botKind`、用途和 text/交互卡片/CardKit 消息；传输层统一完成收件人身份解析、机器人凭据、token、HTTP 请求、CardKit 创建、禁发闸、allowlist、结构化日志和错误脱敏。
 - **机器人边界**：普通通知只能使用通知机器人，审批请求才可声明审批用途。审批机器人未独立配置时使用通知机器人凭据；独立审批应用通过 `User.unionId` 使用 `receive_id_type=union_id`，缺少 `union_id` 时失败并由 outbox 重试。保留既有的“用户对审批应用不可用时回退通知机器人”行为，发送结果会标明实际机器人和是否 fallback。
-- **Outbox adapter**：采购、反馈和项目管理业务只能通过 `lib/notification-channels/` adapter 进入统一私信传输边界。adapter 校验 payload 与持久化元数据、计算收件人和构造业务内容；outbox 核心及传输层不包含业务角色查询或状态分支。adapter 的收件人计划可区分真实私信与 Webhook 等独立传输，采购审批必须至少有一个真实私信审批人。项目管理 P1 只提供 `channel=project-management` 的 payload/收件人校验骨架，真实飞书消息构造和投递在后续阶段启用。
+- **Outbox adapter**：采购、反馈和项目管理业务只能通过 `lib/notification-channels/` adapter 进入统一私信传输边界。adapter 校验 payload 与持久化元数据、计算收件人和构造业务内容；outbox 核心及传输层不包含业务角色查询或状态分支。adapter 的收件人计划可区分真实私信与 Webhook 等独立传输，采购审批必须至少有一个真实私信审批人。项目管理 P2/P3 生命周期事件只写 `channel=project-management` outbox；adapter 校验 payload、审批用途和收件人计划，真实飞书消息构造和投递在后续阶段启用。
 - **私信防误发**：`FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES / OPEN_IDS / UNION_IDS` 为空时不限制；配置后只允许匹配收件人，其他私信会被记录并拦截。Playwright 启动的应用服务默认只允许 `李棋轩`。Docker Compose 默认 `NOTIFICATION_DELIVERY_DISABLED=true` 且 allowlist 为 `李棋轩`；生产真实投递需要显式设置 `NOTIFICATION_DELIVERY_DISABLED=false`，并按需配置或清空 allowlist。
 - **CardKit 回调**：采购审批卡若由审批机器人发送，需要运行审批机器人长连接；生产 `./service/install.sh` 默认安装并启动 `pnx-management-feishu-approval-ws.service`。通知机器人长连接仍可通过 `ENABLE_FEISHU_WS=true` 单独启用。审批机器人回调中的操作人也会通过 `union_id` 映射回系统 `openId` 后再校验权限。
 - **群 Webhook**：采购群通知和日报仍使用 Webhook，独立于统一私信接口

@@ -234,11 +234,17 @@ function authorizeTask(
     return deny("task_not_readable");
   }
 
-  if (
-    action === "task.update_metadata" ||
-    action === "revision.create" ||
-    action === "milestone.submit_review"
-  ) {
+  if (action === "milestone.submit_review") {
+    if (hasTaskRole(actor, resource, ["OWNER", "LEAD", "MEMBER"])) {
+      return allow("milestone_submitter");
+    }
+    if (hasScopedRole(actor, ["TEAM_ADMINISTRATOR"], resource)) {
+      return allow("team_administrator_scope");
+    }
+    return deny("milestone_submit_denied");
+  }
+
+  if (action === "task.update_metadata" || action === "revision.create") {
     if (hasTaskRole(actor, resource, ["OWNER", "LEAD"])) {
       return allow("task_editor");
     }

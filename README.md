@@ -521,10 +521,10 @@ pm2 start npm --name procurement-cron -- run cron
 
 ## 项目管理重构状态
 
-旧项目、阶段、任务、审批、周报、风险和提醒实现及其开发数据已直接清理，不提供旧数据迁移或旧接口兼容。当前已完成 v2.1 P1 底座：Account/Person、Task/Tag、Plan/Node、Segment、站内通知、审计和权限骨架已进入 schema；完整业务 UI 和工作流仍未启用。
+旧项目、阶段、任务、审批、周报、风险和提醒实现及其开发数据已直接清理，不提供旧数据迁移或旧接口兼容。当前已完成 v2.1 P1 底座和 P2/P3 服务端生命周期闭环：Account/Person、Task/Tag、Plan/Node、Segment、站内通知、审计和权限骨架已进入 schema；Task 草稿创建、激活、Current Plan 查询、Revision、Milestone Review 和 Termination 已有服务端状态机与集成测试。完整业务 UI、Segment/Conflict 工作流和真实项目管理飞书投递仍未启用。
 
 - `/progress` 当前只展示“项目管理重构中”的中文占位页。
 - 旧 `/progress/*` 地址统一重定向到 `/progress`。
 - 飞书登录和通讯录同步会保留采购 `User.openId/unionId`，同时初始化项目管理 Account/Person。已有用户先运行 `npm run pm:identity-backfill` 对账；确认后再运行 `APPLY_PM_IDENTITY_BACKFILL=true npm run pm:identity-backfill`。
-- 新项目管理的目标设计位于 [`docs/plan/`](docs/plan/)，未上线的 Task/Revision/Review/Segment 流程不能作为当前使用说明。
-- 项目管理飞书通知只允许写入 `channel=project-management` 的 notification outbox；P1 adapter 只做 payload/收件人校验，真实投递留到后续阶段。
+- 新项目管理的目标设计位于 [`docs/plan/`](docs/plan/)；当前可依赖的是服务端 Task/Plan/Revision/Review/Termination 状态机，浏览器工作台仍未开放。
+- 项目管理飞书通知只允许写入 `channel=project-management` 的 notification outbox；当前 adapter 只做 payload/收件人校验，真实投递留到后续阶段。

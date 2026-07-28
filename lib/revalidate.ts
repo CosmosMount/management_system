@@ -17,3 +17,13 @@ export function revalidateAdmin() {
   revalidatePath(routes.admin.system);
   revalidatePath(routes.admin.roles);
 }
+
+export function revalidateProjectManagement(taskId?: string) {
+  revalidatePath(routes.progress.root);
+  revalidatePath("/progress/tasks");
+  revalidatePath("/progress/approvals");
+  revalidatePath("/progress/notifications");
+  if (taskId) {
+    revalidatePath(`/progress/tasks/${taskId}`);
+  }
+}
