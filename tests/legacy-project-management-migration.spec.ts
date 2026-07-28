@@ -8,13 +8,22 @@ import { prisma } from "../lib/prisma";
 const MIGRATIONS_DIR = path.join(process.cwd(), "prisma/migrations");
 const SHRINK_MIGRATION_NAME =
   "20260728210000_remove_legacy_project_management";
+const LEGACY_TASK_SIGNATURE_COLUMNS = [
+  "projectId",
+  "stageId",
+  "assigneeOpenId",
+  "assigneeName",
+  "dueAt",
+  "isOverdue",
+  "needsOfflineConfirmation",
+  "needsWeeklyReport",
+] as const;
 
 test("收缩 migration 删除旧项目管理对象并保留共享数据模型", async () => {
   const oldTables = [
     "Project",
     "ProjectCreationRequest",
     "ProjectStage",
-    "Task",
     "TaskSubmission",
     "WeeklyReport",
     "ApprovalRecord",
@@ -40,6 +49,22 @@ test("收缩 migration 删除旧项目管理对象并保留共享数据模型", 
   `;
   const tableNames = tables.map((row) => row.table_name).sort();
   expect(tableNames).toEqual([...retainedTables].sort());
+
+  const legacyTaskSignatureTables = await prisma.$queryRaw<
+    Array<{ count: bigint }>
+  >`
+    SELECT COUNT(*) AS count
+    FROM (
+      SELECT table_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'Task'
+        AND column_name IN (${Prisma.join(LEGACY_TASK_SIGNATURE_COLUMNS)})
+      GROUP BY table_name
+      HAVING COUNT(DISTINCT column_name) = ${LEGACY_TASK_SIGNATURE_COLUMNS.length}
+    ) matched_legacy_task_tables
+  `;
+  expect(Number(legacyTaskSignatureTables[0]?.count ?? 0)).toBe(0);
 
   const abandonedPmTables = await prisma.$queryRaw<Array<{ count: bigint }>>`
     SELECT COUNT(*) AS count

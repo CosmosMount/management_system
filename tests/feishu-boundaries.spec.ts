@@ -1,6 +1,22 @@
 import { expect, test } from "@playwright/test";
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
+
+const PROJECT_MANAGEMENT_FEISHU_TRANSPORT_MODULES = [
+  "lib/feishu",
+  "lib/feishu-message",
+  "lib/feishu-webhook",
+  "lib/feishu-cardkit",
+  "lib/feishu-procurement-card-sync",
+] as const;
+
+const PROJECT_MANAGEMENT_FEISHU_TRANSPORT_SYMBOLS = [
+  "sendFeishuDirectMessage",
+  "postToFeishuWebhook",
+  "sendTrackedProcurementCardKitDm",
+  "createCardKitInstance",
+  "updateCardKitInstanceResilient",
+] as const;
 
 test("飞书 API 调用保持在各自传输边界内", async () => {
   const sourceFiles = [
@@ -27,21 +43,43 @@ test("飞书 API 调用保持在各自传输边界内", async () => {
   ]);
 });
 
-test("项目管理入口不能直接依赖飞书传输层", async () => {
-  const appFiles = await collectSourceFiles(path.join(process.cwd(), "app"));
+test("项目管理入口和领域服务不能直接依赖飞书传输层", async () => {
+  const projectManagementFiles = await collectExistingSourceFiles([
+    path.join(process.cwd(), "app/progress"),
+    path.join(process.cwd(), "app/actions/project-management"),
+    path.join(process.cwd(), "components/project-management"),
+    path.join(process.cwd(), "lib/project-management"),
+    path.join(process.cwd(), "lib/notification-channels/project-management.ts"),
+    path.join(process.cwd(), "lib/notification-channels/project-management"),
+  ]);
   const imports = await Promise.all(
-    appFiles.map(async (filePath) => ({
+    projectManagementFiles.map(async (filePath) => ({
       filePath,
       content: await readFile(filePath, "utf8"),
     })),
   );
 
   expect(
-    imports
-      .filter(({ content }) => content.includes("@/lib/feishu-message"))
-      .map(({ filePath }) => relativePath(filePath)),
+    projectManagementFeishuTransportViolations(imports),
   ).toEqual([]);
 });
+
+async function collectExistingSourceFiles(directories: string[]): Promise<string[]> {
+  const files = await Promise.all(
+    directories.map(async (directory) => {
+      try {
+        const entry = await stat(directory);
+        if (entry.isFile() && /\.(?:ts|tsx)$/.test(directory)) return [directory];
+        if (!entry.isDirectory()) return [];
+        return await collectSourceFiles(directory);
+      } catch (error) {
+        if (isNodeError(error) && error.code === "ENOENT") return [];
+        throw error;
+      }
+    }),
+  );
+  return files.flat();
+}
 
 async function collectSourceFiles(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -56,6 +94,10 @@ async function collectSourceFiles(directory: string): Promise<string[]> {
   return files.flat();
 }
 
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error;
+}
+
 function filesContaining(
   sources: Array<{ filePath: string; content: string }>,
   needle: string,
@@ -64,6 +106,77 @@ function filesContaining(
     .filter(({ content }) => content.includes(needle))
     .map(({ filePath }) => relativePath(filePath))
     .sort();
+}
+
+function projectManagementFeishuTransportViolations(
+  sources: Array<{ filePath: string; content: string }>,
+) {
+  return sources
+    .flatMap(({ filePath, content }) => {
+      const importViolations = extractImportSpecifiers(content)
+        .map((specifier) => ({
+          kind: "import",
+          filePath: relativePath(filePath),
+          value: specifier,
+          resolved: normalizeProjectModulePath(filePath, specifier),
+        }))
+        .filter(
+          ({ resolved }) =>
+            resolved !== null &&
+            PROJECT_MANAGEMENT_FEISHU_TRANSPORT_MODULES.includes(
+              resolved as (typeof PROJECT_MANAGEMENT_FEISHU_TRANSPORT_MODULES)[number],
+            ),
+        );
+
+      const symbolViolations = PROJECT_MANAGEMENT_FEISHU_TRANSPORT_SYMBOLS
+        .filter((symbol) => new RegExp(`\\b${symbol}\\b`).test(content))
+        .map((symbol) => ({
+          kind: "symbol",
+          filePath: relativePath(filePath),
+          value: symbol,
+          resolved: null,
+        }));
+
+      return [...importViolations, ...symbolViolations];
+    })
+    .sort((left, right) =>
+      `${left.filePath}:${left.kind}:${left.value}`.localeCompare(
+        `${right.filePath}:${right.kind}:${right.value}`,
+      ),
+    );
+}
+
+function extractImportSpecifiers(content: string): string[] {
+  const specifiers: string[] = [];
+  const importPattern =
+    /\b(?:import|export)\s+(?:type\s+)?(?:[^"'`]*?\s+from\s+)?["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)/g;
+  let match: RegExpExecArray | null;
+  while ((match = importPattern.exec(content)) !== null) {
+    const specifier = match[1] ?? match[2];
+    if (specifier) specifiers.push(specifier);
+  }
+  return specifiers;
+}
+
+function normalizeProjectModulePath(
+  filePath: string,
+  specifier: string,
+): string | null {
+  if (specifier.startsWith("@/")) {
+    return stripModuleExtension(specifier.slice(2));
+  }
+  if (specifier.startsWith(".")) {
+    return stripModuleExtension(
+      relativePath(path.resolve(path.dirname(filePath), specifier)),
+    );
+  }
+  return null;
+}
+
+function stripModuleExtension(modulePath: string): string {
+  return modulePath
+    .replace(/\.(?:ts|tsx|js|jsx|mjs|cjs)$/, "")
+    .replace(/\/index$/, "");
 }
 
 function relativePath(filePath: string): string {
