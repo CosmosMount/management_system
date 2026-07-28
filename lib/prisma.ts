@@ -2,7 +2,7 @@ import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
 
-const PRISMA_SCHEMA_REVISION = "legacy-project-management-removed-v1";
+const PRISMA_SCHEMA_REVISION = "project-management-p1-schema-v1";
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
@@ -27,7 +27,16 @@ function isPrismaClientStale(client: PrismaClient): boolean {
     typeof client.feedbackAttachment?.findMany !== "function" ||
     typeof client.processingVendor?.findMany !== "function" ||
     typeof client.procurementBudgetPool?.findMany !== "function" ||
-    typeof client.procurementFeishuCard?.findMany !== "function"
+    typeof client.procurementFeishuCard?.findMany !== "function" ||
+    typeof client.account?.findMany !== "function" ||
+    typeof client.accountIdentity?.findMany !== "function" ||
+    typeof client.person?.findMany !== "function" ||
+    typeof client.task?.findMany !== "function" ||
+    typeof client.taskPlanVersion?.findMany !== "function" ||
+    typeof client.taskNode?.findMany !== "function" ||
+    typeof client.workSegment?.findMany !== "function" ||
+    typeof client.inAppNotification?.findMany !== "function" ||
+    typeof client.domainAuditEvent?.findMany !== "function"
   );
 }
 

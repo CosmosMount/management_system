@@ -15,6 +15,7 @@
     "feishu:ws": "tsx scripts/feishu-ws.ts",
     "feishu:card-preview": "tsx scripts/test-feishu-approval-card.ts",
     "pm:p0-baseline": "tsx scripts/project-management-p0-baseline.ts",
+    "pm:identity-backfill": "tsx scripts/project-management-identity-backfill.ts",
     "postinstall": "prisma generate",
     "db:deploy": "tsx scripts/deploy-db.ts",
     "db:seed": "tsx prisma/seed.ts",

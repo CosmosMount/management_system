@@ -1,4 +1,5 @@
 import { fetchAllFeishuContactUsers } from "@/lib/feishu-contact";
+import { resolveFeishuIdentityForUser } from "@/lib/project-management/identity";
 import { prisma } from "@/lib/prisma";
 
 export type SyncFeishuUsersResult = {
@@ -34,6 +35,12 @@ export async function syncFeishuContactUsers(): Promise<SyncFeishuUsersResult> {
         name: contact.name,
         avatar: contact.avatar,
       },
+    });
+    await resolveFeishuIdentityForUser({
+      openId: contact.openId,
+      unionId: contact.unionId,
+      name: contact.name,
+      avatar: contact.avatar,
     });
 
     if (existing) updated++;

@@ -46,6 +46,254 @@ enum NotificationOutboxStatus {
   FAILED
 }
 
+enum AccountStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum IdentityProvider {
+  FEISHU
+}
+
+enum PersonStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum ProjectManagementSystemRole {
+  SYSTEM_ADMINISTRATOR
+  TEAM_ADMINISTRATOR
+  RESOURCE_MANAGER
+  AUDITOR
+}
+
+enum TaskStatus {
+  DRAFT
+  ACTIVE
+  COMPLETED
+  FAILED
+  CANCELLED
+  TIMEOUT
+  ARCHIVED
+}
+
+enum TaskPriority {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum TaskMemberRole {
+  OWNER
+  LEAD
+  MEMBER
+  REVIEWER
+  VIEWER
+}
+
+enum RevisionApprovalMode {
+  DIRECT_BY_OWNER
+  REVIEW_REQUIRED
+}
+
+enum PlanVersionStatus {
+  DRAFT
+  CURRENT
+  HISTORICAL
+  ABANDONED
+}
+
+enum TaskNodeType {
+  MILESTONE
+  REVISION
+  TERMINATION
+}
+
+enum TaskNodeStatus {
+  PENDING
+  ACTIVE
+  COMPLETED
+  REVISED
+  CANCELLED
+}
+
+enum RevisionStatus {
+  DRAFT
+  PENDING_APPROVAL
+  EFFECTIVE
+  REJECTED
+  CANCELLED
+}
+
+enum MilestoneReviewResult {
+  PENDING
+  APPROVED
+  REJECTED
+  REVISION_REQUIRED
+}
+
+enum ReviewEvidenceKind {
+  FILE
+  LINK
+  TEXT
+}
+
+enum TerminationOutcome {
+  SUCCESS
+  FAILED
+  CANCELLED
+  TIMEOUT
+}
+
+enum WorkSegmentType {
+  PLANNED
+  ACTUAL
+}
+
+enum WorkSegmentStatus {
+  PLANNED
+  IN_PROGRESS
+  PENDING_CONFIRMATION
+  CONFIRMED
+  CANCELLED
+}
+
+enum WorkSegmentRole {
+  OWNER
+  LEAD
+  DEVELOPER
+  DESIGNER
+  REVIEWER
+  SUPPORT
+  OBSERVER
+  CUSTOM
+}
+
+enum WorkSegmentChangeAction {
+  CREATE
+  UPDATE
+  SPLIT
+  MERGE
+  CONFIRM
+  CANCEL
+  DELETE
+  RELINK
+}
+
+enum ResourceConflictKind {
+  ALLOCATION_OVER_LIMIT
+  MISSING_ALLOCATION
+  HIGH_PRIORITY_OVERLAP
+  LEAD_ROLE_OVERLAP
+  UNAVAILABLE_TIME
+  REVISION_OVERLAP
+  ACTUAL_OVERLOAD
+}
+
+enum ResourceConflictSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum ResourceConflictStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+  IGNORED
+}
+
+enum ProjectManagementNotificationCategory {
+  TASK
+  MILESTONE
+  REVIEW
+  REVISION
+  WORK_SEGMENT
+  RESOURCE_CONFLICT
+  ACCOUNT_SECURITY
+}
+
+enum ProjectManagementNotificationChannel {
+  IN_APP
+  FEISHU
+}
+
+enum AuditSource {
+  WEB
+  CRON
+  MIGRATION
+  SYSTEM
+}
+
+model Account {
+  id                        String                   @id @default(uuid())
+  status                    AccountStatus            @default(ACTIVE)
+  lastLoginAt               DateTime?                @db.Timestamptz(6)
+  identities                AccountIdentity[]
+  person                    Person?
+  createdTags               Tag[]                    @relation("TagCreatedBy")
+  createdTasks              Task[]                   @relation("TaskCreatedBy")
+  createdTaskMembers        TaskMember[]             @relation("TaskMemberCreatedBy")
+  createdPlanVersions       TaskPlanVersion[]        @relation("PlanVersionCreatedBy")
+  createdTaskNodes          TaskNode[]               @relation("TaskNodeCreatedBy")
+  reviewedRevisions         RevisionNode[]           @relation("RevisionReviewedBy")
+  submittedMilestoneReviews MilestoneReview[]        @relation("MilestoneReviewSubmittedBy")
+  reviewedMilestones        MilestoneReview[]        @relation("MilestoneReviewReviewer")
+  revokedMilestoneReviews   MilestoneReview[]        @relation("MilestoneReviewRevokedBy")
+  confirmedTerminations     TerminationNode[]        @relation("TerminationConfirmedBy")
+  createdWorkSegments       WorkSegment[]            @relation("WorkSegmentCreatedBy")
+  updatedWorkSegments       WorkSegment[]            @relation("WorkSegmentUpdatedBy")
+  createdWorkSegmentSources WorkSegmentSource[]      @relation("WorkSegmentSourceCreatedBy")
+  workSegmentChanges        WorkSegmentChange[]      @relation("WorkSegmentChangeActor")
+  resolvedConflicts         ResourceConflict[]       @relation("ResourceConflictResolvedBy")
+  systemRoles               SystemRoleAssignment[]   @relation("SystemRoleAccount")
+  grantedSystemRoles        SystemRoleAssignment[]   @relation("SystemRoleGrantedBy")
+  notificationPreferences   NotificationPreference[]
+  inAppNotifications        InAppNotification[]
+  auditEvents               DomainAuditEvent[]       @relation("AuditActorAccount")
+  createdAt                 DateTime                 @default(now()) @db.Timestamptz(6)
+  updatedAt                 DateTime                 @updatedAt @db.Timestamptz(6)
+}
+
+model AccountIdentity {
+  id              String           @id @default(uuid())
+  accountId       String
+  account         Account          @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  provider        IdentityProvider
+  providerSubject String
+  tenantId        String           @default("default")
+  openId          String?
+  unionId         String?
+  metadata        Json             @default("{}")
+  createdAt       DateTime         @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime         @updatedAt @db.Timestamptz(6)
+
+  @@unique([provider, tenantId, providerSubject])
+  @@unique([provider, tenantId, openId])
+  @@unique([provider, tenantId, unionId])
+  @@index([accountId])
+}
+
+model Person {
+  id                String             @id @default(uuid())
+  accountId         String?            @unique
+  account           Account?           @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  displayName       String
+  avatar            String?
+  status            PersonStatus       @default(ACTIVE)
+  taskMembers       TaskMember[]
+  workSegments      WorkSegment[]
+  resourceConflicts ResourceConflict[]
+  auditEvents       DomainAuditEvent[] @relation("AuditActorPerson")
+  createdAt         DateTime           @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime           @updatedAt @db.Timestamptz(6)
+
+  @@index([displayName])
+  @@index([status])
+}
+
 model User {
   id            String          @id @default(uuid())
   openId        String          @unique
@@ -85,13 +333,17 @@ model UserRole {
 
 model ProcurementBudgetPool {
   id                 String   @id @default(uuid())
-  /** 项目名（导入表「项目」列） */
+  /**
+   * 项目名（导入表「项目」列）
+   */
   description        String   @default("")
   team               String
   techGroup          String
   period             String
   budgetAmount       Float
-  /** 看板/管理页展示顺序，与 Excel 导入行序一致 */
+  /**
+   * 看板/管理页展示顺序，与 Excel 导入行序一致
+   */
   sortOrder          Int      @default(0)
   lastAlertThreshold Int      @default(0)
   createdAt          DateTime @default(now())
@@ -198,8 +450,8 @@ model FeedbackAttachment {
 }
 
 model FileAsset {
-  id                   String        @id @default(uuid())
-  publicPath           String        @unique
+  id                   String           @id @default(uuid())
+  publicPath           String           @unique
   storagePath          String
   kind                 FileAssetKind
   mimeType             String
@@ -208,12 +460,477 @@ model FileAsset {
   feedbackId           String?
   signatureOwnerOpenId String?
   ownerOpenId          String?
-  createdAt            DateTime      @default(now())
+  createdAt            DateTime         @default(now())
+  reviewEvidences      ReviewEvidence[]
 
   @@index([orderId])
   @@index([feedbackId])
   @@index([signatureOwnerOpenId])
   @@index([ownerOpenId])
+}
+
+model Tag {
+  id                 String       @id @default(uuid())
+  name               String
+  color              String       @default("")
+  description        String       @default("")
+  createdByAccountId String
+  createdBy          Account      @relation("TagCreatedBy", fields: [createdByAccountId], references: [id], onDelete: Restrict)
+  archivedAt         DateTime?    @db.Timestamptz(6)
+  createdAt          DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime     @updatedAt @db.Timestamptz(6)
+  taskTags           TaskTag[]
+  segmentTags        SegmentTag[]
+
+  @@index([name])
+  @@index([archivedAt])
+  @@index([createdByAccountId])
+}
+
+model Task {
+  id                    String               @id @default(uuid())
+  title                 String
+  description           String               @default("")
+  team                  String               @default("")
+  techGroup             String               @default("")
+  status                TaskStatus           @default(DRAFT)
+  priority              TaskPriority         @default(MEDIUM)
+  currentPlanVersionId  String               @unique
+  currentPlanVersion    TaskPlanVersion      @relation("CurrentTaskPlanVersion", fields: [currentPlanVersionId], references: [id], onDelete: Restrict)
+  activeMilestoneNodeId String?              @unique
+  activeMilestoneNode   TaskNode?            @relation("ActiveMilestoneNode", fields: [activeMilestoneNodeId], references: [id], onDelete: SetNull)
+  revisionApprovalMode  RevisionApprovalMode @default(REVIEW_REQUIRED)
+  allowSelfReview       Boolean              @default(false)
+  lockVersion           Int                  @default(0)
+  startedAt             DateTime?            @db.Timestamptz(6)
+  endedAt               DateTime?            @db.Timestamptz(6)
+  archivedAt            DateTime?            @db.Timestamptz(6)
+  deletedAt             DateTime?            @db.Timestamptz(6)
+  relatedTaskId         String?
+  relatedTask           Task?                @relation("RelatedTasks", fields: [relatedTaskId], references: [id], onDelete: SetNull)
+  relatedTasks          Task[]               @relation("RelatedTasks")
+  createdByAccountId    String
+  createdBy             Account              @relation("TaskCreatedBy", fields: [createdByAccountId], references: [id], onDelete: Restrict)
+  members               TaskMember[]
+  tags                  TaskTag[]
+  planVersions          TaskPlanVersion[]    @relation("TaskPlanVersions")
+  nodes                 TaskNode[]
+  workSegments          WorkSegment[]
+  inAppNotifications    InAppNotification[]
+  auditEvents           DomainAuditEvent[]
+  createdAt             DateTime             @default(now()) @db.Timestamptz(6)
+  updatedAt             DateTime             @updatedAt @db.Timestamptz(6)
+
+  @@index([status, team, techGroup])
+  @@index([createdByAccountId])
+  @@index([deletedAt])
+  @@index([relatedTaskId])
+}
+
+model TaskTag {
+  id        String   @id @default(uuid())
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  tagId     String
+  tag       Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  @@unique([taskId, tagId])
+  @@index([tagId])
+}
+
+model TaskMember {
+  id                 String         @id @default(uuid())
+  taskId             String
+  task               Task           @relation(fields: [taskId], references: [id], onDelete: Restrict)
+  personId           String
+  person             Person         @relation(fields: [personId], references: [id], onDelete: Restrict)
+  role               TaskMemberRole
+  createdByAccountId String?
+  createdBy          Account?       @relation("TaskMemberCreatedBy", fields: [createdByAccountId], references: [id], onDelete: SetNull)
+  removedAt          DateTime?      @db.Timestamptz(6)
+  createdAt          DateTime       @default(now()) @db.Timestamptz(6)
+
+  @@index([taskId, personId])
+  @@index([personId, role])
+  @@index([createdByAccountId])
+  @@index([removedAt])
+}
+
+model TaskPlanVersion {
+  id                 String            @id @default(uuid())
+  taskId             String
+  task               Task              @relation("TaskPlanVersions", fields: [taskId], references: [id], onDelete: Restrict)
+  versionNo          Int
+  status             PlanVersionStatus @default(DRAFT)
+  baseVersionId      String?
+  baseVersion        TaskPlanVersion?  @relation("PlanVersionBase", fields: [baseVersionId], references: [id], onDelete: SetNull)
+  derivedVersions    TaskPlanVersion[] @relation("PlanVersionBase")
+  revisionNodeId     String?           @unique
+  revisionNode       RevisionNode?     @relation("RevisionTargetPlanVersion", fields: [revisionNodeId], references: [id], onDelete: SetNull)
+  reason             String            @default("")
+  createdByAccountId String
+  createdBy          Account           @relation("PlanVersionCreatedBy", fields: [createdByAccountId], references: [id], onDelete: Restrict)
+  activatedAt        DateTime?         @db.Timestamptz(6)
+  snapshotHash       String            @default("")
+  currentForTask     Task?             @relation("CurrentTaskPlanVersion")
+  nodes              PlanVersionNode[]
+  revisionBaseNodes  RevisionNode[]    @relation("RevisionBasePlanVersion")
+  createdAt          DateTime          @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime          @updatedAt @db.Timestamptz(6)
+
+  @@unique([taskId, versionNo])
+  @@index([taskId, status])
+  @@index([baseVersionId])
+  @@index([createdByAccountId])
+}
+
+model TaskNode {
+  id                  String            @id @default(uuid())
+  taskId              String
+  task                Task              @relation(fields: [taskId], references: [id], onDelete: Restrict)
+  type                TaskNodeType
+  status              TaskNodeStatus    @default(PENDING)
+  businessDescription String            @default("")
+  createdByAccountId  String
+  createdBy           Account           @relation("TaskNodeCreatedBy", fields: [createdByAccountId], references: [id], onDelete: Restrict)
+  deletedAt           DateTime?         @db.Timestamptz(6)
+  planVersionEntries  PlanVersionNode[]
+  milestone           MilestoneNode?
+  revision            RevisionNode?
+  termination         TerminationNode?
+  revisedFrom         RevisionNode[]    @relation("RevisionRevisedFromNode")
+  activeForTask       Task?             @relation("ActiveMilestoneNode")
+  workSegments        WorkSegment[]
+  createdAt           DateTime          @default(now()) @db.Timestamptz(6)
+  updatedAt           DateTime          @updatedAt @db.Timestamptz(6)
+
+  @@index([taskId, type, status])
+  @@index([createdByAccountId])
+  @@index([deletedAt])
+}
+
+model PlanVersionNode {
+  id             String          @id @default(uuid())
+  planVersionId  String
+  planVersion    TaskPlanVersion @relation(fields: [planVersionId], references: [id], onDelete: Restrict)
+  nodeId         String
+  node           TaskNode        @relation(fields: [nodeId], references: [id], onDelete: Restrict)
+  sequence       Int
+  isCarryForward Boolean         @default(false)
+  createdAt      DateTime        @default(now()) @db.Timestamptz(6)
+
+  @@unique([planVersionId, sequence])
+  @@unique([planVersionId, nodeId])
+  @@index([nodeId])
+}
+
+model MilestoneNode {
+  id                   String            @id @default(uuid())
+  nodeId               String            @unique
+  node                 TaskNode          @relation(fields: [nodeId], references: [id], onDelete: Restrict)
+  goal                 String
+  completionCriteria   String
+  expectedCompletedAt  DateTime          @db.Timestamptz(6)
+  reviewRequirements   String
+  submittedForReviewAt DateTime?         @db.Timestamptz(6)
+  completedAt          DateTime?         @db.Timestamptz(6)
+  reviews              MilestoneReview[]
+}
+
+model RevisionNode {
+  id                  String           @id @default(uuid())
+  nodeId              String           @unique
+  node                TaskNode         @relation(fields: [nodeId], references: [id], onDelete: Restrict)
+  reason              String
+  revisedFromNodeId   String?
+  revisedFromNode     TaskNode?        @relation("RevisionRevisedFromNode", fields: [revisedFromNodeId], references: [id], onDelete: SetNull)
+  basePlanVersionId   String
+  basePlanVersion     TaskPlanVersion  @relation("RevisionBasePlanVersion", fields: [basePlanVersionId], references: [id], onDelete: Restrict)
+  targetPlanVersion   TaskPlanVersion? @relation("RevisionTargetPlanVersion")
+  status              RevisionStatus   @default(DRAFT)
+  submittedAt         DateTime?        @db.Timestamptz(6)
+  reviewedAt          DateTime?        @db.Timestamptz(6)
+  effectiveAt         DateTime?        @db.Timestamptz(6)
+  reviewedByAccountId String?
+  reviewedBy          Account?         @relation("RevisionReviewedBy", fields: [reviewedByAccountId], references: [id], onDelete: SetNull)
+  reviewComment       String           @default("")
+  affectedSummary     Json             @default("{}")
+
+  @@index([basePlanVersionId])
+  @@index([revisedFromNodeId])
+  @@index([reviewedByAccountId])
+  @@index([status])
+}
+
+model TerminationNode {
+  id                     String              @id @default(uuid())
+  nodeId                 String              @unique
+  node                   TaskNode            @relation(fields: [nodeId], references: [id], onDelete: Restrict)
+  plannedOutcomeCriteria String
+  plannedAt              DateTime            @db.Timestamptz(6)
+  outcome                TerminationOutcome?
+  reason                 String              @default("")
+  summary                String              @default("")
+  confirmedByAccountId   String?
+  confirmedBy            Account?            @relation("TerminationConfirmedBy", fields: [confirmedByAccountId], references: [id], onDelete: SetNull)
+  confirmedAt            DateTime?           @db.Timestamptz(6)
+
+  @@index([confirmedByAccountId])
+  @@index([outcome])
+}
+
+model MilestoneReview {
+  id                   String                @id @default(uuid())
+  milestoneNodeId      String
+  milestoneNode        MilestoneNode         @relation(fields: [milestoneNodeId], references: [id], onDelete: Restrict)
+  result               MilestoneReviewResult @default(PENDING)
+  submittedByAccountId String?
+  submittedBy          Account?              @relation("MilestoneReviewSubmittedBy", fields: [submittedByAccountId], references: [id], onDelete: SetNull)
+  reviewerAccountId    String?
+  reviewer             Account?              @relation("MilestoneReviewReviewer", fields: [reviewerAccountId], references: [id], onDelete: SetNull)
+  reviewedAt           DateTime?             @db.Timestamptz(6)
+  comment              String                @default("")
+  idempotencyKey       String
+  revokedAt            DateTime?             @db.Timestamptz(6)
+  revokedByAccountId   String?
+  revokedBy            Account?              @relation("MilestoneReviewRevokedBy", fields: [revokedByAccountId], references: [id], onDelete: SetNull)
+  revokeReason         String                @default("")
+  evidences            ReviewEvidence[]
+  createdAt            DateTime              @default(now()) @db.Timestamptz(6)
+
+  @@unique([milestoneNodeId, idempotencyKey])
+  @@index([milestoneNodeId, createdAt])
+  @@index([submittedByAccountId])
+  @@index([reviewerAccountId])
+  @@index([revokedByAccountId])
+}
+
+model ReviewEvidence {
+  id          String             @id @default(uuid())
+  reviewId    String
+  review      MilestoneReview    @relation(fields: [reviewId], references: [id], onDelete: Restrict)
+  kind        ReviewEvidenceKind
+  fileAssetId String?
+  fileAsset   FileAsset?         @relation(fields: [fileAssetId], references: [id], onDelete: SetNull)
+  externalUrl String?
+  note        String             @default("")
+  sortOrder   Int                @default(0)
+  createdAt   DateTime           @default(now()) @db.Timestamptz(6)
+
+  @@index([reviewId, sortOrder])
+  @@index([fileAssetId])
+}
+
+model WorkSegment {
+  id                     String              @id @default(uuid())
+  personId               String
+  person                 Person              @relation(fields: [personId], references: [id], onDelete: Restrict)
+  type                   WorkSegmentType
+  status                 WorkSegmentStatus
+  startAt                DateTime            @db.Timestamptz(6)
+  endAt                  DateTime            @db.Timestamptz(6)
+  content                String
+  allocation             Decimal?            @db.Decimal(5, 2)
+  role                   WorkSegmentRole     @default(DEVELOPER)
+  customRole             String?
+  priority               TaskPriority        @default(MEDIUM)
+  expectedOutput         String              @default("")
+  actualOutput           String              @default("")
+  completionPercent      Decimal?            @db.Decimal(5, 2)
+  taskId                 String?
+  task                   Task?               @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  nodeId                 String?
+  node                   TaskNode?           @relation(fields: [nodeId], references: [id], onDelete: SetNull)
+  associationNeedsReview Boolean             @default(false)
+  createdByAccountId     String
+  createdBy              Account             @relation("WorkSegmentCreatedBy", fields: [createdByAccountId], references: [id], onDelete: Restrict)
+  updatedByAccountId     String?
+  updatedBy              Account?            @relation("WorkSegmentUpdatedBy", fields: [updatedByAccountId], references: [id], onDelete: SetNull)
+  sourceSplitFromId      String?
+  sourceSplitFrom        WorkSegment?        @relation("WorkSegmentSplit", fields: [sourceSplitFromId], references: [id], onDelete: SetNull)
+  splitChildren          WorkSegment[]       @relation("WorkSegmentSplit")
+  deletedAt              DateTime?           @db.Timestamptz(6)
+  plannedSources         WorkSegmentSource[] @relation("PlannedSegmentSource")
+  actualSources          WorkSegmentSource[] @relation("ActualSegmentSource")
+  changes                WorkSegmentChange[]
+  conflictSegments       ConflictSegment[]
+  tags                   SegmentTag[]
+  createdAt              DateTime            @default(now()) @db.Timestamptz(6)
+  updatedAt              DateTime            @updatedAt @db.Timestamptz(6)
+
+  @@index([personId, type, startAt, endAt])
+  @@index([taskId, startAt])
+  @@index([nodeId, type])
+  @@index([associationNeedsReview, personId])
+  @@index([createdByAccountId])
+  @@index([updatedByAccountId])
+  @@index([sourceSplitFromId])
+  @@index([deletedAt])
+}
+
+model SegmentTag {
+  id        String      @id @default(uuid())
+  segmentId String
+  segment   WorkSegment @relation(fields: [segmentId], references: [id], onDelete: Cascade)
+  tagId     String
+  tag       Tag         @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  createdAt DateTime    @default(now()) @db.Timestamptz(6)
+
+  @@unique([segmentId, tagId])
+  @@index([tagId])
+}
+
+model WorkSegmentSource {
+  id                 String      @id @default(uuid())
+  plannedSegmentId   String
+  plannedSegment     WorkSegment @relation("PlannedSegmentSource", fields: [plannedSegmentId], references: [id], onDelete: Restrict)
+  actualSegmentId    String
+  actualSegment      WorkSegment @relation("ActualSegmentSource", fields: [actualSegmentId], references: [id], onDelete: Restrict)
+  coveredStartAt     DateTime    @db.Timestamptz(6)
+  coveredEndAt       DateTime    @db.Timestamptz(6)
+  createdByAccountId String
+  createdBy          Account     @relation("WorkSegmentSourceCreatedBy", fields: [createdByAccountId], references: [id], onDelete: Restrict)
+  createdAt          DateTime    @default(now()) @db.Timestamptz(6)
+
+  @@unique([plannedSegmentId, actualSegmentId, coveredStartAt, coveredEndAt])
+  @@index([actualSegmentId])
+  @@index([createdByAccountId])
+}
+
+model WorkSegmentChange {
+  id             String                  @id @default(uuid())
+  segmentId      String
+  segment        WorkSegment             @relation(fields: [segmentId], references: [id], onDelete: Restrict)
+  action         WorkSegmentChangeAction
+  before         Json?
+  after          Json?
+  reason         String                  @default("")
+  actorAccountId String?
+  actor          Account?                @relation("WorkSegmentChangeActor", fields: [actorAccountId], references: [id], onDelete: SetNull)
+  createdAt      DateTime                @default(now()) @db.Timestamptz(6)
+
+  @@index([segmentId, createdAt])
+  @@index([actorAccountId])
+}
+
+model ResourceConflict {
+  id                  String                   @id @default(uuid())
+  personId            String
+  person              Person                   @relation(fields: [personId], references: [id], onDelete: Restrict)
+  kind                ResourceConflictKind
+  startAt             DateTime                 @db.Timestamptz(6)
+  endAt               DateTime                 @db.Timestamptz(6)
+  severity            ResourceConflictSeverity
+  status              ResourceConflictStatus   @default(OPEN)
+  fingerprint         String                   @unique
+  explanation         Json                     @default("{}")
+  detectedAt          DateTime                 @default(now()) @db.Timestamptz(6)
+  acknowledgedAt      DateTime?                @db.Timestamptz(6)
+  resolvedAt          DateTime?                @db.Timestamptz(6)
+  ignoredUntil        DateTime?                @db.Timestamptz(6)
+  resolvedByAccountId String?
+  resolvedBy          Account?                 @relation("ResourceConflictResolvedBy", fields: [resolvedByAccountId], references: [id], onDelete: SetNull)
+  resolutionNote      String                   @default("")
+  segments            ConflictSegment[]
+  createdAt           DateTime                 @default(now()) @db.Timestamptz(6)
+  updatedAt           DateTime                 @updatedAt @db.Timestamptz(6)
+
+  @@index([personId, status, startAt, endAt])
+  @@index([status, severity])
+  @@index([resolvedByAccountId])
+}
+
+model ConflictSegment {
+  id         String           @id @default(uuid())
+  conflictId String
+  conflict   ResourceConflict @relation(fields: [conflictId], references: [id], onDelete: Cascade)
+  segmentId  String
+  segment    WorkSegment      @relation(fields: [segmentId], references: [id], onDelete: Restrict)
+  createdAt  DateTime         @default(now()) @db.Timestamptz(6)
+
+  @@unique([conflictId, segmentId])
+  @@index([segmentId])
+}
+
+model SystemRoleAssignment {
+  id                 String                      @id @default(uuid())
+  accountId          String
+  account            Account                     @relation("SystemRoleAccount", fields: [accountId], references: [id], onDelete: Restrict)
+  role               ProjectManagementSystemRole
+  team               String                      @default("")
+  techGroup          String                      @default("")
+  grantedByAccountId String?
+  grantedBy          Account?                    @relation("SystemRoleGrantedBy", fields: [grantedByAccountId], references: [id], onDelete: SetNull)
+  revokedAt          DateTime?                   @db.Timestamptz(6)
+  createdAt          DateTime                    @default(now()) @db.Timestamptz(6)
+
+  @@index([accountId, role])
+  @@index([role, team, techGroup])
+  @@index([grantedByAccountId])
+  @@index([revokedAt])
+}
+
+model NotificationPreference {
+  id        String                                @id @default(uuid())
+  accountId String
+  account   Account                               @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  category  ProjectManagementNotificationCategory
+  channel   ProjectManagementNotificationChannel
+  enabled   Boolean                               @default(true)
+  createdAt DateTime                              @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime                              @updatedAt @db.Timestamptz(6)
+
+  @@unique([accountId, category, channel])
+}
+
+model InAppNotification {
+  id                 String                                @id @default(uuid())
+  eventKey           String?                               @unique
+  recipientAccountId String
+  recipient          Account                               @relation(fields: [recipientAccountId], references: [id], onDelete: Restrict)
+  category           ProjectManagementNotificationCategory
+  title              String
+  summary            String                                @default("")
+  entityType         String
+  entityId           String
+  taskId             String?
+  task               Task?                                 @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  linkPath           String                                @default("")
+  payloadVersion     Int                                   @default(1)
+  payload            Json                                  @default("{}")
+  readAt             DateTime?                             @db.Timestamptz(6)
+  createdAt          DateTime                              @default(now()) @db.Timestamptz(6)
+
+  @@index([recipientAccountId, readAt, createdAt])
+  @@index([category, createdAt])
+  @@index([taskId])
+}
+
+model DomainAuditEvent {
+  id             String      @id @default(uuid())
+  actorAccountId String?
+  actorAccount   Account?    @relation("AuditActorAccount", fields: [actorAccountId], references: [id], onDelete: SetNull)
+  actorPersonId  String?
+  actorPerson    Person?     @relation("AuditActorPerson", fields: [actorPersonId], references: [id], onDelete: SetNull)
+  action         String
+  entityType     String
+  entityId       String
+  taskId         String?
+  task           Task?       @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  before         Json?
+  after          Json?
+  reason         String      @default("")
+  requestId      String      @default("")
+  source         AuditSource @default(WEB)
+  schemaVersion  Int         @default(1)
+  createdAt      DateTime    @default(now()) @db.Timestamptz(6)
+
+  @@index([entityType, entityId, createdAt])
+  @@index([taskId, createdAt])
+  @@index([actorAccountId, createdAt])
+  @@index([actorPersonId, createdAt])
+  @@index([source, createdAt])
 }
 
 model NotificationOutbox {

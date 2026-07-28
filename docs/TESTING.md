@@ -121,6 +121,15 @@ npm run build
 npm run db:deploy
 ```
 
+项目管理 P1 schema、身份和授权底座变更应额外执行：
+
+```bash
+npm run test:e2e -- tests/project-management-p1.spec.ts tests/feishu-boundaries.spec.ts
+npm run pm:identity-backfill
+```
+
+`npm run pm:identity-backfill` 默认只做 dry-run。需要验证写入时只能在隔离库或发布演练库设置 `APPLY_PM_IDENTITY_BACKFILL=true`，并确认重复执行不会新增重复 Account、Identity 或 Person。
+
 如果全量 ESLint 因历史问题失败，测试报告必须记录失败规则和文件，并补跑本次改动文件的定向 ESLint。
 
 ## Playwright 通用检查
@@ -242,6 +251,14 @@ npm run db:deploy
 7. 同时启动多个 cron 时，应确认不会重复 claim 同一 outbox；如发现重复，记录为并发风险。
 8. 验证 CardKit fallback 后跟踪表保存实际机器人和最终 `cardId`，远端 CardKit 错误中的敏感字符串不会进入异常或 outbox。
 9. 通过静态搜索确认 IM 消息 API 只在统一传输层、CardKit API 只在 CardKit 模块、Webhook URL 只在 Webhook 模块出现。
+
+## 项目管理 P1 底座测试
+
+1. `tests/project-management-p1.spec.ts` 覆盖新增 schema 约束：单 Task 单 Current Plan、有效 Tag 名称唯一、Segment 时间和 allocation 检查、Review 幂等键、Conflict fingerprint。
+2. 身份测试覆盖 `User -> Account/Identity/Person` 首次解析、重复解析幂等、openId fallback 升级为 unionId、冲突硬失败和禁用 Account 拒绝项目管理 actor。
+3. 授权测试覆盖 Task member、范围内/外 Team Administrator、非成员、空 scope Team Administrator 拒绝、Tag 创建人无 Task 权限，以及 `taskReadableWhere` 防枚举。
+4. 通知测试覆盖站内通知事务 helper、审计脱敏、审计 append-only、`channel=project-management` outbox 入队、审批用途 allowlist、adapter 收件人去重和“P1 不真实投递飞书”的边界。
+5. `tests/feishu-boundaries.spec.ts` 必须继续扫描 `app/progress`、`app/actions/project-management`、`components/project-management`、`lib/project-management` 和项目管理 notification adapter，防止直接导入飞书传输层。
 
 ## 部署冒烟测试
 

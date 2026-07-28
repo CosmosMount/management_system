@@ -17,6 +17,7 @@ npm install
 docker compose up -d postgres
 
 npm run db:deploy
+npm run pm:identity-backfill  # 默认 dry-run，仅输出 Account/Person 初始化计数
 npm run dev
 ```
 
@@ -37,6 +38,7 @@ npm run dev
 ```bash
 docker compose up -d postgres
 npm run db:deploy   # schema 有更新时
+npm run pm:identity-backfill  # 默认 dry-run，仅输出 Account/Person 初始化计数
 npm run dev
 ```
 
@@ -163,6 +165,7 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 | `FEISHU_WS_BOT_KIND` | 可选，长连接使用的机器人，`notification` 或 `approval`，默认 `notification` |
 | `ENABLE_FEISHU_WS` | 可选，是否安装通知机器人长连接，默认 `false` |
 | `ENABLE_FEISHU_APPROVAL_WS` | 可选，是否安装审批机器人长连接，默认 `true` |
+| `APPLY_PM_IDENTITY_BACKFILL` | 项目管理 Account/Person 初始化确认开关；未设为 `true` 时 `npm run pm:identity-backfill` 只做 dry-run |
 | `NEXT_PUBLIC_APP_URL` | 后台任务默认系统地址（cron 飞书卡片按钮跳转用） |
 | `APP_ALLOWED_ORIGINS` | 允许登录跳转和飞书按钮生成的完整 origin 列表 |
 | `LAN_HOST` | dev server 局域网访问 IP |
@@ -518,9 +521,10 @@ pm2 start npm --name procurement-cron -- run cron
 
 ## 项目管理重构状态
 
-旧项目、阶段、任务、审批、周报、风险和提醒实现及其开发数据已直接清理，不提供旧数据迁移或旧接口兼容。
+旧项目、阶段、任务、审批、周报、风险和提醒实现及其开发数据已直接清理，不提供旧数据迁移或旧接口兼容。当前已完成 v2.1 P1 底座：Account/Person、Task/Tag、Plan/Node、Segment、站内通知、审计和权限骨架已进入 schema；完整业务 UI 和工作流仍未启用。
 
 - `/progress` 当前只展示“项目管理重构中”的中文占位页。
 - 旧 `/progress/*` 地址统一重定向到 `/progress`。
-- 新项目管理的目标设计位于 [`docs/plan/`](docs/plan/)，其中功能尚未实现，不能作为当前使用说明。
-- 后续项目管理通知必须在业务事务中写入 notification outbox，不允许 Server Action 直接调用飞书传输层。
+- 飞书登录和通讯录同步会保留采购 `User.openId/unionId`，同时初始化项目管理 Account/Person。已有用户先运行 `npm run pm:identity-backfill` 对账；确认后再运行 `APPLY_PM_IDENTITY_BACKFILL=true npm run pm:identity-backfill`。
+- 新项目管理的目标设计位于 [`docs/plan/`](docs/plan/)，未上线的 Task/Revision/Review/Segment 流程不能作为当前使用说明。
+- 项目管理飞书通知只允许写入 `channel=project-management` 的 notification outbox；P1 adapter 只做 payload/收件人校验，真实投递留到后续阶段。

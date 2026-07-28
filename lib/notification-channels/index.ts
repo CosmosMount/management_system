@@ -1,4 +1,5 @@
 import { feedbackNotificationChannel } from "@/lib/notification-channels/feedback";
+import { projectManagementNotificationChannel } from "@/lib/notification-channels/project-management";
 import { procurementNotificationChannel } from "@/lib/notification-channels/procurement";
 import {
   NonRetryableNotificationError,
@@ -8,6 +9,10 @@ import {
 const adapters = new Map<string, NotificationChannelAdapter>([
   [procurementNotificationChannel.channel, procurementNotificationChannel],
   [feedbackNotificationChannel.channel, feedbackNotificationChannel],
+  [
+    projectManagementNotificationChannel.channel,
+    projectManagementNotificationChannel,
+  ],
 ]);
 
 export function getNotificationChannelAdapter(

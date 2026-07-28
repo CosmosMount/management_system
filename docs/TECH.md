@@ -24,7 +24,7 @@
 - 无独立后端服务，业务逻辑集中在 `app/actions/` 与 `lib/`
 - 文件上传写入私有目录 `storage/uploads/`，通过 `/uploads/...` 鉴权 route 返回
 - 飞书集成拆分为 OAuth、通讯录、Webhook、统一私信传输层和 notification outbox。`lib/feishu-message.ts` 的 `sendFeishuDirectMessage()` 是 IM 私信唯一出口，支持 `text`、交互卡片和 CardKit；Webhook 保持独立。
-- `lib/notification-channels/{procurement,feedback}.ts` 分别实现业务 channel adapter，负责校验持久化 payload、计算并去重收件人、构造完整消息和明确消息用途；传输层不查询业务角色，也不理解采购或反馈状态。
+- `lib/notification-channels/{procurement,feedback,project-management}.ts` 分别实现业务 channel adapter，负责校验持久化 payload、计算并去重收件人、构造完整消息和明确消息用途；传输层不查询业务角色，也不理解采购、反馈或项目管理状态。项目管理 adapter 当前为 P1 骨架，尚不执行真实飞书投递。
 - 通知 outbox 分两层：`NotificationOutbox` 表示业务事件，`NotificationOutboxRecipient` 表示单个收件人的投递状态。核心 drain 按 `channel` 查找 adapter，只调度和更新状态；重试失败收件人时不能把已成功收件人再次发送。临时解析/网络错误退避重试，损坏 payload、未知 channel、非法 `type/botKind` 等确定性配置错误直接冻结，修正后才可人工重置。
 
 ## 结构化日志
@@ -55,6 +55,7 @@ app/
   admin/            # 角色管理
 components/         # UI 组件
 lib/                # 业务逻辑、权限、飞书、校验
+  project-management/ # v2.1 P1 身份、授权、通知和审计底座
 prisma/
   schema.prisma     # 数据模型
   seed.ts           # 初始角色 seed
@@ -70,9 +71,9 @@ Auth.js 不能在中件件中 import 含 Prisma 的模块，因此拆分：
 |------|------|
 | `lib/auth.config.ts` | Edge 可用配置 |
 | `lib/auth-edge.ts` | middleware 使用 |
-| `lib/auth.ts` | 完整 auth（含 signIn 时 upsert User） |
+| `lib/auth.ts` | 完整 auth（含 signIn 时 upsert User，并初始化项目管理 Account/Person） |
 
-登录后 `User` 表记录 `openId`、姓名、头像；`UserRole` 表单独维护审批角色。
+登录后 `User` 表继续记录采购和回调用的 `openId`、姓名、头像；`UserRole` 表单独维护采购审批角色。项目管理 v2.1 另用 `Account`、`AccountIdentity` 和 `Person`：飞书 `unionId` 优先作为 `providerSubject`，无 `unionId` 时使用 `open:<openId>` 作为兼容 subject。`npm run pm:identity-backfill` 可对已有 `User` 做 dry-run 对账，只有设置 `APPLY_PM_IDENTITY_BACKFILL=true` 才会写入 Account/Person。身份冲突会硬失败，并写入脱敏 `DomainAuditEvent` 供管理员后续处理。
 
 ## 权限
 
@@ -80,8 +81,11 @@ Auth.js 不能在中件件中 import 含 Prisma 的模块，因此拆分：
 |------|------|------|
 | 采购 | `lib/permissions.ts` | 服务端角色查询 |
 | 采购（客户端） | `lib/permissions-client.ts` | 纯函数，无数据库依赖 |
+| 项目管理 | `lib/project-management/authorization` | P1 授权骨架、稳定 action 字符串和 readableWhere 查询过滤 |
 
 角色类型见 `UserRoleType` enum：`SUPER_ADMIN`、`TEAM_ADMIN`、`TECH_GROUP_ADMIN`、`TEACHER`、`FINANCE`。
+
+项目管理使用独立 `ProjectManagementSystemRole`。`SYSTEM_ADMINISTRATOR` 必须是全局角色；`AUDITOR` 可全局或限定范围；`TEAM_ADMINISTRATOR` 与 `RESOURCE_MANAGER` 必须带 `team` 或 `techGroup` 范围，数据库和授权 helper 都会拒绝空范围的越权读写。
 
 ## 数据模型
 
@@ -115,9 +119,11 @@ DRAFT → MANAGEMENT_REVIEW → TEACHER_REVIEW → PENDING_APPLICANT_DOCS
 
 ### 项目管理
 
-旧项目管理专用模型和开发数据已通过新增 migration 删除，包括项目、阶段、旧任务及其审批、交付、周报、风险、评论、关注和提醒关系。共享的 `User`、采购/反馈、`FileAsset`、`NotificationOutbox` 与飞书卡片跟踪模型继续保留。
+旧项目管理专用模型和开发数据已通过 migration 删除，包括项目、阶段、旧任务及其审批、交付、周报、风险、评论、关注和提醒关系。共享的 `User`、采购/反馈、`FileAsset`、`NotificationOutbox` 与飞书卡片跟踪模型继续保留。
 
-当前没有项目管理业务模型；后续目标模型仅记录在 [`docs/plan/`](plan/) 中，不能作为当前 schema 说明。
+P1 已新增 v2.1 底座模型：`Account`、`AccountIdentity`、`Person`、`Tag`、`Task`、`TaskMember`、`TaskPlanVersion`、`TaskNode`、`PlanVersionNode`、Milestone/Revision/Termination 子类型、`MilestoneReview`、`ReviewEvidence`、`WorkSegment`、`WorkSegmentSource`、`WorkSegmentChange`、`ResourceConflict`、`SystemRoleAssignment`、`NotificationPreference`、`InAppNotification` 和 `DomainAuditEvent`。这些表从空项目管理数据集开始，不包含 Project、legacy map 或旧来源字段。`/progress` 仍是占位页，完整 Task 创建、Revision、Review、Segment 和通知中心流程尚未上线。
+
+`DomainAuditEvent` 由 append-only trigger 保护，应用代码只能追加审计事件，不能更新或删除既有审计行。
 
 ## 路由一览
 
@@ -147,11 +153,11 @@ DRAFT → MANAGEMENT_REVIEW → TEACHER_REVIEW → PENDING_APPLICANT_DOCS
 - **Webhook 签名**：`HmacSHA256("", timestamp + "\n" + secret)` 后 Base64
 - **统一私信传输层**：`lib/feishu-message.ts` 导出 `FeishuMessage`、`FeishuMessagePurpose`、`FeishuSendResult` 和 `sendFeishuDirectMessage()`。调用方传入系统用户 `openId`、明确的 `botKind`、用途和 text/交互卡片/CardKit 消息；传输层统一完成收件人身份解析、机器人凭据、token、HTTP 请求、CardKit 创建、禁发闸、allowlist、结构化日志和错误脱敏。
 - **机器人边界**：普通通知只能使用通知机器人，审批请求才可声明审批用途。审批机器人未独立配置时使用通知机器人凭据；独立审批应用通过 `User.unionId` 使用 `receive_id_type=union_id`，缺少 `union_id` 时失败并由 outbox 重试。保留既有的“用户对审批应用不可用时回退通知机器人”行为，发送结果会标明实际机器人和是否 fallback。
-- **Outbox adapter**：采购和反馈业务只能通过 `lib/notification-channels/` adapter 进入统一私信传输层。adapter 校验 payload 与持久化元数据、计算收件人和构造业务内容；outbox 核心及传输层不包含业务角色查询或状态分支。adapter 的收件人计划可区分真实私信与 Webhook 等独立传输，采购审批必须至少有一个真实私信审批人。后续项目管理也必须使用稳定 `eventKey` 在业务事务中入队，不能从 Server Action 直接发送。
+- **Outbox adapter**：采购、反馈和项目管理业务只能通过 `lib/notification-channels/` adapter 进入统一私信传输边界。adapter 校验 payload 与持久化元数据、计算收件人和构造业务内容；outbox 核心及传输层不包含业务角色查询或状态分支。adapter 的收件人计划可区分真实私信与 Webhook 等独立传输，采购审批必须至少有一个真实私信审批人。项目管理 P1 只提供 `channel=project-management` 的 payload/收件人校验骨架，真实飞书消息构造和投递在后续阶段启用。
 - **私信防误发**：`FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES / OPEN_IDS / UNION_IDS` 为空时不限制；配置后只允许匹配收件人，其他私信会被记录并拦截。Playwright 启动的应用服务默认只允许 `李棋轩`。Docker Compose 默认 `NOTIFICATION_DELIVERY_DISABLED=true` 且 allowlist 为 `李棋轩`；生产真实投递需要显式设置 `NOTIFICATION_DELIVERY_DISABLED=false`，并按需配置或清空 allowlist。
 - **CardKit 回调**：采购审批卡若由审批机器人发送，需要运行审批机器人长连接；生产 `./service/install.sh` 默认安装并启动 `pnx-management-feishu-approval-ws.service`。通知机器人长连接仍可通过 `ENABLE_FEISHU_WS=true` 单独启用。审批机器人回调中的操作人也会通过 `union_id` 映射回系统 `openId` 后再校验权限。
 - **群 Webhook**：采购群通知和日报仍使用 Webhook，独立于统一私信接口
-- **通讯录同步**：手动入口 `app/actions/syncFeishuUsers.ts`，定时入口 `scripts/cron.ts`，共用 `lib/feishu-user-sync.ts`；需 `contact:*` 只读权限
+- **通讯录同步**：手动入口 `app/actions/syncFeishuUsers.ts`，定时入口 `scripts/cron.ts`，共用 `lib/feishu-user-sync.ts`；需 `contact:*` 只读权限。同步继续 upsert 采购 `User`，同时按同一规则初始化/刷新项目管理 Account/Person。
 
 ## Prisma 与数据库
 
@@ -176,6 +182,7 @@ npm run db:deploy              # prisma migrate deploy（等待 PG 就绪）
 npm run db:seed                # 写入初始 SUPER_ADMIN 等角色
 npm run db:fix-roles           # 清理异常角色数据后重新 seed
 npm run db:studio              # Prisma Studio
+npm run pm:identity-backfill    # 项目管理 Account/Person 初始化 dry-run
 npm run cron                   # 启动定时任务（独立进程）
 ```
 

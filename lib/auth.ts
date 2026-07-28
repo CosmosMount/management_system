@@ -1,6 +1,7 @@
 import NextAuth from "next-auth";
 import { prisma } from "@/lib/prisma";
 import { authConfig } from "@/lib/auth.config";
+import { resolveFeishuIdentityForUser } from "@/lib/project-management/identity";
 
 declare module "next-auth" {
   interface Session {
@@ -38,6 +39,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           name: user.name ?? "未知用户",
           avatar: user.image ?? null,
         },
+      });
+      await resolveFeishuIdentityForUser({
+        openId: user.openId,
+        unionId: user.unionId,
+        name: user.name,
+        avatar: user.image,
       });
       return true;
     },
