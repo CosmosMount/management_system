@@ -55,7 +55,7 @@ app/
   admin/            # 角色管理
 components/         # UI 组件
 lib/                # 业务逻辑、权限、飞书、校验
-  project-management/ # v2.1 P1-P3 身份、授权、生命周期、通知和审计
+  project-management/ # v2.1 P1-P5 身份、授权、生命周期、资源、通知和审计
 prisma/
   schema.prisma     # 数据模型
   seed.ts           # 初始角色 seed
@@ -81,7 +81,7 @@ Auth.js 不能在中件件中 import 含 Prisma 的模块，因此拆分：
 |------|------|------|
 | 采购 | `lib/permissions.ts` | 服务端角色查询 |
 | 采购（客户端） | `lib/permissions-client.ts` | 纯函数，无数据库依赖 |
-| 项目管理 | `lib/project-management/authorization` | P1-P3 授权、稳定 action 字符串、状态机操作鉴权和 readableWhere 查询过滤 |
+| 项目管理 | `lib/project-management/authorization` | P1-P5 授权、稳定 action 字符串、状态机操作鉴权和 readableWhere 查询过滤 |
 
 角色类型见 `UserRoleType` enum：`SUPER_ADMIN`、`TEAM_ADMIN`、`TECH_GROUP_ADMIN`、`TEACHER`、`FINANCE`。
 
@@ -132,7 +132,20 @@ P2/P3 已补齐 Task 计划生命周期的服务端闭环，入口位于 `lib/pr
 - Termination 确认写入 outcome、reason、summary 和 Task 终态。`SUCCESS` 要求所有前置 Milestone 已完成；`FAILED/CANCELLED/TIMEOUT` 可提前结束但必须填写原因，并取消未完成节点。重复相同确认幂等，不同 outcome 返回状态冲突。
 - 查询 facade `getTaskWorkspace`、`getPlanVersion`、`listTaskPlanVersions` 和 `comparePlanVersions` 都通过 `taskReadableWhere(actor)` 过滤，防止枚举不可读 Task 或 Plan。
 
-`/progress` 仍是占位页，P4 UI、Segment/Conflict 工作流、通知中心页面和真实项目管理飞书卡片投递尚未上线。
+P5 已补齐 Resource Segment 与 Conflict 服务端闭环，复用 P1 的 `WorkSegment`、`WorkSegmentSource`、`WorkSegmentChange`、`ResourceConflict` 和 `ConflictSegment`，未新增 migration。入口位于 `lib/project-management/application/segment-service.ts`、`lib/project-management/application/conflict-service.ts`、`app/actions/project-management/{segments,conflicts}.ts` 和 `lib/project-management/queries/resource-queries.ts`：
+
+- Segment 服务支持单条/批量 Planned 创建、Actual 创建、更新、批量移动、拆分、合并、取消、完整确认、部分确认、重关联和 Actual 逻辑删除。所有写操作都在事务内写 `WorkSegmentChange` 和 `DomainAuditEvent`，并通过 `expectedUpdatedAt` 执行乐观锁校验。
+- Segment 校验包括 `endAt > startAt`、单条最长 31 天、`allocation` 可空且非空时 `0 < allocation <= 100`、`completionPercent` 仅 Actual 可用、Node 必须属于关联 Task。Planned 只能关联 Current Plan 且未 `REVISED/CANCELLED` 的 Node；Actual 可保留历史 Node 关联。
+- 权限规则为本人可管理本人 Segment；管理他人 Segment 需要 System Admin，或通过关联 Task 命中 scoped Team Admin/Resource Manager。无 Task 关联的他人 Segment 当前只能由 System Admin 管理。
+- 确认 Planned 会创建 Actual 并写 `WorkSegmentSource`；部分确认会取消原 Planned 并生成未覆盖的剩余 Planned 子段。Segment 操作不会改变 Task、Node、Milestone 或 Termination 状态。
+- Conflict 扫描使用半开区间 `[startAt, endAt)` 和 `v1|kind|personId|startAt|endAt|sortedSegmentIds` 稳定 fingerprint。重复扫描不会重复创建；冲突消失会置为 `RESOLVED`；`ignoredUntil` 到期后仍命中会重新打开。
+- 当前启用 `ALLOCATION_OVER_LIMIT`、`MISSING_ALLOCATION`、`HIGH_PRIORITY_OVERLAP`、`LEAD_ROLE_OVERLAP`、`REVISION_OVERLAP` 和 `ACTUAL_OVERLOAD`。`UNAVAILABLE_TIME` 枚举保留但未扫描，因为当前没有可授权、可维护的人员不可用时间模型。
+- Conflict 查看允许涉及本人、相关 Task 可见者和范围内 Resource Manager/Team Admin；处理、忽略和应用建议仅限 System Admin、范围内 Resource Manager/Team Admin，或所有关联 Task 都由其 OWN 的 Task Owner。`previewConflictSuggestion` 不写库，`applyConflictSuggestion` 必须显式 `confirmApply=true` 并复核 Segment `updatedAt`。
+- `resource-queries.ts` 提供 Segment 列表、详情、change history，以及 Conflict 列表、详情和关联 Segment 解释；详情查询使用 `segmentReadableWhere(actor)` 或 Conflict readable 条件防止枚举不可读对象。
+
+`scripts/cron.ts` 每 10 分钟运行 `scanSegmentTransitions`，把到期 Planned 推到 `PENDING_CONFIRMATION` 并写 `segment_confirmation_due`，把已开始且未结束的 Planned 置为 `IN_PROGRESS` 并写审计；该扫描不会自动生成 Actual。每 15 分钟运行 `scanResourceConflictsForDefaultWindow`，带运行中保护，只写冲突记录、站内通知和 `channel=project-management` outbox，不调整 Segment。
+
+`/progress` 仍是占位页，资源时间轴 UI、冲突中心 UI、通知中心页面和真实项目管理飞书卡片投递尚未上线。
 
 `DomainAuditEvent` 由 append-only trigger 保护，应用代码只能追加审计事件，不能更新或删除既有审计行。
 
@@ -164,7 +177,7 @@ P2/P3 已补齐 Task 计划生命周期的服务端闭环，入口位于 `lib/pr
 - **Webhook 签名**：`HmacSHA256("", timestamp + "\n" + secret)` 后 Base64
 - **统一私信传输层**：`lib/feishu-message.ts` 导出 `FeishuMessage`、`FeishuMessagePurpose`、`FeishuSendResult` 和 `sendFeishuDirectMessage()`。调用方传入系统用户 `openId`、明确的 `botKind`、用途和 text/交互卡片/CardKit 消息；传输层统一完成收件人身份解析、机器人凭据、token、HTTP 请求、CardKit 创建、禁发闸、allowlist、结构化日志和错误脱敏。
 - **机器人边界**：普通通知只能使用通知机器人，审批请求才可声明审批用途。审批机器人未独立配置时使用通知机器人凭据；独立审批应用通过 `User.unionId` 使用 `receive_id_type=union_id`，缺少 `union_id` 时失败并由 outbox 重试。保留既有的“用户对审批应用不可用时回退通知机器人”行为，发送结果会标明实际机器人和是否 fallback。
-- **Outbox adapter**：采购、反馈和项目管理业务只能通过 `lib/notification-channels/` adapter 进入统一私信传输边界。adapter 校验 payload 与持久化元数据、计算收件人和构造业务内容；outbox 核心及传输层不包含业务角色查询或状态分支。adapter 的收件人计划可区分真实私信与 Webhook 等独立传输，采购审批必须至少有一个真实私信审批人。项目管理 P2/P3 生命周期事件只写 `channel=project-management` outbox；adapter 校验 payload、审批用途和收件人计划，真实飞书消息构造和投递在后续阶段启用。
+- **Outbox adapter**：采购、反馈和项目管理业务只能通过 `lib/notification-channels/` adapter 进入统一私信传输边界。adapter 校验 payload 与持久化元数据、计算收件人和构造业务内容；outbox 核心及传输层不包含业务角色查询或状态分支。adapter 的收件人计划可区分真实私信与 Webhook 等独立传输，采购审批必须至少有一个真实私信审批人。项目管理 P2/P3 生命周期事件和 P5 Segment/Conflict 事件只写 `channel=project-management` outbox；adapter 校验 payload、审批用途和收件人计划，真实飞书消息构造和投递在后续阶段启用。
 - **私信防误发**：`FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES / OPEN_IDS / UNION_IDS` 为空时不限制；配置后只允许匹配收件人，其他私信会被记录并拦截。Playwright 启动的应用服务默认只允许 `李棋轩`。Docker Compose 默认 `NOTIFICATION_DELIVERY_DISABLED=true` 且 allowlist 为 `李棋轩`；生产真实投递需要显式设置 `NOTIFICATION_DELIVERY_DISABLED=false`，并按需配置或清空 allowlist。
 - **CardKit 回调**：采购审批卡若由审批机器人发送，需要运行审批机器人长连接；生产 `./service/install.sh` 默认安装并启动 `pnx-management-feishu-approval-ws.service`。通知机器人长连接仍可通过 `ENABLE_FEISHU_WS=true` 单独启用。审批机器人回调中的操作人也会通过 `union_id` 映射回系统 `openId` 后再校验权限。
 - **群 Webhook**：采购群通知和日报仍使用 Webhook，独立于统一私信接口

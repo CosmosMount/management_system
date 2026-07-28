@@ -28,6 +28,10 @@ import {
   type ProjectManagementNotificationPayload,
 } from "@/lib/project-management/notifications/events";
 import {
+  createProjectManagementEventNotificationsTx,
+  recipientsForPersonIdsTx,
+} from "@/lib/project-management/application/notification-utils";
+import {
   activateTaskInputSchema,
   confirmTerminationInputSchema,
   createTaskDraftInputSchema,
@@ -1445,15 +1449,93 @@ async function applyRevisionTx(
     },
   });
   if (replacedNodeIds.length > 0) {
-    await tx.workSegment.updateMany({
+    const affectedSegments = await tx.workSegment.findMany({
       where: {
         taskId: task.id,
         nodeId: { in: replacedNodeIds },
         type: "PLANNED",
+        status: { in: ["PLANNED", "IN_PROGRESS", "PENDING_CONFIRMATION"] },
         deletedAt: null,
       },
-      data: { associationNeedsReview: true },
+      select: {
+        id: true,
+        personId: true,
+        type: true,
+        status: true,
+        startAt: true,
+        endAt: true,
+        content: true,
+        taskId: true,
+        nodeId: true,
+        associationNeedsReview: true,
+        updatedAt: true,
+      },
     });
+    for (const segment of affectedSegments) {
+      if (segment.associationNeedsReview) continue;
+      const before = segmentAssociationSnapshot(segment);
+      const marked = await tx.workSegment.updateMany({
+        where: {
+          id: segment.id,
+          type: "PLANNED",
+          status: { in: ["PLANNED", "IN_PROGRESS", "PENDING_CONFIRMATION"] },
+          deletedAt: null,
+          associationNeedsReview: false,
+        },
+        data: {
+          associationNeedsReview: true,
+          updatedByAccountId: actor.accountId,
+        },
+      });
+      if (marked.count !== 1) continue;
+      const updatedSegment = await tx.workSegment.findUniqueOrThrow({
+        where: { id: segment.id },
+        select: {
+          id: true,
+          personId: true,
+          type: true,
+          status: true,
+          startAt: true,
+          endAt: true,
+          content: true,
+          taskId: true,
+          nodeId: true,
+          associationNeedsReview: true,
+          updatedAt: true,
+        },
+      });
+      const after = segmentAssociationSnapshot(updatedSegment);
+      const reason = "Revision 生效后原关联节点失效";
+      await tx.workSegmentChange.create({
+        data: {
+          segmentId: segment.id,
+          action: "UPDATE",
+          before,
+          after,
+          reason,
+          actorAccountId: actor.accountId,
+        },
+      });
+      await createDomainAuditEventTx(tx, {
+        actorAccountId: actor.accountId,
+        actorPersonId: actor.personId,
+        action: "pm.segment.update",
+        entityType: "WorkSegment",
+        entityId: segment.id,
+        taskId: task.id,
+        before,
+        after,
+        reason,
+      });
+    }
+    if (affectedSegments.length > 0) {
+      await notifySegmentAssociationInvalidatedTx(tx, {
+        actor,
+        task,
+        revisionNodeId,
+        affectedSegments,
+      });
+    }
   }
 
   await createDomainAuditEventTx(tx, {
@@ -2104,6 +2186,43 @@ async function notifyMilestoneReviewResultTx(
   });
 }
 
+async function notifySegmentAssociationInvalidatedTx(
+  tx: PrismaTx,
+  input: {
+    actor: ProjectManagementActor;
+    task: TaskForAuthorization;
+    revisionNodeId: string;
+    affectedSegments: Array<{ id: string; personId: string; content: string }>;
+  },
+) {
+  const recipients = await recipientsForPersonIdsTx(
+    tx,
+    input.affectedSegments.map((segment) => segment.personId),
+  );
+  await createProjectManagementEventNotificationsTx(tx, {
+    actor: input.actor,
+    task: {
+      id: input.task.id,
+      title: input.task.title,
+      status: input.task.status,
+      currentPlanVersionId: input.task.currentPlanVersionId,
+    },
+    kind: "segment_association_invalidated",
+    category: "WORK_SEGMENT",
+    eventKey: `pm:segment:association_invalidated:${input.revisionNodeId}`,
+    title: "Planned Segment 关联待确认",
+    summary: `Task「${input.task.title}」计划修订已生效，${input.affectedSegments.length} 条 Planned Segment 需要重新确认关联`,
+    entityType: "RevisionNode",
+    entityId: input.revisionNodeId,
+    linkPath: PROGRESS_LINK,
+    mandatory: true,
+    recipients,
+    context: {
+      affectedSegmentIds: input.affectedSegments.map((segment) => segment.id),
+    },
+  });
+}
+
 async function createProjectManagementNotificationsTx(
   tx: PrismaTx,
   input: {
@@ -2433,6 +2552,34 @@ function stableStringify(value: unknown): string {
       .join(",")}}`;
   }
   return JSON.stringify(value);
+}
+
+function segmentAssociationSnapshot(segment: {
+  id: string;
+  personId: string;
+  type: string;
+  status: string;
+  startAt: Date;
+  endAt: Date;
+  content: string;
+  taskId: string | null;
+  nodeId: string | null;
+  associationNeedsReview: boolean;
+  updatedAt: Date;
+}): Prisma.InputJsonObject {
+  return {
+    id: segment.id,
+    personId: segment.personId,
+    type: segment.type,
+    status: segment.status,
+    startAt: segment.startAt.toISOString(),
+    endAt: segment.endAt.toISOString(),
+    content: segment.content,
+    taskId: segment.taskId,
+    nodeId: segment.nodeId,
+    associationNeedsReview: segment.associationNeedsReview,
+    updatedAt: segment.updatedAt.toISOString(),
+  };
 }
 
 function jsonValue(value: unknown): Prisma.InputJsonValue {

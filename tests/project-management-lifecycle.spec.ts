@@ -537,6 +537,34 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         createdByAccountId: fixture.owner.account.id,
       },
     });
+    const confirmedPlanned = await prisma.workSegment.create({
+      data: {
+        personId: fixture.member.person.id,
+        type: "PLANNED",
+        status: "CONFIRMED",
+        startAt: new Date("2026-08-01T04:00:00.000Z"),
+        endAt: new Date("2026-08-01T05:00:00.000Z"),
+        content: "已确认旧节点计划投入",
+        allocation: new Prisma.Decimal(50),
+        taskId: fixture.taskId,
+        nodeId: activeNode.nodeId,
+        createdByAccountId: fixture.owner.account.id,
+      },
+    });
+    const cancelledPlanned = await prisma.workSegment.create({
+      data: {
+        personId: fixture.member.person.id,
+        type: "PLANNED",
+        status: "CANCELLED",
+        startAt: new Date("2026-08-01T05:00:00.000Z"),
+        endAt: new Date("2026-08-01T06:00:00.000Z"),
+        content: "已取消旧节点计划投入",
+        allocation: new Prisma.Decimal(50),
+        taskId: fixture.taskId,
+        nodeId: activeNode.nodeId,
+        createdByAccountId: fixture.owner.account.id,
+      },
+    });
 
     const revision = await createRevisionDraft(actor(fixture.owner), {
       taskId: fixture.taskId,
@@ -588,10 +616,41 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       select: { associationNeedsReview: true },
     });
     expect(updatedSegment.associationNeedsReview).toBe(true);
+    await prisma.workSegmentChange.findFirstOrThrow({
+      where: {
+        segmentId: planned.id,
+        action: "UPDATE",
+        reason: "Revision 生效后原关联节点失效",
+      },
+    });
+    await prisma.domainAuditEvent.findFirstOrThrow({
+      where: {
+        entityType: "WorkSegment",
+        entityId: planned.id,
+        action: "pm.segment.update",
+      },
+    });
+    const terminalSegments = await prisma.workSegment.findMany({
+      where: { id: { in: [confirmedPlanned.id, cancelledPlanned.id] } },
+      select: { id: true, associationNeedsReview: true },
+      orderBy: { id: "asc" },
+    });
+    expect(terminalSegments.map((segment) => segment.associationNeedsReview)).toEqual([
+      false,
+      false,
+    ]);
     await expectProjectManagementOutbox(
       `pm:revision:applied:${revision.revisionNodeId}:feishu`,
       {
         type: "revision_applied",
+        botKind: "notification",
+        purpose: "notification",
+      },
+    );
+    await expectProjectManagementOutbox(
+      `pm:segment:association_invalidated:${revision.revisionNodeId}:feishu`,
+      {
+        type: "segment_association_invalidated",
         botKind: "notification",
         purpose: "notification",
       },

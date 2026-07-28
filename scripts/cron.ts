@@ -6,6 +6,12 @@ import { runProcurementStaleReminders } from "../lib/procurement-reminders";
 import { runProcurementBudgetAlerts } from "../lib/procurement-budget-alerts";
 import { syncFeishuContactUsers } from "../lib/feishu-user-sync";
 import { drainNotificationOutbox } from "../lib/notification-outbox";
+import {
+  scanSegmentTransitions,
+} from "../lib/project-management/application/segment-service";
+import {
+  scanResourceConflictsForDefaultWindow,
+} from "../lib/project-management/application/conflict-service";
 import { prisma } from "../lib/prisma";
 import { logger } from "../lib/logger";
 
@@ -13,6 +19,8 @@ const CONTACT_SYNC_CRON = process.env.FEISHU_CONTACT_SYNC_CRON ?? "30 8 * * *";
 const CRON_TIMEZONE = "Asia/Shanghai";
 let contactSyncRunning = false;
 let budgetScanRunning = false;
+let segmentTransitionScanRunning = false;
+let resourceConflictScanRunning = false;
 
 async function runProcurementDaily() {
   const orders = await prisma.purchaseOrder.findMany({
@@ -99,6 +107,64 @@ async function runNotificationOutboxDrain() {
   }
 }
 
+async function runProjectManagementSegmentTransitionScan() {
+  if (segmentTransitionScanRunning) {
+    logger.warn("cron.project_management_segment_transitions.skipped_running", {
+      module: "cron",
+      action: "runProjectManagementSegmentTransitionScan",
+      result: "skipped",
+    });
+    return;
+  }
+
+  segmentTransitionScanRunning = true;
+  try {
+    const result = await scanSegmentTransitions();
+    if (result.pendingConfirmationCount > 0 || result.inProgressCount > 0) {
+      logger.info("cron.project_management_segment_transitions.completed", {
+        module: "cron",
+        action: "runProjectManagementSegmentTransitionScan",
+        ...result,
+      });
+    }
+  } finally {
+    segmentTransitionScanRunning = false;
+  }
+}
+
+async function runProjectManagementResourceConflictScan() {
+  if (resourceConflictScanRunning) {
+    logger.warn("cron.project_management_resource_conflicts.skipped_running", {
+      module: "cron",
+      action: "runProjectManagementResourceConflictScan",
+      result: "skipped",
+    });
+    return;
+  }
+
+  resourceConflictScanRunning = true;
+  try {
+    const result = await scanResourceConflictsForDefaultWindow();
+    if (
+      result.createdCount > 0 ||
+      result.reopenedCount > 0 ||
+      result.resolvedCount > 0
+    ) {
+      logger.info("cron.project_management_resource_conflicts.completed", {
+        module: "cron",
+        action: "runProjectManagementResourceConflictScan",
+        scannedPersonCount: result.scannedPersonCount,
+        detectedCount: result.detectedCount,
+        createdCount: result.createdCount,
+        reopenedCount: result.reopenedCount,
+        resolvedCount: result.resolvedCount,
+      });
+    }
+  } finally {
+    resourceConflictScanRunning = false;
+  }
+}
+
 cron.schedule(
   CONTACT_SYNC_CRON,
   () => {
@@ -142,6 +208,34 @@ cron.schedule(
 );
 
 cron.schedule(
+  "*/10 * * * *",
+  () => {
+    runProjectManagementSegmentTransitionScan().catch((err) =>
+      logger.error("cron.project_management_segment_transitions.failed", {
+        module: "cron",
+        action: "runProjectManagementSegmentTransitionScan",
+        error: err,
+      }),
+    );
+  },
+  { timezone: CRON_TIMEZONE },
+);
+
+cron.schedule(
+  "*/15 * * * *",
+  () => {
+    runProjectManagementResourceConflictScan().catch((err) =>
+      logger.error("cron.project_management_resource_conflicts.failed", {
+        module: "cron",
+        action: "runProjectManagementResourceConflictScan",
+        error: err,
+      }),
+    );
+  },
+  { timezone: CRON_TIMEZONE },
+);
+
+cron.schedule(
   "0 9 * * *",
   () => {
     runProcurementDaily().catch((err) =>
@@ -162,6 +256,8 @@ logger.info("cron.started", {
   contactSyncCron: CONTACT_SYNC_CRON,
   notificationOutboxCron: "*/2 * * * *",
   procurementBudgetCron: "*/10 * * * *",
+  projectManagementSegmentTransitionsCron: "*/10 * * * *",
+  projectManagementResourceConflictsCron: "*/15 * * * *",
   procurementDailyCron: "0 9 * * *",
   notificationDeliveryDisabled:
     process.env.NOTIFICATION_DELIVERY_DISABLED === "true",
