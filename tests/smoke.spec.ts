@@ -142,16 +142,30 @@ test.describe("authenticated smoke", () => {
     expect(errors).toEqual([]);
   });
 
-  test("progress placeholder and legacy redirects stay healthy", async ({ page }) => {
+  test("progress workspace and legacy task redirect stay healthy", async ({ page }) => {
     const errors = await collectBrowserErrors(page);
     await page.goto("/progress", { waitUntil: "networkidle" });
-    await expect(page.getByRole("heading", { name: "项目管理正在重构" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "我的工作" })).toBeVisible();
 
-    await page.goto("/progress/list?deadline=overdue", {
+    await page.goto("/progress/task/legacy-task", {
+      waitUntil: "networkidle",
+    });
+    await expect(page).toHaveURL(/\/progress\/tasks\/legacy-task$/);
+    await expect(
+      page.getByRole("heading", { name: "页面不存在或无权访问" }),
+    ).toBeVisible();
+    await expectHealthyPage(page);
+
+    await page.goto("/progress/kanban", { waitUntil: "networkidle" });
+    await expect(page).toHaveURL(/\/progress$/);
+    await expect(page.getByRole("heading", { name: "我的工作" })).toBeVisible();
+    await expectHealthyPage(page);
+
+    await page.goto("/progress/projects/legacy-project", {
       waitUntil: "networkidle",
     });
     await expect(page).toHaveURL(/\/progress$/);
-    await expect(page.getByRole("heading", { name: "项目管理正在重构" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "我的工作" })).toBeVisible();
     await expectHealthyPage(page);
 
     expect(errors).toEqual([]);

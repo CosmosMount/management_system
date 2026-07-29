@@ -31,8 +31,8 @@ export async function AppHeader() {
             采购管理
           </Link>
           <Link href={routes.progress.root} className={navLinkClass}>
-            <span className="hidden sm:inline">项目管理（重构中）</span>
-            <span className="sm:hidden">项目重构</span>
+            <span className="hidden sm:inline">项目管理</span>
+            <span className="sm:hidden">项目</span>
           </Link>
           <Link href="/profile" className={cn(navLinkClass, "hidden sm:inline")}>
             个人中心

@@ -121,10 +121,10 @@ npm run build
 npm run db:deploy
 ```
 
-项目管理 P1-P5 schema、身份、授权、生命周期、Segment 和 Conflict 变更应额外执行：
+项目管理 P1-P6 schema、身份、授权、生命周期、Segment、Conflict、UI 或通知接入变更应额外执行：
 
 ```bash
-npm run test:e2e -- tests/project-management-p1.spec.ts tests/project-management-lifecycle.spec.ts tests/project-management-segments.spec.ts tests/project-management-conflicts.spec.ts tests/feishu-boundaries.spec.ts
+npm run test:e2e -- tests/project-management-p1.spec.ts tests/project-management-lifecycle.spec.ts tests/project-management-segments.spec.ts tests/project-management-conflicts.spec.ts tests/project-management-ui.spec.ts tests/notification-outbox-adapters.spec.ts tests/feishu-boundaries.spec.ts
 npm run pm:identity-backfill
 ```
 
@@ -202,13 +202,16 @@ npm run pm:identity-backfill
 2. 无关登录用户访问无权限附件应返回 403 或 404。
 3. 有权限用户可打开订单附件、报销截图、签名图片。
 
-## 项目管理占位与旧路由测试
+## 项目管理 P4/P6 UI 测试
 
-1. 桌面 `1440x1000` 与 Pixel 5 分别打开 `/progress`，应展示中文“项目管理重构中”占位内容。
-2. 页面不得出现旧项目、阶段、任务、审批、周报、风险或提醒入口，也不得出现 `PROJECT_MANAGER` 角色文案。
-3. 逐一访问代表性的旧地址，例如 `/progress/new`、`/progress/list`、`/progress/dashboard`、`/progress/archive`、`/progress/task/legacy-id` 和 `/progress/legacy-id`，应服务端重定向到 `/progress`。
-4. 占位页和重定向不得出现 500、Next.js error overlay、未处理浏览器错误或横向滚动。
-5. migration 集成测试必须创建名称以 `_test` 结尾的临时 PostgreSQL 数据库，应用收缩 migration 之前的完整真实 migration 链，写入旧项目管理和共享记录，再单独执行收缩 migration；确认旧表、旧 enum、`PROJECT_MANAGER` 数据和 `channel=progress` outbox/recipient 被删除，同时采购、反馈、用户、附件、CardKit 跟踪和其他 channel outbox 数据保持不变，最后删除临时库。
+1. 桌面 `1440x1000` 与 Pixel 5 分别打开 `/progress`，应展示“我的工作”总览、可见 Active Task、未来投入、待确认计划、开放冲突和未读通知摘要。
+2. 打开 `/progress/tasks`，按“只看我参与”、状态、优先级和关键词筛选时，只展示当前 actor 可读 Task；不可读 Task 不能通过列表枚举。
+3. 打开 `/progress/tasks/[id]`，成员可看到 Task 工作台、当前计划、成员权限和人员投入；非成员或无范围权限账号应看到“页面不存在或无权访问”。
+4. 打开 `/progress/resources`，人员计划时间轴应能新增 Planned Segment，并通过 P5 服务端 action 执行确认、部分确认、拆分、合并、顺延和取消；测试需校验 UI 结果和数据库状态。
+5. 打开 `/progress/resources/conflicts`，冲突中心应展示解释和关联 Segment，并能确认已知、忽略、解决、预览建议和显式应用建议；权限不足账号不能处理冲突。
+6. 打开 `/progress/notifications`，只展示当前收件人的站内通知；可按类型/未读筛选、标记单条或全部已读，跳转对象前仍要按业务对象权限过滤。
+7. 页面不得出现旧项目、阶段、周报、风险、提醒或 `PROJECT_MANAGER` 角色文案；不得出现 500、Next.js error overlay、未处理浏览器错误或横向滚动。
+8. 旧 `/progress/task/:id` 应服务端重定向到 `/progress/tasks/:id`；旧 `/progress/projects/*` 和 `/progress/kanban` 应回到 `/progress`，不能永久跳转到不存在页面。收缩 migration 集成测试仍需验证旧表、旧 enum、`PROJECT_MANAGER` 数据和 `channel=progress` outbox/recipient 被删除，同时采购、反馈、用户、附件、CardKit 跟踪和其他 channel outbox 数据保持不变。
 
 ## 反馈中心测试
 
@@ -244,24 +247,25 @@ npm run pm:identity-backfill
 
 1. 自动化测试强制 `NOTIFICATION_DELIVERY_DISABLED=true`，并 mock 飞书 HTTP；确认测试过程没有真实网络投递。
 2. 飞书传输层分别验证 text、交互卡片和 CardKit，以及禁发、allowlist、通知/审批凭据、`open_id`/`union_id`、审批 fallback、`cardId` 返回和错误脱敏。
-3. procurement/feedback adapter 分别验证 payload、`type`、`botKind` 校验，真实/独立传输收件人计算与去重、完整消息内容和明确用途；普通通知不得使用审批机器人，审批事件只有 Webhook 而无真实审批人时不得标记成功。
-4. 创建采购或反馈事件后应写入正确 channel 的 `NotificationOutbox`；旧 `progress` channel 必须被拒绝或不存在 adapter。
+3. procurement/feedback/project-management adapter 分别验证 payload、`type`、`botKind` 校验，真实/独立传输收件人计算与去重、完整消息内容和明确用途；普通通知不得使用审批机器人，审批事件只有 Webhook 而无真实审批人时不得标记成功。
+4. 创建采购、反馈或项目管理事件后应写入正确 channel 的 `NotificationOutbox`；旧 `progress` channel 必须被拒绝或不存在 adapter。项目管理 adapter 测试应 mock 飞书 HTTP 并验证交互卡包含操作人、Task、事件、对象、时间和上下文。
 5. 飞书网络失败、临时收件人查询失败或缺少 `union_id` 时 outbox 保留可重试状态，不回滚业务状态；未知 channel、非法 payload/元数据和错误机器人用途应终止重试并保留明确错误。
 6. 重跑 drain 不重复发送相同 `eventKey`，多收件人通知只重试失败的 `NotificationOutboxRecipient`；首次收件人解析失败和 outbox/recipient 锁过期后都可安全恢复。
 7. 同时启动多个 cron 时，应确认不会重复 claim 同一 outbox；如发现重复，记录为并发风险。
 8. 验证 CardKit fallback 后跟踪表保存实际机器人和最终 `cardId`，远端 CardKit 错误中的敏感字符串不会进入异常或 outbox。
 9. 通过静态搜索确认 IM 消息 API 只在统一传输层、CardKit API 只在 CardKit 模块、Webhook URL 只在 Webhook 模块出现。
 
-## 项目管理 P1-P5 服务端测试
+## 项目管理 P1-P6 测试
 
 1. `tests/project-management-p1.spec.ts` 覆盖新增 schema 约束：单 Task 单 Current Plan、有效 Tag 名称唯一、Segment 时间和 allocation 检查、Review 幂等键、Conflict fingerprint。
 2. 身份测试覆盖 `User -> Account/Identity/Person` 首次解析、重复解析幂等、openId fallback 升级为 unionId、冲突硬失败和禁用 Account 拒绝项目管理 actor。
 3. 授权测试覆盖 Task member、范围内/外 Team Administrator、非成员、空 scope Team Administrator 拒绝、Tag 创建人无 Task 权限，以及 `taskReadableWhere` 防枚举。
-4. 通知测试覆盖站内通知事务 helper、审计脱敏、审计 append-only、`channel=project-management` outbox 入队、审批用途 allowlist、adapter 收件人去重和“P1 不真实投递飞书”的边界。
+4. 通知测试覆盖站内通知事务 helper、审计脱敏、审计 append-only、`channel=project-management` outbox 入队、审批用途 allowlist、adapter 收件人去重、完整交互卡和通知/审批机器人边界。
 5. `tests/project-management-lifecycle.spec.ts` 覆盖 P2/P3 Task 草稿创建、幂等键冲突、Current Plan 持久化、激活、并发/过期锁拒绝、Revision 提交/驳回/取消/审批/直接生效、Planned Segment 待确认标记、Revision 生效后的 Segment 关联失效通知、Milestone Review TEXT/LINK 证据、FILE 证据拒绝、审批推进、Termination 四种 outcome、查询防枚举、审计和 `channel=project-management` outbox。
 6. `tests/project-management-segments.spec.ts` 覆盖 P5 Segment 中文校验、本人/他人权限、乐观锁、单条与 100 条批量事务回滚、split/merge 时间守恒和来源历史、full/partial confirm、一 Planned 多 Actual、多 Planned 一 Actual、无来源 Actual、cancel、soft delete、relink，以及 Segment 操作不改变 Task/Milestone。
 7. `tests/project-management-conflicts.spec.ts` 覆盖 P5 Conflict 半开区间、100%/100.01% allocation 边界、missing allocation、High/Critical、Owner/Lead、Revision overlap、Actual overload、fingerprint 幂等、消失后 resolved、`ignoredUntil` 到期重开、acknowledge/resolve/ignore 权限与状态机、preview 不写库、apply 显式确认和 `expectedUpdatedAt` 校验，以及 outbox 只使用项目管理通知机器人。
-8. `tests/feishu-boundaries.spec.ts` 必须继续扫描 `app/progress`、`app/actions/project-management`、`components/project-management`、`lib/project-management` 和项目管理 notification adapter，防止直接导入飞书传输层。
+8. `tests/project-management-ui.spec.ts` 覆盖 P4/P6 `/progress` 总览、Task 工作台、资源时间轴、冲突中心、站内通知中心、桌面/移动视口、持久化状态和非成员拒绝路径。
+9. `tests/feishu-boundaries.spec.ts` 必须继续扫描 `app/progress`、`app/actions/project-management`、`components/project-management`、`lib/project-management` 和项目管理 notification adapter，防止项目管理入口或领域服务直接导入飞书传输层。
 
 ## 部署冒烟测试
 
@@ -293,14 +297,14 @@ sudo systemctl status pnx-management-cron
 - server service 启动前执行数据库部署命令。
 - cron service 只启动一个实例。
 - reinstall/uninstall 脚本不会删除数据库和上传附件。
-- 重启服务后 `/`、`/feedback`、`/progress` 可访问，旧 `/progress/*` 正确重定向。
+- 重启服务后 `/`、`/feedback`、`/progress`、`/progress/tasks`、`/progress/resources` 和 `/progress/notifications` 可访问；旧 `/progress/task/:id` 正确重定向到 `/progress/tasks/:id`。
 
 ## Subagent 执行提示词
 
 ### 测试执行 subagent
 
 ```text
-请在当前仓库按 docs/TESTING.md 执行测试。先记录 commit、Node/npm 版本、PostgreSQL 连接目标（脱敏）、Web 端口和登录态文件。按“基础代码测试 → Playwright 通用检查 → 采购模块 → 项目管理占位与旧路由 → 反馈中心 → 管理员面板 → 实时同步 → 通知/cron → 部署冒烟”的顺序执行。不要修改代码。每个场景输出 PASS/FAIL/SKIP，FAIL 必须包含复现步骤、实际结果、期望结果、截图或 HTML 保存路径。不要输出 cookie、token、.env 密钥或完整用户敏感信息。
+请在当前仓库按 docs/TESTING.md 执行测试。先记录 commit、Node/npm 版本、PostgreSQL 连接目标（脱敏）、Web 端口和登录态文件。按“基础代码测试 → Playwright 通用检查 → 采购模块 → 项目管理 P4/P6 UI → 反馈中心 → 管理员面板 → 实时同步 → 通知/cron → 部署冒烟”的顺序执行。不要修改代码。每个场景输出 PASS/FAIL/SKIP，FAIL 必须包含复现步骤、实际结果、期望结果、截图或 HTML 保存路径。不要输出 cookie、token、.env 密钥或完整用户敏感信息。
 ```
 
 ### 代码审查 subagent
@@ -331,7 +335,7 @@ sudo systemctl status pnx-management-cron
 Playwright 结果：
 - 路由巡检:
 - 采购:
-- 项目管理占位/旧路由:
+- 项目管理 P4/P6 UI:
 - 反馈:
 - 管理员:
 - 实时同步:

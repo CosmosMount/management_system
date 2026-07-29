@@ -24,7 +24,7 @@
 - 无独立后端服务，业务逻辑集中在 `app/actions/` 与 `lib/`
 - 文件上传写入私有目录 `storage/uploads/`，通过 `/uploads/...` 鉴权 route 返回
 - 飞书集成拆分为 OAuth、通讯录、Webhook、统一私信传输层和 notification outbox。`lib/feishu-message.ts` 的 `sendFeishuDirectMessage()` 是 IM 私信唯一出口，支持 `text`、交互卡片和 CardKit；Webhook 保持独立。
-- `lib/notification-channels/{procurement,feedback,project-management}.ts` 分别实现业务 channel adapter，负责校验持久化 payload、计算并去重收件人、构造完整消息和明确消息用途；传输层不查询业务角色，也不理解采购、反馈或项目管理状态。项目管理 adapter 当前校验 P1-P3 payload 与收件人计划，尚不执行真实飞书投递。
+- `lib/notification-channels/{procurement,feedback,project-management}.ts` 分别实现业务 channel adapter，负责校验持久化 payload、计算并去重收件人、构造完整消息和明确消息用途；传输层不查询业务角色，也不理解采购、反馈或项目管理状态。项目管理 adapter 构造交互卡并通过统一私信传输层投递，验收/Revision 待审批使用审批机器人，其他事件使用通知机器人。
 - 通知 outbox 分两层：`NotificationOutbox` 表示业务事件，`NotificationOutboxRecipient` 表示单个收件人的投递状态。核心 drain 按 `channel` 查找 adapter，只调度和更新状态；重试失败收件人时不能把已成功收件人再次发送。临时解析/网络错误退避重试，损坏 payload、未知 channel、非法 `type/botKind` 等确定性配置错误直接冻结，修正后才可人工重置。
 
 ## 结构化日志
@@ -51,11 +51,11 @@ app/
   actions/          # Server Actions（采购 + 反馈 + 管理）
   api/auth/         # Auth.js 路由
   apply/ orders/    # 采购报销页面
-  progress/         # 项目管理重构占位页与旧路由重定向
+  progress/         # 项目管理总览、Task 工作台、资源时间轴、冲突和通知中心
   admin/            # 角色管理
 components/         # UI 组件
 lib/                # 业务逻辑、权限、飞书、校验
-  project-management/ # v2.1 P1-P5 身份、授权、生命周期、资源、通知和审计
+  project-management/ # v2.1 P1-P6 身份、授权、生命周期、资源、通知和审计
 prisma/
   schema.prisma     # 数据模型
   seed.ts           # 初始角色 seed
@@ -81,7 +81,7 @@ Auth.js 不能在中件件中 import 含 Prisma 的模块，因此拆分：
 |------|------|------|
 | 采购 | `lib/permissions.ts` | 服务端角色查询 |
 | 采购（客户端） | `lib/permissions-client.ts` | 纯函数，无数据库依赖 |
-| 项目管理 | `lib/project-management/authorization` | P1-P5 授权、稳定 action 字符串、状态机操作鉴权和 readableWhere 查询过滤 |
+| 项目管理 | `lib/project-management/authorization` | P1-P6 授权、稳定 action 字符串、状态机操作鉴权和 readableWhere 查询过滤 |
 
 角色类型见 `UserRoleType` enum：`SUPER_ADMIN`、`TEAM_ADMIN`、`TECH_GROUP_ADMIN`、`TEACHER`、`FINANCE`。
 
@@ -145,7 +145,7 @@ P5 已补齐 Resource Segment 与 Conflict 服务端闭环，复用 P1 的 `Work
 
 `scripts/cron.ts` 每 10 分钟运行 `scanSegmentTransitions`，把到期 Planned 推到 `PENDING_CONFIRMATION` 并写 `segment_confirmation_due`，把已开始且未结束的 Planned 置为 `IN_PROGRESS` 并写审计；该扫描不会自动生成 Actual。每 15 分钟运行 `scanResourceConflictsForDefaultWindow`，带运行中保护，只写冲突记录、站内通知和 `channel=project-management` outbox，不调整 Segment。
 
-`/progress` 仍是占位页，资源时间轴 UI、冲突中心 UI、通知中心页面和真实项目管理飞书卡片投递尚未上线。
+P4/P6 首批浏览器入口已上线：`/progress` 汇总我的 Active Task、未来投入、待确认计划、开放冲突和未读通知；`/progress/tasks` 提供可见 Task 列表；`/progress/tasks/[id]` 提供 Task 工作台；`/progress/resources` 提供人员计划时间轴并复用 P5 Segment action；`/progress/resources/conflicts` 提供冲突中心并复用 P5 Conflict action；`/progress/notifications` 提供站内通知筛选、标记已读和对象跳转。所有页面先解析项目管理 actor，再通过 `taskReadableWhere`、`segmentReadableWhere`、Conflict readable 条件或 `recipientAccountId` 过滤，服务端 action 仍执行状态机、权限和 `expectedUpdatedAt` 校验。
 
 `DomainAuditEvent` 由 append-only trigger 保护，应用代码只能追加审计事件，不能更新或删除既有审计行。
 
@@ -164,12 +164,18 @@ P5 已补齐 Resource Segment 与 Conflict 服务端闭环，复用 P1 的 `Work
 | `/procurement/dashboard` | 采购汇总看板 |
 | `/admin` | 角色与通讯录管理 |
 
-### 项目管理占位
+### 项目管理
 
 | 路径 | 功能 |
 |------|------|
-| `/progress` | 项目管理重构占位页 |
-| `/progress/*` | 服务端重定向到 `/progress` |
+| `/progress` | 我的工作总览 |
+| `/progress/tasks` | Task 列表 |
+| `/progress/tasks/[id]` | Task 工作台 |
+| `/progress/resources` | 人员计划时间轴 |
+| `/progress/resources/conflicts` | 资源冲突中心 |
+| `/progress/notifications` | 站内通知中心 |
+| `/progress/task/:id` | 旧 Task 详情地址，服务端重定向到 `/progress/tasks/:id` |
+| `/progress/projects/*`、`/progress/kanban` | 旧 Project/Kanban 地址，临时重定向到 `/progress` |
 
 ## 飞书集成要点
 
@@ -177,7 +183,7 @@ P5 已补齐 Resource Segment 与 Conflict 服务端闭环，复用 P1 的 `Work
 - **Webhook 签名**：`HmacSHA256("", timestamp + "\n" + secret)` 后 Base64
 - **统一私信传输层**：`lib/feishu-message.ts` 导出 `FeishuMessage`、`FeishuMessagePurpose`、`FeishuSendResult` 和 `sendFeishuDirectMessage()`。调用方传入系统用户 `openId`、明确的 `botKind`、用途和 text/交互卡片/CardKit 消息；传输层统一完成收件人身份解析、机器人凭据、token、HTTP 请求、CardKit 创建、禁发闸、allowlist、结构化日志和错误脱敏。
 - **机器人边界**：普通通知只能使用通知机器人，审批请求才可声明审批用途。审批机器人未独立配置时使用通知机器人凭据；独立审批应用通过 `User.unionId` 使用 `receive_id_type=union_id`，缺少 `union_id` 时失败并由 outbox 重试。保留既有的“用户对审批应用不可用时回退通知机器人”行为，发送结果会标明实际机器人和是否 fallback。
-- **Outbox adapter**：采购、反馈和项目管理业务只能通过 `lib/notification-channels/` adapter 进入统一私信传输边界。adapter 校验 payload 与持久化元数据、计算收件人和构造业务内容；outbox 核心及传输层不包含业务角色查询或状态分支。adapter 的收件人计划可区分真实私信与 Webhook 等独立传输，采购审批必须至少有一个真实私信审批人。项目管理 P2/P3 生命周期事件和 P5 Segment/Conflict 事件只写 `channel=project-management` outbox；adapter 校验 payload、审批用途和收件人计划，真实飞书消息构造和投递在后续阶段启用。
+- **Outbox adapter**：采购、反馈和项目管理业务只能通过 `lib/notification-channels/` adapter 进入统一私信传输边界。adapter 校验 payload 与持久化元数据、计算收件人和构造业务内容；outbox 核心及传输层不包含业务角色查询或状态分支。adapter 的收件人计划可区分真实私信与 Webhook 等独立传输，采购审批必须至少有一个真实私信审批人。项目管理 adapter 会对 `recipientOpenIds` 去重，按 payload purpose 校验 botKind，构造包含操作人、Task、事件、对象、时间和上下文的交互卡，再交给 `sendFeishuDirectMessage()`；项目管理 Server Action 和领域 service 仍不得直接导入飞书传输层。
 - **私信防误发**：`FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES / OPEN_IDS / UNION_IDS` 为空时不限制；配置后只允许匹配收件人，其他私信会被记录并拦截。Playwright 启动的应用服务默认只允许 `李棋轩`。Docker Compose 默认 `NOTIFICATION_DELIVERY_DISABLED=true` 且 allowlist 为 `李棋轩`；生产真实投递需要显式设置 `NOTIFICATION_DELIVERY_DISABLED=false`，并按需配置或清空 allowlist。
 - **CardKit 回调**：采购审批卡若由审批机器人发送，需要运行审批机器人长连接；生产 `./service/install.sh` 默认安装并启动 `pnx-management-feishu-approval-ws.service`。通知机器人长连接仍可通过 `ENABLE_FEISHU_WS=true` 单独启用。审批机器人回调中的操作人也会通过 `union_id` 映射回系统 `openId` 后再校验权限。
 - **群 Webhook**：采购群通知和日报仍使用 Webhook，独立于统一私信接口

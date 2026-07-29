@@ -571,19 +571,11 @@ test.describe("notification outbox channel adapters", () => {
         select: { openId: true },
       })
     ).map((role) => role.openId);
-    const superAdminUnionIds = (
-      await prisma.user.findMany({
-        where: { openId: { in: superAdminOpenIds } },
-        select: { unionId: true },
-      })
-    )
-      .map((user) => user.unionId)
-      .filter((unionId): unionId is string => Boolean(unionId));
-    process.env.FEISHU_DIRECT_MESSAGE_ALLOWED_OPEN_IDS = "";
-    process.env.FEISHU_DIRECT_MESSAGE_ALLOWED_UNION_IDS = [
-      "on_outbox_approver",
-      ...superAdminUnionIds,
+    process.env.FEISHU_DIRECT_MESSAGE_ALLOWED_OPEN_IDS = [
+      "ou_outbox_approver",
+      ...superAdminOpenIds,
     ].join(",");
+    process.env.FEISHU_DIRECT_MESSAGE_ALLOWED_UNION_IDS = "";
 
     await enqueueNotification({
       eventKey,
@@ -675,6 +667,110 @@ test.describe("notification outbox channel adapters", () => {
       "这里是需要收件人直接理解的完整处理说明",
     );
     expect(JSON.stringify(content)).toContain("feedback-content-test");
+  });
+
+  test("项目管理 adapter 使用通知机器人并生成完整业务卡片", async () => {
+    const eventKey = `${EVENT_PREFIX}project-management-content`;
+    await enqueueNotification({
+      eventKey,
+      channel: "project-management",
+      botKind: "notification",
+      type: "resource_conflict_opened",
+      payload: {
+        kind: "resource_conflict_opened",
+        payloadVersion: 1,
+        purpose: "notification",
+        category: "RESOURCE_CONFLICT",
+        title: "资源冲突新增",
+        summary: "李棋轩在电控调试 Task 上存在投入超过 100% 的冲突",
+        actorName: "系统",
+        taskId: "pm-task-id",
+        taskTitle: "电控调试 Task",
+        entityType: "ResourceConflict",
+        entityId: "pm-conflict-id",
+        linkPath: "/progress/resources/conflicts?conflictId=pm-conflict-id",
+        recipientOpenIds: ["ou_outbox_success", "ou_outbox_success"],
+        mandatory: true,
+        appOrigin: "http://127.0.0.1:3002",
+        context: {
+          severity: "HIGH",
+          kind: "ALLOCATION_OVER_LIMIT",
+        },
+      },
+    });
+
+    expect(
+      await drainNotificationOutbox(20, { ignoreDeliveryDisabled: true }),
+    ).toBe(1);
+    expect(authAppIds).toEqual(["notification-app"]);
+    expect(directMessageBodies).toHaveLength(1);
+    const content = JSON.parse(
+      String(directMessageBodies[0]?.content),
+    ) as Record<string, unknown>;
+    const rendered = JSON.stringify(content);
+    expect(rendered).toContain("资源冲突新增");
+    expect(rendered).toContain("系统");
+    expect(rendered).toContain("电控调试 Task");
+    expect(rendered).toContain("投入超过 100%");
+    expect(rendered).toContain("/progress/resources/conflicts");
+    const row = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: { eventKey },
+      include: { recipients: true },
+    });
+    expect(row.status).toBe("SENT");
+    expect(row.recipients).toHaveLength(1);
+    expect(row.recipients[0]).toMatchObject({
+      openId: "ou_outbox_success",
+      status: "SENT",
+      receiveIdType: "open_id",
+    });
+  });
+
+  test("项目管理 adapter 遵守禁发 guard 且不会把跳过投递标记为成功", async () => {
+    const eventKey = `${EVENT_PREFIX}project-management-delivery-disabled`;
+    process.env.NOTIFICATION_DELIVERY_DISABLED = "true";
+    await enqueueNotification({
+      eventKey,
+      channel: "project-management",
+      botKind: "notification",
+      type: "resource_conflict_opened",
+      payload: {
+        kind: "resource_conflict_opened",
+        payloadVersion: 1,
+        purpose: "notification",
+        category: "RESOURCE_CONFLICT",
+        title: "资源冲突禁发验证",
+        summary: "禁发开关打开时不能将项目管理飞书通知标记为成功",
+        actorName: "系统",
+        taskId: "pm-task-id",
+        taskTitle: "电控调试 Task",
+        entityType: "ResourceConflict",
+        entityId: "pm-conflict-disabled",
+        linkPath: "/progress/resources/conflicts?conflictId=pm-conflict-disabled",
+        recipientOpenIds: ["ou_outbox_success"],
+        mandatory: true,
+        appOrigin: "http://127.0.0.1:3002",
+        context: { severity: "HIGH" },
+      },
+    });
+
+    expect(
+      await drainNotificationOutbox(20, { ignoreDeliveryDisabled: true }),
+    ).toBe(0);
+    expect(authAppIds).toEqual([]);
+    expect(directMessageBodies).toHaveLength(0);
+    const row = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: { eventKey },
+      include: { recipients: true },
+    });
+    expect(row.status).toBe("FAILED");
+    expect(row.lastError).toContain("delivery_disabled");
+    expect(row.recipients).toHaveLength(1);
+    expect(row.recipients[0]).toMatchObject({
+      openId: "ou_outbox_success",
+      status: "FAILED",
+    });
+    expect(row.recipients[0]?.lastError).toContain("delivery_disabled");
   });
 
   test("token 远端错误不会进入 outbox 持久化错误", async () => {

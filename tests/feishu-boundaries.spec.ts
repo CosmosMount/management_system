@@ -49,8 +49,6 @@ test("项目管理入口和领域服务不能直接依赖飞书传输层", async
     path.join(process.cwd(), "app/actions/project-management"),
     path.join(process.cwd(), "components/project-management"),
     path.join(process.cwd(), "lib/project-management"),
-    path.join(process.cwd(), "lib/notification-channels/project-management.ts"),
-    path.join(process.cwd(), "lib/notification-channels/project-management"),
   ]);
   const imports = await Promise.all(
     projectManagementFiles.map(async (filePath) => ({
@@ -62,6 +60,23 @@ test("项目管理入口和领域服务不能直接依赖飞书传输层", async
   expect(
     projectManagementFeishuTransportViolations(imports),
   ).toEqual([]);
+});
+
+test("项目管理飞书传输只在 notification channel adapter 内启用", async () => {
+  const adapterPath = path.join(
+    process.cwd(),
+    "lib/notification-channels/project-management.ts",
+  );
+  const content = await readFile(adapterPath, "utf8");
+  expect(content).toContain("sendFeishuDirectMessage");
+  expect(
+    projectManagementFeishuTransportViolations([
+      { filePath: adapterPath, content },
+    ]).map((violation) => violation.filePath),
+  ).toEqual([
+    "lib/notification-channels/project-management.ts",
+    "lib/notification-channels/project-management.ts",
+  ]);
 });
 
 async function collectExistingSourceFiles(directories: string[]): Promise<string[]> {

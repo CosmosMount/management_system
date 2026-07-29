@@ -217,6 +217,43 @@ export async function getResourceConflict({
   return toResourceConflictDto(row, actor);
 }
 
+export async function listTimelinePeople({
+  actor,
+}: {
+  actor: ProjectManagementActor;
+}): Promise<Array<{ id: string; displayName: string }>> {
+  const [actorPerson, segmentPeople] = await Promise.all([
+    prisma.person.findUnique({
+      where: { id: actor.personId },
+      select: { id: true, displayName: true },
+    }),
+    prisma.workSegment.findMany({
+      where: segmentReadableWhere(actor),
+      distinct: ["personId"],
+      select: {
+        person: { select: { id: true, displayName: true } },
+      },
+      orderBy: { personId: "asc" },
+      take: 200,
+    }),
+  ]);
+  const byId = new Map<string, { id: string; displayName: string }>();
+  if (actorPerson) byId.set(actorPerson.id, actorPerson);
+  for (const row of segmentPeople) {
+    byId.set(row.person.id, row.person);
+  }
+  return [...byId.values()].sort((left, right) =>
+    left.displayName.localeCompare(right.displayName, "zh-CN"),
+  );
+}
+
+export type WorkSegmentListResult = Awaited<ReturnType<typeof listWorkSegments>>;
+export type WorkSegmentDetail = WorkSegmentListResult["items"][number];
+export type ResourceConflictListResult = Awaited<
+  ReturnType<typeof listResourceConflicts>
+>;
+export type ResourceConflictDetail = ResourceConflictListResult["items"][number];
+
 const conflictInclude = {
   person: { select: { displayName: true } },
   segments: {

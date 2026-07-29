@@ -38,8 +38,8 @@ export default async function HomePage() {
             <NavCard
               variant="wide"
               href={routes.progress.root}
-              title="项目管理（重构中）"
-              description="旧版功能已下线，新版项目管理正在建设"
+              title="项目管理"
+              description="Task 工作台、人员计划、资源冲突与站内通知"
               icon={FolderKanban}
             />
             {showAdmin && (

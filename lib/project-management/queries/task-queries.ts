@@ -19,6 +19,34 @@ import {
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import { notFoundError } from "@/lib/project-management/application/errors";
 
+export type TaskListItem = {
+  id: string;
+  title: string;
+  description: string;
+  team: string;
+  techGroup: string;
+  status: TaskStatus;
+  priority: TaskPriority;
+  currentPlanVersionNo: number;
+  lockVersion: number;
+  activeMilestone: {
+    nodeId: string;
+    goal: string;
+    expectedCompletedAt: string;
+  } | null;
+  members: TaskMemberSummary[];
+  tags: Array<{ id: string; name: string; color: string }>;
+  openConflictCount: number;
+  segmentNeedsReviewCount: number;
+  updatedAt: string;
+  createdAt: string;
+};
+
+export type TaskListResult = {
+  items: TaskListItem[];
+  nextCursor: string | null;
+};
+
 const planVersionInclude = {
   nodes: {
     include: {
@@ -165,6 +193,108 @@ export type PlanVersionDiff = {
     after: PlanNodeSummary;
   }>;
 };
+
+export async function listTasks({
+  actor,
+  input,
+}: {
+  actor: ProjectManagementActor;
+  input?: {
+    status?: TaskStatus;
+    priority?: TaskPriority;
+    mine?: boolean;
+    query?: string;
+    cursor?: string;
+    limit?: number;
+  };
+}): Promise<TaskListResult> {
+  const limit = Math.min(Math.max(input?.limit ?? 30, 1), 100);
+  const filters: Prisma.TaskWhereInput[] = [
+    taskReadableWhere(actor),
+    input?.status ? { status: input.status } : {},
+    input?.priority ? { priority: input.priority } : {},
+    input?.mine
+      ? { members: { some: { personId: actor.personId, removedAt: null } } }
+      : {},
+    input?.query?.trim()
+      ? {
+          OR: [
+            { title: { contains: input.query.trim(), mode: "insensitive" } },
+            {
+              description: {
+                contains: input.query.trim(),
+                mode: "insensitive",
+              },
+            },
+          ],
+        }
+      : {},
+  ];
+
+  const tasks = await prisma.task.findMany({
+    where: { AND: filters },
+    include: {
+      currentPlanVersion: { select: { versionNo: true } },
+      activeMilestoneNode: {
+        include: {
+          milestone: true,
+        },
+      },
+      members: {
+        where: { removedAt: null },
+        include: { person: { select: { displayName: true } } },
+        orderBy: [{ role: "asc" }, { createdAt: "asc" }],
+      },
+      tags: {
+        include: { tag: { select: { id: true, name: true, color: true } } },
+        orderBy: { createdAt: "asc" },
+      },
+    },
+    orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+    take: limit + 1,
+    ...(input?.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
+  });
+
+  const visibleTasks = tasks.slice(0, limit);
+  const [conflictCounts, segmentReviewCounts] = await Promise.all([
+    countOpenConflictsByTask(visibleTasks.map((task) => task.id)),
+    countSegmentsNeedingReviewByTask(visibleTasks.map((task) => task.id)),
+  ]);
+
+  return {
+    items: visibleTasks.map((task) => ({
+      id: task.id,
+      title: task.title,
+      description: task.description,
+      team: task.team,
+      techGroup: task.techGroup,
+      status: task.status,
+      priority: task.priority,
+      currentPlanVersionNo: task.currentPlanVersion.versionNo,
+      lockVersion: task.lockVersion,
+      activeMilestone:
+        task.activeMilestoneNode?.milestone
+          ? {
+              nodeId: task.activeMilestoneNode.id,
+              goal: task.activeMilestoneNode.milestone.goal,
+              expectedCompletedAt:
+                task.activeMilestoneNode.milestone.expectedCompletedAt.toISOString(),
+            }
+          : null,
+      members: task.members.map((member) => ({
+        personId: member.personId,
+        role: member.role,
+        displayName: member.person.displayName,
+      })),
+      tags: task.tags.map((entry) => entry.tag),
+      openConflictCount: conflictCounts.get(task.id) ?? 0,
+      segmentNeedsReviewCount: segmentReviewCounts.get(task.id) ?? 0,
+      updatedAt: task.updatedAt.toISOString(),
+      createdAt: task.createdAt.toISOString(),
+    })),
+    nextCursor: tasks.length > limit ? tasks[limit]?.id ?? null : null,
+  };
+}
 
 export async function getTaskWorkspace({
   actor,
@@ -470,6 +600,48 @@ function allowed(
 
 function toIso(date: Date | null): string | null {
   return date ? date.toISOString() : null;
+}
+
+async function countOpenConflictsByTask(taskIds: string[]) {
+  if (taskIds.length === 0) return new Map<string, number>();
+  const rows = await prisma.conflictSegment.findMany({
+    where: {
+      segment: { taskId: { in: taskIds }, deletedAt: null },
+      conflict: { status: { in: ["OPEN", "ACKNOWLEDGED"] } },
+    },
+    select: {
+      conflictId: true,
+      segment: { select: { taskId: true } },
+    },
+  });
+  const byTask = new Map<string, Set<string>>();
+  for (const row of rows) {
+    const taskId = row.segment.taskId;
+    if (!taskId) continue;
+    const set = byTask.get(taskId) ?? new Set<string>();
+    set.add(row.conflictId);
+    byTask.set(taskId, set);
+  }
+  return new Map([...byTask.entries()].map(([taskId, ids]) => [taskId, ids.size]));
+}
+
+async function countSegmentsNeedingReviewByTask(taskIds: string[]) {
+  if (taskIds.length === 0) return new Map<string, number>();
+  const rows = await prisma.workSegment.groupBy({
+    by: ["taskId"],
+    where: {
+      taskId: { in: taskIds },
+      deletedAt: null,
+      type: "PLANNED",
+      associationNeedsReview: true,
+    },
+    _count: { _all: true },
+  });
+  return new Map(
+    rows.flatMap((row) =>
+      row.taskId ? [[row.taskId, row._count._all] as const] : [],
+    ),
+  );
 }
 
 function nodeCoreHash(node: PlanNodeSummary): string {

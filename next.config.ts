@@ -13,10 +13,10 @@ const nextConfig: NextConfig = {
       { source: "/orders/:id/edit", destination: "/procurement/:id/edit", permanent: true },
       { source: "/orders/:id", destination: "/procurement/:id", permanent: true },
       { source: "/dashboard", destination: "/procurement/dashboard", permanent: true },
-      { source: "/progress/projects/new", destination: "/progress/new", permanent: true },
-      { source: "/progress/projects/:id", destination: "/progress/:id", permanent: true },
-      { source: "/progress/tasks/:id", destination: "/progress/task/:id", permanent: true },
-      { source: "/progress/kanban", destination: "/progress/dashboard", permanent: true },
+      { source: "/progress/projects/new", destination: "/progress", permanent: false },
+      { source: "/progress/projects/:id", destination: "/progress", permanent: false },
+      { source: "/progress/task/:id", destination: "/progress/tasks/:id", permanent: true },
+      { source: "/progress/kanban", destination: "/progress", permanent: false },
     ];
   },
   experimental: {

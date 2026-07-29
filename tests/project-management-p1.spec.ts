@@ -20,7 +20,6 @@ import {
 } from "../lib/project-management/notifications/events";
 import { createDomainAuditEventTx } from "../lib/project-management/audit";
 import { getNotificationChannelAdapter } from "../lib/notification-channels";
-import { NonRetryableNotificationError } from "../lib/notification-channels/types";
 import { prisma } from "../lib/prisma";
 
 test.describe("project management P1 schema, identity and authorization", () => {
@@ -566,16 +565,6 @@ test.describe("project management P1 schema, identity and authorization", () => 
       directOpenIds: ["ou_pm_notify"],
       requiresDirectRecipient: true,
     });
-    try {
-      await adapter.sendToRecipient(outbox, "ou_pm_notify");
-      throw new Error("项目管理飞书通知不应在 P1 投递");
-    } catch (error) {
-      expect(error).toBeInstanceOf(NonRetryableNotificationError);
-      expect(error).toHaveProperty(
-        "message",
-        "项目管理飞书通知投递将在 P6 启用",
-      );
-    }
     await expect(
       enqueueProjectManagementNotification({
         eventKey: `${eventKey}:invalid-approval`,

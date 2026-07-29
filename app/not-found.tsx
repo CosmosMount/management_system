@@ -15,7 +15,9 @@ export default function NotFound() {
               <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-lg bg-muted text-muted-foreground">
                 <Home className="h-6 w-6" />
               </div>
-              <CardTitle>页面不存在或无权访问</CardTitle>
+              <CardTitle role="heading" aria-level={1}>
+                页面不存在或无权访问
+              </CardTitle>
             </CardHeader>
             <CardContent>
               <p className="text-sm leading-6 text-muted-foreground">

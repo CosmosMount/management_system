@@ -37,7 +37,7 @@ test.describe("普通用户主功能面板", () => {
       page.getByRole("link", { name: "采购管理", exact: true }),
     ).toBeVisible();
     await expect(
-      page.getByRole("link", { name: /项目(?:管理（重构中）|重构)/ }).first(),
+      page.getByRole("link", { name: /项目管理/ }).first(),
     ).toBeVisible();
     await expect(page.getByRole("link", { name: /反馈/ })).toBeVisible();
 
@@ -52,20 +52,38 @@ test.describe("普通用户主功能面板", () => {
 
     await page.goto("/", { waitUntil: "networkidle" });
     await page
-      .getByRole("link", { name: /项目管理（重构中） 旧版功能已下线/ })
+      .getByRole("link", {
+        name: /项目管理 Task 工作台、人员计划、资源冲突与站内通知/,
+      })
       .click();
     await expect(page).toHaveURL(/\/progress$/);
-    await expect(page.getByRole("heading", { name: "项目管理正在重构" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "我的工作" })).toBeVisible();
     await expectHealthyPage(page);
 
-    for (const legacyUrl of ["/progress/list", "/progress/task/legacy-task"]) {
-      await page.goto(legacyUrl, { waitUntil: "networkidle" });
-      await expect(page).toHaveURL(/\/progress$/);
-      await expect(
-        page.getByRole("heading", { name: "项目管理正在重构" }),
-      ).toBeVisible();
-      await expectHealthyPage(page);
-    }
+    await page.goto("/progress/task/legacy-task", { waitUntil: "networkidle" });
+    await expect(page).toHaveURL(/\/progress\/tasks\/legacy-task$/);
+    await expect(
+      page.getByRole("heading", { name: "页面不存在或无权访问" }),
+    ).toBeVisible();
+    await expectHealthyPage(page);
+
+    await page.goto("/progress/kanban", { waitUntil: "networkidle" });
+    await expect(page).toHaveURL(/\/progress$/);
+    await expect(page.getByRole("heading", { name: "我的工作" })).toBeVisible();
+    await expectHealthyPage(page);
+
+    await page.goto("/progress/projects/legacy-project", {
+      waitUntil: "networkidle",
+    });
+    await expect(page).toHaveURL(/\/progress$/);
+    await expect(page.getByRole("heading", { name: "我的工作" })).toBeVisible();
+    await expectHealthyPage(page);
+
+    await page.goto("/progress/list", { waitUntil: "networkidle" });
+    await expect(
+      page.getByRole("heading", { name: "页面不存在或无权访问" }),
+    ).toBeVisible();
+    await expectHealthyPage(page);
 
     await page.goto("/", { waitUntil: "networkidle" });
     await page.getByRole("link", { name: /反馈/ }).first().click();

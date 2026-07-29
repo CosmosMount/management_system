@@ -1,6 +1,6 @@
 # 消息发送与投递规则
 
-本文档描述当前通知基础设施、采购、反馈和项目管理 P1-P5 通知底座。旧项目管理事件、payload、卡片模板和收件人规则已经删除；新项目管理已新增 `channel=project-management` 的 payload 契约、adapter 骨架、Task 生命周期事件和 Segment/Conflict 事件，但真实飞书卡片投递尚未启用。
+本文档描述当前通知基础设施、采购、反馈和项目管理 P1-P6 通知接入。旧项目管理事件、payload、卡片模板和收件人规则已经删除；新项目管理使用 `channel=project-management` 的 payload 契约、站内通知、Task 生命周期事件、Segment/Conflict 事件和飞书 adapter。
 
 ## 架构与边界
 
@@ -14,14 +14,14 @@
 
 - `NotificationOutbox` 表示业务事件，`NotificationOutboxRecipient` 表示单个收件人的投递状态。成功收件人不会因其他人失败而重复发送。
 - `lib/notification-outbox.ts` 只负责入队、claim、按 channel 调度、重试和状态更新，不解析采购或反馈 payload，也不查询业务角色。
-- `lib/notification-channels/types.ts` 定义 adapter 契约；`procurement.ts`、`feedback.ts` 与 `project-management.ts` 分别校验持久化 payload、`type`、`botKind`，计算并去重收件人、构造完整消息和声明消息用途。采购 adapter 还会区分真实私信收件人与 Webhook 等独立传输目标；项目管理 adapter 当前提供 P1-P5 契约校验和收件人计划，不执行真实飞书投递。
+- `lib/notification-channels/types.ts` 定义 adapter 契约；`procurement.ts`、`feedback.ts` 与 `project-management.ts` 分别校验持久化 payload、`type`、`botKind`，计算并去重收件人、构造完整消息和声明消息用途。采购 adapter 还会区分真实私信收件人与 Webhook 等独立传输目标；项目管理 adapter 构造交互卡并通过统一私信传输层投递。
 - `lib/feishu-message.ts` 是飞书 IM 私信统一传输层，导出 `FeishuMessage`、`FeishuMessagePurpose`、`FeishuSendResult` 和 `sendFeishuDirectMessage()`。它不理解业务状态或业务角色。
 - 采购群 Webhook 由独立模块发送，不接入私信接口。SMTP 老师邮件也不属于飞书传输层。
 - 采购 CardKit 快照、卡片 sequence 和后续更新仍由采购领域维护；统一传输层负责创建并发送卡片，成功结果返回 `cardId`。
 
-项目管理必须在业务事务中使用稳定 `eventKey` 写入 outbox，由自己的 channel adapter 处理。项目管理 Server Action 和领域 service 不得直接导入飞书传输层。P2/P3 生命周期和 P5 Segment/Conflict 只允许入队、站内通知和校验 payload 契约；真实飞书消息构造与投递将在后续阶段启用。
+项目管理必须在业务事务中使用稳定 `eventKey` 写入 outbox，由自己的 channel adapter 处理。项目管理 Server Action 和领域 service 不得直接导入飞书传输层。P2/P3 生命周期和 P5 Segment/Conflict 只允许入队站内通知和 `channel=project-management` outbox；真实飞书消息只能由 `lib/notification-channels/project-management.ts` 通过统一传输层发送。
 
-## 项目管理 P1-P5 通知底座
+## 项目管理 P1-P6 通知接入
 
 项目管理通知 payload 位于 `lib/project-management/notifications/contract.ts`，固定包含：
 
@@ -55,9 +55,9 @@ P2/P3 Task 生命周期服务和 P5 Segment/Conflict 服务会在同一业务事
 | Resource Conflict 已解决 | `resource_conflict_resolved` | 普通通知 | Segment Person |
 | Task 结束确认 | `task_terminated` | 普通通知 | active TaskMember |
 
-入队 helper 和 adapter 会拒绝 `type/payload.kind` 不一致、payload 结构错误、错误机器人类型和越界审批用途，并对 `recipientOpenIds` 去重。`sendToRecipient()` 与 `sendComposite()` 当前会以非可重试错误明确失败“项目管理飞书通知投递将在 P6 启用”，避免把尚未实现的飞书投递误标为成功或反复重试。
+入队 helper 和 adapter 会拒绝 `type/payload.kind` 不一致、payload 结构错误、错误机器人类型和越界审批用途，并对 `recipientOpenIds` 去重。项目管理飞书卡片包含操作人、Task、事件摘要、对象类型、事件时间和最多 6 项上下文；按钮跳转到 payload 的 `linkPath`，没有链接时回到 `/progress`。`approval_request` 使用审批机器人用途；所有普通项目管理事件使用通知机器人，不能把审批机器人作为普通通知 fallback。
 
-P5 事件键保持稳定幂等：`pm:segment:confirmation_due:<segmentId>:<endAt>`、`pm:segment:association_invalidated:<revisionNodeId>`、`pm:conflict:opened:<fingerprint>`、`pm:conflict:opened:<fingerprint>:reopened:<detectedAt>` 和 `pm:conflict:resolved:<conflictId>:<updatedAt>`。Conflict 新增、高严重度重开和扫描解除都只写项目管理 outbox，不触碰飞书传输层；`scanSegmentTransitions` 会把到期 Planned 推到 `PENDING_CONFIRMATION`、把进行中的 Planned 置为 `IN_PROGRESS`，但不会自动生成 Actual。
+P5 事件键保持稳定幂等：`pm:segment:confirmation_due:<segmentId>:<endAt>`、`pm:segment:association_invalidated:<revisionNodeId>`、`pm:conflict:opened:<fingerprint>`、`pm:conflict:opened:<fingerprint>:reopened:<detectedAt>` 和 `pm:conflict:resolved:<conflictId>:<updatedAt>`。Conflict 新增、高严重度重开和扫描解除都只写项目管理 outbox 和站内通知；`scanSegmentTransitions` 会把到期 Planned 推到 `PENDING_CONFIRMATION`、把进行中的 Planned 置为 `IN_PROGRESS`，但不会自动生成 Actual。
 
 ## 飞书统一私信传输层
 
@@ -147,4 +147,4 @@ P5 事件键保持稳定幂等：`pm:segment:confirmation_due:<segmentId>:<endAt
 - adapter 测试覆盖 payload/元数据校验、真实与独立传输收件人、机器人用途、未知 channel、eventKey 幂等、首次解析恢复、锁恢复和逐收件人重试。
 - 传输层使用 mock HTTP 覆盖禁发、allowlist、`open_id`/`union_id`、双机器人凭据、fallback、text/交互卡片/CardKit 和错误脱敏。
 - 采购、反馈回归必须验证收件人、消息信息完整性、机器人用途以及 CardKit 跟踪；测试不得联系真实收件人。
-- 项目管理 P1-P3 测试必须验证 outbox 入队、payloadVersion、机器人用途、生命周期事件、收件人去重和 adapter 不真实投递；后续启用真实投递前必须补充完整卡片内容、recipient 级重试和禁发回归。
+- 项目管理测试必须验证 outbox 入队、payloadVersion、机器人用途、生命周期事件、收件人去重、完整卡片内容、recipient 级重试和禁发回归；自动化测试必须 mock 飞书 HTTP，不能联系真实收件人。

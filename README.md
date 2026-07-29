@@ -521,11 +521,15 @@ pm2 start npm --name procurement-cron -- run cron
 
 ## 项目管理重构状态
 
-旧项目、阶段、任务、审批、周报、风险和提醒实现及其开发数据已直接清理，不提供旧数据迁移或旧接口兼容。当前已完成 v2.1 P1 底座、P2/P3 Task 生命周期服务端闭环和 P5 Resource Segment/Conflict 服务端闭环：Account/Person、Task/Tag、Plan/Node、Segment、站内通知、审计和权限骨架已进入 schema；Task 草稿创建、激活、Current Plan 查询、Revision、Milestone Review、Termination、Planned/Actual Work Segment、来源关系、拆分合并、确认/部分确认、重关联、冲突扫描和人工处理已有服务端状态机与集成测试。完整业务 UI、资源时间轴、冲突中心和真实项目管理飞书投递仍未启用。
+旧项目、阶段、任务、审批、周报、风险和提醒实现及其开发数据已直接清理，不提供旧数据迁移或旧接口兼容。当前已完成 v2.1 P1 底座、P2/P3 Task 生命周期服务端闭环、P5 Resource Segment/Conflict 服务端闭环，以及 P4/P6 首批浏览器界面：Account/Person、Task/Tag、Plan/Node、Segment、站内通知、审计和权限骨架已进入 schema；Task 草稿创建、激活、Current Plan 查询、Revision、Milestone Review、Termination、Planned/Actual Work Segment、来源关系、拆分合并、确认/部分确认、重关联、冲突扫描和人工处理已有服务端状态机、界面入口与集成测试。
 
-- `/progress` 当前只展示“项目管理重构中”的中文占位页。
-- 旧 `/progress/*` 地址统一重定向到 `/progress`。
+- `/progress` 展示“我的工作”总览，汇总可见 Active Task、未来投入、待确认计划、开放冲突和未读站内通知。
+- `/progress/tasks` 与 `/progress/tasks/[id]` 提供 Task 列表和 Task 工作台。
+- `/progress/resources` 提供人员计划时间轴，可执行 Planned Segment 新增、确认、部分确认、拆分、合并、顺延和取消。
+- `/progress/resources/conflicts` 提供资源冲突中心，可查看解释、确认已知、忽略、解决、预览并应用建议。
+- `/progress/notifications` 提供站内通知中心，可按类型/未读筛选、标记已读并跳转到仍可访问的业务对象。
+- 旧 `/progress/task/:id` 会重定向到 `/progress/tasks/:id`；旧 `/progress/projects/*` 和 `/progress/kanban` 回到 `/progress`；未映射旧目录没有业务页面。
 - 飞书登录和通讯录同步会保留采购 `User.openId/unionId`，同时初始化项目管理 Account/Person。已有用户先运行 `npm run pm:identity-backfill` 对账；确认后再运行 `APPLY_PM_IDENTITY_BACKFILL=true npm run pm:identity-backfill`。
-- 新项目管理的目标设计位于 [`docs/plan/`](docs/plan/)；当前可依赖的是服务端 Task/Plan/Revision/Review/Termination 与 Segment/Conflict 状态机，浏览器工作台仍未开放。
-- 项目管理飞书通知只允许写入 `channel=project-management` 的 notification outbox；当前 adapter 只做 payload/收件人校验，真实投递留到后续阶段。
+- 新项目管理的目标设计位于 [`docs/plan/`](docs/plan/)；当前浏览器入口仍是首批工作台，不包含完整 Task 创建/审批表单。
+- 项目管理飞书通知只允许写入 `channel=project-management` 的 notification outbox；adapter 已构造普通交互卡并经统一私信传输层投递。验收和 Revision 待审批事件使用审批机器人用途，其他项目管理事件使用通知机器人。
 - 本阶段没有新增人员不可用时间模型，因此 `UNAVAILABLE_TIME` 冲突规则仍暂缓，待 P6+ 有可授权、可维护的不可用时间数据后再启用。

@@ -17,5 +17,10 @@ export const routes = {
   },
   progress: {
     root: "/progress",
+    tasks: "/progress/tasks",
+    taskDetail: (id: string) => `/progress/tasks/${id}`,
+    resources: "/progress/resources",
+    conflicts: "/progress/resources/conflicts",
+    notifications: "/progress/notifications",
   },
 } as const;

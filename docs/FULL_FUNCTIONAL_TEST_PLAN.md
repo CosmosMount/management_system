@@ -67,7 +67,7 @@ npm run test:e2e
 场景：
 
 - 反馈中心：点击“全部”，点击反馈项，URL `selected` 与详情保持稳定。
-- 项目管理占位：`/progress` 展示中文重构状态，代表性旧 `/progress/*` 地址重定向到该入口。
+- 项目管理 P4/P6：`/progress` 总览、Task 工作台、资源时间轴、冲突中心和站内通知中心可访问，旧 `/progress/task/:id` 重定向到新 Task 工作台地址。
 - 采购列表：切换状态筛选，进入草稿/订单详情。
 - 管理面板：进入角色、预算池和系统同步页面。
 
@@ -112,20 +112,21 @@ npm run test:e2e
 - outbox 有对应通知，重复 drain 不重复发送成功项。
 - 失败路径不留下孤儿 `FileAsset` 或磁盘文件。
 
-#### 项目管理占位与清理
+#### 项目管理 P4/P6 UI 与旧实现清理
 
 场景：
 
-1. 桌面和 Pixel 5 打开 `/progress`，展示中文“项目管理重构中”。
-2. 打开 `/progress/new`、`/progress/list`、`/progress/dashboard`、`/progress/archive`、`/progress/task/legacy-id` 和 `/progress/legacy-id`，均重定向到 `/progress`。
-3. 管理页面无 `PROJECT_MANAGER`、旧验收条例、项目模板或进度提醒配置。
-4. 在含旧项目管理数据的隔离 migration fixture 上执行收缩 migration，确认旧表、旧 enum、`channel=progress` outbox/recipient 被删除。
+1. 桌面和 Pixel 5 打开 `/progress`，展示“我的工作”总览，可见 Active Task、未来投入、待确认计划、开放冲突和未读通知。
+2. 打开 `/progress/tasks`、`/progress/tasks/[id]`、`/progress/resources`、`/progress/resources/conflicts` 和 `/progress/notifications`，验证列表、工作台、资源时间轴、冲突处理和站内通知已按当前 actor 授权过滤。
+3. 打开旧 `/progress/task/legacy-id`，应重定向到 `/progress/tasks/legacy-id` 并因对象不存在显示无权/不存在页面；其他旧项目、阶段、周报、风险或提醒目录没有业务页面。
+4. 管理页面无 `PROJECT_MANAGER`、旧验收条例、项目模板或进度提醒配置。
+5. 在含旧项目管理数据的隔离 migration fixture 上执行收缩 migration，确认旧表、旧 enum、`channel=progress` outbox/recipient 被删除。
 
 重点断言：
 
 - 采购、反馈、用户、角色、附件、其他 channel outbox 和 CardKit 跟踪数据不变。
 - 没有旧项目、阶段、任务、审批、周报、风险、提醒页面或 Server Action 可调用。
-- 占位页和重定向无 500、Next error overlay、未处理错误或横向溢出。
+- 新项目管理页面和旧地址重定向无 500、Next error overlay、未处理错误或横向溢出。
 
 #### 反馈
 
@@ -213,4 +214,4 @@ npm run test:e2e
 
 ## 当前自动化覆盖边界
 
-页面 smoke 只覆盖 L1 和部分 L2，不能等同于全功能通过。完整结论还需要带 fixture 的采购、反馈、项目管理占位/清理、管理员、飞书传输层、channel adapter、outbox 并发和 migration spec。
+页面 smoke 只覆盖 L1 和部分 L2，不能等同于全功能通过。完整结论还需要带 fixture 的采购、反馈、项目管理 P4/P6 UI、旧实现清理、管理员、飞书传输层、channel adapter、outbox 并发和 migration spec。
