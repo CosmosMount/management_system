@@ -55,6 +55,8 @@ P2/P3 Task 生命周期服务和 P5 Segment/Conflict 服务会在同一业务事
 | Resource Conflict 已解决 | `resource_conflict_resolved` | 普通通知 | Segment Person |
 | Task 结束确认 | `task_terminated` | 普通通知 | active TaskMember |
 
+既有 Draft `task_assigned` 入队保持 `mandatory=true`。这里的“普通通知”指 `purpose=notification`、`botKind=notification`，不表示 `mandatory=false`；该事件只使用通知机器人，不得路由到 approval bot。S2 的 Active `replaceTaskMembers` 新增/移除/角色变化沿用同一强制成员变化语义：站内 + `mandatory=true` 的 `project-management` outbox，purpose/botKind 仍为 `notification`。
+
 入队 helper 和 adapter 会拒绝 `type/payload.kind` 不一致、payload 结构错误、错误机器人类型和越界审批用途，并对 `recipientOpenIds` 去重。项目管理飞书卡片包含操作人、Task、事件摘要、对象类型、事件时间和最多 6 项上下文；按钮跳转到 payload 的 `linkPath`，没有链接时回到 `/progress`。`approval_request` 使用审批机器人用途；所有普通项目管理事件使用通知机器人，不能把审批机器人作为普通通知 fallback。
 
 P5 事件键保持稳定幂等：`pm:segment:confirmation_due:<segmentId>:<endAt>`、`pm:segment:association_invalidated:<revisionNodeId>`、`pm:conflict:opened:<fingerprint>`、`pm:conflict:opened:<fingerprint>:reopened:<detectedAt>` 和 `pm:conflict:resolved:<conflictId>:<updatedAt>`。Conflict 新增、高严重度重开和扫描解除都只写项目管理 outbox 和站内通知；`scanSegmentTransitions` 会把到期 Planned 推到 `PENDING_CONFIRMATION`、把进行中的 Planned 置为 `IN_PROGRESS`，但不会自动生成 Actual。

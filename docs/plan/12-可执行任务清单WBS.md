@@ -6,6 +6,8 @@
 - `PD` 为人日粗估，不含等待业务确认。
 - 每项关闭前必须提交代码/文档、测试证据和审查结论。
 - 真实排期时把代号替换为姓名，不要多人共同 Owner。
+- P0–P8 是原领域 WBS，任务存在不等于已经关单；当前代码状态和 S0–S10 的关单证据见本文后半部分。
+- 状态只使用：**已实现**（当前代码及当前验证证据齐全）、**计划**（尚未完成阶段门禁）、**延期**（不进入本轮）。`345b5b0` 的首批卡片/列表 UI 只能作为接入基线，不能作为 TimeCanvas、Task Composer 或页面完成态证据。
 
 ## P0 规则与基线
 
@@ -78,7 +80,7 @@
 | ID | 工作 | Owner | Review | 依赖 | 交付与测试 | PD |
 |---|---|---|---|---|---|---:|
 | P4-01 | 重做导航和 Task 列表 | FE-A | BO/QA | P2-08 | URL 筛选 E2E | 2 |
-| P4-02 | 实现 Task 创建三步向导 | FE-A | BO/QA/TL | P2-03 | 表单/E2E | 3 |
+| P4-02 | 实现单页 Task Plan Composer | FE-A | BO/QA/TL | P2-03/S2 | 本地草稿/表单/E2E | 3 |
 | P4-03 | 实现计划节点编辑与键盘排序 | FE-A | QA/SEC | P2-02 | a11y E2E | 3 |
 | P4-04 | 实现 Task 工作台骨架 | FE-A | BO/TL | P2-08 | 空/只读/错误 | 2 |
 | P4-05 | 实现 Current Plan 时间线 | FE-A | BO/QA | P2-09 | 200 Node | 2 |
@@ -106,9 +108,21 @@
 | P5-12 | 实现增量 cron 与完整性巡检 | BE-B | DBA/TL | P5-09 | 重入/性能 | 2 |
 | P5-13 | 100k Segment 性能与索引调优 | DBA | TL/BE-B | P5-12 | query plan 报告 | 2 |
 
+### P5 重新关单工作包
+
+`2499952` 中的 handoff 是 `e0317cc` 时点的历史证据。P5-R01 至 P5-R05 全部在 S1 完成；S9 只处理 P5-12/P5-13 的 cron 运维和性能，不跨阶段保留同一并发缺口。
+
+| ID | 工作 | Owner | Review | 依赖 | 交付与测试 | 状态 |
+|---|---|---|---|---|---|---|
+| P5-R01 | 收紧 suggestion preview 隐私与 Conflict capability | BE-B | SEC/TL | P5-10/11 | 隐藏 Segment/只读用户/允许拒绝测试 | 计划（S1） |
+| P5-R02 | transition guarded update 与 scanner/人工处理竞争控制 | BE-B | TL/DBA | P5-09/10 | 并发无重复 change/audit/outbox | 计划（S1） |
+| P5-R03 | person 级 transaction advisory lock 与 fingerprint 首次竞争 | BE-B | DBA/QA | P5-09 | 数据库级 person 互斥/首次并发/reopen 测试 | 计划（S1） |
+| P5-R04 | 补 merge 31 天、缺失 Allocation、操作者和 Current Plan 通知不变量 | BE-A/BE-B | TL/QA | P3/P5 | 规则/通知 payload 回归 | 计划（S1） |
+| P5-R05 | 补真实 100 条回滚、来源、stale apply 和并发回归 | QA/BE-B | TL/SEC | P5-R01~04 | P5 定向 + 全量 E2E | 计划（S1） |
+
 ## P6 Resource UI 与通知
 
-当前已落地本次 P4/P6 接入范围：`/progress` 总览、Task 列表、Task 工作台、人员计划时间轴、资源冲突中心、站内通知中心和项目管理 notification channel adapter。P4-02/P4-03/P4-06/P4-07/P4-08/P4-09、P6-07 和完整性能调优仍按后续任务处理。
+`345b5b0` 已落地本次 P4/P6 的首批接入基线：`/progress` 四卡片总览、Task 列表、纵向卡片 Task 工作台、表单/卡片资源页、资源冲突中心、站内通知中心和项目管理 notification channel adapter。该状态不等于 P4/P6 已关闭；TimeCanvas/TimeAgenda、单页 Composer、个人时间线、待办、Tag、通知偏好和完成态页面仍按 S3–S9 实施。
 
 | ID | 工作 | Owner | Review | 依赖 | 交付与测试 | PD |
 |---|---|---|---|---|---|---:|
@@ -152,6 +166,49 @@
 | P8-07 | 正式维护窗口 schema 发布 | DBA/TL | BO/QA | P8-06 | 发布记录 | 1 |
 | P8-08 | 上线冒烟与采购回归 | QA | TL/BO | P8-07 | 冒烟报告 | 1 |
 | P8-09 | 7 天值守、完整性巡检和复盘 | TL/DBA | PM/BO | P8-08 | 复盘与遗留项 | 3 |
+
+## 当前 S0–S10 执行工作包
+
+以下是剩余 P4–P8 的实际执行顺序。阶段状态必须在代码、测试、两轮独立审查和文档证据齐全后才能由“计划”改为“已实现”。
+
+| 阶段 | 工作包 | 关键交付 | 映射 WBS | 状态 |
+|---|---|---|---|---|
+| S0 | 基线与追踪矩阵 | 前端 ADR、handoff/345b5b0 时序、计划冲突消除；移动残留 `.next` 到 `.tmp/next-cache-stale-*` 后建立当前检查基线 | P4–P8 协调 | 计划 |
+| S1 | P5 重新关单 | P5-R01~R05；含 person 级 transaction advisory lock 和首次 fingerprint 竞争关单 | P5-03~11 | 计划 |
+| S2 | 计划/画布服务端契约 | S2-01~S2-05：计划编辑、Active 可变字段、聚合查询/预览、安全 DTO、错误码与查询上限 | P2/P3/P5/P6-01 | 计划 |
+| S3 | Shell 与只读画布 | 左侧导航、TimeCanvas/TimeAgenda、时间数学、`@tanstack/react-virtual`、四种只读模式 | P4-01/04/05,P6-02/03 | 计划 |
+| S4 | Segment 画布交互 | Pointer Events brush/drag/resize、键盘/Inspector、全 mutation、stale、批量全成全败；不引入 dnd-kit/日期库 | P5-02~06,P6-04 | 计划 |
+| S5 | Task Composer | 单页创建、同日节点、localStorage、撤销重做、幂等和 Pixel 5 | P4-02/03/10 | 计划 |
+| S6 | Task 工作台 | 默认计划与资源、Revision/Review/Termination/Audit、角色矩阵 | P4-04~08,P6-01 | 计划 |
+| S7 | 资源与个人时间 | Resource Planner、`/progress/my-timeline`、结构化 Conflict Center | P6-01~05 | 计划 |
+| S8 | 驾驶舱与通知 | Dashboard、`/progress/approvals`、Tag、偏好、deadline/retention/integrity cron | P4-09,P6-06~11 | 计划 |
+| S9 | 性能与运维 | cron 跨实例全局互斥、checkpoint、增量扫描 + 每日完整扫描、100k fixture、p95、无障碍、正式文档 | P5-12/13,P7-09 | 计划 |
+| S10 | 发布准备与 UAT 证据 | 空库/快照演练、恢复、全回归、安全、runbook、四方签字 | P7/P8 | 计划 |
+
+### S2 服务端契约子任务
+
+| ID | 工作 | 关键契约与验收 | 状态 |
+|---|---|---|---|
+| S2-01 | 三类 Draft action 与计划版本 | 实现 `updateTaskDraftMetadata`、`replaceTaskDraftMembers`、`replaceTaskDraftPlan`；三者只限 `Task.status=DRAFT`、服务端授权、接收 `expectedLockVersion`，事务写审计并在成功后递增/返回 `lockVersion`。`createTaskDraft`/member replace 收紧为恰好一个 active OWNER、无重复 person+role；只有 plan action 处理 `plannedStartAt?`、chronology、nodeId/clientKey、Segment 引用拒删和整包计划回滚 | 计划 |
+| S2-02 | 三类 Active-only action | 实现 `updateTaskMetadata`、`replaceTaskMembers`、`replaceTaskTags`；仅 ACTIVE、服务端授权、`expectedLockVersion`、锁 Task、事务 mutation + DomainAuditEvent + lockVersion increment，并返回新锁；终态/Archived/stale/无权零写入，三者不得改变 plan/node。member replace 保持恰好一个 active OWNER 和 person+role 唯一 | 计划 |
+| S2-03 | 搜索与页面查询基础 | People/Task/Tag 游标搜索；Task-scoped、personal timeline、`getMyWorkDashboard` 查询基础 | 计划 |
+| S2-04 | TimeCanvas 与放置预览 | `getTimeCanvasData`、Busy 响应级脱敏、对象 capability/versionToken、只读 `previewSegmentPlacement`；最终冲突以 mutation 后服务端复扫为准 | 计划 |
+| S2-05 | 稳定错误与查询保护 | `PLAN_CHRONOLOGY_INVALID`、`STALE_TASK`、`STALE_SEGMENT`、`ASSOCIATION_INVALID`、`QUERY_LIMIT_EXCEEDED`；范围最多 366 天，Person/Task/Tag 显式 ID 各最多 50，超过 5,000 个可见 Segment 明确报错且不静默截断 | 计划 |
+
+S2-01 测试必须逐 action 覆盖：具权限 Draft 成功、无权拒绝、非 Draft 拒绝、stale lock 拒绝、成功审计及锁递增/返回、失败零写入；并验证 metadata/member 输入不能进入 `replaceTaskDraftPlan`。`createTaskDraft`/`replaceTaskDraftMembers` 拒绝 0 OWNER、2 个及以上 OWNER、重复 person+role，允许同人不同 role 且权限取并集；保留既有 Draft `task_assigned` 站内 + `mandatory=true` outbox，purpose/botKind 为 notification 且只用通知机器人。plan action 另测关联节点拒删和事务整包回滚。
+
+S2-02 测试必须逐 action 覆盖 ACTIVE 成功，以及 Draft、全部终态、Archived、stale、无权拒绝和同锁并发。`replaceTaskMembers` 另测 active member 整包差异、`removedAt` 历史、恰好一个 active OWNER、0/多 OWNER 拒绝、重复 person+role 拒绝、同人不同 role 权限并集，以及新增/移除/角色变化的完整站内 + `mandatory=true` `project-management` outbox；purpose/botKind 固定 notification、只用通知机器人而非 approval bot。`replaceTaskTags` 另测只改 TaskTag/audit 且不广播，Draft tags 只走 `updateTaskDraftMetadata`。
+
+## 本轮延期工作包
+
+| ID | 能力 | 状态 | 重新纳入前置条件 |
+|---|---|---|---|
+| DFR-01 | Unavailable Time 模型与扫描 | 延期 | 数据所有权、可见性、审计和冲突规则 ADR |
+| DFR-02 | 跨人员 Segment 重新指派 | 延期 | reassign 权限、并发、审计和通知契约 |
+| DFR-03 | 保存资源视图 | 延期 | 所有权、分享范围和存储模型 |
+| DFR-04 | 自动资源平衡 | 延期 | proposal、人工确认、审计和回滚规则 |
+| DFR-05 | 复杂依赖线 | 延期 | 领域模型和可视化性能方案 |
+| DFR-06 | Task 创建时初始 Segment | 延期 | 原子创建、权限、失败回滚和草稿契约 |
 
 ## 工作包模板
 
