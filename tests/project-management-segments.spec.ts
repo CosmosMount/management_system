@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import type { TaskMemberRole } from "@prisma/client";
+import type { Client } from "pg";
 import { prisma } from "../lib/prisma";
 import {
   activateTask,
@@ -29,6 +30,12 @@ import {
   listWorkSegmentChanges,
   listWorkSegments,
 } from "../lib/project-management/queries/resource-queries";
+import {
+  cleanupBarrierResources,
+  connectDatabaseClient,
+  startBarrierOperations,
+  throwBarrierErrors,
+} from "./helpers/database-barrier";
 import type {
   ProjectManagementActor,
   ProjectManagementSystemRoleRecord,
@@ -251,6 +258,139 @@ test.describe("project management P5 work segment services", () => {
     expect(changeHistory.items.map((item) => item.action)).toContain("MERGE");
   });
 
+  test("Merge rejects a combined range over 31 days without partial writes", async () => {
+    const fixture = await createActivatedFixture();
+    const startAt = new Date("2026-09-01T00:00:00.000Z");
+    const middleAt = new Date("2026-09-21T00:00:00.000Z");
+    const endAt = new Date("2026-10-12T00:00:00.000Z");
+    const common = {
+      personId: fixture.member.person.id,
+      type: "PLANNED" as const,
+      content: "跨月连续计划",
+      allocation: 50,
+      role: "DEVELOPER" as const,
+      priority: "MEDIUM" as const,
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+      tagIds: [],
+    };
+    const first = await createWorkSegment(actor(fixture.member), {
+      ...common,
+      startAt,
+      endAt: middleAt,
+    });
+    const second = await createWorkSegment(actor(fixture.member), {
+      ...common,
+      startAt: middleAt,
+      endAt,
+    });
+    const ids = [first.segment.id, second.segment.id];
+    const changesBefore = await prisma.workSegmentChange.count({
+      where: { segmentId: { in: ids } },
+    });
+    const auditsBefore = await prisma.domainAuditEvent.count({
+      where: { entityType: "WorkSegment", entityId: { in: ids } },
+    });
+    const segmentCountBefore = await prisma.workSegment.count();
+
+    await expectServiceError(
+      mergePlannedSegments(actor(fixture.member), {
+        segments: [first, second].map((item) => ({
+          segmentId: item.segment.id,
+          expectedUpdatedAt: item.segment.updatedAt,
+        })),
+        reason: "尝试合并超过 31 天的计划",
+      }),
+      "VALIDATION_ERROR",
+    );
+
+    const persisted = await prisma.workSegment.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, status: true },
+    });
+    expect(persisted).toHaveLength(2);
+    expect(persisted.every((segment) => segment.status !== "CANCELLED")).toBe(true);
+    expect(await prisma.workSegment.count()).toBe(segmentCountBefore);
+    expect(
+      await prisma.workSegmentChange.count({ where: { segmentId: { in: ids } } }),
+    ).toBe(changesBefore);
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: { entityType: "WorkSegment", entityId: { in: ids } },
+      }),
+    ).toBe(auditsBefore);
+  });
+
+  test("Merge accepts an exact 31-day range and records complete provenance", async () => {
+    const fixture = await createActivatedFixture();
+    const startAt = new Date("2026-09-01T00:00:00.000Z");
+    const middleAt = new Date("2026-09-16T00:00:00.000Z");
+    const endAt = new Date("2026-10-02T00:00:00.000Z");
+    const common = {
+      personId: fixture.member.person.id,
+      type: "PLANNED" as const,
+      content: `恰好 31 天计划 ${randomUUID()}`,
+      allocation: 50,
+      role: "DEVELOPER" as const,
+      priority: "MEDIUM" as const,
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+      tagIds: [],
+    };
+    const first = await createWorkSegment(actor(fixture.member), {
+      ...common,
+      startAt,
+      endAt: middleAt,
+    });
+    const second = await createWorkSegment(actor(fixture.member), {
+      ...common,
+      startAt: middleAt,
+      endAt,
+    });
+
+    const merged = await mergePlannedSegments(actor(fixture.member), {
+      segments: [first, second].map((item) => ({
+        segmentId: item.segment.id,
+        expectedUpdatedAt: item.segment.updatedAt,
+      })),
+      reason: "验证恰好 31 天边界允许合并",
+    });
+
+    expect(merged.segment.startAt).toBe(startAt.toISOString());
+    expect(merged.segment.endAt).toBe(endAt.toISOString());
+    expect(new Date(merged.segment.endAt).getTime() - new Date(merged.segment.startAt).getTime())
+      .toBe(31 * 24 * 60 * 60 * 1_000);
+    const originalIds = [first.segment.id, second.segment.id];
+    expect(
+      await prisma.workSegment.findMany({
+        where: { id: { in: originalIds } },
+        orderBy: { id: "asc" },
+        select: { status: true },
+      }),
+    ).toEqual([{ status: "CANCELLED" }, { status: "CANCELLED" }]);
+    const allIds = [...originalIds, merged.segment.id];
+    const changes = await prisma.workSegmentChange.findMany({
+      where: { segmentId: { in: allIds }, action: "MERGE" },
+      select: { segmentId: true, after: true },
+    });
+    expect(changes).toHaveLength(3);
+    const mergedChange = changes.find(
+      (change) => change.segmentId === merged.segment.id,
+    );
+    expect(mergedChange?.after).toMatchObject({
+      mergedFromSegmentIds: expect.arrayContaining(originalIds),
+    });
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: {
+          entityType: "WorkSegment",
+          entityId: { in: allIds },
+          action: "pm.segment.merge",
+        },
+      }),
+    ).toBe(3);
+  });
+
   test("Confirm, partial confirm and Actual sources preserve Planned/Actual relationships", async () => {
     const fixture = await createActivatedFixture();
     const planned = await createWorkSegment(actor(fixture.member), {
@@ -348,6 +488,79 @@ test.describe("project management P5 work segment services", () => {
         where: { actualSegmentId: actualWithSources.segment.id },
       }),
     ).toBe(2);
+
+    const onePlanManyActuals = await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 20, 22),
+      content: "一条计划由多条实际投入覆盖",
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+    });
+    const firstActual = await createActualSegment(actor(fixture.member), {
+      personId: fixture.member.person.id,
+      startAt: atHour(20),
+      endAt: atHour(21),
+      content: "上午实际投入",
+      allocation: 40,
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+      sources: [
+        {
+          plannedSegmentId: onePlanManyActuals.segment.id,
+          coveredStartAt: atHour(20),
+          coveredEndAt: atHour(21),
+        },
+      ],
+    });
+    const secondActual = await createActualSegment(actor(fixture.member), {
+      personId: fixture.member.person.id,
+      startAt: atHour(21),
+      endAt: atHour(22),
+      content: "下午实际投入",
+      allocation: 60,
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+      sources: [
+        {
+          plannedSegmentId: onePlanManyActuals.segment.id,
+          coveredStartAt: atHour(21),
+          coveredEndAt: atHour(22),
+        },
+      ],
+    });
+    const planWithSources = await getWorkSegment({
+      actor: actor(fixture.member),
+      input: { segmentId: onePlanManyActuals.segment.id },
+    });
+    expect(planWithSources.plannedSources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          actualSegmentId: firstActual.segment.id,
+          coveredStartAt: atHour(20).toISOString(),
+          coveredEndAt: atHour(21).toISOString(),
+        }),
+        expect.objectContaining({
+          actualSegmentId: secondActual.segment.id,
+          coveredStartAt: atHour(21).toISOString(),
+          coveredEndAt: atHour(22).toISOString(),
+        }),
+      ]),
+    );
+    for (const actualSegment of [firstActual.segment, secondActual.segment]) {
+      const detail = await getWorkSegment({
+        actor: actor(fixture.member),
+        input: { segmentId: actualSegment.id },
+      });
+      expect(detail.actualSources).toEqual([
+        expect.objectContaining({ plannedSegmentId: onePlanManyActuals.segment.id }),
+      ]);
+      const history = await listWorkSegmentChanges({
+        actor: actor(fixture.member),
+        input: { segmentId: actualSegment.id },
+      });
+      expect(history.items).toEqual([
+        expect.objectContaining({ action: "CREATE" }),
+      ]);
+    }
 
     const unplannedActual = await createActualSegment(actor(fixture.member), {
       personId: fixture.member.person.id,
@@ -490,6 +703,443 @@ test.describe("project management P5 work segment services", () => {
     expect(firstAfter.startAt.toISOString()).toBe(first.segment.startAt);
   });
 
+  test("A real 100-item move rolls back segments, history, audit and outbox on a late stale item", async () => {
+    const fixture = await createActivatedFixture();
+    const created = await batchCreatePlannedSegments(actor(fixture.member), {
+      segments: Array.from({ length: 100 }, (_, index) => ({
+        ...plannedInput(fixture.member.person.id, 9, 10),
+        startAt: new Date("2026-09-15T09:00:00.000Z"),
+        endAt: new Date("2026-09-15T10:00:00.000Z"),
+        content: `百条事务回滚 ${index + 1}`,
+        taskId: fixture.taskId,
+        nodeId: fixture.activeNodeId,
+      })),
+    });
+    expect(created.segments).toHaveLength(100);
+    const sorted = [...created.segments].sort((left, right) =>
+      left.id.localeCompare(right.id),
+    );
+    const lateStale = sorted[sorted.length - 1];
+    if (!lateStale) throw new Error("缺少批量回滚末项");
+    await prisma.workSegment.update({
+      where: { id: lateStale.id },
+      data: { content: `${lateStale.content}（制造 stale）` },
+    });
+    const ids = sorted.map((segment) => segment.id);
+    const beforeRows = await prisma.workSegment.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, startAt: true, endAt: true, status: true, updatedAt: true },
+    });
+    const beforeById = new Map(beforeRows.map((segment) => [segment.id, segment]));
+    const changesBefore = await prisma.workSegmentChange.count({
+      where: { segmentId: { in: ids } },
+    });
+    const auditsBefore = await prisma.domainAuditEvent.count({
+      where: { entityType: "WorkSegment", entityId: { in: ids } },
+    });
+    const outboxBefore = await prisma.notificationOutbox.count({
+      where: { channel: "project-management" },
+    });
+
+    await expectServiceError(
+      movePlannedSegments(actor(fixture.member), {
+        moves: sorted.map((segment) => ({
+          segmentId: segment.id,
+          expectedUpdatedAt: segment.updatedAt,
+          startAt: new Date(new Date(segment.startAt).getTime() + 24 * 60 * 60 * 1_000),
+          endAt: new Date(new Date(segment.endAt).getTime() + 24 * 60 * 60 * 1_000),
+        })),
+        reason: "验证百条全成全败",
+      }),
+      "STATE_CONFLICT",
+    );
+
+    const afterRows = await prisma.workSegment.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, startAt: true, endAt: true, status: true, updatedAt: true },
+    });
+    expect(afterRows).toHaveLength(100);
+    for (const after of afterRows) {
+      const before = beforeById.get(after.id);
+      expect(before).toBeTruthy();
+      expect(after).toEqual(before);
+    }
+    expect(
+      await prisma.workSegmentChange.count({ where: { segmentId: { in: ids } } }),
+    ).toBe(changesBefore);
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: { entityType: "WorkSegment", entityId: { in: ids } },
+      }),
+    ).toBe(auditsBefore);
+    expect(
+      await prisma.notificationOutbox.count({
+        where: { channel: "project-management" },
+      }),
+    ).toBe(outboxBefore);
+  });
+
+  test("Reverse overlapping batch inputs acquire Segment locks in one database order", async () => {
+    const fixture = await createActivatedFixture();
+    const created = await batchCreatePlannedSegments(actor(fixture.member), {
+      segments: [
+        {
+          ...plannedInput(fixture.member.person.id, 9, 10),
+          startAt: new Date("2026-10-20T09:00:00.000Z"),
+          endAt: new Date("2026-10-20T10:00:00.000Z"),
+          content: "逆序锁批量 A",
+          taskId: fixture.taskId,
+          nodeId: fixture.activeNodeId,
+        },
+        {
+          ...plannedInput(fixture.member.person.id, 10, 11),
+          startAt: new Date("2026-10-20T10:00:00.000Z"),
+          endAt: new Date("2026-10-20T11:00:00.000Z"),
+          content: "逆序锁批量 B",
+          taskId: fixture.taskId,
+          nodeId: fixture.activeNodeId,
+        },
+      ],
+    });
+    const idOrdered = [...created.segments].sort((left, right) =>
+      left.id.localeCompare(right.id),
+    );
+    const lastById = idOrdered.at(-1);
+    if (!lastById) throw new Error("缺少批量锁测试 Segment");
+    const segmentIds = idOrdered.map((segment) => segment.id);
+    const changesBefore = await prisma.workSegmentChange.count({
+      where: { segmentId: { in: segmentIds } },
+    });
+    const auditsBefore = await prisma.domainAuditEvent.count({
+      where: { entityType: "WorkSegment", entityId: { in: segmentIds } },
+    });
+    const outboxBefore = await prisma.notificationOutbox.count({
+      where: { channel: "project-management" },
+    });
+    const moveInput = (segments: typeof idOrdered, dayOffset: number) => ({
+      moves: segments.map((segment) => ({
+        segmentId: segment.id,
+        expectedUpdatedAt: segment.updatedAt,
+        startAt: new Date(
+          new Date(segment.startAt).getTime() + dayOffset * 24 * 60 * 60 * 1_000,
+        ),
+        endAt: new Date(
+          new Date(segment.endAt).getTime() + dayOffset * 24 * 60 * 60 * 1_000,
+        ),
+      })),
+      reason: `逆序重叠批量移动 ${dayOffset}`,
+    });
+
+    const outcomes = await runBehindOrderedWorkSegmentLockBarrier(lastById.id, [
+      () => movePlannedSegments(actor(fixture.member), moveInput(idOrdered, 1)),
+      () =>
+        movePlannedSegments(
+          actor(fixture.member),
+          moveInput([...idOrdered].reverse(), 2),
+        ),
+    ]);
+    expect(serviceOutcomeCodes(outcomes)).toEqual(["OK", "STATE_CONFLICT"]);
+
+    const persisted = await prisma.workSegment.findMany({
+      where: { id: { in: segmentIds } },
+      select: { id: true, startAt: true, endAt: true },
+      orderBy: { id: "asc" },
+    });
+    const appliedOffsets = new Set(
+      persisted.map((segment) => {
+        const original = idOrdered.find((item) => item.id === segment.id);
+        if (!original) throw new Error("缺少原始 Segment");
+        return (
+          (segment.startAt.getTime() - new Date(original.startAt).getTime()) /
+          (24 * 60 * 60 * 1_000)
+        );
+      }),
+    );
+    expect([...appliedOffsets]).toHaveLength(1);
+    expect([1, 2]).toContain([...appliedOffsets][0]);
+    expect(
+      await prisma.workSegmentChange.count({
+        where: { segmentId: { in: segmentIds } },
+      }),
+    ).toBe(changesBefore + 2);
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: { entityType: "WorkSegment", entityId: { in: segmentIds } },
+      }),
+    ).toBe(auditsBefore + 2);
+    expect(
+      await prisma.notificationOutbox.count({
+        where: { channel: "project-management" },
+      }),
+    ).toBe(outboxBefore);
+  });
+
+  test("Concurrent full confirmation creates one Actual and one source history", async () => {
+    const fixture = await createActivatedFixture();
+    const planned = await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 9, 10),
+      content: "并发完整确认",
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+    });
+    const input = {
+      segmentId: planned.segment.id,
+      expectedUpdatedAt: planned.segment.updatedAt,
+      actual: { actualOutput: "并发确认实际产出" },
+    };
+    const outboxBefore = await prisma.notificationOutbox.count({
+      where: { channel: "project-management" },
+    });
+    const outcomes = await runBehindWorkSegmentLockBarrier(
+      planned.segment.id,
+      [
+        () => confirmPlannedSegment(actor(fixture.member), input),
+        () => confirmPlannedSegment(actor(fixture.member), input),
+      ],
+    );
+    const results = outcomes.map((outcome) => {
+      if (outcome.status === "rejected") throw outcome.reason;
+      return outcome.value;
+    });
+    const [left, right] = results;
+    if (!left || !right) throw new Error("完整确认并发结果不完整");
+    expect([left.createdActual, right.createdActual].sort()).toEqual([
+      false,
+      true,
+    ]);
+    expect(left.actualSegment.id).toBe(right.actualSegment.id);
+    expect(
+      await prisma.workSegmentSource.count({
+        where: { plannedSegmentId: planned.segment.id },
+      }),
+    ).toBe(1);
+    const actualIds = await prisma.workSegmentSource.findMany({
+      where: { plannedSegmentId: planned.segment.id },
+      select: { actualSegmentId: true },
+    });
+    const affectedIds = [planned.segment.id, ...actualIds.map((row) => row.actualSegmentId)];
+    expect(
+      await prisma.workSegmentChange.count({
+        where: { segmentId: { in: affectedIds }, action: "CONFIRM" },
+      }),
+    ).toBe(2);
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: {
+          entityType: "WorkSegment",
+          entityId: { in: affectedIds },
+          action: "pm.segment.confirm",
+        },
+      }),
+    ).toBe(2);
+    const confirmedSegments = await prisma.workSegment.findMany({
+      where: { id: { in: affectedIds } },
+      select: { type: true, status: true, deletedAt: true },
+    });
+    expect(
+      confirmedSegments.sort((left, right) =>
+        left.type.localeCompare(right.type),
+      ),
+    ).toEqual([
+      { type: "ACTUAL", status: "CONFIRMED", deletedAt: null },
+      { type: "PLANNED", status: "CONFIRMED", deletedAt: null },
+    ]);
+    expect(
+      await prisma.notificationOutbox.count({
+        where: { channel: "project-management" },
+      }),
+    ).toBe(outboxBefore);
+  });
+
+  test("Concurrent partial confirm, cancel and soft delete each have one state winner", async () => {
+    const fixture = await createActivatedFixture();
+    const partialPlan = await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 11, 13),
+      content: "并发部分确认",
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+    });
+    const partialInput = {
+      segmentId: partialPlan.segment.id,
+      expectedUpdatedAt: partialPlan.segment.updatedAt,
+      coveredStartAt: atHour(11.5),
+      coveredEndAt: atHour(12.5),
+      reason: "并发部分确认",
+    };
+    const partialOutboxBefore = await prisma.notificationOutbox.count({
+      where: { channel: "project-management" },
+    });
+    const partialOutcomes = await runBehindWorkSegmentLockBarrier(
+      partialPlan.segment.id,
+      [
+        () => partiallyConfirmSegment(actor(fixture.member), partialInput),
+        () => partiallyConfirmSegment(actor(fixture.member), partialInput),
+      ],
+    );
+    expect(serviceOutcomeCodes(partialOutcomes)).toEqual(["OK", "STATE_CONFLICT"]);
+    const partialSources = await prisma.workSegmentSource.findMany({
+      where: { plannedSegmentId: partialPlan.segment.id },
+      select: { actualSegmentId: true },
+    });
+    expect(partialSources).toHaveLength(1);
+    const partialActualId = partialSources[0]?.actualSegmentId;
+    if (!partialActualId) throw new Error("部分确认缺少 Actual 来源");
+    const remainingPlans = await prisma.workSegment.findMany({
+      where: { sourceSplitFromId: partialPlan.segment.id, deletedAt: null },
+      orderBy: { startAt: "asc" },
+      select: { id: true, type: true, status: true },
+    });
+    expect(remainingPlans).toHaveLength(2);
+    expect(
+      remainingPlans.every((segment) => segment.type === "PLANNED"),
+    ).toBe(true);
+    expect(
+      await prisma.workSegmentChange.count({
+        where: {
+          segmentId: {
+            in: [
+              partialPlan.segment.id,
+              partialActualId,
+              ...remainingPlans.map((segment) => segment.id),
+            ],
+          },
+          action: { in: ["CONFIRM", "SPLIT"] },
+        },
+      }),
+    ).toBe(4);
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: {
+          entityType: "WorkSegment",
+          entityId: {
+            in: [
+              partialPlan.segment.id,
+              partialActualId,
+              ...remainingPlans.map((segment) => segment.id),
+            ],
+          },
+          action: { in: ["pm.segment.confirm", "pm.segment.split"] },
+        },
+      }),
+    ).toBe(4);
+    expect(
+      await prisma.workSegment.findUniqueOrThrow({
+        where: { id: partialPlan.segment.id },
+        select: { status: true },
+      }),
+    ).toEqual({ status: "CANCELLED" });
+    expect(
+      await prisma.workSegment.findUniqueOrThrow({
+        where: { id: partialActualId },
+        select: { type: true, status: true, deletedAt: true },
+      }),
+    ).toEqual({ type: "ACTUAL", status: "CONFIRMED", deletedAt: null });
+    expect(
+      await prisma.notificationOutbox.count({
+        where: { channel: "project-management" },
+      }),
+    ).toBe(partialOutboxBefore);
+
+    const cancelPlan = await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 14, 15),
+      content: "并发取消",
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+    });
+    const cancelInput = {
+      segmentId: cancelPlan.segment.id,
+      expectedUpdatedAt: cancelPlan.segment.updatedAt,
+      reason: "并发取消",
+    };
+    const cancelOutboxBefore = await prisma.notificationOutbox.count({
+      where: { channel: "project-management" },
+    });
+    const cancelOutcomes = await runBehindWorkSegmentLockBarrier(
+      cancelPlan.segment.id,
+      [
+        () => cancelPlannedSegment(actor(fixture.member), cancelInput),
+        () => cancelPlannedSegment(actor(fixture.member), cancelInput),
+      ],
+    );
+    expect(serviceOutcomeCodes(cancelOutcomes)).toEqual(["OK", "STATE_CONFLICT"]);
+    expect(
+      await prisma.workSegmentChange.count({
+        where: { segmentId: cancelPlan.segment.id, action: "CANCEL" },
+      }),
+    ).toBe(1);
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: {
+          entityType: "WorkSegment",
+          entityId: cancelPlan.segment.id,
+          action: "pm.segment.cancel",
+        },
+      }),
+    ).toBe(1);
+    expect(
+      await prisma.workSegment.findUniqueOrThrow({
+        where: { id: cancelPlan.segment.id },
+        select: { status: true },
+      }),
+    ).toEqual({ status: "CANCELLED" });
+    expect(
+      await prisma.notificationOutbox.count({
+        where: { channel: "project-management" },
+      }),
+    ).toBe(cancelOutboxBefore);
+
+    const actual = await createActualSegment(actor(fixture.member), {
+      personId: fixture.member.person.id,
+      startAt: atHour(16),
+      endAt: atHour(17),
+      content: "并发逻辑删除",
+      allocation: 20,
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+    });
+    const deleteInput = {
+      segmentId: actual.segment.id,
+      expectedUpdatedAt: actual.segment.updatedAt,
+      reason: "并发逻辑删除",
+    };
+    const deleteOutboxBefore = await prisma.notificationOutbox.count({
+      where: { channel: "project-management" },
+    });
+    const deleteOutcomes = await runBehindWorkSegmentLockBarrier(
+      actual.segment.id,
+      [
+        () => softDeleteActualSegment(actor(fixture.member), deleteInput),
+        () => softDeleteActualSegment(actor(fixture.member), deleteInput),
+      ],
+    );
+    expect(serviceOutcomeCodes(deleteOutcomes)).toEqual(["OK", "STATE_CONFLICT"]);
+    expect(
+      await prisma.workSegmentChange.count({
+        where: { segmentId: actual.segment.id, action: "DELETE" },
+      }),
+    ).toBe(1);
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: {
+          entityType: "WorkSegment",
+          entityId: actual.segment.id,
+          action: "pm.segment.delete",
+        },
+      }),
+    ).toBe(1);
+    expect(
+      await prisma.workSegment.findUniqueOrThrow({
+        where: { id: actual.segment.id },
+        select: { status: true, deletedAt: true },
+      }),
+    ).toEqual({ status: "CANCELLED", deletedAt: expect.any(Date) });
+    expect(
+      await prisma.notificationOutbox.count({
+        where: { channel: "project-management" },
+      }),
+    ).toBe(deleteOutboxBefore);
+  });
+
   test("Segment transition scan writes change history and audit", async () => {
     const fixture = await createActivatedFixture();
     const inProgressPlan = await createWorkSegment(actor(fixture.member), {
@@ -529,6 +1179,59 @@ test.describe("project management P5 work segment services", () => {
         },
       }),
     ).toBe(2);
+  });
+
+  test("Concurrent transition scans have one winner and no duplicate side effects", async () => {
+    const fixture = await createActivatedFixture();
+    const duePlan = await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 7, 8),
+      startAt: new Date("2025-01-01T07:00:00.000Z"),
+      endAt: new Date("2025-01-01T08:00:00.000Z"),
+      content: `并发到期转换 ${randomUUID()}`,
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+    });
+    const eventKey = `pm:segment:confirmation_due:${duePlan.segment.id}:${duePlan.segment.endAt}`;
+    const outcomes = await runBehindWorkSegmentLockBarrier(duePlan.segment.id, [
+      () => scanSegmentTransitions(new Date("2025-01-02T10:00:00.000Z")),
+      () => scanSegmentTransitions(new Date("2025-01-02T10:00:00.000Z")),
+    ]);
+    expect(outcomes.every((outcome) => outcome.status === "fulfilled")).toBe(true);
+    const [left, right] = outcomes.map((outcome) => {
+      if (outcome.status === "rejected") throw outcome.reason;
+      return outcome.value;
+    });
+    if (!left || !right) throw new Error("缺少并发 transition 扫描结果");
+    expect(left.pendingConfirmationCount + right.pendingConfirmationCount).toBe(1);
+    expect(
+      await prisma.workSegment.findUniqueOrThrow({
+        where: { id: duePlan.segment.id },
+        select: { status: true },
+      }),
+    ).toEqual({ status: "PENDING_CONFIRMATION" });
+    expect(
+      await prisma.workSegmentChange.count({
+        where: {
+          segmentId: duePlan.segment.id,
+          reason: "Planned Segment 已到期，等待确认",
+        },
+      }),
+    ).toBe(1);
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: {
+          entityType: "WorkSegment",
+          entityId: duePlan.segment.id,
+          action: "pm.segment.update",
+          source: "CRON",
+        },
+      }),
+    ).toBe(1);
+    expect(
+      await prisma.notificationOutbox.count({
+        where: { eventKey: `${eventKey}:feishu` },
+      }),
+    ).toBe(1);
   });
 });
 
@@ -734,6 +1437,201 @@ async function expectServiceError(
   await expect(
     promise.catch((error) => toProjectManagementServiceError(error).code),
   ).resolves.toBe(code);
+}
+
+function serviceOutcomeCodes(
+  outcomes: PromiseSettledResult<unknown>[],
+) {
+  return outcomes
+    .map((outcome) =>
+      outcome.status === "fulfilled"
+        ? "OK"
+        : toProjectManagementServiceError(outcome.reason).code,
+    )
+    .sort();
+}
+
+async function databaseBackendPid(client: Client) {
+  const result = await client.query<{ pid: number }>(
+    "SELECT pg_backend_pid() AS pid",
+  );
+  const pid = result.rows[0]?.pid;
+  if (!pid) throw new Error("无法取得 PostgreSQL backend pid");
+  return pid;
+}
+
+async function lockWorkSegmentRow(client: Client, segmentId: string) {
+  await client.query("BEGIN");
+  const pid = await databaseBackendPid(client);
+  await client.query(
+    'SELECT "id" FROM "WorkSegment" WHERE "id" = $1 FOR UPDATE',
+    [segmentId],
+  );
+  return pid;
+}
+
+async function waitForDirectBlockers(
+  observer: Client,
+  blockerPid: number,
+  expectedCount: number,
+) {
+  const deadline = Date.now() + 7_500;
+  while (Date.now() < deadline) {
+    const result = await observer.query<{ pid: number }>(
+      `WITH RECURSIVE "blocked"("pid") AS (
+         SELECT "activity"."pid"
+         FROM "pg_stat_activity" AS "activity"
+         WHERE $1::int = ANY(pg_blocking_pids("activity"."pid"))
+         UNION
+         SELECT "activity"."pid"
+         FROM "pg_stat_activity" AS "activity"
+         JOIN "blocked" AS "blocker"
+           ON "blocker"."pid" = ANY(pg_blocking_pids("activity"."pid"))
+       )
+       SELECT "pid" FROM "blocked" ORDER BY "pid" ASC`,
+      [blockerPid],
+    );
+    const pids = [...new Set(result.rows.map((row) => row.pid))];
+    if (pids.length >= expectedCount) return pids;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  throw new Error(
+    `未在期限内观察到 ${expectedCount} 个事务被 backend ${blockerPid} 阻塞`,
+  );
+}
+
+async function runBehindWorkSegmentLockBarrier<T>(
+  segmentId: string,
+  operations: [() => Promise<T>, () => Promise<T>],
+) {
+  let locker: Client | undefined;
+  let observer: Client | undefined;
+  let transactionMayBeOpen = false;
+  let released = false;
+  let pending: Promise<T>[] = [];
+  let pendingSettlement: Promise<PromiseSettledResult<T>[]> | undefined;
+  let pendingBackendPids: number[] = [];
+  let pendingHandled = false;
+  let result: PromiseSettledResult<T>[] | undefined;
+  let primaryError: unknown;
+  let hasPrimaryError = false;
+  try {
+    locker = await connectDatabaseClient("segment-barrier-locker");
+    observer = await connectDatabaseClient("segment-barrier-observer");
+    transactionMayBeOpen = true;
+    const lockerPid = await lockWorkSegmentRow(locker, segmentId);
+    const started = startBarrierOperations(operations);
+    pending = started.pending;
+    pendingSettlement = started.settlement;
+    const blockedPids = await waitForDirectBlockers(observer, lockerPid, 2);
+    pendingBackendPids = blockedPids;
+    if (new Set(blockedPids).size < 2) {
+      throw new Error("两个 Segment 事务未使用独立 PostgreSQL backend");
+    }
+    await locker.query("COMMIT");
+    released = true;
+    result = await Promise.allSettled(pending);
+    pendingHandled = true;
+  } catch (error) {
+    primaryError = error;
+    hasPrimaryError = true;
+  }
+  const cleanupErrors = await cleanupBarrierResources({
+    locker,
+    observer,
+    rollbackRequired: Boolean(locker && transactionMayBeOpen && !released),
+    pendingSettlement,
+    pendingBackendPids,
+    pendingHandled,
+    primaryError,
+  });
+  throwBarrierErrors(hasPrimaryError, primaryError, cleanupErrors);
+  if (!result) throw new Error("Segment barrier 未返回并发结果");
+  return result;
+}
+
+async function runBehindOrderedWorkSegmentLockBarrier<T>(
+  lastSegmentId: string,
+  operations: [() => Promise<T>, () => Promise<T>],
+) {
+  let locker: Client | undefined;
+  let observer: Client | undefined;
+  let transactionMayBeOpen = false;
+  let released = false;
+  let pending: Promise<T>[] = [];
+  let pendingSettlement: Promise<PromiseSettledResult<T>[]> | undefined;
+  let pendingBackendPids: number[] = [];
+  let pendingHandled = false;
+  let result: PromiseSettledResult<T>[] | undefined;
+  let primaryError: unknown;
+  let hasPrimaryError = false;
+  try {
+    locker = await connectDatabaseClient("ordered-segment-locker");
+    observer = await connectDatabaseClient("ordered-segment-observer");
+    transactionMayBeOpen = true;
+    const lockerPid = await lockWorkSegmentRow(locker, lastSegmentId);
+    const started = startBarrierOperations(operations);
+    pending = started.pending;
+    pendingSettlement = started.settlement;
+    const { directBlockerPid, indirectBlockerPid } =
+      await waitForSingleDirectAndIndirectBlocker(observer, lockerPid);
+    pendingBackendPids = [directBlockerPid, indirectBlockerPid];
+    if (directBlockerPid === indirectBlockerPid) {
+      throw new Error("逆序批量事务未使用独立 PostgreSQL backend");
+    }
+    await locker.query("COMMIT");
+    released = true;
+    result = await Promise.allSettled(pending);
+    pendingHandled = true;
+  } catch (error) {
+    primaryError = error;
+    hasPrimaryError = true;
+  }
+  const cleanupErrors = await cleanupBarrierResources({
+    locker,
+    observer,
+    rollbackRequired: Boolean(locker && transactionMayBeOpen && !released),
+    pendingSettlement,
+    pendingBackendPids,
+    pendingHandled,
+    primaryError,
+  });
+  throwBarrierErrors(hasPrimaryError, primaryError, cleanupErrors);
+  if (!result) throw new Error("Ordered Segment barrier 未返回并发结果");
+  return result;
+}
+
+async function waitForSingleDirectAndIndirectBlocker(
+  observer: Client,
+  lockerPid: number,
+) {
+  const deadline = Date.now() + 7_500;
+  while (Date.now() < deadline) {
+    const direct = await directBlockerPids(observer, lockerPid);
+    const directBlockerPid = direct[0];
+    if (direct.length === 1 && directBlockerPid) {
+      const indirect = await directBlockerPids(observer, directBlockerPid);
+      const indirectBlockerPid = indirect.find((pid) => pid !== lockerPid);
+      if (indirectBlockerPid) {
+        return { directBlockerPid, indirectBlockerPid };
+      }
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  throw new Error(
+    "未观察到 external(max id) → first(min id) → second(min id) 的固定锁顺序",
+  );
+}
+
+async function directBlockerPids(observer: Client, blockerPid: number) {
+  const result = await observer.query<{ pid: number }>(
+    `SELECT "activity"."pid"
+     FROM "pg_stat_activity" AS "activity"
+     WHERE $1::int = ANY(pg_blocking_pids("activity"."pid"))
+     ORDER BY "activity"."pid" ASC`,
+    [blockerPid],
+  );
+  return [...new Set(result.rows.map((row) => row.pid))];
 }
 
 async function expectSegmentChange(segmentId: string, reason: string) {

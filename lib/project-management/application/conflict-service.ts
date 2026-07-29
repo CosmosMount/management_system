@@ -6,6 +6,7 @@ import type {
   ResourceConflictStatus,
   TaskMemberRole,
 } from "@prisma/client";
+import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 import {
   authorize,
@@ -27,7 +28,9 @@ import {
 import {
   notFoundError,
   stateConflictError,
+  toProjectManagementServiceError,
   validationError,
+  type ProjectManagementErrorCode,
 } from "@/lib/project-management/application/errors";
 import {
   acknowledgeConflictInputSchema,
@@ -104,6 +107,25 @@ export type ConflictScanResult = {
   unchangedCount: number;
 };
 
+export type ConflictScanFailure = {
+  personId: string;
+  code: ProjectManagementErrorCode;
+  message: string;
+};
+
+export type ResourceConflictScanResult = {
+  scannedPersonCount: number;
+  succeededPersonCount: number;
+  failedPersonCount: number;
+  detectedCount: number;
+  createdCount: number;
+  reopenedCount: number;
+  resolvedCount: number;
+  unchangedCount: number;
+  results: ConflictScanResult[];
+  failures: ConflictScanFailure[];
+};
+
 export type ResourceConflictMutationResult = {
   conflictId: string;
   status: ResourceConflictStatus;
@@ -130,39 +152,89 @@ export async function scanConflictsForPerson(
   return prisma.$transaction((tx) => scanConflictsForPersonTx(tx, parsed));
 }
 
-export async function scanResourceConflicts(input: unknown) {
+export async function scanResourceConflicts(
+  input: unknown,
+): Promise<ResourceConflictScanResult> {
   const parsed = scanResourceConflictsInputSchema.parse(input);
-  return prisma.$transaction(async (tx) => {
-    const personIds =
-      parsed.personIds && parsed.personIds.length > 0
-        ? [...new Set(parsed.personIds)]
-        : await personIdsWithSegmentsInRangeTx(tx, parsed);
-    const results: ConflictScanResult[] = [];
-    for (const personId of personIds) {
+  const explicitPersonIds =
+    parsed.personIds && parsed.personIds.length > 0
+      ? [...new Set(parsed.personIds)].sort()
+      : null;
+  const personIds = explicitPersonIds
+    ? await prisma.$transaction(async (tx) => {
+        await assertPersonsScannableTx(tx, explicitPersonIds);
+        return explicitPersonIds;
+      })
+    : (
+        await prisma.$transaction((tx) =>
+          personIdsWithSegmentsInRangeTx(tx, parsed),
+        )
+      ).sort();
+  const results: ConflictScanResult[] = [];
+  const failures: ConflictScanFailure[] = [];
+  for (const personId of personIds) {
+    try {
       results.push(
-        await scanConflictsForPersonTx(tx, {
+        await prisma.$transaction((tx) =>
+          scanConflictsForPersonTx(tx, {
+            personId,
+            startAt: parsed.startAt,
+            endAt: parsed.endAt,
+          }),
+        ),
+      );
+    } catch (error) {
+      const mapped = toProjectManagementServiceError(error);
+      const failure = {
+        personId,
+        code: mapped.code,
+        message: mapped.message,
+      } satisfies ConflictScanFailure;
+      failures.push(failure);
+      logger[mapped.code === "INTERNAL_ERROR" ? "error" : "warn"](
+        "project_management.resource_conflicts.scan.person_failed",
+        {
+          module: "project-management",
+          action: "scanResourceConflicts",
           personId,
-          startAt: parsed.startAt,
-          endAt: parsed.endAt,
-        }),
+          result: "failure",
+          errorCode: failure.code,
+          errorMessage: failure.message,
+        },
       );
     }
-    return {
-      scannedPersonCount: personIds.length,
-      detectedCount: results.reduce((sum, result) => sum + result.detectedCount, 0),
-      createdCount: results.reduce((sum, result) => sum + result.createdCount, 0),
-      reopenedCount: results.reduce((sum, result) => sum + result.reopenedCount, 0),
-      resolvedCount: results.reduce((sum, result) => sum + result.resolvedCount, 0),
-      unchangedCount: results.reduce((sum, result) => sum + result.unchangedCount, 0),
-      results,
-    };
-  });
+  }
+  const result: ResourceConflictScanResult = {
+    scannedPersonCount: personIds.length,
+    succeededPersonCount: results.length,
+    failedPersonCount: failures.length,
+    detectedCount: results.reduce((sum, result) => sum + result.detectedCount, 0),
+    createdCount: results.reduce((sum, result) => sum + result.createdCount, 0),
+    reopenedCount: results.reduce((sum, result) => sum + result.reopenedCount, 0),
+    resolvedCount: results.reduce((sum, result) => sum + result.resolvedCount, 0),
+    unchangedCount: results.reduce((sum, result) => sum + result.unchangedCount, 0),
+    results,
+    failures,
+  };
+  return result;
 }
 
 export async function scanResourceConflictsForDefaultWindow(now = new Date()) {
   const startAt = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1_000);
   const endAt = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1_000);
-  return scanResourceConflicts({ startAt, endAt });
+  const result = await scanResourceConflicts({ startAt, endAt });
+  if (result.failedPersonCount > 0) {
+    logger.warn("project_management.resource_conflicts.scan.default_window_partial", {
+      module: "cron",
+      action: "scanResourceConflictsForDefaultWindow",
+      result: "failure",
+      scannedPersonCount: result.scannedPersonCount,
+      succeededPersonCount: result.succeededPersonCount,
+      failedPersonCount: result.failedPersonCount,
+      failureCodes: result.failures.map((failure) => failure.code),
+    });
+  }
+  return result;
 }
 
 export async function acknowledgeConflict(
@@ -171,7 +243,7 @@ export async function acknowledgeConflict(
 ): Promise<ResourceConflictMutationResult> {
   const parsed = acknowledgeConflictInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    await lockConflictTx(tx, parsed.conflictId);
+    await lockConflictWithPersonTx(tx, parsed.conflictId);
     const refreshedActor = await refreshActorTx(tx, actor);
     const conflict = await loadConflictForMutationTx(tx, parsed.conflictId);
     assertConflictVisible(refreshedActor, conflict);
@@ -211,7 +283,7 @@ export async function resolveConflict(
 ): Promise<ResourceConflictMutationResult> {
   const parsed = resolveConflictInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    await lockConflictTx(tx, parsed.conflictId);
+    await lockConflictWithPersonTx(tx, parsed.conflictId);
     const refreshedActor = await refreshActorTx(tx, actor);
     const conflict = await loadConflictForMutationTx(tx, parsed.conflictId);
     assertConflictVisible(refreshedActor, conflict);
@@ -238,7 +310,7 @@ export async function ignoreConflict(
 ): Promise<ResourceConflictMutationResult> {
   const parsed = ignoreConflictInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    await lockConflictTx(tx, parsed.conflictId);
+    await lockConflictWithPersonTx(tx, parsed.conflictId);
     const refreshedActor = await refreshActorTx(tx, actor);
     const conflict = await loadConflictForMutationTx(tx, parsed.conflictId);
     assertConflictVisible(refreshedActor, conflict);
@@ -250,6 +322,13 @@ export async function ignoreConflict(
     }
     if (conflict.status === "RESOLVED") {
       throw stateConflictError("已解决的冲突不能忽略");
+    }
+    if (
+      conflict.status === "IGNORED" &&
+      conflict.ignoredUntil?.getTime() === parsed.ignoredUntil.getTime() &&
+      conflict.resolutionNote === parsed.reason
+    ) {
+      return { conflictId: conflict.id, status: conflict.status };
     }
     const updated = await tx.resourceConflict.update({
       where: { id: conflict.id },
@@ -287,54 +366,53 @@ export async function previewConflictSuggestion(
   input: unknown,
 ): Promise<ConflictSuggestionPreview> {
   const parsed = previewConflictSuggestionInputSchema.parse(input);
-  const refreshedActor = await refreshActor(actor);
-  const conflict = await prisma.resourceConflict.findFirst({
-    where: { id: parsed.conflictId },
-    include: conflictInclude,
-  });
-  if (!conflict) throw notFoundError();
-  assertConflictVisible(refreshedActor, conflict);
-  assertCanResolveConflict(refreshedActor, conflict);
-  if (conflict.status === "RESOLVED") {
-    return { conflictId: conflict.id, suggestions: [] };
-  }
-  const plannedSegments = conflict.segments
-    .map((entry) => entry.segment)
-    .filter(
-      (segment) =>
-        segment.type === "PLANNED" &&
-        isActivePlannedStatus(segment.status) &&
-        !segment.deletedAt,
-    )
-    .sort(compareSegmentsForSuggestion);
-  if (plannedSegments.length < 2) {
-    return { conflictId: conflict.id, suggestions: [] };
-  }
-  const keep = plannedSegments[0];
-  if (!keep) return { conflictId: conflict.id, suggestions: [] };
-  let cursor = new Date(conflict.endAt);
-  const moves = plannedSegments.slice(1).map((segment) => {
-    const duration = segment.endAt.getTime() - segment.startAt.getTime();
-    const startAt = cursor;
-    const endAt = new Date(startAt.getTime() + duration);
-    cursor = endAt;
+  return prisma.$transaction(async (tx) => {
+    await lockConflictWithPersonTx(tx, parsed.conflictId);
+    const refreshedActor = await refreshActorTx(tx, actor);
+    const conflict = await loadConflictForMutationTx(tx, parsed.conflictId);
+    assertConflictVisible(refreshedActor, conflict);
+    assertCanResolveConflict(refreshedActor, conflict);
+    if (conflict.status === "RESOLVED") {
+      return { conflictId: conflict.id, suggestions: [] };
+    }
+    const plannedSegments = conflict.segments
+      .map((entry) => entry.segment)
+      .filter(
+        (segment) =>
+          segment.type === "PLANNED" &&
+          isActivePlannedStatus(segment.status) &&
+          !segment.deletedAt,
+      )
+      .sort(compareSegmentsForSuggestion);
+    if (plannedSegments.length < 2) {
+      return { conflictId: conflict.id, suggestions: [] };
+    }
+    const keep = plannedSegments[0];
+    if (!keep) return { conflictId: conflict.id, suggestions: [] };
+    let cursor = new Date(conflict.endAt);
+    const moves = plannedSegments.slice(1).map((segment) => {
+      const duration = segment.endAt.getTime() - segment.startAt.getTime();
+      const startAt = cursor;
+      const endAt = new Date(startAt.getTime() + duration);
+      cursor = endAt;
+      return {
+        segmentId: segment.id,
+        expectedUpdatedAt: segment.updatedAt.toISOString(),
+        startAt: startAt.toISOString(),
+        endAt: endAt.toISOString(),
+      };
+    });
     return {
-      segmentId: segment.id,
-      expectedUpdatedAt: segment.updatedAt.toISOString(),
-      startAt: startAt.toISOString(),
-      endAt: endAt.toISOString(),
+      conflictId: conflict.id,
+      suggestions: [
+        {
+          proposalId: "move-lower-priority-after-conflict",
+          title: "将较低优先级计划顺延到冲突结束后",
+          moves,
+        },
+      ],
     };
   });
-  return {
-    conflictId: conflict.id,
-    suggestions: [
-      {
-        proposalId: "move-lower-priority-after-conflict",
-        title: "将较低优先级计划顺延到冲突结束后",
-        moves,
-      },
-    ],
-  };
 }
 
 export async function applyConflictSuggestion(
@@ -343,7 +421,7 @@ export async function applyConflictSuggestion(
 ): Promise<ResourceConflictMutationResult & { movedSegments: BatchSegmentMutationResult }> {
   const parsed = applyConflictSuggestionInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    await lockConflictTx(tx, parsed.conflictId);
+    await lockConflictWithPersonTx(tx, parsed.conflictId);
     const refreshedActor = await refreshActorTx(tx, actor);
     const conflict = await loadConflictForMutationTx(tx, parsed.conflictId);
     assertConflictVisible(refreshedActor, conflict);
@@ -382,11 +460,14 @@ async function scanConflictsForPersonTx(
 ): Promise<ConflictScanResult> {
   const person = await tx.person.findUnique({
     where: { id: input.personId },
-    select: { id: true },
+    select: { id: true, status: true },
   });
-  if (!person) throw validationError("人员不存在或已停用", {
-    personId: ["人员不存在或已停用"],
-  });
+  if (!person || person.status !== "ACTIVE") {
+    throw validationError("人员不存在或已停用", {
+      personId: ["人员不存在或已停用"],
+    });
+  }
+  await lockConflictPersonTx(tx, input.personId);
   const segments = await loadSegmentsForScanTx(tx, input);
   const detected = detectConflictsForSegments(input.personId, input, segments);
   const detectedByFingerprint = new Map(
@@ -423,6 +504,7 @@ async function personIdsWithSegmentsInRangeTx(
 ) {
   const rows = await tx.workSegment.findMany({
     where: {
+      person: { status: "ACTIVE" },
       deletedAt: null,
       startAt: { lt: input.endAt },
       endAt: { gt: input.startAt },
@@ -435,6 +517,24 @@ async function personIdsWithSegmentsInRangeTx(
     distinct: ["personId"],
   });
   return rows.map((row) => row.personId);
+}
+
+async function assertPersonsScannableTx(tx: PrismaTx, personIds: string[]) {
+  if (personIds.length === 0) return;
+  const people = await tx.person.findMany({
+    where: { id: { in: personIds } },
+    select: { id: true, status: true },
+  });
+  const activePersonIds = new Set(
+    people
+      .filter((person) => person.status === "ACTIVE")
+      .map((person) => person.id),
+  );
+  if (activePersonIds.size !== personIds.length) {
+    throw validationError("扫描人员不存在或已停用", {
+      personIds: ["扫描人员不存在或已停用"],
+    });
+  }
 }
 
 async function loadSegmentsForScanTx(
@@ -554,7 +654,7 @@ function detectConflictsInSlice(
   }
 
   const missingAllocation = planned.filter((segment) => segment.allocation == null);
-  if (missingAllocation.length > 1) {
+  if (planned.length > 1 && missingAllocation.length > 0) {
     detected.push(
       detectedConflict({
         kind: "MISSING_ALLOCATION",
@@ -562,8 +662,9 @@ function detectConflictsInSlice(
         personId,
         startAt,
         endAt,
-        segments: missingAllocation,
-        reason: "同一时间段存在多条未填写 Allocation 的 Planned Segment",
+        segments: planned,
+        reason: "同一时间段存在重叠 Planned Segment，且至少一条未填写 Allocation",
+        extra: { missingAllocationSegmentIds: missingAllocation.map((segment) => segment.id) },
       }),
     );
   }
@@ -691,7 +792,7 @@ async function upsertDetectedConflictTx(
   tx: PrismaTx,
   detected: DetectedConflict,
 ): Promise<"created" | "reopened" | "unchanged"> {
-  const existing = await tx.resourceConflict.findUnique({
+  let existing = await tx.resourceConflict.findUnique({
     where: { fingerprint: detected.fingerprint },
     include: { segments: true },
   });
@@ -728,19 +829,24 @@ async function upsertDetectedConflictTx(
     await notifyConflictOpenedTx(tx, created);
     return "created";
   }
+  await lockConflictTx(tx, existing.id);
+  existing = await tx.resourceConflict.findUniqueOrThrow({
+    where: { id: existing.id },
+    include: { segments: true },
+  });
 
   const ignoredStillActive =
     existing.status === "IGNORED" &&
     existing.ignoredUntil != null &&
     existing.ignoredUntil > new Date();
+  const manuallyResolved =
+    existing.status === "RESOLVED" &&
+    !(await wasAutomaticallyResolvedTx(tx, existing));
+  if (ignoredStillActive || manuallyResolved) return "unchanged";
   const shouldReopen =
     existing.status === "RESOLVED" ||
-    (existing.status === "IGNORED" && !ignoredStillActive);
-  const nextStatus = ignoredStillActive
-    ? "IGNORED"
-    : shouldReopen
-      ? "OPEN"
-      : existing.status;
+    existing.status === "IGNORED";
+  const nextStatus = shouldReopen ? "OPEN" : existing.status;
   const detectedAt = new Date();
   await tx.resourceConflict.update({
     where: { id: existing.id },
@@ -752,7 +858,13 @@ async function upsertDetectedConflictTx(
       explanation: detected.explanation,
       detectedAt,
       ...(nextStatus === "OPEN"
-        ? { resolvedAt: null, acknowledgedAt: null, ignoredUntil: null }
+        ? {
+            resolvedAt: null,
+            acknowledgedAt: null,
+            ignoredUntil: null,
+            resolvedByAccountId: null,
+            resolutionNote: "",
+          }
         : {}),
     },
   });
@@ -783,6 +895,30 @@ async function upsertDetectedConflictTx(
   return "unchanged";
 }
 
+async function wasAutomaticallyResolvedTx(
+  tx: PrismaTx,
+  conflict: Pick<ConflictForMutation, "id" | "resolvedAt">,
+) {
+  if (!conflict.resolvedAt) return false;
+  const resolutionAudits = await tx.domainAuditEvent.findMany({
+    where: {
+      entityType: "ResourceConflict",
+      entityId: conflict.id,
+      action: { in: ["pm.conflict.resolve", "pm.conflict.apply_suggestion"] },
+      createdAt: { gte: conflict.resolvedAt },
+    },
+    orderBy: { createdAt: "asc" },
+    take: 2,
+    select: { action: true, source: true, createdAt: true },
+  });
+  if (resolutionAudits.length !== 1) return false;
+  const resolutionAudit = resolutionAudits[0];
+  return (
+    resolutionAudit?.action === "pm.conflict.resolve" &&
+    resolutionAudit.source === "CRON"
+  );
+}
+
 async function resolveObsoleteConflictsTx(
   tx: PrismaTx,
   input: {
@@ -804,16 +940,14 @@ async function resolveObsoleteConflictsTx(
   let resolvedCount = 0;
   for (const conflict of openConflicts) {
     if (input.activeFingerprints.has(conflict.fingerprint)) continue;
-    const updated = await tx.resourceConflict.update({
-      where: { id: conflict.id },
-      data: {
-        status: "RESOLVED",
-        resolvedAt: new Date(),
-        resolutionNote: "扫描确认冲突已解除",
-      },
-      include: conflictInclude,
-    });
-    await createDomainAuditEventTx(tx, {
+    if (
+      conflict.status === "IGNORED" &&
+      conflict.ignoredUntil != null &&
+      conflict.ignoredUntil > new Date()
+    ) {
+      continue;
+    }
+    const resolutionAudit = await createDomainAuditEventTx(tx, {
       action: "pm.conflict.resolve",
       entityType: "ResourceConflict",
       entityId: conflict.id,
@@ -821,6 +955,17 @@ async function resolveObsoleteConflictsTx(
       after: jsonValue({ status: "RESOLVED" }),
       reason: "扫描确认冲突已解除",
       source: "CRON",
+    });
+    const updated = await tx.resourceConflict.update({
+      where: { id: conflict.id },
+      data: {
+        status: "RESOLVED",
+        // Keep the provenance lower bound on the audit row's database clock.
+        resolvedAt: resolutionAudit.createdAt,
+        resolvedByAccountId: null,
+        resolutionNote: "扫描确认冲突已解除",
+      },
+      include: conflictInclude,
     });
     await notifyConflictResolvedTx(tx, updated);
     resolvedCount += 1;
@@ -896,7 +1041,10 @@ async function notifyConflictOpenedTx(
   });
 }
 
-async function notifyConflictResolvedTx(tx: PrismaTx, conflict: ConflictForMutation) {
+async function notifyConflictResolvedTx(
+  tx: PrismaTx,
+  conflict: ConflictForMutation,
+) {
   const recipients = await recipientsForPersonIdsTx(tx, [conflict.personId]);
   await createProjectManagementEventNotificationsTx(tx, {
     actorName: "系统",
@@ -1009,10 +1157,6 @@ function assertProposalOnlyTouchesConflictSegments(
   }
 }
 
-async function refreshActor(actor: ProjectManagementActor) {
-  return prisma.$transaction((tx) => refreshActorTx(tx, actor));
-}
-
 async function refreshActorTx(
   tx: PrismaTx,
   actor: ProjectManagementActor,
@@ -1029,6 +1173,27 @@ async function lockConflictTx(tx: PrismaTx, conflictId: string) {
     SELECT "id" FROM "ResourceConflict" WHERE "id" = ${conflictId} FOR UPDATE
   `;
   if (rows.length === 0) throw notFoundError();
+}
+
+async function lockConflictWithPersonTx(tx: PrismaTx, conflictId: string) {
+  const conflict = await tx.resourceConflict.findUnique({
+    where: { id: conflictId },
+    select: { personId: true },
+  });
+  if (!conflict) throw notFoundError();
+  await lockConflictPersonTx(tx, conflict.personId);
+  await lockConflictTx(tx, conflictId);
+}
+
+async function lockConflictPersonTx(tx: PrismaTx, personId: string) {
+  const digest = createHash("sha256")
+    .update(`pm:resource-conflict:person:${personId}`)
+    .digest();
+  const namespaceKey = digest.readInt32BE(0);
+  const personKey = digest.readInt32BE(4);
+  await tx.$queryRaw<Array<{ locked: string }>>`
+    SELECT pg_advisory_xact_lock(${namespaceKey}, ${personKey})::text AS "locked"
+  `;
 }
 
 async function loadConflictForMutationTx(tx: PrismaTx, conflictId: string) {

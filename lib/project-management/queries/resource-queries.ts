@@ -456,17 +456,14 @@ function sanitizeConflictExplanation(
   const record = explanation as Record<string, unknown>;
   const sanitized: Record<string, unknown> =
     hiddenSegmentCount > 0 ? { ...record, hiddenSegmentCount } : { ...record };
-  if (Array.isArray(record.segmentIds)) {
-    sanitized.segmentIds = record.segmentIds.filter(
-      (segmentId): segmentId is string =>
-        typeof segmentId === "string" && visibleSegmentIds.has(segmentId),
-    );
-  }
-  if (Array.isArray(record.changedSegmentIds)) {
-    sanitized.changedSegmentIds = record.changedSegmentIds.filter(
-      (segmentId): segmentId is string =>
-        typeof segmentId === "string" && visibleSegmentIds.has(segmentId),
-    );
+  for (const key of CONFLICT_EXPLANATION_SEGMENT_ID_ARRAY_KEYS) {
+    const segmentIds = record[key];
+    if (Array.isArray(segmentIds)) {
+      sanitized[key] = segmentIds.filter(
+        (segmentId): segmentId is string =>
+          typeof segmentId === "string" && visibleSegmentIds.has(segmentId),
+      );
+    }
   }
   if (Array.isArray(record.segments)) {
     sanitized.segments = record.segments.filter(
@@ -488,6 +485,12 @@ function sanitizeConflictExplanation(
   }
   return sanitized as Prisma.JsonObject;
 }
+
+const CONFLICT_EXPLANATION_SEGMENT_ID_ARRAY_KEYS = [
+  "segmentIds",
+  "changedSegmentIds",
+  "missingAllocationSegmentIds",
+] as const;
 
 const REDACTED_CONFLICT_HANDLING_TEXT = "处理说明涉及不可见记录，已隐藏";
 

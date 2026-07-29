@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import type { Client } from "pg";
 import { prisma } from "../lib/prisma";
 import {
   activateTask,
@@ -9,6 +10,7 @@ import {
   createActualSegment,
   createWorkSegment,
   movePlannedSegments,
+  updateWorkSegment,
 } from "../lib/project-management/application/segment-service";
 import {
   acknowledgeConflict,
@@ -17,6 +19,7 @@ import {
   previewConflictSuggestion,
   resolveConflict,
   scanConflictsForPerson,
+  scanResourceConflicts,
   scanResourceConflictsForDefaultWindow,
 } from "../lib/project-management/application/conflict-service";
 import {
@@ -27,8 +30,420 @@ import {
   toProjectManagementServiceError,
 } from "../lib/project-management/application/errors";
 import type { ProjectManagementActor } from "../lib/project-management/identity";
+import {
+  cleanupBarrierResources,
+  connectDatabaseClient,
+  signalPendingBackends,
+  startBarrierOperations,
+  throwBarrierErrors,
+} from "./helpers/database-barrier";
+
+async function captureStructuredLogs<T>(callback: () => Promise<T>) {
+  const lines: string[] = [];
+  const originalConsole = {
+    log: console.log,
+    warn: console.warn,
+    error: console.error,
+  };
+  const originalLogFormat = process.env.LOG_FORMAT;
+  const originalLogLevel = process.env.LOG_LEVEL;
+  const capture = (...args: unknown[]) => {
+    lines.push(args.map(String).join(" "));
+  };
+  console.log = capture;
+  console.warn = capture;
+  console.error = capture;
+  process.env.LOG_FORMAT = "json";
+  process.env.LOG_LEVEL = "debug";
+  try {
+    const result = await callback();
+    return {
+      result,
+      entries: lines.flatMap((line) => {
+        try {
+          const parsed = JSON.parse(line) as unknown;
+          return parsed && typeof parsed === "object"
+            ? [parsed as Record<string, unknown>]
+            : [];
+        } catch {
+          return [];
+        }
+      }),
+    };
+  } finally {
+    console.log = originalConsole.log;
+    console.warn = originalConsole.warn;
+    console.error = originalConsole.error;
+    restoreEnvironmentValue("LOG_FORMAT", originalLogFormat);
+    restoreEnvironmentValue("LOG_LEVEL", originalLogLevel);
+  }
+}
+
+function restoreEnvironmentValue(key: string, value: string | undefined) {
+  if (value === undefined) {
+    delete process.env[key];
+    return;
+  }
+  process.env[key] = value;
+}
 
 test.describe("project management P5 resource conflict services", () => {
+  test("Database barrier helpers contain connection, synchronous operation and rollback failures", async () => {
+    const connectFailure = new Error("synthetic connect failure");
+    const connectCleanupFailure = new Error("synthetic connect cleanup failure");
+    const connectEvents: string[] = [];
+    const failedClient = {
+      connect: async () => {
+        connectEvents.push("connect");
+        throw connectFailure;
+      },
+      end: async () => {
+        connectEvents.push("end");
+        throw connectCleanupFailure;
+      },
+      connection: {
+        stream: {
+          destroy: () => {
+            connectEvents.push("destroy");
+          },
+        },
+      },
+    } as unknown as Client;
+    let connectError: unknown;
+    try {
+      await connectDatabaseClient("failing-connect", () => failedClient);
+    } catch (error) {
+      connectError = error;
+    }
+    expect(connectEvents).toEqual(["connect", "end", "destroy"]);
+    expect(connectError).toBeInstanceOf(AggregateError);
+    expect((connectError as AggregateError).errors[0]).toBe(connectFailure);
+
+    const synchronousFailure = new Error("synthetic synchronous operation failure");
+    const synchronousStarted = startBarrierOperations<unknown>([
+      () => {
+        throw synchronousFailure;
+      },
+      async () => "managed success",
+    ]);
+    const synchronousOutcomes = await synchronousStarted.settlement;
+    expect(synchronousOutcomes).toEqual([
+      { status: "rejected", reason: synchronousFailure },
+      { status: "fulfilled", value: "managed success" },
+    ]);
+
+    const cleanupEvents: string[] = [];
+    let releasePending: (() => void) | undefined;
+    const pendingStarted = startBarrierOperations<unknown>([
+      () =>
+        new Promise<void>((resolve) => {
+          releasePending = () => {
+            cleanupEvents.push("pending-released");
+            resolve();
+          };
+        }),
+    ]);
+    await Promise.resolve();
+    const rollbackFailure = new Error("synthetic rollback failure");
+    const locker = {
+      query: async () => {
+        cleanupEvents.push("rollback");
+        throw rollbackFailure;
+      },
+      end: async () => {
+        cleanupEvents.push("locker-end");
+      },
+      connection: {
+        stream: {
+          destroy: () => {
+            cleanupEvents.push("locker-destroy");
+            releasePending?.();
+          },
+        },
+      },
+    } as unknown as Client;
+    const observer = {
+      end: async () => {
+        cleanupEvents.push("observer-end");
+      },
+      connection: { stream: { destroy: () => undefined } },
+    } as unknown as Client;
+    const primaryError = new Error("synthetic primary failure");
+    const cleanupErrors = await cleanupBarrierResources({
+      locker,
+      observer,
+      rollbackRequired: true,
+      pendingSettlement: pendingStarted.settlement,
+      pendingHandled: false,
+      primaryError,
+    });
+    expect(cleanupEvents).toEqual([
+      "rollback",
+      "locker-destroy",
+      "pending-released",
+      "locker-end",
+      "observer-end",
+    ]);
+    expect(cleanupErrors).toHaveLength(1);
+    let aggregate: unknown;
+    try {
+      throwBarrierErrors(true, primaryError, cleanupErrors);
+    } catch (error) {
+      aggregate = error;
+    }
+    expect(aggregate).toBeInstanceOf(AggregateError);
+    expect((aggregate as AggregateError).errors[0]).toBe(primaryError);
+  });
+
+  test("Database barrier cleanup cancels timed-out Prisma transactions before returning", async () => {
+    const person = await createAccountPerson("P5 Barrier Timeout Person");
+    let locker: Client | undefined;
+    let observer: Client | undefined;
+    let pendingSettlement:
+      | Promise<PromiseSettledResult<unknown>[]>
+      | undefined;
+    let pendingBackendPids: number[] = [];
+    let settlementObserved = false;
+    let cleanupErrors: Error[] | undefined;
+    let resourcesHandled = false;
+    let primaryError: unknown;
+    let hasPrimaryError = false;
+    try {
+      locker = await connectDatabaseClient("timeout-cleanup-locker");
+      observer = await connectDatabaseClient("timeout-cleanup-observer");
+      const lockerPid = await lockConflictPerson(locker, person.person.id);
+      const started = startBarrierOperations([
+        () =>
+          scanConflictsForPerson({
+            personId: person.person.id,
+            startAt: atHour(9),
+            endAt: atHour(10),
+          }),
+      ]);
+      pendingSettlement = started.settlement.then((outcomes) => {
+        settlementObserved = true;
+        return outcomes;
+      });
+      const [blockedPid] = await waitForDirectBlockers(
+        observer,
+        lockerPid,
+        1,
+      );
+      if (!blockedPid) throw new Error("未观察到超时清理测试的 Prisma backend");
+      pendingBackendPids = [blockedPid];
+      cleanupErrors = await cleanupBarrierResources({
+        locker,
+        observer,
+        rollbackRequired: false,
+        pendingSettlement,
+        pendingBackendPids,
+        pendingOperationTimeoutMs: 25,
+        pendingHandled: false,
+        primaryError: undefined,
+      });
+      resourcesHandled = true;
+    } catch (error) {
+      primaryError = error;
+      hasPrimaryError = true;
+    }
+    if (!resourcesHandled) {
+      const emergencyCleanupErrors = await cleanupBarrierResources({
+        locker,
+        observer,
+        rollbackRequired: Boolean(locker),
+        pendingSettlement,
+        pendingBackendPids,
+        pendingOperationTimeoutMs: 25,
+        pendingHandled: settlementObserved,
+        primaryError,
+      });
+      throwBarrierErrors(
+        hasPrimaryError,
+        primaryError,
+        emergencyCleanupErrors,
+      );
+    }
+    throwBarrierErrors(hasPrimaryError, primaryError, []);
+    expect(settlementObserved).toBe(true);
+    expect(cleanupErrors?.map((error) => error.message)).toEqual([
+      "等待 pending operation 失败",
+      "pending operation 执行失败",
+    ]);
+    if (!pendingSettlement) throw new Error("缺少超时清理 settlement");
+    const outcomes = await pendingSettlement;
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]?.status).toBe("rejected");
+  });
+
+  test("Database barrier terminate fallback targets the same safe backend and settles before returning", async () => {
+    let target: Client | undefined;
+    let observer: Client | undefined;
+    let pendingSettlement:
+      | Promise<PromiseSettledResult<unknown>[]>
+      | undefined;
+    let targetPid: number | undefined;
+    let cleanupCompleted = false;
+    let settlementObserved = false;
+    let settlementBeforeTerminate = false;
+    let terminateDispatched = false;
+    const targetConnectionErrors: Error[] = [];
+    const signalEvents: Array<{
+      signal: "cancel" | "terminate";
+      targetPids: readonly number[];
+      settled: boolean;
+    }> = [];
+    try {
+      target = await connectDatabaseClient("terminate-target");
+      target.on("error", (error) => {
+        targetConnectionErrors.push(error);
+      });
+      observer = await connectDatabaseClient("terminate-observer");
+      const identity = await observer.query<{
+        databaseName: string;
+        notificationDeliveryDisabled: boolean;
+      }>(
+        `SELECT current_database() AS "databaseName",
+                $1::boolean AS "notificationDeliveryDisabled"`,
+        [process.env.NOTIFICATION_DELIVERY_DISABLED === "true"],
+      );
+      expect(identity.rows[0]).toEqual({
+        databaseName: expect.stringMatching(/_test$/),
+        notificationDeliveryDisabled: true,
+      });
+      targetPid = await databaseBackendPid(target);
+      const started = startBarrierOperations([
+        () => target!.query("SELECT pg_sleep($1)", [60]),
+      ]);
+      pendingSettlement = started.settlement.then((outcomes) => {
+        settlementObserved = true;
+        settlementBeforeTerminate = !terminateDispatched;
+        return outcomes;
+      });
+      const primaryError = new Error(
+        "synthetic terminate fallback primary failure",
+      );
+      const cleanupErrors = await cleanupBarrierResources({
+        locker: target,
+        observer,
+        rollbackRequired: false,
+        pendingSettlement,
+        pendingBackendPids: [targetPid],
+        pendingOperationTimeoutMs: 25,
+        cancelledOperationSettlementTimeoutMs: 25,
+        backendSignalRunner: async ({ signal, targetPids, send }) => {
+          signalEvents.push({
+            signal,
+            targetPids: [...targetPids],
+            settled: settlementObserved,
+          });
+          if (signal === "cancel") return;
+          terminateDispatched = true;
+          await send();
+        },
+        pendingHandled: false,
+        primaryError,
+      });
+      cleanupCompleted = true;
+      expect(signalEvents).toEqual([
+        { signal: "cancel", targetPids: [targetPid], settled: false },
+        { signal: "terminate", targetPids: [targetPid], settled: false },
+      ]);
+      expect(settlementObserved).toBe(true);
+      expect(settlementBeforeTerminate).toBe(false);
+      expect(
+        targetConnectionErrors.every(
+          (error) => error.message === "Connection terminated unexpectedly",
+        ),
+      ).toBe(true);
+      expect(cleanupErrors.map((error) => error.message)).toEqual([
+        "等待 pending operation 失败",
+        "取消 backend 后等待 pending operation 失败",
+        "pending operation 执行失败",
+      ]);
+      const outcomes = await pendingSettlement;
+      expect(outcomes).toHaveLength(1);
+      expect(outcomes[0]?.status).toBe("rejected");
+      let aggregate: unknown;
+      try {
+        throwBarrierErrors(true, primaryError, cleanupErrors);
+      } catch (error) {
+        aggregate = error;
+      }
+      expect(aggregate).toBeInstanceOf(AggregateError);
+      expect((aggregate as AggregateError).errors[0]).toBe(primaryError);
+    } finally {
+      if (!cleanupCompleted) {
+        await cleanupBarrierResources({
+          locker: target,
+          observer,
+          rollbackRequired: false,
+          pendingSettlement,
+          pendingBackendPids: targetPid ? [targetPid] : [],
+          pendingOperationTimeoutMs: 25,
+          cancelledOperationSettlementTimeoutMs: 25,
+          pendingHandled: settlementObserved,
+          primaryError: undefined,
+        });
+      }
+    }
+  });
+
+  test("Database barrier backend signals reject unsafe database, backend type and observer PIDs", async () => {
+    let signalRunnerCalls = 0;
+    const runner = async () => {
+      signalRunnerCalls += 1;
+    };
+    await expect(
+      signalPendingBackends(
+        fakeSignalObserver({ databaseName: "management_system" }),
+        [7101],
+        "terminate",
+        runner,
+      ),
+    ).rejects.toThrow("拒绝在非 _test 数据库取消 backend");
+    await expect(
+      signalPendingBackends(
+        fakeSignalObserver({
+          activities: [
+            {
+              pid: 7102,
+              databaseName: "another_management_system_test",
+              backendType: "client backend",
+            },
+          ],
+        }),
+        [7102],
+        "terminate",
+        runner,
+      ),
+    ).rejects.toThrow("拒绝取消非当前测试数据库 client backend 7102");
+    await expect(
+      signalPendingBackends(
+        fakeSignalObserver({
+          activities: [
+            {
+              pid: 7103,
+              databaseName: "management_system_test",
+              backendType: "autovacuum worker",
+            },
+          ],
+        }),
+        [7103],
+        "terminate",
+        runner,
+      ),
+    ).rejects.toThrow("拒绝取消非当前测试数据库 client backend 7103");
+    await expect(
+      signalPendingBackends(
+        fakeSignalObserver({ observerPid: 7104 }),
+        [7104],
+        "terminate",
+        runner,
+      ),
+    ).rejects.toThrow("拒绝取消 barrier observer 自身 backend");
+    expect(signalRunnerCalls).toBe(0);
+  });
+
   test("Allocation scanner uses half-open intervals and opens conflicts only above 100%", async () => {
     const fixture = await createActivatedFixture();
     await createWorkSegment(actor(fixture.member), {
@@ -132,15 +547,15 @@ test.describe("project management P5 resource conflict services", () => {
       title: "P5 Conflict Other Task",
     });
 
-    await createWorkSegment(actor(fixture.member), {
+    const missingOverlap = await createWorkSegment(actor(fixture.member), {
       ...plannedInput(fixture.member.person.id, 9, 10, null),
-      content: "未填写 Allocation A",
+      content: "唯一未填写 Allocation",
       taskId: fixture.taskId,
       nodeId: fixture.activeNodeId,
     });
-    await createWorkSegment(actor(fixture.member), {
-      ...plannedInput(fixture.member.person.id, 9.25, 10.25, null),
-      content: "未填写 Allocation B",
+    const filledOverlap = await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 9.25, 10.25, 40),
+      content: "已填写 Allocation 的重叠计划",
       taskId: fixture.taskId,
       nodeId: fixture.activeNodeId,
     });
@@ -220,6 +635,32 @@ test.describe("project management P5 resource conflict services", () => {
         "REVISION_OVERLAP",
       ]),
     );
+    const mixedMissingAllocation = await prisma.resourceConflict.findFirstOrThrow({
+      where: {
+        personId: fixture.member.person.id,
+        kind: "MISSING_ALLOCATION",
+        startAt: atHour(9.25),
+        endAt: atHour(10),
+      },
+      select: { explanation: true, segments: { select: { segmentId: true } } },
+    });
+    expect(mixedMissingAllocation.segments.map((entry) => entry.segmentId).sort()).toEqual(
+      [missingOverlap.segment.id, filledOverlap.segment.id].sort(),
+    );
+    const missingExplanation = mixedMissingAllocation.explanation as {
+      segmentIds?: string[];
+      segments?: Array<{ id?: string }>;
+      missingAllocationSegmentIds?: string[];
+    };
+    expect(missingExplanation.segmentIds?.sort()).toEqual(
+      [missingOverlap.segment.id, filledOverlap.segment.id].sort(),
+    );
+    expect(missingExplanation.segments?.map((segment) => segment.id).sort()).toEqual(
+      [missingOverlap.segment.id, filledOverlap.segment.id].sort(),
+    );
+    expect(missingExplanation.missingAllocationSegmentIds).toEqual([
+      missingOverlap.segment.id,
+    ]);
   });
 
   test("Scanner merges continuous slices with the same conflict semantics", async () => {
@@ -486,6 +927,105 @@ test.describe("project management P5 resource conflict services", () => {
     expect(fullIgnoredDetail.explanation).toMatchObject({
       resolutionNote: sensitiveHandlingText,
       ignoredReason: sensitiveHandlingText,
+    });
+  });
+
+  test("Missing-allocation list and detail DTOs redact every hidden Segment evidence field", async () => {
+    const fixture = await createActivatedFixture({
+      title: "P5 Missing Allocation DTO Redaction",
+    });
+    const hiddenTask = await createActivatedFixture({
+      member: fixture.member,
+      title: "P5 Hidden Missing Allocation Task",
+    });
+    const visibleSegment = await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 9.25, 10.25, 50),
+      content: "部分可见的 allocation 证据",
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+    });
+    const hiddenSegment = await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 9, 11, null),
+      content: `隐藏 allocation 证据 ${randomUUID()}`,
+      taskId: hiddenTask.taskId,
+      nodeId: hiddenTask.activeNodeId,
+    });
+    const hiddenVersion = new Date("2026-06-03T04:05:06.789Z");
+    await prisma.workSegment.update({
+      where: { id: hiddenSegment.segment.id },
+      data: { updatedAt: hiddenVersion },
+    });
+    await scanConflictsForPerson({
+      personId: fixture.member.person.id,
+      startAt: atHour(9),
+      endAt: atHour(11),
+    });
+    const conflict = await prisma.resourceConflict.findFirstOrThrow({
+      where: {
+        personId: fixture.member.person.id,
+        kind: "MISSING_ALLOCATION",
+      },
+    });
+    const partialActor = actor(fixture.owner);
+    const partialDetail = await getResourceConflict({
+      actor: partialActor,
+      input: { conflictId: conflict.id },
+    });
+    const partialList = await listResourceConflicts({
+      actor: partialActor,
+      input: {
+        personId: fixture.member.person.id,
+        kind: "MISSING_ALLOCATION",
+      },
+    });
+    const partialListItem = partialList.items.find(
+      (item) => item.id === conflict.id,
+    );
+    if (!partialListItem) throw new Error("列表缺少 allocation 缺失冲突");
+    for (const partialDto of [partialDetail, partialListItem]) {
+      expect(partialDto.hiddenSegmentCount).toBe(1);
+      expect(partialDto.segments.map((segment) => segment.id)).toEqual([
+        visibleSegment.segment.id,
+      ]);
+      expect(partialDto.explanation).toMatchObject({
+        segmentIds: [visibleSegment.segment.id],
+        missingAllocationSegmentIds: [],
+        segments: [expect.objectContaining({ id: visibleSegment.segment.id })],
+      });
+      const serialized = JSON.stringify(partialDto);
+      for (const hiddenMarker of [
+        hiddenSegment.segment.id,
+        hiddenTask.taskId,
+        hiddenSegment.segment.content,
+        atHour(9).toISOString(),
+        atHour(11).toISOString(),
+        hiddenVersion.toISOString(),
+      ]) {
+        expect(serialized).not.toContain(hiddenMarker);
+      }
+    }
+
+    const fullActor = actor(fixture.resourceManager, [
+      { role: "RESOURCE_MANAGER", team: "英雄", techGroup: "电控" },
+    ]);
+    const fullDetail = await getResourceConflict({
+      actor: fullActor,
+      input: { conflictId: conflict.id },
+    });
+    expect(fullDetail.hiddenSegmentCount).toBe(0);
+    expect(fullDetail.segments.map((segment) => segment.id).sort()).toEqual(
+      [visibleSegment.segment.id, hiddenSegment.segment.id].sort(),
+    );
+    expect(fullDetail.explanation).toMatchObject({
+      segmentIds: expect.arrayContaining([
+        visibleSegment.segment.id,
+        hiddenSegment.segment.id,
+      ]),
+      missingAllocationSegmentIds: [hiddenSegment.segment.id],
+      segments: expect.arrayContaining([
+        expect.objectContaining({ id: visibleSegment.segment.id }),
+        expect.objectContaining({ id: hiddenSegment.segment.id }),
+      ]),
     });
   });
 
@@ -854,6 +1394,196 @@ test.describe("project management P5 resource conflict services", () => {
     );
   });
 
+  test("Explicit person prevalidation rejects an invalid person before any conflict writes", async () => {
+    const fixture = await createActivatedFixture();
+    const inactivePerson = await prisma.person.create({
+      data: { displayName: "P5 Invalid Explicit Scan Person", status: "INACTIVE" },
+    });
+    await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 9, 10, 70),
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+    });
+    await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 9.25, 10.25, 60),
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+    });
+    const before = await conflictWriteCounts(fixture.member.person.id);
+
+    await expectServiceError(
+      scanResourceConflicts({
+        personIds: [
+          fixture.member.person.id,
+          inactivePerson.id,
+          randomUUID(),
+        ],
+        startAt: atHour(9),
+        endAt: atHour(11),
+      }),
+      "VALIDATION_ERROR",
+    );
+
+    expect(await conflictWriteCounts(fixture.member.person.id)).toEqual(before);
+  });
+
+  test("A runtime failure for one person is observable and does not stop later people", async () => {
+    const systemAdmin = await createAccountPerson("P5 Partial Scan System Admin");
+    await grantRole(systemAdmin.account.id, "SYSTEM_ADMINISTRATOR");
+    const people = await Promise.all([
+      createAccountPerson("P5 Partial Scan A"),
+      createAccountPerson("P5 Partial Scan B"),
+      createAccountPerson("P5 Partial Scan C"),
+    ]);
+    const sortedPeople = [...people].sort((left, right) =>
+      left.person.id.localeCompare(right.person.id),
+    );
+    for (const [index, person] of sortedPeople.entries()) {
+      await createWorkSegment(actor(systemAdmin), {
+        ...plannedInput(person.person.id, 9, 10, 70),
+        content: `逐人失败隔离 A-${index}`,
+      });
+      await createWorkSegment(actor(systemAdmin), {
+        ...plannedInput(person.person.id, 9.25, 10.25, 60),
+        content: `逐人失败隔离 B-${index}`,
+      });
+    }
+    const middlePerson = sortedPeople[1];
+    if (!middlePerson) throw new Error("缺少中间扫描人员");
+    const successfulPersonIds = sortedPeople
+      .filter((person) => person.person.id !== middlePerson.person.id)
+      .map((person) => person.person.id)
+      .sort();
+    let locker: Client | undefined;
+    let observer: Client | undefined;
+    let transactionMayBeOpen = false;
+    let lockerReleased = false;
+    let scanPromise: ReturnType<typeof scanResourceConflicts> | undefined;
+    let scanSettlement:
+      | Promise<
+          PromiseSettledResult<
+            Awaited<ReturnType<typeof scanResourceConflicts>>
+          >[]
+        >
+      | undefined;
+    let pendingBackendPids: number[] = [];
+    let scanHandled = false;
+    let scanLogEntries: Record<string, unknown>[] = [];
+    let primaryError: unknown;
+    let hasPrimaryError = false;
+    try {
+      locker = await connectDatabaseClient("partial-scan-locker");
+      observer = await connectDatabaseClient("partial-scan-observer");
+      transactionMayBeOpen = true;
+      const lockerPid = await lockConflictPerson(locker, middlePerson.person.id);
+      const started = startBarrierOperations([
+        async () => {
+          const captured = await captureStructuredLogs(() =>
+            scanResourceConflicts({
+              personIds: sortedPeople
+                .map((person) => person.person.id)
+                .reverse(),
+              startAt: atHour(9),
+              endAt: atHour(11),
+            }),
+          );
+          scanLogEntries = captured.entries;
+          return captured.result;
+        },
+      ]);
+      scanPromise = started.pending[0];
+      scanSettlement = started.settlement;
+      if (!scanPromise) throw new Error("逐人扫描 promise 未创建");
+      const [blockedPid] = await waitForDirectBlockers(observer, lockerPid, 1);
+      if (!blockedPid) throw new Error("未观察到中间人员扫描锁等待");
+      pendingBackendPids = [blockedPid];
+      const cancellation = await observer.query<{ cancelled: boolean }>(
+        "SELECT pg_cancel_backend($1) AS cancelled",
+        [blockedPid],
+      );
+      expect(cancellation.rows[0]?.cancelled).toBe(true);
+      await waitForBackendToLeaveLockWait(observer, lockerPid, blockedPid);
+      const result = await scanPromise;
+      scanHandled = true;
+      await locker.query("COMMIT");
+      lockerReleased = true;
+      expect(result).toMatchObject({
+        scannedPersonCount: 3,
+        succeededPersonCount: 2,
+        failedPersonCount: 1,
+        createdCount: 2,
+      });
+      expect(result.results.map((entry) => entry.personId).sort()).toEqual(
+        successfulPersonIds,
+      );
+      expect(result.failures).toEqual([
+        {
+          personId: middlePerson.person.id,
+          code: "INTERNAL_ERROR",
+          message: "操作失败，请稍后重试",
+        },
+      ]);
+      expect(Object.keys(result.failures[0] ?? {}).sort()).toEqual([
+        "code",
+        "message",
+        "personId",
+      ]);
+      const failureLogs = scanLogEntries.filter(
+        (entry) =>
+          entry.event ===
+          "project_management.resource_conflicts.scan.person_failed",
+      );
+      expect(failureLogs).toHaveLength(1);
+      const failureLog = failureLogs[0];
+      expect(failureLog).toMatchObject({
+        module: "project-management",
+        action: "scanResourceConflicts",
+        personId: middlePerson.person.id,
+        result: "failure",
+        errorCode: "INTERNAL_ERROR",
+        errorMessage: "操作失败，请稍后重试",
+        level: "error",
+      });
+      expect(failureLog).not.toHaveProperty("error");
+      expect(failureLog).not.toHaveProperty("stack");
+      const serializedFailureLog = JSON.stringify(failureLog);
+      expect(serializedFailureLog).not.toContain(
+        "canceling statement due to user request",
+      );
+      expect(serializedFailureLog).not.toContain("PrismaClient");
+      expect(
+        await prisma.resourceConflict.count({
+          where: {
+            personId: {
+              in: successfulPersonIds,
+            },
+            kind: "ALLOCATION_OVER_LIMIT",
+          },
+        }),
+      ).toBe(2);
+      expect(
+        await prisma.resourceConflict.count({
+          where: { personId: middlePerson.person.id },
+        }),
+      ).toBe(0);
+    } catch (error) {
+      primaryError = error;
+      hasPrimaryError = true;
+    }
+    const cleanupErrors = await cleanupBarrierResources({
+      locker,
+      observer,
+      rollbackRequired: Boolean(
+        locker && transactionMayBeOpen && !lockerReleased,
+      ),
+      pendingSettlement: scanSettlement,
+      pendingBackendPids,
+      pendingHandled: scanHandled,
+      primaryError,
+    });
+    throwBarrierErrors(hasPrimaryError, primaryError, cleanupErrors);
+  });
+
   test("Conflict scans are idempotent, resolve obsolete conflicts and reopen expired ignored conflicts", async () => {
     const fixture = await createActivatedFixture();
     const first = await createWorkSegment(actor(fixture.member), {
@@ -903,12 +1633,41 @@ test.describe("project management P5 resource conflict services", () => {
       where: { id: conflict.id },
       data: { ignoredUntil: new Date("2026-07-27T08:00:00.000Z") },
     });
-    const reopenedScan = await scanConflictsForPerson({
-      personId: fixture.member.person.id,
-      startAt: atHour(9),
-      endAt: atHour(11),
-    });
-    expect(reopenedScan.reopenedCount).toBe(1);
+    const reopenedScans = await runBehindPersonLockBarrier(
+      fixture.member.person.id,
+      [
+        () =>
+          scanConflictsForPerson({
+            personId: fixture.member.person.id,
+            startAt: atHour(9),
+            endAt: atHour(11),
+          }),
+        () =>
+          scanConflictsForPerson({
+            personId: fixture.member.person.id,
+            startAt: atHour(9),
+            endAt: atHour(11),
+          }),
+      ],
+    );
+    expect(
+      reopenedScans.reduce((sum, result) => sum + result.reopenedCount, 0),
+    ).toBe(1);
+    expect(
+      await prisma.resourceConflict.findUniqueOrThrow({
+        where: { id: conflict.id },
+        select: { status: true },
+      }),
+    ).toEqual({ status: "OPEN" });
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: {
+          entityType: "ResourceConflict",
+          entityId: conflict.id,
+          action: "pm.conflict.scan",
+        },
+      }),
+    ).toBe(2);
     expect(
       await prisma.notificationOutbox.count({
         where: {
@@ -946,6 +1705,697 @@ test.describe("project management P5 resource conflict services", () => {
       true,
     );
     expect(first.segment.id).toBeTruthy();
+  });
+
+  test("A genuine scanner resolution reopens a returning fingerprint once with exactly-once history, audit and outbox", async () => {
+    const cycle = await createOpenAllocationConflict({
+      title: "P5 Genuine Scanner Resolution Provenance",
+      startHour: 9,
+    });
+    const movedAway = await movePlannedSegments(actor(cycle.fixture.member), {
+      moves: [
+        {
+          segmentId: cycle.second.segment.id,
+          expectedUpdatedAt: cycle.second.segment.updatedAt,
+          startAt: atHour(11),
+          endAt: atHour(12),
+        },
+      ],
+      reason: "让原 fingerprint 经 scanner 自动解决",
+    });
+
+    const resolvedScan = await scanConflictsForPerson(cycle.range);
+    expect(resolvedScan.resolvedCount).toBe(1);
+    const [resolvedConflict, resolutionAudit] = await Promise.all([
+      prisma.resourceConflict.findUniqueOrThrow({
+        where: { id: cycle.conflict.id },
+        select: { status: true, resolvedAt: true },
+      }),
+      prisma.domainAuditEvent.findFirstOrThrow({
+        where: {
+          entityType: "ResourceConflict",
+          entityId: cycle.conflict.id,
+          action: "pm.conflict.resolve",
+          source: "CRON",
+        },
+        select: { createdAt: true },
+      }),
+    ]);
+    expect(resolvedConflict.status).toBe("RESOLVED");
+    if (!resolvedConflict.resolvedAt) throw new Error("scanner 未记录 resolvedAt");
+    expect(resolutionAudit.createdAt.getTime()).toBe(
+      resolvedConflict.resolvedAt.getTime(),
+    );
+
+    const movedSecond = movedAway.segments.find(
+      (segment) => segment.id === cycle.second.segment.id,
+    );
+    if (!movedSecond) throw new Error("未返回移出冲突区间的 Segment");
+    await movePlannedSegments(actor(cycle.fixture.member), {
+      moves: [
+        {
+          segmentId: cycle.second.segment.id,
+          expectedUpdatedAt: movedSecond.updatedAt,
+          startAt: cycle.second.segment.startAt,
+          endAt: cycle.second.segment.endAt,
+        },
+      ],
+      reason: "恢复原 fingerprint",
+    });
+
+    const reopenScans = await runBehindPersonLockBarrier(
+      cycle.fixture.member.person.id,
+      [
+        () => scanConflictsForPerson(cycle.range),
+        () => scanConflictsForPerson(cycle.range),
+      ],
+    );
+    expect(
+      reopenScans.reduce((sum, result) => sum + result.reopenedCount, 0),
+    ).toBe(1);
+    expect(
+      reopenScans.reduce((sum, result) => sum + result.unchangedCount, 0),
+    ).toBe(1);
+    expect(
+      await prisma.resourceConflict.findUniqueOrThrow({
+        where: { id: cycle.conflict.id },
+        select: {
+          status: true,
+          resolvedAt: true,
+          resolvedByAccountId: true,
+          resolutionNote: true,
+        },
+      }),
+    ).toEqual({
+      status: "OPEN",
+      resolvedAt: null,
+      resolvedByAccountId: null,
+      resolutionNote: "",
+    });
+    expect(
+      await prisma.resourceConflict.count({
+        where: { fingerprint: cycle.conflict.fingerprint },
+      }),
+    ).toBe(1);
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: {
+          entityType: "ResourceConflict",
+          entityId: cycle.conflict.id,
+        },
+      }),
+    ).toBe(3);
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: {
+          entityType: "ResourceConflict",
+          entityId: cycle.conflict.id,
+          action: "pm.conflict.resolve",
+          source: "CRON",
+        },
+      }),
+    ).toBe(1);
+    expect(
+      await prisma.notificationOutbox.count({
+        where: {
+          eventKey: {
+            startsWith: `pm:conflict:opened:${cycle.conflict.fingerprint}`,
+          },
+          type: "resource_conflict_opened",
+        },
+      }),
+    ).toBe(2);
+    expect(
+      await prisma.notificationOutbox.count({
+        where: {
+          eventKey: { startsWith: `pm:conflict:resolved:${cycle.conflict.id}:` },
+          type: "resource_conflict_resolved",
+        },
+      }),
+    ).toBe(1);
+  });
+
+  test("A unique legacy CRON audit strictly after resolvedAt reopens once, while manual resolve remains terminal", async () => {
+    const legacyFixture = await createActivatedFixture({
+      title: "P5 Legacy Resolution Provenance",
+    });
+    await createWorkSegment(actor(legacyFixture.member), {
+      ...plannedInput(legacyFixture.member.person.id, 9, 10, 70),
+      taskId: legacyFixture.taskId,
+      nodeId: legacyFixture.activeNodeId,
+    });
+    const movable = await createWorkSegment(actor(legacyFixture.member), {
+      ...plannedInput(legacyFixture.member.person.id, 9.25, 10.25, 60),
+      taskId: legacyFixture.taskId,
+      nodeId: legacyFixture.activeNodeId,
+    });
+    await scanConflictsForPerson({
+      personId: legacyFixture.member.person.id,
+      startAt: atHour(9),
+      endAt: atHour(12),
+    });
+    const legacyConflict = await prisma.resourceConflict.findFirstOrThrow({
+      where: {
+        personId: legacyFixture.member.person.id,
+        kind: "ALLOCATION_OVER_LIMIT",
+      },
+    });
+    await ignoreConflict(actor(legacyFixture.resourceManager), {
+      conflictId: legacyConflict.id,
+      reason: "模拟旧版 ignore 后自动解决",
+      ignoredUntil: atHour(20),
+    });
+    await prisma.resourceConflict.update({
+      where: { id: legacyConflict.id },
+      data: { ignoredUntil: new Date("2026-07-27T08:00:00.000Z") },
+    });
+    const movedAway = await movePlannedSegments(actor(legacyFixture.member), {
+      moves: [
+        {
+          segmentId: movable.segment.id,
+          expectedUpdatedAt: movable.segment.updatedAt,
+          startAt: atHour(11),
+          endAt: atHour(12),
+        },
+      ],
+      reason: "让旧版 ignored conflict 被 scanner 自动解决",
+    });
+    const autoResolved = await scanConflictsForPerson({
+      personId: legacyFixture.member.person.id,
+      startAt: atHour(9),
+      endAt: atHour(12),
+    });
+    expect(autoResolved.resolvedCount).toBe(1);
+    const [autoResolvedRow, autoResolutionAudit] = await Promise.all([
+      prisma.resourceConflict.findUniqueOrThrow({
+        where: { id: legacyConflict.id },
+        select: { resolvedAt: true },
+      }),
+      prisma.domainAuditEvent.findFirstOrThrow({
+        where: {
+          entityType: "ResourceConflict",
+          entityId: legacyConflict.id,
+          action: "pm.conflict.resolve",
+          source: "CRON",
+        },
+        select: { createdAt: true },
+      }),
+    ]);
+    if (!autoResolvedRow.resolvedAt) throw new Error("scanner 未记录 resolvedAt");
+    const legacyResolvedAt = new Date(autoResolutionAudit.createdAt.getTime() - 1);
+    await prisma.resourceConflict.update({
+      where: { id: legacyConflict.id },
+      data: {
+        // 模拟旧 scanner：当前周期唯一 CRON audit 晚于 resolvedAt，且残留 ignore actor。
+        resolvedAt: legacyResolvedAt,
+        // 旧 scanner 未清理 ignore actor；不可依赖该可空外键判定来源。
+        resolvedByAccountId: legacyFixture.resourceManager.account.id,
+      },
+    });
+    expect(autoResolutionAudit.createdAt.getTime()).toBeGreaterThan(
+      legacyResolvedAt.getTime(),
+    );
+    const movedAwaySegment = movedAway.segments[0];
+    if (!movedAwaySegment) throw new Error("未返回移动后的 Segment");
+    const movedBack = await movePlannedSegments(actor(legacyFixture.member), {
+      moves: [
+        {
+          segmentId: movable.segment.id,
+          expectedUpdatedAt: movedAwaySegment.updatedAt,
+          startAt: atHour(9.25),
+          endAt: atHour(10.25),
+        },
+      ],
+      reason: "恢复相同 fingerprint",
+    });
+    expect(movedBack.affectedSegmentIds).toEqual([movable.segment.id]);
+
+    const legacyReopenResults = await runBehindPersonLockBarrier(
+      legacyFixture.member.person.id,
+      [
+        () =>
+          scanConflictsForPerson({
+            personId: legacyFixture.member.person.id,
+            startAt: atHour(9),
+            endAt: atHour(12),
+          }),
+        () =>
+          scanConflictsForPerson({
+            personId: legacyFixture.member.person.id,
+            startAt: atHour(9),
+            endAt: atHour(12),
+          }),
+      ],
+    );
+    expect(
+      legacyReopenResults.reduce((sum, result) => sum + result.reopenedCount, 0),
+    ).toBe(1);
+    expect(
+      await prisma.resourceConflict.findUniqueOrThrow({
+        where: { id: legacyConflict.id },
+        select: { status: true, resolvedByAccountId: true },
+      }),
+    ).toEqual({ status: "OPEN", resolvedByAccountId: null });
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: {
+          entityType: "ResourceConflict",
+          entityId: legacyConflict.id,
+          action: "pm.conflict.scan",
+        },
+      }),
+    ).toBe(2);
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: {
+          entityType: "ResourceConflict",
+          entityId: legacyConflict.id,
+          action: "pm.conflict.resolve",
+          source: "CRON",
+        },
+      }),
+    ).toBe(1);
+    expect(
+      await prisma.notificationOutbox.count({
+        where: {
+          eventKey: { startsWith: `pm:conflict:opened:${legacyConflict.fingerprint}` },
+          type: "resource_conflict_opened",
+        },
+      }),
+    ).toBe(2);
+
+    const manualFixture = await createActivatedFixture({
+      title: "P5 Manual Resolution Provenance",
+    });
+    await createWorkSegment(actor(manualFixture.member), {
+      ...plannedInput(manualFixture.member.person.id, 13, 14, 70),
+      taskId: manualFixture.taskId,
+      nodeId: manualFixture.activeNodeId,
+    });
+    await createWorkSegment(actor(manualFixture.member), {
+      ...plannedInput(manualFixture.member.person.id, 13.25, 14.25, 60),
+      taskId: manualFixture.taskId,
+      nodeId: manualFixture.activeNodeId,
+    });
+    await scanConflictsForPerson({
+      personId: manualFixture.member.person.id,
+      startAt: atHour(13),
+      endAt: atHour(15),
+    });
+    const manualConflict = await prisma.resourceConflict.findFirstOrThrow({
+      where: {
+        personId: manualFixture.member.person.id,
+        kind: "ALLOCATION_OVER_LIMIT",
+      },
+    });
+    await resolveConflict(actor(manualFixture.resourceManager), {
+      conflictId: manualConflict.id,
+      resolutionNote: "明确人工终态",
+    });
+    const manualRescan = await scanConflictsForPerson({
+      personId: manualFixture.member.person.id,
+      startAt: atHour(13),
+      endAt: atHour(15),
+    });
+    expect(manualRescan.reopenedCount).toBe(0);
+    expect(
+      await prisma.resourceConflict.findUniqueOrThrow({
+        where: { id: manualConflict.id },
+        select: { status: true, resolvedByAccountId: true, resolutionNote: true },
+      }),
+    ).toEqual({
+      status: "RESOLVED",
+      resolvedByAccountId: manualFixture.resourceManager.account.id,
+      resolutionNote: "明确人工终态",
+    });
+    expect(
+      await prisma.notificationOutbox.count({
+        where: {
+          eventKey: { startsWith: `pm:conflict:opened:${manualConflict.fingerprint}` },
+          type: "resource_conflict_opened",
+        },
+      }),
+    ).toBe(1);
+  });
+
+  test("Old, ambiguous and missing current-cycle audits conservatively keep RESOLVED terminal", async () => {
+    const cases = [
+      { kind: "old-audit", startHour: 9 },
+      { kind: "same-cycle-ambiguity", startHour: 13 },
+      { kind: "missing-current-audit", startHour: 17 },
+    ] as const;
+    for (const provenanceCase of cases) {
+      const cycle = await createOpenAllocationConflict({
+        title: `P5 ${provenanceCase.kind}`,
+        startHour: provenanceCase.startHour,
+      });
+      const resolvedAt = new Date(
+        `2026-07-30T${String(provenanceCase.startHour).padStart(2, "0")}:30:00.000Z`,
+      );
+      await prisma.resourceConflict.update({
+        where: { id: cycle.conflict.id },
+        data: {
+          status: "RESOLVED",
+          resolvedAt,
+          resolvedByAccountId: null,
+          resolutionNote: `保守来源 ${provenanceCase.kind}`,
+        },
+      });
+      if (provenanceCase.kind === "old-audit") {
+        await prisma.domainAuditEvent.create({
+          data: {
+            action: "pm.conflict.resolve",
+            entityType: "ResourceConflict",
+            entityId: cycle.conflict.id,
+            reason: "早于当前 resolvedAt 的旧 CRON audit",
+            source: "CRON",
+            createdAt: new Date(resolvedAt.getTime() - 1),
+          },
+        });
+      }
+      if (provenanceCase.kind === "same-cycle-ambiguity") {
+        await prisma.domainAuditEvent.createMany({
+          data: [
+            {
+              action: "pm.conflict.resolve",
+              entityType: "ResourceConflict",
+              entityId: cycle.conflict.id,
+              reason: "同周期 CRON 来源",
+              source: "CRON",
+              createdAt: new Date(resolvedAt.getTime() + 1),
+            },
+            {
+              action: "pm.conflict.apply_suggestion",
+              entityType: "ResourceConflict",
+              entityId: cycle.conflict.id,
+              reason: "同周期人工来源造成歧义",
+              source: "WEB",
+              actorAccountId: cycle.fixture.resourceManager.account.id,
+              actorPersonId: cycle.fixture.resourceManager.person.id,
+              createdAt: new Date(resolvedAt.getTime() + 2),
+            },
+          ],
+        });
+      }
+
+      const rescan = await scanConflictsForPerson(cycle.range);
+      expect(rescan.reopenedCount).toBe(0);
+      expect(
+        await prisma.resourceConflict.findUniqueOrThrow({
+          where: { id: cycle.conflict.id },
+          select: { status: true, resolutionNote: true },
+        }),
+      ).toEqual({
+        status: "RESOLVED",
+        resolutionNote: `保守来源 ${provenanceCase.kind}`,
+      });
+      expect(
+        await prisma.domainAuditEvent.count({
+          where: {
+            entityType: "ResourceConflict",
+            entityId: cycle.conflict.id,
+            action: "pm.conflict.scan",
+          },
+        }),
+      ).toBe(1);
+      expect(
+        await prisma.notificationOutbox.count({
+          where: {
+            eventKey: {
+              startsWith: `pm:conflict:opened:${cycle.conflict.fingerprint}`,
+            },
+            type: "resource_conflict_opened",
+          },
+        }),
+      ).toBe(1);
+    }
+  });
+
+  test("A genuine apply-suggestion resolution remains terminal when its fingerprint returns", async () => {
+    const cycle = await createOpenAllocationConflict({
+      title: "P5 Apply Resolution Provenance",
+      startHour: 9,
+    });
+    const preview = await previewConflictSuggestion(
+      actor(cycle.fixture.resourceManager),
+      { conflictId: cycle.conflict.id },
+    );
+    const proposal = preview.suggestions[0];
+    if (!proposal) throw new Error("缺少用于 provenance 回归的处理建议");
+    const originalById = new Map(
+      [cycle.first.segment, cycle.second.segment].map((segment) => [
+        segment.id,
+        { startAt: segment.startAt, endAt: segment.endAt },
+      ]),
+    );
+    const applied = await applyConflictSuggestion(
+      actor(cycle.fixture.resourceManager),
+      {
+        conflictId: cycle.conflict.id,
+        confirmApply: true,
+        proposal,
+      },
+    );
+    await movePlannedSegments(actor(cycle.fixture.member), {
+      moves: applied.movedSegments.segments.map((segment) => {
+        const original = originalById.get(segment.id);
+        if (!original) throw new Error("建议移动了冲突范围外 Segment");
+        return {
+          segmentId: segment.id,
+          expectedUpdatedAt: segment.updatedAt,
+          startAt: original.startAt,
+          endAt: original.endAt,
+        };
+      }),
+      reason: "恢复 apply 前 fingerprint",
+    });
+    const rescan = await scanConflictsForPerson(cycle.range);
+    expect(rescan.reopenedCount).toBe(0);
+    expect(
+      await prisma.resourceConflict.findUniqueOrThrow({
+        where: { id: cycle.conflict.id },
+        select: { status: true, resolvedByAccountId: true },
+      }),
+    ).toEqual({
+      status: "RESOLVED",
+      resolvedByAccountId: cycle.fixture.resourceManager.account.id,
+    });
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: {
+          entityType: "ResourceConflict",
+          entityId: cycle.conflict.id,
+          action: "pm.conflict.apply_suggestion",
+          source: "WEB",
+          actorAccountId: cycle.fixture.resourceManager.account.id,
+        },
+      }),
+    ).toBe(1);
+    expect(
+      await prisma.notificationOutbox.count({
+        where: {
+          eventKey: { startsWith: `pm:conflict:opened:${cycle.conflict.fingerprint}` },
+          type: "resource_conflict_opened",
+        },
+      }),
+    ).toBe(1);
+  });
+
+  test("Concurrent first scans serialize per person and create one history/outbox set", async () => {
+    const fixture = await createActivatedFixture();
+    await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 9, 10, 70),
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+    });
+    await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 9.25, 10.25, 60),
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+    });
+
+    const scans = await runBehindPersonLockBarrier(fixture.member.person.id, [
+      () =>
+        scanConflictsForPerson({
+          personId: fixture.member.person.id,
+          startAt: atHour(9),
+          endAt: atHour(11),
+        }),
+      () =>
+        scanConflictsForPerson({
+          personId: fixture.member.person.id,
+          startAt: atHour(9),
+          endAt: atHour(11),
+        }),
+    ]);
+    expect(scans.reduce((sum, result) => sum + result.createdCount, 0)).toBe(1);
+    expect(scans.reduce((sum, result) => sum + result.unchangedCount, 0)).toBe(1);
+    const conflict = await prisma.resourceConflict.findFirstOrThrow({
+      where: {
+        personId: fixture.member.person.id,
+        kind: "ALLOCATION_OVER_LIMIT",
+      },
+    });
+    expect(
+      await prisma.resourceConflict.count({ where: { fingerprint: conflict.fingerprint } }),
+    ).toBe(1);
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: {
+          entityType: "ResourceConflict",
+          entityId: conflict.id,
+          action: "pm.conflict.scan",
+        },
+      }),
+    ).toBe(1);
+    expect(
+      await prisma.notificationOutbox.count({
+        where: {
+          eventKey: { startsWith: `pm:conflict:opened:${conflict.fingerprint}` },
+          type: "resource_conflict_opened",
+        },
+      }),
+    ).toBe(1);
+  });
+
+  test("Scanner and manual resolution races choose the real person/conflict lock-chain winner exactly once", async () => {
+    for (const direction of ["scanner-first", "manual-first"] as const) {
+      const fixture = await createActivatedFixture({ title: direction });
+      await createWorkSegment(actor(fixture.member), {
+        ...plannedInput(fixture.member.person.id, 9, 10, 70),
+        taskId: fixture.taskId,
+        nodeId: fixture.activeNodeId,
+      });
+      const movable = await createWorkSegment(actor(fixture.member), {
+        ...plannedInput(fixture.member.person.id, 9.25, 10.25, 60),
+        taskId: fixture.taskId,
+        nodeId: fixture.activeNodeId,
+      });
+      await scanConflictsForPerson({
+        personId: fixture.member.person.id,
+        startAt: atHour(9),
+        endAt: atHour(11),
+      });
+      const conflict = await prisma.resourceConflict.findFirstOrThrow({
+        where: {
+          personId: fixture.member.person.id,
+          kind: "ALLOCATION_OVER_LIMIT",
+        },
+      });
+      await movePlannedSegments(actor(fixture.member), {
+        moves: [
+          {
+            segmentId: movable.segment.id,
+            expectedUpdatedAt: movable.segment.updatedAt,
+            startAt: atHour(11),
+            endAt: atHour(12),
+          },
+        ],
+        reason: `在 ${direction} 竞争前使 fingerprint 消失`,
+      });
+      const scan = () =>
+        scanConflictsForPerson({
+          personId: fixture.member.person.id,
+          startAt: atHour(9),
+          endAt: atHour(12),
+        });
+      const manualResolve = () =>
+        resolveConflict(actor(fixture.resourceManager), {
+          conflictId: conflict.id,
+          resolutionNote: `并发人工解决 ${direction}`,
+        });
+
+      const outcomes = await runConflictRowLockChain(
+        conflict.id,
+        direction === "scanner-first" ? scan : manualResolve,
+        direction === "scanner-first" ? manualResolve : scan,
+      );
+      expect(outcomes.map((outcome) => outcome.status)).toEqual([
+        "fulfilled",
+        "fulfilled",
+      ]);
+      const scanOutcome = outcomes[direction === "scanner-first" ? 0 : 1];
+      expect(scanOutcome).toMatchObject({
+        status: "fulfilled",
+        value: {
+          resolvedCount: direction === "scanner-first" ? 1 : 0,
+        },
+      });
+      const manualOutcome = outcomes[direction === "scanner-first" ? 1 : 0];
+      expect(manualOutcome).toMatchObject({
+        status: "fulfilled",
+        value: { conflictId: conflict.id, status: "RESOLVED" },
+      });
+
+      const persisted = await prisma.resourceConflict.findUniqueOrThrow({
+        where: { id: conflict.id },
+        select: { status: true, resolvedByAccountId: true, resolutionNote: true },
+      });
+      expect(persisted).toEqual({
+        status: "RESOLVED",
+        resolvedByAccountId:
+          direction === "scanner-first"
+            ? null
+            : fixture.resourceManager.account.id,
+        resolutionNote:
+          direction === "scanner-first"
+            ? "扫描确认冲突已解除"
+            : `并发人工解决 ${direction}`,
+      });
+      expect(
+        await prisma.domainAuditEvent.count({
+          where: {
+            entityType: "ResourceConflict",
+            entityId: conflict.id,
+            action: "pm.conflict.scan",
+          },
+        }),
+      ).toBe(1);
+      const resolutionAudits = await prisma.domainAuditEvent.findMany({
+        where: {
+          entityType: "ResourceConflict",
+          entityId: conflict.id,
+          action: "pm.conflict.resolve",
+        },
+        select: { source: true, actorAccountId: true, actorPersonId: true },
+      });
+      expect(resolutionAudits).toEqual([
+        direction === "scanner-first"
+          ? { source: "CRON", actorAccountId: null, actorPersonId: null }
+          : {
+              source: "WEB",
+              actorAccountId: fixture.resourceManager.account.id,
+              actorPersonId: fixture.resourceManager.person.id,
+            },
+      ]);
+      expect(
+        await prisma.notificationOutbox.count({
+          where: {
+            eventKey: { startsWith: `pm:conflict:resolved:${conflict.id}:` },
+            type: "resource_conflict_resolved",
+          },
+        }),
+      ).toBe(1);
+      const resolvedOutbox = await prisma.notificationOutbox.findFirstOrThrow({
+        where: {
+          eventKey: { startsWith: `pm:conflict:resolved:${conflict.id}:` },
+          type: "resource_conflict_resolved",
+        },
+        select: { payload: true, botKind: true },
+      });
+      expect(resolvedOutbox.botKind).toBe("notification");
+      expect(JSON.parse(resolvedOutbox.payload)).toMatchObject({
+        purpose: "notification",
+      });
+      expect(
+        await prisma.notificationOutbox.count({
+          where: {
+            eventKey: { startsWith: `pm:conflict:opened:${conflict.fingerprint}` },
+            type: "resource_conflict_opened",
+          },
+        }),
+      ).toBe(1);
+    }
   });
 
   test("Manual handling requires system administrator when conflict includes no-task segments", async () => {
@@ -1009,7 +2459,12 @@ test.describe("project management P5 resource conflict services", () => {
       nodeId: fixture.activeNodeId,
     });
     await createWorkSegment(actor(fixture.member), {
-      ...plannedInput(fixture.member.person.id, 9.25, 10.25, 50),
+      ...plannedInput(fixture.member.person.id, 9, 10, 50),
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+    });
+    await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 9, 10, 20),
       taskId: fixture.taskId,
       nodeId: fixture.activeNodeId,
     });
@@ -1040,26 +2495,169 @@ test.describe("project management P5 resource conflict services", () => {
     const preview = await previewConflictSuggestion(actor(fixture.resourceManager), {
       conflictId: conflict.id,
     });
-    expect(preview.suggestions[0]?.moves.length).toBeGreaterThan(0);
+    const proposal = preview.suggestions[0];
+    if (!proposal) throw new Error("缺少冲突处理建议");
+    expect(conflict.segments).toHaveLength(3);
+    expect(proposal.moves).toHaveLength(2);
     expect(await prisma.workSegmentChange.count()).toBe(beforePreviewChangeCount);
 
     await expectServiceError(
       applyConflictSuggestion(actor(fixture.resourceManager), {
         conflictId: conflict.id,
         confirmApply: false,
-        proposal: preview.suggestions[0],
+        proposal,
       }),
       "VALIDATION_ERROR",
+    );
+    const movesInServiceOrder = [...proposal.moves].sort((left, right) =>
+      left.segmentId.localeCompare(right.segmentId),
+    );
+    const staleMove = movesInServiceOrder.at(-1);
+    if (!staleMove) throw new Error("缺少用于 stale apply 的建议移动");
+    const staleSegment = conflict.segments.find(
+      (entry) => entry.segment.id === staleMove.segmentId,
+    )?.segment;
+    if (!staleSegment) throw new Error("建议 Segment 不属于冲突");
+    await updateWorkSegment(actor(fixture.member), {
+      segmentId: staleSegment.id,
+      expectedUpdatedAt: staleSegment.updatedAt,
+      content: `${staleSegment.content}（建议预览后更新）`,
+      reason: "制造 stale suggestion",
+    });
+    const conflictSegmentIds = conflict.segments
+      .map((entry) => entry.segment.id)
+      .sort();
+    const segmentsBeforeStaleApply = await prisma.workSegment.findMany({
+      where: { id: { in: conflictSegmentIds } },
+      select: { id: true, startAt: true, endAt: true, status: true, updatedAt: true },
+      orderBy: { id: "asc" },
+    });
+    const changesBeforeStaleApply = await prisma.workSegmentChange.count({
+      where: { segmentId: { in: conflictSegmentIds } },
+    });
+    const segmentAuditsBeforeStaleApply = await prisma.domainAuditEvent.count({
+      where: { entityType: "WorkSegment", entityId: { in: conflictSegmentIds } },
+    });
+    const conflictAuditsBeforeStaleApply = await prisma.domainAuditEvent.count({
+      where: { entityType: "ResourceConflict", entityId: conflict.id },
+    });
+    const conflictBeforeStaleApply = await prisma.resourceConflict.findUniqueOrThrow({
+      where: { id: conflict.id },
+      select: {
+        status: true,
+        acknowledgedAt: true,
+        resolvedAt: true,
+        resolvedByAccountId: true,
+        resolutionNote: true,
+        updatedAt: true,
+      },
+    });
+    const outboxBeforeStaleApply = await prisma.notificationOutbox.count({
+      where: { channel: "project-management" },
+    });
+    await expectServiceError(
+      applyConflictSuggestion(actor(fixture.resourceManager), {
+        conflictId: conflict.id,
+        confirmApply: true,
+        proposal,
+      }),
+      "STATE_CONFLICT",
+    );
+    expect(
+      await prisma.workSegment.findMany({
+        where: { id: { in: conflictSegmentIds } },
+        select: { id: true, startAt: true, endAt: true, status: true, updatedAt: true },
+        orderBy: { id: "asc" },
+      }),
+    ).toEqual(segmentsBeforeStaleApply);
+    expect(
+      await prisma.workSegmentChange.count({
+        where: { segmentId: { in: conflictSegmentIds } },
+      }),
+    ).toBe(changesBeforeStaleApply);
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: { entityType: "WorkSegment", entityId: { in: conflictSegmentIds } },
+      }),
+    ).toBe(segmentAuditsBeforeStaleApply);
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: { entityType: "ResourceConflict", entityId: conflict.id },
+      }),
+    ).toBe(conflictAuditsBeforeStaleApply);
+    expect(
+      await prisma.notificationOutbox.count({
+        where: { channel: "project-management" },
+      }),
+    ).toBe(outboxBeforeStaleApply);
+    expect(
+      await prisma.resourceConflict.findUniqueOrThrow({
+        where: { id: conflict.id },
+        select: {
+          status: true,
+          acknowledgedAt: true,
+          resolvedAt: true,
+          resolvedByAccountId: true,
+          resolutionNote: true,
+          updatedAt: true,
+        },
+      }),
+    ).toEqual(conflictBeforeStaleApply);
+
+    const refreshedPreview = await previewConflictSuggestion(
+      actor(fixture.resourceManager),
+      { conflictId: conflict.id },
     );
     const applied = await applyConflictSuggestion(actor(fixture.resourceManager), {
       conflictId: conflict.id,
       confirmApply: true,
-      proposal: preview.suggestions[0],
+      proposal: refreshedPreview.suggestions[0],
     });
     expect(applied.status).toBe("RESOLVED");
     expect(applied.movedSegments.affectedSegmentIds.length).toBeGreaterThan(0);
   });
 });
+
+async function createOpenAllocationConflict(options: {
+  title: string;
+  startHour: number;
+}) {
+  const fixture = await createActivatedFixture({ title: options.title });
+  const first = await createWorkSegment(actor(fixture.member), {
+    ...plannedInput(
+      fixture.member.person.id,
+      options.startHour,
+      options.startHour + 1,
+      70,
+    ),
+    taskId: fixture.taskId,
+    nodeId: fixture.activeNodeId,
+  });
+  const second = await createWorkSegment(actor(fixture.member), {
+    ...plannedInput(
+      fixture.member.person.id,
+      options.startHour + 0.25,
+      options.startHour + 1.25,
+      60,
+    ),
+    taskId: fixture.taskId,
+    nodeId: fixture.activeNodeId,
+  });
+  const range = {
+    personId: fixture.member.person.id,
+    startAt: atHour(options.startHour),
+    endAt: atHour(options.startHour + 2),
+  };
+  await scanConflictsForPerson(range);
+  const conflict = await prisma.resourceConflict.findFirstOrThrow({
+    where: {
+      personId: fixture.member.person.id,
+      kind: "ALLOCATION_OVER_LIMIT",
+      startAt: atHour(options.startHour + 0.25),
+    },
+  });
+  return { fixture, first, second, range, conflict };
+}
 
 async function createActivatedFixture(options: {
   owner?: Awaited<ReturnType<typeof createAccountPerson>>;
@@ -1235,6 +2833,240 @@ async function expectServiceError(
   await expect(
     promise.catch((error) => toProjectManagementServiceError(error).code),
   ).resolves.toBe(code);
+}
+
+async function conflictWriteCounts(personId: string) {
+  return {
+    conflicts: await prisma.resourceConflict.count({ where: { personId } }),
+    conflictAudits: await prisma.domainAuditEvent.count({
+      where: { entityType: "ResourceConflict" },
+    }),
+    projectManagementOutbox: await prisma.notificationOutbox.count({
+      where: { channel: "project-management" },
+    }),
+  };
+}
+
+function conflictPersonLockKeys(personId: string) {
+  const digest = createHash("sha256")
+    .update(`pm:resource-conflict:person:${personId}`)
+    .digest();
+  return [digest.readInt32BE(0), digest.readInt32BE(4)] as const;
+}
+
+async function lockConflictPerson(client: Client, personId: string) {
+  const [namespaceKey, personKey] = conflictPersonLockKeys(personId);
+  await client.query("BEGIN");
+  const pid = await databaseBackendPid(client);
+  await client.query("SELECT pg_advisory_xact_lock($1, $2)", [
+    namespaceKey,
+    personKey,
+  ]);
+  return pid;
+}
+
+async function lockConflictRow(client: Client, conflictId: string) {
+  await client.query("BEGIN");
+  const pid = await databaseBackendPid(client);
+  await client.query(
+    'SELECT "id" FROM "ResourceConflict" WHERE "id" = $1 FOR UPDATE',
+    [conflictId],
+  );
+  return pid;
+}
+
+async function databaseBackendPid(client: Client) {
+  const result = await client.query<{ pid: number }>(
+    "SELECT pg_backend_pid() AS pid",
+  );
+  const pid = result.rows[0]?.pid;
+  if (!pid) throw new Error("无法取得 PostgreSQL backend pid");
+  return pid;
+}
+
+function fakeSignalObserver(input: {
+  databaseName?: string;
+  observerPid?: number;
+  activities?: Array<{
+    pid: number;
+    databaseName: string | null;
+    backendType: string;
+  }>;
+}) {
+  const databaseName = input.databaseName ?? "management_system_test";
+  const observerPid = input.observerPid ?? 7100;
+  const client = {
+    query: async (sql: string) => {
+      if (sql.includes("current_database()")) {
+        return { rows: [{ databaseName, observerPid }] };
+      }
+      if (sql.includes('FROM "pg_stat_activity"')) {
+        return { rows: input.activities ?? [] };
+      }
+      throw new Error("fake signal observer 收到非预期 SQL");
+    },
+  };
+  return client as unknown as Client;
+}
+
+async function waitForDirectBlockers(
+  observer: Client,
+  blockerPid: number,
+  expectedCount: number,
+) {
+  const deadline = Date.now() + 7_500;
+  while (Date.now() < deadline) {
+    const result = await observer.query<{ pid: number }>(
+      `WITH RECURSIVE "blocked"("pid") AS (
+         SELECT "activity"."pid"
+         FROM "pg_stat_activity" AS "activity"
+         WHERE $1::int = ANY(pg_blocking_pids("activity"."pid"))
+         UNION
+         SELECT "activity"."pid"
+         FROM "pg_stat_activity" AS "activity"
+         JOIN "blocked" AS "blocker"
+           ON "blocker"."pid" = ANY(pg_blocking_pids("activity"."pid"))
+       )
+       SELECT "pid" FROM "blocked" ORDER BY "pid" ASC`,
+      [blockerPid],
+    );
+    const pids = [...new Set(result.rows.map((row) => row.pid))];
+    if (pids.length >= expectedCount) return pids;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  throw new Error(
+    `未在期限内观察到 ${expectedCount} 个事务被 backend ${blockerPid} 阻塞`,
+  );
+}
+
+async function waitForBackendToLeaveLockWait(
+  observer: Client,
+  lockerPid: number,
+  blockedPid: number,
+) {
+  const deadline = Date.now() + 7_500;
+  while (Date.now() < deadline) {
+    const result = await observer.query<{ stillBlocked: boolean }>(
+      `SELECT $1::int = ANY(pg_blocking_pids($2::int)) AS "stillBlocked"`,
+      [lockerPid, blockedPid],
+    );
+    if (result.rows[0]?.stillBlocked === false) return;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  throw new Error(`backend ${blockedPid} 未确认处理取消信号`);
+}
+
+async function runBehindPersonLockBarrier<T>(
+  personId: string,
+  operations: [() => Promise<T>, () => Promise<T>],
+) {
+  let locker: Client | undefined;
+  let observer: Client | undefined;
+  let transactionMayBeOpen = false;
+  let released = false;
+  let pending: Promise<T>[] = [];
+  let pendingSettlement: Promise<PromiseSettledResult<T>[]> | undefined;
+  let pendingBackendPids: number[] = [];
+  let pendingHandled = false;
+  let result: T[] | undefined;
+  let primaryError: unknown;
+  let hasPrimaryError = false;
+  try {
+    locker = await connectDatabaseClient("person-barrier-locker");
+    observer = await connectDatabaseClient("person-barrier-observer");
+    transactionMayBeOpen = true;
+    const lockerPid = await lockConflictPerson(locker, personId);
+    const started = startBarrierOperations(operations);
+    pending = started.pending;
+    pendingSettlement = started.settlement;
+    const blockedPids = await waitForDirectBlockers(observer, lockerPid, 2);
+    pendingBackendPids = blockedPids;
+    if (new Set(blockedPids).size < 2) {
+      throw new Error("两个扫描事务未使用独立 PostgreSQL backend");
+    }
+    await locker.query("COMMIT");
+    released = true;
+    result = await Promise.all(pending);
+    pendingHandled = true;
+  } catch (error) {
+    primaryError = error;
+    hasPrimaryError = true;
+  }
+  const cleanupErrors = await cleanupBarrierResources({
+    locker,
+    observer,
+    rollbackRequired: Boolean(locker && transactionMayBeOpen && !released),
+    pendingSettlement,
+    pendingBackendPids,
+    pendingHandled,
+    primaryError,
+  });
+  throwBarrierErrors(hasPrimaryError, primaryError, cleanupErrors);
+  if (!result) throw new Error("Person lock barrier 未返回并发结果");
+  return result;
+}
+
+async function runConflictRowLockChain(
+  conflictId: string,
+  firstOperation: () => Promise<unknown>,
+  secondOperation: () => Promise<unknown>,
+) {
+  let locker: Client | undefined;
+  let observer: Client | undefined;
+  let transactionMayBeOpen = false;
+  let released = false;
+  let first: Promise<unknown> | undefined;
+  let second: Promise<unknown> | undefined;
+  const settlements: Promise<PromiseSettledResult<unknown>[]>[] = [];
+  const pendingBackendPids: number[] = [];
+  let pendingHandled = false;
+  let result: PromiseSettledResult<unknown>[] | undefined;
+  let primaryError: unknown;
+  let hasPrimaryError = false;
+  try {
+    locker = await connectDatabaseClient("conflict-chain-locker");
+    observer = await connectDatabaseClient("conflict-chain-observer");
+    transactionMayBeOpen = true;
+    const lockerPid = await lockConflictRow(locker, conflictId);
+    const firstStarted = startBarrierOperations([firstOperation]);
+    first = firstStarted.pending[0];
+    settlements.push(firstStarted.settlement);
+    if (!first) throw new Error("首个冲突操作 promise 未创建");
+    const [firstPid] = await waitForDirectBlockers(observer, lockerPid, 1);
+    if (!firstPid) throw new Error("首个冲突事务未到达 conflict row lock");
+    pendingBackendPids.push(firstPid);
+    const secondStarted = startBarrierOperations([secondOperation]);
+    second = secondStarted.pending[0];
+    settlements.push(secondStarted.settlement);
+    if (!second) throw new Error("第二个冲突操作 promise 未创建");
+    const [secondPid] = await waitForDirectBlockers(observer, firstPid, 1);
+    if (!secondPid || secondPid === firstPid) {
+      throw new Error("第二个冲突事务未在独立 backend 等待人员锁");
+    }
+    pendingBackendPids.push(secondPid);
+    await locker.query("COMMIT");
+    released = true;
+    result = (await Promise.all(settlements)).flat();
+    pendingHandled = true;
+  } catch (error) {
+    primaryError = error;
+    hasPrimaryError = true;
+  }
+  const cleanupErrors = await cleanupBarrierResources({
+    locker,
+    observer,
+    rollbackRequired: Boolean(locker && transactionMayBeOpen && !released),
+    pendingSettlement:
+      settlements.length > 0
+        ? Promise.all(settlements).then((outcomes) => outcomes.flat())
+        : undefined,
+    pendingBackendPids,
+    pendingHandled,
+    primaryError,
+  });
+  throwBarrierErrors(hasPrimaryError, primaryError, cleanupErrors);
+  if (!result) throw new Error("Conflict row lock chain 未返回并发结果");
+  return result;
 }
 
 async function expectServiceAcceptance(

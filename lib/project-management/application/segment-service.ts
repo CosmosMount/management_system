@@ -474,6 +474,7 @@ export async function mergePlannedSegments(
       (latest, segment) => (segment.endAt > latest ? segment.endAt : latest),
       first.endAt,
     );
+    assertValidSegmentRange(startAt, endAt);
     const tagIds = tagIdsOf(first);
     const merged = await tx.workSegment.create({
       data: {
@@ -811,16 +812,25 @@ export async function scanSegmentTransitions(now = new Date()) {
         deletedAt: null,
       },
       include: segmentInclude,
+      orderBy: { id: "asc" },
       take: 500,
     });
     let pendingConfirmationCount = 0;
     for (const segment of toPending) {
-      const before = snapshotSegment(segment);
-      const updated = await tx.workSegment.update({
-        where: { id: segment.id },
+      const transition = await tx.workSegment.updateMany({
+        where: {
+          id: segment.id,
+          type: "PLANNED",
+          status: { in: ["PLANNED", "IN_PROGRESS"] },
+          endAt: { lte: now },
+          deletedAt: null,
+          updatedAt: segment.updatedAt,
+        },
         data: { status: "PENDING_CONFIRMATION" },
-        include: segmentInclude,
       });
+      if (transition.count !== 1) continue;
+      const before = snapshotSegment(segment);
+      const updated = await loadSegmentForMutationTx(tx, segment.id);
       await recordSystemSegmentChangeTx(tx, {
         segmentId: updated.id,
         action: "UPDATE",
@@ -841,16 +851,26 @@ export async function scanSegmentTransitions(now = new Date()) {
         deletedAt: null,
       },
       include: segmentInclude,
+      orderBy: { id: "asc" },
       take: 500,
     });
     let inProgressCount = 0;
     for (const segment of toInProgress) {
-      const before = snapshotSegment(segment);
-      const updated = await tx.workSegment.update({
-        where: { id: segment.id },
+      const transition = await tx.workSegment.updateMany({
+        where: {
+          id: segment.id,
+          type: "PLANNED",
+          status: "PLANNED",
+          startAt: { lte: now },
+          endAt: { gt: now },
+          deletedAt: null,
+          updatedAt: segment.updatedAt,
+        },
         data: { status: "IN_PROGRESS" },
-        include: segmentInclude,
       });
+      if (transition.count !== 1) continue;
+      const before = snapshotSegment(segment);
+      const updated = await loadSegmentForMutationTx(tx, segment.id);
       await recordSystemSegmentChangeTx(tx, {
         segmentId: updated.id,
         action: "UPDATE",
@@ -1427,7 +1447,11 @@ async function lockAndLoadSegmentsTx(tx: PrismaTx, segmentIds: string[]) {
   const uniqueIds = [...new Set(segmentIds)].sort();
   if (uniqueIds.length === 0) return [];
   await tx.$queryRaw<Array<{ id: string }>>`
-    SELECT "id" FROM "WorkSegment" WHERE "id" IN (${Prisma.join(uniqueIds)}) FOR UPDATE
+    SELECT "id"
+    FROM "WorkSegment"
+    WHERE "id" IN (${Prisma.join(uniqueIds)})
+    ORDER BY "id" ASC
+    FOR UPDATE
   `;
   const segments = await tx.workSegment.findMany({
     where: { id: { in: uniqueIds } },

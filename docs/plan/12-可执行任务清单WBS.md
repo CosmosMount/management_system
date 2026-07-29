@@ -110,13 +110,13 @@
 
 ### P5 重新关单工作包
 
-`2499952` 中的 handoff 是 `e0317cc` 时点的历史证据。P5-R01 至 P5-R05 全部在 S1 完成；S9 只处理 P5-12/P5-13 的 cron 运维和性能，不跨阶段保留同一并发缺口。
+`2499952` 中的 handoff 是 `e0317cc` 时点的历史证据。P5-R01 至 P5-R05 均纳入 S1 计划；S9 只处理 P5-12/P5-13 的 cron 运维和性能，不跨阶段保留同一并发缺口。本次并发关单 commit 的范围同时覆盖 WBS P5-R02 与 P5-R03：`transition` guarded update、scanner/人工处理竞争、person 级 transaction advisory lock、fingerprint 首次竞争与 reopen。两个 WBS ID 仍分别保留用于需求追踪，但不再把它们误解为两个独立提交；两项已由本并发关单提交覆盖，并已通过独立 QA（`npm run check`、四文件双视口 104/104、关键 13 标题三轮 39/39）和独立 reviewer 审查（无新 actionable issue）。P5-R04 中操作者与 Current Plan 的通知准确性仍是独立后续工作包，不纳入该并发关单 commit；本次关单不表示 P5-R04、P5-R05 或整个 S1 已完成。
 
 | ID | 工作 | Owner | Review | 依赖 | 交付与测试 | 状态 |
 |---|---|---|---|---|---|---|
 | P5-R01 | 收紧 suggestion preview 隐私与 Conflict capability | BE-B | SEC/TL | P5-10/11 | 隐藏 Segment/只读用户/允许拒绝测试 | 计划（S1） |
-| P5-R02 | transition guarded update 与 scanner/人工处理竞争控制 | BE-B | TL/DBA | P5-09/10 | 并发无重复 change/audit/outbox | 计划（S1） |
-| P5-R03 | person 级 transaction advisory lock 与 fingerprint 首次竞争 | BE-B | DBA/QA | P5-09 | 数据库级 person 互斥/首次并发/reopen 测试 | 计划（S1） |
+| P5-R02 | 并发关单 commit（与 P5-R03 同一提交）：transition guarded update 与 scanner/人工处理竞争控制 | BE-B | TL/DBA | P5-09/10 | 并发无重复 change/audit/outbox | 已实现（本并发关单提交） |
+| P5-R03 | 并发关单 commit（与 P5-R02 同一提交）：person 级 transaction advisory lock、fingerprint 首次竞争与 reopen | BE-B | DBA/QA | P5-09 | 数据库级 person 互斥/首次并发/reopen 测试 | 已实现（本并发关单提交） |
 | P5-R04 | 补 merge 31 天、缺失 Allocation、操作者和 Current Plan 通知不变量 | BE-A/BE-B | TL/QA | P3/P5 | 规则/通知 payload 回归 | 计划（S1） |
 | P5-R05 | 补真实 100 条回滚、来源、stale apply 和并发回归 | QA/BE-B | TL/SEC | P5-R01~04 | P5 定向 + 全量 E2E | 计划（S1） |
 
