@@ -263,7 +263,7 @@ npm run pm:identity-backfill
 4. 通知测试覆盖站内通知事务 helper、审计脱敏、审计 append-only、`channel=project-management` outbox 入队、审批用途 allowlist、adapter 收件人去重、完整交互卡和通知/审批机器人边界。
 5. `tests/project-management-lifecycle.spec.ts` 覆盖 P2/P3 Task 草稿创建、幂等键冲突、Current Plan 持久化、激活、并发/过期锁拒绝、Revision 提交/驳回/取消/审批/直接生效、Planned Segment 待确认标记、Revision 生效后的 Segment 关联失效通知、Milestone Review TEXT/LINK 证据、FILE 证据拒绝、审批推进、Termination 四种 outcome、查询防枚举、审计和 `channel=project-management` outbox。
 6. `tests/project-management-segments.spec.ts` 覆盖 P5 Segment 中文校验、本人/他人权限、乐观锁、单条与 100 条批量事务回滚、split/merge 时间守恒和来源历史、full/partial confirm、一 Planned 多 Actual、多 Planned 一 Actual、无来源 Actual、cancel、soft delete、relink，以及 Segment 操作不改变 Task/Milestone。
-7. `tests/project-management-conflicts.spec.ts` 覆盖 P5 Conflict 半开区间、100%/100.01% allocation 边界、missing allocation、High/Critical、Owner/Lead、Revision overlap、Actual overload、fingerprint 幂等、消失后 resolved、`ignoredUntil` 到期重开、acknowledge/resolve/ignore 权限与状态机、preview 不写库、apply 显式确认和 `expectedUpdatedAt` 校验，以及 outbox 只使用项目管理通知机器人。
+7. `tests/project-management-conflicts.spec.ts` 覆盖 P5 Conflict 半开区间、100%/100.01% allocation 边界、missing allocation、High/Critical、Owner/Lead、Revision overlap、Actual overload、fingerprint 幂等、消失后 resolved、`ignoredUntil` 到期重开、acknowledge/resolve/ignore 权限与状态机、逐状态 capability、隐藏 Segment 脱敏、preview 完整处理权限且不写库、apply 显式确认和 `expectedUpdatedAt` 校验，以及 outbox 只使用项目管理通知机器人。
 8. `tests/project-management-ui.spec.ts` 覆盖 P4/P6 `/progress` 总览、Task 工作台、资源时间轴、冲突中心、站内通知中心、桌面/移动视口、持久化状态和非成员拒绝路径。
 9. `tests/feishu-boundaries.spec.ts` 必须继续扫描 `app/progress`、`app/actions/project-management`、`components/project-management`、`lib/project-management` 和项目管理 notification adapter，防止项目管理入口或领域服务直接导入飞书传输层。
 

@@ -21,6 +21,7 @@ import {
 } from "../lib/project-management/application/conflict-service";
 import {
   getResourceConflict,
+  listResourceConflicts,
 } from "../lib/project-management/queries/resource-queries";
 import {
   toProjectManagementServiceError,
@@ -347,6 +348,14 @@ test.describe("project management P5 resource conflict services", () => {
     });
     expect(detail.segments).toHaveLength(1);
     expect(detail.segments[0]?.id).toBe(visibleSegment.segment.id);
+    expect(detail.hiddenSegmentCount).toBe(1);
+    expect(detail.capabilities).toEqual({
+      canAcknowledge: false,
+      canResolve: false,
+      canIgnore: false,
+      canPreviewSuggestion: false,
+      canApplySuggestion: false,
+    });
     const explanation = detail.explanation as {
       hiddenSegmentCount?: number;
       segments?: Array<{ id: string }>;
@@ -355,10 +364,47 @@ test.describe("project management P5 resource conflict services", () => {
     expect(explanation.segments?.map((segment) => segment.id)).toEqual([
       visibleSegment.segment.id,
     ]);
+    const serializedDetail = JSON.stringify(detail);
+    expect(serializedDetail).not.toContain(hiddenSegment.segment.id);
+    expect(serializedDetail).not.toContain(hiddenSegment.segment.updatedAt);
+    expect(serializedDetail).not.toContain(hiddenSegment.segment.content);
+    expect(serializedDetail).not.toContain(otherTask.taskId);
+    expect(serializedDetail).not.toContain(hiddenSegment.segment.endAt);
 
+    await expectServiceError(
+      previewConflictSuggestion(actor(fixture.owner), {
+        conflictId: conflict.id,
+      }),
+      "STATE_CONFLICT",
+    );
+    await expectServiceError(
+      previewConflictSuggestion(actor(fixture.member), {
+        conflictId: conflict.id,
+      }),
+      "STATE_CONFLICT",
+    );
+    const managerPreview = await previewConflictSuggestion(
+      actor(fixture.resourceManager),
+      { conflictId: conflict.id },
+    );
+    expect(managerPreview.suggestions[0]?.moves).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ segmentId: hiddenSegment.segment.id }),
+      ]),
+    );
+
+    const hiddenMarkers = [
+      `hidden-id=${hiddenSegment.segment.id}`,
+      `hidden-content=${hiddenSegment.segment.content}`,
+      `hidden-task=${otherTask.taskId}`,
+      `hidden-start=${hiddenSegment.segment.startAt}`,
+      `hidden-end=${hiddenSegment.segment.endAt}`,
+      `hidden-version=${hiddenSegment.segment.updatedAt}`,
+    ];
+    const sensitiveHandlingText = hiddenMarkers.join(" | ");
     await resolveConflict(actor(fixture.resourceManager), {
       conflictId: conflict.id,
-      resolutionNote: "记录人工处理",
+      resolutionNote: sensitiveHandlingText,
       changedSegmentIds: [visibleSegment.segment.id, hiddenSegment.segment.id],
     });
     const resolvedDetail = await getResourceConflict({
@@ -371,6 +417,441 @@ test.describe("project management P5 resource conflict services", () => {
     expect(resolvedExplanation.changedSegmentIds).toEqual([
       visibleSegment.segment.id,
     ]);
+    expect(resolvedDetail.resolutionNote).toBe("处理说明涉及不可见记录，已隐藏");
+    expect(resolvedExplanation).toMatchObject({
+      resolutionNote: "处理说明涉及不可见记录，已隐藏",
+    });
+    const resolvedViewerList = await listResourceConflicts({
+      actor: actor(fixture.viewer),
+      input: { personId: fixture.member.person.id },
+    });
+    const resolvedViewerListItem = resolvedViewerList.items.find(
+      (item) => item.id === conflict.id,
+    );
+    if (!resolvedViewerListItem) throw new Error("列表缺少目标资源冲突");
+    for (const partialDto of [resolvedDetail, resolvedViewerListItem]) {
+      const serialized = JSON.stringify(partialDto);
+      for (const marker of hiddenMarkers) expect(serialized).not.toContain(marker);
+    }
+    const fullResolvedDetail = await getResourceConflict({
+      actor: actor(fixture.resourceManager, [
+        { role: "RESOURCE_MANAGER", team: "英雄", techGroup: "电控" },
+      ]),
+      input: { conflictId: conflict.id },
+    });
+    expect(fullResolvedDetail.resolutionNote).toBe(sensitiveHandlingText);
+    expect(fullResolvedDetail.explanation).toMatchObject({
+      resolutionNote: sensitiveHandlingText,
+    });
+
+    await prisma.resourceConflict.update({
+      where: { id: conflict.id },
+      data: { status: "OPEN", resolvedAt: null },
+    });
+    await ignoreConflict(actor(fixture.resourceManager), {
+      conflictId: conflict.id,
+      reason: sensitiveHandlingText,
+      ignoredUntil: atHour(20),
+    });
+    const ignoredViewerDetail = await getResourceConflict({
+      actor: actor(fixture.viewer),
+      input: { conflictId: conflict.id },
+    });
+    const ignoredViewerList = await listResourceConflicts({
+      actor: actor(fixture.viewer),
+      input: { personId: fixture.member.person.id },
+    });
+    const ignoredViewerListItem = ignoredViewerList.items.find(
+      (item) => item.id === conflict.id,
+    );
+    expect(ignoredViewerDetail.resolutionNote).toBe(
+      "处理说明涉及不可见记录，已隐藏",
+    );
+    expect(ignoredViewerDetail.explanation).toMatchObject({
+      resolutionNote: "处理说明涉及不可见记录，已隐藏",
+      ignoredReason: "处理说明涉及不可见记录，已隐藏",
+    });
+    if (!ignoredViewerListItem) throw new Error("列表缺少目标资源冲突");
+    for (const partialDto of [ignoredViewerDetail, ignoredViewerListItem]) {
+      const serialized = JSON.stringify(partialDto);
+      for (const marker of hiddenMarkers) expect(serialized).not.toContain(marker);
+    }
+    const fullIgnoredDetail = await getResourceConflict({
+      actor: actor(fixture.resourceManager, [
+        { role: "RESOURCE_MANAGER", team: "英雄", techGroup: "电控" },
+      ]),
+      input: { conflictId: conflict.id },
+    });
+    expect(fullIgnoredDetail.resolutionNote).toBe(sensitiveHandlingText);
+    expect(fullIgnoredDetail.explanation).toMatchObject({
+      resolutionNote: sensitiveHandlingText,
+      ignoredReason: sensitiveHandlingText,
+    });
+  });
+
+  test("Conflict capabilities follow actor permissions and conflict status", async () => {
+    const fixture = await createActivatedFixture();
+    const systemAdmin = await createAccountPerson("P5 Conflict System Admin");
+    await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 9, 10, 70),
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+    });
+    await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 9.25, 10.25, 60),
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+    });
+    await scanConflictsForPerson({
+      personId: fixture.member.person.id,
+      startAt: atHour(9),
+      endAt: atHour(11),
+    });
+    const conflict = await prisma.resourceConflict.findFirstOrThrow({
+      where: { personId: fixture.member.person.id, kind: "ALLOCATION_OVER_LIMIT" },
+      select: { id: true },
+    });
+    const scopedManagerActor = actor(fixture.resourceManager, [
+      { role: "RESOURCE_MANAGER", team: "英雄", techGroup: "电控" },
+    ]);
+    const systemAdminActor = actor(systemAdmin, [
+      { role: "SYSTEM_ADMINISTRATOR", team: "", techGroup: "" },
+    ]);
+    const noCapabilities = {
+      canAcknowledge: false,
+      canResolve: false,
+      canIgnore: false,
+      canPreviewSuggestion: false,
+      canApplySuggestion: false,
+    };
+    const handlerOpenCapabilities = {
+      canAcknowledge: true,
+      canResolve: true,
+      canIgnore: true,
+      canPreviewSuggestion: true,
+      canApplySuggestion: true,
+    };
+
+    const openSelf = await getResourceConflict({
+      actor: actor(fixture.member),
+      input: { conflictId: conflict.id },
+    });
+    expect(openSelf.capabilities).toEqual({
+      ...noCapabilities,
+      canAcknowledge: true,
+    });
+    for (const handlingActor of [
+      actor(fixture.owner),
+      scopedManagerActor,
+      systemAdminActor,
+    ]) {
+      const detail = await getResourceConflict({
+        actor: handlingActor,
+        input: { conflictId: conflict.id },
+      });
+      expect(detail.capabilities).toEqual(handlerOpenCapabilities);
+    }
+    const openViewer = await getResourceConflict({
+      actor: actor(fixture.viewer),
+      input: { conflictId: conflict.id },
+    });
+    expect(openViewer.capabilities).toEqual(noCapabilities);
+
+    const list = await listResourceConflicts({
+      actor: scopedManagerActor,
+      input: { personId: fixture.member.person.id },
+    });
+    expect(list.items.find((item) => item.id === conflict.id)?.capabilities).toEqual(
+      handlerOpenCapabilities,
+    );
+
+    await prisma.resourceConflict.update({
+      where: { id: conflict.id },
+      data: { status: "ACKNOWLEDGED" },
+    });
+    const acknowledged = await getResourceConflict({
+      actor: scopedManagerActor,
+      input: { conflictId: conflict.id },
+    });
+    expect(acknowledged.capabilities).toEqual(handlerOpenCapabilities);
+
+    await prisma.resourceConflict.update({
+      where: { id: conflict.id },
+      data: { status: "IGNORED" },
+    });
+    const ignored = await getResourceConflict({
+      actor: systemAdminActor,
+      input: { conflictId: conflict.id },
+    });
+    expect(ignored.capabilities).toEqual({
+      ...handlerOpenCapabilities,
+      canAcknowledge: false,
+    });
+
+    await prisma.resourceConflict.update({
+      where: { id: conflict.id },
+      data: { status: "RESOLVED" },
+    });
+    for (const resolvedActor of [actor(fixture.member), actor(fixture.viewer)]) {
+      const detail = await getResourceConflict({
+        actor: resolvedActor,
+        input: { conflictId: conflict.id },
+      });
+      expect(detail.capabilities).toEqual(noCapabilities);
+    }
+    for (const resolvedHandler of [
+      actor(fixture.owner),
+      scopedManagerActor,
+      systemAdminActor,
+    ]) {
+      const detail = await getResourceConflict({
+        actor: resolvedHandler,
+        input: { conflictId: conflict.id },
+      });
+      expect(detail.capabilities).toEqual({
+        ...noCapabilities,
+        canResolve: true,
+        canPreviewSuggestion: true,
+      });
+    }
+  });
+
+  test("Conflict capabilities match each service state contract", async () => {
+    const fixture = await createActivatedFixture();
+    await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 9, 10, 70),
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+    });
+    await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 9.25, 10.25, 60),
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+    });
+    await scanConflictsForPerson({
+      personId: fixture.member.person.id,
+      startAt: atHour(9),
+      endAt: atHour(11),
+    });
+    const conflict = await prisma.resourceConflict.findFirstOrThrow({
+      where: { personId: fixture.member.person.id, kind: "ALLOCATION_OVER_LIMIT" },
+      select: { id: true },
+    });
+    const managerQueryActor = actor(fixture.resourceManager, [
+      { role: "RESOURCE_MANAGER", team: "英雄", techGroup: "电控" },
+    ]);
+    const statusCases = [
+      {
+        status: "OPEN" as const,
+        expected: {
+          canAcknowledge: true,
+          canResolve: true,
+          canIgnore: true,
+          canPreviewSuggestion: true,
+          canApplySuggestion: true,
+        },
+      },
+      {
+        status: "ACKNOWLEDGED" as const,
+        expected: {
+          canAcknowledge: true,
+          canResolve: true,
+          canIgnore: true,
+          canPreviewSuggestion: true,
+          canApplySuggestion: true,
+        },
+      },
+      {
+        status: "IGNORED" as const,
+        expected: {
+          canAcknowledge: false,
+          canResolve: true,
+          canIgnore: true,
+          canPreviewSuggestion: true,
+          canApplySuggestion: true,
+        },
+      },
+      {
+        status: "RESOLVED" as const,
+        expected: {
+          canAcknowledge: false,
+          canResolve: true,
+          canIgnore: false,
+          canPreviewSuggestion: true,
+          canApplySuggestion: false,
+        },
+      },
+    ];
+
+    for (const { status, expected } of statusCases) {
+      await setConflictStatus(conflict.id, status);
+      const detail = await getResourceConflict({
+        actor: managerQueryActor,
+        input: { conflictId: conflict.id },
+      });
+      expect(detail.capabilities).toEqual(expected);
+
+      await setConflictStatus(conflict.id, status);
+      await expectServiceAcceptance(
+        acknowledgeConflict(actor(fixture.resourceManager), {
+          conflictId: conflict.id,
+          note: `状态契约 ${status}`,
+        }),
+        expected.canAcknowledge,
+      );
+
+      await setConflictStatus(conflict.id, status);
+      await expectServiceAcceptance(
+        resolveConflict(actor(fixture.resourceManager), {
+          conflictId: conflict.id,
+          resolutionNote: `状态契约 ${status}`,
+        }),
+        expected.canResolve,
+      );
+
+      await setConflictStatus(conflict.id, status);
+      await expectServiceAcceptance(
+        ignoreConflict(actor(fixture.resourceManager), {
+          conflictId: conflict.id,
+          reason: `状态契约 ${status}`,
+          ignoredUntil: atHour(20),
+        }),
+        expected.canIgnore,
+      );
+
+      await setConflictStatus(conflict.id, status);
+      const previewCall = previewConflictSuggestion(actor(fixture.resourceManager), {
+        conflictId: conflict.id,
+      });
+      await expectServiceAcceptance(previewCall, expected.canPreviewSuggestion);
+      if (status === "RESOLVED") {
+        await expect(previewCall).resolves.toEqual({
+          conflictId: conflict.id,
+          suggestions: [],
+        });
+      }
+
+      await setConflictStatus(conflict.id, "OPEN");
+      const previewForApply = await previewConflictSuggestion(
+        actor(fixture.resourceManager),
+        { conflictId: conflict.id },
+      );
+      const proposal = previewForApply.suggestions[0];
+      if (!proposal) throw new Error("未生成资源冲突处理建议");
+      await setConflictStatus(conflict.id, status);
+      await expectServiceAcceptance(
+        applyConflictSuggestion(actor(fixture.resourceManager), {
+          conflictId: conflict.id,
+          confirmApply: true,
+          proposal,
+        }),
+        expected.canApplySuggestion,
+      );
+    }
+  });
+
+  test("Task owner can handle a conflict only when owning every related Task", async () => {
+    const fixture = await createActivatedFixture();
+    const alsoOwnedTask = await createActivatedFixture({
+      owner: fixture.owner,
+      member: fixture.member,
+      title: "P5 Same Owner Conflict Task",
+    });
+    await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 9, 10, 70),
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+    });
+    await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 9.25, 10.25, 60),
+      taskId: alsoOwnedTask.taskId,
+      nodeId: alsoOwnedTask.activeNodeId,
+    });
+    await scanConflictsForPerson({
+      personId: fixture.member.person.id,
+      startAt: atHour(9),
+      endAt: atHour(11),
+    });
+    const conflict = await prisma.resourceConflict.findFirstOrThrow({
+      where: { personId: fixture.member.person.id, kind: "ALLOCATION_OVER_LIMIT" },
+      select: { id: true },
+    });
+
+    const detail = await getResourceConflict({
+      actor: actor(fixture.owner),
+      input: { conflictId: conflict.id },
+    });
+    expect(detail.hiddenSegmentCount).toBe(0);
+    expect(detail.capabilities).toEqual({
+      canAcknowledge: true,
+      canResolve: true,
+      canIgnore: true,
+      canPreviewSuggestion: true,
+      canApplySuggestion: true,
+    });
+    const preview = await previewConflictSuggestion(actor(fixture.owner), {
+      conflictId: conflict.id,
+    });
+    expect(preview.suggestions[0]?.moves.length).toBeGreaterThan(0);
+  });
+
+  test("Scoped manager cannot handle a conflict when only some Tasks match scope", async () => {
+    const fixture = await createActivatedFixture();
+    const outOfScopeTask = await createActivatedFixture({
+      member: fixture.member,
+      title: "P5 Out Of Scope Conflict Task",
+      team: "步兵",
+      techGroup: "机械",
+    });
+    await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 9, 10, 70),
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+    });
+    await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 9.25, 10.25, 60),
+      taskId: outOfScopeTask.taskId,
+      nodeId: outOfScopeTask.activeNodeId,
+    });
+    await scanConflictsForPerson({
+      personId: fixture.member.person.id,
+      startAt: atHour(9),
+      endAt: atHour(11),
+    });
+    const conflict = await prisma.resourceConflict.findFirstOrThrow({
+      where: { personId: fixture.member.person.id, kind: "ALLOCATION_OVER_LIMIT" },
+      select: { id: true },
+    });
+    const scopedManagerActor = actor(fixture.resourceManager, [
+      { role: "RESOURCE_MANAGER", team: "英雄", techGroup: "电控" },
+    ]);
+
+    const detail = await getResourceConflict({
+      actor: scopedManagerActor,
+      input: { conflictId: conflict.id },
+    });
+    expect(detail.hiddenSegmentCount).toBe(1);
+    expect(detail.capabilities).toEqual({
+      canAcknowledge: false,
+      canResolve: false,
+      canIgnore: false,
+      canPreviewSuggestion: false,
+      canApplySuggestion: false,
+    });
+    const list = await listResourceConflicts({
+      actor: scopedManagerActor,
+      input: { personId: fixture.member.person.id },
+    });
+    expect(list.items.find((item) => item.id === conflict.id)).toMatchObject({
+      hiddenSegmentCount: 1,
+      capabilities: detail.capabilities,
+    });
+    await expectServiceError(
+      previewConflictSuggestion(actor(fixture.resourceManager), {
+        conflictId: conflict.id,
+      }),
+      "STATE_CONFLICT",
+    );
   });
 
   test("Conflict scans are idempotent, resolve obsolete conflicts and reopen expired ignored conflicts", async () => {
@@ -469,6 +950,8 @@ test.describe("project management P5 resource conflict services", () => {
 
   test("Manual handling requires system administrator when conflict includes no-task segments", async () => {
     const fixture = await createActivatedFixture();
+    const systemAdmin = await createAccountPerson("P5 No Task Conflict System Admin");
+    await grantRole(systemAdmin.account.id, "SYSTEM_ADMINISTRATOR");
     await createWorkSegment(actor(fixture.resourceManager), {
       ...plannedInput(fixture.member.person.id, 9, 10, 70),
       taskId: fixture.taskId,
@@ -493,6 +976,29 @@ test.describe("project management P5 resource conflict services", () => {
       }),
       "STATE_CONFLICT",
     );
+
+    const systemAdminDetail = await getResourceConflict({
+      actor: actor(systemAdmin, [
+        { role: "SYSTEM_ADMINISTRATOR", team: "", techGroup: "" },
+      ]),
+      input: { conflictId: conflict.id },
+    });
+    expect(systemAdminDetail.capabilities).toEqual({
+      canAcknowledge: true,
+      canResolve: true,
+      canIgnore: true,
+      canPreviewSuggestion: true,
+      canApplySuggestion: true,
+    });
+    const preview = await previewConflictSuggestion(actor(systemAdmin), {
+      conflictId: conflict.id,
+    });
+    expect(preview.suggestions[0]?.moves.length).toBeGreaterThan(0);
+    const resolved = await resolveConflict(actor(systemAdmin), {
+      conflictId: conflict.id,
+      resolutionNote: "系统管理员处理无 Task Segment 冲突",
+    });
+    expect(resolved.status).toBe("RESOLVED");
   });
 
   test("Manual conflict handling enforces permissions and suggestion apply requires explicit versioned confirmation", async () => {
@@ -556,34 +1062,41 @@ test.describe("project management P5 resource conflict services", () => {
 });
 
 async function createActivatedFixture(options: {
+  owner?: Awaited<ReturnType<typeof createAccountPerson>>;
   member?: Awaited<ReturnType<typeof createAccountPerson>>;
   title?: string;
+  team?: string;
+  techGroup?: string;
 } = {}) {
   const admin = await createAccountPerson("P5 Conflict Team Admin");
-  const owner = await createAccountPerson("P5 Conflict Owner");
+  const owner = options.owner ?? (await createAccountPerson("P5 Conflict Owner"));
   const member = options.member ?? (await createAccountPerson("P5 Conflict Member"));
+  const team = options.team ?? "英雄";
+  const techGroup = options.techGroup ?? "电控";
   const reviewer = await createAccountPerson("P5 Conflict Reviewer");
+  const viewer = await createAccountPerson("P5 Conflict Viewer");
   const outsider = await createAccountPerson("P5 Conflict Outsider");
   const resourceManager = await createAccountPerson("P5 Conflict Resource Manager");
   await grantRole(admin.account.id, "TEAM_ADMINISTRATOR", {
-    team: "英雄",
-    techGroup: "电控",
+    team,
+    techGroup,
   });
   await grantRole(resourceManager.account.id, "RESOURCE_MANAGER", {
-    team: "英雄",
-    techGroup: "电控",
+    team,
+    techGroup,
   });
   const draft = await createTaskDraft(actor(admin), {
     title: `${options.title ?? "P5 Conflict Task"} ${randomUUID()}`,
     description: "P5 Conflict 测试",
-    team: "英雄",
-    techGroup: "电控",
+    team,
+    techGroup,
     priority: "HIGH",
     tagIds: [],
     members: [
       { personId: owner.person.id, role: "OWNER" },
       { personId: member.person.id, role: "MEMBER" },
       { personId: reviewer.person.id, role: "REVIEWER" },
+      { personId: viewer.person.id, role: "VIEWER" },
     ],
     milestones: [milestoneInput("阶段一", "完成阶段一", 1)],
     termination: terminationInput(4),
@@ -599,6 +1112,7 @@ async function createActivatedFixture(options: {
     owner,
     member,
     reviewer,
+    viewer,
     outsider,
     resourceManager,
     taskId: draft.taskId,
@@ -682,8 +1196,8 @@ async function createAccountPerson(displayName: string) {
 
 async function grantRole(
   accountId: string,
-  role: "TEAM_ADMINISTRATOR" | "RESOURCE_MANAGER",
-  scope: { team: string; techGroup: string },
+  role: "TEAM_ADMINISTRATOR" | "RESOURCE_MANAGER" | "SYSTEM_ADMINISTRATOR",
+  scope: { team: string; techGroup: string } = { team: "", techGroup: "" },
 ) {
   await prisma.systemRoleAssignment.create({
     data: {
@@ -695,13 +1209,16 @@ async function grantRole(
   });
 }
 
-function actor(input: Awaited<ReturnType<typeof createAccountPerson>>): ProjectManagementActor {
+function actor(
+  input: Awaited<ReturnType<typeof createAccountPerson>>,
+  systemRoles: ProjectManagementActor["systemRoles"] = [],
+): ProjectManagementActor {
   return {
     accountId: input.account.id,
     personId: input.person.id,
     openId: input.openId,
     unionId: null,
-    systemRoles: [],
+    systemRoles,
   };
 }
 
@@ -718,6 +1235,27 @@ async function expectServiceError(
   await expect(
     promise.catch((error) => toProjectManagementServiceError(error).code),
   ).resolves.toBe(code);
+}
+
+async function expectServiceAcceptance(
+  promise: Promise<unknown>,
+  accepted: boolean,
+) {
+  if (accepted) {
+    await expect(promise).resolves.toBeTruthy();
+    return;
+  }
+  await expectServiceError(promise, "STATE_CONFLICT");
+}
+
+async function setConflictStatus(
+  conflictId: string,
+  status: "OPEN" | "ACKNOWLEDGED" | "IGNORED" | "RESOLVED",
+) {
+  await prisma.resourceConflict.update({
+    where: { id: conflictId },
+    data: { status },
+  });
 }
 
 async function expectProjectManagementOutbox(

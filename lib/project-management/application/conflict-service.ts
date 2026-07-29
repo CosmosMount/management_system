@@ -9,7 +9,6 @@ import type {
 import { prisma } from "@/lib/prisma";
 import {
   authorize,
-  isSystemAdministrator,
   type AuthorizationTaskResource,
 } from "@/lib/project-management/authorization";
 import { createDomainAuditEventTx } from "@/lib/project-management/audit";
@@ -20,6 +19,7 @@ import {
   recipientsForPersonIdsTx,
   uniqueRecipientsByAccount,
 } from "@/lib/project-management/application/notification-utils";
+import { canFullyHandleConflict } from "@/lib/project-management/application/conflict-permissions";
 import {
   movePlannedSegmentsTx,
   type BatchSegmentMutationResult,
@@ -294,6 +294,7 @@ export async function previewConflictSuggestion(
   });
   if (!conflict) throw notFoundError();
   assertConflictVisible(refreshedActor, conflict);
+  assertCanResolveConflict(refreshedActor, conflict);
   if (conflict.status === "RESOLVED") {
     return { conflictId: conflict.id, suggestions: [] };
   }
@@ -1062,28 +1063,13 @@ function assertCanResolveConflict(
   actor: ProjectManagementActor,
   conflict: ConflictForMutation,
 ) {
-  if (isSystemAdministrator(actor)) return;
+  if (canFullyHandleConflict(actor, conflict)) return;
   if (conflict.segments.some((entry) => !entry.segment.task)) {
     throw stateConflictError("包含无 Task 关联 Segment 的冲突只能由系统管理员处理");
   }
-  const tasks = uniqueTasks(conflict);
-  if (tasks.length === 0) {
+  if (conflict.segments.length === 0) {
     throw stateConflictError("无 Task 关联的冲突只能由系统管理员处理");
   }
-  const allScopedManager = tasks.every((task) =>
-    authorize({
-      actor,
-      action: "conflict.resolve",
-      resource: taskResource(task),
-    }).allowed,
-  );
-  if (allScopedManager) return;
-  const allOwnedByActor = tasks.every((task) =>
-    task.members.some(
-      (member) => member.personId === actor.personId && member.role === "OWNER",
-    ),
-  );
-  if (allOwnedByActor) return;
   throw stateConflictError("你没有处理该资源冲突的权限");
 }
 
@@ -1118,14 +1104,6 @@ function taskResource(task: TaskForAuthorization): AuthorizationTaskResource {
       removedAt: member.removedAt,
     })),
   };
-}
-
-function uniqueTasks(conflict: ConflictForMutation) {
-  const byId = new Map<string, TaskForAuthorization>();
-  for (const entry of conflict.segments) {
-    if (entry.segment.task) byId.set(entry.segment.task.id, entry.segment.task);
-  }
-  return [...byId.values()];
 }
 
 function compareSegmentsForSuggestion(left: ConflictSegment, right: ConflictSegment) {

@@ -10,6 +10,10 @@ import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import { notFoundError } from "@/lib/project-management/application/errors";
 import { toWorkSegmentDto } from "@/lib/project-management/application/segment-service";
 import {
+  canFullyHandleConflict,
+  resourceConflictCapabilities,
+} from "@/lib/project-management/application/conflict-permissions";
+import {
   getResourceConflictInputSchema,
   getWorkSegmentInputSchema,
   listResourceConflictsInputSchema,
@@ -360,6 +364,8 @@ function toResourceConflictDto(
   const visibleSegmentIds = new Set(
     visibleSegmentEntries.map((entry) => entry.segmentId),
   );
+  const redactHandlingText =
+    hiddenSegmentCount > 0 && !canFullyHandleConflict(actor, conflict);
   return {
     id: conflict.id,
     personId: conflict.personId,
@@ -374,13 +380,19 @@ function toResourceConflictDto(
       conflict.explanation,
       visibleSegmentIds,
       hiddenSegmentCount,
+      redactHandlingText,
     ),
     detectedAt: conflict.detectedAt.toISOString(),
     acknowledgedAt: conflict.acknowledgedAt?.toISOString() ?? null,
     resolvedAt: conflict.resolvedAt?.toISOString() ?? null,
     ignoredUntil: conflict.ignoredUntil?.toISOString() ?? null,
     resolvedByAccountId: conflict.resolvedByAccountId,
-    resolutionNote: conflict.resolutionNote,
+    resolutionNote: sanitizeHandlingText(
+      conflict.resolutionNote,
+      redactHandlingText,
+    ),
+    hiddenSegmentCount,
+    capabilities: resourceConflictCapabilities(actor, conflict),
     segments: visibleSegmentEntries.map((entry) =>
       toWorkSegmentDetailDto(entry.segment, actor),
     ),
@@ -436,6 +448,7 @@ function sanitizeConflictExplanation(
   explanation: Prisma.JsonValue,
   visibleSegmentIds: Set<string>,
   hiddenSegmentCount: number,
+  redactHandlingText: boolean,
 ): Prisma.JsonValue {
   if (!explanation || typeof explanation !== "object" || Array.isArray(explanation)) {
     return explanation;
@@ -465,5 +478,20 @@ function sanitizeConflictExplanation(
         visibleSegmentIds.has((segment as { id: string }).id),
     );
   }
+  if (redactHandlingText) {
+    if (typeof record.resolutionNote === "string") {
+      sanitized.resolutionNote = REDACTED_CONFLICT_HANDLING_TEXT;
+    }
+    if (typeof record.ignoredReason === "string") {
+      sanitized.ignoredReason = REDACTED_CONFLICT_HANDLING_TEXT;
+    }
+  }
   return sanitized as Prisma.JsonObject;
+}
+
+const REDACTED_CONFLICT_HANDLING_TEXT = "处理说明涉及不可见记录，已隐藏";
+
+function sanitizeHandlingText(value: string | null, redact: boolean) {
+  if (!value || !redact) return value;
+  return REDACTED_CONFLICT_HANDLING_TEXT;
 }

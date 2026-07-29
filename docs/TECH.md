@@ -140,7 +140,7 @@ P5 已补齐 Resource Segment 与 Conflict 服务端闭环，复用 P1 的 `Work
 - 确认 Planned 会创建 Actual 并写 `WorkSegmentSource`；部分确认会取消原 Planned 并生成未覆盖的剩余 Planned 子段。Segment 操作不会改变 Task、Node、Milestone 或 Termination 状态。
 - Conflict 扫描使用半开区间 `[startAt, endAt)` 和 `v1|kind|personId|startAt|endAt|sortedSegmentIds` 稳定 fingerprint。重复扫描不会重复创建；冲突消失会置为 `RESOLVED`；`ignoredUntil` 到期后仍命中会重新打开。
 - 当前启用 `ALLOCATION_OVER_LIMIT`、`MISSING_ALLOCATION`、`HIGH_PRIORITY_OVERLAP`、`LEAD_ROLE_OVERLAP`、`REVISION_OVERLAP` 和 `ACTUAL_OVERLOAD`。`UNAVAILABLE_TIME` 枚举保留但未扫描，因为当前没有可授权、可维护的人员不可用时间模型。
-- Conflict 查看允许涉及本人、相关 Task 可见者和范围内 Resource Manager/Team Admin；处理、忽略和应用建议仅限 System Admin、范围内 Resource Manager/Team Admin，或所有关联 Task 都由其 OWN 的 Task Owner。`previewConflictSuggestion` 不写库，`applyConflictSuggestion` 必须显式 `confirmApply=true` 并复核 Segment `updatedAt`。
+- Conflict 查看允许涉及本人、相关 Task 可见者和范围内 Resource Manager/Team Admin；处理、忽略、预览和应用建议仅限 System Admin、覆盖全部关联 Task 的范围内 Resource Manager/Team Admin，或所有关联 Task 都由其 OWN 的 Task Owner。普通只读用户即使能看到部分关联 Segment，也不能取得隐藏 Segment 的建议、ID、时间或版本。Conflict 列表和详情返回逐操作 capability，但 mutation 仍会独立执行服务端授权；`previewConflictSuggestion` 不写库，`applyConflictSuggestion` 必须显式 `confirmApply=true` 并复核 Segment `updatedAt`。
 - `resource-queries.ts` 提供 Segment 列表、详情、change history，以及 Conflict 列表、详情和关联 Segment 解释；详情查询使用 `segmentReadableWhere(actor)` 或 Conflict readable 条件防止枚举不可读对象。
 
 `scripts/cron.ts` 每 10 分钟运行 `scanSegmentTransitions`，把到期 Planned 推到 `PENDING_CONFIRMATION` 并写 `segment_confirmation_due`，把已开始且未结束的 Planned 置为 `IN_PROGRESS` 并写审计；该扫描不会自动生成 Actual。每 15 分钟运行 `scanResourceConflictsForDefaultWindow`，带运行中保护，只写冲突记录、站内通知和 `channel=project-management` outbox，不调整 Segment。
