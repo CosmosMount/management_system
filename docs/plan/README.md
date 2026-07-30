@@ -8,7 +8,7 @@
 - 代码基线：当前工作树和实际测试；2026-07-28 清理基线与各阶段 handoff 仅用于历史审计。
 - 现有技术栈：Next.js 16、React 19、TypeScript、Prisma 7、PostgreSQL、Auth.js、飞书、通知 outbox、Playwright。
 - 前端 UX 基线：`project-management-frontend-design-v1.0/README.md` 与 01 至 12。
-- 当前仓库状态：P0、P1、P2/P3 服务端主体已实现；`345b5b0` 已加入首批 `/progress` 卡片/列表页面和真实项目管理 notification channel adapter；采购、反馈、共享身份、附件和统一飞书通知基础设施继续运行。
+- 当前仓库状态：P0、P1、P2/P3 服务端主体已实现；S1 已通过 `87635a5b`、`bb72c469`、`414d14f4`、`8d0e494` 完成 P5-R01～R05 服务端重新关单；`345b5b0` 已加入首批 `/progress` 卡片/列表页面和真实项目管理 notification channel adapter；采购、反馈、共享身份、附件和统一飞书通知基础设施继续运行。P5-12/P5-13 的 cron 运维与规模性能仍计划在 S9 完成。
 
 本计划只定义重构实施，不代表这些功能已经实现。执行时每个阶段必须以实际合并的代码、迁移、测试和更新后的正式文档为准。
 
@@ -18,9 +18,22 @@
 - **计划**：目标已经冻结，但尚未完成代码、测试和独立审查门禁。
 - **延期**：明确不进入本轮 S0–S10，不能用临时客户端逻辑变相实现。
 
-P5 handoff `handoffs/2026-07-29-p5-resource-segment-conflict-server-closure.md` 由 `2499952` 记录，描述的是实现提交 `e0317cc` 的时点。其“`/progress` 为占位页”“adapter 未启用”是历史事实；后续 `345b5b0` 已落地 adapter 和首批 UI。该 UI 仍只是基线接入：统一 `TimeCanvas`/`TimeAgenda`、Task Composer、个人时间线、待我处理、Tag 管理以及前端 v1.0 的 Task/资源/首页完成态均为**计划**。
+P5 handoff `handoffs/2026-07-29-p5-resource-segment-conflict-server-closure.md` 由 `2499952` 记录，描述的是实现提交 `e0317cc` 在 2026-07-29 01:00 CST 的历史快照。其“`/progress` 为占位页”“adapter 未启用”是当时事实；后续 `345b5b0` 已落地 adapter 和首批 UI，`f96ddd37` 随后冻结前端 v1.0 与 S0–S10 执行基线，S1 又以 `87635a5b` 至 `8d0e494` 对 P5-R01～R05 做了当前关单。该 UI 仍只是基线接入：统一 `TimeCanvas`/`TimeAgenda`、Task Composer、个人时间线、待我处理、Tag 管理以及前端 v1.0 的 Task/资源/首页完成态均为**计划**。
 
-### 1.2 冲突时的来源优先级
+### 1.2 S1/P5 关单证据
+
+| 工作包 | 当前事实与关单提交 |
+|---|---|
+| P5-R01 | 已实现，`87635a5b`；preview 与处理同权，Conflict 返回逐操作 capability，部分可见对象不泄露隐藏 Segment 或处理文本。 |
+| P5-R02 / P5-R03 | 已实现，二者由同一提交 `bb72c469` 关单；guarded transition、固定行锁顺序、person 级 transaction advisory lock、首次 fingerprint、reopen 和 scanner/人工处理竞争均有回归。 |
+| P5-R04 | 已实现，`414d14f4`；人工解决/apply 使用真实服务端 actor，scanner 使用“系统”，ignore 不误报解决，Revision 通知使用切换后的 Current Plan；31 天 merge 与缺失 Allocation 完整解释已在此前并发关单回归中受保护。 |
+| P5-R05 | 已实现，`8d0e494`；收口真实 100 条末项 stale 全回滚、来源关系、stale apply 和并发回归，并补 Playwright 飞书外联 fail-closed 与 callback 身份隔离。 |
+
+R05 在最终提交前的实际归档结果为：`npm run check` 通过；三个受影响 spec 在 desktop 与 Pixel 5 双视口共 `62/62`；`npm run build` 通过；全量 E2E 为 `326 passed`、30 条既有条件性 skip、`0 failed`；`strace` 定向集为 `16/16`，未发生 DNS 流量、非回环 INET 连接或 Feishu/Lark/Prisma checkpoint 外联。
+
+S1 完成只表示 P5-R01～R05 的服务端安全、并发、不变量与回归重新关单。原 P5 的 P5-12/P5-13（cron 跨实例运维、checkpoint/增量与每日完整扫描、100k Segment 规模性能和索引报告）仍属于 S9；S3–S8 的 TimeCanvas/TimeAgenda 及各前端完成态仍为计划，因此不得把 S1 完成扩写为整个 P5 或 TimeCanvas UI 已完成。
+
+### 1.3 冲突时的来源优先级
 
 1. 当前代码、schema、migration 和实际测试。
 2. P0 ADR、`15-P0规则冻结与安全基线关单.md`、D-001 至 D-013。
@@ -99,7 +112,9 @@ flowchart TD
   S9 --> S10["S10 发布准备与 UAT 证据"]
 ```
 
-原 P0–P8 继续表示领域建设阶段和历史 WBS；S0–S10 是当前剩余工作的执行与关单顺序，不能把二者的状态混为一谈。详细阶段映射见 `11-实施阶段与团队分工.md`，任务卡见 `12-可执行任务清单WBS.md`，需求映射见 `14-需求追踪矩阵.md`。
+原 P0–P8 继续表示领域建设阶段和历史 WBS；S0–S10 是当前实际执行与关单顺序，不能把二者的状态混为一谈。详细阶段映射见 `11-实施阶段与团队分工.md`，任务卡见 `12-可执行任务清单WBS.md`，需求映射见 `14-需求追踪矩阵.md`。
+
+当前关单状态：S0 已由 `f96ddd37` 冻结执行基线，S1 已由 `87635a5b`、`bb72c469`、`414d14f4`、`8d0e494` 完成；S2–S10 仍为计划。S1 不包含 P5-12/P5-13，后者仍在 S9。
 
 推荐完整团队为 1 名产品负责人、1 名技术负责人、2 名后端、2 名前端、1 名测试、0.5 名 DBA/运维、0.5 名安全/代码审查。原 8-11 周与单人 18-25 周是重构初始估算，不是 S0–S10 的重新承诺；当前排期必须基于剩余工作和实际团队重新估算。
 

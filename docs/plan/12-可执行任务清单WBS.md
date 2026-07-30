@@ -110,19 +110,23 @@
 
 ### P5 重新关单工作包
 
-`2499952` 中的 handoff 是 `e0317cc` 时点的历史证据。P5-R01 至 P5-R05 均纳入 S1 计划；S9 只处理 P5-12/P5-13 的 cron 运维和性能，不跨阶段保留同一并发缺口。本次并发关单 commit 的范围同时覆盖 WBS P5-R02 与 P5-R03：`transition` guarded update、scanner/人工处理竞争、person 级 transaction advisory lock、fingerprint 首次竞争与 reopen。两个 WBS ID 仍分别保留用于需求追踪，但不再把它们误解为两个独立提交；两项已由本并发关单提交覆盖，并已通过独立 QA（`npm run check`、四文件双视口 104/104、关键 13 标题三轮 39/39）和独立 reviewer 审查（无新 actionable issue）。P5-R04 中操作者与 Current Plan 的通知准确性仍是独立后续工作包，不纳入该并发关单 commit；本次关单不表示 P5-R04、P5-R05 或整个 S1 已完成。
+`2499952` 中的 handoff 是 `e0317cc` 在 2026-07-29 01:00 CST 的历史快照；`345b5b0` 是后续 notification adapter 与首批 UI，`f96ddd37` 冻结了再次关单的执行基线。S1 现已完成 P5-R01～R05：R01=`87635a5b`，R02/R03=`bb72c469`（同一提交），R04=`414d14f4`，R05=`8d0e494`。R04 中 merge 31 天与缺失 Allocation 回归随 `bb72c469` 先落地，操作者与 Current Plan 通知由 `414d14f4` 最终关闭。R02/R03 的既有归档记录为 `npm run check`、四个 spec 双视口 `104/104`、关键 13 标题三轮 `39/39`；R01 以 Conflict 权限/capability 定向回归、R04 以三份受影响 Playwright spec 的通过归档和当前全量回归取证，不补造各自未留档的测试数字。
+
+R05 是最终安全与回归关单：真实 100 条末项 stale 对 Segment/change/audit/outbox 全回滚、完整来源关系、stale apply 及 scan/reopen/transition 等并发用例已进入当前回归；`8d0e494` 又补齐 Playwright 飞书外联 fail-closed、Prisma checkpoint 禁用和 callback 身份隔离。最终实际结果只有以下一套：`npm run check` 通过；`tests/feishu-delivery-guard.spec.ts`、`tests/feishu-procurement-confirm-card.spec.ts`、`tests/business-flows.spec.ts` 双视口 `62/62`；`npm run build` 通过；全量 E2E `326 passed`、30 条既有条件性 skip、`0 failed`；`strace` 定向集 `16/16`，无 DNS 流量、非回环 INET 连接或 Feishu/Lark/Prisma checkpoint 外联。
+
+S1 完成不等于原 P5 全部完成。P5-12/P5-13 的 cron 跨实例运维、checkpoint/增量与每日完整扫描、100k Segment 性能和索引报告仍明确留在 S9；S3–S8 的 TimeCanvas/TimeAgenda 与页面完成态也仍为计划。
 
 | ID | 工作 | Owner | Review | 依赖 | 交付与测试 | 状态 |
 |---|---|---|---|---|---|---|
-| P5-R01 | 收紧 suggestion preview 隐私与 Conflict capability | BE-B | SEC/TL | P5-10/11 | 隐藏 Segment/只读用户/允许拒绝测试 | 计划（S1） |
-| P5-R02 | 并发关单 commit（与 P5-R03 同一提交）：transition guarded update 与 scanner/人工处理竞争控制 | BE-B | TL/DBA | P5-09/10 | 并发无重复 change/audit/outbox | 已实现（本并发关单提交） |
-| P5-R03 | 并发关单 commit（与 P5-R02 同一提交）：person 级 transaction advisory lock、fingerprint 首次竞争与 reopen | BE-B | DBA/QA | P5-09 | 数据库级 person 互斥/首次并发/reopen 测试 | 已实现（本并发关单提交） |
-| P5-R04 | 补 merge 31 天、缺失 Allocation、操作者和 Current Plan 通知不变量 | BE-A/BE-B | TL/QA | P3/P5 | 规则/通知 payload 回归 | 计划（S1） |
-| P5-R05 | 补真实 100 条回滚、来源、stale apply 和并发回归 | QA/BE-B | TL/SEC | P5-R01~04 | P5 定向 + 全量 E2E | 计划（S1） |
+| P5-R01 | 收紧 suggestion preview 隐私与 Conflict capability | BE-B | SEC/TL | P5-10/11 | 隐藏 Segment/只读用户/允许拒绝/capability 测试 | 已实现（`87635a5b`） |
+| P5-R02 | 并发关单（与 P5-R03 同一提交）：transition guarded update 与 scanner/人工处理竞争控制 | BE-B | TL/DBA | P5-09/10 | 并发无重复 change/audit/outbox | 已实现（`bb72c469`） |
+| P5-R03 | 并发关单（与 P5-R02 同一提交）：person 级 transaction advisory lock、fingerprint 首次竞争与 reopen | BE-B | DBA/QA | P5-09 | 数据库级 person 互斥/首次并发/reopen 测试 | 已实现（`bb72c469`，同 R02） |
+| P5-R04 | 补 merge 31 天、缺失 Allocation、操作者和 Current Plan 通知不变量 | BE-A/BE-B | TL/QA | P3/P5 | 31 天/完整解释/人工与系统 actor/新 Current Plan payload 回归 | 已实现（`414d14f4`） |
+| P5-R05 | 补真实 100 条回滚、来源、stale apply、并发及测试外联安全回归 | QA/BE-B | TL/SEC | P5-R01~04 | P5 定向 + 双视口 + build + 全量 E2E + strace | 已实现（`8d0e494`） |
 
 ## P6 Resource UI 与通知
 
-`345b5b0` 已落地本次 P4/P6 的首批接入基线：`/progress` 四卡片总览、Task 列表、纵向卡片 Task 工作台、表单/卡片资源页、资源冲突中心、站内通知中心和项目管理 notification channel adapter。该状态不等于 P4/P6 已关闭；TimeCanvas/TimeAgenda、单页 Composer、个人时间线、待办、Tag、通知偏好和完成态页面仍按 S3–S9 实施。
+`345b5b0` 已落地本次 P4/P6 的首批接入基线：`/progress` 四卡片总览、Task 列表、纵向卡片 Task 工作台、表单/卡片资源页、资源冲突中心、站内通知中心和项目管理 notification channel adapter。该状态不等于 P4/P6 已关闭；TimeCanvas/TimeAgenda、单页 Composer、个人时间线、待办、Tag、通知偏好和完成态页面仍按 S3–S8 实施，S9 只负责性能、无障碍、运维和正式文档关单。
 
 | ID | 工作 | Owner | Review | 依赖 | 交付与测试 | PD |
 |---|---|---|---|---|---|---:|
@@ -169,12 +173,12 @@
 
 ## 当前 S0–S10 执行工作包
 
-以下是剩余 P4–P8 的实际执行顺序。阶段状态必须在代码、测试、两轮独立审查和文档证据齐全后才能由“计划”改为“已实现”。
+以下是 P4–P8 的实际执行顺序与当前关单状态。阶段状态必须在代码、测试、独立审查和文档证据齐全后才能由“计划”改为“已实现”。
 
 | 阶段 | 工作包 | 关键交付 | 映射 WBS | 状态 |
 |---|---|---|---|---|
-| S0 | 基线与追踪矩阵 | 前端 ADR、handoff/345b5b0 时序、计划冲突消除；移动残留 `.next` 到 `.tmp/next-cache-stale-*` 后建立当前检查基线 | P4–P8 协调 | 计划 |
-| S1 | P5 重新关单 | P5-R01~R05；含 person 级 transaction advisory lock 和首次 fingerprint 竞争关单 | P5-03~11 | 计划 |
+| S0 | 基线与追踪矩阵 | 前端 ADR、handoff/345b5b0 时序、计划冲突消除；移动残留 `.next` 到 `.tmp/next-cache-stale-*` 后建立当前检查基线 | P4–P8 协调 | 已实现（`f96ddd37`） |
+| S1 | P5 重新关单 | P5-R01~R05；含 person 级 transaction advisory lock、首次 fingerprint、通知不变量和最终安全回归 | P5-03~11（不含 P5-12/13） | 已实现（`87635a5b`～`8d0e494`） |
 | S2 | 计划/画布服务端契约 | S2-01~S2-05：计划编辑、Active 可变字段、聚合查询/预览、安全 DTO、错误码与查询上限 | P2/P3/P5/P6-01 | 计划 |
 | S3 | Shell 与只读画布 | 左侧导航、TimeCanvas/TimeAgenda、时间数学、`@tanstack/react-virtual`、四种只读模式 | P4-01/04/05,P6-02/03 | 计划 |
 | S4 | Segment 画布交互 | Pointer Events brush/drag/resize、键盘/Inspector、全 mutation、stale、批量全成全败；不引入 dnd-kit/日期库 | P5-02~06,P6-04 | 计划 |
@@ -184,6 +188,8 @@
 | S8 | 驾驶舱与通知 | Dashboard、`/progress/approvals`、Tag、偏好、deadline/retention/integrity cron | P4-09,P6-06~11 | 计划 |
 | S9 | 性能与运维 | cron 跨实例全局互斥、checkpoint、增量扫描 + 每日完整扫描、100k fixture、p95、无障碍、正式文档 | P5-12/13,P7-09 | 计划 |
 | S10 | 发布准备与 UAT 证据 | 空库/快照演练、恢复、全回归、安全、runbook、四方签字 | P7/P8 | 计划 |
+
+S1 的“已实现”仅关闭上述 P5-R01～R05。P5-12/P5-13 仍在 S9，S3–S8 前端阶段仍全部为计划；不得据此把整个 P5 或 TimeCanvas UI 标记为完成。
 
 ### S2 服务端契约子任务
 
