@@ -842,9 +842,19 @@ test("反馈可由普通用户创建回复，并由管理员关闭", async ({
     .toBe(2);
 
   await loginAsAdminUser(context, baseURL);
+  const adminSessionResponse = await context.request.get("/api/auth/session");
+  expect(adminSessionResponse.ok()).toBe(true);
+  await expect(adminSessionResponse.json()).resolves.toMatchObject({
+    user: {
+      openId: fixtures.adminOpenId,
+      name: "Playwright 管理员",
+    },
+  });
   await page.goto(`/feedback?selected=${feedbackId}`, {
     waitUntil: "networkidle",
   });
+  await expect(page.getByText("反馈清单")).toBeVisible();
+  await expect(page.getByRole("link", { name: "管理员面板" })).toBeVisible();
   await expect(page.getByText(body).last()).toBeVisible();
   const feedbackDetailHeader = page
     .getByText("反馈详情")

@@ -1,5 +1,17 @@
 import "dotenv/config";
 import { defineConfig, devices } from "@playwright/test";
+import { randomUUID } from "node:crypto";
+import path from "node:path";
+import {
+  installPlaywrightFeishuEgressGuard,
+  PLAYWRIGHT_FEISHU_EGRESS_GUARD_ENV,
+  PLAYWRIGHT_FEISHU_EGRESS_ORIGINAL_NODE_OPTIONS_ENV,
+  PLAYWRIGHT_FEISHU_EGRESS_PROBE_OUTPUT_ENV,
+  PLAYWRIGHT_FEISHU_EGRESS_PROBE_ROLE_ENV,
+  PLAYWRIGHT_FEISHU_EGRESS_RUN_ID_ENV,
+  PLAYWRIGHT_FEISHU_EGRESS_SERVER_PROBE_PATH,
+  withPlaywrightFeishuEgressGuardNodeOptions,
+} from "./scripts/playwright-feishu-egress-guard.mjs";
 
 const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:3002";
 const parsedBaseUrl = new URL(baseURL);
@@ -46,6 +58,14 @@ delete process.env.CONFIRM_SEND_FEISHU;
 process.env.DATABASE_URL = testDatabaseUrl;
 process.env.PLAYWRIGHT_DATABASE_URL = testDatabaseUrl;
 process.env.NOTIFICATION_DELIVERY_DISABLED = "true";
+process.env[PLAYWRIGHT_FEISHU_EGRESS_GUARD_ENV] = "true";
+process.env[PLAYWRIGHT_FEISHU_EGRESS_ORIGINAL_NODE_OPTIONS_ENV] ??= "";
+process.env[PLAYWRIGHT_FEISHU_EGRESS_RUN_ID_ENV] ??= randomUUID();
+process.env.NODE_OPTIONS = withPlaywrightFeishuEgressGuardNodeOptions(
+  process.env.NODE_OPTIONS,
+  path.join(process.cwd(), "scripts", "playwright-feishu-egress-guard.mjs"),
+);
+installPlaywrightFeishuEgressGuard();
 
 export default defineConfig({
   testDir: "./tests",
@@ -70,6 +90,12 @@ export default defineConfig({
       PLAYWRIGHT_CONFIRM_RECREATE_DB:
         new URL(testDatabaseUrl).pathname.replace(/^\//, ""),
       NOTIFICATION_DELIVERY_DISABLED: "true",
+      [PLAYWRIGHT_FEISHU_EGRESS_GUARD_ENV]: "true",
+      [PLAYWRIGHT_FEISHU_EGRESS_PROBE_OUTPUT_ENV]: path.join(
+        process.cwd(),
+        PLAYWRIGHT_FEISHU_EGRESS_SERVER_PROBE_PATH,
+      ),
+      [PLAYWRIGHT_FEISHU_EGRESS_PROBE_ROLE_ENV]: "server",
       FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES:
         process.env.FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES?.trim() || "李棋轩",
     },

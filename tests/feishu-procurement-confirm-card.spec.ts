@@ -120,7 +120,7 @@ test("飞书完成报销卡片回调可将订单标记为已完成", async () =>
     select: {
       id: true,
       status: true,
-      initiator: { select: { openId: true } },
+      initiator: { select: { openId: true, unionId: true } },
     },
   });
 
@@ -135,11 +135,13 @@ test("飞书完成报销卡片回调可将订单标记为已完成", async () =>
       },
     });
   }
+  expect(order.initiator.unionId).toBeTruthy();
 
   const result = await handleFeishuCardAction(
     {
       operator: {
-        open_id: order.initiator.openId,
+        open_id: "ou_playwright_approval_bot_operator",
+        union_id: order.initiator.unionId ?? undefined,
         name: "Playwright 普通用户",
       },
       action: {

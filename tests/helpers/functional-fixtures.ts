@@ -16,8 +16,11 @@ import { storagePathToAbsolute } from "../../lib/upload-paths";
 const SESSION_COOKIE_NAME = "authjs.session-token";
 const TEST_PREFIX = "PW全功能";
 const FALLBACK_NORMAL_OPEN_ID = "ou_playwright_liqixuan";
+const FALLBACK_NORMAL_UNION_ID = "on_playwright_liqixuan";
 const FALLBACK_ADMIN_OPEN_ID = "ou_playwright_admin";
+const FALLBACK_ADMIN_UNION_ID = "on_playwright_admin";
 const FALLBACK_OTHER_OPEN_ID = "ou_playwright_other";
+const FALLBACK_OTHER_UNION_ID = "on_playwright_other";
 const FALLBACK_NORMAL_NAME = "李棋轩";
 const FALLBACK_ADMIN_NAME = "Playwright 管理员";
 const FALLBACK_OTHER_NAME = "Playwright 旁观者";
@@ -90,27 +93,38 @@ export async function prepareFunctionalFixtures(
       where: { openId: normalOpenId },
       update: {
         name: FALLBACK_NORMAL_NAME,
+        unionId: FALLBACK_NORMAL_UNION_ID,
         signaturePath: NORMAL_SIGNATURE_PUBLIC_PATH,
       },
       create: {
         openId: normalOpenId,
+        unionId: FALLBACK_NORMAL_UNION_ID,
         name: FALLBACK_NORMAL_NAME,
         signaturePath: NORMAL_SIGNATURE_PUBLIC_PATH,
       },
     }),
     prisma.user.upsert({
       where: { openId: otherOpenId },
-      update: { name: FALLBACK_OTHER_NAME },
-      create: { openId: otherOpenId, name: FALLBACK_OTHER_NAME },
+      update: {
+        name: FALLBACK_OTHER_NAME,
+        unionId: FALLBACK_OTHER_UNION_ID,
+      },
+      create: {
+        openId: otherOpenId,
+        unionId: FALLBACK_OTHER_UNION_ID,
+        name: FALLBACK_OTHER_NAME,
+      },
     }),
     prisma.user.upsert({
       where: { openId: adminOpenId },
       update: {
         name: FALLBACK_ADMIN_NAME,
+        unionId: FALLBACK_ADMIN_UNION_ID,
         signaturePath: ADMIN_SIGNATURE_PUBLIC_PATH,
       },
       create: {
         openId: adminOpenId,
+        unionId: FALLBACK_ADMIN_UNION_ID,
         name: FALLBACK_ADMIN_NAME,
         signaturePath: ADMIN_SIGNATURE_PUBLIC_PATH,
       },
@@ -286,12 +300,14 @@ export async function loginAsNormalUser(
   baseURL: string | undefined,
   auth: AuthMaterial,
 ) {
-  await context.clearCookies();
   if (auth.cookies && auth.cookies.length > 0) {
-    await context.addCookies(normalizeCookiesForBaseUrl(auth.cookies, baseURL));
+    await replaceContextSessionCookies(
+      context,
+      normalizeCookiesForBaseUrl(auth.cookies, baseURL),
+    );
     return;
   }
-  await context.addCookies([
+  await replaceContextSessionCookies(context, [
     await createSessionCookie(auth.openId, auth.name, baseURL),
   ]);
 }
@@ -300,8 +316,7 @@ export async function loginAsAdminUser(
   context: BrowserContext,
   baseURL: string | undefined,
 ) {
-  await context.clearCookies();
-  await context.addCookies([
+  await replaceContextSessionCookies(context, [
     await createSessionCookie(
       FALLBACK_ADMIN_OPEN_ID,
       FALLBACK_ADMIN_NAME,
@@ -314,8 +329,7 @@ export async function loginAsOtherUser(
   context: BrowserContext,
   baseURL: string | undefined,
 ) {
-  await context.clearCookies();
-  await context.addCookies([
+  await replaceContextSessionCookies(context, [
     await createSessionCookie(
       FALLBACK_OTHER_OPEN_ID,
       FALLBACK_OTHER_NAME,
@@ -329,10 +343,23 @@ export async function loginAsTestUser(
   baseURL: string | undefined,
   user: { openId: string; name: string },
 ) {
-  await context.clearCookies();
-  await context.addCookies([
+  await replaceContextSessionCookies(context, [
     await createSessionCookie(user.openId, user.name, baseURL),
   ]);
+}
+
+async function replaceContextSessionCookies(
+  context: BrowserContext,
+  cookies: Cookie[],
+) {
+  await Promise.all(
+    context
+      .pages()
+      .filter((page) => !page.isClosed())
+      .map((page) => page.goto("about:blank", { waitUntil: "load" })),
+  );
+  await context.clearCookies();
+  await context.addCookies(cookies);
 }
 
 export async function expectHealthyPage(page: Page) {
