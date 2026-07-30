@@ -1,0 +1,287 @@
+import {
+  absoluteDateTimeSchema,
+  idSchema,
+} from "@/lib/project-management/validations/lifecycle";
+import {
+  standaloneTimeCanvasScopeKindValues,
+  taskScopedTimeCanvasScopeKind,
+  taskTimeCanvasGrouping,
+  timeCanvasGroupByValues,
+  taskPriorityValues,
+  taskStatusValues,
+  workSegmentStatusValues,
+  workSegmentTypeValues,
+} from "@/lib/project-management/types/contract-values";
+import { addStructuredProjectManagementIssue } from "@/lib/project-management/validations/issues";
+import { z } from "zod";
+
+export const MAX_TIME_CANVAS_RANGE_DAYS = 366;
+export const MAX_TIME_CANVAS_FILTER_IDS = 50;
+export const DEFAULT_TIME_CANVAS_ROW_LIMIT = 25;
+export const MAX_TIME_CANVAS_ROW_LIMIT = 50;
+export const DEFAULT_PEOPLE_PAGE_LIMIT = 25;
+export const MAX_PEOPLE_PAGE_LIMIT = 50;
+export const MAX_TIME_CANVAS_VISIBLE_SEGMENTS = 5_000;
+
+// Producers count VISIBLE Segment records after authorization filtering and reject instead of truncating.
+export const timeCanvasVisibleSegmentCountSchema = z
+  .number({ message: "可见 Segment 数量不正确" })
+  .int("可见 Segment 数量不正确")
+  .min(0, "可见 Segment 数量不正确")
+  .superRefine((visibleSegmentCount, ctx) => {
+    if (visibleSegmentCount > MAX_TIME_CANVAS_VISIBLE_SEGMENTS) {
+      addStructuredProjectManagementIssue({
+        ctx,
+        code: "QUERY_LIMIT_EXCEEDED",
+        message: "授权过滤后的可见 Segment 不能超过 5000 条，禁止静默截断",
+      });
+    }
+  });
+
+const MAX_TIME_CANVAS_RANGE_MS =
+  MAX_TIME_CANVAS_RANGE_DAYS * 24 * 60 * 60 * 1_000;
+const MAX_SEGMENT_RANGE_MS = 31 * 24 * 60 * 60 * 1_000;
+
+const timeCanvasRowCursorSchema = z
+  .string({ message: "画布行分页游标格式不正确" })
+  .trim()
+  .min(1, "画布行分页游标格式不正确")
+  .max(500, "画布行分页游标格式不正确")
+  .optional();
+
+const optionCursorSchema = z
+  .string({ message: "分页游标格式不正确" })
+  .trim()
+  .min(1, "分页游标格式不正确")
+  .max(500, "分页游标格式不正确")
+  .optional();
+
+const querySchema = z
+  .string({ message: "搜索内容格式不正确" })
+  .trim()
+  .max(200, "搜索内容过长")
+  .optional();
+
+function idListSchema(label: string, enforceFrozenLimit = true) {
+  return z
+    .array(idSchema, { message: `${label}列表格式不正确` })
+    .optional()
+    .default([])
+    .superRefine((ids, ctx) => {
+      if (enforceFrozenLimit && ids.length > MAX_TIME_CANVAS_FILTER_IDS) {
+        addStructuredProjectManagementIssue({
+          ctx,
+          code: "QUERY_LIMIT_EXCEEDED",
+          message: `${label}最多选择 50 个`,
+        });
+      }
+      if (new Set(ids).size !== ids.length) {
+        ctx.addIssue({ code: "custom", message: `${label}不能重复选择` });
+      }
+    });
+}
+
+const peoplePageLimitSchema = z
+  .number({ message: "人员分页数量不正确" })
+  .int("人员分页数量不正确")
+  .min(1, "人员分页数量不正确")
+  .optional()
+  .default(DEFAULT_PEOPLE_PAGE_LIMIT)
+  .superRefine((limit, ctx) => {
+    if (limit > MAX_PEOPLE_PAGE_LIMIT) {
+      addStructuredProjectManagementIssue({
+        ctx,
+        code: "QUERY_LIMIT_EXCEEDED",
+        message: "人员分页数量不能超过 50",
+      });
+    }
+  });
+
+const timeCanvasRowLimitSchema = z
+  .number({ message: "画布行分页数量不正确" })
+  .int("画布行分页数量不正确")
+  .min(1, "画布行分页数量不正确")
+  .optional()
+  .default(DEFAULT_TIME_CANVAS_ROW_LIMIT)
+  .superRefine((limit, ctx) => {
+    if (limit > MAX_TIME_CANVAS_ROW_LIMIT) {
+      addStructuredProjectManagementIssue({
+        ctx,
+        code: "QUERY_LIMIT_EXCEEDED",
+        message: "画布行分页数量不能超过 50",
+      });
+    }
+  });
+
+const optionPageLimitSchema = z
+  .number({ message: "分页数量不正确" })
+  .int("分页数量不正确")
+  .min(1, "分页数量不正确")
+  .optional()
+  .default(25)
+  .superRefine((limit, ctx) => {
+    if (limit > 50) {
+      addStructuredProjectManagementIssue({
+        ctx,
+        code: "QUERY_LIMIT_EXCEEDED",
+        message: "分页数量不能超过 50",
+      });
+    }
+  });
+
+export const timeCanvasScopeSchema = z.discriminatedUnion("kind", [
+  z
+    .object({ kind: z.literal(taskScopedTimeCanvasScopeKind), taskId: idSchema })
+    .strict(),
+  z.object({ kind: z.enum(standaloneTimeCanvasScopeKindValues) }).strict(),
+]);
+
+const timeCanvasRangeFields = {
+  rangeStart: absoluteDateTimeSchema("请选择带时区的有效范围开始时间"),
+  rangeEnd: absoluteDateTimeSchema("请选择带时区的有效范围结束时间"),
+} as const;
+
+function validateHalfOpenRange(
+  input: { rangeStart: Date; rangeEnd: Date },
+  ctx: z.RefinementCtx,
+) {
+  if (
+    !(input.rangeStart instanceof Date) ||
+    !(input.rangeEnd instanceof Date)
+  ) {
+    return;
+  }
+  if (input.rangeEnd <= input.rangeStart) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["rangeEnd"],
+      message: "范围结束时间必须晚于开始时间，区间采用 [start, end)",
+    });
+    return;
+  }
+  if (input.rangeEnd.getTime() - input.rangeStart.getTime() > MAX_TIME_CANVAS_RANGE_MS) {
+    addStructuredProjectManagementIssue({
+      ctx,
+      code: "QUERY_LIMIT_EXCEEDED",
+      path: ["rangeEnd"],
+      message: "时间范围不能超过 366 天",
+    });
+  }
+}
+
+export const getTimeCanvasDataInputSchema = z
+  .object({
+    scope: timeCanvasScopeSchema,
+    ...timeCanvasRangeFields,
+    personIds: idListSchema("Person"),
+    taskIds: idListSchema("Task"),
+    tagIds: idListSchema("Tag"),
+    nodeIds: idListSchema("Node", false),
+    types: z.array(z.enum(workSegmentTypeValues)).optional().default([]),
+    statuses: z.array(z.enum(workSegmentStatusValues)).optional().default([]),
+    groupBy: z.enum(timeCanvasGroupByValues),
+    includeTaskAnchors: z.boolean().optional().default(true),
+    includeActual: z.boolean().optional().default(true),
+    includeBusyBlocks: z.boolean().optional().default(false),
+    includeConflicts: z.boolean().optional().default(false),
+    cursor: timeCanvasRowCursorSchema,
+    rowLimit: timeCanvasRowLimitSchema,
+  })
+  .strict()
+  .superRefine((input, ctx) => {
+    validateHalfOpenRange(input, ctx);
+    if (input.groupBy === taskTimeCanvasGrouping && input.includeBusyBlocks) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["includeBusyBlocks"],
+        message: "Busy 只允许在按人员分组的画布中返回",
+      });
+    }
+  });
+
+export const searchPeopleInputSchema = z
+  // Visibility and ACTIVE status are server-enforced and not caller-selectable.
+  .object({
+    query: querySchema,
+    cursor: optionCursorSchema,
+    limit: peoplePageLimitSchema,
+  })
+  .strict();
+
+export const searchTaskOptionsInputSchema = z
+  .object({
+    query: querySchema,
+    statuses: z.array(z.enum(taskStatusValues)).optional().default([]),
+    tagIds: idListSchema("Tag"),
+    mine: z.boolean().optional().default(false),
+    cursor: optionCursorSchema,
+    limit: optionPageLimitSchema,
+  })
+  .strict();
+
+export const listTagOptionsInputSchema = z
+  .object({
+    query: querySchema,
+    includeArchived: z.boolean().optional().default(false),
+    cursor: optionCursorSchema,
+    limit: optionPageLimitSchema,
+  })
+  .strict();
+
+export const previewSegmentPlacementInputSchema = z
+  .object({
+    segmentId: idSchema.optional(),
+    personId: idSchema,
+    startAt: absoluteDateTimeSchema("请选择带时区的有效开始时间"),
+    endAt: absoluteDateTimeSchema("请选择带时区的有效结束时间"),
+    allocation: z
+      .number({ message: "投入比例格式不正确" })
+      .gt(0, "投入比例必须大于 0")
+      .max(100, "投入比例不能超过 100")
+      .nullable()
+      .optional(),
+    taskId: z.union([idSchema, z.null()]).optional(),
+    nodeId: z.union([idSchema, z.null()]).optional(),
+    priority: z.enum(taskPriorityValues).optional(),
+  })
+  .strict()
+  .superRefine((input, ctx) => {
+    if (input.startAt instanceof Date && input.endAt instanceof Date) {
+      if (input.endAt <= input.startAt) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["endAt"],
+          message: "结束时间必须晚于开始时间，区间采用 [start, end)",
+        });
+      } else if (
+        input.endAt.getTime() - input.startAt.getTime() >
+        MAX_SEGMENT_RANGE_MS
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["endAt"],
+          message: "单条投入记录最长 31 天",
+        });
+      }
+    }
+    if (input.nodeId && !input.taskId) {
+      addStructuredProjectManagementIssue({
+        ctx,
+        code: "ASSOCIATION_INVALID",
+        path: ["nodeId"],
+        message: "关联 Node 时必须同时关联 Task",
+      });
+    }
+  });
+
+export type GetTimeCanvasDataInput = z.infer<
+  typeof getTimeCanvasDataInputSchema
+>;
+export type SearchPeopleInput = z.infer<typeof searchPeopleInputSchema>;
+export type SearchTaskOptionsInput = z.infer<
+  typeof searchTaskOptionsInputSchema
+>;
+export type ListTagOptionsInput = z.infer<typeof listTagOptionsInputSchema>;
+export type PreviewSegmentPlacementInput = z.infer<
+  typeof previewSegmentPlacementInputSchema
+>;

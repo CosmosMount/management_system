@@ -1,8 +1,10 @@
 import { logger } from "@/lib/logger";
 import {
   ProjectManagementServiceError,
+  serializeProjectManagementAuthoritativeDtoForServiceError,
   toProjectManagementServiceError,
   type ProjectManagementErrorCode,
+  type ProjectManagementAuthoritativeDto,
   type ProjectManagementFieldErrors,
 } from "@/lib/project-management/application/errors";
 
@@ -17,6 +19,7 @@ export type ProjectManagementActionFailure = {
     code: ProjectManagementErrorCode;
     message: string;
     fieldErrors?: ProjectManagementFieldErrors;
+    current?: ProjectManagementAuthoritativeDto;
   };
 };
 
@@ -82,9 +85,13 @@ export async function runProjectManagementAction<T>({
 }
 
 function serializeServiceError(error: ProjectManagementServiceError) {
+  const current = serializeProjectManagementAuthoritativeDtoForServiceError(
+    error,
+  );
   return {
     code: error.code,
     message: error.message,
     ...(error.fieldErrors ? { fieldErrors: error.fieldErrors } : {}),
+    ...(current === undefined ? {} : { current }),
   };
 }

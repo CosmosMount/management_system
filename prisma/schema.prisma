@@ -571,6 +571,7 @@ model TaskPlanVersion {
   revisionNodeId      String?           @unique
   revisionNode        RevisionNode?     @relation("RevisionTargetPlanVersion", fields: [revisionNodeId], references: [id], onDelete: SetNull)
   reason              String            @default("")
+  plannedStartAt      DateTime?         @db.Timestamptz(6)
   createdByAccountId  String
   createdBy           Account           @relation("PlanVersionCreatedBy", fields: [createdByAccountId], references: [id], onDelete: Restrict)
   activatedAt         DateTime?         @db.Timestamptz(6)

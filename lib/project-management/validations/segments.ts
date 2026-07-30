@@ -1,50 +1,23 @@
+import {
+  resourceConflictKindValues,
+  resourceConflictSeverityValues,
+  resourceConflictStatusValues,
+  taskPriorityValues,
+  workSegmentRoleValues,
+  workSegmentStatusValues,
+  workSegmentTypeValues,
+} from "@/lib/project-management/types/contract-values";
 import { z } from "zod";
 
-export const workSegmentTypeValues = ["PLANNED", "ACTUAL"] as const;
-export const workSegmentStatusValues = [
-  "PLANNED",
-  "IN_PROGRESS",
-  "PENDING_CONFIRMATION",
-  "CONFIRMED",
-  "CANCELLED",
-] as const;
-export const workSegmentRoleValues = [
-  "OWNER",
-  "LEAD",
-  "DEVELOPER",
-  "DESIGNER",
-  "REVIEWER",
-  "SUPPORT",
-  "OBSERVER",
-  "CUSTOM",
-] as const;
-export const taskPriorityValues = [
-  "CRITICAL",
-  "HIGH",
-  "MEDIUM",
-  "LOW",
-] as const;
-export const resourceConflictStatusValues = [
-  "OPEN",
-  "ACKNOWLEDGED",
-  "RESOLVED",
-  "IGNORED",
-] as const;
-export const resourceConflictKindValues = [
-  "ALLOCATION_OVER_LIMIT",
-  "MISSING_ALLOCATION",
-  "HIGH_PRIORITY_OVERLAP",
-  "LEAD_ROLE_OVERLAP",
-  "UNAVAILABLE_TIME",
-  "REVISION_OVERLAP",
-  "ACTUAL_OVERLOAD",
-] as const;
-export const resourceConflictSeverityValues = [
-  "LOW",
-  "MEDIUM",
-  "HIGH",
-  "CRITICAL",
-] as const;
+export {
+  resourceConflictKindValues,
+  resourceConflictSeverityValues,
+  resourceConflictStatusValues,
+  taskPriorityValues,
+  workSegmentRoleValues,
+  workSegmentStatusValues,
+  workSegmentTypeValues,
+};
 
 const MAX_SEGMENT_DAYS = 31;
 

@@ -1,40 +1,23 @@
 import { TEAM_OPTIONS, TECH_GROUP_OPTIONS } from "@/lib/constants";
+import {
+  milestoneReviewDecisionValues,
+  revisionApprovalModeValues,
+  taskMemberRoleValues,
+  taskPriorityValues,
+  terminationOutcomeValues,
+} from "@/lib/project-management/types/contract-values";
+import { addStructuredProjectManagementIssue } from "@/lib/project-management/validations/issues";
 import { z } from "zod";
 
-export const taskPriorityValues = [
-  "CRITICAL",
-  "HIGH",
-  "MEDIUM",
-  "LOW",
-] as const;
+export {
+  milestoneReviewDecisionValues,
+  revisionApprovalModeValues,
+  taskMemberRoleValues,
+  taskPriorityValues,
+  terminationOutcomeValues,
+};
 
-export const taskMemberRoleValues = [
-  "OWNER",
-  "LEAD",
-  "MEMBER",
-  "REVIEWER",
-  "VIEWER",
-] as const;
-
-export const revisionApprovalModeValues = [
-  "DIRECT_BY_OWNER",
-  "REVIEW_REQUIRED",
-] as const;
-
-export const milestoneReviewDecisionValues = [
-  "APPROVED",
-  "REJECTED",
-  "REVISION_REQUIRED",
-] as const;
-
-export const terminationOutcomeValues = [
-  "SUCCESS",
-  "FAILED",
-  "CANCELLED",
-  "TIMEOUT",
-] as const;
-
-const idSchema = z
+export const idSchema = z
   .string({ message: "对象 ID 格式不正确" })
   .trim()
   .uuid("对象 ID 格式不正确");
@@ -47,7 +30,7 @@ const optionalText = (max = 4_000) =>
     .max(max, "内容过长")
     .optional()
     .default("");
-const requiredDate = (message: string) =>
+export const requiredDate = (message: string) =>
   z
     .union(
       [
@@ -69,6 +52,13 @@ const requiredDate = (message: string) =>
       ],
       { error: message },
     );
+
+export const absoluteDateTimeSchema = (message: string) =>
+  z
+    .string({ message })
+    .trim()
+    .datetime({ offset: true, message })
+    .transform((value) => new Date(value));
 
 const strictDateStringPattern =
   /^(\d{4})-(\d{2})-(\d{2})(?:T([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d)(?:\.(\d{1,3}))?)?(Z|[+-](?:[01]\d|2[0-3]):[0-5]\d))?$/;
@@ -104,6 +94,16 @@ export const terminationDraftSchema = z.object({
   businessDescription: optionalText(2_000),
 });
 
+export const s2MilestoneDraftSchema = milestoneDraftSchema.extend({
+  expectedCompletedAt: absoluteDateTimeSchema(
+    "请选择带时区的有效预期完成时间",
+  ),
+});
+
+export const s2TerminationDraftSchema = terminationDraftSchema.extend({
+  plannedAt: absoluteDateTimeSchema("请选择带时区的有效计划结束时间"),
+});
+
 export const taskMemberInputSchema = z.object({
   personId: idSchema,
   role: z.enum(taskMemberRoleValues, { message: "成员角色不正确" }),
@@ -121,20 +121,27 @@ export const createTaskDraftInputSchema = z
       .default("MEDIUM"),
     tagIds: z
       .array(idSchema, { message: "Tag 列表格式不正确" })
+      .max(50, "Tag 数量不能超过 50 个")
       .optional()
       .default([]),
     members: z
       .array(taskMemberInputSchema, { message: "成员列表格式不正确" })
       .min(1, "至少添加一名 Task 成员"),
     milestones: z
-      .array(milestoneDraftSchema, { message: "Milestone 列表格式不正确" })
+      .array(s2MilestoneDraftSchema, { message: "Milestone 列表格式不正确" })
       .min(1, "至少添加一个 Milestone")
       .max(200, "单个计划最多 200 个节点"),
-    termination: terminationDraftSchema,
+    termination: s2TerminationDraftSchema,
+    plannedStartAt: absoluteDateTimeSchema("请选择带时区的有效计划开始时间"),
     revisionApprovalMode: z
       .enum(revisionApprovalModeValues, { message: "修订审批策略不正确" })
       .optional()
       .default("REVIEW_REQUIRED"),
+    allowSelfReview: z
+      .boolean({ message: "自审设置不正确" })
+      .optional()
+      .default(false),
+    relatedTaskId: z.union([idSchema, z.null()]).optional().default(null),
     idempotencyKey: requiredText("缺少请求幂等键", 120),
   })
   .superRefine((input, ctx) => {
@@ -150,13 +157,16 @@ export const createTaskDraftInputSchema = z
       "同一成员不能重复添加相同角色",
       ctx,
     );
-    if (!input.members.some((member) => member.role === "OWNER")) {
+    if (
+      input.members.filter((member) => member.role === "OWNER").length !== 1
+    ) {
       ctx.addIssue({
         code: "custom",
         path: ["members"],
-        message: "至少需要一名 OWNER",
+        message: "必须且只能有一名 OWNER",
       });
     }
+    validatePlanChronology(input, ctx);
   });
 
 export const activateTaskInputSchema = z.object({
@@ -177,12 +187,23 @@ export const revisionDraftInputSchema = z.object({
   revisedFromNodeId: idSchema,
   reason: requiredText("请输入修订原因", 2_000),
   replacementMilestones: z
-    .array(milestoneDraftSchema, { message: "替换 Milestone 列表格式不正确" })
+    .array(s2MilestoneDraftSchema, { message: "替换 Milestone 列表格式不正确" })
     .max(200, "单个计划最多 200 个节点")
     .optional()
     .default([]),
-  termination: terminationDraftSchema,
+  plannedStartAt: absoluteDateTimeSchema("请选择带时区的有效计划开始时间"),
+  termination: s2TerminationDraftSchema,
   idempotencyKey: requiredText("缺少请求幂等键", 120),
+}).superRefine((input, ctx) => {
+  validatePlanChronology(
+    {
+      plannedStartAt: input.plannedStartAt,
+      milestones: input.replacementMilestones,
+      termination: input.termination,
+    },
+    ctx,
+    "replacementMilestones",
+  );
 });
 
 const reviewEvidenceBaseSchema = z.object({
@@ -343,5 +364,55 @@ function ensureUniqueValues(
 ) {
   if (new Set(values).size !== values.length) {
     ctx.addIssue({ code: "custom", path: [path], message });
+  }
+}
+
+export function validatePlanChronology(
+  input: {
+    plannedStartAt: Date;
+    milestones: Array<{ expectedCompletedAt: Date }>;
+    termination: { plannedAt: Date };
+  },
+  ctx: z.RefinementCtx,
+  milestonesPath = "milestones",
+) {
+  if (
+    !(input.plannedStartAt instanceof Date) ||
+    !(input.termination.plannedAt instanceof Date) ||
+    input.milestones.some(
+      (milestone) => !(milestone.expectedCompletedAt instanceof Date),
+    )
+  ) {
+    return;
+  }
+  let previousAt: Date | null = null;
+  input.milestones.forEach((milestone, index) => {
+    if (milestone.expectedCompletedAt < input.plannedStartAt) {
+      addStructuredProjectManagementIssue({
+        ctx,
+        code: "PLAN_CHRONOLOGY_INVALID",
+        path: [milestonesPath, index, "expectedCompletedAt"],
+        message: "Milestone 不得早于计划开始时间",
+      });
+    }
+    if (previousAt && milestone.expectedCompletedAt < previousAt) {
+      addStructuredProjectManagementIssue({
+        ctx,
+        code: "PLAN_CHRONOLOGY_INVALID",
+        path: [milestonesPath, index, "expectedCompletedAt"],
+        message: "Milestone 时间必须按顺序非递减",
+      });
+    }
+    previousAt = milestone.expectedCompletedAt;
+  });
+
+  const finalBoundary = previousAt ?? input.plannedStartAt;
+  if (input.termination.plannedAt < finalBoundary) {
+    addStructuredProjectManagementIssue({
+      ctx,
+      code: "PLAN_CHRONOLOGY_INVALID",
+      path: ["termination", "plannedAt"],
+      message: "计划结束时间不得早于最后一个 Milestone",
+    });
   }
 }
