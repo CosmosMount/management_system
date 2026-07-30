@@ -22,6 +22,7 @@ import {
   stateConflictError,
   validationError,
 } from "@/lib/project-management/application/errors";
+import { lockTaskNodeAssociationsTx } from "@/lib/project-management/application/task-node-association-lock";
 import {
   batchCreatePlannedSegmentsInputSchema,
   cancelPlannedSegmentInputSchema,
@@ -123,6 +124,17 @@ export async function createWorkSegment(
   const parsed = createWorkSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
     const refreshedActor = await refreshActorTx(tx, actor);
+    await assertSegmentReferenceTx(tx, {
+      actor: refreshedActor,
+      personId: parsed.personId,
+      type: parsed.type,
+      taskId: parsed.taskId ?? null,
+      nodeId: parsed.nodeId ?? null,
+    });
+    await lockTaskNodeAssociationsTx(
+      tx,
+      parsed.taskId ? [parsed.taskId] : [],
+    );
     const created = await createWorkSegmentTx(tx, refreshedActor, parsed);
     return {
       segment: toWorkSegmentDto(created),
@@ -138,6 +150,21 @@ export async function batchCreatePlannedSegments(
   const parsed = batchCreatePlannedSegmentsInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
     const refreshedActor = await refreshActorTx(tx, actor);
+    for (const segment of parsed.segments) {
+      await assertSegmentReferenceTx(tx, {
+        actor: refreshedActor,
+        personId: segment.personId,
+        type: "PLANNED",
+        taskId: segment.taskId ?? null,
+        nodeId: segment.nodeId ?? null,
+      });
+    }
+    await lockTaskNodeAssociationsTx(
+      tx,
+      parsed.segments.flatMap((segment) =>
+        segment.taskId ? [segment.taskId] : [],
+      ),
+    );
     const created: SegmentForMutation[] = [];
     for (const segment of parsed.segments) {
       created.push(
@@ -161,6 +188,17 @@ export async function createActualSegment(
   const parsed = createActualSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
     const refreshedActor = await refreshActorTx(tx, actor);
+    await assertSegmentReferenceTx(tx, {
+      actor: refreshedActor,
+      personId: parsed.personId,
+      type: "ACTUAL",
+      taskId: parsed.taskId ?? null,
+      nodeId: parsed.nodeId ?? null,
+    });
+    await lockTaskNodeAssociationsTx(
+      tx,
+      parsed.taskId ? [parsed.taskId] : [],
+    );
     const created = await createActualSegmentTx(tx, refreshedActor, parsed);
     return {
       segment: toWorkSegmentDto(created),
@@ -176,8 +214,32 @@ export async function updateWorkSegment(
   const parsed = updateWorkSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
     const refreshedActor = await refreshActorTx(tx, actor);
+    const preflightSegment = await loadSegmentForMutationTx(tx, parsed.segmentId);
+    assertSegmentVisible(refreshedActor, preflightSegment);
+    assertCanManageSegment(refreshedActor, preflightSegment);
+    const preflightTaskId = Object.hasOwn(parsed, "taskId")
+      ? parsed.taskId ?? null
+      : preflightSegment.taskId;
+    const preflightNodeId = Object.hasOwn(parsed, "nodeId")
+      ? parsed.nodeId ?? null
+      : preflightSegment.nodeId;
+    if (Object.hasOwn(parsed, "taskId") || Object.hasOwn(parsed, "nodeId")) {
+      await assertSegmentReferenceTx(tx, {
+        actor: refreshedActor,
+        personId: preflightSegment.personId,
+        type: preflightSegment.type,
+        taskId: preflightTaskId,
+        nodeId: preflightNodeId,
+      });
+    }
+    const associationLocks = await lockSegmentNodeAssociationTasksTx(tx, {
+      segmentIds: [parsed.segmentId],
+      prospectiveTaskIds: parsed.taskId ? [parsed.taskId] : [],
+    });
     await lockWorkSegmentTx(tx, parsed.segmentId);
     const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
+    assertSegmentAssociationLocatorUnchanged(preflightSegment, segment);
+    assertNodeAssociationTaskLocked(associationLocks, segment);
     assertSegmentVisible(refreshedActor, segment);
     assertCanManageSegment(refreshedActor, segment);
     assertExpectedUpdatedAt(segment, parsed.expectedUpdatedAt);
@@ -340,8 +402,35 @@ export async function splitPlannedSegment(
   const parsed = splitPlannedSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
     const refreshedActor = await refreshActorTx(tx, actor);
+    const preflightSegment = await loadSegmentForMutationTx(tx, parsed.segmentId);
+    assertSegmentVisible(refreshedActor, preflightSegment);
+    assertCanManageSegment(refreshedActor, preflightSegment);
+    for (const part of parsed.parts) {
+      if (!Object.hasOwn(part, "taskId") && !Object.hasOwn(part, "nodeId")) {
+        continue;
+      }
+      await assertSegmentReferenceTx(tx, {
+        actor: refreshedActor,
+        personId: preflightSegment.personId,
+        type: "PLANNED",
+        taskId: Object.hasOwn(part, "taskId")
+          ? part.taskId ?? null
+          : preflightSegment.taskId,
+        nodeId: Object.hasOwn(part, "nodeId")
+          ? part.nodeId ?? null
+          : preflightSegment.nodeId,
+      });
+    }
+    const associationLocks = await lockSegmentNodeAssociationTasksTx(tx, {
+      segmentIds: [parsed.segmentId],
+      prospectiveTaskIds: parsed.parts.flatMap((part) =>
+        part.taskId ? [part.taskId] : [],
+      ),
+    });
     await lockWorkSegmentTx(tx, parsed.segmentId);
     const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
+    assertSegmentAssociationLocatorUnchanged(preflightSegment, segment);
+    assertNodeAssociationTaskLocked(associationLocks, segment);
     assertSegmentVisible(refreshedActor, segment);
     assertCanManageSegment(refreshedActor, segment);
     assertExpectedUpdatedAt(segment, parsed.expectedUpdatedAt);
@@ -447,9 +536,23 @@ export async function mergePlannedSegments(
       parsed.segments.map((segment) => segment.segmentId),
       "不能重复合并同一条投入记录",
     );
+    const preflightSegments = await loadSegmentsForPreflightTx(
+      tx,
+      parsed.segments.map((segment) => segment.segmentId),
+    );
+    for (const segment of preflightSegments) {
+      assertSegmentVisible(refreshedActor, segment);
+      assertCanManageSegment(refreshedActor, segment);
+    }
+    const associationLocks = await lockSegmentNodeAssociationTasksTx(tx, {
+      segmentIds: parsed.segments.map((segment) => segment.segmentId),
+    });
     const segments = await lockAndLoadSegmentsTx(
       tx,
       parsed.segments.map((segment) => segment.segmentId),
+    );
+    const preflightById = new Map(
+      preflightSegments.map((segment) => [segment.id, segment] as const),
     );
     const expectedById = new Map(
       parsed.segments.map((segment) => [
@@ -458,6 +561,10 @@ export async function mergePlannedSegments(
       ]),
     );
     for (const segment of segments) {
+      const preflightSegment = preflightById.get(segment.id);
+      if (!preflightSegment) throw notFoundError();
+      assertSegmentAssociationLocatorUnchanged(preflightSegment, segment);
+      assertNodeAssociationTaskLocked(associationLocks, segment);
       assertSegmentVisible(refreshedActor, segment);
       assertCanManageSegment(refreshedActor, segment);
       assertExpectedUpdatedAt(segment, expectedById.get(segment.id));
@@ -583,8 +690,33 @@ export async function confirmPlannedSegment(
   const parsed = confirmPlannedSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
     const refreshedActor = await refreshActorTx(tx, actor);
+    const preflightSegment = await loadSegmentForMutationTx(tx, parsed.segmentId);
+    assertSegmentVisible(refreshedActor, preflightSegment);
+    assertCanManageSegment(refreshedActor, preflightSegment);
+    if (
+      Object.hasOwn(parsed.actual, "taskId") ||
+      Object.hasOwn(parsed.actual, "nodeId")
+    ) {
+      await assertSegmentReferenceTx(tx, {
+        actor: refreshedActor,
+        personId: preflightSegment.personId,
+        type: "ACTUAL",
+        taskId: Object.hasOwn(parsed.actual, "taskId")
+          ? parsed.actual.taskId ?? null
+          : preflightSegment.taskId,
+        nodeId: Object.hasOwn(parsed.actual, "nodeId")
+          ? parsed.actual.nodeId ?? null
+          : preflightSegment.nodeId,
+      });
+    }
+    const associationLocks = await lockSegmentNodeAssociationTasksTx(tx, {
+      segmentIds: [parsed.segmentId],
+      prospectiveTaskIds: parsed.actual.taskId ? [parsed.actual.taskId] : [],
+    });
     await lockWorkSegmentTx(tx, parsed.segmentId);
     const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
+    assertSegmentAssociationLocatorUnchanged(preflightSegment, segment);
+    assertNodeAssociationTaskLocked(associationLocks, segment);
     assertSegmentVisible(refreshedActor, segment);
     assertCanManageSegment(refreshedActor, segment);
 
@@ -643,8 +775,33 @@ export async function partiallyConfirmSegment(
   const parsed = partiallyConfirmSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
     const refreshedActor = await refreshActorTx(tx, actor);
+    const preflightSegment = await loadSegmentForMutationTx(tx, parsed.segmentId);
+    assertSegmentVisible(refreshedActor, preflightSegment);
+    assertCanManageSegment(refreshedActor, preflightSegment);
+    if (
+      Object.hasOwn(parsed.actual, "taskId") ||
+      Object.hasOwn(parsed.actual, "nodeId")
+    ) {
+      await assertSegmentReferenceTx(tx, {
+        actor: refreshedActor,
+        personId: preflightSegment.personId,
+        type: "ACTUAL",
+        taskId: Object.hasOwn(parsed.actual, "taskId")
+          ? parsed.actual.taskId ?? null
+          : preflightSegment.taskId,
+        nodeId: Object.hasOwn(parsed.actual, "nodeId")
+          ? parsed.actual.nodeId ?? null
+          : preflightSegment.nodeId,
+      });
+    }
+    const associationLocks = await lockSegmentNodeAssociationTasksTx(tx, {
+      segmentIds: [parsed.segmentId],
+      prospectiveTaskIds: parsed.actual.taskId ? [parsed.actual.taskId] : [],
+    });
     await lockWorkSegmentTx(tx, parsed.segmentId);
     const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
+    assertSegmentAssociationLocatorUnchanged(preflightSegment, segment);
+    assertNodeAssociationTaskLocked(associationLocks, segment);
     assertSegmentVisible(refreshedActor, segment);
     assertCanManageSegment(refreshedActor, segment);
     assertExpectedUpdatedAt(segment, parsed.expectedUpdatedAt);
@@ -696,8 +853,38 @@ export async function relinkPlannedSegment(
   const parsed = relinkPlannedSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
     const refreshedActor = await refreshActorTx(tx, actor);
+    const preflightSegment = await loadSegmentForMutationTx(tx, parsed.segmentId);
+    assertSegmentVisible(refreshedActor, preflightSegment);
+    assertCanManageSegment(refreshedActor, preflightSegment);
+    const preflightTaskId =
+      parsed.taskId === null
+        ? null
+        : parsed.taskId !== undefined
+          ? parsed.taskId
+          : preflightSegment.taskId;
+    const preflightNodeId =
+      parsed.nodeId === null
+        ? null
+        : parsed.nodeId !== undefined
+          ? parsed.nodeId
+          : preflightSegment.nodeId;
+    if (parsed.taskId !== undefined || parsed.nodeId !== undefined) {
+      await assertSegmentReferenceTx(tx, {
+        actor: refreshedActor,
+        personId: preflightSegment.personId,
+        type: "PLANNED",
+        taskId: preflightTaskId,
+        nodeId: preflightNodeId,
+      });
+    }
+    const associationLocks = await lockSegmentNodeAssociationTasksTx(tx, {
+      segmentIds: [parsed.segmentId],
+      prospectiveTaskIds: parsed.taskId ? [parsed.taskId] : [],
+    });
     await lockWorkSegmentTx(tx, parsed.segmentId);
     const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
+    assertSegmentAssociationLocatorUnchanged(preflightSegment, segment);
+    assertNodeAssociationTaskLocked(associationLocks, segment);
     assertSegmentVisible(refreshedActor, segment);
     assertCanManageSegment(refreshedActor, segment);
     assertExpectedUpdatedAt(segment, parsed.expectedUpdatedAt);
@@ -1459,6 +1646,61 @@ async function lockAndLoadSegmentsTx(tx: PrismaTx, segmentIds: string[]) {
   });
   if (segments.length !== uniqueIds.length) throw notFoundError();
   return segments.sort((left, right) => uniqueIds.indexOf(left.id) - uniqueIds.indexOf(right.id));
+}
+
+async function loadSegmentsForPreflightTx(
+  tx: PrismaTx,
+  segmentIds: string[],
+) {
+  const uniqueIds = [...new Set(segmentIds)].sort();
+  const segments = await tx.workSegment.findMany({
+    where: { id: { in: uniqueIds } },
+    include: segmentInclude,
+  });
+  if (segments.length !== uniqueIds.length) throw notFoundError();
+  return segments.sort(
+    (left, right) => uniqueIds.indexOf(left.id) - uniqueIds.indexOf(right.id),
+  );
+}
+
+async function lockSegmentNodeAssociationTasksTx(
+  tx: PrismaTx,
+  input: {
+    segmentIds: string[];
+    prospectiveTaskIds?: string[];
+  },
+) {
+  const uniqueSegmentIds = [...new Set(input.segmentIds)];
+  const associations = await tx.workSegment.findMany({
+    where: { id: { in: uniqueSegmentIds } },
+    select: { id: true, taskId: true, nodeId: true },
+  });
+  if (associations.length !== uniqueSegmentIds.length) throw notFoundError();
+  return lockTaskNodeAssociationsTx(tx, [
+    ...associations.flatMap((association) =>
+      association.taskId ? [association.taskId] : [],
+    ),
+    ...(input.prospectiveTaskIds ?? []),
+  ]);
+}
+
+function assertNodeAssociationTaskLocked(
+  lockedTaskIds: ReadonlySet<string>,
+  association: { taskId?: string | null; nodeId?: string | null },
+) {
+  if (!association.taskId && !association.nodeId) return;
+  if (association.taskId && lockedTaskIds.has(association.taskId)) return;
+  throw stateConflictError(
+    "投入记录关联在并发操作中已变化，请刷新后重试",
+  );
+}
+
+function assertSegmentAssociationLocatorUnchanged(
+  before: Pick<SegmentForMutation, "taskId" | "nodeId">,
+  after: Pick<SegmentForMutation, "taskId" | "nodeId">,
+) {
+  if (before.taskId === after.taskId && before.nodeId === after.nodeId) return;
+  throw stateConflictError("投入记录关联在并发操作中已变化，请刷新后重试");
 }
 
 async function loadSegmentForMutationTx(

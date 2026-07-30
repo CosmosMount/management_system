@@ -43,7 +43,9 @@ export async function createProjectManagementEventNotificationsTx(
   },
 ) {
   const uniqueRecipients = uniqueRecipientsByAccount(input.recipients);
-  if (uniqueRecipients.length === 0) return { recipientCount: 0 };
+  if (uniqueRecipients.length === 0 && !input.mandatory) {
+    return { recipientCount: 0 };
+  }
 
   const actorName =
     input.actorName ??

@@ -466,6 +466,9 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       replacementMilestones: [
         milestoneInput("调整后 Milestone", "完成新目标", 4),
       ],
+      plannedStartAt: new Date(
+        Date.UTC(2026, 6, 31, 10, 0, 0),
+      ).toISOString(),
       termination: terminationInput(8),
       idempotencyKey: `revision-reject-${randomUUID()}`,
     });
@@ -575,6 +578,9 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       replacementMilestones: [
         milestoneInput("新的当前 Milestone", "完成替代目标", 5),
       ],
+      plannedStartAt: new Date(
+        Date.UTC(2026, 6, 31, 10, 0, 0),
+      ).toISOString(),
       termination: terminationInput(9),
       idempotencyKey: `revision-apply-${randomUUID()}`,
     });
@@ -745,6 +751,9 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         replacementMilestones: [
           milestoneInput("过期修订", "不会生效", 6),
         ],
+        plannedStartAt: new Date(
+          Date.UTC(2026, 6, 31, 10, 0, 0),
+        ).toISOString(),
         termination: terminationInput(10),
         idempotencyKey: `revision-stale-${randomUUID()}`,
       }),
@@ -764,6 +773,9 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       replacementMilestones: [
         milestoneInput("并发后计划", "只有一个审批结果", 5),
       ],
+      plannedStartAt: new Date(
+        Date.UTC(2026, 6, 31, 10, 0, 0),
+      ).toISOString(),
       termination: terminationInput(9),
       idempotencyKey: `revision-race-${randomUUID()}`,
     });
@@ -817,6 +829,9 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       replacementMilestones: [
         milestoneInput("Owner 新计划", "完成 Owner 目标", 3),
       ],
+      plannedStartAt: new Date(
+        Date.UTC(2026, 6, 31, 10, 0, 0),
+      ).toISOString(),
       termination: terminationInput(7),
       idempotencyKey: `revision-direct-${randomUUID()}`,
     });
@@ -1028,6 +1043,7 @@ function taskDraftInput({
         index + 1,
       ),
     ),
+    plannedStartAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
     termination: terminationInput(milestoneCount + 3),
     revisionApprovalMode,
     idempotencyKey,
@@ -1040,7 +1056,7 @@ function milestoneInput(goal: string, criteria: string, daysFromBase: number) {
     completionCriteria: criteria,
     expectedCompletedAt: new Date(
       Date.UTC(2026, 7, daysFromBase, 10, 0, 0),
-    ),
+    ).toISOString(),
     reviewRequirements: "提交文本或链接证据",
     businessDescription: goal,
   };
@@ -1049,7 +1065,9 @@ function milestoneInput(goal: string, criteria: string, daysFromBase: number) {
 function terminationInput(daysFromBase: number) {
   return {
     plannedOutcomeCriteria: "所有 Milestone 完成并完成总结",
-    plannedAt: new Date(Date.UTC(2026, 7, daysFromBase, 10, 0, 0)),
+    plannedAt: new Date(
+      Date.UTC(2026, 7, daysFromBase, 10, 0, 0),
+    ).toISOString(),
     businessDescription: "结束确认",
   };
 }

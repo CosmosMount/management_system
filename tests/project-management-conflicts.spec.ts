@@ -2773,6 +2773,7 @@ async function createActivatedFixture(options: {
       { personId: viewer.person.id, role: "VIEWER" },
     ],
     milestones: [milestoneInput("阶段一", "完成阶段一", 1)],
+    plannedStartAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
     termination: terminationInput(4),
     idempotencyKey: `p5-conflict-task-${randomUUID()}`,
   });
@@ -2818,7 +2819,9 @@ function milestoneInput(goal: string, criteria: string, daysFromBase: number) {
   return {
     goal,
     completionCriteria: criteria,
-    expectedCompletedAt: new Date(Date.UTC(2026, 7, daysFromBase, 10, 0, 0)),
+    expectedCompletedAt: new Date(
+      Date.UTC(2026, 7, daysFromBase, 10, 0, 0),
+    ).toISOString(),
     reviewRequirements: "提交文本或链接证据",
     businessDescription: goal,
   };
@@ -2827,7 +2830,9 @@ function milestoneInput(goal: string, criteria: string, daysFromBase: number) {
 function terminationInput(daysFromBase: number) {
   return {
     plannedOutcomeCriteria: "所有 Milestone 完成并完成总结",
-    plannedAt: new Date(Date.UTC(2026, 7, daysFromBase, 10, 0, 0)),
+    plannedAt: new Date(
+      Date.UTC(2026, 7, daysFromBase, 10, 0, 0),
+    ).toISOString(),
     businessDescription: "结束确认",
   };
 }

@@ -14,6 +14,9 @@ import { prisma } from "@/lib/prisma";
 import {
   assertAuthorized,
   authorize,
+  isSystemAdministrator,
+  ProjectManagementAuthorizationError,
+  taskReadableWhere,
   type AuthorizationTaskResource,
 } from "@/lib/project-management/authorization";
 import { createDomainAuditEventTx } from "@/lib/project-management/audit";
@@ -45,10 +48,18 @@ import {
 } from "@/lib/project-management/validations/lifecycle";
 import {
   notFoundError,
+  planChronologyInvalidError,
   planVersionConflictError,
+  staleTaskError,
   stateConflictError,
   validationError,
 } from "@/lib/project-management/application/errors";
+import {
+  inspectPlanChronology,
+  type PlanChronologyCompatibility,
+  type PlanChronologyIssue,
+} from "@/lib/project-management/domain/plan-chronology";
+import { hashPlanSnapshot } from "@/lib/project-management/application/plan-snapshot";
 
 type PrismaTx = Prisma.TransactionClient;
 
@@ -82,6 +93,7 @@ type TaskForAuthorization = {
   currentPlanVersionId: string;
   activeMilestoneNodeId: string | null;
   lockVersion: number;
+  updatedAt: Date;
   deletedAt: Date | null;
   members: Array<{
     personId: string;
@@ -184,7 +196,8 @@ export async function createTaskDraft(
       };
     }
 
-    await assertCreateTaskReferencesTx(tx, parsed);
+    assertAllowSelfReviewPolicy(refreshedActor, false, parsed.allowSelfReview);
+    await assertCreateTaskReferencesTx(tx, refreshedActor, parsed);
     await tx.$executeRaw`SET CONSTRAINTS ALL DEFERRED`;
 
     const taskId = randomUUID();
@@ -201,6 +214,8 @@ export async function createTaskDraft(
         status: "DRAFT",
         currentPlanVersionId: planVersionId,
         revisionApprovalMode: parsed.revisionApprovalMode,
+        allowSelfReview: parsed.allowSelfReview,
+        relatedTaskId: parsed.relatedTaskId,
         createdByAccountId: refreshedActor.accountId,
       },
     });
@@ -215,6 +230,7 @@ export async function createTaskDraft(
         idempotencyKey: parsed.idempotencyKey,
         creationRequestHash: requestHash,
         snapshotHash: "",
+        plannedStartAt: parsed.plannedStartAt,
       },
     });
     await createPlanNodesTx(tx, {
@@ -226,11 +242,11 @@ export async function createTaskDraft(
       startingSequence: 1,
       carryForward: false,
     });
-    const initialPlanEntries = await loadPlanEntriesTx(tx, planVersionId);
-    validatePlanChain(initialPlanEntries);
+    const initialPlan = await loadPlanForValidationTx(tx, planVersionId);
+    assertAuthoritativePlanValid(initialPlan);
     await tx.taskPlanVersion.update({
       where: { id: planVersionId },
-      data: { snapshotHash: hashPlanEntries(initialPlanEntries) },
+      data: { snapshotHash: hashPlan(initialPlan) },
     });
     await tx.taskMember.createMany({
       data: parsed.members.map((member) => ({
@@ -257,6 +273,9 @@ export async function createTaskDraft(
       after: jsonValue({
         status: "DRAFT",
         currentPlanVersionId: planVersionId,
+        plannedStartAt: parsed.plannedStartAt,
+        relatedTaskId: parsed.relatedTaskId,
+        allowSelfReview: parsed.allowSelfReview,
         milestoneCount: parsed.milestones.length,
         memberCount: parsed.members.length,
         tagCount: parsed.tagIds.length,
@@ -310,14 +329,16 @@ export async function activateTask(
       throw stateConflictError("只有草稿 Task 可以激活");
     }
     if (task.lockVersion !== parsed.expectedLockVersion) {
-      throw stateConflictError();
+      throw staleTaskError(task);
     }
 
     const currentPlan = await loadCurrentPlanEntriesTx(tx, task);
-    validatePlanChain(currentPlan.nodes);
-    if (!task.members.some((member) => member.role === "OWNER")) {
-      throw validationError("至少需要一名 OWNER", {
-        members: ["至少需要一名 OWNER"],
+    assertAuthoritativePlanValid(currentPlan);
+    if (
+      task.members.filter((member) => member.role === "OWNER").length !== 1
+    ) {
+      throw validationError("必须且只能有一名 OWNER", {
+        members: ["必须且只能有一名 OWNER"],
       });
     }
     const firstMilestone = currentPlan.nodes.find(
@@ -351,7 +372,7 @@ export async function activateTask(
       where: { id: task.currentPlanVersionId },
       data: {
         activatedAt: now,
-        snapshotHash: hashPlanEntries(currentPlan.nodes),
+        snapshotHash: hashPlan(currentPlan),
       },
     });
 
@@ -453,7 +474,7 @@ export async function createRevisionDraft(
 
     assertRevisionBaseline(task, parsed);
     const currentPlan = await loadCurrentPlanEntriesTx(tx, task);
-    validatePlanChain(currentPlan.nodes);
+    assertLegacyCurrentPlanUsableAsRepairBase(currentPlan);
     const revisedFromIndex = currentPlan.nodes.findIndex(
       (entry) => entry.nodeId === parsed.revisedFromNodeId,
     );
@@ -494,6 +515,7 @@ export async function createRevisionDraft(
         idempotencyKey: parsed.idempotencyKey,
         creationRequestHash: requestHash,
         snapshotHash: "",
+        plannedStartAt: parsed.plannedStartAt,
       },
     });
     for (const [index, entry] of carriedEntries.entries()) {
@@ -550,11 +572,11 @@ export async function createRevisionDraft(
       startingSequence: carriedEntries.length + 2,
       carryForward: false,
     });
-    const targetEntries = await loadPlanEntriesTx(tx, targetPlanVersionId);
-    validatePlanChain(targetEntries);
+    const targetPlan = await loadPlanForValidationTx(tx, targetPlanVersionId);
+    assertRevisionTargetPlanValid(targetPlan);
     await tx.taskPlanVersion.update({
       where: { id: targetPlanVersionId },
-      data: { snapshotHash: hashPlanEntries(targetEntries) },
+      data: { snapshotHash: hashPlan(targetPlan) },
     });
 
     await createDomainAuditEventTx(tx, {
@@ -570,6 +592,7 @@ export async function createRevisionDraft(
         targetPlanVersionId,
         revisedFromNodeId: revisedFromEntry.nodeId,
         baseTaskLockVersion: task.lockVersion,
+        plannedStartAt: parsed.plannedStartAt,
         replacementMilestoneCount: parsed.replacementMilestones.length,
       }),
       reason: parsed.reason,
@@ -1211,10 +1234,10 @@ export async function confirmTermination(
       throw stateConflictError("只有执行中的 Task 可以确认结束");
     }
     if (task.lockVersion !== parsed.expectedLockVersion) {
-      throw stateConflictError();
+      throw staleTaskError(task);
     }
     const currentPlan = await loadCurrentPlanEntriesTx(tx, task);
-    validatePlanChain(currentPlan.nodes);
+    assertLegacyCurrentPlanUsableAsRepairBase(currentPlan);
     const terminationEntryIndex = currentPlan.nodes.findIndex(
       (entry) => entry.nodeId === termination.nodeId,
     );
@@ -1369,7 +1392,9 @@ async function applyRevisionTx(
 
   await assertRevisionTargetValidTx(tx, task, revision, targetPlanVersionId);
   const baseEntries = await loadPlanEntriesTx(tx, revision.basePlanVersionId);
-  const targetEntries = await loadPlanEntriesTx(tx, targetPlanVersionId);
+  const targetPlan = await loadPlanForValidationTx(tx, targetPlanVersionId);
+  assertRevisionTargetPlanValid(targetPlan);
+  const targetEntries = targetPlan.nodes;
   assertCompletedPrefixUnchanged(baseEntries, targetEntries);
   const revisedFromIndex = baseEntries.findIndex(
     (entry) => entry.nodeId === revision.revisedFromNodeId,
@@ -1411,7 +1436,7 @@ async function applyRevisionTx(
     data: {
       status: "CURRENT",
       activatedAt: now,
-      snapshotHash: hashPlanEntries(targetEntries),
+      snapshotHash: hashPlan(targetPlan),
     },
   });
   if (targetCurrentUpdated.count !== 1) {
@@ -1587,6 +1612,7 @@ async function applyRevisionTx(
 
 async function assertCreateTaskReferencesTx(
   tx: PrismaTx,
+  actor: ProjectManagementActor,
   input: CreateTaskDraftInput,
 ) {
   const personCount = await tx.person.count({
@@ -1609,6 +1635,15 @@ async function assertCreateTaskReferencesTx(
         tagIds: ["Tag 不存在或已归档"],
       });
     }
+  }
+  if (input.relatedTaskId) {
+    const relatedTask = await tx.task.findFirst({
+      where: {
+        AND: [{ id: input.relatedTaskId }, taskReadableWhere(actor)],
+      },
+      select: { id: true },
+    });
+    if (!relatedTask) throw notFoundError();
   }
 }
 
@@ -1707,6 +1742,7 @@ async function loadTaskForAuthorizationTx(
       currentPlanVersionId: true,
       activeMilestoneNodeId: true,
       lockVersion: true,
+      updatedAt: true,
       deletedAt: true,
       members: {
         where: { removedAt: null },
@@ -1803,29 +1839,101 @@ async function loadPlanEntriesTx(
   });
 }
 
-function validatePlanChain(entries: PlanEntry[]) {
-  if (entries.length < 2) {
-    throw validationError("计划至少需要一个 Milestone 和一个 Termination");
-  }
-  entries.forEach((entry, index) => {
-    if (entry.sequence !== index + 1) {
-      throw validationError("计划节点序号必须从 1 连续递增");
-    }
+async function loadPlanForValidationTx(
+  tx: PrismaTx,
+  planVersionId: string,
+): Promise<{ plannedStartAt: Date | null; nodes: PlanEntry[] }> {
+  const plan = await tx.taskPlanVersion.findUnique({
+    where: { id: planVersionId },
+    select: {
+      plannedStartAt: true,
+      nodes: {
+        include: planNodeInclude,
+        orderBy: { sequence: "asc" },
+      },
+    },
   });
-  const milestoneCount = entries.filter(
-    (entry) => entry.node.type === "MILESTONE",
-  ).length;
-  if (milestoneCount < 1) {
-    throw validationError("计划至少需要一个 Milestone");
+  if (!plan) throw stateConflictError("计划版本不存在");
+  return plan;
+}
+
+function assertAuthoritativePlanValid(plan: {
+  plannedStartAt: Date | null;
+  nodes: PlanEntry[];
+}) {
+  assertPlanChronologyValid(plan, "STRICT");
+}
+
+function assertLegacyCurrentPlanUsableAsRepairBase(plan: {
+  plannedStartAt: Date | null;
+  nodes: PlanEntry[];
+}) {
+  assertPlanChronologyValid(plan, "LEGACY_CURRENT_BASE");
+}
+
+function assertRevisionTargetPlanValid(plan: {
+  plannedStartAt: Date | null;
+  nodes: PlanEntry[];
+}) {
+  assertPlanChronologyValid(plan, "LEGACY_CARRIED_PREFIX");
+}
+
+function assertPlanChronologyValid(
+  plan: { plannedStartAt: Date | null; nodes: PlanEntry[] },
+  compatibility: PlanChronologyCompatibility,
+) {
+  const issues = inspectPlanChronology({
+    plannedStartAt: plan.plannedStartAt,
+    nodes: plan.nodes.map((entry) => ({
+      nodeId: entry.nodeId,
+      sequence: entry.sequence,
+      type: entry.node.type,
+      isCarryForward: entry.isCarryForward,
+      expectedCompletedAt: entry.node.milestone?.expectedCompletedAt ?? null,
+      plannedAt: entry.node.termination?.plannedAt ?? null,
+    })),
+  }, compatibility);
+  if (issues.length > 0) {
+    throw planChronologyInvalidError(
+      issues[0]?.message ?? "计划时间顺序不正确",
+      chronologyFieldErrors(issues),
+    );
   }
-  if (entries[entries.length - 1]?.node.type !== "TERMINATION") {
-    throw validationError("计划最后一个节点必须是 Termination");
+}
+
+function chronologyFieldErrors(
+  issues: PlanChronologyIssue[],
+): Record<string, string[]> {
+  const fieldErrors: Record<string, string[]> = {};
+  for (const issue of issues) {
+    fieldErrors[issue.path] = [
+      ...(fieldErrors[issue.path] ?? []),
+      issue.message,
+    ];
   }
+  return fieldErrors;
 }
 
 function assertTaskActiveForPlanChange(task: TaskForAuthorization) {
   if (task.status !== "ACTIVE") {
     throw stateConflictError("只有执行中的 Task 可以修订计划");
+  }
+}
+
+function assertAllowSelfReviewPolicy(
+  actor: ProjectManagementActor,
+  currentValue: boolean,
+  requestedValue: boolean,
+) {
+  if (
+    !currentValue &&
+    requestedValue &&
+    !isSystemAdministrator(actor)
+  ) {
+    throw new ProjectManagementAuthorizationError(
+      "task.update_metadata",
+      "self_review_policy_admin_required",
+    );
   }
 }
 
@@ -1911,8 +2019,8 @@ async function assertRevisionTargetValidTx(
   if (revision.baseTaskLockVersion !== task.lockVersion) {
     throw planVersionConflictError();
   }
-  const targetEntries = await loadPlanEntriesTx(tx, targetPlanVersionId);
-  validatePlanChain(targetEntries);
+  const targetPlan = await loadPlanForValidationTx(tx, targetPlanVersionId);
+  assertRevisionTargetPlanValid(targetPlan);
 }
 
 function assertCompletedPrefixUnchanged(
@@ -2504,42 +2612,42 @@ function hashRequest(operation: string, input: unknown): string {
     .digest("hex");
 }
 
-function hashPlanEntries(entries: PlanEntry[]): string {
-  return createHash("sha256")
-    .update(
-      stableStringify(
-        entries.map((entry) => ({
-          sequence: entry.sequence,
-          nodeId: entry.nodeId,
-          type: entry.node.type,
-          businessDescription: entry.node.businessDescription,
-          milestone: entry.node.milestone
-            ? {
-                goal: entry.node.milestone.goal,
-                completionCriteria: entry.node.milestone.completionCriteria,
-                expectedCompletedAt:
-                  entry.node.milestone.expectedCompletedAt.toISOString(),
-                reviewRequirements: entry.node.milestone.reviewRequirements,
-              }
-            : null,
-          revision: entry.node.revision
-            ? {
-                reason: entry.node.revision.reason,
-                revisedFromNodeId: entry.node.revision.revisedFromNodeId,
-                basePlanVersionId: entry.node.revision.basePlanVersionId,
-              }
-            : null,
-          termination: entry.node.termination
-            ? {
-                plannedOutcomeCriteria:
-                  entry.node.termination.plannedOutcomeCriteria,
-                plannedAt: entry.node.termination.plannedAt.toISOString(),
-              }
-            : null,
-        })),
-      ),
-    )
-    .digest("hex");
+function hashPlan(plan: {
+  plannedStartAt: Date | null;
+  nodes: PlanEntry[];
+}): string {
+  return hashPlanSnapshot({
+    plannedStartAt: plan.plannedStartAt?.toISOString() ?? null,
+    nodes: plan.nodes.map((entry) => ({
+      sequence: entry.sequence,
+      nodeId: entry.nodeId,
+      type: entry.node.type,
+      businessDescription: entry.node.businessDescription,
+      milestone: entry.node.milestone
+        ? {
+            goal: entry.node.milestone.goal,
+            completionCriteria: entry.node.milestone.completionCriteria,
+            expectedCompletedAt:
+              entry.node.milestone.expectedCompletedAt.toISOString(),
+            reviewRequirements: entry.node.milestone.reviewRequirements,
+          }
+        : null,
+      revision: entry.node.revision
+        ? {
+            reason: entry.node.revision.reason,
+            revisedFromNodeId: entry.node.revision.revisedFromNodeId,
+            basePlanVersionId: entry.node.revision.basePlanVersionId,
+          }
+        : null,
+      termination: entry.node.termination
+        ? {
+            plannedOutcomeCriteria:
+              entry.node.termination.plannedOutcomeCriteria,
+            plannedAt: entry.node.termination.plannedAt.toISOString(),
+          }
+        : null,
+    })),
+  });
 }
 
 function stableStringify(value: unknown): string {

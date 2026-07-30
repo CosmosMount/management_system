@@ -57,6 +57,8 @@ P2/P3 Task 生命周期服务和 P5 Segment/Conflict 服务会在同一业务事
 
 既有 Draft `task_assigned` 入队保持 `mandatory=true`。这里的“普通通知”指 `purpose=notification`、`botKind=notification`，不表示 `mandatory=false`；该事件只使用通知机器人，不得路由到 approval bot。S2 的 Active `replaceTaskMembers` 新增/移除/角色变化沿用同一强制成员变化语义：站内 + `mandatory=true` 的 `project-management` outbox，purpose/botKind 仍为 `notification`。
 
+Active 成员强制事件不得因受影响 Person 已停用、Account 已禁用、缺少飞书 identity 或尚无 Account 而消失。只有 Active Account 才写按 Account 的站内记录；Person 已停用但 Account 仍 Active 的 legacy removal 仍保留站内记录。飞书候选只允许 `provider=FEISHU`、`tenantId=default` 且 trim 后非空的 `openId`，不会回退其他 tenant，也不会因最早一条 identity 为空而漏掉同一默认 tenant 的后续合法 identity。无法安全解析飞书目标时仍写 `mandatory=true` durable outbox，并在 payload `context.recipientResolution` 记录 `PERSON_INACTIVE`、`ACCOUNT_DISABLED`、`DEFAULT_FEISHU_IDENTITY_MISSING`、`FEISHU_OPEN_ID_MISSING` 或 `ACCOUNT_MISSING`；outbox 保留空候选而不猜测、替代或直发任何真实收件人。成员业务审计、站内记录和 outbox 与成员差异处于同一事务，任一晚失败全部回滚。
+
 人工调用 `resolveConflict` 或 `applyConflictSuggestion` 时，`resource_conflict_resolved.actorName` 必须在服务端事务内由已认证 actor 对应的 `Person.displayName` 生成，客户端不能提交或覆盖操作人。`ignoreConflict` 只记录忽略状态和人工审计，不把尚未解除的冲突发送为“已解决”；若忽略到期后 scanner 确认冲突已经解除，解决通知的操作人仍为“系统”。scanner/cron 创建、重新打开或自动解决 Conflict 的通知统一显示“系统”，人工与自动来源不能根据客户端字段推断。
 
 Revision 生效事务先把目标 `TaskPlanVersion` 切换为 `CURRENT` 并更新 `Task.currentPlanVersionId`，随后才以更新后的 Task 上下文写 `revision_applied` 和 `segment_association_invalidated`。这两个 payload（包括对应站内通知）中的 `context.currentPlanVersionId` 均指向切换后的 Current Plan Version，不得保留 base/旧 Current Plan；Segment 关联失效通知仍只发给受影响 Segment Person，普通通知机器人用途不变。
