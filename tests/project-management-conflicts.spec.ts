@@ -1623,6 +1623,14 @@ test.describe("project management P5 resource conflict services", () => {
       reason: "短期接受风险",
       ignoredUntil: atHour(20),
     });
+    expect(
+      await prisma.notificationOutbox.count({
+        where: {
+          eventKey: { startsWith: `pm:conflict:resolved:${conflict.id}:` },
+          type: "resource_conflict_resolved",
+        },
+      }),
+    ).toBe(0);
     const ignoredScan = await scanConflictsForPerson({
       personId: fixture.member.person.id,
       startAt: atHour(9),
@@ -1699,11 +1707,22 @@ test.describe("project management P5 resource conflict services", () => {
       select: { status: true },
     });
     expect(resolved.status).toBe("RESOLVED");
-    await expectProjectManagementOutbox(
+    const scannerResolvedPayload = await expectProjectManagementOutbox(
       `pm:conflict:resolved:${conflict.id}:`,
       "resource_conflict_resolved",
       true,
     );
+    expect(scannerResolvedPayload.actorName).toBe("系统");
+    const scannerResolvedInApp =
+      await prisma.inAppNotification.findFirstOrThrow({
+        where: {
+          eventKey: { startsWith: `pm:conflict:resolved:${conflict.id}:` },
+        },
+        select: { payload: true },
+      });
+    expect(
+      (scannerResolvedInApp.payload as Record<string, unknown>).actorName,
+    ).toBe("系统");
     expect(first.segment.id).toBeTruthy();
   });
 
@@ -2011,7 +2030,52 @@ test.describe("project management P5 resource conflict services", () => {
     await resolveConflict(actor(manualFixture.resourceManager), {
       conflictId: manualConflict.id,
       resolutionNote: "明确人工终态",
+      actorName: "客户端伪造操作人",
     });
+    const manualResolvedPayload = await expectProjectManagementOutbox(
+      `pm:conflict:resolved:${manualConflict.id}:`,
+      "resource_conflict_resolved",
+      true,
+    );
+    expect(manualResolvedPayload.actorName).toBe(
+      manualFixture.resourceManager.person.displayName,
+    );
+    const manualResolvedInApp =
+      await prisma.inAppNotification.findFirstOrThrow({
+        where: {
+          eventKey: {
+            startsWith: `pm:conflict:resolved:${manualConflict.id}:`,
+          },
+        },
+        select: { payload: true },
+      });
+    expect(
+      (manualResolvedInApp.payload as Record<string, unknown>).actorName,
+    ).toBe(manualFixture.resourceManager.person.displayName);
+    await resolveConflict(actor(manualFixture.resourceManager), {
+      conflictId: manualConflict.id,
+      resolutionNote: "明确人工终态",
+      actorName: "再次尝试伪造操作人",
+    });
+    expect(
+      await prisma.notificationOutbox.count({
+        where: {
+          eventKey: {
+            startsWith: `pm:conflict:resolved:${manualConflict.id}:`,
+          },
+          type: "resource_conflict_resolved",
+        },
+      }),
+    ).toBe(1);
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: {
+          entityType: "ResourceConflict",
+          entityId: manualConflict.id,
+          action: "pm.conflict.resolve",
+        },
+      }),
+    ).toBe(1);
     const manualRescan = await scanConflictsForPerson({
       personId: manualFixture.member.person.id,
       startAt: atHour(13),
@@ -2155,6 +2219,14 @@ test.describe("project management P5 resource conflict services", () => {
         confirmApply: true,
         proposal,
       },
+    );
+    const appliedPayload = await expectProjectManagementOutbox(
+      `pm:conflict:resolved:${cycle.conflict.id}:`,
+      "resource_conflict_resolved",
+      true,
+    );
+    expect(appliedPayload.actorName).toBe(
+      cycle.fixture.resourceManager.person.displayName,
     );
     await movePlannedSegments(actor(cycle.fixture.member), {
       moves: applied.movedSegments.segments.map((segment) => {
@@ -2386,6 +2458,10 @@ test.describe("project management P5 resource conflict services", () => {
       expect(resolvedOutbox.botKind).toBe("notification");
       expect(JSON.parse(resolvedOutbox.payload)).toMatchObject({
         purpose: "notification",
+        actorName:
+          direction === "scanner-first"
+            ? "系统"
+            : fixture.resourceManager.person.displayName,
       });
       expect(
         await prisma.notificationOutbox.count({
@@ -3105,6 +3181,7 @@ async function expectProjectManagementOutbox(
   expect(row.channel).toBe("project-management");
   expect(row.type).toBe(type);
   expect(row.botKind).toBe("notification");
-  const payload = JSON.parse(row.payload) as { purpose?: string };
+  const payload = JSON.parse(row.payload) as Record<string, unknown>;
   expect(payload.purpose).toBe("notification");
+  return payload;
 }

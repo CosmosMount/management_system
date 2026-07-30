@@ -726,6 +726,58 @@ test.describe("notification outbox channel adapters", () => {
     });
   });
 
+  test("项目管理人工冲突解决卡片显示真实操作人并保持通知机器人用途", async () => {
+    const eventKey = `${EVENT_PREFIX}project-management-manual-conflict-actor`;
+    await enqueueNotification({
+      eventKey,
+      channel: "project-management",
+      botKind: "notification",
+      type: "resource_conflict_resolved",
+      payload: {
+        kind: "resource_conflict_resolved",
+        payloadVersion: 1,
+        purpose: "notification",
+        category: "RESOURCE_CONFLICT",
+        title: "资源冲突已解决",
+        summary: "资源经理已确认并处理投入冲突",
+        actorName: "资源经理王工",
+        taskId: "pm-task-id",
+        taskTitle: "电控调试 Task",
+        entityType: "ResourceConflict",
+        entityId: "pm-conflict-manual",
+        linkPath: "/progress/resources/conflicts?conflictId=pm-conflict-manual",
+        recipientOpenIds: ["ou_outbox_success"],
+        mandatory: false,
+        appOrigin: "http://127.0.0.1:3002",
+        context: { status: "RESOLVED" },
+      },
+    });
+
+    expect(
+      await drainNotificationOutbox(20, { ignoreDeliveryDisabled: true }),
+    ).toBe(1);
+    expect(authAppIds).toEqual(["notification-app"]);
+    expect(directMessageBodies).toHaveLength(1);
+    const rendered = JSON.stringify(
+      JSON.parse(String(directMessageBodies[0]?.content)) as Record<
+        string,
+        unknown
+      >,
+    );
+    expect(rendered).toContain("资源经理王工");
+    expect(rendered).not.toContain("**操作人**：系统");
+    const row = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: { eventKey },
+      include: { recipients: true },
+    });
+    expect(row).toMatchObject({
+      status: "SENT",
+      botKind: "notification",
+      type: "resource_conflict_resolved",
+    });
+    expect(row.recipients).toHaveLength(1);
+  });
+
   test("项目管理 adapter 遵守禁发 guard 且不会把跳过投递标记为成功", async () => {
     const eventKey = `${EVENT_PREFIX}project-management-delivery-disabled`;
     process.env.NOTIFICATION_DELIVERY_DISABLED = "true";

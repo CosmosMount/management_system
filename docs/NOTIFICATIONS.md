@@ -57,9 +57,13 @@ P2/P3 Task 生命周期服务和 P5 Segment/Conflict 服务会在同一业务事
 
 既有 Draft `task_assigned` 入队保持 `mandatory=true`。这里的“普通通知”指 `purpose=notification`、`botKind=notification`，不表示 `mandatory=false`；该事件只使用通知机器人，不得路由到 approval bot。S2 的 Active `replaceTaskMembers` 新增/移除/角色变化沿用同一强制成员变化语义：站内 + `mandatory=true` 的 `project-management` outbox，purpose/botKind 仍为 `notification`。
 
+人工调用 `resolveConflict` 或 `applyConflictSuggestion` 时，`resource_conflict_resolved.actorName` 必须在服务端事务内由已认证 actor 对应的 `Person.displayName` 生成，客户端不能提交或覆盖操作人。`ignoreConflict` 只记录忽略状态和人工审计，不把尚未解除的冲突发送为“已解决”；若忽略到期后 scanner 确认冲突已经解除，解决通知的操作人仍为“系统”。scanner/cron 创建、重新打开或自动解决 Conflict 的通知统一显示“系统”，人工与自动来源不能根据客户端字段推断。
+
+Revision 生效事务先把目标 `TaskPlanVersion` 切换为 `CURRENT` 并更新 `Task.currentPlanVersionId`，随后才以更新后的 Task 上下文写 `revision_applied` 和 `segment_association_invalidated`。这两个 payload（包括对应站内通知）中的 `context.currentPlanVersionId` 均指向切换后的 Current Plan Version，不得保留 base/旧 Current Plan；Segment 关联失效通知仍只发给受影响 Segment Person，普通通知机器人用途不变。
+
 入队 helper 和 adapter 会拒绝 `type/payload.kind` 不一致、payload 结构错误、错误机器人类型和越界审批用途，并对 `recipientOpenIds` 去重。项目管理飞书卡片包含操作人、Task、事件摘要、对象类型、事件时间和最多 6 项上下文；按钮跳转到 payload 的 `linkPath`，没有链接时回到 `/progress`。`approval_request` 使用审批机器人用途；所有普通项目管理事件使用通知机器人，不能把审批机器人作为普通通知 fallback。
 
-P5 事件键保持稳定幂等：`pm:segment:confirmation_due:<segmentId>:<endAt>`、`pm:segment:association_invalidated:<revisionNodeId>`、`pm:conflict:opened:<fingerprint>`、`pm:conflict:opened:<fingerprint>:reopened:<detectedAt>` 和 `pm:conflict:resolved:<conflictId>:<updatedAt>`。Conflict 新增、高严重度重开和扫描解除都只写项目管理 outbox 和站内通知；`scanSegmentTransitions` 会把到期 Planned 推到 `PENDING_CONFIRMATION`、把进行中的 Planned 置为 `IN_PROGRESS`，但不会自动生成 Actual。
+P5 事件键保持稳定幂等：`pm:segment:confirmation_due:<segmentId>:<endAt>`、`pm:segment:association_invalidated:<revisionNodeId>`、`pm:conflict:opened:<fingerprint>`、`pm:conflict:opened:<fingerprint>:reopened:<detectedAt>` 和 `pm:conflict:resolved:<conflictId>:<updatedAt>`。站内通知在业务事件键后追加 `:inapp:<accountId>`，飞书 outbox 追加 `:feishu`；重复扫描或重复提交依赖唯一事件键保持 exactly once，逐收件人失败只重试失败者。Conflict 新增、高严重度重开和扫描解除都只写项目管理 outbox 和站内通知；`scanSegmentTransitions` 会把到期 Planned 推到 `PENDING_CONFIRMATION`、把进行中的 Planned 置为 `IN_PROGRESS`，但不会自动生成 Actual。
 
 ## 飞书统一私信传输层
 

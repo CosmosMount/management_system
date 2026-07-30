@@ -299,7 +299,7 @@ export async function resolveConflict(
       changedSegmentIds: parsed.changedSegmentIds,
       action: "pm.conflict.resolve",
     });
-    await notifyConflictResolvedTx(tx, updated);
+    await notifyConflictResolvedTx(tx, updated, refreshedActor);
     return { conflictId: updated.id, status: updated.status };
   });
 }
@@ -445,7 +445,7 @@ export async function applyConflictSuggestion(
       changedSegmentIds: movedSegments.affectedSegmentIds,
       action: "pm.conflict.apply_suggestion",
     });
-    await notifyConflictResolvedTx(tx, updated);
+    await notifyConflictResolvedTx(tx, updated, refreshedActor);
     return {
       conflictId: updated.id,
       status: updated.status,
@@ -1044,10 +1044,11 @@ async function notifyConflictOpenedTx(
 async function notifyConflictResolvedTx(
   tx: PrismaTx,
   conflict: ConflictForMutation,
+  actor?: ProjectManagementActor,
 ) {
   const recipients = await recipientsForPersonIdsTx(tx, [conflict.personId]);
   await createProjectManagementEventNotificationsTx(tx, {
-    actorName: "系统",
+    actor,
     task: primaryTaskContext(conflict),
     kind: "resource_conflict_resolved",
     category: "RESOURCE_CONFLICT",

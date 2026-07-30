@@ -639,7 +639,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       false,
       false,
     ]);
-    await expectProjectManagementOutbox(
+    const revisionAppliedPayload = await expectProjectManagementOutbox(
       `pm:revision:applied:${revision.revisionNodeId}:feishu`,
       {
         type: "revision_applied",
@@ -647,7 +647,10 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         purpose: "notification",
       },
     );
-    await expectProjectManagementOutbox(
+    expect(jsonRecord(revisionAppliedPayload.context).currentPlanVersionId).toBe(
+      revision.targetPlanVersionId,
+    );
+    const associationInvalidatedPayload = await expectProjectManagementOutbox(
       `pm:segment:association_invalidated:${revision.revisionNodeId}:feishu`,
       {
         type: "segment_association_invalidated",
@@ -655,6 +658,40 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         purpose: "notification",
       },
     );
+    expect(associationInvalidatedPayload.actorName).toBe(
+      fixture.reviewer.person.displayName,
+    );
+    expect(
+      jsonRecord(associationInvalidatedPayload.context).currentPlanVersionId,
+    ).toBe(revision.targetPlanVersionId);
+    expect(
+      jsonRecord(associationInvalidatedPayload.context).currentPlanVersionId,
+    ).not.toBe(fixture.currentPlanVersionId);
+    expect(associationInvalidatedPayload.recipientOpenIds).toEqual([
+      fixture.member.openId,
+    ]);
+    const associationInvalidatedInApp =
+      await prisma.inAppNotification.findUniqueOrThrow({
+        where: {
+          eventKey: `pm:segment:association_invalidated:${revision.revisionNodeId}:inapp:${fixture.member.account.id}`,
+        },
+        select: { payload: true },
+      });
+    expect(
+      jsonRecord(jsonRecord(associationInvalidatedInApp.payload).context)
+        .currentPlanVersionId,
+    ).toBe(revision.targetPlanVersionId);
+    expect(
+      jsonRecord(associationInvalidatedInApp.payload).actorName,
+    ).toBe(fixture.reviewer.person.displayName);
+    expect(
+      await prisma.notificationOutbox.count({
+        where: {
+          eventKey: `pm:segment:association_invalidated:${revision.revisionNodeId}:feishu`,
+          type: "segment_association_invalidated",
+        },
+      }),
+    ).toBe(1);
     expect(
       await prisma.domainAuditEvent.count({
         where: { taskId: fixture.taskId, action: "pm.revision.apply" },

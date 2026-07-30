@@ -1448,6 +1448,10 @@ async function applyRevisionTx(
       activeMilestoneNodeId: true,
     },
   });
+  const taskAfterPlanSwitch = {
+    ...task,
+    currentPlanVersionId: updatedTask.currentPlanVersionId,
+  };
   if (replacedNodeIds.length > 0) {
     const affectedSegments = await tx.workSegment.findMany({
       where: {
@@ -1531,7 +1535,7 @@ async function applyRevisionTx(
     if (affectedSegments.length > 0) {
       await notifySegmentAssociationInvalidatedTx(tx, {
         actor,
-        task,
+        task: taskAfterPlanSwitch,
         revisionNodeId,
         affectedSegments,
       });
@@ -1560,7 +1564,7 @@ async function applyRevisionTx(
   });
   await notifyTaskMembersTx(tx, {
     actor,
-    task,
+    task: taskAfterPlanSwitch,
     kind: "revision_applied",
     category: "REVISION",
     eventKey: `pm:revision:applied:${revisionNodeId}`,
