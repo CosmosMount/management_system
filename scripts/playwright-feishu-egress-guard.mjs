@@ -19,6 +19,8 @@ export const PLAYWRIGHT_FEISHU_EGRESS_PROBE_ROLE_ENV =
   "PLAYWRIGHT_FEISHU_EGRESS_PROBE_ROLE";
 export const PLAYWRIGHT_FEISHU_EGRESS_RUN_ID_ENV =
   "PLAYWRIGHT_FEISHU_EGRESS_RUN_ID";
+export const PLAYWRIGHT_FEISHU_EGRESS_GUARD_PATH_ENV =
+  "PLAYWRIGHT_FEISHU_EGRESS_GUARD_PATH";
 export const PLAYWRIGHT_FEISHU_EGRESS_SERVER_PROBE_PATH =
   ".tmp/playwright-feishu-egress-server-preload.jsonl";
 
@@ -153,10 +155,14 @@ function recordGuardPreloadProbe() {
   const originalNodeOptions =
     process.env[PLAYWRIGHT_FEISHU_EGRESS_ORIGINAL_NODE_OPTIONS_ENV]?.trim() ??
     "";
-  const originalOptionsPreserved =
-    !originalNodeOptions ||
-    nodeOptions === originalNodeOptions ||
-    nodeOptions.startsWith(`${originalNodeOptions} `);
+  const inheritedNodeOptionsStripped = originalNodeOptions.length === 0;
+  const controlledGuardPath =
+    process.env[PLAYWRIGHT_FEISHU_EGRESS_GUARD_PATH_ENV]?.trim() ?? "";
+  if (!controlledGuardPath) {
+    throw new Error(
+      `${PLAYWRIGHT_FEISHU_EGRESS_GUARD_PATH_ENV} is required for guard probe evidence`,
+    );
+  }
   const entrypoint = path.basename(process.argv[1] ?? "");
   const evidence = {
     role,
@@ -166,8 +172,10 @@ function recordGuardPreloadProbe() {
     isNextDevProcess:
       entrypoint === "next" && process.argv.slice(2).includes("dev"),
     guardInstalled: true,
-    guardImportPresent:
-      hasPlaywrightFeishuEgressGuardNodeOption(nodeOptions),
+    guardImportPresent: hasPlaywrightFeishuEgressGuardNodeOption(
+      nodeOptions,
+      controlledGuardPath,
+    ),
     nodeOptionsSentinelPresent: hasNodeOption(
       nodeOptions,
       PLAYWRIGHT_FEISHU_EGRESS_NODE_OPTIONS_SENTINEL,
@@ -175,8 +183,11 @@ function recordGuardPreloadProbe() {
     checkpointDisabled: process.env.CHECKPOINT_DISABLE === "1",
     notificationDeliveryDisabled:
       process.env.NOTIFICATION_DELIVERY_DISABLED === "true",
+    inheritedNodeOptionsStripped,
+    // Legacy probe fields remain for existing consumers; the official runner
+    // always supplies an empty original value instead of preserving it.
     originalNodeOptionsPresent: originalNodeOptions.length > 0,
-    originalNodeOptionsPreserved: originalOptionsPreserved,
+    originalNodeOptionsPreserved: inheritedNodeOptionsStripped,
   };
 
   mkdirSync(path.dirname(outputPath), { recursive: true });
@@ -242,6 +253,15 @@ export function hasPlaywrightFeishuEgressGuardNodeOption(
   );
 }
 
-if (process.env[PLAYWRIGHT_FEISHU_EGRESS_GUARD_ENV] === "true") {
+const automaticGuardPath =
+  process.env[PLAYWRIGHT_FEISHU_EGRESS_GUARD_PATH_ENV]?.trim() ?? "";
+if (
+  process.env[PLAYWRIGHT_FEISHU_EGRESS_GUARD_ENV] === "true" &&
+  automaticGuardPath &&
+  hasPlaywrightFeishuEgressGuardNodeOption(
+    process.env.NODE_OPTIONS,
+    automaticGuardPath,
+  )
+) {
   installPlaywrightFeishuEgressGuard();
 }

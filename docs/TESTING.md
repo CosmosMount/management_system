@@ -63,14 +63,32 @@
 - `.tmp/` 已被 git 忽略，不要把 cookie、storage state 或请求头写入仓库。
 - 默认测试地址为 `http://127.0.0.1:3002`。配置中包含端口保护，禁止默认打到 3000。
 - Playwright 启动的应用服务强制 `NOTIFICATION_DELIVERY_DISABLED=true`，并默认设置 `FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES="李棋轩"`，防止测试期间误发给其他人；业务 outbox 仍保留完整候选收件人，投递层负责拦截。
-- `npm run test:e2e` 会无条件为测试 worker、受控 Next.js 服务及所有 Node/Prisma 后代注入 Prisma 官方 opt-out `CHECKPOINT_DISABLE=1`，禁止测试期间的 Prisma checkpoint 外联；还会通过 `NODE_OPTIONS` 为这些 Node 进程预加载飞书域名外联 guard。guard 会在标准 `fetch` 及 `node:http` / `node:https` 的 `request`、`get` 入口拦截 `*.feishu.cn` / `*.larksuite.com` / `*.larksuite.cn`，未显式 mock 的测试必须立即失败，且 guard 自测只能使用预取消 signal 或建连前失败的本地 agent，禁止把 DNS、socket 等真实网络错误充当阴性证据。该入口级 guard 是测试禁发的补充防线，不能覆盖先访问非飞书地址后由底层自动重定向、绕过标准入口的 custom transport、原始 socket 或非 Node 外部进程，因此测试仍须保持 `NOTIFICATION_DELIVERY_DISABLED=true` 并显式 mock 外部调用。禁发开关与 guard 不改变生产 callback 的身份读取语义；callback 身份测试必须提供隔离库中的可信假 `union_id`（包括 approval bot 与登录 bot 的跨应用映射）或显式 mock 通讯录查询。
-- 推荐设置独立测试库，例如：
+- `npm run test:e2e` 的 POSIX script 先以空 `NODE_OPTIONS` 启动 `tsx`，runner 再无条件为测试 worker、受控 Next.js 服务及所有 Node/Prisma 后代注入 `CHECKPOINT_DISABLE=1`。调用方 `NODE_OPTIONS`（其中的 `--require`/`--import` 会在 guard 前执行）不会传给 runner 后代，而是严格重建为受控 sentinel 与 cwd 绑定官方 guard 的绝对 import；继承 probe output/role 同样清空，仅 runner 直接拥有的 server 进程组可写固定 repo `.tmp` probe。已能控制父 npm 进程的同 UID 主体不属于此 harness 的认证边界。guard 会在标准 `fetch` 及 `node:http` / `node:https` 的 `request`、`get` 入口拦截 `*.feishu.cn` / `*.larksuite.com` / `*.larksuite.cn`，未显式 mock 的测试必须立即失败，且 guard 自测只能使用预取消 signal 或建连前失败的本地 agent，禁止把 DNS、socket 等真实网络错误充当阴性证据。该入口级 guard 是测试禁发的补充防线，不能覆盖先访问非飞书地址后由底层自动重定向、绕过标准入口的 custom transport、原始 socket 或非 Node 外部进程，因此测试仍须保持 `NOTIFICATION_DELIVERY_DISABLED=true` 并显式 mock 外部调用。禁发开关与 guard 不改变生产 callback 的身份读取语义；callback 身份测试必须提供隔离库中的可信假 `union_id`（包括 approval bot 与登录 bot 的跨应用映射）或显式 mock 通讯录查询。
+- 只需提供本机 PostgreSQL 的凭据/authority 模板；URL 路径不会被访问，也不会成为测试库名：
 
   ```bash
-  createdb management_system_test
-  export PLAYWRIGHT_DATABASE_URL="postgresql://postgres:<密码>@127.0.0.1:5432/management_system_test"
+  export PLAYWRIGHT_DATABASE_URL="postgresql://postgres:<密码>@127.0.0.1:5432/credential_template"
   npm run test:e2e
   ```
+
+  `npm run test:e2e` 是 POSIX-only 官方入口；Windows 因无法在当前实现中可靠保证整个进程树终止，会在 marker/child 创建前拒绝。每次执行会生成新的密码学随机 token 和独立 secret，以 token 构造一对不同、以 `_test` 结尾的 target/shadow，并用 token 唯一 `O_EXCL` marker 绑定精确 pair 与连接摘要。继承的静态路径/shadow/source/clone/reuse/skip/确认变量均被覆盖。runner 强制官方 config、单 worker、`recreate`、`127.0.0.1:3002`、禁通知/checkpoint 和 guard；所有调用方 short option（包括 `-xcalternate...`、`-xc alternate...`、`-xj4`、`-xj 4` 等 Commander cluster）都会拒绝，危险长参数的分离值/等号形式也全部拒绝。clone 脚本在加载数据库代码前 hard reject。
+
+  `scripts/setup-playwright-db.ts` 与 `scripts/cleanup-playwright-db.ts` 的直接调用同样 fail-closed：公开 token/确认值不够，仍须匹配当前 marker、secret hash、连接摘要及精确 pair；路径逐层拒绝 symlink/不安全 owner 或 mode，leaf/file 必须精确 `0700`/`0600`，file 还须 single-link、regular、大小受限且 inode 稳定。setup 部分创建失败会补偿两个精确名称；cleanup/补偿仅在全部数据库操作成功后删除 marker，任何 drop/unlink 失败均非零且 marker 保留。普通 `SHADOW_DATABASE_URL` 从不作为输入。marker 防误用、cross-run 和公开 token 单独删除，但同 UID 或已有工作树写权限的恶意主体可读取/篡改文件与进程，不是此机制声称抵御的认证边界。
+
+  runner 不再让 Playwright 通过 built-in `webServer` 创建 runner 看不见的 detached 组：它先在 marker 创建前确认 3002 未被占用，再独立启动并拥有 server 组，确认受控 HTTP readiness 后，启动无 built-in server 的 CLI 组。`SIGINT`、`SIGTERM`、`SIGHUP` 第一次同时转发给已存在的两组，第二次（同/不同信号）或 5 秒超时分别升级 `SIGKILL`；正常结束、CLI/server 自发 exit/error 和 pre-child signal 都必须先确认 server 与 CLI 两组退出。端口检查只辅助 availability/readiness/诊断，不能替代进程组静默证明。任一组无法 quiesce 时，runner 跳过 DB cleanup、非零退出并保留 marker，而不会删除仍被活动后代使用的库。cleanup 错误递归展开叶子原因并经统一 redaction 逐条记录；入口先设置 129/130/143 fallback 再尝试重触发原信号，因此 `tsx`/handler 忽略信号或 kill 抛错也不会返回 0。直接 runner `SIGKILL`、崩溃、OS 故障或断电仍可能跳过 cleanup；此时禁止前缀删除，只能由 DBA 只读确认精确名称后处理。
+
+  修改 Playwright 数据库 harness 后，先运行不连接数据库的 runner/lifecycle 回归，再用同一本机凭据运行 PostgreSQL 安全演练：
+
+  ```bash
+  npm run test:playwright-db-lifecycle
+
+  PLAYWRIGHT_DATABASE_URL="postgresql://postgres:<密码>@127.0.0.1:5432/credential_template" \
+    NOTIFICATION_DELIVERY_DISABLED=true \
+    CHECKPOINT_DISABLE=1 \
+    npm run test:playwright-db-safety
+  ```
+
+  lifecycle 命令真实启动 `scripts/run-playwright.ts` 验证危险 CLI/short cluster 在 marker/child 前失败，并证明历史 self-test 环境名不能绕过 runner 且不会传给受控后代；正式入口没有 caller 可选择的测试分支。独立的 `verify-playwright-runner-finalizer-entry.ts` 只验证共享 production finalizer 的三种信号内核终止或 129/130/143 fallback、原信号日志、嵌套 cleanup 根因展开与凭据/secret redaction，不宣称它执行了正式 runner 数据库生命周期；clone 是另一个真实 hard-reject 子进程。lifecycle 会真实创建两个独立 POSIX 进程组，以占用 3002 的 detached server 分别覆盖 CLI 自然失败、首次信号超时升级和第二信号强杀，并在 server 尚未静默时断言 cleanup 未调用、marker 与注入的精确 pair 所有权仍保留，静默后才允许清理；另有 parent 自发退出、同组 descendant 继续占端口的回归。marker 的 symlink、mode、owner policy、hardlink、oversize/content、inode swap以及 direct setup 部分补偿、drop/unlink failure 使用 deterministic 文件/注入 seam，不冒充真实数据库故障。PostgreSQL 演练除随机双 pair、相似 sentinel、非法 setup/cleanup、并发 recreate、direct cleanup、pair 隔离外，还用真实随机 target/shadow 重跑上述三种 detached 双组场景，逐次证明活动 server 期间 DB/marker 保留，双组静默后 cleanup 恰好一次且 DB/marker/3002/进程组残留为 0；命令不会访问 source 或发送飞书。
 
   如需执行登录后的功能冒烟，额外指定本地登录态：
 

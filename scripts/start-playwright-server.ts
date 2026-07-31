@@ -1,87 +1,79 @@
-import { spawn } from "child_process";
-import path from "path";
+import { spawn } from "node:child_process";
+import path from "node:path";
 import { logger, withScriptLogging } from "../lib/logger";
-
-const databaseUrl = process.env.PLAYWRIGHT_DATABASE_URL;
-const port = process.env.PLAYWRIGHT_SERVER_PORT ?? "3002";
-
-if (!databaseUrl) {
-  throw new Error("PLAYWRIGHT_DATABASE_URL is required");
-}
-
-const targetDatabase = new URL(databaseUrl).pathname.replace(/^\//, "");
-if (!targetDatabase.endsWith("_test")) {
-  throw new Error("PLAYWRIGHT_DATABASE_URL must point to a database ending with _test");
-}
+import { assertOfficialPlaywrightEnvironment } from "./playwright-runner";
 
 function runStep(
   command: string,
   args: string[],
   extraEnv?: Record<string, string | undefined>,
-) {
-  return new Promise<void>((resolve, reject) => {
+): Promise<void> {
+  return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       env: {
         ...process.env,
         NO_COLOR: undefined,
         FORCE_COLOR: undefined,
-        CONFIRM_SEND_FEISHU: undefined,
-        DATABASE_URL: databaseUrl,
-        PLAYWRIGHT_DATABASE_URL: databaseUrl,
-        PLAYWRIGHT_CONFIRM_RECREATE_DB: targetDatabase,
+        CONFIRM_SEND_FEISHU: "",
+        CHECKPOINT_DISABLE: "1",
         NOTIFICATION_DELIVERY_DISABLED: "true",
-        FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES:
-          process.env.FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES?.trim() || "李棋轩",
         ...extraEnv,
       },
       stdio: "inherit",
     });
-    child.on("exit", (code, signal) => {
+    child.once("exit", (code, signal) => {
       if (signal) {
-        reject(new Error(`${command} ${args.join(" ")} exited with signal ${signal}`));
+        reject(new Error(`${command} exited with signal ${signal}`));
         return;
       }
       if (code === 0) {
         resolve();
         return;
       }
-      reject(new Error(`${command} ${args.join(" ")} exited with code ${code}`));
+      reject(new Error(`${command} exited with code ${code ?? 1}`));
     });
-    child.on("error", reject);
+    child.once("error", reject);
   });
 }
 
-async function main() {
+async function main(): Promise<void> {
+  const ownership = assertOfficialPlaywrightEnvironment(process.env);
+  const port = process.env.PLAYWRIGHT_SERVER_PORT;
   const tsxBin = path.join(process.cwd(), "node_modules", ".bin", "tsx");
+  const nextBin = path.join(
+    process.cwd(),
+    "node_modules",
+    "next",
+    "dist",
+    "bin",
+    "next",
+  );
   const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
   logger.info("playwright.server.start", {
     module: "playwright",
     action: "startPlaywrightServer",
     port,
-    databaseName: targetDatabase,
-    isTestDatabase: targetDatabase.endsWith("_test"),
+    targetDatabaseName: ownership.target.databaseName,
+    shadowDatabaseName: ownership.shadow.databaseName,
+    checkpointDisabled: true,
     notificationDeliveryDisabled: true,
   });
 
   await runStep(process.execPath, [tsxBin, "scripts/setup-playwright-db.ts"]);
   await runStep(npmCommand, ["run", "db:deploy"]);
-  if (process.env.PLAYWRIGHT_DB_SETUP_MODE === "clone") {
-    await runStep(process.execPath, [tsxBin, "scripts/copy-playwright-db-data.ts"]);
-  }
   await runStep(npmCommand, ["run", "db:seed"]);
-
-  await runStep(npmCommand, ["run", "dev", "--", "-p", port], {
-    PORT: port,
-  });
+  await runStep(
+    process.execPath,
+    [nextBin, "dev", "-H", "127.0.0.1", "-p", port ?? ""],
+    { PORT: port },
+  );
 }
 
 withScriptLogging("start-playwright-server", main).catch((error) => {
   logger.error("playwright.server.failed", {
     module: "playwright",
     action: "startPlaywrightServer",
-    port,
-    databaseName: targetDatabase,
     error,
   });
-  process.exit(1);
+  process.exitCode = 1;
 });

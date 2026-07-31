@@ -21,8 +21,10 @@
     "db:seed": "tsx prisma/seed.ts",
     "db:fix-roles": "tsx scripts/fix-user-roles.ts && tsx prisma/seed.ts",
     "db:studio": "prisma studio",
+    "test:playwright-db-lifecycle": "tsx scripts/verify-playwright-runner-lifecycle.ts",
+    "test:playwright-db-safety": "tsx scripts/verify-playwright-db-safety.ts",
     "prepare:template": "tsx scripts/prepare-reimbursement-template.ts",
-    "test:e2e": "tsx scripts/run-playwright.ts"
+    "test:e2e": "NODE_OPTIONS='' tsx scripts/run-playwright.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
