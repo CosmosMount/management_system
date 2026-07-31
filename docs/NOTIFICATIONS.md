@@ -67,6 +67,10 @@ Revision 生效事务先把目标 `TaskPlanVersion` 切换为 `CURRENT` 并更�
 
 P5 事件键保持稳定幂等：`pm:segment:confirmation_due:<segmentId>:<endAt>`、`pm:segment:association_invalidated:<revisionNodeId>`、`pm:conflict:opened:<fingerprint>`、`pm:conflict:opened:<fingerprint>:reopened:<detectedAt>` 和 `pm:conflict:resolved:<conflictId>:<updatedAt>`。站内通知在业务事件键后追加 `:inapp:<accountId>`，飞书 outbox 追加 `:feishu`；重复扫描或重复提交依赖唯一事件键保持 exactly once，逐收件人失败只重试失败者。Conflict 新增、高严重度重开和扫描解除都只写项目管理 outbox 和站内通知；`scanSegmentTransitions` 会把到期 Planned 推到 `PENDING_CONFIRMATION`、把进行中的 Planned 置为 `IN_PROGRESS`，但不会自动生成 Actual。
 
+项目管理通知偏好按 Task、Milestone、Review、Revision、Work Segment 和 Resource Conflict 分类。站内通知是审计/待办兜底，始终写入且 UI 不提供关闭；`NotificationPreference(channel=FEISHU, enabled=false)` 只过滤普通飞书候选。`mandatory=true` 的关键状态、安全与高严重度事件忽略普通关闭偏好，但仍经过 durable outbox、禁发开关、allowlist 和逐收件人重试，不能直发。
+
+Milestone deadline scanner 使用 Asia/Shanghai 业务日期，事件键为 `pm:milestone:<milestoneId>:milestone_due|milestone_overdue:<YYYY-MM-DD>`；同一天重跑保持 exactly once。每日保留任务分批删除 90 天前已读站内通知、30 天前已发送项目管理 outbox 和 180 天前失败 outbox；未读站内通知不因该规则删除。所有测试继续设置 `NOTIFICATION_DELIVERY_DISABLED=true`。
+
 ## 飞书统一私信传输层
 
 `sendFeishuDirectMessage()` 的调用方必须提供：

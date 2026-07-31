@@ -123,6 +123,7 @@ export function timeCanvasDataToModel(
     anchors,
     segments,
     conflicts,
+    nextCursor: data.nextCursor,
     generatedAt: data.generatedAt,
   };
 }

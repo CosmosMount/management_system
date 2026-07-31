@@ -205,6 +205,34 @@ type CanvasCursor = {
   id: string;
 };
 
+export async function getPersonalDueSegments({
+  actor,
+  now = new Date(),
+  limit = 100,
+}: {
+  actor: ProjectManagementActor;
+  now?: Date;
+  limit?: number;
+}) {
+  const boundedLimit = Math.min(Math.max(Math.trunc(limit), 1), 200);
+  const rows = await prisma.workSegment.findMany({
+    where: {
+      personId: actor.personId,
+      type: "PLANNED",
+      status: "PENDING_CONFIRMATION",
+      deletedAt: null,
+    },
+    select: fullSegmentSelect,
+    orderBy: [{ endAt: "asc" }, { id: "asc" }],
+    take: boundedLimit + 1,
+  });
+  return {
+    items: rows.slice(0, boundedLimit).map((row) => toFullSegmentDto(actor, row)),
+    nextCursor: rows.length > boundedLimit ? rows[boundedLimit]?.id ?? null : null,
+    generatedAt: now.toISOString(),
+  };
+}
+
 export async function getTimeCanvasData({
   actor,
   input,

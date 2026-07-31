@@ -6,6 +6,7 @@ import {
   taskReadableWhere,
 } from "@/lib/project-management/authorization";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
+import { configurableNotificationCategories } from "@/lib/project-management/application/notification-preference-service";
 
 const notificationCategoryValues = [
   "TASK",
@@ -112,6 +113,29 @@ export async function getUnreadInAppNotificationCount(
     },
   });
 }
+
+export async function getNotificationPreferences(actor: ProjectManagementActor) {
+  const rows = await prisma.notificationPreference.findMany({
+    where: {
+      accountId: actor.accountId,
+      category: { in: [...configurableNotificationCategories] },
+    },
+    select: { category: true, channel: true, enabled: true, updatedAt: true },
+  });
+  const byKey = new Map(rows.map((row) => [`${row.category}:${row.channel}`, row]));
+  return configurableNotificationCategories.map((category) => ({
+    category,
+    // 站内通知永远启用；数据库记录只用于修复历史数据，不作为禁发开关。
+    inAppEnabled: true,
+    feishuEnabled: byKey.get(`${category}:FEISHU`)?.enabled ?? true,
+    updatedAt:
+      byKey.get(`${category}:FEISHU`)?.updatedAt.toISOString() ?? null,
+  }));
+}
+
+export type NotificationPreferenceItem = Awaited<
+  ReturnType<typeof getNotificationPreferences>
+>[number];
 
 async function visibleTaskTitleMap(
   actor: ProjectManagementActor,

@@ -47,6 +47,25 @@ export async function createProjectManagementEventNotificationsTx(
     return { recipientCount: 0 };
   }
 
+  const disabledFeishuAccountIds = input.mandatory
+    ? new Set<string>()
+    : new Set(
+        (
+          await tx.notificationPreference.findMany({
+            where: {
+              accountId: { in: uniqueRecipients.map((recipient) => recipient.accountId) },
+              category: input.category,
+              channel: "FEISHU",
+              enabled: false,
+            },
+            select: { accountId: true },
+          })
+        ).map((preference) => preference.accountId),
+      );
+  const feishuRecipients = uniqueRecipients.filter(
+    (recipient) => !disabledFeishuAccountIds.has(recipient.accountId),
+  );
+
   const actorName =
     input.actorName ??
     (input.actor ? await actorDisplayNameTx(tx, input.actor) : "系统");
@@ -67,7 +86,7 @@ export async function createProjectManagementEventNotificationsTx(
     entityType: input.entityType,
     entityId: input.entityId,
     linkPath: input.linkPath ?? "/progress",
-    recipientOpenIds: uniqueRecipients
+    recipientOpenIds: feishuRecipients
       .map((recipient) => recipient.openId)
       .filter((openId): openId is string => Boolean(openId)),
     mandatory: input.mandatory,
@@ -98,11 +117,13 @@ export async function createProjectManagementEventNotificationsTx(
       payload: jsonValue(inAppPayload),
     });
   }
-  await enqueueProjectManagementNotificationTx(tx, {
-    eventKey: `${input.eventKey}:feishu`,
-    type: input.kind,
-    payload,
-  });
+  if (input.mandatory || payload.recipientOpenIds.length > 0) {
+    await enqueueProjectManagementNotificationTx(tx, {
+      eventKey: `${input.eventKey}:feishu`,
+      type: input.kind,
+      payload,
+    });
+  }
   return { recipientCount: uniqueRecipients.length };
 }
 
@@ -122,10 +143,9 @@ export async function recipientsForPersonIdsTx(
         select: {
           id: true,
           identities: {
-            where: { provider: "FEISHU" },
-            select: { openId: true },
-            orderBy: { createdAt: "asc" },
-            take: 1,
+            where: { provider: "FEISHU", tenantId: "default" },
+            select: { id: true, openId: true },
+            orderBy: [{ createdAt: "asc" }, { id: "asc" }],
           },
         },
       },
@@ -136,7 +156,7 @@ export async function recipientsForPersonIdsTx(
     return [
       {
         accountId: person.account.id,
-        openId: person.account.identities[0]?.openId ?? null,
+        openId: firstNonEmptyOpenId(person.account.identities),
       },
     ];
   });
@@ -152,17 +172,24 @@ export async function recipientsForAccountIdsTx(
     select: {
       id: true,
       identities: {
-        where: { provider: "FEISHU" },
-        select: { openId: true },
-        orderBy: { createdAt: "asc" },
-        take: 1,
+        where: { provider: "FEISHU", tenantId: "default" },
+        select: { id: true, openId: true },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       },
     },
   });
   return accounts.map((account) => ({
     accountId: account.id,
-    openId: account.identities[0]?.openId ?? null,
+    openId: firstNonEmptyOpenId(account.identities),
   }));
+}
+
+function firstNonEmptyOpenId(
+  identities: Array<{ openId: string | null }>,
+): string | null {
+  return identities
+    .map((identity) => identity.openId?.trim() ?? "")
+    .find(Boolean) ?? null;
 }
 
 export function uniqueRecipientsByAccount(

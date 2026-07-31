@@ -4,6 +4,7 @@ import {
   markAllInAppNotificationsRead as markAllInAppNotificationsReadService,
   markInAppNotificationRead as markInAppNotificationReadService,
 } from "@/lib/project-management/application/notification-service";
+import { updateNotificationPreference as updateNotificationPreferenceService } from "@/lib/project-management/application/notification-preference-service";
 import {
   runProjectManagementAction,
   type ProjectManagementActionResult,
@@ -45,6 +46,26 @@ export async function markAllInAppNotificationsRead(
       const actor = await getCurrentProjectManagementActor();
       log.setActorAccountId(actor.accountId);
       const result = await markAllInAppNotificationsReadService(actor, input);
+      revalidateProjectManagement();
+      return result;
+    },
+  });
+}
+
+export async function updateNotificationPreference(
+  input: unknown,
+): Promise<
+  ProjectManagementActionResult<
+    Awaited<ReturnType<typeof updateNotificationPreferenceService>>
+  >
+> {
+  return runProjectManagementAction({
+    event: "pm.notification.preference.update",
+    action: "updateNotificationPreference",
+    callback: async (log) => {
+      const actor = await getCurrentProjectManagementActor();
+      log.setActorAccountId(actor.accountId);
+      const result = await updateNotificationPreferenceService(actor, input);
       revalidateProjectManagement();
       return result;
     },

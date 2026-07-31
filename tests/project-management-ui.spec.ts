@@ -408,7 +408,9 @@ test.describe("project management P4/P6 UI integration", () => {
 
     await page.goto("/progress");
     await expect(page.getByRole("heading", { name: "我的工作" })).toBeVisible();
-    await expect(page.getByText(fixture.taskTitle)).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: fixture.taskTitle, exact: true }),
+    ).toBeVisible();
     await expect(page.getByText("未读通知")).toBeVisible();
     await expectHealthyPage(page);
 
@@ -449,7 +451,14 @@ test.describe("project management P4/P6 UI integration", () => {
       await page.mouse.up();
       const brushCreate = page.getByRole("form", { name: "投入快速创建" });
       await expect(brushCreate).toBeVisible();
-      await brushCreate.getByLabel("Task").selectOption(fixture.taskId);
+      await brushCreate.getByLabel("Task 搜索关键词").fill(fixture.taskTitle);
+      await brushCreate
+        .getByRole("button", { name: "搜索可关联 Task" })
+        .click();
+      await expect(brushCreate.getByText("已找到 1 个 Task")).toBeVisible();
+      await brushCreate
+        .getByLabel("Task", { exact: true })
+        .selectOption(fixture.taskId);
       await brushCreate.getByLabel("内容").fill(fixture.brushCreateContent);
       await brushCreate.getByRole("button", { name: "创建", exact: true }).click();
       await expect(page.getByText("已创建投入记录")).toBeVisible();
@@ -771,6 +780,411 @@ test.describe("project management P4/P6 UI integration", () => {
       }),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
+
+  test("S8 dashboard, action inbox, Tag and notification preferences work on desktop and mobile", async ({
+    context,
+    page,
+    baseURL,
+  }) => {
+    const user = await createAccountPerson("S8 驾驶舱用户");
+    await loginAsTestUser(context, baseURL, {
+      openId: user.openId,
+      name: user.person.displayName,
+    });
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+
+    await page.goto("/progress");
+    await expect(page.getByRole("heading", { name: "我的工作" })).toBeVisible();
+    await expect(page.getByLabel("工作指标")).toBeVisible();
+    await expect(page.getByTestId("action-inbox")).toHaveCount(0);
+    await expectHealthyPage(page);
+
+    await page.goto("/progress/approvals");
+    await expect(page.getByRole("heading", { name: "待办与审批" })).toBeVisible();
+    await expect(page.getByText("当前没有需要你处理的事项。")).toBeVisible();
+
+    const tagName = `S8 Tag ${randomUUID().slice(0, 12)}`;
+    await page.goto("/progress/tags");
+    await expect(page.getByRole("heading", { name: "Tag 管理" })).toBeVisible();
+    await page.getByLabel("Tag 名称").fill(tagName);
+    await page.getByLabel("说明").fill("S8 双端 Tag 管理验证");
+    await page.getByRole("button", { name: "创建 Tag" }).click();
+    await expect(page.getByText("Tag 已创建。")).toBeVisible();
+    await expect(page.getByRole("heading", { name: tagName })).toBeVisible();
+    await expect.poll(() => prisma.tag.count({ where: { name: tagName } })).toBe(1);
+
+    await page.goto("/progress/notifications");
+    await expect(page.getByRole("heading", { name: "通知偏好" })).toBeVisible();
+    const taskFeishu = page.getByRole("checkbox", { name: "Task飞书通知" });
+    await expect(taskFeishu).toBeChecked();
+    await taskFeishu.uncheck();
+    await expect(page.getByText(/通知偏好已保存/)).toBeVisible();
+    await expect
+      .poll(async () => {
+        return prisma.notificationPreference.findUnique({
+          where: {
+            accountId_category_channel: {
+              accountId: user.account.id,
+              category: "TASK",
+              channel: "FEISHU",
+            },
+          },
+          select: { enabled: true },
+        });
+      })
+      .toEqual({ enabled: false });
+    await expectHealthyPage(page);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
+      ),
+    ).toBe(true);
+    expect(pageErrors).toEqual([]);
+  });
+
+  test("Task workbench persists a Draft plan and locks direct plan editing after activation", async ({
+    context,
+    page,
+    baseURL,
+  }) => {
+    const fixture = await createDraftWorkbenchFixture();
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.owner.openId,
+      name: fixture.owner.person.displayName,
+    });
+
+    await page.goto(`/progress/tasks/${fixture.taskId}`);
+    await expect(page.getByRole("heading", { name: fixture.taskTitle })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "计划与资源" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    const draftEditor = page.locator("section").filter({
+      has: page.getByRole("heading", { name: "编辑 Draft 计划" }),
+    });
+    await expect(draftEditor).toBeVisible();
+    await draftEditor.getByLabel("目标").first().fill("S6 Draft 持久化目标");
+    await draftEditor.getByRole("button", { name: "添加 Milestone" }).click();
+    await expect(page.getByRole("heading", { name: "Milestone #3" })).toBeVisible();
+    await draftEditor.getByLabel("目标").nth(2).fill("S6 新增 Milestone");
+    await draftEditor.getByLabel("完成条件").nth(2).fill("新增节点保存到数据库");
+    await draftEditor.getByLabel("验收要求").nth(2).fill("提交文本证据");
+    await draftEditor.getByLabel("预期完成").nth(2).fill("2026-08-04T18:00");
+    await draftEditor.getByRole("button", { name: "保存 Draft 计划" }).click();
+    await expect(page.getByText("Draft 计划已保存。")).toBeVisible();
+    await expect
+      .poll(async () => {
+        const task = await prisma.task.findUniqueOrThrow({
+          where: { id: fixture.taskId },
+          include: {
+            currentPlanVersion: {
+              include: {
+                nodes: {
+                  include: { node: { include: { milestone: true } } },
+                },
+              },
+            },
+          },
+        });
+        return {
+          lockVersion: task.lockVersion,
+          milestones: task.currentPlanVersion.nodes
+            .flatMap((entry) => entry.node.milestone?.goal ?? [])
+            .sort(),
+        };
+      })
+      .toEqual({
+        lockVersion: 1,
+        milestones: [
+          "S6 Draft 持久化目标",
+          "S6 Draft 第二阶段",
+          "S6 新增 Milestone",
+        ].sort(),
+      });
+
+    page.once("dialog", (dialog) => void dialog.accept());
+    await page.getByRole("button", { name: "激活 Task" }).click();
+    await expect(page.getByText("Task 已激活。")).toBeVisible();
+    await expect(page.getByText(/Current Plan 只读/)).toBeVisible();
+    await expect(page.getByRole("heading", { name: "编辑 Draft 计划" })).toHaveCount(0);
+    await expect
+      .poll(() =>
+        prisma.task.findUnique({
+          where: { id: fixture.taskId },
+          select: { status: true, lockVersion: true },
+        }),
+      )
+      .toEqual({ status: "ACTIVE", lockVersion: 2 });
+    await expectHealthyPage(page);
+  });
+
+  test("Task workbench completes metadata, Review, Revision, audit and Termination UI flows", async ({
+    context,
+    page,
+    baseURL,
+  }) => {
+    test.setTimeout(90_000);
+    const fixture = await createUiFixture();
+    const viewer = await createAccountPerson("S6 UI Viewer");
+    await prisma.task.update({
+      where: { id: fixture.taskId },
+      data: { allowSelfReview: true },
+    });
+    await prisma.taskMember.create({
+      data: { taskId: fixture.taskId, personId: viewer.person.id, role: "VIEWER" },
+    });
+
+    await loginAsTestUser(context, baseURL, {
+      openId: viewer.openId,
+      name: viewer.person.displayName,
+    });
+    await page.goto(`/progress/tasks/${fixture.taskId}`);
+    await page.getByRole("tab", { name: "概览" }).click();
+    await expect(page.getByRole("button", { name: "保存元数据" })).toHaveCount(0);
+    await expect(page.getByText("可创建 Revision：否")).toBeVisible();
+    await expectHealthyPage(page);
+
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.owner.openId,
+      name: fixture.owner.person.displayName,
+    });
+    await page.goto(`/progress/tasks/${fixture.taskId}?tab=review`);
+    await expect(page.getByRole("tab", { name: /验收/ })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await page.goto(`/progress/tasks/${fixture.taskId}?tab=revision`);
+    await expect(page.getByRole("tab", { name: "修订与历史" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await page.goto(`/progress/tasks/${fixture.taskId}?tab=termination`);
+    await expect(page.getByRole("tab", { name: /验收/ })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await page.goto(`/progress/tasks/${fixture.taskId}`);
+    await page.getByRole("tab", { name: "概览" }).click();
+    await expect(page).toHaveURL(/tab=overview/);
+    const renamedTitle = `${fixture.taskTitle} · S6 已编辑`;
+    await page.getByRole("form", { name: "Task 元数据" }).getByLabel("标题").fill(renamedTitle);
+    await page.getByRole("button", { name: "保存元数据" }).click();
+    await expect(page.getByText("Task 元数据已保存。")).toBeVisible();
+    await expect
+      .poll(() =>
+        prisma.task.findUnique({
+          where: { id: fixture.taskId },
+          select: { title: true, allowSelfReview: true },
+        }),
+      )
+      .toEqual({ title: renamedTitle, allowSelfReview: true });
+
+    await page.getByRole("tab", { name: "验收" }).click();
+    await expect(page.getByText("FILE 暂未启用")).toBeVisible();
+    await page.getByRole("textbox", { name: "文本证据" }).fill("S6 Review 文本证据");
+    await page.getByRole("button", { name: "提交验收" }).click();
+    await expect(page.getByText("Milestone 已提交验收。")).toBeVisible();
+    await expect
+      .poll(() =>
+        prisma.milestoneReview.findFirst({
+          where: { milestoneNode: { node: { taskId: fixture.taskId } } },
+          orderBy: { createdAt: "desc" },
+          select: { id: true, result: true },
+        }),
+      )
+      .toMatchObject({ result: "PENDING" });
+
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.reviewer.openId,
+      name: fixture.reviewer.person.displayName,
+    });
+    await page.goto(`/progress/tasks/${fixture.taskId}`);
+    await page.getByRole("tab", { name: /验收/ }).click();
+    await page.getByLabel("Review 说明").fill("S6 Reviewer 通过");
+    await page.getByRole("button", { name: "通过", exact: true }).click();
+    await expect(page.getByText("验收已通过。")).toBeVisible();
+    await expect
+      .poll(() =>
+        prisma.milestoneReview.findFirst({
+          where: { milestoneNode: { node: { taskId: fixture.taskId } } },
+          orderBy: { createdAt: "desc" },
+          select: { result: true },
+        }),
+      )
+      .toEqual({ result: "APPROVED" });
+
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.owner.openId,
+      name: fixture.owner.person.displayName,
+    });
+    await page.goto(`/progress/tasks/${fixture.taskId}`);
+    await page.getByRole("tab", { name: "修订与历史" }).click();
+    const revisionEditor = page.locator("section").filter({
+      has: page.getByRole("heading", { name: "Revision 候选计划" }),
+    });
+    await revisionEditor.getByLabel("修订原因").fill("S6 调整后续目标");
+    await revisionEditor.getByLabel("替换 Milestone #1 目标").fill("S6 Revision 新目标");
+    await revisionEditor.getByLabel("替换 Milestone #1 业务说明").fill("S6 Revision 业务说明 A");
+    await revisionEditor.getByRole("button", { name: "添加替换 Milestone" }).click();
+    await revisionEditor.getByLabel("替换 Milestone #2 目标").fill("S6 Revision 新目标 B");
+    await revisionEditor.getByLabel("替换 Milestone #2 完成条件").fill("S6 Revision 条件 B");
+    await revisionEditor.getByLabel("替换 Milestone #2 验收要求").fill("S6 Revision 验收 B");
+    await revisionEditor.getByLabel("替换 Milestone #2 业务说明").fill("S6 Revision 业务说明 B");
+    await revisionEditor
+      .getByRole("button", { name: "前移替换 Milestone #2" })
+      .click();
+    await expect(revisionEditor.getByLabel("替换 Milestone #1 目标")).toHaveValue(
+      "S6 Revision 新目标 B",
+    );
+    await revisionEditor
+      .getByLabel("候选 Termination 业务说明")
+      .fill("S6 Revision Termination 业务说明");
+    await revisionEditor.getByRole("button", { name: "保存 Revision Draft" }).click();
+    await expect(page.getByText("Revision Draft 已创建。")).toBeVisible();
+    await page.getByRole("button", { name: "编辑候选计划" }).click();
+    await expect(page.getByRole("heading", { name: /Revision 候选计划（编辑已有）/ })).toBeVisible();
+    await revisionEditor.getByLabel("修订原因").fill("S6 二次编辑候选计划");
+    await revisionEditor.getByRole("button", { name: "更新 Revision Draft" }).click();
+    await expect(page.getByText("Revision Draft 已更新。")).toBeVisible();
+    await page.getByRole("button", { name: "查看三层 Diff" }).click();
+    await expect(page.getByRole("heading", { name: "结构 / 字段 / 资源 Diff" })).toBeVisible();
+    await page.getByRole("button", { name: "提交审批" }).click();
+    await expect(page.getByText("Revision 已提交。")).toBeVisible();
+
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.reviewer.openId,
+      name: fixture.reviewer.person.displayName,
+    });
+    await page.goto(`/progress/tasks/${fixture.taskId}`);
+    await page.getByRole("tab", { name: "修订与历史" }).click();
+    await page.getByRole("button", { name: "批准" }).click();
+    await expect(page.getByText("Revision 已批准并应用。")).toBeVisible();
+    await expect
+      .poll(() =>
+        prisma.revisionNode.findFirst({
+          where: { node: { taskId: fixture.taskId } },
+          orderBy: { node: { createdAt: "desc" } },
+          select: { status: true },
+        }),
+      )
+      .toEqual({ status: "EFFECTIVE" });
+
+    await page.getByRole("tab", { name: "审计" }).click();
+    await expect(page.getByRole("heading", { name: "Task 审计" })).toBeVisible();
+    await page.getByLabel("审计事件类型").selectOption("pm.revision.apply");
+    await page.getByRole("button", { name: "应用筛选" }).click();
+    await expect(
+      page.locator("ol li").getByText("pm.revision.apply", { exact: true }),
+    ).toBeVisible();
+
+    await page.getByRole("tab", { name: /验收/ }).click();
+    const outcomeSelect = page.getByLabel("结束结果");
+    await expect(outcomeSelect.locator("option")).toHaveCount(4);
+    await outcomeSelect.selectOption("CANCELLED");
+    await page.getByLabel("原因").fill("S6 Reviewer 提前取消");
+    await page.getByLabel("总结").fill("S6 生命周期 UI 闭环完成");
+    page.once("dialog", (dialog) => void dialog.accept());
+    await page.getByRole("button", { name: "确认结束 Task" }).click();
+    await expect(page.getByText("Task 已完成 Termination 确认。")).toBeVisible();
+    await expect
+      .poll(() =>
+        prisma.task.findUnique({
+          where: { id: fixture.taskId },
+          select: { status: true },
+        }),
+      )
+      .toEqual({ status: "CANCELLED" });
+    await page.getByRole("tab", { name: "概览" }).click();
+    await expect(page.getByRole("button", { name: "保存成员" })).toHaveCount(0);
+    await expectHealthyPage(page);
+  });
+
+  test("S7 resource filters, conflict deep links and personal timeline work on desktop and mobile", async ({
+    context,
+    page,
+    baseURL,
+  }, testInfo) => {
+    test.setTimeout(90_000);
+    const fixture = await createUiFixture();
+    await prisma.workSegment.update({
+      where: { id: fixture.confirmableSegmentId },
+      data: { status: "PENDING_CONFIRMATION" },
+    });
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.member.openId,
+      name: fixture.member.person.displayName,
+    });
+
+    await page.goto(`/progress/resources?focus=${fixture.confirmableSegmentId}`);
+    await expect(page.getByTestId("segment-inspector")).toContainText(
+      "P6 UI 可确认计划",
+    );
+
+    await page.goto(
+      `/progress/resources?from=2026-08-10&to=2026-08-12&people=${fixture.member.person.id},${fixture.owner.person.id}&tasks=${fixture.taskId}&types=planned&statuses=pending_confirmation&group=person&zoom=hour&focus=${fixture.confirmableSegmentId}`,
+    );
+    await expect(page.getByRole("heading", { name: "人员计划" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "资源计划筛选" })).toBeVisible();
+    await expect(page.getByText("人员（2）")).toBeVisible();
+    await expect(page.getByText("Task（1）")).toBeVisible();
+    await expect(page.getByLabel("待确认")).toBeChecked();
+    await expect(page.getByTestId("segment-inspector")).toContainText("P6 UI 可确认计划");
+    await page.getByRole("button", { name: "7 天" }).click();
+    await page.getByRole("button", { name: "应用筛选" }).click();
+    await expect(page).toHaveURL(/to=2026-08-17/);
+    await page.getByRole("button", { name: "复制视图链接" }).click();
+    await expect(page.getByText(/已复制当前视图链接|无法访问剪贴板/)).toBeVisible();
+    await expectHealthyPage(page);
+
+    await page.goto(`/progress/resources/conflicts?status=OPEN&conflictId=${fixture.conflictId}`);
+    await expect(page.getByRole("heading", { name: "资源冲突" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "解释" })).toBeVisible();
+    await expect(page.locator("pre")).toHaveCount(0);
+    const resourceLink = page.getByRole("link", { name: "在资源计划中定位" });
+    await expect(resourceLink).toHaveAttribute(
+      "href",
+      new RegExp(`focus=${fixture.conflictId}`),
+    );
+    await resourceLink.click();
+    await expect(page).toHaveURL(/\/progress\/resources\?/);
+    await expect(page.getByTestId("time-canvas-root")).toContainText(
+      "已选中资源冲突，严重度 HIGH",
+    );
+
+    await page.goto(`/progress/my-timeline?focus=${fixture.confirmableSegmentId}&mode=day`);
+    await expect(page.getByRole("heading", { name: "我的时间" })).toBeVisible();
+    await expect(page.getByTestId("segment-inspector")).toContainText(
+      "P6 UI 可确认计划",
+    );
+    const dueQueue = page.getByRole("region", { name: "到期计划与确认队列" });
+    await expect(dueQueue.getByRole("heading", { name: "到期计划与确认队列" })).toBeVisible();
+    await expect(dueQueue.getByText("P6 UI 可确认计划")).toBeVisible();
+    if (testInfo.project.name === "mobile") {
+      await expect(page.getByTestId("time-agenda")).toBeVisible();
+    } else {
+      await expect(page.getByTestId("time-canvas-scroll")).toBeVisible();
+    }
+    await dueQueue.getByRole("button", { name: "与计划一致" }).click();
+    await expect(page.getByText("已完整确认并生成 Actual")).toBeVisible();
+    await expect.poll(() => prisma.workSegment.findUnique({
+      where: { id: fixture.confirmableSegmentId },
+      select: { status: true },
+    })).toEqual({ status: "CONFIRMED" });
+
+    const independentContent = `S7 独立安排 ${randomUUID()}`;
+    await page.getByRole("button", { name: "新增投入" }).click();
+    const quickCreate = page.getByRole("form", { name: "投入快速创建" });
+    await quickCreate.getByLabel("Task", { exact: true }).selectOption("");
+    await quickCreate.getByLabel("内容").fill(independentContent);
+    await quickCreate.getByRole("button", { name: "创建", exact: true }).click();
+    await expect(page.getByText("已创建投入记录")).toBeVisible();
+    await expect.poll(() => prisma.workSegment.count({
+      where: { personId: fixture.member.person.id, taskId: null, content: independentContent },
+    })).toBe(1);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    await expectHealthyPage(page);
+  });
 });
 
 async function createUiFixture() {
@@ -947,6 +1361,37 @@ async function createUiFixture() {
     conflictId: conflict.id,
     notificationId: notification.id,
   };
+}
+
+async function createDraftWorkbenchFixture() {
+  const admin = await createAccountPerson("S6 Draft Team Admin");
+  const owner = await createAccountPerson("S6 Draft Owner");
+  const reviewer = await createAccountPerson("S6 Draft Reviewer");
+  await grantRole(admin.account.id, "TEAM_ADMINISTRATOR", {
+    team: "英雄",
+    techGroup: "电控",
+  });
+  const taskTitle = `S6 Draft Workbench ${randomUUID()}`;
+  const task = await createTaskDraft(actor(admin), {
+    title: taskTitle,
+    description: "S6 Draft 工作台测试",
+    team: "英雄",
+    techGroup: "电控",
+    priority: "MEDIUM",
+    tagIds: [],
+    members: [
+      { personId: owner.person.id, role: "OWNER" },
+      { personId: reviewer.person.id, role: "REVIEWER" },
+    ],
+    milestones: [
+      milestoneInput("S6 Draft 第一阶段", "完成第一阶段", 1),
+      milestoneInput("S6 Draft 第二阶段", "完成第二阶段", 2),
+    ],
+    plannedStartAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
+    termination: terminationInput(5),
+    idempotencyKey: `s6-draft-workbench-${randomUUID()}`,
+  });
+  return { admin, owner, reviewer, taskId: task.taskId, taskTitle };
 }
 
 async function createAccountPerson(displayName: string) {

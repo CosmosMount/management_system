@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
@@ -70,6 +71,7 @@ export function TimeCanvas({
   initialZoom,
   display: displayInput,
   interaction,
+  initialSelection = null,
   emptyMessage = "选择人员或 Task 后查看计划",
   onRangeChange,
   onSelectionChange,
@@ -83,7 +85,8 @@ export function TimeCanvas({
   const [zoom, setZoom] = useState<TimeCanvasZoom>(
     initialZoom ?? chooseFitZoom(model.range),
   );
-  const [selection, setSelection] = useState<TimeCanvasSelection>(null);
+  const [selection, setSelection] = useState<TimeCanvasSelection>(initialSelection);
+  const mobileAgenda = useMobileAgenda();
   const [scrollState, setScrollState] = useState({ left: 0, width: 900 });
   const [activeFocusKey, setActiveFocusKey] = useState<string | null>(null);
   const [pendingFocusKey, setPendingFocusKey] = useState<string | null>(null);
@@ -339,7 +342,8 @@ export function TimeCanvas({
         )}
       >
         <div className="min-w-0">
-          <div className="block p-3 md:hidden">
+          {mobileAgenda ? (
+          <div className="p-3">
             <TimeAgenda
               model={model}
               display={display}
@@ -348,10 +352,10 @@ export function TimeCanvas({
               emptyMessage={emptyMessage}
             />
           </div>
-
+          ) : (
           <div
             ref={scrollElementRef}
-            className="relative hidden max-h-[min(68dvh,44rem)] min-h-72 min-w-0 overflow-auto overscroll-contain md:block"
+            className="relative max-h-[min(68dvh,44rem)] min-h-72 min-w-0 overflow-auto overscroll-contain"
             data-testid="time-canvas-scroll"
             onScroll={(event) => {
               const element = event.currentTarget;
@@ -428,6 +432,7 @@ export function TimeCanvas({
               )}
             </div>
           </div>
+          )}
         </div>
 
         {display.showInspector && selectedEntity && (
@@ -440,6 +445,20 @@ export function TimeCanvas({
       </div>
     </section>
   );
+}
+
+function useMobileAgenda() {
+  return useSyncExternalStore(subscribeMobileAgenda, mobileAgendaSnapshot, () => false);
+}
+
+function subscribeMobileAgenda(callback: () => void) {
+  const query = window.matchMedia("(max-width: 767px)");
+  query.addEventListener("change", callback);
+  return () => query.removeEventListener("change", callback);
+}
+
+function mobileAgendaSnapshot() {
+  return window.matchMedia("(max-width: 767px)").matches;
 }
 
 function TimeCanvasToolbar({

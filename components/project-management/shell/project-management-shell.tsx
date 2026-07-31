@@ -10,7 +10,10 @@ import {
   ChevronRight,
   FolderKanban,
   GitPullRequestArrow,
+  ListChecks,
+  Tags,
   LayoutList,
+  Clock3,
   Menu,
   X,
   type LucideIcon,
@@ -58,6 +61,12 @@ const navigationItems: NavigationItem[] = [
       pathname.startsWith(`${routes.progress.tasks}/`),
   },
   {
+    href: routes.progress.myTimeline,
+    label: "我的时间",
+    icon: Clock3,
+    match: (pathname) => pathname === routes.progress.myTimeline,
+  },
+  {
     href: routes.progress.resources,
     label: "资源计划",
     icon: CalendarRange,
@@ -72,6 +81,12 @@ const navigationItems: NavigationItem[] = [
       pathname.startsWith(`${routes.progress.conflicts}/`),
   },
   {
+    href: routes.progress.approvals,
+    label: "待办审批",
+    icon: ListChecks,
+    match: (pathname) => pathname === routes.progress.approvals,
+  },
+  {
     href: routes.progress.notifications,
     label: "通知",
     icon: Bell,
@@ -79,6 +94,12 @@ const navigationItems: NavigationItem[] = [
       pathname === routes.progress.notifications ||
       pathname.startsWith(`${routes.progress.notifications}/`),
     notification: true,
+  },
+  {
+    href: routes.progress.tags,
+    label: "Tag",
+    icon: Tags,
+    match: (pathname) => pathname === routes.progress.tags,
   },
 ];
 

@@ -307,6 +307,45 @@ test.describe("project management S2 plan and Task mutation services", () => {
         { code: "NOT_FOUND", message: "对象不存在或无权查看" },
       ]);
     }
+
+    const linkedBySystemAdmin = await updateTaskMetadata(actor(admin), {
+      taskId: activeTarget.taskId,
+      expectedLockVersion: 1,
+      title: "系统管理员建立隐藏关联",
+      description: "关联随后对普通编辑者不可见",
+      team: "英雄",
+      techGroup: "电控",
+      priority: "HIGH",
+      revisionApprovalMode: "REVIEW_REQUIRED",
+      allowSelfReview: false,
+      relatedTaskId: hiddenRelated.taskId,
+    });
+    expect(linkedBySystemAdmin.lockVersion).toBe(2);
+    const preservedByScopedEditor = await updateTaskMetadata(
+      actor(scopedAdmin),
+      {
+        taskId: activeTarget.taskId,
+        expectedLockVersion: 2,
+        title: "只修改标题并原样保留隐藏关联",
+        description: "未改变的关联不应阻断其他元数据更新",
+        team: "英雄",
+        techGroup: "电控",
+        priority: "HIGH",
+        revisionApprovalMode: "REVIEW_REQUIRED",
+        allowSelfReview: false,
+        relatedTaskId: hiddenRelated.taskId,
+      },
+    );
+    expect(preservedByScopedEditor.lockVersion).toBe(3);
+    await expect(
+      prisma.task.findUnique({
+        where: { id: activeTarget.taskId },
+        select: { title: true, relatedTaskId: true },
+      }),
+    ).resolves.toEqual({
+      title: "只修改标题并原样保留隐藏关联",
+      relatedTaskId: hiddenRelated.taskId,
+    });
   });
 
   test("Draft metadata and members enforce strict state, visibility, lock, one OWNER and role union", async () => {

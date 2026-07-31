@@ -525,6 +525,7 @@ model Task {
   @@index([createdByAccountId])
   @@index([deletedAt])
   @@index([relatedTaskId])
+  @@index([updatedAt, id])
 }
 
 model TaskTag {
@@ -772,6 +773,7 @@ model WorkSegment {
   @@index([updatedByAccountId])
   @@index([sourceSplitFromId])
   @@index([deletedAt])
+  @@index([updatedAt, id])
 }
 
 model SegmentTag {
@@ -910,6 +912,7 @@ model InAppNotification {
   @@index([recipientAccountId, readAt, createdAt])
   @@index([category, createdAt])
   @@index([taskId])
+  @@index([readAt, createdAt])
 }
 
 model DomainAuditEvent {
@@ -956,6 +959,7 @@ model NotificationOutbox {
   updatedAt   DateTime                      @updatedAt
 
   @@index([status, nextRunAt])
+  @@index([channel, status, updatedAt])
 }
 
 model NotificationOutboxRecipient {
@@ -977,4 +981,19 @@ model NotificationOutboxRecipient {
   @@unique([outboxId, openId])
   @@index([outboxId, status])
   @@index([status, nextRunAt])
+}
+
+model ProjectManagementScanCheckpoint {
+  key             String   @id
+  cursor          Json     @default("{}")
+  lastStartedAt   DateTime? @db.Timestamptz(6)
+  lastCompletedAt DateTime? @db.Timestamptz(6)
+  lastFullScanAt  DateTime? @db.Timestamptz(6)
+  lastError       String   @default("")
+  lockVersion     Int      @default(0)
+  createdAt       DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @db.Timestamptz(6)
+
+  @@index([lastCompletedAt])
+  @@index([lastFullScanAt])
 }

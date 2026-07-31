@@ -1,10 +1,12 @@
 import { NotificationCenterClient } from "@/components/project-management/notification-center-client";
+import { NotificationPreferencesClient } from "@/components/project-management/notification-preferences-client";
 import { PageCommandBar } from "@/components/project-management/shell/page-command-bar";
 import { Button } from "@/components/ui/button";
 import {
   notificationCategoryLabels,
 } from "@/lib/project-management/labels";
 import {
+  getNotificationPreferences,
   listInAppNotifications,
 } from "@/lib/project-management/queries/notification-queries";
 import {
@@ -33,7 +35,7 @@ export default async function ProgressNotificationsPage({
   const params = (await searchParams) ?? {};
   const category = firstParam(params.category);
   const unreadOnly = firstParam(params.unread) === "1";
-  const [notifications, unreadCount] = await Promise.all([
+  const [notifications, unreadCount, preferences] = await Promise.all([
     listInAppNotifications({
       actor,
       input: {
@@ -45,6 +47,7 @@ export default async function ProgressNotificationsPage({
       },
     }),
     getProgressUnreadNotificationCount(),
+    getNotificationPreferences(actor),
   ]);
 
   return (
@@ -83,6 +86,7 @@ export default async function ProgressNotificationsPage({
             notifications={notifications.items}
             unreadCount={unreadCount}
           />
+          <NotificationPreferencesClient preferences={preferences} />
       </div>
     </>
   );

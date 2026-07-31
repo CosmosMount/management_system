@@ -206,6 +206,33 @@ export const revisionDraftInputSchema = z.object({
   );
 });
 
+export const updateRevisionDraftInputSchema = z
+  .object({
+    reason: requiredText("请输入修订原因", 2_000),
+    replacementMilestones: z
+      .array(s2MilestoneDraftSchema, { message: "替换 Milestone 列表格式不正确" })
+      .max(200, "单个计划最多 200 个节点")
+      .optional()
+      .default([]),
+    plannedStartAt: absoluteDateTimeSchema("请选择带时区的有效计划开始时间"),
+    termination: s2TerminationDraftSchema,
+    revisionNodeId: idSchema,
+    expectedTargetPlanUpdatedAt: absoluteDateTimeSchema(
+      "Revision 候选计划版本令牌不正确",
+    ),
+  })
+  .superRefine((input, ctx) => {
+    validatePlanChronology(
+      {
+        plannedStartAt: input.plannedStartAt,
+        milestones: input.replacementMilestones,
+        termination: input.termination,
+      },
+      ctx,
+      "replacementMilestones",
+    );
+  });
+
 const reviewEvidenceBaseSchema = z.object({
   sortOrder: z
     .number({ message: "证据排序不正确" })
@@ -332,6 +359,9 @@ export type CreateTaskDraftInput = z.infer<
 >;
 export type ActivateTaskInput = z.infer<typeof activateTaskInputSchema>;
 export type RevisionDraftInput = z.infer<typeof revisionDraftInputSchema>;
+export type UpdateRevisionDraftInput = z.infer<
+  typeof updateRevisionDraftInputSchema
+>;
 export type SubmitMilestoneReviewInput = z.infer<
   typeof submitMilestoneReviewInputSchema
 >;
@@ -346,6 +376,24 @@ export type RevisionDecisionInput = z.infer<typeof revisionDecisionInputSchema>;
 export const taskWorkspaceQueryInputSchema = z.object({
   taskId: idSchema,
 });
+
+export const taskLifecycleViewsInputSchema = z
+  .object({
+    taskId: idSchema,
+    reviewCursor: idSchema.optional(),
+    reviewLimit: z.number().int().min(1).max(100).optional().default(50),
+    revisionCursor: idSchema.optional(),
+    revisionLimit: z.number().int().min(1).max(100).optional().default(50),
+    auditCursor: idSchema.optional(),
+    auditLimit: z.number().int().min(1).max(100).optional().default(50),
+    auditEventTypes: z
+      .array(z.string().trim().min(1).max(120))
+      .max(20)
+      .optional()
+      .default([]),
+    auditActor: z.union([idSchema, z.literal("SYSTEM")]).optional(),
+  })
+  .strict();
 
 export const planVersionQueryInputSchema = z.object({
   planVersionId: idSchema,

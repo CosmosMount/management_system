@@ -15,8 +15,13 @@ import {
   type TaskWorkspace,
 } from "@/lib/project-management/queries/task-queries";
 import {
+  getTaskLifecycleViews as getTaskLifecycleViewsQuery,
+  type TaskLifecycleViews,
+} from "@/lib/project-management/queries/task-lifecycle-queries";
+import {
   comparePlanVersionsInputSchema,
   planVersionQueryInputSchema,
+  taskLifecycleViewsInputSchema,
   taskWorkspaceQueryInputSchema,
 } from "@/lib/project-management/validations/lifecycle";
 
@@ -84,6 +89,22 @@ export async function comparePlanVersions(input: {
       const actor = await getCurrentProjectManagementActor();
       log.setActorAccountId(actor.accountId);
       return comparePlanVersionsQuery({ actor, ...parsed });
+    },
+  });
+}
+
+export async function getTaskLifecycleViews(
+  input: unknown,
+): Promise<ProjectManagementActionResult<TaskLifecycleViews>> {
+  return runProjectManagementAction({
+    event: "pm.task.lifecycle_views.view",
+    action: "getTaskLifecycleViews",
+    callback: async (log) => {
+      const parsed = taskLifecycleViewsInputSchema.parse(input);
+      log.setTaskId(parsed.taskId);
+      const actor = await getCurrentProjectManagementActor();
+      log.setActorAccountId(actor.accountId);
+      return getTaskLifecycleViewsQuery({ actor, ...parsed });
     },
   });
 }

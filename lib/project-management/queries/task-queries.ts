@@ -149,7 +149,7 @@ export type TaskWorkspace = {
     updatedAt: string;
   };
   members: TaskMemberSummary[];
-  tags: Array<{ id: string; name: string; color: string }>;
+  tags: Array<{ id: string; name: string; color: string; isArchived: boolean }>;
   currentPlan: PlanVersionSummary;
   permissions: {
     canUpdateMetadata: boolean;
@@ -200,6 +200,15 @@ export type PlanVersionDiff = {
     before: PlanNodeSummary;
     after: PlanNodeSummary;
   }>;
+  resourceImpact: {
+    affectedPlannedSegmentCount: number;
+    associationNeedsReviewCount: number;
+    byNode: Array<{
+      nodeId: string;
+      segmentCount: number;
+      associationNeedsReviewCount: number;
+    }>;
+  };
 };
 
 export async function listTasks({
@@ -320,7 +329,7 @@ export async function getTaskWorkspace({
         orderBy: [{ role: "asc" }, { createdAt: "asc" }],
       },
       tags: {
-        include: { tag: { select: { id: true, name: true, color: true } } },
+        include: { tag: { select: { id: true, name: true, color: true, archivedAt: true } } },
         orderBy: { createdAt: "asc" },
       },
       currentPlanVersion: {
@@ -365,7 +374,12 @@ export async function getTaskWorkspace({
       role: member.role,
       displayName: member.person.displayName,
     })),
-    tags: task.tags.map((entry) => entry.tag),
+    tags: task.tags.map((entry) => ({
+      id: entry.tag.id,
+      name: entry.tag.name,
+      color: entry.tag.color,
+      isArchived: entry.tag.archivedAt !== null,
+    })),
     currentPlan: serializePlanVersion(task.currentPlanVersion),
     permissions: {
       canUpdateMetadata: allowed(actor, "task.update_metadata", resource),
@@ -503,6 +517,46 @@ export async function comparePlanVersions({
     }
   }
 
+  const affectedNodeIds = [
+    ...new Set([
+      ...removed.map((node) => node.nodeId),
+      ...moved.map((node) => node.nodeId),
+      ...changed.map((node) => node.nodeId),
+    ]),
+  ];
+  const segmentImpactRows = affectedNodeIds.length > 0
+    ? await prisma.workSegment.groupBy({
+        by: ["nodeId", "associationNeedsReview"],
+        where: {
+          taskId: fromPlan.taskId,
+          nodeId: { in: affectedNodeIds },
+          type: "PLANNED",
+          deletedAt: null,
+        },
+        _count: { _all: true },
+      })
+    : [];
+  const impactByNode = new Map<
+    string,
+    { segmentCount: number; associationNeedsReviewCount: number }
+  >();
+  for (const row of segmentImpactRows) {
+    if (!row.nodeId) continue;
+    const current = impactByNode.get(row.nodeId) ?? {
+      segmentCount: 0,
+      associationNeedsReviewCount: 0,
+    };
+    current.segmentCount += row._count._all;
+    if (row.associationNeedsReview) {
+      current.associationNeedsReviewCount += row._count._all;
+    }
+    impactByNode.set(row.nodeId, current);
+  }
+  const resourceImpactByNode = affectedNodeIds.flatMap((nodeId) => {
+    const impact = impactByNode.get(nodeId);
+    return impact ? [{ nodeId, ...impact }] : [];
+  });
+
   return {
     fromPlanVersionId,
     toPlanVersionId,
@@ -516,6 +570,17 @@ export async function comparePlanVersions({
     removed,
     moved,
     changed,
+    resourceImpact: {
+      affectedPlannedSegmentCount: resourceImpactByNode.reduce(
+        (total, row) => total + row.segmentCount,
+        0,
+      ),
+      associationNeedsReviewCount: resourceImpactByNode.reduce(
+        (total, row) => total + row.associationNeedsReviewCount,
+        0,
+      ),
+      byNode: resourceImpactByNode,
+    },
   };
 }
 

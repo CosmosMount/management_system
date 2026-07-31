@@ -26,9 +26,11 @@ import {
   splitPlannedSegment,
   updateWorkSegment,
 } from "@/app/actions/project-management/segments";
+import { searchTaskOptions as searchTaskOptionResults } from "@/app/actions/project-management/options";
 import { TimeCanvas } from "@/components/project-management/time-canvas/time-canvas";
 import type {
   TimeCanvasBrushRequest,
+  TimeCanvasMode,
   TimeCanvasModel,
   TimeCanvasSegmentTransformRequest,
   TimeCanvasSelection,
@@ -74,12 +76,20 @@ export function ResourcePlannerCanvasClient({
   tasks,
   defaultPersonId,
   initialZoom,
+  mode = "RESOURCE_PLANNER",
+  defaultTaskId = "",
+  allowIndependent = true,
+  initialFocusId = null,
 }: {
   initialModel: TimeCanvasModel;
   people: PersonOption[];
   tasks: TaskOption[];
   defaultPersonId: string;
   initialZoom: TimeCanvasZoom;
+  mode?: TimeCanvasMode;
+  defaultTaskId?: string;
+  allowIndependent?: boolean;
+  initialFocusId?: string | null;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -101,7 +111,20 @@ export function ResourcePlannerCanvasClient({
       };
     });
   }, [initialModel]);
-  const [selection, setSelection] = useState<TimeCanvasSelection>(null);
+  const initialSelection = useMemo<TimeCanvasSelection>(() => {
+    if (!initialFocusId) return null;
+    if (initialModel.segments.some((segment) => segment.id === initialFocusId)) {
+      return { kind: "SEGMENT", id: initialFocusId };
+    }
+    if (initialModel.conflicts.some((conflict) => conflict.id === initialFocusId)) {
+      return { kind: "CONFLICT", id: initialFocusId };
+    }
+    if (initialModel.anchors.some((anchor) => anchor.id === initialFocusId)) {
+      return { kind: "ANCHOR", id: initialFocusId };
+    }
+    return null;
+  }, [initialFocusId, initialModel]);
+  const [selection, setSelection] = useState<TimeCanvasSelection>(initialSelection);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [createDraft, setCreateDraft] = useState<CreateDraft | null>(null);
   const [detail, setDetail] = useState<WorkSegmentDetail | null>(null);
@@ -109,6 +132,39 @@ export function ResourcePlannerCanvasClient({
   const [detailState, setDetailState] = useState<"IDLE" | "LOADING" | "READY" | "ERROR">("IDLE");
   const [detailError, setDetailError] = useState("");
   const [notice, setNotice] = useState<Notice>(null);
+  const [searchedTasks, setSearchedTasks] = useState<TaskOption[]>([]);
+  const availableTasks = useMemo(
+    () => mergeTaskOptions(tasks, searchedTasks),
+    [searchedTasks, tasks],
+  );
+
+  const searchAvailableTasks = useCallback(async (query: string) => {
+    try {
+      const result = await searchTaskOptionResults({
+        query: query.trim() || undefined,
+        statuses: ["ACTIVE"],
+        limit: 50,
+      });
+      if (!result.ok) {
+        return { ok: false as const, message: result.error.message };
+      }
+      const incoming = result.data.items.map((task) => ({
+        id: task.id,
+        title: task.title,
+        activeNodeId: task.activeMilestone?.nodeId ?? null,
+      }));
+      setSearchedTasks((current) => mergeTaskOptions(current, incoming));
+      return {
+        ok: true as const,
+        message:
+          incoming.length > 0
+            ? `已找到 ${incoming.length} 个 Task`
+            : "没有找到可关联的 Active Task",
+      };
+    } catch {
+      return { ok: false as const, message: "Task 搜索失败，请重试。" };
+    }
+  }, []);
 
   const selectedCanvasSegment = useMemo(
     () =>
@@ -439,9 +495,11 @@ export function ResourcePlannerCanvasClient({
       <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
         <div className="min-w-0 overflow-hidden rounded-xl border border-border bg-background">
           <TimeCanvas
-            mode="RESOURCE_PLANNER"
+            key={initialFocusId ?? "time-canvas"}
+            mode={mode}
             model={model}
             initialZoom={initialZoom}
+            initialSelection={initialSelection}
             display={{ showActual: true, showBusy: true, showConflicts: true, showInspector: false }}
             interaction={{
               enableBrushCreate: !isPending,
@@ -471,7 +529,8 @@ export function ResourcePlannerCanvasClient({
           detailState={detailState}
           detailError={detailError}
           changes={changes}
-          tasks={tasks}
+          tasks={availableTasks}
+          onSearchTasks={searchAvailableTasks}
           disabled={isPending}
           onRun={runMutation}
           onToggleSelected={toggleSegmentSelection}
@@ -483,7 +542,10 @@ export function ResourcePlannerCanvasClient({
         <QuickCreatePanel
           draft={createDraft}
           people={effectivePeople}
-          tasks={tasks}
+          tasks={availableTasks}
+          onSearchTasks={searchAvailableTasks}
+          defaultTaskId={defaultTaskId}
+          allowIndependent={allowIndependent}
           disabled={isPending}
           onCancel={() => setCreateDraft(null)}
           onRun={(action) => {
@@ -499,6 +561,9 @@ function QuickCreatePanel({
   draft,
   people,
   tasks,
+  onSearchTasks,
+  defaultTaskId,
+  allowIndependent,
   disabled,
   onCancel,
   onRun,
@@ -506,6 +571,9 @@ function QuickCreatePanel({
   draft: CreateDraft;
   people: PersonOption[];
   tasks: TaskOption[];
+  onSearchTasks: TaskSearchHandler;
+  defaultTaskId: string;
+  allowIndependent: boolean;
   disabled: boolean;
   onCancel: () => void;
   onRun: (action: () => Promise<ProjectManagementActionResult<unknown>>) => void;
@@ -517,7 +585,7 @@ function QuickCreatePanel({
       onSubmit={(event) => {
         event.preventDefault();
         const form = new FormData(event.currentTarget);
-        const taskId = String(form.get("taskId") ?? "");
+        const taskId = String(form.get("taskId") ?? defaultTaskId);
         const task = tasks.find((item) => item.id === taskId);
         const type = String(form.get("type")) === "ACTUAL" ? "ACTUAL" : "PLANNED";
         const base = {
@@ -565,8 +633,19 @@ function QuickCreatePanel({
         <Input id="quick-content" name="content" defaultValue="计划投入" required maxLength={2_000} />
       </Field>
       <Field label="Task" htmlFor="quick-task">
-        <select id="quick-task" name="taskId" className={selectClass} defaultValue="">
-          <option value="">独立投入</option>
+        <TaskSearchControl
+          idPrefix="quick"
+          disabled={disabled}
+          onSearch={onSearchTasks}
+        />
+        <select
+          id="quick-task"
+          name="taskId"
+          className={selectClass}
+          defaultValue={defaultTaskId}
+          required={!allowIndependent}
+        >
+          {allowIndependent && <option value="">独立投入</option>}
           {tasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}
         </select>
       </Field>
@@ -601,6 +680,7 @@ function SegmentInspector({
   detailError,
   changes,
   tasks,
+  onSearchTasks,
   disabled,
   onRun,
   onToggleSelected,
@@ -612,6 +692,7 @@ function SegmentInspector({
   detailError: string;
   changes: SegmentChange[];
   tasks: TaskOption[];
+  onSearchTasks: TaskSearchHandler;
   disabled: boolean;
   onRun: (
     action: () => Promise<ProjectManagementActionResult<unknown>>,
@@ -763,6 +844,11 @@ function SegmentInspector({
           }), "已重新确认关联");
         }}>
           <p className="text-sm font-medium">重新关联</p>
+          <TaskSearchControl
+            idPrefix="relink"
+            disabled={disabled}
+            onSearch={onSearchTasks}
+          />
           <select name="taskId" aria-label="新的 Task" className={selectClass} defaultValue={detail.taskId ?? ""}>
             <option value="">独立投入</option>
             {tasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}
@@ -818,6 +904,62 @@ function SegmentInspector({
       </section>
     </aside>
   );
+}
+
+type TaskSearchHandler = (
+  query: string,
+) => Promise<{ ok: true; message: string } | { ok: false; message: string }>;
+
+function TaskSearchControl({
+  idPrefix,
+  disabled,
+  onSearch,
+}: {
+  idPrefix: string;
+  disabled: boolean;
+  onSearch: TaskSearchHandler;
+}) {
+  const [query, setQuery] = useState("");
+  const [message, setMessage] = useState("");
+  const [isSearching, startSearch] = useTransition();
+  const inputId = `${idPrefix}-task-search`;
+  return (
+    <div className="grid gap-1">
+      <Label htmlFor={inputId}>Task 搜索关键词</Label>
+      <div className="flex gap-2">
+        <Input
+          id={inputId}
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="输入 Task 名称"
+        />
+        <Button
+          type="button"
+          variant="outline"
+          disabled={disabled || isSearching}
+          onClick={() => {
+            startSearch(async () => {
+              const result = await onSearch(query);
+              setMessage(result.message);
+            });
+          }}
+        >
+          搜索可关联 Task
+        </Button>
+      </div>
+      {message && (
+        <p className="text-xs text-muted-foreground" role="status">
+          {message}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function mergeTaskOptions(current: TaskOption[], incoming: TaskOption[]) {
+  const merged = new Map(current.map((task) => [task.id, task]));
+  incoming.forEach((task) => merged.set(task.id, task));
+  return [...merged.values()];
 }
 
 function ReasonAction({ label, destructive, disabled, onSubmit }: { label: string; destructive?: boolean; disabled: boolean; onSubmit: (reason: string) => void }) {

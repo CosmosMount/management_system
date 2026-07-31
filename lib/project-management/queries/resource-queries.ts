@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
   authorize,
+  isSystemAdministrator,
   segmentReadableWhere,
   taskReadableWhere,
   type AuthorizationTaskResource,
@@ -177,14 +178,27 @@ export async function listWorkSegmentChanges({
 export async function listResourceConflicts({
   actor,
   input,
+  orderBy,
+  actionableOnly = false,
+  resultLimit,
 }: {
   actor: ProjectManagementActor;
   input: unknown;
+  /** Internal presentation ordering. User input never controls Prisma ordering. */
+  orderBy?: Prisma.ResourceConflictOrderByWithRelationInput[];
+  /** Internal Action Inbox filter; capability is still recomputed for every DTO. */
+  actionableOnly?: boolean;
+  /** Internal Action Inbox page size; public validation remains capped at 100. */
+  resultLimit?: number;
 }) {
   const parsed = listResourceConflictsInputSchema.parse(input);
+  const effectiveLimit = resultLimit === undefined
+    ? parsed.limit
+    : Math.min(Math.max(Math.trunc(resultLimit), 1), 200);
   const where: Prisma.ResourceConflictWhereInput = {
     AND: [
       conflictReadableWhere(actor),
+      actionableOnly ? conflictActionableWhere(actor) : {},
       parsed.personId ? { personId: parsed.personId } : {},
       parsed.status ? { status: parsed.status } : {},
       parsed.kind ? { kind: parsed.kind } : {},
@@ -195,14 +209,30 @@ export async function listResourceConflicts({
   const rows = await prisma.resourceConflict.findMany({
     where,
     include: conflictInclude,
-    orderBy: [{ detectedAt: "desc" }, { id: "desc" }],
-    take: parsed.limit + 1,
+    orderBy: orderBy ?? [{ detectedAt: "desc" }, { id: "desc" }],
+    take: effectiveLimit + 1,
     ...(parsed.cursor ? { cursor: { id: parsed.cursor }, skip: 1 } : {}),
   });
   return {
-    items: rows.slice(0, parsed.limit).map((row) => toResourceConflictDto(row, actor)),
-    nextCursor: rows.length > parsed.limit ? rows[parsed.limit]?.id ?? null : null,
+    items: rows.slice(0, effectiveLimit).map((row) => toResourceConflictDto(row, actor)),
+    nextCursor: rows.length > effectiveLimit ? rows[effectiveLimit - 1]?.id ?? null : null,
   };
+}
+
+export async function countActionableResourceConflicts(
+  actor: ProjectManagementActor,
+  severity?: Prisma.EnumResourceConflictSeverityFilter["equals"],
+) {
+  return prisma.resourceConflict.count({
+    where: {
+      AND: [
+        conflictReadableWhere(actor),
+        conflictActionableWhere(actor),
+        { status: { in: ["OPEN", "ACKNOWLEDGED"] } },
+        severity ? { severity } : {},
+      ],
+    },
+  });
 }
 
 export async function getResourceConflict({
@@ -278,6 +308,72 @@ function conflictReadableWhere(
       { personId: actor.personId },
       { segments: { some: { segment: segmentReadableWhere(actor) } } },
       { segments: { some: { segment: { task: taskReadableWhere(actor) } } } },
+    ],
+  };
+}
+
+function conflictActionableWhere(
+  actor: ProjectManagementActor,
+): Prisma.ResourceConflictWhereInput {
+  if (isSystemAdministrator(actor)) return {};
+
+  const managerScopes = actor.systemRoles
+    .filter(
+      (role) =>
+        (role.role === "TEAM_ADMINISTRATOR" || role.role === "RESOURCE_MANAGER") &&
+        (role.team.trim().length > 0 || role.techGroup.trim().length > 0),
+    )
+    .map((role): Prisma.TaskWhereInput => ({
+      ...(role.team.trim() ? { team: role.team.trim() } : {}),
+      ...(role.techGroup.trim() ? { techGroup: role.techGroup.trim() } : {}),
+    }));
+  const containsOnlyTaskSegments: Prisma.ResourceConflictWhereInput = {
+    segments: { none: { segment: { taskId: null } } },
+  };
+  const hasSegments: Prisma.ResourceConflictWhereInput = {
+    segments: { some: {} },
+  };
+  const fullyOwned: Prisma.ResourceConflictWhereInput = {
+    segments: {
+      every: {
+        segment: {
+          task: {
+            members: {
+              some: {
+                personId: actor.personId,
+                role: "OWNER",
+                removedAt: null,
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+  const fullyInManagerScope: Prisma.ResourceConflictWhereInput | null =
+    managerScopes.length > 0
+      ? {
+          segments: {
+            every: { segment: { task: { OR: managerScopes } } },
+          },
+        }
+      : null;
+
+  return {
+    OR: [
+      { personId: actor.personId },
+      {
+        AND: [
+          hasSegments,
+          containsOnlyTaskSegments,
+          {
+            OR: [
+              fullyOwned,
+              ...(fullyInManagerScope ? [fullyInManagerScope] : []),
+            ],
+          },
+        ],
+      },
     ],
   };
 }

@@ -10,6 +10,7 @@ import {
   createRevisionDraft as createRevisionDraftService,
   rejectRevision as rejectRevisionService,
   submitRevision as submitRevisionService,
+  updateRevisionDraft as updateRevisionDraftService,
   type RevisionMutationResult,
 } from "@/lib/project-management/application/lifecycle-service";
 import {
@@ -33,6 +34,16 @@ export async function submitRevision(
 ): Promise<ProjectManagementActionResult<RevisionMutationResult>> {
   return runRevisionAction("pm.revision.submit", "submitRevision", (actor) =>
     submitRevisionService(actor, input),
+  );
+}
+
+export async function updateRevisionDraft(
+  input: unknown,
+): Promise<ProjectManagementActionResult<RevisionMutationResult>> {
+  return runRevisionAction(
+    "pm.revision.draft.update",
+    "updateRevisionDraft",
+    (actor) => updateRevisionDraftService(actor, input),
   );
 }
 

@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { CheckCircle2, Eye, Lightbulb, PauseCircle } from "lucide-react";
 import {
   acknowledgeConflict,
@@ -14,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { formatShanghaiDate } from "@/components/project-management/time-canvas/url-state";
 import type { ProjectManagementActionResult } from "@/lib/project-management/application/action-result";
 import type { ConflictSuggestionPreview } from "@/lib/project-management/application/conflict-service";
 import {
@@ -34,6 +36,7 @@ import { cn } from "@/lib/utils";
 type ConflictCenterClientProps = {
   conflicts: ResourceConflictDetail[];
   selectedConflict: ResourceConflictDetail | null;
+  status: string;
 };
 
 type MutationState = {
@@ -44,13 +47,16 @@ type MutationState = {
 export function ConflictCenterClient({
   conflicts,
   selectedConflict,
+  status,
 }: ConflictCenterClientProps) {
+  const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [state, setState] = useState<MutationState>({
     kind: "idle",
     message: "",
   });
   const [preview, setPreview] = useState<ConflictSuggestionPreview | null>(null);
+  const [confirmedProposalId, setConfirmedProposalId] = useState<string | null>(null);
 
   function runMutation(
     action: () => Promise<ProjectManagementActionResult<unknown>>,
@@ -58,31 +64,43 @@ export function ConflictCenterClient({
   ) {
     setState({ kind: "idle", message: "" });
     startTransition(async () => {
-      const result = await action();
-      if (result.ok) {
-        setState({ kind: "success", message: successMessage });
-        return;
+      try {
+        const result = await action();
+        if (result.ok) {
+          setState({ kind: "success", message: successMessage });
+          setPreview(null);
+          setConfirmedProposalId(null);
+          router.refresh();
+          return;
+        }
+        setState({ kind: "error", message: result.error.message });
+      } catch {
+        setState({ kind: "error", message: "网络异常，操作未完成，请刷新后重试。" });
       }
-      setState({ kind: "error", message: result.error.message });
     });
   }
 
   function runPreview(conflictId: string) {
     setState({ kind: "idle", message: "" });
     startTransition(async () => {
-      const result = await previewConflictSuggestion({ conflictId });
-      if (result.ok) {
-        setPreview(result.data);
-        setState({
-          kind: "success",
-          message:
-            result.data.suggestions.length > 0
-              ? "已生成处理建议"
-              : "当前冲突没有可自动生成的建议",
-        });
-        return;
+      try {
+        const result = await previewConflictSuggestion({ conflictId });
+        if (result.ok) {
+          setPreview(result.data);
+          setConfirmedProposalId(null);
+          setState({
+            kind: "success",
+            message:
+              result.data.suggestions.length > 0
+                ? "已生成只读处理建议；尚未写入任何变更"
+                : "当前冲突没有可自动生成的建议",
+          });
+          return;
+        }
+        setState({ kind: "error", message: result.error.message });
+      } catch {
+        setState({ kind: "error", message: "建议预览加载失败，请稍后重试。" });
       }
-      setState({ kind: "error", message: result.error.message });
     });
   }
 
@@ -97,7 +115,7 @@ export function ConflictCenterClient({
           conflicts.map((conflict) => (
             <Link
               key={conflict.id}
-              href={`${routes.progress.conflicts}?conflictId=${conflict.id}`}
+              href={`${routes.progress.conflicts}?status=${encodeURIComponent(status)}&conflictId=${conflict.id}`}
               className={cn(
                 "block rounded-lg border border-border bg-card p-4 transition-colors hover:border-primary/40",
                 selectedConflict?.id === conflict.id && "border-primary/60",
@@ -122,6 +140,9 @@ export function ConflictCenterClient({
                   {conflictSeverityLabels[conflict.severity]}
                 </Badge>
                 <Badge variant="outline">{conflict.segments.length} 条可见记录</Badge>
+                {conflict.hiddenSegmentCount > 0 && (
+                  <Badge variant="outline">另有 {conflict.hiddenSegmentCount} 条受限记录</Badge>
+                )}
               </div>
             </Link>
           ))
@@ -151,6 +172,12 @@ export function ConflictCenterClient({
                 <Badge variant="outline">
                   {conflictStatusLabels[selectedConflict.status]}
                 </Badge>
+                <Link
+                  className="rounded-lg border border-border px-3 py-1 text-sm hover:bg-muted"
+                  href={resourcePlannerLink(selectedConflict)}
+                >
+                  在资源计划中定位
+                </Link>
               </div>
             </div>
 
@@ -193,13 +220,11 @@ export function ConflictCenterClient({
 
             <div className="rounded-lg border border-border bg-background p-3">
               <h3 className="font-medium">解释</h3>
-              <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-3 text-xs text-muted-foreground">
-                {JSON.stringify(selectedConflict.explanation, null, 2)}
-              </pre>
+              <StructuredExplanation value={selectedConflict.explanation} />
             </div>
 
             <div className="grid gap-3 xl:grid-cols-2">
-              <form
+              {selectedConflict.capabilities.canAcknowledge && <form
                 className="rounded-lg border border-border bg-background p-3"
                 onSubmit={(event) => {
                   event.preventDefault();
@@ -222,9 +247,9 @@ export function ConflictCenterClient({
                   <Eye className="h-4 w-4" aria-hidden="true" />
                   确认已知
                 </Button>
-              </form>
+              </form>}
 
-              <form
+              {selectedConflict.capabilities.canResolve && <form
                 className="rounded-lg border border-border bg-background p-3"
                 onSubmit={(event) => {
                   event.preventDefault();
@@ -256,9 +281,9 @@ export function ConflictCenterClient({
                   <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
                   标记解决
                 </Button>
-              </form>
+              </form>}
 
-              <form
+              {selectedConflict.capabilities.canIgnore && <form
                 className="rounded-lg border border-border bg-background p-3"
                 onSubmit={(event) => {
                   event.preventDefault();
@@ -304,9 +329,9 @@ export function ConflictCenterClient({
                   <PauseCircle className="h-4 w-4" aria-hidden="true" />
                   忽略
                 </Button>
-              </form>
+              </form>}
 
-              <div className="rounded-lg border border-border bg-background p-3">
+              {selectedConflict.capabilities.canPreviewSuggestion && <div className="rounded-lg border border-border bg-background p-3">
                 <Button
                   type="button"
                   variant="outline"
@@ -328,9 +353,22 @@ export function ConflictCenterClient({
                         </li>
                       ))}
                     </ul>
+                    <label className="flex items-start gap-2 rounded-lg border border-border p-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={confirmedProposalId === suggestion.proposalId}
+                        onChange={(event) => setConfirmedProposalId(event.target.checked ? suggestion.proposalId : null)}
+                      />
+                      我确认按以上最新版本令牌应用建议；如 Segment 已变化，服务端必须拒绝。
+                    </label>
                     <Button
                       type="button"
-                      disabled={isPending || suggestion.moves.length === 0}
+                      disabled={
+                        isPending ||
+                        suggestion.moves.length === 0 ||
+                        !selectedConflict.capabilities.canApplySuggestion ||
+                        confirmedProposalId !== suggestion.proposalId
+                      }
                       onClick={() =>
                         runMutation(
                           () =>
@@ -347,13 +385,79 @@ export function ConflictCenterClient({
                     </Button>
                   </div>
                 ))}
-              </div>
+              </div>}
             </div>
+            {!Object.values(selectedConflict.capabilities).some(Boolean) && (
+              <p className="rounded-lg border border-border bg-muted p-3 text-sm text-muted-foreground">
+                当前账号只能查看该冲突，不能确认、解决、忽略或生成建议。
+              </p>
+            )}
           </div>
         )}
       </section>
     </div>
   );
+}
+
+function resourcePlannerLink(conflict: ResourceConflictDetail) {
+  const params = new URLSearchParams({
+    from: formatShanghaiDate(Date.parse(conflict.startAt)),
+    to: formatShanghaiDate(Date.parse(conflict.endAt) + 24 * 60 * 60 * 1_000),
+    people: conflict.personId,
+    group: "person",
+    zoom: "hour",
+    conflict: "open",
+    focus: conflict.id,
+  });
+  return `${routes.progress.resources}?${params.toString()}`;
+}
+
+function StructuredExplanation({ value }: { value: unknown }) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return <p className="mt-2 text-sm text-muted-foreground">{formatExplanationValue(value)}</p>;
+  }
+  return (
+    <dl className="mt-2 grid gap-2 rounded-lg bg-muted p-3 text-sm sm:grid-cols-2">
+      {Object.entries(value as Record<string, unknown>).slice(0, 50).map(([key, child]) => (
+        <div key={key} className="min-w-0 rounded bg-background/70 p-2">
+          <dt className="font-medium">{explanationLabel(key)}</dt>
+          <dd className="mt-1 break-words text-muted-foreground">{formatExplanationValue(child, key)}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function explanationLabel(key: string) {
+  const labels: Record<string, string> = {
+    message: "规则说明",
+    reason: "原因",
+    totalAllocation: "总投入比例",
+    segmentIds: "相关记录",
+    changedSegmentIds: "已调整记录",
+    missingAllocationSegmentIds: "未填写投入比例的记录",
+    hiddenSegmentCount: "受限记录数量",
+    ignoredReason: "忽略原因",
+    ignoredUntil: "忽略至",
+    resolutionNote: "解决说明",
+  };
+  return labels[key] ?? key.replaceAll(/([A-Z])/g, " $1").trim();
+}
+
+function formatExplanationValue(value: unknown, key = ""): string {
+  if (value === null || value === undefined || value === "") return "未提供";
+  if (Array.isArray(value)) {
+    if (key.toLowerCase().includes("id")) return `${value.length} 条记录`;
+    return value.slice(0, 20).map((item) => formatExplanationValue(item)).join("；") || "无";
+  }
+  if (typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>)
+      .slice(0, 20)
+      .map(([childKey, child]) => `${explanationLabel(childKey)}：${formatExplanationValue(child, childKey)}`)
+      .join("；");
+  }
+  if (typeof value === "boolean") return value ? "是" : "否";
+  return String(value);
 }
 
 function localDateTimeToIso(value: string) {

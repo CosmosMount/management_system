@@ -1,0 +1,585 @@
+import { randomUUID } from "node:crypto";
+import { expect, test } from "@playwright/test";
+import { prisma } from "../lib/prisma";
+import { deleteTag } from "../lib/project-management/application/tag-service";
+import {
+  runMilestoneDeadlineScan,
+  runProjectManagementIntegrityScan,
+  runProjectManagementNotificationRetention,
+} from "../lib/project-management/application/maintenance-service";
+import {
+  createProjectManagementEventNotificationsTx,
+  recipientsForAccountIdsTx,
+  recipientsForPersonIdsTx,
+} from "../lib/project-management/application/notification-utils";
+import { updateNotificationPreference } from "../lib/project-management/application/notification-preference-service";
+import type { ProjectManagementActor } from "../lib/project-management/identity";
+import { getActionInbox } from "../lib/project-management/queries/action-inbox-queries";
+import { getMyWorkDashboard } from "../lib/project-management/queries/dashboard-queries";
+import { listTags } from "../lib/project-management/queries/tag-queries";
+
+test.describe("project management S8 dashboard, tags and notifications", () => {
+  test("Action Inbox filters by permission and sorts overdue work first", async () => {
+    const user = await createActor("S8 Inbox");
+    const other = await createActor("S8 Other");
+    const now = new Date();
+    const own = await prisma.workSegment.create({
+      data: {
+        personId: user.personId,
+        type: "PLANNED",
+        status: "PENDING_CONFIRMATION",
+        startAt: new Date(now.getTime() - 2 * 60 * 60_000),
+        endAt: new Date(now.getTime() - 60 * 60_000),
+        content: `S8 待确认 ${randomUUID()}`,
+        createdByAccountId: user.accountId,
+      },
+    });
+    const hidden = await prisma.workSegment.create({
+      data: {
+        personId: other.personId,
+        type: "PLANNED",
+        status: "PENDING_CONFIRMATION",
+        startAt: new Date(now.getTime() - 2 * 60 * 60_000),
+        endAt: new Date(now.getTime() - 60 * 60_000),
+        content: `S8 隐藏待确认 ${randomUUID()}`,
+        createdByAccountId: other.accountId,
+      },
+    });
+    const inbox = await getActionInbox({ actor: user, limit: 100 });
+    expect(inbox.items).toContainEqual(
+      expect.objectContaining({
+        id: `segment-confirm:${own.id}`,
+        kind: "SEGMENT_CONFIRMATION",
+        severity: "HIGH",
+      }),
+    );
+    expect(inbox.items.some((item) => item.id.includes(hidden.id))).toBe(false);
+  });
+
+  test("Action Inbox applies handling permission before limit and reports exact totals", async () => {
+    const user = await createActor("S8 Inbox limit actor");
+    const owner = await createActor("S8 Inbox limit owner");
+    const task = await createActiveTaskWithMilestone(
+      owner,
+      new Date("2026-09-10T02:00:00.000Z"),
+    );
+    await prisma.taskMember.create({
+      data: {
+        taskId: task.taskId,
+        personId: user.personId,
+        role: "VIEWER",
+        createdByAccountId: owner.accountId,
+      },
+    });
+    for (let index = 0; index < 3; index += 1) {
+      await prisma.workSegment.create({
+        data: {
+          personId: owner.personId,
+          taskId: task.taskId,
+          type: "PLANNED",
+          status: "PLANNED",
+          startAt: new Date(`2026-09-0${index + 1}T01:00:00.000Z`),
+          endAt: new Date(`2026-09-0${index + 1}T02:00:00.000Z`),
+          content: `可见但不可处理 ${index}`,
+          associationNeedsReview: true,
+          createdByAccountId: owner.accountId,
+        },
+      });
+    }
+    const actionable = await prisma.workSegment.create({
+      data: {
+        personId: user.personId,
+        type: "PLANNED",
+        status: "PLANNED",
+        startAt: new Date("2026-09-20T01:00:00.000Z"),
+        endAt: new Date("2026-09-20T02:00:00.000Z"),
+        content: "本人可处理关联",
+        associationNeedsReview: true,
+        createdByAccountId: user.accountId,
+      },
+    });
+
+    const inbox = await getActionInbox({ actor: user, limit: 1 });
+    expect(inbox.items).toHaveLength(1);
+    expect(inbox.items[0]?.id).toBe(`association:${actionable.id}`);
+    expect(inbox.totalCount).toBe(1);
+  });
+
+  test("dashboard metrics are independent from display limits", async () => {
+    const user = await createActor("S8 Dashboard totals");
+    for (let index = 0; index < 13; index += 1) {
+      await createActiveTaskWithMilestone(
+        user,
+        new Date(`2026-10-${String(index + 1).padStart(2, "0")}T02:00:00.000Z`),
+      );
+    }
+    await prisma.workSegment.createMany({
+      data: Array.from({ length: 21 }, (_, index) => ({
+        personId: user.personId,
+        type: "PLANNED" as const,
+        status: "PENDING_CONFIRMATION" as const,
+        startAt: new Date(2026, 8, 1, index),
+        endAt: new Date(2026, 8, 1, index + 1),
+        content: `S8 dashboard pending ${index}`,
+        createdByAccountId: user.accountId,
+      })),
+    });
+
+    const [dashboard, inbox] = await Promise.all([
+      getMyWorkDashboard({ actor: user }),
+      getActionInbox({ actor: user, limit: 20 }),
+    ]);
+    expect(dashboard.activeTasks).toHaveLength(12);
+    expect(dashboard.activeTaskCount).toBe(13);
+    expect(inbox.items).toHaveLength(20);
+    expect(inbox.totalCount).toBe(21);
+  });
+
+  test("Action Inbox can return more than the public 100-conflict page size", async () => {
+    const user = await createActor("S8 conflict inbox page size");
+    const start = Date.parse("2026-09-01T00:00:00.000Z");
+    await prisma.resourceConflict.createMany({
+      data: Array.from({ length: 101 }, (_, index) => ({
+        personId: user.personId,
+        kind: "ALLOCATION_OVER_LIMIT" as const,
+        startAt: new Date(start + index * 60_000),
+        endAt: new Date(start + (index + 1) * 60_000),
+        severity: "CRITICAL" as const,
+        status: "OPEN" as const,
+        fingerprint: `s8-inbox-${randomUUID()}`,
+        explanation: { rule: "Action Inbox internal bounded page" },
+      })),
+    });
+
+    const inbox = await getActionInbox({ actor: user, limit: 200 });
+    expect(inbox.items.filter((item) => item.kind === "RESOURCE_CONFLICT")).toHaveLength(
+      101,
+    );
+    expect(inbox.totalCount).toBe(101);
+    expect(inbox.criticalCount).toBe(101);
+  });
+
+  test("Tag deletion removes only classification links and writes an audit", async () => {
+    const user = await createActor("S8 Tag Owner");
+    const fixture = await createActiveTaskWithMilestone(user, new Date("2026-08-10T02:00:00.000Z"));
+    const tag = await prisma.tag.create({
+      data: {
+        name: `S8-delete-${randomUUID()}`,
+        color: "#64748b",
+        createdByAccountId: user.accountId,
+        taskTags: { create: { taskId: fixture.taskId } },
+      },
+    });
+    const result = await deleteTag(user, {
+      tagId: tag.id,
+      expectedUpdatedAt: tag.updatedAt.toISOString(),
+    });
+    expect(result.removedTaskAssociationCount).toBe(1);
+    await expect(prisma.task.findUnique({ where: { id: fixture.taskId } })).resolves.not.toBeNull();
+    await expect(prisma.tag.findUnique({ where: { id: tag.id } })).resolves.toBeNull();
+    await expect(
+      prisma.domainAuditEvent.count({
+        where: { action: "tag.deleted", entityId: tag.id },
+      }),
+    ).resolves.toBe(1);
+  });
+
+  test("Tag management paginates beyond 100 records and stale deletion is atomic", async () => {
+    const user = await createActor("S8 Tag paging");
+    const prefix = `S8-page-${randomUUID()}`;
+    await prisma.tag.createMany({
+      data: Array.from({ length: 101 }, (_, index) => ({
+        name: `${prefix}-${String(index).padStart(3, "0")}`,
+        color: "#64748b",
+        createdByAccountId: user.accountId,
+      })),
+    });
+    const firstPage = await listTags({
+      actor: user,
+      input: { includeArchived: true, query: prefix, limit: 100 },
+    });
+    expect(firstPage.items).toHaveLength(100);
+    expect(firstPage.nextCursor).toBeTruthy();
+    const secondPage = await listTags({
+      actor: user,
+      input: {
+        includeArchived: true,
+        query: prefix,
+        limit: 100,
+        cursor: firstPage.nextCursor,
+      },
+    });
+    expect(secondPage.items).toHaveLength(1);
+    expect(secondPage.nextCursor).toBeNull();
+
+    const staleTarget = firstPage.items[0];
+    if (!staleTarget) throw new Error("Tag 分页测试缺少首条记录");
+    await prisma.tag.update({
+      where: { id: staleTarget.id },
+      data: { description: "并发更新" },
+    });
+    await expect(
+      deleteTag(user, {
+        tagId: staleTarget.id,
+        expectedUpdatedAt: staleTarget.updatedAt,
+      }),
+    ).rejects.toThrow("Tag 已被他人修改");
+    await expect(
+      prisma.domainAuditEvent.count({
+        where: { action: "tag.deleted", entityId: staleTarget.id },
+      }),
+    ).resolves.toBe(0);
+    await expect(
+      prisma.tag.findUnique({ where: { id: staleTarget.id } }),
+    ).resolves.not.toBeNull();
+  });
+
+  test("ordinary Feishu preference is honored while in-app and mandatory delivery remain", async () => {
+    const user = await createActor("S8 Preference");
+    await updateNotificationPreference(user, {
+      category: "TASK",
+      feishuEnabled: false,
+    });
+    const recipient = { accountId: user.accountId, openId: user.openId };
+    const ordinaryKey = `s8-pref-ordinary-${randomUUID()}`;
+    await prisma.$transaction((tx) =>
+      createProjectManagementEventNotificationsTx(tx, {
+        actor: user,
+        kind: "task_assigned",
+        category: "TASK",
+        eventKey: ordinaryKey,
+        title: "普通 Task 通知",
+        summary: "普通飞书通知已关闭",
+        entityType: "Task",
+        entityId: randomUUID(),
+        mandatory: false,
+        recipients: [recipient],
+      }),
+    );
+    expect(
+      await prisma.inAppNotification.count({
+        where: { eventKey: `${ordinaryKey}:inapp:${user.accountId}` },
+      }),
+    ).toBe(1);
+    expect(
+      await prisma.notificationOutbox.count({ where: { eventKey: `${ordinaryKey}:feishu` } }),
+    ).toBe(0);
+
+    const mandatoryKey = `s8-pref-mandatory-${randomUUID()}`;
+    await prisma.$transaction((tx) =>
+      createProjectManagementEventNotificationsTx(tx, {
+        actor: user,
+        kind: "task_activated",
+        category: "TASK",
+        eventKey: mandatoryKey,
+        title: "强制 Task 通知",
+        summary: "关键状态变化仍保留",
+        entityType: "Task",
+        entityId: randomUUID(),
+        mandatory: true,
+        recipients: [recipient],
+      }),
+    );
+    const mandatory = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: { eventKey: `${mandatoryKey}:feishu` },
+    });
+    expect(mandatory.botKind).toBe("notification");
+    expect(JSON.parse(mandatory.payload)).toMatchObject({
+      mandatory: true,
+      recipientOpenIds: [user.openId],
+    });
+  });
+
+  test("notification recipient lookup uses the first non-empty default-tenant identity", async () => {
+    const user = await createActor("S8 Recipient identity");
+    await prisma.accountIdentity.updateMany({
+      where: {
+        accountId: user.accountId,
+        provider: "FEISHU",
+        tenantId: "default",
+      },
+      data: {
+        openId: null,
+        unionId: `on_s8_union_${randomUUID()}`,
+      },
+    });
+    const laterValidOpenId = `ou_s8_later_${randomUUID()}`;
+    await prisma.accountIdentity.create({
+      data: {
+        accountId: user.accountId,
+        provider: "FEISHU",
+        tenantId: "default",
+        providerSubject: `open:${laterValidOpenId}`,
+        openId: `  ${laterValidOpenId}  `,
+      },
+    });
+
+    const [byAccount, byPerson] = await prisma.$transaction((tx) =>
+      Promise.all([
+        recipientsForAccountIdsTx(tx, [user.accountId]),
+        recipientsForPersonIdsTx(tx, [user.personId]),
+      ]),
+    );
+    expect(byAccount).toEqual([
+      { accountId: user.accountId, openId: laterValidOpenId },
+    ]);
+    expect(byPerson).toEqual([
+      { accountId: user.accountId, openId: laterValidOpenId },
+    ]);
+  });
+
+  test("Shanghai milestone scanner is idempotent and maintenance is bounded", async () => {
+    const user = await createActor("S8 Cron");
+    const dueAt = new Date("2026-08-10T02:00:00.000Z");
+    const fixture = await createActiveTaskWithMilestone(user, dueAt);
+    const scanAt = new Date("2026-08-10T00:30:00.000Z");
+    const first = await runMilestoneDeadlineScan(scanAt);
+    const second = await runMilestoneDeadlineScan(scanAt);
+    expect(first.localDate).toBe("2026-08-10");
+    expect(second.localDate).toBe("2026-08-10");
+    const eventKey = `pm:milestone:${fixture.milestoneId}:milestone_due:2026-08-10`;
+    expect(
+      await prisma.notificationOutbox.count({ where: { eventKey: `${eventKey}:feishu` } }),
+    ).toBe(1);
+    expect(
+      await prisma.inAppNotification.count({
+        where: { eventKey: `${eventKey}:inapp:${user.accountId}` },
+      }),
+    ).toBe(1);
+    expect(
+      await prisma.inAppNotification.findUnique({
+        where: { eventKey: `${eventKey}:inapp:${user.accountId}` },
+        select: { linkPath: true },
+      }),
+    ).toEqual({ linkPath: `/progress/tasks/${fixture.taskId}?tab=reviews` });
+
+    const old = new Date("2025-01-01T00:00:00.000Z");
+    const oldInApp = await prisma.inAppNotification.create({
+      data: {
+        recipientAccountId: user.accountId,
+        category: "TASK",
+        title: "S8 过期已读通知",
+        entityType: "Task",
+        entityId: randomUUID(),
+        readAt: old,
+        createdAt: old,
+      },
+    });
+    const oldOutbox = await prisma.notificationOutbox.create({
+      data: {
+        eventKey: `s8-old-outbox-${randomUUID()}`,
+        channel: "project-management",
+        type: "task_assigned",
+        payload: "{}",
+        status: "SENT",
+        sentAt: old,
+        createdAt: old,
+        updatedAt: old,
+      },
+    });
+    const retention = await runProjectManagementNotificationRetention(
+      new Date("2026-08-10T00:30:00.000Z"),
+      5_000,
+    );
+    expect(retention.deletedInAppCount).toBeGreaterThanOrEqual(1);
+    expect(retention.deletedOutboxCount).toBeGreaterThanOrEqual(1);
+    expect(await prisma.inAppNotification.findUnique({ where: { id: oldInApp.id } })).toBeNull();
+    expect(await prisma.notificationOutbox.findUnique({ where: { id: oldOutbox.id } })).toBeNull();
+    expect((await runProjectManagementIntegrityScan()).violationCount).toBe(0);
+  });
+
+  test("deadline scanner and Action Inbox ignore nodes outside the Current Plan", async () => {
+    const user = await createActor("S8 Current Plan Boundary");
+    const now = new Date("2026-08-10T00:30:00.000Z");
+    const current = await createActiveTaskWithMilestone(
+      user,
+      new Date("2026-08-10T02:00:00.000Z"),
+    );
+    const secondCurrent = await createActiveTaskWithMilestone(
+      user,
+      new Date("2026-08-10T03:00:00.000Z"),
+    );
+    const candidatePlanId = randomUUID();
+    const candidateMilestoneNodeId = randomUUID();
+    const candidateMilestoneId = randomUUID();
+    const candidateTerminationNodeId = randomUUID();
+    const candidateTerminationId = randomUUID();
+    await prisma.$transaction(async (tx) => {
+      await tx.taskPlanVersion.create({
+        data: {
+          id: candidatePlanId,
+          taskId: current.taskId,
+          versionNo: 2,
+          status: "DRAFT",
+          plannedStartAt: new Date("2026-08-01T00:00:00.000Z"),
+          createdByAccountId: user.accountId,
+        },
+      });
+      await tx.taskNode.create({
+        data: {
+          id: candidateMilestoneNodeId,
+          taskId: current.taskId,
+          type: "MILESTONE",
+          status: "PENDING",
+          createdByAccountId: user.accountId,
+          planVersionEntries: {
+            create: { planVersionId: candidatePlanId, sequence: 1 },
+          },
+          milestone: {
+            create: {
+              id: candidateMilestoneId,
+              goal: "不得扫描的候选 Milestone",
+              completionCriteria: "候选计划不产生 deadline 通知",
+              expectedCompletedAt: new Date("2026-08-09T02:00:00.000Z"),
+              reviewRequirements: "无",
+            },
+          },
+        },
+      });
+      await tx.taskNode.create({
+        data: {
+          id: candidateTerminationNodeId,
+          taskId: current.taskId,
+          type: "TERMINATION",
+          status: "PENDING",
+          createdByAccountId: user.accountId,
+          planVersionEntries: {
+            create: { planVersionId: candidatePlanId, sequence: 2 },
+          },
+          termination: {
+            create: {
+              id: candidateTerminationId,
+              plannedAt: new Date("2026-08-09T03:00:00.000Z"),
+              plannedOutcomeCriteria: "候选计划 Termination 不得成为待办",
+            },
+          },
+        },
+      });
+    });
+
+    const pagedScan = await runMilestoneDeadlineScan(now, 1);
+    expect(pagedScan.scannedCount).toBeGreaterThanOrEqual(2);
+    for (const milestoneId of [current.milestoneId, secondCurrent.milestoneId]) {
+      expect(
+        await prisma.notificationOutbox.count({
+          where: { eventKey: { startsWith: `pm:milestone:${milestoneId}:` } },
+        }),
+      ).toBe(1);
+    }
+    expect(
+      await prisma.notificationOutbox.count({
+        where: { eventKey: { startsWith: `pm:milestone:${candidateMilestoneId}:` } },
+      }),
+    ).toBe(0);
+    expect(
+      await prisma.inAppNotification.count({
+        where: { entityType: "MilestoneNode", entityId: candidateMilestoneId },
+      }),
+    ).toBe(0);
+    await prisma.taskPlanVersion.update({
+      where: { id: candidatePlanId },
+      data: { status: "ABANDONED" },
+    });
+    await runMilestoneDeadlineScan(now, 1);
+    expect(
+      await prisma.notificationOutbox.count({
+        where: { eventKey: { startsWith: `pm:milestone:${candidateMilestoneId}:` } },
+      }),
+    ).toBe(0);
+
+    const inbox = await getActionInbox({ actor: user, limit: 200 });
+    expect(inbox.items.some((item) => item.id === `termination:${candidateTerminationId}`)).toBe(
+      false,
+    );
+  });
+});
+
+async function createActor(displayName: string): Promise<ProjectManagementActor> {
+  const openId = `ou_s8_${randomUUID()}`;
+  const account = await prisma.account.create({
+    data: {
+      status: "ACTIVE",
+      identities: {
+        create: {
+          provider: "FEISHU",
+          tenantId: "default",
+          providerSubject: `open:${openId}`,
+          openId,
+        },
+      },
+      person: { create: { displayName, status: "ACTIVE" } },
+    },
+    include: { person: true },
+  });
+  if (!account.person) throw new Error("S8 test actor missing person");
+  return {
+    accountId: account.id,
+    personId: account.person.id,
+    openId,
+    unionId: null,
+    systemRoles: [],
+  };
+}
+
+async function createActiveTaskWithMilestone(
+  actor: ProjectManagementActor,
+  dueAt: Date,
+) {
+  const taskId = randomUUID();
+  const planId = randomUUID();
+  const nodeId = randomUUID();
+  const milestoneId = randomUUID();
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SET CONSTRAINTS ALL DEFERRED`;
+    await tx.task.create({
+      data: {
+        id: taskId,
+        title: `S8 Task ${randomUUID()}`,
+        team: "英雄",
+        techGroup: "电控",
+        status: "ACTIVE",
+        currentPlanVersionId: planId,
+        createdByAccountId: actor.accountId,
+      },
+    });
+    await tx.taskPlanVersion.create({
+      data: {
+        id: planId,
+        taskId,
+        versionNo: 1,
+        status: "CURRENT",
+        plannedStartAt: new Date(dueAt.getTime() - 7 * 24 * 60 * 60_000),
+        createdByAccountId: actor.accountId,
+      },
+    });
+    await tx.taskMember.create({
+      data: { taskId, personId: actor.personId, role: "OWNER", createdByAccountId: actor.accountId },
+    });
+    await tx.taskNode.create({
+      data: {
+        id: nodeId,
+        taskId,
+        type: "MILESTONE",
+        status: "ACTIVE",
+        createdByAccountId: actor.accountId,
+        milestone: {
+          create: {
+            id: milestoneId,
+            goal: "S8 截止提醒",
+            completionCriteria: "提醒幂等",
+            expectedCompletedAt: dueAt,
+            reviewRequirements: "检查 outbox",
+          },
+        },
+      },
+    });
+    await tx.planVersionNode.create({
+      data: { planVersionId: planId, nodeId, sequence: 1 },
+    });
+    await tx.task.update({
+      where: { id: taskId },
+      data: { activeMilestoneNodeId: nodeId },
+    });
+  });
+  return { taskId, planId, nodeId, milestoneId };
+}

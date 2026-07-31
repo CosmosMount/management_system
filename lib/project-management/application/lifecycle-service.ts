@@ -24,12 +24,7 @@ import type {
   ProjectManagementActor,
   ProjectManagementSystemRoleRecord,
 } from "@/lib/project-management/identity";
-import {
-  createInAppNotificationTx,
-  enqueueProjectManagementNotificationTx,
-  PROJECT_MANAGEMENT_NOTIFICATION_PAYLOAD_VERSION,
-  type ProjectManagementNotificationPayload,
-} from "@/lib/project-management/notifications/events";
+import type { ProjectManagementNotificationPayload } from "@/lib/project-management/notifications/events";
 import {
   createProjectManagementEventNotificationsTx,
   recipientsForPersonIdsTx,
@@ -50,6 +45,7 @@ import {
   reviewMilestoneDecisionInputSchema,
   submitMilestoneReviewInputSchema,
   submitRevisionInputSchema,
+  updateRevisionDraftInputSchema,
   type CreateTaskDraftInput,
   type RevisionDraftInput,
 } from "@/lib/project-management/validations/lifecycle";
@@ -428,7 +424,7 @@ export async function activateTask(
 
     await notifyTaskMembersTx(tx, {
       actor: refreshedActor,
-      task,
+      task: { ...task, status: updated.status },
       kind: "task_activated",
       category: "TASK",
       eventKey: `pm:task:activated:${task.id}:${updated.lockVersion}`,
@@ -636,6 +632,154 @@ export async function createRevisionDraft(
       currentPlanVersionId: task.currentPlanVersionId,
       lockVersion: task.lockVersion,
       created: true,
+    };
+  });
+}
+
+export async function updateRevisionDraft(
+  actor: ProjectManagementActor,
+  input: unknown,
+): Promise<RevisionMutationResult> {
+  const parsed = updateRevisionDraftInputSchema.parse(input);
+
+  return prisma.$transaction(async (tx) => {
+    const { refreshedActor, task, revision, targetPlanVersionId } =
+      await loadRevisionForMutationTx(tx, actor, parsed.revisionNodeId);
+    if (revision.node.createdByAccountId !== refreshedActor.accountId) {
+      assertAuthorized({
+        actor: refreshedActor,
+        action: "revision.apply",
+        resource: taskResource(task),
+      });
+    }
+    assertTaskActiveForPlanChange(task);
+    if (!["DRAFT", "REJECTED"].includes(revision.status)) {
+      throw stateConflictError("只有草稿或已驳回的 Revision 可以编辑");
+    }
+    if (!targetPlanVersionId || !revision.targetPlanVersion) {
+      throw stateConflictError("Revision 缺少候选计划");
+    }
+    if (
+      revision.targetPlanVersion.status !== "DRAFT" ||
+      revision.targetPlanVersion.updatedAt.getTime() !==
+        parsed.expectedTargetPlanUpdatedAt.getTime()
+    ) {
+      throw planVersionConflictError("Revision 候选计划已更新，请刷新后重试");
+    }
+    if (
+      revision.basePlanVersionId !== task.currentPlanVersionId ||
+      revision.baseTaskLockVersion !== task.lockVersion
+    ) {
+      throw planVersionConflictError();
+    }
+
+    const targetPlan = await loadPlanForValidationTx(tx, targetPlanVersionId);
+    const beforePlanAudit = revisionPlanAuditState(targetPlan);
+    const revisionEntryIndex = targetPlan.nodes.findIndex(
+      (entry) => entry.nodeId === revision.nodeId,
+    );
+    if (revisionEntryIndex < 0) {
+      throw stateConflictError("Revision 候选计划结构不完整");
+    }
+    const replaceableEntries = targetPlan.nodes.slice(revisionEntryIndex + 1);
+    const replaceableNodeIds = replaceableEntries.map((entry) => entry.nodeId);
+    if (replaceableNodeIds.length > 0) {
+      const associated = await tx.workSegment.findFirst({
+        where: { nodeId: { in: replaceableNodeIds }, deletedAt: null },
+        select: { id: true },
+      });
+      if (associated) {
+        throw stateConflictError("候选计划节点已被投入记录引用，不能整包替换");
+      }
+      await tx.planVersionNode.deleteMany({
+        where: { planVersionId: targetPlanVersionId, nodeId: { in: replaceableNodeIds } },
+      });
+      await tx.milestoneNode.deleteMany({
+        where: { nodeId: { in: replaceableNodeIds } },
+      });
+      await tx.terminationNode.deleteMany({
+        where: { nodeId: { in: replaceableNodeIds } },
+      });
+      await tx.taskNode.deleteMany({
+        where: { id: { in: replaceableNodeIds } },
+      });
+    }
+
+    await tx.taskPlanVersion.update({
+      where: { id: targetPlanVersionId },
+      data: {
+        reason: parsed.reason,
+        plannedStartAt: parsed.plannedStartAt,
+        snapshotHash: "",
+      },
+    });
+    await tx.taskNode.update({
+      where: { id: revision.nodeId },
+      data: { businessDescription: parsed.reason },
+    });
+    await tx.revisionNode.update({
+      where: { id: parsed.revisionNodeId },
+      data: {
+        reason: parsed.reason,
+        status: "DRAFT",
+        submittedAt: null,
+        reviewedAt: null,
+        reviewedByAccountId: null,
+        reviewComment: "",
+        affectedSummary: jsonValue({
+          revisedFromNodeId: revision.revisedFromNodeId,
+          replacementMilestoneCount: parsed.replacementMilestones.length,
+        }),
+      },
+    });
+    await createPlanNodesTx(tx, {
+      taskId: task.id,
+      planVersionId: targetPlanVersionId,
+      actorAccountId: refreshedActor.accountId,
+      milestones: parsed.replacementMilestones,
+      termination: parsed.termination,
+      startingSequence: revisionEntryIndex + 2,
+      carryForward: false,
+    });
+    const updatedTargetPlan = await loadPlanForValidationTx(
+      tx,
+      targetPlanVersionId,
+    );
+    assertRevisionTargetPlanValid(updatedTargetPlan);
+    const afterPlanAudit = revisionPlanAuditState(updatedTargetPlan);
+    await tx.taskPlanVersion.update({
+      where: { id: targetPlanVersionId },
+      data: { snapshotHash: afterPlanAudit.snapshotHash },
+    });
+    await createDomainAuditEventTx(tx, {
+      actorAccountId: refreshedActor.accountId,
+      actorPersonId: refreshedActor.personId,
+      action: "pm.revision.draft.update",
+      entityType: "RevisionNode",
+      entityId: parsed.revisionNodeId,
+      taskId: task.id,
+      before: jsonValue({
+        status: revision.status,
+        targetPlanVersionId,
+        targetPlanUpdatedAt: revision.targetPlanVersion.updatedAt,
+        plan: beforePlanAudit,
+      }),
+      after: jsonValue({
+        status: "DRAFT",
+        targetPlanVersionId,
+        replacementMilestoneCount: parsed.replacementMilestones.length,
+        plan: afterPlanAudit,
+        changes: summarizeRevisionPlanChanges(targetPlan, updatedTargetPlan),
+      }),
+      reason: parsed.reason,
+    });
+    return {
+      taskId: task.id,
+      revisionNodeId: parsed.revisionNodeId,
+      targetPlanVersionId,
+      status: "DRAFT",
+      currentPlanVersionId: task.currentPlanVersionId,
+      lockVersion: task.lockVersion,
     };
   });
 }
@@ -2435,57 +2579,24 @@ async function createProjectManagementNotificationsTx(
     recipients: NotificationRecipient[];
   },
 ) {
-  const actorName = await actorDisplayNameTx(tx, input.actor);
-  const uniqueRecipients = uniqueRecipientsByAccount(input.recipients);
-  const payload: ProjectManagementNotificationPayload = {
+  await createProjectManagementEventNotificationsTx(tx, {
+    actor: input.actor,
+    task: {
+      id: input.task.id,
+      title: input.task.title,
+      status: input.task.status,
+      currentPlanVersionId: input.task.currentPlanVersionId,
+    },
     kind: input.kind,
-    payloadVersion: PROJECT_MANAGEMENT_NOTIFICATION_PAYLOAD_VERSION,
-    purpose:
-      input.kind === "milestone_review_submitted" ||
-      input.kind === "revision_pending_review"
-        ? "approval_request"
-        : "notification",
     category: input.category,
+    eventKey: input.eventKey,
     title: input.title,
     summary: input.summary,
-    actorName,
-    taskId: input.task.id,
-    taskTitle: input.task.title,
     entityType: input.entityType,
     entityId: input.entityId,
     linkPath: PROGRESS_LINK,
-    recipientOpenIds: uniqueRecipients
-      .map((recipient) => recipient.openId)
-      .filter((openId): openId is string => Boolean(openId)),
     mandatory: input.mandatory,
-    context: {
-      taskStatus: input.task.status,
-      currentPlanVersionId: input.task.currentPlanVersionId,
-    },
-  };
-  const inAppPayload: ProjectManagementNotificationPayload = {
-    ...payload,
-    recipientOpenIds: [],
-  };
-
-  for (const recipient of uniqueRecipients) {
-    await createInAppNotificationTx(tx, {
-      eventKey: `${input.eventKey}:inapp:${recipient.accountId}`,
-      recipientAccountId: recipient.accountId,
-      category: input.category,
-      title: input.title,
-      summary: input.summary,
-      entityType: input.entityType,
-      entityId: input.entityId,
-      taskId: input.task.id,
-      linkPath: PROGRESS_LINK,
-      payload: jsonValue(inAppPayload),
-    });
-  }
-  await enqueueProjectManagementNotificationTx(tx, {
-    eventKey: `${input.eventKey}:feishu`,
-    type: input.kind,
-    payload,
+    recipients: input.recipients,
   });
 }
 
@@ -2507,8 +2618,8 @@ async function taskMemberRecipientsTx(
                   provider: FEISHU_PROVIDER,
                   tenantId: DEFAULT_TENANT_ID,
                 },
-                select: { openId: true },
-                take: 1,
+                select: { id: true, openId: true },
+                orderBy: [{ createdAt: "asc" }, { id: "asc" }],
               },
             },
           },
@@ -2523,7 +2634,7 @@ async function taskMemberRecipientsTx(
     )
     .map((account) => ({
       accountId: account.id,
-      openId: account.identities[0]?.openId ?? null,
+      openId: firstNonEmptyOpenId(account.identities),
     }));
 }
 
@@ -2545,8 +2656,8 @@ async function reviewerRecipientsTx(
                   provider: FEISHU_PROVIDER,
                   tenantId: DEFAULT_TENANT_ID,
                 },
-                select: { openId: true },
-                take: 1,
+                select: { id: true, openId: true },
+                orderBy: [{ createdAt: "asc" }, { id: "asc" }],
               },
             },
           },
@@ -2566,8 +2677,8 @@ async function reviewerRecipientsTx(
               provider: FEISHU_PROVIDER,
               tenantId: DEFAULT_TENANT_ID,
             },
-            select: { openId: true },
-            take: 1,
+            select: { id: true, openId: true },
+            orderBy: [{ createdAt: "asc" }, { id: "asc" }],
           },
         },
       },
@@ -2582,7 +2693,7 @@ async function reviewerRecipientsTx(
     )
     .map((account) => ({
       accountId: account.id,
-      openId: account.identities[0]?.openId ?? null,
+      openId: firstNonEmptyOpenId(account.identities),
     }));
 }
 
@@ -2640,15 +2751,23 @@ async function accountRecipientsTx(
           provider: FEISHU_PROVIDER,
           tenantId: DEFAULT_TENANT_ID,
         },
-        select: { openId: true },
-        take: 1,
+        select: { id: true, openId: true },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       },
     },
   });
   return accounts.map((account) => ({
     accountId: account.id,
-    openId: account.identities[0]?.openId ?? null,
+    openId: firstNonEmptyOpenId(account.identities),
   }));
+}
+
+function firstNonEmptyOpenId(
+  identities: Array<{ openId: string | null }>,
+): string | null {
+  return identities
+    .map((identity) => identity.openId?.trim() ?? "")
+    .find(Boolean) ?? null;
 }
 
 function scopedRoleWhere(
@@ -2664,30 +2783,6 @@ function scopedRoleWhere(
       { OR: [{ techGroup: "" }, { techGroup: task.techGroup }] },
     ],
   };
-}
-
-function uniqueRecipientsByAccount(
-  recipients: NotificationRecipient[],
-): NotificationRecipient[] {
-  const seen = new Set<string>();
-  const unique: NotificationRecipient[] = [];
-  for (const recipient of recipients) {
-    if (seen.has(recipient.accountId)) continue;
-    seen.add(recipient.accountId);
-    unique.push(recipient);
-  }
-  return unique;
-}
-
-async function actorDisplayNameTx(
-  tx: PrismaTx,
-  actor: ProjectManagementActor,
-): Promise<string> {
-  const person = await tx.person.findUnique({
-    where: { id: actor.personId },
-    select: { displayName: true },
-  });
-  return person?.displayName ?? "系统";
 }
 
 function hashRequest(operation: string, input: unknown): string {
@@ -2732,6 +2827,99 @@ function hashPlan(plan: {
         : null,
     })),
   });
+}
+
+function revisionPlanAuditState(plan: {
+  plannedStartAt: Date | null;
+  nodes: PlanEntry[];
+}) {
+  return {
+    plannedStartAt: plan.plannedStartAt?.toISOString() ?? null,
+    snapshotHash: hashPlan(plan),
+    nodeCount: plan.nodes.length,
+    nodeOrder: plan.nodes.slice(0, 202).map((entry) => ({
+      nodeId: entry.nodeId,
+      sequence: entry.sequence,
+      type: entry.node.type,
+    })),
+  };
+}
+
+function summarizeRevisionPlanChanges(
+  before: { plannedStartAt: Date | null; nodes: PlanEntry[] },
+  after: { plannedStartAt: Date | null; nodes: PlanEntry[] },
+) {
+  const beforeById = new Map(before.nodes.map((entry) => [entry.nodeId, entry]));
+  const afterById = new Map(after.nodes.map((entry) => [entry.nodeId, entry]));
+  const removedEntries = before.nodes.filter(
+    (entry) => !afterById.has(entry.nodeId),
+  );
+  const addedEntries = after.nodes.filter(
+    (entry) => !beforeById.has(entry.nodeId),
+  );
+  const changedEntries = after.nodes.flatMap((entry) => {
+    const previous = beforeById.get(entry.nodeId);
+    if (!previous) return [];
+    const previousView = revisionNodeAuditView(previous);
+    const nextView = revisionNodeAuditView(entry);
+    if (stableStringify(previousView) === stableStringify(nextView)) return [];
+    return [{ nodeId: entry.nodeId, before: previousView, after: nextView }];
+  });
+  const removed = removedEntries
+    .slice(0, 50)
+    .map(revisionNodeAuditView);
+  const added = addedEntries
+    .slice(0, 50)
+    .map(revisionNodeAuditView);
+  const changed = changedEntries.slice(0, 50);
+  return {
+    plannedStartAtChanged:
+      before.plannedStartAt?.toISOString() !== after.plannedStartAt?.toISOString(),
+    removedTotal: removedEntries.length,
+    addedTotal: addedEntries.length,
+    changedTotal: changedEntries.length,
+    removed,
+    added,
+    changed,
+    truncated:
+      removedEntries.length > removed.length ||
+      addedEntries.length > added.length ||
+      changedEntries.length > changed.length,
+  };
+}
+
+function revisionNodeAuditView(entry: PlanEntry) {
+  return {
+    nodeId: entry.nodeId,
+    sequence: entry.sequence,
+    type: entry.node.type,
+    businessDescription: boundedAuditText(entry.node.businessDescription),
+    milestone: entry.node.milestone
+      ? {
+          goal: boundedAuditText(entry.node.milestone.goal),
+          completionCriteria: boundedAuditText(
+            entry.node.milestone.completionCriteria,
+          ),
+          expectedCompletedAt:
+            entry.node.milestone.expectedCompletedAt.toISOString(),
+          reviewRequirements: boundedAuditText(
+            entry.node.milestone.reviewRequirements,
+          ),
+        }
+      : null,
+    termination: entry.node.termination
+      ? {
+          plannedAt: entry.node.termination.plannedAt.toISOString(),
+          plannedOutcomeCriteria: boundedAuditText(
+            entry.node.termination.plannedOutcomeCriteria,
+          ),
+        }
+      : null,
+  };
+}
+
+function boundedAuditText(value: string) {
+  return value.length <= 160 ? value : `${value.slice(0, 160)}…`;
 }
 
 function stableStringify(value: unknown): string {

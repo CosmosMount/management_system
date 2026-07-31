@@ -522,15 +522,18 @@ pm2 start npm --name procurement-cron -- run cron
 
 ## 项目管理重构状态
 
-旧项目、阶段、任务、审批、周报、风险和提醒实现及其开发数据已直接清理，不提供旧数据迁移或旧接口兼容。当前已完成 v2.1 P1 底座、P2/P3 Task 生命周期服务端闭环、P5 Resource Segment/Conflict 服务端闭环，以及 P4/P6 首批浏览器界面：Account/Person、Task/Tag、Plan/Node、Segment、站内通知、审计和权限骨架已进入 schema；Task 草稿创建、激活、Current Plan 查询、Revision、Milestone Review、Termination、Planned/Actual Work Segment、来源关系、拆分合并、确认/部分确认、重关联、冲突扫描和人工处理已有服务端状态机、界面入口与集成测试。
+旧项目、阶段、任务、审批、周报、风险和提醒实现及其开发数据已直接清理，不提供旧数据迁移或旧接口兼容。当前已完成 v2.1 P1 底座、P2/P3 Task 生命周期、P5 Resource Segment/Conflict，以及项目管理前端 v1.0 的 Task Composer、Task 工作台、统一 TimeCanvas/TimeAgenda、资源计划、个人时间线、冲突中心、个人驾驶舱、统一待办、Tag 和通知偏好。Account/Person、Task/Tag、Plan/Node、Segment、通知、审计、权限、cron checkpoint 与跨实例互斥均已有服务端状态机和集成测试。
 
-- `/progress` 展示“我的工作”总览，汇总可见 Active Task、未来投入、待确认计划、开放冲突和未读站内通知。
+- `/progress` 是“我的工作”驾驶舱，提供指标、个人时间预览、行动待办、Active Task 表和折叠通知。
+- `/progress/tasks/new` 提供单页 Plan Composer；`/progress/my-timeline` 提供个人日/周时间与到期确认队列。
 - `/progress/tasks` 与 `/progress/tasks/[id]` 提供 Task 列表和 Task 工作台。
 - `/progress/resources` 提供人员计划时间轴，可执行 Planned Segment 新增、确认、部分确认、拆分、合并、顺延和取消。
 - `/progress/resources/conflicts` 提供资源冲突中心，可查看解释、确认已知、忽略、解决、预览并应用建议。
-- `/progress/notifications` 提供站内通知中心，可按类型/未读筛选、标记已读并跳转到仍可访问的业务对象。
+- `/progress/approvals` 汇总投入确认、Milestone Review、Revision、Conflict、Termination 与关联复核；`/progress/tags` 管理 Tag。
+- `/progress/notifications` 提供站内通知中心和分类飞书偏好；站内通知始终保留，强制事件不受普通关闭偏好影响。
 - 旧 `/progress/task/:id` 会重定向到 `/progress/tasks/:id`；旧 `/progress/projects/*` 和 `/progress/kanban` 回到 `/progress`；未映射旧目录没有业务页面。
 - 飞书登录和通讯录同步会保留采购 `User.openId/unionId`，同时初始化项目管理 Account/Person。已有用户先运行 `npm run pm:identity-backfill` 对账；确认后再运行 `APPLY_PM_IDENTITY_BACKFILL=true npm run pm:identity-backfill`。
-- 新项目管理的目标设计位于 [`docs/plan/`](docs/plan/)；当前浏览器入口仍是首批工作台，不包含完整 Task 创建/审批表单。
+- 新项目管理的设计和逐阶段真实证据位于 [`docs/plan/`](docs/plan/)；当前完成度以 `project-management-frontend-design-v1.0/13-实施进度台账.md` 为准。
+- `npm run pm:release-rehearsal` 仅用于本机隔离 `_test`/`_snapshot` 数据库；必须显式设置 `PM_RELEASE_REHEARSAL_CONFIRM=LOCAL_ISOLATED_REHEARSAL` 和 `NOTIFICATION_DELIVERY_DISABLED=true`。它不会执行生产维护窗口，生产发布仍需另行授权与 BO/TL/QA/DBA 签字。
 - 项目管理飞书通知只允许写入 `channel=project-management` 的 notification outbox；adapter 已构造普通交互卡并经统一私信传输层投递。验收和 Revision 待审批事件使用审批机器人用途，其他项目管理事件使用通知机器人。
 - 本阶段没有新增人员不可用时间模型，因此 `UNAVAILABLE_TIME` 冲突规则仍暂缓，待 P6+ 有可授权、可维护的不可用时间数据后再启用。

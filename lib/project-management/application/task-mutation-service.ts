@@ -171,9 +171,8 @@ export async function replaceTaskTags(
     assertAuthorizedTaskAction(refreshedActor, task, "task.update_metadata");
     assertTaskStatus(task, "ACTIVE");
     assertExpectedLockVersion(task, parsed.expectedLockVersion);
-    await assertTagReferencesTx(tx, parsed.tagIds);
-
     const beforeTagIds = activeTagIds(task);
+    await assertTagReferencesTx(tx, parsed.tagIds, beforeTagIds);
     await replaceTaskTagsTx(tx, task.id, beforeTagIds, parsed.tagIds);
     const updatedTask = await incrementTaskLockTx(
       tx,
@@ -333,11 +332,13 @@ async function updateTaskMetadataForStatus(
       refreshedActor,
       task.id,
       parsed.relatedTaskId,
+      task.relatedTaskId,
     );
     if (requiredStatus === "DRAFT") {
       await assertTagReferencesTx(
         tx,
         (parsed as UpdateTaskDraftMetadataInput).tagIds,
+        activeTagIds(task),
       );
     }
 
@@ -603,6 +604,7 @@ async function assertRelatedTaskVisibleTx(
   actor: ProjectManagementActor,
   taskId: string,
   relatedTaskId: string | null,
+  currentRelatedTaskId: string | null,
 ) {
   if (!relatedTaskId) return;
   if (relatedTaskId === taskId) {
@@ -610,6 +612,7 @@ async function assertRelatedTaskVisibleTx(
       relatedTaskId: ["Task 不能关联自身"],
     });
   }
+  if (relatedTaskId === currentRelatedTaskId) return;
   const relatedTask = await tx.task.findFirst({
     where: {
       AND: [{ id: relatedTaskId }, taskReadableWhere(actor)],
@@ -619,12 +622,18 @@ async function assertRelatedTaskVisibleTx(
   if (!relatedTask) throw notFoundError();
 }
 
-async function assertTagReferencesTx(tx: PrismaTx, tagIds: string[]) {
+async function assertTagReferencesTx(
+  tx: PrismaTx,
+  tagIds: string[],
+  currentTagIds: string[] = [],
+) {
   if (tagIds.length === 0) return;
+  const current = new Set(currentTagIds);
+  const addedTagIds = [...new Set(tagIds)].filter((tagId) => !current.has(tagId));
   const count = await tx.tag.count({
-    where: { id: { in: tagIds }, archivedAt: null },
+    where: { id: { in: addedTagIds }, archivedAt: null },
   });
-  if (count !== new Set(tagIds).size) {
+  if (count !== addedTagIds.length) {
     throw validationError("Tag 不存在或已归档", {
       tagIds: ["Tag 不存在或已归档"],
     });

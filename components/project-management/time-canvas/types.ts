@@ -87,6 +87,7 @@ export type TimeCanvasModel = {
   anchors: TimeCanvasAnchor[];
   segments: TimeCanvasSegment[];
   conflicts: TimeCanvasConflict[];
+  nextCursor?: string | null;
   generatedAt: string;
 };
 
@@ -131,6 +132,7 @@ export type TimeCanvasProps = {
   initialZoom?: TimeCanvasZoom;
   display?: TimeCanvasDisplayOptions;
   interaction?: TimeCanvasInteractionOptions;
+  initialSelection?: TimeCanvasSelection;
   emptyMessage?: string;
   onRangeChange?: (range: TimeCanvasRange) => void;
   onSelectionChange?: (selection: TimeCanvasSelection) => void;

@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { prisma } from "@/lib/prisma";
+import { taskReadableWhere } from "@/lib/project-management/authorization";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import { getUnreadInAppNotificationCount } from "@/lib/project-management/queries/notification-queries";
 import { getTimeCanvasData } from "@/lib/project-management/queries/time-canvas-queries";
@@ -25,11 +27,24 @@ export async function getMyWorkDashboard({
   const rangeEnd =
     parsed.rangeEnd ??
     new Date(now.getTime() + 7 * 24 * 60 * 60 * 1_000).toISOString();
-  const [activeTasks, personalTime, unreadNotificationCount] =
+  const [activeTasks, activeTaskCount, personalTime, unreadNotificationCount] =
     await Promise.all([
       listTasks({
         actor,
         input: { status: "ACTIVE", mine: true, limit: parsed.taskLimit },
+      }),
+      prisma.task.count({
+        where: {
+          AND: [
+            taskReadableWhere(actor),
+            { status: "ACTIVE" },
+            {
+              members: {
+                some: { personId: actor.personId, removedAt: null },
+              },
+            },
+          ],
+        },
       }),
       getTimeCanvasData({
         actor,
@@ -50,6 +65,7 @@ export async function getMyWorkDashboard({
 
   return {
     activeTasks: activeTasks.items,
+    activeTaskCount,
     personalTime,
     pendingConfirmations: personalTime.segments.flatMap((segment) =>
       segment.kind === "SEGMENT" &&

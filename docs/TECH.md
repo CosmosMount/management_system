@@ -154,13 +154,13 @@ Segment 放置关联意图分为 `KEEP` 与 `RELINK`：`KEEP` 不接受 Task/Nod
 
 延期项保持未完成：S7 才会要求 acknowledge/resolve/ignore/apply 消费 Conflict `versionToken`；S9 可增加高于当前冻结显式筛选限制的有限 `nodeIds`/全局复杂度 guard，本轮未实现也未标记完成。
 
-`scripts/cron.ts` 每 10 分钟运行 `scanSegmentTransitions`，把到期 Planned 推到 `PENDING_CONFIRMATION` 并写 `segment_confirmation_due`，把已开始且未结束的 Planned 置为 `IN_PROGRESS` 并写审计；该扫描不会自动生成 Actual。每 15 分钟运行 `scanResourceConflictsForDefaultWindow`，带运行中保护，只写冲突记录、站内通知和 `channel=project-management` outbox，不调整 Segment。
+`scripts/cron.ts` 每 10 分钟在数据库互斥下运行 Segment transition；每 15 分钟按 checkpoint 增量重扫变更人员，02:37 做完整冲突扫描，08:15 执行 deadline/retention/integrity。完整扫描刻意避开增量任务的整 15 分钟，避免共用 advisory lock 时每日固定跳过。扫描只写领域状态、审计、站内通知和 `channel=project-management` outbox，不自动生成 Actual，也不自动调整 Segment 排期。
 
-P4/P6 首批浏览器入口已上线：`/progress` 汇总我的 Active Task、未来投入、待确认计划、开放冲突和未读通知；`/progress/tasks` 提供可见 Task 列表；`/progress/tasks/[id]` 提供 Task 工作台；`/progress/resources` 提供人员计划时间轴并复用 P5 Segment action；`/progress/resources/conflicts` 提供冲突中心并复用 P5 Conflict action；`/progress/notifications` 提供站内通知筛选、标记已读和对象跳转。所有页面先解析项目管理 actor，再通过 `taskReadableWhere`、`segmentReadableWhere`、Conflict readable 条件或 `recipientAccountId` 过滤，服务端 action 仍执行状态机、权限和 `expectedUpdatedAt` 校验。
+项目管理前端 v1.0 浏览器入口已覆盖 `/progress` 驾驶舱、Task Composer/工作台、Resource Planner、Personal Timeline、Conflict Center、Action Inbox、Tag 和通知偏好。所有页面先解析项目管理 actor，再通过 `taskReadableWhere`、`segmentReadableWhere`、Conflict readable 条件或 `recipientAccountId` 过滤，服务端 action 仍执行状态机、权限和版本校验。
 
-项目管理浏览器入口统一由 `app/progress/layout.tsx` 渲染全站 `AppHeader`、`PageShell` 和模块 Shell，子页只提供上下文命令栏与业务内容。桌面端使用可折叠的 sticky 左侧导航；移动端使用基于现有 Dialog 原语的模态 Drawer，支持 Escape、焦点约束和关闭后的焦点恢复。模块 Shell 统一读取通知未读数，并通过 React 请求内缓存复用 actor 与通知页的未读查询；不可用对象使用 `/progress/not-found.tsx` 的统一脱敏页面。`--pm-*` 语义变量集中在 `app/globals.css`，Shell 适配现有明暗主题和 reduced motion。`myTimeline`、`taskNew`、`approvals`、`tags` 已保留类型安全路由常量，但对应页面落地前不显示导航链接。
+项目管理浏览器入口统一由 `app/progress/layout.tsx` 渲染全站 `AppHeader`、`PageShell` 和模块 Shell，子页只提供上下文命令栏与业务内容。桌面端使用可折叠的 sticky 左侧导航；移动端使用模态 Drawer。模块 Shell 统一读取通知未读数；不可用对象使用脱敏页面。`--pm-*` 语义变量集中在 `app/globals.css`，适配明暗主题和 reduced motion。`myTimeline`、`taskNew`、`approvals`、`tags` 均已有类型安全路由和导航入口。
 
-统一只读 `TimeCanvas` 通过显式 adapter 消费 S2 的安全 DTO，并共享时间坐标、半开区间、上海时区 snap/fit、可见窗口、稳定泳道和选择模型。桌面端使用 `@tanstack/react-virtual` 纵向虚拟化人员/Task 行，并只渲染横向可见时间窗口内的对象；Axis、Grid、周末背景、Today Line、计划轨道、Milestone、Termination、Planned、Actual、Busy、Conflict 和只读 Inspector 均由同一模型驱动。Pixel 5 使用复用该模型的 `TimeAgenda` 按日期渲染，不依赖压缩甘特图。Busy 在 adapter 后仍只含人员、时间、投入比例和安全摘要，不恢复源 Segment、Task、Node 或版本标识。`/progress/resources` 已接入真实 `getTimeCanvasData` 查询，同时在交互式画布落地前保留既有精确表单操作。`/progress/time-canvas-fixtures` 只有在官方 runner ownership token、随机 `_test` 数据库和通知禁发同时成立时才可访问，其他环境 fail closed 为 404；它不是用户功能入口。
+统一 `TimeCanvas` 通过显式 adapter 消费 S2 安全 DTO，共享时间坐标、半开区间、上海时区 snap/fit、稳定泳道、选择和 mutation 模型。桌面端使用 `@tanstack/react-virtual` 纵向虚拟化并只渲染横向可见对象；Pixel 5 使用同 DTO 的 `TimeAgenda`。响应式 renderer 通过 `matchMedia/useSyncExternalStore` 只挂载当前视口所需的一套 DOM，避免桌面隐藏 Agenda 仍创建数千节点。Busy 在 adapter 后仍不恢复源 Segment、Task、Node 或版本标识。受控 fixture 页面继续只对官方随机 `_test` runner 开放。
 
 `DomainAuditEvent` 由 append-only trigger 保护，应用代码只能追加审计事件，不能更新或删除既有审计行。
 
@@ -266,8 +266,14 @@ npm run cron                   # 启动定时任务（独立进程）
 | 每日 09:00 | 采购日报、采购停留催办 |
 | 每 10 分钟 | 采购预算阈值扫描 |
 | 每 2 分钟 | drain `NotificationOutbox` |
+| 每 10 分钟 | 项目管理 Planned Segment 状态迁移（数据库 advisory lock） |
+| 每 15 分钟 | 按 `ProjectManagementScanCheckpoint` 增量重扫资源冲突（数据库 advisory lock） |
+| 每日 02:37 | 项目管理 97 天窗口完整资源冲突扫描；避开每 15 分钟增量任务 |
+| 每日 08:15 | Milestone 截止提醒、通知保留清理、项目管理完整性巡检 |
 
 与 Next.js 主进程分离，生产环境用 PM2、systemd 或下文 **Docker** 中的 `cron` 服务单独拉起。
+
+项目管理 cron 不再只依赖进程内 boolean。每类任务先用 PostgreSQL transaction advisory lock 做跨实例互斥；冲突增量扫描按 `(WorkSegment.updatedAt,id)` 稳定游标推进 checkpoint，只有整批人员扫描成功才前移。每日完整扫描覆盖 checkpoint 窗口外、异常重试和历史数据。Task、WorkSegment、站内通知和 outbox 的 S9 索引由 `20260731102000_project_management_scan_checkpoint` migration 创建。
 
 ## Docker 部署
 

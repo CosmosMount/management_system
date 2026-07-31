@@ -67,6 +67,7 @@ export default async function ProgressConflictsPage({
           <ConflictCenterClient
             conflicts={conflicts.items}
             selectedConflict={selectedConflict}
+            status={conflictStatusValues.includes(status as (typeof conflictStatusValues)[number]) ? status : "OPEN"}
           />
       </div>
     </>

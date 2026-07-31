@@ -286,6 +286,10 @@ npm run pm:identity-backfill
 8. `tests/project-management-ui.spec.ts` 覆盖 P4/P6 `/progress` 总览、Task 工作台、资源时间轴、冲突中心、站内通知中心、桌面/移动视口、持久化状态和非成员拒绝路径。
 9. `tests/feishu-boundaries.spec.ts` 必须继续扫描 `app/progress`、`app/actions/project-management`、`components/project-management`、`lib/project-management` 和项目管理 notification adapter，防止项目管理入口或领域服务直接导入飞书传输层。
 10. `tests/project-management-s2-plan-mutations.spec.ts` 覆盖六个 Draft/Active mutation 的参数化允许状态、完全不可见与 visible-but-unauthorized、Draft/Active/四个 terminal/Archived、逐 action stale、成员不变量、真实非空业务差异下的同锁 exactly-once，以及受控审计晚失败整事务回滚；Active member 另在 InApp 已写、outbox insert 阶段注入失败并断言成员 active/history、lock、audit、InApp 和 outbox 全部回滚。副作用快照比较 metadata、TaskTag、active/historical members 和节点正文，不只比较计数。该 spec 还覆盖 raw/foreign `nodeId` 的统一拒绝、legacy Active 修复 Revision/Termination、200 节点长正文的有界审计、公开 absolute date-time 拒绝 `Date` 对象、随机 Task 与隐藏 Task 在 single/batch Planned、Actual、update/relink 的同码同文零写入，以及 mandatory recipient 仅使用 default tenant 非空 openId。TaskNode/Segment 竞争回归使用独立 PostgreSQL 连接外锁 Task 行，通过 `pg_blocking_pids` 建立 writer-first 与 replace-first 阻塞链，分别证明已有关联使删除失败、先删除使新关联失败，且不会死锁或出现 `nodeId` 静默置空。该 spec 只允许随机本机 `_test` PostgreSQL，并要求 `NOTIFICATION_DELIVERY_DISABLED=true`。
+11. `tests/project-management-s8.spec.ts` 覆盖 Action Inbox 权限/逾期排序、Tag 删除仅移除分类、普通/强制通知偏好、Asia/Shanghai deadline event key、保留清理和完整性巡检；UI 的 S8 场景在 Desktop/Pixel 5 验证驾驶舱、待办、Tag 与偏好。
+12. `tests/project-management-s9-cron.spec.ts` 覆盖 PostgreSQL 跨实例 advisory lock、checkpoint 成功推进、增量空跑和每日完整扫描记录；新增 migration 必须在 runner 随机 target 数据库从空库执行。
+13. `tests/project-management-performance.spec.ts` 默认跳过。仅在受控 runner 中设置 `PM_RUN_SCALE_TESTS=true`，生成 10k Task、100k Segment、50×100 PlanNode 和 100k 站内通知，执行 p95、90 天扫描、query plan、响应体积与浏览器 DOM 门禁。不得对开发、共享或生产数据库设置该变量。
+14. `tests/project-management-s10-release.spec.ts` 只在 Desktop 执行运维规格：演练工具 fail-closed、空库 migration、两次共享快照、受保护表 row/hash、identity backfill dry-run/APPLY 幂等、整库/上传恢复和旧 contract/直接飞书发送静态扫描。工具只接受本机 `_test`/`_snapshot` 来源，要求 `PM_RELEASE_REHEARSAL_CONFIRM=LOCAL_ISOLATED_REHEARSAL` 与 `NOTIFICATION_DELIVERY_DISABLED=true`，并只创建/删除随机 `pmrel_*_test` 数据库；不得把生产 URL 伪装成允许名称。
 
 ## 部署冒烟测试
 

@@ -1,6 +1,53 @@
+"use client";
+
 import Link from "next/link";
-import { CalendarCheck, GitBranch, ShieldCheck, Users } from "lucide-react";
+import { useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import {
+  activateTask,
+  replaceTaskDraftMembers,
+  replaceTaskDraftPlan,
+  replaceTaskMembers,
+  replaceTaskTags,
+  updateTaskDraftMetadata,
+  updateTaskMetadata,
+} from "@/app/actions/project-management/tasks";
+import {
+  approveRevision,
+  cancelRevision,
+  createRevisionDraft,
+  rejectRevision,
+  submitRevision,
+  updateRevisionDraft,
+} from "@/app/actions/project-management/revisions";
+import {
+  approveMilestoneReview,
+  rejectMilestoneReview,
+  requireMilestoneRevision,
+  submitMilestoneForReview,
+} from "@/app/actions/project-management/milestones";
+import { confirmTermination } from "@/app/actions/project-management/terminations";
+import {
+  searchPeopleOptions,
+  searchTagOptions,
+  searchTaskOptions,
+} from "@/app/actions/project-management/options";
+import {
+  comparePlanVersions,
+  getPlanVersion,
+  getTaskLifecycleViews,
+} from "@/app/actions/project-management/plans";
+import { ResourcePlannerCanvasClient } from "@/components/project-management/resource-planner-canvas-client";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { TEAM_OPTIONS, TECH_GROUP_OPTIONS } from "@/lib/constants";
+import type { ProjectManagementActionResult } from "@/lib/project-management/application/action-result";
+import {
+  isoToShanghaiDateTimeLocal,
+  shanghaiDateTimeLocalToIso,
+} from "@/lib/project-management/date-time";
 import {
   formatDateTime,
   taskMemberRoleLabels,
@@ -8,179 +55,397 @@ import {
   taskNodeTypeLabels,
   taskPriorityLabels,
   taskStatusLabels,
-  workSegmentStatusLabels,
-  workSegmentTypeLabels,
 } from "@/lib/project-management/labels";
-import type { WorkSegmentDetail } from "@/lib/project-management/queries/resource-queries";
-import type { TaskWorkspace } from "@/lib/project-management/queries/task-queries";
+import type { TaskLifecycleViews } from "@/lib/project-management/queries/task-lifecycle-queries";
+import type {
+  PlanVersionDiff,
+  PlanVersionSummary,
+  TaskWorkspace,
+} from "@/lib/project-management/queries/task-queries";
+import type { TimeCanvasModel } from "@/components/project-management/time-canvas/types";
+import type {
+  PersonOptionDto,
+  TagOptionPage,
+  TaskOptionPage,
+} from "@/lib/project-management/types/time-canvas";
 import { routes } from "@/lib/routes";
+import { cn } from "@/lib/utils";
 
-type TaskWorkbenchProps = {
-  workspace: TaskWorkspace;
-  segments: WorkSegmentDetail[];
+type TabId = "plan" | "overview" | "revisions" | "reviews" | "audit";
+type Notice = { kind: "success" | "error" | "info"; message: string } | null;
+type PlanVersionListItem = {
+  id: string;
+  versionNo: number;
+  status: string;
+  baseVersionId: string | null;
+  revisionNodeId: string | null;
+  reason: string;
+  plannedStartAt: string | null;
+  activatedAt: string | null;
+  createdAt: string;
+};
+type RunAction = (
+  action: () => Promise<ProjectManagementActionResult<unknown>>,
+  successMessage: string,
+  onSuccess?: () => void,
+) => Promise<void>;
+type DraftPlanMilestone = {
+  nodeId: string | null;
+  clientKey: string | null;
+  goal: string;
+  completionCriteria: string;
+  expectedCompletedAt: string;
+  reviewRequirements: string;
+  businessDescription: string;
+};
+type RevisionDraftMilestone = Omit<DraftPlanMilestone, "nodeId" | "clientKey"> & {
+  uiKey: string;
 };
 
-export function TaskWorkbench({ workspace, segments }: TaskWorkbenchProps) {
-  const { task, currentPlan } = workspace;
+const tabs: Array<{ id: TabId; label: string }> = [
+  { id: "plan", label: "计划与资源" },
+  { id: "overview", label: "概览" },
+  { id: "revisions", label: "修订与历史" },
+  { id: "reviews", label: "验收" },
+  { id: "audit", label: "审计" },
+];
+
+export function TaskWorkbench({
+  workspace,
+  lifecycle: initialLifecycle,
+  planVersions,
+  canvasModel,
+  canvasError,
+  people,
+  taskOptions,
+  tagOptions,
+  isSystemAdministrator,
+  initialTab = "plan",
+}: {
+  workspace: TaskWorkspace;
+  lifecycle: TaskLifecycleViews;
+  planVersions: PlanVersionListItem[];
+  canvasModel: TimeCanvasModel | null;
+  canvasError: string | null;
+  people: PersonOptionDto[];
+  taskOptions: TaskOptionPage["items"];
+  tagOptions: TagOptionPage["items"];
+  isSystemAdministrator: boolean;
+  initialTab?: TabId;
+}) {
+  const router = useRouter();
+  const [tab, setTab] = useState<TabId>(initialTab);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<Notice>(null);
+  const [lifecycleState, setLifecycleState] = useState({
+    base: initialLifecycle,
+    value: initialLifecycle,
+  });
+  const lifecycle = lifecycleState.base === initialLifecycle
+    ? lifecycleState.value
+    : initialLifecycle;
+  const setLifecycle = (value: TaskLifecycleViews) => {
+    setLifecycleState({ base: initialLifecycle, value });
+  };
+  const [lockVersionState, setLockVersionState] = useState({
+    server: workspace.task.lockVersion,
+    current: workspace.task.lockVersion,
+  });
+  const lockVersion = lockVersionState.server === workspace.task.lockVersion
+    ? lockVersionState.current
+    : workspace.task.lockVersion;
+  const currentWorkspace = lockVersion === workspace.task.lockVersion
+    ? workspace
+    : { ...workspace, task: { ...workspace.task, lockVersion } };
+  const task = currentWorkspace.task;
+  const activeMilestone = currentWorkspace.currentPlan.nodes.find(
+    (entry) => entry.nodeId === task.activeMilestoneNodeId,
+  );
+  const termination = workspace.currentPlan.nodes.find((entry) => entry.termination);
+  const segmentCount = canvasModel?.segments.filter((entry) => entry.type !== "BUSY").length ?? 0;
+  const actualCount = canvasModel?.segments.filter((entry) => entry.type === "ACTUAL").length ?? 0;
+  const needsReviewCount = canvasModel?.segments.filter(
+    (entry) => entry.associationNeedsReview,
+  ).length ?? 0;
+  const conflictCount = canvasModel?.conflicts.length ?? 0;
+  const selectTab = (nextTab: TabId) => {
+    setTab(nextTab);
+    const url = new URL(window.location.href);
+    if (nextTab === "plan") url.searchParams.delete("tab");
+    else url.searchParams.set("tab", nextTab);
+    window.history.replaceState(window.history.state, "", url);
+  };
+
+  const runAction: RunAction = async (action, successMessage, onSuccess) => {
+    if (busy) return;
+    setBusy(true);
+    setNotice({ kind: "info", message: "正在保存…" });
+    try {
+      const result = await action();
+      if (!result.ok) {
+        setNotice({
+          kind: "error",
+          message:
+            result.error.code === "STALE_TASK"
+              ? `${result.error.message}。正在刷新服务器最新状态。`
+              : result.error.message,
+        });
+        if (result.error.code === "STALE_TASK") router.refresh();
+        return;
+      }
+      const nextLockVersion = actionLockVersion(result.data);
+      if (nextLockVersion !== null) {
+        setLockVersionState({
+          server: workspace.task.lockVersion,
+          current: nextLockVersion,
+        });
+      }
+      setNotice({ kind: "success", message: successMessage });
+      onSuccess?.();
+      router.refresh();
+    } catch {
+      setNotice({ kind: "error", message: "网络或服务暂时不可用，未保存任何本地输入。" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
-    <div className="space-y-5">
-      <section className="grid gap-4 lg:grid-cols-[1.3fr_0.7fr]">
-        <div className="rounded-lg border border-border bg-card p-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge>{taskStatusLabels[task.status]}</Badge>
-            <Badge variant="secondary">{taskPriorityLabels[task.priority]}</Badge>
-            <Badge variant="outline">计划 v{currentPlan.versionNo}</Badge>
+    <div className="min-w-0 space-y-4" data-testid="task-workbench-v1">
+      <section className="rounded-xl border border-border bg-card p-4 sm:p-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <Link href={routes.progress.tasks} className="text-sm text-primary hover:underline">
+                ← 全部 Task
+              </Link>
+              <Badge>{taskStatusLabels[task.status]}</Badge>
+              <Badge variant="secondary">{taskPriorityLabels[task.priority]}</Badge>
+              <Badge variant="outline">计划 v{workspace.currentPlan.versionNo}</Badge>
+              {workspace.tags.slice(0, 3).map((tag) => (
+                <Badge key={tag.id} variant="outline">{tag.name}</Badge>
+              ))}
+            </div>
+            <p className="mt-3 break-words text-xl font-semibold">{task.title}</p>
+            <p className="mt-2 text-sm text-muted-foreground">
+              {activeMilestone?.milestone
+                ? `当前：${activeMilestone.milestone.goal} · ${formatDateTime(activeMilestone.milestone.expectedCompletedAt)} 截止`
+                : task.status === "DRAFT"
+                  ? "草稿计划尚未激活"
+                  : "当前没有 Active Milestone"}
+            </p>
           </div>
-          <p className="mt-4 text-sm leading-6 text-muted-foreground">
-            {task.description || "暂无描述"}
-          </p>
-          <div className="mt-4 grid gap-3 text-sm text-muted-foreground sm:grid-cols-2">
-            <p>组织范围：{task.team || "未设置"} / {task.techGroup || "未设置"}</p>
-            <p>锁版本：{task.lockVersion}</p>
-            <p>创建：{formatDateTime(task.createdAt)}</p>
-            <p>更新：{formatDateTime(task.updatedAt)}</p>
-          </div>
-          <div className="mt-4 flex flex-wrap gap-2">
-            {workspace.tags.length === 0 ? (
-              <Badge variant="outline">无 Tag</Badge>
-            ) : (
-              workspace.tags.map((tag) => (
-                <Badge key={tag.id} variant="outline">
-                  {tag.name}
-                </Badge>
-              ))
+          <div className="flex flex-wrap gap-2">
+            {task.status === "DRAFT" && workspace.permissions.canActivate && (
+              <Button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  if (!window.confirm("确认激活 Task？激活后计划语义只能通过 Revision 修改。")) return;
+                  void runAction(
+                    () => activateTask({ taskId: task.id, expectedLockVersion: task.lockVersion }),
+                    "Task 已激活。",
+                  );
+                }}
+              >
+                激活 Task
+              </Button>
             )}
-          </div>
-        </div>
-
-        <div className="rounded-lg border border-border bg-card p-4">
-          <h2 className="flex items-center gap-2 font-medium">
-            <Users className="h-4 w-4" aria-hidden="true" />
-            成员与权限
-          </h2>
-          <div className="mt-3 space-y-2">
-            {workspace.members.map((member) => (
-              <div
-                key={`${member.personId}-${member.role}`}
-                className="flex items-center justify-between gap-3 rounded-lg bg-background px-3 py-2 text-sm"
-              >
-                <span className="truncate">{member.displayName}</span>
-                <Badge variant="secondary">
-                  {taskMemberRoleLabels[member.role]}
-                </Badge>
-              </div>
-            ))}
-          </div>
-          <div className="mt-4 grid gap-2 text-sm text-muted-foreground">
-            <PermissionLine
-              enabled={workspace.permissions.canCreateRevision}
-              label="可创建 Revision"
-            />
-            <PermissionLine
-              enabled={workspace.permissions.canReviewMilestone}
-              label="可处理验收"
-            />
-            <PermissionLine
-              enabled={workspace.permissions.canTerminate}
-              label="可确认结束"
-            />
-          </div>
-        </div>
-      </section>
-
-      <section className="rounded-lg border border-border bg-card p-4">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <h2 className="flex items-center gap-2 font-medium">
-            <GitBranch className="h-4 w-4" aria-hidden="true" />
-            当前计划
-          </h2>
-          <span className="text-sm text-muted-foreground">
-            {currentPlan.status} · {currentPlan.nodes.length} 个节点
-          </span>
-        </div>
-        <ol className="mt-4 space-y-3">
-          {currentPlan.nodes.map((entry) => (
-            <li
-              key={entry.planVersionNodeId}
-              className="grid gap-3 rounded-lg border border-border bg-background p-3 sm:grid-cols-[64px_1fr]"
+            {task.status === "ACTIVE" && workspace.permissions.canCreateRevision && (
+              <Button type="button" onClick={() => selectTab("revisions")}>发起 Revision</Button>
+            )}
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void navigator.clipboard.writeText(window.location.href).then(
+                () => setNotice({ kind: "success", message: "工作台链接已复制。" }),
+                () => setNotice({ kind: "error", message: "浏览器拒绝复制，请手动复制地址栏链接。" }),
+              )}
             >
-              <div className="text-sm font-medium text-muted-foreground">
-                #{entry.sequence}
-              </div>
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant={entry.status === "ACTIVE" ? "default" : "outline"}>
-                    {taskNodeStatusLabels[entry.status]}
-                  </Badge>
-                  <Badge variant="secondary">
-                    {taskNodeTypeLabels[entry.type]}
-                  </Badge>
-                  {entry.isCarryForward && <Badge variant="outline">延续节点</Badge>}
-                </div>
-                <h3 className="mt-2 font-medium">
-                  {entry.milestone?.goal ??
-                    entry.revision?.reason ??
-                    entry.termination?.plannedOutcomeCriteria}
-                </h3>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  {entry.businessDescription || "暂无业务描述"}
-                </p>
-                {entry.milestone && (
-                  <p className="mt-2 text-sm text-muted-foreground">
-                    截止：{formatDateTime(entry.milestone.expectedCompletedAt)} ·
-                    验收要求：{entry.milestone.reviewRequirements}
-                  </p>
-                )}
-                {entry.termination && (
-                  <p className="mt-2 text-sm text-muted-foreground">
-                    计划结束：{formatDateTime(entry.termination.plannedAt)}
-                  </p>
-                )}
-              </div>
-            </li>
-          ))}
-        </ol>
+              复制链接
+            </Button>
+          </div>
+        </div>
+        <div className="mt-4 grid gap-2 text-sm sm:grid-cols-3 lg:grid-cols-6">
+          <Metric label="参与人" value={workspace.members.length} />
+          <Metric label="当前窗口投入" value={segmentCount} />
+          <Metric label="当前窗口 Actual" value={actualCount} />
+          <Metric label="当前窗口开放冲突" value={conflictCount} alert={conflictCount > 0} />
+          <Metric label="当前窗口关联复核" value={needsReviewCount} alert={needsReviewCount > 0} />
+          <Metric label="锁版本" value={task.lockVersion} />
+        </div>
       </section>
 
-      <section className="rounded-lg border border-border bg-card p-4">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <h2 className="flex items-center gap-2 font-medium">
-            <CalendarCheck className="h-4 w-4" aria-hidden="true" />
-            人员投入
-          </h2>
-          <Link
-            href={`${routes.progress.resources}?taskId=${task.id}`}
-            className="text-sm text-primary hover:underline"
-          >
-            打开资源时间轴
-          </Link>
+      <div className="overflow-x-auto rounded-xl border border-border bg-card px-2" aria-label="Task 工作台标签">
+        <div className="flex min-w-max gap-1" role="tablist">
+          {tabs.map((entry) => (
+            <button
+              key={entry.id}
+              type="button"
+              role="tab"
+              aria-selected={tab === entry.id}
+              className={cn(
+                "border-b-2 px-4 py-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                tab === entry.id
+                  ? "border-primary text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground",
+              )}
+              onClick={() => selectTab(entry.id)}
+            >
+              {entry.label}
+              {entry.id === "reviews" && lifecycle.reviews.some((item) => item.capabilities.canReview) && " · 待办"}
+            </button>
+          ))}
         </div>
-        {segments.length === 0 ? (
-          <div className="mt-4 rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-            当前 Task 没有关联人员投入记录。
+      </div>
+
+      {notice && (
+        <p
+          className={cn(
+            "break-words rounded-lg px-3 py-2 text-sm",
+            notice.kind === "error" && "bg-destructive/10 text-destructive",
+            notice.kind === "success" && "bg-emerald-50 text-emerald-800",
+            notice.kind === "info" && "bg-muted text-muted-foreground",
+          )}
+          role={notice.kind === "error" ? "alert" : "status"}
+        >
+          {notice.message}
+        </p>
+      )}
+
+      <div role="tabpanel" className="min-w-0">
+        {tab === "plan" && (
+          <PlanAndResourcesPanel
+            workspace={currentWorkspace}
+            canvasModel={canvasModel}
+            canvasError={canvasError}
+            busy={busy}
+            runAction={runAction}
+          />
+        )}
+        {tab === "overview" && (
+          <OverviewPanel
+            key={`overview:${task.lockVersion}`}
+            workspace={currentWorkspace}
+            people={people}
+            taskOptions={taskOptions}
+            tagOptions={tagOptions}
+            isSystemAdministrator={isSystemAdministrator}
+            busy={busy}
+            runAction={runAction}
+          />
+        )}
+        {tab === "revisions" && (
+          <RevisionsPanel
+            key={`revisions:${task.lockVersion}:${lifecycle.revisions.length}`}
+            workspace={currentWorkspace}
+            lifecycle={lifecycle}
+            setLifecycle={setLifecycle}
+            planVersions={planVersions}
+            busy={busy}
+            runAction={runAction}
+          />
+        )}
+        {tab === "reviews" && (
+          <ReviewsPanel
+            key={`reviews:${task.lockVersion}:${lifecycle.reviews.length}`}
+            workspace={currentWorkspace}
+            lifecycle={lifecycle}
+            setLifecycle={setLifecycle}
+            terminationNodeId={termination?.nodeId ?? null}
+            busy={busy}
+            runAction={runAction}
+          />
+        )}
+        {tab === "audit" && (
+          <AuditPanel
+            taskId={task.id}
+            lifecycle={lifecycle}
+            setLifecycle={setLifecycle}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PlanAndResourcesPanel({
+  workspace,
+  canvasModel,
+  canvasError,
+  busy,
+  runAction,
+}: {
+  workspace: TaskWorkspace;
+  canvasModel: TimeCanvasModel | null;
+  canvasError: string | null;
+  busy: boolean;
+  runAction: RunAction;
+}) {
+  return (
+    <div className="space-y-4">
+      <section className="rounded-xl border border-border bg-card p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="font-semibold">当前计划</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              v{workspace.currentPlan.versionNo} · {workspace.currentPlan.nodes.length} 个节点 · 计划开始 {formatDateTime(workspace.currentPlan.plannedStartAt)}
+            </p>
           </div>
-        ) : (
-          <div className="mt-4 grid gap-3 lg:grid-cols-2">
-            {segments.map((segment) => (
-              <div
-                key={segment.id}
-                className="rounded-lg border border-border bg-background p-3"
-              >
-                <div className="flex flex-wrap items-center gap-2">
-                  <h3 className="truncate font-medium">{segment.content}</h3>
-                  <Badge variant={segment.type === "ACTUAL" ? "default" : "outline"}>
-                    {workSegmentTypeLabels[segment.type]}
-                  </Badge>
-                  <Badge variant="secondary">
-                    {workSegmentStatusLabels[segment.status]}
-                  </Badge>
-                </div>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  {segment.personName} · {formatDateTime(segment.startAt)} -{" "}
-                  {formatDateTime(segment.endAt)}
-                </p>
+          {workspace.task.status !== "DRAFT" && (
+            <Badge variant="outline">Current Plan 只读，计划语义修改必须走 Revision</Badge>
+          )}
+        </div>
+      </section>
+
+      {workspace.task.status === "DRAFT" && workspace.permissions.canUpdateMetadata ? (
+        <DraftPlanEditor
+          key={`draft-plan:${workspace.task.lockVersion}`}
+          workspace={workspace}
+          busy={busy}
+          runAction={runAction}
+        />
+      ) : (
+        <ReadOnlyPlan plan={workspace.currentPlan} />
+      )}
+
+      <section className="min-w-0 space-y-3">
+        <div>
+          <h2 className="font-semibold">人员投入</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            当前 Task 的 Planned/Actual、参与人的其他 Busy 占用和 Conflict 使用同一安全 DTO。
+          </p>
+        </div>
+        {canvasModel ? (
+          <>
+            {canvasModel.nextCursor && (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950" role="status">
+                当前工作台显示前 50 行；其余人员请前往
+                <Link className="mx-1 underline" href={`${routes.progress.resources}?tasks=${workspace.task.id}`}>资源计划</Link>
+                继续分页查看。
               </div>
-            ))}
+            )}
+            <ResourcePlannerCanvasClient
+              initialModel={canvasModel}
+              people={workspace.members.map((member) => ({
+                id: member.personId,
+                displayName: member.displayName,
+              }))}
+              tasks={[{
+                id: workspace.task.id,
+                title: workspace.task.title,
+                activeNodeId: workspace.task.activeMilestoneNodeId,
+              }]}
+              defaultPersonId={workspace.members[0]?.personId ?? ""}
+              defaultTaskId={workspace.task.id}
+              allowIndependent={false}
+              initialZoom="DAY"
+              mode="TASK_WORKBENCH"
+            />
+          </>
+        ) : (
+          <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-5 text-sm text-destructive" role="alert">
+            时间画布加载失败：{canvasError ?? "未知错误"}。计划和生命周期操作仍可使用；请刷新或缩小时间范围后重试。
           </div>
         )}
       </section>
@@ -188,14 +453,628 @@ export function TaskWorkbench({ workspace, segments }: TaskWorkbenchProps) {
   );
 }
 
-function PermissionLine({ enabled, label }: { enabled: boolean; label: string }) {
+function DraftPlanEditor({
+  workspace,
+  busy,
+  runAction,
+}: {
+  workspace: TaskWorkspace;
+  busy: boolean;
+  runAction: RunAction;
+}) {
+  const [plannedStartAt, setPlannedStartAt] = useState(
+    isoToShanghaiDateTimeLocal(workspace.currentPlan.plannedStartAt ?? workspace.task.createdAt),
+  );
+  const [milestones, setMilestones] = useState<DraftPlanMilestone[]>(() =>
+    workspace.currentPlan.nodes.flatMap((entry) =>
+      entry.milestone
+        ? [{
+            nodeId: entry.nodeId,
+            clientKey: null as string | null,
+            goal: entry.milestone.goal,
+            completionCriteria: entry.milestone.completionCriteria,
+            expectedCompletedAt: isoToShanghaiDateTimeLocal(entry.milestone.expectedCompletedAt),
+            reviewRequirements: entry.milestone.reviewRequirements,
+            businessDescription: entry.businessDescription,
+          }]
+        : [],
+    ),
+  );
+  const terminationEntry = workspace.currentPlan.nodes.find((entry) => entry.termination);
+  const [termination, setTermination] = useState({
+    nodeId: terminationEntry?.nodeId ?? null,
+    clientKey: terminationEntry ? null : newClientKey("termination"),
+    plannedOutcomeCriteria: terminationEntry?.termination?.plannedOutcomeCriteria ?? "",
+    plannedAt: isoToShanghaiDateTimeLocal(
+      terminationEntry?.termination?.plannedAt ??
+        addDaysIso(workspace.currentPlan.plannedStartAt ?? workspace.task.createdAt, 1),
+    ),
+    businessDescription: terminationEntry?.businessDescription ?? "",
+  });
+
   return (
-    <p className="flex items-center gap-2">
-      <ShieldCheck
-        className={enabled ? "h-4 w-4 text-emerald-600" : "h-4 w-4 text-muted-foreground"}
-        aria-hidden="true"
-      />
-      {label}：{enabled ? "是" : "否"}
-    </p>
+    <section className="space-y-4 rounded-xl border border-primary/20 bg-card p-4">
+      <div>
+        <h2 className="font-semibold">编辑 Draft 计划</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          整包事务保存；保留现有 nodeId，新节点使用 clientKey。被 Segment 引用的节点不能隐式删除。
+        </p>
+      </div>
+      <Field label="计划开始" htmlFor="draft-plan-start">
+        <Input
+          id="draft-plan-start"
+          type="datetime-local"
+          value={plannedStartAt}
+          onChange={(event) => setPlannedStartAt(event.target.value)}
+        />
+      </Field>
+      <div className="space-y-3">
+        {milestones.map((milestone, index) => (
+          <div key={milestone.nodeId ?? milestone.clientKey} className="grid gap-3 rounded-lg border border-border p-3 lg:grid-cols-2">
+            <div className="lg:col-span-2 flex items-center justify-between gap-2">
+              <h3 className="font-medium">Milestone #{index + 1}</h3>
+              <div className="flex gap-1">
+                <Button type="button" size="sm" variant="outline" disabled={index === 0} onClick={() => setMilestones(moveItem(milestones, index, index - 1))}>前移</Button>
+                <Button type="button" size="sm" variant="outline" disabled={index === milestones.length - 1} onClick={() => setMilestones(moveItem(milestones, index, index + 1))}>后移</Button>
+                <Button type="button" size="sm" variant="destructive" disabled={milestones.length === 1} onClick={() => setMilestones(milestones.filter((_, itemIndex) => itemIndex !== index))}>删除</Button>
+              </div>
+            </div>
+            <Field label="目标"><Input value={milestone.goal} onChange={(event) => setMilestones(patchItem(milestones, index, { goal: event.target.value }))} /></Field>
+            <Field label="预期完成"><Input type="datetime-local" value={milestone.expectedCompletedAt} onChange={(event) => setMilestones(patchItem(milestones, index, { expectedCompletedAt: event.target.value }))} /></Field>
+            <Field label="完成条件"><Textarea value={milestone.completionCriteria} onChange={(event) => setMilestones(patchItem(milestones, index, { completionCriteria: event.target.value }))} /></Field>
+            <Field label="验收要求"><Textarea value={milestone.reviewRequirements} onChange={(event) => setMilestones(patchItem(milestones, index, { reviewRequirements: event.target.value }))} /></Field>
+            <Field label="业务说明" className="lg:col-span-2"><Textarea value={milestone.businessDescription} onChange={(event) => setMilestones(patchItem(milestones, index, { businessDescription: event.target.value }))} /></Field>
+          </div>
+        ))}
+      </div>
+      <Button
+        type="button"
+        variant="outline"
+        disabled={milestones.length >= 200}
+        onClick={() => {
+          const previous = milestones.at(-1);
+          setMilestones([
+            ...milestones,
+            {
+              nodeId: null,
+              clientKey: newClientKey("milestone"),
+              goal: "",
+              completionCriteria: "",
+              expectedCompletedAt: previous?.expectedCompletedAt ?? plannedStartAt,
+              reviewRequirements: "",
+              businessDescription: "",
+            },
+          ]);
+        }}
+      >
+        添加 Milestone
+      </Button>
+      <div className="grid gap-3 rounded-lg border border-border p-3 lg:grid-cols-2">
+        <h3 className="font-medium lg:col-span-2">Termination（固定末尾）</h3>
+        <Field label="计划结束"><Input type="datetime-local" value={termination.plannedAt} onChange={(event) => setTermination({ ...termination, plannedAt: event.target.value })} /></Field>
+        <Field label="预期结果"><Input value={termination.plannedOutcomeCriteria} onChange={(event) => setTermination({ ...termination, plannedOutcomeCriteria: event.target.value })} /></Field>
+        <Field label="业务说明" className="lg:col-span-2"><Textarea value={termination.businessDescription} onChange={(event) => setTermination({ ...termination, businessDescription: event.target.value })} /></Field>
+      </div>
+      <Button
+        type="button"
+        disabled={busy}
+        onClick={() => void runAction(
+          () => replaceTaskDraftPlan({
+            taskId: workspace.task.id,
+            planVersionId: workspace.currentPlan.id,
+            expectedLockVersion: workspace.task.lockVersion,
+            plannedStartAt: shanghaiDateTimeLocalToIso(plannedStartAt),
+            milestones: milestones.map((milestone) => ({
+              ...(milestone.nodeId ? { nodeId: milestone.nodeId } : { clientKey: milestone.clientKey ?? newClientKey("milestone") }),
+              goal: milestone.goal,
+              completionCriteria: milestone.completionCriteria,
+              expectedCompletedAt: shanghaiDateTimeLocalToIso(milestone.expectedCompletedAt),
+              reviewRequirements: milestone.reviewRequirements,
+              businessDescription: milestone.businessDescription,
+            })),
+            termination: {
+              ...(termination.nodeId ? { nodeId: termination.nodeId } : { clientKey: termination.clientKey }),
+              plannedAt: shanghaiDateTimeLocalToIso(termination.plannedAt),
+              plannedOutcomeCriteria: termination.plannedOutcomeCriteria,
+              businessDescription: termination.businessDescription,
+            },
+          }),
+          "Draft 计划已保存。",
+        )}
+      >
+        保存 Draft 计划
+      </Button>
+    </section>
   );
 }
+
+function ReadOnlyPlan({ plan }: { plan: PlanVersionSummary }) {
+  return (
+    <section className="rounded-xl border border-border bg-card p-4">
+      <ol className="space-y-3">
+        {plan.nodes.map((entry) => (
+          <li key={entry.planVersionNodeId} className="rounded-lg border border-border bg-background p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline">#{entry.sequence}</Badge>
+              <Badge variant="secondary">{taskNodeTypeLabels[entry.type]}</Badge>
+              <Badge variant={entry.status === "ACTIVE" ? "default" : "outline"}>{taskNodeStatusLabels[entry.status]}</Badge>
+              {entry.isCarryForward && <Badge variant="outline">Completed 前缀锁定</Badge>}
+            </div>
+            <h3 className="mt-2 break-words font-medium">
+              {entry.milestone?.goal ?? entry.revision?.reason ?? entry.termination?.plannedOutcomeCriteria}
+            </h3>
+            {entry.milestone && <p className="mt-1 text-sm text-muted-foreground">截止 {formatDateTime(entry.milestone.expectedCompletedAt)} · {entry.milestone.completionCriteria}</p>}
+            {entry.termination && <p className="mt-1 text-sm text-muted-foreground">计划结束 {formatDateTime(entry.termination.plannedAt)}</p>}
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+function OverviewPanel({
+  workspace,
+  people,
+  taskOptions,
+  tagOptions,
+  isSystemAdministrator,
+  busy,
+  runAction,
+}: {
+  workspace: TaskWorkspace;
+  people: PersonOptionDto[];
+  taskOptions: TaskOptionPage["items"];
+  tagOptions: TagOptionPage["items"];
+  isSystemAdministrator: boolean;
+  busy: boolean;
+  runAction: RunAction;
+}) {
+  const editable = ["DRAFT", "ACTIVE"].includes(workspace.task.status) && workspace.permissions.canUpdateMetadata;
+  const canManageMembers = ["DRAFT", "ACTIVE"].includes(workspace.task.status) && workspace.permissions.canManageMembers;
+  const [members, setMembers] = useState(workspace.members.map(({ personId, role }) => ({ personId, role })));
+  const [memberPersonId, setMemberPersonId] = useState(people[0]?.id ?? "");
+  const [memberRole, setMemberRole] = useState<keyof typeof taskMemberRoleLabels>("MEMBER");
+  const [selectedTags, setSelectedTags] = useState(workspace.tags.map((tag) => tag.id));
+  const [peopleOptions, setPeopleOptions] = useState(people);
+  const [taskChoices, setTaskChoices] = useState(taskOptions);
+  const [tagChoices, setTagChoices] = useState(tagOptions);
+  const [peopleQuery, setPeopleQuery] = useState("");
+  const [taskQuery, setTaskQuery] = useState("");
+  const [tagQuery, setTagQuery] = useState("");
+  const [optionLoading, setOptionLoading] = useState(false);
+  const [optionError, setOptionError] = useState("");
+  const availableTags = [
+    ...workspace.tags,
+    ...tagChoices.filter((tag) => !workspace.tags.some((current) => current.id === tag.id)),
+  ];
+
+  const loadPeople = async () => {
+    setOptionLoading(true);
+    setOptionError("");
+    try {
+      const result = await searchPeopleOptions({
+        purpose: "TASK_MEMBERS",
+        taskId: workspace.task.id,
+        query: peopleQuery,
+        limit: 50,
+      });
+      if (!result.ok) return setOptionError(result.error.message);
+      const next = mergeById(peopleOptions, result.data.items);
+      setPeopleOptions(next);
+      if (!memberPersonId && next[0]) setMemberPersonId(next[0].id);
+    } catch {
+      setOptionError("人员搜索失败，请稍后重试。");
+    } finally {
+      setOptionLoading(false);
+    }
+  };
+  const loadTasks = async () => {
+    setOptionLoading(true);
+    setOptionError("");
+    try {
+      const result = await searchTaskOptions({ query: taskQuery, limit: 50 });
+      if (!result.ok) return setOptionError(result.error.message);
+      setTaskChoices(mergeById(taskChoices, result.data.items));
+    } catch {
+      setOptionError("Task 搜索失败，请稍后重试。");
+    } finally {
+      setOptionLoading(false);
+    }
+  };
+  const loadTags = async () => {
+    setOptionLoading(true);
+    setOptionError("");
+    try {
+      const result = await searchTagOptions({ query: tagQuery, includeArchived: false, limit: 50 });
+      if (!result.ok) return setOptionError(result.error.message);
+      setTagChoices(mergeById(tagChoices, result.data.items));
+    } catch {
+      setOptionError("Tag 搜索失败，请稍后重试。");
+    } finally {
+      setOptionLoading(false);
+    }
+  };
+
+  return (
+    <div className="grid gap-4 xl:grid-cols-2">
+      <form
+        className="space-y-3 rounded-xl border border-border bg-card p-4"
+        aria-label="Task 元数据"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const input = {
+            taskId: workspace.task.id,
+            expectedLockVersion: workspace.task.lockVersion,
+            title: String(form.get("title") ?? ""),
+            description: String(form.get("description") ?? ""),
+            team: String(form.get("team") ?? ""),
+            techGroup: String(form.get("techGroup") ?? ""),
+            priority: String(form.get("priority") ?? "MEDIUM"),
+            revisionApprovalMode: String(form.get("revisionApprovalMode") ?? "REVIEW_REQUIRED"),
+            allowSelfReview: isSystemAdministrator
+              ? form.get("allowSelfReview") === "on"
+              : workspace.task.allowSelfReview,
+            relatedTaskId: String(form.get("relatedTaskId") ?? "") || null,
+          };
+          void runAction(
+            () => workspace.task.status === "DRAFT"
+              ? updateTaskDraftMetadata({ ...input, tagIds: selectedTags })
+              : updateTaskMetadata(input),
+            "Task 元数据已保存。",
+          );
+        }}
+      >
+        <div className="flex items-center justify-between gap-2"><h2 className="font-semibold">Task 概览</h2>{!editable && <Badge variant="outline">只读</Badge>}</div>
+        <Field label="标题"><Input name="title" defaultValue={workspace.task.title} disabled={!editable} required maxLength={200} /></Field>
+        <Field label="描述"><Textarea name="description" defaultValue={workspace.task.description} disabled={!editable} maxLength={8_000} /></Field>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="车组"><select name="team" defaultValue={workspace.task.team} disabled={!editable} className={selectClass}>{TEAM_OPTIONS.map((value) => <option key={value}>{value}</option>)}</select></Field>
+          <Field label="技术组"><select name="techGroup" defaultValue={workspace.task.techGroup} disabled={!editable} className={selectClass}>{TECH_GROUP_OPTIONS.map((value) => <option key={value}>{value}</option>)}</select></Field>
+          <Field label="优先级"><select name="priority" defaultValue={workspace.task.priority} disabled={!editable} className={selectClass}>{Object.entries(taskPriorityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>
+          <Field label="Revision 策略"><select name="revisionApprovalMode" defaultValue={workspace.task.revisionApprovalMode} disabled={!editable} className={selectClass}><option value="REVIEW_REQUIRED">需要 Reviewer</option><option value="DIRECT_BY_OWNER">Owner 直接生效</option></select></Field>
+        </div>
+        {editable && <div className="grid gap-2 sm:grid-cols-[1fr_auto]"><Input aria-label="搜索关联 Task" value={taskQuery} onChange={(event) => setTaskQuery(event.target.value)} placeholder="按名称搜索首屏外 Task" /><Button type="button" variant="outline" disabled={optionLoading} onClick={() => void loadTasks()}>搜索 Task</Button></div>}
+        <Field label="关联 Task"><select name="relatedTaskId" defaultValue={workspace.task.relatedTaskId ?? ""} disabled={!editable} className={selectClass}><option value="">不关联</option>{workspace.task.relatedTaskId && !taskChoices.some((item) => item.id === workspace.task.relatedTaskId) && <option value={workspace.task.relatedTaskId}>当前关联 Task（不在首批选项）</option>}{taskChoices.filter((item) => item.id !== workspace.task.id).map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></Field>
+        <label className="flex items-start gap-2 text-sm"><input name="allowSelfReview" type="checkbox" defaultChecked={workspace.task.allowSelfReview} disabled={!editable || !isSystemAdministrator} /><span>允许自审<span className="block text-xs text-muted-foreground">仅 System Administrator 可修改；所有变更写审计。</span></span></label>
+        <div className="space-y-2">
+          <span className="text-sm font-medium">Tags</span>
+          {editable && <div className="grid gap-2 sm:grid-cols-[1fr_auto]"><Input aria-label="搜索 Tag" value={tagQuery} onChange={(event) => setTagQuery(event.target.value)} placeholder="按名称搜索首屏外 Tag" /><Button type="button" variant="outline" disabled={optionLoading} onClick={() => void loadTags()}>搜索 Tag</Button></div>}
+          <div className="flex flex-wrap gap-2">
+            {availableTags.map((tag) => <label key={tag.id} className="flex items-center gap-1 rounded border border-border px-2 py-1 text-sm"><input type="checkbox" checked={selectedTags.includes(tag.id)} disabled={!editable} onChange={(event) => setSelectedTags(event.target.checked ? [...selectedTags, tag.id] : selectedTags.filter((id) => id !== tag.id))} />{tag.name}{tag.isArchived && <span className="text-muted-foreground">（已归档，可移除）</span>}</label>)}
+            {availableTags.length === 0 && <span className="text-sm text-muted-foreground">暂无可用 Tag</span>}
+          </div>
+        </div>
+        {editable && <div className="flex gap-2"><Button type="submit" disabled={busy}>保存元数据</Button>{workspace.task.status === "ACTIVE" && <Button type="button" variant="outline" disabled={busy} onClick={() => void runAction(() => replaceTaskTags({ taskId: workspace.task.id, expectedLockVersion: workspace.task.lockVersion, tagIds: selectedTags }), "Task Tags 已保存。")}>单独保存 Tags</Button>}</div>}
+        <div className="grid gap-1 border-t border-border pt-3 text-xs text-muted-foreground"><span>创建：{formatDateTime(workspace.task.createdAt)}</span><span>更新：{formatDateTime(workspace.task.updatedAt)}</span><span>开始：{formatDateTime(workspace.task.startedAt)}</span><span>结束：{formatDateTime(workspace.task.endedAt)}</span></div>
+      </form>
+
+      <section className="space-y-3 rounded-xl border border-border bg-card p-4">
+        <div className="flex items-center justify-between gap-2"><h2 className="font-semibold">成员与角色</h2>{!canManageMembers && <Badge variant="outline">只读</Badge>}</div>
+        <div className="space-y-2">
+          {members.map((member, index) => {
+            const person = peopleOptions.find((item) => item.id === member.personId) ?? workspace.members.find((item) => item.personId === member.personId);
+            return <div key={`${member.personId}:${member.role}`} className="flex items-center gap-2 rounded-lg border border-border p-2 text-sm"><span className="min-w-0 flex-1 truncate">{person?.displayName ?? "成员"}</span><Badge variant="secondary">{taskMemberRoleLabels[member.role]}</Badge>{canManageMembers && <Button type="button" size="sm" variant="ghost" onClick={() => setMembers(members.filter((_, itemIndex) => itemIndex !== index))}>移除</Button>}</div>;
+          })}
+        </div>
+        {canManageMembers && (
+          <>
+            <div className="grid gap-2 sm:grid-cols-[1fr_auto]"><Input aria-label="搜索成员" value={peopleQuery} onChange={(event) => setPeopleQuery(event.target.value)} placeholder="按姓名搜索首屏外人员" /><Button type="button" variant="outline" disabled={optionLoading} onClick={() => void loadPeople()}>搜索人员</Button></div>
+            <div className="grid gap-2 sm:grid-cols-[1fr_140px_auto]">
+              <select value={memberPersonId} onChange={(event) => setMemberPersonId(event.target.value)} className={selectClass} aria-label="新增成员人员">{peopleOptions.map((person) => <option key={person.id} value={person.id}>{person.displayName}</option>)}</select>
+              <select value={memberRole} onChange={(event) => setMemberRole(event.target.value as keyof typeof taskMemberRoleLabels)} className={selectClass} aria-label="新增成员角色">{Object.entries(taskMemberRoleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+              <Button type="button" variant="outline" onClick={() => { if (!memberPersonId || members.some((entry) => entry.personId === memberPersonId && entry.role === memberRole)) return; setMembers([...members, { personId: memberPersonId, role: memberRole }]); }}>添加</Button>
+            </div>
+            <Button type="button" disabled={busy} onClick={() => void runAction(() => workspace.task.status === "DRAFT" ? replaceTaskDraftMembers({ taskId: workspace.task.id, expectedLockVersion: workspace.task.lockVersion, members }) : replaceTaskMembers({ taskId: workspace.task.id, expectedLockVersion: workspace.task.lockVersion, members }), "Task 成员已保存。")}>保存成员</Button>
+          </>
+        )}
+        {optionError && <p className="text-sm text-destructive" role="alert">{optionError}</p>}
+        <div className="border-t border-border pt-3 text-sm text-muted-foreground">
+          <p>可修改元数据：{workspace.permissions.canUpdateMetadata ? "是" : "否"}</p><p>可创建 Revision：{workspace.permissions.canCreateRevision ? "是" : "否"}</p><p>可处理验收：{workspace.permissions.canReviewMilestone ? "是" : "否"}</p><p>可确认结束：{workspace.permissions.canTerminate ? "是" : "否"}</p>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function RevisionsPanel({
+  workspace,
+  lifecycle,
+  setLifecycle,
+  planVersions,
+  busy,
+  runAction,
+}: {
+  workspace: TaskWorkspace;
+  lifecycle: TaskLifecycleViews;
+  setLifecycle: (value: TaskLifecycleViews) => void;
+  planVersions: PlanVersionListItem[];
+  busy: boolean;
+  runAction: RunAction;
+}) {
+  const revisions = lifecycle.revisions;
+  const selectableNodes = workspace.currentPlan.nodes.filter(
+    (entry) => (entry.milestone || entry.termination) && entry.status !== "COMPLETED",
+  );
+  const [revisedFromNodeId, setRevisedFromNodeId] = useState(
+    workspace.task.activeMilestoneNodeId ?? selectableNodes[0]?.nodeId ?? "",
+  );
+  const selectedIndex = workspace.currentPlan.nodes.findIndex((entry) => entry.nodeId === revisedFromNodeId);
+  const defaultReplacement = workspace.currentPlan.nodes.slice(Math.max(0, selectedIndex)).flatMap((entry) => entry.milestone ? [{
+    uiKey: entry.nodeId,
+    goal: entry.milestone.goal,
+    completionCriteria: entry.milestone.completionCriteria,
+    expectedCompletedAt: isoToShanghaiDateTimeLocal(entry.milestone.expectedCompletedAt),
+    reviewRequirements: entry.milestone.reviewRequirements,
+    businessDescription: entry.businessDescription,
+  }] : []);
+  const [replacement, setReplacement] = useState<RevisionDraftMilestone[]>(defaultReplacement);
+  const termination = workspace.currentPlan.nodes.find((entry) => entry.termination);
+  const [reason, setReason] = useState("");
+  const [plannedStartAt, setPlannedStartAt] = useState(isoToShanghaiDateTimeLocal(workspace.currentPlan.plannedStartAt ?? workspace.task.createdAt));
+  const [terminationDraft, setTerminationDraft] = useState({
+    plannedAt: isoToShanghaiDateTimeLocal(
+      termination?.termination?.plannedAt ??
+        addDaysIso(workspace.currentPlan.plannedStartAt ?? workspace.task.createdAt, 1),
+    ),
+    plannedOutcomeCriteria: termination?.termination?.plannedOutcomeCriteria ?? "",
+    businessDescription: termination?.businessDescription ?? "",
+  });
+  const idempotencyKey = useRef<string | null>(null);
+  const [comments, setComments] = useState<Record<string, string>>({});
+  const [diff, setDiff] = useState<PlanVersionDiff | null>(null);
+  const [diffError, setDiffError] = useState("");
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadError, setLoadError] = useState("");
+  const [editingRevisionId, setEditingRevisionId] = useState<string | null>(null);
+  const [editingTargetUpdatedAt, setEditingTargetUpdatedAt] = useState("");
+
+  const resetReplacement = (nodeId: string) => {
+    setRevisedFromNodeId(nodeId);
+    const index = workspace.currentPlan.nodes.findIndex((entry) => entry.nodeId === nodeId);
+    setReplacement(workspace.currentPlan.nodes.slice(Math.max(0, index)).flatMap((entry) => entry.milestone ? [{
+      uiKey: entry.nodeId,
+      goal: entry.milestone.goal,
+      completionCriteria: entry.milestone.completionCriteria,
+      expectedCompletedAt: isoToShanghaiDateTimeLocal(entry.milestone.expectedCompletedAt),
+      reviewRequirements: entry.milestone.reviewRequirements,
+      businessDescription: entry.businessDescription,
+    }] : []));
+  };
+
+  const beginEditRevision = async (
+    revision: TaskLifecycleViews["revisions"][number],
+  ) => {
+    if (!revision.targetPlanVersionId || !revision.revisedFromNodeId) return;
+    setLoadingMore(true);
+    setLoadError("");
+    try {
+      const result = await getPlanVersion(revision.targetPlanVersionId);
+      if (!result.ok) return setLoadError(result.error.message);
+      const revisionIndex = result.data.nodes.findIndex(
+        (entry) => entry.nodeId === revision.taskNodeId,
+      );
+      if (revisionIndex < 0) return setLoadError("候选计划结构不完整，无法编辑。");
+      const editableNodes = result.data.nodes.slice(revisionIndex + 1);
+      const nextTermination = editableNodes.find((entry) => entry.termination);
+      if (!nextTermination?.termination) {
+        return setLoadError("候选计划缺少 Termination，无法编辑。");
+      }
+      setEditingRevisionId(revision.id);
+      setEditingTargetUpdatedAt(result.data.updatedAt);
+      setRevisedFromNodeId(revision.revisedFromNodeId);
+      setReason(revision.reason);
+      setPlannedStartAt(
+        isoToShanghaiDateTimeLocal(
+          result.data.plannedStartAt ?? workspace.task.createdAt,
+        ),
+      );
+      setReplacement(editableNodes.flatMap((entry) => entry.milestone ? [{
+        uiKey: entry.nodeId,
+        goal: entry.milestone.goal,
+        completionCriteria: entry.milestone.completionCriteria,
+        expectedCompletedAt: isoToShanghaiDateTimeLocal(entry.milestone.expectedCompletedAt),
+        reviewRequirements: entry.milestone.reviewRequirements,
+        businessDescription: entry.businessDescription,
+      }] : []));
+      setTerminationDraft({
+        plannedAt: isoToShanghaiDateTimeLocal(nextTermination.termination.plannedAt),
+        plannedOutcomeCriteria: nextTermination.termination.plannedOutcomeCriteria,
+        businessDescription: nextTermination.businessDescription,
+      });
+    } catch {
+      setLoadError("候选计划加载失败，请稍后重试。");
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      {workspace.task.status === "ACTIVE" &&
+        (workspace.permissions.canCreateRevision || Boolean(editingRevisionId)) && (
+        <section className="space-y-3 rounded-xl border border-primary/20 bg-card p-4">
+          <div><h2 className="font-semibold">Revision 候选计划{editingRevisionId ? "（编辑已有）" : ""}</h2><p className="mt-1 text-sm text-muted-foreground">Completed 前缀由服务端锁定；Draft 或被驳回的候选计划可整包编辑后再提交。</p></div>
+          <Field label="修订起点"><select className={selectClass} value={revisedFromNodeId} disabled={Boolean(editingRevisionId)} onChange={(event) => resetReplacement(event.target.value)}>{selectableNodes.map((entry) => <option key={entry.nodeId} value={entry.nodeId}>{entry.milestone?.goal ?? "Termination"}</option>)}</select></Field>
+          <Field label="修订原因"><Textarea value={reason} onChange={(event) => setReason(event.target.value)} maxLength={2_000} /></Field>
+          <Field label="计划开始"><Input type="datetime-local" value={plannedStartAt} onChange={(event) => setPlannedStartAt(event.target.value)} /></Field>
+          <div className="space-y-3">
+            {replacement.map((milestone, index) => <div key={milestone.uiKey} className="grid gap-2 rounded-lg border border-border p-3 md:grid-cols-2"><div className="md:col-span-2 flex flex-wrap items-center justify-between gap-2"><h3 className="font-medium">替换 Milestone #{index + 1}</h3><div className="flex gap-1"><Button type="button" size="sm" variant="outline" aria-label={`前移替换 Milestone #${index + 1}`} disabled={index === 0} onClick={() => setReplacement((current) => moveItem(current, index, index - 1))}>前移</Button><Button type="button" size="sm" variant="outline" aria-label={`后移替换 Milestone #${index + 1}`} disabled={index === replacement.length - 1} onClick={() => setReplacement((current) => moveItem(current, index, index + 1))}>后移</Button><Button type="button" size="sm" variant="destructive" aria-label={`删除替换 Milestone #${index + 1}`} onClick={() => setReplacement((current) => current.filter((_, itemIndex) => itemIndex !== index))}>删除</Button></div></div><Field label="目标"><Input aria-label={`替换 Milestone #${index + 1} 目标`} value={milestone.goal} onChange={(event) => setReplacement((current) => patchItem(current, index, { goal: event.target.value }))} /></Field><Field label="预期完成"><Input aria-label={`替换 Milestone #${index + 1} 预期完成`} type="datetime-local" value={milestone.expectedCompletedAt} onChange={(event) => setReplacement((current) => patchItem(current, index, { expectedCompletedAt: event.target.value }))} /></Field><Field label="完成条件"><Textarea aria-label={`替换 Milestone #${index + 1} 完成条件`} value={milestone.completionCriteria} onChange={(event) => setReplacement((current) => patchItem(current, index, { completionCriteria: event.target.value }))} /></Field><Field label="验收要求"><Textarea aria-label={`替换 Milestone #${index + 1} 验收要求`} value={milestone.reviewRequirements} onChange={(event) => setReplacement((current) => patchItem(current, index, { reviewRequirements: event.target.value }))} /></Field><Field label="业务说明" className="md:col-span-2"><Textarea aria-label={`替换 Milestone #${index + 1} 业务说明`} value={milestone.businessDescription} onChange={(event) => setReplacement((current) => patchItem(current, index, { businessDescription: event.target.value }))} /></Field></div>)}
+          </div>
+          <Button type="button" variant="outline" onClick={() => setReplacement((current) => [...current, { uiKey: newClientKey("revision-milestone"), goal: "", completionCriteria: "", expectedCompletedAt: current.at(-1)?.expectedCompletedAt ?? plannedStartAt, reviewRequirements: "", businessDescription: "" }])}>添加替换 Milestone</Button>
+          <div className="grid gap-2 rounded-lg border border-border p-3 md:grid-cols-2"><h3 className="font-medium md:col-span-2">候选 Termination</h3><Field label="计划结束"><Input aria-label="候选 Termination 计划结束" type="datetime-local" value={terminationDraft.plannedAt} onChange={(event) => setTerminationDraft((current) => ({ ...current, plannedAt: event.target.value }))} /></Field><Field label="预期结果"><Input aria-label="候选 Termination 预期结果" value={terminationDraft.plannedOutcomeCriteria} onChange={(event) => setTerminationDraft((current) => ({ ...current, plannedOutcomeCriteria: event.target.value }))} /></Field><Field label="业务说明" className="md:col-span-2"><Textarea aria-label="候选 Termination 业务说明" value={terminationDraft.businessDescription} onChange={(event) => setTerminationDraft((current) => ({ ...current, businessDescription: event.target.value }))} /></Field></div>
+          <div className="flex flex-wrap gap-2"><Button type="button" disabled={busy || !revisedFromNodeId} onClick={() => { const replacementMilestones = replacement.map((entry) => ({ goal: entry.goal, completionCriteria: entry.completionCriteria, expectedCompletedAt: shanghaiDateTimeLocalToIso(entry.expectedCompletedAt), reviewRequirements: entry.reviewRequirements, businessDescription: entry.businessDescription })); const termination = { ...terminationDraft, plannedAt: shanghaiDateTimeLocalToIso(terminationDraft.plannedAt) }; if (editingRevisionId) { void runAction(() => updateRevisionDraft({ revisionNodeId: editingRevisionId, expectedTargetPlanUpdatedAt: editingTargetUpdatedAt, reason, plannedStartAt: shanghaiDateTimeLocalToIso(plannedStartAt), replacementMilestones, termination }), "Revision Draft 已更新。", () => { setEditingRevisionId(null); setEditingTargetUpdatedAt(""); setReason(""); }); return; } idempotencyKey.current ??= `revision-workbench:${globalThis.crypto.randomUUID()}`; void runAction(() => createRevisionDraft({ taskId: workspace.task.id, basePlanVersionId: workspace.currentPlan.id, baseTaskLockVersion: workspace.task.lockVersion, revisedFromNodeId, reason, plannedStartAt: shanghaiDateTimeLocalToIso(plannedStartAt), replacementMilestones, termination, idempotencyKey: idempotencyKey.current }), "Revision Draft 已创建。", () => { idempotencyKey.current = null; setReason(""); }); }}>{editingRevisionId ? "更新 Revision Draft" : "保存 Revision Draft"}</Button>{editingRevisionId && <Button type="button" variant="outline" onClick={() => { setEditingRevisionId(null); setEditingTargetUpdatedAt(""); resetReplacement(workspace.task.activeMilestoneNodeId ?? selectableNodes[0]?.nodeId ?? ""); setReason(""); }}>取消编辑</Button>}</div>
+        </section>
+      )}
+
+      <section className="space-y-3 rounded-xl border border-border bg-card p-4">
+        <h2 className="font-semibold">Revision 历史</h2>
+        {revisions.length === 0 && <p className="text-sm text-muted-foreground">暂无 Revision。</p>}
+        {revisions.map((revision) => <article key={revision.id} className="space-y-2 rounded-lg border border-border p-3"><div className="flex flex-wrap items-center gap-2"><Badge>{revisionStatusLabel(revision.status)}</Badge>{revision.targetVersionNo && <Badge variant="outline">候选 v{revision.targetVersionNo}</Badge>}<span className="text-sm text-muted-foreground">基线锁 {revision.baseTaskLockVersion}</span></div><h3 className="font-medium">{revision.reason}</h3><p className="text-sm text-muted-foreground">提交 {formatDateTime(revision.submittedAt)} · 审批 {formatDateTime(revision.reviewedAt)} · 生效 {formatDateTime(revision.effectiveAt)}</p>{revision.reviewComment && <p className="text-sm">审批说明：{revision.reviewComment}</p>}<Field label="处理说明"><Input value={comments[revision.id] ?? ""} onChange={(event) => setComments({ ...comments, [revision.id]: event.target.value })} /></Field><div className="flex flex-wrap gap-2">{revision.capabilities.canEdit && <Button type="button" size="sm" variant="outline" disabled={busy || loadingMore} onClick={() => void beginEditRevision(revision)}>编辑候选计划</Button>}{revision.capabilities.canSubmit && <Button type="button" size="sm" disabled={busy} onClick={() => void runAction(() => submitRevision({ revisionNodeId: revision.id, comment: comments[revision.id] ?? "" }), "Revision 已提交。")}>提交审批</Button>}{revision.capabilities.canReview && <><Button type="button" size="sm" disabled={busy} onClick={() => void runAction(() => approveRevision({ revisionNodeId: revision.id, comment: comments[revision.id] ?? "" }), "Revision 已批准并应用。")}>批准</Button><Button type="button" size="sm" variant="destructive" disabled={busy} onClick={() => void runAction(() => rejectRevision({ revisionNodeId: revision.id, comment: comments[revision.id] ?? "" }), "Revision 已驳回。")}>驳回</Button></>}{revision.capabilities.canCancel && <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void runAction(() => cancelRevision({ revisionNodeId: revision.id, comment: comments[revision.id] ?? "" }), "Revision 已取消。")}>取消</Button>}{revision.targetPlanVersionId && <Button type="button" size="sm" variant="outline" onClick={() => void comparePlanVersions({ fromPlanVersionId: revision.basePlanVersionId, toPlanVersionId: revision.targetPlanVersionId! }).then((result) => { if (result.ok) { setDiff(result.data); setDiffError(""); } else setDiffError(result.error.message); }).catch(() => setDiffError("版本比较请求失败。"))}>查看三层 Diff</Button>}</div></article>)}
+        {loadError && <p className="text-sm text-destructive" role="alert">{loadError}</p>}
+        {lifecycle.nextRevisionCursor && <Button type="button" variant="outline" disabled={loadingMore} onClick={() => { setLoadingMore(true); setLoadError(""); void getTaskLifecycleViews({ taskId: workspace.task.id, revisionCursor: lifecycle.nextRevisionCursor, revisionLimit: 50, reviewLimit: 1, auditLimit: 1 }).then((result) => { if (!result.ok) { setLoadError(result.error.message); return; } setLifecycle({ ...lifecycle, revisions: [...lifecycle.revisions, ...result.data.revisions], nextRevisionCursor: result.data.nextRevisionCursor }); }).catch(() => setLoadError("Revision 历史加载失败，请稍后重试。")).finally(() => setLoadingMore(false)); }}>加载更多 Revision</Button>}
+      </section>
+
+      {(diff || diffError) && <section className="space-y-2 rounded-xl border border-border bg-card p-4" aria-label="Revision 三层 Diff"><h2 className="font-semibold">结构 / 字段 / 资源 Diff</h2>{diffError && <p className="text-sm text-destructive" role="alert">{diffError}</p>}{diff && <><p className="text-sm">结构：新增 {diff.added.length}、删除 {diff.removed.length}、移动 {diff.moved.length}</p><p className="text-sm">字段：{diff.changed.length} 个节点变化{diff.planChanges.plannedStartAt ? "，计划开始有变化" : ""}</p><p className="text-sm">资源：影响 {diff.resourceImpact.affectedPlannedSegmentCount} 条 Planned，其中 {diff.resourceImpact.associationNeedsReviewCount} 条需关联复核</p></>}</section>}
+
+      <section className="rounded-xl border border-border bg-card p-4"><h2 className="font-semibold">计划版本</h2><div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{planVersions.map((plan) => <div key={plan.id} className="rounded-lg border border-border p-3 text-sm"><div className="flex gap-2"><Badge variant={plan.id === workspace.currentPlan.id ? "default" : "outline"}>v{plan.versionNo}</Badge><span>{plan.status}</span></div><p className="mt-2 text-muted-foreground">{plan.reason || "初始计划"}</p><p className="mt-1 text-xs text-muted-foreground">{formatDateTime(plan.createdAt)}</p></div>)}</div></section>
+    </div>
+  );
+}
+
+function ReviewsPanel({
+  workspace,
+  lifecycle,
+  setLifecycle,
+  terminationNodeId,
+  busy,
+  runAction,
+}: {
+  workspace: TaskWorkspace;
+  lifecycle: TaskLifecycleViews;
+  setLifecycle: (value: TaskLifecycleViews) => void;
+  terminationNodeId: string | null;
+  busy: boolean;
+  runAction: RunAction;
+}) {
+  const activeMilestone = workspace.currentPlan.nodes.find((entry) => entry.nodeId === workspace.task.activeMilestoneNodeId && entry.milestone);
+  const [evidenceKind, setEvidenceKind] = useState<"TEXT" | "LINK">("TEXT");
+  const [evidence, setEvidence] = useState("");
+  const [evidenceNote, setEvidenceNote] = useState("");
+  const [comments, setComments] = useState<Record<string, string>>({});
+  const reviewKey = useRef<string | null>(null);
+  const [outcome, setOutcome] = useState<"SUCCESS" | "FAILED" | "CANCELLED" | "TIMEOUT">("SUCCESS");
+  const [terminationReason, setTerminationReason] = useState("");
+  const [terminationSummary, setTerminationSummary] = useState("");
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadError, setLoadError] = useState("");
+
+  return (
+    <div className="space-y-4">
+      {activeMilestone?.milestone && <section className="space-y-3 rounded-xl border border-border bg-card p-4"><div><h2 className="font-semibold">当前 Milestone 验收</h2><h3 className="mt-2 font-medium">{activeMilestone.milestone.goal}</h3><p className="mt-1 text-sm text-muted-foreground">完成条件：{activeMilestone.milestone.completionCriteria}</p><p className="mt-1 text-sm text-muted-foreground">验收要求：{activeMilestone.milestone.reviewRequirements}</p></div>{workspace.permissions.canSubmitMilestoneReview && <><div className="flex gap-3 text-sm"><label><input type="radio" checked={evidenceKind === "TEXT"} onChange={() => setEvidenceKind("TEXT")} /> 文本证据</label><label><input type="radio" checked={evidenceKind === "LINK"} onChange={() => setEvidenceKind("LINK")} /> 链接证据</label><span className="text-muted-foreground">FILE 暂未启用</span></div><Field label={evidenceKind === "TEXT" ? "文本证据" : "证据链接"}>{evidenceKind === "TEXT" ? <Textarea value={evidence} onChange={(event) => setEvidence(event.target.value)} /> : <Input type="url" value={evidence} onChange={(event) => setEvidence(event.target.value)} />}</Field>{evidenceKind === "LINK" && <Field label="链接说明"><Input value={evidenceNote} onChange={(event) => setEvidenceNote(event.target.value)} /></Field>}<Button type="button" disabled={busy} onClick={() => { reviewKey.current ??= `review-workbench:${globalThis.crypto.randomUUID()}`; void runAction(() => submitMilestoneForReview({ milestoneNodeId: activeMilestone.nodeId, idempotencyKey: reviewKey.current, evidences: evidence ? [evidenceKind === "TEXT" ? { kind: "TEXT", note: evidence, sortOrder: 0 } : { kind: "LINK", externalUrl: evidence, note: evidenceNote, sortOrder: 0 }] : [] }), "Milestone 已提交验收。", () => { reviewKey.current = null; setEvidence(""); setEvidenceNote(""); }); }}>提交验收</Button></>}</section>}
+
+      <section className="space-y-3 rounded-xl border border-border bg-card p-4"><h2 className="font-semibold">Review 历史</h2>{lifecycle.reviews.length === 0 && <p className="text-sm text-muted-foreground">暂无验收记录。</p>}{lifecycle.reviews.map((review) => <article key={review.id} className="space-y-2 rounded-lg border border-border p-3"><div className="flex flex-wrap gap-2"><Badge>{reviewResultLabel(review.result)}</Badge><span className="text-sm">{review.milestoneGoal}</span>{review.revokedAt && <Badge variant="outline">已撤销</Badge>}</div><p className="text-sm text-muted-foreground">{review.submittedBy} 提交于 {formatDateTime(review.createdAt)}{review.reviewer ? ` · ${review.reviewer} 处理` : ""}</p>{review.comment && <p className="text-sm">处理说明：{review.comment}</p>}<ul className="space-y-1 text-sm">{review.evidences.map((item) => <li key={item.id}>{item.kind === "LINK" && item.externalUrl ? <a href={item.externalUrl} target="_blank" rel="noreferrer" className="text-primary underline">{item.note || item.externalUrl}</a> : <span>{item.kind}：{item.note || "文件证据未启用"}</span>}</li>)}</ul>{review.capabilities.canReview && <><Field label="Review 说明"><Textarea value={comments[review.id] ?? ""} onChange={(event) => setComments({ ...comments, [review.id]: event.target.value })} /></Field><div className="flex flex-wrap gap-2"><Button type="button" size="sm" disabled={busy} onClick={() => void runAction(() => approveMilestoneReview({ reviewId: review.id, comment: comments[review.id] ?? "" }), "验收已通过。")}>通过</Button><Button type="button" size="sm" variant="destructive" disabled={busy} onClick={() => void runAction(() => rejectMilestoneReview({ reviewId: review.id, comment: comments[review.id] ?? "" }), "验收已驳回。")}>驳回</Button><Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void runAction(() => requireMilestoneRevision({ reviewId: review.id, comment: comments[review.id] ?? "" }), "已要求修订。")}>要求修订</Button></div></>}</article>)}{loadError && <p className="text-sm text-destructive" role="alert">{loadError}</p>}{lifecycle.nextReviewCursor && <Button type="button" variant="outline" disabled={loadingMore} onClick={() => { setLoadingMore(true); setLoadError(""); void getTaskLifecycleViews({ taskId: workspace.task.id, reviewCursor: lifecycle.nextReviewCursor, reviewLimit: 50, revisionLimit: 1, auditLimit: 1 }).then((result) => { if (!result.ok) { setLoadError(result.error.message); return; } setLifecycle({ ...lifecycle, reviews: [...lifecycle.reviews, ...result.data.reviews], nextReviewCursor: result.data.nextReviewCursor }); }).catch(() => setLoadError("Review 历史加载失败，请稍后重试。")).finally(() => setLoadingMore(false)); }}>加载更多 Review</Button>}</section>
+
+      {workspace.task.status === "ACTIVE" && workspace.permissions.canTerminate && terminationNodeId && <section className="space-y-3 rounded-xl border border-destructive/20 bg-card p-4"><div><h2 className="font-semibold">Termination 确认</h2><p className="mt-1 text-sm text-muted-foreground">成功结束要求全部前置 Milestone 已完成；其余结果必须填写原因。操作会写审计并进入终态。</p></div><Field label="结束结果"><select className={selectClass} value={outcome} onChange={(event) => setOutcome(event.target.value as typeof outcome)}><option value="SUCCESS">成功完成</option><option value="FAILED">失败结束</option><option value="CANCELLED">提前取消</option><option value="TIMEOUT">超时结束</option></select></Field><Field label="原因"><Textarea value={terminationReason} onChange={(event) => setTerminationReason(event.target.value)} /></Field><Field label="总结"><Textarea value={terminationSummary} onChange={(event) => setTerminationSummary(event.target.value)} /></Field><Button type="button" variant="destructive" disabled={busy} onClick={() => { if (!window.confirm(`确认以“${terminationOutcomeLabel(outcome)}”结束 Task？`)) return; void runAction(() => confirmTermination({ taskId: workspace.task.id, terminationNodeId, outcome, reason: terminationReason, summary: terminationSummary, expectedLockVersion: workspace.task.lockVersion }), "Task 已完成 Termination 确认。"); }}>确认结束 Task</Button></section>}
+    </div>
+  );
+}
+
+function AuditPanel({
+  taskId,
+  lifecycle,
+  setLifecycle,
+}: {
+  taskId: string;
+  lifecycle: TaskLifecycleViews;
+  setLifecycle: (value: TaskLifecycleViews) => void;
+}) {
+  const [eventType, setEventType] = useState("");
+  const [auditActor, setAuditActor] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const load = async (append: boolean) => {
+    setLoading(true);
+    setError("");
+    try {
+      const result = await getTaskLifecycleViews({
+        taskId,
+        auditCursor: append ? lifecycle.nextAuditCursor ?? undefined : undefined,
+        auditLimit: 50,
+        auditEventTypes: eventType ? [eventType] : [],
+        auditActor: auditActor || undefined,
+        reviewLimit: 1,
+      });
+      if (!result.ok) {
+        setError(result.error.message);
+        return;
+      }
+      setLifecycle({
+        ...lifecycle,
+        audits: append ? [...lifecycle.audits, ...result.data.audits] : result.data.audits,
+        nextAuditCursor: result.data.nextAuditCursor,
+      });
+    } catch {
+      setError("审计记录加载失败，请稍后重试。");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <section className="space-y-3 rounded-xl border border-border bg-card p-4">
+      <div><h2 className="font-semibold">Task 审计</h2><p className="mt-1 text-sm text-muted-foreground">按游标分页；before/after 已在服务端递归脱敏和截断。</p></div>
+      <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+        <select className={selectClass} value={eventType} onChange={(event) => setEventType(event.target.value)} aria-label="审计事件类型"><option value="">全部事件</option>{lifecycle.auditFilterOptions.eventTypes.map((value) => <option key={value} value={value}>{value}</option>)}</select>
+        <select className={selectClass} value={auditActor} onChange={(event) => setAuditActor(event.target.value)} aria-label="审计操作者"><option value="">全部操作者</option>{lifecycle.auditFilterOptions.actors.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
+        <Button type="button" variant="outline" disabled={loading} onClick={() => void load(false)}>应用筛选</Button>
+      </div>
+      {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
+      <ol className="space-y-3">
+        {lifecycle.audits.map((audit) => <li key={audit.id} className="rounded-lg border border-border p-3"><div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{audit.action}</Badge><span className="text-sm">{audit.actor}</span><span className="text-xs text-muted-foreground">{formatDateTime(audit.createdAt)}</span></div><p className="mt-2 text-sm">{audit.reason || "无补充原因"}</p><details className="mt-2 text-xs"><summary className="cursor-pointer text-primary">展开脱敏前后值</summary><div className="mt-2 grid min-w-0 gap-2 lg:grid-cols-2"><AuditJson label="Before" value={audit.before} /><AuditJson label="After" value={audit.after} /></div></details></li>)}
+      </ol>
+      {lifecycle.audits.length === 0 && <p className="text-sm text-muted-foreground">没有符合筛选条件的审计事件。</p>}
+      {lifecycle.nextAuditCursor && <Button type="button" variant="outline" disabled={loading} onClick={() => void load(true)}>加载更多</Button>}
+    </section>
+  );
+}
+
+function AuditJson({ label, value }: { label: string; value: unknown }) {
+  return <div className="min-w-0 rounded bg-muted p-2"><p className="font-medium">{label}</p><pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-all">{JSON.stringify(value, null, 2)}</pre></div>;
+}
+
+function Metric({ label, value, alert = false }: { label: string; value: number; alert?: boolean }) {
+  return <div className={cn("rounded-lg bg-muted/60 px-3 py-2", alert && "bg-amber-100 text-amber-950")}><span className="block text-xs text-muted-foreground">{label}</span><strong>{value}</strong></div>;
+}
+
+function Field({ label, htmlFor, className, children }: { label: string; htmlFor?: string; className?: string; children: React.ReactNode }) {
+  return <label htmlFor={htmlFor} className={cn("grid gap-1 text-sm", className)}><span className="font-medium">{label}</span>{children}</label>;
+}
+
+function moveItem<T>(items: T[], from: number, to: number) {
+  const result = [...items];
+  const [item] = result.splice(from, 1);
+  if (item !== undefined) result.splice(to, 0, item);
+  return result;
+}
+
+function patchItem<T extends object>(items: T[], index: number, patch: Partial<T>) {
+  return items.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item);
+}
+
+function mergeById<T extends { id: string }>(current: T[], incoming: T[]) {
+  const byId = new Map(current.map((item) => [item.id, item]));
+  for (const item of incoming) byId.set(item.id, item);
+  return [...byId.values()];
+}
+
+function newClientKey(prefix: string) {
+  return `${prefix}:${globalThis.crypto.randomUUID()}`;
+}
+
+function addDaysIso(value: string, days: number) {
+  return new Date(new Date(value).getTime() + days * 86_400_000).toISOString();
+}
+
+function actionLockVersion(value: unknown): number | null {
+  if (!value || typeof value !== "object" || !("lockVersion" in value)) return null;
+  const candidate = value.lockVersion;
+  return typeof candidate === "number" && Number.isInteger(candidate) && candidate >= 0
+    ? candidate
+    : null;
+}
+
+function revisionStatusLabel(status: string) {
+  return ({ DRAFT: "草稿", PENDING_APPROVAL: "待审批", APPROVED: "已批准", REJECTED: "已驳回", CANCELLED: "已取消", EFFECTIVE: "已生效" } as Record<string, string>)[status] ?? status;
+}
+
+function reviewResultLabel(result: string) {
+  return ({ PENDING: "待处理", APPROVED: "已通过", REJECTED: "已驳回", REVISION_REQUIRED: "要求修订" } as Record<string, string>)[result] ?? result;
+}
+
+function terminationOutcomeLabel(outcome: string) {
+  return ({ SUCCESS: "成功完成", FAILED: "失败结束", CANCELLED: "提前取消", TIMEOUT: "超时结束" } as Record<string, string>)[outcome] ?? outcome;
+}
+
+const selectClass = "h-9 w-full min-w-0 rounded-lg border border-input bg-background px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50";

@@ -13,6 +13,7 @@ import {
   reviewMilestone,
   submitMilestoneForReview,
   submitRevision,
+  updateRevisionDraft,
 } from "../lib/project-management/application/lifecycle-service";
 import {
   toProjectManagementServiceError,
@@ -24,6 +25,8 @@ import {
   listTaskPlanVersions,
 } from "../lib/project-management/queries/task-queries";
 import type { ProjectManagementActor } from "../lib/project-management/identity";
+import { updateNotificationPreference } from "../lib/project-management/application/notification-preference-service";
+import { getTaskLifecycleViews } from "../lib/project-management/queries/task-lifecycle-queries";
 import {
   milestoneDraftSchema,
   submitMilestoneReviewInputSchema,
@@ -343,6 +346,38 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     expect(attempts.filter((entry) => entry.status === "rejected")).toHaveLength(1);
   });
 
+  test("Task activation honors ordinary Feishu preference while retaining in-app notification", async () => {
+    const fixture = await createDraftFixture();
+    await updateNotificationPreference(actor(fixture.owner), {
+      category: "TASK",
+      feishuEnabled: false,
+    });
+
+    const activated = await activateTask(actor(fixture.owner), {
+      taskId: fixture.taskId,
+      expectedLockVersion: 0,
+    });
+    const eventKey = `pm:task:activated:${fixture.taskId}:${activated.lockVersion}`;
+    const inApp = await prisma.inAppNotification.findUniqueOrThrow({
+      where: { eventKey: `${eventKey}:inapp:${fixture.owner.account.id}` },
+    });
+    expect(jsonRecord(inApp.payload)).toMatchObject({
+      context: { taskStatus: "ACTIVE" },
+    });
+    const outbox = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: { eventKey: `${eventKey}:feishu` },
+    });
+    const payload = jsonRecord(JSON.parse(outbox.payload));
+    expect(payload).toMatchObject({
+      context: { taskStatus: "ACTIVE" },
+      recipientOpenIds: expect.arrayContaining([
+        fixture.member.openId,
+        fixture.reviewer.openId,
+      ]),
+    });
+    expect(payload.recipientOpenIds).not.toContain(fixture.owner.openId);
+  });
+
   test("Milestone Review supports text and link evidence, blocks file evidence, and advances only on approval", async () => {
     const fixture = await createActivatedFixture();
     const activeNode = await firstCurrentMilestone(fixture.taskId);
@@ -574,6 +609,265 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     });
     expect(task.currentPlanVersionId).toBe(fixture.currentPlanVersionId);
     expect(task.activeMilestoneNodeId).toBe(activeNode.nodeId);
+  });
+
+  test("Revision Draft replace enforces ownership, stale and association safety with auditable atomic updates", async () => {
+    const fixture = await createActivatedFixture();
+    const lead = await createAccountPerson("生命周期 Revision Lead");
+    await prisma.taskMember.create({
+      data: {
+        taskId: fixture.taskId,
+        personId: lead.person.id,
+        role: "LEAD",
+        createdByAccountId: fixture.owner.account.id,
+      },
+    });
+    const activeNode = await firstCurrentMilestone(fixture.taskId);
+    const revision = await createRevisionDraft(actor(fixture.owner), {
+      taskId: fixture.taskId,
+      basePlanVersionId: fixture.currentPlanVersionId,
+      baseTaskLockVersion: 1,
+      revisedFromNodeId: activeNode.nodeId,
+      reason: "Revision Draft replace 初始计划",
+      replacementMilestones: [milestoneInput("候选节点 A", "候选条件 A", 4)],
+      plannedStartAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
+      termination: terminationInput(8),
+      idempotencyKey: `revision-update-${randomUUID()}`,
+    });
+    const targetPlanVersionId = revision.targetPlanVersionId ?? "";
+    const targetBefore = await revisionTargetSnapshot(targetPlanVersionId);
+    const replacementNode = targetBefore.nodes.find(
+      (entry) => entry.node.type === "MILESTONE" && !entry.isCarryForward,
+    );
+    if (!replacementNode) throw new Error("测试候选计划缺少可替换 Milestone");
+    const validUpdate = {
+      revisionNodeId: revision.revisionNodeId,
+      expectedTargetPlanUpdatedAt: targetBefore.updatedAt.toISOString(),
+      reason: "Revision Draft replace 已编辑",
+      plannedStartAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
+      replacementMilestones: [
+        {
+          ...milestoneInput("候选节点 B", "候选条件 B", 5),
+          businessDescription: "候选节点 B 的业务说明",
+        },
+        {
+          ...milestoneInput("候选节点 C", "候选条件 C", 6),
+          businessDescription: "候选节点 C 的业务说明",
+        },
+      ],
+      termination: {
+        ...terminationInput(9),
+        businessDescription: "候选结束业务说明",
+      },
+    };
+
+    await prisma.domainAuditEvent.createMany({
+      data: [
+        {
+          taskId: fixture.taskId,
+          action: "pm.test.system_historical",
+          entityType: "Task",
+          entityId: fixture.taskId,
+          source: "CRON",
+          createdAt: new Date("2020-01-01T00:00:00.000Z"),
+        },
+        {
+          taskId: fixture.taskId,
+          actorAccountId: lead.account.id,
+          actorPersonId: lead.person.id,
+          action: "pm.test.lead_historical",
+          entityType: "Task",
+          entityId: fixture.taskId,
+          createdAt: new Date("2020-01-02T00:00:00.000Z"),
+        },
+      ],
+    });
+
+    const leadView = await getTaskLifecycleViews({
+      actor: actor(lead),
+      taskId: fixture.taskId,
+      auditLimit: 1,
+    });
+    expect(leadView.revisions[0]?.capabilities).toMatchObject({
+      canEdit: false,
+      canSubmit: true,
+    });
+    expect(leadView.auditFilterOptions.eventTypes).toEqual(
+      expect.arrayContaining([
+        "pm.test.system_historical",
+        "pm.test.lead_historical",
+      ]),
+    );
+    expect(leadView.auditFilterOptions.actors).toEqual(
+      expect.arrayContaining([
+        { value: "SYSTEM", label: "系统" },
+        { value: lead.person.id, label: lead.person.displayName },
+      ]),
+    );
+    const ownerView = await getTaskLifecycleViews({
+      actor: actor(fixture.owner),
+      taskId: fixture.taskId,
+    });
+    expect(ownerView.revisions[0]?.capabilities.canEdit).toBe(true);
+    await expectServiceError(
+      updateRevisionDraft(actor(lead), validUpdate),
+      "FORBIDDEN",
+    );
+    expect(await revisionTargetSnapshot(targetPlanVersionId)).toEqual(targetBefore);
+
+    await expectServiceError(
+      updateRevisionDraft(actor(fixture.owner), {
+        ...validUpdate,
+        expectedTargetPlanUpdatedAt: new Date(0).toISOString(),
+      }),
+      "PLAN_VERSION_CONFLICT",
+    );
+    expect(await revisionTargetSnapshot(targetPlanVersionId)).toEqual(targetBefore);
+
+    await expectServiceError(
+      updateRevisionDraft(actor(fixture.owner), {
+        ...validUpdate,
+        replacementMilestones: [],
+      }),
+      "PLAN_CHRONOLOGY_INVALID",
+    );
+    expect(await revisionTargetSnapshot(targetPlanVersionId)).toEqual(targetBefore);
+
+    const associatedSegment = await prisma.workSegment.create({
+      data: {
+        personId: fixture.member.person.id,
+        type: "PLANNED",
+        status: "PLANNED",
+        startAt: new Date("2026-08-04T01:00:00.000Z"),
+        endAt: new Date("2026-08-04T02:00:00.000Z"),
+        content: "候选计划关联保护",
+        allocation: new Prisma.Decimal(50),
+        taskId: fixture.taskId,
+        nodeId: replacementNode.nodeId,
+        createdByAccountId: fixture.owner.account.id,
+      },
+    });
+    await expectServiceError(
+      updateRevisionDraft(actor(fixture.owner), validUpdate),
+      "STATE_CONFLICT",
+    );
+    expect(await revisionTargetSnapshot(targetPlanVersionId)).toEqual(targetBefore);
+    await prisma.workSegment.delete({ where: { id: associatedSegment.id } });
+
+    const targetBeforeLateFailure = await revisionTargetSnapshot(targetPlanVersionId);
+    const functionName = `test_revision_rollback_${randomUUID().replaceAll("-", "")}`;
+    const triggerName = `test_revision_rollback_${randomUUID().replaceAll("-", "")}`;
+    await prisma.$executeRaw(Prisma.sql`
+      CREATE FUNCTION ${Prisma.raw(`"${functionName}"`)}() RETURNS trigger AS $$
+      BEGIN
+        IF NEW."businessDescription" = 'S6_FORCE_LATE_ROLLBACK' THEN
+          RAISE EXCEPTION 'forced revision late rollback';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+    `);
+    await prisma.$executeRaw(Prisma.sql`
+      CREATE TRIGGER ${Prisma.raw(`"${triggerName}"`)}
+      BEFORE INSERT ON "TaskNode"
+      FOR EACH ROW EXECUTE FUNCTION ${Prisma.raw(`"${functionName}"`)}()
+    `);
+    try {
+      await expect(
+        updateRevisionDraft(actor(fixture.owner), {
+          ...validUpdate,
+          replacementMilestones: [
+            {
+              ...validUpdate.replacementMilestones[0],
+              businessDescription: "S6_FORCE_LATE_ROLLBACK",
+            },
+          ],
+        }),
+      ).rejects.toThrow(/forced revision late rollback/);
+    } finally {
+      await prisma.$executeRaw(Prisma.sql`
+        DROP TRIGGER ${Prisma.raw(`"${triggerName}"`)} ON "TaskNode"
+      `);
+      await prisma.$executeRaw(Prisma.sql`
+        DROP FUNCTION ${Prisma.raw(`"${functionName}"`)}()
+      `);
+    }
+    expect(await revisionTargetSnapshot(targetPlanVersionId)).toEqual(
+      targetBeforeLateFailure,
+    );
+
+    await prisma.revisionNode.update({
+      where: { id: revision.revisionNodeId },
+      data: {
+        status: "REJECTED",
+        submittedAt: new Date("2026-07-30T00:00:00.000Z"),
+        reviewedAt: new Date("2026-07-30T01:00:00.000Z"),
+        reviewedByAccountId: fixture.owner.account.id,
+        reviewComment: "请修改后重提",
+      },
+    });
+
+    const updated = await updateRevisionDraft(actor(fixture.owner), validUpdate);
+    expect(updated.status).toBe("DRAFT");
+    await expect(
+      prisma.revisionNode.findUniqueOrThrow({
+        where: { id: revision.revisionNodeId },
+        select: {
+          submittedAt: true,
+          reviewedAt: true,
+          reviewedByAccountId: true,
+          reviewComment: true,
+        },
+      }),
+    ).resolves.toEqual({
+      submittedAt: null,
+      reviewedAt: null,
+      reviewedByAccountId: null,
+      reviewComment: "",
+    });
+    const targetAfter = await revisionTargetSnapshot(targetPlanVersionId);
+    expect(targetAfter.updatedAt.getTime()).toBeGreaterThan(targetBefore.updatedAt.getTime());
+    expect(
+      targetAfter.nodes.flatMap((entry) => entry.node.milestone?.goal ?? []),
+    ).toEqual(["候选节点 B", "候选节点 C"]);
+    expect(
+      targetAfter.nodes.flatMap((entry) =>
+        entry.node.milestone ? [entry.node.businessDescription] : [],
+      ),
+    ).toEqual(["候选节点 B 的业务说明", "候选节点 C 的业务说明"]);
+    expect(
+      targetAfter.nodes.find((entry) => entry.node.type === "TERMINATION")?.node
+        .businessDescription,
+    ).toBe("候选结束业务说明");
+    const updateAudits = await prisma.domainAuditEvent.findMany({
+      where: {
+        taskId: fixture.taskId,
+        entityId: revision.revisionNodeId,
+        action: "pm.revision.draft.update",
+      },
+      select: { before: true, after: true },
+    });
+    expect(updateAudits).toHaveLength(1);
+    const auditBefore = jsonRecord(updateAudits[0]?.before);
+    const auditAfter = jsonRecord(updateAudits[0]?.after);
+    expect(jsonRecord(auditBefore.plan).snapshotHash).toBe(targetBefore.snapshotHash);
+    expect(jsonRecord(auditAfter.plan).snapshotHash).toBe(targetAfter.snapshotHash);
+    expect(jsonRecord(auditAfter.changes).added).toEqual(expect.any(Array));
+    expect(jsonRecord(auditAfter.changes).removed).toEqual(expect.any(Array));
+
+    await expectServiceError(
+      updateRevisionDraft(actor(fixture.owner), validUpdate),
+      "PLAN_VERSION_CONFLICT",
+    );
+    await expect(
+      prisma.domainAuditEvent.count({
+        where: {
+          taskId: fixture.taskId,
+          entityId: revision.revisionNodeId,
+          action: "pm.revision.draft.update",
+        },
+      }),
+    ).resolves.toBe(1);
   });
 
   test("Revision approval atomically switches Current Plan and invalidates planned segments", async () => {
@@ -1172,6 +1466,28 @@ async function currentPlanNodes(taskId: string) {
       },
     },
     orderBy: { sequence: "asc" },
+  });
+}
+
+async function revisionTargetSnapshot(planVersionId: string) {
+  return prisma.taskPlanVersion.findUniqueOrThrow({
+    where: { id: planVersionId },
+    select: {
+      updatedAt: true,
+      snapshotHash: true,
+      nodes: {
+        include: {
+          node: {
+            include: {
+              milestone: true,
+              revision: true,
+              termination: true,
+            },
+          },
+        },
+        orderBy: { sequence: "asc" },
+      },
+    },
   });
 }
 

@@ -52,9 +52,12 @@ test.describe("project management S3 shell", () => {
         .toEqual([
           "/progress",
           "/progress/tasks",
+          "/progress/my-timeline",
           "/progress/resources",
           "/progress/resources/conflicts",
+          "/progress/approvals",
           "/progress/notifications",
+          "/progress/tags",
         ]);
 
       const collapseButton = page.getByRole("button", {
@@ -114,7 +117,9 @@ test.describe("project management S3 shell", () => {
     ).toBeVisible();
     if (testInfo.project.name === "desktop") {
       await expect(
-        page.getByRole("link", { name: "Task" }),
+        page
+          .getByTestId("project-management-sidebar")
+          .getByRole("link", { name: "Task", exact: true }),
       ).toHaveAttribute("aria-current", "page");
     } else {
       await expect(
