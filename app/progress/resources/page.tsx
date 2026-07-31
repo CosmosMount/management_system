@@ -1,7 +1,6 @@
-import { ResourceTimelineClient } from "@/components/project-management/resource-timeline-client";
+import { ResourcePlannerCanvasClient } from "@/components/project-management/resource-planner-canvas-client";
 import { PageCommandBar } from "@/components/project-management/shell/page-command-bar";
 import { timeCanvasDataToModel } from "@/components/project-management/time-canvas/adapter";
-import { TimeCanvas } from "@/components/project-management/time-canvas/time-canvas";
 import {
   formatShanghaiDate,
   parseTimeCanvasUrlState,
@@ -9,10 +8,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toProjectManagementServiceError } from "@/lib/project-management/application/errors";
-import {
-  listTimelinePeople,
-  listWorkSegments,
-} from "@/lib/project-management/queries/resource-queries";
+import { listTimelinePeople } from "@/lib/project-management/queries/resource-queries";
 import { listTasks } from "@/lib/project-management/queries/task-queries";
 import { getTimeCanvasData } from "@/lib/project-management/queries/time-canvas-queries";
 import { getProgressActorOrRedirect } from "../_auth";
@@ -39,17 +35,7 @@ export default async function ProgressResourcesPage({
   const taskId = view.taskIds[0];
   const personId = view.personIds[0];
 
-  const [segments, people, tasks, canvasResult] = await Promise.all([
-    listWorkSegments({
-      actor,
-      input: {
-        startAt,
-        endAt,
-        taskId,
-        personId,
-        limit: 100,
-      },
-    }),
+  const [people, tasks, canvasResult] = await Promise.all([
     listTimelinePeople({ actor }),
     listTasks({ actor, input: { status: "ACTIVE", limit: 100 } }),
     getTimeCanvasData({
@@ -134,38 +120,22 @@ export default async function ProgressResourcesPage({
             </div>
           )}
           {canvasModel ? (
-            <div className="min-w-0 overflow-hidden rounded-xl border border-border bg-background" data-testid="resource-time-canvas">
-              <TimeCanvas
-                mode="RESOURCE_PLANNER"
-                model={canvasModel}
-                initialZoom={view.zoom}
-                display={{ showActual: true, showBusy: true, showConflicts: true }}
-                emptyMessage="当前筛选和时间范围内没有可见安排。"
-              />
-            </div>
+            <ResourcePlannerCanvasClient
+              initialModel={canvasModel}
+              people={people}
+              tasks={tasks.items.map((task) => ({
+                id: task.id,
+                title: task.title,
+                activeNodeId: task.activeMilestone?.nodeId ?? null,
+              }))}
+              defaultPersonId={actor.personId}
+              initialZoom={view.zoom}
+            />
           ) : (
             <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-6 text-sm text-destructive" role="alert">
-              时间画布加载失败：{canvasResult.ok ? "未知错误" : canvasResult.message}
+              时间画布加载失败：{canvasResult.ok ? "未知错误" : canvasResult.message}。请调整筛选或刷新后重试；为避免绕过显式区间规则，失败状态不提供旧版自动切分操作。
             </div>
           )}
-          <section aria-labelledby="resource-precise-actions" className="min-w-0">
-            <div className="mb-3">
-              <h2 id="resource-precise-actions" className="text-base font-semibold">精确操作</h2>
-              <p className="mt-1 text-sm text-muted-foreground">画布交互接入前，继续使用经过服务端校验的表单和操作按钮。</p>
-            </div>
-          <ResourceTimelineClient
-            segments={segments.items}
-            people={people}
-            tasks={tasks.items.map((task) => ({
-              id: task.id,
-              title: task.title,
-              activeNodeId: task.activeMilestone?.nodeId ?? null,
-            }))}
-            defaultPersonId={actor.personId}
-            rangeStart={startAt.toISOString()}
-            rangeEnd={new Date(startAt.getTime() + 60 * 60 * 1_000).toISOString()}
-          />
-          </section>
       </div>
     </>
   );

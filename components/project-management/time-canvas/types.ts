@@ -101,11 +101,36 @@ export type TimeCanvasDisplayOptions = {
   showInspector?: boolean;
 };
 
+export type TimeCanvasBrushRequest = {
+  rowId: string;
+  rowKind: TimeCanvasRow["kind"];
+  sourceId: string;
+  startMs: number;
+  endMs: number;
+};
+
+export type TimeCanvasSegmentTransformRequest = {
+  segmentId: string;
+  kind: "MOVE" | "RESIZE_START" | "RESIZE_END" | "KEYBOARD_MOVE";
+  startMs: number;
+  endMs: number;
+};
+
+export type TimeCanvasInteractionOptions = {
+  enableBrushCreate?: boolean;
+  selectedSegmentIds?: ReadonlySet<string>;
+  onBrushCreate?: (request: TimeCanvasBrushRequest) => void;
+  onSegmentTransform?: (request: TimeCanvasSegmentTransformRequest) => void;
+  onSegmentToggleSelection?: (segmentId: string) => void;
+  onInvalidDrop?: (message: string) => void;
+};
+
 export type TimeCanvasProps = {
   mode: TimeCanvasMode;
   model: TimeCanvasModel;
   initialZoom?: TimeCanvasZoom;
   display?: TimeCanvasDisplayOptions;
+  interaction?: TimeCanvasInteractionOptions;
   emptyMessage?: string;
   onRangeChange?: (range: TimeCanvasRange) => void;
   onSelectionChange?: (selection: TimeCanvasSelection) => void;

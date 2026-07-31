@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
@@ -32,14 +33,17 @@ import {
   createTimeScale,
   intervalToRect,
   rangesIntersect,
+  snapTime,
   timeToX,
   visibleTimeWindow,
+  xToTime,
 } from "@/components/project-management/time-canvas/time-math";
 import { layoutIntervalLanes, layoutPointLanes } from "@/components/project-management/time-canvas/lane-layout";
 import type {
   TimeCanvasAnchor,
   TimeCanvasConflict,
   TimeCanvasDisplayOptions,
+  TimeCanvasInteractionOptions,
   TimeCanvasProps,
   TimeCanvasRow,
   TimeCanvasSegment,
@@ -65,6 +69,7 @@ export function TimeCanvas({
   model,
   initialZoom,
   display: displayInput,
+  interaction,
   emptyMessage = "选择人员或 Task 后查看计划",
   onRangeChange,
   onSelectionChange,
@@ -412,6 +417,7 @@ export function TimeCanvas({
                           nowMs={generatedAtMs}
                           selection={selection}
                           activeFocusKey={currentFocusKey}
+                          interaction={interaction}
                           onSelect={select}
                           onObjectFocus={setActiveFocusKey}
                         />
@@ -596,6 +602,7 @@ function TimelineRow({
   nowMs,
   selection,
   activeFocusKey,
+  interaction,
   onSelect,
   onObjectFocus,
 }: {
@@ -609,9 +616,15 @@ function TimelineRow({
   nowMs: number;
   selection: TimeCanvasSelection;
   activeFocusKey: string | null;
+  interaction: TimeCanvasInteractionOptions | undefined;
   onSelect: (selection: TimeCanvasSelection) => void;
   onObjectFocus: (key: string) => void;
 }) {
+  const [brush, setBrush] = useState<{
+    pointerId: number;
+    anchorMs: number;
+    currentMs: number;
+  } | null>(null);
   const layout = layoutIntervalLanes(
     segments.map((segment) => ({
       id: segment.id,
@@ -635,9 +648,79 @@ function TimelineRow({
     scale.msPerPixel * 96,
   );
 
+  const brushRange = brush
+    ? normalizeBrushRange(brush.anchorMs, brush.currentMs, scale)
+    : null;
+  const canBrush =
+    Boolean(interaction?.enableBrushCreate && interaction.onBrushCreate) &&
+    row.editable &&
+    row.kind === "PERSON";
+
+  function pointerTime(event: ReactPointerEvent<HTMLDivElement>) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return clampTime(
+      snapTime(xToTime(event.clientX - rect.left, scale), scale.snapMs),
+      scale.startMs,
+      scale.endMs,
+    );
+  }
+
   return (
-    <div className="relative overflow-hidden bg-background" aria-label={`${row.label} 时间行`}>
+    <div
+      className={cn(
+        "relative overflow-hidden bg-background",
+        canBrush && "cursor-crosshair touch-none",
+      )}
+      data-canvas-row={row.id}
+      aria-label={`${row.label} 时间行`}
+      onPointerDown={(event) => {
+        const target = event.target;
+        if (
+          !canBrush ||
+          event.button !== 0 ||
+          (target instanceof Element && target.closest("[data-canvas-object]"))
+        ) {
+          return;
+        }
+        const atMs = pointerTime(event);
+        event.currentTarget.setPointerCapture(event.pointerId);
+        setBrush({ pointerId: event.pointerId, anchorMs: atMs, currentMs: atMs });
+      }}
+      onPointerMove={(event) => {
+        if (!brush || brush.pointerId !== event.pointerId) return;
+        // React clears currentTarget after the handler returns; capture the
+        // coordinate before entering the deferred state updater.
+        const currentMs = pointerTime(event);
+        setBrush((current) =>
+          current ? { ...current, currentMs } : null,
+        );
+      }}
+      onPointerCancel={() => setBrush(null)}
+      onPointerUp={(event) => {
+        if (!brush || brush.pointerId !== event.pointerId) return;
+        const range = normalizeBrushRange(
+          brush.anchorMs,
+          pointerTime(event),
+          scale,
+        );
+        setBrush(null);
+        interaction?.onBrushCreate?.({
+          rowId: row.id,
+          rowKind: row.kind,
+          sourceId: row.sourceId,
+          ...range,
+        });
+      }}
+    >
       <TimeGrid dayStripes={dayStripes} scale={scale} />
+      {brushRange && (
+        <span
+          className="pointer-events-none absolute inset-y-1 z-40 rounded border-2 border-primary bg-primary/15"
+          style={intervalToRect(brushRange.startMs, brushRange.endMs, scale)}
+          aria-hidden="true"
+          data-testid="time-canvas-brush-preview"
+        />
+      )}
       {row.kind === "PLAN" && (
         <PlanRail anchors={anchors} visibleWindow={visibleWindow} scale={scale} rowId={row.id} />
       )}
@@ -675,6 +758,10 @@ function TimelineRow({
             scale={scale}
             selected={selection?.kind === "SEGMENT" && selection.id === segment.id}
             activeFocusKey={activeFocusKey}
+            multiSelected={Boolean(
+              interaction?.selectedSegmentIds?.has(segment.id),
+            )}
+            interaction={interaction}
             onSelect={onSelect}
             onObjectFocus={onObjectFocus}
           />
@@ -808,6 +895,8 @@ function SegmentBlock({
   scale,
   selected,
   activeFocusKey,
+  multiSelected,
+  interaction,
   onSelect,
   onObjectFocus,
 }: {
@@ -816,16 +905,67 @@ function SegmentBlock({
   scale: ReturnType<typeof createTimeScale>;
   selected: boolean;
   activeFocusKey: string | null;
+  multiSelected: boolean;
+  interaction: TimeCanvasInteractionOptions | undefined;
   onSelect: (selection: TimeCanvasSelection) => void;
   onObjectFocus: (key: string) => void;
 }) {
-  const rect = intervalToRect(segment.startMs, segment.endMs, scale);
+  const [transform, setTransform] = useState<{
+    pointerId: number;
+    kind: "MOVE" | "RESIZE_START" | "RESIZE_END";
+    clientX: number;
+    scrollLeft: number;
+    startMs: number;
+    endMs: number;
+    rowTop: number;
+    rowBottom: number;
+  } | null>(null);
+  const [preview, setPreview] = useState<{
+    startMs: number;
+    endMs: number;
+  } | null>(null);
+  const suppressClickRef = useRef(false);
+  const displayed = preview ?? segment;
+  const rect = intervalToRect(displayed.startMs, displayed.endMs, scale);
   const focusKey = segmentFocusKey(segment.id);
+
+  function requestKeyboardTransform(
+    kind: "KEYBOARD_MOVE" | "RESIZE_END",
+    direction: -1 | 1,
+  ) {
+    if (!interaction?.onSegmentTransform) return;
+    if (kind === "KEYBOARD_MOVE" && !segment.permissions.canMove) return;
+    if (kind === "RESIZE_END" && !segment.permissions.canResize) return;
+    const duration = segment.endMs - segment.startMs;
+    const nextStart =
+      kind === "KEYBOARD_MOVE"
+        ? clampTime(
+            segment.startMs + direction * scale.snapMs,
+            scale.startMs,
+            scale.endMs - duration,
+          )
+        : segment.startMs;
+    const nextEnd =
+      kind === "KEYBOARD_MOVE"
+        ? nextStart + duration
+        : clampTime(
+            segment.endMs + direction * scale.snapMs,
+            segment.startMs + scale.snapMs,
+            scale.endMs,
+          );
+    interaction.onSegmentTransform({
+      segmentId: segment.id,
+      kind,
+      startMs: nextStart,
+      endMs: nextEnd,
+    });
+  }
+
   return (
     <button
       type="button"
       className={cn(
-        "absolute z-10 flex h-5 min-w-px items-center gap-1 overflow-hidden rounded px-1 text-left text-[10px] outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
+        "absolute z-10 flex h-5 min-w-px touch-none items-center gap-1 overflow-hidden rounded px-1 text-left text-[10px] outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
         segment.type === "PLANNED" &&
           "border border-dashed border-sky-500/70 bg-sky-100/90 text-sky-950 dark:bg-sky-950/60 dark:text-sky-50",
         segment.type === "ACTUAL" &&
@@ -833,22 +973,144 @@ function SegmentBlock({
         segment.type === "BUSY" &&
           "border border-slate-400 bg-[repeating-linear-gradient(135deg,var(--muted),var(--muted)_4px,var(--background)_4px,var(--background)_8px)] text-foreground",
         selected && "ring-2 ring-primary ring-offset-1",
+        multiSelected && "ring-2 ring-amber-500 ring-offset-1",
         segment.conflictIds.length > 0 && "border-t-4 border-t-destructive",
+        transform && "cursor-grabbing opacity-80",
       )}
       style={{ left: rect.left, width: rect.width, top: 8 + lane * 24 }}
       aria-pressed={selected}
       aria-label={segmentAriaLabel(segment)}
       title={`${segment.title} · ${formatRange(segment.startMs, segment.endMs)}`}
-      onClick={() => onSelect(selected ? null : { kind: "SEGMENT", id: segment.id })}
+      onClick={(event) => {
+        if (suppressClickRef.current) {
+          suppressClickRef.current = false;
+          return;
+        }
+        if (event.shiftKey && interaction?.onSegmentToggleSelection) {
+          interaction.onSegmentToggleSelection(segment.id);
+          return;
+        }
+        onSelect(selected ? null : { kind: "SEGMENT", id: segment.id });
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        const direction = event.key === "ArrowLeft" ? -1 : 1;
+        if (event.shiftKey) {
+          event.preventDefault();
+          event.stopPropagation();
+          requestKeyboardTransform("KEYBOARD_MOVE", direction);
+        } else if (event.altKey) {
+          event.preventDefault();
+          event.stopPropagation();
+          requestKeyboardTransform("RESIZE_END", direction);
+        }
+      }}
+      onPointerDown={(event) => {
+        if (event.button !== 0 || !interaction?.onSegmentTransform) return;
+        const target = event.target;
+        const handle =
+          target instanceof HTMLElement
+            ? target.closest<HTMLElement>("[data-resize-handle]")?.dataset
+                .resizeHandle
+            : undefined;
+        const kind =
+          handle === "start"
+            ? "RESIZE_START"
+            : handle === "end"
+              ? "RESIZE_END"
+              : "MOVE";
+        if (kind === "MOVE" && !segment.permissions.canMove) return;
+        if (kind !== "MOVE" && !segment.permissions.canResize) return;
+        const scroller = event.currentTarget.closest<HTMLElement>(
+          "[data-testid='time-canvas-scroll']",
+        );
+        const row = event.currentTarget.closest<HTMLElement>("[data-canvas-row]");
+        const rowRect = row?.getBoundingClientRect();
+        event.preventDefault();
+        event.stopPropagation();
+        event.currentTarget.setPointerCapture(event.pointerId);
+        setTransform({
+          pointerId: event.pointerId,
+          kind,
+          clientX: event.clientX,
+          scrollLeft: scroller?.scrollLeft ?? 0,
+          startMs: segment.startMs,
+          endMs: segment.endMs,
+          rowTop: rowRect?.top ?? Number.NEGATIVE_INFINITY,
+          rowBottom: rowRect?.bottom ?? Number.POSITIVE_INFINITY,
+        });
+        setPreview({ startMs: segment.startMs, endMs: segment.endMs });
+      }}
+      onPointerMove={(event) => {
+        if (!transform || transform.pointerId !== event.pointerId) return;
+        const scroller = event.currentTarget.closest<HTMLElement>(
+          "[data-testid='time-canvas-scroll']",
+        );
+        if (scroller) edgeScrollCanvas(scroller, event.clientX);
+        const scrollDelta = (scroller?.scrollLeft ?? 0) - transform.scrollLeft;
+        const rawDelta =
+          (event.clientX - transform.clientX + scrollDelta) * scale.msPerPixel;
+        const deltaMs = snapTime(rawDelta, scale.snapMs, "round", 0);
+        setPreview(
+          transformedRange(transform, deltaMs, scale.startMs, scale.endMs, scale.snapMs),
+        );
+        if (Math.abs(deltaMs) >= scale.snapMs) suppressClickRef.current = true;
+      }}
+      onPointerCancel={() => {
+        setTransform(null);
+        setPreview(null);
+      }}
+      onPointerUp={(event) => {
+        if (!transform || transform.pointerId !== event.pointerId) return;
+        const result = preview;
+        const droppedOutsideOriginalRow =
+          event.clientY < transform.rowTop || event.clientY >= transform.rowBottom;
+        setTransform(null);
+        setPreview(null);
+        if (suppressClickRef.current) {
+          window.setTimeout(() => {
+            suppressClickRef.current = false;
+          }, 0);
+        }
+        if (droppedOutsideOriginalRow) {
+          suppressClickRef.current = true;
+          interaction?.onInvalidDrop?.("不支持跨人员行拖放，投入仍保留在原位置。");
+          return;
+        }
+        if (
+          result &&
+          (result.startMs !== segment.startMs || result.endMs !== segment.endMs)
+        ) {
+          interaction?.onSegmentTransform?.({
+            segmentId: segment.id,
+            kind: transform.kind,
+            ...result,
+          });
+        }
+      }}
       onFocus={() => onObjectFocus(focusKey)}
       tabIndex={activeFocusKey === focusKey ? 0 : -1}
       data-canvas-object
       data-canvas-object-key={focusKey}
       data-testid={`segment-block-${segment.id}`}
     >
+      {segment.permissions.canResize && interaction?.onSegmentTransform && (
+        <span
+          className="absolute inset-y-0 left-0 w-2 cursor-ew-resize"
+          data-resize-handle="start"
+          aria-hidden="true"
+        />
+      )}
       {segment.associationNeedsReview && <Link2Off className="size-3 shrink-0" aria-hidden="true" />}
       <span className="truncate">{segment.title}</span>
       {segment.allocation !== null && <span className="ml-auto shrink-0">{segment.allocation}%</span>}
+      {segment.permissions.canResize && interaction?.onSegmentTransform && (
+        <span
+          className="absolute inset-y-0 right-0 w-2 cursor-ew-resize"
+          data-resize-handle="end"
+          aria-hidden="true"
+        />
+      )}
     </button>
   );
 }
@@ -1205,6 +1467,83 @@ function conflictFocusKey(id: string) {
 
 function overflowFocusKey(rowId: string, placementId: string) {
   return `overflow:${rowId}:${placementId}`;
+}
+
+function normalizeBrushRange(
+  anchorMs: number,
+  currentMs: number,
+  scale: ReturnType<typeof createTimeScale>,
+) {
+  const lower = Math.min(anchorMs, currentMs);
+  const upper = Math.max(anchorMs, currentMs);
+  const rangeDurationMs = scale.endMs - scale.startMs;
+  const minimumDurationMs = Math.min(scale.snapMs, rangeDurationMs);
+  if (upper - lower >= minimumDurationMs) {
+    return {
+      startMs: clampTime(lower, scale.startMs, scale.endMs - minimumDurationMs),
+      endMs: clampTime(upper, scale.startMs + minimumDurationMs, scale.endMs),
+    };
+  }
+  const startMs = clampTime(
+    lower,
+    scale.startMs,
+    scale.endMs - minimumDurationMs,
+  );
+  return { startMs, endMs: startMs + minimumDurationMs };
+}
+
+function transformedRange(
+  transform: {
+    kind: "MOVE" | "RESIZE_START" | "RESIZE_END";
+    startMs: number;
+    endMs: number;
+  },
+  deltaMs: number,
+  rangeStartMs: number,
+  rangeEndMs: number,
+  minimumDurationMs: number,
+) {
+  if (transform.kind === "RESIZE_START") {
+    return {
+      startMs: clampTime(
+        transform.startMs + deltaMs,
+        rangeStartMs,
+        transform.endMs - minimumDurationMs,
+      ),
+      endMs: transform.endMs,
+    };
+  }
+  if (transform.kind === "RESIZE_END") {
+    return {
+      startMs: transform.startMs,
+      endMs: clampTime(
+        transform.endMs + deltaMs,
+        transform.startMs + minimumDurationMs,
+        rangeEndMs,
+      ),
+    };
+  }
+  const duration = transform.endMs - transform.startMs;
+  const startMs = clampTime(
+    transform.startMs + deltaMs,
+    rangeStartMs,
+    rangeEndMs - duration,
+  );
+  return { startMs, endMs: startMs + duration };
+}
+
+function edgeScrollCanvas(scroller: HTMLElement, clientX: number) {
+  const bounds = scroller.getBoundingClientRect();
+  const edge = 40;
+  if (clientX < bounds.left + edge) {
+    scroller.scrollLeft = Math.max(0, scroller.scrollLeft - 24);
+  } else if (clientX > bounds.right - edge) {
+    scroller.scrollLeft += 24;
+  }
+}
+
+function clampTime(value: number, minimum: number, maximum: number) {
+  return Math.max(minimum, Math.min(value, maximum));
 }
 
 function groupByRow<T extends { rowId: string }>(items: T[]) {

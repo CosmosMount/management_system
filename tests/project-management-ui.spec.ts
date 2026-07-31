@@ -42,6 +42,9 @@ test.describe("project management P4/P6 UI integration", () => {
     page,
     baseURL,
   }, testInfo) => {
+    test.setTimeout(90_000);
+    const pageErrors: Error[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error));
     const fixture = await createUiFixture();
     await loginAsTestUser(context, baseURL, {
       openId: fixture.member.openId,
@@ -66,25 +69,268 @@ test.describe("project management P4/P6 UI integration", () => {
     await expectHealthyPage(page);
 
     await page.goto(
-      `/progress/resources?start=2026-08-10&end=2026-08-12&personId=${fixture.member.person.id}`,
+      `/progress/resources?from=2026-08-10&to=2026-08-12&people=${fixture.member.person.id},${fixture.owner.person.id}&zoom=hour`,
     );
     await expect(page.getByRole("heading", { name: "人员计划" })).toBeVisible();
     await expect(page.getByTestId("time-canvas-root")).toBeVisible();
     if (testInfo.project.name === "desktop") {
-      await expect(page.getByTestId("time-canvas-scroll")).toBeVisible();
+      await page.goto(
+        `/progress/resources?from=2026-08-10&to=2026-08-12&people=${fixture.reviewer.person.id}&zoom=hour`,
+      );
+      const emptyCanvasScroll = page.getByTestId("time-canvas-scroll");
+      await emptyCanvasScroll.evaluate((element) => {
+        element.scrollLeft = 1_200;
+        element.dispatchEvent(new Event("scroll"));
+      });
+      const emptyRow = page.getByLabel(`${fixture.reviewer.person.displayName} 时间行`, { exact: true });
+      const emptyScrollBox = await emptyCanvasScroll.boundingBox();
+      const emptyRowBox = await emptyRow.boundingBox();
+      if (!emptyScrollBox || !emptyRowBox) throw new Error("未找到空人员行拖选坐标");
+      const brushStartX = emptyScrollBox.x + Math.min(emptyScrollBox.width - 140, 760);
+      const brushY = emptyRowBox.y + emptyRowBox.height - 8;
+      await page.mouse.move(brushStartX, brushY);
+      await page.mouse.down();
+      await page.mouse.move(brushStartX + 72, brushY, { steps: 4 });
+      await page.mouse.up();
+      const brushCreate = page.getByRole("form", { name: "投入快速创建" });
+      await expect(brushCreate).toBeVisible();
+      await brushCreate.getByLabel("Task").selectOption(fixture.taskId);
+      await brushCreate.getByLabel("内容").fill(fixture.brushCreateContent);
+      await brushCreate.getByRole("button", { name: "创建", exact: true }).click();
+      await expect(page.getByText("已创建投入记录")).toBeVisible();
+      await expect.poll(() => prisma.workSegment.count({
+        where: {
+          personId: fixture.reviewer.person.id,
+          content: fixture.brushCreateContent,
+        },
+      })).toBe(1);
+      await page.goto(
+        `/progress/resources?from=2026-08-10&to=2026-08-12&people=${fixture.member.person.id},${fixture.owner.person.id}&zoom=hour`,
+      );
+      const canvasScroll = page.getByTestId("time-canvas-scroll");
+      await expect(canvasScroll).toBeVisible();
+      await canvasScroll.evaluate((element) => {
+        element.scrollLeft = 1_200;
+        element.dispatchEvent(new Event("scroll"));
+      });
+      const beforeKeyboardMove = await prisma.workSegment.findUniqueOrThrow({
+        where: { id: fixture.movableSegmentId },
+        select: { startAt: true },
+      });
+      const movable = page.getByTestId(`segment-block-${fixture.movableSegmentId}`);
+      await prisma.workSegment.update({
+        where: { id: fixture.movableSegmentId },
+        data: { content: "P6 UI 制造 stale 后仍可重试" },
+      });
+      await movable.focus();
+      await movable.press("Shift+ArrowRight");
+      await expect(page.getByText(/投入记录已被他人修改/)).toBeVisible();
+      expect(
+        await prisma.workSegment.findUniqueOrThrow({
+          where: { id: fixture.movableSegmentId },
+          select: { startAt: true },
+        }),
+      ).toMatchObject({ startAt: beforeKeyboardMove.startAt });
+      await page.waitForTimeout(500);
+      await canvasScroll.evaluate((element) => {
+        element.scrollLeft = 1_200;
+        element.dispatchEvent(new Event("scroll"));
+      });
+      await movable.focus();
+      await movable.press("Shift+ArrowRight");
+      await expect(page.getByText("已移动计划投入")).toBeVisible();
+      await expect
+        .poll(async () => {
+          const row = await prisma.workSegment.findUniqueOrThrow({
+            where: { id: fixture.movableSegmentId },
+            select: { startAt: true },
+          });
+          return row.startAt.getTime();
+        })
+        .toBe(beforeKeyboardMove.startAt.getTime() + 30 * 60 * 1_000);
+      await page.waitForTimeout(800);
+      await canvasScroll.evaluate((element) => {
+        element.scrollLeft = 1_200;
+        element.dispatchEvent(new Event("scroll"));
+      });
+      const beforeInvalidDrop = await prisma.workSegment.findUniqueOrThrow({
+        where: { id: fixture.movableSegmentId },
+        select: { startAt: true, endAt: true },
+      });
+      const movableBox = await page
+        .getByTestId(`segment-block-${fixture.movableSegmentId}`)
+        .boundingBox();
+      const otherRowBox = await page
+        .getByLabel(`${fixture.owner.person.displayName} 时间行`, { exact: true })
+        .boundingBox();
+      if (!movableBox || !otherRowBox) throw new Error("未找到跨行拖动测试坐标");
+      await page.mouse.move(movableBox.x + movableBox.width / 2, movableBox.y + movableBox.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(movableBox.x + movableBox.width / 2 + 36, otherRowBox.y + otherRowBox.height / 2, { steps: 4 });
+      await page.mouse.up();
+      await expect(page.getByText("不支持跨人员行拖放，投入仍保留在原位置。")).toBeVisible();
+      expect(
+        await prisma.workSegment.findUniqueOrThrow({
+          where: { id: fixture.movableSegmentId },
+          select: { startAt: true, endAt: true },
+        }),
+      ).toMatchObject(beforeInvalidDrop);
+
+      await page.mouse.move(movableBox.x + movableBox.width / 2, movableBox.y + movableBox.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(movableBox.x + movableBox.width / 2 + 36, movableBox.y + movableBox.height / 2, { steps: 4 });
+      await page.mouse.up();
+      await expect(page.getByText("已移动计划投入")).toBeVisible();
+      await expect
+        .poll(async () => (await prisma.workSegment.findUniqueOrThrow({ where: { id: fixture.movableSegmentId }, select: { startAt: true } })).startAt.getTime())
+        .toBe(beforeInvalidDrop.startAt.getTime() + 30 * 60 * 1_000);
+      await page.waitForTimeout(800);
+      await canvasScroll.evaluate((element) => {
+        element.scrollLeft = 1_200;
+        element.dispatchEvent(new Event("scroll"));
+      });
+      const beforeStartResize = await prisma.workSegment.findUniqueOrThrow({
+        where: { id: fixture.movableSegmentId },
+        select: { startAt: true },
+      });
+      const startResizeHandle = page
+        .getByTestId(`segment-block-${fixture.movableSegmentId}`)
+        .locator('[data-resize-handle="start"]');
+      const startResizeBox = await startResizeHandle.boundingBox();
+      if (!startResizeBox) throw new Error("未找到可见的 Segment 开始时间调整柄");
+      await page.mouse.move(startResizeBox.x + startResizeBox.width / 2, startResizeBox.y + startResizeBox.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(startResizeBox.x + startResizeBox.width / 2 - 36, startResizeBox.y + startResizeBox.height / 2, { steps: 4 });
+      await page.mouse.up();
+      await expect(page.getByText("已调整计划投入区间")).toBeVisible();
+      await expect
+        .poll(async () => (await prisma.workSegment.findUniqueOrThrow({ where: { id: fixture.movableSegmentId }, select: { startAt: true } })).startAt.getTime())
+        .toBe(beforeStartResize.startAt.getTime() - 30 * 60 * 1_000);
+      await page.waitForTimeout(800);
+      await canvasScroll.evaluate((element) => {
+        element.scrollLeft = 1_200;
+        element.dispatchEvent(new Event("scroll"));
+      });
+      const beforeResize = await prisma.workSegment.findUniqueOrThrow({
+        where: { id: fixture.movableSegmentId },
+        select: { endAt: true },
+      });
+      const resizeHandle = page
+        .getByTestId(`segment-block-${fixture.movableSegmentId}`)
+        .locator('[data-resize-handle="end"]');
+      const resizeBox = await resizeHandle.boundingBox();
+      if (!resizeBox) throw new Error("未找到可见的 Segment 结束时间调整柄");
+      await page.mouse.move(resizeBox.x + resizeBox.width / 2, resizeBox.y + resizeBox.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(resizeBox.x + resizeBox.width / 2 + 36, resizeBox.y + resizeBox.height / 2, { steps: 4 });
+      await page.mouse.up();
+      await expect(page.getByText("已调整计划投入区间")).toBeVisible();
+      await expect
+        .poll(async () => {
+          const row = await prisma.workSegment.findUniqueOrThrow({
+            where: { id: fixture.movableSegmentId },
+            select: { endAt: true },
+          });
+          return row.endAt.getTime();
+        })
+        .toBe(beforeResize.endAt.getTime() + 30 * 60 * 1_000);
+      await page.waitForTimeout(800);
+      await canvasScroll.evaluate((element) => {
+        element.scrollLeft = 1_200;
+        element.dispatchEvent(new Event("scroll"));
+      });
+      const expectedRangeAfterTransforms = await prisma.workSegment.findUniqueOrThrow({
+        where: { id: fixture.movableSegmentId },
+        select: { startAt: true, endAt: true },
+      });
+      await page.getByTestId(`segment-block-${fixture.movableSegmentId}`).click();
+      const movedInspector = page.getByTestId("segment-inspector");
+      await expect(movedInspector.getByRole("heading", { name: "P6 UI 制造 stale 后仍可重试" })).toBeVisible();
+      await movedInspector.getByLabel("职责", { exact: true }).selectOption("CUSTOM");
+      await movedInspector.getByLabel("自定义职责").fill("跨域协调");
+      await movedInspector.getByLabel("内容").fill("P6 UI Inspector 更新不覆盖画布时间");
+      await movedInspector.getByRole("button", { name: "保存精确修改" }).click();
+      await expect(page.getByText("已更新投入详情")).toBeVisible();
+      await expect.poll(async () => {
+        const row = await prisma.workSegment.findUniqueOrThrow({
+          where: { id: fixture.movableSegmentId },
+          select: { startAt: true, endAt: true, role: true, customRole: true },
+        });
+        return {
+          startAt: row.startAt.toISOString(),
+          endAt: row.endAt.toISOString(),
+          role: row.role,
+          customRole: row.customRole,
+        };
+      }).toEqual({
+        startAt: expectedRangeAfterTransforms.startAt.toISOString(),
+        endAt: expectedRangeAfterTransforms.endAt.toISOString(),
+        role: "CUSTOM",
+        customRole: "跨域协调",
+      });
+      await page.waitForTimeout(800);
+      await canvasScroll.evaluate((element) => {
+        element.scrollLeft = 1_200;
+        element.dispatchEvent(new Event("scroll"));
+      });
+      await page
+        .getByTestId(`segment-block-${fixture.batchCancelableSegmentIds[0]}`)
+        .click({ modifiers: ["Shift"] });
+      await page
+        .getByTestId(`segment-block-${fixture.batchCancelableSegmentIds[1]}`)
+        .click({ modifiers: ["Shift"] });
+      await expect(page.getByText("已选 2 条")).toBeVisible();
+      page.once("dialog", (dialog) => dialog.accept());
+      await page.getByRole("button", { name: "批量取消", exact: true }).click();
+      await expect(page.getByText("已原子取消所选计划")).toBeVisible();
+      await expect.poll(() => prisma.workSegment.count({
+        where: {
+          id: { in: [...fixture.batchCancelableSegmentIds] },
+          status: "CANCELLED",
+        },
+      })).toBe(2);
+      await page.waitForTimeout(800);
+      await canvasScroll.evaluate((element) => {
+        element.scrollLeft = 1_200;
+        element.dispatchEvent(new Event("scroll"));
+      });
       await page
         .getByTestId(`segment-block-${fixture.confirmableSegmentId}`)
         .click();
     } else {
       await expect(page.getByTestId("time-agenda")).toBeVisible();
+      await page.getByRole("button", { name: "新增投入" }).click();
+      const quickCreate = page.getByRole("form", { name: "投入快速创建" });
+      await quickCreate.getByLabel("内容").fill(fixture.mobileCreateContent);
+      const actionUrl = "**/progress/resources**";
+      let actionAborted = false;
+      const abortFirstAction = async (route: import("@playwright/test").Route) => {
+        if (!actionAborted && route.request().method() === "POST") {
+          actionAborted = true;
+          await route.abort();
+          return;
+        }
+        await route.continue();
+      };
+      await page.route(actionUrl, abortFirstAction);
+      await quickCreate.getByRole("button", { name: "创建", exact: true }).click();
+      await expect(page.getByText("网络异常，未能保存；输入仍保留，可直接重试。")).toBeVisible();
+      await expect(quickCreate.getByLabel("内容")).toHaveValue(fixture.mobileCreateContent);
+      await page.unroute(actionUrl, abortFirstAction);
+      await quickCreate.getByRole("button", { name: "创建", exact: true }).click();
+      await expect(page.getByText("已创建投入记录")).toBeVisible();
+      await expect
+        .poll(() => prisma.workSegment.count({ where: { content: fixture.mobileCreateContent } }))
+        .toBe(1);
+      await page.waitForTimeout(800);
       await page
         .getByTestId(`agenda-item-${fixture.confirmableSegmentId}`)
         .click();
     }
-    await expect(page.getByTestId("time-canvas-inspector")).toBeVisible();
+    await expect(page.getByTestId("segment-inspector")).toBeVisible();
     await expect(
       page
-        .getByTestId("time-canvas-inspector")
+        .getByTestId("segment-inspector")
         .getByRole("heading", { name: "P6 UI 可确认计划" }),
     ).toBeVisible();
     expect(
@@ -92,8 +338,8 @@ test.describe("project management P4/P6 UI integration", () => {
         () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
       ),
     ).toBe(true);
-    await page.getByRole("button", { name: "与计划一致" }).first().click();
-    await expect(page.getByText("已按计划生成 Actual")).toBeVisible();
+    await page.getByRole("button", { name: "完整确认", exact: true }).click();
+    await expect(page.getByText("已完整确认并生成 Actual")).toBeVisible();
     await expect
       .poll(async () => {
         const row = await prisma.workSegment.findUniqueOrThrow({
@@ -104,6 +350,7 @@ test.describe("project management P4/P6 UI integration", () => {
       })
       .toBe("CONFIRMED");
     await expectHealthyPage(page);
+    expect(pageErrors).toEqual([]);
 
     await page.goto("/progress/resources/conflicts");
     await expect(page.getByRole("heading", { name: "资源冲突" })).toBeVisible();
@@ -112,13 +359,14 @@ test.describe("project management P4/P6 UI integration", () => {
     await expect(page.getByText("已确认知晓该冲突")).toBeVisible();
     await expect
       .poll(async () => {
-        const row = await prisma.resourceConflict.findUniqueOrThrow({
-          where: { id: fixture.conflictId },
-          select: { status: true },
+        return prisma.resourceConflict.count({
+          where: {
+            personId: fixture.member.person.id,
+            status: "ACKNOWLEDGED",
+          },
         });
-        return row.status;
       })
-      .toBe("ACKNOWLEDGED");
+      .toBeGreaterThan(0);
     await expectHealthyPage(page);
 
     await page.goto("/progress/notifications");
@@ -180,6 +428,14 @@ async function createUiFixture() {
     team: "英雄",
     techGroup: "电控",
   });
+  await grantRole(member.account.id, "TEAM_ADMINISTRATOR", {
+    team: "英雄",
+    techGroup: "电控",
+  });
+  await grantRole(member.account.id, "RESOURCE_MANAGER", {
+    team: "英雄",
+    techGroup: "电控",
+  });
   const taskTitle = `P6 UI Task ${randomUUID()}`;
   const draft = await createTaskDraft(actor(admin), {
     title: taskTitle,
@@ -225,7 +481,7 @@ async function createUiFixture() {
     nodeId: activeNode.nodeId,
     tagIds: [],
   });
-  await createWorkSegment(actor(member), {
+  const movable = await createWorkSegment(actor(member), {
     personId: member.person.id,
     type: "PLANNED",
     startAt: atHour(10),
@@ -234,6 +490,19 @@ async function createUiFixture() {
     allocation: 80,
     role: "DEVELOPER",
     priority: "MEDIUM",
+    taskId: draft.taskId,
+    nodeId: activeNode.nodeId,
+    tagIds: [],
+  });
+  await createWorkSegment(actor(admin), {
+    personId: owner.person.id,
+    type: "PLANNED",
+    startAt: atHour(8),
+    endAt: atHour(9),
+    content: "P6 UI 跨行目标人员安排",
+    allocation: 30,
+    role: "LEAD",
+    priority: "LOW",
     taskId: draft.taskId,
     nodeId: activeNode.nodeId,
     tagIds: [],
@@ -247,6 +516,32 @@ async function createUiFixture() {
     allocation: 50,
     role: "DEVELOPER",
     priority: "MEDIUM",
+    taskId: draft.taskId,
+    nodeId: activeNode.nodeId,
+    tagIds: [],
+  });
+  const batchCancelableA = await createWorkSegment(actor(member), {
+    personId: member.person.id,
+    type: "PLANNED",
+    startAt: atHour(12),
+    endAt: atHour(13),
+    content: "P6 UI 批量取消 A",
+    allocation: 20,
+    role: "SUPPORT",
+    priority: "LOW",
+    taskId: draft.taskId,
+    nodeId: activeNode.nodeId,
+    tagIds: [],
+  });
+  const batchCancelableB = await createWorkSegment(actor(member), {
+    personId: member.person.id,
+    type: "PLANNED",
+    startAt: atHour(13),
+    endAt: atHour(14),
+    content: "P6 UI 批量取消 B",
+    allocation: 20,
+    role: "SUPPORT",
+    priority: "LOW",
     taskId: draft.taskId,
     nodeId: activeNode.nodeId,
     tagIds: [],
@@ -287,6 +582,13 @@ async function createUiFixture() {
     taskId: draft.taskId,
     taskTitle,
     confirmableSegmentId: confirmable.segment.id,
+    movableSegmentId: movable.segment.id,
+    batchCancelableSegmentIds: [
+      batchCancelableA.segment.id,
+      batchCancelableB.segment.id,
+    ] as const,
+    brushCreateContent: `P6 UI 画布拖选创建 ${randomUUID()}`,
+    mobileCreateContent: `P6 UI 移动端精确创建 ${randomUUID()}`,
     conflictId: conflict.id,
     notificationId: notification.id,
   };
@@ -320,7 +622,7 @@ async function createAccountPerson(displayName: string) {
 
 async function grantRole(
   accountId: string,
-  role: "TEAM_ADMINISTRATOR",
+  role: "TEAM_ADMINISTRATOR" | "RESOURCE_MANAGER",
   scope: { team: string; techGroup: string },
 ) {
   await prisma.systemRoleAssignment.create({

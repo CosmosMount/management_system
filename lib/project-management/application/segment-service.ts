@@ -35,6 +35,8 @@ import { lockTaskNodeAssociationsTx } from "@/lib/project-management/application
 import { isTaskCreatableForSegment } from "@/lib/project-management/domain/task-segment-policy";
 import {
   batchCreatePlannedSegmentsInputSchema,
+  batchCancelPlannedSegmentsInputSchema,
+  batchConfirmPlannedSegmentsInputSchema,
   cancelPlannedSegmentInputSchema,
   confirmPlannedSegmentInputSchema,
   createActualSegmentInputSchema,
@@ -829,6 +831,71 @@ export async function cancelPlannedSegment(
   });
 }
 
+export async function batchCancelPlannedSegments(
+  actor: ProjectManagementActor,
+  input: unknown,
+): Promise<BatchSegmentMutationResult> {
+  const parsed = batchCancelPlannedSegmentsInputSchema.parse(input);
+  assertUniqueIds(
+    parsed.segments.map((segment) => segment.segmentId),
+    "不能重复取消同一条投入记录",
+  );
+  return prisma.$transaction(async (tx) => {
+    const segmentIds = parsed.segments.map((segment) => segment.segmentId);
+    const conflictRanges = await prepareExistingSegmentConflictMutationTx(
+      tx,
+      segmentIds,
+    );
+    const refreshedActor = await refreshActorTx(tx, actor);
+    const segments = await lockAndLoadSegmentsTx(tx, segmentIds);
+    const expectedById = new Map(
+      parsed.segments.map((segment) => [
+        segment.segmentId,
+        segment.expectedUpdatedAt,
+      ]),
+    );
+
+    // Validate the complete set before the first write so a stale or forbidden
+    // middle item rolls the entire request back without partial audit history.
+    for (const segment of segments) {
+      assertSegmentVisible(refreshedActor, segment);
+      assertCanManageSegment(refreshedActor, segment);
+      assertExpectedUpdatedAt(segment, expectedById.get(segment.id));
+      assertPlannedEditable(
+        segment,
+        "只有未确认且未取消的 Planned Segment 可以批量取消",
+      );
+    }
+
+    const cancelled: SegmentForMutation[] = [];
+    for (const segment of segments) {
+      const before = snapshotSegment(segment);
+      const updated = await tx.workSegment.update({
+        where: { id: segment.id },
+        data: {
+          status: "CANCELLED",
+          updatedByAccountId: refreshedActor.accountId,
+        },
+        include: segmentInclude,
+      });
+      await recordSegmentChangeTx(tx, {
+        actor: refreshedActor,
+        segmentId: updated.id,
+        action: "CANCEL",
+        before,
+        after: snapshotSegment(updated),
+        reason: parsed.reason,
+      });
+      cancelled.push(updated);
+    }
+    await rescanSegmentConflictRangesTx(tx, conflictRanges);
+    return {
+      segments: cancelled.map(toWorkSegmentDto),
+      affectedSegmentIds: cancelled.map((segment) => segment.id),
+    };
+  });
+}
+
 export async function confirmPlannedSegment(
   actor: ProjectManagementActor,
   input: unknown,
@@ -919,6 +986,87 @@ export async function confirmPlannedSegment(
       actualSegment: toWorkSegmentDto(actual),
       createdActual: true,
       affectedSegmentIds: [confirmed.id, actual.id],
+    };
+  });
+}
+
+export async function batchConfirmPlannedSegments(
+  actor: ProjectManagementActor,
+  input: unknown,
+): Promise<
+  BatchSegmentMutationResult & { actualSegments: WorkSegmentDto[] }
+> {
+  const parsed = batchConfirmPlannedSegmentsInputSchema.parse(input);
+  assertUniqueIds(
+    parsed.segments.map((segment) => segment.segmentId),
+    "不能重复确认同一条投入记录",
+  );
+  return prisma.$transaction(async (tx) => {
+    const refreshedActor = await refreshActorTx(tx, actor);
+    const segmentIds = parsed.segments.map((segment) => segment.segmentId);
+    const preflightSegments = await loadSegmentsForPreflightTx(tx, segmentIds);
+    for (const segment of preflightSegments) {
+      assertSegmentVisible(refreshedActor, segment);
+      assertCanManageSegment(refreshedActor, segment);
+    }
+    const associationLocks = await lockSegmentNodeAssociationTasksTx(tx, {
+      segmentIds,
+    });
+    const conflictRanges = await prepareExistingSegmentConflictMutationTx(
+      tx,
+      segmentIds,
+    );
+    const segments = await lockAndLoadSegmentsTx(tx, segmentIds);
+    const preflightById = new Map(
+      preflightSegments.map((segment) => [segment.id, segment] as const),
+    );
+    const expectedById = new Map(
+      parsed.segments.map((segment) => [
+        segment.segmentId,
+        segment.expectedUpdatedAt,
+      ]),
+    );
+
+    // Confirm only after the whole set has passed visibility, permission,
+    // association, version and state checks. The surrounding transaction then
+    // guarantees Actual/source/change/audit creation is all-or-nothing.
+    for (const segment of segments) {
+      const preflightSegment = preflightById.get(segment.id);
+      if (!preflightSegment) throw notFoundError();
+      assertSegmentAssociationLocatorUnchanged(preflightSegment, segment);
+      assertNodeAssociationTaskLocked(associationLocks, segment);
+      assertSegmentVisible(refreshedActor, segment);
+      assertCanManageSegment(refreshedActor, segment);
+      assertExpectedUpdatedAt(segment, expectedById.get(segment.id));
+      assertPlannedEditable(
+        segment,
+        "只有未确认且未取消的 Planned Segment 可以批量确认",
+      );
+    }
+
+    const actualSegments: SegmentForMutation[] = [];
+    for (const planned of segments) {
+      actualSegments.push(
+        await createActualFromPlannedTx(tx, {
+          actor: refreshedActor,
+          planned,
+          coveredStartAt: planned.startAt,
+          coveredEndAt: planned.endAt,
+          actualInput: {},
+          reason: parsed.reason,
+          confirmOriginal: "CONFIRMED",
+        }),
+      );
+    }
+    const confirmed = await lockAndLoadSegmentsTx(tx, segmentIds);
+    await rescanSegmentConflictRangesTx(tx, conflictRanges);
+    return {
+      segments: confirmed.map(toWorkSegmentDto),
+      actualSegments: actualSegments.map(toWorkSegmentDto),
+      affectedSegmentIds: [
+        ...confirmed.map((segment) => segment.id),
+        ...actualSegments.map((segment) => segment.id),
+      ],
     };
   });
 }

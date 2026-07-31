@@ -9,6 +9,8 @@ import {
 } from "../lib/project-management/application/lifecycle-service";
 import {
   batchCreatePlannedSegments,
+  batchCancelPlannedSegments,
+  batchConfirmPlannedSegments,
   cancelPlannedSegment,
   confirmPlannedSegment,
   createActualSegment,
@@ -912,6 +914,206 @@ test.describe("project management P5 work segment services", () => {
         where: { channel: "project-management" },
       }),
     ).toBe(outboxBefore);
+  });
+
+  test("Batch cancel validates all 100 items before writing and rolls back a late stale item", async () => {
+    const fixture = await createActivatedFixture();
+    const created = await batchCreatePlannedSegments(actor(fixture.member), {
+      segments: Array.from({ length: 100 }, (_, index) => ({
+        ...plannedInput(fixture.member.person.id, 9, 10),
+        startAt: new Date("2026-10-15T09:00:00.000Z"),
+        endAt: new Date("2026-10-15T10:00:00.000Z"),
+        content: `百条批量取消 ${index + 1}`,
+        taskId: fixture.taskId,
+        nodeId: fixture.activeNodeId,
+      })),
+    });
+    const sorted = [...created.segments].sort((left, right) =>
+      left.id.localeCompare(right.id),
+    );
+    const lateStale = sorted[sorted.length - 1];
+    if (!lateStale) throw new Error("缺少批量取消末项");
+    await prisma.workSegment.update({
+      where: { id: lateStale.id },
+      data: { content: `${lateStale.content}（制造 stale）` },
+    });
+    const ids = sorted.map((segment) => segment.id);
+    const changesBefore = await prisma.workSegmentChange.count({
+      where: { segmentId: { in: ids } },
+    });
+    const auditsBefore = await prisma.domainAuditEvent.count({
+      where: { entityType: "WorkSegment", entityId: { in: ids } },
+    });
+
+    await expectServiceError(
+      batchCancelPlannedSegments(actor(fixture.member), {
+        segments: sorted.map((segment) => ({
+          segmentId: segment.id,
+          expectedUpdatedAt: segment.updatedAt,
+        })),
+        reason: "验证百条批量取消回滚",
+      }),
+      "STALE_SEGMENT",
+    );
+
+    expect(
+      await prisma.workSegment.count({
+        where: { id: { in: ids }, status: "CANCELLED" },
+      }),
+    ).toBe(0);
+    expect(
+      await prisma.workSegmentChange.count({ where: { segmentId: { in: ids } } }),
+    ).toBe(changesBefore);
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: { entityType: "WorkSegment", entityId: { in: ids } },
+      }),
+    ).toBe(auditsBefore);
+  });
+
+  test("Batch cancel rejects an outsider, then cancels every item with history, audit and conflict rescan", async () => {
+    const fixture = await createActivatedFixture();
+    const created = await batchCreatePlannedSegments(actor(fixture.member), {
+      segments: [
+        {
+          ...plannedInput(fixture.member.person.id, 16, 17),
+          allocation: 70,
+          content: "批量取消成功 A",
+          taskId: fixture.taskId,
+          nodeId: fixture.activeNodeId,
+        },
+        {
+          ...plannedInput(fixture.member.person.id, 16, 17),
+          allocation: 50,
+          content: "批量取消成功 B",
+          taskId: fixture.taskId,
+          nodeId: fixture.activeNodeId,
+        },
+      ],
+    });
+    const ids = created.segments.map((segment) => segment.id);
+    const input = {
+      segments: created.segments.map((segment) => ({
+        segmentId: segment.id,
+        expectedUpdatedAt: segment.updatedAt,
+      })),
+      reason: "批量取消成功路径",
+    };
+    const conflict = await prisma.resourceConflict.findFirstOrThrow({
+      where: {
+        status: "OPEN",
+        segments: { some: { segmentId: { in: ids } } },
+      },
+      select: { id: true },
+    });
+
+    await expectServiceError(
+      batchCancelPlannedSegments(actor(fixture.outsider), input),
+      "NOT_FOUND",
+    );
+    expect(
+      await prisma.workSegment.count({
+        where: { id: { in: ids }, status: "PLANNED" },
+      }),
+    ).toBe(2);
+
+    const cancelled = await batchCancelPlannedSegments(actor(fixture.member), input);
+    expect(cancelled.segments).toHaveLength(2);
+    expect(cancelled.segments.every((segment) => segment.status === "CANCELLED")).toBe(true);
+    expect(
+      await prisma.workSegmentChange.count({
+        where: { segmentId: { in: ids }, action: "CANCEL" },
+      }),
+    ).toBe(2);
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: {
+          entityType: "WorkSegment",
+          entityId: { in: ids },
+          action: "pm.segment.cancel",
+        },
+      }),
+    ).toBe(2);
+    expect(
+      await prisma.resourceConflict.findUniqueOrThrow({
+        where: { id: conflict.id },
+        select: { status: true },
+      }),
+    ).toEqual({ status: "RESOLVED" });
+  });
+
+  test("Batch full confirmation is atomic, permission checked and creates complete Actual sources", async () => {
+    const fixture = await createActivatedFixture();
+    const created = await batchCreatePlannedSegments(actor(fixture.member), {
+      segments: Array.from({ length: 3 }, (_, index) => ({
+        ...plannedInput(fixture.member.person.id, 20 + index, 21 + index),
+        content: `批量确认 ${index + 1}`,
+        taskId: fixture.taskId,
+        nodeId: fixture.activeNodeId,
+      })),
+    });
+    const stale = created.segments[1];
+    if (!stale) throw new Error("缺少批量确认 stale 项");
+    await prisma.workSegment.update({
+      where: { id: stale.id },
+      data: { content: `${stale.content}（制造 stale）` },
+    });
+    const ids = created.segments.map((segment) => segment.id);
+
+    await expectServiceError(
+      batchConfirmPlannedSegments(actor(fixture.member), {
+        segments: created.segments.map((segment) => ({
+          segmentId: segment.id,
+          expectedUpdatedAt: segment.updatedAt,
+        })),
+        reason: "验证批量确认回滚",
+      }),
+      "STALE_SEGMENT",
+    );
+    expect(
+      await prisma.workSegmentSource.count({
+        where: { plannedSegmentId: { in: ids } },
+      }),
+    ).toBe(0);
+    expect(
+      await prisma.workSegment.count({
+        where: { id: { in: ids }, status: "CONFIRMED" },
+      }),
+    ).toBe(0);
+
+    const authoritative = await prisma.workSegment.findMany({
+      where: { id: { in: ids } },
+      orderBy: { id: "asc" },
+    });
+    await expectServiceError(
+      batchConfirmPlannedSegments(actor(fixture.outsider), {
+        segments: authoritative.map((segment) => ({
+          segmentId: segment.id,
+          expectedUpdatedAt: segment.updatedAt,
+        })),
+      }),
+      "NOT_FOUND",
+    );
+    const confirmed = await batchConfirmPlannedSegments(actor(fixture.member), {
+      segments: authoritative.map((segment) => ({
+        segmentId: segment.id,
+        expectedUpdatedAt: segment.updatedAt,
+      })),
+      reason: "批量完整确认",
+    });
+    expect(confirmed.segments).toHaveLength(3);
+    expect(confirmed.actualSegments).toHaveLength(3);
+    expect(confirmed.segments.every((segment) => segment.status === "CONFIRMED")).toBe(true);
+    expect(
+      await prisma.workSegmentSource.count({
+        where: { plannedSegmentId: { in: ids } },
+      }),
+    ).toBe(3);
+    expect(
+      await prisma.workSegmentChange.count({
+        where: { segmentId: { in: ids }, action: "CONFIRM" },
+      }),
+    ).toBe(3);
   });
 
   test("Reverse overlapping batch inputs acquire Segment locks in one database order", async () => {

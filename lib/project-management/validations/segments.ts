@@ -394,6 +394,20 @@ export const cancelPlannedSegmentInputSchema = z.object({
   reason: requiredText("请输入取消原因", 1_000),
 });
 
+export const batchCancelPlannedSegmentsInputSchema = z.object({
+  segments: z
+    .array(
+      z.object({
+        segmentId: idSchema,
+        expectedUpdatedAt: requiredDate("记录版本不正确"),
+      }),
+      { message: "取消列表格式不正确" },
+    )
+    .min(1, "至少选择一条 Planned Segment")
+    .max(100, "单次最多取消 100 条 Planned Segment"),
+  reason: requiredText("请输入取消原因", 1_000),
+});
+
 export const confirmPlannedSegmentInputSchema = z.object({
   segmentId: idSchema,
   expectedUpdatedAt: requiredDate("记录版本不正确"),
@@ -406,6 +420,20 @@ export const confirmPlannedSegmentInputSchema = z.object({
     })
     .optional()
     .default({}),
+});
+
+export const batchConfirmPlannedSegmentsInputSchema = z.object({
+  segments: z
+    .array(
+      z.object({
+        segmentId: idSchema,
+        expectedUpdatedAt: requiredDate("记录版本不正确"),
+      }),
+      { message: "确认列表格式不正确" },
+    )
+    .min(1, "至少选择一条 Planned Segment")
+    .max(100, "单次最多确认 100 条 Planned Segment"),
+  reason: optionalText(1_000),
 });
 
 export const partiallyConfirmSegmentInputSchema = z.object({
@@ -599,6 +627,12 @@ export type MergePlannedSegmentsInput = z.infer<
 >;
 export type ConfirmPlannedSegmentInput = z.infer<
   typeof confirmPlannedSegmentInputSchema
+>;
+export type BatchCancelPlannedSegmentsInput = z.infer<
+  typeof batchCancelPlannedSegmentsInputSchema
+>;
+export type BatchConfirmPlannedSegmentsInput = z.infer<
+  typeof batchConfirmPlannedSegmentsInputSchema
 >;
 export type PartiallyConfirmSegmentInput = z.infer<
   typeof partiallyConfirmSegmentInputSchema

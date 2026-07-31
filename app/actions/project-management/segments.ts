@@ -6,6 +6,8 @@ import {
 } from "@/lib/project-management/application/action-result";
 import {
   batchCreatePlannedSegments as batchCreatePlannedSegmentsService,
+  batchCancelPlannedSegments as batchCancelPlannedSegmentsService,
+  batchConfirmPlannedSegments as batchConfirmPlannedSegmentsService,
   cancelPlannedSegment as cancelPlannedSegmentService,
   confirmPlannedSegment as confirmPlannedSegmentService,
   createActualSegment as createActualSegmentService,
@@ -77,10 +79,32 @@ export async function cancelPlannedSegment(
   return runSegmentAction("pm.segment.cancel", "cancelPlannedSegment", input, cancelPlannedSegmentService);
 }
 
+export async function batchCancelPlannedSegments(
+  input: unknown,
+): Promise<ProjectManagementActionResult<Awaited<ReturnType<typeof batchCancelPlannedSegmentsService>>>> {
+  return runSegmentAction(
+    "pm.segment.cancel",
+    "batchCancelPlannedSegments",
+    input,
+    batchCancelPlannedSegmentsService,
+  );
+}
+
 export async function confirmPlannedSegment(
   input: unknown,
 ): Promise<ProjectManagementActionResult<Awaited<ReturnType<typeof confirmPlannedSegmentService>>>> {
   return runSegmentAction("pm.segment.confirm", "confirmPlannedSegment", input, confirmPlannedSegmentService);
+}
+
+export async function batchConfirmPlannedSegments(
+  input: unknown,
+): Promise<ProjectManagementActionResult<Awaited<ReturnType<typeof batchConfirmPlannedSegmentsService>>>> {
+  return runSegmentAction(
+    "pm.segment.confirm",
+    "batchConfirmPlannedSegments",
+    input,
+    batchConfirmPlannedSegmentsService,
+  );
 }
 
 export async function partiallyConfirmSegment(

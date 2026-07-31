@@ -224,12 +224,14 @@ test.describe("S2 canvas query security", () => {
       openId: owner.openId,
       name: owner.person.displayName,
     });
-    await page.goto("/progress/resources?start=2026-08-10&end=2026-08-12");
+    await page.goto("/progress/resources?from=2026-08-10&to=2026-08-12");
 
-    await page.locator("#segment-task").selectOption(activeTask.taskId);
-    await page.locator("#segment-content").fill("真实 Action 允许 Active Task");
-    await page.getByRole("button", { name: "新增计划" }).click();
-    await expect(page.getByRole("status")).toHaveText("已创建 Planned Segment");
+    await page.getByRole("button", { name: "新增投入" }).click();
+    const quickCreate = page.getByRole("form", { name: "投入快速创建" });
+    await quickCreate.locator("#quick-task").selectOption(activeTask.taskId);
+    await quickCreate.locator("#quick-content").fill("真实 Action 允许 Active Task");
+    await quickCreate.getByRole("button", { name: "创建" }).click();
+    await expect(page.getByRole("status")).toHaveText("已创建投入记录");
     await expect
       .poll(() =>
         prisma.workSegment.count({
@@ -242,7 +244,9 @@ test.describe("S2 canvas query security", () => {
       )
       .toBe(1);
 
-    await page.locator("#segment-task").evaluate(
+    await page.getByRole("button", { name: "新增投入" }).click();
+    const deniedQuickCreate = page.getByRole("form", { name: "投入快速创建" });
+    await deniedQuickCreate.locator("#quick-task").evaluate(
       (element, taskId) => {
         const select = element as HTMLSelectElement;
         const option = document.createElement("option");
@@ -254,11 +258,11 @@ test.describe("S2 canvas query security", () => {
       },
       terminalTask.taskId,
     );
-    await page.locator("#segment-content").fill("真实 Action 拒绝 Completed Task");
+    await deniedQuickCreate.locator("#quick-content").fill("真实 Action 拒绝 Completed Task");
     const deniedActionResponse = page.waitForResponse((response) =>
       Boolean(response.request().headers()["next-action"]),
     );
-    await page.getByRole("button", { name: "新增计划" }).click();
+    await deniedQuickCreate.getByRole("button", { name: "创建" }).click();
     expect(await (await deniedActionResponse).text()).toContain(
       "ASSOCIATION_INVALID",
     );
