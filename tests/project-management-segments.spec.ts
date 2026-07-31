@@ -26,6 +26,9 @@ import {
   toProjectManagementServiceError,
 } from "../lib/project-management/application/errors";
 import {
+  runProjectManagementAction,
+} from "../lib/project-management/application/action-result";
+import {
   getWorkSegment,
   listWorkSegmentChanges,
   listWorkSegments,
@@ -135,7 +138,7 @@ test.describe("project management P5 work segment services", () => {
         expectedUpdatedAt: selfSegment.segment.updatedAt,
         content: "过期更新",
       }),
-      "STATE_CONFLICT",
+      "STALE_SEGMENT",
     );
 
     const beforeBatchCount = await prisma.workSegment.count();
@@ -172,6 +175,138 @@ test.describe("project management P5 work segment services", () => {
       }),
       "NOT_FOUND",
     );
+  });
+
+  test("Stale Segment mutations return only the safe authoritative version and write nothing", async () => {
+    const fixture = await createActivatedFixture();
+    const created = await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 9, 10),
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+    });
+    const authoritativeUpdatedAt = new Date(
+      new Date(created.segment.updatedAt).getTime() + 1_000,
+    );
+    await prisma.workSegment.update({
+      where: { id: created.segment.id },
+      data: {
+        content: "服务端权威内容",
+        updatedAt: authoritativeUpdatedAt,
+      },
+    });
+
+    const authoritativeBeforeStale = await prisma.workSegment.findUniqueOrThrow({
+      where: { id: created.segment.id },
+    });
+    const changesBefore = await prisma.workSegmentChange.count({
+      where: { segmentId: created.segment.id },
+    });
+    const auditsBefore = await prisma.domainAuditEvent.count({
+      where: { entityType: "WorkSegment", entityId: created.segment.id },
+    });
+    const sourceHistoryBefore = await prisma.workSegmentSource.count({
+      where: {
+        OR: [
+          { plannedSegmentId: created.segment.id },
+          { actualSegmentId: created.segment.id },
+        ],
+      },
+    });
+    const outboxBefore = await prisma.notificationOutbox.count({
+      where: { channel: "project-management" },
+    });
+
+    const staleResult = await runProjectManagementAction({
+      event: "test.pm.segment.real_stale_update",
+      action: "testRealStaleSegmentUpdate",
+      callback: async () =>
+        updateWorkSegment(actor(fixture.member), {
+          segmentId: created.segment.id,
+          expectedUpdatedAt: created.segment.updatedAt,
+          content: "过期请求不得写入",
+          reason: "验证真实 Segment stale ActionResult",
+        }),
+    });
+    const authoritativeVersion = authoritativeBeforeStale.updatedAt.toISOString();
+    expect(staleResult).toEqual({
+      ok: false,
+      error: {
+        code: "STALE_SEGMENT",
+        message: "投入记录已被他人修改，请刷新后重试",
+        current: {
+          kind: "SEGMENT",
+          id: created.segment.id,
+          updatedAt: authoritativeVersion,
+          versionToken: authoritativeVersion,
+        },
+      },
+    });
+    if (staleResult.ok || !staleResult.error.current) {
+      throw new Error("真实 stale mutation 未返回安全权威版本");
+    }
+    expect(Object.keys(staleResult.error.current).sort()).toEqual([
+      "id",
+      "kind",
+      "updatedAt",
+      "versionToken",
+    ]);
+    expect(staleResult.error.current.kind).toBe("SEGMENT");
+    if (staleResult.error.current.kind !== "SEGMENT") {
+      throw new Error("Segment stale mutation 不得返回 Task current");
+    }
+    expect(staleResult.error.current.updatedAt).toBe(
+      staleResult.error.current.versionToken,
+    );
+
+    const deniedResult = await runProjectManagementAction({
+      event: "test.pm.segment.denied_stale_update",
+      action: "testDeniedStaleSegmentUpdate",
+      callback: async () =>
+        updateWorkSegment(actor(fixture.outsider), {
+          segmentId: created.segment.id,
+          expectedUpdatedAt: created.segment.updatedAt,
+          content: "无权限用户不得探测版本",
+          reason: "验证授权先于 stale",
+        }),
+    });
+    expect(deniedResult).toEqual({
+      ok: false,
+      error: {
+        code: "NOT_FOUND",
+        message: "对象不存在或无权查看",
+      },
+    });
+
+    expect(
+      await prisma.workSegment.findUniqueOrThrow({
+        where: { id: created.segment.id },
+      }),
+    ).toEqual(authoritativeBeforeStale);
+    expect(
+      await prisma.workSegmentChange.count({
+        where: { segmentId: created.segment.id },
+      }),
+    ).toBe(changesBefore);
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: { entityType: "WorkSegment", entityId: created.segment.id },
+      }),
+    ).toBe(auditsBefore);
+    expect(
+      await prisma.workSegmentSource.count({
+        where: {
+          OR: [
+            { plannedSegmentId: created.segment.id },
+            { actualSegmentId: created.segment.id },
+          ],
+        },
+      }),
+    ).toBe(sourceHistoryBefore);
+    expect(
+      await prisma.notificationOutbox.count({
+        where: { channel: "project-management" },
+      }),
+    ).toBe(outboxBefore);
   });
 
   test("Planned Segment split and merge preserve coverage, history and tags", async () => {
@@ -694,7 +829,7 @@ test.describe("project management P5 work segment services", () => {
         ],
         reason: "批量移动",
       }),
-      "STATE_CONFLICT",
+      "STALE_SEGMENT",
     );
     const firstAfter = await prisma.workSegment.findUniqueOrThrow({
       where: { id: first.segment.id },
@@ -751,7 +886,7 @@ test.describe("project management P5 work segment services", () => {
         })),
         reason: "验证百条全成全败",
       }),
-      "STATE_CONFLICT",
+      "STALE_SEGMENT",
     );
 
     const afterRows = await prisma.workSegment.findMany({
@@ -838,7 +973,7 @@ test.describe("project management P5 work segment services", () => {
           moveInput([...idOrdered].reverse(), 2),
         ),
     ]);
-    expect(serviceOutcomeCodes(outcomes)).toEqual(["OK", "STATE_CONFLICT"]);
+    expect(serviceOutcomeCodes(outcomes)).toEqual(["OK", "STALE_SEGMENT"]);
 
     const persisted = await prisma.workSegment.findMany({
       where: { id: { in: segmentIds } },
@@ -976,7 +1111,7 @@ test.describe("project management P5 work segment services", () => {
         () => partiallyConfirmSegment(actor(fixture.member), partialInput),
       ],
     );
-    expect(serviceOutcomeCodes(partialOutcomes)).toEqual(["OK", "STATE_CONFLICT"]);
+    expect(serviceOutcomeCodes(partialOutcomes)).toEqual(["OK", "STALE_SEGMENT"]);
     const partialSources = await prisma.workSegmentSource.findMany({
       where: { plannedSegmentId: partialPlan.segment.id },
       select: { actualSegmentId: true },
@@ -1061,7 +1196,7 @@ test.describe("project management P5 work segment services", () => {
         () => cancelPlannedSegment(actor(fixture.member), cancelInput),
       ],
     );
-    expect(serviceOutcomeCodes(cancelOutcomes)).toEqual(["OK", "STATE_CONFLICT"]);
+    expect(serviceOutcomeCodes(cancelOutcomes)).toEqual(["OK", "STALE_SEGMENT"]);
     expect(
       await prisma.workSegmentChange.count({
         where: { segmentId: cancelPlan.segment.id, action: "CANCEL" },
@@ -1112,7 +1247,7 @@ test.describe("project management P5 work segment services", () => {
         () => softDeleteActualSegment(actor(fixture.member), deleteInput),
       ],
     );
-    expect(serviceOutcomeCodes(deleteOutcomes)).toEqual(["OK", "STATE_CONFLICT"]);
+    expect(serviceOutcomeCodes(deleteOutcomes)).toEqual(["OK", "STALE_SEGMENT"]);
     expect(
       await prisma.workSegmentChange.count({
         where: { segmentId: actual.segment.id, action: "DELETE" },
@@ -1142,20 +1277,27 @@ test.describe("project management P5 work segment services", () => {
 
   test("Segment transition scan writes change history and audit", async () => {
     const fixture = await createActivatedFixture();
+    const transitionNow = new Date("2025-06-01T10:00:00.000Z");
     const inProgressPlan = await createWorkSegment(actor(fixture.member), {
       ...plannedInput(fixture.member.person.id, 9, 11),
+      startAt: new Date("2025-06-01T09:00:00.000Z"),
+      endAt: new Date("2025-06-01T11:00:00.000Z"),
       taskId: fixture.taskId,
       nodeId: fixture.activeNodeId,
     });
     const duePlan = await createWorkSegment(actor(fixture.member), {
       ...plannedInput(fixture.member.person.id, 7, 8),
+      startAt: new Date("2025-06-01T07:00:00.000Z"),
+      endAt: new Date("2025-06-01T08:00:00.000Z"),
       taskId: fixture.taskId,
       nodeId: fixture.activeNodeId,
     });
 
-    const result = await scanSegmentTransitions(atHour(10));
-    expect(result.inProgressCount).toBeGreaterThanOrEqual(1);
-    expect(result.pendingConfirmationCount).toBeGreaterThanOrEqual(1);
+    const result = await scanSegmentTransitions(transitionNow);
+    expect(result).toEqual({
+      pendingConfirmationCount: 1,
+      inProgressCount: 1,
+    });
 
     const transitioned = await prisma.workSegment.findMany({
       where: { id: { in: [inProgressPlan.segment.id, duePlan.segment.id] } },
@@ -1179,6 +1321,13 @@ test.describe("project management P5 work segment services", () => {
         },
       }),
     ).toBe(2);
+    expect(
+      await prisma.notificationOutbox.count({
+        where: {
+          eventKey: `pm:segment:confirmation_due:${duePlan.segment.id}:${duePlan.segment.endAt}:feishu`,
+        },
+      }),
+    ).toBe(1);
   });
 
   test("Concurrent transition scans have one winner and no duplicate side effects", async () => {
@@ -1268,6 +1417,7 @@ async function createActivatedFixture(
     techGroup,
     priority: "HIGH",
     tagIds: [],
+    plannedStartAt: new Date(Date.UTC(2026, 7, 1, 9, 0, 0)).toISOString(),
     members: [
       { personId: owner.person.id, role: "OWNER" },
       { personId: member.person.id, role: "MEMBER" },

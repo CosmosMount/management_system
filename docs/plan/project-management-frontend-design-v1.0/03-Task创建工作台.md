@@ -8,13 +8,12 @@
 - 组织范围、优先级、Tag、关联 Task。
 - 成员和角色。
 - Revision/Review 策略。
-- 计划开始时间。
+- 必填的计划开始时间。
 - 多个 Milestone 的时间位置、顺序和详情。
 - Termination 的时间和预期结果。
-- 可选的初始人员 Planned Segment。
 - 完整校验、草稿恢复和最终创建。
 
-用户原句“这个 task 创建应该支持”未列完后续内容，本方案按“支持现有后端可表达的全部创建字段，并为关联 Task、自审策略、计划开始与初始 Segment 预留”处理。
+Task 创建不接受任何 Segment 字段；创建成功后统一进入 Task 工作台排期。本文件描述冻结目标，不表示 Task Composer 或 TimeCanvas UI 已经实现。
 
 ## 2. 路由与页面状态
 
@@ -44,9 +43,9 @@
 │ 优先级        │                                               │ 完成条件     │
 │ Team/Group    │ + 在时间轴上点击或拖入 Milestone              │ 截止时间     │
 │ Tags          │                                               │ 验收要求     │
-│ 关联 Task     ├───────────────────────────────────────────────┤ 业务说明     │
-│ 成员          │ 可选：初始人员投入（折叠）                     │ 删除/复制    │
-│ 策略          │ 张三 ─── [计划区间]                            │              │
+│ 关联 Task     │                                               │ 业务说明     │
+│ 成员          │ 创建成功后进入 Task 工作台安排 Segment        │ 删除/复制    │
+│ 策略          │                                               │              │
 └───────────────┴───────────────────────────────────────────────┴──────────────┘
 ```
 
@@ -68,7 +67,7 @@
 - 每个 Milestone 按真实日期间距显示。
 - 两个 Milestone 之间显示阶段带和时长。
 - Termination 固定为终点。
-- 下方可选显示初始人员投入区，不在 P0 时可折叠为提示卡。
+- 创建页不显示人员 Segment 轨道；创建成功后由 Task 工作台承接 Segment 排期。
 - 画布空白处始终有可发现的创建入口，不能只依赖隐藏的双击。
 
 ### 3.3 右侧检查器
@@ -80,7 +79,6 @@
 - 时间顺序错误。
 - 未完成字段。
 - 无成员/无 Owner 警告。
-- 计划与初始 Segment 的冲突提示。
 
 ## 4. 顶部命令栏
 
@@ -111,15 +109,15 @@
 | 标题 | 单行 Input | 必填；最大长度由服务端 schema 决定；画布和列表即时同步。 |
 | 描述 | Textarea | 支持多行；不抢占首屏，默认 3 行。 |
 | 优先级 | Segmented/Select | 低/中/高等现有枚举。 |
-| team | Combobox | 可输入已有值或选择标准项；后端若无字典接口先文本输入。 |
-| techGroup | Combobox | 与 team 联动但不硬编码。 |
+| team | Combobox | 只选择现有固定组织选项，不接受任意文本。 |
+| techGroup | Combobox | 只选择与 team 契约一致的现有固定选项。 |
 | Tags | 多选 Combobox | 显示颜色、说明；无 Tag CRUD 时只选择。 |
 | relatedTask | 搜索选择器 | 仅关联，不形成父子层级；显示状态和当前 Milestone。 |
-| members | 人员多选表 | 每行 person + role；至少一个 Owner 或按现有规则校验。 |
+| members | 人员多选表 | 每行 person + role；必须恰好一个 active OWNER。 |
 | revisionApprovalMode | Radio/Select | 显示每种模式的行为解释。 |
-| allowSelfReview | Switch | 需要后端创建字段支持。 |
-| plannedStartAt | DateTime | 建议新增到 TaskPlanVersion；用于首阶段起点。 |
-| timezone | 只读/Select | P0 可固定 Asia/Shanghai 并明确显示。 |
+| allowSelfReview | Switch | 默认关闭；只有 System Administrator 可开启并写审计。 |
+| plannedStartAt | DateTime | 必填并存入 TaskPlanVersion；新 Revision 的目标计划也必填。 |
+| timezone | 只读 | 固定 `Asia/Shanghai`；数据库时间仍存 UTC。 |
 
 ### 5.1 成员编辑
 
@@ -133,9 +131,10 @@
 ```
 
 - 搜索结果显示姓名、团队、技术组、账号状态。
-- 同一人员是否允许多个角色依服务端规则决定；前端不臆测。
+- 同一人员可兼任多个不同 role，授权取所有 active role 的并集；重复的 `personId + role` 必须拒绝。
 - 移除唯一 Owner 时立即警告。
-- 计划画布初始人员行从成员中选择，不自动为所有成员创建 Segment。
+- 创建 payload 必须拒绝 0 个或 2 个及以上 active OWNER。
+- 成员选择不创建 Segment；Task 创建成功后在工作台按需排期。
 
 ## 6. Milestone 创建交互
 
@@ -214,9 +213,6 @@ Milestone #2                                  [•••]
 业务说明
 [范围、限制、交付物说明]
 
-关联初始投入（可选）
-[张三 8/5–8/9] [李四 8/8–8/12]
-
 [删除节点]                         [应用]
 ```
 
@@ -251,31 +247,28 @@ Milestone 是时间点，但用户还需要感知阶段长度。画布在节点�
 
 阶段名称默认使用“至 Milestone X”，也可只显示目标摘要。阶段带只用于理解，不是新数据模型。
 
-## 10. 初始 Segment（建议 P1，接口可先预留）
+## 10. 创建后 Segment 排期
 
-在创建 Task 时可展开“初始人员投入”：
-
-- 行只包括已选成员。
-- 在人员行拖选创建 Planned Segment。
-- 新 Segment 自动关联当前 Task 草稿和选中 Milestone。
-- 因 Task 尚无服务端 ID，Segment 暂存在本地 draft 中。
-- 最终创建需要后端提供事务式“创建 Task + 初始 Segment”，或先创建 Task 后批量创建 Segment并对失败进行明确补偿。
-
-P0 若后端不改，可把该区显示为“创建 Task 后安排人员”，不应伪装为已保存。
+- Task Composer 只编辑 Task、成员与版本化计划，不创建或暂存 Segment。
+- `createTaskDraft` 成功后跳转 Task 工作台，用户再通过既有 Segment action 排期。
+- Segment 创建、批量创建、编辑和冲突提示不进入 Task 创建 payload 或本地草稿。
+- 创建后的 Draft 编辑分为 metadata、members、plan 三个 action；plan 采用整包 replace，合法已有节点保留 `nodeId`，新节点使用 `clientKey` 映射，被 Segment 引用的节点不得隐式删除或迁移。
+- Task 激活后，节点目标、条件、时间、顺序和 `plannedStartAt` 等计划语义只能通过 Revision 修改。
 
 ## 11. 校验设计
 
 ### 11.1 实时本地校验
 
 - 标题非空。
+- `plannedStartAt` 必填。
 - 至少一个 Milestone。
 - 每个 Milestone 的 goal、completionCriteria、expectedCompletedAt、reviewRequirements 完整。
 - Termination 完整。
 - Milestone 日期不早于计划开始。
-- 日期按 sequence 非递减或严格递增（由业务最终确定）。
+- Milestone 允许同日；日期按 `sequence` 必须非递减。
 - Termination 不早于最后 Milestone。
-- 成员和 Owner 规则满足。
-- 相同人员、角色、重复 Tag 等结构性问题。
+- 恰好一个 active OWNER；同一人员可有多个不同 role，但不得重复相同 `personId + role`。
+- 重复 Tag 等结构性问题。
 
 ### 11.2 校验呈现
 
@@ -291,7 +284,7 @@ P0 若后端不改，可把该区显示为“创建 Task 后安排人员”，�
 
 ## 12. 本地草稿
 
-由于现有后端只支持一次性创建，建议：
+本节定义冻结目标，不表示该本地草稿 UI 已经实现。Task 创建草稿固定使用 `localStorage`：
 
 ```ts
 type LocalTaskDraft = {
@@ -300,7 +293,6 @@ type LocalTaskDraft = {
   savedAt: string;
   task: TaskCreateForm;
   nodes: DraftPlanNode[];
-  initialSegments: DraftSegment[];
   selectedEntityId: string | null;
   viewport: { rangeStart: string; rangeEnd: string; zoom: string };
 };
@@ -308,17 +300,19 @@ type LocalTaskDraft = {
 
 ### 12.1 保存策略
 
-- 用户停止输入后约 500–1000ms 写入 IndexedDB 或 localStorage。
+- 用户停止输入后约 500–1000ms 写入 `localStorage`。
+- storage key 必须同时包含部署环境、`accountId` 和 `schemaVersion`（例如 `task-draft:${deploymentEnvironment}:${accountId}:v${schemaVersion}`），不同环境、账号或 schema 版本不得互相恢复草稿。
 - 只保存纯 JSON，不保存文件对象和敏感令牌。
 - 进入页面时检查同账号、同环境的未完成草稿。
 - 展示保存时间和恢复/放弃操作。
 - schemaVersion 不兼容时只允许导出 JSON 或安全放弃，不能崩溃。
+- 校验失败、业务失败、网络错误或未知提交失败都不得清理草稿；只有 `createTaskDraft` 确认创建成功后才清理。
 
 ### 12.2 撤销/重做
 
 - 记录领域命令：新增节点、移动节点、字段修改、删除、成员变更。
 - 文本输入按短时间窗口合并，避免每个字符一条历史。
-- Server submit 后清空本地历史。
+- 只有 `createTaskDraft` 确认创建成功后才清空本地历史；任何提交失败都保留历史和草稿。
 
 ## 13. 提交流程
 
@@ -367,5 +361,8 @@ flowchart TD
 - 刷新后可恢复本地草稿。
 - 创建失败不丢输入。
 - 重复提交不重复创建。
+- 新建 Task 与后续 Revision 的计划都要求 `plannedStartAt`，Milestone 按 `sequence` 日期非递减并允许同日。
+- 创建 payload 和本地草稿均不含 Segment；创建成功后在 Task 工作台排期。
+- 成员必须恰好一个 active OWNER；多角色授权取并集且拒绝重复相同 role。
 - 只用键盘可新增、选中、移动和编辑节点。
 - Pixel 5 使用纵向计划编辑，不出现不可用的压缩甘特图。

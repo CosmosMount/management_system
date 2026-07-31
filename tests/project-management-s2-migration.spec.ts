@@ -54,6 +54,7 @@ import {
   busyBlockDtoSchema,
   hiddenSegmentPlacementConflictDtoSchema,
   hiddenTimeCanvasConflictDtoSchema,
+  personAccountAvailabilityValues,
   personOptionPageSchema,
   segmentPlacementConflictDtoSchema,
   segmentPlacementPreviewDtoSchema,
@@ -702,12 +703,15 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
       nodeIds: Array.from({ length: 51 }, () => randomUUID()),
     }).success,
   ).toBe(true);
-  expect(searchPeopleInputSchema.parse({}).limit).toBe(25);
+  expect(
+    searchPeopleInputSchema.parse({ purpose: "VISIBLE" }).limit,
+  ).toBe(25);
+  expect(searchPeopleInputSchema.safeParse({}).success).toBe(false);
   for (const disallowedInput of [
-    { team: "英雄" },
-    { techGroup: "电控" },
-    { activeOnly: false },
-    { limit: 51 },
+    { purpose: "VISIBLE", team: "英雄" },
+    { purpose: "VISIBLE", techGroup: "电控" },
+    { purpose: "VISIBLE", activeOnly: false },
+    { purpose: "VISIBLE", limit: 51 },
   ]) {
     expect(searchPeopleInputSchema.safeParse(disallowedInput).success).toBe(false);
   }
@@ -1304,31 +1308,37 @@ test("S2 canvas output schemas enforce segment fields and privacy allowlists", (
 });
 
 test("S2 option page schemas expose only active and minimal public fields", () => {
-  const personId = randomUUID();
+  expect(personAccountAvailabilityValues).toEqual([
+    "UNBOUND",
+    "ACTIVE",
+    "DISABLED",
+  ]);
+  const personIds = Array.from({ length: 3 }, () => randomUUID());
   const personPage = personOptionPageSchema.parse({
-    items: [
-      {
-        id: personId,
-        displayName: "测试成员",
-        avatar: null,
-        status: "ACTIVE",
-      },
-    ],
+    items: personAccountAvailabilityValues.map((accountAvailability, index) => ({
+      id: personIds[index],
+      displayName: `测试成员 ${accountAvailability}`,
+      avatar: null,
+      status: "ACTIVE",
+      accountAvailability,
+    })),
     nextCursor: "person-next",
   });
   expect(personPage).toEqual({
-    items: [
-      {
-        id: personId,
-        displayName: "测试成员",
-        avatar: null,
-        status: "ACTIVE",
-      },
-    ],
+    items: personAccountAvailabilityValues.map((accountAvailability, index) => ({
+      id: personIds[index],
+      displayName: `测试成员 ${accountAvailability}`,
+      avatar: null,
+      status: "ACTIVE",
+      accountAvailability,
+    })),
     nextCursor: "person-next",
   });
   for (const forbiddenField of [
     { accountId: randomUUID() },
+    { identity: { provider: "FEISHU" } },
+    { openId: `ou_${randomUUID()}` },
+    { unionId: `on_${randomUUID()}` },
     { team: "英雄" },
     { techGroup: "电控" },
     { createdAt: "2026-08-01T08:00:00.000Z" },
@@ -1351,11 +1361,20 @@ test("S2 option page schemas expose only active and minimal public fields", () =
           displayName: "停用成员",
           avatar: null,
           status: "INACTIVE",
+          accountAvailability: "ACTIVE",
         },
       ],
       nextCursor: null,
     }).success,
   ).toBe(false);
+  for (const accountAvailability of ["INACTIVE", "UNKNOWN", null]) {
+    expect(
+      personOptionPageSchema.safeParse({
+        items: [{ ...personPage.items[0], accountAvailability }],
+        nextCursor: null,
+      }).success,
+    ).toBe(false);
+  }
   expect(
     personOptionPageSchema.safeParse({
       ...personPage,
@@ -1383,7 +1402,7 @@ test("S2 option page schemas expose only active and minimal public fields", () =
   expect(taskPage.nextCursor).toBe("task-next");
   for (const forbiddenField of [
     { createdByAccountId: randomUUID() },
-    { members: [{ personId }] },
+    { members: [{ personId: personIds[0] }] },
     { createdAt: "2026-08-01T08:00:00.000Z" },
   ]) {
     const result = taskOptionPageSchema.safeParse({

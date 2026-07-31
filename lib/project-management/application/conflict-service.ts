@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
-import type {
+import {
   Prisma,
-  ResourceConflictKind,
-  ResourceConflictSeverity,
-  ResourceConflictStatus,
-  TaskMemberRole,
+  type ResourceConflictKind,
+  type ResourceConflictSeverity,
+  type ResourceConflictStatus,
+  type TaskMemberRole,
 } from "@prisma/client";
 import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
@@ -20,13 +20,23 @@ import {
   recipientsForPersonIdsTx,
   uniqueRecipientsByAccount,
 } from "@/lib/project-management/application/notification-utils";
+import {
+  lockConflictsForRangesTx,
+  prepareConflictMutationTx,
+  type ConflictMutationRange,
+} from "@/lib/project-management/application/conflict-lock-protocol";
 import { canFullyHandleConflict } from "@/lib/project-management/application/conflict-permissions";
 import {
-  movePlannedSegmentsTx,
+  ACTIVE_PLANNED_CONFLICT_STATUSES,
+  detectResourceConflictsForSegments,
+} from "@/lib/project-management/domain/conflict-detection";
+import {
+  moveConflictSuggestionSegmentsTx,
   type BatchSegmentMutationResult,
 } from "@/lib/project-management/application/segment-service";
 import {
   notFoundError,
+  staleSegmentError,
   stateConflictError,
   toProjectManagementServiceError,
   validationError,
@@ -47,8 +57,10 @@ import {
 
 type PrismaTx = Prisma.TransactionClient;
 
-const activePlannedStatuses = ["PLANNED", "IN_PROGRESS", "PENDING_CONFIRMATION"] as const;
 const priorityRank = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1 } as const;
+const CONFLICT_SUGGESTION_PROPOSAL_ID =
+  "move-lower-priority-after-conflict";
+const CONFLICT_SUGGESTION_TITLE = "将较低优先级计划顺延到冲突结束后";
 
 const conflictSegmentInclude = {
   person: { select: { id: true, displayName: true, accountId: true } },
@@ -245,7 +257,11 @@ export async function acknowledgeConflict(
   return prisma.$transaction(async (tx) => {
     await lockConflictWithPersonTx(tx, parsed.conflictId);
     const refreshedActor = await refreshActorTx(tx, actor);
-    const conflict = await loadConflictForMutationTx(tx, parsed.conflictId);
+    let conflict = await loadConflictForMutationTx(tx, parsed.conflictId);
+    assertConflictVisible(refreshedActor, conflict);
+    assertCanAcknowledgeConflict(refreshedActor, conflict);
+    await lockConflictSegmentsTx(tx, conflict);
+    conflict = await loadConflictForMutationTx(tx, parsed.conflictId);
     assertConflictVisible(refreshedActor, conflict);
     assertCanAcknowledgeConflict(refreshedActor, conflict);
     if (conflict.status === "ACKNOWLEDGED") {
@@ -285,7 +301,11 @@ export async function resolveConflict(
   return prisma.$transaction(async (tx) => {
     await lockConflictWithPersonTx(tx, parsed.conflictId);
     const refreshedActor = await refreshActorTx(tx, actor);
-    const conflict = await loadConflictForMutationTx(tx, parsed.conflictId);
+    let conflict = await loadConflictForMutationTx(tx, parsed.conflictId);
+    assertConflictVisible(refreshedActor, conflict);
+    assertCanResolveConflict(refreshedActor, conflict);
+    await lockConflictSegmentsTx(tx, conflict);
+    conflict = await loadConflictForMutationTx(tx, parsed.conflictId);
     assertConflictVisible(refreshedActor, conflict);
     assertCanResolveConflict(refreshedActor, conflict);
     if (conflict.status === "RESOLVED") {
@@ -312,7 +332,11 @@ export async function ignoreConflict(
   return prisma.$transaction(async (tx) => {
     await lockConflictWithPersonTx(tx, parsed.conflictId);
     const refreshedActor = await refreshActorTx(tx, actor);
-    const conflict = await loadConflictForMutationTx(tx, parsed.conflictId);
+    let conflict = await loadConflictForMutationTx(tx, parsed.conflictId);
+    assertConflictVisible(refreshedActor, conflict);
+    assertCanResolveConflict(refreshedActor, conflict);
+    await lockConflictSegmentsTx(tx, conflict);
+    conflict = await loadConflictForMutationTx(tx, parsed.conflictId);
     assertConflictVisible(refreshedActor, conflict);
     assertCanResolveConflict(refreshedActor, conflict);
     if (parsed.ignoredUntil <= new Date()) {
@@ -375,40 +399,24 @@ export async function previewConflictSuggestion(
     if (conflict.status === "RESOLVED") {
       return { conflictId: conflict.id, suggestions: [] };
     }
-    const plannedSegments = conflict.segments
-      .map((entry) => entry.segment)
-      .filter(
-        (segment) =>
-          segment.type === "PLANNED" &&
-          isActivePlannedStatus(segment.status) &&
-          !segment.deletedAt,
-      )
-      .sort(compareSegmentsForSuggestion);
-    if (plannedSegments.length < 2) {
-      return { conflictId: conflict.id, suggestions: [] };
-    }
-    const keep = plannedSegments[0];
-    if (!keep) return { conflictId: conflict.id, suggestions: [] };
-    let cursor = new Date(conflict.endAt);
-    const moves = plannedSegments.slice(1).map((segment) => {
-      const duration = segment.endAt.getTime() - segment.startAt.getTime();
-      const startAt = cursor;
-      const endAt = new Date(startAt.getTime() + duration);
-      cursor = endAt;
-      return {
-        segmentId: segment.id,
-        expectedUpdatedAt: segment.updatedAt.toISOString(),
-        startAt: startAt.toISOString(),
-        endAt: endAt.toISOString(),
-      };
-    });
+    await lockConflictSegmentsTx(tx, conflict);
+    const lockedConflict = await loadConflictForMutationTx(tx, parsed.conflictId);
+    assertConflictVisible(refreshedActor, lockedConflict);
+    assertCanResolveConflict(refreshedActor, lockedConflict);
+    const suggestion = buildCanonicalConflictSuggestion(lockedConflict);
+    if (!suggestion) return { conflictId: conflict.id, suggestions: [] };
     return {
       conflictId: conflict.id,
       suggestions: [
         {
-          proposalId: "move-lower-priority-after-conflict",
-          title: "将较低优先级计划顺延到冲突结束后",
-          moves,
+          proposalId: suggestion.proposalId,
+          title: suggestion.title,
+          moves: suggestion.moves.map((move) => ({
+            segmentId: move.segment.id,
+            expectedUpdatedAt: move.segment.updatedAt.toISOString(),
+            startAt: move.startAt.toISOString(),
+            endAt: move.endAt.toISOString(),
+          })),
         },
       ],
     };
@@ -421,23 +429,44 @@ export async function applyConflictSuggestion(
 ): Promise<ResourceConflictMutationResult & { movedSegments: BatchSegmentMutationResult }> {
   const parsed = applyConflictSuggestionInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    await lockConflictWithPersonTx(tx, parsed.conflictId);
+    const preparedRanges = await lockConflictWithPersonTx(
+      tx,
+      parsed.conflictId,
+      true,
+    );
     const refreshedActor = await refreshActorTx(tx, actor);
+    const visibleConflict = await loadConflictForMutationTx(tx, parsed.conflictId);
+    assertConflictVisible(refreshedActor, visibleConflict);
+    assertCanResolveConflict(refreshedActor, visibleConflict);
+    if (visibleConflict.status === "RESOLVED") {
+      throw stateConflictError("已解决的冲突不能再次应用建议");
+    }
+    await lockConflictSegmentsTx(tx, visibleConflict);
     const conflict = await loadConflictForMutationTx(tx, parsed.conflictId);
     assertConflictVisible(refreshedActor, conflict);
     assertCanResolveConflict(refreshedActor, conflict);
-    assertProposalOnlyTouchesConflictSegments(conflict, parsed);
     if (conflict.status === "RESOLVED") {
       throw stateConflictError("已解决的冲突不能再次应用建议");
     }
-    const movedSegments = await movePlannedSegmentsTx(tx, refreshedActor, {
-      moves: parsed.proposal.moves.map((move) => ({
-        ...move,
-        startAt: move.startAt,
-        endAt: move.endAt,
-      })),
-      reason: "应用资源冲突处理建议",
-    });
+    const canonicalSuggestion = buildCanonicalConflictSuggestion(conflict);
+    assertCanonicalConflictSuggestion(parsed, canonicalSuggestion);
+    if (!canonicalSuggestion) {
+      throw stateConflictError("冲突处理建议已变化，请刷新后重试");
+    }
+    const movedSegments = await moveConflictSuggestionSegmentsTx(
+      tx,
+      refreshedActor,
+      conflict.id,
+      {
+        moves: canonicalSuggestion.moves.map((move) => ({
+          segmentId: move.segment.id,
+          expectedUpdatedAt: move.segment.updatedAt,
+          startAt: move.startAt,
+          endAt: move.endAt,
+        })),
+        reason: "应用资源冲突处理建议",
+      },
+    );
     const updated = await markConflictResolvedTx(tx, {
       actor: refreshedActor,
       conflict,
@@ -446,6 +475,7 @@ export async function applyConflictSuggestion(
       action: "pm.conflict.apply_suggestion",
     });
     await notifyConflictResolvedTx(tx, updated, refreshedActor);
+    await rescanConflictsForRangesTx(tx, preparedRanges, { locksHeld: true });
     return {
       conflictId: updated.id,
       status: updated.status,
@@ -454,9 +484,10 @@ export async function applyConflictSuggestion(
   });
 }
 
-async function scanConflictsForPersonTx(
+export async function scanConflictsForPersonTx(
   tx: PrismaTx,
   input: ScanConflictsForPersonInput,
+  options: { locksHeld?: boolean } = {},
 ): Promise<ConflictScanResult> {
   const person = await tx.person.findUnique({
     where: { id: input.personId },
@@ -467,7 +498,9 @@ async function scanConflictsForPersonTx(
       personId: ["人员不存在或已停用"],
     });
   }
-  await lockConflictPersonTx(tx, input.personId);
+  if (!options.locksHeld) {
+    await prepareConflictMutationTx(tx, [input]);
+  }
   const segments = await loadSegmentsForScanTx(tx, input);
   const detected = detectConflictsForSegments(input.personId, input, segments);
   const detectedByFingerprint = new Map(
@@ -498,6 +531,23 @@ async function scanConflictsForPersonTx(
   };
 }
 
+export async function rescanConflictsForRangesTx(
+  tx: PrismaTx,
+  ranges: ConflictMutationRange[],
+  options: { locksHeld?: boolean } = {},
+): Promise<ConflictScanResult[]> {
+  const preparedRanges = options.locksHeld
+    ? ranges
+    : await prepareConflictMutationTx(tx, ranges);
+  const results: ConflictScanResult[] = [];
+  for (const range of preparedRanges) {
+    results.push(
+      await scanConflictsForPersonTx(tx, range, { locksHeld: true }),
+    );
+  }
+  return results;
+}
+
 async function personIdsWithSegmentsInRangeTx(
   tx: PrismaTx,
   input: ScanResourceConflictsInput,
@@ -509,7 +559,10 @@ async function personIdsWithSegmentsInRangeTx(
       startAt: { lt: input.endAt },
       endAt: { gt: input.startAt },
       OR: [
-        { type: "PLANNED", status: { in: [...activePlannedStatuses] } },
+        {
+          type: "PLANNED",
+          status: { in: [...ACTIVE_PLANNED_CONFLICT_STATUSES] },
+        },
         { type: "ACTUAL", status: "CONFIRMED" },
       ],
     },
@@ -548,11 +601,15 @@ async function loadSegmentsForScanTx(
       startAt: { lt: input.endAt },
       endAt: { gt: input.startAt },
       OR: [
-        { type: "PLANNED", status: { in: [...activePlannedStatuses] } },
+        {
+          type: "PLANNED",
+          status: { in: [...ACTIVE_PLANNED_CONFLICT_STATUSES] },
+        },
         { type: "ACTUAL", status: "CONFIRMED" },
       ],
     },
     include: conflictSegmentInclude,
+    orderBy: [{ startAt: "asc" }, { endAt: "asc" }, { id: "asc" }],
   });
 }
 
@@ -561,231 +618,73 @@ function detectConflictsForSegments(
   range: { startAt: Date; endAt: Date },
   segments: ConflictSegment[],
 ): DetectedConflict[] {
-  const points = [
-    ...new Set(
-      segments.flatMap((segment) => [
-        segment.startAt.getTime(),
-        segment.endAt.getTime(),
-      ]),
-    ),
-  ].sort((left, right) => left - right);
-  const mergedConflicts: DetectedConflict[] = [];
-  const latestByMergeKey = new Map<string, DetectedConflict>();
-  const active = new Map<string, ConflictSegment>();
-  for (let index = 0; index < points.length - 1; index += 1) {
-    const point = points[index];
-    const next = points[index + 1];
-    if (point === undefined || next === undefined || next <= point) continue;
-    if (next <= range.startAt.getTime() || point >= range.endAt.getTime()) continue;
-    for (const segment of segments) {
-      if (segment.endAt.getTime() <= point) active.delete(segment.id);
-      if (segment.startAt.getTime() <= point && segment.endAt.getTime() > point) {
-        active.set(segment.id, segment);
-      }
-    }
-    for (const detected of detectConflictsInSlice(
-      personId,
-      new Date(point),
-      new Date(next),
-      [...active.values()],
-    )) {
-      const mergeKey = [
-        detected.kind,
-        detected.severity,
-        detected.segmentIds.join("|"),
-      ].join(":");
-      const existing = latestByMergeKey.get(mergeKey);
-      if (existing && existing.endAt.getTime() === detected.startAt.getTime()) {
-        existing.endAt = detected.endAt;
-        existing.fingerprint = fingerprintConflict(existing);
-        existing.explanation = {
-          ...existing.explanation,
-          endAt: existing.endAt.toISOString(),
-        };
-      } else {
-        latestByMergeKey.set(mergeKey, detected);
-        mergedConflicts.push(detected);
-      }
-    }
-  }
-  return mergedConflicts.map((conflict) => ({
-    ...conflict,
-    fingerprint: fingerprintConflict(conflict),
-  }));
-}
-
-function detectConflictsInSlice(
-  personId: string,
-  startAt: Date,
-  endAt: Date,
-  activeSegments: ConflictSegment[],
-): DetectedConflict[] {
-  const detected: Omit<DetectedConflict, "fingerprint">[] = [];
-  const planned = activeSegments.filter(
-    (segment) =>
-      segment.type === "PLANNED" &&
-      isActivePlannedStatus(segment.status) &&
-      !segment.deletedAt,
-  );
-  const actual = activeSegments.filter(
-    (segment) =>
-      segment.type === "ACTUAL" &&
-      segment.status === "CONFIRMED" &&
-      !segment.deletedAt,
-  );
-  const plannedWithAllocation = planned.filter((segment) => segment.allocation != null);
-  const plannedAllocationTotal = plannedWithAllocation.reduce(
-    (sum, segment) => sum + decimalToNumber(segment.allocation),
-    0,
-  );
-  if (plannedWithAllocation.length > 1 && plannedAllocationTotal > 100) {
-    detected.push(
-      detectedConflict({
-        kind: "ALLOCATION_OVER_LIMIT",
-        severity: plannedAllocationTotal >= 150 ? "CRITICAL" : "HIGH",
-        personId,
-        startAt,
-        endAt,
-        segments: plannedWithAllocation,
-        reason: `Planned Allocation 合计 ${plannedAllocationTotal}% 超过 100%`,
-        extra: { allocationTotal: plannedAllocationTotal },
+  const byId = new Map(segments.map((segment) => [segment.id, segment]));
+  return detectResourceConflictsForSegments(
+    personId,
+    range,
+    segments.map((segment) => ({
+      id: segment.id,
+      type: segment.type,
+      status: segment.status,
+      startAt: segment.startAt,
+      endAt: segment.endAt,
+      allocation:
+        segment.allocation === null ? null : Number(segment.allocation.toString()),
+      priority: segment.priority,
+      role: segment.role,
+      taskId: segment.taskId,
+      associationNeedsReview: segment.associationNeedsReview,
+      deleted: segment.deletedAt !== null,
+    })),
+  ).map((detected) => {
+    const evidence = detected.evidenceSegmentIds.flatMap((segmentId) => {
+      const segment = byId.get(segmentId);
+      return segment ? [segment] : [];
+    });
+    const extra = {
+      ...(detected.allocationTotal === undefined
+        ? {}
+        : { allocationTotal: detected.allocationTotal }),
+      ...(detected.missingAllocationSegmentIds === undefined
+        ? {}
+        : {
+            missingAllocationSegmentIds:
+              detected.missingAllocationSegmentIds,
+          }),
+    };
+    const conflict: DetectedConflict = {
+      kind: detected.kind,
+      severity: detected.severity,
+      personId: detected.personId,
+      startAt: detected.startAt,
+      endAt: detected.endAt,
+      segmentIds: detected.segmentIds,
+      explanation: jsonObject({
+        kind: detected.kind,
+        reason: detected.reason,
+        startAt: detected.startAt.toISOString(),
+        endAt: detected.endAt.toISOString(),
+        segmentIds: detected.segmentIds,
+        segments: evidence.map((segment) => ({
+          id: segment.id,
+          content: segment.content,
+          type: segment.type,
+          status: segment.status,
+          allocation:
+            segment.allocation === null
+              ? 0
+              : Number(segment.allocation.toString()),
+          priority: segment.priority,
+          role: segment.role,
+          taskId: segment.taskId,
+        })),
+        ...extra,
       }),
-    );
-  }
-
-  const missingAllocation = planned.filter((segment) => segment.allocation == null);
-  if (planned.length > 1 && missingAllocation.length > 0) {
-    detected.push(
-      detectedConflict({
-        kind: "MISSING_ALLOCATION",
-        severity: "MEDIUM",
-        personId,
-        startAt,
-        endAt,
-        segments: planned,
-        reason: "同一时间段存在重叠 Planned Segment，且至少一条未填写 Allocation",
-        extra: { missingAllocationSegmentIds: missingAllocation.map((segment) => segment.id) },
-      }),
-    );
-  }
-
-  const highPriority = planned.filter(
-    (segment) => segment.priority === "CRITICAL" || segment.priority === "HIGH",
-  );
-  if (highPriority.length > 1) {
-    detected.push(
-      detectedConflict({
-        kind: "HIGH_PRIORITY_OVERLAP",
-        severity: highPriority.some((segment) => segment.priority === "CRITICAL")
-          ? "CRITICAL"
-          : "HIGH",
-        personId,
-        startAt,
-        endAt,
-        segments: highPriority,
-        reason: "多个高优先级 Planned Segment 时间重叠",
-      }),
-    );
-  }
-
-  const ownerLeadAcrossTasks = planned.filter(
-    (segment) =>
-      (segment.role === "OWNER" || segment.role === "LEAD") && Boolean(segment.taskId),
-  );
-  if (new Set(ownerLeadAcrossTasks.map((segment) => segment.taskId)).size > 1) {
-    detected.push(
-      detectedConflict({
-        kind: "LEAD_ROLE_OVERLAP",
-        severity: ownerLeadAcrossTasks.some((segment) => segment.role === "OWNER")
-          ? "HIGH"
-          : "MEDIUM",
-        personId,
-        startAt,
-        endAt,
-        segments: ownerLeadAcrossTasks,
-        reason: "Owner/Lead 职责跨 Task 高度重叠",
-      }),
-    );
-  }
-
-  const needsReview = planned.filter((segment) => segment.associationNeedsReview);
-  if (needsReview.length > 0 && planned.length > 1) {
-    detected.push(
-      detectedConflict({
-        kind: "REVISION_OVERLAP",
-        severity: "MEDIUM",
-        personId,
-        startAt,
-        endAt,
-        segments: planned,
-        reason: "Revision 后待重关联 Planned Segment 与其他计划重叠",
-      }),
-    );
-  }
-
-  const actualWithAllocation = actual.filter((segment) => segment.allocation != null);
-  const actualAllocationTotal = actualWithAllocation.reduce(
-    (sum, segment) => sum + decimalToNumber(segment.allocation),
-    0,
-  );
-  if (actualWithAllocation.length > 1 && actualAllocationTotal > 100) {
-    detected.push(
-      detectedConflict({
-        kind: "ACTUAL_OVERLOAD",
-        severity: actualAllocationTotal >= 150 ? "HIGH" : "MEDIUM",
-        personId,
-        startAt,
-        endAt,
-        segments: actualWithAllocation,
-        reason: `Actual Allocation 合计 ${actualAllocationTotal}% 超过 100%`,
-        extra: { allocationTotal: actualAllocationTotal },
-      }),
-    );
-  }
-
-  return detected.map((conflict) => ({
-    ...conflict,
-    fingerprint: fingerprintConflict(conflict),
-  }));
-}
-
-function detectedConflict(input: {
-  kind: ResourceConflictKind;
-  severity: ResourceConflictSeverity;
-  personId: string;
-  startAt: Date;
-  endAt: Date;
-  segments: ConflictSegment[];
-  reason: string;
-  extra?: Record<string, unknown>;
-}): Omit<DetectedConflict, "fingerprint"> {
-  const segmentIds = input.segments.map((segment) => segment.id).sort();
-  return {
-    kind: input.kind,
-    severity: input.severity,
-    personId: input.personId,
-    startAt: input.startAt,
-    endAt: input.endAt,
-    segmentIds,
-    explanation: jsonObject({
-      kind: input.kind,
-      reason: input.reason,
-      startAt: input.startAt.toISOString(),
-      endAt: input.endAt.toISOString(),
-      segmentIds,
-      segments: input.segments.map((segment) => ({
-        id: segment.id,
-        content: segment.content,
-        type: segment.type,
-        status: segment.status,
-        allocation: decimalToNumber(segment.allocation),
-        priority: segment.priority,
-        role: segment.role,
-        taskId: segment.taskId,
-      })),
-      ...(input.extra ?? {}),
-    }),
-  };
+      fingerprint: "",
+    };
+    conflict.fingerprint = fingerprintConflict(conflict);
+    return conflict;
+  });
 }
 
 async function upsertDetectedConflictTx(
@@ -829,7 +728,6 @@ async function upsertDetectedConflictTx(
     await notifyConflictOpenedTx(tx, created);
     return "created";
   }
-  await lockConflictTx(tx, existing.id);
   existing = await tx.resourceConflict.findUniqueOrThrow({
     where: { id: existing.id },
     include: { segments: true },
@@ -1142,20 +1040,61 @@ async function assertChangedSegmentsVisibleTx(
   }
 }
 
-function assertProposalOnlyTouchesConflictSegments(
-  conflict: ConflictForMutation,
+function assertCanonicalConflictSuggestion(
   input: ApplyConflictSuggestionInput,
+  canonical: ReturnType<typeof buildCanonicalConflictSuggestion>,
 ) {
-  const conflictSegmentIds = new Set(
-    conflict.segments.map((entry) => entry.segmentId),
-  );
-  for (const move of input.proposal.moves) {
-    if (!conflictSegmentIds.has(move.segmentId)) {
-      throw validationError("冲突建议只能调整该冲突涉及的 Segment", {
-        proposal: ["冲突建议只能调整该冲突涉及的 Segment"],
-      });
+  if (
+    !canonical ||
+    input.proposal.proposalId !== canonical.proposalId ||
+    input.proposal.moves.length !== canonical.moves.length
+  ) {
+    throw stateConflictError("冲突处理建议已变化，请刷新后重试");
+  }
+  for (const [index, canonicalMove] of canonical.moves.entries()) {
+    const submittedMove = input.proposal.moves[index];
+    if (!submittedMove || submittedMove.segmentId !== canonicalMove.segment.id) {
+      throw stateConflictError("冲突处理建议已变化，请刷新后重试");
+    }
+    if (
+      submittedMove.expectedUpdatedAt.getTime() !==
+      canonicalMove.segment.updatedAt.getTime()
+    ) {
+      throw staleSegmentError(canonicalMove.segment);
+    }
+    if (
+      submittedMove.startAt.getTime() !== canonicalMove.startAt.getTime() ||
+      submittedMove.endAt.getTime() !== canonicalMove.endAt.getTime()
+    ) {
+      throw stateConflictError("冲突处理建议已变化，请刷新后重试");
     }
   }
+}
+
+function buildCanonicalConflictSuggestion(conflict: ConflictForMutation) {
+  const plannedSegments = conflict.segments
+    .map((entry) => entry.segment)
+    .filter(
+      (segment) =>
+        segment.type === "PLANNED" &&
+        isActivePlannedStatus(segment.status) &&
+        !segment.deletedAt,
+    )
+    .sort(compareSegmentsForSuggestion);
+  if (plannedSegments.length < 2) return null;
+
+  let cursor = new Date(conflict.endAt);
+  return {
+    proposalId: CONFLICT_SUGGESTION_PROPOSAL_ID,
+    title: CONFLICT_SUGGESTION_TITLE,
+    moves: plannedSegments.slice(1).map((segment) => {
+      const duration = segment.endAt.getTime() - segment.startAt.getTime();
+      const startAt = cursor;
+      const endAt = new Date(startAt.getTime() + duration);
+      cursor = endAt;
+      return { segment, startAt, endAt };
+    }),
+  };
 }
 
 async function refreshActorTx(
@@ -1169,32 +1108,80 @@ async function refreshActorTx(
   return { ...actor, systemRoles: roles };
 }
 
-async function lockConflictTx(tx: PrismaTx, conflictId: string) {
-  const rows = await tx.$queryRaw<Array<{ id: string }>>`
-    SELECT "id" FROM "ResourceConflict" WHERE "id" = ${conflictId} FOR UPDATE
-  `;
-  if (rows.length === 0) throw notFoundError();
-}
-
-async function lockConflictWithPersonTx(tx: PrismaTx, conflictId: string) {
+async function lockConflictWithPersonTx(
+  tx: PrismaTx,
+  conflictId: string,
+  includeSuggestionMoveRanges = false,
+): Promise<ConflictMutationRange[]> {
   const conflict = await tx.resourceConflict.findUnique({
     where: { id: conflictId },
-    select: { personId: true },
+    select: {
+      personId: true,
+      startAt: true,
+      endAt: true,
+      segments: {
+        select: {
+          segment: { select: { startAt: true, endAt: true } },
+        },
+      },
+    },
   });
   if (!conflict) throw notFoundError();
-  await lockConflictPersonTx(tx, conflict.personId);
-  await lockConflictTx(tx, conflictId);
+  const ranges: ConflictMutationRange[] = [
+    {
+      personId: conflict.personId,
+      startAt: conflict.startAt,
+      endAt: conflict.endAt,
+    },
+  ];
+  if (includeSuggestionMoveRanges) {
+    const projectedEndAt = new Date(
+      conflict.endAt.getTime() +
+        conflict.segments.reduce(
+          (total, entry) =>
+            total +
+            (entry.segment.endAt.getTime() - entry.segment.startAt.getTime()),
+          0,
+        ),
+    );
+    for (const entry of conflict.segments) {
+      ranges.push({
+        personId: conflict.personId,
+        startAt:
+          entry.segment.startAt < conflict.startAt
+            ? entry.segment.startAt
+            : conflict.startAt,
+        endAt: new Date(
+          Math.max(
+            entry.segment.endAt.getTime(),
+            projectedEndAt.getTime(),
+          ),
+        ),
+      });
+    }
+  }
+  const prepared = await prepareConflictMutationTx(tx, ranges);
+  await lockConflictsForRangesTx(tx, prepared, [conflictId]);
+  return prepared;
 }
 
-async function lockConflictPersonTx(tx: PrismaTx, personId: string) {
-  const digest = createHash("sha256")
-    .update(`pm:resource-conflict:person:${personId}`)
-    .digest();
-  const namespaceKey = digest.readInt32BE(0);
-  const personKey = digest.readInt32BE(4);
-  await tx.$queryRaw<Array<{ locked: string }>>`
-    SELECT pg_advisory_xact_lock(${namespaceKey}, ${personKey})::text AS "locked"
+async function lockConflictSegmentsTx(
+  tx: PrismaTx,
+  conflict: ConflictForMutation,
+) {
+  const segmentIds = [...new Set(conflict.segments.map((entry) => entry.segmentId))]
+    .sort();
+  if (segmentIds.length === 0) return;
+  const rows = await tx.$queryRaw<Array<{ id: string }>>`
+    SELECT "id"
+    FROM "WorkSegment"
+    WHERE "id" IN (${Prisma.join(segmentIds)})
+    ORDER BY "id" ASC
+    FOR UPDATE
   `;
+  if (rows.length !== segmentIds.length) {
+    throw stateConflictError("冲突关联的投入记录已变化，请刷新后重试");
+  }
 }
 
 async function loadConflictForMutationTx(tx: PrismaTx, conflictId: string) {
@@ -1277,7 +1264,9 @@ function compareSegmentsForSuggestion(left: ConflictSegment, right: ConflictSegm
   if (priorityDiff !== 0) return priorityDiff;
   const roleDiff = roleRank(right.role) - roleRank(left.role);
   if (roleDiff !== 0) return roleDiff;
-  return left.startAt.getTime() - right.startAt.getTime();
+  const startDiff = left.startAt.getTime() - right.startAt.getTime();
+  if (startDiff !== 0) return startDiff;
+  return left.id.localeCompare(right.id);
 }
 
 function roleRank(role: string) {
@@ -1286,8 +1275,10 @@ function roleRank(role: string) {
   return 1;
 }
 
-function isActivePlannedStatus(status: string): status is (typeof activePlannedStatuses)[number] {
-  return activePlannedStatuses.some((value) => value === status);
+function isActivePlannedStatus(
+  status: string,
+): status is (typeof ACTIVE_PLANNED_CONFLICT_STATUSES)[number] {
+  return ACTIVE_PLANNED_CONFLICT_STATUSES.some((value) => value === status);
 }
 
 function fingerprintConflict(
@@ -1309,10 +1300,6 @@ function fingerprintConflict(
 
 function conflictSummary(conflict: ConflictForMutation) {
   return `${conflict.kind} / ${conflict.severity}，${conflict.startAt.toISOString()} 至 ${conflict.endAt.toISOString()}`;
-}
-
-function decimalToNumber(value: Prisma.Decimal | null) {
-  return value == null ? 0 : Number(value.toString());
 }
 
 function mergeExplanation(

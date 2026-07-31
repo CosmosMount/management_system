@@ -7,6 +7,7 @@ import {
   workSegmentStatusValues,
   workSegmentTypeValues,
 } from "@/lib/project-management/types/contract-values";
+import { addStructuredProjectManagementIssue } from "@/lib/project-management/validations/issues";
 import { z } from "zod";
 
 export {
@@ -269,6 +270,7 @@ export const updateWorkSegmentInputSchema = z
     reason: optionalText(1_000),
     startAt: requiredDate("请选择有效的开始时间").optional(),
     endAt: requiredDate("请选择有效的结束时间").optional(),
+    associationIntent: z.enum(["KEEP", "RELINK"]).optional().default("KEEP"),
     ...segmentOverrideFieldsSchema.shape,
   })
   .superRefine((input, ctx) => {
@@ -289,6 +291,34 @@ export const updateWorkSegmentInputSchema = z
         code: "custom",
         path: ["endAt"],
         message: "单条投入记录最长 31 天",
+      });
+    }
+    const taskSubmitted = Object.hasOwn(input, "taskId");
+    const nodeSubmitted = Object.hasOwn(input, "nodeId");
+    if (input.associationIntent === "KEEP" && (taskSubmitted || nodeSubmitted)) {
+      addStructuredProjectManagementIssue({
+        ctx,
+        code: "ASSOCIATION_INVALID",
+        path: [taskSubmitted ? "taskId" : "nodeId"],
+        message: "KEEP 不接受 Task/Node；如需重关联请显式使用 RELINK",
+      });
+    }
+    if (
+      input.associationIntent === "RELINK" &&
+      (!taskSubmitted || !nodeSubmitted)
+    ) {
+      addStructuredProjectManagementIssue({
+        ctx,
+        code: "ASSOCIATION_INVALID",
+        path: [!taskSubmitted ? "taskId" : "nodeId"],
+        message: "RELINK 必须同时提交 taskId 与 nodeId（可为 null）",
+      });
+    }
+    if (input.associationIntent === "RELINK" && !input.reason.trim()) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["reason"],
+        message: "请输入重关联原因",
       });
     }
   });
@@ -608,8 +638,9 @@ function validateEditableFields(
     });
   }
   if (input.nodeId && !input.taskId) {
-    ctx.addIssue({
-      code: "custom",
+    addStructuredProjectManagementIssue({
+      ctx,
+      code: "ASSOCIATION_INVALID",
       path: ["taskId"],
       message: "关联节点时必须同时关联 Task",
     });
@@ -637,8 +668,9 @@ function validateOverrideFields(
     });
   }
   if (input.nodeId && input.taskId === null) {
-    ctx.addIssue({
-      code: "custom",
+    addStructuredProjectManagementIssue({
+      ctx,
+      code: "ASSOCIATION_INVALID",
       path: ["taskId"],
       message: "关联节点时必须同时关联 Task",
     });

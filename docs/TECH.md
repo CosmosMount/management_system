@@ -144,6 +144,16 @@ P5 已补齐 Resource Segment 与 Conflict 服务端闭环，复用 P1 的 `Work
 - Conflict 查看允许涉及本人、相关 Task 可见者和范围内 Resource Manager/Team Admin；处理、忽略、预览和应用建议仅限 System Admin、覆盖全部关联 Task 的范围内 Resource Manager/Team Admin，或所有关联 Task 都由其 OWN 的 Task Owner。普通只读用户即使能看到部分关联 Segment，Conflict 列表和详情也会统一过滤 explanation 中的 `segmentIds`、`changedSegmentIds`、`missingAllocationSegmentIds` 和 `segments`，不能取得隐藏 Segment 的 ID、Task、时间、内容或版本；具备完整处理权限者仍可取得完整合法证据。Conflict DTO 返回逐操作 capability，但 mutation 仍会独立执行服务端授权；`previewConflictSuggestion` 不写库，`applyConflictSuggestion` 必须显式 `confirmApply=true` 并复核 Segment `updatedAt`。
 - `resource-queries.ts` 提供 Segment 列表、详情、change history，以及 Conflict 列表、详情和关联 Segment 解释；详情查询使用 `segmentReadableWhere(actor)` 或 Conflict readable 条件防止枚举不可读对象。
 
+S2 TimeCanvas 查询与放置预览通过 `app/actions/project-management/canvas.ts` 暴露，并由 strict `POST /api/project-management/canvas` 提供可测试的同一边界。六个 operation 均在服务端从 Auth.js session 解析当前 actor，再进入既有 validation、authorization、`ProjectManagementActionResult`、structured logging 和错误脱敏流程；请求不接受 `actor`、账号、人员或角色注入字段。Task 分组的 Tag 行谓词为“可读 Task 的 TaskTag，或授权且在范围内的 SegmentTag”，因此无范围内 Segment 的 TaskTag Task 仍返回安全 Task 行和 anchor；隐藏 Task 不参与返回。
+
+TimeCanvas 的独立请求预算为：Full Segment + Busy 合计 5,000、Conflict DTO 5,000、Task anchor 50、当前计划非删除 anchor Node 合计 5,000。所有上限均先按授权后的稳定顺序执行 `limit + 1` 或数据库 count，超限返回 `QUERY_LIMIT_EXCEEDED`，不静默截断；单个 200-node 计划及 25 个各 200-node 的计划仍受支持。放置预览同样只读取最多 5,000 个重叠候选，第 5,001 个返回该稳定错误。冲突检测器使用 start/end 事件与增量 active 集合/聚合量，复杂度为 `O(n log n + 实际输出证据量)`，并保持半开区间和稳定 fingerprint 证据顺序。
+
+Segment 放置关联意图分为 `KEEP` 与 `RELINK`：`KEEP` 不接受 Task/Node 覆盖，保留旧关联和 `associationNeedsReview`，包括 Revision 后暂时失效的关联；`RELINK` 必须同时显式提交 nullable `taskId`/`nodeId` 并提供非空审计原因，只有待重关联 Planned Segment 通过可见性、Task 可创建状态和 Current Plan Node 校验后才清除该标志。创建/重关联 Task 及 capability 查询统一复用 `TASK_SEGMENT_CREATABLE_STATUSES` / `isTaskCreatableForSegment`，只允许 `DRAFT`/`ACTIVE`；合法关联错误稳定映射为 `ASSOCIATION_INVALID`，隐藏目标仍为 `NOT_FOUND`。
+
+所有改变 Conflict 输入的 Segment mutation（含批量、确认生成 Actual、Actual 更新/逻辑删除、cron transition 与 suggestion apply）在同一事务返回前自动复扫。统一死锁规约是：先按 person ID 排序取得 person advisory lock，再按 Conflict ID 锁定所有受影响旧/新区间的 Conflict，最后按 Segment ID 锁 Segment；取得 Segment 行锁后禁止再申请新的 person lock。scanner、人工 acknowledge/resolve/ignore/preview/apply 与 mutation 共用此规约和状态 guard；无变化/竞争 loser 不重复写 conflict history、audit 或 outbox。
+
+延期项保持未完成：S7 才会要求 acknowledge/resolve/ignore/apply 消费 Conflict `versionToken`；S9 可增加高于当前冻结显式筛选限制的有限 `nodeIds`/全局复杂度 guard，本轮未实现也未标记完成。
+
 `scripts/cron.ts` 每 10 分钟运行 `scanSegmentTransitions`，把到期 Planned 推到 `PENDING_CONFIRMATION` 并写 `segment_confirmation_due`，把已开始且未结束的 Planned 置为 `IN_PROGRESS` 并写审计；该扫描不会自动生成 Actual。每 15 分钟运行 `scanResourceConflictsForDefaultWindow`，带运行中保护，只写冲突记录、站内通知和 `channel=project-management` outbox，不调整 Segment。
 
 P4/P6 首批浏览器入口已上线：`/progress` 汇总我的 Active Task、未来投入、待确认计划、开放冲突和未读通知；`/progress/tasks` 提供可见 Task 列表；`/progress/tasks/[id]` 提供 Task 工作台；`/progress/resources` 提供人员计划时间轴并复用 P5 Segment action；`/progress/resources/conflicts` 提供冲突中心并复用 P5 Conflict action；`/progress/notifications` 提供站内通知筛选、标记已读和对象跳转。所有页面先解析项目管理 actor，再通过 `taskReadableWhere`、`segmentReadableWhere`、Conflict readable 条件或 `recipientAccountId` 过滤，服务端 action 仍执行状态机、权限和 `expectedUpdatedAt` 校验。

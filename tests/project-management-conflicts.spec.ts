@@ -7,6 +7,7 @@ import {
   createTaskDraft,
 } from "../lib/project-management/application/lifecycle-service";
 import {
+  cancelPlannedSegment,
   createActualSegment,
   createWorkSegment,
   movePlannedSegments,
@@ -478,7 +479,8 @@ test.describe("project management P5 resource conflict services", () => {
       startAt: atHour(12),
       endAt: atHour(14),
     });
-    expect(scan.createdCount).toBe(1);
+    expect(scan.createdCount).toBe(0);
+    expect(scan.unchangedCount).toBe(1);
     const conflict = await prisma.resourceConflict.findFirstOrThrow({
       where: {
         personId: fixture.member.person.id,
@@ -497,6 +499,116 @@ test.describe("project management P5 resource conflict services", () => {
       `pm:conflict:opened:${conflict.fingerprint}:feishu`,
       "resource_conflict_opened",
     );
+  });
+
+  test("Segment create, update and cancel automatically rescan without a manual scanner call", async () => {
+    const fixture = await createActivatedFixture({
+      title: "P5 Automatic Mutation Rescan",
+    });
+    const first = await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 9, 10, 70),
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+    });
+    const second = await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 9.25, 10.25, 60),
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+    });
+    const conflict = await prisma.resourceConflict.findFirstOrThrow({
+      where: {
+        personId: fixture.member.person.id,
+        kind: "ALLOCATION_OVER_LIMIT",
+        status: "OPEN",
+      },
+    });
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: {
+          entityType: "ResourceConflict",
+          entityId: conflict.id,
+          action: "pm.conflict.scan",
+        },
+      }),
+    ).toBe(1);
+
+    const moved = await updateWorkSegment(actor(fixture.member), {
+      segmentId: second.segment.id,
+      expectedUpdatedAt: second.segment.updatedAt,
+      startAt: atHour(11),
+      endAt: atHour(12),
+      associationIntent: "KEEP",
+      reason: "自动复扫解除冲突",
+    });
+    expect(
+      await prisma.resourceConflict.findUniqueOrThrow({
+        where: { id: conflict.id },
+        select: { status: true },
+      }),
+    ).toEqual({ status: "RESOLVED" });
+
+    const returned = await updateWorkSegment(actor(fixture.member), {
+      segmentId: second.segment.id,
+      expectedUpdatedAt: moved.segment.updatedAt,
+      startAt: atHour(9.25),
+      endAt: atHour(10.25),
+      associationIntent: "KEEP",
+      reason: "自动复扫重开冲突",
+    });
+    expect(
+      await prisma.resourceConflict.findUniqueOrThrow({
+        where: { id: conflict.id },
+        select: { status: true },
+      }),
+    ).toEqual({ status: "OPEN" });
+
+    await cancelPlannedSegment(actor(fixture.member), {
+      segmentId: returned.segment.id,
+      expectedUpdatedAt: returned.segment.updatedAt,
+      reason: "自动复扫再次解除冲突",
+    });
+    expect(
+      await prisma.resourceConflict.findUniqueOrThrow({
+        where: { id: conflict.id },
+        select: { status: true },
+      }),
+    ).toEqual({ status: "RESOLVED" });
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: {
+          entityType: "ResourceConflict",
+          entityId: conflict.id,
+          action: "pm.conflict.scan",
+        },
+      }),
+    ).toBe(2);
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: {
+          entityType: "ResourceConflict",
+          entityId: conflict.id,
+          action: "pm.conflict.resolve",
+          source: "CRON",
+        },
+      }),
+    ).toBe(2);
+    expect(
+      await prisma.notificationOutbox.count({
+        where: {
+          eventKey: { startsWith: `pm:conflict:opened:${conflict.fingerprint}` },
+          type: "resource_conflict_opened",
+        },
+      }),
+    ).toBe(2);
+    expect(
+      await prisma.notificationOutbox.count({
+        where: {
+          eventKey: { startsWith: `pm:conflict:resolved:${conflict.id}:` },
+          type: "resource_conflict_resolved",
+        },
+      }),
+    ).toBe(2);
+    expect(first.segment.id).toBeTruthy();
   });
 
   test("Conflict opened notification recipients only come from involved segments", async () => {
@@ -1290,22 +1402,27 @@ test.describe("project management P5 resource conflict services", () => {
     }
   });
 
-  test("Task owner can handle a conflict only when owning every related Task", async () => {
+  test("Task owner applies suggestions for owned Tasks without gaining ordinary Segment management", async () => {
     const fixture = await createActivatedFixture();
     const alsoOwnedTask = await createActivatedFixture({
       owner: fixture.owner,
       member: fixture.member,
       title: "P5 Same Owner Conflict Task",
     });
-    await createWorkSegment(actor(fixture.member), {
+    const first = await createWorkSegment(actor(fixture.member), {
       ...plannedInput(fixture.member.person.id, 9, 10, 70),
       taskId: fixture.taskId,
       nodeId: fixture.activeNodeId,
     });
-    await createWorkSegment(actor(fixture.member), {
+    const second = await createWorkSegment(actor(fixture.member), {
       ...plannedInput(fixture.member.person.id, 9.25, 10.25, 60),
       taskId: alsoOwnedTask.taskId,
       nodeId: alsoOwnedTask.activeNodeId,
+    });
+    const third = await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 9.25, 10.25, 10),
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
     });
     await scanConflictsForPerson({
       personId: fixture.member.person.id,
@@ -1332,7 +1449,238 @@ test.describe("project management P5 resource conflict services", () => {
     const preview = await previewConflictSuggestion(actor(fixture.owner), {
       conflictId: conflict.id,
     });
-    expect(preview.suggestions[0]?.moves.length).toBeGreaterThan(0);
+    const proposal = preview.suggestions[0];
+    if (!proposal) throw new Error("Task Owner 未获得冲突处理建议");
+    expect(proposal.moves.length).toBeGreaterThan(0);
+
+    const conflictSegmentIds = [
+      first.segment.id,
+      second.segment.id,
+      third.segment.id,
+    ].sort();
+    const beforeDeniedOperations = await conflictApplyWriteState(
+      conflict.id,
+      conflictSegmentIds,
+    );
+    await expectServiceError(
+      movePlannedSegments(actor(fixture.owner), {
+        moves: proposal.moves,
+        reason: "Task Owner 尝试普通移动他人 Segment",
+      }),
+      "FORBIDDEN",
+    );
+    expect(
+      await conflictApplyWriteState(conflict.id, conflictSegmentIds),
+    ).toEqual(beforeDeniedOperations);
+
+    await expectServiceError(
+      applyConflictSuggestion(actor(fixture.outsider), {
+        conflictId: conflict.id,
+        confirmApply: true,
+        proposal,
+      }),
+      "NOT_FOUND",
+    );
+    expect(
+      await conflictApplyWriteState(conflict.id, conflictSegmentIds),
+    ).toEqual(beforeDeniedOperations);
+
+    expect(proposal.moves).toHaveLength(2);
+    const firstMove = proposal.moves[0];
+    if (!firstMove) throw new Error("Task Owner 建议缺少首条 move");
+    const shiftedStartAt = new Date(
+      new Date(firstMove.startAt).getTime() + 60_000,
+    ).toISOString();
+    const shiftedEndAt = new Date(
+      new Date(firstMove.endAt).getTime() + 60_000,
+    ).toISOString();
+    const staleExpectedUpdatedAt = new Date(
+      new Date(firstMove.expectedUpdatedAt).getTime() - 1,
+    ).toISOString();
+    const rejectedProposals = [
+      {
+        label: "篡改 canonical 时间",
+        expectedCode: "STATE_CONFLICT" as const,
+        proposal: {
+          ...proposal,
+          moves: proposal.moves.map((move, index) =>
+            index === 0
+              ? { ...move, startAt: shiftedStartAt, endAt: shiftedEndAt }
+              : move,
+          ),
+        },
+      },
+      {
+        label: "空 move set",
+        expectedCode: "STATE_CONFLICT" as const,
+        proposal: { ...proposal, moves: [] },
+      },
+      {
+        label: "缺失 canonical move",
+        expectedCode: "STATE_CONFLICT" as const,
+        proposal: { ...proposal, moves: proposal.moves.slice(0, -1) },
+      },
+      {
+        label: "额外 move",
+        expectedCode: "STATE_CONFLICT" as const,
+        proposal: { ...proposal, moves: [...proposal.moves, firstMove] },
+      },
+      {
+        label: "重排 canonical moves",
+        expectedCode: "STATE_CONFLICT" as const,
+        proposal: { ...proposal, moves: [...proposal.moves].reverse() },
+      },
+      {
+        label: "错误 proposalId",
+        expectedCode: "STATE_CONFLICT" as const,
+        proposal: { ...proposal, proposalId: "forged-proposal" },
+      },
+      {
+        label: "陈旧 expectedUpdatedAt",
+        expectedCode: "STALE_SEGMENT" as const,
+        proposal: {
+          ...proposal,
+          moves: proposal.moves.map((move, index) =>
+            index === 0
+              ? { ...move, expectedUpdatedAt: staleExpectedUpdatedAt }
+              : move,
+          ),
+        },
+      },
+    ];
+    for (const rejected of rejectedProposals) {
+      const beforeRejectedApply = await conflictApplyWriteState(
+        conflict.id,
+        conflictSegmentIds,
+      );
+      await expectServiceError(
+        applyConflictSuggestion(actor(fixture.owner), {
+          conflictId: conflict.id,
+          confirmApply: true,
+          proposal: rejected.proposal,
+        }),
+        rejected.expectedCode,
+      );
+      expect(
+        await conflictApplyWriteState(conflict.id, conflictSegmentIds),
+        rejected.label,
+      ).toEqual(beforeRejectedApply);
+    }
+
+    const applied = await applyConflictSuggestion(actor(fixture.owner), {
+      conflictId: conflict.id,
+      confirmApply: true,
+      proposal,
+    });
+    expect(applied.status).toBe("RESOLVED");
+    expect(applied.movedSegments.affectedSegmentIds.sort()).toEqual(
+      proposal.moves.map((move) => move.segmentId).sort(),
+    );
+    const moveById = new Map(
+      proposal.moves.map((move) => [move.segmentId, move]),
+    );
+    const persistedMovedSegments = await prisma.workSegment.findMany({
+      where: { id: { in: applied.movedSegments.affectedSegmentIds } },
+      select: {
+        id: true,
+        startAt: true,
+        endAt: true,
+        updatedByAccountId: true,
+      },
+      orderBy: { id: "asc" },
+    });
+    for (const segment of persistedMovedSegments) {
+      const move = moveById.get(segment.id);
+      if (!move) throw new Error("Owner apply 移动了冲突范围外 Segment");
+      expect(segment).toMatchObject({
+        startAt: new Date(move.startAt),
+        endAt: new Date(move.endAt),
+        updatedByAccountId: fixture.owner.account.id,
+      });
+    }
+    expect(
+      await prisma.workSegmentChange.findMany({
+        where: {
+          segmentId: { in: applied.movedSegments.affectedSegmentIds },
+          action: "UPDATE",
+          reason: "应用资源冲突处理建议",
+        },
+        select: { segmentId: true, actorAccountId: true },
+        orderBy: { segmentId: "asc" },
+      }),
+    ).toEqual(
+      applied.movedSegments.affectedSegmentIds
+        .sort()
+        .map((segmentId) => ({
+          segmentId,
+          actorAccountId: fixture.owner.account.id,
+        })),
+    );
+    const segmentAudits = await prisma.domainAuditEvent.findMany({
+      where: {
+        entityType: "WorkSegment",
+        entityId: { in: applied.movedSegments.affectedSegmentIds },
+        action: "pm.segment.update",
+        reason: "应用资源冲突处理建议",
+      },
+      select: { entityId: true, actorAccountId: true, actorPersonId: true },
+      orderBy: { entityId: "asc" },
+    });
+    expect(segmentAudits).toEqual(
+      applied.movedSegments.affectedSegmentIds
+        .sort()
+        .map((entityId) => ({
+          entityId,
+          actorAccountId: fixture.owner.account.id,
+          actorPersonId: fixture.owner.person.id,
+        })),
+    );
+    expect(
+      await prisma.resourceConflict.findUniqueOrThrow({
+        where: { id: conflict.id },
+        select: { status: true, resolvedByAccountId: true, resolutionNote: true },
+      }),
+    ).toEqual({
+      status: "RESOLVED",
+      resolvedByAccountId: fixture.owner.account.id,
+      resolutionNote: "已应用资源冲突处理建议",
+    });
+    expect(
+      await prisma.domainAuditEvent.findFirstOrThrow({
+        where: {
+          entityType: "ResourceConflict",
+          entityId: conflict.id,
+          action: "pm.conflict.apply_suggestion",
+        },
+        select: { actorAccountId: true, actorPersonId: true, source: true },
+      }),
+    ).toEqual({
+      actorAccountId: fixture.owner.account.id,
+      actorPersonId: fixture.owner.person.id,
+      source: "WEB",
+    });
+    const resolvedPayload = await expectProjectManagementOutbox(
+      `pm:conflict:resolved:${conflict.id}:`,
+      "resource_conflict_resolved",
+      true,
+    );
+    expect(resolvedPayload.actorName).toBe(fixture.owner.person.displayName);
+
+    const afterApply = await conflictApplyWriteState(
+      conflict.id,
+      conflictSegmentIds,
+    );
+    await expectServiceError(
+      applyConflictSuggestion(actor(fixture.owner), {
+        conflictId: conflict.id,
+        confirmApply: true,
+        proposal,
+      }),
+      "STATE_CONFLICT",
+    );
+    expect(
+      await conflictApplyWriteState(conflict.id, conflictSegmentIds),
+    ).toEqual(afterApply);
   });
 
   test("Scoped manager cannot handle a conflict when only some Tasks match scope", async () => {
@@ -1511,7 +1859,7 @@ test.describe("project management P5 resource conflict services", () => {
         scannedPersonCount: 3,
         succeededPersonCount: 2,
         failedPersonCount: 1,
-        createdCount: 2,
+        createdCount: 0,
       });
       expect(result.results.map((entry) => entry.personId).sort()).toEqual(
         successfulPersonIds,
@@ -1601,7 +1949,8 @@ test.describe("project management P5 resource conflict services", () => {
       startAt: atHour(9),
       endAt: atHour(11),
     });
-    expect(scan.createdCount).toBe(1);
+    expect(scan.createdCount).toBe(0);
+    expect(scan.unchangedCount).toBe(1);
     const repeated = await scanConflictsForPerson({
       personId: fixture.member.person.id,
       startAt: atHour(9),
@@ -1701,7 +2050,7 @@ test.describe("project management P5 resource conflict services", () => {
       startAt: atHour(9),
       endAt: atHour(12),
     });
-    expect(resolvedScan.resolvedCount).toBe(1);
+    expect(resolvedScan.resolvedCount).toBe(0);
     const resolved = await prisma.resourceConflict.findUniqueOrThrow({
       where: { id: conflict.id },
       select: { status: true },
@@ -1744,7 +2093,7 @@ test.describe("project management P5 resource conflict services", () => {
     });
 
     const resolvedScan = await scanConflictsForPerson(cycle.range);
-    expect(resolvedScan.resolvedCount).toBe(1);
+    expect(resolvedScan.resolvedCount).toBe(0);
     const [resolvedConflict, resolutionAudit] = await Promise.all([
       prisma.resourceConflict.findUniqueOrThrow({
         where: { id: cycle.conflict.id },
@@ -1791,10 +2140,10 @@ test.describe("project management P5 resource conflict services", () => {
     );
     expect(
       reopenScans.reduce((sum, result) => sum + result.reopenedCount, 0),
-    ).toBe(1);
+    ).toBe(0);
     expect(
       reopenScans.reduce((sum, result) => sum + result.unchangedCount, 0),
-    ).toBe(1);
+    ).toBe(2);
     expect(
       await prisma.resourceConflict.findUniqueOrThrow({
         where: { id: cycle.conflict.id },
@@ -1904,7 +2253,7 @@ test.describe("project management P5 resource conflict services", () => {
       startAt: atHour(9),
       endAt: atHour(12),
     });
-    expect(autoResolved.resolvedCount).toBe(1);
+    expect(autoResolved.resolvedCount).toBe(0);
     const [autoResolvedRow, autoResolutionAudit] = await Promise.all([
       prisma.resourceConflict.findUniqueOrThrow({
         where: { id: legacyConflict.id },
@@ -1968,7 +2317,7 @@ test.describe("project management P5 resource conflict services", () => {
     );
     expect(
       legacyReopenResults.reduce((sum, result) => sum + result.reopenedCount, 0),
-    ).toBe(1);
+    ).toBe(0);
     expect(
       await prisma.resourceConflict.findUniqueOrThrow({
         where: { id: legacyConflict.id },
@@ -2273,7 +2622,89 @@ test.describe("project management P5 resource conflict services", () => {
     ).toBe(1);
   });
 
-  test("Concurrent first scans serialize per person and create one history/outbox set", async () => {
+  test("Applying a suggestion rescans in-transaction and opens a newly created conflict exactly once", async () => {
+    const fixture = await createActivatedFixture({
+      title: "P5 Apply Creates New Conflict",
+    });
+    const first = await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 9, 10, 70),
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+      priority: "HIGH",
+    });
+    const moved = await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 9.25, 10.25, 60),
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+      priority: "LOW",
+    });
+    const future = await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 10.5, 11.5, 70),
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+      priority: "MEDIUM",
+    });
+    const original = await prisma.resourceConflict.findFirstOrThrow({
+      where: {
+        personId: fixture.member.person.id,
+        kind: "ALLOCATION_OVER_LIMIT",
+        segments: { some: { segmentId: first.segment.id } },
+      },
+    });
+    const preview = await previewConflictSuggestion(
+      actor(fixture.resourceManager),
+      { conflictId: original.id },
+    );
+    const proposal = preview.suggestions[0];
+    if (!proposal) throw new Error("缺少冲突处理建议");
+
+    const applied = await applyConflictSuggestion(
+      actor(fixture.resourceManager),
+      { conflictId: original.id, confirmApply: true, proposal },
+    );
+    expect(applied.status).toBe("RESOLVED");
+    const newConflict = await prisma.resourceConflict.findFirstOrThrow({
+      where: {
+        id: { not: original.id },
+        personId: fixture.member.person.id,
+        kind: "ALLOCATION_OVER_LIMIT",
+        status: "OPEN",
+        AND: [
+          { segments: { some: { segmentId: moved.segment.id } } },
+          { segments: { some: { segmentId: future.segment.id } } },
+        ],
+      },
+    });
+    expect(newConflict.startAt.toISOString()).toBe(atHour(10.5).toISOString());
+    expect(newConflict.endAt.toISOString()).toBe(atHour(11).toISOString());
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: {
+          entityType: "ResourceConflict",
+          entityId: original.id,
+          action: "pm.conflict.apply_suggestion",
+        },
+      }),
+    ).toBe(1);
+    expect(
+      await prisma.notificationOutbox.count({
+        where: {
+          eventKey: { startsWith: `pm:conflict:resolved:${original.id}:` },
+          type: "resource_conflict_resolved",
+        },
+      }),
+    ).toBe(1);
+    expect(
+      await prisma.notificationOutbox.count({
+        where: {
+          eventKey: { startsWith: `pm:conflict:opened:${newConflict.fingerprint}` },
+          type: "resource_conflict_opened",
+        },
+      }),
+    ).toBe(1);
+  });
+
+  test("Concurrent scans after automatic mutation rescan preserve one history/outbox set", async () => {
     const fixture = await createActivatedFixture();
     await createWorkSegment(actor(fixture.member), {
       ...plannedInput(fixture.member.person.id, 9, 10, 70),
@@ -2300,8 +2731,8 @@ test.describe("project management P5 resource conflict services", () => {
           endAt: atHour(11),
         }),
     ]);
-    expect(scans.reduce((sum, result) => sum + result.createdCount, 0)).toBe(1);
-    expect(scans.reduce((sum, result) => sum + result.unchangedCount, 0)).toBe(1);
+    expect(scans.reduce((sum, result) => sum + result.createdCount, 0)).toBe(0);
+    expect(scans.reduce((sum, result) => sum + result.unchangedCount, 0)).toBe(2);
     const conflict = await prisma.resourceConflict.findFirstOrThrow({
       where: {
         personId: fixture.member.person.id,
@@ -2325,6 +2756,158 @@ test.describe("project management P5 resource conflict services", () => {
         where: {
           eventKey: { startsWith: `pm:conflict:opened:${conflict.fingerprint}` },
           type: "resource_conflict_opened",
+        },
+      }),
+    ).toBe(1);
+  });
+
+  test("Segment mutation and scanner share the person lock and resolve once", async () => {
+    const fixture = await createActivatedFixture({
+      title: "P5 Mutation Scanner Race",
+    });
+    await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 9, 10, 70),
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+    });
+    const movable = await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 9.25, 10.25, 60),
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+    });
+    const conflict = await prisma.resourceConflict.findFirstOrThrow({
+      where: {
+        personId: fixture.member.person.id,
+        kind: "ALLOCATION_OVER_LIMIT",
+      },
+    });
+    const results = await runBehindPersonLockBarrier(
+      fixture.member.person.id,
+      [
+        async () => {
+          await movePlannedSegments(actor(fixture.member), {
+            moves: [
+              {
+                segmentId: movable.segment.id,
+                expectedUpdatedAt: movable.segment.updatedAt,
+                startAt: atHour(11),
+                endAt: atHour(12),
+              },
+            ],
+            reason: "mutation/scanner 竞争移动",
+          });
+          return "mutation";
+        },
+        async () => {
+          await scanConflictsForPerson({
+            personId: fixture.member.person.id,
+            startAt: atHour(9),
+            endAt: atHour(12),
+          });
+          return "scanner";
+        },
+      ],
+    );
+    expect(results.sort()).toEqual(["mutation", "scanner"]);
+    expect(
+      await prisma.resourceConflict.findUniqueOrThrow({
+        where: { id: conflict.id },
+        select: { status: true },
+      }),
+    ).toEqual({ status: "RESOLVED" });
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: {
+          entityType: "ResourceConflict",
+          entityId: conflict.id,
+          action: "pm.conflict.resolve",
+          source: "CRON",
+        },
+      }),
+    ).toBe(1);
+    expect(
+      await prisma.notificationOutbox.count({
+        where: {
+          eventKey: { startsWith: `pm:conflict:resolved:${conflict.id}:` },
+          type: "resource_conflict_resolved",
+        },
+      }),
+    ).toBe(1);
+  });
+
+  test("Suggestion apply and competing mutation serialize with one winner and no duplicate side effects", async () => {
+    const cycle = await createOpenAllocationConflict({
+      title: "P5 Apply Mutation Race",
+      startHour: 9,
+    });
+    const preview = await previewConflictSuggestion(
+      actor(cycle.fixture.resourceManager),
+      { conflictId: cycle.conflict.id },
+    );
+    const proposal = preview.suggestions[0];
+    if (!proposal) throw new Error("缺少并发 apply 建议");
+    const outcomes = await runBehindPersonLockBarrier(
+      cycle.fixture.member.person.id,
+      [
+        async () => {
+          try {
+            await applyConflictSuggestion(actor(cycle.fixture.resourceManager), {
+              conflictId: cycle.conflict.id,
+              confirmApply: true,
+              proposal,
+            });
+            return "apply:ok";
+          } catch (error) {
+            return `apply:${toProjectManagementServiceError(error).code}`;
+          }
+        },
+        async () => {
+          try {
+            await movePlannedSegments(actor(cycle.fixture.member), {
+              moves: [
+                {
+                  segmentId: cycle.second.segment.id,
+                  expectedUpdatedAt: cycle.second.segment.updatedAt,
+                  startAt: atHour(12),
+                  endAt: atHour(13),
+                },
+              ],
+              reason: "与 apply 竞争的人工移动",
+            });
+            return "mutation:ok";
+          } catch (error) {
+            return `mutation:${toProjectManagementServiceError(error).code}`;
+          }
+        },
+      ],
+    );
+    expect(outcomes.filter((outcome) => outcome.endsWith(":ok"))).toHaveLength(1);
+    expect(outcomes).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^apply:(ok|STATE_CONFLICT)$/),
+        expect.stringMatching(/^mutation:(ok|STALE_SEGMENT)$/),
+      ]),
+    );
+    expect(
+      await prisma.resourceConflict.findUniqueOrThrow({
+        where: { id: cycle.conflict.id },
+        select: { status: true },
+      }),
+    ).toEqual({ status: "RESOLVED" });
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: {
+          entityType: "ResourceConflict",
+          entityId: cycle.conflict.id,
+          action: { in: ["pm.conflict.resolve", "pm.conflict.apply_suggestion"] },
+        },
+      }),
+    ).toBe(1);
+    expect(
+      await prisma.notificationOutbox.count({
+        where: {
+          eventKey: { startsWith: `pm:conflict:resolved:${cycle.conflict.id}:` },
+          type: "resource_conflict_resolved",
         },
       }),
     ).toBe(1);
@@ -2354,16 +2937,12 @@ test.describe("project management P5 resource conflict services", () => {
           kind: "ALLOCATION_OVER_LIMIT",
         },
       });
-      await movePlannedSegments(actor(fixture.member), {
-        moves: [
-          {
-            segmentId: movable.segment.id,
-            expectedUpdatedAt: movable.segment.updatedAt,
-            startAt: atHour(11),
-            endAt: atHour(12),
-          },
-        ],
-        reason: `在 ${direction} 竞争前使 fingerprint 消失`,
+      // This race targets scanner/manual conflict status guards. A raw fixture
+      // update intentionally leaves the Conflict stale; real Segment services
+      // now rescan in the mutation transaction and are covered separately.
+      await prisma.workSegment.update({
+        where: { id: movable.segment.id },
+        data: { startAt: atHour(11), endAt: atHour(12) },
       });
       const scan = () =>
         scanConflictsForPerson({
@@ -2637,7 +3216,7 @@ test.describe("project management P5 resource conflict services", () => {
         confirmApply: true,
         proposal,
       }),
-      "STATE_CONFLICT",
+      "STALE_SEGMENT",
     );
     expect(
       await prisma.workSegment.findMany({
@@ -2772,6 +3351,7 @@ async function createActivatedFixture(options: {
       { personId: reviewer.person.id, role: "REVIEWER" },
       { personId: viewer.person.id, role: "VIEWER" },
     ],
+    plannedStartAt: new Date(Date.UTC(2026, 7, 1, 9, 0, 0)).toISOString(),
     milestones: [milestoneInput("阶段一", "完成阶段一", 1)],
     plannedStartAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
     termination: terminationInput(4),
@@ -2925,6 +3505,69 @@ async function conflictWriteCounts(personId: string) {
     projectManagementOutbox: await prisma.notificationOutbox.count({
       where: { channel: "project-management" },
     }),
+  };
+}
+
+async function conflictApplyWriteState(
+  conflictId: string,
+  segmentIds: string[],
+) {
+  const [conflict, segments, changes, sources, audits, notifications, outbox] =
+    await Promise.all([
+      prisma.resourceConflict.findUniqueOrThrow({
+        where: { id: conflictId },
+        select: {
+          status: true,
+          resolvedAt: true,
+          resolvedByAccountId: true,
+          resolutionNote: true,
+          updatedAt: true,
+        },
+      }),
+      prisma.workSegment.findMany({
+        where: { id: { in: segmentIds } },
+        select: {
+          id: true,
+          status: true,
+          startAt: true,
+          endAt: true,
+          updatedAt: true,
+          updatedByAccountId: true,
+        },
+        orderBy: { id: "asc" },
+      }),
+      prisma.workSegmentChange.count({
+        where: { segmentId: { in: segmentIds } },
+      }),
+      prisma.workSegmentSource.count({
+        where: {
+          OR: [
+            { plannedSegmentId: { in: segmentIds } },
+            { actualSegmentId: { in: segmentIds } },
+          ],
+        },
+      }),
+      prisma.domainAuditEvent.count({
+        where: {
+          OR: [
+            { entityType: "ResourceConflict", entityId: conflictId },
+            { entityType: "WorkSegment", entityId: { in: segmentIds } },
+          ],
+        },
+      }),
+      prisma.inAppNotification.count(),
+      prisma.notificationOutbox.count({
+        where: { channel: "project-management" },
+      }),
+    ]);
+  return {
+    conflict,
+    segments,
+    changes,
+    sources,
+    audits,
+    notifications,
+    outbox,
   };
 }
 

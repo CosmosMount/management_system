@@ -44,20 +44,24 @@ flowchart TD
 
 产品负责人 + 后端负责人 + 前端负责人。
 
-### 需要冻结的问题
+### 已冻结的执行契约
 
-1. Milestone 日期必须严格递增还是允许同日？
-2. 计划开始时间是否必填，存 TaskPlanVersion 还是其他位置？
-3. Task 创建时是否必须有 Owner？一个人能否多角色？
-4. Draft Task 的节点如何增量保存？
-5. Active Task 哪些元数据可直接改，哪些必须 Revision？
-6. 谁能为他人创建/移动 Planned Segment？
-7. Actual 是否允许修改时间，谁能改？
-8. 其他 Task 的占用向谁显示详情，向谁只显示 Busy？
-9. Allocation 的单位与冲突规则。
-10. Task 创建时是否 P0 支持初始 Segment。
-11. 业务时区是否固定 Asia/Shanghai。
-12. 跨人员重新指派是否进入范围。
+以下是 Accepted ADR 的确定结论；它们冻结验收口径，不表示对应 UI 已经完成：
+
+1. 新建 Task 与新 Revision 的计划都必须提交 `TaskPlanVersion.plannedStartAt`；数据库可空只用于兼容旧数据。
+2. Milestone 允许同日，按 `sequence` 的日期必须非递减；Termination 不得早于最后一个 Milestone。
+3. Task 创建不接受任何 Segment 字段；创建成功后在 Task 工作台排期。
+4. 每个 Task 必须恰好一个 active OWNER；同一人员可兼任多个不同 role，权限取 active role 并集，重复 `personId + role` 必须拒绝。
+5. Draft 更新拆为 metadata、members、plan 三个 action；plan 使用整包 replace，合法已有节点保留 `nodeId`，新节点用 `clientKey` 映射，被 Segment 引用的节点不得隐式删除或迁移。
+6. Active Task 只有非计划语义 metadata、members、tags 可走各自 action；目标、条件、节点时间、顺序、`plannedStartAt` 等计划语义只能通过 Revision。
+7. Planned 的本人编辑与代排分别由服务端 `segment.manage_self` / `segment.manage_others` 和 permission flags 决定；前端不从角色名称自行推断。
+8. Actual 不在画布拖动；只有具备服务端权限的用户可在 Inspector 精确编辑，并保留变更历史。
+9. Busy 必须由服务端按响应级权限脱敏生成；前端不得先取得完整 Segment 再遮挡，DTO 不含源 Segment ID、内容、Task、Node、Tag、创建人或版本令牌。
+10. Allocation 单位为百分比，可空表示未知；非空值范围 `(0,100]`。重叠 Planned 的已知 Allocation 合计恰好 100% 不冲突，超过 100% 冲突，重叠且有缺失值按缺失 Allocation 规则单独提示。
+11. 业务时区固定 `Asia/Shanghai`，输入与展示按该时区解释，数据库仍存 UTC。
+12. 跨人员 Segment reassign 延期；所有跨人员行投放均为 invalid drop，不能用普通 move 或客户端改 person 变相实现。
+
+本轮真正延期的非目标只有 Accepted ADR 列出的 Unavailable Time 模型与扫描、跨人员重新指派、保存资源视图、自动资源平衡、复杂依赖线和 Task 创建时初始 Segment。重新纳入前必须先冻结相应授权、事务、审计、通知、隐私和测试契约。
 
 ### 输出
 
@@ -104,14 +108,14 @@ flowchart TD
 
 ### 后端任务
 
-- 增加 plannedStartAt 与迁移。
-- 增加计划日期顺序校验。
+- 接入并验证 `plannedStartAt` 的新建 Task / Revision 必填与旧数据兼容读取。
+- 接入并验证 Milestone 同日、按 `sequence` 日期非递减的服务端校验。
 - 设计 `getTimeCanvasData`。
 - 设计 person/task/tag 搜索。
 - 为 Segment/Task/Node 返回 permission flags。
 - 增加 versionToken/陈旧写入错误。
-- 设计 Busy DTO。
-- 设计 Draft Task 更新 Actions。
+- 接入服务端脱敏 Busy DTO，禁止客户端遮挡完整对象。
+- 接入三个 Draft Task 更新 action 及 plan 整包 replace 的 `nodeId` / `clientKey` 契约。
 - 设计统一错误 code。
 
 ### 前端配合
@@ -176,6 +180,7 @@ flowchart TD
 
 - Segment Quick Create。
 - Segment 完整 Inspector。
+- Actual 只允许在 Inspector 精确编辑，不提供画布 drag/resize。
 - Split/Merge/Cancel/Confirm/Partial Confirm Dialog。
 - mutation adapter 接现有 Actions。
 - Conflict Inspector。
@@ -184,7 +189,7 @@ flowchart TD
 
 - 补充即时冲突预览/复扫。
 - 确认 move/update 的版本契约。
-- 批量 mutation 返回逐项结果。
+- 批量 mutation 使用单次有界请求和服务端事务，整体成功或整体失败。
 
 ### QA
 
@@ -209,13 +214,14 @@ flowchart TD
 - 计划校验面板。
 - 撤销/重做。
 - `createTaskDraft` 提交、字段错误映射和 idempotency。
+- 创建 payload 与本地草稿都不含 Segment；成功后在 Task 工作台排期。
 - 创建成功落点。
 
 ### 后端
 
 - 补齐 create 字段。
 - chronology validation。
-- Draft update（若本阶段纳入创建后继续编辑）。
+- 接入 metadata、members、plan 三个 Draft action；plan 采用带 `nodeId` / `clientKey` 的整包 replace。
 
 ### UX
 
@@ -246,6 +252,7 @@ flowchart TD
 - 在人员行创建 Segment。
 - Milestone 只读/可编辑语义。
 - Active Task `发起 Revision` 入口。
+- Active 计划语义字段保持只读，修改统一进入 Revision。
 - Overview 字段与权限。
 
 ### 后端
@@ -281,7 +288,7 @@ flowchart TD
 
 - 多 ID 聚合查询与人员分页。
 - 搜索接口。
-- 批量动作逐项结果。
+- 批量动作使用单次有界、事务式全成全败结果。
 
 ### QA
 
@@ -289,6 +296,7 @@ flowchart TD
 - 筛选组合、空结果。
 - 无详情 Busy。
 - 冲突定位和返回。
+- 跨人员行始终拒绝投放；本轮不提供 reassign 入口。
 
 ### 完成条件
 

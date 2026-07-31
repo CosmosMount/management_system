@@ -195,11 +195,11 @@ S1 的“已实现”仅关闭上述 P5-R01～R05。P5-12/P5-13 仍在 S9，S3�
 
 | ID | 工作 | 关键契约与验收 | 状态 |
 |---|---|---|---|
-| S2-01 | 三类 Draft action 与计划版本 | 实现 `updateTaskDraftMetadata`、`replaceTaskDraftMembers`、`replaceTaskDraftPlan`；三者只限 `Task.status=DRAFT`、服务端授权、接收 `expectedLockVersion`，事务写审计并在成功后递增/返回 `lockVersion`。`createTaskDraft`/member replace 收紧为恰好一个 active OWNER、无重复 person+role；只有 plan action 处理 `plannedStartAt?`、chronology、nodeId/clientKey、Segment 引用拒删和整包计划回滚 | 计划 |
+| S2-01 | 三类 Draft action 与计划版本 | 实现 `updateTaskDraftMetadata`、`replaceTaskDraftMembers`、`replaceTaskDraftPlan`；三者只限 `Task.status=DRAFT`、服务端授权、接收 `expectedLockVersion`，事务写审计并在成功后递增/返回 `lockVersion`。Draft 计划固定为 `TaskPlanVersion.status=CURRENT + activatedAt=null`；`createTaskDraft`/member replace 收紧为恰好一个 active OWNER、无重复 person+role；只有 plan action 处理必填 `plannedStartAt`、chronology、nodeId/clientKey、Segment 引用拒删和整包计划回滚。数据库 nullable 仅兼容旧数据；新 Task、新 Revision 和 `replaceTaskDraftPlan` 输入缺失或 `null` 时服务端必须拒绝 | 计划 |
 | S2-02 | 三类 Active-only action | 实现 `updateTaskMetadata`、`replaceTaskMembers`、`replaceTaskTags`；仅 ACTIVE、服务端授权、`expectedLockVersion`、锁 Task、事务 mutation + DomainAuditEvent + lockVersion increment，并返回新锁；终态/Archived/stale/无权零写入，三者不得改变 plan/node。member replace 保持恰好一个 active OWNER 和 person+role 唯一 | 计划 |
-| S2-03 | 搜索与页面查询基础 | People/Task/Tag 游标搜索；Task-scoped、personal timeline、`getMyWorkDashboard` 查询基础 | 计划 |
-| S2-04 | TimeCanvas 与放置预览 | `getTimeCanvasData`、Busy 响应级脱敏、对象 capability/versionToken、只读 `previewSegmentPlacement`；最终冲突以 mutation 后服务端复扫为准 | 计划 |
-| S2-05 | 稳定错误与查询保护 | `PLAN_CHRONOLOGY_INVALID`、`STALE_TASK`、`STALE_SEGMENT`、`ASSOCIATION_INVALID`、`QUERY_LIMIT_EXCEEDED`；范围最多 366 天，Person/Task/Tag 显式 ID 各最多 50，超过 5,000 个可见 Segment 明确报错且不静默截断 | 计划 |
+| S2-03 | 搜索与页面查询基础 | People/Task/Tag 游标搜索；People 使用严格 `VISIBLE`/`TASK_CREATE`/`TASK_MEMBERS` purpose；六个公开查询/预览通过 session actor-bound action/strict route 暴露且拒绝客户端 actor；Task 分组 Tag 为可读 TaskTag 或授权范围内 SegmentTag，无 Segment 的 TaskTag Task 仍返回行/anchor且不泄露隐藏 Task | 实现中（服务端与回归已补，待新 harness QA） |
+| S2-04 | TimeCanvas 与放置预览 | `getTimeCanvasData`、Busy 脱敏、capability/versionToken、只读 `previewSegmentPlacement`；KEEP 保留复核关联，只有合法 RELINK 清除；mutation 依 person→conflict→segment 锁序在同事务自动复扫 | 实现中（服务端与回归已补，待新 harness QA） |
+| S2-05 | 稳定错误与查询保护 | 既有稳定错误；366 天、三类显式 ID 50、Full+Busy 5,000，并新增 Preview 候选 5,000、Conflict DTO 5,000、Task anchor 50、anchor Node 5,000 的独立 limit+1/count 拒绝 | 实现中（未执行 Playwright；S7 versionToken 与 S9 更高全局 guard 延期） |
 
 S2-01 测试必须逐 action 覆盖：具权限 Draft 成功、无权拒绝、非 Draft 拒绝、stale lock 拒绝、成功审计及锁递增/返回、失败零写入；并验证 metadata/member 输入不能进入 `replaceTaskDraftPlan`。`createTaskDraft`/`replaceTaskDraftMembers` 拒绝 0 OWNER、2 个及以上 OWNER、重复 person+role，允许同人不同 role 且权限取并集；保留既有 Draft `task_assigned` 站内 + `mandatory=true` outbox，purpose/botKind 为 notification 且只用通知机器人。plan action 另测关联节点拒删和事务整包回滚。
 

@@ -2,6 +2,7 @@ import {
   absoluteDateTimeSchema,
   idSchema,
 } from "@/lib/project-management/validations/lifecycle";
+import { TEAM_OPTIONS, TECH_GROUP_OPTIONS } from "@/lib/constants";
 import {
   standaloneTimeCanvasScopeKindValues,
   taskScopedTimeCanvasScopeKind,
@@ -9,6 +10,7 @@ import {
   timeCanvasGroupByValues,
   taskPriorityValues,
   taskStatusValues,
+  workSegmentRoleValues,
   workSegmentStatusValues,
   workSegmentTypeValues,
 } from "@/lib/project-management/types/contract-values";
@@ -22,8 +24,13 @@ export const MAX_TIME_CANVAS_ROW_LIMIT = 50;
 export const DEFAULT_PEOPLE_PAGE_LIMIT = 25;
 export const MAX_PEOPLE_PAGE_LIMIT = 50;
 export const MAX_TIME_CANVAS_VISIBLE_SEGMENTS = 5_000;
+export const MAX_TIME_CANVAS_CONFLICTS = 5_000;
+export const MAX_TIME_CANVAS_ANCHOR_TASKS = 50;
+// Twenty-five supported 200-node plans fit exactly in one response.
+export const MAX_TIME_CANVAS_ANCHOR_NODES = 5_000;
 
-// Producers count VISIBLE Segment records after authorization filtering and reject instead of truncating.
+// Producers count serialized Full Segment and Busy objects after authorization
+// classification, then reject instead of truncating the response.
 export const timeCanvasVisibleSegmentCountSchema = z
   .number({ message: "可见 Segment 数量不正确" })
   .int("可见 Segment 数量不正确")
@@ -33,7 +40,7 @@ export const timeCanvasVisibleSegmentCountSchema = z
       addStructuredProjectManagementIssue({
         ctx,
         code: "QUERY_LIMIT_EXCEEDED",
-        message: "授权过滤后的可见 Segment 不能超过 5000 条，禁止静默截断",
+        message: "授权过滤后的返回时间对象不能超过 5000 条，禁止静默截断",
       });
     }
   });
@@ -199,14 +206,36 @@ export const getTimeCanvasDataInputSchema = z
     }
   });
 
-export const searchPeopleInputSchema = z
+const searchPeopleCommonFields = {
+  query: querySchema,
+  cursor: optionCursorSchema,
+  limit: peoplePageLimitSchema,
+} as const;
+
+export const searchPeopleInputSchema = z.discriminatedUnion("purpose", [
   // Visibility and ACTIVE status are server-enforced and not caller-selectable.
-  .object({
-    query: querySchema,
-    cursor: optionCursorSchema,
-    limit: peoplePageLimitSchema,
-  })
-  .strict();
+  z
+    .object({
+      purpose: z.literal("VISIBLE"),
+      ...searchPeopleCommonFields,
+    })
+    .strict(),
+  z
+    .object({
+      purpose: z.literal("TASK_CREATE"),
+      team: z.enum(TEAM_OPTIONS, { message: "请选择有效车组" }),
+      techGroup: z.enum(TECH_GROUP_OPTIONS, { message: "请选择有效技术组" }),
+      ...searchPeopleCommonFields,
+    })
+    .strict(),
+  z
+    .object({
+      purpose: z.literal("TASK_MEMBERS"),
+      taskId: idSchema,
+      ...searchPeopleCommonFields,
+    })
+    .strict(),
+]);
 
 export const searchTaskOptionsInputSchema = z
   .object({
@@ -243,6 +272,8 @@ export const previewSegmentPlacementInputSchema = z
     taskId: z.union([idSchema, z.null()]).optional(),
     nodeId: z.union([idSchema, z.null()]).optional(),
     priority: z.enum(taskPriorityValues).optional(),
+    role: z.enum(workSegmentRoleValues).optional(),
+    associationIntent: z.enum(["KEEP", "RELINK"]).optional().default("KEEP"),
   })
   .strict()
   .superRefine((input, ctx) => {
@@ -270,6 +301,27 @@ export const previewSegmentPlacementInputSchema = z
         code: "ASSOCIATION_INVALID",
         path: ["nodeId"],
         message: "关联 Node 时必须同时关联 Task",
+      });
+    }
+    const taskSubmitted = Object.hasOwn(input, "taskId");
+    const nodeSubmitted = Object.hasOwn(input, "nodeId");
+    if (input.associationIntent === "KEEP" && (taskSubmitted || nodeSubmitted)) {
+      addStructuredProjectManagementIssue({
+        ctx,
+        code: "ASSOCIATION_INVALID",
+        path: [taskSubmitted ? "taskId" : "nodeId"],
+        message: "KEEP 不接受 Task/Node；如需预览重关联请显式使用 RELINK",
+      });
+    }
+    if (
+      input.associationIntent === "RELINK" &&
+      (!taskSubmitted || !nodeSubmitted)
+    ) {
+      addStructuredProjectManagementIssue({
+        ctx,
+        code: "ASSOCIATION_INVALID",
+        path: [!taskSubmitted ? "taskId" : "nodeId"],
+        message: "RELINK 必须同时提交 taskId 与 nodeId（可为 null）",
       });
     }
   });

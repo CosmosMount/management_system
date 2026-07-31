@@ -17,12 +17,20 @@ import {
   createProjectManagementEventNotificationsTx,
   recipientsForPersonIdsTx,
 } from "@/lib/project-management/application/notification-utils";
+import { canFullyHandleConflict } from "@/lib/project-management/application/conflict-permissions";
 import {
+  prepareConflictMutationTx,
+  type ConflictMutationRange,
+} from "@/lib/project-management/application/conflict-lock-protocol";
+import {
+  associationInvalidError,
   notFoundError,
+  staleSegmentError,
   stateConflictError,
   validationError,
 } from "@/lib/project-management/application/errors";
 import { lockTaskNodeAssociationsTx } from "@/lib/project-management/application/task-node-association-lock";
+import { isTaskCreatableForSegment } from "@/lib/project-management/domain/task-segment-policy";
 import {
   batchCreatePlannedSegmentsInputSchema,
   cancelPlannedSegmentInputSchema,
@@ -64,6 +72,7 @@ const segmentInclude = {
       priority: true,
       allowSelfReview: true,
       currentPlanVersionId: true,
+      deletedAt: true,
       members: {
         where: { removedAt: null },
         select: { personId: true, role: true, removedAt: true },
@@ -123,6 +132,9 @@ export async function createWorkSegment(
 ): Promise<SegmentMutationResult> {
   const parsed = createWorkSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
+    const conflictRanges = await prepareConflictMutationTx(tx, [
+      segmentConflictRange(parsed),
+    ]);
     const refreshedActor = await refreshActorTx(tx, actor);
     await assertSegmentReferenceTx(tx, {
       actor: refreshedActor,
@@ -136,6 +148,7 @@ export async function createWorkSegment(
       parsed.taskId ? [parsed.taskId] : [],
     );
     const created = await createWorkSegmentTx(tx, refreshedActor, parsed);
+    await rescanSegmentConflictRangesTx(tx, conflictRanges);
     return {
       segment: toWorkSegmentDto(created),
       affectedSegmentIds: [created.id],
@@ -149,6 +162,10 @@ export async function batchCreatePlannedSegments(
 ): Promise<BatchSegmentMutationResult> {
   const parsed = batchCreatePlannedSegmentsInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
+    const conflictRanges = await prepareConflictMutationTx(
+      tx,
+      parsed.segments.map(segmentConflictRange),
+    );
     const refreshedActor = await refreshActorTx(tx, actor);
     for (const segment of parsed.segments) {
       await assertSegmentReferenceTx(tx, {
@@ -174,6 +191,7 @@ export async function batchCreatePlannedSegments(
         }),
       );
     }
+    await rescanSegmentConflictRangesTx(tx, conflictRanges);
     return {
       segments: created.map(toWorkSegmentDto),
       affectedSegmentIds: created.map((segment) => segment.id),
@@ -187,6 +205,14 @@ export async function createActualSegment(
 ): Promise<SegmentMutationResult> {
   const parsed = createActualSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
+    const sourceRanges = await loadSegmentConflictRangesTx(
+      tx,
+      parsed.sources.map((source) => source.plannedSegmentId),
+    );
+    const conflictRanges = await prepareConflictMutationTx(tx, [
+      segmentConflictRange(parsed),
+      ...sourceRanges,
+    ]);
     const refreshedActor = await refreshActorTx(tx, actor);
     await assertSegmentReferenceTx(tx, {
       actor: refreshedActor,
@@ -200,6 +226,7 @@ export async function createActualSegment(
       parsed.taskId ? [parsed.taskId] : [],
     );
     const created = await createActualSegmentTx(tx, refreshedActor, parsed);
+    await rescanSegmentConflictRangesTx(tx, conflictRanges);
     return {
       segment: toWorkSegmentDto(created),
       affectedSegmentIds: [created.id],
@@ -213,6 +240,18 @@ export async function updateWorkSegment(
 ): Promise<SegmentMutationResult> {
   const parsed = updateWorkSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
+    const [existingRange] = await loadSegmentConflictRangesTx(tx, [
+      parsed.segmentId,
+    ]);
+    if (!existingRange) throw notFoundError();
+    const conflictRanges = await prepareConflictMutationTx(tx, [
+      existingRange,
+      {
+        personId: existingRange.personId,
+        startAt: parsed.startAt ?? existingRange.startAt,
+        endAt: parsed.endAt ?? existingRange.endAt,
+      },
+    ]);
     const refreshedActor = await refreshActorTx(tx, actor);
     const preflightSegment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentVisible(refreshedActor, preflightSegment);
@@ -251,10 +290,14 @@ export async function updateWorkSegment(
       throw stateConflictError("已确认的 Planned Segment 不能修改");
     }
 
-    const nextTaskId =
-      Object.hasOwn(parsed, "taskId") ? parsed.taskId ?? null : segment.taskId;
-    const nextNodeId =
-      Object.hasOwn(parsed, "nodeId") ? parsed.nodeId ?? null : segment.nodeId;
+    const isRelink = parsed.associationIntent === "RELINK";
+    if (isRelink && (segment.type !== "PLANNED" || !segment.associationNeedsReview)) {
+      throw associationInvalidError(
+        "只有待重关联的 Planned Segment 可以执行 RELINK",
+      );
+    }
+    const nextTaskId = isRelink ? parsed.taskId ?? null : segment.taskId;
+    const nextNodeId = isRelink ? parsed.nodeId ?? null : segment.nodeId;
     const nextStartAt = parsed.startAt ?? segment.startAt;
     const nextEndAt = parsed.endAt ?? segment.endAt;
     const nextRole = parsed.role ?? segment.role;
@@ -277,13 +320,16 @@ export async function updateWorkSegment(
       });
     }
 
-    await assertSegmentReferenceTx(tx, {
-      actor: refreshedActor,
-      personId: segment.personId,
-      type: segment.type,
-      taskId: nextTaskId,
-      nodeId: nextNodeId,
-    });
+    if (isRelink) {
+      await assertSegmentReferenceTx(tx, {
+        actor: refreshedActor,
+        personId: segment.personId,
+        type: segment.type,
+        taskId: nextTaskId,
+        nodeId: nextNodeId,
+        requireCreatableTask: true,
+      });
+    }
     const tagIds = parsed.tagIds ?? tagIdsOf(segment);
     await assertTagsActiveTx(tx, tagIds);
 
@@ -313,6 +359,9 @@ export async function updateWorkSegment(
           segment.type === "ACTUAL" ? decimalOrNull(nextCompletionPercent) : null,
         taskId: nextTaskId,
         nodeId: nextNodeId,
+        associationNeedsReview: isRelink
+          ? false
+          : segment.associationNeedsReview,
         updatedByAccountId: refreshedActor.accountId,
       },
       include: segmentInclude,
@@ -322,11 +371,12 @@ export async function updateWorkSegment(
     await recordSegmentChangeTx(tx, {
       actor: refreshedActor,
       segmentId: updated.id,
-      action: "UPDATE",
+      action: isRelink ? "RELINK" : "UPDATE",
       before,
       after: snapshotSegment(reloaded),
       reason: parsed.reason,
     });
+    await rescanSegmentConflictRangesTx(tx, conflictRanges);
     return {
       segment: toWorkSegmentDto(reloaded),
       affectedSegmentIds: [reloaded.id],
@@ -340,8 +390,26 @@ export async function movePlannedSegments(
 ): Promise<BatchSegmentMutationResult> {
   const parsed = movePlannedSegmentsInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
+    const currentRanges = await loadSegmentConflictRangesTx(
+      tx,
+      parsed.moves.map((move) => move.segmentId),
+    );
+    const personBySegmentId = new Map(
+      currentRanges.map((range) => [range.segmentId, range.personId]),
+    );
+    const conflictRanges = await prepareConflictMutationTx(tx, [
+      ...currentRanges,
+      ...parsed.moves.flatMap((move) => {
+        const personId = personBySegmentId.get(move.segmentId);
+        return personId
+          ? [{ personId, startAt: move.startAt, endAt: move.endAt }]
+          : [];
+      }),
+    ]);
     const refreshedActor = await refreshActorTx(tx, actor);
-    return movePlannedSegmentsTx(tx, refreshedActor, parsed);
+    const result = await movePlannedSegmentsTx(tx, refreshedActor, parsed);
+    await rescanSegmentConflictRangesTx(tx, conflictRanges);
+    return result;
   });
 }
 
@@ -349,6 +417,66 @@ export async function movePlannedSegmentsTx(
   tx: PrismaTx,
   actor: ProjectManagementActor,
   input: MovePlannedSegmentsInput,
+): Promise<BatchSegmentMutationResult> {
+  return movePlannedSegmentsWithAuthorizationTx(tx, actor, input, (segment) => {
+    assertCanManageSegment(actor, segment);
+  });
+}
+
+export async function moveConflictSuggestionSegmentsTx(
+  tx: PrismaTx,
+  actor: ProjectManagementActor,
+  conflictId: string,
+  input: MovePlannedSegmentsInput,
+): Promise<BatchSegmentMutationResult> {
+  const conflict = await tx.resourceConflict.findUnique({
+    where: { id: conflictId },
+    select: {
+      personId: true,
+      status: true,
+      segments: {
+        select: {
+          segmentId: true,
+          segment: {
+            select: {
+              personId: true,
+              task: segmentInclude.task,
+            },
+          },
+        },
+      },
+    },
+  });
+  if (!conflict) throw notFoundError();
+  if (conflict.status === "RESOLVED") {
+    throw stateConflictError("已解决的冲突不能再次应用建议");
+  }
+  if (!canFullyHandleConflict(actor, conflict)) {
+    throw stateConflictError("你没有处理该资源冲突的权限");
+  }
+
+  const conflictSegmentIds = new Set<string>();
+  for (const entry of conflict.segments) {
+    if (entry.segment.personId !== conflict.personId) {
+      throw stateConflictError("冲突关联的投入人员不一致，无法应用建议");
+    }
+    conflictSegmentIds.add(entry.segmentId);
+  }
+
+  return movePlannedSegmentsWithAuthorizationTx(tx, actor, input, (segment) => {
+    if (!conflictSegmentIds.has(segment.id)) {
+      throw validationError("冲突建议只能调整该冲突涉及的 Segment", {
+        proposal: ["冲突建议只能调整该冲突涉及的 Segment"],
+      });
+    }
+  });
+}
+
+async function movePlannedSegmentsWithAuthorizationTx(
+  tx: PrismaTx,
+  actor: ProjectManagementActor,
+  input: MovePlannedSegmentsInput,
+  assertCanMove: (segment: SegmentForMutation) => void,
 ): Promise<BatchSegmentMutationResult> {
   assertUniqueIds(
     input.moves.map((move) => move.segmentId),
@@ -364,7 +492,7 @@ export async function movePlannedSegmentsTx(
     const move = moveById.get(segment.id);
     if (!move) throw validationError("移动记录不存在");
     assertSegmentVisible(actor, segment);
-    assertCanManageSegment(actor, segment);
+    assertCanMove(segment);
     assertExpectedUpdatedAt(segment, move.expectedUpdatedAt);
     assertPlannedEditable(segment, "只有未确认且未取消的 Planned Segment 可以移动");
     assertValidSegmentRange(move.startAt, move.endAt);
@@ -401,6 +529,11 @@ export async function splitPlannedSegment(
 ): Promise<BatchSegmentMutationResult> {
   const parsed = splitPlannedSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
+    const [existingRange] = await loadSegmentConflictRangesTx(tx, [
+      parsed.segmentId,
+    ]);
+    if (!existingRange) throw notFoundError();
+    const conflictRanges = await prepareConflictMutationTx(tx, [existingRange]);
     const refreshedActor = await refreshActorTx(tx, actor);
     const preflightSegment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentVisible(refreshedActor, preflightSegment);
@@ -455,6 +588,7 @@ export async function splitPlannedSegment(
         type: "PLANNED",
         taskId: childTaskId,
         nodeId: childNodeId,
+        requireCreatableTask: true,
       });
       await assertTagsActiveTx(tx, childTagIds);
       const child = await tx.workSegment.create({
@@ -480,6 +614,7 @@ export async function splitPlannedSegment(
           completionPercent: null,
           taskId: childTaskId,
           nodeId: childNodeId,
+          associationNeedsReview: segment.associationNeedsReview,
           sourceSplitFromId: segment.id,
           createdByAccountId: refreshedActor.accountId,
           updatedByAccountId: refreshedActor.accountId,
@@ -518,6 +653,7 @@ export async function splitPlannedSegment(
       },
       reason: parsed.reason,
     });
+    await rescanSegmentConflictRangesTx(tx, conflictRanges);
     return {
       segments: children.map(toWorkSegmentDto),
       affectedSegmentIds: [segment.id, ...children.map((child) => child.id)],
@@ -531,6 +667,11 @@ export async function mergePlannedSegments(
 ): Promise<SegmentMutationResult> {
   const parsed = mergePlannedSegmentsInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
+    const currentRanges = await loadSegmentConflictRangesTx(
+      tx,
+      parsed.segments.map((segment) => segment.segmentId),
+    );
+    const conflictRanges = await prepareConflictMutationTx(tx, currentRanges);
     const refreshedActor = await refreshActorTx(tx, actor);
     assertUniqueIds(
       parsed.segments.map((segment) => segment.segmentId),
@@ -600,6 +741,7 @@ export async function mergePlannedSegments(
         completionPercent: null,
         taskId: first.taskId,
         nodeId: first.nodeId,
+        associationNeedsReview: first.associationNeedsReview,
         createdByAccountId: refreshedActor.accountId,
         updatedByAccountId: refreshedActor.accountId,
         tags: { create: tagIds.map((tagId) => ({ tagId })) },
@@ -639,6 +781,7 @@ export async function mergePlannedSegments(
       },
       reason: parsed.reason,
     });
+    await rescanSegmentConflictRangesTx(tx, conflictRanges);
     return {
       segment: toWorkSegmentDto(merged),
       affectedSegmentIds: [...sorted.map((segment) => segment.id), merged.id],
@@ -652,6 +795,11 @@ export async function cancelPlannedSegment(
 ): Promise<SegmentMutationResult> {
   const parsed = cancelPlannedSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
+    const [existingRange] = await loadSegmentConflictRangesTx(tx, [
+      parsed.segmentId,
+    ]);
+    if (!existingRange) throw notFoundError();
+    const conflictRanges = await prepareConflictMutationTx(tx, [existingRange]);
     const refreshedActor = await refreshActorTx(tx, actor);
     await lockWorkSegmentTx(tx, parsed.segmentId);
     const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
@@ -676,6 +824,7 @@ export async function cancelPlannedSegment(
       after: snapshotSegment(updated),
       reason: parsed.reason,
     });
+    await rescanSegmentConflictRangesTx(tx, conflictRanges);
     return {
       segment: toWorkSegmentDto(updated),
       affectedSegmentIds: [updated.id],
@@ -689,6 +838,18 @@ export async function confirmPlannedSegment(
 ): Promise<SegmentMutationResult & { actualSegment: WorkSegmentDto; createdActual: boolean }> {
   const parsed = confirmPlannedSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
+    const [existingRange] = await loadSegmentConflictRangesTx(tx, [
+      parsed.segmentId,
+    ]);
+    if (!existingRange) throw notFoundError();
+    const conflictRanges = await prepareConflictMutationTx(tx, [
+      existingRange,
+      {
+        personId: existingRange.personId,
+        startAt: parsed.actual.startAt ?? existingRange.startAt,
+        endAt: parsed.actual.endAt ?? existingRange.endAt,
+      },
+    ]);
     const refreshedActor = await refreshActorTx(tx, actor);
     const preflightSegment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentVisible(refreshedActor, preflightSegment);
@@ -754,6 +915,7 @@ export async function confirmPlannedSegment(
       confirmOriginal: "CONFIRMED",
     });
     const confirmed = await loadSegmentForMutationTx(tx, segment.id);
+    await rescanSegmentConflictRangesTx(tx, conflictRanges);
     return {
       segment: toWorkSegmentDto(confirmed),
       actualSegment: toWorkSegmentDto(actual),
@@ -774,6 +936,18 @@ export async function partiallyConfirmSegment(
 > {
   const parsed = partiallyConfirmSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
+    const [existingRange] = await loadSegmentConflictRangesTx(tx, [
+      parsed.segmentId,
+    ]);
+    if (!existingRange) throw notFoundError();
+    const conflictRanges = await prepareConflictMutationTx(tx, [
+      existingRange,
+      {
+        personId: existingRange.personId,
+        startAt: parsed.actual.startAt ?? parsed.coveredStartAt,
+        endAt: parsed.actual.endAt ?? parsed.coveredEndAt,
+      },
+    ]);
     const refreshedActor = await refreshActorTx(tx, actor);
     const preflightSegment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentVisible(refreshedActor, preflightSegment);
@@ -833,6 +1007,7 @@ export async function partiallyConfirmSegment(
       reason: parsed.reason || "部分确认后保留剩余计划",
     });
     const original = await loadSegmentForMutationTx(tx, segment.id);
+    await rescanSegmentConflictRangesTx(tx, conflictRanges);
     return {
       segment: toWorkSegmentDto(original),
       actualSegment: toWorkSegmentDto(actual),
@@ -852,6 +1027,11 @@ export async function relinkPlannedSegment(
 ): Promise<SegmentMutationResult> {
   const parsed = relinkPlannedSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
+    const [existingRange] = await loadSegmentConflictRangesTx(tx, [
+      parsed.segmentId,
+    ]);
+    if (!existingRange) throw notFoundError();
+    const conflictRanges = await prepareConflictMutationTx(tx, [existingRange]);
     const refreshedActor = await refreshActorTx(tx, actor);
     const preflightSegment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentVisible(refreshedActor, preflightSegment);
@@ -906,7 +1086,7 @@ export async function relinkPlannedSegment(
           ? parsed.nodeId
           : segment.nodeId;
     if (nextNodeId && !nextTaskId) {
-      throw validationError("关联节点时必须同时关联 Task", {
+      throw associationInvalidError("关联节点时必须同时关联 Task", {
         taskId: ["关联节点时必须同时关联 Task"],
       });
     }
@@ -916,6 +1096,7 @@ export async function relinkPlannedSegment(
       type: "PLANNED",
       taskId: nextTaskId,
       nodeId: nextNodeId,
+      requireCreatableTask: true,
     });
     const before = snapshotSegment(segment);
     const updated = await tx.workSegment.update({
@@ -936,6 +1117,7 @@ export async function relinkPlannedSegment(
       after: snapshotSegment(updated),
       reason: parsed.reason,
     });
+    await rescanSegmentConflictRangesTx(tx, conflictRanges);
     return {
       segment: toWorkSegmentDto(updated),
       affectedSegmentIds: [updated.id],
@@ -949,6 +1131,11 @@ export async function softDeleteActualSegment(
 ): Promise<SegmentMutationResult> {
   const parsed = softDeleteActualSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
+    const [existingRange] = await loadSegmentConflictRangesTx(tx, [
+      parsed.segmentId,
+    ]);
+    if (!existingRange) throw notFoundError();
+    const conflictRanges = await prepareConflictMutationTx(tx, [existingRange]);
     const refreshedActor = await refreshActorTx(tx, actor);
     await lockWorkSegmentTx(tx, parsed.segmentId);
     const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
@@ -982,6 +1169,7 @@ export async function softDeleteActualSegment(
       after: snapshotSegment(updated),
       reason: parsed.reason,
     });
+    await rescanSegmentConflictRangesTx(tx, conflictRanges);
     return {
       segment: toWorkSegmentDto(updated),
       affectedSegmentIds: [updated.id],
@@ -1002,6 +1190,22 @@ export async function scanSegmentTransitions(now = new Date()) {
       orderBy: { id: "asc" },
       take: 500,
     });
+    const toInProgress = await tx.workSegment.findMany({
+      where: {
+        type: "PLANNED",
+        status: "PLANNED",
+        startAt: { lte: now },
+        endAt: { gt: now },
+        deletedAt: null,
+      },
+      include: segmentInclude,
+      orderBy: { id: "asc" },
+      take: 500,
+    });
+    const conflictRanges = await prepareConflictMutationTx(tx, [
+      ...toPending.map(segmentConflictRange),
+      ...toInProgress.map(segmentConflictRange),
+    ]);
     let pendingConfirmationCount = 0;
     for (const segment of toPending) {
       const transition = await tx.workSegment.updateMany({
@@ -1029,18 +1233,6 @@ export async function scanSegmentTransitions(now = new Date()) {
       pendingConfirmationCount += 1;
     }
 
-    const toInProgress = await tx.workSegment.findMany({
-      where: {
-        type: "PLANNED",
-        status: "PLANNED",
-        startAt: { lte: now },
-        endAt: { gt: now },
-        deletedAt: null,
-      },
-      include: segmentInclude,
-      orderBy: { id: "asc" },
-      take: 500,
-    });
     let inProgressCount = 0;
     for (const segment of toInProgress) {
       const transition = await tx.workSegment.updateMany({
@@ -1067,6 +1259,7 @@ export async function scanSegmentTransitions(now = new Date()) {
       });
       inProgressCount += 1;
     }
+    await rescanSegmentConflictRangesTx(tx, conflictRanges);
     return {
       pendingConfirmationCount,
       inProgressCount,
@@ -1086,6 +1279,7 @@ async function createWorkSegmentTx(
     type: input.type,
     taskId: input.taskId ?? null,
     nodeId: input.nodeId ?? null,
+    requireCreatableTask: true,
   });
   await assertTagsActiveTx(tx, input.tagIds);
   await assertCanManageNewSegment(tx, actor, input);
@@ -1223,10 +1417,11 @@ async function assertSegmentReferenceTx(
     type: WorkSegment["type"];
     taskId?: string | null;
     nodeId?: string | null;
+    requireCreatableTask?: boolean;
   },
 ) {
   if (input.nodeId && !input.taskId) {
-    throw validationError("关联节点时必须同时关联 Task", {
+    throw associationInvalidError("关联节点时必须同时关联 Task", {
       taskId: ["关联节点时必须同时关联 Task"],
     });
   }
@@ -1236,19 +1431,29 @@ async function assertSegmentReferenceTx(
     personId: input.personId,
     task,
   });
+  if (
+    input.requireCreatableTask &&
+    !isTaskCreatableForSegment(task.status)
+  ) {
+    throw associationInvalidError("当前 Task 状态不允许创建或重关联 Segment", {
+      taskId: ["当前 Task 状态不允许创建或重关联 Segment"],
+    });
+  }
   if (!input.nodeId) return;
   const node = await tx.taskNode.findUnique({
     where: { id: input.nodeId },
     select: { id: true, taskId: true, status: true },
   });
   if (!node || node.taskId !== input.taskId) {
-    throw validationError("关联节点不属于该 Task", {
+    throw associationInvalidError("关联节点不属于该 Task", {
       nodeId: ["关联节点不属于该 Task"],
     });
   }
   if (input.type === "PLANNED") {
     if (node.status === "REVISED" || node.status === "CANCELLED") {
-      throw stateConflictError("Planned Segment 不能关联已失效节点");
+      throw associationInvalidError("Planned Segment 不能关联已失效节点", {
+        nodeId: ["Planned Segment 不能关联已失效节点"],
+      });
     }
     const inCurrentPlan = await tx.planVersionNode.findFirst({
       where: {
@@ -1258,7 +1463,9 @@ async function assertSegmentReferenceTx(
       select: { id: true },
     });
     if (!inCurrentPlan) {
-      throw stateConflictError("Planned Segment 只能关联 Current Plan 节点");
+      throw associationInvalidError("Planned Segment 只能关联 Current Plan 节点", {
+        nodeId: ["Planned Segment 只能关联 Current Plan 节点"],
+      });
     }
   }
 }
@@ -1450,6 +1657,7 @@ async function createRemainingSegmentsAfterPartialConfirmTx(
         completionPercent: null,
         taskId: input.planned.taskId,
         nodeId: input.planned.nodeId,
+        associationNeedsReview: input.planned.associationNeedsReview,
         sourceSplitFromId: input.planned.id,
         createdByAccountId: input.actor.accountId,
         updatedByAccountId: input.actor.accountId,
@@ -1532,13 +1740,14 @@ async function loadTaskForAuthorizationTx(
       priority: true,
       allowSelfReview: true,
       currentPlanVersionId: true,
+      deletedAt: true,
       members: {
         where: { removedAt: null },
         select: { personId: true, role: true, removedAt: true },
       },
     },
   });
-  if (!task) throw notFoundError();
+  if (!task || task.deletedAt) throw notFoundError();
   return task;
 }
 
@@ -1826,13 +2035,13 @@ function extractTaskId(value: Prisma.InputJsonValue | null) {
 }
 
 function assertExpectedUpdatedAt(
-  segment: Pick<WorkSegment, "updatedAt">,
+  segment: Pick<WorkSegment, "id" | "updatedAt">,
   expectedUpdatedAt: Date | undefined,
 ) {
   if (!expectedUpdatedAt || segment.updatedAt.getTime() === expectedUpdatedAt.getTime()) {
     return;
   }
-  throw stateConflictError("投入记录已被他人修改，请刷新后重试");
+  throw staleSegmentError(segment);
 }
 
 function assertPlannedEditable(segment: SegmentForMutation, message: string) {
@@ -1918,6 +2127,7 @@ function assertMergeCompatible(segments: SegmentForMutation[]) {
       segment.priority !== first.priority ||
       segment.taskId !== first.taskId ||
       segment.nodeId !== first.nodeId ||
+      segment.associationNeedsReview !== first.associationNeedsReview ||
       segment.expectedOutput !== first.expectedOutput ||
       tagIdsOf(segment).join("|") !== firstTagKey
     ) {
@@ -1937,6 +2147,51 @@ function assertMergeCompatible(segments: SegmentForMutation[]) {
 function assertUniqueIds(ids: string[], message: string) {
   if (new Set(ids).size === ids.length) return;
   throw validationError(message);
+}
+
+type SegmentConflictRange = ConflictMutationRange & { segmentId?: string };
+
+function segmentConflictRange(input: {
+  personId: string;
+  startAt: Date;
+  endAt: Date;
+}): ConflictMutationRange {
+  return {
+    personId: input.personId,
+    startAt: input.startAt,
+    endAt: input.endAt,
+  };
+}
+
+async function loadSegmentConflictRangesTx(
+  tx: PrismaTx,
+  segmentIds: string[],
+): Promise<SegmentConflictRange[]> {
+  if (segmentIds.length === 0) return [];
+  const rows = await tx.workSegment.findMany({
+    where: { id: { in: [...new Set(segmentIds)] } },
+    select: { id: true, personId: true, startAt: true, endAt: true },
+    orderBy: { id: "asc" },
+  });
+  return rows.map((row) => ({
+    segmentId: row.id,
+    personId: row.personId,
+    startAt: row.startAt,
+    endAt: row.endAt,
+  }));
+}
+
+async function rescanSegmentConflictRangesTx(
+  tx: PrismaTx,
+  ranges: ConflictMutationRange[],
+) {
+  if (ranges.length === 0) return;
+  // Dynamic loading avoids a module-initialization cycle: conflict apply reuses
+  // the Segment move primitive, while Segment mutations reuse the scanner.
+  const { rescanConflictsForRangesTx } = await import(
+    "@/lib/project-management/application/conflict-service"
+  );
+  await rescanConflictsForRangesTx(tx, ranges, { locksHeld: true });
 }
 
 function plannedStatusForRange(startAt: Date, endAt: Date): WorkSegment["status"] {

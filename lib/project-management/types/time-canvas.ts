@@ -372,14 +372,23 @@ export type TimeCanvasConflictDto = z.infer<
   typeof timeCanvasConflictDtoSchema
 >;
 
+export const personAccountAvailabilityValues = [
+  "UNBOUND",
+  "ACTIVE",
+  "DISABLED",
+] as const;
+
 export const personOptionDtoSchema = z
   .object({
     id: dtoIdSchema,
     displayName: z.string().trim().min(1),
     avatar: z.string().nullable(),
     status: z.literal("ACTIVE"),
+    accountAvailability: z.enum(personAccountAvailabilityValues),
   })
   .strict();
+
+export type PersonOptionDto = z.infer<typeof personOptionDtoSchema>;
 
 export const personOptionPageSchema = z
   .object({
@@ -457,7 +466,7 @@ const personGroupedTimeCanvasDataDtoSchema = z
     ...timeCanvasDataCommonFields,
     groupBy: z.literal(personTimeCanvasGrouping),
     rows: z.array(personTimeCanvasRowDtoSchema),
-    /** Complete authorized result; producers reject above the visible limit. */
+    /** Complete authorized page; Full plus Busy objects share the 5,000 limit. */
     segments: z.array(z.union([timeSegmentDtoSchema, busyBlockDtoSchema])),
   })
   .strict();
