@@ -1,8 +1,6 @@
 import Link from "next/link";
 import { AlertTriangle, Bell, CalendarClock, ClipboardList } from "lucide-react";
-import { AppHeader } from "@/components/app-header";
-import { ProgressShell } from "@/components/project-management/progress-shell";
-import { PageShell } from "@/components/page-shell";
+import { PageCommandBar } from "@/components/project-management/shell/page-command-bar";
 import { Badge } from "@/components/ui/badge";
 import {
   conflictKindLabels,
@@ -20,13 +18,11 @@ export default async function ProgressPage() {
 
   return (
     <>
-      <AppHeader />
-      <PageShell>
-        <ProgressShell
-          title="我的工作"
-          subtitle="查看当前 Task、待确认投入、资源冲突和站内通知。"
-          unreadCount={overview.unreadNotificationCount}
-        >
+      <PageCommandBar
+        title="我的工作"
+        description="查看当前 Task、待确认投入、资源冲突和站内通知。"
+      />
+      <div className="mx-auto flex w-full min-w-0 max-w-[96rem] flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
           <div className="grid gap-4 lg:grid-cols-2">
             <section className="rounded-lg border border-border bg-card p-4">
               <div className="flex items-center justify-between gap-3">
@@ -188,8 +184,7 @@ export default async function ProgressPage() {
               </div>
             </section>
           </div>
-        </ProgressShell>
-      </PageShell>
+      </div>
     </>
   );
 }

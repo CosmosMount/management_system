@@ -86,6 +86,21 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+  --pm-shell-border: var(--border);
+  --pm-sidebar-bg: color-mix(in oklch, var(--card) 96%, var(--primary) 4%);
+  --pm-command-bar-bg: color-mix(
+    in oklch,
+    var(--background) 96%,
+    var(--card) 4%
+  );
+  --pm-nav-active-bg: color-mix(
+    in oklch,
+    var(--primary) 12%,
+    transparent
+  );
+  --pm-nav-active-foreground: var(--primary);
+  --pm-nav-hover: var(--muted);
+  --pm-focus-ring: var(--ring);
 }
 
 .dark {
@@ -137,5 +152,11 @@
   html {
     @apply font-sans;
     scrollbar-gutter: stable;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pm-shell-motion {
+    transition-duration: 0.01ms !important;
   }
 }

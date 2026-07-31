@@ -1,10 +1,7 @@
-import { AppHeader } from "@/components/app-header";
-import { PageShell } from "@/components/page-shell";
-import { ProgressShell } from "@/components/project-management/progress-shell";
 import { ResourceTimelineClient } from "@/components/project-management/resource-timeline-client";
+import { PageCommandBar } from "@/components/project-management/shell/page-command-bar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { getUnreadInAppNotificationCount } from "@/lib/project-management/queries/notification-queries";
 import {
   listTimelinePeople,
   listWorkSegments,
@@ -29,7 +26,7 @@ export default async function ProgressResourcesPage({
   const taskId = uuidOrUndefined(firstParam(params.taskId));
   const personId = uuidOrUndefined(firstParam(params.personId));
 
-  const [segments, people, tasks, unreadCount] = await Promise.all([
+  const [segments, people, tasks] = await Promise.all([
     listWorkSegments({
       actor,
       input: {
@@ -42,18 +39,15 @@ export default async function ProgressResourcesPage({
     }),
     listTimelinePeople({ actor }),
     listTasks({ actor, input: { status: "ACTIVE", limit: 100 } }),
-    getUnreadInAppNotificationCount(actor),
   ]);
 
   return (
     <>
-      <AppHeader />
-      <PageShell>
-        <ProgressShell
-          title="人员计划"
-          subtitle="查看计划与实际投入，处理确认、移动、拆分、合并和取消。"
-          unreadCount={unreadCount}
-        >
+      <PageCommandBar
+        title="人员计划"
+        description="查看计划与实际投入，处理确认、移动、拆分、合并和取消。"
+      />
+      <div className="mx-auto flex w-full min-w-0 max-w-[96rem] flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
           <form className="grid gap-3 rounded-lg border border-border bg-card p-4 md:grid-cols-[180px_180px_1fr_auto]">
             <Input
               name="start"
@@ -95,8 +89,7 @@ export default async function ProgressResourcesPage({
             rangeStart={startAt.toISOString()}
             rangeEnd={new Date(startAt.getTime() + 60 * 60 * 1_000).toISOString()}
           />
-        </ProgressShell>
-      </PageShell>
+      </div>
     </>
   );
 }

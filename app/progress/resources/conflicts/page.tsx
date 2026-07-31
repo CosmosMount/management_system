@@ -1,12 +1,9 @@
 import { notFound } from "next/navigation";
-import { AppHeader } from "@/components/app-header";
-import { PageShell } from "@/components/page-shell";
 import { ConflictCenterClient } from "@/components/project-management/conflict-center-client";
-import { ProgressShell } from "@/components/project-management/progress-shell";
+import { PageCommandBar } from "@/components/project-management/shell/page-command-bar";
 import { Button } from "@/components/ui/button";
 import { toProjectManagementServiceError } from "@/lib/project-management/application/errors";
 import { conflictStatusLabels } from "@/lib/project-management/labels";
-import { getUnreadInAppNotificationCount } from "@/lib/project-management/queries/notification-queries";
 import {
   getResourceConflict,
   listResourceConflicts,
@@ -26,20 +23,17 @@ export default async function ProgressConflictsPage({
   const params = (await searchParams) ?? {};
   const status = firstParam(params.status);
   const conflictId = uuidOrUndefined(firstParam(params.conflictId));
-  const [conflicts, unreadCount] = await Promise.all([
-    listResourceConflicts({
-      actor,
-      input: {
-        status: conflictStatusValues.includes(
-          status as (typeof conflictStatusValues)[number],
-        )
-          ? (status as (typeof conflictStatusValues)[number])
-          : "OPEN",
-        limit: 50,
-      },
-    }),
-    getUnreadInAppNotificationCount(actor),
-  ]);
+  const conflicts = await listResourceConflicts({
+    actor,
+    input: {
+      status: conflictStatusValues.includes(
+        status as (typeof conflictStatusValues)[number],
+      )
+        ? (status as (typeof conflictStatusValues)[number])
+        : "OPEN",
+      limit: 50,
+    },
+  });
   const selectedConflict = conflictId
     ? await getResourceConflict({ actor, input: { conflictId } }).catch((error) => {
         const mapped = toProjectManagementServiceError(error);
@@ -50,13 +44,11 @@ export default async function ProgressConflictsPage({
 
   return (
     <>
-      <AppHeader />
-      <PageShell>
-        <ProgressShell
-          title="资源冲突"
-          subtitle="查看冲突解释，确认已知、忽略、解决或应用服务端建议。"
-          unreadCount={unreadCount}
-        >
+      <PageCommandBar
+        title="资源冲突"
+        description="查看冲突解释，确认已知、忽略、解决或应用服务端建议。"
+      />
+      <div className="mx-auto flex w-full min-w-0 max-w-[96rem] flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
           <form className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card p-4">
             <select
               name="status"
@@ -76,8 +68,7 @@ export default async function ProgressConflictsPage({
             conflicts={conflicts.items}
             selectedConflict={selectedConflict}
           />
-        </ProgressShell>
-      </PageShell>
+      </div>
     </>
   );
 }

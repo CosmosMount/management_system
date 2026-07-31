@@ -1,6 +1,4 @@
-import { AppHeader } from "@/components/app-header";
-import { PageShell } from "@/components/page-shell";
-import { ProgressShell } from "@/components/project-management/progress-shell";
+import { PageCommandBar } from "@/components/project-management/shell/page-command-bar";
 import { TaskList } from "@/components/project-management/task-list";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,7 +6,6 @@ import {
   taskPriorityLabels,
   taskStatusLabels,
 } from "@/lib/project-management/labels";
-import { getUnreadInAppNotificationCount } from "@/lib/project-management/queries/notification-queries";
 import { listTasks } from "@/lib/project-management/queries/task-queries";
 import { getProgressActorOrRedirect } from "../_auth";
 
@@ -35,35 +32,28 @@ export default async function ProgressTasksPage({
   const status = firstParam(params.status);
   const priority = firstParam(params.priority);
   const query = firstParam(params.q);
-  const [tasks, unreadCount] = await Promise.all([
-    listTasks({
-      actor,
-      input: {
-        status: statusValues.includes(status as (typeof statusValues)[number])
-          ? (status as (typeof statusValues)[number])
-          : undefined,
-        priority: priorityValues.includes(
-          priority as (typeof priorityValues)[number],
-        )
-          ? (priority as (typeof priorityValues)[number])
-          : undefined,
-        mine: firstParam(params.mine) === "1",
-        query,
-        limit: 50,
-      },
-    }),
-    getUnreadInAppNotificationCount(actor),
-  ]);
+  const tasks = await listTasks({
+    actor,
+    input: {
+      status: statusValues.includes(status as (typeof statusValues)[number])
+        ? (status as (typeof statusValues)[number])
+        : undefined,
+      priority: priorityValues.includes(priority as (typeof priorityValues)[number])
+        ? (priority as (typeof priorityValues)[number])
+        : undefined,
+      mine: firstParam(params.mine) === "1",
+      query,
+      limit: 50,
+    },
+  });
 
   return (
     <>
-      <AppHeader />
-      <PageShell>
-        <ProgressShell
-          title="全部 Task"
-          subtitle="按状态、优先级和关键词查看当前可见 Task。"
-          unreadCount={unreadCount}
-        >
+      <PageCommandBar
+        title="全部 Task"
+        description="按状态、优先级和关键词查看当前可见 Task。"
+      />
+      <div className="mx-auto flex w-full min-w-0 max-w-[96rem] flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
           <form className="grid gap-3 rounded-lg border border-border bg-card p-4 md:grid-cols-[1fr_160px_160px_auto_auto]">
             <Input
               name="q"
@@ -109,8 +99,7 @@ export default async function ProgressTasksPage({
             <Button type="submit">筛选</Button>
           </form>
           <TaskList tasks={tasks.items} />
-        </ProgressShell>
-      </PageShell>
+      </div>
     </>
   );
 }

@@ -1,16 +1,16 @@
-import { AppHeader } from "@/components/app-header";
-import { PageShell } from "@/components/page-shell";
 import { NotificationCenterClient } from "@/components/project-management/notification-center-client";
-import { ProgressShell } from "@/components/project-management/progress-shell";
+import { PageCommandBar } from "@/components/project-management/shell/page-command-bar";
 import { Button } from "@/components/ui/button";
 import {
   notificationCategoryLabels,
 } from "@/lib/project-management/labels";
 import {
-  getUnreadInAppNotificationCount,
   listInAppNotifications,
 } from "@/lib/project-management/queries/notification-queries";
-import { getProgressActorOrRedirect } from "../_auth";
+import {
+  getProgressActorOrRedirect,
+  getProgressUnreadNotificationCount,
+} from "../_auth";
 
 type SearchParams = Record<string, string | string[] | undefined>;
 
@@ -44,18 +44,16 @@ export default async function ProgressNotificationsPage({
         limit: 50,
       },
     }),
-    getUnreadInAppNotificationCount(actor),
+    getProgressUnreadNotificationCount(),
   ]);
 
   return (
     <>
-      <AppHeader />
-      <PageShell>
-        <ProgressShell
-          title="站内通知"
-          subtitle="查看项目管理业务通知，标记已读并跳转到仍可访问的业务对象。"
-          unreadCount={unreadCount}
-        >
+      <PageCommandBar
+        title="站内通知"
+        description="查看项目管理业务通知，标记已读并跳转到仍可访问的业务对象。"
+      />
+      <div className="mx-auto flex w-full min-w-0 max-w-[96rem] flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
           <form className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card p-4">
             <select
               name="category"
@@ -85,8 +83,7 @@ export default async function ProgressNotificationsPage({
             notifications={notifications.items}
             unreadCount={unreadCount}
           />
-        </ProgressShell>
-      </PageShell>
+      </div>
     </>
   );
 }

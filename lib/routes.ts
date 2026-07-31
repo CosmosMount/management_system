@@ -17,10 +17,14 @@ export const routes = {
   },
   progress: {
     root: "/progress",
+    myTimeline: "/progress/my-timeline",
     tasks: "/progress/tasks",
+    taskNew: "/progress/tasks/new",
     taskDetail: (id: string) => `/progress/tasks/${id}`,
     resources: "/progress/resources",
     conflicts: "/progress/resources/conflicts",
+    approvals: "/progress/approvals",
     notifications: "/progress/notifications",
+    tags: "/progress/tags",
   },
 } as const;

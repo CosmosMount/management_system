@@ -1,10 +1,7 @@
 import { notFound } from "next/navigation";
-import { AppHeader } from "@/components/app-header";
-import { PageShell } from "@/components/page-shell";
-import { ProgressShell } from "@/components/project-management/progress-shell";
+import { PageCommandBar } from "@/components/project-management/shell/page-command-bar";
 import { TaskWorkbench } from "@/components/project-management/task-workbench";
 import { toProjectManagementServiceError } from "@/lib/project-management/application/errors";
-import { getUnreadInAppNotificationCount } from "@/lib/project-management/queries/notification-queries";
 import { listWorkSegments } from "@/lib/project-management/queries/resource-queries";
 import { getTaskWorkspace } from "@/lib/project-management/queries/task-queries";
 import { getProgressActorOrRedirect } from "../../_auth";
@@ -21,23 +18,20 @@ export default async function ProgressTaskDetailPage({
     if (mapped.code === "NOT_FOUND") notFound();
     throw error;
   });
-  const [segments, unreadCount] = await Promise.all([
-    listWorkSegments({ actor, input: { taskId: id, limit: 50 } }),
-    getUnreadInAppNotificationCount(actor),
-  ]);
+  const segments = await listWorkSegments({
+    actor,
+    input: { taskId: id, limit: 50 },
+  });
 
   return (
     <>
-      <AppHeader />
-      <PageShell>
-        <ProgressShell
-          title={workspace.task.title}
-          subtitle="Task 工作台：查看元数据、当前计划、成员权限和关联人员投入。"
-          unreadCount={unreadCount}
-        >
-          <TaskWorkbench workspace={workspace} segments={segments.items} />
-        </ProgressShell>
-      </PageShell>
+      <PageCommandBar
+        title={workspace.task.title}
+        description="Task 工作台：查看元数据、当前计划、成员权限和关联人员投入。"
+      />
+      <div className="mx-auto flex w-full min-w-0 max-w-[96rem] flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
+        <TaskWorkbench workspace={workspace} segments={segments.items} />
+      </div>
     </>
   );
 }

@@ -158,6 +158,8 @@ Segment 放置关联意图分为 `KEEP` 与 `RELINK`：`KEEP` 不接受 Task/Nod
 
 P4/P6 首批浏览器入口已上线：`/progress` 汇总我的 Active Task、未来投入、待确认计划、开放冲突和未读通知；`/progress/tasks` 提供可见 Task 列表；`/progress/tasks/[id]` 提供 Task 工作台；`/progress/resources` 提供人员计划时间轴并复用 P5 Segment action；`/progress/resources/conflicts` 提供冲突中心并复用 P5 Conflict action；`/progress/notifications` 提供站内通知筛选、标记已读和对象跳转。所有页面先解析项目管理 actor，再通过 `taskReadableWhere`、`segmentReadableWhere`、Conflict readable 条件或 `recipientAccountId` 过滤，服务端 action 仍执行状态机、权限和 `expectedUpdatedAt` 校验。
 
+项目管理浏览器入口统一由 `app/progress/layout.tsx` 渲染全站 `AppHeader`、`PageShell` 和模块 Shell，子页只提供上下文命令栏与业务内容。桌面端使用可折叠的 sticky 左侧导航；移动端使用基于现有 Dialog 原语的模态 Drawer，支持 Escape、焦点约束和关闭后的焦点恢复。模块 Shell 统一读取通知未读数，并通过 React 请求内缓存复用 actor 与通知页的未读查询；不可用对象使用 `/progress/not-found.tsx` 的统一脱敏页面。`--pm-*` 语义变量集中在 `app/globals.css`，Shell 适配现有明暗主题和 reduced motion。`myTimeline`、`taskNew`、`approvals`、`tags` 已保留类型安全路由常量，但对应页面落地前不显示导航链接；本阶段不包含 TimeCanvas。
+
 `DomainAuditEvent` 由 append-only trigger 保护，应用代码只能追加审计事件，不能更新或删除既有审计行。
 
 ## 路由一览
