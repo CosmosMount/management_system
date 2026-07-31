@@ -28,6 +28,19 @@ const authMiddleware = middlewareAuth((req) => {
       return NextResponse.json({ error: "未登录" }, { status: 401 });
     }
 
+    if (pathname.startsWith("/api/project-management/")) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: { code: "UNAUTHENTICATED", message: "请先登录" },
+        },
+        {
+          status: 401,
+          headers: { "Cache-Control": "no-store, max-age=0" },
+        },
+      );
+    }
+
     const loginUrl = new URL("/login", req.nextUrl);
     const returnPath = `${req.nextUrl.pathname}${req.nextUrl.search}`;
     loginUrl.searchParams.set("callbackUrl", returnPath);

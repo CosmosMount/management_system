@@ -1428,7 +1428,6 @@ async function createActivatedFixture(
       milestoneInput("阶段一", "完成阶段一", 1),
       milestoneInput("阶段二", "完成阶段二", 2),
     ],
-    plannedStartAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
     termination: terminationInput(5),
     idempotencyKey: `p5-segment-task-${randomUUID()}`,
   });

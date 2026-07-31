@@ -136,6 +136,7 @@ export type TaskWorkspace = {
     techGroup: string;
     status: TaskStatus;
     priority: TaskPriority;
+    relatedTaskId: string | null;
     currentPlanVersionId: string;
     activeMilestoneNodeId: string | null;
     revisionApprovalMode: string;
@@ -170,6 +171,7 @@ export type PlanVersionSummary = {
   baseVersionId: string | null;
   revisionNodeId: string | null;
   reason: string;
+  plannedStartAt: string | null;
   activatedAt: string | null;
   snapshotHash: string;
   createdAt: string;
@@ -180,6 +182,12 @@ export type PlanVersionSummary = {
 export type PlanVersionDiff = {
   fromPlanVersionId: string;
   toPlanVersionId: string;
+  planChanges: {
+    plannedStartAt: {
+      before: string | null;
+      after: string | null;
+    } | null;
+  };
   added: PlanNodeSummary[];
   removed: PlanNodeSummary[];
   moved: Array<{
@@ -340,6 +348,7 @@ export async function getTaskWorkspace({
       techGroup: task.techGroup,
       status: task.status,
       priority: task.priority,
+      relatedTaskId: task.relatedTaskId,
       currentPlanVersionId: task.currentPlanVersionId,
       activeMilestoneNodeId: task.activeMilestoneNodeId,
       revisionApprovalMode: task.revisionApprovalMode,
@@ -407,6 +416,7 @@ export async function listTaskPlanVersions({
     baseVersionId: string | null;
     revisionNodeId: string | null;
     reason: string;
+    plannedStartAt: string | null;
     activatedAt: string | null;
     createdAt: string;
   }>
@@ -426,12 +436,14 @@ export async function listTaskPlanVersions({
       baseVersionId: true,
       revisionNodeId: true,
       reason: true,
+      plannedStartAt: true,
       activatedAt: true,
       createdAt: true,
     },
   });
   return plans.map((plan) => ({
     ...plan,
+    plannedStartAt: toIso(plan.plannedStartAt),
     activatedAt: toIso(plan.activatedAt),
     createdAt: plan.createdAt.toISOString(),
   }));
@@ -467,6 +479,8 @@ export async function comparePlanVersions({
   }
   const fromNodes = serializePlanVersion(fromPlan).nodes;
   const toNodes = serializePlanVersion(toPlan).nodes;
+  const fromPlannedStartAt = toIso(fromPlan.plannedStartAt);
+  const toPlannedStartAt = toIso(toPlan.plannedStartAt);
   const fromById = new Map(fromNodes.map((node) => [node.nodeId, node]));
   const toById = new Map(toNodes.map((node) => [node.nodeId, node]));
   const added = toNodes.filter((node) => !fromById.has(node.nodeId));
@@ -492,6 +506,12 @@ export async function comparePlanVersions({
   return {
     fromPlanVersionId,
     toPlanVersionId,
+    planChanges: {
+      plannedStartAt:
+        fromPlannedStartAt === toPlannedStartAt
+          ? null
+          : { before: fromPlannedStartAt, after: toPlannedStartAt },
+    },
     added,
     removed,
     moved,
@@ -508,6 +528,7 @@ function serializePlanVersion(plan: PlanVersionWithNodes): PlanVersionSummary {
     baseVersionId: plan.baseVersionId,
     revisionNodeId: plan.revisionNodeId,
     reason: plan.reason,
+    plannedStartAt: toIso(plan.plannedStartAt),
     activatedAt: toIso(plan.activatedAt),
     snapshotHash: plan.snapshotHash,
     createdAt: plan.createdAt.toISOString(),

@@ -805,6 +805,7 @@ test.describe("project management P5 resource conflict services", () => {
       where: {
         personId: fixture.member.person.id,
         kind: "HIGH_PRIORITY_OVERLAP",
+        status: { not: "RESOLVED" },
       },
       select: { startAt: true, endAt: true },
     });
@@ -1798,6 +1799,9 @@ test.describe("project management P5 resource conflict services", () => {
     }
     const middlePerson = sortedPeople[1];
     if (!middlePerson) throw new Error("缺少中间扫描人员");
+    const middleConflictCountBefore = await prisma.resourceConflict.count({
+      where: { personId: middlePerson.person.id },
+    });
     const successfulPersonIds = sortedPeople
       .filter((person) => person.person.id !== middlePerson.person.id)
       .map((person) => person.person.id)
@@ -1913,7 +1917,7 @@ test.describe("project management P5 resource conflict services", () => {
         await prisma.resourceConflict.count({
           where: { personId: middlePerson.person.id },
         }),
-      ).toBe(0);
+      ).toBe(middleConflictCountBefore);
     } catch (error) {
       primaryError = error;
       hasPrimaryError = true;
@@ -3353,7 +3357,6 @@ async function createActivatedFixture(options: {
     ],
     plannedStartAt: new Date(Date.UTC(2026, 7, 1, 9, 0, 0)).toISOString(),
     milestones: [milestoneInput("阶段一", "完成阶段一", 1)],
-    plannedStartAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
     termination: terminationInput(4),
     idempotencyKey: `p5-conflict-task-${randomUUID()}`,
   });

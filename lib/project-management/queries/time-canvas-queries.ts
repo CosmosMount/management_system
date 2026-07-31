@@ -914,7 +914,12 @@ async function loadTaskAnchors(
     );
   }
   const tasks = await prisma.task.findMany({
-    where: { id: { in: candidates.map((task) => task.id) } },
+    where: {
+      AND: [
+        { id: { in: candidates.map((task) => task.id) } },
+        taskReadableWhere(actor),
+      ],
+    },
     select: anchorTaskSelect,
     orderBy: [{ title: "asc" }, { id: "asc" }],
   });

@@ -18,7 +18,9 @@ import {
   recipientsForPersonIdsTx,
 } from "@/lib/project-management/application/notification-utils";
 import { canFullyHandleConflict } from "@/lib/project-management/application/conflict-permissions";
+import { rescanConflictsForRangesTx } from "@/lib/project-management/application/conflict-service";
 import {
+  lockConflictPersonsTx,
   prepareConflictMutationTx,
   type ConflictMutationRange,
 } from "@/lib/project-management/application/conflict-lock-protocol";
@@ -132,6 +134,10 @@ export async function createWorkSegment(
 ): Promise<SegmentMutationResult> {
   const parsed = createWorkSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
+    await lockTaskNodeAssociationsTx(
+      tx,
+      parsed.taskId ? [parsed.taskId] : [],
+    );
     const conflictRanges = await prepareConflictMutationTx(tx, [
       segmentConflictRange(parsed),
     ]);
@@ -143,10 +149,6 @@ export async function createWorkSegment(
       taskId: parsed.taskId ?? null,
       nodeId: parsed.nodeId ?? null,
     });
-    await lockTaskNodeAssociationsTx(
-      tx,
-      parsed.taskId ? [parsed.taskId] : [],
-    );
     const created = await createWorkSegmentTx(tx, refreshedActor, parsed);
     await rescanSegmentConflictRangesTx(tx, conflictRanges);
     return {
@@ -162,6 +164,12 @@ export async function batchCreatePlannedSegments(
 ): Promise<BatchSegmentMutationResult> {
   const parsed = batchCreatePlannedSegmentsInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
+    await lockTaskNodeAssociationsTx(
+      tx,
+      parsed.segments.flatMap((segment) =>
+        segment.taskId ? [segment.taskId] : [],
+      ),
+    );
     const conflictRanges = await prepareConflictMutationTx(
       tx,
       parsed.segments.map(segmentConflictRange),
@@ -176,12 +184,6 @@ export async function batchCreatePlannedSegments(
         nodeId: segment.nodeId ?? null,
       });
     }
-    await lockTaskNodeAssociationsTx(
-      tx,
-      parsed.segments.flatMap((segment) =>
-        segment.taskId ? [segment.taskId] : [],
-      ),
-    );
     const created: SegmentForMutation[] = [];
     for (const segment of parsed.segments) {
       created.push(
@@ -205,14 +207,16 @@ export async function createActualSegment(
 ): Promise<SegmentMutationResult> {
   const parsed = createActualSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    const sourceRanges = await loadSegmentConflictRangesTx(
+    await lockSegmentNodeAssociationTasksTx(tx, {
+      segmentIds: parsed.sources.map((source) => source.plannedSegmentId),
+      prospectiveTaskIds: parsed.taskId ? [parsed.taskId] : [],
+    });
+    const conflictRanges = await prepareExistingSegmentConflictMutationTx(
       tx,
       parsed.sources.map((source) => source.plannedSegmentId),
+      () => [segmentConflictRange(parsed)],
+      [parsed.personId],
     );
-    const conflictRanges = await prepareConflictMutationTx(tx, [
-      segmentConflictRange(parsed),
-      ...sourceRanges,
-    ]);
     const refreshedActor = await refreshActorTx(tx, actor);
     await assertSegmentReferenceTx(tx, {
       actor: refreshedActor,
@@ -221,10 +225,6 @@ export async function createActualSegment(
       taskId: parsed.taskId ?? null,
       nodeId: parsed.nodeId ?? null,
     });
-    await lockTaskNodeAssociationsTx(
-      tx,
-      parsed.taskId ? [parsed.taskId] : [],
-    );
     const created = await createActualSegmentTx(tx, refreshedActor, parsed);
     await rescanSegmentConflictRangesTx(tx, conflictRanges);
     return {
@@ -240,18 +240,6 @@ export async function updateWorkSegment(
 ): Promise<SegmentMutationResult> {
   const parsed = updateWorkSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    const [existingRange] = await loadSegmentConflictRangesTx(tx, [
-      parsed.segmentId,
-    ]);
-    if (!existingRange) throw notFoundError();
-    const conflictRanges = await prepareConflictMutationTx(tx, [
-      existingRange,
-      {
-        personId: existingRange.personId,
-        startAt: parsed.startAt ?? existingRange.startAt,
-        endAt: parsed.endAt ?? existingRange.endAt,
-      },
-    ]);
     const refreshedActor = await refreshActorTx(tx, actor);
     const preflightSegment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentVisible(refreshedActor, preflightSegment);
@@ -275,6 +263,19 @@ export async function updateWorkSegment(
       segmentIds: [parsed.segmentId],
       prospectiveTaskIds: parsed.taskId ? [parsed.taskId] : [],
     });
+    const conflictRanges = await prepareExistingSegmentConflictMutationTx(
+      tx,
+      [parsed.segmentId],
+      (currentRanges) => {
+        const current = currentRanges[0];
+        if (!current) throw notFoundError();
+        return [{
+          personId: current.personId,
+          startAt: parsed.startAt ?? current.startAt,
+          endAt: parsed.endAt ?? current.endAt,
+        }];
+      },
+    );
     await lockWorkSegmentTx(tx, parsed.segmentId);
     const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentAssociationLocatorUnchanged(preflightSegment, segment);
@@ -390,22 +391,21 @@ export async function movePlannedSegments(
 ): Promise<BatchSegmentMutationResult> {
   const parsed = movePlannedSegmentsInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    const currentRanges = await loadSegmentConflictRangesTx(
+    const conflictRanges = await prepareExistingSegmentConflictMutationTx(
       tx,
       parsed.moves.map((move) => move.segmentId),
+      (currentRanges) => {
+        const personBySegmentId = new Map(
+          currentRanges.map((range) => [range.segmentId, range.personId]),
+        );
+        return parsed.moves.flatMap((move) => {
+          const personId = personBySegmentId.get(move.segmentId);
+          return personId
+            ? [{ personId, startAt: move.startAt, endAt: move.endAt }]
+            : [];
+        });
+      },
     );
-    const personBySegmentId = new Map(
-      currentRanges.map((range) => [range.segmentId, range.personId]),
-    );
-    const conflictRanges = await prepareConflictMutationTx(tx, [
-      ...currentRanges,
-      ...parsed.moves.flatMap((move) => {
-        const personId = personBySegmentId.get(move.segmentId);
-        return personId
-          ? [{ personId, startAt: move.startAt, endAt: move.endAt }]
-          : [];
-      }),
-    ]);
     const refreshedActor = await refreshActorTx(tx, actor);
     const result = await movePlannedSegmentsTx(tx, refreshedActor, parsed);
     await rescanSegmentConflictRangesTx(tx, conflictRanges);
@@ -529,11 +529,6 @@ export async function splitPlannedSegment(
 ): Promise<BatchSegmentMutationResult> {
   const parsed = splitPlannedSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    const [existingRange] = await loadSegmentConflictRangesTx(tx, [
-      parsed.segmentId,
-    ]);
-    if (!existingRange) throw notFoundError();
-    const conflictRanges = await prepareConflictMutationTx(tx, [existingRange]);
     const refreshedActor = await refreshActorTx(tx, actor);
     const preflightSegment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentVisible(refreshedActor, preflightSegment);
@@ -560,6 +555,10 @@ export async function splitPlannedSegment(
         part.taskId ? [part.taskId] : [],
       ),
     });
+    const conflictRanges = await prepareExistingSegmentConflictMutationTx(
+      tx,
+      [parsed.segmentId],
+    );
     await lockWorkSegmentTx(tx, parsed.segmentId);
     const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentAssociationLocatorUnchanged(preflightSegment, segment);
@@ -667,11 +666,6 @@ export async function mergePlannedSegments(
 ): Promise<SegmentMutationResult> {
   const parsed = mergePlannedSegmentsInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    const currentRanges = await loadSegmentConflictRangesTx(
-      tx,
-      parsed.segments.map((segment) => segment.segmentId),
-    );
-    const conflictRanges = await prepareConflictMutationTx(tx, currentRanges);
     const refreshedActor = await refreshActorTx(tx, actor);
     assertUniqueIds(
       parsed.segments.map((segment) => segment.segmentId),
@@ -688,6 +682,10 @@ export async function mergePlannedSegments(
     const associationLocks = await lockSegmentNodeAssociationTasksTx(tx, {
       segmentIds: parsed.segments.map((segment) => segment.segmentId),
     });
+    const conflictRanges = await prepareExistingSegmentConflictMutationTx(
+      tx,
+      parsed.segments.map((segment) => segment.segmentId),
+    );
     const segments = await lockAndLoadSegmentsTx(
       tx,
       parsed.segments.map((segment) => segment.segmentId),
@@ -795,11 +793,10 @@ export async function cancelPlannedSegment(
 ): Promise<SegmentMutationResult> {
   const parsed = cancelPlannedSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    const [existingRange] = await loadSegmentConflictRangesTx(tx, [
-      parsed.segmentId,
-    ]);
-    if (!existingRange) throw notFoundError();
-    const conflictRanges = await prepareConflictMutationTx(tx, [existingRange]);
+    const conflictRanges = await prepareExistingSegmentConflictMutationTx(
+      tx,
+      [parsed.segmentId],
+    );
     const refreshedActor = await refreshActorTx(tx, actor);
     await lockWorkSegmentTx(tx, parsed.segmentId);
     const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
@@ -838,18 +835,6 @@ export async function confirmPlannedSegment(
 ): Promise<SegmentMutationResult & { actualSegment: WorkSegmentDto; createdActual: boolean }> {
   const parsed = confirmPlannedSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    const [existingRange] = await loadSegmentConflictRangesTx(tx, [
-      parsed.segmentId,
-    ]);
-    if (!existingRange) throw notFoundError();
-    const conflictRanges = await prepareConflictMutationTx(tx, [
-      existingRange,
-      {
-        personId: existingRange.personId,
-        startAt: parsed.actual.startAt ?? existingRange.startAt,
-        endAt: parsed.actual.endAt ?? existingRange.endAt,
-      },
-    ]);
     const refreshedActor = await refreshActorTx(tx, actor);
     const preflightSegment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentVisible(refreshedActor, preflightSegment);
@@ -874,6 +859,19 @@ export async function confirmPlannedSegment(
       segmentIds: [parsed.segmentId],
       prospectiveTaskIds: parsed.actual.taskId ? [parsed.actual.taskId] : [],
     });
+    const conflictRanges = await prepareExistingSegmentConflictMutationTx(
+      tx,
+      [parsed.segmentId],
+      (currentRanges) => {
+        const current = currentRanges[0];
+        if (!current) throw notFoundError();
+        return [{
+          personId: current.personId,
+          startAt: parsed.actual.startAt ?? current.startAt,
+          endAt: parsed.actual.endAt ?? current.endAt,
+        }];
+      },
+    );
     await lockWorkSegmentTx(tx, parsed.segmentId);
     const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentAssociationLocatorUnchanged(preflightSegment, segment);
@@ -936,18 +934,6 @@ export async function partiallyConfirmSegment(
 > {
   const parsed = partiallyConfirmSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    const [existingRange] = await loadSegmentConflictRangesTx(tx, [
-      parsed.segmentId,
-    ]);
-    if (!existingRange) throw notFoundError();
-    const conflictRanges = await prepareConflictMutationTx(tx, [
-      existingRange,
-      {
-        personId: existingRange.personId,
-        startAt: parsed.actual.startAt ?? parsed.coveredStartAt,
-        endAt: parsed.actual.endAt ?? parsed.coveredEndAt,
-      },
-    ]);
     const refreshedActor = await refreshActorTx(tx, actor);
     const preflightSegment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentVisible(refreshedActor, preflightSegment);
@@ -972,6 +958,19 @@ export async function partiallyConfirmSegment(
       segmentIds: [parsed.segmentId],
       prospectiveTaskIds: parsed.actual.taskId ? [parsed.actual.taskId] : [],
     });
+    const conflictRanges = await prepareExistingSegmentConflictMutationTx(
+      tx,
+      [parsed.segmentId],
+      (currentRanges) => {
+        const current = currentRanges[0];
+        if (!current) throw notFoundError();
+        return [{
+          personId: current.personId,
+          startAt: parsed.actual.startAt ?? parsed.coveredStartAt,
+          endAt: parsed.actual.endAt ?? parsed.coveredEndAt,
+        }];
+      },
+    );
     await lockWorkSegmentTx(tx, parsed.segmentId);
     const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentAssociationLocatorUnchanged(preflightSegment, segment);
@@ -1027,11 +1026,6 @@ export async function relinkPlannedSegment(
 ): Promise<SegmentMutationResult> {
   const parsed = relinkPlannedSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    const [existingRange] = await loadSegmentConflictRangesTx(tx, [
-      parsed.segmentId,
-    ]);
-    if (!existingRange) throw notFoundError();
-    const conflictRanges = await prepareConflictMutationTx(tx, [existingRange]);
     const refreshedActor = await refreshActorTx(tx, actor);
     const preflightSegment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentVisible(refreshedActor, preflightSegment);
@@ -1061,6 +1055,10 @@ export async function relinkPlannedSegment(
       segmentIds: [parsed.segmentId],
       prospectiveTaskIds: parsed.taskId ? [parsed.taskId] : [],
     });
+    const conflictRanges = await prepareExistingSegmentConflictMutationTx(
+      tx,
+      [parsed.segmentId],
+    );
     await lockWorkSegmentTx(tx, parsed.segmentId);
     const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentAssociationLocatorUnchanged(preflightSegment, segment);
@@ -1131,11 +1129,10 @@ export async function softDeleteActualSegment(
 ): Promise<SegmentMutationResult> {
   const parsed = softDeleteActualSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    const [existingRange] = await loadSegmentConflictRangesTx(tx, [
-      parsed.segmentId,
-    ]);
-    if (!existingRange) throw notFoundError();
-    const conflictRanges = await prepareConflictMutationTx(tx, [existingRange]);
+    const conflictRanges = await prepareExistingSegmentConflictMutationTx(
+      tx,
+      [parsed.segmentId],
+    );
     const refreshedActor = await refreshActorTx(tx, actor);
     await lockWorkSegmentTx(tx, parsed.segmentId);
     const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
@@ -2181,16 +2178,44 @@ async function loadSegmentConflictRangesTx(
   }));
 }
 
+async function prepareExistingSegmentConflictMutationTx(
+  tx: PrismaTx,
+  segmentIds: string[],
+  additionalRanges: (
+    currentRanges: SegmentConflictRange[],
+  ) => ConflictMutationRange[] = () => [],
+  additionalPersonIds: string[] = [],
+): Promise<ConflictMutationRange[]> {
+  const uniqueSegmentIds = [...new Set(segmentIds)];
+  const locators = uniqueSegmentIds.length
+    ? await tx.workSegment.findMany({
+        where: { id: { in: uniqueSegmentIds } },
+        select: { id: true, personId: true },
+        orderBy: { id: "asc" },
+      })
+    : [];
+  if (locators.length !== uniqueSegmentIds.length) throw notFoundError();
+
+  // Person advisory locks serialize all time-range writers. Reloading the
+  // ranges only after those locks prevents a concurrent move from making the
+  // subsequent ResourceConflict locks and rescan cover a stale interval.
+  await lockConflictPersonsTx(tx, [
+    ...locators.map((locator) => locator.personId),
+    ...additionalPersonIds,
+  ]);
+  const currentRanges = await loadSegmentConflictRangesTx(tx, uniqueSegmentIds);
+  if (currentRanges.length !== uniqueSegmentIds.length) throw notFoundError();
+  return prepareConflictMutationTx(tx, [
+    ...currentRanges,
+    ...additionalRanges(currentRanges),
+  ]);
+}
+
 async function rescanSegmentConflictRangesTx(
   tx: PrismaTx,
   ranges: ConflictMutationRange[],
 ) {
   if (ranges.length === 0) return;
-  // Dynamic loading avoids a module-initialization cycle: conflict apply reuses
-  // the Segment move primitive, while Segment mutations reuse the scanner.
-  const { rescanConflictsForRangesTx } = await import(
-    "@/lib/project-management/application/conflict-service"
-  );
   await rescanConflictsForRangesTx(tx, ranges, { locksHeld: true });
 }
 

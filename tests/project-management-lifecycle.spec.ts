@@ -129,13 +129,25 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         createdByAccountId: admin.account.id,
       },
     });
-    const draftInput = taskDraftInput({
-      ownerPersonId: owner.person.id,
-      memberPersonId: member.person.id,
-      reviewerPersonId: reviewer.person.id,
-      tagIds: [tag.id],
-      idempotencyKey: `task-draft-${randomUUID()}`,
-    });
+    const related = await createTaskDraft(
+      actor(admin),
+      taskDraftInput({
+        ownerPersonId: owner.person.id,
+        memberPersonId: member.person.id,
+        reviewerPersonId: reviewer.person.id,
+        idempotencyKey: `related-task-${randomUUID()}`,
+      }),
+    );
+    const draftInput = {
+      ...taskDraftInput({
+        ownerPersonId: owner.person.id,
+        memberPersonId: member.person.id,
+        reviewerPersonId: reviewer.person.id,
+        tagIds: [tag.id],
+        idempotencyKey: `task-draft-${randomUUID()}`,
+      }),
+      relatedTaskId: related.taskId,
+    };
 
     await expectServiceError(
       createTaskDraft(actor(outsider), draftInput),
@@ -229,7 +241,48 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       taskId: created.taskId,
     });
     expect(workspace.task.title).toBe(draftInput.title);
+    expect(workspace.task.relatedTaskId).toBe(related.taskId);
+    expect(workspace.currentPlan.plannedStartAt).toBe(draftInput.plannedStartAt);
     expect(workspace.currentPlan.nodes).toHaveLength(3);
+    const planSummary = await getPlanVersion({
+      actor: actor(owner),
+      planVersionId: created.currentPlanVersionId,
+    });
+    expect(planSummary.plannedStartAt).toBe(draftInput.plannedStartAt);
+    const planHistory = await listTaskPlanVersions({
+      actor: actor(owner),
+      taskId: created.taskId,
+    });
+    expect(planHistory[0]?.plannedStartAt).toBe(draftInput.plannedStartAt);
+
+    await prisma.taskPlanVersion.update({
+      where: { id: created.currentPlanVersionId },
+      data: { plannedStartAt: null },
+    });
+    expect(
+      (
+        await getTaskWorkspace({
+          actor: actor(owner),
+          taskId: created.taskId,
+        })
+      ).currentPlan.plannedStartAt,
+    ).toBeNull();
+    expect(
+      (
+        await getPlanVersion({
+          actor: actor(owner),
+          planVersionId: created.currentPlanVersionId,
+        })
+      ).plannedStartAt,
+    ).toBeNull();
+    expect(
+      (
+        await listTaskPlanVersions({
+          actor: actor(owner),
+          taskId: created.taskId,
+        })
+      )[0]?.plannedStartAt,
+    ).toBeNull();
     await expectServiceError(
       getTaskWorkspace({ actor: actor(outsider), taskId: created.taskId }),
       "NOT_FOUND",
@@ -540,6 +593,18 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         createdByAccountId: fixture.owner.account.id,
       },
     });
+    const overlappingPlanned = await prisma.workSegment.create({
+      data: {
+        personId: fixture.member.person.id,
+        type: "PLANNED",
+        status: "PLANNED",
+        startAt: new Date("2026-08-01T02:00:00.000Z"),
+        endAt: new Date("2026-08-01T04:00:00.000Z"),
+        content: "其他计划投入",
+        allocation: new Prisma.Decimal(40),
+        createdByAccountId: fixture.owner.account.id,
+      },
+    });
     const confirmedPlanned = await prisma.workSegment.create({
       data: {
         personId: fixture.member.person.id,
@@ -579,7 +644,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         milestoneInput("新的当前 Milestone", "完成替代目标", 5),
       ],
       plannedStartAt: new Date(
-        Date.UTC(2026, 6, 31, 10, 0, 0),
+        Date.UTC(2026, 6, 31, 11, 0, 0),
       ).toISOString(),
       termination: terminationInput(9),
       idempotencyKey: `revision-apply-${randomUUID()}`,
@@ -622,6 +687,20 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       select: { associationNeedsReview: true },
     });
     expect(updatedSegment.associationNeedsReview).toBe(true);
+    const revisionConflict = await prisma.resourceConflict.findFirstOrThrow({
+      where: {
+        personId: fixture.member.person.id,
+        kind: "REVISION_OVERLAP",
+        status: "OPEN",
+        segments: {
+          every: { segmentId: { in: [planned.id, overlappingPlanned.id] } },
+        },
+      },
+      include: { segments: { select: { segmentId: true } } },
+    });
+    expect(
+      revisionConflict.segments.map((entry) => entry.segmentId).sort(),
+    ).toEqual([planned.id, overlappingPlanned.id].sort());
     await prisma.workSegmentChange.findFirstOrThrow({
       where: {
         segmentId: planned.id,
@@ -710,6 +789,10 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       toPlanVersionId: applied.currentPlanVersionId,
     });
     expect(diff.added.length).toBeGreaterThan(0);
+    expect(diff.planChanges.plannedStartAt).toEqual({
+      before: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
+      after: new Date(Date.UTC(2026, 6, 31, 11, 0, 0)).toISOString(),
+    });
     const planHistory = await listTaskPlanVersions({
       actor: actor(fixture.owner),
       taskId: fixture.taskId,

@@ -66,6 +66,8 @@ test.describe("S2 canvas query security", () => {
     const unauthenticated = await request.post(endpoint, {
       data: { operation: "listTagOptions", input: {} },
     });
+    expect(unauthenticated.status()).toBe(401);
+    expect(unauthenticated.headers()["cache-control"]).toContain("no-store");
     expect(await unauthenticated.json()).toMatchObject({
       ok: false,
       error: { code: "UNAUTHENTICATED" },
@@ -260,9 +262,11 @@ test.describe("S2 canvas query security", () => {
     expect(await (await deniedActionResponse).text()).toContain(
       "ASSOCIATION_INVALID",
     );
-    await expect(page.getByRole("alert")).toContainText(
-      "当前 Task 状态不允许创建或重关联 Segment",
-    );
+    await expect(
+      page.getByText("当前 Task 状态不允许创建或重关联 Segment", {
+        exact: true,
+      }),
+    ).toBeVisible();
     expect(
       await prisma.workSegment.count({
         where: { taskId: terminalTask.taskId },
@@ -403,19 +407,36 @@ test.describe("S2 canvas query security", () => {
       visibleTask.taskId,
     ]);
     expect(taskOptions.items[0]?.permission).toEqual({ canView: true });
-    const tags = await listTagOptions({
-      actor: ownerActor,
-      input: { includeArchived: true },
-    });
-    expect(tags.items.map((tag) => tag.id)).toEqual(
+    const visibleTagIds: string[] = [];
+    let tagCursor: string | undefined;
+    do {
+      const tagPage = await listTagOptions({
+        actor: ownerActor,
+        input: { includeArchived: true, limit: 50, cursor: tagCursor },
+      });
+      visibleTagIds.push(...tagPage.items.map((tag) => tag.id));
+      tagCursor = tagPage.nextCursor ?? undefined;
+    } while (tagCursor);
+    expect(visibleTagIds).toEqual(
       expect.arrayContaining([activeTag.id, ownArchivedTag.id]),
     );
-    expect(tags.items.map((tag) => tag.id)).not.toContain(otherArchivedTag.id);
-    const adminTags = await listTagOptions({
-      actor: adminActor,
-      input: { includeArchived: true },
-    });
-    expect(adminTags.items.map((tag) => tag.id)).toContain(otherArchivedTag.id);
+    expect(visibleTagIds).not.toContain(otherArchivedTag.id);
+
+    const adminTagIds: string[] = [];
+    let adminTagCursor: string | undefined;
+    do {
+      const tagPage = await listTagOptions({
+        actor: adminActor,
+        input: {
+          includeArchived: true,
+          limit: 50,
+          cursor: adminTagCursor,
+        },
+      });
+      adminTagIds.push(...tagPage.items.map((tag) => tag.id));
+      adminTagCursor = tagPage.nextCursor ?? undefined;
+    } while (adminTagCursor);
+    expect(adminTagIds).toContain(otherArchivedTag.id);
   });
 
   test("People purposes enforce directory authorization, anti-enumeration and safe account availability", async () => {
@@ -1147,6 +1168,10 @@ test.describe("S2 canvas query security", () => {
     ]);
     const teamAdminActor = actor(teamAdmin, [
       scopedRole("TEAM_ADMINISTRATOR", "英雄", "电控"),
+    ]);
+    await Promise.all([
+      grantScopedRole(resourceManager.account.id, "RESOURCE_MANAGER", "英雄", "电控"),
+      grantScopedRole(teamAdmin.account.id, "TEAM_ADMINISTRATOR", "英雄", "电控"),
     ]);
     const activeTask = await createTask({
       ownerAccountId: owner.account.id,
@@ -2373,8 +2398,8 @@ test.describe("S2 canvas query security", () => {
       actor: actor(owner),
       input: {
         personId: owner.person.id,
-        startAt: atHour(9),
-        endAt: atHour(10),
+        startAt: atHour(9).toISOString(),
+        endAt: atHour(10).toISOString(),
         allocation: 0.01,
         associationIntent: "KEEP",
       },
@@ -2394,8 +2419,8 @@ test.describe("S2 canvas query security", () => {
         actor: actor(owner),
         input: {
           personId: owner.person.id,
-          startAt: atHour(9),
-          endAt: atHour(10),
+          startAt: atHour(9).toISOString(),
+          endAt: atHour(10).toISOString(),
           allocation: 0.01,
           associationIntent: "KEEP",
         },
@@ -2550,6 +2575,12 @@ test.describe("S2 canvas query security", () => {
     const managerActor = actor(manager, [
       scopedRole("RESOURCE_MANAGER", "英雄", "电控"),
     ]);
+    await grantScopedRole(
+      manager.account.id,
+      "RESOURCE_MANAGER",
+      "英雄",
+      "电控",
+    );
     const taskA = await createTask({
       ownerAccountId: visibleOwner.account.id,
       title: "Preview 可见 Task",
@@ -3653,6 +3684,23 @@ function scopedRole(
   techGroup: string,
 ): ProjectManagementSystemRoleRecord {
   return { role, team, techGroup };
+}
+
+async function grantScopedRole(
+  accountId: string,
+  role: "TEAM_ADMINISTRATOR" | "RESOURCE_MANAGER",
+  team: string,
+  techGroup: string,
+) {
+  await prisma.systemRoleAssignment.create({
+    data: {
+      accountId,
+      role,
+      team,
+      techGroup,
+      grantedByAccountId: accountId,
+    },
+  });
 }
 
 function canvasInput(

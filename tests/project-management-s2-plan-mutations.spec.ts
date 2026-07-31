@@ -1612,7 +1612,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
         expect(segment.nodeId).toBe(removed.nodeId);
         expect(await prisma.taskNode.findUnique({ where: { id: removed.nodeId } })).not.toBeNull();
       } else {
-        expect(codes).toEqual(["OK", "VALIDATION_ERROR"]);
+        expect(codes).toEqual(["ASSOCIATION_INVALID", "OK"]);
         expect(
           await prisma.workSegment.count({
             where: { taskId: fixture.taskId, content: `association writer ${first}` },
@@ -1654,11 +1654,18 @@ test.describe("project management S2 plan and Task mutation services", () => {
       type: "PLANNED",
     });
     await prisma.workSegment.update({
+      where: { id: updateBase.segment.id },
+      data: { associationNeedsReview: true },
+    });
+    await prisma.workSegment.update({
       where: { id: relinkBase.segment.id },
       data: { associationNeedsReview: true },
     });
     const reloadedRelink = await prisma.workSegment.findUniqueOrThrow({
       where: { id: relinkBase.segment.id },
+    });
+    const reloadedUpdate = await prisma.workSegment.findUniqueOrThrow({
+      where: { id: updateBase.segment.id },
     });
 
     const cases: Array<{
@@ -1705,8 +1712,9 @@ test.describe("project management S2 plan and Task mutation services", () => {
         name: "update",
         invoke: (taskId, nodeId) =>
           updateWorkSegment(actor(operator), {
-            segmentId: updateBase.segment.id,
-            expectedUpdatedAt: updateBase.segment.updatedAt,
+            segmentId: reloadedUpdate.id,
+            expectedUpdatedAt: reloadedUpdate.updatedAt,
+            associationIntent: "RELINK",
             taskId,
             nodeId,
             reason: "oracle update",

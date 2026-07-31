@@ -318,6 +318,42 @@ test("S2 contract values are a browser-safe leaf aligned with Prisma enums", asy
   expect(segmentValidationConflictKindValues).toBe(resourceConflictKindValues);
 });
 
+test("S2 Task mutations expose session-bound Server Actions and anchor loads recheck authorization", async () => {
+  const taskActionsSource = await readFile(
+    path.join(process.cwd(), "app/actions/project-management/tasks.ts"),
+    "utf8",
+  );
+  for (const actionName of [
+    "updateTaskDraftMetadata",
+    "replaceTaskDraftMembers",
+    "replaceTaskDraftPlan",
+    "updateTaskMetadata",
+    "replaceTaskMembers",
+    "replaceTaskTags",
+  ]) {
+    expect(taskActionsSource).toMatch(
+      new RegExp(`export async function ${actionName}\\(\\s*input: unknown`),
+    );
+  }
+  expect(taskActionsSource).toContain("getCurrentProjectManagementActor()");
+  expect(taskActionsSource).toContain("runProjectManagementAction({");
+  expect(taskActionsSource).toContain("revalidateProjectManagement(taskId)");
+
+  const canvasQuerySource = await readFile(
+    path.join(
+      process.cwd(),
+      "lib/project-management/queries/time-canvas-queries.ts",
+    ),
+    "utf8",
+  );
+  const anchorLoaderSource = canvasQuerySource.slice(
+    canvasQuerySource.indexOf("async function loadTaskAnchors"),
+    canvasQuerySource.indexOf("function toTaskAnchorDto"),
+  );
+  expect(anchorLoaderSource).not.toBe("");
+  expect(anchorLoaderSource.match(/taskReadableWhere\(actor\)/g)).toHaveLength(2);
+});
+
 test("S2 plan and canvas validations enforce absolute chronology, identities and limits", () => {
   const ownerPersonId = randomUUID();
   const baseDraft = {
