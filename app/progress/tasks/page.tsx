@@ -1,12 +1,15 @@
 import { PageCommandBar } from "@/components/project-management/shell/page-command-bar";
 import { TaskList } from "@/components/project-management/task-list";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   taskPriorityLabels,
   taskStatusLabels,
 } from "@/lib/project-management/labels";
 import { listTasks } from "@/lib/project-management/queries/task-queries";
+import { routes } from "@/lib/routes";
+import { cn } from "@/lib/utils";
+import Link from "next/link";
 import { getProgressActorOrRedirect } from "../_auth";
 
 const statusValues = [
@@ -52,6 +55,11 @@ export default async function ProgressTasksPage({
       <PageCommandBar
         title="全部 Task"
         description="按状态、优先级和关键词查看当前可见 Task。"
+        actions={
+          <Link href={routes.progress.taskNew} className={cn(buttonVariants())}>
+            新建 Task
+          </Link>
+        }
       />
       <div className="mx-auto flex w-full min-w-0 max-w-[96rem] flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
           <form className="grid gap-3 rounded-lg border border-border bg-card p-4 md:grid-cols-[1fr_160px_160px_auto_auto]">

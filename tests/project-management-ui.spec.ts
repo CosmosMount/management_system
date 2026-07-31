@@ -37,6 +37,361 @@ test.describe("project management P4/P6 UI integration", () => {
     );
   });
 
+  test("Task Composer restores a scoped local draft and creates exactly one Task on desktop and mobile", async ({
+    context,
+    page,
+    baseURL,
+  }, testInfo) => {
+    test.setTimeout(90_000);
+    const creator = await createAccountPerson("S5 Composer Creator");
+    await grantRole(creator.account.id, "TEAM_ADMINISTRATOR", {
+      team: "英雄",
+      techGroup: "电控",
+    });
+    await loginAsTestUser(context, baseURL, {
+      openId: creator.openId,
+      name: creator.person.displayName,
+    });
+    const title = `S5 Composer ${randomUUID()}`;
+
+    await page.goto("/progress/tasks/new?start=2026-09-01");
+    await expect(page.getByRole("heading", { name: "新建 Task" })).toBeVisible();
+    await expect(page.getByTestId("task-composer")).toBeVisible();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
+      ),
+    ).toBe(true);
+    await expect(page.getByRole("checkbox", { name: /允许自审/ })).toBeDisabled();
+    await page.getByLabel("Task 名称").fill(title);
+    await page.waitForTimeout(900);
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          Object.keys(window.localStorage).some((key) => key.startsWith("task-draft:")),
+        ),
+      )
+      .toBe(true);
+
+    await page.reload();
+    await expect(page.getByText(/检测到 .* 保存的未完成草稿/)).toBeVisible();
+    await page.getByRole("button", { name: "恢复草稿" }).click();
+    await expect(page.getByLabel("Task 名称")).toHaveValue(title);
+
+    await page
+      .getByRole("button", { name: `移除 ${creator.person.displayName} 负责人` })
+      .click();
+    await page.getByRole("button", { name: /^校验/ }).click();
+    await expect(page.getByText("必须且只能有一名负责人。")).toBeVisible();
+    await page.getByLabel("成员人员").selectOption(creator.person.id);
+    await page.getByLabel("成员角色").selectOption("OWNER");
+    await page.getByRole("button", { name: "添加", exact: true }).click();
+
+    if (testInfo.project.name === "desktop") {
+      await page.getByRole("application", { name: "Task 计划时间轴" }).press("m");
+      await expect(page.getByTestId("task-composer-milestone-count")).toHaveText("2/200");
+      await page.getByLabel("预期完成时间").fill("2026-09-08T09:00");
+      await page.getByRole("button", { name: "同时间前移" }).click();
+      await expect(page.getByRole("heading", { name: "Milestone #1" })).toBeVisible();
+      await page.getByLabel("预期完成时间").fill("2026-09-08T10:00");
+      await expect(page.getByRole("button", { name: "同时间前移" })).toBeDisabled();
+      await page.getByRole("button", { name: "删除", exact: true }).click();
+      await expect(page.getByTestId("task-composer-milestone-count")).toHaveText("1/200");
+    }
+
+    await page.getByLabel("目标").fill("完成 S5 Composer 主流程");
+    await page
+      .getByLabel("完成条件")
+      .fill("创建页、权限、幂等和数据库断言均通过");
+    await page
+      .getByLabel("验收要求")
+      .fill("由 Playwright 同时验证 Desktop 与 Pixel 5");
+    await page.getByRole("button", { name: /^Termination/ }).click();
+    await page
+      .getByLabel("Task 整体预期结果")
+      .fill("Task 草稿创建完成且不包含初始 Segment");
+    await page.getByLabel("计划结束时间").fill("2026-09-07T18:00");
+    await page.getByRole("button", { name: /^校验/ }).click();
+    await expect(
+      page.getByText("Termination 不得早于最后一个 Milestone。"),
+    ).toBeVisible();
+    await page.getByLabel("计划结束时间").fill("2026-09-16T18:00");
+    await page.getByRole("button", { name: /^校验/ }).click();
+    await expect(page.getByText("计划校验通过，可以创建 Task 草稿。")).toBeVisible();
+
+    await page.waitForTimeout(900);
+    await page.evaluate(() => {
+      const key = Object.keys(window.localStorage).find((candidate) =>
+        candidate.startsWith("task-draft:"),
+      );
+      if (!key) throw new Error("未找到 S5 本地草稿 key");
+      const envelope = JSON.parse(window.localStorage.getItem(key) ?? "null") as {
+        task: {
+          milestones: Array<Record<string, unknown>>;
+          selectedEntityId: string | null;
+        };
+      };
+      const first = envelope.task.milestones[0];
+      if (!first) throw new Error("本地草稿缺少 Milestone");
+      envelope.task.milestones = Array.from({ length: 200 }, (_, index) => ({
+        ...first,
+        id: `draft-node-${crypto.randomUUID()}`,
+        goal: `S5 批量 Milestone ${index + 1}`,
+      }));
+      envelope.task.selectedEntityId = String(envelope.task.milestones[0]?.id ?? "");
+      window.localStorage.setItem(key, JSON.stringify(envelope));
+    });
+    await page.reload();
+    await page.getByRole("button", { name: "恢复草稿" }).click();
+    await expect(page.getByTestId("task-composer-milestone-count")).toHaveText("200/200");
+    await page.getByRole("button", { name: /^校验/ }).click();
+    await expect(page.getByText("计划校验通过，可以创建 Task 草稿。")).toBeVisible();
+
+    let aborted = false;
+    await page.route("**/progress/tasks/new?*", async (route) => {
+      if (route.request().method() === "POST" && !aborted) {
+        aborted = true;
+        await route.fetch();
+        await route.abort("failed");
+        return;
+      }
+      await route.continue();
+    });
+    await page.getByRole("button", { name: "创建 Task 草稿" }).click();
+    await expect(page.getByText(/网络或服务暂时不可用/)).toBeVisible();
+    expect(await prisma.task.count({ where: { title } })).toBe(1);
+    await page.unroute("**/progress/tasks/new?*");
+    await page.getByRole("button", { name: "创建 Task 草稿" }).click();
+    await expect(page.getByRole("heading", { name: title })).toBeVisible();
+    await expectHealthyPage(page);
+    const task = await prisma.task.findFirstOrThrow({
+      where: { title },
+      include: {
+        members: { where: { removedAt: null } },
+        currentPlanVersion: { include: { nodes: true } },
+        workSegments: { where: { deletedAt: null } },
+      },
+    });
+    expect(task.status).toBe("DRAFT");
+    expect(task.members).toEqual([
+      expect.objectContaining({ personId: creator.person.id, role: "OWNER" }),
+    ]);
+    expect(task.currentPlanVersion.plannedStartAt).not.toBeNull();
+    expect(task.currentPlanVersion.nodes).toHaveLength(201);
+    expect(task.workSegments).toHaveLength(0);
+    expect(await prisma.task.count({ where: { title } })).toBe(1);
+    expect(
+      await page.evaluate(() =>
+        Object.keys(window.localStorage).some((key) => key.startsWith("task-draft:")),
+      ),
+    ).toBe(false);
+  });
+
+  test("Task Composer does not expose a writable form without a create scope", async ({
+    context,
+    page,
+    baseURL,
+  }) => {
+    const outsider = await createAccountPerson("S5 Composer Outsider");
+    await loginAsTestUser(context, baseURL, {
+      openId: outsider.openId,
+      name: outsider.person.displayName,
+    });
+    await page.goto("/progress/tasks");
+    await page.getByRole("link", { name: "新建 Task" }).click();
+    await expect(
+      page.getByText(/当前账号没有可创建 Task 的组织范围/),
+    ).toBeVisible();
+    await expect(page.getByTestId("task-composer")).toHaveCount(0);
+    await expectHealthyPage(page);
+  });
+
+  test("Task Composer isolates local drafts, preserves incompatible data and guards browser history", async ({
+    context,
+    page,
+    baseURL,
+  }) => {
+    const creatorA = await createAccountPerson("S5 Draft Scope A");
+    const creatorB = await createAccountPerson("S5 Draft Scope B");
+    const hiddenCreator = await createAccountPerson("S5 Hidden Task Creator");
+    await grantRole(creatorA.account.id, "TEAM_ADMINISTRATOR", {
+      team: "英雄",
+      techGroup: "电控",
+    });
+    await grantRole(creatorB.account.id, "TEAM_ADMINISTRATOR", {
+      team: "英雄",
+      techGroup: "电控",
+    });
+    await grantRole(hiddenCreator.account.id, "TEAM_ADMINISTRATOR", {
+      team: "工程",
+      techGroup: "机械",
+    });
+    const hiddenTitle = `S5 Hidden Related ${randomUUID()}`;
+    const hiddenTask = await createTaskDraft(actor(hiddenCreator), {
+      title: hiddenTitle,
+      description: "不可枚举的关联 Task",
+      team: "工程",
+      techGroup: "机械",
+      members: [{ personId: hiddenCreator.person.id, role: "OWNER" }],
+      plannedStartAt: "2026-09-01T01:00:00.000Z",
+      milestones: [
+        {
+          goal: "隐藏阶段",
+          completionCriteria: "隐藏完成条件",
+          expectedCompletedAt: "2026-09-02T10:00:00.000Z",
+          reviewRequirements: "隐藏验收要求",
+          businessDescription: "",
+        },
+      ],
+      termination: {
+        plannedOutcomeCriteria: "隐藏结束条件",
+        plannedAt: "2026-09-04T10:00:00.000Z",
+        businessDescription: "",
+      },
+      idempotencyKey: `s5-hidden-${randomUUID()}`,
+    });
+    await loginAsTestUser(context, baseURL, {
+      openId: creatorA.openId,
+      name: creatorA.person.displayName,
+    });
+
+    await page.goto("/progress/tasks");
+    await page.getByRole("link", { name: "新建 Task" }).click();
+    await expect(page.locator("option", { hasText: hiddenTitle })).toHaveCount(0);
+    const forgedTitle = `S5 forged related ${randomUUID()}`;
+    await page.getByLabel("Task 名称").fill(forgedTitle);
+    await page.getByLabel("目标").fill("伪造关联目标");
+    await page.getByLabel("完成条件").fill("服务端拒绝隐藏关联");
+    await page.getByLabel("验收要求").fill("不得通过本地草稿绕过可见性");
+    await page.getByRole("button", { name: /^Termination/ }).click();
+    await page.getByLabel("Task 整体预期结果").fill("隐藏关联写入被拒绝");
+    await page.waitForTimeout(900);
+    await page.evaluate(({ taskId, title }) => {
+      const key = Object.keys(window.localStorage).find((candidate) =>
+        candidate.startsWith("task-draft:"),
+      );
+      if (!key) throw new Error("未找到待伪造的本地草稿");
+      const envelope = JSON.parse(window.localStorage.getItem(key) ?? "null") as {
+        task: { title: string; relatedTaskId: string | null };
+      };
+      envelope.task.title = title;
+      envelope.task.relatedTaskId = taskId;
+      window.localStorage.setItem(key, JSON.stringify(envelope));
+    }, { taskId: hiddenTask.taskId, title: forgedTitle });
+    await page.reload();
+    await page.getByRole("button", { name: "恢复草稿" }).click();
+    await page.getByRole("button", { name: "创建 Task 草稿" }).click();
+    await expect(page.getByText(/对象不存在|无权/)).toBeVisible();
+    expect(await prisma.task.count({ where: { title: forgedTitle } })).toBe(0);
+    await page.getByLabel("关联 Task", { exact: true }).selectOption("");
+    await page.getByLabel("Task 名称").fill("S5 Account A local draft");
+    await page.waitForTimeout(900);
+    const localKey = await page.evaluate(() => {
+      const key = Object.keys(window.localStorage).find((candidate) =>
+        candidate.startsWith("task-draft:"),
+      );
+      if (!key) throw new Error("未找到本地草稿 key");
+      window.localStorage.setItem(
+        "task-draft:other-deployment:other-account:v1",
+        window.localStorage.getItem(key) ?? "",
+      );
+      return key;
+    });
+
+    await page.goBack();
+    await expect(page.getByRole("dialog", { name: "离开 Task Composer？" })).toBeVisible();
+    await page.getByRole("button", { name: "继续编辑" }).click();
+    await expect(page.getByTestId("task-composer")).toBeVisible();
+
+    await page.evaluate((key) => {
+      const envelope = JSON.parse(window.localStorage.getItem(key) ?? "null") as {
+        task: { milestones: Array<{ id: string }> };
+      };
+      envelope.task.milestones[1] = {
+        ...envelope.task.milestones[0]!,
+      };
+      window.localStorage.setItem(key, JSON.stringify(envelope));
+    }, localKey);
+    await page.reload();
+    await expect(page.getByText(/草稿版本、结构或字段不兼容/)).toBeVisible();
+    const downloadPromise = page.waitForEvent("download");
+    await page.getByRole("button", { name: "导出原始草稿" }).click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toMatch(/^task-composer-unreadable-.*\.json$/);
+    await page.getByRole("button", { name: "安全放弃" }).click();
+    expect(await page.evaluate((key) => window.localStorage.getItem(key), localKey)).toBeNull();
+
+    await page.getByLabel("Task 名称").fill("S5 Account A isolated draft");
+    await page.waitForTimeout(900);
+    await page.getByRole("button", { name: "全部 Task", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "离开 Task Composer？" })).toBeVisible();
+    await page.getByRole("button", { name: "保存本地草稿并离开" }).click();
+    await expect(page.getByRole("heading", { name: "全部 Task" })).toBeVisible();
+    await page.goBack();
+    await expect(page.getByRole("heading", { name: "全部 Task" })).toBeVisible();
+    await expect(page.getByTestId("task-composer")).toHaveCount(0);
+    await context.clearCookies();
+    await loginAsTestUser(context, baseURL, {
+      openId: creatorB.openId,
+      name: creatorB.person.displayName,
+    });
+    await page.goto("/progress/tasks/new");
+    await expect(page.getByText(/检测到 .* 保存的未完成草稿/)).toHaveCount(0);
+    await expect(page.getByText(/草稿版本、结构或字段不兼容/)).toHaveCount(0);
+    await expect(page.getByLabel("Task 名称")).toHaveValue("");
+    expect(
+      await page.evaluate(() =>
+        window.localStorage.getItem("task-draft:other-deployment:other-account:v1"),
+      ),
+    ).not.toBeNull();
+    await expectHealthyPage(page);
+  });
+
+  test("Task Composer keeps the current actor as Owner beyond the first people page and persists self review for a system administrator", async ({
+    context,
+    page,
+    baseURL,
+  }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop", "服务端分页归属路径只需在桌面重复一次");
+    await prisma.person.createMany({
+      data: Array.from({ length: 55 }, (_, index) => ({
+        displayName: `000 S5 owner pagination ${String(index).padStart(2, "0")}`,
+        status: "ACTIVE" as const,
+      })),
+    });
+    const administrator = await createAccountPerson("ZZZ S5 System Administrator");
+    await grantRole(administrator.account.id, "SYSTEM_ADMINISTRATOR");
+    await loginAsTestUser(context, baseURL, {
+      openId: administrator.openId,
+      name: administrator.person.displayName,
+    });
+    const title = `S5 system admin ${randomUUID()}`;
+
+    await page.goto("/progress/tasks/new?start=2026-10-01");
+    await expect(
+      page.getByRole("button", {
+        name: `移除 ${administrator.person.displayName} 负责人`,
+      }),
+    ).toBeVisible();
+    await page.getByLabel("Task 名称").fill(title);
+    await page.getByLabel("目标").fill("管理员自审目标");
+    await page.getByLabel("完成条件").fill("Owner 为当前 actor");
+    await page.getByLabel("验收要求").fill("自审配置持久化");
+    await page.getByRole("checkbox", { name: /允许自审/ }).check();
+    await page.getByRole("button", { name: /^Termination/ }).click();
+    await page.getByLabel("Task 整体预期结果").fill("管理员 Task 创建完成");
+    await page.getByRole("button", { name: "创建 Task 草稿" }).click();
+    await expect(page.getByRole("heading", { name: title })).toBeVisible();
+    const task = await prisma.task.findFirstOrThrow({
+      where: { title },
+      include: { members: { where: { removedAt: null } } },
+    });
+    expect(task.allowSelfReview).toBe(true);
+    expect(task.members).toEqual([
+      expect.objectContaining({ personId: administrator.person.id, role: "OWNER" }),
+    ]);
+  });
+
   test("dashboard, Task workbench, resource timeline, conflicts and notifications work", async ({
     context,
     page,
@@ -622,15 +977,15 @@ async function createAccountPerson(displayName: string) {
 
 async function grantRole(
   accountId: string,
-  role: "TEAM_ADMINISTRATOR" | "RESOURCE_MANAGER",
-  scope: { team: string; techGroup: string },
+  role: "TEAM_ADMINISTRATOR" | "RESOURCE_MANAGER" | "SYSTEM_ADMINISTRATOR",
+  scope?: { team: string; techGroup: string },
 ) {
   await prisma.systemRoleAssignment.create({
     data: {
       accountId,
       role,
-      team: scope.team,
-      techGroup: scope.techGroup,
+      team: scope?.team ?? "",
+      techGroup: scope?.techGroup ?? "",
     },
   });
 }

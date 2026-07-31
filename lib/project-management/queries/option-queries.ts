@@ -15,9 +15,11 @@ import {
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import {
   personOptionPageSchema,
+  personOptionDtoSchema,
   tagOptionPageSchema,
   taskOptionPageSchema,
   type PersonOptionPage,
+  type PersonOptionDto,
   type TagOptionPage,
   type TaskOptionPage,
 } from "@/lib/project-management/types/time-canvas";
@@ -53,6 +55,27 @@ const peopleSearchTaskAuthorizationSelect = {
 type PeopleSearchTask = Prisma.TaskGetPayload<{
   select: typeof peopleSearchTaskAuthorizationSelect;
 }>;
+
+export async function getActorPersonOption(
+  actor: ProjectManagementActor,
+): Promise<PersonOptionDto> {
+  const person = await prisma.person.findFirstOrThrow({
+    where: { id: actor.personId, accountId: actor.accountId, status: "ACTIVE" },
+    select: {
+      id: true,
+      displayName: true,
+      avatar: true,
+      account: { select: { status: true } },
+    },
+  });
+  return personOptionDtoSchema.parse({
+    id: person.id,
+    displayName: person.displayName,
+    avatar: person.avatar,
+    status: "ACTIVE",
+    accountAvailability: person.account?.status ?? "UNBOUND",
+  });
+}
 
 export async function searchPeople({
   actor,
