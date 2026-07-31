@@ -158,7 +158,9 @@ Segment 放置关联意图分为 `KEEP` 与 `RELINK`：`KEEP` 不接受 Task/Nod
 
 P4/P6 首批浏览器入口已上线：`/progress` 汇总我的 Active Task、未来投入、待确认计划、开放冲突和未读通知；`/progress/tasks` 提供可见 Task 列表；`/progress/tasks/[id]` 提供 Task 工作台；`/progress/resources` 提供人员计划时间轴并复用 P5 Segment action；`/progress/resources/conflicts` 提供冲突中心并复用 P5 Conflict action；`/progress/notifications` 提供站内通知筛选、标记已读和对象跳转。所有页面先解析项目管理 actor，再通过 `taskReadableWhere`、`segmentReadableWhere`、Conflict readable 条件或 `recipientAccountId` 过滤，服务端 action 仍执行状态机、权限和 `expectedUpdatedAt` 校验。
 
-项目管理浏览器入口统一由 `app/progress/layout.tsx` 渲染全站 `AppHeader`、`PageShell` 和模块 Shell，子页只提供上下文命令栏与业务内容。桌面端使用可折叠的 sticky 左侧导航；移动端使用基于现有 Dialog 原语的模态 Drawer，支持 Escape、焦点约束和关闭后的焦点恢复。模块 Shell 统一读取通知未读数，并通过 React 请求内缓存复用 actor 与通知页的未读查询；不可用对象使用 `/progress/not-found.tsx` 的统一脱敏页面。`--pm-*` 语义变量集中在 `app/globals.css`，Shell 适配现有明暗主题和 reduced motion。`myTimeline`、`taskNew`、`approvals`、`tags` 已保留类型安全路由常量，但对应页面落地前不显示导航链接；本阶段不包含 TimeCanvas。
+项目管理浏览器入口统一由 `app/progress/layout.tsx` 渲染全站 `AppHeader`、`PageShell` 和模块 Shell，子页只提供上下文命令栏与业务内容。桌面端使用可折叠的 sticky 左侧导航；移动端使用基于现有 Dialog 原语的模态 Drawer，支持 Escape、焦点约束和关闭后的焦点恢复。模块 Shell 统一读取通知未读数，并通过 React 请求内缓存复用 actor 与通知页的未读查询；不可用对象使用 `/progress/not-found.tsx` 的统一脱敏页面。`--pm-*` 语义变量集中在 `app/globals.css`，Shell 适配现有明暗主题和 reduced motion。`myTimeline`、`taskNew`、`approvals`、`tags` 已保留类型安全路由常量，但对应页面落地前不显示导航链接。
+
+统一只读 `TimeCanvas` 通过显式 adapter 消费 S2 的安全 DTO，并共享时间坐标、半开区间、上海时区 snap/fit、可见窗口、稳定泳道和选择模型。桌面端使用 `@tanstack/react-virtual` 纵向虚拟化人员/Task 行，并只渲染横向可见时间窗口内的对象；Axis、Grid、周末背景、Today Line、计划轨道、Milestone、Termination、Planned、Actual、Busy、Conflict 和只读 Inspector 均由同一模型驱动。Pixel 5 使用复用该模型的 `TimeAgenda` 按日期渲染，不依赖压缩甘特图。Busy 在 adapter 后仍只含人员、时间、投入比例和安全摘要，不恢复源 Segment、Task、Node 或版本标识。`/progress/resources` 已接入真实 `getTimeCanvasData` 查询，同时在交互式画布落地前保留既有精确表单操作。`/progress/time-canvas-fixtures` 只有在官方 runner ownership token、随机 `_test` 数据库和通知禁发同时成立时才可访问，其他环境 fail closed 为 404；它不是用户功能入口。
 
 `DomainAuditEvent` 由 append-only trigger 保护，应用代码只能追加审计事件，不能更新或删除既有审计行。
 

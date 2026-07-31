@@ -140,6 +140,10 @@ test.describe("project management S3 shell", () => {
     ).toBeVisible();
     await expect(page.getByText(fixture.taskTitle)).toHaveCount(0);
     await expectHealthyPage(page);
+    expect(browserErrors).toEqual([
+      "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    ]);
+    browserErrors.length = 0;
 
     for (const route of [
       "/progress",
@@ -208,19 +212,23 @@ async function createShellFixture() {
       priority: "MEDIUM",
       tagIds: [],
       members: [{ personId: account.person.id, role: "OWNER" }],
-      plannedStartAt,
+      plannedStartAt: plannedStartAt.toISOString(),
       milestones: [
         {
           goal: "验证 Shell",
           completionCriteria: "桌面与移动导航均可使用",
-          expectedCompletedAt: new Date("2026-08-02T00:00:00.000+08:00"),
+          expectedCompletedAt: new Date(
+            "2026-08-02T00:00:00.000+08:00",
+          ).toISOString(),
           reviewRequirements: "自动化测试通过",
           businessDescription: "Shell 测试节点",
         },
       ],
       termination: {
         plannedOutcomeCriteria: "Shell 验证完成",
-        plannedAt: new Date("2026-08-03T00:00:00.000+08:00"),
+        plannedAt: new Date(
+          "2026-08-03T00:00:00.000+08:00",
+        ).toISOString(),
         businessDescription: "结束测试",
       },
       idempotencyKey: `s3-shell-${randomUUID()}`,

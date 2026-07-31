@@ -41,7 +41,7 @@ test.describe("project management P4/P6 UI integration", () => {
     context,
     page,
     baseURL,
-  }) => {
+  }, testInfo) => {
     const fixture = await createUiFixture();
     await loginAsTestUser(context, baseURL, {
       openId: fixture.member.openId,
@@ -69,7 +69,29 @@ test.describe("project management P4/P6 UI integration", () => {
       `/progress/resources?start=2026-08-10&end=2026-08-12&personId=${fixture.member.person.id}`,
     );
     await expect(page.getByRole("heading", { name: "人员计划" })).toBeVisible();
-    await expect(page.getByText("P6 UI 可确认计划")).toBeVisible();
+    await expect(page.getByTestId("time-canvas-root")).toBeVisible();
+    if (testInfo.project.name === "desktop") {
+      await expect(page.getByTestId("time-canvas-scroll")).toBeVisible();
+      await page
+        .getByTestId(`segment-block-${fixture.confirmableSegmentId}`)
+        .click();
+    } else {
+      await expect(page.getByTestId("time-agenda")).toBeVisible();
+      await page
+        .getByTestId(`agenda-item-${fixture.confirmableSegmentId}`)
+        .click();
+    }
+    await expect(page.getByTestId("time-canvas-inspector")).toBeVisible();
+    await expect(
+      page
+        .getByTestId("time-canvas-inspector")
+        .getByRole("heading", { name: "P6 UI 可确认计划" }),
+    ).toBeVisible();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+      ),
+    ).toBe(true);
     await page.getByRole("button", { name: "与计划一致" }).first().click();
     await expect(page.getByText("已按计划生成 Actual")).toBeVisible();
     await expect
