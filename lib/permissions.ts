@@ -1,31 +1,31 @@
 import type { UserRoleType } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import {
+  getAccountAuthorizationContextForOpenId,
+  getGlobalSuperAdministratorOpenIds,
+  isGlobalSuperAdministrator,
+  requireGlobalSuperAdministrator,
+} from "@/lib/account-authorization";
 import type { OrderScope, UserRoleRecord } from "@/lib/permissions-client";
 
 export async function getUserRoles(openId: string): Promise<UserRoleRecord[]> {
-  const records = await prisma.userRole.findMany({
-    where: { openId },
-    select: { role: true, team: true, techGroup: true },
-  });
+  const authorization = await getAccountAuthorizationContextForOpenId(openId);
+  if (!authorization) return [];
+  const records = authorization.reimbursementRoles.map(
+    ({ role, team, techGroup }) => ({ role, team, techGroup }),
+  );
+  if (authorization.isSuperAdministrator) {
+    records.push({ role: "SUPER_ADMIN", team: "", techGroup: "" });
+  }
   return records;
 }
 
 export async function isSuperAdmin(openId: string): Promise<boolean> {
-  const record = await prisma.userRole.findFirst({
-    where: { openId, role: "SUPER_ADMIN" },
-  });
-  return !!record;
+  return isGlobalSuperAdministrator(openId);
 }
 
 export async function requireSuperAdmin() {
-  const { auth } = await import("@/lib/auth");
-  const session = await auth();
-  if (!session?.user?.openId) {
-    throw new Error("未登录");
-  }
-  if (!(await isSuperAdmin(session.user.openId))) {
-    throw new Error("无管理权限");
-  }
+  const { session } = await requireGlobalSuperAdministrator();
   return session;
 }
 
@@ -33,6 +33,9 @@ export async function getOpenIdsByRole(
   role: UserRoleType,
   order: OrderScope,
 ): Promise<string[]> {
+  if (role === "SUPER_ADMIN") {
+    return getGlobalSuperAdministratorOpenIds();
+  }
   const where: {
     role: UserRoleType;
     team?: string;
@@ -47,26 +50,37 @@ export async function getOpenIdsByRole(
     if (!order.techGroup) return [];
     where.techGroup = order.techGroup;
     where.team = "";
-  } else if (role === "SUPER_ADMIN") {
-    where.team = "";
-    where.techGroup = "";
   } else {
     where.team = "";
     where.techGroup = "";
   }
 
   const records = await prisma.userRole.findMany({
-    where,
-    select: { openId: true },
+    where: { ...where, revokedAt: null },
+    select: {
+      account: {
+        select: {
+          identities: {
+            where: {
+              provider: "FEISHU",
+              tenantId: "default",
+              openId: { not: null },
+            },
+            select: { openId: true },
+          },
+        },
+      },
+    },
   });
-  const roleOpenIds = records.map((r) => r.openId);
-  if (roleOpenIds.length === 0) return [];
-
-  const users = await prisma.user.findMany({
-    where: { openId: { in: roleOpenIds } },
-    select: { openId: true },
-  });
-  return users.map((u) => u.openId);
+  return [
+    ...new Set(
+      records.flatMap((record) =>
+        record.account?.identities.flatMap((identity) =>
+          identity.openId ? [identity.openId] : [],
+        ) ?? [],
+      ),
+    ),
+  ];
 }
 
 export {

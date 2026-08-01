@@ -3,7 +3,9 @@ import {
   drainNotificationOutbox,
   enqueueNotification,
 } from "../lib/notification-outbox";
+import { getGlobalSuperAdministratorOpenIds } from "../lib/account-authorization";
 import { feedbackNotificationChannel } from "../lib/notification-channels/feedback";
+import { resolveFeishuIdentityForUser } from "../lib/project-management/identity";
 import { prisma } from "../lib/prisma";
 
 const EVENT_PREFIX = "playwright:notification-adapter:";
@@ -546,36 +548,71 @@ test.describe("notification outbox channel adapters", () => {
     await prisma.userRole.deleteMany({
       where: { openId: "ou_outbox_approver" },
     });
+    const approverIdentity = await resolveFeishuIdentityForUser({
+      openId: "ou_outbox_approver",
+      unionId: "on_outbox_approver",
+      name: "测试审批人",
+    });
     await prisma.user.upsert({
       where: { openId: "ou_outbox_approver" },
-      update: { name: "测试审批人", unionId: "on_outbox_approver" },
+      update: {
+        accountId: approverIdentity.account.id,
+        name: "测试审批人",
+        unionId: "on_outbox_approver",
+      },
       create: {
+        accountId: approverIdentity.account.id,
         openId: "ou_outbox_approver",
         unionId: "on_outbox_approver",
         name: "测试审批人",
       },
     });
-    await prisma.userRole.create({
+    const approverRole = await prisma.userRole.create({
       data: {
+        accountId: approverIdentity.account.id,
         openId: "ou_outbox_approver",
         role: "TEAM_ADMIN",
-        team: "审批路由车组",
+        team: "英雄",
         techGroup: "",
       },
     });
-    process.env.FEISHU_APPROVAL_APP_ID = "approval-app";
-    process.env.FEISHU_APPROVAL_APP_SECRET = "approval-secret";
-    const superAdminOpenIds = (
-      await prisma.userRole.findMany({
-        where: { role: "SUPER_ADMIN" },
+    const suspendedRoles = await prisma.userRole.findMany({
+      where: {
+        id: { not: approverRole.id },
+        revokedAt: null,
+        OR: [
+          { role: "TEAM_ADMIN", team: "英雄" },
+          { role: "TECH_GROUP_ADMIN", techGroup: "电控" },
+        ],
+      },
+      select: { id: true },
+    });
+    await prisma.userRole.updateMany({
+      where: { id: { in: suspendedRoles.map((role) => role.id) } },
+      data: { revokedAt: new Date() },
+    });
+    try {
+      process.env.FEISHU_APPROVAL_APP_ID = "approval-app";
+      process.env.FEISHU_APPROVAL_APP_SECRET = "approval-secret";
+      const [superAdminOpenIds, reimbursementApprovers] = await Promise.all([
+        getGlobalSuperAdministratorOpenIds(),
+        prisma.userRole.findMany({
+        where: {
+          revokedAt: null,
+          OR: [
+            { role: "TEAM_ADMIN", team: "英雄" },
+            { role: "TECH_GROUP_ADMIN", techGroup: "电控" },
+          ],
+        },
         select: { openId: true },
-      })
-    ).map((role) => role.openId);
-    process.env.FEISHU_DIRECT_MESSAGE_ALLOWED_OPEN_IDS = [
-      "ou_outbox_approver",
-      ...superAdminOpenIds,
-    ].join(",");
-    process.env.FEISHU_DIRECT_MESSAGE_ALLOWED_UNION_IDS = "";
+        }),
+      ]);
+      process.env.FEISHU_DIRECT_MESSAGE_ALLOWED_OPEN_IDS = [
+        "ou_outbox_approver",
+        ...superAdminOpenIds,
+        ...reimbursementApprovers.map((role) => role.openId),
+      ].join(",");
+      process.env.FEISHU_DIRECT_MESSAGE_ALLOWED_UNION_IDS = "";
 
     await enqueueNotification({
       eventKey,
@@ -590,7 +627,7 @@ test.describe("notification outbox channel adapters", () => {
           initiatorName: "测试采购发起人",
           totalPrice: 128,
           status: "MANAGEMENT_REVIEW",
-          team: "审批路由车组",
+          team: "英雄",
           techGroup: "电控",
           items: [{ name: "长名称测试物料", quantity: 2, unitPrice: 64 }],
         },
@@ -632,7 +669,13 @@ test.describe("notification outbox channel adapters", () => {
       botKind: "approval",
       cardStage: "MANAGEMENT_REVIEW",
     });
-    expect(trackedCard.cardId).toMatch(/^outbox-card-\d+$/);
+      expect(trackedCard.cardId).toMatch(/^outbox-card-\d+$/);
+    } finally {
+      await prisma.userRole.updateMany({
+        where: { id: { in: suspendedRoles.map((role) => role.id) } },
+        data: { revokedAt: null },
+      });
+    }
   });
 
   test("反馈 adapter 使用通知机器人并生成完整消息", async () => {

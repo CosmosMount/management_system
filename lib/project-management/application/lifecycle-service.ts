@@ -24,6 +24,7 @@ import type {
   ProjectManagementActor,
   ProjectManagementSystemRoleRecord,
 } from "@/lib/project-management/identity";
+import { assertProjectAccessActiveTx } from "@/lib/project-management/identity";
 import type { ProjectManagementNotificationPayload } from "@/lib/project-management/notifications/events";
 import {
   createProjectManagementEventNotificationsTx,
@@ -1946,6 +1947,7 @@ async function refreshActorTx(
   tx: PrismaTx,
   actor: ProjectManagementActor,
 ): Promise<ProjectManagementActor> {
+  await assertProjectAccessActiveTx(tx, actor.accountId);
   const roles = await tx.systemRoleAssignment.findMany({
     where: { accountId: actor.accountId, revokedAt: null },
     select: { role: true, team: true, techGroup: true },
@@ -2612,7 +2614,7 @@ async function taskMemberRecipientsTx(
           account: {
             select: {
               id: true,
-              status: true,
+              projectAccessStatus: true,
               identities: {
                 where: {
                   provider: FEISHU_PROVIDER,
@@ -2630,7 +2632,7 @@ async function taskMemberRecipientsTx(
   return members
     .map((member) => member.person.account)
     .filter((account): account is NonNullable<typeof account> =>
-      Boolean(account && account.status === "ACTIVE"),
+      Boolean(account && account.projectAccessStatus === "ACTIVE"),
     )
     .map((account) => ({
       accountId: account.id,
@@ -2650,7 +2652,7 @@ async function reviewerRecipientsTx(
           account: {
             select: {
               id: true,
-              status: true,
+              projectAccessStatus: true,
               identities: {
                 where: {
                   provider: FEISHU_PROVIDER,
@@ -2666,12 +2668,16 @@ async function reviewerRecipientsTx(
     },
   });
   const scopedAdmins = await tx.systemRoleAssignment.findMany({
-    where: scopedRoleWhere("TEAM_ADMINISTRATOR", task),
+    where: {
+      OR: [
+        scopedRoleWhere("GROUP_LEADER", task),
+      ],
+    },
     select: {
       account: {
         select: {
           id: true,
-          status: true,
+          projectAccessStatus: true,
           identities: {
             where: {
               provider: FEISHU_PROVIDER,
@@ -2689,7 +2695,7 @@ async function reviewerRecipientsTx(
     ...scopedAdmins.map((entry) => entry.account),
   ]
     .filter((account): account is NonNullable<typeof account> =>
-      Boolean(account && account.status === "ACTIVE"),
+      Boolean(account && account.projectAccessStatus === "ACTIVE"),
     )
     .map((account) => ({
       accountId: account.id,
@@ -2734,7 +2740,7 @@ async function accountRecipientsTx(
   }
   const accounts = await tx.account.findMany({
     where: {
-      status: "ACTIVE",
+      projectAccessStatus: "ACTIVE",
       OR: [
         ...(input.accountIds.length > 0
           ? [{ id: { in: input.accountIds } }]

@@ -1309,8 +1309,7 @@ function resourceScopedTaskWhere(
 ): Prisma.TaskWhereInput[] {
   return actor.systemRoles.flatMap((role) => {
     if (
-      role.role !== "TEAM_ADMINISTRATOR" &&
-      role.role !== "RESOURCE_MANAGER"
+      role.role !== "GROUP_LEADER"
     ) {
       return [];
     }

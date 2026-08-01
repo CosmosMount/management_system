@@ -59,7 +59,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
     const admin = await createAccountPerson("S2 System Admin");
     const owner = await createAccountPerson("S2 Create Owner");
     const reviewer = await createAccountPerson("S2 Create Reviewer");
-    await grantRole(admin.account.id, "SYSTEM_ADMINISTRATOR");
+    await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
 
     const related = await createDraft({
       creator: admin,
@@ -108,7 +108,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
 
     const teamAdmin = await createAccountPerson("S2 Team Admin");
     const teamOwner = await createAccountPerson("S2 Team Owner");
-    await grantRole(teamAdmin.account.id, "TEAM_ADMINISTRATOR", {
+    await grantRole(teamAdmin.account.id, "GROUP_LEADER", {
       team: "英雄",
       techGroup: "电控",
     });
@@ -175,8 +175,8 @@ test.describe("project management S2 plan and Task mutation services", () => {
     );
     const owner = await createAccountPerson("S2 Related Reference Owner");
     const reviewer = await createAccountPerson("S2 Related Reference Reviewer");
-    await grantRole(admin.account.id, "SYSTEM_ADMINISTRATOR");
-    await grantRole(scopedAdmin.account.id, "TEAM_ADMINISTRATOR", {
+    await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
+    await grantRole(scopedAdmin.account.id, "GROUP_LEADER", {
       team: "英雄",
       techGroup: "电控",
     });
@@ -354,7 +354,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
     const reviewer = await createAccountPerson("S2 Draft Reviewer");
     const member = await createAccountPerson("S2 Draft Member");
     const outsider = await createAccountPerson("S2 Draft Outsider");
-    await grantRole(admin.account.id, "SYSTEM_ADMINISTRATOR");
+    await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
     const tag = await createTag(admin.account.id, "Draft Tag");
     const fixture = await createDraft({ creator: admin, owner, reviewer });
 
@@ -554,7 +554,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
     const admin = await createAccountPerson("S2 Plan Admin");
     const owner = await createAccountPerson("S2 Plan Owner");
     const reviewer = await createAccountPerson("S2 Plan Reviewer");
-    await grantRole(admin.account.id, "SYSTEM_ADMINISTRATOR");
+    await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
     const fixture = await createDraft({ creator: admin, owner, reviewer });
     const original = await currentPlan(fixture.taskId);
     const originalHash = original.snapshotHash;
@@ -688,7 +688,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
     const admin = await createAccountPerson("S2 Bounded Audit Admin");
     const owner = await createAccountPerson("S2 Bounded Audit Owner");
     const reviewer = await createAccountPerson("S2 Bounded Audit Reviewer");
-    await grantRole(admin.account.id, "SYSTEM_ADMINISTRATOR");
+    await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
     const fixture = await createDraft({ creator: admin, owner, reviewer });
     const sensitiveNeedle = `S2_AUDIT_PROSE_${randomUUID()}`;
     const longText = `${sensitiveNeedle}-${"长文本".repeat(550)}`;
@@ -744,7 +744,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
     const admin = await createAccountPerson("S2 Node Identity Admin");
     const owner = await createAccountPerson("S2 Node Identity Owner");
     const reviewer = await createAccountPerson("S2 Node Identity Reviewer");
-    await grantRole(admin.account.id, "SYSTEM_ADMINISTRATOR");
+    await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
     const fixture = await createDraft({ creator: admin, owner, reviewer });
     const foreign = await createDraft({
       creator: admin,
@@ -792,7 +792,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
     const reviewer = await createAccountPerson("S2 Matrix Reviewer");
     const viewer = await createAccountPerson("S2 Matrix Viewer");
     const outsider = await createAccountPerson("S2 Matrix Outsider");
-    await grantRole(admin.account.id, "SYSTEM_ADMINISTRATOR");
+    await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
 
     const fixtures = new Map<string, Awaited<ReturnType<typeof createDraft>>>();
     for (const status of [
@@ -895,7 +895,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
     const admin = await createAccountPerson("S2 Exactly Once Admin");
     const owner = await createAccountPerson("S2 Exactly Once Owner");
     const reviewer = await createAccountPerson("S2 Exactly Once Reviewer");
-    await grantRole(admin.account.id, "SYSTEM_ADMINISTRATOR");
+    await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
 
     for (const mutationCase of MUTATION_ACTION_CASES) {
       const initialTag = await createTag(
@@ -1006,7 +1006,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
     const admin = await createAccountPerson("S2 Late Failure Admin");
     const owner = await createAccountPerson("S2 Late Failure Owner");
     const reviewer = await createAccountPerson("S2 Late Failure Reviewer");
-    await grantRole(admin.account.id, "SYSTEM_ADMINISTRATOR");
+    await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
     const fixtures: Array<{
       mutationCase: (typeof MUTATION_ACTION_CASES)[number];
       fixture: Awaited<ReturnType<typeof createDraft>>;
@@ -1056,7 +1056,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
     const admin = await createAccountPerson("S2 Outbox Rollback Admin");
     const owner = await createAccountPerson("S2 Outbox Rollback Owner");
     const reviewer = await createAccountPerson("S2 Outbox Rollback Reviewer");
-    await grantRole(admin.account.id, "SYSTEM_ADMINISTRATOR");
+    await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
     const fixture = await createDraft({ creator: admin, owner, reviewer });
     await activateTask(actor(owner), {
       taskId: fixture.taskId,
@@ -1133,7 +1133,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
       const reviewer = await createAccountPerson(
         `S2 Ref Reviewer ${segmentCase.name}`,
       );
-      await grantRole(admin.account.id, "SYSTEM_ADMINISTRATOR");
+      await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
       const fixture = await createDraft({ creator: admin, owner, reviewer });
       const plan = await currentPlan(fixture.taskId);
       const retained = plan.nodes[0];
@@ -1194,7 +1194,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
     const reviewer = await createAccountPerson("S2 Active Reviewer");
     const member = await createAccountPerson("S2 Active Member");
     const newcomer = await createAccountPerson("S2 Active Newcomer");
-    await grantRole(admin.account.id, "SYSTEM_ADMINISTRATOR");
+    await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
     const firstTag = await createTag(admin.account.id, "Active Tag A");
     const secondTag = await createTag(admin.account.id, "Active Tag B");
     const fixture = await createDraft({
@@ -1376,7 +1376,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
     const owner = await createAccountPerson("S2 Invalid Members Owner");
     const reviewer = await createAccountPerson("S2 Invalid Members Reviewer");
     const inactive = await createAccountPerson("S2 Invalid Members Inactive");
-    await grantRole(admin.account.id, "SYSTEM_ADMINISTRATOR");
+    await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
     await prisma.person.update({
       where: { id: inactive.person.id },
       data: { status: "INACTIVE" },
@@ -1449,7 +1449,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
         status: "ACTIVE",
       },
     });
-    await grantRole(admin.account.id, "SYSTEM_ADMINISTRATOR");
+    await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
     const fixture = await createDraft({
       creator: admin,
       owner,
@@ -1474,7 +1474,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
     });
     await prisma.account.update({
       where: { id: disabled.account.id },
-      data: { status: "DISABLED" },
+      data: { projectAccessStatus: "DISABLED" },
     });
     await prisma.accountIdentity.deleteMany({
       where: { accountId: wrongTenant.account.id },
@@ -1600,7 +1600,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
     const admin = await createAccountPerson("S2 Association Lock Admin");
     const owner = await createAccountPerson("S2 Association Lock Owner");
     const reviewer = await createAccountPerson("S2 Association Lock Reviewer");
-    await grantRole(admin.account.id, "SYSTEM_ADMINISTRATOR");
+    await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
 
     for (const first of ["WRITER", "REPLACE"] as const) {
       const fixture = await createDraft({
@@ -1674,7 +1674,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
       "S2 Segment Oracle Hidden Reviewer",
     );
     const operator = await createAccountPerson("S2 Segment Oracle Operator");
-    await grantRole(admin.account.id, "SYSTEM_ADMINISTRATOR");
+    await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
     const hidden = await createDraft({
       creator: admin,
       owner: hiddenOwner,
@@ -1807,7 +1807,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
     const admin = await createAccountPerson("S2 Revision Admin");
     const owner = await createAccountPerson("S2 Revision Owner");
     const reviewer = await createAccountPerson("S2 Revision Reviewer");
-    await grantRole(admin.account.id, "SYSTEM_ADMINISTRATOR");
+    await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
     const fixture = await createDraft({ creator: admin, owner, reviewer });
     await activateTask(actor(owner), {
       taskId: fixture.taskId,
@@ -1959,7 +1959,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
     const admin = await createAccountPerson("S2 Legacy Repair Admin");
     const owner = await createAccountPerson("S2 Legacy Repair Owner");
     const reviewer = await createAccountPerson("S2 Legacy Repair Reviewer");
-    await grantRole(admin.account.id, "SYSTEM_ADMINISTRATOR");
+    await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
     const legacyInput = taskDraftInput({
       ownerPersonId: owner.person.id,
       reviewerPersonId: reviewer.person.id,
@@ -2340,7 +2340,7 @@ async function createAccountPerson(displayName: string) {
   const openId = `ou_s2_plan_${randomUUID()}`;
   const account = await prisma.account.create({
     data: {
-      status: "ACTIVE",
+      projectAccessStatus: "ACTIVE",
       identities: {
         create: {
           provider: "FEISHU",
@@ -2363,7 +2363,12 @@ async function grantRole(
   scope: { team: string; techGroup: string } = { team: "", techGroup: "" },
 ) {
   await prisma.systemRoleAssignment.create({
-    data: { accountId, role, team: scope.team, techGroup: scope.techGroup },
+    data: {
+      accountId,
+      role,
+      team: scope.team,
+      techGroup: role === "GROUP_LEADER" && scope.team ? "" : scope.techGroup,
+    },
   });
 }
 

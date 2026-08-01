@@ -177,7 +177,7 @@ async function createScaleFixture() {
   const openId = `ou_s9_perf_${randomUUID()}`;
   const account = await prisma.account.create({
     data: {
-      status: "ACTIVE",
+      projectAccessStatus: "ACTIVE",
       identities: {
         create: {
           provider: "FEISHU",
@@ -187,7 +187,7 @@ async function createScaleFixture() {
         },
       },
       person: { create: { displayName: "S9 性能管理员", status: "ACTIVE" } },
-      systemRoles: { create: { role: "SYSTEM_ADMINISTRATOR" } },
+      systemRoles: { create: { role: "PROJECT_ADMINISTRATOR" } },
     },
     include: { person: true },
   });
@@ -380,7 +380,7 @@ async function createScaleFixture() {
       personId: person.id,
       openId,
       unionId: null,
-      systemRoles: [{ role: "SYSTEM_ADMINISTRATOR" as const, team: "", techGroup: "" }],
+      systemRoles: [{ role: "PROJECT_ADMINISTRATOR" as const, team: "", techGroup: "" }],
     } satisfies ProjectManagementActor,
     openId,
     personIds: Array.from({ length: 50 }, (_, index) => personUuid(index + 1)),

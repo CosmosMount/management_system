@@ -320,7 +320,7 @@ function conflictActionableWhere(
   const managerScopes = actor.systemRoles
     .filter(
       (role) =>
-        (role.role === "TEAM_ADMINISTRATOR" || role.role === "RESOURCE_MANAGER") &&
+        role.role === "GROUP_LEADER" &&
         (role.team.trim().length > 0 || role.techGroup.trim().length > 0),
     )
     .map((role): Prisma.TaskWhereInput => ({

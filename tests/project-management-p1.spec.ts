@@ -21,6 +21,8 @@ import {
 import { createDomainAuditEventTx } from "../lib/project-management/audit";
 import { getNotificationChannelAdapter } from "../lib/notification-channels";
 import { prisma } from "../lib/prisma";
+import { getOpenIdsByRole, getUserRoles } from "../lib/permissions";
+import { resolveReimbursementListSignatures } from "../lib/reimbursement-list-signatures";
 
 test.describe("project management P1 schema, identity and authorization", () => {
   test("schema constraints enforce current plan, tag, segment, review and conflict invariants", async () => {
@@ -185,14 +187,6 @@ test.describe("project management P1 schema, identity and authorization", () => 
   test("Feishu identity resolution is idempotent, upgrades openId fallback and rejects conflicts or disabled accounts", async () => {
     const openId = `ou_pm_${randomUUID()}`;
     const unionId = `on_pm_${randomUUID()}`;
-    await prisma.user.create({
-      data: {
-        openId,
-        unionId: null,
-        name: "身份测试用户",
-      },
-    });
-
     const first = await resolveFeishuIdentityForUser({
       openId,
       name: "身份测试用户",
@@ -200,10 +194,6 @@ test.describe("project management P1 schema, identity and authorization", () => 
     expect(first.created).toBe(true);
     expect(first.identity.providerSubject).toBe(`open:${openId}`);
 
-    await prisma.user.update({
-      where: { openId },
-      data: { unionId },
-    });
     const upgraded = await resolveFeishuIdentityForUser({
       openId,
       unionId,
@@ -212,9 +202,54 @@ test.describe("project management P1 schema, identity and authorization", () => 
     expect(upgraded.created).toBe(false);
     expect(upgraded.account.id).toBe(first.account.id);
     expect(upgraded.identity.providerSubject).toBe(unionId);
+    await prisma.userRole.create({
+      data: {
+        accountId: first.account.id,
+        openId,
+        role: "TEAM_ADMIN",
+        team: "英雄",
+      },
+    });
+    await prisma.user.update({
+      where: { accountId: first.account.id },
+      data: { signaturePath: "/uploads/playwright/signature-admin.png" },
+    });
+
+    const rotatedOpenId = `ou_pm_rotated_${randomUUID()}`;
+    const rotated = await resolveFeishuIdentityForUser({
+      openId: rotatedOpenId,
+      unionId,
+      name: "身份测试用户",
+    });
+    expect(rotated.account.id).toBe(first.account.id);
+    expect(rotated.reimbursementUser.id).toBe(first.reimbursementUser.id);
+    expect(rotated.reimbursementUser.openId).toBe(rotatedOpenId);
+    await expect(
+      prisma.user.findUnique({ where: { openId } }),
+    ).resolves.toBeNull();
+    await expect(getUserRoles(rotatedOpenId)).resolves.toEqual(
+      expect.arrayContaining([
+        { role: "TEAM_ADMIN", team: "英雄", techGroup: "" },
+      ]),
+    );
+    await expect(
+      getOpenIdsByRole("TEAM_ADMIN", { team: "英雄", techGroup: "" }),
+    ).resolves.toContain(rotatedOpenId);
+    await expect(
+      resolveReimbursementListSignatures({
+        team: "工程",
+        techGroup: "机械",
+        teamApproverAccountId: first.account.id,
+        teamApproverOpenId: openId,
+        initiator: { name: "领用人", signaturePath: null },
+      }),
+    ).resolves.toMatchObject({
+      acceptor1Label: "身份测试用户",
+      acceptor1Path: expect.stringContaining("signature-admin.png"),
+    });
 
     const repeated = await resolveFeishuIdentityForUser({
-      openId,
+      openId: rotatedOpenId,
       unionId,
       name: "身份测试用户",
     });
@@ -223,18 +258,18 @@ test.describe("project management P1 schema, identity and authorization", () => 
     expect(
       await prisma.accountIdentity.count({
         where: {
-          OR: [{ openId }, { unionId }],
+          OR: [{ openId: rotatedOpenId }, { unionId }],
         },
       }),
     ).toBe(1);
 
     await prisma.account.update({
       where: { id: first.account.id },
-      data: { status: "DISABLED" },
+      data: { projectAccessStatus: "DISABLED" },
     });
     await expect(
       getProjectManagementActorForFeishuUser({
-        openId,
+        openId: rotatedOpenId,
         unionId,
         name: "身份测试用户",
       }),
@@ -285,11 +320,16 @@ test.describe("project management P1 schema, identity and authorization", () => 
 
   test("identity backfill dry-run is non-mutating and APPLY is idempotent", async () => {
     const openId = `ou_backfill_${randomUUID()}`;
-    await prisma.user.create({
+    await prisma.account.create({
       data: {
-        openId,
-        unionId: `on_backfill_${randomUUID()}`,
-        name: "Backfill 用户",
+        person: { create: { displayName: "Backfill 用户" } },
+        reimbursementUser: {
+          create: {
+            openId,
+            unionId: `on_backfill_${randomUUID()}`,
+            name: "Backfill 用户",
+          },
+        },
       },
     });
 
@@ -356,7 +396,7 @@ test.describe("project management P1 schema, identity and authorization", () => 
     await prisma.systemRoleAssignment.create({
       data: {
         accountId: teamAdmin.account.id,
-        role: "TEAM_ADMINISTRATOR",
+        role: "GROUP_LEADER",
         team: "英雄",
         techGroup: "",
       },
@@ -364,7 +404,7 @@ test.describe("project management P1 schema, identity and authorization", () => 
     await prisma.systemRoleAssignment.create({
       data: {
         accountId: otherTeamAdmin.account.id,
-        role: "TEAM_ADMINISTRATOR",
+        role: "GROUP_LEADER",
         team: "步兵",
         techGroup: "",
       },
@@ -374,10 +414,10 @@ test.describe("project management P1 schema, identity and authorization", () => 
     const viewerActor = actor(viewer.account.id, viewer.person.id, []);
     const outsiderActor = actor(outsider.account.id, outsider.person.id, []);
     const teamAdminActor = actor(teamAdmin.account.id, teamAdmin.person.id, [
-      { role: "TEAM_ADMINISTRATOR", team: "英雄", techGroup: "" },
+      { role: "GROUP_LEADER", team: "英雄", techGroup: "" },
     ]);
     const globalTeamAdminActor = actor(teamAdmin.account.id, teamAdmin.person.id, [
-      { role: "TEAM_ADMINISTRATOR", team: "", techGroup: "" },
+      { role: "GROUP_LEADER", team: "", techGroup: "" },
     ]);
     const globalAuditorActor = actor(teamAdmin.account.id, teamAdmin.person.id, [
       { role: "AUDITOR", team: "", techGroup: "" },
@@ -385,7 +425,7 @@ test.describe("project management P1 schema, identity and authorization", () => 
     const otherTeamAdminActor = actor(
       otherTeamAdmin.account.id,
       otherTeamAdmin.person.id,
-      [{ role: "TEAM_ADMINISTRATOR", team: "步兵", techGroup: "" }],
+      [{ role: "GROUP_LEADER", team: "步兵", techGroup: "" }],
     );
     const resource = {
       type: "task" as const,
@@ -416,7 +456,7 @@ test.describe("project management P1 schema, identity and authorization", () => 
     ).toMatchObject({ allowed: false });
     expect(
       authorize({ actor: globalAuditorActor, action: "task.view", resource }),
-    ).toMatchObject({ allowed: true });
+    ).toMatchObject({ allowed: false });
     expect(
       authorize({ actor: otherTeamAdminActor, action: "task.view", resource }),
     ).toMatchObject({ allowed: false });
@@ -457,7 +497,7 @@ test.describe("project management P1 schema, identity and authorization", () => 
       prisma.systemRoleAssignment.create({
         data: {
           accountId: otherTeamAdmin.account.id,
-          role: "TEAM_ADMINISTRATOR",
+          role: "GROUP_LEADER",
           team: "",
           techGroup: "",
         },
@@ -467,7 +507,7 @@ test.describe("project management P1 schema, identity and authorization", () => 
       prisma.systemRoleAssignment.create({
         data: {
           accountId: otherTeamAdmin.account.id,
-          role: "SYSTEM_ADMINISTRATOR",
+          role: "PROJECT_ADMINISTRATOR",
           team: "英雄",
           techGroup: "",
         },
@@ -585,7 +625,7 @@ test.describe("project management P1 schema, identity and authorization", () => 
 async function createAccountPerson(displayName: string) {
   const account = await prisma.account.create({
     data: {
-      status: "ACTIVE",
+      projectAccessStatus: "ACTIVE",
       person: {
         create: {
           displayName,

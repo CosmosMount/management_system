@@ -1,6 +1,6 @@
 # pnx management
 
-Next.js 全栈管理系统。采购报销与反馈中心继续使用；项目管理正在重构，旧实现和旧开发数据已清理。
+Next.js 全栈管理系统。采购报销、项目管理与反馈中心共用飞书统一账号。
 
 - 技术文档：[`docs/TECH.md`](docs/TECH.md)
 - 消息发送矩阵：[`docs/NOTIFICATIONS.md`](docs/NOTIFICATIONS.md)
@@ -17,7 +17,6 @@ npm install
 docker compose up -d postgres
 
 npm run db:deploy
-npm run pm:identity-backfill  # 默认 dry-run，仅输出 Account/Person 初始化计数
 npm run dev
 ```
 
@@ -38,7 +37,6 @@ npm run dev
 ```bash
 docker compose up -d postgres
 npm run db:deploy   # schema 有更新时
-npm run pm:identity-backfill  # 默认 dry-run，仅输出 Account/Person 初始化计数
 npm run dev
 ```
 
@@ -92,25 +90,10 @@ docker compose up -d --build
 
 ### 3. 初始化管理员（首次）
 
-在 `prisma/seed.ts` 填入你的飞书 `openId` 后，临时开启 seed：
-
-```yaml
-# docker-compose.yml → app → environment 追加一行（仅首次）
-RUN_DB_SEED: "true"
-```
-
-然后：
+先用飞书登录一次或同步通讯录，确认首位管理员已经建立统一账号，再在容器内执行：
 
 ```bash
-docker compose up -d app
-```
-
-seed 成功后**删除** `RUN_DB_SEED` 行并再次 `docker compose up -d`，避免重复写入。
-
-也可先飞书登录一次，再在容器内手动 seed：
-
-```bash
-docker compose exec app npx tsx prisma/seed.ts
+docker compose exec app npm run db:seed -- --super-admin-open-id=<飞书 openId>
 ```
 
 ### 4. 常用命令
@@ -213,18 +196,19 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 
 采购审批卡片可用 `npm run feishu:card-preview -- <orderId>` 预览。该脚本默认 dry-run；真实发送必须额外设置 `CONFIRM_SEND_FEISHU=true`，且不能设置 `NOTIFICATION_DELIVERY_DISABLED=true`。
 
-## 角色配置（审批必做）
+## 统一账号与角色配置
 
-登录只解决「谁能进系统」；**审批按钮**取决于 `UserRole` 表里的角色分配。
+飞书 OAuth 是唯一登录方式。`Account + AccountIdentity` 是统一账号，`Person` 承载项目成员资料，`User` 继续承载采购报销资料和订单关系，并且必须通过唯一且非空的 `accountId` 关联统一账号。项目角色与报销角色独立，只有统一超级管理员跨两个业务域生效。飞书 `openId` 发生变化时，系统使用稳定的 `unionId` 找回原账号并原位更新报销用户，不会新建重复用户或丢失角色。
 
 ### 推荐：超级管理员可视化管理
 
-1. 自己先用飞书登录一次
-2. 在 [`prisma/seed.ts`](prisma/seed.ts) 填入自己的 `openId` 为 `SUPER_ADMIN`，执行 `npm run db:seed`
-3. 登录后访问 **`/admin` 权限管理**：
+1. 自己先用飞书登录一次或同步通讯录。
+2. 执行 `npm run db:seed -- --super-admin-open-id=<飞书 openId>` 初始化首位统一超级管理员。
+3. 登录后访问 **`/admin/accounts` 账号与权限**：
    - 点击 **「同步飞书通讯录」** 将企业全员录入系统（无需对方先登录）
-   - **车组组长配置**：为每个车组指定组长与报销员
-   - **技术组组长配置**：为每个技术组指定组长
+   - 管理项目管理员及多个车组/技术组组长范围
+   - 管理原有四类报销角色
+   - 启用或禁用项目访问；该状态不影响登录和报销
 
 用户也可通过飞书登录自动写入/更新 `User` 表；分配角色前需先完成通讯录同步或让对方登录一次。
 
@@ -244,37 +228,25 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 
 | 角色 | 范围 | 权限 |
 |------|------|------|
-| SUPER_ADMIN | 全局 | 访问 `/admin`，管理所有角色 |
+| 统一超级管理员 | 全局 | 报销和项目最高权限；访问 `/admin/accounts` |
+| 项目管理员 | 项目全局 | 全部项目业务、Tag 和项目审计；不能管理账号 |
+| 项目组长 | 指定一个车组或技术组 | 对匹配组织的 Task 拥有完整权限 |
 | TEAM_ADMIN | 指定车组 | 管理审核阶段，车组组长通过 |
 | TECH_GROUP_ADMIN | 指定技术组 | 管理审核阶段，技术组组长通过 |
 | TEACHER | 全局 | 「老师审核」阶段通过 |
 | FINANCE | 指定车组 | 上传报销截图 |
 
-同一人可拥有多个角色（如同时担任「英雄」管理员与「工程」报销员）。
+普通项目成员不写系统角色，只按现有 `TaskMember` 角色授权。同一人可拥有多个项目组长范围和多个报销角色。
 
 ### 导航栏没有「权限管理」？
 
 常见原因：
 
-1. **`db:seed` 未执行**：`seed.ts` 里写了 SUPER_ADMIN 不等于已写入数据库，需运行 `npm run db:seed`
-2. **openId 不一致**：`UserRole.openId` 必须与 `User` 表中你登录账号的 openId 完全一致
-3. **旧数据残留**：若曾配置过 `TECH` 或 `ou_xxx_placeholder`，schema 升级后会导致角色表异常，执行：
-   ```bash
-   npm run db:fix-roles
-   ```
-4. **会话未刷新**：修改角色后退出重新飞书登录一次
+1. **首位超管未初始化**：执行 `npm run db:seed -- --super-admin-open-id=<飞书 openId>`。
+2. **账号尚未建立**：先让该用户登录或执行通讯录同步。
+3. **旧数据未通过迁移预检**：升级前先运行 `npm run accounts:preflight`，处理报告中的身份、重复角色或范围冲突。
 
-### 手动 seed（可选）
-
-```typescript
-const seedRoles = [
-  { openId: "ou_xxx", role: UserRoleType.SUPER_ADMIN },
-  { openId: "ou_yyy", role: UserRoleType.TEACHER },
-  { openId: "ou_zzz", role: UserRoleType.TEAM_ADMIN, team: "英雄" },
-  { openId: "ou_aaa", role: UserRoleType.TECH_GROUP_ADMIN, techGroup: "机械" },
-  { openId: "ou_bbb", role: UserRoleType.FINANCE, team: "英雄" },
-];
-```
+已有数据库升级时按 `npm run accounts:preflight` → `npm run db:deploy` → `npm run accounts:validate` 执行。预检遇到同时含车组和技术组的旧项目组长会阻止切换，必须显式选择一个范围或拆成两个组长授权。
 
 ### 完整审批与报销流程
 
@@ -303,7 +275,7 @@ const seedRoles = [
 
 ### 审批人私信（已实现）
 
-开通权限 **`im:message:send_as_bot`** 后，系统会在状态变更时向对应角色的**所有** `UserRole` 用户私发卡片。发送机器人按消息性质区分：
+开通权限 **`im:message:send_as_bot`** 后，系统会在状态变更时按 `UserRole.accountId` 找到对应账号的**当前飞书身份**并私发卡片；`UserRole.openId` 只作为历史兼容快照，不参与授权或收件人解析。发送机器人按消息性质区分：
 
 - **审批机器人**：只发待审批、待验收、待确认等需要处理的消息。
 - **通知机器人**：发审批结果、普通状态变更、提醒、反馈等其他私信消息。
@@ -532,7 +504,7 @@ pm2 start npm --name procurement-cron -- run cron
 - `/progress/approvals` 汇总投入确认、Milestone Review、Revision、Conflict、Termination 与关联复核；`/progress/tags` 管理 Tag。
 - `/progress/notifications` 提供站内通知中心和分类飞书偏好；站内通知始终保留，强制事件不受普通关闭偏好影响。
 - 旧 `/progress/task/:id` 会重定向到 `/progress/tasks/:id`；旧 `/progress/projects/*` 和 `/progress/kanban` 回到 `/progress`；未映射旧目录没有业务页面。
-- 飞书登录和通讯录同步会保留采购 `User.openId/unionId`，同时初始化项目管理 Account/Person。已有用户先运行 `npm run pm:identity-backfill` 对账；确认后再运行 `APPLY_PM_IDENTITY_BACKFILL=true npm run pm:identity-backfill`。
+- 飞书登录和通讯录同步先解析统一 `Account/AccountIdentity/Person`，再关联并更新采购 `User`。`projectAccessStatus=DISABLED` 只阻止项目页面和操作；登录、采购报销和超级管理员后台不受影响。
 - 新项目管理的设计和逐阶段真实证据位于 [`docs/plan/`](docs/plan/)；当前完成度以 `project-management-frontend-design-v1.0/13-实施进度台账.md` 为准。
 - `npm run pm:release-rehearsal` 仅用于本机隔离 `_test`/`_snapshot` 数据库；必须显式设置 `PM_RELEASE_REHEARSAL_CONFIRM=LOCAL_ISOLATED_REHEARSAL` 和 `NOTIFICATION_DELIVERY_DISABLED=true`。它不会执行生产维护窗口，生产发布仍需另行授权与 BO/TL/QA/DBA 签字。
 - 项目管理飞书通知只允许写入 `channel=project-management` 的 notification outbox；adapter 已构造普通交互卡并经统一私信传输层投递。验收和 Revision 待审批事件使用审批机器人用途，其他项目管理事件使用通知机器人。

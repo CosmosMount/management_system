@@ -13,6 +13,7 @@ import {
 } from "@/lib/project-management/authorization";
 import { createDomainAuditEventTx } from "@/lib/project-management/audit";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
+import { assertProjectAccessActiveTx } from "@/lib/project-management/identity";
 import {
   createProjectManagementEventNotificationsTx,
   recipientsForPersonIdsTx,
@@ -1863,6 +1864,7 @@ async function refreshActorTx(
   tx: PrismaTx,
   actor: ProjectManagementActor,
 ): Promise<ProjectManagementActor> {
+  await assertProjectAccessActiveTx(tx, actor.accountId);
   const roles = await tx.systemRoleAssignment.findMany({
     where: { accountId: actor.accountId, revokedAt: null },
     select: { role: true, team: true, techGroup: true },

@@ -19,6 +19,8 @@
     "pm:release-rehearsal": "tsx scripts/project-management-release-rehearsal.ts",
     "postinstall": "prisma generate",
     "db:deploy": "tsx scripts/deploy-db.ts",
+    "accounts:preflight": "tsx scripts/preflight-unified-accounts.ts",
+    "accounts:validate": "tsx scripts/validate-unified-accounts.ts",
     "db:seed": "tsx prisma/seed.ts",
     "db:fix-roles": "tsx scripts/fix-user-roles.ts && tsx prisma/seed.ts",
     "db:studio": "prisma studio",

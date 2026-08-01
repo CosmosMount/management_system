@@ -44,7 +44,7 @@ test.describe("project management P4/P6 UI integration", () => {
   }, testInfo) => {
     test.setTimeout(90_000);
     const creator = await createAccountPerson("S5 Composer Creator");
-    await grantRole(creator.account.id, "TEAM_ADMINISTRATOR", {
+    await grantRole(creator.account.id, "GROUP_LEADER", {
       team: "英雄",
       techGroup: "电控",
     });
@@ -214,15 +214,15 @@ test.describe("project management P4/P6 UI integration", () => {
     const creatorA = await createAccountPerson("S5 Draft Scope A");
     const creatorB = await createAccountPerson("S5 Draft Scope B");
     const hiddenCreator = await createAccountPerson("S5 Hidden Task Creator");
-    await grantRole(creatorA.account.id, "TEAM_ADMINISTRATOR", {
+    await grantRole(creatorA.account.id, "GROUP_LEADER", {
       team: "英雄",
       techGroup: "电控",
     });
-    await grantRole(creatorB.account.id, "TEAM_ADMINISTRATOR", {
+    await grantRole(creatorB.account.id, "GROUP_LEADER", {
       team: "英雄",
       techGroup: "电控",
     });
-    await grantRole(hiddenCreator.account.id, "TEAM_ADMINISTRATOR", {
+    await grantRole(hiddenCreator.account.id, "GROUP_LEADER", {
       team: "工程",
       techGroup: "机械",
     });
@@ -360,7 +360,7 @@ test.describe("project management P4/P6 UI integration", () => {
       })),
     });
     const administrator = await createAccountPerson("ZZZ S5 System Administrator");
-    await grantRole(administrator.account.id, "SYSTEM_ADMINISTRATOR");
+    await grantRole(administrator.account.id, "PROJECT_ADMINISTRATOR");
     await loginAsTestUser(context, baseURL, {
       openId: administrator.openId,
       name: administrator.person.displayName,
@@ -1193,15 +1193,11 @@ async function createUiFixture() {
   const member = await createAccountPerson("P6 UI Member");
   const reviewer = await createAccountPerson("P6 UI Reviewer");
   const outsider = await createAccountPerson("P6 UI Outsider");
-  await grantRole(admin.account.id, "TEAM_ADMINISTRATOR", {
+  await grantRole(admin.account.id, "GROUP_LEADER", {
     team: "英雄",
     techGroup: "电控",
   });
-  await grantRole(member.account.id, "TEAM_ADMINISTRATOR", {
-    team: "英雄",
-    techGroup: "电控",
-  });
-  await grantRole(member.account.id, "RESOURCE_MANAGER", {
+  await grantRole(member.account.id, "GROUP_LEADER", {
     team: "英雄",
     techGroup: "电控",
   });
@@ -1367,7 +1363,7 @@ async function createDraftWorkbenchFixture() {
   const admin = await createAccountPerson("S6 Draft Team Admin");
   const owner = await createAccountPerson("S6 Draft Owner");
   const reviewer = await createAccountPerson("S6 Draft Reviewer");
-  await grantRole(admin.account.id, "TEAM_ADMINISTRATOR", {
+  await grantRole(admin.account.id, "GROUP_LEADER", {
     team: "英雄",
     techGroup: "电控",
   });
@@ -1398,7 +1394,7 @@ async function createAccountPerson(displayName: string) {
   const openId = `ou_pm_p6_ui_${randomUUID()}`;
   const account = await prisma.account.create({
     data: {
-      status: "ACTIVE",
+      projectAccessStatus: "ACTIVE",
       identities: {
         create: {
           provider: "FEISHU",
@@ -1422,7 +1418,7 @@ async function createAccountPerson(displayName: string) {
 
 async function grantRole(
   accountId: string,
-  role: "TEAM_ADMINISTRATOR" | "RESOURCE_MANAGER" | "SYSTEM_ADMINISTRATOR",
+  role: "GROUP_LEADER" | "PROJECT_ADMINISTRATOR",
   scope?: { team: string; techGroup: string },
 ) {
   await prisma.systemRoleAssignment.create({
@@ -1430,7 +1426,7 @@ async function grantRole(
       accountId,
       role,
       team: scope?.team ?? "",
-      techGroup: scope?.techGroup ?? "",
+      techGroup: scope?.team ? "" : (scope?.techGroup ?? ""),
     },
   });
 }

@@ -68,14 +68,13 @@ export async function getActionInbox({
   const now = new Date();
   const visibleTask = taskReadableWhere(actor);
   const segmentManagerTask = taskActionableWhere(actor, [], [
-    "TEAM_ADMINISTRATOR",
-    "RESOURCE_MANAGER",
+    "GROUP_LEADER",
   ]);
   const reviewableTask = taskActionableWhere(actor, ["REVIEWER"], [
-    "TEAM_ADMINISTRATOR",
+    "GROUP_LEADER",
   ]);
   const terminableTask = taskActionableWhere(actor, ["OWNER", "REVIEWER"], [
-    "TEAM_ADMINISTRATOR",
+    "GROUP_LEADER",
   ]);
   const confirmationSegmentWhere: Prisma.WorkSegmentWhereInput = {
     AND: [

@@ -1,112 +1,172 @@
 "use server";
 
-import type { UserRoleType } from "@prisma/client";
-import { TEAM_OPTIONS, TECH_GROUP_OPTIONS } from "@/lib/constants";
-import { requireSuperAdmin } from "@/lib/permissions";
+import type { AccountStatus, UserRoleType } from "@prisma/client";
+import { z, ZodError } from "zod";
+import {
+  assignReimbursementRole,
+  grantAccountRole,
+  revokeAccountRole,
+  revokeReimbursementRole,
+  setProjectAccessStatus,
+} from "@/lib/account-management";
+import { requireGlobalSuperAdministrator } from "@/lib/account-authorization";
 import { prisma } from "@/lib/prisma";
 import { revalidateAdmin } from "@/lib/revalidate";
+import {
+  assignReimbursementRoleInputSchema,
+  grantAccountRoleInputSchema,
+  revokeRoleInputSchema,
+  setProjectAccessStatusInputSchema,
+} from "@/lib/validations/account-management";
 
-const TEAM_SCOPED_ROLES = new Set<UserRoleType>(["TEAM_ADMIN", "FINANCE"]);
-const TECH_GROUP_SCOPED_ROLES = new Set<UserRoleType>([
-  "TECH_GROUP_ADMIN",
-  "TEACHER",
-]);
-const GLOBAL_ROLES = new Set<UserRoleType>(["SUPER_ADMIN"]);
-
-function resolveRoleScope(
-  role: UserRoleType,
-  team?: string,
-  techGroup?: string,
-): { team: string; techGroup: string } {
-  if (TEAM_SCOPED_ROLES.has(role)) {
-    const resolvedTeam = team ?? "";
-    if (!resolvedTeam || !(TEAM_OPTIONS as readonly string[]).includes(resolvedTeam)) {
-      throw new Error("车组角色必须指定有效车组");
-    }
-    return { team: resolvedTeam, techGroup: "" };
+function inputError(error: unknown): never {
+  if (error instanceof ZodError) {
+    throw new Error(error.issues[0]?.message ?? "提交的数据无效");
   }
-
-  if (TECH_GROUP_SCOPED_ROLES.has(role)) {
-    const resolvedTechGroup = techGroup ?? "";
-    if (
-      !resolvedTechGroup ||
-      !(TECH_GROUP_OPTIONS as readonly string[]).includes(resolvedTechGroup)
-    ) {
-      throw new Error("技术组角色必须指定有效技术组");
-    }
-    return { team: "", techGroup: resolvedTechGroup };
-  }
-
-  if (GLOBAL_ROLES.has(role)) {
-    if (team || techGroup) {
-      throw new Error("该角色不需要指定车组或技术组");
-    }
-    return { team: "", techGroup: "" };
-  }
-
-  throw new Error("未知角色类型");
+  throw error;
 }
 
+const compatibilityUserRoleInputSchema = z.object({
+  openId: z.string().trim().min(1, "用户参数无效"),
+  role: z.enum([
+    "SUPER_ADMIN",
+    "TEAM_ADMIN",
+    "TECH_GROUP_ADMIN",
+    "TEACHER",
+    "FINANCE",
+  ]),
+  team: z.string().trim().optional().default(""),
+  techGroup: z.string().trim().optional().default(""),
+});
+
+export async function grantProjectSystemRole(input: {
+  targetAccountId: string;
+  role: "SUPER_ADMINISTRATOR" | "PROJECT_ADMINISTRATOR" | "GROUP_LEADER";
+  team?: string;
+  techGroup?: string;
+}) {
+  try {
+    const parsed = grantAccountRoleInputSchema.parse(input);
+    const { context } = await requireGlobalSuperAdministrator();
+    const result = await grantAccountRole(context.accountId, parsed);
+    revalidateAdmin();
+    return { changed: result.changed };
+  } catch (error) {
+    inputError(error);
+  }
+}
+
+export async function revokeProjectSystemRole(input: {
+  assignmentId: string;
+}) {
+  try {
+    const parsed = revokeRoleInputSchema.parse(input);
+    const { context } = await requireGlobalSuperAdministrator();
+    const result = await revokeAccountRole(
+      context.accountId,
+      parsed.assignmentId,
+    );
+    revalidateAdmin();
+    return { changed: result.changed };
+  } catch (error) {
+    inputError(error);
+  }
+}
+
+export async function updateProjectAccessStatus(input: {
+  targetAccountId: string;
+  status: AccountStatus;
+}) {
+  try {
+    const parsed = setProjectAccessStatusInputSchema.parse(input);
+    const { context } = await requireGlobalSuperAdministrator();
+    const result = await setProjectAccessStatus(
+      context.accountId,
+      parsed.targetAccountId,
+      parsed.status,
+    );
+    revalidateAdmin();
+    return result;
+  } catch (error) {
+    inputError(error);
+  }
+}
+
+export async function assignAccountReimbursementRole(input: {
+  targetAccountId: string;
+  role: "TEAM_ADMIN" | "TECH_GROUP_ADMIN" | "TEACHER" | "FINANCE";
+  team?: string;
+  techGroup?: string;
+}) {
+  try {
+    const parsed = assignReimbursementRoleInputSchema.parse(input);
+    const { context } = await requireGlobalSuperAdministrator();
+    const result = await assignReimbursementRole(context.accountId, parsed);
+    revalidateAdmin();
+    return { changed: result.changed };
+  } catch (error) {
+    inputError(error);
+  }
+}
+
+export async function revokeAccountReimbursementRole(input: {
+  assignmentId: string;
+}) {
+  try {
+    const parsed = revokeRoleInputSchema.parse(input);
+    const { context } = await requireGlobalSuperAdministrator();
+    const result = await revokeReimbursementRole(
+      context.accountId,
+      parsed.assignmentId,
+    );
+    revalidateAdmin();
+    return { changed: result.changed };
+  } catch (error) {
+    inputError(error);
+  }
+}
+
+/** Compatibility entry point for the existing reimbursement-role UI. */
 export async function assignUserRole(input: {
   openId: string;
   role: UserRoleType;
   team?: string;
   techGroup?: string;
 }) {
-  await requireSuperAdmin();
-
-  const { team, techGroup } = resolveRoleScope(
-    input.role,
-    input.team,
-    input.techGroup,
-  );
-
-  const user = await prisma.user.findUnique({ where: { openId: input.openId } });
-  if (!user) {
-    throw new Error("用户不存在，请先在权限管理页同步飞书通讯录");
+  try {
+    const { context } = await requireGlobalSuperAdministrator();
+    const parsedInput = compatibilityUserRoleInputSchema.parse(input);
+    const user = await prisma.user.findUnique({
+      where: { openId: parsedInput.openId },
+      select: { accountId: true },
+    });
+    if (!user?.accountId) {
+      throw new Error("用户缺少统一账号，请先同步飞书通讯录");
+    }
+    if (parsedInput.role === "SUPER_ADMIN") {
+      const parsed = grantAccountRoleInputSchema.parse({
+        targetAccountId: user.accountId,
+        role: "SUPER_ADMINISTRATOR",
+      });
+      const result = await grantAccountRole(context.accountId, parsed);
+      revalidateAdmin();
+      return { changed: result.changed };
+    }
+    const parsed = assignReimbursementRoleInputSchema.parse({
+      targetAccountId: user.accountId,
+      role: parsedInput.role,
+      team: parsedInput.team,
+      techGroup: parsedInput.techGroup,
+    });
+    const result = await assignReimbursementRole(context.accountId, parsed);
+    revalidateAdmin();
+    return { changed: result.changed };
+  } catch (error) {
+    inputError(error);
   }
-
-  await prisma.userRole.upsert({
-    where: {
-      openId_role_team_techGroup: {
-        openId: input.openId,
-        role: input.role,
-        team,
-        techGroup,
-      },
-    },
-    update: {},
-    create: {
-      openId: input.openId,
-      role: input.role,
-      team,
-      techGroup,
-    },
-  });
-
-  revalidateAdmin();
 }
 
+/** Compatibility entry point for the existing reimbursement-role UI. */
 export async function removeUserRole(roleId: string) {
-  const session = await requireSuperAdmin();
-
-  const record = await prisma.userRole.findUnique({ where: { id: roleId } });
-  if (!record) {
-    throw new Error("角色记录不存在");
-  }
-
-  if (record.role === "SUPER_ADMIN") {
-    const superAdminCount = await prisma.userRole.count({
-      where: { role: "SUPER_ADMIN" },
-    });
-    if (superAdminCount <= 1) {
-      throw new Error("至少保留一名超级管理员");
-    }
-    if (record.openId === session.user.openId) {
-      throw new Error("不能移除自己的超级管理员权限");
-    }
-  }
-
-  await prisma.userRole.delete({ where: { id: roleId } });
-  revalidateAdmin();
+  return revokeAccountReimbursementRole({ assignmentId: roleId });
 }

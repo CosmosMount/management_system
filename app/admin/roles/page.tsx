@@ -1,23 +1,6 @@
-import { RolesPanel } from "@/components/admin/roles-panel";
-import { prisma } from "@/lib/prisma";
+import { redirect } from "next/navigation";
+import { routes } from "@/lib/routes";
 
-export default async function AdminRolesPage() {
-  const [users, roles] = await Promise.all([
-    prisma.user.findMany({ orderBy: { name: "asc" } }),
-    prisma.userRole.findMany({ orderBy: { role: "asc" } }),
-  ]);
-
-  return (
-    <RolesPanel
-      users={users.map((user) => ({
-        ...user,
-        createdAt: user.createdAt.toISOString(),
-      }))}
-      roles={roles.map((role) => ({
-        ...role,
-        team: role.team ?? "",
-        techGroup: role.techGroup ?? "",
-      }))}
-    />
-  );
+export default function LegacyAdminRolesPage() {
+  redirect(routes.admin.accounts);
 }

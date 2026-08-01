@@ -65,6 +65,9 @@ enum ProjectManagementSystemRole {
   TEAM_ADMINISTRATOR
   RESOURCE_MANAGER
   AUDITOR
+  SUPER_ADMINISTRATOR
+  PROJECT_ADMINISTRATOR
+  GROUP_LEADER
 }
 
 enum TaskStatus {
@@ -229,7 +232,7 @@ enum AuditSource {
 
 model Account {
   id                        String                   @id @default(uuid())
-  status                    AccountStatus            @default(ACTIVE)
+  projectAccessStatus       AccountStatus            @default(ACTIVE)
   lastLoginAt               DateTime?                @db.Timestamptz(6)
   identities                AccountIdentity[]
   person                    Person?
@@ -250,6 +253,13 @@ model Account {
   resolvedConflicts         ResourceConflict[]       @relation("ResourceConflictResolvedBy")
   systemRoles               SystemRoleAssignment[]   @relation("SystemRoleAccount")
   grantedSystemRoles        SystemRoleAssignment[]   @relation("SystemRoleGrantedBy")
+  revokedSystemRoles        SystemRoleAssignment[]   @relation("SystemRoleRevokedBy")
+  reimbursementRoles        UserRole[]               @relation("UserRoleAccount")
+  grantedReimbursementRoles UserRole[]               @relation("UserRoleGrantedBy")
+  revokedReimbursementRoles UserRole[]               @relation("UserRoleRevokedBy")
+  reimbursementUser         User?
+  teamApprovedOrders        PurchaseOrder[]          @relation("PurchaseOrderTeamApprover")
+  techGroupApprovedOrders   PurchaseOrder[]          @relation("PurchaseOrderTechGroupApprover")
   notificationPreferences   NotificationPreference[]
   inAppNotifications        InAppNotification[]
   auditEvents               DomainAuditEvent[]       @relation("AuditActorAccount")
@@ -296,6 +306,8 @@ model Person {
 
 model User {
   id            String          @id @default(uuid())
+  accountId     String          @unique
+  account       Account         @relation(fields: [accountId], references: [id], onDelete: Restrict)
   openId        String          @unique
   unionId       String?         @unique
   name          String
@@ -322,13 +334,23 @@ model ProcurementFeishuCard {
 }
 
 model UserRole {
-  id        String       @id @default(uuid())
-  openId    String
-  role      UserRoleType
-  team      String       @default("")
-  techGroup String       @default("")
+  id                 String       @id @default(uuid())
+  accountId          String?
+  account            Account?     @relation("UserRoleAccount", fields: [accountId], references: [id], onDelete: Restrict)
+  openId             String
+  role               UserRoleType
+  team               String       @default("")
+  techGroup          String       @default("")
+  grantedByAccountId String?
+  grantedBy          Account?     @relation("UserRoleGrantedBy", fields: [grantedByAccountId], references: [id], onDelete: SetNull)
+  revokedByAccountId String?
+  revokedBy          Account?     @relation("UserRoleRevokedBy", fields: [revokedByAccountId], references: [id], onDelete: SetNull)
+  revokedAt          DateTime?    @db.Timestamptz(6)
+  createdAt          DateTime     @default(now()) @db.Timestamptz(6)
 
-  @@unique([openId, role, team, techGroup])
+  @@index([accountId, role])
+  @@index([openId, role])
+  @@index([revokedAt])
 }
 
 model ProcurementBudgetPool {
@@ -353,32 +375,39 @@ model ProcurementBudgetPool {
 }
 
 model PurchaseOrder {
-  id                      String         @id @default(uuid())
-  orderNo                 String         @unique
-  initiatorId             String
-  initiator               User           @relation(fields: [initiatorId], references: [id])
-  initiatorName           String
-  team                    String
-  techGroup               String
-  totalPrice              Float          @default(0)
-  teamApproved            Boolean        @default(false)
-  techGroupApproved       Boolean        @default(false)
-  teamApproverOpenId      String?
-  techGroupApproverOpenId String?
-  invoicePaths            String         @default("[]")
-  invoicePath             String?
-  listDocPath             String?
-  screenshotPath          String?
-  status                  OrderStatus    @default(DRAFT)
-  isWorkshopFee           Boolean        @default(false)
-  rejectionReason         String?
-  rejectedAt              DateTime?
-  rejectedByName          String?
-  lastReminderAt          DateTime?
-  statusEnteredAt         DateTime       @default(now())
-  items                   PurchaseItem[]
-  createdAt               DateTime       @default(now())
-  updatedAt               DateTime       @updatedAt
+  id                         String         @id @default(uuid())
+  orderNo                    String         @unique
+  initiatorId                String
+  initiator                  User           @relation(fields: [initiatorId], references: [id])
+  initiatorName              String
+  team                       String
+  techGroup                  String
+  totalPrice                 Float          @default(0)
+  teamApproved               Boolean        @default(false)
+  techGroupApproved          Boolean        @default(false)
+  teamApproverAccountId      String?
+  teamApproverAccount        Account?       @relation("PurchaseOrderTeamApprover", fields: [teamApproverAccountId], references: [id], onDelete: Restrict)
+  teamApproverOpenId         String?
+  techGroupApproverAccountId String?
+  techGroupApproverAccount   Account?       @relation("PurchaseOrderTechGroupApprover", fields: [techGroupApproverAccountId], references: [id], onDelete: Restrict)
+  techGroupApproverOpenId    String?
+  invoicePaths               String         @default("[]")
+  invoicePath                String?
+  listDocPath                String?
+  screenshotPath             String?
+  status                     OrderStatus    @default(DRAFT)
+  isWorkshopFee              Boolean        @default(false)
+  rejectionReason            String?
+  rejectedAt                 DateTime?
+  rejectedByName             String?
+  lastReminderAt             DateTime?
+  statusEnteredAt            DateTime       @default(now())
+  items                      PurchaseItem[]
+  createdAt                  DateTime       @default(now())
+  updatedAt                  DateTime       @updatedAt
+
+  @@index([teamApproverAccountId])
+  @@index([techGroupApproverAccountId])
 }
 
 enum PurchaseItemKind {
@@ -869,12 +898,15 @@ model SystemRoleAssignment {
   techGroup          String                      @default("")
   grantedByAccountId String?
   grantedBy          Account?                    @relation("SystemRoleGrantedBy", fields: [grantedByAccountId], references: [id], onDelete: SetNull)
+  revokedByAccountId String?
+  revokedBy          Account?                    @relation("SystemRoleRevokedBy", fields: [revokedByAccountId], references: [id], onDelete: SetNull)
   revokedAt          DateTime?                   @db.Timestamptz(6)
   createdAt          DateTime                    @default(now()) @db.Timestamptz(6)
 
   @@index([accountId, role])
   @@index([role, team, techGroup])
   @@index([grantedByAccountId])
+  @@index([revokedByAccountId])
   @@index([revokedAt])
 }
 
@@ -984,15 +1016,15 @@ model NotificationOutboxRecipient {
 }
 
 model ProjectManagementScanCheckpoint {
-  key             String   @id
-  cursor          Json     @default("{}")
+  key             String    @id
+  cursor          Json      @default("{}")
   lastStartedAt   DateTime? @db.Timestamptz(6)
   lastCompletedAt DateTime? @db.Timestamptz(6)
   lastFullScanAt  DateTime? @db.Timestamptz(6)
-  lastError       String   @default("")
-  lockVersion     Int      @default(0)
-  createdAt       DateTime @default(now()) @db.Timestamptz(6)
-  updatedAt       DateTime @updatedAt @db.Timestamptz(6)
+  lastError       String    @default("")
+  lockVersion     Int       @default(0)
+  createdAt       DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @db.Timestamptz(6)
 
   @@index([lastCompletedAt])
   @@index([lastFullScanAt])

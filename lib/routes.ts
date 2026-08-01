@@ -3,7 +3,8 @@ export const routes = {
   admin: {
     root: "/admin",
     system: "/admin/system",
-    roles: "/admin/roles",
+    accounts: "/admin/accounts",
+    roles: "/admin/accounts",
     budgetPools: "/admin/budget-pools",
   },
   procurement: {

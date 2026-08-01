@@ -4,6 +4,7 @@ import { randomUUID } from "crypto";
 import { revalidatePath } from "next/cache";
 import type { FeedbackStatus } from "@prisma/client";
 import { auth } from "@/lib/auth";
+import { resolveFeishuIdentityForUser } from "@/lib/project-management/identity";
 import {
   FEEDBACK_IMAGE_TOTAL_SIZE_LABEL,
   MAX_FEEDBACK_IMAGE_COUNT,
@@ -76,19 +77,14 @@ async function requireFeedbackUser(): Promise<FeedbackActionUser> {
     throw new Error("未登录");
   }
 
-  return prisma.user.upsert({
-    where: { openId: session.user.openId },
-    update: {
-      name: session.user.name ?? "未知用户",
-      avatar: session.user.image ?? null,
-    },
-    create: {
-      openId: session.user.openId,
-      name: session.user.name ?? "未知用户",
-      avatar: session.user.image ?? null,
-    },
-    select: { openId: true, name: true, avatar: true },
+  const identity = await resolveFeishuIdentityForUser({
+    openId: session.user.openId,
+    unionId: session.user.unionId,
+    name: session.user.name,
+    avatar: session.user.image,
   });
+  const { openId, name, avatar } = identity.reimbursementUser;
+  return { openId, name, avatar };
 }
 
 async function cleanupAttachments(attachments: SavedFeedbackAttachment[]) {

@@ -11,6 +11,7 @@ import {
   UserRoleType,
 } from "@prisma/client";
 import { prisma } from "../../lib/prisma";
+import { resolveFeishuIdentityForUser } from "../../lib/project-management/identity";
 import { storagePathToAbsolute } from "../../lib/upload-paths";
 
 const SESSION_COOKIE_NAME = "authjs.session-token";
@@ -88,15 +89,35 @@ export async function prepareFunctionalFixtures(
   await cleanupFunctionalFixtures([normalOpenId, adminOpenId, otherOpenId]);
   await createPlaywrightSignatureFiles({ normalOpenId, adminOpenId });
 
+  const [normalIdentity, otherIdentity, adminIdentity] = await Promise.all([
+    resolveFeishuIdentityForUser({
+      openId: normalOpenId,
+      unionId: FALLBACK_NORMAL_UNION_ID,
+      name: FALLBACK_NORMAL_NAME,
+    }),
+    resolveFeishuIdentityForUser({
+      openId: otherOpenId,
+      unionId: FALLBACK_OTHER_UNION_ID,
+      name: FALLBACK_OTHER_NAME,
+    }),
+    resolveFeishuIdentityForUser({
+      openId: adminOpenId,
+      unionId: FALLBACK_ADMIN_UNION_ID,
+      name: FALLBACK_ADMIN_NAME,
+    }),
+  ]);
+
   await Promise.all([
     prisma.user.upsert({
       where: { openId: normalOpenId },
       update: {
+        accountId: normalIdentity.account.id,
         name: FALLBACK_NORMAL_NAME,
         unionId: FALLBACK_NORMAL_UNION_ID,
         signaturePath: NORMAL_SIGNATURE_PUBLIC_PATH,
       },
       create: {
+        accountId: normalIdentity.account.id,
         openId: normalOpenId,
         unionId: FALLBACK_NORMAL_UNION_ID,
         name: FALLBACK_NORMAL_NAME,
@@ -106,10 +127,12 @@ export async function prepareFunctionalFixtures(
     prisma.user.upsert({
       where: { openId: otherOpenId },
       update: {
+        accountId: otherIdentity.account.id,
         name: FALLBACK_OTHER_NAME,
         unionId: FALLBACK_OTHER_UNION_ID,
       },
       create: {
+        accountId: otherIdentity.account.id,
         openId: otherOpenId,
         unionId: FALLBACK_OTHER_UNION_ID,
         name: FALLBACK_OTHER_NAME,
@@ -118,11 +141,13 @@ export async function prepareFunctionalFixtures(
     prisma.user.upsert({
       where: { openId: adminOpenId },
       update: {
+        accountId: adminIdentity.account.id,
         name: FALLBACK_ADMIN_NAME,
         unionId: FALLBACK_ADMIN_UNION_ID,
         signaturePath: ADMIN_SIGNATURE_PUBLIC_PATH,
       },
       create: {
+        accountId: adminIdentity.account.id,
         openId: adminOpenId,
         unionId: FALLBACK_ADMIN_UNION_ID,
         name: FALLBACK_ADMIN_NAME,
@@ -136,17 +161,32 @@ export async function prepareFunctionalFixtures(
   });
   await prisma.userRole.createMany({
     data: [
-      { openId: adminOpenId, role: UserRoleType.SUPER_ADMIN },
-      { openId: adminOpenId, role: UserRoleType.TEAM_ADMIN, team: "英雄" },
+      { accountId: adminIdentity.account.id, openId: adminOpenId, role: UserRoleType.TEAM_ADMIN, team: "英雄" },
       {
+        accountId: adminIdentity.account.id,
         openId: adminOpenId,
         role: UserRoleType.TECH_GROUP_ADMIN,
         techGroup: "电控",
       },
-      { openId: adminOpenId, role: UserRoleType.FINANCE, team: "英雄" },
-      { openId: adminOpenId, role: UserRoleType.TEACHER, techGroup: "电控" },
+      { accountId: adminIdentity.account.id, openId: adminOpenId, role: UserRoleType.FINANCE, team: "英雄" },
+      { accountId: adminIdentity.account.id, openId: adminOpenId, role: UserRoleType.TEACHER, techGroup: "电控" },
     ],
   });
+  const existingSuperAdmin = await prisma.systemRoleAssignment.findFirst({
+    where: {
+      accountId: adminIdentity.account.id,
+      role: "SUPER_ADMINISTRATOR",
+      revokedAt: null,
+    },
+  });
+  if (!existingSuperAdmin) {
+    await prisma.systemRoleAssignment.create({
+      data: {
+        accountId: adminIdentity.account.id,
+        role: "SUPER_ADMINISTRATOR",
+      },
+    });
+  }
 
   await prisma.procurementBudgetPool.upsert({
     where: {

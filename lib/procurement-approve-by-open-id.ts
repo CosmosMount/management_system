@@ -57,6 +57,13 @@ export async function approveProcurementByOpenId(
     }
 
     await requireApproverSignature(openId);
+    const approver = await prisma.user.findUnique({
+      where: { openId },
+      select: { accountId: true },
+    });
+    if (!approver) {
+      throw new Error("当前账号未关联统一账号，请重新登录后重试");
+    }
 
     const notifyContext = getDefaultNotificationContext();
     const { advancedToTeacherReview } = await prisma.$transaction(async (tx) => {
@@ -75,12 +82,14 @@ export async function approveProcurementByOpenId(
           ...(canTeam
             ? {
                 teamApproved: true,
+                teamApproverAccountId: approver.accountId,
                 teamApproverOpenId: openId,
               }
             : {}),
           ...(canTech
             ? {
                 techGroupApproved: true,
+                techGroupApproverAccountId: approver.accountId,
                 techGroupApproverOpenId: openId,
               }
             : {}),

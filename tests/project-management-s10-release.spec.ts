@@ -6,6 +6,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { Client } from "pg";
 import { prisma } from "../lib/prisma";
+import { resolveFeishuIdentityForUser } from "../lib/project-management/identity";
 
 type RehearsalReport = {
   cleanup: {
@@ -184,12 +185,10 @@ test.describe("S10 release readiness", () => {
       path.join(uploadSource, "nested", "附件.bin"),
       Buffer.from([0, 1, 2, 3, 255]),
     );
-    await prisma.user.create({
-      data: {
-        name: "发布演练共享用户",
-        openId,
-        unionId: `on_release_${randomUUID()}`,
-      },
+    await resolveFeishuIdentityForUser({
+      name: "发布演练共享用户",
+      openId,
+      unionId: `on_release_${randomUUID()}`,
     });
 
     try {

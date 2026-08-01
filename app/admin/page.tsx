@@ -8,19 +8,32 @@ import { routes } from "@/lib/routes";
 
 export default async function AdminPage() {
   const [
-    userCount,
-    assignedUserRows,
+    accountCount,
+    activeAccountCount,
+    disabledAccountCount,
     superAdminCount,
-    roleCount,
+    projectAdminCount,
+    groupLeaderRows,
+    reimbursementRoleCount,
     budgetPoolCount,
   ] = await Promise.all([
-    prisma.user.count(),
-    prisma.userRole.findMany({
-      distinct: ["openId"],
-      select: { openId: true },
+    prisma.account.count(),
+    prisma.account.count({ where: { projectAccessStatus: "ACTIVE" } }),
+    prisma.account.count({ where: { projectAccessStatus: "DISABLED" } }),
+    prisma.systemRoleAssignment.count({
+      where: { role: "SUPER_ADMINISTRATOR", revokedAt: null },
     }),
-    prisma.userRole.count({ where: { role: "SUPER_ADMIN" } }),
-    prisma.userRole.count(),
+    prisma.systemRoleAssignment.count({
+      where: { role: "PROJECT_ADMINISTRATOR", revokedAt: null },
+    }),
+    prisma.systemRoleAssignment.findMany({
+      where: { role: "GROUP_LEADER", revokedAt: null },
+      distinct: ["accountId"],
+      select: { accountId: true },
+    }),
+    prisma.userRole.count({
+      where: { revokedAt: null, role: { not: "SUPER_ADMIN" } },
+    }),
     prisma.procurementBudgetPool.count({
       where: { period: currentBudgetPeriod() },
     }),
@@ -31,15 +44,45 @@ export default async function AdminPage() {
       <section className="grid min-w-0 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <AdminMetric
           icon={Users}
-          label="通讯录用户"
-          value={userCount}
-          detail={`${assignedUserRows.length} 人已有角色`}
+          label="统一账号"
+          value={accountCount}
+          detail="飞书统一身份"
+        />
+        <AdminMetric
+          icon={Users}
+          label="项目已启用"
+          value={activeAccountCount}
+          detail="可进入项目管理"
+        />
+        <AdminMetric
+          icon={Users}
+          label="项目已禁用"
+          value={disabledAccountCount}
+          detail="登录与报销不受影响"
         />
         <AdminMetric
           icon={ShieldCheck}
-          label="全局管理"
+          label="超级管理员"
           value={superAdminCount}
-          detail="超级管理员"
+          detail="跨报销与项目"
+        />
+        <AdminMetric
+          icon={ShieldCheck}
+          label="项目管理员"
+          value={projectAdminCount}
+          detail="全部项目业务权限"
+        />
+        <AdminMetric
+          icon={ShieldCheck}
+          label="组织组长"
+          value={groupLeaderRows.length}
+          detail="按车组或技术组授权"
+        />
+        <AdminMetric
+          icon={ShieldCheck}
+          label="报销角色"
+          value={reimbursementRoleCount}
+          detail="车组、技术组、老师与财务"
         />
         <AdminMetric
           icon={Wallet}
@@ -57,10 +100,10 @@ export default async function AdminPage() {
           detail="从飞书通讯录同步用户资料。"
         />
         <AdminEntryCard
-          href={routes.admin.roles}
+          href={routes.admin.accounts}
           icon={ShieldCheck}
-          title="用户与角色"
-          detail={`当前共有 ${roleCount} 条角色配置。`}
+          title="账号与权限"
+          detail={`当前共有 ${reimbursementRoleCount} 条报销角色配置。`}
         />
         <AdminEntryCard
           href={routes.admin.budgetPools}

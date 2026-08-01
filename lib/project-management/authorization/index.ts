@@ -174,7 +174,7 @@ function authorizeSegment(
     if (resource.task && authorizeTask(actor, "task.view", resource.task).allowed) {
       return allow("task_context");
     }
-    if (hasScopedRole(actor, ["TEAM_ADMINISTRATOR", "RESOURCE_MANAGER"], resource.task)) {
+    if (hasScopedRole(actor, ["GROUP_LEADER"], resource.task)) {
       return allow("resource_scope");
     }
   }
@@ -183,9 +183,9 @@ function authorizeSegment(
   }
   if (
     action === "segment.manage_others" &&
-    hasScopedRole(actor, ["TEAM_ADMINISTRATOR", "RESOURCE_MANAGER"], resource.task)
+    hasScopedRole(actor, ["GROUP_LEADER"], resource.task)
   ) {
-    return allow("resource_manager");
+    return allow("group_leader_scope");
   }
   return deny("segment_policy_denied");
 }
@@ -196,9 +196,6 @@ function authorizeAudit(
   resource: AuthorizationAuditResource,
 ): AuthorizationDecision {
   if (action !== "audit.view") return deny("audit_action_mismatch");
-  if (hasScopedRole(actor, ["AUDITOR"], resource.task)) {
-    return allow("auditor_scope");
-  }
   if (resource.task && authorizeTask(actor, "task.view", resource.task).allowed) {
     return allow("task_readable_audit");
   }
@@ -214,8 +211,8 @@ function authorizeTask(
   resource: AuthorizationTaskResource,
 ): AuthorizationDecision {
   if (action === "task.create") {
-    return hasScopedRole(actor, ["TEAM_ADMINISTRATOR"], resource)
-      ? allow("team_administrator_scope")
+    return hasScopedRole(actor, ["GROUP_LEADER"], resource)
+      ? allow("group_leader_scope")
       : deny("task_create_scope_denied");
   }
 
@@ -228,7 +225,7 @@ function authorizeTask(
     if (hasTaskRole(actor, resource, ["OWNER", "LEAD", "MEMBER", "REVIEWER", "VIEWER"])) {
       return allow("task_member");
     }
-    if (hasScopedRole(actor, ["TEAM_ADMINISTRATOR", "AUDITOR"], resource)) {
+    if (hasScopedRole(actor, ["GROUP_LEADER"], resource)) {
       return allow("scoped_task_reader");
     }
     return deny("task_not_readable");
@@ -238,8 +235,8 @@ function authorizeTask(
     if (hasTaskRole(actor, resource, ["OWNER", "LEAD", "MEMBER"])) {
       return allow("milestone_submitter");
     }
-    if (hasScopedRole(actor, ["TEAM_ADMINISTRATOR"], resource)) {
-      return allow("team_administrator_scope");
+    if (hasScopedRole(actor, ["GROUP_LEADER"], resource)) {
+      return allow("group_leader_scope");
     }
     return deny("milestone_submit_denied");
   }
@@ -248,40 +245,40 @@ function authorizeTask(
     if (hasTaskRole(actor, resource, ["OWNER", "LEAD"])) {
       return allow("task_editor");
     }
-    if (hasScopedRole(actor, ["TEAM_ADMINISTRATOR"], resource)) {
-      return allow("team_administrator_scope");
+    if (hasScopedRole(actor, ["GROUP_LEADER"], resource)) {
+      return allow("group_leader_scope");
     }
     return deny("task_edit_denied");
   }
 
   if (action === "task.manage_members" || action === "task.activate") {
     if (hasTaskRole(actor, resource, ["OWNER"])) return allow("task_owner");
-    if (hasScopedRole(actor, ["TEAM_ADMINISTRATOR"], resource)) {
-      return allow("team_administrator_scope");
+    if (hasScopedRole(actor, ["GROUP_LEADER"], resource)) {
+      return allow("group_leader_scope");
     }
     return deny("task_owner_required");
   }
 
   if (action === "task.archive") {
     if (hasTaskRole(actor, resource, ["OWNER"])) return allow("task_owner");
-    if (hasScopedRole(actor, ["TEAM_ADMINISTRATOR"], resource)) {
-      return allow("team_administrator_scope");
+    if (hasScopedRole(actor, ["GROUP_LEADER"], resource)) {
+      return allow("group_leader_scope");
     }
     return deny("task_archive_denied");
   }
 
   if (action === "revision.review" || action === "milestone.review") {
     if (hasTaskRole(actor, resource, ["REVIEWER"])) return allow("task_reviewer");
-    if (hasScopedRole(actor, ["TEAM_ADMINISTRATOR"], resource)) {
-      return allow("team_administrator_scope");
+    if (hasScopedRole(actor, ["GROUP_LEADER"], resource)) {
+      return allow("group_leader_scope");
     }
     return deny("reviewer_required");
   }
 
   if (action === "revision.apply") {
     if (hasTaskRole(actor, resource, ["OWNER"])) return allow("task_owner");
-    if (hasScopedRole(actor, ["TEAM_ADMINISTRATOR"], resource)) {
-      return allow("team_administrator_scope");
+    if (hasScopedRole(actor, ["GROUP_LEADER"], resource)) {
+      return allow("group_leader_scope");
     }
     return deny("revision_apply_denied");
   }
@@ -290,14 +287,14 @@ function authorizeTask(
     if (hasTaskRole(actor, resource, ["OWNER", "REVIEWER"])) {
       return allow("task_owner_or_reviewer");
     }
-    if (hasScopedRole(actor, ["TEAM_ADMINISTRATOR"], resource)) {
-      return allow("team_administrator_scope");
+    if (hasScopedRole(actor, ["GROUP_LEADER"], resource)) {
+      return allow("group_leader_scope");
     }
     return deny("task_terminate_denied");
   }
 
   if (action === "conflict.resolve") {
-    if (hasScopedRole(actor, ["TEAM_ADMINISTRATOR", "RESOURCE_MANAGER"], resource)) {
+    if (hasScopedRole(actor, ["GROUP_LEADER"], resource)) {
       return allow("conflict_manager_scope");
     }
     return deny("conflict_resolve_denied");
@@ -311,14 +308,14 @@ function authorizeSystemScoped(
   action: ProjectManagementAction,
   resource: { type: "system"; team?: string; techGroup?: string },
 ): AuthorizationDecision {
-  if (action === "task.create" && hasScopedRole(actor, ["TEAM_ADMINISTRATOR"], resource)) {
-    return allow("team_administrator_scope");
+  if (action === "task.create" && hasScopedRole(actor, ["GROUP_LEADER"], resource)) {
+    return allow("group_leader_scope");
   }
   if (
     action === "segment.manage_others" &&
-    hasScopedRole(actor, ["TEAM_ADMINISTRATOR", "RESOURCE_MANAGER"], resource)
+    hasScopedRole(actor, ["GROUP_LEADER"], resource)
   ) {
-    return allow("resource_manager_scope");
+    return allow("group_leader_scope");
   }
   return deny("system_scope_denied");
 }
@@ -331,7 +328,7 @@ export function taskReadableWhere(
   }
   const or: Prisma.TaskWhereInput[] = [
     { members: { some: { personId: actor.personId, removedAt: null } } },
-    ...scopedTaskWhere(actor, ["TEAM_ADMINISTRATOR", "AUDITOR"]),
+    ...scopedTaskWhere(actor, ["GROUP_LEADER"]),
   ];
   return or.length > 0 ? { deletedAt: null, OR: or } : neverTaskWhere();
 }
@@ -347,7 +344,7 @@ export function segmentReadableWhere(
     OR: [
       { personId: actor.personId },
       { task: taskReadableWhere(actor) },
-      ...scopedTaskWhere(actor, ["TEAM_ADMINISTRATOR", "RESOURCE_MANAGER"]).map(
+      ...scopedTaskWhere(actor, ["GROUP_LEADER"]).map(
         (task) => ({ task }),
       ),
     ],
@@ -369,7 +366,6 @@ export function auditReadableWhere(
     OR: [
       { actorAccountId: actor.accountId },
       { task: taskReadableWhere(actor) },
-      ...scopedTaskWhere(actor, ["AUDITOR"]).map((task) => ({ task })),
     ],
   };
 }
@@ -382,7 +378,11 @@ export function notificationReadableWhere(
 
 export function isSystemAdministrator(actor: ProjectManagementActor): boolean {
   return actor.systemRoles.some(
-    (role) => role.role === "SYSTEM_ADMINISTRATOR" && !role.team && !role.techGroup,
+    (role) =>
+      (role.role === "SUPER_ADMINISTRATOR" ||
+        role.role === "PROJECT_ADMINISTRATOR") &&
+      !role.team &&
+      !role.techGroup,
   );
 }
 
@@ -427,7 +427,10 @@ function roleScopeMatches(
   const roleTeam = role.team.trim();
   const roleTechGroup = role.techGroup.trim();
   if (!roleTeam && !roleTechGroup) {
-    return role.role === "SYSTEM_ADMINISTRATOR" || role.role === "AUDITOR";
+    return (
+      role.role === "SUPER_ADMINISTRATOR" ||
+      role.role === "PROJECT_ADMINISTRATOR"
+    );
   }
   if (!resource) return false;
   if (roleTeam && roleTeam !== resource.team) return false;
@@ -457,7 +460,11 @@ function roleCanProduceTaskScopeWhere(
   role: ProjectManagementSystemRoleRecord,
 ): boolean {
   const hasScope = role.team.trim().length > 0 || role.techGroup.trim().length > 0;
-  return hasScope || role.role === "SYSTEM_ADMINISTRATOR" || role.role === "AUDITOR";
+  return (
+    hasScope ||
+    role.role === "SUPER_ADMINISTRATOR" ||
+    role.role === "PROJECT_ADMINISTRATOR"
+  );
 }
 
 function isSelfReview(

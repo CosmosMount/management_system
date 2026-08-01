@@ -106,7 +106,7 @@ export default async function ProgressTaskNewPage({
         initialTags={tagPage.items}
         isSystemAdministrator={isSystemAdministrator(actor)}
         createScopes={actor.systemRoles
-          .filter((role) => role.role === "TEAM_ADMINISTRATOR")
+          .filter((role) => role.role === "GROUP_LEADER")
           .map((role) => ({ team: role.team, techGroup: role.techGroup }))}
       />
     </>
@@ -122,7 +122,7 @@ function chooseInitialScope(
       ? { team: template.task.team, techGroup: template.task.techGroup }
       : null,
     ...actor.systemRoles
-      .filter((role) => role.role === "TEAM_ADMINISTRATOR")
+      .filter((role) => role.role === "GROUP_LEADER")
       .map((role) => ({
         team: TEAM_OPTIONS.includes(role.team as (typeof TEAM_OPTIONS)[number])
           ? role.team

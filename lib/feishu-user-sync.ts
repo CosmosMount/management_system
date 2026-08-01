@@ -1,6 +1,5 @@
 import { fetchAllFeishuContactUsers } from "@/lib/feishu-contact";
 import { resolveFeishuIdentityForUser } from "@/lib/project-management/identity";
-import { prisma } from "@/lib/prisma";
 
 export type SyncFeishuUsersResult = {
   total: number;
@@ -18,33 +17,14 @@ export async function syncFeishuContactUsers(): Promise<SyncFeishuUsersResult> {
   let updated = 0;
 
   for (const contact of contacts) {
-    const existing = await prisma.user.findUnique({
-      where: { openId: contact.openId },
-    });
-
-    await prisma.user.upsert({
-      where: { openId: contact.openId },
-      update: {
-        name: contact.name,
-        avatar: contact.avatar,
-        unionId: contact.unionId ?? undefined,
-      },
-      create: {
-        openId: contact.openId,
-        unionId: contact.unionId,
-        name: contact.name,
-        avatar: contact.avatar,
-      },
-    });
-    await resolveFeishuIdentityForUser({
+    const identity = await resolveFeishuIdentityForUser({
       openId: contact.openId,
       unionId: contact.unionId,
       name: contact.name,
       avatar: contact.avatar,
     });
-
-    if (existing) updated++;
-    else created++;
+    if (identity.reimbursementUserCreated) created++;
+    else updated++;
   }
 
   return { total: contacts.length, created, updated };

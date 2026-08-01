@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 const adminNavItems = [
   { href: routes.admin.root, label: "概览", icon: LayoutDashboard },
   { href: routes.admin.system, label: "系统同步", icon: RefreshCw },
-  { href: routes.admin.roles, label: "用户与角色", icon: ShieldCheck },
+  { href: routes.admin.accounts, label: "账号与权限", icon: ShieldCheck },
   { href: routes.admin.budgetPools, label: "采购预算池", icon: Wallet },
 ] as const;
 

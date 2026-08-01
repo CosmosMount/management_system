@@ -7,6 +7,7 @@ import {
   orderNotificationEventKey,
 } from "../lib/notification-outbox";
 import { prisma } from "../lib/prisma";
+import { resolveFeishuIdentityForUser } from "../lib/project-management/identity";
 import {
   expectHealthyPage,
   formatPrismaError,
@@ -55,7 +56,9 @@ test("采购管理审核和老师审核能通过 UI 推进状态", async ({
           status: true,
           teamApproved: true,
           techGroupApproved: true,
+          teamApproverAccountId: true,
           teamApproverOpenId: true,
+          techGroupApproverAccountId: true,
           techGroupApproverOpenId: true,
         },
       });
@@ -65,7 +68,9 @@ test("采购管理审核和老师审核能通过 UI 推进状态", async ({
       status: "TEACHER_REVIEW",
       teamApproved: true,
       techGroupApproved: true,
+      teamApproverAccountId: expect.any(String),
       teamApproverOpenId: fixtures.adminOpenId,
+      techGroupApproverAccountId: expect.any(String),
       techGroupApproverOpenId: fixtures.adminOpenId,
     });
 
@@ -87,13 +92,19 @@ test("采购管理审核和老师审核能通过 UI 推进状态", async ({
 
 test("采购管理审核部分通过不刷新审批轮次时间", async () => {
   const teamOnlyOpenId = `ou_pw_team_only_${Date.now()}`;
+  const identity = await resolveFeishuIdentityForUser({
+    openId: teamOnlyOpenId,
+    name: "PW车组审批人",
+  });
   await prisma.user.upsert({
     where: { openId: teamOnlyOpenId },
     update: {
+      accountId: identity.account.id,
       name: "PW车组审批人",
       signaturePath: "/uploads/playwright/signature-admin.png",
     },
     create: {
+      accountId: identity.account.id,
       openId: teamOnlyOpenId,
       name: "PW车组审批人",
       signaturePath: "/uploads/playwright/signature-admin.png",
@@ -101,6 +112,7 @@ test("采购管理审核部分通过不刷新审批轮次时间", async () => {
   });
   await prisma.userRole.create({
     data: {
+      accountId: identity.account.id,
       openId: teamOnlyOpenId,
       role: UserRoleType.TEAM_ADMIN,
       team: "英雄",
@@ -145,6 +157,7 @@ test("采购管理审核部分通过不刷新审批轮次时间", async () => {
     status: "MANAGEMENT_REVIEW",
     teamApproved: true,
     techGroupApproved: false,
+    teamApproverAccountId: identity.account.id,
     teamApproverOpenId: teamOnlyOpenId,
   });
   expect(partiallyApproved.statusEnteredAt.toISOString()).toBe(

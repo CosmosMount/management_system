@@ -1,61 +1,51 @@
 import "dotenv/config";
-import { UserRoleType } from "@prisma/client";
 import { prisma } from "../lib/prisma";
 
-/**
- * 配置说明：
- * 1. 自己先用飞书登录本系统一次
- * 2. npm run db:studio → User 表复制其 openId
- * 3. 填入下方 SUPER_ADMIN 后执行 npm run db:seed
- * 4. 登录后访问 /admin 可视化管理其他角色
- */
-const seedRoles: {
-  openId: string;
-  role: UserRoleType;
-  team?: string;
-  techGroup?: string;
-}[] = [
-  { openId: "ou_9b67061d0974037132da5550530c44ca", role: UserRoleType.SUPER_ADMIN },
-  // { openId: "ou_从User表复制", role: UserRoleType.TEACHER },
-  // { openId: "ou_从User表复制", role: UserRoleType.TEAM_ADMIN, team: "英雄" },
-  { openId: "ou_9b67061d0974037132da5550530c44ca", role: UserRoleType.TECH_GROUP_ADMIN, techGroup: "电控" },
-  
-];
+function cliValue(name: string): string {
+  const prefix = `--${name}=`;
+  return process.argv.find((argument) => argument.startsWith(prefix))?.slice(prefix.length).trim() ?? "";
+}
 
 async function main() {
-  if (seedRoles.length === 0) {
+  const openId = cliValue("super-admin-open-id");
+  if (!openId) {
     console.log(
-      "seedRoles 为空，请在 prisma/seed.ts 填入 User 表中的 openId 后重试",
+      "未提供 --super-admin-open-id；如需初始化首位超级管理员，请先登录后执行 npm run db:seed -- --super-admin-open-id=<openId>",
     );
     return;
   }
-  for (const entry of seedRoles) {
-    const team = entry.team ?? "";
-    const techGroup = entry.techGroup ?? "";
-    await prisma.userRole.upsert({
-      where: {
-        openId_role_team_techGroup: {
-          openId: entry.openId,
-          role: entry.role,
-          team,
-          techGroup,
-        },
-      },
-      update: {},
-      create: {
-        openId: entry.openId,
-        role: entry.role,
-        team,
-        techGroup,
+
+  const user = await prisma.user.findUnique({
+    where: { openId },
+    select: { accountId: true },
+  });
+  if (!user?.accountId) {
+    throw new Error("该飞书用户尚未建立统一账号，请先登录或同步通讯录");
+  }
+
+  const existing = await prisma.systemRoleAssignment.findFirst({
+    where: {
+      accountId: user.accountId,
+      role: "SUPER_ADMINISTRATOR",
+      team: "",
+      techGroup: "",
+      revokedAt: null,
+    },
+  });
+  if (!existing) {
+    await prisma.systemRoleAssignment.create({
+      data: {
+        accountId: user.accountId,
+        role: "SUPER_ADMINISTRATOR",
       },
     });
   }
-  console.log(`UserRole seed 完成，共 ${seedRoles.length} 条`);
+  console.log(existing ? "该账号已是超级管理员" : "超级管理员初始化完成");
 }
 
 main()
-  .catch((e) => {
-    console.error(e);
+  .catch((error) => {
+    console.error(error);
     process.exit(1);
   })
   .finally(async () => {

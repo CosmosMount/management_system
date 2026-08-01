@@ -432,9 +432,11 @@ test.describe("S3 TimeCanvas controlled browser fixtures", () => {
       ).toContain("fixture-person-12");
       expect(await mountedRows.count()).toBeLessThan(50);
     } else {
-      expect(
-        await page.locator("[data-testid^='agenda-item-']").count(),
-      ).toBeGreaterThan(200);
+      await expect
+        .poll(() =>
+          page.getByTestId("time-agenda").getByRole("listitem").count(),
+        )
+        .toBeGreaterThan(200);
     }
     await expectHealthyPage(page);
 
@@ -462,7 +464,7 @@ async function createCanvasBrowserIdentity() {
   const name = "S3 TimeCanvas 验收用户";
   await prisma.account.create({
     data: {
-      status: "ACTIVE",
+      projectAccessStatus: "ACTIVE",
       identities: {
         create: {
           provider: "FEISHU",

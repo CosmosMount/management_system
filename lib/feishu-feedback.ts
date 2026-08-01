@@ -3,7 +3,7 @@ import { feedbackStatusLabels, feedbackStatusTone } from "@/lib/feedback-labels"
 import type { FeishuBotKind } from "@/lib/feishu-app-config";
 import { sendFeishuDirectMessage } from "@/lib/feishu-message";
 import { buildAppUrl, type NotificationContext } from "@/lib/app-origin";
-import { prisma } from "@/lib/prisma";
+import { getGlobalSuperAdministratorOpenIds } from "@/lib/account-authorization";
 
 type FeedbackCard = ReturnType<typeof buildFeedbackCard>;
 
@@ -98,18 +98,7 @@ async function sendDirectCard(
 }
 
 export async function getFeedbackSuperAdminOpenIds(): Promise<string[]> {
-  const records = await prisma.userRole.findMany({
-    where: { role: "SUPER_ADMIN" },
-    select: { openId: true },
-  });
-  const openIds = [...new Set(records.map((record) => record.openId))];
-  if (openIds.length === 0) return [];
-
-  const users = await prisma.user.findMany({
-    where: { openId: { in: openIds } },
-    select: { openId: true },
-  });
-  return users.map((user) => user.openId);
+  return getGlobalSuperAdministratorOpenIds();
 }
 
 async function notifyOpenIds(

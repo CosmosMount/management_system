@@ -18,18 +18,20 @@ type SignatureUser = {
 };
 
 function pickAdminUser(
-  roles: { role: UserRoleType; openId: string }[],
+  roles: {
+    role: UserRoleType;
+    account: { reimbursementUser: SignatureUser | null } | null;
+  }[],
   role: UserRoleType,
-  userByOpenId: Map<string, SignatureUser>,
 ): SignatureUser | undefined {
   const matches = roles.filter((r) => r.role === role);
   if (matches.length === 0) return undefined;
 
   for (const match of matches) {
-    const user = userByOpenId.get(match.openId);
+    const user = match.account?.reimbursementUser;
     if (user?.signaturePath) return user;
   }
-  return userByOpenId.get(matches[0]!.openId);
+  return matches[0]?.account?.reimbursementUser ?? undefined;
 }
 
 async function resolveRoleAdminSignatures(
@@ -38,40 +40,38 @@ async function resolveRoleAdminSignatures(
 ): Promise<{ teamUser?: SignatureUser; techUser?: SignatureUser }> {
   const roles = await prisma.userRole.findMany({
     where: {
+      revokedAt: null,
       OR: [
         { role: UserRoleType.TEAM_ADMIN, team },
         { role: UserRoleType.TECH_GROUP_ADMIN, techGroup },
       ],
     },
+    select: {
+      role: true,
+      account: {
+        select: {
+          reimbursementUser: {
+            select: { openId: true, name: true, signaturePath: true },
+          },
+        },
+      },
+    },
   });
 
-  const openIds = roles.map((r) => r.openId);
-  const users =
-    openIds.length === 0
-      ? []
-      : await prisma.user.findMany({
-          where: { openId: { in: openIds } },
-          select: { openId: true, name: true, signaturePath: true },
-        });
-  const userByOpenId = new Map(users.map((u) => [u.openId, u]));
-
   return {
-    teamUser: pickAdminUser(roles, UserRoleType.TEAM_ADMIN, userByOpenId),
-    techUser: pickAdminUser(
-      roles,
-      UserRoleType.TECH_GROUP_ADMIN,
-      userByOpenId,
-    ),
+    teamUser: pickAdminUser(roles, UserRoleType.TEAM_ADMIN),
+    techUser: pickAdminUser(roles, UserRoleType.TECH_GROUP_ADMIN),
   };
 }
 
 async function loadApproverUser(
+  accountId: string | null | undefined,
   openId: string | null | undefined,
 ): Promise<SignatureUser | undefined> {
-  if (!openId) return undefined;
+  if (!accountId && !openId) return undefined;
   return (
-    (await prisma.user.findUnique({
-      where: { openId },
+    (await prisma.user.findFirst({
+      where: accountId ? { accountId } : { openId: openId! },
       select: { openId: true, name: true, signaturePath: true },
     })) ?? undefined
   );
@@ -81,13 +81,21 @@ async function loadApproverUser(
 export async function resolveReimbursementListSignatures(order: {
   team: string;
   techGroup: string;
+  teamApproverAccountId?: string | null;
   teamApproverOpenId?: string | null;
+  techGroupApproverAccountId?: string | null;
   techGroupApproverOpenId?: string | null;
   initiator: { name: string; signaturePath: string | null };
 }): Promise<ListSignatureContext> {
   const [storedTeamUser, storedTechUser, roleFallback] = await Promise.all([
-    loadApproverUser(order.teamApproverOpenId),
-    loadApproverUser(order.techGroupApproverOpenId),
+    loadApproverUser(
+      order.teamApproverAccountId,
+      order.teamApproverOpenId,
+    ),
+    loadApproverUser(
+      order.techGroupApproverAccountId,
+      order.techGroupApproverOpenId,
+    ),
     resolveRoleAdminSignatures(order.team, order.techGroup),
   ]);
 

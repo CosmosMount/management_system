@@ -247,11 +247,14 @@ npm run pm:identity-backfill
 
 ## 管理员面板测试
 
-1. 超级管理员进入 `/admin`。
-2. 添加和删除用户角色，期望列表立即更新，权限重新登录或刷新后生效。
-3. 角色选择中不应出现 `PROJECT_MANAGER`，也不应存在旧验收条例、进度提醒规则或每日进度卡片管理入口。
-4. 对失败 outbox 执行重试，期望状态变化且不重复发送已成功收件人。
-5. 触发飞书用户同步，期望同步结果 toast 显示新增/更新数量。
+1. 统一超级管理员进入 `/admin/accounts`；非超管和项目管理员访问页面或直接调用 Server Action 均被拒绝。`/admin/roles` 应服务端重定向到新地址。
+2. 按姓名、项目启停、角色、车组和技术组筛选，验证 30 条服务端分页；空结果显示中文空状态。
+3. 授予/撤销项目管理员、多个车组/技术组组长和四类报销角色，验证 UI、数据库活跃记录、角色历史、安全审计、站内通知和 mandatory outbox 一致。
+4. 项目启停需要确认。禁用后该用户访问 `/progress` 应进入“项目管理访问已禁用”，直接项目操作拒绝，但 `/procurement` 仍可访问；重新启用后原角色和 TaskMember 权限恢复。
+5. 验证禁止自撤销超级管理员、最后一名超管保护、重复提交幂等和可理解的中文错误。
+6. Desktop 使用表格与详情面板；Pixel 5 使用卡片和全屏详情。长姓名、多角色、身份缺失和错误消息均不得造成横向滚动。
+7. 对失败 outbox 执行重试，期望状态变化且不重复发送已成功收件人。
+8. 触发飞书用户同步，期望同步结果 toast 显示新增/更新数量。
 
 ## 实时同步测试
 
@@ -277,8 +280,8 @@ npm run pm:identity-backfill
 ## 项目管理 P1-P6 测试
 
 1. `tests/project-management-p1.spec.ts` 覆盖新增 schema 约束：单 Task 单 Current Plan、有效 Tag 名称唯一、Segment 时间和 allocation 检查、Review 幂等键、Conflict fingerprint。
-2. 身份测试覆盖 `User -> Account/Identity/Person` 首次解析、重复解析幂等、openId fallback 升级为 unionId、冲突硬失败和禁用 Account 拒绝项目管理 actor。
-3. 授权测试覆盖 Task member、范围内/外 Team Administrator、非成员、空 scope Team Administrator 拒绝、Tag 创建人无 Task 权限，以及 `taskReadableWhere` 防枚举。
+2. 身份测试覆盖 `User -> Account/Identity/Person` 首次解析、重复解析幂等、openId fallback 升级为 unionId、同 unionId 下的 openId 轮换、报销 User 原位更新、角色与收件人不丢失、冲突硬失败、非空 `User.accountId` 关联和禁用账号拒绝项目 Actor。
+3. 授权测试覆盖统一超级管理员、项目管理员、车组/技术组/多范围组长、匹配/不匹配/空范围 Task、普通 TaskMember、转组前后范围、跨 Task Conflict 和 `taskReadableWhere` 防枚举。所有管理员仍需覆盖 `allowSelfReview` 允许与拒绝路径。
 4. 通知测试覆盖站内通知事务 helper、审计脱敏、审计 append-only、`channel=project-management` outbox 入队、审批用途 allowlist、adapter 收件人去重、完整交互卡和通知/审批机器人边界。
 5. `tests/project-management-lifecycle.spec.ts` 覆盖 P2/P3 Task 草稿创建、幂等键冲突、Current Plan 持久化、激活、并发/过期锁拒绝、Revision 提交/驳回/取消/审批/直接生效、Planned Segment 待确认标记、Revision 生效后的 Segment 关联失效通知、Milestone Review TEXT/LINK 证据、FILE 证据拒绝、审批推进、Termination 四种 outcome、查询防枚举、审计和 `channel=project-management` outbox。
 6. `tests/project-management-segments.spec.ts` 覆盖 P5 Segment 中文校验、本人/他人权限、乐观锁、真实 100 条批量在末项 stale 时对 Segment/change/audit/outbox 的事务回滚、逆序重叠批量输入的 `id ASC` 行锁顺序、split/merge 时间守恒和完整来源历史、merge 最终范围超过 31 天拒绝且恰好 31 天允许、full/partial confirm、一 Planned 多 Actual、多 Planned 一 Actual、无来源 Actual、并发 full confirm、并发 cron transition、cancel、soft delete、relink，以及 Segment 操作不改变 Task/Milestone。批量锁顺序用例外锁最大 ID，并通过 `pg_blocking_pids` 断言一条直接及一条间接等待链；full/partial confirm、cancel、soft delete 和 cron transition 竞争也通过独立 PostgreSQL 行锁屏障确认两个事务真实重叠，并断言最终状态及 change/audit/outbox exactly-once。
@@ -286,10 +289,34 @@ npm run pm:identity-backfill
 8. `tests/project-management-ui.spec.ts` 覆盖 P4/P6 `/progress` 总览、Task 工作台、资源时间轴、冲突中心、站内通知中心、桌面/移动视口、持久化状态和非成员拒绝路径。
 9. `tests/feishu-boundaries.spec.ts` 必须继续扫描 `app/progress`、`app/actions/project-management`、`components/project-management`、`lib/project-management` 和项目管理 notification adapter，防止项目管理入口或领域服务直接导入飞书传输层。
 10. `tests/project-management-s2-plan-mutations.spec.ts` 覆盖六个 Draft/Active mutation 的参数化允许状态、完全不可见与 visible-but-unauthorized、Draft/Active/四个 terminal/Archived、逐 action stale、成员不变量、真实非空业务差异下的同锁 exactly-once，以及受控审计晚失败整事务回滚；Active member 另在 InApp 已写、outbox insert 阶段注入失败并断言成员 active/history、lock、audit、InApp 和 outbox 全部回滚。副作用快照比较 metadata、TaskTag、active/historical members 和节点正文，不只比较计数。该 spec 还覆盖 raw/foreign `nodeId` 的统一拒绝、legacy Active 修复 Revision/Termination、200 节点长正文的有界审计、公开 absolute date-time 拒绝 `Date` 对象、随机 Task 与隐藏 Task 在 single/batch Planned、Actual、update/relink 的同码同文零写入，以及 mandatory recipient 仅使用 default tenant 非空 openId。TaskNode/Segment 竞争回归使用独立 PostgreSQL 连接外锁 Task 行，通过 `pg_blocking_pids` 建立 writer-first 与 replace-first 阻塞链，分别证明已有关联使删除失败、先删除使新关联失败，且不会死锁或出现 `nodeId` 静默置空。该 spec 只允许随机本机 `_test` PostgreSQL，并要求 `NOTIFICATION_DELIVERY_DISABLED=true`。
-11. `tests/project-management-s8.spec.ts` 覆盖 Action Inbox 权限/逾期排序、Tag 删除仅移除分类、普通/强制通知偏好、Asia/Shanghai deadline event key、保留清理和完整性巡检；UI 的 S8 场景在 Desktop/Pixel 5 验证驾驶舱、待办、Tag 与偏好。
+11. `tests/project-management-s8.spec.ts` 覆盖 Action Inbox 权限/逾期排序、Tag 删除仅移除分类、Tag 写事务内项目禁用与角色撤销复核、普通/强制通知偏好、Asia/Shanghai deadline event key、保留清理和完整性巡检；UI 的 S8 场景在 Desktop/Pixel 5 验证驾驶舱、待办、Tag 与偏好。
 12. `tests/project-management-s9-cron.spec.ts` 覆盖 PostgreSQL 跨实例 advisory lock、checkpoint 成功推进、增量空跑和每日完整扫描记录；新增 migration 必须在 runner 随机 target 数据库从空库执行。
 13. `tests/project-management-performance.spec.ts` 默认跳过。仅在受控 runner 中设置 `PM_RUN_SCALE_TESTS=true`，生成 10k Task、100k Segment、50×100 PlanNode 和 100k 站内通知，执行 p95、90 天扫描、query plan、响应体积与浏览器 DOM 门禁。不得对开发、共享或生产数据库设置该变量。
 14. `tests/project-management-s10-release.spec.ts` 只在 Desktop 执行运维规格：演练工具 fail-closed、空库 migration、两次共享快照、受保护表 row/hash、identity backfill dry-run/APPLY 幂等、整库/上传恢复和旧 contract/直接飞书发送静态扫描。工具只接受本机 `_test`/`_snapshot` 来源，要求 `PM_RELEASE_REHEARSAL_CONFIRM=LOCAL_ISOLATED_REHEARSAL` 与 `NOTIFICATION_DELIVERY_DISABLED=true`，并只创建/删除随机 `pmrel_*_test` 数据库；不得把生产 URL 伪装成允许名称。
+
+## 统一账号迁移验证
+
+已有数据库发布前按顺序执行：
+
+```bash
+npm run accounts:preflight
+npm run db:deploy
+npm run accounts:validate
+```
+
+预检是旧 schema 上的只读命令，应覆盖身份多账号冲突、待创建账号、孤儿角色、重复或非法角色范围、双范围旧项目组长和旧报销超管数量。任何阻断项必须非零退出，不能猜测身份或自动拆分双范围。
+
+`tests/legacy-project-management-migration.spec.ts` 在额外的随机本机 `_test` PostgreSQL 中从真实前置 migration 链构造旧用户和角色，验证：
+
+- `unionId/openId` 关联和缺失 Account 自动创建；
+- 报销超管、旧项目系统管理员和旧组长的映射；
+- `RESOURCE_MANAGER/AUDITOR` 等所有旧角色逐条撤销审计、重复执行不重复审计；
+- 旧角色撤销但保留、`User.accountId NOT NULL`、`projectAccessStatus` 列名和新范围约束；
+- 身份多账号冲突和双范围旧组长会阻止迁移；
+- `source=MIGRATION` 审计存在，站内通知与 outbox 为零；
+- 活跃旧角色、非法报销范围和重复活跃角色被数据库拒绝。
+
+迁移测试只允许官方 runner 的随机 `_test` 数据库；不得把普通开发库或生产库改名伪装成测试库。
 
 ## 部署冒烟测试
 

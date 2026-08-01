@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import { sendFeishuDirectMessage } from "../lib/feishu-message";
 import { sendTrackedProcurementCardKitDm } from "../lib/feishu-procurement-card-sync";
 import { prisma } from "../lib/prisma";
+import { resolveFeishuIdentityForUser } from "../lib/project-management/identity";
 
 type FetchCall = { url: string; init?: RequestInit };
 
@@ -125,10 +126,9 @@ test.describe("统一飞书私信传输层", () => {
   });
 
   test("allowlist 拒绝不匹配的系统用户且不发送请求", async () => {
-    await prisma.user.upsert({
-      where: { openId: "ou_feishu_transport_blocked" },
-      update: { name: "不在白名单" },
-      create: { openId: "ou_feishu_transport_blocked", name: "不在白名单" },
+    await resolveFeishuIdentityForUser({
+      openId: "ou_feishu_transport_blocked",
+      name: "不在白名单",
     });
     process.env.FEISHU_DIRECT_MESSAGE_ALLOWED_UNION_IDS = "";
 
@@ -190,10 +190,9 @@ test.describe("统一飞书私信传输层", () => {
   });
 
   test("独立审批机器人缺少 union_id 时失败并保留给 outbox 重试", async () => {
-    await prisma.user.upsert({
-      where: { openId: "ou_feishu_missing_union" },
-      update: { name: "缺少 union id", unionId: null },
-      create: { openId: "ou_feishu_missing_union", name: "缺少 union id" },
+    await resolveFeishuIdentityForUser({
+      openId: "ou_feishu_missing_union",
+      name: "缺少 union id",
     });
     process.env.FEISHU_APPROVAL_APP_ID = "approval-app";
     process.env.FEISHU_APPROVAL_APP_SECRET = "approval-secret";

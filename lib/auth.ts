@@ -1,5 +1,4 @@
 import NextAuth from "next-auth";
-import { prisma } from "@/lib/prisma";
 import { authConfig } from "@/lib/auth.config";
 import { resolveFeishuIdentityForUser } from "@/lib/project-management/identity";
 
@@ -26,20 +25,6 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     ...authConfig.callbacks,
     async signIn({ user }) {
       if (!user.openId) return false;
-      await prisma.user.upsert({
-        where: { openId: user.openId },
-        update: {
-          name: user.name ?? "未知用户",
-          avatar: user.image ?? null,
-          unionId: user.unionId ?? undefined,
-        },
-        create: {
-          openId: user.openId,
-          unionId: user.unionId ?? null,
-          name: user.name ?? "未知用户",
-          avatar: user.image ?? null,
-        },
-      });
       await resolveFeishuIdentityForUser({
         openId: user.openId,
         unionId: user.unionId,

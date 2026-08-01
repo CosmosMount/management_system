@@ -208,6 +208,41 @@ test.describe("普通用户主功能面板", () => {
     });
     await expectHealthyPage(page);
   });
+
+  test("项目访问禁用只阻止项目管理，不影响采购报销", async ({ page }) => {
+    const account = await prisma.user.findUniqueOrThrow({
+      where: { openId: fixtures.normalOpenId },
+      select: { accountId: true },
+    });
+    if (!account.accountId) throw new Error("普通用户缺少统一账号关联");
+
+    await prisma.account.update({
+      where: { id: account.accountId },
+      data: { projectAccessStatus: "DISABLED" },
+    });
+    try {
+      await page.goto("/progress", { waitUntil: "networkidle" });
+      await expect(page).toHaveURL(/\/project-access-disabled$/);
+      await expect(
+        page.getByRole("heading", { name: "项目管理访问已禁用" }),
+      ).toBeVisible();
+      await expect(
+        page.getByText("登录和报销功能不受影响", { exact: false }),
+      ).toBeVisible();
+      await expectHealthyPage(page);
+
+      await page.goto("/procurement", { waitUntil: "networkidle" });
+      await expect(
+        page.getByRole("link", { name: /新建申请/ }),
+      ).toBeVisible();
+      await expectHealthyPage(page);
+    } finally {
+      await prisma.account.update({
+        where: { id: account.accountId },
+        data: { projectAccessStatus: "ACTIVE" },
+      });
+    }
+  });
 });
 
 test.describe("管理员面板", () => {
@@ -218,12 +253,12 @@ test.describe("管理员面板", () => {
   test("管理员首页和三个子面板都能进入", async ({ page }) => {
     await page.goto("/admin", { waitUntil: "networkidle" });
     await expect(page.getByRole("main").getByText("管理员面板")).toBeVisible();
-    await expect(page.getByText("通讯录用户")).toBeVisible();
+    await expect(page.getByText("统一账号")).toBeVisible();
     await expectHealthyPage(page);
 
     const panels = [
       { name: /系统同步/, url: /\/admin\/system$/, text: /飞书|同步|通讯录/ },
-      { name: /用户与角色/, url: /\/admin\/roles$/, text: /角色|用户/ },
+      { name: /账号与权限/, url: /\/admin\/accounts$/, text: /账号|权限/ },
       { name: /采购预算池/, url: /\/admin\/budget-pools$/, text: /预算|导入/ },
     ];
 
@@ -233,6 +268,112 @@ test.describe("管理员面板", () => {
       await expect(page).toHaveURL(panel.url);
       await expect(page.getByText(panel.text).first()).toBeVisible();
       await expectHealthyPage(page);
+    }
+  });
+
+  test("账号与权限页可管理项目组长和项目访问状态", async ({ page }) => {
+    await page.goto("/admin/accounts?q=李棋轩", { waitUntil: "networkidle" });
+    if ((page.viewportSize()?.width ?? 0) < 768) {
+      const accountCard = page.getByRole("button", { name: "管理 李棋轩" });
+      await expect(accountCard).toBeVisible();
+      await accountCard.click();
+    } else {
+      await expect(page.getByText("李棋轩").first()).toBeVisible();
+      await page.getByRole("button", { name: "管理" }).first().click();
+    }
+    const detail = page.getByTestId("account-permission-detail");
+    await expect(detail).toBeVisible();
+
+    await page.getByLabel("项目角色").selectOption("GROUP_LEADER");
+    await page.getByLabel("组长范围类型").selectOption("team");
+    await page.getByLabel("组长范围", { exact: true }).selectOption("英雄");
+    await page.getByRole("button", { name: /授予$/ }).click();
+    await expect(detail.getByText("组长 · 英雄").first()).toBeVisible();
+
+    const target = await prisma.user.findUniqueOrThrow({
+      where: { openId: fixtures.normalOpenId },
+      select: { accountId: true },
+    });
+    expect(target.accountId).toBeTruthy();
+    await expect
+      .poll(() =>
+        prisma.systemRoleAssignment.count({
+          where: {
+            accountId: target.accountId!,
+            role: "GROUP_LEADER",
+            team: "英雄",
+            revokedAt: null,
+          },
+        }),
+      )
+      .toBe(1);
+
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "禁用项目访问" }).click();
+    await expect(detail.getByRole("button", { name: "启用项目访问" })).toBeVisible();
+    await expect
+      .poll(async () =>
+        (
+          await prisma.account.findUniqueOrThrow({
+            where: { id: target.accountId! },
+            select: { projectAccessStatus: true },
+          })
+        ).projectAccessStatus,
+      )
+      .toBe("DISABLED");
+
+    page.once("dialog", (dialog) => dialog.accept());
+    await detail.getByRole("button", { name: "启用项目访问" }).click();
+    await expect(detail.getByRole("button", { name: "禁用项目访问" })).toBeVisible();
+
+    page.once("dialog", (dialog) => dialog.accept());
+    await detail.getByRole("button", { name: "撤销组长 · 英雄" }).click();
+    await expect(detail.getByText("普通成员（无系统角色）")).toBeVisible();
+    await expectHealthyPage(page);
+  });
+
+  test("账号与权限页可显示飞书 CDN 头像", async ({ page }) => {
+    const target = await prisma.user.findUniqueOrThrow({
+      where: { openId: fixtures.normalOpenId },
+      select: { accountId: true },
+    });
+    if (!target.accountId) throw new Error("头像测试账号缺少统一账号");
+    const person = await prisma.person.findUniqueOrThrow({
+      where: { accountId: target.accountId },
+      select: { avatar: true },
+    });
+    const avatarUrl =
+      "https://s1-imfile.feishucdn.com/static-resource/v1/playwright-avatar~?image_size=72x72&format=png";
+
+    await page.route("**/_next/image?*", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "image/png",
+        body: Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z3p8AAAAASUVORK5CYII=",
+          "base64",
+        ),
+      });
+    });
+    await prisma.person.update({
+      where: { accountId: target.accountId },
+      data: { avatar: avatarUrl },
+    });
+
+    try {
+      const response = await page.goto("/admin/accounts?q=李棋轩", {
+        waitUntil: "networkidle",
+      });
+      expect(response?.status()).toBe(200);
+      await expect(
+        page.locator('img[src*="s1-imfile.feishucdn.com"]:visible').first(),
+      ).toBeVisible();
+      await expectHealthyPage(page);
+    } finally {
+      await prisma.person.update({
+        where: { accountId: target.accountId },
+        data: { avatar: person.avatar },
+      });
     }
   });
 
@@ -251,4 +392,34 @@ test("非管理员访问管理员面板会被重定向到首页", async ({
   ).toBeVisible();
   await expect(page.getByText("管理员面板")).toHaveCount(0);
   await expectHealthyPage(page);
+});
+
+test("项目管理员仍不能进入账号与权限后台", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  const target = await prisma.user.findUniqueOrThrow({
+    where: { openId: fixtures.otherOpenId },
+    select: { accountId: true },
+  });
+  if (!target.accountId) throw new Error("项目管理员测试账号缺少统一账号");
+  const assignment = await prisma.systemRoleAssignment.create({
+    data: {
+      accountId: target.accountId,
+      role: "PROJECT_ADMINISTRATOR",
+    },
+  });
+  try {
+    await loginAsOtherUser(context, baseURL);
+    await page.goto("/admin/accounts", { waitUntil: "networkidle" });
+    await expect(page).toHaveURL(/\/$/);
+    await expect(page.getByText("账号与权限")).toHaveCount(0);
+    await expectHealthyPage(page);
+  } finally {
+    await prisma.systemRoleAssignment.update({
+      where: { id: assignment.id },
+      data: { revokedAt: new Date() },
+    });
+  }
 });

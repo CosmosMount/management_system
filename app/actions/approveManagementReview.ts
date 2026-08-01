@@ -67,6 +67,13 @@ async function approveManagementReviewLogged(orderId: string, userOpenId: string
   }
 
   await requireApproverSignature(userOpenId);
+  const approver = await prisma.user.findUnique({
+    where: { openId: userOpenId },
+    select: { accountId: true },
+  });
+  if (!approver) {
+    throw new Error("当前账号未关联统一账号，请重新登录后重试");
+  }
 
   const context = await getNotificationContext();
   const { updated, advancedToTeacherReview } = await prisma.$transaction(
@@ -86,12 +93,14 @@ async function approveManagementReviewLogged(orderId: string, userOpenId: string
           ...(canTeam
             ? {
                 teamApproved: true,
+                teamApproverAccountId: approver.accountId,
                 teamApproverOpenId: userOpenId,
               }
             : {}),
           ...(canTech
             ? {
                 techGroupApproved: true,
+                techGroupApproverAccountId: approver.accountId,
                 techGroupApproverOpenId: userOpenId,
               }
             : {}),

@@ -45,7 +45,7 @@ test.describe("project management S9 cron operations", () => {
   test("incremental checkpoint advances only after a successful scan and full scan is recorded", async () => {
     const account = await prisma.account.create({
       data: {
-        status: "ACTIVE",
+        projectAccessStatus: "ACTIVE",
         person: { create: { displayName: "S9 checkpoint person", status: "ACTIVE" } },
       },
       include: { person: true },

@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { getAccountAuthorizationContextForOpenId } from "@/lib/account-authorization";
 import {
   canViewProcurementOrder,
   procurementListWhere,
@@ -47,12 +48,12 @@ function encodeVersion(parts: string[]): string {
 }
 
 async function userRoleVersion(openId: string): Promise<string> {
-  const roles = await prisma.userRole.findMany({
-    where: { openId },
-    orderBy: [{ role: "asc" }, { team: "asc" }, { techGroup: "asc" }],
-    select: { role: true, team: true, techGroup: true },
-  });
-  return `roles:${JSON.stringify(roles)}`;
+  const authorization = await getAccountAuthorizationContextForOpenId(openId);
+  return `roles:${JSON.stringify({
+    reimbursement: authorization?.reimbursementRoles ?? [],
+    projectAccessStatus: authorization?.projectAccessStatus ?? null,
+    project: authorization?.projectRoles ?? [],
+  })}`;
 }
 
 async function userProfileVersion(openId: string): Promise<string> {
@@ -211,7 +212,7 @@ async function getProfileVersion(userOpenId: string): Promise<string> {
 }
 
 async function getAdminVersion(): Promise<string> {
-  const [users, roles, budgetAggregate, budgetCount] = await Promise.all([
+  const [users, roles, systemRoles, accounts, budgetAggregate, budgetCount] = await Promise.all([
     prisma.user.findMany({
       orderBy: { openId: "asc" },
       select: {
@@ -224,13 +225,26 @@ async function getAdminVersion(): Promise<string> {
       },
     }),
     prisma.userRole.findMany({
+      where: { revokedAt: null, role: { not: "SUPER_ADMIN" } },
       orderBy: [
-        { openId: "asc" },
+        { accountId: "asc" },
         { role: "asc" },
         { team: "asc" },
         { techGroup: "asc" },
       ],
-      select: { openId: true, role: true, team: true, techGroup: true },
+      select: { accountId: true, role: true, team: true, techGroup: true },
+    }),
+    prisma.systemRoleAssignment.findMany({
+      where: {
+        revokedAt: null,
+        role: { in: ["SUPER_ADMINISTRATOR", "PROJECT_ADMINISTRATOR", "GROUP_LEADER"] },
+      },
+      orderBy: [{ accountId: "asc" }, { role: "asc" }, { team: "asc" }, { techGroup: "asc" }],
+      select: { accountId: true, role: true, team: true, techGroup: true },
+    }),
+    prisma.account.findMany({
+      orderBy: { id: "asc" },
+      select: { id: true, projectAccessStatus: true, updatedAt: true },
     }),
     prisma.procurementBudgetPool.aggregate({ _max: { updatedAt: true } }),
     prisma.procurementBudgetPool.count(),
@@ -244,6 +258,8 @@ async function getAdminVersion(): Promise<string> {
       })),
     )}`,
     `roles:${JSON.stringify(roles)}`,
+    `systemRoles:${JSON.stringify(systemRoles)}`,
+    `accounts:${JSON.stringify(accounts)}`,
     encodePart("budgetPools", budgetAggregate._max.updatedAt, budgetCount),
   ]);
 }

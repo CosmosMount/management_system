@@ -989,7 +989,7 @@ test.describe("project management P5 resource conflict services", () => {
     }
     const fullResolvedDetail = await getResourceConflict({
       actor: actor(fixture.resourceManager, [
-        { role: "RESOURCE_MANAGER", team: "英雄", techGroup: "电控" },
+        { role: "GROUP_LEADER", team: "英雄", techGroup: "" },
       ]),
       input: { conflictId: conflict.id },
     });
@@ -1032,7 +1032,7 @@ test.describe("project management P5 resource conflict services", () => {
     }
     const fullIgnoredDetail = await getResourceConflict({
       actor: actor(fixture.resourceManager, [
-        { role: "RESOURCE_MANAGER", team: "英雄", techGroup: "电控" },
+        { role: "GROUP_LEADER", team: "英雄", techGroup: "" },
       ]),
       input: { conflictId: conflict.id },
     });
@@ -1119,7 +1119,7 @@ test.describe("project management P5 resource conflict services", () => {
     }
 
     const fullActor = actor(fixture.resourceManager, [
-      { role: "RESOURCE_MANAGER", team: "英雄", techGroup: "电控" },
+      { role: "GROUP_LEADER", team: "英雄", techGroup: "" },
     ]);
     const fullDetail = await getResourceConflict({
       actor: fullActor,
@@ -1165,10 +1165,10 @@ test.describe("project management P5 resource conflict services", () => {
       select: { id: true },
     });
     const scopedManagerActor = actor(fixture.resourceManager, [
-      { role: "RESOURCE_MANAGER", team: "英雄", techGroup: "电控" },
+      { role: "GROUP_LEADER", team: "英雄", techGroup: "" },
     ]);
     const systemAdminActor = actor(systemAdmin, [
-      { role: "SYSTEM_ADMINISTRATOR", team: "", techGroup: "" },
+      { role: "PROJECT_ADMINISTRATOR", team: "", techGroup: "" },
     ]);
     const noCapabilities = {
       canAcknowledge: false,
@@ -1291,7 +1291,7 @@ test.describe("project management P5 resource conflict services", () => {
       select: { id: true },
     });
     const managerQueryActor = actor(fixture.resourceManager, [
-      { role: "RESOURCE_MANAGER", team: "英雄", techGroup: "电控" },
+      { role: "GROUP_LEADER", team: "英雄", techGroup: "" },
     ]);
     const statusCases = [
       {
@@ -1712,7 +1712,7 @@ test.describe("project management P5 resource conflict services", () => {
       select: { id: true },
     });
     const scopedManagerActor = actor(fixture.resourceManager, [
-      { role: "RESOURCE_MANAGER", team: "英雄", techGroup: "电控" },
+      { role: "GROUP_LEADER", team: "英雄", techGroup: "" },
     ]);
 
     const detail = await getResourceConflict({
@@ -1778,7 +1778,7 @@ test.describe("project management P5 resource conflict services", () => {
 
   test("A runtime failure for one person is observable and does not stop later people", async () => {
     const systemAdmin = await createAccountPerson("P5 Partial Scan System Admin");
-    await grantRole(systemAdmin.account.id, "SYSTEM_ADMINISTRATOR");
+    await grantRole(systemAdmin.account.id, "PROJECT_ADMINISTRATOR");
     const people = await Promise.all([
       createAccountPerson("P5 Partial Scan A"),
       createAccountPerson("P5 Partial Scan B"),
@@ -3060,7 +3060,7 @@ test.describe("project management P5 resource conflict services", () => {
   test("Manual handling requires system administrator when conflict includes no-task segments", async () => {
     const fixture = await createActivatedFixture();
     const systemAdmin = await createAccountPerson("P5 No Task Conflict System Admin");
-    await grantRole(systemAdmin.account.id, "SYSTEM_ADMINISTRATOR");
+    await grantRole(systemAdmin.account.id, "PROJECT_ADMINISTRATOR");
     await createWorkSegment(actor(fixture.resourceManager), {
       ...plannedInput(fixture.member.person.id, 9, 10, 70),
       taskId: fixture.taskId,
@@ -3088,7 +3088,7 @@ test.describe("project management P5 resource conflict services", () => {
 
     const systemAdminDetail = await getResourceConflict({
       actor: actor(systemAdmin, [
-        { role: "SYSTEM_ADMINISTRATOR", team: "", techGroup: "" },
+        { role: "PROJECT_ADMINISTRATOR", team: "", techGroup: "" },
       ]),
       input: { conflictId: conflict.id },
     });
@@ -3334,11 +3334,11 @@ async function createActivatedFixture(options: {
   const viewer = await createAccountPerson("P5 Conflict Viewer");
   const outsider = await createAccountPerson("P5 Conflict Outsider");
   const resourceManager = await createAccountPerson("P5 Conflict Resource Manager");
-  await grantRole(admin.account.id, "TEAM_ADMINISTRATOR", {
+  await grantRole(admin.account.id, "GROUP_LEADER", {
     team,
     techGroup,
   });
-  await grantRole(resourceManager.account.id, "RESOURCE_MANAGER", {
+  await grantRole(resourceManager.account.id, "GROUP_LEADER", {
     team,
     techGroup,
   });
@@ -3434,7 +3434,7 @@ async function createAccountPerson(displayName: string) {
   const openId = `ou_pm_p5_conflict_${randomUUID()}`;
   const account = await prisma.account.create({
     data: {
-      status: "ACTIVE",
+      projectAccessStatus: "ACTIVE",
       identities: {
         create: {
           provider: "FEISHU",
@@ -3458,7 +3458,7 @@ async function createAccountPerson(displayName: string) {
 
 async function grantRole(
   accountId: string,
-  role: "TEAM_ADMINISTRATOR" | "RESOURCE_MANAGER" | "SYSTEM_ADMINISTRATOR",
+  role: "GROUP_LEADER" | "PROJECT_ADMINISTRATOR",
   scope: { team: string; techGroup: string } = { team: "", techGroup: "" },
 ) {
   await prisma.systemRoleAssignment.create({
@@ -3466,7 +3466,7 @@ async function grantRole(
       accountId,
       role,
       team: scope.team,
-      techGroup: scope.techGroup,
+      techGroup: scope.team ? "" : scope.techGroup,
     },
   });
 }

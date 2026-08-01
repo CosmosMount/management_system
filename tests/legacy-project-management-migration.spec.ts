@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { Prisma } from "@prisma/client";
+import { spawnSync } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { Client } from "pg";
@@ -8,6 +9,12 @@ import { prisma } from "../lib/prisma";
 const MIGRATIONS_DIR = path.join(process.cwd(), "prisma/migrations");
 const SHRINK_MIGRATION_NAME =
   "20260728210000_remove_legacy_project_management";
+const UNIFIED_ACCOUNT_SCHEMA_MIGRATION = "20260731120000_unified_account_schema";
+const UNIFIED_ACCOUNT_BACKFILL_MIGRATION = "20260731121000_unified_account_backfill";
+const UNIFIED_ACCOUNT_SCOPE_MIGRATION =
+  "20260731122000_account_project_access_and_role_scope";
+const PROCUREMENT_APPROVER_ACCOUNT_MIGRATION =
+  "20260801100000_procurement_approver_accounts";
 const LEGACY_TASK_SIGNATURE_COLUMNS = [
   "projectId",
   "stageId",
@@ -280,9 +287,395 @@ test("收缩 migration 基于真实前置迁移链删除旧数据并保留共享
   }
 });
 
+test("统一账号 migration 映射旧角色、保留历史并且不发送通知", async () => {
+  test.setTimeout(90_000);
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) throw new Error("DATABASE_URL is required");
+  const databaseName = new URL(databaseUrl).pathname.replace(/^\//, "");
+  if (!databaseName.endsWith("_test")) {
+    throw new Error(`拒绝在非测试数据库验证统一账号 migration: ${databaseName}`);
+  }
+
+  const temporaryDatabaseName = `ms_accounts_${process.pid}_${Date.now()}_test`;
+  const adminUrl = new URL(databaseUrl);
+  adminUrl.pathname = "/postgres";
+  const temporaryDatabaseUrl = new URL(databaseUrl);
+  temporaryDatabaseUrl.pathname = `/${temporaryDatabaseName}`;
+  const adminClient = new Client({ connectionString: adminUrl.toString() });
+  let migrationClient: Client | null = null;
+  await adminClient.connect();
+  try {
+    await adminClient.query(`CREATE DATABASE "${temporaryDatabaseName}"`);
+    migrationClient = new Client({ connectionString: temporaryDatabaseUrl.toString() });
+    await migrationClient.connect();
+    const migrationNames = (await readdir(MIGRATIONS_DIR, { withFileTypes: true }))
+      .filter(
+        (entry) =>
+          entry.isDirectory() && entry.name < UNIFIED_ACCOUNT_SCHEMA_MIGRATION,
+      )
+      .map((entry) => entry.name)
+      .sort();
+    for (const migrationName of migrationNames) {
+      await executeMigrationSql(
+        migrationClient,
+        await readFile(path.join(MIGRATIONS_DIR, migrationName, "migration.sql"), "utf8"),
+      );
+    }
+
+    await migrationClient.query(`
+      INSERT INTO "Account" (id, status, "createdAt", "updatedAt") VALUES
+        ('account-super', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+        ('account-project', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+        ('account-leader', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+      INSERT INTO "Person" (id, "accountId", "displayName", status, "createdAt", "updatedAt") VALUES
+        ('person-super', 'account-super', '旧报销超管', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+        ('person-project', 'account-project', '旧项目管理员', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+        ('person-leader', 'account-leader', '旧车组管理员', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+      INSERT INTO "AccountIdentity" (
+        id, "accountId", provider, "providerSubject", "tenantId", "openId", "unionId", metadata, "createdAt", "updatedAt"
+      ) VALUES
+        ('identity-super', 'account-super', 'FEISHU', 'on-unified-super', 'default', 'ou-unified-super', 'on-unified-super', '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+        ('identity-project', 'account-project', 'FEISHU', 'on-unified-project', 'default', 'ou-unified-project', 'on-unified-project', '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+        ('identity-leader', 'account-leader', 'FEISHU', 'on-unified-leader', 'default', 'ou-unified-leader', 'on-unified-leader', '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+      INSERT INTO "User" (id, "openId", "unionId", name) VALUES
+        ('user-super', 'ou-unified-super', 'on-unified-super', '旧报销超管'),
+        ('user-project', 'ou-unified-project', 'on-unified-project', '旧项目管理员'),
+        ('user-leader', 'ou-unified-leader', 'on-unified-leader', '旧车组管理员'),
+        ('user-new-account', 'ou-unified-new', 'on-unified-new', '待创建统一账号');
+      INSERT INTO "UserRole" (id, "openId", role, team, "techGroup") VALUES
+        ('role-super', 'ou-unified-super', 'SUPER_ADMIN', '', ''),
+        ('role-team', 'ou-unified-new', 'TEAM_ADMIN', '英雄', '');
+      INSERT INTO "SystemRoleAssignment" (
+        id, "accountId", role, team, "techGroup", "createdAt"
+      ) VALUES
+        ('role-system-admin', 'account-project', 'SYSTEM_ADMINISTRATOR', '', '', CURRENT_TIMESTAMP),
+        ('role-team-admin', 'account-leader', 'TEAM_ADMINISTRATOR', '英雄', '', CURRENT_TIMESTAMP),
+        ('role-resource-manager', 'account-leader', 'RESOURCE_MANAGER', '英雄', '', CURRENT_TIMESTAMP),
+        ('role-auditor', 'account-project', 'AUDITOR', '', '', CURRENT_TIMESTAMP);
+      INSERT INTO "PurchaseOrder" (
+        id, "orderNo", "initiatorId", "initiatorName", team, "techGroup",
+        "teamApproved", "techGroupApproved", "teamApproverOpenId",
+        "techGroupApproverOpenId", "updatedAt"
+      ) VALUES (
+        'unified-approved-order', 'UNIFIED-APPROVER-BACKFILL', 'user-new-account',
+        '待创建统一账号', '英雄', '电控', true, true,
+        'ou-unified-super', 'ou-unified-project', CURRENT_TIMESTAMP
+      );
+    `);
+
+    let firstBackfillAuditCount = 0;
+    for (const migrationName of [
+      UNIFIED_ACCOUNT_SCHEMA_MIGRATION,
+      UNIFIED_ACCOUNT_BACKFILL_MIGRATION,
+      UNIFIED_ACCOUNT_SCOPE_MIGRATION,
+      PROCUREMENT_APPROVER_ACCOUNT_MIGRATION,
+    ]) {
+      const sql = await readFile(
+        path.join(MIGRATIONS_DIR, migrationName, "migration.sql"),
+        "utf8",
+      );
+      if (migrationName === UNIFIED_ACCOUNT_BACKFILL_MIGRATION) {
+        await executeMigrationSqlInTransaction(migrationClient, sql);
+        firstBackfillAuditCount = Number(
+          (
+            await migrationClient.query<{ count: string }>(`
+              SELECT count(*)::text AS count
+              FROM "DomainAuditEvent" WHERE source = 'MIGRATION'
+            `)
+          ).rows[0]?.count ?? 0,
+        );
+        await executeMigrationSqlInTransaction(migrationClient, sql);
+        const repeatedAuditCount = Number(
+          (
+            await migrationClient.query<{ count: string }>(`
+              SELECT count(*)::text AS count
+              FROM "DomainAuditEvent" WHERE source = 'MIGRATION'
+            `)
+          ).rows[0]?.count ?? 0,
+        );
+        expect(repeatedAuditCount).toBe(firstBackfillAuditCount);
+      } else {
+        await executeMigrationSql(migrationClient, sql);
+      }
+    }
+
+    const users = await migrationClient.query<{
+      accountId: string | null;
+      openId: string;
+    }>(`SELECT "openId", "accountId" FROM "User" ORDER BY "openId"`);
+    expect(users.rows.every((user) => Boolean(user.accountId))).toBe(true);
+    expect(
+      users.rows.find((user) => user.openId === "ou-unified-new")?.accountId,
+    ).toBeTruthy();
+
+    const activeRoles = await migrationClient.query<{
+      role: string;
+      team: string;
+      techGroup: string;
+    }>(`
+      SELECT role::text AS role, team, "techGroup"
+      FROM "SystemRoleAssignment"
+      WHERE "revokedAt" IS NULL
+      ORDER BY role::text, team, "techGroup"
+    `);
+    expect(activeRoles.rows).toEqual([
+      { role: "GROUP_LEADER", team: "英雄", techGroup: "" },
+      { role: "PROJECT_ADMINISTRATOR", team: "", techGroup: "" },
+      { role: "SUPER_ADMINISTRATOR", team: "", techGroup: "" },
+    ]);
+
+    const legacyRoles = await migrationClient.query<{
+      role: string;
+      revoked: boolean;
+    }>(`
+      SELECT role::text AS role, "revokedAt" IS NOT NULL AS revoked
+      FROM "SystemRoleAssignment"
+      WHERE role IN ('SYSTEM_ADMINISTRATOR', 'TEAM_ADMINISTRATOR', 'RESOURCE_MANAGER', 'AUDITOR')
+      ORDER BY role::text
+    `);
+    expect(legacyRoles.rows).toEqual([
+      { role: "AUDITOR", revoked: true },
+      { role: "RESOURCE_MANAGER", revoked: true },
+      { role: "SYSTEM_ADMINISTRATOR", revoked: true },
+      { role: "TEAM_ADMINISTRATOR", revoked: true },
+    ]);
+
+    const reimbursementRoles = await migrationClient.query<{
+      accountId: string | null;
+      role: string;
+      revoked: boolean;
+    }>(`
+      SELECT "accountId", role::text AS role, "revokedAt" IS NOT NULL AS revoked
+      FROM "UserRole" ORDER BY role::text
+    `);
+    expect(reimbursementRoles.rows.every((role) => Boolean(role.accountId))).toBe(true);
+    expect(reimbursementRoles.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ role: "SUPER_ADMIN", revoked: true }),
+        expect.objectContaining({ role: "TEAM_ADMIN", revoked: false }),
+      ]),
+    );
+
+    const accountColumns = await migrationClient.query<{ column_name: string }>(`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'Account'
+        AND column_name IN ('status', 'projectAccessStatus')
+    `);
+    expect(accountColumns.rows.map((row) => row.column_name)).toEqual([
+      "projectAccessStatus",
+    ]);
+    const historicalApprovers = await migrationClient.query<{
+      teamApproverAccountId: string | null;
+      techGroupApproverAccountId: string | null;
+    }>(`
+      SELECT "teamApproverAccountId", "techGroupApproverAccountId"
+      FROM "PurchaseOrder" WHERE id = 'unified-approved-order'
+    `);
+    expect(historicalApprovers.rows[0]).toEqual({
+      teamApproverAccountId: "account-super",
+      techGroupApproverAccountId: "account-project",
+    });
+    const sideEffects = await migrationClient.query<{
+      audits: string;
+      inApp: string;
+      outbox: string;
+    }>(`
+      SELECT
+        (SELECT count(*) FROM "DomainAuditEvent" WHERE source = 'MIGRATION')::text AS audits,
+        (SELECT count(*) FROM "InAppNotification")::text AS "inApp",
+        (SELECT count(*) FROM "NotificationOutbox")::text AS outbox
+    `);
+    expect(Number(sideEffects.rows[0]?.audits ?? 0)).toBeGreaterThanOrEqual(4);
+    expect(sideEffects.rows[0]).toMatchObject({ inApp: "0", outbox: "0" });
+
+    const retiredRoleAudits = await migrationClient.query<{ entityId: string }>(`
+      SELECT "entityId"
+      FROM "DomainAuditEvent"
+      WHERE source = 'MIGRATION'
+        AND action = 'account.legacy_role.revoked'
+        AND "entityType" = 'SystemRoleAssignment'
+      ORDER BY "entityId"
+    `);
+    expect(retiredRoleAudits.rows.map((row) => row.entityId)).toEqual([
+      "role-auditor",
+      "role-resource-manager",
+      "role-system-admin",
+      "role-team-admin",
+    ]);
+    await expect(
+      migrationClient.query(`
+        INSERT INTO "User" (id, "openId", name)
+        VALUES ('invalid-orphan-user', 'ou-invalid-orphan', '非法孤儿用户')
+      `),
+    ).rejects.toThrow();
+
+    await expect(
+      migrationClient.query(`
+        INSERT INTO "SystemRoleAssignment" (
+          id, "accountId", role, team, "techGroup", "createdAt"
+        ) VALUES (
+          'invalid-active-legacy', 'account-project', 'AUDITOR', '', '', CURRENT_TIMESTAMP
+        )
+      `),
+    ).rejects.toThrow();
+    await expect(
+      migrationClient.query(`
+        INSERT INTO "UserRole" (
+          id, "accountId", "openId", role, team, "techGroup", "createdAt"
+        ) VALUES (
+          'invalid-reimbursement-scope', 'account-project', 'ou-unified-project',
+          'FINANCE', '', '', CURRENT_TIMESTAMP
+        )
+      `),
+    ).rejects.toThrow();
+  } finally {
+    await migrationClient?.end().catch(() => undefined);
+    await adminClient
+      .query(`DROP DATABASE IF EXISTS "${temporaryDatabaseName}"`)
+      .catch(() => undefined);
+    await adminClient.end();
+  }
+});
+
+test("统一账号 migration 对身份冲突和双范围旧组长失败关闭", async () => {
+  test.setTimeout(90_000);
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) throw new Error("DATABASE_URL is required");
+  const databaseName = new URL(databaseUrl).pathname.replace(/^\//, "");
+  if (!databaseName.endsWith("_test")) {
+    throw new Error(`拒绝在非测试数据库验证统一账号预检: ${databaseName}`);
+  }
+
+  const temporaryDatabaseName = `ms_accounts_conflict_${process.pid}_${Date.now()}_test`;
+  const adminUrl = new URL(databaseUrl);
+  adminUrl.pathname = "/postgres";
+  const temporaryDatabaseUrl = new URL(databaseUrl);
+  temporaryDatabaseUrl.pathname = `/${temporaryDatabaseName}`;
+  const adminClient = new Client({ connectionString: adminUrl.toString() });
+  let migrationClient: Client | null = null;
+  await adminClient.connect();
+  try {
+    await adminClient.query(`CREATE DATABASE "${temporaryDatabaseName}"`);
+    migrationClient = new Client({
+      connectionString: temporaryDatabaseUrl.toString(),
+    });
+    await migrationClient.connect();
+    const migrationNames = (await readdir(MIGRATIONS_DIR, { withFileTypes: true }))
+      .filter(
+        (entry) =>
+          entry.isDirectory() && entry.name < UNIFIED_ACCOUNT_SCHEMA_MIGRATION,
+      )
+      .map((entry) => entry.name)
+      .sort();
+    for (const migrationName of migrationNames) {
+      await executeMigrationSql(
+        migrationClient,
+        await readFile(
+          path.join(MIGRATIONS_DIR, migrationName, "migration.sql"),
+          "utf8",
+        ),
+      );
+    }
+    await migrationClient.query(`
+      INSERT INTO "Account" (id, status, "createdAt", "updatedAt") VALUES
+        ('conflict-account-a', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+        ('conflict-account-b', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+      INSERT INTO "AccountIdentity" (
+        id, "accountId", provider, "providerSubject", "tenantId", "openId", "unionId", metadata, "createdAt", "updatedAt"
+      ) VALUES
+        ('conflict-identity-union', 'conflict-account-a', 'FEISHU', 'on-conflict', 'default', NULL, 'on-conflict', '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+        ('conflict-identity-open', 'conflict-account-b', 'FEISHU', 'open:ou-conflict', 'default', 'ou-conflict', NULL, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+      INSERT INTO "User" (id, "openId", "unionId", name)
+      VALUES ('conflict-user', 'ou-conflict', 'on-conflict', '冲突用户');
+      INSERT INTO "UserRole" (id, "openId", role, team, "techGroup")
+      VALUES ('conflict-super-role', 'ou-conflict', 'SUPER_ADMIN', '', '');
+    `);
+    await executeMigrationSql(
+      migrationClient,
+      await readFile(
+        path.join(
+          MIGRATIONS_DIR,
+          UNIFIED_ACCOUNT_SCHEMA_MIGRATION,
+          "migration.sql",
+        ),
+        "utf8",
+      ),
+    );
+    const backfillSql = await readFile(
+      path.join(
+        MIGRATIONS_DIR,
+        UNIFIED_ACCOUNT_BACKFILL_MIGRATION,
+        "migration.sql",
+      ),
+      "utf8",
+    );
+    await expect(
+      executeMigrationSqlInTransaction(migrationClient, backfillSql),
+    ).rejects.toThrow("飞书身份关联了多个 Account");
+
+    await migrationClient.query(`
+      UPDATE "AccountIdentity"
+      SET "accountId" = 'conflict-account-a'
+      WHERE id = 'conflict-identity-open';
+    `);
+    const preflight = spawnSync(
+      path.join(process.cwd(), "node_modules", ".bin", "tsx"),
+      ["scripts/preflight-unified-accounts.ts"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          DATABASE_URL: temporaryDatabaseUrl.toString(),
+        },
+      },
+    );
+    expect(preflight.status).toBe(1);
+    expect(JSON.parse(preflight.stdout)).toMatchObject({
+      identityConflicts: 1,
+      ready: false,
+    });
+    await expect(
+      executeMigrationSqlInTransaction(migrationClient, backfillSql),
+    ).rejects.toThrow("同一飞书用户命中多个 AccountIdentity");
+
+    await migrationClient.query(`
+      DELETE FROM "AccountIdentity" WHERE id = 'conflict-identity-open';
+      INSERT INTO "SystemRoleAssignment" (
+        id, "accountId", role, team, "techGroup", "createdAt"
+      ) VALUES (
+        'ambiguous-team-administrator', 'conflict-account-a',
+        'TEAM_ADMINISTRATOR', '英雄', '电控', CURRENT_TIMESTAMP
+      );
+    `);
+    await expect(
+      executeMigrationSqlInTransaction(migrationClient, backfillSql),
+    ).rejects.toThrow("同时包含车组和技术组");
+  } finally {
+    await migrationClient?.end().catch(() => undefined);
+    await adminClient
+      .query(`DROP DATABASE IF EXISTS "${temporaryDatabaseName}"`)
+      .catch(() => undefined);
+    await adminClient.end();
+  }
+});
+
 async function executeMigrationSql(client: Client, sql: string) {
   for (const statement of splitPostgresStatements(sql)) {
     await client.query(statement);
+  }
+}
+
+async function executeMigrationSqlInTransaction(client: Client, sql: string) {
+  await client.query("BEGIN");
+  try {
+    for (const statement of splitPostgresStatements(sql)) {
+      await client.query(statement);
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
   }
 }
 

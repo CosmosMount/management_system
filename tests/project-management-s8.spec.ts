@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import { prisma } from "../lib/prisma";
-import { deleteTag } from "../lib/project-management/application/tag-service";
+import {
+  createTag,
+  deleteTag,
+  updateTag,
+} from "../lib/project-management/application/tag-service";
 import {
   runMilestoneDeadlineScan,
   runProjectManagementIntegrityScan,
@@ -182,6 +186,55 @@ test.describe("project management S8 dashboard, tags and notifications", () => {
         where: { action: "tag.deleted", entityId: tag.id },
       }),
     ).resolves.toBe(1);
+  });
+
+  test("Tag writes recheck project access and current administrator roles inside the transaction", async () => {
+    const disabled = await createActor("S8 disabled tag actor");
+    await prisma.account.update({
+      where: { id: disabled.accountId },
+      data: { projectAccessStatus: "DISABLED" },
+    });
+    await expect(
+      createTag(disabled, {
+        name: `S8-disabled-${randomUUID().slice(0, 8)}`,
+        color: "#64748b",
+      }),
+    ).rejects.toThrow("账号已禁用");
+
+    const administrator = await createActor("S8 revoked tag administrator");
+    const owner = await createActor("S8 other tag owner");
+    const assignment = await prisma.systemRoleAssignment.create({
+      data: {
+        accountId: administrator.accountId,
+        role: "PROJECT_ADMINISTRATOR",
+      },
+    });
+    const staleAdministrator: ProjectManagementActor = {
+      ...administrator,
+      systemRoles: [
+        { role: "PROJECT_ADMINISTRATOR", team: "", techGroup: "" },
+      ],
+    };
+    const tag = await prisma.tag.create({
+      data: {
+        name: `S8-revoked-${randomUUID()}`,
+        color: "#64748b",
+        createdByAccountId: owner.accountId,
+      },
+    });
+    await prisma.systemRoleAssignment.update({
+      where: { id: assignment.id },
+      data: { revokedAt: new Date() },
+    });
+    await expect(
+      updateTag(staleAdministrator, {
+        tagId: tag.id,
+        expectedUpdatedAt: tag.updatedAt.toISOString(),
+        name: "撤权后不应更新",
+        color: "#64748b",
+        description: "",
+      }),
+    ).rejects.toThrow("你没有执行此操作的权限");
   });
 
   test("Tag management paginates beyond 100 records and stale deletion is atomic", async () => {
@@ -498,7 +551,7 @@ async function createActor(displayName: string): Promise<ProjectManagementActor>
   const openId = `ou_s8_${randomUUID()}`;
   const account = await prisma.account.create({
     data: {
-      status: "ACTIVE",
+      projectAccessStatus: "ACTIVE",
       identities: {
         create: {
           provider: "FEISHU",

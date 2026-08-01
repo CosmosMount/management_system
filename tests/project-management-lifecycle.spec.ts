@@ -121,7 +121,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     const member = await createAccountPerson("生命周期 Member");
     const reviewer = await createAccountPerson("生命周期 Reviewer");
     const outsider = await createAccountPerson("生命周期 Outsider");
-    await grantRole(admin.account.id, "TEAM_ADMINISTRATOR", {
+    await grantRole(admin.account.id, "GROUP_LEADER", {
       team: "英雄",
       techGroup: "电控",
     });
@@ -1361,7 +1361,7 @@ async function createDraftFixture(
   const owner = await createAccountPerson("生命周期 Owner");
   const member = await createAccountPerson("生命周期 Member");
   const reviewer = await createAccountPerson("生命周期 Reviewer");
-  await grantRole(admin.account.id, "TEAM_ADMINISTRATOR", {
+  await grantRole(admin.account.id, "GROUP_LEADER", {
     team: "英雄",
     techGroup: "电控",
   });
@@ -1505,7 +1505,7 @@ async function createAccountPerson(displayName: string) {
   const openId = `ou_pm_lifecycle_${randomUUID()}`;
   const account = await prisma.account.create({
     data: {
-      status: "ACTIVE",
+      projectAccessStatus: "ACTIVE",
       identities: {
         create: {
           provider: "FEISHU",
@@ -1529,7 +1529,7 @@ async function createAccountPerson(displayName: string) {
 
 async function grantRole(
   accountId: string,
-  role: "TEAM_ADMINISTRATOR",
+  role: "GROUP_LEADER",
   scope: { team: string; techGroup: string },
 ) {
   await prisma.systemRoleAssignment.create({
@@ -1537,7 +1537,7 @@ async function grantRole(
       accountId,
       role,
       team: scope.team,
-      techGroup: scope.techGroup,
+      techGroup: scope.team ? "" : scope.techGroup,
     },
   });
 }

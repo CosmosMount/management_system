@@ -504,7 +504,7 @@ test.describe("S2 canvas query security", () => {
     });
     const ownerActor = actor(owner);
     const teamAdminActor = actor(teamAdmin, [
-      scopedRole("TEAM_ADMINISTRATOR", "英雄", "电控"),
+      scopedRole("GROUP_LEADER", "英雄", "电控"),
     ]);
     const ordinaryActor = actor(ordinary);
     const systemActor = actor(owner, [systemAdministratorRole()]);
@@ -979,7 +979,7 @@ test.describe("S2 canvas query security", () => {
     const visibleOwner = await createAccountPerson("Tag 并集可见 Owner");
     const hiddenOwner = await createAccountPerson("Tag 并集隐藏 Owner");
     const teamAdminActor = actor(teamAdmin, [
-      scopedRole("TEAM_ADMINISTRATOR", "英雄", "电控"),
+      scopedRole("GROUP_LEADER", "英雄", "电控"),
     ]);
     const tag = await createTag(teamAdmin.account.id, "Tag 并集筛选");
     const taskTagOnly = await createTask({
@@ -1168,14 +1168,14 @@ test.describe("S2 canvas query security", () => {
     const viewer = await createAccountPerson("Capability Viewer");
     const outOfScopePerson = await createAccountPerson("Capability 越界人员");
     const resourceManagerActor = actor(resourceManager, [
-      scopedRole("RESOURCE_MANAGER", "英雄", "电控"),
+      scopedRole("GROUP_LEADER", "英雄", "电控"),
     ]);
     const teamAdminActor = actor(teamAdmin, [
-      scopedRole("TEAM_ADMINISTRATOR", "英雄", "电控"),
+      scopedRole("GROUP_LEADER", "英雄", "电控"),
     ]);
     await Promise.all([
-      grantScopedRole(resourceManager.account.id, "RESOURCE_MANAGER", "英雄", "电控"),
-      grantScopedRole(teamAdmin.account.id, "TEAM_ADMINISTRATOR", "英雄", "电控"),
+      grantScopedRole(resourceManager.account.id, "GROUP_LEADER", "英雄", "电控"),
+      grantScopedRole(teamAdmin.account.id, "GROUP_LEADER", "英雄", "电控"),
     ]);
     const activeTask = await createTask({
       ownerAccountId: owner.account.id,
@@ -1371,16 +1371,16 @@ test.describe("S2 canvas query security", () => {
     });
     expect(rowCanCreate(personalCanvas, independent.person.id)).toBe(true);
 
-    await expectErrorCode(
-      getTimeCanvasData({
-        actor: resourceManagerActor,
-        input: canvasInput({
-          scope: { kind: "RESOURCE_PLANNER" },
-          groupBy: "PERSON",
-          taskIds: [activeTask.taskId],
-        }),
+    const groupLeaderTaskFilter = await getTimeCanvasData({
+      actor: resourceManagerActor,
+      input: canvasInput({
+        scope: { kind: "RESOURCE_PLANNER" },
+        groupBy: "PERSON",
+        taskIds: [activeTask.taskId],
       }),
-      "NOT_FOUND",
+    });
+    expect(groupLeaderTaskFilter.anchors.map((anchor) => anchor.id)).toContain(
+      activeTask.taskId,
     );
     await expectErrorCode(
       getTimeCanvasData({
@@ -1419,7 +1419,7 @@ test.describe("S2 canvas query security", () => {
     const ownerActor = actor(owner);
     const adminActor = actor(owner, [systemAdministratorRole()]);
     const managerActor = actor(resourceManager, [
-      scopedRole("RESOURCE_MANAGER", scopedTeam, scopedTechGroup),
+      scopedRole("GROUP_LEADER", scopedTeam, scopedTechGroup),
     ]);
     const taskA = await createTask({
       ownerAccountId: owner.account.id,
@@ -2577,11 +2577,11 @@ test.describe("S2 canvas query security", () => {
     const viewer = await createAccountPerson("Preview Viewer");
     const outsider = await createAccountPerson("Preview Outsider");
     const managerActor = actor(manager, [
-      scopedRole("RESOURCE_MANAGER", "英雄", "电控"),
+      scopedRole("GROUP_LEADER", "英雄", "电控"),
     ]);
     await grantScopedRole(
       manager.account.id,
-      "RESOURCE_MANAGER",
+      "GROUP_LEADER",
       "英雄",
       "电控",
     );
@@ -3286,7 +3286,7 @@ async function createAccountPerson(
   const openId = `ou_s2_canvas_${randomUUID()}`;
   const account = await prisma.account.create({
     data: {
-      status: accountStatus,
+      projectAccessStatus: accountStatus,
       person: { create: { displayName, status } },
       identities: {
         create: {
@@ -3679,20 +3679,20 @@ function actor(
 }
 
 function systemAdministratorRole(): ProjectManagementSystemRoleRecord {
-  return { role: "SYSTEM_ADMINISTRATOR", team: "", techGroup: "" };
+  return { role: "PROJECT_ADMINISTRATOR", team: "", techGroup: "" };
 }
 
 function scopedRole(
-  role: "TEAM_ADMINISTRATOR" | "RESOURCE_MANAGER",
+  role: "GROUP_LEADER",
   team: string,
   techGroup: string,
 ): ProjectManagementSystemRoleRecord {
-  return { role, team, techGroup };
+  return { role, team, techGroup: team ? "" : techGroup };
 }
 
 async function grantScopedRole(
   accountId: string,
-  role: "TEAM_ADMINISTRATOR" | "RESOURCE_MANAGER",
+  role: "GROUP_LEADER",
   team: string,
   techGroup: string,
 ) {
@@ -3701,7 +3701,7 @@ async function grantScopedRole(
       accountId,
       role,
       team,
-      techGroup,
+      techGroup: team ? "" : techGroup,
       grantedByAccountId: accountId,
     },
   });

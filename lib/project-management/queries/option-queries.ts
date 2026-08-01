@@ -65,7 +65,7 @@ export async function getActorPersonOption(
       id: true,
       displayName: true,
       avatar: true,
-      account: { select: { status: true } },
+      account: { select: { projectAccessStatus: true } },
     },
   });
   return personOptionDtoSchema.parse({
@@ -73,7 +73,7 @@ export async function getActorPersonOption(
     displayName: person.displayName,
     avatar: person.avatar,
     status: "ACTIVE",
-    accountAvailability: person.account?.status ?? "UNBOUND",
+    accountAvailability: person.account?.projectAccessStatus ?? "UNBOUND",
   });
 }
 
@@ -114,7 +114,7 @@ export async function searchPeople({
       displayName: true,
       avatar: true,
       status: true,
-      account: { select: { status: true } },
+      account: { select: { projectAccessStatus: true } },
     },
     orderBy: [{ displayName: "asc" }, { id: "asc" }],
     take: parsed.limit + 1,
@@ -126,7 +126,9 @@ export async function searchPeople({
     avatar: person.avatar,
     status: "ACTIVE" as const,
     accountAvailability:
-      person.account === null ? "UNBOUND" as const : person.account.status,
+      person.account === null
+        ? "UNBOUND" as const
+        : person.account.projectAccessStatus,
   }));
   return personOptionPageSchema.parse({
     items,

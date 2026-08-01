@@ -6,6 +6,21 @@ const configuredDevOrigins = [
 ].filter((origin): origin is string => Boolean(origin));
 
 const nextConfig: NextConfig = {
+  // The controlled Playwright runner may coexist with a developer server in
+  // this workspace. A runner-owned build directory prevents Next.js locks and
+  // generated state from crossing those two isolated processes.
+  distDir: process.env.PLAYWRIGHT_DB_OWNERSHIP_TOKEN
+    ? ".next-playwright"
+    : ".next",
+  images: {
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: "s1-imfile.feishucdn.com",
+        pathname: "/static-resource/**",
+      },
+    ],
+  },
   async redirects() {
     return [
       { source: "/apply", destination: "/procurement/new", permanent: true },

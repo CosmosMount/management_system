@@ -211,7 +211,9 @@ export async function uploadApplicantDocs(formData: FormData) {
     const signatures = await resolveReimbursementListSignatures({
       team: order.team,
       techGroup: order.techGroup,
+      teamApproverAccountId: order.teamApproverAccountId,
       teamApproverOpenId: order.teamApproverOpenId,
+      techGroupApproverAccountId: order.techGroupApproverAccountId,
       techGroupApproverOpenId: order.techGroupApproverOpenId,
       initiator: order.initiator,
     });
@@ -409,7 +411,9 @@ export async function previewReimbursementListDoc(input: {
   const signatures = await resolveReimbursementListSignatures({
     team: order.team,
     techGroup: order.techGroup,
+    teamApproverAccountId: order.teamApproverAccountId,
     teamApproverOpenId: order.teamApproverOpenId,
+    techGroupApproverAccountId: order.techGroupApproverAccountId,
     techGroupApproverOpenId: order.techGroupApproverOpenId,
     initiator: order.initiator,
   });

@@ -1604,11 +1604,11 @@ async function createActivatedFixture(
   const disabledPerson = await prisma.person.create({
     data: { displayName: "P5 Disabled Person", status: "INACTIVE" },
   });
-  await grantRole(admin.account.id, "TEAM_ADMINISTRATOR", {
+  await grantRole(admin.account.id, "GROUP_LEADER", {
     team,
     techGroup,
   });
-  await grantRole(resourceManager.account.id, "RESOURCE_MANAGER", {
+  await grantRole(resourceManager.account.id, "GROUP_LEADER", {
     team,
     techGroup,
   });
@@ -1730,7 +1730,7 @@ async function createAccountPerson(displayName: string) {
   const openId = `ou_pm_p5_segment_${randomUUID()}`;
   const account = await prisma.account.create({
     data: {
-      status: "ACTIVE",
+      projectAccessStatus: "ACTIVE",
       identities: {
         create: {
           provider: "FEISHU",
@@ -1754,7 +1754,7 @@ async function createAccountPerson(displayName: string) {
 
 async function grantRole(
   accountId: string,
-  role: "TEAM_ADMINISTRATOR" | "RESOURCE_MANAGER" | "SYSTEM_ADMINISTRATOR",
+  role: "GROUP_LEADER" | "PROJECT_ADMINISTRATOR",
   scope: { team?: string; techGroup?: string } = {},
 ) {
   await prisma.systemRoleAssignment.create({
@@ -1762,7 +1762,7 @@ async function grantRole(
       accountId,
       role,
       team: scope.team ?? "",
-      techGroup: scope.techGroup ?? "",
+      techGroup: scope.team ? "" : (scope.techGroup ?? ""),
     },
   });
 }
