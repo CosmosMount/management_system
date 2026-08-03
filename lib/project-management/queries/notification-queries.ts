@@ -14,7 +14,6 @@ const notificationCategoryValues = [
   "REVIEW",
   "REVISION",
   "WORK_SEGMENT",
-  "RESOURCE_CONFLICT",
   "ACCOUNT_SECURITY",
 ] as const satisfies readonly ProjectManagementNotificationCategory[];
 

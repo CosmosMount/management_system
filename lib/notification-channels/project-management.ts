@@ -183,7 +183,6 @@ function buildProjectManagementCard(
 
 function cardTemplate(payload: ProjectManagementNotificationPayload) {
   if (payload.purpose === "approval_request") return "orange";
-  if (payload.category === "RESOURCE_CONFLICT") return "red";
   if (payload.category === "ACCOUNT_SECURITY") return "red";
   if (payload.category === "WORK_SEGMENT") return "blue";
   return payload.mandatory ? "orange" : "green";
@@ -204,9 +203,6 @@ function contextLabel(key: string) {
     taskStatus: "Task 状态",
     currentPlanVersionId: "当前计划",
     segmentStatus: "投入状态",
-    conflictStatus: "冲突状态",
-    severity: "严重度",
-    kind: "类型",
   };
   return labels[key] ?? key;
 }

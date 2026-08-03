@@ -19,7 +19,6 @@ export const markAllInAppNotificationsReadInputSchema = z.object({
       "REVIEW",
       "REVISION",
       "WORK_SEGMENT",
-      "RESOURCE_CONFLICT",
       "ACCOUNT_SECURITY",
     ])
     .optional(),

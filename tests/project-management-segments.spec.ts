@@ -47,6 +47,42 @@ import type {
 } from "../lib/project-management/identity";
 
 test.describe("project management P5 work segment services", () => {
+  test("overlapping Segments are allowed without conflict notifications or outbox", async () => {
+    const fixture = await createActivatedFixture();
+    const first = await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 9, 11),
+      content: "允许重叠 A",
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+    });
+    const second = await createWorkSegment(actor(fixture.member), {
+      ...plannedInput(fixture.member.person.id, 10, 12),
+      content: "允许重叠 B",
+      taskId: fixture.taskId,
+      nodeId: fixture.activeNodeId,
+    });
+
+    expect(
+      await prisma.workSegment.count({
+        where: { id: { in: [first.segment.id, second.segment.id] } },
+      }),
+    ).toBe(2);
+    expect(
+      await prisma.notificationOutbox.count({
+        where: {
+          type: {
+            in: ["resource_conflict_opened", "resource_conflict_resolved"],
+          },
+        },
+      }),
+    ).toBe(0);
+    expect(
+      await prisma.inAppNotification.count({
+        where: { entityType: "ResourceConflict" },
+      }),
+    ).toBe(0);
+  });
+
   test("Segment validation, permissions, batch rollback and optimistic lock are enforced", async () => {
     const fixture = await createActivatedFixture();
 
@@ -57,7 +93,6 @@ test.describe("project management P5 work segment services", () => {
         startAt: atHour(10),
         endAt: atHour(9),
         content: "非法时间",
-        allocation: 50,
       }),
       "VALIDATION_ERROR",
     );
@@ -69,7 +104,6 @@ test.describe("project management P5 work segment services", () => {
         startAt: atHour(9),
         endAt: atHour(10),
         content: "越权创建他人计划",
-        allocation: 50,
       }),
       "FORBIDDEN",
     );
@@ -130,7 +164,6 @@ test.describe("project management P5 work segment services", () => {
       segmentId: selfSegment.segment.id,
       expectedUpdatedAt: selfSegment.segment.updatedAt,
       content: "更新后的计划内容",
-      allocation: 60,
       reason: "调整投入",
     });
     expect(updated.segment.content).toBe("更新后的计划内容");
@@ -404,7 +437,6 @@ test.describe("project management P5 work segment services", () => {
       personId: fixture.member.person.id,
       type: "PLANNED" as const,
       content: "跨月连续计划",
-      allocation: 50,
       role: "DEVELOPER" as const,
       priority: "MEDIUM" as const,
       taskId: fixture.taskId,
@@ -467,7 +499,6 @@ test.describe("project management P5 work segment services", () => {
       personId: fixture.member.person.id,
       type: "PLANNED" as const,
       content: `恰好 31 天计划 ${randomUUID()}`,
-      allocation: 50,
       role: "DEVELOPER" as const,
       priority: "MEDIUM" as const,
       taskId: fixture.taskId,
@@ -604,7 +635,6 @@ test.describe("project management P5 work segment services", () => {
       startAt: atHour(14),
       endAt: atHour(16),
       content: "一次实际投入覆盖两条计划",
-      allocation: 80,
       taskId: fixture.taskId,
       nodeId: fixture.activeNodeId,
       sources: [
@@ -637,7 +667,6 @@ test.describe("project management P5 work segment services", () => {
       startAt: atHour(20),
       endAt: atHour(21),
       content: "上午实际投入",
-      allocation: 40,
       taskId: fixture.taskId,
       nodeId: fixture.activeNodeId,
       sources: [
@@ -653,7 +682,6 @@ test.describe("project management P5 work segment services", () => {
       startAt: atHour(21),
       endAt: atHour(22),
       content: "下午实际投入",
-      allocation: 60,
       taskId: fixture.taskId,
       nodeId: fixture.activeNodeId,
       sources: [
@@ -704,7 +732,6 @@ test.describe("project management P5 work segment services", () => {
       startAt: atHour(17),
       endAt: atHour(18),
       content: "未提前规划的实际投入",
-      allocation: 30,
     });
     expect(unplannedActual.segment.type).toBe("ACTUAL");
 
@@ -718,7 +745,6 @@ test.describe("project management P5 work segment services", () => {
       startAt: atHour(18),
       endAt: atHour(19),
       content: "无 Task 的来源 Actual",
-      allocation: 40,
       sources: [
         {
           plannedSegmentId: sourceLeakPlan.segment.id,
@@ -783,7 +809,6 @@ test.describe("project management P5 work segment services", () => {
       startAt: atHour(11),
       endAt: atHour(12),
       content: "需要删除的实际投入",
-      allocation: 20,
       taskId: fixture.taskId,
       nodeId: fixture.activeNodeId,
     });
@@ -971,20 +996,18 @@ test.describe("project management P5 work segment services", () => {
     ).toBe(auditsBefore);
   });
 
-  test("Batch cancel rejects an outsider, then cancels every item with history, audit and conflict rescan", async () => {
+  test("Batch cancel rejects an outsider, then cancels every item with history and audit", async () => {
     const fixture = await createActivatedFixture();
     const created = await batchCreatePlannedSegments(actor(fixture.member), {
       segments: [
         {
           ...plannedInput(fixture.member.person.id, 16, 17),
-          allocation: 70,
           content: "批量取消成功 A",
           taskId: fixture.taskId,
           nodeId: fixture.activeNodeId,
         },
         {
           ...plannedInput(fixture.member.person.id, 16, 17),
-          allocation: 50,
           content: "批量取消成功 B",
           taskId: fixture.taskId,
           nodeId: fixture.activeNodeId,
@@ -999,14 +1022,6 @@ test.describe("project management P5 work segment services", () => {
       })),
       reason: "批量取消成功路径",
     };
-    const conflict = await prisma.resourceConflict.findFirstOrThrow({
-      where: {
-        status: "OPEN",
-        segments: { some: { segmentId: { in: ids } } },
-      },
-      select: { id: true },
-    });
-
     await expectServiceError(
       batchCancelPlannedSegments(actor(fixture.outsider), input),
       "NOT_FOUND",
@@ -1034,12 +1049,6 @@ test.describe("project management P5 work segment services", () => {
         },
       }),
     ).toBe(2);
-    expect(
-      await prisma.resourceConflict.findUniqueOrThrow({
-        where: { id: conflict.id },
-        select: { status: true },
-      }),
-    ).toEqual({ status: "RESOLVED" });
   });
 
   test("Batch full confirmation is atomic, permission checked and creates complete Actual sources", async () => {
@@ -1430,7 +1439,6 @@ test.describe("project management P5 work segment services", () => {
       startAt: atHour(16),
       endAt: atHour(17),
       content: "并发逻辑删除",
-      allocation: 20,
       taskId: fixture.taskId,
       nodeId: fixture.activeNodeId,
     });
@@ -1659,7 +1667,6 @@ function plannedInput(personId: string, startHour: number, endHour: number) {
     startAt: atHour(startHour),
     endAt: atHour(endHour),
     content: `计划投入 ${startHour}-${endHour}`,
-    allocation: 50,
     role: "DEVELOPER",
     priority: "MEDIUM",
     tagIds: [],

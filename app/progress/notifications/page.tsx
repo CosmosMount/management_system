@@ -22,7 +22,6 @@ const categories = [
   "REVIEW",
   "REVISION",
   "WORK_SEGMENT",
-  "RESOURCE_CONFLICT",
   "ACCOUNT_SECURITY",
 ] as const;
 

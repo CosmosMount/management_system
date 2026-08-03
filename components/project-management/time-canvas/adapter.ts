@@ -1,7 +1,6 @@
 import { layoutIntervalLanes, rowHeightForLaneCount } from "@/components/project-management/time-canvas/lane-layout";
 import type {
   TimeCanvasAnchor,
-  TimeCanvasConflict,
   TimeCanvasMode,
   TimeCanvasModel,
   TimeCanvasRow,
@@ -83,36 +82,6 @@ export function timeCanvasDataToModel(
     ? data.anchors.flatMap((task) => adaptTaskAnchors(task, planRowIds.get(task.id)))
     : [];
 
-  const conflicts: TimeCanvasConflict[] = data.conflicts.map((conflict, index) => {
-    if (conflict.visibility === "HIDDEN") {
-      return {
-        id: `hidden-conflict:${index}`,
-        rowId: null,
-        visibility: "HIDDEN",
-        severity: conflict.severity,
-        status: null,
-        reason: null,
-        startMs: null,
-        endMs: null,
-        hiddenSegmentCount: conflict.hiddenSegmentCount,
-      };
-    }
-    return {
-      id: conflict.id,
-      rowId:
-        data.groupBy === "PERSON"
-          ? rowIdBySource.get(`PERSON:${conflict.personId}`) ?? null
-          : null,
-      visibility: "VISIBLE",
-      severity: conflict.severity,
-      status: conflict.status,
-      reason: conflict.conflictKind,
-      startMs: parseMs(conflict.startAt),
-      endMs: parseMs(conflict.endAt),
-      hiddenSegmentCount: conflict.hiddenSegmentCount,
-    };
-  });
-
   return {
     timezone: data.timezone,
     range: {
@@ -122,7 +91,6 @@ export function timeCanvasDataToModel(
     rows: [...planRows, ...regularRows],
     anchors,
     segments,
-    conflicts,
     nextCursor: data.nextCursor,
     generatedAt: data.generatedAt,
   };
@@ -146,10 +114,8 @@ function adaptSegment(
       startMs: parseMs(segment.startAt),
       endMs: parseMs(segment.endAt),
       title: "其他占用",
-      allocation: segment.allocation,
       priority: null,
       associationNeedsReview: false,
-      conflictIds: [],
       visibility: "BUSY_ONLY",
       permissions: readOnlyPermissions,
       versionToken: null,
@@ -170,10 +136,8 @@ function adaptSegment(
     startMs: parseMs(segment.startAt),
     endMs: parseMs(segment.endAt),
     title: segment.content || "未命名投入",
-    allocation: segment.allocation,
     priority: segment.priority,
     associationNeedsReview: segment.associationNeedsReview,
-    conflictIds: segment.conflictIds,
     visibility: segment.visibility,
     permissions: segment.permissions,
     versionToken: segment.versionToken,

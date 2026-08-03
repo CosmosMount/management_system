@@ -43,7 +43,6 @@ export default async function TimeCanvasFixturePage({
             display={{
               showActual: true,
               showBusy: true,
-              showConflicts: true,
               showInspector: true,
             }}
             emptyMessage="受控空数据验收状态"

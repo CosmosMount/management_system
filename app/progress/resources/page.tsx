@@ -75,7 +75,6 @@ export default async function ProgressResourcesPage({
         includeActual:
           view.types.length === 0 || view.types.includes("ACTUAL"),
         includeBusyBlocks: view.groupBy === "PERSON",
-        includeConflicts: true,
         cursor,
         rowLimit: 50,
       },
@@ -86,17 +85,9 @@ export default async function ProgressResourcesPage({
         message: toProjectManagementServiceError(error).message,
       })),
   ]);
-  const rawCanvasModel = canvasResult.ok
+  const canvasModel = canvasResult.ok
     ? timeCanvasDataToModel(canvasResult.data, "RESOURCE_PLANNER")
     : null;
-  const canvasModel = rawCanvasModel && view.conflictOnly
-    ? {
-        ...rawCanvasModel,
-        segments: rawCanvasModel.segments.filter(
-          (segment) => segment.conflictIds.length > 0 || segment.type === "BUSY",
-        ),
-      }
-    : rawCanvasModel;
   const people = mergePeople(
     [actorPerson, ...peoplePage.items],
     canvasModel?.rows
@@ -142,7 +133,6 @@ export default async function ProgressResourcesPage({
               tagIds: view.tagIds,
               types: view.types,
               statuses: view.statuses,
-              conflictOnly: view.conflictOnly,
             }}
             initialPeople={people}
             initialTasks={taskPage.items}

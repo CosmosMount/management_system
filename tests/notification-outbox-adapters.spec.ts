@@ -718,27 +718,24 @@ test.describe("notification outbox channel adapters", () => {
       eventKey,
       channel: "project-management",
       botKind: "notification",
-      type: "resource_conflict_opened",
+      type: "task_activated",
       payload: {
-        kind: "resource_conflict_opened",
+        kind: "task_activated",
         payloadVersion: 1,
         purpose: "notification",
-        category: "RESOURCE_CONFLICT",
-        title: "资源冲突新增",
-        summary: "李棋轩在电控调试 Task 上存在投入超过 100% 的冲突",
-        actorName: "系统",
+        category: "TASK",
+        title: "Task 已激活",
+        summary: "李棋轩已激活电控调试 Task",
+        actorName: "李棋轩",
         taskId: "pm-task-id",
         taskTitle: "电控调试 Task",
-        entityType: "ResourceConflict",
-        entityId: "pm-conflict-id",
-        linkPath: "/progress/resources/conflicts?conflictId=pm-conflict-id",
+        entityType: "Task",
+        entityId: "pm-task-id",
+        linkPath: "/progress/tasks/pm-task-id",
         recipientOpenIds: ["ou_outbox_success", "ou_outbox_success"],
         mandatory: true,
         appOrigin: "http://127.0.0.1:3002",
-        context: {
-          severity: "HIGH",
-          kind: "ALLOCATION_OVER_LIMIT",
-        },
+        context: { status: "ACTIVE" },
       },
     });
 
@@ -751,11 +748,10 @@ test.describe("notification outbox channel adapters", () => {
       String(directMessageBodies[0]?.content),
     ) as Record<string, unknown>;
     const rendered = JSON.stringify(content);
-    expect(rendered).toContain("资源冲突新增");
-    expect(rendered).toContain("系统");
+    expect(rendered).toContain("Task 已激活");
+    expect(rendered).toContain("李棋轩");
     expect(rendered).toContain("电控调试 Task");
-    expect(rendered).toContain("投入超过 100%");
-    expect(rendered).toContain("/progress/resources/conflicts");
+    expect(rendered).toContain("/progress/tasks/pm-task-id");
     const row = await prisma.notificationOutbox.findUniqueOrThrow({
       where: { eventKey },
       include: { recipients: true },
@@ -769,58 +765,6 @@ test.describe("notification outbox channel adapters", () => {
     });
   });
 
-  test("项目管理人工冲突解决卡片显示真实操作人并保持通知机器人用途", async () => {
-    const eventKey = `${EVENT_PREFIX}project-management-manual-conflict-actor`;
-    await enqueueNotification({
-      eventKey,
-      channel: "project-management",
-      botKind: "notification",
-      type: "resource_conflict_resolved",
-      payload: {
-        kind: "resource_conflict_resolved",
-        payloadVersion: 1,
-        purpose: "notification",
-        category: "RESOURCE_CONFLICT",
-        title: "资源冲突已解决",
-        summary: "资源经理已确认并处理投入冲突",
-        actorName: "资源经理王工",
-        taskId: "pm-task-id",
-        taskTitle: "电控调试 Task",
-        entityType: "ResourceConflict",
-        entityId: "pm-conflict-manual",
-        linkPath: "/progress/resources/conflicts?conflictId=pm-conflict-manual",
-        recipientOpenIds: ["ou_outbox_success"],
-        mandatory: false,
-        appOrigin: "http://127.0.0.1:3002",
-        context: { status: "RESOLVED" },
-      },
-    });
-
-    expect(
-      await drainNotificationOutbox(20, { ignoreDeliveryDisabled: true }),
-    ).toBe(1);
-    expect(authAppIds).toEqual(["notification-app"]);
-    expect(directMessageBodies).toHaveLength(1);
-    const rendered = JSON.stringify(
-      JSON.parse(String(directMessageBodies[0]?.content)) as Record<
-        string,
-        unknown
-      >,
-    );
-    expect(rendered).toContain("资源经理王工");
-    expect(rendered).not.toContain("**操作人**：系统");
-    const row = await prisma.notificationOutbox.findUniqueOrThrow({
-      where: { eventKey },
-      include: { recipients: true },
-    });
-    expect(row).toMatchObject({
-      status: "SENT",
-      botKind: "notification",
-      type: "resource_conflict_resolved",
-    });
-    expect(row.recipients).toHaveLength(1);
-  });
-
   test("项目管理 adapter 遵守禁发 guard 且不会把跳过投递标记为成功", async () => {
     const eventKey = `${EVENT_PREFIX}project-management-delivery-disabled`;
     process.env.NOTIFICATION_DELIVERY_DISABLED = "true";
@@ -828,24 +772,24 @@ test.describe("notification outbox channel adapters", () => {
       eventKey,
       channel: "project-management",
       botKind: "notification",
-      type: "resource_conflict_opened",
+      type: "segment_confirmation_due",
       payload: {
-        kind: "resource_conflict_opened",
+        kind: "segment_confirmation_due",
         payloadVersion: 1,
         purpose: "notification",
-        category: "RESOURCE_CONFLICT",
-        title: "资源冲突禁发验证",
+        category: "WORK_SEGMENT",
+        title: "投入确认禁发验证",
         summary: "禁发开关打开时不能将项目管理飞书通知标记为成功",
         actorName: "系统",
         taskId: "pm-task-id",
         taskTitle: "电控调试 Task",
-        entityType: "ResourceConflict",
-        entityId: "pm-conflict-disabled",
-        linkPath: "/progress/resources/conflicts?conflictId=pm-conflict-disabled",
+        entityType: "WorkSegment",
+        entityId: "pm-segment-disabled",
+        linkPath: "/progress/my-timeline?focus=pm-segment-disabled",
         recipientOpenIds: ["ou_outbox_success"],
         mandatory: true,
         appOrigin: "http://127.0.0.1:3002",
-        context: { severity: "HIGH" },
+        context: { status: "PENDING_CONFIRMATION" },
       },
     });
 

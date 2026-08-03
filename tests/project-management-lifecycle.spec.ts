@@ -741,7 +741,6 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         startAt: new Date("2026-08-04T01:00:00.000Z"),
         endAt: new Date("2026-08-04T02:00:00.000Z"),
         content: "候选计划关联保护",
-        allocation: new Prisma.Decimal(50),
         taskId: fixture.taskId,
         nodeId: replacementNode.nodeId,
         createdByAccountId: fixture.owner.account.id,
@@ -881,7 +880,6 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         startAt: new Date("2026-08-01T01:00:00.000Z"),
         endAt: new Date("2026-08-01T03:00:00.000Z"),
         content: "旧节点计划投入",
-        allocation: new Prisma.Decimal(50),
         taskId: fixture.taskId,
         nodeId: activeNode.nodeId,
         createdByAccountId: fixture.owner.account.id,
@@ -895,7 +893,6 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         startAt: new Date("2026-08-01T02:00:00.000Z"),
         endAt: new Date("2026-08-01T04:00:00.000Z"),
         content: "其他计划投入",
-        allocation: new Prisma.Decimal(40),
         createdByAccountId: fixture.owner.account.id,
       },
     });
@@ -907,7 +904,6 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         startAt: new Date("2026-08-01T04:00:00.000Z"),
         endAt: new Date("2026-08-01T05:00:00.000Z"),
         content: "已确认旧节点计划投入",
-        allocation: new Prisma.Decimal(50),
         taskId: fixture.taskId,
         nodeId: activeNode.nodeId,
         createdByAccountId: fixture.owner.account.id,
@@ -921,7 +917,6 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         startAt: new Date("2026-08-01T05:00:00.000Z"),
         endAt: new Date("2026-08-01T06:00:00.000Z"),
         content: "已取消旧节点计划投入",
-        allocation: new Prisma.Decimal(50),
         taskId: fixture.taskId,
         nodeId: activeNode.nodeId,
         createdByAccountId: fixture.owner.account.id,
@@ -981,20 +976,12 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       select: { associationNeedsReview: true },
     });
     expect(updatedSegment.associationNeedsReview).toBe(true);
-    const revisionConflict = await prisma.resourceConflict.findFirstOrThrow({
-      where: {
-        personId: fixture.member.person.id,
-        kind: "REVISION_OVERLAP",
-        status: "OPEN",
-        segments: {
-          every: { segmentId: { in: [planned.id, overlappingPlanned.id] } },
-        },
-      },
-      include: { segments: { select: { segmentId: true } } },
-    });
     expect(
-      revisionConflict.segments.map((entry) => entry.segmentId).sort(),
-    ).toEqual([planned.id, overlappingPlanned.id].sort());
+      await prisma.workSegment.findUniqueOrThrow({
+        where: { id: overlappingPlanned.id },
+        select: { associationNeedsReview: true },
+      }),
+    ).toEqual({ associationNeedsReview: false });
     await prisma.workSegmentChange.findFirstOrThrow({
       where: {
         segmentId: planned.id,

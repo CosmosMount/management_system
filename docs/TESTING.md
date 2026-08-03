@@ -140,10 +140,10 @@ npm run build
 npm run db:deploy
 ```
 
-项目管理 P1-P6 schema、身份、授权、生命周期、Segment、Conflict、UI 或通知接入变更应额外执行：
+项目管理 P1-P6 schema、身份、授权、生命周期、Segment、UI 或通知接入变更应额外执行：
 
 ```bash
-npm run test:e2e -- tests/project-management-p1.spec.ts tests/project-management-lifecycle.spec.ts tests/project-management-segments.spec.ts tests/project-management-conflicts.spec.ts tests/project-management-ui.spec.ts tests/notification-outbox-adapters.spec.ts tests/feishu-boundaries.spec.ts
+npm run test:e2e -- tests/project-management-p1.spec.ts tests/project-management-lifecycle.spec.ts tests/project-management-segments.spec.ts tests/project-management-resource-removal-migration.spec.ts tests/project-management-ui.spec.ts tests/notification-outbox-adapters.spec.ts tests/feishu-boundaries.spec.ts
 npm run pm:identity-backfill
 ```
 
@@ -223,11 +223,11 @@ npm run pm:identity-backfill
 
 ## 项目管理 P4/P6 UI 测试
 
-1. 桌面 `1440x1000` 与 Pixel 5 分别打开 `/progress`，应展示“我的工作”总览、可见 Active Task、未来投入、待确认计划、开放冲突和未读通知摘要。
+1. 桌面 `1440x1000` 与 Pixel 5 分别打开 `/progress`，应展示“我的工作”总览、可见 Active Task、未来投入、待确认计划和未读通知摘要；导航中不得出现“资源冲突”。
 2. 打开 `/progress/tasks`，按“只看我参与”、状态、优先级和关键词筛选时，只展示当前 actor 可读 Task；不可读 Task 不能通过列表枚举。
 3. 打开 `/progress/tasks/[id]`，成员可看到 Task 工作台、当前计划、成员权限和人员投入；非成员或无范围权限账号应看到“页面不存在或无权访问”。
 4. 打开 `/progress/resources`，人员计划时间轴应能新增 Planned Segment，并通过 P5 服务端 action 执行确认、部分确认、拆分、合并、顺延和取消；测试需校验 UI 结果和数据库状态。
-5. 打开 `/progress/resources/conflicts`，冲突中心应展示解释和关联 Segment，并能确认已知、忽略、解决、预览建议和显式应用建议；权限不足账号不能处理冲突。
+5. `/progress/resources/conflicts` 必须返回 404。资源计划、个人时间线、Task 工作台和 Agenda 不得出现冲突标记或投入比例；快速创建与 Inspector 不得提供比例输入。创建、更新、移动、拆分、合并和确认仍需正常工作，重叠 Segment 不得产生冲突待办、通知或 outbox。
 6. 打开 `/progress/notifications`，只展示当前收件人的站内通知；可按类型/未读筛选、标记单条或全部已读，跳转对象前仍要按业务对象权限过滤。
 7. 页面不得出现旧项目、阶段、周报、风险、提醒或 `PROJECT_MANAGER` 角色文案；不得出现 500、Next.js error overlay、未处理浏览器错误或横向滚动。
 8. 旧 `/progress/task/:id` 应服务端重定向到 `/progress/tasks/:id`；旧 `/progress/projects/*` 和 `/progress/kanban` 应回到 `/progress`，不能永久跳转到不存在页面。收缩 migration 集成测试仍需验证旧表、旧 enum、`PROJECT_MANAGER` 数据和 `channel=progress` outbox/recipient 被删除，同时采购、反馈、用户、附件、CardKit 跟踪和其他 channel outbox 数据保持不变。
@@ -279,19 +279,19 @@ npm run pm:identity-backfill
 
 ## 项目管理 P1-P6 测试
 
-1. `tests/project-management-p1.spec.ts` 覆盖新增 schema 约束：单 Task 单 Current Plan、有效 Tag 名称唯一、Segment 时间和 allocation 检查、Review 幂等键、Conflict fingerprint。
+1. `tests/project-management-p1.spec.ts` 覆盖核心 schema 约束：单 Task 单 Current Plan、有效 Tag 名称唯一、Segment 时间检查和 Review 幂等键。
 2. 身份测试覆盖 `User -> Account/Identity/Person` 首次解析、重复解析幂等、openId fallback 升级为 unionId、同 unionId 下的 openId 轮换、报销 User 原位更新、角色与收件人不丢失、冲突硬失败、非空 `User.accountId` 关联和禁用账号拒绝项目 Actor。
-3. 授权测试覆盖统一超级管理员、项目管理员、车组/技术组/多范围组长、匹配/不匹配/空范围 Task、普通 TaskMember、转组前后范围、跨 Task Conflict 和 `taskReadableWhere` 防枚举。所有管理员仍需覆盖 `allowSelfReview` 允许与拒绝路径。
+3. 授权测试覆盖统一超级管理员、项目管理员、车组/技术组/多范围组长、匹配/不匹配/空范围 Task、普通 TaskMember、转组前后范围和 `taskReadableWhere` 防枚举。所有管理员仍需覆盖 `allowSelfReview` 允许与拒绝路径。
 4. 通知测试覆盖站内通知事务 helper、审计脱敏、审计 append-only、`channel=project-management` outbox 入队、审批用途 allowlist、adapter 收件人去重、完整交互卡和通知/审批机器人边界。
 5. `tests/project-management-lifecycle.spec.ts` 覆盖 P2/P3 Task 草稿创建、幂等键冲突、Current Plan 持久化、激活、并发/过期锁拒绝、Revision 提交/驳回/取消/审批/直接生效、Planned Segment 待确认标记、Revision 生效后的 Segment 关联失效通知、Milestone Review TEXT/LINK 证据、FILE 证据拒绝、审批推进、Termination 四种 outcome、查询防枚举、审计和 `channel=project-management` outbox。
 6. `tests/project-management-segments.spec.ts` 覆盖 P5 Segment 中文校验、本人/他人权限、乐观锁、真实 100 条批量在末项 stale 时对 Segment/change/audit/outbox 的事务回滚、逆序重叠批量输入的 `id ASC` 行锁顺序、split/merge 时间守恒和完整来源历史、merge 最终范围超过 31 天拒绝且恰好 31 天允许、full/partial confirm、一 Planned 多 Actual、多 Planned 一 Actual、无来源 Actual、并发 full confirm、并发 cron transition、cancel、soft delete、relink，以及 Segment 操作不改变 Task/Milestone。批量锁顺序用例外锁最大 ID，并通过 `pg_blocking_pids` 断言一条直接及一条间接等待链；full/partial confirm、cancel、soft delete 和 cron transition 竞争也通过独立 PostgreSQL 行锁屏障确认两个事务真实重叠，并断言最终状态及 change/audit/outbox exactly-once。
-7. `tests/project-management-conflicts.spec.ts` 覆盖 P5 Conflict 半开区间、100%/100.01% allocation 边界、任意一条缺失 allocation 时的完整重叠证据、High/Critical、Owner/Lead、Revision overlap、Actual overload、fingerprint 幂等、显式人员名单预校验零写入、逐人失败隔离与 partial result、并发首次扫描、并发到期重开、消失后 resolved、`ignoredUntil` 到期重开，以及 scanner 自动解决来源判定。来源回归会在不篡改 `resolvedAt`/audit `createdAt` 的情况下让真实 scanner 自动解决后恢复原 fingerprint，验证并发只重开一次且 conflict history、audit、opened/resolved outbox exactly once；判定只允许当前 `resolvedAt` 周期下界起（含下界）恰好一条匹配的 CRON resolve audit 重开，并保留 createdAt 严格晚于 resolvedAt 的 legacy audit 与 stale actor、旧周期 audit、同周期多来源歧义、当前周期 audit 缺失、真实人工 resolve/apply 终态。scanner/manual 双向竞争会先改变 Segment 使原 fingerprint 确实 obsolete，再用 conflict row 外锁串起真实 person/conflict 锁链，分别断言系统或人工赢家、loser 的实际服务结果、数据库 actor/source 和 resolved outbox exactly once。查询回归同时覆盖部分可见 `MISSING_ALLOCATION` 的 list/detail DTO，确保隐藏 Segment 的 ID、Task、时间、内容和版本全部脱敏，而完整处理者仍可见合法证据。其余覆盖 acknowledge/resolve/ignore 权限与状态机、逐状态 capability、preview 完整处理权限且不写库、stale apply 零写入、apply 显式确认和 `expectedUpdatedAt` 校验，以及 outbox 只使用项目管理通知机器人。逐人扫描运行时失败会捕获真实 JSON structured logger 输出，断言 public DTO 与日志只保留稳定 `INTERNAL_ERROR`、安全中文和人员/action 诊断字段，不包含原始数据库异常、message 或 stack。并发用例使用独立 PostgreSQL 连接持有 advisory/row lock，通过 `pg_blocking_pids` 确认事务到达预期等待链后才释放，不依赖 sleep 猜测时序；barrier 操作从创建时立即挂接 `allSettled` observer，把同步 throw 托管为 rejection。清理先尝试有界 rollback；若失败则先强制关闭 locker 释放外锁，再有界等待同一 settlement；pending 超时时只允许在当前 `_test` 数据库取消由等待链精确观测到的 client backend PID，取消无响应时终止同一 PID，并在返回前等待 Prisma 事务 settlement。observer 与 locker 独立关闭，保留主错误为聚合错误首项。fake-client 单元式回归覆盖连接失败清理、同步 throw 和 rollback 失败顺序，真实超时回归另验证 backend 取消及 settlement，不污染后续串行用例。关键 barrier 用例以 `--repeat-each=3` 重跑验证确定性。
-8. `tests/project-management-ui.spec.ts` 覆盖 P4/P6 `/progress` 总览、Task 工作台、资源时间轴、冲突中心、站内通知中心、桌面/移动视口、持久化状态和非成员拒绝路径。
+7. `tests/project-management-resource-removal-migration.spec.ts` 从完整前置迁移链创建隔离 PostgreSQL 数据库，写入旧 allocation、Conflict、通知、outbox、checkpoint 和审计数据；应用删除 migration 后验证目标对象消失，普通 Segment、通知、outbox 与审计保留，历史 JSON 只清除顶层 `allocation`。
+8. `tests/project-management-ui.spec.ts` 和 `tests/project-management-s3-shell.spec.ts` 覆盖 `/progress` 总览、Task 工作台、资源计划、个人时间线、站内通知中心、桌面/移动视口，以及冲突入口消失、旧 URL 404、比例输入与展示消失。
 9. `tests/feishu-boundaries.spec.ts` 必须继续扫描 `app/progress`、`app/actions/project-management`、`components/project-management`、`lib/project-management` 和项目管理 notification adapter，防止项目管理入口或领域服务直接导入飞书传输层。
 10. `tests/project-management-s2-plan-mutations.spec.ts` 覆盖六个 Draft/Active mutation 的参数化允许状态、完全不可见与 visible-but-unauthorized、Draft/Active/四个 terminal/Archived、逐 action stale、成员不变量、真实非空业务差异下的同锁 exactly-once，以及受控审计晚失败整事务回滚；Active member 另在 InApp 已写、outbox insert 阶段注入失败并断言成员 active/history、lock、audit、InApp 和 outbox 全部回滚。副作用快照比较 metadata、TaskTag、active/historical members 和节点正文，不只比较计数。该 spec 还覆盖 raw/foreign `nodeId` 的统一拒绝、legacy Active 修复 Revision/Termination、200 节点长正文的有界审计、公开 absolute date-time 拒绝 `Date` 对象、随机 Task 与隐藏 Task 在 single/batch Planned、Actual、update/relink 的同码同文零写入，以及 mandatory recipient 仅使用 default tenant 非空 openId。TaskNode/Segment 竞争回归使用独立 PostgreSQL 连接外锁 Task 行，通过 `pg_blocking_pids` 建立 writer-first 与 replace-first 阻塞链，分别证明已有关联使删除失败、先删除使新关联失败，且不会死锁或出现 `nodeId` 静默置空。该 spec 只允许随机本机 `_test` PostgreSQL，并要求 `NOTIFICATION_DELIVERY_DISABLED=true`。
 11. `tests/project-management-s8.spec.ts` 覆盖 Action Inbox 权限/逾期排序、Tag 删除仅移除分类、Tag 写事务内项目禁用与角色撤销复核、普通/强制通知偏好、Asia/Shanghai deadline event key、保留清理和完整性巡检；UI 的 S8 场景在 Desktop/Pixel 5 验证驾驶舱、待办、Tag 与偏好。
-12. `tests/project-management-s9-cron.spec.ts` 覆盖 PostgreSQL 跨实例 advisory lock、checkpoint 成功推进、增量空跑和每日完整扫描记录；新增 migration 必须在 runner 随机 target 数据库从空库执行。
-13. `tests/project-management-performance.spec.ts` 默认跳过。仅在受控 runner 中设置 `PM_RUN_SCALE_TESTS=true`，生成 10k Task、100k Segment、50×100 PlanNode 和 100k 站内通知，执行 p95、90 天扫描、query plan、响应体积与浏览器 DOM 门禁。不得对开发、共享或生产数据库设置该变量。
+12. `tests/project-management-s9-cron.spec.ts` 覆盖保留的 PostgreSQL 跨实例 advisory lock；新增 migration 必须在 runner 随机 target 数据库从空库执行。
+13. `tests/project-management-performance.spec.ts` 默认跳过。仅在受控 runner 中设置 `PM_RUN_SCALE_TESTS=true`，生成 10k Task、100k Segment、50×100 PlanNode 和 100k 站内通知，执行 p95、query plan、响应体积与浏览器 DOM 门禁。不得对开发、共享或生产数据库设置该变量。
 14. `tests/project-management-s10-release.spec.ts` 只在 Desktop 执行运维规格：演练工具 fail-closed、空库 migration、两次共享快照、受保护表 row/hash、identity backfill dry-run/APPLY 幂等、整库/上传恢复和旧 contract/直接飞书发送静态扫描。工具只接受本机 `_test`/`_snapshot` 来源，要求 `PM_RELEASE_REHEARSAL_CONFIRM=LOCAL_ISOLATED_REHEARSAL` 与 `NOTIFICATION_DELIVERY_DISABLED=true`，并只创建/删除随机 `pmrel_*_test` 数据库；不得把生产 URL 伪装成允许名称。
 
 ## 统一账号迁移验证

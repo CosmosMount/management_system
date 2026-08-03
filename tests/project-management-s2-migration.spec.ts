@@ -1,8 +1,5 @@
 import { expect, test } from "@playwright/test";
 import {
-  ResourceConflictKind,
-  ResourceConflictSeverity,
-  ResourceConflictStatus,
   RevisionApprovalMode,
   TaskMemberRole,
   TaskNodeStatus,
@@ -32,9 +29,6 @@ import {
   staleTaskError,
 } from "../lib/project-management/application/errors";
 import {
-  resourceConflictKindValues,
-  resourceConflictSeverityValues,
-  resourceConflictStatusValues,
   revisionApprovalModeValues,
   standaloneTimeCanvasScopeKindValues,
   taskMemberRoleValues,
@@ -52,18 +46,12 @@ import {
 import {
   BUSY_BLOCK_DTO_FIELDS,
   busyBlockDtoSchema,
-  hiddenSegmentPlacementConflictDtoSchema,
-  hiddenTimeCanvasConflictDtoSchema,
   personAccountAvailabilityValues,
   personOptionPageSchema,
-  segmentPlacementConflictDtoSchema,
-  segmentPlacementPreviewDtoSchema,
   tagOptionPageSchema,
   taskOptionPageSchema,
-  timeCanvasConflictDtoSchema,
   timeCanvasDataDtoSchema,
   timeSegmentDtoSchema,
-  visibleSegmentPlacementConflictDtoSchema,
 } from "../lib/project-management/types/time-canvas";
 import {
   absoluteDateTimeSchema,
@@ -71,7 +59,13 @@ import {
   revisionDraftInputSchema,
 } from "../lib/project-management/validations/lifecycle";
 import {
-  resourceConflictKindValues as segmentValidationConflictKindValues,
+  batchCreatePlannedSegmentsInputSchema,
+  confirmPlannedSegmentInputSchema,
+  createActualSegmentInputSchema,
+  createWorkSegmentInputSchema,
+  partiallyConfirmSegmentInputSchema,
+  splitPlannedSegmentInputSchema,
+  updateWorkSegmentInputSchema,
   workSegmentTypeValues as segmentValidationWorkSegmentTypeValues,
 } from "../lib/project-management/validations/segments";
 import {
@@ -84,7 +78,6 @@ import {
   getTimeCanvasDataInputSchema,
   listTagOptionsInputSchema,
   MAX_TIME_CANVAS_VISIBLE_SEGMENTS,
-  previewSegmentPlacementInputSchema,
   searchPeopleInputSchema,
   timeCanvasVisibleSegmentCountSchema,
 } from "../lib/project-management/validations/time-canvas";
@@ -293,15 +286,6 @@ test("S2 contract values are a browser-safe leaf aligned with Prisma enums", asy
   expect(workSegmentTypeValues).toEqual(Object.values(WorkSegmentType));
   expect(workSegmentStatusValues).toEqual(Object.values(WorkSegmentStatus));
   expect(workSegmentRoleValues).toEqual(Object.values(WorkSegmentRole));
-  expect(resourceConflictKindValues).toEqual(
-    Object.values(ResourceConflictKind),
-  );
-  expect(resourceConflictSeverityValues).toEqual(
-    Object.values(ResourceConflictSeverity),
-  );
-  expect(resourceConflictStatusValues).toEqual(
-    Object.values(ResourceConflictStatus),
-  );
   expect(timeCanvasScopeKindValues).toEqual([
     "TASK_SCOPED",
     "PERSONAL",
@@ -315,7 +299,6 @@ test("S2 contract values are a browser-safe leaf aligned with Prisma enums", asy
   ]);
   expect(timeCanvasGroupByValues).toEqual(["PERSON", "TASK"]);
   expect(segmentValidationWorkSegmentTypeValues).toBe(workSegmentTypeValues);
-  expect(segmentValidationConflictKindValues).toBe(resourceConflictKindValues);
 });
 
 test("S2 Task mutations expose session-bound Server Actions and anchor loads recheck authorization", async () => {
@@ -752,26 +735,6 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
     expect(searchPeopleInputSchema.safeParse(disallowedInput).success).toBe(false);
   }
   expect(listTagOptionsInputSchema.parse({}).includeArchived).toBe(false);
-  const preview = previewSegmentPlacementInputSchema.parse({
-    personId: randomUUID(),
-    startAt: "2026-08-01T23:30:00+08:00",
-    endAt: "2026-08-02T00:30:00+08:00",
-  });
-  expect(preview.startAt.toISOString()).toBe("2026-08-01T15:30:00.000Z");
-  expect(
-    previewSegmentPlacementInputSchema.safeParse({
-      personId: randomUUID(),
-      startAt: "2026-08-01T23:30:00",
-      endAt: "2026-08-02T00:30:00",
-    }).success,
-  ).toBe(false);
-  expect(
-    previewSegmentPlacementInputSchema.safeParse({
-      personId: randomUUID(),
-      startAt: "2026-08-01T10:00:00+08:00",
-      endAt: "2026-08-01T10:00:00+08:00",
-    }).success,
-  ).toBe(false);
   expect(MAX_TIME_CANVAS_VISIBLE_SEGMENTS).toBe(5_000);
   expect(timeCanvasVisibleSegmentCountSchema.parse(5_000)).toBe(5_000);
   expect(timeCanvasVisibleSegmentCountSchema.safeParse(5_001).success).toBe(
@@ -779,7 +742,7 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
   );
 });
 
-test("S2 canvas output schemas enforce segment fields and privacy allowlists", () => {
+test("S2 canvas output schemas retain pagination, grouping and privacy invariants", () => {
   const updatedAt = "2026-08-01T08:30:00.000Z";
   const segmentPersonId = randomUUID();
   const segmentTaskId = randomUUID();
@@ -793,40 +756,44 @@ test("S2 canvas output schemas enforce segment fields and privacy allowlists", (
     startAt: "2026-08-01T09:00:00.000Z",
     endAt: "2026-08-01T10:00:00.000Z",
     content: "可见投入",
-    allocation: 50,
     role: "OWNER",
     customRole: null,
     priority: "HIGH",
-    expectedOutput: "完成输出",
+    expectedOutput: "",
     actualOutput: "",
     completionPercent: null,
     taskId: segmentTaskId,
     nodeId: randomUUID(),
-    associationNeedsReview: true,
-    conflictIds: [randomUUID()],
-    tags: [{ id: randomUUID(), name: "机械", color: "#334455" }],
+    associationNeedsReview: false,
+    tags: [],
     permissions: segmentPermissions(),
     updatedAt,
     versionToken: updatedAt,
   });
   expect(segment).toMatchObject({
-    kind: "SEGMENT",
-    visibility: "FULL",
-    associationNeedsReview: true,
+    content: "可见投入",
     versionToken: updatedAt,
+    permissions: segmentPermissions(),
   });
-  expect(segment.conflictIds).toHaveLength(1);
-  expect(segment.permissions.canViewDetails).toBe(true);
+  for (const forbiddenField of [
+    { allocation: 50 },
+    { conflictIds: [] },
+    { capabilities: segment.permissions },
+  ]) {
+    expect(
+      timeSegmentDtoSchema.safeParse({ ...segment, ...forbiddenField }).success,
+    ).toBe(false);
+  }
   expect(
     timeSegmentDtoSchema.safeParse({
       ...segment,
-      capabilities: segment.permissions,
+      versionToken: "2026-08-01T08:30:00.001Z",
     }).success,
   ).toBe(false);
   expect(
     timeSegmentDtoSchema.safeParse({
       ...segment,
-      versionToken: "2026-08-01T08:30:00.001Z",
+      permissions: { ...segment.permissions, canResolveConflict: true },
     }).success,
   ).toBe(false);
 
@@ -837,16 +804,8 @@ test("S2 canvas output schemas enforce segment fields and privacy allowlists", (
     personId: busyPersonId,
     startAt: "2026-08-01T09:00:00.000Z",
     endAt: "2026-08-01T10:00:00.000Z",
-    allocation: 50,
-    conflictSummary: { count: 2, severity: "HIGH" },
   });
-  expect(Object.keys(busy).sort()).toEqual(
-    [...BUSY_BLOCK_DTO_FIELDS].sort(),
-  );
-  expect(busy.conflictSummary).toEqual({
-    count: 2,
-    severity: "HIGH",
-  });
+  expect(Object.keys(busy).sort()).toEqual([...BUSY_BLOCK_DTO_FIELDS].sort());
   const busyForbiddenFields: Array<Record<string, unknown>> = [
     { id: randomUUID() },
     { title: "不得泄露" },
@@ -856,110 +815,32 @@ test("S2 canvas output schemas enforce segment fields and privacy allowlists", (
     { tags: [{ id: randomUUID(), name: "不得泄露" }] },
     { creator: { id: randomUUID() } },
     { createdByAccountId: randomUUID() },
+    { createdAt: updatedAt },
     { updatedAt },
     { versionToken: updatedAt },
     { proposal: { startAt: updatedAt } },
+    { allocation: 50 },
+    { conflictSummary: { count: 1, severity: "HIGH" } },
   ];
   for (const forbiddenField of busyForbiddenFields) {
-    const result = busyBlockDtoSchema.safeParse({
-      ...busy,
-      ...forbiddenField,
-    });
+    const result = busyBlockDtoSchema.safeParse({ ...busy, ...forbiddenField });
     expect(
       result.success,
       `Busy accepted ${Object.keys(forbiddenField)[0]}`,
     ).toBe(false);
   }
-  const busySummaryForbiddenFields: Array<Record<string, unknown>> = [
-    { id: randomUUID() },
-    { title: "不得泄露" },
-    { content: "不得泄露" },
-    { taskId: randomUUID() },
-    { nodeId: randomUUID() },
-    { tags: [{ id: randomUUID(), name: "不得泄露" }] },
-    { creator: { id: randomUUID() } },
-    { createdByAccountId: randomUUID() },
-    { updatedAt },
-    { versionToken: updatedAt },
-    { conflictIds: [randomUUID()] },
-    { segmentIds: [randomUUID()] },
-    { startAt: updatedAt },
-    { endAt: updatedAt },
-    { proposal: { startAt: updatedAt } },
-  ];
-  for (const forbiddenField of busySummaryForbiddenFields) {
-    const result = busyBlockDtoSchema.safeParse({
-      ...busy,
-      conflictSummary: {
-        ...busy.conflictSummary,
-        ...forbiddenField,
-      },
-    });
-    expect(
-      result.success,
-      `Busy conflict summary accepted ${Object.keys(forbiddenField)[0]}`,
-    ).toBe(false);
-  }
-
-  const hiddenConflict = hiddenTimeCanvasConflictDtoSchema.parse({
-    kind: "CONFLICT",
-    visibility: "HIDDEN",
-    severity: "HIGH",
-    hiddenSegmentCount: 2,
-    capabilities: hiddenConflictCapabilities(),
-  });
-  expect(hiddenConflict.hiddenSegmentCount).toBe(2);
-  const hiddenConflictForbiddenFields: Array<Record<string, unknown>> = [
-    { id: randomUUID() },
-    { personId: randomUUID() },
-    { startAt: "2026-08-01T09:00:00.000Z" },
-    { endAt: "2026-08-01T10:00:00.000Z" },
-    { updatedAt },
-    { versionToken: updatedAt },
-    { proposal: { startAt: updatedAt } },
-  ];
-  for (const forbiddenField of hiddenConflictForbiddenFields) {
-    const result = hiddenTimeCanvasConflictDtoSchema.safeParse({
-      ...hiddenConflict,
-      ...forbiddenField,
-    });
-    expect(
-      result.success,
-      `Hidden conflict accepted ${Object.keys(forbiddenField)[0]}`,
-    ).toBe(false);
-  }
 
   const canvasResponseFields = {
-    scope: { kind: "RESOURCE_PLANNER" as const },
+    scope: { kind: "RESOURCE_PLANNER" },
     timezone: "Asia/Shanghai",
     range: {
       startAt: "2026-08-01T00:00:00.000Z",
       endAt: "2026-08-02T00:00:00.000Z",
     },
     anchors: [],
-    conflicts: [],
     nextCursor: "resource-row-next",
-    generatedAt: "2026-08-01T08:31:00.000Z",
-  };
-  const inPageVisibleConflict = canvasVisibleConflict(segmentPersonId);
-  expect(
-    timeCanvasDataDtoSchema.safeParse({
-      ...canvasResponseFields,
-      groupBy: "PERSON",
-      rows: [canvasRow("PERSON", segmentPersonId, "当前 Person 页")],
-      conflicts: [inPageVisibleConflict, hiddenConflict],
-      segments: [],
-    }).success,
-  ).toBe(true);
-  expect(
-    timeCanvasDataDtoSchema.safeParse({
-      ...canvasResponseFields,
-      groupBy: "PERSON",
-      rows: [canvasRow("PERSON", segmentPersonId, "当前 Person 页")],
-      conflicts: [canvasVisibleConflict(randomUUID())],
-      segments: [],
-    }).success,
-  ).toBe(false);
+    generatedAt: updatedAt,
+  } as const;
   const personGroupedCanvas = timeCanvasDataDtoSchema.parse({
     ...canvasResponseFields,
     groupBy: "PERSON",
@@ -969,11 +850,13 @@ test("S2 canvas output schemas enforce segment fields and privacy allowlists", (
     ],
     segments: [segment, busy],
   });
-  expect(personGroupedCanvas).toMatchObject({
-    scope: { kind: "RESOURCE_PLANNER" },
-    groupBy: "PERSON",
-    nextCursor: "resource-row-next",
-  });
+  expect(personGroupedCanvas.nextCursor).toBe("resource-row-next");
+  expect(
+    timeCanvasDataDtoSchema.safeParse({
+      ...personGroupedCanvas,
+      conflicts: [],
+    }).success,
+  ).toBe(false);
   expect(
     timeCanvasDataDtoSchema.safeParse({
       ...personGroupedCanvas,
@@ -991,6 +874,7 @@ test("S2 canvas output schemas enforce segment fields and privacy allowlists", (
       segments: [],
     }).success,
   ).toBe(false);
+
   const offPagePersonId = randomUUID();
   for (const offPageObject of [
     { ...segment, personId: offPagePersonId },
@@ -1006,23 +890,20 @@ test("S2 canvas output schemas enforce segment fields and privacy allowlists", (
       `${offPageObject.kind} 不得跨 Person 行分页返回`,
     ).toBe(false);
   }
-  const boundedCanvasResponseFields = {
+
+  const boundedResponseFields = {
     ...canvasResponseFields,
     range: {
       startAt: "2026-08-01T09:00:00.000Z",
       endAt: "2026-08-01T11:00:00.000Z",
     },
     nextCursor: null,
-  };
+  } as const;
   const currentPersonRows = [
     canvasRow("PERSON", segmentPersonId, "完整可见人员行"),
     canvasRow("PERSON", busyPersonId, "脱敏人员行"),
   ];
-  const invalidCanvasIntervals = [
-    {
-      startAt: "2026-08-01T07:00:00.000Z",
-      endAt: "2026-08-01T08:00:00.000Z",
-    },
+  const invalidIntervals = [
     {
       startAt: "2026-08-01T08:00:00.000Z",
       endAt: "2026-08-01T09:00:00.000Z",
@@ -1031,12 +912,8 @@ test("S2 canvas output schemas enforce segment fields and privacy allowlists", (
       startAt: "2026-08-01T11:00:00.000Z",
       endAt: "2026-08-01T12:00:00.000Z",
     },
-    {
-      startAt: "2026-08-01T12:00:00.000Z",
-      endAt: "2026-08-01T13:00:00.000Z",
-    },
   ];
-  const validCanvasIntervals = [
+  const validIntervals = [
     {
       startAt: "2026-08-01T08:30:00.000Z",
       endAt: "2026-08-01T09:30:00.000Z",
@@ -1045,16 +922,12 @@ test("S2 canvas output schemas enforce segment fields and privacy allowlists", (
       startAt: "2026-08-01T10:30:00.000Z",
       endAt: "2026-08-01T11:30:00.000Z",
     },
-    {
-      startAt: "2026-08-01T09:15:00.000Z",
-      endAt: "2026-08-01T10:45:00.000Z",
-    },
   ];
   for (const canvasObject of [segment, busy]) {
-    for (const interval of invalidCanvasIntervals) {
+    for (const interval of invalidIntervals) {
       expect(
         timeCanvasDataDtoSchema.safeParse({
-          ...boundedCanvasResponseFields,
+          ...boundedResponseFields,
           groupBy: "PERSON",
           rows: currentPersonRows,
           segments: [{ ...canvasObject, ...interval }],
@@ -1062,18 +935,19 @@ test("S2 canvas output schemas enforce segment fields and privacy allowlists", (
         `${canvasObject.kind} 不得返回不与半开区间相交的对象`,
       ).toBe(false);
     }
-    for (const interval of validCanvasIntervals) {
+    for (const interval of validIntervals) {
       expect(
         timeCanvasDataDtoSchema.safeParse({
-          ...boundedCanvasResponseFields,
+          ...boundedResponseFields,
           groupBy: "PERSON",
           rows: currentPersonRows,
           segments: [{ ...canvasObject, ...interval }],
         }).success,
-        `${canvasObject.kind} 应接受跨边界或完全位于范围内的对象`,
+        `${canvasObject.kind} 应接受跨边界的对象`,
       ).toBe(true);
     }
   }
+
   expect(
     timeCanvasDataDtoSchema.safeParse({
       ...canvasResponseFields,
@@ -1148,199 +1022,127 @@ test("S2 canvas output schemas enforce segment fields and privacy allowlists", (
     timeCanvasDataDtoSchema.safeParse({
       ...canvasResponseFields,
       groupBy: "TASK",
-      rows: [
-        canvasRow("PERSON", segmentPersonId, "不得混入 Task 分组的人员行"),
-      ],
+      rows: [canvasRow("PERSON", segmentPersonId, "错误分组行")],
       segments: [segment],
     }).success,
   ).toBe(false);
+});
 
-  const visiblePlacementConflict =
-    visibleSegmentPlacementConflictDtoSchema.parse({
-      kind: "PLACEMENT_CONFLICT",
-      visibility: "VISIBLE",
-      reason: "ALLOCATION_OVER_LIMIT",
-      severity: "HIGH",
-      range: {
-        startAt: "2026-08-01T09:30:00.000Z",
-        endAt: "2026-08-01T10:00:00.000Z",
-      },
-    });
-  const hiddenPlacementConflict =
-    hiddenSegmentPlacementConflictDtoSchema.parse({
-      kind: "PLACEMENT_CONFLICT",
-      visibility: "HIDDEN",
-      blocked: true,
-    });
-  const placementPreview = segmentPlacementPreviewDtoSchema.parse({
-    personId: segmentPersonId,
-    range: {
-      startAt: "2026-08-01T09:00:00.000Z",
-      endAt: "2026-08-01T10:00:00.000Z",
-    },
-    allocation: 50,
-    conflicts: [visiblePlacementConflict, hiddenPlacementConflict],
-    generatedAt: "2026-08-01T08:32:00.000Z",
-  });
-  expect(placementPreview.conflicts).toHaveLength(2);
+test("removed allocation and includeConflicts inputs fail strict validation", () => {
+  const segmentId = randomUUID();
+  const personId = randomUUID();
+  const startAt = "2026-08-01T09:00:00.000Z";
+  const endAt = "2026-08-01T10:00:00.000Z";
+  const plannedCreate = {
+    personId,
+    type: "PLANNED" as const,
+    startAt,
+    endAt,
+    content: "旧客户端创建",
+  };
+  expect(createWorkSegmentInputSchema.safeParse(plannedCreate).success).toBe(true);
   expect(
-    timeCanvasConflictDtoSchema.safeParse(visiblePlacementConflict).success,
+    createWorkSegmentInputSchema.safeParse({ ...plannedCreate, allocation: 50 })
+      .success,
   ).toBe(false);
+
+  const actualCreate = {
+    personId,
+    startAt,
+    endAt,
+    content: "旧客户端 Actual 创建",
+    actualOutput: "完成",
+    completionPercent: 100,
+    sources: [],
+  };
+  expect(createActualSegmentInputSchema.safeParse(actualCreate).success).toBe(true);
   expect(
-    segmentPlacementConflictDtoSchema.safeParse(hiddenConflict).success,
+    createActualSegmentInputSchema.safeParse({ ...actualCreate, allocation: 50 })
+      .success,
   ).toBe(false);
-  expect(hiddenPlacementConflict).toEqual({
-    kind: "PLACEMENT_CONFLICT",
-    visibility: "HIDDEN",
-    blocked: true,
-  });
-  expect(
-    segmentPlacementPreviewDtoSchema.safeParse({
-      ...placementPreview,
-      conflicts: [],
-    }).success,
-  ).toBe(true);
-  expect(
-    segmentPlacementPreviewDtoSchema.safeParse({
-      ...placementPreview,
-      conflicts: [hiddenPlacementConflict],
-    }).success,
-  ).toBe(true);
-  for (const hiddenIndicatorCount of [2, 3]) {
-    expect(
-      segmentPlacementPreviewDtoSchema.safeParse({
-        ...placementPreview,
-        conflicts: [
-          visiblePlacementConflict,
-          ...Array.from(
-            { length: hiddenIndicatorCount },
-            () => hiddenPlacementConflict,
-          ),
-        ],
-      }).success,
-      `${hiddenIndicatorCount} 个隐藏 placement indicator 必须拒绝`,
-    ).toBe(false);
-  }
 
-  const visiblePlacementForbiddenFields: Array<Record<string, unknown>> = [
-    { id: randomUUID() },
-    { conflictId: randomUUID() },
-    { segmentId: randomUUID() },
-    { personId: randomUUID() },
-    { taskId: randomUUID() },
-    { nodeId: randomUUID() },
-    { title: "不得泄露" },
-    { content: "不得泄露" },
-    { tags: [{ id: randomUUID(), name: "不得泄露" }] },
-    { creator: { id: randomUUID() } },
-    { createdByAccountId: randomUUID() },
-    { status: "OPEN" },
-    { updatedAt },
-    { token: updatedAt },
-    { versionToken: updatedAt },
-    { proposal: { startAt: updatedAt } },
-    { capability: { canResolve: true } },
-    { capabilities: { canResolve: true } },
-    { hiddenSegmentCount: 1 },
-    { startAt: "2026-08-01T09:30:00.000Z" },
-    { endAt: "2026-08-01T10:00:00.000Z" },
-  ];
-  for (const forbiddenField of visiblePlacementForbiddenFields) {
-    const result = segmentPlacementPreviewDtoSchema.safeParse({
-      ...placementPreview,
-      conflicts: [
-        {
-          ...visiblePlacementConflict,
-          ...forbiddenField,
-        },
-      ],
-    });
-    expect(
-      result.success,
-      `Visible placement conflict accepted ${Object.keys(forbiddenField)[0]}`,
-    ).toBe(false);
-  }
-
-  const hiddenPlacementForbiddenFields: Array<Record<string, unknown>> = [
-    { reason: "HIGH_PRIORITY_OVERLAP" },
-    { severity: "HIGH" },
-    { count: 2 },
-    { hiddenSegmentCount: 2 },
-    { candidateSegmentCount: 2 },
-    { id: randomUUID() },
-    { conflictId: randomUUID() },
-    { segmentId: randomUUID() },
-    { personId: randomUUID() },
-    { taskId: randomUUID() },
-    { nodeId: randomUUID() },
-    { title: "不得泄露" },
-    { content: "不得泄露" },
-    { tags: [{ id: randomUUID(), name: "不得泄露" }] },
-    { creator: { id: randomUUID() } },
-    { createdByAccountId: randomUUID() },
-    { status: "OPEN" },
-    { updatedAt },
-    { token: updatedAt },
-    { versionToken: updatedAt },
-    { proposal: { startAt: updatedAt } },
-    { capability: { canResolve: true } },
-    { capabilities: { canResolve: true } },
-    { startAt: "2026-08-01T09:30:00.000Z" },
-    { endAt: "2026-08-01T10:00:00.000Z" },
-    {
-      range: {
-        startAt: "2026-08-01T09:30:00.000Z",
-        endAt: "2026-08-01T10:00:00.000Z",
-      },
-    },
-    { allocation: 50 },
-  ];
-  for (const forbiddenField of hiddenPlacementForbiddenFields) {
-    const result = segmentPlacementPreviewDtoSchema.safeParse({
-      ...placementPreview,
-      conflicts: [
-        {
-          ...hiddenPlacementConflict,
-          ...forbiddenField,
-        },
-      ],
-    });
-    expect(
-      result.success,
-      `Hidden placement conflict accepted ${Object.keys(forbiddenField)[0]}`,
-    ).toBe(false);
-  }
-  const adjacentPlacementPreview = segmentPlacementPreviewDtoSchema.parse({
-    personId: segmentPersonId,
-    range: {
-      startAt: "2026-08-01T10:00:00.000Z",
-      endAt: "2026-08-01T11:00:00.000Z",
-    },
-    allocation: 50,
-    conflicts: [hiddenPlacementConflict],
-    generatedAt: "2026-08-01T08:33:00.000Z",
-  });
-  expect(adjacentPlacementPreview.conflicts).toEqual([
-    hiddenPlacementConflict,
-  ]);
-  expect(Object.keys(adjacentPlacementPreview.conflicts[0] ?? {}).sort()).toEqual(
-    ["blocked", "kind", "visibility"],
+  const batchCreate = { segments: [plannedCreate] };
+  expect(batchCreatePlannedSegmentsInputSchema.safeParse(batchCreate).success).toBe(
+    true,
   );
-  for (const forbiddenCount of [
-    { candidateSegmentCount: 2 },
-    { visibleSegmentCount: 2 },
-  ]) {
-    const result = segmentPlacementPreviewDtoSchema.safeParse({
-      ...placementPreview,
-      ...forbiddenCount,
-    });
-    expect(
-      result.success,
-      `Placement preview accepted ${Object.keys(forbiddenCount)[0]}`,
-    ).toBe(false);
-  }
-  expect(placementPreview).not.toHaveProperty("candidateSegmentCount");
-  expect(placementPreview).not.toHaveProperty("visibleSegmentCount");
+  expect(
+    batchCreatePlannedSegmentsInputSchema.safeParse({
+      segments: [{ ...plannedCreate, allocation: 50 }],
+    }).success,
+  ).toBe(false);
+
+  const update = {
+    segmentId,
+    expectedUpdatedAt: startAt,
+    content: "旧客户端更新",
+  };
+  expect(updateWorkSegmentInputSchema.safeParse(update).success).toBe(true);
+  expect(
+    updateWorkSegmentInputSchema.safeParse({ ...update, allocation: 50 }).success,
+  ).toBe(false);
+
+  const split = {
+    segmentId,
+    expectedUpdatedAt: startAt,
+    reason: "拆分验证",
+    parts: [
+      { startAt, endAt: "2026-08-01T09:30:00.000Z" },
+      { startAt: "2026-08-01T09:30:00.000Z", endAt },
+    ],
+  };
+  expect(splitPlannedSegmentInputSchema.safeParse(split).success).toBe(true);
+  expect(
+    splitPlannedSegmentInputSchema.safeParse({
+      ...split,
+      parts: [{ ...split.parts[0], allocation: 50 }, split.parts[1]],
+    }).success,
+  ).toBe(false);
+
+  const fullConfirmation = {
+    segmentId,
+    expectedUpdatedAt: startAt,
+    actual: { actualOutput: "完整确认" },
+  };
+  expect(confirmPlannedSegmentInputSchema.safeParse(fullConfirmation).success).toBe(
+    true,
+  );
+  expect(
+    confirmPlannedSegmentInputSchema.safeParse({
+      ...fullConfirmation,
+      actual: { ...fullConfirmation.actual, allocation: 50 },
+    }).success,
+  ).toBe(false);
+
+  const partialConfirmation = {
+    segmentId,
+    expectedUpdatedAt: startAt,
+    coveredStartAt: startAt,
+    coveredEndAt: endAt,
+    actual: { actualOutput: "部分确认" },
+  };
+  expect(
+    partiallyConfirmSegmentInputSchema.safeParse(partialConfirmation).success,
+  ).toBe(true);
+  expect(
+    partiallyConfirmSegmentInputSchema.safeParse({
+      ...partialConfirmation,
+      actual: { ...partialConfirmation.actual, allocation: 50 },
+    }).success,
+  ).toBe(false);
+
+  const canvasInput = {
+    scope: { kind: "PERSONAL" as const },
+    rangeStart: startAt,
+    rangeEnd: endAt,
+    groupBy: "PERSON" as const,
+  };
+  expect(getTimeCanvasDataInputSchema.safeParse(canvasInput).success).toBe(true);
+  expect(
+    getTimeCanvasDataInputSchema.safeParse({
+      ...canvasInput,
+      includeConflicts: true,
+    }).success,
+  ).toBe(false);
 });
 
 test("S2 option page schemas expose only active and minimal public fields", () => {
@@ -1532,16 +1334,6 @@ test("S2 structured errors and stale authoritative DTOs are stable and safe", as
       timeCanvasVisibleSegmentCountSchema.parse(5_001),
     ),
   ).toBe("QUERY_LIMIT_EXCEEDED");
-  expect(
-    await mappedActionErrorCode(() =>
-      previewSegmentPlacementInputSchema.parse({
-        personId: randomUUID(),
-        nodeId: randomUUID(),
-        startAt: "2026-08-01T09:00:00.000Z",
-        endAt: "2026-08-01T10:00:00.000Z",
-      }),
-    ),
-  ).toBe("ASSOCIATION_INVALID");
   expect(
     await mappedActionErrorCode(() =>
       getTimeCanvasDataInputSchema.parse({
@@ -1955,16 +1747,6 @@ function segmentPermissions() {
   };
 }
 
-function hiddenConflictCapabilities() {
-  return {
-    canAcknowledge: false as const,
-    canResolve: false as const,
-    canIgnore: false as const,
-    canPreviewSuggestion: false as const,
-    canApplySuggestion: false as const,
-  };
-}
-
 function canvasRow(kind: "PERSON" | "TASK", id: string, label: string) {
   return {
     id,
@@ -2013,31 +1795,6 @@ function canvasTaskAnchor(taskId: string, nodeTaskId = taskId) {
         versionToken: updatedAt,
       },
     ],
-    updatedAt,
-    versionToken: updatedAt,
-  };
-}
-
-function canvasVisibleConflict(personId: string) {
-  const updatedAt = "2026-08-01T08:30:00.000Z";
-  return {
-    kind: "CONFLICT",
-    visibility: "VISIBLE",
-    id: randomUUID(),
-    personId,
-    conflictKind: "ALLOCATION_OVER_LIMIT",
-    startAt: "2026-08-01T09:00:00.000Z",
-    endAt: "2026-08-01T10:00:00.000Z",
-    severity: "HIGH",
-    status: "OPEN",
-    hiddenSegmentCount: 0,
-    capabilities: {
-      canAcknowledge: true,
-      canResolve: true,
-      canIgnore: false,
-      canPreviewSuggestion: false,
-      canApplySuggestion: false,
-    },
     updatedAt,
     versionToken: updatedAt,
   };

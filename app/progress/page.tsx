@@ -48,7 +48,7 @@ export default async function ProgressPage() {
             mode="PERSONAL_TIMELINE"
             model={canvasModel}
             initialZoom="DAY"
-            display={{ showActual: true, showBusy: false, showConflicts: true, showInspector: false }}
+            display={{ showActual: true, showBusy: false, showInspector: false }}
             emptyMessage="未来 7 天没有个人投入。"
           />
         </section>

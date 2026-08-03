@@ -31,13 +31,6 @@ import {
   recipientsForPersonIdsTx,
 } from "@/lib/project-management/application/notification-utils";
 import {
-  lockConflictPersonsTx,
-  lockConflictsForRangesTx,
-  normalizeConflictMutationRanges,
-  type ConflictMutationRange,
-} from "@/lib/project-management/application/conflict-lock-protocol";
-import { rescanConflictsForRangesTx } from "@/lib/project-management/application/conflict-service";
-import {
   activateTaskInputSchema,
   confirmTerminationInputSchema,
   createTaskDraftInputSchema,
@@ -123,11 +116,6 @@ const revisionAffectedSegmentSelect = {
 type RevisionAffectedSegment = Prisma.WorkSegmentGetPayload<{
   select: typeof revisionAffectedSegmentSelect;
 }>;
-
-type RevisionConflictPreparation = {
-  affectedSegments: RevisionAffectedSegment[];
-  ranges: ConflictMutationRange[];
-};
 
 type NotificationRecipient = {
   accountId: string;
@@ -1581,7 +1569,7 @@ async function applyRevisionTx(
     .slice(revisedFromIndex)
     .filter((entry) => entry.node.status !== "COMPLETED")
     .map((entry) => entry.nodeId);
-  const conflictPreparation = await prepareRevisionConflictMutationTx(tx, {
+  const affectedRevisionSegments = await prepareRevisionAffectedSegmentsTx(tx, {
     taskId: task.id,
     replacedNodeIds,
   });
@@ -1657,7 +1645,8 @@ async function applyRevisionTx(
     currentPlanVersionId: updatedTask.currentPlanVersionId,
   };
   if (replacedNodeIds.length > 0) {
-    const affectedSegments = conflictPreparation.affectedSegments;
+    const affectedSegments = affectedRevisionSegments;
+    const markedSegments: RevisionAffectedSegment[] = [];
     for (const segment of affectedSegments) {
       if (segment.associationNeedsReview) continue;
       const before = segmentAssociationSnapshot(segment);
@@ -1692,6 +1681,7 @@ async function applyRevisionTx(
         },
       });
       const after = segmentAssociationSnapshot(updatedSegment);
+      markedSegments.push(updatedSegment);
       const reason = "Revision 生效后原关联节点失效";
       await tx.workSegmentChange.create({
         data: {
@@ -1715,17 +1705,12 @@ async function applyRevisionTx(
         reason,
       });
     }
-    if (affectedSegments.length > 0) {
+    if (markedSegments.length > 0) {
       await notifySegmentAssociationInvalidatedTx(tx, {
         actor,
         task: taskAfterPlanSwitch,
         revisionNodeId,
-        affectedSegments,
-      });
-    }
-    if (conflictPreparation.ranges.length > 0) {
-      await rescanConflictsForRangesTx(tx, conflictPreparation.ranges, {
-        locksHeld: true,
+        affectedSegments: markedSegments,
       });
     }
   }
@@ -1974,12 +1959,12 @@ async function lockTaskTx(tx: PrismaTx, taskId: string) {
   if (rows.length === 0) throw notFoundError();
 }
 
-async function prepareRevisionConflictMutationTx(
+async function prepareRevisionAffectedSegmentsTx(
   tx: PrismaTx,
   input: { taskId: string; replacedNodeIds: string[] },
-): Promise<RevisionConflictPreparation> {
+): Promise<RevisionAffectedSegment[]> {
   if (input.replacedNodeIds.length === 0) {
-    return { affectedSegments: [], ranges: [] };
+    return [];
   }
   const where: Prisma.WorkSegmentWhereInput = {
     taskId: input.taskId,
@@ -1989,38 +1974,17 @@ async function prepareRevisionConflictMutationTx(
     deletedAt: null,
   };
 
-  // loadRevisionForMutationTx already holds the Task row. That prevents new
-  // associations from entering or leaving this replacement set while we take
-  // the global mutation order: Task -> Person -> Conflict -> WorkSegment.
-  const locators = await tx.workSegment.findMany({
-    where,
-    select: { personId: true },
-    orderBy: { id: "asc" },
-  });
-  await lockConflictPersonsTx(
-    tx,
-    locators.map((locator) => locator.personId),
-  );
-
-  // A range/status writer that started before the Task lock may have completed
-  // while the advisory locks were pending, so reload only after Person locks.
+  // Re-evaluate eligibility after the WorkSegment locks are acquired so a row
+  // changed by a system transition or older writer while this transaction
+  // waited is not invalidated.
   const currentSegments = await tx.workSegment.findMany({
     where,
     select: revisionAffectedSegmentSelect,
     orderBy: { id: "asc" },
   });
-  const ranges = normalizeConflictMutationRanges(
-    currentSegments.map((segment) => ({
-      personId: segment.personId,
-      startAt: segment.startAt,
-      endAt: segment.endAt,
-    })),
-  );
-  await lockConflictsForRangesTx(tx, ranges);
-
   const segmentIds = currentSegments.map((segment) => segment.id);
   if (segmentIds.length === 0) {
-    return { affectedSegments: [], ranges };
+    return [];
   }
   await tx.$queryRaw<Array<{ id: string }>>`
     SELECT "id"
@@ -2030,14 +1994,13 @@ async function prepareRevisionConflictMutationTx(
     FOR UPDATE
   `;
   const affectedSegments = await tx.workSegment.findMany({
-    where: { id: { in: segmentIds } },
+    where: {
+      AND: [where, { id: { in: segmentIds } }],
+    },
     select: revisionAffectedSegmentSelect,
     orderBy: { id: "asc" },
   });
-  if (affectedSegments.length !== segmentIds.length) {
-    throw stateConflictError("Revision 关联投入在并发操作中已变化，请重试");
-  }
-  return { affectedSegments, ranges };
+  return affectedSegments;
 }
 
 async function loadCurrentPlanEntriesTx(tx: PrismaTx, task: TaskForAuthorization) {

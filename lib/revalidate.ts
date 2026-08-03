@@ -23,7 +23,6 @@ export function revalidateProjectManagement(taskId?: string) {
   revalidatePath(routes.progress.tasks);
   revalidatePath("/progress/approvals");
   revalidatePath(routes.progress.resources);
-  revalidatePath(routes.progress.conflicts);
   revalidatePath(routes.progress.notifications);
   revalidatePath(routes.progress.approvals);
   revalidatePath(routes.progress.tags);

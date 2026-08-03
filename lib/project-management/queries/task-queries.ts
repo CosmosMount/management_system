@@ -36,7 +36,6 @@ export type TaskListItem = {
   } | null;
   members: TaskMemberSummary[];
   tags: Array<{ id: string; name: string; color: string }>;
-  openConflictCount: number;
   segmentNeedsReviewCount: number;
   updatedAt: string;
   createdAt: string;
@@ -273,10 +272,9 @@ export async function listTasks({
   });
 
   const visibleTasks = tasks.slice(0, limit);
-  const [conflictCounts, segmentReviewCounts] = await Promise.all([
-    countOpenConflictsByTask(visibleTasks.map((task) => task.id)),
-    countSegmentsNeedingReviewByTask(visibleTasks.map((task) => task.id)),
-  ]);
+  const segmentReviewCounts = await countSegmentsNeedingReviewByTask(
+    visibleTasks.map((task) => task.id),
+  );
 
   return {
     items: visibleTasks.map((task) => ({
@@ -304,7 +302,6 @@ export async function listTasks({
         displayName: member.person.displayName,
       })),
       tags: task.tags.map((entry) => entry.tag),
-      openConflictCount: conflictCounts.get(task.id) ?? 0,
       segmentNeedsReviewCount: segmentReviewCounts.get(task.id) ?? 0,
       updatedAt: task.updatedAt.toISOString(),
       createdAt: task.createdAt.toISOString(),
@@ -686,29 +683,6 @@ function allowed(
 
 function toIso(date: Date | null): string | null {
   return date ? date.toISOString() : null;
-}
-
-async function countOpenConflictsByTask(taskIds: string[]) {
-  if (taskIds.length === 0) return new Map<string, number>();
-  const rows = await prisma.conflictSegment.findMany({
-    where: {
-      segment: { taskId: { in: taskIds }, deletedAt: null },
-      conflict: { status: { in: ["OPEN", "ACKNOWLEDGED"] } },
-    },
-    select: {
-      conflictId: true,
-      segment: { select: { taskId: true } },
-    },
-  });
-  const byTask = new Map<string, Set<string>>();
-  for (const row of rows) {
-    const taskId = row.segment.taskId;
-    if (!taskId) continue;
-    const set = byTask.get(taskId) ?? new Set<string>();
-    set.add(row.conflictId);
-    byTask.set(taskId, set);
-  }
-  return new Map([...byTask.entries()].map(([taskId, ids]) => [taskId, ids.size]));
 }
 
 async function countSegmentsNeedingReviewByTask(taskIds: string[]) {

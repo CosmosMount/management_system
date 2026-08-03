@@ -54,7 +54,6 @@ test.describe("project management S3 shell", () => {
           "/progress/tasks",
           "/progress/my-timeline",
           "/progress/resources",
-          "/progress/resources/conflicts",
           "/progress/approvals",
           "/progress/notifications",
           "/progress/tags",
@@ -94,6 +93,9 @@ test.describe("project management S3 shell", () => {
           name: `通知，${fixture.unreadCount} 条未读`,
         }),
       ).toBeVisible();
+      await expect(
+        drawer.getByRole("link", { name: "资源冲突" }),
+      ).toHaveCount(0);
       await expect(
         page.getByRole("heading", { name: "我的工作" }),
       ).toHaveCount(0);
@@ -154,7 +156,6 @@ test.describe("project management S3 shell", () => {
       "/progress",
       "/progress/tasks",
       "/progress/resources",
-      "/progress/resources/conflicts",
       "/progress/notifications",
     ]) {
       await page.goto(route);
@@ -163,6 +164,11 @@ test.describe("project management S3 shell", () => {
       ).toBeVisible();
       await expectHealthyPage(page);
     }
+
+    const removedConflictRoute = await context.request.get(
+      "/progress/resources/conflicts",
+    );
+    expect(removedConflictRoute.status()).toBe(404);
 
     expect(browserErrors).toEqual([]);
   });

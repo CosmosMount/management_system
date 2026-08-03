@@ -184,37 +184,12 @@ enum WorkSegmentChangeAction {
   RELINK
 }
 
-enum ResourceConflictKind {
-  ALLOCATION_OVER_LIMIT
-  MISSING_ALLOCATION
-  HIGH_PRIORITY_OVERLAP
-  LEAD_ROLE_OVERLAP
-  UNAVAILABLE_TIME
-  REVISION_OVERLAP
-  ACTUAL_OVERLOAD
-}
-
-enum ResourceConflictSeverity {
-  LOW
-  MEDIUM
-  HIGH
-  CRITICAL
-}
-
-enum ResourceConflictStatus {
-  OPEN
-  ACKNOWLEDGED
-  RESOLVED
-  IGNORED
-}
-
 enum ProjectManagementNotificationCategory {
   TASK
   MILESTONE
   REVIEW
   REVISION
   WORK_SEGMENT
-  RESOURCE_CONFLICT
   ACCOUNT_SECURITY
 }
 
@@ -250,7 +225,6 @@ model Account {
   updatedWorkSegments       WorkSegment[]            @relation("WorkSegmentUpdatedBy")
   createdWorkSegmentSources WorkSegmentSource[]      @relation("WorkSegmentSourceCreatedBy")
   workSegmentChanges        WorkSegmentChange[]      @relation("WorkSegmentChangeActor")
-  resolvedConflicts         ResourceConflict[]       @relation("ResourceConflictResolvedBy")
   systemRoles               SystemRoleAssignment[]   @relation("SystemRoleAccount")
   grantedSystemRoles        SystemRoleAssignment[]   @relation("SystemRoleGrantedBy")
   revokedSystemRoles        SystemRoleAssignment[]   @relation("SystemRoleRevokedBy")
@@ -287,18 +261,17 @@ model AccountIdentity {
 }
 
 model Person {
-  id                String             @id @default(uuid())
-  accountId         String?            @unique
-  account           Account?           @relation(fields: [accountId], references: [id], onDelete: SetNull)
-  displayName       String
-  avatar            String?
-  status            PersonStatus       @default(ACTIVE)
-  taskMembers       TaskMember[]
-  workSegments      WorkSegment[]
-  resourceConflicts ResourceConflict[]
-  auditEvents       DomainAuditEvent[] @relation("AuditActorPerson")
-  createdAt         DateTime           @default(now()) @db.Timestamptz(6)
-  updatedAt         DateTime           @updatedAt @db.Timestamptz(6)
+  id           String             @id @default(uuid())
+  accountId    String?            @unique
+  account      Account?           @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  displayName  String
+  avatar       String?
+  status       PersonStatus       @default(ACTIVE)
+  taskMembers  TaskMember[]
+  workSegments WorkSegment[]
+  auditEvents  DomainAuditEvent[] @relation("AuditActorPerson")
+  createdAt    DateTime           @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime           @updatedAt @db.Timestamptz(6)
 
   @@index([displayName])
   @@index([status])
@@ -766,7 +739,6 @@ model WorkSegment {
   startAt                DateTime            @db.Timestamptz(6)
   endAt                  DateTime            @db.Timestamptz(6)
   content                String
-  allocation             Decimal?            @db.Decimal(5, 2)
   role                   WorkSegmentRole     @default(DEVELOPER)
   customRole             String?
   priority               TaskPriority        @default(MEDIUM)
@@ -789,7 +761,6 @@ model WorkSegment {
   plannedSources         WorkSegmentSource[] @relation("PlannedSegmentSource")
   actualSources          WorkSegmentSource[] @relation("ActualSegmentSource")
   changes                WorkSegmentChange[]
-  conflictSegments       ConflictSegment[]
   tags                   SegmentTag[]
   createdAt              DateTime            @default(now()) @db.Timestamptz(6)
   updatedAt              DateTime            @updatedAt @db.Timestamptz(6)
@@ -848,45 +819,6 @@ model WorkSegmentChange {
 
   @@index([segmentId, createdAt])
   @@index([actorAccountId])
-}
-
-model ResourceConflict {
-  id                  String                   @id @default(uuid())
-  personId            String
-  person              Person                   @relation(fields: [personId], references: [id], onDelete: Restrict)
-  kind                ResourceConflictKind
-  startAt             DateTime                 @db.Timestamptz(6)
-  endAt               DateTime                 @db.Timestamptz(6)
-  severity            ResourceConflictSeverity
-  status              ResourceConflictStatus   @default(OPEN)
-  fingerprint         String                   @unique
-  explanation         Json                     @default("{}")
-  detectedAt          DateTime                 @default(now()) @db.Timestamptz(6)
-  acknowledgedAt      DateTime?                @db.Timestamptz(6)
-  resolvedAt          DateTime?                @db.Timestamptz(6)
-  ignoredUntil        DateTime?                @db.Timestamptz(6)
-  resolvedByAccountId String?
-  resolvedBy          Account?                 @relation("ResourceConflictResolvedBy", fields: [resolvedByAccountId], references: [id], onDelete: SetNull)
-  resolutionNote      String                   @default("")
-  segments            ConflictSegment[]
-  createdAt           DateTime                 @default(now()) @db.Timestamptz(6)
-  updatedAt           DateTime                 @updatedAt @db.Timestamptz(6)
-
-  @@index([personId, status, startAt, endAt])
-  @@index([status, severity])
-  @@index([resolvedByAccountId])
-}
-
-model ConflictSegment {
-  id         String           @id @default(uuid())
-  conflictId String
-  conflict   ResourceConflict @relation(fields: [conflictId], references: [id], onDelete: Cascade)
-  segmentId  String
-  segment    WorkSegment      @relation(fields: [segmentId], references: [id], onDelete: Restrict)
-  createdAt  DateTime         @default(now()) @db.Timestamptz(6)
-
-  @@unique([conflictId, segmentId])
-  @@index([segmentId])
 }
 
 model SystemRoleAssignment {
@@ -1013,19 +945,4 @@ model NotificationOutboxRecipient {
   @@unique([outboxId, openId])
   @@index([outboxId, status])
   @@index([status, nextRunAt])
-}
-
-model ProjectManagementScanCheckpoint {
-  key             String    @id
-  cursor          Json      @default("{}")
-  lastStartedAt   DateTime? @db.Timestamptz(6)
-  lastCompletedAt DateTime? @db.Timestamptz(6)
-  lastFullScanAt  DateTime? @db.Timestamptz(6)
-  lastError       String    @default("")
-  lockVersion     Int       @default(0)
-  createdAt       DateTime  @default(now()) @db.Timestamptz(6)
-  updatedAt       DateTime  @updatedAt @db.Timestamptz(6)
-
-  @@index([lastCompletedAt])
-  @@index([lastFullScanAt])
 }

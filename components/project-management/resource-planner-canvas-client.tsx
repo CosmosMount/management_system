@@ -116,9 +116,6 @@ export function ResourcePlannerCanvasClient({
     if (initialModel.segments.some((segment) => segment.id === initialFocusId)) {
       return { kind: "SEGMENT", id: initialFocusId };
     }
-    if (initialModel.conflicts.some((conflict) => conflict.id === initialFocusId)) {
-      return { kind: "CONFLICT", id: initialFocusId };
-    }
     if (initialModel.anchors.some((anchor) => anchor.id === initialFocusId)) {
       return { kind: "ANCHOR", id: initialFocusId };
     }
@@ -500,7 +497,7 @@ export function ResourcePlannerCanvasClient({
             model={model}
             initialZoom={initialZoom}
             initialSelection={initialSelection}
-            display={{ showActual: true, showBusy: true, showConflicts: true, showInspector: false }}
+            display={{ showActual: true, showBusy: true, showInspector: false }}
             interaction={{
               enableBrushCreate: !isPending,
               selectedSegmentIds: selectedIds,
@@ -593,7 +590,6 @@ function QuickCreatePanel({
           startAt: shanghaiDateTimeLocalToIso(String(form.get("startAt") ?? "")),
           endAt: shanghaiDateTimeLocalToIso(String(form.get("endAt") ?? "")),
           content: String(form.get("content") ?? ""),
-          allocation: numberOrNull(form.get("allocation")),
           role: String(form.get("role") ?? "DEVELOPER"),
           customRole: String(form.get("customRole") ?? ""),
           priority: String(form.get("priority") ?? "MEDIUM"),
@@ -648,9 +644,6 @@ function QuickCreatePanel({
           {allowIndependent && <option value="">独立投入</option>}
           {tasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}
         </select>
-      </Field>
-      <Field label="投入比例" htmlFor="quick-allocation">
-        <Input id="quick-allocation" name="allocation" type="number" min="1" max="100" step="0.01" defaultValue="50" />
       </Field>
       <Field label="职责" htmlFor="quick-role">
         <select id="quick-role" name="role" className={selectClass} defaultValue="DEVELOPER">
@@ -709,9 +702,8 @@ function SegmentInspector({
     return (
       <aside className="rounded-xl border border-border bg-card p-5" data-testid="segment-inspector">
         <h2 className="font-semibold">其他占用</h2>
-        <p className="mt-2 text-sm text-muted-foreground">详情受限，仅显示时间与安全投入摘要。</p>
+        <p className="mt-2 text-sm text-muted-foreground">详情受限，仅显示占用时间。</p>
         <p className="mt-3 text-sm">{formatRange(canvasSegment.startMs, canvasSegment.endMs)}</p>
-        <p className="mt-1 text-sm">投入：{canvasSegment.allocation == null ? "未提供" : `${canvasSegment.allocation}%`}</p>
       </aside>
     );
   }
@@ -755,7 +747,6 @@ function SegmentInspector({
                 startAt: shanghaiDateTimeLocalToIso(String(form.get("startAt") ?? "")),
                 endAt: shanghaiDateTimeLocalToIso(String(form.get("endAt") ?? "")),
                 content: String(form.get("content") ?? ""),
-                allocation: numberOrNull(form.get("allocation")),
                 role: String(form.get("role") ?? detail.role),
                 customRole: String(form.get("customRole") ?? ""),
                 priority: String(form.get("priority") ?? detail.priority),
@@ -770,8 +761,7 @@ function SegmentInspector({
           <Field label="开始" htmlFor="inspect-start"><Input id="inspect-start" name="startAt" type="datetime-local" defaultValue={toLocal(Date.parse(detail.startAt))} required /></Field>
           <Field label="结束" htmlFor="inspect-end"><Input id="inspect-end" name="endAt" type="datetime-local" defaultValue={toLocal(Date.parse(detail.endAt))} required /></Field>
           <Field label="内容" htmlFor="inspect-content"><Textarea id="inspect-content" name="content" defaultValue={detail.content} maxLength={2_000} required /></Field>
-          <div className="grid grid-cols-2 gap-2">
-            <Field label="投入比例" htmlFor="inspect-allocation"><Input id="inspect-allocation" name="allocation" type="number" min="1" max="100" step="0.01" defaultValue={detail.allocation ?? ""} /></Field>
+          <div className="grid gap-2">
             <Field label="完成比例" htmlFor="inspect-completion"><Input id="inspect-completion" name="completionPercent" type="number" min="0" max="100" disabled={detail.type !== "ACTUAL"} defaultValue={detail.completionPercent ?? ""} /></Field>
           </div>
           <Field label="职责" htmlFor="inspect-role"><select id="inspect-role" name="role" className={selectClass} defaultValue={detail.role}>{Object.entries(workSegmentRoleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>
@@ -870,7 +860,6 @@ function SegmentInspector({
         <p className="mt-2 text-xs text-muted-foreground">
           关联对象：{detail.task?.title ?? "独立投入"}
           {detail.node ? ` · ${detail.node.type} / ${detail.node.status}` : " · 未关联计划节点"}
-          {` · 冲突 ${canvasSegment.conflictIds.length} 个`}
         </p>
         {detail.plannedSources.length > 0 && (
           <div className="mt-2 text-xs">

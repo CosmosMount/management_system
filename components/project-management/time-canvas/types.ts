@@ -59,25 +59,11 @@ export type TimeCanvasSegment = {
   startMs: number;
   endMs: number;
   title: string;
-  allocation: number | null;
   priority: string | null;
   associationNeedsReview: boolean;
-  conflictIds: string[];
   visibility: "FULL" | "BUSY_ONLY";
   permissions: TimeCanvasSegmentPermissions;
   versionToken: string | null;
-};
-
-export type TimeCanvasConflict = {
-  id: string;
-  rowId: string | null;
-  visibility: "VISIBLE" | "HIDDEN";
-  severity: string;
-  status: string | null;
-  reason: string | null;
-  startMs: number | null;
-  endMs: number | null;
-  hiddenSegmentCount: number;
 };
 
 export type TimeCanvasModel = {
@@ -86,19 +72,17 @@ export type TimeCanvasModel = {
   rows: TimeCanvasRow[];
   anchors: TimeCanvasAnchor[];
   segments: TimeCanvasSegment[];
-  conflicts: TimeCanvasConflict[];
   nextCursor?: string | null;
   generatedAt: string;
 };
 
 export type TimeCanvasSelection =
-  | { kind: "ANCHOR" | "SEGMENT" | "CONFLICT"; id: string }
+  | { kind: "ANCHOR" | "SEGMENT"; id: string }
   | null;
 
 export type TimeCanvasDisplayOptions = {
   showActual?: boolean;
   showBusy?: boolean;
-  showConflicts?: boolean;
   showInspector?: boolean;
 };
 

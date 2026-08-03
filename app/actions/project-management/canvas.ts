@@ -5,7 +5,6 @@ import {
   runProjectManagementAction,
   type ProjectManagementActionResult,
 } from "@/lib/project-management/application/action-result";
-import { previewSegmentPlacement as previewSegmentPlacementService } from "@/lib/project-management/application/segment-placement-preview";
 import { getCurrentProjectManagementActor } from "@/lib/project-management/identity";
 import { getMyWorkDashboard as getMyWorkDashboardQuery } from "@/lib/project-management/queries/dashboard-queries";
 import {
@@ -22,7 +21,6 @@ const canvasQueryRequestSchema = z
       "searchPeople",
       "searchTaskOptions",
       "listTagOptions",
-      "previewSegmentPlacement",
       "getMyWorkDashboard",
     ]),
     input: z.unknown().optional().default({}),
@@ -34,7 +32,6 @@ type CanvasQueryResult =
   | Awaited<ReturnType<typeof searchPeopleQuery>>
   | Awaited<ReturnType<typeof searchTaskOptionsQuery>>
   | Awaited<ReturnType<typeof listTagOptionsQuery>>
-  | Awaited<ReturnType<typeof previewSegmentPlacementService>>
   | Awaited<ReturnType<typeof getMyWorkDashboardQuery>>;
 
 export async function dispatchCanvasQuery(
@@ -56,8 +53,6 @@ export async function dispatchCanvasQuery(
           return searchTaskOptionsQuery({ actor, input: parsed.input });
         case "listTagOptions":
           return listTagOptionsQuery({ actor, input: parsed.input });
-        case "previewSegmentPlacement":
-          return previewSegmentPlacementService({ actor, input: parsed.input });
         case "getMyWorkDashboard":
           return getMyWorkDashboardQuery({ actor, input: parsed.input });
       }
@@ -109,21 +104,6 @@ export async function listTagOptions(
 > {
   return runCanvasAction("pm.canvas.tags.list", "listTagOptions", input, (actor, value) =>
     listTagOptionsQuery({ actor, input: value }),
-  );
-}
-
-export async function previewSegmentPlacement(
-  input: unknown,
-): Promise<
-  ProjectManagementActionResult<
-    Awaited<ReturnType<typeof previewSegmentPlacementService>>
-  >
-> {
-  return runCanvasAction(
-    "pm.canvas.segment.preview_placement",
-    "previewSegmentPlacement",
-    input,
-    (actor, value) => previewSegmentPlacementService({ actor, input: value }),
   );
 }
 

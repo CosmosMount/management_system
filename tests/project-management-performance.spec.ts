@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma";
-import { scanConflictsForPerson } from "../lib/project-management/application/conflict-service";
 import { updateWorkSegment } from "../lib/project-management/application/segment-service";
 import type { ProjectManagementActor } from "../lib/project-management/identity";
 import { getTimeCanvasData } from "../lib/project-management/queries/time-canvas-queries";
@@ -58,7 +57,6 @@ test.describe("project management S9 scale and performance", () => {
           includeTaskAnchors: true,
           includeActual: true,
           includeBusyBlocks: true,
-          includeConflicts: true,
           rowLimit: 50,
         },
       });
@@ -71,13 +69,6 @@ test.describe("project management S9 scale and performance", () => {
         toPlanVersionId: comparisonPlanId,
       }),
     );
-    const conflictStartedAt = performance.now();
-    await scanConflictsForPerson({
-      personId: fixture.personIds[0],
-      startAt: rangeStart,
-      endAt: new Date(rangeStart.getTime() + 90 * 24 * 60 * 60_000),
-    });
-    const conflictScanMs = performance.now() - conflictStartedAt;
     const actionSegment = await prisma.workSegment.create({
       data: {
         personId: actor.personId,
@@ -86,7 +77,6 @@ test.describe("project management S9 scale and performance", () => {
         startAt: new Date("2026-08-03T01:00:00.000Z"),
         endAt: new Date("2026-08-03T02:00:00.000Z"),
         content: "S9 real action performance fixture",
-        allocation: 50,
         createdByAccountId: actor.accountId,
       },
     });
@@ -98,7 +88,6 @@ test.describe("project management S9 scale and performance", () => {
         segmentId: actionSegment.id,
         expectedUpdatedAt: actionVersion,
         content: `S9 real action ${actionSequence}`,
-        allocation: 50,
         reason: "S9 普通业务 action 性能门禁",
       });
       actionVersion = result.segment.updatedAt;
@@ -125,7 +114,6 @@ test.describe("project management S9 scale and performance", () => {
       workspaceP95,
       timelineP95,
       versionCompareP95,
-      conflictScanMs,
       actionTransactionP95,
       responseBytes,
       taskPlan,
@@ -137,7 +125,6 @@ test.describe("project management S9 scale and performance", () => {
     expect(workspaceP95).toBeLessThan(1_200);
     expect(timelineP95).toBeLessThan(1_500);
     expect(versionCompareP95).toBeLessThan(1_000);
-    expect(conflictScanMs).toBeLessThan(2_000);
     expect(actionTransactionP95).toBeLessThan(500);
     expect(responseBytes).toBeLessThan(5 * 1024 * 1024);
     expect(taskPlan.executionTimeMs).toBeLessThan(800);
@@ -244,7 +231,7 @@ async function createScaleFixture() {
   `;
   await prisma.$executeRaw`
     INSERT INTO "WorkSegment" (
-      id, "personId", type, status, "startAt", "endAt", content, allocation,
+      id, "personId", type, status, "startAt", "endAt", content,
       role, priority, "taskId", "createdByAccountId", "createdAt", "updatedAt"
     )
     SELECT
@@ -253,7 +240,7 @@ async function createScaleFixture() {
       'PLANNED'::"WorkSegmentType", 'CONFIRMED'::"WorkSegmentStatus",
       '2026-08-01T00:00:00Z'::timestamptz + (floor((g - 1) / 50) * interval '5 hours'),
       '2026-08-01T00:00:00Z'::timestamptz + (floor((g - 1) / 50) * interval '5 hours') + interval '90 minutes',
-      'S9 Scale Segment ' || g, 50,
+      'S9 Scale Segment ' || g,
       'DEVELOPER'::"WorkSegmentRole", 'MEDIUM'::"TaskPriority",
       '81000000-0000-4000-8000-' || lpad((((g - 1) % 50) + 1)::text, 12, '0'),
       ${accountId}, now(), now()

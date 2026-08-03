@@ -1,22 +1,8 @@
 import { expect, test } from "@playwright/test";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma";
-import {
-  previewSegmentPlacement,
-} from "../lib/project-management/application/segment-placement-preview";
-import {
-  scanConflictsForPerson,
-} from "../lib/project-management/application/conflict-service";
-import {
-  createWorkSegment,
-  updateWorkSegment,
-} from "../lib/project-management/application/segment-service";
-import {
-  ACTIVE_PLANNED_CONFLICT_STATUSES,
-  detectResourceConflictsForSegments,
-  type ConflictDetectionSegment,
-} from "../lib/project-management/domain/conflict-detection";
+import { createWorkSegment } from "../lib/project-management/application/segment-service";
 import {
   toProjectManagementServiceError,
   type ProjectManagementErrorCode,
@@ -53,14 +39,6 @@ test.describe("S2 canvas query security", () => {
       techGroup: "电控",
       members: [{ personId: owner.person.id, role: "OWNER" }],
     });
-    const segment = await createSegment({
-      accountId: owner.account.id,
-      personId: owner.person.id,
-      taskId: task.taskId,
-      nodeId: task.milestoneNodeId,
-      startAt: atHour(9),
-      endAt: atHour(10),
-    });
     const endpoint = new URL("/api/project-management/canvas", baseURL).toString();
 
     const unauthenticated = await request.post(endpoint, {
@@ -92,16 +70,6 @@ test.describe("S2 canvas query security", () => {
       { operation: "searchPeople", input: { purpose: "VISIBLE" } },
       { operation: "searchTaskOptions", input: { query: "Action 边界" } },
       { operation: "listTagOptions", input: {} },
-      {
-        operation: "previewSegmentPlacement",
-        input: {
-          segmentId: segment.id,
-          personId: owner.person.id,
-          startAt: atHour(9),
-          endAt: atHour(10.5),
-          associationIntent: "KEEP",
-        },
-      },
       {
         operation: "getMyWorkDashboard",
         input: { rangeStart: RANGE_START, rangeEnd: RANGE_END },
@@ -179,16 +147,6 @@ test.describe("S2 canvas query security", () => {
           scope: { kind: "TASK_SCOPED", taskId: task.taskId },
           groupBy: "TASK",
         }),
-      },
-      {
-        operation: "previewSegmentPlacement",
-        input: {
-          segmentId: segment.id,
-          personId: owner.person.id,
-          startAt: atHour(9),
-          endAt: atHour(10),
-          associationIntent: "KEEP",
-        },
       },
     ]) {
       const denied = await context.request.post(endpoint, { data: payload });
@@ -1269,7 +1227,6 @@ test.describe("S2 canvas query security", () => {
           startAt: atHour(14 + index * 0.1),
           endAt: atHour(14.05 + index * 0.1),
           content: `禁止关联终态 Task ${index}`,
-          allocation: 10,
           taskId: task.taskId,
           nodeId: task.milestoneNodeId,
         }),
@@ -1293,7 +1250,6 @@ test.describe("S2 canvas query security", () => {
       startAt: atHour(15),
       endAt: atHour(16),
       content: "允许关联 Active Task",
-      allocation: 10,
       taskId: activeTask.taskId,
       nodeId: activeTask.milestoneNodeId,
     });
@@ -1304,7 +1260,6 @@ test.describe("S2 canvas query security", () => {
       startAt: atHour(16),
       endAt: atHour(17),
       content: "允许关联 Draft Task",
-      allocation: 10,
       taskId: draftTask.taskId,
       nodeId: draftTask.milestoneNodeId,
     });
@@ -1413,14 +1368,9 @@ test.describe("S2 canvas query security", () => {
     const owner = await createAccountPerson("画布 Owner");
     const member = await createAccountPerson("画布 Member");
     const hiddenOwner = await createAccountPerson("隐藏 Owner");
-    const thirdOwner = await createAccountPerson("第三 Owner");
-    const resourceManager = await createAccountPerson("资源经理");
     const inactive = await createAccountPerson("停用画布人员", "INACTIVE");
     const ownerActor = actor(owner);
     const adminActor = actor(owner, [systemAdministratorRole()]);
-    const managerActor = actor(resourceManager, [
-      scopedRole("GROUP_LEADER", scopedTeam, scopedTechGroup),
-    ]);
     const taskA = await createTask({
       ownerAccountId: owner.account.id,
       title: "可见 Task A",
@@ -1439,13 +1389,6 @@ test.describe("S2 canvas query security", () => {
       techGroup: "机械",
       members: [{ personId: hiddenOwner.person.id, role: "OWNER" }],
     });
-    const taskC = await createTask({
-      ownerAccountId: thirdOwner.account.id,
-      title: "隐藏 Task C",
-      team: "无人机",
-      techGroup: "视觉",
-      members: [{ personId: thirdOwner.person.id, role: "OWNER" }],
-    });
     const current = await createSegment({
       accountId: owner.account.id,
       personId: member.person.id,
@@ -1453,7 +1396,6 @@ test.describe("S2 canvas query security", () => {
       nodeId: taskA.milestoneNodeId,
       startAt: atHour(9),
       endAt: atHour(12),
-      allocation: 60,
       content: "可见 Task A 投入",
     });
     const hidden = await createSegment({
@@ -1463,7 +1405,6 @@ test.describe("S2 canvas query security", () => {
       nodeId: taskB.milestoneNodeId,
       startAt: atHour(10),
       endAt: atHour(11),
-      allocation: 60,
       content: "绝密 Task B 投入",
     });
     const hiddenTag = await createTag(hiddenOwner.account.id, "绝密 Segment Tag");
@@ -1475,16 +1416,6 @@ test.describe("S2 canvas query security", () => {
       where: { id: hidden.id },
       data: { updatedAt: new Date(hiddenVersionToken) },
     });
-    const hiddenC = await createSegment({
-      accountId: thirdOwner.account.id,
-      personId: member.person.id,
-      taskId: taskC.taskId,
-      nodeId: taskC.milestoneNodeId,
-      startAt: atHour(10),
-      endAt: atHour(11),
-      allocation: 60,
-      content: "绝密 Task C 投入",
-    });
     const actual = await createSegment({
       accountId: owner.account.id,
       personId: owner.person.id,
@@ -1494,7 +1425,6 @@ test.describe("S2 canvas query security", () => {
       status: "CONFIRMED",
       startAt: atHour(13),
       endAt: atHour(14),
-      allocation: 50,
       content: "本人 Actual",
     });
     const endingAtRangeStart = await createSegment({
@@ -1521,41 +1451,12 @@ test.describe("S2 canvas query security", () => {
       endAt: new Date("2026-08-10T01:00:00.000Z"),
       content: "跨过范围起点",
     });
-    const mixedConflict = await createConflict({
-      personId: member.person.id,
-      segmentIds: [current.id, hidden.id],
-      severity: "HIGH",
-      fingerprint: `mixed-${randomUUID()}`,
-    });
-    const allHiddenConflict = await createConflict({
-      personId: member.person.id,
-      segmentIds: [hidden.id, hiddenC.id],
-      severity: "CRITICAL",
-      fingerprint: `hidden-${randomUUID()}`,
-    });
-    const manageableSecond = await createSegment({
-      accountId: owner.account.id,
-      personId: member.person.id,
-      taskId: taskA.taskId,
-      startAt: atHour(9.5),
-      endAt: atHour(10.5),
-      allocation: 55,
-      content: "可处理 Task A 投入",
-    });
-    const manageableConflict = await createConflict({
-      personId: member.person.id,
-      segmentIds: [current.id, manageableSecond.id],
-      severity: "HIGH",
-      fingerprint: `manageable-${randomUUID()}`,
-    });
-
     const taskCanvas = await getTimeCanvasData({
       actor: ownerActor,
       input: canvasInput({
         scope: { kind: "TASK_SCOPED", taskId: taskA.taskId },
         groupBy: "PERSON",
         includeBusyBlocks: true,
-        includeConflicts: true,
       }),
     });
     expect(taskCanvas.rows.map((row) => row.id)).toEqual(
@@ -1577,8 +1478,6 @@ test.describe("S2 canvas query security", () => {
     expect(busy).toBeTruthy();
     expect(Object.keys(busy ?? {}).sort()).toEqual(
       [
-        "allocation",
-        "conflictSummary",
         "endAt",
         "kind",
         "personId",
@@ -1619,62 +1518,6 @@ test.describe("S2 canvas query security", () => {
       canRelink: false,
       canSoftDelete: true,
     });
-    const mixed = taskCanvas.conflicts.find(
-      (conflict) =>
-        conflict.visibility === "VISIBLE" && conflict.id === mixedConflict.id,
-    );
-    expect(mixed).toMatchObject({
-      visibility: "VISIBLE",
-      hiddenSegmentCount: 1,
-      capabilities: {
-        canResolve: false,
-        canPreviewSuggestion: false,
-        canApplySuggestion: false,
-      },
-    });
-    expect(JSON.stringify(mixed)).not.toContain("explanation");
-
-    const managerCanvas = await getTimeCanvasData({
-      actor: managerActor,
-      input: canvasInput({
-        scope: { kind: "RESOURCE_PLANNER" },
-        groupBy: "PERSON",
-        includeBusyBlocks: true,
-        includeConflicts: true,
-      }),
-    });
-    const fullyHidden = managerCanvas.conflicts.find(
-      (conflict) =>
-        conflict.visibility === "HIDDEN" &&
-        conflict.severity === allHiddenConflict.severity,
-    );
-    expect(fullyHidden).toMatchObject({
-      visibility: "HIDDEN",
-      hiddenSegmentCount: 2,
-      capabilities: {
-        canAcknowledge: false,
-        canResolve: false,
-        canIgnore: false,
-        canPreviewSuggestion: false,
-        canApplySuggestion: false,
-      },
-    });
-    expect(Object.keys(fullyHidden ?? {}).sort()).toEqual(
-      [
-        "capabilities",
-        "hiddenSegmentCount",
-        "kind",
-        "severity",
-        "visibility",
-      ].sort(),
-    );
-    const manageable = managerCanvas.conflicts.find(
-      (conflict) =>
-        conflict.visibility === "VISIBLE" &&
-        conflict.id === manageableConflict.id,
-    );
-    expect(manageable?.capabilities.canResolve).toBe(true);
-
     for (const scope of ["PERSONAL", "DASHBOARD"] as const) {
       const canvas = await getTimeCanvasData({
         actor: ownerActor,
@@ -1691,7 +1534,6 @@ test.describe("S2 canvas query security", () => {
         input: canvasInput({
           scope: { kind: scope },
           groupBy: "TASK",
-          includeConflicts: true,
         }),
       });
       expect(canvas.rows.map((row) => row.id)).toContain(taskA.taskId);
@@ -1700,7 +1542,6 @@ test.describe("S2 canvas query security", () => {
           (segment) => segment.personId === owner.person.id,
         ),
       ).toBe(true);
-      expect(canvas.conflicts).toEqual([]);
     }
     const ordinaryResource = await getTimeCanvasData({
       actor: ownerActor,
@@ -1801,124 +1642,7 @@ test.describe("S2 canvas query security", () => {
     );
   });
 
-  test("PERSONAL and DASHBOARD TASK pages scope conflicts to the actor and current rowIds", async () => {
-    const owner = await createAccountPerson("Conflict 分页 Owner");
-    const taskA = await createTask({
-      ownerAccountId: owner.account.id,
-      title: "Conflict 分页 A",
-      team: "英雄",
-      techGroup: "电控",
-      members: [{ personId: owner.person.id, role: "OWNER" }],
-    });
-    const taskB = await createTask({
-      ownerAccountId: owner.account.id,
-      title: "Conflict 分页 B",
-      team: "英雄",
-      techGroup: "电控",
-      members: [{ personId: owner.person.id, role: "OWNER" }],
-    });
-    const taskASegments = await Promise.all([
-      createSegment({
-        accountId: owner.account.id,
-        personId: owner.person.id,
-        taskId: taskA.taskId,
-        startAt: atHour(9),
-        endAt: atHour(11),
-        content: "Conflict A1",
-      }),
-      createSegment({
-        accountId: owner.account.id,
-        personId: owner.person.id,
-        taskId: taskA.taskId,
-        startAt: atHour(9.5),
-        endAt: atHour(10.5),
-        content: "Conflict A2",
-      }),
-    ]);
-    const taskBSegments = await Promise.all([
-      createSegment({
-        accountId: owner.account.id,
-        personId: owner.person.id,
-        taskId: taskB.taskId,
-        startAt: atHour(9),
-        endAt: atHour(11),
-        content: "Conflict B1",
-      }),
-      createSegment({
-        accountId: owner.account.id,
-        personId: owner.person.id,
-        taskId: taskB.taskId,
-        startAt: atHour(9.5),
-        endAt: atHour(10.5),
-        content: "Conflict B2",
-      }),
-    ]);
-    const independentSegments = await Promise.all([
-      createSegment({
-        accountId: owner.account.id,
-        personId: owner.person.id,
-        startAt: atHour(9),
-        endAt: atHour(11),
-        content: "Independent Conflict 1",
-      }),
-      createSegment({
-        accountId: owner.account.id,
-        personId: owner.person.id,
-        startAt: atHour(9.5),
-        endAt: atHour(10.5),
-        content: "Independent Conflict 2",
-      }),
-    ]);
-    const conflictA = await createConflict({
-      personId: owner.person.id,
-      segmentIds: taskASegments.map((segment) => segment.id),
-      severity: "HIGH",
-      fingerprint: `page-a-${randomUUID()}`,
-    });
-    const conflictB = await createConflict({
-      personId: owner.person.id,
-      segmentIds: taskBSegments.map((segment) => segment.id),
-      severity: "MEDIUM",
-      fingerprint: `page-b-${randomUUID()}`,
-    });
-    const independentConflict = await createConflict({
-      personId: owner.person.id,
-      segmentIds: independentSegments.map((segment) => segment.id),
-      severity: "LOW",
-      fingerprint: `page-independent-${randomUUID()}`,
-    });
-
-    for (const scope of ["PERSONAL", "DASHBOARD"] as const) {
-      const firstPage = await getTimeCanvasData({
-        actor: actor(owner),
-        input: canvasInput({
-          scope: { kind: scope },
-          groupBy: "TASK",
-          includeConflicts: true,
-          rowLimit: 1,
-        }),
-      });
-      const secondPage = await getTimeCanvasData({
-        actor: actor(owner),
-        input: canvasInput({
-          scope: { kind: scope },
-          groupBy: "TASK",
-          includeConflicts: true,
-          rowLimit: 1,
-          cursor: firstPage.nextCursor ?? undefined,
-        }),
-      });
-      expect(firstPage.rows.map((row) => row.id)).toEqual([taskA.taskId]);
-      expect(secondPage.rows.map((row) => row.id)).toEqual([taskB.taskId]);
-      expect(visibleConflictIds(firstPage)).toEqual([conflictA.id]);
-      expect(visibleConflictIds(secondPage)).toEqual([conflictB.id]);
-      expect(JSON.stringify([firstPage, secondPage])).not.toContain(
-        independentConflict.id,
-      );
-    }
-  });
-
-  test("Busy and Conflict queries exclude exact half-open boundaries and keep adjacent intersections", async () => {
+  test("Busy queries exclude exact half-open boundaries and keep adjacent intersections", async () => {
     const owner = await createAccountPerson("半开边界 Owner");
     const target = await createAccountPerson("半开边界目标");
     const hiddenOwner = await createAccountPerson("半开边界隐藏 Owner");
@@ -1939,24 +1663,6 @@ test.describe("S2 canvas query security", () => {
       techGroup: "机械",
       members: [{ personId: hiddenOwner.person.id, role: "OWNER" }],
     });
-    const conflictEvidence = await Promise.all([
-      createSegment({
-        accountId: owner.account.id,
-        personId: target.person.id,
-        taskId: visibleTask.taskId,
-        startAt: atHour(9),
-        endAt: atHour(11),
-        content: "半开边界 Conflict Evidence A",
-      }),
-      createSegment({
-        accountId: owner.account.id,
-        personId: target.person.id,
-        taskId: visibleTask.taskId,
-        startAt: atHour(9.5),
-        endAt: atHour(10.5),
-        content: "半开边界 Conflict Evidence B",
-      }),
-    ]);
     const rangeStart = new Date(RANGE_START);
     const rangeEnd = new Date(RANGE_END);
     const justAfterRangeStart = new Date(rangeStart.getTime() + 1);
@@ -1997,41 +1703,6 @@ test.describe("S2 canvas query security", () => {
         content: "Busy 刚跨入 rangeEnd",
       }),
     ]);
-    const conflictFixtures = await Promise.all([
-      createConflict({
-        personId: target.person.id,
-        segmentIds: conflictEvidence.map((segment) => segment.id),
-        severity: "LOW",
-        fingerprint: `half-open-conflict-end-exact-${randomUUID()}`,
-        startAt: beforeRangeStart,
-        endAt: rangeStart,
-      }),
-      createConflict({
-        personId: target.person.id,
-        segmentIds: conflictEvidence.map((segment) => segment.id),
-        severity: "MEDIUM",
-        fingerprint: `half-open-conflict-end-adjacent-${randomUUID()}`,
-        startAt: beforeRangeStart,
-        endAt: justAfterRangeStart,
-      }),
-      createConflict({
-        personId: target.person.id,
-        segmentIds: conflictEvidence.map((segment) => segment.id),
-        severity: "HIGH",
-        fingerprint: `half-open-conflict-start-exact-${randomUUID()}`,
-        startAt: rangeEnd,
-        endAt: afterRangeEnd,
-      }),
-      createConflict({
-        personId: target.person.id,
-        segmentIds: conflictEvidence.map((segment) => segment.id),
-        severity: "CRITICAL",
-        fingerprint: `half-open-conflict-start-adjacent-${randomUUID()}`,
-        startAt: justBeforeRangeEnd,
-        endAt: afterRangeEnd,
-      }),
-    ]);
-
     const canvas = await getTimeCanvasData({
       actor: actor(owner),
       input: canvasInput({
@@ -2039,7 +1710,6 @@ test.describe("S2 canvas query security", () => {
         groupBy: "PERSON",
         personIds: [target.person.id],
         includeBusyBlocks: true,
-        includeConflicts: true,
       }),
     });
     const busyRanges = canvas.segments.flatMap((segment) =>
@@ -2059,13 +1729,6 @@ test.describe("S2 canvas query security", () => {
     expect(busyRanges).not.toContain(
       `${busyFixtures[2]!.startAt.toISOString()}|${busyFixtures[2]!.endAt.toISOString()}`,
     );
-    const returnedConflictIds = visibleConflictIds(canvas);
-    expect(returnedConflictIds).toEqual([
-      conflictFixtures[1]!.id,
-      conflictFixtures[3]!.id,
-    ]);
-    expect(returnedConflictIds).not.toContain(conflictFixtures[0]!.id);
-    expect(returnedConflictIds).not.toContain(conflictFixtures[2]!.id);
   });
 
   test("Busy blocks use hidden source IDs only as a stable tie-breaker", async () => {
@@ -2097,7 +1760,6 @@ test.describe("S2 canvas query security", () => {
     const hiddenIdPrefix = randomUUID().slice(0, -1);
     const hiddenSegmentFixtures = Array.from({ length: 8 }, (_, index) => ({
       id: `${hiddenIdPrefix}${index.toString(16)}`,
-      allocation: 31 + index,
       content: `Busy 稳定排序绝密投入 ${index}`,
     }));
     const hiddenSegments = [];
@@ -2111,7 +1773,6 @@ test.describe("S2 canvas query security", () => {
           nodeId: hiddenTask.milestoneNodeId,
           startAt: atHour(9),
           endAt: atHour(10),
-          allocation: fixture.allocation,
           content: fixture.content,
           tagIds: [hiddenTag.id],
         }),
@@ -2136,22 +1797,13 @@ test.describe("S2 canvas query security", () => {
           segment.endAt === atHour(10).toISOString(),
       );
     };
-    const expectedAllocations = [...hiddenSegments]
-      .sort((left, right) =>
-        left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
-      )
-      .map((segment) => Number(segment.allocation?.toString()));
     const firstRead = await loadEqualKeyBusyBlocks();
     const secondRead = await loadEqualKeyBusyBlocks();
-    expect(firstRead.map((segment) => segment.allocation)).toEqual(
-      expectedAllocations,
-    );
+    expect(firstRead).toHaveLength(hiddenSegments.length);
     expect(secondRead).toEqual(firstRead);
     for (const busy of firstRead) {
       expect(Object.keys(busy).sort()).toEqual(
         [
-          "allocation",
-          "conflictSummary",
           "endAt",
           "kind",
           "personId",
@@ -2216,7 +1868,6 @@ test.describe("S2 canvas query security", () => {
       startAt,
       endAt,
       content: `批量可见 ${index}`,
-      allocation: new Prisma.Decimal(1),
       role: "DEVELOPER" as const,
       priority: "LOW" as const,
       taskId: visibleTask.taskId,
@@ -2231,7 +1882,6 @@ test.describe("S2 canvas query security", () => {
       startAt,
       endAt,
       content: `批量隐藏 ${index}`,
-      allocation: new Prisma.Decimal(1),
       role: "DEVELOPER" as const,
       priority: "LOW" as const,
       taskId: hiddenTask.taskId,
@@ -2293,7 +1943,6 @@ test.describe("S2 canvas query security", () => {
         startAt: atHour(9),
         endAt: atHour(10),
         content: `Busy-only 隐藏 ${index}`,
-        allocation: new Prisma.Decimal(1),
         role: "DEVELOPER" as const,
         priority: "LOW" as const,
         taskId: hiddenTask.taskId,
@@ -2345,7 +1994,6 @@ test.describe("S2 canvas query security", () => {
         startAt: atHour(9),
         endAt: atHour(10),
         content: `Full+Busy 可见 ${index}`,
-        allocation: new Prisma.Decimal(1),
         role: "DEVELOPER" as const,
         priority: "LOW" as const,
         taskId: visibleTask.taskId,
@@ -2359,7 +2007,6 @@ test.describe("S2 canvas query security", () => {
         startAt: atHour(9),
         endAt: atHour(10),
         content: `Full+Busy 隐藏 ${index}`,
-        allocation: new Prisma.Decimal(1),
         role: "DEVELOPER" as const,
         priority: "LOW" as const,
         taskId: hiddenTask.taskId,
@@ -2376,112 +2023,6 @@ test.describe("S2 canvas query security", () => {
           includeBusyBlocks: true,
         }),
       }),
-      "QUERY_LIMIT_EXCEEDED",
-    );
-  });
-
-  test("placement preview accepts 5000 dense candidates and rejects candidate 5001", async () => {
-    test.setTimeout(120_000);
-    const owner = await createAccountPerson("Preview 5000 边界 Owner");
-    await createSegmentsInChunks(
-      Array.from({ length: 5_000 }, (_, index) => ({
-        id: randomUUID(),
-        personId: owner.person.id,
-        type: "PLANNED" as const,
-        status: "PLANNED" as const,
-        startAt: atHour(9),
-        endAt: atHour(10),
-        content: `Preview dense ${index}`,
-        allocation: new Prisma.Decimal("0.01"),
-        role: "DEVELOPER" as const,
-        priority: "LOW" as const,
-        createdByAccountId: owner.account.id,
-      })),
-    );
-    const exact = await previewSegmentPlacement({
-      actor: actor(owner),
-      input: {
-        personId: owner.person.id,
-        startAt: atHour(9).toISOString(),
-        endAt: atHour(10).toISOString(),
-        allocation: 0.01,
-        associationIntent: "KEEP",
-      },
-    });
-    expect(exact.personId).toBe(owner.person.id);
-
-    await createSegment({
-      accountId: owner.account.id,
-      personId: owner.person.id,
-      startAt: atHour(9),
-      endAt: atHour(10),
-      allocation: 0.01,
-      content: "Preview dense overflow",
-    });
-    await expectErrorCode(
-      previewSegmentPlacement({
-        actor: actor(owner),
-        input: {
-          personId: owner.person.id,
-          startAt: atHour(9).toISOString(),
-          endAt: atHour(10).toISOString(),
-          allocation: 0.01,
-          associationIntent: "KEEP",
-        },
-      }),
-      "QUERY_LIMIT_EXCEEDED",
-    );
-  });
-
-  test("Conflict DTO budget accepts 5000 and rejects 5001 independently of time objects", async () => {
-    test.setTimeout(120_000);
-    const owner = await createAccountPerson("Conflict 5000 边界 Owner");
-    await createSegment({
-      accountId: owner.account.id,
-      personId: owner.person.id,
-      startAt: atHour(9),
-      endAt: atHour(10),
-      allocation: 10,
-    });
-    const conflicts = Array.from({ length: 5_001 }, (_, index) => ({
-      id: randomUUID(),
-      personId: owner.person.id,
-      kind: "ALLOCATION_OVER_LIMIT" as const,
-      startAt: atHour(9),
-      endAt: atHour(10),
-      severity: "MEDIUM" as const,
-      status: "OPEN" as const,
-      fingerprint: `s2-conflict-budget-${randomUUID()}-${index}`,
-      explanation: {},
-    }));
-    await prisma.resourceConflict.createMany({ data: conflicts.slice(0, 5_000) });
-    const input = canvasInput({
-      scope: { kind: "PERSONAL" },
-      groupBy: "PERSON",
-      includeConflicts: true,
-      includeTaskAnchors: false,
-    });
-    const exact = await getTimeCanvasData({ actor: actor(owner), input });
-    expect(exact.conflicts).toHaveLength(5_000);
-    expect(
-      exact.conflicts.every(
-        (conflict) =>
-          conflict.visibility === "HIDDEN" &&
-          Object.keys(conflict).sort().join("|") ===
-            [
-              "capabilities",
-              "hiddenSegmentCount",
-              "kind",
-              "severity",
-              "visibility",
-            ]
-              .sort()
-              .join("|"),
-      ),
-    ).toBe(true);
-    await prisma.resourceConflict.create({ data: conflicts[5_000]! });
-    await expectErrorCode(
-      getTimeCanvasData({ actor: actor(owner), input }),
       "QUERY_LIMIT_EXCEEDED",
     );
   });
@@ -2569,389 +2110,6 @@ test.describe("S2 canvas query security", () => {
     );
   });
 
-  test("placement preview enforces management and association privacy, shares scanner rules and writes nothing", async () => {
-    const manager = await createAccountPerson("Preview 资源经理");
-    const target = await createAccountPerson("Preview 目标人员");
-    const visibleOwner = await createAccountPerson("Preview 可见 Owner");
-    const hiddenOwner = await createAccountPerson("Preview 隐藏 Owner");
-    const viewer = await createAccountPerson("Preview Viewer");
-    const outsider = await createAccountPerson("Preview Outsider");
-    const managerActor = actor(manager, [
-      scopedRole("GROUP_LEADER", "英雄", "电控"),
-    ]);
-    await grantScopedRole(
-      manager.account.id,
-      "GROUP_LEADER",
-      "英雄",
-      "电控",
-    );
-    const taskA = await createTask({
-      ownerAccountId: visibleOwner.account.id,
-      title: "Preview 可见 Task",
-      team: "英雄",
-      techGroup: "电控",
-      members: [
-        { personId: visibleOwner.person.id, role: "OWNER" },
-        { personId: target.person.id, role: "MEMBER" },
-        { personId: viewer.person.id, role: "VIEWER" },
-      ],
-    });
-    const taskB = await createTask({
-      ownerAccountId: hiddenOwner.account.id,
-      title: "Preview 隐藏 Task",
-      team: "步兵",
-      techGroup: "机械",
-      members: [{ personId: hiddenOwner.person.id, role: "OWNER" }],
-    });
-    const taskC = await createTask({
-      ownerAccountId: visibleOwner.account.id,
-      title: "Preview 重关联目标 Task",
-      team: "英雄",
-      techGroup: "电控",
-      members: [{ personId: visibleOwner.person.id, role: "OWNER" }],
-    });
-    const editable = await createSegment({
-      accountId: visibleOwner.account.id,
-      personId: target.person.id,
-      taskId: taskA.taskId,
-      nodeId: taskA.milestoneNodeId,
-      startAt: atHour(9),
-      endAt: atHour(10),
-      allocation: 60,
-      content: "Preview 候选",
-      associationNeedsReview: true,
-    });
-    await createSegment({
-      accountId: hiddenOwner.account.id,
-      personId: target.person.id,
-      taskId: taskB.taskId,
-      nodeId: taskB.milestoneNodeId,
-      startAt: atHour(9.5),
-      endAt: atHour(10.5),
-      allocation: 60,
-      content: "Preview 隐藏命中",
-    });
-    const before = await previewWriteState(target.person.id);
-    const hiddenPreview = await previewSegmentPlacement({
-      actor: managerActor,
-      input: {
-        segmentId: editable.id,
-        personId: target.person.id,
-        startAt: atHour(9).toISOString(),
-        endAt: atHour(10).toISOString(),
-      },
-    });
-    expect(hiddenPreview.conflicts).toContainEqual({
-      kind: "PLACEMENT_CONFLICT",
-      visibility: "HIDDEN",
-      blocked: true,
-    });
-    expect(
-      hiddenPreview.conflicts.filter(
-        (conflict) => conflict.visibility === "HIDDEN",
-      ),
-    ).toHaveLength(1);
-    expect(Object.keys(hiddenPreview.conflicts.at(-1) ?? {}).sort()).toEqual(
-      ["blocked", "kind", "visibility"].sort(),
-    );
-    expect(await previewWriteState(target.person.id)).toEqual(before);
-
-    await expectErrorCode(
-      previewSegmentPlacement({
-        actor: actor(viewer),
-        input: {
-          segmentId: editable.id,
-          personId: target.person.id,
-          startAt: atHour(9).toISOString(),
-          endAt: atHour(10).toISOString(),
-        },
-      }),
-      "FORBIDDEN",
-    );
-    await expectErrorCode(
-      previewSegmentPlacement({
-        actor: actor(outsider),
-        input: {
-          segmentId: editable.id,
-          personId: target.person.id,
-          startAt: atHour(9).toISOString(),
-          endAt: atHour(10).toISOString(),
-        },
-      }),
-      "NOT_FOUND",
-    );
-    await expectErrorCode(
-      previewSegmentPlacement({
-        actor: managerActor,
-        input: {
-          segmentId: editable.id,
-          personId: manager.person.id,
-          startAt: atHour(9).toISOString(),
-          endAt: atHour(10).toISOString(),
-        },
-      }),
-      "ASSOCIATION_INVALID",
-    );
-    await expectErrorCode(
-      previewSegmentPlacement({
-        actor: managerActor,
-        input: {
-          personId: target.person.id,
-          taskId: taskB.taskId,
-          nodeId: taskB.milestoneNodeId,
-          associationIntent: "RELINK",
-          startAt: atHour(9).toISOString(),
-          endAt: atHour(10).toISOString(),
-        },
-      }),
-      "NOT_FOUND",
-    );
-
-    const consistencyTarget = await createAccountPerson("Preview 一致性人员");
-    await prisma.taskMember.create({
-      data: {
-        taskId: taskA.taskId,
-        personId: consistencyTarget.person.id,
-        role: "MEMBER",
-        createdByAccountId: visibleOwner.account.id,
-      },
-    });
-    await prisma.taskMember.create({
-      data: {
-        taskId: taskC.taskId,
-        personId: consistencyTarget.person.id,
-        role: "MEMBER",
-        createdByAccountId: visibleOwner.account.id,
-      },
-    });
-    await createSegment({
-      accountId: visibleOwner.account.id,
-      personId: consistencyTarget.person.id,
-      taskId: taskA.taskId,
-      nodeId: taskA.milestoneNodeId,
-      startAt: atHour(9),
-      endAt: atHour(10),
-      allocation: 60,
-      content: "一致性已有安排",
-    });
-    const reviewCandidate = await createSegment({
-      accountId: visibleOwner.account.id,
-      personId: consistencyTarget.person.id,
-      taskId: taskA.taskId,
-      nodeId: taskA.milestoneNodeId,
-      startAt: atHour(9),
-      endAt: atHour(10),
-      allocation: 20,
-      content: "待重关联 Preview 候选",
-      associationNeedsReview: true,
-    });
-    const beforeRelinkPreviews = await previewWriteState(
-      consistencyTarget.person.id,
-    );
-    const pureMovePreview = await previewSegmentPlacement({
-      actor: managerActor,
-      input: {
-        segmentId: reviewCandidate.id,
-        personId: consistencyTarget.person.id,
-        startAt: atHour(9.1).toISOString(),
-        endAt: atHour(10.1).toISOString(),
-      },
-    });
-    expect(visibleConflictReasons(pureMovePreview)).toContain("REVISION_OVERLAP");
-    await expectErrorCode(
-      previewSegmentPlacement({
-        actor: managerActor,
-        input: {
-          segmentId: reviewCandidate.id,
-          personId: consistencyTarget.person.id,
-          startAt: atHour(9.1).toISOString(),
-          endAt: atHour(10.1).toISOString(),
-          role: "LEAD",
-        },
-      }),
-      "ASSOCIATION_INVALID",
-    );
-    const explicitSameAssociationPreview = await previewSegmentPlacement({
-      actor: managerActor,
-      input: {
-        segmentId: reviewCandidate.id,
-        personId: consistencyTarget.person.id,
-        taskId: taskA.taskId,
-        nodeId: taskA.milestoneNodeId,
-        associationIntent: "RELINK",
-        startAt: atHour(9.1).toISOString(),
-        endAt: atHour(10.1).toISOString(),
-      },
-    });
-    expect(visibleConflictReasons(explicitSameAssociationPreview)).not.toContain(
-      "REVISION_OVERLAP",
-    );
-    const changedAssociationPreview = await previewSegmentPlacement({
-      actor: managerActor,
-      input: {
-        segmentId: reviewCandidate.id,
-        personId: consistencyTarget.person.id,
-        taskId: taskC.taskId,
-        nodeId: taskC.milestoneNodeId,
-        associationIntent: "RELINK",
-        startAt: atHour(9.1).toISOString(),
-        endAt: atHour(10.1).toISOString(),
-      },
-    });
-    expect(visibleConflictReasons(changedAssociationPreview)).not.toContain(
-      "REVISION_OVERLAP",
-    );
-    expect(await previewWriteState(consistencyTarget.person.id)).toEqual(
-      beforeRelinkPreviews,
-    );
-    const keepResult = await updateWorkSegment(managerActor, {
-      segmentId: reviewCandidate.id,
-      expectedUpdatedAt: reviewCandidate.updatedAt,
-      associationIntent: "KEEP",
-      startAt: atHour(9.1),
-      endAt: atHour(10.1),
-      reason: "KEEP 保留 Revision 待复核关联",
-    });
-    expect(keepResult.segment.associationNeedsReview).toBe(true);
-    expect(keepResult.segment.taskId).toBe(taskA.taskId);
-    expect(keepResult.segment.nodeId).toBe(taskA.milestoneNodeId);
-    await expectErrorCode(
-      updateWorkSegment(managerActor, {
-        segmentId: reviewCandidate.id,
-        expectedUpdatedAt: keepResult.segment.updatedAt,
-        associationIntent: "KEEP",
-        taskId: taskC.taskId,
-        nodeId: taskC.milestoneNodeId,
-      }),
-      "ASSOCIATION_INVALID",
-    );
-    await expectErrorCode(
-      updateWorkSegment(managerActor, {
-        segmentId: reviewCandidate.id,
-        expectedUpdatedAt: keepResult.segment.updatedAt,
-        associationIntent: "RELINK",
-        reason: "验证错误 Node 不得重关联",
-        taskId: taskA.taskId,
-        nodeId: taskC.milestoneNodeId,
-      }),
-      "ASSOCIATION_INVALID",
-    );
-    await expectErrorCode(
-      updateWorkSegment(managerActor, {
-        segmentId: reviewCandidate.id,
-        expectedUpdatedAt: keepResult.segment.updatedAt,
-        associationIntent: "RELINK",
-        reason: "验证隐藏目标不得重关联",
-        taskId: taskB.taskId,
-        nodeId: taskB.milestoneNodeId,
-      }),
-      "NOT_FOUND",
-    );
-    await expectErrorCode(
-      updateWorkSegment(managerActor, {
-        segmentId: reviewCandidate.id,
-        expectedUpdatedAt: keepResult.segment.updatedAt,
-        associationIntent: "RELINK",
-        taskId: taskC.taskId,
-        nodeId: taskC.milestoneNodeId,
-      }),
-      "VALIDATION_ERROR",
-    );
-    const relinkResult = await updateWorkSegment(managerActor, {
-      segmentId: reviewCandidate.id,
-      expectedUpdatedAt: keepResult.segment.updatedAt,
-      associationIntent: "RELINK",
-      taskId: taskC.taskId,
-      nodeId: taskC.milestoneNodeId,
-      reason: "RELINK 明确确认新关联",
-    });
-    expect(relinkResult.segment.associationNeedsReview).toBe(false);
-    expect(relinkResult.segment.taskId).toBe(taskC.taskId);
-    expect(relinkResult.segment.nodeId).toBe(taskC.milestoneNodeId);
-    expect(
-      await prisma.resourceConflict.count({
-        where: {
-          personId: consistencyTarget.person.id,
-          kind: "REVISION_OVERLAP",
-          status: { not: "RESOLVED" },
-        },
-      }),
-    ).toBe(0);
-    await createSegment({
-      accountId: visibleOwner.account.id,
-      personId: consistencyTarget.person.id,
-      taskId: taskC.taskId,
-      nodeId: taskC.milestoneNodeId,
-      startAt: atHour(9.5),
-      endAt: atHour(10.5),
-      allocation: 10,
-      role: "OWNER",
-      content: "Preview role 一致性已有安排",
-    });
-    const visiblePreview = await previewSegmentPlacement({
-      actor: managerActor,
-      input: {
-        personId: consistencyTarget.person.id,
-        taskId: taskA.taskId,
-        nodeId: taskA.milestoneNodeId,
-        associationIntent: "RELINK",
-        startAt: atHour(9.5).toISOString(),
-        endAt: atHour(10.5).toISOString(),
-        allocation: 60,
-        priority: "MEDIUM",
-        role: "LEAD",
-      },
-    });
-    expect(
-      visiblePreview.conflicts.some(
-        (conflict) =>
-          conflict.visibility === "VISIBLE" &&
-          conflict.reason === "ALLOCATION_OVER_LIMIT",
-      ),
-    ).toBe(true);
-    expect(visibleConflictReasons(visiblePreview)).toContain(
-      "LEAD_ROLE_OVERLAP",
-    );
-    const defaultRolePreview = await previewSegmentPlacement({
-      actor: managerActor,
-      input: {
-        personId: consistencyTarget.person.id,
-        taskId: taskA.taskId,
-        nodeId: taskA.milestoneNodeId,
-        associationIntent: "RELINK",
-        startAt: atHour(9.5).toISOString(),
-        endAt: atHour(10.5).toISOString(),
-        allocation: 60,
-        priority: "MEDIUM",
-      },
-    });
-    expect(visibleConflictReasons(defaultRolePreview)).not.toContain(
-      "LEAD_ROLE_OVERLAP",
-    );
-    await createSegment({
-      accountId: visibleOwner.account.id,
-      personId: consistencyTarget.person.id,
-      taskId: taskA.taskId,
-      nodeId: taskA.milestoneNodeId,
-      startAt: atHour(9.5),
-      endAt: atHour(10.5),
-      allocation: 60,
-      content: "一致性最终安排",
-    });
-    await scanConflictsForPerson({
-      personId: consistencyTarget.person.id,
-      startAt: atHour(8),
-      endAt: atHour(12),
-    });
-    const scannerKinds = await prisma.resourceConflict.findMany({
-      where: { personId: consistencyTarget.person.id },
-      select: { kind: true },
-    });
-    expect(scannerKinds.map((conflict) => conflict.kind)).toContain(
-      "ALLOCATION_OVER_LIMIT",
-    );
-  });
-
   test("empty canvases retain safe rows without fabricating time objects", async () => {
     const person = await createAccountPerson("空画布人员");
     const personal = await getTimeCanvasData({
@@ -2959,12 +2117,10 @@ test.describe("S2 canvas query security", () => {
       input: canvasInput({
         scope: { kind: "PERSONAL" },
         groupBy: "PERSON",
-        includeConflicts: true,
       }),
     });
     expect(personal.rows.map((row) => row.id)).toEqual([person.person.id]);
     expect(personal.segments).toEqual([]);
-    expect(personal.conflicts).toEqual([]);
     expect(personal.anchors).toEqual([]);
     expect(personal.nextCursor).toBeNull();
 
@@ -2973,235 +2129,12 @@ test.describe("S2 canvas query security", () => {
       input: canvasInput({
         scope: { kind: "DASHBOARD" },
         groupBy: "TASK",
-        includeConflicts: true,
       }),
     });
     expect(taskGrouped.rows).toEqual([]);
     expect(taskGrouped.segments).toEqual([]);
-    expect(taskGrouped.conflicts).toEqual([]);
     expect(taskGrouped.anchors).toEqual([]);
     expect(taskGrouped.nextCursor).toBeNull();
-  });
-
-  test("extracted conflict detection preserves P5 statuses, rules, severity, evidence, merge keys, fingerprint and explanation", async () => {
-    expect(ACTIVE_PLANNED_CONFLICT_STATUSES).toEqual([
-      "PLANNED",
-      "IN_PROGRESS",
-      "PENDING_CONFIRMATION",
-    ]);
-    const personId = "detector-person";
-    const segments: ConflictDetectionSegment[] = [
-      detectionSegment("allocation-z", 9, 10, {
-        status: "PLANNED",
-        allocation: 60,
-      }),
-      detectionSegment("allocation-a", 9, 10, {
-        status: "IN_PROGRESS",
-        allocation: 60,
-      }),
-      detectionSegment("allocation-m", 9, 10, {
-        status: "PENDING_CONFIRMATION",
-        allocation: 60,
-      }),
-      detectionSegment("planned-confirmed-excluded", 9, 10, {
-        status: "CONFIRMED",
-        allocation: 100,
-      }),
-      detectionSegment("planned-cancelled-excluded", 9, 10, {
-        status: "CANCELLED",
-        allocation: 100,
-      }),
-      detectionSegment("allocation-high-b", 8, 8.5, { allocation: 60 }),
-      detectionSegment("allocation-high-a", 8, 8.5, { allocation: 60 }),
-      detectionSegment("missing-b", 10, 11, { allocation: null }),
-      detectionSegment("missing-a", 10, 11, { allocation: 40 }),
-      detectionSegment("priority-b", 11, 12, { priority: "HIGH" }),
-      detectionSegment("priority-a", 11, 12, { priority: "CRITICAL" }),
-      detectionSegment("lead-b", 12, 13, {
-        role: "OWNER",
-        taskId: "task-b",
-      }),
-      detectionSegment("lead-a", 12, 13, {
-        role: "LEAD",
-        taskId: "task-a",
-      }),
-      detectionSegment("revision-b", 13, 14, {
-        associationNeedsReview: true,
-      }),
-      detectionSegment("revision-a", 13, 14),
-      detectionSegment("actual-b", 14, 15, {
-        type: "ACTUAL",
-        status: "CONFIRMED",
-        allocation: 80,
-      }),
-      detectionSegment("actual-a", 14, 15, {
-        type: "ACTUAL",
-        status: "CONFIRMED",
-        allocation: 70,
-      }),
-      detectionSegment("actual-unconfirmed-excluded", 14, 15, {
-        type: "ACTUAL",
-        status: "PLANNED",
-        allocation: 100,
-      }),
-      detectionSegment("merge-b", 16, 19, { priority: "HIGH" }),
-      detectionSegment("merge-a", 16, 19, { priority: "CRITICAL" }),
-      detectionSegment("merge-low-boundary", 16.5, 18.5),
-      detectionSegment("merge-key-change", 17, 18, { priority: "HIGH" }),
-    ];
-    const detected = detectResourceConflictsForSegments(
-      personId,
-      { startAt: atHour(7), endAt: atHour(20) },
-      segments,
-    );
-    const allocationCritical = findDetectedConflict(
-      detected,
-      "ALLOCATION_OVER_LIMIT",
-      9,
-    );
-    expect(allocationCritical.severity).toBe("CRITICAL");
-    expect(allocationCritical.segmentIds).toEqual([
-      "allocation-a",
-      "allocation-m",
-      "allocation-z",
-    ]);
-    expect(allocationCritical.evidenceSegmentIds).toEqual([
-      "allocation-z",
-      "allocation-a",
-      "allocation-m",
-    ]);
-    expect(allocationCritical.allocationTotal).toBe(180);
-    expect(
-      findDetectedConflict(detected, "ALLOCATION_OVER_LIMIT", 8).severity,
-    ).toBe("HIGH");
-
-    const missing = findDetectedConflict(detected, "MISSING_ALLOCATION", 10);
-    expect(missing.severity).toBe("MEDIUM");
-    expect(missing.segmentIds).toEqual(["missing-a", "missing-b"]);
-    expect(missing.evidenceSegmentIds).toEqual(["missing-b", "missing-a"]);
-    expect(missing.missingAllocationSegmentIds).toEqual(["missing-b"]);
-    expect(
-      findDetectedConflict(detected, "HIGH_PRIORITY_OVERLAP", 11).severity,
-    ).toBe("CRITICAL");
-    expect(findDetectedConflict(detected, "LEAD_ROLE_OVERLAP", 12).severity).toBe(
-      "HIGH",
-    );
-    expect(findDetectedConflict(detected, "REVISION_OVERLAP", 13).severity).toBe(
-      "MEDIUM",
-    );
-    expect(findDetectedConflict(detected, "ACTUAL_OVERLOAD", 14).severity).toBe(
-      "HIGH",
-    );
-    const mergeConflicts = detected.filter(
-      (conflict) =>
-        conflict.kind === "HIGH_PRIORITY_OVERLAP" &&
-        conflict.startAt >= atHour(16),
-    );
-    expect(
-      mergeConflicts.map((conflict) => ({
-        startAt: conflict.startAt.toISOString(),
-        endAt: conflict.endAt.toISOString(),
-        segmentIds: conflict.segmentIds,
-      })),
-    ).toEqual([
-      {
-        startAt: atHour(16).toISOString(),
-        endAt: atHour(17).toISOString(),
-        segmentIds: ["merge-a", "merge-b"],
-      },
-      {
-        startAt: atHour(17).toISOString(),
-        endAt: atHour(18).toISOString(),
-        segmentIds: ["merge-a", "merge-b", "merge-key-change"],
-      },
-      {
-        startAt: atHour(18).toISOString(),
-        endAt: atHour(19).toISOString(),
-        segmentIds: ["merge-a", "merge-b"],
-      },
-    ]);
-
-    const persistedPerson = await createAccountPerson("P5 抽取持久化人员");
-    const first = await createSegment({
-      accountId: persistedPerson.account.id,
-      personId: persistedPerson.person.id,
-      startAt: atHour(9),
-      endAt: atHour(10),
-      allocation: 70,
-      content: "P5 证据 first",
-    });
-    const second = await createSegment({
-      accountId: persistedPerson.account.id,
-      personId: persistedPerson.person.id,
-      startAt: atHour(9.5),
-      endAt: atHour(10.5),
-      allocation: 60,
-      content: "P5 证据 second",
-    });
-    await scanConflictsForPerson({
-      personId: persistedPerson.person.id,
-      startAt: atHour(8),
-      endAt: atHour(12),
-    });
-    const persisted = await prisma.resourceConflict.findFirstOrThrow({
-      where: {
-        personId: persistedPerson.person.id,
-        kind: "ALLOCATION_OVER_LIMIT",
-      },
-      select: {
-        kind: true,
-        severity: true,
-        startAt: true,
-        endAt: true,
-        fingerprint: true,
-        explanation: true,
-        segments: { select: { segmentId: true } },
-      },
-    });
-    const sortedIds = [first.id, second.id].sort();
-    expect(persisted.severity).toBe("HIGH");
-    expect(persisted.segments.map((entry) => entry.segmentId).sort()).toEqual(
-      sortedIds,
-    );
-    expect(persisted.fingerprint).toBe(
-      expectedConflictFingerprint({
-        kind: persisted.kind,
-        personId: persistedPerson.person.id,
-        startAt: persisted.startAt,
-        endAt: persisted.endAt,
-        segmentIds: sortedIds,
-      }),
-    );
-    expect(persisted.explanation).toEqual({
-      kind: "ALLOCATION_OVER_LIMIT",
-      reason: "Planned Allocation 合计 130% 超过 100%",
-      startAt: atHour(9.5).toISOString(),
-      endAt: atHour(10).toISOString(),
-      segmentIds: sortedIds,
-      segments: [
-        {
-          id: first.id,
-          content: "P5 证据 first",
-          type: "PLANNED",
-          status: "PLANNED",
-          allocation: 70,
-          priority: "MEDIUM",
-          role: "DEVELOPER",
-          taskId: null,
-        },
-        {
-          id: second.id,
-          content: "P5 证据 second",
-          type: "PLANNED",
-          status: "PLANNED",
-          allocation: 60,
-          priority: "MEDIUM",
-          role: "DEVELOPER",
-          taskId: null,
-        },
-      ],
-      allocationTotal: 130,
-    });
   });
 
   test("dashboard basis contains only the actor's visible active work and own unread notifications", async () => {
@@ -3395,7 +2328,6 @@ async function createSegment({
   status = type === "ACTUAL" ? "CONFIRMED" : "PLANNED",
   startAt,
   endAt,
-  allocation = 50,
   content = "S2 查询 Segment",
   role = "DEVELOPER",
   priority = "MEDIUM",
@@ -3416,7 +2348,6 @@ async function createSegment({
     | "CANCELLED";
   startAt: Date;
   endAt: Date;
-  allocation?: number | null;
   content?: string;
   role?: "OWNER" | "LEAD" | "DEVELOPER";
   priority?: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
@@ -3432,7 +2363,6 @@ async function createSegment({
       startAt,
       endAt,
       content,
-      allocation: allocation === null ? null : new Prisma.Decimal(allocation),
       role,
       priority,
       taskId,
@@ -3580,7 +2510,6 @@ async function createAnchorTaskBatch({
         startAt: atHour(9),
         endAt: atHour(10),
         content: `${task.title} anchor candidate`,
-        allocation: new Prisma.Decimal(1),
         role: "DEVELOPER" as const,
         priority: "LOW" as const,
         taskId: task.id,
@@ -3618,36 +2547,6 @@ async function createSegmentsInChunks(
       data: rows.slice(offset, offset + 1_000),
     });
   }
-}
-
-async function createConflict({
-  personId,
-  segmentIds,
-  severity,
-  fingerprint,
-  startAt = atHour(9.5),
-  endAt = atHour(10.5),
-}: {
-  personId: string;
-  segmentIds: string[];
-  severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
-  fingerprint: string;
-  startAt?: Date;
-  endAt?: Date;
-}) {
-  return prisma.resourceConflict.create({
-    data: {
-      personId,
-      kind: "ALLOCATION_OVER_LIMIT",
-      startAt,
-      endAt,
-      severity,
-      status: "OPEN",
-      fingerprint,
-      explanation: { forbidden: "raw explanation must not reach canvas" },
-      segments: { create: segmentIds.map((segmentId) => ({ segmentId })) },
-    },
-  });
 }
 
 async function createTag(
@@ -3716,7 +2615,6 @@ function canvasInput(
     includeTaskAnchors: true,
     includeActual: true,
     includeBusyBlocks: false,
-    includeConflicts: false,
     ...overrides,
   };
 }
@@ -3745,44 +2643,6 @@ async function serviceErrorOf(promise: Promise<unknown>) {
   throw new Error("预期服务调用失败，但调用成功");
 }
 
-async function previewWriteState(personId: string) {
-  const [
-    conflicts,
-    conflictSegments,
-    changes,
-    audits,
-    notifications,
-    outbox,
-    segments,
-  ] = await Promise.all([
-    prisma.resourceConflict.count(),
-    prisma.conflictSegment.count(),
-    prisma.workSegmentChange.count(),
-    prisma.domainAuditEvent.count(),
-    prisma.inAppNotification.count(),
-    prisma.notificationOutbox.count(),
-    prisma.workSegment.findMany({
-      where: { personId },
-      select: { id: true, updatedAt: true, startAt: true, endAt: true },
-      orderBy: { id: "asc" },
-    }),
-  ]);
-  return {
-    conflicts,
-    conflictSegments,
-    changes,
-    audits,
-    notifications,
-    outbox,
-    segments: segments.map((segment) => ({
-      id: segment.id,
-      updatedAt: segment.updatedAt.toISOString(),
-      startAt: segment.startAt.toISOString(),
-      endAt: segment.endAt.toISOString(),
-    })),
-  };
-}
-
 function fullSegmentIds(
   data: Awaited<ReturnType<typeof getTimeCanvasData>>,
 ): string[] {
@@ -3791,86 +2651,11 @@ function fullSegmentIds(
   );
 }
 
-function visibleConflictIds(
-  data: Awaited<ReturnType<typeof getTimeCanvasData>>,
-): string[] {
-  return data.conflicts.flatMap((conflict) =>
-    conflict.visibility === "VISIBLE" ? [conflict.id] : [],
-  );
-}
-
 function rowCanCreate(
   data: Awaited<ReturnType<typeof getTimeCanvasData>>,
   rowId: string,
 ): boolean | undefined {
   return data.rows.find((row) => row.id === rowId)?.capabilities.canCreateSegment;
-}
-
-function visibleConflictReasons(
-  preview: Awaited<ReturnType<typeof previewSegmentPlacement>>,
-): string[] {
-  return preview.conflicts.flatMap((conflict) =>
-    conflict.visibility === "VISIBLE" ? [conflict.reason] : [],
-  );
-}
-
-function detectionSegment(
-  id: string,
-  startHour: number,
-  endHour: number,
-  overrides: Partial<
-    Omit<ConflictDetectionSegment, "id" | "startAt" | "endAt">
-  > = {},
-): ConflictDetectionSegment {
-  return {
-    id,
-    type: "PLANNED",
-    status: "PLANNED",
-    startAt: atHour(startHour),
-    endAt: atHour(endHour),
-    allocation: 20,
-    priority: "LOW",
-    role: "DEVELOPER",
-    taskId: null,
-    associationNeedsReview: false,
-    deleted: false,
-    ...overrides,
-  };
-}
-
-function findDetectedConflict(
-  conflicts: ReturnType<typeof detectResourceConflictsForSegments>,
-  kind: ReturnType<typeof detectResourceConflictsForSegments>[number]["kind"],
-  startHour: number,
-) {
-  const conflict = conflicts.find(
-    (candidate) =>
-      candidate.kind === kind &&
-      candidate.startAt.getTime() === atHour(startHour).getTime(),
-  );
-  if (!conflict) throw new Error(`未找到 ${kind} @ ${startHour}`);
-  return conflict;
-}
-
-function expectedConflictFingerprint(input: {
-  kind: string;
-  personId: string;
-  startAt: Date;
-  endAt: Date;
-  segmentIds: string[];
-}): string {
-  return createHash("sha256")
-    .update(
-      [
-        "v1",
-        input.kind,
-        input.personId,
-        input.startAt.toISOString(),
-        input.endAt.toISOString(),
-        [...input.segmentIds].sort().join(","),
-      ].join("|"),
-    )
-    .digest("hex");
 }
 
 type TaskMemberRoleInput =

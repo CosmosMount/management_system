@@ -39,7 +39,6 @@ export function ResourceFilterBar({
     tagIds: string[];
     types: Array<"PLANNED" | "ACTUAL">;
     statuses: SegmentStatus[];
-    conflictOnly: boolean;
   };
   initialPeople: PersonOption[];
   initialTasks: TaskOption[];
@@ -58,7 +57,6 @@ export function ResourceFilterBar({
   const [from, setFrom] = useState(initial.from);
   const [to, setTo] = useState(initial.to);
   const [groupBy, setGroupBy] = useState(initial.groupBy);
-  const [conflictOnly, setConflictOnly] = useState(initial.conflictOnly);
   const [personQuery, setPersonQuery] = useState("");
   const [taskQuery, setTaskQuery] = useState("");
   const [tagQuery, setTagQuery] = useState("");
@@ -75,7 +73,6 @@ export function ResourceFilterBar({
     setList(params, "tags", tagIds);
     setList(params, "types", types.map((value) => value.toLowerCase()));
     setList(params, "statuses", statuses.map((value) => value.toLowerCase()));
-    if (conflictOnly) params.set("conflict", "open");
     router.push(`/progress/resources?${params.toString()}`);
   };
 
@@ -137,7 +134,6 @@ export function ResourceFilterBar({
             setTagIds([]);
             setTypes([]);
             setStatuses([]);
-            setConflictOnly(false);
           }}
         >
           <X aria-hidden="true" />清除筛选
@@ -208,10 +204,6 @@ export function ResourceFilterBar({
           values={statuses}
           onToggle={(value) => setStatuses((current) => toggle(current, value as SegmentStatus))}
         />
-        <label className="flex items-center gap-2 rounded-lg border border-border px-3 py-2">
-          <input type="checkbox" checked={conflictOnly} onChange={(event) => setConflictOnly(event.target.checked)} />
-          只看冲突
-        </label>
       </div>
 
       <div className="flex flex-wrap gap-2" aria-label="已选筛选">

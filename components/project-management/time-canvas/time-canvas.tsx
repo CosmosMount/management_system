@@ -12,7 +12,6 @@ import {
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
-  AlertTriangle,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -42,7 +41,6 @@ import {
 import { layoutIntervalLanes, layoutPointLanes } from "@/components/project-management/time-canvas/lane-layout";
 import type {
   TimeCanvasAnchor,
-  TimeCanvasConflict,
   TimeCanvasDisplayOptions,
   TimeCanvasInteractionOptions,
   TimeCanvasProps,
@@ -79,7 +77,6 @@ export function TimeCanvas({
   const display: Required<TimeCanvasDisplayOptions> = {
     showActual: displayInput?.showActual ?? true,
     showBusy: displayInput?.showBusy ?? true,
-    showConflicts: displayInput?.showConflicts ?? true,
     showInspector: displayInput?.showInspector ?? true,
   };
   const [zoom, setZoom] = useState<TimeCanvasZoom>(
@@ -106,27 +103,11 @@ export function TimeCanvas({
     [filteredSegments],
   );
   const anchorsByRow = useMemo(() => groupByRow(model.anchors), [model.anchors]);
-  const conflictsByRow = useMemo(
-    () =>
-      groupByRow(
-        display.showConflicts
-          ? model.conflicts.filter(
-              (conflict): conflict is TimeCanvasConflict & { rowId: string } =>
-                conflict.visibility === "VISIBLE" && conflict.rowId !== null,
-            )
-          : [],
-      ),
-    [display.showConflicts, model.conflicts],
-  );
   const generatedAtMs = Date.parse(model.generatedAt);
   const focusTargets = useMemo(
     () =>
-      buildCanvasFocusTargets(
-        model,
-        filteredSegments,
-        display.showConflicts,
-      ),
-    [display.showConflicts, filteredSegments, model],
+      buildCanvasFocusTargets(model, filteredSegments),
+    [filteredSegments, model],
   );
   const currentFocusKey =
     activeFocusKey && focusTargets.some((target) => target.key === activeFocusKey)
@@ -303,10 +284,6 @@ export function TimeCanvas({
   );
 
   const selectedEntity = resolveSelection(model, selection);
-  const hiddenConflictObjectCount = model.conflicts
-    .filter((conflict) => conflict.visibility === "HIDDEN")
-    .reduce((total, conflict) => total + conflict.hiddenSegmentCount, 0);
-
   return (
     <section
       className="min-w-0 max-w-full"
@@ -318,7 +295,6 @@ export function TimeCanvas({
       <TimeCanvasToolbar
         model={model}
         zoom={zoom}
-        hiddenConflictObjectCount={display.showConflicts ? hiddenConflictObjectCount : 0}
         canChangeRange={Boolean(onRangeChange)}
         canGoToday={
           generatedAtMs >= model.range.startMs &&
@@ -417,7 +393,6 @@ export function TimeCanvas({
                           dayStripes={dayStripes}
                           segments={segmentsByRow.get(row.id) ?? []}
                           anchors={anchorsByRow.get(row.id) ?? []}
-                          conflicts={conflictsByRow.get(row.id) ?? []}
                           nowMs={generatedAtMs}
                           selection={selection}
                           activeFocusKey={currentFocusKey}
@@ -464,7 +439,6 @@ function mobileAgendaSnapshot() {
 function TimeCanvasToolbar({
   model,
   zoom,
-  hiddenConflictObjectCount,
   canChangeRange,
   canGoToday,
   onPrevious,
@@ -475,7 +449,6 @@ function TimeCanvasToolbar({
 }: {
   model: TimeCanvasProps["model"];
   zoom: TimeCanvasZoom;
-  hiddenConflictObjectCount: number;
   canChangeRange: boolean;
   canGoToday: boolean;
   onPrevious: () => void;
@@ -529,12 +502,6 @@ function TimeCanvasToolbar({
         <RotateCcw aria-hidden="true" />
         适应范围
       </Button>
-      {hiddenConflictObjectCount > 0 && (
-        <Badge variant="destructive" aria-label={`${hiddenConflictObjectCount} 个受限对象涉及冲突`}>
-          <AlertTriangle aria-hidden="true" />
-          {hiddenConflictObjectCount} 个受限对象
-        </Badge>
-      )}
       <div className="hidden items-center gap-2 text-xs text-muted-foreground xl:flex" aria-label="图例">
         <span>░ Planned</span>
         <span>■ Actual</span>
@@ -617,7 +584,6 @@ function TimelineRow({
   dayStripes,
   segments,
   anchors,
-  conflicts,
   nowMs,
   selection,
   activeFocusKey,
@@ -631,7 +597,6 @@ function TimelineRow({
   dayStripes: number[];
   segments: TimeCanvasSegment[];
   anchors: TimeCanvasAnchor[];
-  conflicts: Array<TimeCanvasConflict & { rowId: string }>;
   nowMs: number;
   selection: TimeCanvasSelection;
   activeFocusKey: string | null;
@@ -801,27 +766,6 @@ function TimelineRow({
         />
       ))}
 
-      {conflicts
-        .filter(
-          (conflict) =>
-            conflict.startMs !== null &&
-            conflict.endMs !== null &&
-            rangesIntersect(
-              { startMs: conflict.startMs, endMs: conflict.endMs },
-              visibleWindow,
-            ),
-        )
-        .map((conflict) => (
-          <ConflictOverlay
-            key={conflict.id}
-            conflict={conflict}
-            scale={scale}
-            selected={selection?.kind === "CONFLICT" && selection.id === conflict.id}
-            activeFocusKey={activeFocusKey}
-            onSelect={onSelect}
-            onObjectFocus={onObjectFocus}
-          />
-        ))}
       <TodayLine scale={scale} nowMs={nowMs} />
     </div>
   );
@@ -993,7 +937,6 @@ function SegmentBlock({
           "border border-slate-400 bg-[repeating-linear-gradient(135deg,var(--muted),var(--muted)_4px,var(--background)_4px,var(--background)_8px)] text-foreground",
         selected && "ring-2 ring-primary ring-offset-1",
         multiSelected && "ring-2 ring-amber-500 ring-offset-1",
-        segment.conflictIds.length > 0 && "border-t-4 border-t-destructive",
         transform && "cursor-grabbing opacity-80",
       )}
       style={{ left: rect.left, width: rect.width, top: 8 + lane * 24 }}
@@ -1122,7 +1065,6 @@ function SegmentBlock({
       )}
       {segment.associationNeedsReview && <Link2Off className="size-3 shrink-0" aria-hidden="true" />}
       <span className="truncate">{segment.title}</span>
-      {segment.allocation !== null && <span className="ml-auto shrink-0">{segment.allocation}%</span>}
       {segment.permissions.canResize && interaction?.onSegmentTransform && (
         <span
           className="absolute inset-y-0 right-0 w-2 cursor-ew-resize"
@@ -1188,46 +1130,6 @@ function AnchorMarker({
   );
 }
 
-function ConflictOverlay({
-  conflict,
-  scale,
-  selected,
-  activeFocusKey,
-  onSelect,
-  onObjectFocus,
-}: {
-  conflict: TimeCanvasConflict & { rowId: string };
-  scale: ReturnType<typeof createTimeScale>;
-  selected: boolean;
-  activeFocusKey: string | null;
-  onSelect: (selection: TimeCanvasSelection) => void;
-  onObjectFocus: (key: string) => void;
-}) {
-  if (conflict.startMs === null || conflict.endMs === null) return null;
-  const rect = intervalToRect(conflict.startMs, conflict.endMs, scale);
-  const focusKey = conflictFocusKey(conflict.id);
-  return (
-    <button
-      type="button"
-      className={cn(
-        "absolute top-0 z-30 flex h-4 items-center justify-end overflow-hidden border-t-2 border-destructive bg-destructive/10 px-0.5 text-destructive outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        selected && "ring-2 ring-destructive",
-      )}
-      style={{ left: rect.left, width: Math.max(16, rect.width) }}
-      aria-pressed={selected}
-      aria-label={`资源冲突，严重度 ${conflict.severity}，${formatRange(conflict.startMs, conflict.endMs)}`}
-      onClick={() => onSelect(selected ? null : { kind: "CONFLICT", id: conflict.id })}
-      onFocus={() => onObjectFocus(focusKey)}
-      tabIndex={activeFocusKey === focusKey ? 0 : -1}
-      data-canvas-object
-      data-canvas-object-key={focusKey}
-      data-testid={`conflict-overlay-${conflict.id}`}
-    >
-      <AlertTriangle className="size-3" aria-hidden="true" />
-    </button>
-  );
-}
-
 function TodayLine({
   scale,
   nowMs,
@@ -1250,8 +1152,7 @@ function TodayLine({
 
 type SelectedEntity =
   | { kind: "ANCHOR"; value: TimeCanvasAnchor }
-  | { kind: "SEGMENT"; value: TimeCanvasSegment }
-  | { kind: "CONFLICT"; value: TimeCanvasConflict };
+  | { kind: "SEGMENT"; value: TimeCanvasSegment };
 
 function TimeCanvasInspector({
   entity,
@@ -1287,24 +1188,11 @@ function InspectorBody({ entity }: { entity: SelectedEntity }) {
       </dl>
     );
   }
-  if (entity.kind === "CONFLICT") {
-    return (
-      <dl className="mt-4 grid gap-3 text-sm">
-        <Detail label="严重度" value={entity.value.severity} />
-        <Detail label="状态" value={entity.value.status ?? "详情受限"} />
-        <Detail label="规则" value={entity.value.reason ?? "隐藏冲突摘要"} />
-        {entity.value.startMs !== null && entity.value.endMs !== null && (
-          <Detail label="区间" value={formatRange(entity.value.startMs, entity.value.endMs)} />
-        )}
-      </dl>
-    );
-  }
   const segment = entity.value;
   return (
     <dl className="mt-4 grid gap-3 text-sm">
       <Detail label="类型与状态" value={segment.type === "BUSY" ? "其他占用（详情受限）" : `${segment.type} · ${segment.status}`} />
       <Detail label="区间" value={formatRange(segment.startMs, segment.endMs)} />
-      <Detail label="投入比例" value={segment.allocation === null ? "未提供" : `${segment.allocation}%`} />
       {segment.visibility === "FULL" && (
         <>
           <Detail label="优先级" value={segment.priority ?? "未提供"} />
@@ -1338,8 +1226,7 @@ function resolveSelection(
     const value = model.segments.find((segment) => segment.id === selection.id);
     return value ? { kind: "SEGMENT", value } : null;
   }
-  const value = model.conflicts.find((conflict) => conflict.id === selection.id);
-  return value ? { kind: "CONFLICT", value } : null;
+  return null;
 }
 
 type CanvasFocusTarget = {
@@ -1351,7 +1238,6 @@ type CanvasFocusTarget = {
 function buildCanvasFocusTargets(
   model: TimeCanvasProps["model"],
   segments: TimeCanvasSegment[],
-  showConflicts: boolean,
 ): CanvasFocusTarget[] {
   const rowIndexById = new Map(
     model.rows.map((row, rowIndex) => [row.id, rowIndex]),
@@ -1397,30 +1283,6 @@ function buildCanvasFocusTargets(
       rowIndex,
       atMs: anchor.atMs,
     });
-  }
-
-  if (showConflicts) {
-    for (const conflict of model.conflicts) {
-      if (
-        conflict.visibility !== "VISIBLE" ||
-        conflict.rowId === null ||
-        conflict.startMs === null ||
-        conflict.endMs === null ||
-        !rangesIntersect(
-          { startMs: conflict.startMs, endMs: conflict.endMs },
-          model.range,
-        )
-      ) {
-        continue;
-      }
-      const rowIndex = rowIndexById.get(conflict.rowId);
-      if (rowIndex === undefined) continue;
-      targets.push({
-        key: conflictFocusKey(conflict.id),
-        rowIndex,
-        atMs: conflict.startMs,
-      });
-    }
   }
 
   return targets.sort(
@@ -1478,10 +1340,6 @@ function segmentFocusKey(id: string) {
 
 function anchorFocusKey(id: string) {
   return `anchor:${id}`;
-}
-
-function conflictFocusKey(id: string) {
-  return `conflict:${id}`;
 }
 
 function overflowFocusKey(rowId: string, placementId: string) {
@@ -1579,24 +1437,18 @@ function selectionAnnouncement(entity: SelectedEntity) {
   if (entity.kind === "ANCHOR") {
     return `已选中计划节点 ${entity.value.label}，${formatDateTime(entity.value.atMs)}`;
   }
-  if (entity.kind === "CONFLICT") {
-    return `已选中资源冲突，严重度 ${entity.value.severity}`;
-  }
   return `已选中${entity.value.type === "BUSY" ? "其他占用" : entity.value.title}，${formatRange(entity.value.startMs, entity.value.endMs)}`;
 }
 
 function entityTitle(entity: SelectedEntity) {
   if (entity.kind === "ANCHOR") return entity.value.label;
-  if (entity.kind === "CONFLICT") return "资源冲突";
   return entity.value.title;
 }
 
 function segmentAriaLabel(segment: TimeCanvasSegment) {
   const type = segment.type === "BUSY" ? "其他占用" : segment.type;
-  const allocation = segment.allocation === null ? "未提供投入比例" : `投入 ${segment.allocation}%`;
   const association = segment.associationNeedsReview ? "，关联需要复核" : "";
-  const conflict = segment.conflictIds.length > 0 ? "，存在冲突" : "";
-  return `${type} ${segment.title}，${formatRange(segment.startMs, segment.endMs)}，${allocation}${association}${conflict}`;
+  return `${type} ${segment.title}，${formatRange(segment.startMs, segment.endMs)}${association}`;
 }
 
 const dateFormatter = new Intl.DateTimeFormat("zh-CN", {

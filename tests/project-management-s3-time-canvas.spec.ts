@@ -176,7 +176,6 @@ test.describe("S3 TimeCanvas pure core", () => {
         group: "task",
         people: ids.join(","),
         types: "planned,actual",
-        conflict: "open",
         focus: uuid(99),
       }),
       RANGE,
@@ -238,11 +237,10 @@ test.describe("S3 TimeCanvas pure core", () => {
       rows: [],
       anchors: [],
       segments: [],
-      conflicts: [],
     });
   });
 
-  test("DTO adapter preserves Busy response-level privacy and hidden conflict summary", () => {
+  test("DTO adapter preserves Busy response-level privacy", () => {
     const personId = uuid(1);
     const data = timeCanvasDataDtoSchema.parse({
       scope: { kind: "RESOURCE_PLANNER" },
@@ -269,23 +267,6 @@ test.describe("S3 TimeCanvas pure core", () => {
           personId,
           startAt: new Date(RANGE.startMs + DAY_MS).toISOString(),
           endAt: new Date(RANGE.startMs + 2 * DAY_MS).toISOString(),
-          allocation: 50,
-          conflictSummary: { count: 1, severity: "HIGH" },
-        },
-      ],
-      conflicts: [
-        {
-          kind: "CONFLICT",
-          visibility: "HIDDEN",
-          severity: "HIGH",
-          hiddenSegmentCount: 2,
-          capabilities: {
-            canAcknowledge: false,
-            canResolve: false,
-            canIgnore: false,
-            canPreviewSuggestion: false,
-            canApplySuggestion: false,
-          },
         },
       ],
       nextCursor: null,
@@ -302,13 +283,6 @@ test.describe("S3 TimeCanvas pure core", () => {
     });
     expect(model.segments[0]).not.toHaveProperty("content");
     expect(model.segments[0]).not.toHaveProperty("tags");
-    expect(model.conflicts[0]).toMatchObject({
-      visibility: "HIDDEN",
-      rowId: null,
-      startMs: null,
-      endMs: null,
-      hiddenSegmentCount: 2,
-    });
   });
 
   test("Active plan rails remain read-only even when metadata is editable", () => {
@@ -345,7 +319,6 @@ test.describe("S3 TimeCanvas pure core", () => {
         },
       ],
       segments: [],
-      conflicts: [],
       nextCursor: null,
       generatedAt: versionToken,
     });

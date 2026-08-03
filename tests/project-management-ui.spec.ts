@@ -9,9 +9,6 @@ import {
   createWorkSegment,
 } from "../lib/project-management/application/segment-service";
 import {
-  scanConflictsForPerson,
-} from "../lib/project-management/application/conflict-service";
-import {
   markInAppNotificationRead as markInAppNotificationReadService,
 } from "../lib/project-management/application/notification-service";
 import {
@@ -392,7 +389,7 @@ test.describe("project management P4/P6 UI integration", () => {
     ]);
   });
 
-  test("dashboard, Task workbench, resource timeline, conflicts and notifications work", async ({
+  test("dashboard, Task workbench, resource timeline and notifications work", async ({
     context,
     page,
     baseURL,
@@ -412,6 +409,7 @@ test.describe("project management P4/P6 UI integration", () => {
       page.getByRole("link", { name: fixture.taskTitle, exact: true }),
     ).toBeVisible();
     await expect(page.getByText("未读通知")).toBeVisible();
+    await expect(page.getByRole("link", { name: "资源冲突" })).toHaveCount(0);
     await expectHealthyPage(page);
 
     await page.goto("/progress/tasks?mine=1");
@@ -430,6 +428,8 @@ test.describe("project management P4/P6 UI integration", () => {
     );
     await expect(page.getByRole("heading", { name: "人员计划" })).toBeVisible();
     await expect(page.getByTestId("time-canvas-root")).toBeVisible();
+    await expect(page.getByText("只看冲突")).toHaveCount(0);
+    await expect(page.getByText("投入比例")).toHaveCount(0);
     if (testInfo.project.name === "desktop") {
       await page.goto(
         `/progress/resources?from=2026-08-10&to=2026-08-12&people=${fixture.reviewer.person.id}&zoom=hour`,
@@ -451,6 +451,7 @@ test.describe("project management P4/P6 UI integration", () => {
       await page.mouse.up();
       const brushCreate = page.getByRole("form", { name: "投入快速创建" });
       await expect(brushCreate).toBeVisible();
+      await expect(brushCreate.getByLabel("投入比例")).toHaveCount(0);
       await brushCreate.getByLabel("Task 搜索关键词").fill(fixture.taskTitle);
       await brushCreate
         .getByRole("button", { name: "搜索可关联 Task" })
@@ -610,6 +611,7 @@ test.describe("project management P4/P6 UI integration", () => {
       await page.getByTestId(`segment-block-${fixture.movableSegmentId}`).click();
       const movedInspector = page.getByTestId("segment-inspector");
       await expect(movedInspector.getByRole("heading", { name: "P6 UI 制造 stale 后仍可重试" })).toBeVisible();
+      await expect(movedInspector.getByLabel("投入比例")).toHaveCount(0);
       await movedInspector.getByLabel("职责", { exact: true }).selectOption("CUSTOM");
       await movedInspector.getByLabel("自定义职责").fill("跨域协调");
       await movedInspector.getByLabel("内容").fill("P6 UI Inspector 更新不覆盖画布时间");
@@ -665,6 +667,7 @@ test.describe("project management P4/P6 UI integration", () => {
       await expect(page.getByTestId("time-agenda")).toBeVisible();
       await page.getByRole("button", { name: "新增投入" }).click();
       const quickCreate = page.getByRole("form", { name: "投入快速创建" });
+      await expect(quickCreate.getByLabel("投入比例")).toHaveCount(0);
       await quickCreate.getByLabel("内容").fill(fixture.mobileCreateContent);
       const actionUrl = "**/progress/resources**";
       let actionAborted = false;
@@ -715,23 +718,6 @@ test.describe("project management P4/P6 UI integration", () => {
       .toBe("CONFIRMED");
     await expectHealthyPage(page);
     expect(pageErrors).toEqual([]);
-
-    await page.goto("/progress/resources/conflicts");
-    await expect(page.getByRole("heading", { name: "资源冲突" })).toBeVisible();
-    await expect(page.getByText("投入超过 100%").first()).toBeVisible();
-    await page.getByRole("button", { name: "确认已知" }).click();
-    await expect(page.getByText("已确认知晓该冲突")).toBeVisible();
-    await expect
-      .poll(async () => {
-        return prisma.resourceConflict.count({
-          where: {
-            personId: fixture.member.person.id,
-            status: "ACKNOWLEDGED",
-          },
-        });
-      })
-      .toBeGreaterThan(0);
-    await expectHealthyPage(page);
 
     await page.goto("/progress/notifications");
     await expect(page.getByRole("heading", { name: "站内通知" })).toBeVisible();
@@ -1100,7 +1086,7 @@ test.describe("project management P4/P6 UI integration", () => {
     await expectHealthyPage(page);
   });
 
-  test("S7 resource filters, conflict deep links and personal timeline work on desktop and mobile", async ({
+  test("S7 resource filters, removed conflict route and personal timeline work on desktop and mobile", async ({
     context,
     page,
     baseURL,
@@ -1137,20 +1123,8 @@ test.describe("project management P4/P6 UI integration", () => {
     await expect(page.getByText(/已复制当前视图链接|无法访问剪贴板/)).toBeVisible();
     await expectHealthyPage(page);
 
-    await page.goto(`/progress/resources/conflicts?status=OPEN&conflictId=${fixture.conflictId}`);
-    await expect(page.getByRole("heading", { name: "资源冲突" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "解释" })).toBeVisible();
-    await expect(page.locator("pre")).toHaveCount(0);
-    const resourceLink = page.getByRole("link", { name: "在资源计划中定位" });
-    await expect(resourceLink).toHaveAttribute(
-      "href",
-      new RegExp(`focus=${fixture.conflictId}`),
-    );
-    await resourceLink.click();
-    await expect(page).toHaveURL(/\/progress\/resources\?/);
-    await expect(page.getByTestId("time-canvas-root")).toContainText(
-      "已选中资源冲突，严重度 HIGH",
-    );
+    const removedConflictPage = await page.goto("/progress/resources/conflicts");
+    expect(removedConflictPage?.status()).toBe(404);
 
     await page.goto(`/progress/my-timeline?focus=${fixture.confirmableSegmentId}&mode=day`);
     await expect(page.getByRole("heading", { name: "我的时间" })).toBeVisible();
@@ -1239,7 +1213,6 @@ async function createUiFixture() {
     startAt: atHour(9),
     endAt: atHour(10),
     content: "P6 UI 可确认计划",
-    allocation: 40,
     role: "DEVELOPER",
     priority: "MEDIUM",
     taskId: draft.taskId,
@@ -1251,8 +1224,7 @@ async function createUiFixture() {
     type: "PLANNED",
     startAt: atHour(10),
     endAt: atHour(11),
-    content: "P6 UI 冲突计划 A",
-    allocation: 80,
+    content: "P6 UI 重叠计划 A",
     role: "DEVELOPER",
     priority: "MEDIUM",
     taskId: draft.taskId,
@@ -1265,7 +1237,6 @@ async function createUiFixture() {
     startAt: atHour(8),
     endAt: atHour(9),
     content: "P6 UI 跨行目标人员安排",
-    allocation: 30,
     role: "LEAD",
     priority: "LOW",
     taskId: draft.taskId,
@@ -1277,8 +1248,7 @@ async function createUiFixture() {
     type: "PLANNED",
     startAt: atHour(10.5),
     endAt: atHour(11.5),
-    content: "P6 UI 冲突计划 B",
-    allocation: 50,
+    content: "P6 UI 重叠计划 B",
     role: "DEVELOPER",
     priority: "MEDIUM",
     taskId: draft.taskId,
@@ -1291,7 +1261,6 @@ async function createUiFixture() {
     startAt: atHour(12),
     endAt: atHour(13),
     content: "P6 UI 批量取消 A",
-    allocation: 20,
     role: "SUPPORT",
     priority: "LOW",
     taskId: draft.taskId,
@@ -1304,24 +1273,11 @@ async function createUiFixture() {
     startAt: atHour(13),
     endAt: atHour(14),
     content: "P6 UI 批量取消 B",
-    allocation: 20,
     role: "SUPPORT",
     priority: "LOW",
     taskId: draft.taskId,
     nodeId: activeNode.nodeId,
     tagIds: [],
-  });
-  await scanConflictsForPerson({
-    personId: member.person.id,
-    startAt: atHour(8),
-    endAt: atHour(12),
-  });
-  const conflict = await prisma.resourceConflict.findFirstOrThrow({
-    where: {
-      personId: member.person.id,
-      kind: "ALLOCATION_OVER_LIMIT",
-      status: "OPEN",
-    },
   });
   const notification = await prisma.inAppNotification.create({
     data: {
@@ -1354,7 +1310,6 @@ async function createUiFixture() {
     ] as const,
     brushCreateContent: `P6 UI 画布拖选创建 ${randomUUID()}`,
     mobileCreateContent: `P6 UI 移动端精确创建 ${randomUUID()}`,
-    conflictId: conflict.id,
     notificationId: notification.id,
   };
 }

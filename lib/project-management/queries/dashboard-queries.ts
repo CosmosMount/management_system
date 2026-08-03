@@ -56,7 +56,6 @@ export async function getMyWorkDashboard({
           includeTaskAnchors: true,
           includeActual: true,
           includeBusyBlocks: false,
-          includeConflicts: true,
           rowLimit: 1,
         },
       }),
@@ -74,13 +73,6 @@ export async function getMyWorkDashboard({
       segment.personId === actor.personId
         ? [segment]
         : [],
-    ),
-    conflicts: personalTime.conflicts.filter(
-      (conflict) =>
-        conflict.visibility === "VISIBLE" ||
-        conflict.capabilities.canAcknowledge ||
-        conflict.capabilities.canResolve ||
-        conflict.capabilities.canIgnore,
     ),
     unreadNotificationCount,
     generatedAt: personalTime.generatedAt,

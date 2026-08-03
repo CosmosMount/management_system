@@ -1,7 +1,4 @@
 import {
-  resourceConflictKindValues,
-  resourceConflictSeverityValues,
-  resourceConflictStatusValues,
   taskPriorityValues,
   workSegmentRoleValues,
   workSegmentStatusValues,
@@ -11,9 +8,6 @@ import { addStructuredProjectManagementIssue } from "@/lib/project-management/va
 import { z } from "zod";
 
 export {
-  resourceConflictKindValues,
-  resourceConflictSeverityValues,
-  resourceConflictStatusValues,
   taskPriorityValues,
   workSegmentRoleValues,
   workSegmentStatusValues,
@@ -85,13 +79,6 @@ export const requiredDate = (message: string) =>
     { error: message },
   );
 
-const allocationSchema = z
-  .number({ message: "投入比例格式不正确" })
-  .gt(0, "投入比例必须大于 0")
-  .max(100, "投入比例不能超过 100")
-  .nullable()
-  .optional();
-
 const completionPercentSchema = z
   .number({ message: "完成比例格式不正确" })
   .min(0, "完成比例不能小于 0")
@@ -149,7 +136,6 @@ const optionalSegmentTimeRangeSchema = z
 const segmentEditableFieldsSchema = z
   .object({
     content: requiredText("请输入工作内容", 2_000),
-    allocation: allocationSchema,
     role: z
       .enum(workSegmentRoleValues, { message: "人员职责不正确" })
       .optional()
@@ -177,7 +163,6 @@ const segmentEditableFieldsSchema = z
 const segmentOverrideFieldsSchema = z
   .object({
     content: requiredText("请输入工作内容", 2_000).optional(),
-    allocation: allocationSchema,
     role: z.enum(workSegmentRoleValues, { message: "人员职责不正确" }).optional(),
     customRole: optionalTextField(100),
     priority: z.enum(taskPriorityValues, { message: "优先级不正确" }).optional(),
@@ -201,6 +186,7 @@ export const createWorkSegmentInputSchema = segmentTimeRangeSchema
     personId: idSchema,
     type: z.enum(workSegmentTypeValues, { message: "投入类型不正确" }),
   })
+  .strict()
   .superRefine((input, ctx) => {
     validateEditableFields(input, ctx);
     if (input.type === "PLANNED" && input.completionPercent != null) {
@@ -240,6 +226,7 @@ export const createActualSegmentInputSchema = segmentTimeRangeSchema
       .optional()
       .default([]),
   })
+  .strict()
   .superRefine((input, ctx) => {
     validateEditableFields(input, ctx);
   });
@@ -254,6 +241,7 @@ export const batchCreatePlannedSegmentsInputSchema = z.object({
           type: z.literal("PLANNED").optional(),
           completionPercent: z.never().optional(),
         })
+        .strict()
         .superRefine((input, ctx) => {
           validateEditableFields(input, ctx);
         }),
@@ -273,6 +261,7 @@ export const updateWorkSegmentInputSchema = z
     associationIntent: z.enum(["KEEP", "RELINK"]).optional().default("KEEP"),
     ...segmentOverrideFieldsSchema.shape,
   })
+  .strict()
   .superRefine((input, ctx) => {
     validateOverrideFields(input, ctx);
     if (input.startAt && input.endAt && input.endAt <= input.startAt) {
@@ -365,6 +354,7 @@ export const splitPlannedSegmentInputSchema = z.object({
       segmentTimeRangeSchema
         .safeExtend(segmentOverrideFieldsSchema.shape)
         .safeExtend({ tagIds: z.array(idSchema).max(50).optional() })
+        .strict()
         .superRefine((input, ctx) => {
           validateOverrideFields(input, ctx);
         }),
@@ -415,6 +405,7 @@ export const confirmPlannedSegmentInputSchema = z.object({
   actual: optionalSegmentTimeRangeSchema
     .safeExtend(segmentOverrideFieldsSchema.shape)
     .safeExtend({ tagIds: z.array(idSchema).max(50).optional() })
+    .strict()
     .superRefine((input, ctx) => {
       validateOverrideFields(input, ctx);
     })
@@ -445,6 +436,7 @@ export const partiallyConfirmSegmentInputSchema = z.object({
   actual: optionalSegmentTimeRangeSchema
     .safeExtend(segmentOverrideFieldsSchema.shape)
     .safeExtend({ tagIds: z.array(idSchema).max(50).optional() })
+    .strict()
     .superRefine((input, ctx) => {
       validateOverrideFields(input, ctx);
     })
@@ -508,106 +500,6 @@ export const listWorkSegmentChangesInputSchema = z.object({
     .default(50),
 });
 
-export const scanConflictsForPersonInputSchema = z
-  .object({
-    personId: idSchema,
-    startAt: requiredDate("请选择有效的扫描开始时间"),
-    endAt: requiredDate("请选择有效的扫描结束时间"),
-  })
-  .superRefine((input, ctx) => {
-    if (input.endAt <= input.startAt) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["endAt"],
-        message: "扫描结束时间必须晚于开始时间",
-      });
-    }
-  });
-
-export const scanResourceConflictsInputSchema = z
-  .object({
-    startAt: requiredDate("请选择有效的扫描开始时间"),
-    endAt: requiredDate("请选择有效的扫描结束时间"),
-    personIds: z.array(idSchema).max(500).optional(),
-  })
-  .superRefine((input, ctx) => {
-    if (input.endAt <= input.startAt) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["endAt"],
-        message: "扫描结束时间必须晚于开始时间",
-      });
-    }
-  });
-
-export const listResourceConflictsInputSchema = z.object({
-  personId: idSchema.optional(),
-  status: z
-    .enum(resourceConflictStatusValues, { message: "冲突状态不正确" })
-    .optional(),
-  kind: z
-    .enum(resourceConflictKindValues, { message: "冲突类型不正确" })
-    .optional(),
-  severity: z
-    .enum(resourceConflictSeverityValues, { message: "冲突严重度不正确" })
-    .optional(),
-  startAt: requiredDate("请选择有效的开始时间").optional(),
-  endAt: requiredDate("请选择有效的结束时间").optional(),
-  cursor: idSchema.optional(),
-  limit: z
-    .number({ message: "分页大小不正确" })
-    .int("分页大小不正确")
-    .min(1, "分页大小不正确")
-    .max(100, "分页大小不能超过 100")
-    .optional()
-    .default(50),
-});
-
-export const getResourceConflictInputSchema = z.object({ conflictId: idSchema });
-
-export const acknowledgeConflictInputSchema = z.object({
-  conflictId: idSchema,
-  note: optionalText(1_000),
-});
-
-export const resolveConflictInputSchema = z.object({
-  conflictId: idSchema,
-  resolutionNote: requiredText("请输入解决说明", 1_000),
-  changedSegmentIds: z
-    .array(idSchema, { message: "调整记录列表格式不正确" })
-    .max(100, "调整记录过多")
-    .optional()
-    .default([]),
-});
-
-export const ignoreConflictInputSchema = z.object({
-  conflictId: idSchema,
-  reason: requiredText("请输入忽略原因", 1_000),
-  ignoredUntil: requiredDate("请选择有效的忽略截止时间"),
-});
-
-export const previewConflictSuggestionInputSchema = z.object({
-  conflictId: idSchema,
-});
-
-export const applyConflictSuggestionInputSchema = z.object({
-  conflictId: idSchema,
-  confirmApply: z.literal(true, {
-    message: "应用建议前必须明确确认",
-  }),
-  proposal: z.object({
-    proposalId: requiredText("建议 ID 不正确", 120),
-    moves: z.array(
-      z.object({
-        segmentId: idSchema,
-        expectedUpdatedAt: requiredDate("记录版本不正确"),
-        startAt: requiredDate("请选择有效的开始时间"),
-        endAt: requiredDate("请选择有效的结束时间"),
-      }),
-    ),
-  }),
-});
-
 export type CreateWorkSegmentInput = z.infer<typeof createWorkSegmentInputSchema>;
 export type CreateActualSegmentInput = z.infer<
   typeof createActualSegmentInputSchema
@@ -640,16 +532,6 @@ export type PartiallyConfirmSegmentInput = z.infer<
 export type RelinkPlannedSegmentInput = z.infer<
   typeof relinkPlannedSegmentInputSchema
 >;
-export type ScanConflictsForPersonInput = z.infer<
-  typeof scanConflictsForPersonInputSchema
->;
-export type ScanResourceConflictsInput = z.infer<
-  typeof scanResourceConflictsInputSchema
->;
-export type ApplyConflictSuggestionInput = z.infer<
-  typeof applyConflictSuggestionInputSchema
->;
-
 function maxSegmentMs() {
   return MAX_SEGMENT_DAYS * 24 * 60 * 60 * 1_000;
 }

@@ -167,7 +167,6 @@ export function TaskWorkbench({
   const needsReviewCount = canvasModel?.segments.filter(
     (entry) => entry.associationNeedsReview,
   ).length ?? 0;
-  const conflictCount = canvasModel?.conflicts.length ?? 0;
   const selectTab = (nextTab: TabId) => {
     setTab(nextTab);
     const url = new URL(window.location.href);
@@ -266,11 +265,10 @@ export function TaskWorkbench({
             </Button>
           </div>
         </div>
-        <div className="mt-4 grid gap-2 text-sm sm:grid-cols-3 lg:grid-cols-6">
+        <div className="mt-4 grid gap-2 text-sm sm:grid-cols-3 lg:grid-cols-5">
           <Metric label="参与人" value={workspace.members.length} />
           <Metric label="当前窗口投入" value={segmentCount} />
           <Metric label="当前窗口 Actual" value={actualCount} />
-          <Metric label="当前窗口开放冲突" value={conflictCount} alert={conflictCount > 0} />
           <Metric label="当前窗口关联复核" value={needsReviewCount} alert={needsReviewCount > 0} />
           <Metric label="锁版本" value={task.lockVersion} />
         </div>
@@ -413,7 +411,7 @@ function PlanAndResourcesPanel({
         <div>
           <h2 className="font-semibold">人员投入</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            当前 Task 的 Planned/Actual、参与人的其他 Busy 占用和 Conflict 使用同一安全 DTO。
+            当前 Task 的 Planned/Actual 与参与人的其他 Busy 占用使用同一安全 DTO。
           </p>
         </div>
         {canvasModel ? (

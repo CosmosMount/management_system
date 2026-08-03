@@ -25,7 +25,7 @@ import { getOpenIdsByRole, getUserRoles } from "../lib/permissions";
 import { resolveReimbursementListSignatures } from "../lib/reimbursement-list-signatures";
 
 test.describe("project management P1 schema, identity and authorization", () => {
-  test("schema constraints enforce current plan, tag, segment, review and conflict invariants", async () => {
+  test("schema constraints enforce current plan, tag, segment and review invariants", async () => {
     const { account, person } = await createAccountPerson("约束测试用户");
     const task = await createTaskWithCurrentPlan({
       accountId: account.id,
@@ -90,25 +90,9 @@ test.describe("project management P1 schema, identity and authorization", () => 
           personId: person.id,
           type: "PLANNED",
           status: "PLANNED",
-          startAt: new Date("2026-07-28T09:00:00.000Z"),
-          endAt: new Date("2026-07-28T10:00:00.000Z"),
-          content: "非法 allocation",
-          allocation: new Prisma.Decimal(100.01),
-          createdByAccountId: account.id,
-        },
-      }),
-    ).rejects.toThrow();
-
-    await expect(
-      prisma.workSegment.create({
-        data: {
-          personId: person.id,
-          type: "PLANNED",
-          status: "PLANNED",
           startAt: new Date("2026-07-28T10:00:00.000Z"),
           endAt: new Date("2026-07-28T09:00:00.000Z"),
           content: "非法时间",
-          allocation: new Prisma.Decimal(50),
           createdByAccountId: account.id,
         },
       }),
@@ -122,8 +106,7 @@ test.describe("project management P1 schema, identity and authorization", () => 
           status: "CONFIRMED",
           startAt: new Date("2026-07-28T09:00:00.000Z"),
           endAt: new Date("2026-07-28T10:00:00.000Z"),
-          content: "允许缺 allocation 以便冲突扫描解释",
-          allocation: null,
+          content: "有效 Actual Segment",
           createdByAccountId: account.id,
         },
       }),
@@ -149,39 +132,6 @@ test.describe("project management P1 schema, identity and authorization", () => 
       }),
     ).rejects.toThrow();
 
-    await prisma.resourceConflict.create({
-      data: {
-        personId: person.id,
-        kind: "ALLOCATION_OVER_LIMIT",
-        startAt: new Date("2026-07-28T09:00:00.000Z"),
-        endAt: new Date("2026-07-28T11:00:00.000Z"),
-        severity: "HIGH",
-        fingerprint: `p1-conflict-${randomUUID()}`,
-      },
-    });
-    const fingerprint = `p1-conflict-dupe-${randomUUID()}`;
-    await prisma.resourceConflict.create({
-      data: {
-        personId: person.id,
-        kind: "ALLOCATION_OVER_LIMIT",
-        startAt: new Date("2026-07-28T09:00:00.000Z"),
-        endAt: new Date("2026-07-28T11:00:00.000Z"),
-        severity: "HIGH",
-        fingerprint,
-      },
-    });
-    await expect(
-      prisma.resourceConflict.create({
-        data: {
-          personId: person.id,
-          kind: "ALLOCATION_OVER_LIMIT",
-          startAt: new Date("2026-07-28T09:00:00.000Z"),
-          endAt: new Date("2026-07-28T11:00:00.000Z"),
-          severity: "HIGH",
-          fingerprint,
-        },
-      }),
-    ).rejects.toThrow();
   });
 
   test("Feishu identity resolution is idempotent, upgrades openId fallback and rejects conflicts or disabled accounts", async () => {

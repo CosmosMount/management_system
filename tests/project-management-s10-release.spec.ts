@@ -115,11 +115,11 @@ function expectSuccessfulReport(report: RehearsalReport): void {
   expect(report.migration.appliedMigrationCount).toBeGreaterThan(0);
   expect(report.migration.expectedMigrationsApplied).toBe(true);
   expect(report.migration.appliedMigrations).toContain(
-    "20260731102000_project_management_scan_checkpoint",
+    "20260801110000_remove_resource_conflicts_and_allocation",
   );
   if (report.scenario === "shared_snapshot") {
     expect(report.migration.appliedMigrations).toEqual([
-      "20260731102000_project_management_scan_checkpoint",
+      "20260801110000_remove_resource_conflicts_and_allocation",
     ]);
     expect(report.migration.appliedMigrationCount).toBe(1);
     expect(report.migration.beforeMigrationCount).toBeGreaterThan(0);

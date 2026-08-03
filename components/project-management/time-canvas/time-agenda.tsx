@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, Clock3, Flag } from "lucide-react";
+import { Clock3, Flag } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type {
   TimeCanvasDisplayOptions,
@@ -16,7 +16,7 @@ type AgendaItem = {
   title: string;
   meta: string;
   state: string;
-  kind: "ANCHOR" | "SEGMENT" | "CONFLICT";
+  kind: "ANCHOR" | "SEGMENT";
 };
 
 export function TimeAgenda({
@@ -84,7 +84,7 @@ export function TimeAgenda({
                         {item.meta}
                       </span>
                     </span>
-                    <Badge variant={item.kind === "CONFLICT" ? "destructive" : "secondary"}>
+                    <Badge variant="secondary">
                       {item.state}
                     </Badge>
                   </button>
@@ -130,49 +130,19 @@ function groupAgendaItems(
     const startsBeforeRange = segment.startMs < model.range.startMs;
     const visibleStartMs = Math.max(segment.startMs, model.range.startMs);
     const visibleEndMs = Math.min(segment.endMs, model.range.endMs);
-    const allocationMeta =
-      segment.type === "BUSY"
-        ? "其他占用（详情受限）"
-        : segment.allocation === null
-          ? "未填写投入比例"
-          : `投入 ${segment.allocation}%`;
+    const segmentMeta =
+      segment.type === "BUSY" ? "其他占用（详情受限）" : "投入安排";
     items.push({
       id: segment.id,
       selection: { kind: "SEGMENT", id: segment.id },
       atMs: visibleStartMs,
       endMs: visibleEndMs,
       title: segment.title,
-      meta: startsBeforeRange ? `范围开始时已在进行 · ${allocationMeta}` : allocationMeta,
+      meta: startsBeforeRange ? `范围开始时已在进行 · ${segmentMeta}` : segmentMeta,
       state: segment.type === "BUSY" ? "忙碌" : `${segment.type} · ${segment.status}`,
       kind: "SEGMENT",
     });
   }
-  if (display.showConflicts !== false) {
-    for (const conflict of model.conflicts) {
-      if (conflict.visibility !== "VISIBLE" || conflict.startMs === null) continue;
-      const conflictEndMs = conflict.endMs ?? conflict.startMs + 1;
-      if (
-        conflict.startMs >= model.range.endMs ||
-        conflictEndMs <= model.range.startMs
-      ) {
-        continue;
-      }
-      items.push({
-        id: conflict.id,
-        selection: { kind: "CONFLICT", id: conflict.id },
-        atMs: Math.max(conflict.startMs, model.range.startMs),
-        endMs:
-          conflict.endMs === null
-            ? null
-            : Math.min(conflict.endMs, model.range.endMs),
-        title: "资源冲突",
-        meta: conflict.reason ?? "冲突详情",
-        state: conflict.severity,
-        kind: "CONFLICT",
-      });
-    }
-  }
-
   items.sort((left, right) => left.atMs - right.atMs || left.id.localeCompare(right.id));
   const byDate = new Map<string, AgendaItem[]>();
   for (const item of items) {
@@ -190,7 +160,6 @@ function groupAgendaItems(
 
 function AgendaIcon({ kind }: { kind: AgendaItem["kind"] }) {
   const className = "mt-1 size-4 shrink-0 text-muted-foreground";
-  if (kind === "CONFLICT") return <AlertTriangle className={className} aria-hidden="true" />;
   if (kind === "ANCHOR") return <Flag className={className} aria-hidden="true" />;
   return <Clock3 className={className} aria-hidden="true" />;
 }

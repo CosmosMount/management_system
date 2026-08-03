@@ -1,6 +1,6 @@
 # 消息发送与投递规则
 
-本文档描述当前通知基础设施、采购、反馈和项目管理 P1-P6 通知接入。旧项目管理事件、payload、卡片模板和收件人规则已经删除；新项目管理使用 `channel=project-management` 的 payload 契约、站内通知、Task 生命周期事件、Segment/Conflict 事件和飞书 adapter。
+本文档描述当前通知基础设施、采购、反馈和项目管理通知接入。项目管理使用 `channel=project-management` 的 payload 契约、站内通知、Task 生命周期与 Segment 事件和飞书 adapter。资源冲突通知事件已下线。
 
 ## 架构与边界
 
@@ -19,7 +19,7 @@
 - 采购群 Webhook 由独立模块发送，不接入私信接口。SMTP 老师邮件也不属于飞书传输层。
 - 采购 CardKit 快照、卡片 sequence 和后续更新仍由采购领域维护；统一传输层负责创建并发送卡片，成功结果返回 `cardId`。
 
-项目管理必须在业务事务中使用稳定 `eventKey` 写入 outbox，由自己的 channel adapter 处理。项目管理 Server Action 和领域 service 不得直接导入飞书传输层。P2/P3 生命周期和 P5 Segment/Conflict 只允许入队站内通知和 `channel=project-management` outbox；真实飞书消息只能由 `lib/notification-channels/project-management.ts` 通过统一传输层发送。
+项目管理必须在业务事务中使用稳定 `eventKey` 写入 outbox，由自己的 channel adapter 处理。项目管理 Server Action 和领域 service 不得直接导入飞书传输层。Task 生命周期和 Segment 只允许入队站内通知和 `channel=project-management` outbox；真实飞书消息只能由 `lib/notification-channels/project-management.ts` 通过统一传输层发送。
 
 ## 项目管理 P1-P6 通知接入
 
@@ -27,7 +27,7 @@
 
 - `payloadVersion=1`
 - `purpose=notification|approval_request`
-- `category=TASK|MILESTONE|REVIEW|REVISION|WORK_SEGMENT|RESOURCE_CONFLICT|ACCOUNT_SECURITY`
+- `category=TASK|MILESTONE|REVIEW|REVISION|WORK_SEGMENT|ACCOUNT_SECURITY`
 - `title`、`summary`、`actorName`
 - `entityType/entityId`、可选 `taskId/taskTitle`、`linkPath`
 - `recipientOpenIds` 和 `mandatory`
@@ -38,7 +38,7 @@
 - `enqueueProjectManagementNotificationTx()` 和非事务版本只写 `NotificationOutbox`，channel 固定为 `project-management`。
 - `approval_request` 自动使用审批机器人；普通通知使用通知机器人。当前只允许 `milestone_review_submitted` 和 `revision_pending_review` 声明 `approval_request`，其他事件不得持久化为审批机器人通知。
 
-P2/P3 Task 生命周期服务和 P5 Segment/Conflict 服务会在同一业务事务中写站内通知和 `channel=project-management` outbox，事件包括：
+Task 生命周期服务和 Segment 服务会在同一业务事务中写站内通知和 `channel=project-management` outbox，事件包括：
 
 | 场景 | outbox type | 用途 | 收件人 |
 |------|-------------|------|--------|
@@ -51,8 +51,6 @@ P2/P3 Task 生命周期服务和 P5 Segment/Conflict 服务会在同一业务事
 | Revision 生效 | `revision_applied` | 普通通知 | active TaskMember |
 | Planned Segment 到期待确认 | `segment_confirmation_due` | 普通通知 | Segment Person |
 | Planned Segment 关联失效 | `segment_association_invalidated` | 普通通知 | Segment Person |
-| Resource Conflict 新增或重新打开 | `resource_conflict_opened` | 普通通知 | Segment Person + Task OWNER + 匹配范围组长 |
-| Resource Conflict 已解决 | `resource_conflict_resolved` | 普通通知 | Segment Person |
 | Task 结束确认 | `task_terminated` | 普通通知 | active TaskMember |
 | 账号角色或项目访问变更 | `account_security` | 强制普通通知 | 仅被操作账号 |
 
@@ -62,17 +60,17 @@ P2/P3 Task 生命周期服务和 P5 Segment/Conflict 服务会在同一业务事
 
 Active 成员强制事件不得因受影响 Person 已停用、Account 已禁用、缺少飞书 identity 或尚无 Account 而消失。只有 Active Account 才写按 Account 的站内记录；Person 已停用但 Account 仍 Active 的 legacy removal 仍保留站内记录。飞书候选只允许 `provider=FEISHU`、`tenantId=default` 且 trim 后非空的 `openId`，不会回退其他 tenant，也不会因最早一条 identity 为空而漏掉同一默认 tenant 的后续合法 identity。无法安全解析飞书目标时仍写 `mandatory=true` durable outbox，并在 payload `context.recipientResolution` 记录 `PERSON_INACTIVE`、`ACCOUNT_DISABLED`、`DEFAULT_FEISHU_IDENTITY_MISSING`、`FEISHU_OPEN_ID_MISSING` 或 `ACCOUNT_MISSING`；outbox 保留空候选而不猜测、替代或直发任何真实收件人。成员业务审计、站内记录和 outbox 与成员差异处于同一事务，任一晚失败全部回滚。
 
-人工调用 `resolveConflict` 或 `applyConflictSuggestion` 时，`resource_conflict_resolved.actorName` 必须在服务端事务内由已认证 actor 对应的 `Person.displayName` 生成，客户端不能提交或覆盖操作人。`ignoreConflict` 只记录忽略状态和人工审计，不把尚未解除的冲突发送为“已解决”；若忽略到期后 scanner 确认冲突已经解除，解决通知的操作人仍为“系统”。scanner/cron 创建、重新打开或自动解决 Conflict 的通知统一显示“系统”，人工与自动来源不能根据客户端字段推断。
-
 Revision 生效事务先把目标 `TaskPlanVersion` 切换为 `CURRENT` 并更新 `Task.currentPlanVersionId`，随后才以更新后的 Task 上下文写 `revision_applied` 和 `segment_association_invalidated`。这两个 payload（包括对应站内通知）中的 `context.currentPlanVersionId` 均指向切换后的 Current Plan Version，不得保留 base/旧 Current Plan；Segment 关联失效通知仍只发给受影响 Segment Person，普通通知机器人用途不变。
 
 入队 helper 和 adapter 会拒绝 `type/payload.kind` 不一致、payload 结构错误、错误机器人类型和越界审批用途，并对 `recipientOpenIds` 去重。项目管理飞书卡片包含操作人、Task、事件摘要、对象类型、事件时间和最多 6 项上下文；按钮跳转到 payload 的 `linkPath`，没有链接时回到 `/progress`。`approval_request` 使用审批机器人用途；所有普通项目管理事件使用通知机器人，不能把审批机器人作为普通通知 fallback。
 
-P5 事件键保持稳定幂等：`pm:segment:confirmation_due:<segmentId>:<endAt>`、`pm:segment:association_invalidated:<revisionNodeId>`、`pm:conflict:opened:<fingerprint>`、`pm:conflict:opened:<fingerprint>:reopened:<detectedAt>` 和 `pm:conflict:resolved:<conflictId>:<updatedAt>`。站内通知在业务事件键后追加 `:inapp:<accountId>`，飞书 outbox 追加 `:feishu`；重复扫描或重复提交依赖唯一事件键保持 exactly once，逐收件人失败只重试失败者。Conflict 新增、高严重度重开和扫描解除都只写项目管理 outbox 和站内通知；`scanSegmentTransitions` 会把到期 Planned 推到 `PENDING_CONFIRMATION`、把进行中的 Planned 置为 `IN_PROGRESS`，但不会自动生成 Actual。
+资源冲突下线 migration 会删除 `RESOURCE_CONFLICT` 偏好与站内通知，以及 `resource_conflict_opened`、`resource_conflict_resolved` outbox；收件人投递行随 outbox 级联删除。已经送达飞书的历史消息无法撤回。
+
+Segment 事件键保持稳定幂等：`pm:segment:confirmation_due:<segmentId>:<endAt>` 和 `pm:segment:association_invalidated:<revisionNodeId>`。站内通知在业务事件键后追加 `:inapp:<accountId>`，飞书 outbox 追加 `:feishu`；重复提交依赖唯一事件键保持 exactly once，逐收件人失败只重试失败者。`scanSegmentTransitions` 会把到期 Planned 推到 `PENDING_CONFIRMATION`、把进行中的 Planned 置为 `IN_PROGRESS`，但不会自动生成 Actual。
 
 统一账号历史迁移只追加 `source=MIGRATION` 的 `DomainAuditEvent`，不创建站内通知或 outbox，不会在上线时批量触达真实用户。
 
-项目管理通知偏好按 Task、Milestone、Review、Revision、Work Segment 和 Resource Conflict 分类。站内通知是审计/待办兜底，始终写入且 UI 不提供关闭；`NotificationPreference(channel=FEISHU, enabled=false)` 只过滤普通飞书候选。`mandatory=true` 的关键状态、安全与高严重度事件忽略普通关闭偏好，但仍经过 durable outbox、禁发开关、allowlist 和逐收件人重试，不能直发。
+项目管理通知偏好按 Task、Milestone、Review、Revision 和 Work Segment 分类。站内通知是审计/待办兜底，始终写入且 UI 不提供关闭；`NotificationPreference(channel=FEISHU, enabled=false)` 只过滤普通飞书候选。`mandatory=true` 的关键状态与安全事件忽略普通关闭偏好，但仍经过 durable outbox、禁发开关、allowlist 和逐收件人重试，不能直发。
 
 Milestone deadline scanner 使用 Asia/Shanghai 业务日期，事件键为 `pm:milestone:<milestoneId>:milestone_due|milestone_overdue:<YYYY-MM-DD>`；同一天重跑保持 exactly once。每日保留任务分批删除 90 天前已读站内通知、30 天前已发送项目管理 outbox 和 180 天前失败 outbox；未读站内通知不因该规则删除。所有测试继续设置 `NOTIFICATION_DELIVERY_DISABLED=true`。
 

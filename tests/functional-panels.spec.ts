@@ -53,7 +53,7 @@ test.describe("普通用户主功能面板", () => {
     await page.goto("/", { waitUntil: "networkidle" });
     await page
       .getByRole("link", {
-        name: /项目管理 Task 工作台、人员计划、资源冲突与站内通知/,
+        name: /项目管理 Task 工作台、人员计划与站内通知/,
       })
       .click();
     await expect(page).toHaveURL(/\/progress$/);

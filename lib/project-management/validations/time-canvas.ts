@@ -8,9 +8,7 @@ import {
   taskScopedTimeCanvasScopeKind,
   taskTimeCanvasGrouping,
   timeCanvasGroupByValues,
-  taskPriorityValues,
   taskStatusValues,
-  workSegmentRoleValues,
   workSegmentStatusValues,
   workSegmentTypeValues,
 } from "@/lib/project-management/types/contract-values";
@@ -24,7 +22,6 @@ export const MAX_TIME_CANVAS_ROW_LIMIT = 50;
 export const DEFAULT_PEOPLE_PAGE_LIMIT = 25;
 export const MAX_PEOPLE_PAGE_LIMIT = 50;
 export const MAX_TIME_CANVAS_VISIBLE_SEGMENTS = 5_000;
-export const MAX_TIME_CANVAS_CONFLICTS = 5_000;
 export const MAX_TIME_CANVAS_ANCHOR_TASKS = 50;
 // Twenty-five supported 200-node plans fit exactly in one response.
 export const MAX_TIME_CANVAS_ANCHOR_NODES = 5_000;
@@ -47,7 +44,6 @@ export const timeCanvasVisibleSegmentCountSchema = z
 
 const MAX_TIME_CANVAS_RANGE_MS =
   MAX_TIME_CANVAS_RANGE_DAYS * 24 * 60 * 60 * 1_000;
-const MAX_SEGMENT_RANGE_MS = 31 * 24 * 60 * 60 * 1_000;
 
 const timeCanvasRowCursorSchema = z
   .string({ message: "画布行分页游标格式不正确" })
@@ -190,7 +186,6 @@ export const getTimeCanvasDataInputSchema = z
     includeTaskAnchors: z.boolean().optional().default(true),
     includeActual: z.boolean().optional().default(true),
     includeBusyBlocks: z.boolean().optional().default(false),
-    includeConflicts: z.boolean().optional().default(false),
     cursor: timeCanvasRowCursorSchema,
     rowLimit: timeCanvasRowLimitSchema,
   })
@@ -257,75 +252,6 @@ export const listTagOptionsInputSchema = z
   })
   .strict();
 
-export const previewSegmentPlacementInputSchema = z
-  .object({
-    segmentId: idSchema.optional(),
-    personId: idSchema,
-    startAt: absoluteDateTimeSchema("请选择带时区的有效开始时间"),
-    endAt: absoluteDateTimeSchema("请选择带时区的有效结束时间"),
-    allocation: z
-      .number({ message: "投入比例格式不正确" })
-      .gt(0, "投入比例必须大于 0")
-      .max(100, "投入比例不能超过 100")
-      .nullable()
-      .optional(),
-    taskId: z.union([idSchema, z.null()]).optional(),
-    nodeId: z.union([idSchema, z.null()]).optional(),
-    priority: z.enum(taskPriorityValues).optional(),
-    role: z.enum(workSegmentRoleValues).optional(),
-    associationIntent: z.enum(["KEEP", "RELINK"]).optional().default("KEEP"),
-  })
-  .strict()
-  .superRefine((input, ctx) => {
-    if (input.startAt instanceof Date && input.endAt instanceof Date) {
-      if (input.endAt <= input.startAt) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["endAt"],
-          message: "结束时间必须晚于开始时间，区间采用 [start, end)",
-        });
-      } else if (
-        input.endAt.getTime() - input.startAt.getTime() >
-        MAX_SEGMENT_RANGE_MS
-      ) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["endAt"],
-          message: "单条投入记录最长 31 天",
-        });
-      }
-    }
-    if (input.nodeId && !input.taskId) {
-      addStructuredProjectManagementIssue({
-        ctx,
-        code: "ASSOCIATION_INVALID",
-        path: ["nodeId"],
-        message: "关联 Node 时必须同时关联 Task",
-      });
-    }
-    const taskSubmitted = Object.hasOwn(input, "taskId");
-    const nodeSubmitted = Object.hasOwn(input, "nodeId");
-    if (input.associationIntent === "KEEP" && (taskSubmitted || nodeSubmitted)) {
-      addStructuredProjectManagementIssue({
-        ctx,
-        code: "ASSOCIATION_INVALID",
-        path: [taskSubmitted ? "taskId" : "nodeId"],
-        message: "KEEP 不接受 Task/Node；如需预览重关联请显式使用 RELINK",
-      });
-    }
-    if (
-      input.associationIntent === "RELINK" &&
-      (!taskSubmitted || !nodeSubmitted)
-    ) {
-      addStructuredProjectManagementIssue({
-        ctx,
-        code: "ASSOCIATION_INVALID",
-        path: [!taskSubmitted ? "taskId" : "nodeId"],
-        message: "RELINK 必须同时提交 taskId 与 nodeId（可为 null）",
-      });
-    }
-  });
-
 export type GetTimeCanvasDataInput = z.infer<
   typeof getTimeCanvasDataInputSchema
 >;
@@ -334,6 +260,3 @@ export type SearchTaskOptionsInput = z.infer<
   typeof searchTaskOptionsInputSchema
 >;
 export type ListTagOptionsInput = z.infer<typeof listTagOptionsInputSchema>;
-export type PreviewSegmentPlacementInput = z.infer<
-  typeof previewSegmentPlacementInputSchema
->;

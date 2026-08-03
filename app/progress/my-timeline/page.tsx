@@ -57,7 +57,6 @@ export default async function ProgressMyTimelinePage({ searchParams }: { searchP
         includeTaskAnchors: true,
         includeActual: true,
         includeBusyBlocks: false,
-        includeConflicts: true,
         rowLimit: 25,
       },
     }).then((data) => ({ ok: true as const, data })).catch((error: unknown) => ({

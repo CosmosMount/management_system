@@ -7,8 +7,6 @@ import { runProcurementBudgetAlerts } from "../lib/procurement-budget-alerts";
 import { syncFeishuContactUsers } from "../lib/feishu-user-sync";
 import { drainNotificationOutbox } from "../lib/notification-outbox";
 import {
-  runFullResourceConflictCron,
-  runIncrementalResourceConflictCron,
   runLockedProjectManagementDaily,
   runSegmentTransitionCron,
 } from "../lib/project-management/application/cron-service";
@@ -25,7 +23,6 @@ const CRON_TIMEZONE = "Asia/Shanghai";
 let contactSyncRunning = false;
 let budgetScanRunning = false;
 let segmentTransitionScanRunning = false;
-let resourceConflictScanRunning = false;
 let projectManagementDailyRunning = false;
 
 async function runProcurementDaily() {
@@ -147,48 +144,6 @@ async function runProjectManagementSegmentTransitionScan() {
   }
 }
 
-async function runProjectManagementResourceConflictScan() {
-  if (resourceConflictScanRunning) {
-    logger.warn("cron.project_management_resource_conflicts.skipped_running", {
-      module: "cron",
-      action: "runProjectManagementResourceConflictScan",
-      result: "skipped",
-    });
-    return;
-  }
-
-  resourceConflictScanRunning = true;
-  try {
-    const locked = await runIncrementalResourceConflictCron();
-    if (!locked.acquired) {
-      logger.warn("cron.project_management_resource_conflicts.skipped_database_lock", {
-        module: "cron",
-        action: "runProjectManagementResourceConflictScan",
-        result: "skipped",
-      });
-      return;
-    }
-    const result = locked.result;
-    if (
-      result.createdCount > 0 ||
-      result.reopenedCount > 0 ||
-      result.resolvedCount > 0
-    ) {
-      logger.info("cron.project_management_resource_conflicts.completed", {
-        module: "cron",
-        action: "runProjectManagementResourceConflictScan",
-        scannedPersonCount: result.scannedPersonCount,
-        detectedCount: result.detectedCount,
-        createdCount: result.createdCount,
-        reopenedCount: result.reopenedCount,
-        resolvedCount: result.resolvedCount,
-      });
-    }
-  } finally {
-    resourceConflictScanRunning = false;
-  }
-}
-
 async function runProjectManagementDailyMaintenance() {
   if (projectManagementDailyRunning) {
     logger.warn("cron.project_management_daily.skipped_running", {
@@ -227,41 +182,6 @@ async function runProjectManagementDailyMaintenance() {
   } finally {
     projectManagementDailyRunning = false;
   }
-}
-
-async function runProjectManagementFullResourceConflictScan() {
-  const locked = await runFullResourceConflictCron();
-  if (!locked.acquired) {
-    logger.warn("cron.project_management_resource_conflicts_full.skipped_database_lock", {
-      module: "cron",
-      action: "runProjectManagementFullResourceConflictScan",
-      result: "skipped",
-    });
-    return;
-  }
-  const logContext = {
-    module: "cron",
-    action: "runProjectManagementFullResourceConflictScan",
-    scannedPersonCount: locked.result.scannedPersonCount,
-    succeededPersonCount: locked.result.succeededPersonCount,
-    failedPersonCount: locked.result.failedPersonCount,
-    failureCodes: [...new Set(locked.result.failures.map((failure) => failure.code))],
-    detectedCount: locked.result.detectedCount,
-    createdCount: locked.result.createdCount,
-    reopenedCount: locked.result.reopenedCount,
-    resolvedCount: locked.result.resolvedCount,
-  };
-  if (locked.result.failedPersonCount > 0) {
-    logger.error(
-      "cron.project_management_resource_conflicts_full.partial_failure",
-      logContext,
-    );
-    return;
-  }
-  logger.info(
-    "cron.project_management_resource_conflicts_full.completed",
-    logContext,
-  );
 }
 
 cron.schedule(
@@ -321,37 +241,6 @@ cron.schedule(
 );
 
 cron.schedule(
-  "*/15 * * * *",
-  () => {
-    runProjectManagementResourceConflictScan().catch((err) =>
-      logger.error("cron.project_management_resource_conflicts.failed", {
-        module: "cron",
-        action: "runProjectManagementResourceConflictScan",
-        error: err,
-      }),
-    );
-  },
-  { timezone: CRON_TIMEZONE },
-);
-
-cron.schedule(
-  // Keep the daily full scan off the */15 incremental schedule. Both jobs
-  // intentionally share one advisory lock, so a colliding minute could make
-  // the full scan lose the lock and be skipped every day.
-  "37 2 * * *",
-  () => {
-    runProjectManagementFullResourceConflictScan().catch((err) =>
-      logger.error("cron.project_management_resource_conflicts_full.failed", {
-        module: "cron",
-        action: "runProjectManagementFullResourceConflictScan",
-        error: err,
-      }),
-    );
-  },
-  { timezone: CRON_TIMEZONE },
-);
-
-cron.schedule(
   "15 8 * * *",
   () => {
     runProjectManagementDailyMaintenance().catch((err) =>
@@ -387,8 +276,6 @@ logger.info("cron.started", {
   notificationOutboxCron: "*/2 * * * *",
   procurementBudgetCron: "*/10 * * * *",
   projectManagementSegmentTransitionsCron: "*/10 * * * *",
-  projectManagementResourceConflictsCron: "*/15 * * * *",
-  projectManagementResourceConflictsFullCron: "37 2 * * *",
   projectManagementDailyCron: "15 8 * * *",
   procurementDailyCron: "0 9 * * *",
   notificationDeliveryDisabled:

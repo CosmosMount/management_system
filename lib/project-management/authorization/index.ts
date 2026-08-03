@@ -30,8 +30,6 @@ export const PROJECT_MANAGEMENT_ACTIONS = [
   "segment.view",
   "segment.manage_self",
   "segment.manage_others",
-  "conflict.view",
-  "conflict.resolve",
   "audit.view",
 ] as const;
 
@@ -219,7 +217,6 @@ function authorizeTask(
   if (
     action === "task.view" ||
     action === "plan.view_history" ||
-    action === "conflict.view" ||
     action === "audit.view"
   ) {
     if (hasTaskRole(actor, resource, ["OWNER", "LEAD", "MEMBER", "REVIEWER", "VIEWER"])) {
@@ -291,13 +288,6 @@ function authorizeTask(
       return allow("group_leader_scope");
     }
     return deny("task_terminate_denied");
-  }
-
-  if (action === "conflict.resolve") {
-    if (hasScopedRole(actor, ["GROUP_LEADER"], resource)) {
-      return allow("conflict_manager_scope");
-    }
-    return deny("conflict_resolve_denied");
   }
 
   return deny("unsupported_action_for_task");

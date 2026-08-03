@@ -26,30 +26,6 @@ export const taskPriorityValues = [
   "LOW",
 ] as const;
 
-export const resourceConflictStatusValues = [
-  "OPEN",
-  "ACKNOWLEDGED",
-  "RESOLVED",
-  "IGNORED",
-] as const;
-
-export const resourceConflictKindValues = [
-  "ALLOCATION_OVER_LIMIT",
-  "MISSING_ALLOCATION",
-  "HIGH_PRIORITY_OVERLAP",
-  "LEAD_ROLE_OVERLAP",
-  "UNAVAILABLE_TIME",
-  "REVISION_OVERLAP",
-  "ACTUAL_OVERLOAD",
-] as const;
-
-export const resourceConflictSeverityValues = [
-  "LOW",
-  "MEDIUM",
-  "HIGH",
-  "CRITICAL",
-] as const;
-
 export const taskStatusValues = [
   "DRAFT",
   "ACTIVE",

@@ -9,7 +9,6 @@ import {
   ChevronLeft,
   ChevronRight,
   FolderKanban,
-  GitPullRequestArrow,
   ListChecks,
   Tags,
   LayoutList,
@@ -71,14 +70,6 @@ const navigationItems: NavigationItem[] = [
     label: "资源计划",
     icon: CalendarRange,
     match: (pathname) => pathname === routes.progress.resources,
-  },
-  {
-    href: routes.progress.conflicts,
-    label: "资源冲突",
-    icon: GitPullRequestArrow,
-    match: (pathname) =>
-      pathname === routes.progress.conflicts ||
-      pathname.startsWith(`${routes.progress.conflicts}/`),
   },
   {
     href: routes.progress.approvals,

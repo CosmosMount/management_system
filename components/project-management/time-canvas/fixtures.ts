@@ -33,7 +33,6 @@ export function createEmptyTimeCanvasFixture(): TimeCanvasModel {
     rows: [],
     anchors: [],
     segments: [],
-    conflicts: [],
     generatedAt: new Date(RANGE_START).toISOString(),
   };
 }
@@ -57,7 +56,6 @@ function composerFixture(): TimeCanvasModel {
       versionToken: `fixture-${index}`,
     })),
     segments: [],
-    conflicts: [],
     generatedAt: new Date(RANGE_START).toISOString(),
   };
 }
@@ -95,28 +93,13 @@ function workbenchFixture(): TimeCanvasModel {
         startMs: RANGE_START + (2 + index / 3) * DAY_MS,
         endMs: RANGE_START + (4 + index / 3) * DAY_MS,
         title: `工作台投入 ${index + 1}`,
-        allocation: 40,
         priority: "MEDIUM",
         associationNeedsReview: index === 4,
-        conflictIds: index < 2 ? ["workbench-conflict"] : [],
         visibility: "FULL" as const,
         permissions: editablePermissions,
         versionToken: `workbench-segment-${index}`,
       })),
     ),
-    conflicts: [
-      {
-        id: "workbench-conflict",
-        rowId: personRows[0]?.id ?? null,
-        visibility: "VISIBLE",
-        severity: "HIGH",
-        status: "OPEN",
-        reason: "ALLOCATION_OVER_LIMIT",
-        startMs: RANGE_START + 2 * DAY_MS,
-        endMs: RANGE_START + 5 * DAY_MS,
-        hiddenSegmentCount: 0,
-      },
-    ],
     generatedAt: new Date(RANGE_START).toISOString(),
   };
 }
@@ -137,10 +120,8 @@ function resourceFixture(): TimeCanvasModel {
       startMs: RANGE_START + (rowIndex % 10) * DAY_MS + index * 2 * HOUR_MS,
       endMs: RANGE_START + (rowIndex % 10) * DAY_MS + index * 2 * HOUR_MS + 8 * HOUR_MS,
       title: index === 3 ? "其他占用" : `资源安排 ${rowIndex + 1}-${index + 1}`,
-      allocation: index === 3 ? null : 50,
       priority: index === 3 ? null : "MEDIUM",
       associationNeedsReview: false,
-      conflictIds: index < 2 ? [`resource-conflict-${rowIndex}`] : [],
       visibility: index === 3 ? ("BUSY_ONLY" as const) : ("FULL" as const),
       permissions: index === 3 ? readOnlyPermissions() : editablePermissions,
       versionToken: index === 3 ? null : `resource-${rowIndex}-${index}`,
@@ -152,17 +133,6 @@ function resourceFixture(): TimeCanvasModel {
     rows,
     anchors: [],
     segments,
-    conflicts: rows.slice(0, 8).map((row, index) => ({
-      id: `resource-conflict-${index}`,
-      rowId: row.id,
-      visibility: "VISIBLE",
-      severity: index === 0 ? "CRITICAL" : "HIGH",
-      status: "OPEN",
-      reason: "ALLOCATION_OVER_LIMIT",
-      startMs: RANGE_START + index * DAY_MS,
-      endMs: RANGE_START + (index + 1) * DAY_MS,
-      hiddenSegmentCount: 0,
-    })),
     generatedAt: new Date(RANGE_START).toISOString(),
   };
 }
@@ -185,15 +155,12 @@ function personalFixture(): TimeCanvasModel {
       startMs: RANGE_START + index * 8 * HOUR_MS,
       endMs: RANGE_START + index * 8 * HOUR_MS + 4 * HOUR_MS,
       title: `个人安排 ${index + 1}`,
-      allocation: 60,
       priority: "MEDIUM",
       associationNeedsReview: false,
-      conflictIds: [],
       visibility: "FULL" as const,
       permissions: editablePermissions,
       versionToken: `personal-${index}`,
     })),
-    conflicts: [],
     generatedAt: new Date(RANGE_START).toISOString(),
   };
 }

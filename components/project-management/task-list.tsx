@@ -72,19 +72,10 @@ export function TaskList({ tasks }: { tasks: TaskListItem[] }) {
                   )
                   .join("、")}
               </p>
-              {(task.openConflictCount > 0 ||
-                task.segmentNeedsReviewCount > 0) && (
+              {task.segmentNeedsReviewCount > 0 && (
                 <p className="flex items-center gap-2 text-amber-700">
                   <AlertTriangle className="h-4 w-4" aria-hidden="true" />
-                  {task.openConflictCount > 0
-                    ? `${task.openConflictCount} 个资源冲突`
-                    : ""}
-                  {task.openConflictCount > 0 && task.segmentNeedsReviewCount > 0
-                    ? "，"
-                    : ""}
-                  {task.segmentNeedsReviewCount > 0
-                    ? `${task.segmentNeedsReviewCount} 条计划关联待确认`
-                    : ""}
+                  {task.segmentNeedsReviewCount} 条计划关联待确认
                 </p>
               )}
             </div>

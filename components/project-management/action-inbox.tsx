@@ -10,7 +10,6 @@ const kindLabels: Record<ActionInboxKind, string> = {
   SEGMENT_CONFIRMATION: "投入确认",
   MILESTONE_REVIEW: "Milestone 验收",
   REVISION_REVIEW: "Revision 审核",
-  RESOURCE_CONFLICT: "资源冲突",
   TERMINATION: "Termination",
   ASSOCIATION_REVIEW: "关联复核",
 };

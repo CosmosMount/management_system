@@ -18,13 +18,6 @@ import {
   createProjectManagementEventNotificationsTx,
   recipientsForPersonIdsTx,
 } from "@/lib/project-management/application/notification-utils";
-import { canFullyHandleConflict } from "@/lib/project-management/application/conflict-permissions";
-import { rescanConflictsForRangesTx } from "@/lib/project-management/application/conflict-service";
-import {
-  lockConflictPersonsTx,
-  prepareConflictMutationTx,
-  type ConflictMutationRange,
-} from "@/lib/project-management/application/conflict-lock-protocol";
 import {
   associationInvalidError,
   notFoundError,
@@ -104,7 +97,6 @@ export type WorkSegmentDto = {
   startAt: string;
   endAt: string;
   content: string;
-  allocation: number | null;
   role: WorkSegment["role"];
   customRole: string;
   priority: TaskPriority;
@@ -141,9 +133,6 @@ export async function createWorkSegment(
       tx,
       parsed.taskId ? [parsed.taskId] : [],
     );
-    const conflictRanges = await prepareConflictMutationTx(tx, [
-      segmentConflictRange(parsed),
-    ]);
     const refreshedActor = await refreshActorTx(tx, actor);
     await assertSegmentReferenceTx(tx, {
       actor: refreshedActor,
@@ -153,7 +142,6 @@ export async function createWorkSegment(
       nodeId: parsed.nodeId ?? null,
     });
     const created = await createWorkSegmentTx(tx, refreshedActor, parsed);
-    await rescanSegmentConflictRangesTx(tx, conflictRanges);
     return {
       segment: toWorkSegmentDto(created),
       affectedSegmentIds: [created.id],
@@ -172,10 +160,6 @@ export async function batchCreatePlannedSegments(
       parsed.segments.flatMap((segment) =>
         segment.taskId ? [segment.taskId] : [],
       ),
-    );
-    const conflictRanges = await prepareConflictMutationTx(
-      tx,
-      parsed.segments.map(segmentConflictRange),
     );
     const refreshedActor = await refreshActorTx(tx, actor);
     for (const segment of parsed.segments) {
@@ -196,7 +180,6 @@ export async function batchCreatePlannedSegments(
         }),
       );
     }
-    await rescanSegmentConflictRangesTx(tx, conflictRanges);
     return {
       segments: created.map(toWorkSegmentDto),
       affectedSegmentIds: created.map((segment) => segment.id),
@@ -214,12 +197,6 @@ export async function createActualSegment(
       segmentIds: parsed.sources.map((source) => source.plannedSegmentId),
       prospectiveTaskIds: parsed.taskId ? [parsed.taskId] : [],
     });
-    const conflictRanges = await prepareExistingSegmentConflictMutationTx(
-      tx,
-      parsed.sources.map((source) => source.plannedSegmentId),
-      () => [segmentConflictRange(parsed)],
-      [parsed.personId],
-    );
     const refreshedActor = await refreshActorTx(tx, actor);
     await assertSegmentReferenceTx(tx, {
       actor: refreshedActor,
@@ -229,7 +206,6 @@ export async function createActualSegment(
       nodeId: parsed.nodeId ?? null,
     });
     const created = await createActualSegmentTx(tx, refreshedActor, parsed);
-    await rescanSegmentConflictRangesTx(tx, conflictRanges);
     return {
       segment: toWorkSegmentDto(created),
       affectedSegmentIds: [created.id],
@@ -266,19 +242,6 @@ export async function updateWorkSegment(
       segmentIds: [parsed.segmentId],
       prospectiveTaskIds: parsed.taskId ? [parsed.taskId] : [],
     });
-    const conflictRanges = await prepareExistingSegmentConflictMutationTx(
-      tx,
-      [parsed.segmentId],
-      (currentRanges) => {
-        const current = currentRanges[0];
-        if (!current) throw notFoundError();
-        return [{
-          personId: current.personId,
-          startAt: parsed.startAt ?? current.startAt,
-          endAt: parsed.endAt ?? current.endAt,
-        }];
-      },
-    );
     await lockWorkSegmentTx(tx, parsed.segmentId);
     const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentAssociationLocatorUnchanged(preflightSegment, segment);
@@ -344,10 +307,6 @@ export async function updateWorkSegment(
         startAt: nextStartAt,
         endAt: nextEndAt,
         content: parsed.content ?? segment.content,
-        allocation:
-          parsed.allocation !== undefined
-            ? decimalOrNull(parsed.allocation)
-            : segment.allocation,
         role: nextRole,
         customRole: nextCustomRole.trim() || null,
         priority: parsed.priority ?? segment.priority,
@@ -380,7 +339,6 @@ export async function updateWorkSegment(
       after: snapshotSegment(reloaded),
       reason: parsed.reason,
     });
-    await rescanSegmentConflictRangesTx(tx, conflictRanges);
     return {
       segment: toWorkSegmentDto(reloaded),
       affectedSegmentIds: [reloaded.id],
@@ -394,25 +352,8 @@ export async function movePlannedSegments(
 ): Promise<BatchSegmentMutationResult> {
   const parsed = movePlannedSegmentsInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    const conflictRanges = await prepareExistingSegmentConflictMutationTx(
-      tx,
-      parsed.moves.map((move) => move.segmentId),
-      (currentRanges) => {
-        const personBySegmentId = new Map(
-          currentRanges.map((range) => [range.segmentId, range.personId]),
-        );
-        return parsed.moves.flatMap((move) => {
-          const personId = personBySegmentId.get(move.segmentId);
-          return personId
-            ? [{ personId, startAt: move.startAt, endAt: move.endAt }]
-            : [];
-        });
-      },
-    );
     const refreshedActor = await refreshActorTx(tx, actor);
-    const result = await movePlannedSegmentsTx(tx, refreshedActor, parsed);
-    await rescanSegmentConflictRangesTx(tx, conflictRanges);
-    return result;
+    return movePlannedSegmentsTx(tx, refreshedActor, parsed);
   });
 }
 
@@ -423,55 +364,6 @@ export async function movePlannedSegmentsTx(
 ): Promise<BatchSegmentMutationResult> {
   return movePlannedSegmentsWithAuthorizationTx(tx, actor, input, (segment) => {
     assertCanManageSegment(actor, segment);
-  });
-}
-
-export async function moveConflictSuggestionSegmentsTx(
-  tx: PrismaTx,
-  actor: ProjectManagementActor,
-  conflictId: string,
-  input: MovePlannedSegmentsInput,
-): Promise<BatchSegmentMutationResult> {
-  const conflict = await tx.resourceConflict.findUnique({
-    where: { id: conflictId },
-    select: {
-      personId: true,
-      status: true,
-      segments: {
-        select: {
-          segmentId: true,
-          segment: {
-            select: {
-              personId: true,
-              task: segmentInclude.task,
-            },
-          },
-        },
-      },
-    },
-  });
-  if (!conflict) throw notFoundError();
-  if (conflict.status === "RESOLVED") {
-    throw stateConflictError("已解决的冲突不能再次应用建议");
-  }
-  if (!canFullyHandleConflict(actor, conflict)) {
-    throw stateConflictError("你没有处理该资源冲突的权限");
-  }
-
-  const conflictSegmentIds = new Set<string>();
-  for (const entry of conflict.segments) {
-    if (entry.segment.personId !== conflict.personId) {
-      throw stateConflictError("冲突关联的投入人员不一致，无法应用建议");
-    }
-    conflictSegmentIds.add(entry.segmentId);
-  }
-
-  return movePlannedSegmentsWithAuthorizationTx(tx, actor, input, (segment) => {
-    if (!conflictSegmentIds.has(segment.id)) {
-      throw validationError("冲突建议只能调整该冲突涉及的 Segment", {
-        proposal: ["冲突建议只能调整该冲突涉及的 Segment"],
-      });
-    }
   });
 }
 
@@ -558,10 +450,6 @@ export async function splitPlannedSegment(
         part.taskId ? [part.taskId] : [],
       ),
     });
-    const conflictRanges = await prepareExistingSegmentConflictMutationTx(
-      tx,
-      [parsed.segmentId],
-    );
     await lockWorkSegmentTx(tx, parsed.segmentId);
     const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentAssociationLocatorUnchanged(preflightSegment, segment);
@@ -601,10 +489,6 @@ export async function splitPlannedSegment(
           startAt: part.startAt,
           endAt: part.endAt,
           content: part.content ?? segment.content,
-          allocation:
-            part.allocation !== undefined
-              ? decimalOrNull(part.allocation)
-              : segment.allocation,
           role: part.role ?? segment.role,
           customRole:
             (part.customRole !== undefined
@@ -655,7 +539,6 @@ export async function splitPlannedSegment(
       },
       reason: parsed.reason,
     });
-    await rescanSegmentConflictRangesTx(tx, conflictRanges);
     return {
       segments: children.map(toWorkSegmentDto),
       affectedSegmentIds: [segment.id, ...children.map((child) => child.id)],
@@ -685,10 +568,6 @@ export async function mergePlannedSegments(
     const associationLocks = await lockSegmentNodeAssociationTasksTx(tx, {
       segmentIds: parsed.segments.map((segment) => segment.segmentId),
     });
-    const conflictRanges = await prepareExistingSegmentConflictMutationTx(
-      tx,
-      parsed.segments.map((segment) => segment.segmentId),
-    );
     const segments = await lockAndLoadSegmentsTx(
       tx,
       parsed.segments.map((segment) => segment.segmentId),
@@ -733,7 +612,6 @@ export async function mergePlannedSegments(
         startAt,
         endAt,
         content: first.content,
-        allocation: first.allocation,
         role: first.role,
         customRole: first.customRole,
         priority: first.priority,
@@ -782,7 +660,6 @@ export async function mergePlannedSegments(
       },
       reason: parsed.reason,
     });
-    await rescanSegmentConflictRangesTx(tx, conflictRanges);
     return {
       segment: toWorkSegmentDto(merged),
       affectedSegmentIds: [...sorted.map((segment) => segment.id), merged.id],
@@ -796,13 +673,20 @@ export async function cancelPlannedSegment(
 ): Promise<SegmentMutationResult> {
   const parsed = cancelPlannedSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    const conflictRanges = await prepareExistingSegmentConflictMutationTx(
-      tx,
-      [parsed.segmentId],
-    );
     const refreshedActor = await refreshActorTx(tx, actor);
+    const preflightSegment = await loadSegmentForMutationTx(
+      tx,
+      parsed.segmentId,
+    );
+    assertSegmentVisible(refreshedActor, preflightSegment);
+    assertCanManageSegment(refreshedActor, preflightSegment);
+    const associationLocks = await lockSegmentNodeAssociationTasksTx(tx, {
+      segmentIds: [parsed.segmentId],
+    });
     await lockWorkSegmentTx(tx, parsed.segmentId);
     const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
+    assertSegmentAssociationLocatorUnchanged(preflightSegment, segment);
+    assertNodeAssociationTaskLocked(associationLocks, segment);
     assertSegmentVisible(refreshedActor, segment);
     assertCanManageSegment(refreshedActor, segment);
     assertExpectedUpdatedAt(segment, parsed.expectedUpdatedAt);
@@ -824,7 +708,6 @@ export async function cancelPlannedSegment(
       after: snapshotSegment(updated),
       reason: parsed.reason,
     });
-    await rescanSegmentConflictRangesTx(tx, conflictRanges);
     return {
       segment: toWorkSegmentDto(updated),
       affectedSegmentIds: [updated.id],
@@ -843,11 +726,15 @@ export async function batchCancelPlannedSegments(
   );
   return prisma.$transaction(async (tx) => {
     const segmentIds = parsed.segments.map((segment) => segment.segmentId);
-    const conflictRanges = await prepareExistingSegmentConflictMutationTx(
-      tx,
-      segmentIds,
-    );
     const refreshedActor = await refreshActorTx(tx, actor);
+    const preflightSegments = await loadSegmentsForPreflightTx(tx, segmentIds);
+    for (const segment of preflightSegments) {
+      assertSegmentVisible(refreshedActor, segment);
+      assertCanManageSegment(refreshedActor, segment);
+    }
+    const associationLocks = await lockSegmentNodeAssociationTasksTx(tx, {
+      segmentIds,
+    });
     const segments = await lockAndLoadSegmentsTx(tx, segmentIds);
     const expectedById = new Map(
       parsed.segments.map((segment) => [
@@ -859,6 +746,12 @@ export async function batchCancelPlannedSegments(
     // Validate the complete set before the first write so a stale or forbidden
     // middle item rolls the entire request back without partial audit history.
     for (const segment of segments) {
+      const preflightSegment = preflightSegments.find(
+        (candidate) => candidate.id === segment.id,
+      );
+      if (!preflightSegment) throw notFoundError();
+      assertSegmentAssociationLocatorUnchanged(preflightSegment, segment);
+      assertNodeAssociationTaskLocked(associationLocks, segment);
       assertSegmentVisible(refreshedActor, segment);
       assertCanManageSegment(refreshedActor, segment);
       assertExpectedUpdatedAt(segment, expectedById.get(segment.id));
@@ -889,7 +782,6 @@ export async function batchCancelPlannedSegments(
       });
       cancelled.push(updated);
     }
-    await rescanSegmentConflictRangesTx(tx, conflictRanges);
     return {
       segments: cancelled.map(toWorkSegmentDto),
       affectedSegmentIds: cancelled.map((segment) => segment.id),
@@ -927,19 +819,6 @@ export async function confirmPlannedSegment(
       segmentIds: [parsed.segmentId],
       prospectiveTaskIds: parsed.actual.taskId ? [parsed.actual.taskId] : [],
     });
-    const conflictRanges = await prepareExistingSegmentConflictMutationTx(
-      tx,
-      [parsed.segmentId],
-      (currentRanges) => {
-        const current = currentRanges[0];
-        if (!current) throw notFoundError();
-        return [{
-          personId: current.personId,
-          startAt: parsed.actual.startAt ?? current.startAt,
-          endAt: parsed.actual.endAt ?? current.endAt,
-        }];
-      },
-    );
     await lockWorkSegmentTx(tx, parsed.segmentId);
     const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentAssociationLocatorUnchanged(preflightSegment, segment);
@@ -981,7 +860,6 @@ export async function confirmPlannedSegment(
       confirmOriginal: "CONFIRMED",
     });
     const confirmed = await loadSegmentForMutationTx(tx, segment.id);
-    await rescanSegmentConflictRangesTx(tx, conflictRanges);
     return {
       segment: toWorkSegmentDto(confirmed),
       actualSegment: toWorkSegmentDto(actual),
@@ -1013,10 +891,6 @@ export async function batchConfirmPlannedSegments(
     const associationLocks = await lockSegmentNodeAssociationTasksTx(tx, {
       segmentIds,
     });
-    const conflictRanges = await prepareExistingSegmentConflictMutationTx(
-      tx,
-      segmentIds,
-    );
     const segments = await lockAndLoadSegmentsTx(tx, segmentIds);
     const preflightById = new Map(
       preflightSegments.map((segment) => [segment.id, segment] as const),
@@ -1060,7 +934,6 @@ export async function batchConfirmPlannedSegments(
       );
     }
     const confirmed = await lockAndLoadSegmentsTx(tx, segmentIds);
-    await rescanSegmentConflictRangesTx(tx, conflictRanges);
     return {
       segments: confirmed.map(toWorkSegmentDto),
       actualSegments: actualSegments.map(toWorkSegmentDto),
@@ -1107,19 +980,6 @@ export async function partiallyConfirmSegment(
       segmentIds: [parsed.segmentId],
       prospectiveTaskIds: parsed.actual.taskId ? [parsed.actual.taskId] : [],
     });
-    const conflictRanges = await prepareExistingSegmentConflictMutationTx(
-      tx,
-      [parsed.segmentId],
-      (currentRanges) => {
-        const current = currentRanges[0];
-        if (!current) throw notFoundError();
-        return [{
-          personId: current.personId,
-          startAt: parsed.actual.startAt ?? parsed.coveredStartAt,
-          endAt: parsed.actual.endAt ?? parsed.coveredEndAt,
-        }];
-      },
-    );
     await lockWorkSegmentTx(tx, parsed.segmentId);
     const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentAssociationLocatorUnchanged(preflightSegment, segment);
@@ -1155,7 +1015,6 @@ export async function partiallyConfirmSegment(
       reason: parsed.reason || "部分确认后保留剩余计划",
     });
     const original = await loadSegmentForMutationTx(tx, segment.id);
-    await rescanSegmentConflictRangesTx(tx, conflictRanges);
     return {
       segment: toWorkSegmentDto(original),
       actualSegment: toWorkSegmentDto(actual),
@@ -1204,10 +1063,6 @@ export async function relinkPlannedSegment(
       segmentIds: [parsed.segmentId],
       prospectiveTaskIds: parsed.taskId ? [parsed.taskId] : [],
     });
-    const conflictRanges = await prepareExistingSegmentConflictMutationTx(
-      tx,
-      [parsed.segmentId],
-    );
     await lockWorkSegmentTx(tx, parsed.segmentId);
     const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentAssociationLocatorUnchanged(preflightSegment, segment);
@@ -1264,7 +1119,6 @@ export async function relinkPlannedSegment(
       after: snapshotSegment(updated),
       reason: parsed.reason,
     });
-    await rescanSegmentConflictRangesTx(tx, conflictRanges);
     return {
       segment: toWorkSegmentDto(updated),
       affectedSegmentIds: [updated.id],
@@ -1278,10 +1132,6 @@ export async function softDeleteActualSegment(
 ): Promise<SegmentMutationResult> {
   const parsed = softDeleteActualSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    const conflictRanges = await prepareExistingSegmentConflictMutationTx(
-      tx,
-      [parsed.segmentId],
-    );
     const refreshedActor = await refreshActorTx(tx, actor);
     await lockWorkSegmentTx(tx, parsed.segmentId);
     const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
@@ -1315,7 +1165,6 @@ export async function softDeleteActualSegment(
       after: snapshotSegment(updated),
       reason: parsed.reason,
     });
-    await rescanSegmentConflictRangesTx(tx, conflictRanges);
     return {
       segment: toWorkSegmentDto(updated),
       affectedSegmentIds: [updated.id],
@@ -1348,10 +1197,6 @@ export async function scanSegmentTransitions(now = new Date()) {
       orderBy: { id: "asc" },
       take: 500,
     });
-    const conflictRanges = await prepareConflictMutationTx(tx, [
-      ...toPending.map(segmentConflictRange),
-      ...toInProgress.map(segmentConflictRange),
-    ]);
     let pendingConfirmationCount = 0;
     for (const segment of toPending) {
       const transition = await tx.workSegment.updateMany({
@@ -1405,7 +1250,6 @@ export async function scanSegmentTransitions(now = new Date()) {
       });
       inProgressCount += 1;
     }
-    await rescanSegmentConflictRangesTx(tx, conflictRanges);
     return {
       pendingConfirmationCount,
       inProgressCount,
@@ -1438,7 +1282,6 @@ async function createWorkSegmentTx(
       startAt: input.startAt,
       endAt: input.endAt,
       content: input.content,
-      allocation: decimalOrNull(input.allocation),
       role: input.role,
       customRole: input.customRole.trim() || null,
       priority: input.priority,
@@ -1490,7 +1333,6 @@ async function createActualSegmentTx(
       startAt: input.startAt,
       endAt: input.endAt,
       content: input.content,
-      allocation: decimalOrNull(input.allocation),
       role: input.role,
       customRole: input.customRole.trim() || null,
       priority: input.priority,
@@ -1700,10 +1542,6 @@ async function createActualFromPlannedTx(
       startAt: actualStartAt,
       endAt: actualEndAt,
       content: input.actualInput.content ?? input.planned.content,
-      allocation:
-        input.actualInput.allocation !== undefined
-          ? decimalOrNull(input.actualInput.allocation)
-          : input.planned.allocation,
       role: input.actualInput.role ?? input.planned.role,
       customRole:
         (input.actualInput.customRole !== undefined
@@ -1794,7 +1632,6 @@ async function createRemainingSegmentsAfterPartialConfirmTx(
         startAt: range.startAt,
         endAt: range.endAt,
         content: input.planned.content,
-        allocation: input.planned.allocation,
         role: input.planned.role,
         customRole: input.planned.customRole,
         priority: input.planned.priority,
@@ -2268,7 +2105,6 @@ function assertMergeCompatible(segments: SegmentForMutation[]) {
       segment.personId !== first.personId ||
       segment.type !== first.type ||
       segment.content !== first.content ||
-      decimalKey(segment.allocation) !== decimalKey(first.allocation) ||
       segment.role !== first.role ||
       (segment.customRole ?? "") !== (first.customRole ?? "") ||
       segment.priority !== first.priority ||
@@ -2294,79 +2130,6 @@ function assertMergeCompatible(segments: SegmentForMutation[]) {
 function assertUniqueIds(ids: string[], message: string) {
   if (new Set(ids).size === ids.length) return;
   throw validationError(message);
-}
-
-type SegmentConflictRange = ConflictMutationRange & { segmentId?: string };
-
-function segmentConflictRange(input: {
-  personId: string;
-  startAt: Date;
-  endAt: Date;
-}): ConflictMutationRange {
-  return {
-    personId: input.personId,
-    startAt: input.startAt,
-    endAt: input.endAt,
-  };
-}
-
-async function loadSegmentConflictRangesTx(
-  tx: PrismaTx,
-  segmentIds: string[],
-): Promise<SegmentConflictRange[]> {
-  if (segmentIds.length === 0) return [];
-  const rows = await tx.workSegment.findMany({
-    where: { id: { in: [...new Set(segmentIds)] } },
-    select: { id: true, personId: true, startAt: true, endAt: true },
-    orderBy: { id: "asc" },
-  });
-  return rows.map((row) => ({
-    segmentId: row.id,
-    personId: row.personId,
-    startAt: row.startAt,
-    endAt: row.endAt,
-  }));
-}
-
-async function prepareExistingSegmentConflictMutationTx(
-  tx: PrismaTx,
-  segmentIds: string[],
-  additionalRanges: (
-    currentRanges: SegmentConflictRange[],
-  ) => ConflictMutationRange[] = () => [],
-  additionalPersonIds: string[] = [],
-): Promise<ConflictMutationRange[]> {
-  const uniqueSegmentIds = [...new Set(segmentIds)];
-  const locators = uniqueSegmentIds.length
-    ? await tx.workSegment.findMany({
-        where: { id: { in: uniqueSegmentIds } },
-        select: { id: true, personId: true },
-        orderBy: { id: "asc" },
-      })
-    : [];
-  if (locators.length !== uniqueSegmentIds.length) throw notFoundError();
-
-  // Person advisory locks serialize all time-range writers. Reloading the
-  // ranges only after those locks prevents a concurrent move from making the
-  // subsequent ResourceConflict locks and rescan cover a stale interval.
-  await lockConflictPersonsTx(tx, [
-    ...locators.map((locator) => locator.personId),
-    ...additionalPersonIds,
-  ]);
-  const currentRanges = await loadSegmentConflictRangesTx(tx, uniqueSegmentIds);
-  if (currentRanges.length !== uniqueSegmentIds.length) throw notFoundError();
-  return prepareConflictMutationTx(tx, [
-    ...currentRanges,
-    ...additionalRanges(currentRanges),
-  ]);
-}
-
-async function rescanSegmentConflictRangesTx(
-  tx: PrismaTx,
-  ranges: ConflictMutationRange[],
-) {
-  if (ranges.length === 0) return;
-  await rescanConflictsForRangesTx(tx, ranges, { locksHeld: true });
 }
 
 function plannedStatusForRange(startAt: Date, endAt: Date): WorkSegment["status"] {
@@ -2404,10 +2167,6 @@ function decimalToNumber(value: Prisma.Decimal | null) {
   return value == null ? null : Number(value.toString());
 }
 
-function decimalKey(value: Prisma.Decimal | null) {
-  return value == null ? "" : value.toString();
-}
-
 function snapshotSegment(segment: SegmentForMutation): Prisma.InputJsonObject {
   return {
     id: segment.id,
@@ -2417,7 +2176,6 @@ function snapshotSegment(segment: SegmentForMutation): Prisma.InputJsonObject {
     startAt: segment.startAt.toISOString(),
     endAt: segment.endAt.toISOString(),
     content: segment.content,
-    allocation: decimalToNumber(segment.allocation),
     role: segment.role,
     customRole: segment.customRole ?? "",
     priority: segment.priority,
@@ -2443,7 +2201,6 @@ export function toWorkSegmentDto(segment: SegmentForMutation): WorkSegmentDto {
     startAt: segment.startAt.toISOString(),
     endAt: segment.endAt.toISOString(),
     content: segment.content,
-    allocation: decimalToNumber(segment.allocation),
     role: segment.role,
     customRole: segment.customRole ?? "",
     priority: segment.priority,

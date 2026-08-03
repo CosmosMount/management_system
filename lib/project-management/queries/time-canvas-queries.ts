@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import type {
   Prisma,
-  ResourceConflictSeverity,
   Task,
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -17,7 +16,6 @@ import {
   queryLimitExceededError,
   validationError,
 } from "@/lib/project-management/application/errors";
-import { resourceConflictCapabilities } from "@/lib/project-management/application/conflict-permissions";
 import {
   isTaskCreatableForSegment,
   TASK_SEGMENT_CREATABLE_STATUSES,
@@ -27,7 +25,6 @@ import {
   timeCanvasDataDtoSchema,
   type BusyBlockDto,
   type SegmentPermissionsDto,
-  type TimeCanvasConflictDto,
   type TimeCanvasDataDto,
   type TimeCanvasNodeAnchorDto,
   type TimeCanvasRowDto,
@@ -38,7 +35,6 @@ import {
   getTimeCanvasDataInputSchema,
   MAX_TIME_CANVAS_ANCHOR_NODES,
   MAX_TIME_CANVAS_ANCHOR_TASKS,
-  MAX_TIME_CANVAS_CONFLICTS,
   MAX_TIME_CANVAS_VISIBLE_SEGMENTS,
   type GetTimeCanvasDataInput,
 } from "@/lib/project-management/validations/time-canvas";
@@ -69,7 +65,6 @@ const fullSegmentSelect = {
   startAt: true,
   endAt: true,
   content: true,
-  allocation: true,
   role: true,
   customRole: true,
   priority: true,
@@ -88,49 +83,13 @@ const fullSegmentSelect = {
     },
     orderBy: { tagId: "asc" },
   },
-  conflictSegments: {
-    select: { conflictId: true },
-    orderBy: { conflictId: "asc" },
-  },
 } satisfies Prisma.WorkSegmentSelect;
 
 const busyCandidateSelect = {
   personId: true,
   startAt: true,
   endAt: true,
-  allocation: true,
-  conflictSegments: {
-    where: {
-      conflict: { status: { in: ["OPEN", "ACKNOWLEDGED"] } },
-    },
-    select: {
-      conflict: { select: { severity: true } },
-    },
-  },
 } satisfies Prisma.WorkSegmentSelect;
-
-const conflictQuerySelect = {
-  id: true,
-  personId: true,
-  kind: true,
-  startAt: true,
-  endAt: true,
-  severity: true,
-  status: true,
-  updatedAt: true,
-  segments: {
-    select: {
-      segment: {
-        select: {
-          personId: true,
-          deletedAt: true,
-          task: { select: canvasTaskAuthorizationSelect },
-        },
-      },
-    },
-    orderBy: { segmentId: "asc" },
-  },
-} satisfies Prisma.ResourceConflictSelect;
 
 const anchorTaskSelect = {
   ...canvasRowTaskSelect,
@@ -185,9 +144,6 @@ type CanvasTask = Prisma.TaskGetPayload<{
 }>;
 type FullSegment = Prisma.WorkSegmentGetPayload<{
   select: typeof fullSegmentSelect;
-}>;
-type CanvasConflict = Prisma.ResourceConflictGetPayload<{
-  select: typeof conflictQuerySelect;
 }>;
 type AnchorTask = Prisma.TaskGetPayload<{ select: typeof anchorTaskSelect }>;
 
@@ -300,9 +256,6 @@ export async function getTimeCanvasData({
     segments.push(...busy);
   }
 
-  const conflicts = parsed.includeConflicts
-    ? await loadCanvasConflicts(actor, parsed, rowPage.rowIds)
-    : [];
   const anchors = parsed.includeTaskAnchors
     ? await loadTaskAnchors(
         actor,
@@ -323,7 +276,6 @@ export async function getTimeCanvasData({
     rows: rowPage.rows,
     anchors,
     segments,
-    conflicts,
     nextCursor: rowPage.nextCursor,
     generatedAt: new Date().toISOString(),
   });
@@ -771,129 +723,14 @@ async function loadBusyBlocks(
     MAX_TIME_CANVAS_VISIBLE_SEGMENTS - remainingLimit + candidates.length,
   );
   return candidates.map((candidate) => {
-    const severities = candidate.conflictSegments.map(
-      (entry) => entry.conflict.severity,
-    );
     return {
       kind: "BUSY" as const,
       visibility: "BUSY_ONLY" as const,
       personId: candidate.personId,
       startAt: candidate.startAt.toISOString(),
       endAt: candidate.endAt.toISOString(),
-      allocation: decimalToNumber(candidate.allocation),
-      conflictSummary: {
-        count: severities.length,
-        severity: highestSeverity(severities),
-      },
     };
   });
-}
-
-async function loadCanvasConflicts(
-  actor: ProjectManagementActor,
-  input: GetTimeCanvasDataInput,
-  rowIds: string[],
-): Promise<TimeCanvasConflictDto[]> {
-  if (rowIds.length === 0) return [];
-  const scopeWhere: Prisma.ResourceConflictWhereInput =
-    input.scope.kind === "PERSONAL" || input.scope.kind === "DASHBOARD"
-      ? {
-          AND: [
-            { personId: actor.personId },
-            input.groupBy === "TASK"
-              ? {
-                  segments: {
-                    some: {
-                      segment: {
-                        taskId: { in: rowIds },
-                        deletedAt: null,
-                      },
-                    },
-                  },
-                }
-              : {},
-          ],
-        }
-      : input.groupBy === "TASK"
-      ? {
-          segments: {
-            some: { segment: { taskId: { in: rowIds }, deletedAt: null } },
-          },
-        }
-      : input.scope.kind === "TASK_SCOPED"
-        ? {
-            personId: { in: rowIds },
-            segments: {
-              some: {
-                segment: {
-                  taskId: input.scope.taskId,
-                  deletedAt: null,
-                },
-              },
-            },
-          }
-        : { personId: { in: rowIds } };
-  const conflictWhere: Prisma.ResourceConflictWhereInput = {
-    AND: [
-      scopeWhere,
-      { startAt: { lt: input.rangeEnd }, endAt: { gt: input.rangeStart } },
-    ],
-  };
-  const conflictIds = await prisma.resourceConflict.findMany({
-    where: conflictWhere,
-    select: { id: true },
-    orderBy: [{ startAt: "asc" }, { id: "asc" }],
-    take: MAX_TIME_CANVAS_CONFLICTS + 1,
-  });
-  if (conflictIds.length > MAX_TIME_CANVAS_CONFLICTS) {
-    throw queryLimitExceededError(
-      "授权过滤后的 Conflict DTO 超过 5000 条，请缩小范围后重试",
-    );
-  }
-  const conflicts = await prisma.resourceConflict.findMany({
-    where: {
-      AND: [conflictWhere, { id: { in: conflictIds.map((row) => row.id) } }],
-    },
-    select: conflictQuerySelect,
-    orderBy: [{ startAt: "asc" }, { id: "asc" }],
-  });
-  return conflicts.map((conflict) => toCanvasConflictDto(actor, conflict));
-}
-
-function toCanvasConflictDto(
-  actor: ProjectManagementActor,
-  conflict: CanvasConflict,
-): TimeCanvasConflictDto {
-  const visibleCount = conflict.segments.filter((entry) =>
-    conflictSegmentVisible(actor, entry.segment),
-  ).length;
-  const hiddenSegmentCount = conflict.segments.length - visibleCount;
-  if (visibleCount === 0) {
-    return {
-      kind: "CONFLICT",
-      visibility: "HIDDEN",
-      severity: conflict.severity,
-      hiddenSegmentCount: Math.max(hiddenSegmentCount, 1),
-      capabilities: hiddenConflictCapabilities(),
-    };
-  }
-  const capabilities = resourceConflictCapabilities(actor, conflict);
-  const updatedAt = conflict.updatedAt.toISOString();
-  return {
-    kind: "CONFLICT",
-    visibility: "VISIBLE",
-    id: conflict.id,
-    personId: conflict.personId,
-    conflictKind: conflict.kind,
-    startAt: conflict.startAt.toISOString(),
-    endAt: conflict.endAt.toISOString(),
-    severity: conflict.severity,
-    status: conflict.status,
-    hiddenSegmentCount,
-    capabilities,
-    updatedAt,
-    versionToken: updatedAt,
-  };
 }
 
 async function loadTaskAnchors(
@@ -1081,7 +918,6 @@ function toFullSegmentDto(
     startAt: segment.startAt.toISOString(),
     endAt: segment.endAt.toISOString(),
     content: segment.content,
-    allocation: decimalToNumber(segment.allocation),
     role: segment.role,
     customRole: segment.customRole,
     priority: segment.priority,
@@ -1091,7 +927,6 @@ function toFullSegmentDto(
     taskId: segment.taskId,
     nodeId: segment.nodeId,
     associationNeedsReview: segment.associationNeedsReview,
-    conflictIds: segment.conflictSegments.map((entry) => entry.conflictId),
     tags: segment.tags.map((entry) => ({
       id: entry.tag.id,
       name: entry.tag.name,
@@ -1151,22 +986,6 @@ function segmentPermissions(
     canRelink: editable && segment.associationNeedsReview,
     canSoftDelete: false,
   };
-}
-
-function conflictSegmentVisible(
-  actor: ProjectManagementActor,
-  segment: CanvasConflict["segments"][number]["segment"],
-): boolean {
-  if (segment.deletedAt) return false;
-  return authorize({
-    actor,
-    action: "segment.view",
-    resource: {
-      type: "segment",
-      personId: segment.personId,
-      task: segment.task ? taskResource(segment.task) : null,
-    },
-  }).allowed;
 }
 
 function canCreateForPerson(
@@ -1344,32 +1163,6 @@ function nodePlannedAt(
   return null;
 }
 
-function highestSeverity(
-  severities: ResourceConflictSeverity[],
-): ResourceConflictSeverity | null {
-  const rank: Record<ResourceConflictSeverity, number> = {
-    LOW: 1,
-    MEDIUM: 2,
-    HIGH: 3,
-    CRITICAL: 4,
-  };
-  return severities.reduce<ResourceConflictSeverity | null>(
-    (highest, severity) =>
-      highest === null || rank[severity] > rank[highest] ? severity : highest,
-    null,
-  );
-}
-
-function hiddenConflictCapabilities() {
-  return {
-    canAcknowledge: false as const,
-    canResolve: false as const,
-    canIgnore: false as const,
-    canPreviewSuggestion: false as const,
-    canApplySuggestion: false as const,
-  };
-}
-
 function isTerminalTaskStatus(status: Task["status"]): boolean {
   return (
     status === "COMPLETED" ||
@@ -1400,7 +1193,6 @@ function canvasCursorFilter(input: GetTimeCanvasDataInput): string {
         includeTaskAnchors: input.includeTaskAnchors,
         includeActual: input.includeActual,
         includeBusyBlocks: input.includeBusyBlocks,
-        includeConflicts: input.includeConflicts,
       }),
     )
     .digest("base64url")

@@ -7,7 +7,6 @@ import type {
   WorkSegmentStatus,
   WorkSegmentType,
 } from "@prisma/client";
-import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma";
 import {
   activateTask,
@@ -21,6 +20,7 @@ import {
 } from "../lib/project-management/application/lifecycle-service";
 import {
   batchCreatePlannedSegments,
+  cancelPlannedSegment,
   createActualSegment,
   createWorkSegment,
   relinkPlannedSegment,
@@ -1623,7 +1623,6 @@ test.describe("project management S2 plan and Task mutation services", () => {
           startAt: new Date("2026-08-03T01:00:00.000Z"),
           endAt: new Date("2026-08-03T02:00:00.000Z"),
           content: `association writer ${first}`,
-          allocation: 50,
           taskId: fixture.taskId,
           nodeId: removed.nodeId,
         });
@@ -1801,6 +1800,134 @@ test.describe("project management S2 plan and Task mutation services", () => {
         message: errors[1]?.message,
       });
     }
+  });
+
+  test("Revision notification excludes a Segment cancelled while the apply waits for its row lock", async () => {
+    expect(process.env.NOTIFICATION_DELIVERY_DISABLED).toBe("true");
+    expect(new URL(process.env.DATABASE_URL ?? "").pathname).toMatch(/_test$/);
+
+    const admin = await createAccountPerson("S2 Revision Cancel Race Admin");
+    const owner = await createAccountPerson("S2 Revision Cancel Race Owner");
+    const reviewer = await createAccountPerson(
+      "S2 Revision Cancel Race Reviewer",
+    );
+    const member = await createAccountPerson("S2 Revision Cancel Race Member");
+    await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
+    const fixture = await createDraft({
+      creator: admin,
+      owner,
+      reviewer,
+      title: "S2 Revision cancellation serialization",
+      extraMembers: [{ personId: member.person.id, role: "MEMBER" }],
+    });
+    await activateTask(actor(owner), {
+      taskId: fixture.taskId,
+      expectedLockVersion: 0,
+    });
+    const current = await currentPlan(fixture.taskId);
+    const revisedFrom = current.nodes.find(
+      (entry) => entry.node.status === "ACTIVE",
+    );
+    if (!revisedFrom) throw new Error("缺少 Revision 并发测试起点");
+
+    const cancelledCandidate = await createWorkSegment(actor(member), {
+      ...segmentCreateInput(member.person.id, "Revision 等待期间取消", 11),
+      type: "PLANNED",
+      taskId: fixture.taskId,
+      nodeId: revisedFrom.nodeId,
+    });
+    const retainedCandidate = await createWorkSegment(actor(member), {
+      ...segmentCreateInput(member.person.id, "Revision 仍需关联复核", 13),
+      type: "PLANNED",
+      taskId: fixture.taskId,
+      nodeId: revisedFrom.nodeId,
+    });
+    const taskBeforeRevision = await currentTask(fixture.taskId);
+    const revision = await createRevisionDraft(actor(owner), {
+      taskId: fixture.taskId,
+      basePlanVersionId: current.id,
+      baseTaskLockVersion: taskBeforeRevision.lockVersion,
+      revisedFromNodeId: revisedFrom.nodeId,
+      reason: "验证取消与 Revision 生效串行化",
+      plannedStartAt: iso(2026, 8, 1),
+      replacementMilestones: [milestoneInput("并发后的替代节点", 6)],
+      termination: terminationInput(8),
+      idempotencyKey: `s2-revision-cancel-race-${randomUUID()}`,
+    });
+    await submitRevision(actor(owner), {
+      revisionNodeId: revision.revisionNodeId,
+      comment: "提交并发回归 Revision",
+    });
+
+    const outcomes = await runCancellationBeforeRevisionBehindSegmentLock(
+      cancelledCandidate.segment.id,
+      () =>
+        cancelPlannedSegment(actor(member), {
+          segmentId: cancelledCandidate.segment.id,
+          expectedUpdatedAt: cancelledCandidate.segment.updatedAt,
+          reason: "Revision 生效前取消",
+        }),
+      () =>
+        approveRevision(actor(reviewer), {
+          revisionNodeId: revision.revisionNodeId,
+          comment: "取消完成后批准 Revision",
+        }),
+    );
+    for (const outcome of outcomes) {
+      if (outcome.status === "rejected") throw outcome.reason;
+    }
+
+    const persistedSegments = await prisma.workSegment.findMany({
+      where: {
+        id: {
+          in: [
+            cancelledCandidate.segment.id,
+            retainedCandidate.segment.id,
+          ],
+        },
+      },
+      select: { id: true, status: true, associationNeedsReview: true },
+    });
+    expect(
+      persistedSegments.find(
+        (segment) => segment.id === cancelledCandidate.segment.id,
+      ),
+    ).toMatchObject({ status: "CANCELLED", associationNeedsReview: false });
+    expect(
+      persistedSegments.find(
+        (segment) => segment.id === retainedCandidate.segment.id,
+      ),
+    ).toMatchObject({ status: "PLANNED", associationNeedsReview: true });
+    expect(
+      await prisma.workSegmentChange.count({
+        where: {
+          segmentId: cancelledCandidate.segment.id,
+          reason: "Revision 生效后原关联节点失效",
+        },
+      }),
+    ).toBe(0);
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: {
+          entityType: "WorkSegment",
+          entityId: cancelledCandidate.segment.id,
+          action: "pm.segment.update",
+          reason: "Revision 生效后原关联节点失效",
+        },
+      }),
+    ).toBe(0);
+
+    const associationOutbox = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: {
+        eventKey: `pm:segment:association_invalidated:${revision.revisionNodeId}:feishu`,
+      },
+      select: { payload: true },
+    });
+    const payload = jsonRecord(JSON.parse(associationOutbox.payload));
+    expect(jsonRecord(payload.context).affectedSegmentIds).toEqual([
+      retainedCandidate.segment.id,
+    ]);
+    expect(payload.summary).toContain("1 条 Planned Segment");
   });
 
   test("Revision validates the authoritative carried prefix and submit cannot bypass missing plannedStartAt", async () => {
@@ -2435,7 +2562,6 @@ async function createSegmentReference(
       startAt: new Date("2026-08-02T09:00:00.000Z"),
       endAt: new Date("2026-08-02T10:00:00.000Z"),
       content: `S2 reference ${input.type}/${input.status}`,
-      allocation: new Prisma.Decimal(50),
       taskId: input.taskId,
       nodeId: input.nodeId,
       associationNeedsReview: input.associationNeedsReview ?? false,
@@ -2454,7 +2580,6 @@ async function createSourceHistoryReference(input: SegmentReferenceFixture) {
       startAt: new Date("2026-08-02T09:00:00.000Z"),
       endAt: new Date("2026-08-02T10:00:00.000Z"),
       content: "历史 Planned 来源",
-      allocation: new Prisma.Decimal(50),
       taskId: input.taskId,
       nodeId: input.nodeId,
       createdByAccountId: input.accountId,
@@ -2468,7 +2593,6 @@ async function createSourceHistoryReference(input: SegmentReferenceFixture) {
       startAt: planned.startAt,
       endAt: planned.endAt,
       content: "Actual 历史来源",
-      allocation: new Prisma.Decimal(50),
       taskId: input.taskId,
       nodeId: null,
       createdByAccountId: input.accountId,
@@ -2765,7 +2889,6 @@ function segmentCreateInput(personId: string, content: string, hour = 1) {
     startAt: new Date(Date.UTC(2026, 7, 20, hour, 0, 0)),
     endAt: new Date(Date.UTC(2026, 7, 20, hour + 1, 0, 0)),
     content,
-    allocation: 50,
     role: "DEVELOPER" as const,
     priority: "MEDIUM" as const,
     tagIds: [],
@@ -2911,6 +3034,65 @@ async function runBehindTaskLockBarrier(
   return runTaskLockBarrier(taskId, operations, false);
 }
 
+async function runCancellationBeforeRevisionBehindSegmentLock(
+  segmentId: string,
+  cancelOperation: () => Promise<unknown>,
+  revisionOperation: () => Promise<unknown>,
+) {
+  let locker: Client | undefined;
+  let observer: Client | undefined;
+  let transactionMayBeOpen = false;
+  let released = false;
+  const pending: Promise<unknown>[] = [];
+  let pendingSettlement: Promise<PromiseSettledResult<unknown>[]> | undefined;
+  let pendingBackendPids: number[] = [];
+  let pendingHandled = false;
+  let result: PromiseSettledResult<unknown>[] | undefined;
+  let primaryError: unknown;
+  let hasPrimaryError = false;
+  try {
+    locker = await connectDatabaseClient("s2-revision-segment-locker");
+    observer = await connectDatabaseClient("s2-revision-segment-observer");
+    transactionMayBeOpen = true;
+    const lockerPid = await lockWorkSegmentRow(locker, segmentId);
+
+    const cancellation = startBarrierOperations([cancelOperation]).pending[0];
+    if (!cancellation) throw new Error("Segment 取消操作未启动");
+    pending.push(cancellation);
+    pendingSettlement = Promise.allSettled(pending);
+    await waitForTaskLockBlockers(observer, lockerPid, 1);
+
+    const revision = startBarrierOperations([revisionOperation]).pending[0];
+    if (!revision) throw new Error("Revision 生效操作未启动");
+    pending.push(revision);
+    pendingSettlement = Promise.allSettled(pending);
+    pendingBackendPids = await waitForTaskLockBlockers(observer, lockerPid, 2);
+    if (new Set(pendingBackendPids).size < 2) {
+      throw new Error("取消与 Revision 未使用独立 PostgreSQL backend");
+    }
+
+    await locker.query("COMMIT");
+    released = true;
+    result = await pendingSettlement;
+    pendingHandled = true;
+  } catch (error) {
+    primaryError = error;
+    hasPrimaryError = true;
+  }
+  const cleanupErrors = await cleanupBarrierResources({
+    locker,
+    observer,
+    rollbackRequired: Boolean(locker && transactionMayBeOpen && !released),
+    pendingSettlement,
+    pendingBackendPids,
+    pendingHandled,
+    primaryError,
+  });
+  throwBarrierErrors(hasPrimaryError, primaryError, cleanupErrors);
+  if (!result) throw new Error("取消与 Revision barrier 未返回结果");
+  return result;
+}
+
 async function runTaskAssociationLockChain(
   taskId: string,
   firstOperation: () => Promise<unknown>,
@@ -2992,6 +3174,20 @@ async function lockTaskRow(client: Client, taskId: string) {
   await client.query('SELECT "id" FROM "Task" WHERE "id" = $1 FOR UPDATE', [
     taskId,
   ]);
+  return pid;
+}
+
+async function lockWorkSegmentRow(client: Client, segmentId: string) {
+  await client.query("BEGIN");
+  const identity = await client.query<{ pid: number }>(
+    "SELECT pg_backend_pid() AS pid",
+  );
+  const pid = identity.rows[0]?.pid;
+  if (!pid) throw new Error("无法取得 WorkSegment locker backend pid");
+  await client.query(
+    'SELECT "id" FROM "WorkSegment" WHERE "id" = $1 FOR UPDATE',
+    [segmentId],
+  );
   return pid;
 }
 

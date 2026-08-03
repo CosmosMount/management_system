@@ -24,7 +24,6 @@ export type TimeCanvasUrlState = {
   statuses: Array<
     "PLANNED" | "IN_PROGRESS" | "PENDING_CONFIRMATION" | "CONFIRMED" | "CANCELLED"
   >;
-  conflictOnly: boolean;
   focusId: string | null;
   issues: string[];
 };
@@ -88,7 +87,6 @@ export function parseTimeCanvasUrlState(
     tagIds,
     types,
     statuses,
-    conflictOnly: searchParams.get("conflict") === "open",
     focusId,
     issues,
   };
@@ -114,7 +112,6 @@ export function serializeTimeCanvasUrlState(
       state.statuses.map((status) => status.toLowerCase()).join(","),
     );
   }
-  if (state.conflictOnly) params.set("conflict", "open");
   if (state.focusId) params.set("focus", state.focusId);
   return params;
 }

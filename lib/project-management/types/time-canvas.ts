@@ -1,7 +1,4 @@
 import {
-  resourceConflictKindValues,
-  resourceConflictSeverityValues,
-  resourceConflictStatusValues,
   personTimeCanvasGrouping,
   standaloneTimeCanvasScopeKindValues,
   taskScopedTimeCanvasScopeKind,
@@ -18,9 +15,6 @@ import { z } from "zod";
 
 const dtoIdSchema = z.string().uuid();
 const dtoAbsoluteDateTimeSchema = z.string().datetime({ offset: true });
-const conflictKindSchema = z.enum(resourceConflictKindValues);
-const conflictSeveritySchema = z.enum(resourceConflictSeverityValues);
-const conflictStatusSchema = z.enum(resourceConflictStatusValues);
 const taskStatusSchema = z.enum(taskStatusValues);
 const taskPrioritySchema = z.enum(taskPriorityValues);
 const taskNodeTypeSchema = z.enum(taskNodeTypeValues);
@@ -101,20 +95,6 @@ export const segmentPermissionsDtoSchema = z
 
 export type SegmentPermissionsDto = z.infer<
   typeof segmentPermissionsDtoSchema
->;
-
-const conflictCapabilitiesDtoSchema = z
-  .object({
-    canAcknowledge: z.boolean(),
-    canResolve: z.boolean(),
-    canIgnore: z.boolean(),
-    canPreviewSuggestion: z.boolean(),
-    canApplySuggestion: z.boolean(),
-  })
-  .strict();
-
-export type ConflictCapabilitiesDto = z.infer<
-  typeof conflictCapabilitiesDtoSchema
 >;
 
 const rowCapabilitiesDtoSchema = z
@@ -225,7 +205,6 @@ export const timeSegmentDtoSchema = z
     startAt: dtoAbsoluteDateTimeSchema,
     endAt: dtoAbsoluteDateTimeSchema,
     content: z.string(),
-    allocation: z.number().gt(0).max(100).nullable(),
     role: z.enum(workSegmentRoleValues),
     customRole: z.string().nullable(),
     priority: taskPrioritySchema,
@@ -235,7 +214,6 @@ export const timeSegmentDtoSchema = z
     taskId: dtoIdSchema.nullable(),
     nodeId: dtoIdSchema.nullable(),
     associationNeedsReview: z.boolean(),
-    conflictIds: z.array(dtoIdSchema),
     tags: z.array(segmentTagDtoSchema),
     permissions: segmentPermissionsDtoSchema,
     updatedAt: dtoAbsoluteDateTimeSchema,
@@ -261,13 +239,6 @@ export const timeSegmentDtoSchema = z
 
 export type TimeSegmentDto = z.infer<typeof timeSegmentDtoSchema>;
 
-export const busyConflictSummaryDtoSchema = z
-  .object({
-    count: z.number().int().min(0),
-    severity: conflictSeveritySchema.nullable(),
-  })
-  .strict();
-
 export const busyBlockDtoSchema = z
   .object({
     kind: z.literal("BUSY"),
@@ -275,8 +246,6 @@ export const busyBlockDtoSchema = z
     personId: dtoIdSchema,
     startAt: dtoAbsoluteDateTimeSchema,
     endAt: dtoAbsoluteDateTimeSchema,
-    allocation: z.number().gt(0).max(100).nullable(),
-    conflictSummary: busyConflictSummaryDtoSchema,
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -295,82 +264,9 @@ export const BUSY_BLOCK_DTO_FIELDS = [
   "personId",
   "startAt",
   "endAt",
-  "allocation",
-  "conflictSummary",
 ] as const;
 
 export type BusyBlockDto = z.infer<typeof busyBlockDtoSchema>;
-
-const hiddenConflictCapabilitiesDtoSchema = z
-  .object({
-    canAcknowledge: z.literal(false),
-    canResolve: z.literal(false),
-    canIgnore: z.literal(false),
-    canPreviewSuggestion: z.literal(false),
-    canApplySuggestion: z.literal(false),
-  })
-  .strict();
-
-export const hiddenTimeCanvasConflictDtoSchema = z
-  .object({
-    kind: z.literal("CONFLICT"),
-    visibility: z.literal("HIDDEN"),
-    severity: conflictSeveritySchema,
-    hiddenSegmentCount: z.number().int().min(1),
-    capabilities: hiddenConflictCapabilitiesDtoSchema,
-  })
-  .strict();
-
-export type HiddenTimeCanvasConflictDto = z.infer<
-  typeof hiddenTimeCanvasConflictDtoSchema
->;
-
-export const visibleTimeCanvasConflictDtoSchema = z
-  .object({
-    kind: z.literal("CONFLICT"),
-    visibility: z.literal("VISIBLE"),
-    id: dtoIdSchema,
-    personId: dtoIdSchema,
-    conflictKind: conflictKindSchema,
-    startAt: dtoAbsoluteDateTimeSchema,
-    endAt: dtoAbsoluteDateTimeSchema,
-    severity: conflictSeveritySchema,
-    status: conflictStatusSchema,
-    hiddenSegmentCount: z.number().int().min(0),
-    capabilities: conflictCapabilitiesDtoSchema,
-    updatedAt: dtoAbsoluteDateTimeSchema,
-    versionToken: dtoAbsoluteDateTimeSchema,
-  })
-  .strict()
-  .superRefine((value, ctx) => {
-    if (new Date(value.endAt) <= new Date(value.startAt)) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["endAt"],
-        message: "Conflict 结束时间必须晚于开始时间",
-      });
-    }
-    if (value.versionToken !== value.updatedAt) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["versionToken"],
-        message: "Conflict 版本令牌必须等于 updatedAt",
-      });
-    }
-  });
-
-export type VisibleTimeCanvasConflictDto = z.infer<
-  typeof visibleTimeCanvasConflictDtoSchema
->;
-
-export const timeCanvasConflictDtoSchema = z.union([
-  visibleTimeCanvasConflictDtoSchema,
-  hiddenTimeCanvasConflictDtoSchema,
-]);
-
-export type TimeCanvasConflictDto = z.infer<
-  typeof timeCanvasConflictDtoSchema
->;
 
 export const personAccountAvailabilityValues = [
   "UNBOUND",
@@ -456,7 +352,6 @@ const timeCanvasDataCommonFields = {
   timezone: z.string().trim().min(1),
   range: timeCanvasRangeDtoSchema,
   anchors: z.array(timeCanvasTaskAnchorDtoSchema),
-  conflicts: z.array(timeCanvasConflictDtoSchema),
   nextCursor: pageCursorSchema,
   generatedAt: dtoAbsoluteDateTimeSchema,
 } as const;
@@ -548,18 +443,6 @@ export const timeCanvasDataDtoSchema = z
           });
         }
       });
-      value.conflicts.forEach((conflict, index) => {
-        if (
-          conflict.visibility === "VISIBLE" &&
-          !currentPersonIds.has(conflict.personId)
-        ) {
-          ctx.addIssue({
-            code: "custom",
-            path: ["conflicts", index, "personId"],
-            message: "可见 Conflict 必须属于当前 Person 行分页",
-          });
-        }
-      });
       return;
     }
 
@@ -585,69 +468,3 @@ export const timeCanvasDataDtoSchema = z
   });
 
 export type TimeCanvasDataDto = z.infer<typeof timeCanvasDataDtoSchema>;
-
-export const visibleSegmentPlacementConflictDtoSchema = z
-  .object({
-    kind: z.literal("PLACEMENT_CONFLICT"),
-    visibility: z.literal("VISIBLE"),
-    reason: conflictKindSchema,
-    severity: conflictSeveritySchema,
-    range: timeCanvasRangeDtoSchema,
-  })
-  .strict();
-
-export type VisibleSegmentPlacementConflictDto = z.infer<
-  typeof visibleSegmentPlacementConflictDtoSchema
->;
-
-export const hiddenSegmentPlacementConflictDtoSchema = z
-  .object({
-    kind: z.literal("PLACEMENT_CONFLICT"),
-    visibility: z.literal("HIDDEN"),
-    blocked: z.literal(true),
-  })
-  .strict();
-
-export type HiddenSegmentPlacementConflictDto = z.infer<
-  typeof hiddenSegmentPlacementConflictDtoSchema
->;
-
-export const segmentPlacementConflictDtoSchema = z.discriminatedUnion(
-  "visibility",
-  [
-    visibleSegmentPlacementConflictDtoSchema,
-    hiddenSegmentPlacementConflictDtoSchema,
-  ],
-);
-
-export type SegmentPlacementConflictDto = z.infer<
-  typeof segmentPlacementConflictDtoSchema
->;
-
-export const segmentPlacementPreviewDtoSchema = z
-  .object({
-    personId: dtoIdSchema,
-    range: timeCanvasRangeDtoSchema,
-    allocation: z.number().gt(0).max(100).nullable(),
-    conflicts: z.array(segmentPlacementConflictDtoSchema),
-    generatedAt: dtoAbsoluteDateTimeSchema,
-  })
-  .strict()
-  .superRefine((value, ctx) => {
-    const hiddenConflictIndexes = value.conflicts
-      .map((conflict, index) =>
-        conflict.visibility === "HIDDEN" ? index : null,
-      )
-      .filter((index): index is number => index !== null);
-    if (hiddenConflictIndexes.length > 1) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["conflicts", hiddenConflictIndexes[1] ?? 0],
-        message: "隐藏 placement 命中必须聚合为单一通用 indicator",
-      });
-    }
-  });
-
-export type SegmentPlacementPreviewDto = z.infer<
-  typeof segmentPlacementPreviewDtoSchema
->;

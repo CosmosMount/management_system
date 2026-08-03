@@ -12,16 +12,11 @@ import {
   type AuthorizationTaskResource,
 } from "@/lib/project-management/authorization";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
-import {
-  countActionableResourceConflicts,
-  listResourceConflicts,
-} from "@/lib/project-management/queries/resource-queries";
 
 export type ActionInboxKind =
   | "SEGMENT_CONFIRMATION"
   | "MILESTONE_REVIEW"
   | "REVISION_REVIEW"
-  | "RESOURCE_CONFLICT"
   | "TERMINATION"
   | "ASSOCIATION_REVIEW";
 
@@ -64,7 +59,6 @@ export async function getActionInbox({
   generatedAt: string;
 }> {
   const boundedLimit = Math.min(Math.max(Math.trunc(limit), 1), 200);
-  const conflictLimit = Math.min(boundedLimit, 100);
   const now = new Date();
   const visibleTask = taskReadableWhere(actor);
   const segmentManagerTask = taskActionableWhere(actor, [], [
@@ -138,25 +132,12 @@ export async function getActionInbox({
       },
     },
   };
-  const conflictQueries = (["CRITICAL", "HIGH", "MEDIUM", "LOW"] as const).flatMap(
-    (severity) =>
-      (["OPEN", "ACKNOWLEDGED"] as const).map((status) =>
-        listResourceConflicts({
-          actor,
-          input: { status, severity, limit: conflictLimit },
-          orderBy: [{ startAt: "asc" }, { id: "asc" }],
-          actionableOnly: true,
-          resultLimit: boundedLimit,
-        }),
-      ),
-  );
   const [
     confirmationSegments,
     associationSegments,
     reviews,
     revisions,
     terminations,
-    conflictResults,
     counts,
     criticalCounts,
   ] =
@@ -238,14 +219,12 @@ export async function getActionInbox({
         orderBy: [{ plannedAt: "asc" }, { id: "asc" }],
         take: boundedLimit,
       }),
-      Promise.all(conflictQueries),
       Promise.all([
         prisma.workSegment.count({ where: confirmationSegmentWhere }),
         prisma.workSegment.count({ where: associationSegmentWhere }),
         prisma.milestoneReview.count({ where: milestoneReviewWhere }),
         prisma.revisionNode.count({ where: revisionWhere }),
         prisma.terminationNode.count({ where: terminationWhere }),
-        countActionableResourceConflicts(actor),
       ]),
       Promise.all([
         prisma.milestoneReview.count({
@@ -259,7 +238,6 @@ export async function getActionInbox({
         prisma.terminationNode.count({
           where: { AND: [terminationWhere, { plannedAt: { lt: now } }] },
         }),
-        countActionableResourceConflicts(actor, "CRITICAL"),
       ]),
     ]);
 
@@ -383,27 +361,6 @@ export async function getActionInbox({
       href: `/progress/tasks/${task.id}?tab=reviews`,
     });
   }
-  for (const conflict of conflictResults.flatMap((result) => result.items)) {
-    if (
-      !conflict.capabilities.canAcknowledge &&
-      !conflict.capabilities.canResolve &&
-      !conflict.capabilities.canIgnore
-    ) {
-      continue;
-    }
-    items.push({
-      id: `conflict:${conflict.id}`,
-      kind: "RESOURCE_CONFLICT",
-      title: `${conflict.personName}的资源冲突`,
-      summary: `${conflict.kind} · ${conflict.status}`,
-      taskId: null,
-      taskTitle: null,
-      dueAt: conflict.startAt,
-      severity: conflict.severity,
-      href: `/progress/resources/conflicts?conflictId=${conflict.id}`,
-    });
-  }
-
   const severityRank = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 } as const;
   items.sort((left, right) => {
     const severity = severityRank[left.severity] - severityRank[right.severity];

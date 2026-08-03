@@ -51,7 +51,7 @@ app/
   actions/          # Server Actions（采购 + 反馈 + 管理）
   api/auth/         # Auth.js 路由
   apply/ orders/    # 采购报销页面
-  progress/         # 项目管理总览、Task 工作台、资源时间轴、冲突和通知中心
+  progress/         # 项目管理总览、Task 工作台、资源时间轴和通知中心
   admin/            # 角色管理
 components/         # UI 组件
 lib/                # 业务逻辑、权限、飞书、校验
@@ -123,7 +123,7 @@ DRAFT → MANAGEMENT_REVIEW → TEACHER_REVIEW → PENDING_APPLICANT_DOCS
 
 旧项目管理专用模型和开发数据已通过 migration 删除，包括项目、阶段、旧任务及其审批、交付、周报、风险、评论、关注和提醒关系。共享的 `User`、采购/反馈、`FileAsset`、`NotificationOutbox` 与飞书卡片跟踪模型继续保留。
 
-P1 已新增 v2.1 底座模型：`Account`、`AccountIdentity`、`Person`、`Tag`、`Task`、`TaskMember`、`TaskPlanVersion`、`TaskNode`、`PlanVersionNode`、Milestone/Revision/Termination 子类型、`MilestoneReview`、`ReviewEvidence`、`WorkSegment`、`WorkSegmentSource`、`WorkSegmentChange`、`ResourceConflict`、`SystemRoleAssignment`、`NotificationPreference`、`InAppNotification` 和 `DomainAuditEvent`。这些表从空项目管理数据集开始，不包含 Project、legacy map 或旧来源字段。
+当前项目管理数据模型包括 `Account`、`AccountIdentity`、`Person`、`Tag`、`Task`、`TaskMember`、`TaskPlanVersion`、`TaskNode`、`PlanVersionNode`、Milestone/Revision/Termination 子类型、`MilestoneReview`、`ReviewEvidence`、`WorkSegment`、`WorkSegmentSource`、`WorkSegmentChange`、`SystemRoleAssignment`、`NotificationPreference`、`InAppNotification` 和 `DomainAuditEvent`。资源冲突表、扫描 checkpoint 和 `WorkSegment.allocation` 已由不可逆 migration 删除。
 
 P2/P3 已补齐 Task 计划生命周期的服务端闭环，入口位于 `lib/project-management/application/lifecycle-service.ts`、`app/actions/project-management/{tasks,plans,revisions,milestones,terminations}.ts` 和 `lib/project-management/queries/task-queries.ts`：
 
@@ -135,30 +135,21 @@ P2/P3 已补齐 Task 计划生命周期的服务端闭环，入口位于 `lib/pr
 - 查询 facade `getTaskWorkspace`、`getPlanVersion`、`listTaskPlanVersions` 和 `comparePlanVersions` 都通过 `taskReadableWhere(actor)` 过滤，防止枚举不可读 Task 或 Plan。
 - S2 Task mutation service 将 Draft 更新拆为 metadata/member/plan 三个事务，将 Active 直接更新拆为 metadata/member/tag 三个事务；六个入口都先锁 Task、复核服务端权限/状态/`expectedLockVersion`，再原子提交业务数据、审计与新锁版本。Draft plan replace 只接受当前计划已有 `nodeId`；新节点必须使用 `clientKey`，随机或外部 `nodeId` 统一返回 `ASSOCIATION_INVALID`。计划写入的公开时间边界只接受带 `Z`/offset 的 string，内部解析后才使用 `Date`。plan replace 审计不复制 goal、criteria、reviewRequirements 或 businessDescription 正文，只记录 before/after snapshot hash、planned start、节点数，以及有界的 retained/added/removed/reordered ID/type 和字段名变化统计。新 Task、激活、新 Revision 目标及 Revision submit/apply 均严格要求 `plannedStartAt` 和合法 chronology；仅 legacy Active Current Plan 可在创建修复 Revision 或确认 Termination 时忽略已有的空开始时间/旧时间乱序。Revision 目标仍严格校验新 `plannedStartAt`、replacement suffix 和 Termination，只对标记为 `isCarryForward` 的连续历史前缀容忍其内部旧乱序。
 
-P5 已补齐 Resource Segment 与 Conflict 服务端闭环，复用 P1 的 `WorkSegment`、`WorkSegmentSource`、`WorkSegmentChange`、`ResourceConflict` 和 `ConflictSegment`，未新增 migration。入口位于 `lib/project-management/application/segment-service.ts`、`lib/project-management/application/conflict-service.ts`、`app/actions/project-management/{segments,conflicts}.ts` 和 `lib/project-management/queries/resource-queries.ts`：
+P5 Resource Segment 服务端闭环位于 `lib/project-management/application/segment-service.ts`、`app/actions/project-management/segments.ts` 和 `lib/project-management/queries/resource-queries.ts`：
 
-- Segment 服务支持单条/批量 Planned 创建、Actual 创建、更新、批量移动、拆分、合并、取消、完整确认、部分确认、重关联和 Actual 逻辑删除。所有写操作都在事务内写 `WorkSegmentChange` 和 `DomainAuditEvent`，并通过 `expectedUpdatedAt` 执行乐观锁校验；批量写入保持单事务全成全败。创建或改变 Task/`nodeId` 关联的路径先在锁前以同一安全错误校验 prospective Task/Node 的可见性，再与 Draft plan replace 共享 PostgreSQL Task 行锁协议：按 Task ID 排序取得 `FOR UPDATE`，按 Segment ID 排序取得 `WorkSegment` 行锁，锁后复核既有 locator 未漂移并再次校验 prospective 关联，最后才写入。随机不存在与真实但不可见的 prospective Task 不形成存在性 oracle；只有已获授权的既有 Segment locator 在等待锁期间真实变化才返回并发刷新错误。该协议也使 plan replace 的“检查引用后删除”和关联 writer 不能交错，`ON DELETE SET NULL` 不会静默清空并发新关联。其他需要转换状态的入口仍按固定 ID 顺序取得 `WorkSegment` 行锁；cron transition 使用带旧状态与时间条件的 guarded update，只有真实状态变化才写 change、audit 和 outbox，因此并发或幂等重试不会重复副作用。
-- Segment 校验包括 `endAt > startAt`、单条及 merge 最终结果最长 31 天、`allocation` 可空且非空时 `0 < allocation <= 100`、`completionPercent` 仅 Actual 可用、Node 必须属于关联 Task。Planned 只能关联 Current Plan 且未 `REVISED/CANCELLED` 的 Node；Actual 可保留历史 Node 关联。
-- 权限规则为本人可管理本人 Segment；管理他人 Segment 需要统一超管、项目管理员，或通过关联 Task 命中组长范围。无 Task 关联的他人 Segment 只能由全局项目角色管理。
-- 确认 Planned 会创建 Actual 并写 `WorkSegmentSource`；部分确认会取消原 Planned 并生成未覆盖的剩余 Planned 子段。Segment 操作不会改变 Task、Node、Milestone 或 Termination 状态。
-- Conflict 扫描使用半开区间 `[startAt, endAt)` 和 `v1|kind|personId|startAt|endAt|sortedSegmentIds` 稳定 fingerprint。显式人员名单会在任何扫描写入前统一校验存在且为 ACTIVE，任一无效时整批零写入；合法名单按人员独立提交，单人运行时失败会记录脱敏 structured log、返回稳定 failure code 和成功/失败统计，并继续后续人员。管理 action 原样返回 partial result，cron 专用的 default-window wrapper 明确记录 partial summary，因此失败人员不会被调用方静默丢弃。每个人员在事务内先取得由 SHA-256 域分隔摘要前 64 bit 生成的双 `int4` PostgreSQL advisory lock，再读取和写入该人员的 conflict；碰撞概率为 64 bit 空间，不同人员不会被一个全局锁串行。人工 acknowledge/resolve/ignore/preview/apply 采用同一人员锁，再按 person → conflict row → segment ID 的固定顺序加锁。重复扫描不会重复创建 history/audit/outbox，扫描器不会覆盖尚未到期的 ignore 或人工 resolved 结果；自动解决记录可在同一 fingerprint 再次出现时重开。解决来源取自 append-only `DomainAuditEvent`：scanner 自动解决的 `resolvedAt` 复用同事务本轮 resolve audit 由 PostgreSQL 默认生成的实际 `createdAt`，避免应用时钟晚于数据库事务时钟而把真实审计排除在周期下界外；重开仍以当前 Conflict `resolvedAt` 为本轮周期下界，只接受下界起（含下界）恰好一条 `action=pm.conflict.resolve`、`source=CRON` 的 resolve/apply 审计。早于当前 `resolvedAt` 的旧审计、当前周期审计缺失或多条、`apply_suggestion`、人工/Web 或异常来源一律保守视为人工终态；`resolvedByAccountId` 不参与来源证明，因此可兼容旧 scanner 遗留 actor，又不会靠空 actor 猜测历史来源。
-- 当前启用 `ALLOCATION_OVER_LIMIT`、`MISSING_ALLOCATION`、`HIGH_PRIORITY_OVERLAP`、`LEAD_ROLE_OVERLAP`、`REVISION_OVERLAP` 和 `ACTUAL_OVERLOAD`。两条以上 Planned 重叠且其中任意一条缺少 allocation 时产生 `MISSING_ALLOCATION`，证据包含该切片全部重叠 Planned，并单独列出缺失 allocation 的 ID。`UNAVAILABLE_TIME` 枚举保留但未扫描，因为当前没有可授权、可维护的人员不可用时间模型。
-- Conflict 查看允许涉及本人、相关 Task 可见者和范围内组长；处理、忽略、预览和应用建议仅限全局项目角色、覆盖全部关联 Task 的范围内组长，或所有关联 Task 都由其 OWN 的 Task Owner。普通只读用户即使能看到部分关联 Segment，Conflict 列表和详情也会统一过滤 explanation 中的 `segmentIds`、`changedSegmentIds`、`missingAllocationSegmentIds` 和 `segments`，不能取得隐藏 Segment 的 ID、Task、时间、内容或版本；具备完整处理权限者仍可取得完整合法证据。Conflict DTO 返回逐操作 capability，但 mutation 仍会独立执行服务端授权；`previewConflictSuggestion` 不写库，`applyConflictSuggestion` 必须显式 `confirmApply=true` 并复核 Segment `updatedAt`。
-- `resource-queries.ts` 提供 Segment 列表、详情、change history，以及 Conflict 列表、详情和关联 Segment 解释；详情查询使用 `segmentReadableWhere(actor)` 或 Conflict readable 条件防止枚举不可读对象。
+- Segment 服务支持单条/批量 Planned 创建、Actual 创建、更新、批量移动、拆分、合并、取消、完整确认、部分确认、重关联和 Actual 逻辑删除。所有写操作继续在事务内写 `WorkSegmentChange` 和 `DomainAuditEvent`，通过 `expectedUpdatedAt` 执行乐观锁，批量写入保持全成全败。
+- 创建或改变 Task/`nodeId` 关联的路径继续与 Draft plan replace 共用 Task 行锁协议；状态转换继续按稳定 Segment ID 顺序锁行。Revision 生效只锁定受影响 Segment，并安全设置 `associationNeedsReview=true`。
+- Segment 校验包括 `endAt > startAt`、单条及 merge 最终结果最长 31 天、Actual 完成比例和 Task/Node 关联规则。Planned 只能关联 Current Plan 且未 `REVISED/CANCELLED` 的 Node；Actual 可保留历史 Node 关联。
+- 权限规则、状态机、确认生成 Actual、`WorkSegmentSource`、变更历史和审计均保留。多个 Segment 可以时间重叠，服务端不检测、提示、阻止或通知资源冲突。
+- `WorkSegment.allocation`、资源冲突领域模型、扫描器、建议预览、处理 action 和相关 DTO 已删除。旧客户端提交 `allocation` 或 `includeConflicts` 会在 strict Zod 边界返回校验错误。
 
-S2 TimeCanvas 查询与放置预览通过 `app/actions/project-management/canvas.ts` 暴露，并由 strict `POST /api/project-management/canvas` 提供可测试的同一边界。六个 operation 均在服务端从 Auth.js session 解析当前 actor，再进入既有 validation、authorization、`ProjectManagementActionResult`、structured logging 和错误脱敏流程；请求不接受 `actor`、账号、人员或角色注入字段。Task 分组的 Tag 行谓词为“可读 Task 的 TaskTag，或授权且在范围内的 SegmentTag”，因此无范围内 Segment 的 TaskTag Task 仍返回安全 Task 行和 anchor；隐藏 Task 不参与返回。
+S2 TimeCanvas 查询通过 `app/actions/project-management/canvas.ts` 暴露，并由 strict `POST /api/project-management/canvas` 提供同一可测试边界。五个 operation 都从 Auth.js session 解析当前 actor，再进入 validation、authorization、`ProjectManagementActionResult`、structured logging 和错误脱敏流程；请求不接受 actor、账号、人员或角色注入字段。
 
-TimeCanvas 的独立请求预算为：Full Segment + Busy 合计 5,000、Conflict DTO 5,000、Task anchor 50、当前计划非删除 anchor Node 合计 5,000。所有上限均先按授权后的稳定顺序执行 `limit + 1` 或数据库 count，超限返回 `QUERY_LIMIT_EXCEEDED`，不静默截断；单个 200-node 计划及 25 个各 200-node 的计划仍受支持。放置预览同样只读取最多 5,000 个重叠候选，第 5,001 个返回该稳定错误。冲突检测器使用 start/end 事件与增量 active 集合/聚合量，复杂度为 `O(n log n + 实际输出证据量)`，并保持半开区间和稳定 fingerprint 证据顺序。
+TimeCanvas 的请求预算为 Full Segment + Busy 合计 5,000、Task anchor 50、当前计划非删除 anchor Node 合计 5,000。Busy DTO 只包含 `kind`、`visibility`、`personId`、`startAt` 和 `endAt`，不返回源 Segment、Task、Node、内容、版本、比例或冲突摘要。响应不再包含 `conflicts`，Segment DTO 不再包含 `allocation` 或 `conflictIds`。
 
-Segment 放置关联意图分为 `KEEP` 与 `RELINK`：`KEEP` 不接受 Task/Node 覆盖，保留旧关联和 `associationNeedsReview`，包括 Revision 后暂时失效的关联；`RELINK` 必须同时显式提交 nullable `taskId`/`nodeId` 并提供非空审计原因，只有待重关联 Planned Segment 通过可见性、Task 可创建状态和 Current Plan Node 校验后才清除该标志。创建/重关联 Task 及 capability 查询统一复用 `TASK_SEGMENT_CREATABLE_STATUSES` / `isTaskCreatableForSegment`，只允许 `DRAFT`/`ACTIVE`；合法关联错误稳定映射为 `ASSOCIATION_INVALID`，隐藏目标仍为 `NOT_FOUND`。
+`scripts/cron.ts` 每 10 分钟在数据库互斥下运行 Segment transition，并在每日 08:15 执行 deadline/retention/integrity 维护。资源冲突的增量与每日全量扫描、checkpoint、运行状态和日志均已删除。定时任务只处理保留的领域状态、审计、站内通知和 `channel=project-management` outbox，不自动生成 Actual，也不自动调整 Segment 排期。
 
-所有改变 Conflict 输入的 Segment mutation（含批量、确认生成 Actual、Actual 更新/逻辑删除、cron transition 与 suggestion apply）在同一事务返回前自动复扫。统一死锁规约是：先按 person ID 排序取得 person advisory lock，再按 Conflict ID 锁定所有受影响旧/新区间的 Conflict，最后按 Segment ID 锁 Segment；取得 Segment 行锁后禁止再申请新的 person lock。scanner、人工 acknowledge/resolve/ignore/preview/apply 与 mutation 共用此规约和状态 guard；无变化/竞争 loser 不重复写 conflict history、audit 或 outbox。
-
-延期项保持未完成：S7 才会要求 acknowledge/resolve/ignore/apply 消费 Conflict `versionToken`；S9 可增加高于当前冻结显式筛选限制的有限 `nodeIds`/全局复杂度 guard，本轮未实现也未标记完成。
-
-`scripts/cron.ts` 每 10 分钟在数据库互斥下运行 Segment transition；每 15 分钟按 checkpoint 增量重扫变更人员，02:37 做完整冲突扫描，08:15 执行 deadline/retention/integrity。完整扫描刻意避开增量任务的整 15 分钟，避免共用 advisory lock 时每日固定跳过。扫描只写领域状态、审计、站内通知和 `channel=project-management` outbox，不自动生成 Actual，也不自动调整 Segment 排期。
-
-项目管理前端 v1.0 浏览器入口已覆盖 `/progress` 驾驶舱、Task Composer/工作台、Resource Planner、Personal Timeline、Conflict Center、Action Inbox、Tag 和通知偏好。所有页面先解析项目管理 actor，再通过 `taskReadableWhere`、`segmentReadableWhere`、Conflict readable 条件或 `recipientAccountId` 过滤，服务端 action 仍执行项目启停、状态机、权限和版本校验。系统角色与 TaskMember 权限取并集；组长改 Task 组织归属时新旧范围都必须匹配，跨 Task 冲突要求全部 Task 均可管理。
+项目管理浏览器入口覆盖 `/progress` 驾驶舱、Task Composer/工作台、Resource Planner、Personal Timeline、Action Inbox、Tag 和通知偏好。所有页面先解析项目管理 actor，再通过 `taskReadableWhere`、`segmentReadableWhere` 或 `recipientAccountId` 过滤，服务端 action 仍执行项目启停、状态机、权限和版本校验。系统角色与 TaskMember 权限取并集；组长改 Task 组织归属时新旧范围都必须匹配。
 
 项目管理浏览器入口统一由 `app/progress/layout.tsx` 渲染全站 `AppHeader`、`PageShell` 和模块 Shell，子页只提供上下文命令栏与业务内容。桌面端使用可折叠的 sticky 左侧导航；移动端使用模态 Drawer。模块 Shell 统一读取通知未读数；不可用对象使用脱敏页面。`--pm-*` 语义变量集中在 `app/globals.css`，适配明暗主题和 reduced motion。`myTimeline`、`taskNew`、`approvals`、`tags` 均已有类型安全路由和导航入口。
 
@@ -191,7 +182,6 @@ Segment 放置关联意图分为 `KEEP` 与 `RELINK`：`KEEP` 不接受 Task/Nod
 | `/progress/tasks` | Task 列表 |
 | `/progress/tasks/[id]` | Task 工作台 |
 | `/progress/resources` | 人员计划时间轴 |
-| `/progress/resources/conflicts` | 资源冲突中心 |
 | `/progress/notifications` | 站内通知中心 |
 | `/progress/task/:id` | 旧 Task 详情地址，服务端重定向到 `/progress/tasks/:id` |
 | `/progress/projects/*`、`/progress/kanban` | 旧 Project/Kanban 地址，临时重定向到 `/progress` |
@@ -272,13 +262,11 @@ npm run cron                   # 启动定时任务（独立进程）
 | 每 10 分钟 | 采购预算阈值扫描 |
 | 每 2 分钟 | drain `NotificationOutbox` |
 | 每 10 分钟 | 项目管理 Planned Segment 状态迁移（数据库 advisory lock） |
-| 每 15 分钟 | 按 `ProjectManagementScanCheckpoint` 增量重扫资源冲突（数据库 advisory lock） |
-| 每日 02:37 | 项目管理 97 天窗口完整资源冲突扫描；避开每 15 分钟增量任务 |
 | 每日 08:15 | Milestone 截止提醒、通知保留清理、项目管理完整性巡检 |
 
 与 Next.js 主进程分离，生产环境用 PM2、systemd 或下文 **Docker** 中的 `cron` 服务单独拉起。
 
-项目管理 cron 不再只依赖进程内 boolean。每类任务先用 PostgreSQL transaction advisory lock 做跨实例互斥；冲突增量扫描按 `(WorkSegment.updatedAt,id)` 稳定游标推进 checkpoint，只有整批人员扫描成功才前移。每日完整扫描覆盖 checkpoint 窗口外、异常重试和历史数据。Task、WorkSegment、站内通知和 outbox 的 S9 索引由 `20260731102000_project_management_scan_checkpoint` migration 创建。
+项目管理 cron 不只依赖进程内 boolean；每类保留任务先用 PostgreSQL transaction advisory lock 做跨实例互斥。Task、WorkSegment、站内通知和 outbox 的 S9 查询索引继续保留，原扫描 checkpoint 表已删除。
 
 ## Docker 部署
 

@@ -2,22 +2,14 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
   authorize,
-  isSystemAdministrator,
   segmentReadableWhere,
-  taskReadableWhere,
   type AuthorizationTaskResource,
 } from "@/lib/project-management/authorization";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import { notFoundError } from "@/lib/project-management/application/errors";
 import { toWorkSegmentDto } from "@/lib/project-management/application/segment-service";
 import {
-  canFullyHandleConflict,
-  resourceConflictCapabilities,
-} from "@/lib/project-management/application/conflict-permissions";
-import {
-  getResourceConflictInputSchema,
   getWorkSegmentInputSchema,
-  listResourceConflictsInputSchema,
   listWorkSegmentChangesInputSchema,
   listWorkSegmentsInputSchema,
 } from "@/lib/project-management/validations/segments";
@@ -175,82 +167,6 @@ export async function listWorkSegmentChanges({
   };
 }
 
-export async function listResourceConflicts({
-  actor,
-  input,
-  orderBy,
-  actionableOnly = false,
-  resultLimit,
-}: {
-  actor: ProjectManagementActor;
-  input: unknown;
-  /** Internal presentation ordering. User input never controls Prisma ordering. */
-  orderBy?: Prisma.ResourceConflictOrderByWithRelationInput[];
-  /** Internal Action Inbox filter; capability is still recomputed for every DTO. */
-  actionableOnly?: boolean;
-  /** Internal Action Inbox page size; public validation remains capped at 100. */
-  resultLimit?: number;
-}) {
-  const parsed = listResourceConflictsInputSchema.parse(input);
-  const effectiveLimit = resultLimit === undefined
-    ? parsed.limit
-    : Math.min(Math.max(Math.trunc(resultLimit), 1), 200);
-  const where: Prisma.ResourceConflictWhereInput = {
-    AND: [
-      conflictReadableWhere(actor),
-      actionableOnly ? conflictActionableWhere(actor) : {},
-      parsed.personId ? { personId: parsed.personId } : {},
-      parsed.status ? { status: parsed.status } : {},
-      parsed.kind ? { kind: parsed.kind } : {},
-      parsed.severity ? { severity: parsed.severity } : {},
-      timeOverlapWhere(parsed.startAt, parsed.endAt),
-    ],
-  };
-  const rows = await prisma.resourceConflict.findMany({
-    where,
-    include: conflictInclude,
-    orderBy: orderBy ?? [{ detectedAt: "desc" }, { id: "desc" }],
-    take: effectiveLimit + 1,
-    ...(parsed.cursor ? { cursor: { id: parsed.cursor }, skip: 1 } : {}),
-  });
-  return {
-    items: rows.slice(0, effectiveLimit).map((row) => toResourceConflictDto(row, actor)),
-    nextCursor: rows.length > effectiveLimit ? rows[effectiveLimit - 1]?.id ?? null : null,
-  };
-}
-
-export async function countActionableResourceConflicts(
-  actor: ProjectManagementActor,
-  severity?: Prisma.EnumResourceConflictSeverityFilter["equals"],
-) {
-  return prisma.resourceConflict.count({
-    where: {
-      AND: [
-        conflictReadableWhere(actor),
-        conflictActionableWhere(actor),
-        { status: { in: ["OPEN", "ACKNOWLEDGED"] } },
-        severity ? { severity } : {},
-      ],
-    },
-  });
-}
-
-export async function getResourceConflict({
-  actor,
-  input,
-}: {
-  actor: ProjectManagementActor;
-  input: unknown;
-}) {
-  const parsed = getResourceConflictInputSchema.parse(input);
-  const row = await prisma.resourceConflict.findFirst({
-    where: { AND: [{ id: parsed.conflictId }, conflictReadableWhere(actor)] },
-    include: conflictInclude,
-  });
-  if (!row) throw notFoundError();
-  return toResourceConflictDto(row, actor);
-}
-
 export async function listTimelinePeople({
   actor,
 }: {
@@ -283,105 +199,10 @@ export async function listTimelinePeople({
 
 export type WorkSegmentListResult = Awaited<ReturnType<typeof listWorkSegments>>;
 export type WorkSegmentDetail = WorkSegmentListResult["items"][number];
-export type ResourceConflictListResult = Awaited<
-  ReturnType<typeof listResourceConflicts>
->;
-export type ResourceConflictDetail = ResourceConflictListResult["items"][number];
-
-const conflictInclude = {
-  person: { select: { displayName: true } },
-  segments: {
-    include: {
-      segment: {
-        include: segmentQueryInclude,
-      },
-    },
-    orderBy: { createdAt: "asc" },
-  },
-} satisfies Prisma.ResourceConflictInclude;
-
-function conflictReadableWhere(
-  actor: ProjectManagementActor,
-): Prisma.ResourceConflictWhereInput {
-  return {
-    OR: [
-      { personId: actor.personId },
-      { segments: { some: { segment: segmentReadableWhere(actor) } } },
-      { segments: { some: { segment: { task: taskReadableWhere(actor) } } } },
-    ],
-  };
-}
-
-function conflictActionableWhere(
-  actor: ProjectManagementActor,
-): Prisma.ResourceConflictWhereInput {
-  if (isSystemAdministrator(actor)) return {};
-
-  const managerScopes = actor.systemRoles
-    .filter(
-      (role) =>
-        role.role === "GROUP_LEADER" &&
-        (role.team.trim().length > 0 || role.techGroup.trim().length > 0),
-    )
-    .map((role): Prisma.TaskWhereInput => ({
-      ...(role.team.trim() ? { team: role.team.trim() } : {}),
-      ...(role.techGroup.trim() ? { techGroup: role.techGroup.trim() } : {}),
-    }));
-  const containsOnlyTaskSegments: Prisma.ResourceConflictWhereInput = {
-    segments: { none: { segment: { taskId: null } } },
-  };
-  const hasSegments: Prisma.ResourceConflictWhereInput = {
-    segments: { some: {} },
-  };
-  const fullyOwned: Prisma.ResourceConflictWhereInput = {
-    segments: {
-      every: {
-        segment: {
-          task: {
-            members: {
-              some: {
-                personId: actor.personId,
-                role: "OWNER",
-                removedAt: null,
-              },
-            },
-          },
-        },
-      },
-    },
-  };
-  const fullyInManagerScope: Prisma.ResourceConflictWhereInput | null =
-    managerScopes.length > 0
-      ? {
-          segments: {
-            every: { segment: { task: { OR: managerScopes } } },
-          },
-        }
-      : null;
-
-  return {
-    OR: [
-      { personId: actor.personId },
-      {
-        AND: [
-          hasSegments,
-          containsOnlyTaskSegments,
-          {
-            OR: [
-              fullyOwned,
-              ...(fullyInManagerScope ? [fullyInManagerScope] : []),
-            ],
-          },
-        ],
-      },
-    ],
-  };
-}
-
 function timeOverlapWhere(
   startAt?: Date,
   endAt?: Date,
-): Prisma.WorkSegmentWhereInput & Prisma.ResourceConflictWhereInput {
+): Prisma.WorkSegmentWhereInput {
   if (!startAt && !endAt) return {};
   return {
     ...(endAt ? { startAt: { lt: endAt } } : {}),
@@ -449,61 +270,9 @@ function toWorkSegmentDetailDto(
   };
 }
 
-function toResourceConflictDto(
-  conflict: Prisma.ResourceConflictGetPayload<{ include: typeof conflictInclude }>,
-  actor: ProjectManagementActor,
-) {
-  const visibleSegmentEntries = conflict.segments.filter((entry) =>
-    segmentVisible(actor, entry.segment),
-  );
-  const hiddenSegmentCount = conflict.segments.length - visibleSegmentEntries.length;
-  const visibleSegmentIds = new Set(
-    visibleSegmentEntries.map((entry) => entry.segmentId),
-  );
-  const redactHandlingText =
-    hiddenSegmentCount > 0 && !canFullyHandleConflict(actor, conflict);
-  return {
-    id: conflict.id,
-    personId: conflict.personId,
-    personName: conflict.person.displayName,
-    kind: conflict.kind,
-    startAt: conflict.startAt.toISOString(),
-    endAt: conflict.endAt.toISOString(),
-    severity: conflict.severity,
-    status: conflict.status,
-    fingerprint: conflict.fingerprint,
-    explanation: sanitizeConflictExplanation(
-      conflict.explanation,
-      visibleSegmentIds,
-      hiddenSegmentCount,
-      redactHandlingText,
-    ),
-    detectedAt: conflict.detectedAt.toISOString(),
-    acknowledgedAt: conflict.acknowledgedAt?.toISOString() ?? null,
-    resolvedAt: conflict.resolvedAt?.toISOString() ?? null,
-    ignoredUntil: conflict.ignoredUntil?.toISOString() ?? null,
-    resolvedByAccountId: conflict.resolvedByAccountId,
-    resolutionNote: sanitizeHandlingText(
-      conflict.resolutionNote,
-      redactHandlingText,
-    ),
-    hiddenSegmentCount,
-    capabilities: resourceConflictCapabilities(actor, conflict),
-    segments: visibleSegmentEntries.map((entry) =>
-      toWorkSegmentDetailDto(entry.segment, actor),
-    ),
-    createdAt: conflict.createdAt.toISOString(),
-    updatedAt: conflict.updatedAt.toISOString(),
-  };
-}
-
 type SegmentQueryPayload = Prisma.WorkSegmentGetPayload<{
   include: typeof segmentQueryInclude;
 }>;
-
-function segmentVisible(actor: ProjectManagementActor, segment: SegmentQueryPayload) {
-  return sourceSegmentVisible(actor, segment);
-}
 
 function sourceSegmentVisible(
   actor: ProjectManagementActor,
@@ -538,59 +307,4 @@ function taskResource(
     allowSelfReview: task.allowSelfReview,
     members: task.members,
   };
-}
-
-function sanitizeConflictExplanation(
-  explanation: Prisma.JsonValue,
-  visibleSegmentIds: Set<string>,
-  hiddenSegmentCount: number,
-  redactHandlingText: boolean,
-): Prisma.JsonValue {
-  if (!explanation || typeof explanation !== "object" || Array.isArray(explanation)) {
-    return explanation;
-  }
-  const record = explanation as Record<string, unknown>;
-  const sanitized: Record<string, unknown> =
-    hiddenSegmentCount > 0 ? { ...record, hiddenSegmentCount } : { ...record };
-  for (const key of CONFLICT_EXPLANATION_SEGMENT_ID_ARRAY_KEYS) {
-    const segmentIds = record[key];
-    if (Array.isArray(segmentIds)) {
-      sanitized[key] = segmentIds.filter(
-        (segmentId): segmentId is string =>
-          typeof segmentId === "string" && visibleSegmentIds.has(segmentId),
-      );
-    }
-  }
-  if (Array.isArray(record.segments)) {
-    sanitized.segments = record.segments.filter(
-      (segment) =>
-        segment &&
-        typeof segment === "object" &&
-        !Array.isArray(segment) &&
-        typeof (segment as { id?: unknown }).id === "string" &&
-        visibleSegmentIds.has((segment as { id: string }).id),
-    );
-  }
-  if (redactHandlingText) {
-    if (typeof record.resolutionNote === "string") {
-      sanitized.resolutionNote = REDACTED_CONFLICT_HANDLING_TEXT;
-    }
-    if (typeof record.ignoredReason === "string") {
-      sanitized.ignoredReason = REDACTED_CONFLICT_HANDLING_TEXT;
-    }
-  }
-  return sanitized as Prisma.JsonObject;
-}
-
-const CONFLICT_EXPLANATION_SEGMENT_ID_ARRAY_KEYS = [
-  "segmentIds",
-  "changedSegmentIds",
-  "missingAllocationSegmentIds",
-] as const;
-
-const REDACTED_CONFLICT_HANDLING_TEXT = "处理说明涉及不可见记录，已隐藏";
-
-function sanitizeHandlingText(value: string | null, redact: boolean) {
-  if (!value || !redact) return value;
-  return REDACTED_CONFLICT_HANDLING_TEXT;
 }

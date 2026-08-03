@@ -139,30 +139,6 @@ test.describe("project management S8 dashboard, tags and notifications", () => {
     expect(inbox.totalCount).toBe(21);
   });
 
-  test("Action Inbox can return more than the public 100-conflict page size", async () => {
-    const user = await createActor("S8 conflict inbox page size");
-    const start = Date.parse("2026-09-01T00:00:00.000Z");
-    await prisma.resourceConflict.createMany({
-      data: Array.from({ length: 101 }, (_, index) => ({
-        personId: user.personId,
-        kind: "ALLOCATION_OVER_LIMIT" as const,
-        startAt: new Date(start + index * 60_000),
-        endAt: new Date(start + (index + 1) * 60_000),
-        severity: "CRITICAL" as const,
-        status: "OPEN" as const,
-        fingerprint: `s8-inbox-${randomUUID()}`,
-        explanation: { rule: "Action Inbox internal bounded page" },
-      })),
-    });
-
-    const inbox = await getActionInbox({ actor: user, limit: 200 });
-    expect(inbox.items.filter((item) => item.kind === "RESOURCE_CONFLICT")).toHaveLength(
-      101,
-    );
-    expect(inbox.totalCount).toBe(101);
-    expect(inbox.criticalCount).toBe(101);
-  });
-
   test("Tag deletion removes only classification links and writes an audit", async () => {
     const user = await createActor("S8 Tag Owner");
     const fixture = await createActiveTaskWithMilestone(user, new Date("2026-08-10T02:00:00.000Z"));

@@ -17,8 +17,6 @@ const PROJECT_MANAGEMENT_NOTIFICATION_KINDS = [
   "revision_applied",
   "segment_confirmation_due",
   "segment_association_invalidated",
-  "resource_conflict_opened",
-  "resource_conflict_resolved",
   "task_terminated",
   "account_security",
 ] as const;
@@ -43,7 +41,6 @@ export const projectManagementNotificationPayloadSchema = z
       "REVIEW",
       "REVISION",
       "WORK_SEGMENT",
-      "RESOURCE_CONFLICT",
       "ACCOUNT_SECURITY",
     ]),
     title: z.string().min(1),

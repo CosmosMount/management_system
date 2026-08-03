@@ -18,7 +18,7 @@ const SAFE_SOURCE_DATABASE = /^[A-Za-z0-9_]+_(?:test|snapshot)$/;
 const SAFE_REHEARSAL_DATABASE = /^pmrel_[a-f0-9]{16}_[a-z]+_test$/;
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 const EXPECTED_REHEARSAL_MIGRATIONS = [
-  "20260731102000_project_management_scan_checkpoint",
+  "20260801110000_remove_resource_conflicts_and_allocation",
 ] as const;
 const PROTECTED_TABLE_NAMES = [
   "User",
@@ -404,14 +404,84 @@ async function prepareSharedSnapshotBeforeExpectedMigrations(
         );
       }
     }
-    await client.query("BEGIN");
-    await client.query('DROP TABLE IF EXISTS "ProjectManagementScanCheckpoint"');
-    await client.query('DROP INDEX IF EXISTS "Task_updatedAt_id_idx"');
-    await client.query('DROP INDEX IF EXISTS "WorkSegment_updatedAt_id_idx"');
-    await client.query('DROP INDEX IF EXISTS "InAppNotification_readAt_createdAt_idx"');
+    // Reconstruct the removed schema with empty conflict tables so the shared
+    // snapshot exercises the destructive migration from its real predecessor.
     await client.query(
-      'DROP INDEX IF EXISTS "NotificationOutbox_channel_status_updatedAt_idx"',
+      'ALTER TYPE "ProjectManagementNotificationCategory" ADD VALUE IF NOT EXISTS \'RESOURCE_CONFLICT\'',
     );
+    await client.query("BEGIN");
+    await client.query(`
+      CREATE TYPE "ResourceConflictKind" AS ENUM (
+        'ALLOCATION_OVER_LIMIT', 'MISSING_ALLOCATION',
+        'HIGH_PRIORITY_OVERLAP', 'LEAD_ROLE_OVERLAP',
+        'UNAVAILABLE_TIME', 'REVISION_OVERLAP', 'ACTUAL_OVERLOAD'
+      );
+      CREATE TYPE "ResourceConflictSeverity" AS ENUM (
+        'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'
+      );
+      CREATE TYPE "ResourceConflictStatus" AS ENUM (
+        'OPEN', 'ACKNOWLEDGED', 'RESOLVED', 'IGNORED'
+      );
+
+      ALTER TABLE "WorkSegment" ADD COLUMN "allocation" DECIMAL(5,2);
+      ALTER TABLE "WorkSegment"
+        ADD CONSTRAINT "WorkSegment_allocation_range_check"
+        CHECK ("allocation" IS NULL OR ("allocation" > 0 AND "allocation" <= 100));
+
+      CREATE TABLE "ResourceConflict" (
+        "id" TEXT NOT NULL,
+        "personId" TEXT NOT NULL,
+        "kind" "ResourceConflictKind" NOT NULL,
+        "startAt" TIMESTAMPTZ(6) NOT NULL,
+        "endAt" TIMESTAMPTZ(6) NOT NULL,
+        "severity" "ResourceConflictSeverity" NOT NULL,
+        "status" "ResourceConflictStatus" NOT NULL DEFAULT 'OPEN',
+        "fingerprint" TEXT NOT NULL,
+        "explanation" JSONB NOT NULL DEFAULT '{}',
+        "detectedAt" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "acknowledgedAt" TIMESTAMPTZ(6),
+        "resolvedAt" TIMESTAMPTZ(6),
+        "ignoredUntil" TIMESTAMPTZ(6),
+        "resolvedByAccountId" TEXT,
+        "resolutionNote" TEXT NOT NULL DEFAULT '',
+        "createdAt" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT "ResourceConflict_pkey" PRIMARY KEY ("id"),
+        CONSTRAINT "ResourceConflict_personId_fkey"
+          FOREIGN KEY ("personId") REFERENCES "Person"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+        CONSTRAINT "ResourceConflict_resolvedByAccountId_fkey"
+          FOREIGN KEY ("resolvedByAccountId") REFERENCES "Account"("id") ON DELETE SET NULL ON UPDATE CASCADE
+      );
+      CREATE UNIQUE INDEX "ResourceConflict_fingerprint_key"
+        ON "ResourceConflict"("fingerprint");
+
+      CREATE TABLE "ConflictSegment" (
+        "id" TEXT NOT NULL,
+        "conflictId" TEXT NOT NULL,
+        "segmentId" TEXT NOT NULL,
+        "createdAt" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT "ConflictSegment_pkey" PRIMARY KEY ("id"),
+        CONSTRAINT "ConflictSegment_conflictId_fkey"
+          FOREIGN KEY ("conflictId") REFERENCES "ResourceConflict"("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        CONSTRAINT "ConflictSegment_segmentId_fkey"
+          FOREIGN KEY ("segmentId") REFERENCES "WorkSegment"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+        CONSTRAINT "ConflictSegment_conflictId_segmentId_key"
+          UNIQUE ("conflictId", "segmentId")
+      );
+
+      CREATE TABLE "ProjectManagementScanCheckpoint" (
+        "key" TEXT NOT NULL,
+        "cursor" JSONB NOT NULL DEFAULT '{}',
+        "lastStartedAt" TIMESTAMPTZ(6),
+        "lastCompletedAt" TIMESTAMPTZ(6),
+        "lastFullScanAt" TIMESTAMPTZ(6),
+        "lastError" TEXT NOT NULL DEFAULT '',
+        "lockVersion" INTEGER NOT NULL DEFAULT 0,
+        "createdAt" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT "ProjectManagementScanCheckpoint_pkey" PRIMARY KEY ("key")
+      );
+    `);
     await client.query(
       'DELETE FROM "_prisma_migrations" WHERE migration_name = ANY($1::text[])',
       [[...EXPECTED_REHEARSAL_MIGRATIONS]],

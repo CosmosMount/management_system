@@ -70,7 +70,6 @@ export default async function ProgressTaskDetailPage({
           includeTaskAnchors: true,
           includeActual: true,
           includeBusyBlocks: true,
-          includeConflicts: true,
           rowLimit: 50,
         },
       })
