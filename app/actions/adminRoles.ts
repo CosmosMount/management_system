@@ -1,13 +1,12 @@
 "use server";
 
-import type { AccountStatus, UserRoleType } from "@prisma/client";
+import type { UserRoleType } from "@prisma/client";
 import { z, ZodError } from "zod";
 import {
   assignReimbursementRole,
   grantAccountRole,
   revokeAccountRole,
   revokeReimbursementRole,
-  setProjectAccessStatus,
 } from "@/lib/account-management";
 import { requireGlobalSuperAdministrator } from "@/lib/account-authorization";
 import { prisma } from "@/lib/prisma";
@@ -16,7 +15,6 @@ import {
   assignReimbursementRoleInputSchema,
   grantAccountRoleInputSchema,
   revokeRoleInputSchema,
-  setProjectAccessStatusInputSchema,
 } from "@/lib/validations/account-management";
 
 function inputError(error: unknown): never {
@@ -68,25 +66,6 @@ export async function revokeProjectSystemRole(input: {
     );
     revalidateAdmin();
     return { changed: result.changed };
-  } catch (error) {
-    inputError(error);
-  }
-}
-
-export async function updateProjectAccessStatus(input: {
-  targetAccountId: string;
-  status: AccountStatus;
-}) {
-  try {
-    const parsed = setProjectAccessStatusInputSchema.parse(input);
-    const { context } = await requireGlobalSuperAdministrator();
-    const result = await setProjectAccessStatus(
-      context.accountId,
-      parsed.targetAccountId,
-      parsed.status,
-    );
-    revalidateAdmin();
-    return result;
   } catch (error) {
     inputError(error);
   }

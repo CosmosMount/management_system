@@ -179,7 +179,6 @@ async function createShellFixture() {
   const displayName = "S3 Shell 用户";
   const account = await prisma.account.create({
     data: {
-      projectAccessStatus: "ACTIVE",
       identities: {
         create: {
           provider: "FEISHU",

@@ -4,17 +4,19 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Check, Copy, Search, X } from "lucide-react";
 import {
-  searchPeopleOptions,
   searchTagOptions,
-  searchTaskOptions,
 } from "@/app/actions/project-management/options";
+import { TaskMultiSelect } from "@/components/project-management/task-picker";
+import { UserMultiSelect } from "@/components/project-management/user-picker";
 import { formatShanghaiDate } from "@/components/project-management/time-canvas/url-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import type {
+  PersonOptionDto,
+  TaskOptionPage,
+} from "@/lib/project-management/types/time-canvas";
 
-type PersonOption = { id: string; displayName: string };
-type TaskOption = { id: string; title: string };
 type TagOption = { id: string; name: string; color: string };
 type SegmentStatus =
   | "PLANNED"
@@ -40,14 +42,12 @@ export function ResourceFilterBar({
     types: Array<"PLANNED" | "ACTUAL">;
     statuses: SegmentStatus[];
   };
-  initialPeople: PersonOption[];
-  initialTasks: TaskOption[];
+  initialPeople: PersonOptionDto[];
+  initialTasks: TaskOptionPage["items"];
   initialTags: TagOption[];
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
-  const [people, setPeople] = useState(initialPeople);
-  const [tasks, setTasks] = useState(initialTasks);
   const [tags, setTags] = useState(initialTags);
   const [personIds, setPersonIds] = useState(initial.personIds);
   const [taskIds, setTaskIds] = useState(initial.taskIds);
@@ -57,8 +57,6 @@ export function ResourceFilterBar({
   const [from, setFrom] = useState(initial.from);
   const [to, setTo] = useState(initial.to);
   const [groupBy, setGroupBy] = useState(initial.groupBy);
-  const [personQuery, setPersonQuery] = useState("");
-  const [taskQuery, setTaskQuery] = useState("");
   const [tagQuery, setTagQuery] = useState("");
   const [notice, setNotice] = useState("");
 
@@ -141,34 +139,30 @@ export function ResourceFilterBar({
       </div>
 
       <div className="grid gap-3 lg:grid-cols-3">
-        <FilterPicker
-          label="人员"
-          query={personQuery}
-          onQueryChange={setPersonQuery}
-          options={people.map((person) => ({ id: person.id, label: person.displayName }))}
-          selectedIds={personIds}
-          onToggle={(id) => setPersonIds((current) => toggle(current, id))}
-          disabled={isPending}
-          onSearch={() => startTransition(async () => {
-            const result = await searchPeopleOptions({ purpose: "VISIBLE", query: personQuery || undefined, limit: 50 });
-            if (!result.ok) return setNotice(result.error.message);
-            setPeople((current) => merge(current, result.data.items));
-          })}
-        />
-        <FilterPicker
-          label="Task"
-          query={taskQuery}
-          onQueryChange={setTaskQuery}
-          options={tasks.map((task) => ({ id: task.id, label: task.title }))}
-          selectedIds={taskIds}
-          onToggle={(id) => setTaskIds((current) => toggle(current, id))}
-          disabled={isPending}
-          onSearch={() => startTransition(async () => {
-            const result = await searchTaskOptions({ query: taskQuery || undefined, statuses: ["ACTIVE"], limit: 50 });
-            if (!result.ok) return setNotice(result.error.message);
-            setTasks((current) => merge(current, result.data.items));
-          })}
-        />
+        <fieldset className="min-w-0 rounded-lg border border-border p-3">
+          <legend className="px-1 text-sm font-medium">人员（{personIds.length}）</legend>
+          <UserMultiSelect
+            ariaLabel="筛选人员"
+            scope={{ purpose: "VISIBLE" }}
+            value={personIds}
+            onValueChange={setPersonIds}
+            initialOptions={initialPeople}
+            disabled={isPending}
+            placeholder="按姓名或拼音首字母搜索"
+          />
+        </fieldset>
+        <fieldset className="min-w-0 rounded-lg border border-border p-3">
+          <legend className="px-1 text-sm font-medium">Task（{taskIds.length}）</legend>
+          <TaskMultiSelect
+            ariaLabel="筛选 Task"
+            value={taskIds}
+            onValueChange={setTaskIds}
+            initialOptions={initialTasks}
+            statuses={["ACTIVE"]}
+            disabled={isPending}
+            placeholder="按标题、描述或拼音首字母搜索"
+          />
+        </fieldset>
         <FilterPicker
           label="Tag"
           query={tagQuery}
@@ -207,8 +201,6 @@ export function ResourceFilterBar({
       </div>
 
       <div className="flex flex-wrap gap-2" aria-label="已选筛选">
-        {selectedBadges(personIds, people, "displayName", (id) => setPersonIds((current) => current.filter((value) => value !== id)))}
-        {selectedBadges(taskIds, tasks, "title", (id) => setTaskIds((current) => current.filter((value) => value !== id)))}
         {selectedBadges(tagIds, tags, "name", (id) => setTagIds((current) => current.filter((value) => value !== id)))}
       </div>
       {notice && <p className="text-sm text-muted-foreground" role="status">{notice}</p>}

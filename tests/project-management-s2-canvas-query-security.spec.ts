@@ -2,7 +2,10 @@ import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma";
-import { createWorkSegment } from "../lib/project-management/application/segment-service";
+import {
+  createActualSegment,
+  createWorkSegment,
+} from "../lib/project-management/application/segment-service";
 import {
   toProjectManagementServiceError,
   type ProjectManagementErrorCode,
@@ -12,8 +15,11 @@ import type {
   ProjectManagementSystemRoleRecord,
 } from "../lib/project-management/identity";
 import { getMyWorkDashboard } from "../lib/project-management/queries/dashboard-queries";
+import { listTasks } from "../lib/project-management/queries/task-queries";
 import {
   listTagOptions,
+  resolvePeopleOptionsByIds,
+  resolveTaskOptionsByIds,
   searchPeople,
   searchTaskOptions,
 } from "../lib/project-management/queries/option-queries";
@@ -163,9 +169,10 @@ test.describe("S2 canvas query security", () => {
     baseURL,
   }) => {
     const owner = await createAccountPerson("Create Action Owner");
+    const activeTaskTitle = `Create Action Active ${randomUUID()}`;
     const activeTask = await createTask({
       ownerAccountId: owner.account.id,
-      title: `Create Action Active ${randomUUID()}`,
+      title: activeTaskTitle,
       team: "英雄",
       techGroup: "电控",
       members: [{ personId: owner.person.id, role: "OWNER" }],
@@ -186,7 +193,10 @@ test.describe("S2 canvas query security", () => {
 
     await page.getByRole("button", { name: "新增投入" }).click();
     const quickCreate = page.getByRole("form", { name: "投入快速创建" });
-    await quickCreate.locator("#quick-task").selectOption(activeTask.taskId);
+    await quickCreate.getByLabel("Task", { exact: true }).fill(activeTaskTitle);
+    await page
+      .getByRole("option", { name: activeTaskTitle, exact: true })
+      .click();
     await quickCreate.locator("#quick-content").fill("真实 Action 允许 Active Task");
     await quickCreate.getByRole("button", { name: "创建" }).click();
     await expect(page.getByRole("status")).toHaveText("已创建投入记录");
@@ -204,23 +214,22 @@ test.describe("S2 canvas query security", () => {
 
     await page.getByRole("button", { name: "新增投入" }).click();
     const deniedQuickCreate = page.getByRole("form", { name: "投入快速创建" });
-    await deniedQuickCreate.locator("#quick-task").evaluate(
-      (element, taskId) => {
-        const select = element as HTMLSelectElement;
-        const option = document.createElement("option");
-        option.value = taskId;
-        option.textContent = "终态 Task（注入值仅用于验证服务端授权）";
-        select.append(option);
-        select.value = taskId;
-        select.dispatchEvent(new Event("change", { bubbles: true }));
-      },
-      terminalTask.taskId,
-    );
     await deniedQuickCreate.locator("#quick-content").fill("真实 Action 拒绝 Completed Task");
     const deniedActionResponse = page.waitForResponse((response) =>
       Boolean(response.request().headers()["next-action"]),
     );
-    await deniedQuickCreate.getByRole("button", { name: "创建" }).click();
+    await deniedQuickCreate.evaluate((form, taskId) => {
+      const hiddenTaskId = form.querySelector<HTMLInputElement>('input[name="taskId"]');
+      const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+      if (!hiddenTaskId || !submit) throw new Error("快速创建表单结构不完整");
+      hiddenTaskId.remove();
+      const injectedTaskId = document.createElement("input");
+      injectedTaskId.type = "hidden";
+      injectedTaskId.name = "taskId";
+      injectedTaskId.value = taskId;
+      form.prepend(injectedTaskId);
+      (form as HTMLFormElement).requestSubmit(submit);
+    }, terminalTask.taskId);
     expect(await (await deniedActionResponse).text()).toContain(
       "ASSOCIATION_INVALID",
     );
@@ -288,7 +297,7 @@ test.describe("S2 canvas query security", () => {
         (item) =>
           Object.keys(item).sort().join("|") ===
           [
-            "accountAvailability",
+            "accountBinding",
             "avatar",
             "displayName",
             "id",
@@ -299,21 +308,11 @@ test.describe("S2 canvas query security", () => {
       ),
     ).toBe(true);
 
-    const sameNameIds: string[] = [];
-    let peopleCursor: string | undefined;
-    do {
-      const page = await searchPeople({
-        actor: adminActor,
-        input: {
-          purpose: "VISIBLE",
-          query: "同名成员",
-          limit: 1,
-          cursor: peopleCursor,
-        },
-      });
-      sameNameIds.push(...page.items.map((item) => item.id));
-      peopleCursor = page.nextCursor ?? undefined;
-    } while (peopleCursor);
+    const sameNamePage = await searchPeople({
+      actor: ownerActor,
+      input: { purpose: "VISIBLE", query: "同名成员", limit: 50 },
+    });
+    const sameNameIds = sameNamePage.items.map((item) => item.id);
     expect(new Set(sameNameIds).size).toBe(sameNameIds.length);
     expect(sameNameIds).toEqual(
       expect.arrayContaining([
@@ -330,7 +329,7 @@ test.describe("S2 canvas query security", () => {
     );
     const firstPeoplePage = await searchPeople({
       actor: adminActor,
-      input: { purpose: "VISIBLE", query: "同名成员", limit: 1 },
+      input: { purpose: "VISIBLE", limit: 1 },
     });
     await expectErrorCode(
       searchPeople({
@@ -369,6 +368,28 @@ test.describe("S2 canvas query security", () => {
       visibleTask.taskId,
     ]);
     expect(taskOptions.items[0]?.permission).toEqual({ canView: true });
+    const taskList = await listTasks({
+      actor: ownerActor,
+      input: { query: "同名 Task", limit: 50 },
+    });
+    expect(taskList.items.map((item) => item.id)).toEqual([visibleTask.taskId]);
+    expect(taskList.nextCursor).toBeNull();
+    const resolvedTasks = await resolveTaskOptionsByIds({
+      actor: ownerActor,
+      input: { ids: [hiddenTask.taskId, visibleTask.taskId] },
+    });
+    expect(resolvedTasks.map((item) => item.id)).toEqual([visibleTask.taskId]);
+    const resolvedPeople = await resolvePeopleOptionsByIds({
+      actor: ownerActor,
+      input: {
+        scope: { purpose: "VISIBLE" },
+        ids: [hiddenOwner.person.id, visibleSegmentPerson.person.id, visibleMember.person.id],
+      },
+    });
+    expect(resolvedPeople.map((item) => item.id)).toEqual([
+      visibleSegmentPerson.person.id,
+      visibleMember.person.id,
+    ]);
     const visibleTagIds: string[] = [];
     let tagCursor: string | undefined;
     do {
@@ -401,7 +422,7 @@ test.describe("S2 canvas query security", () => {
     expect(adminTagIds).toContain(otherArchivedTag.id);
   });
 
-  test("People purposes enforce directory authorization, anti-enumeration and safe account availability", async () => {
+  test("People purposes enforce directory authorization, anti-enumeration and safe account binding", async () => {
     const directoryKey = randomUUID();
     const directoryQuery = `成员目录 ${directoryKey}`;
     const owner = await createAccountPerson("成员目录 Owner");
@@ -409,11 +430,7 @@ test.describe("S2 canvas query security", () => {
     const ordinary = await createAccountPerson("成员目录普通成员");
     const hiddenOwner = await createAccountPerson("成员目录隐藏 Owner");
     const active = await createAccountPerson(`${directoryQuery} Active`);
-    const disabled = await createAccountPerson(
-      `${directoryQuery} Disabled`,
-      "ACTIVE",
-      "DISABLED",
-    );
+    const bound = await createAccountPerson(`${directoryQuery} Bound`);
     const inactive = await createAccountPerson(
       `${directoryQuery} Inactive`,
       "INACTIVE",
@@ -422,7 +439,7 @@ test.describe("S2 canvas query security", () => {
       data: { displayName: `${directoryQuery} Unbound`, status: "ACTIVE" },
     });
     const activeIdentityMarker = `active-identity-${randomUUID()}`;
-    const disabledIdentityMarker = `disabled-identity-${randomUUID()}`;
+    const boundIdentityMarker = `bound-identity-${randomUUID()}`;
     await prisma.accountIdentity.createMany({
       data: [
         {
@@ -434,12 +451,12 @@ test.describe("S2 canvas query security", () => {
           unionId: `on_${activeIdentityMarker}`,
         },
         {
-          accountId: disabled.account.id,
+          accountId: bound.account.id,
           provider: "FEISHU",
-          providerSubject: disabledIdentityMarker,
-          tenantId: `tenant-${disabledIdentityMarker}`,
-          openId: `ou_${disabledIdentityMarker}`,
-          unionId: `on_${disabledIdentityMarker}`,
+          providerSubject: boundIdentityMarker,
+          tenantId: `tenant-${boundIdentityMarker}`,
+          openId: `ou_${boundIdentityMarker}`,
+          unionId: `on_${boundIdentityMarker}`,
         },
       ],
     });
@@ -496,7 +513,7 @@ test.describe("S2 canvas query security", () => {
       expect(page.items.map((item) => item.id)).toEqual(
         expect.arrayContaining([
           active.person.id,
-          disabled.person.id,
+          bound.person.id,
           unbound.id,
         ]),
       );
@@ -514,11 +531,11 @@ test.describe("S2 canvas query security", () => {
       },
     });
     expect(
-      ownerMembers.items.map((item) => [item.id, item.accountAvailability]),
+      ownerMembers.items.map((item) => [item.id, item.accountBinding]),
     ).toEqual(
       expect.arrayContaining([
-        [active.person.id, "ACTIVE"],
-        [disabled.person.id, "DISABLED"],
+        [active.person.id, "BOUND"],
+        [bound.person.id, "BOUND"],
         [unbound.id, "UNBOUND"],
       ]),
     );
@@ -528,7 +545,7 @@ test.describe("S2 canvas query security", () => {
     for (const item of ownerMembers.items) {
       expect(Object.keys(item).sort()).toEqual(
         [
-          "accountAvailability",
+          "accountBinding",
           "avatar",
           "displayName",
           "id",
@@ -539,11 +556,11 @@ test.describe("S2 canvas query security", () => {
     const serialized = JSON.stringify(ownerMembers);
     for (const sensitive of [
       active.account.id,
-      disabled.account.id,
+      bound.account.id,
       activeIdentityMarker,
-      disabledIdentityMarker,
+      boundIdentityMarker,
       `tenant-${activeIdentityMarker}`,
-      `tenant-${disabledIdentityMarker}`,
+      `tenant-${boundIdentityMarker}`,
     ]) {
       expect(serialized).not.toContain(sensitive);
     }
@@ -565,7 +582,7 @@ test.describe("S2 canvas query security", () => {
       expect(page.items.map((item) => item.id)).toEqual(
         expect.arrayContaining([
           active.person.id,
-          disabled.person.id,
+          bound.person.id,
           unbound.id,
         ]),
       );
@@ -616,6 +633,26 @@ test.describe("S2 canvas query security", () => {
           purpose: "TASK_MEMBERS",
           taskId: task.taskId,
           query: directoryQuery,
+        },
+      }),
+      "FORBIDDEN",
+    );
+    await expectErrorCode(
+      resolvePeopleOptionsByIds({
+        actor: ordinaryActor,
+        input: {
+          scope: { purpose: "TASK_CREATE", team: "英雄", techGroup: "电控" },
+          ids: [active.person.id],
+        },
+      }),
+      "FORBIDDEN",
+    );
+    await expectErrorCode(
+      resolvePeopleOptionsByIds({
+        actor: ordinaryActor,
+        input: {
+          scope: { purpose: "TASK_MEMBERS", taskId: task.taskId },
+          ids: [active.person.id],
         },
       }),
       "FORBIDDEN",
@@ -693,7 +730,7 @@ test.describe("S2 canvas query security", () => {
     );
   });
 
-  test("People, Task and Tag options page at the 50-item boundary and reject bound cursors", async () => {
+  test("People and Task cap fuzzy candidates at 501 while empty queries and Tags retain bound cursors", async () => {
     const owner = await createAccountPerson("选项游标 Owner");
     const ownerActor = actor(owner);
     const adminActor = actor(owner, [systemAdministratorRole()]);
@@ -705,7 +742,7 @@ test.describe("S2 canvas query security", () => {
       ownerAccountId: owner.account.id,
       ownerPersonId: owner.person.id,
       titlePrefix: taskQuery,
-      count: 51,
+      count: 502,
     });
     const tagIds = Array.from({ length: 51 }, () => randomUUID());
     await prisma.tag.createMany({
@@ -716,7 +753,7 @@ test.describe("S2 canvas query security", () => {
         createdByAccountId: owner.account.id,
       })),
     });
-    const personIds = Array.from({ length: 51 }, () => randomUUID());
+    const personIds = Array.from({ length: 502 }, () => randomUUID());
     await prisma.person.createMany({
       data: personIds.map((id) => ({
         id,
@@ -738,45 +775,43 @@ test.describe("S2 canvas query security", () => {
       input: { purpose: "VISIBLE", query: peopleQuery, limit: 50 },
     });
     expect(firstPeoplePage.items).toHaveLength(50);
-    expect(firstPeoplePage.nextCursor).not.toBeNull();
-    const secondPeoplePage = await searchPeople({
+    expect(firstPeoplePage.nextCursor).toBeNull();
+    expect(firstPeoplePage.hasMoreByQuery).toBe(true);
+    expect(personIds).toEqual(expect.arrayContaining(firstPeoplePage.items.map((item) => item.id)));
+    await prisma.person.update({
+      where: { id: personIds[0]! },
+      data: { status: "INACTIVE" },
+    });
+    const restoredPeople = await resolvePeopleOptionsByIds({
       actor: adminActor,
       input: {
-        purpose: "VISIBLE",
-        query: peopleQuery,
-        limit: 50,
-        cursor: firstPeoplePage.nextCursor ?? undefined,
+        scope: { purpose: "VISIBLE" },
+        ids: [personIds[1]!, personIds[0]!],
       },
     });
-    expect(secondPeoplePage.items).toHaveLength(1);
-    expect(
-      new Set(
-        [...firstPeoplePage.items, ...secondPeoplePage.items].map(
-          (item) => item.id,
-        ),
-      ),
-    ).toEqual(new Set(personIds));
+    expect(restoredPeople.map((item) => [item.id, item.status])).toEqual([
+      [personIds[1], "ACTIVE"],
+      [personIds[0], "INACTIVE"],
+    ]);
+    const peopleCursorPage = await searchPeople({
+      actor: adminActor,
+      input: { purpose: "VISIBLE", limit: 1 },
+    });
+    expect(peopleCursorPage.nextCursor).not.toBeNull();
 
     const firstTaskPage = await searchTaskOptions({
       actor: ownerActor,
       input: { query: taskQuery, limit: 50 },
     });
     expect(firstTaskPage.items).toHaveLength(50);
-    expect(firstTaskPage.nextCursor).not.toBeNull();
-    const secondTaskPage = await searchTaskOptions({
+    expect(firstTaskPage.nextCursor).toBeNull();
+    expect(firstTaskPage.hasMoreByQuery).toBe(true);
+    expect(taskIds).toEqual(expect.arrayContaining(firstTaskPage.items.map((item) => item.id)));
+    const taskCursorPage = await searchTaskOptions({
       actor: ownerActor,
-      input: {
-        query: taskQuery,
-        limit: 50,
-        cursor: firstTaskPage.nextCursor ?? undefined,
-      },
+      input: { limit: 1 },
     });
-    expect(secondTaskPage.items).toHaveLength(1);
-    expect(
-      new Set(
-        [...firstTaskPage.items, ...secondTaskPage.items].map((item) => item.id),
-      ),
-    ).toEqual(new Set(taskIds));
+    expect(taskCursorPage.nextCursor).not.toBeNull();
 
     const firstTagPage = await listTagOptions({
       actor: ownerActor,
@@ -805,7 +840,7 @@ test.describe("S2 canvas query security", () => {
         input: {
           purpose: "VISIBLE",
           query: `${peopleQuery} changed`,
-          cursor: firstPeoplePage.nextCursor ?? undefined,
+          cursor: peopleCursorPage.nextCursor ?? undefined,
         },
       }),
       "VALIDATION_ERROR",
@@ -816,7 +851,6 @@ test.describe("S2 canvas query security", () => {
         purpose: "TASK_CREATE",
         team: "英雄",
         techGroup: "电控",
-        query: peopleQuery,
         limit: 1,
       },
     });
@@ -826,7 +860,6 @@ test.describe("S2 canvas query security", () => {
         actor: adminActor,
         input: {
           purpose: "VISIBLE",
-          query: peopleQuery,
           cursor: taskCreatePeoplePage.nextCursor ?? undefined,
         },
       }),
@@ -839,7 +872,6 @@ test.describe("S2 canvas query security", () => {
           purpose: "TASK_CREATE",
           team: "步兵",
           techGroup: "机械",
-          query: peopleQuery,
           cursor: taskCreatePeoplePage.nextCursor ?? undefined,
         },
       }),
@@ -850,7 +882,6 @@ test.describe("S2 canvas query security", () => {
       input: {
         purpose: "TASK_MEMBERS",
         taskId: taskIds[0]!,
-        query: peopleQuery,
         limit: 1,
       },
     });
@@ -861,7 +892,6 @@ test.describe("S2 canvas query security", () => {
         input: {
           purpose: "TASK_MEMBERS",
           taskId: taskIds[1]!,
-          query: peopleQuery,
           cursor: taskMembersPeoplePage.nextCursor ?? undefined,
         },
       }),
@@ -872,7 +902,7 @@ test.describe("S2 canvas query security", () => {
         actor: adminActor,
         input: {
           query: taskQuery,
-          cursor: firstPeoplePage.nextCursor ?? undefined,
+          cursor: peopleCursorPage.nextCursor ?? undefined,
         },
       }),
       "VALIDATION_ERROR",
@@ -882,7 +912,7 @@ test.describe("S2 canvas query security", () => {
         actor: adminActor,
         input: {
           query: tagQuery,
-          cursor: firstPeoplePage.nextCursor ?? undefined,
+          cursor: peopleCursorPage.nextCursor ?? undefined,
         },
       }),
       "VALIDATION_ERROR",
@@ -893,7 +923,7 @@ test.describe("S2 canvas query security", () => {
         actor: ownerActor,
         input: {
           query: tagQuery,
-          cursor: firstTaskPage.nextCursor ?? undefined,
+          cursor: taskCursorPage.nextCursor ?? undefined,
         },
       }),
       "VALIDATION_ERROR",
@@ -912,6 +942,23 @@ test.describe("S2 canvas query security", () => {
       searchTaskOptions({
         actor: ownerActor,
         input: { query: taskQuery, limit: 51 },
+      }),
+      "QUERY_LIMIT_EXCEEDED",
+    );
+    await expectErrorCode(
+      resolvePeopleOptionsByIds({
+        actor: adminActor,
+        input: {
+          scope: { purpose: "VISIBLE" },
+          ids: personIds.slice(0, 51),
+        },
+      }),
+      "QUERY_LIMIT_EXCEEDED",
+    );
+    await expectErrorCode(
+      resolveTaskOptionsByIds({
+        actor: ownerActor,
+        input: { ids: taskIds.slice(0, 51) },
       }),
       "QUERY_LIMIT_EXCEEDED",
     );
@@ -1227,6 +1274,17 @@ test.describe("S2 canvas query security", () => {
           startAt: atHour(14 + index * 0.1),
           endAt: atHour(14.05 + index * 0.1),
           content: `禁止关联终态 Task ${index}`,
+          taskId: task.taskId,
+          nodeId: task.milestoneNodeId,
+        }),
+        "ASSOCIATION_INVALID",
+      );
+      await expectErrorCode(
+        createActualSegment(teamAdminActor, {
+          personId: target.person.id,
+          startAt: atHour(15 + index * 0.1),
+          endAt: atHour(15.05 + index * 0.1),
+          content: `禁止 Actual 关联终态 Task ${index}`,
           taskId: task.taskId,
           nodeId: task.milestoneNodeId,
         }),
@@ -2214,12 +2272,10 @@ test.describe("S2 canvas query security", () => {
 async function createAccountPerson(
   displayName: string,
   status: "ACTIVE" | "INACTIVE" = "ACTIVE",
-  accountStatus: "ACTIVE" | "DISABLED" = "ACTIVE",
 ) {
   const openId = `ou_s2_canvas_${randomUUID()}`;
   const account = await prisma.account.create({
     data: {
-      projectAccessStatus: accountStatus,
       person: { create: { displayName, status } },
       identities: {
         create: {

@@ -49,7 +49,6 @@ export class ProjectManagementIdentityError extends Error {
     readonly code:
       | "UNAUTHENTICATED"
       | "IDENTITY_CONFLICT"
-      | "ACCOUNT_DISABLED"
       | "VALIDATION_ERROR",
     message: string,
   ) {
@@ -59,22 +58,6 @@ export class ProjectManagementIdentityError extends Error {
 }
 
 type PrismaClientLike = Prisma.TransactionClient | typeof prisma;
-
-export async function assertProjectAccessActiveTx(
-  tx: Prisma.TransactionClient,
-  accountId: string,
-): Promise<void> {
-  const account = await tx.account.findUnique({
-    where: { id: accountId },
-    select: { projectAccessStatus: true },
-  });
-  if (!account || account.projectAccessStatus !== "ACTIVE") {
-    throw new ProjectManagementIdentityError(
-      "ACCOUNT_DISABLED",
-      "账号已禁用，无法访问项目管理",
-    );
-  }
-}
 
 type IdentityWithAccount = AccountIdentity & {
   account: Account & { person: Person | null };
@@ -252,7 +235,6 @@ export async function resolveFeishuIdentityForUserTx(
       })
     : await tx.account.create({
         data: {
-          projectAccessStatus: "ACTIVE",
           lastLoginAt: new Date(),
         },
       });
@@ -406,12 +388,6 @@ export async function getProjectManagementActorForFeishuUser(
   input: ProjectManagementIdentityInput,
 ): Promise<ProjectManagementActor> {
   const resolved = await resolveFeishuIdentityForUser(input);
-  if (resolved.account.projectAccessStatus !== "ACTIVE") {
-    throw new ProjectManagementIdentityError(
-      "ACCOUNT_DISABLED",
-      "账号已禁用，无法访问项目管理",
-    );
-  }
   const systemRoles = await prisma.systemRoleAssignment.findMany({
     where: {
       accountId: resolved.account.id,

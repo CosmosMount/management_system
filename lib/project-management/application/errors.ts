@@ -205,9 +205,6 @@ export function toProjectManagementServiceError(
     if (error.code === "UNAUTHENTICATED") {
       return new ProjectManagementServiceError("UNAUTHENTICATED", error.message);
     }
-    if (error.code === "ACCOUNT_DISABLED") {
-      return new ProjectManagementServiceError("FORBIDDEN", error.message);
-    }
     return new ProjectManagementServiceError("VALIDATION_ERROR", error.message);
   }
 

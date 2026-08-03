@@ -51,7 +51,6 @@ async function userRoleVersion(openId: string): Promise<string> {
   const authorization = await getAccountAuthorizationContextForOpenId(openId);
   return `roles:${JSON.stringify({
     reimbursement: authorization?.reimbursementRoles ?? [],
-    projectAccessStatus: authorization?.projectAccessStatus ?? null,
     project: authorization?.projectRoles ?? [],
   })}`;
 }
@@ -244,7 +243,7 @@ async function getAdminVersion(): Promise<string> {
     }),
     prisma.account.findMany({
       orderBy: { id: "asc" },
-      select: { id: true, projectAccessStatus: true, updatedAt: true },
+      select: { id: true, updatedAt: true },
     }),
     prisma.procurementBudgetPool.aggregate({ _max: { updatedAt: true } }),
     prisma.procurementBudgetPool.count(),

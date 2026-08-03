@@ -1,12 +1,10 @@
 import type {
-  AccountStatus,
   ProjectManagementSystemRole,
   UserRoleType,
 } from "@prisma/client";
 
 export type AdminAccountRow = {
   id: string;
-  projectAccessStatus: AccountStatus;
   lastLoginAt: string | null;
   createdAt: string;
   person: { displayName: string; avatar: string | null } | null;

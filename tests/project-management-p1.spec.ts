@@ -134,7 +134,7 @@ test.describe("project management P1 schema, identity and authorization", () => 
 
   });
 
-  test("Feishu identity resolution is idempotent, upgrades openId fallback and rejects conflicts or disabled accounts", async () => {
+  test("Feishu identity resolution is idempotent, upgrades openId fallback and rejects identity conflicts", async () => {
     const openId = `ou_pm_${randomUUID()}`;
     const unionId = `on_pm_${randomUUID()}`;
     const first = await resolveFeishuIdentityForUser({
@@ -213,17 +213,13 @@ test.describe("project management P1 schema, identity and authorization", () => 
       }),
     ).toBe(1);
 
-    await prisma.account.update({
-      where: { id: first.account.id },
-      data: { projectAccessStatus: "DISABLED" },
-    });
     await expect(
       getProjectManagementActorForFeishuUser({
         openId: rotatedOpenId,
         unionId,
         name: "身份测试用户",
       }),
-    ).rejects.toThrow("账号已禁用");
+    ).resolves.toMatchObject({ accountId: first.account.id });
 
     const conflictOpenId = `ou_pm_conflict_${randomUUID()}`;
     const conflictUnionId = `on_pm_conflict_${randomUUID()}`;
@@ -575,7 +571,6 @@ test.describe("project management P1 schema, identity and authorization", () => 
 async function createAccountPerson(displayName: string) {
   const account = await prisma.account.create({
     data: {
-      projectAccessStatus: "ACTIVE",
       person: {
         create: {
           displayName,

@@ -18,6 +18,11 @@ import {
 } from "@/lib/project-management/authorization";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import { notFoundError } from "@/lib/project-management/application/errors";
+import { rankFuzzyMatches } from "@/lib/search/fuzzy-score";
+import {
+  normalizeSearchText,
+  searchTerms,
+} from "@/lib/search/normalize-search-text";
 
 export type TaskListItem = {
   id: string;
@@ -44,7 +49,26 @@ export type TaskListItem = {
 export type TaskListResult = {
   items: TaskListItem[];
   nextCursor: string | null;
+  hasMoreByQuery: boolean;
 };
+
+const taskListInclude = {
+  currentPlanVersion: { select: { versionNo: true } },
+  activeMilestoneNode: {
+    include: {
+      milestone: true,
+    },
+  },
+  members: {
+    where: { removedAt: null },
+    include: { person: { select: { displayName: true } } },
+    orderBy: [{ role: "asc" }, { createdAt: "asc" }],
+  },
+  tags: {
+    include: { tag: { select: { id: true, name: true, color: true } } },
+    orderBy: { createdAt: "asc" },
+  },
+} satisfies Prisma.TaskInclude;
 
 const planVersionInclude = {
   nodes: {
@@ -225,6 +249,7 @@ export async function listTasks({
   };
 }): Promise<TaskListResult> {
   const limit = Math.min(Math.max(input?.limit ?? 30, 1), 100);
+  const query = normalizeSearchText(input?.query ?? "");
   const filters: Prisma.TaskWhereInput[] = [
     taskReadableWhere(actor),
     input?.status ? { status: input.status } : {},
@@ -232,46 +257,80 @@ export async function listTasks({
     input?.mine
       ? { members: { some: { personId: actor.personId, removedAt: null } } }
       : {},
-    input?.query?.trim()
-      ? {
-          OR: [
-            { title: { contains: input.query.trim(), mode: "insensitive" } },
-            {
-              description: {
-                contains: input.query.trim(),
-                mode: "insensitive",
-              },
-            },
-          ],
-        }
-      : {},
   ];
-
-  const tasks = await prisma.task.findMany({
-    where: { AND: filters },
-    include: {
-      currentPlanVersion: { select: { versionNo: true } },
-      activeMilestoneNode: {
-        include: {
-          milestone: true,
-        },
+  const where: Prisma.TaskWhereInput = { AND: filters };
+  let hasMoreByQuery = false;
+  let hasNextPage = false;
+  let visibleTasks: Prisma.TaskGetPayload<{ include: typeof taskListInclude }>[];
+  if (query) {
+    const candidateSelect = { id: true, title: true, description: true, status: true } as const;
+    const directCandidates = await prisma.task.findMany({
+      where: {
+        AND: [
+          where,
+          ...searchTerms(query).map((term) => ({
+            OR: [
+              { title: { contains: term, mode: "insensitive" as const } },
+              { description: { contains: term, mode: "insensitive" as const } },
+            ],
+          })),
+        ],
       },
-      members: {
-        where: { removedAt: null },
-        include: { person: { select: { displayName: true } } },
-        orderBy: [{ role: "asc" }, { createdAt: "asc" }],
-      },
-      tags: {
-        include: { tag: { select: { id: true, name: true, color: true } } },
-        orderBy: { createdAt: "asc" },
-      },
-    },
-    orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
-    take: limit + 1,
-    ...(input?.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
-  });
-
-  const visibleTasks = tasks.slice(0, limit);
+      select: candidateSelect,
+      orderBy: [{ title: "asc" }, { id: "asc" }],
+      take: 501,
+    });
+    const fallbackCandidates = directCandidates.length < 50
+      ? await prisma.task.findMany({
+          where,
+          select: candidateSelect,
+          orderBy: [{ title: "asc" }, { id: "asc" }],
+          take: 501,
+        })
+      : [];
+    const candidates = [...new Map(
+      [...directCandidates, ...fallbackCandidates].map((task) => [task.id, task]),
+    ).values()];
+    const ranked = rankFuzzyMatches(
+      candidates,
+      query,
+      (task) => [
+        { text: task.title, weight: 2, pinyin: true },
+        { text: task.description, weight: 1 },
+      ],
+      (left, right) =>
+        Number(right.status === "ACTIVE") - Number(left.status === "ACTIVE") ||
+        left.title.localeCompare(right.title, "zh-CN") ||
+        left.id.localeCompare(right.id),
+    );
+    const resultLimit = Math.min(limit, 50);
+    const orderedIds = ranked.slice(0, resultLimit).map(({ item }) => item.id);
+    const rows = orderedIds.length
+      ? await prisma.task.findMany({
+          where: { AND: [where, { id: { in: orderedIds } }] },
+          include: taskListInclude,
+        })
+      : [];
+    const byId = new Map(rows.map((task) => [task.id, task]));
+    visibleTasks = orderedIds.flatMap((id) => {
+      const task = byId.get(id);
+      return task ? [task] : [];
+    });
+    hasMoreByQuery =
+      ranked.length > resultLimit ||
+      directCandidates.length === 501 ||
+      fallbackCandidates.length === 501;
+  } else {
+    const tasks = await prisma.task.findMany({
+      where,
+      include: taskListInclude,
+      orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+      take: limit + 1,
+      ...(input?.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
+    });
+    visibleTasks = tasks.slice(0, limit);
+    hasNextPage = tasks.length > limit;
+  }
   const segmentReviewCounts = await countSegmentsNeedingReviewByTask(
     visibleTasks.map((task) => task.id),
   );
@@ -306,7 +365,8 @@ export async function listTasks({
       updatedAt: task.updatedAt.toISOString(),
       createdAt: task.createdAt.toISOString(),
     })),
-    nextCursor: tasks.length > limit ? tasks[limit]?.id ?? null : null,
+    nextCursor: hasNextPage ? visibleTasks.at(-1)?.id ?? null : null,
+    hasMoreByQuery,
   };
 }
 

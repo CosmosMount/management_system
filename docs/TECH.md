@@ -73,7 +73,9 @@ Auth.js 使用飞书 OAuth。认证配置与完整登录副作用拆分如下：
 | `lib/auth-edge.ts` | Proxy 使用的轻量 Auth.js 实例 |
 | `lib/auth.ts` | 完整 auth；登录时解析统一账号并更新报销 User |
 
-`Account + AccountIdentity` 是两个业务域共同的账号底座；`Person` 承载项目成员资料，`User` 通过唯一、非空 `accountId` 保留采购订单关系。飞书 `unionId` 优先作为 `providerSubject`，无 `unionId` 时使用 `open:<openId>`。身份解析与报销 User 协调在同一事务中按 `accountId → unionId → openId` 查找；`openId` 轮换会更新原 Identity 和 User，候选指向不同账号或重复 Identity 时硬失败并写脱敏审计，不按姓名自动合并。`Account.projectAccessStatus` 只控制项目管理：Proxy 在渲染 `/progress` 前把禁用账号引导到说明页，项目 Actor 与所有写事务（包括 Tag）仍独立复核；登录、采购报销和超级管理员后台不受影响。
+`Account + AccountIdentity` 是两个业务域共同的账号底座；`Person` 承载项目成员资料，`User` 通过唯一、非空 `accountId` 保留采购订单关系。飞书 `unionId` 优先作为 `providerSubject`，无 `unionId` 时使用 `open:<openId>`。身份解析与报销 User 协调在同一事务中按 `accountId → unionId → openId` 查找；`openId` 轮换会更新原 Identity 和 User，候选指向不同账号或重复 Identity 时硬失败并写脱敏审计，不按姓名自动合并。账号级项目访问禁用字段和 Proxy/Actor gate 已删除；项目可见性与写权限继续由系统角色、TaskMember、`taskReadableWhere` 和各 action 授权规则服务端执行。
+
+人员与 Task option 查询采用有界两阶段搜索：非空查询在授权 where 内最多读取 501 个直接或回退候选，按 NFKC、前缀、分词前缀、子串、拼音首字母与顺序匹配评分并返回前 50 项；空查询保留绑定 filter hash 的稳定 ID 游标。批量 resolver 最多接收 50 个 ID，按输入顺序恢复且静默丢弃不可见对象。客户端基于 Base UI Combobox，使用 250ms 防抖、scope/filter 缓存和请求序列防止旧响应覆盖。
 
 ## 权限
 
@@ -82,7 +84,7 @@ Auth.js 使用飞书 OAuth。认证配置与完整登录副作用拆分如下：
 | 采购 | `lib/permissions.ts` | 服务端角色查询 |
 | 采购（客户端） | `lib/permissions-client.ts` | 纯函数，无数据库依赖 |
 | 项目管理 | `lib/project-management/authorization` | P1-P6 授权、稳定 action 字符串、状态机操作鉴权和 readableWhere 查询过滤 |
-| 统一账号 | `lib/account-authorization.ts` | 账号、项目访问和两个角色域的授权上下文 |
+| 统一账号 | `lib/account-authorization.ts` | 统一账号和两个角色域的授权上下文 |
 | 账号变更 | `lib/account-management.ts` | 超管复核、事务锁、审计与通知 |
 
 报销活跃角色为 `TEAM_ADMIN`、`TECH_GROUP_ADMIN`、`TEACHER`、`FINANCE`。授权、审批收件人和角色签名回退均通过 `UserRole.accountId` 读取账号当前身份；`UserRole.openId` 仅为只读历史兼容字段。采购管理审核同时保存审批人的稳定 `accountId` 和当时的 `openId` 快照，验收清单签名优先按 `accountId` 解析，避免飞书身份轮换后错误回退到当前组长。旧 `UserRole.SUPER_ADMIN` 仅保留撤销历史；统一超级管理员在报销权限 helper 中合成兼容的超管语义。
@@ -171,7 +173,7 @@ TimeCanvas 的请求预算为 Full Segment + Busy 合计 5,000、Task anchor 50�
 | `/procurement/[id]` | 订单详情与审批 |
 | `/procurement/dashboard` | 采购汇总看板 |
 | `/admin` | 超级管理员概览 |
-| `/admin/accounts` | 统一账号、项目访问与两个角色域管理 |
+| `/admin/accounts` | 统一账号与两个角色域管理 |
 | `/admin/roles` | 兼容地址，服务端重定向到 `/admin/accounts` |
 
 ### 项目管理
@@ -217,6 +219,7 @@ npm run db:deploy
 - dev 热更新可能导致 client 缓存过期；`lib/prisma.ts` 中 `isPrismaClientStale()` 会在缺少新 model delegate 时重建 client
 - schema 变更后执行 `npx prisma generate` 并重启 dev server
 - 旧 SQLite 数据不迁移；首次部署从空 PostgreSQL 库开始
+- `20260803190000_remove_project_access_status` 会删除账号项目访问状态列与枚举，和仍读取旧列的进程不兼容。生产发布必须使用维护窗口：先构建新版本并备份数据库，停止旧 Web/cron/ws 进程，执行 `npm run db:deploy`，再启动新版本并验证账号登录、项目授权和人员/Task 搜索主流程。
 
 ### 常用命令
 

@@ -208,7 +208,8 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
    - 点击 **「同步飞书通讯录」** 将企业全员录入系统（无需对方先登录）
    - 管理项目管理员及多个车组/技术组组长范围
    - 管理原有四类报销角色
-   - 启用或禁用项目访问；该状态不影响登录和报销
+
+项目模块不再提供账号级启用/禁用开关。账号通过登录身份解析后，项目可见性和写权限只由系统角色、TaskMember 与既有授权规则决定；停用 `Person` 仍不能被新增选择。
 
 用户也可通过飞书登录自动写入/更新 `User` 表；分配角色前需先完成通讯录同步或让对方登录一次。
 
@@ -503,7 +504,8 @@ pm2 start npm --name procurement-cron -- run cron
 - `/progress/approvals` 汇总投入确认、Milestone Review、Revision、Termination 与关联复核；`/progress/tags` 管理 Tag。
 - `/progress/notifications` 提供站内通知中心和分类飞书偏好；站内通知始终保留，强制事件不受普通关闭偏好影响。
 - 旧 `/progress/task/:id` 会重定向到 `/progress/tasks/:id`；旧 `/progress/projects/*` 和 `/progress/kanban` 回到 `/progress`；未映射旧目录没有业务页面。
-- 飞书登录和通讯录同步先解析统一 `Account/AccountIdentity/Person`，再关联并更新采购 `User`。`projectAccessStatus=DISABLED` 只阻止项目页面和操作；登录、采购报销和超级管理员后台不受影响。
+- 飞书登录和通讯录同步先解析统一 `Account/AccountIdentity/Person`，再关联并更新采购 `User`。账号级项目访问禁用机制已移除，历史禁用账号恢复项目入口，但仍受系统角色、TaskMember 和数据范围授权约束。
+- 人员与 Task 选择统一使用异步模糊选择器，支持 NFKC、拼音首字母、顺序匹配、已选项安全恢复和最多 50 项多选；Task 列表与账号后台使用相同的有界排序规则。
 - 新项目管理的设计和逐阶段真实证据位于 [`docs/plan/`](docs/plan/)；当前完成度以 `project-management-frontend-design-v1.0/13-实施进度台账.md` 为准。
 - `npm run pm:release-rehearsal` 仅用于本机隔离 `_test`/`_snapshot` 数据库；必须显式设置 `PM_RELEASE_REHEARSAL_CONFIRM=LOCAL_ISOLATED_REHEARSAL` 和 `NOTIFICATION_DELIVERY_DISABLED=true`。它不会执行生产维护窗口，生产发布仍需另行授权与 BO/TL/QA/DBA 签字。
 - 项目管理飞书通知只允许写入 `channel=project-management` 的 notification outbox；adapter 已构造普通交互卡并经统一私信传输层投递。验收和 Revision 待审批事件使用审批机器人用途，其他项目管理事件使用通知机器人。

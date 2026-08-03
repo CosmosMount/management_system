@@ -4,8 +4,6 @@ import { prisma } from "../lib/prisma";
 async function main() {
   const [
     accountCount,
-    activeAccountCount,
-    disabledAccountCount,
     userCount,
     linkedUserCount,
     userAccountIdIsRequired,
@@ -18,8 +16,6 @@ async function main() {
     migrationAuditCount,
   ] = await Promise.all([
     prisma.account.count(),
-    prisma.account.count({ where: { projectAccessStatus: "ACTIVE" } }),
-    prisma.account.count({ where: { projectAccessStatus: "DISABLED" } }),
     prisma.user.count(),
     prisma.$queryRaw<Array<{ linkedUserCount: bigint }>>`
       SELECT COUNT("accountId") AS "linkedUserCount" FROM "User"
@@ -64,8 +60,6 @@ async function main() {
 
   const report = {
     accountCount,
-    activeAccountCount,
-    disabledAccountCount,
     userCount,
     linkedUserCount,
     userAccountIdIsRequired,

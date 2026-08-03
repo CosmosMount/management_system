@@ -1,5 +1,4 @@
-import type { AccountStatus, Prisma } from "@prisma/client";
-import { randomUUID } from "node:crypto";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { createDomainAuditEventTx } from "@/lib/project-management/audit";
 import {
@@ -48,7 +47,6 @@ async function loadSecurityTarget(tx: Transaction, targetAccountId: string) {
     where: { id: targetAccountId },
     select: {
       id: true,
-      projectAccessStatus: true,
       person: { select: { displayName: true } },
       identities: {
         where: { provider: "FEISHU", tenantId: "default" },
@@ -243,40 +241,6 @@ export async function revokeAccountRole(
       after: { active: false, revokedAt: revokedAt.toISOString() },
     });
     return { assignment: updated, changed: true };
-  });
-}
-
-export async function setProjectAccessStatus(
-  actorAccountId: string,
-  targetAccountId: string,
-  status: AccountStatus,
-) {
-  return prisma.$transaction(async (tx) => {
-    await assertActorIsSuperAdministrator(tx, actorAccountId);
-    await lockAccountMutations(tx, targetAccountId);
-    const target = await loadSecurityTarget(tx, targetAccountId);
-    if (target.projectAccessStatus === status) return { status, changed: false };
-    const changeId = randomUUID();
-    await tx.account.update({
-      where: { id: target.id },
-      data: { projectAccessStatus: status },
-    });
-    await createAccountSecuritySideEffects(tx, {
-      actorAccountId,
-      target,
-      action: "account.project_access.changed",
-      entityType: "Account",
-      entityId: target.id,
-      eventId: changeId,
-      title: status === "ACTIVE" ? "项目访问已启用" : "项目访问已禁用",
-      summary:
-        status === "ACTIVE"
-          ? "你的项目管理访问权限已恢复，报销权限不受影响"
-          : "你的项目管理访问权限已禁用，登录和报销权限不受影响",
-      before: { projectAccessStatus: target.projectAccessStatus },
-      after: { projectAccessStatus: status },
-    });
-    return { status, changed: true };
   });
 }
 

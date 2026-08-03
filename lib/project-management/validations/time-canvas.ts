@@ -207,6 +207,23 @@ const searchPeopleCommonFields = {
   limit: peoplePageLimitSchema,
 } as const;
 
+export const peopleOptionScopeSchema = z.discriminatedUnion("purpose", [
+  z.object({ purpose: z.literal("VISIBLE") }).strict(),
+  z
+    .object({
+      purpose: z.literal("TASK_CREATE"),
+      team: z.enum(TEAM_OPTIONS, { message: "请选择有效车组" }),
+      techGroup: z.enum(TECH_GROUP_OPTIONS, { message: "请选择有效技术组" }),
+    })
+    .strict(),
+  z
+    .object({
+      purpose: z.literal("TASK_MEMBERS"),
+      taskId: idSchema,
+    })
+    .strict(),
+]);
+
 export const searchPeopleInputSchema = z.discriminatedUnion("purpose", [
   // Visibility and ACTIVE status are server-enforced and not caller-selectable.
   z
@@ -243,6 +260,17 @@ export const searchTaskOptionsInputSchema = z
   })
   .strict();
 
+export const resolvePeopleOptionsByIdsInputSchema = z
+  .object({
+    scope: peopleOptionScopeSchema,
+    ids: idListSchema("Person"),
+  })
+  .strict();
+
+export const resolveTaskOptionsByIdsInputSchema = z
+  .object({ ids: idListSchema("Task") })
+  .strict();
+
 export const listTagOptionsInputSchema = z
   .object({
     query: querySchema,
@@ -256,6 +284,7 @@ export type GetTimeCanvasDataInput = z.infer<
   typeof getTimeCanvasDataInputSchema
 >;
 export type SearchPeopleInput = z.infer<typeof searchPeopleInputSchema>;
+export type PeopleOptionScope = z.infer<typeof peopleOptionScopeSchema>;
 export type SearchTaskOptionsInput = z.infer<
   typeof searchTaskOptionsInputSchema
 >;

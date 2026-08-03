@@ -7,10 +7,13 @@ import {
 import { getCurrentProjectManagementActor } from "@/lib/project-management/identity";
 import {
   listTagOptions as listTagOptionsQuery,
+  resolvePeopleOptionsByIds as resolvePeopleOptionsByIdsQuery,
+  resolveTaskOptionsByIds as resolveTaskOptionsByIdsQuery,
   searchPeople as searchPeopleQuery,
   searchTaskOptions as searchTaskOptionsQuery,
 } from "@/lib/project-management/queries/option-queries";
 import type {
+  PersonOptionDto,
   PersonOptionPage,
   TagOptionPage,
   TaskOptionPage,
@@ -40,6 +43,34 @@ export async function searchTaskOptions(
       const actor = await getCurrentProjectManagementActor();
       log.setActorAccountId(actor.accountId);
       return searchTaskOptionsQuery({ actor, input });
+    },
+  });
+}
+
+export async function resolvePeopleOptionsByIds(
+  input: unknown,
+): Promise<ProjectManagementActionResult<PersonOptionDto[]>> {
+  return runProjectManagementAction({
+    event: "pm.options.people.resolve",
+    action: "resolvePeopleOptionsByIds",
+    callback: async (log) => {
+      const actor = await getCurrentProjectManagementActor();
+      log.setActorAccountId(actor.accountId);
+      return resolvePeopleOptionsByIdsQuery({ actor, input });
+    },
+  });
+}
+
+export async function resolveTaskOptionsByIds(
+  input: unknown,
+): Promise<ProjectManagementActionResult<TaskOptionPage["items"]>> {
+  return runProjectManagementAction({
+    event: "pm.options.tasks.resolve",
+    action: "resolveTaskOptionsByIds",
+    callback: async (log) => {
+      const actor = await getCurrentProjectManagementActor();
+      log.setActorAccountId(actor.accountId);
+      return resolveTaskOptionsByIdsQuery({ actor, input });
     },
   });
 }

@@ -16,7 +16,6 @@ import {
 } from "@/lib/project-management/authorization";
 import { createDomainAuditEventTx } from "@/lib/project-management/audit";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
-import { assertProjectAccessActiveTx } from "@/lib/project-management/identity";
 import {
   associationInvalidError,
   notFoundError,
@@ -517,7 +516,6 @@ async function refreshActorTx(
   tx: PrismaTx,
   actor: ProjectManagementActor,
 ): Promise<ProjectManagementActor> {
-  await assertProjectAccessActiveTx(tx, actor.accountId);
   const roles = await tx.systemRoleAssignment.findMany({
     where: { accountId: actor.accountId, revokedAt: null },
     select: { role: true, team: true, techGroup: true },
@@ -839,7 +837,6 @@ async function resolveMandatoryMemberRecipientTx(
     | "RESOLVED"
     | "PERSON_INACTIVE"
     | "ACCOUNT_MISSING"
-    | "ACCOUNT_DISABLED"
     | "DEFAULT_FEISHU_IDENTITY_MISSING"
     | "FEISHU_OPEN_ID_MISSING";
   recipients: Array<{ accountId: string; openId: string | null }>;
@@ -851,7 +848,6 @@ async function resolveMandatoryMemberRecipientTx(
       account: {
         select: {
           id: true,
-          projectAccessStatus: true,
           identities: {
             where: {
               provider: "FEISHU",
@@ -866,9 +862,6 @@ async function resolveMandatoryMemberRecipientTx(
   });
   if (!person?.account) {
     return { status: "ACCOUNT_MISSING", recipients: [] };
-  }
-  if (person.account.projectAccessStatus !== "ACTIVE") {
-    return { status: "ACCOUNT_DISABLED", recipients: [] };
   }
   const openId = person.account.identities
     .map((identity) => identity.openId?.trim() ?? "")

@@ -280,7 +280,7 @@ npm run pm:identity-backfill
 ## 项目管理 P1-P6 测试
 
 1. `tests/project-management-p1.spec.ts` 覆盖核心 schema 约束：单 Task 单 Current Plan、有效 Tag 名称唯一、Segment 时间检查和 Review 幂等键。
-2. 身份测试覆盖 `User -> Account/Identity/Person` 首次解析、重复解析幂等、openId fallback 升级为 unionId、同 unionId 下的 openId 轮换、报销 User 原位更新、角色与收件人不丢失、冲突硬失败、非空 `User.accountId` 关联和禁用账号拒绝项目 Actor。
+2. 身份测试覆盖 `User -> Account/Identity/Person` 首次解析、重复解析幂等、openId fallback 升级为 unionId、同 unionId 下的 openId 轮换、报销 User 原位更新、角色与收件人不丢失、冲突硬失败和非空 `User.accountId` 关联。账号级项目禁用已移除，项目授权回归应覆盖角色、TaskMember 和数据范围允许/拒绝路径。
 3. 授权测试覆盖统一超级管理员、项目管理员、车组/技术组/多范围组长、匹配/不匹配/空范围 Task、普通 TaskMember、转组前后范围和 `taskReadableWhere` 防枚举。所有管理员仍需覆盖 `allowSelfReview` 允许与拒绝路径。
 4. 通知测试覆盖站内通知事务 helper、审计脱敏、审计 append-only、`channel=project-management` outbox 入队、审批用途 allowlist、adapter 收件人去重、完整交互卡和通知/审批机器人边界。
 5. `tests/project-management-lifecycle.spec.ts` 覆盖 P2/P3 Task 草稿创建、幂等键冲突、Current Plan 持久化、激活、并发/过期锁拒绝、Revision 提交/驳回/取消/审批/直接生效、Planned Segment 待确认标记、Revision 生效后的 Segment 关联失效通知、Milestone Review TEXT/LINK 证据、FILE 证据拒绝、审批推进、Termination 四种 outcome、查询防枚举、审计和 `channel=project-management` outbox。
@@ -311,12 +311,14 @@ npm run accounts:validate
 - `unionId/openId` 关联和缺失 Account 自动创建；
 - 报销超管、旧项目系统管理员和旧组长的映射；
 - `RESOURCE_MANAGER/AUDITOR` 等所有旧角色逐条撤销审计、重复执行不重复审计；
-- 旧角色撤销但保留、`User.accountId NOT NULL`、`projectAccessStatus` 列名和新范围约束；
+- 旧角色撤销但保留、`User.accountId NOT NULL` 和新范围约束；
 - 身份多账号冲突和双范围旧组长会阻止迁移；
 - `source=MIGRATION` 审计存在，站内通知与 outbox 为零；
 - 活跃旧角色、非法报销范围和重复活跃角色被数据库拒绝。
 
 迁移测试只允许官方 runner 的随机 `_test` 数据库；不得把普通开发库或生产库改名伪装成测试库。
+
+`tests/project-access-status-removal-migration.spec.ts` 从新迁移之前的完整 migration 链构造 ACTIVE/DISABLED 账号，验证历史 DISABLED 账号逐一获得 `source=MIGRATION` 恢复审计、ACTIVE 账号无该审计、通知/outbox 数量不变、列与枚举删除且 append-only 审计触发器仍有效。`tests/fuzzy-search.spec.ts` 与 S2 option 安全测试覆盖标准化、拼音/顺序评分、AND 语义、50/501 边界、游标绑定和 resolver 不泄露。`tests/entity-picker.spec.ts` 通过仅在 runner-owned `_test` 数据库和通知禁发环境开放的 `/progress/entity-picker-fixtures`，确定性验证旧响应、分页和 resolver 竞态、失败重试、50 项上限、键盘独立投入及 disabled FormData 语义。
 
 ## 部署冒烟测试
 

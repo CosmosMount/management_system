@@ -1492,7 +1492,6 @@ async function createAccountPerson(displayName: string) {
   const openId = `ou_pm_lifecycle_${randomUUID()}`;
   const account = await prisma.account.create({
     data: {
-      projectAccessStatus: "ACTIVE",
       identities: {
         create: {
           provider: "FEISHU",

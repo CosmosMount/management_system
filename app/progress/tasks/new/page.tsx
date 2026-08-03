@@ -15,6 +15,7 @@ import {
 import {
   getActorPersonOption,
   listTagOptions,
+  resolvePeopleOptionsByIds,
   searchPeople,
   searchTaskOptions,
 } from "@/lib/project-management/queries/option-queries";
@@ -22,6 +23,7 @@ import {
   getTaskWorkspace,
   type TaskWorkspace,
 } from "@/lib/project-management/queries/task-queries";
+import type { PersonOptionDto } from "@/lib/project-management/types/time-canvas";
 import { getProgressActorOrRedirect } from "../../_auth";
 
 type SearchParams = Record<string, string | string[] | undefined>;
@@ -61,7 +63,7 @@ export default async function ProgressTaskNewPage({
     );
   }
 
-  const [actorPerson, peoplePage, taskPage, tagPage] = await Promise.all([
+  const [actorPerson, peoplePage, templatePeople, taskPage, tagPage] = await Promise.all([
     getActorPersonOption(actor),
     searchPeople({
       actor,
@@ -72,12 +74,13 @@ export default async function ProgressTaskNewPage({
         limit: 50,
       },
     }),
+    resolveTemplatePeople(actor, initialScope, template),
     searchTaskOptions({ actor, input: { limit: 50 } }),
     listTagOptions({ actor, input: { limit: 50 } }),
   ]);
-  const people = mergeTemplatePeople(
-    mergePersonOptions(peoplePage.items, [actorPerson]),
-    template,
+  const people = mergePersonOptions(
+    peoplePage.items,
+    [actorPerson, ...templatePeople],
   );
   const tasks = mergeRelatedTasks(taskPage.items, template, requestedRelated);
   const seed = createSeed({
@@ -245,28 +248,29 @@ function createSeed({
   };
 }
 
-function mergeTemplatePeople<T extends { id: string }>(
-  people: T[],
+async function resolveTemplatePeople(
+  actor: Awaited<ReturnType<typeof getProgressActorOrRedirect>>,
+  scope: { team: string; techGroup: string },
   template: TaskWorkspace | null,
-) {
-  const merged: Array<T | {
-    id: string;
-    displayName: string;
-    avatar: null;
-    status: "ACTIVE";
-    accountAvailability: "ACTIVE";
-  }> = [...people];
-  for (const member of template?.members ?? []) {
-    if (merged.some((person) => person.id === member.personId)) continue;
-    merged.push({
-      id: member.personId,
-      displayName: member.displayName,
-      avatar: null,
-      status: "ACTIVE",
-      accountAvailability: "ACTIVE",
-    });
+): Promise<PersonOptionDto[]> {
+  const ids = [...new Set(template?.members.map((member) => member.personId) ?? [])];
+  const resolved: PersonOptionDto[] = [];
+  for (let offset = 0; offset < ids.length; offset += 50) {
+    resolved.push(
+      ...(await resolvePeopleOptionsByIds({
+        actor,
+        input: {
+          scope: {
+            purpose: "TASK_CREATE",
+            team: scope.team,
+            techGroup: scope.techGroup,
+          },
+          ids: ids.slice(offset, offset + 50),
+        },
+      })),
+    );
   }
-  return merged;
+  return resolved;
 }
 
 function mergePersonOptions<T extends { id: string }>(people: T[], required: T[]) {
@@ -299,6 +303,8 @@ function workspaceTaskOption(workspace: TaskWorkspace) {
     title: workspace.task.title,
     status: workspace.task.status,
     priority: workspace.task.priority,
+    team: workspace.task.team,
+    techGroup: workspace.task.techGroup,
     activeMilestone: active?.milestone
       ? {
           nodeId: active.nodeId,

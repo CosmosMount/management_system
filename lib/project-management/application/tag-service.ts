@@ -7,10 +7,7 @@ import {
   notFoundError,
   staleTaskError,
 } from "@/lib/project-management/application/errors";
-import {
-  assertProjectAccessActiveTx,
-  type ProjectManagementActor,
-} from "@/lib/project-management/identity";
+import type { ProjectManagementActor } from "@/lib/project-management/identity";
 
 const idSchema = z.string().uuid("Tag ID 格式不正确");
 const tagFieldsSchema = z.object({
@@ -158,7 +155,6 @@ async function refreshActorTx(
   tx: Prisma.TransactionClient,
   actor: ProjectManagementActor,
 ): Promise<ProjectManagementActor> {
-  await assertProjectAccessActiveTx(tx, actor.accountId);
   const systemRoles = await tx.systemRoleAssignment.findMany({
     where: { accountId: actor.accountId, revokedAt: null },
     select: { role: true, team: true, techGroup: true },

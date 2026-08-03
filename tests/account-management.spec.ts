@@ -3,7 +3,6 @@ import { expect, test } from "@playwright/test";
 import {
   grantAccountRole,
   revokeAccountRole,
-  setProjectAccessStatus,
 } from "../lib/account-management";
 import { isGlobalSuperAdministrator } from "../lib/account-authorization";
 import { authorize } from "../lib/project-management/authorization";
@@ -15,7 +14,7 @@ import { prisma } from "../lib/prisma";
 
 test.describe.configure({ mode: "serial" });
 
-test("统一超管、项目角色、项目禁用、审计和通知保持事务一致", async () => {
+test("统一超管、项目角色、审计和通知保持事务一致", async () => {
   const actor = await createAccount("权限测试超管");
   const target = await createAccount("权限测试目标");
   const outsider = await createAccount("权限测试普通成员");
@@ -57,18 +56,9 @@ test("统一超管、项目角色、项目禁用、审计和通知保持事务�
   expect(first.changed).toBe(true);
   expect(repeated.changed).toBe(false);
 
-  const disabled = await setProjectAccessStatus(
-    actor.accountId,
-    target.accountId,
-    "DISABLED",
-  );
-  expect(disabled.changed).toBe(true);
-  await expect(
-    setProjectAccessStatus(actor.accountId, target.accountId, "DISABLED"),
-  ).resolves.toMatchObject({ changed: false });
   await expect(
     getProjectManagementActorForFeishuUser({ openId: target.openId }),
-  ).rejects.toThrow("账号已禁用");
+  ).resolves.toMatchObject({ accountId: target.accountId });
 
   const [account, auditCount, inAppCount, outboxCount] = await Promise.all([
     prisma.account.findUniqueOrThrow({ where: { id: target.accountId } }),
@@ -82,10 +72,10 @@ test("统一超管、项目角色、项目禁用、审计和通知保持事务�
       where: { eventKey: { startsWith: "account-security:" } },
     }),
   ]);
-  expect(account.projectAccessStatus).toBe("DISABLED");
-  expect(auditCount).toBeGreaterThanOrEqual(2);
-  expect(inAppCount).toBeGreaterThanOrEqual(2);
-  expect(outboxCount).toBeGreaterThanOrEqual(2);
+  expect(account.id).toBe(target.accountId);
+  expect(auditCount).toBeGreaterThanOrEqual(1);
+  expect(inAppCount).toBeGreaterThanOrEqual(1);
+  expect(outboxCount).toBeGreaterThanOrEqual(1);
 
   const roleOutbox = await prisma.notificationOutbox.findUniqueOrThrow({
     where: {
