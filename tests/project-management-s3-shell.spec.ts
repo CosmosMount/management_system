@@ -198,15 +198,6 @@ async function createShellFixture() {
     include: { person: true },
   });
   if (!account.person) throw new Error("S3 Shell 测试账号缺少 Person");
-  await prisma.systemRoleAssignment.create({
-    data: {
-      accountId: account.id,
-      role: "GROUP_LEADER",
-      team: "英雄",
-      techGroup: "",
-    },
-  });
-
   const taskTitle = `超长 Task 标题 ${"用于验证命令栏不会撑破页面边界".repeat(8)}`;
   const plannedStartAt = new Date("2026-08-01T00:00:00.000+08:00");
   const task = await createTaskDraft(

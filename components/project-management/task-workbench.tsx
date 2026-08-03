@@ -101,6 +101,8 @@ type DraftPlanMilestone = {
 type RevisionDraftMilestone = Omit<DraftPlanMilestone, "nodeId" | "clientKey"> & {
   uiKey: string;
 };
+type ActiveTaskMemberRole = "OWNER" | "PARTICIPANT";
+const activeTaskMemberRoles: ActiveTaskMemberRole[] = ["OWNER", "PARTICIPANT"];
 
 const tabs: Array<{ id: TabId; label: string }> = [
   { id: "plan", label: "计划与资源" },
@@ -119,7 +121,6 @@ export function TaskWorkbench({
   people,
   taskOptions,
   tagOptions,
-  isSystemAdministrator,
   initialTab = "plan",
 }: {
   workspace: TaskWorkspace;
@@ -130,7 +131,6 @@ export function TaskWorkbench({
   people: PersonOptionDto[];
   taskOptions: TaskOptionPage["items"];
   tagOptions: TagOptionPage["items"];
-  isSystemAdministrator: boolean;
   initialTab?: TabId;
 }) {
   const router = useRouter();
@@ -328,7 +328,6 @@ export function TaskWorkbench({
             people={people}
             taskOptions={taskOptions}
             tagOptions={tagOptions}
-            isSystemAdministrator={isSystemAdministrator}
             busy={busy}
             runAction={runAction}
           />
@@ -615,7 +614,6 @@ function OverviewPanel({
   people,
   taskOptions,
   tagOptions,
-  isSystemAdministrator,
   busy,
   runAction,
 }: {
@@ -623,15 +621,20 @@ function OverviewPanel({
   people: PersonOptionDto[];
   taskOptions: TaskOptionPage["items"];
   tagOptions: TagOptionPage["items"];
-  isSystemAdministrator: boolean;
   busy: boolean;
   runAction: RunAction;
 }) {
   const editable = ["DRAFT", "ACTIVE"].includes(workspace.task.status) && workspace.permissions.canUpdateMetadata;
   const canManageMembers = ["DRAFT", "ACTIVE"].includes(workspace.task.status) && workspace.permissions.canManageMembers;
-  const [members, setMembers] = useState(workspace.members.map(({ personId, role }) => ({ personId, role })));
+  const [members, setMembers] = useState(
+    workspace.members.flatMap(({ personId, role }) =>
+      role === "OWNER" || role === "PARTICIPANT"
+        ? [{ personId, role }]
+        : [],
+    ),
+  );
   const [memberPersonId, setMemberPersonId] = useState(people[0]?.id ?? "");
-  const [memberRole, setMemberRole] = useState<keyof typeof taskMemberRoleLabels>("MEMBER");
+  const [memberRole, setMemberRole] = useState<ActiveTaskMemberRole>("PARTICIPANT");
   const [selectedTags, setSelectedTags] = useState(workspace.tags.map((tag) => tag.id));
   const [peopleOptions, setPeopleOptions] = useState(people);
   const [taskChoices, setTaskChoices] = useState(taskOptions);
@@ -709,10 +712,6 @@ function OverviewPanel({
             team: String(form.get("team") ?? ""),
             techGroup: String(form.get("techGroup") ?? ""),
             priority: String(form.get("priority") ?? "MEDIUM"),
-            revisionApprovalMode: String(form.get("revisionApprovalMode") ?? "REVIEW_REQUIRED"),
-            allowSelfReview: isSystemAdministrator
-              ? form.get("allowSelfReview") === "on"
-              : workspace.task.allowSelfReview,
             relatedTaskId: String(form.get("relatedTaskId") ?? "") || null,
           };
           void runAction(
@@ -730,11 +729,9 @@ function OverviewPanel({
           <Field label="车组"><select name="team" defaultValue={workspace.task.team} disabled={!editable} className={selectClass}>{TEAM_OPTIONS.map((value) => <option key={value}>{value}</option>)}</select></Field>
           <Field label="技术组"><select name="techGroup" defaultValue={workspace.task.techGroup} disabled={!editable} className={selectClass}>{TECH_GROUP_OPTIONS.map((value) => <option key={value}>{value}</option>)}</select></Field>
           <Field label="优先级"><select name="priority" defaultValue={workspace.task.priority} disabled={!editable} className={selectClass}>{Object.entries(taskPriorityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>
-          <Field label="Revision 策略"><select name="revisionApprovalMode" defaultValue={workspace.task.revisionApprovalMode} disabled={!editable} className={selectClass}><option value="REVIEW_REQUIRED">需要 Reviewer</option><option value="DIRECT_BY_OWNER">Owner 直接生效</option></select></Field>
         </div>
         {editable && <div className="grid gap-2 sm:grid-cols-[1fr_auto]"><Input aria-label="搜索关联 Task" value={taskQuery} onChange={(event) => setTaskQuery(event.target.value)} placeholder="按名称搜索首屏外 Task" /><Button type="button" variant="outline" disabled={optionLoading} onClick={() => void loadTasks()}>搜索 Task</Button></div>}
         <Field label="关联 Task"><select name="relatedTaskId" defaultValue={workspace.task.relatedTaskId ?? ""} disabled={!editable} className={selectClass}><option value="">不关联</option>{workspace.task.relatedTaskId && !taskChoices.some((item) => item.id === workspace.task.relatedTaskId) && <option value={workspace.task.relatedTaskId}>当前关联 Task（不在首批选项）</option>}{taskChoices.filter((item) => item.id !== workspace.task.id).map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></Field>
-        <label className="flex items-start gap-2 text-sm"><input name="allowSelfReview" type="checkbox" defaultChecked={workspace.task.allowSelfReview} disabled={!editable || !isSystemAdministrator} /><span>允许自审<span className="block text-xs text-muted-foreground">仅 System Administrator 可修改；所有变更写审计。</span></span></label>
         <div className="space-y-2">
           <span className="text-sm font-medium">Tags</span>
           {editable && <div className="grid gap-2 sm:grid-cols-[1fr_auto]"><Input aria-label="搜索 Tag" value={tagQuery} onChange={(event) => setTagQuery(event.target.value)} placeholder="按名称搜索首屏外 Tag" /><Button type="button" variant="outline" disabled={optionLoading} onClick={() => void loadTags()}>搜索 Tag</Button></div>}
@@ -752,7 +749,8 @@ function OverviewPanel({
         <div className="space-y-2">
           {members.map((member, index) => {
             const person = peopleOptions.find((item) => item.id === member.personId) ?? workspace.members.find((item) => item.personId === member.personId);
-            return <div key={`${member.personId}:${member.role}`} className="flex items-center gap-2 rounded-lg border border-border p-2 text-sm"><span className="min-w-0 flex-1 truncate">{person?.displayName ?? "成员"}</span><Badge variant="secondary">{taskMemberRoleLabels[member.role]}</Badge>{canManageMembers && <Button type="button" size="sm" variant="ghost" onClick={() => setMembers(members.filter((_, itemIndex) => itemIndex !== index))}>移除</Button>}</div>;
+            const lastOwner = member.role === "OWNER" && members.filter((item) => item.role === "OWNER").length === 1;
+            return <div key={`${member.personId}:${member.role}`} className="flex items-center gap-2 rounded-lg border border-border p-2 text-sm"><span className="min-w-0 flex-1 truncate">{person?.displayName ?? "成员"}</span><Badge variant="secondary">{taskMemberRoleLabels[member.role]}</Badge>{canManageMembers && <Button type="button" size="sm" variant="ghost" disabled={lastOwner} title={lastOwner ? "至少保留一名负责人" : undefined} onClick={() => setMembers(members.filter((_, itemIndex) => itemIndex !== index))}>移除</Button>}</div>;
           })}
         </div>
         {canManageMembers && (
@@ -760,8 +758,8 @@ function OverviewPanel({
             <div className="grid gap-2 sm:grid-cols-[1fr_auto]"><Input aria-label="搜索成员" value={peopleQuery} onChange={(event) => setPeopleQuery(event.target.value)} placeholder="按姓名搜索首屏外人员" /><Button type="button" variant="outline" disabled={optionLoading} onClick={() => void loadPeople()}>搜索人员</Button></div>
             <div className="grid gap-2 sm:grid-cols-[1fr_140px_auto]">
               <select value={memberPersonId} onChange={(event) => setMemberPersonId(event.target.value)} className={selectClass} aria-label="新增成员人员">{peopleOptions.map((person) => <option key={person.id} value={person.id}>{person.displayName}</option>)}</select>
-              <select value={memberRole} onChange={(event) => setMemberRole(event.target.value as keyof typeof taskMemberRoleLabels)} className={selectClass} aria-label="新增成员角色">{Object.entries(taskMemberRoleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
-              <Button type="button" variant="outline" onClick={() => { if (!memberPersonId || members.some((entry) => entry.personId === memberPersonId && entry.role === memberRole)) return; setMembers([...members, { personId: memberPersonId, role: memberRole }]); }}>添加</Button>
+              <select value={memberRole} onChange={(event) => setMemberRole(event.target.value as ActiveTaskMemberRole)} className={selectClass} aria-label="新增成员角色">{activeTaskMemberRoles.map((value) => <option key={value} value={value}>{taskMemberRoleLabels[value]}</option>)}</select>
+              <Button type="button" variant="outline" onClick={() => { if (!memberPersonId) return; const existing = members.find((entry) => entry.personId === memberPersonId); if (existing?.role === "OWNER" && memberRole === "PARTICIPANT" && members.filter((entry) => entry.role === "OWNER").length === 1) { setOptionError("至少保留一名负责人。"); return; } setMembers(existing ? members.map((entry) => entry.personId === memberPersonId ? { ...entry, role: memberRole } : entry) : [...members, { personId: memberPersonId, role: memberRole }]); setOptionError(""); }}>添加</Button>
             </div>
             <Button type="button" disabled={busy} onClick={() => void runAction(() => workspace.task.status === "DRAFT" ? replaceTaskDraftMembers({ taskId: workspace.task.id, expectedLockVersion: workspace.task.lockVersion, members }) : replaceTaskMembers({ taskId: workspace.task.id, expectedLockVersion: workspace.task.lockVersion, members }), "Task 成员已保存。")}>保存成员</Button>
           </>
@@ -951,7 +949,7 @@ function ReviewsPanel({
     <div className="space-y-4">
       {activeMilestone?.milestone && <section className="space-y-3 rounded-xl border border-border bg-card p-4"><div><h2 className="font-semibold">当前 Milestone 验收</h2><h3 className="mt-2 font-medium">{activeMilestone.milestone.goal}</h3><p className="mt-1 text-sm text-muted-foreground">完成条件：{activeMilestone.milestone.completionCriteria}</p><p className="mt-1 text-sm text-muted-foreground">验收要求：{activeMilestone.milestone.reviewRequirements}</p></div>{workspace.permissions.canSubmitMilestoneReview && <><div className="flex gap-3 text-sm"><label><input type="radio" checked={evidenceKind === "TEXT"} onChange={() => setEvidenceKind("TEXT")} /> 文本证据</label><label><input type="radio" checked={evidenceKind === "LINK"} onChange={() => setEvidenceKind("LINK")} /> 链接证据</label><span className="text-muted-foreground">FILE 暂未启用</span></div><Field label={evidenceKind === "TEXT" ? "文本证据" : "证据链接"}>{evidenceKind === "TEXT" ? <Textarea value={evidence} onChange={(event) => setEvidence(event.target.value)} /> : <Input type="url" value={evidence} onChange={(event) => setEvidence(event.target.value)} />}</Field>{evidenceKind === "LINK" && <Field label="链接说明"><Input value={evidenceNote} onChange={(event) => setEvidenceNote(event.target.value)} /></Field>}<Button type="button" disabled={busy} onClick={() => { reviewKey.current ??= `review-workbench:${globalThis.crypto.randomUUID()}`; void runAction(() => submitMilestoneForReview({ milestoneNodeId: activeMilestone.nodeId, idempotencyKey: reviewKey.current, evidences: evidence ? [evidenceKind === "TEXT" ? { kind: "TEXT", note: evidence, sortOrder: 0 } : { kind: "LINK", externalUrl: evidence, note: evidenceNote, sortOrder: 0 }] : [] }), "Milestone 已提交验收。", () => { reviewKey.current = null; setEvidence(""); setEvidenceNote(""); }); }}>提交验收</Button></>}</section>}
 
-      <section className="space-y-3 rounded-xl border border-border bg-card p-4"><h2 className="font-semibold">Review 历史</h2>{lifecycle.reviews.length === 0 && <p className="text-sm text-muted-foreground">暂无验收记录。</p>}{lifecycle.reviews.map((review) => <article key={review.id} className="space-y-2 rounded-lg border border-border p-3"><div className="flex flex-wrap gap-2"><Badge>{reviewResultLabel(review.result)}</Badge><span className="text-sm">{review.milestoneGoal}</span>{review.revokedAt && <Badge variant="outline">已撤销</Badge>}</div><p className="text-sm text-muted-foreground">{review.submittedBy} 提交于 {formatDateTime(review.createdAt)}{review.reviewer ? ` · ${review.reviewer} 处理` : ""}</p>{review.comment && <p className="text-sm">处理说明：{review.comment}</p>}<ul className="space-y-1 text-sm">{review.evidences.map((item) => <li key={item.id}>{item.kind === "LINK" && item.externalUrl ? <a href={item.externalUrl} target="_blank" rel="noreferrer" className="text-primary underline">{item.note || item.externalUrl}</a> : <span>{item.kind}：{item.note || "文件证据未启用"}</span>}</li>)}</ul>{review.capabilities.canReview && <><Field label="Review 说明"><Textarea value={comments[review.id] ?? ""} onChange={(event) => setComments({ ...comments, [review.id]: event.target.value })} /></Field><div className="flex flex-wrap gap-2"><Button type="button" size="sm" disabled={busy} onClick={() => void runAction(() => approveMilestoneReview({ reviewId: review.id, comment: comments[review.id] ?? "" }), "验收已通过。")}>通过</Button><Button type="button" size="sm" variant="destructive" disabled={busy} onClick={() => void runAction(() => rejectMilestoneReview({ reviewId: review.id, comment: comments[review.id] ?? "" }), "验收已驳回。")}>驳回</Button><Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void runAction(() => requireMilestoneRevision({ reviewId: review.id, comment: comments[review.id] ?? "" }), "已要求修订。")}>要求修订</Button></div></>}</article>)}{loadError && <p className="text-sm text-destructive" role="alert">{loadError}</p>}{lifecycle.nextReviewCursor && <Button type="button" variant="outline" disabled={loadingMore} onClick={() => { setLoadingMore(true); setLoadError(""); void getTaskLifecycleViews({ taskId: workspace.task.id, reviewCursor: lifecycle.nextReviewCursor, reviewLimit: 50, revisionLimit: 1, auditLimit: 1 }).then((result) => { if (!result.ok) { setLoadError(result.error.message); return; } setLifecycle({ ...lifecycle, reviews: [...lifecycle.reviews, ...result.data.reviews], nextReviewCursor: result.data.nextReviewCursor }); }).catch(() => setLoadError("Review 历史加载失败，请稍后重试。")).finally(() => setLoadingMore(false)); }}>加载更多 Review</Button>}</section>
+      <section className="space-y-3 rounded-xl border border-border bg-card p-4"><h2 className="font-semibold">验收历史</h2>{lifecycle.reviews.length === 0 && <p className="text-sm text-muted-foreground">暂无验收记录。</p>}{lifecycle.reviews.map((review) => <article key={review.id} className="space-y-2 rounded-lg border border-border p-3"><div className="flex flex-wrap gap-2"><Badge>{reviewResultLabel(review.result)}</Badge><span className="text-sm">{review.milestoneGoal}</span>{review.revokedAt && <Badge variant="outline">已撤销</Badge>}</div><p className="text-sm text-muted-foreground">{review.submittedBy} 提交于 {formatDateTime(review.createdAt)}{review.reviewer ? ` · 审批人 ${review.reviewer}` : ""}</p>{review.comment && <p className="text-sm">审批说明：{review.comment}</p>}<ul className="space-y-1 text-sm">{review.evidences.map((item) => <li key={item.id}>{item.kind === "LINK" && item.externalUrl ? <a href={item.externalUrl} target="_blank" rel="noreferrer" className="text-primary underline">{item.note || item.externalUrl}</a> : <span>{item.kind}：{item.note || "文件证据未启用"}</span>}</li>)}</ul>{review.capabilities.canReview && <><Field label="审批说明"><Textarea value={comments[review.id] ?? ""} onChange={(event) => setComments({ ...comments, [review.id]: event.target.value })} /></Field><div className="flex flex-wrap gap-2"><Button type="button" size="sm" disabled={busy} onClick={() => void runAction(() => approveMilestoneReview({ reviewId: review.id, comment: comments[review.id] ?? "" }), "验收已通过。")}>通过</Button><Button type="button" size="sm" variant="destructive" disabled={busy} onClick={() => void runAction(() => rejectMilestoneReview({ reviewId: review.id, comment: comments[review.id] ?? "" }), "验收已驳回。")}>驳回</Button><Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void runAction(() => requireMilestoneRevision({ reviewId: review.id, comment: comments[review.id] ?? "" }), "已要求修订。")}>要求修订</Button></div></>}</article>)}{loadError && <p className="text-sm text-destructive" role="alert">{loadError}</p>}{lifecycle.nextReviewCursor && <Button type="button" variant="outline" disabled={loadingMore} onClick={() => { setLoadingMore(true); setLoadError(""); void getTaskLifecycleViews({ taskId: workspace.task.id, reviewCursor: lifecycle.nextReviewCursor, reviewLimit: 50, revisionLimit: 1, auditLimit: 1 }).then((result) => { if (!result.ok) { setLoadError(result.error.message); return; } setLifecycle({ ...lifecycle, reviews: [...lifecycle.reviews, ...result.data.reviews], nextReviewCursor: result.data.nextReviewCursor }); }).catch(() => setLoadError("验收历史加载失败，请稍后重试。")).finally(() => setLoadingMore(false)); }}>加载更多验收记录</Button>}</section>
 
       {workspace.task.status === "ACTIVE" && workspace.permissions.canTerminate && terminationNodeId && <section className="space-y-3 rounded-xl border border-destructive/20 bg-card p-4"><div><h2 className="font-semibold">Termination 确认</h2><p className="mt-1 text-sm text-muted-foreground">成功结束要求全部前置 Milestone 已完成；其余结果必须填写原因。操作会写审计并进入终态。</p></div><Field label="结束结果"><select className={selectClass} value={outcome} onChange={(event) => setOutcome(event.target.value as typeof outcome)}><option value="SUCCESS">成功完成</option><option value="FAILED">失败结束</option><option value="CANCELLED">提前取消</option><option value="TIMEOUT">超时结束</option></select></Field><Field label="原因"><Textarea value={terminationReason} onChange={(event) => setTerminationReason(event.target.value)} /></Field><Field label="总结"><Textarea value={terminationSummary} onChange={(event) => setTerminationSummary(event.target.value)} /></Field><Button type="button" variant="destructive" disabled={busy} onClick={() => { if (!window.confirm(`确认以“${terminationOutcomeLabel(outcome)}”结束 Task？`)) return; void runAction(() => confirmTermination({ taskId: workspace.task.id, terminationNodeId, outcome, reason: terminationReason, summary: terminationSummary, expectedLockVersion: workspace.task.lockVersion }), "Task 已完成 Termination 确认。"); }}>确认结束 Task</Button></section>}
     </div>

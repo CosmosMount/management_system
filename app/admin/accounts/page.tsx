@@ -6,7 +6,6 @@ const PAGE_SIZE = 30;
 const projectRoleValues = [
   "SUPER_ADMINISTRATOR",
   "PROJECT_ADMINISTRATOR",
-  "GROUP_LEADER",
 ] as const;
 const reimbursementRoleValues = [
   "TEAM_ADMIN",

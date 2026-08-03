@@ -13,7 +13,6 @@ export default async function AdminPage() {
     disabledAccountCount,
     superAdminCount,
     projectAdminCount,
-    groupLeaderRows,
     reimbursementRoleCount,
     budgetPoolCount,
   ] = await Promise.all([
@@ -25,11 +24,6 @@ export default async function AdminPage() {
     }),
     prisma.systemRoleAssignment.count({
       where: { role: "PROJECT_ADMINISTRATOR", revokedAt: null },
-    }),
-    prisma.systemRoleAssignment.findMany({
-      where: { role: "GROUP_LEADER", revokedAt: null },
-      distinct: ["accountId"],
-      select: { accountId: true },
     }),
     prisma.userRole.count({
       where: { revokedAt: null, role: { not: "SUPER_ADMIN" } },
@@ -71,12 +65,6 @@ export default async function AdminPage() {
           label="项目管理员"
           value={projectAdminCount}
           detail="全部项目业务权限"
-        />
-        <AdminMetric
-          icon={ShieldCheck}
-          label="组织组长"
-          value={groupLeaderRows.length}
-          detail="按车组或技术组授权"
         />
         <AdminMetric
           icon={ShieldCheck}

@@ -44,14 +44,14 @@ test("统一超管、项目角色、项目禁用、审计和通知保持事务�
   ).rejects.toThrow("无管理权限");
   const first = await grantAccountRole(actor.accountId, {
     targetAccountId: target.accountId,
-    role: "GROUP_LEADER",
-    team: "英雄",
+    role: "PROJECT_ADMINISTRATOR",
+    team: "",
     techGroup: "",
   });
   const repeated = await grantAccountRole(actor.accountId, {
     targetAccountId: target.accountId,
-    role: "GROUP_LEADER",
-    team: "英雄",
+    role: "PROJECT_ADMINISTRATOR",
+    team: "",
     techGroup: "",
   });
   expect(first.changed).toBe(true);
@@ -107,7 +107,7 @@ test("统一超管、项目角色、项目禁用、审计和通知保持事务�
     actorName: "权限测试超管",
     mandatory: true,
   });
-  expect(rolePayload.summary).toContain("组长");
+  expect(rolePayload.summary).toContain("项目管理员");
   expect(rolePayload.recipientOpenIds).toContain(target.openId);
   expect(roleOutbox.recipients).toHaveLength(0);
 
@@ -164,27 +164,108 @@ test("两名超级管理员并发互撤只能成功一次并保留最后一名",
       }),
     ).resolves.toBe(1);
   } finally {
-    await prisma.systemRoleAssignment.updateMany({
-      where: { id: { in: [firstAssignment.id, secondAssignment.id] } },
-      data: { revokedAt: new Date() },
-    });
     if (unrelatedAssignments.length > 0) {
       await prisma.systemRoleAssignment.updateMany({
         where: { id: { in: unrelatedAssignments.map((item) => item.id) } },
         data: { revokedAt: null, revokedByAccountId: null },
       });
     }
+    await prisma.systemRoleAssignment.updateMany({
+      where: { id: { in: [firstAssignment.id, secondAssignment.id] } },
+      data: { revokedAt: new Date() },
+    });
   }
 });
 
-test("项目管理员全局放行，组长按车组或技术组匹配且继续禁止自审", async () => {
+test("最后一名活跃全局审批人不能被并发撤销角色或禁用项目访问", async () => {
+  const actor = await createAccount("审批人保护操作超管");
+  const target = await createAccount("最后一名活跃审批人");
+  const actorAssignment = await prisma.systemRoleAssignment.create({
+    data: { accountId: actor.accountId, role: "SUPER_ADMINISTRATOR" },
+  });
+  const targetAssignment = await prisma.systemRoleAssignment.create({
+    data: { accountId: target.accountId, role: "PROJECT_ADMINISTRATOR" },
+  });
+  await prisma.account.update({
+    where: { id: actor.accountId },
+    data: { projectAccessStatus: "DISABLED" },
+  });
+  const unrelatedAssignments = await prisma.systemRoleAssignment.findMany({
+    where: {
+      id: { notIn: [actorAssignment.id, targetAssignment.id] },
+      role: { in: ["SUPER_ADMINISTRATOR", "PROJECT_ADMINISTRATOR"] },
+      team: "",
+      techGroup: "",
+      revokedAt: null,
+    },
+    select: { id: true },
+  });
+  try {
+    await prisma.systemRoleAssignment.updateMany({
+      where: { id: { in: unrelatedAssignments.map((item) => item.id) } },
+      data: { revokedAt: new Date() },
+    });
+    const sideEffectsBefore = await prisma.domainAuditEvent.count({
+      where: {
+        entityId: { in: [target.accountId, targetAssignment.id] },
+        action: {
+          in: ["account.role.revoked", "account.project_access.changed"],
+        },
+      },
+    });
+    const outcomes = await Promise.allSettled([
+      revokeAccountRole(actor.accountId, targetAssignment.id),
+      setProjectAccessStatus(actor.accountId, target.accountId, "DISABLED"),
+    ]);
+    expect(outcomes).toHaveLength(2);
+    for (const outcome of outcomes) {
+      expect(outcome.status).toBe("rejected");
+      if (outcome.status === "rejected") {
+        expect((outcome.reason as Error).message).toContain(
+          "至少保留一名项目访问已启用的全局管理员",
+        );
+      }
+    }
+    await expect(
+      prisma.systemRoleAssignment.findUniqueOrThrow({
+        where: { id: targetAssignment.id },
+        select: { revokedAt: true },
+      }),
+    ).resolves.toEqual({ revokedAt: null });
+    await expect(
+      prisma.account.findUniqueOrThrow({
+        where: { id: target.accountId },
+        select: { projectAccessStatus: true },
+      }),
+    ).resolves.toEqual({ projectAccessStatus: "ACTIVE" });
+    await expect(
+      prisma.domainAuditEvent.count({
+        where: {
+          entityId: { in: [target.accountId, targetAssignment.id] },
+          action: {
+            in: ["account.role.revoked", "account.project_access.changed"],
+          },
+        },
+      }),
+    ).resolves.toBe(sideEffectsBefore);
+  } finally {
+    await prisma.systemRoleAssignment.updateMany({
+      where: { id: { in: unrelatedAssignments.map((item) => item.id) } },
+      data: { revokedAt: null, revokedByAccountId: null },
+    });
+    await prisma.systemRoleAssignment.updateMany({
+      where: { id: { in: [actorAssignment.id, targetAssignment.id] } },
+      data: { revokedAt: new Date() },
+    });
+  }
+});
+
+test("项目管理员全局放行并允许自审，退役组长仅保留全员读取权限", async () => {
   const base = { accountId: randomUUID(), personId: randomUUID(), openId: "test", systemRoles: [] };
   const task = {
     type: "task" as const,
     team: "英雄",
     techGroup: "电控",
-    submittedByAccountId: base.accountId,
-    allowSelfReview: false,
     members: [],
   };
   const projectAdmin: ProjectManagementActor = {
@@ -205,10 +286,10 @@ test("项目管理员全局放行，组长按车组或技术组匹配且继续�
   };
 
   expect(authorize({ actor: projectAdmin, action: "task.manage_members", resource: task }).allowed).toBe(true);
-  expect(authorize({ actor: teamLeader, action: "task.terminate", resource: task }).allowed).toBe(true);
-  expect(authorize({ actor: techLeader, action: "segment.manage_others", resource: { type: "segment", task } }).allowed).toBe(true);
-  expect(authorize({ actor: otherLeader, action: "task.view", resource: task }).allowed).toBe(false);
-  expect(authorize({ actor: projectAdmin, action: "milestone.review", resource: task })).toMatchObject({ allowed: false, reason: "self_review_denied" });
+  expect(authorize({ actor: teamLeader, action: "task.terminate", resource: task }).allowed).toBe(false);
+  expect(authorize({ actor: techLeader, action: "segment.manage_others", resource: { type: "segment", task } }).allowed).toBe(false);
+  expect(authorize({ actor: otherLeader, action: "task.view", resource: task }).allowed).toBe(true);
+  expect(authorize({ actor: projectAdmin, action: "milestone.review", resource: task })).toMatchObject({ allowed: true, reason: "global_administrator" });
 });
 
 async function createAccount(name: string) {

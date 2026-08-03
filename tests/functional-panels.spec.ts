@@ -271,7 +271,7 @@ test.describe("管理员面板", () => {
     }
   });
 
-  test("账号与权限页可管理项目组长和项目访问状态", async ({ page }) => {
+  test("账号与权限页只授予全局项目角色并可管理项目访问状态", async ({ page }) => {
     await page.goto("/admin/accounts?q=李棋轩", { waitUntil: "networkidle" });
     if ((page.viewportSize()?.width ?? 0) < 768) {
       const accountCard = page.getByRole("button", { name: "管理 李棋轩" });
@@ -284,11 +284,13 @@ test.describe("管理员面板", () => {
     const detail = page.getByTestId("account-permission-detail");
     await expect(detail).toBeVisible();
 
-    await page.getByLabel("项目角色").selectOption("GROUP_LEADER");
-    await page.getByLabel("组长范围类型").selectOption("team");
-    await page.getByLabel("组长范围", { exact: true }).selectOption("英雄");
+    await expect(page.getByLabel("项目角色").locator("option")).toHaveText([
+      "超级管理员",
+      "项目管理员",
+    ]);
+    await page.getByLabel("项目角色").selectOption("PROJECT_ADMINISTRATOR");
     await page.getByRole("button", { name: /授予$/ }).click();
-    await expect(detail.getByText("组长 · 英雄").first()).toBeVisible();
+    await expect(detail.getByText("项目管理员").first()).toBeVisible();
 
     const target = await prisma.user.findUniqueOrThrow({
       where: { openId: fixtures.normalOpenId },
@@ -300,8 +302,7 @@ test.describe("管理员面板", () => {
         prisma.systemRoleAssignment.count({
           where: {
             accountId: target.accountId!,
-            role: "GROUP_LEADER",
-            team: "英雄",
+            role: "PROJECT_ADMINISTRATOR",
             revokedAt: null,
           },
         }),
@@ -327,7 +328,7 @@ test.describe("管理员面板", () => {
     await expect(detail.getByRole("button", { name: "禁用项目访问" })).toBeVisible();
 
     page.once("dialog", (dialog) => dialog.accept());
-    await detail.getByRole("button", { name: "撤销组长 · 英雄" }).click();
+    await detail.getByRole("button", { name: "撤销项目管理员" }).click();
     await expect(detail.getByText("普通成员（无系统角色）")).toBeVisible();
     await expectHealthyPage(page);
   });

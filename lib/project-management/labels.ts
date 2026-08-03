@@ -29,10 +29,11 @@ export const taskPriorityLabels: Record<TaskPriority, string> = {
 
 export const taskMemberRoleLabels: Record<TaskMemberRole, string> = {
   OWNER: "负责人",
-  LEAD: "Lead",
-  MEMBER: "成员",
-  REVIEWER: "Reviewer",
-  VIEWER: "只读",
+  PARTICIPANT: "参与人",
+  LEAD: "参与人（历史）",
+  MEMBER: "参与人（历史）",
+  REVIEWER: "审批人（历史）",
+  VIEWER: "只读（历史）",
 };
 
 export const taskNodeTypeLabels: Record<TaskNodeType, string> = {

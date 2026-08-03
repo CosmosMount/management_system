@@ -1,14 +1,10 @@
 import type {
-  ProjectManagementSystemRole,
   TaskMemberRole,
   TaskPriority,
   TaskStatus,
 } from "@prisma/client";
 import type { Prisma } from "@prisma/client";
-import type {
-  ProjectManagementActor,
-  ProjectManagementSystemRoleRecord,
-} from "@/lib/project-management/identity";
+import type { ProjectManagementActor } from "@/lib/project-management/identity";
 
 export const PROJECT_MANAGEMENT_ACTIONS = [
   "tag.create",
@@ -54,8 +50,6 @@ export type AuthorizationTaskResource = {
   techGroup?: string;
   status?: TaskStatus;
   priority?: TaskPriority;
-  allowSelfReview?: boolean;
-  submittedByAccountId?: string | null;
   members?: AuthorizationMember[];
 };
 
@@ -103,22 +97,7 @@ export function authorize({
   resource: AuthorizationResource;
 }): AuthorizationDecision {
   if (isSystemAdministrator(actor)) {
-    if (
-      actionRequiresSelfReviewCheck(action) &&
-      isSelfReview(actor, resource) &&
-      !selfReviewAllowed(resource)
-    ) {
-      return deny("self_review_denied");
-    }
-    return allow("system_administrator");
-  }
-
-  if (
-    actionRequiresSelfReviewCheck(action) &&
-    isSelfReview(actor, resource) &&
-    !selfReviewAllowed(resource)
-  ) {
-    return deny("self_review_denied");
+    return allow("global_administrator");
   }
 
   if (resource.type === "tag") {
@@ -168,22 +147,20 @@ function authorizeSegment(
   resource: AuthorizationSegmentResource,
 ): AuthorizationDecision {
   if (action === "segment.view") {
-    if (resource.personId === actor.personId) return allow("segment_self");
-    if (resource.task && authorizeTask(actor, "task.view", resource.task).allowed) {
-      return allow("task_context");
-    }
-    if (hasScopedRole(actor, ["GROUP_LEADER"], resource.task)) {
-      return allow("resource_scope");
-    }
+    return allow("global_segment_visibility");
   }
   if (action === "segment.manage_self" && resource.personId === actor.personId) {
-    return allow("segment_self");
+    if (!resource.task) return allow("unlinked_segment_self");
+    if (hasTaskRole(actor, resource.task, ["OWNER", "PARTICIPANT"])) {
+      return allow("task_member_segment_self");
+    }
   }
   if (
     action === "segment.manage_others" &&
-    hasScopedRole(actor, ["GROUP_LEADER"], resource.task)
+    resource.task &&
+    hasTaskRole(actor, resource.task, ["OWNER"])
   ) {
-    return allow("group_leader_scope");
+    return allow("task_owner_segment_management");
   }
   return deny("segment_policy_denied");
 }
@@ -209,9 +186,7 @@ function authorizeTask(
   resource: AuthorizationTaskResource,
 ): AuthorizationDecision {
   if (action === "task.create") {
-    return hasScopedRole(actor, ["GROUP_LEADER"], resource)
-      ? allow("group_leader_scope")
-      : deny("task_create_scope_denied");
+    return allow("active_project_account");
   }
 
   if (
@@ -219,75 +194,45 @@ function authorizeTask(
     action === "plan.view_history" ||
     action === "audit.view"
   ) {
-    if (hasTaskRole(actor, resource, ["OWNER", "LEAD", "MEMBER", "REVIEWER", "VIEWER"])) {
-      return allow("task_member");
-    }
-    if (hasScopedRole(actor, ["GROUP_LEADER"], resource)) {
-      return allow("scoped_task_reader");
-    }
-    return deny("task_not_readable");
+    return allow("global_task_visibility");
   }
 
   if (action === "milestone.submit_review") {
-    if (hasTaskRole(actor, resource, ["OWNER", "LEAD", "MEMBER"])) {
+    if (hasTaskRole(actor, resource, ["OWNER", "PARTICIPANT"])) {
       return allow("milestone_submitter");
-    }
-    if (hasScopedRole(actor, ["GROUP_LEADER"], resource)) {
-      return allow("group_leader_scope");
     }
     return deny("milestone_submit_denied");
   }
 
   if (action === "task.update_metadata" || action === "revision.create") {
-    if (hasTaskRole(actor, resource, ["OWNER", "LEAD"])) {
+    if (hasTaskRole(actor, resource, ["OWNER", "PARTICIPANT"])) {
       return allow("task_editor");
-    }
-    if (hasScopedRole(actor, ["GROUP_LEADER"], resource)) {
-      return allow("group_leader_scope");
     }
     return deny("task_edit_denied");
   }
 
   if (action === "task.manage_members" || action === "task.activate") {
     if (hasTaskRole(actor, resource, ["OWNER"])) return allow("task_owner");
-    if (hasScopedRole(actor, ["GROUP_LEADER"], resource)) {
-      return allow("group_leader_scope");
-    }
     return deny("task_owner_required");
   }
 
   if (action === "task.archive") {
     if (hasTaskRole(actor, resource, ["OWNER"])) return allow("task_owner");
-    if (hasScopedRole(actor, ["GROUP_LEADER"], resource)) {
-      return allow("group_leader_scope");
-    }
     return deny("task_archive_denied");
   }
 
   if (action === "revision.review" || action === "milestone.review") {
-    if (hasTaskRole(actor, resource, ["REVIEWER"])) return allow("task_reviewer");
-    if (hasScopedRole(actor, ["GROUP_LEADER"], resource)) {
-      return allow("group_leader_scope");
-    }
-    return deny("reviewer_required");
+    return deny("global_administrator_required");
   }
 
   if (action === "revision.apply") {
-    if (hasTaskRole(actor, resource, ["OWNER"])) return allow("task_owner");
-    if (hasScopedRole(actor, ["GROUP_LEADER"], resource)) {
-      return allow("group_leader_scope");
-    }
-    return deny("revision_apply_denied");
+    return deny("global_administrator_required");
   }
 
   if (action === "task.terminate") {
-    if (hasTaskRole(actor, resource, ["OWNER", "REVIEWER"])) {
-      return allow("task_owner_or_reviewer");
-    }
-    if (hasScopedRole(actor, ["GROUP_LEADER"], resource)) {
-      return allow("group_leader_scope");
-    }
-    return deny("task_terminate_denied");
+    return hasTaskRole(actor, resource, ["OWNER"])
+      ? allow("task_owner")
+      : deny("task_owner_required");
   }
 
   return deny("unsupported_action_for_task");
@@ -298,47 +243,24 @@ function authorizeSystemScoped(
   action: ProjectManagementAction,
   resource: { type: "system"; team?: string; techGroup?: string },
 ): AuthorizationDecision {
-  if (action === "task.create" && hasScopedRole(actor, ["GROUP_LEADER"], resource)) {
-    return allow("group_leader_scope");
-  }
-  if (
-    action === "segment.manage_others" &&
-    hasScopedRole(actor, ["GROUP_LEADER"], resource)
-  ) {
-    return allow("group_leader_scope");
-  }
+  void actor;
+  void resource;
+  if (action === "task.create") return allow("active_project_account");
   return deny("system_scope_denied");
 }
 
 export function taskReadableWhere(
   actor: ProjectManagementActor,
 ): Prisma.TaskWhereInput {
-  if (isSystemAdministrator(actor)) {
-    return { deletedAt: null };
-  }
-  const or: Prisma.TaskWhereInput[] = [
-    { members: { some: { personId: actor.personId, removedAt: null } } },
-    ...scopedTaskWhere(actor, ["GROUP_LEADER"]),
-  ];
-  return or.length > 0 ? { deletedAt: null, OR: or } : neverTaskWhere();
+  void actor;
+  return { deletedAt: null };
 }
 
 export function segmentReadableWhere(
   actor: ProjectManagementActor,
 ): Prisma.WorkSegmentWhereInput {
-  if (isSystemAdministrator(actor)) {
-    return { deletedAt: null };
-  }
-  return {
-    deletedAt: null,
-    OR: [
-      { personId: actor.personId },
-      { task: taskReadableWhere(actor) },
-      ...scopedTaskWhere(actor, ["GROUP_LEADER"]).map(
-        (task) => ({ task }),
-      ),
-    ],
-  };
+  void actor;
+  return { deletedAt: null };
 }
 
 export function tagReadableWhere(
@@ -351,11 +273,11 @@ export function tagReadableWhere(
 export function auditReadableWhere(
   actor: ProjectManagementActor,
 ): Prisma.DomainAuditEventWhereInput {
-  if (isSystemAdministrator(actor)) return {};
+  const readableTasks = taskReadableWhere(actor);
   return {
     OR: [
       { actorAccountId: actor.accountId },
-      { task: taskReadableWhere(actor) },
+      { task: readableTasks },
     ],
   };
 }
@@ -391,100 +313,10 @@ function hasTaskRole(
   );
 }
 
-function hasScopedRole(
-  actor: ProjectManagementActor,
-  roles: ProjectManagementSystemRole[],
-  resource:
-    | Pick<AuthorizationTaskResource, "team" | "techGroup">
-    | AuthorizationTaskResource
-    | { team?: string; techGroup?: string }
-    | null
-    | undefined,
-): boolean {
-  return actor.systemRoles.some(
-    (role) => roles.includes(role.role) && roleScopeMatches(role, resource),
-  );
-}
-
-function roleScopeMatches(
-  role: ProjectManagementSystemRoleRecord,
-  resource:
-    | Pick<AuthorizationTaskResource, "team" | "techGroup">
-    | { team?: string; techGroup?: string }
-    | null
-    | undefined,
-): boolean {
-  const roleTeam = role.team.trim();
-  const roleTechGroup = role.techGroup.trim();
-  if (!roleTeam && !roleTechGroup) {
-    return (
-      role.role === "SUPER_ADMINISTRATOR" ||
-      role.role === "PROJECT_ADMINISTRATOR"
-    );
-  }
-  if (!resource) return false;
-  if (roleTeam && roleTeam !== resource.team) return false;
-  if (roleTechGroup && roleTechGroup !== resource.techGroup) return false;
-  return true;
-}
-
-function scopedTaskWhere(
-  actor: ProjectManagementActor,
-  roles: ProjectManagementSystemRole[],
-): Prisma.TaskWhereInput[] {
-  return actor.systemRoles
-    .filter(
-      (role) => roles.includes(role.role) && roleCanProduceTaskScopeWhere(role),
-    )
-    .map((role) => {
-      const where: Prisma.TaskWhereInput = {};
-      const team = role.team.trim();
-      const techGroup = role.techGroup.trim();
-      if (team) where.team = team;
-      if (techGroup) where.techGroup = techGroup;
-      return where;
-    });
-}
-
-function roleCanProduceTaskScopeWhere(
-  role: ProjectManagementSystemRoleRecord,
-): boolean {
-  const hasScope = role.team.trim().length > 0 || role.techGroup.trim().length > 0;
-  return (
-    hasScope ||
-    role.role === "SUPER_ADMINISTRATOR" ||
-    role.role === "PROJECT_ADMINISTRATOR"
-  );
-}
-
-function isSelfReview(
-  actor: ProjectManagementActor,
-  resource: AuthorizationResource,
-): boolean {
-  return (
-    "submittedByAccountId" in resource &&
-    resource.submittedByAccountId === actor.accountId
-  );
-}
-
-function actionRequiresSelfReviewCheck(
-  action: ProjectManagementAction,
-): boolean {
-  return action === "revision.review" || action === "milestone.review";
-}
-
-function selfReviewAllowed(resource: AuthorizationResource): boolean {
-  return "allowSelfReview" in resource && resource.allowSelfReview === true;
-}
-
 function allow(reason: string): AuthorizationDecision {
   return { allowed: true, reason };
 }
 
 function deny(reason: string): AuthorizationDecision {
   return { allowed: false, reason };
-}
-
-function neverTaskWhere(): Prisma.TaskWhereInput {
-  return { id: { in: [] } };
 }

@@ -7,6 +7,7 @@ import {
   activateTask,
   createTaskDraft,
 } from "../lib/project-management/application/lifecycle-service";
+import { replaceTaskMembers } from "../lib/project-management/application/task-mutation-service";
 import {
   batchCreatePlannedSegments,
   batchCancelPlannedSegments,
@@ -125,7 +126,7 @@ test.describe("project management P5 work segment services", () => {
     const otherScope = await createActivatedFixture({
       team: "工程",
       techGroup: "机械",
-      extraMembers: [{ personId: fixture.resourceManager.person.id, role: "VIEWER" }],
+      extraMembers: [{ personId: fixture.resourceManager.person.id, role: "PARTICIPANT" }],
     });
     const relinkCandidate = await createWorkSegment(actor(fixture.resourceManager), {
       ...plannedInput(fixture.member.person.id, 13, 14),
@@ -146,9 +147,9 @@ test.describe("project management P5 work segment services", () => {
         expectedUpdatedAt: relinkCandidateVersion.updatedAt,
         taskId: otherScope.taskId,
         nodeId: null,
-        reason: "不能只凭目标 Task 可见性重关联他人 Segment",
+        reason: "目标 Task 缺少投入持有人成员关系",
       }),
-      "NOT_FOUND",
+      "ASSOCIATION_INVALID",
     );
 
     await expectServiceError(
@@ -157,7 +158,7 @@ test.describe("project management P5 work segment services", () => {
         taskId: fixture.taskId,
         nodeId: fixture.activeNodeId,
       }),
-      "NOT_FOUND",
+      "ASSOCIATION_INVALID",
     );
 
     const updated = await updateWorkSegment(actor(fixture.member), {
@@ -167,6 +168,35 @@ test.describe("project management P5 work segment services", () => {
       reason: "调整投入",
     });
     expect(updated.segment.content).toBe("更新后的计划内容");
+
+    const orphanedSegment = await prisma.workSegment.create({
+      data: {
+        personId: fixture.outsider.person.id,
+        type: "PLANNED",
+        status: "PLANNED",
+        startAt: atHour(15),
+        endAt: atHour(16),
+        content: "损坏的非成员关联投入",
+        taskId: fixture.taskId,
+        nodeId: fixture.activeNodeId,
+        createdByAccountId: fixture.resourceManager.account.id,
+      },
+    });
+    await expectServiceError(
+      updateWorkSegment(actor(fixture.resourceManager), {
+        segmentId: orphanedSegment.id,
+        expectedUpdatedAt: orphanedSegment.updatedAt,
+        content: "不应写入的内容",
+      }),
+      "ASSOCIATION_INVALID",
+    );
+    await expect(
+      prisma.workSegment.findUniqueOrThrow({
+        where: { id: orphanedSegment.id },
+        select: { content: true },
+      }),
+    ).resolves.toEqual({ content: "损坏的非成员关联投入" });
+
     await expectServiceError(
       updateWorkSegment(actor(fixture.member), {
         segmentId: selfSegment.segment.id,
@@ -192,7 +222,7 @@ test.describe("project management P5 work segment services", () => {
           },
         ],
       }),
-      "VALIDATION_ERROR",
+      "ASSOCIATION_INVALID",
     );
     expect(await prisma.workSegment.count()).toBe(beforeBatchCount);
 
@@ -203,13 +233,14 @@ test.describe("project management P5 work segment services", () => {
     expect(visibleToMember.items.map((item) => item.id)).toContain(
       selfSegment.segment.id,
     );
-    await expectServiceError(
-      getWorkSegment({
-        actor: actor(fixture.outsider),
-        input: { segmentId: selfSegment.segment.id },
-      }),
-      "NOT_FOUND",
-    );
+    expect(
+      (
+        await getWorkSegment({
+          actor: actor(fixture.outsider),
+          input: { segmentId: selfSegment.segment.id },
+        })
+      ).id,
+    ).toBe(selfSegment.segment.id);
   });
 
   test("Stale Segment mutations return only the safe authoritative version and write nothing", async () => {
@@ -307,8 +338,8 @@ test.describe("project management P5 work segment services", () => {
     expect(deniedResult).toEqual({
       ok: false,
       error: {
-        code: "NOT_FOUND",
-        message: "对象不存在或无权查看",
+        code: "FORBIDDEN",
+        message: "你没有执行此操作的权限",
       },
     });
 
@@ -757,7 +788,7 @@ test.describe("project management P5 work segment services", () => {
       actor: actor(fixture.owner),
       input: { segmentId: sourceLeakPlan.segment.id },
     });
-    expect(ownerView.plannedSources).toHaveLength(0);
+    expect(ownerView.plannedSources).toHaveLength(1);
     const memberView = await getWorkSegment({
       actor: actor(fixture.member),
       input: { segmentId: sourceLeakPlan.segment.id },
@@ -863,6 +894,112 @@ test.describe("project management P5 work segment services", () => {
       select: { startAt: true, endAt: true },
     });
     expect(firstAfter.startAt.toISOString()).toBe(first.segment.startAt);
+  });
+
+  test("成员降级与移动或删除他人 Segment 并发时按 Task 锁后的权限判定", async () => {
+    test.setTimeout(90_000);
+
+    for (const operation of ["MOVE", "DELETE"] as const) {
+      const fixture = await createActivatedFixture();
+      const segment =
+        operation === "MOVE"
+          ? (
+              await createWorkSegment(actor(fixture.owner), {
+                ...plannedInput(fixture.member.person.id, 9, 10),
+                content: "等待 Owner 降级的移动",
+                taskId: fixture.taskId,
+                nodeId: fixture.activeNodeId,
+              })
+            ).segment
+          : (
+              await createActualSegment(actor(fixture.owner), {
+                personId: fixture.member.person.id,
+                startAt: atHour(9),
+                endAt: atHour(10),
+                content: "等待 Owner 降级的删除",
+                taskId: fixture.taskId,
+                nodeId: fixture.activeNodeId,
+              })
+            ).segment;
+      const task = await prisma.task.findUniqueOrThrow({
+        where: { id: fixture.taskId },
+        select: {
+          lockVersion: true,
+          members: {
+            where: { removedAt: null },
+            select: { id: true, personId: true, role: true },
+            orderBy: { id: "asc" },
+          },
+        },
+      });
+      const ownerMembership = task.members.find(
+        (member) => member.personId === fixture.owner.person.id,
+      );
+      if (!ownerMembership) throw new Error("并发回归缺少待降级 Owner 成员行");
+      const downgradeOwner = () =>
+        replaceTaskMembers(actor(fixture.admin), {
+          taskId: fixture.taskId,
+          expectedLockVersion: task.lockVersion,
+          members: task.members.map((member) => ({
+            personId: member.personId,
+            role:
+              member.personId === fixture.owner.person.id
+                ? ("PARTICIPANT" as const)
+                : member.role,
+          })),
+        });
+      const mutateOtherPersonsSegment = () =>
+        operation === "MOVE"
+          ? movePlannedSegments(actor(fixture.owner), {
+              moves: [
+                {
+                  segmentId: segment.id,
+                  expectedUpdatedAt: segment.updatedAt,
+                  startAt: atHour(11),
+                  endAt: atHour(12),
+                },
+              ],
+              reason: "降级后不得移动他人投入",
+            })
+          : softDeleteActualSegment(actor(fixture.owner), {
+              segmentId: segment.id,
+              expectedUpdatedAt: segment.updatedAt,
+              reason: "降级后不得删除他人投入",
+            });
+
+      const outcomes = await runBehindTaskMemberDowngradeBarrier(
+        ownerMembership.id,
+        downgradeOwner,
+        mutateOtherPersonsSegment,
+      );
+      expect(outcomes[0].status).toBe("fulfilled");
+      expect(outcomes[1].status).toBe("rejected");
+      if (outcomes[1].status === "rejected") {
+        expect(toProjectManagementServiceError(outcomes[1].reason).code).toBe(
+          "FORBIDDEN",
+        );
+      }
+      await expect(
+        prisma.taskMember.findFirstOrThrow({
+          where: {
+            taskId: fixture.taskId,
+            personId: fixture.owner.person.id,
+            removedAt: null,
+          },
+          select: { role: true },
+        }),
+      ).resolves.toEqual({ role: "PARTICIPANT" });
+      await expect(
+        prisma.workSegment.findUniqueOrThrow({
+          where: { id: segment.id },
+          select: { startAt: true, endAt: true, deletedAt: true },
+        }),
+      ).resolves.toEqual({
+        startAt: new Date(segment.startAt),
+        endAt: new Date(segment.endAt),
+        deletedAt: null,
+      });
+    }
   });
 
   test("A real 100-item move rolls back segments, history, audit and outbox on a late stale item", async () => {
@@ -1024,7 +1161,7 @@ test.describe("project management P5 work segment services", () => {
     };
     await expectServiceError(
       batchCancelPlannedSegments(actor(fixture.outsider), input),
-      "NOT_FOUND",
+      "FORBIDDEN",
     );
     expect(
       await prisma.workSegment.count({
@@ -1101,7 +1238,7 @@ test.describe("project management P5 work segment services", () => {
           expectedUpdatedAt: segment.updatedAt,
         })),
       }),
-      "NOT_FOUND",
+      "FORBIDDEN",
     );
     const confirmed = await batchConfirmPlannedSegments(actor(fixture.member), {
       segments: authoritative.map((segment) => ({
@@ -1612,14 +1749,8 @@ async function createActivatedFixture(
   const disabledPerson = await prisma.person.create({
     data: { displayName: "P5 Disabled Person", status: "INACTIVE" },
   });
-  await grantRole(admin.account.id, "GROUP_LEADER", {
-    team,
-    techGroup,
-  });
-  await grantRole(resourceManager.account.id, "GROUP_LEADER", {
-    team,
-    techGroup,
-  });
+  await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
+  await grantRole(resourceManager.account.id, "PROJECT_ADMINISTRATOR");
   const draft = await createTaskDraft(actor(admin), {
     title: `P5 Segment Task ${randomUUID()}`,
     description: "P5 Segment 测试",
@@ -1630,8 +1761,8 @@ async function createActivatedFixture(
     plannedStartAt: new Date(Date.UTC(2026, 7, 1, 9, 0, 0)).toISOString(),
     members: [
       { personId: owner.person.id, role: "OWNER" },
-      { personId: member.person.id, role: "MEMBER" },
-      { personId: reviewer.person.id, role: "REVIEWER" },
+      { personId: member.person.id, role: "PARTICIPANT" },
+      { personId: reviewer.person.id, role: "PARTICIPANT" },
       ...(options.extraMembers ?? []),
     ],
     milestones: [
@@ -1768,8 +1899,14 @@ async function grantRole(
     data: {
       accountId,
       role,
-      team: scope.team ?? "",
-      techGroup: scope.team ? "" : (scope.techGroup ?? ""),
+      team: role === "PROJECT_ADMINISTRATOR" ? "" : (scope.team ?? ""),
+      techGroup:
+        role === "PROJECT_ADMINISTRATOR"
+          ? ""
+          : scope.team
+            ? ""
+            : (scope.techGroup ?? ""),
+      revokedAt: role === "GROUP_LEADER" ? new Date() : null,
     },
   });
 }
@@ -1833,6 +1970,16 @@ async function lockWorkSegmentRow(client: Client, segmentId: string) {
   return pid;
 }
 
+async function lockTaskMemberRow(client: Client, taskMemberId: string) {
+  await client.query("BEGIN");
+  const pid = await databaseBackendPid(client);
+  await client.query(
+    'SELECT "id" FROM "TaskMember" WHERE "id" = $1 FOR UPDATE',
+    [taskMemberId],
+  );
+  return pid;
+}
+
 async function waitForDirectBlockers(
   observer: Client,
   blockerPid: number,
@@ -1861,6 +2008,70 @@ async function waitForDirectBlockers(
   throw new Error(
     `未在期限内观察到 ${expectedCount} 个事务被 backend ${blockerPid} 阻塞`,
   );
+}
+
+async function runBehindTaskMemberDowngradeBarrier(
+  taskMemberId: string,
+  downgradeOwner: () => Promise<unknown>,
+  mutateSegment: () => Promise<unknown>,
+): Promise<
+  [PromiseSettledResult<unknown>, PromiseSettledResult<unknown>]
+> {
+  let locker: Client | undefined;
+  let observer: Client | undefined;
+  let transactionMayBeOpen = false;
+  let released = false;
+  let pending: Promise<unknown>[] = [];
+  let pendingSettlement:
+    | Promise<PromiseSettledResult<unknown>[]>
+    | undefined;
+  let pendingBackendPids: number[] = [];
+  let pendingHandled = false;
+  let result:
+    | [PromiseSettledResult<unknown>, PromiseSettledResult<unknown>]
+    | undefined;
+  let primaryError: unknown;
+  let hasPrimaryError = false;
+  try {
+    locker = await connectDatabaseClient("task-member-downgrade-locker");
+    observer = await connectDatabaseClient("task-member-downgrade-observer");
+    transactionMayBeOpen = true;
+    const lockerPid = await lockTaskMemberRow(locker, taskMemberId);
+    const downgradePromise = Promise.resolve().then(downgradeOwner);
+    void downgradePromise.catch(() => undefined);
+    pending = [downgradePromise];
+    pendingSettlement = Promise.allSettled(pending);
+    await waitForDirectBlockers(observer, lockerPid, 1);
+
+    const mutationPromise = Promise.resolve().then(mutateSegment);
+    void mutationPromise.catch(() => undefined);
+    pending = [downgradePromise, mutationPromise];
+    pendingSettlement = Promise.allSettled(pending);
+    const { directBlockerPid, indirectBlockerPid } =
+      await waitForSingleDirectAndIndirectBlocker(observer, lockerPid);
+    pendingBackendPids = [directBlockerPid, indirectBlockerPid];
+    await locker.query("COMMIT");
+    released = true;
+    const settled = await Promise.allSettled(pending);
+    pendingHandled = true;
+    if (settled.length !== 2) throw new Error("成员降级屏障结果数量错误");
+    result = [settled[0]!, settled[1]!];
+  } catch (error) {
+    primaryError = error;
+    hasPrimaryError = true;
+  }
+  const cleanupErrors = await cleanupBarrierResources({
+    locker,
+    observer,
+    rollbackRequired: Boolean(locker && transactionMayBeOpen && !released),
+    pendingSettlement,
+    pendingBackendPids,
+    pendingHandled,
+    primaryError,
+  });
+  throwBarrierErrors(hasPrimaryError, primaryError, cleanupErrors);
+  if (!result) throw new Error("成员降级屏障未返回并发结果");
+  return result;
 }
 
 async function runBehindWorkSegmentLockBarrier<T>(

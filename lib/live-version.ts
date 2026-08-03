@@ -237,7 +237,7 @@ async function getAdminVersion(): Promise<string> {
     prisma.systemRoleAssignment.findMany({
       where: {
         revokedAt: null,
-        role: { in: ["SUPER_ADMINISTRATOR", "PROJECT_ADMINISTRATOR", "GROUP_LEADER"] },
+        role: { in: ["SUPER_ADMINISTRATOR", "PROJECT_ADMINISTRATOR"] },
       },
       orderBy: [{ accountId: "asc" }, { role: "asc" }, { team: "asc" }, { techGroup: "asc" }],
       select: { accountId: true, role: true, team: true, techGroup: true },

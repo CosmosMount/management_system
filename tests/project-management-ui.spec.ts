@@ -41,10 +41,7 @@ test.describe("project management P4/P6 UI integration", () => {
   }, testInfo) => {
     test.setTimeout(90_000);
     const creator = await createAccountPerson("S5 Composer Creator");
-    await grantRole(creator.account.id, "GROUP_LEADER", {
-      team: "英雄",
-      techGroup: "电控",
-    });
+    const coOwner = await createAccountPerson("S5 Composer Co-Owner");
     await loginAsTestUser(context, baseURL, {
       openId: creator.openId,
       name: creator.person.displayName,
@@ -59,7 +56,7 @@ test.describe("project management P4/P6 UI integration", () => {
         () => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
       ),
     ).toBe(true);
-    await expect(page.getByRole("checkbox", { name: /允许自审/ })).toBeDisabled();
+    await expect(page.getByRole("checkbox", { name: /允许自审/ })).toHaveCount(0);
     await page.getByLabel("Task 名称").fill(title);
     await page.waitForTimeout(900);
     await expect
@@ -75,14 +72,16 @@ test.describe("project management P4/P6 UI integration", () => {
     await page.getByRole("button", { name: "恢复草稿" }).click();
     await expect(page.getByLabel("Task 名称")).toHaveValue(title);
 
-    await page
-      .getByRole("button", { name: `移除 ${creator.person.displayName} 负责人` })
-      .click();
-    await page.getByRole("button", { name: /^校验/ }).click();
-    await expect(page.getByText("必须且只能有一名负责人。")).toBeVisible();
-    await page.getByLabel("成员人员").selectOption(creator.person.id);
+    const lastOwnerButton = page.getByRole("button", {
+      name: `移除 ${creator.person.displayName} 负责人`,
+    });
+    await expect(lastOwnerButton).toBeDisabled();
+    await page.getByLabel("搜索 Task 成员").fill(coOwner.person.displayName);
+    await page.getByLabel("搜索 Task 成员").press("Enter");
+    await page.getByLabel("成员人员").selectOption(coOwner.person.id);
     await page.getByLabel("成员角色").selectOption("OWNER");
     await page.getByRole("button", { name: "添加", exact: true }).click();
+    await expect(lastOwnerButton).toBeEnabled();
 
     if (testInfo.project.name === "desktop") {
       await page.getByRole("application", { name: "Task 计划时间轴" }).press("m");
@@ -170,9 +169,13 @@ test.describe("project management P4/P6 UI integration", () => {
       },
     });
     expect(task.status).toBe("DRAFT");
-    expect(task.members).toEqual([
-      expect.objectContaining({ personId: creator.person.id, role: "OWNER" }),
-    ]);
+    expect(task.members).toHaveLength(2);
+    expect(task.members).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ personId: creator.person.id, role: "OWNER" }),
+        expect.objectContaining({ personId: coOwner.person.id, role: "OWNER" }),
+      ]),
+    );
     expect(task.currentPlanVersion.plannedStartAt).not.toBeNull();
     expect(task.currentPlanVersion.nodes).toHaveLength(201);
     expect(task.workSegments).toHaveLength(0);
@@ -184,7 +187,7 @@ test.describe("project management P4/P6 UI integration", () => {
     ).toBe(false);
   });
 
-  test("Task Composer does not expose a writable form without a create scope", async ({
+  test("ordinary active accounts can open the Task Composer without an organization role", async ({
     context,
     page,
     baseURL,
@@ -194,12 +197,13 @@ test.describe("project management P4/P6 UI integration", () => {
       openId: outsider.openId,
       name: outsider.person.displayName,
     });
-    await page.goto("/progress/tasks");
-    await page.getByRole("link", { name: "新建 Task" }).click();
-    await expect(
-      page.getByText(/当前账号没有可创建 Task 的组织范围/),
-    ).toBeVisible();
-    await expect(page.getByTestId("task-composer")).toHaveCount(0);
+    await page.goto("/progress/tasks/new");
+    await expect(page.getByTestId("task-composer")).toBeVisible();
+    await expect(page.getByLabel("成员角色").locator("option")).toHaveText([
+      "负责人",
+      "参与人",
+    ]);
+    await expect(page.getByText("流程策略")).toHaveCount(0);
     await expectHealthyPage(page);
   });
 
@@ -211,18 +215,6 @@ test.describe("project management P4/P6 UI integration", () => {
     const creatorA = await createAccountPerson("S5 Draft Scope A");
     const creatorB = await createAccountPerson("S5 Draft Scope B");
     const hiddenCreator = await createAccountPerson("S5 Hidden Task Creator");
-    await grantRole(creatorA.account.id, "GROUP_LEADER", {
-      team: "英雄",
-      techGroup: "电控",
-    });
-    await grantRole(creatorB.account.id, "GROUP_LEADER", {
-      team: "英雄",
-      techGroup: "电控",
-    });
-    await grantRole(hiddenCreator.account.id, "GROUP_LEADER", {
-      team: "工程",
-      techGroup: "机械",
-    });
     const hiddenTitle = `S5 Hidden Related ${randomUUID()}`;
     const hiddenTask = await createTaskDraft(actor(hiddenCreator), {
       title: hiddenTitle,
@@ -246,6 +238,10 @@ test.describe("project management P4/P6 UI integration", () => {
         businessDescription: "",
       },
       idempotencyKey: `s5-hidden-${randomUUID()}`,
+    });
+    await prisma.task.update({
+      where: { id: hiddenTask.taskId },
+      data: { deletedAt: new Date() },
     });
     await loginAsTestUser(context, baseURL, {
       openId: creatorA.openId,
@@ -344,7 +340,7 @@ test.describe("project management P4/P6 UI integration", () => {
     await expectHealthyPage(page);
   });
 
-  test("Task Composer keeps the current actor as Owner beyond the first people page and persists self review for a system administrator", async ({
+  test("Task Composer keeps the current actor as Owner beyond the first people page and removes workflow policy controls", async ({
     context,
     page,
     baseURL,
@@ -373,8 +369,9 @@ test.describe("project management P4/P6 UI integration", () => {
     await page.getByLabel("Task 名称").fill(title);
     await page.getByLabel("目标").fill("管理员自审目标");
     await page.getByLabel("完成条件").fill("Owner 为当前 actor");
-    await page.getByLabel("验收要求").fill("自审配置持久化");
-    await page.getByRole("checkbox", { name: /允许自审/ }).check();
+    await page.getByLabel("验收要求").fill("全局管理员审批");
+    await expect(page.getByText("流程策略")).toHaveCount(0);
+    await expect(page.getByRole("checkbox", { name: /允许自审/ })).toHaveCount(0);
     await page.getByRole("button", { name: /^Termination/ }).click();
     await page.getByLabel("Task 整体预期结果").fill("管理员 Task 创建完成");
     await page.getByRole("button", { name: "创建 Task 草稿" }).click();
@@ -383,7 +380,6 @@ test.describe("project management P4/P6 UI integration", () => {
       where: { title },
       include: { members: { where: { removedAt: null } } },
     });
-    expect(task.allowSelfReview).toBe(true);
     expect(task.members).toEqual([
       expect.objectContaining({ personId: administrator.person.id, role: "OWNER" }),
     ]);
@@ -430,16 +426,41 @@ test.describe("project management P4/P6 UI integration", () => {
     await expect(page.getByTestId("time-canvas-root")).toBeVisible();
     await expect(page.getByText("只看冲突")).toHaveCount(0);
     await expect(page.getByText("投入比例")).toHaveCount(0);
+    await page.goto(
+      `/progress/resources?from=2026-08-10&to=2026-08-12&people=${fixture.inactiveHistory.person.id}&zoom=hour`,
+    );
+    await expect(
+      page.getByText(
+        `${fixture.inactiveHistory.person.displayName}（已停用）`,
+        { exact: true },
+      ).first(),
+    ).toBeVisible();
+    if (testInfo.project.name === "desktop") {
+      await page.getByTestId("time-canvas-scroll").evaluate((element) => {
+        element.scrollLeft = 1_200;
+        element.dispatchEvent(new Event("scroll"));
+      });
+    }
+    await expect(
+      page.getByTestId(
+        testInfo.project.name === "mobile"
+          ? `agenda-item-${fixture.inactiveHistorySegmentId}`
+          : `segment-block-${fixture.inactiveHistorySegmentId}`,
+      ),
+    ).toBeVisible();
+    await page.goto(
+      `/progress/resources?from=2026-08-10&to=2026-08-12&people=${fixture.member.person.id},${fixture.owner.person.id}&zoom=hour`,
+    );
     if (testInfo.project.name === "desktop") {
       await page.goto(
-        `/progress/resources?from=2026-08-10&to=2026-08-12&people=${fixture.reviewer.person.id}&zoom=hour`,
+        `/progress/resources?from=2026-08-10&to=2026-08-12&people=${fixture.member.person.id}&zoom=hour`,
       );
       const emptyCanvasScroll = page.getByTestId("time-canvas-scroll");
       await emptyCanvasScroll.evaluate((element) => {
         element.scrollLeft = 1_200;
         element.dispatchEvent(new Event("scroll"));
       });
-      const emptyRow = page.getByLabel(`${fixture.reviewer.person.displayName} 时间行`, { exact: true });
+      const emptyRow = page.getByLabel(`${fixture.member.person.displayName} 时间行`, { exact: true });
       const emptyScrollBox = await emptyCanvasScroll.boundingBox();
       const emptyRowBox = await emptyRow.boundingBox();
       if (!emptyScrollBox || !emptyRowBox) throw new Error("未找到空人员行拖选坐标");
@@ -465,7 +486,7 @@ test.describe("project management P4/P6 UI integration", () => {
       await expect(page.getByText("已创建投入记录")).toBeVisible();
       await expect.poll(() => prisma.workSegment.count({
         where: {
-          personId: fixture.reviewer.person.id,
+          personId: fixture.member.person.id,
           content: fixture.brushCreateContent,
         },
       })).toBe(1);
@@ -740,7 +761,7 @@ test.describe("project management P4/P6 UI integration", () => {
     await expectHealthyPage(page);
   });
 
-  test("non-member cannot enumerate Task workbench", async ({
+  test("non-member can view the full Task workbench but cannot mutate it", async ({
     context,
     page,
     baseURL,
@@ -752,9 +773,11 @@ test.describe("project management P4/P6 UI integration", () => {
     });
 
     await page.goto(`/progress/tasks/${fixture.taskId}`);
-    await expect(
-      page.getByRole("heading", { name: "页面不存在或无权访问" }),
-    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: fixture.taskTitle })).toBeVisible();
+    await page.getByRole("tab", { name: "概览" }).click();
+    await expect(page.getByRole("button", { name: "保存元数据" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "保存成员" })).toHaveCount(0);
+    await expect(page.getByText("可创建 Revision：否")).toBeVisible();
     await expectHealthyPage(page);
 
     await page.goto("/progress/notifications");
@@ -913,13 +936,6 @@ test.describe("project management P4/P6 UI integration", () => {
     test.setTimeout(90_000);
     const fixture = await createUiFixture();
     const viewer = await createAccountPerson("S6 UI Viewer");
-    await prisma.task.update({
-      where: { id: fixture.taskId },
-      data: { allowSelfReview: true },
-    });
-    await prisma.taskMember.create({
-      data: { taskId: fixture.taskId, personId: viewer.person.id, role: "VIEWER" },
-    });
 
     await loginAsTestUser(context, baseURL, {
       openId: viewer.openId,
@@ -961,11 +977,16 @@ test.describe("project management P4/P6 UI integration", () => {
       .poll(() =>
         prisma.task.findUnique({
           where: { id: fixture.taskId },
-          select: { title: true, allowSelfReview: true },
+          select: { title: true },
         }),
       )
-      .toEqual({ title: renamedTitle, allowSelfReview: true });
+      .toEqual({ title: renamedTitle });
 
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.admin.openId,
+      name: fixture.admin.person.displayName,
+    });
+    await page.goto(`/progress/tasks/${fixture.taskId}`);
     await page.getByRole("tab", { name: "验收" }).click();
     await expect(page.getByText("FILE 暂未启用")).toBeVisible();
     await page.getByRole("textbox", { name: "文本证据" }).fill("S6 Review 文本证据");
@@ -981,13 +1002,7 @@ test.describe("project management P4/P6 UI integration", () => {
       )
       .toMatchObject({ result: "PENDING" });
 
-    await loginAsTestUser(context, baseURL, {
-      openId: fixture.reviewer.openId,
-      name: fixture.reviewer.person.displayName,
-    });
-    await page.goto(`/progress/tasks/${fixture.taskId}`);
-    await page.getByRole("tab", { name: /验收/ }).click();
-    await page.getByLabel("Review 说明").fill("S6 Reviewer 通过");
+    await page.getByLabel("审批说明").fill("S6 管理员通过");
     await page.getByRole("button", { name: "通过", exact: true }).click();
     await expect(page.getByText("验收已通过。")).toBeVisible();
     await expect
@@ -1039,8 +1054,8 @@ test.describe("project management P4/P6 UI integration", () => {
     await expect(page.getByText("Revision 已提交。")).toBeVisible();
 
     await loginAsTestUser(context, baseURL, {
-      openId: fixture.reviewer.openId,
-      name: fixture.reviewer.person.displayName,
+      openId: fixture.admin.openId,
+      name: fixture.admin.person.displayName,
     });
     await page.goto(`/progress/tasks/${fixture.taskId}`);
     await page.getByRole("tab", { name: "修订与历史" }).click();
@@ -1167,14 +1182,8 @@ async function createUiFixture() {
   const member = await createAccountPerson("P6 UI Member");
   const reviewer = await createAccountPerson("P6 UI Reviewer");
   const outsider = await createAccountPerson("P6 UI Outsider");
-  await grantRole(admin.account.id, "GROUP_LEADER", {
-    team: "英雄",
-    techGroup: "电控",
-  });
-  await grantRole(member.account.id, "GROUP_LEADER", {
-    team: "英雄",
-    techGroup: "电控",
-  });
+  const inactiveHistory = await createAccountPerson("P6 UI Historical Person");
+  await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
   const taskTitle = `P6 UI Task ${randomUUID()}`;
   const draft = await createTaskDraft(actor(admin), {
     title: taskTitle,
@@ -1185,8 +1194,9 @@ async function createUiFixture() {
     tagIds: [],
     members: [
       { personId: owner.person.id, role: "OWNER" },
-      { personId: member.person.id, role: "MEMBER" },
-      { personId: reviewer.person.id, role: "REVIEWER" },
+      { personId: member.person.id, role: "PARTICIPANT" },
+      { personId: reviewer.person.id, role: "PARTICIPANT" },
+      { personId: inactiveHistory.person.id, role: "PARTICIPANT" },
     ],
     milestones: [
       milestoneInput("P6 UI 第一阶段", "完成第一阶段", 1),
@@ -1231,7 +1241,7 @@ async function createUiFixture() {
     nodeId: activeNode.nodeId,
     tagIds: [],
   });
-  await createWorkSegment(actor(admin), {
+  await createWorkSegment(actor(owner), {
     personId: owner.person.id,
     type: "PLANNED",
     startAt: atHour(8),
@@ -1254,6 +1264,27 @@ async function createUiFixture() {
     taskId: draft.taskId,
     nodeId: activeNode.nodeId,
     tagIds: [],
+  });
+  const inactiveHistorySegment = await createWorkSegment(
+    actor(inactiveHistory),
+    {
+      personId: inactiveHistory.person.id,
+      type: "ACTUAL",
+      startAt: atHour(15),
+      endAt: atHour(16),
+      content: "P6 UI 停用人员历史投入",
+      actualOutput: "历史产出",
+      completionPercent: 100,
+      role: "SUPPORT",
+      priority: "LOW",
+      taskId: draft.taskId,
+      nodeId: activeNode.nodeId,
+      tagIds: [],
+    },
+  );
+  await prisma.person.update({
+    where: { id: inactiveHistory.person.id },
+    data: { status: "INACTIVE" },
   });
   const batchCancelableA = await createWorkSegment(actor(member), {
     personId: member.person.id,
@@ -1300,10 +1331,12 @@ async function createUiFixture() {
     member,
     reviewer,
     outsider,
+    inactiveHistory,
     taskId: draft.taskId,
     taskTitle,
     confirmableSegmentId: confirmable.segment.id,
     movableSegmentId: movable.segment.id,
+    inactiveHistorySegmentId: inactiveHistorySegment.segment.id,
     batchCancelableSegmentIds: [
       batchCancelableA.segment.id,
       batchCancelableB.segment.id,
@@ -1318,10 +1351,6 @@ async function createDraftWorkbenchFixture() {
   const admin = await createAccountPerson("S6 Draft Team Admin");
   const owner = await createAccountPerson("S6 Draft Owner");
   const reviewer = await createAccountPerson("S6 Draft Reviewer");
-  await grantRole(admin.account.id, "GROUP_LEADER", {
-    team: "英雄",
-    techGroup: "电控",
-  });
   const taskTitle = `S6 Draft Workbench ${randomUUID()}`;
   const task = await createTaskDraft(actor(admin), {
     title: taskTitle,
@@ -1332,7 +1361,7 @@ async function createDraftWorkbenchFixture() {
     tagIds: [],
     members: [
       { personId: owner.person.id, role: "OWNER" },
-      { personId: reviewer.person.id, role: "REVIEWER" },
+      { personId: reviewer.person.id, role: "PARTICIPANT" },
     ],
     milestones: [
       milestoneInput("S6 Draft 第一阶段", "完成第一阶段", 1),
@@ -1373,15 +1402,14 @@ async function createAccountPerson(displayName: string) {
 
 async function grantRole(
   accountId: string,
-  role: "GROUP_LEADER" | "PROJECT_ADMINISTRATOR",
-  scope?: { team: string; techGroup: string },
+  role: "PROJECT_ADMINISTRATOR",
 ) {
   await prisma.systemRoleAssignment.create({
     data: {
       accountId,
       role,
-      team: scope?.team ?? "",
-      techGroup: scope?.team ? "" : (scope?.techGroup ?? ""),
+      team: "",
+      techGroup: "",
     },
   });
 }

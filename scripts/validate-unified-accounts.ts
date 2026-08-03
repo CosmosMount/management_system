@@ -79,6 +79,7 @@ async function main() {
     ready:
       linkedUserCount === userCount &&
       userAccountIdIsRequired &&
+      groupLeaderCount === 0 &&
       activeLegacyProjectRoleCount === 0 &&
       activeLegacyReimbursementSuperAdminCount === 0 &&
       (userCount === 0 || superAdministratorCount > 0),

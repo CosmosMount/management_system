@@ -45,7 +45,6 @@ const canvasTaskAuthorizationSelect = {
   techGroup: true,
   status: true,
   priority: true,
-  allowSelfReview: true,
   members: {
     where: { removedAt: null },
     select: { personId: true, role: true, removedAt: true },
@@ -197,9 +196,13 @@ export async function getTimeCanvasData({
   input: unknown;
 }): Promise<TimeCanvasDataDto> {
   const parsed = getTimeCanvasDataInputSchema.parse(input);
-  const scopeTask = await authorizeScopeAndExplicitFilters(actor, parsed);
-  const rowFilter = canvasCursorFilter(parsed);
   const authorizedSegmentFilter = authorizedSegmentFilterWhere(actor, parsed);
+  const scopeTask = await authorizeScopeAndExplicitFilters(
+    actor,
+    parsed,
+    authorizedSegmentFilter,
+  );
+  const rowFilter = canvasCursorFilter(parsed);
   const rowPage =
     parsed.groupBy === "PERSON"
       ? await loadPersonRows(
@@ -284,6 +287,7 @@ export async function getTimeCanvasData({
 async function authorizeScopeAndExplicitFilters(
   actor: ProjectManagementActor,
   input: GetTimeCanvasDataInput,
+  authorizedSegmentFilter: Prisma.WorkSegmentWhereInput,
 ): Promise<CanvasTask | null> {
   let scopeTask: CanvasTask | null = null;
   if (input.scope.kind === "TASK_SCOPED") {
@@ -313,8 +317,9 @@ async function authorizeScopeAndExplicitFilters(
     const count = await prisma.person.count({
       where: {
         AND: [
-          { id: { in: input.personIds }, status: "ACTIVE" },
+          { id: { in: input.personIds } },
           personWhere,
+          personAvailableInRangeWhere(authorizedSegmentFilter),
         ],
       },
     });
@@ -363,8 +368,8 @@ async function loadPersonRows(
   const universe = personUniverseWhere(actor, input, scopeTask);
   const where: Prisma.PersonWhereInput = {
     AND: [
-      { status: "ACTIVE" },
       universe,
+      personAvailableInRangeWhere(authorizedSegmentFilter),
       input.personIds.length > 0 ? { id: { in: input.personIds } } : {},
       tagFilteredRowWhere(input, authorizedSegmentFilter),
     ],
@@ -381,6 +386,7 @@ async function loadPersonRows(
     select: {
       id: true,
       displayName: true,
+      status: true,
       taskMembers:
         input.scope.kind === "TASK_SCOPED"
           ? {
@@ -406,13 +412,18 @@ async function loadPersonRows(
     return {
       kind: "PERSON" as const,
       id: person.id,
-      label: person.displayName,
+      label:
+        person.status === "INACTIVE"
+          ? `${person.displayName}（已停用）`
+          : person.displayName,
       sublabel:
         taskMembers.length > 0
           ? taskMembers.map((member) => member.role).join(" / ")
           : null,
       capabilities: {
-        canCreateSegment: canCreateByPersonId.get(person.id) ?? false,
+        canCreateSegment:
+          person.status === "ACTIVE" &&
+          (canCreateByPersonId.get(person.id) ?? false),
       },
     };
   });
@@ -424,6 +435,17 @@ async function loadPersonRows(
         ? encodeCanvasCursor("PERSON", filter, rows.at(-1)?.id)
         : null,
     rowUniverseWhere: where,
+  };
+}
+
+function personAvailableInRangeWhere(
+  authorizedSegmentFilter: Prisma.WorkSegmentWhereInput,
+): Prisma.PersonWhereInput {
+  return {
+    OR: [
+      { status: "ACTIVE" },
+      { workSegments: { some: authorizedSegmentFilter } },
+    ],
   };
 }
 
@@ -501,23 +523,12 @@ function personUniverseWhere(
       },
     };
   }
-  if (isSystemAdministrator(actor)) return {};
-  const scopedTasks = resourceScopedTaskWhere(actor);
-  if (scopedTasks.length === 0) return { id: actor.personId };
   return {
     OR: [
-      { id: actor.personId },
-      {
-        taskMembers: {
-          some: { removedAt: null, task: { OR: scopedTasks } },
-        },
-      },
+      { status: "ACTIVE" },
       {
         workSegments: {
-          some: {
-            deletedAt: null,
-            task: { OR: scopedTasks },
-          },
+          some: segmentReadableWhere(actor),
         },
       },
     ],
@@ -1089,10 +1100,16 @@ function manageableTaskWhere(
   actor: ProjectManagementActor,
 ): Prisma.TaskWhereInput {
   if (isSystemAdministrator(actor)) return { deletedAt: null };
-  const scopedTasks = resourceScopedTaskWhere(actor);
-  // This predicate is capability-only. Resource Manager scope must not be added
-  // to taskReadableWhere or used to return Task details.
-  return scopedTasks.length > 0 ? { OR: scopedTasks } : { id: { in: [] } };
+  return {
+    deletedAt: null,
+    members: {
+      some: {
+        personId: actor.personId,
+        role: "OWNER",
+        removedAt: null,
+      },
+    },
+  };
 }
 
 function isEligibleSegmentTask(status: Task["status"]): boolean {
@@ -1107,7 +1124,6 @@ function taskResource(
     | "techGroup"
     | "status"
     | "priority"
-    | "allowSelfReview"
     | "members"
   >,
 ): AuthorizationTaskResource {
@@ -1118,31 +1134,8 @@ function taskResource(
     techGroup: task.techGroup,
     status: task.status,
     priority: task.priority,
-    allowSelfReview: task.allowSelfReview,
     members: task.members,
   };
-}
-
-function resourceScopedTaskWhere(
-  actor: ProjectManagementActor,
-): Prisma.TaskWhereInput[] {
-  return actor.systemRoles.flatMap((role) => {
-    if (
-      role.role !== "GROUP_LEADER"
-    ) {
-      return [];
-    }
-    const team = role.team.trim();
-    const techGroup = role.techGroup.trim();
-    if (!team && !techGroup) return [];
-    return [
-      {
-        deletedAt: null,
-        ...(team ? { team } : {}),
-        ...(techGroup ? { techGroup } : {}),
-      },
-    ];
-  });
 }
 
 function nodeLabel(

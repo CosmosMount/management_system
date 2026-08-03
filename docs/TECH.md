@@ -42,7 +42,7 @@
 - Web 进程里仍存在 `drainNotificationOutboxSoon()`，当前已具备结构化日志，但后续应收口为“Web 只入队，cron/worker 统一投递”。
 - outbox claim 当前以乐观 `updateMany` 抢占为主；后续建议改为 PostgreSQL `FOR UPDATE SKIP LOCKED` 原子 claim，并记录 `lockOwner`/心跳。
 - channel adapter 必须固化业务 payload 与收件人计划；不要在 outbox 核心或飞书传输层增加业务分支。
-- 维护脚本应逐步统一 dry-run/confirm 约定，写操作脚本必须要求显式 `APPLY_*=true` 和目标数据库确认；会触达飞书的脚本必须要求 `CONFIRM_SEND_FEISHU=true`，并默认尊重 `NOTIFICATION_DELIVERY_DISABLED=true`。
+- 维护脚本应逐步统一 dry-run/confirm 约定，写操作脚本必须要求显式确认（例如既有 `APPLY_*=true` 或受控 `--apply` 参数）和目标数据库确认；会触达飞书的脚本必须要求 `CONFIRM_SEND_FEISHU=true`，并默认尊重 `NOTIFICATION_DELIVERY_DISABLED=true`。
 
 ## 目录结构
 
@@ -87,7 +87,11 @@ Auth.js 使用飞书 OAuth。认证配置与完整登录副作用拆分如下：
 
 报销活跃角色为 `TEAM_ADMIN`、`TECH_GROUP_ADMIN`、`TEACHER`、`FINANCE`。授权、审批收件人和角色签名回退均通过 `UserRole.accountId` 读取账号当前身份；`UserRole.openId` 仅为只读历史兼容字段。采购管理审核同时保存审批人的稳定 `accountId` 和当时的 `openId` 快照，验收清单签名优先按 `accountId` 解析，避免飞书身份轮换后错误回退到当前组长。旧 `UserRole.SUPER_ADMIN` 仅保留撤销历史；统一超级管理员在报销权限 helper 中合成兼容的超管语义。
 
-项目活跃角色为全局 `SUPER_ADMINISTRATOR`、全局 `PROJECT_ADMINISTRATOR` 和单车组或单技术组 `GROUP_LEADER`。前两者拥有全部项目业务权限；组长匹配 `Task.team OR Task.techGroup`。旧 `SYSTEM_ADMINISTRATOR/TEAM_ADMINISTRATOR/RESOURCE_MANAGER/AUDITOR` 只允许作为已撤销历史。数据库 CHECK、活跃部分唯一索引和 Zod 同时约束角色范围。
+项目活跃系统角色只允许全局 `SUPER_ADMINISTRATOR` 和全局 `PROJECT_ADMINISTRATOR`，二者在项目业务中统一视为全局管理员。`GROUP_LEADER` 与旧 `SYSTEM_ADMINISTRATOR/TEAM_ADMINISTRATOR/RESOURCE_MANAGER/AUDITOR` 只保留已撤销历史；数据库 CHECK 和账号管理 Zod 禁止重新授予。该退役不影响采购报销独立的 `TEAM_ADMIN/TECH_GROUP_ADMIN`。审批提交、全局角色撤销和项目访问禁用共用全局事务 advisory lock；账号后台不得撤销或禁用最后一名同时满足 `projectAccessStatus=ACTIVE` 且具有 default tenant 非空飞书 `openId` 的全局管理员，审批提交会在事务内重复校验，否则业务状态与通知全部回滚。数据库永久延迟约束覆盖 Task 首次创建、账号状态、角色与飞书身份，防止绕过应用层或部署窗口中的并发写入破坏同一不变量。
+
+Task 有效成员只允许 `OWNER` 和 `PARTICIPANT`。同一 Person 在同一 Task 中最多一个有效角色，一个 Task 可以有多名 Owner 但至少有一名；整包成员替换先锁 Task，并在同一事务维护成员历史、乐观锁、审计和通知。Task 关联 Segment 的所有用户写路径先锁关联 Task、再按稳定顺序锁 Segment，并基于锁后的成员快照复核操作者权限和 Segment 持有人成员关系，避免 Owner 被并发降级后继续使用旧权限。`LEAD/MEMBER/REVIEWER/VIEWER` 枚举值只用于读取已结束成员历史。Work Segment 自身的工作职责 `REVIEWER` 是内容字段，不参与 Task 授权。
+
+所有 `projectAccessStatus=ACTIVE` 账号都可读取全部未删除 Task、计划、验收、Task 审计和完整 Work Segment，也都可创建合法组织范围的 Task；创建者自动成为 Owner。非成员只有读取权，Participant 可编辑 Task/计划、提交验收与 Revision 并管理自己的关联 Segment，Owner 另可管理成员、Task 状态、任意未生效 Revision 和该 Task 全部 Segment，全局管理员拥有全部项目写权限。所有 capability 由服务端计算，终态、关联和状态机校验不因全员可见而放宽。
 
 ## 数据模型
 
@@ -123,24 +127,24 @@ DRAFT → MANAGEMENT_REVIEW → TEACHER_REVIEW → PENDING_APPLICANT_DOCS
 
 旧项目管理专用模型和开发数据已通过 migration 删除，包括项目、阶段、旧任务及其审批、交付、周报、风险、评论、关注和提醒关系。共享的 `User`、采购/反馈、`FileAsset`、`NotificationOutbox` 与飞书卡片跟踪模型继续保留。
 
-当前项目管理数据模型包括 `Account`、`AccountIdentity`、`Person`、`Tag`、`Task`、`TaskMember`、`TaskPlanVersion`、`TaskNode`、`PlanVersionNode`、Milestone/Revision/Termination 子类型、`MilestoneReview`、`ReviewEvidence`、`WorkSegment`、`WorkSegmentSource`、`WorkSegmentChange`、`SystemRoleAssignment`、`NotificationPreference`、`InAppNotification` 和 `DomainAuditEvent`。资源冲突表、扫描 checkpoint 和 `WorkSegment.allocation` 已由不可逆 migration 删除。
+当前项目管理数据模型包括 `Account`、`AccountIdentity`、`Person`、`Tag`、`Task`、`TaskMember`、`TaskPlanVersion`、`TaskNode`、`PlanVersionNode`、Milestone/Revision/Termination 子类型、`MilestoneReview`、`ReviewEvidence`、`WorkSegment`、`WorkSegmentSource`、`WorkSegmentChange`、`SystemRoleAssignment`、`NotificationPreference`、`InAppNotification` 和 `DomainAuditEvent`。资源冲突表、扫描 checkpoint 和 `WorkSegment.allocation` 已由不可逆 migration 删除；`Task.revisionApprovalMode`、`Task.allowSelfReview` 和数据库 enum `RevisionApprovalMode` 也已删除，历史策略写入 `source=MIGRATION` 审计。
 
 P2/P3 已补齐 Task 计划生命周期的服务端闭环，入口位于 `lib/project-management/application/lifecycle-service.ts`、`app/actions/project-management/{tasks,plans,revisions,milestones,terminations}.ts` 和 `lib/project-management/queries/task-queries.ts`：
 
-- Task 草稿创建在事务中写入 `Task(status=DRAFT)`、初始 `TaskPlanVersion(status=CURRENT, activatedAt=null)`、有序 Milestone、末尾 Termination、成员、Tag、审计、站内通知和 `channel=project-management` outbox；`TaskPlanVersion.idempotencyKey` 与 `creationRequestHash` 支持同账号请求幂等和 payload 冲突检测。
-- `activateTask` 锁定 Task 行，校验 Draft 状态、权限、`expectedLockVersion`、OWNER、Milestone、末尾 Termination 和连续序号后，把首个 Milestone 置为 `ACTIVE` 并递增 `lockVersion`。
-- Revision 只允许基于当前 Current Plan 和匹配的 `RevisionNode.baseTaskLockVersion` 创建；目标计划保留已完成前缀、插入 Revision 节点、替换后续 Milestone 与 Termination。提交后默认待审批，`DIRECT_BY_OWNER` 且具备 `revision.apply` 权限时可直接生效。通过审批会原子历史化旧 Current、启用新 Current、标记被替换节点为 `REVISED`，并把受影响的 Planned Work Segment 标记 `associationNeedsReview=true`。
-- Milestone Review 允许 OWNER/LEAD/MEMBER 和匹配范围的组长提交 TEXT/LINK 证据；FILE 证据当前返回中文校验错误。审批限 REVIEWER、匹配范围组长或全局项目角色，默认禁止自审。通过后推进到下一 Milestone 或激活 Termination；驳回和要求修订不推进。
+- Task 草稿创建在事务中写入 `Task(status=DRAFT)`、初始 `TaskPlanVersion(status=CURRENT, activatedAt=null)`、有序 Milestone、末尾 Termination、成员、Tag、审计、站内通知和 `channel=project-management` outbox；`TaskPlanVersion.idempotencyKey` 与 `creationRequestHash` 支持同账号请求幂等和 payload 冲突检测。任何启用项目账号都可创建，服务端把创建者归一化为 Owner；模板成员只复制 Owner/Participant，人员冲突时 Owner 优先。
+- `activateTask` 锁定 Task 行，校验 Draft 状态、Owner 权限、`expectedLockVersion`、至少一名 OWNER、Milestone、末尾 Termination 和连续序号后，把首个 Milestone 置为 `ACTIVE` 并递增 `lockVersion`。
+- Revision 只允许基于当前 Current Plan 和匹配的 `RevisionNode.baseTaskLockVersion` 创建；目标计划保留已完成前缀、插入 Revision 节点、替换后续 Milestone 与 Termination。Participant 可管理自己创建的未生效 Revision，Owner/全局管理员可管理该 Task 任意未生效 Revision。每次提交都进入 `PENDING_APPROVAL`，只有全局管理员执行显式批准后才原子历史化旧 Current、启用新 Current、标记被替换节点为 `REVISED`，并把受影响的 Planned Work Segment 标记 `associationNeedsReview=true`。
+- Milestone Review 允许 OWNER/PARTICIPANT/全局管理员提交 TEXT/LINK 证据；FILE 证据当前返回中文校验错误。只有两类全局管理员可以通过、驳回或要求修订，并允许处理自己提交的 Review。通过后推进到下一 Milestone 或激活 Termination；驳回和要求修订不推进。`reviewerAccountId/reviewedByAccountId` 等历史数据库字段继续保存实际审批人，应用界面统一显示“审批人”。
 - Termination 确认写入 outcome、reason、summary 和 Task 终态。`SUCCESS` 要求所有前置 Milestone 已完成；`FAILED/CANCELLED/TIMEOUT` 可提前结束但必须填写原因，并取消未完成节点。重复相同确认幂等，不同 outcome 返回状态冲突。
-- 查询 facade `getTaskWorkspace`、`getPlanVersion`、`listTaskPlanVersions` 和 `comparePlanVersions` 都通过 `taskReadableWhere(actor)` 过滤，防止枚举不可读 Task 或 Plan。
+- 查询 facade `getTaskWorkspace`、`getPlanVersion`、`listTaskPlanVersions` 和 `comparePlanVersions` 都通过 `taskReadableWhere(actor)` 限定 `deletedAt=null`；所有启用项目账号共享读取范围，但删除对象仍不能通过显式 ID 枚举。
 - S2 Task mutation service 将 Draft 更新拆为 metadata/member/plan 三个事务，将 Active 直接更新拆为 metadata/member/tag 三个事务；六个入口都先锁 Task、复核服务端权限/状态/`expectedLockVersion`，再原子提交业务数据、审计与新锁版本。Draft plan replace 只接受当前计划已有 `nodeId`；新节点必须使用 `clientKey`，随机或外部 `nodeId` 统一返回 `ASSOCIATION_INVALID`。计划写入的公开时间边界只接受带 `Z`/offset 的 string，内部解析后才使用 `Date`。plan replace 审计不复制 goal、criteria、reviewRequirements 或 businessDescription 正文，只记录 before/after snapshot hash、planned start、节点数，以及有界的 retained/added/removed/reordered ID/type 和字段名变化统计。新 Task、激活、新 Revision 目标及 Revision submit/apply 均严格要求 `plannedStartAt` 和合法 chronology；仅 legacy Active Current Plan 可在创建修复 Revision 或确认 Termination 时忽略已有的空开始时间/旧时间乱序。Revision 目标仍严格校验新 `plannedStartAt`、replacement suffix 和 Termination，只对标记为 `isCarryForward` 的连续历史前缀容忍其内部旧乱序。
 
 P5 Resource Segment 服务端闭环位于 `lib/project-management/application/segment-service.ts`、`app/actions/project-management/segments.ts` 和 `lib/project-management/queries/resource-queries.ts`：
 
 - Segment 服务支持单条/批量 Planned 创建、Actual 创建、更新、批量移动、拆分、合并、取消、完整确认、部分确认、重关联和 Actual 逻辑删除。所有写操作继续在事务内写 `WorkSegmentChange` 和 `DomainAuditEvent`，通过 `expectedUpdatedAt` 执行乐观锁，批量写入保持全成全败。
-- 创建或改变 Task/`nodeId` 关联的路径继续与 Draft plan replace 共用 Task 行锁协议；状态转换继续按稳定 Segment ID 顺序锁行。Revision 生效只锁定受影响 Segment，并安全设置 `associationNeedsReview=true`。
+- 创建或改变 Task/`nodeId` 关联的路径继续与 Draft plan replace 共用 Task 行锁协议，并要求 Segment Person 是目标 Task 的有效 Owner/Participant；新建、更新、拆分、合并、确认和重关联均复核该成员一致性。状态转换继续按稳定 Segment ID 顺序锁行。Revision 生效只锁定受影响 Segment，并安全设置 `associationNeedsReview=true`。
 - Segment 校验包括 `endAt > startAt`、单条及 merge 最终结果最长 31 天、Actual 完成比例和 Task/Node 关联规则。Planned 只能关联 Current Plan 且未 `REVISED/CANCELLED` 的 Node；Actual 可保留历史 Node 关联。
-- 权限规则、状态机、确认生成 Actual、`WorkSegmentSource`、变更历史和审计均保留。多个 Segment 可以时间重叠，服务端不检测、提示、阻止或通知资源冲突。
+- 所有启用账号可读取全员完整 Planned/Actual Segment 和变更历史。Participant 只能管理自己的 Task 关联 Segment，Owner 可管理该 Task 全部 Segment，全局管理员可管理全部；非成员不能写入已有 Task。无 Task 关联的 Segment 仍由本人管理。状态机、确认生成 Actual、`WorkSegmentSource`、变更历史和审计均保留。多个 Segment 可以时间重叠，服务端不检测、提示、阻止或通知资源冲突。
 - `WorkSegment.allocation`、资源冲突领域模型、扫描器、建议预览、处理 action 和相关 DTO 已删除。旧客户端提交 `allocation` 或 `includeConflicts` 会在 strict Zod 边界返回校验错误。
 
 S2 TimeCanvas 查询通过 `app/actions/project-management/canvas.ts` 暴露，并由 strict `POST /api/project-management/canvas` 提供同一可测试边界。五个 operation 都从 Auth.js session 解析当前 actor，再进入 validation、authorization、`ProjectManagementActionResult`、structured logging 和错误脱敏流程；请求不接受 actor、账号、人员或角色注入字段。
@@ -149,13 +153,30 @@ TimeCanvas 的请求预算为 Full Segment + Busy 合计 5,000、Task anchor 50�
 
 `scripts/cron.ts` 每 10 分钟在数据库互斥下运行 Segment transition，并在每日 08:15 执行 deadline/retention/integrity 维护。资源冲突的增量与每日全量扫描、checkpoint、运行状态和日志均已删除。定时任务只处理保留的领域状态、审计、站内通知和 `channel=project-management` outbox，不自动生成 Actual，也不自动调整 Segment 排期。
 
-项目管理浏览器入口覆盖 `/progress` 驾驶舱、Task Composer/工作台、Resource Planner、Personal Timeline、Action Inbox、Tag 和通知偏好。所有页面先解析项目管理 actor，再通过 `taskReadableWhere`、`segmentReadableWhere` 或 `recipientAccountId` 过滤，服务端 action 仍执行项目启停、状态机、权限和版本校验。系统角色与 TaskMember 权限取并集；组长改 Task 组织归属时新旧范围都必须匹配。
+项目管理浏览器入口覆盖 `/progress` 驾驶舱、Task Composer/工作台、Resource Planner、Personal Timeline、Action Inbox、Tag 和通知偏好。所有页面先解析项目管理 actor；`taskReadableWhere` 和 `segmentReadableWhere` 对启用账号返回全部未删除对象，人员列表返回所有活跃 Person，并在所选范围继续展示有历史投入的停用 Person。服务端 action 仍执行项目启停、成员、状态机、权限、关联和版本校验，DTO capability flags 决定只读或可操作 UI。审批待办和审批按钮只对两类全局管理员可用。
 
 项目管理浏览器入口统一由 `app/progress/layout.tsx` 渲染全站 `AppHeader`、`PageShell` 和模块 Shell，子页只提供上下文命令栏与业务内容。桌面端使用可折叠的 sticky 左侧导航；移动端使用模态 Drawer。模块 Shell 统一读取通知未读数；不可用对象使用脱敏页面。`--pm-*` 语义变量集中在 `app/globals.css`，适配明暗主题和 reduced motion。`myTimeline`、`taskNew`、`approvals`、`tags` 均已有类型安全路由和导航入口。
 
 统一 `TimeCanvas` 通过显式 adapter 消费 S2 安全 DTO，共享时间坐标、半开区间、上海时区 snap/fit、稳定泳道、选择和 mutation 模型。桌面端使用 `@tanstack/react-virtual` 纵向虚拟化并只渲染横向可见对象；Pixel 5 使用同 DTO 的 `TimeAgenda`。响应式 renderer 通过 `matchMedia/useSyncExternalStore` 只挂载当前视口所需的一套 DOM，避免桌面隐藏 Agenda 仍创建数千节点。Busy 在 adapter 后仍不恢复源 Segment、Task、Node 或版本标识。受控 fixture 页面继续只对官方随机 `_test` runner 开放。
 
 `DomainAuditEvent` 由 append-only trigger 保护，应用代码只能追加审计事件，不能更新或删除既有审计行。
+
+### Task 权限迁移与审批通知修复
+
+`20260803120000_task_global_visibility_participants_admin_approval` 是不可逆 migration，不得修改已应用历史。它会：
+
+- 在变更前阻断零 Owner Task 和孤立的 Task 关联 Segment；
+- 按 Person 归一化有效成员，保留 Owner，转换 Lead/Member 为 Participant，结束 Reviewer/Viewer，并保留所有历史行；
+- 为已有 Task 关联投入的非成员 Person 回填 Participant；
+- 撤销所有非全局项目角色，增加有效成员角色、人员唯一和全局角色数据库约束；
+- 记录旧 Task 审批策略及每次成员/角色迁移的 `source=MIGRATION` 审计；
+- 删除 Task 审批策略列与 enum，且不创建站内通知或 outbox。
+
+`20260803115900_active_global_approval_administrator_preflight` 是排序在上述不可逆 migration 之前的只读数据库门禁，后续兼容迁移安装第一代临时触发器并监听空库首条 Task。`20260803115990_atomic_global_approval_administrator_guard` 安装第二代永久串行延迟约束，紧随其后的 `20260803115995_finalize_atomic_global_approval_administrator_guard` 在显式事务中按固定顺序锁定 Task、Account、AccountIdentity、SystemRoleAssignment 并最终复检，保证任何既有写事务都在不可逆主迁移前被观察。`20260803123000` 继续执行迁移后纵深校验，后续兼容清理迁移只移除第一代触发器和函数，不触碰第二代约束。空库允许先部署并初始化首位管理员，但创建首个 Task 前必须完成初始化。
+
+`npm run db:deploy` 在调用 Prisma 前会由 `scripts/task-access-atomic-deploy.ts` 检查 migration history。若不可逆 `20260803120000` 尚未应用，受控入口会先让 Prisma 只应用其前置 migration，并用首语句安全阻断标记阻止 Prisma 非事务执行主迁移；随后把主 migration SQL 和对应 `_prisma_migrations` 成功记录放入同一 PostgreSQL 事务，最后再交还 Prisma 应用后续 migration。失败会同时回滚 schema、数据和 history；检测到非本工具创建的 legacy enum 或未解决失败记录时拒绝自动猜测。不得绕过该入口直接运行 `prisma migrate deploy`。
+
+发布前在旧 schema 上执行 `npm run pm:task-access-preflight`，检查零 Owner、重复成员、旧角色分布、Segment 回填、活跃 `GROUP_LEADER`、活跃/飞书可达全局管理员、待审批对象和旧通知。迁移后先以 dry-run 执行 `npm run pm:repair-task-approval-notifications`；在 `NOTIFICATION_DELIVERY_DISABLED=true` 的维护窗口以 `npm run pm:repair-task-approval-notifications -- --apply` 重跑，会逐待审批对象事务化冻结旧 Reviewer/组长 outbox，以版本化事件键为活跃全局管理员补建站内通知和 approval outbox，并追加幂等迁移审计。没有活跃全局管理员或所有管理员均无有效飞书 openId 时，脚本会在冻结任何旧 outbox 前阻断。
 
 ## 路由一览
 

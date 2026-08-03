@@ -52,16 +52,10 @@ export const taskNodeStatusValues = [
 
 export const taskMemberRoleValues = [
   "OWNER",
-  "LEAD",
-  "MEMBER",
-  "REVIEWER",
-  "VIEWER",
+  "PARTICIPANT",
 ] as const;
 
-export const revisionApprovalModeValues = [
-  "DIRECT_BY_OWNER",
-  "REVIEW_REQUIRED",
-] as const;
+export type ActiveTaskMemberRole = (typeof taskMemberRoleValues)[number];
 
 export const milestoneReviewDecisionValues = [
   "APPROVED",

@@ -1,6 +1,11 @@
 import type { AccountStatus, Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/prisma";
+import {
+  USABLE_GLOBAL_APPROVAL_ADMINISTRATOR_REQUIRED,
+  activeGlobalApprovalAdministratorAccountIdsTx,
+  lockGlobalApprovalAdministratorSetTx,
+} from "@/lib/project-management/approval-administrators";
 import { createDomainAuditEventTx } from "@/lib/project-management/audit";
 import {
   createInAppNotificationTx,
@@ -148,8 +153,8 @@ export async function grantAccountRole(
     }
     await lockAccountMutations(tx, input.targetAccountId);
     const target = await loadSecurityTarget(tx, input.targetAccountId);
-    const team = input.role === "GROUP_LEADER" ? input.team : "";
-    const techGroup = input.role === "GROUP_LEADER" ? input.techGroup : "";
+    const team = "";
+    const techGroup = "";
     const existing = await tx.systemRoleAssignment.findFirst({
       where: {
         accountId: target.id,
@@ -199,6 +204,12 @@ export async function revokeAccountRole(
       // target-account lock. A stable order avoids a grant/revoke deadlock.
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(${SUPER_ADMIN_MUTATION_LOCK})`;
     }
+    if (
+      assignment.role === "SUPER_ADMINISTRATOR" ||
+      assignment.role === "PROJECT_ADMINISTRATOR"
+    ) {
+      await lockGlobalApprovalAdministratorSetTx(tx);
+    }
     await lockAccountMutations(tx, assignment.accountId);
     assignment = await tx.systemRoleAssignment.findUnique({
       where: { id: assignmentId },
@@ -217,6 +228,20 @@ export async function revokeAccountRole(
     }
 
     const target = await loadSecurityTarget(tx, assignment.accountId);
+    if (
+      target.projectAccessStatus === "ACTIVE" &&
+      (assignment.role === "SUPER_ADMINISTRATOR" ||
+        assignment.role === "PROJECT_ADMINISTRATOR")
+    ) {
+      const remainingAdministratorAccountIds =
+        await activeGlobalApprovalAdministratorAccountIdsTx(tx, {
+          excludeAssignmentId: assignment.id,
+          requireFeishuOpenId: true,
+        });
+      if (remainingAdministratorAccountIds.length === 0) {
+        throw new Error(USABLE_GLOBAL_APPROVAL_ADMINISTRATOR_REQUIRED);
+      }
+    }
     const revokedAt = new Date();
     const updated = await tx.systemRoleAssignment.update({
       where: { id: assignment.id },
@@ -253,9 +278,34 @@ export async function setProjectAccessStatus(
 ) {
   return prisma.$transaction(async (tx) => {
     await assertActorIsSuperAdministrator(tx, actorAccountId);
+    if (status === "DISABLED") {
+      await lockGlobalApprovalAdministratorSetTx(tx);
+    }
     await lockAccountMutations(tx, targetAccountId);
     const target = await loadSecurityTarget(tx, targetAccountId);
     if (target.projectAccessStatus === status) return { status, changed: false };
+    if (status === "DISABLED") {
+      const targetIsGlobalAdministrator =
+        (await tx.systemRoleAssignment.count({
+          where: {
+            accountId: target.id,
+            role: { in: ["SUPER_ADMINISTRATOR", "PROJECT_ADMINISTRATOR"] },
+            team: "",
+            techGroup: "",
+            revokedAt: null,
+          },
+        })) > 0;
+      if (targetIsGlobalAdministrator) {
+        const remainingAdministratorAccountIds =
+          await activeGlobalApprovalAdministratorAccountIdsTx(tx, {
+            excludeAccountId: target.id,
+            requireFeishuOpenId: true,
+          });
+        if (remainingAdministratorAccountIds.length === 0) {
+          throw new Error(USABLE_GLOBAL_APPROVAL_ADMINISTRATOR_REQUIRED);
+        }
+      }
+    }
     const changeId = randomUUID();
     await tx.account.update({
       where: { id: target.id },

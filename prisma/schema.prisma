@@ -89,15 +89,11 @@ enum TaskPriority {
 
 enum TaskMemberRole {
   OWNER
+  PARTICIPANT
   LEAD
   MEMBER
   REVIEWER
   VIEWER
-}
-
-enum RevisionApprovalMode {
-  DIRECT_BY_OWNER
-  REVIEW_REQUIRED
 }
 
 enum PlanVersionStatus {
@@ -490,38 +486,36 @@ model Tag {
 }
 
 model Task {
-  id                    String               @id @default(uuid())
+  id                    String              @id @default(uuid())
   title                 String
-  description           String               @default("")
-  team                  String               @default("")
-  techGroup             String               @default("")
-  status                TaskStatus           @default(DRAFT)
-  priority              TaskPriority         @default(MEDIUM)
-  currentPlanVersionId  String               @unique
-  currentPlanVersion    TaskPlanVersion      @relation("CurrentTaskPlanVersion", fields: [currentPlanVersionId], references: [id], onDelete: Restrict)
-  activeMilestoneNodeId String?              @unique
-  activeMilestoneNode   TaskNode?            @relation("ActiveMilestoneNode", fields: [activeMilestoneNodeId], references: [id], onDelete: SetNull)
-  revisionApprovalMode  RevisionApprovalMode @default(REVIEW_REQUIRED)
-  allowSelfReview       Boolean              @default(false)
-  lockVersion           Int                  @default(0)
-  startedAt             DateTime?            @db.Timestamptz(6)
-  endedAt               DateTime?            @db.Timestamptz(6)
-  archivedAt            DateTime?            @db.Timestamptz(6)
-  deletedAt             DateTime?            @db.Timestamptz(6)
+  description           String              @default("")
+  team                  String              @default("")
+  techGroup             String              @default("")
+  status                TaskStatus          @default(DRAFT)
+  priority              TaskPriority        @default(MEDIUM)
+  currentPlanVersionId  String              @unique
+  currentPlanVersion    TaskPlanVersion     @relation("CurrentTaskPlanVersion", fields: [currentPlanVersionId], references: [id], onDelete: Restrict)
+  activeMilestoneNodeId String?             @unique
+  activeMilestoneNode   TaskNode?           @relation("ActiveMilestoneNode", fields: [activeMilestoneNodeId], references: [id], onDelete: SetNull)
+  lockVersion           Int                 @default(0)
+  startedAt             DateTime?           @db.Timestamptz(6)
+  endedAt               DateTime?           @db.Timestamptz(6)
+  archivedAt            DateTime?           @db.Timestamptz(6)
+  deletedAt             DateTime?           @db.Timestamptz(6)
   relatedTaskId         String?
-  relatedTask           Task?                @relation("RelatedTasks", fields: [relatedTaskId], references: [id], onDelete: SetNull)
-  relatedTasks          Task[]               @relation("RelatedTasks")
+  relatedTask           Task?               @relation("RelatedTasks", fields: [relatedTaskId], references: [id], onDelete: SetNull)
+  relatedTasks          Task[]              @relation("RelatedTasks")
   createdByAccountId    String
-  createdBy             Account              @relation("TaskCreatedBy", fields: [createdByAccountId], references: [id], onDelete: Restrict)
+  createdBy             Account             @relation("TaskCreatedBy", fields: [createdByAccountId], references: [id], onDelete: Restrict)
   members               TaskMember[]
   tags                  TaskTag[]
-  planVersions          TaskPlanVersion[]    @relation("TaskPlanVersions")
+  planVersions          TaskPlanVersion[]   @relation("TaskPlanVersions")
   nodes                 TaskNode[]
   workSegments          WorkSegment[]
   inAppNotifications    InAppNotification[]
   auditEvents           DomainAuditEvent[]
-  createdAt             DateTime             @default(now()) @db.Timestamptz(6)
-  updatedAt             DateTime             @updatedAt @db.Timestamptz(6)
+  createdAt             DateTime            @default(now()) @db.Timestamptz(6)
+  updatedAt             DateTime            @updatedAt @db.Timestamptz(6)
 
   @@index([status, team, techGroup])
   @@index([createdByAccountId])

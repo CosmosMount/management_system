@@ -55,7 +55,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
     expect(parsed.toISOString()).toBe("2026-08-01T10:00:00.000Z");
   });
 
-  test("create persists planned start, related Task and controlled self-review with chronology-safe hashes", async () => {
+  test("create persists planned start and globally readable related Task with chronology-safe hashes", async () => {
     const admin = await createAccountPerson("S2 System Admin");
     const owner = await createAccountPerson("S2 Create Owner");
     const reviewer = await createAccountPerson("S2 Create Reviewer");
@@ -72,7 +72,6 @@ test.describe("project management S2 plan and Task mutation services", () => {
       reviewerPersonId: reviewer.person.id,
       title: "计划字段持久化 Task",
       relatedTaskId: related.taskId,
-      allowSelfReview: true,
       sameDayMilestones: true,
     });
     const created = await createTaskDraft(actor(admin), input);
@@ -88,14 +87,12 @@ test.describe("project management S2 plan and Task mutation services", () => {
     ]);
     expect(task).toMatchObject({
       relatedTaskId: related.taskId,
-      allowSelfReview: true,
     });
     expect(plan.plannedStartAt?.toISOString()).toBe(input.plannedStartAt);
     expect(plan.snapshotHash).toMatch(/^[a-f0-9]{64}$/);
     expect(jsonRecord(audit.after)).toMatchObject({
       plannedStartAt: input.plannedStartAt,
       relatedTaskId: related.taskId,
-      allowSelfReview: true,
     });
 
     await expectServiceError(
@@ -112,39 +109,48 @@ test.describe("project management S2 plan and Task mutation services", () => {
       team: "英雄",
       techGroup: "电控",
     });
-    await expectServiceError(
-      createTaskDraft(
-        actor(teamAdmin),
-        taskDraftInput({
-          ownerPersonId: teamOwner.person.id,
-          reviewerPersonId: reviewer.person.id,
-          title: "非管理员开启自审",
-          allowSelfReview: true,
-        }),
-      ),
-      "FORBIDDEN",
+    const ordinaryCreated = await createTaskDraft(
+      actor(teamAdmin),
+      taskDraftInput({
+        ownerPersonId: teamOwner.person.id,
+        reviewerPersonId: reviewer.person.id,
+        title: "退役组长按普通账号创建 Task",
+      }),
     );
+    await expect(
+      prisma.taskMember.findFirstOrThrow({
+        where: {
+          taskId: ordinaryCreated.taskId,
+          personId: teamAdmin.person.id,
+          removedAt: null,
+        },
+        select: { role: true },
+      }),
+    ).resolves.toEqual({ role: "OWNER" });
 
     const hidden = await createDraft({
       creator: admin,
       owner,
       reviewer,
-      title: "不可枚举关联 Task",
+      title: "跨组织关联 Task",
       team: "工程",
       techGroup: "机械",
     });
-    await expectServiceError(
-      createTaskDraft(
-        actor(teamAdmin),
-        taskDraftInput({
-          ownerPersonId: teamOwner.person.id,
-          reviewerPersonId: reviewer.person.id,
-          title: "隐藏关联防枚举",
-          relatedTaskId: hidden.taskId,
-        }),
-      ),
-      "NOT_FOUND",
+    const crossGroupCreated = await createTaskDraft(
+      actor(teamAdmin),
+      taskDraftInput({
+        ownerPersonId: teamOwner.person.id,
+        reviewerPersonId: reviewer.person.id,
+        title: "全局可见关联",
+        relatedTaskId: hidden.taskId,
+      }),
     );
+    expect(
+      await prisma.task.findUniqueOrThrow({
+        where: { id: crossGroupCreated.taskId },
+        select: { relatedTaskId: true },
+      }),
+    ).toEqual({ relatedTaskId: hidden.taskId });
 
     const invalidChronology = taskDraftInput({
       ownerPersonId: teamOwner.person.id,
@@ -165,7 +171,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
     );
   });
 
-  test("related Task references hide missing and invisible identities with complete zero-effect snapshots", async () => {
+  test("related Task references reject deleted or missing IDs but accept every readable live Task", async () => {
     expect(process.env.NOTIFICATION_DELIVERY_DISABLED).toBe("true");
     expect(new URL(process.env.DATABASE_URL ?? "").pathname).toMatch(/_test$/);
 
@@ -211,7 +217,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
     );
     const createAttemptKeys = [
       `s2-related-missing-${randomUUID()}`,
-      `s2-related-hidden-${randomUUID()}`,
+      `s2-related-visible-${randomUUID()}`,
     ];
     expect(new Set(createAttemptKeys).size).toBe(2);
 
@@ -247,8 +253,6 @@ test.describe("project management S2 plan and Task mutation services", () => {
             team: "英雄",
             techGroup: "电控",
             priority: "CRITICAL",
-            revisionApprovalMode: "DIRECT_BY_OWNER",
-            allowSelfReview: false,
             relatedTaskId,
             tagIds: [replacementTag.id],
           }),
@@ -266,8 +270,6 @@ test.describe("project management S2 plan and Task mutation services", () => {
             team: "英雄",
             techGroup: "电控",
             priority: "LOW",
-            revisionApprovalMode: "DIRECT_BY_OWNER",
-            allowSelfReview: false,
             relatedTaskId,
           }),
       },
@@ -282,73 +284,39 @@ test.describe("project management S2 plan and Task mutation services", () => {
         await prisma.task.findUnique({ where: { id: hiddenRelated.taskId } }),
       ).toMatchObject({ team: "工程", techGroup: "机械" });
 
-      const rejectionSignatures = [];
-      for (const [attemptIndex, relatedTaskId] of [
-        missingRelatedTaskId,
-        hiddenRelated.taskId,
-      ].entries()) {
-        const before = await relatedTaskReferenceSideEffectSnapshot(
+      const before = await relatedTaskReferenceSideEffectSnapshot(
+        mutationCase.snapshotTaskIds,
+        mutationCase.includeGlobalCounts,
+      );
+      const error = await expectServiceError(
+        mutationCase.invoke(missingRelatedTaskId, 0),
+        "NOT_FOUND",
+      );
+      expect({ code: error.code, message: error.message }).toEqual({
+        code: "NOT_FOUND",
+        message: "对象不存在或无权查看",
+      });
+      expect(
+        await relatedTaskReferenceSideEffectSnapshot(
           mutationCase.snapshotTaskIds,
           mutationCase.includeGlobalCounts,
-        );
-        const error = await expectServiceError(
-          mutationCase.invoke(relatedTaskId, attemptIndex),
-          "NOT_FOUND",
-        );
-        rejectionSignatures.push({ code: error.code, message: error.message });
-        expect(await relatedTaskReferenceSideEffectSnapshot(
-          mutationCase.snapshotTaskIds,
-          mutationCase.includeGlobalCounts,
-        )).toEqual(before);
-      }
+        ),
+      ).toEqual(before);
 
-      expect(rejectionSignatures, mutationCase.name).toEqual([
-        { code: "NOT_FOUND", message: "对象不存在或无权查看" },
-        { code: "NOT_FOUND", message: "对象不存在或无权查看" },
-      ]);
+      await expect(mutationCase.invoke(hiddenRelated.taskId, 1)).resolves.toBeTruthy();
     }
-
-    const linkedBySystemAdmin = await updateTaskMetadata(actor(admin), {
-      taskId: activeTarget.taskId,
-      expectedLockVersion: 1,
-      title: "系统管理员建立隐藏关联",
-      description: "关联随后对普通编辑者不可见",
-      team: "英雄",
-      techGroup: "电控",
-      priority: "HIGH",
-      revisionApprovalMode: "REVIEW_REQUIRED",
-      allowSelfReview: false,
-      relatedTaskId: hiddenRelated.taskId,
-    });
-    expect(linkedBySystemAdmin.lockVersion).toBe(2);
-    const preservedByScopedEditor = await updateTaskMetadata(
-      actor(scopedAdmin),
-      {
-        taskId: activeTarget.taskId,
-        expectedLockVersion: 2,
-        title: "只修改标题并原样保留隐藏关联",
-        description: "未改变的关联不应阻断其他元数据更新",
-        team: "英雄",
-        techGroup: "电控",
-        priority: "HIGH",
-        revisionApprovalMode: "REVIEW_REQUIRED",
-        allowSelfReview: false,
-        relatedTaskId: hiddenRelated.taskId,
-      },
-    );
-    expect(preservedByScopedEditor.lockVersion).toBe(3);
     await expect(
-      prisma.task.findUnique({
-        where: { id: activeTarget.taskId },
-        select: { title: true, relatedTaskId: true },
+      prisma.task.findMany({
+        where: { id: { in: [draftTarget.taskId, activeTarget.taskId] } },
+        select: { relatedTaskId: true },
       }),
-    ).resolves.toEqual({
-      title: "只修改标题并原样保留隐藏关联",
-      relatedTaskId: hiddenRelated.taskId,
-    });
+    ).resolves.toEqual([
+      { relatedTaskId: hiddenRelated.taskId },
+      { relatedTaskId: hiddenRelated.taskId },
+    ]);
   });
 
-  test("Draft metadata and members enforce strict state, visibility, lock, one OWNER and role union", async () => {
+  test("Draft metadata and members enforce state, write permission, lock, multiple Owners and one role per person", async () => {
     const admin = await createAccountPerson("S2 Draft Admin");
     const owner = await createAccountPerson("S2 Draft Owner");
     const reviewer = await createAccountPerson("S2 Draft Reviewer");
@@ -367,8 +335,6 @@ test.describe("project management S2 plan and Task mutation services", () => {
         team: "英雄",
         techGroup: "电控",
         priority: "HIGH",
-        revisionApprovalMode: "REVIEW_REQUIRED",
-        allowSelfReview: false,
         relatedTaskId: null,
       }),
       "STATE_CONFLICT",
@@ -379,7 +345,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
         expectedLockVersion: 0,
         members: [
           { personId: owner.person.id, role: "OWNER" },
-          { personId: reviewer.person.id, role: "REVIEWER" },
+          { personId: reviewer.person.id, role: "PARTICIPANT" },
         ],
       }),
       "STATE_CONFLICT",
@@ -394,45 +360,36 @@ test.describe("project management S2 plan and Task mutation services", () => {
       team: "英雄",
       techGroup: "电控",
       priority: "CRITICAL",
-      revisionApprovalMode: "DIRECT_BY_OWNER",
-      allowSelfReview: false,
       relatedTaskId: null,
       tagIds: [tag.id],
     });
     expect(metadata).toMatchObject({ lockVersion: 1, tagIds: [tag.id] });
 
-    await expectServiceError(
-      updateTaskDraftMetadata(actor(owner), {
-        taskId: fixture.taskId,
-        expectedLockVersion: 1,
-        title: "越权开启自审",
-        description: "",
-        team: "英雄",
-        techGroup: "电控",
-        priority: "HIGH",
-        revisionApprovalMode: "REVIEW_REQUIRED",
-        allowSelfReview: true,
-        relatedTaskId: null,
-        tagIds: [tag.id],
-      }),
-      "FORBIDDEN",
-    );
-    expect((await currentTask(fixture.taskId)).lockVersion).toBe(1);
-
-    const adminMetadata = await updateTaskDraftMetadata(actor(admin), {
+    const ownerMetadata = await updateTaskDraftMetadata(actor(owner), {
       taskId: fixture.taskId,
       expectedLockVersion: 1,
-      title: "管理员开启自审",
-      description: "策略审计",
+      title: "负责人继续编辑",
+      description: "",
       team: "英雄",
       techGroup: "电控",
       priority: "HIGH",
-      revisionApprovalMode: "REVIEW_REQUIRED",
-      allowSelfReview: true,
       relatedTaskId: null,
       tagIds: [tag.id],
     });
-    expect(adminMetadata.lockVersion).toBe(2);
+    expect(ownerMetadata.lockVersion).toBe(2);
+
+    const adminMetadata = await updateTaskDraftMetadata(actor(admin), {
+      taskId: fixture.taskId,
+      expectedLockVersion: 2,
+      title: "管理员编辑元数据",
+      description: "管理员写权限审计",
+      team: "英雄",
+      techGroup: "电控",
+      priority: "HIGH",
+      relatedTaskId: null,
+      tagIds: [tag.id],
+    });
+    expect(adminMetadata.lockVersion).toBe(3);
 
     await expectServiceError(
       updateTaskDraftMetadata(actor(owner), {
@@ -443,50 +400,44 @@ test.describe("project management S2 plan and Task mutation services", () => {
         team: "英雄",
         techGroup: "电控",
         priority: "HIGH",
-        revisionApprovalMode: "REVIEW_REQUIRED",
-        allowSelfReview: true,
         relatedTaskId: null,
         tagIds: [tag.id],
       }),
       "STALE_TASK",
-      { expectedCurrentLockVersion: 2 },
+      { expectedCurrentLockVersion: 3 },
     );
     await expectServiceError(
       updateTaskDraftMetadata(actor(outsider), {
         taskId: fixture.taskId,
-        expectedLockVersion: 2,
-        title: "不可见",
+        expectedLockVersion: 3,
+        title: "非成员不可写",
         description: "",
         team: "英雄",
         techGroup: "电控",
         priority: "HIGH",
-        revisionApprovalMode: "REVIEW_REQUIRED",
-        allowSelfReview: true,
         relatedTaskId: null,
         tagIds: [],
       }),
-      "NOT_FOUND",
+      "FORBIDDEN",
     );
 
+    const multipleOwners = await replaceTaskDraftMembers(actor(owner), {
+      taskId: fixture.taskId,
+      expectedLockVersion: 3,
+      members: [
+        { personId: owner.person.id, role: "OWNER" },
+        { personId: reviewer.person.id, role: "OWNER" },
+      ],
+    });
+    expect(multipleOwners.lockVersion).toBe(4);
     await expectServiceError(
       replaceTaskDraftMembers(actor(owner), {
         taskId: fixture.taskId,
-        expectedLockVersion: 2,
+        expectedLockVersion: 4,
         members: [
           { personId: owner.person.id, role: "OWNER" },
-          { personId: reviewer.person.id, role: "OWNER" },
-        ],
-      }),
-      "VALIDATION_ERROR",
-    );
-    await expectServiceError(
-      replaceTaskDraftMembers(actor(owner), {
-        taskId: fixture.taskId,
-        expectedLockVersion: 2,
-        members: [
-          { personId: owner.person.id, role: "OWNER" },
-          { personId: reviewer.person.id, role: "REVIEWER" },
-          { personId: reviewer.person.id, role: "REVIEWER" },
+          { personId: reviewer.person.id, role: "PARTICIPANT" },
+          { personId: reviewer.person.id, role: "PARTICIPANT" },
         ],
       }),
       "VALIDATION_ERROR",
@@ -498,31 +449,30 @@ test.describe("project management S2 plan and Task mutation services", () => {
     await expectServiceError(
       replaceTaskDraftMembers(actor(owner), {
         taskId: fixture.taskId,
-        expectedLockVersion: 2,
+        expectedLockVersion: 4,
         members: [
           { personId: owner.person.id, role: "OWNER" },
-          { personId: reviewer.person.id, role: "REVIEWER" },
-          { personId: outsider.person.id, role: "MEMBER" },
+          { personId: reviewer.person.id, role: "PARTICIPANT" },
+          { personId: outsider.person.id, role: "PARTICIPANT" },
         ],
       }),
       "VALIDATION_ERROR",
     );
-    expect((await currentTask(fixture.taskId)).lockVersion).toBe(2);
+    expect((await currentTask(fixture.taskId)).lockVersion).toBe(4);
     const members = await replaceTaskDraftMembers(actor(owner), {
       taskId: fixture.taskId,
-      expectedLockVersion: 2,
+      expectedLockVersion: 4,
       members: [
         { personId: owner.person.id, role: "OWNER" },
-        { personId: owner.person.id, role: "REVIEWER" },
-        { personId: reviewer.person.id, role: "REVIEWER" },
-        { personId: member.person.id, role: "MEMBER" },
+        { personId: reviewer.person.id, role: "PARTICIPANT" },
+        { personId: member.person.id, role: "PARTICIPANT" },
       ],
     });
-    expect(members.lockVersion).toBe(3);
+    expect(members.lockVersion).toBe(5);
     expect(members.members).toEqual(
       expect.arrayContaining([
         { personId: owner.person.id, role: "OWNER" },
-        { personId: owner.person.id, role: "REVIEWER" },
+        { personId: reviewer.person.id, role: "PARTICIPANT" },
       ]),
     );
     expect(await prisma.notificationOutbox.count()).toBe(beforeOutboxCount);
@@ -538,12 +488,12 @@ test.describe("project management S2 plan and Task mutation services", () => {
           },
         },
       }),
-    ).toBe(3);
+    ).toBe(5);
 
     await expectServiceError(
       replaceTaskTags(actor(owner), {
         taskId: fixture.taskId,
-        expectedLockVersion: 3,
+        expectedLockVersion: 5,
         tagIds: [],
       }),
       "STATE_CONFLICT",
@@ -809,7 +759,6 @@ test.describe("project management S2 plan and Task mutation services", () => {
         owner,
         reviewer,
         title: `S2 matrix ${status}`,
-        extraMembers: [{ personId: viewer.person.id, role: "VIEWER" }],
       });
       if (status !== "DRAFT") {
         await activateTask(actor(owner), {
@@ -853,7 +802,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
           allowedFixture,
           allowedTask.lockVersion,
         ),
-        "NOT_FOUND",
+        "FORBIDDEN",
       );
       expect(await mutationSideEffectCounts(allowedFixture.taskId)).toEqual(
         beforeUnauthorized,
@@ -914,14 +863,13 @@ test.describe("project management S2 plan and Task mutation services", () => {
       if (mutationCase.name === "replaceTaskMembers") {
         const removed = await createAccountPerson("S2 Concurrent Removed");
         const added = await createAccountPerson("S2 Concurrent Added");
-        extraMembers.push({ personId: removed.person.id, role: "MEMBER" });
+        extraMembers.push({ personId: removed.person.id, role: "PARTICIPANT" });
         requestedMembers = [
           { personId: owner.person.id, role: "OWNER" },
-          { personId: reviewer.person.id, role: "REVIEWER" },
-          { personId: reviewer.person.id, role: "LEAD" },
-          { personId: added.person.id, role: "VIEWER" },
+          { personId: reviewer.person.id, role: "PARTICIPANT" },
+          { personId: added.person.id, role: "PARTICIPANT" },
         ];
-        expectedChangedPeople = [reviewer, removed, added];
+        expectedChangedPeople = [admin, removed, added];
       }
       const fixture = await createDraft({
         creator: admin,
@@ -1072,8 +1020,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
           expectedLockVersion: 1,
           members: [
             { personId: owner.person.id, role: "OWNER" },
-            { personId: owner.person.id, role: "MEMBER" },
-            { personId: reviewer.person.id, role: "REVIEWER" },
+            { personId: reviewer.person.id, role: "PARTICIPANT" },
           ],
         }),
       ).rejects.toThrow("s2 controlled outbox failure after inapp");
@@ -1201,7 +1148,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
       creator: admin,
       owner,
       reviewer,
-      extraMembers: [{ personId: member.person.id, role: "MEMBER" }],
+      extraMembers: [{ personId: member.person.id, role: "PARTICIPANT" }],
       tagIds: [firstTag.id],
     });
     const activated = await activateTask(actor(owner), {
@@ -1219,8 +1166,6 @@ test.describe("project management S2 plan and Task mutation services", () => {
         team: "英雄",
         techGroup: "电控",
         priority: "HIGH",
-        revisionApprovalMode: "REVIEW_REQUIRED",
-        allowSelfReview: false,
         relatedTaskId: null,
         tagIds: [firstTag.id],
       }),
@@ -1251,9 +1196,8 @@ test.describe("project management S2 plan and Task mutation services", () => {
       expectedLockVersion: 1,
       members: [
         { personId: owner.person.id, role: "OWNER" },
-        { personId: owner.person.id, role: "REVIEWER" },
-        { personId: member.person.id, role: "LEAD" },
-        { personId: newcomer.person.id, role: "VIEWER" },
+        { personId: member.person.id, role: "PARTICIPANT" },
+        { personId: newcomer.person.id, role: "PARTICIPANT" },
       ],
     });
     expect(membersResult.lockVersion).toBe(2);
@@ -1264,9 +1208,8 @@ test.describe("project management S2 plan and Task mutation services", () => {
     expect(activeMembers).toEqual(
       expect.arrayContaining([
         { personId: owner.person.id, role: "OWNER" },
-        { personId: owner.person.id, role: "REVIEWER" },
-        { personId: member.person.id, role: "LEAD" },
-        { personId: newcomer.person.id, role: "VIEWER" },
+        { personId: member.person.id, role: "PARTICIPANT" },
+        { personId: newcomer.person.id, role: "PARTICIPANT" },
       ]),
     );
     expect(
@@ -1280,7 +1223,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
         eventKey: { startsWith: `pm:task:member_changed:${fixture.taskId}:2:` },
       },
     });
-    expect(memberOutbox).toHaveLength(4);
+    expect(memberOutbox).toHaveLength(3);
     for (const row of memberOutbox) {
       const payload = jsonRecord(JSON.parse(row.payload));
       expect(row).toMatchObject({
@@ -1308,7 +1251,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
           },
         },
       }),
-    ).toBe(4);
+    ).toBe(3);
 
     const outboxBeforeTags = await prisma.notificationOutbox.count();
     const tagsResult = await replaceTaskTags(actor(owner), {
@@ -1330,8 +1273,6 @@ test.describe("project management S2 plan and Task mutation services", () => {
       team: "英雄",
       techGroup: "电控",
       priority: "LOW",
-      revisionApprovalMode: "REVIEW_REQUIRED",
-      allowSelfReview: true,
       relatedTaskId: null,
     });
     expect(metadataResult.lockVersion).toBe(4);
@@ -1392,19 +1333,15 @@ test.describe("project management S2 plan and Task mutation services", () => {
       }
       const task = await currentTask(fixture.taskId);
       const invalidSets: Array<Array<{ personId: string; role: TaskMemberRole }>> = [
-        [{ personId: reviewer.person.id, role: "REVIEWER" }],
+        [{ personId: reviewer.person.id, role: "PARTICIPANT" }],
         [
           { personId: owner.person.id, role: "OWNER" },
-          { personId: reviewer.person.id, role: "OWNER" },
+          { personId: reviewer.person.id, role: "PARTICIPANT" },
+          { personId: reviewer.person.id, role: "PARTICIPANT" },
         ],
         [
           { personId: owner.person.id, role: "OWNER" },
-          { personId: reviewer.person.id, role: "REVIEWER" },
-          { personId: reviewer.person.id, role: "REVIEWER" },
-        ],
-        [
-          { personId: owner.person.id, role: "OWNER" },
-          { personId: inactive.person.id, role: "MEMBER" },
+          { personId: inactive.person.id, role: "PARTICIPANT" },
         ],
       ];
       for (const members of invalidSets) {
@@ -1455,13 +1392,13 @@ test.describe("project management S2 plan and Task mutation services", () => {
       owner,
       reviewer,
       extraMembers: [
-        { personId: inactive.person.id, role: "MEMBER" },
-        { personId: wrongTenant.person.id, role: "MEMBER" },
-        { personId: firstBlankThenValid.person.id, role: "MEMBER" },
-        { personId: disabled.person.id, role: "MEMBER" },
-        { personId: emptyOpenId.person.id, role: "MEMBER" },
-        { personId: missingIdentity.person.id, role: "MEMBER" },
-        { personId: noAccountPerson.id, role: "VIEWER" },
+        { personId: inactive.person.id, role: "PARTICIPANT" },
+        { personId: wrongTenant.person.id, role: "PARTICIPANT" },
+        { personId: firstBlankThenValid.person.id, role: "PARTICIPANT" },
+        { personId: disabled.person.id, role: "PARTICIPANT" },
+        { personId: emptyOpenId.person.id, role: "PARTICIPANT" },
+        { personId: missingIdentity.person.id, role: "PARTICIPANT" },
+        { personId: noAccountPerson.id, role: "PARTICIPANT" },
       ],
     });
     await activateTask(actor(owner), {
@@ -1516,7 +1453,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
       expectedLockVersion: 1,
       members: [
         { personId: owner.person.id, role: "OWNER" },
-        { personId: reviewer.person.id, role: "REVIEWER" },
+        { personId: reviewer.person.id, role: "PARTICIPANT" },
       ],
     });
     expect(result.lockVersion).toBe(2);
@@ -1526,7 +1463,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
       },
       orderBy: { eventKey: "asc" },
     });
-    expect(outboxes).toHaveLength(7);
+    expect(outboxes).toHaveLength(8);
     const payloadByPersonId = new Map<string, Record<string, unknown>>();
     for (const outbox of outboxes) {
       expect(outbox).toMatchObject({
@@ -1571,6 +1508,10 @@ test.describe("project management S2 plan and Task mutation services", () => {
       recipientOpenIds: [laterValidOpenId],
       context: { recipientResolution: "RESOLVED" },
     });
+    expect(payloadByPersonId.get(admin.person.id)).toMatchObject({
+      recipientOpenIds: [admin.openId],
+      context: { recipientResolution: "RESOLVED" },
+    });
     const inAppRows = await prisma.inAppNotification.findMany({
       where: {
         eventKey: {
@@ -1584,6 +1525,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
         inactive.account.id,
         wrongTenant.account.id,
         firstBlankThenValid.account.id,
+        admin.account.id,
         emptyOpenId.account.id,
         missingIdentity.account.id,
       ].sort(),
@@ -1666,7 +1608,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
     }
   });
 
-  test("prospective Segment Task references do not reveal missing versus hidden Tasks", async () => {
+  test("prospective Segment Task references distinguish missing IDs from visible Tasks that reject non-member writes", async () => {
     const admin = await createAccountPerson("S2 Segment Oracle Admin");
     const hiddenOwner = await createAccountPerson("S2 Segment Oracle Hidden Owner");
     const hiddenReviewer = await createAccountPerson(
@@ -1772,20 +1714,25 @@ test.describe("project management S2 plan and Task mutation services", () => {
     ];
 
     for (const associationCase of cases) {
-      const errors = [];
       for (const target of [
-        { taskId: randomUUID(), nodeId: randomUUID() },
-        { taskId: hidden.taskId, nodeId: hiddenNodeId },
+        {
+          taskId: randomUUID(),
+          nodeId: randomUUID(),
+          expectedCode: "NOT_FOUND" as const,
+        },
+        {
+          taskId: hidden.taskId,
+          nodeId: hiddenNodeId,
+          expectedCode: "ASSOCIATION_INVALID" as const,
+        },
       ]) {
         const before = await segmentAssociationSideEffectSnapshot([
           updateBase.segment.id,
           reloadedRelink.id,
         ]);
-        errors.push(
-          await expectServiceError(
-            associationCase.invoke(target.taskId, target.nodeId),
-            "NOT_FOUND",
-          ),
+        await expectServiceError(
+          associationCase.invoke(target.taskId, target.nodeId),
+          target.expectedCode,
         );
         expect(
           await segmentAssociationSideEffectSnapshot([
@@ -1795,10 +1742,6 @@ test.describe("project management S2 plan and Task mutation services", () => {
           associationCase.name,
         ).toEqual(before);
       }
-      expect(errors[0]).toMatchObject({
-        code: errors[1]?.code,
-        message: errors[1]?.message,
-      });
     }
   });
 
@@ -1818,7 +1761,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
       owner,
       reviewer,
       title: "S2 Revision cancellation serialization",
-      extraMembers: [{ personId: member.person.id, role: "MEMBER" }],
+      extraMembers: [{ personId: member.person.id, role: "PARTICIPANT" }],
     });
     await activateTask(actor(owner), {
       taskId: fixture.taskId,
@@ -1868,7 +1811,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
           reason: "Revision 生效前取消",
         }),
       () =>
-        approveRevision(actor(reviewer), {
+        approveRevision(actor(admin), {
           revisionNodeId: revision.revisionNodeId,
           comment: "取消完成后批准 Revision",
         }),
@@ -1947,7 +1890,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
       idempotencyKey: `s2-review-${randomUUID()}`,
       evidences: [{ kind: "TEXT", note: "完成首个阶段" }],
     });
-    await reviewMilestone(actor(reviewer), {
+    await reviewMilestone(actor(admin), {
       reviewId: review.reviewId,
       result: "APPROVED",
       comment: "通过",
@@ -2039,7 +1982,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
       data: { plannedAt: new Date(iso(2026, 8, 1)) },
     });
     await expectServiceError(
-      approveRevision(actor(reviewer), {
+      approveRevision(actor(admin), {
         revisionNodeId: revision.revisionNodeId,
         comment: "apply 也必须重新校验",
       }),
@@ -2055,7 +1998,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
       where: { id: targetTermination.id },
       data: { plannedAt: validTerminationAt },
     });
-    const applied = await approveRevision(actor(reviewer), {
+    const applied = await approveRevision(actor(admin), {
       revisionNodeId: revision.revisionNodeId,
       comment: "合法生效",
     });
@@ -2102,8 +2045,8 @@ test.describe("project management S2 plan and Task mutation services", () => {
       taskId: legacy.taskId,
       expectedLockVersion: 0,
     });
-    await approveCurrentMilestone(legacy.taskId, owner, reviewer, "legacy-1");
-    await approveCurrentMilestone(legacy.taskId, owner, reviewer, "legacy-2");
+    await approveCurrentMilestone(legacy.taskId, owner, admin, "legacy-1");
+    await approveCurrentMilestone(legacy.taskId, owner, admin, "legacy-2");
     const legacyPlan = await currentPlan(legacy.taskId);
     const carriedMilestones = legacyPlan.nodes.filter(
       (entry) => entry.node.type === "MILESTONE" && entry.node.status === "COMPLETED",
@@ -2145,7 +2088,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
       }),
     ).toMatchObject({ status: "PENDING_APPROVAL" });
     expect(
-      await approveRevision(actor(reviewer), {
+      await approveRevision(actor(admin), {
         revisionNodeId: revision.revisionNodeId,
         comment: "应用 legacy 修复",
       }),
@@ -2253,8 +2196,6 @@ async function invokeMutationAction(
       team: "英雄",
       techGroup: "电控",
       priority: "HIGH",
-      revisionApprovalMode: "REVIEW_REQUIRED",
-      allowSelfReview: false,
       relatedTaskId: null,
       tagIds: [],
     });
@@ -2282,8 +2223,6 @@ async function invokeMutationAction(
       team: "英雄",
       techGroup: "电控",
       priority: "HIGH",
-      revisionApprovalMode: "REVIEW_REQUIRED",
-      allowSelfReview: false,
       relatedTaskId: null,
     });
   }
@@ -2304,8 +2243,7 @@ async function invokeMutationAction(
 function fixtureMembers(fixture: DraftFixture) {
   return [
     { personId: fixture.owner.person.id, role: "OWNER" as const },
-    { personId: fixture.owner.person.id, role: "MEMBER" as const },
-    { personId: fixture.reviewer.person.id, role: "REVIEWER" as const },
+    { personId: fixture.reviewer.person.id, role: "PARTICIPANT" as const },
   ];
 }
 
@@ -2403,7 +2341,6 @@ function taskDraftInput(input: {
   team?: "英雄" | "工程";
   techGroup?: "电控" | "机械";
   relatedTaskId?: string | null;
-  allowSelfReview?: boolean;
   sameDayMilestones?: boolean;
   extraMembers?: Array<{ personId: string; role: TaskMemberRole }>;
   tagIds?: string[];
@@ -2417,7 +2354,7 @@ function taskDraftInput(input: {
     tagIds: input.tagIds ?? [],
     members: [
       { personId: input.ownerPersonId, role: "OWNER" as const },
-      { personId: input.reviewerPersonId, role: "REVIEWER" as const },
+      { personId: input.reviewerPersonId, role: "PARTICIPANT" as const },
       ...(input.extraMembers ?? []),
     ],
     plannedStartAt: iso(2026, 8, 1),
@@ -2426,8 +2363,6 @@ function taskDraftInput(input: {
       milestoneInput("M2", input.sameDayMilestones ? 2 : 4),
     ],
     termination: terminationInput(8),
-    revisionApprovalMode: "REVIEW_REQUIRED" as const,
-    allowSelfReview: input.allowSelfReview ?? false,
     relatedTaskId: input.relatedTaskId ?? null,
     idempotencyKey: `s2-task-${randomUUID()}`,
   };
@@ -2489,12 +2424,19 @@ async function grantRole(
   role: ProjectManagementSystemRole,
   scope: { team: string; techGroup: string } = { team: "", techGroup: "" },
 ) {
+  const isGlobalAdministrator =
+    role === "SUPER_ADMINISTRATOR" || role === "PROJECT_ADMINISTRATOR";
   await prisma.systemRoleAssignment.create({
     data: {
       accountId,
       role,
-      team: scope.team,
-      techGroup: role === "GROUP_LEADER" && scope.team ? "" : scope.techGroup,
+      team: isGlobalAdministrator ? "" : scope.team,
+      techGroup: isGlobalAdministrator
+        ? ""
+        : role === "GROUP_LEADER" && scope.team
+          ? ""
+          : scope.techGroup,
+      revokedAt: isGlobalAdministrator ? null : new Date(),
     },
   });
 }
@@ -2621,8 +2563,6 @@ async function mutationSideEffectCounts(taskId: string) {
       team: task.team,
       techGroup: task.techGroup,
       priority: task.priority,
-      revisionApprovalMode: task.revisionApprovalMode,
-      allowSelfReview: task.allowSelfReview,
       relatedTaskId: task.relatedTaskId,
       status: task.status,
     },

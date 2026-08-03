@@ -21,7 +21,6 @@ const segmentTaskSelect = {
   techGroup: true,
   status: true,
   priority: true,
-  allowSelfReview: true,
   members: {
     where: { removedAt: null },
     select: { personId: true, role: true, removedAt: true },
@@ -172,27 +171,24 @@ export async function listTimelinePeople({
 }: {
   actor: ProjectManagementActor;
 }): Promise<Array<{ id: string; displayName: string }>> {
-  const [actorPerson, segmentPeople] = await Promise.all([
-    prisma.person.findUnique({
-      where: { id: actor.personId },
-      select: { id: true, displayName: true },
-    }),
-    prisma.workSegment.findMany({
-      where: segmentReadableWhere(actor),
-      distinct: ["personId"],
-      select: {
-        person: { select: { id: true, displayName: true } },
-      },
-      orderBy: { personId: "asc" },
-      take: 200,
-    }),
-  ]);
-  const byId = new Map<string, { id: string; displayName: string }>();
-  if (actorPerson) byId.set(actorPerson.id, actorPerson);
-  for (const row of segmentPeople) {
-    byId.set(row.person.id, row.person);
-  }
-  return [...byId.values()].sort((left, right) =>
+  const people = await prisma.person.findMany({
+    where: {
+      OR: [
+        { status: "ACTIVE" },
+        { workSegments: { some: segmentReadableWhere(actor) } },
+      ],
+    },
+    select: { id: true, displayName: true, status: true },
+    orderBy: [{ displayName: "asc" }, { id: "asc" }],
+    take: 5_000,
+  });
+  return people.map((person) => ({
+    id: person.id,
+    displayName:
+      person.status === "INACTIVE"
+        ? `${person.displayName}（已停用）`
+        : person.displayName,
+  })).sort((left, right) =>
     left.displayName.localeCompare(right.displayName, "zh-CN"),
   );
 }
@@ -304,7 +300,6 @@ function taskResource(
     techGroup: task.techGroup,
     status: task.status,
     priority: task.priority,
-    allowSelfReview: task.allowSelfReview,
     members: task.members,
   };
 }

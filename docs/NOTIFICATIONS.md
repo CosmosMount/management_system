@@ -42,33 +42,50 @@ Task 生命周期服务和 Segment 服务会在同一业务事务中写站内通
 
 | 场景 | outbox type | 用途 | 收件人 |
 |------|-------------|------|--------|
-| Task 草稿成员加入 | `task_assigned` | 普通通知 | active TaskMember |
-| Task 激活 | `task_activated` | 普通通知 | active TaskMember |
-| Milestone 提交验收 | `milestone_review_submitted` | 审批请求 | active REVIEWER + 匹配范围组长 |
-| Milestone 验收结果 | `milestone_review_result` | 普通通知 | 提交人 + OWNER |
-| Revision 待审批 | `revision_pending_review` | 审批请求 | active REVIEWER + 匹配范围组长 |
-| Revision 驳回 | `revision_result` | 普通通知 | 创建人 + OWNER |
-| Revision 生效 | `revision_applied` | 普通通知 | active TaskMember |
+| Task 草稿成员加入 | `task_assigned` | 普通通知 | 有效 OWNER/PARTICIPANT |
+| Task 激活 | `task_activated` | 普通通知 | 有效 OWNER/PARTICIPANT |
+| Milestone 提交验收 | `milestone_review_submitted` | 审批请求 | 所有活跃全局管理员，按账号去重 |
+| Milestone 验收结果 | `milestone_review_result` | 普通通知 | 提交人 + 所有 OWNER |
+| Revision 待审批 | `revision_pending_review` | 审批请求 | 所有活跃全局管理员，按账号去重 |
+| Revision 驳回 | `revision_result` | 普通通知 | 创建人 + 所有 OWNER |
+| Revision 生效 | `revision_applied` | 普通通知 | 创建人 + 所有 OWNER |
 | Planned Segment 到期待确认 | `segment_confirmation_due` | 普通通知 | Segment Person |
 | Planned Segment 关联失效 | `segment_association_invalidated` | 普通通知 | Segment Person |
-| Task 结束确认 | `task_terminated` | 普通通知 | active TaskMember |
+| Task 结束确认 | `task_terminated` | 普通通知 | 有效 OWNER/PARTICIPANT |
 | 账号角色或项目访问变更 | `account_security` | 强制普通通知 | 仅被操作账号 |
 
 既有 Draft `task_assigned` 入队保持 `mandatory=true`。这里的“普通通知”指 `purpose=notification`、`botKind=notification`，不表示 `mandatory=false`；该事件只使用通知机器人，不得路由到 approval bot。S2 的 Active `replaceTaskMembers` 新增/移除/角色变化沿用同一强制成员变化语义：站内 + `mandatory=true` 的 `project-management` outbox，purpose/botKind 仍为 `notification`。
 
 账号安全变更由 `lib/account-management.ts` 在角色或项目访问事务中写入。事件只通知被操作人，站内分类固定为 `ACCOUNT_SECURITY`，outbox 固定 `mandatory=true`、`purpose=notification` 和通知机器人。摘要包含操作人、授予/撤销或项目启停、角色与组织范围、状态变化和时间。项目访问已禁用不会过滤该账号的飞书 identity，因此禁用结果仍可投递；站内记录保留供重新启用后查看。事件键以 `account-security:<action>:<稳定实体或变更 ID>` 开头，站内和飞书后缀分别保证幂等。报销角色通知也通过 `accountId` 解析当前 Identity；历史 `UserRole.openId` 不作为投递目标。
 
-Active 成员强制事件不得因受影响 Person 已停用、Account 已禁用、缺少飞书 identity 或尚无 Account 而消失。只有 Active Account 才写按 Account 的站内记录；Person 已停用但 Account 仍 Active 的 legacy removal 仍保留站内记录。飞书候选只允许 `provider=FEISHU`、`tenantId=default` 且 trim 后非空的 `openId`，不会回退其他 tenant，也不会因最早一条 identity 为空而漏掉同一默认 tenant 的后续合法 identity。无法安全解析飞书目标时仍写 `mandatory=true` durable outbox，并在 payload `context.recipientResolution` 记录 `PERSON_INACTIVE`、`ACCOUNT_DISABLED`、`DEFAULT_FEISHU_IDENTITY_MISSING`、`FEISHU_OPEN_ID_MISSING` 或 `ACCOUNT_MISSING`；outbox 保留空候选而不猜测、替代或直发任何真实收件人。成员业务审计、站内记录和 outbox 与成员差异处于同一事务，任一晚失败全部回滚。
+Active 成员强制事件不得因受影响 Person 已停用、Account 已禁用、缺少飞书 identity 或尚无 Account 而消失。只有 Active Account 才写按 Account 的站内记录；Person 已停用但 Account 仍 Active 的 legacy removal 仍保留站内记录。飞书候选只允许 `provider=FEISHU`、`tenantId=default` 且 trim 后非空的 `openId`，不会回退其他 tenant，也不会因最早一条 identity 为空而漏掉同一默认 tenant 的后续合法 identity。无法安全解析飞书目标时仍写 `mandatory=true` durable outbox，并在 payload `context.recipientResolution` 记录 `PERSON_INACTIVE`、`ACCOUNT_DISABLED`、`DEFAULT_FEISHU_IDENTITY_MISSING`、`FEISHU_OPEN_ID_MISSING` 或 `ACCOUNT_MISSING`；outbox 保留空候选而不猜测、替代或直发任何真实收件人。成员业务审计、站内记录和 outbox 与成员差异处于同一事务，任一晚失败全部回滚。新建和激活 Task 的常规成员收件人只读取有效 OWNER/PARTICIPANT；历史 LEAD/MEMBER/REVIEWER/VIEWER 不再取得成员通知。
 
 Revision 生效事务先把目标 `TaskPlanVersion` 切换为 `CURRENT` 并更新 `Task.currentPlanVersionId`，随后才以更新后的 Task 上下文写 `revision_applied` 和 `segment_association_invalidated`。这两个 payload（包括对应站内通知）中的 `context.currentPlanVersionId` 均指向切换后的 Current Plan Version，不得保留 base/旧 Current Plan；Segment 关联失效通知仍只发给受影响 Segment Person，普通通知机器人用途不变。
 
-入队 helper 和 adapter 会拒绝 `type/payload.kind` 不一致、payload 结构错误、错误机器人类型和越界审批用途，并对 `recipientOpenIds` 去重。项目管理飞书卡片包含操作人、Task、事件摘要、对象类型、事件时间和最多 6 项上下文；按钮跳转到 payload 的 `linkPath`，没有链接时回到 `/progress`。`approval_request` 使用审批机器人用途；所有普通项目管理事件使用通知机器人，不能把审批机器人作为普通通知 fallback。
+入队 helper 和 adapter 会拒绝 `type/payload.kind` 不一致、payload 结构错误、错误机器人类型和越界审批用途，并对 `recipientOpenIds` 去重。项目管理飞书卡片包含操作人、Task、事件摘要、对象类型、事件时间和最多 6 项上下文；按钮跳转到 payload 的 `linkPath`，没有链接时回到 `/progress`。`approval_request` 使用审批机器人用途；所有普通项目管理事件使用通知机器人，不能把审批机器人作为普通通知 fallback。Milestone/Revision 提交审批前会在全局审批人事务锁内重新查询收件人；没有项目访问启用的全局管理员，或所有管理员都缺少 default tenant 非空飞书 openId 时，审批状态、审计、站内通知和 outbox 全部回滚，不生成无人可处理或确定无法投递的 pending。
 
 资源冲突下线 migration 会删除 `RESOURCE_CONFLICT` 偏好与站内通知，以及 `resource_conflict_opened`、`resource_conflict_resolved` outbox；收件人投递行随 outbox 级联删除。已经送达飞书的历史消息无法撤回。
 
 Segment 事件键保持稳定幂等：`pm:segment:confirmation_due:<segmentId>:<endAt>` 和 `pm:segment:association_invalidated:<revisionNodeId>`。站内通知在业务事件键后追加 `:inapp:<accountId>`，飞书 outbox 追加 `:feishu`；重复提交依赖唯一事件键保持 exactly once，逐收件人失败只重试失败者。`scanSegmentTransitions` 会把到期 Planned 推到 `PENDING_CONFIRMATION`、把进行中的 Planned 置为 `IN_PROGRESS`，但不会自动生成 Actual。
 
-统一账号历史迁移只追加 `source=MIGRATION` 的 `DomainAuditEvent`，不创建站内通知或 outbox，不会在上线时批量触达真实用户。
+统一账号和 Task 成员/角色数据库迁移只追加 `source=MIGRATION` 的 `DomainAuditEvent`，不创建站内通知或 outbox，不会在上线时批量触达真实用户。
+
+### 旧待审批通知修复
+
+数据库迁移不会删除已发送给旧 Task Reviewer 或项目 `GROUP_LEADER` 的历史站内/飞书记录，这些记录继续作为审计证据，但旧收件人不再拥有审批能力。部署后必须在通知 worker 保持禁发时运行幂等修复：
+
+```bash
+# 默认 dry-run，只报告待处理数量、管理员收件人和旧 outbox
+npm run pm:repair-task-approval-notifications
+
+# 写入修复；仍只写站内通知/outbox，不直接发送飞书
+NOTIFICATION_DELIVERY_DISABLED=true \
+npm run pm:repair-task-approval-notifications -- --apply
+```
+
+修复脚本只选择 `projectAccessStatus=ACTIVE` 且持有有效全局 `SUPER_ADMINISTRATOR` 或 `PROJECT_ADMINISTRATOR` 的账号，并按账号去重。没有可用全局管理员，或全部管理员都缺少 default tenant 非空飞书 openId 时，APPLY 会在冻结任何旧 outbox 前阻断。对每个仍为 `PENDING` 的 Milestone Review 或 `PENDING_APPROVAL` Revision，脚本在单独事务中冻结对应旧 `:feishu` outbox，以 `global-admin:v2` 版本化事件键创建管理员站内通知和 approval outbox，并写稳定 ID 的 `source=MIGRATION` 审计；任一对象失败只回滚该对象。全部待审批对象成功后，其他可重试的旧审批 outbox 也会被标记为冻结并写入明确原因。重复运行依赖事件键和审计 ID 保持幂等。
+
+该脚本不会调用飞书传输层，也不会绕过 `NOTIFICATION_DELIVERY_DISABLED`、收件人 allowlist、outbox claim 或逐收件人重试。修复完成并核对无真实外发后，才可恢复正常 worker。
 
 项目管理通知偏好按 Task、Milestone、Review、Revision 和 Work Segment 分类。站内通知是审计/待办兜底，始终写入且 UI 不提供关闭；`NotificationPreference(channel=FEISHU, enabled=false)` 只过滤普通飞书候选。`mandatory=true` 的关键状态与安全事件忽略普通关闭偏好，但仍经过 durable outbox、禁发开关、allowlist 和逐收件人重试，不能直发。
 

@@ -306,7 +306,7 @@ test.describe("project management P1 schema, identity and authorization", () => 
     }
   });
 
-  test("authorization and readableWhere deny non-members and do not inherit permissions from Tag", async () => {
+  test("authorization exposes tasks globally while keeping member and administrator write boundaries", async () => {
     const owner = await createAccountPerson("Owner");
     const viewer = await createAccountPerson("Viewer");
     const outsider = await createAccountPerson("Outsider");
@@ -330,7 +330,7 @@ test.describe("project management P1 schema, identity and authorization", () => 
       data: {
         taskId: task.taskId,
         personId: viewer.person.id,
-        role: "VIEWER",
+        role: "PARTICIPANT",
         createdByAccountId: owner.account.id,
       },
     });
@@ -343,23 +343,6 @@ test.describe("project management P1 schema, identity and authorization", () => 
     await prisma.taskTag.create({
       data: { taskId: task.taskId, tagId: tag.id },
     });
-    await prisma.systemRoleAssignment.create({
-      data: {
-        accountId: teamAdmin.account.id,
-        role: "GROUP_LEADER",
-        team: "英雄",
-        techGroup: "",
-      },
-    });
-    await prisma.systemRoleAssignment.create({
-      data: {
-        accountId: otherTeamAdmin.account.id,
-        role: "GROUP_LEADER",
-        team: "步兵",
-        techGroup: "",
-      },
-    });
-
     const ownerActor = actor(owner.account.id, owner.person.id, []);
     const viewerActor = actor(viewer.account.id, viewer.person.id, []);
     const outsiderActor = actor(outsider.account.id, outsider.person.id, []);
@@ -367,7 +350,7 @@ test.describe("project management P1 schema, identity and authorization", () => 
       { role: "GROUP_LEADER", team: "英雄", techGroup: "" },
     ]);
     const globalTeamAdminActor = actor(teamAdmin.account.id, teamAdmin.person.id, [
-      { role: "GROUP_LEADER", team: "", techGroup: "" },
+      { role: "PROJECT_ADMINISTRATOR", team: "", techGroup: "" },
     ]);
     const globalAuditorActor = actor(teamAdmin.account.id, teamAdmin.person.id, [
       { role: "AUDITOR", team: "", techGroup: "" },
@@ -381,11 +364,9 @@ test.describe("project management P1 schema, identity and authorization", () => 
       type: "task" as const,
       team: "英雄",
       techGroup: "电控",
-      allowSelfReview: false,
-      submittedByAccountId: owner.account.id,
       members: [
         { personId: owner.person.id, role: "OWNER" as const },
-        { personId: viewer.person.id, role: "VIEWER" as const },
+        { personId: viewer.person.id, role: "PARTICIPANT" as const },
       ],
     };
 
@@ -394,25 +375,31 @@ test.describe("project management P1 schema, identity and authorization", () => 
     });
     expect(
       authorize({ actor: viewerActor, action: "task.update_metadata", resource }),
-    ).toMatchObject({ allowed: false });
+    ).toMatchObject({ allowed: true });
     expect(
       authorize({ actor: outsiderActor, action: "task.view", resource }),
-    ).toMatchObject({ allowed: false });
+    ).toMatchObject({ allowed: true });
     expect(
       authorize({ actor: teamAdminActor, action: "task.view", resource }),
     ).toMatchObject({ allowed: true });
     expect(
       authorize({ actor: globalTeamAdminActor, action: "task.view", resource }),
-    ).toMatchObject({ allowed: false });
+    ).toMatchObject({ allowed: true });
     expect(
       authorize({ actor: globalAuditorActor, action: "task.view", resource }),
-    ).toMatchObject({ allowed: false });
+    ).toMatchObject({ allowed: true });
     expect(
       authorize({ actor: otherTeamAdminActor, action: "task.view", resource }),
-    ).toMatchObject({ allowed: false });
+    ).toMatchObject({ allowed: true });
     expect(
       authorize({ actor: ownerActor, action: "milestone.review", resource }),
-    ).toMatchObject({ allowed: false, reason: "self_review_denied" });
+    ).toMatchObject({ allowed: false, reason: "global_administrator_required" });
+    expect(
+      authorize({ actor: teamAdminActor, action: "task.update_metadata", resource }),
+    ).toMatchObject({ allowed: false });
+    expect(
+      authorize({ actor: globalTeamAdminActor, action: "milestone.review", resource }),
+    ).toMatchObject({ allowed: true });
     expect(
       authorize({
         actor: outsiderActor,
@@ -430,7 +417,7 @@ test.describe("project management P1 schema, identity and authorization", () => 
       where: taskReadableWhere(outsiderActor),
       select: { id: true },
     });
-    expect(outsiderVisible.map((item) => item.id)).not.toContain(task.taskId);
+    expect(outsiderVisible.map((item) => item.id)).toContain(task.taskId);
     const adminVisible = await prisma.task.findMany({
       where: taskReadableWhere(teamAdminActor),
       select: { id: true },
@@ -440,9 +427,7 @@ test.describe("project management P1 schema, identity and authorization", () => 
       where: taskReadableWhere(globalTeamAdminActor),
       select: { id: true },
     });
-    expect(globalTeamAdminVisible.map((item) => item.id)).not.toContain(
-      task.taskId,
-    );
+    expect(globalTeamAdminVisible.map((item) => item.id)).toContain(task.taskId);
     await expect(
       prisma.systemRoleAssignment.create({
         data: {

@@ -2,7 +2,6 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   Prisma,
   type MilestoneReviewResult,
-  type RevisionApprovalMode,
   type RevisionStatus,
   type TaskNodeType,
   type TaskStatus,
@@ -14,16 +13,16 @@ import { prisma } from "@/lib/prisma";
 import {
   assertAuthorized,
   authorize,
-  isSystemAdministrator,
-  ProjectManagementAuthorizationError,
   taskReadableWhere,
   type AuthorizationTaskResource,
 } from "@/lib/project-management/authorization";
+import {
+  ACTIVE_GLOBAL_APPROVAL_ADMINISTRATOR_REQUIRED,
+  activeGlobalApprovalAdministratorAccountIdsTx,
+  lockGlobalApprovalAdministratorSetTx,
+} from "@/lib/project-management/approval-administrators";
 import { createDomainAuditEventTx } from "@/lib/project-management/audit";
-import type {
-  ProjectManagementActor,
-  ProjectManagementSystemRoleRecord,
-} from "@/lib/project-management/identity";
+import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import { assertProjectAccessActiveTx } from "@/lib/project-management/identity";
 import type { ProjectManagementNotificationPayload } from "@/lib/project-management/notifications/events";
 import {
@@ -85,8 +84,6 @@ type TaskForAuthorization = {
   techGroup: string;
   status: TaskStatus;
   priority: string;
-  allowSelfReview: boolean;
-  revisionApprovalMode: RevisionApprovalMode;
   currentPlanVersionId: string;
   activeMilestoneNodeId: string | null;
   lockVersion: number;
@@ -157,8 +154,13 @@ export async function createTaskDraft(
   actor: ProjectManagementActor,
   input: unknown,
 ): Promise<CreateTaskDraftResult> {
+  assertCurrentTaskComposerPayloadVersion(input);
   const parsed = createTaskDraftInputSchema.parse(input);
-  const requestHash = hashRequest("task.create_draft", parsed);
+  const normalizedInput = {
+    ...parsed,
+    members: ensureCreatorOwner(parsed.members, actor.personId),
+  };
+  const requestHash = hashRequest("task.create_draft", normalizedInput);
 
   return prisma.$transaction(async (tx) => {
     const refreshedActor = await refreshActorTx(tx, actor);
@@ -211,8 +213,7 @@ export async function createTaskDraft(
       };
     }
 
-    assertAllowSelfReviewPolicy(refreshedActor, false, parsed.allowSelfReview);
-    await assertCreateTaskReferencesTx(tx, refreshedActor, parsed);
+    await assertCreateTaskReferencesTx(tx, refreshedActor, normalizedInput);
     await tx.$executeRaw`SET CONSTRAINTS ALL DEFERRED`;
 
     const taskId = randomUUID();
@@ -228,8 +229,6 @@ export async function createTaskDraft(
         priority: parsed.priority,
         status: "DRAFT",
         currentPlanVersionId: planVersionId,
-        revisionApprovalMode: parsed.revisionApprovalMode,
-        allowSelfReview: parsed.allowSelfReview,
         relatedTaskId: parsed.relatedTaskId,
         createdByAccountId: refreshedActor.accountId,
       },
@@ -264,7 +263,7 @@ export async function createTaskDraft(
       data: { snapshotHash: hashPlan(initialPlan) },
     });
     await tx.taskMember.createMany({
-      data: parsed.members.map((member) => ({
+      data: normalizedInput.members.map((member) => ({
         taskId,
         personId: member.personId,
         role: member.role,
@@ -290,9 +289,8 @@ export async function createTaskDraft(
         currentPlanVersionId: planVersionId,
         plannedStartAt: parsed.plannedStartAt,
         relatedTaskId: parsed.relatedTaskId,
-        allowSelfReview: parsed.allowSelfReview,
         milestoneCount: parsed.milestones.length,
-        memberCount: parsed.members.length,
+        memberCount: normalizedInput.members.length,
         tagCount: parsed.tagIds.length,
       }),
       reason: "创建 Task 草稿",
@@ -323,6 +321,18 @@ export async function createTaskDraft(
   });
 }
 
+function assertCurrentTaskComposerPayloadVersion(input: unknown) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return;
+  if (
+    Object.prototype.hasOwnProperty.call(input, "revisionApprovalMode") ||
+    Object.prototype.hasOwnProperty.call(input, "allowSelfReview")
+  ) {
+    throw validationError(
+      "页面版本已过期，请刷新页面后重试；本地草稿会继续保留",
+    );
+  }
+}
+
 export async function activateTask(
   actor: ProjectManagementActor,
   input: unknown,
@@ -349,11 +359,9 @@ export async function activateTask(
 
     const currentPlan = await loadCurrentPlanEntriesTx(tx, task);
     assertAuthoritativePlanValid(currentPlan);
-    if (
-      task.members.filter((member) => member.role === "OWNER").length !== 1
-    ) {
-      throw validationError("必须且只能有一名 OWNER", {
-        members: ["必须且只能有一名 OWNER"],
+    if (task.members.every((member) => member.role !== "OWNER")) {
+      throw validationError("至少需要一名负责人", {
+        members: ["至少需要一名负责人"],
       });
     }
     const firstMilestone = currentPlan.nodes.find(
@@ -634,13 +642,7 @@ export async function updateRevisionDraft(
   return prisma.$transaction(async (tx) => {
     const { refreshedActor, task, revision, targetPlanVersionId } =
       await loadRevisionForMutationTx(tx, actor, parsed.revisionNodeId);
-    if (revision.node.createdByAccountId !== refreshedActor.accountId) {
-      assertAuthorized({
-        actor: refreshedActor,
-        action: "revision.apply",
-        resource: taskResource(task),
-      });
-    }
+    assertCanManageRevision(refreshedActor, task, revision);
     assertTaskActiveForPlanChange(task);
     if (!["DRAFT", "REJECTED"].includes(revision.status)) {
       throw stateConflictError("只有草稿或已驳回的 Revision 可以编辑");
@@ -782,11 +784,7 @@ export async function submitRevision(
   return prisma.$transaction(async (tx) => {
     const { refreshedActor, task, revision, targetPlanVersionId } =
       await loadRevisionForMutationTx(tx, actor, parsed.revisionNodeId);
-    assertAuthorized({
-      actor: refreshedActor,
-      action: "revision.create",
-      resource: taskResource(task),
-    });
+    assertCanManageRevision(refreshedActor, task, revision);
     if (revision.status !== "DRAFT" && revision.status !== "REJECTED") {
       throw stateConflictError("只有草稿或已驳回的 Revision 可以提交");
     }
@@ -797,24 +795,6 @@ export async function submitRevision(
       throw stateConflictError("Revision 目标计划已失效，请刷新后重试");
     }
     await assertRevisionTargetValidTx(tx, task, revision, targetPlanVersionId);
-
-    if (task.revisionApprovalMode === "DIRECT_BY_OWNER") {
-      const canApply = authorize({
-        actor: refreshedActor,
-        action: "revision.apply",
-        resource: taskResource(task),
-      });
-      if (canApply.allowed) {
-        return applyRevisionTx(tx, {
-          actor: refreshedActor,
-          task,
-          revisionNodeId: parsed.revisionNodeId,
-          reviewComment: parsed.comment,
-          directApply: true,
-          allowedRevisionStatuses: ["DRAFT", "REJECTED"],
-        });
-      }
-    }
 
     const submitted = await tx.revisionNode.updateMany({
       where: {
@@ -841,7 +821,7 @@ export async function submitRevision(
       after: jsonValue({ status: "PENDING_APPROVAL", targetPlanVersionId }),
       reason: revision.reason,
     });
-    await notifyReviewersTx(tx, {
+    await notifyGlobalAdministratorsTx(tx, {
       actor: refreshedActor,
       task,
       kind: "revision_pending_review",
@@ -877,7 +857,7 @@ export async function approveRevision(
     assertAuthorized({
       actor: refreshedActor,
       action: "revision.review",
-      resource: taskResource(task, revision.node.createdByAccountId),
+      resource: taskResource(task),
     });
     if (revision.status !== "PENDING_APPROVAL") {
       if (revision.status === "EFFECTIVE") {
@@ -897,7 +877,6 @@ export async function approveRevision(
       task,
       revisionNodeId: parsed.revisionNodeId,
       reviewComment: parsed.comment,
-      directApply: false,
       allowedRevisionStatuses: ["PENDING_APPROVAL"],
     });
   });
@@ -915,7 +894,7 @@ export async function rejectRevision(
     assertAuthorized({
       actor: refreshedActor,
       action: "revision.review",
-      resource: taskResource(task, revision.node.createdByAccountId),
+      resource: taskResource(task),
     });
     if (revision.status !== "PENDING_APPROVAL") {
       if (revision.status === "REJECTED") {
@@ -983,15 +962,7 @@ export async function cancelRevision(
   return prisma.$transaction(async (tx) => {
     const { refreshedActor, task, revision } =
       await loadRevisionForMutationTx(tx, actor, parsed.revisionNodeId);
-    const canCancelAsCreator =
-      revision.node.createdByAccountId === refreshedActor.accountId;
-    if (!canCancelAsCreator) {
-      assertAuthorized({
-        actor: refreshedActor,
-        action: "revision.apply",
-        resource: taskResource(task),
-      });
-    }
+    assertCanManageRevision(refreshedActor, task, revision);
     if (
       revision.status !== "DRAFT" &&
       revision.status !== "PENDING_APPROVAL" &&
@@ -1181,7 +1152,7 @@ export async function submitMilestoneForReview(
       }),
       reason: "提交 Milestone 验收",
     });
-    await notifyReviewersTx(tx, {
+    await notifyGlobalAdministratorsTx(tx, {
       actor: refreshedActor,
       task,
       kind: "milestone_review_submitted",
@@ -1223,7 +1194,7 @@ export async function reviewMilestone(
     assertAuthorized({
       actor: refreshedActor,
       action: "milestone.review",
-      resource: taskResource(task, review.submittedByAccountId),
+      resource: taskResource(task),
     });
     const newerReview = await tx.milestoneReview.findFirst({
       where: {
@@ -1514,14 +1485,12 @@ async function applyRevisionTx(
     task,
     revisionNodeId,
     reviewComment,
-    directApply,
     allowedRevisionStatuses,
   }: {
     actor: ProjectManagementActor;
     task: TaskForAuthorization;
     revisionNodeId: string;
     reviewComment: string;
-    directApply: boolean;
     allowedRevisionStatuses: RevisionStatus[];
   },
 ): Promise<RevisionMutationResult> {
@@ -1583,7 +1552,7 @@ async function applyRevisionTx(
     data: {
       status: "EFFECTIVE",
       reviewedAt: now,
-      reviewedByAccountId: directApply ? null : actor.accountId,
+      reviewedByAccountId: actor.accountId,
       effectiveAt: now,
       reviewComment,
     },
@@ -1718,7 +1687,7 @@ async function applyRevisionTx(
   await createDomainAuditEventTx(tx, {
     actorAccountId: actor.accountId,
     actorPersonId: actor.personId,
-    action: directApply ? "pm.revision.apply_direct" : "pm.revision.apply",
+    action: "pm.revision.apply",
     entityType: "RevisionNode",
     entityId: revisionNodeId,
     taskId: task.id,
@@ -1735,7 +1704,7 @@ async function applyRevisionTx(
     }),
     reason: reviewComment || revision.reason,
   });
-  await notifyTaskMembersTx(tx, {
+  await createProjectManagementNotificationsTx(tx, {
     actor,
     task: taskAfterPlanSwitch,
     kind: "revision_applied",
@@ -1746,6 +1715,11 @@ async function applyRevisionTx(
     entityType: "RevisionNode",
     entityId: revisionNodeId,
     mandatory: true,
+    recipients: await revisionCreatorAndOwnersTx(
+      tx,
+      taskAfterPlanSwitch,
+      revision,
+    ),
   });
 
   return {
@@ -1885,8 +1859,6 @@ async function loadTaskForAuthorizationTx(
       techGroup: true,
       status: true,
       priority: true,
-      allowSelfReview: true,
-      revisionApprovalMode: true,
       currentPlanVersionId: true,
       activeMilestoneNodeId: true,
       lockVersion: true,
@@ -1902,10 +1874,7 @@ async function loadTaskForAuthorizationTx(
   return task;
 }
 
-function taskResource(
-  task: TaskForAuthorization,
-  submittedByAccountId?: string | null,
-): AuthorizationTaskResource {
+function taskResource(task: TaskForAuthorization): AuthorizationTaskResource {
   return {
     type: "task",
     id: task.id,
@@ -1913,8 +1882,6 @@ function taskResource(
     techGroup: task.techGroup,
     status: task.status,
     priority: task.priority as AuthorizationTaskResource["priority"],
-    allowSelfReview: task.allowSelfReview,
-    submittedByAccountId,
     members: task.members,
   };
 }
@@ -2113,21 +2080,36 @@ function assertTaskActiveForPlanChange(task: TaskForAuthorization) {
   }
 }
 
-function assertAllowSelfReviewPolicy(
+function assertCanManageRevision(
   actor: ProjectManagementActor,
-  currentValue: boolean,
-  requestedValue: boolean,
+  task: TaskForAuthorization,
+  revision: { node: { createdByAccountId: string } },
 ) {
-  if (
-    !currentValue &&
-    requestedValue &&
-    !isSystemAdministrator(actor)
-  ) {
-    throw new ProjectManagementAuthorizationError(
-      "task.update_metadata",
-      "self_review_policy_admin_required",
-    );
-  }
+  assertAuthorized({
+    actor,
+    action: "revision.create",
+    resource: taskResource(task),
+  });
+  if (revision.node.createdByAccountId === actor.accountId) return;
+  assertAuthorized({
+    actor,
+    action: "task.manage_members",
+    resource: taskResource(task),
+  });
+}
+
+function ensureCreatorOwner(
+  members: CreateTaskDraftInput["members"],
+  creatorPersonId: string,
+): CreateTaskDraftInput["members"] {
+  const normalized = new Map(
+    members.map((member) => [member.personId, member] as const),
+  );
+  normalized.set(creatorPersonId, {
+    personId: creatorPersonId,
+    role: "OWNER",
+  });
+  return [...normalized.values()];
 }
 
 function assertRevisionBaseline(
@@ -2419,7 +2401,7 @@ async function notifyTaskMembersTx(
   await createProjectManagementNotificationsTx(tx, { ...input, recipients });
 }
 
-async function notifyReviewersTx(
+async function notifyGlobalAdministratorsTx(
   tx: PrismaTx,
   input: {
     actor: ProjectManagementActor;
@@ -2434,7 +2416,7 @@ async function notifyReviewersTx(
     mandatory: boolean;
   },
 ) {
-  const recipients = await reviewerRecipientsTx(tx, input.task);
+  const recipients = await globalAdministratorRecipientsTx(tx);
   await createProjectManagementNotificationsTx(tx, { ...input, recipients });
 }
 
@@ -2570,7 +2552,11 @@ async function taskMemberRecipientsTx(
   taskId: string,
 ): Promise<NotificationRecipient[]> {
   const members = await tx.taskMember.findMany({
-    where: { taskId, removedAt: null },
+    where: {
+      taskId,
+      removedAt: null,
+      role: { in: ["OWNER", "PARTICIPANT"] },
+    },
     select: {
       person: {
         select: {
@@ -2603,67 +2589,42 @@ async function taskMemberRecipientsTx(
     }));
 }
 
-async function reviewerRecipientsTx(
+async function globalAdministratorRecipientsTx(
   tx: PrismaTx,
-  task: TaskForAuthorization,
 ): Promise<NotificationRecipient[]> {
-  const reviewerMembers = await tx.taskMember.findMany({
-    where: { taskId: task.id, role: "REVIEWER", removedAt: null },
-    select: {
-      person: {
-        select: {
-          account: {
-            select: {
-              id: true,
-              projectAccessStatus: true,
-              identities: {
-                where: {
-                  provider: FEISHU_PROVIDER,
-                  tenantId: DEFAULT_TENANT_ID,
-                },
-                select: { id: true, openId: true },
-                orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-              },
-            },
-          },
-        },
-      },
-    },
-  });
-  const scopedAdmins = await tx.systemRoleAssignment.findMany({
+  await lockGlobalApprovalAdministratorSetTx(tx);
+  const accountIds = await activeGlobalApprovalAdministratorAccountIdsTx(tx);
+  if (accountIds.length === 0) {
+    throw stateConflictError(ACTIVE_GLOBAL_APPROVAL_ADMINISTRATOR_REQUIRED);
+  }
+  const globalAdministrators = await tx.account.findMany({
     where: {
-      OR: [
-        scopedRoleWhere("GROUP_LEADER", task),
-      ],
+      id: { in: accountIds },
+      projectAccessStatus: "ACTIVE",
     },
     select: {
-      account: {
-        select: {
-          id: true,
-          projectAccessStatus: true,
-          identities: {
-            where: {
-              provider: FEISHU_PROVIDER,
-              tenantId: DEFAULT_TENANT_ID,
-            },
-            select: { id: true, openId: true },
-            orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-          },
+      id: true,
+      identities: {
+        where: {
+          provider: FEISHU_PROVIDER,
+          tenantId: DEFAULT_TENANT_ID,
         },
+        select: { id: true, openId: true },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       },
     },
+    orderBy: { id: "asc" },
   });
-  return [
-    ...reviewerMembers.map((member) => member.person.account),
-    ...scopedAdmins.map((entry) => entry.account),
-  ]
-    .filter((account): account is NonNullable<typeof account> =>
-      Boolean(account && account.projectAccessStatus === "ACTIVE"),
-    )
-    .map((account) => ({
+  const recipients = globalAdministrators.map((account) => ({
       accountId: account.id,
       openId: firstNonEmptyOpenId(account.identities),
-    }));
+  }));
+  if (!recipients.some((recipient) => recipient.openId)) {
+    throw stateConflictError(
+      "当前没有具备有效飞书身份的活跃全局管理员，无法提交审批",
+    );
+  }
+  return recipients;
 }
 
 async function revisionCreatorAndOwnersTx(
@@ -2737,21 +2698,6 @@ function firstNonEmptyOpenId(
   return identities
     .map((identity) => identity.openId?.trim() ?? "")
     .find(Boolean) ?? null;
-}
-
-function scopedRoleWhere(
-  role: ProjectManagementSystemRoleRecord["role"],
-  task: Pick<TaskForAuthorization, "team" | "techGroup">,
-): Prisma.SystemRoleAssignmentWhereInput {
-  return {
-    role,
-    revokedAt: null,
-    OR: [{ team: { not: "" } }, { techGroup: { not: "" } }],
-    AND: [
-      { OR: [{ team: "" }, { team: task.team }] },
-      { OR: [{ techGroup: "" }, { techGroup: task.techGroup }] },
-    ],
-  };
 }
 
 function hashRequest(operation: string, input: unknown): string {

@@ -1,5 +1,7 @@
 # 项目管理系统 v2.1 重构与前端 v1.0 执行总计划
 
+> 状态（2026-08-03）：Task 可见性、成员角色、项目 `GROUP_LEADER` 与审批策略已由 [Task 全员可见、双成员角色与全局管理员审批 ADR](../adr/2026-08-03-task-global-visibility-participants-admin-approval.md) 重新决策。本目录未逐篇改写的旧成员/权限/审批描述仅保留为历史计划，不代表当前实现。
+>
 > 状态（2026-08-01）：本文涉及资源冲突、冲突中心、投入比例、冲突通知或冲突扫描的设计已由“删除资源冲突与投入比例”决策取代，仅保留历史背景，不代表当前实现。
 
 ## 1. 文档定位
@@ -44,7 +46,7 @@ S1 完成只表示 P5-R01～R05 的服务端安全、并发、不变量与回归
 5. 本目录 00 至 14，作为领域、权限、测试和发布门禁。
 6. `management_plan/项目管理系统设计 v2.1.md` 仅作参考，其中 Project 已被 Task + Tag 覆盖。
 
-正式决策见 [项目管理前端 v1.0 执行基线 ADR](../adr/2026-07-30-project-management-frontend-v1-execution-baseline.md)。
+现行成员、权限和审批决策见 [Task 全员可见、双成员角色与全局管理员审批 ADR](../adr/2026-08-03-task-global-visibility-participants-admin-approval.md)；其他前端执行决策见 [项目管理前端 v1.0 执行基线 ADR](../adr/2026-07-30-project-management-frontend-v1-execution-baseline.md)。
 
 ## 2. 已确认的产品决策
 

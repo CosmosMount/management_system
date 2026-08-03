@@ -3,7 +3,6 @@ import { PageCommandBar } from "@/components/project-management/shell/page-comma
 import { TaskWorkbench } from "@/components/project-management/task-workbench";
 import { timeCanvasDataToModel } from "@/components/project-management/time-canvas/adapter";
 import { toProjectManagementServiceError } from "@/lib/project-management/application/errors";
-import { isSystemAdministrator } from "@/lib/project-management/authorization";
 import {
   listTagOptions,
   searchPeople,
@@ -99,7 +98,6 @@ export default async function ProgressTaskDetailPage({
           people={peoplePage.items}
           taskOptions={taskPage.items}
           tagOptions={tagPage.items}
-          isSystemAdministrator={isSystemAdministrator(actor)}
           initialTab={initialTab}
         />
       </div>

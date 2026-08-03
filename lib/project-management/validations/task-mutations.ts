@@ -2,7 +2,6 @@ import { TEAM_OPTIONS, TECH_GROUP_OPTIONS } from "@/lib/constants";
 import {
   absoluteDateTimeSchema,
   idSchema,
-  revisionApprovalModeValues,
   s2MilestoneDraftSchema,
   s2TerminationDraftSchema,
   taskMemberInputSchema,
@@ -44,10 +43,6 @@ const taskMetadataFields = {
   team: z.enum(TEAM_OPTIONS, { message: "请选择有效车组" }),
   techGroup: z.enum(TECH_GROUP_OPTIONS, { message: "请选择有效技术组" }),
   priority: z.enum(taskPriorityValues, { message: "优先级不正确" }),
-  revisionApprovalMode: z.enum(revisionApprovalModeValues, {
-    message: "修订审批策略不正确",
-  }),
-  allowSelfReview: z.boolean({ message: "自审设置不正确" }),
   relatedTaskId: z.union([idSchema, z.null()]),
 } as const;
 
@@ -78,23 +73,19 @@ const replaceTaskMembersBaseInputSchema = z
   })
   .strict()
   .superRefine((input, ctx) => {
-    const personRoles = input.members.map(
-      (member) => `${member.personId}:${member.role}`,
-    );
-    if (new Set(personRoles).size !== personRoles.length) {
+    const personIds = input.members.map((member) => member.personId);
+    if (new Set(personIds).size !== personIds.length) {
       ctx.addIssue({
         code: "custom",
         path: ["members"],
-        message: "同一成员不能重复添加相同角色",
+        message: "同一成员只能有一个角色",
       });
     }
-    if (
-      input.members.filter((member) => member.role === "OWNER").length !== 1
-    ) {
+    if (input.members.every((member) => member.role !== "OWNER")) {
       ctx.addIssue({
         code: "custom",
         path: ["members"],
-        message: "必须且只能有一名 OWNER",
+        message: "至少需要一名负责人",
       });
     }
   });

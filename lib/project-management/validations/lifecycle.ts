@@ -1,7 +1,6 @@
 import { TEAM_OPTIONS, TECH_GROUP_OPTIONS } from "@/lib/constants";
 import {
   milestoneReviewDecisionValues,
-  revisionApprovalModeValues,
   taskMemberRoleValues,
   taskPriorityValues,
   terminationOutcomeValues,
@@ -11,7 +10,6 @@ import { z } from "zod";
 
 export {
   milestoneReviewDecisionValues,
-  revisionApprovalModeValues,
   taskMemberRoleValues,
   taskPriorityValues,
   terminationOutcomeValues,
@@ -133,17 +131,10 @@ export const createTaskDraftInputSchema = z
       .max(200, "单个计划最多 200 个节点"),
     termination: s2TerminationDraftSchema,
     plannedStartAt: absoluteDateTimeSchema("请选择带时区的有效计划开始时间"),
-    revisionApprovalMode: z
-      .enum(revisionApprovalModeValues, { message: "修订审批策略不正确" })
-      .optional()
-      .default("REVIEW_REQUIRED"),
-    allowSelfReview: z
-      .boolean({ message: "自审设置不正确" })
-      .optional()
-      .default(false),
     relatedTaskId: z.union([idSchema, z.null()]).optional().default(null),
     idempotencyKey: requiredText("缺少请求幂等键", 120),
   })
+  .strict()
   .superRefine((input, ctx) => {
     ensureUniqueValues(
       input.tagIds,
@@ -152,18 +143,16 @@ export const createTaskDraftInputSchema = z
       ctx,
     );
     ensureUniqueValues(
-      input.members.map((member) => `${member.personId}:${member.role}`),
+      input.members.map((member) => member.personId),
       "members",
-      "同一成员不能重复添加相同角色",
+      "同一成员只能有一个角色",
       ctx,
     );
-    if (
-      input.members.filter((member) => member.role === "OWNER").length !== 1
-    ) {
+    if (input.members.every((member) => member.role !== "OWNER")) {
       ctx.addIssue({
         code: "custom",
         path: ["members"],
-        message: "必须且只能有一名 OWNER",
+        message: "至少需要一名负责人",
       });
     }
     validatePlanChronology(input, ctx);

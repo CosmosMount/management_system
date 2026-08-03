@@ -38,7 +38,6 @@ import { cn } from "@/lib/utils";
 const activeProjectRoles = new Set([
   "SUPER_ADMINISTRATOR",
   "PROJECT_ADMINISTRATOR",
-  "GROUP_LEADER",
 ]);
 
 const projectRoleLabels: Record<string, string> = {
@@ -222,7 +221,7 @@ function AccountFilters({ filters }: { filters: Filters }) {
         <option value="">全部状态</option><option value="ACTIVE">项目已启用</option><option value="DISABLED">项目已禁用</option>
       </select>
       <select name="role" defaultValue={filters.role} aria-label="角色类型" className="h-8 rounded-lg border border-input bg-background px-2 text-sm">
-        <option value="">全部角色</option><option value="SUPER_ADMINISTRATOR">超级管理员</option><option value="PROJECT_ADMINISTRATOR">项目管理员</option><option value="GROUP_LEADER">组长</option><option value="ORDINARY">普通成员</option><option value="TEAM_ADMIN">报销车组组长</option><option value="TECH_GROUP_ADMIN">报销技术组组长</option><option value="TEACHER">指导老师</option><option value="FINANCE">报销员</option>
+        <option value="">全部角色</option><option value="SUPER_ADMINISTRATOR">超级管理员</option><option value="PROJECT_ADMINISTRATOR">项目管理员</option><option value="ORDINARY">普通成员</option><option value="TEAM_ADMIN">报销车组组长</option><option value="TECH_GROUP_ADMIN">报销技术组组长</option><option value="TEACHER">指导老师</option><option value="FINANCE">报销员</option>
       </select>
       <select name="team" defaultValue={filters.team} aria-label="车组" className="h-8 rounded-lg border border-input bg-background px-2 text-sm"><option value="">全部车组</option>{TEAM_OPTIONS.map((item) => <option key={item}>{item}</option>)}</select>
       <select name="techGroup" defaultValue={filters.techGroup} aria-label="技术组" className="h-8 rounded-lg border border-input bg-background px-2 text-sm"><option value="">全部技术组</option>{TECH_GROUP_OPTIONS.map((item) => <option key={item}>{item}</option>)}</select>
@@ -330,19 +329,15 @@ function AccountDetail({
 }
 
 function ProjectRoleForm({ accountId, pending, run }: FormProps) {
-  const [role, setRole] = useState<"SUPER_ADMINISTRATOR" | "PROJECT_ADMINISTRATOR" | "GROUP_LEADER">("PROJECT_ADMINISTRATOR");
-  const [scopeType, setScopeType] = useState<"team" | "techGroup">("team");
-  const [scopeValue, setScopeValue] = useState<string>(TEAM_OPTIONS[0]);
+  const [role, setRole] = useState<"SUPER_ADMINISTRATOR" | "PROJECT_ADMINISTRATOR">("PROJECT_ADMINISTRATOR");
   return <div className="grid min-w-0 gap-2 sm:grid-cols-2">
-    <select aria-label="项目角色" value={role} onChange={(event) => setRole(event.target.value as typeof role)} className="h-8 rounded-lg border bg-background px-2 text-sm"><option value="SUPER_ADMINISTRATOR">超级管理员</option><option value="PROJECT_ADMINISTRATOR">项目管理员</option><option value="GROUP_LEADER">组长</option></select>
-    <select aria-label="组长范围类型" value={scopeType} disabled={role !== "GROUP_LEADER"} onChange={(event) => { const next = event.target.value as typeof scopeType; setScopeType(next); setScopeValue(next === "team" ? TEAM_OPTIONS[0] : TECH_GROUP_OPTIONS[0]); }} className="h-8 rounded-lg border bg-background px-2 text-sm disabled:opacity-50"><option value="team">车组</option><option value="techGroup">技术组</option></select>
-    <select aria-label="组长范围" value={scopeValue} disabled={role !== "GROUP_LEADER"} onChange={(event) => setScopeValue(event.target.value)} className="h-8 rounded-lg border bg-background px-2 text-sm disabled:opacity-50">{(scopeType === "team" ? TEAM_OPTIONS : TECH_GROUP_OPTIONS).map((item) => <option key={item}>{item}</option>)}</select>
+    <select aria-label="项目角色" value={role} onChange={(event) => setRole(event.target.value as typeof role)} className="h-8 rounded-lg border bg-background px-2 text-sm"><option value="SUPER_ADMINISTRATOR">超级管理员</option><option value="PROJECT_ADMINISTRATOR">项目管理员</option></select>
     <Button className="sm:col-span-2" disabled={pending} onClick={() => {
       if (
         role === "SUPER_ADMINISTRATOR" &&
         !window.confirm("确定授予超级管理员？\n\n该账号将获得报销系统、全部项目业务以及账号与权限后台的最高权限。")
       ) return;
-      run(() => grantProjectSystemRole({ targetAccountId: accountId, role, team: role === "GROUP_LEADER" && scopeType === "team" ? scopeValue : undefined, techGroup: role === "GROUP_LEADER" && scopeType === "techGroup" ? scopeValue : undefined }), "项目角色已授予");
+      run(() => grantProjectSystemRole({ targetAccountId: accountId, role }), "项目角色已授予");
     }}><ShieldCheck className="mr-1 h-4 w-4" />授予</Button>
   </div>;
 }

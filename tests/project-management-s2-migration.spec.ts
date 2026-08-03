@@ -1,6 +1,5 @@
 import { expect, test } from "@playwright/test";
 import {
-  RevisionApprovalMode,
   TaskMemberRole,
   TaskNodeStatus,
   TaskNodeType,
@@ -29,7 +28,6 @@ import {
   staleTaskError,
 } from "../lib/project-management/application/errors";
 import {
-  revisionApprovalModeValues,
   standaloneTimeCanvasScopeKindValues,
   taskMemberRoleValues,
   taskNodeStatusValues,
@@ -278,10 +276,10 @@ test("S2 contract values are a browser-safe leaf aligned with Prisma enums", asy
   expect(taskPriorityValues).toEqual(Object.values(TaskPriority));
   expect(taskNodeTypeValues).toEqual(Object.values(TaskNodeType));
   expect(taskNodeStatusValues).toEqual(Object.values(TaskNodeStatus));
-  expect(taskMemberRoleValues).toEqual(Object.values(TaskMemberRole));
-  expect(revisionApprovalModeValues).toEqual(
-    Object.values(RevisionApprovalMode),
-  );
+  expect(taskMemberRoleValues).toEqual([
+    TaskMemberRole.OWNER,
+    TaskMemberRole.PARTICIPANT,
+  ]);
   expect(terminationOutcomeValues).toEqual(Object.values(TerminationOutcome));
   expect(workSegmentTypeValues).toEqual(Object.values(WorkSegmentType));
   expect(workSegmentStatusValues).toEqual(Object.values(WorkSegmentStatus));
@@ -355,7 +353,6 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
     idempotencyKey: randomUUID(),
   };
   const parsedDraft = createTaskDraftInputSchema.parse(baseDraft);
-  expect(parsedDraft.allowSelfReview).toBe(false);
   expect(parsedDraft.relatedTaskId).toBeNull();
 
   const absoluteDateTime = absoluteDateTimeSchema("时间必须包含时区");
@@ -419,7 +416,7 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
         { personId: randomUUID(), role: "OWNER" },
       ],
     }).success,
-  ).toBe(false);
+  ).toBe(true);
   expect(
     createTaskDraftInputSchema.safeParse({
       ...baseDraft,
@@ -582,10 +579,10 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
       expectedLockVersion: 1,
       members: [
         { personId: samePersonId, role: "OWNER" },
-        { personId: samePersonId, role: "REVIEWER" },
+        { personId: samePersonId, role: "PARTICIPANT" },
       ],
     }).success,
-  ).toBe(true);
+  ).toBe(false);
   expect(
     replaceTaskMembersInputSchema.safeParse({
       taskId: randomUUID(),
@@ -604,7 +601,7 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
         { personId: randomUUID(), role: "OWNER" },
         ...Array.from({ length: 50 }, () => ({
           personId: randomUUID(),
-          role: "MEMBER" as const,
+          role: "PARTICIPANT" as const,
         })),
       ],
     }).success,

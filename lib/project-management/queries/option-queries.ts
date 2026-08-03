@@ -4,7 +4,6 @@ import { prisma } from "@/lib/prisma";
 import {
   assertAuthorized,
   isSystemAdministrator,
-  segmentReadableWhere,
   taskReadableWhere,
   type AuthorizationTaskResource,
 } from "@/lib/project-management/authorization";
@@ -45,7 +44,6 @@ const peopleSearchTaskAuthorizationSelect = {
   techGroup: true,
   status: true,
   priority: true,
-  allowSelfReview: true,
   members: {
     where: { removedAt: null },
     select: { personId: true, role: true, removedAt: true },
@@ -143,7 +141,7 @@ async function peopleVisibilityForPurpose(
   actor: ProjectManagementActor,
   input: SearchPeopleInput,
 ): Promise<Prisma.PersonWhereInput> {
-  if (input.purpose === "VISIBLE") return peopleVisibleWhere(actor);
+  if (input.purpose === "VISIBLE") return {};
   if (input.purpose === "TASK_CREATE") {
     assertAuthorized({
       actor,
@@ -193,7 +191,6 @@ function peopleSearchTaskResource(
     techGroup: task.techGroup,
     status: task.status,
     priority: task.priority,
-    allowSelfReview: task.allowSelfReview,
     members: task.members,
   };
 }
@@ -342,29 +339,6 @@ export async function listTagOptions({
         ? nextOptionCursor("tags", filter, items.at(-1)?.id)
         : null,
   });
-}
-
-function peopleVisibleWhere(
-  actor: ProjectManagementActor,
-): Prisma.PersonWhereInput {
-  return {
-    OR: [
-      { id: actor.personId },
-      {
-        taskMembers: {
-          some: {
-            removedAt: null,
-            task: taskReadableWhere(actor),
-          },
-        },
-      },
-      {
-        workSegments: {
-          some: segmentReadableWhere(actor),
-        },
-      },
-    ],
-  };
 }
 
 function cursorFilter(value: unknown): string {

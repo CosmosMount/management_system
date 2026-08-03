@@ -8,7 +8,6 @@ import { prisma } from "@/lib/prisma";
 import {
   assertAuthorized,
   authorize,
-  isSystemAdministrator,
   type AuthorizationTaskResource,
 } from "@/lib/project-management/authorization";
 import { createDomainAuditEventTx } from "@/lib/project-management/audit";
@@ -68,7 +67,6 @@ const segmentInclude = {
       techGroup: true,
       status: true,
       priority: true,
-      allowSelfReview: true,
       currentPlanVersionId: true,
       deletedAt: true,
       members: {
@@ -377,6 +375,9 @@ async function movePlannedSegmentsWithAuthorizationTx(
     input.moves.map((move) => move.segmentId),
     "不能重复移动同一条投入记录",
   );
+  const associationLocks = await lockSegmentNodeAssociationTasksTx(tx, {
+    segmentIds: input.moves.map((move) => move.segmentId),
+  });
   const segments = await lockAndLoadSegmentsTx(
     tx,
     input.moves.map((move) => move.segmentId),
@@ -386,6 +387,7 @@ async function movePlannedSegmentsWithAuthorizationTx(
   for (const segment of segments) {
     const move = moveById.get(segment.id);
     if (!move) throw validationError("移动记录不存在");
+    assertNodeAssociationTaskLocked(associationLocks, segment);
     assertSegmentVisible(actor, segment);
     assertCanMove(segment);
     assertExpectedUpdatedAt(segment, move.expectedUpdatedAt);
@@ -1133,8 +1135,12 @@ export async function softDeleteActualSegment(
   const parsed = softDeleteActualSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
     const refreshedActor = await refreshActorTx(tx, actor);
+    const associationLocks = await lockSegmentNodeAssociationTasksTx(tx, {
+      segmentIds: [parsed.segmentId],
+    });
     await lockWorkSegmentTx(tx, parsed.segmentId);
     const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
+    assertNodeAssociationTaskLocked(associationLocks, segment);
     assertSegmentVisible(refreshedActor, segment);
     assertCanManageSegment(refreshedActor, segment);
     assertExpectedUpdatedAt(segment, parsed.expectedUpdatedAt);
@@ -1415,6 +1421,17 @@ async function assertSegmentReferenceTx(
   }
   if (!input.taskId) return;
   const task = await loadTaskForAuthorizationTx(tx, input.taskId);
+  if (
+    !task.members.some(
+      (member) =>
+        member.personId === input.personId &&
+        (member.role === "OWNER" || member.role === "PARTICIPANT"),
+    )
+  ) {
+    throw associationInvalidError("Task 关联投入只能属于负责人或参与人", {
+      personId: ["请先将该人员添加为负责人或参与人"],
+    });
+  }
   assertActorCanReferenceTaskForSegment(input.actor, {
     personId: input.personId,
     task,
@@ -1722,7 +1739,6 @@ async function loadTaskForAuthorizationTx(
       techGroup: true,
       status: true,
       priority: true,
-      allowSelfReview: true,
       currentPlanVersionId: true,
       deletedAt: true,
       members: {
@@ -1743,7 +1759,6 @@ function taskResource(task: TaskForAuthorization): AuthorizationTaskResource {
     techGroup: task.techGroup,
     status: task.status,
     priority: task.priority,
-    allowSelfReview: task.allowSelfReview,
     members: task.members,
   };
 }
@@ -1761,25 +1776,18 @@ function assertActorCanReferenceTaskForSegment(
   actor: ProjectManagementActor,
   input: { personId: string; task: TaskForAuthorization },
 ) {
-  if (input.personId === actor.personId) {
-    assertTaskVisible(actor, input.task);
-    return;
-  }
-  if (
-    authorize({
-      actor,
-      action: "segment.manage_others",
-      resource: {
-        type: "segment",
-        personId: input.personId,
-        task: taskResource(input.task),
-      },
-    }).allowed
-  ) {
-    return;
-  }
-  if (isSystemAdministrator(actor)) return;
-  throw notFoundError();
+  assertAuthorized({
+    actor,
+    action:
+      input.personId === actor.personId
+        ? "segment.manage_self"
+        : "segment.manage_others",
+    resource: {
+      type: "segment",
+      personId: input.personId,
+      task: taskResource(input.task),
+    },
+  });
 }
 
 function assertSegmentVisible(
@@ -1802,6 +1810,18 @@ function assertCanManageSegment(
   actor: ProjectManagementActor,
   segment: SegmentForMutation,
 ) {
+  if (
+    segment.task &&
+    !segment.task.members.some(
+      (member) =>
+        member.personId === segment.personId &&
+        (member.role === "OWNER" || member.role === "PARTICIPANT"),
+    )
+  ) {
+    throw associationInvalidError("Task 关联投入只能属于负责人或参与人", {
+      personId: ["请先将该人员添加为负责人或参与人"],
+    });
+  }
   assertAuthorized({
     actor,
     action:

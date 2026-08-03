@@ -52,16 +52,15 @@ import type {
 import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
-const LOCAL_DRAFT_SCHEMA_VERSION = 1;
+const LOCAL_DRAFT_SCHEMA_VERSION = 2;
 const MAX_HISTORY = 80;
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const MAX_LOCAL_DRAFT_BYTES = 1_000_000;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const taskMemberRoles = ["OWNER", "LEAD", "MEMBER", "REVIEWER", "VIEWER"] as const;
+const taskMemberRoles = ["OWNER", "PARTICIPANT"] as const;
 type TaskMemberRoleValue = (typeof taskMemberRoles)[number];
 type TaskPriorityValue = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
-type RevisionApprovalModeValue = "DIRECT_BY_OWNER" | "REVIEW_REQUIRED";
 
 export type TaskComposerMilestone = {
   id: string;
@@ -82,8 +81,6 @@ export type TaskComposerSeed = {
   tagIds: string[];
   relatedTaskId: string | null;
   members: Array<{ personId: string; role: TaskMemberRoleValue }>;
-  revisionApprovalMode: RevisionApprovalModeValue;
-  allowSelfReview: boolean;
   plannedStartAt: string;
   milestones: TaskComposerMilestone[];
   termination: {
@@ -108,7 +105,7 @@ type ValidationIssue = {
 };
 
 type LocalTaskDraft = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   draftId: string;
   savedAt: string;
   task: TaskComposerSeed;
@@ -129,8 +126,7 @@ export function TaskComposerClient({
   initialPeople,
   initialTasks,
   initialTags,
-  isSystemAdministrator,
-  createScopes,
+  actorPersonId,
 }: {
   accountId: string;
   deploymentEnvironment: string;
@@ -138,8 +134,7 @@ export function TaskComposerClient({
   initialPeople: PersonOption[];
   initialTasks: TaskOption[];
   initialTags: TagOption[];
-  isSystemAdministrator: boolean;
-  createScopes: Array<{ team: string; techGroup: string }>;
+  actorPersonId: string;
 }) {
   const router = useRouter();
   const [history, setHistory] = useState<ComposerHistory>({
@@ -170,7 +165,7 @@ export function TaskComposerClient({
       "",
   );
   const [memberRole, setMemberRole] =
-    useState<TaskMemberRoleValue>("MEMBER");
+    useState<TaskMemberRoleValue>("PARTICIPANT");
   const [lastValidationIssues, setLastValidationIssues] = useState<
     ValidationIssue[]
   >([]);
@@ -186,9 +181,14 @@ export function TaskComposerClient({
       `task-draft:${encodeURIComponent(deploymentEnvironment)}:${encodeURIComponent(accountId)}:v${LOCAL_DRAFT_SCHEMA_VERSION}`,
     [accountId, deploymentEnvironment],
   );
+  const legacyStorageKey = useMemo(
+    () =>
+      `task-draft:${encodeURIComponent(deploymentEnvironment)}:${encodeURIComponent(accountId)}:v1`,
+    [accountId, deploymentEnvironment],
+  );
   const issues = useMemo(
-    () => validateComposer(state, isSystemAdministrator, createScopes),
-    [createScopes, isSystemAdministrator, state],
+    () => validateComposer(state),
+    [state],
   );
   const selectedMilestone = state.milestones.find(
     (milestone) => milestone.id === state.selectedEntityId,
@@ -223,8 +223,16 @@ export function TaskComposerClient({
   useEffect(() => {
     const timer = window.setTimeout(() => {
       try {
-        const raw = window.localStorage.getItem(storageKey);
-        const parsed = raw ? parseLocalDraft(raw) : null;
+        const currentRaw = window.localStorage.getItem(storageKey);
+        const legacyRaw = currentRaw
+          ? null
+          : window.localStorage.getItem(legacyStorageKey);
+        const raw = currentRaw ?? legacyRaw;
+        const parsed = currentRaw
+          ? parseLocalDraft(currentRaw)
+          : legacyRaw
+            ? migrateLegacyLocalDraft(legacyRaw, actorPersonId)
+            : null;
         if (parsed) {
           setRecovery({ kind: "VALID", draft: parsed });
           setSavedAt(parsed.savedAt);
@@ -243,7 +251,7 @@ export function TaskComposerClient({
       }
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [storageKey]);
+  }, [actorPersonId, legacyStorageKey, storageKey]);
 
   useEffect(() => {
     if (!storageReady || recovery || !dirty || submitting) return;
@@ -469,6 +477,7 @@ export function TaskComposerClient({
   const discardLocalDraft = () => {
     try {
       window.localStorage.removeItem(storageKey);
+      window.localStorage.removeItem(legacyStorageKey);
       return true;
     } catch {
       setServerError("浏览器拒绝删除本地草稿；为避免旧草稿再次出现，当前不会离开页面。");
@@ -508,8 +517,6 @@ export function TaskComposerClient({
         tagIds: state.tagIds,
         relatedTaskId: state.relatedTaskId,
         members: state.members,
-        revisionApprovalMode: state.revisionApprovalMode,
-        allowSelfReview: state.allowSelfReview,
         plannedStartAt: shanghaiDateTimeLocalToIso(state.plannedStartAt),
         milestones: state.milestones.map((milestone) => ({
           goal: milestone.goal,
@@ -534,6 +541,7 @@ export function TaskComposerClient({
       }
       try {
         window.localStorage.removeItem(storageKey);
+        window.localStorage.removeItem(legacyStorageKey);
       } catch {
         // The Task is already committed. Storage cleanup failure must not turn a
         // successful business mutation into a retry that could confuse the user.
@@ -551,10 +559,6 @@ export function TaskComposerClient({
   };
 
   const loadPeople = async () => {
-    if (!scopeAllowed(state.team, state.techGroup, isSystemAdministrator, createScopes)) {
-      setOptionError("当前账号没有该组织范围的 Task 创建权限。");
-      return;
-    }
     setOptionLoading(true);
     setOptionError("");
     try {
@@ -619,30 +623,35 @@ export function TaskComposerClient({
       setOptionError("请先选择人员。");
       return;
     }
+    const existing = state.members.find(
+      (member) => member.personId === memberPersonId,
+    );
     if (
-      state.members.some(
-        (member) => member.personId === memberPersonId && member.role === memberRole,
-      )
+      existing?.role === "OWNER" &&
+      memberRole !== "OWNER" &&
+      state.members.filter((member) => member.role === "OWNER").length === 1
     ) {
-      setOptionError("同一人员不能重复添加相同角色。");
+      setOptionError("至少保留一名负责人。");
       return;
     }
-    updateField("members", [
-      ...state.members,
-      { personId: memberPersonId, role: memberRole },
-    ]);
+    updateField(
+      "members",
+      existing
+        ? state.members.map((member) =>
+            member.personId === memberPersonId
+              ? { ...member, role: memberRole }
+              : member,
+          )
+        : [
+            ...state.members,
+            { personId: memberPersonId, role: memberRole },
+          ],
+    );
+    setOptionError("");
   };
 
   const changeTeam = (team: string) => {
-    const nextGroup = scopeAllowed(
-      team,
-      state.techGroup,
-      isSystemAdministrator,
-      createScopes,
-    )
-      ? state.techGroup
-      : firstAllowedGroup(team, isSystemAdministrator, createScopes);
-    commit((current) => ({ ...current, team, techGroup: nextGroup }));
+    commit((current) => ({ ...current, team }));
     setOptionError("");
   };
 
@@ -878,7 +887,7 @@ export function TaskComposerClient({
                   value={state.team}
                   onChange={(event) => changeTeam(event.target.value)}
                 >
-                  {allowedTeams(isSystemAdministrator, createScopes).map((team) => (
+                  {TEAM_OPTIONS.map((team) => (
                     <option key={team} value={team}>
                       {team}
                     </option>
@@ -892,7 +901,7 @@ export function TaskComposerClient({
                   value={state.techGroup}
                   onChange={(event) => updateField("techGroup", event.target.value)}
                 >
-                  {allowedGroups(state.team, isSystemAdministrator, createScopes).map((group) => (
+                  {TECH_GROUP_OPTIONS.map((group) => (
                     <option key={group} value={group}>
                       {group}
                     </option>
@@ -1000,6 +1009,11 @@ export function TaskComposerClient({
                       type="button"
                       variant="ghost"
                       size="icon-xs"
+                      disabled={
+                        member.role === "OWNER" &&
+                        state.members.filter((item) => item.role === "OWNER")
+                          .length === 1
+                      }
                       aria-label={`移除 ${person?.displayName ?? "成员"} ${taskMemberRoleLabels[member.role]}`}
                       onClick={() =>
                         updateField(
@@ -1069,39 +1083,6 @@ export function TaskComposerClient({
             </div>
           </ComposerSection>
 
-          <ComposerSection title="流程策略">
-            <Field label="Revision 审批" htmlFor="revision-approval-mode">
-              <select
-                id="revision-approval-mode"
-                className={selectClassName}
-                value={state.revisionApprovalMode}
-                onChange={(event) =>
-                  updateField(
-                    "revisionApprovalMode",
-                    event.target.value as RevisionApprovalModeValue,
-                  )
-                }
-              >
-                <option value="REVIEW_REQUIRED">需要 Reviewer 审批</option>
-                <option value="DIRECT_BY_OWNER">Owner 可直接生效</option>
-              </select>
-            </Field>
-            <label className="flex items-start gap-2 text-sm">
-              <input
-                id="allowSelfReview"
-                type="checkbox"
-                checked={state.allowSelfReview}
-                disabled={!isSystemAdministrator}
-                onChange={(event) => updateField("allowSelfReview", event.target.checked)}
-              />
-              <span>
-                允许自审
-                <span className="mt-1 block text-xs text-muted-foreground">
-                  默认关闭，仅 System Administrator 可开启；服务端会再次校验并审计。
-                </span>
-              </span>
-            </label>
-          </ComposerSection>
         </aside>
 
         <main className="min-w-0 space-y-4">
@@ -1765,8 +1746,6 @@ const selectClassName =
 
 function validateComposer(
   state: TaskComposerSeed,
-  isAdmin: boolean,
-  scopes: Array<{ team: string; techGroup: string }>,
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   if (!state.title.trim()) issues.push({ key: "title", message: "请输入 Task 名称。" });
@@ -1776,14 +1755,8 @@ function validateComposer(
   if (!TECH_GROUP_OPTIONS.includes(state.techGroup as (typeof TECH_GROUP_OPTIONS)[number])) {
     issues.push({ key: "techGroup", message: "请选择有效技术组。" });
   }
-  if (!scopeAllowed(state.team, state.techGroup, isAdmin, scopes)) {
-    issues.push({ key: "team", message: "当前账号没有该组织范围的 Task 创建权限。" });
-  }
   if (!validLocalDateTime(state.plannedStartAt)) {
     issues.push({ key: "plannedStartAt", message: "请选择有效的计划开始时间。" });
-  }
-  if (state.allowSelfReview && !isAdmin) {
-    issues.push({ key: "allowSelfReview", message: "只有 System Administrator 可开启自审。" });
   }
   if (new Set(state.tagIds).size !== state.tagIds.length) {
     issues.push({ key: "tag-search", message: "不能重复选择同一个 Tag。" });
@@ -1791,12 +1764,12 @@ function validateComposer(
   if (state.members.length === 0) {
     issues.push({ key: "members", message: "至少添加一名 Task 成员。" });
   }
-  const memberKeys = state.members.map((member) => `${member.personId}:${member.role}`);
-  if (new Set(memberKeys).size !== memberKeys.length) {
-    issues.push({ key: "members", message: "同一成员不能重复添加相同角色。" });
+  const memberPersonIds = state.members.map((member) => member.personId);
+  if (new Set(memberPersonIds).size !== memberPersonIds.length) {
+    issues.push({ key: "members", message: "同一成员只能有一个角色。" });
   }
-  if (state.members.filter((member) => member.role === "OWNER").length !== 1) {
-    issues.push({ key: "members", message: "必须且只能有一名负责人。" });
+  if (state.members.every((member) => member.role !== "OWNER")) {
+    issues.push({ key: "members", message: "至少需要一名负责人。" });
   }
   if (state.milestones.length < 1 || state.milestones.length > 200) {
     issues.push({ key: "plannedStartAt", message: "计划必须包含 1–200 个 Milestone。" });
@@ -1899,10 +1872,6 @@ function parseLocalDraft(raw: string): LocalTaskDraft | null {
         task.techGroup as (typeof TECH_GROUP_OPTIONS)[number],
       ) ||
       !["CRITICAL", "HIGH", "MEDIUM", "LOW"].includes(String(task.priority)) ||
-      !["DIRECT_BY_OWNER", "REVIEW_REQUIRED"].includes(
-        String(task.revisionApprovalMode),
-      ) ||
-      typeof task.allowSelfReview !== "boolean" ||
       (task.relatedTaskId !== null &&
         (typeof task.relatedTaskId !== "string" ||
           !UUID_PATTERN.test(task.relatedTaskId))) ||
@@ -1937,6 +1906,61 @@ function parseLocalDraft(raw: string): LocalTaskDraft | null {
       return null;
     }
     return value as LocalTaskDraft;
+  } catch {
+    return null;
+  }
+}
+
+function migrateLegacyLocalDraft(
+  raw: string,
+  creatorPersonId: string,
+): LocalTaskDraft | null {
+  if (raw.length > MAX_LOCAL_DRAFT_BYTES) return null;
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!isRecord(value) || value.schemaVersion !== 1 || !isRecord(value.task)) {
+      return null;
+    }
+    const legacyMembers = Array.isArray(value.task.members)
+      ? value.task.members
+      : [];
+    const normalized = new Map<string, TaskMemberRoleValue>();
+    for (const member of legacyMembers) {
+      if (
+        !isRecord(member) ||
+        typeof member.personId !== "string" ||
+        !UUID_PATTERN.test(member.personId)
+      ) {
+        continue;
+      }
+      const role =
+        member.role === "OWNER"
+          ? "OWNER"
+          : member.role === "LEAD" ||
+              member.role === "MEMBER" ||
+              member.role === "PARTICIPANT"
+            ? "PARTICIPANT"
+            : null;
+      if (!role || normalized.get(member.personId) === "OWNER") continue;
+      normalized.set(member.personId, role);
+    }
+    normalized.set(creatorPersonId, "OWNER");
+    const { revisionApprovalMode: _revisionApprovalMode, allowSelfReview: _allowSelfReview, ...task } =
+      value.task;
+    void _revisionApprovalMode;
+    void _allowSelfReview;
+    const migrated = {
+      ...value,
+      schemaVersion: LOCAL_DRAFT_SCHEMA_VERSION,
+      task: {
+        ...task,
+        members: [...normalized].map(([personId, role]) => ({
+          personId,
+          role,
+        })),
+      },
+    };
+    return parseLocalDraft(JSON.stringify(migrated));
   } catch {
     return null;
   }
@@ -2080,48 +2104,6 @@ function mergeOptions<T extends { id: string }>(current: T[], incoming: T[]) {
   const map = new Map(current.map((item) => [item.id, item]));
   for (const item of incoming) map.set(item.id, item);
   return [...map.values()];
-}
-
-function scopeAllowed(
-  team: string,
-  techGroup: string,
-  isAdmin: boolean,
-  scopes: Array<{ team: string; techGroup: string }>,
-) {
-  if (isAdmin) return true;
-  return scopes.some((scope) => {
-    const roleTeam = scope.team.trim();
-    const roleGroup = scope.techGroup.trim();
-    if (!roleTeam && !roleGroup) return false;
-    return (!roleTeam || roleTeam === team) && (!roleGroup || roleGroup === techGroup);
-  });
-}
-
-function allowedTeams(
-  isAdmin: boolean,
-  scopes: Array<{ team: string; techGroup: string }>,
-) {
-  if (isAdmin) return [...TEAM_OPTIONS];
-  return TEAM_OPTIONS.filter((team) =>
-    TECH_GROUP_OPTIONS.some((group) => scopeAllowed(team, group, false, scopes)),
-  );
-}
-
-function allowedGroups(
-  team: string,
-  isAdmin: boolean,
-  scopes: Array<{ team: string; techGroup: string }>,
-) {
-  if (isAdmin) return [...TECH_GROUP_OPTIONS];
-  return TECH_GROUP_OPTIONS.filter((group) => scopeAllowed(team, group, false, scopes));
-}
-
-function firstAllowedGroup(
-  team: string,
-  isAdmin: boolean,
-  scopes: Array<{ team: string; techGroup: string }>,
-) {
-  return allowedGroups(team, isAdmin, scopes)[0] ?? TECH_GROUP_OPTIONS[0];
 }
 
 function countIssues(issues: ValidationIssue[], keys: string[]) {

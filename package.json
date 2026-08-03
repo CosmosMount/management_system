@@ -17,6 +17,8 @@
     "pm:p0-baseline": "tsx scripts/project-management-p0-baseline.ts",
     "pm:identity-backfill": "tsx scripts/project-management-identity-backfill.ts",
     "pm:release-rehearsal": "tsx scripts/project-management-release-rehearsal.ts",
+    "pm:task-access-preflight": "tsx scripts/preflight-task-access-migration.ts",
+    "pm:repair-task-approval-notifications": "tsx scripts/repair-task-approval-notifications.ts",
     "postinstall": "prisma generate",
     "db:deploy": "tsx scripts/deploy-db.ts",
     "accounts:preflight": "tsx scripts/preflight-unified-accounts.ts",

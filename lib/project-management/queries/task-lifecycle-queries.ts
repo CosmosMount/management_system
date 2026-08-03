@@ -133,7 +133,6 @@ export async function getTaskLifecycleViews({
       techGroup: true,
       status: true,
       priority: true,
-      allowSelfReview: true,
       members: {
         where: { removedAt: null },
         select: { personId: true, role: true, removedAt: true },
@@ -256,7 +255,7 @@ export async function getTaskLifecycleViews({
   }).allowed;
   const canApplyRevision = authorize({
     actor,
-    action: "revision.apply",
+    action: "task.manage_members",
     resource,
   }).allowed;
   const visibleAuditRows = auditRows.slice(0, auditLimit);
@@ -290,10 +289,7 @@ export async function getTaskLifecycleViews({
           authorize({
             actor,
             action: "milestone.review",
-            resource: {
-              ...resource,
-              submittedByAccountId: review.submittedByAccountId,
-            },
+            resource,
           }).allowed,
       },
     })),
@@ -320,23 +316,26 @@ export async function getTaskLifecycleViews({
       capabilities: {
         canEdit:
           (revision.status === "DRAFT" || revision.status === "REJECTED") &&
-          (revision.node.createdByAccountId === actor.accountId || canApplyRevision),
+          ((revision.node.createdByAccountId === actor.accountId &&
+            canCreateRevision) ||
+            canApplyRevision),
         canSubmit:
-          canCreateRevision &&
-          (revision.status === "DRAFT" || revision.status === "REJECTED"),
+          (revision.status === "DRAFT" || revision.status === "REJECTED") &&
+          ((revision.node.createdByAccountId === actor.accountId &&
+            canCreateRevision) ||
+            canApplyRevision),
         canReview:
           revision.status === "PENDING_APPROVAL" &&
           authorize({
             actor,
             action: "revision.review",
-            resource: {
-              ...resource,
-              submittedByAccountId: revision.node.createdByAccountId,
-            },
+            resource,
           }).allowed,
         canCancel:
           ["DRAFT", "PENDING_APPROVAL", "REJECTED"].includes(revision.status) &&
-          (revision.node.createdByAccountId === actor.accountId || canApplyRevision),
+          ((revision.node.createdByAccountId === actor.accountId &&
+            canCreateRevision) ||
+            canApplyRevision),
       },
     })),
     nextRevisionCursor:

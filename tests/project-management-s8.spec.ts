@@ -67,14 +67,6 @@ test.describe("project management S8 dashboard, tags and notifications", () => {
       owner,
       new Date("2026-09-10T02:00:00.000Z"),
     );
-    await prisma.taskMember.create({
-      data: {
-        taskId: task.taskId,
-        personId: user.personId,
-        role: "VIEWER",
-        createdByAccountId: owner.accountId,
-      },
-    });
     for (let index = 0; index < 3; index += 1) {
       await prisma.workSegment.create({
         data: {

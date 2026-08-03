@@ -206,7 +206,7 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 2. 执行 `npm run db:seed -- --super-admin-open-id=<飞书 openId>` 初始化首位统一超级管理员。
 3. 登录后访问 **`/admin/accounts` 账号与权限**：
    - 点击 **「同步飞书通讯录」** 将企业全员录入系统（无需对方先登录）
-   - 管理项目管理员及多个车组/技术组组长范围
+   - 管理项目管理员；项目系统角色不再提供车组/技术组组长
    - 管理原有四类报销角色
    - 启用或禁用项目访问；该状态不影响登录和报销
 
@@ -229,14 +229,19 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 | 角色 | 范围 | 权限 |
 |------|------|------|
 | 统一超级管理员 | 全局 | 报销和项目最高权限；访问 `/admin/accounts` |
-| 项目管理员 | 项目全局 | 全部项目业务、Tag 和项目审计；不能管理账号 |
-| 项目组长 | 指定一个车组或技术组 | 对匹配组织的 Task 拥有完整权限 |
+| 项目管理员 | 项目全局 | 与统一超级管理员相同的项目业务权限、审批权、Tag 和项目审计；不能管理账号 |
+| Task 负责人 | 单个 Task | 管理成员、Task 状态、计划、Revision、验收证据和该 Task 全部投入；可有多名 |
+| Task 参与人 | 单个 Task | 编辑 Task 与计划、提交 Revision/验收证据，并管理自己的关联投入 |
 | TEAM_ADMIN | 指定车组 | 管理审核阶段，车组组长通过 |
 | TECH_GROUP_ADMIN | 指定技术组 | 管理审核阶段，技术组组长通过 |
 | TEACHER | 全局 | 「老师审核」阶段通过 |
 | FINANCE | 指定车组 | 上传报销截图 |
 
-普通项目成员不写系统角色，只按现有 `TaskMember` 角色授权。同一人可拥有多个项目组长范围和多个报销角色。
+`projectAccessStatus=ACTIVE` 的账号都可查看全部未删除 Task、计划、成员、验收、审计和完整 Planned/Actual Work Segment，也都可创建任意合法车组/技术组的 Task；创建者自动成为负责人。Task 有效成员只保留负责人和参与人，同一人在同一 Task 中只能有一个角色，且至少保留一名负责人。非成员只有读取权；Milestone 和 Revision 的通过、驳回、要求修订只允许统一超级管理员或项目管理员处理，并允许管理员自审。
+
+系统始终要求至少保留一名项目访问已启用且具有 default tenant 有效飞书 openId 的全局管理员；账号后台会拒绝撤销或禁用最后一名可用审批人，数据库延迟约束也会拦截绕过应用层的账号状态、角色、身份写入以及无审批人的首个 Task。提交 Milestone/Revision 审批时会在同一事务中再次校验，失败时整事务回滚，不会留下无人处理或无法通知的待审批记录。
+
+项目 `GROUP_LEADER` 已退役，只保留撤销历史且不能继续授予。采购报销的 `TEAM_ADMIN`、`TECH_GROUP_ADMIN` 等独立角色、组长称谓和审批流程不受影响。Work Segment 中名为 `REVIEWER` 的工作职责仍可使用，它只描述该段工作，不授予 Task 审批权限。
 
 ### 导航栏没有「权限管理」？
 
@@ -246,7 +251,7 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 2. **账号尚未建立**：先让该用户登录或执行通讯录同步。
 3. **旧数据未通过迁移预检**：升级前先运行 `npm run accounts:preflight`，处理报告中的身份、重复角色或范围冲突。
 
-已有数据库升级时按 `npm run accounts:preflight` → `npm run db:deploy` → `npm run accounts:validate` 执行。预检遇到同时含车组和技术组的旧项目组长会阻止切换，必须显式选择一个范围或拆成两个组长授权。
+统一账号历史升级仍按 `npm run accounts:preflight` → `npm run db:deploy` → `npm run accounts:validate` 执行。Task 全员可见改造部署前还必须先运行只读 `npm run pm:task-access-preflight`；若报告零负责人 Task 或孤立的 Task 关联投入，迁移会阻断，必须先人工修复，不能猜测负责人。受控 `npm run db:deploy` 会把不可逆 Task migration 与 Prisma history 记录放入同一 PostgreSQL 事务；不得绕过它直接运行 `prisma migrate deploy`。迁移链还会在不可逆 Task DDL 之前按固定顺序锁定相关表、复检活跃且飞书可达的全局管理员，并安装覆盖账号状态、全局角色、飞书身份和首条 Task 创建的永久串行延迟约束，避免遗漏人工预检、部署中断或旧实例并发写入时留下半升级 schema。该自动门禁不替代发布前报告核对。
 
 ### 完整审批与报销流程
 
@@ -496,6 +501,10 @@ pm2 start npm --name procurement-cron -- run cron
 
 旧项目、阶段、任务、审批、周报、风险和提醒实现及其开发数据已直接清理，不提供旧数据迁移或旧接口兼容。当前已完成 v2.1 底座、Task 生命周期、Resource Segment，以及项目管理前端的 Task Composer、Task 工作台、统一 TimeCanvas/TimeAgenda、资源计划、个人时间线、个人驾驶舱、统一待办、Tag 和通知偏好。Account/Person、Task/Tag、Plan/Node、Segment、通知、审计、权限和通用 cron 跨实例互斥均已有服务端状态机和集成测试。
 
+- 所有项目访问启用账号可查看全部未删除 Task、计划/审批/审计历史和全员完整 Segment，并可创建 Task；可见性扩大不扩大写权限。
+- Task 成员只分“负责人”和“参与人”。支持多负责人且至少一名，同一 Person 只能有一个有效角色；创建者自动成为负责人。
+- 参与人可编辑 Task/计划、提交验收和 Revision，并管理自己的关联投入；负责人另可管理成员、Task 状态、任意未生效 Revision 和该 Task 全部投入；全局管理员拥有全部项目写权限。
+- Revision 每次提交都进入待审批，Milestone 与 Revision 只由统一超级管理员或项目管理员决定，允许管理员自审；界面不再提供流程策略、Reviewer 或自审开关。
 - `/progress` 是“我的工作”驾驶舱，提供指标、个人时间预览、行动待办、Active Task 表和折叠通知。
 - `/progress/tasks/new` 提供单页 Plan Composer；`/progress/my-timeline` 提供个人日/周时间与到期确认队列。
 - `/progress/tasks` 与 `/progress/tasks/[id]` 提供 Task 列表和 Task 工作台。
@@ -508,3 +517,21 @@ pm2 start npm --name procurement-cron -- run cron
 - `npm run pm:release-rehearsal` 仅用于本机隔离 `_test`/`_snapshot` 数据库；必须显式设置 `PM_RELEASE_REHEARSAL_CONFIRM=LOCAL_ISOLATED_REHEARSAL` 和 `NOTIFICATION_DELIVERY_DISABLED=true`。它不会执行生产维护窗口，生产发布仍需另行授权与 BO/TL/QA/DBA 签字。
 - 项目管理飞书通知只允许写入 `channel=project-management` 的 notification outbox；adapter 已构造普通交互卡并经统一私信传输层投递。验收和 Revision 待审批事件使用审批机器人用途，其他项目管理事件使用通知机器人。
 - 资源冲突和投入比例能力已完整下线：`/progress/resources/conflicts` 返回 404，Segment 允许时间重叠，系统不再检测、提示、阻止或通知冲突，也没有替代容量模型。
+
+现行成员、可见性和审批决策见 [Task 全员可见、双成员角色与全局管理员审批 ADR](docs/adr/2026-08-03-task-global-visibility-participants-admin-approval.md)。已有数据的受控发布顺序为：
+
+```bash
+npm run pm:task-access-preflight
+npm run db:deploy
+
+# 默认 dry-run：报告待处理审批、管理员收件人和旧 outbox
+npm run pm:repair-task-approval-notifications
+
+# 仅在通知禁发的维护窗口执行写入修复
+NOTIFICATION_DELIVERY_DISABLED=true \
+npm run pm:repair-task-approval-notifications -- --apply
+
+npm run accounts:validate
+```
+
+通知修复会保留已发送的旧 Reviewer/组长历史消息，冻结仍待发送或重试的旧审批 outbox，并为当前待审批对象按版本化事件键补建全局管理员站内通知和 outbox；它不会绕过禁发、allowlist 或 outbox 投递门禁。

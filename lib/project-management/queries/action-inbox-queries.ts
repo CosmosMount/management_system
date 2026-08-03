@@ -1,6 +1,5 @@
 import type {
   Prisma,
-  ProjectManagementSystemRole,
   TaskMemberRole,
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -39,7 +38,6 @@ const taskResourceSelect = {
   techGroup: true,
   status: true,
   priority: true,
-  allowSelfReview: true,
   members: {
     where: { removedAt: null },
     select: { personId: true, role: true, removedAt: true },
@@ -61,15 +59,11 @@ export async function getActionInbox({
   const boundedLimit = Math.min(Math.max(Math.trunc(limit), 1), 200);
   const now = new Date();
   const visibleTask = taskReadableWhere(actor);
-  const segmentManagerTask = taskActionableWhere(actor, [], [
-    "GROUP_LEADER",
-  ]);
-  const reviewableTask = taskActionableWhere(actor, ["REVIEWER"], [
-    "GROUP_LEADER",
-  ]);
-  const terminableTask = taskActionableWhere(actor, ["OWNER", "REVIEWER"], [
-    "GROUP_LEADER",
-  ]);
+  const segmentManagerTask = taskActionableWhere(actor, ["OWNER"]);
+  const reviewableTask = isSystemAdministrator(actor)
+    ? { deletedAt: null }
+    : { id: { in: [] } };
+  const terminableTask = taskActionableWhere(actor, ["OWNER"]);
   const confirmationSegmentWhere: Prisma.WorkSegmentWhereInput = {
     AND: [
       segmentReadableWhere(actor),
@@ -92,15 +86,6 @@ export async function getActionInbox({
   const milestoneReviewWhere: Prisma.MilestoneReviewWhereInput = {
     result: "PENDING",
     revokedAt: null,
-    AND: [
-      {
-        OR: [
-          { submittedByAccountId: null },
-          { submittedByAccountId: { not: actor.accountId } },
-          { milestoneNode: { node: { task: { allowSelfReview: true } } } },
-        ],
-      },
-    ],
     milestoneNode: {
       node: {
         task: { AND: [visibleTask, reviewableTask] },
@@ -112,14 +97,6 @@ export async function getActionInbox({
   };
   const revisionWhere: Prisma.RevisionNodeWhereInput = {
     status: "PENDING_APPROVAL",
-    AND: [
-      {
-        OR: [
-          { node: { createdByAccountId: { not: actor.accountId } } },
-          { node: { task: { allowSelfReview: true } } },
-        ],
-      },
-    ],
     node: { task: { AND: [visibleTask, reviewableTask] } },
   };
   const terminationWhere: Prisma.TerminationNodeWhereInput = {
@@ -293,11 +270,7 @@ export async function getActionInbox({
       !authorize({
         actor,
         action: "milestone.review",
-        resource: {
-          type: "task",
-          ...task,
-          submittedByAccountId: review.submittedByAccountId,
-        },
+        resource: { type: "task", ...task },
       }).allowed
     ) {
       continue;
@@ -320,11 +293,7 @@ export async function getActionInbox({
       !authorize({
         actor,
         action: "revision.review",
-        resource: {
-          type: "task",
-          ...task,
-          submittedByAccountId: revision.node.createdByAccountId,
-        },
+        resource: { type: "task", ...task },
       }).allowed
     ) {
       continue;
@@ -380,19 +349,8 @@ export async function getActionInbox({
 function taskActionableWhere(
   actor: ProjectManagementActor,
   taskRoles: TaskMemberRole[],
-  systemRoles: ProjectManagementSystemRole[],
 ): Prisma.TaskWhereInput {
   if (isSystemAdministrator(actor)) return { deletedAt: null };
-  const scoped = actor.systemRoles
-    .filter(
-      (role) =>
-        systemRoles.includes(role.role) &&
-        (role.team.trim().length > 0 || role.techGroup.trim().length > 0),
-    )
-    .map((role): Prisma.TaskWhereInput => ({
-      ...(role.team.trim() ? { team: role.team.trim() } : {}),
-      ...(role.techGroup.trim() ? { techGroup: role.techGroup.trim() } : {}),
-    }));
   const roleWhere: Prisma.TaskWhereInput[] = taskRoles.length
     ? [
         {
@@ -408,6 +366,6 @@ function taskActionableWhere(
     : [];
   return {
     deletedAt: null,
-    OR: [...roleWhere, ...scoped],
+    OR: roleWhere,
   };
 }

@@ -149,11 +149,8 @@ test.describe("S2 canvas query security", () => {
         }),
       },
     ]) {
-      const denied = await context.request.post(endpoint, { data: payload });
-      expect(await denied.json()).toMatchObject({
-        ok: false,
-        error: { code: "NOT_FOUND" },
-      });
+      const readable = await context.request.post(endpoint, { data: payload });
+      expect(await readable.json()).toMatchObject({ ok: true });
     }
   });
 
@@ -163,9 +160,10 @@ test.describe("S2 canvas query security", () => {
     baseURL,
   }) => {
     const owner = await createAccountPerson("Create Action Owner");
+    const activeTaskTitle = `Create Action Active ${randomUUID()}`;
     const activeTask = await createTask({
       ownerAccountId: owner.account.id,
-      title: `Create Action Active ${randomUUID()}`,
+      title: activeTaskTitle,
       team: "英雄",
       techGroup: "电控",
       members: [{ personId: owner.person.id, role: "OWNER" }],
@@ -182,14 +180,23 @@ test.describe("S2 canvas query security", () => {
       openId: owner.openId,
       name: owner.person.displayName,
     });
-    await page.goto("/progress/resources?from=2026-08-10&to=2026-08-12");
+    await page.goto(
+      `/progress/resources?from=2026-08-10&to=2026-08-12&people=${owner.person.id}`,
+    );
 
     await page.getByRole("button", { name: "新增投入" }).click();
     const quickCreate = page.getByRole("form", { name: "投入快速创建" });
+    await quickCreate.locator("#quick-task-search").fill(activeTaskTitle);
+    await quickCreate
+      .getByRole("button", { name: "搜索可关联 Task" })
+      .click();
+    await expect(quickCreate.getByRole("status")).toHaveText(/已找到 1 个 Task/);
     await quickCreate.locator("#quick-task").selectOption(activeTask.taskId);
     await quickCreate.locator("#quick-content").fill("真实 Action 允许 Active Task");
     await quickCreate.getByRole("button", { name: "创建" }).click();
-    await expect(page.getByRole("status")).toHaveText("已创建投入记录");
+    await expect(
+      page.getByText("已创建投入记录", { exact: true }),
+    ).toBeVisible();
     await expect
       .poll(() =>
         prisma.workSegment.count({
@@ -237,27 +244,33 @@ test.describe("S2 canvas query security", () => {
   });
 
   test("People, Task and Tag options use minimal permission-filtered stable cursor pages", async () => {
-    const owner = await createAccountPerson("选项-Owner");
-    const visibleMember = await createAccountPerson("同名成员");
-    const visibleSegmentPerson = await createAccountPerson("同名成员");
-    const outsider = await createAccountPerson("不可见成员");
-    const inactive = await createAccountPerson("停用成员", "INACTIVE");
-    const hiddenOwner = await createAccountPerson("隐藏 Task Owner");
+    const optionKey = randomUUID();
+    const sameNamePerson = `同名成员 ${optionKey}`;
+    const sameNameTask = `同名 Task ${optionKey}`;
+    const owner = await createAccountPerson(`选项 Owner ${optionKey}`);
+    const visibleMember = await createAccountPerson(sameNamePerson);
+    const visibleSegmentPerson = await createAccountPerson(sameNamePerson);
+    const outsider = await createAccountPerson(`非成员 ${optionKey}`);
+    const inactive = await createAccountPerson(
+      `停用成员 ${optionKey}`,
+      "INACTIVE",
+    );
+    const hiddenOwner = await createAccountPerson(`其他 Task Owner ${optionKey}`);
     const ownerActor = actor(owner);
     const adminActor = actor(owner, [systemAdministratorRole()]);
     const visibleTask = await createTask({
       ownerAccountId: owner.account.id,
-      title: "同名 Task",
+      title: sameNameTask,
       team: "英雄",
       techGroup: "电控",
       members: [
         { personId: owner.person.id, role: "OWNER" },
-        { personId: visibleMember.person.id, role: "MEMBER" },
+        { personId: visibleMember.person.id, role: "PARTICIPANT" },
       ],
     });
     const hiddenTask = await createTask({
       ownerAccountId: hiddenOwner.account.id,
-      title: "同名 Task",
+      title: sameNameTask,
       team: "步兵",
       techGroup: "机械",
       members: [{ personId: hiddenOwner.person.id, role: "OWNER" }],
@@ -272,16 +285,17 @@ test.describe("S2 canvas query security", () => {
 
     const people = await searchPeople({
       actor: ownerActor,
-      input: { purpose: "VISIBLE" },
+      input: { purpose: "VISIBLE", query: optionKey, limit: 50 },
     });
     expect(people.items.map((item) => item.id)).toEqual(
       expect.arrayContaining([
         owner.person.id,
         visibleMember.person.id,
         visibleSegmentPerson.person.id,
+        outsider.person.id,
+        hiddenOwner.person.id,
       ]),
     );
-    expect(people.items.map((item) => item.id)).not.toContain(outsider.person.id);
     expect(people.items.map((item) => item.id)).not.toContain(inactive.person.id);
     expect(
       people.items.every(
@@ -306,7 +320,7 @@ test.describe("S2 canvas query security", () => {
         actor: adminActor,
         input: {
           purpose: "VISIBLE",
-          query: "同名成员",
+          query: sameNamePerson,
           limit: 1,
           cursor: peopleCursor,
         },
@@ -330,29 +344,29 @@ test.describe("S2 canvas query security", () => {
     );
     const firstPeoplePage = await searchPeople({
       actor: adminActor,
-      input: { purpose: "VISIBLE", query: "同名成员", limit: 1 },
+      input: { purpose: "VISIBLE", query: sameNamePerson, limit: 1 },
     });
     await expectErrorCode(
       searchPeople({
         actor: adminActor,
         input: {
           purpose: "VISIBLE",
-          query: "不同查询",
+          query: `不同查询 ${optionKey}`,
           cursor: firstPeoplePage.nextCursor,
         },
       }),
       "VALIDATION_ERROR",
     );
 
-    const activeTag = await createTag(owner.account.id, "活动 Tag");
+    const activeTag = await createTag(owner.account.id, `活动 Tag ${optionKey}`);
     const ownArchivedTag = await createTag(
       owner.account.id,
-      "本人归档 Tag",
+      `本人归档 Tag ${optionKey}`,
       new Date(),
     );
     const otherArchivedTag = await createTag(
       hiddenOwner.account.id,
-      "他人归档 Tag",
+      `他人归档 Tag ${optionKey}`,
       new Date(),
     );
     await prisma.taskTag.create({
@@ -363,11 +377,11 @@ test.describe("S2 canvas query security", () => {
     });
     const taskOptions = await searchTaskOptions({
       actor: ownerActor,
-      input: { query: "同名 Task", tagIds: [activeTag.id] },
+      input: { query: sameNameTask, tagIds: [activeTag.id] },
     });
-    expect(taskOptions.items.map((item) => item.id)).toEqual([
-      visibleTask.taskId,
-    ]);
+    expect(taskOptions.items.map((item) => item.id).sort()).toEqual(
+      [visibleTask.taskId, hiddenTask.taskId].sort(),
+    );
     expect(taskOptions.items[0]?.permission).toEqual({ canView: true });
     const visibleTagIds: string[] = [];
     let tagCursor: string | undefined;
@@ -401,7 +415,7 @@ test.describe("S2 canvas query security", () => {
     expect(adminTagIds).toContain(otherArchivedTag.id);
   });
 
-  test("People purposes enforce directory authorization, anti-enumeration and safe account availability", async () => {
+  test("People purposes expose the active directory without leaking account identities", async () => {
     const directoryKey = randomUUID();
     const directoryQuery = `成员目录 ${directoryKey}`;
     const owner = await createAccountPerson("成员目录 Owner");
@@ -450,7 +464,7 @@ test.describe("S2 canvas query security", () => {
       techGroup: "电控",
       members: [
         { personId: owner.person.id, role: "OWNER" },
-        { personId: ordinary.person.id, role: "MEMBER" },
+        { personId: ordinary.person.id, role: "PARTICIPANT" },
       ],
     });
     const hiddenTask = await createTask({
@@ -471,13 +485,31 @@ test.describe("S2 canvas query security", () => {
       actor: ordinaryActor,
       input: { purpose: "VISIBLE", query: directoryQuery },
     });
-    expect(ordinaryVisible.items).toEqual([]);
+    expect(ordinaryVisible.items.map((item) => item.id)).toEqual(
+      expect.arrayContaining([
+        active.person.id,
+        disabled.person.id,
+        unbound.id,
+      ]),
+    );
+    expect(ordinaryVisible.items.map((item) => item.id)).not.toContain(
+      inactive.person.id,
+    );
 
     const systemVisible = await searchPeople({
       actor: systemActor,
       input: { purpose: "VISIBLE", query: directoryQuery },
     });
-    expect(systemVisible.items).toEqual([]);
+    expect(systemVisible.items.map((item) => item.id)).toEqual(
+      expect.arrayContaining([
+        active.person.id,
+        disabled.person.id,
+        unbound.id,
+      ]),
+    );
+    expect(systemVisible.items.map((item) => item.id)).not.toContain(
+      inactive.person.id,
+    );
 
     for (const input of [
       {
@@ -548,20 +580,16 @@ test.describe("S2 canvas query security", () => {
       expect(serialized).not.toContain(sensitive);
     }
 
-    for (const input of [
-      {
-        purpose: "TASK_CREATE" as const,
-        team: "英雄" as const,
-        techGroup: "电控" as const,
-        query: directoryQuery,
-      },
-      {
-        purpose: "TASK_MEMBERS" as const,
-        taskId: task.taskId,
-        query: directoryQuery,
-      },
-    ]) {
-      const page = await searchPeople({ actor: teamAdminActor, input });
+    for (const searchActor of [teamAdminActor, ordinaryActor]) {
+      const page = await searchPeople({
+        actor: searchActor,
+        input: {
+          purpose: "TASK_CREATE",
+          team: "英雄",
+          techGroup: "电控",
+          query: directoryQuery,
+        },
+      });
       expect(page.items.map((item) => item.id)).toEqual(
         expect.arrayContaining([
           active.person.id,
@@ -574,36 +602,25 @@ test.describe("S2 canvas query security", () => {
       );
     }
 
-    await expectErrorCode(
-      searchPeople({
-        actor: teamAdminActor,
-        input: {
-          purpose: "TASK_CREATE",
-          team: "步兵",
-          techGroup: "机械",
-          query: directoryQuery,
-        },
-      }),
-      "FORBIDDEN",
-    );
+    expect(
+      (
+        await searchPeople({
+          actor: teamAdminActor,
+          input: {
+            purpose: "TASK_CREATE",
+            team: "步兵",
+            techGroup: "机械",
+            query: directoryQuery,
+          },
+        })
+      ).items.map((item) => item.id),
+    ).toEqual(expect.arrayContaining([active.person.id, unbound.id]));
     await expectErrorCode(
       searchPeople({
         actor: teamAdminActor,
         input: {
           purpose: "TASK_MEMBERS",
           taskId: hiddenTask.taskId,
-          query: directoryQuery,
-        },
-      }),
-      "NOT_FOUND",
-    );
-    await expectErrorCode(
-      searchPeople({
-        actor: ordinaryActor,
-        input: {
-          purpose: "TASK_CREATE",
-          team: "英雄",
-          techGroup: "电控",
           query: directoryQuery,
         },
       }),
@@ -633,10 +650,8 @@ test.describe("S2 canvas query security", () => {
         input: { purpose: "TASK_MEMBERS", taskId: hiddenTask.taskId },
       }),
     );
-    expect({ code: randomTaskError.code, message: randomTaskError.message }).toEqual(
-      { code: hiddenTaskError.code, message: hiddenTaskError.message },
-    );
     expect(randomTaskError.code).toBe("NOT_FOUND");
+    expect(hiddenTaskError.code).toBe("FORBIDDEN");
 
     await expectErrorCode(
       searchPeople({ actor: systemActor, input: { query: directoryQuery } }),
@@ -728,7 +743,7 @@ test.describe("S2 canvas query security", () => {
       data: personIds.map((personId) => ({
         taskId: taskIds[0]!,
         personId,
-        role: "MEMBER",
+        role: "PARTICIPANT",
         createdByAccountId: owner.account.id,
       })),
     });
@@ -947,7 +962,7 @@ test.describe("S2 canvas query security", () => {
       techGroup: "电控",
       members: [
         { personId: visibleOwner.person.id, role: "OWNER" },
-        { personId: target.person.id, role: "MEMBER" },
+        { personId: target.person.id, role: "PARTICIPANT" },
       ],
     });
     const segmentTagOnly = await createTask({
@@ -957,7 +972,7 @@ test.describe("S2 canvas query security", () => {
       techGroup: "电控",
       members: [
         { personId: visibleOwner.person.id, role: "OWNER" },
-        { personId: target.person.id, role: "MEMBER" },
+        { personId: target.person.id, role: "PARTICIPANT" },
       ],
     });
     const both = await createTask({
@@ -967,7 +982,7 @@ test.describe("S2 canvas query security", () => {
       techGroup: "电控",
       members: [
         { personId: visibleOwner.person.id, role: "OWNER" },
-        { personId: target.person.id, role: "MEMBER" },
+        { personId: target.person.id, role: "PARTICIPANT" },
       ],
     });
     const taskTagWithoutSegment = await createTask({
@@ -977,7 +992,7 @@ test.describe("S2 canvas query security", () => {
       techGroup: "电控",
       members: [
         { personId: visibleOwner.person.id, role: "OWNER" },
-        { personId: target.person.id, role: "MEMBER" },
+        { personId: target.person.id, role: "PARTICIPANT" },
       ],
     });
     const taskTagOutsideRange = await createTask({
@@ -987,7 +1002,7 @@ test.describe("S2 canvas query security", () => {
       techGroup: "电控",
       members: [
         { personId: visibleOwner.person.id, role: "OWNER" },
-        { personId: target.person.id, role: "MEMBER" },
+        { personId: target.person.id, role: "PARTICIPANT" },
       ],
     });
     const hidden = await createTask({
@@ -997,7 +1012,7 @@ test.describe("S2 canvas query security", () => {
       techGroup: "机械",
       members: [
         { personId: hiddenOwner.person.id, role: "OWNER" },
-        { personId: target.person.id, role: "MEMBER" },
+        { personId: target.person.id, role: "PARTICIPANT" },
       ],
     });
     await prisma.taskTag.createMany({
@@ -1057,6 +1072,7 @@ test.describe("S2 canvas query security", () => {
       taskTagOnlySegment.id,
       segmentTagOnlySegment.id,
       bothSegment.id,
+      hiddenSegment.id,
     ].sort();
     const personGrouped = await getTimeCanvasData({
       actor: teamAdminActor,
@@ -1086,6 +1102,7 @@ test.describe("S2 canvas query security", () => {
         both.taskId,
         taskTagWithoutSegment.taskId,
         taskTagOutsideRange.taskId,
+        hidden.taskId,
       ].sort(),
     );
     expect(fullSegmentIds(taskGrouped).sort()).toEqual(expectedSegmentIds);
@@ -1113,9 +1130,9 @@ test.describe("S2 canvas query security", () => {
       taskGrouped.rows.map((row) => row.id).sort(),
     );
     expect(new Set(pagedTaskIds).size).toBe(pagedTaskIds.length);
-    expect(JSON.stringify(personGrouped)).not.toContain(hiddenSegment.id);
-    expect(JSON.stringify(taskGrouped)).not.toContain(hidden.taskId);
-    expect(JSON.stringify(taskGrouped)).not.toContain(hiddenSegment.id);
+    expect(JSON.stringify(personGrouped)).toContain(hiddenSegment.id);
+    expect(JSON.stringify(taskGrouped)).toContain(hidden.taskId);
+    expect(JSON.stringify(taskGrouped)).toContain(hiddenSegment.id);
   });
 
   test("PERSON row creation capabilities use eligible Task existence without widening task visibility", async () => {
@@ -1125,14 +1142,17 @@ test.describe("S2 canvas query security", () => {
     const target = await createAccountPerson("Capability 目标人员");
     const viewer = await createAccountPerson("Capability Viewer");
     const outOfScopePerson = await createAccountPerson("Capability 越界人员");
-    const resourceManagerActor = actor(resourceManager, [
-      scopedRole("GROUP_LEADER", "英雄", "电控"),
-    ]);
+    const resourceManagerActor = actor(resourceManager, [systemAdministratorRole()]);
     const teamAdminActor = actor(teamAdmin, [
       scopedRole("GROUP_LEADER", "英雄", "电控"),
     ]);
     await Promise.all([
-      grantScopedRole(resourceManager.account.id, "GROUP_LEADER", "英雄", "电控"),
+      prisma.systemRoleAssignment.create({
+        data: {
+          accountId: resourceManager.account.id,
+          role: "PROJECT_ADMINISTRATOR",
+        },
+      }),
       grantScopedRole(teamAdmin.account.id, "GROUP_LEADER", "英雄", "电控"),
     ]);
     const activeTask = await createTask({
@@ -1142,8 +1162,8 @@ test.describe("S2 canvas query security", () => {
       techGroup: "电控",
       members: [
         { personId: owner.person.id, role: "OWNER" },
-        { personId: target.person.id, role: "MEMBER" },
-        { personId: viewer.person.id, role: "VIEWER" },
+        { personId: target.person.id, role: "PARTICIPANT" },
+        { personId: viewer.person.id, role: "PARTICIPANT" },
       ],
     });
     const draftTask = await createTask({
@@ -1154,7 +1174,7 @@ test.describe("S2 canvas query security", () => {
       status: "DRAFT",
       members: [
         { personId: owner.person.id, role: "OWNER" },
-        { personId: target.person.id, role: "MEMBER" },
+        { personId: target.person.id, role: "PARTICIPANT" },
       ],
     });
     const terminalTasks = await Promise.all(
@@ -1168,7 +1188,7 @@ test.describe("S2 canvas query security", () => {
             status,
             members: [
               { personId: owner.person.id, role: "OWNER" },
-              { personId: target.person.id, role: "MEMBER" },
+              { personId: target.person.id, role: "PARTICIPANT" },
             ],
           }),
       ),
@@ -1180,27 +1200,46 @@ test.describe("S2 canvas query security", () => {
       techGroup: "机械",
       members: [
         { personId: owner.person.id, role: "OWNER" },
-        { personId: outOfScopePerson.person.id, role: "MEMBER" },
+        { personId: outOfScopePerson.person.id, role: "PARTICIPANT" },
       ],
     });
 
-    for (const managerActor of [resourceManagerActor, teamAdminActor]) {
-      const canvas = await getTimeCanvasData({
-        actor: managerActor,
-        input: canvasInput({
-          scope: { kind: "RESOURCE_PLANNER" },
-          groupBy: "PERSON",
-          personIds: [target.person.id],
-        }),
-      });
-      expect(rowCanCreate(canvas, target.person.id)).toBe(true);
-      expect(canvas.rows.map((row) => row.id)).not.toContain(
-        outOfScopePerson.person.id,
-      );
+    const administratorCanvas = await getTimeCanvasData({
+      actor: resourceManagerActor,
+      input: canvasInput({
+        scope: { kind: "RESOURCE_PLANNER" },
+        groupBy: "PERSON",
+        personIds: [target.person.id],
+      }),
+    });
+    expect(rowCanCreate(administratorCanvas, target.person.id)).toBe(true);
+    const retiredLeaderCanvas = await getTimeCanvasData({
+      actor: teamAdminActor,
+      input: canvasInput({
+        scope: { kind: "RESOURCE_PLANNER" },
+        groupBy: "PERSON",
+        personIds: [target.person.id],
+      }),
+    });
+    expect(rowCanCreate(retiredLeaderCanvas, target.person.id)).toBe(false);
+    for (const canvas of [administratorCanvas, retiredLeaderCanvas]) {
+      expect(canvas.rows.map((row) => row.id)).toContain(target.person.id);
     }
 
-    const singleTerminal = await getTimeCanvasData({
+    const allPeopleCanvas = await getTimeCanvasData({
       actor: teamAdminActor,
+      input: canvasInput({
+        scope: { kind: "RESOURCE_PLANNER" },
+        groupBy: "PERSON",
+        personIds: [outOfScopePerson.person.id],
+      }),
+    });
+    expect(allPeopleCanvas.rows.map((row) => row.id)).toContain(
+      outOfScopePerson.person.id,
+    );
+
+    const singleTerminal = await getTimeCanvasData({
+      actor: resourceManagerActor,
       input: canvasInput({
         scope: { kind: "RESOURCE_PLANNER" },
         groupBy: "PERSON",
@@ -1221,7 +1260,7 @@ test.describe("S2 canvas query security", () => {
     };
     for (const [index, task] of terminalTasks.entries()) {
       await expectErrorCode(
-        createWorkSegment(teamAdminActor, {
+        createWorkSegment(resourceManagerActor, {
           personId: target.person.id,
           type: "PLANNED",
           startAt: atHour(14 + index * 0.1),
@@ -1244,7 +1283,7 @@ test.describe("S2 canvas query security", () => {
       }),
     }).toEqual(deniedWriteCounts);
 
-    const activeCreated = await createWorkSegment(teamAdminActor, {
+    const activeCreated = await createWorkSegment(resourceManagerActor, {
       personId: target.person.id,
       type: "PLANNED",
       startAt: atHour(15),
@@ -1254,7 +1293,7 @@ test.describe("S2 canvas query security", () => {
       nodeId: activeTask.milestoneNodeId,
     });
     expect(activeCreated.segment.taskId).toBe(activeTask.taskId);
-    const draftCreated = await createWorkSegment(teamAdminActor, {
+    const draftCreated = await createWorkSegment(resourceManagerActor, {
       personId: target.person.id,
       type: "PLANNED",
       startAt: atHour(16),
@@ -1265,7 +1304,7 @@ test.describe("S2 canvas query security", () => {
     });
     expect(draftCreated.segment.taskId).toBe(draftTask.taskId);
     const mixedTasks = await getTimeCanvasData({
-      actor: teamAdminActor,
+      actor: resourceManagerActor,
       input: canvasInput({
         scope: { kind: "RESOURCE_PLANNER" },
         groupBy: "PERSON",
@@ -1275,7 +1314,7 @@ test.describe("S2 canvas query security", () => {
     });
     expect(rowCanCreate(mixedTasks, target.person.id)).toBe(true);
     const terminalOnlyTasks = await getTimeCanvasData({
-      actor: teamAdminActor,
+      actor: resourceManagerActor,
       input: canvasInput({
         scope: { kind: "RESOURCE_PLANNER" },
         groupBy: "PERSON",
@@ -1337,31 +1376,21 @@ test.describe("S2 canvas query security", () => {
     expect(groupLeaderTaskFilter.anchors.map((anchor) => anchor.id)).toContain(
       activeTask.taskId,
     );
-    await expectErrorCode(
-      getTimeCanvasData({
-        actor: teamAdminActor,
-        input: canvasInput({
-          scope: { kind: "RESOURCE_PLANNER" },
-          groupBy: "PERSON",
-          taskIds: [outOfScopeTask.taskId],
-        }),
-      }),
-      "NOT_FOUND",
-    );
-    await expectErrorCode(
-      getTimeCanvasData({
-        actor: resourceManagerActor,
-        input: canvasInput({
-          scope: { kind: "RESOURCE_PLANNER" },
-          groupBy: "PERSON",
-          personIds: [outOfScopePerson.person.id],
-        }),
-      }),
-      "NOT_FOUND",
-    );
+    expect(
+      (
+        await getTimeCanvasData({
+          actor: teamAdminActor,
+          input: canvasInput({
+            scope: { kind: "RESOURCE_PLANNER" },
+            groupBy: "PERSON",
+            taskIds: [outOfScopeTask.taskId],
+          }),
+        })
+      ).anchors.map((anchor) => anchor.id),
+    ).toContain(outOfScopeTask.taskId);
   });
 
-  test("four canvas scopes enforce row domains, half-open filters, Full/Busy privacy and Actual capabilities", async () => {
+  test("four canvas scopes enforce row domains, half-open filters, global Full visibility and Actual capabilities", async () => {
     const scopeKey = randomUUID();
     const scopedTeam = `英雄-${scopeKey}`;
     const scopedTechGroup = `电控-${scopeKey}`;
@@ -1369,6 +1398,10 @@ test.describe("S2 canvas query security", () => {
     const member = await createAccountPerson("画布 Member");
     const hiddenOwner = await createAccountPerson("隐藏 Owner");
     const inactive = await createAccountPerson("停用画布人员", "INACTIVE");
+    const inactiveWithHistory = await createAccountPerson(
+      "有历史投入的停用画布人员",
+      "INACTIVE",
+    );
     const ownerActor = actor(owner);
     const adminActor = actor(owner, [systemAdministratorRole()]);
     const taskA = await createTask({
@@ -1379,7 +1412,7 @@ test.describe("S2 canvas query security", () => {
       plannedStartAt: null,
       members: [
         { personId: owner.person.id, role: "OWNER" },
-        { personId: member.person.id, role: "MEMBER" },
+        { personId: member.person.id, role: "PARTICIPANT" },
       ],
     });
     const taskB = await createTask({
@@ -1388,6 +1421,13 @@ test.describe("S2 canvas query security", () => {
       team: "步兵",
       techGroup: "机械",
       members: [{ personId: hiddenOwner.person.id, role: "OWNER" }],
+    });
+    await prisma.taskMember.create({
+      data: {
+        taskId: taskB.taskId,
+        personId: inactiveWithHistory.person.id,
+        role: "PARTICIPANT",
+      },
     });
     const current = await createSegment({
       accountId: owner.account.id,
@@ -1406,6 +1446,15 @@ test.describe("S2 canvas query security", () => {
       startAt: atHour(10),
       endAt: atHour(11),
       content: "绝密 Task B 投入",
+    });
+    const inactiveHistory = await createSegment({
+      accountId: hiddenOwner.account.id,
+      personId: inactiveWithHistory.person.id,
+      taskId: taskB.taskId,
+      nodeId: taskB.milestoneNodeId,
+      startAt: atHour(15),
+      endAt: atHour(16),
+      content: "停用人员历史投入",
     });
     const hiddenTag = await createTag(hiddenOwner.account.id, "绝密 Segment Tag");
     await prisma.segmentTag.create({
@@ -1470,24 +1519,22 @@ test.describe("S2 canvas query security", () => {
       visibility: "FULL",
       versionToken: current.updatedAt.toISOString(),
     });
-    const busy = taskCanvas.segments.find(
-      (segment) =>
-        segment.kind === "BUSY" &&
-        segment.startAt === hidden.startAt.toISOString(),
+    expect(taskCanvas.segments.some((segment) => segment.kind === "BUSY")).toBe(
+      false,
     );
-    expect(busy).toBeTruthy();
-    expect(Object.keys(busy ?? {}).sort()).toEqual(
-      [
-        "endAt",
-        "kind",
-        "personId",
-        "startAt",
-        "visibility",
-      ].sort(),
+    expect(taskCanvas.segments).toContainEqual(
+      expect.objectContaining({
+        kind: "SEGMENT",
+        visibility: "FULL",
+        id: hidden.id,
+        content: "绝密 Task B 投入",
+        taskId: taskB.taskId,
+        nodeId: taskB.milestoneNodeId,
+        versionToken: hiddenVersionToken,
+      }),
     );
-    expect(JSON.stringify(busy)).not.toContain("绝密 Task B 投入");
     const serializedTaskCanvas = JSON.stringify(taskCanvas);
-    for (const forbidden of [
+    for (const visible of [
       hidden.id,
       "绝密 Task B 投入",
       taskB.taskId,
@@ -1496,7 +1543,7 @@ test.describe("S2 canvas query security", () => {
       hiddenTag.name,
       hiddenVersionToken,
     ]) {
-      expect(serializedTaskCanvas).not.toContain(forbidden);
+      expect(serializedTaskCanvas).toContain(visible);
     }
     expect(fullSegmentIds(taskCanvas)).toContain(crossingRangeStart.id);
     expect(fullSegmentIds(taskCanvas)).not.toContain(endingAtRangeStart.id);
@@ -1548,44 +1595,65 @@ test.describe("S2 canvas query security", () => {
       input: canvasInput({
         scope: { kind: "RESOURCE_PLANNER" },
         groupBy: "PERSON",
+        personIds: [owner.person.id, member.person.id, hiddenOwner.person.id],
       }),
     });
-    expect(ordinaryResource.rows.map((row) => row.id)).toEqual([
-      owner.person.id,
-    ]);
+    expect(ordinaryResource.rows.map((row) => row.id)).toEqual(
+      expect.arrayContaining([
+        owner.person.id,
+        member.person.id,
+        hiddenOwner.person.id,
+      ]),
+    );
+    const globallyVisibleHidden = ordinaryResource.segments.find(
+      (segment) => segment.kind === "SEGMENT" && segment.id === hidden.id,
+    );
+    expect(globallyVisibleHidden).toMatchObject({
+      kind: "SEGMENT",
+      visibility: "FULL",
+      content: "绝密 Task B 投入",
+      taskId: taskB.taskId,
+      nodeId: taskB.milestoneNodeId,
+      versionToken: hiddenVersionToken,
+    });
     const taskGrouped = await getTimeCanvasData({
       actor: ownerActor,
       input: canvasInput({
         scope: { kind: "RESOURCE_PLANNER" },
         groupBy: "TASK",
+        taskIds: [taskA.taskId, taskB.taskId],
       }),
     });
     expect(taskGrouped.rows.map((row) => row.id)).toContain(taskA.taskId);
+    expect(taskGrouped.rows.map((row) => row.id)).toContain(taskB.taskId);
     expect(taskGrouped.segments.every((segment) => segment.kind === "SEGMENT"))
       .toBe(true);
 
-    await expectErrorCode(
-      getTimeCanvasData({
-        actor: ownerActor,
-        input: canvasInput({
-          scope: { kind: "RESOURCE_PLANNER" },
-          groupBy: "PERSON",
-          personIds: [member.person.id],
+    expect(
+      (
+        await getTimeCanvasData({
+          actor: ownerActor,
+          input: canvasInput({
+            scope: { kind: "RESOURCE_PLANNER" },
+            groupBy: "PERSON",
+            personIds: [member.person.id],
+          }),
+        })
+      ).rows.map((row) => row.id),
+    ).toContain(member.person.id);
+    expect(
+      fullSegmentIds(
+        await getTimeCanvasData({
+          actor: ownerActor,
+          input: canvasInput({
+            scope: { kind: "RESOURCE_PLANNER" },
+            groupBy: "PERSON",
+            personIds: [member.person.id],
+            taskIds: [taskB.taskId],
+          }),
         }),
-      }),
-      "NOT_FOUND",
-    );
-    await expectErrorCode(
-      getTimeCanvasData({
-        actor: ownerActor,
-        input: canvasInput({
-          scope: { kind: "RESOURCE_PLANNER" },
-          groupBy: "PERSON",
-          taskIds: [taskB.taskId],
-        }),
-      }),
-      "NOT_FOUND",
-    );
+      ),
+    ).toContain(hidden.id);
     await expectErrorCode(
       getTimeCanvasData({
         actor: ownerActor,
@@ -1607,6 +1675,24 @@ test.describe("S2 canvas query security", () => {
         }),
       }),
       "NOT_FOUND",
+    );
+    const inactiveHistoryCanvas = await getTimeCanvasData({
+      actor: adminActor,
+      input: canvasInput({
+        scope: { kind: "RESOURCE_PLANNER" },
+        groupBy: "PERSON",
+        personIds: [inactiveWithHistory.person.id],
+      }),
+    });
+    expect(inactiveHistoryCanvas.rows).toEqual([
+      expect.objectContaining({
+        id: inactiveWithHistory.person.id,
+        label: "有历史投入的停用画布人员（已停用）",
+        capabilities: { canCreateSegment: false },
+      }),
+    ]);
+    expect(fullSegmentIds(inactiveHistoryCanvas)).toContain(
+      inactiveHistory.id,
     );
 
     const firstRowPage = await getTimeCanvasData({
@@ -1642,18 +1728,18 @@ test.describe("S2 canvas query security", () => {
     );
   });
 
-  test("Busy queries exclude exact half-open boundaries and keep adjacent intersections", async () => {
+  test("globally visible Full segments exclude exact half-open boundaries and keep adjacent intersections", async () => {
     const owner = await createAccountPerson("半开边界 Owner");
     const target = await createAccountPerson("半开边界目标");
     const hiddenOwner = await createAccountPerson("半开边界隐藏 Owner");
-    const visibleTask = await createTask({
+    await createTask({
       ownerAccountId: owner.account.id,
       title: "半开边界可见 Task",
       team: "英雄",
       techGroup: "电控",
       members: [
         { personId: owner.person.id, role: "OWNER" },
-        { personId: target.person.id, role: "MEMBER" },
+        { personId: target.person.id, role: "PARTICIPANT" },
       ],
     });
     const hiddenTask = await createTask({
@@ -1706,43 +1792,43 @@ test.describe("S2 canvas query security", () => {
     const canvas = await getTimeCanvasData({
       actor: actor(owner),
       input: canvasInput({
-        scope: { kind: "TASK_SCOPED", taskId: visibleTask.taskId },
+        scope: { kind: "RESOURCE_PLANNER" },
         groupBy: "PERSON",
         personIds: [target.person.id],
         includeBusyBlocks: true,
       }),
     });
-    const busyRanges = canvas.segments.flatMap((segment) =>
-      segment.kind === "BUSY"
+    const visibleRanges = canvas.segments.flatMap((segment) =>
+      segment.kind === "SEGMENT" && segment.taskId === hiddenTask.taskId
         ? [`${segment.startAt}|${segment.endAt}`]
         : [],
     );
-    expect(busyRanges).toEqual(
+    expect(visibleRanges).toEqual(
       expect.arrayContaining([
         `${busyFixtures[1]!.startAt.toISOString()}|${busyFixtures[1]!.endAt.toISOString()}`,
         `${busyFixtures[3]!.startAt.toISOString()}|${busyFixtures[3]!.endAt.toISOString()}`,
       ]),
     );
-    expect(busyRanges).not.toContain(
+    expect(visibleRanges).not.toContain(
       `${busyFixtures[0]!.startAt.toISOString()}|${busyFixtures[0]!.endAt.toISOString()}`,
     );
-    expect(busyRanges).not.toContain(
+    expect(visibleRanges).not.toContain(
       `${busyFixtures[2]!.startAt.toISOString()}|${busyFixtures[2]!.endAt.toISOString()}`,
     );
   });
 
-  test("Busy blocks use hidden source IDs only as a stable tie-breaker", async () => {
+  test("globally visible equal-time Full segments use stable IDs as a tie-breaker", async () => {
     const owner = await createAccountPerson("Busy 稳定排序 Owner");
     const target = await createAccountPerson("Busy 稳定排序目标");
     const hiddenOwner = await createAccountPerson("Busy 稳定排序隐藏 Owner");
-    const visibleTask = await createTask({
+    await createTask({
       ownerAccountId: owner.account.id,
       title: "Busy 稳定排序可见 Task",
       team: "英雄",
       techGroup: "电控",
       members: [
         { personId: owner.person.id, role: "OWNER" },
-        { personId: target.person.id, role: "MEMBER" },
+        { personId: target.person.id, role: "PARTICIPANT" },
       ],
     });
     const hiddenTaskTitle = `Busy 稳定排序绝密 Task ${randomUUID()}`;
@@ -1779,11 +1865,11 @@ test.describe("S2 canvas query security", () => {
       );
     }
 
-    const loadEqualKeyBusyBlocks = async () => {
+    const loadEqualKeyFullSegments = async () => {
       const canvas = await getTimeCanvasData({
         actor: actor(owner),
         input: canvasInput({
-          scope: { kind: "TASK_SCOPED", taskId: visibleTask.taskId },
+          scope: { kind: "RESOURCE_PLANNER" },
           groupBy: "PERSON",
           personIds: [target.person.id],
           includeBusyBlocks: true,
@@ -1791,52 +1877,36 @@ test.describe("S2 canvas query security", () => {
       });
       return canvas.segments.filter(
         (segment) =>
-          segment.kind === "BUSY" &&
+          segment.kind === "SEGMENT" &&
+          segment.taskId === hiddenTask.taskId &&
           segment.personId === target.person.id &&
           segment.startAt === atHour(9).toISOString() &&
           segment.endAt === atHour(10).toISOString(),
       );
     };
-    const firstRead = await loadEqualKeyBusyBlocks();
-    const secondRead = await loadEqualKeyBusyBlocks();
+    const firstRead = await loadEqualKeyFullSegments();
+    const secondRead = await loadEqualKeyFullSegments();
     expect(firstRead).toHaveLength(hiddenSegments.length);
     expect(secondRead).toEqual(firstRead);
-    for (const busy of firstRead) {
-      expect(Object.keys(busy).sort()).toEqual(
-        [
-          "endAt",
-          "kind",
-          "personId",
-          "startAt",
-          "visibility",
-        ].sort(),
-      );
-    }
-
-    const serializedBusy = JSON.stringify(firstRead);
-    for (const forbidden of [
-      ...hiddenSegments.flatMap((segment) => [
-        segment.id,
-        segment.content,
-        segment.updatedAt.toISOString(),
-      ]),
+    expect(
+      firstRead.flatMap((segment) =>
+        segment.kind === "SEGMENT" ? [segment.id] : [],
+      ),
+    ).toEqual(
+      hiddenSegments.map((segment) => segment.id).sort(),
+    );
+    const serializedFull = JSON.stringify(firstRead);
+    for (const visible of [
+      ...hiddenSegments.flatMap((segment) => [segment.id, segment.content]),
       hiddenTask.taskId,
-      hiddenTask.milestoneNodeId,
-      hiddenTaskTitle,
       hiddenTag.id,
       hiddenTag.name,
-      '"id"',
-      '"taskId"',
-      '"nodeId"',
-      '"tagIds"',
-      '"title"',
-      '"versionToken"',
     ]) {
-      expect(serializedBusy).not.toContain(forbidden);
+      expect(serializedFull).toContain(visible);
     }
   });
 
-  test("time-object limit accepts 5000 authorized Full records despite hidden data and rejects 5001 Full", async () => {
+  test("time-object limit counts all globally visible Full records and rejects 5001", async () => {
     test.setTimeout(120_000);
     const owner = await createAccountPerson("5000 Full 上限 Owner");
     const target = await createAccountPerson("5000 Full 上限目标");
@@ -1848,7 +1918,7 @@ test.describe("S2 canvas query security", () => {
       techGroup: "电控",
       members: [
         { personId: owner.person.id, role: "OWNER" },
-        { personId: target.person.id, role: "MEMBER" },
+        { personId: target.person.id, role: "PARTICIPANT" },
       ],
     });
     const hiddenTask = await createTask({
@@ -1860,7 +1930,7 @@ test.describe("S2 canvas query security", () => {
     });
     const startAt = atHour(9);
     const endAt = atHour(10);
-    const rows = Array.from({ length: 5_000 }, (_, index) => ({
+    const rows = Array.from({ length: 4_975 }, (_, index) => ({
       id: randomUUID(),
       personId: target.person.id,
       type: "PLANNED" as const,
@@ -1896,8 +1966,8 @@ test.describe("S2 canvas query security", () => {
     });
     const atLimit = await getTimeCanvasData({ actor: actor(owner), input });
     expect(atLimit.segments).toHaveLength(5_000);
-    expect(JSON.stringify(atLimit)).not.toContain(hiddenRows[0]!.id);
-    expect(JSON.stringify(atLimit)).not.toContain("批量隐藏");
+    expect(JSON.stringify(atLimit)).toContain(hiddenRows[0]!.id);
+    expect(JSON.stringify(atLimit)).toContain("批量隐藏");
     await createSegment({
       accountId: owner.account.id,
       personId: target.person.id,
@@ -1924,7 +1994,7 @@ test.describe("S2 canvas query security", () => {
       techGroup: "电控",
       members: [
         { personId: owner.person.id, role: "OWNER" },
-        { personId: target.person.id, role: "MEMBER" },
+        { personId: target.person.id, role: "PARTICIPANT" },
       ],
     });
     const hiddenTask = await createTask({
@@ -1975,7 +2045,7 @@ test.describe("S2 canvas query security", () => {
       techGroup: "电控",
       members: [
         { personId: owner.person.id, role: "OWNER" },
-        { personId: target.person.id, role: "MEMBER" },
+        { personId: target.person.id, role: "PARTICIPANT" },
       ],
     });
     const hiddenTask = await createTask({
@@ -2496,7 +2566,7 @@ async function createAnchorTaskBatch({
         {
           taskId: task.id,
           personId: targetPersonId,
-          role: "MEMBER" as const,
+          role: "PARTICIPANT" as const,
           createdByAccountId: ownerAccountId,
         },
       ]),
@@ -2602,6 +2672,7 @@ async function grantScopedRole(
       team,
       techGroup: team ? "" : techGroup,
       grantedByAccountId: accountId,
+      revokedAt: new Date(),
     },
   });
 }
@@ -2658,12 +2729,7 @@ function rowCanCreate(
   return data.rows.find((row) => row.id === rowId)?.capabilities.canCreateSegment;
 }
 
-type TaskMemberRoleInput =
-  | "OWNER"
-  | "LEAD"
-  | "MEMBER"
-  | "REVIEWER"
-  | "VIEWER";
+type TaskMemberRoleInput = "OWNER" | "PARTICIPANT";
 
 type TaskStatusInput =
   | "DRAFT"

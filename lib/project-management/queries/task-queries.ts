@@ -138,8 +138,6 @@ export type TaskWorkspace = {
     relatedTaskId: string | null;
     currentPlanVersionId: string;
     activeMilestoneNodeId: string | null;
-    revisionApprovalMode: string;
-    allowSelfReview: boolean;
     lockVersion: number;
     startedAt: string | null;
     endedAt: string | null;
@@ -341,7 +339,6 @@ export async function getTaskWorkspace({
     techGroup: task.techGroup,
     status: task.status,
     priority: task.priority,
-    allowSelfReview: task.allowSelfReview,
     members: task.members,
   });
 
@@ -357,8 +354,6 @@ export async function getTaskWorkspace({
       relatedTaskId: task.relatedTaskId,
       currentPlanVersionId: task.currentPlanVersionId,
       activeMilestoneNodeId: task.activeMilestoneNodeId,
-      revisionApprovalMode: task.revisionApprovalMode,
-      allowSelfReview: task.allowSelfReview,
       lockVersion: task.lockVersion,
       startedAt: toIso(task.startedAt),
       endedAt: toIso(task.endedAt),
@@ -655,7 +650,6 @@ function taskResource(input: {
   techGroup: string;
   status: TaskStatus;
   priority: TaskPriority;
-  allowSelfReview: boolean;
   members: Array<{
     personId: string;
     role: TaskMemberRole;
@@ -668,7 +662,6 @@ function taskResource(input: {
     techGroup: input.techGroup,
     status: input.status,
     priority: input.priority,
-    allowSelfReview: input.allowSelfReview,
     members: input.members,
   };
 }

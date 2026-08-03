@@ -1,19 +1,21 @@
 import "dotenv/config";
 import { spawnSync } from "child_process";
+import { ensureTaskAccessMigrationAppliedAtomically } from "./task-access-atomic-deploy";
 
 const passthroughArgs = process.argv.slice(2);
 const maxWaitMs = Number(process.env.DB_WAIT_MS ?? 60_000);
 const pollMs = 2_000;
 
-function runPrisma(args: string[]) {
+function runPrisma(args: string[], allowFailure = false) {
   const result = spawnSync("npx", ["prisma", ...args], {
     cwd: process.cwd(),
     env: process.env,
     stdio: "inherit",
   });
-  if (result.status !== 0) {
+  if (result.status !== 0 && !allowFailure) {
     process.exit(result.status ?? 1);
   }
+  return { status: result.status };
 }
 
 async function waitForPostgres(): Promise<void> {
@@ -44,12 +46,17 @@ async function waitForPostgres(): Promise<void> {
 
 async function main() {
   await waitForPostgres();
-
   if (passthroughArgs.length > 0) {
-    runPrisma(["migrate", "deploy", ...passthroughArgs]);
-    return;
+    throw new Error(
+      "db:deploy 不接受 Prisma 透传参数；Task access 原子迁移必须经过受控部署入口",
+    );
   }
 
+  await ensureTaskAccessMigrationAppliedAtomically({
+    cwd: process.cwd(),
+    databaseUrl: process.env.DATABASE_URL ?? "",
+    runPrisma,
+  });
   runPrisma(["migrate", "deploy"]);
 }
 

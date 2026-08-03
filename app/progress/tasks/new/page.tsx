@@ -6,10 +6,6 @@ import {
 } from "@/components/project-management/task-composer-client";
 import { TEAM_OPTIONS, TECH_GROUP_OPTIONS } from "@/lib/constants";
 import {
-  authorize,
-  isSystemAdministrator,
-} from "@/lib/project-management/authorization";
-import {
   isoToShanghaiDateTimeLocal,
 } from "@/lib/project-management/date-time";
 import {
@@ -44,22 +40,6 @@ export default async function ProgressTaskNewPage({
     : null;
 
   const initialScope = chooseInitialScope(actor, template);
-  if (!initialScope) {
-    return (
-      <>
-        <PageCommandBar
-          title="新建 Task"
-          description="当前账号没有可创建 Task 的组织范围。"
-        />
-        <div className="mx-auto w-full max-w-3xl px-4 py-12 sm:px-6">
-          <div className="rounded-xl border border-border bg-card p-6 text-sm leading-6 text-muted-foreground">
-            创建 Task 需要 System Administrator 或对应车组/技术组的 Team
-            Administrator 权限。请联系管理员配置后重试。
-          </div>
-        </div>
-      </>
-    );
-  }
 
   const [actorPerson, peoplePage, taskPage, tagPage] = await Promise.all([
     getActorPersonOption(actor),
@@ -104,10 +84,7 @@ export default async function ProgressTaskNewPage({
         initialPeople={people}
         initialTasks={tasks}
         initialTags={tagPage.items}
-        isSystemAdministrator={isSystemAdministrator(actor)}
-        createScopes={actor.systemRoles
-          .filter((role) => role.role === "GROUP_LEADER")
-          .map((role) => ({ team: role.team, techGroup: role.techGroup }))}
+        actorPersonId={actor.personId}
       />
     </>
   );
@@ -117,35 +94,19 @@ function chooseInitialScope(
   actor: Awaited<ReturnType<typeof getProgressActorOrRedirect>>,
   template: TaskWorkspace | null,
 ) {
-  const candidates = [
-    template
-      ? { team: template.task.team, techGroup: template.task.techGroup }
-      : null,
-    ...actor.systemRoles
-      .filter((role) => role.role === "GROUP_LEADER")
-      .map((role) => ({
-        team: TEAM_OPTIONS.includes(role.team as (typeof TEAM_OPTIONS)[number])
-          ? role.team
-          : TEAM_OPTIONS[0],
-        techGroup: TECH_GROUP_OPTIONS.includes(
-          role.techGroup as (typeof TECH_GROUP_OPTIONS)[number],
-        )
-          ? role.techGroup
-          : TECH_GROUP_OPTIONS[0],
-      })),
-    { team: TEAM_OPTIONS[0], techGroup: TECH_GROUP_OPTIONS[0] },
-  ].filter(
-    (scope): scope is { team: string; techGroup: string } => scope !== null,
-  );
-  return (
-    candidates.find((scope) =>
-      authorize({
-        actor,
-        action: "task.create",
-        resource: { type: "system", ...scope },
-      }).allowed,
-    ) ?? null
-  );
+  void actor;
+  const templateTeam = template?.task.team;
+  const templateTechGroup = template?.task.techGroup;
+  return {
+    team: TEAM_OPTIONS.includes(templateTeam as (typeof TEAM_OPTIONS)[number])
+      ? templateTeam!
+      : TEAM_OPTIONS[0],
+    techGroup: TECH_GROUP_OPTIONS.includes(
+      templateTechGroup as (typeof TECH_GROUP_OPTIONS)[number],
+    )
+      ? templateTechGroup!
+      : TECH_GROUP_OPTIONS[0],
+  };
 }
 
 function createSeed({
@@ -204,10 +165,10 @@ function createSeed({
           },
         ];
   const owner = people.find((person) => person.id === actorPersonId) ?? people[0];
-  const templateMembers = template?.members.map((member) => ({
-    personId: member.personId,
-    role: member.role,
-  }));
+  const templateMembers = normalizeTemplateMembers(
+    template?.members ?? [],
+    actorPersonId,
+  );
 
   return {
     draftId: randomUUID(),
@@ -220,16 +181,11 @@ function createSeed({
     relatedTaskId:
       requestedRelated?.task.id ?? template?.task.relatedTaskId ?? null,
     members:
-      templateMembers && templateMembers.length > 0
+      templateMembers.length > 0
         ? templateMembers
         : owner
           ? [{ personId: owner.id, role: "OWNER" }]
           : [],
-    revisionApprovalMode:
-      template?.task.revisionApprovalMode === "DIRECT_BY_OWNER"
-        ? "DIRECT_BY_OWNER"
-        : "REVIEW_REQUIRED",
-    allowSelfReview: false,
     plannedStartAt,
     milestones,
     termination: {
@@ -243,6 +199,28 @@ function createSeed({
     },
     selectedEntityId: milestones[0]?.id ?? null,
   };
+}
+
+function normalizeTemplateMembers(
+  members: TaskWorkspace["members"],
+  creatorPersonId: string,
+): Array<{ personId: string; role: "OWNER" | "PARTICIPANT" }> {
+  const normalized = new Map<string, "OWNER" | "PARTICIPANT">();
+  for (const member of members) {
+    const role =
+      member.role === "OWNER"
+        ? "OWNER"
+        : member.role === "PARTICIPANT" ||
+            member.role === "LEAD" ||
+            member.role === "MEMBER"
+          ? "PARTICIPANT"
+          : null;
+    if (!role) continue;
+    if (normalized.get(member.personId) === "OWNER") continue;
+    normalized.set(member.personId, role);
+  }
+  normalized.set(creatorPersonId, "OWNER");
+  return [...normalized].map(([personId, role]) => ({ personId, role }));
 }
 
 function mergeTemplatePeople<T extends { id: string }>(

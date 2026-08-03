@@ -41,7 +41,7 @@ const compatibilityUserRoleInputSchema = z.object({
 
 export async function grantProjectSystemRole(input: {
   targetAccountId: string;
-  role: "SUPER_ADMINISTRATOR" | "PROJECT_ADMINISTRATOR" | "GROUP_LEADER";
+  role: "SUPER_ADMINISTRATOR" | "PROJECT_ADMINISTRATOR";
   team?: string;
   techGroup?: string;
 }) {

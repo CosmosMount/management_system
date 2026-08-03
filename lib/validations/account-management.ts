@@ -4,7 +4,6 @@ import { TEAM_OPTIONS, TECH_GROUP_OPTIONS } from "@/lib/constants";
 export const accountProjectRoleSchema = z.enum([
   "SUPER_ADMINISTRATOR",
   "PROJECT_ADMINISTRATOR",
-  "GROUP_LEADER",
 ]);
 
 export const reimbursementRoleSchema = z.enum([
@@ -26,30 +25,8 @@ export const grantAccountRoleInputSchema = z
     ...scopeFields,
   })
   .superRefine((input, ctx) => {
-    if (input.role !== "GROUP_LEADER") {
-      if (input.team || input.techGroup) {
-        ctx.addIssue({ code: "custom", message: "全局角色不能设置组织范围" });
-      }
-      return;
-    }
-    const hasTeam = Boolean(input.team);
-    const hasTechGroup = Boolean(input.techGroup);
-    if (hasTeam === hasTechGroup) {
-      ctx.addIssue({ code: "custom", message: "组长必须且只能选择一个车组或技术组" });
-      return;
-    }
-    if (input.team && !TEAM_OPTIONS.includes(input.team as never)) {
-      ctx.addIssue({ code: "custom", path: ["team"], message: "车组范围无效" });
-    }
-    if (
-      input.techGroup &&
-      !TECH_GROUP_OPTIONS.includes(input.techGroup as never)
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["techGroup"],
-        message: "技术组范围无效",
-      });
+    if (input.team || input.techGroup) {
+      ctx.addIssue({ code: "custom", message: "全局角色不能设置组织范围" });
     }
   });
 

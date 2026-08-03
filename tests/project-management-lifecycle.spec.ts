@@ -33,6 +33,7 @@ import {
   terminationDraftSchema,
   taskWorkspaceQueryInputSchema,
 } from "../lib/project-management/validations/lifecycle";
+import { withGlobalApprovalAdministratorGuardDisabled } from "./helpers/global-approval-administrator-guard";
 
 test.describe("project management P2/P3 task lifecycle services", () => {
   test("Lifecycle validation returns Chinese messages for UUID and disabled file evidence errors", async () => {
@@ -115,16 +116,13 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     }
   });
 
-  test("Task draft creation is authorized, idempotent and query-visible only to readers", async () => {
+  test("Task draft creation is open to active accounts, idempotent and globally readable", async () => {
     const admin = await createAccountPerson("生命周期 Team Admin");
     const owner = await createAccountPerson("生命周期 Owner");
     const member = await createAccountPerson("生命周期 Member");
     const reviewer = await createAccountPerson("生命周期 Reviewer");
     const outsider = await createAccountPerson("生命周期 Outsider");
-    await grantRole(admin.account.id, "GROUP_LEADER", {
-      team: "英雄",
-      techGroup: "电控",
-    });
+    await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
     const tag = await prisma.tag.create({
       data: {
         name: `生命周期标签-${randomUUID()}`,
@@ -152,10 +150,40 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       relatedTaskId: related.taskId,
     };
 
-    await expectServiceError(
-      createTaskDraft(actor(outsider), draftInput),
-      "FORBIDDEN",
+    const legacyIdempotencyKey = `task-draft-legacy-page-${randomUUID()}`;
+    const legacyPageError = await captureServiceError(
+      createTaskDraft(actor(admin), {
+        ...draftInput,
+        idempotencyKey: legacyIdempotencyKey,
+        revisionApprovalMode: "REVIEW_REQUIRED",
+        allowSelfReview: false,
+      }),
     );
+    expect(legacyPageError).toMatchObject({
+      code: "VALIDATION_ERROR",
+      message: "页面版本已过期，请刷新页面后重试；本地草稿会继续保留",
+    });
+    expect(
+      await prisma.taskPlanVersion.count({
+        where: { idempotencyKey: legacyIdempotencyKey },
+      }),
+    ).toBe(0);
+
+    const outsiderCreated = await createTaskDraft(actor(outsider), {
+      ...draftInput,
+      idempotencyKey: `task-draft-outsider-${randomUUID()}`,
+    });
+    expect(outsiderCreated.status).toBe("DRAFT");
+    await expect(
+      prisma.taskMember.findFirstOrThrow({
+        where: {
+          taskId: outsiderCreated.taskId,
+          personId: outsider.person.id,
+          removedAt: null,
+        },
+        select: { role: true },
+      }),
+    ).resolves.toEqual({ role: "OWNER" });
 
     const created = await createTaskDraft(actor(admin), draftInput);
     expect(created).toMatchObject({ created: true, status: "DRAFT" });
@@ -286,10 +314,14 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         })
       )[0]?.plannedStartAt,
     ).toBeNull();
-    await expectServiceError(
-      getTaskWorkspace({ actor: actor(outsider), taskId: created.taskId }),
-      "NOT_FOUND",
-    );
+    expect(
+      (
+        await getTaskWorkspace({
+          actor: actor(outsider),
+          taskId: created.taskId,
+        })
+      ).task.id,
+    ).toBe(created.taskId);
   });
 
   test("Task activation sets the first active milestone and rejects stale or concurrent activation", async () => {
@@ -536,14 +568,6 @@ test.describe("project management P2/P3 task lifecycle services", () => {
 
   test("Revision draft, submit, reject and cancel preserve the current plan", async () => {
     const fixture = await createActivatedFixture();
-    await prisma.taskMember.create({
-      data: {
-        taskId: fixture.taskId,
-        personId: fixture.owner.person.id,
-        role: "REVIEWER",
-        createdByAccountId: fixture.owner.account.id,
-      },
-    });
     const activeNode = await firstCurrentMilestone(fixture.taskId);
     const revision = await createRevisionDraft(actor(fixture.owner), {
       taskId: fixture.taskId,
@@ -618,7 +642,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       data: {
         taskId: fixture.taskId,
         personId: lead.person.id,
-        role: "LEAD",
+        role: "PARTICIPANT",
         createdByAccountId: fixture.owner.account.id,
       },
     });
@@ -690,7 +714,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     });
     expect(leadView.revisions[0]?.capabilities).toMatchObject({
       canEdit: false,
-      canSubmit: true,
+      canSubmit: false,
     });
     expect(leadView.auditFilterOptions.eventTypes).toEqual(
       expect.arrayContaining([
@@ -1016,6 +1040,15 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     expect(jsonRecord(revisionAppliedPayload.context).currentPlanVersionId).toBe(
       revision.targetPlanVersionId,
     );
+    expect(revisionAppliedPayload.recipientOpenIds).toContain(
+      fixture.owner.openId,
+    );
+    expect(revisionAppliedPayload.recipientOpenIds).not.toContain(
+      fixture.member.openId,
+    );
+    expect(revisionAppliedPayload.recipientOpenIds).not.toContain(
+      fixture.reviewer.openId,
+    );
     const associationInvalidatedPayload = await expectProjectManagementOutbox(
       `pm:segment:association_invalidated:${revision.revisionNodeId}:feishu`,
       {
@@ -1085,25 +1118,29 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       ]),
     );
     const outsider = await createAccountPerson("生命周期 Plan Outsider");
-    await expectServiceError(
-      getPlanVersion({
+    expect(
+      (
+        await getPlanVersion({
+          actor: actor(outsider),
+          planVersionId: applied.currentPlanVersionId,
+        })
+      ).id,
+    ).toBe(applied.currentPlanVersionId);
+    expect(
+      await listTaskPlanVersions({
         actor: actor(outsider),
-        planVersionId: applied.currentPlanVersionId,
+        taskId: fixture.taskId,
       }),
-      "NOT_FOUND",
-    );
-    await expectServiceError(
-      listTaskPlanVersions({ actor: actor(outsider), taskId: fixture.taskId }),
-      "NOT_FOUND",
-    );
-    await expectServiceError(
-      comparePlanVersions({
-        actor: actor(outsider),
-        fromPlanVersionId: fixture.currentPlanVersionId,
-        toPlanVersionId: applied.currentPlanVersionId,
-      }),
-      "NOT_FOUND",
-    );
+    ).toHaveLength(2);
+    expect(
+      (
+        await comparePlanVersions({
+          actor: actor(outsider),
+          fromPlanVersionId: fixture.currentPlanVersionId,
+          toPlanVersionId: applied.currentPlanVersionId,
+        })
+      ).added.length,
+    ).toBeGreaterThan(0);
 
     await expectServiceError(
       createRevisionDraft(actor(fixture.owner), {
@@ -1181,10 +1218,10 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     }
   });
 
-  test("Direct owner revision applies without reviewer when the task policy allows it", async () => {
-    const fixture = await createActivatedFixture("DIRECT_BY_OWNER");
+  test("Revision always waits for approval and a global administrator may self-approve", async () => {
+    const fixture = await createActivatedFixture();
     const activeNode = await firstCurrentMilestone(fixture.taskId);
-    const revision = await createRevisionDraft(actor(fixture.owner), {
+    const revision = await createRevisionDraft(actor(fixture.admin), {
       taskId: fixture.taskId,
       basePlanVersionId: fixture.currentPlanVersionId,
       baseTaskLockVersion: 1,
@@ -1199,12 +1236,18 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       termination: terminationInput(7),
       idempotencyKey: `revision-direct-${randomUUID()}`,
     });
-    const submitted = await submitRevision(actor(fixture.owner), {
+    const submitted = await submitRevision(actor(fixture.admin), {
       revisionNodeId: revision.revisionNodeId,
-      comment: "直接生效",
+      comment: "提交后显式自审",
     });
-    expect(submitted.status).toBe("EFFECTIVE");
-    expect(submitted.currentPlanVersionId).toBe(revision.targetPlanVersionId);
+    expect(submitted.status).toBe("PENDING_APPROVAL");
+    expect(submitted.currentPlanVersionId).toBe(fixture.currentPlanVersionId);
+    const approved = await approveRevision(actor(fixture.admin), {
+      revisionNodeId: revision.revisionNodeId,
+      comment: "管理员自审通过",
+    });
+    expect(approved.status).toBe("EFFECTIVE");
+    expect(approved.currentPlanVersionId).toBe(revision.targetPlanVersionId);
   });
 
   test("Termination enforces success prerequisites and supports early failed/cancelled/timeout outcomes", async () => {
@@ -1298,7 +1341,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     );
     expect(reviewerCancelled.status).toBe("CANCELLED");
 
-    const completedFixture = await createActivatedFixture("REVIEW_REQUIRED", 1);
+    const completedFixture = await createActivatedFixture(1);
     const activeNode = await firstCurrentMilestone(completedFixture.taskId);
     const review = await submitMilestoneForReview(actor(completedFixture.member), {
       milestoneNodeId: activeNode.nodeId,
@@ -1326,13 +1369,142 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     });
     expect(success.status).toBe("COMPLETED");
   });
+
+  test("没有可用全局审批人或有效飞书身份时提交审批整事务回滚", async () => {
+    const fixture = await createActivatedFixture();
+    const activeNode = await firstCurrentMilestone(fixture.taskId);
+    const revision = await createRevisionDraft(actor(fixture.owner), {
+      taskId: fixture.taskId,
+      basePlanVersionId: fixture.currentPlanVersionId,
+      baseTaskLockVersion: fixture.lockVersion,
+      revisedFromNodeId: activeNode.nodeId,
+      reason: "审批人可达性门禁",
+      replacementMilestones: [
+        milestoneInput("审批人恢复后再提交", "审批链路可达", 4),
+      ],
+      plannedStartAt: new Date(
+        Date.UTC(2026, 6, 31, 10, 0, 0),
+      ).toISOString(),
+      termination: terminationInput(8),
+      idempotencyKey: `revision-approver-guard-${randomUUID()}`,
+    });
+    const activeAssignments = await prisma.systemRoleAssignment.findMany({
+      where: {
+        role: { in: ["SUPER_ADMINISTRATOR", "PROJECT_ADMINISTRATOR"] },
+        team: "",
+        techGroup: "",
+        revokedAt: null,
+      },
+      select: { id: true },
+    });
+    const reviewKey = `review-approver-guard-${randomUUID()}`;
+    await withGlobalApprovalAdministratorGuardDisabled(async () => {
+      try {
+        await prisma.systemRoleAssignment.updateMany({
+          where: { id: { in: activeAssignments.map((item) => item.id) } },
+          data: { revokedAt: new Date() },
+        });
+        const milestoneError = await captureServiceError(
+          submitMilestoneForReview(actor(fixture.member), {
+            milestoneNodeId: activeNode.nodeId,
+            idempotencyKey: reviewKey,
+            evidences: [{ kind: "TEXT", note: "没有审批人时不得落库" }],
+          }),
+        );
+        expect(milestoneError).toMatchObject({
+          code: "STATE_CONFLICT",
+          message: expect.stringContaining(
+            "至少保留一名项目访问已启用的全局管理员",
+          ),
+        });
+        const revisionError = await captureServiceError(
+          submitRevision(actor(fixture.owner), {
+            revisionNodeId: revision.revisionNodeId,
+            comment: "没有审批人时不得进入待审批",
+          }),
+        );
+        expect(revisionError).toMatchObject({
+          code: "STATE_CONFLICT",
+          message: expect.stringContaining(
+            "至少保留一名项目访问已启用的全局管理员",
+          ),
+        });
+      } finally {
+        await prisma.systemRoleAssignment.updateMany({
+          where: { id: { in: activeAssignments.map((item) => item.id) } },
+          data: { revokedAt: null, revokedByAccountId: null },
+        });
+      }
+    });
+
+    const administratorIdentities = await prisma.accountIdentity.findMany({
+      where: {
+        provider: "FEISHU",
+        tenantId: "default",
+        account: {
+          projectAccessStatus: "ACTIVE",
+          systemRoles: {
+            some: {
+              role: {
+                in: ["SUPER_ADMINISTRATOR", "PROJECT_ADMINISTRATOR"],
+              },
+              team: "",
+              techGroup: "",
+              revokedAt: null,
+            },
+          },
+        },
+      },
+      select: { id: true, openId: true },
+    });
+    await withGlobalApprovalAdministratorGuardDisabled(async () => {
+      try {
+        await prisma.$transaction(
+          administratorIdentities.map((identity, index) =>
+            prisma.accountIdentity.update({
+              where: { id: identity.id },
+              data: { openId: " ".repeat(index + 1) },
+            }),
+          ),
+        );
+        const error = await captureServiceError(
+          submitRevision(actor(fixture.owner), {
+            revisionNodeId: revision.revisionNodeId,
+            comment: "没有可达飞书身份时不得进入待审批",
+          }),
+        );
+        expect(error).toMatchObject({
+          code: "STATE_CONFLICT",
+          message: expect.stringContaining("有效飞书身份"),
+        });
+      } finally {
+        await prisma.$transaction(
+          administratorIdentities.map((identity) =>
+            prisma.accountIdentity.update({
+              where: { id: identity.id },
+              data: { openId: identity.openId },
+            }),
+          ),
+        );
+      }
+    });
+
+    await expect(
+      prisma.milestoneReview.count({
+        where: { milestoneNodeId: activeNode.nodeId, idempotencyKey: reviewKey },
+      }),
+    ).resolves.toBe(0);
+    await expect(
+      prisma.revisionNode.findUniqueOrThrow({
+        where: { id: revision.revisionNodeId },
+        select: { status: true, submittedAt: true },
+      }),
+    ).resolves.toEqual({ status: "DRAFT", submittedAt: null });
+  });
 });
 
-async function createActivatedFixture(
-  revisionApprovalMode: "REVIEW_REQUIRED" | "DIRECT_BY_OWNER" = "REVIEW_REQUIRED",
-  milestoneCount = 2,
-) {
-  const fixture = await createDraftFixture(revisionApprovalMode, milestoneCount);
+async function createActivatedFixture(milestoneCount = 2) {
+  const fixture = await createDraftFixture(milestoneCount);
   const activated = await activateTask(actor(fixture.owner), {
     taskId: fixture.taskId,
     expectedLockVersion: 0,
@@ -1340,24 +1512,18 @@ async function createActivatedFixture(
   return { ...fixture, lockVersion: activated.lockVersion };
 }
 
-async function createDraftFixture(
-  revisionApprovalMode: "REVIEW_REQUIRED" | "DIRECT_BY_OWNER" = "REVIEW_REQUIRED",
-  milestoneCount = 2,
-) {
+async function createDraftFixture(milestoneCount = 2) {
   const admin = await createAccountPerson("生命周期 Admin");
   const owner = await createAccountPerson("生命周期 Owner");
   const member = await createAccountPerson("生命周期 Member");
   const reviewer = await createAccountPerson("生命周期 Reviewer");
-  await grantRole(admin.account.id, "GROUP_LEADER", {
-    team: "英雄",
-    techGroup: "电控",
-  });
+  await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
+  await grantRole(reviewer.account.id, "SUPER_ADMINISTRATOR");
   const input = taskDraftInput({
     ownerPersonId: owner.person.id,
     memberPersonId: member.person.id,
     reviewerPersonId: reviewer.person.id,
     idempotencyKey: `task-${randomUUID()}`,
-    revisionApprovalMode,
     milestoneCount,
   });
   const created = await createTaskDraft(actor(admin), input);
@@ -1377,7 +1543,6 @@ function taskDraftInput({
   reviewerPersonId,
   idempotencyKey,
   tagIds = [],
-  revisionApprovalMode = "REVIEW_REQUIRED",
   milestoneCount = 2,
 }: {
   ownerPersonId: string;
@@ -1385,7 +1550,6 @@ function taskDraftInput({
   reviewerPersonId: string;
   idempotencyKey: string;
   tagIds?: string[];
-  revisionApprovalMode?: "REVIEW_REQUIRED" | "DIRECT_BY_OWNER";
   milestoneCount?: number;
 }) {
   return {
@@ -1397,8 +1561,8 @@ function taskDraftInput({
     tagIds,
     members: [
       { personId: ownerPersonId, role: "OWNER" },
-      { personId: memberPersonId, role: "MEMBER" },
-      { personId: reviewerPersonId, role: "REVIEWER" },
+      { personId: memberPersonId, role: "PARTICIPANT" },
+      { personId: reviewerPersonId, role: "PARTICIPANT" },
     ],
     milestones: Array.from({ length: milestoneCount }, (_, index) =>
       milestoneInput(
@@ -1409,7 +1573,6 @@ function taskDraftInput({
     ),
     plannedStartAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
     termination: terminationInput(milestoneCount + 3),
-    revisionApprovalMode,
     idempotencyKey,
   };
 }
@@ -1516,15 +1679,14 @@ async function createAccountPerson(displayName: string) {
 
 async function grantRole(
   accountId: string,
-  role: "GROUP_LEADER",
-  scope: { team: string; techGroup: string },
+  role: "SUPER_ADMINISTRATOR" | "PROJECT_ADMINISTRATOR",
 ) {
   await prisma.systemRoleAssignment.create({
     data: {
       accountId,
       role,
-      team: scope.team,
-      techGroup: scope.team ? "" : scope.techGroup,
+      team: "",
+      techGroup: "",
     },
   });
 }

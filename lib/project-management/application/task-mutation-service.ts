@@ -9,8 +9,6 @@ import { prisma } from "@/lib/prisma";
 import {
   assertAuthorized,
   authorize,
-  isSystemAdministrator,
-  ProjectManagementAuthorizationError,
   taskReadableWhere,
   type AuthorizationTaskResource,
 } from "@/lib/project-management/authorization";
@@ -323,11 +321,6 @@ async function updateTaskMetadataForStatus(
     assertTaskStatus(task, requiredStatus);
     assertExpectedLockVersion(task, parsed.expectedLockVersion);
     assertAuthorizedTargetScope(refreshedActor, task, parsed);
-    assertAllowSelfReviewPolicy(
-      refreshedActor,
-      task.allowSelfReview,
-      parsed.allowSelfReview,
-    );
     await assertRelatedTaskVisibleTx(
       tx,
       refreshedActor,
@@ -357,8 +350,6 @@ async function updateTaskMetadataForStatus(
         team: parsed.team,
         techGroup: parsed.techGroup,
         priority: parsed.priority,
-        revisionApprovalMode: parsed.revisionApprovalMode,
-        allowSelfReview: parsed.allowSelfReview,
         relatedTaskId: parsed.relatedTaskId,
         lockVersion: { increment: 1 },
       },
@@ -399,10 +390,7 @@ async function updateTaskMetadataForStatus(
         ...metadataSnapshot(updatedTask),
         ...(requiredStatus === "DRAFT" ? { tagIds } : {}),
       }),
-      reason:
-        task.allowSelfReview !== parsed.allowSelfReview
-          ? "更新 Task 元数据与自审策略"
-          : "更新 Task 元数据",
+      reason: "更新 Task 元数据",
     });
 
     return {
@@ -432,6 +420,7 @@ async function replaceTaskMembersForStatus(
       tx,
       parsed.members.map((member) => member.personId),
     );
+    await assertTaskSegmentMembersIncludedTx(tx, task.id, parsed.members);
 
     const beforeMembers = memberSnapshot(task.members);
     const changes = calculateMemberChanges(task.members, parsed.members);
@@ -533,7 +522,6 @@ function taskResource(task: TaskForMutation): AuthorizationTaskResource {
     techGroup: task.techGroup,
     status: task.status,
     priority: task.priority,
-    allowSelfReview: task.allowSelfReview,
     members: task.members,
   };
 }
@@ -581,23 +569,6 @@ function assertExpectedLockVersion(
 ) {
   if (task.lockVersion !== expectedLockVersion) {
     throw staleTaskError(task);
-  }
-}
-
-function assertAllowSelfReviewPolicy(
-  actor: ProjectManagementActor,
-  currentValue: boolean,
-  requestedValue: boolean,
-) {
-  if (
-    !currentValue &&
-    requestedValue &&
-    !isSystemAdministrator(actor)
-  ) {
-    throw new ProjectManagementAuthorizationError(
-      "task.update_metadata",
-      "self_review_policy_admin_required",
-    );
   }
 }
 
@@ -680,24 +651,55 @@ async function replaceTaskTagsTx(
 function assertExistingMemberInvariant(
   members: Array<{ personId: string; role: TaskMemberRole }>,
 ) {
-  const keys = members.map((member) => memberKey(member));
-  if (new Set(keys).size !== keys.length) {
-    throw stateConflictError("Task 当前成员数据存在重复角色，请联系管理员处理");
+  const personIds = members.map((member) => member.personId);
+  if (new Set(personIds).size !== personIds.length) {
+    throw stateConflictError("Task 当前成员数据存在重复成员，请联系管理员处理");
+  }
+  if (
+    members.some(
+      (member) => member.role !== "OWNER" && member.role !== "PARTICIPANT",
+    )
+  ) {
+    throw stateConflictError("Task 当前成员仍含历史角色，请联系管理员处理");
+  }
+  if (members.every((member) => member.role !== "OWNER")) {
+    throw stateConflictError("Task 当前没有负责人，请联系管理员处理");
   }
 }
 
 function assertRequestedMemberInvariant(
   members: Array<{ personId: string; role: TaskMemberRole }>,
 ) {
-  const keys = members.map((member) => memberKey(member));
-  if (new Set(keys).size !== keys.length) {
-    throw validationError("同一成员不能重复添加相同角色", {
-      members: ["同一成员不能重复添加相同角色"],
+  const personIds = members.map((member) => member.personId);
+  if (new Set(personIds).size !== personIds.length) {
+    throw validationError("同一成员只能有一个角色", {
+      members: ["同一成员只能有一个角色"],
     });
   }
-  if (members.filter((member) => member.role === "OWNER").length !== 1) {
-    throw validationError("必须且只能有一名 OWNER", {
-      members: ["必须且只能有一名 OWNER"],
+  if (members.every((member) => member.role !== "OWNER")) {
+    throw validationError("至少需要一名负责人", {
+      members: ["至少需要一名负责人"],
+    });
+  }
+}
+
+async function assertTaskSegmentMembersIncludedTx(
+  tx: PrismaTx,
+  taskId: string,
+  requestedMembers: Array<{ personId: string }>,
+) {
+  const retainedPersonIds = requestedMembers.map((member) => member.personId);
+  const orphanedSegment = await tx.workSegment.findFirst({
+    where: {
+      taskId,
+      deletedAt: null,
+      personId: { notIn: retainedPersonIds },
+    },
+    select: { id: true },
+  });
+  if (orphanedSegment) {
+    throw validationError("仍有关联投入的成员不能移出 Task", {
+      members: ["请先处理该成员的 Task 关联投入"],
     });
   }
 }
@@ -1415,8 +1417,6 @@ function metadataSnapshot(task: TaskForMutation) {
     team: task.team,
     techGroup: task.techGroup,
     priority: task.priority,
-    revisionApprovalMode: task.revisionApprovalMode,
-    allowSelfReview: task.allowSelfReview,
     relatedTaskId: task.relatedTaskId,
     lockVersion: task.lockVersion,
   };
