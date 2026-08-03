@@ -1,6 +1,11 @@
 import type { Prisma } from "@prisma/client";
 import { AccountsPanel } from "@/components/admin/accounts-panel";
 import { prisma } from "@/lib/prisma";
+import { rankFuzzyMatches } from "@/lib/search/fuzzy-score";
+import {
+  normalizeSearchText,
+  searchTerms,
+} from "@/lib/search/normalize-search-text";
 
 const PAGE_SIZE = 30;
 const projectRoleValues = [
@@ -14,6 +19,43 @@ const reimbursementRoleValues = [
   "FINANCE",
 ] as const;
 
+const accountRowSelect = {
+  id: true,
+  lastLoginAt: true,
+  createdAt: true,
+  person: { select: { displayName: true, avatar: true } },
+  identities: {
+    where: { provider: "FEISHU" as const, tenantId: "default" },
+    orderBy: { createdAt: "asc" as const },
+    select: { id: true, openId: true, unionId: true },
+  },
+  reimbursementUser: {
+    select: { openId: true, name: true, email: true },
+  },
+  systemRoles: {
+    orderBy: { createdAt: "desc" as const },
+    select: {
+      id: true,
+      role: true,
+      team: true,
+      techGroup: true,
+      createdAt: true,
+      revokedAt: true,
+    },
+  },
+  reimbursementRoles: {
+    orderBy: { createdAt: "desc" as const },
+    select: {
+      id: true,
+      role: true,
+      team: true,
+      techGroup: true,
+      createdAt: true,
+      revokedAt: true,
+    },
+  },
+} satisfies Prisma.AccountSelect;
+
 type SearchParams = Record<string, string | string[] | undefined>;
 
 function firstParam(value: string | string[] | undefined) {
@@ -26,8 +68,7 @@ export default async function AdminAccountsPage({
   searchParams?: Promise<SearchParams>;
 }) {
   const params = (await searchParams) ?? {};
-  const query = firstParam(params.q).trim();
-  const status = firstParam(params.status);
+  const query = normalizeSearchText(firstParam(params.q));
   const role = firstParam(params.role);
   const team = firstParam(params.team);
   const techGroup = firstParam(params.techGroup);
@@ -35,26 +76,6 @@ export default async function AdminAccountsPage({
   const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
 
   const conditions: Prisma.AccountWhereInput[] = [];
-  if (query) {
-    conditions.push({
-      OR: [
-            { person: { displayName: { contains: query, mode: "insensitive" } } },
-            {
-              reimbursementUser: {
-                name: { contains: query, mode: "insensitive" },
-              },
-            },
-            {
-              identities: {
-                some: { openId: { contains: query, mode: "insensitive" } },
-              },
-            },
-          ],
-    });
-  }
-  if (status === "ACTIVE" || status === "DISABLED") {
-    conditions.push({ projectAccessStatus: status });
-  }
   if (projectRoleValues.includes(role as (typeof projectRoleValues)[number])) {
     conditions.push({
       systemRoles: {
@@ -103,55 +124,119 @@ export default async function AdminAccountsPage({
   const where: Prisma.AccountWhereInput =
     conditions.length > 0 ? { AND: conditions } : {};
 
-  const [accounts, total] = await Promise.all([
-    prisma.account.findMany({
-      where,
-      orderBy: [
-        { person: { displayName: "asc" } },
-        { createdAt: "asc" },
-      ],
-      skip: (page - 1) * PAGE_SIZE,
-      take: PAGE_SIZE,
-      select: {
-        id: true,
-        projectAccessStatus: true,
-        lastLoginAt: true,
-        createdAt: true,
-        person: { select: { displayName: true, avatar: true } },
-        identities: {
-          where: { provider: "FEISHU", tenantId: "default" },
-          orderBy: { createdAt: "asc" },
-          select: { id: true, openId: true, unionId: true },
-        },
-        reimbursementUser: {
-          select: { openId: true, name: true, email: true },
-        },
-        systemRoles: {
-          orderBy: { createdAt: "desc" },
-          select: {
-            id: true,
-            role: true,
-            team: true,
-            techGroup: true,
-            createdAt: true,
-            revokedAt: true,
-          },
-        },
-        reimbursementRoles: {
-          orderBy: { createdAt: "desc" },
-          select: {
-            id: true,
-            role: true,
-            team: true,
-            techGroup: true,
-            createdAt: true,
-            revokedAt: true,
-          },
-        },
+  let accounts: Prisma.AccountGetPayload<{ select: typeof accountRowSelect }>[];
+  let total: number;
+  let hasMoreByQuery = false;
+  if (query) {
+    const candidateSelect = {
+      id: true,
+      person: { select: { displayName: true } },
+      identities: {
+        where: { provider: "FEISHU" as const, tenantId: "default" },
+        select: { openId: true, unionId: true },
       },
-    }),
-    prisma.account.count({ where }),
-  ]);
+      reimbursementUser: {
+        select: { name: true, email: true, openId: true },
+      },
+    } satisfies Prisma.AccountSelect;
+    const directSearchConditions = searchTerms(query).map(
+      (term): Prisma.AccountWhereInput => ({
+        OR: [
+          { person: { displayName: { contains: term, mode: "insensitive" } } },
+          { reimbursementUser: { name: { contains: term, mode: "insensitive" } } },
+          { reimbursementUser: { email: { contains: term, mode: "insensitive" } } },
+          { reimbursementUser: { openId: { contains: term, mode: "insensitive" } } },
+          {
+            identities: {
+              some: {
+                provider: "FEISHU",
+                tenantId: "default",
+                openId: { contains: term, mode: "insensitive" },
+              },
+            },
+          },
+          {
+            identities: {
+              some: {
+                provider: "FEISHU",
+                tenantId: "default",
+                unionId: { contains: term, mode: "insensitive" },
+              },
+            },
+          },
+        ],
+      }),
+    );
+    const directCandidates = await prisma.account.findMany({
+      where: {
+        AND: [where, ...directSearchConditions],
+      },
+      orderBy: [{ person: { displayName: "asc" } }, { createdAt: "asc" }],
+      take: 501,
+      select: candidateSelect,
+    });
+    const fallbackCandidates = directCandidates.length < 50
+      ? await prisma.account.findMany({
+          where,
+          orderBy: [{ person: { displayName: "asc" } }, { createdAt: "asc" }],
+          take: 501,
+          select: candidateSelect,
+        })
+      : [];
+    const candidates = [...new Map(
+      [...directCandidates, ...fallbackCandidates].map((account) => [account.id, account]),
+    ).values()];
+    const ranked = rankFuzzyMatches(
+      candidates,
+      query,
+      (account) => [
+        { text: account.person?.displayName ?? "", weight: 2, pinyin: true },
+        { text: account.reimbursementUser?.name ?? "", weight: 2, pinyin: true },
+        ...account.identities.flatMap((identity) => [
+          { text: identity.openId ?? "" },
+          { text: identity.unionId ?? "" },
+        ]),
+        { text: account.reimbursementUser?.openId ?? "" },
+        { text: account.reimbursementUser?.email ?? "" },
+      ],
+      (left, right) => {
+        const leftName = left.person?.displayName ?? left.reimbursementUser?.name ?? "";
+        const rightName = right.person?.displayName ?? right.reimbursementUser?.name ?? "";
+        return (
+          leftName.localeCompare(rightName, "zh-CN") ||
+          left.id.localeCompare(right.id)
+        );
+      },
+    );
+    total = ranked.length;
+    hasMoreByQuery =
+      directCandidates.length === 501 || fallbackCandidates.length === 501;
+    const pageIds = ranked
+      .slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+      .map(({ item }) => item.id);
+    const rows = pageIds.length
+      ? await prisma.account.findMany({
+          where: { AND: [where, { id: { in: pageIds } }] },
+          select: accountRowSelect,
+        })
+      : [];
+    const byId = new Map(rows.map((account) => [account.id, account]));
+    accounts = pageIds.flatMap((id) => {
+      const account = byId.get(id);
+      return account ? [account] : [];
+    });
+  } else {
+    [accounts, total] = await Promise.all([
+      prisma.account.findMany({
+        where,
+        orderBy: [{ person: { displayName: "asc" } }, { createdAt: "asc" }],
+        skip: (page - 1) * PAGE_SIZE,
+        take: PAGE_SIZE,
+        select: accountRowSelect,
+      }),
+      prisma.account.count({ where }),
+    ]);
+  }
 
   const entityAccountIds = new Map<string, string>();
   for (const account of accounts) {
@@ -227,7 +312,8 @@ export default async function AdminAccountsPage({
       page={page}
       pageSize={PAGE_SIZE}
       total={total}
-      filters={{ query, status, role, team, techGroup }}
+      hasMoreByQuery={hasMoreByQuery}
+      filters={{ query, role, team, techGroup }}
     />
   );
 }

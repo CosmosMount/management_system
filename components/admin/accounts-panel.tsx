@@ -11,7 +11,6 @@ import {
   grantProjectSystemRole,
   revokeAccountReimbursementRole,
   revokeProjectSystemRole,
-  updateProjectAccessStatus,
 } from "@/app/actions/adminRoles";
 import type { AdminAccountRow } from "@/components/admin/account-types";
 import { Badge } from "@/components/ui/badge";
@@ -56,7 +55,6 @@ const reimbursementRoleLabels: Record<string, string> = {
 
 type Filters = {
   query: string;
-  status: string;
   role: string;
   team: string;
   techGroup: string;
@@ -67,12 +65,14 @@ export function AccountsPanel({
   page,
   pageSize,
   total,
+  hasMoreByQuery,
   filters,
 }: {
   accounts: AdminAccountRow[];
   page: number;
   pageSize: number;
   total: number;
+  hasMoreByQuery: boolean;
   filters: Filters;
 }) {
   const router = useRouter();
@@ -103,11 +103,16 @@ export function AccountsPanel({
         <CardHeader>
           <CardTitle>账号与权限</CardTitle>
           <CardDescription>
-            超级管理员跨报销与项目生效；项目禁用不会影响登录和报销。
+            统一管理项目角色与报销角色；业务权限仍由角色和 Task 成员关系决定。
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <AccountFilters filters={filters} />
+          {hasMoreByQuery && (
+            <p className="text-sm text-amber-700" role="status">
+              匹配账号较多，当前仅在前 501 个候选中排序，请继续输入关键词缩小范围。
+            </p>
+          )}
           {accounts.length === 0 ? (
             <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
               没有符合条件的账号。
@@ -119,7 +124,6 @@ export function AccountsPanel({
                   <TableHeader>
                     <TableRow>
                       <TableHead>账号</TableHead>
-                      <TableHead>项目访问</TableHead>
                       <TableHead>系统身份</TableHead>
                       <TableHead>报销角色</TableHead>
                       <TableHead className="text-right">操作</TableHead>
@@ -129,7 +133,6 @@ export function AccountsPanel({
                     {accounts.map((account) => (
                       <TableRow key={account.id}>
                         <TableCell><AccountIdentity account={account} /></TableCell>
-                        <TableCell><StatusBadge status={account.projectAccessStatus} /></TableCell>
                         <TableCell><RoleBadges account={account} kind="project" /></TableCell>
                         <TableCell><RoleBadges account={account} kind="reimbursement" /></TableCell>
                         <TableCell className="text-right">
@@ -160,7 +163,6 @@ export function AccountsPanel({
                   >
                     <div className="flex items-start justify-between gap-3">
                       <AccountIdentity account={account} />
-                      <StatusBadge status={account.projectAccessStatus} />
                     </div>
                     <div className="mt-3"><RoleBadges account={account} kind="project" /></div>
                   </button>
@@ -215,11 +217,8 @@ export function AccountsPanel({
 
 function AccountFilters({ filters }: { filters: Filters }) {
   return (
-    <form className="grid min-w-0 gap-3 lg:grid-cols-[minmax(12rem,1fr)_10rem_11rem_9rem_9rem_auto]">
+    <form className="grid min-w-0 gap-3 lg:grid-cols-[minmax(12rem,1fr)_11rem_9rem_9rem_auto]">
       <Input name="q" defaultValue={filters.query} placeholder="搜索姓名或飞书 ID" aria-label="搜索账号" />
-      <select name="status" defaultValue={filters.status} aria-label="项目访问状态" className="h-8 rounded-lg border border-input bg-background px-2 text-sm">
-        <option value="">全部状态</option><option value="ACTIVE">项目已启用</option><option value="DISABLED">项目已禁用</option>
-      </select>
       <select name="role" defaultValue={filters.role} aria-label="角色类型" className="h-8 rounded-lg border border-input bg-background px-2 text-sm">
         <option value="">全部角色</option><option value="SUPER_ADMINISTRATOR">超级管理员</option><option value="PROJECT_ADMINISTRATOR">项目管理员</option><option value="ORDINARY">普通成员</option><option value="TEAM_ADMIN">报销车组组长</option><option value="TECH_GROUP_ADMIN">报销技术组组长</option><option value="TEACHER">指导老师</option><option value="FINANCE">报销员</option>
       </select>
@@ -249,24 +248,15 @@ function AccountDetail({
     <Card data-testid="account-permission-detail">
       <CardHeader>
         <CardTitle className="flex min-w-0 items-center gap-2"><UserRoundCog className="h-5 w-5 shrink-0" /><span className="truncate">{displayName(account)}</span></CardTitle>
-        <CardDescription>飞书身份、项目访问和两个业务域的角色配置。</CardDescription>
+        <CardDescription>飞书身份以及项目、报销两个业务域的角色配置。</CardDescription>
       </CardHeader>
       <CardContent className="grid min-w-0 gap-6 xl:grid-cols-2">
         <section className="min-w-0 space-y-3 rounded-xl border p-4">
-          <h3 className="font-medium">账号与项目访问</h3>
+          <h3 className="font-medium">账号与身份</h3>
           <dl className="space-y-2 text-sm">
             <IdentityRows account={account} />
             <div className="flex justify-between gap-3"><dt className="text-muted-foreground">最后登录</dt><dd>{account.lastLoginAt ? new Date(account.lastLoginAt).toLocaleString("zh-CN") : "尚未登录"}</dd></div>
           </dl>
-          <Button
-            variant={account.projectAccessStatus === "ACTIVE" ? "destructive" : "default"}
-            disabled={pending}
-            onClick={() => {
-              const next = account.projectAccessStatus === "ACTIVE" ? "DISABLED" : "ACTIVE";
-              if (!window.confirm(next === "DISABLED" ? "确定禁用该账号的项目管理访问？登录和报销不会受影响。" : "确定恢复该账号的项目管理访问？")) return;
-              run(() => updateProjectAccessStatus({ targetAccountId: account.id, status: next }), next === "ACTIVE" ? "项目访问已启用" : "项目访问已禁用");
-            }}
-          >{account.projectAccessStatus === "ACTIVE" ? "禁用项目访问" : "启用项目访问"}</Button>
         </section>
 
         <section className="min-w-0 space-y-3 rounded-xl border p-4">
@@ -365,8 +355,6 @@ function IdentityRows({ account }: { account: AdminAccountRow }) {
   return <><div className="flex min-w-0 justify-between gap-3"><dt className="shrink-0 text-muted-foreground">openId</dt><dd className="min-w-0 break-all text-right">{identity?.openId ?? "缺失"}</dd></div><div className="flex min-w-0 justify-between gap-3"><dt className="shrink-0 text-muted-foreground">unionId</dt><dd className="min-w-0 break-all text-right">{identity?.unionId ?? "缺失"}</dd></div></>;
 }
 
-function StatusBadge({ status }: { status: AdminAccountRow["projectAccessStatus"] }) { return <Badge variant={status === "ACTIVE" ? "default" : "destructive"}>{status === "ACTIVE" ? "项目已启用" : "项目已禁用"}</Badge>; }
-
 function RoleBadges({ account, kind }: { account: AdminAccountRow; kind: "project" | "reimbursement" }) {
   const labels = kind === "project" ? account.systemRoles.filter((item) => !item.revokedAt && activeProjectRoles.has(item.role)).map(systemRoleLabel) : account.reimbursementRoles.filter((item) => !item.revokedAt && item.role !== "SUPER_ADMIN").map(reimbursementRoleLabel);
   if (!labels.length) return <span className="text-xs text-muted-foreground">{kind === "project" ? "普通成员" : "无"}</span>;
@@ -379,5 +367,5 @@ function subscribeMobileAccountsLayout(callback: () => void) { const query = win
 function mobileAccountsLayoutSnapshot() { return window.matchMedia("(max-width: 767px)").matches; }
 function systemRoleLabel(assignment: { role: string; team: string; techGroup: string }) { const scope = assignment.team || assignment.techGroup; return `${projectRoleLabels[assignment.role] ?? assignment.role}${scope ? ` · ${scope}` : ""}`; }
 function reimbursementRoleLabel(assignment: { role: string; team: string; techGroup: string }) { const scope = assignment.team || assignment.techGroup; return `${reimbursementRoleLabels[assignment.role] ?? assignment.role}${scope ? ` · ${scope}` : ""}`; }
-function securityAuditLabel(action: string) { return ({ "account.role.granted": "授予项目角色", "account.role.revoked": "撤销项目角色", "account.reimbursement_role.granted": "授予报销角色", "account.reimbursement_role.revoked": "撤销报销角色", "account.project_access.changed": "变更项目访问", "account.role.migrated": "迁移账号角色" }[action] ?? "账号安全变更"); }
-function pageHref(filters: Filters, page: number) { const params = new URLSearchParams(); if (filters.query) params.set("q", filters.query); if (filters.status) params.set("status", filters.status); if (filters.role) params.set("role", filters.role); if (filters.team) params.set("team", filters.team); if (filters.techGroup) params.set("techGroup", filters.techGroup); params.set("page", String(page)); return `/admin/accounts?${params.toString()}`; }
+function securityAuditLabel(action: string) { return ({ "account.role.granted": "授予项目角色", "account.role.revoked": "撤销项目角色", "account.reimbursement_role.granted": "授予报销角色", "account.reimbursement_role.revoked": "撤销报销角色", "account.project_access.removed": "移除项目访问禁用机制", "account.role.migrated": "迁移账号角色" }[action] ?? "账号安全变更"); }
+function pageHref(filters: Filters, page: number) { const params = new URLSearchParams(); if (filters.query) params.set("q", filters.query); if (filters.role) params.set("role", filters.role); if (filters.team) params.set("team", filters.team); if (filters.techGroup) params.set("techGroup", filters.techGroup); params.set("page", String(page)); return `/admin/accounts?${params.toString()}`; }

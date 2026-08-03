@@ -184,7 +184,6 @@ test("approval notification repair blocks before freezing when administrators la
       provider: "FEISHU",
       tenantId: "default",
       account: {
-        projectAccessStatus: "ACTIVE",
         systemRoles: {
           some: {
             role: {
@@ -300,7 +299,6 @@ async function activeGlobalAdministrators() {
       team: "",
       techGroup: "",
       revokedAt: null,
-      account: { projectAccessStatus: "ACTIVE" },
     },
     select: {
       account: {
@@ -429,7 +427,6 @@ async function createAccountPerson(displayName: string) {
   const openId = `ou_task_repair_${randomUUID()}`;
   const account = await prisma.account.create({
     data: {
-      projectAccessStatus: "ACTIVE",
       identities: {
         create: {
           provider: "FEISHU",

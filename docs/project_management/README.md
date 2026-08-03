@@ -5,8 +5,8 @@
 当前状态：
 
 - `/progress` 已开放项目管理入口，包含我的工作总览、Task 列表/工作台、人员计划、个人时间线和站内通知中心。资源冲突中心已删除，旧 `/progress/resources/conflicts` 返回 404。
-- `projectAccessStatus=ACTIVE` 的账号可查看全部未删除 Task、计划版本、成员、Milestone/Revision 审批与 Task 审计，也可查看全员完整 Planned/Actual Work Segment 和变更历史；停用 Person 的历史投入继续显示并标记“已停用”。
-- 所有启用项目账号都可创建合法车组/技术组的 Task，创建者自动成为负责人。Task 有效成员只允许 `OWNER`（负责人）和 `PARTICIPANT`（参与人），支持多负责人但至少一名，同一 Person 在同一 Task 中只能有一个有效角色。
+- 所有已登录统一账号都可查看全部未删除 Task、计划版本、成员、Milestone/Revision 审批与 Task 审计，也可查看全员完整 Planned/Actual Work Segment 和变更历史；停用 Person 的历史投入继续显示并标记“已停用”。账号级项目访问启用/禁用状态已经删除。
+- 所有已登录统一账号都可创建合法车组/技术组的 Task，创建者自动成为负责人。Task 有效成员只允许 `OWNER`（负责人）和 `PARTICIPANT`（参与人），支持多负责人但至少一名，同一 Person 在同一 Task 中只能有一个有效角色。
 - 非成员只有读取权；Participant 可编辑 Task/计划、提交验收与 Revision 并管理自己的关联投入；Owner 另可管理成员、Task 状态、任意未生效 Revision 和该 Task 全部投入；全局 `SUPER_ADMINISTRATOR/PROJECT_ADMINISTRATOR` 可执行全部项目操作。
 - Milestone 和 Revision 的最终决定只允许两类全局管理员，允许自审，但 Revision 提交后仍必须先进入 `PENDING_APPROVAL` 并执行显式批准。Task 级流程策略、允许自审开关和 Task Reviewer 已删除。
 - 项目 `GROUP_LEADER` 已退役并只保留撤销历史。采购报销的车组/技术组角色不受影响；Work Segment 的 `REVIEWER` 工作职责也继续保留，但不授予 Task 审批权。

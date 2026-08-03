@@ -5,9 +5,9 @@ type PrismaTx = Prisma.TransactionClient;
 const GLOBAL_APPROVAL_ADMINISTRATOR_LOCK = 2_026_080_301;
 
 export const ACTIVE_GLOBAL_APPROVAL_ADMINISTRATOR_REQUIRED =
-  "至少保留一名项目访问已启用的全局管理员";
+  "至少保留一名全局管理员";
 export const USABLE_GLOBAL_APPROVAL_ADMINISTRATOR_REQUIRED =
-  "至少保留一名项目访问已启用的全局管理员，且该账号必须具有有效飞书身份";
+  "至少保留一名具有有效飞书身份的全局管理员";
 
 export async function lockGlobalApprovalAdministratorSetTx(tx: PrismaTx) {
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(${GLOBAL_APPROVAL_ADMINISTRATOR_LOCK})`;
@@ -33,7 +33,6 @@ export async function activeGlobalApprovalAdministratorAccountIdsTx(
       ...(input.excludeAccountId
         ? { accountId: { not: input.excludeAccountId } }
         : {}),
-      account: { projectAccessStatus: "ACTIVE" },
     },
     select: {
       accountId: true,

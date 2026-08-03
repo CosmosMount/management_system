@@ -208,7 +208,8 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
    - 点击 **「同步飞书通讯录」** 将企业全员录入系统（无需对方先登录）
    - 管理项目管理员；项目系统角色不再提供车组/技术组组长
    - 管理原有四类报销角色
-   - 启用或禁用项目访问；该状态不影响登录和报销
+
+项目模块不再提供账号级启用/禁用开关。账号通过登录身份解析后，项目可见性和写权限只由系统角色、TaskMember 与既有授权规则决定；停用 `Person` 仍不能被新增选择。
 
 用户也可通过飞书登录自动写入/更新 `User` 表；分配角色前需先完成通讯录同步或让对方登录一次。
 
@@ -237,9 +238,9 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 | TEACHER | 全局 | 「老师审核」阶段通过 |
 | FINANCE | 指定车组 | 上传报销截图 |
 
-`projectAccessStatus=ACTIVE` 的账号都可查看全部未删除 Task、计划、成员、验收、审计和完整 Planned/Actual Work Segment，也都可创建任意合法车组/技术组的 Task；创建者自动成为负责人。Task 有效成员只保留负责人和参与人，同一人在同一 Task 中只能有一个角色，且至少保留一名负责人。非成员只有读取权；Milestone 和 Revision 的通过、驳回、要求修订只允许统一超级管理员或项目管理员处理，并允许管理员自审。
+所有已登录统一账号都可查看全部未删除 Task、计划、成员、验收、审计和完整 Planned/Actual Work Segment，也都可创建任意合法车组/技术组的 Task；创建者自动成为负责人。账号级项目访问禁用机制已经删除。Task 有效成员只保留负责人和参与人，同一人在同一 Task 中只能有一个角色，且至少保留一名负责人。非成员只有读取权；Milestone 和 Revision 的通过、驳回、要求修订只允许统一超级管理员或项目管理员处理，并允许管理员自审。
 
-系统始终要求至少保留一名项目访问已启用且具有 default tenant 有效飞书 openId 的全局管理员；账号后台会拒绝撤销或禁用最后一名可用审批人，数据库延迟约束也会拦截绕过应用层的账号状态、角色、身份写入以及无审批人的首个 Task。提交 Milestone/Revision 审批时会在同一事务中再次校验，失败时整事务回滚，不会留下无人处理或无法通知的待审批记录。
+存在 Task 数据时，系统要求至少保留一名具有 default tenant 有效飞书 openId 的全局管理员；账号后台会拒绝撤销最后一名可用审批人的角色，数据库永久门禁也会拦截绕过应用层的账号删除、角色和身份写入。空库创建首个 Task 时同样检查该不变量。提交 Milestone/Revision 审批时会在同一事务中再次校验，失败时整事务回滚，不会留下无人处理或无法通知的待审批记录。
 
 项目 `GROUP_LEADER` 已退役，只保留撤销历史且不能继续授予。采购报销的 `TEAM_ADMIN`、`TECH_GROUP_ADMIN` 等独立角色、组长称谓和审批流程不受影响。Work Segment 中名为 `REVIEWER` 的工作职责仍可使用，它只描述该段工作，不授予 Task 审批权限。
 
@@ -251,7 +252,7 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 2. **账号尚未建立**：先让该用户登录或执行通讯录同步。
 3. **旧数据未通过迁移预检**：升级前先运行 `npm run accounts:preflight`，处理报告中的身份、重复角色或范围冲突。
 
-统一账号历史升级仍按 `npm run accounts:preflight` → `npm run db:deploy` → `npm run accounts:validate` 执行。Task 全员可见改造部署前还必须先运行只读 `npm run pm:task-access-preflight`；若报告零负责人 Task 或孤立的 Task 关联投入，迁移会阻断，必须先人工修复，不能猜测负责人。受控 `npm run db:deploy` 会把不可逆 Task migration 与 Prisma history 记录放入同一 PostgreSQL 事务；不得绕过它直接运行 `prisma migrate deploy`。迁移链还会在不可逆 Task DDL 之前按固定顺序锁定相关表、复检活跃且飞书可达的全局管理员，并安装覆盖账号状态、全局角色、飞书身份和首条 Task 创建的永久串行延迟约束，避免遗漏人工预检、部署中断或旧实例并发写入时留下半升级 schema。该自动门禁不替代发布前报告核对。
+统一账号历史升级仍按 `npm run accounts:preflight` → `npm run db:deploy` → `npm run accounts:validate` 执行。Task 全员可见改造部署前还必须先运行只读 `npm run pm:task-access-preflight`；若报告零负责人 Task 或孤立的 Task 关联投入，迁移会阻断，必须先人工修复，不能猜测负责人。受控 `npm run db:deploy` 会把不可逆 Task migration 与 Prisma history 记录放入同一 PostgreSQL 事务；不得绕过它直接运行 `prisma migrate deploy`。迁移链还会在不可逆 Task DDL 之前按固定顺序锁定相关表、复检具有有效飞书身份的全局管理员，并安装覆盖账号删除、全局角色、飞书身份和首条 Task 创建的永久串行延迟约束，避免遗漏人工预检、部署中断或旧实例并发写入时留下半升级 schema。该自动门禁不替代发布前报告核对。
 
 ### 完整审批与报销流程
 
@@ -501,7 +502,7 @@ pm2 start npm --name procurement-cron -- run cron
 
 旧项目、阶段、任务、审批、周报、风险和提醒实现及其开发数据已直接清理，不提供旧数据迁移或旧接口兼容。当前已完成 v2.1 底座、Task 生命周期、Resource Segment，以及项目管理前端的 Task Composer、Task 工作台、统一 TimeCanvas/TimeAgenda、资源计划、个人时间线、个人驾驶舱、统一待办、Tag 和通知偏好。Account/Person、Task/Tag、Plan/Node、Segment、通知、审计、权限和通用 cron 跨实例互斥均已有服务端状态机和集成测试。
 
-- 所有项目访问启用账号可查看全部未删除 Task、计划/审批/审计历史和全员完整 Segment，并可创建 Task；可见性扩大不扩大写权限。
+- 所有已登录并成功解析到统一 `Account/Person` 的账号可查看全部未删除 Task、计划/审批/审计历史和全员完整 Segment，并可创建 Task；可见性扩大不扩大写权限。
 - Task 成员只分“负责人”和“参与人”。支持多负责人且至少一名，同一 Person 只能有一个有效角色；创建者自动成为负责人。
 - 参与人可编辑 Task/计划、提交验收和 Revision，并管理自己的关联投入；负责人另可管理成员、Task 状态、任意未生效 Revision 和该 Task 全部投入；全局管理员拥有全部项目写权限。
 - Revision 每次提交都进入待审批，Milestone 与 Revision 只由统一超级管理员或项目管理员决定，允许管理员自审；界面不再提供流程策略、Reviewer 或自审开关。
@@ -512,7 +513,8 @@ pm2 start npm --name procurement-cron -- run cron
 - `/progress/approvals` 汇总投入确认、Milestone Review、Revision、Termination 与关联复核；`/progress/tags` 管理 Tag。
 - `/progress/notifications` 提供站内通知中心和分类飞书偏好；站内通知始终保留，强制事件不受普通关闭偏好影响。
 - 旧 `/progress/task/:id` 会重定向到 `/progress/tasks/:id`；旧 `/progress/projects/*` 和 `/progress/kanban` 回到 `/progress`；未映射旧目录没有业务页面。
-- 飞书登录和通讯录同步先解析统一 `Account/AccountIdentity/Person`，再关联并更新采购 `User`。`projectAccessStatus=DISABLED` 只阻止项目页面和操作；登录、采购报销和超级管理员后台不受影响。
+- 飞书登录和通讯录同步先解析统一 `Account/AccountIdentity/Person`，再关联并更新采购 `User`。账号级项目访问禁用机制已移除，历史禁用账号恢复项目入口，但仍受系统角色、TaskMember 和数据范围授权约束。
+- 人员与 Task 选择统一使用异步模糊选择器，支持 NFKC、拼音首字母、顺序匹配、已选项安全恢复和最多 50 项多选；Task 列表与账号后台使用相同的有界排序规则。
 - 新项目管理的设计和逐阶段真实证据位于 [`docs/plan/`](docs/plan/)；当前完成度以 `project-management-frontend-design-v1.0/13-实施进度台账.md` 为准。
 - `npm run pm:release-rehearsal` 仅用于本机隔离 `_test`/`_snapshot` 数据库；必须显式设置 `PM_RELEASE_REHEARSAL_CONFIRM=LOCAL_ISOLATED_REHEARSAL` 和 `NOTIFICATION_DELIVERY_DISABLED=true`。它不会执行生产维护窗口，生产发布仍需另行授权与 BO/TL/QA/DBA 签字。
 - 项目管理飞书通知只允许写入 `channel=project-management` 的 notification outbox；adapter 已构造普通交互卡并经统一私信传输层投递。验收和 Revision 待审批事件使用审批机器人用途，其他项目管理事件使用通知机器人。

@@ -437,7 +437,6 @@ async function createCanvasBrowserIdentity() {
   const name = "S3 TimeCanvas 验收用户";
   await prisma.account.create({
     data: {
-      projectAccessStatus: "ACTIVE",
       identities: {
         create: {
           provider: "FEISHU",

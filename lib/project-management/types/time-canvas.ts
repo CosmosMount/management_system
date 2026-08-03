@@ -268,19 +268,15 @@ export const BUSY_BLOCK_DTO_FIELDS = [
 
 export type BusyBlockDto = z.infer<typeof busyBlockDtoSchema>;
 
-export const personAccountAvailabilityValues = [
-  "UNBOUND",
-  "ACTIVE",
-  "DISABLED",
-] as const;
+export const personAccountBindingValues = ["UNBOUND", "BOUND"] as const;
 
 export const personOptionDtoSchema = z
   .object({
     id: dtoIdSchema,
     displayName: z.string().trim().min(1),
     avatar: z.string().nullable(),
-    status: z.literal("ACTIVE"),
-    accountAvailability: z.enum(personAccountAvailabilityValues),
+    status: z.enum(["ACTIVE", "INACTIVE"]),
+    accountBinding: z.enum(personAccountBindingValues),
   })
   .strict();
 
@@ -290,6 +286,7 @@ export const personOptionPageSchema = z
   .object({
     items: z.array(personOptionDtoSchema),
     nextCursor: pageCursorSchema,
+    hasMoreByQuery: z.boolean().optional().default(false),
   })
   .strict();
 
@@ -315,6 +312,8 @@ export const taskOptionDtoSchema = z
     title: z.string().trim().min(1),
     status: taskStatusSchema,
     priority: taskPrioritySchema,
+    team: z.string(),
+    techGroup: z.string(),
     activeMilestone: activeMilestoneOptionDtoSchema.nullable(),
     permission: taskOptionPermissionDtoSchema,
   })
@@ -324,6 +323,7 @@ export const taskOptionPageSchema = z
   .object({
     items: z.array(taskOptionDtoSchema),
     nextCursor: pageCursorSchema,
+    hasMoreByQuery: z.boolean().optional().default(false),
   })
   .strict();
 

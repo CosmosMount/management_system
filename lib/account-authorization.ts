@@ -1,5 +1,4 @@
 import type {
-  AccountStatus,
   ProjectManagementSystemRole,
   UserRoleType,
 } from "@prisma/client";
@@ -25,7 +24,6 @@ export type AccountReimbursementRoleRecord = {
 export type AccountAuthorizationContext = {
   accountId: string;
   isSuperAdministrator: boolean;
-  projectAccessStatus: AccountStatus;
   projectRoles: AccountProjectRoleRecord[];
   reimbursementRoles: AccountReimbursementRoleRecord[];
 };
@@ -43,7 +41,6 @@ export async function getAccountAuthorizationContextForOpenId(
       account: {
         select: {
           id: true,
-          projectAccessStatus: true,
           systemRoles: {
             where: { revokedAt: null },
             select: { id: true, role: true, team: true, techGroup: true },
@@ -61,7 +58,6 @@ export async function getAccountAuthorizationContextForOpenId(
   const projectRoles = identity.account.systemRoles;
   return {
     accountId: identity.account.id,
-    projectAccessStatus: identity.account.projectAccessStatus,
     isSuperAdministrator: projectRoles.some(
       (assignment) =>
         assignment.role === "SUPER_ADMINISTRATOR" &&

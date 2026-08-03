@@ -18,21 +18,6 @@ const TASK_ACCESS_PREFLIGHT =
   "20260803115900_active_global_approval_administrator_preflight";
 const TASK_ACCESS_MIGRATION =
   "20260803120000_task_global_visibility_participants_admin_approval";
-const BACKFILLED_GUARD_MIGRATIONS = [
-  "20260803115900_active_global_approval_administrator_preflight",
-  "20260803115950_durable_global_approval_administrator_guard",
-  "20260803115975_refine_global_approval_administrator_role_guard",
-  "20260803115980_serialize_global_approval_administrator_guard",
-  "20260803115990_atomic_global_approval_administrator_guard",
-  "20260803115992_refine_atomic_global_approval_administrator_guard",
-  "20260803115995_finalize_atomic_global_approval_administrator_guard",
-  "20260803123050_remove_refined_global_approval_administrator_role_guard",
-  "20260803123075_remove_serialized_global_approval_administrator_guard",
-  "20260803123100_remove_durable_global_approval_administrator_guard",
-  "20260803123105_cleanup_all_legacy_global_approval_administrator_guards",
-  "20260803123110_remove_residual_global_approval_administrator_guard_function",
-] as const;
-
 test("controlled db deploy atomically applies Task access and backfills real Prisma history", async () => {
   test.setTimeout(180_000);
   const sourceUrl = safeLocalTestDatabaseUrl();
@@ -197,30 +182,15 @@ test("controlled db deploy atomically applies Task access and backfills real Pri
     expect(successfulDeploy.status).toBe(0);
     await assertFinalMigrationState(target);
 
-    await dropPermanentGuard(target);
-    await target.query(
-      `DELETE FROM "_prisma_migrations"
-       WHERE migration_name = ANY($1::text[])`,
-      [[...BACKFILLED_GUARD_MIGRATIONS]],
-    );
-    const historyBackfillDeploy = runControlledDeploy(targetUrl);
-    expect(historyBackfillDeploy.status).toBe(0);
-    expect(commandOutput(historyBackfillDeploy)).toContain(
-      "All migrations have been successfully applied",
+    const idempotentDeploy = runControlledDeploy(targetUrl);
+    expect(
+      idempotentDeploy.status,
+      commandOutput(idempotentDeploy),
+    ).toBe(0);
+    expect(commandOutput(idempotentDeploy)).toContain(
+      "No pending migrations to apply",
     );
     await assertFinalMigrationState(target);
-
-    const backfilledHistory = await target.query<{ count: string }>(
-      `SELECT count(DISTINCT migration_name)::text AS count
-       FROM "_prisma_migrations"
-       WHERE migration_name = ANY($1::text[])
-         AND finished_at IS NOT NULL
-         AND rolled_back_at IS NULL`,
-      [[...BACKFILLED_GUARD_MIGRATIONS]],
-    );
-    expect(backfilledHistory.rows[0]?.count).toBe(
-      String(BACKFILLED_GUARD_MIGRATIONS.length),
-    );
   } finally {
     await target?.end().catch(() => undefined);
     if (temporaryPrismaRoot) {
@@ -405,21 +375,6 @@ async function insertLegacyTaskAndPlan(
   );
 }
 
-async function dropPermanentGuard(client: Client) {
-  await client.query(`
-    DROP TRIGGER IF EXISTS "Task_usable_global_administrator_insert_guard_v2" ON "Task";
-    DROP TRIGGER IF EXISTS "Account_usable_global_administrator_guard_v2" ON "Account";
-    DROP TRIGGER IF EXISTS "Account_usable_global_administrator_update_guard_v2" ON "Account";
-    DROP TRIGGER IF EXISTS "Account_usable_global_administrator_delete_guard_v2" ON "Account";
-    DROP TRIGGER IF EXISTS "AccountIdentity_usable_global_administrator_guard_v2" ON "AccountIdentity";
-    DROP TRIGGER IF EXISTS "AccountIdentity_usable_global_administrator_update_guard_v2" ON "AccountIdentity";
-    DROP TRIGGER IF EXISTS "AccountIdentity_usable_global_administrator_delete_guard_v2" ON "AccountIdentity";
-    DROP TRIGGER IF EXISTS "SystemRoleAssignment_global_administrator_update_guard_v2" ON "SystemRoleAssignment";
-    DROP TRIGGER IF EXISTS "SystemRoleAssignment_global_administrator_delete_guard_v2" ON "SystemRoleAssignment";
-    DROP FUNCTION IF EXISTS "assert_usable_global_approval_administrator_v2"();
-  `);
-}
-
 async function assertFinalMigrationState(client: Client) {
   const result = await client.query<{
     legacyTriggerCount: string;
@@ -466,7 +421,7 @@ async function assertFinalMigrationState(client: Client) {
       legacyTriggerCount: "0",
       mainHistoryCount: "1",
       permanentFunction: "assert_usable_global_approval_administrator_v2()",
-      permanentTriggerCount: "7",
+      permanentTriggerCount: "6",
       policyColumns: "0",
     },
   ]);

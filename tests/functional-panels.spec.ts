@@ -209,39 +209,9 @@ test.describe("普通用户主功能面板", () => {
     await expectHealthyPage(page);
   });
 
-  test("项目访问禁用只阻止项目管理，不影响采购报销", async ({ page }) => {
-    const account = await prisma.user.findUniqueOrThrow({
-      where: { openId: fixtures.normalOpenId },
-      select: { accountId: true },
-    });
-    if (!account.accountId) throw new Error("普通用户缺少统一账号关联");
-
-    await prisma.account.update({
-      where: { id: account.accountId },
-      data: { projectAccessStatus: "DISABLED" },
-    });
-    try {
-      await page.goto("/progress", { waitUntil: "networkidle" });
-      await expect(page).toHaveURL(/\/project-access-disabled$/);
-      await expect(
-        page.getByRole("heading", { name: "项目管理访问已禁用" }),
-      ).toBeVisible();
-      await expect(
-        page.getByText("登录和报销功能不受影响", { exact: false }),
-      ).toBeVisible();
-      await expectHealthyPage(page);
-
-      await page.goto("/procurement", { waitUntil: "networkidle" });
-      await expect(
-        page.getByRole("link", { name: /新建申请/ }),
-      ).toBeVisible();
-      await expectHealthyPage(page);
-    } finally {
-      await prisma.account.update({
-        where: { id: account.accountId },
-        data: { projectAccessStatus: "ACTIVE" },
-      });
-    }
+  test("旧项目访问禁用页已移除", async ({ page }) => {
+    const response = await page.goto("/project-access-disabled");
+    expect(response?.status()).toBe(404);
   });
 });
 
@@ -271,8 +241,8 @@ test.describe("管理员面板", () => {
     }
   });
 
-  test("账号与权限页只授予全局项目角色并可管理项目访问状态", async ({ page }) => {
-    await page.goto("/admin/accounts?q=李棋轩", { waitUntil: "networkidle" });
+  test("账号与权限页只授予全局项目角色且没有项目访问状态入口", async ({ page }) => {
+    await page.goto("/admin/accounts?q=lqx", { waitUntil: "networkidle" });
     if ((page.viewportSize()?.width ?? 0) < 768) {
       const accountCard = page.getByRole("button", { name: "管理 李棋轩" });
       await expect(accountCard).toBeVisible();
@@ -309,23 +279,9 @@ test.describe("管理员面板", () => {
       )
       .toBe(1);
 
-    page.once("dialog", (dialog) => dialog.accept());
-    await page.getByRole("button", { name: "禁用项目访问" }).click();
-    await expect(detail.getByRole("button", { name: "启用项目访问" })).toBeVisible();
-    await expect
-      .poll(async () =>
-        (
-          await prisma.account.findUniqueOrThrow({
-            where: { id: target.accountId! },
-            select: { projectAccessStatus: true },
-          })
-        ).projectAccessStatus,
-      )
-      .toBe("DISABLED");
-
-    page.once("dialog", (dialog) => dialog.accept());
-    await detail.getByRole("button", { name: "启用项目访问" }).click();
-    await expect(detail.getByRole("button", { name: "禁用项目访问" })).toBeVisible();
+    await expect(page.getByText("项目访问状态")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "禁用项目访问" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "启用项目访问" })).toHaveCount(0);
 
     page.once("dialog", (dialog) => dialog.accept());
     await detail.getByRole("button", { name: "撤销项目管理员" }).click();

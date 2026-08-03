@@ -164,7 +164,6 @@ async function createScaleFixture() {
   const openId = `ou_s9_perf_${randomUUID()}`;
   const account = await prisma.account.create({
     data: {
-      projectAccessStatus: "ACTIVE",
       identities: {
         create: {
           provider: "FEISHU",

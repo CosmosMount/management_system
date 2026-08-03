@@ -44,7 +44,7 @@ import {
 import {
   BUSY_BLOCK_DTO_FIELDS,
   busyBlockDtoSchema,
-  personAccountAvailabilityValues,
+  personAccountBindingValues,
   personOptionPageSchema,
   tagOptionPageSchema,
   taskOptionPageSchema,
@@ -1142,32 +1142,29 @@ test("removed allocation and includeConflicts inputs fail strict validation", ()
   ).toBe(false);
 });
 
-test("S2 option page schemas expose only active and minimal public fields", () => {
-  expect(personAccountAvailabilityValues).toEqual([
-    "UNBOUND",
-    "ACTIVE",
-    "DISABLED",
-  ]);
-  const personIds = Array.from({ length: 3 }, () => randomUUID());
+test("S2 option page schemas expose only minimal public fields", () => {
+  expect(personAccountBindingValues).toEqual(["UNBOUND", "BOUND"]);
+  const personIds = Array.from({ length: 2 }, () => randomUUID());
   const personPage = personOptionPageSchema.parse({
-    items: personAccountAvailabilityValues.map((accountAvailability, index) => ({
+    items: personAccountBindingValues.map((accountBinding, index) => ({
       id: personIds[index],
-      displayName: `测试成员 ${accountAvailability}`,
+      displayName: `测试成员 ${accountBinding}`,
       avatar: null,
       status: "ACTIVE",
-      accountAvailability,
+      accountBinding,
     })),
     nextCursor: "person-next",
   });
   expect(personPage).toEqual({
-    items: personAccountAvailabilityValues.map((accountAvailability, index) => ({
+    items: personAccountBindingValues.map((accountBinding, index) => ({
       id: personIds[index],
-      displayName: `测试成员 ${accountAvailability}`,
+      displayName: `测试成员 ${accountBinding}`,
       avatar: null,
       status: "ACTIVE",
-      accountAvailability,
+      accountBinding,
     })),
     nextCursor: "person-next",
+    hasMoreByQuery: false,
   });
   for (const forbiddenField of [
     { accountId: randomUUID() },
@@ -1196,16 +1193,16 @@ test("S2 option page schemas expose only active and minimal public fields", () =
           displayName: "停用成员",
           avatar: null,
           status: "INACTIVE",
-          accountAvailability: "ACTIVE",
+          accountBinding: "BOUND",
         },
       ],
       nextCursor: null,
     }).success,
-  ).toBe(false);
-  for (const accountAvailability of ["INACTIVE", "UNKNOWN", null]) {
+  ).toBe(true);
+  for (const accountBinding of ["INACTIVE", "UNKNOWN", null]) {
     expect(
       personOptionPageSchema.safeParse({
-        items: [{ ...personPage.items[0], accountAvailability }],
+        items: [{ ...personPage.items[0], accountBinding }],
         nextCursor: null,
       }).success,
     ).toBe(false);
@@ -1224,6 +1221,8 @@ test("S2 option page schemas expose only active and minimal public fields", () =
         title: "可关联 Task",
         status: "ACTIVE",
         priority: "MEDIUM",
+        team: "英雄",
+        techGroup: "电控",
         activeMilestone: {
           nodeId: randomUUID(),
           goal: "当前节点",

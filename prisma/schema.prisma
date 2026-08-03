@@ -46,11 +46,6 @@ enum NotificationOutboxStatus {
   FAILED
 }
 
-enum AccountStatus {
-  ACTIVE
-  DISABLED
-}
-
 enum IdentityProvider {
   FEISHU
 }
@@ -203,7 +198,6 @@ enum AuditSource {
 
 model Account {
   id                        String                   @id @default(uuid())
-  projectAccessStatus       AccountStatus            @default(ACTIVE)
   lastLoginAt               DateTime?                @db.Timestamptz(6)
   identities                AccountIdentity[]
   person                    Person?

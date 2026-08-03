@@ -28,9 +28,7 @@ import {
 } from "@/app/actions/project-management/milestones";
 import { confirmTermination } from "@/app/actions/project-management/terminations";
 import {
-  searchPeopleOptions,
   searchTagOptions,
-  searchTaskOptions,
 } from "@/app/actions/project-management/options";
 import {
   comparePlanVersions,
@@ -38,6 +36,8 @@ import {
   getTaskLifecycleViews,
 } from "@/app/actions/project-management/plans";
 import { ResourcePlannerCanvasClient } from "@/components/project-management/resource-planner-canvas-client";
+import { TaskSelect } from "@/components/project-management/task-picker";
+import { UserSelect } from "@/components/project-management/user-picker";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -210,7 +210,11 @@ export function TaskWorkbench({
   };
 
   return (
-    <div className="min-w-0 space-y-4" data-testid="task-workbench-v1">
+    <div
+      className="min-w-0 space-y-4"
+      data-testid="task-workbench-v1"
+      data-server-lock-version={workspace.task.lockVersion}
+    >
       <section className="rounded-xl border border-border bg-card p-4 sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
@@ -317,13 +321,15 @@ export function TaskWorkbench({
             workspace={currentWorkspace}
             canvasModel={canvasModel}
             canvasError={canvasError}
+            people={people}
+            taskOptions={taskOptions}
             busy={busy}
             runAction={runAction}
           />
         )}
         {tab === "overview" && (
           <OverviewPanel
-            key={`overview:${task.lockVersion}`}
+            key={`overview:${workspace.task.lockVersion}`}
             workspace={currentWorkspace}
             people={people}
             taskOptions={taskOptions}
@@ -370,15 +376,29 @@ function PlanAndResourcesPanel({
   workspace,
   canvasModel,
   canvasError,
+  people,
+  taskOptions,
   busy,
   runAction,
 }: {
   workspace: TaskWorkspace;
   canvasModel: TimeCanvasModel | null;
   canvasError: string | null;
+  people: PersonOptionDto[];
+  taskOptions: TaskOptionPage["items"];
   busy: boolean;
   runAction: RunAction;
 }) {
+  const creatableSegmentPersonIds = new Set(
+    canvasModel?.rows.flatMap((row) =>
+      row.kind === "PERSON" && row.editable ? [row.sourceId] : [],
+    ) ?? [],
+  );
+  const segmentPeople = people.filter(
+    (person) =>
+      person.status === "ACTIVE" &&
+      creatableSegmentPersonIds.has(person.id),
+  );
   return (
     <div className="space-y-4">
       <section className="rounded-xl border border-border bg-card p-4">
@@ -424,16 +444,13 @@ function PlanAndResourcesPanel({
             )}
             <ResourcePlannerCanvasClient
               initialModel={canvasModel}
-              people={workspace.members.map((member) => ({
-                id: member.personId,
-                displayName: member.displayName,
-              }))}
-              tasks={[{
-                id: workspace.task.id,
-                title: workspace.task.title,
-                activeNodeId: workspace.task.activeMilestoneNodeId,
-              }]}
-              defaultPersonId={workspace.members[0]?.personId ?? ""}
+              peopleOptions={segmentPeople}
+              peopleScope={{
+                purpose: "TASK_SEGMENT_CREATE",
+                taskId: workspace.task.id,
+              }}
+              taskOptions={taskOptions}
+              defaultPersonId={segmentPeople[0]?.id ?? ""}
               defaultTaskId={workspace.task.id}
               allowIndependent={false}
               initialZoom="DAY"
@@ -635,12 +652,10 @@ function OverviewPanel({
   );
   const [memberPersonId, setMemberPersonId] = useState(people[0]?.id ?? "");
   const [memberRole, setMemberRole] = useState<ActiveTaskMemberRole>("PARTICIPANT");
-  const [selectedTags, setSelectedTags] = useState(workspace.tags.map((tag) => tag.id));
   const [peopleOptions, setPeopleOptions] = useState(people);
-  const [taskChoices, setTaskChoices] = useState(taskOptions);
+  const [relatedTaskId, setRelatedTaskId] = useState(workspace.task.relatedTaskId);
+  const [selectedTags, setSelectedTags] = useState(workspace.tags.map((tag) => tag.id));
   const [tagChoices, setTagChoices] = useState(tagOptions);
-  const [peopleQuery, setPeopleQuery] = useState("");
-  const [taskQuery, setTaskQuery] = useState("");
   const [tagQuery, setTagQuery] = useState("");
   const [optionLoading, setOptionLoading] = useState(false);
   const [optionError, setOptionError] = useState("");
@@ -649,39 +664,6 @@ function OverviewPanel({
     ...tagChoices.filter((tag) => !workspace.tags.some((current) => current.id === tag.id)),
   ];
 
-  const loadPeople = async () => {
-    setOptionLoading(true);
-    setOptionError("");
-    try {
-      const result = await searchPeopleOptions({
-        purpose: "TASK_MEMBERS",
-        taskId: workspace.task.id,
-        query: peopleQuery,
-        limit: 50,
-      });
-      if (!result.ok) return setOptionError(result.error.message);
-      const next = mergeById(peopleOptions, result.data.items);
-      setPeopleOptions(next);
-      if (!memberPersonId && next[0]) setMemberPersonId(next[0].id);
-    } catch {
-      setOptionError("人员搜索失败，请稍后重试。");
-    } finally {
-      setOptionLoading(false);
-    }
-  };
-  const loadTasks = async () => {
-    setOptionLoading(true);
-    setOptionError("");
-    try {
-      const result = await searchTaskOptions({ query: taskQuery, limit: 50 });
-      if (!result.ok) return setOptionError(result.error.message);
-      setTaskChoices(mergeById(taskChoices, result.data.items));
-    } catch {
-      setOptionError("Task 搜索失败，请稍后重试。");
-    } finally {
-      setOptionLoading(false);
-    }
-  };
   const loadTags = async () => {
     setOptionLoading(true);
     setOptionError("");
@@ -694,6 +676,38 @@ function OverviewPanel({
     } finally {
       setOptionLoading(false);
     }
+  };
+  const addMember = () => {
+    if (!memberPersonId) {
+      setOptionError("请先选择人员。");
+      return;
+    }
+    const selectedPerson = peopleOptions.find(
+      (person) => person.id === memberPersonId,
+    );
+    if (!selectedPerson || selectedPerson.status !== "ACTIVE") {
+      setOptionError("该人员已停用或不可用，不能新增角色。");
+      return;
+    }
+    const existing = members.find((entry) => entry.personId === memberPersonId);
+    if (
+      existing?.role === "OWNER" &&
+      memberRole === "PARTICIPANT" &&
+      members.filter((entry) => entry.role === "OWNER").length === 1
+    ) {
+      setOptionError("至少保留一名负责人。");
+      return;
+    }
+    setOptionError("");
+    setMembers(
+      existing
+        ? members.map((entry) =>
+            entry.personId === memberPersonId
+              ? { ...entry, role: memberRole }
+              : entry,
+          )
+        : [...members, { personId: memberPersonId, role: memberRole }],
+    );
   };
 
   return (
@@ -730,8 +744,19 @@ function OverviewPanel({
           <Field label="技术组"><select name="techGroup" defaultValue={workspace.task.techGroup} disabled={!editable} className={selectClass}>{TECH_GROUP_OPTIONS.map((value) => <option key={value}>{value}</option>)}</select></Field>
           <Field label="优先级"><select name="priority" defaultValue={workspace.task.priority} disabled={!editable} className={selectClass}>{Object.entries(taskPriorityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>
         </div>
-        {editable && <div className="grid gap-2 sm:grid-cols-[1fr_auto]"><Input aria-label="搜索关联 Task" value={taskQuery} onChange={(event) => setTaskQuery(event.target.value)} placeholder="按名称搜索首屏外 Task" /><Button type="button" variant="outline" disabled={optionLoading} onClick={() => void loadTasks()}>搜索 Task</Button></div>}
-        <Field label="关联 Task"><select name="relatedTaskId" defaultValue={workspace.task.relatedTaskId ?? ""} disabled={!editable} className={selectClass}><option value="">不关联</option>{workspace.task.relatedTaskId && !taskChoices.some((item) => item.id === workspace.task.relatedTaskId) && <option value={workspace.task.relatedTaskId}>当前关联 Task（不在首批选项）</option>}{taskChoices.filter((item) => item.id !== workspace.task.id).map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></Field>
+        <Field label="关联 Task" htmlFor="overview-related-task">
+          <TaskSelect
+            inputId="overview-related-task"
+            ariaLabel="关联 Task"
+            name="relatedTaskId"
+            value={relatedTaskId}
+            onValueChange={setRelatedTaskId}
+            initialOptions={taskOptions}
+            excludeIds={[workspace.task.id]}
+            disabled={!editable}
+            placeholder="按标题、描述或拼音首字母搜索"
+          />
+        </Field>
         <div className="space-y-2">
           <span className="text-sm font-medium">Tags</span>
           {editable && <div className="grid gap-2 sm:grid-cols-[1fr_auto]"><Input aria-label="搜索 Tag" value={tagQuery} onChange={(event) => setTagQuery(event.target.value)} placeholder="按名称搜索首屏外 Tag" /><Button type="button" variant="outline" disabled={optionLoading} onClick={() => void loadTags()}>搜索 Tag</Button></div>}
@@ -755,11 +780,22 @@ function OverviewPanel({
         </div>
         {canManageMembers && (
           <>
-            <div className="grid gap-2 sm:grid-cols-[1fr_auto]"><Input aria-label="搜索成员" value={peopleQuery} onChange={(event) => setPeopleQuery(event.target.value)} placeholder="按姓名搜索首屏外人员" /><Button type="button" variant="outline" disabled={optionLoading} onClick={() => void loadPeople()}>搜索人员</Button></div>
             <div className="grid gap-2 sm:grid-cols-[1fr_140px_auto]">
-              <select value={memberPersonId} onChange={(event) => setMemberPersonId(event.target.value)} className={selectClass} aria-label="新增成员人员">{peopleOptions.map((person) => <option key={person.id} value={person.id}>{person.displayName}</option>)}</select>
+              <UserSelect
+                ariaLabel="新增成员人员"
+                scope={{ purpose: "TASK_MEMBERS", taskId: workspace.task.id }}
+                value={memberPersonId || null}
+                onValueChange={(nextValue) => setMemberPersonId(nextValue ?? "")}
+                onOptionChange={(option) => {
+                  if (option) {
+                    setPeopleOptions((current) => mergeById(current, [option]));
+                  }
+                }}
+                initialOptions={peopleOptions}
+                placeholder="按姓名或拼音首字母搜索"
+              />
               <select value={memberRole} onChange={(event) => setMemberRole(event.target.value as ActiveTaskMemberRole)} className={selectClass} aria-label="新增成员角色">{activeTaskMemberRoles.map((value) => <option key={value} value={value}>{taskMemberRoleLabels[value]}</option>)}</select>
-              <Button type="button" variant="outline" onClick={() => { if (!memberPersonId) return; const existing = members.find((entry) => entry.personId === memberPersonId); if (existing?.role === "OWNER" && memberRole === "PARTICIPANT" && members.filter((entry) => entry.role === "OWNER").length === 1) { setOptionError("至少保留一名负责人。"); return; } setMembers(existing ? members.map((entry) => entry.personId === memberPersonId ? { ...entry, role: memberRole } : entry) : [...members, { personId: memberPersonId, role: memberRole }]); setOptionError(""); }}>添加</Button>
+              <Button type="button" variant="outline" onClick={addMember}>添加</Button>
             </div>
             <Button type="button" disabled={busy} onClick={() => void runAction(() => workspace.task.status === "DRAFT" ? replaceTaskDraftMembers({ taskId: workspace.task.id, expectedLockVersion: workspace.task.lockVersion, members }) : replaceTaskMembers({ taskId: workspace.task.id, expectedLockVersion: workspace.task.lockVersion, members }), "Task 成员已保存。")}>保存成员</Button>
           </>
@@ -1025,7 +1061,10 @@ function Metric({ label, value, alert = false }: { label: string; value: number;
 }
 
 function Field({ label, htmlFor, className, children }: { label: string; htmlFor?: string; className?: string; children: React.ReactNode }) {
-  return <label htmlFor={htmlFor} className={cn("grid gap-1 text-sm", className)}><span className="font-medium">{label}</span>{children}</label>;
+  if (htmlFor) {
+    return <div className={cn("grid gap-1 text-sm", className)}><label htmlFor={htmlFor} className="font-medium">{label}</label>{children}</div>;
+  }
+  return <label className={cn("grid gap-1 text-sm", className)}><span className="font-medium">{label}</span>{children}</label>;
 }
 
 function moveItem<T>(items: T[], from: number, to: number) {

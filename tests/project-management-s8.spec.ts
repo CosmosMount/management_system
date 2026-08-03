@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import { prisma } from "../lib/prisma";
 import {
-  createTag,
   deleteTag,
   updateTag,
 } from "../lib/project-management/application/tag-service";
@@ -156,19 +155,7 @@ test.describe("project management S8 dashboard, tags and notifications", () => {
     ).resolves.toBe(1);
   });
 
-  test("Tag writes recheck project access and current administrator roles inside the transaction", async () => {
-    const disabled = await createActor("S8 disabled tag actor");
-    await prisma.account.update({
-      where: { id: disabled.accountId },
-      data: { projectAccessStatus: "DISABLED" },
-    });
-    await expect(
-      createTag(disabled, {
-        name: `S8-disabled-${randomUUID().slice(0, 8)}`,
-        color: "#64748b",
-      }),
-    ).rejects.toThrow("账号已禁用");
-
+  test("Tag writes recheck current administrator roles inside the transaction", async () => {
     const administrator = await createActor("S8 revoked tag administrator");
     const owner = await createActor("S8 other tag owner");
     const assignment = await prisma.systemRoleAssignment.create({
@@ -519,7 +506,6 @@ async function createActor(displayName: string): Promise<ProjectManagementActor>
   const openId = `ou_s8_${randomUUID()}`;
   const account = await prisma.account.create({
     data: {
-      projectAccessStatus: "ACTIVE",
       identities: {
         create: {
           provider: "FEISHU",

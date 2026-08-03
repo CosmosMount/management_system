@@ -14,7 +14,6 @@ import {
 } from "@/lib/project-management/authorization";
 import { createDomainAuditEventTx } from "@/lib/project-management/audit";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
-import { assertProjectAccessActiveTx } from "@/lib/project-management/identity";
 import {
   associationInvalidError,
   notFoundError,
@@ -419,6 +418,7 @@ async function replaceTaskMembersForStatus(
     await assertActivePeopleTx(
       tx,
       parsed.members.map((member) => member.personId),
+      task.members.map((member) => member.personId),
     );
     await assertTaskSegmentMembersIncludedTx(tx, task.id, parsed.members);
 
@@ -506,7 +506,6 @@ async function refreshActorTx(
   tx: PrismaTx,
   actor: ProjectManagementActor,
 ): Promise<ProjectManagementActor> {
-  await assertProjectAccessActiveTx(tx, actor.accountId);
   const roles = await tx.systemRoleAssignment.findMany({
     where: { accountId: actor.accountId, revokedAt: null },
     select: { role: true, team: true, techGroup: true },
@@ -613,8 +612,16 @@ async function assertTagReferencesTx(
   }
 }
 
-async function assertActivePeopleTx(tx: PrismaTx, personIds: string[]) {
-  const uniquePersonIds = [...new Set(personIds)];
+async function assertActivePeopleTx(
+  tx: PrismaTx,
+  personIds: string[],
+  existingPersonIds: string[] = [],
+) {
+  const existing = new Set(existingPersonIds);
+  const uniquePersonIds = [...new Set(personIds)].filter(
+    (personId) => !existing.has(personId),
+  );
+  if (uniquePersonIds.length === 0) return;
   const count = await tx.person.count({
     where: { id: { in: uniquePersonIds }, status: "ACTIVE" },
   });
@@ -841,7 +848,6 @@ async function resolveMandatoryMemberRecipientTx(
     | "RESOLVED"
     | "PERSON_INACTIVE"
     | "ACCOUNT_MISSING"
-    | "ACCOUNT_DISABLED"
     | "DEFAULT_FEISHU_IDENTITY_MISSING"
     | "FEISHU_OPEN_ID_MISSING";
   recipients: Array<{ accountId: string; openId: string | null }>;
@@ -853,7 +859,6 @@ async function resolveMandatoryMemberRecipientTx(
       account: {
         select: {
           id: true,
-          projectAccessStatus: true,
           identities: {
             where: {
               provider: "FEISHU",
@@ -868,9 +873,6 @@ async function resolveMandatoryMemberRecipientTx(
   });
   if (!person?.account) {
     return { status: "ACCOUNT_MISSING", recipients: [] };
-  }
-  if (person.account.projectAccessStatus !== "ACTIVE") {
-    return { status: "ACCOUNT_DISABLED", recipients: [] };
   }
   const openId = person.account.identities
     .map((identity) => identity.openId?.trim() ?? "")

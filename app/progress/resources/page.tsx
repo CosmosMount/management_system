@@ -11,6 +11,8 @@ import { toProjectManagementServiceError } from "@/lib/project-management/applic
 import {
   getActorPersonOption,
   listTagOptions,
+  resolvePeopleOptionsByIds,
+  resolveTaskOptionsByIds,
   searchPeople,
   searchTaskOptions,
 } from "@/lib/project-management/queries/option-queries";
@@ -54,11 +56,24 @@ export default async function ProgressResourcesPage({
   const endAt = new Date(view.range.endMs);
   const cursor = firstParam(params.cursor) || undefined;
 
-  const [actorPerson, peoplePage, taskPage, tagPage, canvasResult] = await Promise.all([
+  const [
+    actorPerson,
+    peoplePage,
+    taskPage,
+    tagPage,
+    selectedPeople,
+    selectedTasks,
+    canvasResult,
+  ] = await Promise.all([
     getActorPersonOption(actor),
     searchPeople({ actor, input: { purpose: "VISIBLE", limit: 50 } }),
     searchTaskOptions({ actor, input: { statuses: ["ACTIVE"], limit: 50 } }),
     listTagOptions({ actor, input: { limit: 50 } }),
+    resolvePeopleOptionsByIds({
+      actor,
+      input: { scope: { purpose: "VISIBLE" }, ids: view.personIds },
+    }),
+    resolveTaskOptionsByIds({ actor, input: { ids: view.taskIds } }),
     getTimeCanvasData({
       actor,
       input: {
@@ -88,31 +103,22 @@ export default async function ProgressResourcesPage({
   const canvasModel = canvasResult.ok
     ? timeCanvasDataToModel(canvasResult.data, "RESOURCE_PLANNER")
     : null;
-  const people = mergePeople(
+  const canvasTasks = canvasResult.ok
+    ? (
+        await resolveTaskOptionsByIds({
+          actor,
+          input: { ids: canvasResult.data.anchors.map((task) => task.id) },
+        })
+      ).filter((task) => task.status === "ACTIVE")
+    : [];
+  const pickerPeople = mergeOptionsInPreferredOrder(
+    selectedPeople,
     [actorPerson, ...peoplePage.items],
-    canvasModel?.rows
-      .filter((row) => row.kind === "PERSON")
-      .map((row) => ({ id: row.sourceId, displayName: row.label })) ?? [],
   );
-  const tasks = mergeTasks(
-    taskPage.items.map((task) => ({
-      id: task.id,
-      title: task.title,
-      activeNodeId: task.activeMilestone?.nodeId ?? null,
-    })),
-    canvasResult.ok
-      ? canvasResult.data.anchors
-          .filter((task) => task.status === "ACTIVE")
-          .map((task) => ({
-            id: task.id,
-            title: task.title,
-            activeNodeId:
-              task.nodes.find(
-                (node) =>
-                  node.type === "MILESTONE" && node.status === "ACTIVE",
-              )?.id ?? null,
-          }))
-      : [],
+  const pickerTasks = mergeOptionsInPreferredOrder(
+    selectedTasks,
+    canvasTasks,
+    taskPage.items,
   );
 
   return (
@@ -134,8 +140,8 @@ export default async function ProgressResourcesPage({
               types: view.types,
               statuses: view.statuses,
             }}
-            initialPeople={people}
-            initialTasks={taskPage.items}
+            initialPeople={pickerPeople}
+            initialTasks={pickerTasks}
             initialTags={tagPage.items}
           />
           {view.issues.length > 0 && (
@@ -146,8 +152,8 @@ export default async function ProgressResourcesPage({
           {canvasModel ? (
             <ResourcePlannerCanvasClient
               initialModel={canvasModel}
-              people={people}
-              tasks={tasks}
+              peopleOptions={pickerPeople}
+              taskOptions={pickerTasks}
               defaultPersonId={actor.personId}
               initialZoom={view.zoom}
               initialFocusId={view.focusId}
@@ -177,26 +183,20 @@ export default async function ProgressResourcesPage({
   );
 }
 
+function mergeOptionsInPreferredOrder<T extends { id: string }>(
+  ...groups: T[][]
+) {
+  const result = new Map<string, T>();
+  for (const group of groups) {
+    for (const option of group) {
+      if (!result.has(option.id)) result.set(option.id, option);
+    }
+  }
+  return [...result.values()];
+}
+
 function firstParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
-}
-
-function mergePeople(
-  first: Array<{ id: string; displayName: string }>,
-  second: Array<{ id: string; displayName: string }>,
-) {
-  const people = new Map(first.map((person) => [person.id, person]));
-  second.forEach((person) => people.set(person.id, person));
-  return [...people.values()];
-}
-
-function mergeTasks(
-  first: Array<{ id: string; title: string; activeNodeId: string | null }>,
-  second: Array<{ id: string; title: string; activeNodeId: string | null }>,
-) {
-  const tasks = new Map(first.map((task) => [task.id, task]));
-  second.forEach((task) => tasks.set(task.id, task));
-  return [...tasks.values()];
 }
 
 function resourceHref(params: SearchParams, cursor: string | null) {

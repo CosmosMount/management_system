@@ -2,19 +2,12 @@ import { cache } from "react";
 import { redirect } from "next/navigation";
 import {
   getCurrentProjectManagementActor,
-  ProjectManagementIdentityError,
   type ProjectManagementActor,
 } from "@/lib/project-management/identity";
 import { getUnreadInAppNotificationCount } from "@/lib/project-management/queries/notification-queries";
 
 async function loadProgressActorOrRedirect(): Promise<ProjectManagementActor> {
   const actor = await getCurrentProjectManagementActor().catch((error) => {
-    if (
-      error instanceof ProjectManagementIdentityError &&
-      error.code === "ACCOUNT_DISABLED"
-    ) {
-      redirect("/project-access-disabled");
-    }
     if (
       error instanceof Error &&
       (error.message === "请重新登录" || error.message.includes("登录"))

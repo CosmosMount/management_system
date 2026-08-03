@@ -3,10 +3,12 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
   assertAuthorized,
+  authorize,
   isSystemAdministrator,
   taskReadableWhere,
   type AuthorizationTaskResource,
 } from "@/lib/project-management/authorization";
+import { isTaskCreatableForSegment } from "@/lib/project-management/domain/task-segment-policy";
 import {
   notFoundError,
   validationError,
@@ -24,10 +26,18 @@ import {
 } from "@/lib/project-management/types/time-canvas";
 import {
   listTagOptionsInputSchema,
+  resolvePeopleOptionsByIdsInputSchema,
+  resolveTaskOptionsByIdsInputSchema,
   searchPeopleInputSchema,
   searchTaskOptionsInputSchema,
+  type PeopleOptionScope,
   type SearchPeopleInput,
 } from "@/lib/project-management/validations/time-canvas";
+import { rankFuzzyMatches } from "@/lib/search/fuzzy-score";
+import {
+  normalizeSearchText,
+  searchTerms,
+} from "@/lib/search/normalize-search-text";
 
 type OptionCursorKind = "people" | "tasks" | "tags";
 
@@ -54,24 +64,61 @@ type PeopleSearchTask = Prisma.TaskGetPayload<{
   select: typeof peopleSearchTaskAuthorizationSelect;
 }>;
 
+const personOptionSelect = {
+  id: true,
+  displayName: true,
+  avatar: true,
+  status: true,
+  account: { select: { id: true } },
+} satisfies Prisma.PersonSelect;
+
+const taskOptionSelect = {
+  id: true,
+  title: true,
+  description: true,
+  status: true,
+  priority: true,
+  team: true,
+  techGroup: true,
+  activeMilestoneNode: {
+    select: {
+      id: true,
+      milestone: {
+        select: { goal: true, expectedCompletedAt: true },
+      },
+    },
+  },
+} satisfies Prisma.TaskSelect;
+
+type PersonOptionRow = Prisma.PersonGetPayload<{
+  select: typeof personOptionSelect;
+}>;
+type TaskOptionRow = Prisma.TaskGetPayload<{
+  select: typeof taskOptionSelect;
+}>;
+
+const FUZZY_CANDIDATE_LIMIT = 501;
+const QUERY_RESULT_LIMIT = 50;
+
 export async function getActorPersonOption(
   actor: ProjectManagementActor,
 ): Promise<PersonOptionDto> {
   const person = await prisma.person.findFirstOrThrow({
-    where: { id: actor.personId, accountId: actor.accountId, status: "ACTIVE" },
+    where: { id: actor.personId, accountId: actor.accountId },
     select: {
       id: true,
       displayName: true,
       avatar: true,
-      account: { select: { projectAccessStatus: true } },
+      status: true,
+      account: { select: { id: true } },
     },
   });
   return personOptionDtoSchema.parse({
     id: person.id,
     displayName: person.displayName,
     avatar: person.avatar,
-    status: "ACTIVE",
-    accountAvailability: person.account?.projectAccessStatus ?? "UNBOUND",
+    status: person.status,
+    accountBinding: person.account ? "BOUND" : "UNBOUND",
   });
 }
 
@@ -84,15 +131,56 @@ export async function searchPeople({
 }): Promise<PersonOptionPage> {
   const parsed = searchPeopleInputSchema.parse(input);
   const visibility = await peopleVisibilityForPurpose(actor, parsed);
-  const query = parsed.query?.trim() ?? "";
+  const query = normalizeSearchText(parsed.query ?? "");
+  const baseWhere: Prisma.PersonWhereInput = {
+    AND: [{ status: "ACTIVE" }, visibility],
+  };
+  if (query) {
+    if (parsed.cursor) {
+      throw validationError("非空人员搜索不支持分页游标，请继续输入关键词", {
+        cursor: ["非空人员搜索不支持分页游标，请继续输入关键词"],
+      });
+    }
+    const directRows = await prisma.person.findMany({
+      where: {
+        AND: [
+          baseWhere,
+          ...searchTerms(query).map((term) => ({
+            displayName: { contains: term, mode: "insensitive" as const },
+          })),
+        ],
+      },
+      select: personOptionSelect,
+      orderBy: [{ displayName: "asc" }, { id: "asc" }],
+      take: FUZZY_CANDIDATE_LIMIT,
+    });
+    const fallbackRows =
+      directRows.length < QUERY_RESULT_LIMIT
+        ? await prisma.person.findMany({
+            where: baseWhere,
+            select: personOptionSelect,
+            orderBy: [{ displayName: "asc" }, { id: "asc" }],
+            take: FUZZY_CANDIDATE_LIMIT,
+          })
+        : [];
+    const ranked = rankFuzzyMatches(
+      mergeRowsById(directRows, fallbackRows),
+      query,
+      (person) => [{ text: person.displayName, weight: 2, pinyin: true }],
+      comparePeopleRows,
+    );
+    const resultLimit = Math.min(parsed.limit, QUERY_RESULT_LIMIT);
+    return personOptionPageSchema.parse({
+      items: ranked.slice(0, resultLimit).map(({ item }) => personOption(item)),
+      nextCursor: null,
+      hasMoreByQuery:
+        ranked.length > resultLimit ||
+        directRows.length === FUZZY_CANDIDATE_LIMIT ||
+        fallbackRows.length === FUZZY_CANDIDATE_LIMIT,
+    });
+  }
   const where: Prisma.PersonWhereInput = {
-    AND: [
-      { status: "ACTIVE" },
-      visibility,
-      query
-        ? { displayName: { contains: query, mode: "insensitive" } }
-        : {},
-    ],
+    AND: [{ status: "ACTIVE" }, visibility],
   };
   const filter = cursorFilter({
     query,
@@ -107,39 +195,25 @@ export async function searchPeople({
   });
   const rows = await prisma.person.findMany({
     where,
-    select: {
-      id: true,
-      displayName: true,
-      avatar: true,
-      status: true,
-      account: { select: { projectAccessStatus: true } },
-    },
+    select: personOptionSelect,
     orderBy: [{ displayName: "asc" }, { id: "asc" }],
     take: parsed.limit + 1,
     ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
   });
-  const items = rows.slice(0, parsed.limit).map((person) => ({
-    id: person.id,
-    displayName: person.displayName,
-    avatar: person.avatar,
-    status: "ACTIVE" as const,
-    accountAvailability:
-      person.account === null
-        ? "UNBOUND" as const
-        : person.account.projectAccessStatus,
-  }));
+  const items = rows.slice(0, parsed.limit).map(personOption);
   return personOptionPageSchema.parse({
     items,
     nextCursor:
       rows.length > parsed.limit
         ? nextOptionCursor("people", filter, items.at(-1)?.id)
         : null,
+    hasMoreByQuery: false,
   });
 }
 
 async function peopleVisibilityForPurpose(
   actor: ProjectManagementActor,
-  input: SearchPeopleInput,
+  input: SearchPeopleInput | PeopleOptionScope,
 ): Promise<Prisma.PersonWhereInput> {
   if (input.purpose === "VISIBLE") return {};
   if (input.purpose === "TASK_CREATE") {
@@ -162,6 +236,29 @@ async function peopleVisibilityForPurpose(
     select: peopleSearchTaskAuthorizationSelect,
   });
   if (!task) throw notFoundError();
+  if (input.purpose === "TASK_SEGMENT_CREATE") {
+    if (!isTaskCreatableForSegment(task.status)) {
+      return { id: { in: [] } };
+    }
+    const resource = peopleSearchTaskResource(task);
+    const permittedPersonIds = task.members.flatMap((member) => {
+      const action = member.personId === actor.personId
+        ? "segment.manage_self"
+        : "segment.manage_others";
+      return authorize({
+        actor,
+        action,
+        resource: {
+          type: "segment",
+          personId: member.personId,
+          task: resource,
+        },
+      }).allowed
+        ? [member.personId]
+        : [];
+    });
+    return { id: { in: permittedPersonIds } };
+  }
   assertAuthorized({
     actor,
     action: "task.manage_members",
@@ -203,20 +300,12 @@ export async function searchTaskOptions({
   input: unknown;
 }): Promise<TaskOptionPage> {
   const parsed = searchTaskOptionsInputSchema.parse(input);
-  const query = parsed.query?.trim() ?? "";
+  const query = normalizeSearchText(parsed.query ?? "");
   const statuses = [...parsed.statuses].sort();
   const tagIds = [...parsed.tagIds].sort();
-  const where: Prisma.TaskWhereInput = {
+  const baseWhere: Prisma.TaskWhereInput = {
     AND: [
       taskReadableWhere(actor),
-      query
-        ? {
-            OR: [
-              { title: { contains: query, mode: "insensitive" } },
-              { description: { contains: query, mode: "insensitive" } },
-            ],
-          }
-        : {},
       statuses.length > 0 ? { status: { in: statuses } } : {},
       tagIds.length > 0
         ? { tags: { some: { tagId: { in: tagIds } } } }
@@ -230,6 +319,57 @@ export async function searchTaskOptions({
         : {},
     ],
   };
+  if (query) {
+    if (parsed.cursor) {
+      throw validationError("非空 Task 搜索不支持分页游标，请继续输入关键词", {
+        cursor: ["非空 Task 搜索不支持分页游标，请继续输入关键词"],
+      });
+    }
+    const directRows = await prisma.task.findMany({
+      where: {
+        AND: [
+          baseWhere,
+          ...searchTerms(query).map((term) => ({
+            OR: [
+              { title: { contains: term, mode: "insensitive" as const } },
+              { description: { contains: term, mode: "insensitive" as const } },
+            ],
+          })),
+        ],
+      },
+      select: taskOptionSelect,
+      orderBy: [{ title: "asc" }, { id: "asc" }],
+      take: FUZZY_CANDIDATE_LIMIT,
+    });
+    const fallbackRows =
+      directRows.length < QUERY_RESULT_LIMIT
+        ? await prisma.task.findMany({
+            where: baseWhere,
+            select: taskOptionSelect,
+            orderBy: [{ title: "asc" }, { id: "asc" }],
+            take: FUZZY_CANDIDATE_LIMIT,
+          })
+        : [];
+    const ranked = rankFuzzyMatches(
+      mergeRowsById(directRows, fallbackRows),
+      query,
+      (task) => [
+        { text: task.title, weight: 2, pinyin: true },
+        { text: task.description, weight: 1 },
+      ],
+      compareTaskRows,
+    );
+    const resultLimit = Math.min(parsed.limit, QUERY_RESULT_LIMIT);
+    return taskOptionPageSchema.parse({
+      items: ranked.slice(0, resultLimit).map(({ item }) => taskOption(item)),
+      nextCursor: null,
+      hasMoreByQuery:
+        ranked.length > resultLimit ||
+        directRows.length === FUZZY_CANDIDATE_LIMIT ||
+        fallbackRows.length === FUZZY_CANDIDATE_LIMIT,
+    });
+  }
+  const where = baseWhere;
   const filter = cursorFilter({ query, statuses, tagIds, mine: parsed.mine });
   const cursorId = await validateOptionCursor({
     cursor: parsed.cursor,
@@ -240,46 +380,68 @@ export async function searchTaskOptions({
   });
   const rows = await prisma.task.findMany({
     where,
-    select: {
-      id: true,
-      title: true,
-      status: true,
-      priority: true,
-      activeMilestoneNode: {
-        select: {
-          id: true,
-          milestone: {
-            select: { goal: true, expectedCompletedAt: true },
-          },
-        },
-      },
-    },
+    select: taskOptionSelect,
     orderBy: [{ title: "asc" }, { id: "asc" }],
     take: parsed.limit + 1,
     ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
   });
-  const items = rows.slice(0, parsed.limit).map((task) => ({
-    id: task.id,
-    title: task.title,
-    status: task.status,
-    priority: task.priority,
-    activeMilestone:
-      task.activeMilestoneNode?.milestone
-        ? {
-            nodeId: task.activeMilestoneNode.id,
-            goal: task.activeMilestoneNode.milestone.goal,
-            expectedCompletedAt:
-              task.activeMilestoneNode.milestone.expectedCompletedAt.toISOString(),
-          }
-        : null,
-    permission: { canView: true },
-  }));
+  const items = rows.slice(0, parsed.limit).map(taskOption);
   return taskOptionPageSchema.parse({
     items,
     nextCursor:
       rows.length > parsed.limit
         ? nextOptionCursor("tasks", filter, items.at(-1)?.id)
         : null,
+    hasMoreByQuery: false,
+  });
+}
+
+export async function resolvePeopleOptionsByIds({
+  actor,
+  input,
+}: {
+  actor: ProjectManagementActor;
+  input: unknown;
+}): Promise<PersonOptionDto[]> {
+  const parsed = resolvePeopleOptionsByIdsInputSchema.parse(input);
+  const visibility = await peopleVisibilityForPurpose(actor, parsed.scope);
+  if (parsed.ids.length === 0) return [];
+  const rows = await prisma.person.findMany({
+    where: {
+      AND: [
+        { id: { in: parsed.ids } },
+        visibility,
+        parsed.scope.purpose === "TASK_SEGMENT_CREATE"
+          ? { status: "ACTIVE" }
+          : {},
+      ],
+    },
+    select: personOptionSelect,
+  });
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  return parsed.ids.flatMap((id) => {
+    const row = byId.get(id);
+    return row ? [personOptionDtoSchema.parse(personOption(row))] : [];
+  });
+}
+
+export async function resolveTaskOptionsByIds({
+  actor,
+  input,
+}: {
+  actor: ProjectManagementActor;
+  input: unknown;
+}): Promise<TaskOptionPage["items"]> {
+  const parsed = resolveTaskOptionsByIdsInputSchema.parse(input);
+  if (parsed.ids.length === 0) return [];
+  const rows = await prisma.task.findMany({
+    where: { AND: [{ id: { in: parsed.ids } }, taskReadableWhere(actor)] },
+    select: taskOptionSelect,
+  });
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  return parsed.ids.flatMap((id) => {
+    const row = byId.get(id);
+    return row ? [taskOption(row)] : [];
   });
 }
 
@@ -339,6 +501,63 @@ export async function listTagOptions({
         ? nextOptionCursor("tags", filter, items.at(-1)?.id)
         : null,
   });
+}
+
+function personOption(person: PersonOptionRow) {
+  return {
+    id: person.id,
+    displayName: person.displayName,
+    avatar: person.avatar,
+    status: person.status,
+    accountBinding:
+      person.account === null ? ("UNBOUND" as const) : ("BOUND" as const),
+  };
+}
+
+function taskOption(task: TaskOptionRow) {
+  return {
+    id: task.id,
+    title: task.title,
+    status: task.status,
+    priority: task.priority,
+    team: task.team,
+    techGroup: task.techGroup,
+    activeMilestone:
+      task.activeMilestoneNode?.milestone
+        ? {
+            nodeId: task.activeMilestoneNode.id,
+            goal: task.activeMilestoneNode.milestone.goal,
+            expectedCompletedAt:
+              task.activeMilestoneNode.milestone.expectedCompletedAt.toISOString(),
+          }
+        : null,
+    permission: { canView: true },
+  };
+}
+
+function mergeRowsById<T extends { id: string }>(...groups: readonly T[][]): T[] {
+  const rows = new Map<string, T>();
+  for (const group of groups) {
+    for (const row of group) rows.set(row.id, row);
+  }
+  return [...rows.values()];
+}
+
+function comparePeopleRows(left: PersonOptionRow, right: PersonOptionRow) {
+  return (
+    left.displayName.localeCompare(right.displayName, "zh-CN") ||
+    left.id.localeCompare(right.id)
+  );
+}
+
+function compareTaskRows(left: TaskOptionRow, right: TaskOptionRow) {
+  const activeOrder =
+    Number(right.status === "ACTIVE") - Number(left.status === "ACTIVE");
+  return (
+    activeOrder ||
+    left.title.localeCompare(right.title, "zh-CN") ||
+    left.id.localeCompare(right.id)
+  );
 }
 
 function cursorFilter(value: unknown): string {

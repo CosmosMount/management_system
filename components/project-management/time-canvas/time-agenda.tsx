@@ -14,6 +14,7 @@ type AgendaItem = {
   atMs: number;
   endMs: number | null;
   title: string;
+  rowLabel: string | null;
   meta: string;
   state: string;
   kind: "ANCHOR" | "SEGMENT";
@@ -80,6 +81,11 @@ export function TimeAgenda({
                       <span className="mt-1 block break-words text-sm font-medium">
                         {item.title}
                       </span>
+                      {item.rowLabel && (
+                        <span className="mt-1 block text-xs text-muted-foreground">
+                          {item.rowLabel}
+                        </span>
+                      )}
                       <span className="mt-1 block text-xs text-muted-foreground">
                         {item.meta}
                       </span>
@@ -103,6 +109,7 @@ function groupAgendaItems(
   display: TimeCanvasDisplayOptions,
 ) {
   const items: AgendaItem[] = [];
+  const rowLabels = new Map(model.rows.map((row) => [row.id, row.label]));
   for (const anchor of model.anchors) {
     if (anchor.atMs < model.range.startMs || anchor.atMs >= model.range.endMs) {
       continue;
@@ -113,6 +120,7 @@ function groupAgendaItems(
       atMs: anchor.atMs,
       endMs: null,
       title: anchor.label,
+      rowLabel: rowLabels.get(anchor.rowId) ?? null,
       meta: anchor.kind === "TERMINATION" ? "计划终止" : "计划节点",
       state: anchor.status,
       kind: "ANCHOR",
@@ -138,6 +146,7 @@ function groupAgendaItems(
       atMs: visibleStartMs,
       endMs: visibleEndMs,
       title: segment.title,
+      rowLabel: rowLabels.get(segment.rowId) ?? null,
       meta: startsBeforeRange ? `范围开始时已在进行 · ${segmentMeta}` : segmentMeta,
       state: segment.type === "BUSY" ? "忙碌" : `${segment.type} · ${segment.status}`,
       kind: "SEGMENT",

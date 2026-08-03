@@ -455,6 +455,16 @@ async function loadTaskRows(
   scopeTask: CanvasTask | null,
   filter: string,
 ): Promise<RowPage> {
+  const actorCanCreateSegments = Boolean(
+    await prisma.person.findFirst({
+      where: {
+        id: actor.personId,
+        accountId: actor.accountId,
+        status: "ACTIVE",
+      },
+      select: { id: true },
+    }),
+  );
   const universe = taskUniverseWhere(actor, input, scopeTask);
   const where: Prisma.TaskWhereInput = {
     AND: [
@@ -485,6 +495,7 @@ async function loadTaskRows(
     sublabel: `${task.status} / ${task.priority}`,
     capabilities: {
       canCreateSegment:
+        actorCanCreateSegments &&
         isTaskCreatableForSegment(task.status) &&
         authorize({
           actor,
@@ -1044,6 +1055,7 @@ async function loadPersonCreateCapabilities(
         Boolean(
           task &&
             isEligibleSegmentTask(task.status) &&
+            hasActiveTaskMember(task, personId) &&
             canCreateForPerson(actor, personId, task),
         ),
       );
@@ -1055,13 +1067,29 @@ async function loadPersonCreateCapabilities(
     (personId) => personId !== actor.personId,
   );
   const selfRequiresTask = input.taskIds.length > 0;
-  const [hasSelfEligibleTask, hasManageableEligibleTask] = await Promise.all([
+  const otherPersonIds = personIds.filter(
+    (personId) => personId !== actor.personId,
+  );
+  const [hasSelfEligibleTask, manageablePersonIds] = await Promise.all([
     selfRequiresTask && personIds.includes(actor.personId)
-      ? eligibleTaskExists(input, taskReadableWhere(actor))
+      ? eligibleTaskExists(input, {
+          AND: [
+            taskReadableWhere(actor),
+            {
+              members: {
+                some: {
+                  personId: actor.personId,
+                  role: { in: ["OWNER", "PARTICIPANT"] },
+                  removedAt: null,
+                },
+              },
+            },
+          ],
+        })
       : Promise.resolve(false),
     hasOtherPeople
-      ? eligibleTaskExists(input, manageableTaskWhere(actor))
-      : Promise.resolve(false),
+      ? manageableEligibleTaskPersonIds(actor, input, otherPersonIds)
+      : Promise.resolve(new Set<string>()),
   ]);
   for (const personId of personIds) {
     result.set(
@@ -1070,10 +1098,36 @@ async function loadPersonCreateCapabilities(
         ? selfRequiresTask
           ? hasSelfEligibleTask
           : canCreateForPerson(actor, personId, null)
-        : hasManageableEligibleTask,
+        : manageablePersonIds.has(personId),
     );
   }
   return result;
+}
+
+async function manageableEligibleTaskPersonIds(
+  actor: ProjectManagementActor,
+  input: GetTimeCanvasDataInput,
+  personIds: string[],
+): Promise<Set<string>> {
+  const memberships = await prisma.taskMember.findMany({
+    where: {
+      personId: { in: personIds },
+      role: { in: ["OWNER", "PARTICIPANT"] },
+      removedAt: null,
+      task: {
+        AND: [
+          manageableTaskWhere(actor),
+          {
+            status: { in: [...TASK_SEGMENT_CREATABLE_STATUSES] },
+          },
+          input.taskIds.length > 0 ? { id: { in: input.taskIds } } : {},
+        ],
+      },
+    },
+    select: { personId: true },
+    distinct: ["personId"],
+  });
+  return new Set(memberships.map((membership) => membership.personId));
 }
 
 async function eligibleTaskExists(
@@ -1114,6 +1168,15 @@ function manageableTaskWhere(
 
 function isEligibleSegmentTask(status: Task["status"]): boolean {
   return isTaskCreatableForSegment(status);
+}
+
+function hasActiveTaskMember(task: CanvasTask, personId: string): boolean {
+  return task.members.some(
+    (member) =>
+      member.personId === personId &&
+      member.removedAt === null &&
+      (member.role === "OWNER" || member.role === "PARTICIPANT"),
+  );
 }
 
 function taskResource(

@@ -106,6 +106,11 @@ export default async function ProgressTasksPage({
             </label>
             <Button type="submit">筛选</Button>
           </form>
+          {tasks.hasMoreByQuery && (
+            <p className="text-sm text-amber-700" role="status">
+              搜索结果较多，仅显示最相关的 50 条，请继续输入关键词缩小范围。
+            </p>
+          )}
           <TaskList tasks={tasks.items} />
       </div>
     </>

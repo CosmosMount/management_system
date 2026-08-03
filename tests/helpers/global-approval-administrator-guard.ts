@@ -1,7 +1,6 @@
 import { prisma } from "../../lib/prisma";
 
 const GUARDED_TABLE_TRIGGERS = [
-  ["Account", "Account_usable_global_administrator_update_guard_v2"],
   ["Account", "Account_usable_global_administrator_delete_guard_v2"],
   [
     "AccountIdentity",

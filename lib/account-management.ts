@@ -1,5 +1,4 @@
-import type { AccountStatus, Prisma } from "@prisma/client";
-import { randomUUID } from "node:crypto";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
   USABLE_GLOBAL_APPROVAL_ADMINISTRATOR_REQUIRED,
@@ -53,7 +52,6 @@ async function loadSecurityTarget(tx: Transaction, targetAccountId: string) {
     where: { id: targetAccountId },
     select: {
       id: true,
-      projectAccessStatus: true,
       person: { select: { displayName: true } },
       identities: {
         where: { provider: "FEISHU", tenantId: "default" },
@@ -229,9 +227,8 @@ export async function revokeAccountRole(
 
     const target = await loadSecurityTarget(tx, assignment.accountId);
     if (
-      target.projectAccessStatus === "ACTIVE" &&
-      (assignment.role === "SUPER_ADMINISTRATOR" ||
-        assignment.role === "PROJECT_ADMINISTRATOR")
+      assignment.role === "SUPER_ADMINISTRATOR" ||
+      assignment.role === "PROJECT_ADMINISTRATOR"
     ) {
       const remainingAdministratorAccountIds =
         await activeGlobalApprovalAdministratorAccountIdsTx(tx, {
@@ -268,65 +265,6 @@ export async function revokeAccountRole(
       after: { active: false, revokedAt: revokedAt.toISOString() },
     });
     return { assignment: updated, changed: true };
-  });
-}
-
-export async function setProjectAccessStatus(
-  actorAccountId: string,
-  targetAccountId: string,
-  status: AccountStatus,
-) {
-  return prisma.$transaction(async (tx) => {
-    await assertActorIsSuperAdministrator(tx, actorAccountId);
-    if (status === "DISABLED") {
-      await lockGlobalApprovalAdministratorSetTx(tx);
-    }
-    await lockAccountMutations(tx, targetAccountId);
-    const target = await loadSecurityTarget(tx, targetAccountId);
-    if (target.projectAccessStatus === status) return { status, changed: false };
-    if (status === "DISABLED") {
-      const targetIsGlobalAdministrator =
-        (await tx.systemRoleAssignment.count({
-          where: {
-            accountId: target.id,
-            role: { in: ["SUPER_ADMINISTRATOR", "PROJECT_ADMINISTRATOR"] },
-            team: "",
-            techGroup: "",
-            revokedAt: null,
-          },
-        })) > 0;
-      if (targetIsGlobalAdministrator) {
-        const remainingAdministratorAccountIds =
-          await activeGlobalApprovalAdministratorAccountIdsTx(tx, {
-            excludeAccountId: target.id,
-            requireFeishuOpenId: true,
-          });
-        if (remainingAdministratorAccountIds.length === 0) {
-          throw new Error(USABLE_GLOBAL_APPROVAL_ADMINISTRATOR_REQUIRED);
-        }
-      }
-    }
-    const changeId = randomUUID();
-    await tx.account.update({
-      where: { id: target.id },
-      data: { projectAccessStatus: status },
-    });
-    await createAccountSecuritySideEffects(tx, {
-      actorAccountId,
-      target,
-      action: "account.project_access.changed",
-      entityType: "Account",
-      entityId: target.id,
-      eventId: changeId,
-      title: status === "ACTIVE" ? "项目访问已启用" : "项目访问已禁用",
-      summary:
-        status === "ACTIVE"
-          ? "你的项目管理访问权限已恢复，报销权限不受影响"
-          : "你的项目管理访问权限已禁用，登录和报销权限不受影响",
-      before: { projectAccessStatus: target.projectAccessStatus },
-      after: { projectAccessStatus: status },
-    });
-    return { status, changed: true };
   });
 }
 

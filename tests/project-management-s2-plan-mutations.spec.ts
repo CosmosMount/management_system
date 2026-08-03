@@ -1375,7 +1375,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
     const firstBlankThenValid = await createAccountPerson(
       "S2 First Blank Then Valid Recipient",
     );
-    const disabled = await createAccountPerson("S2 Disabled Recipient");
+    const bound = await createAccountPerson("S2 Bound Recipient");
     const emptyOpenId = await createAccountPerson("S2 Empty OpenId Recipient");
     const missingIdentity = await createAccountPerson(
       "S2 Missing Identity Recipient",
@@ -1395,7 +1395,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
         { personId: inactive.person.id, role: "PARTICIPANT" },
         { personId: wrongTenant.person.id, role: "PARTICIPANT" },
         { personId: firstBlankThenValid.person.id, role: "PARTICIPANT" },
-        { personId: disabled.person.id, role: "PARTICIPANT" },
+        { personId: bound.person.id, role: "PARTICIPANT" },
         { personId: emptyOpenId.person.id, role: "PARTICIPANT" },
         { personId: missingIdentity.person.id, role: "PARTICIPANT" },
         { personId: noAccountPerson.id, role: "PARTICIPANT" },
@@ -1408,10 +1408,6 @@ test.describe("project management S2 plan and Task mutation services", () => {
     await prisma.person.update({
       where: { id: inactive.person.id },
       data: { status: "INACTIVE" },
-    });
-    await prisma.account.update({
-      where: { id: disabled.account.id },
-      data: { projectAccessStatus: "DISABLED" },
     });
     await prisma.accountIdentity.deleteMany({
       where: { accountId: wrongTenant.account.id },
@@ -1488,9 +1484,9 @@ test.describe("project management S2 plan and Task mutation services", () => {
       recipientOpenIds: [],
       context: { recipientResolution: "ACCOUNT_MISSING" },
     });
-    expect(payloadByPersonId.get(disabled.person.id)).toMatchObject({
-      recipientOpenIds: [],
-      context: { recipientResolution: "ACCOUNT_DISABLED" },
+    expect(payloadByPersonId.get(bound.person.id)).toMatchObject({
+      recipientOpenIds: [bound.openId],
+      context: { recipientResolution: "RESOLVED" },
     });
     expect(payloadByPersonId.get(wrongTenant.person.id)).toMatchObject({
       recipientOpenIds: [],
@@ -1523,6 +1519,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
     expect(inAppRows.map((row) => row.recipientAccountId).sort()).toEqual(
       [
         inactive.account.id,
+        bound.account.id,
         wrongTenant.account.id,
         firstBlankThenValid.account.id,
         admin.account.id,
@@ -2402,7 +2399,6 @@ async function createAccountPerson(displayName: string) {
   const openId = `ou_s2_plan_${randomUUID()}`;
   const account = await prisma.account.create({
     data: {
-      projectAccessStatus: "ACTIVE",
       identities: {
         create: {
           provider: "FEISHU",

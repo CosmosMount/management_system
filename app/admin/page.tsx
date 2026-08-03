@@ -9,16 +9,12 @@ import { routes } from "@/lib/routes";
 export default async function AdminPage() {
   const [
     accountCount,
-    activeAccountCount,
-    disabledAccountCount,
     superAdminCount,
     projectAdminCount,
     reimbursementRoleCount,
     budgetPoolCount,
   ] = await Promise.all([
     prisma.account.count(),
-    prisma.account.count({ where: { projectAccessStatus: "ACTIVE" } }),
-    prisma.account.count({ where: { projectAccessStatus: "DISABLED" } }),
     prisma.systemRoleAssignment.count({
       where: { role: "SUPER_ADMINISTRATOR", revokedAt: null },
     }),
@@ -41,18 +37,6 @@ export default async function AdminPage() {
           label="统一账号"
           value={accountCount}
           detail="飞书统一身份"
-        />
-        <AdminMetric
-          icon={Users}
-          label="项目已启用"
-          value={activeAccountCount}
-          detail="可进入项目管理"
-        />
-        <AdminMetric
-          icon={Users}
-          label="项目已禁用"
-          value={disabledAccountCount}
-          detail="登录与报销不受影响"
         />
         <AdminMetric
           icon={ShieldCheck}

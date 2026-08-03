@@ -23,7 +23,6 @@ import {
 } from "@/lib/project-management/approval-administrators";
 import { createDomainAuditEventTx } from "@/lib/project-management/audit";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
-import { assertProjectAccessActiveTx } from "@/lib/project-management/identity";
 import type { ProjectManagementNotificationPayload } from "@/lib/project-management/notifications/events";
 import {
   createProjectManagementEventNotificationsTx,
@@ -1737,13 +1736,16 @@ async function assertCreateTaskReferencesTx(
   actor: ProjectManagementActor,
   input: CreateTaskDraftInput,
 ) {
+  const memberPersonIds = [
+    ...new Set(input.members.map((member) => member.personId)),
+  ];
   const personCount = await tx.person.count({
     where: {
-      id: { in: [...new Set(input.members.map((member) => member.personId))] },
-      status: "ACTIVE",
+      id: { in: memberPersonIds },
+      OR: [{ status: "ACTIVE" }, { id: actor.personId }],
     },
   });
-  if (personCount !== new Set(input.members.map((member) => member.personId)).size) {
+  if (personCount !== memberPersonIds.length) {
     throw validationError("成员不存在或已停用", {
       members: ["成员不存在或已停用"],
     });
@@ -1899,7 +1901,6 @@ async function refreshActorTx(
   tx: PrismaTx,
   actor: ProjectManagementActor,
 ): Promise<ProjectManagementActor> {
-  await assertProjectAccessActiveTx(tx, actor.accountId);
   const roles = await tx.systemRoleAssignment.findMany({
     where: { accountId: actor.accountId, revokedAt: null },
     select: { role: true, team: true, techGroup: true },
@@ -2563,7 +2564,6 @@ async function taskMemberRecipientsTx(
           account: {
             select: {
               id: true,
-              projectAccessStatus: true,
               identities: {
                 where: {
                   provider: FEISHU_PROVIDER,
@@ -2580,9 +2580,7 @@ async function taskMemberRecipientsTx(
   });
   return members
     .map((member) => member.person.account)
-    .filter((account): account is NonNullable<typeof account> =>
-      Boolean(account && account.projectAccessStatus === "ACTIVE"),
-    )
+    .filter((account): account is NonNullable<typeof account> => Boolean(account))
     .map((account) => ({
       accountId: account.id,
       openId: firstNonEmptyOpenId(account.identities),
@@ -2598,10 +2596,7 @@ async function globalAdministratorRecipientsTx(
     throw stateConflictError(ACTIVE_GLOBAL_APPROVAL_ADMINISTRATOR_REQUIRED);
   }
   const globalAdministrators = await tx.account.findMany({
-    where: {
-      id: { in: accountIds },
-      projectAccessStatus: "ACTIVE",
-    },
+    where: { id: { in: accountIds } },
     select: {
       id: true,
       identities: {
@@ -2664,7 +2659,6 @@ async function accountRecipientsTx(
   }
   const accounts = await tx.account.findMany({
     where: {
-      projectAccessStatus: "ACTIVE",
       OR: [
         ...(input.accountIds.length > 0
           ? [{ id: { in: input.accountIds } }]

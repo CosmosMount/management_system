@@ -1,5 +1,7 @@
 # ADR: Task 全员可见、双成员角色与全局管理员审批
 
+> 状态（2026-08-04）：本文关于 `Account.projectAccessStatus`、禁用账号和账号状态门禁的决策已由 [移除账号级项目访问状态](./2026-08-04-remove-project-access-status.md) 取代；成员、可见性、写权限和审批决策继续有效。
+
 日期：2026-08-03
 
 状态：Accepted
@@ -8,7 +10,7 @@
 
 项目管理此前按 Task 成员和组织范围控制读取，并提供 `OWNER/LEAD/MEMBER/REVIEWER/VIEWER` 多种成员角色、Task 级 Revision 审批策略和自审开关。该模型把“执行成员”“只读可见性”和“审批人”混在同一成员表中，也使同一 Task 的读取、编辑和审批能力依赖多套范围规则。
 
-本次产品决策将项目管理改为透明协作模型：所有启用项目访问的账号共享完整业务视图，Task 执行权限只由负责人、参与人和全局管理员决定，Milestone 与 Revision 的最终决定统一收口到全局管理员。采购报销的独立角色和审批状态机不在本 ADR 范围内。
+本次产品决策将项目管理改为透明协作模型：所有项目账号共享完整业务视图，Task 执行权限只由负责人、参与人和全局管理员决定，Milestone 与 Revision 的最终决定统一收口到全局管理员。采购报销的独立角色和审批状态机不在本 ADR 范围内。账号访问状态的后续删除见 2026-08-04 ADR。
 
 本 ADR 取代以下历史决策中与 Task 可见性、项目 `GROUP_LEADER`、Task Reviewer、Revision 直通和自审策略有关的部分：
 
@@ -19,11 +21,11 @@
 
 ### 1. 账号与读取边界
 
-- “所有人”指 `Account.projectAccessStatus=ACTIVE` 的项目管理账号；禁用账号仍不能进入项目管理或调用项目写操作。
-- 所有启用账号可读取全部未逻辑删除 Task、计划版本、成员、Milestone Review、Revision、Task 审计和 Work Segment 变更历史。
-- 所有启用账号可读取所有未逻辑删除 Work Segment 的完整内容，包括 Planned/Actual、时间、内容、产出、完成度和 Task/Node/Tag 关联。
+- “所有人”指所有已登录并成功解析到统一 `Account/Person` 的项目管理账号；不再存在项目访问启用/禁用状态。
+- 所有账号可读取全部未逻辑删除 Task、计划版本、成员、Milestone Review、Revision、Task 审计和 Work Segment 变更历史。
+- 所有账号可读取所有未逻辑删除 Work Segment 的完整内容，包括 Planned/Actual、时间、内容、产出、完成度和 Task/Node/Tag 关联。
 - 读取范围扩大不授予写权限；已删除对象仍不能通过列表、搜索或显式 ID 枚举。
-- 所有启用账号都可创建使用固定合法车组/技术组选项的 Task，创建者始终成为负责人。
+- 所有账号都可创建使用固定合法车组/技术组选项的 Task，创建者始终成为负责人。
 
 ### 2. Task 成员
 
@@ -37,7 +39,7 @@
 ### 3. 项目系统角色
 
 - 活跃项目系统角色只允许全局 `SUPER_ADMINISTRATOR` 和全局 `PROJECT_ADMINISTRATOR`，二者在项目业务中统一视为全局管理员。
-- 账号角色撤销、项目访问禁用和审批提交共同串行维护至少一名项目访问启用的全局管理员；审批提交还要求存在 default tenant 非空飞书 openId，否则整事务失败。
+- 全局角色撤销和审批提交共同串行维护可用全局管理员集合；存在 Task 数据时至少保留一名具有 default tenant 非空飞书 openId 的全局管理员，否则整事务失败。
 - `GROUP_LEADER` 及其他旧项目角色全部撤销并只保留历史；账号后台不能再授予。
 - 报销 `TEAM_ADMIN`、`TECH_GROUP_ADMIN`、`TEACHER`、`FINANCE` 及采购审批流程保持不变。
 

@@ -1,5 +1,4 @@
 import { middlewareAuth } from "@/lib/auth-edge";
-import { getAccountAuthorizationContextForOpenId } from "@/lib/account-authorization";
 import {
   appOriginFromHostHeaders,
   buildAppUrl,
@@ -46,18 +45,6 @@ const authMiddleware = middlewareAuth(async (req) => {
     const returnPath = `${req.nextUrl.pathname}${req.nextUrl.search}`;
     loginUrl.searchParams.set("callbackUrl", returnPath);
     return NextResponse.redirect(loginUrl);
-  }
-
-  if (pathname === "/progress" || pathname.startsWith("/progress/")) {
-    const openId = req.auth?.user?.openId;
-    if (openId) {
-      const authorization = await getAccountAuthorizationContextForOpenId(openId);
-      if (authorization?.projectAccessStatus === "DISABLED") {
-        return NextResponse.redirect(
-          new URL("/project-access-disabled", req.nextUrl),
-        );
-      }
-    }
   }
 
   return NextResponse.next();

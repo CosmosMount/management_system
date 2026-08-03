@@ -34,11 +34,6 @@ export const revokeRoleInputSchema = z.object({
   assignmentId: z.string().uuid("角色记录参数无效"),
 });
 
-export const setProjectAccessStatusInputSchema = z.object({
-  targetAccountId: z.string().uuid("账号参数无效"),
-  status: z.enum(["ACTIVE", "DISABLED"]),
-});
-
 export const assignReimbursementRoleInputSchema = z
   .object({
     targetAccountId: z.string().uuid("账号参数无效"),
@@ -70,9 +65,6 @@ export const assignReimbursementRoleInputSchema = z
   });
 
 export type GrantAccountRoleInput = z.infer<typeof grantAccountRoleInputSchema>;
-export type SetProjectAccessStatusInput = z.infer<
-  typeof setProjectAccessStatusInputSchema
->;
 export type AssignReimbursementRoleInput = z.infer<
   typeof assignReimbursementRoleInputSchema
 >;

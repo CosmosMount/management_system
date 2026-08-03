@@ -52,17 +52,17 @@ Task 生命周期服务和 Segment 服务会在同一业务事务中写站内通
 | Planned Segment 到期待确认 | `segment_confirmation_due` | 普通通知 | Segment Person |
 | Planned Segment 关联失效 | `segment_association_invalidated` | 普通通知 | Segment Person |
 | Task 结束确认 | `task_terminated` | 普通通知 | 有效 OWNER/PARTICIPANT |
-| 账号角色或项目访问变更 | `account_security` | 强制普通通知 | 仅被操作账号 |
+| 账号角色变更 | `account_security` | 强制普通通知 | 仅被操作账号 |
 
 既有 Draft `task_assigned` 入队保持 `mandatory=true`。这里的“普通通知”指 `purpose=notification`、`botKind=notification`，不表示 `mandatory=false`；该事件只使用通知机器人，不得路由到 approval bot。S2 的 Active `replaceTaskMembers` 新增/移除/角色变化沿用同一强制成员变化语义：站内 + `mandatory=true` 的 `project-management` outbox，purpose/botKind 仍为 `notification`。
 
-账号安全变更由 `lib/account-management.ts` 在角色或项目访问事务中写入。事件只通知被操作人，站内分类固定为 `ACCOUNT_SECURITY`，outbox 固定 `mandatory=true`、`purpose=notification` 和通知机器人。摘要包含操作人、授予/撤销或项目启停、角色与组织范围、状态变化和时间。项目访问已禁用不会过滤该账号的飞书 identity，因此禁用结果仍可投递；站内记录保留供重新启用后查看。事件键以 `account-security:<action>:<稳定实体或变更 ID>` 开头，站内和飞书后缀分别保证幂等。报销角色通知也通过 `accountId` 解析当前 Identity；历史 `UserRole.openId` 不作为投递目标。
+账号安全变更由 `lib/account-management.ts` 在角色事务中写入。事件只通知被操作人，站内分类固定为 `ACCOUNT_SECURITY`，outbox 固定 `mandatory=true`、`purpose=notification` 和通知机器人。摘要包含操作人、角色授予/撤销、组织范围和时间。事件键以 `account-security:<action>:<稳定实体或变更 ID>` 开头，站内和飞书后缀分别保证幂等。报销角色通知也通过 `accountId` 解析当前 Identity；历史 `UserRole.openId` 不作为投递目标。删除项目访问禁用机制的 migration 只写 `source=MIGRATION` 审计，不创建站内通知或飞书 outbox。
 
-Active 成员强制事件不得因受影响 Person 已停用、Account 已禁用、缺少飞书 identity 或尚无 Account 而消失。只有 Active Account 才写按 Account 的站内记录；Person 已停用但 Account 仍 Active 的 legacy removal 仍保留站内记录。飞书候选只允许 `provider=FEISHU`、`tenantId=default` 且 trim 后非空的 `openId`，不会回退其他 tenant，也不会因最早一条 identity 为空而漏掉同一默认 tenant 的后续合法 identity。无法安全解析飞书目标时仍写 `mandatory=true` durable outbox，并在 payload `context.recipientResolution` 记录 `PERSON_INACTIVE`、`ACCOUNT_DISABLED`、`DEFAULT_FEISHU_IDENTITY_MISSING`、`FEISHU_OPEN_ID_MISSING` 或 `ACCOUNT_MISSING`；outbox 保留空候选而不猜测、替代或直发任何真实收件人。成员业务审计、站内记录和 outbox 与成员差异处于同一事务，任一晚失败全部回滚。新建和激活 Task 的常规成员收件人只读取有效 OWNER/PARTICIPANT；历史 LEAD/MEMBER/REVIEWER/VIEWER 不再取得成员通知。
+Active 成员强制事件不得因受影响 Person 已停用、缺少飞书 identity 或尚无 Account 而消失。已绑定 Account 仍写按 Account 的站内记录；Person 已停用的 legacy removal 也保留站内记录。飞书候选只允许 `provider=FEISHU`、`tenantId=default` 且 trim 后非空的 `openId`，不会回退其他 tenant，也不会因最早一条 identity 为空而漏掉同一默认 tenant 的后续合法 identity。无法安全解析飞书目标时仍写 `mandatory=true` durable outbox，并在 payload `context.recipientResolution` 记录 `PERSON_INACTIVE`、`DEFAULT_FEISHU_IDENTITY_MISSING`、`FEISHU_OPEN_ID_MISSING` 或 `ACCOUNT_MISSING`；outbox 保留空候选而不猜测、替代或直发任何真实收件人。成员业务审计、站内记录和 outbox 与成员差异处于同一事务，任一晚失败全部回滚。新建和激活 Task 的常规成员收件人只读取有效 OWNER/PARTICIPANT；历史 LEAD/MEMBER/REVIEWER/VIEWER 不再取得成员通知。
 
 Revision 生效事务先把目标 `TaskPlanVersion` 切换为 `CURRENT` 并更新 `Task.currentPlanVersionId`，随后才以更新后的 Task 上下文写 `revision_applied` 和 `segment_association_invalidated`。这两个 payload（包括对应站内通知）中的 `context.currentPlanVersionId` 均指向切换后的 Current Plan Version，不得保留 base/旧 Current Plan；Segment 关联失效通知仍只发给受影响 Segment Person，普通通知机器人用途不变。
 
-入队 helper 和 adapter 会拒绝 `type/payload.kind` 不一致、payload 结构错误、错误机器人类型和越界审批用途，并对 `recipientOpenIds` 去重。项目管理飞书卡片包含操作人、Task、事件摘要、对象类型、事件时间和最多 6 项上下文；按钮跳转到 payload 的 `linkPath`，没有链接时回到 `/progress`。`approval_request` 使用审批机器人用途；所有普通项目管理事件使用通知机器人，不能把审批机器人作为普通通知 fallback。Milestone/Revision 提交审批前会在全局审批人事务锁内重新查询收件人；没有项目访问启用的全局管理员，或所有管理员都缺少 default tenant 非空飞书 openId 时，审批状态、审计、站内通知和 outbox 全部回滚，不生成无人可处理或确定无法投递的 pending。
+入队 helper 和 adapter 会拒绝 `type/payload.kind` 不一致、payload 结构错误、错误机器人类型和越界审批用途，并对 `recipientOpenIds` 去重。项目管理飞书卡片包含操作人、Task、事件摘要、对象类型、事件时间和最多 6 项上下文；按钮跳转到 payload 的 `linkPath`，没有链接时回到 `/progress`。`approval_request` 使用审批机器人用途；所有普通项目管理事件使用通知机器人，不能把审批机器人作为普通通知 fallback。Milestone/Revision 提交审批前会在全局审批人事务锁内重新查询收件人；没有有效全局管理员角色，或所有管理员都缺少 default tenant 非空飞书 openId 时，审批状态、审计、站内通知和 outbox 全部回滚，不生成无人可处理或确定无法投递的 pending。
 
 资源冲突下线 migration 会删除 `RESOURCE_CONFLICT` 偏好与站内通知，以及 `resource_conflict_opened`、`resource_conflict_resolved` outbox；收件人投递行随 outbox 级联删除。已经送达飞书的历史消息无法撤回。
 
@@ -83,7 +83,7 @@ NOTIFICATION_DELIVERY_DISABLED=true \
 npm run pm:repair-task-approval-notifications -- --apply
 ```
 
-修复脚本只选择 `projectAccessStatus=ACTIVE` 且持有有效全局 `SUPER_ADMINISTRATOR` 或 `PROJECT_ADMINISTRATOR` 的账号，并按账号去重。没有可用全局管理员，或全部管理员都缺少 default tenant 非空飞书 openId 时，APPLY 会在冻结任何旧 outbox 前阻断。对每个仍为 `PENDING` 的 Milestone Review 或 `PENDING_APPROVAL` Revision，脚本在单独事务中冻结对应旧 `:feishu` outbox，以 `global-admin:v2` 版本化事件键创建管理员站内通知和 approval outbox，并写稳定 ID 的 `source=MIGRATION` 审计；任一对象失败只回滚该对象。全部待审批对象成功后，其他可重试的旧审批 outbox 也会被标记为冻结并写入明确原因。重复运行依赖事件键和审计 ID 保持幂等。
+修复脚本只选择持有有效全局 `SUPER_ADMINISTRATOR` 或 `PROJECT_ADMINISTRATOR` 角色的账号，并按账号去重。没有可用全局管理员，或全部管理员都缺少 default tenant 非空飞书 openId 时，APPLY 会在冻结任何旧 outbox 前阻断。对每个仍为 `PENDING` 的 Milestone Review 或 `PENDING_APPROVAL` Revision，脚本在单独事务中冻结对应旧 `:feishu` outbox，以 `global-admin:v2` 版本化事件键创建管理员站内通知和 approval outbox，并写稳定 ID 的 `source=MIGRATION` 审计；任一对象失败只回滚该对象。全部待审批对象成功后，其他可重试的旧审批 outbox 也会被标记为冻结并写入明确原因。重复运行依赖事件键和审计 ID 保持幂等。
 
 该脚本不会调用飞书传输层，也不会绕过 `NOTIFICATION_DELIVERY_DISABLED`、收件人 allowlist、outbox claim 或逐收件人重试。修复完成并核对无真实外发后，才可恢复正常 worker。
 

@@ -27,9 +27,9 @@ import {
 import { createTaskDraft } from "@/app/actions/project-management/tasks";
 import {
   listTagOptions,
-  searchPeople,
-  searchTaskOptions,
 } from "@/app/actions/project-management/canvas";
+import { TaskSelect } from "@/components/project-management/task-picker";
+import { UserSelect } from "@/components/project-management/user-picker";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -42,7 +42,6 @@ import {
 import {
   taskMemberRoleLabels,
   taskPriorityLabels,
-  taskStatusLabels,
 } from "@/lib/project-management/labels";
 import type {
   PersonOptionDto,
@@ -152,17 +151,23 @@ export function TaskComposerClient({
   const [storageReady, setStorageReady] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState<string | null>(null);
   const [people, setPeople] = useState<PersonOption[]>(initialPeople);
-  const [tasks, setTasks] = useState<TaskOption[]>(initialTasks);
   const [tags, setTags] = useState<TagOption[]>(initialTags);
-  const [personQuery, setPersonQuery] = useState("");
-  const [taskQuery, setTaskQuery] = useState("");
   const [tagQuery, setTagQuery] = useState("");
   const [optionError, setOptionError] = useState("");
   const [optionLoading, setOptionLoading] = useState(false);
   const [memberPersonId, setMemberPersonId] = useState(
-    initialSeed.members.find((member) => member.role === "OWNER")?.personId ??
-      initialPeople[0]?.id ??
-      "",
+    () => {
+      const ownerId = initialSeed.members.find(
+        (member) => member.role === "OWNER",
+      )?.personId;
+      return (
+        initialPeople.find(
+          (person) => person.id === ownerId && person.status === "ACTIVE",
+        )?.id ??
+        initialPeople.find((person) => person.status === "ACTIVE")?.id ??
+        ""
+      );
+    },
   );
   const [memberRole, setMemberRole] =
     useState<TaskMemberRoleValue>("PARTICIPANT");
@@ -558,49 +563,6 @@ export function TaskComposerClient({
     }
   };
 
-  const loadPeople = async () => {
-    setOptionLoading(true);
-    setOptionError("");
-    try {
-      const result = await searchPeople({
-        purpose: "TASK_CREATE",
-        team: state.team,
-        techGroup: state.techGroup,
-        query: personQuery || undefined,
-        limit: 50,
-      });
-      if (!result.ok) {
-        setOptionError(result.error.message);
-        return;
-      }
-      setPeople((current) => mergeOptions(current, result.data.items));
-      if (!memberPersonId && result.data.items[0]) {
-        setMemberPersonId(result.data.items[0].id);
-      }
-    } catch {
-      setOptionError("人员搜索暂时不可用，请稍后重试。");
-    } finally {
-      setOptionLoading(false);
-    }
-  };
-
-  const loadTasks = async () => {
-    setOptionLoading(true);
-    setOptionError("");
-    try {
-      const result = await searchTaskOptions({ query: taskQuery || undefined, limit: 50 });
-      if (!result.ok) {
-        setOptionError(result.error.message);
-        return;
-      }
-      setTasks((current) => mergeOptions(current, result.data.items));
-    } catch {
-      setOptionError("Task 搜索暂时不可用，请稍后重试。");
-    } finally {
-      setOptionLoading(false);
-    }
-  };
-
   const loadTags = async () => {
     setOptionLoading(true);
     setOptionError("");
@@ -626,6 +588,11 @@ export function TaskComposerClient({
     const existing = state.members.find(
       (member) => member.personId === memberPersonId,
     );
+    const selectedPerson = people.find((person) => person.id === memberPersonId);
+    if (!selectedPerson || selectedPerson.status !== "ACTIVE") {
+      setOptionError("该人员已停用或不可用，不能新增角色。");
+      return;
+    }
     if (
       existing?.role === "OWNER" &&
       memberRole !== "OWNER" &&
@@ -957,36 +924,15 @@ export function TaskComposerClient({
               </div>
             </Field>
             <Field label="关联 Task" htmlFor="related-task">
-              <div className="mb-2 flex gap-2">
-                <Input
-                  value={taskQuery}
-                  placeholder="按名称搜索可见 Task"
-                  aria-label="搜索关联 Task"
-                  onChange={(event) => setTaskQuery(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      void loadTasks();
-                    }
-                  }}
-                />
-                <Button type="button" variant="outline" onClick={() => void loadTasks()}>
-                  搜索
-                </Button>
-              </div>
-              <select
-                id="related-task"
-                className={selectClassName}
-                value={state.relatedTaskId ?? ""}
-                onChange={(event) => updateField("relatedTaskId", event.target.value || null)}
-              >
-                <option value="">不关联</option>
-                {tasks.map((task) => (
-                  <option key={task.id} value={task.id}>
-                    {task.title} · {taskStatusLabels[task.status]}
-                  </option>
-                ))}
-              </select>
+              <TaskSelect
+                inputId="related-task"
+                ariaLabel="关联 Task"
+                value={state.relatedTaskId}
+                onValueChange={(nextValue) => updateField("relatedTaskId", nextValue)}
+                initialOptions={initialTasks}
+                placeholder="按标题、描述或拼音首字母搜索"
+                clearable
+              />
             </Field>
           </ComposerSection>
 
@@ -1030,36 +976,21 @@ export function TaskComposerClient({
               {state.members.length === 0 && <EmptyInline>尚未添加成员</EmptyInline>}
             </div>
             <div className="mt-3 space-y-2 rounded-lg bg-muted/40 p-3">
-              <div className="flex gap-2">
-                <Input
-                  value={personQuery}
-                  placeholder="搜索人员"
-                  aria-label="搜索 Task 成员"
-                  onChange={(event) => setPersonQuery(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      void loadPeople();
-                    }
-                  }}
-                />
-                <Button type="button" variant="outline" onClick={() => void loadPeople()}>
-                  搜索
-                </Button>
-              </div>
-              <select
-                aria-label="成员人员"
-                className={selectClassName}
-                value={memberPersonId}
-                onChange={(event) => setMemberPersonId(event.target.value)}
-              >
-                {people.map((person) => (
-                  <option key={person.id} value={person.id}>
-                    {person.displayName}
-                    {person.accountAvailability !== "ACTIVE" ? "（账号不可用）" : ""}
-                  </option>
-                ))}
-              </select>
+              <UserSelect
+                ariaLabel="成员人员"
+                scope={{
+                  purpose: "TASK_CREATE",
+                  team: state.team,
+                  techGroup: state.techGroup,
+                }}
+                value={memberPersonId || null}
+                onValueChange={(nextValue) => setMemberPersonId(nextValue ?? "")}
+                onOptionChange={(option) => {
+                  if (option) setPeople((current) => mergeOptions(current, [option]));
+                }}
+                initialOptions={initialPeople}
+                placeholder="按姓名或拼音首字母搜索"
+              />
               <div className="flex gap-2">
                 <select
                   aria-label="成员角色"

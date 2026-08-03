@@ -26,7 +26,11 @@ import {
   splitPlannedSegment,
   updateWorkSegment,
 } from "@/app/actions/project-management/segments";
-import { searchTaskOptions as searchTaskOptionResults } from "@/app/actions/project-management/options";
+import { TaskSelect } from "@/components/project-management/task-picker";
+import {
+  UserSelect,
+  type UserPickerScope,
+} from "@/components/project-management/user-picker";
 import { TimeCanvas } from "@/components/project-management/time-canvas/time-canvas";
 import type {
   TimeCanvasBrushRequest,
@@ -53,14 +57,13 @@ import {
   workSegmentTypeLabels,
 } from "@/lib/project-management/labels";
 import type { WorkSegmentDetail } from "@/lib/project-management/queries/resource-queries";
+import type {
+  PersonOptionDto,
+  TaskOptionPage,
+} from "@/lib/project-management/types/time-canvas";
 import { cn } from "@/lib/utils";
 
-type PersonOption = { id: string; displayName: string };
-type TaskOption = {
-  id: string;
-  title: string;
-  activeNodeId: string | null;
-};
+type TaskOption = TaskOptionPage["items"][number];
 type Notice = { kind: "success" | "error" | "info"; message: string } | null;
 type CreateDraft = { personId: string; startMs: number; endMs: number };
 type SegmentChange = {
@@ -72,8 +75,9 @@ type SegmentChange = {
 
 export function ResourcePlannerCanvasClient({
   initialModel,
-  people,
-  tasks,
+  peopleOptions,
+  taskOptions,
+  peopleScope = { purpose: "VISIBLE" },
   defaultPersonId,
   initialZoom,
   mode = "RESOURCE_PLANNER",
@@ -82,8 +86,9 @@ export function ResourcePlannerCanvasClient({
   initialFocusId = null,
 }: {
   initialModel: TimeCanvasModel;
-  people: PersonOption[];
-  tasks: TaskOption[];
+  peopleOptions: PersonOptionDto[];
+  taskOptions: TaskOption[];
+  peopleScope?: UserPickerScope;
   defaultPersonId: string;
   initialZoom: TimeCanvasZoom;
   mode?: TimeCanvasMode;
@@ -129,40 +134,6 @@ export function ResourcePlannerCanvasClient({
   const [detailState, setDetailState] = useState<"IDLE" | "LOADING" | "READY" | "ERROR">("IDLE");
   const [detailError, setDetailError] = useState("");
   const [notice, setNotice] = useState<Notice>(null);
-  const [searchedTasks, setSearchedTasks] = useState<TaskOption[]>([]);
-  const availableTasks = useMemo(
-    () => mergeTaskOptions(tasks, searchedTasks),
-    [searchedTasks, tasks],
-  );
-
-  const searchAvailableTasks = useCallback(async (query: string) => {
-    try {
-      const result = await searchTaskOptionResults({
-        query: query.trim() || undefined,
-        statuses: ["ACTIVE"],
-        limit: 50,
-      });
-      if (!result.ok) {
-        return { ok: false as const, message: result.error.message };
-      }
-      const incoming = result.data.items.map((task) => ({
-        id: task.id,
-        title: task.title,
-        activeNodeId: task.activeMilestone?.nodeId ?? null,
-      }));
-      setSearchedTasks((current) => mergeTaskOptions(current, incoming));
-      return {
-        ok: true as const,
-        message:
-          incoming.length > 0
-            ? `已找到 ${incoming.length} 个 Task`
-            : "没有找到可关联的 Active Task",
-      };
-    } catch {
-      return { ok: false as const, message: "Task 搜索失败，请重试。" };
-    }
-  }, []);
-
   const selectedCanvasSegment = useMemo(
     () =>
       selection?.kind === "SEGMENT"
@@ -170,16 +141,21 @@ export function ResourcePlannerCanvasClient({
         : null,
     [model.segments, selection],
   );
-  const effectivePeople = useMemo(() => {
-    const byId = new Map(people.map((person) => [person.id, person]));
-    for (const row of model.rows) {
-      if (row.kind === "PERSON" && !byId.has(row.sourceId)) {
-        byId.set(row.sourceId, { id: row.sourceId, displayName: row.label });
-      }
-    }
-    return [...byId.values()];
-  }, [model.rows, people]);
-
+  const canCreateSegment = model.rows.some(
+    (row) => row.kind !== "PLAN" && row.editable,
+  );
+  const quickCreatePersonId =
+    model.rows.find(
+      (row) =>
+        row.kind === "PERSON" &&
+        row.editable &&
+        row.sourceId === defaultPersonId,
+    )?.sourceId ??
+    model.rows.find((row) => row.kind === "PERSON" && row.editable)?.sourceId ??
+    defaultPersonId;
+  const lockedTaskId = !allowIndependent && defaultTaskId
+    ? defaultTaskId
+    : null;
   useEffect(() => {
     let active = true;
     if (
@@ -222,7 +198,6 @@ export function ResourcePlannerCanvasClient({
       active = false;
     };
   }, [selectedCanvasSegment, selection]);
-
   const runMutation = useCallback(
     (
       action: () => Promise<ProjectManagementActionResult<unknown>>,
@@ -354,19 +329,21 @@ export function ResourcePlannerCanvasClient({
   return (
     <div className="space-y-4" data-testid="resource-planner-workbench">
       <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-3">
-        <Button
-          type="button"
-          size="sm"
-          onClick={() =>
-            setCreateDraft({
-              personId: defaultPersonId,
-              startMs: model.range.startMs,
-              endMs: Math.min(model.range.endMs, model.range.startMs + 60 * 60 * 1_000),
-            })
-          }
-        >
-          新增投入
-        </Button>
+        {canCreateSegment && (
+          <Button
+            type="button"
+            size="sm"
+            onClick={() =>
+              setCreateDraft({
+                personId: quickCreatePersonId,
+                startMs: model.range.startMs,
+                endMs: Math.min(model.range.endMs, model.range.startMs + 60 * 60 * 1_000),
+              })
+            }
+          >
+            新增投入
+          </Button>
+        )}
         <span className="text-sm text-muted-foreground">
           Shift+点击可多选；Shift+方向键移动，Alt+方向键调整结束时间。
         </span>
@@ -499,7 +476,7 @@ export function ResourcePlannerCanvasClient({
             initialSelection={initialSelection}
             display={{ showActual: true, showBusy: true, showInspector: false }}
             interaction={{
-              enableBrushCreate: !isPending,
+              enableBrushCreate: !isPending && canCreateSegment,
               selectedSegmentIds: selectedIds,
               onBrushCreate: handleBrush,
               onSegmentTransform: isPending ? undefined : handleTransform,
@@ -526,8 +503,8 @@ export function ResourcePlannerCanvasClient({
           detailState={detailState}
           detailError={detailError}
           changes={changes}
-          tasks={availableTasks}
-          onSearchTasks={searchAvailableTasks}
+          taskOptions={taskOptions}
+          lockedTaskId={lockedTaskId}
           disabled={isPending}
           onRun={runMutation}
           onToggleSelected={toggleSegmentSelection}
@@ -535,13 +512,14 @@ export function ResourcePlannerCanvasClient({
         />
       </div>
 
-      {createDraft && (
+      {canCreateSegment && createDraft && (
         <QuickCreatePanel
           draft={createDraft}
-          people={effectivePeople}
-          tasks={availableTasks}
-          onSearchTasks={searchAvailableTasks}
+          peopleOptions={peopleOptions}
+          peopleScope={peopleScope}
+          taskOptions={taskOptions}
           defaultTaskId={defaultTaskId}
+          lockedTaskId={lockedTaskId}
           allowIndependent={allowIndependent}
           disabled={isPending}
           onCancel={() => setCreateDraft(null)}
@@ -556,25 +534,37 @@ export function ResourcePlannerCanvasClient({
 
 function QuickCreatePanel({
   draft,
-  people,
-  tasks,
-  onSearchTasks,
+  peopleOptions,
+  peopleScope,
+  taskOptions,
   defaultTaskId,
+  lockedTaskId,
   allowIndependent,
   disabled,
   onCancel,
   onRun,
 }: {
   draft: CreateDraft;
-  people: PersonOption[];
-  tasks: TaskOption[];
-  onSearchTasks: TaskSearchHandler;
+  peopleOptions: PersonOptionDto[];
+  peopleScope: UserPickerScope;
+  taskOptions: TaskOption[];
   defaultTaskId: string;
+  lockedTaskId: string | null;
   allowIndependent: boolean;
   disabled: boolean;
   onCancel: () => void;
   onRun: (action: () => Promise<ProjectManagementActionResult<unknown>>) => void;
 }) {
+  const [personId, setPersonId] = useState<string | null>(draft.personId || null);
+  const [taskId, setTaskId] = useState<string | null>(defaultTaskId || null);
+  const [taskNodeId, setTaskNodeId] = useState<string | null>(
+    () =>
+      taskOptions.find((option) => option.id === defaultTaskId)?.activeMilestone
+        ?.nodeId ?? null,
+  );
+  const lockedTask = lockedTaskId
+    ? taskOptions.find((option) => option.id === lockedTaskId) ?? null
+    : null;
   return (
     <form
       className="grid gap-3 rounded-xl border border-primary/30 bg-card p-4 md:grid-cols-2 xl:grid-cols-4"
@@ -582,8 +572,7 @@ function QuickCreatePanel({
       onSubmit={(event) => {
         event.preventDefault();
         const form = new FormData(event.currentTarget);
-        const taskId = String(form.get("taskId") ?? defaultTaskId);
-        const task = tasks.find((item) => item.id === taskId);
+        const submittedTaskId = String(form.get("taskId") ?? "") || null;
         const type = String(form.get("type")) === "ACTUAL" ? "ACTUAL" : "PLANNED";
         const base = {
           personId: String(form.get("personId") ?? draft.personId),
@@ -593,8 +582,8 @@ function QuickCreatePanel({
           role: String(form.get("role") ?? "DEVELOPER"),
           customRole: String(form.get("customRole") ?? ""),
           priority: String(form.get("priority") ?? "MEDIUM"),
-          taskId: taskId || null,
-          nodeId: task?.activeNodeId ?? null,
+          taskId: submittedTaskId,
+          nodeId: submittedTaskId ? taskNodeId : null,
           tagIds: [],
         };
         onRun(() =>
@@ -615,9 +604,19 @@ function QuickCreatePanel({
         </select>
       </Field>
       <Field label="人员" htmlFor="quick-person">
-        <select id="quick-person" name="personId" className={selectClass} defaultValue={draft.personId}>
-          {people.map((person) => <option key={person.id} value={person.id}>{person.displayName}</option>)}
-        </select>
+        <UserSelect
+          inputId="quick-person"
+          ariaLabel="人员"
+          scope={peopleScope}
+          name="personId"
+          value={personId}
+          onValueChange={setPersonId}
+          initialOptions={peopleOptions}
+          required
+          clearable={false}
+          disabled={disabled}
+          placeholder="按姓名或拼音首字母搜索"
+        />
       </Field>
       <Field label="开始" htmlFor="quick-start">
         <Input id="quick-start" name="startAt" type="datetime-local" defaultValue={toLocal(draft.startMs)} required />
@@ -629,21 +628,35 @@ function QuickCreatePanel({
         <Input id="quick-content" name="content" defaultValue="计划投入" required maxLength={2_000} />
       </Field>
       <Field label="Task" htmlFor="quick-task">
-        <TaskSearchControl
-          idPrefix="quick"
-          disabled={disabled}
-          onSearch={onSearchTasks}
-        />
-        <select
-          id="quick-task"
-          name="taskId"
-          className={selectClass}
-          defaultValue={defaultTaskId}
-          required={!allowIndependent}
-        >
-          {allowIndependent && <option value="">独立投入</option>}
-          {tasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}
-        </select>
+        {lockedTaskId ? (
+          <>
+            <Input
+              id="quick-task"
+              value={lockedTask?.title ?? "当前 Task"}
+              readOnly
+              aria-readonly="true"
+            />
+            <input type="hidden" name="taskId" value={lockedTaskId} />
+          </>
+        ) : (
+          <TaskSelect
+            inputId="quick-task"
+            ariaLabel="Task"
+            name="taskId"
+            value={taskId}
+            onValueChange={setTaskId}
+            onOptionChange={(option) =>
+              setTaskNodeId(option?.activeMilestone?.nodeId ?? null)
+            }
+            initialOptions={taskOptions}
+            statuses={["ACTIVE"]}
+            allowIndependent={allowIndependent}
+            required={!allowIndependent}
+            clearable={allowIndependent}
+            disabled={disabled}
+            placeholder="按标题、描述或拼音首字母搜索"
+          />
+        )}
       </Field>
       <Field label="职责" htmlFor="quick-role">
         <select id="quick-role" name="role" className={selectClass} defaultValue="DEVELOPER">
@@ -672,8 +685,8 @@ function SegmentInspector({
   detailState,
   detailError,
   changes,
-  tasks,
-  onSearchTasks,
+  taskOptions,
+  lockedTaskId,
   disabled,
   onRun,
   onToggleSelected,
@@ -684,8 +697,8 @@ function SegmentInspector({
   detailState: "IDLE" | "LOADING" | "READY" | "ERROR";
   detailError: string;
   changes: SegmentChange[];
-  tasks: TaskOption[];
-  onSearchTasks: TaskSearchHandler;
+  taskOptions: TaskOption[];
+  lockedTaskId: string | null;
   disabled: boolean;
   onRun: (
     action: () => Promise<ProjectManagementActionResult<unknown>>,
@@ -695,6 +708,17 @@ function SegmentInspector({
   onToggleSelected: (segmentId: string) => void;
   selected: boolean;
 }) {
+  const [relinkTaskId, setRelinkTaskId] = useState<string | null>(
+    canvasSegment?.taskId ?? null,
+  );
+  const [relinkNodeId, setRelinkNodeId] = useState<string | null>(
+    () =>
+      taskOptions.find((option) => option.id === canvasSegment?.taskId)
+        ?.activeMilestone?.nodeId ?? null,
+  );
+  const lockedTask = lockedTaskId
+    ? taskOptions.find((option) => option.id === lockedTaskId) ?? null
+    : null;
   if (!canvasSegment) {
     return <aside className="rounded-xl border border-dashed border-border p-5 text-sm text-muted-foreground">选择画布中的投入查看 Inspector。</aside>;
   }
@@ -823,26 +847,42 @@ function SegmentInspector({
         <form className="grid gap-2 border-t border-border pt-4" aria-label="重新关联" onSubmit={(event) => {
           event.preventDefault();
           const form = new FormData(event.currentTarget);
-          const taskId = String(form.get("taskId") ?? "");
-          const task = tasks.find((item) => item.id === taskId);
+          const taskId = String(form.get("taskId") ?? "") || null;
           onRun(() => relinkPlannedSegment({
             segmentId: detail.id,
             expectedUpdatedAt: detail.updatedAt,
-            taskId: taskId || null,
-            nodeId: task?.activeNodeId ?? null,
+            taskId,
+            nodeId: taskId ? relinkNodeId : null,
             reason: String(form.get("reason") ?? ""),
           }), "已重新确认关联");
         }}>
           <p className="text-sm font-medium">重新关联</p>
-          <TaskSearchControl
-            idPrefix="relink"
-            disabled={disabled}
-            onSearch={onSearchTasks}
-          />
-          <select name="taskId" aria-label="新的 Task" className={selectClass} defaultValue={detail.taskId ?? ""}>
-            <option value="">独立投入</option>
-            {tasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}
-          </select>
+          {lockedTaskId ? (
+            <>
+              <Input
+                aria-label="新的 Task"
+                value={lockedTask?.title ?? detail.task?.title ?? "当前 Task"}
+                readOnly
+                aria-readonly="true"
+              />
+              <input type="hidden" name="taskId" value={lockedTaskId} />
+            </>
+          ) : (
+            <TaskSelect
+              ariaLabel="新的 Task"
+              name="taskId"
+              value={relinkTaskId}
+              onValueChange={setRelinkTaskId}
+              onOptionChange={(option) =>
+                setRelinkNodeId(option?.activeMilestone?.nodeId ?? null)
+              }
+              initialOptions={taskOptions}
+              statuses={["ACTIVE"]}
+              allowIndependent
+              disabled={disabled}
+              placeholder="按标题、描述或拼音首字母搜索"
+            />
+          )}
           <Input name="reason" aria-label="重关联原因" defaultValue="Inspector 重新关联" required />
           <Button type="submit" variant="outline" disabled={disabled}>确认关联</Button>
         </form>
@@ -893,62 +933,6 @@ function SegmentInspector({
       </section>
     </aside>
   );
-}
-
-type TaskSearchHandler = (
-  query: string,
-) => Promise<{ ok: true; message: string } | { ok: false; message: string }>;
-
-function TaskSearchControl({
-  idPrefix,
-  disabled,
-  onSearch,
-}: {
-  idPrefix: string;
-  disabled: boolean;
-  onSearch: TaskSearchHandler;
-}) {
-  const [query, setQuery] = useState("");
-  const [message, setMessage] = useState("");
-  const [isSearching, startSearch] = useTransition();
-  const inputId = `${idPrefix}-task-search`;
-  return (
-    <div className="grid gap-1">
-      <Label htmlFor={inputId}>Task 搜索关键词</Label>
-      <div className="flex gap-2">
-        <Input
-          id={inputId}
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="输入 Task 名称"
-        />
-        <Button
-          type="button"
-          variant="outline"
-          disabled={disabled || isSearching}
-          onClick={() => {
-            startSearch(async () => {
-              const result = await onSearch(query);
-              setMessage(result.message);
-            });
-          }}
-        >
-          搜索可关联 Task
-        </Button>
-      </div>
-      {message && (
-        <p className="text-xs text-muted-foreground" role="status">
-          {message}
-        </p>
-      )}
-    </div>
-  );
-}
-
-function mergeTaskOptions(current: TaskOption[], incoming: TaskOption[]) {
-  const merged = new Map(current.map((task) => [task.id, task]));
-  incoming.forEach((task) => merged.set(task.id, task));
-  return [...merged.values()];
 }
 
 function ReasonAction({ label, destructive, disabled, onSubmit }: { label: string; destructive?: boolean; disabled: boolean; onSubmit: (reason: string) => void }) {

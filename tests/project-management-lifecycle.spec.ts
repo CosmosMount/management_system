@@ -24,6 +24,7 @@ import {
   getTaskWorkspace,
   listTaskPlanVersions,
 } from "../lib/project-management/queries/task-queries";
+import { getActorPersonOption } from "../lib/project-management/queries/option-queries";
 import type { ProjectManagementActor } from "../lib/project-management/identity";
 import { updateNotificationPreference } from "../lib/project-management/application/notification-preference-service";
 import { getTaskLifecycleViews } from "../lib/project-management/queries/task-lifecycle-queries";
@@ -116,7 +117,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     }
   });
 
-  test("Task draft creation is open to active accounts, idempotent and globally readable", async () => {
+  test("Task draft creation is open to unified accounts, idempotent and globally readable", async () => {
     const admin = await createAccountPerson("生命周期 Team Admin");
     const owner = await createAccountPerson("生命周期 Owner");
     const member = await createAccountPerson("生命周期 Member");
@@ -322,6 +323,66 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         })
       ).task.id,
     ).toBe(created.taskId);
+  });
+
+  test("an inactive Person account remains readable and can become Owner only as the Task creator", async () => {
+    const inactiveCreator = await createAccountPerson(
+      "生命周期停用人员创建者",
+    );
+    await prisma.person.update({
+      where: { id: inactiveCreator.person.id },
+      data: { status: "INACTIVE" },
+    });
+    await expect(getActorPersonOption(actor(inactiveCreator))).resolves.toMatchObject({
+      id: inactiveCreator.person.id,
+      status: "INACTIVE",
+      accountBinding: "BOUND",
+    });
+
+    const input = {
+      ...taskDraftInput({
+        ownerPersonId: inactiveCreator.person.id,
+        memberPersonId: inactiveCreator.person.id,
+        reviewerPersonId: inactiveCreator.person.id,
+        idempotencyKey: `inactive-creator-${randomUUID()}`,
+      }),
+      members: [
+        { personId: inactiveCreator.person.id, role: "OWNER" as const },
+      ],
+    };
+    const created = await createTaskDraft(actor(inactiveCreator), input);
+    await expect(
+      prisma.taskMember.findFirstOrThrow({
+        where: {
+          taskId: created.taskId,
+          personId: inactiveCreator.person.id,
+          removedAt: null,
+        },
+        select: { role: true },
+      }),
+    ).resolves.toEqual({ role: "OWNER" });
+    await expect(
+      getTaskWorkspace({
+        actor: actor(inactiveCreator),
+        taskId: created.taskId,
+      }),
+    ).resolves.toMatchObject({ task: { id: created.taskId } });
+
+    const activeCreator = await createAccountPerson("生命周期活跃创建者");
+    const rejected = await captureServiceError(
+      createTaskDraft(actor(activeCreator), {
+        ...input,
+        idempotencyKey: `inactive-non-creator-${randomUUID()}`,
+        members: [
+          { personId: activeCreator.person.id, role: "OWNER" },
+          { personId: inactiveCreator.person.id, role: "PARTICIPANT" },
+        ],
+      }),
+    );
+    expect(rejected).toMatchObject({
+      code: "VALIDATION_ERROR",
+      message: "成员不存在或已停用",
+    });
   });
 
   test("Task activation sets the first active milestone and rejects stale or concurrent activation", async () => {
@@ -1414,7 +1475,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         expect(milestoneError).toMatchObject({
           code: "STATE_CONFLICT",
           message: expect.stringContaining(
-            "至少保留一名项目访问已启用的全局管理员",
+            "至少保留一名全局管理员",
           ),
         });
         const revisionError = await captureServiceError(
@@ -1426,7 +1487,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         expect(revisionError).toMatchObject({
           code: "STATE_CONFLICT",
           message: expect.stringContaining(
-            "至少保留一名项目访问已启用的全局管理员",
+            "至少保留一名全局管理员",
           ),
         });
       } finally {
@@ -1442,7 +1503,6 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         provider: "FEISHU",
         tenantId: "default",
         account: {
-          projectAccessStatus: "ACTIVE",
           systemRoles: {
             some: {
               role: {
@@ -1655,7 +1715,6 @@ async function createAccountPerson(displayName: string) {
   const openId = `ou_pm_lifecycle_${randomUUID()}`;
   const account = await prisma.account.create({
     data: {
-      projectAccessStatus: "ACTIVE",
       identities: {
         create: {
           provider: "FEISHU",

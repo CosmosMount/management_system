@@ -40,8 +40,12 @@ test.describe("project management P4/P6 UI integration", () => {
     baseURL,
   }, testInfo) => {
     test.setTimeout(90_000);
-    const creator = await createAccountPerson("S5 Composer Creator");
-    const coOwner = await createAccountPerson("S5 Composer Co-Owner");
+    const creator = await createAccountPerson(
+      `S5 Composer Creator ${testInfo.project.name} ${randomUUID()}`,
+    );
+    const coOwner = await createAccountPerson(
+      `S5 Composer Co-Owner ${testInfo.project.name} ${randomUUID()}`,
+    );
     await loginAsTestUser(context, baseURL, {
       openId: creator.openId,
       name: creator.person.displayName,
@@ -76,9 +80,13 @@ test.describe("project management P4/P6 UI integration", () => {
       name: `移除 ${creator.person.displayName} 负责人`,
     });
     await expect(lastOwnerButton).toBeDisabled();
-    await page.getByLabel("搜索 Task 成员").fill(coOwner.person.displayName);
-    await page.getByLabel("搜索 Task 成员").press("Enter");
-    await page.getByLabel("成员人员").selectOption(coOwner.person.id);
+    await page.getByLabel("成员人员", { exact: true }).fill(coOwner.person.displayName);
+    await expect(
+      page.getByRole("option", { name: new RegExp(coOwner.person.displayName) }),
+    ).toBeVisible();
+    await page
+      .getByRole("option", { name: new RegExp(coOwner.person.displayName) })
+      .click();
     await page.getByLabel("成员角色").selectOption("OWNER");
     await page.getByRole("button", { name: "添加", exact: true }).click();
     await expect(lastOwnerButton).toBeEnabled();
@@ -187,7 +195,7 @@ test.describe("project management P4/P6 UI integration", () => {
     ).toBe(false);
   });
 
-  test("ordinary active accounts can open the Task Composer without an organization role", async ({
+  test("ordinary unified accounts can open the Task Composer without an organization role", async ({
     context,
     page,
     baseURL,
@@ -204,6 +212,57 @@ test.describe("project management P4/P6 UI integration", () => {
       "参与人",
     ]);
     await expect(page.getByText("流程策略")).toHaveCount(0);
+    await expectHealthyPage(page);
+  });
+
+  test("an inactive Person account can open global read pages and the Task Composer", async ({
+    context,
+    page,
+    baseURL,
+  }) => {
+    const guardAdmin = await createAccountPerson("S5 Inactive Owner Guard Admin");
+    await grantRole(guardAdmin.account.id, "PROJECT_ADMINISTRATOR");
+    const user = await createAccountPerson("S5 Inactive Unified Account");
+    await prisma.person.update({
+      where: { id: user.person.id },
+      data: { status: "INACTIVE" },
+    });
+    const draftTitle = `S5 Inactive Owner Draft ${randomUUID()}`;
+    const draft = await createTaskDraft(actor(user), {
+      title: draftTitle,
+      description: "停用创建者仍可创建 Task，但不能新增投入",
+      team: "英雄",
+      techGroup: "电控",
+      priority: "MEDIUM",
+      tagIds: [],
+      members: [{ personId: user.person.id, role: "OWNER" }],
+      milestones: [milestoneInput("停用负责人阶段", "完成阶段目标", 1)],
+      plannedStartAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
+      termination: terminationInput(5),
+      idempotencyKey: `inactive-owner-draft-${randomUUID()}`,
+    });
+    await loginAsTestUser(context, baseURL, {
+      openId: user.openId,
+      name: user.person.displayName,
+    });
+
+    await page.goto("/progress/resources");
+    await expect(page.getByRole("heading", { name: "人员计划" })).toBeVisible();
+    await expectHealthyPage(page);
+    await page.goto("/progress/my-timeline");
+    await expect(page.getByRole("heading", { name: "我的时间" })).toBeVisible();
+    await expectHealthyPage(page);
+    await page.goto("/progress/tasks/new");
+    await expect(page.getByTestId("task-composer")).toBeVisible();
+    await expect(
+      page.getByRole("button", {
+        name: `移除 ${user.person.displayName} 负责人`,
+      }),
+    ).toBeDisabled();
+    await expectHealthyPage(page);
+    await page.goto(`/progress/tasks/${draft.taskId}`);
+    await expect(page.getByRole("heading", { name: draftTitle })).toBeVisible();
+    await expect(page.getByRole("button", { name: "新增投入" })).toHaveCount(0);
     await expectHealthyPage(page);
   });
 
@@ -250,7 +309,11 @@ test.describe("project management P4/P6 UI integration", () => {
 
     await page.goto("/progress/tasks");
     await page.getByRole("link", { name: "新建 Task" }).click();
-    await expect(page.locator("option", { hasText: hiddenTitle })).toHaveCount(0);
+    await page.getByLabel("关联 Task", { exact: true }).fill(hiddenTitle);
+    await expect(page.getByText("没有匹配项。")).toBeVisible();
+    await expect(
+      page.getByRole("option", { name: new RegExp(hiddenTitle) }),
+    ).toHaveCount(0);
     const forgedTitle = `S5 forged related ${randomUUID()}`;
     await page.getByLabel("Task 名称").fill(forgedTitle);
     await page.getByLabel("目标").fill("伪造关联目标");
@@ -276,7 +339,7 @@ test.describe("project management P4/P6 UI integration", () => {
     await page.getByRole("button", { name: "创建 Task 草稿" }).click();
     await expect(page.getByText(/对象不存在|无权/)).toBeVisible();
     expect(await prisma.task.count({ where: { title: forgedTitle } })).toBe(0);
-    await page.getByLabel("关联 Task", { exact: true }).selectOption("");
+    await page.getByRole("button", { name: "清空关联 Task" }).click();
     await page.getByLabel("Task 名称").fill("S5 Account A local draft");
     await page.waitForTimeout(900);
     const localKey = await page.evaluate(() => {
@@ -385,6 +448,62 @@ test.describe("project management P4/P6 UI integration", () => {
     ]);
   });
 
+  test("Task Composer restores an inactive template owner with the real status", async ({
+    context,
+    page,
+    baseURL,
+  }) => {
+    const creator = await createAccountPerson("S5 Template Copy Creator");
+    const inactiveOwner = await createAccountPerson("S5 Template Inactive Owner");
+    const template = await createTaskDraft(actor(creator), {
+      title: `S5 Inactive Template ${randomUUID()}`,
+      description: "复制时必须恢复模板成员的真实人员状态",
+      team: "英雄",
+      techGroup: "电控",
+      priority: "MEDIUM",
+      tagIds: [],
+      members: [
+        { personId: inactiveOwner.person.id, role: "OWNER" },
+        { personId: creator.person.id, role: "PARTICIPANT" },
+      ],
+      milestones: [milestoneInput("模板阶段", "模板完成条件", 1)],
+      plannedStartAt: new Date(Date.UTC(2026, 7, 1, 1, 0, 0)).toISOString(),
+      termination: terminationInput(5),
+      idempotencyKey: `s5-inactive-template-${randomUUID()}`,
+    });
+    await prisma.person.update({
+      where: { id: inactiveOwner.person.id },
+      data: { status: "INACTIVE" },
+    });
+    await loginAsTestUser(context, baseURL, {
+      openId: creator.openId,
+      name: creator.person.displayName,
+    });
+
+    await page.goto(`/progress/tasks/new?templateTaskId=${template.taskId}`);
+    await expect(
+      page.getByRole("button", {
+        name: `移除 ${inactiveOwner.person.displayName} 负责人`,
+      }),
+    ).toBeVisible();
+    const memberPicker = page.getByLabel("成员人员", { exact: true });
+    await memberPicker.click();
+    const inactiveOption = page.getByRole("option", {
+      name: new RegExp(inactiveOwner.person.displayName),
+    });
+    await expect(inactiveOption).toContainText("人员已停用");
+    await expect(inactiveOption).toHaveAttribute("aria-disabled", "true");
+    await memberPicker.press("Escape");
+    await expect(memberPicker).not.toHaveValue(inactiveOwner.person.displayName);
+    await page.getByRole("button", { name: "添加", exact: true }).click();
+    await expect(
+      page.getByRole("button", {
+        name: `移除 ${inactiveOwner.person.displayName} 成员`,
+      }),
+    ).toHaveCount(0);
+    await expectHealthyPage(page);
+  });
+
   test("dashboard, Task workbench, resource timeline and notifications work", async ({
     context,
     page,
@@ -451,6 +570,59 @@ test.describe("project management P4/P6 UI integration", () => {
     await page.goto(
       `/progress/resources?from=2026-08-10&to=2026-08-12&people=${fixture.member.person.id},${fixture.owner.person.id}&zoom=hour`,
     );
+    await expect(
+      page.getByRole("button", { name: `移除${fixture.member.person.displayName}` }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: `移除${fixture.owner.person.displayName}` }),
+    ).toBeVisible();
+    const peoplePicker = page.getByLabel("筛选人员", { exact: true });
+    await peoplePicker.click();
+    await peoplePicker.press("Backspace");
+    await expect(
+      page.getByRole("button", { name: `移除${fixture.owner.person.displayName}` }),
+    ).toHaveCount(0);
+    await peoplePicker.fill(fixture.owner.person.displayName);
+    const ownerOption = page.getByRole("option", {
+      name: fixture.owner.person.displayName,
+      exact: true,
+    });
+    await expect(ownerOption.locator(".sr-only")).toHaveText("已绑定账号");
+    const ownerLabelBox = await ownerOption
+      .getByText(fixture.owner.person.displayName, { exact: true })
+      .boundingBox();
+    expect(ownerLabelBox?.width ?? 0).toBeGreaterThan(80);
+    await ownerOption.click();
+    const taskPicker = page.getByLabel("筛选 Task", { exact: true });
+    await taskPicker.fill(fixture.taskTitle);
+    const taskOption = page.getByRole("option", {
+      name: fixture.taskTitle,
+      exact: true,
+    });
+    await expect(taskOption.locator(".sr-only")).toContainText("进行中 · 高");
+    await expect(taskOption.locator(".sr-only")).toContainText("英雄 / 电控");
+    const taskTitleBox = await taskOption
+      .getByText(fixture.taskTitle, { exact: true })
+      .boundingBox();
+    expect(taskTitleBox?.width ?? 0).toBeGreaterThan(120);
+    await taskOption.click();
+    await page.getByRole("button", { name: "应用筛选" }).click();
+    await expect(page).toHaveURL(new RegExp(`tasks=${fixture.taskId}`));
+    await page.reload();
+    await expect(
+      page.getByRole("button", { name: `移除${fixture.owner.person.displayName}` }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: `移除${fixture.taskTitle}` }),
+    ).toBeVisible();
+    await page.goto(
+      `/progress/resources?from=2026-08-10&to=2026-08-12&tasks=${fixture.taskId}&group=task&zoom=hour`,
+    );
+    await expect(page.getByText(fixture.taskTitle, { exact: true }).first()).toBeVisible();
+    await expect(page.getByRole("button", { name: "新增投入" })).toBeVisible();
+    await page.goto(
+      `/progress/resources?from=2026-08-10&to=2026-08-12&people=${fixture.member.person.id},${fixture.owner.person.id}&zoom=hour`,
+    );
     if (testInfo.project.name === "desktop") {
       await page.goto(
         `/progress/resources?from=2026-08-10&to=2026-08-12&people=${fixture.member.person.id}&zoom=hour`,
@@ -473,23 +645,20 @@ test.describe("project management P4/P6 UI integration", () => {
       const brushCreate = page.getByRole("form", { name: "投入快速创建" });
       await expect(brushCreate).toBeVisible();
       await expect(brushCreate.getByLabel("投入比例")).toHaveCount(0);
-      await brushCreate.getByLabel("Task 搜索关键词").fill(fixture.taskTitle);
-      await brushCreate
-        .getByRole("button", { name: "搜索可关联 Task" })
+      await brushCreate.getByLabel("Task", { exact: true }).fill(fixture.taskTitle);
+      await page
+        .getByRole("option", { name: fixture.taskTitle, exact: true })
         .click();
-      await expect(brushCreate.getByText("已找到 1 个 Task")).toBeVisible();
-      await brushCreate
-        .getByLabel("Task", { exact: true })
-        .selectOption(fixture.taskId);
       await brushCreate.getByLabel("内容").fill(fixture.brushCreateContent);
       await brushCreate.getByRole("button", { name: "创建", exact: true }).click();
       await expect(page.getByText("已创建投入记录")).toBeVisible();
-      await expect.poll(() => prisma.workSegment.count({
+      await expect.poll(() => prisma.workSegment.findFirst({
         where: {
           personId: fixture.member.person.id,
           content: fixture.brushCreateContent,
         },
-      })).toBe(1);
+        select: { taskId: true, nodeId: true },
+      })).toEqual({ taskId: fixture.taskId, nodeId: fixture.activeNodeId });
       await page.goto(
         `/progress/resources?from=2026-08-10&to=2026-08-12&people=${fixture.member.person.id},${fixture.owner.person.id}&zoom=hour`,
       );
@@ -774,6 +943,7 @@ test.describe("project management P4/P6 UI integration", () => {
 
     await page.goto(`/progress/tasks/${fixture.taskId}`);
     await expect(page.getByRole("heading", { name: fixture.taskTitle })).toBeVisible();
+    await expect(page.getByRole("button", { name: "新增投入" })).toHaveCount(0);
     await page.getByRole("tab", { name: "概览" }).click();
     await expect(page.getByRole("button", { name: "保存元数据" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "保存成员" })).toHaveCount(0);
@@ -925,6 +1095,199 @@ test.describe("project management P4/P6 UI integration", () => {
         }),
       )
       .toEqual({ status: "ACTIVE", lockVersion: 2 });
+    await expectHealthyPage(page);
+  });
+
+  test("Task workbench quick create skips an inactive first member", async ({
+    context,
+    page,
+    baseURL,
+  }) => {
+    const fixture = await createDraftWorkbenchFixture();
+    await prisma.person.update({
+      where: { id: fixture.owner.person.id },
+      data: { status: "INACTIVE" },
+    });
+    await prisma.person.update({
+      where: { id: fixture.admin.person.id },
+      data: { status: "INACTIVE" },
+    });
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.reviewer.openId,
+      name: fixture.reviewer.person.displayName,
+    });
+
+    await page.goto(`/progress/tasks/${fixture.taskId}`);
+    await page.getByRole("button", { name: "新增投入", exact: true }).click();
+    const quickCreate = page.getByRole("form", { name: "投入快速创建" });
+    await expect(quickCreate.locator('input[name="personId"]')).toHaveValue(
+      fixture.reviewer.person.id,
+    );
+    await expect(
+      quickCreate.getByLabel("人员", { exact: true }),
+    ).toHaveValue(fixture.reviewer.person.displayName);
+    await quickCreate
+      .getByLabel("人员", { exact: true })
+      .fill(fixture.owner.person.displayName);
+    await expect(page.getByText("没有匹配项。")).toBeVisible();
+    await expect(
+      page.getByRole("option", {
+        name: new RegExp(fixture.owner.person.displayName),
+      }),
+    ).toHaveCount(0);
+    await quickCreate.getByLabel("人员", { exact: true }).press("Escape");
+    await expect(quickCreate.getByLabel("Task", { exact: true })).toHaveValue(
+      fixture.taskTitle,
+    );
+    await expect(quickCreate.getByLabel("Task", { exact: true })).toHaveAttribute(
+      "readonly",
+      "",
+    );
+    await expect(quickCreate.locator('input[name="taskId"]')).toHaveValue(
+      fixture.taskId,
+    );
+    await expectHealthyPage(page);
+  });
+
+  test("Task workbench keeps saved related Task and members across authoritative refreshes", async ({
+    context,
+    page,
+    baseURL,
+  }) => {
+    const fixture = await createDraftWorkbenchFixture();
+    const addedMember = await createAccountPerson(
+      `S6 Workbench Persisted Member ${randomUUID()}`,
+    );
+    const relatedTitle = `S6 Workbench Related ${randomUUID()}`;
+    const related = await createTaskDraft(actor(fixture.admin), {
+      title: relatedTitle,
+      description: "验证 Workbench 保存后的 authoritative refresh",
+      team: "英雄",
+      techGroup: "电控",
+      priority: "MEDIUM",
+      tagIds: [],
+      members: [{ personId: fixture.owner.person.id, role: "OWNER" }],
+      milestones: [milestoneInput("关联 Task 阶段", "关联 Task 完成条件", 1)],
+      plannedStartAt: new Date(Date.UTC(2026, 7, 1, 1, 0, 0)).toISOString(),
+      termination: terminationInput(5),
+      idempotencyKey: `s6-workbench-related-${randomUUID()}`,
+    });
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.owner.openId,
+      name: fixture.owner.person.displayName,
+    });
+    await page.goto(`/progress/tasks/${fixture.taskId}`);
+    await page.getByRole("button", { name: "新增投入", exact: true }).click();
+    const quickCreate = page.getByRole("form", { name: "投入快速创建" });
+    const segmentPersonPicker = quickCreate.getByLabel("人员", { exact: true });
+    await segmentPersonPicker.click();
+    await expect(
+      page.getByRole("option", {
+        name: fixture.admin.person.displayName,
+        exact: true,
+      }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("option", {
+        name: fixture.reviewer.person.displayName,
+        exact: true,
+      }),
+    ).toBeVisible();
+    await page
+      .getByRole("option", {
+        name: fixture.reviewer.person.displayName,
+        exact: true,
+      })
+      .click();
+    await expect(quickCreate.locator('input[name="personId"]')).toHaveValue(
+      fixture.reviewer.person.id,
+    );
+    await quickCreate.getByRole("button", { name: "取消", exact: true }).click();
+    await page.getByRole("tab", { name: "概览" }).click();
+
+    const relatedPicker = page.getByLabel("关联 Task", { exact: true });
+    await relatedPicker.fill(relatedTitle);
+    await page
+      .getByRole("option", { name: relatedTitle, exact: true })
+      .click();
+    await page.getByRole("button", { name: "保存元数据" }).click();
+    await expect(page.getByText("Task 元数据已保存。")).toBeVisible();
+    await expect(relatedPicker).toHaveValue(relatedTitle);
+    await expect
+      .poll(() =>
+        prisma.task.findUnique({
+          where: { id: fixture.taskId },
+          select: { relatedTaskId: true, lockVersion: true },
+        }),
+      )
+      .toEqual({ relatedTaskId: related.taskId, lockVersion: 1 });
+    await expect(page.getByTestId("task-workbench-v1")).toHaveAttribute(
+      "data-server-lock-version",
+      "1",
+    );
+
+    await page.getByRole("button", { name: "保存元数据" }).click();
+    await expect
+      .poll(() =>
+        prisma.task.findUnique({
+          where: { id: fixture.taskId },
+          select: { relatedTaskId: true, lockVersion: true },
+        }),
+      )
+      .toEqual({ relatedTaskId: related.taskId, lockVersion: 2 });
+    await expect(page.getByTestId("task-workbench-v1")).toHaveAttribute(
+      "data-server-lock-version",
+      "2",
+    );
+
+    const memberPicker = page.getByLabel("新增成员人员", { exact: true });
+    await memberPicker.fill(addedMember.person.displayName);
+    await page
+      .getByRole("option", {
+        name: addedMember.person.displayName,
+        exact: true,
+      })
+      .click();
+    await page.getByLabel("新增成员角色").selectOption("PARTICIPANT");
+    await page.getByRole("button", { name: "添加", exact: true }).click();
+    await page.getByRole("button", { name: "保存成员" }).click();
+    await expect(page.getByText("Task 成员已保存。")).toBeVisible();
+    await expect(page.getByText(addedMember.person.displayName)).toBeVisible();
+    await expect
+      .poll(() =>
+        prisma.taskMember.count({
+          where: {
+            taskId: fixture.taskId,
+            personId: addedMember.person.id,
+            role: "PARTICIPANT",
+            removedAt: null,
+          },
+        }),
+      )
+      .toBe(1);
+    await expect(page.getByTestId("task-workbench-v1")).toHaveAttribute(
+      "data-server-lock-version",
+      "3",
+    );
+
+    await page.getByRole("button", { name: "保存成员" }).click();
+    await expect
+      .poll(() =>
+        prisma.taskMember.count({
+          where: {
+            taskId: fixture.taskId,
+            personId: addedMember.person.id,
+            role: "PARTICIPANT",
+            removedAt: null,
+          },
+        }),
+      )
+      .toBe(1);
+    await expect(page.getByTestId("task-workbench-v1")).toHaveAttribute(
+      "data-server-lock-version",
+      "4",
+    );
+    await expect(relatedPicker).toHaveValue(relatedTitle);
     await expectHealthyPage(page);
   });
 
@@ -1164,7 +1527,9 @@ test.describe("project management P4/P6 UI integration", () => {
     const independentContent = `S7 独立安排 ${randomUUID()}`;
     await page.getByRole("button", { name: "新增投入" }).click();
     const quickCreate = page.getByRole("form", { name: "投入快速创建" });
-    await quickCreate.getByLabel("Task", { exact: true }).selectOption("");
+    await expect(
+      quickCreate.locator('input[type="hidden"][name="taskId"]'),
+    ).toHaveValue("");
     await quickCreate.getByLabel("内容").fill(independentContent);
     await quickCreate.getByRole("button", { name: "创建", exact: true }).click();
     await expect(page.getByText("已创建投入记录")).toBeVisible();
@@ -1177,12 +1542,15 @@ test.describe("project management P4/P6 UI integration", () => {
 });
 
 async function createUiFixture() {
-  const admin = await createAccountPerson("P6 UI Team Admin");
-  const owner = await createAccountPerson("P6 UI Owner");
-  const member = await createAccountPerson("P6 UI Member");
-  const reviewer = await createAccountPerson("P6 UI Reviewer");
-  const outsider = await createAccountPerson("P6 UI Outsider");
-  const inactiveHistory = await createAccountPerson("P6 UI Historical Person");
+  const fixtureKey = randomUUID();
+  const admin = await createAccountPerson(`P6 UI Team Admin ${fixtureKey}`);
+  const owner = await createAccountPerson(`P6 UI Owner ${fixtureKey}`);
+  const member = await createAccountPerson(`P6 UI Member ${fixtureKey}`);
+  const reviewer = await createAccountPerson(`P6 UI Reviewer ${fixtureKey}`);
+  const outsider = await createAccountPerson(`P6 UI Outsider ${fixtureKey}`);
+  const inactiveHistory = await createAccountPerson(
+    `P6 UI Historical Person ${fixtureKey}`,
+  );
   await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
   const taskTitle = `P6 UI Task ${randomUUID()}`;
   const draft = await createTaskDraft(actor(admin), {
@@ -1334,6 +1702,7 @@ async function createUiFixture() {
     inactiveHistory,
     taskId: draft.taskId,
     taskTitle,
+    activeNodeId: activeNode.nodeId,
     confirmableSegmentId: confirmable.segment.id,
     movableSegmentId: movable.segment.id,
     inactiveHistorySegmentId: inactiveHistorySegment.segment.id,
@@ -1378,7 +1747,6 @@ async function createAccountPerson(displayName: string) {
   const openId = `ou_pm_p6_ui_${randomUUID()}`;
   const account = await prisma.account.create({
     data: {
-      projectAccessStatus: "ACTIVE",
       identities: {
         create: {
           provider: "FEISHU",

@@ -136,7 +136,7 @@ export async function recipientsForPersonIdsTx(
     where: {
       id: { in: [...new Set(personIds)] },
       status: "ACTIVE",
-      account: { projectAccessStatus: "ACTIVE" },
+      account: { isNot: null },
     },
     select: {
       account: {
@@ -168,10 +168,7 @@ export async function recipientsForAccountIdsTx(
 ): Promise<ProjectManagementNotificationRecipient[]> {
   if (accountIds.length === 0) return [];
   const accounts = await tx.account.findMany({
-    where: {
-      id: { in: [...new Set(accountIds)] },
-      projectAccessStatus: "ACTIVE",
-    },
+    where: { id: { in: [...new Set(accountIds)] } },
     select: {
       id: true,
       identities: {

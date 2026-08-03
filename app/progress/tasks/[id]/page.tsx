@@ -5,6 +5,8 @@ import { timeCanvasDataToModel } from "@/components/project-management/time-canv
 import { toProjectManagementServiceError } from "@/lib/project-management/application/errors";
 import {
   listTagOptions,
+  resolvePeopleOptionsByIds,
+  resolveTaskOptionsByIds,
   searchPeople,
   searchTaskOptions,
 } from "@/lib/project-management/queries/option-queries";
@@ -32,7 +34,16 @@ export default async function ProgressTaskDetailPage({
     throw error;
   });
   const range = taskCanvasRange(workspace);
-  const [lifecycle, planVersions, peoplePage, taskPage, tagPage, canvasResult] =
+  const [
+    lifecycle,
+    planVersions,
+    peoplePage,
+    currentPeople,
+    taskPage,
+    currentTaskOptions,
+    tagPage,
+    canvasResult,
+  ] =
     await Promise.all([
       getTaskLifecycleViews({ actor, taskId: id, reviewLimit: 50, auditLimit: 50 }),
       listTaskPlanVersions({ actor, taskId: id }),
@@ -42,16 +53,13 @@ export default async function ProgressTaskDetailPage({
             input: { purpose: "TASK_MEMBERS", taskId: id, limit: 50 },
           })
         : Promise.resolve({
-            items: workspace.members.map((member) => ({
-              id: member.personId,
-              displayName: member.displayName,
-              avatar: null,
-              status: "ACTIVE" as const,
-              accountAvailability: "ACTIVE" as const,
-            })),
+            items: [],
             nextCursor: null,
+            hasMoreByQuery: false,
           }),
+      resolveWorkspacePeople(actor, workspace.members.map((member) => member.personId)),
       searchTaskOptions({ actor, input: { limit: 50 } }),
+      resolveTaskOptionsByIds({ actor, input: { ids: [id] } }),
       listTagOptions({ actor, input: { limit: 50 } }),
       getTimeCanvasData({
         actor,
@@ -95,14 +103,44 @@ export default async function ProgressTaskDetailPage({
           planVersions={planVersions}
           canvasModel={canvasModel}
           canvasError={canvasResult.ok ? null : canvasResult.message}
-          people={peoplePage.items}
-          taskOptions={taskPage.items}
+          people={mergeOptions(currentPeople, peoplePage.items)}
+          taskOptions={mergeOptions(currentTaskOptions, taskPage.items)}
           tagOptions={tagPage.items}
           initialTab={initialTab}
         />
       </div>
     </>
   );
+}
+
+async function resolveWorkspacePeople(
+  actor: Awaited<ReturnType<typeof getProgressActorOrRedirect>>,
+  memberIds: string[],
+) {
+  const ids = [...new Set(memberIds)];
+  const people = [];
+  for (let offset = 0; offset < ids.length; offset += 50) {
+    people.push(
+      ...(await resolvePeopleOptionsByIds({
+        actor,
+        input: {
+          scope: { purpose: "VISIBLE" },
+          ids: ids.slice(offset, offset + 50),
+        },
+      })),
+    );
+  }
+  return people;
+}
+
+function mergeOptions<T extends { id: string }>(...groups: T[][]) {
+  const merged = new Map<string, T>();
+  for (const group of groups) {
+    for (const option of group) {
+      if (!merged.has(option.id)) merged.set(option.id, option);
+    }
+  }
+  return [...merged.values()];
 }
 
 function normalizeTaskTab(value: string | string[] | undefined) {

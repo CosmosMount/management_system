@@ -3,7 +3,6 @@ import { expect, test } from "@playwright/test";
 import {
   grantAccountRole,
   revokeAccountRole,
-  setProjectAccessStatus,
 } from "../lib/account-management";
 import { isGlobalSuperAdministrator } from "../lib/account-authorization";
 import { authorize } from "../lib/project-management/authorization";
@@ -15,7 +14,7 @@ import { prisma } from "../lib/prisma";
 
 test.describe.configure({ mode: "serial" });
 
-test("统一超管、项目角色、项目禁用、审计和通知保持事务一致", async () => {
+test("统一超管、项目角色、审计和通知保持事务一致", async () => {
   const actor = await createAccount("权限测试超管");
   const target = await createAccount("权限测试目标");
   const outsider = await createAccount("权限测试普通成员");
@@ -57,18 +56,9 @@ test("统一超管、项目角色、项目禁用、审计和通知保持事务�
   expect(first.changed).toBe(true);
   expect(repeated.changed).toBe(false);
 
-  const disabled = await setProjectAccessStatus(
-    actor.accountId,
-    target.accountId,
-    "DISABLED",
-  );
-  expect(disabled.changed).toBe(true);
-  await expect(
-    setProjectAccessStatus(actor.accountId, target.accountId, "DISABLED"),
-  ).resolves.toMatchObject({ changed: false });
   await expect(
     getProjectManagementActorForFeishuUser({ openId: target.openId }),
-  ).rejects.toThrow("账号已禁用");
+  ).resolves.toMatchObject({ accountId: target.accountId });
 
   const [account, auditCount, inAppCount, outboxCount] = await Promise.all([
     prisma.account.findUniqueOrThrow({ where: { id: target.accountId } }),
@@ -82,10 +72,10 @@ test("统一超管、项目角色、项目禁用、审计和通知保持事务�
       where: { eventKey: { startsWith: "account-security:" } },
     }),
   ]);
-  expect(account.projectAccessStatus).toBe("DISABLED");
-  expect(auditCount).toBeGreaterThanOrEqual(2);
-  expect(inAppCount).toBeGreaterThanOrEqual(2);
-  expect(outboxCount).toBeGreaterThanOrEqual(2);
+  expect(account.id).toBe(target.accountId);
+  expect(auditCount).toBeGreaterThanOrEqual(1);
+  expect(inAppCount).toBeGreaterThanOrEqual(1);
+  expect(outboxCount).toBeGreaterThanOrEqual(1);
 
   const roleOutbox = await prisma.notificationOutbox.findUniqueOrThrow({
     where: {
@@ -177,7 +167,7 @@ test("两名超级管理员并发互撤只能成功一次并保留最后一名",
   }
 });
 
-test("最后一名活跃全局审批人不能被并发撤销角色或禁用项目访问", async () => {
+test("最后一名可用全局审批人不能被并发撤销角色或清空飞书身份", async () => {
   const actor = await createAccount("审批人保护操作超管");
   const target = await createAccount("最后一名活跃审批人");
   const actorAssignment = await prisma.systemRoleAssignment.create({
@@ -186,10 +176,20 @@ test("最后一名活跃全局审批人不能被并发撤销角色或禁用项�
   const targetAssignment = await prisma.systemRoleAssignment.create({
     data: { accountId: target.accountId, role: "PROJECT_ADMINISTRATOR" },
   });
-  await prisma.account.update({
-    where: { id: actor.accountId },
-    data: { projectAccessStatus: "DISABLED" },
+  const guardedTask = await createTaskForAdministratorGuard(actor);
+  const actorIdentities = await prisma.accountIdentity.findMany({
+    where: { accountId: actor.accountId, provider: "FEISHU", tenantId: "default" },
+    select: { id: true, openId: true },
   });
+  const targetIdentities = await prisma.accountIdentity.findMany({
+    where: { accountId: target.accountId, provider: "FEISHU", tenantId: "default" },
+    select: { id: true, openId: true },
+  });
+  expect(actorIdentities).not.toHaveLength(0);
+  expect(targetIdentities).not.toHaveLength(0);
+  const blankOpenIds = await allocateUniqueBlankOpenIds(
+    actorIdentities.length + targetIdentities.length,
+  );
   const unrelatedAssignments = await prisma.systemRoleAssignment.findMany({
     where: {
       id: { notIn: [actorAssignment.id, targetAssignment.id] },
@@ -205,24 +205,35 @@ test("最后一名活跃全局审批人不能被并发撤销角色或禁用项�
       where: { id: { in: unrelatedAssignments.map((item) => item.id) } },
       data: { revokedAt: new Date() },
     });
+    for (const [index, identity] of actorIdentities.entries()) {
+      await prisma.accountIdentity.update({
+        where: { id: identity.id },
+        data: { openId: blankOpenIds[index] },
+      });
+    }
     const sideEffectsBefore = await prisma.domainAuditEvent.count({
       where: {
-        entityId: { in: [target.accountId, targetAssignment.id] },
-        action: {
-          in: ["account.role.revoked", "account.project_access.changed"],
-        },
+        entityId: targetAssignment.id,
+        action: "account.role.revoked",
       },
     });
     const outcomes = await Promise.allSettled([
       revokeAccountRole(actor.accountId, targetAssignment.id),
-      setProjectAccessStatus(actor.accountId, target.accountId, "DISABLED"),
+      prisma.$transaction(
+        targetIdentities.map((identity, index) =>
+          prisma.accountIdentity.update({
+            where: { id: identity.id },
+            data: { openId: blankOpenIds[actorIdentities.length + index] },
+          }),
+        ),
+      ),
     ]);
     expect(outcomes).toHaveLength(2);
     for (const outcome of outcomes) {
       expect(outcome.status).toBe("rejected");
       if (outcome.status === "rejected") {
-        expect((outcome.reason as Error).message).toContain(
-          "至少保留一名项目访问已启用的全局管理员",
+        expect((outcome.reason as Error).message).toMatch(
+          /至少保留一名具有有效飞书身份的全局管理员|usable global approval administrator/,
         );
       }
     }
@@ -233,26 +244,41 @@ test("最后一名活跃全局审批人不能被并发撤销角色或禁用项�
       }),
     ).resolves.toEqual({ revokedAt: null });
     await expect(
-      prisma.account.findUniqueOrThrow({
-        where: { id: target.accountId },
-        select: { projectAccessStatus: true },
+      prisma.accountIdentity.findMany({
+        where: { id: { in: targetIdentities.map((identity) => identity.id) } },
+        select: { id: true, openId: true },
+        orderBy: { id: "asc" },
       }),
-    ).resolves.toEqual({ projectAccessStatus: "ACTIVE" });
+    ).resolves.toEqual(
+      [...targetIdentities].sort((left, right) => left.id.localeCompare(right.id)),
+    );
     await expect(
       prisma.domainAuditEvent.count({
         where: {
-          entityId: { in: [target.accountId, targetAssignment.id] },
-          action: {
-            in: ["account.role.revoked", "account.project_access.changed"],
-          },
+          entityId: targetAssignment.id,
+          action: "account.role.revoked",
         },
       }),
     ).resolves.toBe(sideEffectsBefore);
   } finally {
+    for (const identity of [...actorIdentities, ...targetIdentities]) {
+      await prisma.accountIdentity.update({
+        where: { id: identity.id },
+        data: { openId: identity.openId },
+      });
+    }
     await prisma.systemRoleAssignment.updateMany({
       where: { id: { in: unrelatedAssignments.map((item) => item.id) } },
       data: { revokedAt: null, revokedByAccountId: null },
     });
+    await prisma.$executeRaw`
+      WITH deleted_members AS (
+        DELETE FROM "TaskMember" WHERE "taskId" = ${guardedTask.taskId}
+      ), deleted_plan AS (
+        DELETE FROM "TaskPlanVersion" WHERE id = ${guardedTask.planVersionId}
+      )
+      DELETE FROM "Task" WHERE id = ${guardedTask.taskId}
+    `;
     await prisma.systemRoleAssignment.updateMany({
       where: { id: { in: [actorAssignment.id, targetAssignment.id] } },
       data: { revokedAt: new Date() },
@@ -306,9 +332,77 @@ async function createAccount(name: string) {
       },
       person: { create: { displayName: name } },
     },
+    include: { person: { select: { id: true } } },
   });
+  if (!account.person) throw new Error("测试账号缺少人员记录");
   return {
     accountId: account.id,
+    personId: account.person.id,
     openId,
   };
+}
+
+async function createTaskForAdministratorGuard(account: {
+  accountId: string;
+  personId: string;
+}) {
+  const taskId = randomUUID();
+  const planVersionId = randomUUID();
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SET CONSTRAINTS ALL DEFERRED`;
+    await tx.task.create({
+      data: {
+        id: taskId,
+        title: `全局审批管理员门禁测试 ${taskId}`,
+        team: "英雄",
+        techGroup: "电控",
+        currentPlanVersionId: planVersionId,
+        createdByAccountId: account.accountId,
+      },
+    });
+    await tx.taskPlanVersion.create({
+      data: {
+        id: planVersionId,
+        taskId,
+        versionNo: 1,
+        status: "CURRENT",
+        createdByAccountId: account.accountId,
+      },
+    });
+    await tx.taskMember.create({
+      data: {
+        taskId,
+        personId: account.personId,
+        role: "OWNER",
+        createdByAccountId: account.accountId,
+      },
+    });
+  });
+  return { taskId, planVersionId };
+}
+
+async function allocateUniqueBlankOpenIds(count: number): Promise<string[]> {
+  const existing = await prisma.accountIdentity.findMany({
+    where: {
+      provider: "FEISHU",
+      tenantId: "default",
+      openId: { not: null },
+    },
+    select: { openId: true },
+  });
+  const used = new Set(
+    existing
+      .map(({ openId }) => openId)
+      .filter((openId): openId is string => openId !== null && openId.trim() === ""),
+  );
+  const allocated: string[] = [];
+  let candidate = " ";
+  while (allocated.length < count) {
+    if (!used.has(candidate)) {
+      allocated.push(candidate);
+      used.add(candidate);
+    }
+    candidate += " ";
+  }
+  return allocated;
 }

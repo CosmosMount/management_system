@@ -5,7 +5,11 @@ import { PageCommandBar } from "@/components/project-management/shell/page-comma
 import { timeCanvasDataToModel } from "@/components/project-management/time-canvas/adapter";
 import { formatShanghaiDate } from "@/components/project-management/time-canvas/url-state";
 import { toProjectManagementServiceError } from "@/lib/project-management/application/errors";
-import { getActorPersonOption, searchTaskOptions } from "@/lib/project-management/queries/option-queries";
+import {
+  getActorPersonOption,
+  resolveTaskOptionsByIds,
+  searchTaskOptions,
+} from "@/lib/project-management/queries/option-queries";
 import { getWorkSegment } from "@/lib/project-management/queries/resource-queries";
 import {
   getPersonalDueSegments,
@@ -66,7 +70,15 @@ export default async function ProgressMyTimelinePage({ searchParams }: { searchP
     getPersonalDueSegments({ actor, limit: 100 }),
   ]);
   const model = canvasResult.ok ? timeCanvasDataToModel(canvasResult.data, "PERSONAL_TIMELINE") : null;
-  const tasks = taskPage.items.map((task) => ({ id: task.id, title: task.title, activeNodeId: task.activeMilestone?.nodeId ?? null }));
+  const canvasTaskOptions = canvasResult.ok
+    ? (
+        await resolveTaskOptionsByIds({
+          actor,
+          input: { ids: canvasResult.data.anchors.map((task) => task.id) },
+        })
+      ).filter((task) => task.status === "ACTIVE")
+    : [];
+  const taskOptions = mergeOptions(canvasTaskOptions, taskPage.items);
   const dueSegments = duePage.items.map((segment) => ({
     id: segment.id,
     title: segment.content,
@@ -99,8 +111,8 @@ export default async function ProgressMyTimelinePage({ searchParams }: { searchP
         {model ? (
           <ResourcePlannerCanvasClient
             initialModel={model}
-            people={[{ id: actorPerson.id, displayName: actorPerson.displayName }]}
-            tasks={tasks}
+            peopleOptions={[actorPerson]}
+            taskOptions={taskOptions}
             defaultPersonId={actor.personId}
             initialZoom={mode === "day" ? "HOUR" : "DAY"}
             mode="PERSONAL_TIMELINE"
@@ -114,6 +126,16 @@ export default async function ProgressMyTimelinePage({ searchParams }: { searchP
       </div>
     </>
   );
+}
+
+function mergeOptions<T extends { id: string }>(...groups: T[][]) {
+  const merged = new Map<string, T>();
+  for (const group of groups) {
+    for (const option of group) {
+      if (!merged.has(option.id)) merged.set(option.id, option);
+    }
+  }
+  return [...merged.values()];
 }
 
 function timelineHref(date: string, mode: "day" | "week") {

@@ -121,7 +121,6 @@ async function globalAdministratorRecipients(): Promise<Recipient[]> {
       team: "",
       techGroup: "",
       revokedAt: null,
-      account: { projectAccessStatus: "ACTIVE" },
     },
     select: {
       account: {
