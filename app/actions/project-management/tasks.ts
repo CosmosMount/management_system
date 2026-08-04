@@ -14,6 +14,7 @@ import {
   replaceTaskDraftPlan as replaceTaskDraftPlanService,
   replaceTaskMembers as replaceTaskMembersService,
   replaceTaskTags as replaceTaskTagsService,
+  updateTaskDraft as updateTaskDraftService,
   updateTaskDraftMetadata as updateTaskDraftMetadataService,
   updateTaskMetadata as updateTaskMetadataService,
 } from "@/lib/project-management/application/task-mutation-service";
@@ -68,6 +69,19 @@ export async function updateTaskDraftMetadata(
     "updateTaskDraftMetadata",
     input,
     updateTaskDraftMetadataService,
+  );
+}
+
+export async function updateTaskDraft(
+  input: unknown,
+): Promise<
+  ProjectManagementActionResult<Awaited<ReturnType<typeof updateTaskDraftService>>>
+> {
+  return runTaskMutationAction(
+    "pm.task.draft.update",
+    "updateTaskDraft",
+    input,
+    updateTaskDraftService,
   );
 }
 

@@ -37,6 +37,31 @@ const tagIdsSchema = z
 
 const taskMemberMutationInputSchema = taskMemberInputSchema.strict();
 
+const taskMembersMutationSchema = z
+  .array(taskMemberMutationInputSchema, { message: "成员列表格式不正确" })
+  .min(1, "至少添加一名 Task 成员");
+
+function validateTaskMembers(
+  members: z.infer<typeof taskMembersMutationSchema>,
+  ctx: z.RefinementCtx,
+) {
+  const personIds = members.map((member) => member.personId);
+  if (new Set(personIds).size !== personIds.length) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["members"],
+      message: "同一成员只能有一个角色",
+    });
+  }
+  if (members.every((member) => member.role !== "OWNER")) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["members"],
+      message: "至少需要一名负责人",
+    });
+  }
+}
+
 const taskMetadataFields = {
   title: requiredText("请输入 Task 名称", 200),
   description: optionalText(8_000),
@@ -67,27 +92,11 @@ const replaceTaskMembersBaseInputSchema = z
   .object({
     taskId: idSchema,
     expectedLockVersion: expectedTaskLockVersionSchema,
-    members: z
-      .array(taskMemberMutationInputSchema, { message: "成员列表格式不正确" })
-      .min(1, "至少添加一名 Task 成员"),
+    members: taskMembersMutationSchema,
   })
   .strict()
   .superRefine((input, ctx) => {
-    const personIds = input.members.map((member) => member.personId);
-    if (new Set(personIds).size !== personIds.length) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["members"],
-        message: "同一成员只能有一个角色",
-      });
-    }
-    if (input.members.every((member) => member.role !== "OWNER")) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["members"],
-        message: "至少需要一名负责人",
-      });
-    }
+    validateTaskMembers(input.members, ctx);
   });
 
 export const replaceTaskDraftMembersInputSchema =
@@ -124,6 +133,40 @@ export const draftTerminationReplacementSchema = s2TerminationDraftSchema
   .strict()
   .superRefine(validateNodeIdentity);
 
+function validateDraftPlanReplacement(
+  input: {
+    plannedStartAt: Date;
+    milestones: Array<{ nodeId?: string; clientKey?: string; expectedCompletedAt: Date }>;
+    termination: { nodeId?: string; clientKey?: string; plannedAt: Date };
+  },
+  ctx: z.RefinementCtx,
+) {
+  // Persistence must additionally reject omission of any node referenced by a Segment.
+  validatePlanChronology(input, ctx);
+  const nodeIds = [
+    ...input.milestones.map((node) => node.nodeId),
+    input.termination.nodeId,
+  ].filter((value): value is string => Boolean(value));
+  const clientKeys = [
+    ...input.milestones.map((node) => node.clientKey),
+    input.termination.clientKey,
+  ].filter((value): value is string => Boolean(value));
+  if (new Set(nodeIds).size !== nodeIds.length) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["milestones"],
+      message: "计划中不能重复使用同一个 nodeId",
+    });
+  }
+  if (new Set(clientKeys).size !== clientKeys.length) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["milestones"],
+      message: "计划中不能重复使用同一个 clientKey",
+    });
+  }
+}
+
 export const replaceTaskDraftPlanInputSchema = z
   .object({
     taskId: idSchema,
@@ -139,30 +182,31 @@ export const replaceTaskDraftPlanInputSchema = z
   })
   .strict()
   .superRefine((input, ctx) => {
-    // Persistence must additionally reject omission of any node referenced by a Segment.
-    validatePlanChronology(input, ctx);
-    const nodeIds = [
-      ...input.milestones.map((node) => node.nodeId),
-      input.termination.nodeId,
-    ].filter((value): value is string => Boolean(value));
-    const clientKeys = [
-      ...input.milestones.map((node) => node.clientKey),
-      input.termination.clientKey,
-    ].filter((value): value is string => Boolean(value));
-    if (new Set(nodeIds).size !== nodeIds.length) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["milestones"],
-        message: "计划中不能重复使用同一个 nodeId",
-      });
-    }
-    if (new Set(clientKeys).size !== clientKeys.length) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["milestones"],
-        message: "计划中不能重复使用同一个 clientKey",
-      });
-    }
+    validateDraftPlanReplacement(input, ctx);
+  });
+
+export const updateTaskDraftInputSchema = z
+  .object({
+    taskId: idSchema,
+    planVersionId: idSchema,
+    expectedLockVersion: expectedTaskLockVersionSchema,
+    ...taskMetadataFields,
+    tagIds: tagIdsSchema,
+    members: taskMembersMutationSchema.optional(),
+    plannedStartAt: absoluteDateTimeSchema(
+      "请选择带时区的有效计划开始时间",
+    ),
+    milestones: z
+      .array(draftMilestoneReplacementSchema, {
+        message: "Milestone 列表格式不正确",
+      })
+      .max(200, "单个计划最多 200 个节点"),
+    termination: draftTerminationReplacementSchema,
+  })
+  .strict()
+  .superRefine((input, ctx) => {
+    if (input.members) validateTaskMembers(input.members, ctx);
+    validateDraftPlanReplacement(input, ctx);
   });
 
 export const replaceTaskTagsInputSchema = z
@@ -176,6 +220,7 @@ export const replaceTaskTagsInputSchema = z
 export type UpdateTaskDraftMetadataInput = z.infer<
   typeof updateTaskDraftMetadataInputSchema
 >;
+export type UpdateTaskDraftInput = z.infer<typeof updateTaskDraftInputSchema>;
 export type UpdateTaskMetadataInput = z.infer<
   typeof updateTaskMetadataInputSchema
 >;

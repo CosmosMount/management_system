@@ -22,6 +22,7 @@ export const routes = {
     tasks: "/progress/tasks",
     taskNew: "/progress/tasks/new",
     taskDetail: (id: string) => `/progress/tasks/${id}`,
+    taskEdit: (id: string) => `/progress/tasks/${id}/edit`,
     resources: "/progress/resources",
     approvals: "/progress/approvals",
     notifications: "/progress/notifications",

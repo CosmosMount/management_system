@@ -17,7 +17,10 @@ import {
   Trash2,
   Undo2,
 } from "lucide-react";
-import { createTaskDraft } from "@/app/actions/project-management/tasks";
+import {
+  createTaskDraft,
+  updateTaskDraft,
+} from "@/app/actions/project-management/tasks";
 import {
   listTagOptions,
 } from "@/app/actions/project-management/canvas";
@@ -74,6 +77,7 @@ const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const taskMemberRoles = ["OWNER", "PARTICIPANT"] as const;
 type TaskMemberRoleValue = (typeof taskMemberRoles)[number];
+type LegacyTaskMemberRoleValue = "LEAD" | "MEMBER" | "REVIEWER" | "VIEWER";
 type TaskPriorityValue = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
 
 export const TASK_COMPOSER_START_ID = "task-composer-start";
@@ -156,6 +160,12 @@ type LocalTaskDraft = {
   task: TaskComposerSeed;
   inspectorDraft: TaskComposerInspectorDraft | null;
   inspectorDirty: boolean;
+  editContext?: {
+    kind: "EDIT_DRAFT";
+    taskId: string;
+    planVersionId: string;
+    baseLockVersion: number;
+  };
 };
 
 type LocalDraftRecovery =
@@ -165,6 +175,28 @@ type LocalDraftRecovery =
 type PersonOption = PersonOptionDto;
 type TaskOption = TaskOptionPage["items"][number];
 type TagOption = TagOptionPage["items"][number];
+type TaskActionError = {
+  code: string;
+  message: string;
+  fieldErrors?: Record<string, string[]>;
+};
+
+export type TaskComposerMode =
+  | { kind: "CREATE" }
+  | {
+      kind: "EDIT_DRAFT";
+      taskId: string;
+      planVersionId: string;
+      expectedLockVersion: number;
+      existingNodeIds: string[];
+      canManageMembers: boolean;
+      preservedLegacyMembers?: Array<{
+        personId: string;
+        role: LegacyTaskMemberRoleValue;
+      }>;
+    };
+
+const CREATE_TASK_COMPOSER_MODE: TaskComposerMode = { kind: "CREATE" };
 
 export function TaskComposerClient({
   accountId,
@@ -174,6 +206,7 @@ export function TaskComposerClient({
   initialTasks,
   initialTags,
   actorPersonId,
+  mode = CREATE_TASK_COMPOSER_MODE,
 }: {
   accountId: string;
   deploymentEnvironment: string;
@@ -182,6 +215,7 @@ export function TaskComposerClient({
   initialTasks: TaskOption[];
   initialTags: TagOption[];
   actorPersonId: string;
+  mode?: TaskComposerMode;
 }) {
   const router = useRouter();
   const normalizedInitialSeed = useMemo(
@@ -194,7 +228,14 @@ export function TaskComposerClient({
     future: [],
   });
   const state = history.present;
-  const [dirty, setDirty] = useState(false);
+  const [baselineFingerprint, setBaselineFingerprint] = useState(() =>
+    composerSubmissionFingerprint(normalizedInitialSeed),
+  );
+  const currentFingerprint = useMemo(
+    () => composerSubmissionFingerprint(state),
+    [state],
+  );
+  const dirty = currentFingerprint !== baselineFingerprint;
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
@@ -202,7 +243,9 @@ export function TaskComposerClient({
   const [recovery, setRecovery] = useState<LocalDraftRecovery | null>(null);
   const [storageReady, setStorageReady] = useState(false);
   const [storageBusy, setStorageBusy] = useState(false);
+  const [cleanDraftCleanupError, setCleanDraftCleanupError] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState<string | null>(null);
+  const [historyGuardActive, setHistoryGuardActive] = useState(false);
   const [people, setPeople] = useState<PersonOption[]>(initialPeople);
   const [tags, setTags] = useState<TagOption[]>(initialTags);
   const [tagQuery, setTagQuery] = useState("");
@@ -226,23 +269,55 @@ export function TaskComposerClient({
     useState<TaskMemberRoleValue>("PARTICIPANT");
   const historyGuardRef = useRef(false);
   const bypassPopStateRef = useRef(false);
+  const bypassBeforeUnloadRef = useRef(false);
+  const wasDirtyRef = useRef(false);
+  const preserveDraftOnNavigationRef = useRef(false);
+  const cleanDraftCleanupPromiseRef = useRef<Promise<boolean> | null>(null);
   const draftWriteChainRef = useRef<Promise<void>>(Promise.resolve());
   const autoSaveTimerRef = useRef<number | null>(null);
   const liveEditEntityRef = useRef<string | null>(null);
+  const isEditingDraft = mode.kind === "EDIT_DRAFT";
+  const preservedLegacyMembers =
+    mode.kind === "EDIT_DRAFT" ? (mode.preservedLegacyMembers ?? []) : [];
+  const canManageMembers =
+    mode.kind === "CREATE" ||
+    (mode.canManageMembers && preservedLegacyMembers.length === 0);
+  const returnPath =
+    mode.kind === "EDIT_DRAFT"
+      ? routes.progress.taskDetail(mode.taskId)
+      : routes.progress.tasks;
+  const editContext = useMemo<LocalTaskDraft["editContext"]>(
+    () =>
+      mode.kind === "EDIT_DRAFT"
+        ? {
+            kind: "EDIT_DRAFT",
+            taskId: mode.taskId,
+            planVersionId: mode.planVersionId,
+            baseLockVersion: mode.expectedLockVersion,
+          }
+        : undefined,
+    [mode],
+  );
   const storageKey = useMemo(
     () =>
-      `task-draft:${encodeURIComponent(deploymentEnvironment)}:${encodeURIComponent(accountId)}:v${LOCAL_DRAFT_SCHEMA_VERSION}`,
-    [accountId, deploymentEnvironment],
+      mode.kind === "EDIT_DRAFT"
+        ? `task-edit-draft:${encodeURIComponent(deploymentEnvironment)}:${encodeURIComponent(accountId)}:${encodeURIComponent(mode.taskId)}:v1`
+        : `task-draft:${encodeURIComponent(deploymentEnvironment)}:${encodeURIComponent(accountId)}:v${LOCAL_DRAFT_SCHEMA_VERSION}`,
+    [accountId, deploymentEnvironment, mode],
   );
   const legacyStorageKeyV1 = useMemo(
     () =>
-      `task-draft:${encodeURIComponent(deploymentEnvironment)}:${encodeURIComponent(accountId)}:v1`,
-    [accountId, deploymentEnvironment],
+      mode.kind === "CREATE"
+        ? `task-draft:${encodeURIComponent(deploymentEnvironment)}:${encodeURIComponent(accountId)}:v1`
+        : null,
+    [accountId, deploymentEnvironment, mode.kind],
   );
   const legacyStorageKeyV2 = useMemo(
     () =>
-      `task-draft:${encodeURIComponent(deploymentEnvironment)}:${encodeURIComponent(accountId)}:v2`,
-    [accountId, deploymentEnvironment],
+      mode.kind === "CREATE"
+        ? `task-draft:${encodeURIComponent(deploymentEnvironment)}:${encodeURIComponent(accountId)}:v2`
+        : null,
+    [accountId, deploymentEnvironment, mode.kind],
   );
   const issues = useMemo(
     () => validateComposer(state),
@@ -284,6 +359,29 @@ export function TaskComposerClient({
     autoSaveTimerRef.current = null;
   }, []);
 
+  const replaceAfterCollapsingHistoryGuard = useCallback(
+    (destination: string) => {
+      setPendingNavigation(null);
+      setBaselineFingerprint(currentFingerprint);
+      if (!historyGuardRef.current) {
+        setHistoryGuardActive(false);
+        router.replace(destination);
+        return;
+      }
+
+      const finishNavigation = () => {
+        historyGuardRef.current = false;
+        setHistoryGuardActive(false);
+        bypassBeforeUnloadRef.current = true;
+        window.location.replace(destination);
+      };
+      window.addEventListener("popstate", finishNavigation, { once: true });
+      bypassPopStateRef.current = true;
+      window.history.back();
+    },
+    [currentFingerprint, router],
+  );
+
   const commit = useCallback(
     (mutator: (current: TaskComposerSeed) => TaskComposerSeed) => {
       setHistory((current) => ({
@@ -291,7 +389,7 @@ export function TaskComposerClient({
         present: mutator(current.present),
         future: [],
       }));
-      setDirty(true);
+      setCleanDraftCleanupError(false);
       setServerError("");
       setStatusMessage("");
     },
@@ -304,7 +402,7 @@ export function TaskComposerClient({
         ...current,
         present: mutator(current.present),
       }));
-      setDirty(true);
+      setCleanDraftCleanupError(false);
     },
     [],
   );
@@ -318,10 +416,10 @@ export function TaskComposerClient({
         try {
           await withTaskComposerDraftLock(storageKey, async () => {
             const currentRaw = window.localStorage.getItem(storageKey);
-            const legacyRawV2 = currentRaw
+            const legacyRawV2 = currentRaw || !legacyStorageKeyV2
               ? null
               : window.localStorage.getItem(legacyStorageKeyV2);
-            const legacyRawV1 = currentRaw || legacyRawV2
+            const legacyRawV1 = currentRaw || legacyRawV2 || !legacyStorageKeyV1
               ? null
               : window.localStorage.getItem(legacyStorageKeyV1);
             preservedRaw = currentRaw ?? legacyRawV2 ?? legacyRawV1;
@@ -360,7 +458,10 @@ export function TaskComposerClient({
             }
 
             if (cancelled) return;
-            if (parsed) {
+            const contextError = parsed
+              ? localDraftContextError(parsed, editContext)
+              : null;
+            if (parsed && !contextError) {
               setRecovery({ kind: "VALID", draft: parsed });
               setSavedAt(parsed.savedAt);
             } else if (preservedRaw) {
@@ -369,6 +470,7 @@ export function TaskComposerClient({
                 raw: preservedRaw,
                 reason:
                   unavailableReason ||
+                  contextError ||
                   "草稿版本、结构或字段不兼容，未自动覆盖或删除原始内容。",
               });
             } else {
@@ -394,7 +496,7 @@ export function TaskComposerClient({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [actorPersonId, legacyStorageKeyV1, legacyStorageKeyV2, storageKey]);
+  }, [actorPersonId, editContext, legacyStorageKeyV1, legacyStorageKeyV2, storageKey]);
 
   useEffect(() => {
     if (!storageReady || recovery || !dirty || submitting || storageBusy) return;
@@ -409,6 +511,7 @@ export function TaskComposerClient({
         task: state,
         inspectorDraft: null,
         inspectorDirty: false,
+        ...(editContext ? { editContext } : {}),
       };
       void queueDraftWrite(envelope)
         .then(() => {
@@ -428,11 +531,11 @@ export function TaskComposerClient({
         autoSaveTimerRef.current = null;
       }
     };
-  }, [dirty, queueDraftWrite, recovery, state, storageBusy, storageReady, submitting]);
+  }, [dirty, editContext, queueDraftWrite, recovery, state, storageBusy, storageReady, submitting]);
 
   useEffect(() => {
-    if (!dirty || submitting) return;
-    if (!historyGuardRef.current) {
+    if ((!dirty && !historyGuardActive) || submitting) return;
+    if (dirty && !historyGuardRef.current) {
       const currentHistoryState = window.history.state as {
         taskComposerGuard?: boolean;
       } | null;
@@ -444,8 +547,15 @@ export function TaskComposerClient({
         );
       }
       historyGuardRef.current = true;
+      setHistoryGuardActive(true);
     }
+    const shouldBlockUnload =
+      dirty ||
+      storageBusy ||
+      cleanDraftCleanupError ||
+      (wasDirtyRef.current && !preserveDraftOnNavigationRef.current);
     const beforeUnload = (event: BeforeUnloadEvent) => {
+      if (bypassBeforeUnloadRef.current) return;
       event.preventDefault();
       event.returnValue = "";
     };
@@ -458,11 +568,49 @@ export function TaskComposerClient({
       const url = new URL(link.href, window.location.href);
       if (url.origin !== window.location.origin || url.href === window.location.href) return;
       event.preventDefault();
-      setPendingNavigation(`${url.pathname}${url.search}${url.hash}`);
+      if (
+        storageBusy ||
+        cleanDraftCleanupError ||
+        (!dirty &&
+          wasDirtyRef.current &&
+          !preserveDraftOnNavigationRef.current)
+      ) {
+        setStatusMessage("请先等待或重试清理旧本地草稿。");
+        return;
+      }
+      const destination = `${url.pathname}${url.search}${url.hash}`;
+      if (dirty) {
+        setPendingNavigation(destination);
+      } else {
+        replaceAfterCollapsingHistoryGuard(destination);
+      }
     };
     const interceptHistory = () => {
       if (bypassPopStateRef.current) {
         bypassPopStateRef.current = false;
+        return;
+      }
+      if (
+        storageBusy ||
+        cleanDraftCleanupError ||
+        (!dirty &&
+          wasDirtyRef.current &&
+          !preserveDraftOnNavigationRef.current)
+      ) {
+        window.history.pushState(
+          { ...(window.history.state ?? {}), taskComposerGuard: true },
+          "",
+          window.location.href,
+        );
+        historyGuardRef.current = true;
+        setStatusMessage("请先等待或重试清理旧本地草稿。");
+        return;
+      }
+      if (!dirty) {
+        historyGuardRef.current = false;
+        setHistoryGuardActive(false);
+        bypassPopStateRef.current = true;
+        window.history.back();
         return;
       }
       window.history.pushState(
@@ -473,15 +621,22 @@ export function TaskComposerClient({
       historyGuardRef.current = true;
       setPendingNavigation("__HISTORY_BACK__");
     };
-    window.addEventListener("beforeunload", beforeUnload);
+    if (shouldBlockUnload) window.addEventListener("beforeunload", beforeUnload);
     window.addEventListener("popstate", interceptHistory);
     document.addEventListener("click", interceptLinks, true);
     return () => {
-      window.removeEventListener("beforeunload", beforeUnload);
+      if (shouldBlockUnload) window.removeEventListener("beforeunload", beforeUnload);
       window.removeEventListener("popstate", interceptHistory);
       document.removeEventListener("click", interceptLinks, true);
     };
-  }, [dirty, submitting]);
+  }, [
+    cleanDraftCleanupError,
+    dirty,
+    historyGuardActive,
+    replaceAfterCollapsingHistoryGuard,
+    storageBusy,
+    submitting,
+  ]);
 
   const updateField = <K extends keyof TaskComposerSeed>(
     key: K,
@@ -566,6 +721,7 @@ export function TaskComposerClient({
         nodeMeta,
       });
     });
+    setCleanDraftCleanupError(false);
   };
 
   const updateInspector = (next: TaskComposerInspectorDraft) => {
@@ -639,7 +795,7 @@ export function TaskComposerClient({
         future: [current.present, ...current.future].slice(0, MAX_HISTORY),
       };
     });
-    setDirty(true);
+    setCleanDraftCleanupError(false);
   };
 
   const redo = () => {
@@ -653,7 +809,7 @@ export function TaskComposerClient({
         future: current.future.slice(1),
       };
     });
-    setDirty(true);
+    setCleanDraftCleanupError(false);
   };
 
   const focusIssue = (issue: ValidationIssue) => {
@@ -666,9 +822,19 @@ export function TaskComposerClient({
   const runValidation = () => {
     if (issues[0]) focusIssue(issues[0]);
     setStatusMessage(
-      issues.length === 0 ? "计划校验通过，可以创建 Task 草稿。" : `发现 ${issues.length} 个问题。`,
+      issues.length === 0
+        ? isEditingDraft
+          ? "内容校验通过，可以保存 Task。"
+          : "计划校验通过，可以创建 Task 草稿。"
+        : `发现 ${issues.length} 个问题。`,
     );
     return issues.length === 0;
+  };
+
+  const applyActionError = (error: TaskActionError) => {
+    setServerError(actionErrorMessage(error));
+    const issue = serverFieldValidationIssue(error.fieldErrors, state);
+    if (issue) focusIssue(issue);
   };
 
   const persistLocalDraftNow = async () => {
@@ -682,6 +848,7 @@ export function TaskComposerClient({
         task: state,
         inspectorDraft: null,
         inspectorDirty: false,
+        ...(editContext ? { editContext } : {}),
       });
       setSavedAt(saved);
       return true;
@@ -691,46 +858,83 @@ export function TaskComposerClient({
     }
   };
 
-  const discardLocalDraft = async () => {
+  const discardLocalDraft = useCallback(async () => {
     cancelPendingAutoSave();
     try {
       await draftWriteChainRef.current.catch(() => undefined);
       await removeTaskComposerDraft(storageKey, [
-        legacyStorageKeyV1,
-        legacyStorageKeyV2,
+        ...[legacyStorageKeyV1, legacyStorageKeyV2].filter(
+          (key): key is string => Boolean(key),
+        ),
       ]);
       return true;
     } catch {
       setServerError("浏览器拒绝删除本地草稿；为避免旧草稿再次出现，当前不会离开页面。");
       return false;
     }
-  };
+  }, [cancelPendingAutoSave, legacyStorageKeyV1, legacyStorageKeyV2, storageKey]);
 
-  const replaceAfterCollapsingHistoryGuard = (destination: string) => {
-    setPendingNavigation(null);
-    setDirty(false);
-    if (!historyGuardRef.current) {
-      router.replace(destination);
+  const clearRevertedLocalDraft = useCallback(() => {
+    if (cleanDraftCleanupPromiseRef.current) {
+      return cleanDraftCleanupPromiseRef.current;
+    }
+    const cleanup = (async () => {
+      setStorageBusy(true);
+      setCleanDraftCleanupError(false);
+      setServerError("");
+      const discarded = await discardLocalDraft();
+      if (discarded) {
+        wasDirtyRef.current = false;
+        setSavedAt(null);
+      } else {
+        setCleanDraftCleanupError(true);
+      }
+      return discarded;
+    })().finally(() => {
+      cleanDraftCleanupPromiseRef.current = null;
+      setStorageBusy(false);
+    });
+    cleanDraftCleanupPromiseRef.current = cleanup;
+    return cleanup;
+  }, [discardLocalDraft]);
+
+  useEffect(() => {
+    if (dirty) {
+      wasDirtyRef.current = true;
       return;
     }
-
-    const finishNavigation = () => {
-      historyGuardRef.current = false;
-      window.location.replace(destination);
-    };
-    window.addEventListener("popstate", finishNavigation, { once: true });
-    bypassPopStateRef.current = true;
-    window.history.back();
-  };
+    if (
+      !wasDirtyRef.current ||
+      preserveDraftOnNavigationRef.current ||
+      cleanDraftCleanupError ||
+      !storageReady ||
+      recovery ||
+      submitting ||
+      storageBusy
+    ) {
+      return;
+    }
+    void clearRevertedLocalDraft();
+  }, [
+    cleanDraftCleanupError,
+    clearRevertedLocalDraft,
+    dirty,
+    recovery,
+    storageBusy,
+    storageReady,
+    submitting,
+  ]);
 
   const submit = async () => {
-    if (submitting || !runValidation()) return;
+    if (submitting || (isEditingDraft && !dirty) || !runValidation()) return;
     cancelPendingAutoSave();
     setSubmitting(true);
     setServerError("");
-    setStatusMessage("正在创建 Task 草稿…");
+    setStatusMessage(
+      isEditingDraft ? "正在保存 Task…" : "正在创建 Task 草稿…",
+    );
     try {
-      const result = await createTaskDraft({
+      const commonPayload = {
         title: state.title,
         description: state.description,
         team: state.team,
@@ -738,47 +942,125 @@ export function TaskComposerClient({
         priority: state.priority,
         tagIds: state.tagIds,
         relatedTaskId: state.relatedTaskId,
-        members: state.members,
         plannedStartAt: shanghaiDateTimeLocalToIso(state.plannedStartAt),
-        milestones: sortMilestones(state.milestones).map((milestone) => ({
-          goal: milestone.goal,
-          completionCriteria: milestone.completionCriteria,
-          expectedCompletedAt: shanghaiDateTimeLocalToIso(
-            milestone.expectedCompletedAt,
-          ),
-          reviewRequirements: milestone.reviewRequirements,
-          businessDescription: milestone.businessDescription,
-        })),
-        termination: {
-          name: state.termination.name,
-          plannedAt: shanghaiDateTimeLocalToIso(state.termination.plannedAt),
-          plannedOutcomeCriteria: state.termination.plannedOutcomeCriteria,
-          businessDescription: state.termination.businessDescription,
-        },
-        idempotencyKey: `task-composer:${state.draftId}`,
-      });
-      if (!result.ok) {
-        setServerError(result.error.message);
-        setStatusMessage("创建失败，本地草稿和幂等键已保留，可修正后重试。");
-        return;
+      };
+      let destination: string;
+      if (mode.kind === "CREATE") {
+        const result = await createTaskDraft({
+          ...commonPayload,
+          members: state.members,
+          milestones: sortMilestones(state.milestones).map((milestone) => ({
+            goal: milestone.goal,
+            completionCriteria: milestone.completionCriteria,
+            expectedCompletedAt: shanghaiDateTimeLocalToIso(
+              milestone.expectedCompletedAt,
+            ),
+            reviewRequirements: milestone.reviewRequirements,
+            businessDescription: milestone.businessDescription,
+          })),
+          termination: {
+            name: state.termination.name,
+            plannedAt: shanghaiDateTimeLocalToIso(state.termination.plannedAt),
+            plannedOutcomeCriteria: state.termination.plannedOutcomeCriteria,
+            businessDescription: state.termination.businessDescription,
+          },
+          idempotencyKey: `task-composer:${state.draftId}`,
+        });
+        if (!result.ok) {
+          applyActionError(result.error);
+          setStatusMessage(
+            "创建失败，本地草稿和幂等键已保留，可修正后重试。",
+          );
+          return;
+        }
+        destination = `${routes.progress.taskDetail(result.data.taskId)}?created=1`;
+      } else {
+        const existingNodeIds = new Set(mode.existingNodeIds);
+        const membersChanged =
+          memberSubmissionFingerprint(state.members) !==
+          memberSubmissionFingerprint(normalizedInitialSeed.members);
+        const nodeIdentity = (id: string) =>
+          existingNodeIds.has(id) ? { nodeId: id } : { clientKey: id };
+        const result = await updateTaskDraft({
+          ...commonPayload,
+          taskId: mode.taskId,
+          planVersionId: mode.planVersionId,
+          expectedLockVersion: mode.expectedLockVersion,
+          ...(canManageMembers && membersChanged
+            ? { members: state.members }
+            : {}),
+          milestones: sortMilestones(state.milestones).map((milestone) => ({
+            ...nodeIdentity(milestone.id),
+            goal: milestone.goal,
+            completionCriteria: milestone.completionCriteria,
+            expectedCompletedAt: shanghaiDateTimeLocalToIso(
+              milestone.expectedCompletedAt,
+            ),
+            reviewRequirements: milestone.reviewRequirements,
+            businessDescription: milestone.businessDescription,
+          })),
+          termination: {
+            ...nodeIdentity(state.termination.id),
+            name: state.termination.name,
+            plannedAt: shanghaiDateTimeLocalToIso(state.termination.plannedAt),
+            plannedOutcomeCriteria: state.termination.plannedOutcomeCriteria,
+            businessDescription: state.termination.businessDescription,
+          },
+        });
+        if (!result.ok) {
+          if (result.error.code === "STALE_TASK") {
+            const exportedDraft: LocalTaskDraft = {
+              schemaVersion: LOCAL_DRAFT_SCHEMA_VERSION,
+              draftId: state.draftId,
+              savedAt: new Date().toISOString(),
+              task: state,
+              inspectorDraft: null,
+              inspectorDirty: false,
+              ...(editContext ? { editContext } : {}),
+            };
+            const persisted = await persistLocalDraftNow();
+            if (persisted) setServerError("");
+            setRecovery({
+              kind: "INCOMPATIBLE",
+              raw: JSON.stringify(exportedDraft),
+              reason:
+                "Task 已在服务端更新，当前本地修改不会覆盖最新版本。请先导出，或放弃并加载最新版本。",
+            });
+            setStatusMessage(
+              "保存冲突，本地修改已保留；不会自动刷新或合并字段。",
+            );
+            return;
+          }
+          applyActionError(result.error);
+          setStatusMessage("保存失败，本地修改已保留，可修正后重试。");
+          return;
+        }
+        destination = routes.progress.taskDetail(mode.taskId);
       }
       try {
         await draftWriteChainRef.current.catch(() => undefined);
         await removeTaskComposerDraft(storageKey, [
-          legacyStorageKeyV1,
-          legacyStorageKeyV2,
+          ...[legacyStorageKeyV1, legacyStorageKeyV2].filter(
+            (key): key is string => Boolean(key),
+          ),
         ]);
       } catch {
         // The Task is already committed. Storage cleanup failure must not turn a
         // successful business mutation into a retry that could confuse the user.
       }
-      setStatusMessage("Task 草稿已创建，正在进入工作台…");
-      replaceAfterCollapsingHistoryGuard(
-        `${routes.progress.taskDetail(result.data.taskId)}?created=1`,
+      setStatusMessage(
+        isEditingDraft
+          ? "Task 已保存，正在返回工作台…"
+          : "Task 草稿已创建，正在进入工作台…",
       );
+      replaceAfterCollapsingHistoryGuard(destination);
     } catch {
       setServerError("网络或服务暂时不可用，请稍后重试。草稿不会被清除。");
-      setStatusMessage("创建失败，本地草稿和幂等键已保留。");
+      setStatusMessage(
+        isEditingDraft
+          ? "保存失败，本地修改已保留。"
+          : "创建失败，本地草稿和幂等键已保留。",
+      );
     } finally {
       setSubmitting(false);
     }
@@ -845,25 +1127,48 @@ export function TaskComposerClient({
   };
 
   return (
-    <div className="min-w-0" data-testid="task-composer">
+    <div
+      className="min-w-0"
+      data-testid="task-composer"
+      data-composer-mode={mode.kind}
+    >
       <div className="sticky top-14 z-20 border-b border-border bg-background/95 px-4 py-3 backdrop-blur md:top-14 sm:px-6 lg:px-8">
         <div className="mx-auto flex w-full max-w-[110rem] flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <Button
               type="button"
               variant="ghost"
-              onClick={() =>
-                dirty
-                  ? setPendingNavigation(routes.progress.tasks)
-                  : router.push(routes.progress.tasks)
-              }
+              disabled={storageBusy || cleanDraftCleanupError}
+              onClick={() => {
+                if (dirty) {
+                  setPendingNavigation(returnPath);
+                } else if (
+                  wasDirtyRef.current &&
+                  !preserveDraftOnNavigationRef.current
+                ) {
+                  void clearRevertedLocalDraft().then((cleared) => {
+                    if (!cleared) return;
+                    if (historyGuardRef.current) {
+                      replaceAfterCollapsingHistoryGuard(returnPath);
+                    } else {
+                      router.push(returnPath);
+                    }
+                  });
+                } else if (historyGuardRef.current) {
+                  replaceAfterCollapsingHistoryGuard(returnPath);
+                } else {
+                  router.push(returnPath);
+                }
+              }}
             >
               <ArrowLeft aria-hidden="true" />
-              全部 Task
+              {isEditingDraft ? "返回 Task 工作台" : "全部 Task"}
             </Button>
             <span className="text-sm text-muted-foreground" aria-live="polite">
               {savedAt
-                ? `本地已保存 ${formatSavedAt(savedAt)}`
+                ? storageBusy && !dirty
+                  ? "正在清理旧本地草稿…"
+                  : `本地已保存 ${formatSavedAt(savedAt)}`
                 : dirty
                   ? "等待本地保存"
                   : "尚未修改"}
@@ -893,9 +1198,19 @@ export function TaskComposerClient({
             <Button type="button" variant="outline" onClick={runValidation}>
               校验{issues.length > 0 ? ` (${issues.length})` : ""}
             </Button>
-            <Button type="button" disabled={submitting} onClick={submit}>
+            <Button
+              type="button"
+              disabled={submitting || (isEditingDraft && !dirty)}
+              onClick={submit}
+            >
               <Save aria-hidden="true" />
-              {submitting ? "正在创建…" : "创建 Task 草稿"}
+              {submitting
+                ? isEditingDraft
+                  ? "正在保存…"
+                  : "正在创建…"
+                : isEditingDraft
+                  ? "保存 Task"
+                  : "创建 Task 草稿"}
             </Button>
           </div>
         </div>
@@ -912,11 +1227,17 @@ export function TaskComposerClient({
                 type="button"
                 size="sm"
                 onClick={() => {
-                  setHistory({ past: [], present: recovery.draft.task, future: [] });
+                  const recoveredTask =
+                    mode.kind === "EDIT_DRAFT" && !canManageMembers
+                      ? {
+                          ...recovery.draft.task,
+                          members: normalizedInitialSeed.members,
+                        }
+                      : recovery.draft.task;
+                  setHistory({ past: [], present: recoveredTask, future: [] });
                   liveEditEntityRef.current = null;
                   setRecovery(null);
                   setStorageReady(true);
-                  setDirty(true);
                   setStatusMessage("已恢复本地草稿。");
                 }}
               >
@@ -933,6 +1254,11 @@ export function TaskComposerClient({
                   void discardLocalDraft()
                     .then((discarded) => {
                       if (!discarded) return;
+                      if (isEditingDraft) {
+                        bypassBeforeUnloadRef.current = true;
+                        window.location.reload();
+                        return;
+                      }
                       setRecovery(null);
                       setStorageReady(true);
                       setSavedAt(null);
@@ -971,6 +1297,11 @@ export function TaskComposerClient({
                   void discardLocalDraft()
                     .then((discarded) => {
                       if (!discarded) return;
+                      if (isEditingDraft) {
+                        bypassBeforeUnloadRef.current = true;
+                        window.location.reload();
+                        return;
+                      }
                       setRecovery(null);
                       setStorageReady(true);
                       setSavedAt(null);
@@ -978,9 +1309,28 @@ export function TaskComposerClient({
                     .finally(() => setStorageBusy(false));
                 }}
               >
-                安全放弃
+                {isEditingDraft ? "放弃并加载最新版本" : "安全放弃"}
               </Button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {cleanDraftCleanupError && (
+        <div className="border-b border-destructive/40 bg-destructive/10 px-4 py-3 text-sm sm:px-6 lg:px-8">
+          <div className="mx-auto flex max-w-[110rem] flex-wrap items-center justify-between gap-3">
+            <p role="alert">
+              已回到服务端基线，但旧本地草稿尚未清除。为避免下次误恢复，请先重试清理。
+            </p>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={storageBusy}
+              onClick={() => void clearRevertedLocalDraft()}
+            >
+              重试清理本地草稿
+            </Button>
           </div>
         </div>
       )}
@@ -1097,6 +1447,9 @@ export function TaskComposerClient({
                       aria-hidden="true"
                     />
                     {tag.name}
+                    {tag.isArchived && (
+                      <span className="text-muted-foreground">（已归档）</span>
+                    )}
                   </label>
                 ))}
                 {tags.length === 0 && <EmptyInline>没有可选 Tag</EmptyInline>}
@@ -1109,6 +1462,7 @@ export function TaskComposerClient({
                 value={state.relatedTaskId}
                 onValueChange={(nextValue) => updateField("relatedTaskId", nextValue)}
                 initialOptions={initialTasks}
+                excludeIds={mode.kind === "EDIT_DRAFT" ? [mode.taskId] : []}
                 placeholder="按标题、描述或拼音首字母搜索"
                 clearable
               />
@@ -1130,67 +1484,103 @@ export function TaskComposerClient({
                     <Badge variant={member.role === "OWNER" ? "default" : "secondary"}>
                       {taskMemberRoleLabels[member.role]}
                     </Badge>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-xs"
-                      disabled={
-                        member.role === "OWNER" &&
-                        state.members.filter((item) => item.role === "OWNER")
-                          .length === 1
-                      }
-                      aria-label={`移除 ${person?.displayName ?? "成员"} ${taskMemberRoleLabels[member.role]}`}
-                      onClick={() =>
-                        updateField(
-                          "members",
-                          state.members.filter((_, memberIndex) => memberIndex !== index),
-                        )
-                      }
-                    >
-                      <Trash2 aria-hidden="true" />
-                    </Button>
+                    {canManageMembers && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-xs"
+                        disabled={
+                          member.role === "OWNER" &&
+                          state.members.filter((item) => item.role === "OWNER")
+                            .length === 1
+                        }
+                        aria-label={`移除 ${person?.displayName ?? "成员"} ${taskMemberRoleLabels[member.role]}`}
+                        onClick={() =>
+                          updateField(
+                            "members",
+                            state.members.filter((_, memberIndex) => memberIndex !== index),
+                          )
+                        }
+                      >
+                        <Trash2 aria-hidden="true" />
+                      </Button>
+                    )}
                   </div>
                 );
               })}
-              {state.members.length === 0 && <EmptyInline>尚未添加成员</EmptyInline>}
+              {preservedLegacyMembers.map((member) => {
+                const person = people.find((item) => item.id === member.personId);
+                return (
+                  <div
+                    key={`legacy:${member.personId}:${member.role}`}
+                    className="flex min-w-0 items-center gap-2 rounded-lg border border-border p-2 text-sm"
+                  >
+                    <span className="min-w-0 flex-1 truncate">
+                      {person?.displayName ?? "历史成员"}
+                    </span>
+                    <Badge variant="outline">
+                      {taskMemberRoleLabels[member.role]}
+                    </Badge>
+                    <span className="text-xs text-muted-foreground">只读</span>
+                  </div>
+                );
+              })}
+              {state.members.length === 0 && preservedLegacyMembers.length === 0 && (
+                <EmptyInline>尚未添加成员</EmptyInline>
+              )}
             </div>
-            <div className="mt-3 space-y-2 rounded-lg bg-muted/40 p-3">
-              <UserSelect
-                ariaLabel="成员人员"
-                scope={{
-                  purpose: "TASK_CREATE",
-                  team: state.team,
-                  techGroup: state.techGroup,
-                }}
-                value={memberPersonId || null}
-                onValueChange={(nextValue) => setMemberPersonId(nextValue ?? "")}
-                onOptionChange={(option) => {
-                  if (option) setPeople((current) => mergeOptions(current, [option]));
-                }}
-                initialOptions={initialPeople}
-                placeholder="按姓名或拼音首字母搜索"
-              />
-              <div className="flex gap-2">
-                <select
-                  aria-label="成员角色"
-                  className={selectClassName}
-                  value={memberRole}
-                  onChange={(event) =>
-                    setMemberRole(event.target.value as TaskMemberRoleValue)
+            {preservedLegacyMembers.length > 0 ? (
+              <p className="text-xs text-muted-foreground">
+                此 Task 含历史成员角色。历史成员会保留；在管理员清理历史数据前，成员区保持只读，其他内容仍可保存。
+              </p>
+            ) : !canManageMembers ? (
+              <p className="text-xs text-muted-foreground">
+                你可以编辑 Task 内容和计划，成员与角色为只读。
+              </p>
+            ) : null}
+            {canManageMembers && (
+              <div className="mt-3 space-y-2 rounded-lg bg-muted/40 p-3">
+                <UserSelect
+                  ariaLabel="成员人员"
+                  scope={
+                    mode.kind === "EDIT_DRAFT"
+                      ? { purpose: "TASK_MEMBERS", taskId: mode.taskId }
+                      : {
+                          purpose: "TASK_CREATE",
+                          team: state.team,
+                          techGroup: state.techGroup,
+                        }
                   }
-                >
-                  {taskMemberRoles.map((role) => (
-                    <option key={role} value={role}>
-                      {taskMemberRoleLabels[role]}
-                    </option>
-                  ))}
-                </select>
-                <Button type="button" variant="outline" onClick={addMember}>
-                  <Plus aria-hidden="true" />
-                  添加
-                </Button>
+                  value={memberPersonId || null}
+                  onValueChange={(nextValue) => setMemberPersonId(nextValue ?? "")}
+                  onOptionChange={(option) => {
+                    if (option) setPeople((current) => mergeOptions(current, [option]));
+                  }}
+                  initialOptions={initialPeople}
+                  placeholder="按姓名或拼音首字母搜索"
+                />
+                <div className="flex gap-2">
+                  <select
+                    aria-label="成员角色"
+                    className={selectClassName}
+                    value={memberRole}
+                    onChange={(event) =>
+                      setMemberRole(event.target.value as TaskMemberRoleValue)
+                    }
+                  >
+                    {taskMemberRoles.map((role) => (
+                      <option key={role} value={role}>
+                        {taskMemberRoleLabels[role]}
+                      </option>
+                    ))}
+                  </select>
+                  <Button type="button" variant="outline" onClick={addMember}>
+                    <Plus aria-hidden="true" />
+                    添加
+                  </Button>
+                </div>
               </div>
-            </div>
+            )}
           </ComposerSection>
 
         </aside>
@@ -1210,6 +1600,9 @@ export function TaskComposerClient({
           }
           optionLoading={optionLoading}
           submitting={submitting}
+          submitDisabled={isEditingDraft && !dirty}
+          submitLabel={isEditingDraft ? "保存 Task" : "创建草稿"}
+          submittingLabel={isEditingDraft ? "正在保存…" : "正在创建…"}
           onSelect={selectEntity}
           onBeginMilestone={beginMilestone}
           onConstrainAnchorMove={constrainAnchorMove}
@@ -1231,7 +1624,9 @@ export function TaskComposerClient({
       >
         <DialogContent className="sm:max-w-md" showCloseButton={false}>
           <DialogHeader>
-            <DialogTitle>离开 Task Composer？</DialogTitle>
+            <DialogTitle>
+              {isEditingDraft ? "离开 Task 编辑？" : "离开 Task Composer？"}
+            </DialogTitle>
             <DialogDescription>
               当前修改尚未提交到服务端。你可以保留本地草稿后离开，或放弃草稿。
             </DialogDescription>
@@ -1256,10 +1651,11 @@ export function TaskComposerClient({
                 void discardLocalDraft()
                   .then((discarded) => {
                     if (!discarded) return;
-                    setDirty(false);
+                    setBaselineFingerprint(currentFingerprint);
                     if (destination === "__HISTORY_BACK__") {
                       bypassPopStateRef.current = true;
                       historyGuardRef.current = false;
+                      setHistoryGuardActive(false);
                       window.history.go(-2);
                     } else {
                       replaceAfterCollapsingHistoryGuard(destination);
@@ -1280,10 +1676,12 @@ export function TaskComposerClient({
                 void persistLocalDraftNow()
                   .then((persisted) => {
                     if (!persisted) return;
-                    setDirty(false);
+                    preserveDraftOnNavigationRef.current = true;
+                    setBaselineFingerprint(currentFingerprint);
                     if (destination === "__HISTORY_BACK__") {
                       bypassPopStateRef.current = true;
                       historyGuardRef.current = false;
+                      setHistoryGuardActive(false);
                       window.history.go(-2);
                     } else {
                       replaceAfterCollapsingHistoryGuard(destination);
@@ -1995,6 +2393,92 @@ function validateComposer(
   return issues;
 }
 
+function actionErrorMessage(error: TaskActionError) {
+  const detail = Object.values(error.fieldErrors ?? {})
+    .flatMap((messages) => messages)
+    .find(Boolean);
+  return detail && detail !== error.message
+    ? `${error.message}：${detail}`
+    : error.message;
+}
+
+function serverFieldValidationIssue(
+  fieldErrors: Record<string, string[]> | undefined,
+  state: TaskComposerSeed,
+): ValidationIssue | null {
+  const entry = Object.entries(fieldErrors ?? {}).find(
+    ([, messages]) => messages.length > 0,
+  );
+  if (!entry) return null;
+  const [path, messages] = entry;
+  const message = messages[0] ?? "输入内容不符合要求。";
+  const directKeys: Record<string, string> = {
+    title: "title",
+    team: "team",
+    techGroup: "techGroup",
+    relatedTaskId: "related-task",
+    tagIds: "tag-search",
+    members: "members",
+    plannedStartAt: "plannedStartAt",
+    "termination.name": "termination-name",
+    "termination.plannedAt": "termination-plannedAt",
+    "termination.plannedOutcomeCriteria": "termination-outcome",
+  };
+  const directKey = directKeys[path];
+  if (directKey) {
+    return {
+      key: directKey,
+      message,
+      ...(path === "plannedStartAt"
+        ? { entityId: TASK_COMPOSER_START_ID }
+        : path.startsWith("termination.")
+          ? { entityId: state.termination.id }
+          : {}),
+    };
+  }
+  const milestoneMatch = /^milestones\.(\d+)\.(.+)$/.exec(path);
+  if (!milestoneMatch) return null;
+  const milestone = sortMilestones(state.milestones)[Number(milestoneMatch[1])];
+  if (!milestone) return null;
+  const milestoneKeys: Record<string, string> = {
+    goal: `goal-${milestone.id}`,
+    completionCriteria: `criteria-${milestone.id}`,
+    expectedCompletedAt: `expected-${milestone.id}`,
+    reviewRequirements: `review-${milestone.id}`,
+    businessDescription: `business-${milestone.id}`,
+  };
+  return {
+    key: milestoneKeys[milestoneMatch[2] ?? ""] ?? `goal-${milestone.id}`,
+    entityId: milestone.id,
+    message,
+  };
+}
+
+function localDraftContextError(
+  draft: LocalTaskDraft,
+  expected: LocalTaskDraft["editContext"],
+) {
+  const actual: unknown = draft.editContext;
+  if (!expected) {
+    return actual === undefined
+      ? null
+      : "检测到其他编辑场景的本地草稿，未自动覆盖当前新建内容。";
+  }
+  if (!isRecord(actual) || actual.kind !== "EDIT_DRAFT") {
+    return "本地编辑草稿缺少 Task 版本信息，不能安全恢复。";
+  }
+  if (
+    actual.taskId !== expected.taskId ||
+    actual.planVersionId !== expected.planVersionId
+  ) {
+    return "本地编辑草稿不属于当前 Task 或计划版本，不能安全恢复。";
+  }
+  if (actual.baseLockVersion !== expected.baseLockVersion) {
+    return "Task 已在服务端更新，旧本地草稿不能直接覆盖最新版本。";
+  }
+  return null;
+}
+
 function parseLocalDraft(raw: string): LocalTaskDraft | null {
   if (raw.length > MAX_TASK_COMPOSER_DRAFT_CHARS) return null;
   try {
@@ -2269,7 +2753,7 @@ function isStoredMilestone(value: unknown) {
   return (
     stringFields &&
     typeof value.id === "string" &&
-    value.id.startsWith("draft-node-") &&
+    (value.id.startsWith("draft-node-") || UUID_PATTERN.test(value.id)) &&
     value.id.length <= 160 &&
     typeof value.goal === "string" &&
     value.goal.length <= 2_000 &&
@@ -2291,7 +2775,7 @@ function isStoredTermination(value: unknown) {
       (key) => typeof value[key] === "string",
     ) &&
     typeof value.id === "string" &&
-    value.id.startsWith("draft-termination-") &&
+    (value.id.startsWith("draft-termination-") || UUID_PATTERN.test(value.id)) &&
     value.id.length <= 160 &&
     typeof value.name === "string" &&
     value.name.length <= 200 &&
@@ -2392,6 +2876,38 @@ function sortMilestones(milestones: TaskComposerMilestone[]) {
       return Number.isFinite(delta) && delta !== 0 ? delta : left.index - right.index;
     })
     .map((entry) => entry.milestone);
+}
+
+function composerSubmissionFingerprint(state: TaskComposerSeed) {
+  return JSON.stringify({
+    title: state.title,
+    description: state.description,
+    team: state.team,
+    techGroup: state.techGroup,
+    priority: state.priority,
+    tagIds: [...state.tagIds].sort(),
+    relatedTaskId: state.relatedTaskId,
+    members: [...state.members].sort(
+      (left, right) =>
+        left.personId.localeCompare(right.personId) ||
+        left.role.localeCompare(right.role),
+    ),
+    plannedStartAt: state.plannedStartAt,
+    milestones: sortMilestones(state.milestones),
+    termination: state.termination,
+  });
+}
+
+function memberSubmissionFingerprint(
+  members: TaskComposerSeed["members"],
+) {
+  return JSON.stringify(
+    [...members].sort(
+      (left, right) =>
+        left.personId.localeCompare(right.personId) ||
+        left.role.localeCompare(right.role),
+    ),
+  );
 }
 
 function normalizeComposerSeed(seed: TaskComposerSeed): TaskComposerSeed {

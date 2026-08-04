@@ -71,6 +71,7 @@ import {
   replaceTaskDraftPlanInputSchema,
   replaceTaskDraftMembersInputSchema,
   replaceTaskMembersInputSchema,
+  updateTaskDraftInputSchema,
 } from "../lib/project-management/validations/task-mutations";
 import { addStructuredProjectManagementIssue } from "../lib/project-management/validations/issues";
 import {
@@ -491,6 +492,7 @@ test("S2 Task mutations expose session-bound Server Actions and anchor loads rec
     "utf8",
   );
   for (const actionName of [
+    "updateTaskDraft",
     "updateTaskDraftMetadata",
     "replaceTaskDraftMembers",
     "replaceTaskDraftPlan",
@@ -730,6 +732,54 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
     replaceTaskDraftPlanInputSchema.safeParse({
       ...draftPlanInput,
       plannedStartAt: "2026-08-01T09:00:00",
+    }).success,
+  ).toBe(false);
+
+  const unifiedDraftInput = {
+    ...draftPlanInput,
+    title: "统一编辑 Task",
+    description: "一次保存元数据、成员与计划",
+    team: "英雄" as const,
+    techGroup: "电控" as const,
+    priority: "HIGH" as const,
+    relatedTaskId: null,
+    tagIds: [randomUUID()],
+    members: [{ personId: randomUUID(), role: "OWNER" as const }],
+  };
+  const duplicateUnifiedPersonId = randomUUID();
+  expect(updateTaskDraftInputSchema.safeParse(unifiedDraftInput).success).toBe(
+    true,
+  );
+  const { members: _members, ...participantDraftInput } = unifiedDraftInput;
+  void _members;
+  expect(
+    updateTaskDraftInputSchema.safeParse(participantDraftInput).success,
+  ).toBe(true);
+  expect(
+    updateTaskDraftInputSchema.safeParse({
+      ...unifiedDraftInput,
+      members: [
+        { personId: duplicateUnifiedPersonId, role: "OWNER" },
+        { personId: duplicateUnifiedPersonId, role: "PARTICIPANT" },
+      ],
+    }).success,
+  ).toBe(false);
+  expect(
+    updateTaskDraftInputSchema.safeParse({
+      ...unifiedDraftInput,
+      tagIds: Array.from({ length: 51 }, () => randomUUID()),
+    }).success,
+  ).toBe(false);
+  expect(
+    updateTaskDraftInputSchema.safeParse({
+      ...unifiedDraftInput,
+      plannedStartAt: "2026-08-01T09:00:00",
+    }).success,
+  ).toBe(false);
+  expect(
+    updateTaskDraftInputSchema.safeParse({
+      ...unifiedDraftInput,
+      unexpected: true,
     }).success,
   ).toBe(false);
   expect(

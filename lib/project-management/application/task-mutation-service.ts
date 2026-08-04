@@ -37,6 +37,7 @@ import {
   replaceTaskDraftPlanInputSchema,
   replaceTaskMembersInputSchema,
   replaceTaskTagsInputSchema,
+  updateTaskDraftInputSchema,
   updateTaskDraftMetadataInputSchema,
   updateTaskMetadataInputSchema,
   type ReplaceTaskDraftMembersInput,
@@ -121,6 +122,172 @@ export type TaskDraftPlanMutationResult = TaskMutationResult & {
     type: TaskNodeType;
   }>;
 };
+
+export type TaskDraftUpdateMutationResult = TaskDraftPlanMutationResult & {
+  tagIds: string[];
+  members: Array<{ personId: string; role: TaskMemberRole }>;
+};
+
+export async function updateTaskDraft(
+  actor: ProjectManagementActor,
+  input: unknown,
+): Promise<TaskDraftUpdateMutationResult> {
+  const parsed = updateTaskDraftInputSchema.parse(input);
+
+  return prisma.$transaction(async (tx) => {
+    const { refreshedActor, task } = await loadLockedTaskTx(
+      tx,
+      actor,
+      parsed.taskId,
+    );
+    assertAuthorizedTaskAction(refreshedActor, task, "task.update_metadata");
+    assertTaskStatus(task, "DRAFT");
+    assertExpectedLockVersion(task, parsed.expectedLockVersion);
+    assertAuthorizedTargetScope(refreshedActor, task, parsed);
+    await assertRelatedTaskVisibleTx(
+      tx,
+      refreshedActor,
+      task.id,
+      parsed.relatedTaskId,
+      task.relatedTaskId,
+    );
+
+    const beforeTagIds = activeTagIds(task);
+    await assertTagReferencesTx(tx, parsed.tagIds, beforeTagIds);
+
+    if (parsed.members) {
+      assertAuthorizedTaskAction(refreshedActor, task, "task.manage_members");
+      assertExistingMemberInvariant(task.members);
+      assertRequestedMemberInvariant(parsed.members);
+      await assertActivePeopleTx(
+        tx,
+        parsed.members.map((member) => member.personId),
+        task.members.map((member) => member.personId),
+      );
+      await assertTaskSegmentMembersIncludedTx(tx, task.id, parsed.members);
+    }
+
+    const plan = await loadInitialDraftPlanTx(
+      tx,
+      task,
+      parsed.planVersionId,
+    );
+    const replacement = await resolveDraftPlanReplacementTx(tx, plan, parsed);
+    const beforePlan = auditPlanState(plan);
+    const beforeMetadata = metadataSnapshot(task);
+    const beforeMembers = memberSnapshot(task.members);
+
+    await tx.task.update({
+      where: { id: task.id },
+      data: {
+        title: parsed.title,
+        description: parsed.description,
+        team: parsed.team,
+        techGroup: parsed.techGroup,
+        priority: parsed.priority,
+        relatedTaskId: parsed.relatedTaskId,
+      },
+    });
+    await replaceTaskTagsTx(tx, task.id, beforeTagIds, parsed.tagIds);
+    if (parsed.members) {
+      await applyMemberChangesTx(tx, {
+        taskId: task.id,
+        actorAccountId: refreshedActor.accountId,
+        currentMembers: task.members,
+        requestedMembers: parsed.members,
+      });
+    }
+
+    await tx.planVersionNode.deleteMany({
+      where: { planVersionId: plan.id },
+    });
+    await deleteOmittedDraftNodesTx(tx, replacement.omittedEntries);
+    await persistReplacementNodesTx(tx, {
+      task,
+      actorAccountId: refreshedActor.accountId,
+      milestones: replacement.milestones,
+      termination: replacement.termination,
+    });
+    await tx.planVersionNode.createMany({
+      data: [
+        ...replacement.milestones.map((milestone, index) => ({
+          planVersionId: plan.id,
+          nodeId: milestone.nodeId,
+          sequence: index + 1,
+          isCarryForward: false,
+        })),
+        {
+          planVersionId: plan.id,
+          nodeId: replacement.termination.nodeId,
+          sequence: replacement.milestones.length + 1,
+          isCarryForward: false,
+        },
+      ],
+    });
+    await tx.taskPlanVersion.update({
+      where: { id: plan.id },
+      data: { plannedStartAt: parsed.plannedStartAt },
+    });
+
+    const authoritativePlan = await loadPlanForMutationTx(tx, plan.id);
+    assertAuthoritativePlanValid(authoritativePlan);
+    const snapshotHash = hashPlan(authoritativePlan);
+    await tx.taskPlanVersion.update({
+      where: { id: plan.id },
+      data: { snapshotHash },
+    });
+    const updatedTask = await incrementTaskLockTx(
+      tx,
+      task,
+      parsed.expectedLockVersion,
+    );
+    const afterTagIds = sortedUnique(parsed.tagIds);
+    const afterMembers = memberSnapshot(parsed.members ?? task.members);
+    const afterPlan = auditPlanState({
+      ...authoritativePlan,
+      snapshotHash,
+    });
+    await createDomainAuditEventTx(tx, {
+      actorAccountId: refreshedActor.accountId,
+      actorPersonId: refreshedActor.personId,
+      action: "pm.task.draft.update",
+      entityType: "Task",
+      entityId: task.id,
+      taskId: task.id,
+      before: jsonValue({
+        metadata: beforeMetadata,
+        tagIds: beforeTagIds,
+        members: beforeMembers,
+        plan: beforePlan,
+        lockVersion: task.lockVersion,
+      }),
+      after: jsonValue({
+        metadata: metadataSnapshot(updatedTask),
+        tagIds: afterTagIds,
+        members: afterMembers,
+        plan: afterPlan,
+        planChanges: summarizePlanChanges(plan, authoritativePlan),
+        lockVersion: updatedTask.lockVersion,
+      }),
+      reason: "统一更新 Task 草稿",
+    });
+
+    return {
+      ...serializeTaskMutation(updatedTask),
+      tagIds: afterTagIds,
+      members: afterMembers,
+      planVersionId: plan.id,
+      plannedStartAt: parsed.plannedStartAt.toISOString(),
+      snapshotHash,
+      nodeMappings: replacement.nodeMappings,
+      nodes: authoritativePlan.nodes.map((entry) => ({
+        nodeId: entry.nodeId,
+        sequence: entry.sequence,
+        type: entry.node.type,
+      })),
+    };
+  });
+}
 
 export async function updateTaskDraftMetadata(
   actor: ProjectManagementActor,

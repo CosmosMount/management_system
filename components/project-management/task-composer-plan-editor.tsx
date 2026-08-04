@@ -48,6 +48,9 @@ export function TaskComposerPlanEditor({
   notice,
   optionLoading,
   submitting,
+  submitDisabled,
+  submitLabel,
+  submittingLabel,
   onSelect,
   onBeginMilestone,
   onConstrainAnchorMove,
@@ -66,6 +69,9 @@ export function TaskComposerPlanEditor({
   notice: { message: string; error: boolean } | null;
   optionLoading: boolean;
   submitting: boolean;
+  submitDisabled?: boolean;
+  submitLabel: string;
+  submittingLabel: string;
   onSelect: (entityId: string) => void;
   onBeginMilestone: (at: string, source?: TaskComposerMilestone) => void;
   onConstrainAnchorMove: (
@@ -328,8 +334,13 @@ export function TaskComposerPlanEditor({
           <Plus aria-hidden="true" />
           Milestone
         </Button>
-        <Button type="button" className="flex-1" disabled={submitting} onClick={onSubmit}>
-          {submitting ? "正在创建…" : "创建草稿"}
+        <Button
+          type="button"
+          className="flex-1"
+          disabled={submitting || submitDisabled}
+          onClick={onSubmit}
+        >
+          {submitting ? submittingLabel : submitLabel}
         </Button>
       </div>
     </>

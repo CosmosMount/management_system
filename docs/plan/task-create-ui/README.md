@@ -1,4 +1,4 @@
-# Task 创建界面最终设计
+# Task Composer 创建与 DRAFT 编辑界面最终设计
 
 状态：已确认，作为实现与验收依据
 
@@ -19,9 +19,9 @@
 
 ## 2. 目标与边界
 
-本次重构把 Task 计划的时间线、节点列表和节点编辑统一到一套数据与交互模型中，降低创建、调整、复制和校验节点的操作成本。
+本次重构把 Task 计划的时间线、节点列表和节点编辑统一到一套数据与交互模型中，并由 `CREATE` 和 `EDIT_DRAFT` 两种模式共用同一 Composer，降低创建、调整、复制和校验节点的操作成本。
 
-- 仅重新设计桌面端 `/progress/tasks/new`。Pixel 5 继续使用现有纵向表单/节点编辑布局，不渲染桌面三栏画布。
+- `/progress/tasks/new` 用于创建；`/progress/tasks/[id]/edit` 只用于编辑尚未激活的 DRAFT Task。两者在桌面端共用三栏 Composer，在 Pixel 5 共用纵向表单/节点编辑布局且不渲染桌面三栏画布。
 - 创建页不查询或展示成员 Planned、Actual、Busy 数据；只复用统一 `TimeCanvas` 的时间坐标、缩放、平移、适配范围、吸附和选择习惯。
 - 不增加节点级负责人。成员仍是 Task 级 `OWNER`/`PARTICIPANT`，同一人员只能有一个有效角色。
 - Task 允许 `0–200` 个 Milestone；合法计划可以只有 Start 和 Terminal。
@@ -29,7 +29,7 @@
 - Milestone 不新增名称字段；必填 `goal` 同时用于 Inspector 标题、节点表名称、画布标签和阶段名称。
 - 所有新建、Draft 保存、Revision 目标和模板副本提交都必须满足严格时间顺序：`Start < Milestone 1 < … < Milestone n < Terminal`。
 
-现有 URL 预填能力必须保留：`start` 预填计划开始时间，`templateTaskId` 复制模板计划，`relatedTaskId` 预选关联 Task。现有本地草稿、撤销/重做、离开保护、请求幂等、失败保留和成功跳转工作台能力也不得回退。
+现有 URL 预填能力必须保留：`start` 预填计划开始时间，`templateTaskId` 复制模板计划，`relatedTaskId` 预选关联 Task。现有本地草稿、撤销/重做、离开保护、请求幂等、失败保留和成功跳转工作台能力也不得回退。DRAFT 工作台不再内联编辑元数据、成员或计划；“概览”和“计划与资源”只读，统一从右上角“编辑 Task”进入 Composer。ACTIVE 编辑和 Revision 全部保持原状。
 
 ## 3. 页面结构
 
@@ -37,13 +37,13 @@
 
 顶部保留以下操作和状态：
 
-- 返回 Task 列表；
+- 创建模式返回 Task 列表；编辑模式返回 Task 工作台；
 - 本地草稿保存状态和最后保存时间；
 - 撤销、重做；
 - 当前校验问题数量及定位入口；
-- 主操作“创建 Task 草稿”。
+- 创建模式主操作“创建 Task 草稿”，编辑模式主操作“保存 Task”。
 
-创建请求进行中时主操作不可重复触发。服务端失败时保留 Composer 实时节点状态、临时节点和幂等键，展示可理解的中文错误；成功时清除对应本地草稿并跳转新 Task 工作台。
+请求进行中时主操作不可重复触发；编辑模式无业务内容变化时主操作禁用，单纯切换所选节点不算修改。服务端失败时保留 Composer 实时节点状态和临时节点；创建模式同时保留幂等键。成功时清除对应本地草稿并跳转 Task 工作台。
 
 ### 3.2 桌面三栏
 
@@ -89,6 +89,12 @@ v1/v2 草稿按原值安全迁移：缺少 Terminal 名称时补为 `Terminal`�
 实时节点状态参与自动保存；刷新或意外关闭后，临时节点仍同时恢复到 Inspector、画布和节点表。旧 v3 中尚未保存的 Inspector 工作副本在恢复时转换为实时节点：新增副本成为临时 Milestone，既有节点副本合并为当前输入，不静默丢失。
 
 v3 使用分级浏览器存储：普通草稿继续直接写入按环境和账号隔离的 `localStorage`；接近合法 200 节点长文本边界的大草稿写入 IndexedDB，`localStorage` 只保留同一作用域的小型版本指针。恢复时校验指针与正文的草稿身份、保存时间和序列化长度；同账号多标签页通过浏览器存储锁串行执行读取、正文写入、指针更新和删除。离开前先取消尚未触发的防抖写入，“保存本地草稿并离开”必须等待异步写入完成；“放弃并离开”必须等待已入队写入结束后再清理。创建成功、放弃草稿或安全清理时同时删除 `localStorage` 和对应 IndexedDB 记录，任何写入失败都停留在 Composer 并提示用户不要刷新。
+
+### 4.4 DRAFT 编辑初始值与本地草稿
+
+编辑 Seed 必须来自权威 Workspace：完整回填元数据、当前 Tag、关联 Task、成员、Start、Milestone 和 Terminal；既有 Milestone/Terminal 保留 `nodeId` 并初始化为 `ESTABLISHED`，新 Milestone 使用 Composer 临时 ID，提交时作为稳定 `clientKey`。当前成员即使停用也继续展示并可保留；只有 `canManageMembers` 可以搜索、添加、移除或改变角色。Participant 的成员区只读，恢复草稿时也以服务端成员覆盖本地成员。若迁移后异常残留 `LEAD/MEMBER/REVIEWER/VIEWER` 历史角色，则逐行只读展示并保留、整个成员区停止修改，非成员内容仍可保存；恢复时同样丢弃本地成员差异。当前已归档 Tag 可展示和移除，但搜索只能新增未归档 Tag；关联 Task 排除自身并保留当前选项回显。
+
+编辑草稿使用 `task-edit-draft:{environment}:{accountId}:{taskId}:v1`，正文除 Composer 完整状态外还绑定 `taskId`、`planVersionId` 和基础 `lockVersion`。只有环境、账号、Task、计划版本和锁版本完全匹配时可恢复；服务端版本变化时不恢复、不覆盖、不做隐式字段合并，只提供原始草稿导出和“放弃并加载最新版本”。保存收到 `STALE_TASK` 时停留当前页并保留本地输入。服务端保存成功后，即使浏览器存储清理失败，也按成功结果返回工作台，不能诱导用户重复提交。
 
 ## 5. 统一时间画布
 
@@ -186,6 +192,8 @@ Inspector 直接编辑 Composer 实时状态，不显示“保存”“取消”
 - 权威计划校验同时验证唯一末尾 Terminal、连续 sequence、有效时间和严格递增；相等时间与逆序时间都拒绝。
 - 客户端校验仅用于及时反馈，不能替代 Server Action/领域服务的同等约束。
 - 创建仍在单一事务中写 Task、Current Plan、节点、成员、Tag、审计、站内通知和 `channel=project-management` outbox，并保留现有幂等键冲突检查。
+- DRAFT 统一编辑通过 `updateTaskDraft` 在单一事务锁定 Task 和节点关联，重新加载权限并校验 DRAFT、初始未激活 v1 Current Plan、`planVersionId`、`lockVersion`、目标组织范围、关联可见性、Tag、可选成员、Segment 引用和完整计划；随后整体更新元数据、Tag、可选成员与计划、重算 `snapshotHash`、只递增一次锁并写一条 `pm.task.draft.update` 审计。Participant 必须省略 `members`，伪造成员字段拒绝；该事务不创建站内通知或 outbox。既有三个 DRAFT mutation 只为兼容保留，统一编辑页不调用它们。
+- 编辑 URL 在服务端对无 Task 查看权或无 `task.update_metadata` 权限返回脱敏 404，对非 DRAFT 重定向工作台；Server Action 再次执行权限、状态和锁校验，页面防护不能替代服务端授权。
 
 ### 8.3 零 Milestone 生命周期
 
@@ -246,7 +254,7 @@ Inspector 直接编辑 Composer 实时状态，不显示“保存”“取消”
 ### 11.3 移动与回归
 
 - Pixel 5 不渲染桌面三栏画布，但能完成零 Milestone 创建、Terminal 命名和严格时间错误修正。
-- URL 预填、模板复制、Task 级成员权限、本地草稿隔离、幂等创建、失败保留和成功跳转均不回退。
+- URL 预填、模板复制、Task 级成员权限、本地草稿隔离、幂等创建、失败保留和成功跳转均不回退；DRAFT 编辑在 Desktop/Pixel 5 都能一次保存全部区域，Participant 成员只读，过期本地草稿不能覆盖服务端新版本。
 - Task Composer 与 Task Workbench 的 PLAN 行统一使用水平节点连接布局；Resource Planner、Personal Timeline 的人员/Task 行以及 Planned、Actual、Busy 行为不受影响。
 
 完成实现前必须执行 `npm run check`、`npm run test:e2e`、`npm run build`，并在隔离 PostgreSQL 通过受控 `npm run db:deploy` 验证完整迁移链。

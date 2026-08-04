@@ -31,6 +31,7 @@ import {
   replaceTaskDraftPlan,
   replaceTaskMembers,
   replaceTaskTags,
+  updateTaskDraft,
   updateTaskDraftMetadata,
   updateTaskMetadata,
 } from "../lib/project-management/application/task-mutation-service";
@@ -637,6 +638,233 @@ test.describe("project management S2 plan and Task mutation services", () => {
     );
   });
 
+  test("unified Draft update is atomic, permission-aware and increments the Task lock once", async () => {
+    const admin = await createAccountPerson("S2 Unified Draft Admin");
+    const owner = await createAccountPerson("S2 Unified Draft Owner");
+    const participant = await createAccountPerson("S2 Unified Draft Participant");
+    const addedMember = await createAccountPerson("S2 Unified Draft Added Member");
+    await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
+    const tag = await createTag(admin.account.id, "Unified Draft Tag");
+    const fixture = await createDraft({
+      creator: admin,
+      owner,
+      reviewer: participant,
+    });
+    const planInput = await draftPlanReplaceInput(fixture, 0);
+    const beforeSnapshot = await mutationSideEffectCounts(fixture.taskId);
+
+    const updated = await updateTaskDraft(actor(owner), {
+      ...planInput,
+      title: "统一保存后的 Draft Task",
+      description: "元数据、成员与计划处于同一事务",
+      team: "工程",
+      techGroup: "机械",
+      priority: "CRITICAL",
+      relatedTaskId: null,
+      tagIds: [tag.id],
+      members: [
+        { personId: owner.person.id, role: "OWNER" },
+        { personId: participant.person.id, role: "PARTICIPANT" },
+        { personId: addedMember.person.id, role: "PARTICIPANT" },
+      ],
+      milestones: [
+        ...planInput.milestones.map((milestone, index) => ({
+          ...milestone,
+          goal: index === 0 ? "统一更新既有节点" : milestone.goal,
+        })),
+        {
+          clientKey: "unified-draft-new-node",
+          goal: "统一新增节点",
+          completionCriteria: "同一事务创建稳定节点",
+          expectedCompletedAt: iso(2026, 8, 6),
+          reviewRequirements: "检查节点映射",
+          businessDescription: "统一编辑页新增",
+        },
+      ],
+    });
+
+    expect(updated).toMatchObject({
+      taskId: fixture.taskId,
+      lockVersion: 1,
+      tagIds: [tag.id],
+    });
+    expect(updated.nodeMappings).toEqual([
+      expect.objectContaining({ clientKey: "unified-draft-new-node" }),
+    ]);
+    expect(updated.members).toEqual(
+      expect.arrayContaining([
+        { personId: addedMember.person.id, role: "PARTICIPANT" },
+      ]),
+    );
+    const persisted = await mutationSideEffectCounts(fixture.taskId);
+    expect(persisted).toMatchObject({
+      lockVersion: 1,
+      taskMetadata: {
+        title: "统一保存后的 Draft Task",
+        team: "工程",
+        techGroup: "机械",
+        priority: "CRITICAL",
+      },
+      taskTagIds: [tag.id],
+    });
+    expect(
+      persisted.memberRows.some(
+        (member) =>
+          member.personId === addedMember.person.id &&
+          member.role === "PARTICIPANT" &&
+          member.removedAt === null,
+      ),
+    ).toBe(true);
+    const existingFirstNodeId =
+      "nodeId" in planInput.milestones[0]!
+        ? planInput.milestones[0]!.nodeId
+        : null;
+    const mappedNodeId = updated.nodeMappings[0]?.nodeId;
+    expect(existingFirstNodeId).toBeTruthy();
+    expect(mappedNodeId).toMatch(UUID_PATTERN);
+    expect(persisted.nodeContent).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          nodeId: existingFirstNodeId,
+          milestone: expect.objectContaining({ goal: "统一更新既有节点" }),
+        }),
+        expect.objectContaining({
+          nodeId: mappedNodeId,
+          milestone: expect.objectContaining({ goal: "统一新增节点" }),
+        }),
+      ]),
+    );
+    expect(persisted.snapshotHash).toBe(updated.snapshotHash);
+    expect(persisted.notificationRows).toEqual(beforeSnapshot.notificationRows);
+    expect(persisted.outboxRows).toEqual(beforeSnapshot.outboxRows);
+    const audit = await prisma.domainAuditEvent.findFirstOrThrow({
+      where: { taskId: fixture.taskId, action: "pm.task.draft.update" },
+    });
+    expect(jsonRecord(audit.before)).toMatchObject({
+      metadata: expect.objectContaining({
+        title: beforeSnapshot.taskMetadata.title,
+      }),
+      tagIds: beforeSnapshot.taskTagIds,
+      members: expect.any(Array),
+      plan: expect.objectContaining({
+        snapshotHash: beforeSnapshot.snapshotHash,
+      }),
+      lockVersion: 0,
+    });
+    expect(jsonRecord(audit.after)).toMatchObject({
+      metadata: expect.objectContaining({
+        title: "统一保存后的 Draft Task",
+      }),
+      lockVersion: 1,
+      tagIds: [tag.id],
+      members: expect.arrayContaining([
+        { personId: addedMember.person.id, role: "PARTICIPANT" },
+      ]),
+      plan: expect.objectContaining({ snapshotHash: updated.snapshotHash }),
+      planChanges: {
+        added: { totalCount: 1 },
+        removed: { totalCount: 0 },
+        fieldChanges: expect.objectContaining({ nodeCount: 1 }),
+      },
+    });
+
+    const beforeForbidden = await mutationSideEffectCounts(fixture.taskId);
+    const participantPlanInput = await draftPlanReplaceInput(fixture, 1);
+    await expectServiceError(
+      updateTaskDraft(actor(participant), {
+        ...participantPlanInput,
+        title: "参与人伪造成员编辑",
+        description: "必须被拒绝",
+        team: "工程",
+        techGroup: "机械",
+        priority: "HIGH",
+        relatedTaskId: null,
+        tagIds: [tag.id],
+        members: fixtureMembers(fixture),
+      }),
+      "FORBIDDEN",
+    );
+    expect(await mutationSideEffectCounts(fixture.taskId)).toEqual(
+      beforeForbidden,
+    );
+
+    const participantUpdated = await updateTaskDraft(actor(participant), {
+      ...participantPlanInput,
+      title: "参与人统一更新 Draft",
+      description: "成员未随请求提交",
+      team: "工程",
+      techGroup: "机械",
+      priority: "HIGH",
+      relatedTaskId: null,
+      tagIds: [tag.id],
+      milestones: participantPlanInput.milestones.map((milestone, index) => ({
+        ...milestone,
+        goal: index === 0 ? "参与人更新计划" : milestone.goal,
+      })),
+    });
+    expect(participantUpdated.lockVersion).toBe(2);
+    expect(participantUpdated.members).toEqual(updated.members);
+    expect((await currentTask(fixture.taskId)).lockVersion).toBe(2);
+
+    const constrainedPlan = await currentPlan(fixture.taskId);
+    const referencedNodeId = constrainedPlan.nodes.find(
+      (entry) => entry.node.milestone,
+    )?.nodeId;
+    if (!referencedNodeId) throw new Error("缺少统一 mutation Segment 节点");
+    await createSegmentReference({
+      taskId: fixture.taskId,
+      nodeId: referencedNodeId,
+      personId: addedMember.person.id,
+      accountId: owner.account.id,
+      type: "PLANNED",
+      status: "PLANNED",
+    });
+    const constrainedInput = await draftPlanReplaceInput(fixture, 2);
+    const unifiedConstrainedInput = {
+      ...constrainedInput,
+      title: "约束失败不得写入元数据",
+      description: "统一事务完整回滚",
+      team: "英雄" as const,
+      techGroup: "电控" as const,
+      priority: "LOW" as const,
+      relatedTaskId: null,
+      tagIds: [],
+      members: updated.members,
+    };
+
+    for (const [input, code] of [
+      [
+        { ...unifiedConstrainedInput, planVersionId: randomUUID() },
+        "STATE_CONFLICT",
+      ],
+      [
+        {
+          ...unifiedConstrainedInput,
+          members: updated.members.filter(
+            (member) => member.personId !== addedMember.person.id,
+          ),
+        },
+        "VALIDATION_ERROR",
+      ],
+      [
+        {
+          ...unifiedConstrainedInput,
+          milestones: constrainedInput.milestones.filter(
+            (milestone) =>
+              !("nodeId" in milestone && milestone.nodeId === referencedNodeId),
+          ),
+        },
+        "ASSOCIATION_INVALID",
+      ],
+    ] as const) {
+      const beforeRejected = await mutationSideEffectCounts(fixture.taskId);
+      await expectServiceError(updateTaskDraft(actor(owner), input), code);
+      expect(await mutationSideEffectCounts(fixture.taskId)).toEqual(
+        beforeRejected,
+      );
+    }
+  });
+
   test("Draft plan replace audit stays bounded and excludes 200-node plan prose", async () => {
     const admin = await createAccountPerson("S2 Bounded Audit Admin");
     const owner = await createAccountPerson("S2 Bounded Audit Owner");
@@ -740,7 +968,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
     ]);
   });
 
-  test("all six mutation actions enforce visible authorization, lifecycle and stale matrices with zero rejected effects", async () => {
+  test("all seven mutation actions enforce visible authorization, lifecycle and stale matrices with zero rejected effects", async () => {
     const admin = await createAccountPerson("S2 Matrix Admin");
     const owner = await createAccountPerson("S2 Matrix Owner");
     const reviewer = await createAccountPerson("S2 Matrix Reviewer");
@@ -844,7 +1072,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
     }
   });
 
-  test("all six mutation actions serialize the same lock version exactly once", async () => {
+  test("all seven mutation actions serialize the same lock version exactly once", async () => {
     const admin = await createAccountPerson("S2 Exactly Once Admin");
     const owner = await createAccountPerson("S2 Exactly Once Owner");
     const reviewer = await createAccountPerson("S2 Exactly Once Reviewer");
@@ -954,7 +1182,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
     }
   });
 
-  test("all six mutation actions roll back business, audit, lock and notifications on a controlled late failure", async () => {
+  test("all seven mutation actions roll back business, audit, lock and notifications on a controlled late failure", async () => {
     const admin = await createAccountPerson("S2 Late Failure Admin");
     const owner = await createAccountPerson("S2 Late Failure Owner");
     const reviewer = await createAccountPerson("S2 Late Failure Reviewer");
@@ -2140,6 +2368,11 @@ const UUID_PATTERN =
 
 const MUTATION_ACTION_CASES = [
   {
+    name: "updateTaskDraft",
+    requiredStatus: "DRAFT",
+    auditAction: "pm.task.draft.update",
+  },
+  {
     name: "updateTaskDraftMetadata",
     requiredStatus: "DRAFT",
     auditAction: "pm.task.draft_metadata.update",
@@ -2185,6 +2418,23 @@ async function invokeMutationAction(
     members?: Array<{ personId: string; role: TaskMemberRole }>;
   } = {},
 ) {
+  if (name === "updateTaskDraft") {
+    const planInput = await draftPlanReplaceInput(fixture, expectedLockVersion);
+    const firstMilestone = planInput.milestones[0];
+    if (!firstMilestone) throw new Error("缺少统一 Draft mutation Milestone");
+    firstMilestone.goal = `${firstMilestone.goal}（统一 mutation）`;
+    return updateTaskDraft(inputActor, {
+      ...planInput,
+      title: `S2 mutation ${name}`,
+      description: "unified mutation matrix",
+      team: "英雄",
+      techGroup: "电控",
+      priority: "HIGH",
+      relatedTaskId: null,
+      tagIds: [],
+      members: options.members ?? fixtureMembers(fixture),
+    });
+  }
   if (name === "updateTaskDraftMetadata") {
     return updateTaskDraftMetadata(inputActor, {
       taskId: fixture.taskId,
@@ -2788,6 +3038,12 @@ function expectMutationBusinessEffect(
   before: MutationSideEffectSnapshot,
   after: MutationSideEffectSnapshot,
 ) {
+  if (name === "updateTaskDraft") {
+    expect(after.taskMetadata).not.toEqual(before.taskMetadata);
+    expect(after.nodeContent).not.toEqual(before.nodeContent);
+    expect(after.taskTagIds).not.toEqual(before.taskTagIds);
+    return;
+  }
   if (name === "updateTaskDraftMetadata" || name === "updateTaskMetadata") {
     expect(after.taskMetadata).not.toEqual(before.taskMetadata);
     return;
