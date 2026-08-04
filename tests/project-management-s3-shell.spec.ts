@@ -226,6 +226,7 @@ async function createShellFixture() {
         },
       ],
       termination: {
+        name: "Terminal",
         plannedOutcomeCriteria: "Shell 验证完成",
         plannedAt: new Date(
           "2026-08-03T00:00:00.000+08:00",

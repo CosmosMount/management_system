@@ -1818,6 +1818,7 @@ function milestoneInput(goal: string, criteria: string, daysFromBase: number) {
 
 function terminationInput(daysFromBase: number) {
   return {
+    name: "Terminal",
     plannedOutcomeCriteria: "所有 Milestone 完成并完成总结",
     plannedAt: new Date(
       Date.UTC(2026, 7, daysFromBase, 10, 0, 0),

@@ -22,6 +22,7 @@ import {
   comparePlanVersions,
   getPlanVersion,
   getTaskWorkspace,
+  listTasks,
   listTaskPlanVersions,
 } from "../lib/project-management/queries/task-queries";
 import { getActorPersonOption } from "../lib/project-management/queries/option-queries";
@@ -106,6 +107,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     expect(isoMilestoneDate.success).toBe(true);
 
     const nullTerminationDate = terminationDraftSchema.safeParse({
+      name: "Terminal",
       plannedOutcomeCriteria: "结束条件",
       plannedAt: null,
     });
@@ -437,6 +439,143 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     ]);
     expect(attempts.filter((entry) => entry.status === "fulfilled")).toHaveLength(1);
     expect(attempts.filter((entry) => entry.status === "rejected")).toHaveLength(1);
+  });
+
+  test("Task can activate directly into a named Terminal without Milestones", async () => {
+    const fixture = await createDraftFixture(0, "最终验收");
+    const terminalBeforeActivation = await prisma.terminationNode.findFirstOrThrow({
+      where: { node: { taskId: fixture.taskId } },
+      select: { nodeId: true, name: true, plannedAt: true },
+    });
+    expect(terminalBeforeActivation.name).toBe("最终验收");
+
+    const activated = await activateTask(actor(fixture.owner), {
+      taskId: fixture.taskId,
+      expectedLockVersion: 0,
+    });
+    expect(activated).toMatchObject({
+      status: "ACTIVE",
+      lockVersion: 1,
+      activeMilestoneNodeId: null,
+    });
+    await expect(
+      prisma.taskNode.findUniqueOrThrow({
+        where: { id: terminalBeforeActivation.nodeId },
+        select: { status: true },
+      }),
+    ).resolves.toEqual({ status: "ACTIVE" });
+
+    const workspace = await getTaskWorkspace({
+      actor: actor(fixture.owner),
+      taskId: fixture.taskId,
+    });
+    expect(workspace.currentPlan.nodes).toHaveLength(1);
+    expect(workspace.currentPlan.nodes[0]?.termination).toMatchObject({
+      name: "最终验收",
+      plannedAt: terminalBeforeActivation.plannedAt.toISOString(),
+    });
+    const taskList = await listTasks({
+      actor: actor(fixture.owner),
+      input: { status: "ACTIVE", mine: true },
+    });
+    expect(
+      taskList.items.find((task) => task.id === fixture.taskId)?.activeTermination,
+    ).toEqual({
+      nodeId: terminalBeforeActivation.nodeId,
+      name: "最终验收",
+      plannedAt: terminalBeforeActivation.plannedAt.toISOString(),
+    });
+    const activationOutbox = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: {
+        eventKey: `pm:task:activated:${fixture.taskId}:1:feishu`,
+      },
+    });
+    expect(
+      String(jsonRecord(JSON.parse(activationOutbox.payload)).summary),
+    ).toContain("最终验收");
+
+    const terminated = await confirmTermination(actor(fixture.owner), {
+      taskId: fixture.taskId,
+      terminationNodeId: terminalBeforeActivation.nodeId,
+      outcome: "SUCCESS",
+      reason: "",
+      summary: "零 Milestone Task 已完成",
+      expectedLockVersion: 1,
+    });
+    expect(terminated).toMatchObject({
+      status: "COMPLETED",
+      activeMilestoneNodeId: null,
+      outcome: "SUCCESS",
+    });
+    const terminationOutbox = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: {
+        eventKey: `pm:task:terminated:${terminalBeforeActivation.nodeId}:feishu`,
+      },
+    });
+    expect(
+      String(jsonRecord(JSON.parse(terminationOutbox.payload)).summary),
+    ).toContain("最终验收");
+  });
+
+  test("legacy Active Current Plans over 200 Milestones remain terminable", async () => {
+    const fixture = await createActivatedFixture(200);
+    const currentNodes = await currentPlanNodes(fixture.taskId);
+    const terminationEntry = currentNodes.find(
+      (entry) => entry.node.type === "TERMINATION",
+    );
+    if (!terminationEntry) throw new Error("测试计划缺少 Terminal");
+    const legacyMilestoneNodeId = randomUUID();
+
+    await prisma.$transaction(async (tx) => {
+      await tx.planVersionNode.update({
+        where: { id: terminationEntry.id },
+        data: { sequence: 202 },
+      });
+      await tx.taskNode.create({
+        data: {
+          id: legacyMilestoneNodeId,
+          taskId: fixture.taskId,
+          type: "MILESTONE",
+          status: "PENDING",
+          businessDescription: "模拟旧版 Revision 合并产生的第 201 个节点",
+          createdByAccountId: fixture.admin.account.id,
+          milestone: {
+            create: {
+              goal: "历史节点 201",
+              completionCriteria: "历史兼容",
+              expectedCompletedAt: new Date(Date.UTC(2026, 7, 201, 10, 0, 0)),
+              reviewRequirements: "不阻断历史计划结束",
+            },
+          },
+        },
+      });
+      await tx.planVersionNode.create({
+        data: {
+          planVersionId: fixture.currentPlanVersionId,
+          nodeId: legacyMilestoneNodeId,
+          sequence: 201,
+        },
+      });
+    });
+
+    const terminated = await confirmTermination(actor(fixture.owner), {
+      taskId: fixture.taskId,
+      terminationNodeId: terminationEntry.nodeId,
+      outcome: "CANCELLED",
+      reason: "验证历史超限计划兼容",
+      summary: "历史计划仍可正常结束",
+      expectedLockVersion: 1,
+    });
+    expect(terminated).toMatchObject({
+      status: "CANCELLED",
+      outcome: "CANCELLED",
+    });
+    await expect(
+      prisma.taskNode.findUniqueOrThrow({
+        where: { id: legacyMilestoneNodeId },
+        select: { status: true },
+      }),
+    ).resolves.toEqual({ status: "CANCELLED" });
   });
 
   test("Task activation honors ordinary Feishu preference while retaining in-app notification", async () => {
@@ -812,7 +951,10 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     await expectServiceError(
       updateRevisionDraft(actor(fixture.owner), {
         ...validUpdate,
-        replacementMilestones: [],
+        termination: {
+          ...validUpdate.termination,
+          plannedAt: validUpdate.plannedStartAt,
+        },
       }),
       "PLAN_CHRONOLOGY_INVALID",
     );
@@ -952,6 +1094,73 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         },
       }),
     ).resolves.toBe(1);
+  });
+
+  test("Revision enforces the 200 Milestone limit after carried nodes are merged", async () => {
+    const fixture = await createActivatedFixture(200);
+    const currentNodes = await currentPlanNodes(fixture.taskId);
+    const lastMilestone = currentNodes.filter(
+      (entry) => entry.node.type === "MILESTONE",
+    ).at(-1);
+    if (!lastMilestone) throw new Error("测试计划缺少最后一个 Milestone");
+    const revisionCountBefore = await prisma.revisionNode.count({
+      where: { node: { taskId: fixture.taskId } },
+    });
+    const baseInput = {
+      taskId: fixture.taskId,
+      basePlanVersionId: fixture.currentPlanVersionId,
+      baseTaskLockVersion: 1,
+      revisedFromNodeId: lastMilestone.nodeId,
+      reason: "验证合并后的 Milestone 上限",
+      plannedStartAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
+      termination: terminationInput(203),
+    };
+
+    await expectServiceError(
+      createRevisionDraft(actor(fixture.owner), {
+        ...baseInput,
+        replacementMilestones: [
+          milestoneInput("候选节点 200", "候选条件 200", 200),
+          milestoneInput("候选节点 201", "候选条件 201", 201),
+        ],
+        idempotencyKey: `revision-over-limit-${randomUUID()}`,
+      }),
+      "PLAN_CHRONOLOGY_INVALID",
+    );
+    expect(
+      await prisma.revisionNode.count({
+        where: { node: { taskId: fixture.taskId } },
+      }),
+    ).toBe(revisionCountBefore);
+
+    const validRevision = await createRevisionDraft(actor(fixture.owner), {
+      ...baseInput,
+      replacementMilestones: [
+        milestoneInput("候选节点 200", "候选条件 200", 200),
+      ],
+      idempotencyKey: `revision-at-limit-${randomUUID()}`,
+    });
+    const targetPlanVersionId = validRevision.targetPlanVersionId ?? "";
+    const targetBefore = await revisionTargetSnapshot(targetPlanVersionId);
+    expect(
+      targetBefore.nodes.filter((entry) => entry.node.type === "MILESTONE"),
+    ).toHaveLength(200);
+
+    await expectServiceError(
+      updateRevisionDraft(actor(fixture.owner), {
+        revisionNodeId: validRevision.revisionNodeId,
+        expectedTargetPlanUpdatedAt: targetBefore.updatedAt.toISOString(),
+        reason: "更新后超过 Milestone 上限",
+        plannedStartAt: baseInput.plannedStartAt,
+        replacementMilestones: [
+          milestoneInput("候选节点 200", "候选条件 200", 200),
+          milestoneInput("候选节点 201", "候选条件 201", 201),
+        ],
+        termination: baseInput.termination,
+      }),
+      "PLAN_CHRONOLOGY_INVALID",
+    );
+    expect(await revisionTargetSnapshot(targetPlanVersionId)).toEqual(targetBefore);
   });
 
   test("Revision approval atomically switches Current Plan and invalidates planned segments", async () => {
@@ -1572,7 +1781,10 @@ async function createActivatedFixture(milestoneCount = 2) {
   return { ...fixture, lockVersion: activated.lockVersion };
 }
 
-async function createDraftFixture(milestoneCount = 2) {
+async function createDraftFixture(
+  milestoneCount = 2,
+  terminationName = "Terminal",
+) {
   const admin = await createAccountPerson("生命周期 Admin");
   const owner = await createAccountPerson("生命周期 Owner");
   const member = await createAccountPerson("生命周期 Member");
@@ -1585,6 +1797,7 @@ async function createDraftFixture(milestoneCount = 2) {
     reviewerPersonId: reviewer.person.id,
     idempotencyKey: `task-${randomUUID()}`,
     milestoneCount,
+    terminationName,
   });
   const created = await createTaskDraft(actor(admin), input);
   return {
@@ -1604,6 +1817,7 @@ function taskDraftInput({
   idempotencyKey,
   tagIds = [],
   milestoneCount = 2,
+  terminationName = "Terminal",
 }: {
   ownerPersonId: string;
   memberPersonId: string;
@@ -1611,6 +1825,7 @@ function taskDraftInput({
   idempotencyKey: string;
   tagIds?: string[];
   milestoneCount?: number;
+  terminationName?: string;
 }) {
   return {
     title: `生命周期 Task ${randomUUID()}`,
@@ -1632,7 +1847,7 @@ function taskDraftInput({
       ),
     ),
     plannedStartAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
-    termination: terminationInput(milestoneCount + 3),
+    termination: terminationInput(milestoneCount + 3, terminationName),
     idempotencyKey,
   };
 }
@@ -1649,8 +1864,9 @@ function milestoneInput(goal: string, criteria: string, daysFromBase: number) {
   };
 }
 
-function terminationInput(daysFromBase: number) {
+function terminationInput(daysFromBase: number, name = "Terminal") {
   return {
+    name,
     plannedOutcomeCriteria: "所有 Milestone 完成并完成总结",
     plannedAt: new Date(
       Date.UTC(2026, 7, daysFromBase, 10, 0, 0),

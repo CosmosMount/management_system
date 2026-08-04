@@ -72,12 +72,12 @@ export default async function ProgressPage() {
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[34rem] text-left text-sm">
-                  <thead className="text-muted-foreground"><tr><th className="pb-2 font-medium">Task</th><th className="pb-2 font-medium">当前 Milestone</th><th className="pb-2 font-medium">版本</th></tr></thead>
+                  <thead className="text-muted-foreground"><tr><th className="pb-2 font-medium">Task</th><th className="pb-2 font-medium">当前节点</th><th className="pb-2 font-medium">版本</th></tr></thead>
                   <tbody>
                     {dashboard.activeTasks.map((task) => (
                       <tr key={task.id} className="border-t border-border">
                         <td className="max-w-64 py-3 pr-3"><Link href={routes.progress.taskDetail(task.id)} className="break-words font-medium hover:underline">{task.title}</Link></td>
-                        <td className="py-3 pr-3 text-muted-foreground">{task.activeMilestone ? `${task.activeMilestone.goal} · ${formatDateTime(task.activeMilestone.expectedCompletedAt)}` : "暂无"}</td>
+                        <td className="py-3 pr-3 text-muted-foreground">{task.activeMilestone ? `${task.activeMilestone.goal} · ${formatDateTime(task.activeMilestone.expectedCompletedAt)}` : task.activeTermination ? `${task.activeTermination.name} · ${formatDateTime(task.activeTermination.plannedAt)}` : "暂无"}</td>
                         <td className="py-3"><Badge variant="secondary">v{task.currentPlanVersionNo}</Badge></td>
                       </tr>
                     ))}

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { PageCommandBar } from "@/components/project-management/shell/page-command-bar";
 import {
+  TASK_COMPOSER_START_ID,
   TaskComposerClient,
   type TaskComposerSeed,
 } from "@/components/project-management/task-composer-client";
@@ -78,7 +79,7 @@ export default async function ProgressTaskNewPage({
     <>
       <PageCommandBar
         title="新建 Task"
-        description="在一个工作台内编排元数据、成员、Milestone 与 Termination；创建后再安排人员投入。"
+        description="在一个工作台内编排元数据、成员、Milestone 与 Terminal；创建后再安排人员投入。"
       />
       <TaskComposerClient
         accountId={actor.accountId}
@@ -128,11 +129,10 @@ function createSeed({
   start: string;
 }): TaskComposerSeed {
   const now = new Date();
-  const defaultStart = new Date(now.getTime() + 24 * 60 * 60 * 1_000);
-  defaultStart.setUTCHours(1, 0, 0, 0);
+  const shanghaiToday = isoToShanghaiDateTimeLocal(now).slice(0, 10);
   const defaultStartLocal = validDateParam(start)
     ? `${start}T09:00`
-    : isoToShanghaiDateTimeLocal(defaultStart);
+    : addDaysLocal(`${shanghaiToday}T09:00`, 1);
   const templateMilestones = template?.currentPlan.nodes
     .filter((entry) => entry.type === "MILESTONE" && entry.milestone)
     .map((entry) => ({
@@ -140,7 +140,7 @@ function createSeed({
       goal: entry.milestone?.goal ?? "",
       completionCriteria: entry.milestone?.completionCriteria ?? "",
       expectedCompletedAt: isoToShanghaiDateTimeLocal(
-        entry.milestone?.expectedCompletedAt ?? defaultStart.toISOString(),
+        entry.milestone?.expectedCompletedAt ?? `${defaultStartLocal}:00+08:00`,
       ),
       reviewRequirements: entry.milestone?.reviewRequirements ?? "",
       businessDescription: entry.businessDescription,
@@ -153,20 +153,7 @@ function createSeed({
     : template?.currentPlan.plannedStartAt
       ? isoToShanghaiDateTimeLocal(template.currentPlan.plannedStartAt)
       : defaultStartLocal;
-  const firstMilestoneAt = addDaysLocal(plannedStartAt, 7);
-  const milestones =
-    templateMilestones && templateMilestones.length > 0
-      ? templateMilestones
-      : [
-          {
-            id: `draft-node-${randomUUID()}`,
-            goal: "",
-            completionCriteria: "",
-            expectedCompletedAt: firstMilestoneAt,
-            reviewRequirements: "",
-            businessDescription: "",
-          },
-        ];
+  const milestones = templateMilestones ?? [];
   const owner = people.find((person) => person.id === actorPersonId) ?? people[0];
   const templateMembers = normalizeTemplateMembers(
     template?.members ?? [],
@@ -193,14 +180,15 @@ function createSeed({
     milestones,
     termination: {
       id: `draft-termination-${randomUUID()}`,
+      name: templateTermination?.termination?.name ?? "Terminal",
       plannedAt: templateTermination?.termination
         ? isoToShanghaiDateTimeLocal(templateTermination.termination.plannedAt)
-        : addDaysLocal(milestones.at(-1)?.expectedCompletedAt ?? firstMilestoneAt, 7),
+        : addDaysLocal(plannedStartAt, 14),
       plannedOutcomeCriteria:
         templateTermination?.termination?.plannedOutcomeCriteria ?? "",
       businessDescription: templateTermination?.businessDescription ?? "",
     },
-    selectedEntityId: milestones[0]?.id ?? null,
+    selectedEntityId: TASK_COMPOSER_START_ID,
   };
 }
 

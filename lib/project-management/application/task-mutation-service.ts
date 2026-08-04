@@ -1165,6 +1165,7 @@ async function persistReplacementNodesTx(
     await tx.terminationNode.update({
       where: { nodeId: input.termination.nodeId },
       data: {
+        name: input.termination.input.name,
         plannedOutcomeCriteria:
           input.termination.input.plannedOutcomeCriteria,
         plannedAt: input.termination.input.plannedAt,
@@ -1182,6 +1183,7 @@ async function persistReplacementNodesTx(
         createdByAccountId: input.actorAccountId,
         termination: {
           create: {
+            name: input.termination.input.name,
             plannedOutcomeCriteria:
               input.termination.input.plannedOutcomeCriteria,
             plannedAt: input.termination.input.plannedAt,
@@ -1265,6 +1267,9 @@ function hashPlan(plan: PlanForMutation) {
         : null,
       termination: entry.node.termination
         ? {
+            ...(entry.node.termination.name !== "Terminal"
+              ? { name: entry.node.termination.name }
+              : {}),
             plannedOutcomeCriteria:
               entry.node.termination.plannedOutcomeCriteria,
             plannedAt: entry.node.termination.plannedAt.toISOString(),
@@ -1362,6 +1367,7 @@ function planNodeComparableFields(entry: PlanEntry): Record<string, string | nul
     reviewRequirements: entry.node.milestone?.reviewRequirements ?? null,
     plannedOutcomeCriteria:
       entry.node.termination?.plannedOutcomeCriteria ?? null,
+    terminationName: entry.node.termination?.name ?? null,
     plannedAt: entry.node.termination?.plannedAt.toISOString() ?? null,
   };
 }

@@ -190,6 +190,7 @@ export async function getActionInbox({
         select: {
           id: true,
           plannedAt: true,
+          name: true,
           plannedOutcomeCriteria: true,
           node: { select: { task: { select: taskResourceSelect } } },
         },
@@ -322,7 +323,7 @@ export async function getActionInbox({
       id: `termination:${termination.id}`,
       kind: "TERMINATION",
       title: task.title,
-      summary: termination.plannedOutcomeCriteria,
+      summary: `${termination.name}：${termination.plannedOutcomeCriteria}`,
       taskId: task.id,
       taskTitle: task.title,
       dueAt: termination.plannedAt.toISOString(),

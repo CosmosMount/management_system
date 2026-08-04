@@ -6,6 +6,14 @@ export type TimeCanvasMode =
 
 export type TimeCanvasZoom = "HOUR" | "DAY" | "WEEK" | "MONTH";
 
+export type TimeCanvasTone =
+  | "BLUE"
+  | "VIOLET"
+  | "AMBER"
+  | "EMERALD"
+  | "ROSE"
+  | "SLATE";
+
 export type TimeCanvasRange = {
   startMs: number;
   endMs: number;
@@ -33,6 +41,18 @@ export type TimeCanvasAnchor = {
   sequence: number;
   editable: boolean;
   versionToken: string;
+  tone?: TimeCanvasTone;
+  visualState?: "TEMPORARY" | "INVALID";
+};
+
+export type TimeCanvasPhaseBand = {
+  id: string;
+  rowId: string;
+  startMs: number;
+  endMs: number;
+  label: string;
+  tone: TimeCanvasTone;
+  visualState?: "TEMPORARY";
 };
 
 export type TimeCanvasSegmentPermissions = {
@@ -71,6 +91,7 @@ export type TimeCanvasModel = {
   range: TimeCanvasRange;
   rows: TimeCanvasRow[];
   anchors: TimeCanvasAnchor[];
+  phaseBands?: TimeCanvasPhaseBand[];
   segments: TimeCanvasSegment[];
   nextCursor?: string | null;
   generatedAt: string;
@@ -101,10 +122,41 @@ export type TimeCanvasSegmentTransformRequest = {
   endMs: number;
 };
 
+export type TimeCanvasAnchorCreateRequest = {
+  rowId: string;
+  rowKind: TimeCanvasRow["kind"];
+  sourceId: string;
+  atMs: number;
+  snapMs: number;
+};
+
+export type TimeCanvasAnchorMoveRequest = {
+  anchorId: string;
+  rowId: string;
+  kind: "MOVE" | "KEYBOARD_MOVE";
+  atMs: number;
+  deltaMs: number;
+  snapMs: number;
+};
+
+export type TimeCanvasAnchorMoveResolution = Pick<
+  TimeCanvasAnchorMoveRequest,
+  "atMs" | "deltaMs"
+> & {
+  blockedMessage?: string;
+};
+
 export type TimeCanvasInteractionOptions = {
   enableBrushCreate?: boolean;
+  enableAnchorCreate?: boolean;
   selectedSegmentIds?: ReadonlySet<string>;
   onBrushCreate?: (request: TimeCanvasBrushRequest) => void;
+  onAnchorCreate?: (request: TimeCanvasAnchorCreateRequest) => void;
+  constrainAnchorMove?: (
+    request: TimeCanvasAnchorMoveRequest,
+  ) => TimeCanvasAnchorMoveResolution;
+  onAnchorMove?: (request: TimeCanvasAnchorMoveRequest) => void;
+  onAnchorSelectionChange?: (anchorId: string | null) => void;
   onSegmentTransform?: (request: TimeCanvasSegmentTransformRequest) => void;
   onSegmentToggleSelection?: (segmentId: string) => void;
   onInvalidDrop?: (message: string) => void;
@@ -116,6 +168,8 @@ export type TimeCanvasProps = {
   initialZoom?: TimeCanvasZoom;
   display?: TimeCanvasDisplayOptions;
   interaction?: TimeCanvasInteractionOptions;
+  /** Passing `selection` makes selection controlled; omit it for internal state. */
+  selection?: TimeCanvasSelection;
   initialSelection?: TimeCanvasSelection;
   emptyMessage?: string;
   onRangeChange?: (range: TimeCanvasRange) => void;

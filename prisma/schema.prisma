@@ -663,6 +663,7 @@ model TerminationNode {
   id                     String              @id @default(uuid())
   nodeId                 String              @unique
   node                   TaskNode            @relation(fields: [nodeId], references: [id], onDelete: Restrict)
+  name                   String              @default("Terminal") @db.VarChar(200)
   plannedOutcomeCriteria String
   plannedAt              DateTime            @db.Timestamptz(6)
   outcome                TerminationOutcome?

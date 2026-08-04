@@ -233,10 +233,17 @@ export function TaskWorkbench({
             <p className="mt-2 text-sm text-muted-foreground">
               {activeMilestone?.milestone
                 ? `当前：${activeMilestone.milestone.goal} · ${formatDateTime(activeMilestone.milestone.expectedCompletedAt)} 截止`
+                : termination?.termination && termination.status === "ACTIVE"
+                  ? `当前：${termination.termination.name} · ${formatDateTime(termination.termination.plannedAt)}`
                 : task.status === "DRAFT"
                   ? "草稿计划尚未激活"
                   : "当前没有 Active Milestone"}
             </p>
+            {workspace.currentPlan.chronologyCompatibilityIssues.length > 0 && (
+              <p className="mt-2 text-sm text-amber-700">
+                当前计划包含旧版时间顺序；可继续只读或结束 Task，新建 Draft/Revision 前必须调整为严格递增。
+              </p>
+            )}
           </div>
           <div className="flex flex-wrap gap-2">
             {task.status === "DRAFT" && workspace.permissions.canActivate && (
@@ -498,6 +505,7 @@ function DraftPlanEditor({
   const [termination, setTermination] = useState({
     nodeId: terminationEntry?.nodeId ?? null,
     clientKey: terminationEntry ? null : newClientKey("termination"),
+    name: terminationEntry?.termination?.name ?? "Terminal",
     plannedOutcomeCriteria: terminationEntry?.termination?.plannedOutcomeCriteria ?? "",
     plannedAt: isoToShanghaiDateTimeLocal(
       terminationEntry?.termination?.plannedAt ??
@@ -530,7 +538,7 @@ function DraftPlanEditor({
               <div className="flex gap-1">
                 <Button type="button" size="sm" variant="outline" disabled={index === 0} onClick={() => setMilestones(moveItem(milestones, index, index - 1))}>前移</Button>
                 <Button type="button" size="sm" variant="outline" disabled={index === milestones.length - 1} onClick={() => setMilestones(moveItem(milestones, index, index + 1))}>后移</Button>
-                <Button type="button" size="sm" variant="destructive" disabled={milestones.length === 1} onClick={() => setMilestones(milestones.filter((_, itemIndex) => itemIndex !== index))}>删除</Button>
+                <Button type="button" size="sm" variant="destructive" onClick={() => setMilestones(milestones.filter((_, itemIndex) => itemIndex !== index))}>删除</Button>
               </div>
             </div>
             <Field label="目标"><Input value={milestone.goal} onChange={(event) => setMilestones(patchItem(milestones, index, { goal: event.target.value }))} /></Field>
@@ -565,6 +573,7 @@ function DraftPlanEditor({
       </Button>
       <div className="grid gap-3 rounded-lg border border-border p-3 lg:grid-cols-2">
         <h3 className="font-medium lg:col-span-2">Termination（固定末尾）</h3>
+        <Field label="名称"><Input value={termination.name} onChange={(event) => setTermination({ ...termination, name: event.target.value })} /></Field>
         <Field label="计划结束"><Input type="datetime-local" value={termination.plannedAt} onChange={(event) => setTermination({ ...termination, plannedAt: event.target.value })} /></Field>
         <Field label="预期结果"><Input value={termination.plannedOutcomeCriteria} onChange={(event) => setTermination({ ...termination, plannedOutcomeCriteria: event.target.value })} /></Field>
         <Field label="业务说明" className="lg:col-span-2"><Textarea value={termination.businessDescription} onChange={(event) => setTermination({ ...termination, businessDescription: event.target.value })} /></Field>
@@ -588,6 +597,7 @@ function DraftPlanEditor({
             })),
             termination: {
               ...(termination.nodeId ? { nodeId: termination.nodeId } : { clientKey: termination.clientKey }),
+              name: termination.name,
               plannedAt: shanghaiDateTimeLocalToIso(termination.plannedAt),
               plannedOutcomeCriteria: termination.plannedOutcomeCriteria,
               businessDescription: termination.businessDescription,
@@ -615,7 +625,7 @@ function ReadOnlyPlan({ plan }: { plan: PlanVersionSummary }) {
               {entry.isCarryForward && <Badge variant="outline">Completed 前缀锁定</Badge>}
             </div>
             <h3 className="mt-2 break-words font-medium">
-              {entry.milestone?.goal ?? entry.revision?.reason ?? entry.termination?.plannedOutcomeCriteria}
+              {entry.milestone?.goal ?? entry.revision?.reason ?? entry.termination?.name}
             </h3>
             {entry.milestone && <p className="mt-1 text-sm text-muted-foreground">截止 {formatDateTime(entry.milestone.expectedCompletedAt)} · {entry.milestone.completionCriteria}</p>}
             {entry.termination && <p className="mt-1 text-sm text-muted-foreground">计划结束 {formatDateTime(entry.termination.plannedAt)}</p>}
@@ -845,6 +855,7 @@ function RevisionsPanel({
   const [reason, setReason] = useState("");
   const [plannedStartAt, setPlannedStartAt] = useState(isoToShanghaiDateTimeLocal(workspace.currentPlan.plannedStartAt ?? workspace.task.createdAt));
   const [terminationDraft, setTerminationDraft] = useState({
+    name: termination?.termination?.name ?? "Terminal",
     plannedAt: isoToShanghaiDateTimeLocal(
       termination?.termination?.plannedAt ??
         addDaysIso(workspace.currentPlan.plannedStartAt ?? workspace.task.createdAt, 1),
@@ -910,6 +921,7 @@ function RevisionsPanel({
         businessDescription: entry.businessDescription,
       }] : []));
       setTerminationDraft({
+        name: nextTermination.termination.name,
         plannedAt: isoToShanghaiDateTimeLocal(nextTermination.termination.plannedAt),
         plannedOutcomeCriteria: nextTermination.termination.plannedOutcomeCriteria,
         businessDescription: nextTermination.businessDescription,
@@ -927,14 +939,14 @@ function RevisionsPanel({
         (workspace.permissions.canCreateRevision || Boolean(editingRevisionId)) && (
         <section className="space-y-3 rounded-xl border border-primary/20 bg-card p-4">
           <div><h2 className="font-semibold">Revision 候选计划{editingRevisionId ? "（编辑已有）" : ""}</h2><p className="mt-1 text-sm text-muted-foreground">Completed 前缀由服务端锁定；Draft 或被驳回的候选计划可整包编辑后再提交。</p></div>
-          <Field label="修订起点"><select className={selectClass} value={revisedFromNodeId} disabled={Boolean(editingRevisionId)} onChange={(event) => resetReplacement(event.target.value)}>{selectableNodes.map((entry) => <option key={entry.nodeId} value={entry.nodeId}>{entry.milestone?.goal ?? "Termination"}</option>)}</select></Field>
+          <Field label="修订起点"><select className={selectClass} value={revisedFromNodeId} disabled={Boolean(editingRevisionId)} onChange={(event) => resetReplacement(event.target.value)}>{selectableNodes.map((entry) => <option key={entry.nodeId} value={entry.nodeId}>{entry.milestone?.goal ?? entry.termination?.name ?? "Terminal"}</option>)}</select></Field>
           <Field label="修订原因"><Textarea value={reason} onChange={(event) => setReason(event.target.value)} maxLength={2_000} /></Field>
           <Field label="计划开始"><Input type="datetime-local" value={plannedStartAt} onChange={(event) => setPlannedStartAt(event.target.value)} /></Field>
           <div className="space-y-3">
             {replacement.map((milestone, index) => <div key={milestone.uiKey} className="grid gap-2 rounded-lg border border-border p-3 md:grid-cols-2"><div className="md:col-span-2 flex flex-wrap items-center justify-between gap-2"><h3 className="font-medium">替换 Milestone #{index + 1}</h3><div className="flex gap-1"><Button type="button" size="sm" variant="outline" aria-label={`前移替换 Milestone #${index + 1}`} disabled={index === 0} onClick={() => setReplacement((current) => moveItem(current, index, index - 1))}>前移</Button><Button type="button" size="sm" variant="outline" aria-label={`后移替换 Milestone #${index + 1}`} disabled={index === replacement.length - 1} onClick={() => setReplacement((current) => moveItem(current, index, index + 1))}>后移</Button><Button type="button" size="sm" variant="destructive" aria-label={`删除替换 Milestone #${index + 1}`} onClick={() => setReplacement((current) => current.filter((_, itemIndex) => itemIndex !== index))}>删除</Button></div></div><Field label="目标"><Input aria-label={`替换 Milestone #${index + 1} 目标`} value={milestone.goal} onChange={(event) => setReplacement((current) => patchItem(current, index, { goal: event.target.value }))} /></Field><Field label="预期完成"><Input aria-label={`替换 Milestone #${index + 1} 预期完成`} type="datetime-local" value={milestone.expectedCompletedAt} onChange={(event) => setReplacement((current) => patchItem(current, index, { expectedCompletedAt: event.target.value }))} /></Field><Field label="完成条件"><Textarea aria-label={`替换 Milestone #${index + 1} 完成条件`} value={milestone.completionCriteria} onChange={(event) => setReplacement((current) => patchItem(current, index, { completionCriteria: event.target.value }))} /></Field><Field label="验收要求"><Textarea aria-label={`替换 Milestone #${index + 1} 验收要求`} value={milestone.reviewRequirements} onChange={(event) => setReplacement((current) => patchItem(current, index, { reviewRequirements: event.target.value }))} /></Field><Field label="业务说明" className="md:col-span-2"><Textarea aria-label={`替换 Milestone #${index + 1} 业务说明`} value={milestone.businessDescription} onChange={(event) => setReplacement((current) => patchItem(current, index, { businessDescription: event.target.value }))} /></Field></div>)}
           </div>
           <Button type="button" variant="outline" onClick={() => setReplacement((current) => [...current, { uiKey: newClientKey("revision-milestone"), goal: "", completionCriteria: "", expectedCompletedAt: current.at(-1)?.expectedCompletedAt ?? plannedStartAt, reviewRequirements: "", businessDescription: "" }])}>添加替换 Milestone</Button>
-          <div className="grid gap-2 rounded-lg border border-border p-3 md:grid-cols-2"><h3 className="font-medium md:col-span-2">候选 Termination</h3><Field label="计划结束"><Input aria-label="候选 Termination 计划结束" type="datetime-local" value={terminationDraft.plannedAt} onChange={(event) => setTerminationDraft((current) => ({ ...current, plannedAt: event.target.value }))} /></Field><Field label="预期结果"><Input aria-label="候选 Termination 预期结果" value={terminationDraft.plannedOutcomeCriteria} onChange={(event) => setTerminationDraft((current) => ({ ...current, plannedOutcomeCriteria: event.target.value }))} /></Field><Field label="业务说明" className="md:col-span-2"><Textarea aria-label="候选 Termination 业务说明" value={terminationDraft.businessDescription} onChange={(event) => setTerminationDraft((current) => ({ ...current, businessDescription: event.target.value }))} /></Field></div>
+          <div className="grid gap-2 rounded-lg border border-border p-3 md:grid-cols-2"><h3 className="font-medium md:col-span-2">候选 Termination</h3><Field label="名称"><Input aria-label="候选 Termination 名称" value={terminationDraft.name} onChange={(event) => setTerminationDraft((current) => ({ ...current, name: event.target.value }))} /></Field><Field label="计划结束"><Input aria-label="候选 Termination 计划结束" type="datetime-local" value={terminationDraft.plannedAt} onChange={(event) => setTerminationDraft((current) => ({ ...current, plannedAt: event.target.value }))} /></Field><Field label="预期结果"><Input aria-label="候选 Termination 预期结果" value={terminationDraft.plannedOutcomeCriteria} onChange={(event) => setTerminationDraft((current) => ({ ...current, plannedOutcomeCriteria: event.target.value }))} /></Field><Field label="业务说明" className="md:col-span-2"><Textarea aria-label="候选 Termination 业务说明" value={terminationDraft.businessDescription} onChange={(event) => setTerminationDraft((current) => ({ ...current, businessDescription: event.target.value }))} /></Field></div>
           <div className="flex flex-wrap gap-2"><Button type="button" disabled={busy || !revisedFromNodeId} onClick={() => { const replacementMilestones = replacement.map((entry) => ({ goal: entry.goal, completionCriteria: entry.completionCriteria, expectedCompletedAt: shanghaiDateTimeLocalToIso(entry.expectedCompletedAt), reviewRequirements: entry.reviewRequirements, businessDescription: entry.businessDescription })); const termination = { ...terminationDraft, plannedAt: shanghaiDateTimeLocalToIso(terminationDraft.plannedAt) }; if (editingRevisionId) { void runAction(() => updateRevisionDraft({ revisionNodeId: editingRevisionId, expectedTargetPlanUpdatedAt: editingTargetUpdatedAt, reason, plannedStartAt: shanghaiDateTimeLocalToIso(plannedStartAt), replacementMilestones, termination }), "Revision Draft 已更新。", () => { setEditingRevisionId(null); setEditingTargetUpdatedAt(""); setReason(""); }); return; } idempotencyKey.current ??= `revision-workbench:${globalThis.crypto.randomUUID()}`; void runAction(() => createRevisionDraft({ taskId: workspace.task.id, basePlanVersionId: workspace.currentPlan.id, baseTaskLockVersion: workspace.task.lockVersion, revisedFromNodeId, reason, plannedStartAt: shanghaiDateTimeLocalToIso(plannedStartAt), replacementMilestones, termination, idempotencyKey: idempotencyKey.current }), "Revision Draft 已创建。", () => { idempotencyKey.current = null; setReason(""); }); }}>{editingRevisionId ? "更新 Revision Draft" : "保存 Revision Draft"}</Button>{editingRevisionId && <Button type="button" variant="outline" onClick={() => { setEditingRevisionId(null); setEditingTargetUpdatedAt(""); resetReplacement(workspace.task.activeMilestoneNodeId ?? selectableNodes[0]?.nodeId ?? ""); setReason(""); }}>取消编辑</Button>}</div>
         </section>
       )}

@@ -159,7 +159,7 @@ function adaptTaskAnchors(
       taskId: task.id,
       kind: "PLAN_START",
       status: task.status,
-      label: "计划开始",
+      label: "Start",
       atMs: parseMs(task.plannedStartAt),
       sequence: -1,
       editable: canEditDraftPlan,

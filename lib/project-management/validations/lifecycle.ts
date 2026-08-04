@@ -87,6 +87,7 @@ export const milestoneDraftSchema = z.object({
 });
 
 export const terminationDraftSchema = z.object({
+  name: requiredText("请输入 Terminal 名称", 200),
   plannedOutcomeCriteria: requiredText("请输入结束条件"),
   plannedAt: requiredDate("请选择有效的计划结束时间"),
   businessDescription: optionalText(2_000),
@@ -127,7 +128,6 @@ export const createTaskDraftInputSchema = z
       .min(1, "至少添加一名 Task 成员"),
     milestones: z
       .array(s2MilestoneDraftSchema, { message: "Milestone 列表格式不正确" })
-      .min(1, "至少添加一个 Milestone")
       .max(200, "单个计划最多 200 个节点"),
     termination: s2TerminationDraftSchema,
     plannedStartAt: absoluteDateTimeSchema("请选择带时区的有效计划开始时间"),
@@ -423,33 +423,38 @@ export function validatePlanChronology(
     return;
   }
   let previousAt: Date | null = null;
+  let finalBoundary = input.plannedStartAt;
   input.milestones.forEach((milestone, index) => {
-    if (milestone.expectedCompletedAt < input.plannedStartAt) {
+    if (milestone.expectedCompletedAt <= input.plannedStartAt) {
       addStructuredProjectManagementIssue({
         ctx,
         code: "PLAN_CHRONOLOGY_INVALID",
         path: [milestonesPath, index, "expectedCompletedAt"],
-        message: "Milestone 不得早于计划开始时间",
+        message: "Milestone 必须晚于计划开始时间",
       });
     }
-    if (previousAt && milestone.expectedCompletedAt < previousAt) {
+    if (previousAt && milestone.expectedCompletedAt <= previousAt) {
       addStructuredProjectManagementIssue({
         ctx,
         code: "PLAN_CHRONOLOGY_INVALID",
         path: [milestonesPath, index, "expectedCompletedAt"],
-        message: "Milestone 时间必须按顺序非递减",
+        message: "Milestone 时间必须严格递增",
       });
     }
     previousAt = milestone.expectedCompletedAt;
+    if (milestone.expectedCompletedAt > finalBoundary) {
+      finalBoundary = milestone.expectedCompletedAt;
+    }
   });
 
-  const finalBoundary = previousAt ?? input.plannedStartAt;
-  if (input.termination.plannedAt < finalBoundary) {
+  if (input.termination.plannedAt <= finalBoundary) {
     addStructuredProjectManagementIssue({
       ctx,
       code: "PLAN_CHRONOLOGY_INVALID",
       path: ["termination", "plannedAt"],
-      message: "计划结束时间不得早于最后一个 Milestone",
+      message: input.milestones.length > 0
+        ? "计划结束时间必须晚于最后一个 Milestone"
+        : "计划结束时间必须晚于计划开始时间",
     });
   }
 }

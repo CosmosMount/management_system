@@ -134,7 +134,6 @@ export const replaceTaskDraftPlanInputSchema = z
       .array(draftMilestoneReplacementSchema, {
         message: "Milestone 列表格式不正确",
       })
-      .min(1, "至少添加一个 Milestone")
       .max(200, "单个计划最多 200 个节点"),
     termination: draftTerminationReplacementSchema,
   })

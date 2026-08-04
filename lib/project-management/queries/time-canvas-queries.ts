@@ -126,6 +126,7 @@ const anchorTaskSelect = {
               },
               termination: {
                 select: {
+                  name: true,
                   plannedOutcomeCriteria: true,
                   plannedAt: true,
                 },
@@ -1206,7 +1207,7 @@ function nodeLabel(
 ): string {
   if (node.milestone) return node.milestone.goal;
   if (node.revision) return node.revision.reason;
-  if (node.termination) return node.termination.plannedOutcomeCriteria;
+  if (node.termination) return node.termination.name;
   return node.businessDescription.trim() || node.type;
 }
 

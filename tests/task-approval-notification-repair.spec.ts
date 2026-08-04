@@ -356,6 +356,7 @@ async function createPendingApprovalFixture() {
       milestoneInput("Repair milestone 2", 3),
     ],
     termination: {
+      name: "Terminal",
       plannedOutcomeCriteria: "审批通知修复完成",
       plannedAt: new Date("2026-08-05T00:00:00.000Z").toISOString(),
       businessDescription: "Repair termination",
@@ -391,6 +392,7 @@ async function createPendingApprovalFixture() {
     plannedStartAt: new Date("2026-08-01T00:00:00.000Z").toISOString(),
     replacementMilestones: [milestoneInput("Repair revised milestone", 4)],
     termination: {
+      name: "Terminal",
       plannedOutcomeCriteria: "修订审批完成",
       plannedAt: new Date("2026-08-06T00:00:00.000Z").toISOString(),
       businessDescription: "Repair revised termination",

@@ -457,6 +457,7 @@ test.describe("project management S8 dashboard, tags and notifications", () => {
           termination: {
             create: {
               id: candidateTerminationId,
+              name: "Terminal",
               plannedAt: new Date("2026-08-09T03:00:00.000Z"),
               plannedOutcomeCriteria: "候选计划 Termination 不得成为待办",
             },

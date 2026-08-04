@@ -19,8 +19,7 @@ export type AuthoritativePlanChronology = {
 
 export type PlanChronologyCompatibility =
   | "STRICT"
-  | "LEGACY_CURRENT_BASE"
-  | "LEGACY_CARRIED_PREFIX";
+  | "LEGACY_CURRENT_BASE";
 
 /**
  * Validates the complete persisted plan rather than trusting a partial editor
@@ -70,10 +69,13 @@ export function inspectPlanChronology(
   const milestones = orderedNodes.filter(
     (node) => node.type === "MILESTONE",
   );
-  if (milestones.length === 0) {
+  if (
+    compatibility !== "LEGACY_CURRENT_BASE" &&
+    milestones.length > 200
+  ) {
     issues.push({
       path: "nodes",
-      message: "计划至少需要一个 Milestone",
+      message: "计划最多包含 200 个 Milestone",
     });
   }
 
@@ -98,6 +100,7 @@ export function inspectPlanChronology(
   }
 
   let chronologyBoundary = plannedStartAt;
+  let previousMilestoneAt: Date | null = null;
   for (const milestone of milestones) {
     const nodeIndex = orderedNodes.indexOf(milestone);
     const expectedCompletedAt = validDate(milestone.expectedCompletedAt);
@@ -111,27 +114,24 @@ export function inspectPlanChronology(
     if (
       compatibility !== "LEGACY_CURRENT_BASE" &&
       plannedStartAt &&
-      expectedCompletedAt < plannedStartAt
+      expectedCompletedAt <= plannedStartAt
     ) {
       issues.push({
         path: `nodes.${nodeIndex}.expectedCompletedAt`,
-        message: "Milestone 不得早于计划开始时间",
+        message: "Milestone 必须晚于计划开始时间",
       });
     }
-    const toleratesLegacyPrefixOrder =
-      compatibility === "LEGACY_CARRIED_PREFIX" &&
-      milestone.isCarryForward === true;
     if (
       compatibility !== "LEGACY_CURRENT_BASE" &&
-      !toleratesLegacyPrefixOrder &&
-      chronologyBoundary &&
-      expectedCompletedAt < chronologyBoundary
+      previousMilestoneAt &&
+      expectedCompletedAt <= previousMilestoneAt
     ) {
       issues.push({
         path: `nodes.${nodeIndex}.expectedCompletedAt`,
-        message: "Milestone 时间必须按 sequence 非递减",
+        message: "Milestone 时间必须按 sequence 严格递增",
       });
     }
+    previousMilestoneAt = expectedCompletedAt;
     if (
       !chronologyBoundary ||
       expectedCompletedAt.getTime() > chronologyBoundary.getTime()
@@ -152,11 +152,13 @@ export function inspectPlanChronology(
       if (
         compatibility !== "LEGACY_CURRENT_BASE" &&
         chronologyBoundary &&
-        plannedAt < chronologyBoundary
+        plannedAt <= chronologyBoundary
       ) {
         issues.push({
           path: `nodes.${terminationIndex}.plannedAt`,
-          message: "Termination 不得早于最后一个 Milestone",
+          message: milestones.length > 0
+            ? "Termination 必须晚于最后一个 Milestone"
+            : "Termination 必须晚于计划开始时间",
         });
       }
     }

@@ -71,6 +71,51 @@ export function snapTime(
   return Math[mode]((timeMs - originMs) / snapMs) * snapMs + originMs;
 }
 
+export function moveTimePoint(input: {
+  atMs: number;
+  rawDeltaMs: number;
+  snapMs: number;
+  range: TimeCanvasRange;
+}): { atMs: number; deltaMs: number } {
+  assertRange(input.range);
+  if (
+    !Number.isFinite(input.atMs) ||
+    input.atMs < input.range.startMs ||
+    input.atMs >= input.range.endMs
+  ) {
+    throw new Error("时间点必须位于当前半开区间内");
+  }
+  const snappedDeltaMs = snapTime(
+    input.rawDeltaMs,
+    input.snapMs,
+    "round",
+    0,
+  );
+  const minimumDeltaMs =
+    Math.ceil((input.range.startMs - input.atMs) / input.snapMs) * input.snapMs;
+  const maximumDeltaMs =
+    Math.floor((input.range.endMs - 1 - input.atMs) / input.snapMs) * input.snapMs;
+  const deltaMs = Math.max(
+    minimumDeltaMs,
+    Math.min(snappedDeltaMs, maximumDeltaMs),
+  );
+  return { atMs: input.atMs + deltaMs, deltaMs };
+}
+
+export function snapTimeInRange(
+  timeMs: number,
+  snapMs: number,
+  range: TimeCanvasRange,
+): number | null {
+  assertRange(range);
+  const rounded = snapTime(timeMs, snapMs);
+  if (rounded >= range.startMs && rounded < range.endMs) return rounded;
+  const boundary = rounded < range.startMs
+    ? snapTime(range.startMs, snapMs, "ceil")
+    : snapTime(range.endMs - 1, snapMs, "floor");
+  return boundary >= range.startMs && boundary < range.endMs ? boundary : null;
+}
+
 export function intervalToRect(
   startMs: number,
   endMs: number,
@@ -118,10 +163,18 @@ export function visibleTimeWindow(input: {
   overscanPx?: number;
 }): TimeCanvasRange {
   const overscanPx = Math.max(0, input.overscanPx ?? input.viewportWidthPx / 2);
-  const left = Math.max(0, input.scrollLeftPx - overscanPx);
+  const maximumScrollLeft = Math.max(
+    0,
+    input.scale.contentWidthPx - input.viewportWidthPx,
+  );
+  const scrollLeftPx = Math.max(
+    0,
+    Math.min(input.scrollLeftPx, maximumScrollLeft),
+  );
+  const left = Math.max(0, scrollLeftPx - overscanPx);
   const right = Math.min(
     input.scale.contentWidthPx,
-    input.scrollLeftPx + input.viewportWidthPx + overscanPx,
+    scrollLeftPx + input.viewportWidthPx + overscanPx,
   );
   return {
     startMs: Math.max(input.scale.startMs, xToTime(left, input.scale)),

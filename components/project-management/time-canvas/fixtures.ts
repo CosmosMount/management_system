@@ -39,6 +39,14 @@ export function createEmptyTimeCanvasFixture(): TimeCanvasModel {
 
 function composerFixture(): TimeCanvasModel {
   const rowId = "plan:fixture-composer";
+  const tones = [
+    "BLUE",
+    "VIOLET",
+    "AMBER",
+    "EMERALD",
+    "ROSE",
+    "SLATE",
+  ] as const;
   return {
     timezone: "Asia/Shanghai",
     range: { startMs: RANGE_START, endMs: RANGE_START + 30 * DAY_MS },
@@ -54,6 +62,14 @@ function composerFixture(): TimeCanvasModel {
       sequence: index,
       editable: true,
       versionToken: `fixture-${index}`,
+    })),
+    phaseBands: Array.from({ length: 19 }, (_, index) => ({
+      id: `composer-phase-${index}`,
+      rowId,
+      startMs: RANGE_START + index * DAY_MS,
+      endMs: RANGE_START + (index + 1) * DAY_MS,
+      label: `阶段 ${index + 1}`,
+      tone: tones[index % tones.length] ?? "BLUE",
     })),
     segments: [],
     generatedAt: new Date(RANGE_START).toISOString(),
@@ -74,7 +90,7 @@ function workbenchFixture(): TimeCanvasModel {
       rowId: planId,
       taskId: "fixture-workbench",
       kind: index === 3 ? ("TERMINATION" as const) : ("MILESTONE" as const),
-      status: index === 1 ? "ACTIVE" : "PENDING",
+      status: index === 0 ? "COMPLETED" : index === 1 ? "ACTIVE" : "PENDING",
       label: index === 3 ? "计划结束" : `里程碑 ${index + 1}`,
       atMs: RANGE_START + day * DAY_MS,
       sequence: index,

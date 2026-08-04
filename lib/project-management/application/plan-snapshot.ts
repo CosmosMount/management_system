@@ -17,6 +17,7 @@ export type PlanSnapshotNode = {
     basePlanVersionId: string;
   } | null;
   termination: {
+    name?: string;
     plannedOutcomeCriteria: string;
     plannedAt: string;
   } | null;
@@ -27,8 +28,25 @@ export function hashPlanSnapshot(input: {
   nodes: PlanSnapshotNode[];
 }): string {
   return createHash("sha256")
-    .update(stableStringify(input))
+    .update(stableStringify(normalizeSnapshot(input)))
     .digest("hex");
+}
+
+function normalizeSnapshot(input: {
+  plannedStartAt: string | null;
+  nodes: PlanSnapshotNode[];
+}) {
+  return {
+    ...input,
+    nodes: input.nodes.map((node) => {
+      if (!node.termination || node.termination.name !== "Terminal") {
+        return node;
+      }
+      const termination = { ...node.termination };
+      delete termination.name;
+      return { ...node, termination };
+    }),
+  };
 }
 
 function stableStringify(value: unknown): string {

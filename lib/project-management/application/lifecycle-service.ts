@@ -289,6 +289,7 @@ export async function createTaskDraft(
         plannedStartAt: parsed.plannedStartAt,
         relatedTaskId: parsed.relatedTaskId,
         milestoneCount: parsed.milestones.length,
+        terminationName: parsed.termination.name,
         memberCount: normalizedInput.members.length,
         tagCount: parsed.tagIds.length,
       }),
@@ -366,20 +367,22 @@ export async function activateTask(
     const firstMilestone = currentPlan.nodes.find(
       (entry) => entry.node.type === "MILESTONE",
     );
-    if (!firstMilestone) {
-      throw validationError("计划至少需要一个 Milestone");
-    }
+    const termination = currentPlan.nodes.find(
+      (entry) => entry.node.type === "TERMINATION",
+    );
+    const firstActiveNode = firstMilestone ?? termination;
+    if (!firstActiveNode) throw stateConflictError("计划缺少结束节点");
 
     const now = new Date();
     await tx.taskNode.update({
-      where: { id: firstMilestone.nodeId },
+      where: { id: firstActiveNode.nodeId },
       data: { status: "ACTIVE" },
     });
     const updated = await tx.task.update({
       where: { id: task.id },
       data: {
         status: "ACTIVE",
-        activeMilestoneNodeId: firstMilestone.nodeId,
+        activeMilestoneNodeId: firstMilestone?.nodeId ?? null,
         startedAt: now,
         lockVersion: { increment: 1 },
       },
@@ -414,6 +417,10 @@ export async function activateTask(
         status: updated.status,
         lockVersion: updated.lockVersion,
         activeMilestoneNodeId: updated.activeMilestoneNodeId,
+        activeNodeId: firstActiveNode.nodeId,
+        activeNodeType: firstActiveNode.node.type,
+        activeNodeName: firstActiveNode.node.termination?.name ??
+          firstActiveNode.node.milestone?.goal ?? null,
       }),
       reason: "激活 Task",
     });
@@ -425,7 +432,9 @@ export async function activateTask(
       category: "TASK",
       eventKey: `pm:task:activated:${task.id}:${updated.lockVersion}`,
       title: "Task 已激活",
-      summary: `Task「${task.title}」已开始执行`,
+      summary: firstMilestone
+        ? `Task「${task.title}」已开始执行`
+        : `Task「${task.title}」已开始执行，当前节点：${termination?.node.termination?.name ?? "Terminal"}`,
       entityType: "Task",
       entityId: task.id,
       mandatory: false,
@@ -512,15 +521,6 @@ export async function createRevisionDraft(
     }
 
     const carriedEntries = currentPlan.nodes.slice(0, revisedFromIndex);
-    if (
-      carriedEntries.filter((entry) => entry.node.type === "MILESTONE")
-        .length +
-        parsed.replacementMilestones.length ===
-      0
-    ) {
-      throw validationError("修订后的计划至少需要一个 Milestone");
-    }
-
     const targetPlanVersionId = randomUUID();
     const revisionTaskNodeId = randomUUID();
     const revisionNodeId = randomUUID();
@@ -616,6 +616,7 @@ export async function createRevisionDraft(
         baseTaskLockVersion: task.lockVersion,
         plannedStartAt: parsed.plannedStartAt,
         replacementMilestoneCount: parsed.replacementMilestones.length,
+        terminationName: parsed.termination.name,
       }),
       reason: parsed.reason,
     });
@@ -719,6 +720,7 @@ export async function updateRevisionDraft(
         affectedSummary: jsonValue({
           revisedFromNodeId: revision.revisedFromNodeId,
           replacementMilestoneCount: parsed.replacementMilestones.length,
+          terminationName: parsed.termination.name,
         }),
       },
     });
@@ -758,6 +760,7 @@ export async function updateRevisionDraft(
         status: "DRAFT",
         targetPlanVersionId,
         replacementMilestoneCount: parsed.replacementMilestones.length,
+        terminationName: parsed.termination.name,
         plan: afterPlanAudit,
         changes: summarizeRevisionPlanChanges(targetPlan, updatedTargetPlan),
       }),
@@ -1444,11 +1447,13 @@ export async function confirmTermination(
         taskStatus: task.status,
         lockVersion: task.lockVersion,
         outcome: termination.outcome,
+        name: termination.name,
       }),
       after: jsonValue({
         taskStatus: updated.status,
         lockVersion: updated.lockVersion,
         outcome: parsed.outcome,
+        name: termination.name,
         cancelledNodeCount: unfinishedNodeIds.length,
       }),
       reason: parsed.reason,
@@ -1460,7 +1465,7 @@ export async function confirmTermination(
       category: "TASK",
       eventKey: `pm:task:terminated:${termination.nodeId}`,
       title: "Task 已结束",
-      summary: `Task「${task.title}」已结束：${parsed.outcome}`,
+      summary: `Task「${task.title}」已结束（${termination.name}）：${parsed.outcome}`,
       entityType: "TerminationNode",
       entityId: termination.id,
       mandatory: true,
@@ -1831,6 +1836,7 @@ async function createPlanNodesTx(
       createdByAccountId: actorAccountId,
       termination: {
         create: {
+          name: termination.name,
           plannedOutcomeCriteria: termination.plannedOutcomeCriteria,
           plannedAt: termination.plannedAt,
         },
@@ -2036,7 +2042,7 @@ function assertRevisionTargetPlanValid(plan: {
   plannedStartAt: Date | null;
   nodes: PlanEntry[];
 }) {
-  assertPlanChronologyValid(plan, "LEGACY_CARRIED_PREFIX");
+  assertPlanChronologyValid(plan, "STRICT");
 }
 
 function assertPlanChronologyValid(
@@ -2144,6 +2150,7 @@ function summarizeRevisionDraft(
     carriedNodeCount: revisedFromIndex,
     replacedNodeCount: currentEntries.length - revisedFromIndex,
     replacementMilestoneCount: input.replacementMilestones.length,
+    terminationName: input.termination.name,
   };
 }
 
@@ -2729,6 +2736,9 @@ function hashPlan(plan: {
         : null,
       termination: entry.node.termination
         ? {
+            ...(entry.node.termination.name !== "Terminal"
+              ? { name: entry.node.termination.name }
+              : {}),
             plannedOutcomeCriteria:
               entry.node.termination.plannedOutcomeCriteria,
             plannedAt: entry.node.termination.plannedAt.toISOString(),
@@ -2818,6 +2828,7 @@ function revisionNodeAuditView(entry: PlanEntry) {
       : null,
     termination: entry.node.termination
       ? {
+          name: boundedAuditText(entry.node.termination.name),
           plannedAt: entry.node.termination.plannedAt.toISOString(),
           plannedOutcomeCriteria: boundedAuditText(
             entry.node.termination.plannedOutcomeCriteria,

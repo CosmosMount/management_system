@@ -1,0 +1,2 @@
+ALTER TABLE "TerminationNode"
+ADD COLUMN "name" VARCHAR(200) NOT NULL DEFAULT 'Terminal';

@@ -19,6 +19,7 @@ import {
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import { notFoundError } from "@/lib/project-management/application/errors";
 import { rankFuzzyMatches } from "@/lib/search/fuzzy-score";
+import { inspectPlanChronology } from "@/lib/project-management/domain/plan-chronology";
 import {
   normalizeSearchText,
   searchTerms,
@@ -39,6 +40,11 @@ export type TaskListItem = {
     goal: string;
     expectedCompletedAt: string;
   } | null;
+  activeTermination: {
+    nodeId: string;
+    name: string;
+    plannedAt: string;
+  } | null;
   members: TaskMemberSummary[];
   tags: Array<{ id: string; name: string; color: string }>;
   segmentNeedsReviewCount: number;
@@ -53,7 +59,25 @@ export type TaskListResult = {
 };
 
 const taskListInclude = {
-  currentPlanVersion: { select: { versionNo: true } },
+  currentPlanVersion: {
+    select: {
+      versionNo: true,
+      nodes: {
+        where: {
+          node: { type: "TERMINATION", status: "ACTIVE", deletedAt: null },
+        },
+        take: 1,
+        select: {
+          node: {
+            select: {
+              id: true,
+              termination: { select: { name: true, plannedAt: true } },
+            },
+          },
+        },
+      },
+    },
+  },
   activeMilestoneNode: {
     include: {
       milestone: true,
@@ -141,6 +165,7 @@ type PlanNodeSummary = {
   } | null;
   termination: {
     id: string;
+    name: string;
     plannedOutcomeCriteria: string;
     plannedAt: string;
     outcome: TerminationOutcome | null;
@@ -197,6 +222,7 @@ export type PlanVersionSummary = {
   snapshotHash: string;
   createdAt: string;
   updatedAt: string;
+  chronologyCompatibilityIssues: Array<{ path: string; message: string }>;
   nodes: PlanNodeSummary[];
 };
 
@@ -353,6 +379,14 @@ export async function listTasks({
                 task.activeMilestoneNode.milestone.expectedCompletedAt.toISOString(),
             }
           : null,
+      activeTermination: task.currentPlanVersion.nodes[0]?.node.termination
+        ? {
+            nodeId: task.currentPlanVersion.nodes[0].node.id,
+            name: task.currentPlanVersion.nodes[0].node.termination.name,
+            plannedAt:
+              task.currentPlanVersion.nodes[0].node.termination.plannedAt.toISOString(),
+          }
+        : null,
       members: task.members.map((member) => ({
         personId: member.personId,
         role: member.role,
@@ -637,6 +671,17 @@ export async function comparePlanVersions({
 }
 
 function serializePlanVersion(plan: PlanVersionWithNodes): PlanVersionSummary {
+  const chronologyCompatibilityIssues = inspectPlanChronology({
+    plannedStartAt: plan.plannedStartAt,
+    nodes: plan.nodes.map((entry) => ({
+      nodeId: entry.nodeId,
+      sequence: entry.sequence,
+      type: entry.node.type,
+      isCarryForward: entry.isCarryForward,
+      expectedCompletedAt: entry.node.milestone?.expectedCompletedAt ?? null,
+      plannedAt: entry.node.termination?.plannedAt ?? null,
+    })),
+  });
   return {
     id: plan.id,
     taskId: plan.taskId,
@@ -650,6 +695,7 @@ function serializePlanVersion(plan: PlanVersionWithNodes): PlanVersionSummary {
     snapshotHash: plan.snapshotHash,
     createdAt: plan.createdAt.toISOString(),
     updatedAt: plan.updatedAt.toISOString(),
+    chronologyCompatibilityIssues,
     nodes: plan.nodes.map((entry) => ({
       planVersionNodeId: entry.id,
       nodeId: entry.nodeId,
@@ -692,6 +738,7 @@ function serializePlanVersion(plan: PlanVersionWithNodes): PlanVersionSummary {
       termination: entry.node.termination
         ? {
             id: entry.node.termination.id,
+            name: entry.node.termination.name,
             plannedOutcomeCriteria:
               entry.node.termination.plannedOutcomeCriteria,
             plannedAt: entry.node.termination.plannedAt.toISOString(),
@@ -778,6 +825,7 @@ function nodeCoreHash(node: PlanNodeSummary): string {
       : null,
     termination: node.termination
       ? {
+          name: node.termination.name,
           plannedOutcomeCriteria: node.termination.plannedOutcomeCriteria,
           plannedAt: node.termination.plannedAt,
         }

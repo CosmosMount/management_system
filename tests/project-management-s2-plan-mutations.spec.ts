@@ -36,6 +36,7 @@ import {
 } from "../lib/project-management/application/task-mutation-service";
 import { toProjectManagementServiceError } from "../lib/project-management/application/errors";
 import type { ProjectManagementActor } from "../lib/project-management/identity";
+import { getTaskWorkspace } from "../lib/project-management/queries/task-queries";
 import { absoluteDateTimeSchema } from "../lib/project-management/validations/lifecycle";
 import {
   cleanupBarrierResources,
@@ -72,7 +73,6 @@ test.describe("project management S2 plan and Task mutation services", () => {
       reviewerPersonId: reviewer.person.id,
       title: "计划字段持久化 Task",
       relatedTaskId: related.taskId,
-      sameDayMilestones: true,
     });
     const created = await createTaskDraft(actor(admin), input);
 
@@ -98,7 +98,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
     await expectServiceError(
       createTaskDraft(actor(admin), {
         ...input,
-        plannedStartAt: iso(2026, 8, 2),
+        plannedStartAt: iso(2026, 7, 31),
       }),
       "STATE_CONFLICT",
     );
@@ -532,13 +532,14 @@ test.describe("project management S2 plan and Task mutation services", () => {
           clientKey: "composer-new-m2",
           goal: "新 M2",
           completionCriteria: "新节点完成",
-          expectedCompletedAt: iso(2026, 8, 2),
+          expectedCompletedAt: iso(2026, 8, 3),
           reviewRequirements: "文本证据",
-          businessDescription: "同日排序",
+          businessDescription: "严格递增排序",
         },
       ],
       termination: {
         nodeId: originalTermination.nodeId,
+        name: "Terminal",
         plannedOutcomeCriteria: "计划完成",
         plannedAt: iso(2026, 8, 4),
         businessDescription: "保留结束节点",
@@ -578,13 +579,14 @@ test.describe("project management S2 plan and Task mutation services", () => {
           clientKey: "composer-new-m2",
           goal: "新 M2",
           completionCriteria: "新节点完成",
-          expectedCompletedAt: iso(2026, 8, 2),
+          expectedCompletedAt: iso(2026, 8, 3),
           reviewRequirements: "文本证据",
-          businessDescription: "同日排序",
+          businessDescription: "严格递增排序",
         },
       ],
       termination: {
         nodeId: originalTermination.nodeId,
+        name: "Terminal",
         plannedOutcomeCriteria: "计划完成",
         plannedAt: iso(2026, 8, 4),
         businessDescription: "保留结束节点",
@@ -622,6 +624,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
         ],
         termination: {
           nodeId: originalTermination.nodeId,
+          name: "Terminal",
           plannedOutcomeCriteria: "结束",
           plannedAt: iso(2026, 8, 4),
           businessDescription: "",
@@ -658,6 +661,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
       })),
       termination: {
         clientKey: "bounded-audit-termination",
+        name: "终".repeat(200),
         plannedOutcomeCriteria: `${longText}-termination-criteria`,
         plannedAt: iso(2026, 8, 205),
         businessDescription: `${longText}-termination-business`,
@@ -1118,6 +1122,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
           ],
           termination: {
             nodeId: termination.nodeId,
+            name: termination.node.termination.name,
             plannedOutcomeCriteria:
               termination.node.termination.plannedOutcomeCriteria,
             plannedAt: termination.node.termination.plannedAt.toISOString(),
@@ -2022,7 +2027,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
     );
   });
 
-  test("legacy Active chronology can be repaired by Revision or closed by Termination while target validation remains strict", async () => {
+  test("legacy Active chronology remains readable and closable but cannot enter a non-strict Revision target", async () => {
     const admin = await createAccountPerson("S2 Legacy Repair Admin");
     const owner = await createAccountPerson("S2 Legacy Repair Owner");
     const reviewer = await createAccountPerson("S2 Legacy Repair Reviewer");
@@ -2066,30 +2071,26 @@ test.describe("project management S2 plan and Task mutation services", () => {
       where: { nodeId: carriedMilestones[1]?.nodeId },
       data: { expectedCompletedAt: new Date(iso(2026, 8, 2)) },
     });
-    const legacyTask = await currentTask(legacy.taskId);
-    const revision = await createRevisionDraft(actor(owner), {
+    const legacyWorkspace = await getTaskWorkspace({
+      actor: actor(owner),
       taskId: legacy.taskId,
-      basePlanVersionId: legacy.currentPlanVersionId,
-      baseTaskLockVersion: legacyTask.lockVersion,
-      revisedFromNodeId: active.nodeId,
-      reason: "修复 legacy Current chronology",
-      plannedStartAt: iso(2026, 8, 1),
-      replacementMilestones: [milestoneInput("Repaired M3", 6)],
-      termination: terminationInput(8),
-      idempotencyKey: `s2-legacy-repair-${randomUUID()}`,
     });
-    expect(
-      await submitRevision(actor(owner), {
-        revisionNodeId: revision.revisionNodeId,
-        comment: "提交 legacy 修复",
+    expect(legacyWorkspace.currentPlan.chronologyCompatibilityIssues.length).toBeGreaterThan(0);
+    const legacyTask = await currentTask(legacy.taskId);
+    await expectServiceError(
+      createRevisionDraft(actor(owner), {
+        taskId: legacy.taskId,
+        basePlanVersionId: legacy.currentPlanVersionId,
+        baseTaskLockVersion: legacyTask.lockVersion,
+        revisedFromNodeId: active.nodeId,
+        reason: "修复 legacy Current chronology",
+        plannedStartAt: iso(2026, 8, 1),
+        replacementMilestones: [milestoneInput("Repaired M3", 6)],
+        termination: terminationInput(8),
+        idempotencyKey: `s2-legacy-repair-${randomUUID()}`,
       }),
-    ).toMatchObject({ status: "PENDING_APPROVAL" });
-    expect(
-      await approveRevision(actor(admin), {
-        revisionNodeId: revision.revisionNodeId,
-        comment: "应用 legacy 修复",
-      }),
-    ).toMatchObject({ status: "EFFECTIVE" });
+      "PLAN_CHRONOLOGY_INVALID",
+    );
 
     const closeFixture = await createDraft({
       creator: admin,
@@ -2300,6 +2301,7 @@ function planTerminationReplacement(entry: PlanEntryFixture) {
   if (!entry.node.termination) throw new Error("计划节点不是 Termination");
   return {
     nodeId: entry.nodeId,
+    name: entry.node.termination.name,
     plannedOutcomeCriteria: entry.node.termination.plannedOutcomeCriteria,
     plannedAt: entry.node.termination.plannedAt.toISOString(),
     businessDescription: entry.node.businessDescription,
@@ -2338,7 +2340,6 @@ function taskDraftInput(input: {
   team?: "英雄" | "工程";
   techGroup?: "电控" | "机械";
   relatedTaskId?: string | null;
-  sameDayMilestones?: boolean;
   extraMembers?: Array<{ personId: string; role: TaskMemberRole }>;
   tagIds?: string[];
 }) {
@@ -2357,7 +2358,7 @@ function taskDraftInput(input: {
     plannedStartAt: iso(2026, 8, 1),
     milestones: [
       milestoneInput("M1", 2),
-      milestoneInput("M2", input.sameDayMilestones ? 2 : 4),
+      milestoneInput("M2", 4),
     ],
     termination: terminationInput(8),
     relatedTaskId: input.relatedTaskId ?? null,
@@ -2377,6 +2378,7 @@ function milestoneInput(goal: string, day: number) {
 
 function terminationInput(day: number) {
   return {
+    name: "Terminal",
     plannedOutcomeCriteria: "完成全部目标",
     plannedAt: iso(2026, 8, day),
     businessDescription: "结束确认",
@@ -2605,6 +2607,7 @@ async function mutationSideEffectCounts(taskId: string) {
         : null,
       termination: entry.node.termination
         ? {
+            name: entry.node.termination.name,
             plannedOutcomeCriteria:
               entry.node.termination.plannedOutcomeCriteria,
             plannedAt: entry.node.termination.plannedAt.toISOString(),

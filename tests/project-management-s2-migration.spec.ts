@@ -19,6 +19,7 @@ import { prisma } from "../lib/prisma";
 import {
   runProjectManagementAction,
 } from "../lib/project-management/application/action-result";
+import { hashPlanSnapshot } from "../lib/project-management/application/plan-snapshot";
 import {
   PROJECT_MANAGEMENT_ERROR_CODES,
   ProjectManagementServiceError,
@@ -83,6 +84,191 @@ import {
 const MIGRATIONS_DIR = path.join(process.cwd(), "prisma/migrations");
 const S2_MIGRATION_NAME =
   "20260730120000_add_task_plan_version_planned_start_at";
+const TERMINATION_NAME_MIGRATION_NAME =
+  "20260804120000_add_termination_node_name";
+
+test("Termination name migration provides a non-null 200-character Terminal default", async () => {
+  const columns = await prisma.$queryRaw<
+    Array<{
+      data_type: string;
+      character_maximum_length: number | null;
+      is_nullable: string;
+      column_default: string | null;
+    }>
+  >`
+    SELECT data_type, character_maximum_length, is_nullable, column_default
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'TerminationNode'
+      AND column_name = 'name'
+  `;
+  expect(columns).toHaveLength(1);
+  expect(columns[0]).toMatchObject({
+    data_type: "character varying",
+    character_maximum_length: 200,
+    is_nullable: "NO",
+  });
+  expect(columns[0]?.column_default).toContain("Terminal");
+});
+
+test("Termination name migration backfills existing rows before enforcing the default", async () => {
+  test.setTimeout(180_000);
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) throw new Error("DATABASE_URL is required");
+  const sourceUrl = new URL(databaseUrl);
+  const sourceDatabaseName = sourceUrl.pathname.replace(/^\//, "");
+  if (
+    !["127.0.0.1", "localhost", "::1"].includes(sourceUrl.hostname) ||
+    !sourceDatabaseName.endsWith("_test") ||
+    /prod(?:uction)?/i.test(sourceDatabaseName)
+  ) {
+    throw new Error("拒绝在非本机测试数据库执行 Terminal name migration 回归");
+  }
+
+  const randomPart = randomUUID().replaceAll("-", "").slice(0, 12);
+  const temporaryDatabaseName = `${sourceDatabaseName.slice(0, 20)}_${randomPart}_terminal_name_test`;
+  if (!/^[a-zA-Z0-9_]+_terminal_name_test$/.test(temporaryDatabaseName)) {
+    throw new Error("Terminal name 临时数据库名称安全校验失败");
+  }
+  const adminUrl = new URL(sourceUrl);
+  adminUrl.pathname = "/postgres";
+  const temporaryDatabaseUrl = new URL(sourceUrl);
+  temporaryDatabaseUrl.pathname = `/${temporaryDatabaseName}`;
+  const adminClient = new Client({ connectionString: adminUrl.toString() });
+  let migrationClient: Client | null = null;
+  await adminClient.connect();
+  try {
+    const existing = await adminClient.query(
+      "SELECT 1 FROM pg_database WHERE datname = $1",
+      [temporaryDatabaseName],
+    );
+    if (existing.rowCount !== 0) {
+      throw new Error("随机 Terminal name 临时数据库已存在，拒绝复用");
+    }
+    await adminClient.query(`CREATE DATABASE "${temporaryDatabaseName}"`);
+    migrationClient = new Client({
+      connectionString: temporaryDatabaseUrl.toString(),
+    });
+    await migrationClient.connect();
+    const migrationNames = (await readdir(MIGRATIONS_DIR, { withFileTypes: true }))
+      .filter(
+        (entry) =>
+          entry.isDirectory() && entry.name < TERMINATION_NAME_MIGRATION_NAME,
+      )
+      .map((entry) => entry.name)
+      .sort();
+    expect(migrationNames.length).toBeGreaterThan(0);
+    for (const migrationName of migrationNames) {
+      const migrationSql = await readFile(
+        path.join(MIGRATIONS_DIR, migrationName, "migration.sql"),
+        "utf8",
+      );
+      const requiresOuterTransaction =
+        migrationSql.includes("ON COMMIT DROP") ||
+        (migrationSql.includes("LOCK TABLE") &&
+          !/(?:^|\n)\s*BEGIN\s*;/i.test(migrationSql));
+      if (requiresOuterTransaction) {
+        await executeMigrationSqlAtomically(migrationClient, migrationSql);
+      } else {
+        await executeMigrationSql(migrationClient, migrationSql);
+      }
+    }
+
+    const beforeColumn = await migrationClient.query(`
+      SELECT 1
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'TerminationNode'
+        AND column_name = 'name'
+    `);
+    expect(beforeColumn.rowCount).toBe(0);
+
+    const accountId = randomUUID();
+    const taskId = randomUUID();
+    const planVersionId = randomUUID();
+    const taskNodeId = randomUUID();
+    const terminationId = randomUUID();
+    const identityId = randomUUID();
+    const roleAssignmentId = randomUUID();
+    await migrationClient.query("BEGIN");
+    await migrationClient.query("SET CONSTRAINTS ALL DEFERRED");
+    await migrationClient.query(
+      'INSERT INTO "Account" ("id", "updatedAt") VALUES ($1, CURRENT_TIMESTAMP)',
+      [accountId],
+    );
+    await migrationClient.query(
+      'INSERT INTO "AccountIdentity" ("id", "accountId", "provider", "providerSubject", "tenantId", "openId", "updatedAt") VALUES ($1, $2, \'FEISHU\', $3, \'default\', $4, CURRENT_TIMESTAMP)',
+      [identityId, accountId, `open:terminal-migration-${accountId}`, `ou_terminal_migration_${accountId}`],
+    );
+    await migrationClient.query(
+      'INSERT INTO "SystemRoleAssignment" ("id", "accountId", "role", "team", "techGroup") VALUES ($1, $2, \'PROJECT_ADMINISTRATOR\', \'\', \'\')',
+      [roleAssignmentId, accountId],
+    );
+    await migrationClient.query(
+      'INSERT INTO "Task" ("id", "title", "currentPlanVersionId", "createdByAccountId", "updatedAt") VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)',
+      [taskId, "pre-migration Terminal", planVersionId, accountId],
+    );
+    await migrationClient.query(
+      'INSERT INTO "TaskPlanVersion" ("id", "taskId", "versionNo", "status", "reason", "createdByAccountId", "updatedAt") VALUES ($1, $2, 1, \'CURRENT\', $3, $4, CURRENT_TIMESTAMP)',
+      [planVersionId, taskId, "pre-migration Terminal plan", accountId],
+    );
+    await migrationClient.query(
+      'INSERT INTO "TaskNode" ("id", "taskId", "type", "status", "businessDescription", "createdByAccountId", "updatedAt") VALUES ($1, $2, \'TERMINATION\', \'PENDING\', $3, $4, CURRENT_TIMESTAMP)',
+      [taskNodeId, taskId, "legacy Terminal row", accountId],
+    );
+    await migrationClient.query(
+      'INSERT INTO "TerminationNode" ("id", "nodeId", "plannedOutcomeCriteria", "plannedAt") VALUES ($1, $2, $3, $4)',
+      [terminationId, taskNodeId, "legacy completion criteria", new Date("2026-08-20T01:00:00.000Z")],
+    );
+    await migrationClient.query("COMMIT");
+
+    await executeMigrationSql(
+      migrationClient,
+      await readFile(
+        path.join(
+          MIGRATIONS_DIR,
+          TERMINATION_NAME_MIGRATION_NAME,
+          "migration.sql",
+        ),
+        "utf8",
+      ),
+    );
+
+    const migratedTermination = await migrationClient.query<{ name: string }>(
+      'SELECT "name" FROM "TerminationNode" WHERE "id" = $1',
+      [terminationId],
+    );
+    expect(migratedTermination.rows).toEqual([{ name: "Terminal" }]);
+    const columns = await migrationClient.query<{
+      data_type: string;
+      character_maximum_length: number | null;
+      is_nullable: string;
+      column_default: string | null;
+    }>(`
+      SELECT data_type, character_maximum_length, is_nullable, column_default
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'TerminationNode'
+        AND column_name = 'name'
+    `);
+    expect(columns.rows).toHaveLength(1);
+    expect(columns.rows[0]).toMatchObject({
+      data_type: "character varying",
+      character_maximum_length: 200,
+      is_nullable: "NO",
+    });
+    expect(columns.rows[0]?.column_default).toContain("Terminal");
+  } finally {
+    await migrationClient?.end().catch(() => undefined);
+    await adminClient.query(`DROP DATABASE IF EXISTS "${temporaryDatabaseName}"`);
+    const remains = await adminClient.query(
+      "SELECT 1 FROM pg_database WHERE datname = $1",
+      [temporaryDatabaseName],
+    );
+    expect(remains.rowCount).toBe(0);
+    await adminClient.end();
+  }
+});
 
 test("S2 migration adds nullable timestamptz(6) plannedStartAt and preserves legacy null plans", async () => {
   const columns = await prisma.$queryRaw<
@@ -346,14 +532,77 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
     members: [{ personId: ownerPersonId, role: "OWNER" }],
     milestones: [
       milestone("同日节点 A", "2026-08-01T10:00:00.000Z"),
-      milestone("同日节点 B", "2026-08-01T10:00:00.000Z"),
+      milestone("同日节点 B", "2026-08-01T11:00:00.000Z"),
     ],
-    termination: termination("2026-08-01T10:00:00.000Z"),
+    termination: termination("2026-08-01T12:00:00.000Z"),
     plannedStartAt: "2026-08-01T09:00:00.000Z",
     idempotencyKey: randomUUID(),
   };
   const parsedDraft = createTaskDraftInputSchema.parse(baseDraft);
   expect(parsedDraft.relatedTaskId).toBeNull();
+  expect(parsedDraft.termination.name).toBe("Terminal");
+  expect(
+    createTaskDraftInputSchema.safeParse({
+      ...baseDraft,
+      milestones: Array.from({ length: 201 }, (_, index) =>
+        milestone(
+          `节点 ${index + 1}`,
+          new Date(Date.UTC(2026, 7, index + 2, 10)).toISOString(),
+        ),
+      ),
+      termination: termination(
+        new Date(Date.UTC(2027, 2, 1, 10)).toISOString(),
+      ),
+    }).success,
+  ).toBe(false);
+  expect(
+    createTaskDraftInputSchema.safeParse({
+      ...baseDraft,
+      milestones: [],
+      termination: {
+        ...termination("2026-08-01T10:00:00.000Z"),
+        name: "项目验收终点",
+      },
+    }).success,
+  ).toBe(true);
+  expect(
+    createTaskDraftInputSchema.safeParse({
+      ...baseDraft,
+      termination: {
+        plannedOutcomeCriteria: baseDraft.termination.plannedOutcomeCriteria,
+        plannedAt: baseDraft.termination.plannedAt,
+        businessDescription: baseDraft.termination.businessDescription,
+      },
+    }).success,
+  ).toBe(false);
+  expect(
+    createTaskDraftInputSchema.safeParse({
+      ...baseDraft,
+      termination: { ...baseDraft.termination, name: " " },
+    }).success,
+  ).toBe(false);
+  expect(
+    createTaskDraftInputSchema.safeParse({
+      ...baseDraft,
+      termination: { ...baseDraft.termination, name: "终".repeat(201) },
+    }).success,
+  ).toBe(false);
+  expect(
+    createTaskDraftInputSchema.safeParse({
+      ...baseDraft,
+      milestones: [
+        milestone("同刻节点 A", "2026-08-01T10:00:00.000Z"),
+        milestone("同刻节点 B", "2026-08-01T10:00:00.000Z"),
+      ],
+    }).success,
+  ).toBe(false);
+  expect(
+    createTaskDraftInputSchema.safeParse({
+      ...baseDraft,
+      milestones: [],
+      termination: termination("2026-08-01T09:00:00.000Z"),
+    }).success,
+  ).toBe(false);
 
   const absoluteDateTime = absoluteDateTimeSchema("时间必须包含时区");
   for (const invalidDateTime of ["2026-08-01", "2026-08-01T10:00:00"]) {
@@ -386,7 +635,7 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
     milestones: [
       milestone("跨日节点", "2026-08-02T00:00:00+08:00"),
     ],
-    termination: termination("2026-08-02T00:00:00+08:00"),
+    termination: termination("2026-08-02T01:00:00+08:00"),
   });
   expect(crossDayDraft.milestones[0]?.expectedCompletedAt.toISOString()).toBe(
     "2026-08-01T16:00:00.000Z",
@@ -737,6 +986,44 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
   expect(timeCanvasVisibleSegmentCountSchema.safeParse(5_001).success).toBe(
     false,
   );
+});
+
+test("Terminal default name preserves snapshot hashes while custom names are versioned", () => {
+  const terminalNode = {
+    sequence: 1,
+    nodeId: randomUUID(),
+    type: "TERMINATION" as const,
+    businessDescription: "结束确认",
+    milestone: null,
+    revision: null,
+    termination: {
+      plannedOutcomeCriteria: "完成目标",
+      plannedAt: "2026-08-15T09:00:00.000Z",
+    },
+  };
+  const input = {
+    plannedStartAt: "2026-08-01T09:00:00.000Z",
+    nodes: [terminalNode],
+  };
+  const legacyHash = hashPlanSnapshot(input);
+  expect(
+    hashPlanSnapshot({
+      ...input,
+      nodes: [{
+        ...terminalNode,
+        termination: { ...terminalNode.termination, name: "Terminal" },
+      }],
+    }),
+  ).toBe(legacyHash);
+  expect(
+    hashPlanSnapshot({
+      ...input,
+      nodes: [{
+        ...terminalNode,
+        termination: { ...terminalNode.termination, name: "最终验收" },
+      }],
+    }),
+  ).not.toBe(legacyHash);
 });
 
 test("S2 canvas output schemas retain pagination, grouping and privacy invariants", () => {
@@ -1722,6 +2009,7 @@ function milestone(goal: string, expectedCompletedAt: string) {
 
 function termination(plannedAt: string) {
   return {
+    name: "Terminal",
     plannedOutcomeCriteria: "全部节点完成",
     plannedAt,
     businessDescription: "",
@@ -1810,6 +2098,17 @@ async function mappedActionErrorCode(callback: () => unknown) {
 async function executeMigrationSql(client: Client, sql: string) {
   for (const statement of splitPostgresStatements(sql)) {
     await client.query(statement);
+  }
+}
+
+async function executeMigrationSqlAtomically(client: Client, sql: string) {
+  await client.query("BEGIN");
+  try {
+    await executeMigrationSql(client, sql);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
   }
 }
 

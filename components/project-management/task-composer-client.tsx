@@ -6,18 +6,11 @@ import {
   useMemo,
   useRef,
   useState,
-  type MouseEvent as ReactMouseEvent,
-  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
 import {
-  AlertTriangle,
   ArrowLeft,
-  CheckCircle2,
-  Copy,
-  Flag,
-  GripVertical,
   Plus,
   Redo2,
   Save,
@@ -29,9 +22,18 @@ import {
   listTagOptions,
 } from "@/app/actions/project-management/canvas";
 import { TaskSelect } from "@/components/project-management/task-picker";
+import { TaskComposerPlanEditor } from "@/components/project-management/task-composer-plan-editor";
 import { UserSelect } from "@/components/project-management/user-picker";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { TEAM_OPTIONS, TECH_GROUP_OPTIONS } from "@/lib/constants";
@@ -48,18 +50,33 @@ import type {
   TagOptionPage,
   TaskOptionPage,
 } from "@/lib/project-management/types/time-canvas";
+import type {
+  TimeCanvasAnchorMoveRequest,
+  TimeCanvasAnchorMoveResolution,
+} from "@/components/project-management/time-canvas/types";
+import {
+  MAX_TASK_COMPOSER_DRAFT_CHARS,
+  canUseIndexedDraftStorage,
+  parseIndexedDraftPointer,
+  persistTaskComposerDraft,
+  readIndexedDraft,
+  removeTaskComposerDraft,
+  withTaskComposerDraftLock,
+} from "@/components/project-management/task-composer-draft-storage";
 import { routes } from "@/lib/routes";
-import { cn } from "@/lib/utils";
 
-const LOCAL_DRAFT_SCHEMA_VERSION = 2;
+const LOCAL_DRAFT_SCHEMA_VERSION = 3;
 const MAX_HISTORY = 80;
 const DAY_MS = 24 * 60 * 60 * 1_000;
-const MAX_LOCAL_DRAFT_BYTES = 1_000_000;
+const NO_LEGAL_ANCHOR_MOVE_MESSAGE =
+  "当前吸附粒度没有合法位置，节点已保留在原处；请放大画布或使用 Inspector 精调。";
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const taskMemberRoles = ["OWNER", "PARTICIPANT"] as const;
 type TaskMemberRoleValue = (typeof taskMemberRoles)[number];
 type TaskPriorityValue = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
+
+export const TASK_COMPOSER_START_ID = "task-composer-start";
 
 export type TaskComposerMilestone = {
   id: string;
@@ -68,6 +85,11 @@ export type TaskComposerMilestone = {
   expectedCompletedAt: string;
   reviewRequirements: string;
   businessDescription: string;
+};
+
+export type TaskComposerNodeMeta = {
+  lifecycle: "TEMPORARY" | "ESTABLISHED";
+  lastValidAt: string;
 };
 
 export type TaskComposerSeed = {
@@ -84,12 +106,36 @@ export type TaskComposerSeed = {
   milestones: TaskComposerMilestone[];
   termination: {
     id: string;
+    name: string;
     plannedAt: string;
     plannedOutcomeCriteria: string;
     businessDescription: string;
   };
   selectedEntityId: string | null;
+  /** Composer-only presentation state. It is never included in the server payload. */
+  nodeMeta?: Record<string, TaskComposerNodeMeta>;
 };
+
+export type TaskComposerInspectorDraft =
+  | {
+      kind: "START";
+      entityId: typeof TASK_COMPOSER_START_ID;
+      plannedStartAt: string;
+      returnEntityId: string | null;
+    }
+  | {
+      kind: "MILESTONE";
+      entityId: string;
+      milestone: TaskComposerMilestone;
+      isNew: boolean;
+      returnEntityId: string | null;
+    }
+  | {
+      kind: "TERMINATION";
+      entityId: string;
+      termination: TaskComposerSeed["termination"];
+      returnEntityId: string | null;
+    };
 
 type ComposerHistory = {
   past: TaskComposerSeed[];
@@ -97,17 +143,19 @@ type ComposerHistory = {
   future: TaskComposerSeed[];
 };
 
-type ValidationIssue = {
+export type ValidationIssue = {
   key: string;
   message: string;
   entityId?: string;
 };
 
 type LocalTaskDraft = {
-  schemaVersion: 2;
+  schemaVersion: 3;
   draftId: string;
   savedAt: string;
   task: TaskComposerSeed;
+  inspectorDraft: TaskComposerInspectorDraft | null;
+  inspectorDirty: boolean;
 };
 
 type LocalDraftRecovery =
@@ -136,9 +184,13 @@ export function TaskComposerClient({
   actorPersonId: string;
 }) {
   const router = useRouter();
+  const normalizedInitialSeed = useMemo(
+    () => normalizeComposerSeed(initialSeed),
+    [initialSeed],
+  );
   const [history, setHistory] = useState<ComposerHistory>({
     past: [],
-    present: initialSeed,
+    present: normalizedInitialSeed,
     future: [],
   });
   const state = history.present;
@@ -149,6 +201,7 @@ export function TaskComposerClient({
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [recovery, setRecovery] = useState<LocalDraftRecovery | null>(null);
   const [storageReady, setStorageReady] = useState(false);
+  const [storageBusy, setStorageBusy] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState<string | null>(null);
   const [people, setPeople] = useState<PersonOption[]>(initialPeople);
   const [tags, setTags] = useState<TagOption[]>(initialTags);
@@ -171,34 +224,65 @@ export function TaskComposerClient({
   );
   const [memberRole, setMemberRole] =
     useState<TaskMemberRoleValue>("PARTICIPANT");
-  const [lastValidationIssues, setLastValidationIssues] = useState<
-    ValidationIssue[]
-  >([]);
-  const dragRef = useRef<{
-    id: string;
-    startX: number;
-    originalAt: string;
-  } | null>(null);
   const historyGuardRef = useRef(false);
   const bypassPopStateRef = useRef(false);
+  const draftWriteChainRef = useRef<Promise<void>>(Promise.resolve());
+  const autoSaveTimerRef = useRef<number | null>(null);
+  const liveEditEntityRef = useRef<string | null>(null);
   const storageKey = useMemo(
     () =>
       `task-draft:${encodeURIComponent(deploymentEnvironment)}:${encodeURIComponent(accountId)}:v${LOCAL_DRAFT_SCHEMA_VERSION}`,
     [accountId, deploymentEnvironment],
   );
-  const legacyStorageKey = useMemo(
+  const legacyStorageKeyV1 = useMemo(
     () =>
       `task-draft:${encodeURIComponent(deploymentEnvironment)}:${encodeURIComponent(accountId)}:v1`,
+    [accountId, deploymentEnvironment],
+  );
+  const legacyStorageKeyV2 = useMemo(
+    () =>
+      `task-draft:${encodeURIComponent(deploymentEnvironment)}:${encodeURIComponent(accountId)}:v2`,
     [accountId, deploymentEnvironment],
   );
   const issues = useMemo(
     () => validateComposer(state),
     [state],
   );
-  const selectedMilestone = state.milestones.find(
-    (milestone) => milestone.id === state.selectedEntityId,
+  const inspectorDraft = useMemo(
+    () => inspectorDraftForEntity(state, state.selectedEntityId),
+    [state],
   );
-  const selectedTermination = state.selectedEntityId === state.termination.id;
+  const inspectorIssues = useMemo(
+    () =>
+      inspectorDraft
+        ? issues.filter((issue) => issue.entityId === inspectorDraft.entityId)
+        : [],
+    [inspectorDraft, issues],
+  );
+
+  const queueDraftWrite = useCallback(
+    (draft: LocalTaskDraft) => {
+      const raw = JSON.stringify(draft);
+      const write = draftWriteChainRef.current
+        .catch(() => undefined)
+        .then(() =>
+          persistTaskComposerDraft({
+            storageKey,
+            raw,
+            draftId: draft.draftId,
+            savedAt: draft.savedAt,
+          }),
+        );
+      draftWriteChainRef.current = write.catch(() => undefined);
+      return write;
+    },
+    [storageKey],
+  );
+  const cancelPendingAutoSave = useCallback(() => {
+    if (autoSaveTimerRef.current === null) return;
+    window.clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = null;
+  }, []);
 
   const commit = useCallback(
     (mutator: (current: TaskComposerSeed) => TaskComposerSeed) => {
@@ -226,57 +310,125 @@ export function TaskComposerClient({
   );
 
   useEffect(() => {
+    let cancelled = false;
     const timer = window.setTimeout(() => {
-      try {
-        const currentRaw = window.localStorage.getItem(storageKey);
-        const legacyRaw = currentRaw
-          ? null
-          : window.localStorage.getItem(legacyStorageKey);
-        const raw = currentRaw ?? legacyRaw;
-        const parsed = currentRaw
-          ? parseLocalDraft(currentRaw)
-          : legacyRaw
-            ? migrateLegacyLocalDraft(legacyRaw, actorPersonId)
-            : null;
-        if (parsed) {
-          setRecovery({ kind: "VALID", draft: parsed });
-          setSavedAt(parsed.savedAt);
-        } else if (raw) {
-          setRecovery({
-            kind: "INCOMPATIBLE",
-            raw,
-            reason: "草稿版本、结构或字段不兼容，未自动覆盖或删除原始内容。",
+      void (async () => {
+        let preservedRaw: string | null = null;
+        let unavailableReason = "";
+        try {
+          await withTaskComposerDraftLock(storageKey, async () => {
+            const currentRaw = window.localStorage.getItem(storageKey);
+            const legacyRawV2 = currentRaw
+              ? null
+              : window.localStorage.getItem(legacyStorageKeyV2);
+            const legacyRawV1 = currentRaw || legacyRawV2
+              ? null
+              : window.localStorage.getItem(legacyStorageKeyV1);
+            preservedRaw = currentRaw ?? legacyRawV2 ?? legacyRawV1;
+
+            let parsed: LocalTaskDraft | null = null;
+            if (currentRaw) {
+              const pointer = parseIndexedDraftPointer(currentRaw);
+              if (pointer) {
+                const indexedRaw = await readIndexedDraft(storageKey);
+                preservedRaw = indexedRaw ?? currentRaw;
+                parsed = indexedRaw ? parseLocalDraft(indexedRaw) : null;
+                if (
+                  parsed &&
+                  (parsed.draftId !== pointer.draftId ||
+                    parsed.savedAt !== pointer.savedAt ||
+                    indexedRaw?.length !== pointer.serializedChars)
+                ) {
+                  parsed = null;
+                }
+                if (!indexedRaw) {
+                  unavailableReason = "本地草稿索引存在，但大草稿内容缺失或不可读取。";
+                }
+              } else {
+                parsed = parseLocalDraft(currentRaw);
+              }
+            } else if (legacyRawV2) {
+              parsed = migrateLegacyLocalDraft(legacyRawV2, actorPersonId, 2);
+            } else if (legacyRawV1) {
+              parsed = migrateLegacyLocalDraft(legacyRawV1, actorPersonId, 1);
+            } else if (canUseIndexedDraftStorage()) {
+              const indexedRaw = await readIndexedDraft(storageKey);
+              if (indexedRaw) {
+                preservedRaw = indexedRaw;
+                parsed = parseLocalDraft(indexedRaw);
+              }
+            }
+
+            if (cancelled) return;
+            if (parsed) {
+              setRecovery({ kind: "VALID", draft: parsed });
+              setSavedAt(parsed.savedAt);
+            } else if (preservedRaw) {
+              setRecovery({
+                kind: "INCOMPATIBLE",
+                raw: preservedRaw,
+                reason:
+                  unavailableReason ||
+                  "草稿版本、结构或字段不兼容，未自动覆盖或删除原始内容。",
+              });
+            } else {
+              setStorageReady(true);
+            }
           });
-        } else {
-          setStorageReady(true);
+        } catch {
+          if (cancelled) return;
+          if (preservedRaw) {
+            setRecovery({
+              kind: "INCOMPATIBLE",
+              raw: preservedRaw,
+              reason: "浏览器无法读取本地大草稿；原始索引仍保留，未自动覆盖或删除。",
+            });
+          } else {
+            setStorageReady(true);
+            setServerError("浏览器本地草稿不可用；你仍可创建 Task，但刷新后内容可能丢失。");
+          }
         }
-      } catch {
-        setStorageReady(true);
-        setServerError("浏览器本地草稿不可用；你仍可创建 Task，但刷新后内容可能丢失。");
-      }
+      })();
     }, 0);
-    return () => window.clearTimeout(timer);
-  }, [actorPersonId, legacyStorageKey, storageKey]);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [actorPersonId, legacyStorageKeyV1, legacyStorageKeyV2, storageKey]);
 
   useEffect(() => {
-    if (!storageReady || recovery || !dirty || submitting) return;
+    if (!storageReady || recovery || !dirty || submitting || storageBusy) return;
+    let cancelled = false;
     const timer = window.setTimeout(() => {
+      autoSaveTimerRef.current = null;
       const saved = new Date().toISOString();
       const envelope: LocalTaskDraft = {
         schemaVersion: LOCAL_DRAFT_SCHEMA_VERSION,
         draftId: state.draftId,
         savedAt: saved,
         task: state,
+        inspectorDraft: null,
+        inspectorDirty: false,
       };
-      try {
-        window.localStorage.setItem(storageKey, JSON.stringify(envelope));
-        setSavedAt(saved);
-      } catch {
-        setServerError("本地草稿保存失败，请不要刷新页面并尽快复制重要内容。");
-      }
+      void queueDraftWrite(envelope)
+        .then(() => {
+          if (!cancelled) setSavedAt(saved);
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setServerError("本地草稿保存失败，请不要刷新页面并尽快复制重要内容。");
+          }
+        });
     }, 700);
-    return () => window.clearTimeout(timer);
-  }, [dirty, recovery, state, storageKey, storageReady, submitting]);
+    autoSaveTimerRef.current = timer;
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      if (autoSaveTimerRef.current === timer) {
+        autoSaveTimerRef.current = null;
+      }
+    };
+  }, [dirty, queueDraftWrite, recovery, state, storageBusy, storageReady, submitting]);
 
   useEffect(() => {
     if (!dirty || submitting) return;
@@ -334,90 +486,150 @@ export function TaskComposerClient({
   const updateField = <K extends keyof TaskComposerSeed>(
     key: K,
     value: TaskComposerSeed[K],
-  ) => commit((current) => ({ ...current, [key]: value }));
+  ) => {
+    liveEditEntityRef.current = null;
+    commit((current) => ({ ...current, [key]: value }));
+  };
 
-  const updateMilestone = (
-    id: string,
-    patch: Partial<TaskComposerMilestone>,
-    sortByDate = false,
-  ) =>
-    commit((current) => ({
-      ...current,
-      milestones: sortByDate
-        ? sortMilestones(
-            current.milestones.map((milestone) =>
-              milestone.id === id ? { ...milestone, ...patch } : milestone,
-            ),
-          )
-        : current.milestones.map((milestone) =>
-            milestone.id === id ? { ...milestone, ...patch } : milestone,
-          ),
-    }));
+  const selectEntity = (entityId: string) => {
+    if (entityId === state.selectedEntityId) return;
+    liveEditEntityRef.current = null;
+    replacePresent((current) => ({ ...current, selectedEntityId: entityId }));
+  };
 
-  const addMilestone = (at?: string) => {
+  const beginMilestone = (at: string, source?: TaskComposerMilestone) => {
     if (state.milestones.length >= 200) {
       setServerError("单个计划最多 200 个 Milestone。");
       return;
     }
-    const previousAt = state.milestones.at(-1)?.expectedCompletedAt ?? state.plannedStartAt;
+    if (!isMilestoneTimeAvailable(state, at)) {
+      setServerError("当前没有可用的分钟级 Milestone 位置，请先调整相邻节点或 Terminal。");
+      return;
+    }
     const milestone: TaskComposerMilestone = {
       id: `draft-node-${clientId()}`,
-      goal: "",
-      completionCriteria: "",
-      expectedCompletedAt: at ?? addDaysLocal(previousAt, 7),
-      reviewRequirements: "",
-      businessDescription: "",
+      goal: source?.goal ?? "",
+      completionCriteria: source?.completionCriteria ?? "",
+      expectedCompletedAt: at,
+      reviewRequirements: source?.reviewRequirements ?? "",
+      businessDescription: source?.businessDescription ?? "",
     };
-    commit((current) => ({
-      ...current,
-      milestones: sortMilestones([...current.milestones, milestone]),
-      selectedEntityId: milestone.id,
-    }));
+    commit((current) => {
+      const nextState: TaskComposerSeed = {
+        ...current,
+        milestones: sortMilestones([...current.milestones, milestone]),
+        selectedEntityId: milestone.id,
+        nodeMeta: {
+          ...current.nodeMeta,
+          [milestone.id]: {
+            lifecycle: "TEMPORARY",
+            lastValidAt: at,
+          },
+        },
+      };
+      return reconcileComposerPlanState(nextState);
+    });
+    // Adding a node is a structural history entry. The first field edit starts
+    // a separate live-edit segment so undo can restore the blank temporary node
+    // without removing it.
+    liveEditEntityRef.current = null;
     window.setTimeout(() => document.getElementById(`goal-${milestone.id}`)?.focus(), 0);
   };
 
   const duplicateMilestone = (source: TaskComposerMilestone) => {
-    if (state.milestones.length >= 200) {
-      setServerError("单个计划最多 200 个 Milestone。");
+    const savedSource =
+      state.milestones.find((milestone) => milestone.id === source.id) ?? source;
+    const duplicateAt = suggestDuplicateAt(state, savedSource.id);
+    if (!duplicateAt) {
+      setServerError("原节点之后没有合法的分钟级位置，请先移动相邻节点或 Terminal 后再复制。");
       return;
     }
-    const copy: TaskComposerMilestone = {
-      ...source,
-      id: `draft-node-${clientId()}`,
-      goal: source.goal ? `${source.goal}（副本）` : "",
-      expectedCompletedAt: addDaysLocal(source.expectedCompletedAt, 1),
-    };
-    commit((current) => ({
-      ...current,
-      milestones: sortMilestones([...current.milestones, copy]),
-      selectedEntityId: copy.id,
-    }));
+    beginMilestone(duplicateAt, savedSource);
   };
 
-  const removeMilestone = (id: string) => {
-    if (state.milestones.length <= 1) {
-      setServerError("计划至少保留一个 Milestone。");
-      return;
-    }
-    const target = state.milestones.find((item) => item.id === id);
-    if (
-      target &&
-      (target.goal || target.completionCriteria || target.reviewRequirements) &&
-      !window.confirm("此 Milestone 已填写内容，确认删除？")
-    ) {
-      return;
-    }
+  const removeMilestones = (ids: string[]) => {
+    const existingIds = ids.filter((id) => state.milestones.some((item) => item.id === id));
+    if (existingIds.length === 0) return;
+    if (!window.confirm(`确认删除选中的 ${existingIds.length} 个 Milestone？`)) return;
+    liveEditEntityRef.current = null;
     commit((current) => {
-      const remaining = current.milestones.filter((item) => item.id !== id);
-      return {
+      const remaining = current.milestones.filter((item) => !existingIds.includes(item.id));
+      const nextSelection = current.selectedEntityId && existingIds.includes(current.selectedEntityId)
+        ? current.termination.id
+        : current.selectedEntityId;
+      const nodeMeta = { ...current.nodeMeta };
+      existingIds.forEach((id) => delete nodeMeta[id]);
+      return reconcileComposerPlanState({
         ...current,
         milestones: remaining,
-        selectedEntityId: remaining[0]?.id ?? current.termination.id,
-      };
+        selectedEntityId: nextSelection,
+        nodeMeta,
+      });
     });
   };
 
+  const updateInspector = (next: TaskComposerInspectorDraft) => {
+    const mutate = (current: TaskComposerSeed) => applyLiveInspectorUpdate(current, next);
+    if (liveEditEntityRef.current === next.entityId) {
+      replacePresent(mutate);
+    } else {
+      liveEditEntityRef.current = next.entityId;
+      commit(mutate);
+    }
+    setServerError("");
+    setStatusMessage("");
+  };
+
+  const moveAnchor = (request: TimeCanvasAnchorMoveRequest) => {
+    const result = applyAnchorMove(state, request);
+    if (!result.ok) {
+      setServerError(result.message);
+      return;
+    }
+    liveEditEntityRef.current = null;
+    commit(() => reconcileComposerPlanState(result.state));
+  };
+
+  const constrainAnchorMove = (
+    request: TimeCanvasAnchorMoveRequest,
+  ): TimeCanvasAnchorMoveResolution => {
+    const result = resolveAnchorMoveCandidate(state, request);
+    const originalAt = renderAtMs(state, request.anchorId);
+    const atMs = result.ok ? result.candidateAt : originalAt;
+    const blockedMessage = result.ok
+      ? result.candidateAt === originalAt && request.atMs !== originalAt
+        ? NO_LEGAL_ANCHOR_MOVE_MESSAGE
+        : undefined
+      : result.message;
+    return {
+      atMs,
+      deltaMs: atMs - originalAt,
+      blockedMessage,
+    };
+  };
+
+  const moveTerminal = (plannedAt: string) => {
+    const at = localMs(plannedAt);
+    const boundary = Math.max(
+      renderAtMs(state, TASK_COMPOSER_START_ID),
+      ...state.milestones.map((milestone) => renderAtMs(state, milestone.id)),
+    );
+    if (!Number.isFinite(at) || at <= boundary) {
+      setServerError("Terminal 必须严格晚于 Start 和全部 Milestone。");
+      return;
+    }
+    liveEditEntityRef.current = null;
+    commit((current) =>
+      reconcileComposerPlanState({
+        ...current,
+        termination: { ...current.termination, plannedAt },
+        selectedEntityId: current.termination.id,
+      }),
+    );
+  };
+
   const undo = () => {
+    liveEditEntityRef.current = null;
     setHistory((current) => {
       const previous = current.past.at(-1);
       if (!previous) return current;
@@ -431,6 +643,7 @@ export function TaskComposerClient({
   };
 
   const redo = () => {
+    liveEditEntityRef.current = null;
     setHistory((current) => {
       const next = current.future[0];
       if (!next) return current;
@@ -445,13 +658,12 @@ export function TaskComposerClient({
 
   const focusIssue = (issue: ValidationIssue) => {
     if (issue.entityId) {
-      commit((current) => ({ ...current, selectedEntityId: issue.entityId ?? null }));
+      selectEntity(issue.entityId);
     }
     window.setTimeout(() => document.getElementById(issue.key)?.focus(), 0);
   };
 
   const runValidation = () => {
-    setLastValidationIssues(issues);
     if (issues[0]) focusIssue(issues[0]);
     setStatusMessage(
       issues.length === 0 ? "计划校验通过，可以创建 Task 草稿。" : `发现 ${issues.length} 个问题。`,
@@ -459,18 +671,18 @@ export function TaskComposerClient({
     return issues.length === 0;
   };
 
-  const persistLocalDraftNow = () => {
+  const persistLocalDraftNow = async () => {
+    cancelPendingAutoSave();
     const saved = new Date().toISOString();
     try {
-      window.localStorage.setItem(
-        storageKey,
-        JSON.stringify({
-          schemaVersion: LOCAL_DRAFT_SCHEMA_VERSION,
-          draftId: state.draftId,
-          savedAt: saved,
-          task: state,
-        } satisfies LocalTaskDraft),
-      );
+      await queueDraftWrite({
+        schemaVersion: LOCAL_DRAFT_SCHEMA_VERSION,
+        draftId: state.draftId,
+        savedAt: saved,
+        task: state,
+        inspectorDraft: null,
+        inspectorDirty: false,
+      });
       setSavedAt(saved);
       return true;
     } catch {
@@ -479,10 +691,14 @@ export function TaskComposerClient({
     }
   };
 
-  const discardLocalDraft = () => {
+  const discardLocalDraft = async () => {
+    cancelPendingAutoSave();
     try {
-      window.localStorage.removeItem(storageKey);
-      window.localStorage.removeItem(legacyStorageKey);
+      await draftWriteChainRef.current.catch(() => undefined);
+      await removeTaskComposerDraft(storageKey, [
+        legacyStorageKeyV1,
+        legacyStorageKeyV2,
+      ]);
       return true;
     } catch {
       setServerError("浏览器拒绝删除本地草稿；为避免旧草稿再次出现，当前不会离开页面。");
@@ -509,6 +725,7 @@ export function TaskComposerClient({
 
   const submit = async () => {
     if (submitting || !runValidation()) return;
+    cancelPendingAutoSave();
     setSubmitting(true);
     setServerError("");
     setStatusMessage("正在创建 Task 草稿…");
@@ -523,7 +740,7 @@ export function TaskComposerClient({
         relatedTaskId: state.relatedTaskId,
         members: state.members,
         plannedStartAt: shanghaiDateTimeLocalToIso(state.plannedStartAt),
-        milestones: state.milestones.map((milestone) => ({
+        milestones: sortMilestones(state.milestones).map((milestone) => ({
           goal: milestone.goal,
           completionCriteria: milestone.completionCriteria,
           expectedCompletedAt: shanghaiDateTimeLocalToIso(
@@ -533,6 +750,7 @@ export function TaskComposerClient({
           businessDescription: milestone.businessDescription,
         })),
         termination: {
+          name: state.termination.name,
           plannedAt: shanghaiDateTimeLocalToIso(state.termination.plannedAt),
           plannedOutcomeCriteria: state.termination.plannedOutcomeCriteria,
           businessDescription: state.termination.businessDescription,
@@ -545,8 +763,11 @@ export function TaskComposerClient({
         return;
       }
       try {
-        window.localStorage.removeItem(storageKey);
-        window.localStorage.removeItem(legacyStorageKey);
+        await draftWriteChainRef.current.catch(() => undefined);
+        await removeTaskComposerDraft(storageKey, [
+          legacyStorageKeyV1,
+          legacyStorageKeyV2,
+        ]);
       } catch {
         // The Task is already committed. Storage cleanup failure must not turn a
         // successful business mutation into a retry that could confuse the user.
@@ -618,66 +839,9 @@ export function TaskComposerClient({
   };
 
   const changeTeam = (team: string) => {
+    liveEditEntityRef.current = null;
     commit((current) => ({ ...current, team }));
     setOptionError("");
-  };
-
-  const moveSameTime = (id: string, direction: -1 | 1) => {
-    const index = state.milestones.findIndex((item) => item.id === id);
-    const targetIndex = index + direction;
-    const target = state.milestones[targetIndex];
-    const source = state.milestones[index];
-    if (!source || !target || source.expectedCompletedAt !== target.expectedCompletedAt) {
-      return;
-    }
-    commit((current) => {
-      const milestones = [...current.milestones];
-      [milestones[index], milestones[targetIndex]] = [milestones[targetIndex]!, milestones[index]!];
-      return { ...current, milestones };
-    });
-  };
-
-  const startDrag = (
-    event: ReactPointerEvent<HTMLButtonElement>,
-    milestone: TaskComposerMilestone,
-  ) => {
-    event.stopPropagation();
-    event.currentTarget.setPointerCapture(event.pointerId);
-    setHistory((current) => ({
-      past: [...current.past.slice(-(MAX_HISTORY - 1)), current.present],
-      present: current.present,
-      future: [],
-    }));
-    dragRef.current = {
-      id: milestone.id,
-      startX: event.clientX,
-      originalAt: milestone.expectedCompletedAt,
-    };
-  };
-
-  const dragMilestone = (event: ReactPointerEvent<HTMLButtonElement>) => {
-    const drag = dragRef.current;
-    if (!drag || drag.id !== event.currentTarget.dataset.nodeId) return;
-    const days = Math.round((event.clientX - drag.startX) / 48);
-    replacePresent((current) => ({
-      ...current,
-      milestones: current.milestones.map((milestone) =>
-        milestone.id === drag.id
-          ? { ...milestone, expectedCompletedAt: addDaysLocal(drag.originalAt, days) }
-          : milestone,
-      ),
-      selectedEntityId: drag.id,
-    }));
-  };
-
-  const endDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
-    if (!dragRef.current) return;
-    event.currentTarget.releasePointerCapture(event.pointerId);
-    dragRef.current = null;
-    replacePresent((current) => ({
-      ...current,
-      milestones: sortMilestones(current.milestones),
-    }));
   };
 
   return (
@@ -749,6 +913,7 @@ export function TaskComposerClient({
                 size="sm"
                 onClick={() => {
                   setHistory({ past: [], present: recovery.draft.task, future: [] });
+                  liveEditEntityRef.current = null;
                   setRecovery(null);
                   setStorageReady(true);
                   setDirty(true);
@@ -761,11 +926,18 @@ export function TaskComposerClient({
                 type="button"
                 size="sm"
                 variant="outline"
+                disabled={storageBusy}
                 onClick={() => {
-                  if (!discardLocalDraft()) return;
-                  setRecovery(null);
-                  setStorageReady(true);
-                  setSavedAt(null);
+                  if (storageBusy) return;
+                  setStorageBusy(true);
+                  void discardLocalDraft()
+                    .then((discarded) => {
+                      if (!discarded) return;
+                      setRecovery(null);
+                      setStorageReady(true);
+                      setSavedAt(null);
+                    })
+                    .finally(() => setStorageBusy(false));
                 }}
               >
                 放弃旧草稿
@@ -792,11 +964,18 @@ export function TaskComposerClient({
                 type="button"
                 size="sm"
                 variant="destructive"
+                disabled={storageBusy}
                 onClick={() => {
-                  if (!discardLocalDraft()) return;
-                  setRecovery(null);
-                  setStorageReady(true);
-                  setSavedAt(null);
+                  if (storageBusy) return;
+                  setStorageBusy(true);
+                  void discardLocalDraft()
+                    .then((discarded) => {
+                      if (!discarded) return;
+                      setRecovery(null);
+                      setStorageReady(true);
+                      setSavedAt(null);
+                    })
+                    .finally(() => setStorageBusy(false));
                 }}
               >
                 安全放弃
@@ -1016,610 +1195,108 @@ export function TaskComposerClient({
 
         </aside>
 
-        <main className="min-w-0 space-y-4">
-          <section className="rounded-xl border border-border bg-card p-4 sm:p-5">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <div className="flex items-center gap-2">
-                  <h2 className="font-semibold">计划时间轴</h2>
-                  <Badge variant="secondary" data-testid="task-composer-milestone-count">
-                    {state.milestones.length}/200
-                  </Badge>
-                </div>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  固定 Asia/Shanghai；创建页只编排节点，不创建人员投入。
-                </p>
-              </div>
-              <Button type="button" variant="outline" onClick={() => addMilestone()}>
-                <Plus aria-hidden="true" />
-                Milestone
-              </Button>
-            </div>
-            <Field label="计划开始时间" required htmlFor="plannedStartAt" className="mt-4 max-w-sm">
-              <Input
-                id="plannedStartAt"
-                type="datetime-local"
-                value={state.plannedStartAt}
-                aria-invalid={issues.some((issue) => issue.key === "plannedStartAt")}
-                onChange={(event) => updateField("plannedStartAt", event.target.value)}
-              />
-            </Field>
-
-            <PlanRail
-              state={state}
-              issues={issues}
-              onAdd={addMilestone}
-              onSelect={(id) => updateField("selectedEntityId", id)}
-              onStartDrag={startDrag}
-              onDrag={dragMilestone}
-              onEndDrag={endDrag}
-            />
-
-            <div className="mt-4 space-y-2 lg:hidden" aria-label="移动端纵向计划节点">
-              {state.milestones.map((milestone, index) => (
-                <button
-                  key={milestone.id}
-                  type="button"
-                  className={cn(
-                    "flex w-full min-w-0 items-start gap-3 rounded-lg border p-3 text-left",
-                    state.selectedEntityId === milestone.id
-                      ? "border-primary bg-primary/5"
-                      : "border-border",
-                  )}
-                  onClick={() => updateField("selectedEntityId", milestone.id)}
-                >
-                  <Badge variant="secondary">M{index + 1}</Badge>
-                  <span className="min-w-0 flex-1">
-                    <span className="block break-words font-medium">
-                      {milestone.goal || "未命名 Milestone"}
-                    </span>
-                    <span className="mt-1 block text-xs text-muted-foreground">
-                      {formatLocalDateTime(milestone.expectedCompletedAt)}
-                    </span>
-                  </span>
-                  {issues.some((issue) => issue.entityId === milestone.id) && (
-                    <AlertTriangle className="size-4 text-destructive" aria-label="存在校验问题" />
-                  )}
-                </button>
-              ))}
-              <button
-                type="button"
-                className={cn(
-                  "flex w-full items-start gap-3 rounded-lg border p-3 text-left",
-                  selectedTermination ? "border-primary bg-primary/5" : "border-border",
-                )}
-                onClick={() => updateField("selectedEntityId", state.termination.id)}
-              >
-                <Flag className="size-4 text-primary" aria-hidden="true" />
-                <span>
-                  <span className="block font-medium">Termination</span>
-                  <span className="mt-1 block text-xs text-muted-foreground">
-                    {formatLocalDateTime(state.termination.plannedAt)}
-                  </span>
-                </span>
-              </button>
-            </div>
-          </section>
-
-          {(serverError || optionError || statusMessage) && (
-            <div
-              className={cn(
-                "rounded-lg border p-3 text-sm leading-6",
-                serverError || optionError
-                  ? "border-destructive/40 bg-destructive/5 text-destructive"
-                  : "border-border bg-muted/40",
-              )}
-              role={serverError || optionError ? "alert" : "status"}
-              aria-live="polite"
-            >
-              {serverError || optionError || statusMessage}
-              {optionLoading && " 正在加载…"}
-            </div>
-          )}
-        </main>
-
-        <aside className="min-w-0" aria-label="计划节点检查器">
-          <div className="space-y-4 rounded-xl border border-border bg-card p-4 lg:sticky lg:top-36">
-            {selectedMilestone ? (
-              <MilestoneInspector
-                milestone={selectedMilestone}
-                index={state.milestones.findIndex((item) => item.id === selectedMilestone.id)}
-                milestones={state.milestones}
-                issues={issues}
-                onUpdate={updateMilestone}
-                onDuplicate={() => duplicateMilestone(selectedMilestone)}
-                onDelete={() => removeMilestone(selectedMilestone.id)}
-                onMoveSameTime={(direction) => moveSameTime(selectedMilestone.id, direction)}
-              />
-            ) : selectedTermination ? (
-              <TerminationInspector
-                state={state}
-                issues={issues}
-                onUpdate={(patch) =>
-                  commit((current) => ({
-                    ...current,
-                    termination: { ...current.termination, ...patch },
-                  }))
+        <TaskComposerPlanEditor
+          state={state}
+          issues={issues}
+          inspectorDraft={inspectorDraft}
+          inspectorIssues={inspectorIssues}
+          notice={
+            serverError || optionError || statusMessage
+              ? {
+                  message: serverError || optionError || statusMessage,
+                  error: Boolean(serverError || optionError),
                 }
-              />
-            ) : (
-              <PlanOverview state={state} issues={issues} onFocusIssue={focusIssue} />
-            )}
-
-            <div className="border-t border-border pt-4">
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <h3 className="text-sm font-semibold">问题列表</h3>
-                <Badge variant={issues.length > 0 ? "destructive" : "secondary"}>
-                  {issues.length}
-                </Badge>
-              </div>
-              {issues.length === 0 ? (
-                <p className="flex items-center gap-2 text-sm text-emerald-700">
-                  <CheckCircle2 className="size-4" aria-hidden="true" />
-                  当前本地校验通过
-                </p>
-              ) : (
-                <ol className="max-h-64 space-y-2 overflow-y-auto text-sm">
-                  {issues.map((issue, index) => (
-                    <li key={`${issue.key}:${issue.entityId ?? "root"}:${index}`}>
-                      <button
-                        type="button"
-                        className="w-full rounded-md px-2 py-1 text-left text-destructive hover:bg-destructive/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                        onClick={() => focusIssue(issue)}
-                      >
-                        {issue.message}
-                      </button>
-                    </li>
-                  ))}
-                </ol>
-              )}
-              {lastValidationIssues.length > 0 && (
-                <p className="mt-2 text-xs text-muted-foreground">
-                  最近一次校验：{lastValidationIssues.length} 个问题
-                </p>
-              )}
-            </div>
-          </div>
-        </aside>
+              : null
+          }
+          optionLoading={optionLoading}
+          submitting={submitting}
+          onSelect={selectEntity}
+          onBeginMilestone={beginMilestone}
+          onConstrainAnchorMove={constrainAnchorMove}
+          onMoveAnchor={moveAnchor}
+          onMoveTerminal={moveTerminal}
+          onUpdateInspector={updateInspector}
+          onDuplicateMilestone={duplicateMilestone}
+          onDeleteMilestones={removeMilestones}
+          onFocusIssue={focusIssue}
+          onSubmit={submit}
+        />
       </div>
 
-      <div className="sticky bottom-0 z-20 flex gap-2 border-t border-border bg-background/95 p-3 backdrop-blur lg:hidden">
-        <Button type="button" variant="outline" className="flex-1" onClick={() => addMilestone()}>
-          <Plus aria-hidden="true" />
-          Milestone
-        </Button>
-        <Button type="button" className="flex-1" disabled={submitting} onClick={submit}>
-          {submitting ? "正在创建…" : "创建草稿"}
-        </Button>
-      </div>
-
-      {pendingNavigation && (
-        <div
-          className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="leave-composer-title"
-        >
-          <div className="w-full max-w-md rounded-xl bg-background p-5 shadow-xl">
-            <h2 id="leave-composer-title" className="text-lg font-semibold">
-              离开 Task Composer？
-            </h2>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+      <Dialog
+        open={Boolean(pendingNavigation)}
+        onOpenChange={(open) => {
+          if (!open && !storageBusy) setPendingNavigation(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md" showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>离开 Task Composer？</DialogTitle>
+            <DialogDescription>
               当前修改尚未提交到服务端。你可以保留本地草稿后离开，或放弃草稿。
-            </p>
-            <div className="mt-5 flex flex-wrap justify-end gap-2">
-              <Button type="button" variant="ghost" onClick={() => setPendingNavigation(null)}>
-                继续编辑
-              </Button>
-              <Button
-                type="button"
-                variant="destructive"
-                onClick={() => {
-                  if (!discardLocalDraft()) return;
-                  setDirty(false);
-                  if (pendingNavigation === "__HISTORY_BACK__") {
-                    bypassPopStateRef.current = true;
-                    historyGuardRef.current = false;
-                    window.history.go(-2);
-                  } else {
-                    replaceAfterCollapsingHistoryGuard(pendingNavigation);
-                  }
-                }}
-              >
-                放弃并离开
-              </Button>
-              <Button
-                type="button"
-                onClick={() => {
-                  if (!persistLocalDraftNow()) return;
-                  setDirty(false);
-                  if (pendingNavigation === "__HISTORY_BACK__") {
-                    bypassPopStateRef.current = true;
-                    historyGuardRef.current = false;
-                    window.history.go(-2);
-                  } else {
-                    replaceAfterCollapsingHistoryGuard(pendingNavigation);
-                  }
-                }}
-              >
-                保存本地草稿并离开
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function PlanRail({
-  state,
-  issues,
-  onAdd,
-  onSelect,
-  onStartDrag,
-  onDrag,
-  onEndDrag,
-}: {
-  state: TaskComposerSeed;
-  issues: ValidationIssue[];
-  onAdd: (at?: string) => void;
-  onSelect: (id: string) => void;
-  onStartDrag: (
-    event: ReactPointerEvent<HTMLButtonElement>,
-    milestone: TaskComposerMilestone,
-  ) => void;
-  onDrag: (event: ReactPointerEvent<HTMLButtonElement>) => void;
-  onEndDrag: (event: ReactPointerEvent<HTMLButtonElement>) => void;
-}) {
-  const range = composerRange(state);
-  const width = Math.max(760, Math.ceil((range.endMs - range.startMs) / DAY_MS) * 48);
-  const xFor = (value: string) => {
-    const ms = localMs(value);
-    const ratio = Number.isFinite(ms)
-      ? (ms - range.startMs) / Math.max(1, range.endMs - range.startMs)
-      : 0;
-    return 48 + Math.max(0, Math.min(1, ratio)) * (width - 96);
-  };
-  const addAtPointer = (event: ReactMouseEvent<HTMLDivElement>) => {
-    if (event.target !== event.currentTarget) return;
-    const rect = event.currentTarget.getBoundingClientRect();
-    const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
-    const at = range.startMs + ratio * (range.endMs - range.startMs);
-    onAdd(isoToShanghaiDateTimeLocal(new Date(Math.round(at / DAY_MS) * DAY_MS)));
-  };
-  return (
-    <div className="mt-5 hidden lg:block">
-      <p className="mb-2 text-xs text-muted-foreground">
-        单击空白处创建；拖动节点按天吸附；聚焦轨道后按 M 在中点创建。
-      </p>
-      <div className="max-w-full overflow-x-auto rounded-lg border border-border" data-testid="task-composer-plan-scroll">
-        <div
-          className="relative h-48 cursor-crosshair bg-[linear-gradient(to_right,var(--border)_1px,transparent_1px)] bg-[size:48px_100%]"
-          style={{ width }}
-          tabIndex={0}
-          role="application"
-          aria-label="Task 计划时间轴"
-          onClick={(event) => {
-            // A browser double-click emits detail=1 then detail=2. The first click creates
-            // exactly one node and the second is ignored, so both entry paths are equivalent.
-            if (event.detail === 1) addAtPointer(event);
-          }}
-          onKeyDown={(event) => {
-            if (event.key.toLowerCase() === "m") {
-              event.preventDefault();
-              onAdd(
-                isoToShanghaiDateTimeLocal(
-                  new Date((range.startMs + range.endMs) / 2),
-                ),
-              );
-            }
-          }}
-        >
-          <div className="absolute inset-x-8 top-24 h-px bg-border" aria-hidden="true" />
-          <div
-            className="absolute top-6 -translate-x-1/2 text-center text-xs"
-            style={{ left: xFor(state.plannedStartAt) }}
-          >
-            <span className="block h-16 border-l-2 border-primary" aria-hidden="true" />
-            <span className="mt-1 block whitespace-nowrap font-medium">计划开始</span>
-          </div>
-          {state.milestones.map((milestone, index) => {
-            const hasIssue = issues.some((issue) => issue.entityId === milestone.id);
-            return (
-              <button
-                key={milestone.id}
-                type="button"
-                data-node-id={milestone.id}
-                aria-label={`Milestone ${index + 1}：${milestone.goal || "未命名"}，${formatLocalDateTime(milestone.expectedCompletedAt)}`}
-                aria-pressed={state.selectedEntityId === milestone.id}
-                className={cn(
-                  "absolute top-[4.7rem] z-10 flex max-w-40 touch-none select-none flex-col items-center rounded-lg px-2 py-1 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                  state.selectedEntityId === milestone.id && "bg-primary/10",
-                )}
-                style={{ left: xFor(milestone.expectedCompletedAt), transform: "translateX(-50%)" }}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onSelect(milestone.id);
-                }}
-                onPointerDown={(event) => onStartDrag(event, milestone)}
-                onPointerMove={onDrag}
-                onPointerUp={onEndDrag}
-                onPointerCancel={onEndDrag}
-              >
-                <span
-                  className={cn(
-                    "grid size-7 rotate-45 place-items-center border-2 bg-background",
-                    hasIssue ? "border-destructive" : "border-primary",
-                  )}
-                  aria-hidden="true"
-                >
-                  <span className="-rotate-45 text-[10px] font-bold">{index + 1}</span>
-                </span>
-                <span className="mt-2 max-w-36 truncate font-medium">
-                  {milestone.goal || "未命名"}
-                </span>
-                <span className="whitespace-nowrap text-muted-foreground">
-                  {datePart(milestone.expectedCompletedAt)}
-                </span>
-              </button>
-            );
-          })}
-          <button
-            type="button"
-            className={cn(
-              "absolute top-[4.6rem] z-10 flex -translate-x-1/2 flex-col items-center rounded-lg px-2 py-1 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              state.selectedEntityId === state.termination.id && "bg-primary/10",
-            )}
-            style={{ left: xFor(state.termination.plannedAt) }}
-            aria-label={`Termination：${formatLocalDateTime(state.termination.plannedAt)}`}
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.stopPropagation();
-              onSelect(state.termination.id);
-            }}
-          >
-            <Flag className="size-7 text-primary" aria-hidden="true" />
-            <span className="mt-2 font-medium">结束</span>
-            <span className="whitespace-nowrap text-muted-foreground">
-              {datePart(state.termination.plannedAt)}
-            </span>
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function MilestoneInspector({
-  milestone,
-  index,
-  milestones,
-  issues,
-  onUpdate,
-  onDuplicate,
-  onDelete,
-  onMoveSameTime,
-}: {
-  milestone: TaskComposerMilestone;
-  index: number;
-  milestones: TaskComposerMilestone[];
-  issues: ValidationIssue[];
-  onUpdate: (
-    id: string,
-    patch: Partial<TaskComposerMilestone>,
-    sortByDate?: boolean,
-  ) => void;
-  onDuplicate: () => void;
-  onDelete: () => void;
-  onMoveSameTime: (direction: -1 | 1) => void;
-}) {
-  const previous = milestones[index - 1];
-  const next = milestones[index + 1];
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between gap-2">
-        <div>
-          <p className="text-xs text-muted-foreground">草稿节点</p>
-          <h2 className="font-semibold">Milestone #{index + 1}</h2>
-        </div>
-        <GripVertical className="size-5 text-muted-foreground" aria-hidden="true" />
-      </div>
-      <Field label="目标" required htmlFor={`goal-${milestone.id}`}>
-        <Input
-          id={`goal-${milestone.id}`}
-          value={milestone.goal}
-          aria-invalid={hasIssue(issues, `goal-${milestone.id}`)}
-          onChange={(event) => onUpdate(milestone.id, { goal: event.target.value })}
-        />
-      </Field>
-      <Field label="预期完成时间" required htmlFor={`expected-${milestone.id}`}>
-        <Input
-          id={`expected-${milestone.id}`}
-          type="datetime-local"
-          value={milestone.expectedCompletedAt}
-          aria-invalid={hasIssue(issues, `expected-${milestone.id}`)}
-          onChange={(event) =>
-            onUpdate(milestone.id, { expectedCompletedAt: event.target.value }, true)
-          }
-        />
-        <div className="mt-2 flex flex-wrap gap-2">
-          <Button
-            type="button"
-            size="xs"
-            variant="outline"
-            onClick={() =>
-              onUpdate(
-                milestone.id,
-                { expectedCompletedAt: addDaysLocal(milestone.expectedCompletedAt, -1) },
-                true,
-              )
-            }
-          >
-            前移一天
-          </Button>
-          <Button
-            type="button"
-            size="xs"
-            variant="outline"
-            onClick={() =>
-              onUpdate(
-                milestone.id,
-                { expectedCompletedAt: addDaysLocal(milestone.expectedCompletedAt, 1) },
-                true,
-              )
-            }
-          >
-            后移一天
-          </Button>
-        </div>
-      </Field>
-      <Field label="完成条件" required htmlFor={`criteria-${milestone.id}`}>
-        <Textarea
-          id={`criteria-${milestone.id}`}
-          value={milestone.completionCriteria}
-          aria-invalid={hasIssue(issues, `criteria-${milestone.id}`)}
-          onChange={(event) =>
-            onUpdate(milestone.id, { completionCriteria: event.target.value })
-          }
-        />
-      </Field>
-      <Field label="验收要求" required htmlFor={`review-${milestone.id}`}>
-        <Textarea
-          id={`review-${milestone.id}`}
-          value={milestone.reviewRequirements}
-          aria-invalid={hasIssue(issues, `review-${milestone.id}`)}
-          onChange={(event) =>
-            onUpdate(milestone.id, { reviewRequirements: event.target.value })
-          }
-        />
-      </Field>
-      <Field label="业务说明" htmlFor={`business-${milestone.id}`}>
-        <Textarea
-          id={`business-${milestone.id}`}
-          value={milestone.businessDescription}
-          onChange={(event) =>
-            onUpdate(milestone.id, { businessDescription: event.target.value })
-          }
-        />
-      </Field>
-      <div className="flex flex-wrap gap-2">
-        <Button type="button" variant="outline" size="sm" onClick={onDuplicate}>
-          <Copy aria-hidden="true" />
-          复制
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={
-            !previous || previous.expectedCompletedAt !== milestone.expectedCompletedAt
-          }
-          onClick={() => onMoveSameTime(-1)}
-        >
-          同时间前移
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={
-            !next || next.expectedCompletedAt !== milestone.expectedCompletedAt
-          }
-          onClick={() => onMoveSameTime(1)}
-        >
-          同时间后移
-        </Button>
-        <Button type="button" variant="destructive" size="sm" onClick={onDelete}>
-          <Trash2 aria-hidden="true" />
-          删除
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function TerminationInspector({
-  state,
-  issues,
-  onUpdate,
-}: {
-  state: TaskComposerSeed;
-  issues: ValidationIssue[];
-  onUpdate: (patch: Partial<TaskComposerSeed["termination"]>) => void;
-}) {
-  return (
-    <div className="space-y-3">
-      <div>
-        <p className="text-xs text-muted-foreground">固定终点，不可删除</p>
-        <h2 className="font-semibold">Termination</h2>
-      </div>
-      <Field label="计划结束时间" required htmlFor="termination-plannedAt">
-        <Input
-          id="termination-plannedAt"
-          type="datetime-local"
-          value={state.termination.plannedAt}
-          aria-invalid={hasIssue(issues, "termination-plannedAt")}
-          onChange={(event) => onUpdate({ plannedAt: event.target.value })}
-        />
-      </Field>
-      <Field label="Task 整体预期结果" required htmlFor="termination-outcome">
-        <Textarea
-          id="termination-outcome"
-          value={state.termination.plannedOutcomeCriteria}
-          aria-invalid={hasIssue(issues, "termination-outcome")}
-          onChange={(event) => onUpdate({ plannedOutcomeCriteria: event.target.value })}
-        />
-      </Field>
-      <Field label="业务说明" htmlFor="termination-business">
-        <Textarea
-          id="termination-business"
-          value={state.termination.businessDescription}
-          onChange={(event) => onUpdate({ businessDescription: event.target.value })}
-        />
-      </Field>
-    </div>
-  );
-}
-
-function PlanOverview({
-  state,
-  issues,
-  onFocusIssue,
-}: {
-  state: TaskComposerSeed;
-  issues: ValidationIssue[];
-  onFocusIssue: (issue: ValidationIssue) => void;
-}) {
-  const start = localMs(state.plannedStartAt);
-  const end = localMs(state.termination.plannedAt);
-  return (
-    <div>
-      <h2 className="font-semibold">计划概览</h2>
-      <dl className="mt-3 grid grid-cols-2 gap-3 text-sm">
-        <div className="rounded-lg bg-muted/50 p-3">
-          <dt className="text-muted-foreground">Milestone</dt>
-          <dd className="mt-1 text-lg font-semibold">{state.milestones.length}</dd>
-        </div>
-        <div className="rounded-lg bg-muted/50 p-3">
-          <dt className="text-muted-foreground">计划跨度</dt>
-          <dd className="mt-1 text-lg font-semibold">
-            {Number.isFinite(start) && Number.isFinite(end) && end >= start
-              ? `${Math.ceil((end - start) / DAY_MS)} 天`
-              : "—"}
-          </dd>
-        </div>
-      </dl>
-      {issues[0] && (
-        <Button
-          type="button"
-          variant="outline"
-          className="mt-4 w-full"
-          onClick={() => onFocusIssue(issues[0]!)}
-        >
-          定位第一个问题
-        </Button>
-      )}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={storageBusy}
+              onClick={() => setPendingNavigation(null)}
+            >
+              继续编辑
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={storageBusy}
+              onClick={() => {
+                const destination = pendingNavigation;
+                if (!destination || storageBusy) return;
+                setStorageBusy(true);
+                void discardLocalDraft()
+                  .then((discarded) => {
+                    if (!discarded) return;
+                    setDirty(false);
+                    if (destination === "__HISTORY_BACK__") {
+                      bypassPopStateRef.current = true;
+                      historyGuardRef.current = false;
+                      window.history.go(-2);
+                    } else {
+                      replaceAfterCollapsingHistoryGuard(destination);
+                    }
+                  })
+                  .finally(() => setStorageBusy(false));
+              }}
+            >
+              放弃并离开
+            </Button>
+            <Button
+              type="button"
+              disabled={storageBusy}
+              onClick={() => {
+                const destination = pendingNavigation;
+                if (!destination || storageBusy) return;
+                setStorageBusy(true);
+                void persistLocalDraftNow()
+                  .then((persisted) => {
+                    if (!persisted) return;
+                    setDirty(false);
+                    if (destination === "__HISTORY_BACK__") {
+                      bypassPopStateRef.current = true;
+                      historyGuardRef.current = false;
+                      window.history.go(-2);
+                    } else {
+                      replaceAfterCollapsingHistoryGuard(destination);
+                    }
+                  })
+                  .finally(() => setStorageBusy(false));
+              }}
+            >
+              保存本地草稿并离开
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -1675,10 +1352,518 @@ function EmptyInline({ children }: { children: ReactNode }) {
 const selectClassName =
   "h-8 w-full min-w-0 rounded-lg border border-input bg-background px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50 disabled:opacity-50";
 
+function inspectorDraftForEntity(
+  state: TaskComposerSeed,
+  entityId: string | null,
+): TaskComposerInspectorDraft | null {
+  if (entityId === TASK_COMPOSER_START_ID) {
+    return {
+      kind: "START",
+      entityId: TASK_COMPOSER_START_ID,
+      plannedStartAt: state.plannedStartAt,
+      returnEntityId: entityId,
+    };
+  }
+  if (entityId === state.termination.id) {
+    return {
+      kind: "TERMINATION",
+      entityId: state.termination.id,
+      termination: { ...state.termination },
+      returnEntityId: entityId,
+    };
+  }
+  const milestone = state.milestones.find((item) => item.id === entityId);
+  if (!milestone) return null;
+  return {
+    kind: "MILESTONE",
+    entityId: milestone.id,
+    milestone: { ...milestone },
+    isNew: nodeMetaFor(state, milestone.id).lifecycle === "TEMPORARY",
+    returnEntityId: entityId,
+  };
+}
+
+function applyLiveInspectorUpdate(
+  state: TaskComposerSeed,
+  draft: TaskComposerInspectorDraft,
+): TaskComposerSeed {
+  let nextState: TaskComposerSeed;
+  if (draft.kind === "START") {
+    nextState = { ...state, plannedStartAt: draft.plannedStartAt };
+  } else if (draft.kind === "TERMINATION") {
+    nextState = { ...state, termination: { ...draft.termination } };
+  } else {
+    nextState = {
+      ...state,
+      milestones: state.milestones.map((milestone) =>
+        milestone.id === draft.entityId ? { ...draft.milestone } : milestone,
+      ),
+    };
+  }
+
+  nextState = reconcileComposerPlanState(nextState);
+
+  return {
+    ...nextState,
+    milestones: sortMilestonesByRenderTime(nextState),
+    selectedEntityId: draft.entityId,
+  };
+}
+
+function validateInspector(
+  draft: TaskComposerInspectorDraft,
+  state: TaskComposerSeed,
+): ValidationIssue[] {
+  if (draft.kind === "START") {
+    if (!validLocalDateTime(draft.plannedStartAt)) {
+      return [{ key: "plannedStartAt", entityId: draft.entityId, message: "请选择有效的计划开始时间。" }];
+    }
+    return isNodeTimeStrictlyLegal(state, draft.entityId, draft.plannedStartAt)
+      ? []
+      : [{ key: "plannedStartAt", entityId: draft.entityId, message: "Start 必须严格早于下一个节点。" }];
+  }
+
+  if (draft.kind === "TERMINATION") {
+    const issues: ValidationIssue[] = [];
+    const name = draft.termination.name.trim();
+    if (!name) {
+      issues.push({ key: "termination-name", entityId: draft.entityId, message: "请输入 Terminal 名称。" });
+    } else if (name.length > 200) {
+      issues.push({ key: "termination-name", entityId: draft.entityId, message: "Terminal 名称不能超过 200 个字符。" });
+    }
+    if (!validLocalDateTime(draft.termination.plannedAt)) {
+      issues.push({ key: "termination-plannedAt", entityId: draft.entityId, message: "请选择有效的计划结束时间。" });
+    } else if (
+      !isNodeTimeStrictlyLegal(
+        state,
+        draft.entityId,
+        draft.termination.plannedAt,
+      )
+    ) {
+      issues.push({ key: "termination-plannedAt", entityId: draft.entityId, message: "Terminal 必须严格晚于前一个节点。" });
+    }
+    if (!draft.termination.plannedOutcomeCriteria.trim()) {
+      issues.push({ key: "termination-outcome", entityId: draft.entityId, message: "请输入结束条件。" });
+    }
+    return issues;
+  }
+
+  const issues: ValidationIssue[] = [];
+  const milestone = draft.milestone;
+  if (!milestone.goal.trim()) {
+    issues.push({ key: `goal-${draft.entityId}`, entityId: draft.entityId, message: "请输入 Milestone 目标。" });
+  }
+  if (!validLocalDateTime(milestone.expectedCompletedAt)) {
+    issues.push({ key: `expected-${draft.entityId}`, entityId: draft.entityId, message: "请选择有效的 Milestone 完成时间。" });
+  } else {
+    const at = localMs(milestone.expectedCompletedAt);
+    const occupied = state.milestones.some(
+      (item) => item.id !== draft.entityId && comparisonAtMs(state, item.id) === at,
+    );
+    if (
+      !validLocalDateTime(state.plannedStartAt) ||
+      !validLocalDateTime(state.termination.plannedAt) ||
+      at <= localMs(state.plannedStartAt) ||
+      at >= localMs(state.termination.plannedAt)
+    ) {
+      issues.push({ key: `expected-${draft.entityId}`, entityId: draft.entityId, message: "Milestone 必须严格位于 Start 与 Terminal 之间。" });
+    } else if (occupied) {
+      issues.push({ key: `expected-${draft.entityId}`, entityId: draft.entityId, message: "Milestone 不能与其他节点处于同一时刻。" });
+    }
+  }
+  if (!milestone.completionCriteria.trim()) {
+    issues.push({ key: `criteria-${draft.entityId}`, entityId: draft.entityId, message: "请输入完成条件。" });
+  }
+  if (!milestone.reviewRequirements.trim()) {
+    issues.push({ key: `review-${draft.entityId}`, entityId: draft.entityId, message: "请输入验收要求。" });
+  }
+  return issues;
+}
+
+function nodeMetaFor(
+  state: TaskComposerSeed,
+  entityId: string,
+): TaskComposerNodeMeta {
+  const stored = state.nodeMeta?.[entityId];
+  if (stored && validLocalDateTime(stored.lastValidAt)) return stored;
+  const currentAt = entityId === TASK_COMPOSER_START_ID
+    ? state.plannedStartAt
+    : entityId === state.termination.id
+      ? state.termination.plannedAt
+      : state.milestones.find((milestone) => milestone.id === entityId)
+          ?.expectedCompletedAt ?? state.plannedStartAt;
+  return {
+    lifecycle: "ESTABLISHED",
+    lastValidAt: validLocalDateTime(currentAt) ? currentAt : state.plannedStartAt,
+  };
+}
+
+function renderAtLocal(state: TaskComposerSeed, entityId: string) {
+  return nodeMetaFor(state, entityId).lastValidAt;
+}
+
+function renderAtMs(state: TaskComposerSeed, entityId: string) {
+  return localMs(renderAtLocal(state, entityId));
+}
+
+function updateLastValidAt(
+  state: TaskComposerSeed,
+  entityId: string,
+  lastValidAt: string,
+) {
+  return {
+    ...state.nodeMeta,
+    [entityId]: {
+      ...nodeMetaFor(state, entityId),
+      lastValidAt,
+    },
+  };
+}
+
+function isNodeTimeStrictlyLegal(
+  state: TaskComposerSeed,
+  entityId: string,
+  candidate: string,
+) {
+  if (!validLocalDateTime(candidate)) return false;
+  const at = localMs(candidate);
+  if (entityId === TASK_COMPOSER_START_ID) {
+    return at < Math.min(
+      comparisonAtMs(state, state.termination.id),
+      ...state.milestones.map((milestone) => comparisonAtMs(state, milestone.id)),
+    );
+  }
+  if (entityId === state.termination.id) {
+    return at > Math.max(
+      comparisonAtMs(state, TASK_COMPOSER_START_ID),
+      ...state.milestones.map((milestone) => comparisonAtMs(state, milestone.id)),
+    );
+  }
+  if (!state.milestones.some((milestone) => milestone.id === entityId)) return false;
+  if (
+    !validLocalDateTime(state.plannedStartAt) ||
+    !validLocalDateTime(state.termination.plannedAt)
+  ) {
+    return false;
+  }
+  return (
+    at > localMs(state.plannedStartAt) &&
+    at < localMs(state.termination.plannedAt) &&
+    !state.milestones.some(
+      (milestone) =>
+        milestone.id !== entityId && comparisonAtMs(state, milestone.id) === at,
+    )
+  );
+}
+
+function nodeInputAtLocal(state: TaskComposerSeed, entityId: string) {
+  if (entityId === TASK_COMPOSER_START_ID) return state.plannedStartAt;
+  if (entityId === state.termination.id) return state.termination.plannedAt;
+  return state.milestones.find((milestone) => milestone.id === entityId)
+    ?.expectedCompletedAt ?? "";
+}
+
+function comparisonAtMs(state: TaskComposerSeed, entityId: string) {
+  const inputAt = nodeInputAtLocal(state, entityId);
+  return validLocalDateTime(inputAt) ? localMs(inputAt) : renderAtMs(state, entityId);
+}
+
+function isMilestoneTimeAvailable(
+  state: TaskComposerSeed,
+  candidate: string,
+) {
+  if (!validLocalDateTime(candidate)) return false;
+  const at = localMs(candidate);
+  return (
+    at > renderAtMs(state, TASK_COMPOSER_START_ID) &&
+    at < renderAtMs(state, state.termination.id) &&
+    !state.milestones.some((milestone) => renderAtMs(state, milestone.id) === at)
+  );
+}
+
+function sortMilestonesByRenderTime(state: TaskComposerSeed) {
+  return [...state.milestones].sort(
+    (left, right) =>
+      renderAtMs(state, left.id) - renderAtMs(state, right.id) ||
+      left.id.localeCompare(right.id),
+  );
+}
+
+function reconcileStrictlyLegalTimes(state: TaskComposerSeed) {
+  if (
+    !validLocalDateTime(state.plannedStartAt) ||
+    !validLocalDateTime(state.termination.plannedAt) ||
+    state.milestones.some(
+      (milestone) => !validLocalDateTime(milestone.expectedCompletedAt),
+    )
+  ) {
+    return state;
+  }
+  const milestones = sortMilestones(state.milestones);
+  const times = [
+    state.plannedStartAt,
+    ...milestones.map((milestone) => milestone.expectedCompletedAt),
+    state.termination.plannedAt,
+  ];
+  if (times.some((at, index) => index > 0 && localMs(at) <= localMs(times[index - 1]!))) {
+    return state;
+  }
+  const nodeMeta = { ...state.nodeMeta };
+  nodeMeta[TASK_COMPOSER_START_ID] = {
+    ...nodeMetaFor(state, TASK_COMPOSER_START_ID),
+    lastValidAt: state.plannedStartAt,
+  };
+  milestones.forEach((milestone) => {
+    nodeMeta[milestone.id] = {
+      ...nodeMetaFor(state, milestone.id),
+      lastValidAt: milestone.expectedCompletedAt,
+    };
+  });
+  nodeMeta[state.termination.id] = {
+    ...nodeMetaFor(state, state.termination.id),
+    lastValidAt: state.termination.plannedAt,
+  };
+  return { ...state, milestones, nodeMeta };
+}
+
+function reconcileComposerPlanState(state: TaskComposerSeed) {
+  let nextState = state;
+  const entityIds = [
+    TASK_COMPOSER_START_ID,
+    ...state.milestones.map((milestone) => milestone.id),
+    state.termination.id,
+  ];
+  for (const entityId of entityIds) {
+    const inputAt = nodeInputAtLocal(nextState, entityId);
+    if (!isNodeTimeStrictlyLegal(nextState, entityId, inputAt)) continue;
+    nextState = {
+      ...nextState,
+      nodeMeta: updateLastValidAt(nextState, entityId, inputAt),
+    };
+  }
+  nextState = reconcileStrictlyLegalTimes(nextState);
+  for (const milestone of nextState.milestones) {
+    nextState = promoteTemporaryMilestone(nextState, milestone.id);
+  }
+  return {
+    ...nextState,
+    milestones: sortMilestonesByRenderTime(nextState),
+  };
+}
+
+function suggestDuplicateAt(state: TaskComposerSeed, sourceId: string) {
+  const sorted = sortMilestonesByRenderTime(state);
+  const sourceIndex = sorted.findIndex((milestone) => milestone.id === sourceId);
+  if (sourceIndex < 0) return null;
+  const sourceAt = renderAtMs(state, sourceId);
+  const upperExclusive = sorted[sourceIndex + 1]
+    ? renderAtMs(state, sorted[sourceIndex + 1]!.id)
+    : renderAtMs(state, state.termination.id);
+  const occupied = new Set(
+    state.milestones.map((milestone) => renderAtMs(state, milestone.id)),
+  );
+  const preferredAt = sourceAt + DAY_MS;
+  if (preferredAt < upperExclusive && !occupied.has(preferredAt)) {
+    return isoToShanghaiDateTimeLocal(new Date(preferredAt));
+  }
+  const minuteMs = 60_000;
+  for (let offset = 1; offset <= occupied.size + 1; offset += 1) {
+    const candidateAt = sourceAt + offset * minuteMs;
+    if (candidateAt >= upperExclusive) return null;
+    if (!occupied.has(candidateAt)) {
+      return isoToShanghaiDateTimeLocal(new Date(candidateAt));
+    }
+  }
+  return null;
+}
+
+function promoteTemporaryMilestone(
+  state: TaskComposerSeed,
+  entityId: string,
+): TaskComposerSeed {
+  const draft = inspectorDraftForEntity(state, entityId);
+  if (
+    draft?.kind !== "MILESTONE" ||
+    nodeMetaFor(state, entityId).lifecycle !== "TEMPORARY" ||
+    validateInspector(draft, state).length > 0
+  ) {
+    return state;
+  }
+  return {
+    ...state,
+    nodeMeta: {
+      ...state.nodeMeta,
+      [entityId]: {
+        ...nodeMetaFor(state, entityId),
+        lifecycle: "ESTABLISHED" as const,
+      },
+    },
+  };
+}
+
+function applyAnchorMove(
+  state: TaskComposerSeed,
+  request: TimeCanvasAnchorMoveRequest,
+): { ok: true; state: TaskComposerSeed } | { ok: false; message: string } {
+  const resolved = resolveAnchorMoveCandidate(state, request);
+  if (!resolved.ok) return resolved;
+  const { candidateAt, originalAt } = resolved;
+  if (candidateAt === originalAt && request.atMs !== originalAt) {
+    return {
+      ok: false,
+      message: NO_LEGAL_ANCHOR_MOVE_MESSAGE,
+    };
+  }
+  const localValue = isoToShanghaiDateTimeLocal(new Date(candidateAt));
+  if (request.anchorId === TASK_COMPOSER_START_ID) {
+    return {
+      ok: true,
+      state: {
+        ...state,
+        plannedStartAt: localValue,
+        selectedEntityId: request.anchorId,
+        nodeMeta: updateLastValidAt(state, request.anchorId, localValue),
+      },
+    };
+  }
+  if (request.anchorId === state.termination.id) {
+    return {
+      ok: true,
+      state: {
+        ...state,
+        termination: { ...state.termination, plannedAt: localValue },
+        selectedEntityId: request.anchorId,
+        nodeMeta: updateLastValidAt(state, request.anchorId, localValue),
+      },
+    };
+  }
+  const nextState: TaskComposerSeed = {
+    ...state,
+    milestones: state.milestones.map((milestone) =>
+      milestone.id === request.anchorId
+        ? { ...milestone, expectedCompletedAt: localValue }
+        : milestone,
+    ),
+    selectedEntityId: request.anchorId,
+    nodeMeta: updateLastValidAt(state, request.anchorId, localValue),
+  };
+  const promoted = promoteTemporaryMilestone(nextState, request.anchorId);
+  return {
+    ok: true,
+    state: { ...promoted, milestones: sortMilestonesByRenderTime(promoted) },
+  };
+}
+
+function resolveAnchorMoveCandidate(
+  state: TaskComposerSeed,
+  request: TimeCanvasAnchorMoveRequest,
+):
+  | { ok: true; originalAt: number; candidateAt: number }
+  | { ok: false; message: string } {
+  const originalAt = renderAtMs(state, request.anchorId);
+  if (!Number.isFinite(originalAt) || !Number.isFinite(request.atMs) || request.snapMs <= 0) {
+    return { ok: false, message: "节点时间无效，请使用 Inspector 重新设置。" };
+  }
+
+  let lowerExclusive = Number.NEGATIVE_INFINITY;
+  let upperExclusive = Number.POSITIVE_INFINITY;
+  let occupied = new Set<number>();
+  if (request.anchorId === TASK_COMPOSER_START_ID) {
+    upperExclusive = Math.min(
+      renderAtMs(state, state.termination.id),
+      ...state.milestones.map((milestone) => renderAtMs(state, milestone.id)),
+    );
+  } else if (request.anchorId === state.termination.id) {
+    lowerExclusive = Math.max(
+      renderAtMs(state, TASK_COMPOSER_START_ID),
+      ...state.milestones.map((milestone) => renderAtMs(state, milestone.id)),
+    );
+  } else {
+    const milestone = state.milestones.find((item) => item.id === request.anchorId);
+    if (!milestone) return { ok: false, message: "未找到要移动的 Milestone。" };
+    lowerExclusive = renderAtMs(state, TASK_COMPOSER_START_ID);
+    upperExclusive = renderAtMs(state, state.termination.id);
+    occupied = new Set(
+      state.milestones
+        .filter((item) => item.id !== request.anchorId)
+        .map((item) => renderAtMs(state, item.id)),
+    );
+  }
+
+  const candidateAt = nearestLegalMove({
+    originalAt,
+    targetAt: request.atMs,
+    snapMs: request.snapMs,
+    lowerExclusive,
+    upperExclusive,
+    occupied,
+  });
+  if (candidateAt === null) {
+    return {
+      ok: false,
+      message: NO_LEGAL_ANCHOR_MOVE_MESSAGE,
+    };
+  }
+  return { ok: true, originalAt, candidateAt };
+}
+
+function nearestLegalMove(input: {
+  originalAt: number;
+  targetAt: number;
+  snapMs: number;
+  lowerExclusive: number;
+  upperExclusive: number;
+  occupied: ReadonlySet<number>;
+}) {
+  const minimumStep = Number.isFinite(input.lowerExclusive)
+    ? Math.floor((input.lowerExclusive - input.originalAt) / input.snapMs) + 1
+    : Number.NEGATIVE_INFINITY;
+  const maximumStep = Number.isFinite(input.upperExclusive)
+    ? Math.ceil((input.upperExclusive - input.originalAt) / input.snapMs) - 1
+    : Number.POSITIVE_INFINITY;
+  const targetStep = Math.round((input.targetAt - input.originalAt) / input.snapMs);
+  const boundedStep = Math.max(minimumStep, Math.min(targetStep, maximumStep));
+  const maximumSearch = input.occupied.size + 2;
+  const preferForward = targetStep >= 0;
+  for (let distance = 0; distance <= maximumSearch; distance += 1) {
+    const steps = distance === 0
+      ? [boundedStep]
+      : preferForward
+        ? [boundedStep + distance, boundedStep - distance]
+        : [boundedStep - distance, boundedStep + distance];
+    for (const step of steps) {
+      if (step < minimumStep || step > maximumStep) continue;
+      const at = input.originalAt + step * input.snapMs;
+      if (!input.occupied.has(at)) return at;
+    }
+  }
+  return null;
+}
+
 function validateComposer(
   state: TaskComposerSeed,
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
+  const startValid = validLocalDateTime(state.plannedStartAt);
+  const terminationValid = validLocalDateTime(state.termination.plannedAt);
+  const startAt = startValid ? localMs(state.plannedStartAt) : Number.NaN;
+  const terminationAt = terminationValid
+    ? localMs(state.termination.plannedAt)
+    : Number.NaN;
+  const milestoneTimeCounts = new Map<number, number>();
+  for (const milestone of state.milestones) {
+    if (!validLocalDateTime(milestone.expectedCompletedAt)) continue;
+    const at = localMs(milestone.expectedCompletedAt);
+    milestoneTimeCounts.set(at, (milestoneTimeCounts.get(at) ?? 0) + 1);
+  }
+  const hasMilestoneAtOrBeforeStart =
+    startValid &&
+    [...milestoneTimeCounts.keys()].some((milestoneAt) => milestoneAt <= startAt);
+  const hasMilestoneAtOrAfterTermination =
+    terminationValid &&
+    [...milestoneTimeCounts.keys()].some(
+      (milestoneAt) => milestoneAt >= terminationAt,
+    );
   if (!state.title.trim()) issues.push({ key: "title", message: "请输入 Task 名称。" });
   if (!TEAM_OPTIONS.includes(state.team as (typeof TEAM_OPTIONS)[number])) {
     issues.push({ key: "team", message: "请选择有效车组。" });
@@ -1686,8 +1871,21 @@ function validateComposer(
   if (!TECH_GROUP_OPTIONS.includes(state.techGroup as (typeof TECH_GROUP_OPTIONS)[number])) {
     issues.push({ key: "techGroup", message: "请选择有效技术组。" });
   }
-  if (!validLocalDateTime(state.plannedStartAt)) {
-    issues.push({ key: "plannedStartAt", message: "请选择有效的计划开始时间。" });
+  if (!startValid) {
+    issues.push({
+      key: "plannedStartAt",
+      entityId: TASK_COMPOSER_START_ID,
+      message: "请选择有效的计划开始时间。",
+    });
+  } else if (
+    hasMilestoneAtOrBeforeStart ||
+    (terminationValid && terminationAt <= startAt)
+  ) {
+    issues.push({
+      key: "plannedStartAt",
+      entityId: TASK_COMPOSER_START_ID,
+      message: "Start 必须严格早于全部 Milestone 和 Terminal。",
+    });
   }
   if (new Set(state.tagIds).size !== state.tagIds.length) {
     issues.push({ key: "tag-search", message: "不能重复选择同一个 Tag。" });
@@ -1702,11 +1900,17 @@ function validateComposer(
   if (state.members.every((member) => member.role !== "OWNER")) {
     issues.push({ key: "members", message: "至少需要一名负责人。" });
   }
-  if (state.milestones.length < 1 || state.milestones.length > 200) {
-    issues.push({ key: "plannedStartAt", message: "计划必须包含 1–200 个 Milestone。" });
+  if (state.milestones.length > 200) {
+    issues.push({ key: "plannedStartAt", entityId: TASK_COMPOSER_START_ID, message: "计划最多包含 200 个 Milestone。" });
   }
-  let chronologyBoundary = localMs(state.plannedStartAt);
-  for (const milestone of state.milestones) {
+  for (const milestone of sortMilestones(state.milestones)) {
+    if (nodeMetaFor(state, milestone.id).lifecycle === "TEMPORARY") {
+      issues.push({
+        key: `goal-${milestone.id}`,
+        entityId: milestone.id,
+        message: `请完成或删除临时 Milestone「${milestone.goal || "未命名"}」。`,
+      });
+    }
     if (!milestone.goal.trim()) {
       issues.push({
         key: `goal-${milestone.id}`,
@@ -1735,43 +1939,64 @@ function validateComposer(
         entityId: milestone.id,
         message: "请选择有效的 Milestone 完成时间。",
       });
-    } else if (Number.isFinite(chronologyBoundary) && at < chronologyBoundary) {
+    } else if (
+      (startValid && at <= startAt) ||
+      (terminationValid && at >= terminationAt)
+    ) {
       issues.push({
         key: `expected-${milestone.id}`,
         entityId: milestone.id,
-        message: "Milestone 必须按 sequence 非递减，且不得早于计划开始时间。",
+        message: "Milestone 必须严格位于 Start 与 Terminal 之间。",
+      });
+    } else if ((milestoneTimeCounts.get(at) ?? 0) > 1) {
+      issues.push({
+        key: `expected-${milestone.id}`,
+        entityId: milestone.id,
+        message: "Milestone 不能与其他节点处于同一时刻。",
       });
     }
-    chronologyBoundary = at;
   }
-  if (!validLocalDateTime(state.termination.plannedAt)) {
+  if (!terminationValid) {
     issues.push({
       key: "termination-plannedAt",
       entityId: state.termination.id,
       message: "请选择有效的计划结束时间。",
     });
   } else if (
-    Number.isFinite(chronologyBoundary) &&
-    localMs(state.termination.plannedAt) < chronologyBoundary
+    hasMilestoneAtOrAfterTermination ||
+    (startValid && terminationAt <= startAt)
   ) {
     issues.push({
       key: "termination-plannedAt",
       entityId: state.termination.id,
-      message: "Termination 不得早于最后一个 Milestone。",
+      message: "Terminal 必须严格晚于 Start 和最后一个 Milestone。",
+    });
+  }
+  if (!state.termination.name.trim()) {
+    issues.push({
+      key: "termination-name",
+      entityId: state.termination.id,
+      message: "请输入 Terminal 名称。",
+    });
+  } else if (state.termination.name.trim().length > 200) {
+    issues.push({
+      key: "termination-name",
+      entityId: state.termination.id,
+      message: "Terminal 名称不能超过 200 个字符。",
     });
   }
   if (!state.termination.plannedOutcomeCriteria.trim()) {
     issues.push({
       key: "termination-outcome",
       entityId: state.termination.id,
-      message: "请填写 Task 整体预期结果。",
+      message: "请输入结束条件。",
     });
   }
   return issues;
 }
 
 function parseLocalDraft(raw: string): LocalTaskDraft | null {
-  if (raw.length > MAX_LOCAL_DRAFT_BYTES) return null;
+  if (raw.length > MAX_TASK_COMPOSER_DRAFT_CHARS) return null;
   try {
     const value: unknown = JSON.parse(raw);
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -1782,6 +2007,9 @@ function parseLocalDraft(raw: string): LocalTaskDraft | null {
       !UUID_PATTERN.test(envelope.draftId) ||
       typeof envelope.savedAt !== "string" ||
       Number.isNaN(new Date(envelope.savedAt).getTime()) ||
+      typeof envelope.inspectorDirty !== "boolean" ||
+      (envelope.inspectorDraft !== null &&
+        !isStoredInspectorDraft(envelope.inspectorDraft)) ||
       !envelope.task ||
       typeof envelope.task !== "object" ||
       Array.isArray(envelope.task)
@@ -1809,7 +2037,7 @@ function parseLocalDraft(raw: string): LocalTaskDraft | null {
       (task.selectedEntityId !== null &&
         (typeof task.selectedEntityId !== "string" || task.selectedEntityId.length > 160)) ||
       typeof task.plannedStartAt !== "string" ||
-      !validLocalDateTime(task.plannedStartAt) ||
+      task.plannedStartAt.length > 32 ||
       !Array.isArray(task.members) ||
       task.members.length > 500 ||
       !task.members.every(isStoredMember) ||
@@ -1818,25 +2046,76 @@ function parseLocalDraft(raw: string): LocalTaskDraft | null {
       !task.tagIds.every((tagId) => typeof tagId === "string") ||
       !task.tagIds.every((tagId) => UUID_PATTERN.test(tagId as string)) ||
       !Array.isArray(task.milestones) ||
-      task.milestones.length < 1 ||
       task.milestones.length > 200 ||
       !task.milestones.every(isStoredMilestone) ||
       !task.termination ||
-      !isStoredTermination(task.termination)
+      !isStoredTermination(task.termination) ||
+      (task.nodeMeta !== undefined && !isStoredNodeMetaMap(task.nodeMeta))
     ) {
       return null;
     }
     const nodeIds = [
+      TASK_COMPOSER_START_ID,
       ...task.milestones.map((milestone) => (milestone as Record<string, unknown>).id),
       (task.termination as Record<string, unknown>).id,
     ];
+    const inspectorEntityId = isRecord(envelope.inspectorDraft)
+      ? envelope.inspectorDraft.entityId
+      : null;
     if (
       new Set(nodeIds).size !== nodeIds.length ||
-      (task.selectedEntityId !== null && !nodeIds.includes(task.selectedEntityId))
+      (task.selectedEntityId !== null &&
+        !nodeIds.includes(task.selectedEntityId) &&
+        task.selectedEntityId !== inspectorEntityId)
     ) {
       return null;
     }
-    return value as LocalTaskDraft;
+    const parsed = value as LocalTaskDraft;
+    const taskSeed = parsed.task;
+    const storedInspector = parsed.inspectorDirty ? parsed.inspectorDraft : null;
+    if (
+      storedInspector &&
+      ((storedInspector.returnEntityId !== null &&
+        !nodeIds.includes(storedInspector.returnEntityId)) ||
+        (storedInspector.kind === "TERMINATION" &&
+          storedInspector.entityId !== taskSeed.termination.id) ||
+        (storedInspector.kind === "MILESTONE" &&
+          (storedInspector.isNew
+            ? nodeIds.includes(storedInspector.entityId)
+            : !taskSeed.milestones.some(
+                (milestone) => milestone.id === storedInspector.entityId,
+              ))))
+    ) {
+      return null;
+    }
+    const storedMeta = taskSeed.nodeMeta;
+    const rawNodeTimes = [
+      [TASK_COMPOSER_START_ID, taskSeed.plannedStartAt],
+      ...taskSeed.milestones.map((milestone) => [milestone.id, milestone.expectedCompletedAt]),
+      [taskSeed.termination.id, taskSeed.termination.plannedAt],
+    ] as const;
+    if (
+      rawNodeTimes.some(
+        ([entityId, at]) =>
+          !validLocalDateTime(at) &&
+          !validLocalDateTime(storedMeta?.[entityId]?.lastValidAt ?? ""),
+      )
+    ) {
+      return null;
+    }
+    const normalizedTask = normalizeComposerSeed(taskSeed);
+    const restoredTask = parsed.inspectorDirty && parsed.inspectorDraft
+      ? mergeStoredInspectorDraft(normalizedTask, parsed.inspectorDraft)
+      : normalizedTask;
+    if (!restoredTask || !hasStrictRenderChronology(restoredTask)) {
+      return null;
+    }
+    return {
+      ...parsed,
+      task: restoredTask,
+      inspectorDraft: null,
+      inspectorDirty: false,
+    };
   } catch {
     return null;
   }
@@ -1845,56 +2124,127 @@ function parseLocalDraft(raw: string): LocalTaskDraft | null {
 function migrateLegacyLocalDraft(
   raw: string,
   creatorPersonId: string,
+  schemaVersion: 1 | 2,
 ): LocalTaskDraft | null {
-  if (raw.length > MAX_LOCAL_DRAFT_BYTES) return null;
+  if (raw.length > MAX_TASK_COMPOSER_DRAFT_CHARS) return null;
   try {
     const value: unknown = JSON.parse(raw);
-    if (!isRecord(value) || value.schemaVersion !== 1 || !isRecord(value.task)) {
+    if (!isRecord(value) || value.schemaVersion !== schemaVersion || !isRecord(value.task)) {
       return null;
     }
-    const legacyMembers = Array.isArray(value.task.members)
-      ? value.task.members
-      : [];
-    const normalized = new Map<string, TaskMemberRoleValue>();
-    for (const member of legacyMembers) {
-      if (
-        !isRecord(member) ||
-        typeof member.personId !== "string" ||
-        !UUID_PATTERN.test(member.personId)
-      ) {
-        continue;
-      }
-      const role =
-        member.role === "OWNER"
-          ? "OWNER"
-          : member.role === "LEAD" ||
-              member.role === "MEMBER" ||
-              member.role === "PARTICIPANT"
-            ? "PARTICIPANT"
-            : null;
-      if (!role || normalized.get(member.personId) === "OWNER") continue;
-      normalized.set(member.personId, role);
-    }
-    normalized.set(creatorPersonId, "OWNER");
-    const { revisionApprovalMode: _revisionApprovalMode, allowSelfReview: _allowSelfReview, ...task } =
-      value.task;
+    const normalized = normalizeLegacyMembers(value.task.members, creatorPersonId);
+    const {
+      revisionApprovalMode: _revisionApprovalMode,
+      allowSelfReview: _allowSelfReview,
+      nodeMeta: _nodeMeta,
+      ...task
+    } = value.task;
     void _revisionApprovalMode;
     void _allowSelfReview;
+    void _nodeMeta;
     const migrated = {
       ...value,
       schemaVersion: LOCAL_DRAFT_SCHEMA_VERSION,
+      inspectorDraft: null,
+      inspectorDirty: false,
       task: {
         ...task,
         members: [...normalized].map(([personId, role]) => ({
           personId,
           role,
         })),
+        termination: isRecord(task.termination)
+          ? { ...task.termination, name: "Terminal" }
+          : task.termination,
       },
     };
     return parseLocalDraft(JSON.stringify(migrated));
   } catch {
     return null;
   }
+}
+
+function mergeStoredInspectorDraft(
+  state: TaskComposerSeed,
+  draft: TaskComposerInspectorDraft,
+): TaskComposerSeed | null {
+  if (draft.kind !== "MILESTONE" || !draft.isNew) {
+    if (
+      draft.kind === "MILESTONE" &&
+      !state.milestones.some((milestone) => milestone.id === draft.entityId)
+    ) {
+      return null;
+    }
+    return applyLiveInspectorUpdate(state, draft);
+  }
+  if (
+    state.milestones.length >= 200 ||
+    state.milestones.some((milestone) => milestone.id === draft.entityId)
+  ) {
+    return null;
+  }
+  const lastValidAt = isMilestoneTimeAvailable(
+    state,
+    draft.milestone.expectedCompletedAt,
+  )
+    ? draft.milestone.expectedCompletedAt
+    : firstAvailableMilestoneAt(state);
+  if (!lastValidAt) return null;
+  const restored: TaskComposerSeed = {
+    ...state,
+    milestones: [...state.milestones, { ...draft.milestone }],
+    selectedEntityId: draft.entityId,
+    nodeMeta: {
+      ...state.nodeMeta,
+      [draft.entityId]: {
+        lifecycle: "TEMPORARY",
+        lastValidAt,
+      },
+    },
+  };
+  return reconcileComposerPlanState(restored);
+}
+
+function firstAvailableMilestoneAt(state: TaskComposerSeed) {
+  const startAt = renderAtMs(state, TASK_COMPOSER_START_ID);
+  const terminalAt = renderAtMs(state, state.termination.id);
+  const occupied = new Set(
+    state.milestones.map((milestone) => renderAtMs(state, milestone.id)),
+  );
+  for (let offset = 1; offset <= occupied.size + 1; offset += 1) {
+    const candidateAt = startAt + offset * 60_000;
+    if (candidateAt >= terminalAt) return null;
+    if (!occupied.has(candidateAt)) {
+      return isoToShanghaiDateTimeLocal(new Date(candidateAt));
+    }
+  }
+  return null;
+}
+
+function normalizeLegacyMembers(value: unknown, creatorPersonId: string) {
+  const legacyMembers = Array.isArray(value) ? value : [];
+  const normalized = new Map<string, TaskMemberRoleValue>();
+  for (const member of legacyMembers) {
+    if (
+      !isRecord(member) ||
+      typeof member.personId !== "string" ||
+      !UUID_PATTERN.test(member.personId)
+    ) {
+      continue;
+    }
+    const role =
+      member.role === "OWNER"
+        ? "OWNER"
+        : member.role === "LEAD" ||
+            member.role === "MEMBER" ||
+            member.role === "PARTICIPANT"
+          ? "PARTICIPANT"
+          : null;
+    if (!role || normalized.get(member.personId) === "OWNER") continue;
+    normalized.set(member.personId, role);
+  }
+  normalized.set(creatorPersonId, "OWNER");
+  return normalized;
 }
 
 function isStoredMember(value: unknown) {
@@ -1930,21 +2280,23 @@ function isStoredMilestone(value: unknown) {
     typeof value.businessDescription === "string" &&
     value.businessDescription.length <= 2_000 &&
     typeof value.expectedCompletedAt === "string" &&
-    validLocalDateTime(value.expectedCompletedAt)
+    value.expectedCompletedAt.length <= 32
   );
 }
 
 function isStoredTermination(value: unknown) {
   if (!isRecord(value)) return false;
   return (
-    ["id", "plannedAt", "plannedOutcomeCriteria", "businessDescription"].every(
+    ["id", "name", "plannedAt", "plannedOutcomeCriteria", "businessDescription"].every(
       (key) => typeof value[key] === "string",
     ) &&
     typeof value.id === "string" &&
     value.id.startsWith("draft-termination-") &&
     value.id.length <= 160 &&
+    typeof value.name === "string" &&
+    value.name.length <= 200 &&
     typeof value.plannedAt === "string" &&
-    validLocalDateTime(value.plannedAt) &&
+    value.plannedAt.length <= 32 &&
     typeof value.plannedOutcomeCriteria === "string" &&
     value.plannedOutcomeCriteria.length <= 2_000 &&
     typeof value.businessDescription === "string" &&
@@ -1952,20 +2304,74 @@ function isStoredTermination(value: unknown) {
   );
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+function isStoredNodeMetaMap(value: unknown) {
+  if (!isRecord(value) || Object.keys(value).length > 202) return false;
+  return Object.entries(value).every(
+    ([entityId, meta]) =>
+      entityId.length <= 160 &&
+      isRecord(meta) &&
+      (meta.lifecycle === "TEMPORARY" || meta.lifecycle === "ESTABLISHED") &&
+      typeof meta.lastValidAt === "string" &&
+      validLocalDateTime(meta.lastValidAt),
+  );
 }
 
-function composerRange(state: TaskComposerSeed) {
-  const values = [
-    localMs(state.plannedStartAt),
-    ...state.milestones.map((milestone) => localMs(milestone.expectedCompletedAt)),
-    localMs(state.termination.plannedAt),
-  ].filter(Number.isFinite);
-  const fallback = Date.now();
-  const startMs = Math.min(...(values.length > 0 ? values : [fallback]));
-  const endCandidate = Math.max(...(values.length > 0 ? values : [fallback + 14 * DAY_MS]));
-  return { startMs, endMs: Math.max(startMs + DAY_MS, endCandidate) };
+function isStoredInspectorDraft(value: unknown): value is TaskComposerInspectorDraft {
+  if (!isRecord(value) || typeof value.kind !== "string") return false;
+  const validReturnEntityId =
+    value.returnEntityId === null ||
+    (typeof value.returnEntityId === "string" && value.returnEntityId.length <= 160);
+  if (!validReturnEntityId || typeof value.entityId !== "string" || value.entityId.length > 160) {
+    return false;
+  }
+  if (value.kind === "START") {
+    return (
+      value.entityId === TASK_COMPOSER_START_ID &&
+      typeof value.plannedStartAt === "string" &&
+      value.plannedStartAt.length <= 32
+    );
+  }
+  if (value.kind === "MILESTONE") {
+    const milestone = value.milestone;
+    if (!isRecord(milestone)) return false;
+    return (
+      typeof value.isNew === "boolean" &&
+      value.entityId.startsWith("draft-node-") &&
+      milestone.id === value.entityId &&
+      [
+        "id",
+        "goal",
+        "completionCriteria",
+        "expectedCompletedAt",
+        "reviewRequirements",
+        "businessDescription",
+      ].every((key) => typeof milestone[key] === "string") &&
+      String(milestone.goal).length <= 2_000 &&
+      String(milestone.completionCriteria).length <= 2_000 &&
+      String(milestone.reviewRequirements).length <= 2_000 &&
+      String(milestone.businessDescription).length <= 2_000 &&
+      String(milestone.expectedCompletedAt).length <= 32
+    );
+  }
+  if (value.kind === "TERMINATION") {
+    const termination = value.termination;
+    if (!isRecord(termination)) return false;
+    return (
+      termination.id === value.entityId &&
+      ["id", "name", "plannedAt", "plannedOutcomeCriteria", "businessDescription"].every(
+        (key) => typeof termination[key] === "string",
+      ) &&
+      String(termination.name).length <= 200 &&
+      String(termination.plannedAt).length <= 32 &&
+      String(termination.plannedOutcomeCriteria).length <= 2_000 &&
+      String(termination.businessDescription).length <= 2_000
+    );
+  }
+  return false;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function validLocalDateTime(value: string) {
@@ -1978,12 +2384,6 @@ function localMs(value: string) {
   return new Date(shanghaiDateTimeLocalToIso(value)).getTime();
 }
 
-function addDaysLocal(value: string, days: number) {
-  const parsed = localMs(value);
-  if (!Number.isFinite(parsed)) return value;
-  return isoToShanghaiDateTimeLocal(new Date(parsed + days * DAY_MS));
-}
-
 function sortMilestones(milestones: TaskComposerMilestone[]) {
   return milestones
     .map((milestone, index) => ({ milestone, index }))
@@ -1994,12 +2394,87 @@ function sortMilestones(milestones: TaskComposerMilestone[]) {
     .map((entry) => entry.milestone);
 }
 
-function datePart(value: string) {
-  return value.slice(0, 10) || "未设置";
+function normalizeComposerSeed(seed: TaskComposerSeed): TaskComposerSeed {
+  const fallbackAt = [
+    seed.plannedStartAt,
+    ...seed.milestones.map((milestone) => milestone.expectedCompletedAt),
+    seed.termination.plannedAt,
+  ].find(validLocalDateTime) ?? "2000-01-01T00:00";
+  const normalizedMeta: Record<string, TaskComposerNodeMeta> = {};
+  const normalizeMeta = (
+    entityId: string,
+    currentAt: string,
+    lifecycle: TaskComposerNodeMeta["lifecycle"],
+  ) => {
+    const stored = seed.nodeMeta?.[entityId];
+    normalizedMeta[entityId] = {
+      lifecycle: stored?.lifecycle ?? lifecycle,
+      lastValidAt: validLocalDateTime(stored?.lastValidAt ?? "")
+        ? stored!.lastValidAt
+        : validLocalDateTime(currentAt)
+          ? currentAt
+          : fallbackAt,
+    };
+  };
+  normalizeMeta(TASK_COMPOSER_START_ID, seed.plannedStartAt, "ESTABLISHED");
+  seed.milestones.forEach((milestone) =>
+    normalizeMeta(milestone.id, milestone.expectedCompletedAt, "ESTABLISHED"),
+  );
+  normalizeMeta(seed.termination.id, seed.termination.plannedAt, "ESTABLISHED");
+  normalizedMeta[TASK_COMPOSER_START_ID]!.lifecycle = "ESTABLISHED";
+  normalizedMeta[seed.termination.id]!.lifecycle = "ESTABLISHED";
+  const normalized: TaskComposerSeed = {
+    ...seed,
+    nodeMeta: normalizedMeta,
+  };
+  const reconciled = reconcileComposerPlanState(normalized);
+  return seed.nodeMeta === undefined && !hasStrictRenderChronology(reconciled)
+    ? createFallbackRenderChronology(reconciled)
+    : reconciled;
 }
 
-function formatLocalDateTime(value: string) {
-  return validLocalDateTime(value) ? value.replace("T", " ") : "未设置";
+function hasStrictRenderChronology(state: TaskComposerSeed) {
+  const renderTimes = [
+    renderAtMs(state, TASK_COMPOSER_START_ID),
+    ...sortMilestonesByRenderTime(state).map((milestone) =>
+      renderAtMs(state, milestone.id),
+    ),
+    renderAtMs(state, state.termination.id),
+  ];
+  return renderTimes.every(
+    (at, index) =>
+      Number.isFinite(at) &&
+      (index === 0 || at > renderTimes[index - 1]!),
+  );
+}
+
+function createFallbackRenderChronology(state: TaskComposerSeed) {
+  const milestones = sortMilestonesByRenderTime(state);
+  const startAt = validLocalDateTime(state.plannedStartAt)
+    ? localMs(state.plannedStartAt)
+    : localMs("2000-01-01T00:00");
+  const minuteMs = 60_000;
+  const nodeMeta: Record<string, TaskComposerNodeMeta> = {
+    [TASK_COMPOSER_START_ID]: {
+      lifecycle: "ESTABLISHED",
+      lastValidAt: isoToShanghaiDateTimeLocal(new Date(startAt)),
+    },
+  };
+  milestones.forEach((milestone, index) => {
+    nodeMeta[milestone.id] = {
+      lifecycle: "ESTABLISHED",
+      lastValidAt: isoToShanghaiDateTimeLocal(
+        new Date(startAt + (index + 1) * minuteMs),
+      ),
+    };
+  });
+  nodeMeta[state.termination.id] = {
+    lifecycle: "ESTABLISHED",
+    lastValidAt: isoToShanghaiDateTimeLocal(
+      new Date(startAt + (milestones.length + 1) * minuteMs),
+    ),
+  };
+  return { ...state, milestones, nodeMeta };
 }
 
 function formatSavedAt(value: string) {
@@ -2039,8 +2514,4 @@ function mergeOptions<T extends { id: string }>(current: T[], incoming: T[]) {
 
 function countIssues(issues: ValidationIssue[], keys: string[]) {
   return issues.filter((issue) => keys.includes(issue.key)).length;
-}
-
-function hasIssue(issues: ValidationIssue[], key: string) {
-  return issues.some((issue) => issue.key === key);
 }

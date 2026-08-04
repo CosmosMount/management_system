@@ -18,8 +18,10 @@ import {
   createTimeScale,
   fitTimeRange,
   intervalToRect,
+  moveTimePoint,
   rangesIntersect,
   snapTime,
+  snapTimeInRange,
   timeToX,
   visibleTimeWindow,
   xToTime,
@@ -52,6 +54,42 @@ test.describe("S3 TimeCanvas pure core", () => {
     expect(snapTime(point + 5 * HOUR_MS, DAY_MS, "floor")).toBe(point - 0.5 * DAY_MS);
     expect(snapTime(point + 5 * HOUR_MS, DAY_MS, "ceil")).toBe(point + 0.5 * DAY_MS);
     expect(
+      moveTimePoint({
+        atMs: RANGE.startMs + DAY_MS,
+        rawDeltaMs: 0.51 * DAY_MS,
+        snapMs: DAY_MS,
+        range: RANGE,
+      }),
+    ).toEqual({
+      atMs: RANGE.startMs + 2 * DAY_MS,
+      deltaMs: DAY_MS,
+    });
+    expect(
+      moveTimePoint({
+        atMs: RANGE.startMs,
+        rawDeltaMs: -10 * DAY_MS,
+        snapMs: DAY_MS,
+        range: RANGE,
+      }),
+    ).toEqual({ atMs: RANGE.startMs, deltaMs: 0 });
+    expect(
+      moveTimePoint({
+        atMs: RANGE.endMs - DAY_MS,
+        rawDeltaMs: 10 * DAY_MS,
+        snapMs: DAY_MS,
+        range: RANGE,
+      }),
+    ).toEqual({
+      atMs: RANGE.endMs - DAY_MS,
+      deltaMs: 0,
+    });
+    expect(
+      snapTimeInRange(RANGE.endMs - HOUR_MS, DAY_MS, RANGE),
+    ).toBe(RANGE.endMs - DAY_MS);
+    expect(
+      snapTimeInRange(0, DAY_MS, { startMs: 1, endMs: 2 }),
+    ).toBeNull();
+    expect(
       intervalToRect(RANGE.startMs - DAY_MS, RANGE.startMs + DAY_MS, scale),
     ).toEqual({ left: 0, width: 96 });
     expect(
@@ -79,6 +117,14 @@ test.describe("S3 TimeCanvas pure core", () => {
     });
     expect(window.startMs).toBe(RANGE.startMs + 10 * DAY_MS);
     expect(window.endMs).toBe(RANGE.startMs + 20 * DAY_MS);
+    const clampedWindow = visibleTimeWindow({
+      scale,
+      scrollLeftPx: 999_999,
+      viewportWidthPx: 960,
+      overscanPx: 0,
+    });
+    expect(clampedWindow.startMs).toBe(RANGE.startMs + 20 * DAY_MS);
+    expect(clampedWindow.endMs).toBe(RANGE.endMs);
     const weekTicks = axisTicks({ window: RANGE, zoom: "WEEK" });
     expect(
       new Intl.DateTimeFormat("en-US", {
@@ -218,6 +264,7 @@ test.describe("S3 TimeCanvas pure core", () => {
   test("four-mode fixtures cover 200 anchors, 50 rows, dense overlap, long text and empty data", () => {
     const composer = createTimeCanvasFixture("TASK_COMPOSER");
     expect(composer.anchors).toHaveLength(200);
+    expect(composer.phaseBands).toHaveLength(19);
     expect(new Set(composer.anchors.slice(0, 10).map((item) => item.atMs)).size).toBe(1);
 
     const workbench = createTimeCanvasFixture("TASK_WORKBENCH");
@@ -366,13 +413,68 @@ test.describe("S3 TimeCanvas controlled browser fixtures", () => {
     );
     if (testInfo.project.name === "desktop") {
       await expect(
-        page.getByTestId("plan-rail-plan:fixture-composer"),
+        page.getByTestId("phase-bands-plan:fixture-composer"),
       ).toBeVisible();
       await expect(page.locator("[data-canvas-object]")).toHaveCount(200);
+      expect(
+        await page.getByTestId("timeline-row-plan:fixture-composer").evaluate((row) => {
+          const rowBottom = row.getBoundingClientRect().bottom;
+          return [...row.querySelectorAll("[data-anchor-label-lane]")].every(
+            (anchor) => anchor.getBoundingClientRect().bottom <= rowBottom + 1,
+          );
+        }),
+      ).toBe(true);
+      const headerZIndex = await page
+        .getByTestId("time-canvas-row-header-plan:fixture-composer")
+        .evaluate((header) => Number.parseInt(getComputedStyle(header).zIndex, 10));
+      const anchorZIndex = await page
+        .getByTestId("milestone-marker-composer-node-0")
+        .evaluate((anchor) => Number.parseInt(getComputedStyle(anchor).zIndex, 10));
+      expect(headerZIndex).toBeGreaterThan(anchorZIndex);
+      await expect(
+        page.getByTestId("milestone-marker-composer-node-0"),
+      ).toHaveAttribute("data-anchor-icon", "DIAMOND");
+      const composerSymbol = await page.getByTestId("anchor-symbol-composer-node-0").boundingBox();
+      const composerBand = await page.getByTestId("phase-band-composer-phase-0").boundingBox();
+      if (!composerSymbol || !composerBand) throw new Error("Composer 计划连接元素缺少布局信息");
+      expect(Math.abs(
+        composerSymbol.y + composerSymbol.height / 2 -
+        (composerBand.y + composerBand.height / 2),
+      )).toBeLessThanOrEqual(1);
     } else {
       await expect(
         page.locator("[data-testid^='agenda-item-']"),
       ).toHaveCount(200);
+    }
+    await expectHealthyPage(page);
+
+    await page.goto(
+      "/progress/time-canvas-fixtures?mode=TASK_WORKBENCH",
+    );
+    if (testInfo.project.name === "desktop") {
+      await expect(
+        page.getByTestId("milestone-marker-workbench-node-0"),
+      ).toHaveAttribute("data-anchor-icon", "CHECK");
+      await expect(
+        page.getByTestId("phase-band-workbench-node-0:workbench-node-1"),
+      ).toContainText("里程碑 2");
+      const workbenchSymbol = await page.getByTestId("anchor-symbol-workbench-node-0").boundingBox();
+      const workbenchBand = await page
+        .getByTestId("phase-band-workbench-node-0:workbench-node-1")
+        .boundingBox();
+      if (!workbenchSymbol || !workbenchBand) throw new Error("Workbench 计划连接元素缺少布局信息");
+      expect(Math.abs(
+        workbenchSymbol.y + workbenchSymbol.height / 2 -
+        (workbenchBand.y + workbenchBand.height / 2),
+      )).toBeLessThanOrEqual(1);
+      const firstReadonlyAnchor = page.getByTestId(
+        "milestone-marker-workbench-node-0",
+      );
+      await firstReadonlyAnchor.focus();
+      await page.keyboard.press("ArrowRight");
+      await expect
+        .poll(() => activeCanvasObjectKey(page))
+        .toBe("anchor:workbench-node-1");
     }
     await expectHealthyPage(page);
 

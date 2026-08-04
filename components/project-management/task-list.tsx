@@ -60,6 +60,12 @@ export function TaskList({ tasks }: { tasks: TaskListItem[] }) {
                   当前：{task.activeMilestone.goal} ·{" "}
                   {formatDateTime(task.activeMilestone.expectedCompletedAt)}
                 </p>
+              ) : task.activeTermination ? (
+                <p className="flex items-center gap-2">
+                  <Clock3 className="h-4 w-4" aria-hidden="true" />
+                  当前：{task.activeTermination.name} ·{" "}
+                  {formatDateTime(task.activeTermination.plannedAt)}
+                </p>
               ) : (
                 <p>当前没有 Active Milestone</p>
               )}

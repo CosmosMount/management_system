@@ -133,13 +133,15 @@ DRAFT → MANAGEMENT_REVIEW → TEACHER_REVIEW → PENDING_APPLICANT_DOCS
 
 P2/P3 已补齐 Task 计划生命周期的服务端闭环，入口位于 `lib/project-management/application/lifecycle-service.ts`、`app/actions/project-management/{tasks,plans,revisions,milestones,terminations}.ts` 和 `lib/project-management/queries/task-queries.ts`：
 
-- Task 草稿创建在事务中写入 `Task(status=DRAFT)`、初始 `TaskPlanVersion(status=CURRENT, activatedAt=null)`、有序 Milestone、末尾 Termination、成员、Tag、审计、站内通知和 `channel=project-management` outbox；`TaskPlanVersion.idempotencyKey` 与 `creationRequestHash` 支持同账号请求幂等和 payload 冲突检测。任何已登录并成功解析到统一 `Account/Person` 的账号都可创建，服务端把创建者归一化为 Owner；即使创建者 Person 已停用也保留该自动 Owner，其他新增成员必须是活跃 Person。模板成员只复制 Owner/Participant，人员冲突时 Owner 优先。
-- `activateTask` 锁定 Task 行，校验 Draft 状态、Owner 权限、`expectedLockVersion`、至少一名 OWNER、Milestone、末尾 Termination 和连续序号后，把首个 Milestone 置为 `ACTIVE` 并递增 `lockVersion`。
+- Task 草稿创建在事务中写入 `Task(status=DRAFT)`、初始 `TaskPlanVersion(status=CURRENT, activatedAt=null)`、`0–200` 个有序 Milestone、末尾 Termination、成员、Tag、审计、站内通知和 `channel=project-management` outbox；Start 固定由 `plannedStartAt` 表示，Terminal 持久化 trim 后 `1–200` 字符的名称（默认 `Terminal`）。Start、每个 Milestone 与 Terminal 时间必须严格递增，不接受同刻。`TaskPlanVersion.idempotencyKey` 与 `creationRequestHash` 支持同账号请求幂等和 payload 冲突检测。任何已登录并成功解析到统一 `Account/Person` 的账号都可创建，服务端把创建者归一化为 Owner；即使创建者 Person 已停用也保留该自动 Owner，其他新增成员必须是活跃 Person。模板成员只复制 Owner/Participant，人员冲突时 Owner 优先，模板计划继续复制 Terminal 名称并按新时间规则重新校验。
+- `activateTask` 锁定 Task 行，校验 Draft 状态、Owner 权限、`expectedLockVersion`、至少一名 OWNER、合法计划、末尾 Termination 和连续序号后递增 `lockVersion`。存在 Milestone 时把首个 Milestone 置为 `ACTIVE` 并写入 `activeMilestoneNodeId`；零 Milestone 时直接激活 Terminal，`activeMilestoneNodeId` 保持 `null`，审计、工作台和通知以 Terminal 名称表示实际活动节点。
 - Revision 只允许基于当前 Current Plan 和匹配的 `RevisionNode.baseTaskLockVersion` 创建；目标计划保留已完成前缀、插入 Revision 节点、替换后续 Milestone 与 Termination。Participant 可管理自己创建的未生效 Revision，Owner/全局管理员可管理该 Task 任意未生效 Revision。每次提交都进入 `PENDING_APPROVAL`，只有全局管理员执行显式批准后才原子历史化旧 Current、启用新 Current、标记被替换节点为 `REVISED`，并把受影响的 Planned Work Segment 标记 `associationNeedsReview=true`。
 - Milestone Review 允许 OWNER/PARTICIPANT/全局管理员提交 TEXT/LINK 证据；FILE 证据当前返回中文校验错误。只有两类全局管理员可以通过、驳回或要求修订，并允许处理自己提交的 Review。通过后推进到下一 Milestone 或激活 Termination；驳回和要求修订不推进。`reviewerAccountId/reviewedByAccountId` 等历史数据库字段继续保存实际审批人，应用界面统一显示“审批人”。
 - Termination 确认写入 outcome、reason、summary 和 Task 终态。`SUCCESS` 要求所有前置 Milestone 已完成；`FAILED/CANCELLED/TIMEOUT` 可提前结束但必须填写原因，并取消未完成节点。重复相同确认幂等，不同 outcome 返回状态冲突。
 - 查询 facade `getTaskWorkspace`、`getPlanVersion`、`listTaskPlanVersions` 和 `comparePlanVersions` 都通过 `taskReadableWhere(actor)` 限定 `deletedAt=null`；所有已登录统一账号共享读取范围，但删除对象仍不能通过显式 ID 枚举。
-- S2 Task mutation service 将 Draft 更新拆为 metadata/member/plan 三个事务，将 Active 直接更新拆为 metadata/member/tag 三个事务；六个入口都先锁 Task、复核服务端权限/状态/`expectedLockVersion`，再原子提交业务数据、审计与新锁版本。Draft plan replace 只接受当前计划已有 `nodeId`；新节点必须使用 `clientKey`，随机或外部 `nodeId` 统一返回 `ASSOCIATION_INVALID`。计划写入的公开时间边界只接受带 `Z`/offset 的 string，内部解析后才使用 `Date`。plan replace 审计不复制 goal、criteria、reviewRequirements 或 businessDescription 正文，只记录 before/after snapshot hash、planned start、节点数，以及有界的 retained/added/removed/reordered ID/type 和字段名变化统计。新 Task、激活、新 Revision 目标及 Revision submit/apply 均严格要求 `plannedStartAt` 和合法 chronology；仅 legacy Active Current Plan 可在创建修复 Revision 或确认 Termination 时忽略已有的空开始时间/旧时间乱序。Revision 目标仍严格校验新 `plannedStartAt`、replacement suffix 和 Termination，只对标记为 `isCarryForward` 的连续历史前缀容忍其内部旧乱序。
+- S2 Task mutation service 将 Draft 更新拆为 metadata/member/plan 三个事务，将 Active 直接更新拆为 metadata/member/tag 三个事务；六个入口都先锁 Task、复核服务端权限/状态/`expectedLockVersion`，再原子提交业务数据、审计与新锁版本。Draft plan replace 接受 `0–200` 个 Milestone，只接受当前计划已有 `nodeId`；新节点必须使用 `clientKey`，随机或外部 `nodeId` 统一返回 `ASSOCIATION_INVALID`。计划写入的公开时间边界只接受带 `Z`/offset 的 string，内部解析后才使用 `Date`，Start/Milestone/Terminal 必须严格递增。plan replace 审计不复制 goal、criteria、reviewRequirements 或 businessDescription 正文，只记录 before/after snapshot hash、planned start、节点数、Terminal 名称变化，以及有界的 retained/added/removed/reordered ID/type 和字段名变化统计。新 Task、激活、新 Revision 目标及 Revision submit/apply 均严格要求 `plannedStartAt` 和合法 chronology；既有只读或 Active Current Plan 的旧同刻/乱序数据不被迁移自动改写，但新 Draft 保存、模板副本或 Revision 目标必须先修正。Revision 目标仍严格校验新 `plannedStartAt`、replacement suffix 和 Termination，不为不可变完成前缀设计新的同刻兼容写入流程。
+
+`TerminationNode.name` 是 `VARCHAR(200) NOT NULL DEFAULT 'Terminal'` 的计划版本字段，随创建、Draft 替换、Revision、模板复制、查询 DTO、版本差异和有界审计摘要传播。默认名称为 `Terminal` 时计划快照保持旧 canonical 形式；只有自定义名称进入新增 canonical 键，因此既有默认名称计划的 hash 不会全量失效，自定义名称变化会改变快照 hash。
 
 P5 Resource Segment 服务端闭环位于 `lib/project-management/application/segment-service.ts`、`app/actions/project-management/segments.ts` 和 `lib/project-management/queries/resource-queries.ts`：
 
@@ -157,9 +159,9 @@ TimeCanvas 的请求预算为 Full Segment + Busy 合计 5,000、Task anchor 50�
 
 项目管理浏览器入口覆盖 `/progress` 驾驶舱、Task Composer/工作台、Resource Planner、Personal Timeline、Action Inbox、Tag 和通知偏好。所有页面先解析项目管理 actor；`taskReadableWhere` 和 `segmentReadableWhere` 对所有已登录统一账号返回全部未删除对象，人员列表返回所有活跃 Person，并在所选范围继续展示有历史投入的停用 Person。停用 Person 对应账号仍可进入页面、全局读取并创建 Task，其本人会成为该 Task 的自动 Owner；停用 Person 不可作为其他 Task 的新增成员，也不可创建新 Segment。服务端 action 仍执行成员、Person 状态、状态机、权限、关联和版本校验，DTO capability flags 决定只读或可操作 UI。审批待办和审批按钮只对两类全局管理员可用。
 
-项目管理浏览器入口统一由 `app/progress/layout.tsx` 渲染全站 `AppHeader`、`PageShell` 和模块 Shell，子页只提供上下文命令栏与业务内容。桌面端使用可折叠的 sticky 左侧导航；移动端使用模态 Drawer。模块 Shell 统一读取通知未读数；不可用对象使用脱敏页面。`--pm-*` 语义变量集中在 `app/globals.css`，适配明暗主题和 reduced motion。`myTimeline`、`taskNew`、`approvals`、`tags` 均已有类型安全路由和导航入口。
+项目管理浏览器入口统一由 `app/progress/layout.tsx` 渲染全站 `AppHeader`、`PageShell` 和模块 Shell，子页只提供上下文命令栏与业务内容。桌面端使用可折叠的 sticky 左侧导航；移动端使用模态 Drawer。模块 Shell 统一读取通知未读数；不可用对象使用脱敏页面。`--pm-*` 语义变量集中在 `app/globals.css`，适配明暗主题和 reduced motion。`myTimeline`、`taskNew`、`approvals`、`tags` 均已有类型安全路由和导航入口。Task Composer 桌面端采用“Task 信息 / TimeCanvas 与节点表 / 节点 Inspector”三栏，画布与节点表使用同一受控选择和实时节点状态；Inspector 不设保存/取消，连续编辑按节点合并为一条撤销历史。新增 Milestone 立即成为 Composer 专用临时节点，补全后自动转正；节点元数据保存临时生命周期和无效时间输入期间的最后合法画布位置，不进入服务端 DTO。所有 TimeCanvas PLAN 行采用节点符号与阶段块共线的布局，人员/Task Segment 行不变。Pixel 5 保留纵向实时编辑且不显示桌面画布布局。Composer 只复用时间坐标与交互，不查询成员 Planned/Actual/Busy。Composer 本地草稿 v3 对普通内容使用账号/环境隔离的 `localStorage`，对合法 200 节点长文本草稿使用 IndexedDB 并在 `localStorage` 保存校验指针；临时状态和最后合法位置随正文保存，旧 v3 Inspector 工作副本在恢复时转换为实时节点。同账号多标签页通过 Web Locks 串行化完整存储事务，离开前取消待触发防抖并等待已入队写入及清理完成。详细规格见 [`docs/plan/task-create-ui/README.md`](plan/task-create-ui/README.md)。
 
-统一 `TimeCanvas` 通过显式 adapter 消费 S2 安全 DTO，共享时间坐标、半开区间、上海时区 snap/fit、稳定泳道、选择和 mutation 模型。桌面端使用 `@tanstack/react-virtual` 纵向虚拟化并只渲染横向可见对象；Pixel 5 使用同 DTO 的 `TimeAgenda`。响应式 renderer 通过 `matchMedia/useSyncExternalStore` 只挂载当前视口所需的一套 DOM，避免桌面隐藏 Agenda 仍创建数千节点。Busy 在 adapter 后仍不恢复源 Segment、Task、Node 或版本标识。受控 fixture 页面继续只对官方随机 `_test` runner 开放。
+统一 `TimeCanvas` 通过显式 adapter 消费 S2 安全 DTO，共享时间坐标、半开区间、上海时区 snap/fit、稳定泳道、选择和 mutation 模型。`TASK_COMPOSER` 模式额外支持外部受控选中、锚点选择、空白位置创建请求、锚点拖动/键盘移动回调和带名称/颜色的阶段带；Start、Milestone、Terminal 都是可操作锚点，阶段带标注下一节点，业务严格边界和 Milestone 自动重排由 Composer 负责。其他模式不启用这些创建/写回行为。桌面端使用 `@tanstack/react-virtual` 纵向虚拟化并只渲染横向可见对象；Pixel 5 使用同 DTO 的 `TimeAgenda`。响应式 renderer 通过 `matchMedia/useSyncExternalStore` 只挂载当前视口所需的一套 DOM，避免桌面隐藏 Agenda 仍创建数千节点。Busy 在 adapter 后仍不恢复源 Segment、Task、Node 或版本标识。受控 fixture 页面继续只对官方随机 `_test` runner 开放。
 
 `DomainAuditEvent` 由 append-only trigger 保护，应用代码只能追加审计事件，不能更新或删除既有审计行。
 
@@ -203,6 +205,7 @@ TimeCanvas 的请求预算为 Full Segment + Busy 合计 5,000、Task anchor 50�
 |------|------|
 | `/progress` | 我的工作总览 |
 | `/progress/tasks` | Task 列表 |
+| `/progress/tasks/new` | Task 创建页（桌面三栏 Composer、移动纵向编辑） |
 | `/progress/tasks/[id]` | Task 工作台 |
 | `/progress/resources` | 人员计划时间轴 |
 | `/progress/notifications` | 站内通知中心 |
@@ -241,6 +244,7 @@ npm run db:deploy
 - schema 变更后执行 `npx prisma generate` 并重启 dev server
 - 旧 SQLite 数据不迁移；首次部署从空 PostgreSQL 库开始
 - `20260803190000_remove_project_access_status` 会删除账号项目访问状态列与枚举，和仍读取旧列的进程不兼容。生产发布必须使用维护窗口：先构建新版本并备份数据库，停止旧 Web/cron/ws 进程，执行 `npm run db:deploy`，再启动新版本并验证账号登录、项目授权和人员/Task 搜索主流程。
+- `20260804120000_add_termination_node_name` 为 `TerminationNode` 增加非空 `name` 并用数据库默认值 `Terminal` 回填既有行；迁移不修改历史计划时间、节点状态、审计或通知。部署后需验证默认/自定义名称的查询、模板和 Revision 传播，以及旧同刻计划仍可读取但不能作为新写入提交。
 
 ### 常用命令
 

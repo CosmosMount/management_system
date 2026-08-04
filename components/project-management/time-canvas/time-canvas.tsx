@@ -16,6 +16,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Circle,
+  Diamond,
   Flag,
   GitBranch,
   Link2Off,
@@ -32,8 +33,10 @@ import {
   chooseFitZoom,
   createTimeScale,
   intervalToRect,
+  moveTimePoint,
   rangesIntersect,
   snapTime,
+  snapTimeInRange,
   timeToX,
   visibleTimeWindow,
   xToTime,
@@ -41,8 +44,11 @@ import {
 import { layoutIntervalLanes, layoutPointLanes } from "@/components/project-management/time-canvas/lane-layout";
 import type {
   TimeCanvasAnchor,
+  TimeCanvasAnchorMoveRequest,
+  TimeCanvasAnchorMoveResolution,
   TimeCanvasDisplayOptions,
   TimeCanvasInteractionOptions,
+  TimeCanvasPhaseBand,
   TimeCanvasProps,
   TimeCanvasRow,
   TimeCanvasSegment,
@@ -55,6 +61,15 @@ import { cn } from "@/lib/utils";
 
 const ROW_HEADER_WIDTH = 240;
 const AXIS_HEIGHT = 56;
+const PLAN_RAIL_TOP = 28;
+const planPhaseTones = [
+  "BLUE",
+  "VIOLET",
+  "AMBER",
+  "EMERALD",
+  "ROSE",
+  "SLATE",
+] as const;
 const zoomOrder: TimeCanvasZoom[] = ["HOUR", "DAY", "WEEK", "MONTH"];
 const zoomLabels: Record<TimeCanvasZoom, string> = {
   HOUR: "小时",
@@ -69,6 +84,7 @@ export function TimeCanvas({
   initialZoom,
   display: displayInput,
   interaction,
+  selection: controlledSelection,
   initialSelection = null,
   emptyMessage = "选择人员或 Task 后查看计划",
   onRangeChange,
@@ -82,7 +98,11 @@ export function TimeCanvas({
   const [zoom, setZoom] = useState<TimeCanvasZoom>(
     initialZoom ?? chooseFitZoom(model.range),
   );
-  const [selection, setSelection] = useState<TimeCanvasSelection>(initialSelection);
+  const [internalSelection, setInternalSelection] =
+    useState<TimeCanvasSelection>(initialSelection);
+  const selection = controlledSelection === undefined
+    ? internalSelection
+    : controlledSelection;
   const mobileAgenda = useMobileAgenda();
   const [scrollState, setScrollState] = useState({ left: 0, width: 900 });
   const [activeFocusKey, setActiveFocusKey] = useState<string | null>(null);
@@ -103,6 +123,10 @@ export function TimeCanvas({
     [filteredSegments],
   );
   const anchorsByRow = useMemo(() => groupByRow(model.anchors), [model.anchors]);
+  const phaseBandsByRow = useMemo(
+    () => groupByRow(model.phaseBands ?? []),
+    [model.phaseBands],
+  );
   const generatedAtMs = Date.parse(model.generatedAt);
   const focusTargets = useMemo(
     () =>
@@ -129,6 +153,16 @@ export function TimeCanvas({
         scale,
         scrollLeftPx: scrollState.left,
         viewportWidthPx: scrollState.width,
+      }),
+    [scale, scrollState],
+  );
+  const viewportWindow = useMemo(
+    () =>
+      visibleTimeWindow({
+        scale,
+        scrollLeftPx: scrollState.left,
+        viewportWidthPx: scrollState.width,
+        overscanPx: 0,
       }),
     [scale, scrollState],
   );
@@ -199,10 +233,15 @@ export function TimeCanvas({
 
   const select = useCallback(
     (next: TimeCanvasSelection) => {
-      setSelection(next);
+      if (controlledSelection === undefined) {
+        setInternalSelection(next);
+      }
+      interaction?.onAnchorSelectionChange?.(
+        next?.kind === "ANCHOR" ? next.id : null,
+      );
       onSelectionChange?.(next);
     },
-    [onSelectionChange],
+    [controlledSelection, interaction, onSelectionChange],
   );
 
   const scrollToToday = useCallback(() => {
@@ -387,12 +426,15 @@ export function TimeCanvas({
                       >
                         <RowHeader row={row} />
                         <TimelineRow
+                          mode={mode}
                           row={row}
                           scale={scale}
                           visibleWindow={visibleWindow}
+                          viewportWindow={viewportWindow}
                           dayStripes={dayStripes}
                           segments={segmentsByRow.get(row.id) ?? []}
                           anchors={anchorsByRow.get(row.id) ?? []}
+                          phaseBands={phaseBandsByRow.get(row.id) ?? []}
                           nowMs={generatedAtMs}
                           selection={selection}
                           activeFocusKey={currentFocusKey}
@@ -557,7 +599,10 @@ function TimeAxis({
 
 function RowHeader({ row }: { row: TimeCanvasRow }) {
   return (
-    <div className="sticky left-0 z-20 flex min-w-0 flex-col justify-center border-r border-border bg-card px-3">
+    <div
+      className="sticky left-0 z-[25] flex min-w-0 flex-col justify-center border-r border-border bg-card px-3"
+      data-testid={`time-canvas-row-header-${row.id}`}
+    >
       <div className="flex min-w-0 items-center gap-2">
         <span className="min-w-0 flex-1 truncate text-sm font-medium" title={row.label}>
           {row.label}
@@ -578,12 +623,15 @@ function RowHeader({ row }: { row: TimeCanvasRow }) {
 }
 
 function TimelineRow({
+  mode,
   row,
   scale,
   visibleWindow,
+  viewportWindow,
   dayStripes,
   segments,
   anchors,
+  phaseBands,
   nowMs,
   selection,
   activeFocusKey,
@@ -591,12 +639,15 @@ function TimelineRow({
   onSelect,
   onObjectFocus,
 }: {
+  mode: TimeCanvasProps["mode"];
   row: TimeCanvasRow;
   scale: ReturnType<typeof createTimeScale>;
   visibleWindow: { startMs: number; endMs: number };
+  viewportWindow: { startMs: number; endMs: number };
   dayStripes: number[];
   segments: TimeCanvasSegment[];
   anchors: TimeCanvasAnchor[];
+  phaseBands: TimeCanvasPhaseBand[];
   nowMs: number;
   selection: TimeCanvasSelection;
   activeFocusKey: string | null;
@@ -609,6 +660,17 @@ function TimelineRow({
     anchorMs: number;
     currentMs: number;
   } | null>(null);
+  const [anchorPreview, setAnchorPreview] = useState<{
+    anchorId: string;
+    atMs: number;
+  } | null>(null);
+  const previewAnchors = anchorPreview
+    ? anchors.map((anchor) =>
+        anchor.id === anchorPreview.anchorId
+          ? { ...anchor, atMs: anchorPreview.atMs }
+          : anchor,
+      )
+    : anchors;
   const layout = layoutIntervalLanes(
     segments.map((segment) => ({
       id: segment.id,
@@ -621,15 +683,24 @@ function TimelineRow({
   );
   const segmentById = new Map(segments.map((segment) => [segment.id, segment]));
   const visibleAnchors = anchors.filter(
-    (anchor) => anchor.atMs >= visibleWindow.startMs && anchor.atMs < visibleWindow.endMs,
+    (anchor) =>
+      anchor.id === anchorPreview?.anchorId ||
+      (anchor.atMs >= visibleWindow.startMs && anchor.atMs < visibleWindow.endMs),
   );
   const anchorLanes = layoutPointLanes(
     visibleAnchors.map((anchor) => ({
       id: anchor.id,
-      atMs: anchor.atMs,
+      atMs:
+        anchor.id === anchorPreview?.anchorId
+          ? anchorPreview.atMs
+          : anchor.atMs,
       sequence: anchor.sequence,
     })),
     scale.msPerPixel * 96,
+  );
+  const maximumPlanLabelLane = Math.max(
+    0,
+    Math.floor((row.height - 80) / 22),
   );
 
   const brushRange = brush
@@ -639,6 +710,10 @@ function TimelineRow({
     Boolean(interaction?.enableBrushCreate && interaction.onBrushCreate) &&
     row.editable &&
     row.kind === "PERSON";
+  const canCreateAnchor =
+    Boolean(interaction?.enableAnchorCreate && interaction.onAnchorCreate) &&
+    row.editable &&
+    row.kind === "PLAN";
 
   function pointerTime(event: ReactPointerEvent<HTMLDivElement>) {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -654,8 +729,10 @@ function TimelineRow({
       className={cn(
         "relative overflow-hidden bg-background",
         canBrush && "cursor-crosshair touch-none",
+        canCreateAnchor && "cursor-cell",
       )}
       data-canvas-row={row.id}
+      data-anchor-preview={anchorPreview?.anchorId ?? ""}
       aria-label={`${row.label} 时间行`}
       onPointerDown={(event) => {
         const target = event.target;
@@ -695,6 +772,34 @@ function TimelineRow({
           ...range,
         });
       }}
+      onClick={(event) => {
+        const target = event.target;
+        if (
+          !canCreateAnchor ||
+          (target instanceof Element && target.closest("[data-canvas-object]"))
+        ) {
+          return;
+        }
+        const rect = event.currentTarget.getBoundingClientRect();
+        const atMs = snapTimeInRange(
+          xToTime(event.clientX - rect.left, scale),
+          scale.snapMs,
+          scale,
+        );
+        if (atMs === null) {
+          interaction?.onInvalidDrop?.(
+            "当前时间范围内没有可用吸附位置，请放大画布后重试。",
+          );
+          return;
+        }
+        interaction?.onAnchorCreate?.({
+          rowId: row.id,
+          rowKind: row.kind,
+          sourceId: row.sourceId,
+          atMs,
+          snapMs: scale.snapMs,
+        });
+      }}
     >
       <TimeGrid dayStripes={dayStripes} scale={scale} />
       {brushRange && (
@@ -706,7 +811,19 @@ function TimelineRow({
         />
       )}
       {row.kind === "PLAN" && (
-        <PlanRail anchors={anchors} visibleWindow={visibleWindow} scale={scale} rowId={row.id} />
+        <PlanRail
+          anchors={previewAnchors}
+          phaseBands={anchorPreview ? [] : phaseBands}
+          viewportWindow={viewportWindow}
+          scale={scale}
+          rowId={row.id}
+          selectedAnchorId={
+            selection?.kind === "ANCHOR" ? selection.id : null
+          }
+          onSelectAnchor={(anchorId) =>
+            onSelect({ kind: "ANCHOR", id: anchorId })
+          }
+        />
       )}
       {visiblePlacements.map((placement) => {
         if (placement.aggregated) {
@@ -755,14 +872,24 @@ function TimelineRow({
       {visibleAnchors.map((anchor, index) => (
         <AnchorMarker
           key={anchor.id}
+          mode={mode}
+          planRow={row.kind === "PLAN"}
           anchor={anchor}
-          lane={anchorLanes.get(anchor.id) ?? 0}
+          lane={
+            row.kind === "PLAN"
+              ? Math.min(anchorLanes.get(anchor.id) ?? 0, maximumPlanLabelLane)
+              : anchorLanes.get(anchor.id) ?? 0
+          }
           offset={index % 10}
           scale={scale}
           selected={selection?.kind === "ANCHOR" && selection.id === anchor.id}
           activeFocusKey={activeFocusKey}
+          interaction={interaction}
           onSelect={onSelect}
           onObjectFocus={onObjectFocus}
+          onPreviewChange={(anchorId, atMs) =>
+            setAnchorPreview(atMs === null ? null : { anchorId, atMs })
+          }
         />
       ))}
 
@@ -801,51 +928,135 @@ function TimeGrid({
 
 function PlanRail({
   anchors,
-  visibleWindow,
+  phaseBands,
+  viewportWindow,
   scale,
   rowId,
+  selectedAnchorId,
+  onSelectAnchor,
 }: {
   anchors: TimeCanvasAnchor[];
-  visibleWindow: { startMs: number; endMs: number };
+  phaseBands: TimeCanvasPhaseBand[];
+  viewportWindow: { startMs: number; endMs: number };
   scale: ReturnType<typeof createTimeScale>;
   rowId: string;
+  selectedAnchorId: string | null;
+  onSelectAnchor: (anchorId: string) => void;
 }) {
+  if (phaseBands.length > 0) {
+    return (
+      <PhaseBands
+        bands={phaseBands}
+        viewportWindow={viewportWindow}
+        scale={scale}
+        rowId={rowId}
+        anchors={anchors}
+        selectedAnchorId={selectedAnchorId}
+        onSelectAnchor={onSelectAnchor}
+      />
+    );
+  }
   const sorted = [...anchors].sort(
     (left, right) =>
       left.atMs - right.atMs ||
       left.sequence - right.sequence ||
       left.id.localeCompare(right.id),
   );
-  const spans = sorted
+  const generatedBands: TimeCanvasPhaseBand[] = sorted
     .slice(0, -1)
-    .map((anchor, index) => ({
-      id: `${anchor.id}:${sorted[index + 1]?.id ?? "end"}`,
-      startMs: anchor.atMs,
-      endMs: sorted[index + 1]?.atMs ?? anchor.atMs,
-      completed: anchor.status === "COMPLETED",
-    }))
-    .filter(
-      (span) =>
-        span.endMs > span.startMs && rangesIntersect(span, visibleWindow),
-    );
-  if (spans.length === 0) return null;
+    .flatMap((anchor, index) => {
+      const next = sorted[index + 1];
+      if (!next || next.atMs <= anchor.atMs) return [];
+      return [{
+        id: `${anchor.id}:${next.id}`,
+        rowId,
+        startMs: anchor.atMs,
+        endMs: next.atMs,
+        label: next.label,
+        tone: planPhaseTones[index % planPhaseTones.length] ?? "BLUE",
+        visualState:
+          anchor.visualState === "TEMPORARY" || next.visualState === "TEMPORARY"
+            ? ("TEMPORARY" as const)
+            : undefined,
+      }];
+    });
+  return (
+    <PhaseBands
+      bands={generatedBands}
+      viewportWindow={viewportWindow}
+      scale={scale}
+      rowId={rowId}
+      anchors={sorted}
+      selectedAnchorId={selectedAnchorId}
+      onSelectAnchor={onSelectAnchor}
+    />
+  );
+}
+
+function PhaseBands({
+  bands,
+  viewportWindow,
+  scale,
+  rowId,
+  anchors,
+  selectedAnchorId,
+  onSelectAnchor,
+}: {
+  bands: TimeCanvasPhaseBand[];
+  viewportWindow: { startMs: number; endMs: number };
+  scale: ReturnType<typeof createTimeScale>;
+  rowId: string;
+  anchors: TimeCanvasAnchor[];
+  selectedAnchorId: string | null;
+  onSelectAnchor: (anchorId: string) => void;
+}) {
+  const visibleBands = bands.filter(
+    (band) =>
+      band.endMs > band.startMs && rangesIntersect(band, viewportWindow),
+  );
+  if (visibleBands.length === 0) return null;
   return (
     <div
       className="pointer-events-none absolute inset-0 z-[5]"
-      aria-hidden="true"
-      data-testid={`plan-rail-${rowId}`}
+      data-testid={`phase-bands-${rowId}`}
     >
-      {spans.map((span) => {
-        const rect = intervalToRect(span.startMs, span.endMs, scale);
+      {visibleBands.map((band) => {
+        const rect = intervalToRect(
+          Math.max(band.startMs, viewportWindow.startMs),
+          Math.min(band.endMs, viewportWindow.endMs),
+          scale,
+        );
+        const endpointAnchor = anchors.find(
+          (anchor) => anchor.atMs === band.endMs,
+        );
+        const selected = endpointAnchor?.id === selectedAnchorId;
         return (
-          <span
-            key={span.id}
+          <button
+            type="button"
+            key={band.id}
             className={cn(
-              "absolute top-9 h-2 rounded-full border border-primary/50 bg-primary/15",
-              span.completed && "border-emerald-600/70 bg-emerald-500/25",
+              "pointer-events-auto absolute flex h-5 min-w-px items-center justify-center overflow-hidden rounded border px-1.5 text-center text-[10px] font-medium",
+              phaseBandToneClassName(band.tone),
+              band.visualState === "TEMPORARY" &&
+                "border-dashed border-amber-500 bg-amber-100/80 text-amber-950 dark:bg-amber-950/50 dark:text-amber-100",
+              selected && "ring-2 ring-inset ring-primary shadow-sm",
             )}
-            style={{ left: rect.left, width: rect.width }}
-          />
+            style={{ left: rect.left, width: rect.width, top: PLAN_RAIL_TOP }}
+            aria-label={`阶段 ${band.label}，${formatRange(band.startMs, band.endMs)}`}
+            aria-pressed={selected}
+            title={`${band.label} · ${formatRange(band.startMs, band.endMs)}`}
+            data-testid={`phase-band-${band.id}`}
+            data-phase-selected={selected ? "true" : "false"}
+            disabled={!endpointAnchor}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (endpointAnchor) onSelectAnchor(endpointAnchor.id);
+            }}
+          >
+            <span className="truncate">
+              {band.visualState === "TEMPORARY" ? `临时 · ${band.label}` : band.label}
+            </span>
+          </button>
         );
       })}
     </div>
@@ -1077,55 +1288,262 @@ function SegmentBlock({
 }
 
 function AnchorMarker({
+  mode,
+  planRow,
   anchor,
   lane,
   offset,
   scale,
   selected,
   activeFocusKey,
+  interaction,
   onSelect,
   onObjectFocus,
+  onPreviewChange,
 }: {
+  mode: TimeCanvasProps["mode"];
+  planRow: boolean;
   anchor: TimeCanvasAnchor;
   lane: number;
   offset: number;
   scale: ReturnType<typeof createTimeScale>;
   selected: boolean;
   activeFocusKey: string | null;
+  interaction: TimeCanvasInteractionOptions | undefined;
   onSelect: (selection: TimeCanvasSelection) => void;
   onObjectFocus: (key: string) => void;
+  onPreviewChange: (anchorId: string, atMs: number | null) => void;
 }) {
-  const left = timeToX(anchor.atMs, scale) + offset * 2;
-  const top = 8 + lane * 22;
-  const Icon = anchor.kind === "TERMINATION" ? Flag : anchor.kind === "REVISION" ? GitBranch : anchor.status === "COMPLETED" ? Check : Circle;
+  const [move, setMove] = useState<{
+    pointerId: number;
+    clientX: number;
+    scrollLeft: number;
+    rowTop: number;
+    rowBottom: number;
+  } | null>(null);
+  const [previewAtMs, setPreviewAtMs] = useState<number | null>(null);
+  const previewBlockedMessageRef = useRef<string | null>(null);
+  const suppressClickRef = useRef(false);
+  const displayedAtMs = previewAtMs ?? anchor.atMs;
+  const left = timeToX(displayedAtMs, scale) + (planRow ? 0 : offset * 2);
+  const top = planRow ? PLAN_RAIL_TOP + 2 : 8 + lane * 22;
+  const iconKind =
+    anchor.kind === "TERMINATION"
+      ? "FLAG"
+      : anchor.kind === "REVISION"
+        ? "BRANCH"
+        : mode === "TASK_COMPOSER" && anchor.kind === "MILESTONE"
+          ? "DIAMOND"
+          : anchor.status === "COMPLETED"
+            ? "CHECK"
+            : "CIRCLE";
+  const Icon =
+    iconKind === "FLAG"
+      ? Flag
+      : iconKind === "BRANCH"
+        ? GitBranch
+        : iconKind === "DIAMOND"
+          ? Diamond
+          : iconKind === "CHECK"
+            ? Check
+            : Circle;
   const focusKey = anchorFocusKey(anchor.id);
+  const canMove = anchor.editable && Boolean(interaction?.onAnchorMove);
+  const announcedStatus =
+    anchor.visualState === "TEMPORARY"
+      ? "临时"
+      : anchor.visualState === "INVALID"
+        ? "需修正"
+        : anchor.status;
+
+  function requestKeyboardMove(direction: -1 | 1) {
+    if (!canMove) return;
+    const canvasResult = moveTimePoint({
+      atMs: anchor.atMs,
+      rawDeltaMs: direction * scale.snapMs,
+      snapMs: scale.snapMs,
+      range: scale,
+    });
+    const result = constrainMove(canvasResult, "KEYBOARD_MOVE");
+    if (result.deltaMs === 0) {
+      interaction?.onInvalidDrop?.(
+        result.blockedMessage ?? "节点已到当前时间范围边界，无法继续移动。",
+      );
+      return;
+    }
+    interaction?.onAnchorMove?.({
+      anchorId: anchor.id,
+      rowId: anchor.rowId,
+      kind: "KEYBOARD_MOVE",
+      ...result,
+      snapMs: scale.snapMs,
+    });
+  }
+
+  function constrainMove(
+    result: { atMs: number; deltaMs: number },
+    kind: TimeCanvasAnchorMoveRequest["kind"],
+  ): TimeCanvasAnchorMoveResolution {
+    return interaction?.constrainAnchorMove?.({
+      anchorId: anchor.id,
+      rowId: anchor.rowId,
+      kind,
+      ...result,
+      snapMs: scale.snapMs,
+    }) ?? result;
+  }
+
   return (
     <button
       type="button"
       className={cn(
         "absolute z-20 flex max-w-40 -translate-x-1/2 flex-col items-center rounded px-1 text-[10px] outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        canMove && "touch-none cursor-grab",
+        move && "cursor-grabbing opacity-80",
         selected && "bg-primary/10 ring-2 ring-primary",
+        anchor.visualState === "TEMPORARY" && "text-amber-700",
+        anchor.visualState === "INVALID" && "text-destructive",
       )}
       style={{ left, top }}
       aria-pressed={selected}
-      aria-label={`${anchor.kind === "TERMINATION" ? "终止节点" : "计划节点"} ${anchor.label}，${formatDateTime(anchor.atMs)}，状态 ${anchor.status}`}
-      title={`${anchor.label} · ${formatDateTime(anchor.atMs)}`}
-      onClick={() => onSelect(selected ? null : { kind: "ANCHOR", id: anchor.id })}
+      aria-label={`${anchor.kind === "TERMINATION" ? "终止节点" : "计划节点"} ${anchor.label}，${formatDateTime(displayedAtMs)}，状态 ${announcedStatus}${canMove ? "，按左右方向键可移动" : ""}`}
+      title={`${anchor.label} · ${formatDateTime(displayedAtMs)}`}
+      onClick={() => {
+        if (suppressClickRef.current) {
+          suppressClickRef.current = false;
+          return;
+        }
+        onSelect(selected ? null : { kind: "ANCHOR", id: anchor.id });
+      }}
+      onKeyDown={(event) => {
+        if (
+          !canMove ||
+          (event.key !== "ArrowLeft" && event.key !== "ArrowRight")
+        ) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        requestKeyboardMove(event.key === "ArrowLeft" ? -1 : 1);
+      }}
+      onPointerDown={(event) => {
+        if (event.button !== 0 || !canMove) return;
+        const scroller = event.currentTarget.closest<HTMLElement>(
+          "[data-testid='time-canvas-scroll']",
+        );
+        const row = event.currentTarget.closest<HTMLElement>("[data-canvas-row]");
+        const rowRect = row?.getBoundingClientRect();
+        event.preventDefault();
+        event.stopPropagation();
+        event.currentTarget.setPointerCapture(event.pointerId);
+        setMove({
+          pointerId: event.pointerId,
+          clientX: event.clientX,
+          scrollLeft: scroller?.scrollLeft ?? 0,
+          rowTop: rowRect?.top ?? Number.NEGATIVE_INFINITY,
+          rowBottom: rowRect?.bottom ?? Number.POSITIVE_INFINITY,
+        });
+        setPreviewAtMs(anchor.atMs);
+        previewBlockedMessageRef.current = null;
+        onPreviewChange(anchor.id, anchor.atMs);
+      }}
+      onPointerMove={(event) => {
+        if (!move || move.pointerId !== event.pointerId) return;
+        const scroller = event.currentTarget.closest<HTMLElement>(
+          "[data-testid='time-canvas-scroll']",
+        );
+        if (scroller) edgeScrollCanvas(scroller, event.clientX);
+        const scrollDelta = (scroller?.scrollLeft ?? 0) - move.scrollLeft;
+        const rawDelta =
+          (event.clientX - move.clientX + scrollDelta) * scale.msPerPixel;
+        const canvasResult = moveTimePoint({
+          atMs: anchor.atMs,
+          rawDeltaMs: rawDelta,
+          snapMs: scale.snapMs,
+          range: scale,
+        });
+        const result = constrainMove(canvasResult, "MOVE");
+        setPreviewAtMs(result.atMs);
+        previewBlockedMessageRef.current = result.blockedMessage ?? null;
+        onPreviewChange(anchor.id, result.atMs);
+        if (Math.abs(rawDelta) >= scale.snapMs) {
+          suppressClickRef.current = true;
+        }
+      }}
+      onPointerCancel={() => {
+        setMove(null);
+        setPreviewAtMs(null);
+        previewBlockedMessageRef.current = null;
+        onPreviewChange(anchor.id, null);
+      }}
+      onPointerUp={(event) => {
+        if (!move || move.pointerId !== event.pointerId) return;
+        const result = previewAtMs;
+        const blockedMessage = previewBlockedMessageRef.current;
+        const attemptedMove = suppressClickRef.current;
+        const droppedOutsideOriginalRow =
+          event.clientY < move.rowTop || event.clientY >= move.rowBottom;
+        setMove(null);
+        setPreviewAtMs(null);
+        previewBlockedMessageRef.current = null;
+        onPreviewChange(anchor.id, null);
+        if (suppressClickRef.current) {
+          window.setTimeout(() => {
+            suppressClickRef.current = false;
+          }, 0);
+        }
+        if (droppedOutsideOriginalRow) {
+          suppressClickRef.current = true;
+          interaction?.onInvalidDrop?.("不支持跨计划行拖放，节点仍保留在原位置。");
+          return;
+        }
+        if (result !== null && result !== anchor.atMs) {
+          interaction?.onAnchorMove?.({
+            anchorId: anchor.id,
+            rowId: anchor.rowId,
+            kind: "MOVE",
+            atMs: result,
+            deltaMs: result - anchor.atMs,
+            snapMs: scale.snapMs,
+          });
+        } else if (attemptedMove) {
+          interaction?.onInvalidDrop?.(
+            blockedMessage ?? "节点已到当前时间范围边界，仍保留在原位置。",
+          );
+        }
+      }}
       onFocus={() => onObjectFocus(focusKey)}
       tabIndex={activeFocusKey === focusKey ? 0 : -1}
       data-canvas-object
       data-canvas-object-key={focusKey}
+      data-anchor-icon={iconKind}
+      data-anchor-visual-state={anchor.visualState ?? "DEFAULT"}
+      data-anchor-label-lane={planRow ? lane : undefined}
       data-testid={`milestone-marker-${anchor.id}`}
     >
       <Icon
         className={cn(
           "size-4 shrink-0",
+          anchorToneClassName(anchor),
           anchor.status === "ACTIVE" && "fill-primary text-primary",
-          anchor.kind === "TERMINATION" && "text-destructive",
+          anchor.visualState === "TEMPORARY" &&
+            "text-amber-600 [stroke-dasharray:3_2] dark:text-amber-400",
+          anchor.visualState === "INVALID" && "text-destructive",
         )}
         aria-hidden="true"
+        data-testid={`anchor-symbol-${anchor.id}`}
       />
-      <span className="mt-0.5 max-w-32 truncate">{anchor.label}</span>
+      <span
+        className="max-w-32 truncate"
+        style={{ marginTop: planRow ? 4 + lane * 22 : 2 }}
+      >
+        {anchor.visualState === "TEMPORARY" ? `临时 · ${anchor.label}` : anchor.label}
+      </span>
+      {planRow && (
+        <span className="max-w-32 truncate text-[9px] text-muted-foreground">
+          {formatCompactAnchorDate(displayedAtMs, scale.snapMs < DAY_MS)}
+        </span>
+      )}
     </button>
   );
 }
@@ -1451,6 +1869,39 @@ function segmentAriaLabel(segment: TimeCanvasSegment) {
   return `${type} ${segment.title}，${formatRange(segment.startMs, segment.endMs)}${association}`;
 }
 
+function anchorToneClassName(anchor: TimeCanvasAnchor) {
+  if (anchor.visualState === "TEMPORARY") return "text-amber-600 dark:text-amber-400";
+  if (anchor.visualState === "INVALID") return "text-destructive";
+  if (anchor.tone === "BLUE") return "text-blue-600 dark:text-blue-400";
+  if (anchor.tone === "VIOLET") return "text-violet-600 dark:text-violet-400";
+  if (anchor.tone === "AMBER") return "text-amber-600 dark:text-amber-400";
+  if (anchor.tone === "EMERALD") return "text-emerald-600 dark:text-emerald-400";
+  if (anchor.tone === "ROSE") return "text-rose-600 dark:text-rose-400";
+  if (anchor.tone === "SLATE") return "text-slate-600 dark:text-slate-400";
+  if (anchor.kind === "PLAN_START") return "text-blue-600 dark:text-blue-400";
+  if (anchor.kind === "TERMINATION") return "text-destructive";
+  return "text-foreground";
+}
+
+function phaseBandToneClassName(tone: TimeCanvasPhaseBand["tone"]) {
+  if (tone === "BLUE") {
+    return "border-blue-500/60 bg-blue-500/15 text-blue-950 dark:text-blue-100";
+  }
+  if (tone === "VIOLET") {
+    return "border-violet-500/60 bg-violet-500/15 text-violet-950 dark:text-violet-100";
+  }
+  if (tone === "AMBER") {
+    return "border-amber-500/60 bg-amber-500/15 text-amber-950 dark:text-amber-100";
+  }
+  if (tone === "EMERALD") {
+    return "border-emerald-500/60 bg-emerald-500/15 text-emerald-950 dark:text-emerald-100";
+  }
+  if (tone === "ROSE") {
+    return "border-rose-500/60 bg-rose-500/15 text-rose-950 dark:text-rose-100";
+  }
+  return "border-slate-500/60 bg-slate-500/15 text-slate-950 dark:text-slate-100";
+}
+
 const dateFormatter = new Intl.DateTimeFormat("zh-CN", {
   timeZone: "Asia/Shanghai",
   year: "numeric",
@@ -1458,6 +1909,15 @@ const dateFormatter = new Intl.DateTimeFormat("zh-CN", {
   day: "2-digit",
 });
 const dateTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
+  timeZone: "Asia/Shanghai",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+const compactDateTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
   timeZone: "Asia/Shanghai",
   month: "2-digit",
   day: "2-digit",
@@ -1478,6 +1938,13 @@ function formatDate(timeMs: number) {
 
 function formatDateTime(timeMs: number) {
   return dateTimeFormatter.format(new Date(timeMs));
+}
+
+function formatCompactAnchorDate(timeMs: number, includeTime: boolean) {
+  const value = includeTime
+    ? compactDateTimeFormatter.format(new Date(timeMs))
+    : formatDate(timeMs).slice(5);
+  return value.replaceAll("/", "-");
 }
 
 function formatRange(startMs: number, endMs: number) {
