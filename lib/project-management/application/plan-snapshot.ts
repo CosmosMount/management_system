@@ -13,7 +13,8 @@ export type PlanSnapshotNode = {
   } | null;
   revision: {
     reason: string;
-    revisedFromNodeId: string | null;
+    revisionAt: string;
+    reviewRound: number;
     basePlanVersionId: string;
   } | null;
   termination: {

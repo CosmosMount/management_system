@@ -120,8 +120,7 @@ const anchorTaskSelect = {
               revision: {
                 select: {
                   reason: true,
-                  submittedAt: true,
-                  effectiveAt: true,
+                  revisionAt: true,
                 },
               },
               termination: {
@@ -1216,7 +1215,7 @@ function nodePlannedAt(
 ): Date | null {
   if (node.milestone) return node.milestone.expectedCompletedAt;
   if (node.termination) return node.termination.plannedAt;
-  if (node.revision) return node.revision.effectiveAt ?? node.revision.submittedAt;
+  if (node.revision) return node.revision.revisionAt;
   return null;
 }
 

@@ -166,60 +166,38 @@ export const activateTaskInputSchema = z.object({
     .min(0, "锁版本不正确"),
 });
 
-export const revisionDraftInputSchema = z.object({
+export const createRevisionInputSchema = z.object({
   taskId: idSchema,
   basePlanVersionId: idSchema,
   baseTaskLockVersion: z
     .number({ message: "基线锁版本不正确" })
     .int("基线锁版本不正确")
     .min(0, "基线锁版本不正确"),
-  revisedFromNodeId: idSchema,
+  revisionAt: absoluteDateTimeSchema("请选择带时区的有效 Revision 时间"),
   reason: requiredText("请输入修订原因", 2_000),
   replacementMilestones: z
     .array(s2MilestoneDraftSchema, { message: "替换 Milestone 列表格式不正确" })
     .max(200, "单个计划最多 200 个节点")
     .optional()
     .default([]),
-  plannedStartAt: absoluteDateTimeSchema("请选择带时区的有效计划开始时间"),
   termination: s2TerminationDraftSchema,
   idempotencyKey: requiredText("缺少请求幂等键", 120),
-}).superRefine((input, ctx) => {
-  validatePlanChronology(
-    {
-      plannedStartAt: input.plannedStartAt,
-      milestones: input.replacementMilestones,
-      termination: input.termination,
-    },
-    ctx,
-    "replacementMilestones",
-  );
 });
 
-export const updateRevisionDraftInputSchema = z
+export const reviseRejectedRevisionInputSchema = z
   .object({
+    revisionAt: absoluteDateTimeSchema("请选择带时区的有效 Revision 时间"),
     reason: requiredText("请输入修订原因", 2_000),
     replacementMilestones: z
       .array(s2MilestoneDraftSchema, { message: "替换 Milestone 列表格式不正确" })
       .max(200, "单个计划最多 200 个节点")
       .optional()
       .default([]),
-    plannedStartAt: absoluteDateTimeSchema("请选择带时区的有效计划开始时间"),
     termination: s2TerminationDraftSchema,
     revisionNodeId: idSchema,
     expectedTargetPlanUpdatedAt: absoluteDateTimeSchema(
       "Revision 候选计划版本令牌不正确",
     ),
-  })
-  .superRefine((input, ctx) => {
-    validatePlanChronology(
-      {
-        plannedStartAt: input.plannedStartAt,
-        milestones: input.replacementMilestones,
-        termination: input.termination,
-      },
-      ctx,
-      "replacementMilestones",
-    );
   });
 
 const reviewEvidenceBaseSchema = z.object({
@@ -316,8 +294,6 @@ export const rejectRevisionInputSchema = revisionDecisionInputSchema.superRefine
 
 export const cancelRevisionInputSchema = revisionDecisionInputSchema;
 
-export const submitRevisionInputSchema = revisionDecisionInputSchema;
-
 export const confirmTerminationInputSchema = z
   .object({
     taskId: idSchema,
@@ -347,9 +323,9 @@ export type CreateTaskDraftInput = z.infer<
   typeof createTaskDraftInputSchema
 >;
 export type ActivateTaskInput = z.infer<typeof activateTaskInputSchema>;
-export type RevisionDraftInput = z.infer<typeof revisionDraftInputSchema>;
-export type UpdateRevisionDraftInput = z.infer<
-  typeof updateRevisionDraftInputSchema
+export type CreateRevisionInput = z.infer<typeof createRevisionInputSchema>;
+export type ReviseRejectedRevisionInput = z.infer<
+  typeof reviseRejectedRevisionInputSchema
 >;
 export type SubmitMilestoneReviewInput = z.infer<
   typeof submitMilestoneReviewInputSchema

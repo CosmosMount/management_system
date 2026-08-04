@@ -1447,11 +1447,16 @@ async function assertSegmentReferenceTx(
   if (!input.nodeId) return;
   const node = await tx.taskNode.findUnique({
     where: { id: input.nodeId },
-    select: { id: true, taskId: true, status: true },
+    select: { id: true, taskId: true, status: true, type: true },
   });
   if (!node || node.taskId !== input.taskId) {
     throw associationInvalidError("关联节点不属于该 Task", {
       nodeId: ["关联节点不属于该 Task"],
+    });
+  }
+  if (node.type === "REVISION") {
+    throw associationInvalidError("Revision 只是时间标记，不能关联投入记录", {
+      nodeId: ["Revision 节点不能关联 Planned 或 Actual Segment"],
     });
   }
   if (input.type === "PLANNED") {

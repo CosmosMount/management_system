@@ -11,12 +11,12 @@ import { prisma } from "../lib/prisma";
 import {
   activateTask,
   approveRevision,
+  cancelRevision,
   confirmTermination,
-  createRevisionDraft,
+  createRevision,
   createTaskDraft,
   reviewMilestone,
   submitMilestoneForReview,
-  submitRevision,
 } from "../lib/project-management/application/lifecycle-service";
 import {
   batchCreatePlannedSegments,
@@ -1788,22 +1788,16 @@ test.describe("project management S2 plan and Task mutation services", () => {
       nodeId: revisedFrom.nodeId,
     });
     const taskBeforeRevision = await currentTask(fixture.taskId);
-    const revision = await createRevisionDraft(actor(owner), {
+    const revision = await createRevision(actor(owner), {
       taskId: fixture.taskId,
       basePlanVersionId: current.id,
       baseTaskLockVersion: taskBeforeRevision.lockVersion,
-      revisedFromNodeId: revisedFrom.nodeId,
       reason: "验证取消与 Revision 生效串行化",
-      plannedStartAt: iso(2026, 8, 1),
+      revisionAt: iso(2026, 8, 1),
       replacementMilestones: [milestoneInput("并发后的替代节点", 6)],
       termination: terminationInput(8),
       idempotencyKey: `s2-revision-cancel-race-${randomUUID()}`,
     });
-    await submitRevision(actor(owner), {
-      revisionNodeId: revision.revisionNodeId,
-      comment: "提交并发回归 Revision",
-    });
-
     const outcomes = await runCancellationBeforeRevisionBehindSegmentLock(
       cancelledCandidate.segment.id,
       () =>
@@ -1875,7 +1869,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
     expect(payload.summary).toContain("1 条 Planned Segment");
   });
 
-  test("Revision validates the authoritative carried prefix and submit cannot bypass missing plannedStartAt", async () => {
+  test("Revision validates marker bounds and approval cannot bypass authoritative chronology", async () => {
     const admin = await createAccountPerson("S2 Revision Admin");
     const owner = await createAccountPerson("S2 Revision Owner");
     const reviewer = await createAccountPerson("S2 Revision Reviewer");
@@ -1899,22 +1893,21 @@ test.describe("project management S2 plan and Task mutation services", () => {
     });
     const task = await currentTask(fixture.taskId);
     const current = await currentPlan(fixture.taskId);
-    const revisedFrom = current.nodes.find(
+    const activeEntry = current.nodes.find(
       (entry) => entry.node.status === "ACTIVE",
     );
-    if (!revisedFrom) throw new Error("缺少修订起点");
+    if (!activeEntry) throw new Error("缺少 Active 计划节点");
 
     const planCountBefore = await prisma.taskPlanVersion.count({
       where: { taskId: fixture.taskId },
     });
     await expectServiceError(
-      createRevisionDraft(actor(owner), {
+      createRevision(actor(owner), {
         taskId: fixture.taskId,
         basePlanVersionId: current.id,
         baseTaskLockVersion: task.lockVersion,
-        revisedFromNodeId: revisedFrom.nodeId,
-        reason: "非法抬高计划起点",
-        plannedStartAt: iso(2026, 8, 3),
+        reason: "Revision 时间早于已完成 Milestone",
+        revisionAt: iso(2026, 8, 1),
         replacementMilestones: [milestoneInput("修订 M2", 6)],
         termination: terminationInput(8),
         idempotencyKey: `s2-revision-invalid-${randomUUID()}`,
@@ -1925,13 +1918,12 @@ test.describe("project management S2 plan and Task mutation services", () => {
       await prisma.taskPlanVersion.count({ where: { taskId: fixture.taskId } }),
     ).toBe(planCountBefore);
 
-    const revision = await createRevisionDraft(actor(owner), {
+    const revision = await createRevision(actor(owner), {
       taskId: fixture.taskId,
       basePlanVersionId: current.id,
       baseTaskLockVersion: task.lockVersion,
-      revisedFromNodeId: revisedFrom.nodeId,
       reason: "合法完整修订",
-      plannedStartAt: iso(2026, 8, 1),
+      revisionAt: iso(2026, 8, 2),
       replacementMilestones: [milestoneInput("修订 M2", 6)],
       termination: terminationInput(8),
       idempotencyKey: `s2-revision-valid-${randomUUID()}`,
@@ -1946,31 +1938,48 @@ test.describe("project management S2 plan and Task mutation services", () => {
       where: { id: targetPlan.id },
       data: { plannedStartAt: null },
     });
-    const auditBeforeSubmit = await prisma.domainAuditEvent.count({
-      where: { taskId: fixture.taskId, action: "pm.revision.submit" },
-    });
     await expectServiceError(
-      submitRevision(actor(owner), {
+      approveRevision(actor(admin), {
         revisionNodeId: revision.revisionNodeId,
-        comment: "不得绕过 chronology",
+        comment: "审批不得绕过 chronology",
       }),
       "PLAN_CHRONOLOGY_INVALID",
     );
-    expect(
-      await prisma.domainAuditEvent.count({
-        where: { taskId: fixture.taskId, action: "pm.revision.submit" },
-      }),
-    ).toBe(auditBeforeSubmit);
 
     await prisma.taskPlanVersion.update({
       where: { id: targetPlan.id },
       data: { plannedStartAt: new Date(iso(2026, 8, 1)) },
     });
-    const submitted = await submitRevision(actor(owner), {
-      revisionNodeId: revision.revisionNodeId,
-      comment: "提交合法修订",
+    await prisma.taskPlanVersion.update({
+      where: { id: targetPlan.id },
+      data: { plannedStartAt: new Date(iso(2026, 7, 31)) },
     });
-    expect(submitted.status).toBe("PENDING_APPROVAL");
+    await expectServiceError(
+      approveRevision(actor(admin), {
+        revisionNodeId: revision.revisionNodeId,
+        comment: "候选计划不得改变 Start",
+      }),
+      "PLAN_VERSION_CONFLICT",
+    );
+    expect(
+      await prisma.task.findUniqueOrThrow({
+        where: { id: fixture.taskId },
+        select: { currentPlanVersionId: true, lockVersion: true },
+      }),
+    ).toEqual({
+      currentPlanVersionId: current.id,
+      lockVersion: task.lockVersion,
+    });
+    expect(
+      await prisma.revisionNode.findUniqueOrThrow({
+        where: { id: revision.revisionNodeId },
+        select: { status: true },
+      }),
+    ).toEqual({ status: "PENDING_APPROVAL" });
+    await prisma.taskPlanVersion.update({
+      where: { id: targetPlan.id },
+      data: { plannedStartAt: new Date(iso(2026, 8, 1)) },
+    });
     const targetTermination = await prisma.terminationNode.findFirstOrThrow({
       where: {
         node: {
@@ -2009,6 +2018,47 @@ test.describe("project management S2 plan and Task mutation services", () => {
       currentPlanVersionId: targetPlan.id,
     });
 
+    const appliedTask = await currentTask(fixture.taskId);
+    const appliedPlan = await currentPlan(fixture.taskId);
+    const planCountAfterApply = await prisma.taskPlanVersion.count({
+      where: { taskId: fixture.taskId },
+    });
+    await expectServiceError(
+      createRevision(actor(owner), {
+        taskId: fixture.taskId,
+        basePlanVersionId: appliedPlan.id,
+        baseTaskLockVersion: appliedTask.lockVersion,
+        reason: "不得早于上一条有效 Revision",
+        revisionAt: iso(2026, 8, 1),
+        replacementMilestones: [milestoneInput("再次修订 M2", 7)],
+        termination: terminationInput(9),
+        idempotencyKey: `s2-revision-before-effective-${randomUUID()}`,
+      }),
+      "PLAN_CHRONOLOGY_INVALID",
+    );
+    expect(
+      await prisma.taskPlanVersion.count({ where: { taskId: fixture.taskId } }),
+    ).toBe(planCountAfterApply);
+
+    const sameTimeRevision = await createRevision(actor(owner), {
+      taskId: fixture.taskId,
+      basePlanVersionId: appliedPlan.id,
+      baseTaskLockVersion: appliedTask.lockVersion,
+      reason: "与上一条有效 Revision 同刻",
+      revisionAt: iso(2026, 8, 2),
+      replacementMilestones: [milestoneInput("同刻后的 M2", 7)],
+      termination: terminationInput(9),
+      idempotencyKey: `s2-revision-same-effective-${randomUUID()}`,
+    });
+    const sameTimeTarget = await planById(
+      sameTimeRevision.targetPlanVersionId ?? "",
+    );
+    expect(
+      sameTimeTarget.nodes
+        .filter((entry) => entry.isCarryForward)
+        .map((entry) => entry.node.type),
+    ).toEqual(["MILESTONE", "REVISION"]);
+
     const legacyDraft = await createDraft({
       creator: admin,
       owner: await createAccountPerson("S2 Legacy Draft Owner"),
@@ -2025,6 +2075,144 @@ test.describe("project management S2 plan and Task mutation services", () => {
       }),
       "PLAN_CHRONOLOGY_INVALID",
     );
+  });
+
+  test("Revision marker accepts Start and Candidate Terminal equality boundaries", async () => {
+    const admin = await createAccountPerson("S2 Revision Boundary Admin");
+    const owner = await createAccountPerson("S2 Revision Boundary Owner");
+    const reviewer = await createAccountPerson("S2 Revision Boundary Reviewer");
+    await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
+    const fixture = await createDraft({ creator: admin, owner, reviewer });
+    await activateTask(actor(owner), {
+      taskId: fixture.taskId,
+      expectedLockVersion: 0,
+    });
+    const task = await currentTask(fixture.taskId);
+    const current = await currentPlan(fixture.taskId);
+
+    const atStart = await createRevision(actor(owner), {
+      taskId: fixture.taskId,
+      basePlanVersionId: current.id,
+      baseTaskLockVersion: task.lockVersion,
+      reason: "Revision 等于 Start",
+      revisionAt: iso(2026, 8, 1),
+      replacementMilestones: [milestoneInput("Start 边界后计划", 4)],
+      termination: terminationInput(8),
+      idempotencyKey: `s2-revision-at-start-${randomUUID()}`,
+    });
+    expect(atStart.status).toBe("PENDING_APPROVAL");
+    await cancelRevision(actor(owner), {
+      revisionNodeId: atStart.revisionNodeId,
+      comment: "验证下一个等值边界",
+    });
+
+    const atTerminal = await createRevision(actor(owner), {
+      taskId: fixture.taskId,
+      basePlanVersionId: current.id,
+      baseTaskLockVersion: task.lockVersion,
+      reason: "Revision 等于 Candidate Terminal",
+      revisionAt: iso(2026, 8, 8),
+      replacementMilestones: [milestoneInput("Terminal 边界前计划", 4)],
+      termination: terminationInput(8),
+      idempotencyKey: `s2-revision-at-terminal-${randomUUID()}`,
+    });
+    expect(atTerminal.status).toBe("PENDING_APPROVAL");
+  });
+
+  test("all Segment association entry points reject Revision marker nodes", async () => {
+    const admin = await createAccountPerson("S2 Revision Segment Admin");
+    const owner = await createAccountPerson("S2 Revision Segment Owner");
+    const reviewer = await createAccountPerson("S2 Revision Segment Reviewer");
+    await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
+    const fixture = await createDraft({ creator: admin, owner, reviewer });
+    await activateTask(actor(owner), {
+      taskId: fixture.taskId,
+      expectedLockVersion: 0,
+    });
+    const task = await currentTask(fixture.taskId);
+    const current = await currentPlan(fixture.taskId);
+    const revision = await createRevision(actor(owner), {
+      taskId: fixture.taskId,
+      basePlanVersionId: current.id,
+      baseTaskLockVersion: task.lockVersion,
+      reason: "Segment 禁止关联 Revision",
+      revisionAt: iso(2026, 8, 1),
+      replacementMilestones: [milestoneInput("Revision 后计划", 6)],
+      termination: terminationInput(8),
+      idempotencyKey: `s2-revision-segment-${randomUUID()}`,
+    });
+    await approveRevision(actor(admin), {
+      revisionNodeId: revision.revisionNodeId,
+      comment: "批准以验证 Current Plan 标记关联",
+    });
+    const appliedPlan = await currentPlan(fixture.taskId);
+    const revisionNodeId = appliedPlan.nodes.find(
+      (entry) => entry.node.type === "REVISION",
+    )?.nodeId;
+    if (!revisionNodeId) throw new Error("Current Plan 缺少 Revision 标记");
+
+    const updateBase = await createWorkSegment(actor(owner), {
+      ...segmentCreateInput(owner.person.id, "revision marker update base"),
+      type: "PLANNED",
+    });
+    const relinkBase = await createWorkSegment(actor(owner), {
+      ...segmentCreateInput(owner.person.id, "revision marker relink base", 3),
+      type: "PLANNED",
+    });
+    await prisma.workSegment.updateMany({
+      where: { id: { in: [updateBase.segment.id, relinkBase.segment.id] } },
+      data: { associationNeedsReview: true },
+    });
+    const [updateSegment, relinkSegment] = await Promise.all([
+      prisma.workSegment.findUniqueOrThrow({ where: { id: updateBase.segment.id } }),
+      prisma.workSegment.findUniqueOrThrow({ where: { id: relinkBase.segment.id } }),
+    ]);
+    const cases = [
+      () => createWorkSegment(actor(owner), {
+        ...segmentCreateInput(owner.person.id, "revision marker single", 5),
+        type: "PLANNED",
+        taskId: fixture.taskId,
+        nodeId: revisionNodeId,
+      }),
+      () => batchCreatePlannedSegments(actor(owner), {
+        segments: [{
+          ...segmentCreateInput(owner.person.id, "revision marker batch", 7),
+          taskId: fixture.taskId,
+          nodeId: revisionNodeId,
+        }],
+      }),
+      () => createActualSegment(actor(owner), {
+        ...segmentCreateInput(owner.person.id, "revision marker actual", 9),
+        taskId: fixture.taskId,
+        nodeId: revisionNodeId,
+        actualOutput: "不得关联",
+        completionPercent: 100,
+        sources: [],
+      }),
+      () => updateWorkSegment(actor(owner), {
+        segmentId: updateSegment.id,
+        expectedUpdatedAt: updateSegment.updatedAt,
+        associationIntent: "RELINK",
+        taskId: fixture.taskId,
+        nodeId: revisionNodeId,
+        reason: "不得关联 Revision",
+      }),
+      () => relinkPlannedSegment(actor(owner), {
+        segmentId: relinkSegment.id,
+        expectedUpdatedAt: relinkSegment.updatedAt,
+        taskId: fixture.taskId,
+        nodeId: revisionNodeId,
+        reason: "不得关联 Revision",
+      }),
+    ];
+    for (const invoke of cases) {
+      await expectServiceError(invoke(), "ASSOCIATION_INVALID");
+    }
+    expect(
+      await prisma.workSegment.count({
+        where: { nodeId: revisionNodeId },
+      }),
+    ).toBe(0);
   });
 
   test("legacy Active chronology remains readable and closable but cannot enter a non-strict Revision target", async () => {
@@ -2078,13 +2266,12 @@ test.describe("project management S2 plan and Task mutation services", () => {
     expect(legacyWorkspace.currentPlan.chronologyCompatibilityIssues.length).toBeGreaterThan(0);
     const legacyTask = await currentTask(legacy.taskId);
     await expectServiceError(
-      createRevisionDraft(actor(owner), {
+      createRevision(actor(owner), {
         taskId: legacy.taskId,
         basePlanVersionId: legacy.currentPlanVersionId,
         baseTaskLockVersion: legacyTask.lockVersion,
-        revisedFromNodeId: active.nodeId,
         reason: "修复 legacy Current chronology",
-        plannedStartAt: iso(2026, 8, 1),
+        revisionAt: iso(2026, 8, 2),
         replacementMilestones: [milestoneInput("Repaired M3", 6)],
         termination: terminationInput(8),
         idempotencyKey: `s2-legacy-repair-${randomUUID()}`,
@@ -2456,6 +2643,22 @@ async function currentTask(taskId: string) {
 async function currentPlan(taskId: string) {
   return prisma.taskPlanVersion.findFirstOrThrow({
     where: { task: { id: taskId }, status: "CURRENT" },
+    include: {
+      nodes: {
+        include: {
+          node: {
+            include: { milestone: true, revision: true, termination: true },
+          },
+        },
+        orderBy: { sequence: "asc" },
+      },
+    },
+  });
+}
+
+async function planById(planVersionId: string) {
+  return prisma.taskPlanVersion.findUniqueOrThrow({
+    where: { id: planVersionId },
     include: {
       nodes: {
         include: {

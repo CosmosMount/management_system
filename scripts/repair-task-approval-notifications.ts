@@ -110,7 +110,7 @@ async function main() {
 function isLegacyApprovalEventKey(eventKey: string) {
   return (
     /^pm:milestone:review_submitted:[0-9a-f-]+:feishu$/.test(eventKey) ||
-    /^pm:revision:pending_review:[0-9a-f-]+:feishu$/.test(eventKey)
+    /^pm:revision:pending_review:[0-9a-f-]+(?::round:\d+)?:feishu$/.test(eventKey)
   );
 }
 
@@ -198,12 +198,16 @@ async function repairMilestone(reviewId: string, recipients: Recipient[]) {
   });
 }
 
-async function repairRevision(revisionId: string, recipients: Recipient[]) {
+async function repairRevision(
+  revisionId: string,
+  recipients: Recipient[],
+) {
   await prisma.$transaction(async (tx) => {
     const revision = await tx.revisionNode.findFirst({
       where: { id: revisionId, status: "PENDING_APPROVAL" },
       select: {
         id: true,
+        reviewRound: true,
         node: {
           select: {
             task: {
@@ -223,13 +227,17 @@ async function repairRevision(revisionId: string, recipients: Recipient[]) {
       tx,
       `pm:revision:pending_review:${revision.id}:feishu`,
     );
+    await freezeLegacyOutboxTx(
+      tx,
+      `pm:revision:pending_review:${revision.id}:round:${revision.reviewRound}:feishu`,
+    );
     const task = revision.node.task;
     await createProjectManagementEventNotificationsTx(tx, {
       actorName: "系统迁移",
       task,
       kind: "revision_pending_review",
       category: "REVISION",
-      eventKey: `pm:revision:pending_review:global-admin:v2:${revision.id}`,
+      eventKey: `pm:revision:pending_review:global-admin:v2:${revision.id}:round:${revision.reviewRound}`,
       title: "计划修订待审批",
       summary: `Task「${task.title}」有新的计划修订待审批`,
       entityType: "RevisionNode",

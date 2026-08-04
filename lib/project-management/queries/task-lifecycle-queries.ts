@@ -37,13 +37,14 @@ export type TaskLifecycleViews = {
     id: string;
     taskNodeId: string;
     reason: string;
-    revisedFromNodeId: string | null;
+    revisionAt: string;
+    reviewRound: number;
+    createdAt: string;
     basePlanVersionId: string;
     baseTaskLockVersion: number;
     targetPlanVersionId: string | null;
     targetVersionNo: number | null;
     status: string;
-    submittedAt: string | null;
     reviewedAt: string | null;
     effectiveAt: string | null;
     reviewer: string | null;
@@ -51,7 +52,6 @@ export type TaskLifecycleViews = {
     affectedSummary: unknown;
     capabilities: {
       canEdit: boolean;
-      canSubmit: boolean;
       canReview: boolean;
       canCancel: boolean;
     };
@@ -216,7 +216,9 @@ export async function getTaskLifecycleViews({
     prisma.revisionNode.findMany({
       where: { node: { taskId } },
       include: {
-        node: { select: { id: true, createdByAccountId: true } },
+        node: {
+          select: { id: true, createdByAccountId: true, createdAt: true },
+        },
         targetPlanVersion: { select: { id: true, versionNo: true } },
         reviewedBy: { select: { person: { select: { displayName: true } } } },
       },
@@ -301,13 +303,14 @@ export async function getTaskLifecycleViews({
       id: revision.id,
       taskNodeId: revision.node.id,
       reason: revision.reason,
-      revisedFromNodeId: revision.revisedFromNodeId,
+      revisionAt: revision.revisionAt.toISOString(),
+      reviewRound: revision.reviewRound,
+      createdAt: revision.node.createdAt.toISOString(),
       basePlanVersionId: revision.basePlanVersionId,
       baseTaskLockVersion: revision.baseTaskLockVersion,
       targetPlanVersionId: revision.targetPlanVersion?.id ?? null,
       targetVersionNo: revision.targetPlanVersion?.versionNo ?? null,
       status: revision.status,
-      submittedAt: revision.submittedAt?.toISOString() ?? null,
       reviewedAt: revision.reviewedAt?.toISOString() ?? null,
       effectiveAt: revision.effectiveAt?.toISOString() ?? null,
       reviewer: revision.reviewedBy?.person?.displayName ?? null,
@@ -315,12 +318,7 @@ export async function getTaskLifecycleViews({
       affectedSummary: redactAuditValue(revision.affectedSummary),
       capabilities: {
         canEdit:
-          (revision.status === "DRAFT" || revision.status === "REJECTED") &&
-          ((revision.node.createdByAccountId === actor.accountId &&
-            canCreateRevision) ||
-            canApplyRevision),
-        canSubmit:
-          (revision.status === "DRAFT" || revision.status === "REJECTED") &&
+          revision.status === "REJECTED" &&
           ((revision.node.createdByAccountId === actor.accountId &&
             canCreateRevision) ||
             canApplyRevision),
@@ -332,7 +330,7 @@ export async function getTaskLifecycleViews({
             resource,
           }).allowed,
         canCancel:
-          ["DRAFT", "PENDING_APPROVAL", "REJECTED"].includes(revision.status) &&
+          ["PENDING_APPROVAL", "REJECTED"].includes(revision.status) &&
           ((revision.node.createdByAccountId === actor.accountId &&
             canCreateRevision) ||
             canApplyRevision),

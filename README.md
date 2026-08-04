@@ -240,7 +240,9 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 
 所有已登录统一账号都可查看全部未删除 Task、计划、成员、验收、审计和完整 Planned/Actual Work Segment，也都可创建任意合法车组/技术组的 Task；创建者自动成为负责人。账号级项目访问禁用机制已经删除。Task 有效成员只保留负责人和参与人，同一人在同一 Task 中只能有一个角色，且至少保留一名负责人。非成员只有读取权；Milestone 和 Revision 的通过、驳回、要求修订只允许统一超级管理员或项目管理员处理，并允许管理员自审。
 
-存在 Task 数据时，系统要求至少保留一名具有 default tenant 有效飞书 openId 的全局管理员；账号后台会拒绝撤销最后一名可用审批人的角色，数据库永久门禁也会拦截绕过应用层的账号删除、角色和身份写入。空库创建首个 Task 时同样检查该不变量。提交 Milestone/Revision 审批时会在同一事务中再次校验，失败时整事务回滚，不会留下无人处理或无法通知的待审批记录。
+Revision 是用户选择时间的计划变化标记，不形成阶段，也不能关联 Planned/Actual Segment。创建 Revision 时固定沿用 Current Plan 的 Start，自动保留全部已完成 Milestone 和已生效 Revision，并用调用方提供的后续 Milestone 与 Terminal 重建未完成部分。创建即进入 `PENDING_APPROVAL`，不再存在草稿或单独提交动作；驳回后可修改并直接重新送审，取消后释放该 Task 的唯一候选名额，批准后才进入 Current Plan 和正式时间轴。
+
+存在 Task 数据时，系统要求至少保留一名具有 default tenant 有效飞书 openId 的全局管理员；账号后台会拒绝撤销最后一名可用审批人的角色，数据库永久门禁也会拦截绕过应用层的账号删除、角色和身份写入。空库创建首个 Task 时同样检查该不变量。提交 Milestone 验收或创建/重新送审 Revision 时会在同一事务中再次校验，失败时整事务回滚，不会留下无人处理或无法通知的待审批记录。
 
 项目 `GROUP_LEADER` 已退役，只保留撤销历史且不能继续授予。采购报销的 `TEAM_ADMIN`、`TECH_GROUP_ADMIN` 等独立角色、组长称谓和审批流程不受影响。Work Segment 中名为 `REVIEWER` 的工作职责仍可使用，它只描述该段工作，不授予 Task 审批权限。
 
@@ -504,8 +506,8 @@ pm2 start npm --name procurement-cron -- run cron
 
 - 所有已登录并成功解析到统一 `Account/Person` 的账号可查看全部未删除 Task、计划/审批/审计历史和全员完整 Segment，并可创建 Task；可见性扩大不扩大写权限。
 - Task 成员只分“负责人”和“参与人”。支持多负责人且至少一名，同一 Person 只能有一个有效角色；创建者自动成为负责人。
-- 参与人可编辑 Task/计划、提交验收和 Revision，并管理自己的关联投入；负责人另可管理成员、Task 状态、任意未生效 Revision 和该 Task 全部投入；全局管理员拥有全部项目写权限。
-- Revision 每次提交都进入待审批，Milestone 与 Revision 只由统一超级管理员或项目管理员决定，允许管理员自审；界面不再提供流程策略、Reviewer 或自审开关。
+- 参与人可编辑 Task/计划、提交验收并创建自己的 Revision，并管理自己的关联投入；负责人另可管理成员、Task 状态、任意未生效 Revision 和该 Task 全部投入；全局管理员拥有全部项目写权限。
+- Revision 是可选择时间的非分段标记，创建即待审批，没有 Draft/Submit；驳回后修改即重新送审。Milestone 与 Revision 只由统一超级管理员或项目管理员决定，允许管理员自审；界面不再提供流程策略、Reviewer 或自审开关。
 - `/progress` 是“我的工作”驾驶舱，提供指标、个人时间预览、行动待办、Active Task 表和折叠通知。
 - `/progress/tasks/new` 提供单页 Plan Composer；`/progress/my-timeline` 提供个人日/周时间与到期确认队列。
 - `/progress/tasks` 与 `/progress/tasks/[id]` 提供 Task 列表和 Task 工作台。
@@ -520,7 +522,7 @@ pm2 start npm --name procurement-cron -- run cron
 - 项目管理飞书通知只允许写入 `channel=project-management` 的 notification outbox；adapter 已构造普通交互卡并经统一私信传输层投递。验收和 Revision 待审批事件使用审批机器人用途，其他项目管理事件使用通知机器人。
 - 资源冲突和投入比例能力已完整下线：`/progress/resources/conflicts` 返回 404，Segment 允许时间重叠，系统不再检测、提示、阻止或通知冲突，也没有替代容量模型。
 
-现行成员、可见性和审批决策见 [Task 全员可见、双成员角色与全局管理员审批 ADR](docs/adr/2026-08-03-task-global-visibility-participants-admin-approval.md)。已有数据的受控发布顺序为：
+现行成员、可见性和审批决策见 [Task 全员可见、双成员角色与全局管理员审批 ADR](docs/adr/2026-08-03-task-global-visibility-participants-admin-approval.md)，Revision 节点与送审状态机见 [Revision 时间标记 ADR](docs/adr/2026-08-04-revision-time-marker.md)。已有数据的受控发布顺序为：
 
 ```bash
 npm run pm:task-access-preflight

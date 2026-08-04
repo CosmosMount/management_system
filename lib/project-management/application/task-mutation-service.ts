@@ -1261,7 +1261,8 @@ function hashPlan(plan: PlanForMutation) {
       revision: entry.node.revision
         ? {
             reason: entry.node.revision.reason,
-            revisedFromNodeId: entry.node.revision.revisedFromNodeId,
+            revisionAt: entry.node.revision.revisionAt.toISOString(),
+            reviewRound: entry.node.revision.reviewRound,
             basePlanVersionId: entry.node.revision.basePlanVersionId,
           }
         : null,

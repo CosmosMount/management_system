@@ -7,10 +7,9 @@ import {
 import {
   approveRevision as approveRevisionService,
   cancelRevision as cancelRevisionService,
-  createRevisionDraft as createRevisionDraftService,
+  createRevision as createRevisionService,
   rejectRevision as rejectRevisionService,
-  submitRevision as submitRevisionService,
-  updateRevisionDraft as updateRevisionDraftService,
+  reviseRejectedRevision as reviseRejectedRevisionService,
   type RevisionMutationResult,
 } from "@/lib/project-management/application/lifecycle-service";
 import {
@@ -19,31 +18,23 @@ import {
 } from "@/lib/project-management/identity";
 import { revalidateProjectManagement } from "@/lib/revalidate";
 
-export async function createRevisionDraft(
+export async function createRevision(
   input: unknown,
 ): Promise<
   ProjectManagementActionResult<RevisionMutationResult & { created: boolean }>
 > {
-  return runRevisionAction("pm.revision.create", "createRevisionDraft", (actor) =>
-    createRevisionDraftService(actor, input),
+  return runRevisionAction("pm.revision.create", "createRevision", (actor) =>
+    createRevisionService(actor, input),
   );
 }
 
-export async function submitRevision(
-  input: unknown,
-): Promise<ProjectManagementActionResult<RevisionMutationResult>> {
-  return runRevisionAction("pm.revision.submit", "submitRevision", (actor) =>
-    submitRevisionService(actor, input),
-  );
-}
-
-export async function updateRevisionDraft(
+export async function reviseRejectedRevision(
   input: unknown,
 ): Promise<ProjectManagementActionResult<RevisionMutationResult>> {
   return runRevisionAction(
-    "pm.revision.draft.update",
-    "updateRevisionDraft",
-    (actor) => updateRevisionDraftService(actor, input),
+    "pm.revision.resubmit",
+    "reviseRejectedRevision",
+    (actor) => reviseRejectedRevisionService(actor, input),
   );
 }
 

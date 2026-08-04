@@ -54,6 +54,8 @@ Task 生命周期服务和 Segment 服务会在同一业务事务中写站内通
 | Task 结束确认 | `task_terminated` | 普通通知 | 有效 OWNER/PARTICIPANT |
 | 账号角色变更 | `account_security` | 强制普通通知 | 仅被操作账号 |
 
+Revision 创建和被驳回后的修改都会直接产生 `revision_pending_review`。事件键包含 `revisionId + reviewRound`；驳回结果键也包含对应 round，因此每轮送审和结果各自 exactly once，不会被上一轮幂等记录吞掉。Revision 不再产生独立 submit 通知或审计事件。
+
 Task 激活与结束通知使用持久化的 Terminal 名称表示结束节点，不再以结束条件充当节点名称。零 Milestone Task 激活时，`task_activated` 摘要会明确当前 Terminal 名称；`task_terminated` 摘要同时包含 Terminal 名称和本次确认结果。事件键、收件人、通知机器人用途、站内通知和 durable outbox 路径保持不变。
 
 既有 Draft `task_assigned` 入队保持 `mandatory=true`。这里的“普通通知”指 `purpose=notification`、`botKind=notification`，不表示 `mandatory=false`；该事件只使用通知机器人，不得路由到 approval bot。S2 的 Active `replaceTaskMembers` 新增/移除/角色变化沿用同一强制成员变化语义：站内 + `mandatory=true` 的 `project-management` outbox，purpose/botKind 仍为 `notification`。
@@ -64,7 +66,7 @@ Active 成员强制事件不得因受影响 Person 已停用、缺少飞书 iden
 
 Revision 生效事务先把目标 `TaskPlanVersion` 切换为 `CURRENT` 并更新 `Task.currentPlanVersionId`，随后才以更新后的 Task 上下文写 `revision_applied` 和 `segment_association_invalidated`。这两个 payload（包括对应站内通知）中的 `context.currentPlanVersionId` 均指向切换后的 Current Plan Version，不得保留 base/旧 Current Plan；Segment 关联失效通知仍只发给受影响 Segment Person，普通通知机器人用途不变。
 
-入队 helper 和 adapter 会拒绝 `type/payload.kind` 不一致、payload 结构错误、错误机器人类型和越界审批用途，并对 `recipientOpenIds` 去重。项目管理飞书卡片包含操作人、Task、事件摘要、对象类型、事件时间和最多 6 项上下文；按钮跳转到 payload 的 `linkPath`，没有链接时回到 `/progress`。`approval_request` 使用审批机器人用途；所有普通项目管理事件使用通知机器人，不能把审批机器人作为普通通知 fallback。Milestone/Revision 提交审批前会在全局审批人事务锁内重新查询收件人；没有有效全局管理员角色，或所有管理员都缺少 default tenant 非空飞书 openId 时，审批状态、审计、站内通知和 outbox 全部回滚，不生成无人可处理或确定无法投递的 pending。
+入队 helper 和 adapter 会拒绝 `type/payload.kind` 不一致、payload 结构错误、错误机器人类型和越界审批用途，并对 `recipientOpenIds` 去重。项目管理飞书卡片包含操作人、Task、事件摘要、对象类型、事件时间和最多 6 项上下文；按钮跳转到 payload 的 `linkPath`，没有链接时回到 `/progress`。`approval_request` 使用审批机器人用途；所有普通项目管理事件使用通知机器人，不能把审批机器人作为普通通知 fallback。Milestone 提交验收以及 Revision 创建/重新送审前会在全局审批人事务锁内重新查询收件人；没有有效全局管理员角色，或所有管理员都缺少 default tenant 非空飞书 openId 时，审批状态、审计、站内通知和 outbox 全部回滚，不生成无人可处理或确定无法投递的 pending。
 
 资源冲突下线 migration 会删除 `RESOURCE_CONFLICT` 偏好与站内通知，以及 `resource_conflict_opened`、`resource_conflict_resolved` outbox；收件人投递行随 outbox 级联删除。已经送达飞书的历史消息无法撤回。
 

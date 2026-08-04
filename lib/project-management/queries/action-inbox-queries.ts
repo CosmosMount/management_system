@@ -174,7 +174,7 @@ export async function getActionInbox({
         select: {
           id: true,
           reason: true,
-          submittedAt: true,
+          revisionAt: true,
           node: {
             select: {
               createdByAccountId: true,
@@ -182,7 +182,7 @@ export async function getActionInbox({
             },
           },
         },
-        orderBy: [{ submittedAt: "asc" }, { id: "asc" }],
+        orderBy: [{ revisionAt: "asc" }, { id: "asc" }],
         take: boundedLimit,
       }),
       prisma.terminationNode.findMany({
@@ -306,7 +306,7 @@ export async function getActionInbox({
       summary: revision.reason || "Task 计划修订等待审核。",
       taskId: task.id,
       taskTitle: task.title,
-      dueAt: revision.submittedAt?.toISOString() ?? null,
+      dueAt: revision.revisionAt.toISOString(),
       severity: "HIGH",
       href: `/progress/tasks/${task.id}?tab=revisions`,
     });

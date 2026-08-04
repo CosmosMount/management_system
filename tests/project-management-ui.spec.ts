@@ -2274,17 +2274,32 @@ test.describe("project management P4/P6 UI integration", () => {
     await revisionEditor
       .getByLabel("候选 Termination 名称")
       .fill("S6 自定义交付终点");
-    await revisionEditor.getByRole("button", { name: "保存 Revision Draft" }).click();
-    await expect(page.getByText("Revision Draft 已创建。")).toBeVisible();
-    await page.getByRole("button", { name: "编辑候选计划" }).click();
-    await expect(page.getByRole("heading", { name: /Revision 候选计划（编辑已有）/ })).toBeVisible();
-    await revisionEditor.getByLabel("修订原因").fill("S6 二次编辑候选计划");
-    await revisionEditor.getByRole("button", { name: "更新 Revision Draft" }).click();
-    await expect(page.getByText("Revision Draft 已更新。")).toBeVisible();
+    await revisionEditor.getByRole("button", { name: "创建并送审" }).click();
+    await expect(page.getByText("Revision 已创建并送审。")).toBeVisible();
     await page.getByRole("button", { name: "查看三层 Diff" }).click();
     await expect(page.getByRole("heading", { name: "结构 / 字段 / 资源 Diff" })).toBeVisible();
-    await page.getByRole("button", { name: "提交审批" }).click();
-    await expect(page.getByText("Revision 已提交。")).toBeVisible();
+
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.admin.openId,
+      name: fixture.admin.person.displayName,
+    });
+    await page.goto(`/progress/tasks/${fixture.taskId}`);
+    await page.getByRole("tab", { name: "修订与历史" }).click();
+    await page.getByLabel("处理说明").fill("S6 请修改候选计划");
+    await page.getByRole("button", { name: "驳回" }).click();
+    await expect(page.getByText("Revision 已驳回。")).toBeVisible();
+
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.owner.openId,
+      name: fixture.owner.person.displayName,
+    });
+    await page.goto(`/progress/tasks/${fixture.taskId}`);
+    await page.getByRole("tab", { name: "修订与历史" }).click();
+    await page.getByRole("button", { name: "修改候选计划" }).click();
+    await expect(page.getByRole("heading", { name: /Revision 候选计划（修改被驳回记录）/ })).toBeVisible();
+    await revisionEditor.getByLabel("修订原因").fill("S6 二次编辑候选计划");
+    await revisionEditor.getByRole("button", { name: "修改并重新送审" }).click();
+    await expect(page.getByText("Revision 已修改并重新送审。")).toBeVisible();
 
     await loginAsTestUser(context, baseURL, {
       openId: fixture.admin.openId,
@@ -2303,9 +2318,7 @@ test.describe("project management P4/P6 UI integration", () => {
         }),
       )
       .toEqual({ status: "EFFECTIVE" });
-    await expect(
-      revisionEditor.getByLabel("修订起点").locator("option").last(),
-    ).toHaveText("S6 自定义交付终点");
+    await expect(page.getByText("第 2 轮")).toBeVisible();
 
     await page.getByRole("tab", { name: "审计" }).click();
     await expect(page.getByRole("heading", { name: "Task 审计" })).toBeVisible();

@@ -1,6 +1,6 @@
 # ADR: Task 全员可见、双成员角色与全局管理员审批
 
-> 状态（2026-08-04）：本文关于 `Account.projectAccessStatus`、禁用账号和账号状态门禁的决策已由 [移除账号级项目访问状态](./2026-08-04-remove-project-access-status.md) 取代；成员、可见性、写权限和审批决策继续有效。
+> 状态（2026-08-04）：本文关于 `Account.projectAccessStatus`、禁用账号和账号状态门禁的决策已由 [移除账号级项目访问状态](./2026-08-04-remove-project-access-status.md) 取代；Revision 草稿、编辑和单独提交动作已由 [Revision 时间标记与候选计划状态机](./2026-08-04-revision-time-marker.md) 取代。成员、可见性和审批角色继续有效。
 
 日期：2026-08-03
 
@@ -50,7 +50,7 @@
 | 查看未删除 Task、计划、验收、审计和投入 | ✓ | ✓ | ✓ | ✓ |
 | 创建 Task | ✓ | ✓ | ✓ | ✓ |
 | 修改 Task 元数据、Tag、Draft 计划 | — | ✓ | ✓ | ✓ |
-| 创建、编辑和提交自己的 Revision | — | ✓ | ✓ | ✓ |
+| 创建自己的 Revision、修改并重新送审被驳回 Revision | — | ✓ | ✓ | ✓ |
 | 管理该 Task 的任意未生效 Revision | — | — | ✓ | ✓ |
 | 提交 Milestone 验收证据 | — | ✓ | ✓ | ✓ |
 | 管理成员、激活和结束 Task | — | — | ✓ | ✓ |
@@ -62,8 +62,8 @@
 
 ### 5. 固定审批策略
 
-- Owner、Participant 和全局管理员可以提交 Milestone 验收证据以及创建、编辑、提交 Revision。
-- Revision 每次提交都进入 `PENDING_APPROVAL`；不存在 Owner 直接生效路径。
+- Owner、Participant 和全局管理员可以提交 Milestone 验收证据、创建自己的 Revision，并修改后重新送审被驳回的 Revision。
+- Revision 创建即进入 `PENDING_APPROVAL`；不存在 Draft、单独 Submit 或 Owner 直接生效路径。
 - 只有两类全局管理员可以批准或驳回 Revision，以及通过、驳回或要求修订 Milestone。
 - 全局管理员可以处理自己提交的 Milestone 或自己创建的 Revision，但必须执行一次显式审批动作。
 - Revision 仅能在批准事务内生效；Current Plan 切换、旧版本历史化和受影响 Segment 待复核标记继续原子提交。

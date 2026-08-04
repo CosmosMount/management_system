@@ -11,6 +11,10 @@ import {
   rowHeightForLaneCount,
 } from "../components/project-management/time-canvas/lane-layout";
 import {
+  buildPlanPhaseBands,
+  findPhaseEndpointAnchor,
+} from "../components/project-management/time-canvas/plan-phase-bands";
+import {
   DAY_MS,
   HOUR_MS,
   axisTicks,
@@ -43,6 +47,40 @@ const RANGE = {
 };
 
 test.describe("S3 TimeCanvas pure core", () => {
+  test("Revision markers remain visible anchors without splitting plan phases", () => {
+    const rowId = "plan:revision-marker";
+    const anchor = (
+      id: string,
+      kind: "PLAN_START" | "MILESTONE" | "REVISION" | "TERMINATION",
+      atMs: number,
+      sequence: number,
+    ) => ({
+      id,
+      rowId,
+      taskId: "task:revision-marker",
+      kind,
+      status: "ACTIVE",
+      label: id,
+      atMs,
+      sequence,
+      editable: false,
+      versionToken: "v1",
+    });
+    const anchors = [
+      anchor("start", "PLAN_START", 1, -1),
+      anchor("revision-before", "REVISION", 2, 1),
+      anchor("revision-same-time", "REVISION", 3, 2),
+      anchor("milestone", "MILESTONE", 3, 3),
+      anchor("terminal", "TERMINATION", 5, 4),
+    ];
+
+    expect(buildPlanPhaseBands(anchors, rowId)).toMatchObject([
+      { id: "start:milestone", startMs: 1, endMs: 3 },
+      { id: "milestone:terminal", startMs: 3, endMs: 5 },
+    ]);
+    expect(findPhaseEndpointAnchor(anchors, 3)?.id).toBe("milestone");
+  });
+
   test("time scale round-trips, clips, snaps, fits and preserves half-open boundaries", () => {
     const scale = createTimeScale({
       range: RANGE,
