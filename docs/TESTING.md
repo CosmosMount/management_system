@@ -225,7 +225,7 @@ npm run pm:identity-backfill
 
 1. 桌面 `1440x1000` 与 Pixel 5 分别打开 `/progress`，应展示“我的工作”总览、可见 Active Task、未来投入、待确认计划和未读通知摘要；导航中不得出现“资源冲突”。
 2. 打开 `/progress/tasks`，按“只看我参与”、状态、优先级和关键词筛选时，只展示当前 actor 可读 Task；不可读 Task 不能通过列表枚举。
-3. 打开 `/progress/tasks/[id]`，成员可看到 Task 工作台、当前计划、成员权限和人员投入；非成员或无范围权限账号应看到“页面不存在或无权访问”。
+3. 打开 `/progress/tasks/[id]`，成员可看到 Task 工作台、当前计划、成员权限和人员投入；人员投入时间线必须位于 Tab 导航上方，并在桌面与移动端切换任意 Tab 后保持显示及交互状态。非成员或无范围权限账号应看到“页面不存在或无权访问”。
 4. 打开 `/progress/resources`，人员计划时间轴应能新增 Planned Segment，并通过 P5 服务端 action 执行确认、部分确认、拆分、合并、顺延和取消；测试需校验 UI 结果和数据库状态。
 5. `/progress/resources/conflicts` 必须返回 404。资源计划、个人时间线、Task 工作台和 Agenda 不得出现冲突标记或投入比例；快速创建与 Inspector 不得提供比例输入。创建、更新、移动、拆分、合并和确认仍需正常工作，重叠 Segment 不得产生冲突待办、通知或 outbox。
 6. 打开 `/progress/notifications`，只展示当前收件人的站内通知；可按类型/未读筛选、标记单条或全部已读，跳转对象前仍要按业务对象权限过滤。

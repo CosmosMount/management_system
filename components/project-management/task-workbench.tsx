@@ -275,6 +275,14 @@ export function TaskWorkbench({
         </div>
       </section>
 
+      <TaskTimelineSection
+        workspace={currentWorkspace}
+        canvasModel={canvasModel}
+        canvasError={canvasError}
+        people={people}
+        taskOptions={taskOptions}
+      />
+
       <div className="overflow-x-auto rounded-xl border border-border bg-card px-2" aria-label="Task 工作台标签">
         <div className="flex min-w-max gap-1" role="tablist">
           {tabs.map((entry) => (
@@ -316,10 +324,6 @@ export function TaskWorkbench({
         {tab === "plan" && (
           <PlanAndResourcesPanel
             workspace={currentWorkspace}
-            canvasModel={canvasModel}
-            canvasError={canvasError}
-            people={people}
-            taskOptions={taskOptions}
           />
         )}
         {tab === "overview" && (
@@ -367,7 +371,7 @@ export function TaskWorkbench({
   );
 }
 
-function PlanAndResourcesPanel({
+function TaskTimelineSection({
   workspace,
   canvasModel,
   canvasError,
@@ -391,6 +395,52 @@ function PlanAndResourcesPanel({
       creatableSegmentPersonIds.has(person.id),
   );
   return (
+    <section
+      className="min-w-0 space-y-3"
+      aria-labelledby="task-timeline-heading"
+      data-testid="task-workbench-timeline"
+    >
+      <div>
+        <h2 id="task-timeline-heading" className="font-semibold">人员投入</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          当前 Task 的 Planned/Actual 与参与人的其他 Busy 占用使用同一安全 DTO。
+        </p>
+      </div>
+      {canvasModel ? (
+        <>
+          {canvasModel.nextCursor && (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950" role="status">
+              当前工作台显示前 50 行；其余人员请前往
+              <Link className="mx-1 underline" href={`${routes.progress.resources}?tasks=${workspace.task.id}`}>资源计划</Link>
+              继续分页查看。
+            </div>
+          )}
+          <ResourcePlannerCanvasClient
+            initialModel={canvasModel}
+            peopleOptions={segmentPeople}
+            peopleScope={{
+              purpose: "TASK_SEGMENT_CREATE",
+              taskId: workspace.task.id,
+            }}
+            taskOptions={taskOptions}
+            defaultPersonId={segmentPeople[0]?.id ?? ""}
+            defaultTaskId={workspace.task.id}
+            allowIndependent={false}
+            initialZoom="DAY"
+            mode="TASK_WORKBENCH"
+          />
+        </>
+      ) : (
+        <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-5 text-sm text-destructive" role="alert">
+          时间画布加载失败：{canvasError ?? "未知错误"}。计划和生命周期操作仍可使用；请刷新或缩小时间范围后重试。
+        </div>
+      )}
+    </section>
+  );
+}
+
+function PlanAndResourcesPanel({ workspace }: { workspace: TaskWorkspace }) {
+  return (
     <div className="space-y-4">
       <section className="rounded-xl border border-border bg-card p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -412,44 +462,6 @@ function PlanAndResourcesPanel({
       </section>
 
       <ReadOnlyPlan plan={workspace.currentPlan} />
-
-      <section className="min-w-0 space-y-3">
-        <div>
-          <h2 className="font-semibold">人员投入</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            当前 Task 的 Planned/Actual 与参与人的其他 Busy 占用使用同一安全 DTO。
-          </p>
-        </div>
-        {canvasModel ? (
-          <>
-            {canvasModel.nextCursor && (
-              <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950" role="status">
-                当前工作台显示前 50 行；其余人员请前往
-                <Link className="mx-1 underline" href={`${routes.progress.resources}?tasks=${workspace.task.id}`}>资源计划</Link>
-                继续分页查看。
-              </div>
-            )}
-            <ResourcePlannerCanvasClient
-              initialModel={canvasModel}
-              peopleOptions={segmentPeople}
-              peopleScope={{
-                purpose: "TASK_SEGMENT_CREATE",
-                taskId: workspace.task.id,
-              }}
-              taskOptions={taskOptions}
-              defaultPersonId={segmentPeople[0]?.id ?? ""}
-              defaultTaskId={workspace.task.id}
-              allowIndependent={false}
-              initialZoom="DAY"
-              mode="TASK_WORKBENCH"
-            />
-          </>
-        ) : (
-          <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-5 text-sm text-destructive" role="alert">
-            时间画布加载失败：{canvasError ?? "未知错误"}。计划和生命周期操作仍可使用；请刷新或缩小时间范围后重试。
-          </div>
-        )}
-      </section>
     </div>
   );
 }

@@ -1403,6 +1403,41 @@ test.describe("project management P4/P6 UI integration", () => {
     await expect(page.getByRole("heading", { name: fixture.taskTitle })).toBeVisible();
     await expect(page.getByRole("heading", { name: "当前计划" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "人员投入" })).toBeVisible();
+    const workbenchTimeline = page.getByTestId("task-workbench-timeline");
+    await expect(workbenchTimeline).toHaveCount(1);
+    await expect(workbenchTimeline).toBeVisible();
+    expect(
+      await workbenchTimeline.evaluate((element) => {
+        const tabs = document.querySelector('[aria-label="Task 工作台标签"]');
+        return Boolean(
+          tabs &&
+            (element.compareDocumentPosition(tabs) & Node.DOCUMENT_POSITION_FOLLOWING),
+        );
+      }),
+    ).toBe(true);
+    await expect(
+      page.getByTestId(testInfo.project.name === "mobile" ? "time-agenda" : "time-canvas-root"),
+    ).toBeVisible();
+    await workbenchTimeline.evaluate((element) => {
+      element.dataset.tabPersistenceMarker = "preserved";
+    });
+    for (const tabName of ["概览", "修订与历史", "验收", "审计"]) {
+      await page.getByRole("tab", { name: tabName }).click();
+      await expect(page.getByRole("tab", { name: tabName })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+      await expect(workbenchTimeline).toBeVisible();
+      await expect(workbenchTimeline).toHaveAttribute(
+        "data-tab-persistence-marker",
+        "preserved",
+      );
+    }
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
+      ),
+    ).toBe(true);
     await expectHealthyPage(page);
 
     await page.goto(
