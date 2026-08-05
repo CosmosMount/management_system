@@ -30,16 +30,17 @@ import {
 } from "@/lib/project-management/application/notification-utils";
 import {
   activateTaskInputSchema,
+  cancelRevisionInputSchema,
   confirmTerminationInputSchema,
   createTaskDraftInputSchema,
+  createRevisionInputSchema,
   rejectRevisionInputSchema,
-  revisionDraftInputSchema,
+  revisionDecisionInputSchema,
+  reviseRejectedRevisionInputSchema,
   reviewMilestoneDecisionInputSchema,
   submitMilestoneReviewInputSchema,
-  submitRevisionInputSchema,
-  updateRevisionDraftInputSchema,
   type CreateTaskDraftInput,
-  type RevisionDraftInput,
+  type CreateRevisionInput,
 } from "@/lib/project-management/validations/lifecycle";
 import {
   notFoundError,
@@ -450,12 +451,12 @@ export async function activateTask(
   });
 }
 
-export async function createRevisionDraft(
+export async function createRevision(
   actor: ProjectManagementActor,
   input: unknown,
 ): Promise<RevisionMutationResult & { created: boolean }> {
-  const parsed = revisionDraftInputSchema.parse(input);
-  const requestHash = hashRequest("revision.create_draft", parsed);
+  const parsed = createRevisionInputSchema.parse(input);
+  const requestHash = hashRequest("revision.create", parsed);
 
   return prisma.$transaction(async (tx) => {
     await lockTaskTx(tx, parsed.taskId);
@@ -496,7 +497,7 @@ export async function createRevisionDraft(
         taskId: existing.taskId,
         revisionNodeId: existing.revisionNodeId ?? "",
         targetPlanVersionId: existing.id,
-        status: existing.revisionNode?.status ?? "DRAFT",
+        status: existing.revisionNode?.status ?? "PENDING_APPROVAL",
         currentPlanVersionId: task.currentPlanVersionId,
         lockVersion: task.lockVersion,
         created: false,
@@ -504,23 +505,32 @@ export async function createRevisionDraft(
     }
 
     assertRevisionBaseline(task, parsed);
+    const activeCandidate = await tx.taskPlanVersion.findFirst({
+      where: {
+        taskId: task.id,
+        status: "DRAFT",
+        revisionNodeId: { not: null },
+      },
+      select: { id: true },
+    });
+    if (activeCandidate) {
+      throw stateConflictError("当前 Task 已有待处理的 Revision");
+    }
     const currentPlan = await loadCurrentPlanEntriesTx(tx, task);
     assertLegacyCurrentPlanUsableAsRepairBase(currentPlan);
-    const revisedFromIndex = currentPlan.nodes.findIndex(
-      (entry) => entry.nodeId === parsed.revisedFromNodeId,
-    );
-    if (revisedFromIndex < 0) {
-      throw validationError("修订起点不属于当前计划");
-    }
-    const revisedFromEntry = currentPlan.nodes[revisedFromIndex];
-    if (!revisedFromEntry) {
-      throw validationError("修订起点不属于当前计划");
-    }
-    if (revisedFromEntry.node.status === "COMPLETED") {
-      throw stateConflictError("不能修订已完成的计划节点");
-    }
+    await assertRevisionAtValidTx(tx, {
+      taskId: task.id,
+      revisionAt: parsed.revisionAt,
+      plannedStartAt: currentPlan.plannedStartAt,
+      terminalAt: parsed.termination.plannedAt,
+      completedMilestoneTimes: currentPlan.nodes.flatMap((entry) =>
+        entry.node.milestone && entry.node.status === "COMPLETED"
+          ? [entry.node.milestone.expectedCompletedAt]
+          : [],
+      ),
+    });
 
-    const carriedEntries = currentPlan.nodes.slice(0, revisedFromIndex);
+    const carriedEntries = currentPlan.nodes.filter(isRevisionCarryForwardEntry);
     const targetPlanVersionId = randomUUID();
     const revisionTaskNodeId = randomUUID();
     const revisionNodeId = randomUUID();
@@ -537,7 +547,7 @@ export async function createRevisionDraft(
         idempotencyKey: parsed.idempotencyKey,
         creationRequestHash: requestHash,
         snapshotHash: "",
-        plannedStartAt: parsed.plannedStartAt,
+        plannedStartAt: currentPlan.plannedStartAt,
       },
     });
     for (const [index, entry] of carriedEntries.entries()) {
@@ -565,12 +575,13 @@ export async function createRevisionDraft(
         id: revisionNodeId,
         nodeId: revisionTaskNodeId,
         reason: parsed.reason,
-        revisedFromNodeId: revisedFromEntry.nodeId,
+        revisionAt: parsed.revisionAt,
+        reviewRound: 1,
         basePlanVersionId: task.currentPlanVersionId,
         baseTaskLockVersion: task.lockVersion,
-        status: "DRAFT",
+        status: "PENDING_APPROVAL",
         affectedSummary: jsonValue(
-          summarizeRevisionDraft(currentPlan.nodes, revisedFromIndex, parsed),
+          summarizeRevisionCandidate(currentPlan.nodes, carriedEntries, parsed),
         ),
       },
     });
@@ -609,23 +620,35 @@ export async function createRevisionDraft(
       entityId: revisionNodeId,
       taskId: task.id,
       after: jsonValue({
-        status: "DRAFT",
+        status: "PENDING_APPROVAL",
         basePlanVersionId: task.currentPlanVersionId,
         targetPlanVersionId,
-        revisedFromNodeId: revisedFromEntry.nodeId,
         baseTaskLockVersion: task.lockVersion,
-        plannedStartAt: parsed.plannedStartAt,
+        revisionAt: parsed.revisionAt,
+        reviewRound: 1,
         replacementMilestoneCount: parsed.replacementMilestones.length,
         terminationName: parsed.termination.name,
       }),
       reason: parsed.reason,
+    });
+    await notifyGlobalAdministratorsTx(tx, {
+      actor: refreshedActor,
+      task,
+      kind: "revision_pending_review",
+      category: "REVISION",
+      eventKey: `pm:revision:pending_review:${revisionNodeId}:round:1`,
+      title: "计划修订待审批",
+      summary: `Task「${task.title}」有新的计划修订待审批`,
+      entityType: "RevisionNode",
+      entityId: revisionNodeId,
+      mandatory: true,
     });
 
     return {
       taskId: task.id,
       revisionNodeId,
       targetPlanVersionId,
-      status: "DRAFT",
+      status: "PENDING_APPROVAL",
       currentPlanVersionId: task.currentPlanVersionId,
       lockVersion: task.lockVersion,
       created: true,
@@ -633,19 +656,19 @@ export async function createRevisionDraft(
   });
 }
 
-export async function updateRevisionDraft(
+export async function reviseRejectedRevision(
   actor: ProjectManagementActor,
   input: unknown,
 ): Promise<RevisionMutationResult> {
-  const parsed = updateRevisionDraftInputSchema.parse(input);
+  const parsed = reviseRejectedRevisionInputSchema.parse(input);
 
   return prisma.$transaction(async (tx) => {
     const { refreshedActor, task, revision, targetPlanVersionId } =
       await loadRevisionForMutationTx(tx, actor, parsed.revisionNodeId);
     assertCanManageRevision(refreshedActor, task, revision);
     assertTaskActiveForPlanChange(task);
-    if (!["DRAFT", "REJECTED"].includes(revision.status)) {
-      throw stateConflictError("只有草稿或已驳回的 Revision 可以编辑");
+    if (revision.status !== "REJECTED") {
+      throw stateConflictError("只有已驳回的 Revision 可以修改后重新送审");
     }
     if (!targetPlanVersionId || !revision.targetPlanVersion) {
       throw stateConflictError("Revision 缺少候选计划");
@@ -664,7 +687,25 @@ export async function updateRevisionDraft(
       throw planVersionConflictError();
     }
 
+    const currentPlan = await loadCurrentPlanEntriesTx(tx, task);
+    await assertRevisionAtValidTx(tx, {
+      taskId: task.id,
+      revisionAt: parsed.revisionAt,
+      plannedStartAt: currentPlan.plannedStartAt,
+      terminalAt: parsed.termination.plannedAt,
+      completedMilestoneTimes: currentPlan.nodes.flatMap((entry) =>
+        entry.node.milestone && entry.node.status === "COMPLETED"
+          ? [entry.node.milestone.expectedCompletedAt]
+          : [],
+      ),
+    });
+
     const targetPlan = await loadPlanForValidationTx(tx, targetPlanVersionId);
+    assertRevisionTargetPlanValid(targetPlan);
+    assertRevisionStartUnchanged(
+      currentPlan.plannedStartAt,
+      targetPlan.plannedStartAt,
+    );
     const beforePlanAudit = revisionPlanAuditState(targetPlan);
     const revisionEntryIndex = targetPlan.nodes.findIndex(
       (entry) => entry.nodeId === revision.nodeId,
@@ -700,7 +741,6 @@ export async function updateRevisionDraft(
       where: { id: targetPlanVersionId },
       data: {
         reason: parsed.reason,
-        plannedStartAt: parsed.plannedStartAt,
         snapshotHash: "",
       },
     });
@@ -712,13 +752,14 @@ export async function updateRevisionDraft(
       where: { id: parsed.revisionNodeId },
       data: {
         reason: parsed.reason,
-        status: "DRAFT",
-        submittedAt: null,
+        revisionAt: parsed.revisionAt,
+        status: "PENDING_APPROVAL",
+        reviewRound: { increment: 1 },
         reviewedAt: null,
         reviewedByAccountId: null,
         reviewComment: "",
         affectedSummary: jsonValue({
-          revisedFromNodeId: revision.revisedFromNodeId,
+          carriedNodeCount: revisionEntryIndex,
           replacementMilestoneCount: parsed.replacementMilestones.length,
           terminationName: parsed.termination.name,
         }),
@@ -746,18 +787,21 @@ export async function updateRevisionDraft(
     await createDomainAuditEventTx(tx, {
       actorAccountId: refreshedActor.accountId,
       actorPersonId: refreshedActor.personId,
-      action: "pm.revision.draft.update",
+      action: "pm.revision.resubmit",
       entityType: "RevisionNode",
       entityId: parsed.revisionNodeId,
       taskId: task.id,
       before: jsonValue({
         status: revision.status,
+        reviewRound: revision.reviewRound,
         targetPlanVersionId,
         targetPlanUpdatedAt: revision.targetPlanVersion.updatedAt,
         plan: beforePlanAudit,
       }),
       after: jsonValue({
-        status: "DRAFT",
+        status: "PENDING_APPROVAL",
+        revisionAt: parsed.revisionAt,
+        reviewRound: revision.reviewRound + 1,
         targetPlanVersionId,
         replacementMilestoneCount: parsed.replacementMilestones.length,
         terminationName: parsed.termination.name,
@@ -766,76 +810,18 @@ export async function updateRevisionDraft(
       }),
       reason: parsed.reason,
     });
-    return {
-      taskId: task.id,
-      revisionNodeId: parsed.revisionNodeId,
-      targetPlanVersionId,
-      status: "DRAFT",
-      currentPlanVersionId: task.currentPlanVersionId,
-      lockVersion: task.lockVersion,
-    };
-  });
-}
-
-export async function submitRevision(
-  actor: ProjectManagementActor,
-  input: unknown,
-): Promise<RevisionMutationResult> {
-  const parsed = submitRevisionInputSchema.parse(input);
-
-  return prisma.$transaction(async (tx) => {
-    const { refreshedActor, task, revision, targetPlanVersionId } =
-      await loadRevisionForMutationTx(tx, actor, parsed.revisionNodeId);
-    assertCanManageRevision(refreshedActor, task, revision);
-    if (revision.status !== "DRAFT" && revision.status !== "REJECTED") {
-      throw stateConflictError("只有草稿或已驳回的 Revision 可以提交");
-    }
-    if (!targetPlanVersionId) {
-      throw stateConflictError("Revision 缺少目标计划版本");
-    }
-    if (revision.targetPlanVersion?.status !== "DRAFT") {
-      throw stateConflictError("Revision 目标计划已失效，请刷新后重试");
-    }
-    await assertRevisionTargetValidTx(tx, task, revision, targetPlanVersionId);
-
-    const submitted = await tx.revisionNode.updateMany({
-      where: {
-        id: parsed.revisionNodeId,
-        status: { in: ["DRAFT", "REJECTED"] },
-      },
-      data: {
-        status: "PENDING_APPROVAL",
-        submittedAt: new Date(),
-        reviewComment: "",
-      },
-    });
-    if (submitted.count !== 1) {
-      throw stateConflictError("只有草稿或已驳回的 Revision 可以提交");
-    }
-    await createDomainAuditEventTx(tx, {
-      actorAccountId: refreshedActor.accountId,
-      actorPersonId: refreshedActor.personId,
-      action: "pm.revision.submit",
-      entityType: "RevisionNode",
-      entityId: parsed.revisionNodeId,
-      taskId: task.id,
-      before: jsonValue({ status: revision.status }),
-      after: jsonValue({ status: "PENDING_APPROVAL", targetPlanVersionId }),
-      reason: revision.reason,
-    });
     await notifyGlobalAdministratorsTx(tx, {
       actor: refreshedActor,
       task,
       kind: "revision_pending_review",
       category: "REVISION",
-      eventKey: `pm:revision:pending_review:${parsed.revisionNodeId}`,
-      title: "计划修订待审批",
-      summary: `Task「${task.title}」有新的计划修订待审批`,
+      eventKey: `pm:revision:pending_review:${parsed.revisionNodeId}:round:${revision.reviewRound + 1}`,
+      title: "计划修订重新待审批",
+      summary: `Task「${task.title}」的计划修订已修改并重新送审`,
       entityType: "RevisionNode",
       entityId: parsed.revisionNodeId,
       mandatory: true,
     });
-
     return {
       taskId: task.id,
       revisionNodeId: parsed.revisionNodeId,
@@ -851,7 +837,7 @@ export async function approveRevision(
   actor: ProjectManagementActor,
   input: unknown,
 ): Promise<RevisionMutationResult> {
-  const parsed = submitRevisionInputSchema.parse(input);
+  const parsed = revisionDecisionInputSchema.parse(input);
 
   return prisma.$transaction(async (tx) => {
     const { refreshedActor, task, revision } =
@@ -930,8 +916,14 @@ export async function rejectRevision(
       entityType: "RevisionNode",
       entityId: parsed.revisionNodeId,
       taskId: task.id,
-      before: jsonValue({ status: revision.status }),
-      after: jsonValue({ status: "REJECTED" }),
+      before: jsonValue({
+        status: revision.status,
+        reviewRound: revision.reviewRound,
+      }),
+      after: jsonValue({
+        status: "REJECTED",
+        reviewRound: revision.reviewRound,
+      }),
       reason: parsed.comment,
     });
     await notifyRevisionResultTx(tx, {
@@ -940,7 +932,7 @@ export async function rejectRevision(
       revisionNodeId: parsed.revisionNodeId,
       title: "计划修订已驳回",
       summary: parsed.comment,
-      eventKey: `pm:revision:result:${parsed.revisionNodeId}:rejected`,
+      eventKey: `pm:revision:result:${parsed.revisionNodeId}:round:${revision.reviewRound}:rejected`,
       recipients: await revisionCreatorAndOwnersTx(tx, task, revision),
     });
 
@@ -959,14 +951,13 @@ export async function cancelRevision(
   actor: ProjectManagementActor,
   input: unknown,
 ): Promise<RevisionMutationResult> {
-  const parsed = submitRevisionInputSchema.parse(input);
+  const parsed = cancelRevisionInputSchema.parse(input);
 
   return prisma.$transaction(async (tx) => {
     const { refreshedActor, task, revision } =
       await loadRevisionForMutationTx(tx, actor, parsed.revisionNodeId);
     assertCanManageRevision(refreshedActor, task, revision);
     if (
-      revision.status !== "DRAFT" &&
       revision.status !== "PENDING_APPROVAL" &&
       revision.status !== "REJECTED"
     ) {
@@ -985,7 +976,7 @@ export async function cancelRevision(
     const cancelled = await tx.revisionNode.updateMany({
       where: {
         id: parsed.revisionNodeId,
-        status: { in: ["DRAFT", "PENDING_APPROVAL", "REJECTED"] },
+        status: { in: ["PENDING_APPROVAL", "REJECTED"] },
       },
       data: {
         status: "CANCELLED",
@@ -1532,15 +1523,18 @@ async function applyRevisionTx(
   assertRevisionTargetPlanValid(targetPlan);
   const targetEntries = targetPlan.nodes;
   assertCompletedPrefixUnchanged(baseEntries, targetEntries);
-  const revisedFromIndex = baseEntries.findIndex(
-    (entry) => entry.nodeId === revision.revisedFromNodeId,
+  const carriedBaseNodeIds = new Set(
+    targetEntries
+      .filter((entry) => entry.isCarryForward)
+      .map((entry) => entry.nodeId),
   );
-  if (revisedFromIndex < 0) {
-    throw planVersionConflictError("修订起点已不在当前计划中");
-  }
   const replacedNodeIds = baseEntries
-    .slice(revisedFromIndex)
-    .filter((entry) => entry.node.status !== "COMPLETED")
+    .filter(
+      (entry) =>
+        !carriedBaseNodeIds.has(entry.nodeId) &&
+        entry.node.type !== "REVISION" &&
+        entry.node.status !== "COMPLETED",
+    )
     .map((entry) => entry.nodeId);
   const affectedRevisionSegments = await prepareRevisionAffectedSegmentsTx(tx, {
     taskId: task.id,
@@ -2121,7 +2115,7 @@ function ensureCreatorOwner(
 
 function assertRevisionBaseline(
   task: TaskForAuthorization,
-  input: RevisionDraftInput,
+  input: CreateRevisionInput,
 ) {
   if (input.basePlanVersionId !== task.currentPlanVersionId) {
     throw planVersionConflictError();
@@ -2140,18 +2134,26 @@ async function nextPlanVersionNoTx(tx: PrismaTx, taskId: string): Promise<number
   return (latest?.versionNo ?? 0) + 1;
 }
 
-function summarizeRevisionDraft(
+function summarizeRevisionCandidate(
   currentEntries: PlanEntry[],
-  revisedFromIndex: number,
-  input: RevisionDraftInput,
+  carriedEntries: PlanEntry[],
+  input: CreateRevisionInput,
 ) {
   return {
-    revisedFromNodeId: input.revisedFromNodeId,
-    carriedNodeCount: revisedFromIndex,
-    replacedNodeCount: currentEntries.length - revisedFromIndex,
+    revisionAt: input.revisionAt,
+    carriedNodeCount: carriedEntries.length,
+    replacedNodeCount: currentEntries.length - carriedEntries.length,
     replacementMilestoneCount: input.replacementMilestones.length,
     terminationName: input.termination.name,
   };
+}
+
+function isRevisionCarryForwardEntry(entry: PlanEntry) {
+  return (
+    (entry.node.type === "MILESTONE" && entry.node.status === "COMPLETED") ||
+    (entry.node.type === "REVISION" &&
+      entry.node.revision?.status === "EFFECTIVE")
+  );
 }
 
 async function loadRevisionForMutationTx(
@@ -2193,6 +2195,7 @@ async function assertRevisionTargetValidTx(
   revision: {
     basePlanVersionId: string;
     baseTaskLockVersion: number;
+    revisionAt: Date;
   },
   targetPlanVersionId: string,
 ) {
@@ -2204,6 +2207,91 @@ async function assertRevisionTargetValidTx(
   }
   const targetPlan = await loadPlanForValidationTx(tx, targetPlanVersionId);
   assertRevisionTargetPlanValid(targetPlan);
+  const basePlan = await loadPlanForValidationTx(
+    tx,
+    revision.basePlanVersionId,
+  );
+  assertRevisionStartUnchanged(
+    basePlan.plannedStartAt,
+    targetPlan.plannedStartAt,
+  );
+  const terminalAt = targetPlan.nodes.find(
+    (entry) => entry.node.type === "TERMINATION",
+  )?.node.termination?.plannedAt;
+  if (!terminalAt) {
+    throw stateConflictError("Revision 候选计划缺少 Terminal");
+  }
+  await assertRevisionAtValidTx(tx, {
+    taskId: task.id,
+    revisionAt: revision.revisionAt,
+    plannedStartAt: targetPlan.plannedStartAt,
+    terminalAt,
+    completedMilestoneTimes: targetPlan.nodes.flatMap((entry) =>
+      entry.node.milestone && entry.node.status === "COMPLETED"
+        ? [entry.node.milestone.expectedCompletedAt]
+        : [],
+    ),
+  });
+}
+
+async function assertRevisionAtValidTx(
+  tx: PrismaTx,
+  input: {
+    taskId: string;
+    revisionAt: Date;
+    plannedStartAt: Date | null;
+    terminalAt: Date;
+    completedMilestoneTimes: Date[];
+  },
+) {
+  if (!input.plannedStartAt) {
+    throw planChronologyInvalidError("计划开始时间不能为空", {
+      revisionAt: ["Revision 必须位于有效计划范围内"],
+    });
+  }
+  const fail = (message: string): never => {
+    throw planChronologyInvalidError(message, { revisionAt: [message] });
+  };
+  if (input.revisionAt < input.plannedStartAt) {
+    fail("Revision 时间不能早于计划开始时间");
+  }
+  if (input.revisionAt > input.terminalAt) {
+    fail("Revision 时间不能晚于 Terminal");
+  }
+  const lastCompletedMilestoneAt = input.completedMilestoneTimes.reduce<Date | null>(
+    (latest, value) => (!latest || value > latest ? value : latest),
+    null,
+  );
+  if (lastCompletedMilestoneAt && input.revisionAt < lastCompletedMilestoneAt) {
+    fail("Revision 时间不能早于最后一个已完成 Milestone");
+  }
+  const lastEffectiveRevision = await tx.revisionNode.findFirst({
+    where: {
+      status: "EFFECTIVE",
+      node: { taskId: input.taskId },
+    },
+    orderBy: [{ revisionAt: "desc" }, { id: "desc" }],
+    select: { revisionAt: true },
+  });
+  if (
+    lastEffectiveRevision &&
+    input.revisionAt < lastEffectiveRevision.revisionAt
+  ) {
+    fail("Revision 时间不能早于上一条已生效 Revision");
+  }
+}
+
+function assertRevisionStartUnchanged(
+  basePlannedStartAt: Date | null,
+  targetPlannedStartAt: Date | null,
+) {
+  if (
+    !basePlannedStartAt ||
+    !targetPlannedStartAt ||
+    basePlannedStartAt.getTime() !== targetPlannedStartAt.getTime()
+  ) {
+    throw planVersionConflictError("Revision 不能修改计划开始时间");
+  }
 }
 
 function assertCompletedPrefixUnchanged(
@@ -2213,8 +2301,11 @@ function assertCompletedPrefixUnchanged(
   const completedPrefix = baseEntries.filter(
     (entry) => entry.node.type === "MILESTONE" && entry.node.status === "COMPLETED",
   );
+  const targetMilestones = targetEntries.filter(
+    (entry) => entry.node.type === "MILESTONE",
+  );
   for (const [index, baseEntry] of completedPrefix.entries()) {
-    const targetEntry = targetEntries[index];
+    const targetEntry = targetMilestones[index];
     if (!targetEntry || targetEntry.nodeId !== baseEntry.nodeId) {
       throw planVersionConflictError("Revision 不能改变已完成 Milestone");
     }
@@ -2730,7 +2821,8 @@ function hashPlan(plan: {
       revision: entry.node.revision
         ? {
             reason: entry.node.revision.reason,
-            revisedFromNodeId: entry.node.revision.revisedFromNodeId,
+            revisionAt: entry.node.revision.revisionAt.toISOString(),
+            reviewRound: entry.node.revision.reviewRound,
             basePlanVersionId: entry.node.revision.basePlanVersionId,
           }
         : null,

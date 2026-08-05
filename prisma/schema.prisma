@@ -113,7 +113,6 @@ enum TaskNodeStatus {
 }
 
 enum RevisionStatus {
-  DRAFT
   PENDING_APPROVAL
   EFFECTIVE
   REJECTED
@@ -594,7 +593,6 @@ model TaskNode {
   milestone           MilestoneNode?
   revision            RevisionNode?
   termination         TerminationNode?
-  revisedFrom         RevisionNode[]    @relation("RevisionRevisedFromNode")
   activeForTask       Task?             @relation("ActiveMilestoneNode")
   workSegments        WorkSegment[]
   createdAt           DateTime          @default(now()) @db.Timestamptz(6)
@@ -638,14 +636,13 @@ model RevisionNode {
   nodeId              String           @unique
   node                TaskNode         @relation(fields: [nodeId], references: [id], onDelete: Restrict)
   reason              String
-  revisedFromNodeId   String?
-  revisedFromNode     TaskNode?        @relation("RevisionRevisedFromNode", fields: [revisedFromNodeId], references: [id], onDelete: SetNull)
+  revisionAt          DateTime         @db.Timestamptz(6)
+  reviewRound         Int              @default(1)
   basePlanVersionId   String
   basePlanVersion     TaskPlanVersion  @relation("RevisionBasePlanVersion", fields: [basePlanVersionId], references: [id], onDelete: Restrict)
   baseTaskLockVersion Int              @default(0)
   targetPlanVersion   TaskPlanVersion? @relation("RevisionTargetPlanVersion")
-  status              RevisionStatus   @default(DRAFT)
-  submittedAt         DateTime?        @db.Timestamptz(6)
+  status              RevisionStatus   @default(PENDING_APPROVAL)
   reviewedAt          DateTime?        @db.Timestamptz(6)
   effectiveAt         DateTime?        @db.Timestamptz(6)
   reviewedByAccountId String?
@@ -654,7 +651,7 @@ model RevisionNode {
   affectedSummary     Json             @default("{}")
 
   @@index([basePlanVersionId])
-  @@index([revisedFromNodeId])
+  @@index([revisionAt])
   @@index([reviewedByAccountId])
   @@index([status])
 }

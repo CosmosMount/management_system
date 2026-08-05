@@ -7,13 +7,12 @@ import {
   approveRevision,
   cancelRevision,
   confirmTermination,
-  createRevisionDraft,
+  createRevision,
   createTaskDraft,
   rejectRevision,
   reviewMilestone,
   submitMilestoneForReview,
-  submitRevision,
-  updateRevisionDraft,
+  reviseRejectedRevision,
 } from "../lib/project-management/application/lifecycle-service";
 import {
   toProjectManagementServiceError,
@@ -766,25 +765,27 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     expect(persistedReview.result).toBe(fulfilled[0]?.value.result);
   });
 
-  test("Revision draft, submit, reject and cancel preserve the current plan", async () => {
+  test("Revision create, reject and cancel preserve the current plan", async () => {
     const fixture = await createActivatedFixture();
     const activeNode = await firstCurrentMilestone(fixture.taskId);
-    const revision = await createRevisionDraft(actor(fixture.owner), {
+    const revision = await createRevision(actor(fixture.owner), {
       taskId: fixture.taskId,
       basePlanVersionId: fixture.currentPlanVersionId,
       baseTaskLockVersion: 1,
-      revisedFromNodeId: activeNode.nodeId,
       reason: "计划需要调整",
       replacementMilestones: [
         milestoneInput("调整后 Milestone", "完成新目标", 4),
       ],
-      plannedStartAt: new Date(
+      revisionAt: new Date(
         Date.UTC(2026, 6, 31, 10, 0, 0),
       ).toISOString(),
       termination: terminationInput(8),
       idempotencyKey: `revision-reject-${randomUUID()}`,
     });
-    expect(revision).toMatchObject({ created: true, status: "DRAFT" });
+    expect(revision).toMatchObject({
+      created: true,
+      status: "PENDING_APPROVAL",
+    });
     await expect(
       prisma.$executeRaw`
         UPDATE "RevisionNode"
@@ -793,11 +794,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       `,
     ).rejects.toThrow();
 
-    const submitted = await submitRevision(actor(fixture.owner), {
-      revisionNodeId: revision.revisionNodeId,
-      comment: "请审批",
-    });
-    expect(submitted.status).toBe("PENDING_APPROVAL");
+    expect(revision.status).toBe("PENDING_APPROVAL");
 
     await expectServiceError(
       rejectRevision(actor(fixture.owner), {
@@ -835,7 +832,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     expect(task.activeMilestoneNodeId).toBe(activeNode.nodeId);
   });
 
-  test("Revision Draft replace enforces ownership, stale and association safety with auditable atomic updates", async () => {
+  test("Rejected Revision resubmit enforces ownership, stale and association safety with auditable atomic updates", async () => {
     const fixture = await createActivatedFixture();
     const lead = await createAccountPerson("生命周期 Revision Lead");
     await prisma.taskMember.create({
@@ -846,20 +843,22 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         createdByAccountId: fixture.owner.account.id,
       },
     });
-    const activeNode = await firstCurrentMilestone(fixture.taskId);
-    const revision = await createRevisionDraft(actor(fixture.owner), {
+    const revision = await createRevision(actor(fixture.owner), {
       taskId: fixture.taskId,
       basePlanVersionId: fixture.currentPlanVersionId,
       baseTaskLockVersion: 1,
-      revisedFromNodeId: activeNode.nodeId,
-      reason: "Revision Draft replace 初始计划",
+      reason: "Revision 重新送审初始计划",
       replacementMilestones: [milestoneInput("候选节点 A", "候选条件 A", 4)],
-      plannedStartAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
+      revisionAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
       termination: terminationInput(8),
       idempotencyKey: `revision-update-${randomUUID()}`,
     });
     const targetPlanVersionId = revision.targetPlanVersionId ?? "";
-    const targetBefore = await revisionTargetSnapshot(targetPlanVersionId);
+    await rejectRevision(actor(fixture.reviewer), {
+      revisionNodeId: revision.revisionNodeId,
+      comment: "请修改后重提",
+    });
+    let targetBefore = await revisionTargetSnapshot(targetPlanVersionId);
     const replacementNode = targetBefore.nodes.find(
       (entry) => entry.node.type === "MILESTONE" && !entry.isCarryForward,
     );
@@ -867,8 +866,8 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     const validUpdate = {
       revisionNodeId: revision.revisionNodeId,
       expectedTargetPlanUpdatedAt: targetBefore.updatedAt.toISOString(),
-      reason: "Revision Draft replace 已编辑",
-      plannedStartAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
+      reason: "Revision 重新送审已编辑",
+      revisionAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
       replacementMilestones: [
         {
           ...milestoneInput("候选节点 B", "候选条件 B", 5),
@@ -884,6 +883,34 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         businessDescription: "候选结束业务说明",
       },
     };
+
+    await prisma.taskPlanVersion.update({
+      where: { id: targetPlanVersionId },
+      data: { plannedStartAt: new Date("2026-07-30T10:00:00.000Z") },
+    });
+    const targetWithChangedStart = await revisionTargetSnapshot(
+      targetPlanVersionId,
+    );
+    await expectServiceError(
+      reviseRejectedRevision(actor(fixture.owner), {
+        ...validUpdate,
+        expectedTargetPlanUpdatedAt:
+          targetWithChangedStart.updatedAt.toISOString(),
+      }),
+      "PLAN_VERSION_CONFLICT",
+    );
+    expect(
+      await prisma.revisionNode.findUniqueOrThrow({
+        where: { id: revision.revisionNodeId },
+        select: { status: true, reviewRound: true },
+      }),
+    ).toEqual({ status: "REJECTED", reviewRound: 1 });
+    await prisma.taskPlanVersion.update({
+      where: { id: targetPlanVersionId },
+      data: { plannedStartAt: new Date("2026-07-31T10:00:00.000Z") },
+    });
+    targetBefore = await revisionTargetSnapshot(targetPlanVersionId);
+    validUpdate.expectedTargetPlanUpdatedAt = targetBefore.updatedAt.toISOString();
 
     await prisma.domainAuditEvent.createMany({
       data: [
@@ -914,7 +941,6 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     });
     expect(leadView.revisions[0]?.capabilities).toMatchObject({
       canEdit: false,
-      canSubmit: false,
     });
     expect(leadView.auditFilterOptions.eventTypes).toEqual(
       expect.arrayContaining([
@@ -934,13 +960,13 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     });
     expect(ownerView.revisions[0]?.capabilities.canEdit).toBe(true);
     await expectServiceError(
-      updateRevisionDraft(actor(lead), validUpdate),
+      reviseRejectedRevision(actor(lead), validUpdate),
       "FORBIDDEN",
     );
     expect(await revisionTargetSnapshot(targetPlanVersionId)).toEqual(targetBefore);
 
     await expectServiceError(
-      updateRevisionDraft(actor(fixture.owner), {
+      reviseRejectedRevision(actor(fixture.owner), {
         ...validUpdate,
         expectedTargetPlanUpdatedAt: new Date(0).toISOString(),
       }),
@@ -949,11 +975,11 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     expect(await revisionTargetSnapshot(targetPlanVersionId)).toEqual(targetBefore);
 
     await expectServiceError(
-      updateRevisionDraft(actor(fixture.owner), {
+      reviseRejectedRevision(actor(fixture.owner), {
         ...validUpdate,
         termination: {
           ...validUpdate.termination,
-          plannedAt: validUpdate.plannedStartAt,
+          plannedAt: validUpdate.revisionAt,
         },
       }),
       "PLAN_CHRONOLOGY_INVALID",
@@ -974,7 +1000,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       },
     });
     await expectServiceError(
-      updateRevisionDraft(actor(fixture.owner), validUpdate),
+      reviseRejectedRevision(actor(fixture.owner), validUpdate),
       "STATE_CONFLICT",
     );
     expect(await revisionTargetSnapshot(targetPlanVersionId)).toEqual(targetBefore);
@@ -1000,7 +1026,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     `);
     try {
       await expect(
-        updateRevisionDraft(actor(fixture.owner), {
+        reviseRejectedRevision(actor(fixture.owner), {
           ...validUpdate,
           replacementMilestones: [
             {
@@ -1022,31 +1048,20 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       targetBeforeLateFailure,
     );
 
-    await prisma.revisionNode.update({
-      where: { id: revision.revisionNodeId },
-      data: {
-        status: "REJECTED",
-        submittedAt: new Date("2026-07-30T00:00:00.000Z"),
-        reviewedAt: new Date("2026-07-30T01:00:00.000Z"),
-        reviewedByAccountId: fixture.owner.account.id,
-        reviewComment: "请修改后重提",
-      },
-    });
-
-    const updated = await updateRevisionDraft(actor(fixture.owner), validUpdate);
-    expect(updated.status).toBe("DRAFT");
+    const updated = await reviseRejectedRevision(actor(fixture.owner), validUpdate);
+    expect(updated.status).toBe("PENDING_APPROVAL");
     await expect(
       prisma.revisionNode.findUniqueOrThrow({
         where: { id: revision.revisionNodeId },
         select: {
-          submittedAt: true,
+          reviewRound: true,
           reviewedAt: true,
           reviewedByAccountId: true,
           reviewComment: true,
         },
       }),
     ).resolves.toEqual({
-      submittedAt: null,
+      reviewRound: 2,
       reviewedAt: null,
       reviewedByAccountId: null,
       reviewComment: "",
@@ -1069,7 +1084,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       where: {
         taskId: fixture.taskId,
         entityId: revision.revisionNodeId,
-        action: "pm.revision.draft.update",
+        action: "pm.revision.resubmit",
       },
       select: { before: true, after: true },
     });
@@ -1082,47 +1097,53 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     expect(jsonRecord(auditAfter.changes).removed).toEqual(expect.any(Array));
 
     await expectServiceError(
-      updateRevisionDraft(actor(fixture.owner), validUpdate),
-      "PLAN_VERSION_CONFLICT",
+      reviseRejectedRevision(actor(fixture.owner), validUpdate),
+      "STATE_CONFLICT",
     );
     await expect(
       prisma.domainAuditEvent.count({
         where: {
           taskId: fixture.taskId,
           entityId: revision.revisionNodeId,
-          action: "pm.revision.draft.update",
+          action: "pm.revision.resubmit",
         },
       }),
     ).resolves.toBe(1);
   });
 
   test("Revision enforces the 200 Milestone limit after carried nodes are merged", async () => {
-    const fixture = await createActivatedFixture(200);
-    const currentNodes = await currentPlanNodes(fixture.taskId);
-    const lastMilestone = currentNodes.filter(
-      (entry) => entry.node.type === "MILESTONE",
-    ).at(-1);
-    if (!lastMilestone) throw new Error("测试计划缺少最后一个 Milestone");
+    const fixture = await createActivatedFixture(2);
+    const activeMilestone = await firstCurrentMilestone(fixture.taskId);
+    const review = await submitMilestoneForReview(actor(fixture.owner), {
+      milestoneNodeId: activeMilestone.nodeId,
+      idempotencyKey: `revision-limit-review-${randomUUID()}`,
+      evidences: [{ kind: "TEXT", note: "完成锁定前缀" }],
+    });
+    await reviewMilestone(actor(fixture.reviewer), {
+      reviewId: review.reviewId,
+      result: "APPROVED",
+      comment: "通过",
+    });
     const revisionCountBefore = await prisma.revisionNode.count({
       where: { node: { taskId: fixture.taskId } },
     });
     const baseInput = {
       taskId: fixture.taskId,
       basePlanVersionId: fixture.currentPlanVersionId,
-      baseTaskLockVersion: 1,
-      revisedFromNodeId: lastMilestone.nodeId,
+      baseTaskLockVersion: 2,
       reason: "验证合并后的 Milestone 上限",
-      plannedStartAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
+      revisionAt: new Date(Date.UTC(2026, 7, 2, 10, 0, 0)).toISOString(),
       termination: terminationInput(203),
     };
+    const twoHundredReplacementMilestones = Array.from(
+      { length: 200 },
+      (_, index) => milestoneInput(`候选节点 ${index + 1}`, `候选条件 ${index + 1}`, index + 3),
+    );
 
     await expectServiceError(
-      createRevisionDraft(actor(fixture.owner), {
+      createRevision(actor(fixture.owner), {
         ...baseInput,
-        replacementMilestones: [
-          milestoneInput("候选节点 200", "候选条件 200", 200),
-          milestoneInput("候选节点 201", "候选条件 201", 201),
-        ],
+        replacementMilestones: twoHundredReplacementMilestones,
         idempotencyKey: `revision-over-limit-${randomUUID()}`,
       }),
       "PLAN_CHRONOLOGY_INVALID",
@@ -1133,29 +1154,31 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       }),
     ).toBe(revisionCountBefore);
 
-    const validRevision = await createRevisionDraft(actor(fixture.owner), {
+    const validRevision = await createRevision(actor(fixture.owner), {
       ...baseInput,
-      replacementMilestones: [
-        milestoneInput("候选节点 200", "候选条件 200", 200),
-      ],
+      replacementMilestones: twoHundredReplacementMilestones.slice(0, 199),
       idempotencyKey: `revision-at-limit-${randomUUID()}`,
     });
     const targetPlanVersionId = validRevision.targetPlanVersionId ?? "";
-    const targetBefore = await revisionTargetSnapshot(targetPlanVersionId);
     expect(
-      targetBefore.nodes.filter((entry) => entry.node.type === "MILESTONE"),
+      (await revisionTargetSnapshot(targetPlanVersionId)).nodes.filter(
+        (entry) => entry.node.type === "MILESTONE",
+      ),
     ).toHaveLength(200);
 
+    await rejectRevision(actor(fixture.reviewer), {
+      revisionNodeId: validRevision.revisionNodeId,
+      comment: "请调整候选计划",
+    });
+    const targetBefore = await revisionTargetSnapshot(targetPlanVersionId);
+
     await expectServiceError(
-      updateRevisionDraft(actor(fixture.owner), {
+      reviseRejectedRevision(actor(fixture.owner), {
         revisionNodeId: validRevision.revisionNodeId,
         expectedTargetPlanUpdatedAt: targetBefore.updatedAt.toISOString(),
         reason: "更新后超过 Milestone 上限",
-        plannedStartAt: baseInput.plannedStartAt,
-        replacementMilestones: [
-          milestoneInput("候选节点 200", "候选条件 200", 200),
-          milestoneInput("候选节点 201", "候选条件 201", 201),
-        ],
+        revisionAt: baseInput.revisionAt,
+        replacementMilestones: twoHundredReplacementMilestones,
         termination: baseInput.termination,
       }),
       "PLAN_CHRONOLOGY_INVALID",
@@ -1217,27 +1240,22 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       },
     });
 
-    const revision = await createRevisionDraft(actor(fixture.owner), {
+    const revision = await createRevision(actor(fixture.owner), {
       taskId: fixture.taskId,
       basePlanVersionId: fixture.currentPlanVersionId,
       baseTaskLockVersion: 1,
-      revisedFromNodeId: activeNode.nodeId,
       reason: "当前目标变更",
       replacementMilestones: [
         milestoneInput("新的当前 Milestone", "完成替代目标", 5),
       ],
-      plannedStartAt: new Date(
+      revisionAt: new Date(
         Date.UTC(2026, 6, 31, 11, 0, 0),
       ).toISOString(),
       termination: terminationInput(9),
       idempotencyKey: `revision-apply-${randomUUID()}`,
     });
-    await submitRevision(actor(fixture.owner), {
-      revisionNodeId: revision.revisionNodeId,
-      comment: "请审批",
-    });
     const revisionPendingPayload = await expectProjectManagementOutbox(
-      `pm:revision:pending_review:${revision.revisionNodeId}:feishu`,
+      `pm:revision:pending_review:${revision.revisionNodeId}:round:1:feishu`,
       {
         type: "revision_pending_review",
         botKind: "approval",
@@ -1373,10 +1391,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       toPlanVersionId: applied.currentPlanVersionId,
     });
     expect(diff.added.length).toBeGreaterThan(0);
-    expect(diff.planChanges.plannedStartAt).toEqual({
-      before: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
-      after: new Date(Date.UTC(2026, 6, 31, 11, 0, 0)).toISOString(),
-    });
+    expect(diff.planChanges.plannedStartAt).toBeNull();
     const planHistory = await listTaskPlanVersions({
       actor: actor(fixture.owner),
       taskId: fixture.taskId,
@@ -1413,16 +1428,15 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     ).toBeGreaterThan(0);
 
     await expectServiceError(
-      createRevisionDraft(actor(fixture.owner), {
+      createRevision(actor(fixture.owner), {
         taskId: fixture.taskId,
         basePlanVersionId: fixture.currentPlanVersionId,
         baseTaskLockVersion: 1,
-        revisedFromNodeId: activeNode.nodeId,
         reason: "基线已过期",
         replacementMilestones: [
           milestoneInput("过期修订", "不会生效", 6),
         ],
-        plannedStartAt: new Date(
+        revisionAt: new Date(
           Date.UTC(2026, 6, 31, 10, 0, 0),
         ).toISOString(),
         termination: terminationInput(10),
@@ -1434,25 +1448,19 @@ test.describe("project management P2/P3 task lifecycle services", () => {
 
   test("Revision concurrent approval and rejection cannot overwrite each other", async () => {
     const fixture = await createActivatedFixture();
-    const activeNode = await firstCurrentMilestone(fixture.taskId);
-    const revision = await createRevisionDraft(actor(fixture.owner), {
+    const revision = await createRevision(actor(fixture.owner), {
       taskId: fixture.taskId,
       basePlanVersionId: fixture.currentPlanVersionId,
       baseTaskLockVersion: 1,
-      revisedFromNodeId: activeNode.nodeId,
       reason: "并发审批测试",
       replacementMilestones: [
         milestoneInput("并发后计划", "只有一个审批结果", 5),
       ],
-      plannedStartAt: new Date(
+      revisionAt: new Date(
         Date.UTC(2026, 6, 31, 10, 0, 0),
       ).toISOString(),
       termination: terminationInput(9),
       idempotencyKey: `revision-race-${randomUUID()}`,
-    });
-    await submitRevision(actor(fixture.owner), {
-      revisionNodeId: revision.revisionNodeId,
-      comment: "请审批",
     });
 
     const decisions = await Promise.allSettled([
@@ -1490,28 +1498,22 @@ test.describe("project management P2/P3 task lifecycle services", () => {
 
   test("Revision always waits for approval and a global administrator may self-approve", async () => {
     const fixture = await createActivatedFixture();
-    const activeNode = await firstCurrentMilestone(fixture.taskId);
-    const revision = await createRevisionDraft(actor(fixture.admin), {
+    const revision = await createRevision(actor(fixture.admin), {
       taskId: fixture.taskId,
       basePlanVersionId: fixture.currentPlanVersionId,
       baseTaskLockVersion: 1,
-      revisedFromNodeId: activeNode.nodeId,
       reason: "Owner 直接调整",
       replacementMilestones: [
         milestoneInput("Owner 新计划", "完成 Owner 目标", 3),
       ],
-      plannedStartAt: new Date(
+      revisionAt: new Date(
         Date.UTC(2026, 6, 31, 10, 0, 0),
       ).toISOString(),
       termination: terminationInput(7),
       idempotencyKey: `revision-direct-${randomUUID()}`,
     });
-    const submitted = await submitRevision(actor(fixture.admin), {
-      revisionNodeId: revision.revisionNodeId,
-      comment: "提交后显式自审",
-    });
-    expect(submitted.status).toBe("PENDING_APPROVAL");
-    expect(submitted.currentPlanVersionId).toBe(fixture.currentPlanVersionId);
+    expect(revision.status).toBe("PENDING_APPROVAL");
+    expect(revision.currentPlanVersionId).toBe(fixture.currentPlanVersionId);
     const approved = await approveRevision(actor(fixture.admin), {
       revisionNodeId: revision.revisionNodeId,
       comment: "管理员自审通过",
@@ -1643,21 +1645,20 @@ test.describe("project management P2/P3 task lifecycle services", () => {
   test("没有可用全局审批人或有效飞书身份时提交审批整事务回滚", async () => {
     const fixture = await createActivatedFixture();
     const activeNode = await firstCurrentMilestone(fixture.taskId);
-    const revision = await createRevisionDraft(actor(fixture.owner), {
+    const revisionInput = {
       taskId: fixture.taskId,
       basePlanVersionId: fixture.currentPlanVersionId,
       baseTaskLockVersion: fixture.lockVersion,
-      revisedFromNodeId: activeNode.nodeId,
       reason: "审批人可达性门禁",
       replacementMilestones: [
         milestoneInput("审批人恢复后再提交", "审批链路可达", 4),
       ],
-      plannedStartAt: new Date(
+      revisionAt: new Date(
         Date.UTC(2026, 6, 31, 10, 0, 0),
       ).toISOString(),
       termination: terminationInput(8),
       idempotencyKey: `revision-approver-guard-${randomUUID()}`,
-    });
+    };
     const activeAssignments = await prisma.systemRoleAssignment.findMany({
       where: {
         role: { in: ["SUPER_ADMINISTRATOR", "PROJECT_ADMINISTRATOR"] },
@@ -1687,12 +1688,10 @@ test.describe("project management P2/P3 task lifecycle services", () => {
             "至少保留一名全局管理员",
           ),
         });
-        const revisionError = await captureServiceError(
-          submitRevision(actor(fixture.owner), {
-            revisionNodeId: revision.revisionNodeId,
-            comment: "没有审批人时不得进入待审批",
-          }),
-        );
+        const revisionError = await captureServiceError(createRevision(
+          actor(fixture.owner),
+          { ...revisionInput, idempotencyKey: `${revisionInput.idempotencyKey}:no-admin` },
+        ));
         expect(revisionError).toMatchObject({
           code: "STATE_CONFLICT",
           message: expect.stringContaining(
@@ -1736,12 +1735,10 @@ test.describe("project management P2/P3 task lifecycle services", () => {
             }),
           ),
         );
-        const error = await captureServiceError(
-          submitRevision(actor(fixture.owner), {
-            revisionNodeId: revision.revisionNodeId,
-            comment: "没有可达飞书身份时不得进入待审批",
-          }),
-        );
+        const error = await captureServiceError(createRevision(
+          actor(fixture.owner),
+          { ...revisionInput, idempotencyKey: `${revisionInput.idempotencyKey}:no-identity` },
+        ));
         expect(error).toMatchObject({
           code: "STATE_CONFLICT",
           message: expect.stringContaining("有效飞书身份"),
@@ -1764,11 +1761,8 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       }),
     ).resolves.toBe(0);
     await expect(
-      prisma.revisionNode.findUniqueOrThrow({
-        where: { id: revision.revisionNodeId },
-        select: { status: true, submittedAt: true },
-      }),
-    ).resolves.toEqual({ status: "DRAFT", submittedAt: null });
+      prisma.revisionNode.count({ where: { node: { taskId: fixture.taskId } } }),
+    ).resolves.toBe(0);
   });
 });
 

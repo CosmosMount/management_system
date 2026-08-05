@@ -42,6 +42,10 @@ import {
   xToTime,
 } from "@/components/project-management/time-canvas/time-math";
 import { layoutIntervalLanes, layoutPointLanes } from "@/components/project-management/time-canvas/lane-layout";
+import {
+  buildPlanPhaseBands,
+  findPhaseEndpointAnchor,
+} from "@/components/project-management/time-canvas/plan-phase-bands";
 import type {
   TimeCanvasAnchor,
   TimeCanvasAnchorMoveRequest,
@@ -62,14 +66,6 @@ import { cn } from "@/lib/utils";
 const ROW_HEADER_WIDTH = 240;
 const AXIS_HEIGHT = 56;
 const PLAN_RAIL_TOP = 28;
-const planPhaseTones = [
-  "BLUE",
-  "VIOLET",
-  "AMBER",
-  "EMERALD",
-  "ROSE",
-  "SLATE",
-] as const;
 const zoomOrder: TimeCanvasZoom[] = ["HOUR", "DAY", "WEEK", "MONTH"];
 const zoomLabels: Record<TimeCanvasZoom, string> = {
   HOUR: "小时",
@@ -962,24 +958,7 @@ function PlanRail({
       left.sequence - right.sequence ||
       left.id.localeCompare(right.id),
   );
-  const generatedBands: TimeCanvasPhaseBand[] = sorted
-    .slice(0, -1)
-    .flatMap((anchor, index) => {
-      const next = sorted[index + 1];
-      if (!next || next.atMs <= anchor.atMs) return [];
-      return [{
-        id: `${anchor.id}:${next.id}`,
-        rowId,
-        startMs: anchor.atMs,
-        endMs: next.atMs,
-        label: next.label,
-        tone: planPhaseTones[index % planPhaseTones.length] ?? "BLUE",
-        visualState:
-          anchor.visualState === "TEMPORARY" || next.visualState === "TEMPORARY"
-            ? ("TEMPORARY" as const)
-            : undefined,
-      }];
-    });
+  const generatedBands = buildPlanPhaseBands(sorted, rowId);
   return (
     <PhaseBands
       bands={generatedBands}
@@ -1026,9 +1005,7 @@ function PhaseBands({
           Math.min(band.endMs, viewportWindow.endMs),
           scale,
         );
-        const endpointAnchor = anchors.find(
-          (anchor) => anchor.atMs === band.endMs,
-        );
+        const endpointAnchor = findPhaseEndpointAnchor(anchors, band.endMs);
         const selected = endpointAnchor?.id === selectedAnchorId;
         return (
           <button

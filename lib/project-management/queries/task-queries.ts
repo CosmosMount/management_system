@@ -153,12 +153,12 @@ type PlanNodeSummary = {
   revision: {
     id: string;
     reason: string;
-    revisedFromNodeId: string | null;
+    revisionAt: string;
+    reviewRound: number;
     basePlanVersionId: string;
     baseTaskLockVersion: number;
     targetPlanVersionId: string | null;
     status: RevisionStatus;
-    submittedAt: string | null;
     reviewedAt: string | null;
     effectiveAt: string | null;
     reviewComment: string;
@@ -723,13 +723,13 @@ function serializePlanVersion(plan: PlanVersionWithNodes): PlanVersionSummary {
         ? {
             id: entry.node.revision.id,
             reason: entry.node.revision.reason,
-            revisedFromNodeId: entry.node.revision.revisedFromNodeId,
+            revisionAt: entry.node.revision.revisionAt.toISOString(),
+            reviewRound: entry.node.revision.reviewRound,
             basePlanVersionId: entry.node.revision.basePlanVersionId,
             baseTaskLockVersion: entry.node.revision.baseTaskLockVersion,
             targetPlanVersionId:
               entry.node.revision.targetPlanVersion?.id ?? null,
             status: entry.node.revision.status,
-            submittedAt: toIso(entry.node.revision.submittedAt),
             reviewedAt: toIso(entry.node.revision.reviewedAt),
             effectiveAt: toIso(entry.node.revision.effectiveAt),
             reviewComment: entry.node.revision.reviewComment,
@@ -819,7 +819,8 @@ function nodeCoreHash(node: PlanNodeSummary): string {
     revision: node.revision
       ? {
           reason: node.revision.reason,
-          revisedFromNodeId: node.revision.revisedFromNodeId,
+          revisionAt: node.revision.revisionAt,
+          reviewRound: node.revision.reviewRound,
           basePlanVersionId: node.revision.basePlanVersionId,
         }
       : null,

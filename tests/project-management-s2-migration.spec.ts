@@ -55,7 +55,7 @@ import {
 import {
   absoluteDateTimeSchema,
   createTaskDraftInputSchema,
-  revisionDraftInputSchema,
+  createRevisionInputSchema,
 } from "../lib/project-management/validations/lifecycle";
 import {
   batchCreatePlannedSegmentsInputSchema,
@@ -642,20 +642,19 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
   expect(crossDayDraft.milestones[0]?.expectedCompletedAt.toISOString()).toBe(
     "2026-08-01T16:00:00.000Z",
   );
-  const revision = revisionDraftInputSchema.parse({
+  const revision = createRevisionInputSchema.parse({
     taskId: randomUUID(),
     basePlanVersionId: randomUUID(),
     baseTaskLockVersion: 0,
-    revisedFromNodeId: randomUUID(),
+    revisionAt: "2026-08-03T23:00:00+08:00",
     reason: "跨日调整计划",
-    plannedStartAt: "2026-08-03T23:00:00+08:00",
     replacementMilestones: [
       milestone("Revision 跨日节点", "2026-08-04T00:00:00+08:00"),
     ],
     termination: termination("2026-08-04T01:00:00+08:00"),
     idempotencyKey: randomUUID(),
   });
-  expect(revision.plannedStartAt.toISOString()).toBe(
+  expect(revision.revisionAt.toISOString()).toBe(
     "2026-08-03T15:00:00.000Z",
   );
 
@@ -690,11 +689,10 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
     }).success,
   ).toBe(false);
   expect(
-    revisionDraftInputSchema.safeParse({
+    createRevisionInputSchema.safeParse({
       taskId: randomUUID(),
       basePlanVersionId: randomUUID(),
       baseTaskLockVersion: 0,
-      revisedFromNodeId: randomUUID(),
       reason: "调整计划",
       replacementMilestones: [
         milestone("Revision 节点", "2026-08-03T10:00:00.000Z"),

@@ -7,10 +7,9 @@ import { prisma } from "../lib/prisma";
 import type { ProjectManagementActor } from "../lib/project-management/identity";
 import {
   activateTask,
-  createRevisionDraft,
+  createRevision,
   createTaskDraft,
   submitMilestoneForReview,
-  submitRevision,
 } from "../lib/project-management/application/lifecycle-service";
 import { withGlobalApprovalAdministratorGuardDisabled } from "./helpers/global-approval-administrator-guard";
 
@@ -28,7 +27,7 @@ test("approval notification repair is dry-run safe, per-object transactional and
   const milestoneLegacyKey =
     `pm:milestone:review_submitted:${fixture.reviewId}:feishu`;
   const revisionLegacyKey =
-    `pm:revision:pending_review:${fixture.revisionId}:feishu`;
+    `pm:revision:pending_review:${fixture.revisionId}:round:1:feishu`;
   const before = await notificationRepairSnapshot(fixture);
 
   await runRepair(false);
@@ -281,7 +280,7 @@ async function notificationRepairSnapshot(
           eventKey: {
             in: [
               `pm:milestone:review_submitted:${fixture.reviewId}:feishu`,
-              `pm:revision:pending_review:${fixture.revisionId}:feishu`,
+              `pm:revision:pending_review:${fixture.revisionId}:round:1:feishu`,
             ],
           },
         },
@@ -383,13 +382,12 @@ async function createPendingApprovalFixture() {
     where: { id: draft.taskId },
     select: { lockVersion: true, currentPlanVersionId: true },
   });
-  const revision = await createRevisionDraft(actor(owner), {
+  const revision = await createRevision(actor(owner), {
     taskId: draft.taskId,
     basePlanVersionId: currentTask.currentPlanVersionId,
     baseTaskLockVersion: currentTask.lockVersion,
-    revisedFromNodeId: activeMilestone.nodeId,
     reason: "验证管理员通知修复",
-    plannedStartAt: new Date("2026-08-01T00:00:00.000Z").toISOString(),
+    revisionAt: new Date("2026-08-01T00:00:00.000Z").toISOString(),
     replacementMilestones: [milestoneInput("Repair revised milestone", 4)],
     termination: {
       name: "Terminal",
@@ -398,10 +396,6 @@ async function createPendingApprovalFixture() {
       businessDescription: "Repair revised termination",
     },
     idempotencyKey: `repair-revision-${randomUUID()}`,
-  });
-  await submitRevision(actor(owner), {
-    revisionNodeId: revision.revisionNodeId,
-    comment: "待管理员审批",
   });
   return {
     owner,

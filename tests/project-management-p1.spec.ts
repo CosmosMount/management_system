@@ -482,7 +482,7 @@ test.describe("project management P1 schema, identity and authorization", () => 
         await createDomainAuditEventTx(tx, {
           actorAccountId: account.id,
           actorPersonId: person.id,
-          action: "pm.revision.submit",
+          action: "pm.revision.create",
           entityType: "RevisionNode",
           entityId: payload.entityId,
           before: { token: "should-not-persist", title: "旧标题" },
