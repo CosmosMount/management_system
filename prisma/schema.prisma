@@ -152,17 +152,6 @@ enum WorkSegmentStatus {
   CANCELLED
 }
 
-enum WorkSegmentRole {
-  OWNER
-  LEAD
-  DEVELOPER
-  DESIGNER
-  REVIEWER
-  SUPPORT
-  OBSERVER
-  CUSTOM
-}
-
 enum WorkSegmentChangeAction {
   CREATE
   UPDATE
@@ -171,7 +160,6 @@ enum WorkSegmentChangeAction {
   CONFIRM
   CANCEL
   DELETE
-  RELINK
 }
 
 enum ProjectManagementNotificationCategory {
@@ -594,7 +582,6 @@ model TaskNode {
   revision            RevisionNode?
   termination         TerminationNode?
   activeForTask       Task?             @relation("ActiveMilestoneNode")
-  workSegments        WorkSegment[]
   createdAt           DateTime          @default(now()) @db.Timestamptz(6)
   updatedAt           DateTime          @updatedAt @db.Timestamptz(6)
 
@@ -725,17 +712,12 @@ model WorkSegment {
   startAt                DateTime            @db.Timestamptz(6)
   endAt                  DateTime            @db.Timestamptz(6)
   content                String
-  role                   WorkSegmentRole     @default(DEVELOPER)
-  customRole             String?
   priority               TaskPriority        @default(MEDIUM)
   expectedOutput         String              @default("")
   actualOutput           String              @default("")
   completionPercent      Decimal?            @db.Decimal(5, 2)
   taskId                 String?
   task                   Task?               @relation(fields: [taskId], references: [id], onDelete: SetNull)
-  nodeId                 String?
-  node                   TaskNode?           @relation(fields: [nodeId], references: [id], onDelete: SetNull)
-  associationNeedsReview Boolean             @default(false)
   createdByAccountId     String
   createdBy              Account             @relation("WorkSegmentCreatedBy", fields: [createdByAccountId], references: [id], onDelete: Restrict)
   updatedByAccountId     String?
@@ -753,8 +735,6 @@ model WorkSegment {
 
   @@index([personId, type, startAt, endAt])
   @@index([taskId, startAt])
-  @@index([nodeId, type])
-  @@index([associationNeedsReview, personId])
   @@index([createdByAccountId])
   @@index([updatedByAccountId])
   @@index([sourceSplitFromId])

@@ -20,10 +20,8 @@ import {
 } from "../lib/project-management/application/lifecycle-service";
 import {
   batchCreatePlannedSegments,
-  cancelPlannedSegment,
   createActualSegment,
   createWorkSegment,
-  relinkPlannedSegment,
   updateWorkSegment,
 } from "../lib/project-management/application/segment-service";
 import {
@@ -806,14 +804,8 @@ test.describe("project management S2 plan and Task mutation services", () => {
     expect(participantUpdated.members).toEqual(updated.members);
     expect((await currentTask(fixture.taskId)).lockVersion).toBe(2);
 
-    const constrainedPlan = await currentPlan(fixture.taskId);
-    const referencedNodeId = constrainedPlan.nodes.find(
-      (entry) => entry.node.milestone,
-    )?.nodeId;
-    if (!referencedNodeId) throw new Error("缺少统一 mutation Segment 节点");
     await createSegmentReference({
       taskId: fixture.taskId,
-      nodeId: referencedNodeId,
       personId: addedMember.person.id,
       accountId: owner.account.id,
       type: "PLANNED",
@@ -845,16 +837,6 @@ test.describe("project management S2 plan and Task mutation services", () => {
           ),
         },
         "VALIDATION_ERROR",
-      ],
-      [
-        {
-          ...unifiedConstrainedInput,
-          milestones: constrainedInput.milestones.filter(
-            (milestone) =>
-              !("nodeId" in milestone && milestone.nodeId === referencedNodeId),
-          ),
-        },
-        "ASSOCIATION_INVALID",
       ],
     ] as const) {
       const beforeRejected = await mutationSideEffectCounts(fixture.taskId);
@@ -1262,108 +1244,47 @@ test.describe("project management S2 plan and Task mutation services", () => {
     expect(await mutationSideEffectCounts(fixture.taskId)).toEqual(before);
   });
 
-  test("Draft plan replace refuses every historical Segment reference without partial effects", async () => {
-    const cases: Array<{
-      name: string;
-      createReference: (input: SegmentReferenceFixture) => Promise<void>;
-    }> = [
-      ...(
-        [
-          "PLANNED",
-          "IN_PROGRESS",
-          "PENDING_CONFIRMATION",
-          "CONFIRMED",
-          "CANCELLED",
-        ] as WorkSegmentStatus[]
-      ).map((status) => ({
-        name: `Planned ${status}`,
-        createReference: (input: SegmentReferenceFixture) =>
-          createSegmentReference({ ...input, type: "PLANNED", status }),
-      })),
-      {
-        name: "soft-deleted Actual",
-        createReference: (input) =>
-          createSegmentReference({
-            ...input,
-            type: "ACTUAL",
-            status: "CONFIRMED",
-            deletedAt: new Date(),
-          }),
-      },
-      {
-        name: "associationNeedsReview",
-        createReference: (input) =>
-          createSegmentReference({
-            ...input,
-            type: "PLANNED",
-            status: "PLANNED",
-            associationNeedsReview: true,
-          }),
-      },
-      {
-        name: "historical Planned to Actual source",
-        createReference: createSourceHistoryReference,
-      },
-    ];
-
-    for (const segmentCase of cases) {
-      const admin = await createAccountPerson(`S2 Ref Admin ${segmentCase.name}`);
-      const owner = await createAccountPerson(`S2 Ref Owner ${segmentCase.name}`);
-      const reviewer = await createAccountPerson(
-        `S2 Ref Reviewer ${segmentCase.name}`,
-      );
-      await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
-      const fixture = await createDraft({ creator: admin, owner, reviewer });
-      const plan = await currentPlan(fixture.taskId);
-      const retained = plan.nodes[0];
-      const referenced = plan.nodes[1];
-      const termination = plan.nodes.at(-1);
-      if (!retained?.node.milestone || !referenced || !termination?.node.termination) {
-        throw new Error(`测试计划结构不完整：${segmentCase.name}`);
-      }
-      await segmentCase.createReference({
-        taskId: fixture.taskId,
-        nodeId: referenced.nodeId,
-        personId: owner.person.id,
-        accountId: admin.account.id,
-      });
-      const before = await mutationSideEffectCounts(fixture.taskId);
-
-      await expectServiceError(
-        replaceTaskDraftPlan(actor(owner), {
-          taskId: fixture.taskId,
-          planVersionId: fixture.currentPlanVersionId,
-          expectedLockVersion: 0,
-          plannedStartAt: iso(2026, 8, 1),
-          milestones: [
-            {
-              nodeId: retained.nodeId,
-              goal: retained.node.milestone.goal,
-              completionCriteria:
-                retained.node.milestone.completionCriteria,
-              expectedCompletedAt:
-                retained.node.milestone.expectedCompletedAt.toISOString(),
-              reviewRequirements:
-                retained.node.milestone.reviewRequirements,
-              businessDescription: retained.node.businessDescription,
-            },
-          ],
-          termination: {
-            nodeId: termination.nodeId,
-            name: termination.node.termination.name,
-            plannedOutcomeCriteria:
-              termination.node.termination.plannedOutcomeCriteria,
-            plannedAt: termination.node.termination.plannedAt.toISOString(),
-            businessDescription: termination.node.businessDescription,
-          },
-        }),
-        "ASSOCIATION_INVALID",
-      );
-      expect(await mutationSideEffectCounts(fixture.taskId)).toEqual(before);
-      expect(
-        await prisma.taskNode.findUnique({ where: { id: referenced.nodeId } }),
-      ).not.toBeNull();
+  test("Draft plan replace may delete a Node while Task-associated Segments remain intact", async () => {
+    const admin = await createAccountPerson("S2 Task-only Segment Admin");
+    const owner = await createAccountPerson("S2 Task-only Segment Owner");
+    const reviewer = await createAccountPerson("S2 Task-only Segment Reviewer");
+    await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
+    const fixture = await createDraft({ creator: admin, owner, reviewer });
+    const plan = await currentPlan(fixture.taskId);
+    const retained = plan.nodes[0];
+    const removed = plan.nodes[1];
+    const termination = plan.nodes.at(-1);
+    if (!retained?.node.milestone || !removed || !termination?.node.termination) {
+      throw new Error("测试计划结构不完整");
     }
+    const segment = await prisma.workSegment.create({
+      data: {
+        personId: owner.person.id,
+        type: "PLANNED",
+        status: "PLANNED",
+        startAt: new Date("2026-08-02T09:00:00.000Z"),
+        endAt: new Date("2026-08-02T10:00:00.000Z"),
+        content: "仅关联 Task 的投入",
+        taskId: fixture.taskId,
+        createdByAccountId: admin.account.id,
+      },
+    });
+
+    await replaceTaskDraftPlan(actor(owner), {
+      taskId: fixture.taskId,
+      planVersionId: fixture.currentPlanVersionId,
+      expectedLockVersion: 0,
+      plannedStartAt: iso(2026, 8, 1),
+      milestones: [planMilestoneReplacement(retained)],
+      termination: planTerminationReplacement(termination),
+    });
+
+    expect(
+      await prisma.taskNode.findUnique({ where: { id: removed.nodeId } }),
+    ).toBeNull();
+    await expect(
+      prisma.workSegment.findUniqueOrThrow({ where: { id: segment.id } }),
+    ).resolves.toMatchObject({ taskId: fixture.taskId, status: "PLANNED" });
   });
 
   test("Active metadata, members and tags keep history, audit all changes and enqueue guarded operator-accurate notifications", async () => {
@@ -1767,7 +1688,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
     ).toBe(0);
   });
 
-  test("Task association lock orders Segment writer and Draft replace without deadlock or silent nodeId nulling", async () => {
+  test("Task association lock orders Segment writer and Draft replace without deadlock", async () => {
     expect(new URL(process.env.DATABASE_URL ?? "").pathname).toMatch(/_test$/);
     const admin = await createAccountPerson("S2 Association Lock Admin");
     const owner = await createAccountPerson("S2 Association Lock Owner");
@@ -1796,7 +1717,6 @@ test.describe("project management S2 plan and Task mutation services", () => {
           endAt: new Date("2026-08-03T02:00:00.000Z"),
           content: `association writer ${first}`,
           taskId: fixture.taskId,
-          nodeId: removed.nodeId,
         });
       const replace = () =>
         replaceTaskDraftPlan(actor(owner), {
@@ -1815,26 +1735,21 @@ test.describe("project management S2 plan and Task mutation services", () => {
       );
       const codes = serviceOutcomeCodes(outcomes);
       if (first === "WRITER") {
-        expect(codes).toEqual(["ASSOCIATION_INVALID", "OK"]);
+        expect(codes).toEqual(["OK", "OK"]);
         const segment = await prisma.workSegment.findFirstOrThrow({
           where: { taskId: fixture.taskId, content: `association writer ${first}` },
         });
-        expect(segment.nodeId).toBe(removed.nodeId);
-        expect(await prisma.taskNode.findUnique({ where: { id: removed.nodeId } })).not.toBeNull();
+        expect(segment.taskId).toBe(fixture.taskId);
+        expect(await prisma.taskNode.findUnique({ where: { id: removed.nodeId } })).toBeNull();
       } else {
-        expect(codes).toEqual(["ASSOCIATION_INVALID", "OK"]);
+        expect(codes).toEqual(["OK", "OK"]);
         expect(
           await prisma.workSegment.count({
             where: { taskId: fixture.taskId, content: `association writer ${first}` },
           }),
-        ).toBe(0);
+        ).toBe(1);
         expect(await prisma.taskNode.findUnique({ where: { id: removed.nodeId } })).toBeNull();
       }
-      expect(
-        await prisma.workSegment.count({
-          where: { taskId: fixture.taskId, nodeId: null },
-        }),
-      ).toBe(0);
     }
   });
 
@@ -1852,27 +1767,9 @@ test.describe("project management S2 plan and Task mutation services", () => {
       reviewer: hiddenReviewer,
       title: "S2 hidden association target",
     });
-    const hiddenNodeId = (await currentPlan(hidden.taskId)).nodes[0]?.nodeId;
-    if (!hiddenNodeId) throw new Error("缺少隐藏 Task 节点");
-
     const updateBase = await createWorkSegment(actor(operator), {
       ...segmentCreateInput(operator.person.id, "oracle update base"),
       type: "PLANNED",
-    });
-    const relinkBase = await createWorkSegment(actor(operator), {
-      ...segmentCreateInput(operator.person.id, "oracle relink base", 3),
-      type: "PLANNED",
-    });
-    await prisma.workSegment.update({
-      where: { id: updateBase.segment.id },
-      data: { associationNeedsReview: true },
-    });
-    await prisma.workSegment.update({
-      where: { id: relinkBase.segment.id },
-      data: { associationNeedsReview: true },
-    });
-    const reloadedRelink = await prisma.workSegment.findUniqueOrThrow({
-      where: { id: relinkBase.segment.id },
     });
     const reloadedUpdate = await prisma.workSegment.findUniqueOrThrow({
       where: { id: updateBase.segment.id },
@@ -1880,39 +1777,36 @@ test.describe("project management S2 plan and Task mutation services", () => {
 
     const cases: Array<{
       name: string;
-      invoke: (taskId: string, nodeId: string) => Promise<unknown>;
+      invoke: (taskId: string) => Promise<unknown>;
     }> = [
       {
         name: "single Planned",
-        invoke: (taskId, nodeId) =>
+        invoke: (taskId) =>
           createWorkSegment(actor(operator), {
             ...segmentCreateInput(operator.person.id, "oracle single", 5),
             type: "PLANNED",
             taskId,
-            nodeId,
           }),
       },
       {
         name: "batch Planned",
-        invoke: (taskId, nodeId) =>
+        invoke: (taskId) =>
           batchCreatePlannedSegments(actor(operator), {
             segments: [
               {
                 ...segmentCreateInput(operator.person.id, "oracle batch", 7),
                 type: "PLANNED",
                 taskId,
-                nodeId,
               },
             ],
           }),
       },
       {
         name: "Actual",
-        invoke: (taskId, nodeId) =>
+        invoke: (taskId) =>
           createActualSegment(actor(operator), {
             ...segmentCreateInput(operator.person.id, "oracle actual", 9),
             taskId,
-            nodeId,
             actualOutput: "oracle actual output",
             completionPercent: 100,
             sources: [],
@@ -1920,25 +1814,12 @@ test.describe("project management S2 plan and Task mutation services", () => {
       },
       {
         name: "update",
-        invoke: (taskId, nodeId) =>
+        invoke: (taskId) =>
           updateWorkSegment(actor(operator), {
             segmentId: reloadedUpdate.id,
             expectedUpdatedAt: reloadedUpdate.updatedAt,
-            associationIntent: "RELINK",
             taskId,
-            nodeId,
             reason: "oracle update",
-          }),
-      },
-      {
-        name: "relink",
-        invoke: (taskId, nodeId) =>
-          relinkPlannedSegment(actor(operator), {
-            segmentId: reloadedRelink.id,
-            expectedUpdatedAt: reloadedRelink.updatedAt,
-            taskId,
-            nodeId,
-            reason: "oracle relink",
           }),
       },
     ];
@@ -1947,157 +1828,29 @@ test.describe("project management S2 plan and Task mutation services", () => {
       for (const target of [
         {
           taskId: randomUUID(),
-          nodeId: randomUUID(),
           expectedCode: "NOT_FOUND" as const,
         },
         {
           taskId: hidden.taskId,
-          nodeId: hiddenNodeId,
           expectedCode: "ASSOCIATION_INVALID" as const,
         },
       ]) {
         const before = await segmentAssociationSideEffectSnapshot([
           updateBase.segment.id,
-          reloadedRelink.id,
         ]);
         await expectServiceError(
-          associationCase.invoke(target.taskId, target.nodeId),
+          associationCase.invoke(target.taskId),
           target.expectedCode,
         );
         expect(
-          await segmentAssociationSideEffectSnapshot([
-            updateBase.segment.id,
-            reloadedRelink.id,
-          ]),
+          await segmentAssociationSideEffectSnapshot([updateBase.segment.id]),
           associationCase.name,
         ).toEqual(before);
       }
     }
   });
 
-  test("Revision notification excludes a Segment cancelled while the apply waits for its row lock", async () => {
-    expect(process.env.NOTIFICATION_DELIVERY_DISABLED).toBe("true");
-    expect(new URL(process.env.DATABASE_URL ?? "").pathname).toMatch(/_test$/);
-
-    const admin = await createAccountPerson("S2 Revision Cancel Race Admin");
-    const owner = await createAccountPerson("S2 Revision Cancel Race Owner");
-    const reviewer = await createAccountPerson(
-      "S2 Revision Cancel Race Reviewer",
-    );
-    const member = await createAccountPerson("S2 Revision Cancel Race Member");
-    await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
-    const fixture = await createDraft({
-      creator: admin,
-      owner,
-      reviewer,
-      title: "S2 Revision cancellation serialization",
-      extraMembers: [{ personId: member.person.id, role: "PARTICIPANT" }],
-    });
-    await activateTask(actor(owner), {
-      taskId: fixture.taskId,
-      expectedLockVersion: 0,
-    });
-    const current = await currentPlan(fixture.taskId);
-    const revisedFrom = current.nodes.find(
-      (entry) => entry.node.status === "ACTIVE",
-    );
-    if (!revisedFrom) throw new Error("缺少 Revision 并发测试起点");
-
-    const cancelledCandidate = await createWorkSegment(actor(member), {
-      ...segmentCreateInput(member.person.id, "Revision 等待期间取消", 11),
-      type: "PLANNED",
-      taskId: fixture.taskId,
-      nodeId: revisedFrom.nodeId,
-    });
-    const retainedCandidate = await createWorkSegment(actor(member), {
-      ...segmentCreateInput(member.person.id, "Revision 仍需关联复核", 13),
-      type: "PLANNED",
-      taskId: fixture.taskId,
-      nodeId: revisedFrom.nodeId,
-    });
-    const taskBeforeRevision = await currentTask(fixture.taskId);
-    const revision = await createRevision(actor(owner), {
-      taskId: fixture.taskId,
-      basePlanVersionId: current.id,
-      baseTaskLockVersion: taskBeforeRevision.lockVersion,
-      reason: "验证取消与 Revision 生效串行化",
-      revisionAt: iso(2026, 8, 1),
-      replacementMilestones: [milestoneInput("并发后的替代节点", 6)],
-      termination: terminationInput(8),
-      idempotencyKey: `s2-revision-cancel-race-${randomUUID()}`,
-    });
-    const outcomes = await runCancellationBeforeRevisionBehindSegmentLock(
-      cancelledCandidate.segment.id,
-      () =>
-        cancelPlannedSegment(actor(member), {
-          segmentId: cancelledCandidate.segment.id,
-          expectedUpdatedAt: cancelledCandidate.segment.updatedAt,
-          reason: "Revision 生效前取消",
-        }),
-      () =>
-        approveRevision(actor(admin), {
-          revisionNodeId: revision.revisionNodeId,
-          comment: "取消完成后批准 Revision",
-        }),
-    );
-    for (const outcome of outcomes) {
-      if (outcome.status === "rejected") throw outcome.reason;
-    }
-
-    const persistedSegments = await prisma.workSegment.findMany({
-      where: {
-        id: {
-          in: [
-            cancelledCandidate.segment.id,
-            retainedCandidate.segment.id,
-          ],
-        },
-      },
-      select: { id: true, status: true, associationNeedsReview: true },
-    });
-    expect(
-      persistedSegments.find(
-        (segment) => segment.id === cancelledCandidate.segment.id,
-      ),
-    ).toMatchObject({ status: "CANCELLED", associationNeedsReview: false });
-    expect(
-      persistedSegments.find(
-        (segment) => segment.id === retainedCandidate.segment.id,
-      ),
-    ).toMatchObject({ status: "PLANNED", associationNeedsReview: true });
-    expect(
-      await prisma.workSegmentChange.count({
-        where: {
-          segmentId: cancelledCandidate.segment.id,
-          reason: "Revision 生效后原关联节点失效",
-        },
-      }),
-    ).toBe(0);
-    expect(
-      await prisma.domainAuditEvent.count({
-        where: {
-          entityType: "WorkSegment",
-          entityId: cancelledCandidate.segment.id,
-          action: "pm.segment.update",
-          reason: "Revision 生效后原关联节点失效",
-        },
-      }),
-    ).toBe(0);
-
-    const associationOutbox = await prisma.notificationOutbox.findUniqueOrThrow({
-      where: {
-        eventKey: `pm:segment:association_invalidated:${revision.revisionNodeId}:feishu`,
-      },
-      select: { payload: true },
-    });
-    const payload = jsonRecord(JSON.parse(associationOutbox.payload));
-    expect(jsonRecord(payload.context).affectedSegmentIds).toEqual([
-      retainedCandidate.segment.id,
-    ]);
-    expect(payload.summary).toContain("1 条 Planned Segment");
-  });
-
-  test("Revision validates marker bounds and approval cannot bypass authoritative chronology", async () => {
+   test("Revision validates marker bounds and approval cannot bypass authoritative chronology", async () => {
     const admin = await createAccountPerson("S2 Revision Admin");
     const owner = await createAccountPerson("S2 Revision Owner");
     const reviewer = await createAccountPerson("S2 Revision Reviewer");
@@ -2347,103 +2100,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
     expect(atTerminal.status).toBe("PENDING_APPROVAL");
   });
 
-  test("all Segment association entry points reject Revision marker nodes", async () => {
-    const admin = await createAccountPerson("S2 Revision Segment Admin");
-    const owner = await createAccountPerson("S2 Revision Segment Owner");
-    const reviewer = await createAccountPerson("S2 Revision Segment Reviewer");
-    await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
-    const fixture = await createDraft({ creator: admin, owner, reviewer });
-    await activateTask(actor(owner), {
-      taskId: fixture.taskId,
-      expectedLockVersion: 0,
-    });
-    const task = await currentTask(fixture.taskId);
-    const current = await currentPlan(fixture.taskId);
-    const revision = await createRevision(actor(owner), {
-      taskId: fixture.taskId,
-      basePlanVersionId: current.id,
-      baseTaskLockVersion: task.lockVersion,
-      reason: "Segment 禁止关联 Revision",
-      revisionAt: iso(2026, 8, 1),
-      replacementMilestones: [milestoneInput("Revision 后计划", 6)],
-      termination: terminationInput(8),
-      idempotencyKey: `s2-revision-segment-${randomUUID()}`,
-    });
-    await approveRevision(actor(admin), {
-      revisionNodeId: revision.revisionNodeId,
-      comment: "批准以验证 Current Plan 标记关联",
-    });
-    const appliedPlan = await currentPlan(fixture.taskId);
-    const revisionNodeId = appliedPlan.nodes.find(
-      (entry) => entry.node.type === "REVISION",
-    )?.nodeId;
-    if (!revisionNodeId) throw new Error("Current Plan 缺少 Revision 标记");
-
-    const updateBase = await createWorkSegment(actor(owner), {
-      ...segmentCreateInput(owner.person.id, "revision marker update base"),
-      type: "PLANNED",
-    });
-    const relinkBase = await createWorkSegment(actor(owner), {
-      ...segmentCreateInput(owner.person.id, "revision marker relink base", 3),
-      type: "PLANNED",
-    });
-    await prisma.workSegment.updateMany({
-      where: { id: { in: [updateBase.segment.id, relinkBase.segment.id] } },
-      data: { associationNeedsReview: true },
-    });
-    const [updateSegment, relinkSegment] = await Promise.all([
-      prisma.workSegment.findUniqueOrThrow({ where: { id: updateBase.segment.id } }),
-      prisma.workSegment.findUniqueOrThrow({ where: { id: relinkBase.segment.id } }),
-    ]);
-    const cases = [
-      () => createWorkSegment(actor(owner), {
-        ...segmentCreateInput(owner.person.id, "revision marker single", 5),
-        type: "PLANNED",
-        taskId: fixture.taskId,
-        nodeId: revisionNodeId,
-      }),
-      () => batchCreatePlannedSegments(actor(owner), {
-        segments: [{
-          ...segmentCreateInput(owner.person.id, "revision marker batch", 7),
-          taskId: fixture.taskId,
-          nodeId: revisionNodeId,
-        }],
-      }),
-      () => createActualSegment(actor(owner), {
-        ...segmentCreateInput(owner.person.id, "revision marker actual", 9),
-        taskId: fixture.taskId,
-        nodeId: revisionNodeId,
-        actualOutput: "不得关联",
-        completionPercent: 100,
-        sources: [],
-      }),
-      () => updateWorkSegment(actor(owner), {
-        segmentId: updateSegment.id,
-        expectedUpdatedAt: updateSegment.updatedAt,
-        associationIntent: "RELINK",
-        taskId: fixture.taskId,
-        nodeId: revisionNodeId,
-        reason: "不得关联 Revision",
-      }),
-      () => relinkPlannedSegment(actor(owner), {
-        segmentId: relinkSegment.id,
-        expectedUpdatedAt: relinkSegment.updatedAt,
-        taskId: fixture.taskId,
-        nodeId: revisionNodeId,
-        reason: "不得关联 Revision",
-      }),
-    ];
-    for (const invoke of cases) {
-      await expectServiceError(invoke(), "ASSOCIATION_INVALID");
-    }
-    expect(
-      await prisma.workSegment.count({
-        where: { nodeId: revisionNodeId },
-      }),
-    ).toBe(0);
-  });
-
-  test("legacy Active chronology remains readable and closable but cannot enter a non-strict Revision target", async () => {
+   test("legacy Active chronology remains readable and closable but cannot enter a non-strict Revision target", async () => {
     const admin = await createAccountPerson("S2 Legacy Repair Admin");
     const owner = await createAccountPerson("S2 Legacy Repair Owner");
     const reviewer = await createAccountPerson("S2 Legacy Repair Reviewer");
@@ -2934,7 +2591,6 @@ async function createTag(accountId: string, prefix: string) {
 
 type SegmentReferenceFixture = {
   taskId: string;
-  nodeId: string;
   personId: string;
   accountId: string;
 };
@@ -2944,7 +2600,6 @@ async function createSegmentReference(
     type: WorkSegmentType;
     status: WorkSegmentStatus;
     deletedAt?: Date;
-    associationNeedsReview?: boolean;
   },
 ) {
   await prisma.workSegment.create({
@@ -2956,47 +2611,7 @@ async function createSegmentReference(
       endAt: new Date("2026-08-02T10:00:00.000Z"),
       content: `S2 reference ${input.type}/${input.status}`,
       taskId: input.taskId,
-      nodeId: input.nodeId,
-      associationNeedsReview: input.associationNeedsReview ?? false,
       deletedAt: input.deletedAt,
-      createdByAccountId: input.accountId,
-    },
-  });
-}
-
-async function createSourceHistoryReference(input: SegmentReferenceFixture) {
-  const planned = await prisma.workSegment.create({
-    data: {
-      personId: input.personId,
-      type: "PLANNED",
-      status: "CANCELLED",
-      startAt: new Date("2026-08-02T09:00:00.000Z"),
-      endAt: new Date("2026-08-02T10:00:00.000Z"),
-      content: "历史 Planned 来源",
-      taskId: input.taskId,
-      nodeId: input.nodeId,
-      createdByAccountId: input.accountId,
-    },
-  });
-  const actual = await prisma.workSegment.create({
-    data: {
-      personId: input.personId,
-      type: "ACTUAL",
-      status: "CONFIRMED",
-      startAt: planned.startAt,
-      endAt: planned.endAt,
-      content: "Actual 历史来源",
-      taskId: input.taskId,
-      nodeId: null,
-      createdByAccountId: input.accountId,
-    },
-  });
-  await prisma.workSegmentSource.create({
-    data: {
-      plannedSegmentId: planned.id,
-      actualSegmentId: actual.id,
-      coveredStartAt: planned.startAt,
-      coveredEndAt: planned.endAt,
       createdByAccountId: input.accountId,
     },
   });
@@ -3287,7 +2902,6 @@ function segmentCreateInput(personId: string, content: string, hour = 1) {
     startAt: new Date(Date.UTC(2026, 7, 20, hour, 0, 0)),
     endAt: new Date(Date.UTC(2026, 7, 20, hour + 1, 0, 0)),
     content,
-    role: "DEVELOPER" as const,
     priority: "MEDIUM" as const,
     tagIds: [],
   };
@@ -3432,65 +3046,6 @@ async function runBehindTaskLockBarrier(
   return runTaskLockBarrier(taskId, operations, false);
 }
 
-async function runCancellationBeforeRevisionBehindSegmentLock(
-  segmentId: string,
-  cancelOperation: () => Promise<unknown>,
-  revisionOperation: () => Promise<unknown>,
-) {
-  let locker: Client | undefined;
-  let observer: Client | undefined;
-  let transactionMayBeOpen = false;
-  let released = false;
-  const pending: Promise<unknown>[] = [];
-  let pendingSettlement: Promise<PromiseSettledResult<unknown>[]> | undefined;
-  let pendingBackendPids: number[] = [];
-  let pendingHandled = false;
-  let result: PromiseSettledResult<unknown>[] | undefined;
-  let primaryError: unknown;
-  let hasPrimaryError = false;
-  try {
-    locker = await connectDatabaseClient("s2-revision-segment-locker");
-    observer = await connectDatabaseClient("s2-revision-segment-observer");
-    transactionMayBeOpen = true;
-    const lockerPid = await lockWorkSegmentRow(locker, segmentId);
-
-    const cancellation = startBarrierOperations([cancelOperation]).pending[0];
-    if (!cancellation) throw new Error("Segment 取消操作未启动");
-    pending.push(cancellation);
-    pendingSettlement = Promise.allSettled(pending);
-    await waitForTaskLockBlockers(observer, lockerPid, 1);
-
-    const revision = startBarrierOperations([revisionOperation]).pending[0];
-    if (!revision) throw new Error("Revision 生效操作未启动");
-    pending.push(revision);
-    pendingSettlement = Promise.allSettled(pending);
-    pendingBackendPids = await waitForTaskLockBlockers(observer, lockerPid, 2);
-    if (new Set(pendingBackendPids).size < 2) {
-      throw new Error("取消与 Revision 未使用独立 PostgreSQL backend");
-    }
-
-    await locker.query("COMMIT");
-    released = true;
-    result = await pendingSettlement;
-    pendingHandled = true;
-  } catch (error) {
-    primaryError = error;
-    hasPrimaryError = true;
-  }
-  const cleanupErrors = await cleanupBarrierResources({
-    locker,
-    observer,
-    rollbackRequired: Boolean(locker && transactionMayBeOpen && !released),
-    pendingSettlement,
-    pendingBackendPids,
-    pendingHandled,
-    primaryError,
-  });
-  throwBarrierErrors(hasPrimaryError, primaryError, cleanupErrors);
-  if (!result) throw new Error("取消与 Revision barrier 未返回结果");
-  return result;
-}
-
 async function runTaskAssociationLockChain(
   taskId: string,
   firstOperation: () => Promise<unknown>,
@@ -3572,20 +3127,6 @@ async function lockTaskRow(client: Client, taskId: string) {
   await client.query('SELECT "id" FROM "Task" WHERE "id" = $1 FOR UPDATE', [
     taskId,
   ]);
-  return pid;
-}
-
-async function lockWorkSegmentRow(client: Client, segmentId: string) {
-  await client.query("BEGIN");
-  const identity = await client.query<{ pid: number }>(
-    "SELECT pg_backend_pid() AS pid",
-  );
-  const pid = identity.rows[0]?.pid;
-  if (!pid) throw new Error("无法取得 WorkSegment locker backend pid");
-  await client.query(
-    'SELECT "id" FROM "WorkSegment" WHERE "id" = $1 FOR UPDATE',
-    [segmentId],
-  );
   return pid;
 }
 

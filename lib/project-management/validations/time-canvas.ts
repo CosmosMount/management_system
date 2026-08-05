@@ -179,7 +179,6 @@ export const getTimeCanvasDataInputSchema = z
     personIds: idListSchema("Person"),
     taskIds: idListSchema("Task"),
     tagIds: idListSchema("Tag"),
-    nodeIds: idListSchema("Node", false),
     types: z.array(z.enum(workSegmentTypeValues)).optional().default([]),
     statuses: z.array(z.enum(workSegmentStatusValues)).optional().default([]),
     groupBy: z.enum(timeCanvasGroupByValues),

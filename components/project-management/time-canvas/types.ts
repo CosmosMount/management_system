@@ -64,7 +64,6 @@ export type TimeCanvasSegmentPermissions = {
   canMerge: boolean;
   canCancel: boolean;
   canConfirm: boolean;
-  canRelink: boolean;
   canSoftDelete: boolean;
 };
 
@@ -73,14 +72,12 @@ export type TimeCanvasSegment = {
   rowId: string;
   personId: string;
   taskId: string | null;
-  nodeId: string | null;
   type: "PLANNED" | "ACTUAL" | "BUSY";
   status: string;
   startMs: number;
   endMs: number;
   title: string;
   priority: string | null;
-  associationNeedsReview: boolean;
   visibility: "FULL" | "BUSY_ONLY";
   permissions: TimeCanvasSegmentPermissions;
   versionToken: string | null;
@@ -149,6 +146,7 @@ export type TimeCanvasAnchorMoveResolution = Pick<
 export type TimeCanvasInteractionOptions = {
   enableBrushCreate?: boolean;
   enableAnchorCreate?: boolean;
+  creationRange?: TimeCanvasBrushRequest | null;
   selectedSegmentIds?: ReadonlySet<string>;
   onBrushCreate?: (request: TimeCanvasBrushRequest) => void;
   onAnchorCreate?: (request: TimeCanvasAnchorCreateRequest) => void;

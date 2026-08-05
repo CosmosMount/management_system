@@ -11,7 +11,6 @@ const kindLabels: Record<ActionInboxKind, string> = {
   MILESTONE_REVIEW: "Milestone 验收",
   REVISION_REVIEW: "Revision 审核",
   TERMINATION: "Termination",
-  ASSOCIATION_REVIEW: "关联复核",
 };
 
 const severityLabels = {

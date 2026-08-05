@@ -50,7 +50,6 @@ test.describe("project management S9 scale and performance", () => {
           personIds: fixture.personIds,
           taskIds: [],
           tagIds: [],
-          nodeIds: [],
           types: [],
           statuses: [],
           groupBy: "PERSON",
@@ -231,7 +230,7 @@ async function createScaleFixture() {
   await prisma.$executeRaw`
     INSERT INTO "WorkSegment" (
       id, "personId", type, status, "startAt", "endAt", content,
-      role, priority, "taskId", "createdByAccountId", "createdAt", "updatedAt"
+      priority, "taskId", "createdByAccountId", "createdAt", "updatedAt"
     )
     SELECT
       '84000000-0000-4000-8000-' || lpad(g::text, 12, '0'),
@@ -240,7 +239,7 @@ async function createScaleFixture() {
       '2026-08-01T00:00:00Z'::timestamptz + (floor((g - 1) / 50) * interval '5 hours'),
       '2026-08-01T00:00:00Z'::timestamptz + (floor((g - 1) / 50) * interval '5 hours') + interval '90 minutes',
       'S9 Scale Segment ' || g,
-      'DEVELOPER'::"WorkSegmentRole", 'MEDIUM'::"TaskPriority",
+      'MEDIUM'::"TaskPriority",
       '81000000-0000-4000-8000-' || lpad((((g - 1) % 50) + 1)::text, 12, '0'),
       ${accountId}, now(), now()
     FROM generate_series(1, 100000) AS g

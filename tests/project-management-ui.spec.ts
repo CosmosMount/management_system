@@ -1505,12 +1505,34 @@ test.describe("project management P4/P6 UI integration", () => {
       if (!emptyScrollBox || !emptyRowBox) throw new Error("未找到空人员行拖选坐标");
       const brushStartX = emptyScrollBox.x + Math.min(emptyScrollBox.width - 140, 760);
       const brushY = emptyRowBox.y + emptyRowBox.height - 8;
-      await page.mouse.move(brushStartX, brushY);
+      await page.mouse.click(brushStartX, brushY);
+      const clickCreate = page.getByRole("form", { name: "投入快速创建" });
+      await expect(clickCreate).toBeVisible();
+      const minimumRange = page.getByTestId("time-canvas-creation-range");
+      await expect(minimumRange).toBeVisible();
+      expect((await minimumRange.boundingBox())?.width ?? 0).toBeGreaterThan(0);
+      await clickCreate.getByRole("button", { name: "取消", exact: true }).click();
+      await expect(minimumRange).toHaveCount(0);
+      await emptyRow.scrollIntoViewIfNeeded();
+      const dragScrollBox = await emptyCanvasScroll.boundingBox();
+      const dragRowBox = await emptyRow.boundingBox();
+      if (!dragScrollBox || !dragRowBox) {
+        throw new Error("取消快速创建后未找到空人员行拖选坐标");
+      }
+      const dragStartX =
+        dragScrollBox.x + Math.min(dragScrollBox.width - 140, 760);
+      const dragY = dragRowBox.y + dragRowBox.height - 8;
+      await page.mouse.move(dragStartX, dragY);
       await page.mouse.down();
-      await page.mouse.move(brushStartX + 72, brushY, { steps: 4 });
+      await page.mouse.move(dragStartX + 72, dragY, { steps: 4 });
       await page.mouse.up();
       const brushCreate = page.getByRole("form", { name: "投入快速创建" });
       await expect(brushCreate).toBeVisible();
+      await expect(page.getByTestId("time-canvas-creation-range")).toBeVisible();
+      await expect(page.getByTestId("time-canvas-creation-range")).toHaveCSS(
+        "border-top-style",
+        "dashed",
+      );
       await expect(brushCreate.getByLabel("投入比例")).toHaveCount(0);
       await brushCreate.getByLabel("Task", { exact: true }).fill(fixture.taskTitle);
       await page
@@ -1519,13 +1541,14 @@ test.describe("project management P4/P6 UI integration", () => {
       await brushCreate.getByLabel("内容").fill(fixture.brushCreateContent);
       await brushCreate.getByRole("button", { name: "创建", exact: true }).click();
       await expect(page.getByText("已创建投入记录")).toBeVisible();
+      await expect(page.getByTestId("time-canvas-creation-range")).toHaveCount(0);
       await expect.poll(() => prisma.workSegment.findFirst({
         where: {
           personId: fixture.member.person.id,
           content: fixture.brushCreateContent,
         },
-        select: { taskId: true, nodeId: true },
-      })).toEqual({ taskId: fixture.taskId, nodeId: fixture.activeNodeId });
+        select: { taskId: true },
+      })).toEqual({ taskId: fixture.taskId });
       await page.goto(
         `/progress/resources?from=2026-08-10&to=2026-08-12&people=${fixture.member.person.id},${fixture.owner.person.id}&zoom=hour`,
       );
@@ -1669,27 +1692,23 @@ test.describe("project management P4/P6 UI integration", () => {
       const movedInspector = page.getByTestId("segment-inspector");
       await expect(movedInspector.getByRole("heading", { name: "P6 UI 制造 stale 后仍可重试" })).toBeVisible();
       await expect(movedInspector.getByLabel("投入比例")).toHaveCount(0);
-      await movedInspector.getByLabel("职责", { exact: true }).selectOption("CUSTOM");
-      await movedInspector.getByLabel("自定义职责").fill("跨域协调");
+      await expect(movedInspector.getByLabel("职责", { exact: true })).toHaveCount(0);
+      await expect(movedInspector.getByLabel("自定义职责")).toHaveCount(0);
       await movedInspector.getByLabel("内容").fill("P6 UI Inspector 更新不覆盖画布时间");
       await movedInspector.getByRole("button", { name: "保存精确修改" }).click();
       await expect(page.getByText("已更新投入详情")).toBeVisible();
       await expect.poll(async () => {
         const row = await prisma.workSegment.findUniqueOrThrow({
           where: { id: fixture.movableSegmentId },
-          select: { startAt: true, endAt: true, role: true, customRole: true },
+          select: { startAt: true, endAt: true },
         });
         return {
           startAt: row.startAt.toISOString(),
           endAt: row.endAt.toISOString(),
-          role: row.role,
-          customRole: row.customRole,
         };
       }).toEqual({
         startAt: expectedRangeAfterTransforms.startAt.toISOString(),
         endAt: expectedRangeAfterTransforms.endAt.toISOString(),
-        role: "CUSTOM",
-        customRole: "跨域协调",
       });
       await page.waitForTimeout(800);
       await canvasScroll.evaluate((element) => {
@@ -2942,8 +2961,9 @@ test.describe("project management P4/P6 UI integration", () => {
     await expect(page).toHaveURL(
       `/progress/tasks/${fixture.taskId}?tab=revisions`,
     );
-    await page.getByRole("button", { name: "查看三层 Diff" }).click();
-    await expect(page.getByRole("heading", { name: "结构 / 字段 / 资源 Diff" })).toBeVisible();
+    await page.getByRole("button", { name: "查看 Diff" }).click();
+    await expect(page.getByRole("heading", { name: "结构 / 字段 Diff" })).toBeVisible();
+    await expect(page.getByText(/需关联复核/)).toHaveCount(0);
 
     await loginAsTestUser(context, baseURL, {
       openId: fixture.admin.openId,
@@ -3172,16 +3192,9 @@ async function createUiFixture() {
     termination: terminationInput(5),
     idempotencyKey: `p6-ui-task-${randomUUID()}`,
   });
-  const activated = await activateTask(actor(owner), {
+  await activateTask(actor(owner), {
     taskId: draft.taskId,
     expectedLockVersion: draft.lockVersion,
-  });
-  const activeNode = await prisma.planVersionNode.findFirstOrThrow({
-    where: {
-      planVersionId: activated.currentPlanVersionId,
-      node: { type: "MILESTONE", status: "ACTIVE" },
-    },
-    select: { nodeId: true },
   });
   const confirmable = await createWorkSegment(actor(member), {
     personId: member.person.id,
@@ -3189,10 +3202,8 @@ async function createUiFixture() {
     startAt: atHour(9),
     endAt: atHour(10),
     content: "P6 UI 可确认计划",
-    role: "DEVELOPER",
     priority: "MEDIUM",
     taskId: draft.taskId,
-    nodeId: activeNode.nodeId,
     tagIds: [],
   });
   const movable = await createWorkSegment(actor(member), {
@@ -3201,10 +3212,8 @@ async function createUiFixture() {
     startAt: atHour(10),
     endAt: atHour(11),
     content: "P6 UI 重叠计划 A",
-    role: "DEVELOPER",
     priority: "MEDIUM",
     taskId: draft.taskId,
-    nodeId: activeNode.nodeId,
     tagIds: [],
   });
   await createWorkSegment(actor(owner), {
@@ -3213,10 +3222,8 @@ async function createUiFixture() {
     startAt: atHour(8),
     endAt: atHour(9),
     content: "P6 UI 跨行目标人员安排",
-    role: "LEAD",
     priority: "LOW",
     taskId: draft.taskId,
-    nodeId: activeNode.nodeId,
     tagIds: [],
   });
   await createWorkSegment(actor(member), {
@@ -3225,10 +3232,8 @@ async function createUiFixture() {
     startAt: atHour(10.5),
     endAt: atHour(11.5),
     content: "P6 UI 重叠计划 B",
-    role: "DEVELOPER",
     priority: "MEDIUM",
     taskId: draft.taskId,
-    nodeId: activeNode.nodeId,
     tagIds: [],
   });
   const inactiveHistorySegment = await createWorkSegment(
@@ -3241,10 +3246,8 @@ async function createUiFixture() {
       content: "P6 UI 停用人员历史投入",
       actualOutput: "历史产出",
       completionPercent: 100,
-      role: "SUPPORT",
       priority: "LOW",
       taskId: draft.taskId,
-      nodeId: activeNode.nodeId,
       tagIds: [],
     },
   );
@@ -3258,10 +3261,8 @@ async function createUiFixture() {
     startAt: atHour(12),
     endAt: atHour(13),
     content: "P6 UI 批量取消 A",
-    role: "SUPPORT",
     priority: "LOW",
     taskId: draft.taskId,
-    nodeId: activeNode.nodeId,
     tagIds: [],
   });
   const batchCancelableB = await createWorkSegment(actor(member), {
@@ -3270,10 +3271,8 @@ async function createUiFixture() {
     startAt: atHour(13),
     endAt: atHour(14),
     content: "P6 UI 批量取消 B",
-    role: "SUPPORT",
     priority: "LOW",
     taskId: draft.taskId,
-    nodeId: activeNode.nodeId,
     tagIds: [],
   });
   const notification = await prisma.inAppNotification.create({
@@ -3300,7 +3299,6 @@ async function createUiFixture() {
     inactiveHistory,
     taskId: draft.taskId,
     taskTitle,
-    activeNodeId: activeNode.nodeId,
     confirmableSegmentId: confirmable.segment.id,
     movableSegmentId: movable.segment.id,
     inactiveHistorySegmentId: inactiveHistorySegment.segment.id,

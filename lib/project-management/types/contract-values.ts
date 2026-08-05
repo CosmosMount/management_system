@@ -8,17 +8,6 @@ export const workSegmentStatusValues = [
   "CANCELLED",
 ] as const;
 
-export const workSegmentRoleValues = [
-  "OWNER",
-  "LEAD",
-  "DEVELOPER",
-  "DESIGNER",
-  "REVIEWER",
-  "SUPPORT",
-  "OBSERVER",
-  "CUSTOM",
-] as const;
-
 export const taskPriorityValues = [
   "CRITICAL",
   "HIGH",

@@ -6,7 +6,6 @@ import {
   TaskPriority,
   TaskStatus,
   TerminationOutcome,
-  WorkSegmentRole,
   WorkSegmentStatus,
   WorkSegmentType,
 } from "@prisma/client";
@@ -38,7 +37,6 @@ import {
   terminationOutcomeValues,
   timeCanvasGroupByValues,
   timeCanvasScopeKindValues,
-  workSegmentRoleValues,
   workSegmentStatusValues,
   workSegmentTypeValues,
 } from "../lib/project-management/types/contract-values";
@@ -470,7 +468,6 @@ test("S2 contract values are a browser-safe leaf aligned with Prisma enums", asy
   expect(terminationOutcomeValues).toEqual(Object.values(TerminationOutcome));
   expect(workSegmentTypeValues).toEqual(Object.values(WorkSegmentType));
   expect(workSegmentStatusValues).toEqual(Object.values(WorkSegmentStatus));
-  expect(workSegmentRoleValues).toEqual(Object.values(WorkSegmentRole));
   expect(timeCanvasScopeKindValues).toEqual([
     "TASK_SCOPED",
     "PERSONAL",
@@ -1013,9 +1010,9 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
       rangeStart,
       rangeEnd,
       groupBy: "PERSON",
-      nodeIds: Array.from({ length: 51 }, () => randomUUID()),
+      nodeIds: [randomUUID()],
     }).success,
-  ).toBe(true);
+  ).toBe(false);
   expect(
     searchPeopleInputSchema.parse({ purpose: "VISIBLE" }).limit,
   ).toBe(25);
@@ -1088,15 +1085,11 @@ test("S2 canvas output schemas retain pagination, grouping and privacy invariant
     startAt: "2026-08-01T09:00:00.000Z",
     endAt: "2026-08-01T10:00:00.000Z",
     content: "可见投入",
-    role: "OWNER",
-    customRole: null,
     priority: "HIGH",
     expectedOutput: "",
     actualOutput: "",
     completionPercent: null,
     taskId: segmentTaskId,
-    nodeId: randomUUID(),
-    associationNeedsReview: false,
     tags: [],
     permissions: segmentPermissions(),
     updatedAt,
@@ -2074,7 +2067,6 @@ function segmentPermissions() {
     canMerge: true,
     canCancel: true,
     canConfirm: true,
-    canRelink: true,
     canSoftDelete: true,
   };
 }

@@ -21,7 +21,6 @@ import {
   mergePlannedSegments,
   movePlannedSegments,
   partiallyConfirmSegment,
-  relinkPlannedSegment,
   softDeleteActualSegment,
   splitPlannedSegment,
   updateWorkSegment,
@@ -52,7 +51,6 @@ import {
 } from "@/lib/project-management/date-time";
 import {
   taskPriorityLabels,
-  workSegmentRoleLabels,
   workSegmentStatusLabels,
   workSegmentTypeLabels,
 } from "@/lib/project-management/labels";
@@ -65,7 +63,12 @@ import { cn } from "@/lib/utils";
 
 type TaskOption = TaskOptionPage["items"][number];
 type Notice = { kind: "success" | "error" | "info"; message: string } | null;
-type CreateDraft = { personId: string; startMs: number; endMs: number };
+type CreateDraft = {
+  rowId: string;
+  personId: string;
+  startMs: number;
+  endMs: number;
+};
 type SegmentChange = {
   id: string;
   action: string;
@@ -153,6 +156,13 @@ export function ResourcePlannerCanvasClient({
     )?.sourceId ??
     model.rows.find((row) => row.kind === "PERSON" && row.editable)?.sourceId ??
     defaultPersonId;
+  const quickCreateRowId =
+    model.rows.find(
+      (row) =>
+        row.kind === "PERSON" &&
+        row.editable &&
+        row.sourceId === quickCreatePersonId,
+    )?.id ?? `person:${quickCreatePersonId}`;
   const lockedTaskId = !allowIndependent && defaultTaskId
     ? defaultTaskId
     : null;
@@ -248,6 +258,7 @@ export function ResourcePlannerCanvasClient({
       return;
     }
     setCreateDraft({
+      rowId: request.rowId,
       personId: request.sourceId,
       startMs: request.startMs,
       endMs: request.endMs,
@@ -335,6 +346,7 @@ export function ResourcePlannerCanvasClient({
             size="sm"
             onClick={() =>
               setCreateDraft({
+                rowId: quickCreateRowId,
                 personId: quickCreatePersonId,
                 startMs: model.range.startMs,
                 endMs: Math.min(model.range.endMs, model.range.startMs + 60 * 60 * 1_000),
@@ -477,6 +489,15 @@ export function ResourcePlannerCanvasClient({
             display={{ showActual: true, showBusy: true, showInspector: false }}
             interaction={{
               enableBrushCreate: !isPending && canCreateSegment,
+              creationRange: createDraft
+                ? {
+                    rowId: createDraft.rowId,
+                    rowKind: "PERSON",
+                    sourceId: createDraft.personId,
+                    startMs: createDraft.startMs,
+                    endMs: createDraft.endMs,
+                  }
+                : null,
               selectedSegmentIds: selectedIds,
               onBrushCreate: handleBrush,
               onSegmentTransform: isPending ? undefined : handleTransform,
@@ -503,8 +524,6 @@ export function ResourcePlannerCanvasClient({
           detailState={detailState}
           detailError={detailError}
           changes={changes}
-          taskOptions={taskOptions}
-          lockedTaskId={lockedTaskId}
           disabled={isPending}
           onRun={runMutation}
           onToggleSelected={toggleSegmentSelection}
@@ -512,8 +531,9 @@ export function ResourcePlannerCanvasClient({
         />
       </div>
 
-      {canCreateSegment && createDraft && (
+      {createDraft && (
         <QuickCreatePanel
+          key={`${createDraft.rowId}:${createDraft.startMs}:${createDraft.endMs}`}
           draft={createDraft}
           peopleOptions={peopleOptions}
           peopleScope={peopleScope}
@@ -557,11 +577,6 @@ function QuickCreatePanel({
 }) {
   const [personId, setPersonId] = useState<string | null>(draft.personId || null);
   const [taskId, setTaskId] = useState<string | null>(defaultTaskId || null);
-  const [taskNodeId, setTaskNodeId] = useState<string | null>(
-    () =>
-      taskOptions.find((option) => option.id === defaultTaskId)?.activeMilestone
-        ?.nodeId ?? null,
-  );
   const lockedTask = lockedTaskId
     ? taskOptions.find((option) => option.id === lockedTaskId) ?? null
     : null;
@@ -579,11 +594,8 @@ function QuickCreatePanel({
           startAt: shanghaiDateTimeLocalToIso(String(form.get("startAt") ?? "")),
           endAt: shanghaiDateTimeLocalToIso(String(form.get("endAt") ?? "")),
           content: String(form.get("content") ?? ""),
-          role: String(form.get("role") ?? "DEVELOPER"),
-          customRole: String(form.get("customRole") ?? ""),
           priority: String(form.get("priority") ?? "MEDIUM"),
           taskId: submittedTaskId,
-          nodeId: submittedTaskId ? taskNodeId : null,
           tagIds: [],
         };
         onRun(() =>
@@ -645,9 +657,6 @@ function QuickCreatePanel({
             name="taskId"
             value={taskId}
             onValueChange={setTaskId}
-            onOptionChange={(option) =>
-              setTaskNodeId(option?.activeMilestone?.nodeId ?? null)
-            }
             initialOptions={taskOptions}
             statuses={["ACTIVE"]}
             allowIndependent={allowIndependent}
@@ -657,14 +666,6 @@ function QuickCreatePanel({
             placeholder="按标题、描述或拼音首字母搜索"
           />
         )}
-      </Field>
-      <Field label="职责" htmlFor="quick-role">
-        <select id="quick-role" name="role" className={selectClass} defaultValue="DEVELOPER">
-          {Object.entries(workSegmentRoleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-        </select>
-      </Field>
-      <Field label="自定义职责" htmlFor="quick-custom-role">
-        <Input id="quick-custom-role" name="customRole" maxLength={100} placeholder="选择“自定义”时必填" />
       </Field>
       <Field label="优先级" htmlFor="quick-priority">
         <select id="quick-priority" name="priority" className={selectClass} defaultValue="MEDIUM">
@@ -685,8 +686,6 @@ function SegmentInspector({
   detailState,
   detailError,
   changes,
-  taskOptions,
-  lockedTaskId,
   disabled,
   onRun,
   onToggleSelected,
@@ -697,8 +696,6 @@ function SegmentInspector({
   detailState: "IDLE" | "LOADING" | "READY" | "ERROR";
   detailError: string;
   changes: SegmentChange[];
-  taskOptions: TaskOption[];
-  lockedTaskId: string | null;
   disabled: boolean;
   onRun: (
     action: () => Promise<ProjectManagementActionResult<unknown>>,
@@ -708,17 +705,6 @@ function SegmentInspector({
   onToggleSelected: (segmentId: string) => void;
   selected: boolean;
 }) {
-  const [relinkTaskId, setRelinkTaskId] = useState<string | null>(
-    canvasSegment?.taskId ?? null,
-  );
-  const [relinkNodeId, setRelinkNodeId] = useState<string | null>(
-    () =>
-      taskOptions.find((option) => option.id === canvasSegment?.taskId)
-        ?.activeMilestone?.nodeId ?? null,
-  );
-  const lockedTask = lockedTaskId
-    ? taskOptions.find((option) => option.id === lockedTaskId) ?? null
-    : null;
   if (!canvasSegment) {
     return <aside className="rounded-xl border border-dashed border-border p-5 text-sm text-muted-foreground">选择画布中的投入查看 Inspector。</aside>;
   }
@@ -748,7 +734,7 @@ function SegmentInspector({
           <Badge variant="secondary">{workSegmentStatusLabels[detail.status]}</Badge>
         </div>
         <p className="mt-2 text-sm text-muted-foreground">{detail.personName} · {formatRange(Date.parse(detail.startAt), Date.parse(detail.endAt))}</p>
-        <p className="mt-1 text-sm text-muted-foreground">{detail.task?.title ?? "独立投入"}{detail.associationNeedsReview ? " · 关联需复核" : ""}</p>
+        <p className="mt-1 text-sm text-muted-foreground">{detail.task?.title ?? "独立投入"}</p>
         {plannedEditable && (
           <Button type="button" size="sm" variant="outline" className="mt-3" onClick={() => onToggleSelected(detail.id)}>
             {selected ? "移出多选" : "加入多选"}
@@ -771,8 +757,6 @@ function SegmentInspector({
                 startAt: shanghaiDateTimeLocalToIso(String(form.get("startAt") ?? "")),
                 endAt: shanghaiDateTimeLocalToIso(String(form.get("endAt") ?? "")),
                 content: String(form.get("content") ?? ""),
-                role: String(form.get("role") ?? detail.role),
-                customRole: String(form.get("customRole") ?? ""),
                 priority: String(form.get("priority") ?? detail.priority),
                 expectedOutput: String(form.get("expectedOutput") ?? ""),
                 actualOutput: String(form.get("actualOutput") ?? ""),
@@ -788,8 +772,6 @@ function SegmentInspector({
           <div className="grid gap-2">
             <Field label="完成比例" htmlFor="inspect-completion"><Input id="inspect-completion" name="completionPercent" type="number" min="0" max="100" disabled={detail.type !== "ACTUAL"} defaultValue={detail.completionPercent ?? ""} /></Field>
           </div>
-          <Field label="职责" htmlFor="inspect-role"><select id="inspect-role" name="role" className={selectClass} defaultValue={detail.role}>{Object.entries(workSegmentRoleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>
-          <Field label="自定义职责" htmlFor="inspect-custom-role"><Input id="inspect-custom-role" name="customRole" defaultValue={detail.customRole} maxLength={100} placeholder="选择“自定义”时必填" /></Field>
           <Field label="优先级" htmlFor="inspect-priority"><select id="inspect-priority" name="priority" className={selectClass} defaultValue={detail.priority}>{Object.entries(taskPriorityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>
           <Field label="预期输出" htmlFor="inspect-expected"><Textarea id="inspect-expected" name="expectedOutput" defaultValue={detail.expectedOutput} /></Field>
           <Field label="实际输出" htmlFor="inspect-actual"><Textarea id="inspect-actual" name="actualOutput" defaultValue={detail.actualOutput} /></Field>
@@ -843,51 +825,6 @@ function SegmentInspector({
         </form>
       )}
 
-      {detail.associationNeedsReview && canvasSegment.permissions.canRelink && (
-        <form className="grid gap-2 border-t border-border pt-4" aria-label="重新关联" onSubmit={(event) => {
-          event.preventDefault();
-          const form = new FormData(event.currentTarget);
-          const taskId = String(form.get("taskId") ?? "") || null;
-          onRun(() => relinkPlannedSegment({
-            segmentId: detail.id,
-            expectedUpdatedAt: detail.updatedAt,
-            taskId,
-            nodeId: taskId ? relinkNodeId : null,
-            reason: String(form.get("reason") ?? ""),
-          }), "已重新确认关联");
-        }}>
-          <p className="text-sm font-medium">重新关联</p>
-          {lockedTaskId ? (
-            <>
-              <Input
-                aria-label="新的 Task"
-                value={lockedTask?.title ?? detail.task?.title ?? "当前 Task"}
-                readOnly
-                aria-readonly="true"
-              />
-              <input type="hidden" name="taskId" value={lockedTaskId} />
-            </>
-          ) : (
-            <TaskSelect
-              ariaLabel="新的 Task"
-              name="taskId"
-              value={relinkTaskId}
-              onValueChange={setRelinkTaskId}
-              onOptionChange={(option) =>
-                setRelinkNodeId(option?.activeMilestone?.nodeId ?? null)
-              }
-              initialOptions={taskOptions}
-              statuses={["ACTIVE"]}
-              allowIndependent
-              disabled={disabled}
-              placeholder="按标题、描述或拼音首字母搜索"
-            />
-          )}
-          <Input name="reason" aria-label="重关联原因" defaultValue="Inspector 重新关联" required />
-          <Button type="submit" variant="outline" disabled={disabled}>确认关联</Button>
-        </form>
-      )}
-
       {plannedEditable && canvasSegment.permissions.canCancel && (
         <ReasonAction label="取消计划" destructive disabled={disabled} onSubmit={(reason) => onRun(() => cancelPlannedSegment({ segmentId: detail.id, expectedUpdatedAt: detail.updatedAt, reason }), "已取消计划")} />
       )}
@@ -899,7 +836,6 @@ function SegmentInspector({
         <h3 className="text-sm font-semibold">来源与变更历史</h3>
         <p className="mt-2 text-xs text-muted-foreground">
           关联对象：{detail.task?.title ?? "独立投入"}
-          {detail.node ? ` · ${detail.node.type} / ${detail.node.status}` : " · 未关联计划节点"}
         </p>
         {detail.plannedSources.length > 0 && (
           <div className="mt-2 text-xs">

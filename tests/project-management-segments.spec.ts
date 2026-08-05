@@ -19,7 +19,6 @@ import {
   mergePlannedSegments,
   movePlannedSegments,
   partiallyConfirmSegment,
-  relinkPlannedSegment,
   scanSegmentTransitions,
   softDeleteActualSegment,
   splitPlannedSegment,
@@ -54,13 +53,11 @@ test.describe("project management P5 work segment services", () => {
       ...plannedInput(fixture.member.person.id, 9, 11),
       content: "允许重叠 A",
       taskId: fixture.taskId,
-      nodeId: fixture.activeNodeId,
     });
     const second = await createWorkSegment(actor(fixture.member), {
       ...plannedInput(fixture.member.person.id, 10, 12),
       content: "允许重叠 B",
       taskId: fixture.taskId,
-      nodeId: fixture.activeNodeId,
     });
 
     expect(
@@ -112,51 +109,19 @@ test.describe("project management P5 work segment services", () => {
     const selfSegment = await createWorkSegment(actor(fixture.member), {
       ...plannedInput(fixture.member.person.id, 9, 10),
       taskId: fixture.taskId,
-      nodeId: fixture.activeNodeId,
     });
     expect(selfSegment.segment.status).toBe("PLANNED");
 
     const managerSegment = await createWorkSegment(actor(fixture.resourceManager), {
       ...plannedInput(fixture.member.person.id, 10, 11),
       taskId: fixture.taskId,
-      nodeId: fixture.activeNodeId,
     });
     expect(managerSegment.segment.personId).toBe(fixture.member.person.id);
-
-    const otherScope = await createActivatedFixture({
-      team: "工程",
-      techGroup: "机械",
-      extraMembers: [{ personId: fixture.resourceManager.person.id, role: "PARTICIPANT" }],
-    });
-    const relinkCandidate = await createWorkSegment(actor(fixture.resourceManager), {
-      ...plannedInput(fixture.member.person.id, 13, 14),
-      taskId: fixture.taskId,
-      nodeId: fixture.activeNodeId,
-    });
-    await prisma.workSegment.update({
-      where: { id: relinkCandidate.segment.id },
-      data: { associationNeedsReview: true },
-    });
-    const relinkCandidateVersion = await prisma.workSegment.findUniqueOrThrow({
-      where: { id: relinkCandidate.segment.id },
-      select: { updatedAt: true },
-    });
-    await expectServiceError(
-      relinkPlannedSegment(actor(fixture.resourceManager), {
-        segmentId: relinkCandidate.segment.id,
-        expectedUpdatedAt: relinkCandidateVersion.updatedAt,
-        taskId: otherScope.taskId,
-        nodeId: null,
-        reason: "目标 Task 缺少投入持有人成员关系",
-      }),
-      "ASSOCIATION_INVALID",
-    );
 
     await expectServiceError(
       createWorkSegment(actor(fixture.outsider), {
         ...plannedInput(fixture.outsider.person.id, 11, 12),
         taskId: fixture.taskId,
-        nodeId: fixture.activeNodeId,
       }),
       "ASSOCIATION_INVALID",
     );
@@ -178,7 +143,6 @@ test.describe("project management P5 work segment services", () => {
         endAt: atHour(16),
         content: "损坏的非成员关联投入",
         taskId: fixture.taskId,
-        nodeId: fixture.activeNodeId,
         createdByAccountId: fixture.resourceManager.account.id,
       },
     });
@@ -213,12 +177,10 @@ test.describe("project management P5 work segment services", () => {
           {
             ...plannedInput(fixture.member.person.id, 12, 13),
             taskId: fixture.taskId,
-            nodeId: fixture.activeNodeId,
           },
           {
             ...plannedInput(fixture.disabledPerson.id, 13, 14),
             taskId: fixture.taskId,
-            nodeId: fixture.activeNodeId,
           },
         ],
       }),
@@ -248,7 +210,6 @@ test.describe("project management P5 work segment services", () => {
     const created = await createWorkSegment(actor(fixture.member), {
       ...plannedInput(fixture.member.person.id, 9, 10),
       taskId: fixture.taskId,
-      nodeId: fixture.activeNodeId,
     });
     const authoritativeUpdatedAt = new Date(
       new Date(created.segment.updatedAt).getTime() + 1_000,
@@ -387,7 +348,6 @@ test.describe("project management P5 work segment services", () => {
     const planned = await createWorkSegment(actor(fixture.member), {
       ...plannedInput(fixture.member.person.id, 9, 11),
       taskId: fixture.taskId,
-      nodeId: fixture.activeNodeId,
       tagIds: [tag.id],
     });
 
@@ -468,10 +428,8 @@ test.describe("project management P5 work segment services", () => {
       personId: fixture.member.person.id,
       type: "PLANNED" as const,
       content: "跨月连续计划",
-      role: "DEVELOPER" as const,
       priority: "MEDIUM" as const,
       taskId: fixture.taskId,
-      nodeId: fixture.activeNodeId,
       tagIds: [],
     };
     const first = await createWorkSegment(actor(fixture.member), {
@@ -530,10 +488,8 @@ test.describe("project management P5 work segment services", () => {
       personId: fixture.member.person.id,
       type: "PLANNED" as const,
       content: `恰好 31 天计划 ${randomUUID()}`,
-      role: "DEVELOPER" as const,
       priority: "MEDIUM" as const,
       taskId: fixture.taskId,
-      nodeId: fixture.activeNodeId,
       tagIds: [],
     };
     const first = await createWorkSegment(actor(fixture.member), {
@@ -595,7 +551,6 @@ test.describe("project management P5 work segment services", () => {
     const planned = await createWorkSegment(actor(fixture.member), {
       ...plannedInput(fixture.member.person.id, 9, 10),
       taskId: fixture.taskId,
-      nodeId: fixture.activeNodeId,
       expectedOutput: "完成计划产出",
     });
     const confirmed = await confirmPlannedSegment(actor(fixture.member), {
@@ -630,7 +585,6 @@ test.describe("project management P5 work segment services", () => {
     const partialPlan = await createWorkSegment(actor(fixture.member), {
       ...plannedInput(fixture.member.person.id, 11, 13),
       taskId: fixture.taskId,
-      nodeId: fixture.activeNodeId,
     });
     await expectServiceError(
       partiallyConfirmSegment(actor(fixture.member), {
@@ -654,12 +608,10 @@ test.describe("project management P5 work segment services", () => {
     const planA = await createWorkSegment(actor(fixture.member), {
       ...plannedInput(fixture.member.person.id, 14, 15),
       taskId: fixture.taskId,
-      nodeId: fixture.activeNodeId,
     });
     const planB = await createWorkSegment(actor(fixture.member), {
       ...plannedInput(fixture.member.person.id, 15, 16),
       taskId: fixture.taskId,
-      nodeId: fixture.activeNodeId,
     });
     const actualWithSources = await createActualSegment(actor(fixture.member), {
       personId: fixture.member.person.id,
@@ -667,7 +619,6 @@ test.describe("project management P5 work segment services", () => {
       endAt: atHour(16),
       content: "一次实际投入覆盖两条计划",
       taskId: fixture.taskId,
-      nodeId: fixture.activeNodeId,
       sources: [
         {
           plannedSegmentId: planA.segment.id,
@@ -691,7 +642,6 @@ test.describe("project management P5 work segment services", () => {
       ...plannedInput(fixture.member.person.id, 20, 22),
       content: "一条计划由多条实际投入覆盖",
       taskId: fixture.taskId,
-      nodeId: fixture.activeNodeId,
     });
     const firstActual = await createActualSegment(actor(fixture.member), {
       personId: fixture.member.person.id,
@@ -699,7 +649,6 @@ test.describe("project management P5 work segment services", () => {
       endAt: atHour(21),
       content: "上午实际投入",
       taskId: fixture.taskId,
-      nodeId: fixture.activeNodeId,
       sources: [
         {
           plannedSegmentId: onePlanManyActuals.segment.id,
@@ -714,7 +663,6 @@ test.describe("project management P5 work segment services", () => {
       endAt: atHour(22),
       content: "下午实际投入",
       taskId: fixture.taskId,
-      nodeId: fixture.activeNodeId,
       sources: [
         {
           plannedSegmentId: onePlanManyActuals.segment.id,
@@ -769,7 +717,6 @@ test.describe("project management P5 work segment services", () => {
     const sourceLeakPlan = await createWorkSegment(actor(fixture.member), {
       ...plannedInput(fixture.member.person.id, 18, 19),
       taskId: fixture.taskId,
-      nodeId: fixture.activeNodeId,
     });
     await createActualSegment(actor(fixture.member), {
       personId: fixture.member.person.id,
@@ -796,37 +743,62 @@ test.describe("project management P5 work segment services", () => {
     expect(memberView.plannedSources).toHaveLength(1);
   });
 
-  test("Cancel, relink and soft-delete do not advance Task or Milestone state", async () => {
+  test("Actual 创建在来源 Task 并发变化后拒绝使用未锁定的新 Task", async () => {
+    test.setTimeout(90_000);
     const fixture = await createActivatedFixture();
+    const replacementTaskId = await createAdditionalActivatedTask(fixture);
     const planned = await createWorkSegment(actor(fixture.member), {
       ...plannedInput(fixture.member.person.id, 9, 10),
+      content: "并发切换 Task 的 Actual 来源",
       taskId: fixture.taskId,
-      nodeId: fixture.activeNodeId,
     });
-    const nextNode = await nextCurrentMilestone(fixture.taskId, fixture.activeNodeId);
-    await prisma.workSegment.update({
-      where: { id: planned.segment.id },
-      data: { associationNeedsReview: true },
+    const actualContent = `不应创建的 Actual ${randomUUID()}`;
+
+    const outcome = await runSourceTaskSwitchBarrier({
+      sourceSegmentId: planned.segment.id,
+      replacementTaskId,
+      createActual: () =>
+        createActualSegment(actor(fixture.member), {
+          personId: fixture.member.person.id,
+          startAt: atHour(9),
+          endAt: atHour(10),
+          content: actualContent,
+          taskId: fixture.taskId,
+          sources: [
+            {
+              plannedSegmentId: planned.segment.id,
+              coveredStartAt: atHour(9),
+              coveredEndAt: atHour(10),
+            },
+          ],
+        }),
     });
-    const staleForRelink = await prisma.workSegment.findUniqueOrThrow({
-      where: { id: planned.segment.id },
-      select: { updatedAt: true },
-    });
+
+    expect(outcome.status).toBe("rejected");
+    if (outcome.status === "rejected") {
+      expect(toProjectManagementServiceError(outcome.reason)).toMatchObject({
+        code: "STATE_CONFLICT",
+        message: "投入记录关联在并发操作中已变化，请刷新后重试",
+      });
+    }
+    await expect(
+      prisma.workSegment.findUniqueOrThrow({
+        where: { id: planned.segment.id },
+        select: { taskId: true },
+      }),
+    ).resolves.toEqual({ taskId: replacementTaskId });
+    await expect(
+      prisma.workSegment.count({ where: { content: actualContent } }),
+    ).resolves.toBe(0);
+  });
+
+  test("Cancel and soft-delete do not advance Task or Milestone state", async () => {
+    const fixture = await createActivatedFixture();
     const taskBefore = await taskState(fixture.taskId);
-    const relinked = await relinkPlannedSegment(actor(fixture.member), {
-      segmentId: planned.segment.id,
-      expectedUpdatedAt: staleForRelink.updatedAt,
-      taskId: fixture.taskId,
-      nodeId: nextNode.nodeId,
-      reason: "Revision 后人工重关联",
-    });
-    expect(relinked.segment.associationNeedsReview).toBe(false);
-    expect(relinked.segment.nodeId).toBe(nextNode.nodeId);
 
     const cancelledPlan = await createWorkSegment(actor(fixture.member), {
       ...plannedInput(fixture.member.person.id, 10, 11),
       taskId: fixture.taskId,
-      nodeId: fixture.activeNodeId,
     });
     const cancelled = await cancelPlannedSegment(actor(fixture.member), {
       segmentId: cancelledPlan.segment.id,
@@ -841,7 +813,6 @@ test.describe("project management P5 work segment services", () => {
       endAt: atHour(12),
       content: "需要删除的实际投入",
       taskId: fixture.taskId,
-      nodeId: fixture.activeNodeId,
     });
     const deleted = await softDeleteActualSegment(actor(fixture.member), {
       segmentId: actual.segment.id,
@@ -857,12 +828,10 @@ test.describe("project management P5 work segment services", () => {
     const first = await createWorkSegment(actor(fixture.member), {
       ...plannedInput(fixture.member.person.id, 9, 10),
       taskId: fixture.taskId,
-      nodeId: fixture.activeNodeId,
     });
     const second = await createWorkSegment(actor(fixture.member), {
       ...plannedInput(fixture.member.person.id, 10, 11),
       taskId: fixture.taskId,
-      nodeId: fixture.activeNodeId,
     });
     await updateWorkSegment(actor(fixture.member), {
       segmentId: second.segment.id,
@@ -908,7 +877,6 @@ test.describe("project management P5 work segment services", () => {
                 ...plannedInput(fixture.member.person.id, 9, 10),
                 content: "等待 Owner 降级的移动",
                 taskId: fixture.taskId,
-                nodeId: fixture.activeNodeId,
               })
             ).segment
           : (
@@ -918,7 +886,6 @@ test.describe("project management P5 work segment services", () => {
                 endAt: atHour(10),
                 content: "等待 Owner 降级的删除",
                 taskId: fixture.taskId,
-                nodeId: fixture.activeNodeId,
               })
             ).segment;
       const task = await prisma.task.findUniqueOrThrow({
@@ -1011,7 +978,6 @@ test.describe("project management P5 work segment services", () => {
         endAt: new Date("2026-09-15T10:00:00.000Z"),
         content: `百条事务回滚 ${index + 1}`,
         taskId: fixture.taskId,
-        nodeId: fixture.activeNodeId,
       })),
     });
     expect(created.segments).toHaveLength(100);
@@ -1087,7 +1053,6 @@ test.describe("project management P5 work segment services", () => {
         endAt: new Date("2026-10-15T10:00:00.000Z"),
         content: `百条批量取消 ${index + 1}`,
         taskId: fixture.taskId,
-        nodeId: fixture.activeNodeId,
       })),
     });
     const sorted = [...created.segments].sort((left, right) =>
@@ -1141,13 +1106,11 @@ test.describe("project management P5 work segment services", () => {
           ...plannedInput(fixture.member.person.id, 16, 17),
           content: "批量取消成功 A",
           taskId: fixture.taskId,
-          nodeId: fixture.activeNodeId,
         },
         {
           ...plannedInput(fixture.member.person.id, 16, 17),
           content: "批量取消成功 B",
           taskId: fixture.taskId,
-          nodeId: fixture.activeNodeId,
         },
       ],
     });
@@ -1195,7 +1158,6 @@ test.describe("project management P5 work segment services", () => {
         ...plannedInput(fixture.member.person.id, 20 + index, 21 + index),
         content: `批量确认 ${index + 1}`,
         taskId: fixture.taskId,
-        nodeId: fixture.activeNodeId,
       })),
     });
     const stale = created.segments[1];
@@ -1272,7 +1234,6 @@ test.describe("project management P5 work segment services", () => {
           endAt: new Date("2026-10-20T10:00:00.000Z"),
           content: "逆序锁批量 A",
           taskId: fixture.taskId,
-          nodeId: fixture.activeNodeId,
         },
         {
           ...plannedInput(fixture.member.person.id, 10, 11),
@@ -1280,7 +1241,6 @@ test.describe("project management P5 work segment services", () => {
           endAt: new Date("2026-10-20T11:00:00.000Z"),
           content: "逆序锁批量 B",
           taskId: fixture.taskId,
-          nodeId: fixture.activeNodeId,
         },
       ],
     });
@@ -1363,7 +1323,6 @@ test.describe("project management P5 work segment services", () => {
       ...plannedInput(fixture.member.person.id, 9, 10),
       content: "并发完整确认",
       taskId: fixture.taskId,
-      nodeId: fixture.activeNodeId,
     });
     const input = {
       segmentId: planned.segment.id,
@@ -1440,7 +1399,6 @@ test.describe("project management P5 work segment services", () => {
       ...plannedInput(fixture.member.person.id, 11, 13),
       content: "并发部分确认",
       taskId: fixture.taskId,
-      nodeId: fixture.activeNodeId,
     });
     const partialInput = {
       segmentId: partialPlan.segment.id,
@@ -1527,7 +1485,6 @@ test.describe("project management P5 work segment services", () => {
       ...plannedInput(fixture.member.person.id, 14, 15),
       content: "并发取消",
       taskId: fixture.taskId,
-      nodeId: fixture.activeNodeId,
     });
     const cancelInput = {
       segmentId: cancelPlan.segment.id,
@@ -1577,7 +1534,6 @@ test.describe("project management P5 work segment services", () => {
       endAt: atHour(17),
       content: "并发逻辑删除",
       taskId: fixture.taskId,
-      nodeId: fixture.activeNodeId,
     });
     const deleteInput = {
       segmentId: actual.segment.id,
@@ -1630,14 +1586,12 @@ test.describe("project management P5 work segment services", () => {
       startAt: new Date("2025-06-01T09:00:00.000Z"),
       endAt: new Date("2025-06-01T11:00:00.000Z"),
       taskId: fixture.taskId,
-      nodeId: fixture.activeNodeId,
     });
     const duePlan = await createWorkSegment(actor(fixture.member), {
       ...plannedInput(fixture.member.person.id, 7, 8),
       startAt: new Date("2025-06-01T07:00:00.000Z"),
       endAt: new Date("2025-06-01T08:00:00.000Z"),
       taskId: fixture.taskId,
-      nodeId: fixture.activeNodeId,
     });
 
     const result = await scanSegmentTransitions(transitionNow);
@@ -1685,7 +1639,6 @@ test.describe("project management P5 work segment services", () => {
       endAt: new Date("2025-01-01T08:00:00.000Z"),
       content: `并发到期转换 ${randomUUID()}`,
       taskId: fixture.taskId,
-      nodeId: fixture.activeNodeId,
     });
     const eventKey = `pm:segment:confirmation_due:${duePlan.segment.id}:${duePlan.segment.endAt}`;
     const outcomes = await runBehindWorkSegmentLockBarrier(duePlan.segment.id, [
@@ -1772,12 +1725,13 @@ async function createActivatedFixture(
     termination: terminationInput(5),
     idempotencyKey: `p5-segment-task-${randomUUID()}`,
   });
-  const activated = await activateTask(actor(owner), {
+  await activateTask(actor(owner), {
     taskId: draft.taskId,
     expectedLockVersion: draft.lockVersion,
   });
-  const activeNode = await currentActiveMilestone(draft.taskId);
   return {
+    team,
+    techGroup,
     admin,
     owner,
     member,
@@ -1786,9 +1740,34 @@ async function createActivatedFixture(
     resourceManager,
     disabledPerson,
     taskId: draft.taskId,
-    currentPlanVersionId: activated.currentPlanVersionId,
-    activeNodeId: activeNode.nodeId,
   };
+}
+
+async function createAdditionalActivatedTask(
+  fixture: Awaited<ReturnType<typeof createActivatedFixture>>,
+) {
+  const draft = await createTaskDraft(actor(fixture.admin), {
+    title: `P5 Segment Replacement Task ${randomUUID()}`,
+    description: "Actual 来源并发 Task 切换测试",
+    team: fixture.team,
+    techGroup: fixture.techGroup,
+    priority: "HIGH",
+    tagIds: [],
+    plannedStartAt: new Date(Date.UTC(2026, 7, 1, 9, 0, 0)).toISOString(),
+    members: [
+      { personId: fixture.owner.person.id, role: "OWNER" },
+      { personId: fixture.member.person.id, role: "PARTICIPANT" },
+      { personId: fixture.reviewer.person.id, role: "PARTICIPANT" },
+    ],
+    milestones: [milestoneInput("替代阶段", "完成替代阶段", 1)],
+    termination: terminationInput(5),
+    idempotencyKey: `p5-segment-replacement-task-${randomUUID()}`,
+  });
+  await activateTask(actor(fixture.owner), {
+    taskId: draft.taskId,
+    expectedLockVersion: draft.lockVersion,
+  });
+  return draft.taskId;
 }
 
 function plannedInput(personId: string, startHour: number, endHour: number) {
@@ -1798,7 +1777,6 @@ function plannedInput(personId: string, startHour: number, endHour: number) {
     startAt: atHour(startHour),
     endAt: atHour(endHour),
     content: `计划投入 ${startHour}-${endHour}`,
-    role: "DEVELOPER",
     priority: "MEDIUM",
     tagIds: [],
   };
@@ -1825,32 +1803,6 @@ function terminationInput(daysFromBase: number) {
     ).toISOString(),
     businessDescription: "结束确认",
   };
-}
-
-async function currentActiveMilestone(taskId: string) {
-  const row = await prisma.planVersionNode.findFirstOrThrow({
-    where: {
-      planVersion: { taskId, status: "CURRENT" },
-      node: { type: "MILESTONE", status: "ACTIVE" },
-    },
-    select: { nodeId: true },
-  });
-  return row;
-}
-
-async function nextCurrentMilestone(taskId: string, activeNodeId: string) {
-  const row = await prisma.planVersionNode.findFirstOrThrow({
-    where: {
-      planVersion: { taskId, status: "CURRENT" },
-      node: {
-        type: "MILESTONE",
-        id: { not: activeNodeId },
-      },
-    },
-    select: { nodeId: true },
-    orderBy: { sequence: "asc" },
-  });
-  return row;
 }
 
 async function taskState(taskId: string) {
@@ -2071,6 +2023,59 @@ async function runBehindTaskMemberDowngradeBarrier(
   });
   throwBarrierErrors(hasPrimaryError, primaryError, cleanupErrors);
   if (!result) throw new Error("成员降级屏障未返回并发结果");
+  return result;
+}
+
+async function runSourceTaskSwitchBarrier(input: {
+  sourceSegmentId: string;
+  replacementTaskId: string;
+  createActual: () => Promise<unknown>;
+}): Promise<PromiseSettledResult<unknown>> {
+  let locker: Client | undefined;
+  let observer: Client | undefined;
+  let transactionMayBeOpen = false;
+  let released = false;
+  let pendingSettlement:
+    | Promise<PromiseSettledResult<unknown>[]>
+    | undefined;
+  let pendingBackendPids: number[] = [];
+  let pendingHandled = false;
+  let result: PromiseSettledResult<unknown> | undefined;
+  let primaryError: unknown;
+  let hasPrimaryError = false;
+  try {
+    locker = await connectDatabaseClient("source-task-switch-locker");
+    observer = await connectDatabaseClient("source-task-switch-observer");
+    transactionMayBeOpen = true;
+    const lockerPid = await lockWorkSegmentRow(locker, input.sourceSegmentId);
+    const pending = Promise.resolve().then(input.createActual);
+    void pending.catch(() => undefined);
+    pendingSettlement = Promise.allSettled([pending]);
+    pendingBackendPids = await waitForDirectBlockers(observer, lockerPid, 1);
+
+    await locker.query(
+      'UPDATE "WorkSegment" SET "taskId" = $1 WHERE "id" = $2',
+      [input.replacementTaskId, input.sourceSegmentId],
+    );
+    await locker.query("COMMIT");
+    released = true;
+    [result] = await pendingSettlement;
+    pendingHandled = true;
+  } catch (error) {
+    primaryError = error;
+    hasPrimaryError = true;
+  }
+  const cleanupErrors = await cleanupBarrierResources({
+    locker,
+    observer,
+    rollbackRequired: Boolean(locker && transactionMayBeOpen && !released),
+    pendingSettlement,
+    pendingBackendPids,
+    pendingHandled,
+    primaryError,
+  });
+  throwBarrierErrors(hasPrimaryError, primaryError, cleanupErrors);
+  if (!result) throw new Error("Actual 来源 Task 切换屏障未返回结果");
   return result;
 }
 

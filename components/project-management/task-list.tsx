@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { AlertTriangle, ArrowRight, Clock3 } from "lucide-react";
+import { ArrowRight, Clock3 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import {
   formatDateTime,
@@ -78,12 +78,6 @@ export function TaskList({ tasks }: { tasks: TaskListItem[] }) {
                   )
                   .join("、")}
               </p>
-              {task.segmentNeedsReviewCount > 0 && (
-                <p className="flex items-center gap-2 text-amber-700">
-                  <AlertTriangle className="h-4 w-4" aria-hidden="true" />
-                  {task.segmentNeedsReviewCount} 条计划关联待确认
-                </p>
-              )}
             </div>
           </div>
           <div className="mt-3 flex justify-end">

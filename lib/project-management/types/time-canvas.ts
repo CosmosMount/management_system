@@ -7,7 +7,6 @@ import {
   taskNodeTypeValues,
   taskPriorityValues,
   taskStatusValues,
-  workSegmentRoleValues,
   workSegmentStatusValues,
   workSegmentTypeValues,
 } from "@/lib/project-management/types/contract-values";
@@ -88,7 +87,6 @@ export const segmentPermissionsDtoSchema = z
     canMerge: z.boolean(),
     canCancel: z.boolean(),
     canConfirm: z.boolean(),
-    canRelink: z.boolean(),
     canSoftDelete: z.boolean(),
   })
   .strict();
@@ -205,15 +203,11 @@ export const timeSegmentDtoSchema = z
     startAt: dtoAbsoluteDateTimeSchema,
     endAt: dtoAbsoluteDateTimeSchema,
     content: z.string(),
-    role: z.enum(workSegmentRoleValues),
-    customRole: z.string().nullable(),
     priority: taskPrioritySchema,
     expectedOutput: z.string(),
     actualOutput: z.string(),
     completionPercent: z.number().min(0).max(100).nullable(),
     taskId: dtoIdSchema.nullable(),
-    nodeId: dtoIdSchema.nullable(),
-    associationNeedsReview: z.boolean(),
     tags: z.array(segmentTagDtoSchema),
     permissions: segmentPermissionsDtoSchema,
     updatedAt: dtoAbsoluteDateTimeSchema,

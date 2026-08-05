@@ -26,7 +26,7 @@ import {
   createProjectManagementEventNotificationsTx,
 } from "@/lib/project-management/application/notification-utils";
 import { hashPlanSnapshot } from "@/lib/project-management/application/plan-snapshot";
-import { lockTaskNodeAssociationsTx } from "@/lib/project-management/application/task-node-association-lock";
+import { lockTaskSegmentAssociationsTx } from "@/lib/project-management/application/task-segment-association-lock";
 import {
   inspectPlanChronology,
   type PlanChronologyIssue,
@@ -651,7 +651,7 @@ async function loadLockedTaskTx(
   refreshedActor: ProjectManagementActor;
   task: TaskForMutation;
 }> {
-  const lockedTaskIds = await lockTaskNodeAssociationsTx(tx, [taskId]);
+  const lockedTaskIds = await lockTaskSegmentAssociationsTx(tx, [taskId]);
   if (!lockedTaskIds.has(taskId)) throw notFoundError();
 
   const refreshedActor = await refreshActorTx(tx, actor);
@@ -1226,21 +1226,6 @@ async function resolveDraftPlanReplacementTx(
   const omittedEntries = plan.nodes.filter(
     (entry) => !retainedIds.has(entry.nodeId),
   );
-  if (omittedEntries.length > 0) {
-    const referenced = await tx.workSegment.findFirst({
-      where: { nodeId: { in: omittedEntries.map((entry) => entry.nodeId) } },
-      select: { nodeId: true },
-    });
-    if (referenced) {
-      throw associationInvalidError(
-        "被投入记录引用的计划节点不能删除，请先处理关联",
-        {
-          nodes: ["被投入记录引用的计划节点不能删除"],
-        },
-      );
-    }
-  }
-
   return {
     milestones,
     termination,

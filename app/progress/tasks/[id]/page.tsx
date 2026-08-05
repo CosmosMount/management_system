@@ -70,7 +70,6 @@ export default async function ProgressTaskDetailPage({
           personIds: [],
           taskIds: [id],
           tagIds: [],
-          nodeIds: [],
           types: [],
           statuses: [],
           groupBy: "PERSON",

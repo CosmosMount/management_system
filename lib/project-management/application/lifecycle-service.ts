@@ -26,7 +26,6 @@ import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import type { ProjectManagementNotificationPayload } from "@/lib/project-management/notifications/events";
 import {
   createProjectManagementEventNotificationsTx,
-  recipientsForPersonIdsTx,
 } from "@/lib/project-management/application/notification-utils";
 import {
   activateTaskInputSchema,
@@ -95,24 +94,6 @@ type TaskForAuthorization = {
     removedAt: Date | null;
   }>;
 };
-
-const revisionAffectedSegmentSelect = {
-  id: true,
-  personId: true,
-  type: true,
-  status: true,
-  startAt: true,
-  endAt: true,
-  content: true,
-  taskId: true,
-  nodeId: true,
-  associationNeedsReview: true,
-  updatedAt: true,
-} satisfies Prisma.WorkSegmentSelect;
-
-type RevisionAffectedSegment = Prisma.WorkSegmentGetPayload<{
-  select: typeof revisionAffectedSegmentSelect;
-}>;
 
 type NotificationRecipient = {
   accountId: string;
@@ -716,13 +697,6 @@ export async function reviseRejectedRevision(
     const replaceableEntries = targetPlan.nodes.slice(revisionEntryIndex + 1);
     const replaceableNodeIds = replaceableEntries.map((entry) => entry.nodeId);
     if (replaceableNodeIds.length > 0) {
-      const associated = await tx.workSegment.findFirst({
-        where: { nodeId: { in: replaceableNodeIds }, deletedAt: null },
-        select: { id: true },
-      });
-      if (associated) {
-        throw stateConflictError("候选计划节点已被投入记录引用，不能整包替换");
-      }
       await tx.planVersionNode.deleteMany({
         where: { planVersionId: targetPlanVersionId, nodeId: { in: replaceableNodeIds } },
       });
@@ -1536,11 +1510,6 @@ async function applyRevisionTx(
         entry.node.status !== "COMPLETED",
     )
     .map((entry) => entry.nodeId);
-  const affectedRevisionSegments = await prepareRevisionAffectedSegmentsTx(tx, {
-    taskId: task.id,
-    replacedNodeIds,
-  });
-
   const now = new Date();
   const revisionMarkedEffective = await tx.revisionNode.updateMany({
     where: {
@@ -1611,77 +1580,6 @@ async function applyRevisionTx(
     ...task,
     currentPlanVersionId: updatedTask.currentPlanVersionId,
   };
-  if (replacedNodeIds.length > 0) {
-    const affectedSegments = affectedRevisionSegments;
-    const markedSegments: RevisionAffectedSegment[] = [];
-    for (const segment of affectedSegments) {
-      if (segment.associationNeedsReview) continue;
-      const before = segmentAssociationSnapshot(segment);
-      const marked = await tx.workSegment.updateMany({
-        where: {
-          id: segment.id,
-          type: "PLANNED",
-          status: { in: ["PLANNED", "IN_PROGRESS", "PENDING_CONFIRMATION"] },
-          deletedAt: null,
-          associationNeedsReview: false,
-        },
-        data: {
-          associationNeedsReview: true,
-          updatedByAccountId: actor.accountId,
-        },
-      });
-      if (marked.count !== 1) continue;
-      const updatedSegment = await tx.workSegment.findUniqueOrThrow({
-        where: { id: segment.id },
-        select: {
-          id: true,
-          personId: true,
-          type: true,
-          status: true,
-          startAt: true,
-          endAt: true,
-          content: true,
-          taskId: true,
-          nodeId: true,
-          associationNeedsReview: true,
-          updatedAt: true,
-        },
-      });
-      const after = segmentAssociationSnapshot(updatedSegment);
-      markedSegments.push(updatedSegment);
-      const reason = "Revision 生效后原关联节点失效";
-      await tx.workSegmentChange.create({
-        data: {
-          segmentId: segment.id,
-          action: "UPDATE",
-          before,
-          after,
-          reason,
-          actorAccountId: actor.accountId,
-        },
-      });
-      await createDomainAuditEventTx(tx, {
-        actorAccountId: actor.accountId,
-        actorPersonId: actor.personId,
-        action: "pm.segment.update",
-        entityType: "WorkSegment",
-        entityId: segment.id,
-        taskId: task.id,
-        before,
-        after,
-        reason,
-      });
-    }
-    if (markedSegments.length > 0) {
-      await notifySegmentAssociationInvalidatedTx(tx, {
-        actor,
-        task: taskAfterPlanSwitch,
-        revisionNodeId,
-        affectedSegments: markedSegments,
-      });
-    }
-  }
-
   await createDomainAuditEventTx(tx, {
     actorAccountId: actor.accountId,
     actorPersonId: actor.personId,
@@ -1925,50 +1823,6 @@ async function lockTaskTx(tx: PrismaTx, taskId: string) {
     SELECT "id" FROM "Task" WHERE "id" = ${taskId} FOR UPDATE
   `;
   if (rows.length === 0) throw notFoundError();
-}
-
-async function prepareRevisionAffectedSegmentsTx(
-  tx: PrismaTx,
-  input: { taskId: string; replacedNodeIds: string[] },
-): Promise<RevisionAffectedSegment[]> {
-  if (input.replacedNodeIds.length === 0) {
-    return [];
-  }
-  const where: Prisma.WorkSegmentWhereInput = {
-    taskId: input.taskId,
-    nodeId: { in: input.replacedNodeIds },
-    type: "PLANNED",
-    status: { in: ["PLANNED", "IN_PROGRESS", "PENDING_CONFIRMATION"] },
-    deletedAt: null,
-  };
-
-  // Re-evaluate eligibility after the WorkSegment locks are acquired so a row
-  // changed by a system transition or older writer while this transaction
-  // waited is not invalidated.
-  const currentSegments = await tx.workSegment.findMany({
-    where,
-    select: revisionAffectedSegmentSelect,
-    orderBy: { id: "asc" },
-  });
-  const segmentIds = currentSegments.map((segment) => segment.id);
-  if (segmentIds.length === 0) {
-    return [];
-  }
-  await tx.$queryRaw<Array<{ id: string }>>`
-    SELECT "id"
-    FROM "WorkSegment"
-    WHERE "id" IN (${Prisma.join(segmentIds)})
-    ORDER BY "id" ASC
-    FOR UPDATE
-  `;
-  const affectedSegments = await tx.workSegment.findMany({
-    where: {
-      AND: [where, { id: { in: segmentIds } }],
-    },
-    select: revisionAffectedSegmentSelect,
-    orderBy: { id: "asc" },
-  });
-  return affectedSegments;
 }
 
 async function loadCurrentPlanEntriesTx(tx: PrismaTx, task: TaskForAuthorization) {
@@ -2572,43 +2426,6 @@ async function notifyMilestoneReviewResultTx(
   });
 }
 
-async function notifySegmentAssociationInvalidatedTx(
-  tx: PrismaTx,
-  input: {
-    actor: ProjectManagementActor;
-    task: TaskForAuthorization;
-    revisionNodeId: string;
-    affectedSegments: Array<{ id: string; personId: string; content: string }>;
-  },
-) {
-  const recipients = await recipientsForPersonIdsTx(
-    tx,
-    input.affectedSegments.map((segment) => segment.personId),
-  );
-  await createProjectManagementEventNotificationsTx(tx, {
-    actor: input.actor,
-    task: {
-      id: input.task.id,
-      title: input.task.title,
-      status: input.task.status,
-      currentPlanVersionId: input.task.currentPlanVersionId,
-    },
-    kind: "segment_association_invalidated",
-    category: "WORK_SEGMENT",
-    eventKey: `pm:segment:association_invalidated:${input.revisionNodeId}`,
-    title: "Planned Segment 关联待确认",
-    summary: `Task「${input.task.title}」计划修订已生效，${input.affectedSegments.length} 条 Planned Segment 需要重新确认关联`,
-    entityType: "RevisionNode",
-    entityId: input.revisionNodeId,
-    linkPath: PROGRESS_LINK,
-    mandatory: true,
-    recipients,
-    context: {
-      affectedSegmentIds: input.affectedSegments.map((segment) => segment.id),
-    },
-  });
-}
-
 async function createProjectManagementNotificationsTx(
   tx: PrismaTx,
   input: {
@@ -2948,34 +2765,6 @@ function stableStringify(value: unknown): string {
       .join(",")}}`;
   }
   return JSON.stringify(value);
-}
-
-function segmentAssociationSnapshot(segment: {
-  id: string;
-  personId: string;
-  type: string;
-  status: string;
-  startAt: Date;
-  endAt: Date;
-  content: string;
-  taskId: string | null;
-  nodeId: string | null;
-  associationNeedsReview: boolean;
-  updatedAt: Date;
-}): Prisma.InputJsonObject {
-  return {
-    id: segment.id,
-    personId: segment.personId,
-    type: segment.type,
-    status: segment.status,
-    startAt: segment.startAt.toISOString(),
-    endAt: segment.endAt.toISOString(),
-    content: segment.content,
-    taskId: segment.taskId,
-    nodeId: segment.nodeId,
-    associationNeedsReview: segment.associationNeedsReview,
-    updatedAt: segment.updatedAt.toISOString(),
-  };
 }
 
 function jsonValue(value: unknown): Prisma.InputJsonValue {

@@ -30,7 +30,6 @@ const segmentTaskSelect = {
 const segmentQueryInclude = {
   person: { select: { displayName: true } },
   task: { select: segmentTaskSelect },
-  node: { select: { id: true, type: true, status: true } },
   tags: {
     select: {
       tag: { select: { id: true, name: true, color: true } },
@@ -88,12 +87,8 @@ export async function listWorkSegments({
       segmentReadableWhere(actor),
       parsed.personId ? { personId: parsed.personId } : {},
       parsed.taskId ? { taskId: parsed.taskId } : {},
-      parsed.nodeId ? { nodeId: parsed.nodeId } : {},
       parsed.type ? { type: parsed.type } : {},
       parsed.status ? { status: parsed.status } : {},
-      parsed.associationNeedsReview === undefined
-        ? {}
-        : { associationNeedsReview: parsed.associationNeedsReview },
       timeOverlapWhere(parsed.startAt, parsed.endAt),
     ],
   };
@@ -228,12 +223,10 @@ function toWorkSegmentDetailDto(
         status: "ACTIVE",
         accountId: null,
       },
-      node: null,
       tags: segment.tags.map((entry) => ({ tagId: entry.tag.id })),
     }),
     personName: segment.person.displayName,
     task,
-    node: segment.node,
     tags: segment.tags.map((entry) => entry.tag),
     plannedSources: segment.plannedSources
       .filter((source) => sourceSegmentVisible(actor, source.actualSegment))

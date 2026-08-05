@@ -5,7 +5,6 @@ import type {
   TaskNodeType,
   TaskPriority,
   TaskStatus,
-  WorkSegmentRole,
   WorkSegmentStatus,
   WorkSegmentType,
 } from "@prisma/client";
@@ -61,17 +60,6 @@ export const workSegmentStatusLabels: Record<WorkSegmentStatus, string> = {
   PENDING_CONFIRMATION: "待确认",
   CONFIRMED: "已确认",
   CANCELLED: "已取消",
-};
-
-export const workSegmentRoleLabels: Record<WorkSegmentRole, string> = {
-  OWNER: "负责人",
-  LEAD: "Lead",
-  DEVELOPER: "开发",
-  DESIGNER: "设计",
-  REVIEWER: "评审",
-  SUPPORT: "支持",
-  OBSERVER: "观察",
-  CUSTOM: "自定义",
 };
 
 export const notificationCategoryLabels: Record<
