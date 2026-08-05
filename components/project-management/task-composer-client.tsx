@@ -22,6 +22,10 @@ import {
   updateTaskDraft,
 } from "@/app/actions/project-management/tasks";
 import {
+  createRevision,
+  reviseRejectedRevision,
+} from "@/app/actions/project-management/revisions";
+import {
   listTagOptions,
 } from "@/app/actions/project-management/canvas";
 import { TaskSelect } from "@/components/project-management/task-picker";
@@ -96,6 +100,22 @@ export type TaskComposerNodeMeta = {
   lastValidAt: string;
 };
 
+export type TaskComposerRevisionAnchor = {
+  id: string;
+  reason: string;
+  revisionAt: string;
+  status: string;
+};
+
+export type TaskComposerRevisionContext = {
+  markerId: string;
+  reason: string;
+  revisionAt: string;
+  reviewRound: number;
+  lockedMilestoneIds: string[];
+  carriedAnchors: TaskComposerRevisionAnchor[];
+};
+
 export type TaskComposerSeed = {
   draftId: string;
   title: string;
@@ -116,6 +136,7 @@ export type TaskComposerSeed = {
     businessDescription: string;
   };
   selectedEntityId: string | null;
+  revision?: TaskComposerRevisionContext;
   /** Composer-only presentation state. It is never included in the server payload. */
   nodeMeta?: Record<string, TaskComposerNodeMeta>;
 };
@@ -139,6 +160,13 @@ export type TaskComposerInspectorDraft =
       entityId: string;
       termination: TaskComposerSeed["termination"];
       returnEntityId: string | null;
+    }
+  | {
+      kind: "REVISION";
+      entityId: string;
+      revision: TaskComposerRevisionAnchor;
+      isCurrent: boolean;
+      returnEntityId: string | null;
     };
 
 type ComposerHistory = {
@@ -160,12 +188,25 @@ type LocalTaskDraft = {
   task: TaskComposerSeed;
   inspectorDraft: TaskComposerInspectorDraft | null;
   inspectorDirty: boolean;
-  editContext?: {
-    kind: "EDIT_DRAFT";
-    taskId: string;
-    planVersionId: string;
-    baseLockVersion: number;
-  };
+  editContext?:
+    | {
+        kind: "EDIT_DRAFT";
+        taskId: string;
+        planVersionId: string;
+        baseLockVersion: number;
+      }
+    | {
+        kind: "CREATE_REVISION";
+        taskId: string;
+        basePlanVersionId: string;
+        baseLockVersion: number;
+      }
+    | {
+        kind: "RESUBMIT_REVISION";
+        taskId: string;
+        revisionNodeId: string;
+        targetPlanUpdatedAt: string;
+      };
 };
 
 type LocalDraftRecovery =
@@ -194,6 +235,23 @@ export type TaskComposerMode =
         personId: string;
         role: LegacyTaskMemberRoleValue;
       }>;
+    }
+  | {
+      kind: "CREATE_REVISION";
+      taskId: string;
+      basePlanVersionId: string;
+      baseVersionNo: number;
+      baseTaskLockVersion: number;
+    }
+  | {
+      kind: "RESUBMIT_REVISION";
+      taskId: string;
+      revisionNodeId: string;
+      basePlanVersionId: string;
+      baseVersionNo: number;
+      baseTaskLockVersion: number;
+      targetVersionNo: number;
+      expectedTargetPlanUpdatedAt: string;
     };
 
 const CREATE_TASK_COMPOSER_MODE: TaskComposerMode = { kind: "CREATE" };
@@ -277,15 +335,22 @@ export function TaskComposerClient({
   const autoSaveTimerRef = useRef<number | null>(null);
   const liveEditEntityRef = useRef<string | null>(null);
   const isEditingDraft = mode.kind === "EDIT_DRAFT";
+  const isRevisionComposer =
+    mode.kind === "CREATE_REVISION" || mode.kind === "RESUBMIT_REVISION";
+  const isResubmittingRevision = mode.kind === "RESUBMIT_REVISION";
   const preservedLegacyMembers =
     mode.kind === "EDIT_DRAFT" ? (mode.preservedLegacyMembers ?? []) : [];
   const canManageMembers =
     mode.kind === "CREATE" ||
-    (mode.canManageMembers && preservedLegacyMembers.length === 0);
+    (mode.kind === "EDIT_DRAFT" &&
+      mode.canManageMembers &&
+      preservedLegacyMembers.length === 0);
   const returnPath =
-    mode.kind === "EDIT_DRAFT"
-      ? routes.progress.taskDetail(mode.taskId)
-      : routes.progress.tasks;
+    mode.kind === "CREATE"
+      ? routes.progress.tasks
+      : isRevisionComposer
+        ? routes.progress.taskRevisions(mode.taskId)
+        : routes.progress.taskDetail(mode.taskId);
   const editContext = useMemo<LocalTaskDraft["editContext"]>(
     () =>
       mode.kind === "EDIT_DRAFT"
@@ -295,13 +360,31 @@ export function TaskComposerClient({
             planVersionId: mode.planVersionId,
             baseLockVersion: mode.expectedLockVersion,
           }
-        : undefined,
+        : mode.kind === "CREATE_REVISION"
+          ? {
+              kind: "CREATE_REVISION",
+              taskId: mode.taskId,
+              basePlanVersionId: mode.basePlanVersionId,
+              baseLockVersion: mode.baseTaskLockVersion,
+            }
+          : mode.kind === "RESUBMIT_REVISION"
+            ? {
+                kind: "RESUBMIT_REVISION",
+                taskId: mode.taskId,
+                revisionNodeId: mode.revisionNodeId,
+                targetPlanUpdatedAt: mode.expectedTargetPlanUpdatedAt,
+              }
+            : undefined,
     [mode],
   );
   const storageKey = useMemo(
     () =>
       mode.kind === "EDIT_DRAFT"
         ? `task-edit-draft:${encodeURIComponent(deploymentEnvironment)}:${encodeURIComponent(accountId)}:${encodeURIComponent(mode.taskId)}:v1`
+        : mode.kind === "CREATE_REVISION"
+          ? `revision-create-draft:${encodeURIComponent(deploymentEnvironment)}:${encodeURIComponent(accountId)}:${encodeURIComponent(mode.taskId)}:v1`
+          : mode.kind === "RESUBMIT_REVISION"
+            ? `revision-resubmit-draft:${encodeURIComponent(deploymentEnvironment)}:${encodeURIComponent(accountId)}:${encodeURIComponent(mode.revisionNodeId)}:v1`
         : `task-draft:${encodeURIComponent(deploymentEnvironment)}:${encodeURIComponent(accountId)}:v${LOCAL_DRAFT_SCHEMA_VERSION}`,
     [accountId, deploymentEnvironment, mode],
   );
@@ -692,6 +775,10 @@ export function TaskComposerClient({
   };
 
   const duplicateMilestone = (source: TaskComposerMilestone) => {
+    if (isLockedRevisionMilestone(state, source.id)) {
+      setServerError("已承接的 Milestone 为只读，不能复制或修改。");
+      return;
+    }
     const savedSource =
       state.milestones.find((milestone) => milestone.id === source.id) ?? source;
     const duplicateAt = suggestDuplicateAt(state, savedSource.id);
@@ -703,6 +790,11 @@ export function TaskComposerClient({
   };
 
   const removeMilestones = (ids: string[]) => {
+    const lockedIds = ids.filter((id) => isLockedRevisionMilestone(state, id));
+    if (lockedIds.length > 0) {
+      setServerError("已完成并承接到候选计划的 Milestone 不能删除。");
+      return;
+    }
     const existingIds = ids.filter((id) => state.milestones.some((item) => item.id === id));
     if (existingIds.length === 0) return;
     if (!window.confirm(`确认删除选中的 ${existingIds.length} 个 Milestone？`)) return;
@@ -725,6 +817,10 @@ export function TaskComposerClient({
   };
 
   const updateInspector = (next: TaskComposerInspectorDraft) => {
+    if (isReadOnlyRevisionEntity(state, next.entityId)) {
+      setServerError("该节点由当前计划承接，只能查看，不能修改。");
+      return;
+    }
     const mutate = (current: TaskComposerSeed) => applyLiveInspectorUpdate(current, next);
     if (liveEditEntityRef.current === next.entityId) {
       replacePresent(mutate);
@@ -737,6 +833,10 @@ export function TaskComposerClient({
   };
 
   const moveAnchor = (request: TimeCanvasAnchorMoveRequest) => {
+    if (isReadOnlyRevisionEntity(state, request.anchorId)) {
+      setServerError("该节点由当前计划承接，只能查看，不能移动。");
+      return;
+    }
     const result = applyAnchorMove(state, request);
     if (!result.ok) {
       setServerError(result.message);
@@ -769,6 +869,7 @@ export function TaskComposerClient({
     const boundary = Math.max(
       renderAtMs(state, TASK_COMPOSER_START_ID),
       ...state.milestones.map((milestone) => renderAtMs(state, milestone.id)),
+      ...revisionAnchorTimes(state),
     );
     if (!Number.isFinite(at) || at <= boundary) {
       setServerError("Terminal 必须严格晚于 Start 和全部 Milestone。");
@@ -825,7 +926,11 @@ export function TaskComposerClient({
       issues.length === 0
         ? isEditingDraft
           ? "内容校验通过，可以保存 Task。"
-          : "计划校验通过，可以创建 Task 草稿。"
+          : isResubmittingRevision
+            ? "候选计划校验通过，可以修改并重新送审。"
+            : isRevisionComposer
+              ? "候选计划校验通过，可以创建并送审。"
+              : "计划校验通过，可以创建 Task 草稿。"
         : `发现 ${issues.length} 个问题。`,
     );
     return issues.length === 0;
@@ -931,7 +1036,13 @@ export function TaskComposerClient({
     setSubmitting(true);
     setServerError("");
     setStatusMessage(
-      isEditingDraft ? "正在保存 Task…" : "正在创建 Task 草稿…",
+      isEditingDraft
+        ? "正在保存 Task…"
+        : isResubmittingRevision
+          ? "正在修改并重新送审…"
+          : isRevisionComposer
+            ? "正在创建 Revision 并送审…"
+            : "正在创建 Task 草稿…",
     );
     try {
       const commonPayload = {
@@ -974,7 +1085,7 @@ export function TaskComposerClient({
           return;
         }
         destination = `${routes.progress.taskDetail(result.data.taskId)}?created=1`;
-      } else {
+      } else if (mode.kind === "EDIT_DRAFT") {
         const existingNodeIds = new Set(mode.existingNodeIds);
         const membersChanged =
           memberSubmissionFingerprint(state.members) !==
@@ -1036,6 +1147,83 @@ export function TaskComposerClient({
           return;
         }
         destination = routes.progress.taskDetail(mode.taskId);
+      } else {
+        if (!state.revision) {
+          setServerError("Revision 编辑上下文缺失，请刷新后重试。");
+          return;
+        }
+        const lockedMilestoneIds = new Set(
+          normalizedInitialSeed.revision?.lockedMilestoneIds ?? [],
+        );
+        const replacementMilestones = sortMilestones(state.milestones)
+          .filter((milestone) => !lockedMilestoneIds.has(milestone.id))
+          .map((milestone) => ({
+            goal: milestone.goal,
+            completionCriteria: milestone.completionCriteria,
+            expectedCompletedAt: shanghaiDateTimeLocalToIso(
+              milestone.expectedCompletedAt,
+            ),
+            reviewRequirements: milestone.reviewRequirements,
+            businessDescription: milestone.businessDescription,
+          }));
+        const revisionPayload = {
+          revisionAt: shanghaiDateTimeLocalToIso(state.revision.revisionAt),
+          reason: state.revision.reason,
+          replacementMilestones,
+          termination: {
+            name: state.termination.name,
+            plannedAt: shanghaiDateTimeLocalToIso(state.termination.plannedAt),
+            plannedOutcomeCriteria: state.termination.plannedOutcomeCriteria,
+            businessDescription: state.termination.businessDescription,
+          },
+        };
+        const result = mode.kind === "CREATE_REVISION"
+          ? await createRevision({
+              ...revisionPayload,
+              taskId: mode.taskId,
+              basePlanVersionId: mode.basePlanVersionId,
+              baseTaskLockVersion: mode.baseTaskLockVersion,
+              idempotencyKey: `revision-composer:${state.draftId}`,
+            })
+          : await reviseRejectedRevision({
+              ...revisionPayload,
+              revisionNodeId: mode.revisionNodeId,
+              expectedTargetPlanUpdatedAt: mode.expectedTargetPlanUpdatedAt,
+            });
+        if (!result.ok) {
+          if (
+            result.error.code === "STALE_TASK" ||
+            result.error.code === "PLAN_VERSION_CONFLICT" ||
+            result.error.code === "STATE_CONFLICT"
+          ) {
+            const exportedDraft: LocalTaskDraft = {
+              schemaVersion: LOCAL_DRAFT_SCHEMA_VERSION,
+              draftId: state.draftId,
+              savedAt: new Date().toISOString(),
+              task: state,
+              inspectorDraft: null,
+              inspectorDirty: false,
+              ...(editContext ? { editContext } : {}),
+            };
+            await persistLocalDraftNow();
+            setRecovery({
+              kind: "INCOMPATIBLE",
+              raw: JSON.stringify(exportedDraft),
+              reason:
+                "Task 或 Revision 候选计划已在服务端变化，当前本地修改不会覆盖最新版本。请先导出，或放弃并加载最新版本。",
+            });
+            setStatusMessage("保存冲突，本地修改已保留；不会自动刷新或合并字段。");
+            return;
+          }
+          applyActionError(result.error);
+          setStatusMessage(
+            mode.kind === "CREATE_REVISION"
+              ? "创建失败，本地草稿和幂等键已保留，可修正后重试。"
+              : "重新送审失败，本地修改已保留，可修正后重试。",
+          );
+          return;
+        }
+        destination = routes.progress.taskRevisions(mode.taskId);
       }
       try {
         await draftWriteChainRef.current.catch(() => undefined);
@@ -1051,6 +1239,10 @@ export function TaskComposerClient({
       setStatusMessage(
         isEditingDraft
           ? "Task 已保存，正在返回工作台…"
+          : isResubmittingRevision
+            ? "Revision 已修改并重新送审，正在返回工作台…"
+            : isRevisionComposer
+              ? "Revision 已创建并送审，正在返回工作台…"
           : "Task 草稿已创建，正在进入工作台…",
       );
       replaceAfterCollapsingHistoryGuard(destination);
@@ -1059,6 +1251,10 @@ export function TaskComposerClient({
       setStatusMessage(
         isEditingDraft
           ? "保存失败，本地修改已保留。"
+          : isResubmittingRevision
+            ? "重新送审失败，本地修改已保留。"
+            : isRevisionComposer
+              ? "创建失败，本地草稿和幂等键已保留。"
           : "创建失败，本地草稿和幂等键已保留。",
       );
     } finally {
@@ -1162,7 +1358,9 @@ export function TaskComposerClient({
               }}
             >
               <ArrowLeft aria-hidden="true" />
-              {isEditingDraft ? "返回 Task 工作台" : "全部 Task"}
+              {mode.kind === "CREATE"
+                ? "全部 Task"
+                : "返回 Task 工作台"}
             </Button>
             <span className="text-sm text-muted-foreground" aria-live="polite">
               {savedAt
@@ -1207,9 +1405,17 @@ export function TaskComposerClient({
               {submitting
                 ? isEditingDraft
                   ? "正在保存…"
+                  : isResubmittingRevision
+                    ? "正在重新送审…"
+                    : isRevisionComposer
+                      ? "正在创建并送审…"
                   : "正在创建…"
                 : isEditingDraft
                   ? "保存 Task"
+                  : isResubmittingRevision
+                    ? "修改并重新送审"
+                    : isRevisionComposer
+                      ? "创建并送审"
                   : "创建 Task 草稿"}
             </Button>
           </div>
@@ -1227,13 +1433,12 @@ export function TaskComposerClient({
                 type="button"
                 size="sm"
                 onClick={() => {
-                  const recoveredTask =
-                    mode.kind === "EDIT_DRAFT" && !canManageMembers
-                      ? {
-                          ...recovery.draft.task,
-                          members: normalizedInitialSeed.members,
-                        }
-                      : recovery.draft.task;
+                  const recoveredTask = sanitizeRecoveredComposerState({
+                    recovered: recovery.draft.task,
+                    authoritative: normalizedInitialSeed,
+                    mode,
+                    canManageMembers,
+                  });
                   setHistory({ past: [], present: recoveredTask, future: [] });
                   liveEditEntityRef.current = null;
                   setRecovery(null);
@@ -1254,7 +1459,7 @@ export function TaskComposerClient({
                   void discardLocalDraft()
                     .then((discarded) => {
                       if (!discarded) return;
-                      if (isEditingDraft) {
+                      if (mode.kind !== "CREATE") {
                         bypassBeforeUnloadRef.current = true;
                         window.location.reload();
                         return;
@@ -1297,7 +1502,7 @@ export function TaskComposerClient({
                   void discardLocalDraft()
                     .then((discarded) => {
                       if (!discarded) return;
-                      if (isEditingDraft) {
+                      if (mode.kind !== "CREATE") {
                         bypassBeforeUnloadRef.current = true;
                         window.location.reload();
                         return;
@@ -1309,7 +1514,7 @@ export function TaskComposerClient({
                     .finally(() => setStorageBusy(false));
                 }}
               >
-                {isEditingDraft ? "放弃并加载最新版本" : "安全放弃"}
+                {mode.kind !== "CREATE" ? "放弃并加载最新版本" : "安全放弃"}
               </Button>
             </div>
           </div>
@@ -1336,7 +1541,73 @@ export function TaskComposerClient({
       )}
 
       <div className="mx-auto grid w-full min-w-0 max-w-[110rem] gap-4 px-4 py-5 sm:px-6 lg:grid-cols-[19rem_minmax(0,1fr)_22rem] lg:px-8">
-        <aside className="min-w-0 space-y-4" aria-label="Task 基本信息">
+        <aside
+          className="min-w-0 space-y-4"
+          aria-label={isRevisionComposer ? "Revision 信息" : "Task 基本信息"}
+        >
+          {isRevisionComposer && state.revision ? (
+            <>
+              <ComposerSection title="Revision 信息" issueCount={countIssues(issues, ["revision-reason"])}>
+                <Field label="Task" htmlFor="revision-task-title">
+                  <Input id="revision-task-title" value={state.title} readOnly />
+                </Field>
+                <Field label="修订原因" required htmlFor="revision-reason">
+                  <Textarea
+                    id="revision-reason"
+                    rows={6}
+                    value={state.revision.reason}
+                    maxLength={2_000}
+                    aria-invalid={issues.some((issue) => issue.key === "revision-reason")}
+                    onChange={(event) => {
+                      const mutator = (current: TaskComposerSeed) => current.revision
+                        ? {
+                            ...current,
+                            revision: {
+                              ...current.revision,
+                              reason: event.target.value,
+                            },
+                          }
+                        : current;
+                      if (liveEditEntityRef.current === state.revision?.markerId) {
+                        replacePresent(mutator);
+                      } else {
+                        liveEditEntityRef.current = state.revision?.markerId ?? null;
+                        commit(mutator);
+                      }
+                    }}
+                  />
+                </Field>
+              </ComposerSection>
+              <ComposerSection title="只读基线">
+                <dl className="space-y-2 text-sm">
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-muted-foreground">计划版本</dt>
+                    <dd>v{mode.baseVersionNo}</dd>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-muted-foreground">Task 锁版本</dt>
+                    <dd>{mode.baseTaskLockVersion}</dd>
+                  </div>
+                  {mode.kind === "RESUBMIT_REVISION" && (
+                    <>
+                      <div className="flex justify-between gap-3">
+                        <dt className="text-muted-foreground">候选版本</dt>
+                        <dd>v{mode.targetVersionNo}</dd>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <dt className="text-muted-foreground">重新送审轮次</dt>
+                        <dd>第 {state.revision.reviewRound + 1} 轮</dd>
+                      </div>
+                    </>
+                  )}
+                </dl>
+                <p className="text-xs leading-5 text-muted-foreground">
+                  Start、已完成 Milestone 与已生效 Revision 由当前计划承接并保持只读；Revision 标记不切割计划阶段。
+                </p>
+              </ComposerSection>
+            </>
+          ) : (
+            <>
           <ComposerSection title="基本信息" issueCount={countIssues(issues, ["title", "team", "techGroup"])}>
             <Field label="Task 名称" required htmlFor="title">
               <Input
@@ -1583,6 +1854,9 @@ export function TaskComposerClient({
             )}
           </ComposerSection>
 
+            </>
+          )}
+
         </aside>
 
         <TaskComposerPlanEditor
@@ -1601,8 +1875,24 @@ export function TaskComposerClient({
           optionLoading={optionLoading}
           submitting={submitting}
           submitDisabled={isEditingDraft && !dirty}
-          submitLabel={isEditingDraft ? "保存 Task" : "创建草稿"}
-          submittingLabel={isEditingDraft ? "正在保存…" : "正在创建…"}
+          submitLabel={
+            isEditingDraft
+              ? "保存 Task"
+              : isResubmittingRevision
+                ? "修改并重新送审"
+                : isRevisionComposer
+                  ? "创建并送审"
+                  : "创建草稿"
+          }
+          submittingLabel={
+            isEditingDraft
+              ? "正在保存…"
+              : isResubmittingRevision
+                ? "正在重新送审…"
+                : isRevisionComposer
+                  ? "正在创建并送审…"
+                  : "正在创建…"
+          }
           onSelect={selectEntity}
           onBeginMilestone={beginMilestone}
           onConstrainAnchorMove={constrainAnchorMove}
@@ -1770,6 +2060,32 @@ function inspectorDraftForEntity(
       returnEntityId: entityId,
     };
   }
+  if (state.revision && entityId === state.revision.markerId) {
+    return {
+      kind: "REVISION",
+      entityId: state.revision.markerId,
+      revision: {
+        id: state.revision.markerId,
+        reason: state.revision.reason,
+        revisionAt: state.revision.revisionAt,
+        status: "当前候选",
+      },
+      isCurrent: true,
+      returnEntityId: state.revision.markerId,
+    };
+  }
+  const carriedRevision = state.revision?.carriedAnchors.find(
+    (anchor) => anchor.id === entityId,
+  );
+  if (carriedRevision) {
+    return {
+      kind: "REVISION",
+      entityId: carriedRevision.id,
+      revision: { ...carriedRevision },
+      isCurrent: false,
+      returnEntityId: carriedRevision.id,
+    };
+  }
   const milestone = state.milestones.find((item) => item.id === entityId);
   if (!milestone) return null;
   return {
@@ -1790,13 +2106,28 @@ function applyLiveInspectorUpdate(
     nextState = { ...state, plannedStartAt: draft.plannedStartAt };
   } else if (draft.kind === "TERMINATION") {
     nextState = { ...state, termination: { ...draft.termination } };
-  } else {
+  } else if (draft.kind === "MILESTONE") {
     nextState = {
       ...state,
       milestones: state.milestones.map((milestone) =>
         milestone.id === draft.entityId ? { ...draft.milestone } : milestone,
       ),
     };
+  } else if (state.revision && draft.isCurrent) {
+    const nextNodeMeta = isRevisionTimeLegal(state, draft.revision.revisionAt)
+      ? updateLastValidAt(state, draft.entityId, draft.revision.revisionAt)
+      : state.nodeMeta;
+    nextState = {
+      ...state,
+      revision: {
+        ...state.revision,
+        reason: draft.revision.reason,
+        revisionAt: draft.revision.revisionAt,
+      },
+      nodeMeta: nextNodeMeta,
+    };
+  } else {
+    return state;
   }
 
   nextState = reconcileComposerPlanState(nextState);
@@ -1812,6 +2143,25 @@ function validateInspector(
   draft: TaskComposerInspectorDraft,
   state: TaskComposerSeed,
 ): ValidationIssue[] {
+  if (draft.kind === "REVISION") {
+    if (!draft.isCurrent) return [];
+    const issues: ValidationIssue[] = [];
+    if (!draft.revision.reason.trim()) {
+      issues.push({
+        key: "revision-reason",
+        entityId: draft.entityId,
+        message: "请输入修订原因。",
+      });
+    }
+    if (!validLocalDateTime(draft.revision.revisionAt)) {
+      issues.push({
+        key: "revisionAt",
+        entityId: draft.entityId,
+        message: "请选择有效的 Revision 时间。",
+      });
+    }
+    return issues;
+  }
   if (draft.kind === "START") {
     if (!validLocalDateTime(draft.plannedStartAt)) {
       return [{ key: "plannedStartAt", entityId: draft.entityId, message: "请选择有效的计划开始时间。" }];
@@ -1884,12 +2234,13 @@ function nodeMetaFor(
 ): TaskComposerNodeMeta {
   const stored = state.nodeMeta?.[entityId];
   if (stored && validLocalDateTime(stored.lastValidAt)) return stored;
-  const currentAt = entityId === TASK_COMPOSER_START_ID
+  const revisionAt = revisionAnchorAt(state, entityId);
+  const currentAt = revisionAt ?? (entityId === TASK_COMPOSER_START_ID
     ? state.plannedStartAt
     : entityId === state.termination.id
       ? state.termination.plannedAt
       : state.milestones.find((milestone) => milestone.id === entityId)
-          ?.expectedCompletedAt ?? state.plannedStartAt;
+          ?.expectedCompletedAt ?? state.plannedStartAt);
   return {
     lifecycle: "ESTABLISHED",
     lastValidAt: validLocalDateTime(currentAt) ? currentAt : state.plannedStartAt,
@@ -1955,6 +2306,8 @@ function isNodeTimeStrictlyLegal(
 }
 
 function nodeInputAtLocal(state: TaskComposerSeed, entityId: string) {
+  const revisionAt = revisionAnchorAt(state, entityId);
+  if (revisionAt) return revisionAt;
   if (entityId === TASK_COMPOSER_START_ID) return state.plannedStartAt;
   if (entityId === state.termination.id) return state.termination.plannedAt;
   return state.milestones.find((milestone) => milestone.id === entityId)
@@ -2113,6 +2466,17 @@ function applyAnchorMove(
     };
   }
   const localValue = isoToShanghaiDateTimeLocal(new Date(candidateAt));
+  if (state.revision && request.anchorId === state.revision.markerId) {
+    return {
+      ok: true,
+      state: {
+        ...state,
+        revision: { ...state.revision, revisionAt: localValue },
+        selectedEntityId: request.anchorId,
+        nodeMeta: updateLastValidAt(state, request.anchorId, localValue),
+      },
+    };
+  }
   if (request.anchorId === TASK_COMPOSER_START_ID) {
     return {
       ok: true,
@@ -2161,6 +2525,26 @@ function resolveAnchorMoveCandidate(
   const originalAt = renderAtMs(state, request.anchorId);
   if (!Number.isFinite(originalAt) || !Number.isFinite(request.atMs) || request.snapMs <= 0) {
     return { ok: false, message: "节点时间无效，请使用 Inspector 重新设置。" };
+  }
+
+  if (isReadOnlyRevisionEntity(state, request.anchorId)) {
+    return { ok: false, message: "该节点由当前计划承接，只能查看，不能移动。" };
+  }
+  if (state.revision && request.anchorId === state.revision.markerId) {
+    const lowerInclusive = Math.max(
+      renderAtMs(state, TASK_COMPOSER_START_ID),
+      ...state.revision.lockedMilestoneIds.map((id) => renderAtMs(state, id)),
+      ...state.revision.carriedAnchors.map((anchor) => localMs(anchor.revisionAt)),
+    );
+    const upperInclusive = renderAtMs(state, state.termination.id);
+    if (upperInclusive < lowerInclusive) {
+      return { ok: false, message: "当前计划范围内没有合法的 Revision 时间。" };
+    }
+    return {
+      ok: true,
+      originalAt,
+      candidateAt: Math.max(lowerInclusive, Math.min(request.atMs, upperInclusive)),
+    };
   }
 
   let lowerExclusive = Number.NEGATIVE_INFINITY;
@@ -2263,11 +2647,13 @@ function validateComposer(
       (milestoneAt) => milestoneAt >= terminationAt,
     );
   if (!state.title.trim()) issues.push({ key: "title", message: "请输入 Task 名称。" });
-  if (!TEAM_OPTIONS.includes(state.team as (typeof TEAM_OPTIONS)[number])) {
-    issues.push({ key: "team", message: "请选择有效车组。" });
-  }
-  if (!TECH_GROUP_OPTIONS.includes(state.techGroup as (typeof TECH_GROUP_OPTIONS)[number])) {
-    issues.push({ key: "techGroup", message: "请选择有效技术组。" });
+  if (!state.revision) {
+    if (!TEAM_OPTIONS.includes(state.team as (typeof TEAM_OPTIONS)[number])) {
+      issues.push({ key: "team", message: "请选择有效车组。" });
+    }
+    if (!TECH_GROUP_OPTIONS.includes(state.techGroup as (typeof TECH_GROUP_OPTIONS)[number])) {
+      issues.push({ key: "techGroup", message: "请选择有效技术组。" });
+    }
   }
   if (!startValid) {
     issues.push({
@@ -2285,17 +2671,17 @@ function validateComposer(
       message: "Start 必须严格早于全部 Milestone 和 Terminal。",
     });
   }
-  if (new Set(state.tagIds).size !== state.tagIds.length) {
+  if (!state.revision && new Set(state.tagIds).size !== state.tagIds.length) {
     issues.push({ key: "tag-search", message: "不能重复选择同一个 Tag。" });
   }
-  if (state.members.length === 0) {
+  if (!state.revision && state.members.length === 0) {
     issues.push({ key: "members", message: "至少添加一名 Task 成员。" });
   }
   const memberPersonIds = state.members.map((member) => member.personId);
-  if (new Set(memberPersonIds).size !== memberPersonIds.length) {
+  if (!state.revision && new Set(memberPersonIds).size !== memberPersonIds.length) {
     issues.push({ key: "members", message: "同一成员只能有一个角色。" });
   }
-  if (state.members.every((member) => member.role !== "OWNER")) {
+  if (!state.revision && state.members.every((member) => member.role !== "OWNER")) {
     issues.push({ key: "members", message: "至少需要一名负责人。" });
   }
   if (state.milestones.length > 200) {
@@ -2390,6 +2776,49 @@ function validateComposer(
       message: "请输入结束条件。",
     });
   }
+  if (state.revision) {
+    const revisionAtValid = validLocalDateTime(state.revision.revisionAt);
+    if (!state.revision.reason.trim()) {
+      issues.push({
+        key: "revision-reason",
+        entityId: state.revision.markerId,
+        message: "请输入修订原因。",
+      });
+    } else if (state.revision.reason.trim().length > 2_000) {
+      issues.push({
+        key: "revision-reason",
+        entityId: state.revision.markerId,
+        message: "修订原因不能超过 2000 个字符。",
+      });
+    }
+    if (!revisionAtValid) {
+      issues.push({
+        key: "revisionAt",
+        entityId: state.revision.markerId,
+        message: "请选择有效的 Revision 时间。",
+      });
+    } else if (startValid && terminationValid) {
+      const revisionAt = localMs(state.revision.revisionAt);
+      const lowerBoundary = Math.max(
+        startAt,
+        ...state.revision.lockedMilestoneIds.map((id) => comparisonAtMs(state, id)),
+        ...state.revision.carriedAnchors.map((anchor) => localMs(anchor.revisionAt)),
+      );
+      if (revisionAt < lowerBoundary) {
+        issues.push({
+          key: "revisionAt",
+          entityId: state.revision.markerId,
+          message: "Revision 时间不能早于最后一个已完成 Milestone 或已生效 Revision。",
+        });
+      } else if (revisionAt > terminationAt) {
+        issues.push({
+          key: "revisionAt",
+          entityId: state.revision.markerId,
+          message: "Revision 时间不能晚于 Terminal。",
+        });
+      }
+    }
+  }
   return issues;
 }
 
@@ -2420,6 +2849,8 @@ function serverFieldValidationIssue(
     tagIds: "tag-search",
     members: "members",
     plannedStartAt: "plannedStartAt",
+    revisionAt: "revisionAt",
+    reason: "revision-reason",
     "termination.name": "termination-name",
     "termination.plannedAt": "termination-plannedAt",
     "termination.plannedOutcomeCriteria": "termination-outcome",
@@ -2431,14 +2862,19 @@ function serverFieldValidationIssue(
       message,
       ...(path === "plannedStartAt"
         ? { entityId: TASK_COMPOSER_START_ID }
+        : path === "revisionAt" || path === "reason"
+          ? { entityId: state.revision?.markerId }
         : path.startsWith("termination.")
           ? { entityId: state.termination.id }
           : {}),
     };
   }
-  const milestoneMatch = /^milestones\.(\d+)\.(.+)$/.exec(path);
+  const milestoneMatch = /^(?:milestones|replacementMilestones)\.(\d+)\.(.+)$/.exec(path);
   if (!milestoneMatch) return null;
-  const milestone = sortMilestones(state.milestones)[Number(milestoneMatch[1])];
+  const submittedMilestones = sortMilestones(state.milestones).filter(
+    (milestone) => !isLockedRevisionMilestone(state, milestone.id),
+  );
+  const milestone = submittedMilestones[Number(milestoneMatch[1])];
   if (!milestone) return null;
   const milestoneKeys: Record<string, string> = {
     goal: `goal-${milestone.id}`,
@@ -2464,17 +2900,33 @@ function localDraftContextError(
       ? null
       : "检测到其他编辑场景的本地草稿，未自动覆盖当前新建内容。";
   }
-  if (!isRecord(actual) || actual.kind !== "EDIT_DRAFT") {
-    return "本地编辑草稿缺少 Task 版本信息，不能安全恢复。";
+  if (!isRecord(actual) || actual.kind !== expected.kind) {
+    return "本地草稿缺少当前编辑场景的版本信息，不能安全恢复。";
   }
-  if (
+  if (expected.kind === "EDIT_DRAFT") {
+    if (
+      actual.taskId !== expected.taskId ||
+      actual.planVersionId !== expected.planVersionId
+    ) {
+      return "本地编辑草稿不属于当前 Task 或计划版本，不能安全恢复。";
+    }
+    if (actual.baseLockVersion !== expected.baseLockVersion) {
+      return "Task 已在服务端更新，旧本地草稿不能直接覆盖最新版本。";
+    }
+  } else if (expected.kind === "CREATE_REVISION") {
+    if (
+      actual.taskId !== expected.taskId ||
+      actual.basePlanVersionId !== expected.basePlanVersionId ||
+      actual.baseLockVersion !== expected.baseLockVersion
+    ) {
+      return "Task 基线已变化，旧 Revision 草稿不能直接覆盖最新版本。";
+    }
+  } else if (
     actual.taskId !== expected.taskId ||
-    actual.planVersionId !== expected.planVersionId
+    actual.revisionNodeId !== expected.revisionNodeId ||
+    actual.targetPlanUpdatedAt !== expected.targetPlanUpdatedAt
   ) {
-    return "本地编辑草稿不属于当前 Task 或计划版本，不能安全恢复。";
-  }
-  if (actual.baseLockVersion !== expected.baseLockVersion) {
-    return "Task 已在服务端更新，旧本地草稿不能直接覆盖最新版本。";
+    return "Revision 候选计划已变化，旧本地草稿不能直接覆盖最新版本。";
   }
   return null;
 }
@@ -2534,7 +2986,8 @@ function parseLocalDraft(raw: string): LocalTaskDraft | null {
       !task.milestones.every(isStoredMilestone) ||
       !task.termination ||
       !isStoredTermination(task.termination) ||
-      (task.nodeMeta !== undefined && !isStoredNodeMetaMap(task.nodeMeta))
+      (task.nodeMeta !== undefined && !isStoredNodeMetaMap(task.nodeMeta)) ||
+      (task.revision !== undefined && !isStoredRevisionContext(task.revision))
     ) {
       return null;
     }
@@ -2542,6 +2995,16 @@ function parseLocalDraft(raw: string): LocalTaskDraft | null {
       TASK_COMPOSER_START_ID,
       ...task.milestones.map((milestone) => (milestone as Record<string, unknown>).id),
       (task.termination as Record<string, unknown>).id,
+      ...(isRecord(task.revision)
+        ? [
+            task.revision.markerId,
+            ...(Array.isArray(task.revision.carriedAnchors)
+              ? task.revision.carriedAnchors.flatMap((anchor) =>
+                  isRecord(anchor) && typeof anchor.id === "string" ? [anchor.id] : [],
+                )
+              : []),
+          ]
+        : []),
     ];
     const inspectorEntityId = isRecord(envelope.inspectorDraft)
       ? envelope.inspectorDraft.entityId
@@ -2563,6 +3026,8 @@ function parseLocalDraft(raw: string): LocalTaskDraft | null {
         !nodeIds.includes(storedInspector.returnEntityId)) ||
         (storedInspector.kind === "TERMINATION" &&
           storedInspector.entityId !== taskSeed.termination.id) ||
+        (storedInspector.kind === "REVISION" &&
+          !revisionAnchorAt(taskSeed, storedInspector.entityId)) ||
         (storedInspector.kind === "MILESTONE" &&
           (storedInspector.isNew
             ? nodeIds.includes(storedInspector.entityId)
@@ -2577,6 +3042,14 @@ function parseLocalDraft(raw: string): LocalTaskDraft | null {
       [TASK_COMPOSER_START_ID, taskSeed.plannedStartAt],
       ...taskSeed.milestones.map((milestone) => [milestone.id, milestone.expectedCompletedAt]),
       [taskSeed.termination.id, taskSeed.termination.plannedAt],
+      ...(taskSeed.revision
+        ? [
+            [taskSeed.revision.markerId, taskSeed.revision.revisionAt] as const,
+            ...taskSeed.revision.carriedAnchors.map(
+              (anchor) => [anchor.id, anchor.revisionAt] as const,
+            ),
+          ]
+        : []),
     ] as const;
     if (
       rawNodeTimes.some(
@@ -2789,7 +3262,7 @@ function isStoredTermination(value: unknown) {
 }
 
 function isStoredNodeMetaMap(value: unknown) {
-  if (!isRecord(value) || Object.keys(value).length > 202) return false;
+  if (!isRecord(value) || Object.keys(value).length > 405) return false;
   return Object.entries(value).every(
     ([entityId, meta]) =>
       entityId.length <= 160 &&
@@ -2797,6 +3270,42 @@ function isStoredNodeMetaMap(value: unknown) {
       (meta.lifecycle === "TEMPORARY" || meta.lifecycle === "ESTABLISHED") &&
       typeof meta.lastValidAt === "string" &&
       validLocalDateTime(meta.lastValidAt),
+  );
+}
+
+function isStoredRevisionContext(value: unknown): value is TaskComposerRevisionContext {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.markerId === "string" &&
+    value.markerId.length <= 160 &&
+    typeof value.reason === "string" &&
+    value.reason.length <= 2_000 &&
+    typeof value.revisionAt === "string" &&
+    value.revisionAt.length <= 32 &&
+    Number.isInteger(value.reviewRound) &&
+    Number(value.reviewRound) >= 1 &&
+    Array.isArray(value.lockedMilestoneIds) &&
+    value.lockedMilestoneIds.length <= 200 &&
+    value.lockedMilestoneIds.every(
+      (id) => typeof id === "string" && id.length <= 160,
+    ) &&
+    Array.isArray(value.carriedAnchors) &&
+    value.carriedAnchors.length <= 200 &&
+    value.carriedAnchors.every(isStoredRevisionAnchor)
+  );
+}
+
+function isStoredRevisionAnchor(value: unknown): value is TaskComposerRevisionAnchor {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    value.id.length <= 160 &&
+    typeof value.reason === "string" &&
+    value.reason.length <= 2_000 &&
+    typeof value.revisionAt === "string" &&
+    value.revisionAt.length <= 32 &&
+    typeof value.status === "string" &&
+    value.status.length <= 80
   );
 }
 
@@ -2851,6 +3360,13 @@ function isStoredInspectorDraft(value: unknown): value is TaskComposerInspectorD
       String(termination.businessDescription).length <= 2_000
     );
   }
+  if (value.kind === "REVISION") {
+    return (
+      isStoredRevisionAnchor(value.revision) &&
+      typeof value.isCurrent === "boolean" &&
+      value.revision.id === value.entityId
+    );
+  }
   return false;
 }
 
@@ -2895,6 +3411,12 @@ function composerSubmissionFingerprint(state: TaskComposerSeed) {
     plannedStartAt: state.plannedStartAt,
     milestones: sortMilestones(state.milestones),
     termination: state.termination,
+    revision: state.revision
+      ? {
+          reason: state.revision.reason,
+          revisionAt: state.revision.revisionAt,
+        }
+      : null,
   });
 }
 
@@ -2937,6 +3459,16 @@ function normalizeComposerSeed(seed: TaskComposerSeed): TaskComposerSeed {
     normalizeMeta(milestone.id, milestone.expectedCompletedAt, "ESTABLISHED"),
   );
   normalizeMeta(seed.termination.id, seed.termination.plannedAt, "ESTABLISHED");
+  if (seed.revision) {
+    normalizeMeta(
+      seed.revision.markerId,
+      seed.revision.revisionAt,
+      "ESTABLISHED",
+    );
+    seed.revision.carriedAnchors.forEach((anchor) =>
+      normalizeMeta(anchor.id, anchor.revisionAt, "ESTABLISHED"),
+    );
+  }
   normalizedMeta[TASK_COMPOSER_START_ID]!.lifecycle = "ESTABLISHED";
   normalizedMeta[seed.termination.id]!.lifecycle = "ESTABLISHED";
   const normalized: TaskComposerSeed = {
@@ -2991,6 +3523,109 @@ function createFallbackRenderChronology(state: TaskComposerSeed) {
     ),
   };
   return { ...state, milestones, nodeMeta };
+}
+
+function revisionAnchorAt(state: TaskComposerSeed, entityId: string) {
+  if (!state.revision) return null;
+  if (state.revision.markerId === entityId) return state.revision.revisionAt;
+  return state.revision.carriedAnchors.find((anchor) => anchor.id === entityId)
+    ?.revisionAt ?? null;
+}
+
+function revisionAnchorTimes(state: TaskComposerSeed) {
+  if (!state.revision) return [];
+  return [
+    localMs(state.revision.revisionAt),
+    ...state.revision.carriedAnchors.map((anchor) => localMs(anchor.revisionAt)),
+  ].filter(Number.isFinite);
+}
+
+function isLockedRevisionMilestone(state: TaskComposerSeed, entityId: string) {
+  return state.revision?.lockedMilestoneIds.includes(entityId) ?? false;
+}
+
+function isReadOnlyRevisionEntity(state: TaskComposerSeed, entityId: string) {
+  if (!state.revision) return false;
+  return (
+    entityId === TASK_COMPOSER_START_ID ||
+    state.revision.lockedMilestoneIds.includes(entityId) ||
+    state.revision.carriedAnchors.some((anchor) => anchor.id === entityId)
+  );
+}
+
+function isRevisionTimeLegal(state: TaskComposerSeed, candidate: string) {
+  if (
+    !state.revision ||
+    !validLocalDateTime(candidate) ||
+    !validLocalDateTime(state.plannedStartAt) ||
+    !validLocalDateTime(state.termination.plannedAt)
+  ) {
+    return false;
+  }
+  const lowerBoundary = Math.max(
+    localMs(state.plannedStartAt),
+    ...state.revision.lockedMilestoneIds.map((id) => comparisonAtMs(state, id)),
+    ...state.revision.carriedAnchors.map((anchor) => localMs(anchor.revisionAt)),
+  );
+  const candidateAt = localMs(candidate);
+  return (
+    candidateAt >= lowerBoundary &&
+    candidateAt <= localMs(state.termination.plannedAt)
+  );
+}
+
+function sanitizeRecoveredComposerState({
+  recovered,
+  authoritative,
+  mode,
+  canManageMembers,
+}: {
+  recovered: TaskComposerSeed;
+  authoritative: TaskComposerSeed;
+  mode: TaskComposerMode;
+  canManageMembers: boolean;
+}) {
+  if (mode.kind === "EDIT_DRAFT" && !canManageMembers) {
+    return { ...recovered, members: authoritative.members };
+  }
+  if (mode.kind !== "CREATE_REVISION" && mode.kind !== "RESUBMIT_REVISION") {
+    return recovered;
+  }
+  const authoritativeRevision = authoritative.revision;
+  const recoveredRevision = recovered.revision;
+  if (!authoritativeRevision || !recoveredRevision) return authoritative;
+  const lockedById = new Map(
+    authoritative.milestones
+      .filter((milestone) =>
+        authoritativeRevision.lockedMilestoneIds.includes(milestone.id),
+      )
+      .map((milestone) => [milestone.id, milestone]),
+  );
+  const editable = recovered.milestones.filter(
+    (milestone) => !lockedById.has(milestone.id),
+  );
+  return normalizeComposerSeed({
+    ...recovered,
+    title: authoritative.title,
+    description: authoritative.description,
+    team: authoritative.team,
+    techGroup: authoritative.techGroup,
+    priority: authoritative.priority,
+    tagIds: authoritative.tagIds,
+    relatedTaskId: authoritative.relatedTaskId,
+    members: authoritative.members,
+    plannedStartAt: authoritative.plannedStartAt,
+    milestones: [...lockedById.values(), ...editable],
+    selectedEntityId:
+      recovered.selectedEntityId === recoveredRevision.markerId
+        ? authoritativeRevision.markerId
+        : recovered.selectedEntityId,
+    revision: {
+      ...authoritativeRevision,
+      reason: recoveredRevision.reason,
+      revisionAt: recoveredRevision.revisionAt,
+    },
+  });
 }
 
 function formatSavedAt(value: string) {

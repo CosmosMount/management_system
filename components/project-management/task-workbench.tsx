@@ -12,9 +12,7 @@ import {
 import {
   approveRevision,
   cancelRevision,
-  createRevision,
   rejectRevision,
-  reviseRejectedRevision,
 } from "@/app/actions/project-management/revisions";
 import {
   approveMilestoneReview,
@@ -28,7 +26,6 @@ import {
 } from "@/app/actions/project-management/options";
 import {
   comparePlanVersions,
-  getPlanVersion,
   getTaskLifecycleViews,
 } from "@/app/actions/project-management/plans";
 import { ResourcePlannerCanvasClient } from "@/components/project-management/resource-planner-canvas-client";
@@ -40,10 +37,6 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { TEAM_OPTIONS, TECH_GROUP_OPTIONS } from "@/lib/constants";
 import type { ProjectManagementActionResult } from "@/lib/project-management/application/action-result";
-import {
-  isoToShanghaiDateTimeLocal,
-  shanghaiDateTimeLocalToIso,
-} from "@/lib/project-management/date-time";
 import {
   formatDateTime,
   taskMemberRoleLabels,
@@ -85,14 +78,6 @@ type RunAction = (
   successMessage: string,
   onSuccess?: () => void,
 ) => Promise<void>;
-type RevisionDraftMilestone = {
-  uiKey: string;
-  goal: string;
-  completionCriteria: string;
-  expectedCompletedAt: string;
-  reviewRequirements: string;
-  businessDescription: string;
-};
 type ActiveTaskMemberRole = "OWNER" | "PARTICIPANT";
 const activeTaskMemberRoles: ActiveTaskMemberRole[] = ["OWNER", "PARTICIPANT"];
 
@@ -262,7 +247,12 @@ export function TaskWorkbench({
               </Button>
             )}
             {task.status === "ACTIVE" && workspace.permissions.canCreateRevision && (
-              <Button type="button" onClick={() => selectTab("revisions")}>发起 Revision</Button>
+              <Link
+                href={routes.progress.taskRevisionNew(task.id)}
+                className={cn(buttonVariants())}
+              >
+                发起 Revision
+              </Link>
             )}
             <Button
               type="button"
@@ -686,109 +676,18 @@ function RevisionsPanel({
   runAction: RunAction;
 }) {
   const revisions = lifecycle.revisions;
-  const defaultReplacement = workspace.currentPlan.nodes.flatMap((entry) =>
-    entry.milestone && entry.status !== "COMPLETED" ? [{
-    uiKey: entry.nodeId,
-    goal: entry.milestone.goal,
-    completionCriteria: entry.milestone.completionCriteria,
-    expectedCompletedAt: isoToShanghaiDateTimeLocal(entry.milestone.expectedCompletedAt),
-    reviewRequirements: entry.milestone.reviewRequirements,
-    businessDescription: entry.businessDescription,
-  }] : []);
-  const [replacement, setReplacement] = useState<RevisionDraftMilestone[]>(defaultReplacement);
-  const termination = workspace.currentPlan.nodes.find((entry) => entry.termination);
-  const [reason, setReason] = useState("");
-  const [terminationDraft, setTerminationDraft] = useState({
-    name: termination?.termination?.name ?? "Terminal",
-    plannedAt: isoToShanghaiDateTimeLocal(
-      termination?.termination?.plannedAt ??
-        addDaysIso(workspace.currentPlan.plannedStartAt ?? workspace.task.createdAt, 1),
-    ),
-    plannedOutcomeCriteria: termination?.termination?.plannedOutcomeCriteria ?? "",
-    businessDescription: termination?.businessDescription ?? "",
-  });
-  const idempotencyKey = useRef<string | null>(null);
-  const [revisionAt, setRevisionAt] = useState(
-    isoToShanghaiDateTimeLocal(
-      workspace.currentPlan.nodes.find(
-        (entry) => entry.nodeId === workspace.task.activeMilestoneNodeId,
-      )?.milestone?.expectedCompletedAt ??
-        workspace.currentPlan.plannedStartAt ??
-        workspace.task.createdAt,
-    ),
-  );
   const [comments, setComments] = useState<Record<string, string>>({});
   const [diff, setDiff] = useState<PlanVersionDiff | null>(null);
   const [diffError, setDiffError] = useState("");
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState("");
-  const [editingRevisionId, setEditingRevisionId] = useState<string | null>(null);
-  const [editingTargetUpdatedAt, setEditingTargetUpdatedAt] = useState("");
-
-  const beginEditRevision = async (
-    revision: TaskLifecycleViews["revisions"][number],
-  ) => {
-    if (!revision.targetPlanVersionId) return;
-    setLoadingMore(true);
-    setLoadError("");
-    try {
-      const result = await getPlanVersion(revision.targetPlanVersionId);
-      if (!result.ok) return setLoadError(result.error.message);
-      const revisionIndex = result.data.nodes.findIndex(
-        (entry) => entry.nodeId === revision.taskNodeId,
-      );
-      if (revisionIndex < 0) return setLoadError("候选计划结构不完整，无法编辑。");
-      const editableNodes = result.data.nodes.slice(revisionIndex + 1);
-      const nextTermination = editableNodes.find((entry) => entry.termination);
-      if (!nextTermination?.termination) {
-        return setLoadError("候选计划缺少 Termination，无法编辑。");
-      }
-      setEditingRevisionId(revision.id);
-      setEditingTargetUpdatedAt(result.data.updatedAt);
-      setReason(revision.reason);
-      setRevisionAt(isoToShanghaiDateTimeLocal(revision.revisionAt));
-      setReplacement(editableNodes.flatMap((entry) => entry.milestone ? [{
-        uiKey: entry.nodeId,
-        goal: entry.milestone.goal,
-        completionCriteria: entry.milestone.completionCriteria,
-        expectedCompletedAt: isoToShanghaiDateTimeLocal(entry.milestone.expectedCompletedAt),
-        reviewRequirements: entry.milestone.reviewRequirements,
-        businessDescription: entry.businessDescription,
-      }] : []));
-      setTerminationDraft({
-        name: nextTermination.termination.name,
-        plannedAt: isoToShanghaiDateTimeLocal(nextTermination.termination.plannedAt),
-        plannedOutcomeCriteria: nextTermination.termination.plannedOutcomeCriteria,
-        businessDescription: nextTermination.businessDescription,
-      });
-    } catch {
-      setLoadError("候选计划加载失败，请稍后重试。");
-    } finally {
-      setLoadingMore(false);
-    }
-  };
 
   return (
     <div className="space-y-4">
-      {workspace.task.status === "ACTIVE" &&
-        (workspace.permissions.canCreateRevision || Boolean(editingRevisionId)) && (
-        <section className="space-y-3 rounded-xl border border-primary/20 bg-card p-4">
-          <div><h2 className="font-semibold">Revision 候选计划{editingRevisionId ? "（修改被驳回记录）" : ""}</h2><p className="mt-1 text-sm text-muted-foreground">已完成 Milestone 和既有 Revision 由服务端锁定；保存后直接进入待审批。</p></div>
-          <Field label="Revision 时间"><Input aria-label="Revision 时间" type="datetime-local" value={revisionAt} onChange={(event) => setRevisionAt(event.target.value)} /></Field>
-          <Field label="修订原因"><Textarea value={reason} onChange={(event) => setReason(event.target.value)} maxLength={2_000} /></Field>
-          <div className="space-y-3">
-            {replacement.map((milestone, index) => <div key={milestone.uiKey} className="grid gap-2 rounded-lg border border-border p-3 md:grid-cols-2"><div className="md:col-span-2 flex flex-wrap items-center justify-between gap-2"><h3 className="font-medium">替换 Milestone #{index + 1}</h3><div className="flex gap-1"><Button type="button" size="sm" variant="outline" aria-label={`前移替换 Milestone #${index + 1}`} disabled={index === 0} onClick={() => setReplacement((current) => moveItem(current, index, index - 1))}>前移</Button><Button type="button" size="sm" variant="outline" aria-label={`后移替换 Milestone #${index + 1}`} disabled={index === replacement.length - 1} onClick={() => setReplacement((current) => moveItem(current, index, index + 1))}>后移</Button><Button type="button" size="sm" variant="destructive" aria-label={`删除替换 Milestone #${index + 1}`} onClick={() => setReplacement((current) => current.filter((_, itemIndex) => itemIndex !== index))}>删除</Button></div></div><Field label="目标"><Input aria-label={`替换 Milestone #${index + 1} 目标`} value={milestone.goal} onChange={(event) => setReplacement((current) => patchItem(current, index, { goal: event.target.value }))} /></Field><Field label="预期完成"><Input aria-label={`替换 Milestone #${index + 1} 预期完成`} type="datetime-local" value={milestone.expectedCompletedAt} onChange={(event) => setReplacement((current) => patchItem(current, index, { expectedCompletedAt: event.target.value }))} /></Field><Field label="完成条件"><Textarea aria-label={`替换 Milestone #${index + 1} 完成条件`} value={milestone.completionCriteria} onChange={(event) => setReplacement((current) => patchItem(current, index, { completionCriteria: event.target.value }))} /></Field><Field label="验收要求"><Textarea aria-label={`替换 Milestone #${index + 1} 验收要求`} value={milestone.reviewRequirements} onChange={(event) => setReplacement((current) => patchItem(current, index, { reviewRequirements: event.target.value }))} /></Field><Field label="业务说明" className="md:col-span-2"><Textarea aria-label={`替换 Milestone #${index + 1} 业务说明`} value={milestone.businessDescription} onChange={(event) => setReplacement((current) => patchItem(current, index, { businessDescription: event.target.value }))} /></Field></div>)}
-          </div>
-          <Button type="button" variant="outline" onClick={() => setReplacement((current) => [...current, { uiKey: newClientKey("revision-milestone"), goal: "", completionCriteria: "", expectedCompletedAt: current.at(-1)?.expectedCompletedAt ?? revisionAt, reviewRequirements: "", businessDescription: "" }])}>添加替换 Milestone</Button>
-          <div className="grid gap-2 rounded-lg border border-border p-3 md:grid-cols-2"><h3 className="font-medium md:col-span-2">候选 Termination</h3><Field label="名称"><Input aria-label="候选 Termination 名称" value={terminationDraft.name} onChange={(event) => setTerminationDraft((current) => ({ ...current, name: event.target.value }))} /></Field><Field label="计划结束"><Input aria-label="候选 Termination 计划结束" type="datetime-local" value={terminationDraft.plannedAt} onChange={(event) => setTerminationDraft((current) => ({ ...current, plannedAt: event.target.value }))} /></Field><Field label="预期结果"><Input aria-label="候选 Termination 预期结果" value={terminationDraft.plannedOutcomeCriteria} onChange={(event) => setTerminationDraft((current) => ({ ...current, plannedOutcomeCriteria: event.target.value }))} /></Field><Field label="业务说明" className="md:col-span-2"><Textarea aria-label="候选 Termination 业务说明" value={terminationDraft.businessDescription} onChange={(event) => setTerminationDraft((current) => ({ ...current, businessDescription: event.target.value }))} /></Field></div>
-          <div className="flex flex-wrap gap-2"><Button type="button" disabled={busy || !revisionAt} onClick={() => { const replacementMilestones = replacement.map((entry) => ({ goal: entry.goal, completionCriteria: entry.completionCriteria, expectedCompletedAt: shanghaiDateTimeLocalToIso(entry.expectedCompletedAt), reviewRequirements: entry.reviewRequirements, businessDescription: entry.businessDescription })); const termination = { ...terminationDraft, plannedAt: shanghaiDateTimeLocalToIso(terminationDraft.plannedAt) }; if (editingRevisionId) { void runAction(() => reviseRejectedRevision({ revisionNodeId: editingRevisionId, expectedTargetPlanUpdatedAt: editingTargetUpdatedAt, revisionAt: shanghaiDateTimeLocalToIso(revisionAt), reason, replacementMilestones, termination }), "Revision 已修改并重新送审。", () => { setEditingRevisionId(null); setEditingTargetUpdatedAt(""); setReason(""); }); return; } idempotencyKey.current ??= `revision-workbench:${globalThis.crypto.randomUUID()}`; void runAction(() => createRevision({ taskId: workspace.task.id, basePlanVersionId: workspace.currentPlan.id, baseTaskLockVersion: workspace.task.lockVersion, revisionAt: shanghaiDateTimeLocalToIso(revisionAt), reason, replacementMilestones, termination, idempotencyKey: idempotencyKey.current }), "Revision 已创建并送审。", () => { idempotencyKey.current = null; setReason(""); }); }}>{editingRevisionId ? "修改并重新送审" : "创建并送审"}</Button>{editingRevisionId && <Button type="button" variant="outline" onClick={() => { setEditingRevisionId(null); setEditingTargetUpdatedAt(""); setReplacement(defaultReplacement); setReason(""); }}>取消编辑</Button>}</div>
-        </section>
-      )}
-
       <section className="space-y-3 rounded-xl border border-border bg-card p-4">
         <h2 className="font-semibold">Revision 历史</h2>
         {revisions.length === 0 && <p className="text-sm text-muted-foreground">暂无 Revision。</p>}
-        {revisions.map((revision) => <article key={revision.id} className="space-y-2 rounded-lg border border-border p-3"><div className="flex flex-wrap items-center gap-2"><Badge>{revisionStatusLabel(revision.status)}</Badge>{revision.targetVersionNo && <Badge variant="outline">候选 v{revision.targetVersionNo}</Badge>}<Badge variant="outline">第 {revision.reviewRound} 轮</Badge><span className="text-sm text-muted-foreground">基线锁 {revision.baseTaskLockVersion}</span></div><h3 className="font-medium">{revision.reason}</h3><p className="text-sm text-muted-foreground">标记 {formatDateTime(revision.revisionAt)} · 创建 {formatDateTime(revision.createdAt)} · 审批 {formatDateTime(revision.reviewedAt)} · 生效 {formatDateTime(revision.effectiveAt)}</p>{revision.reviewComment && <p className="text-sm">审批说明：{revision.reviewComment}</p>}<Field label="处理说明"><Input value={comments[revision.id] ?? ""} onChange={(event) => setComments({ ...comments, [revision.id]: event.target.value })} /></Field><div className="flex flex-wrap gap-2">{revision.capabilities.canEdit && <Button type="button" size="sm" variant="outline" disabled={busy || loadingMore} onClick={() => void beginEditRevision(revision)}>修改候选计划</Button>}{revision.capabilities.canReview && <><Button type="button" size="sm" disabled={busy} onClick={() => void runAction(() => approveRevision({ revisionNodeId: revision.id, comment: comments[revision.id] ?? "" }), "Revision 已批准并应用。")}>批准</Button><Button type="button" size="sm" variant="destructive" disabled={busy} onClick={() => void runAction(() => rejectRevision({ revisionNodeId: revision.id, comment: comments[revision.id] ?? "" }), "Revision 已驳回。")}>驳回</Button></>}{revision.capabilities.canCancel && <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void runAction(() => cancelRevision({ revisionNodeId: revision.id, comment: comments[revision.id] ?? "" }), "Revision 已取消。")}>取消</Button>}{revision.targetPlanVersionId && <Button type="button" size="sm" variant="outline" onClick={() => void comparePlanVersions({ fromPlanVersionId: revision.basePlanVersionId, toPlanVersionId: revision.targetPlanVersionId! }).then((result) => { if (result.ok) { setDiff(result.data); setDiffError(""); } else setDiffError(result.error.message); }).catch(() => setDiffError("版本比较请求失败。"))}>查看三层 Diff</Button>}</div></article>)}
+        {revisions.map((revision) => <article key={revision.id} className="space-y-2 rounded-lg border border-border p-3"><div className="flex flex-wrap items-center gap-2"><Badge>{revisionStatusLabel(revision.status)}</Badge>{revision.targetVersionNo && <Badge variant="outline">候选 v{revision.targetVersionNo}</Badge>}<Badge variant="outline">第 {revision.reviewRound} 轮</Badge><span className="text-sm text-muted-foreground">基线锁 {revision.baseTaskLockVersion}</span></div><h3 className="font-medium">{revision.reason}</h3><p className="text-sm text-muted-foreground">标记 {formatDateTime(revision.revisionAt)} · 创建 {formatDateTime(revision.createdAt)} · 审批 {formatDateTime(revision.reviewedAt)} · 生效 {formatDateTime(revision.effectiveAt)}</p>{revision.reviewComment && <p className="text-sm">审批说明：{revision.reviewComment}</p>}<Field label="处理说明"><Input value={comments[revision.id] ?? ""} onChange={(event) => setComments({ ...comments, [revision.id]: event.target.value })} /></Field><div className="flex flex-wrap gap-2">{revision.capabilities.canEdit && <Link href={routes.progress.taskRevisionEdit(workspace.task.id, revision.id)} className={cn(buttonVariants({ size: "sm", variant: "outline" }))}>修改候选计划</Link>}{revision.capabilities.canReview && <><Button type="button" size="sm" disabled={busy} onClick={() => void runAction(() => approveRevision({ revisionNodeId: revision.id, comment: comments[revision.id] ?? "" }), "Revision 已批准并应用。")}>批准</Button><Button type="button" size="sm" variant="destructive" disabled={busy} onClick={() => void runAction(() => rejectRevision({ revisionNodeId: revision.id, comment: comments[revision.id] ?? "" }), "Revision 已驳回。")}>驳回</Button></>}{revision.capabilities.canCancel && <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void runAction(() => cancelRevision({ revisionNodeId: revision.id, comment: comments[revision.id] ?? "" }), "Revision 已取消。")}>取消</Button>}{revision.targetPlanVersionId && <Button type="button" size="sm" variant="outline" onClick={() => void comparePlanVersions({ fromPlanVersionId: revision.basePlanVersionId, toPlanVersionId: revision.targetPlanVersionId! }).then((result) => { if (result.ok) { setDiff(result.data); setDiffError(""); } else setDiffError(result.error.message); }).catch(() => setDiffError("版本比较请求失败。"))}>查看三层 Diff</Button>}</div></article>)}
         {loadError && <p className="text-sm text-destructive" role="alert">{loadError}</p>}
         {lifecycle.nextRevisionCursor && <Button type="button" variant="outline" disabled={loadingMore} onClick={() => { setLoadingMore(true); setLoadError(""); void getTaskLifecycleViews({ taskId: workspace.task.id, revisionCursor: lifecycle.nextRevisionCursor, revisionLimit: 50, reviewLimit: 1, auditLimit: 1 }).then((result) => { if (!result.ok) { setLoadError(result.error.message); return; } setLifecycle({ ...lifecycle, revisions: [...lifecycle.revisions, ...result.data.revisions], nextRevisionCursor: result.data.nextRevisionCursor }); }).catch(() => setLoadError("Revision 历史加载失败，请稍后重试。")).finally(() => setLoadingMore(false)); }}>加载更多 Revision</Button>}
       </section>
@@ -913,29 +812,10 @@ function Field({ label, htmlFor, className, children }: { label: string; htmlFor
   return <label className={cn("grid gap-1 text-sm", className)}><span className="font-medium">{label}</span>{children}</label>;
 }
 
-function moveItem<T>(items: T[], from: number, to: number) {
-  const result = [...items];
-  const [item] = result.splice(from, 1);
-  if (item !== undefined) result.splice(to, 0, item);
-  return result;
-}
-
-function patchItem<T extends object>(items: T[], index: number, patch: Partial<T>) {
-  return items.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item);
-}
-
 function mergeById<T extends { id: string }>(current: T[], incoming: T[]) {
   const byId = new Map(current.map((item) => [item.id, item]));
   for (const item of incoming) byId.set(item.id, item);
   return [...byId.values()];
-}
-
-function newClientKey(prefix: string) {
-  return `${prefix}:${globalThis.crypto.randomUUID()}`;
-}
-
-function addDaysIso(value: string, days: number) {
-  return new Date(new Date(value).getTime() + days * 86_400_000).toISOString();
 }
 
 function actionLockVersion(value: unknown): number | null {

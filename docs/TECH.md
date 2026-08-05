@@ -160,9 +160,9 @@ TimeCanvas 的请求预算为 Full Segment + Busy 合计 5,000、Task anchor 50�
 
 项目管理浏览器入口覆盖 `/progress` 驾驶舱、Task Composer/工作台、Resource Planner、Personal Timeline、Action Inbox、Tag 和通知偏好。所有页面先解析项目管理 actor；`taskReadableWhere` 和 `segmentReadableWhere` 对所有已登录统一账号返回全部未删除对象，人员列表返回所有活跃 Person，并在所选范围继续展示有历史投入的停用 Person。停用 Person 对应账号仍可进入页面、全局读取并创建 Task，其本人会成为该 Task 的自动 Owner；停用 Person 不可作为其他 Task 的新增成员，也不可创建新 Segment。服务端 action 仍执行成员、Person 状态、状态机、权限、关联和版本校验，DTO capability flags 决定只读或可操作 UI。审批待办和审批按钮只对两类全局管理员可用。
 
-项目管理浏览器入口统一由 `app/progress/layout.tsx` 渲染全站 `AppHeader`、`PageShell` 和模块 Shell，子页只提供上下文命令栏与业务内容。桌面端使用可折叠的 sticky 左侧导航；移动端使用模态 Drawer。模块 Shell 统一读取通知未读数；不可用对象使用脱敏页面。`--pm-*` 语义变量集中在 `app/globals.css`，适配明暗主题和 reduced motion。`myTimeline`、`taskNew`、`taskEdit`、`approvals`、`tags` 均已有类型安全路由和导航入口。`/progress/tasks/new` 与仅限 DRAFT 的 `/progress/tasks/[id]/edit` 共用 Task Composer；编辑 URL 对无查看权或无 metadata 更新权返回脱敏 404，对非 DRAFT 重定向工作台。DRAFT 工作台只读展示概览与 Current Plan，并在右上角按“编辑 Task → 激活 Task → 复制链接”给出能力允许的操作；ACTIVE 工作台编辑和 Revision 保持原路径。
+项目管理浏览器入口统一由 `app/progress/layout.tsx` 渲染全站 `AppHeader`、`PageShell` 和模块 Shell，子页只提供上下文命令栏与业务内容。桌面端使用可折叠的 sticky 左侧导航；移动端使用模态 Drawer。模块 Shell 统一读取通知未读数；不可用对象使用脱敏页面。`--pm-*` 语义变量集中在 `app/globals.css`，适配明暗主题和 reduced motion。`myTimeline`、`taskNew`、`taskEdit`、`taskRevisionNew`、`taskRevisionEdit`、`approvals`、`tags` 均已有类型安全路由和导航入口。`/progress/tasks/new`、仅限 DRAFT 的 `/progress/tasks/[id]/edit`、Revision 新建和驳回重提路由共用 Task Composer；权限不足返回脱敏 404，状态变化或已有候选时重定向工作台。DRAFT 工作台只读展示概览与 Current Plan，并在右上角按“编辑 Task → 激活 Task → 复制链接”给出能力允许的操作。ACTIVE 工作台右上角“发起 Revision”进入独立新建页；Revision Tab 只保留历史、审批/驳回、取消和三层 Diff，被驳回记录链接到独立编辑页。
 
-Task Composer 桌面端采用“Task 信息 / TimeCanvas 与节点表 / 节点 Inspector”三栏，画布与节点表使用同一受控选择和实时节点状态；Inspector 不设保存/取消，连续编辑按节点合并为一条撤销历史。新增 Milestone 立即成为 Composer 专用临时节点，补全后自动转正；编辑模式保留既有 `nodeId`，新节点的 Composer ID 作为提交 `clientKey`。节点元数据保存临时生命周期和无效时间输入期间的最后合法画布位置，不进入服务端 DTO。所有 TimeCanvas PLAN 行采用节点符号与阶段块共线的布局，人员/Task Segment 行不变。Pixel 5 保留纵向实时编辑且不显示桌面画布布局。Composer 只复用时间坐标与交互，不查询成员 Planned/Actual/Busy。
+Task Composer 支持 `CREATE`、`EDIT_DRAFT`、`CREATE_REVISION`、`RESUBMIT_REVISION` 四种模式。桌面端采用“Task/Revision 信息 / TimeCanvas 与节点表 / 节点 Inspector”三栏，画布与节点表使用同一受控选择和实时节点状态；Inspector 不设保存/取消，连续编辑按节点合并为一条撤销历史。新增 Milestone 立即成为 Composer 专用临时节点，补全后自动转正；Task 编辑保留既有 `nodeId`，新节点的 Composer ID 作为提交 `clientKey`。Revision 模式固定 Start，把已完成 Milestone 和已生效 Revision 作为只读承接节点，仅提交可替换 Milestone、当前 Revision 时间/原因和 Terminal；Revision Marker 不参与阶段带边界。节点元数据保存临时生命周期和无效时间输入期间的最后合法画布位置，不进入服务端 DTO。Pixel 5 保留纵向实时编辑且不显示桌面画布布局。Composer 只复用时间坐标与交互，不查询成员 Planned/Actual/Busy。
 
 创建草稿继续使用账号/环境隔离的 v3 存储；编辑草稿使用 `task-edit-draft:{environment}:{accountId}:{taskId}:v1`，正文额外绑定 `taskId`、`planVersionId` 和基础 `lockVersion`。两者对普通内容使用 `localStorage`，对合法 200 节点长文本草稿使用 IndexedDB 并在 `localStorage` 保存校验指针；临时状态和最后合法位置随正文保存。同账号多标签页通过 Web Locks 串行化完整存储事务，离开前取消待触发防抖并等待已入队写入及清理完成。编辑恢复只接受环境、账号、Task、Plan Version 和锁版本完全匹配的内容；版本不匹配时仅允许导出或放弃并加载最新版本，不做字段合并。失去成员管理权后恢复时以服务端成员覆盖本地成员。保存成功后清理本地编辑草稿并返回工作台；浏览器清理失败不改变已提交事务的成功结果。详细规格见 [`docs/plan/task-create-ui/README.md`](plan/task-create-ui/README.md)。
 
@@ -211,6 +211,8 @@ Task Composer 桌面端采用“Task 信息 / TimeCanvas 与节点表 / 节点 I
 | `/progress` | 我的工作总览 |
 | `/progress/tasks` | Task 列表 |
 | `/progress/tasks/new` | Task 创建页（桌面三栏 Composer、移动纵向编辑） |
+| `/progress/tasks/[id]/revisions/new` | Revision 创建并送审 Composer |
+| `/progress/tasks/[id]/revisions/[revisionId]/edit` | 被驳回 Revision 修改并重新送审 Composer |
 | `/progress/tasks/[id]` | Task 工作台 |
 | `/progress/resources` | 人员计划时间轴 |
 | `/progress/notifications` | 站内通知中心 |

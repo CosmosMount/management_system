@@ -1895,7 +1895,9 @@ test.describe("project management P4/P6 UI integration", () => {
     baseURL,
   }, testInfo) => {
     const fixture = await createDraftWorkbenchFixture();
-    const addedMember = await createAccountPerson("S6 Unified Editor Member");
+    const addedMember = await createAccountPerson(
+      `S6 Unified Editor Member ${randomUUID()}`,
+    );
     const inactiveCurrentMember = await createAccountPerson(
       "S6 Unified Editor Inactive Member",
     );
@@ -2022,7 +2024,12 @@ test.describe("project management P4/P6 UI integration", () => {
     await page.getByLabel(tag.name).check();
     await page.getByLabel(`${archivedTag.name}（已归档）`).uncheck();
     await page.getByLabel("成员人员", { exact: true }).fill(addedMember.person.displayName);
-    await page.getByRole("option", { name: new RegExp(addedMember.person.displayName) }).click();
+    await page
+      .getByRole("option", {
+        name: addedMember.person.displayName,
+        exact: true,
+      })
+      .click();
     await page.getByLabel("成员角色").selectOption("PARTICIPANT");
     await page.getByRole("button", { name: "添加", exact: true }).click();
 
@@ -2036,9 +2043,16 @@ test.describe("project management P4/P6 UI integration", () => {
     }
     await page.getByLabel("目标").fill("S6 Draft 持久化目标");
     await page.getByRole("button", { name: "添加 Milestone", exact: true }).first().click();
-    await page.getByLabel("目标").fill("S6 新增 Milestone");
-    await page.getByLabel("完成条件").fill("新增节点保存到数据库");
-    await page.getByLabel("验收要求").fill("提交文本证据");
+    const draftInspector = page.getByTestId("task-composer-inspector");
+    await draftInspector
+      .getByRole("textbox", { name: /^目标/ })
+      .fill("S6 新增 Milestone");
+    await draftInspector
+      .getByRole("textbox", { name: /^完成条件/ })
+      .fill("新增节点保存到数据库");
+    await draftInspector
+      .getByRole("textbox", { name: /^验收要求/ })
+      .fill("提交文本证据");
     await page.getByLabel("预期完成时间").fill("2026-08-03T18:00");
     if (testInfo.project.name === "mobile") {
       await page
@@ -2122,7 +2136,6 @@ test.describe("project management P4/P6 UI integration", () => {
     baseURL,
   }) => {
     const fixture = await createDraftWorkbenchFixture();
-    const localOnlyMember = await createAccountPerson("S6 Legacy Local-only Member");
     const legacyMembers = await Promise.all(
       (["LEAD", "MEMBER", "REVIEWER", "VIEWER"] as const).map(async (role) => ({
         role,
@@ -2136,13 +2149,11 @@ test.describe("project management P4/P6 UI integration", () => {
     });
 
     await page.goto(`/progress/tasks/${fixture.taskId}/edit`);
-    await page.getByLabel("成员人员", { exact: true }).fill(
-      localOnlyMember.person.displayName,
-    );
     await page
-      .getByRole("option", { name: new RegExp(localOnlyMember.person.displayName) })
+      .getByRole("button", {
+        name: `移除 ${fixture.reviewer.person.displayName} 参与人`,
+      })
       .click();
-    await page.getByRole("button", { name: "添加", exact: true }).click();
     await page.getByLabel("Task 名称").fill(updatedTitle);
     await expect
       .poll(() =>
@@ -2153,20 +2164,34 @@ test.describe("project management P4/P6 UI integration", () => {
         fixture.taskId),
       )
       .toBe(true);
-    await prisma.taskMember.createMany({
-      data: legacyMembers.map(({ account, role }) => ({
-        taskId: fixture.taskId,
-        personId: account.person.id,
-        role,
-        createdByAccountId: fixture.admin.account.id,
-      })),
-    });
+    await prisma.$executeRawUnsafe(
+      'ALTER TABLE "TaskMember" DROP CONSTRAINT "TaskMember_active_role_check"',
+    );
+    try {
+      await prisma.taskMember.createMany({
+        data: legacyMembers.map(({ account, role }) => ({
+          taskId: fixture.taskId,
+          personId: account.person.id,
+          role,
+          createdByAccountId: fixture.admin.account.id,
+        })),
+      });
+    } finally {
+      await prisma.$executeRawUnsafe(`
+        ALTER TABLE "TaskMember"
+          ADD CONSTRAINT "TaskMember_active_role_check"
+          CHECK (
+            "removedAt" IS NOT NULL
+            OR role IN ('OWNER', 'PARTICIPANT')
+          ) NOT VALID
+      `);
+    }
 
     await page.reload();
     await expect(page.getByRole("button", { name: "恢复草稿" })).toBeVisible();
     await page.getByRole("button", { name: "恢复草稿" }).click();
     await expect(page.getByLabel("Task 名称")).toHaveValue(updatedTitle);
-    await expect(page.getByText(localOnlyMember.person.displayName)).toHaveCount(0);
+    await expect(page.getByText(fixture.reviewer.person.displayName)).toBeVisible();
     const memberList = page.locator("#members");
     for (const { account, role } of legacyMembers) {
       const row = memberList.getByText(account.person.displayName).locator("..");
@@ -2202,6 +2227,7 @@ test.describe("project management P4/P6 UI integration", () => {
         title: updatedTitle,
         lockVersion: 1,
         members: [
+          { personId: fixture.admin.person.id, role: "OWNER" },
           { personId: fixture.owner.person.id, role: "OWNER" },
           { personId: fixture.reviewer.person.id, role: "PARTICIPANT" },
           ...legacyMembers.map(({ account, role }) => ({
@@ -2272,6 +2298,7 @@ test.describe("project management P4/P6 UI integration", () => {
         title: updatedTitle,
         lockVersion: 1,
         members: [
+          { personId: fixture.admin.person.id, role: "OWNER" },
           { personId: fixture.owner.person.id, role: "PARTICIPANT" },
           { personId: fixture.reviewer.person.id, role: "PARTICIPANT" },
           { personId: replacementOwner.person.id, role: "OWNER" },
@@ -2365,8 +2392,15 @@ test.describe("project management P4/P6 UI integration", () => {
   }, testInfo) => {
     const fixture = await createDraftWorkbenchFixture();
     const outsider = await createAccountPerson("S6 Unified Editor Outsider");
+    const searchFillerKey = randomUUID();
+    await prisma.person.createMany({
+      data: Array.from({ length: 55 }, (_, index) => ({
+        displayName: `000 S6 permission search filler ${String(index).padStart(2, "0")} ${searchFillerKey}`,
+        status: "ACTIVE" as const,
+      })),
+    });
     const localOnlyMember = await createAccountPerson(
-      "S6 Permission Downgrade Local Member",
+      `S6 Permission Downgrade Local Member ${randomUUID()}`,
     );
     const temporaryAdministrator = await prisma.systemRoleAssignment.create({
       data: {
@@ -2390,11 +2424,15 @@ test.describe("project management P4/P6 UI integration", () => {
     });
 
     await page.goto(`/progress/tasks/${fixture.taskId}/edit`);
-    await page.getByLabel("成员人员", { exact: true }).fill(
-      localOnlyMember.person.displayName,
-    );
+    const memberPicker = page.getByLabel("成员人员", { exact: true });
+    await memberPicker.click();
+    await memberPicker.press("ControlOrMeta+A");
+    await memberPicker.pressSequentially(localOnlyMember.person.displayName);
     await page
-      .getByRole("option", { name: new RegExp(localOnlyMember.person.displayName) })
+      .getByRole("option", {
+        name: localOnlyMember.person.displayName,
+        exact: true,
+      })
       .click();
     await page.getByLabel("成员角色").selectOption("PARTICIPANT");
     await page.getByRole("button", { name: "添加", exact: true }).click();
@@ -2692,6 +2730,10 @@ test.describe("project management P4/P6 UI integration", () => {
       openId: viewer.openId,
       name: viewer.person.displayName,
     });
+    const deniedRevisionPage = await page.goto(
+      `/progress/tasks/${fixture.taskId}/revisions/new`,
+    );
+    expect(deniedRevisionPage?.status()).toBe(404);
     await page.goto(`/progress/tasks/${fixture.taskId}`);
     await page.getByRole("tab", { name: "概览" }).click();
     await expect(page.getByRole("button", { name: "保存元数据" })).toHaveCount(0);
@@ -2712,6 +2754,20 @@ test.describe("project management P4/P6 UI integration", () => {
       "aria-selected",
       "true",
     );
+    await expect(page.getByLabel("Revision 时间")).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "创建并送审" }),
+    ).toHaveCount(0);
+    await prisma.task.update({
+      where: { id: fixture.taskId },
+      data: { status: "DRAFT" },
+    });
+    await page.goto(`/progress/tasks/${fixture.taskId}/revisions/new`);
+    await expect(page).toHaveURL(`/progress/tasks/${fixture.taskId}`);
+    await prisma.task.update({
+      where: { id: fixture.taskId },
+      data: { status: "ACTIVE" },
+    });
     await page.goto(`/progress/tasks/${fixture.taskId}?tab=termination`);
     await expect(page.getByRole("tab", { name: /验收/ })).toHaveAttribute(
       "aria-selected",
@@ -2771,35 +2827,121 @@ test.describe("project management P4/P6 UI integration", () => {
       name: fixture.owner.person.displayName,
     });
     await page.goto(`/progress/tasks/${fixture.taskId}`);
-    await page.getByRole("tab", { name: "修订与历史" }).click();
-    const revisionEditor = page.locator("section").filter({
-      has: page.getByRole("heading", { name: "Revision 候选计划" }),
-    });
-    await revisionEditor.getByLabel("修订原因").fill("S6 调整后续目标");
-    await revisionEditor.getByLabel("替换 Milestone #1 目标").fill("S6 Revision 新目标");
-    await revisionEditor.getByLabel("替换 Milestone #1 业务说明").fill("S6 Revision 业务说明 A");
-    await revisionEditor.getByRole("button", { name: "添加替换 Milestone" }).click();
-    await revisionEditor.getByLabel("替换 Milestone #2 目标").fill("S6 Revision 新目标 B");
-    await revisionEditor.getByLabel("替换 Milestone #2 完成条件").fill("S6 Revision 条件 B");
-    await revisionEditor.getByLabel("替换 Milestone #2 验收要求").fill("S6 Revision 验收 B");
-    await revisionEditor.getByLabel("替换 Milestone #2 业务说明").fill("S6 Revision 业务说明 B");
-    await revisionEditor
-      .getByLabel("替换 Milestone #2 预期完成")
-      .fill("2026-08-01T21:00");
-    await revisionEditor
-      .getByRole("button", { name: "前移替换 Milestone #2" })
-      .click();
-    await expect(revisionEditor.getByLabel("替换 Milestone #1 目标")).toHaveValue(
-      "S6 Revision 新目标 B",
+    await page.getByRole("link", { name: "发起 Revision" }).click();
+    await expect(page).toHaveURL(
+      `/progress/tasks/${fixture.taskId}/revisions/new`,
     );
-    await revisionEditor
-      .getByLabel("候选 Termination 业务说明")
-      .fill("S6 Revision Termination 业务说明");
-    await revisionEditor
-      .getByLabel("候选 Termination 名称")
-      .fill("S6 自定义交付终点");
-    await revisionEditor.getByRole("button", { name: "创建并送审" }).click();
-    await expect(page.getByText("Revision 已创建并送审。")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "发起 Revision" })).toBeVisible();
+    await expect(page.getByTestId("task-composer")).toHaveAttribute(
+      "data-composer-mode",
+      "CREATE_REVISION",
+    );
+    expect(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth <=
+          document.documentElement.clientWidth + 1,
+      ),
+    ).toBe(true);
+    if ((page.viewportSize()?.width ?? 0) >= 1_024) {
+      await page
+        .getByRole("button", { name: "查看 P6 UI 第一阶段" })
+        .click();
+    } else {
+      await page
+        .getByLabel("移动端纵向计划节点")
+        .getByRole("button", { name: /P6 UI 第一阶段/ })
+        .click();
+    }
+    await expect(
+      page
+        .getByTestId("task-composer-inspector")
+        .getByRole("textbox", { name: /^目标/ }),
+    ).toHaveAttribute("readonly", "");
+    if ((page.viewportSize()?.width ?? 0) >= 1_024) {
+      await page.getByRole("button", { name: "查看 Start" }).click();
+    } else {
+      await page
+        .getByLabel("移动端纵向计划节点")
+        .getByRole("button", { name: /Start/ })
+        .click();
+    }
+    await expect(page.getByLabel("计划开始时间")).toHaveAttribute("readonly", "");
+    await page.getByLabel("修订原因").fill("S6 调整后续目标");
+    if ((page.viewportSize()?.width ?? 0) >= 1_024) {
+      await page
+        .getByRole("button", { name: "编辑 S6 调整后续目标" })
+        .click();
+    } else {
+      await page
+        .getByLabel("移动端纵向计划节点")
+        .getByRole("button", { name: /S6 调整后续目标/ })
+        .click();
+    }
+    await page.getByLabel("Revision 时间").fill("2026-08-03T12:00");
+    await page.waitForTimeout(900);
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          Object.keys(window.localStorage).some((key) =>
+            key.startsWith("revision-create-draft:"),
+          ),
+        ),
+      )
+      .toBe(true);
+    await page.reload();
+    await page.getByRole("button", { name: "恢复草稿" }).click();
+    await expect(page.getByLabel("修订原因")).toHaveValue("S6 调整后续目标");
+    await expect(page.getByLabel("Revision 时间")).toHaveValue(
+      "2026-08-03T12:00",
+    );
+    await prisma.task.update({
+      where: { id: fixture.taskId },
+      data: { lockVersion: { increment: 1 } },
+    });
+    await page.reload();
+    await expect(
+      page.getByText("Task 基线已变化，旧 Revision 草稿不能直接覆盖最新版本。"),
+    ).toBeVisible();
+    await page
+      .getByRole("button", { name: "放弃并加载最新版本" })
+      .click();
+    await expect(page.getByLabel("修订原因")).toHaveValue("");
+    await page.getByLabel("修订原因").fill("S6 调整后续目标");
+    if ((page.viewportSize()?.width ?? 0) >= 1_024) {
+      await page
+        .getByRole("button", { name: "编辑 S6 调整后续目标" })
+        .click();
+    } else {
+      await page
+        .getByLabel("移动端纵向计划节点")
+        .getByRole("button", { name: /S6 调整后续目标/ })
+        .click();
+    }
+    await page.getByLabel("Revision 时间").fill("2026-08-03T12:00");
+    await page.getByRole("button", { name: "添加 Milestone" }).first().click();
+    const revisionInspector = page.getByTestId("task-composer-inspector");
+    await revisionInspector
+      .getByRole("textbox", { name: /^目标/ })
+      .fill("S6 Revision 新目标 B");
+    await revisionInspector
+      .getByRole("textbox", { name: /^完成条件/ })
+      .fill("S6 Revision 条件 B");
+    await revisionInspector
+      .getByRole("textbox", { name: /^验收要求/ })
+      .fill("S6 Revision 验收 B");
+    await revisionInspector
+      .getByRole("textbox", { name: "业务说明" })
+      .fill("S6 Revision 业务说明 B");
+    await page.getByRole("button", { name: "创建并送审" }).first().click();
+    await expect(page).toHaveURL(`/progress/tasks/${fixture.taskId}?tab=revisions`);
+    await expect(
+      page.getByRole("heading", { name: "S6 调整后续目标" }),
+    ).toBeVisible();
+    await page.goto(`/progress/tasks/${fixture.taskId}/revisions/new`);
+    await expect(page).toHaveURL(
+      `/progress/tasks/${fixture.taskId}?tab=revisions`,
+    );
     await page.getByRole("button", { name: "查看三层 Diff" }).click();
     await expect(page.getByRole("heading", { name: "结构 / 字段 / 资源 Diff" })).toBeVisible();
 
@@ -2813,17 +2955,63 @@ test.describe("project management P4/P6 UI integration", () => {
     await page.getByRole("button", { name: "驳回" }).click();
     await expect(page.getByText("Revision 已驳回。")).toBeVisible();
 
+    const rejectedRevision = await prisma.revisionNode.findFirstOrThrow({
+      where: { node: { taskId: fixture.taskId }, status: "REJECTED" },
+      orderBy: { node: { createdAt: "desc" } },
+      select: { id: true, targetPlanVersion: { select: { id: true } } },
+    });
+    expect(rejectedRevision.targetPlanVersion).not.toBeNull();
+    await loginAsTestUser(context, baseURL, {
+      openId: viewer.openId,
+      name: viewer.person.displayName,
+    });
+    const deniedRevisionEditPage = await page.goto(
+      `/progress/tasks/${fixture.taskId}/revisions/${rejectedRevision.id}/edit`,
+    );
+    expect(deniedRevisionEditPage?.status()).toBe(404);
+
     await loginAsTestUser(context, baseURL, {
       openId: fixture.owner.openId,
       name: fixture.owner.person.displayName,
     });
     await page.goto(`/progress/tasks/${fixture.taskId}`);
     await page.getByRole("tab", { name: "修订与历史" }).click();
-    await page.getByRole("button", { name: "修改候选计划" }).click();
-    await expect(page.getByRole("heading", { name: /Revision 候选计划（修改被驳回记录）/ })).toBeVisible();
-    await revisionEditor.getByLabel("修订原因").fill("S6 二次编辑候选计划");
-    await revisionEditor.getByRole("button", { name: "修改并重新送审" }).click();
-    await expect(page.getByText("Revision 已修改并重新送审。")).toBeVisible();
+    await page.getByRole("link", { name: "修改候选计划" }).click();
+    await expect(page.getByRole("heading", { name: "修改 Revision" })).toBeVisible();
+    await expect(page.getByTestId("task-composer")).toHaveAttribute(
+      "data-composer-mode",
+      "RESUBMIT_REVISION",
+    );
+    await page.getByLabel("修订原因").fill("S6 二次编辑候选计划");
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          Object.keys(window.localStorage).some((key) =>
+            key.startsWith("revision-resubmit-draft:"),
+          ),
+        ),
+      )
+      .toBe(true);
+    await prisma.taskPlanVersion.update({
+      where: { id: rejectedRevision.targetPlanVersion!.id },
+      data: { updatedAt: new Date(Date.now() + 10_000) },
+    });
+    await page.reload();
+    await expect(
+      page.getByText(
+        "Revision 候选计划已变化，旧本地草稿不能直接覆盖最新版本。",
+      ),
+    ).toBeVisible();
+    await page
+      .getByRole("button", { name: "放弃并加载最新版本" })
+      .click();
+    await expect(page.getByLabel("修订原因")).toHaveValue("S6 调整后续目标");
+    await page.getByLabel("修订原因").fill("S6 二次编辑候选计划");
+    await page.getByRole("button", { name: "修改并重新送审" }).first().click();
+    await expect(page).toHaveURL(`/progress/tasks/${fixture.taskId}?tab=revisions`);
+    await expect(
+      page.getByRole("heading", { name: "S6 二次编辑候选计划" }),
+    ).toBeVisible();
 
     await loginAsTestUser(context, baseURL, {
       openId: fixture.admin.openId,

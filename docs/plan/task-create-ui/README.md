@@ -1,8 +1,8 @@
-# Task Composer 创建与 DRAFT 编辑界面最终设计
+# Task Composer 创建、DRAFT 编辑与 Revision 界面最终设计
 
 状态：已确认，作为实现与验收依据
 
-确认日期：2026-08-04
+确认日期：2026-08-05
 
 ## 1. 文档定位
 
@@ -19,9 +19,10 @@
 
 ## 2. 目标与边界
 
-本次重构把 Task 计划的时间线、节点列表和节点编辑统一到一套数据与交互模型中，并由 `CREATE` 和 `EDIT_DRAFT` 两种模式共用同一 Composer，降低创建、调整、复制和校验节点的操作成本。
+本次重构把 Task 计划的时间线、节点列表和节点编辑统一到一套数据与交互模型中，并由 `CREATE`、`EDIT_DRAFT`、`CREATE_REVISION` 和 `RESUBMIT_REVISION` 四种模式共用同一 Composer，降低创建、调整、复制和校验节点的操作成本。
 
 - `/progress/tasks/new` 用于创建；`/progress/tasks/[id]/edit` 只用于编辑尚未激活的 DRAFT Task。两者在桌面端共用三栏 Composer，在 Pixel 5 共用纵向表单/节点编辑布局且不渲染桌面三栏画布。
+- `/progress/tasks/[id]/revisions/new` 用于 ACTIVE Task 创建并直接送审 Revision；`/progress/tasks/[id]/revisions/[revisionId]/edit` 只用于修改被驳回的候选计划并重新送审。Revision Tab 不再包含内联候选计划编辑器。
 - 创建页不查询或展示成员 Planned、Actual、Busy 数据；只复用统一 `TimeCanvas` 的时间坐标、缩放、平移、适配范围、吸附和选择习惯。
 - 不增加节点级负责人。成员仍是 Task 级 `OWNER`/`PARTICIPANT`，同一人员只能有一个有效角色。
 - Task 允许 `0–200` 个 Milestone；合法计划可以只有 Start 和 Terminal。
@@ -29,7 +30,7 @@
 - Milestone 不新增名称字段；必填 `goal` 同时用于 Inspector 标题、节点表名称、画布标签和阶段名称。
 - 所有新建、Draft 保存、Revision 目标和模板副本提交都必须满足严格时间顺序：`Start < Milestone 1 < … < Milestone n < Terminal`。
 
-现有 URL 预填能力必须保留：`start` 预填计划开始时间，`templateTaskId` 复制模板计划，`relatedTaskId` 预选关联 Task。现有本地草稿、撤销/重做、离开保护、请求幂等、失败保留和成功跳转工作台能力也不得回退。DRAFT 工作台不再内联编辑元数据、成员或计划；“概览”和“计划与资源”只读，统一从右上角“编辑 Task”进入 Composer。ACTIVE 编辑和 Revision 全部保持原状。
+现有 URL 预填能力必须保留：`start` 预填计划开始时间，`templateTaskId` 复制模板计划，`relatedTaskId` 预选关联 Task。现有本地草稿、撤销/重做、离开保护、请求幂等、失败保留和成功跳转工作台能力也不得回退。DRAFT 工作台不再内联编辑元数据、成员或计划；“概览”和“计划与资源”只读，统一从右上角“编辑 Task”进入 Composer。ACTIVE Task 的既有元数据、Tag 和成员编辑保持原状；Revision 的创建和驳回后修改迁入通用 Composer，审批、取消、历史、三层 Diff 和内部状态机保持不变。
 
 ## 3. 页面结构
 
@@ -37,11 +38,11 @@
 
 顶部保留以下操作和状态：
 
-- 创建模式返回 Task 列表；编辑模式返回 Task 工作台；
+- 创建模式返回 Task 列表；DRAFT 编辑返回 Task 工作台；Revision 创建/修改返回“修订与历史”；
 - 本地草稿保存状态和最后保存时间；
 - 撤销、重做；
 - 当前校验问题数量及定位入口；
-- 创建模式主操作“创建 Task 草稿”，编辑模式主操作“保存 Task”。
+- 主操作依次为“创建 Task 草稿”“保存 Task”“创建并送审”“修改并重新送审”。
 
 请求进行中时主操作不可重复触发；编辑模式无业务内容变化时主操作禁用，单纯切换所选节点不算修改。服务端失败时保留 Composer 实时节点状态和临时节点；创建模式同时保留幂等键。成功时清除对应本地草稿并跳转 Task 工作台。
 
@@ -51,7 +52,7 @@
 
 | 区域 | 内容 | 行为 |
 |---|---|---|
-| 左栏 | Task 名称、描述、优先级、车组、技术组、Tag、关联 Task、Owner、Participant | 页面正常滚动；复用现有选择器、校验和成员去重规则 |
+| 左栏 | 创建/DRAFT 编辑时显示 Task 基础信息、Tag、关联 Task 和成员；Revision 时显示只读 Task 摘要及可编辑修订原因 | 页面正常滚动；复用现有选择器、校验和成员去重规则 |
 | 中栏 | 计划时间范围、`TimeCanvas`、节点表 | 占用主要宽度；画布和表格共享同一节点状态与选中状态 |
 | 右栏 | 当前节点 Inspector | 桌面吸顶、内部滚动；字段实时修改，不显示保存/取消 |
 
@@ -60,6 +61,8 @@
 ### 3.3 移动端
 
 Pixel 5 不显示桌面 `TimeCanvas` 或三栏布局，继续使用纵向的基础信息和节点编辑流程。移动端仍必须支持零 Milestone、Terminal 名称、严格时间校验、模板复制和本地草稿恢复，并且不得出现横向溢出、不可操作控件或隐藏桌面内容带来的重复焦点。
+
+Revision 模式在移动端使用相同纵向结构，并清楚标识只读承接节点；修订原因、当前 Revision Marker、后续 Milestone 和 Terminal 仍可完成编辑与送审。
 
 ## 4. 初始值、模板与本地草稿
 
@@ -96,6 +99,12 @@ v3 使用分级浏览器存储：普通草稿继续直接写入按环境和账�
 
 编辑草稿使用 `task-edit-draft:{environment}:{accountId}:{taskId}:v1`，正文除 Composer 完整状态外还绑定 `taskId`、`planVersionId` 和基础 `lockVersion`。只有环境、账号、Task、计划版本和锁版本完全匹配时可恢复；服务端版本变化时不恢复、不覆盖、不做隐式字段合并，只提供原始草稿导出和“放弃并加载最新版本”。保存收到 `STALE_TASK` 时停留当前页并保留本地输入。服务端保存成功后，即使浏览器存储清理失败，也按成功结果返回工作台，不能诱导用户重复提交。
 
+### 4.5 Revision 初始值与本地草稿
+
+Revision Seed 来自 ACTIVE Task 的权威 Current Plan。Start 固定沿用；已完成 Milestone 和已生效 Revision Marker 自动承接并只读；当前 Revision Marker 的时间和修订原因可编辑，但 Marker 只是时间锚点，不形成阶段带，也不能被 Segment 关联；Marker 之后的 Milestone 与 Terminal 可以编辑。创建成功即为 `PENDING_APPROVAL`，被驳回后修改成功直接重新送审并使 `reviewRound + 1`，不存在 DRAFT Revision 或独立 Submit。
+
+创建草稿使用 `revision-create-draft:{environment}:{accountId}:{taskId}:v1`，重提草稿使用 `revision-resubmit-draft:{environment}:{accountId}:{revisionId}:v1`。正文分别绑定基线计划、Task 锁版本，或候选计划更新时间；稳定实体键保证服务端版本变化后仍能发现旧草稿，envelope 校验不匹配时禁止恢复和覆盖，只允许导出或“放弃并加载最新版本”。恢复会把 SSR 重新生成的 Marker ID 映射到权威 Marker，同时保留选中节点、修订时间、后续节点和最后合法画布位置。创建幂等键绑定 Composer `draftId`；冲突和服务端失败均停留页面并保留输入，成功清理草稿并返回 `?tab=revisions`。
+
 ## 5. 统一时间画布
 
 ### 5.1 展示模型
@@ -104,6 +113,7 @@ Start、每个 Milestone 和 Terminal 都是可选择的时间锚点：
 
 - Start：蓝色圆点，标签固定为 `Start`；
 - Composer Milestone：菱形，标签取 `goal`；Workbench 继续按节点状态使用既有完成勾或状态圆点；
+- Revision Marker：独立时间锚点；已生效 Marker 和当前 Marker 都不作为阶段边界，当前 Marker 仅在 Revision Composer 中可编辑；
 - Terminal：旗帜，标签取持久化名称。
 
 所有 `TimeCanvas` PLAN 行都让节点符号与阶段块位于同一条水平连接线上。阶段块从前一节点中心连接至后一节点中心，文案始终取“下一节点”的名称，即下一 Milestone 的 `goal` 或 Terminal 名称；节点名称和上海时区日期显示在符号下方。颜色按 `BLUE → VIOLET → AMBER → EMERALD → ROSE → SLATE` 的固定无障碍色板依序循环，仅用于展示，不写入数据库。零 Milestone 时仍展示 Start、Terminal 和两者之间以 Terminal 名称标注的阶段块。
@@ -114,7 +124,7 @@ Start、每个 Milestone 和 Terminal 都是可选择的时间锚点：
 
 ### 5.2 缩放、吸附与移动
 
-拖动和键盘移动沿用画布当前档位的吸附粒度：
+可编辑节点的拖动和键盘移动沿用画布当前档位的吸附粒度；Revision 模式的 Start、已完成 Milestone 和已生效 Revision Marker 不响应移动：
 
 | 画布档位 | 吸附步长 |
 |---|---|
@@ -122,7 +132,7 @@ Start、每个 Milestone 和 Terminal 都是可选择的时间锚点：
 | 日、周 | 1 天 |
 | 月 | 7 天 |
 
-拖动按时间增量修改原值，不把时区转换为浏览器本地日历日。Start、Milestone、Terminal 均可拖动；键盘聚焦节点后，左右方向键按一个当前吸附步长移动，`Enter`/空格选择节点。所有操作必须保持严格时间边界：
+拖动按时间增量修改原值，不把时区转换为浏览器本地日历日。在创建和 DRAFT 编辑模式中 Start、Milestone、Terminal 均可拖动；Revision 模式仅允许当前 Marker、后续 Milestone 和 Terminal 移动。键盘聚焦节点后，左右方向键按一个当前吸附步长移动，`Enter`/空格选择节点。所有操作必须保持严格时间边界：
 
 - Start 只能移动到首个 Milestone（无 Milestone 时为 Terminal）之前；
 - Terminal 只能移动到最后一个 Milestone（无 Milestone 时为 Start）之后；
@@ -153,7 +163,7 @@ Start、每个 Milestone 和 Terminal 都是可选择的时间锚点：
 | 计划时间 | 上海时区日期时间 |
 | 操作 | 按节点类型提供编辑、复制、删除 |
 
-负责人和状态不属于创建页节点表。Start、Terminal 可以编辑时间/内容，但不能删除、复制或批量选择。Milestone 支持编辑、复制和删除。
+负责人和状态不属于创建页节点表。Start、Terminal 可以编辑时间/内容，但不能删除、复制或批量选择。Milestone 支持编辑、复制和删除。Revision 模式中的 Start、已完成 Milestone 和已生效 Revision Marker 只读，不能复制或删除；当前 Revision Marker 只能编辑时间。
 
 - 单个删除需要确认，完成后同步移除画布锚点和相邻色带；
 - 批量操作仅有“删除所选 Milestone”，确认后一次删除，并作为一条撤销历史；
@@ -170,6 +180,8 @@ Inspector 直接编辑 Composer 实时状态，不显示“保存”“取消”
 | Start | 计划开始时间 | 名称固定为 `Start`；时间必填且早于下一节点 |
 | Milestone | 目标、计划时间、完成条件、验收要求、业务说明 | 前四项必填，业务说明可选；不显示负责人 |
 | Terminal | 名称、计划结束时间、结束条件、业务说明 | 名称、时间、结束条件必填；名称 trim 后 1–200 字符，业务说明可选 |
+
+Revision 模式覆盖上述通用规则：承接的 Start、已完成 Milestone 和已生效 Revision Marker 全部只读；当前 Revision Marker 只编辑时间，修订原因位于左栏；后续 Milestone 和 Terminal 沿用通用 Inspector。
 
 新增 Milestone 立即计入 `0–200` 上限并保持临时状态，直到目标、严格合法时间、完成条件和验收要求全部有效后一次性转为正式节点。转正不可逆；后续字段失效时显示“需修正”并阻止提交。临时节点切换后继续保留，可从 Inspector 或节点表显式删除；普通 Milestone 在 Inspector 保留复制和删除。
 
@@ -194,6 +206,8 @@ Inspector 直接编辑 Composer 实时状态，不显示“保存”“取消”
 - 创建仍在单一事务中写 Task、Current Plan、节点、成员、Tag、审计、站内通知和 `channel=project-management` outbox，并保留现有幂等键冲突检查。
 - DRAFT 统一编辑通过 `updateTaskDraft` 在单一事务锁定 Task 和节点关联，重新加载权限并校验 DRAFT、初始未激活 v1 Current Plan、`planVersionId`、`lockVersion`、目标组织范围、关联可见性、Tag、可选成员、Segment 引用和完整计划；随后整体更新元数据、Tag、可选成员与计划、重算 `snapshotHash`、只递增一次锁并写一条 `pm.task.draft.update` 审计。Participant 必须省略 `members`，伪造成员字段拒绝；该事务不创建站内通知或 outbox。既有三个 DRAFT mutation 只为兼容保留，统一编辑页不调用它们。
 - 编辑 URL 在服务端对无 Task 查看权或无 `task.update_metadata` 权限返回脱敏 404，对非 DRAFT 重定向工作台；Server Action 再次执行权限、状态和锁校验，页面防护不能替代服务端授权。
+- Revision 新建 URL 对无 `revision.create` 权限返回脱敏 404；非 ACTIVE 时返回 Task 工作台，已有 Candidate 时返回“修订与历史”。驳回修改 URL 只接受 `REJECTED && canEdit`，创建人还须保有 `revision.create`，其他操作者须有成员管理权限。Server Action 继续重新验证权限、状态、基线计划、锁版本和候选更新时间。
+- Revision 创建继续原子写入候选计划、Revision Marker、审计和按 Revision ID + round 幂等的审批通知；驳回后调用 `reviseRejectedRevision` 原子替换可编辑后续计划、增加轮次并重新进入 `PENDING_APPROVAL`。每个 Task 最多一个 Candidate，且不增加普通 DRAFT Task 通知规则。
 
 ### 8.3 零 Milestone 生命周期
 
@@ -246,7 +260,7 @@ Inspector 直接编辑 Composer 实时状态，不显示“保存”“取消”
 
 - 初始画布只有 Start/Terminal；空白菜单可创建 Milestone 或移动 Terminal。
 - 画布、节点表和 Inspector 选择双向同步；新增节点立即以临时样式进入三处，补全后自动转正。
-- 全部锚点可拖动和键盘移动，Milestone 穿越后自动重排；非法吸附恢复原位并给出可执行提示。
+- 各模式中的可编辑锚点可拖动和键盘移动，Revision 承接锚点保持只读；Milestone 穿越后自动重排，非法吸附恢复原位并给出可执行提示。
 - 复制、临时节点显式删除、单删、批量删除和连续编辑撤销/重做按本文实时状态规则执行。
 - 刷新恢复临时节点和最后合法画布位置；旧 v3 Inspector 工作副本安全转换，v1/v2 同刻草稿只提示和阻止提交，不自动改变时间。
 - `1440x1000` 下长文本、空列表、200 节点、长错误、慢请求和失败请求均无页面级横向滚动、Next.js error overlay 或未捕获浏览器错误。
@@ -255,6 +269,7 @@ Inspector 直接编辑 Composer 实时状态，不显示“保存”“取消”
 
 - Pixel 5 不渲染桌面三栏画布，但能完成零 Milestone 创建、Terminal 命名和严格时间错误修正。
 - URL 预填、模板复制、Task 级成员权限、本地草稿隔离、幂等创建、失败保留和成功跳转均不回退；DRAFT 编辑在 Desktop/Pixel 5 都能一次保存全部区域，Participant 成员只读，过期本地草稿不能覆盖服务端新版本。
+- Revision 创建和驳回后修改在 Desktop/Pixel 5 都使用通用 Composer；只读承接边界不可绕过，Marker 不切割阶段，成功直接进入待审批并返回 Revision Tab；刷新能恢复选中 Marker，基线或候选版本变化后旧草稿只能导出或显式放弃加载最新版本。
 - Task Composer 与 Task Workbench 的 PLAN 行统一使用水平节点连接布局；Resource Planner、Personal Timeline 的人员/Task 行以及 Planned、Actual、Busy 行为不受影响。
 
 完成实现前必须执行 `npm run check`、`npm run test:e2e`、`npm run build`，并在隔离 PostgreSQL 通过受控 `npm run db:deploy` 验证完整迁移链。

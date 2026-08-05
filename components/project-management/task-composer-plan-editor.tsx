@@ -9,6 +9,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { TimeCanvas } from "@/components/project-management/time-canvas/time-canvas";
+import { buildPlanPhaseBands } from "@/components/project-management/time-canvas/plan-phase-bands";
 import type {
   TimeCanvasAnchorMoveRequest,
   TimeCanvasAnchorMoveResolution,
@@ -90,8 +91,10 @@ export function TaskComposerPlanEditor({
   const canvasModel = useMemo(() => buildComposerCanvasModel(state, issues), [issues, state]);
   const temporaryCount = state.milestones.filter((milestone) => isTemporary(state, milestone.id)).length;
   const allSelected =
-    state.milestones.length > 0 &&
-    state.milestones.every((milestone) => bulkSelection.has(milestone.id));
+    state.milestones.some((milestone) => !isReadOnlyEntity(state, milestone.id)) &&
+    state.milestones
+      .filter((milestone) => !isReadOnlyEntity(state, milestone.id))
+      .every((milestone) => bulkSelection.has(milestone.id));
   const quickAtLocal = quickAt
     ? isoToShanghaiDateTimeLocal(new Date(quickAt.atMs))
     : null;
@@ -104,6 +107,12 @@ export function TaskComposerPlanEditor({
   const lastPlanNodeAt = Math.max(
     renderAtMs(state, TASK_COMPOSER_START_ID),
     ...state.milestones.map((milestone) => renderAtMs(state, milestone.id)),
+    ...(state.revision
+      ? [
+          localMs(state.revision.revisionAt),
+          ...state.revision.carriedAnchors.map((anchor) => localMs(anchor.revisionAt)),
+        ]
+      : []),
   );
   const canMoveTerminalAt = Boolean(quickAt && quickAt.atMs > lastPlanNodeAt);
 
@@ -134,7 +143,9 @@ export function TaskComposerPlanEditor({
                 )}
               </div>
               <p className="mt-1 text-sm text-muted-foreground">
-                固定 Asia/Shanghai；创建页只编排节点，不加载成员投入数据。
+                {state.revision
+                  ? "固定 Asia/Shanghai；承接节点只读，Revision 标记不形成计划阶段。"
+                  : "固定 Asia/Shanghai；Composer 只编排节点，不加载成员投入数据。"}
               </p>
             </div>
             <Button
@@ -246,7 +257,13 @@ export function TaskComposerPlanEditor({
           onSelect={onSelect}
           onToggleAll={(checked) =>
             setBulkSelection(
-              checked ? new Set(state.milestones.map((milestone) => milestone.id)) : new Set(),
+              checked
+                ? new Set(
+                    state.milestones
+                      .filter((milestone) => !isReadOnlyEntity(state, milestone.id))
+                      .map((milestone) => milestone.id),
+                  )
+                : new Set(),
             )
           }
           onToggle={(id, checked) =>
@@ -288,6 +305,7 @@ export function TaskComposerPlanEditor({
       <aside className="min-w-0" aria-label="计划节点检查器">
         <div className="max-h-[calc(100dvh-10rem)] space-y-4 overflow-y-auto rounded-xl border border-border bg-card p-4 lg:sticky lg:top-36">
           <Inspector
+            state={state}
             draft={inspectorDraft}
             issues={inspectorIssues}
             onChange={onUpdateInspector}
@@ -363,7 +381,7 @@ function buildComposerCanvasModel(
       label: "Start",
       atMs: renderAtMs(state, TASK_COMPOSER_START_ID),
       sequence: 0,
-      editable: true,
+      editable: !state.revision,
       versionToken: state.plannedStartAt,
       tone: "BLUE" as const,
       visualState: hasIssue(TASK_COMPOSER_START_ID) ? ("INVALID" as const) : undefined,
@@ -377,7 +395,7 @@ function buildComposerCanvasModel(
       label: milestone.goal || "临时 Milestone",
       atMs: renderAtMs(state, milestone.id),
       sequence: index + 1,
-      editable: true,
+      editable: !isReadOnlyEntity(state, milestone.id),
       versionToken: milestone.expectedCompletedAt,
       tone: phaseTones[index % phaseTones.length],
       visualState: isTemporary(state, milestone.id)
@@ -386,6 +404,40 @@ function buildComposerCanvasModel(
           ? ("INVALID" as const)
           : undefined,
     })),
+    ...(state.revision
+      ? [
+          ...state.revision.carriedAnchors.map((anchor, index) => ({
+            id: anchor.id,
+            rowId: PLAN_ROW_ID,
+            taskId: state.draftId,
+            kind: "REVISION" as const,
+            status: anchor.status,
+            label: anchor.reason || "Revision",
+            atMs: localMs(anchor.revisionAt),
+            sequence: sortedMilestones.length + index + 1,
+            editable: false,
+            versionToken: anchor.revisionAt,
+            tone: "SLATE" as const,
+          })),
+          {
+            id: state.revision.markerId,
+            rowId: PLAN_ROW_ID,
+            taskId: state.draftId,
+            kind: "REVISION" as const,
+            status: "当前候选",
+            label: state.revision.reason || "当前 Revision",
+            atMs: localMs(state.revision.revisionAt),
+            sequence:
+              sortedMilestones.length + state.revision.carriedAnchors.length + 1,
+            editable: true,
+            versionToken: state.revision.revisionAt,
+            tone: "ROSE" as const,
+            visualState: hasIssue(state.revision.markerId)
+              ? ("INVALID" as const)
+              : undefined,
+          },
+        ]
+      : []),
     {
       id: state.termination.id,
       rowId: PLAN_ROW_ID,
@@ -394,7 +446,10 @@ function buildComposerCanvasModel(
       status: "草稿",
       label: state.termination.name || "Terminal",
       atMs: renderAtMs(state, state.termination.id),
-      sequence: sortedMilestones.length + 1,
+      sequence:
+        sortedMilestones.length +
+        (state.revision?.carriedAnchors.length ?? 0) +
+        (state.revision ? 2 : 1),
       editable: true,
       versionToken: state.termination.plannedAt,
       tone: "VIOLET" as const,
@@ -406,22 +461,10 @@ function buildComposerCanvasModel(
   const end = Math.max(...validTimes);
   const duration = Math.max(DAY_MS, end - start);
   const padding = Math.max(DAY_MS, duration * 0.08);
-  const phaseBands = anchors.slice(0, -1).flatMap((anchor, index) => {
-    const next = anchors[index + 1];
-    if (!next || next.atMs <= anchor.atMs) return [];
-    return [{
-      id: `composer-phase-${anchor.id}-${next.id}`,
-      rowId: PLAN_ROW_ID,
-      startMs: anchor.atMs,
-      endMs: next.atMs,
-      label: next.label,
-      tone: phaseTones[index % phaseTones.length] ?? "BLUE",
-      visualState:
-        anchor.visualState === "TEMPORARY" || next.visualState === "TEMPORARY"
-          ? ("TEMPORARY" as const)
-          : undefined,
-    }];
-  });
+  const phaseBands = buildPlanPhaseBands(anchors, PLAN_ROW_ID).map((band) => ({
+    ...band,
+    id: `composer-phase-${band.id}`,
+  }));
   return {
     timezone: "Asia/Shanghai",
     range: { startMs: start - padding, endMs: end + padding + 1 },
@@ -465,17 +508,43 @@ function NodeTable({
   onDuplicate: (milestone: TaskComposerMilestone) => void;
   onDelete: (ids: string[]) => void;
 }) {
+  const revisionRows = state.revision
+    ? [
+        ...state.revision.carriedAnchors.map((anchor) => ({
+          id: anchor.id,
+          name: anchor.reason || "Revision",
+          type: "Revision",
+          at: anchor.revisionAt,
+          milestone: null,
+          temporary: false,
+          readOnly: true,
+        })),
+        {
+          id: state.revision.markerId,
+          name: state.revision.reason || "当前 Revision",
+          type: "Revision",
+          at: state.revision.revisionAt,
+          milestone: null,
+          temporary: false,
+          readOnly: false,
+        },
+      ]
+    : [];
+  const milestoneRows = sortMilestonesForDisplay(state).map((milestone) => ({
+    id: milestone.id,
+    name: milestone.goal || "临时 Milestone",
+    type: "Milestone",
+    at: milestone.expectedCompletedAt,
+    milestone,
+    temporary: isTemporary(state, milestone.id),
+    readOnly: isReadOnlyEntity(state, milestone.id),
+  }));
   const rows = [
-    { id: TASK_COMPOSER_START_ID, name: "Start", type: "Start", at: state.plannedStartAt, milestone: null, temporary: false },
-    ...sortMilestonesForDisplay(state).map((milestone) => ({
-      id: milestone.id,
-      name: milestone.goal || "临时 Milestone",
-      type: "Milestone",
-      at: milestone.expectedCompletedAt,
-      milestone,
-      temporary: isTemporary(state, milestone.id),
-    })),
-    { id: state.termination.id, name: state.termination.name || "Terminal", type: "Terminal", at: state.termination.plannedAt, milestone: null, temporary: false },
+    { id: TASK_COMPOSER_START_ID, name: "Start", type: "Start", at: state.plannedStartAt, milestone: null, temporary: false, readOnly: Boolean(state.revision) },
+    ...[...milestoneRows, ...revisionRows].sort(
+      (left, right) => localMs(left.at) - localMs(right.at) || left.id.localeCompare(right.id),
+    ),
+    { id: state.termination.id, name: state.termination.name || "Terminal", type: "Terminal", at: state.termination.plannedAt, milestone: null, temporary: false, readOnly: false },
   ];
   return (
     <section className="hidden min-w-0 rounded-xl border border-border bg-card p-4 lg:block" aria-label="计划节点列表">
@@ -503,7 +572,7 @@ function NodeTable({
                   type="checkbox"
                   aria-label="选择全部 Milestone"
                   checked={allSelected}
-                  disabled={state.milestones.length === 0}
+                  disabled={state.milestones.every((milestone) => isReadOnlyEntity(state, milestone.id))}
                   onChange={(event) => onToggleAll(event.target.checked)}
                 />
               </th>
@@ -526,7 +595,7 @@ function NodeTable({
                   )}
                 >
                   <td className="py-2">
-                    {row.milestone && (
+                    {row.milestone && !row.readOnly && (
                       <input
                         type="checkbox"
                         aria-label={`选择 ${row.name}`}
@@ -555,6 +624,7 @@ function NodeTable({
                       {row.temporary && (
                         <Badge variant="outline" className="border-amber-500 text-amber-700">临时</Badge>
                       )}
+                      {row.readOnly && <Badge variant="outline">只读承接</Badge>}
                       {hasError && !row.temporary && (
                         <Badge variant="destructive">需修正</Badge>
                       )}
@@ -563,10 +633,10 @@ function NodeTable({
                   <td className="py-2 tabular-nums">{formatLocalDateTime(row.at)}</td>
                   <td className="py-2">
                     <div className="flex gap-1">
-                      <Button type="button" size="icon-xs" variant="ghost" aria-label={`编辑 ${row.name}`} onClick={() => onSelect(row.id)}>
+                      <Button type="button" size="icon-xs" variant="ghost" aria-label={`${row.readOnly ? "查看" : "编辑"} ${row.name}`} onClick={() => onSelect(row.id)}>
                         <Pencil aria-hidden="true" />
                       </Button>
-                      {row.milestone && (
+                      {row.milestone && !row.readOnly && (
                         <>
                           {!row.temporary && (
                             <Button type="button" size="icon-xs" variant="ghost" aria-label={`复制 ${row.name}`} onClick={() => onDuplicate(row.milestone!)}>
@@ -591,16 +661,40 @@ function NodeTable({
 }
 
 function MobileNodeList({ state, issues, onSelect }: { state: TaskComposerSeed; issues: ValidationIssue[]; onSelect: (id: string) => void }) {
-  const rows = [
-    { id: TASK_COMPOSER_START_ID, label: "Start", at: state.plannedStartAt, icon: null, temporary: false },
-    ...sortMilestonesForDisplay(state).map((milestone, index) => ({
+  const revisionRows = state.revision
+    ? [
+        ...state.revision.carriedAnchors.map((anchor) => ({
+          id: anchor.id,
+          label: anchor.reason || "Revision",
+          at: anchor.revisionAt,
+          icon: "Revision",
+          temporary: false,
+          readOnly: true,
+        })),
+        {
+          id: state.revision.markerId,
+          label: state.revision.reason || "当前 Revision",
+          at: state.revision.revisionAt,
+          icon: "Revision",
+          temporary: false,
+          readOnly: false,
+        },
+      ]
+    : [];
+  const milestoneRows = sortMilestonesForDisplay(state).map((milestone, index) => ({
       id: milestone.id,
       label: milestone.goal || "临时 Milestone",
       at: milestone.expectedCompletedAt,
       icon: `M${index + 1}`,
       temporary: isTemporary(state, milestone.id),
-    })),
-    { id: state.termination.id, label: state.termination.name || "Terminal", at: state.termination.plannedAt, icon: "Terminal", temporary: false },
+      readOnly: isReadOnlyEntity(state, milestone.id),
+    }));
+  const rows = [
+    { id: TASK_COMPOSER_START_ID, label: "Start", at: state.plannedStartAt, icon: null, temporary: false, readOnly: Boolean(state.revision) },
+    ...[...milestoneRows, ...revisionRows].sort(
+      (left, right) => localMs(left.at) - localMs(right.at) || left.id.localeCompare(right.id),
+    ),
+    { id: state.termination.id, label: state.termination.name || "Terminal", at: state.termination.plannedAt, icon: "Terminal", temporary: false, readOnly: false },
   ];
   return (
     <div className="mt-4 space-y-2 lg:hidden" aria-label="移动端纵向计划节点">
@@ -623,6 +717,7 @@ function MobileNodeList({ state, issues, onSelect }: { state: TaskComposerSeed; 
             <span className="block break-words font-medium">{row.label}</span>
             <span className="mt-1 block text-xs text-muted-foreground">{formatLocalDateTime(row.at)}</span>
             {row.temporary && <Badge variant="outline" className="mt-1 border-amber-500 text-amber-700">临时</Badge>}
+            {row.readOnly && <Badge variant="outline" className="mt-1">只读承接</Badge>}
           </span>
           {issues.some((issue) => issue.entityId === row.id) && (
             <span className="text-xs text-destructive">需修正</span>
@@ -634,12 +729,14 @@ function MobileNodeList({ state, issues, onSelect }: { state: TaskComposerSeed; 
 }
 
 function Inspector({
+  state,
   draft,
   issues,
   onChange,
   onDuplicate,
   onDelete,
 }: {
+  state: TaskComposerSeed;
   draft: TaskComposerInspectorDraft | null;
   issues: ValidationIssue[];
   onChange: (draft: TaskComposerInspectorDraft) => void;
@@ -649,17 +746,24 @@ function Inspector({
   if (!draft) {
     return <p className="text-sm text-muted-foreground">从画布或节点列表选择一个节点进行编辑。</p>;
   }
+  const readOnly = isReadOnlyEntity(state, draft.entityId);
   const fieldError = (key: string) => issues.some((issue) => issue.key === key);
   return (
     <div className="space-y-3" data-testid="task-composer-inspector">
       <div className="flex items-start justify-between gap-2">
         <div>
           <p className="text-xs text-muted-foreground">
-            {draft.kind === "MILESTONE" && draft.isNew ? "待新增节点" : "节点 Inspector"}
+            {draft.kind === "MILESTONE" && draft.isNew
+              ? "待新增节点"
+              : readOnly
+                ? "只读承接节点"
+                : "节点 Inspector"}
           </p>
           <h2 className="font-semibold">
             {draft.kind === "START"
               ? "Start"
+              : draft.kind === "REVISION"
+                ? draft.revision.reason || "Revision"
               : draft.kind === "TERMINATION"
                 ? draft.termination.name || "Terminal"
                 : draft.milestone.goal || "未命名 Milestone"}
@@ -671,6 +775,7 @@ function Inspector({
         {draft.kind === "MILESTONE" && !draft.isNew && issues.length > 0 && (
           <Badge variant="destructive">需修正</Badge>
         )}
+        {readOnly && <Badge variant="outline">只读</Badge>}
       </div>
 
       {draft.kind === "START" && (
@@ -679,10 +784,43 @@ function Inspector({
             id="plannedStartAt"
             type="datetime-local"
             value={draft.plannedStartAt}
+            readOnly={readOnly}
             aria-invalid={fieldError("plannedStartAt")}
             onChange={(event) => onChange({ ...draft, plannedStartAt: event.target.value })}
           />
         </PlanField>
+      )}
+
+      {draft.kind === "REVISION" && (
+        <>
+          <PlanField label="Revision 时间" required htmlFor="revisionAt">
+            <Input
+              id="revisionAt"
+              type="datetime-local"
+              value={draft.revision.revisionAt}
+              readOnly={readOnly}
+              aria-invalid={fieldError("revisionAt")}
+              onChange={(event) =>
+                onChange({
+                  ...draft,
+                  revision: {
+                    ...draft.revision,
+                    revisionAt: event.target.value,
+                  },
+                })
+              }
+            />
+          </PlanField>
+          <div>
+            <p className="mb-1.5 text-sm font-medium">修订原因</p>
+            <p className="break-words rounded-lg border border-input bg-muted/30 px-3 py-2 text-sm">
+              {draft.revision.reason || "请在左侧填写修订原因"}
+            </p>
+          </div>
+          <p className="text-xs leading-5 text-muted-foreground">
+            Revision 是时间标记，不形成阶段，也不能关联人员投入。
+          </p>
+        </>
       )}
 
       {draft.kind === "MILESTONE" && (
@@ -691,6 +829,7 @@ function Inspector({
             <Input
               id={`goal-${draft.entityId}`}
               value={draft.milestone.goal}
+              readOnly={readOnly}
               maxLength={2_000}
               aria-invalid={fieldError(`goal-${draft.entityId}`)}
               onChange={(event) => onChange({ ...draft, milestone: { ...draft.milestone, goal: event.target.value } })}
@@ -701,6 +840,7 @@ function Inspector({
               id={`expected-${draft.entityId}`}
               type="datetime-local"
               value={draft.milestone.expectedCompletedAt}
+              readOnly={readOnly}
               aria-invalid={fieldError(`expected-${draft.entityId}`)}
               onChange={(event) => onChange({ ...draft, milestone: { ...draft.milestone, expectedCompletedAt: event.target.value } })}
             />
@@ -709,6 +849,7 @@ function Inspector({
             <Textarea
               id={`criteria-${draft.entityId}`}
               value={draft.milestone.completionCriteria}
+              readOnly={readOnly}
               maxLength={2_000}
               aria-invalid={fieldError(`criteria-${draft.entityId}`)}
               onChange={(event) => onChange({ ...draft, milestone: { ...draft.milestone, completionCriteria: event.target.value } })}
@@ -718,6 +859,7 @@ function Inspector({
             <Textarea
               id={`review-${draft.entityId}`}
               value={draft.milestone.reviewRequirements}
+              readOnly={readOnly}
               maxLength={2_000}
               aria-invalid={fieldError(`review-${draft.entityId}`)}
               onChange={(event) => onChange({ ...draft, milestone: { ...draft.milestone, reviewRequirements: event.target.value } })}
@@ -727,6 +869,7 @@ function Inspector({
             <Textarea
               id={`business-${draft.entityId}`}
               value={draft.milestone.businessDescription}
+              readOnly={readOnly}
               maxLength={2_000}
               onChange={(event) => onChange({ ...draft, milestone: { ...draft.milestone, businessDescription: event.target.value } })}
             />
@@ -780,7 +923,7 @@ function Inspector({
         </ul>
       )}
 
-      {draft.kind === "MILESTONE" && (
+      {draft.kind === "MILESTONE" && !readOnly && (
         <div className="flex flex-wrap gap-2 border-t border-border pt-3">
           {draft.isNew ? (
             <Button type="button" size="sm" variant="destructive" onClick={() => onDelete(draft.milestone)}>
@@ -846,11 +989,27 @@ function isTemporary(state: TaskComposerSeed, entityId: string) {
 function renderAtMs(state: TaskComposerSeed, entityId: string) {
   const stored = state.nodeMeta?.[entityId]?.lastValidAt;
   if (stored) return localMs(stored);
+  if (state.revision?.markerId === entityId) {
+    return localMs(state.revision.revisionAt);
+  }
+  const carriedRevision = state.revision?.carriedAnchors.find(
+    (anchor) => anchor.id === entityId,
+  );
+  if (carriedRevision) return localMs(carriedRevision.revisionAt);
   if (entityId === TASK_COMPOSER_START_ID) return localMs(state.plannedStartAt);
   if (entityId === state.termination.id) return localMs(state.termination.plannedAt);
   return localMs(
     state.milestones.find((milestone) => milestone.id === entityId)
       ?.expectedCompletedAt ?? "",
+  );
+}
+
+function isReadOnlyEntity(state: TaskComposerSeed, entityId: string) {
+  if (!state.revision) return false;
+  return (
+    entityId === TASK_COMPOSER_START_ID ||
+    state.revision.lockedMilestoneIds.includes(entityId) ||
+    state.revision.carriedAnchors.some((anchor) => anchor.id === entityId)
   );
 }
 

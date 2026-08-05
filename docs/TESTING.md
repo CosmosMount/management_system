@@ -263,6 +263,13 @@ npm run pm:identity-backfill
 6. 编辑草稿按环境、账号和 Task ID 隔离；刷新仅在 Task、Plan Version 和基础 lockVersion 全匹配时允许恢复。失去成员管理权或服务端出现历史角色后，恢复必须以服务端标准成员覆盖本地成员改动，同时保留其他可编辑内容。服务端版本变化后旧草稿不能恢复或覆盖，只能导出或“放弃并加载最新版本”；`STALE_TASK` 保留当前输入，不隐式刷新或合并。
 7. 领域测试覆盖并发相同 lockVersion 只有一次成功、错误 Plan Version、非初始 v1 Current Plan、非 DRAFT、权限拒绝、Tag/关联/成员/计划晚失败回滚和完整审计。UI 在 Desktop/Pixel 5 另覆盖长 Task、节点、成员、Tag、长错误、零/200 Milestone 和窄屏无横向溢出、Next.js overlay 或未捕获浏览器错误。
 
+### Revision 通用 Composer 专项测试
+
+1. ACTIVE Task 的“发起 Revision”必须进入 `/progress/tasks/[id]/revisions/new`；Revision Tab 不再出现内联候选表单。非成员直达新建 URL 得到脱敏 404；非 ACTIVE 时返回 Task 工作台，已有 Candidate 时返回“修订与历史”。
+2. Desktop 与 Pixel 5 均验证三栏/纵向 Composer、无页面级横向溢出、Start/已完成 Milestone/已生效 Revision 只读、当前 Revision Marker 可调整且不切割阶段带、后续 Milestone 与 Terminal 可编辑。创建按钮为“创建并送审”，成功直接返回 `?tab=revisions` 并持久化 `PENDING_APPROVAL`。
+3. 被驳回记录的“修改候选计划”进入 `/progress/tasks/[id]/revisions/[revisionId]/edit`；仅创建人（仍有 `revision.create`）或 Owner/全局管理员可进入。保存按钮为“修改并重新送审”，成功后 `reviewRound + 1` 且直接回到待审批，不存在 Draft/Submit。
+4. Revision 本地草稿按环境、账号、Task、基线计划/锁或 Revision/候选 `updatedAt` 隔离；刷新后可恢复 reason、revisionAt、节点、选中项与最后合法画布位置。版本冲突不得覆盖服务端，必须保留并允许导出或显式放弃加载最新版本；成功清理失败不得伪装成服务端失败。
+
 ## 反馈中心测试
 
 1. 打开 `/feedback`。
