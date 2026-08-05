@@ -378,6 +378,13 @@ async function createPendingApprovalFixture() {
     idempotencyKey: `repair-review-${randomUUID()}`,
     evidences: [{ kind: "TEXT", note: "待管理员处理" }],
   });
+  await prisma.milestoneReview.update({
+    where: { id: review.reviewId },
+    data: {
+      revokedAt: new Date(),
+      revokeReason: "测试构造迁移前的历史异常并发审批",
+    },
+  });
   const currentTask = await prisma.task.findUniqueOrThrow({
     where: { id: draft.taskId },
     select: { lockVersion: true, currentPlanVersionId: true },
@@ -396,6 +403,10 @@ async function createPendingApprovalFixture() {
       businessDescription: "Repair revised termination",
     },
     idempotencyKey: `repair-revision-${randomUUID()}`,
+  });
+  await prisma.milestoneReview.update({
+    where: { id: review.reviewId },
+    data: { revokedAt: null, revokeReason: "" },
   });
   return {
     owner,

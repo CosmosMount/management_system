@@ -103,7 +103,30 @@ export async function getActionInbox({
     outcome: null,
     node: {
       status: { in: ["PENDING", "ACTIVE"] },
-      task: { AND: [visibleTask, terminableTask] },
+      task: {
+        AND: [
+          visibleTask,
+          terminableTask,
+          {
+            nodes: {
+              none: {
+                OR: [
+                  {
+                    milestone: {
+                      is: {
+                        reviews: {
+                          some: { result: "PENDING", revokedAt: null },
+                        },
+                      },
+                    },
+                  },
+                  { revision: { is: { status: "PENDING_APPROVAL" } } },
+                ],
+              },
+            },
+          },
+        ],
+      },
       planVersionEntries: {
         some: { planVersion: { currentForTask: { isNot: null } } },
       },

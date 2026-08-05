@@ -20,6 +20,7 @@ import type { ProjectManagementActor } from "../lib/project-management/identity"
 import { getActionInbox } from "../lib/project-management/queries/action-inbox-queries";
 import { getMyWorkDashboard } from "../lib/project-management/queries/dashboard-queries";
 import { listTags } from "../lib/project-management/queries/tag-queries";
+import { getTimeCanvasData } from "../lib/project-management/queries/time-canvas-queries";
 
 test.describe("project management S8 dashboard, tags and notifications", () => {
   test("Action Inbox filters by permission and sorts overdue work first", async () => {
@@ -98,6 +99,111 @@ test.describe("project management S8 dashboard, tags and notifications", () => {
     expect(inbox.items).toHaveLength(1);
     expect(inbox.items[0]?.id).toBe(`association:${actionable.id}`);
     expect(inbox.totalCount).toBe(1);
+  });
+
+  test("Task approval gate hides Terminal inbox work and disables Canvas actions until release", async () => {
+    const owner = await createActor("S8 Task approval gate");
+    const task = await createActiveTaskWithMilestone(
+      owner,
+      new Date("2026-09-10T02:00:00.000Z"),
+    );
+    const terminationNodeId = randomUUID();
+    const terminationId = randomUUID();
+    await prisma.taskNode.create({
+      data: {
+        id: terminationNodeId,
+        taskId: task.taskId,
+        type: "TERMINATION",
+        status: "PENDING",
+        createdByAccountId: owner.accountId,
+        planVersionEntries: {
+          create: { planVersionId: task.planId, sequence: 2 },
+        },
+        termination: {
+          create: {
+            id: terminationId,
+            name: "S8 Gate Terminal",
+            plannedAt: new Date("2026-09-20T02:00:00.000Z"),
+            plannedOutcomeCriteria: "审批空闲时允许结束",
+          },
+        },
+      },
+    });
+    const canvasInput = {
+      scope: { kind: "TASK_SCOPED" as const, taskId: task.taskId },
+      rangeStart: "2026-09-01T00:00:00.000Z",
+      rangeEnd: "2026-10-01T00:00:00.000Z",
+      groupBy: "TASK" as const,
+      includeTaskAnchors: true,
+      includeActual: true,
+      includeBusyBlocks: false,
+    };
+    const loadCapabilities = async () => {
+      const canvas = await getTimeCanvasData({ actor: owner, input: canvasInput });
+      const taskAnchor = canvas.anchors.find((anchor) => anchor.id === task.taskId);
+      const milestoneAnchor = taskAnchor?.nodes.find(
+        (node) => node.id === task.nodeId,
+      );
+      const terminationAnchor = taskAnchor?.nodes.find(
+        (node) => node.id === terminationNodeId,
+      );
+      return {
+        canCreateRevision: taskAnchor?.capabilities.canCreateRevision,
+        canSubmitReview: milestoneAnchor?.capabilities.canSubmitReview,
+        canConfirmTermination:
+          terminationAnchor?.capabilities.canConfirmTermination,
+      };
+    };
+    const terminalInboxId = `termination:${terminationId}`;
+
+    await expect(loadCapabilities()).resolves.toEqual({
+      canCreateRevision: true,
+      canSubmitReview: true,
+      canConfirmTermination: true,
+    });
+    expect(
+      (await getActionInbox({ actor: owner, limit: 100 })).items.some(
+        (item) => item.id === terminalInboxId,
+      ),
+    ).toBe(true);
+
+    const review = await prisma.milestoneReview.create({
+      data: {
+        milestoneNodeId: task.milestoneId,
+        result: "PENDING",
+        submittedByAccountId: owner.accountId,
+        idempotencyKey: `s8-task-approval-gate-${randomUUID()}`,
+      },
+      select: { id: true },
+    });
+    await expect(loadCapabilities()).resolves.toEqual({
+      canCreateRevision: false,
+      canSubmitReview: false,
+      canConfirmTermination: false,
+    });
+    expect(
+      (await getActionInbox({ actor: owner, limit: 100 })).items.some(
+        (item) => item.id === terminalInboxId,
+      ),
+    ).toBe(false);
+
+    await prisma.milestoneReview.update({
+      where: { id: review.id },
+      data: {
+        revokedAt: new Date("2026-09-11T00:00:00.000Z"),
+        revokeReason: "验证门禁释放",
+      },
+    });
+    await expect(loadCapabilities()).resolves.toEqual({
+      canCreateRevision: true,
+      canSubmitReview: true,
+      canConfirmTermination: true,
+    });
+    expect(
+      (await getActionInbox({ actor: owner, limit: 100 })).items.some(
+        (item) => item.id === terminalInboxId,
+      ),
+    ).toBe(true);
   });
 
   test("dashboard metrics are independent from display limits", async () => {

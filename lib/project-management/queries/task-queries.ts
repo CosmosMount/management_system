@@ -17,6 +17,10 @@ import {
   type AuthorizationTaskResource,
 } from "@/lib/project-management/authorization";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
+import {
+  loadTaskApprovalGate,
+  type TaskPendingApproval,
+} from "@/lib/project-management/task-approval-gate";
 import { notFoundError } from "@/lib/project-management/application/errors";
 import { rankFuzzyMatches } from "@/lib/search/fuzzy-score";
 import { inspectPlanChronology } from "@/lib/project-management/domain/plan-chronology";
@@ -197,6 +201,8 @@ export type TaskWorkspace = {
   members: TaskMemberSummary[];
   tags: Array<{ id: string; name: string; color: string; isArchived: boolean }>;
   currentPlan: PlanVersionSummary;
+  pendingApproval: TaskPendingApproval | null;
+  pendingApprovalConflict: boolean;
   permissions: {
     canUpdateMetadata: boolean;
     canManageMembers: boolean;
@@ -428,6 +434,8 @@ export async function getTaskWorkspace({
   });
   if (!task) throw notFoundError();
 
+  const approvalGate = await loadTaskApprovalGate(prisma, task.id);
+
   const resource = taskResource({
     team: task.team,
     techGroup: task.techGroup,
@@ -467,6 +475,8 @@ export async function getTaskWorkspace({
       isArchived: entry.tag.archivedAt !== null,
     })),
     currentPlan: serializePlanVersion(task.currentPlanVersion),
+    pendingApproval: approvalGate.pendingApproval,
+    pendingApprovalConflict: approvalGate.pendingApprovalConflict,
     permissions: {
       canUpdateMetadata: allowed(actor, "task.update_metadata", resource),
       canManageMembers: allowed(actor, "task.manage_members", resource),

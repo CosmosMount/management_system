@@ -3,7 +3,9 @@ import { randomUUID } from "node:crypto";
 import { prisma } from "../lib/prisma";
 import {
   activateTask,
+  createRevision,
   createTaskDraft,
+  rejectRevision,
 } from "../lib/project-management/application/lifecycle-service";
 import {
   createWorkSegment,
@@ -42,6 +44,59 @@ test.describe("project management P4/P6 UI integration", () => {
     expect(isoToShanghaiDateTimeLocal("2026-08-09T16:00:00.000Z")).toBe(
       "2026-08-10T00:00",
     );
+  });
+
+  test("server-rendered Task workbench tabs remain navigable without client JavaScript", async ({
+    browser,
+    baseURL,
+  }, testInfo) => {
+    if (!baseURL) throw new Error("无脚本回归缺少 Playwright baseURL");
+    const owner = await createAccountPerson(
+      `P6 UI No-JS Owner ${testInfo.project.name} ${randomUUID()}`,
+    );
+    const task = await createTaskDraft(actor(owner), {
+      title: `P6 UI No-JS Task ${randomUUID()}`,
+      description: "验证客户端脚本加载失败时的工作台导航",
+      team: "英雄",
+      techGroup: "电控",
+      priority: "MEDIUM",
+      tagIds: [],
+      members: [{ personId: owner.person.id, role: "OWNER" }],
+      milestones: [milestoneInput("No-JS Milestone", "完成无脚本回归", 1)],
+      plannedStartAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
+      termination: terminationInput(5),
+      idempotencyKey: `p6-ui-no-js-${randomUUID()}`,
+    });
+    await activateTask(actor(owner), {
+      taskId: task.taskId,
+      expectedLockVersion: task.lockVersion,
+    });
+
+    const context = await browser.newContext({
+      baseURL,
+      javaScriptEnabled: false,
+      viewport:
+        testInfo.project.name === "mobile"
+          ? { width: 393, height: 727 }
+          : { width: 1_440, height: 1_000 },
+    });
+    try {
+      await loginAsTestUser(context, baseURL, {
+        openId: owner.openId,
+        name: owner.person.displayName,
+      });
+      const page = await context.newPage();
+      await page.goto(`/progress/tasks/${task.taskId}`);
+      const reviewsTab = page.getByRole("tab", { name: "验收" });
+      await expect(reviewsTab).toHaveAttribute("data-hydrated", "false");
+      await reviewsTab.click({ timeout: 5_000 });
+      await expect(page).toHaveURL(
+        `${baseURL}/progress/tasks/${task.taskId}?tab=reviews`,
+      );
+      await expect(page.getByRole("heading", { name: "当前 Milestone 验收" })).toBeVisible();
+    } finally {
+      await context.close();
+    }
   });
 
   test("Task Composer restores a scoped local draft and creates exactly one Task on desktop and mobile", async ({
@@ -2752,6 +2807,100 @@ test.describe("project management P4/P6 UI integration", () => {
     await expectHealthyPage(page);
   });
 
+  test("cancelling a rejected Revision keeps an unrelated Milestone gate", async ({
+    context,
+    page,
+    baseURL,
+  }) => {
+    const fixture = await createUiFixture();
+    const task = await prisma.task.findUniqueOrThrow({
+      where: { id: fixture.taskId },
+      select: { currentPlanVersionId: true, lockVersion: true },
+    });
+    const reason = `S6 不相关门禁 ${randomUUID()}`;
+    const revision = await createRevision(actor(fixture.owner), {
+      taskId: fixture.taskId,
+      basePlanVersionId: task.currentPlanVersionId,
+      baseTaskLockVersion: task.lockVersion,
+      reason,
+      revisionAt: "2026-07-31T12:00:00.000Z",
+      replacementMilestones: [
+        milestoneInput("S6 不相关门禁候选", "候选完成条件", 2),
+      ],
+      termination: terminationInput(5),
+      idempotencyKey: `s6-unrelated-gate-revision-${randomUUID()}`,
+    });
+    await rejectRevision(actor(fixture.admin), {
+      revisionNodeId: revision.revisionNodeId,
+      comment: "保留为可取消的已驳回 Revision",
+    });
+    const activeMilestone = await prisma.milestoneNode.findUniqueOrThrow({
+      where: { nodeId: fixture.activeNodeId },
+      select: { id: true },
+    });
+    await prisma.milestoneReview.create({
+      data: {
+        milestoneNodeId: activeMilestone.id,
+        result: "PENDING",
+        submittedByAccountId: fixture.owner.account.id,
+        idempotencyKey: `s6-unrelated-gate-review-${randomUUID()}`,
+      },
+    });
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.owner.openId,
+      name: fixture.owner.person.displayName,
+    });
+
+    await page.goto(`/progress/tasks/${fixture.taskId}?tab=revisions`);
+    await expect(page.getByTestId("task-approval-gate")).toContainText(
+      "Milestone",
+    );
+    await page.evaluate(() => {
+      const browserWindow = window as Window & {
+        __taskApprovalGateRemoved?: boolean;
+        __taskApprovalGateObserver?: MutationObserver;
+      };
+      browserWindow.__taskApprovalGateRemoved = false;
+      browserWindow.__taskApprovalGateObserver = new MutationObserver((records) => {
+        for (const record of records) {
+          for (const removedNode of record.removedNodes) {
+            if (
+              removedNode instanceof Element &&
+              (removedNode.matches('[data-testid="task-approval-gate"]') ||
+                removedNode.querySelector('[data-testid="task-approval-gate"]'))
+            ) {
+              browserWindow.__taskApprovalGateRemoved = true;
+            }
+          }
+        }
+      });
+      browserWindow.__taskApprovalGateObserver.observe(document.body, {
+        childList: true,
+        subtree: true,
+      });
+    });
+    const revisionCard = page.getByRole("heading", { name: reason }).locator("..");
+    await revisionCard.getByRole("button", { name: "取消", exact: true }).click();
+    await expect(page.getByText("Revision 已取消。")).toBeVisible();
+    await expect(page.getByTestId("task-approval-gate")).toContainText(
+      "Milestone",
+    );
+    expect(
+      await page.evaluate(() => {
+        const browserWindow = window as Window & {
+          __taskApprovalGateRemoved?: boolean;
+          __taskApprovalGateObserver?: MutationObserver;
+        };
+        browserWindow.__taskApprovalGateObserver?.disconnect();
+        return browserWindow.__taskApprovalGateRemoved;
+      }),
+    ).toBe(false);
+    await page.getByRole("tab", { name: /验收/ }).click();
+    await expect(page.getByRole("button", { name: "提交验收" })).toBeDisabled();
+    await expect(page.getByLabel("结束结果")).toBeDisabled();
+    await expectHealthyPage(page);
+  });
+
   test("Task workbench completes metadata, Review, Revision, audit and Termination UI flows", async ({
     context,
     page,
@@ -2828,12 +2977,92 @@ test.describe("project management P4/P6 UI integration", () => {
       openId: fixture.admin.openId,
       name: fixture.admin.person.displayName,
     });
+    const replayedReviewUuid = randomUUID();
+    const revokedReviewUuid = randomUUID();
+    const freshReviewUuid = randomUUID();
+    const activeMilestone = await prisma.milestoneNode.findUniqueOrThrow({
+      where: { nodeId: fixture.activeNodeId },
+      select: { id: true },
+    });
+    await prisma.milestoneReview.create({
+      data: {
+        milestoneNodeId: activeMilestone.id,
+        result: "REJECTED",
+        submittedByAccountId: fixture.admin.account.id,
+        reviewerAccountId: fixture.admin.account.id,
+        reviewedAt: new Date(),
+        comment: "模拟首次响应丢失后原请求已进入终态",
+        idempotencyKey: `review-workbench:${replayedReviewUuid}`,
+      },
+    });
+    await prisma.milestoneReview.create({
+      data: {
+        milestoneNodeId: activeMilestone.id,
+        result: "PENDING",
+        submittedByAccountId: fixture.admin.account.id,
+        revokedAt: new Date(),
+        revokeReason: "模拟迁移撤出的旧请求键",
+        idempotencyKey: `review-workbench:${revokedReviewUuid}`,
+      },
+    });
     await page.goto(`/progress/tasks/${fixture.taskId}`);
     await page.getByRole("tab", { name: "验收" }).click();
     await expect(page.getByText("FILE 暂未启用")).toBeVisible();
-    await page.getByRole("textbox", { name: "文本证据" }).fill("S6 Review 文本证据");
+    await page.evaluate(
+      ({ replayedReviewUuid, revokedReviewUuid, freshReviewUuid }) => {
+        const generatedValues = [
+          replayedReviewUuid,
+          revokedReviewUuid,
+          freshReviewUuid,
+        ];
+        const nativeRandomUuid = globalThis.crypto.randomUUID.bind(
+          globalThis.crypto,
+        );
+        Object.defineProperty(globalThis.crypto, "randomUUID", {
+          configurable: true,
+          value: () => generatedValues.shift() ?? nativeRandomUuid(),
+        });
+      },
+      { replayedReviewUuid, revokedReviewUuid, freshReviewUuid },
+    );
+    await page
+      .getByRole("textbox", { name: "文本证据" })
+      .fill("S6 已处理旧请求的重试证据");
     await page.getByRole("button", { name: "提交验收" }).click();
     await expect(page.getByText("Milestone 已提交验收。")).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "文本证据" })).toHaveValue(
+      "",
+    );
+    await expect(page.getByTestId("task-approval-gate")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "提交验收" })).toBeEnabled();
+    await page.getByRole("textbox", { name: "文本证据" }).fill("S6 Review 文本证据");
+    await page.getByRole("button", { name: "提交验收" }).click();
+    await expect(
+      page.getByText("该验收提交已撤出，请使用新的请求键重新提交"),
+    ).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "文本证据" })).toHaveValue(
+      "S6 Review 文本证据",
+    );
+    await page.getByRole("button", { name: "提交验收" }).click();
+    await expect(page.getByText("Milestone 已提交验收。")).toBeVisible();
+    await expect(page.getByTestId("task-approval-gate")).toContainText(
+      "正在等待审批",
+    );
+    await expect(page.getByRole("button", { name: "提交验收" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "发起 Revision" })).toBeDisabled();
+    await expect(page.getByLabel("结束结果")).toBeDisabled();
+    await page.getByRole("tab", { name: "概览" }).click();
+    await page
+      .getByTestId("task-approval-gate")
+      .getByRole("link", { name: "前往处理" })
+      .click();
+    await expect(page.getByRole("tab", { name: /验收/ })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await expect(page).toHaveURL(
+      `/progress/tasks/${fixture.taskId}?tab=reviews`,
+    );
     await expect
       .poll(() =>
         prisma.milestoneReview.findFirst({
@@ -2843,6 +3072,20 @@ test.describe("project management P4/P6 UI integration", () => {
         }),
       )
       .toMatchObject({ result: "PENDING" });
+    await expect
+      .poll(() =>
+        prisma.milestoneReview.count({
+          where: {
+            milestoneNodeId: activeMilestone.id,
+            idempotencyKey: `review-workbench:${freshReviewUuid}`,
+          },
+        }),
+      )
+      .toBe(1);
+    await page.goto(`/progress/tasks/${fixture.taskId}/revisions/new`);
+    await expect(page).toHaveURL(
+      `/progress/tasks/${fixture.taskId}?tab=reviews`,
+    );
 
     await page.getByLabel("审批说明").fill("S6 管理员通过");
     await page.getByRole("button", { name: "通过", exact: true }).click();
@@ -2973,6 +3216,23 @@ test.describe("project management P4/P6 UI integration", () => {
     await expect(
       page.getByRole("heading", { name: "S6 调整后续目标" }),
     ).toBeVisible();
+    await expect(page.getByTestId("task-approval-gate")).toContainText(
+      "Revision",
+    );
+    await expect(page.getByRole("button", { name: "发起 Revision" })).toBeDisabled();
+    const reviewsTab = page.getByRole("tab", { name: /验收/ });
+    await expect(reviewsTab).toHaveAttribute("data-hydrated", "true");
+    await reviewsTab.click();
+    await expect(reviewsTab).toHaveAttribute("aria-selected", "true", {
+      timeout: 15_000,
+    });
+    await expect(page.getByRole("button", { name: "提交验收" })).toBeDisabled();
+    await expect(page.getByLabel("结束结果")).toBeDisabled();
+    const revisionsTab = page.getByRole("tab", { name: "修订与历史" });
+    await revisionsTab.click();
+    await expect(revisionsTab).toHaveAttribute("aria-selected", "true", {
+      timeout: 15_000,
+    });
     await page.goto(`/progress/tasks/${fixture.taskId}/revisions/new`);
     await expect(page).toHaveURL(
       `/progress/tasks/${fixture.taskId}?tab=revisions`,
@@ -3009,8 +3269,43 @@ test.describe("project management P4/P6 UI integration", () => {
       openId: fixture.owner.openId,
       name: fixture.owner.person.displayName,
     });
+    const activeMilestoneForBlockedResubmit = await prisma.task.findUniqueOrThrow({
+      where: { id: fixture.taskId },
+      select: {
+        activeMilestoneNode: {
+          select: { milestone: { select: { id: true } } },
+        },
+      },
+    });
+    const activeMilestoneId =
+      activeMilestoneForBlockedResubmit.activeMilestoneNode?.milestone?.id;
+    if (!activeMilestoneId) throw new Error("UI 门禁测试缺少 Active Milestone");
+    const blockingReview = await prisma.milestoneReview.create({
+      data: {
+        milestoneNodeId: activeMilestoneId,
+        result: "PENDING",
+        submittedByAccountId: fixture.owner.account.id,
+        idempotencyKey: `ui-block-revision-resubmit-${randomUUID()}`,
+      },
+      select: { id: true },
+    });
     await page.goto(`/progress/tasks/${fixture.taskId}`);
     await page.getByRole("tab", { name: "修订与历史" }).click();
+    await expect(
+      page.getByRole("button", { name: "修改候选计划" }),
+    ).toBeDisabled();
+    await page.goto(
+      `/progress/tasks/${fixture.taskId}/revisions/${rejectedRevision.id}/edit`,
+    );
+    await expect(page).toHaveURL(`/progress/tasks/${fixture.taskId}?tab=reviews`);
+    await prisma.milestoneReview.update({
+      where: { id: blockingReview.id },
+      data: {
+        revokedAt: new Date(),
+        revokeReason: "继续验证 Revision 重提",
+      },
+    });
+    await page.goto(`/progress/tasks/${fixture.taskId}?tab=revisions`);
     await page.getByRole("link", { name: "修改候选计划" }).click();
     await expect(page.getByRole("heading", { name: "修改 Revision" })).toBeVisible();
     await expect(page.getByTestId("task-composer")).toHaveAttribute(

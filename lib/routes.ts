@@ -27,6 +27,7 @@ export const routes = {
     taskRevisionEdit: (taskId: string, revisionId: string) =>
       `/progress/tasks/${taskId}/revisions/${revisionId}/edit`,
     taskRevisions: (id: string) => `/progress/tasks/${id}?tab=revisions`,
+    taskReviews: (id: string) => `/progress/tasks/${id}?tab=reviews`,
     resources: "/progress/resources",
     approvals: "/progress/approvals",
     notifications: "/progress/notifications",

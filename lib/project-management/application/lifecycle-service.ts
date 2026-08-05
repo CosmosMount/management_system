@@ -56,6 +56,7 @@ import {
   type PlanChronologyIssue,
 } from "@/lib/project-management/domain/plan-chronology";
 import { hashPlanSnapshot } from "@/lib/project-management/application/plan-snapshot";
+import { assertTaskApprovalAvailableTx } from "@/lib/project-management/task-approval-gate";
 
 type PrismaTx = Prisma.TransactionClient;
 
@@ -504,6 +505,7 @@ export async function createRevision(
       };
     }
 
+    await assertTaskApprovalAvailableTx(tx, task.id);
     assertRevisionBaseline(task, parsed);
     const activeCandidate = await tx.taskPlanVersion.findFirst({
       where: {
@@ -686,6 +688,7 @@ export async function reviseRejectedRevision(
     ) {
       throw planVersionConflictError();
     }
+    await assertTaskApprovalAvailableTx(tx, task.id);
 
     const currentPlan = await loadCurrentPlanEntriesTx(tx, task);
     await assertRevisionAtValidTx(tx, {
@@ -1057,15 +1060,6 @@ export async function submitMilestoneForReview(
       action: "milestone.submit_review",
       resource: taskResource(task),
     });
-    if (
-      task.status !== "ACTIVE" ||
-      milestone.node.status !== "ACTIVE" ||
-      task.activeMilestoneNodeId !== milestone.nodeId
-    ) {
-      throw stateConflictError("只有当前 Active Milestone 可以提交验收");
-    }
-    await assertNodeInCurrentPlanTx(tx, task, milestone.nodeId, "MILESTONE");
-
     const existing = await tx.milestoneReview.findUnique({
       where: {
         milestoneNodeId_idempotencyKey: {
@@ -1073,9 +1067,14 @@ export async function submitMilestoneForReview(
           idempotencyKey: parsed.idempotencyKey,
         },
       },
-      select: { id: true, result: true },
+      select: { id: true, result: true, revokedAt: true },
     });
     if (existing) {
+      if (existing.revokedAt) {
+        throw stateConflictError(
+          "该验收提交已撤出，请使用新的请求键重新提交",
+        );
+      }
       return {
         taskId: task.id,
         reviewId: existing.id,
@@ -1087,27 +1086,15 @@ export async function submitMilestoneForReview(
         created: false,
       };
     }
-    const pendingReview = await tx.milestoneReview.findFirst({
-      where: {
-        milestoneNodeId: milestone.id,
-        result: "PENDING",
-        revokedAt: null,
-      },
-      select: { id: true, result: true },
-      orderBy: { createdAt: "desc" },
-    });
-    if (pendingReview) {
-      return {
-        taskId: task.id,
-        reviewId: pendingReview.id,
-        milestoneNodeId: milestone.nodeId,
-        result: pendingReview.result,
-        taskStatus: task.status,
-        activeMilestoneNodeId: task.activeMilestoneNodeId,
-        lockVersion: task.lockVersion,
-        created: false,
-      };
+    if (
+      task.status !== "ACTIVE" ||
+      milestone.node.status !== "ACTIVE" ||
+      task.activeMilestoneNodeId !== milestone.nodeId
+    ) {
+      throw stateConflictError("只有当前 Active Milestone 可以提交验收");
     }
+    await assertNodeInCurrentPlanTx(tx, task, milestone.nodeId, "MILESTONE");
+    await assertTaskApprovalAvailableTx(tx, task.id);
 
     const review = await tx.milestoneReview.create({
       data: {
@@ -1363,6 +1350,7 @@ export async function confirmTermination(
     if (task.lockVersion !== parsed.expectedLockVersion) {
       throw staleTaskError(task);
     }
+    await assertTaskApprovalAvailableTx(tx, task.id);
     const currentPlan = await loadCurrentPlanEntriesTx(tx, task);
     assertLegacyCurrentPlanUsableAsRepairBase(currentPlan);
     const terminationEntryIndex = currentPlan.nodes.findIndex(

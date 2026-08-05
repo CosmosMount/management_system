@@ -25,6 +25,16 @@ export default async function ProgressTaskRevisionNewPage({
   if (workspace.task.status !== "ACTIVE") {
     redirect(routes.progress.taskDetail(id));
   }
+  if (workspace.pendingApprovalConflict) {
+    redirect(routes.progress.taskReviews(id));
+  }
+  if (workspace.pendingApproval) {
+    redirect(
+      workspace.pendingApproval.kind === "REVISION"
+        ? routes.progress.taskRevisions(id)
+        : routes.progress.taskReviews(id),
+    );
+  }
   const activeCandidate = await getOpenRevisionCandidate({ actor, taskId: id });
   if (activeCandidate) redirect(routes.progress.taskRevisions(id));
   const seed = buildCreateRevisionComposerSeed(workspace);

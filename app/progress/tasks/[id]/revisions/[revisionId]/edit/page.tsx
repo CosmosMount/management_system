@@ -38,6 +38,16 @@ export default async function ProgressTaskRevisionEditPage({
   ) {
     redirect(routes.progress.taskRevisions(id));
   }
+  if (workspace.pendingApprovalConflict) {
+    redirect(routes.progress.taskReviews(id));
+  }
+  if (workspace.pendingApproval) {
+    redirect(
+      workspace.pendingApproval.kind === "REVISION"
+        ? routes.progress.taskRevisions(id)
+        : routes.progress.taskReviews(id),
+    );
+  }
   if (!revision.targetPlanVersionId || revision.targetVersionNo === null) {
     redirect(routes.progress.taskRevisions(id));
   }

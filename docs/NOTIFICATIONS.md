@@ -56,6 +56,8 @@ Task 生命周期服务和 Segment 服务会在同一业务事务中写站内通
 
 Revision 创建和被驳回后的修改都会直接产生 `revision_pending_review`。事件键包含 `revisionId + reviewRound`；驳回结果键也包含对应 round，因此每轮送审和结果各自 exactly once，不会被上一轮幂等记录吞掉。Revision 不再产生独立 submit 通知或审计事件。
 
+同一 Task 同时只允许一个未撤出的 `PENDING` Milestone Review 或 `PENDING_APPROVAL` Revision。门禁在 Task 行锁事务内、幂等重放之后检查：未撤出的原 Review 使用相同 Milestone 请求键时返回原结果，不生成第二份审计或通知；已撤出的旧键和不同请求键，以及被其他审批占用的 Revision/Milestone/Terminal 请求均返回状态冲突，且不创建站内通知、outbox 或任何业务写入。审批通过、驳回、要求修订、取消或撤出后才释放门禁；Terminal 仍为直接确认，只产生既有 `task_terminated` 普通通知。
+
 Task 激活与结束通知使用持久化的 Terminal 名称表示结束节点，不再以结束条件充当节点名称。零 Milestone Task 激活时，`task_activated` 摘要会明确当前 Terminal 名称；`task_terminated` 摘要同时包含 Terminal 名称和本次确认结果。事件键、收件人、通知机器人用途、站内通知和 durable outbox 路径保持不变。
 
 既有 Draft `task_assigned` 入队保持 `mandatory=true`。这里的“普通通知”指 `purpose=notification`、`botKind=notification`，不表示 `mandatory=false`；该事件只使用通知机器人，不得路由到 approval bot。S2 的 Active `replaceTaskMembers` 新增/移除/角色变化沿用同一强制成员变化语义：站内 + `mandatory=true` 的 `project-management` outbox，purpose/botKind 仍为 `notification`。
@@ -72,11 +74,15 @@ Revision 生效事务先把目标 `TaskPlanVersion` 切换为 `CURRENT` 并更�
 
 Segment 事件键保持稳定幂等：`pm:segment:confirmation_due:<segmentId>:<endAt>` 和 `pm:segment:association_invalidated:<revisionNodeId>`。站内通知在业务事件键后追加 `:inapp:<accountId>`，飞书 outbox 追加 `:feishu`；重复提交依赖唯一事件键保持 exactly once，逐收件人失败只重试失败者。`scanSegmentTransitions` 会把到期 Planned 推到 `PENDING_CONFIRMATION`、把进行中的 Planned 置为 `IN_PROGRESS`，但不会自动生成 Actual。
 
-统一账号和 Task 成员/角色数据库迁移只追加 `source=MIGRATION` 的 `DomainAuditEvent`，不创建站内通知或 outbox，不会在上线时批量触达真实用户。
+统一账号和 Task 成员/角色数据库迁移只追加 `source=MIGRATION` 的 `DomainAuditEvent`，不创建站内通知或 outbox，不会在上线时批量触达真实用户。单一 Task 审批门禁迁移同样不新建通知：它保留已发送历史，冻结被撤出审批对应仍可重试的 outbox 与未完成 recipient，并把相关未读站内审批通知标记为已读。
+
+### 单一 Task 审批门禁迁移
+
+`20260805120000_single_task_pending_approval` 必须在应用写入和通知 worker 都停止、`NOTIFICATION_DELIVERY_DISABLED=true` 的维护窗口执行。迁移撤出全部当前 Task Milestone/Revision 待审批并写确定性 `source=MIGRATION` 审计；对应 outbox 的 `PENDING/PROCESSING/FAILED` 状态会永久冻结为不可重试失败，未完成 recipient 同步冻结。只有本轮 `milestone_review_submitted` / `revision_pending_review` 站内审批请求会标记已读，复用同一 Revision ID 的上一轮 `revision_result` 等结果通知保持原读状态。已发送的飞书消息、站内通知、证据和投递历史不会删除，也不会发送额外撤出通知。迁移不选择或修改采购、报销、投入确认和关联复核通知。
 
 ### 旧待审批通知修复
 
-数据库迁移不会删除已发送给旧 Task Reviewer 或项目 `GROUP_LEADER` 的历史站内/飞书记录，这些记录继续作为审计证据，但旧收件人不再拥有审批能力。部署后必须在通知 worker 保持禁发时运行幂等修复：
+早期全局管理员审批收件人切换不会删除已发送给旧 Task Reviewer 或项目 `GROUP_LEADER` 的历史站内/飞书记录，这些记录继续作为审计证据，但旧收件人不再拥有审批能力。在单一审批门禁迁移之前部署该历史版本时，需在通知 worker 保持禁发时运行幂等修复；当前版本会直接撤出仍待处理的 Task 审批，不应再为这些对象补建审批通知：
 
 ```bash
 # 默认 dry-run，只报告待处理数量、管理员收件人和旧 outbox

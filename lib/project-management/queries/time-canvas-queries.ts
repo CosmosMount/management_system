@@ -93,6 +93,24 @@ const busyCandidateSelect = {
 const anchorTaskSelect = {
   ...canvasRowTaskSelect,
   updatedAt: true,
+  nodes: {
+    where: {
+      OR: [
+        {
+          milestone: {
+            is: {
+              reviews: {
+                some: { result: "PENDING", revokedAt: null },
+              },
+            },
+          },
+        },
+        { revision: { is: { status: "PENDING_APPROVAL" } } },
+      ],
+    },
+    select: { id: true },
+    take: 2,
+  },
   currentPlanVersion: {
     select: {
       plannedStartAt: true,
@@ -833,6 +851,7 @@ function toTaskAnchorDto(
   const canManageMembers =
     (task.status === "DRAFT" || task.status === "ACTIVE") &&
     authorize({ actor, action: "task.manage_members", resource }).allowed;
+  const hasPendingApproval = task.nodes.length > 0;
   const updatedAt = task.updatedAt.toISOString();
   return {
     id: task.id,
@@ -853,6 +872,7 @@ function toTaskAnchorDto(
         authorize({ actor, action: "task.archive", resource }).allowed,
       canCreateRevision:
         task.status === "ACTIVE" &&
+        !hasPendingApproval &&
         authorize({ actor, action: "revision.create", resource }).allowed,
     },
     nodes: task.currentPlanVersion.nodes.flatMap((entry) => {
@@ -879,6 +899,7 @@ function toNodeAnchorDto(
     task.status === "ACTIVE" &&
     node.status !== "REVISED" &&
     node.status !== "CANCELLED";
+  const hasPendingApproval = task.nodes.length > 0;
   const updatedAt = node.updatedAt.toISOString();
   return {
     id: node.id,
@@ -906,6 +927,7 @@ function toNodeAnchorDto(
       canSubmitReview:
         node.type === "MILESTONE" &&
         node.status === "ACTIVE" &&
+        !hasPendingApproval &&
         authorize({
           actor,
           action: "milestone.submit_review",
@@ -918,6 +940,7 @@ function toNodeAnchorDto(
       canConfirmTermination:
         node.type === "TERMINATION" &&
         task.status === "ACTIVE" &&
+        !hasPendingApproval &&
         authorize({ actor, action: "task.terminate", resource }).allowed,
     },
     updatedAt,

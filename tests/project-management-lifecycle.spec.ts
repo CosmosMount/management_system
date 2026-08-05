@@ -650,18 +650,14 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       result: "PENDING",
       milestoneNodeId: activeNode.nodeId,
     });
-    const duplicatePending = await submitMilestoneForReview(
-      actor(fixture.member),
-      {
+    await expectServiceError(
+      submitMilestoneForReview(actor(fixture.member), {
         milestoneNodeId: activeNode.nodeId,
         idempotencyKey: `review-duplicate-${randomUUID()}`,
         evidences: [{ kind: "TEXT", note: "重复提交待处理验收" }],
-      },
+      }),
+      "STATE_CONFLICT",
     );
-    expect(duplicatePending).toMatchObject({
-      created: false,
-      reviewId: submitted.reviewId,
-    });
     const reviewSubmittedPayload = await expectProjectManagementOutbox(
       `pm:milestone:review_submitted:${submitted.reviewId}:feishu`,
       {
@@ -715,10 +711,22 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         purpose: "notification",
       },
     );
+    await expect(
+      submitMilestoneForReview(actor(fixture.member), {
+        milestoneNodeId: activeNode.nodeId,
+        idempotencyKey: reviewIdempotencyKey,
+        evidences: [{ kind: "TEXT", note: "审批通过后的原请求键重放" }],
+      }),
+    ).resolves.toMatchObject({
+      created: false,
+      reviewId: submitted.reviewId,
+      result: "APPROVED",
+    });
 
+    const secondReviewKey = `review-reject-${randomUUID()}`;
     const secondReview = await submitMilestoneForReview(actor(fixture.member), {
       milestoneNodeId: advancedNodes[1]?.nodeId,
-      idempotencyKey: `review-reject-${randomUUID()}`,
+      idempotencyKey: secondReviewKey,
       evidences: [{ kind: "TEXT", note: "第二阶段证据" }],
     });
     const rejected = await reviewMilestone(actor(fixture.reviewer), {
@@ -728,6 +736,210 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     });
     expect(rejected.activeMilestoneNodeId).toBe(advancedNodes[1]?.nodeId);
     expect((await currentPlanNodes(fixture.taskId))[1]?.node.status).toBe("ACTIVE");
+    await expect(
+      submitMilestoneForReview(actor(fixture.member), {
+        milestoneNodeId: advancedNodes[1]?.nodeId,
+        idempotencyKey: secondReviewKey,
+        evidences: [{ kind: "TEXT", note: "终态记录的原请求键重放" }],
+      }),
+    ).resolves.toMatchObject({
+      created: false,
+      reviewId: secondReview.reviewId,
+      result: "REJECTED",
+    });
+    expect(
+      await prisma.milestoneReview.count({
+        where: { milestoneNodeId: advancedNodes[1]?.node.milestone?.id },
+      }),
+    ).toBe(1);
+  });
+
+  test("Task permits only one pending Milestone or Revision and blocks Termination until it is released", async () => {
+    const fixture = await createActivatedFixture();
+    const activeNode = await firstCurrentMilestone(fixture.taskId);
+    const terminalNode = (await currentPlanNodes(fixture.taskId)).at(-1);
+    if (!terminalNode?.node.termination) throw new Error("测试计划缺少 Terminal");
+    const milestoneReview = await submitMilestoneForReview(actor(fixture.member), {
+      milestoneNodeId: activeNode.nodeId,
+      idempotencyKey: `single-gate-review-${randomUUID()}`,
+      evidences: [{ kind: "TEXT", note: "先占用审批门禁" }],
+    });
+    const revisionInput = {
+      taskId: fixture.taskId,
+      basePlanVersionId: fixture.currentPlanVersionId,
+      baseTaskLockVersion: fixture.lockVersion,
+      reason: "单一审批门禁 Revision",
+      revisionAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
+      replacementMilestones: [
+        milestoneInput("门禁后的 Revision Milestone", "Revision 条件", 4),
+      ],
+      termination: terminationInput(8),
+      idempotencyKey: `single-gate-revision-${randomUUID()}`,
+    };
+
+    await expectServiceError(
+      createRevision(actor(fixture.owner), revisionInput),
+      "STATE_CONFLICT",
+    );
+    await expectServiceError(
+      confirmTermination(actor(fixture.owner), {
+        taskId: fixture.taskId,
+        terminationNodeId: terminalNode.nodeId,
+        outcome: "FAILED",
+        reason: "审批期间不得结束",
+        summary: "应被门禁阻止",
+        expectedLockVersion: fixture.lockVersion,
+      }),
+      "STATE_CONFLICT",
+    );
+    expect(
+      await prisma.revisionNode.count({ where: { node: { taskId: fixture.taskId } } }),
+    ).toBe(0);
+
+    await reviewMilestone(actor(fixture.reviewer), {
+      reviewId: milestoneReview.reviewId,
+      result: "REJECTED",
+      comment: "释放门禁以发起 Revision",
+    });
+    const revision = await createRevision(actor(fixture.owner), revisionInput);
+    expect(revision.status).toBe("PENDING_APPROVAL");
+
+    await expectServiceError(
+      submitMilestoneForReview(actor(fixture.member), {
+        milestoneNodeId: activeNode.nodeId,
+        idempotencyKey: `single-gate-review-blocked-${randomUUID()}`,
+        evidences: [{ kind: "TEXT", note: "Revision 期间不得提交" }],
+      }),
+      "STATE_CONFLICT",
+    );
+    await expectServiceError(
+      confirmTermination(actor(fixture.owner), {
+        taskId: fixture.taskId,
+        terminationNodeId: terminalNode.nodeId,
+        outcome: "FAILED",
+        reason: "Revision 期间不得结束",
+        summary: "应被门禁阻止",
+        expectedLockVersion: fixture.lockVersion,
+      }),
+      "STATE_CONFLICT",
+    );
+
+    await rejectRevision(actor(fixture.reviewer), {
+      revisionNodeId: revision.revisionNodeId,
+      comment: "释放门禁以重新提交 Milestone",
+    });
+    const secondMilestoneReview = await submitMilestoneForReview(
+      actor(fixture.member),
+      {
+        milestoneNodeId: activeNode.nodeId,
+        idempotencyKey: `single-gate-review-after-revision-${randomUUID()}`,
+        evidences: [{ kind: "TEXT", note: "Revision 驳回后可提交" }],
+      },
+    );
+    expect(secondMilestoneReview.created).toBe(true);
+    const targetPlan = await prisma.taskPlanVersion.findUniqueOrThrow({
+      where: { id: revision.targetPlanVersionId ?? "" },
+      select: { updatedAt: true },
+    });
+    await expectServiceError(
+      reviseRejectedRevision(actor(fixture.owner), {
+        revisionNodeId: revision.revisionNodeId,
+        expectedTargetPlanUpdatedAt: targetPlan.updatedAt.toISOString(),
+        reason: "Milestone 待审批时不能重新送审",
+        revisionAt: revisionInput.revisionAt,
+        replacementMilestones: revisionInput.replacementMilestones,
+        termination: revisionInput.termination,
+      }),
+      "STATE_CONFLICT",
+    );
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: { taskId: fixture.taskId, action: "pm.revision.resubmit" },
+      }),
+    ).toBe(0);
+  });
+
+  test("concurrent Milestone, Revision and Terminal operations allow exactly one winner", async () => {
+    const fixture = await createActivatedFixture();
+    const activeNode = await firstCurrentMilestone(fixture.taskId);
+    const terminalNode = (await currentPlanNodes(fixture.taskId)).at(-1);
+    if (!terminalNode?.node.termination) throw new Error("测试计划缺少 Terminal");
+    const outcomes = await Promise.allSettled([
+      submitMilestoneForReview(actor(fixture.member), {
+        milestoneNodeId: activeNode.nodeId,
+        idempotencyKey: `single-gate-race-review-${randomUUID()}`,
+        evidences: [{ kind: "TEXT", note: "并发 Milestone" }],
+      }),
+      createRevision(actor(fixture.owner), {
+        taskId: fixture.taskId,
+        basePlanVersionId: fixture.currentPlanVersionId,
+        baseTaskLockVersion: fixture.lockVersion,
+        reason: "并发 Revision",
+        revisionAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
+        replacementMilestones: [
+          milestoneInput("并发 Revision Milestone", "并发条件", 4),
+        ],
+        termination: terminationInput(8),
+        idempotencyKey: `single-gate-race-revision-${randomUUID()}`,
+      }),
+      confirmTermination(actor(fixture.owner), {
+        taskId: fixture.taskId,
+        terminationNodeId: terminalNode.nodeId,
+        outcome: "FAILED",
+        reason: "并发 Terminal",
+        summary: "只能有一个事务成功",
+        expectedLockVersion: fixture.lockVersion,
+      }),
+    ]);
+    expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
+    expect(outcomes.filter((outcome) => outcome.status === "rejected")).toHaveLength(2);
+    const [pendingMilestones, pendingRevisions] = await Promise.all([
+      prisma.milestoneReview.count({
+        where: {
+          result: "PENDING",
+          revokedAt: null,
+          milestoneNode: { node: { taskId: fixture.taskId } },
+        },
+      }),
+      prisma.revisionNode.count({
+        where: { status: "PENDING_APPROVAL", node: { taskId: fixture.taskId } },
+      }),
+    ]);
+    const finalTask = await prisma.task.findUniqueOrThrow({
+      where: { id: fixture.taskId },
+      select: { status: true },
+    });
+    const terminalWon = finalTask.status === "FAILED" ? 1 : 0;
+    expect(pendingMilestones + pendingRevisions + terminalWon).toBe(1);
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: {
+          taskId: fixture.taskId,
+          action: {
+            in: [
+              "pm.milestone.review.submit",
+              "pm.revision.create",
+              "pm.termination.confirm",
+            ],
+          },
+        },
+      }),
+    ).toBe(1);
+    expect(
+      await prisma.notificationOutbox.count({
+        where: {
+          channel: "project-management",
+          type: {
+            in: [
+              "milestone_review_submitted",
+              "revision_pending_review",
+              "task_terminated",
+            ],
+          },
+          payload: { contains: fixture.taskId },
+        },
+      }),
+    ).toBe(1);
   });
 
   test("Milestone Review concurrent decisions only persist one result", async () => {

@@ -1,7 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useRef, useState } from "react";
+import {
+  type MouseEvent,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { useRouter } from "next/navigation";
 import {
   activateTask,
@@ -36,7 +41,10 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { TEAM_OPTIONS, TECH_GROUP_OPTIONS } from "@/lib/constants";
-import type { ProjectManagementActionResult } from "@/lib/project-management/application/action-result";
+import type {
+  ProjectManagementActionFailure,
+  ProjectManagementActionResult,
+} from "@/lib/project-management/application/action-result";
 import {
   formatDateTime,
   taskMemberRoleLabels,
@@ -57,6 +65,7 @@ import type {
   TagOptionPage,
   TaskOptionPage,
 } from "@/lib/project-management/types/time-canvas";
+import type { TaskPendingApproval } from "@/lib/project-management/task-approval-gate";
 import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
@@ -76,10 +85,27 @@ type PlanVersionListItem = {
 type RunAction = (
   action: () => Promise<ProjectManagementActionResult<unknown>>,
   successMessage: string,
-  onSuccess?: () => void,
+  onSuccess?: (data: unknown) => void,
+  onFailure?: (error: ProjectManagementActionFailure["error"]) => void,
 ) => Promise<void>;
+type ApprovalGate = {
+  pendingApproval: TaskPendingApproval | null;
+  pendingApprovalConflict: boolean;
+};
 type ActiveTaskMemberRole = "OWNER" | "PARTICIPANT";
 const activeTaskMemberRoles: ActiveTaskMemberRole[] = ["OWNER", "PARTICIPANT"];
+
+function subscribeHydration() {
+  return () => undefined;
+}
+
+function hydratedClientSnapshot() {
+  return true;
+}
+
+function hydratingServerSnapshot() {
+  return false;
+}
 
 const tabs: Array<{ id: TabId; label: string }> = [
   { id: "plan", label: "计划与资源" },
@@ -111,6 +137,11 @@ export function TaskWorkbench({
   initialTab?: TabId;
 }) {
   const router = useRouter();
+  const hydrated = useSyncExternalStore(
+    subscribeHydration,
+    hydratedClientSnapshot,
+    hydratingServerSnapshot,
+  );
   const [tab, setTab] = useState<TabId>(initialTab);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
@@ -131,10 +162,31 @@ export function TaskWorkbench({
   const lockVersion = lockVersionState.server === workspace.task.lockVersion
     ? lockVersionState.current
     : workspace.task.lockVersion;
-  const currentWorkspace = lockVersion === workspace.task.lockVersion
-    ? workspace
-    : { ...workspace, task: { ...workspace.task, lockVersion } };
+  const serverApprovalGateKey = approvalGateKey(workspace);
+  const [approvalGateState, setApprovalGateState] = useState({
+    server: serverApprovalGateKey,
+    current: {
+      pendingApproval: workspace.pendingApproval,
+      pendingApprovalConflict: workspace.pendingApprovalConflict,
+    } satisfies ApprovalGate,
+  });
+  const approvalGate = approvalGateState.server === serverApprovalGateKey
+    ? approvalGateState.current
+    : {
+        pendingApproval: workspace.pendingApproval,
+        pendingApprovalConflict: workspace.pendingApprovalConflict,
+      };
+  const setApprovalGate = (next: ApprovalGate) => {
+    setApprovalGateState({ server: serverApprovalGateKey, current: next });
+  };
+  const currentWorkspace = {
+    ...workspace,
+    task: { ...workspace.task, lockVersion },
+    ...approvalGate,
+  };
   const task = currentWorkspace.task;
+  const approvalBlocked =
+    approvalGate.pendingApprovalConflict || approvalGate.pendingApproval !== null;
   const activeMilestone = currentWorkspace.currentPlan.nodes.find(
     (entry) => entry.nodeId === task.activeMilestoneNodeId,
   );
@@ -144,21 +196,39 @@ export function TaskWorkbench({
   const needsReviewCount = canvasModel?.segments.filter(
     (entry) => entry.associationNeedsReview,
   ).length ?? 0;
-  const selectTab = (nextTab: TabId) => {
-    setTab(nextTab);
-    const url = new URL(window.location.href);
-    if (nextTab === "plan") url.searchParams.delete("tab");
-    else url.searchParams.set("tab", nextTab);
-    window.history.replaceState(window.history.state, "", url);
-  };
+  const selectTabFromLink = (
+    event: MouseEvent<HTMLAnchorElement>,
+    nextTab: TabId,
+  ) => {
+    if (
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey
+    ) {
+      return;
+    }
 
-  const runAction: RunAction = async (action, successMessage, onSuccess) => {
+    event.preventDefault();
+    setTab(nextTab);
+    const url = new URL(event.currentTarget.href);
+    window.history.replaceState(window.history.state, "", url);
+    router.replace(`${url.pathname}${url.search}${url.hash}`, { scroll: false });
+  };
+  const runAction: RunAction = async (
+    action,
+    successMessage,
+    onSuccess,
+    onFailure,
+  ) => {
     if (busy) return;
     setBusy(true);
     setNotice({ kind: "info", message: "正在保存…" });
     try {
       const result = await action();
       if (!result.ok) {
+        onFailure?.(result.error);
         setNotice({
           kind: "error",
           message:
@@ -177,7 +247,7 @@ export function TaskWorkbench({
         });
       }
       setNotice({ kind: "success", message: successMessage });
-      onSuccess?.();
+      onSuccess?.(result.data);
       router.refresh();
     } catch {
       setNotice({ kind: "error", message: "网络或服务暂时不可用，未保存任何本地输入。" });
@@ -247,12 +317,18 @@ export function TaskWorkbench({
               </Button>
             )}
             {task.status === "ACTIVE" && workspace.permissions.canCreateRevision && (
-              <Link
-                href={routes.progress.taskRevisionNew(task.id)}
-                className={cn(buttonVariants())}
-              >
-                发起 Revision
-              </Link>
+              approvalBlocked ? (
+                <Button type="button" disabled title="当前 Task 已有待审批事项">
+                  发起 Revision
+                </Button>
+              ) : (
+                <Link
+                  href={routes.progress.taskRevisionNew(task.id)}
+                  className={cn(buttonVariants())}
+                >
+                  发起 Revision
+                </Link>
+              )
             )}
             <Button
               type="button"
@@ -275,6 +351,43 @@ export function TaskWorkbench({
         </div>
       </section>
 
+      {approvalBlocked && (
+        <section
+          className="flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950"
+          role="status"
+          data-testid="task-approval-gate"
+        >
+          <p className="min-w-0 break-words">
+            {approvalGate.pendingApprovalConflict
+              ? "当前 Task 存在多条待审批记录，相关提交与结束操作已暂停，请联系管理员处理。"
+              : approvalGate.pendingApproval?.kind === "MILESTONE_REVIEW"
+                ? `Milestone「${approvalGate.pendingApproval.title}」正在等待审批；完成处理前不能发起 Revision、重复提交验收或结束 Task。`
+                : `Revision「${approvalGate.pendingApproval?.title || "未命名修订"}」正在等待审批；完成处理前不能提交 Milestone 验收或结束 Task。`}
+          </p>
+          {!approvalGate.pendingApprovalConflict && approvalGate.pendingApproval && (
+            <a
+              className={cn(
+                buttonVariants({ size: "sm", variant: "outline" }),
+              )}
+              href={
+                approvalGate.pendingApproval.kind === "REVISION"
+                  ? routes.progress.taskRevisions(task.id)
+                  : routes.progress.taskReviews(task.id)
+              }
+              data-hydrated={hydrated ? "true" : "false"}
+              onClick={(event) => selectTabFromLink(
+                event,
+                approvalGate.pendingApproval?.kind === "REVISION"
+                  ? "revisions"
+                  : "reviews",
+              )}
+            >
+              前往处理
+            </a>
+          )}
+        </section>
+      )}
+
       <TaskTimelineSection
         workspace={currentWorkspace}
         canvasModel={canvasModel}
@@ -283,25 +396,33 @@ export function TaskWorkbench({
         taskOptions={taskOptions}
       />
 
-      <div className="overflow-x-auto rounded-xl border border-border bg-card px-2" aria-label="Task 工作台标签">
+      <div
+        className="overflow-x-auto rounded-xl border border-border bg-card px-2"
+        aria-label="Task 工作台标签"
+      >
         <div className="flex min-w-max gap-1" role="tablist">
           {tabs.map((entry) => (
-            <button
+            <a
               key={entry.id}
-              type="button"
+              href={
+                entry.id === "plan"
+                  ? routes.progress.taskDetail(task.id)
+                  : `${routes.progress.taskDetail(task.id)}?tab=${entry.id}`
+              }
               role="tab"
               aria-selected={tab === entry.id}
+              data-hydrated={hydrated ? "true" : "false"}
               className={cn(
                 "border-b-2 px-4 py-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 tab === entry.id
                   ? "border-primary text-foreground"
                   : "border-transparent text-muted-foreground hover:text-foreground",
               )}
-              onClick={() => selectTab(entry.id)}
+              onClick={(event) => selectTabFromLink(event, entry.id)}
             >
               {entry.label}
               {entry.id === "reviews" && lifecycle.reviews.some((item) => item.capabilities.canReview) && " · 待办"}
-            </button>
+            </a>
           ))}
         </div>
       </div>
@@ -346,6 +467,7 @@ export function TaskWorkbench({
             planVersions={planVersions}
             busy={busy}
             runAction={runAction}
+            approvalGate={approvalGate}
           />
         )}
         {tab === "reviews" && (
@@ -357,6 +479,8 @@ export function TaskWorkbench({
             terminationNodeId={termination?.nodeId ?? null}
             busy={busy}
             runAction={runAction}
+            approvalGate={approvalGate}
+            setApprovalGate={setApprovalGate}
           />
         )}
         {tab === "audit" && (
@@ -507,6 +631,8 @@ function OverviewPanel({
 }) {
   const editable = workspace.task.status === "ACTIVE" && workspace.permissions.canUpdateMetadata;
   const canManageMembers = workspace.task.status === "ACTIVE" && workspace.permissions.canManageMembers;
+  const approvalBlocked =
+    workspace.pendingApprovalConflict || workspace.pendingApproval !== null;
   const [members, setMembers] = useState(
     workspace.members.flatMap(({ personId, role }) =>
       role === "OWNER" || role === "PARTICIPANT"
@@ -665,7 +791,7 @@ function OverviewPanel({
         )}
         {optionError && <p className="text-sm text-destructive" role="alert">{optionError}</p>}
         <div className="border-t border-border pt-3 text-sm text-muted-foreground">
-          <p>可修改元数据：{workspace.permissions.canUpdateMetadata ? "是" : "否"}</p><p>可创建 Revision：{workspace.permissions.canCreateRevision ? "是" : "否"}</p><p>可处理验收：{workspace.permissions.canReviewMilestone ? "是" : "否"}</p><p>可确认结束：{workspace.permissions.canTerminate ? "是" : "否"}</p>
+          <p>可修改元数据：{workspace.permissions.canUpdateMetadata ? "是" : "否"}</p><p>当前可创建 Revision：{workspace.task.status === "ACTIVE" && workspace.permissions.canCreateRevision && !approvalBlocked ? "是" : "否"}</p><p>拥有验收审批权限：{workspace.permissions.canReviewMilestone ? "是" : "否"}</p><p>当前可确认结束：{workspace.task.status === "ACTIVE" && workspace.permissions.canTerminate && !approvalBlocked ? "是" : "否"}</p>
         </div>
       </section>
     </div>
@@ -679,6 +805,7 @@ function RevisionsPanel({
   planVersions,
   busy,
   runAction,
+  approvalGate,
 }: {
   workspace: TaskWorkspace;
   lifecycle: TaskLifecycleViews;
@@ -686,6 +813,7 @@ function RevisionsPanel({
   planVersions: PlanVersionListItem[];
   busy: boolean;
   runAction: RunAction;
+  approvalGate: ApprovalGate;
 }) {
   const revisions = lifecycle.revisions;
   const [comments, setComments] = useState<Record<string, string>>({});
@@ -693,13 +821,15 @@ function RevisionsPanel({
   const [diffError, setDiffError] = useState("");
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState("");
+  const approvalBlocked =
+    approvalGate.pendingApprovalConflict || approvalGate.pendingApproval !== null;
 
   return (
     <div className="space-y-4">
       <section className="space-y-3 rounded-xl border border-border bg-card p-4">
         <h2 className="font-semibold">Revision 历史</h2>
         {revisions.length === 0 && <p className="text-sm text-muted-foreground">暂无 Revision。</p>}
-        {revisions.map((revision) => <article key={revision.id} className="space-y-2 rounded-lg border border-border p-3"><div className="flex flex-wrap items-center gap-2"><Badge>{revisionStatusLabel(revision.status)}</Badge>{revision.targetVersionNo && <Badge variant="outline">候选 v{revision.targetVersionNo}</Badge>}<Badge variant="outline">第 {revision.reviewRound} 轮</Badge><span className="text-sm text-muted-foreground">基线锁 {revision.baseTaskLockVersion}</span></div><h3 className="font-medium">{revision.reason}</h3><p className="text-sm text-muted-foreground">标记 {formatDateTime(revision.revisionAt)} · 创建 {formatDateTime(revision.createdAt)} · 审批 {formatDateTime(revision.reviewedAt)} · 生效 {formatDateTime(revision.effectiveAt)}</p>{revision.reviewComment && <p className="text-sm">审批说明：{revision.reviewComment}</p>}<Field label="处理说明"><Input value={comments[revision.id] ?? ""} onChange={(event) => setComments({ ...comments, [revision.id]: event.target.value })} /></Field><div className="flex flex-wrap gap-2">{revision.capabilities.canEdit && <Link href={routes.progress.taskRevisionEdit(workspace.task.id, revision.id)} className={cn(buttonVariants({ size: "sm", variant: "outline" }))}>修改候选计划</Link>}{revision.capabilities.canReview && <><Button type="button" size="sm" disabled={busy} onClick={() => void runAction(() => approveRevision({ revisionNodeId: revision.id, comment: comments[revision.id] ?? "" }), "Revision 已批准并应用。")}>批准</Button><Button type="button" size="sm" variant="destructive" disabled={busy} onClick={() => void runAction(() => rejectRevision({ revisionNodeId: revision.id, comment: comments[revision.id] ?? "" }), "Revision 已驳回。")}>驳回</Button></>}{revision.capabilities.canCancel && <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void runAction(() => cancelRevision({ revisionNodeId: revision.id, comment: comments[revision.id] ?? "" }), "Revision 已取消。")}>取消</Button>}{revision.targetPlanVersionId && <Button type="button" size="sm" variant="outline" onClick={() => void comparePlanVersions({ fromPlanVersionId: revision.basePlanVersionId, toPlanVersionId: revision.targetPlanVersionId! }).then((result) => { if (result.ok) { setDiff(result.data); setDiffError(""); } else setDiffError(result.error.message); }).catch(() => setDiffError("版本比较请求失败。"))}>查看三层 Diff</Button>}</div></article>)}
+        {revisions.map((revision) => <article key={revision.id} className="space-y-2 rounded-lg border border-border p-3"><div className="flex flex-wrap items-center gap-2"><Badge>{revisionStatusLabel(revision.status)}</Badge>{revision.targetVersionNo && <Badge variant="outline">候选 v{revision.targetVersionNo}</Badge>}<Badge variant="outline">第 {revision.reviewRound} 轮</Badge><span className="text-sm text-muted-foreground">基线锁 {revision.baseTaskLockVersion}</span></div><h3 className="font-medium">{revision.reason}</h3><p className="text-sm text-muted-foreground">标记 {formatDateTime(revision.revisionAt)} · 创建 {formatDateTime(revision.createdAt)} · 审批 {formatDateTime(revision.reviewedAt)} · 生效 {formatDateTime(revision.effectiveAt)}</p>{revision.reviewComment && <p className="text-sm">审批说明：{revision.reviewComment}</p>}<Field label="处理说明"><Input value={comments[revision.id] ?? ""} onChange={(event) => setComments({ ...comments, [revision.id]: event.target.value })} /></Field><div className="flex flex-wrap gap-2">{revision.capabilities.canEdit && (approvalBlocked ? <Button type="button" size="sm" variant="outline" disabled title="当前 Task 已有待审批事项">修改候选计划</Button> : <Link href={routes.progress.taskRevisionEdit(workspace.task.id, revision.id)} className={cn(buttonVariants({ size: "sm", variant: "outline" }))}>修改候选计划</Link>)}{revision.capabilities.canReview && <><Button type="button" size="sm" disabled={busy} onClick={() => void runAction(() => approveRevision({ revisionNodeId: revision.id, comment: comments[revision.id] ?? "" }), "Revision 已批准并应用。")}>批准</Button><Button type="button" size="sm" variant="destructive" disabled={busy} onClick={() => void runAction(() => rejectRevision({ revisionNodeId: revision.id, comment: comments[revision.id] ?? "" }), "Revision 已驳回。")}>驳回</Button></>}{revision.capabilities.canCancel && <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void runAction(() => cancelRevision({ revisionNodeId: revision.id, comment: comments[revision.id] ?? "" }), "Revision 已取消。")}>取消</Button>}{revision.targetPlanVersionId && <Button type="button" size="sm" variant="outline" onClick={() => void comparePlanVersions({ fromPlanVersionId: revision.basePlanVersionId, toPlanVersionId: revision.targetPlanVersionId! }).then((result) => { if (result.ok) { setDiff(result.data); setDiffError(""); } else setDiffError(result.error.message); }).catch(() => setDiffError("版本比较请求失败。"))}>查看三层 Diff</Button>}</div></article>)}
         {loadError && <p className="text-sm text-destructive" role="alert">{loadError}</p>}
         {lifecycle.nextRevisionCursor && <Button type="button" variant="outline" disabled={loadingMore} onClick={() => { setLoadingMore(true); setLoadError(""); void getTaskLifecycleViews({ taskId: workspace.task.id, revisionCursor: lifecycle.nextRevisionCursor, revisionLimit: 50, reviewLimit: 1, auditLimit: 1 }).then((result) => { if (!result.ok) { setLoadError(result.error.message); return; } setLifecycle({ ...lifecycle, revisions: [...lifecycle.revisions, ...result.data.revisions], nextRevisionCursor: result.data.nextRevisionCursor }); }).catch(() => setLoadError("Revision 历史加载失败，请稍后重试。")).finally(() => setLoadingMore(false)); }}>加载更多 Revision</Button>}
       </section>
@@ -718,6 +848,8 @@ function ReviewsPanel({
   terminationNodeId,
   busy,
   runAction,
+  approvalGate,
+  setApprovalGate,
 }: {
   workspace: TaskWorkspace;
   lifecycle: TaskLifecycleViews;
@@ -725,6 +857,8 @@ function ReviewsPanel({
   terminationNodeId: string | null;
   busy: boolean;
   runAction: RunAction;
+  approvalGate: ApprovalGate;
+  setApprovalGate: (next: ApprovalGate) => void;
 }) {
   const activeMilestone = workspace.currentPlan.nodes.find((entry) => entry.nodeId === workspace.task.activeMilestoneNodeId && entry.milestone);
   const [evidenceKind, setEvidenceKind] = useState<"TEXT" | "LINK">("TEXT");
@@ -737,14 +871,33 @@ function ReviewsPanel({
   const [terminationSummary, setTerminationSummary] = useState("");
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState("");
+  const approvalBlocked =
+    approvalGate.pendingApprovalConflict || approvalGate.pendingApproval !== null;
+  const markMilestonePending = (data: unknown) => {
+    const reviewId = recordString(data, "reviewId");
+    const result = recordString(data, "result");
+    reviewKey.current = null;
+    setEvidence("");
+    setEvidenceNote("");
+    if (result !== "PENDING" || !reviewId || !activeMilestone?.milestone) return;
+    setApprovalGate({
+      pendingApproval: {
+        kind: "MILESTONE_REVIEW",
+        id: reviewId,
+        title: activeMilestone.milestone.goal,
+        submittedAt: new Date().toISOString(),
+      },
+      pendingApprovalConflict: false,
+    });
+  };
 
   return (
     <div className="space-y-4">
-      {activeMilestone?.milestone && <section className="space-y-3 rounded-xl border border-border bg-card p-4"><div><h2 className="font-semibold">当前 Milestone 验收</h2><h3 className="mt-2 font-medium">{activeMilestone.milestone.goal}</h3><p className="mt-1 text-sm text-muted-foreground">完成条件：{activeMilestone.milestone.completionCriteria}</p><p className="mt-1 text-sm text-muted-foreground">验收要求：{activeMilestone.milestone.reviewRequirements}</p></div>{workspace.permissions.canSubmitMilestoneReview && <><div className="flex gap-3 text-sm"><label><input type="radio" checked={evidenceKind === "TEXT"} onChange={() => setEvidenceKind("TEXT")} /> 文本证据</label><label><input type="radio" checked={evidenceKind === "LINK"} onChange={() => setEvidenceKind("LINK")} /> 链接证据</label><span className="text-muted-foreground">FILE 暂未启用</span></div><Field label={evidenceKind === "TEXT" ? "文本证据" : "证据链接"}>{evidenceKind === "TEXT" ? <Textarea value={evidence} onChange={(event) => setEvidence(event.target.value)} /> : <Input type="url" value={evidence} onChange={(event) => setEvidence(event.target.value)} />}</Field>{evidenceKind === "LINK" && <Field label="链接说明"><Input value={evidenceNote} onChange={(event) => setEvidenceNote(event.target.value)} /></Field>}<Button type="button" disabled={busy} onClick={() => { reviewKey.current ??= `review-workbench:${globalThis.crypto.randomUUID()}`; void runAction(() => submitMilestoneForReview({ milestoneNodeId: activeMilestone.nodeId, idempotencyKey: reviewKey.current, evidences: evidence ? [evidenceKind === "TEXT" ? { kind: "TEXT", note: evidence, sortOrder: 0 } : { kind: "LINK", externalUrl: evidence, note: evidenceNote, sortOrder: 0 }] : [] }), "Milestone 已提交验收。", () => { reviewKey.current = null; setEvidence(""); setEvidenceNote(""); }); }}>提交验收</Button></>}</section>}
+      {activeMilestone?.milestone && <section className="space-y-3 rounded-xl border border-border bg-card p-4"><div><h2 className="font-semibold">当前 Milestone 验收</h2><h3 className="mt-2 font-medium">{activeMilestone.milestone.goal}</h3><p className="mt-1 text-sm text-muted-foreground">完成条件：{activeMilestone.milestone.completionCriteria}</p><p className="mt-1 text-sm text-muted-foreground">验收要求：{activeMilestone.milestone.reviewRequirements}</p></div>{workspace.permissions.canSubmitMilestoneReview && <><div className="flex gap-3 text-sm"><label><input type="radio" checked={evidenceKind === "TEXT"} disabled={approvalBlocked} onChange={() => setEvidenceKind("TEXT")} /> 文本证据</label><label><input type="radio" checked={evidenceKind === "LINK"} disabled={approvalBlocked} onChange={() => setEvidenceKind("LINK")} /> 链接证据</label><span className="text-muted-foreground">FILE 暂未启用</span></div><Field label={evidenceKind === "TEXT" ? "文本证据" : "证据链接"}>{evidenceKind === "TEXT" ? <Textarea value={evidence} disabled={approvalBlocked} onChange={(event) => setEvidence(event.target.value)} /> : <Input type="url" value={evidence} disabled={approvalBlocked} onChange={(event) => setEvidence(event.target.value)} />}</Field>{evidenceKind === "LINK" && <Field label="链接说明"><Input value={evidenceNote} disabled={approvalBlocked} onChange={(event) => setEvidenceNote(event.target.value)} /></Field>}<Button type="button" disabled={busy || approvalBlocked} title={approvalBlocked ? "当前 Task 已有待审批事项" : undefined} onClick={() => { reviewKey.current ??= `review-workbench:${globalThis.crypto.randomUUID()}`; void runAction(() => submitMilestoneForReview({ milestoneNodeId: activeMilestone.nodeId, idempotencyKey: reviewKey.current, evidences: evidence ? [evidenceKind === "TEXT" ? { kind: "TEXT", note: evidence, sortOrder: 0 } : { kind: "LINK", externalUrl: evidence, note: evidenceNote, sortOrder: 0 }] : [] }), "Milestone 已提交验收。", markMilestonePending, (error) => { if (error.code === "STATE_CONFLICT") reviewKey.current = null; }); }}>提交验收</Button></>}</section>}
 
       <section className="space-y-3 rounded-xl border border-border bg-card p-4"><h2 className="font-semibold">验收历史</h2>{lifecycle.reviews.length === 0 && <p className="text-sm text-muted-foreground">暂无验收记录。</p>}{lifecycle.reviews.map((review) => <article key={review.id} className="space-y-2 rounded-lg border border-border p-3"><div className="flex flex-wrap gap-2"><Badge>{reviewResultLabel(review.result)}</Badge><span className="text-sm">{review.milestoneGoal}</span>{review.revokedAt && <Badge variant="outline">已撤销</Badge>}</div><p className="text-sm text-muted-foreground">{review.submittedBy} 提交于 {formatDateTime(review.createdAt)}{review.reviewer ? ` · 审批人 ${review.reviewer}` : ""}</p>{review.comment && <p className="text-sm">审批说明：{review.comment}</p>}<ul className="space-y-1 text-sm">{review.evidences.map((item) => <li key={item.id}>{item.kind === "LINK" && item.externalUrl ? <a href={item.externalUrl} target="_blank" rel="noreferrer" className="text-primary underline">{item.note || item.externalUrl}</a> : <span>{item.kind}：{item.note || "文件证据未启用"}</span>}</li>)}</ul>{review.capabilities.canReview && <><Field label="审批说明"><Textarea value={comments[review.id] ?? ""} onChange={(event) => setComments({ ...comments, [review.id]: event.target.value })} /></Field><div className="flex flex-wrap gap-2"><Button type="button" size="sm" disabled={busy} onClick={() => void runAction(() => approveMilestoneReview({ reviewId: review.id, comment: comments[review.id] ?? "" }), "验收已通过。")}>通过</Button><Button type="button" size="sm" variant="destructive" disabled={busy} onClick={() => void runAction(() => rejectMilestoneReview({ reviewId: review.id, comment: comments[review.id] ?? "" }), "验收已驳回。")}>驳回</Button><Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void runAction(() => requireMilestoneRevision({ reviewId: review.id, comment: comments[review.id] ?? "" }), "已要求修订。")}>要求修订</Button></div></>}</article>)}{loadError && <p className="text-sm text-destructive" role="alert">{loadError}</p>}{lifecycle.nextReviewCursor && <Button type="button" variant="outline" disabled={loadingMore} onClick={() => { setLoadingMore(true); setLoadError(""); void getTaskLifecycleViews({ taskId: workspace.task.id, reviewCursor: lifecycle.nextReviewCursor, reviewLimit: 50, revisionLimit: 1, auditLimit: 1 }).then((result) => { if (!result.ok) { setLoadError(result.error.message); return; } setLifecycle({ ...lifecycle, reviews: [...lifecycle.reviews, ...result.data.reviews], nextReviewCursor: result.data.nextReviewCursor }); }).catch(() => setLoadError("验收历史加载失败，请稍后重试。")).finally(() => setLoadingMore(false)); }}>加载更多验收记录</Button>}</section>
 
-      {workspace.task.status === "ACTIVE" && workspace.permissions.canTerminate && terminationNodeId && <section className="space-y-3 rounded-xl border border-destructive/20 bg-card p-4"><div><h2 className="font-semibold">Termination 确认</h2><p className="mt-1 text-sm text-muted-foreground">成功结束要求全部前置 Milestone 已完成；其余结果必须填写原因。操作会写审计并进入终态。</p></div><Field label="结束结果"><select className={selectClass} value={outcome} onChange={(event) => setOutcome(event.target.value as typeof outcome)}><option value="SUCCESS">成功完成</option><option value="FAILED">失败结束</option><option value="CANCELLED">提前取消</option><option value="TIMEOUT">超时结束</option></select></Field><Field label="原因"><Textarea value={terminationReason} onChange={(event) => setTerminationReason(event.target.value)} /></Field><Field label="总结"><Textarea value={terminationSummary} onChange={(event) => setTerminationSummary(event.target.value)} /></Field><Button type="button" variant="destructive" disabled={busy} onClick={() => { if (!window.confirm(`确认以“${terminationOutcomeLabel(outcome)}”结束 Task？`)) return; void runAction(() => confirmTermination({ taskId: workspace.task.id, terminationNodeId, outcome, reason: terminationReason, summary: terminationSummary, expectedLockVersion: workspace.task.lockVersion }), "Task 已完成 Termination 确认。"); }}>确认结束 Task</Button></section>}
+      {workspace.task.status === "ACTIVE" && workspace.permissions.canTerminate && terminationNodeId && <section className="space-y-3 rounded-xl border border-destructive/20 bg-card p-4"><div><h2 className="font-semibold">Termination 确认</h2><p className="mt-1 text-sm text-muted-foreground">成功结束要求全部前置 Milestone 已完成；其余结果必须填写原因。操作会写审计并进入终态。</p></div><Field label="结束结果"><select className={selectClass} value={outcome} disabled={approvalBlocked} onChange={(event) => setOutcome(event.target.value as typeof outcome)}><option value="SUCCESS">成功完成</option><option value="FAILED">失败结束</option><option value="CANCELLED">提前取消</option><option value="TIMEOUT">超时结束</option></select></Field><Field label="原因"><Textarea value={terminationReason} disabled={approvalBlocked} onChange={(event) => setTerminationReason(event.target.value)} /></Field><Field label="总结"><Textarea value={terminationSummary} disabled={approvalBlocked} onChange={(event) => setTerminationSummary(event.target.value)} /></Field><Button type="button" variant="destructive" disabled={busy || approvalBlocked} title={approvalBlocked ? "当前 Task 已有待审批事项" : undefined} onClick={() => { if (!window.confirm(`确认以“${terminationOutcomeLabel(outcome)}”结束 Task？`)) return; void runAction(() => confirmTermination({ taskId: workspace.task.id, terminationNodeId, outcome, reason: terminationReason, summary: terminationSummary, expectedLockVersion: workspace.task.lockVersion }), "Task 已完成 Termination 确认。"); }}>确认结束 Task</Button></section>}
     </div>
   );
 }
@@ -828,6 +981,21 @@ function mergeById<T extends { id: string }>(current: T[], incoming: T[]) {
   const byId = new Map(current.map((item) => [item.id, item]));
   for (const item of incoming) byId.set(item.id, item);
   return [...byId.values()];
+}
+
+function approvalGateKey(
+  workspace: Pick<TaskWorkspace, "pendingApproval" | "pendingApprovalConflict">,
+) {
+  if (workspace.pendingApprovalConflict) return "CONFLICT";
+  return workspace.pendingApproval
+    ? `${workspace.pendingApproval.kind}:${workspace.pendingApproval.id}`
+    : "NONE";
+}
+
+function recordString(value: unknown, key: string): string | null {
+  if (!value || typeof value !== "object" || !(key in value)) return null;
+  const candidate = (value as Record<string, unknown>)[key];
+  return typeof candidate === "string" ? candidate : null;
 }
 
 function actionLockVersion(value: unknown): number | null {

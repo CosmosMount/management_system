@@ -242,6 +242,8 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 
 Revision 是用户选择时间的计划变化标记，不形成阶段，也不能关联 Planned/Actual Segment。创建 Revision 时固定沿用 Current Plan 的 Start，自动保留全部已完成 Milestone 和已生效 Revision，并用调用方提供的后续 Milestone 与 Terminal 重建未完成部分。创建即进入 `PENDING_APPROVAL`，不再存在草稿或单独提交动作；驳回后可修改并直接重新送审，取消后释放该 Task 的唯一候选名额，批准后才进入 Current Plan 和正式时间轴。
 
+同一 Task 同时最多只能有一条待审批：未撤出的 `PENDING` Milestone Review 与 `PENDING_APPROVAL` Revision 互斥。Milestone 提交后，在审批通过、驳回、要求修订或撤出前不能用新的请求键重复提交；原 Review 尚未撤出时，相同请求键按原结果幂等重放。撤出后的旧请求键会明确返回冲突，重新提交必须使用新请求键。任一待审批存在时，发起/重新送审 Revision 和确认 Terminal 都会被阻止；被驳回或取消的 Revision 不占用名额。Terminal 仍是直接结束确认，不新增审批记录。
+
 存在 Task 数据时，系统要求至少保留一名具有 default tenant 有效飞书 openId 的全局管理员；账号后台会拒绝撤销最后一名可用审批人的角色，数据库永久门禁也会拦截绕过应用层的账号删除、角色和身份写入。空库创建首个 Task 时同样检查该不变量。提交 Milestone 验收或创建/重新送审 Revision 时会在同一事务中再次校验，失败时整事务回滚，不会留下无人处理或无法通知的待审批记录。
 
 项目 `GROUP_LEADER` 已退役，只保留撤销历史且不能继续授予。采购报销的 `TEAM_ADMIN`、`TECH_GROUP_ADMIN` 等独立角色、组长称谓和审批流程不受影响。Work Segment 中名为 `REVIEWER` 的工作职责仍可使用，它只描述该段工作，不授予 Task 审批权限。
@@ -507,7 +509,7 @@ pm2 start npm --name procurement-cron -- run cron
 - 所有已登录并成功解析到统一 `Account/Person` 的账号可查看全部未删除 Task、计划/审批/审计历史和全员完整 Segment，并可创建 Task；可见性扩大不扩大写权限。
 - Task 成员只分“负责人”和“参与人”。支持多负责人且至少一名，同一 Person 只能有一个有效角色；创建者自动成为负责人。
 - 参与人可编辑 Task/计划、提交验收并创建自己的 Revision，并管理自己的关联投入；负责人另可管理成员、Task 状态、任意未生效 Revision 和该 Task 全部投入；全局管理员拥有全部项目写权限。
-- Revision 是可选择时间的非分段标记，创建即待审批，没有 Draft/Submit；驳回后修改即重新送审。Milestone 与 Revision 只由统一超级管理员或项目管理员决定，允许管理员自审；界面不再提供流程策略、Reviewer 或自审开关。
+- Revision 是可选择时间的非分段标记，创建即待审批，没有 Draft/Submit；驳回后修改即重新送审。每个 Task 只允许一条 Milestone/Revision 待审批，待审批期间不能再次提交 Milestone、发起或重新送审 Revision，也不能确认 Terminal。Milestone 与 Revision 只由统一超级管理员或项目管理员决定，允许管理员自审；界面不再提供流程策略、Reviewer 或自审开关。
 - `/progress` 是“我的工作”驾驶舱，提供指标、个人时间预览、行动待办、Active Task 表和折叠通知。
 - `/progress/tasks/new` 提供新建 Composer；尚未激活的 Task 通过工作台右上角“编辑 Task”进入 `/progress/tasks/[id]/edit`，使用同一 Composer 一次保存基本信息、Tag、关联 Task、成员和完整计划。Participant 可编辑内容与计划，但成员区只读；保存成功后返回工作台。
 - `/progress/tasks` 与 `/progress/tasks/[id]` 提供 Task 列表和 Task 工作台。人员投入时间线位于工作台 Tab 上方，并在“计划与资源”“概览”“修订与历史”“验收”“审计”之间切换时保持显示和交互状态。DRAFT 工作台的“概览”和“计划与资源”均为只读展示；ACTIVE 的既有元数据、Tag 和成员编辑保持不变。发起 Revision 进入 `/progress/tasks/[id]/revisions/new`，被驳回候选通过 `/progress/tasks/[id]/revisions/[revisionId]/edit` 修改；两者与 Task 创建/草稿编辑共用 Composer 的 TimeCanvas、节点表、Inspector、撤销/重做、校验和本地恢复，保存后直接返回“修订与历史”。工作台 Revision Tab 只保留历史、审批、取消和 Diff，不再内联编辑候选计划。
@@ -526,16 +528,11 @@ pm2 start npm --name procurement-cron -- run cron
 
 ```bash
 npm run pm:task-access-preflight
-npm run db:deploy
 
-# 默认 dry-run：报告待处理审批、管理员收件人和旧 outbox
-npm run pm:repair-task-approval-notifications
-
-# 仅在通知禁发的维护窗口执行写入修复
-NOTIFICATION_DELIVERY_DISABLED=true \
-npm run pm:repair-task-approval-notifications -- --apply
+# 进入维护窗口后停止应用写入和通知 worker，再执行迁移
+NOTIFICATION_DELIVERY_DISABLED=true npm run db:deploy
 
 npm run accounts:validate
 ```
 
-通知修复会保留已发送的旧 Reviewer/组长历史消息，冻结仍待发送或重试的旧审批 outbox，并为当前待审批对象按版本化事件键补建全局管理员站内通知和 outbox；它不会绕过禁发、allowlist 或 outbox 投递门禁。
+`20260805120000_single_task_pending_approval` 会统一撤出当前待处理的 Task Milestone/Revision 审批：保留审批、证据和已发送消息历史，取消 Revision 候选计划，冻结尚可投递的对应 outbox/recipient，将相关未读站内审批通知标记为已读，并写 `source=MIGRATION` 审计。迁移末尾会断言全库 Task 待审批数为零；失败则整次回滚。采购、报销、投入确认和关联复核完全不受影响。迁移成功并完成验证后才能恢复应用写入和通知 worker。
