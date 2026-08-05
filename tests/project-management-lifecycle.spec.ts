@@ -1071,10 +1071,6 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       comment: "请修改后重提",
     });
     let targetBefore = await revisionTargetSnapshot(targetPlanVersionId);
-    const replacementNode = targetBefore.nodes.find(
-      (entry) => entry.node.type === "MILESTONE" && !entry.isCarryForward,
-    );
-    if (!replacementNode) throw new Error("测试候选计划缺少可替换 Milestone");
     const validUpdate = {
       revisionNodeId: revision.revisionNodeId,
       expectedTargetPlanUpdatedAt: targetBefore.updatedAt.toISOString(),
@@ -1197,26 +1193,6 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       "PLAN_CHRONOLOGY_INVALID",
     );
     expect(await revisionTargetSnapshot(targetPlanVersionId)).toEqual(targetBefore);
-
-    const associatedSegment = await prisma.workSegment.create({
-      data: {
-        personId: fixture.member.person.id,
-        type: "PLANNED",
-        status: "PLANNED",
-        startAt: new Date("2026-08-04T01:00:00.000Z"),
-        endAt: new Date("2026-08-04T02:00:00.000Z"),
-        content: "候选计划关联保护",
-        taskId: fixture.taskId,
-        nodeId: replacementNode.nodeId,
-        createdByAccountId: fixture.owner.account.id,
-      },
-    });
-    await expectServiceError(
-      reviseRejectedRevision(actor(fixture.owner), validUpdate),
-      "STATE_CONFLICT",
-    );
-    expect(await revisionTargetSnapshot(targetPlanVersionId)).toEqual(targetBefore);
-    await prisma.workSegment.delete({ where: { id: associatedSegment.id } });
 
     const targetBeforeLateFailure = await revisionTargetSnapshot(targetPlanVersionId);
     const functionName = `test_revision_rollback_${randomUUID().replaceAll("-", "")}`;
@@ -1398,7 +1374,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     expect(await revisionTargetSnapshot(targetPlanVersionId)).toEqual(targetBefore);
   });
 
-  test("Revision approval atomically switches Current Plan and invalidates planned segments", async () => {
+  test("Revision approval atomically switches Current Plan without rewriting Task-associated segments", async () => {
     const fixture = await createActivatedFixture();
     const activeNode = await firstCurrentMilestone(fixture.taskId);
     const planned = await prisma.workSegment.create({
@@ -1410,7 +1386,6 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         endAt: new Date("2026-08-01T03:00:00.000Z"),
         content: "旧节点计划投入",
         taskId: fixture.taskId,
-        nodeId: activeNode.nodeId,
         createdByAccountId: fixture.owner.account.id,
       },
     });
@@ -1434,7 +1409,6 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         endAt: new Date("2026-08-01T05:00:00.000Z"),
         content: "已确认旧节点计划投入",
         taskId: fixture.taskId,
-        nodeId: activeNode.nodeId,
         createdByAccountId: fixture.owner.account.id,
       },
     });
@@ -1447,7 +1421,6 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         endAt: new Date("2026-08-01T06:00:00.000Z"),
         content: "已取消旧节点计划投入",
         taskId: fixture.taskId,
-        nodeId: activeNode.nodeId,
         createdByAccountId: fixture.owner.account.id,
       },
     });
@@ -1495,40 +1468,49 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       select: { status: true },
     });
     expect(oldNode.status).toBe("REVISED");
-    const updatedSegment = await prisma.workSegment.findUniqueOrThrow({
-      where: { id: planned.id },
-      select: { associationNeedsReview: true },
+    const persistedSegments = await prisma.workSegment.findMany({
+      where: {
+        id: {
+          in: [
+            planned.id,
+            overlappingPlanned.id,
+            confirmedPlanned.id,
+            cancelledPlanned.id,
+          ],
+        },
+      },
+      select: { id: true, status: true, updatedAt: true },
     });
-    expect(updatedSegment.associationNeedsReview).toBe(true);
     expect(
-      await prisma.workSegment.findUniqueOrThrow({
-        where: { id: overlappingPlanned.id },
-        select: { associationNeedsReview: true },
+      persistedSegments.map((segment) => ({
+        id: segment.id,
+        status: segment.status,
+        updatedAt: segment.updatedAt.toISOString(),
+      })),
+    ).toEqual(
+      expect.arrayContaining(
+        [planned, overlappingPlanned, confirmedPlanned, cancelledPlanned].map(
+          (segment) => ({
+            id: segment.id,
+            status: segment.status,
+            updatedAt: segment.updatedAt.toISOString(),
+          }),
+        ),
+      ),
+    );
+    expect(
+      await prisma.workSegmentChange.count({
+        where: { reason: "Revision 生效后原关联节点失效" },
       }),
-    ).toEqual({ associationNeedsReview: false });
-    await prisma.workSegmentChange.findFirstOrThrow({
-      where: {
-        segmentId: planned.id,
-        action: "UPDATE",
-        reason: "Revision 生效后原关联节点失效",
-      },
-    });
-    await prisma.domainAuditEvent.findFirstOrThrow({
-      where: {
-        entityType: "WorkSegment",
-        entityId: planned.id,
-        action: "pm.segment.update",
-      },
-    });
-    const terminalSegments = await prisma.workSegment.findMany({
-      where: { id: { in: [confirmedPlanned.id, cancelledPlanned.id] } },
-      select: { id: true, associationNeedsReview: true },
-      orderBy: { id: "asc" },
-    });
-    expect(terminalSegments.map((segment) => segment.associationNeedsReview)).toEqual([
-      false,
-      false,
-    ]);
+    ).toBe(0);
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: {
+          entityType: "WorkSegment",
+          reason: "Revision 生效后原关联节点失效",
+        },
+      }),
+    ).toBe(0);
     const revisionAppliedPayload = await expectProjectManagementOutbox(
       `pm:revision:applied:${revision.revisionNodeId}:feishu`,
       {
@@ -1549,48 +1531,24 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     expect(revisionAppliedPayload.recipientOpenIds).not.toContain(
       fixture.reviewer.openId,
     );
-    const associationInvalidatedPayload = await expectProjectManagementOutbox(
-      `pm:segment:association_invalidated:${revision.revisionNodeId}:feishu`,
-      {
-        type: "segment_association_invalidated",
-        botKind: "notification",
-        purpose: "notification",
-      },
-    );
-    expect(associationInvalidatedPayload.actorName).toBe(
-      fixture.reviewer.person.displayName,
-    );
-    expect(
-      jsonRecord(associationInvalidatedPayload.context).currentPlanVersionId,
-    ).toBe(revision.targetPlanVersionId);
-    expect(
-      jsonRecord(associationInvalidatedPayload.context).currentPlanVersionId,
-    ).not.toBe(fixture.currentPlanVersionId);
-    expect(associationInvalidatedPayload.recipientOpenIds).toEqual([
-      fixture.member.openId,
-    ]);
-    const associationInvalidatedInApp =
-      await prisma.inAppNotification.findUniqueOrThrow({
-        where: {
-          eventKey: `pm:segment:association_invalidated:${revision.revisionNodeId}:inapp:${fixture.member.account.id}`,
-        },
-        select: { payload: true },
-      });
-    expect(
-      jsonRecord(jsonRecord(associationInvalidatedInApp.payload).context)
-        .currentPlanVersionId,
-    ).toBe(revision.targetPlanVersionId);
-    expect(
-      jsonRecord(associationInvalidatedInApp.payload).actorName,
-    ).toBe(fixture.reviewer.person.displayName);
     expect(
       await prisma.notificationOutbox.count({
         where: {
-          eventKey: `pm:segment:association_invalidated:${revision.revisionNodeId}:feishu`,
-          type: "segment_association_invalidated",
+          eventKey: {
+            startsWith: `pm:segment:association_invalidated:${revision.revisionNodeId}`,
+          },
         },
       }),
-    ).toBe(1);
+    ).toBe(0);
+    expect(
+      await prisma.inAppNotification.count({
+        where: {
+          eventKey: {
+            startsWith: `pm:segment:association_invalidated:${revision.revisionNodeId}`,
+          },
+        },
+      }),
+    ).toBe(0);
     expect(
       await prisma.domainAuditEvent.count({
         where: { taskId: fixture.taskId, action: "pm.revision.apply" },

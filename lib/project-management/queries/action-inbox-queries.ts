@@ -16,8 +16,7 @@ export type ActionInboxKind =
   | "SEGMENT_CONFIRMATION"
   | "MILESTONE_REVIEW"
   | "REVISION_REVIEW"
-  | "TERMINATION"
-  | "ASSOCIATION_REVIEW";
+  | "TERMINATION";
 
 export type ActionInboxItem = {
   id: string;
@@ -59,7 +58,6 @@ export async function getActionInbox({
   const boundedLimit = Math.min(Math.max(Math.trunc(limit), 1), 200);
   const now = new Date();
   const visibleTask = taskReadableWhere(actor);
-  const segmentManagerTask = taskActionableWhere(actor, ["OWNER"]);
   const reviewableTask = isSystemAdministrator(actor)
     ? { deletedAt: null }
     : { id: { in: [] } };
@@ -72,15 +70,6 @@ export async function getActionInbox({
         type: "PLANNED",
         status: "PENDING_CONFIRMATION",
       },
-    ],
-  };
-  const associationSegmentWhere: Prisma.WorkSegmentWhereInput = {
-    AND: [
-      segmentReadableWhere(actor),
-      { associationNeedsReview: true },
-      isSystemAdministrator(actor)
-        ? {}
-        : { OR: [{ personId: actor.personId }, { task: segmentManagerTask }] },
     ],
   };
   const milestoneReviewWhere: Prisma.MilestoneReviewWhereInput = {
@@ -134,7 +123,6 @@ export async function getActionInbox({
   };
   const [
     confirmationSegments,
-    associationSegments,
     reviews,
     revisions,
     terminations,
@@ -151,25 +139,9 @@ export async function getActionInbox({
           status: true,
           content: true,
           endAt: true,
-          associationNeedsReview: true,
           task: { select: taskResourceSelect },
         },
         orderBy: [{ endAt: "asc" }, { id: "asc" }],
-        take: boundedLimit,
-      }),
-      prisma.workSegment.findMany({
-        where: associationSegmentWhere,
-        select: {
-          id: true,
-          personId: true,
-          type: true,
-          status: true,
-          content: true,
-          endAt: true,
-          associationNeedsReview: true,
-          task: { select: taskResourceSelect },
-        },
-        orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
         take: boundedLimit,
       }),
       prisma.milestoneReview.findMany({
@@ -222,7 +194,6 @@ export async function getActionInbox({
       }),
       Promise.all([
         prisma.workSegment.count({ where: confirmationSegmentWhere }),
-        prisma.workSegment.count({ where: associationSegmentWhere }),
         prisma.milestoneReview.count({ where: milestoneReviewWhere }),
         prisma.revisionNode.count({ where: revisionWhere }),
         prisma.terminationNode.count({ where: terminationWhere }),
@@ -273,20 +244,6 @@ export async function getActionInbox({
         href: `/progress/my-timeline?focus=${segment.id}`,
       });
     }
-  }
-  for (const segment of associationSegments) {
-    const task = segment.task;
-    items.push({
-      id: `association:${segment.id}`,
-      kind: "ASSOCIATION_REVIEW",
-      title: segment.content,
-      summary: "计划修订后关联可能失效，请重新确认 Task 与节点。",
-      taskId: task?.id ?? null,
-      taskTitle: task?.title ?? null,
-      dueAt: null,
-      severity: "HIGH",
-      href: `/progress/resources?focus=${segment.id}`,
-    });
   }
   for (const review of reviews) {
     const task = review.milestoneNode.node.task;

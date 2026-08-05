@@ -54,7 +54,6 @@ export default async function ProgressMyTimelinePage({ searchParams }: { searchP
         personIds: [actor.personId],
         taskIds: [],
         tagIds: [],
-        nodeIds: [],
         types: [],
         statuses: [],
         groupBy: "PERSON",

@@ -15,7 +15,6 @@ import {
   mergePlannedSegments as mergePlannedSegmentsService,
   movePlannedSegments as movePlannedSegmentsService,
   partiallyConfirmSegment as partiallyConfirmSegmentService,
-  relinkPlannedSegment as relinkPlannedSegmentService,
   scanSegmentTransitions as scanSegmentTransitionsService,
   softDeleteActualSegment as softDeleteActualSegmentService,
   splitPlannedSegment as splitPlannedSegmentService,
@@ -124,12 +123,6 @@ export async function createActualSegment(
   input: unknown,
 ): Promise<ProjectManagementActionResult<Awaited<ReturnType<typeof createActualSegmentService>>>> {
   return runSegmentAction("pm.segment.create", "createActualSegment", input, createActualSegmentService);
-}
-
-export async function relinkPlannedSegment(
-  input: unknown,
-): Promise<ProjectManagementActionResult<Awaited<ReturnType<typeof relinkPlannedSegmentService>>>> {
-  return runSegmentAction("pm.segment.relink", "relinkPlannedSegment", input, relinkPlannedSegmentService);
 }
 
 export async function softDeleteActualSegment(

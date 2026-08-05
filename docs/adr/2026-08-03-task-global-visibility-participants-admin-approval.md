@@ -1,5 +1,7 @@
 # ADR: Task 全员可见、双成员角色与全局管理员审批
 
+> 状态（2026-08-05）：本文关于 Work Segment 职责、Task Node 关联和关联复核的决策已由 [删除 Work Segment 职责与 Task Node 关联](./2026-08-05-remove-work-segment-role-node-association.md) 取代；成员、可见性和审批角色继续有效。
+>
 > 状态（2026-08-04）：本文关于 `Account.projectAccessStatus`、禁用账号和账号状态门禁的决策已由 [移除账号级项目访问状态](./2026-08-04-remove-project-access-status.md) 取代；Revision 草稿、编辑和单独提交动作已由 [Revision 时间标记与候选计划状态机](./2026-08-04-revision-time-marker.md) 取代。成员、可见性和审批角色继续有效。
 
 日期：2026-08-03

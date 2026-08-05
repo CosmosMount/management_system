@@ -51,7 +51,6 @@ export type TaskListItem = {
   } | null;
   members: TaskMemberSummary[];
   tags: Array<{ id: string; name: string; color: string }>;
-  segmentNeedsReviewCount: number;
   updatedAt: string;
   createdAt: string;
 };
@@ -253,15 +252,6 @@ export type PlanVersionDiff = {
     before: PlanNodeSummary;
     after: PlanNodeSummary;
   }>;
-  resourceImpact: {
-    affectedPlannedSegmentCount: number;
-    associationNeedsReviewCount: number;
-    byNode: Array<{
-      nodeId: string;
-      segmentCount: number;
-      associationNeedsReviewCount: number;
-    }>;
-  };
 };
 
 export async function listTasks({
@@ -361,10 +351,6 @@ export async function listTasks({
     visibleTasks = tasks.slice(0, limit);
     hasNextPage = tasks.length > limit;
   }
-  const segmentReviewCounts = await countSegmentsNeedingReviewByTask(
-    visibleTasks.map((task) => task.id),
-  );
-
   return {
     items: visibleTasks.map((task) => ({
       id: task.id,
@@ -399,7 +385,6 @@ export async function listTasks({
         displayName: member.person.displayName,
       })),
       tags: task.tags.map((entry) => entry.tag),
-      segmentNeedsReviewCount: segmentReviewCounts.get(task.id) ?? 0,
       updatedAt: task.updatedAt.toISOString(),
       createdAt: task.createdAt.toISOString(),
     })),
@@ -613,46 +598,6 @@ export async function comparePlanVersions({
     }
   }
 
-  const affectedNodeIds = [
-    ...new Set([
-      ...removed.map((node) => node.nodeId),
-      ...moved.map((node) => node.nodeId),
-      ...changed.map((node) => node.nodeId),
-    ]),
-  ];
-  const segmentImpactRows = affectedNodeIds.length > 0
-    ? await prisma.workSegment.groupBy({
-        by: ["nodeId", "associationNeedsReview"],
-        where: {
-          taskId: fromPlan.taskId,
-          nodeId: { in: affectedNodeIds },
-          type: "PLANNED",
-          deletedAt: null,
-        },
-        _count: { _all: true },
-      })
-    : [];
-  const impactByNode = new Map<
-    string,
-    { segmentCount: number; associationNeedsReviewCount: number }
-  >();
-  for (const row of segmentImpactRows) {
-    if (!row.nodeId) continue;
-    const current = impactByNode.get(row.nodeId) ?? {
-      segmentCount: 0,
-      associationNeedsReviewCount: 0,
-    };
-    current.segmentCount += row._count._all;
-    if (row.associationNeedsReview) {
-      current.associationNeedsReviewCount += row._count._all;
-    }
-    impactByNode.set(row.nodeId, current);
-  }
-  const resourceImpactByNode = affectedNodeIds.flatMap((nodeId) => {
-    const impact = impactByNode.get(nodeId);
-    return impact ? [{ nodeId, ...impact }] : [];
-  });
-
   return {
     fromPlanVersionId,
     toPlanVersionId,
@@ -666,17 +611,6 @@ export async function comparePlanVersions({
     removed,
     moved,
     changed,
-    resourceImpact: {
-      affectedPlannedSegmentCount: resourceImpactByNode.reduce(
-        (total, row) => total + row.segmentCount,
-        0,
-      ),
-      associationNeedsReviewCount: resourceImpactByNode.reduce(
-        (total, row) => total + row.associationNeedsReviewCount,
-        0,
-      ),
-      byNode: resourceImpactByNode,
-    },
   };
 }
 
@@ -793,25 +727,6 @@ function allowed(
 
 function toIso(date: Date | null): string | null {
   return date ? date.toISOString() : null;
-}
-
-async function countSegmentsNeedingReviewByTask(taskIds: string[]) {
-  if (taskIds.length === 0) return new Map<string, number>();
-  const rows = await prisma.workSegment.groupBy({
-    by: ["taskId"],
-    where: {
-      taskId: { in: taskIds },
-      deletedAt: null,
-      type: "PLANNED",
-      associationNeedsReview: true,
-    },
-    _count: { _all: true },
-  });
-  return new Map(
-    rows.flatMap((row) =>
-      row.taskId ? [[row.taskId, row._count._all] as const] : [],
-    ),
-  );
 }
 
 function nodeCoreHash(node: PlanNodeSummary): string {

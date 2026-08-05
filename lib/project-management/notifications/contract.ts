@@ -16,7 +16,6 @@ const PROJECT_MANAGEMENT_NOTIFICATION_KINDS = [
   "revision_result",
   "revision_applied",
   "segment_confirmation_due",
-  "segment_association_invalidated",
   "task_terminated",
   "account_security",
 ] as const;

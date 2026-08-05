@@ -19,7 +19,6 @@ import {
   Diamond,
   Flag,
   GitBranch,
-  Link2Off,
   Lock,
   Minus,
   Plus,
@@ -123,7 +122,7 @@ export function TimeCanvas({
     () => groupByRow(model.phaseBands ?? []),
     [model.phaseBands],
   );
-  const generatedAtMs = Date.parse(model.generatedAt);
+  const liveNowMs = useLiveNow(model.generatedAt);
   const focusTargets = useMemo(
     () =>
       buildCanvasFocusTargets(model, filteredSegments),
@@ -241,7 +240,7 @@ export function TimeCanvas({
   );
 
   const scrollToToday = useCallback(() => {
-    const now = Date.now();
+    const now = liveNowMs;
     if (now < model.range.startMs || now >= model.range.endMs) {
       if (onRangeChange) {
         const duration = model.range.endMs - model.range.startMs;
@@ -255,7 +254,7 @@ export function TimeCanvas({
       left: Math.max(0, timeToX(now, scale) - scrollState.width / 2),
       behavior: prefersReducedMotion() ? "auto" : "smooth",
     });
-  }, [model.range, onRangeChange, scale, scrollState.width]);
+  }, [liveNowMs, model.range, onRangeChange, scale, scrollState.width]);
 
   const fitRange = useCallback(() => {
     setZoom(chooseFitZoom(model.range));
@@ -332,8 +331,8 @@ export function TimeCanvas({
         zoom={zoom}
         canChangeRange={Boolean(onRangeChange)}
         canGoToday={
-          generatedAtMs >= model.range.startMs &&
-          generatedAtMs < model.range.endMs
+          liveNowMs >= model.range.startMs &&
+          liveNowMs < model.range.endMs
             ? true
             : Boolean(onRangeChange)
         }
@@ -389,7 +388,7 @@ export function TimeCanvas({
                 scale={scale}
                 zoom={zoom}
                 timezone={model.timezone}
-                nowMs={generatedAtMs}
+                nowMs={liveNowMs}
               />
 
               {model.rows.length === 0 ? (
@@ -431,7 +430,7 @@ export function TimeCanvas({
                           segments={segmentsByRow.get(row.id) ?? []}
                           anchors={anchorsByRow.get(row.id) ?? []}
                           phaseBands={phaseBandsByRow.get(row.id) ?? []}
-                          nowMs={generatedAtMs}
+                          nowMs={liveNowMs}
                           selection={selection}
                           activeFocusKey={currentFocusKey}
                           interaction={interaction}
@@ -462,6 +461,31 @@ export function TimeCanvas({
 
 function useMobileAgenda() {
   return useSyncExternalStore(subscribeMobileAgenda, mobileAgendaSnapshot, () => false);
+}
+
+function useLiveNow(generatedAt: string) {
+  const [nowMs, setNowMs] = useState(() => {
+    const generatedAtMs = Date.parse(generatedAt);
+    return Number.isFinite(generatedAtMs) ? generatedAtMs : 0;
+  });
+
+  useEffect(() => {
+    const refresh = () => setNowMs(Date.now());
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    refresh();
+    const interval = window.setInterval(refresh, 60_000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, []);
+
+  return nowMs;
 }
 
 function subscribeMobileAgenda(callback: () => void) {
@@ -651,11 +675,13 @@ function TimelineRow({
   onSelect: (selection: TimeCanvasSelection) => void;
   onObjectFocus: (key: string) => void;
 }) {
-  const [brush, setBrush] = useState<{
+  type ActiveBrush = {
     pointerId: number;
     anchorMs: number;
     currentMs: number;
-  } | null>(null);
+  };
+  const brushRef = useRef<ActiveBrush | null>(null);
+  const [brush, setBrush] = useState<ActiveBrush | null>(null);
   const [anchorPreview, setAnchorPreview] = useState<{
     anchorId: string;
     atMs: number;
@@ -702,6 +728,9 @@ function TimelineRow({
   const brushRange = brush
     ? normalizeBrushRange(brush.anchorMs, brush.currentMs, scale)
     : null;
+  const creationRange = interaction?.creationRange?.rowId === row.id
+    ? interaction.creationRange
+    : null;
   const canBrush =
     Boolean(interaction?.enableBrushCreate && interaction.onBrushCreate) &&
     row.editable &&
@@ -741,26 +770,45 @@ function TimelineRow({
         }
         const atMs = pointerTime(event);
         event.currentTarget.setPointerCapture(event.pointerId);
-        setBrush({ pointerId: event.pointerId, anchorMs: atMs, currentMs: atMs });
+        const nextBrush = {
+          pointerId: event.pointerId,
+          anchorMs: atMs,
+          currentMs: atMs,
+        };
+        brushRef.current = nextBrush;
+        setBrush(nextBrush);
       }}
       onPointerMove={(event) => {
-        if (!brush || brush.pointerId !== event.pointerId) return;
-        // React clears currentTarget after the handler returns; capture the
-        // coordinate before entering the deferred state updater.
+        const activeBrush = brushRef.current;
+        if (!activeBrush || activeBrush.pointerId !== event.pointerId) return;
         const currentMs = pointerTime(event);
-        setBrush((current) =>
-          current ? { ...current, currentMs } : null,
-        );
+        const nextBrush = { ...activeBrush, currentMs };
+        brushRef.current = nextBrush;
+        setBrush(nextBrush);
       }}
-      onPointerCancel={() => setBrush(null)}
+      onPointerCancel={(event) => {
+        if (brushRef.current?.pointerId !== event.pointerId) return;
+        brushRef.current = null;
+        setBrush(null);
+      }}
+      onLostPointerCapture={(event) => {
+        if (brushRef.current?.pointerId !== event.pointerId) return;
+        brushRef.current = null;
+        setBrush(null);
+      }}
       onPointerUp={(event) => {
-        if (!brush || brush.pointerId !== event.pointerId) return;
+        const activeBrush = brushRef.current;
+        if (!activeBrush || activeBrush.pointerId !== event.pointerId) return;
         const range = normalizeBrushRange(
-          brush.anchorMs,
+          activeBrush.anchorMs,
           pointerTime(event),
           scale,
         );
+        brushRef.current = null;
         setBrush(null);
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+          event.currentTarget.releasePointerCapture(event.pointerId);
+        }
         interaction?.onBrushCreate?.({
           rowId: row.id,
           rowKind: row.kind,
@@ -800,10 +848,22 @@ function TimelineRow({
       <TimeGrid dayStripes={dayStripes} scale={scale} />
       {brushRange && (
         <span
-          className="pointer-events-none absolute inset-y-1 z-40 rounded border-2 border-primary bg-primary/15"
+          className="pointer-events-none absolute inset-y-1 z-[15] rounded border-2 border-dashed border-primary bg-primary/15"
           style={intervalToRect(brushRange.startMs, brushRange.endMs, scale)}
           aria-hidden="true"
           data-testid="time-canvas-brush-preview"
+        />
+      )}
+      {!brushRange && creationRange && (
+        <span
+          className="pointer-events-none absolute inset-y-1 z-[15] rounded border-2 border-dashed border-primary bg-primary/15"
+          style={intervalToRect(
+            creationRange.startMs,
+            creationRange.endMs,
+            scale,
+          )}
+          aria-hidden="true"
+          data-testid="time-canvas-creation-range"
         />
       )}
       {row.kind === "PLAN" && (
@@ -1251,7 +1311,6 @@ function SegmentBlock({
           aria-hidden="true"
         />
       )}
-      {segment.associationNeedsReview && <Link2Off className="size-3 shrink-0" aria-hidden="true" />}
       <span className="truncate">{segment.title}</span>
       {segment.permissions.canResize && interaction?.onSegmentTransform && (
         <span
@@ -1537,10 +1596,13 @@ function TodayLine({
   if (!Number.isFinite(nowMs) || nowMs < scale.startMs || nowMs >= scale.endMs) return null;
   return (
     <span
-      className="pointer-events-none absolute inset-y-0 z-40 w-px bg-rose-500"
+      className={cn(
+        "pointer-events-none absolute inset-y-0 w-px bg-rose-500",
+        axis ? "z-20" : "z-[5]",
+      )}
       style={{ left: timeToX(nowMs, scale) }}
       aria-hidden="true"
-      data-testid={axis ? "time-canvas-today-axis" : undefined}
+      data-testid={axis ? "time-canvas-today-axis" : "time-canvas-today-line"}
     />
   );
 }
@@ -1591,7 +1653,6 @@ function InspectorBody({ entity }: { entity: SelectedEntity }) {
       {segment.visibility === "FULL" && (
         <>
           <Detail label="优先级" value={segment.priority ?? "未提供"} />
-          <Detail label="关联" value={segment.associationNeedsReview ? "需要重新确认关联" : "关联有效"} />
           <Detail label="权限" value={segment.permissions.canEdit ? "可编辑" : "只读"} />
         </>
       )}
@@ -1842,8 +1903,7 @@ function entityTitle(entity: SelectedEntity) {
 
 function segmentAriaLabel(segment: TimeCanvasSegment) {
   const type = segment.type === "BUSY" ? "其他占用" : segment.type;
-  const association = segment.associationNeedsReview ? "，关联需要复核" : "";
-  return `${type} ${segment.title}，${formatRange(segment.startMs, segment.endMs)}${association}`;
+  return `${type} ${segment.title}，${formatRange(segment.startMs, segment.endMs)}`;
 }
 
 function anchorToneClassName(anchor: TimeCanvasAnchor) {

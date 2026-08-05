@@ -1,15 +1,12 @@
 import {
   taskPriorityValues,
-  workSegmentRoleValues,
   workSegmentStatusValues,
   workSegmentTypeValues,
 } from "@/lib/project-management/types/contract-values";
-import { addStructuredProjectManagementIssue } from "@/lib/project-management/validations/issues";
 import { z } from "zod";
 
 export {
   taskPriorityValues,
-  workSegmentRoleValues,
   workSegmentStatusValues,
   workSegmentTypeValues,
 };
@@ -136,11 +133,6 @@ const optionalSegmentTimeRangeSchema = z
 const segmentEditableFieldsSchema = z
   .object({
     content: requiredText("请输入工作内容", 2_000),
-    role: z
-      .enum(workSegmentRoleValues, { message: "人员职责不正确" })
-      .optional()
-      .default("DEVELOPER"),
-    customRole: optionalText(100),
     priority: z
       .enum(taskPriorityValues, { message: "优先级不正确" })
       .optional()
@@ -149,7 +141,6 @@ const segmentEditableFieldsSchema = z
     actualOutput: optionalText(2_000),
     completionPercent: completionPercentSchema,
     taskId: nullableIdSchema,
-    nodeId: nullableIdSchema,
     tagIds: z
       .array(idSchema, { message: "Tag 列表格式不正确" })
       .max(50, "Tag 数量过多")
@@ -163,14 +154,11 @@ const segmentEditableFieldsSchema = z
 const segmentOverrideFieldsSchema = z
   .object({
     content: requiredText("请输入工作内容", 2_000).optional(),
-    role: z.enum(workSegmentRoleValues, { message: "人员职责不正确" }).optional(),
-    customRole: optionalTextField(100),
     priority: z.enum(taskPriorityValues, { message: "优先级不正确" }).optional(),
     expectedOutput: optionalTextField(2_000),
     actualOutput: optionalTextField(2_000),
     completionPercent: completionPercentSchema,
     taskId: nullableIdSchema,
-    nodeId: nullableIdSchema,
     tagIds: z
       .array(idSchema, { message: "Tag 列表格式不正确" })
       .max(50, "Tag 数量过多")
@@ -258,7 +246,6 @@ export const updateWorkSegmentInputSchema = z
     reason: optionalText(1_000),
     startAt: requiredDate("请选择有效的开始时间").optional(),
     endAt: requiredDate("请选择有效的结束时间").optional(),
-    associationIntent: z.enum(["KEEP", "RELINK"]).optional().default("KEEP"),
     ...segmentOverrideFieldsSchema.shape,
   })
   .strict()
@@ -280,34 +267,6 @@ export const updateWorkSegmentInputSchema = z
         code: "custom",
         path: ["endAt"],
         message: "单条投入记录最长 31 天",
-      });
-    }
-    const taskSubmitted = Object.hasOwn(input, "taskId");
-    const nodeSubmitted = Object.hasOwn(input, "nodeId");
-    if (input.associationIntent === "KEEP" && (taskSubmitted || nodeSubmitted)) {
-      addStructuredProjectManagementIssue({
-        ctx,
-        code: "ASSOCIATION_INVALID",
-        path: [taskSubmitted ? "taskId" : "nodeId"],
-        message: "KEEP 不接受 Task/Node；如需重关联请显式使用 RELINK",
-      });
-    }
-    if (
-      input.associationIntent === "RELINK" &&
-      (!taskSubmitted || !nodeSubmitted)
-    ) {
-      addStructuredProjectManagementIssue({
-        ctx,
-        code: "ASSOCIATION_INVALID",
-        path: [!taskSubmitted ? "taskId" : "nodeId"],
-        message: "RELINK 必须同时提交 taskId 与 nodeId（可为 null）",
-      });
-    }
-    if (input.associationIntent === "RELINK" && !input.reason.trim()) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["reason"],
-        message: "请输入重关联原因",
       });
     }
   });
@@ -452,40 +411,32 @@ export const partiallyConfirmSegmentInputSchema = z.object({
   }
 });
 
-export const relinkPlannedSegmentInputSchema = z.object({
-  segmentId: idSchema,
-  expectedUpdatedAt: requiredDate("记录版本不正确"),
-  taskId: nullableIdSchema,
-  nodeId: nullableIdSchema,
-  reason: requiredText("请输入重关联原因", 1_000),
-});
-
 export const softDeleteActualSegmentInputSchema = z.object({
   segmentId: idSchema,
   expectedUpdatedAt: requiredDate("记录版本不正确"),
   reason: requiredText("请输入删除原因", 1_000),
 });
 
-export const listWorkSegmentsInputSchema = z.object({
-  personId: idSchema.optional(),
-  taskId: idSchema.optional(),
-  nodeId: idSchema.optional(),
-  type: z.enum(workSegmentTypeValues, { message: "投入类型不正确" }).optional(),
-  status: z
-    .enum(workSegmentStatusValues, { message: "投入状态不正确" })
-    .optional(),
-  associationNeedsReview: z.boolean().optional(),
-  startAt: requiredDate("请选择有效的开始时间").optional(),
-  endAt: requiredDate("请选择有效的结束时间").optional(),
-  cursor: idSchema.optional(),
-  limit: z
-    .number({ message: "分页大小不正确" })
-    .int("分页大小不正确")
-    .min(1, "分页大小不正确")
-    .max(100, "分页大小不能超过 100")
-    .optional()
-    .default(50),
-});
+export const listWorkSegmentsInputSchema = z
+  .object({
+    personId: idSchema.optional(),
+    taskId: idSchema.optional(),
+    type: z.enum(workSegmentTypeValues, { message: "投入类型不正确" }).optional(),
+    status: z
+      .enum(workSegmentStatusValues, { message: "投入状态不正确" })
+      .optional(),
+    startAt: requiredDate("请选择有效的开始时间").optional(),
+    endAt: requiredDate("请选择有效的结束时间").optional(),
+    cursor: idSchema.optional(),
+    limit: z
+      .number({ message: "分页大小不正确" })
+      .int("分页大小不正确")
+      .min(1, "分页大小不正确")
+      .max(100, "分页大小不能超过 100")
+      .optional()
+      .default(50),
+  })
+  .strict();
 
 export const getWorkSegmentInputSchema = z.object({ segmentId: idSchema });
 export const listWorkSegmentChangesInputSchema = z.object({
@@ -529,38 +480,16 @@ export type BatchConfirmPlannedSegmentsInput = z.infer<
 export type PartiallyConfirmSegmentInput = z.infer<
   typeof partiallyConfirmSegmentInputSchema
 >;
-export type RelinkPlannedSegmentInput = z.infer<
-  typeof relinkPlannedSegmentInputSchema
->;
 function maxSegmentMs() {
   return MAX_SEGMENT_DAYS * 24 * 60 * 60 * 1_000;
 }
 
 function validateEditableFields(
   input: {
-    role?: string;
-    customRole?: string;
-    taskId?: string | null;
-    nodeId?: string | null;
     tagIds?: string[];
   },
   ctx: z.RefinementCtx,
 ) {
-  if (input.role === "CUSTOM" && !input.customRole?.trim()) {
-    ctx.addIssue({
-      code: "custom",
-      path: ["customRole"],
-      message: "自定义职责不能为空",
-    });
-  }
-  if (input.nodeId && !input.taskId) {
-    addStructuredProjectManagementIssue({
-      ctx,
-      code: "ASSOCIATION_INVALID",
-      path: ["taskId"],
-      message: "关联节点时必须同时关联 Task",
-    });
-  }
   if (input.tagIds) {
     ensureUniqueValues(input.tagIds, "tagIds", "不能重复选择同一个 Tag", ctx);
   }
@@ -568,29 +497,10 @@ function validateEditableFields(
 
 function validateOverrideFields(
   input: {
-    role?: string;
-    customRole?: string;
-    taskId?: string | null;
-    nodeId?: string | null;
     tagIds?: string[];
   },
   ctx: z.RefinementCtx,
 ) {
-  if (input.role === "CUSTOM" && !input.customRole?.trim()) {
-    ctx.addIssue({
-      code: "custom",
-      path: ["customRole"],
-      message: "自定义职责不能为空",
-    });
-  }
-  if (input.nodeId && input.taskId === null) {
-    addStructuredProjectManagementIssue({
-      ctx,
-      code: "ASSOCIATION_INVALID",
-      path: ["taskId"],
-      message: "关联节点时必须同时关联 Task",
-    });
-  }
   if (input.tagIds) {
     ensureUniqueValues(input.tagIds, "tagIds", "不能重复选择同一个 Tag", ctx);
   }

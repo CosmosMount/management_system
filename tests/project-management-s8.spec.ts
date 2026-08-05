@@ -60,47 +60,6 @@ test.describe("project management S8 dashboard, tags and notifications", () => {
     expect(inbox.items.some((item) => item.id.includes(hidden.id))).toBe(false);
   });
 
-  test("Action Inbox applies handling permission before limit and reports exact totals", async () => {
-    const user = await createActor("S8 Inbox limit actor");
-    const owner = await createActor("S8 Inbox limit owner");
-    const task = await createActiveTaskWithMilestone(
-      owner,
-      new Date("2026-09-10T02:00:00.000Z"),
-    );
-    for (let index = 0; index < 3; index += 1) {
-      await prisma.workSegment.create({
-        data: {
-          personId: owner.personId,
-          taskId: task.taskId,
-          type: "PLANNED",
-          status: "PLANNED",
-          startAt: new Date(`2026-09-0${index + 1}T01:00:00.000Z`),
-          endAt: new Date(`2026-09-0${index + 1}T02:00:00.000Z`),
-          content: `可见但不可处理 ${index}`,
-          associationNeedsReview: true,
-          createdByAccountId: owner.accountId,
-        },
-      });
-    }
-    const actionable = await prisma.workSegment.create({
-      data: {
-        personId: user.personId,
-        type: "PLANNED",
-        status: "PLANNED",
-        startAt: new Date("2026-09-20T01:00:00.000Z"),
-        endAt: new Date("2026-09-20T02:00:00.000Z"),
-        content: "本人可处理关联",
-        associationNeedsReview: true,
-        createdByAccountId: user.accountId,
-      },
-    });
-
-    const inbox = await getActionInbox({ actor: user, limit: 1 });
-    expect(inbox.items).toHaveLength(1);
-    expect(inbox.items[0]?.id).toBe(`association:${actionable.id}`);
-    expect(inbox.totalCount).toBe(1);
-  });
-
   test("Task approval gate hides Terminal inbox work and disables Canvas actions until release", async () => {
     const owner = await createActor("S8 Task approval gate");
     const task = await createActiveTaskWithMilestone(

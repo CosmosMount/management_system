@@ -23,7 +23,7 @@ import {
   stateConflictError,
   validationError,
 } from "@/lib/project-management/application/errors";
-import { lockTaskNodeAssociationsTx } from "@/lib/project-management/application/task-node-association-lock";
+import { lockTaskSegmentAssociationsTx } from "@/lib/project-management/application/task-segment-association-lock";
 import { isTaskCreatableForSegment } from "@/lib/project-management/domain/task-segment-policy";
 import {
   batchCreatePlannedSegmentsInputSchema,
@@ -36,7 +36,6 @@ import {
   mergePlannedSegmentsInputSchema,
   movePlannedSegmentsInputSchema,
   partiallyConfirmSegmentInputSchema,
-  relinkPlannedSegmentInputSchema,
   softDeleteActualSegmentInputSchema,
   splitPlannedSegmentInputSchema,
   updateWorkSegmentInputSchema,
@@ -74,9 +73,6 @@ const segmentInclude = {
       },
     },
   },
-  node: {
-    select: { id: true, taskId: true, type: true, status: true },
-  },
   tags: { select: { tagId: true } },
 } satisfies Prisma.WorkSegmentInclude;
 
@@ -94,15 +90,11 @@ export type WorkSegmentDto = {
   startAt: string;
   endAt: string;
   content: string;
-  role: WorkSegment["role"];
-  customRole: string;
   priority: TaskPriority;
   expectedOutput: string;
   actualOutput: string;
   completionPercent: number | null;
   taskId: string | null;
-  nodeId: string | null;
-  associationNeedsReview: boolean;
   sourceSplitFromId: string | null;
   deletedAt: string | null;
   tagIds: string[];
@@ -126,7 +118,7 @@ export async function createWorkSegment(
 ): Promise<SegmentMutationResult> {
   const parsed = createWorkSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    await lockTaskNodeAssociationsTx(
+    await lockTaskSegmentAssociationsTx(
       tx,
       parsed.taskId ? [parsed.taskId] : [],
     );
@@ -136,7 +128,6 @@ export async function createWorkSegment(
       personId: parsed.personId,
       type: parsed.type,
       taskId: parsed.taskId ?? null,
-      nodeId: parsed.nodeId ?? null,
     });
     const created = await createWorkSegmentTx(tx, refreshedActor, parsed);
     return {
@@ -152,7 +143,7 @@ export async function batchCreatePlannedSegments(
 ): Promise<BatchSegmentMutationResult> {
   const parsed = batchCreatePlannedSegmentsInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    await lockTaskNodeAssociationsTx(
+    await lockTaskSegmentAssociationsTx(
       tx,
       parsed.segments.flatMap((segment) =>
         segment.taskId ? [segment.taskId] : [],
@@ -165,7 +156,6 @@ export async function batchCreatePlannedSegments(
         personId: segment.personId,
         type: "PLANNED",
         taskId: segment.taskId ?? null,
-        nodeId: segment.nodeId ?? null,
       });
     }
     const created: SegmentForMutation[] = [];
@@ -190,7 +180,7 @@ export async function createActualSegment(
 ): Promise<SegmentMutationResult> {
   const parsed = createActualSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    await lockSegmentNodeAssociationTasksTx(tx, {
+    const associationLocks = await lockSegmentAssociationTasksTx(tx, {
       segmentIds: parsed.sources.map((source) => source.plannedSegmentId),
       prospectiveTaskIds: parsed.taskId ? [parsed.taskId] : [],
     });
@@ -200,9 +190,13 @@ export async function createActualSegment(
       personId: parsed.personId,
       type: "ACTUAL",
       taskId: parsed.taskId ?? null,
-      nodeId: parsed.nodeId ?? null,
     });
-    const created = await createActualSegmentTx(tx, refreshedActor, parsed);
+    const created = await createActualSegmentTx(
+      tx,
+      refreshedActor,
+      parsed,
+      associationLocks,
+    );
     return {
       segment: toWorkSegmentDto(created),
       affectedSegmentIds: [created.id],
@@ -223,26 +217,22 @@ export async function updateWorkSegment(
     const preflightTaskId = Object.hasOwn(parsed, "taskId")
       ? parsed.taskId ?? null
       : preflightSegment.taskId;
-    const preflightNodeId = Object.hasOwn(parsed, "nodeId")
-      ? parsed.nodeId ?? null
-      : preflightSegment.nodeId;
-    if (Object.hasOwn(parsed, "taskId") || Object.hasOwn(parsed, "nodeId")) {
+    if (Object.hasOwn(parsed, "taskId")) {
       await assertSegmentReferenceTx(tx, {
         actor: refreshedActor,
         personId: preflightSegment.personId,
         type: preflightSegment.type,
         taskId: preflightTaskId,
-        nodeId: preflightNodeId,
       });
     }
-    const associationLocks = await lockSegmentNodeAssociationTasksTx(tx, {
+    const associationLocks = await lockSegmentAssociationTasksTx(tx, {
       segmentIds: [parsed.segmentId],
       prospectiveTaskIds: parsed.taskId ? [parsed.taskId] : [],
     });
     await lockWorkSegmentTx(tx, parsed.segmentId);
     const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentAssociationLocatorUnchanged(preflightSegment, segment);
-    assertNodeAssociationTaskLocked(associationLocks, segment);
+    assertAssociationTaskLocked(associationLocks, segment);
     assertSegmentVisible(refreshedActor, segment);
     assertCanManageSegment(refreshedActor, segment);
     assertExpectedUpdatedAt(segment, parsed.expectedUpdatedAt);
@@ -254,19 +244,11 @@ export async function updateWorkSegment(
       throw stateConflictError("已确认的 Planned Segment 不能修改");
     }
 
-    const isRelink = parsed.associationIntent === "RELINK";
-    if (isRelink && (segment.type !== "PLANNED" || !segment.associationNeedsReview)) {
-      throw associationInvalidError(
-        "只有待重关联的 Planned Segment 可以执行 RELINK",
-      );
-    }
-    const nextTaskId = isRelink ? parsed.taskId ?? null : segment.taskId;
-    const nextNodeId = isRelink ? parsed.nodeId ?? null : segment.nodeId;
+    const nextTaskId = Object.hasOwn(parsed, "taskId")
+      ? parsed.taskId ?? null
+      : segment.taskId;
     const nextStartAt = parsed.startAt ?? segment.startAt;
     const nextEndAt = parsed.endAt ?? segment.endAt;
-    const nextRole = parsed.role ?? segment.role;
-    const nextCustomRole =
-      parsed.customRole !== undefined ? parsed.customRole : segment.customRole ?? "";
     const nextCompletionPercent =
       parsed.completionPercent !== undefined
         ? parsed.completionPercent
@@ -278,19 +260,12 @@ export async function updateWorkSegment(
         completionPercent: ["Planned Segment 不能填写完成比例"],
       });
     }
-    if (nextRole === "CUSTOM" && !nextCustomRole.trim()) {
-      throw validationError("自定义职责不能为空", {
-        customRole: ["自定义职责不能为空"],
-      });
-    }
-
-    if (isRelink) {
+    if (Object.hasOwn(parsed, "taskId")) {
       await assertSegmentReferenceTx(tx, {
         actor: refreshedActor,
         personId: segment.personId,
         type: segment.type,
         taskId: nextTaskId,
-        nodeId: nextNodeId,
         requireCreatableTask: true,
       });
     }
@@ -304,8 +279,6 @@ export async function updateWorkSegment(
         startAt: nextStartAt,
         endAt: nextEndAt,
         content: parsed.content ?? segment.content,
-        role: nextRole,
-        customRole: nextCustomRole.trim() || null,
         priority: parsed.priority ?? segment.priority,
         expectedOutput:
           parsed.expectedOutput !== undefined
@@ -318,10 +291,6 @@ export async function updateWorkSegment(
         completionPercent:
           segment.type === "ACTUAL" ? decimalOrNull(nextCompletionPercent) : null,
         taskId: nextTaskId,
-        nodeId: nextNodeId,
-        associationNeedsReview: isRelink
-          ? false
-          : segment.associationNeedsReview,
         updatedByAccountId: refreshedActor.accountId,
       },
       include: segmentInclude,
@@ -331,7 +300,7 @@ export async function updateWorkSegment(
     await recordSegmentChangeTx(tx, {
       actor: refreshedActor,
       segmentId: updated.id,
-      action: isRelink ? "RELINK" : "UPDATE",
+      action: "UPDATE",
       before,
       after: snapshotSegment(reloaded),
       reason: parsed.reason,
@@ -374,7 +343,7 @@ async function movePlannedSegmentsWithAuthorizationTx(
     input.moves.map((move) => move.segmentId),
     "不能重复移动同一条投入记录",
   );
-  const associationLocks = await lockSegmentNodeAssociationTasksTx(tx, {
+  const associationLocks = await lockSegmentAssociationTasksTx(tx, {
     segmentIds: input.moves.map((move) => move.segmentId),
   });
   const segments = await lockAndLoadSegmentsTx(
@@ -386,7 +355,7 @@ async function movePlannedSegmentsWithAuthorizationTx(
   for (const segment of segments) {
     const move = moveById.get(segment.id);
     if (!move) throw validationError("移动记录不存在");
-    assertNodeAssociationTaskLocked(associationLocks, segment);
+    assertAssociationTaskLocked(associationLocks, segment);
     assertSegmentVisible(actor, segment);
     assertCanMove(segment);
     assertExpectedUpdatedAt(segment, move.expectedUpdatedAt);
@@ -430,7 +399,7 @@ export async function splitPlannedSegment(
     assertSegmentVisible(refreshedActor, preflightSegment);
     assertCanManageSegment(refreshedActor, preflightSegment);
     for (const part of parsed.parts) {
-      if (!Object.hasOwn(part, "taskId") && !Object.hasOwn(part, "nodeId")) {
+      if (!Object.hasOwn(part, "taskId")) {
         continue;
       }
       await assertSegmentReferenceTx(tx, {
@@ -440,12 +409,9 @@ export async function splitPlannedSegment(
         taskId: Object.hasOwn(part, "taskId")
           ? part.taskId ?? null
           : preflightSegment.taskId,
-        nodeId: Object.hasOwn(part, "nodeId")
-          ? part.nodeId ?? null
-          : preflightSegment.nodeId,
       });
     }
-    const associationLocks = await lockSegmentNodeAssociationTasksTx(tx, {
+    const associationLocks = await lockSegmentAssociationTasksTx(tx, {
       segmentIds: [parsed.segmentId],
       prospectiveTaskIds: parsed.parts.flatMap((part) =>
         part.taskId ? [part.taskId] : [],
@@ -454,7 +420,7 @@ export async function splitPlannedSegment(
     await lockWorkSegmentTx(tx, parsed.segmentId);
     const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentAssociationLocatorUnchanged(preflightSegment, segment);
-    assertNodeAssociationTaskLocked(associationLocks, segment);
+    assertAssociationTaskLocked(associationLocks, segment);
     assertSegmentVisible(refreshedActor, segment);
     assertCanManageSegment(refreshedActor, segment);
     assertExpectedUpdatedAt(segment, parsed.expectedUpdatedAt);
@@ -471,14 +437,11 @@ export async function splitPlannedSegment(
       const childTagIds = part.tagIds ?? originalTagIds;
       const childTaskId =
         Object.hasOwn(part, "taskId") ? part.taskId ?? null : segment.taskId;
-      const childNodeId =
-        Object.hasOwn(part, "nodeId") ? part.nodeId ?? null : segment.nodeId;
       await assertSegmentReferenceTx(tx, {
         actor: refreshedActor,
         personId: segment.personId,
         type: "PLANNED",
         taskId: childTaskId,
-        nodeId: childNodeId,
         requireCreatableTask: true,
       });
       await assertTagsActiveTx(tx, childTagIds);
@@ -490,18 +453,11 @@ export async function splitPlannedSegment(
           startAt: part.startAt,
           endAt: part.endAt,
           content: part.content ?? segment.content,
-          role: part.role ?? segment.role,
-          customRole:
-            (part.customRole !== undefined
-              ? part.customRole
-              : segment.customRole ?? "") || null,
           priority: part.priority ?? segment.priority,
           expectedOutput: part.expectedOutput ?? segment.expectedOutput,
           actualOutput: "",
           completionPercent: null,
           taskId: childTaskId,
-          nodeId: childNodeId,
-          associationNeedsReview: segment.associationNeedsReview,
           sourceSplitFromId: segment.id,
           createdByAccountId: refreshedActor.accountId,
           updatedByAccountId: refreshedActor.accountId,
@@ -566,7 +522,7 @@ export async function mergePlannedSegments(
       assertSegmentVisible(refreshedActor, segment);
       assertCanManageSegment(refreshedActor, segment);
     }
-    const associationLocks = await lockSegmentNodeAssociationTasksTx(tx, {
+    const associationLocks = await lockSegmentAssociationTasksTx(tx, {
       segmentIds: parsed.segments.map((segment) => segment.segmentId),
     });
     const segments = await lockAndLoadSegmentsTx(
@@ -586,7 +542,7 @@ export async function mergePlannedSegments(
       const preflightSegment = preflightById.get(segment.id);
       if (!preflightSegment) throw notFoundError();
       assertSegmentAssociationLocatorUnchanged(preflightSegment, segment);
-      assertNodeAssociationTaskLocked(associationLocks, segment);
+      assertAssociationTaskLocked(associationLocks, segment);
       assertSegmentVisible(refreshedActor, segment);
       assertCanManageSegment(refreshedActor, segment);
       assertExpectedUpdatedAt(segment, expectedById.get(segment.id));
@@ -613,15 +569,11 @@ export async function mergePlannedSegments(
         startAt,
         endAt,
         content: first.content,
-        role: first.role,
-        customRole: first.customRole,
         priority: first.priority,
         expectedOutput: first.expectedOutput,
         actualOutput: "",
         completionPercent: null,
         taskId: first.taskId,
-        nodeId: first.nodeId,
-        associationNeedsReview: first.associationNeedsReview,
         createdByAccountId: refreshedActor.accountId,
         updatedByAccountId: refreshedActor.accountId,
         tags: { create: tagIds.map((tagId) => ({ tagId })) },
@@ -681,13 +633,13 @@ export async function cancelPlannedSegment(
     );
     assertSegmentVisible(refreshedActor, preflightSegment);
     assertCanManageSegment(refreshedActor, preflightSegment);
-    const associationLocks = await lockSegmentNodeAssociationTasksTx(tx, {
+    const associationLocks = await lockSegmentAssociationTasksTx(tx, {
       segmentIds: [parsed.segmentId],
     });
     await lockWorkSegmentTx(tx, parsed.segmentId);
     const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentAssociationLocatorUnchanged(preflightSegment, segment);
-    assertNodeAssociationTaskLocked(associationLocks, segment);
+    assertAssociationTaskLocked(associationLocks, segment);
     assertSegmentVisible(refreshedActor, segment);
     assertCanManageSegment(refreshedActor, segment);
     assertExpectedUpdatedAt(segment, parsed.expectedUpdatedAt);
@@ -733,7 +685,7 @@ export async function batchCancelPlannedSegments(
       assertSegmentVisible(refreshedActor, segment);
       assertCanManageSegment(refreshedActor, segment);
     }
-    const associationLocks = await lockSegmentNodeAssociationTasksTx(tx, {
+    const associationLocks = await lockSegmentAssociationTasksTx(tx, {
       segmentIds,
     });
     const segments = await lockAndLoadSegmentsTx(tx, segmentIds);
@@ -752,7 +704,7 @@ export async function batchCancelPlannedSegments(
       );
       if (!preflightSegment) throw notFoundError();
       assertSegmentAssociationLocatorUnchanged(preflightSegment, segment);
-      assertNodeAssociationTaskLocked(associationLocks, segment);
+      assertAssociationTaskLocked(associationLocks, segment);
       assertSegmentVisible(refreshedActor, segment);
       assertCanManageSegment(refreshedActor, segment);
       assertExpectedUpdatedAt(segment, expectedById.get(segment.id));
@@ -800,10 +752,7 @@ export async function confirmPlannedSegment(
     const preflightSegment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentVisible(refreshedActor, preflightSegment);
     assertCanManageSegment(refreshedActor, preflightSegment);
-    if (
-      Object.hasOwn(parsed.actual, "taskId") ||
-      Object.hasOwn(parsed.actual, "nodeId")
-    ) {
+    if (Object.hasOwn(parsed.actual, "taskId")) {
       await assertSegmentReferenceTx(tx, {
         actor: refreshedActor,
         personId: preflightSegment.personId,
@@ -811,19 +760,16 @@ export async function confirmPlannedSegment(
         taskId: Object.hasOwn(parsed.actual, "taskId")
           ? parsed.actual.taskId ?? null
           : preflightSegment.taskId,
-        nodeId: Object.hasOwn(parsed.actual, "nodeId")
-          ? parsed.actual.nodeId ?? null
-          : preflightSegment.nodeId,
       });
     }
-    const associationLocks = await lockSegmentNodeAssociationTasksTx(tx, {
+    const associationLocks = await lockSegmentAssociationTasksTx(tx, {
       segmentIds: [parsed.segmentId],
       prospectiveTaskIds: parsed.actual.taskId ? [parsed.actual.taskId] : [],
     });
     await lockWorkSegmentTx(tx, parsed.segmentId);
     const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentAssociationLocatorUnchanged(preflightSegment, segment);
-    assertNodeAssociationTaskLocked(associationLocks, segment);
+    assertAssociationTaskLocked(associationLocks, segment);
     assertSegmentVisible(refreshedActor, segment);
     assertCanManageSegment(refreshedActor, segment);
 
@@ -889,7 +835,7 @@ export async function batchConfirmPlannedSegments(
       assertSegmentVisible(refreshedActor, segment);
       assertCanManageSegment(refreshedActor, segment);
     }
-    const associationLocks = await lockSegmentNodeAssociationTasksTx(tx, {
+    const associationLocks = await lockSegmentAssociationTasksTx(tx, {
       segmentIds,
     });
     const segments = await lockAndLoadSegmentsTx(tx, segmentIds);
@@ -910,7 +856,7 @@ export async function batchConfirmPlannedSegments(
       const preflightSegment = preflightById.get(segment.id);
       if (!preflightSegment) throw notFoundError();
       assertSegmentAssociationLocatorUnchanged(preflightSegment, segment);
-      assertNodeAssociationTaskLocked(associationLocks, segment);
+      assertAssociationTaskLocked(associationLocks, segment);
       assertSegmentVisible(refreshedActor, segment);
       assertCanManageSegment(refreshedActor, segment);
       assertExpectedUpdatedAt(segment, expectedById.get(segment.id));
@@ -961,10 +907,7 @@ export async function partiallyConfirmSegment(
     const preflightSegment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentVisible(refreshedActor, preflightSegment);
     assertCanManageSegment(refreshedActor, preflightSegment);
-    if (
-      Object.hasOwn(parsed.actual, "taskId") ||
-      Object.hasOwn(parsed.actual, "nodeId")
-    ) {
+    if (Object.hasOwn(parsed.actual, "taskId")) {
       await assertSegmentReferenceTx(tx, {
         actor: refreshedActor,
         personId: preflightSegment.personId,
@@ -972,19 +915,16 @@ export async function partiallyConfirmSegment(
         taskId: Object.hasOwn(parsed.actual, "taskId")
           ? parsed.actual.taskId ?? null
           : preflightSegment.taskId,
-        nodeId: Object.hasOwn(parsed.actual, "nodeId")
-          ? parsed.actual.nodeId ?? null
-          : preflightSegment.nodeId,
       });
     }
-    const associationLocks = await lockSegmentNodeAssociationTasksTx(tx, {
+    const associationLocks = await lockSegmentAssociationTasksTx(tx, {
       segmentIds: [parsed.segmentId],
       prospectiveTaskIds: parsed.actual.taskId ? [parsed.actual.taskId] : [],
     });
     await lockWorkSegmentTx(tx, parsed.segmentId);
     const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentAssociationLocatorUnchanged(preflightSegment, segment);
-    assertNodeAssociationTaskLocked(associationLocks, segment);
+    assertAssociationTaskLocked(associationLocks, segment);
     assertSegmentVisible(refreshedActor, segment);
     assertCanManageSegment(refreshedActor, segment);
     assertExpectedUpdatedAt(segment, parsed.expectedUpdatedAt);
@@ -1029,104 +969,6 @@ export async function partiallyConfirmSegment(
   });
 }
 
-export async function relinkPlannedSegment(
-  actor: ProjectManagementActor,
-  input: unknown,
-): Promise<SegmentMutationResult> {
-  const parsed = relinkPlannedSegmentInputSchema.parse(input);
-  return prisma.$transaction(async (tx) => {
-    const refreshedActor = await refreshActorTx(tx, actor);
-    const preflightSegment = await loadSegmentForMutationTx(tx, parsed.segmentId);
-    assertSegmentVisible(refreshedActor, preflightSegment);
-    assertCanManageSegment(refreshedActor, preflightSegment);
-    const preflightTaskId =
-      parsed.taskId === null
-        ? null
-        : parsed.taskId !== undefined
-          ? parsed.taskId
-          : preflightSegment.taskId;
-    const preflightNodeId =
-      parsed.nodeId === null
-        ? null
-        : parsed.nodeId !== undefined
-          ? parsed.nodeId
-          : preflightSegment.nodeId;
-    if (parsed.taskId !== undefined || parsed.nodeId !== undefined) {
-      await assertSegmentReferenceTx(tx, {
-        actor: refreshedActor,
-        personId: preflightSegment.personId,
-        type: "PLANNED",
-        taskId: preflightTaskId,
-        nodeId: preflightNodeId,
-      });
-    }
-    const associationLocks = await lockSegmentNodeAssociationTasksTx(tx, {
-      segmentIds: [parsed.segmentId],
-      prospectiveTaskIds: parsed.taskId ? [parsed.taskId] : [],
-    });
-    await lockWorkSegmentTx(tx, parsed.segmentId);
-    const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
-    assertSegmentAssociationLocatorUnchanged(preflightSegment, segment);
-    assertNodeAssociationTaskLocked(associationLocks, segment);
-    assertSegmentVisible(refreshedActor, segment);
-    assertCanManageSegment(refreshedActor, segment);
-    assertExpectedUpdatedAt(segment, parsed.expectedUpdatedAt);
-    assertPlannedEditable(segment, "只有未确认且未取消的 Planned Segment 可以重关联");
-    if (!segment.associationNeedsReview) {
-      throw stateConflictError("该 Planned Segment 不需要重新确认关联");
-    }
-
-    const nextTaskId =
-      parsed.taskId === null
-        ? null
-        : parsed.taskId !== undefined
-          ? parsed.taskId
-          : segment.taskId;
-    const nextNodeId =
-      parsed.nodeId === null
-        ? null
-        : parsed.nodeId !== undefined
-          ? parsed.nodeId
-          : segment.nodeId;
-    if (nextNodeId && !nextTaskId) {
-      throw associationInvalidError("关联节点时必须同时关联 Task", {
-        taskId: ["关联节点时必须同时关联 Task"],
-      });
-    }
-    await assertSegmentReferenceTx(tx, {
-      actor: refreshedActor,
-      personId: segment.personId,
-      type: "PLANNED",
-      taskId: nextTaskId,
-      nodeId: nextNodeId,
-      requireCreatableTask: true,
-    });
-    const before = snapshotSegment(segment);
-    const updated = await tx.workSegment.update({
-      where: { id: segment.id },
-      data: {
-        taskId: nextTaskId,
-        nodeId: nextNodeId,
-        associationNeedsReview: false,
-        updatedByAccountId: refreshedActor.accountId,
-      },
-      include: segmentInclude,
-    });
-    await recordSegmentChangeTx(tx, {
-      actor: refreshedActor,
-      segmentId: updated.id,
-      action: "RELINK",
-      before,
-      after: snapshotSegment(updated),
-      reason: parsed.reason,
-    });
-    return {
-      segment: toWorkSegmentDto(updated),
-      affectedSegmentIds: [updated.id],
-    };
-  });
-}
-
 export async function softDeleteActualSegment(
   actor: ProjectManagementActor,
   input: unknown,
@@ -1134,12 +976,12 @@ export async function softDeleteActualSegment(
   const parsed = softDeleteActualSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
     const refreshedActor = await refreshActorTx(tx, actor);
-    const associationLocks = await lockSegmentNodeAssociationTasksTx(tx, {
+    const associationLocks = await lockSegmentAssociationTasksTx(tx, {
       segmentIds: [parsed.segmentId],
     });
     await lockWorkSegmentTx(tx, parsed.segmentId);
     const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
-    assertNodeAssociationTaskLocked(associationLocks, segment);
+    assertAssociationTaskLocked(associationLocks, segment);
     assertSegmentVisible(refreshedActor, segment);
     assertCanManageSegment(refreshedActor, segment);
     assertExpectedUpdatedAt(segment, parsed.expectedUpdatedAt);
@@ -1273,7 +1115,6 @@ async function createWorkSegmentTx(
     personId: input.personId,
     type: input.type,
     taskId: input.taskId ?? null,
-    nodeId: input.nodeId ?? null,
     requireCreatableTask: true,
   });
   await assertTagsActiveTx(tx, input.tagIds);
@@ -1287,15 +1128,12 @@ async function createWorkSegmentTx(
       startAt: input.startAt,
       endAt: input.endAt,
       content: input.content,
-      role: input.role,
-      customRole: input.customRole.trim() || null,
       priority: input.priority,
       expectedOutput: input.expectedOutput,
       actualOutput: input.actualOutput,
       completionPercent:
         input.type === "ACTUAL" ? decimalOrNull(input.completionPercent) : null,
       taskId: input.taskId ?? null,
-      nodeId: input.nodeId ?? null,
       createdByAccountId: actor.accountId,
       updatedByAccountId: actor.accountId,
       tags: { create: input.tagIds.map((tagId) => ({ tagId })) },
@@ -1317,6 +1155,7 @@ async function createActualSegmentTx(
   tx: PrismaTx,
   actor: ProjectManagementActor,
   input: CreateActualSegmentInput,
+  associationLocks: ReadonlySet<string>,
 ): Promise<SegmentForMutation> {
   await assertPersonActiveTx(tx, input.personId);
   await assertSegmentReferenceTx(tx, {
@@ -1324,13 +1163,17 @@ async function createActualSegmentTx(
     personId: input.personId,
     type: "ACTUAL",
     taskId: input.taskId ?? null,
-    nodeId: input.nodeId ?? null,
     requireCreatableTask: true,
   });
   await assertTagsActiveTx(tx, input.tagIds);
   await assertCanManageNewSegment(tx, actor, input);
 
-  const sources = await lockAndValidateActualSourcesTx(tx, actor, input);
+  const sources = await lockAndValidateActualSourcesTx(
+    tx,
+    actor,
+    input,
+    associationLocks,
+  );
   const created = await tx.workSegment.create({
     data: {
       personId: input.personId,
@@ -1339,14 +1182,11 @@ async function createActualSegmentTx(
       startAt: input.startAt,
       endAt: input.endAt,
       content: input.content,
-      role: input.role,
-      customRole: input.customRole.trim() || null,
       priority: input.priority,
       expectedOutput: input.expectedOutput,
       actualOutput: input.actualOutput,
       completionPercent: decimalOrNull(input.completionPercent),
       taskId: input.taskId ?? null,
-      nodeId: input.nodeId ?? null,
       createdByAccountId: actor.accountId,
       updatedByAccountId: actor.accountId,
       tags: { create: input.tagIds.map((tagId) => ({ tagId })) },
@@ -1410,15 +1250,9 @@ async function assertSegmentReferenceTx(
     personId: string;
     type: WorkSegment["type"];
     taskId?: string | null;
-    nodeId?: string | null;
     requireCreatableTask?: boolean;
   },
 ) {
-  if (input.nodeId && !input.taskId) {
-    throw associationInvalidError("关联节点时必须同时关联 Task", {
-      taskId: ["关联节点时必须同时关联 Task"],
-    });
-  }
   if (!input.taskId) return;
   const task = await loadTaskForAuthorizationTx(tx, input.taskId);
   if (
@@ -1440,43 +1274,9 @@ async function assertSegmentReferenceTx(
     input.requireCreatableTask &&
     !isTaskCreatableForSegment(task.status)
   ) {
-    throw associationInvalidError("当前 Task 状态不允许创建或重关联 Segment", {
-      taskId: ["当前 Task 状态不允许创建或重关联 Segment"],
+    throw associationInvalidError("当前 Task 状态不允许创建或关联 Segment", {
+      taskId: ["当前 Task 状态不允许创建或关联 Segment"],
     });
-  }
-  if (!input.nodeId) return;
-  const node = await tx.taskNode.findUnique({
-    where: { id: input.nodeId },
-    select: { id: true, taskId: true, status: true, type: true },
-  });
-  if (!node || node.taskId !== input.taskId) {
-    throw associationInvalidError("关联节点不属于该 Task", {
-      nodeId: ["关联节点不属于该 Task"],
-    });
-  }
-  if (node.type === "REVISION") {
-    throw associationInvalidError("Revision 只是时间标记，不能关联投入记录", {
-      nodeId: ["Revision 节点不能关联 Planned 或 Actual Segment"],
-    });
-  }
-  if (input.type === "PLANNED") {
-    if (node.status === "REVISED" || node.status === "CANCELLED") {
-      throw associationInvalidError("Planned Segment 不能关联已失效节点", {
-        nodeId: ["Planned Segment 不能关联已失效节点"],
-      });
-    }
-    const inCurrentPlan = await tx.planVersionNode.findFirst({
-      where: {
-        planVersionId: task.currentPlanVersionId,
-        nodeId: node.id,
-      },
-      select: { id: true },
-    });
-    if (!inCurrentPlan) {
-      throw associationInvalidError("Planned Segment 只能关联 Current Plan 节点", {
-        nodeId: ["Planned Segment 只能关联 Current Plan 节点"],
-      });
-    }
   }
 }
 
@@ -1484,6 +1284,7 @@ async function lockAndValidateActualSourcesTx(
   tx: PrismaTx,
   actor: ProjectManagementActor,
   input: CreateActualSegmentInput,
+  associationLocks: ReadonlySet<string>,
 ) {
   if (input.sources.length === 0) return [];
   assertUniqueIds(
@@ -1501,6 +1302,7 @@ async function lockAndValidateActualSourcesTx(
   for (const planned of plannedSegments) {
     const source = sourceById.get(planned.id);
     if (!source) throw validationError("来源 Planned Segment 不存在");
+    assertAssociationTaskLocked(associationLocks, planned);
     assertSegmentVisible(actor, planned);
     assertCanManageSegment(actor, planned);
     if (source.expectedUpdatedAt) {
@@ -1545,16 +1347,11 @@ async function createActualFromPlannedTx(
     Object.hasOwn(input.actualInput, "taskId")
       ? input.actualInput.taskId ?? null
       : input.planned.taskId;
-  const actualNodeId =
-    Object.hasOwn(input.actualInput, "nodeId")
-      ? input.actualInput.nodeId ?? null
-      : input.planned.nodeId;
   await assertSegmentReferenceTx(tx, {
     actor: input.actor,
     personId: input.planned.personId,
     type: "ACTUAL",
     taskId: actualTaskId,
-    nodeId: actualNodeId,
   });
   const actual = await tx.workSegment.create({
     data: {
@@ -1564,18 +1361,12 @@ async function createActualFromPlannedTx(
       startAt: actualStartAt,
       endAt: actualEndAt,
       content: input.actualInput.content ?? input.planned.content,
-      role: input.actualInput.role ?? input.planned.role,
-      customRole:
-        (input.actualInput.customRole !== undefined
-          ? input.actualInput.customRole
-          : input.planned.customRole ?? "") || null,
       priority: input.actualInput.priority ?? input.planned.priority,
       expectedOutput:
         input.actualInput.expectedOutput ?? input.planned.expectedOutput,
       actualOutput: input.actualInput.actualOutput ?? "",
       completionPercent: decimalOrNull(input.actualInput.completionPercent),
       taskId: actualTaskId,
-      nodeId: actualNodeId,
       createdByAccountId: input.actor.accountId,
       updatedByAccountId: input.actor.accountId,
       tags: { create: tagIds.map((tagId) => ({ tagId })) },
@@ -1654,15 +1445,11 @@ async function createRemainingSegmentsAfterPartialConfirmTx(
         startAt: range.startAt,
         endAt: range.endAt,
         content: input.planned.content,
-        role: input.planned.role,
-        customRole: input.planned.customRole,
         priority: input.planned.priority,
         expectedOutput: input.planned.expectedOutput,
         actualOutput: "",
         completionPercent: null,
         taskId: input.planned.taskId,
-        nodeId: input.planned.nodeId,
-        associationNeedsReview: input.planned.associationNeedsReview,
         sourceSplitFromId: input.planned.id,
         createdByAccountId: input.actor.accountId,
         updatedByAccountId: input.actor.accountId,
@@ -1880,7 +1667,7 @@ async function loadSegmentsForPreflightTx(
   );
 }
 
-async function lockSegmentNodeAssociationTasksTx(
+async function lockSegmentAssociationTasksTx(
   tx: PrismaTx,
   input: {
     segmentIds: string[];
@@ -1890,10 +1677,10 @@ async function lockSegmentNodeAssociationTasksTx(
   const uniqueSegmentIds = [...new Set(input.segmentIds)];
   const associations = await tx.workSegment.findMany({
     where: { id: { in: uniqueSegmentIds } },
-    select: { id: true, taskId: true, nodeId: true },
+    select: { id: true, taskId: true },
   });
   if (associations.length !== uniqueSegmentIds.length) throw notFoundError();
-  return lockTaskNodeAssociationsTx(tx, [
+  return lockTaskSegmentAssociationsTx(tx, [
     ...associations.flatMap((association) =>
       association.taskId ? [association.taskId] : [],
     ),
@@ -1901,11 +1688,11 @@ async function lockSegmentNodeAssociationTasksTx(
   ]);
 }
 
-function assertNodeAssociationTaskLocked(
+function assertAssociationTaskLocked(
   lockedTaskIds: ReadonlySet<string>,
-  association: { taskId?: string | null; nodeId?: string | null },
+  association: { taskId?: string | null },
 ) {
-  if (!association.taskId && !association.nodeId) return;
+  if (!association.taskId) return;
   if (association.taskId && lockedTaskIds.has(association.taskId)) return;
   throw stateConflictError(
     "投入记录关联在并发操作中已变化，请刷新后重试",
@@ -1913,10 +1700,10 @@ function assertNodeAssociationTaskLocked(
 }
 
 function assertSegmentAssociationLocatorUnchanged(
-  before: Pick<SegmentForMutation, "taskId" | "nodeId">,
-  after: Pick<SegmentForMutation, "taskId" | "nodeId">,
+  before: Pick<SegmentForMutation, "taskId">,
+  after: Pick<SegmentForMutation, "taskId">,
 ) {
-  if (before.taskId === after.taskId && before.nodeId === after.nodeId) return;
+  if (before.taskId === after.taskId) return;
   throw stateConflictError("投入记录关联在并发操作中已变化，请刷新后重试");
 }
 
@@ -2129,12 +1916,8 @@ function assertMergeCompatible(segments: SegmentForMutation[]) {
       segment.personId !== first.personId ||
       segment.type !== first.type ||
       segment.content !== first.content ||
-      segment.role !== first.role ||
-      (segment.customRole ?? "") !== (first.customRole ?? "") ||
       segment.priority !== first.priority ||
       segment.taskId !== first.taskId ||
-      segment.nodeId !== first.nodeId ||
-      segment.associationNeedsReview !== first.associationNeedsReview ||
       segment.expectedOutput !== first.expectedOutput ||
       tagIdsOf(segment).join("|") !== firstTagKey
     ) {
@@ -2200,15 +1983,11 @@ function snapshotSegment(segment: SegmentForMutation): Prisma.InputJsonObject {
     startAt: segment.startAt.toISOString(),
     endAt: segment.endAt.toISOString(),
     content: segment.content,
-    role: segment.role,
-    customRole: segment.customRole ?? "",
     priority: segment.priority,
     expectedOutput: segment.expectedOutput,
     actualOutput: segment.actualOutput,
     completionPercent: decimalToNumber(segment.completionPercent),
     taskId: segment.taskId,
-    nodeId: segment.nodeId,
-    associationNeedsReview: segment.associationNeedsReview,
     sourceSplitFromId: segment.sourceSplitFromId,
     deletedAt: segment.deletedAt?.toISOString() ?? null,
     tagIds: tagIdsOf(segment),
@@ -2225,15 +2004,11 @@ export function toWorkSegmentDto(segment: SegmentForMutation): WorkSegmentDto {
     startAt: segment.startAt.toISOString(),
     endAt: segment.endAt.toISOString(),
     content: segment.content,
-    role: segment.role,
-    customRole: segment.customRole ?? "",
     priority: segment.priority,
     expectedOutput: segment.expectedOutput,
     actualOutput: segment.actualOutput,
     completionPercent: decimalToNumber(segment.completionPercent),
     taskId: segment.taskId,
-    nodeId: segment.nodeId,
-    associationNeedsReview: segment.associationNeedsReview,
     sourceSplitFromId: segment.sourceSplitFromId,
     deletedAt: segment.deletedAt?.toISOString() ?? null,
     tagIds: tagIdsOf(segment),

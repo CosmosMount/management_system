@@ -235,7 +235,7 @@ test.describe("S2 canvas query security", () => {
       "ASSOCIATION_INVALID",
     );
     await expect(
-      page.getByText("当前 Task 状态不允许创建或重关联 Segment", {
+      page.getByText("当前 Task 状态不允许创建或关联 Segment", {
         exact: true,
       }),
     ).toBeVisible();
@@ -1445,7 +1445,6 @@ test.describe("S2 canvas query security", () => {
           endAt: atHour(14.05 + index * 0.1),
           content: `禁止关联终态 Task ${index}`,
           taskId: task.taskId,
-          nodeId: task.milestoneNodeId,
         }),
         "ASSOCIATION_INVALID",
       );
@@ -1456,7 +1455,6 @@ test.describe("S2 canvas query security", () => {
           endAt: atHour(15.05 + index * 0.1),
           content: `禁止 Actual 关联终态 Task ${index}`,
           taskId: task.taskId,
-          nodeId: task.milestoneNodeId,
         }),
         "FORBIDDEN",
       );
@@ -1479,7 +1477,6 @@ test.describe("S2 canvas query security", () => {
       endAt: atHour(16),
       content: "允许关联 Active Task",
       taskId: activeTask.taskId,
-      nodeId: activeTask.milestoneNodeId,
     });
     expect(activeCreated.segment.taskId).toBe(activeTask.taskId);
     const draftCreated = await createWorkSegment(resourceManagerActor, {
@@ -1489,7 +1486,6 @@ test.describe("S2 canvas query security", () => {
       endAt: atHour(17),
       content: "允许关联 Draft Task",
       taskId: draftTask.taskId,
-      nodeId: draftTask.milestoneNodeId,
     });
     expect(draftCreated.segment.taskId).toBe(draftTask.taskId);
     const mixedTasks = await getTimeCanvasData({
@@ -1622,7 +1618,6 @@ test.describe("S2 canvas query security", () => {
       accountId: owner.account.id,
       personId: member.person.id,
       taskId: taskA.taskId,
-      nodeId: taskA.milestoneNodeId,
       startAt: atHour(9),
       endAt: atHour(12),
       content: "可见 Task A 投入",
@@ -1631,7 +1626,6 @@ test.describe("S2 canvas query security", () => {
       accountId: hiddenOwner.account.id,
       personId: member.person.id,
       taskId: taskB.taskId,
-      nodeId: taskB.milestoneNodeId,
       startAt: atHour(10),
       endAt: atHour(11),
       content: "绝密 Task B 投入",
@@ -1640,7 +1634,6 @@ test.describe("S2 canvas query security", () => {
       accountId: hiddenOwner.account.id,
       personId: inactiveWithHistory.person.id,
       taskId: taskB.taskId,
-      nodeId: taskB.milestoneNodeId,
       startAt: atHour(15),
       endAt: atHour(16),
       content: "停用人员历史投入",
@@ -1658,7 +1651,6 @@ test.describe("S2 canvas query security", () => {
       accountId: owner.account.id,
       personId: owner.person.id,
       taskId: taskA.taskId,
-      nodeId: taskA.milestoneNodeId,
       type: "ACTUAL",
       status: "CONFIRMED",
       startAt: atHour(13),
@@ -1718,7 +1710,6 @@ test.describe("S2 canvas query security", () => {
         id: hidden.id,
         content: "绝密 Task B 投入",
         taskId: taskB.taskId,
-        nodeId: taskB.milestoneNodeId,
         versionToken: hiddenVersionToken,
       }),
     );
@@ -1727,7 +1718,6 @@ test.describe("S2 canvas query security", () => {
       hidden.id,
       "绝密 Task B 投入",
       taskB.taskId,
-      taskB.milestoneNodeId,
       hiddenTag.id,
       hiddenTag.name,
       hiddenVersionToken,
@@ -1751,7 +1741,6 @@ test.describe("S2 canvas query security", () => {
       canMerge: false,
       canCancel: false,
       canConfirm: false,
-      canRelink: false,
       canSoftDelete: true,
     });
     for (const scope of ["PERSONAL", "DASHBOARD"] as const) {
@@ -1802,7 +1791,6 @@ test.describe("S2 canvas query security", () => {
       visibility: "FULL",
       content: "绝密 Task B 投入",
       taskId: taskB.taskId,
-      nodeId: taskB.milestoneNodeId,
       versionToken: hiddenVersionToken,
     });
     const taskGrouped = await getTimeCanvasData({
@@ -2045,7 +2033,6 @@ test.describe("S2 canvas query security", () => {
           accountId: hiddenOwner.account.id,
           personId: target.person.id,
           taskId: hiddenTask.taskId,
-          nodeId: hiddenTask.milestoneNodeId,
           startAt: atHour(9),
           endAt: atHour(10),
           content: fixture.content,
@@ -2127,7 +2114,6 @@ test.describe("S2 canvas query security", () => {
       startAt,
       endAt,
       content: `批量可见 ${index}`,
-      role: "DEVELOPER" as const,
       priority: "LOW" as const,
       taskId: visibleTask.taskId,
       createdByAccountId: owner.account.id,
@@ -2141,7 +2127,6 @@ test.describe("S2 canvas query security", () => {
       startAt,
       endAt,
       content: `批量隐藏 ${index}`,
-      role: "DEVELOPER" as const,
       priority: "LOW" as const,
       taskId: hiddenTask.taskId,
       createdByAccountId: hiddenOwner.account.id,
@@ -2202,7 +2187,6 @@ test.describe("S2 canvas query security", () => {
         startAt: atHour(9),
         endAt: atHour(10),
         content: `Busy-only 隐藏 ${index}`,
-        role: "DEVELOPER" as const,
         priority: "LOW" as const,
         taskId: hiddenTask.taskId,
         createdByAccountId: hiddenOwner.account.id,
@@ -2253,7 +2237,6 @@ test.describe("S2 canvas query security", () => {
         startAt: atHour(9),
         endAt: atHour(10),
         content: `Full+Busy 可见 ${index}`,
-        role: "DEVELOPER" as const,
         priority: "LOW" as const,
         taskId: visibleTask.taskId,
         createdByAccountId: owner.account.id,
@@ -2266,7 +2249,6 @@ test.describe("S2 canvas query security", () => {
         startAt: atHour(9),
         endAt: atHour(10),
         content: `Full+Busy 隐藏 ${index}`,
-        role: "DEVELOPER" as const,
         priority: "LOW" as const,
         taskId: hiddenTask.taskId,
         createdByAccountId: hiddenOwner.account.id,
@@ -2580,22 +2562,18 @@ async function createSegment({
   accountId,
   personId,
   taskId = null,
-  nodeId = null,
   type = "PLANNED",
   status = type === "ACTUAL" ? "CONFIRMED" : "PLANNED",
   startAt,
   endAt,
   content = "S2 查询 Segment",
-  role = "DEVELOPER",
   priority = "MEDIUM",
-  associationNeedsReview = false,
   tagIds = [],
 }: {
   id?: string;
   accountId: string;
   personId: string;
   taskId?: string | null;
-  nodeId?: string | null;
   type?: "PLANNED" | "ACTUAL";
   status?:
     | "PLANNED"
@@ -2606,9 +2584,7 @@ async function createSegment({
   startAt: Date;
   endAt: Date;
   content?: string;
-  role?: "OWNER" | "LEAD" | "DEVELOPER";
   priority?: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
-  associationNeedsReview?: boolean;
   tagIds?: string[];
 }) {
   return prisma.workSegment.create({
@@ -2620,11 +2596,8 @@ async function createSegment({
       startAt,
       endAt,
       content,
-      role,
       priority,
       taskId,
-      nodeId,
-      associationNeedsReview,
       createdByAccountId: accountId,
       updatedByAccountId: accountId,
       ...(tagIds.length > 0
@@ -2767,7 +2740,6 @@ async function createAnchorTaskBatch({
         startAt: atHour(9),
         endAt: atHour(10),
         content: `${task.title} anchor candidate`,
-        role: "DEVELOPER" as const,
         priority: "LOW" as const,
         taskId: task.id,
         createdByAccountId: ownerAccountId,

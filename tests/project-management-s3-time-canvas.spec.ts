@@ -361,7 +361,6 @@ test.describe("S3 TimeCanvas pure core", () => {
     expect(model.segments[0]).toMatchObject({
       title: "其他占用",
       taskId: null,
-      nodeId: null,
       versionToken: null,
       visibility: "BUSY_ONLY",
       permissions: { canViewDetails: false, canEdit: false },
@@ -414,6 +413,42 @@ test.describe("S3 TimeCanvas pure core", () => {
 });
 
 test.describe("S3 TimeCanvas controlled browser fixtures", () => {
+  test("current-time line follows the live browser clock and stays below sticky headers", async ({
+    context,
+    page,
+    baseURL,
+  }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop", "移动端使用议程视图");
+    const identity = await createCanvasBrowserIdentity();
+    await loginAsTestUser(context, baseURL, identity);
+    await page.clock.setFixedTime(new Date("2026-08-05T08:00:00.000+08:00"));
+    await page.goto("/progress/time-canvas-fixtures?mode=RESOURCE_PLANNER");
+
+    const axisLine = page.getByTestId("time-canvas-today-axis");
+    await expect(axisLine).toBeVisible();
+    const initialLeft = (await axisLine.boundingBox())?.x;
+    if (initialLeft === undefined) throw new Error("当前时间线缺少布局信息");
+
+    await page.clock.setFixedTime(new Date("2026-08-06T08:00:00.000+08:00"));
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect
+      .poll(async () => (await axisLine.boundingBox())?.x ?? initialLeft)
+      .toBeGreaterThan(initialLeft);
+
+    const header = page.getByTestId(
+      "time-canvas-row-header-person:fixture-person-0",
+    );
+    const headerZIndex = await header.evaluate((element) =>
+      Number.parseInt(getComputedStyle(element).zIndex, 10),
+    );
+    const rowLineZIndex = await page
+      .getByLabel("超长人员名称".repeat(12) + " 时间行", { exact: true })
+      .getByTestId("time-canvas-today-line")
+      .evaluate((element) => Number.parseInt(getComputedStyle(element).zIndex, 10));
+    expect(headerZIndex).toBeGreaterThan(rowLineZIndex);
+    await expectHealthyPage(page);
+  });
+
   test("four modes render real dense, long, empty and virtualized states accessibly", async ({
     context,
     page,

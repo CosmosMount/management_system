@@ -64,15 +64,11 @@ const fullSegmentSelect = {
   startAt: true,
   endAt: true,
   content: true,
-  role: true,
-  customRole: true,
   priority: true,
   expectedOutput: true,
   actualOutput: true,
   completionPercent: true,
   taskId: true,
-  nodeId: true,
-  associationNeedsReview: true,
   deletedAt: true,
   updatedAt: true,
   task: { select: canvasTaskAuthorizationSelect },
@@ -360,19 +356,6 @@ async function authorizeScopeAndExplicitFilters(
     });
     if (count !== input.tagIds.length) throw notFoundError();
   }
-  if (input.nodeIds.length > 0) {
-    const count = await prisma.taskNode.count({
-      where: {
-        id: { in: input.nodeIds },
-        deletedAt: null,
-        task: taskReadableWhere(actor),
-        planVersionEntries: {
-          some: { planVersion: { currentForTask: { isNot: null } } },
-        },
-      },
-    });
-    if (count !== input.nodeIds.length) throw notFoundError();
-  }
   return scopeTask;
 }
 
@@ -655,7 +638,6 @@ function taskTagFilteredRowWhere(
                 },
               }
             : {},
-          input.nodeIds.length > 0 ||
           input.types.length > 0 ||
           input.statuses.length > 0
             ? { id: { in: [] } }
@@ -707,7 +689,6 @@ function segmentFilterWhere(
             ],
           }
         : {},
-      input.nodeIds.length > 0 ? { nodeId: { in: input.nodeIds } } : {},
       input.types.length > 0 ? { type: { in: input.types } } : {},
       input.statuses.length > 0 ? { status: { in: input.statuses } } : {},
       input.includeActual ? {} : { type: { not: "ACTUAL" } },
@@ -963,15 +944,11 @@ function toFullSegmentDto(
     startAt: segment.startAt.toISOString(),
     endAt: segment.endAt.toISOString(),
     content: segment.content,
-    role: segment.role,
-    customRole: segment.customRole,
     priority: segment.priority,
     expectedOutput: segment.expectedOutput,
     actualOutput: segment.actualOutput,
     completionPercent: decimalToNumber(segment.completionPercent),
     taskId: segment.taskId,
-    nodeId: segment.nodeId,
-    associationNeedsReview: segment.associationNeedsReview,
     tags: segment.tags.map((entry) => ({
       id: entry.tag.id,
       name: entry.tag.name,
@@ -1011,7 +988,6 @@ function segmentPermissions(
       canMerge: false,
       canCancel: false,
       canConfirm: false,
-      canRelink: false,
       canSoftDelete: editable,
     };
   }
@@ -1028,7 +1004,6 @@ function segmentPermissions(
     canMerge: editable,
     canCancel: editable,
     canConfirm: editable,
-    canRelink: editable && segment.associationNeedsReview,
     canSoftDelete: false,
   };
 }
@@ -1265,7 +1240,6 @@ function canvasCursorFilter(input: GetTimeCanvasDataInput): string {
         personIds: [...input.personIds].sort(),
         taskIds: [...input.taskIds].sort(),
         tagIds: [...input.tagIds].sort(),
-        nodeIds: [...input.nodeIds].sort(),
         types: [...input.types].sort(),
         statuses: [...input.statuses].sort(),
         groupBy: input.groupBy,
