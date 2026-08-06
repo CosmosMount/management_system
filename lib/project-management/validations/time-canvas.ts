@@ -267,6 +267,7 @@ export const searchTaskOptionsInputSchema = z
     statuses: z.array(z.enum(taskStatusValues)).optional().default([]),
     tagIds: idListSchema("Tag"),
     mine: z.boolean().optional().default(false),
+    projectCandidates: z.boolean().optional().default(false),
     cursor: optionCursorSchema,
     limit: optionPageLimitSchema,
   })
@@ -280,7 +281,7 @@ export const resolvePeopleOptionsByIdsInputSchema = z
   .strict();
 
 export const resolveTaskOptionsByIdsInputSchema = z
-  .object({ ids: idListSchema("Task") })
+  .object({ ids: idListSchema("Task"), projectCandidates: z.boolean().optional().default(false) })
   .strict();
 
 export const listTagOptionsInputSchema = z

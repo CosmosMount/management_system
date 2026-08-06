@@ -21,6 +21,7 @@ export function revalidateAdmin() {
 export function revalidateProjectManagement(taskId?: string) {
   revalidatePath(routes.progress.root);
   revalidatePath(routes.progress.tasks);
+  revalidatePath(routes.progress.projects);
   revalidatePath("/progress/approvals");
   revalidatePath(routes.progress.resources);
   revalidatePath(routes.progress.notifications);

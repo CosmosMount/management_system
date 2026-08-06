@@ -132,6 +132,7 @@ export const createTaskDraftInputSchema = z
     termination: s2TerminationDraftSchema,
     plannedStartAt: absoluteDateTimeSchema("请选择带时区的有效计划开始时间"),
     relatedTaskId: z.union([idSchema, z.null()]).optional().default(null),
+    projectId: z.union([idSchema, z.null()]).optional().default(null),
     idempotencyKey: requiredText("缺少请求幂等键", 120),
   })
   .strict()

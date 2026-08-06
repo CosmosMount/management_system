@@ -239,7 +239,7 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 | TEACHER | 全局 | 「老师审核」阶段通过 |
 | FINANCE | 指定车组 | 上传报销截图 |
 
-所有已登录统一账号都可查看全部未删除 Task、计划、成员、验收、审计和完整 Planned/Actual Work Segment，也都可创建任意合法车组/技术组的 Task；创建者自动成为负责人。账号级项目访问禁用机制已经删除。Task 有效成员只保留负责人和参与人，同一人在同一 Task 中只能有一个角色，且至少保留一名负责人。非成员只有读取权；Milestone 和 Revision 的通过、驳回、要求修订只允许统一超级管理员或项目管理员处理，并允许管理员自审。
+所有已登录统一账号都可查看全部未删除 Project、Task、计划、成员、验收、审计和完整 Planned/Actual Work Segment，也都可提交 Project 立项和创建任意合法车组/技术组的 Task。Project 是 Task 上方的文件夹与立项对象，不包含 Stage；只有统一超级管理员或项目管理员能审批立项。Project Owner 可修改、结束和删除 Project，但不会继承任何 Task 写权限。
 
 Revision 是用户选择时间的计划变化标记，不形成阶段，也不能关联 Planned/Actual Segment。创建 Revision 时固定沿用 Current Plan 的 Start，自动保留全部已完成 Milestone 和已生效 Revision，并用调用方提供的后续 Milestone 与 Terminal 重建未完成部分。创建即进入 `PENDING_APPROVAL`，不再存在草稿或单独提交动作；驳回后可修改并直接重新送审，取消后释放该 Task 的唯一候选名额，批准后才进入 Current Plan 和正式时间轴。
 
@@ -505,7 +505,7 @@ pm2 start npm --name procurement-cron -- run cron
 
 ## 项目管理重构状态
 
-旧项目、阶段、任务、审批、周报、风险和提醒实现及其开发数据已直接清理，不提供旧数据迁移或旧接口兼容。当前已完成 v2.1 底座、Task 生命周期、Resource Segment，以及项目管理前端的 Task Composer、Task 工作台、统一 TimeCanvas/TimeAgenda、资源计划、个人时间线、个人驾驶舱、统一待办、Tag 和通知偏好。Account/Person、Task/Tag、Plan/Node、Segment、通知、审计、权限和通用 cron 跨实例互斥均已有服务端状态机和集成测试。
+旧 Project/Stage 工作流已清理；当前重新提供轻量 Project 文件夹和立项流程，不恢复 Stage、周报、风险或旧审批角色。`/progress/projects` 提供默认“只看我参与 + 进行中”的列表、创建、详情、编辑、审批、驳回重提、结束和软删除；Project 列表、详情 Task、立项轮次和审计记录使用稳定游标继续加载，不会在固定数量后静默截断。一个 Task 最多属于一个 ACTIVE Project；Task 加入时会把有效 Task 成员补为 Project Participant，但 Project 身份不授予 Task 权限。
 
 - 所有已登录并成功解析到统一 `Account/Person` 的账号可查看全部未删除 Task、计划/审批/审计历史和全员完整 Segment，并可创建 Task；可见性扩大不扩大写权限。
 - Task 成员只分“负责人”和“参与人”。支持多负责人且至少一名，同一 Person 只能有一个有效角色；创建者自动成为负责人。
@@ -517,12 +517,12 @@ pm2 start npm --name procurement-cron -- run cron
 - `/progress/resources` 提供人员计划时间轴，可执行 Planned Segment 新增、确认、部分确认、拆分、合并、顺延和取消。
 - `/progress/approvals` 汇总投入确认、Milestone Review、Revision 与 Termination；`/progress/tags` 管理 Tag。
 - `/progress/notifications` 提供站内通知中心和分类飞书偏好；站内通知始终保留，强制事件不受普通关闭偏好影响。
-- 旧 `/progress/task/:id` 会重定向到 `/progress/tasks/:id`；旧 `/progress/projects/*` 和 `/progress/kanban` 回到 `/progress`；未映射旧目录没有业务页面。
+- 旧 `/progress/task/:id` 会重定向到 `/progress/tasks/:id`；`/progress/projects/*` 是当前 Project 正式路由，旧 `/progress/kanban` 回到 `/progress`。
 - 飞书登录和通讯录同步先解析统一 `Account/AccountIdentity/Person`，再关联并更新采购 `User`。账号级项目访问禁用机制已移除，历史禁用账号恢复项目入口，但仍受系统角色、TaskMember 和数据范围授权约束。
 - 人员与 Task 选择统一使用异步模糊选择器，支持 NFKC、拼音首字母、顺序匹配、已选项安全恢复和最多 50 项多选；Task 列表与账号后台使用相同的有界排序规则。
 - 新项目管理的设计和逐阶段真实证据位于 [`docs/plan/`](docs/plan/)；当前完成度以 `project-management-frontend-design-v1.0/13-实施进度台账.md` 为准。
 - `npm run pm:release-rehearsal` 仅用于本机隔离 `_test`/`_snapshot` 数据库；必须显式设置 `PM_RELEASE_REHEARSAL_CONFIRM=LOCAL_ISOLATED_REHEARSAL` 和 `NOTIFICATION_DELIVERY_DISABLED=true`。它不会执行生产维护窗口，生产发布仍需另行授权与 BO/TL/QA/DBA 签字。
-- 项目管理飞书通知只允许写入 `channel=project-management` 的 notification outbox；adapter 已构造普通交互卡并经统一私信传输层投递。验收和 Revision 待审批事件使用审批机器人用途，其他项目管理事件使用通知机器人。
+- 项目管理飞书通知只允许写入 `channel=project-management` 的 notification outbox；adapter 已构造普通交互卡并经统一私信传输层投递。Project 立项、验收和 Revision 待审批事件使用审批机器人用途，其他项目管理事件使用通知机器人。
 - 资源冲突和投入比例能力已完整下线：`/progress/resources/conflicts` 返回 404，Segment 允许时间重叠，系统不再检测、提示、阻止或通知冲突，也没有替代容量模型。
 
 现行成员、可见性和审批决策见 [Task 全员可见、双成员角色与全局管理员审批 ADR](docs/adr/2026-08-03-task-global-visibility-participants-admin-approval.md)，Revision 节点与送审状态机见 [Revision 时间标记 ADR](docs/adr/2026-08-04-revision-time-marker.md)。已有数据的受控发布顺序为：

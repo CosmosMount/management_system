@@ -51,6 +51,7 @@ test.describe("project management S3 shell", () => {
         )
         .toEqual([
           "/progress",
+          "/progress/projects",
           "/progress/tasks",
           "/progress/my-timeline",
           "/progress/resources",

@@ -9,6 +9,7 @@ export type ProjectManagementAuditInput = {
   entityType: string;
   entityId: string;
   taskId?: string | null;
+  projectId?: string | null;
   before?: Prisma.InputJsonValue | null;
   after?: Prisma.InputJsonValue | null;
   reason?: string;
@@ -32,6 +33,7 @@ export async function createDomainAuditEventTx(
       entityType: input.entityType,
       entityId: input.entityId,
       taskId: input.taskId ?? null,
+      projectId: input.projectId ?? null,
       before: sanitizeAuditJson(input.before),
       after: sanitizeAuditJson(input.after),
       reason: input.reason ?? "",

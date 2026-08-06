@@ -190,19 +190,70 @@ function cardTemplate(payload: ProjectManagementNotificationPayload) {
 
 function contextText(context: Record<string, unknown>) {
   const entries = Object.entries(context)
-    .filter(([, value]) => value !== null && value !== undefined && value !== "")
+    .filter(
+      ([key, value]) =>
+        value !== null &&
+        value !== undefined &&
+        value !== "" &&
+        !isInternalContextKey(key),
+    )
     .slice(0, 6);
   if (entries.length === 0) return null;
   return entries
-    .map(([key, value]) => `**${contextLabel(key)}**：${truncate(String(value), 80)}`)
+    .map(
+      ([key, value]) =>
+        `**${contextLabel(key)}**：${truncate(contextValue(key, value), 80)}`,
+    )
     .join("\n");
+}
+
+function isInternalContextKey(key: string) {
+  return key === "lockVersion" || key.endsWith("Id") || key.endsWith("Ids");
+}
+
+function contextValue(key: string, value: unknown) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item)).join("、");
+  }
+  if (key === "beforeStatus" || key === "afterStatus" || key === "taskStatus") {
+    return statusLabel(String(value));
+  }
+  if (key === "decision") {
+    return value === "APPROVED" ? "通过" : value === "REJECTED" ? "驳回" : String(value);
+  }
+  if (key === "role") {
+    return value === "OWNER" ? "负责人" : value === "PARTICIPANT" ? "参与人" : String(value);
+  }
+  return String(value);
+}
+
+function statusLabel(value: string) {
+  const labels: Record<string, string> = {
+    DRAFT: "草稿",
+    PENDING_APPROVAL: "立项审批中",
+    ACTIVE: "进行中",
+    COMPLETED: "已完成",
+    FAILED: "失败",
+    CANCELLED: "已取消",
+    TIMEOUT: "超时",
+    ARCHIVED: "已归档",
+    DELETED: "已删除",
+  };
+  return labels[value] ?? value;
 }
 
 function contextLabel(key: string) {
   const labels: Record<string, string> = {
     taskStatus: "Task 状态",
-    currentPlanVersionId: "当前计划",
     segmentStatus: "投入状态",
+    beforeStatus: "变更前状态",
+    afterStatus: "变更后状态",
+    round: "立项轮次",
+    ownerNames: "负责人",
+    taskCount: "Task 数量",
+    decision: "审批结果",
+    comment: "审批意见",
+    role: "成员角色",
   };
   return labels[key] ?? key;
 }

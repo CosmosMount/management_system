@@ -22,6 +22,7 @@ export function TaskMemberRolePicker({
   editable,
   onChange,
   onPersonResolved,
+  protectedOwnerId,
 }: {
   members: EditableTaskMember[];
   people: PersonOptionDto[];
@@ -29,6 +30,7 @@ export function TaskMemberRolePicker({
   editable: boolean;
   onChange: (members: EditableTaskMember[]) => void;
   onPersonResolved?: (person: PersonOptionDto) => void;
+  protectedOwnerId?: string;
 }) {
   const [error, setError] = useState("");
   const owners = members.filter((member) => member.role === "OWNER");
@@ -41,6 +43,10 @@ export function TaskMemberRolePicker({
     if (!personId) return;
     const existing = members.find((member) => member.personId === personId);
     if (existing?.role === role) return;
+    if (existing?.role === "OWNER" && role === "PARTICIPANT" && personId === protectedOwnerId) {
+      setError("你当前是 Project 负责人，不能降级自己。");
+      return;
+    }
     if (existing?.role === "OWNER" && owners.length === 1) {
       setError("至少保留一名负责人。");
       return;
@@ -72,6 +78,7 @@ export function TaskMemberRolePicker({
         scope={scope}
         editable={editable}
         lastOwnerId={owners.length === 1 ? owners[0]?.personId : undefined}
+        protectedOwnerId={protectedOwnerId}
         placeholder="搜索负责人"
         onSelect={selectPerson}
         onRemove={removePerson}
@@ -90,6 +97,7 @@ export function TaskMemberRolePicker({
         onPersonResolved={onPersonResolved}
       />
       {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
+      {protectedOwnerId && owners.some((member) => member.personId === protectedOwnerId) && <p className="text-xs text-muted-foreground">你当前是 Project 负责人，不能移除或降级自己；请由其他负责人操作。</p>}
     </div>
   );
 }
@@ -102,6 +110,7 @@ function MemberGroup({
   scope,
   editable,
   lastOwnerId,
+  protectedOwnerId,
   placeholder,
   onSelect,
   onRemove,
@@ -114,6 +123,7 @@ function MemberGroup({
   scope: UserPickerScope;
   editable: boolean;
   lastOwnerId?: string;
+  protectedOwnerId?: string;
   placeholder: string;
   onSelect: (personId: string | null, role: EditableTaskMember["role"]) => void;
   onRemove: (personId: string) => void;
@@ -140,7 +150,7 @@ function MemberGroup({
                     variant="ghost"
                     size="icon-xs"
                     className="size-5 rounded-full"
-                    disabled={member.personId === lastOwnerId}
+                    disabled={member.personId === lastOwnerId || member.personId === protectedOwnerId}
                     aria-label={`移除 ${name} ${label}`}
                     onClick={() => onRemove(member.personId)}
                   >

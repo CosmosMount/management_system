@@ -27,6 +27,7 @@ import {
   listTagOptions,
 } from "@/app/actions/project-management/canvas";
 import { TaskSelect } from "@/components/project-management/task-picker";
+import { ProjectSelect } from "@/components/project-management/project-picker";
 import { TaskComposerPlanEditor } from "@/components/project-management/task-composer-plan-editor";
 import { TaskMemberRolePicker } from "@/components/project-management/task-member-role-picker";
 import { Badge } from "@/components/ui/badge";
@@ -124,6 +125,7 @@ export type TaskComposerSeed = {
   priority: TaskPriorityValue;
   tagIds: string[];
   relatedTaskId: string | null;
+  projectId?: string | null;
   members: Array<{ personId: string; role: TaskMemberRoleValue }>;
   plannedStartAt: string;
   milestones: TaskComposerMilestone[];
@@ -262,6 +264,7 @@ export function TaskComposerClient({
   initialPeople,
   initialTasks,
   initialTags,
+  initialProjects = [],
   actorPersonId,
   mode = CREATE_TASK_COMPOSER_MODE,
 }: {
@@ -271,6 +274,7 @@ export function TaskComposerClient({
   initialPeople: PersonOption[];
   initialTasks: TaskOption[];
   initialTags: TagOption[];
+  initialProjects?: Array<{ id: string; name: string; avatarPath: string | null }>;
   actorPersonId: string;
   mode?: TaskComposerMode;
 }) {
@@ -1021,6 +1025,7 @@ export function TaskComposerClient({
         priority: state.priority,
         tagIds: state.tagIds,
         relatedTaskId: state.relatedTaskId,
+        projectId: state.projectId ?? null,
         plannedStartAt: shanghaiDateTimeLocalToIso(state.plannedStartAt),
       };
       let destination: string;
@@ -1615,6 +1620,9 @@ export function TaskComposerClient({
                 clearable
                 disabled={isRevisionComposer}
               />
+            </Field>
+            <Field label="所属 Project" htmlFor="task-project">
+              <ProjectSelect inputId="task-project" value={state.projectId ?? null} onValueChange={(projectId) => updateField("projectId", projectId)} initialOptions={initialProjects} disabled={isRevisionComposer} />
             </Field>
           </ComposerSection>
 
@@ -2651,6 +2659,7 @@ function serverFieldValidationIssue(
     team: "team",
     techGroup: "techGroup",
     relatedTaskId: "related-task",
+    projectId: "task-project",
     tagIds: "tag-search",
     members: "members",
     plannedStartAt: "plannedStartAt",
@@ -2776,6 +2785,9 @@ function parseLocalDraft(raw: string): LocalTaskDraft | null {
       (task.relatedTaskId !== null &&
         (typeof task.relatedTaskId !== "string" ||
           !UUID_PATTERN.test(task.relatedTaskId))) ||
+      (task.projectId !== undefined && task.projectId !== null &&
+        (typeof task.projectId !== "string" ||
+          !UUID_PATTERN.test(task.projectId))) ||
       (task.selectedEntityId !== null &&
         (typeof task.selectedEntityId !== "string" || task.selectedEntityId.length > 160)) ||
       typeof task.plannedStartAt !== "string" ||
@@ -3222,6 +3234,7 @@ function composerSubmissionFingerprint(state: TaskComposerSeed) {
     priority: state.priority,
     tagIds: [...state.tagIds].sort(),
     relatedTaskId: state.relatedTaskId,
+    projectId: state.projectId ?? null,
     members: [...state.members].sort(
       (left, right) =>
         left.personId.localeCompare(right.personId) ||
@@ -3293,6 +3306,7 @@ function normalizeComposerSeed(seed: TaskComposerSeed): TaskComposerSeed {
   normalizedMeta[seed.termination.id]!.lifecycle = "ESTABLISHED";
   const normalized: TaskComposerSeed = {
     ...seed,
+    projectId: seed.projectId ?? null,
     revision: seed.revision
       ? {
           ...seed.revision,
@@ -3443,6 +3457,7 @@ function sanitizeRecoveredComposerState({
     priority: authoritative.priority,
     tagIds: authoritative.tagIds,
     relatedTaskId: authoritative.relatedTaskId,
+    projectId: authoritative.projectId ?? null,
     members: authoritative.members,
     plannedStartAt: authoritative.plannedStartAt,
     milestones: [...lockedById.values(), ...editable],

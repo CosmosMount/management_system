@@ -18,11 +18,18 @@ const PROJECT_MANAGEMENT_NOTIFICATION_KINDS = [
   "segment_confirmation_due",
   "task_terminated",
   "account_security",
+  "project_establishment_submitted",
+  "project_establishment_result",
+  "project_member_added",
+  "project_task_changed",
+  "project_completed",
+  "project_deleted",
 ] as const;
 
 const PROJECT_MANAGEMENT_APPROVAL_REQUEST_KINDS = [
   "milestone_review_submitted",
   "revision_pending_review",
+  "project_establishment_submitted",
 ] as const satisfies readonly (typeof PROJECT_MANAGEMENT_NOTIFICATION_KINDS)[number][];
 
 const approvalRequestKindSet = new Set<string>(
@@ -41,12 +48,15 @@ export const projectManagementNotificationPayloadSchema = z
       "REVISION",
       "WORK_SEGMENT",
       "ACCOUNT_SECURITY",
+      "PROJECT",
     ]),
     title: z.string().min(1),
     summary: z.string().default(""),
     actorName: z.string().default("系统"),
     taskId: z.string().nullable().optional(),
     taskTitle: z.string().nullable().optional(),
+    projectId: z.string().nullable().optional(),
+    projectName: z.string().nullable().optional(),
     entityType: z.string().min(1),
     entityId: z.string().min(1),
     linkPath: z.string().default(""),

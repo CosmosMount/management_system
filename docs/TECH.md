@@ -129,9 +129,9 @@ DRAFT → MANAGEMENT_REVIEW → TEACHER_REVIEW → PENDING_APPLICANT_DOCS
 
 ### 项目管理
 
-旧项目管理专用模型和开发数据已通过 migration 删除，包括项目、阶段、旧任务及其审批、交付、周报、风险、评论、关注和提醒关系。共享的 `User`、采购/反馈、`FileAsset`、`NotificationOutbox` 与飞书卡片跟踪模型继续保留。
+旧项目管理专用模型和开发数据已通过 migration 删除。新 Project 不是旧模型恢复：它只包含文件夹、成员、立项轮次和 Task 归属，不包含 Project Stage、周报、风险或旧审批角色。
 
-当前项目管理数据模型包括 `Account`、`AccountIdentity`、`Person`、`Tag`、`Task`、`TaskMember`、`TaskPlanVersion`、`TaskNode`、`PlanVersionNode`、Milestone/Revision/Termination 子类型、`MilestoneReview`、`ReviewEvidence`、`WorkSegment`、`WorkSegmentSource`、`WorkSegmentChange`、`SystemRoleAssignment`、`NotificationPreference`、`InAppNotification` 和 `DomainAuditEvent`。资源冲突表、扫描 checkpoint 和 `WorkSegment.allocation` 已由不可逆 migration 删除；`Task.revisionApprovalMode`、`Task.allowSelfReview` 和数据库 enum `RevisionApprovalMode` 也已删除，历史策略写入 `source=MIGRATION` 审计。
+当前项目管理数据模型还包括 `Project`、`ProjectMember`、`ProjectEstablishmentRequest` 和 `ProjectEstablishmentRequestedTask`。`Task.projectId` 可空且最多指向一个 Project；有效 Project 成员和单一待审批轮次由 PostgreSQL partial unique index 保证。Project 删除使用 `deletedAt` 软删除，并在同一事务清空关联 Task 的 `projectId`。
 
 P2/P3 已补齐 Task 计划生命周期的服务端闭环，入口位于 `lib/project-management/application/lifecycle-service.ts`、`app/actions/project-management/{tasks,plans,revisions,milestones,terminations}.ts` 和 `lib/project-management/queries/task-queries.ts`：
 
@@ -221,6 +221,10 @@ Task Composer 支持 `CREATE`、`EDIT_DRAFT`、`CREATE_REVISION`、`RESUBMIT_REV
 |------|------|
 | `/progress` | 我的工作总览 |
 | `/progress/tasks` | Task 列表 |
+| `/progress/projects` | Project 列表（默认我的 + 进行中；空搜索使用 `updatedAt + id` 稳定游标分页） |
+| `/progress/projects/new` | 提交 Project 立项 |
+| `/progress/projects/[id]` | Project 详情与立项审批 |
+| `/progress/projects/[id]/edit` | 驳回重提或 ACTIVE Project 编辑 |
 | `/progress/tasks/new` | Task 创建页（桌面三栏 Composer、移动纵向编辑） |
 | `/progress/tasks/[id]/revisions/new` | Revision 创建并送审 Composer |
 | `/progress/tasks/[id]/revisions/[revisionId]/edit` | 被驳回 Revision 修改并重新送审 Composer |
@@ -228,7 +232,7 @@ Task Composer 支持 `CREATE`、`EDIT_DRAFT`、`CREATE_REVISION`、`RESUBMIT_REV
 | `/progress/resources` | 人员计划时间轴 |
 | `/progress/notifications` | 站内通知中心 |
 | `/progress/task/:id` | 旧 Task 详情地址，服务端重定向到 `/progress/tasks/:id` |
-| `/progress/projects/*`、`/progress/kanban` | 旧 Project/Kanban 地址，临时重定向到 `/progress` |
+| `/progress/kanban` | 旧 Kanban 地址，临时重定向到 `/progress` |
 
 ## 飞书集成要点
 

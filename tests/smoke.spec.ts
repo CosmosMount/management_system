@@ -164,8 +164,8 @@ test.describe("authenticated smoke", () => {
     await page.goto("/progress/projects/legacy-project", {
       waitUntil: "networkidle",
     });
-    await expect(page).toHaveURL(/\/progress$/);
-    await expect(page.getByRole("heading", { name: "我的工作" })).toBeVisible();
+    await expect(page).toHaveURL(/\/progress\/projects\/legacy-project$/);
+    await expect(page.getByRole("heading", { name: "页面不存在或无权访问" })).toBeVisible();
     await expectHealthyPage(page);
 
     expect(errors).toEqual([]);

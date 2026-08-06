@@ -230,7 +230,15 @@ npm run pm:identity-backfill
 5. `/progress/resources/conflicts` 必须返回 404。资源计划、个人时间线、Task 工作台和 Agenda 不得出现冲突标记或投入比例；快速创建与 Inspector 不得提供比例输入。创建、更新、移动、拆分、合并和确认仍需正常工作，重叠 Segment 不得产生冲突待办、通知或 outbox。
 6. 打开 `/progress/notifications`，只展示当前收件人的站内通知；可按类型/未读筛选、标记单条或全部已读，跳转对象前仍要按业务对象权限过滤。
 7. 页面不得出现旧项目、阶段、周报、风险、提醒或 `PROJECT_MANAGER` 角色文案；不得出现 500、Next.js error overlay、未处理浏览器错误或横向滚动。
-8. 旧 `/progress/task/:id` 应服务端重定向到 `/progress/tasks/:id`；旧 `/progress/projects/*` 和 `/progress/kanban` 应回到 `/progress`，不能永久跳转到不存在页面。收缩 migration 集成测试仍需验证旧表、旧 enum、`PROJECT_MANAGER` 数据和 `channel=progress` outbox/recipient 被删除，同时采购、反馈、用户、附件、CardKit 跟踪和其他 channel outbox 数据保持不变。
+8. 旧 `/progress/task/:id` 应服务端重定向到 `/progress/tasks/:id`；`/progress/projects/*` 是当前正式路由，只有旧 `/progress/kanban` 回到 `/progress`。收缩 migration 集成测试仍需验证历史旧表、旧 enum、`PROJECT_MANAGER` 数据和 `channel=progress` outbox/recipient 被删除；HEAD 还必须证明新 Project 不含 Stage、`ownerOpenId` 等旧签名。
+
+### Project 立项专项测试
+
+1. `/progress/projects` 无参数时默认“只看我参与 + 进行中”，显式 `mine=0&status=` 可取消默认；Desktop 和 Pixel 5 均无横向滚动。
+2. 普通账号可提交完整立项但不能审批；两类全局管理员可通过或驳回。驳回保留同一 Project，原申请人可修改并创建新轮次。
+3. 立项提交不改变所选 Task；批准时全部 Task 原子挂载，冲突时零部分写入。Task 成员同步为 Project Participant，Project Owner 不获得 Task 写权限。
+4. Project 结束要求至少一个关联 Task 且全部严格 `COMPLETED`；软删除保留 Task 并清空 `projectId`，删除对象直达返回脱敏 404。
+5. 头像只接受真实 PNG/JPEG/WebP 且不超过 2 MiB；所有自动化测试继续使用禁通知环境，不发送真实飞书消息。
 
 ### Task 创建页专项测试
 
@@ -337,6 +345,7 @@ npm run pm:identity-backfill
 18. `tests/revision-time-marker-migration.spec.ts` 在额外随机 `_test` PostgreSQL 中验证空 Revision 表升级、`revisionAt/reviewRound`、新状态枚举、单候选 partial unique index，以及存在旧 Revision 数据时在破坏性字段调整前 fail-fast。
 19. `tests/work-segment-schema-drift-repair.spec.ts` 在 runner 持有的 `_test` PostgreSQL 临时 schema 中重建完整缺失和部分缺失两类 `WorkSegment` 漂移，写入既有 Segment 后连续执行修复与严格 catalog 验证 migration，核对数据保留、默认回填、完整 catalog/OID、约束行为和重复执行 no-op；另构造同名错误字段、列序索引、DESC/operator-class 索引、检查约束和外键动作，验证后置 migration fail-fast 且事务不改变 catalog 或数据。`tests/work-segment-role-node-removal-migration.spec.ts` 还必须从漂移状态按完整合并顺序执行删除准备、历史删除、修复、验证和最终收敛 migration，验证不会在历史删除 migration 前中止；最终删除职责、Node 关联、关联复核和专用通知/历史，同时保留普通 Segment、普通审计、通知、outbox 及 append-only trigger。
 20. `tests/single-task-approval-migration.spec.ts` 在 runner 创建的随机 `_test` PostgreSQL 中人工构造同一 Task 同时存在 Milestone/Revision 待审批的异常数据，验证 Milestone 撤出、Revision/候选计划/非承接未完成节点取消、Current Plan 与 Task 锁版本不变、历史终态和采购数据不变、outbox/recipient 冻结、站内通知已读、确定性迁移审计及最终待审批总数为零。
+21. `tests/project-establishment.spec.ts` 在 Desktop 与 Pixel 5 验证 Project 默认筛选、立项入口、异步 Task 搜索及选中列表（含长名称和移除入口），并在领域层验证驳回重提、批准挂载、稳定游标翻页、候选授权、完成阻塞与删除解绑；该 spec 只能使用 runner 持有的隔离 PostgreSQL。
 
 ## 统一账号迁移验证
 

@@ -21,6 +21,7 @@ import {
   type TaskWorkspace,
 } from "@/lib/project-management/queries/task-queries";
 import type { PersonOptionDto } from "@/lib/project-management/types/time-canvas";
+import { listActiveProjectOptions, resolveActiveProjectOptions } from "@/lib/project-management/queries/project-queries";
 import { getProgressActorOrRedirect } from "../../_auth";
 
 type SearchParams = Record<string, string | string[] | undefined>;
@@ -35,16 +36,18 @@ export default async function ProgressTaskNewPage({
   const templateTaskId = firstParam(params.templateTaskId);
   const relatedTaskId = firstParam(params.relatedTaskId);
   const start = firstParam(params.start);
+  const requestedProjectId = firstParam(params.projectId);
   const template = templateTaskId
     ? await getTaskWorkspace({ actor, taskId: templateTaskId }).catch(() => null)
     : null;
   const requestedRelated = relatedTaskId
     ? await getTaskWorkspace({ actor, taskId: relatedTaskId }).catch(() => null)
     : null;
+  const preferredProjectId = requestedProjectId ?? template?.task.projectId ?? null;
 
   const initialScope = chooseInitialScope(actor, template);
 
-  const [actorPerson, peoplePage, templatePeople, taskPage, tagPage] = await Promise.all([
+  const [actorPerson, peoplePage, templatePeople, taskPage, tagPage, projectOptions, preferredProjects] = await Promise.all([
     getActorPersonOption(actor),
     searchPeople({
       actor,
@@ -58,7 +61,10 @@ export default async function ProgressTaskNewPage({
     resolveTemplatePeople(actor, initialScope, template),
     searchTaskOptions({ actor, input: { limit: 50 } }),
     listTagOptions({ actor, input: { limit: 50 } }),
+    listActiveProjectOptions(),
+    resolveActiveProjectOptions({ ids: preferredProjectId ? [preferredProjectId] : [] }),
   ]);
+  const initialProjectOptions = [...new Map([...preferredProjects, ...projectOptions].map((project) => [project.id, project])).values()];
   const people = mergePersonOptions(
     peoplePage.items,
     [actorPerson, ...templatePeople],
@@ -71,6 +77,7 @@ export default async function ProgressTaskNewPage({
     template,
     requestedRelated,
     start,
+    projectId: preferredProjects[0]?.id ?? null,
   });
   const deploymentEnvironment =
     process.env.NEXT_PUBLIC_APP_URL?.trim() || process.env.NODE_ENV || "unknown";
@@ -88,6 +95,7 @@ export default async function ProgressTaskNewPage({
         initialPeople={people}
         initialTasks={tasks}
         initialTags={tagPage.items}
+        initialProjects={initialProjectOptions}
         actorPersonId={actor.personId}
       />
     </>
@@ -120,6 +128,7 @@ function createSeed({
   template,
   requestedRelated,
   start,
+  projectId,
 }: {
   actorPersonId: string;
   initialScope: { team: string; techGroup: string };
@@ -127,6 +136,7 @@ function createSeed({
   template: TaskWorkspace | null;
   requestedRelated: TaskWorkspace | null;
   start: string;
+  projectId: string | null;
 }): TaskComposerSeed {
   const now = new Date();
   const shanghaiToday = isoToShanghaiDateTimeLocal(now).slice(0, 10);
@@ -170,6 +180,7 @@ function createSeed({
     tagIds: template?.tags.map((tag) => tag.id) ?? [],
     relatedTaskId:
       requestedRelated?.task.id ?? template?.task.relatedTaskId ?? null,
+    projectId,
     members:
       templateMembers.length > 0
         ? templateMembers

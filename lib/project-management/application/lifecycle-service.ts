@@ -53,6 +53,7 @@ import { assertPersistedPlanChronologyValid } from "@/lib/project-management/app
 import { hashPlanSnapshot } from "@/lib/project-management/application/plan-snapshot";
 import { assertTaskApprovalAvailableTx } from "@/lib/project-management/task-approval-gate";
 import { refreshProjectManagementActorTx } from "@/lib/project-management/application/actor-refresh";
+import { acquireProjectCrossAggregateLockTx, assertActiveProjectTargetTx, recordTaskProjectChangeTx, syncTaskMembersToProjectTx } from "@/lib/project-management/application/project-service";
 
 type PrismaTx = Prisma.TransactionClient;
 
@@ -142,6 +143,7 @@ export async function createTaskDraft(
   const requestHash = hashRequest("task.create_draft", normalizedInput);
 
   return prisma.$transaction(async (tx) => {
+    await acquireProjectCrossAggregateLockTx(tx);
     const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     assertAuthorized({
       actor: refreshedActor,
@@ -193,6 +195,7 @@ export async function createTaskDraft(
     }
 
     await assertCreateTaskReferencesTx(tx, refreshedActor, normalizedInput);
+    await assertActiveProjectTargetTx(tx, parsed.projectId);
     await tx.$executeRaw`SET CONSTRAINTS ALL DEFERRED`;
 
     const taskId = randomUUID();
@@ -209,6 +212,7 @@ export async function createTaskDraft(
         status: "DRAFT",
         currentPlanVersionId: planVersionId,
         relatedTaskId: parsed.relatedTaskId,
+        projectId: parsed.projectId,
         createdByAccountId: refreshedActor.accountId,
       },
     });
@@ -249,6 +253,7 @@ export async function createTaskDraft(
         createdByAccountId: refreshedActor.accountId,
       })),
     });
+    await syncTaskMembersToProjectTx(tx, { projectId: parsed.projectId, taskId, members: normalizedInput.members, actor: refreshedActor });
     if (parsed.tagIds.length > 0) {
       await tx.taskTag.createMany({
         data: parsed.tagIds.map((tagId) => ({ taskId, tagId })),
@@ -268,6 +273,7 @@ export async function createTaskDraft(
         currentPlanVersionId: planVersionId,
         plannedStartAt: parsed.plannedStartAt,
         relatedTaskId: parsed.relatedTaskId,
+        projectId: parsed.projectId,
         milestoneCount: parsed.milestones.length,
         terminationName: parsed.termination.name,
         memberCount: normalizedInput.members.length,
@@ -275,6 +281,7 @@ export async function createTaskDraft(
       }),
       reason: "创建 Task 草稿",
     });
+    if (parsed.projectId) await recordTaskProjectChangeTx(tx, refreshedActor, { id: taskId, title: parsed.title, status: "DRAFT", members: normalizedInput.members.map((member) => ({ ...member, removedAt: null })), beforeProjectId: null, afterProjectId: parsed.projectId, lockVersion: 0 });
 
     const task = await loadTaskForAuthorizationTx(tx, taskId);
     await notifyTaskMembersTx(tx, {

@@ -317,6 +317,7 @@ export async function searchTaskOptions({
             },
           }
         : {},
+      parsed.projectCandidates ? projectEstablishmentTaskCandidateWhere(actor) : {},
     ],
   };
   if (query) {
@@ -370,7 +371,7 @@ export async function searchTaskOptions({
     });
   }
   const where = baseWhere;
-  const filter = cursorFilter({ query, statuses, tagIds, mine: parsed.mine });
+  const filter = cursorFilter({ query, statuses, tagIds, mine: parsed.mine, projectCandidates: parsed.projectCandidates });
   const cursorId = await validateOptionCursor({
     cursor: parsed.cursor,
     kind: "tasks",
@@ -435,7 +436,7 @@ export async function resolveTaskOptionsByIds({
   const parsed = resolveTaskOptionsByIdsInputSchema.parse(input);
   if (parsed.ids.length === 0) return [];
   const rows = await prisma.task.findMany({
-    where: { AND: [{ id: { in: parsed.ids } }, taskReadableWhere(actor)] },
+    where: { AND: [{ id: { in: parsed.ids } }, taskReadableWhere(actor), parsed.projectCandidates ? projectEstablishmentTaskCandidateWhere(actor) : {}] },
     select: taskOptionSelect,
   });
   const byId = new Map(rows.map((row) => [row.id, row]));
@@ -443,6 +444,13 @@ export async function resolveTaskOptionsByIds({
     const row = byId.get(id);
     return row ? [taskOption(row)] : [];
   });
+}
+
+function projectEstablishmentTaskCandidateWhere(actor: ProjectManagementActor): Prisma.TaskWhereInput {
+  return {
+    projectId: null,
+    ...(isSystemAdministrator(actor) ? {} : { members: { some: { personId: actor.personId, role: { in: ["OWNER", "PARTICIPANT"] }, removedAt: null } } }),
+  };
 }
 
 export async function listTagOptions({

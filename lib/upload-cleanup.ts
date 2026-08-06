@@ -1,6 +1,6 @@
 import { readdir, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
-import { removeUploadByPublicPath } from "@/lib/file-upload";
+import { removeUploadByPublicPath, removeUploadFileByPublicPath } from "@/lib/file-upload";
 import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 import { uploadStorageRoot } from "@/lib/upload-paths";
@@ -88,6 +88,8 @@ export async function drainUploadCleanupTasks(limit = 50): Promise<{
       id: true,
       publicPath: true,
       cleanupAttempts: true,
+      cleanupRequestedAt: true,
+      writeGeneration: true,
     },
     orderBy: [{ cleanupNextRunAt: "asc" }, { createdAt: "asc" }],
     take: limit,
@@ -97,8 +99,49 @@ export async function drainUploadCleanupTasks(limit = 50): Promise<{
 
   for (const asset of assets) {
     try {
-      await removeUploadByPublicPath(asset.publicPath);
-      cleaned += 1;
+      const removed = await prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT "id" FROM "FileAsset" WHERE "id" = ${asset.id} FOR UPDATE`;
+        const current = await tx.fileAsset.findUnique({
+          where: { id: asset.id },
+          select: {
+            cleanupRequestedAt: true,
+            cleanupNextRunAt: true,
+            writeGeneration: true,
+            kind: true,
+            projectId: true,
+            project: { select: { deletedAt: true } },
+          },
+        });
+        if (
+          !current?.cleanupRequestedAt ||
+          !asset.cleanupRequestedAt ||
+          current.cleanupRequestedAt.getTime() !== asset.cleanupRequestedAt.getTime() ||
+          current.writeGeneration !== asset.writeGeneration ||
+          (current.cleanupNextRunAt && current.cleanupNextRunAt > new Date())
+        ) {
+          return false;
+        }
+        if (
+          current.kind === "PROJECT_AVATAR" &&
+          current.projectId &&
+          current.project?.deletedAt === null
+        ) {
+          await tx.fileAsset.update({
+            where: { id: asset.id },
+            data: {
+              cleanupRequestedAt: null,
+              cleanupNextRunAt: null,
+              cleanupAttempts: 0,
+              cleanupLastError: "",
+            },
+          });
+          return false;
+        }
+        await removeUploadFileByPublicPath(asset.publicPath);
+        await tx.fileAsset.delete({ where: { id: asset.id } });
+        return true;
+      });
+      if (removed) cleaned += 1;
     } catch (error) {
       failed += 1;
       const attempts = asset.cleanupAttempts + 1;

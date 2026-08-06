@@ -23,12 +23,18 @@ export type ProjectManagementNotificationTaskContext = {
   currentPlanVersionId?: string;
 };
 
+export type ProjectManagementNotificationProjectContext = {
+  id: string;
+  name: string;
+};
+
 export async function createProjectManagementEventNotificationsTx(
   tx: Prisma.TransactionClient,
   input: {
     actor?: ProjectManagementActor | null;
     actorName?: string;
     task?: ProjectManagementNotificationTaskContext | null;
+    project?: ProjectManagementNotificationProjectContext | null;
     kind: ProjectManagementNotificationPayload["kind"];
     category: ProjectManagementNotificationCategory;
     eventKey: string;
@@ -74,7 +80,8 @@ export async function createProjectManagementEventNotificationsTx(
     payloadVersion: PROJECT_MANAGEMENT_NOTIFICATION_PAYLOAD_VERSION,
     purpose:
       input.kind === "milestone_review_submitted" ||
-      input.kind === "revision_pending_review"
+      input.kind === "revision_pending_review" ||
+      input.kind === "project_establishment_submitted"
         ? "approval_request"
         : "notification",
     category: input.category,
@@ -83,6 +90,8 @@ export async function createProjectManagementEventNotificationsTx(
     actorName,
     taskId: input.task?.id ?? null,
     taskTitle: input.task?.title ?? null,
+    projectId: input.project?.id ?? null,
+    projectName: input.project?.name ?? null,
     entityType: input.entityType,
     entityId: input.entityId,
     linkPath: input.linkPath ?? "/progress",
@@ -113,6 +122,7 @@ export async function createProjectManagementEventNotificationsTx(
       entityType: input.entityType,
       entityId: input.entityId,
       taskId: input.task?.id ?? null,
+      projectId: input.project?.id ?? null,
       linkPath: input.linkPath ?? "/progress",
       payload: jsonValue(inAppPayload),
     });

@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { X } from "lucide-react";
 import {
   resolveTaskOptionsByIds,
   searchTaskOptions,
@@ -28,6 +29,7 @@ export type TaskPickerFilters = {
   statuses?: TaskPickerOption["status"][];
   tagIds?: string[];
   mine?: boolean;
+  projectCandidates?: boolean;
 };
 
 type CommonProps = TaskPickerFilters & {
@@ -87,6 +89,7 @@ export function TaskMultiSelect({
   onValueChange,
   clearable = true,
   maxSelected = 50,
+  showSelectedList = false,
   ariaLabel = "选择 Task",
   ...props
 }: CommonProps & {
@@ -94,31 +97,45 @@ export function TaskMultiSelect({
   onValueChange: (value: string[]) => void;
   clearable?: boolean;
   maxSelected?: number;
+  showSelectedList?: boolean;
 }) {
   const picker = useTaskPicker(
     props,
     props.initialOptions ?? EMPTY_TASK_OPTIONS,
   );
-  return (
+  return <div className="space-y-3">
     <AsyncMultiCombobox
-      {...props}
-      {...picker}
-      ariaLabel={ariaLabel}
-      value={value}
-      onValueChange={onValueChange}
-      clearable={clearable}
-      maxSelected={maxSelected}
-      getOptionLabel={(option) => option.title}
-      getOptionDescription={getTaskOptionDescription}
-      renderOption={(option) => <TaskOptionContent option={option} />}
-    />
-  );
+        {...props}
+        {...picker}
+        ariaLabel={ariaLabel}
+        value={value}
+        onValueChange={onValueChange}
+        clearable={clearable}
+        maxSelected={maxSelected}
+        getOptionLabel={(option) => option.title}
+        getOptionDescription={getTaskOptionDescription}
+        renderOption={(option) => <TaskOptionContent option={option} />}
+      />
+    {showSelectedList && value.length > 0 && <div className="space-y-2">
+      <p className="text-sm font-medium">已选择 {value.length} 个 Task</p>
+      <ul className="divide-y rounded-lg border" aria-label="已选择的 Task">
+        {value.map((id) => {
+          const option = picker.optionById(id);
+          return <li key={id} className="flex min-w-0 items-center gap-3 p-3">
+            <div className="min-w-0 flex-1">{option ? <TaskOptionContent option={option} /> : <span className="text-sm text-muted-foreground">正在加载已选择的 Task…</span>}</div>
+            <button type="button" className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label={`移除${option?.title ?? "已选择的 Task"}`} onClick={() => onValueChange(value.filter((taskId) => taskId !== id))}><X className="size-4" aria-hidden="true" /></button>
+          </li>;
+        })}
+      </ul>
+    </div>}
+  </div>;
 }
 
 function useTaskPicker(filters: TaskPickerFilters, initialOptions: TaskPickerOption[]) {
+  const [, setOptionRevision] = useState(0);
   const statusesKey = [...(filters.statuses ?? [])].sort().join(",");
   const tagIdsKey = [...(filters.tagIds ?? [])].sort().join(",");
-  const scopeKey = `${statusesKey}|${tagIdsKey}|${filters.mine ? "mine" : "all"}`;
+  const scopeKey = `${statusesKey}|${tagIdsKey}|${filters.mine ? "mine" : "all"}|${filters.projectCandidates ? "project-candidates" : "all-projects"}`;
   const decorate = useCallback(
     (options: TaskOptionPage["items"]): TaskPickerOption[] =>
       options.map((option) => {
@@ -156,6 +173,7 @@ function useTaskPicker(filters: TaskPickerFilters, initialOptions: TaskPickerOpt
           : undefined,
         tagIds: tagIdsKey ? tagIdsKey.split(",") : undefined,
         mine: filters.mine,
+        projectCandidates: filters.projectCandidates,
         cursor,
         limit: 50,
       });
@@ -164,17 +182,19 @@ function useTaskPicker(filters: TaskPickerFilters, initialOptions: TaskPickerOpt
       for (const option of items) {
         optionCache.current.set(option.id, option);
       }
+      setOptionRevision((current) => current + 1);
       return { ...result.data, items };
     },
-    [decorate, filters.mine, tagIdsKey, statusesKey],
+    [decorate, filters.mine, filters.projectCandidates, tagIdsKey, statusesKey],
   );
   const resolveOptions = useCallback(async (ids: string[]) => {
-    const result = await resolveTaskOptionsByIds({ ids });
+    const result = await resolveTaskOptionsByIds({ ids, projectCandidates: filters.projectCandidates });
     if (!result.ok) throw new Error(result.error.message);
     const items = decorate(result.data);
     for (const option of items) optionCache.current.set(option.id, option);
+    setOptionRevision((current) => current + 1);
     return items;
-  }, [decorate]);
+  }, [decorate, filters.projectCandidates]);
   const optionById = useCallback(
     (id: string) => optionCache.current.get(id),
     [],

@@ -28,7 +28,6 @@ const LEGACY_TASK_SIGNATURE_COLUMNS = [
 
 test("收缩 migration 删除旧项目管理对象并保留共享数据模型", async () => {
   const oldTables = [
-    "Project",
     "ProjectCreationRequest",
     "ProjectStage",
     "TaskSubmission",
@@ -46,6 +45,10 @@ test("收缩 migration 删除旧项目管理对象并保留共享数据模型", 
     "ProcurementFeishuCard",
     "NotificationOutbox",
     "NotificationOutboxRecipient",
+    "Project",
+    "ProjectMember",
+    "ProjectEstablishmentRequest",
+    "ProjectEstablishmentRequestedTask",
   ];
 
   const tables = await prisma.$queryRaw<Array<{ table_name: string }>>`
@@ -79,6 +82,17 @@ test("收缩 migration 删除旧项目管理对象并保留共享数据模型", 
     WHERE table_schema = 'public' AND table_name LIKE 'Pm%'
   `;
   expect(Number(abandonedPmTables[0]?.count ?? 0)).toBe(0);
+
+  const projectColumns = await prisma.$queryRaw<Array<{ column_name: string }>>`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'Project'
+  `;
+  const projectColumnNames = new Set(projectColumns.map((row) => row.column_name));
+  expect(projectColumnNames).toContain("requesterAccountId");
+  expect(projectColumnNames).toContain("establishmentRound");
+  expect(projectColumnNames).not.toContain("ownerOpenId");
+  expect(projectColumnNames).not.toContain("stageId");
 
   const roleValues = await prisma.$queryRaw<Array<{ enumlabel: string }>>`
     SELECT enumlabel

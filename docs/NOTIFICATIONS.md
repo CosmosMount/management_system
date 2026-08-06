@@ -37,7 +37,7 @@
 
 - `createInAppNotificationTx()` 在业务事务内创建站内通知，`eventKey` 幂等。
 - `enqueueProjectManagementNotificationTx()` 和非事务版本只写 `NotificationOutbox`，channel 固定为 `project-management`。
-- `approval_request` 自动使用审批机器人；普通通知使用通知机器人。当前只允许 `milestone_review_submitted` 和 `revision_pending_review` 声明 `approval_request`，其他事件不得持久化为审批机器人通知。
+- `approval_request` 自动使用审批机器人；普通通知使用通知机器人。`milestone_review_submitted`、`revision_pending_review` 和 `project_establishment_submitted` 可以声明 `approval_request`，其他事件不得持久化为审批机器人通知。
 
 Task 生命周期服务和 Segment 服务会在同一业务事务中写站内通知和 `channel=project-management` outbox，事件包括：
 
@@ -53,6 +53,9 @@ Task 生命周期服务和 Segment 服务会在同一业务事务中写站内通
 | Planned Segment 到期待确认 | `segment_confirmation_due` | 普通通知 | Segment Person |
 | Task 结束确认 | `task_terminated` | 普通通知 | 有效 OWNER/PARTICIPANT |
 | 账号角色变更 | `account_security` | 强制普通通知 | 仅被操作账号 |
+| Project 提交/重提立项 | `project_establishment_submitted` | 审批请求 | 两类全局管理员 |
+| Project 立项结果 | `project_establishment_result` | 普通通知 | 申请人、提交人和 Project 成员 |
+| Project 结束/删除 | `project_completed` / `project_deleted` | 普通通知 | 申请人和 Project 成员 |
 
 Revision 创建和被驳回后的修改都会直接产生 `revision_pending_review`。事件键包含 `revisionId + reviewRound`；驳回结果键也包含对应 round，因此每轮送审和结果各自 exactly once，不会被上一轮幂等记录吞掉。Revision 不再产生独立 submit 通知或审计事件。
 

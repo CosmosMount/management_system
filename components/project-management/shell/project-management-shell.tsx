@@ -52,6 +52,14 @@ const navigationItems: NavigationItem[] = [
     match: (pathname) => pathname === routes.progress.root,
   },
   {
+    href: routes.progress.projects,
+    label: "Project",
+    icon: FolderKanban,
+    match: (pathname) =>
+      pathname === routes.progress.projects ||
+      pathname.startsWith(`${routes.progress.projects}/`),
+  },
+  {
     href: routes.progress.tasks,
     label: "Task",
     icon: LayoutList,

@@ -33,6 +33,7 @@ export type CreateInAppNotificationInput = {
   entityType: string;
   entityId: string;
   taskId?: string | null;
+  projectId?: string | null;
   linkPath?: string;
   payloadVersion?: number;
   payload?: Prisma.InputJsonValue;
@@ -53,6 +54,7 @@ export async function createInAppNotificationTx(
         entityType: input.entityType,
         entityId: input.entityId,
         taskId: input.taskId ?? null,
+        projectId: input.projectId ?? null,
         linkPath: input.linkPath ?? "",
         payloadVersion:
           input.payloadVersion ??

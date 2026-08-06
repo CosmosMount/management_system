@@ -66,6 +66,7 @@ export const notificationCategoryLabels: Record<
   ProjectManagementNotificationCategory,
   string
 > = {
+  PROJECT: "Project",
   TASK: "Task",
   MILESTONE: "Milestone",
   REVIEW: "验收",

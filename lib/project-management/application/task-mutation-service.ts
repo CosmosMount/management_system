@@ -23,6 +23,7 @@ import {
 } from "@/lib/project-management/application/errors";
 import {
   createProjectManagementEventNotificationsTx,
+  recipientsForPersonIdsTx,
 } from "@/lib/project-management/application/notification-utils";
 import { hashPlanSnapshot } from "@/lib/project-management/application/plan-snapshot";
 import { lockTaskSegmentAssociationsTx } from "@/lib/project-management/application/task-segment-association-lock";
@@ -44,6 +45,7 @@ import {
   type UpdateTaskMetadataInput,
 } from "@/lib/project-management/validations/task-mutations";
 import { refreshProjectManagementActorTx } from "@/lib/project-management/application/actor-refresh";
+import { acquireProjectCrossAggregateLockTx, assertTaskProjectChangeAllowedTx, syncTaskMembersToProjectTx } from "@/lib/project-management/application/project-service";
 
 type PrismaTx = Prisma.TransactionClient;
 
@@ -154,6 +156,8 @@ export async function updateTaskDraft(
       parsed.relatedTaskId,
       task.relatedTaskId,
     );
+    const targetProjectId = parsed.projectId === undefined ? task.projectId : parsed.projectId;
+    await assertTaskProjectChangeAllowedTx(tx, task.projectId, targetProjectId);
 
     const beforeTagIds = activeTagIds(task);
     await assertTagReferencesTx(tx, parsed.tagIds, beforeTagIds);
@@ -189,6 +193,7 @@ export async function updateTaskDraft(
         techGroup: parsed.techGroup,
         priority: parsed.priority,
         relatedTaskId: parsed.relatedTaskId,
+        projectId: parsed.projectId,
       },
     });
     await replaceTaskTagsTx(tx, task.id, beforeTagIds, parsed.tagIds);
@@ -200,6 +205,7 @@ export async function updateTaskDraft(
         requestedMembers: parsed.members,
       });
     }
+    await syncTaskMembersToProjectTx(tx, { projectId: targetProjectId, taskId: task.id, members: parsed.members ?? task.members, actor: refreshedActor });
 
     await tx.planVersionNode.deleteMany({
       where: { planVersionId: plan.id },
@@ -274,6 +280,7 @@ export async function updateTaskDraft(
       }),
       reason: "统一更新 Task 草稿",
     });
+    await auditTaskProjectChangeTx(tx, refreshedActor, task, updatedTask);
 
     return {
       ...serializeTaskMutation(updatedTask),
@@ -334,6 +341,8 @@ export async function updateActiveTask(
         parsed.metadata.relatedTaskId,
         task.relatedTaskId,
       );
+      const targetProjectId = parsed.metadata.projectId === undefined ? task.projectId : parsed.metadata.projectId;
+      await assertTaskProjectChangeAllowedTx(tx, task.projectId, targetProjectId);
     }
 
     const beforeTagIds = activeTagIds(task);
@@ -392,6 +401,9 @@ export async function updateActiveTask(
         requestedMembers: parsed.members,
       });
     }
+    if (metadataChanged || membersChanged) {
+      await syncTaskMembersToProjectTx(tx, { projectId: parsed.metadata?.projectId === undefined ? task.projectId : parsed.metadata.projectId, taskId: task.id, members: parsed.members ?? task.members, actor: refreshedActor });
+    }
 
     const updatedTask = metadataChanged || tagsChanged || membersChanged
       ? await incrementTaskLockTx(tx, task, parsed.expectedLockVersion)
@@ -415,6 +427,7 @@ export async function updateActiveTask(
         }),
         reason: "更新 Task 元数据",
       });
+      await auditTaskProjectChangeTx(tx, refreshedActor, task, updatedTask);
     }
     if (tagsChanged) {
       await createDomainAuditEventTx(tx, {
@@ -648,6 +661,8 @@ async function updateTaskMetadataForStatus(
       parsed.relatedTaskId,
       task.relatedTaskId,
     );
+    const targetProjectId = parsed.projectId === undefined ? task.projectId : parsed.projectId;
+    await assertTaskProjectChangeAllowedTx(tx, task.projectId, targetProjectId);
     if (requiredStatus === "DRAFT") {
       await assertTagReferencesTx(
         tx,
@@ -671,6 +686,7 @@ async function updateTaskMetadataForStatus(
         techGroup: parsed.techGroup,
         priority: parsed.priority,
         relatedTaskId: parsed.relatedTaskId,
+        projectId: parsed.projectId,
         lockVersion: { increment: 1 },
       },
     });
@@ -690,6 +706,7 @@ async function updateTaskMetadataForStatus(
       tagIds = sortedUnique(requestedTagIds);
     }
     const updatedTask = await loadTaskAfterMutationTx(tx, task.id);
+    await syncTaskMembersToProjectTx(tx, { projectId: targetProjectId, taskId: task.id, members: updatedTask.members, actor: refreshedActor });
     await createDomainAuditEventTx(tx, {
       actorAccountId: refreshedActor.accountId,
       actorPersonId: refreshedActor.personId,
@@ -712,6 +729,7 @@ async function updateTaskMetadataForStatus(
       }),
       reason: "更新 Task 元数据",
     });
+    await auditTaskProjectChangeTx(tx, refreshedActor, task, updatedTask);
 
     return {
       ...serializeTaskMutation(updatedTask),
@@ -751,6 +769,7 @@ async function replaceTaskMembersForStatus(
       currentMembers: task.members,
       requestedMembers: parsed.members,
     });
+    await syncTaskMembersToProjectTx(tx, { projectId: task.projectId, taskId: task.id, members: parsed.members, actor: refreshedActor });
     const updatedTask = await incrementTaskLockTx(
       tx,
       task,
@@ -805,6 +824,7 @@ async function loadLockedTaskTx(
   refreshedActor: ProjectManagementActor;
   task: TaskForMutation;
 }> {
+  await acquireProjectCrossAggregateLockTx(tx);
   const lockedTaskIds = await lockTaskSegmentAssociationsTx(tx, [taskId]);
   if (!lockedTaskIds.has(taskId)) throw notFoundError();
 
@@ -1696,15 +1716,64 @@ function metadataSnapshot(task: TaskForMutation) {
     techGroup: task.techGroup,
     priority: task.priority,
     relatedTaskId: task.relatedTaskId,
+    projectId: task.projectId,
     lockVersion: task.lockVersion,
   };
+}
+
+async function auditTaskProjectChangeTx(
+  tx: PrismaTx,
+  actor: ProjectManagementActor,
+  beforeTask: TaskForMutation,
+  afterTask: TaskForMutation,
+) {
+  if (beforeTask.projectId === afterTask.projectId) return;
+  await createDomainAuditEventTx(tx, {
+    actorAccountId: actor.accountId,
+    actorPersonId: actor.personId,
+    action: afterTask.projectId
+      ? beforeTask.projectId
+        ? "pm.task.project.move"
+        : "pm.task.project.assign"
+      : "pm.task.project.remove",
+    entityType: "Task",
+    entityId: afterTask.id,
+    taskId: afterTask.id,
+    projectId: afterTask.projectId ?? beforeTask.projectId,
+    before: jsonValue({ projectId: beforeTask.projectId }),
+    after: jsonValue({ projectId: afterTask.projectId }),
+    reason: "更新 Task 所属 Project",
+  });
+  const projectIds = [beforeTask.projectId, afterTask.projectId].filter((id): id is string => Boolean(id));
+  const projects = projectIds.length
+    ? await tx.project.findMany({ where: { id: { in: projectIds } }, select: { id: true, name: true, members: { where: { removedAt: null, role: "OWNER" }, select: { personId: true } } } })
+    : [];
+  const recipientPersonIds = [...new Set([...afterTask.members.filter((member) => member.role === "OWNER" || member.role === "PARTICIPANT").map((member) => member.personId), ...projects.flatMap((project) => project.members.map((member) => member.personId))])];
+  const recipients = await recipientsForPersonIdsTx(tx, recipientPersonIds);
+  const primaryProject = projects.find((project) => project.id === afterTask.projectId) ?? projects[0];
+  await createProjectManagementEventNotificationsTx(tx, {
+    actor,
+    task: { id: afterTask.id, title: afterTask.title, status: afterTask.status },
+    project: primaryProject ? { id: primaryProject.id, name: primaryProject.name } : null,
+    kind: "project_task_changed",
+    category: "PROJECT",
+    eventKey: `pm:task:${afterTask.id}:project:${afterTask.lockVersion}`,
+    title: "Task 所属 Project 已变更",
+    summary: afterTask.projectId ? `Task「${afterTask.title}」已${beforeTask.projectId ? "移动" : "加入"} Project「${primaryProject?.name ?? "Project"}」` : `Task「${afterTask.title}」已移出 Project`,
+    entityType: "Task",
+    entityId: afterTask.id,
+    linkPath: `/progress/tasks/${afterTask.id}`,
+    mandatory: false,
+    recipients,
+    context: { beforeProjectId: beforeTask.projectId, afterProjectId: afterTask.projectId },
+  });
 }
 
 function taskMetadataMatches(
   task: TaskForMutation,
   metadata: Pick<
     UpdateTaskMetadataInput,
-    "title" | "description" | "team" | "techGroup" | "priority" | "relatedTaskId"
+    "title" | "description" | "team" | "techGroup" | "priority" | "relatedTaskId" | "projectId"
   >,
 ) {
   return (
@@ -1713,7 +1782,8 @@ function taskMetadataMatches(
     task.team === metadata.team &&
     task.techGroup === metadata.techGroup &&
     task.priority === metadata.priority &&
-    task.relatedTaskId === metadata.relatedTaskId
+    task.relatedTaskId === metadata.relatedTaskId &&
+    (metadata.projectId === undefined || task.projectId === metadata.projectId)
   );
 }
 

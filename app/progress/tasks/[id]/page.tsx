@@ -11,6 +11,7 @@ import {
 } from "@/lib/project-management/queries/option-queries";
 import { getTaskLifecycleViews } from "@/lib/project-management/queries/task-lifecycle-queries";
 import { getTaskWorkspace } from "@/lib/project-management/queries/task-queries";
+import { listActiveProjectOptions } from "@/lib/project-management/queries/project-queries";
 import { getProgressActorOrRedirect } from "../../_auth";
 
 export default async function ProgressTaskDetailPage({
@@ -32,6 +33,7 @@ export default async function ProgressTaskDetailPage({
     taskPage,
     currentRelatedTaskOptions,
     tagPage,
+    projectOptions,
   ] =
     await Promise.all([
       getTaskLifecycleViews({
@@ -59,6 +61,7 @@ export default async function ProgressTaskDetailPage({
         input: { ids: workspace.task.relatedTaskId ? [workspace.task.relatedTaskId] : [] },
       }),
       listTagOptions({ actor, input: { limit: 50 } }),
+      listActiveProjectOptions(workspace.task.projectId),
     ]);
 
   return (
@@ -74,6 +77,7 @@ export default async function ProgressTaskDetailPage({
           people={mergeOptions(currentPeople, peoplePage.items)}
           taskOptions={mergeOptions(currentRelatedTaskOptions, taskPage.items)}
           tagOptions={tagPage.items}
+          projectOptions={projectOptions}
         />
       </div>
     </>

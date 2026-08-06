@@ -21,6 +21,7 @@ import {
   type TaskWorkspace,
 } from "@/lib/project-management/queries/task-queries";
 import { routes } from "@/lib/routes";
+import { listActiveProjectOptions } from "@/lib/project-management/queries/project-queries";
 import { getProgressActorOrRedirect } from "../../../_auth";
 
 export default async function ProgressTaskEditPage({
@@ -53,6 +54,7 @@ export default async function ProgressTaskEditPage({
     taskPage,
     currentRelatedTasks,
     tagPage,
+    projectOptions,
   ] = await Promise.all([
     getActorPersonOption(actor),
     workspace.permissions.canManageMembers
@@ -69,6 +71,7 @@ export default async function ProgressTaskEditPage({
     searchTaskOptions({ actor, input: { limit: 50 } }),
     resolveTaskOptionsByIds({ actor, input: { ids: relatedTaskIds } }),
     listTagOptions({ actor, input: { limit: 50 } }),
+    listActiveProjectOptions(workspace.task.projectId),
   ]);
   const people = mergeById(
     currentPeople,
@@ -99,6 +102,7 @@ export default async function ProgressTaskEditPage({
         initialPeople={people}
         initialTasks={tasks}
         initialTags={tags}
+        initialProjects={projectOptions}
         actorPersonId={actor.personId}
         mode={{
           kind: "EDIT_DRAFT",
@@ -158,6 +162,7 @@ function editSeed(workspace: TaskWorkspace): TaskComposerSeed {
     priority: workspace.task.priority,
     tagIds: workspace.tags.map((tag) => tag.id),
     relatedTaskId: workspace.task.relatedTaskId,
+    projectId: workspace.task.projectId,
     members: workspace.members.flatMap((member) =>
       member.role === "OWNER" || member.role === "PARTICIPANT"
         ? [{ personId: member.personId, role: member.role }]

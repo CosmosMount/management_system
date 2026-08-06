@@ -60,6 +60,8 @@ const FEEDBACK_IMAGE_TYPES: ReadonlySet<string> = new Set(
 );
 
 export const MAX_SIGNATURE_SIZE = 2 * 1024 * 1024;
+export const MAX_PROJECT_AVATAR_SIZE = 2 * 1024 * 1024;
+const PROJECT_AVATAR_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"]);
 
 export type SavedFeedbackImage = {
   path: string;
@@ -676,6 +678,43 @@ export async function saveFeedbackImage(
   };
 }
 
+export async function saveProjectAvatarDraft(
+  ownerOpenId: string,
+  file: File,
+): Promise<string> {
+  if (!PROJECT_AVATAR_TYPES.has(file.type)) {
+    throw new Error("Project 头像仅支持 PNG/JPG/WebP");
+  }
+  if (file.size > MAX_PROJECT_AVATAR_SIZE) {
+    throw new Error("Project 头像不能超过 2MB");
+  }
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const detectedMimeType = assertDetectedMimeAllowed(buffer, PROJECT_AVATAR_TYPES, file.type);
+  const extension = extensionForMime(detectedMimeType);
+  if (!extension || ![".png", ".jpg", ".webp"].includes(extension)) {
+    throw new Error("Project 头像仅支持 PNG/JPG/WebP");
+  }
+  const filename = `${randomUUID()}${extension}`;
+  const storagePath = `projects/drafts/${filename}`;
+  const publicPath = `/uploads/${storagePath}`;
+  await writeAssetFile({
+    storagePath,
+    publicPath,
+    buffer,
+    mimeType: detectedMimeType,
+    options: { kind: "PROJECT_AVATAR", ownerOpenId },
+  });
+  await prisma.fileAsset.update({
+    where: { publicPath },
+    data: {
+      cleanupRequestedAt: new Date(),
+      cleanupNextRunAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      cleanupLastError: "未绑定的 Project 头像草稿将在 24 小时后清理",
+    },
+  });
+  return publicPath;
+}
+
 export async function removeFeedbackUpload(publicPath: string): Promise<void> {
   if (!publicPath.startsWith("/uploads/feedback/")) return;
   const storagePath = publicPathToStoragePath(publicPath);
@@ -692,10 +731,14 @@ export async function removeOrderUploads(orderId: string): Promise<void> {
 }
 
 export async function removeUploadByPublicPath(publicPath: string): Promise<void> {
+  await removeUploadFileByPublicPath(publicPath);
+  await prisma.fileAsset.deleteMany({ where: { publicPath } });
+}
+
+export async function removeUploadFileByPublicPath(publicPath: string): Promise<void> {
   const storagePath = publicPathToStoragePath(publicPath);
   if (!storagePath) return;
   await rm(storagePathToAbsolute(storagePath), { force: true });
-  await prisma.fileAsset.deleteMany({ where: { publicPath } });
 }
 
 export async function fileAssetExists(publicPath: string): Promise<boolean> {

@@ -37,6 +37,7 @@ enum FileAssetKind {
   FEEDBACK_ATTACHMENT
   USER_SIGNATURE
   TEMP_UPLOAD
+  PROJECT_AVATAR
 }
 
 enum NotificationOutboxStatus {
@@ -90,6 +91,25 @@ enum TaskMemberRole {
   MEMBER
   REVIEWER
   VIEWER
+}
+
+enum ProjectStatus {
+  DRAFT
+  PENDING_APPROVAL
+  ACTIVE
+  COMPLETED
+}
+
+enum ProjectMemberRole {
+  OWNER
+  PARTICIPANT
+}
+
+enum ProjectEstablishmentRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
 }
 
 enum PlanVersionStatus {
@@ -164,6 +184,7 @@ enum WorkSegmentChangeAction {
 }
 
 enum ProjectManagementNotificationCategory {
+  PROJECT
   TASK
   MILESTONE
   REVIEW
@@ -185,38 +206,45 @@ enum AuditSource {
 }
 
 model Account {
-  id                        String                   @id @default(uuid())
-  lastLoginAt               DateTime?                @db.Timestamptz(6)
+  id                        String                        @id @default(uuid())
+  lastLoginAt               DateTime?                     @db.Timestamptz(6)
   identities                AccountIdentity[]
   person                    Person?
-  createdTags               Tag[]                    @relation("TagCreatedBy")
-  createdTasks              Task[]                   @relation("TaskCreatedBy")
-  createdTaskMembers        TaskMember[]             @relation("TaskMemberCreatedBy")
-  createdPlanVersions       TaskPlanVersion[]        @relation("PlanVersionCreatedBy")
-  createdTaskNodes          TaskNode[]               @relation("TaskNodeCreatedBy")
-  reviewedRevisions         RevisionNode[]           @relation("RevisionReviewedBy")
-  submittedMilestoneReviews MilestoneReview[]        @relation("MilestoneReviewSubmittedBy")
-  reviewedMilestones        MilestoneReview[]        @relation("MilestoneReviewReviewer")
-  revokedMilestoneReviews   MilestoneReview[]        @relation("MilestoneReviewRevokedBy")
-  confirmedTerminations     TerminationNode[]        @relation("TerminationConfirmedBy")
-  createdWorkSegments       WorkSegment[]            @relation("WorkSegmentCreatedBy")
-  updatedWorkSegments       WorkSegment[]            @relation("WorkSegmentUpdatedBy")
-  createdWorkSegmentSources WorkSegmentSource[]      @relation("WorkSegmentSourceCreatedBy")
-  workSegmentChanges        WorkSegmentChange[]      @relation("WorkSegmentChangeActor")
-  systemRoles               SystemRoleAssignment[]   @relation("SystemRoleAccount")
-  grantedSystemRoles        SystemRoleAssignment[]   @relation("SystemRoleGrantedBy")
-  revokedSystemRoles        SystemRoleAssignment[]   @relation("SystemRoleRevokedBy")
-  reimbursementRoles        UserRole[]               @relation("UserRoleAccount")
-  grantedReimbursementRoles UserRole[]               @relation("UserRoleGrantedBy")
-  revokedReimbursementRoles UserRole[]               @relation("UserRoleRevokedBy")
+  createdTags               Tag[]                         @relation("TagCreatedBy")
+  createdTasks              Task[]                        @relation("TaskCreatedBy")
+  createdTaskMembers        TaskMember[]                  @relation("TaskMemberCreatedBy")
+  createdPlanVersions       TaskPlanVersion[]             @relation("PlanVersionCreatedBy")
+  createdTaskNodes          TaskNode[]                    @relation("TaskNodeCreatedBy")
+  reviewedRevisions         RevisionNode[]                @relation("RevisionReviewedBy")
+  submittedMilestoneReviews MilestoneReview[]             @relation("MilestoneReviewSubmittedBy")
+  reviewedMilestones        MilestoneReview[]             @relation("MilestoneReviewReviewer")
+  revokedMilestoneReviews   MilestoneReview[]             @relation("MilestoneReviewRevokedBy")
+  confirmedTerminations     TerminationNode[]             @relation("TerminationConfirmedBy")
+  createdWorkSegments       WorkSegment[]                 @relation("WorkSegmentCreatedBy")
+  updatedWorkSegments       WorkSegment[]                 @relation("WorkSegmentUpdatedBy")
+  createdWorkSegmentSources WorkSegmentSource[]           @relation("WorkSegmentSourceCreatedBy")
+  workSegmentChanges        WorkSegmentChange[]           @relation("WorkSegmentChangeActor")
+  systemRoles               SystemRoleAssignment[]        @relation("SystemRoleAccount")
+  grantedSystemRoles        SystemRoleAssignment[]        @relation("SystemRoleGrantedBy")
+  revokedSystemRoles        SystemRoleAssignment[]        @relation("SystemRoleRevokedBy")
+  reimbursementRoles        UserRole[]                    @relation("UserRoleAccount")
+  grantedReimbursementRoles UserRole[]                    @relation("UserRoleGrantedBy")
+  revokedReimbursementRoles UserRole[]                    @relation("UserRoleRevokedBy")
   reimbursementUser         User?
-  teamApprovedOrders        PurchaseOrder[]          @relation("PurchaseOrderTeamApprover")
-  techGroupApprovedOrders   PurchaseOrder[]          @relation("PurchaseOrderTechGroupApprover")
+  teamApprovedOrders        PurchaseOrder[]               @relation("PurchaseOrderTeamApprover")
+  techGroupApprovedOrders   PurchaseOrder[]               @relation("PurchaseOrderTechGroupApprover")
   notificationPreferences   NotificationPreference[]
   inAppNotifications        InAppNotification[]
-  auditEvents               DomainAuditEvent[]       @relation("AuditActorAccount")
-  createdAt                 DateTime                 @default(now()) @db.Timestamptz(6)
-  updatedAt                 DateTime                 @updatedAt @db.Timestamptz(6)
+  auditEvents               DomainAuditEvent[]            @relation("AuditActorAccount")
+  requestedProjects         Project[]                     @relation("ProjectRequester")
+  reviewedProjects          Project[]                     @relation("ProjectReviewer")
+  deletedProjects           Project[]                     @relation("ProjectDeletedBy")
+  createdProjectMembers     ProjectMember[]               @relation("ProjectMemberCreatedBy")
+  removedProjectMembers     ProjectMember[]               @relation("ProjectMemberRemovedBy")
+  submittedProjectRequests  ProjectEstablishmentRequest[] @relation("ProjectRequestSubmittedBy")
+  reviewedProjectRequests   ProjectEstablishmentRequest[] @relation("ProjectRequestReviewer")
+  createdAt                 DateTime                      @default(now()) @db.Timestamptz(6)
+  updatedAt                 DateTime                      @updatedAt @db.Timestamptz(6)
 }
 
 model AccountIdentity {
@@ -239,17 +267,18 @@ model AccountIdentity {
 }
 
 model Person {
-  id           String             @id @default(uuid())
-  accountId    String?            @unique
-  account      Account?           @relation(fields: [accountId], references: [id], onDelete: SetNull)
-  displayName  String
-  avatar       String?
-  status       PersonStatus       @default(ACTIVE)
-  taskMembers  TaskMember[]
-  workSegments WorkSegment[]
-  auditEvents  DomainAuditEvent[] @relation("AuditActorPerson")
-  createdAt    DateTime           @default(now()) @db.Timestamptz(6)
-  updatedAt    DateTime           @updatedAt @db.Timestamptz(6)
+  id             String             @id @default(uuid())
+  accountId      String?            @unique
+  account        Account?           @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  displayName    String
+  avatar         String?
+  status         PersonStatus       @default(ACTIVE)
+  taskMembers    TaskMember[]
+  workSegments   WorkSegment[]
+  auditEvents    DomainAuditEvent[] @relation("AuditActorPerson")
+  projectMembers ProjectMember[]
+  createdAt      DateTime           @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime           @updatedAt @db.Timestamptz(6)
 
   @@index([displayName])
   @@index([status])
@@ -440,6 +469,8 @@ model FileAsset {
   feedbackId           String?
   signatureOwnerOpenId String?
   ownerOpenId          String?
+  projectId            String?          @unique
+  project              Project?         @relation(fields: [projectId], references: [id], onDelete: SetNull)
   writeGeneration      String?
   cleanupRequestedAt   DateTime?
   cleanupAttempts      Int              @default(0)
@@ -452,6 +483,7 @@ model FileAsset {
   @@index([feedbackId])
   @@index([signatureOwnerOpenId])
   @@index([ownerOpenId])
+  @@index([projectId])
   @@index([cleanupRequestedAt, cleanupNextRunAt])
 }
 
@@ -474,42 +506,136 @@ model Tag {
 }
 
 model Task {
-  id                    String              @id @default(uuid())
+  id                    String                              @id @default(uuid())
   title                 String
-  description           String              @default("")
-  team                  String              @default("")
-  techGroup             String              @default("")
-  status                TaskStatus          @default(DRAFT)
-  priority              TaskPriority        @default(MEDIUM)
-  currentPlanVersionId  String              @unique
-  currentPlanVersion    TaskPlanVersion     @relation("CurrentTaskPlanVersion", fields: [currentPlanVersionId], references: [id], onDelete: Restrict)
-  activeMilestoneNodeId String?             @unique
-  activeMilestoneNode   TaskNode?           @relation("ActiveMilestoneNode", fields: [activeMilestoneNodeId], references: [id], onDelete: SetNull)
-  lockVersion           Int                 @default(0)
-  startedAt             DateTime?           @db.Timestamptz(6)
-  endedAt               DateTime?           @db.Timestamptz(6)
-  archivedAt            DateTime?           @db.Timestamptz(6)
-  deletedAt             DateTime?           @db.Timestamptz(6)
+  description           String                              @default("")
+  team                  String                              @default("")
+  techGroup             String                              @default("")
+  status                TaskStatus                          @default(DRAFT)
+  priority              TaskPriority                        @default(MEDIUM)
+  currentPlanVersionId  String                              @unique
+  currentPlanVersion    TaskPlanVersion                     @relation("CurrentTaskPlanVersion", fields: [currentPlanVersionId], references: [id], onDelete: Restrict)
+  activeMilestoneNodeId String?                             @unique
+  activeMilestoneNode   TaskNode?                           @relation("ActiveMilestoneNode", fields: [activeMilestoneNodeId], references: [id], onDelete: SetNull)
+  lockVersion           Int                                 @default(0)
+  startedAt             DateTime?                           @db.Timestamptz(6)
+  endedAt               DateTime?                           @db.Timestamptz(6)
+  archivedAt            DateTime?                           @db.Timestamptz(6)
+  deletedAt             DateTime?                           @db.Timestamptz(6)
   relatedTaskId         String?
-  relatedTask           Task?               @relation("RelatedTasks", fields: [relatedTaskId], references: [id], onDelete: SetNull)
-  relatedTasks          Task[]              @relation("RelatedTasks")
+  relatedTask           Task?                               @relation("RelatedTasks", fields: [relatedTaskId], references: [id], onDelete: SetNull)
+  relatedTasks          Task[]                              @relation("RelatedTasks")
+  projectId             String?
+  project               Project?                            @relation(fields: [projectId], references: [id], onDelete: SetNull)
   createdByAccountId    String
-  createdBy             Account             @relation("TaskCreatedBy", fields: [createdByAccountId], references: [id], onDelete: Restrict)
+  createdBy             Account                             @relation("TaskCreatedBy", fields: [createdByAccountId], references: [id], onDelete: Restrict)
   members               TaskMember[]
   tags                  TaskTag[]
-  planVersions          TaskPlanVersion[]   @relation("TaskPlanVersions")
+  planVersions          TaskPlanVersion[]                   @relation("TaskPlanVersions")
   nodes                 TaskNode[]
   workSegments          WorkSegment[]
   inAppNotifications    InAppNotification[]
   auditEvents           DomainAuditEvent[]
-  createdAt             DateTime            @default(now()) @db.Timestamptz(6)
-  updatedAt             DateTime            @updatedAt @db.Timestamptz(6)
+  establishmentRequests ProjectEstablishmentRequestedTask[]
+  createdAt             DateTime                            @default(now()) @db.Timestamptz(6)
+  updatedAt             DateTime                            @updatedAt @db.Timestamptz(6)
 
   @@index([status, team, techGroup])
   @@index([createdByAccountId])
   @@index([deletedAt])
   @@index([relatedTaskId])
+  @@index([projectId, status])
   @@index([updatedAt, id])
+}
+
+model Project {
+  id                    String                        @id @default(uuid())
+  name                  String                        @db.VarChar(200)
+  description           String                        @db.VarChar(8000)
+  avatarPath            String?
+  status                ProjectStatus                 @default(PENDING_APPROVAL)
+  requesterAccountId    String
+  requester             Account                       @relation("ProjectRequester", fields: [requesterAccountId], references: [id], onDelete: Restrict)
+  establishmentRound    Int                           @default(1)
+  lockVersion           Int                           @default(0)
+  submittedAt           DateTime                      @default(now()) @db.Timestamptz(6)
+  startedAt             DateTime?                     @db.Timestamptz(6)
+  completedAt           DateTime?                     @db.Timestamptz(6)
+  reviewedAt            DateTime?                     @db.Timestamptz(6)
+  reviewedByAccountId   String?
+  reviewedBy            Account?                      @relation("ProjectReviewer", fields: [reviewedByAccountId], references: [id], onDelete: SetNull)
+  reviewComment         String                        @default("") @db.VarChar(2000)
+  deletedAt             DateTime?                     @db.Timestamptz(6)
+  deletedByAccountId    String?
+  deletedBy             Account?                      @relation("ProjectDeletedBy", fields: [deletedByAccountId], references: [id], onDelete: SetNull)
+  members               ProjectMember[]
+  establishmentRequests ProjectEstablishmentRequest[]
+  tasks                 Task[]
+  avatarAssets          FileAsset[]
+  inAppNotifications    InAppNotification[]
+  auditEvents           DomainAuditEvent[]
+  createdAt             DateTime                      @default(now()) @db.Timestamptz(6)
+  updatedAt             DateTime                      @updatedAt @db.Timestamptz(6)
+
+  @@index([status, updatedAt, id])
+  @@index([requesterAccountId])
+  @@index([deletedAt])
+}
+
+model ProjectMember {
+  id                 String            @id @default(uuid())
+  projectId          String
+  project            Project           @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  personId           String
+  person             Person            @relation(fields: [personId], references: [id], onDelete: Restrict)
+  role               ProjectMemberRole
+  createdByAccountId String
+  createdBy          Account           @relation("ProjectMemberCreatedBy", fields: [createdByAccountId], references: [id], onDelete: Restrict)
+  removedByAccountId String?
+  removedBy          Account?          @relation("ProjectMemberRemovedBy", fields: [removedByAccountId], references: [id], onDelete: SetNull)
+  removedAt          DateTime?         @db.Timestamptz(6)
+  createdAt          DateTime          @default(now()) @db.Timestamptz(6)
+
+  @@index([projectId, role])
+  @@index([personId, role])
+  @@index([removedAt])
+}
+
+model ProjectEstablishmentRequest {
+  id                   String                              @id @default(uuid())
+  projectId            String
+  project              Project                             @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  round                Int
+  status               ProjectEstablishmentRequestStatus   @default(PENDING)
+  idempotencyKey       String
+  requestHash          String
+  submittedByAccountId String
+  submittedBy          Account                             @relation("ProjectRequestSubmittedBy", fields: [submittedByAccountId], references: [id], onDelete: Restrict)
+  reviewerAccountId    String?
+  reviewer             Account?                            @relation("ProjectRequestReviewer", fields: [reviewerAccountId], references: [id], onDelete: SetNull)
+  reviewComment        String                              @default("") @db.VarChar(2000)
+  snapshot             Json
+  submittedAt          DateTime                            @default(now()) @db.Timestamptz(6)
+  reviewedAt           DateTime?                           @db.Timestamptz(6)
+  requestedTasks       ProjectEstablishmentRequestedTask[]
+
+  @@unique([projectId, round])
+  @@unique([submittedByAccountId, idempotencyKey])
+  @@index([status, submittedAt])
+}
+
+model ProjectEstablishmentRequestedTask {
+  id          String                      @id @default(uuid())
+  requestId   String
+  request     ProjectEstablishmentRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  taskId      String
+  task        Task                        @relation(fields: [taskId], references: [id], onDelete: Restrict)
+  lockVersion Int
+  sortOrder   Int                         @default(0)
+  createdAt   DateTime                    @default(now()) @db.Timestamptz(6)
+
+  @@unique([requestId, taskId])
+  @@index([taskId])
 }
 
 model TaskTag {
@@ -711,34 +837,34 @@ model ReviewEvidence {
 }
 
 model WorkSegment {
-  id                     String              @id @default(uuid())
-  personId               String
-  person                 Person              @relation(fields: [personId], references: [id], onDelete: Restrict)
-  type                   WorkSegmentType
-  status                 WorkSegmentStatus
-  startAt                DateTime            @db.Timestamptz(6)
-  endAt                  DateTime            @db.Timestamptz(6)
-  content                String
-  priority               TaskPriority        @default(MEDIUM)
-  expectedOutput         String              @default("")
-  actualOutput           String              @default("")
-  completionPercent      Decimal?            @db.Decimal(5, 2)
-  taskId                 String?
-  task                   Task?               @relation(fields: [taskId], references: [id], onDelete: SetNull)
-  createdByAccountId     String
-  createdBy              Account             @relation("WorkSegmentCreatedBy", fields: [createdByAccountId], references: [id], onDelete: Restrict)
-  updatedByAccountId     String?
-  updatedBy              Account?            @relation("WorkSegmentUpdatedBy", fields: [updatedByAccountId], references: [id], onDelete: SetNull)
-  sourceSplitFromId      String?
-  sourceSplitFrom        WorkSegment?        @relation("WorkSegmentSplit", fields: [sourceSplitFromId], references: [id], onDelete: SetNull)
-  splitChildren          WorkSegment[]       @relation("WorkSegmentSplit")
-  deletedAt              DateTime?           @db.Timestamptz(6)
-  plannedSources         WorkSegmentSource[] @relation("PlannedSegmentSource")
-  actualSources          WorkSegmentSource[] @relation("ActualSegmentSource")
-  changes                WorkSegmentChange[]
-  tags                   SegmentTag[]
-  createdAt              DateTime            @default(now()) @db.Timestamptz(6)
-  updatedAt              DateTime            @updatedAt @db.Timestamptz(6)
+  id                 String              @id @default(uuid())
+  personId           String
+  person             Person              @relation(fields: [personId], references: [id], onDelete: Restrict)
+  type               WorkSegmentType
+  status             WorkSegmentStatus
+  startAt            DateTime            @db.Timestamptz(6)
+  endAt              DateTime            @db.Timestamptz(6)
+  content            String
+  priority           TaskPriority        @default(MEDIUM)
+  expectedOutput     String              @default("")
+  actualOutput       String              @default("")
+  completionPercent  Decimal?            @db.Decimal(5, 2)
+  taskId             String?
+  task               Task?               @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  createdByAccountId String
+  createdBy          Account             @relation("WorkSegmentCreatedBy", fields: [createdByAccountId], references: [id], onDelete: Restrict)
+  updatedByAccountId String?
+  updatedBy          Account?            @relation("WorkSegmentUpdatedBy", fields: [updatedByAccountId], references: [id], onDelete: SetNull)
+  sourceSplitFromId  String?
+  sourceSplitFrom    WorkSegment?        @relation("WorkSegmentSplit", fields: [sourceSplitFromId], references: [id], onDelete: SetNull)
+  splitChildren      WorkSegment[]       @relation("WorkSegmentSplit")
+  deletedAt          DateTime?           @db.Timestamptz(6)
+  plannedSources     WorkSegmentSource[] @relation("PlannedSegmentSource")
+  actualSources      WorkSegmentSource[] @relation("ActualSegmentSource")
+  changes            WorkSegmentChange[]
+  tags               SegmentTag[]
+  createdAt          DateTime            @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime            @updatedAt @db.Timestamptz(6)
 
   @@index([personId, type, startAt, endAt])
   @@index([taskId, startAt])
@@ -840,6 +966,8 @@ model InAppNotification {
   entityId           String
   taskId             String?
   task               Task?                                 @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  projectId          String?
+  project            Project?                              @relation(fields: [projectId], references: [id], onDelete: SetNull)
   linkPath           String                                @default("")
   payloadVersion     Int                                   @default(1)
   payload            Json                                  @default("{}")
@@ -849,6 +977,7 @@ model InAppNotification {
   @@index([recipientAccountId, readAt, createdAt])
   @@index([category, createdAt])
   @@index([taskId])
+  @@index([projectId])
   @@index([readAt, createdAt])
 }
 
@@ -863,6 +992,8 @@ model DomainAuditEvent {
   entityId       String
   taskId         String?
   task           Task?       @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  projectId      String?
+  project        Project?    @relation(fields: [projectId], references: [id], onDelete: SetNull)
   before         Json?
   after          Json?
   reason         String      @default("")
@@ -873,6 +1004,7 @@ model DomainAuditEvent {
 
   @@index([entityType, entityId, createdAt])
   @@index([taskId, createdAt])
+  @@index([projectId, createdAt])
   @@index([actorAccountId, createdAt])
   @@index([actorPersonId, createdAt])
   @@index([source, createdAt])

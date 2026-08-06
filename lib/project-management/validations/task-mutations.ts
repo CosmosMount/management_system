@@ -69,6 +69,7 @@ const taskMetadataFields = {
   techGroup: z.enum(TECH_GROUP_OPTIONS, { message: "请选择有效技术组" }),
   priority: z.enum(taskPriorityValues, { message: "优先级不正确" }),
   relatedTaskId: z.union([idSchema, z.null()]),
+  projectId: z.union([idSchema, z.null()]).optional(),
 } as const;
 
 export const updateTaskDraftMetadataInputSchema = z

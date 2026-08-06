@@ -2,6 +2,8 @@ import type {
   TaskMemberRole,
   TaskPriority,
   TaskStatus,
+  ProjectStatus,
+  ProjectMemberRole,
 } from "@prisma/client";
 import type { Prisma } from "@prisma/client";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
@@ -10,6 +12,14 @@ export const PROJECT_MANAGEMENT_ACTIONS = [
   "tag.create",
   "tag.update",
   "tag.delete",
+  "project.create",
+  "project.view",
+  "project.update",
+  "project.manage_members",
+  "project.submit_establishment",
+  "project.review_establishment",
+  "project.complete",
+  "project.delete",
   "task.create",
   "task.view",
   "task.update_metadata",
@@ -58,6 +68,18 @@ export type AuthorizationTagResource = {
   createdByAccountId?: string | null;
 };
 
+export type AuthorizationProjectResource = {
+  type: "project";
+  id?: string;
+  status?: ProjectStatus;
+  requesterAccountId?: string | null;
+  members?: Array<{
+    personId: string;
+    role: ProjectMemberRole;
+    removedAt?: Date | null;
+  }>;
+};
+
 export type AuthorizationSegmentResource = {
   type: "segment";
   personId?: string | null;
@@ -72,6 +94,7 @@ export type AuthorizationAuditResource = {
 
 export type AuthorizationResource =
   | AuthorizationTaskResource
+  | AuthorizationProjectResource
   | AuthorizationTagResource
   | AuthorizationSegmentResource
   | AuthorizationAuditResource
@@ -103,6 +126,9 @@ export function authorize({
   if (resource.type === "tag") {
     return authorizeTag(actor, action, resource);
   }
+  if (resource.type === "project") {
+    return authorizeProject(actor, action, resource);
+  }
   if (resource.type === "segment") {
     return authorizeSegment(actor, action, resource);
   }
@@ -113,6 +139,46 @@ export function authorize({
     return authorizeTask(actor, action, resource);
   }
   return authorizeSystemScoped(actor, action, resource);
+}
+
+function authorizeProject(
+  actor: ProjectManagementActor,
+  action: ProjectManagementAction,
+  resource: AuthorizationProjectResource,
+): AuthorizationDecision {
+  if (action === "project.create" || action === "project.view") {
+    return allow("authenticated_project_access");
+  }
+  if (action === "project.review_establishment") {
+    return deny("global_administrator_required");
+  }
+  const isOwner = resource.members?.some(
+    (member) =>
+      member.personId === actor.personId &&
+      member.role === "OWNER" &&
+      !member.removedAt,
+  );
+  if (
+    resource.status === "DRAFT" &&
+    resource.requesterAccountId === actor.accountId &&
+    (action === "project.update" ||
+      action === "project.manage_members" ||
+      action === "project.submit_establishment")
+  ) {
+    return allow("project_requester_draft_exception");
+  }
+  if (isOwner) {
+    if (
+      action === "project.update" ||
+      action === "project.manage_members" ||
+      action === "project.submit_establishment" ||
+      action === "project.complete" ||
+      action === "project.delete"
+    ) {
+      return allow("project_owner");
+    }
+  }
+  return deny("project_policy_denied");
 }
 
 export function assertAuthorized(input: {
@@ -256,6 +322,13 @@ export function taskReadableWhere(
   return { deletedAt: null };
 }
 
+export function projectReadableWhere(
+  actor: ProjectManagementActor,
+): Prisma.ProjectWhereInput {
+  void actor;
+  return { deletedAt: null };
+}
+
 export function segmentReadableWhere(
   actor: ProjectManagementActor,
 ): Prisma.WorkSegmentWhereInput {
@@ -278,6 +351,7 @@ export function auditReadableWhere(
     OR: [
       { actorAccountId: actor.accountId },
       { task: readableTasks },
+      { project: projectReadableWhere(actor) },
     ],
   };
 }

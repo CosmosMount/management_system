@@ -68,6 +68,7 @@ import type {
 import type { TaskPendingApproval } from "@/lib/project-management/task-approval-gate";
 import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";
+import { ProjectSelect } from "@/components/project-management/project-picker";
 
 const TASK_DETAIL_START_ID = "task-detail-start";
 const TASK_DETAIL_PLAN_ROW_ID = "task-detail-plan-row";
@@ -99,12 +100,14 @@ export function TaskWorkbench({
   people,
   taskOptions,
   tagOptions,
+  projectOptions,
 }: {
   workspace: TaskWorkspace;
   lifecycle: TaskLifecycleViews;
   people: PersonOptionDto[];
   taskOptions: TaskOptionPage["items"];
   tagOptions: TagOptionPage["items"];
+  projectOptions: Array<{ id: string; name: string; avatarPath: string | null }>;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -235,6 +238,11 @@ export function TaskWorkbench({
               <Badge>{taskStatusLabels[task.status]}</Badge>
               <Badge variant="secondary">{taskPriorityLabels[task.priority]}</Badge>
               <Badge variant="outline">计划 v{workspace.currentPlan.versionNo}</Badge>
+              {task.project && (
+                <Link href={routes.progress.projectDetail(task.project.id)} className="text-sm font-medium text-primary hover:underline">
+                  Project：{task.project.name}
+                </Link>
+              )}
             </div>
             <h1 className="mt-3 break-words text-2xl font-semibold">{task.title}</h1>
             {task.description && (
@@ -260,6 +268,10 @@ export function TaskWorkbench({
                     ? taskOptions.find((option) => option.id === task.relatedTaskId)?.title ?? "已关联"
                     : "未关联"
                 }
+              />
+              <OverviewItem
+                label="所属 Project"
+                value={task.project ? task.project.name : "未设置"}
               />
             </dl>
             {workspace.currentPlan.chronologyCompatibilityIssues.length > 0 && (
@@ -461,7 +473,8 @@ export function TaskWorkbench({
             workspace={currentWorkspace}
             people={people}
             taskOptions={taskOptions}
-            tagOptions={tagOptions}
+              tagOptions={tagOptions}
+              projectOptions={projectOptions}
             busy={busy}
             runAction={runAction}
             notice={notice}
@@ -811,6 +824,7 @@ function ActiveTaskEditor({
   people,
   taskOptions,
   tagOptions,
+  projectOptions,
   busy,
   runAction,
   notice,
@@ -820,6 +834,7 @@ function ActiveTaskEditor({
   people: PersonOptionDto[];
   taskOptions: TaskOptionPage["items"];
   tagOptions: TagOptionPage["items"];
+  projectOptions: Array<{ id: string; name: string; avatarPath: string | null }>;
   busy: boolean;
   runAction: RunAction;
   notice: Notice;
@@ -836,6 +851,7 @@ function ActiveTaskEditor({
   );
   const [peopleOptions, setPeopleOptions] = useState(people);
   const [relatedTaskId, setRelatedTaskId] = useState(workspace.task.relatedTaskId);
+  const [projectId, setProjectId] = useState(workspace.task.projectId);
   const [selectedTags, setSelectedTags] = useState(workspace.tags.map((tag) => tag.id));
   const [tagChoices, setTagChoices] = useState(tagOptions);
   const [tagQuery, setTagQuery] = useState("");
@@ -880,6 +896,7 @@ function ActiveTaskEditor({
                   techGroup: String(form.get("techGroup") ?? ""),
                   priority: String(form.get("priority") ?? "MEDIUM"),
                   relatedTaskId,
+                  projectId,
                 }
               : undefined,
             tagIds: editable ? selectedTags : undefined,
@@ -929,6 +946,9 @@ function ActiveTaskEditor({
             disabled={!editable}
             placeholder="按标题、描述或拼音首字母搜索"
           />
+        </Field>
+        <Field label="所属 Project">
+          <ProjectSelect value={projectId} onValueChange={setProjectId} initialOptions={projectOptions} disabled={!editable} />
         </Field>
         <div className="space-y-2">
           <span className="text-sm font-medium">Tags</span>

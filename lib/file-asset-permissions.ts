@@ -78,6 +78,15 @@ export async function canViewFileAsset({
   userOpenId: string;
   roles: UserRoleRecord[];
 }): Promise<boolean> {
+  if (asset.kind === "PROJECT_AVATAR") {
+    if (!asset.projectId) return asset.ownerOpenId === userOpenId;
+    return Boolean(
+      await prisma.project.findFirst({
+        where: { id: asset.projectId, deletedAt: null },
+        select: { id: true },
+      }),
+    );
+  }
   if (isSuperAdmin(roles)) return true;
 
   if (asset.ownerOpenId && asset.ownerOpenId === userOpenId) return true;

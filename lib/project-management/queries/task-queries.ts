@@ -37,6 +37,7 @@ export type TaskListItem = {
   techGroup: string;
   status: TaskStatus;
   priority: TaskPriority;
+  project: { id: string; name: string; avatarPath: string | null } | null;
   currentPlanVersionNo: number;
   lockVersion: number;
   activeMilestone: {
@@ -62,6 +63,7 @@ export type TaskListResult = {
 };
 
 const taskListInclude = {
+  project: { select: { id: true, name: true, avatarPath: true } },
   currentPlanVersion: {
     select: {
       versionNo: true,
@@ -188,6 +190,8 @@ export type TaskWorkspace = {
     status: TaskStatus;
     priority: TaskPriority;
     relatedTaskId: string | null;
+    projectId: string | null;
+    project: { id: string; name: string; avatarPath: string | null } | null;
     currentPlanVersionId: string;
     activeMilestoneNodeId: string | null;
     lockVersion: number;
@@ -360,6 +364,7 @@ export async function listTasks({
       techGroup: task.techGroup,
       status: task.status,
       priority: task.priority,
+      project: task.project,
       currentPlanVersionNo: task.currentPlanVersion.versionNo,
       lockVersion: task.lockVersion,
       activeMilestone:
@@ -403,6 +408,7 @@ export async function getTaskWorkspace({
   const task = await prisma.task.findFirst({
     where: { AND: [{ id: taskId }, taskReadableWhere(actor)] },
     include: {
+      project: { select: { id: true, name: true, avatarPath: true } },
       members: {
         where: { removedAt: null },
         include: { person: { select: { displayName: true } } },
@@ -438,7 +444,9 @@ export async function getTaskWorkspace({
       techGroup: task.techGroup,
       status: task.status,
       priority: task.priority,
-      relatedTaskId: task.relatedTaskId,
+    relatedTaskId: task.relatedTaskId,
+    projectId: task.projectId,
+    project: task.project,
       currentPlanVersionId: task.currentPlanVersionId,
       activeMilestoneNodeId: task.activeMilestoneNodeId,
       lockVersion: task.lockVersion,

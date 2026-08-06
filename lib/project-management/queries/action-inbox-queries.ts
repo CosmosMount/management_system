@@ -16,6 +16,7 @@ export type ActionInboxKind =
   | "SEGMENT_CONFIRMATION"
   | "MILESTONE_REVIEW"
   | "REVISION_REVIEW"
+  | "PROJECT_ESTABLISHMENT"
   | "TERMINATION";
 
 export type ActionInboxItem = {
@@ -126,6 +127,7 @@ export async function getActionInbox({
     reviews,
     revisions,
     terminations,
+    projectRequests,
     counts,
     criticalCounts,
   ] =
@@ -192,11 +194,22 @@ export async function getActionInbox({
         orderBy: [{ plannedAt: "asc" }, { id: "asc" }],
         take: boundedLimit,
       }),
+      isSystemAdministrator(actor)
+        ? prisma.projectEstablishmentRequest.findMany({
+            where: { status: "PENDING", project: { deletedAt: null, status: "PENDING_APPROVAL" } },
+            select: { id: true, round: true, submittedAt: true, project: { select: { id: true, name: true } } },
+            orderBy: [{ submittedAt: "asc" }, { id: "asc" }],
+            take: boundedLimit,
+          })
+        : Promise.resolve([]),
       Promise.all([
         prisma.workSegment.count({ where: confirmationSegmentWhere }),
         prisma.milestoneReview.count({ where: milestoneReviewWhere }),
         prisma.revisionNode.count({ where: revisionWhere }),
         prisma.terminationNode.count({ where: terminationWhere }),
+        isSystemAdministrator(actor)
+          ? prisma.projectEstablishmentRequest.count({ where: { status: "PENDING", project: { deletedAt: null, status: "PENDING_APPROVAL" } } })
+          : Promise.resolve(0),
       ]),
       Promise.all([
         prisma.milestoneReview.count({
@@ -309,6 +322,19 @@ export async function getActionInbox({
       dueAt: termination.plannedAt.toISOString(),
       severity: termination.plannedAt < now ? "CRITICAL" : "MEDIUM",
       href: `/progress/tasks/${task.id}?tab=reviews`,
+    });
+  }
+  for (const request of projectRequests) {
+    items.push({
+      id: `project-establishment:${request.id}`,
+      kind: "PROJECT_ESTABLISHMENT",
+      title: request.project.name,
+      summary: `第 ${request.round} 轮 Project 立项申请等待审批。`,
+      taskId: null,
+      taskTitle: null,
+      dueAt: request.submittedAt.toISOString(),
+      severity: "HIGH",
+      href: `/progress/projects/${request.project.id}#establishment`,
     });
   }
   const severityRank = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 } as const;
