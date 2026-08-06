@@ -75,6 +75,46 @@ export async function resolveNormalAuthMaterial(): Promise<AuthMaterial> {
   return { openId: FALLBACK_NORMAL_OPEN_ID, name: FALLBACK_NORMAL_NAME };
 }
 
+export async function ensureFallbackAdminFixture(): Promise<void> {
+  assertTestDatabase();
+  const identity = await resolveFeishuIdentityForUser({
+    openId: FALLBACK_ADMIN_OPEN_ID,
+    unionId: FALLBACK_ADMIN_UNION_ID,
+    name: FALLBACK_ADMIN_NAME,
+  });
+  await prisma.user.upsert({
+    where: { openId: FALLBACK_ADMIN_OPEN_ID },
+    update: {
+      accountId: identity.account.id,
+      name: FALLBACK_ADMIN_NAME,
+      unionId: FALLBACK_ADMIN_UNION_ID,
+      signaturePath: ADMIN_SIGNATURE_PUBLIC_PATH,
+    },
+    create: {
+      accountId: identity.account.id,
+      openId: FALLBACK_ADMIN_OPEN_ID,
+      unionId: FALLBACK_ADMIN_UNION_ID,
+      name: FALLBACK_ADMIN_NAME,
+      signaturePath: ADMIN_SIGNATURE_PUBLIC_PATH,
+    },
+  });
+  const existingRole = await prisma.systemRoleAssignment.findFirst({
+    where: {
+      accountId: identity.account.id,
+      role: "SUPER_ADMINISTRATOR",
+      revokedAt: null,
+    },
+  });
+  if (!existingRole) {
+    await prisma.systemRoleAssignment.create({
+      data: {
+        accountId: identity.account.id,
+        role: "SUPER_ADMINISTRATOR",
+      },
+    });
+  }
+}
+
 export async function prepareFunctionalFixtures(
   normalAuth: AuthMaterial,
 ): Promise<FunctionalFixtureIds> {

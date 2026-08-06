@@ -2,7 +2,7 @@ import Link from "next/link";
 import { RefreshCw, ShieldCheck, Users, Wallet } from "lucide-react";
 import { AdminMetric } from "@/components/admin/admin-metric";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { currentBudgetPeriod } from "@/lib/import-procurement-budget";
+import { currentBudgetPeriod } from "@/lib/procurement-budget-period";
 import { prisma } from "@/lib/prisma";
 import { routes } from "@/lib/routes";
 

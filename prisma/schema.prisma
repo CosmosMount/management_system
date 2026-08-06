@@ -44,6 +44,7 @@ enum NotificationOutboxStatus {
   PROCESSING
   SENT
   FAILED
+  CANCELED
 }
 
 enum IdentityProvider {
@@ -439,6 +440,11 @@ model FileAsset {
   feedbackId           String?
   signatureOwnerOpenId String?
   ownerOpenId          String?
+  writeGeneration      String?
+  cleanupRequestedAt   DateTime?
+  cleanupAttempts      Int              @default(0)
+  cleanupLastError     String           @default("")
+  cleanupNextRunAt     DateTime?
   createdAt            DateTime         @default(now())
   reviewEvidences      ReviewEvidence[]
 
@@ -446,6 +452,7 @@ model FileAsset {
   @@index([feedbackId])
   @@index([signatureOwnerOpenId])
   @@index([ownerOpenId])
+  @@index([cleanupRequestedAt, cleanupNextRunAt])
 }
 
 model Tag {

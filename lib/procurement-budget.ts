@@ -2,7 +2,7 @@ import { procurementSummaryWhere } from "@/lib/procurement-visibility";
 import {
   formatBudgetPoolLabel,
   currentBudgetPeriod,
-} from "@/lib/import-procurement-budget";
+} from "@/lib/procurement-budget-period";
 import { prisma } from "@/lib/prisma";
 
 export const BUDGET_ALERT_THRESHOLDS = [70, 80, 90, 100] as const;

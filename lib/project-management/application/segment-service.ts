@@ -43,6 +43,7 @@ import {
   type CreateWorkSegmentInput,
   type MovePlannedSegmentsInput,
 } from "@/lib/project-management/validations/segments";
+import { refreshProjectManagementActorTx } from "@/lib/project-management/application/actor-refresh";
 
 type PrismaTx = Prisma.TransactionClient;
 
@@ -122,7 +123,7 @@ export async function createWorkSegment(
       tx,
       parsed.taskId ? [parsed.taskId] : [],
     );
-    const refreshedActor = await refreshActorTx(tx, actor);
+    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     await assertSegmentReferenceTx(tx, {
       actor: refreshedActor,
       personId: parsed.personId,
@@ -149,7 +150,7 @@ export async function batchCreatePlannedSegments(
         segment.taskId ? [segment.taskId] : [],
       ),
     );
-    const refreshedActor = await refreshActorTx(tx, actor);
+    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     for (const segment of parsed.segments) {
       await assertSegmentReferenceTx(tx, {
         actor: refreshedActor,
@@ -184,7 +185,7 @@ export async function createActualSegment(
       segmentIds: parsed.sources.map((source) => source.plannedSegmentId),
       prospectiveTaskIds: parsed.taskId ? [parsed.taskId] : [],
     });
-    const refreshedActor = await refreshActorTx(tx, actor);
+    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     await assertSegmentReferenceTx(tx, {
       actor: refreshedActor,
       personId: parsed.personId,
@@ -210,7 +211,7 @@ export async function updateWorkSegment(
 ): Promise<SegmentMutationResult> {
   const parsed = updateWorkSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    const refreshedActor = await refreshActorTx(tx, actor);
+    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     const preflightSegment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentVisible(refreshedActor, preflightSegment);
     assertCanManageSegment(refreshedActor, preflightSegment);
@@ -318,7 +319,7 @@ export async function movePlannedSegments(
 ): Promise<BatchSegmentMutationResult> {
   const parsed = movePlannedSegmentsInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    const refreshedActor = await refreshActorTx(tx, actor);
+    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     return movePlannedSegmentsTx(tx, refreshedActor, parsed);
   });
 }
@@ -394,7 +395,7 @@ export async function splitPlannedSegment(
 ): Promise<BatchSegmentMutationResult> {
   const parsed = splitPlannedSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    const refreshedActor = await refreshActorTx(tx, actor);
+    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     const preflightSegment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentVisible(refreshedActor, preflightSegment);
     assertCanManageSegment(refreshedActor, preflightSegment);
@@ -509,7 +510,7 @@ export async function mergePlannedSegments(
 ): Promise<SegmentMutationResult> {
   const parsed = mergePlannedSegmentsInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    const refreshedActor = await refreshActorTx(tx, actor);
+    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     assertUniqueIds(
       parsed.segments.map((segment) => segment.segmentId),
       "不能重复合并同一条投入记录",
@@ -626,7 +627,7 @@ export async function cancelPlannedSegment(
 ): Promise<SegmentMutationResult> {
   const parsed = cancelPlannedSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    const refreshedActor = await refreshActorTx(tx, actor);
+    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     const preflightSegment = await loadSegmentForMutationTx(
       tx,
       parsed.segmentId,
@@ -679,7 +680,7 @@ export async function batchCancelPlannedSegments(
   );
   return prisma.$transaction(async (tx) => {
     const segmentIds = parsed.segments.map((segment) => segment.segmentId);
-    const refreshedActor = await refreshActorTx(tx, actor);
+    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     const preflightSegments = await loadSegmentsForPreflightTx(tx, segmentIds);
     for (const segment of preflightSegments) {
       assertSegmentVisible(refreshedActor, segment);
@@ -748,7 +749,7 @@ export async function confirmPlannedSegment(
 ): Promise<SegmentMutationResult & { actualSegment: WorkSegmentDto; createdActual: boolean }> {
   const parsed = confirmPlannedSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    const refreshedActor = await refreshActorTx(tx, actor);
+    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     const preflightSegment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentVisible(refreshedActor, preflightSegment);
     assertCanManageSegment(refreshedActor, preflightSegment);
@@ -828,7 +829,7 @@ export async function batchConfirmPlannedSegments(
     "不能重复确认同一条投入记录",
   );
   return prisma.$transaction(async (tx) => {
-    const refreshedActor = await refreshActorTx(tx, actor);
+    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     const segmentIds = parsed.segments.map((segment) => segment.segmentId);
     const preflightSegments = await loadSegmentsForPreflightTx(tx, segmentIds);
     for (const segment of preflightSegments) {
@@ -903,7 +904,7 @@ export async function partiallyConfirmSegment(
 > {
   const parsed = partiallyConfirmSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    const refreshedActor = await refreshActorTx(tx, actor);
+    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     const preflightSegment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentVisible(refreshedActor, preflightSegment);
     assertCanManageSegment(refreshedActor, preflightSegment);
@@ -975,7 +976,7 @@ export async function softDeleteActualSegment(
 ): Promise<SegmentMutationResult> {
   const parsed = softDeleteActualSegmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    const refreshedActor = await refreshActorTx(tx, actor);
+    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     const associationLocks = await lockSegmentAssociationTasksTx(tx, {
       segmentIds: [parsed.segmentId],
     });
@@ -1504,17 +1505,6 @@ async function notifySegmentConfirmationDueTx(
       endAt: segment.endAt.toISOString(),
     },
   });
-}
-
-async function refreshActorTx(
-  tx: PrismaTx,
-  actor: ProjectManagementActor,
-): Promise<ProjectManagementActor> {
-  const roles = await tx.systemRoleAssignment.findMany({
-    where: { accountId: actor.accountId, revokedAt: null },
-    select: { role: true, team: true, techGroup: true },
-  });
-  return { ...actor, systemRoles: roles };
 }
 
 async function loadTaskForAuthorizationTx(

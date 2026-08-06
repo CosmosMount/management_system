@@ -2,21 +2,21 @@
 
 import { randomUUID } from "crypto";
 import { revalidatePath } from "next/cache";
-import type { FeedbackStatus } from "@prisma/client";
+import type { FeedbackStatus, Prisma } from "@prisma/client";
 import { auth } from "@/lib/auth";
 import { resolveFeishuIdentityForUser } from "@/lib/project-management/identity";
 import {
   FEEDBACK_IMAGE_TOTAL_SIZE_LABEL,
   MAX_FEEDBACK_IMAGE_COUNT,
   MAX_FEEDBACK_IMAGE_TOTAL_SIZE,
-  removeFeedbackUpload,
   saveFeedbackImage,
 } from "@/lib/file-upload";
+import { cleanupUploadPaths } from "@/lib/upload-cleanup";
 import {
   drainNotificationOutboxSoon,
-  enqueueFeedbackCreatedNotification,
-  enqueueFeedbackReplyNotification,
-  enqueueFeedbackStatusNotification,
+  enqueueFeedbackCreatedNotificationTx,
+  enqueueFeedbackReplyNotificationTx,
+  enqueueFeedbackStatusNotificationTx,
 } from "@/lib/notification-outbox";
 import { isSuperAdmin } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
@@ -88,8 +88,9 @@ async function requireFeedbackUser(): Promise<FeedbackActionUser> {
 }
 
 async function cleanupAttachments(attachments: SavedFeedbackAttachment[]) {
-  await Promise.allSettled(
-    attachments.map((attachment) => removeFeedbackUpload(attachment.path)),
+  await cleanupUploadPaths(
+    attachments.map((attachment) => attachment.path),
+    "feedback_transaction_compensation",
   );
 }
 
@@ -113,6 +114,16 @@ async function saveAttachments(
   return attachments;
 }
 
+async function lockFeedbackTx(
+  tx: Prisma.TransactionClient,
+  feedbackId: string,
+) {
+  const rows = await tx.$queryRaw<Array<{ id: string }>>`
+    SELECT "id" FROM "Feedback" WHERE "id" = ${feedbackId} FOR UPDATE
+  `;
+  if (rows.length === 0) throw new Error("反馈不存在");
+}
+
 function parseFeedbackStatus(value: FormDataEntryValue | null): FeedbackStatus {
   const status = String(value ?? "");
   if (!feedbackStatuses.includes(status as FeedbackStatus)) {
@@ -128,43 +139,48 @@ export async function createFeedback(formData: FormData) {
   const files = parseImages(formData);
   const feedbackId = randomUUID();
   const now = new Date();
+  const context = await getNotificationContext();
   const attachments = await saveAttachments(feedbackId, files);
 
   let feedback: { id: string };
   try {
-    feedback = await prisma.feedback.create({
-      data: {
-        id: feedbackId,
-        submitterOpenId: user.openId,
-        submitterName: user.name,
-        status: "OPEN",
-        lastMessageAt: now,
-        messages: {
-          create: {
-            authorOpenId: user.openId,
-            authorName: user.name,
-            body,
-            createdAt: now,
-            attachments: { create: attachments },
+    feedback = await prisma.$transaction(async (tx) => {
+      const created = await tx.feedback.create({
+        data: {
+          id: feedbackId,
+          submitterOpenId: user.openId,
+          submitterName: user.name,
+          status: "OPEN",
+          lastMessageAt: now,
+          messages: {
+            create: {
+              authorOpenId: user.openId,
+              authorName: user.name,
+              body,
+              createdAt: now,
+              attachments: { create: attachments },
+            },
           },
         },
-      },
-      select: { id: true },
+        select: { id: true },
+      });
+      await enqueueFeedbackCreatedNotificationTx(
+        tx,
+        `feedback:created:${created.id}`,
+        {
+          feedbackId: created.id,
+          submitterName: user.name,
+          body: notificationBody(body, files.length),
+        },
+        context,
+      );
+      return created;
     });
   } catch (err) {
     await cleanupAttachments(attachments);
     throw err;
   }
 
-  await enqueueFeedbackCreatedNotification(
-    `feedback:created:${feedback.id}`,
-    {
-      feedbackId: feedback.id,
-      submitterName: user.name,
-      body: notificationBody(body, files.length),
-    },
-    await getNotificationContext(),
-  );
   drainNotificationOutboxSoon();
 
   revalidatePath("/feedback");
@@ -208,42 +224,60 @@ export async function replyFeedback(formData: FormData) {
   }
 
   const now = new Date();
+  const context = await getNotificationContext();
   const attachments = await saveAttachments(feedbackId, files);
   try {
-    await prisma.feedback.update({
-      where: { id: feedbackId },
-      data: {
-        lastMessageAt: now,
-        messages: {
-          create: {
-            authorOpenId: user.openId,
-            authorName: user.name,
-            body,
-            createdAt: now,
-            attachments: { create: attachments },
-          },
+    await prisma.$transaction(async (tx) => {
+      await lockFeedbackTx(tx, feedbackId);
+      const current = await tx.feedback.findUniqueOrThrow({
+        where: { id: feedbackId },
+        select: {
+          status: true,
+          submitterOpenId: true,
         },
-      },
+      });
+      if (!actorIsAdmin && current.submitterOpenId !== user.openId) {
+        throw new Error("无权查看或回复该反馈");
+      }
+      if (!actorIsAdmin && current.status === "CLOSED") {
+        throw new Error("该反馈已关闭，无法继续回复");
+      }
+      await tx.feedback.update({
+        where: { id: feedbackId },
+        data: { lastMessageAt: now },
+      });
+      const message = await tx.feedbackMessage.create({
+        data: {
+          feedbackId,
+          authorOpenId: user.openId,
+          authorName: user.name,
+          body,
+          createdAt: now,
+          attachments: { create: attachments },
+        },
+        select: { id: true },
+      });
+      const recipientOpenIds = actorIsAdmin
+        ? [current.submitterOpenId].filter((openId) => openId !== user.openId)
+        : undefined;
+      await enqueueFeedbackReplyNotificationTx(
+        tx,
+        `feedback:reply:${feedbackId}:${message.id}`,
+        {
+          feedbackId,
+          actorName: user.name,
+          actorIsAdmin,
+          recipientOpenIds,
+          body: notificationBody(body, files.length),
+        },
+        context,
+      );
     });
   } catch (err) {
     await cleanupAttachments(attachments);
     throw err;
   }
 
-  const recipientOpenIds = actorIsAdmin
-    ? [feedback.submitterOpenId].filter((openId) => openId !== user.openId)
-    : undefined;
-  await enqueueFeedbackReplyNotification(
-    `feedback:reply:${feedbackId}:${now.toISOString()}:${user.openId}`,
-    {
-      feedbackId,
-      actorName: user.name,
-      actorIsAdmin,
-      recipientOpenIds,
-      body: notificationBody(body, files.length),
-    },
-    await getNotificationContext(),
-  );
   drainNotificationOutboxSoon();
 
   revalidatePath("/feedback");
@@ -262,35 +296,42 @@ export async function updateFeedbackStatus(formData: FormData) {
     throw new Error("参数无效");
   }
 
-  const feedback = await prisma.feedback.findUnique({
-    where: { id: feedbackId },
-    select: { id: true, submitterOpenId: true },
+  const context = await getNotificationContext();
+  const result = await prisma.$transaction(async (tx) => {
+    await lockFeedbackTx(tx, feedbackId);
+    const current = await tx.feedback.findUniqueOrThrow({
+      where: { id: feedbackId },
+      select: { id: true, status: true, submitterOpenId: true },
+    });
+    if (current.status === status) return { updated: current, changed: false };
+    const updated = await tx.feedback.update({
+      where: { id: feedbackId },
+      data: {
+        status,
+        closedAt: status === "CLOSED" ? new Date() : null,
+      },
+      select: {
+        id: true,
+        status: true,
+        submitterOpenId: true,
+        updatedAt: true,
+      },
+    });
+    await enqueueFeedbackStatusNotificationTx(
+      tx,
+      `feedback:status:${updated.id}:${updated.status}:${randomUUID()}`,
+      {
+        feedbackId: updated.id,
+        actorName: user.name,
+        status: updated.status,
+        submitterOpenId: updated.submitterOpenId,
+      },
+      context,
+    );
+    return { updated, changed: true };
   });
-  if (!feedback) {
-    throw new Error("反馈不存在");
-  }
-
-  const updated = await prisma.feedback.update({
-    where: { id: feedbackId },
-    data: {
-      status,
-      closedAt: status === "CLOSED" ? new Date() : null,
-    },
-    select: { id: true, status: true, submitterOpenId: true },
-  });
-
-  await enqueueFeedbackStatusNotification(
-    `feedback:status:${updated.id}:${updated.status}`,
-    {
-      feedbackId: updated.id,
-      actorName: user.name,
-      status: updated.status,
-      submitterOpenId: updated.submitterOpenId,
-    },
-    await getNotificationContext(),
-  );
-  drainNotificationOutboxSoon();
+  if (result.changed) drainNotificationOutboxSoon();
 
   revalidatePath("/feedback");
-  return updated;
+  return result.updated;
 }

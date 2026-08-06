@@ -13,7 +13,7 @@ import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { buildDashboardChartsData } from "@/lib/procurement-dashboard-stats";
 import { resolveProcurementHandlerNames } from "@/lib/procurement-order-handlers";
 import { listBudgetPoolViews } from "@/lib/procurement-budget";
-import { currentBudgetPeriod } from "@/lib/import-procurement-budget";
+import { currentBudgetPeriod } from "@/lib/procurement-budget-period";
 import { procurementSummaryWhere } from "@/lib/procurement-visibility";
 import { prisma } from "@/lib/prisma";
 

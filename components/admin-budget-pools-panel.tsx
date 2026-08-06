@@ -25,10 +25,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  DEFAULT_BUDGET_PERIOD,
-  downloadBudgetPoolTemplate,
-} from "@/lib/import-procurement-budget";
+import { DEFAULT_BUDGET_PERIOD } from "@/lib/procurement-budget-period";
 import { MAX_BUDGET_POOL_IMPORT_ROWS } from "@/lib/constants";
 import { getActionErrorMessage } from "@/lib/action-error-message";
 
@@ -68,6 +65,19 @@ export function AdminBudgetPoolsPanel({ pools }: Props) {
     });
   }
 
+  function handleDownloadTemplate() {
+    startTransition(async () => {
+      try {
+        const { downloadBudgetPoolTemplate } = await import(
+          "@/lib/import-procurement-budget"
+        );
+        downloadBudgetPoolTemplate();
+      } catch {
+        toast.error("预算模板加载失败，请稍后重试");
+      }
+    });
+  }
+
   return (
     <Card>
       <CardHeader className="flex flex-row items-start justify-between gap-4">
@@ -84,10 +94,10 @@ export function AdminBudgetPoolsPanel({ pools }: Props) {
             variant="outline"
             size="sm"
             disabled={pending}
-            onClick={() => downloadBudgetPoolTemplate()}
+            onClick={handleDownloadTemplate}
           >
             <FileSpreadsheet className="mr-1 h-4 w-4" />
-            下载模板
+            {pending ? "处理中…" : "下载模板"}
           </Button>
           <Button
             type="button"

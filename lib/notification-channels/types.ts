@@ -7,6 +7,8 @@ export type NotificationRecipientPlan =
       openIds: string[];
       directOpenIds?: string[];
       requiresDirectRecipient?: boolean;
+      cancelReason?: string;
+      emptyRecipientReason?: string;
     }
   | { supported: false };
 
@@ -15,6 +17,19 @@ export class NonRetryableNotificationError extends Error {
     super(message);
     this.name = "NonRetryableNotificationError";
   }
+}
+
+export class CanceledNotificationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CanceledNotificationError";
+  }
+}
+
+export function isCanceledNotificationError(
+  error: unknown,
+): error is CanceledNotificationError {
+  return error instanceof CanceledNotificationError;
 }
 
 export function isNonRetryableNotificationError(

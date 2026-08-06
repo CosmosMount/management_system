@@ -5,6 +5,7 @@ import { getOpenIdsByRole } from "@/lib/permissions";
 import { statusLabels } from "@/lib/permissions-client";
 import { prisma } from "@/lib/prisma";
 import { routes } from "@/lib/routes";
+import type { TeacherReviewEmailOutboxPayload } from "@/lib/notification-contracts/procurement";
 
 export type TeacherEmailRecipient = {
   openId: string;
@@ -40,6 +41,13 @@ export function buildTeacherReviewEmailContent(
   teacherName: string,
   detailUrl: string,
 ) {
+  const safeTeacherName = escapeHtmlText(teacherName);
+  const safeOrderNo = escapeHtmlText(order.orderNo);
+  const safeStatusLabel = escapeHtmlText(statusLabels[order.status]);
+  const safeInitiatorName = escapeHtmlText(order.initiatorName);
+  const safeTeam = escapeHtmlText(order.team);
+  const safeTechGroup = escapeHtmlText(order.techGroup);
+  const safeDetailUrl = escapeHtmlAttribute(detailUrl);
   const statusLabel = statusLabels[order.status];
   const subject = `【采购审批】${order.orderNo} 待老师审核`;
   const text = [
@@ -56,111 +64,89 @@ export function buildTeacherReviewEmailContent(
 
   const html = `
     <div style="font-family:Segoe UI,Microsoft YaHei,sans-serif;line-height:1.6;color:#111827;">
-      <p>${teacherName} 老师，您好：</p>
-      <p>采购单 <strong>${order.orderNo}</strong> 已进入「<strong>${statusLabel}</strong>」环节，请登录系统完成审批。</p>
+      <p>${safeTeacherName} 老师，您好：</p>
+      <p>采购单 <strong>${safeOrderNo}</strong> 已进入「<strong>${safeStatusLabel}</strong>」环节，请登录系统完成审批。</p>
       <table style="border-collapse:collapse;margin:16px 0;">
-        <tr><td style="padding:4px 12px 4px 0;color:#6b7280;">申请人</td><td>${order.initiatorName}</td></tr>
-        <tr><td style="padding:4px 12px 4px 0;color:#6b7280;">车组 / 技术组</td><td>${order.team} / ${order.techGroup}</td></tr>
+        <tr><td style="padding:4px 12px 4px 0;color:#6b7280;">申请人</td><td>${safeInitiatorName}</td></tr>
+        <tr><td style="padding:4px 12px 4px 0;color:#6b7280;">车组 / 技术组</td><td>${safeTeam} / ${safeTechGroup}</td></tr>
         <tr><td style="padding:4px 12px 4px 0;color:#6b7280;">总金额</td><td>¥${order.totalPrice.toFixed(2)}</td></tr>
       </table>
       <p>
-        <a href="${detailUrl}" style="display:inline-block;padding:10px 18px;background:#2563eb;color:#ffffff;text-decoration:none;border-radius:6px;">
+        <a href="${safeDetailUrl}" style="display:inline-block;padding:10px 18px;background:#2563eb;color:#ffffff;text-decoration:none;border-radius:6px;">
           前往系统审批
         </a>
       </p>
-      <p style="color:#6b7280;font-size:12px;">如按钮无法打开，请复制链接到浏览器：${detailUrl}</p>
+      <p style="color:#6b7280;font-size:12px;">如按钮无法打开，请复制链接到浏览器：${escapeHtmlText(detailUrl)}</p>
     </div>
   `.trim();
 
   return { subject, text, html };
 }
 
-export async function sendTeacherReviewEmails(
+function escapeHtmlText(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function escapeHtmlAttribute(value: string): string {
+  return escapeHtmlText(value);
+}
+
+export async function sendTeacherReviewEmailToOpenId(
   order: OrderCardPayload,
+  recipientOpenId: string,
   context?: NotificationContext,
-): Promise<{ sent: number; skipped: number }> {
+): Promise<void> {
   const recipients = await collectTeacherReviewEmailRecipients(order);
-  if (recipients.length === 0) {
-    console.warn(
-      "[email] 老师审核无可邮件通知的指导老师（请先在权限管理配置邮箱）",
-    );
-    return { sent: 0, skipped: 0 };
-  }
+  const recipient = recipients.find((item) => item.openId === recipientOpenId);
+  if (!recipient) throw new Error("老师邮箱不存在或收件人已不具备当前审批资格");
 
   const detailUrl = buildAppUrl(
     `${routes.procurement.detail(order.id)}?focus=approval&from=email#approval`,
     context?.appOrigin,
   );
 
-  let sent = 0;
-  let skipped = 0;
-
-  const results = await Promise.allSettled(
-    recipients.map(async (recipient) => {
-      const content = buildTeacherReviewEmailContent(
-        order,
-        recipient.name,
-        detailUrl,
-      );
-      const result = await sendEmail({
-        to: recipient.email,
-        subject: content.subject,
-        html: content.html,
-        text: content.text,
-      });
-      if (result.skipped) {
-        skipped += 1;
-        return;
-      }
-      sent += 1;
-      console.log(
-        `[email] 老师审核邮件已发送 order=${order.orderNo} to=${recipient.email}`,
-      );
-    }),
-  );
-
-  const failures = results.filter(
-    (result): result is PromiseRejectedResult => result.status === "rejected",
-  );
-  if (failures.length > 0) {
-    const message =
-      failures[0]?.reason instanceof Error
-        ? failures[0].reason.message
-        : String(failures[0]?.reason);
-    throw new Error(
-      `老师审核邮件发送失败：${failures.length}/${recipients.length} 封失败；${message}`,
-    );
-  }
-
-  return { sent, skipped };
+  const content = buildTeacherReviewEmailContent(order, recipient.name, detailUrl);
+  const result = await sendEmail({
+    to: recipient.email,
+    subject: content.subject,
+    html: content.html,
+    text: content.text,
+  });
+  if (result.skipped) throw new Error(`EMAIL_DELIVERY_SKIPPED: ${result.reason}`);
 }
 
-/** 同一订单进入老师审核时只发一次邮件（outbox 按收件人发送时补发） */
+/** Legacy entry point retained for reminders; it now only enqueues durable work. */
 export async function sendTeacherReviewEmailsOnce(
   order: OrderCardPayload,
+  expectedStatusEnteredAt: Date,
   context: NotificationContext | undefined,
   dedupeEventKey: string,
 ): Promise<void> {
   if (order.status !== "TEACHER_REVIEW") return;
 
   const emailEventKey = `${dedupeEventKey}:teacher_email`;
-  const reserved = await prisma.notificationOutbox.createMany({
+  await prisma.notificationOutbox.createMany({
     data: [
       {
         eventKey: emailEventKey,
-        channel: "procurement",
-        type: "teacher_email_sent",
+        channel: "email",
+        type: "teacher_review_email",
         botKind: "notification",
-        payload: JSON.stringify({ orderId: order.id }),
-        status: "SENT",
-        sentAt: new Date(),
+        payload: JSON.stringify({
+          kind: "teacher_review_email",
+          order: { ...order, status: "TEACHER_REVIEW" },
+          expectedStatusEnteredAt: expectedStatusEnteredAt.toISOString(),
+          appOrigin: context?.appOrigin ?? null,
+        } satisfies TeacherReviewEmailOutboxPayload),
+        status: "PENDING",
+        nextRunAt: new Date(),
       },
     ],
     skipDuplicates: true,
-  });
-  if (reserved.count === 0) return;
-
-  await sendTeacherReviewEmails(order, context).catch((error) => {
-    console.error("[email] 老师审核邮件失败:", error);
   });
 }

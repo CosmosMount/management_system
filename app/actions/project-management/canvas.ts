@@ -1,6 +1,5 @@
 "use server";
 
-import { z } from "zod";
 import {
   runProjectManagementAction,
   type ProjectManagementActionResult,
@@ -13,51 +12,12 @@ import {
   searchTaskOptions as searchTaskOptionsQuery,
 } from "@/lib/project-management/queries/option-queries";
 import { getTimeCanvasData as getTimeCanvasDataQuery } from "@/lib/project-management/queries/time-canvas-queries";
-
-const canvasQueryRequestSchema = z
-  .object({
-    operation: z.enum([
-      "getTimeCanvasData",
-      "searchPeople",
-      "searchTaskOptions",
-      "listTagOptions",
-      "getMyWorkDashboard",
-    ]),
-    input: z.unknown().optional().default({}),
-  })
-  .strict();
-
-type CanvasQueryResult =
-  | Awaited<ReturnType<typeof getTimeCanvasDataQuery>>
-  | Awaited<ReturnType<typeof searchPeopleQuery>>
-  | Awaited<ReturnType<typeof searchTaskOptionsQuery>>
-  | Awaited<ReturnType<typeof listTagOptionsQuery>>
-  | Awaited<ReturnType<typeof getMyWorkDashboardQuery>>;
+import { dispatchCanvasQueryRequest } from "@/lib/project-management/application/canvas-query-dispatcher";
 
 export async function dispatchCanvasQuery(
   request: unknown,
-): Promise<ProjectManagementActionResult<CanvasQueryResult>> {
-  return runProjectManagementAction({
-    event: "pm.canvas.query.dispatch",
-    action: "dispatchCanvasQuery",
-    callback: async (log) => {
-      const actor = await getCurrentProjectManagementActor();
-      log.setActorAccountId(actor.accountId);
-      const parsed = canvasQueryRequestSchema.parse(request);
-      switch (parsed.operation) {
-        case "getTimeCanvasData":
-          return getTimeCanvasDataQuery({ actor, input: parsed.input });
-        case "searchPeople":
-          return searchPeopleQuery({ actor, input: parsed.input });
-        case "searchTaskOptions":
-          return searchTaskOptionsQuery({ actor, input: parsed.input });
-        case "listTagOptions":
-          return listTagOptionsQuery({ actor, input: parsed.input });
-        case "getMyWorkDashboard":
-          return getMyWorkDashboardQuery({ actor, input: parsed.input });
-      }
-    },
-  });
+) {
+  return dispatchCanvasQueryRequest(request);
 }
 
 export async function getTimeCanvasData(

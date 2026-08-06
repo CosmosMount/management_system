@@ -67,6 +67,7 @@ export default async function EditOrderPage({ params }: Props) {
           ) : null}
           <ApplyForm
             orderId={order.id}
+            expectedUpdatedAt={order.updatedAt.toISOString()}
             initialValues={toOrderFormInput(order)}
             hasSignature={hasSignature}
           />

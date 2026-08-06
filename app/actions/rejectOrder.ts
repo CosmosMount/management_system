@@ -5,7 +5,7 @@ import { auth } from "@/lib/auth";
 import { mapOrderItems } from "@/lib/feishu";
 import {
   drainNotificationOutboxSoon,
-  enqueueApplicantResubmitNotification,
+  enqueueApplicantResubmitNotificationTx,
   enqueueProcurementRejectedNotificationTx,
   enqueueProcurementReturnDraftNotificationTx,
 } from "@/lib/notification-outbox";
@@ -20,6 +20,7 @@ import {
 import type { ProcurementRejectOutcome } from "@/lib/procurement-reject-outcome";
 import { getNotificationContext } from "@/lib/request-origin";
 import { revalidateProcurement } from "@/lib/revalidate";
+import { logger } from "@/lib/logger";
 import { OrderStatus } from "@prisma/client";
 
 const inputSchema = z.object({
@@ -205,7 +206,7 @@ export async function rejectProcurementOrder(input: {
         );
       });
     } else {
-      const updated = await prisma.$transaction(async (tx) => {
+      await prisma.$transaction(async (tx) => {
         const locked = await tx.purchaseOrder.updateMany({
           where: { id: orderId, status: order.status },
           data: {
@@ -220,34 +221,43 @@ export async function rejectProcurementOrder(input: {
         if (locked.count !== 1) {
           throw new Error("订单状态已更新，请刷新后重试");
         }
-        return tx.purchaseOrder.findUniqueOrThrow({ where: { id: orderId } });
+        const updated = await tx.purchaseOrder.findUniqueOrThrow({
+          where: { id: orderId },
+        });
+        await enqueueApplicantResubmitNotificationTx(
+          tx,
+          `procurement:resubmit:${updated.id}:${updated.updatedAt.toISOString()}`,
+          toOrderCardPayload({ ...order, status: updated.status }),
+          reason,
+          actorName,
+          context,
+        );
       });
-      await enqueueApplicantResubmitNotification(
-        `procurement:resubmit:${updated.id}:${updated.updatedAt.toISOString()}`,
-        toOrderCardPayload({ ...order, status: updated.status }),
-        reason,
-        actorName,
-        context,
-      );
     }
   }
 
-  try {
-    if (
-      order.status === OrderStatus.MANAGEMENT_REVIEW ||
-      order.status === OrderStatus.TEACHER_REVIEW
-    ) {
+  if (
+    order.status === OrderStatus.MANAGEMENT_REVIEW ||
+    order.status === OrderStatus.TEACHER_REVIEW
+  ) {
+    try {
       await refreshProcurementFeishuCards(
         orderId,
         outcome === "terminate"
           ? `已驳回终止，订单 ${order.orderNo} 已结束`
           : `已退回修改，已通知采购人 ${order.initiatorName}`,
       );
+    } catch (err) {
+      logger.error("procurement.order.reject.card_refresh.failed", {
+        module: "procurement",
+        action: "rejectProcurementOrder",
+        entityType: "PurchaseOrder",
+        entityId: orderId,
+        error: err,
+      });
     }
-    drainNotificationOutboxSoon();
-  } catch (err) {
-    console.error("[procurement] drain notification outbox failed:", err);
   }
+  drainNotificationOutboxSoon();
 
   revalidateProcurement(orderId);
   return { id: orderId };

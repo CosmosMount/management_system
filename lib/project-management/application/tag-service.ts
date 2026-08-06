@@ -1,5 +1,4 @@
 import { z } from "zod";
-import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { createDomainAuditEventTx } from "@/lib/project-management/audit";
 import { assertAuthorized, isSystemAdministrator } from "@/lib/project-management/authorization";
@@ -8,6 +7,7 @@ import {
   staleTaskError,
 } from "@/lib/project-management/application/errors";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
+import { refreshProjectManagementActorTx } from "@/lib/project-management/application/actor-refresh";
 
 const idSchema = z.string().uuid("Tag ID 格式不正确");
 const tagFieldsSchema = z.object({
@@ -33,7 +33,7 @@ const tagTransitionSchema = z.object({
 export async function createTag(actor: ProjectManagementActor, input: unknown) {
   const parsed = tagFieldsSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    const refreshedActor = await refreshActorTx(tx, actor);
+    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     assertAuthorized({
       actor: refreshedActor,
       action: "tag.create",
@@ -57,7 +57,7 @@ export async function createTag(actor: ProjectManagementActor, input: unknown) {
 export async function updateTag(actor: ProjectManagementActor, input: unknown) {
   const parsed = updateTagSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    const refreshedActor = await refreshActorTx(tx, actor);
+    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     const current = await tx.tag.findUnique({ where: { id: parsed.tagId } });
     if (!current) throw notFoundError();
     assertTagMutation(refreshedActor, current.createdByAccountId, "tag.update");
@@ -87,7 +87,7 @@ export async function setTagArchived(
 ) {
   const parsed = tagTransitionSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    const refreshedActor = await refreshActorTx(tx, actor);
+    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     const current = await tx.tag.findUnique({ where: { id: parsed.tagId } });
     if (!current) throw notFoundError();
     assertTagMutation(refreshedActor, current.createdByAccountId, "tag.update");
@@ -116,7 +116,7 @@ export async function setTagArchived(
 export async function deleteTag(actor: ProjectManagementActor, input: unknown) {
   const parsed = tagTransitionSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    const refreshedActor = await refreshActorTx(tx, actor);
+    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     const current = await tx.tag.findUnique({
       where: { id: parsed.tagId },
       include: { _count: { select: { taskTags: true, segmentTags: true } } },
@@ -149,17 +149,6 @@ export async function deleteTag(actor: ProjectManagementActor, input: unknown) {
       removedSegmentAssociationCount: current._count.segmentTags,
     };
   });
-}
-
-async function refreshActorTx(
-  tx: Prisma.TransactionClient,
-  actor: ProjectManagementActor,
-): Promise<ProjectManagementActor> {
-  const systemRoles = await tx.systemRoleAssignment.findMany({
-    where: { accountId: actor.accountId, revokedAt: null },
-    select: { role: true, team: true, techGroup: true },
-  });
-  return { ...actor, systemRoles };
 }
 
 function assertTagMutation(

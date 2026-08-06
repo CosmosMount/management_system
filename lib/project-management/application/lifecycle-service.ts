@@ -49,13 +49,10 @@ import {
   stateConflictError,
   validationError,
 } from "@/lib/project-management/application/errors";
-import {
-  inspectPlanChronology,
-  type PlanChronologyCompatibility,
-  type PlanChronologyIssue,
-} from "@/lib/project-management/domain/plan-chronology";
+import { assertPersistedPlanChronologyValid } from "@/lib/project-management/application/persisted-plan-chronology";
 import { hashPlanSnapshot } from "@/lib/project-management/application/plan-snapshot";
 import { assertTaskApprovalAvailableTx } from "@/lib/project-management/task-approval-gate";
+import { refreshProjectManagementActorTx } from "@/lib/project-management/application/actor-refresh";
 
 type PrismaTx = Prisma.TransactionClient;
 
@@ -145,7 +142,7 @@ export async function createTaskDraft(
   const requestHash = hashRequest("task.create_draft", normalizedInput);
 
   return prisma.$transaction(async (tx) => {
-    const refreshedActor = await refreshActorTx(tx, actor);
+    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     assertAuthorized({
       actor: refreshedActor,
       action: "task.create",
@@ -324,7 +321,7 @@ export async function activateTask(
 
   return prisma.$transaction(async (tx) => {
     await lockTaskTx(tx, parsed.taskId);
-    const refreshedActor = await refreshActorTx(tx, actor);
+    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     const task = await loadTaskForAuthorizationTx(tx, parsed.taskId);
     assertTaskVisible(refreshedActor, task);
     assertAuthorized({
@@ -442,7 +439,7 @@ export async function createRevision(
 
   return prisma.$transaction(async (tx) => {
     await lockTaskTx(tx, parsed.taskId);
-    const refreshedActor = await refreshActorTx(tx, actor);
+    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     const task = await loadTaskForAuthorizationTx(tx, parsed.taskId);
     assertTaskVisible(refreshedActor, task);
     assertAuthorized({
@@ -1026,7 +1023,7 @@ export async function submitMilestoneForReview(
     );
     await lockTaskTx(tx, milestoneTaskId);
     const milestone = await loadMilestoneWithTaskTx(tx, parsed.milestoneNodeId);
-    const refreshedActor = await refreshActorTx(tx, actor);
+    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     const task = await loadTaskForAuthorizationTx(tx, milestoneTaskId);
     assertTaskVisible(refreshedActor, task);
     assertAuthorized({
@@ -1142,7 +1139,7 @@ export async function reviewMilestone(
     const reviewTaskId = await loadMilestoneReviewTaskIdTx(tx, parsed.reviewId);
     await lockTaskTx(tx, reviewTaskId);
     const review = await loadMilestoneReviewForMutationTx(tx, parsed.reviewId);
-    const refreshedActor = await refreshActorTx(tx, actor);
+    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     const task = await loadTaskForAuthorizationTx(tx, reviewTaskId);
     assertTaskVisible(refreshedActor, task);
     assertAuthorized({
@@ -1290,7 +1287,7 @@ export async function confirmTermination(
 
   return prisma.$transaction(async (tx) => {
     await lockTaskTx(tx, parsed.taskId);
-    const refreshedActor = await refreshActorTx(tx, actor);
+    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     const task = await loadTaskForAuthorizationTx(tx, parsed.taskId);
     assertTaskVisible(refreshedActor, task);
     assertAuthorized({
@@ -1783,17 +1780,6 @@ function assertTaskVisible(actor: ProjectManagementActor, task: TaskForAuthoriza
   if (!visible.allowed) throw notFoundError();
 }
 
-async function refreshActorTx(
-  tx: PrismaTx,
-  actor: ProjectManagementActor,
-): Promise<ProjectManagementActor> {
-  const roles = await tx.systemRoleAssignment.findMany({
-    where: { accountId: actor.accountId, revokedAt: null },
-    select: { role: true, team: true, techGroup: true },
-  });
-  return { ...actor, systemRoles: roles };
-}
-
 async function lockIdempotencyKeyTx(
   tx: PrismaTx,
   accountId: string,
@@ -1864,57 +1850,21 @@ function assertAuthoritativePlanValid(plan: {
   plannedStartAt: Date | null;
   nodes: PlanEntry[];
 }) {
-  assertPlanChronologyValid(plan, "STRICT");
+  assertPersistedPlanChronologyValid(plan, "STRICT");
 }
 
 function assertLegacyCurrentPlanUsableAsRepairBase(plan: {
   plannedStartAt: Date | null;
   nodes: PlanEntry[];
 }) {
-  assertPlanChronologyValid(plan, "LEGACY_CURRENT_BASE");
+  assertPersistedPlanChronologyValid(plan, "LEGACY_CURRENT_BASE");
 }
 
 function assertRevisionTargetPlanValid(plan: {
   plannedStartAt: Date | null;
   nodes: PlanEntry[];
 }) {
-  assertPlanChronologyValid(plan, "STRICT");
-}
-
-function assertPlanChronologyValid(
-  plan: { plannedStartAt: Date | null; nodes: PlanEntry[] },
-  compatibility: PlanChronologyCompatibility,
-) {
-  const issues = inspectPlanChronology({
-    plannedStartAt: plan.plannedStartAt,
-    nodes: plan.nodes.map((entry) => ({
-      nodeId: entry.nodeId,
-      sequence: entry.sequence,
-      type: entry.node.type,
-      isCarryForward: entry.isCarryForward,
-      expectedCompletedAt: entry.node.milestone?.expectedCompletedAt ?? null,
-      plannedAt: entry.node.termination?.plannedAt ?? null,
-    })),
-  }, compatibility);
-  if (issues.length > 0) {
-    throw planChronologyInvalidError(
-      issues[0]?.message ?? "计划时间顺序不正确",
-      chronologyFieldErrors(issues),
-    );
-  }
-}
-
-function chronologyFieldErrors(
-  issues: PlanChronologyIssue[],
-): Record<string, string[]> {
-  const fieldErrors: Record<string, string[]> = {};
-  for (const issue of issues) {
-    fieldErrors[issue.path] = [
-      ...(fieldErrors[issue.path] ?? []),
-      issue.message,
-    ];
-  }
-  return fieldErrors;
+  assertPersistedPlanChronologyValid(plan, "STRICT");
 }
 
 function assertTaskActiveForPlanChange(task: TaskForAuthorization) {
@@ -2020,7 +1970,7 @@ async function loadRevisionForMutationTx(
     },
   });
   if (!revision) throw notFoundError();
-  const refreshedActor = await refreshActorTx(tx, actor);
+  const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
   const task = await loadTaskForAuthorizationTx(tx, revision.basePlanVersion.taskId);
   assertTaskVisible(refreshedActor, task);
   return {

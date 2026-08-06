@@ -4,8 +4,15 @@ import {
   TEAM_OPTIONS,
   TECH_GROUP_OPTIONS,
 } from "@/lib/constants";
+import {
+  DEFAULT_BUDGET_PERIOD,
+} from "@/lib/procurement-budget-period";
 
-export const DEFAULT_BUDGET_PERIOD = "2026";
+export {
+  DEFAULT_BUDGET_PERIOD,
+  currentBudgetPeriod,
+  formatBudgetPoolLabel,
+} from "@/lib/procurement-budget-period";
 
 export type BudgetPoolImportRow = {
   description: string;
@@ -46,10 +53,6 @@ type RawRow = {
   budgetAmount?: string | number;
   period?: string;
 };
-
-export function currentBudgetPeriod(): string {
-  return DEFAULT_BUDGET_PERIOD;
-}
 
 function normalizeHeader(value: unknown): string {
   return String(value ?? "").trim();
@@ -249,10 +252,6 @@ export async function parseBudgetPoolsFromFile(
 ): Promise<BudgetPoolImportResult> {
   const buffer = await file.arrayBuffer();
   return parseBudgetPoolsFromBuffer(buffer);
-}
-
-export function formatBudgetPoolLabel(team: string, techGroup: string): string {
-  return `${team} · ${techGroup}`;
 }
 
 export function downloadBudgetPoolTemplate() {

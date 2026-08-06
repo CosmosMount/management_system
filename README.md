@@ -139,6 +139,7 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 | `FEISHU_APPROVAL_APP_SECRET` | 可选，审批机器人 App Secret；未配置时回退通知机器人 |
 | `FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES` / `FEISHU_DIRECT_MESSAGE_ALLOWED_OPEN_IDS` / `FEISHU_DIRECT_MESSAGE_ALLOWED_UNION_IDS` | 可选，飞书私信收件人临时 allowlist；用于测试或演练防误发，未配置时不限制；同时配置多个身份维度时必须全部匹配。Playwright 启动的应用服务默认只允许 `李棋轩` |
 | `NOTIFICATION_DELIVERY_DISABLED` | 通知总禁发闸；本地、测试和 Docker 默认应为 `true`，生产确认配置与收件人范围后才可显式设为 `false` |
+| `EMAIL_DELIVERY_ALLOWED_ADDRESSES` | 可选，SMTP 收件邮箱 allowlist，逗号/分号/换行分隔；测试和演练环境建议显式配置，未配置时不限制 |
 | `CONFIRM_SEND_FEISHU` | 人工调试脚本真实发送的二次确认；不替代禁发闸或收件人 allowlist |
 | `FEISHU_WEBHOOK_URL` | 采购通知群 Webhook（与 `FEISHU_PROCUREMENT_WEBHOOK_URL` 二选一，后者优先） |
 | `FEISHU_PROCUREMENT_WEBHOOK_URL` | 采购专用群 Webhook |

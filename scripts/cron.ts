@@ -17,6 +17,10 @@ import {
 } from "../lib/project-management/application/maintenance-service";
 import { prisma } from "../lib/prisma";
 import { logger } from "../lib/logger";
+import {
+  drainUploadCleanupTasks,
+  reconcileStaleUploadArtifacts,
+} from "../lib/upload-cleanup";
 
 const CONTACT_SYNC_CRON = process.env.FEISHU_CONTACT_SYNC_CRON ?? "30 8 * * *";
 const CRON_TIMEZONE = "Asia/Shanghai";
@@ -106,6 +110,27 @@ async function runNotificationOutboxDrain() {
       module: "cron",
       action: "runNotificationOutboxDrain",
       sent,
+    });
+  }
+}
+
+async function runUploadCleanupDrain() {
+  const [tasks, artifacts] = await Promise.all([
+    drainUploadCleanupTasks(50),
+    reconcileStaleUploadArtifacts({ limit: 100 }),
+  ]);
+  if (
+    tasks.cleaned > 0 ||
+    tasks.failed > 0 ||
+    artifacts.removed > 0 ||
+    artifacts.restored > 0 ||
+    artifacts.failed > 0
+  ) {
+    logger.info("cron.upload_cleanup.completed", {
+      module: "cron",
+      action: "runUploadCleanupDrain",
+      tasks,
+      artifacts,
     });
   }
 }
@@ -205,6 +230,20 @@ cron.schedule(
       logger.error("cron.notification_outbox_drain.failed", {
         module: "cron",
         action: "runNotificationOutboxDrain",
+        error: err,
+      }),
+    );
+  },
+  { timezone: CRON_TIMEZONE },
+);
+
+cron.schedule(
+  "*/10 * * * *",
+  () => {
+    runUploadCleanupDrain().catch((err) =>
+      logger.error("cron.upload_cleanup.failed", {
+        module: "cron",
+        action: "runUploadCleanupDrain",
         error: err,
       }),
     );

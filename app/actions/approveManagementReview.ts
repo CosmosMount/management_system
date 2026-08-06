@@ -140,6 +140,7 @@ async function approveManagementReviewLogged(orderId: string, userOpenId: string
             initiatorName: finalOrder.initiatorName,
             totalPrice: finalOrder.totalPrice,
             status: finalOrder.status,
+            statusEnteredAt: finalOrder.statusEnteredAt,
             team: finalOrder.team,
             techGroup: finalOrder.techGroup,
             items: mapOrderItems(order.items),

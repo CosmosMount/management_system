@@ -1,5 +1,4 @@
 import type { NotificationOutbox } from "@prisma/client";
-import { z } from "zod";
 import { defaultAppOrigin } from "@/lib/app-origin";
 import type { FeishuBotKind } from "@/lib/feishu-app-config";
 import {
@@ -20,125 +19,17 @@ import {
   sendProcurementRejectedNotificationToOpenId,
   sendProcurementReturnDraftNotification,
   sendProcurementReturnDraftNotificationToOpenId,
-  type BudgetThresholdPayload,
-  type OrderCardPayload,
 } from "@/lib/feishu";
-import { sendTeacherReviewEmailsOnce } from "@/lib/procurement-teacher-email";
+import {
+  orderOutboxPayloadSchema,
+  type OrderOutboxPayload,
+} from "@/lib/notification-contracts/procurement";
 import type {
   NotificationChannelAdapter,
   NotificationDeliveryTarget,
 } from "@/lib/notification-channels/types";
 import { NonRetryableNotificationError } from "@/lib/notification-channels/types";
 import type { FeishuSendResult } from "@/lib/feishu-message";
-
-const orderSchema = z.object({
-  id: z.string().min(1),
-  orderNo: z.string().min(1),
-  initiatorName: z.string(),
-  totalPrice: z.number(),
-  status: z.enum([
-    "DRAFT",
-    "MANAGEMENT_REVIEW",
-    "TEACHER_REVIEW",
-    "PENDING_APPLICANT_DOCS",
-    "PENDING_FINANCE_REVIEW",
-    "PENDING_APPLICANT_CONFIRM",
-    "COMPLETED",
-    "REJECTED",
-  ]),
-  team: z.string(),
-  techGroup: z.string(),
-  items: z
-    .array(
-      z.object({
-        name: z.string(),
-        quantity: z.number(),
-        unitPrice: z.number(),
-      }),
-    )
-    .optional(),
-  screenshotPath: z.string().nullable().optional(),
-  invoicePaths: z.string().nullable().optional(),
-  invoicePath: z.string().nullable().optional(),
-  listDocPath: z.string().nullable().optional(),
-});
-
-const budgetSchema = z.object({
-  description: z.string(),
-  team: z.string(),
-  techGroup: z.string(),
-  period: z.string(),
-  budgetAmount: z.number(),
-  usedAmount: z.number(),
-  usagePercent: z.number(),
-  threshold: z.number(),
-  recipientOpenIds: z.array(z.string()),
-});
-
-const appOriginSchema = z.string().nullable().optional();
-
-const orderOutboxPayloadSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("order"), order: orderSchema, appOrigin: appOriginSchema }),
-  z.object({
-    kind: z.literal("procurement_rejected"),
-    order: orderSchema,
-    reason: z.string(),
-    rejectedByName: z.string(),
-    appOrigin: appOriginSchema,
-  }),
-  z.object({
-    kind: z.literal("applicant_resubmit"),
-    order: orderSchema,
-    reason: z.string(),
-    financeName: z.string(),
-    appOrigin: appOriginSchema,
-  }),
-  z.object({
-    kind: z.literal("procurement_return_draft"),
-    order: orderSchema,
-    reason: z.string(),
-    returnedByName: z.string(),
-    appOrigin: appOriginSchema,
-  }),
-  z.object({
-    kind: z.literal("budget_threshold"),
-    budget: budgetSchema,
-    appOrigin: appOriginSchema,
-  }),
-]);
-
-export type OrderOutboxPayload =
-  | {
-      kind: "order";
-      order: OrderCardPayload;
-      appOrigin?: string | null;
-    }
-  | {
-      kind: "procurement_rejected";
-      order: OrderCardPayload;
-      reason: string;
-      rejectedByName: string;
-      appOrigin?: string | null;
-    }
-  | {
-      kind: "applicant_resubmit";
-      order: OrderCardPayload;
-      reason: string;
-      financeName: string;
-      appOrigin?: string | null;
-    }
-  | {
-      kind: "procurement_return_draft";
-      order: OrderCardPayload;
-      reason: string;
-      returnedByName: string;
-      appOrigin?: string | null;
-    }
-  | {
-      kind: "budget_threshold";
-      budget: BudgetThresholdPayload;
-      appOrigin?: string | null;
-    };
 
 function parseRow(row: NotificationOutbox): {
   data: OrderOutboxPayload;
@@ -284,23 +175,11 @@ export const procurementNotificationChannel: NotificationChannelAdapter = {
     };
   },
   sendToRecipient,
-  async beforeRecipientDelivery(row) {
-    const { data } = parseRow(row);
-    if (data.kind === "order") {
-      await sendTeacherReviewEmailsOnce(
-        data.order,
-        { appOrigin: data.appOrigin ?? defaultAppOrigin() },
-        row.eventKey,
-      );
-    }
-  },
   async sendComposite(row) {
     const { data, botKind } = parseRow(row);
     const context = { appOrigin: data.appOrigin ?? defaultAppOrigin() };
     if (data.kind === "order") {
-      await sendOrderNotification(data.order, context, botKind, {
-        outboxEventKey: row.eventKey,
-      });
+      await sendOrderNotification(data.order, context, botKind);
       return;
     }
     if (data.kind === "procurement_rejected") {

@@ -18,6 +18,15 @@ export function normalizeEmailAddress(email: string): string {
   return trimmed.toLowerCase();
 }
 
+function configuredEmailAllowlist(): Set<string> {
+  return new Set(
+    (process.env.EMAIL_DELIVERY_ALLOWED_ADDRESSES ?? "")
+      .split(/[\n,，;；]+/)
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
 function createSmtpTransport() {
   const host = process.env.SMTP_HOST?.trim();
   const user = process.env.SMTP_USER?.trim();
@@ -47,13 +56,42 @@ export async function sendEmail(options: {
   subject: string;
   html: string;
   text?: string;
-}): Promise<{ sent: boolean; skipped: boolean }> {
+}): Promise<
+  | { sent: true; skipped: false }
+  | {
+      sent: false;
+      skipped: true;
+      reason: "delivery_disabled" | "smtp_not_configured" | "recipient_not_allowed";
+    }
+> {
+  if (process.env.NOTIFICATION_DELIVERY_DISABLED === "true") {
+    logger.info("email.delivery.skipped", {
+      module: "email",
+      action: "sendEmail",
+      reason: "NOTIFICATION_DELIVERY_DISABLED",
+      result: "skipped",
+    });
+    return { sent: false, skipped: true, reason: "delivery_disabled" };
+  }
+
+  const normalizedRecipient = normalizeEmailAddress(options.to);
+  const allowlist = configuredEmailAllowlist();
+  if (allowlist.size > 0 && !allowlist.has(normalizedRecipient)) {
+    logger.info("email.delivery.skipped", {
+      module: "email",
+      action: "sendEmail",
+      reason: "recipient_not_allowed",
+      result: "skipped",
+    });
+    return { sent: false, skipped: true, reason: "recipient_not_allowed" };
+  }
+
   if (!isSmtpConfigured()) {
     logger.warn("email.smtp.skipped_not_configured", {
       module: "email",
       action: "sendEmail",
     });
-    return { sent: false, skipped: true };
+    return { sent: false, skipped: true, reason: "smtp_not_configured" };
   }
 
   const transporter = createSmtpTransport();
@@ -62,7 +100,7 @@ export async function sendEmail(options: {
 
   await transporter.sendMail({
     from,
-    to: options.to,
+    to: normalizedRecipient,
     subject: options.subject,
     html: options.html,
     text: options.text,

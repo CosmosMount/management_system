@@ -9,7 +9,7 @@ import {
   enqueueBudgetThresholdNotification,
 } from "@/lib/notification-outbox";
 import { prisma } from "@/lib/prisma";
-import { currentBudgetPeriod } from "@/lib/import-procurement-budget";
+import { currentBudgetPeriod } from "@/lib/procurement-budget-period";
 import type { NotificationContext } from "@/lib/app-origin";
 
 export async function checkBudgetAlertsForGroup(

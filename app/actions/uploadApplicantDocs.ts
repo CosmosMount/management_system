@@ -13,10 +13,10 @@ import { getNotificationContext } from "@/lib/request-origin";
 import {
   MAX_FILE_SIZE,
   MAX_INVOICE_COUNT,
-  removeUploadByPublicPath,
   saveUpload,
   uploadTypeSets,
 } from "@/lib/file-upload";
+import { cleanupUploadPaths } from "@/lib/upload-cleanup";
 import { MAX_REIMBURSEMENT_LIST_ROWS } from "@/lib/constants";
 import {
   formatDocDate,
@@ -326,26 +326,24 @@ export async function uploadApplicantDocs(formData: FormData) {
         context,
       );
     });
-    await Promise.allSettled(
+    await cleanupUploadPaths(
       [
         ...replacedPhotoPaths,
         ...(previousListDocPath && previousListDocPath !== listDocPath
           ? [previousListDocPath]
           : []),
-      ].map((publicPath) => removeUploadByPublicPath(publicPath)),
+      ],
+      "applicant_documents_replaced",
     );
   } catch (err) {
-    await Promise.allSettled(
-      newlyUploadedPaths.map((publicPath) => removeUploadByPublicPath(publicPath)),
+    await cleanupUploadPaths(
+      newlyUploadedPaths,
+      "applicant_documents_transaction_compensation",
     );
     throw err;
   }
   if (isInitialSubmit) {
-    try {
-      drainNotificationOutboxSoon();
-    } catch (err) {
-      console.error("[procurement] drain notification outbox failed:", err);
-    }
+    drainNotificationOutboxSoon();
   }
 
   revalidateProcurement(orderId);

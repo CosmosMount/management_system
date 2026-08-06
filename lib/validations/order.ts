@@ -81,6 +81,7 @@ export const createOrderSchema = z.object({
 
 export const updateOrderSchema = createOrderSchema.extend({
   orderId: z.string().min(1, "订单不存在"),
+  expectedUpdatedAt: z.iso.datetime({ message: "订单版本无效，请刷新后重试" }),
 });
 
 export type CreateOrderInput = z.infer<typeof createOrderSchema>;

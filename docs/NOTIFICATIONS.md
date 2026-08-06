@@ -8,13 +8,14 @@
 业务事务
   └─ NotificationOutbox（eventKey 幂等）
        └─ channel adapter（payload 校验、收件人、消息内容、用途）
-            └─ sendFeishuDirectMessage（身份、机器人、禁发闸、HTTP/CardKit）
+            ├─ sendFeishuDirectMessage（身份、机器人、禁发闸、HTTP/CardKit）
+            └─ email adapter → sendEmail（SMTP 禁发闸、邮箱 allowlist）
                  └─ NotificationOutboxRecipient（逐收件人结果与重试）
 ```
 
 - `NotificationOutbox` 表示业务事件，`NotificationOutboxRecipient` 表示单个收件人的投递状态。成功收件人不会因其他人失败而重复发送。
 - `lib/notification-outbox.ts` 只负责入队、claim、按 channel 调度、重试和状态更新，不解析采购或反馈 payload，也不查询业务角色。
-- `lib/notification-channels/types.ts` 定义 adapter 契约；`procurement.ts`、`feedback.ts` 与 `project-management.ts` 分别校验持久化 payload、`type`、`botKind`，计算并去重收件人、构造完整消息和声明消息用途。采购 adapter 还会区分真实私信收件人与 Webhook 等独立传输目标；项目管理 adapter 构造交互卡并通过统一私信传输层投递。
+- `lib/notification-channels/types.ts` 定义 adapter 契约；`procurement.ts`、`feedback.ts`、`project-management.ts` 与 `email.ts` 分别校验持久化 payload、`type`、`botKind`，计算并去重收件人、构造完整消息和声明消息用途。老师审核邮件使用独立 `channel=email` 逐收件人投递，不再用预写 `SENT` 的哨兵代替真实结果。
 - `lib/feishu-message.ts` 是飞书 IM 私信统一传输层，导出 `FeishuMessage`、`FeishuMessagePurpose`、`FeishuSendResult` 和 `sendFeishuDirectMessage()`。它不理解业务状态或业务角色。
 - 采购群 Webhook 由独立模块发送，不接入私信接口。SMTP 老师邮件也不属于飞书传输层。
 - 采购 CardKit 快照、卡片 sequence 和后续更新仍由采购领域维护；统一传输层负责创建并发送卡片，成功结果返回 `cardId`。
@@ -123,12 +124,16 @@ Milestone deadline scanner 使用 Asia/Shanghai 业务日期，事件键为 `pm:
 ## 投递安全与错误处理
 
 - `NOTIFICATION_DELIVERY_DISABLED=true` 时，outbox drain 和即时 drain 触发不会真实投递；飞书私信、群 Webhook、IM 素材上传也必须在出口处跳过网络请求。
+- SMTP 最终出口同样强制检查 `NOTIFICATION_DELIVERY_DISABLED`；配置 `EMAIL_DELIVERY_ALLOWED_ADDRESSES` 时，只允许列表内的规范化邮箱。自动化测试不得绕过该出口保护。
 - `FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES / OPEN_IDS / UNION_IDS` 是真实投递 allowlist。业务 payload 和 outbox 保留完整候选人，统一传输层在最后出口拦截不允许的收件人。
 - 自动化测试始终启用禁发开关，不得发送真实飞书消息。人工调试脚本还必须显式满足 `CONFIRM_SEND_FEISHU=true`，并继续通过禁发与 allowlist 检查。
 - token、凭据、完整卡片 payload、用户敏感数据和飞书原始错误响应不得写入日志或 outbox `lastError`；token、IM 与 CardKit 失败只保留安全的 code/status 和少量已知错误分类。
 - 单个收件人失败不回滚业务事务，也不改变其他收件人的成功状态。网络失败、缺少 `union_id` 和临时收件人查询失败按 outbox 退避策略处理；未知 channel、非法 payload、`type/payload.kind` 不一致或非法机器人用途属于终止配置错误，直接冻结为最大重试次数，等待人工修正后重置。
 - 审批事件必须至少解析出一个真实私信审批人；群 Webhook 成功不能代替审批待办私信，也不能令只有 Webhook 目标的审批 outbox 标记为 `SENT`。
 - 业务状态变化与 outbox 记录应在同一事务中提交；重复入队依赖稳定 `eventKey` 幂等。
+- outbox 与 recipient claim 必须比较扫描时的 `status/attempts/lockedUntil` 和可投递时间；外部 SMTP/飞书发送期间会持续在同一事务续租父子 claim，完成与失败回写以最新租约 fencing，慢请求不得被另一 worker 重复发送。
+- adapter 每次重试都会重新计算当前合法收件人；尚未发送且已撤权的 recipient 会标为 `CANCELED`，不会继续投递。协调过程不会抢占租约仍有效的 `PROCESSING` recipient；该次投递完成或租约过期后再按最新资格收敛。已成功记录保留为历史审计，不会回滚或伪装成未发送。
+- 老师审核邮件同时绑定订单 ID 与本轮 `statusEnteredAt`。订单离开该轮老师审核，或退回后重新进入新一轮老师审核时，旧邮件 outbox 与未完成 recipient 会进入 `CANCELED`，不会恢复投递；`CANCELED` 父 outbox 不允许通过现有人工重试入口恢复。当前通用保留任务不清理采购/邮件 outbox，因此这些记录按审计历史保留，后续如增加保留周期必须单独评审。
 
 ## 采购消息
 
@@ -146,6 +151,7 @@ Milestone deadline scanner 使用 Asia/Shanghai 业务日期，事件键为 `pm:
 | `COMPLETED` 已完成 | 通知 | outbox 触发 Webhook | 采购群摘要，通常无角色私信 |
 
 管理审核的车组组长和技术组组长分别审批；催办只通知尚未完成审批的一侧。
+订单进入 `TEACHER_REVIEW` 时，采购私信 outbox 与 `channel=email/type=teacher_review_email` 邮件 outbox 在同一业务事务创建；邮件成功后才标记对应 recipient 为 `SENT`，临时 SMTP 失败按 outbox 退避重试。
 所有声明为审批用途的订单状态都要求至少一个真实私信收件人。角色配置为空时，本轮不会发送群 Webhook，outbox 保持可重试失败，避免群摘要成功掩盖无人可审批。
 
 ### 结果、运营与催办

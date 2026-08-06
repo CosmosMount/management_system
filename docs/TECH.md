@@ -40,7 +40,7 @@
 ### 已知框架治理项
 
 - Web 进程里仍存在 `drainNotificationOutboxSoon()`，当前已具备结构化日志，但后续应收口为“Web 只入队，cron/worker 统一投递”。
-- outbox claim 当前以乐观 `updateMany` 抢占为主；后续建议改为 PostgreSQL `FOR UPDATE SKIP LOCKED` 原子 claim，并记录 `lockOwner`/心跳。
+- outbox claim 使用查询时的 `status/attempts/lockedUntil` 与可投递时间进行条件更新；收件人外部发送期间定时在同一事务续租父 outbox 与 recipient，所有完成/失败回写继续以最新 `attempts + lockedUntil` fencing，避免旧 worker 覆盖新租约或慢请求触发重复投递。
 - channel adapter 必须固化业务 payload 与收件人计划；不要在 outbox 核心或飞书传输层增加业务分支。
 - 维护脚本应逐步统一 dry-run/confirm 约定，写操作脚本必须要求显式确认（例如既有 `APPLY_*=true` 或受控 `--apply` 参数）和目标数据库确认；会触达飞书的脚本必须要求 `CONFIRM_SEND_FEISHU=true`，并默认尊重 `NOTIFICATION_DELIVERY_DISABLED=true`。
 
@@ -109,9 +109,11 @@ Task 有效成员只允许 `OWNER` 和 `PARTICIPANT`。同一 Person 在同一 T
 
 **采购明细 Excel 导入**（`lib/import-procurement-items.ts`）：采购申请页支持从 Excel 导入条目，列包括物品名称、规格、种类、采购链接、加工商、数量、行总价。加工费条目导入后仍需手动上传图片。
 
+新建采购申请和工坊加工费会先使用预分配的订单 ID 安全写入全部图片；文件准备完成后，订单、明细、最终状态与提交 outbox 才在单一事务中创建。草稿更新同样先完整暂存新图片，再以页面读取到的 `updatedAt` 做乐观版本校验，并在单一事务替换订单与明细；沿用旧图片时服务端要求路径来自当前订单现有明细，且对应 `FileAsset` 的 `orderId/kind` 匹配。文件准备阶段不会暴露中间业务状态，第二张文件失败或数据库事务失败时会清理本次暂存文件，成功后再补偿清理被替换图片。通用上传补偿会执行两次即时幂等清理；持续失败时在 `FileAsset.cleanupRequestedAt/cleanupNextRunAt` 留下持久化任务，由 cron 每 10 分钟继续重试，避免事务失败、附件替换、管理员删除或生成文档注册失败后静默遗留文件。同一任务还会处理超过一小时的 `.tmp-*`/`.bak-*`：临时文件删除，备份在主文件缺失时恢复、主文件存在时清理。签名等固定路径资产覆盖注册失败时不会复用删除资产任务，而是把失败的新文件隔离为 `.tmp-cleanup-*`，通过绑定原 `FileAsset.writeGeneration` 的 `.restore-bak-*` 标记即时或由 cron 恢复旧文件，并保留原权限元数据；后续成功覆盖会推进写入代次，使旧恢复标记只能清理、不能回滚新文件。
+
 **预算池**（`lib/procurement-budget.ts`、`lib/procurement-budget-alerts.ts`）：
 
-- 超级管理员在 `/admin` 通过 Excel 导入预算（项目、车组、技术组、预算、周期默认 2026）；每行一个项目，同组可有多个项目；仅「项目+车组+技术组+周期」完全相同才合并预算；展示顺序与导入表行序一致；单次最多 300 行；支持追加或覆盖同周期数据
+- 超级管理员在 `/admin` 通过 Excel 导入预算（项目、车组、技术组、预算、周期默认 2026）；每行一个项目，同组可有多个项目；仅「项目+车组+技术组+周期」完全相同才合并预算；展示顺序与导入表行序一致；单次最多 300 行；支持追加或覆盖同周期数据。导入会按周期排序获取事务级 advisory lock，删除与 upsert 保持在同一事务，防止并发覆盖交错或多周期导入死锁
 - 已使用金额 = 同一车组且同一技术组、状态非 `DRAFT`/`REJECTED` 的订单 `totalPrice` 之和；同组别多项目按各自预算占比分摊已用金额，使用率按组预算合计计算
 - 使用率首次达到 70%、80%、90%、100% 时向对应车组组长或技术组组长发送飞书私信（按组别去重）
 - 采购看板 `/procurement/dashboard` 按项目分行展示预算占用（副标为车组·技术组），并汇总当前筛选下的预算池总量；支持按车组/技术组筛选
@@ -270,7 +272,7 @@ npm run db:deploy              # prisma migrate deploy（等待 PG 就绪）
 npm run db:seed -- --super-admin-open-id=<openId> # 初始化首位统一超级管理员
 npm run accounts:preflight    # 旧 schema 统一账号迁移只读预检
 npm run accounts:validate     # 新 schema 统一账号迁移只读核对
-npm run db:fix-roles           # 清理异常角色数据后重新 seed
+npm run db:roles:validate      # 只读校验报销角色作用域；异常数据需受控修复
 npm run db:studio              # Prisma Studio
 npm run cron                   # 启动定时任务（独立进程）
 ```

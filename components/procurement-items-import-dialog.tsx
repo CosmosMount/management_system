@@ -12,13 +12,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  downloadProcurementItemsTemplate,
-  filterProcessingFeeItems,
-  parseProcurementItemsFromFile,
-  type ImportProcurementItemsResult,
-} from "@/lib/import-procurement-items";
+import type { ImportProcurementItemsResult } from "@/lib/import-procurement-items";
 import type { PurchaseItemInput } from "@/lib/validations/order";
+import {
+  SPREADSHEET_FILE_SIZE_LABEL,
+  validateSpreadsheetFile,
+} from "@/lib/spreadsheet-file";
+import { createAsyncOperationGeneration } from "@/lib/async-operation-generation";
 
 type Props = {
   open: boolean;
@@ -29,6 +29,7 @@ type Props = {
     items: PurchaseItemInput[],
     mode: "replace" | "append",
   ) => void;
+  parseFile?: (file: File) => Promise<ImportProcurementItemsResult>;
 };
 
 export function ProcurementItemsImportDialog({
@@ -37,33 +38,49 @@ export function ProcurementItemsImportDialog({
   existingItemCount,
   processingFeeOnly = false,
   onConfirm,
+  parseFile,
 }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const parseGenerationRef = useRef(createAsyncOperationGeneration());
   const [result, setResult] = useState<ImportProcurementItemsResult | null>(
     null,
   );
+  const [fileName, setFileName] = useState("");
   const [parsing, setParsing] = useState(false);
+  const [downloadingTemplate, setDownloadingTemplate] = useState(false);
 
   async function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
 
+    const generation = parseGenerationRef.current.begin();
+    setFileName("");
+    setResult(null);
     setParsing(true);
     try {
-      let parsed = await parseProcurementItemsFromFile(file);
+      validateSpreadsheetFile(file);
+      const importHelpers = await import("@/lib/import-procurement-items");
+      let parsed = parseFile
+        ? await parseFile(file)
+        : await importHelpers.parseProcurementItemsFromFile(file);
       if (processingFeeOnly) {
-        parsed = filterProcessingFeeItems(parsed);
+        parsed = importHelpers.filterProcessingFeeItems(parsed);
       }
+      if (!parseGenerationRef.current.isCurrent(generation)) return;
+      setFileName(file.name);
       setResult(parsed);
       if (parsed.items.length === 0 && parsed.errors.length === 0) {
         toast.error("未解析到有效条目");
       }
     } catch (err) {
+      if (!parseGenerationRef.current.isCurrent(generation)) return;
       toast.error(err instanceof Error ? err.message : "文件解析失败");
       setResult(null);
     } finally {
-      setParsing(false);
+      if (parseGenerationRef.current.isCurrent(generation)) {
+        setParsing(false);
+      }
     }
   }
 
@@ -80,14 +97,35 @@ export function ProcurementItemsImportDialog({
       return;
     }
 
+    parseGenerationRef.current.cancel();
     onConfirm(result.items, mode);
+    setFileName("");
     setResult(null);
     onOpenChange(false);
   }
 
   function handleOpenChange(next: boolean) {
-    if (!next) setResult(null);
+    if (!next) {
+      parseGenerationRef.current.cancel();
+      setParsing(false);
+      setFileName("");
+      setResult(null);
+    }
     onOpenChange(next);
+  }
+
+  async function handleDownloadTemplate() {
+    setDownloadingTemplate(true);
+    try {
+      const { downloadProcurementItemsTemplate } = await import(
+        "@/lib/import-procurement-items"
+      );
+      downloadProcurementItemsTemplate();
+    } catch {
+      toast.error("采购明细模板加载失败，请稍后重试");
+    } finally {
+      setDownloadingTemplate(false);
+    }
   }
 
   return (
@@ -96,7 +134,7 @@ export function ProcurementItemsImportDialog({
         <DialogHeader>
           <DialogTitle>从 Excel 导入采购明细</DialogTitle>
           <DialogDescription>
-            支持 .xlsx / .xls。加工费条目导入后仍需手动上传参考图片。
+            支持 .xlsx / .xls，文件不超过 {SPREADSHEET_FILE_SIZE_LABEL}。加工费条目导入后仍需手动上传参考图片。
             {processingFeeOnly ? " 本表单仅导入加工费行。" : ""}
           </DialogDescription>
         </DialogHeader>
@@ -121,17 +159,19 @@ export function ProcurementItemsImportDialog({
           <Button
             type="button"
             variant="ghost"
-            onClick={() => downloadProcurementItemsTemplate()}
+            disabled={downloadingTemplate}
+            onClick={() => void handleDownloadTemplate()}
           >
             <FileSpreadsheet className="mr-1 h-4 w-4" />
-            下载模板
+            {downloadingTemplate ? "下载中…" : "下载模板"}
           </Button>
         </div>
 
         {result && (
           <div className="max-h-48 space-y-2 overflow-y-auto rounded-md border bg-muted/30 p-3 text-sm">
             <p>
-              成功解析 <strong>{result.items.length}</strong> 条
+              文件：<strong>{fileName}</strong>；成功解析{" "}
+              <strong>{result.items.length}</strong> 条
               {result.errors.length > 0 && (
                 <>，<span className="text-destructive">{result.errors.length} 条错误</span></>
               )}
@@ -165,7 +205,7 @@ export function ProcurementItemsImportDialog({
             <Button
               type="button"
               variant="secondary"
-              disabled={!result?.items.length}
+              disabled={parsing || !result?.items.length}
               onClick={() => handleConfirm("append")}
             >
               追加到现有条目
@@ -173,7 +213,7 @@ export function ProcurementItemsImportDialog({
           )}
           <Button
             type="button"
-            disabled={!result?.items.length}
+            disabled={parsing || !result?.items.length}
             onClick={() => handleConfirm("replace")}
           >
             {existingItemCount > 0 ? "覆盖现有条目" : "导入"}

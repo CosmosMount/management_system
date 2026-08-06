@@ -319,11 +319,23 @@ export function createOfficialPlaywrightEnvironment(
   for (const environmentName of FORMER_ENTRY_BYPASS_ENVIRONMENTS) {
     delete env[environmentName];
   }
+  for (const environmentName of [
+    "SMTP_HOST",
+    "SMTP_PORT",
+    "SMTP_USER",
+    "SMTP_PASSWORD",
+    "SMTP_FROM",
+    "SMTP_SECURE",
+    "SMTP_REQUIRE_TLS",
+  ]) {
+    delete env[environmentName];
+  }
 
   env.CHECKPOINT_DISABLE = "1";
   env.CONFIRM_SEND_FEISHU = "";
   env.DATABASE_URL = ownership.target.url;
   env.NOTIFICATION_DELIVERY_DISABLED = "true";
+  env.EMAIL_DELIVERY_ALLOWED_ADDRESSES = "";
   env.PLAYWRIGHT_BASE_URL = CONTROLLED_BASE_URL;
   env.PLAYWRIGHT_CONFIRM_RECREATE_DB = ownership.target.databaseName;
   env.PLAYWRIGHT_CONFIRM_RECREATE_SHADOW_DB =

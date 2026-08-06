@@ -61,6 +61,14 @@ import type {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import {
+  formatCanvasDate as formatDate,
+  formatCanvasDateTime as formatDateTime,
+  formatCanvasRange as formatRange,
+  formatCanvasTick as formatTick,
+  formatCompactAnchorDate,
+  isShanghaiWeekend,
+} from "@/components/project-management/time-canvas/time-format";
 
 const ROW_HEADER_WIDTH = 240;
 const AXIS_HEIGHT = 56;
@@ -1937,67 +1945,6 @@ function phaseBandToneClassName(tone: TimeCanvasPhaseBand["tone"]) {
     return "border-rose-500/60 bg-rose-500/15 text-rose-950 dark:text-rose-100";
   }
   return "border-slate-500/60 bg-slate-500/15 text-slate-950 dark:text-slate-100";
-}
-
-const dateFormatter = new Intl.DateTimeFormat("zh-CN", {
-  timeZone: "Asia/Shanghai",
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-});
-const dateTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
-  timeZone: "Asia/Shanghai",
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
-  hourCycle: "h23",
-});
-const compactDateTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
-  timeZone: "Asia/Shanghai",
-  month: "2-digit",
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
-  hourCycle: "h23",
-});
-const hourFormatter = new Intl.DateTimeFormat("zh-CN", {
-  timeZone: "Asia/Shanghai",
-  hour: "2-digit",
-  minute: "2-digit",
-  hourCycle: "h23",
-});
-
-function formatDate(timeMs: number) {
-  return dateFormatter.format(new Date(timeMs));
-}
-
-function formatDateTime(timeMs: number) {
-  return dateTimeFormatter.format(new Date(timeMs));
-}
-
-function formatCompactAnchorDate(timeMs: number, includeTime: boolean) {
-  const value = includeTime
-    ? compactDateTimeFormatter.format(new Date(timeMs))
-    : formatDate(timeMs).slice(5);
-  return value.replaceAll("/", "-");
-}
-
-function formatRange(startMs: number, endMs: number) {
-  return `${formatDateTime(startMs)} – ${formatDateTime(endMs)}`;
-}
-
-function formatTick(timeMs: number, zoom: TimeCanvasZoom) {
-  return zoom === "HOUR" ? hourFormatter.format(new Date(timeMs)) : formatDate(timeMs);
-}
-
-function isShanghaiWeekend(timeMs: number) {
-  const weekday = new Intl.DateTimeFormat("en-US", {
-    timeZone: "Asia/Shanghai",
-    weekday: "short",
-  }).format(new Date(timeMs));
-  return weekday === "Sat" || weekday === "Sun";
 }
 
 function prefersReducedMotion() {

@@ -1,9 +1,10 @@
 "use server";
 
 import { auth } from "@/lib/auth";
-import { OrderStatus, type PurchaseItemKind } from "@prisma/client";
-import { attachItemReferenceImages } from "@/lib/order-item-images";
-import { removeOrderUploads } from "@/lib/file-upload";
+import { randomUUID } from "node:crypto";
+import { OrderStatus } from "@prisma/client";
+import { prepareItemReferenceImages } from "@/lib/order-item-images";
+import { cleanupUploadPaths } from "@/lib/upload-cleanup";
 import { withActionLogging } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 import { revalidateProcurement } from "@/lib/revalidate";
@@ -14,6 +15,7 @@ import {
   parseWorkshopFeeFormData,
 } from "@/lib/validations/workshop-fee";
 import { generateWorkshopOrderNo } from "@/lib/workshop-order-no";
+import { parseJsonFormField } from "@/lib/validations/form-data-json";
 
 function isUniqueConstraintError(err: unknown): boolean {
   return (
@@ -43,7 +45,7 @@ export async function createWorkshopFeeOrder(formData: FormData) {
 }
 
 async function createWorkshopFeeOrderLogged(formData: FormData, userOpenId: string) {
-  const payload = JSON.parse(String(formData.get("payload") ?? "{}"));
+  const payload = parseJsonFormField(formData);
   const parsed = createWorkshopFeeSchema.parse(payload);
   const { itemImages } = parseWorkshopFeeFormData(formData);
   assertWorkshopFeeImages(parsed.items, itemImages);
@@ -57,16 +59,21 @@ async function createWorkshopFeeOrderLogged(formData: FormData, userOpenId: stri
 
   const totalPrice = parsed.items.reduce((sum, item) => sum + item.lineTotal, 0);
 
-  let order: {
-    id: string;
-    items: Array<{ id: string; itemKind: PurchaseItemKind }>;
-  } | null = null;
-  for (let attempt = 0; attempt < 5; attempt++) {
-    try {
+  const orderId = randomUUID();
+  const preparedImages = await prepareItemReferenceImages({
+    orderId,
+    itemKinds: parsed.items.map(() => "PROCESSING_FEE"),
+    itemImages,
+  });
+  let order: { id: string } | null = null;
+  try {
+    for (let attempt = 0; attempt < 5; attempt++) {
       const orderNo = await generateWorkshopOrderNo();
-      order = await prisma.$transaction(async (tx) => {
-        return tx.purchaseOrder.create({
+      try {
+        order = await prisma.$transaction(async (tx) =>
+          tx.purchaseOrder.create({
           data: {
+            id: orderId,
             orderNo,
             initiatorId: user.id,
             initiatorName: user.name,
@@ -77,8 +84,7 @@ async function createWorkshopFeeOrderLogged(formData: FormData, userOpenId: stri
             isWorkshopFee: true,
             teamApproved: true,
             techGroupApproved: true,
-            items: {
-              create: parsed.items.map((item) => ({
+            items: { create: parsed.items.map((item, index) => ({
                 name: item.name,
                 spec: item.spec,
                 itemKind: "PROCESSING_FEE",
@@ -86,34 +92,30 @@ async function createWorkshopFeeOrderLogged(formData: FormData, userOpenId: stri
                 processingVendor: item.processingVendor,
                 quantity: item.quantity,
                 unitPrice: item.lineTotal / item.quantity,
+                referenceImagePath: preparedImages.referenceImagePaths[index],
               })),
             },
           },
-          include: { items: true },
-        });
-      });
-      break;
-    } catch (err) {
-      if (!isUniqueConstraintError(err) || attempt === 4) {
-        throw err;
+          }),
+        );
+        break;
+      } catch (err) {
+        if (!isUniqueConstraintError(err) || attempt === 4) throw err;
       }
     }
+  } catch (error) {
+    await cleanupUploadPaths(
+      preparedImages.stagedUploadPaths,
+      "workshop_order_create_compensation",
+    );
+    throw error;
   }
   if (!order) {
-    throw new Error("订单创建失败，请重试");
-  }
-
-  try {
-    await attachItemReferenceImages(
-      order.id,
-      order.items.map((item) => ({ id: item.id, itemKind: item.itemKind })),
-      itemImages,
-      parsed.items.map(() => null),
+    await cleanupUploadPaths(
+      preparedImages.stagedUploadPaths,
+      "workshop_order_create_compensation",
     );
-  } catch (err) {
-    await prisma.purchaseOrder.deleteMany({ where: { id: order.id } });
-    await removeOrderUploads(order.id);
-    throw err;
+    throw new Error("订单创建失败，请重试");
   }
 
   revalidateProcurement(order.id);

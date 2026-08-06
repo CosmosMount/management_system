@@ -1,21 +1,30 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { auth } from "@/lib/auth";
-import { OrderStatus, type PurchaseItemKind } from "@prisma/client";
+import { OrderStatus } from "@prisma/client";
 import { generateOrderNo } from "@/lib/order-no";
-import { attachItemReferenceImages } from "@/lib/order-item-images";
 import { prisma } from "@/lib/prisma";
-import { removeOrderUploads } from "@/lib/file-upload";
+import { prepareItemReferenceImages } from "@/lib/order-item-images";
+import { cleanupUploadPaths } from "@/lib/upload-cleanup";
 import { withActionLogging } from "@/lib/logger";
-import { runProcurementSubmitSideEffects } from "@/lib/procurement-order-side-effects";
+import {
+  enqueueProcurementSubmitNotificationTx,
+  runProcurementBudgetAlertSideEffects,
+} from "@/lib/procurement-order-side-effects";
+import {
+  drainNotificationOutboxSoon,
+} from "@/lib/notification-outbox";
+import { getNotificationContext } from "@/lib/request-origin";
 import { revalidateProcurement } from "@/lib/revalidate";
 import { requireInitiatorSignature } from "@/lib/user-signature";
+import { itemKindNeedsImage } from "@/lib/purchase-item-kind";
 import {
-  assertItemImagesPresent,
   createOrderSchema,
   parseOrderFormData,
   toStoredPurchaseItem,
 } from "@/lib/validations/order";
+import { parseJsonFormField } from "@/lib/validations/form-data-json";
 
 function isUniqueConstraintError(err: unknown): boolean {
   return (
@@ -45,13 +54,17 @@ export async function createOrder(formData: FormData) {
 }
 
 async function createOrderLogged(formData: FormData, userOpenId: string) {
-  const payload = JSON.parse(String(formData.get("payload") ?? "{}"));
+  const payload = parseJsonFormField(formData);
   const parsed = createOrderSchema.parse(payload);
   if (parsed.submit) {
     await requireInitiatorSignature(userOpenId);
   }
   const { itemImages } = parseOrderFormData(formData);
-  assertItemImagesPresent(parsed.items, itemImages);
+  parsed.items.forEach((item, index) => {
+    if (itemKindNeedsImage(item.itemKind) && !itemImages.has(index)) {
+      throw new Error("加工费须上传对应图片");
+    }
+  });
 
   const user = await prisma.user.findUnique({
     where: { openId: userOpenId },
@@ -62,20 +75,35 @@ async function createOrderLogged(formData: FormData, userOpenId: string) {
 
   const storedItems = parsed.items.map(toStoredPurchaseItem);
   const totalPrice = parsed.items.reduce((sum, item) => sum + item.lineTotal, 0);
-  const status = parsed.submit
-    ? OrderStatus.MANAGEMENT_REVIEW
-    : OrderStatus.DRAFT;
+  const status = parsed.submit ? OrderStatus.MANAGEMENT_REVIEW : OrderStatus.DRAFT;
+  const orderId = randomUUID();
+  const context = parsed.submit ? await getNotificationContext() : undefined;
+  const preparedImages = await prepareItemReferenceImages({
+    orderId,
+    itemKinds: storedItems.map((item) => item.itemKind),
+    itemImages,
+  });
+  const preparedItems = storedItems.map((item, index) => ({
+    ...item,
+    referenceImagePath: preparedImages.referenceImagePaths[index],
+  }));
+  const stagedUploadPaths = preparedImages.stagedUploadPaths;
+  const cleanupStagedUploads = () =>
+    cleanupUploadPaths(stagedUploadPaths, "order_create_compensation");
 
   let order: {
     id: string;
-    items: Array<{ id: string; itemKind: PurchaseItemKind }>;
+    team: string;
+    techGroup: string;
   } | null = null;
-  for (let attempt = 0; attempt < 5; attempt++) {
-    try {
+  try {
+    for (let attempt = 0; attempt < 5; attempt++) {
       const orderNo = await generateOrderNo();
-      order = await prisma.$transaction(async (tx) => {
-        return tx.purchaseOrder.create({
+      try {
+        order = await prisma.$transaction(async (tx) => {
+          const created = await tx.purchaseOrder.create({
           data: {
+            id: orderId,
             orderNo,
             initiatorId: user.id,
             initiatorName: user.name,
@@ -83,52 +111,41 @@ async function createOrderLogged(formData: FormData, userOpenId: string) {
             techGroup: parsed.techGroup,
             totalPrice,
             status,
-            ...(parsed.submit
-              ? { statusEnteredAt: new Date(), lastReminderAt: null }
-              : {}),
             items: {
-              create: storedItems,
+              create: preparedItems,
             },
           },
           include: { items: true },
+          });
+          if (parsed.submit) {
+            await enqueueProcurementSubmitNotificationTx(tx, created, context!);
+          }
+          return created;
         });
-      });
-      break;
-    } catch (err) {
-      if (!isUniqueConstraintError(err) || attempt === 4) {
-        throw err;
+        break;
+      } catch (err) {
+        if (!isUniqueConstraintError(err) || attempt === 4) {
+          throw err;
+        }
       }
     }
+  } catch (error) {
+    await cleanupStagedUploads();
+    throw error;
   }
   if (!order) {
+    await cleanupStagedUploads();
     throw new Error("订单创建失败，请重试");
   }
 
-  try {
-    await attachItemReferenceImages(
-      order.id,
-      order.items.map((item) => ({ id: item.id, itemKind: item.itemKind })),
-      itemImages,
-      parsed.items.map((item) => item.referenceImagePath ?? null),
-    );
-  } catch (err) {
-    await prisma.purchaseOrder.deleteMany({ where: { id: order.id } });
-    await removeOrderUploads(order.id);
-    throw err;
-  }
-
-  const refreshed = await prisma.purchaseOrder.findUnique({
-    where: { id: order.id },
-    include: { items: true },
-  });
-  if (!refreshed) {
-    throw new Error("订单创建失败");
-  }
-
   if (status === OrderStatus.MANAGEMENT_REVIEW) {
-    await runProcurementSubmitSideEffects(refreshed);
+    drainNotificationOutboxSoon();
+    await runProcurementBudgetAlertSideEffects(
+      order.team,
+      order.techGroup,
+    );
   }
 
-  revalidateProcurement(refreshed.id);
-  return { id: refreshed.id };
+  revalidateProcurement(order.id);
+  return { id: order.id };
 }

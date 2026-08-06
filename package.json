@@ -24,7 +24,7 @@
     "accounts:preflight": "tsx scripts/preflight-unified-accounts.ts",
     "accounts:validate": "tsx scripts/validate-unified-accounts.ts",
     "db:seed": "tsx prisma/seed.ts",
-    "db:fix-roles": "tsx scripts/fix-user-roles.ts && tsx prisma/seed.ts",
+    "db:roles:validate": "tsx scripts/validate-user-roles.ts",
     "db:studio": "prisma studio",
     "test:playwright-db-lifecycle": "tsx scripts/verify-playwright-runner-lifecycle.ts",
     "test:playwright-db-safety": "tsx scripts/verify-playwright-db-safety.ts",

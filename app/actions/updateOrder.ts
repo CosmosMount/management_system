@@ -2,14 +2,20 @@
 
 import { auth } from "@/lib/auth";
 import { OrderStatus } from "@prisma/client";
-import { attachItemReferenceImages } from "@/lib/order-item-images";
+import {
+  assertExistingItemImagesBelongToOrder,
+  prepareItemReferenceImages,
+} from "@/lib/order-item-images";
 import { prisma } from "@/lib/prisma";
 import { canEditDraftOrder } from "@/lib/permissions";
 import { withActionLogging } from "@/lib/logger";
+import { procurementResubmitFields } from "@/lib/procurement-order-draft";
 import {
-  procurementResubmitFields,
-} from "@/lib/procurement-order-draft";
-import { runProcurementSubmitSideEffects } from "@/lib/procurement-order-side-effects";
+  enqueueProcurementSubmitNotificationTx,
+  runProcurementBudgetAlertSideEffects,
+} from "@/lib/procurement-order-side-effects";
+import { drainNotificationOutboxSoon } from "@/lib/notification-outbox";
+import { getNotificationContext } from "@/lib/request-origin";
 import { revalidateProcurement } from "@/lib/revalidate";
 import { requireInitiatorSignature } from "@/lib/user-signature";
 import {
@@ -20,6 +26,8 @@ import {
   toStoredPurchaseItem,
   updateOrderSchema,
 } from "@/lib/validations/order";
+import { parseJsonFormField } from "@/lib/validations/form-data-json";
+import { cleanupUploadPaths } from "@/lib/upload-cleanup";
 
 async function requireDraftOrder(orderId: string, userOpenId: string) {
   const order = await prisma.purchaseOrder.findUnique({
@@ -64,7 +72,7 @@ export async function updateOrder(formData: FormData) {
 }
 
 async function updateOrderLogged(formData: FormData, userOpenId: string) {
-  const payload = JSON.parse(String(formData.get("payload") ?? "{}"));
+  const payload = parseJsonFormField(formData);
   const parsed = updateOrderSchema.parse(payload);
   const { itemImages } = parseOrderFormData(formData);
   assertItemImagesPresent(parsed.items, itemImages);
@@ -73,58 +81,85 @@ async function updateOrderLogged(formData: FormData, userOpenId: string) {
     await requireInitiatorSignature(userOpenId);
   }
 
-  await requireDraftOrder(parsed.orderId, userOpenId);
+  const currentOrder = await requireDraftOrder(parsed.orderId, userOpenId);
+  await assertExistingItemImagesBelongToOrder(
+    parsed.orderId,
+    currentOrder.items.map((item) => item.referenceImagePath),
+    parsed.items.map((item) => item.referenceImagePath),
+  );
 
   const storedItems = parsed.items.map(toStoredPurchaseItem);
   const totalPrice = parsed.items.reduce((sum, item) => sum + item.lineTotal, 0);
-
-  const order = await prisma.$transaction(async (tx) => {
-    const updated = await tx.purchaseOrder.updateMany({
-      where: {
-        id: parsed.orderId,
-        status: OrderStatus.DRAFT,
-        initiator: { openId: userOpenId },
-      },
-      data: {
-        team: parsed.team,
-        techGroup: parsed.techGroup,
-        totalPrice,
-        ...(parsed.submit ? procurementResubmitFields() : { status: OrderStatus.DRAFT }),
-      },
-    });
-    if (updated.count !== 1) {
-      throw new Error("订单状态已更新，请刷新后重试");
-    }
-
-    return tx.purchaseOrder.update({
-      where: { id: parsed.orderId },
-      data: {
-        items: {
-          deleteMany: {},
-          create: storedItems,
-        },
-      },
-      include: { items: true },
-    });
-  });
-
-  await attachItemReferenceImages(
-    order.id,
-    order.items.map((item) => ({ id: item.id, itemKind: item.itemKind })),
+  const prepared = await prepareItemReferenceImages({
+    orderId: parsed.orderId,
+    itemKinds: storedItems.map((item) => item.itemKind),
     itemImages,
-    parsed.items.map((item) => item.referenceImagePath ?? null),
-  );
-
-  const refreshed = await prisma.purchaseOrder.findUnique({
-    where: { id: order.id },
-    include: { items: true },
+    existingPaths: parsed.items.map((item) => item.referenceImagePath),
   });
-  if (!refreshed) {
-    throw new Error("订单更新失败");
+  const preparedItems = storedItems.map((item, index) => ({
+    ...item,
+    referenceImagePath: prepared.referenceImagePaths[index],
+  }));
+  const context = parsed.submit ? await getNotificationContext() : undefined;
+  let refreshed;
+  try {
+    refreshed = await prisma.$transaction(async (tx) => {
+      const changed = await tx.purchaseOrder.updateMany({
+        where: {
+          id: parsed.orderId,
+          status: OrderStatus.DRAFT,
+          updatedAt: new Date(parsed.expectedUpdatedAt),
+          initiator: { openId: userOpenId },
+        },
+        data: {
+          team: parsed.team,
+          techGroup: parsed.techGroup,
+          totalPrice,
+          ...(parsed.submit
+            ? procurementResubmitFields()
+            : { status: OrderStatus.DRAFT }),
+        },
+      });
+      if (changed.count !== 1) {
+        throw new Error("订单状态已更新，请刷新后重试");
+      }
+      await tx.purchaseItem.deleteMany({ where: { orderId: parsed.orderId } });
+      await tx.purchaseItem.createMany({
+        data: preparedItems.map((item) => ({ ...item, orderId: parsed.orderId })),
+      });
+      const updated = await tx.purchaseOrder.findUniqueOrThrow({
+        where: { id: parsed.orderId },
+        include: { items: true },
+      });
+      if (parsed.submit) {
+        await enqueueProcurementSubmitNotificationTx(tx, updated, context!);
+      }
+      return updated;
+    });
+  } catch (error) {
+    await cleanupUploadPaths(
+      prepared.stagedUploadPaths,
+      "order_update_transaction_compensation",
+    );
+    throw error;
   }
 
+  const retainedPaths = new Set(
+    prepared.referenceImagePaths.filter((value): value is string => !!value),
+  );
+  const replacedPaths = currentOrder.items
+    .map((item) => item.referenceImagePath)
+    .filter(
+      (value): value is string => !!value && !retainedPaths.has(value),
+    );
+  await cleanupUploadPaths(replacedPaths, "order_update_replaced_images");
+
   if (parsed.submit) {
-    await runProcurementSubmitSideEffects(refreshed);
+    drainNotificationOutboxSoon();
+    await runProcurementBudgetAlertSideEffects(
+      refreshed.team,
+      refreshed.techGroup,
+    );
   }
 
   revalidateProcurement(refreshed.id);
@@ -158,6 +193,7 @@ async function submitDraftOrderLogged(orderId: string, userOpenId: string) {
   createOrderSchema.parse({ ...formInput, submit: true });
   assertItemImagesPresent(formInput.items, new Map());
 
+  const context = await getNotificationContext();
   const updated = await prisma.$transaction(async (tx) => {
     const changed = await tx.purchaseOrder.updateMany({
       where: {
@@ -170,13 +206,16 @@ async function submitDraftOrderLogged(orderId: string, userOpenId: string) {
     if (changed.count !== 1) {
       throw new Error("订单状态已更新，请刷新后重试");
     }
-    return tx.purchaseOrder.findUniqueOrThrow({
+    const submitted = await tx.purchaseOrder.findUniqueOrThrow({
       where: { id: orderId },
       include: { items: true },
     });
+    await enqueueProcurementSubmitNotificationTx(tx, submitted, context);
+    return submitted;
   });
 
-  await runProcurementSubmitSideEffects(updated);
+  drainNotificationOutboxSoon();
+  await runProcurementBudgetAlertSideEffects(updated.team, updated.techGroup);
 
   revalidateProcurement(orderId);
   return { id: updated.id };

@@ -3,7 +3,7 @@ import { UserRoleType } from "@prisma/client";
 import { handleFeishuCardAction } from "../lib/feishu-card-action-handler";
 import { approveProcurementByOpenId } from "../lib/procurement-approve-by-open-id";
 import {
-  enqueueOrderNotification,
+  enqueueOrderNotificationTx,
   orderNotificationEventKey,
 } from "../lib/notification-outbox";
 import { prisma } from "../lib/prisma";
@@ -136,16 +136,18 @@ test("采购管理审核部分通过不刷新审批轮次时间", async () => {
   });
   const managementReviewKey = orderNotificationEventKey(original);
 
-  await enqueueOrderNotification(managementReviewKey, {
-    id: original.id,
-    orderNo: original.orderNo,
-    initiatorName: original.initiatorName,
-    totalPrice: original.totalPrice,
-    status: original.status,
-    team: original.team,
-    techGroup: original.techGroup,
-    items: [],
-  });
+  await prisma.$transaction((tx) =>
+    enqueueOrderNotificationTx(tx, managementReviewKey, {
+      id: original.id,
+      orderNo: original.orderNo,
+      initiatorName: original.initiatorName,
+      totalPrice: original.totalPrice,
+      status: original.status,
+      team: original.team,
+      techGroup: original.techGroup,
+      items: [],
+    }),
+  );
 
   await approveProcurementByOpenId(teamOnlyOpenId, order.id);
 
@@ -164,16 +166,22 @@ test("采购管理审核部分通过不刷新审批轮次时间", async () => {
     original.statusEnteredAt.toISOString(),
   );
 
-  await enqueueOrderNotification(orderNotificationEventKey(partiallyApproved), {
-    id: partiallyApproved.id,
-    orderNo: partiallyApproved.orderNo,
-    initiatorName: partiallyApproved.initiatorName,
-    totalPrice: partiallyApproved.totalPrice,
-    status: partiallyApproved.status,
-    team: partiallyApproved.team,
-    techGroup: partiallyApproved.techGroup,
-    items: [],
-  });
+  await prisma.$transaction((tx) =>
+    enqueueOrderNotificationTx(
+      tx,
+      orderNotificationEventKey(partiallyApproved),
+      {
+        id: partiallyApproved.id,
+        orderNo: partiallyApproved.orderNo,
+        initiatorName: partiallyApproved.initiatorName,
+        totalPrice: partiallyApproved.totalPrice,
+        status: partiallyApproved.status,
+        team: partiallyApproved.team,
+        techGroup: partiallyApproved.techGroup,
+        items: [],
+      },
+    ),
+  );
   await expect(
     prisma.notificationOutbox.count({ where: { eventKey: managementReviewKey } }),
   ).resolves.toBe(1);
@@ -755,31 +763,15 @@ test("工坊加工费可录入并直接计入采购汇总", async ({
   await expect(page.getByRole("heading", { name: "工坊加工费" })).toBeVisible();
   await page.getByText("请选择车组").click();
   await page.getByRole("option", { name: "英雄" }).click();
-  await page
-    .getByText("费用名称")
-    .first()
-    .locator("xpath=following::input[1]")
-    .fill(feeName);
-  await page
-    .getByText("说明")
-    .first()
-    .locator("xpath=following::input[1]")
-    .fill("PW全功能-加工说明");
+  await page.getByLabel("费用名称").fill(feeName);
+  await page.getByLabel("说明").fill("PW全功能-加工说明");
   await page.getByText("请选择加工商").click();
   await page.getByRole("option", { name: /添加加工商/ }).click();
   await page.locator("#processing-vendor-name").fill(vendorName);
   await page.getByRole("button", { name: "添加", exact: true }).click();
   await expect(page.getByText("加工商已添加")).toBeVisible();
-  await page
-    .getByText("图片")
-    .first()
-    .locator("xpath=following::input[@type='file'][1]")
-    .setInputFiles([pngUpload("workshop-fee.png")]);
-  await page
-    .getByText("金额")
-    .first()
-    .locator("xpath=following::input[1]")
-    .fill("66");
+  await page.getByLabel("图片").setInputFiles([pngUpload("workshop-fee.png")]);
+  await page.getByLabel("金额").fill("66");
   await page.getByRole("button", { name: "提交并计入汇总" }).click();
 
   await expect
@@ -1030,23 +1022,11 @@ async function fillProcurementItemFields(
   itemName: string,
   lineTotal: string,
 ) {
-  await page
-    .getByText("物品名称")
-    .first()
-    .locator("xpath=following::input[1]")
-    .fill(itemName);
-  await page
-    .getByText("规格")
-    .first()
-    .locator("xpath=following::input[1]")
-    .fill("PW-SPEC");
+  await page.getByLabel("物品名称").fill(itemName);
+  await page.getByLabel("规格").fill("PW-SPEC");
   await page
     .getByPlaceholder("https://")
     .first()
     .fill("https://example.com/playwright-item");
-  await page
-    .getByText("行总价")
-    .first()
-    .locator("xpath=following::input[1]")
-    .fill(lineTotal);
+  await page.getByLabel("行总价").fill(lineTotal);
 }

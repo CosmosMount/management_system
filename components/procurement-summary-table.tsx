@@ -27,10 +27,6 @@ import { PurchaseItemReferenceCell } from "@/components/purchase-item-reference-
 import { formatPurchaseItemKind } from "@/lib/purchase-item-kind";
 import { TEAM_OPTIONS, TECH_GROUP_OPTIONS } from "@/lib/constants";
 import type { TeamOption } from "@/lib/constants";
-import {
-  exportAllBomXlsx,
-  exportTeamBomXlsx,
-} from "@/lib/export-procurement-bom";
 import type { SummaryRow } from "@/lib/procurement-summary-types";
 
 export type { SummaryRow } from "@/lib/procurement-summary-types";
@@ -45,6 +41,7 @@ const ALL_TECH_GROUPS = "全部技术组";
 export function ProcurementSummaryTable({ rows }: Props) {
   const [teamFilter, setTeamFilter] = useState(ALL_TEAMS);
   const [techGroupFilter, setTechGroupFilter] = useState(ALL_TECH_GROUPS);
+  const [exporting, setExporting] = useState(false);
 
   const filteredRows = useMemo(() => {
     return rows.filter((row) => {
@@ -64,7 +61,7 @@ export function ProcurementSummaryTable({ rows }: Props) {
     teamFilter !== ALL_TEAMS &&
     (TEAM_OPTIONS as readonly string[]).includes(teamFilter);
 
-  function handleExportTeamBom() {
+  async function handleExportTeamBom() {
     if (!canExportTeamBom) {
       toast.error("请先在上方选择要导出的车组");
       return;
@@ -74,17 +71,33 @@ export function ProcurementSummaryTable({ rows }: Props) {
       toast.error("该车组暂无采购明细");
       return;
     }
-    exportTeamBomXlsx(rows, teamFilter as TeamOption);
-    toast.success(`已导出 ${teamFilter} BOM`);
+    setExporting(true);
+    try {
+      const { exportTeamBomXlsx } = await import("@/lib/export-procurement-bom");
+      exportTeamBomXlsx(rows, teamFilter as TeamOption);
+      toast.success(`已导出 ${teamFilter} BOM`);
+    } catch {
+      toast.error("BOM 导出组件加载失败，请稍后重试");
+    } finally {
+      setExporting(false);
+    }
   }
 
-  function handleExportAllBom() {
+  async function handleExportAllBom() {
     if (rows.length === 0) {
       toast.error("暂无采购明细可导出");
       return;
     }
-    exportAllBomXlsx(rows);
-    toast.success("已导出全部 BOM");
+    setExporting(true);
+    try {
+      const { exportAllBomXlsx } = await import("@/lib/export-procurement-bom");
+      exportAllBomXlsx(rows);
+      toast.success("已导出全部 BOM");
+    } catch {
+      toast.error("BOM 导出组件加载失败，请稍后重试");
+    } finally {
+      setExporting(false);
+    }
   }
 
   return (
@@ -146,21 +159,21 @@ export function ProcurementSummaryTable({ rows }: Props) {
             type="button"
             variant="outline"
             size="sm"
-            disabled={rows.length === 0}
-            onClick={handleExportTeamBom}
+            disabled={rows.length === 0 || exporting}
+            onClick={() => void handleExportTeamBom()}
           >
             <Download className="mr-1 h-4 w-4" />
-            导出该车组 BOM
+            {exporting ? "导出中…" : "导出该车组 BOM"}
           </Button>
           <Button
             type="button"
             variant="outline"
             size="sm"
-            disabled={rows.length === 0}
-            onClick={handleExportAllBom}
+            disabled={rows.length === 0 || exporting}
+            onClick={() => void handleExportAllBom()}
           >
             <Download className="mr-1 h-4 w-4" />
-            导出全部 BOM
+            {exporting ? "导出中…" : "导出全部 BOM"}
           </Button>
         </div>
       </div>

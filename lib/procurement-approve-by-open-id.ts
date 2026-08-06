@@ -126,6 +126,7 @@ export async function approveProcurementByOpenId(
             initiatorName: finalOrder.initiatorName,
             totalPrice: finalOrder.totalPrice,
             status: finalOrder.status,
+            statusEnteredAt: finalOrder.statusEnteredAt,
             team: finalOrder.team,
             techGroup: finalOrder.techGroup,
             items: mapOrderItems(order.items),

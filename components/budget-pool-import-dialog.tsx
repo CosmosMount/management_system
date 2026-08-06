@@ -14,12 +14,15 @@ import {
 } from "@/components/ui/dialog";
 import {
   DEFAULT_BUDGET_PERIOD,
-  downloadBudgetPoolTemplate,
   formatBudgetPoolLabel,
-  parseBudgetPoolsFromFile,
-  type BudgetPoolImportResult,
-} from "@/lib/import-procurement-budget";
+} from "@/lib/procurement-budget-period";
+import type { BudgetPoolImportResult } from "@/lib/import-procurement-budget";
 import { MAX_BUDGET_POOL_IMPORT_ROWS } from "@/lib/constants";
+import {
+  SPREADSHEET_FILE_SIZE_LABEL,
+  validateSpreadsheetFile,
+} from "@/lib/spreadsheet-file";
+import { createAsyncOperationGeneration } from "@/lib/async-operation-generation";
 
 type Props = {
   open: boolean;
@@ -27,6 +30,7 @@ type Props = {
   existingPoolCount: number;
   onConfirm: (file: File, mode: "replace" | "append") => void;
   pending?: boolean;
+  parseFile?: (file: File) => Promise<BudgetPoolImportResult>;
 };
 
 export function BudgetPoolImportDialog({
@@ -35,36 +39,53 @@ export function BudgetPoolImportDialog({
   existingPoolCount,
   onConfirm,
   pending = false,
+  parseFile,
 }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const parseGenerationRef = useRef(createAsyncOperationGeneration());
   const [file, setFile] = useState<File | null>(null);
   const [result, setResult] = useState<BudgetPoolImportResult | null>(null);
   const [parsing, setParsing] = useState(false);
+  const [downloadingTemplate, setDownloadingTemplate] = useState(false);
 
   async function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const selected = event.target.files?.[0];
     event.target.value = "";
     if (!selected) return;
 
-    setFile(selected);
+    const generation = parseGenerationRef.current.begin();
+    setFile(null);
+    setResult(null);
     setParsing(true);
     try {
-      const parsed = await parseBudgetPoolsFromFile(selected);
+      validateSpreadsheetFile(selected);
+      const parsed = parseFile
+        ? await parseFile(selected)
+        : await import("@/lib/import-procurement-budget").then((module) =>
+            module.parseBudgetPoolsFromFile(selected),
+          );
+      if (!parseGenerationRef.current.isCurrent(generation)) return;
+      setFile(selected);
       setResult(parsed);
       if (parsed.rows.length === 0 && parsed.errors.length === 0) {
         toast.error("未解析到有效预算池");
       }
     } catch (err) {
+      if (!parseGenerationRef.current.isCurrent(generation)) return;
       toast.error(err instanceof Error ? err.message : "文件解析失败");
       setFile(null);
       setResult(null);
     } finally {
-      setParsing(false);
+      if (parseGenerationRef.current.isCurrent(generation)) {
+        setParsing(false);
+      }
     }
   }
 
   function handleOpenChange(next: boolean) {
     if (!next) {
+      parseGenerationRef.current.cancel();
+      setParsing(false);
       setFile(null);
       setResult(null);
     }
@@ -76,10 +97,25 @@ export function BudgetPoolImportDialog({
       toast.error("没有可导入的有效预算池");
       return;
     }
+    parseGenerationRef.current.cancel();
     onConfirm(file, mode);
     setFile(null);
     setResult(null);
     onOpenChange(false);
+  }
+
+  async function handleDownloadTemplate() {
+    setDownloadingTemplate(true);
+    try {
+      const { downloadBudgetPoolTemplate } = await import(
+        "@/lib/import-procurement-budget"
+      );
+      downloadBudgetPoolTemplate();
+    } catch {
+      toast.error("预算模板加载失败，请稍后重试");
+    } finally {
+      setDownloadingTemplate(false);
+    }
   }
 
   return (
@@ -89,7 +125,7 @@ export function BudgetPoolImportDialog({
           <DialogTitle>导入采购预算池</DialogTitle>
           <DialogDescription>
             每行对应一条「车组 + 技术组」预算；相同组合将合并求和。周期默认{" "}
-            {DEFAULT_BUDGET_PERIOD}，单次最多 {MAX_BUDGET_POOL_IMPORT_ROWS} 行。
+            {DEFAULT_BUDGET_PERIOD}，单次最多 {MAX_BUDGET_POOL_IMPORT_ROWS} 行，文件不超过 {SPREADSHEET_FILE_SIZE_LABEL}。
           </DialogDescription>
         </DialogHeader>
 
@@ -113,17 +149,19 @@ export function BudgetPoolImportDialog({
           <Button
             type="button"
             variant="ghost"
-            onClick={() => downloadBudgetPoolTemplate()}
+            disabled={downloadingTemplate || pending}
+            onClick={() => void handleDownloadTemplate()}
           >
             <FileSpreadsheet className="mr-1 h-4 w-4" />
-            下载模板
+            {downloadingTemplate ? "下载中…" : "下载模板"}
           </Button>
         </div>
 
         {result && (
           <div className="max-h-52 space-y-2 overflow-y-auto rounded-md border bg-muted/30 p-3 text-sm">
             <p>
-              将导入 <strong>{result.rows.length}</strong> 条预算池
+              文件：<strong>{file?.name}</strong>；将导入{" "}
+              <strong>{result.rows.length}</strong> 条预算池
               {result.errors.length > 0 && (
                 <>
                   ，
@@ -173,7 +211,7 @@ export function BudgetPoolImportDialog({
             <Button
               type="button"
               variant="secondary"
-              disabled={!result?.rows.length || pending}
+              disabled={parsing || !result?.rows.length || pending}
               onClick={() => handleConfirm("append")}
             >
               追加
@@ -181,7 +219,7 @@ export function BudgetPoolImportDialog({
           )}
           <Button
             type="button"
-            disabled={!result?.rows.length || pending}
+            disabled={parsing || !result?.rows.length || pending}
             onClick={() => handleConfirm("replace")}
           >
             {existingPoolCount > 0 ? "覆盖同周期" : "导入"}

@@ -1,6 +1,7 @@
 import type {
   NotificationOutbox,
   NotificationOutboxRecipient,
+  NotificationOutboxStatus,
   Prisma,
 } from "@prisma/client";
 import { resolveProcurementBotKind } from "@/lib/feishu-bot-routing";
@@ -13,24 +14,138 @@ import type {
 } from "@/lib/feishu-feedback";
 import type { NotificationContext } from "@/lib/app-origin";
 import { getNotificationChannelAdapter } from "@/lib/notification-channels";
-import { isNonRetryableNotificationError } from "@/lib/notification-channels/types";
+import {
+  isCanceledNotificationError,
+  isNonRetryableNotificationError,
+} from "@/lib/notification-channels/types";
 import type { FeedbackOutboxPayload } from "@/lib/notification-channels/feedback";
-import type { OrderOutboxPayload } from "@/lib/notification-channels/procurement";
+import type {
+  OrderOutboxPayload,
+  TeacherReviewEmailOutboxPayload,
+} from "@/lib/notification-contracts/procurement";
 import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 
 const MAX_ATTEMPTS = 8;
 const NOTIFICATION_DELIVERY_DISABLED =
   process.env.NOTIFICATION_DELIVERY_DISABLED === "true";
-const RECIPIENT_LOCK_MS = 2 * 60 * 1000;
+const DEFAULT_RECIPIENT_LOCK_MS = 2 * 60 * 1000;
 const FROZEN_NEXT_RUN_AT = new Date("9999-12-31T00:00:00.000Z");
 
 type DrainNotificationOutboxOptions = {
   ignoreDeliveryDisabled?: boolean;
 };
 
+type DeliveryClaim = {
+  attempts: number;
+  lockedUntil: Date;
+};
+
+type CoordinationTerminalState = {
+  status: "CANCELED" | "FAILED";
+  lastError: string;
+  nextRunAt?: Date;
+};
+
+function recipientLockMs(): number {
+  if (process.env.NODE_ENV !== "test") return DEFAULT_RECIPIENT_LOCK_MS;
+  const override = Number(process.env.NOTIFICATION_OUTBOX_TEST_LOCK_MS);
+  return Number.isFinite(override) && override >= 100
+    ? override
+    : DEFAULT_RECIPIENT_LOCK_MS;
+}
+
+function nextClaimExpiry() {
+  return new Date(Date.now() + recipientLockMs());
+}
+
+async function renewOutboxAndRecipientClaims(
+  outboxId: string,
+  outboxClaim: DeliveryClaim,
+  recipientId: string,
+  recipientClaim: DeliveryClaim,
+): Promise<boolean> {
+  if (
+    outboxClaim.lockedUntil <= new Date() ||
+    recipientClaim.lockedUntil <= new Date()
+  ) {
+    return false;
+  }
+  const renewedUntil = nextClaimExpiry();
+  try {
+    await prisma.$transaction(async (tx) => {
+      const parent = await tx.notificationOutbox.updateMany({
+        where: {
+          id: outboxId,
+          status: "PROCESSING",
+          attempts: outboxClaim.attempts,
+          lockedUntil: outboxClaim.lockedUntil,
+        },
+        data: { lockedUntil: renewedUntil },
+      });
+      const recipient = await tx.notificationOutboxRecipient.updateMany({
+        where: {
+          id: recipientId,
+          status: "PROCESSING",
+          attempts: recipientClaim.attempts,
+          lockedUntil: recipientClaim.lockedUntil,
+        },
+        data: { lockedUntil: renewedUntil },
+      });
+      if (parent.count !== 1 || recipient.count !== 1) {
+        throw new Error("notification claim lost");
+      }
+    });
+  } catch {
+    return false;
+  }
+  outboxClaim.lockedUntil = renewedUntil;
+  recipientClaim.lockedUntil = renewedUntil;
+  return true;
+}
+
+async function withClaimHeartbeat<T>(
+  renew: () => Promise<boolean>,
+  operation: () => Promise<T>,
+): Promise<T> {
+  let heartbeat = Promise.resolve(true);
+  const timer = setInterval(() => {
+    heartbeat = heartbeat.then((active) => (active ? renew() : false));
+  }, Math.max(25, Math.floor(recipientLockMs() / 4)));
+  try {
+    return await operation();
+  } finally {
+    clearInterval(timer);
+    await heartbeat;
+  }
+}
+
+async function renewOutboxClaim(
+  outboxId: string,
+  claim: DeliveryClaim,
+): Promise<boolean> {
+  if (claim.lockedUntil <= new Date()) return false;
+  const renewedUntil = nextClaimExpiry();
+  const renewed = await prisma.notificationOutbox.updateMany({
+    where: {
+      id: outboxId,
+      status: "PROCESSING",
+      attempts: claim.attempts,
+      lockedUntil: claim.lockedUntil,
+    },
+    data: { lockedUntil: renewedUntil },
+  });
+  if (renewed.count !== 1) return false;
+  claim.lockedUntil = renewedUntil;
+  return true;
+}
+
 export type EnqueueNotificationResult = {
   created: boolean;
+};
+
+type OrderNotificationInput = OrderCardPayload & {
+  statusEnteredAt?: Date;
 };
 
 export async function enqueueNotification({
@@ -186,7 +301,7 @@ export async function resetNotificationOutboxForRetry({
       await tx.notificationOutboxRecipient.updateMany({
         where: {
           outboxId: id,
-          status: { not: "SENT" },
+          status: { in: ["PENDING", "FAILED", "PROCESSING"] },
         },
         data: {
           status: "PENDING",
@@ -201,24 +316,6 @@ export async function resetNotificationOutboxForRetry({
   });
 }
 
-export async function enqueueOrderNotification(
-  eventKey: string,
-  order: OrderCardPayload,
-  context?: NotificationContext,
-) {
-  await enqueueNotification({
-    eventKey,
-    channel: "procurement",
-    botKind: resolveProcurementBotKind(order.status),
-    type: "order",
-    payload: {
-      kind: "order",
-      order,
-      appOrigin: context?.appOrigin ?? null,
-    } satisfies OrderOutboxPayload,
-  });
-}
-
 export function orderNotificationEventKey(order: {
   id: string;
   status: string;
@@ -230,10 +327,10 @@ export function orderNotificationEventKey(order: {
 export async function enqueueOrderNotificationTx(
   tx: Prisma.TransactionClient,
   eventKey: string,
-  order: OrderCardPayload,
+  order: OrderNotificationInput,
   context?: NotificationContext,
 ) {
-  return enqueueNotificationTx(tx, {
+  const result = await enqueueNotificationTx(tx, {
     eventKey,
     channel: "procurement",
     botKind: resolveProcurementBotKind(order.status),
@@ -244,28 +341,23 @@ export async function enqueueOrderNotificationTx(
       appOrigin: context?.appOrigin ?? null,
     } satisfies OrderOutboxPayload,
   });
-}
-
-export async function enqueueProcurementRejectedNotification(
-  eventKey: string,
-  order: OrderCardPayload,
-  reason: string,
-  rejectedByName: string,
-  context?: NotificationContext,
-) {
-  await enqueueNotification({
-    eventKey,
-    channel: "procurement",
-    botKind: "notification",
-    type: "procurement_rejected",
-    payload: {
-      kind: "procurement_rejected",
-      order,
-      reason,
-      rejectedByName,
-      appOrigin: context?.appOrigin ?? null,
-    } satisfies OrderOutboxPayload,
-  });
+  if (order.status === "TEACHER_REVIEW") {
+    if (!order.statusEnteredAt) {
+      throw new Error("老师审核邮件缺少审批轮次时间");
+    }
+    await enqueueNotificationTx(tx, {
+      eventKey: `${eventKey}:teacher_email`,
+      channel: "email",
+      type: "teacher_review_email",
+      payload: {
+        kind: "teacher_review_email",
+        order: { ...order, status: "TEACHER_REVIEW" },
+        expectedStatusEnteredAt: order.statusEnteredAt.toISOString(),
+        appOrigin: context?.appOrigin ?? null,
+      } satisfies TeacherReviewEmailOutboxPayload,
+    });
+  }
+  return result;
 }
 
 export async function enqueueProcurementRejectedNotificationTx(
@@ -291,14 +383,15 @@ export async function enqueueProcurementRejectedNotificationTx(
   });
 }
 
-export async function enqueueApplicantResubmitNotification(
+export async function enqueueApplicantResubmitNotificationTx(
+  tx: Prisma.TransactionClient,
   eventKey: string,
   order: OrderCardPayload,
   reason: string,
   financeName: string,
   context?: NotificationContext,
 ) {
-  await enqueueNotification({
+  return enqueueNotificationTx(tx, {
     eventKey,
     channel: "procurement",
     botKind: "notification",
@@ -308,28 +401,6 @@ export async function enqueueApplicantResubmitNotification(
       order,
       reason,
       financeName,
-      appOrigin: context?.appOrigin ?? null,
-    } satisfies OrderOutboxPayload,
-  });
-}
-
-export async function enqueueProcurementReturnDraftNotification(
-  eventKey: string,
-  order: OrderCardPayload,
-  reason: string,
-  returnedByName: string,
-  context?: NotificationContext,
-) {
-  await enqueueNotification({
-    eventKey,
-    channel: "procurement",
-    botKind: "notification",
-    type: "procurement_return_draft",
-    payload: {
-      kind: "procurement_return_draft",
-      order,
-      reason,
-      returnedByName,
       appOrigin: context?.appOrigin ?? null,
     } satisfies OrderOutboxPayload,
   });
@@ -376,12 +447,13 @@ export async function enqueueBudgetThresholdNotification(
   });
 }
 
-export async function enqueueFeedbackCreatedNotification(
+export async function enqueueFeedbackCreatedNotificationTx(
+  tx: Prisma.TransactionClient,
   eventKey: string,
   payload: FeedbackCreatedNotificationPayload,
   context?: NotificationContext,
 ) {
-  await enqueueNotification({
+  return enqueueNotificationTx(tx, {
     eventKey,
     channel: "feedback",
     botKind: "notification",
@@ -394,12 +466,14 @@ export async function enqueueFeedbackCreatedNotification(
   });
 }
 
-export async function enqueueFeedbackReplyNotification(
+export async function enqueueFeedbackReplyNotificationTx(
+  tx: Prisma.TransactionClient,
   eventKey: string,
   payload: FeedbackReplyNotificationPayload,
   context?: NotificationContext,
 ) {
-  await enqueueNotification({
+  if (!hasFeedbackReplyRecipient(payload)) return { created: false };
+  return enqueueNotificationTx(tx, {
     eventKey,
     channel: "feedback",
     botKind: "notification",
@@ -412,12 +486,22 @@ export async function enqueueFeedbackReplyNotification(
   });
 }
 
-export async function enqueueFeedbackStatusNotification(
+function hasFeedbackReplyRecipient(
+  payload: FeedbackReplyNotificationPayload,
+): boolean {
+  return (
+    !payload.actorIsAdmin ||
+    (payload.recipientOpenIds?.some((openId) => openId.trim().length > 0) ?? false)
+  );
+}
+
+export async function enqueueFeedbackStatusNotificationTx(
+  tx: Prisma.TransactionClient,
   eventKey: string,
   payload: FeedbackStatusNotificationPayload,
   context?: NotificationContext,
 ) {
-  await enqueueNotification({
+  return enqueueNotificationTx(tx, {
     eventKey,
     channel: "feedback",
     botKind: "notification",
@@ -462,12 +546,19 @@ export async function drainNotificationOutbox(
 
   let sent = 0;
   for (const row of rows) {
-    const lockedUntil = new Date(Date.now() + RECIPIENT_LOCK_MS);
+    const lockedUntil = nextClaimExpiry();
+    const claim = { attempts: row.attempts + 1, lockedUntil };
     const claimed = await prisma.notificationOutbox.updateMany({
       where: {
         id: row.id,
         status: row.status,
         attempts: row.attempts,
+        AND: [
+          { lockedUntil: row.lockedUntil },
+          row.status === "PROCESSING"
+            ? { lockedUntil: { lte: now } }
+            : { nextRunAt: { lte: now } },
+        ],
       },
       data: {
         status: "PROCESSING",
@@ -479,13 +570,21 @@ export async function drainNotificationOutbox(
     if (claimed.count !== 1) continue;
 
     try {
-      const recipientResult = await sendOutboxNotificationByRecipient(row);
+      const recipientResult = await sendOutboxNotificationByRecipient(row, claim);
       if (recipientResult.supported) {
         if (recipientResult.completed) sent++;
       } else {
-        await sendOutboxNotification(row);
+        await withClaimHeartbeat(
+          () => renewOutboxClaim(row.id, claim),
+          () => sendOutboxNotification(row),
+        );
         const markedSent = await prisma.notificationOutbox.updateMany({
-          where: { id: row.id, status: "PROCESSING" },
+          where: {
+            id: row.id,
+            status: "PROCESSING",
+            attempts: claim.attempts,
+            lockedUntil: claim.lockedUntil,
+          },
           data: {
             status: "SENT",
             sentAt: new Date(),
@@ -500,7 +599,12 @@ export async function drainNotificationOutbox(
       const nonRetryable = isNonRetryableNotificationError(err);
       const attempts = nonRetryable ? MAX_ATTEMPTS : row.attempts + 1;
       await prisma.notificationOutbox.updateMany({
-        where: { id: row.id, status: "PROCESSING" },
+        where: {
+          id: row.id,
+          status: "PROCESSING",
+          attempts: claim.attempts,
+          lockedUntil: claim.lockedUntil,
+        },
         data: {
           status: "FAILED",
           attempts,
@@ -517,23 +621,39 @@ export async function drainNotificationOutbox(
 
 async function sendOutboxNotificationByRecipient(
   row: NotificationOutbox,
+  claim: DeliveryClaim,
 ): Promise<{ supported: true; completed: boolean } | { supported: false }> {
   const adapter = getNotificationChannelAdapter(row.channel);
   const plan = await adapter.resolveRecipientPlan(row);
   if (!plan.supported) return { supported: false };
-
-  if (
-    plan.requiresDirectRecipient &&
-    (plan.directOpenIds ?? plan.openIds)
-      .map((id) => id.trim())
-      .filter(Boolean).length === 0
-  ) {
-    await failOutboxWithNoRecipients(row);
+  if (!(await renewOutboxClaim(row.id, claim))) {
     return { supported: true, completed: false };
   }
 
-  await ensureOutboxRecipients(row.id, plan.openIds);
+  if (plan.cancelReason) {
+    await coordinateOutboxRecipientsForClaim(row.id, [], claim, {
+      status: "CANCELED",
+      lastError: plan.cancelReason,
+    });
+    return { supported: true, completed: false };
+  }
+
+  const directOpenIds = (plan.directOpenIds ?? plan.openIds)
+    .map((id) => id.trim())
+    .filter(Boolean);
+  if (plan.requiresDirectRecipient && directOpenIds.length === 0) {
+    // Cancel any recipients from an earlier resolution without creating
+    // transport-only pseudo recipients such as the procurement Webhook.
+    await failOutboxWithNoRecipients(row, claim, plan.emptyRecipientReason);
+    return { supported: true, completed: false };
+  }
+  if (!(await coordinateOutboxRecipientsForClaim(row.id, plan.openIds, claim))) {
+    return { supported: true, completed: false };
+  }
   await adapter.beforeRecipientDelivery?.(row);
+  if (!(await renewOutboxClaim(row.id, claim))) {
+    return { supported: true, completed: false };
+  }
 
   const now = new Date();
   const recipients = await prisma.notificationOutboxRecipient.findMany({
@@ -549,16 +669,21 @@ async function sendOutboxNotificationByRecipient(
   });
 
   for (const recipient of recipients) {
-    await sendOutboxRecipient(row, recipient);
+    await sendOutboxRecipient(row, recipient, claim);
   }
 
-  const summary = await updateOutboxStatusFromRecipients(row.id);
+  const summary = await updateOutboxStatusFromRecipients(row.id, claim);
   return { supported: true, completed: summary.completed };
 }
 
-async function failOutboxWithNoRecipients(row: NotificationOutbox) {
+async function failOutboxWithNoRecipients(
+  row: NotificationOutbox,
+  claim: DeliveryClaim,
+  emptyRecipientReason?: string,
+) {
   const attempts = row.attempts + 1;
   const message =
+    emptyRecipientReason ??
     "审批通知没有可投递的真实私信收件人，已停止本轮发送；请检查审批角色和用户配置。";
   logger.error("notification.outbox.recipient.empty", {
     module: "notification",
@@ -573,27 +698,31 @@ async function failOutboxWithNoRecipients(row: NotificationOutbox) {
     result: "failure",
     errorMessage: message,
   });
-  await prisma.notificationOutbox.updateMany({
-    where: { id: row.id, status: "PROCESSING" },
-    data: {
-      status: "FAILED",
-      lastError: message,
-      nextRunAt: nextRetryAt(attempts),
-      lockedUntil: null,
-    },
+  await coordinateOutboxRecipientsForClaim(row.id, [], claim, {
+    status: "FAILED",
+    lastError: message,
+    nextRunAt: nextRetryAt(attempts),
   });
 }
 
 async function sendOutboxRecipient(
   row: NotificationOutbox,
   recipient: NotificationOutboxRecipient,
+  outboxClaim: DeliveryClaim,
 ) {
-  const lockedUntil = new Date(Date.now() + RECIPIENT_LOCK_MS);
+  if (!(await renewOutboxClaim(row.id, outboxClaim))) return;
+  const lockedUntil = nextClaimExpiry();
   const claimed = await prisma.notificationOutboxRecipient.updateMany({
     where: {
       id: recipient.id,
       status: recipient.status,
       attempts: recipient.attempts,
+      AND: [
+        { lockedUntil: recipient.lockedUntil },
+        recipient.status === "PROCESSING"
+          ? { lockedUntil: { lte: new Date() } }
+          : { nextRunAt: { lte: new Date() } },
+      ],
     },
     data: {
       status: "PROCESSING",
@@ -605,12 +734,29 @@ async function sendOutboxRecipient(
   if (claimed.count !== 1) return;
 
   const attempts = recipient.attempts + 1;
+  const claim = { attempts, lockedUntil };
   try {
-    const target = await getNotificationChannelAdapter(
-      row.channel,
-    ).sendToRecipient(row, recipient.openId);
+    const target = await withClaimHeartbeat(
+      () =>
+        renewOutboxAndRecipientClaims(
+          row.id,
+          outboxClaim,
+          recipient.id,
+          claim,
+        ),
+      () =>
+        getNotificationChannelAdapter(row.channel).sendToRecipient(
+          row,
+          recipient.openId,
+        ),
+    );
     await prisma.notificationOutboxRecipient.updateMany({
-      where: { id: recipient.id, status: "PROCESSING" },
+      where: {
+        id: recipient.id,
+        status: "PROCESSING",
+        attempts: claim.attempts,
+        lockedUntil: claim.lockedUntil,
+      },
       data: {
         status: "SENT",
         receiveId: target?.receiveId ?? recipient.receiveId,
@@ -622,6 +768,22 @@ async function sendOutboxRecipient(
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    if (isCanceledNotificationError(err)) {
+      await prisma.notificationOutboxRecipient.updateMany({
+        where: {
+          id: recipient.id,
+          status: "PROCESSING",
+          attempts: claim.attempts,
+          lockedUntil: claim.lockedUntil,
+        },
+        data: {
+          status: "CANCELED",
+          lastError: message.slice(0, 1000),
+          lockedUntil: null,
+        },
+      });
+      return;
+    }
     const nonRetryable = isNonRetryableNotificationError(err);
     logger.error("notification.outbox.recipient.failed", {
       module: "notification",
@@ -638,7 +800,12 @@ async function sendOutboxRecipient(
       errorMessage: message,
     });
     await prisma.notificationOutboxRecipient.updateMany({
-      where: { id: recipient.id, status: "PROCESSING" },
+      where: {
+        id: recipient.id,
+        status: "PROCESSING",
+        attempts: claim.attempts,
+        lockedUntil: claim.lockedUntil,
+      },
       data: {
         status: "FAILED",
         attempts: nonRetryable ? MAX_ATTEMPTS : attempts,
@@ -650,11 +817,119 @@ async function sendOutboxRecipient(
   }
 }
 
-async function ensureOutboxRecipients(outboxId: string, openIds: string[]) {
-  const uniqueOpenIds = [...new Set(openIds.map((id) => id.trim()).filter(Boolean))];
-  if (uniqueOpenIds.length === 0) return;
+export async function reconcileOutboxRecipients(
+  outboxId: string,
+  openIds: string[],
+) {
+  await prisma.$transaction(async (tx) => {
+    await reconcileOutboxRecipientsTx(tx, outboxId, openIds, new Date());
+  });
+}
 
-  await prisma.notificationOutboxRecipient.createMany({
+async function coordinateOutboxRecipientsForClaim(
+  outboxId: string,
+  openIds: string[],
+  claim: DeliveryClaim,
+  terminal?: CoordinationTerminalState,
+): Promise<boolean> {
+  let renewedUntil: Date | null = null;
+  const coordinated = await prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<
+      Array<{
+        attempts: number;
+        lockedUntil: Date | null;
+        status: NotificationOutboxStatus;
+      }>
+    >`
+      SELECT "status", "attempts", "lockedUntil"
+      FROM "NotificationOutbox"
+      WHERE "id" = ${outboxId}
+      FOR UPDATE
+    `;
+    const current = rows[0];
+    const now = new Date();
+    if (
+      !current ||
+      current.status !== "PROCESSING" ||
+      current.attempts !== claim.attempts ||
+      current.lockedUntil?.getTime() !== claim.lockedUntil.getTime() ||
+      claim.lockedUntil <= now
+    ) {
+      return false;
+    }
+    renewedUntil = new Date(now.getTime() + recipientLockMs());
+
+    const updated = await tx.notificationOutbox.updateMany({
+      where: {
+        id: outboxId,
+        status: "PROCESSING",
+        attempts: claim.attempts,
+        lockedUntil: claim.lockedUntil,
+      },
+      data: terminal
+        ? {
+            status: terminal.status,
+            lastError: terminal.lastError,
+            nextRunAt: terminal.nextRunAt,
+            lockedUntil: null,
+          }
+        : { lockedUntil: renewedUntil },
+    });
+    if (updated.count !== 1) return false;
+    await reconcileOutboxRecipientsTx(tx, outboxId, openIds, now);
+    return true;
+  });
+  if (coordinated && !terminal && renewedUntil) {
+    claim.lockedUntil = renewedUntil;
+  }
+  return coordinated;
+}
+
+async function reconcileOutboxRecipientsTx(
+  tx: Prisma.TransactionClient,
+  outboxId: string,
+  openIds: string[],
+  now: Date,
+) {
+  const uniqueOpenIds = [
+    ...new Set(openIds.map((id) => id.trim()).filter(Boolean)),
+  ];
+  await tx.notificationOutboxRecipient.updateMany({
+    where: {
+      outboxId,
+      ...(uniqueOpenIds.length > 0
+        ? { openId: { notIn: uniqueOpenIds } }
+        : {}),
+      OR: [
+        { status: { in: ["PENDING", "FAILED"] } },
+        {
+          status: "PROCESSING",
+          OR: [{ lockedUntil: null }, { lockedUntil: { lte: now } }],
+        },
+      ],
+    },
+    data: {
+      status: "CANCELED",
+      lastError: "收件人已不再具备当前事件的投递资格",
+      lockedUntil: null,
+    },
+  });
+  if (uniqueOpenIds.length === 0) return;
+  await tx.notificationOutboxRecipient.updateMany({
+    where: {
+      outboxId,
+      openId: { in: uniqueOpenIds },
+      status: "CANCELED",
+    },
+    data: {
+      status: "PENDING",
+      attempts: 0,
+      lastError: "",
+      nextRunAt: new Date(),
+      lockedUntil: null,
+    },
+  });
+  await tx.notificationOutboxRecipient.createMany({
     data: uniqueOpenIds.map((openId) => ({
       outboxId,
       openId,
@@ -667,7 +942,10 @@ async function ensureOutboxRecipients(outboxId: string, openIds: string[]) {
   });
 }
 
-async function updateOutboxStatusFromRecipients(outboxId: string): Promise<{
+async function updateOutboxStatusFromRecipients(
+  outboxId: string,
+  claim: DeliveryClaim,
+): Promise<{
   completed: boolean;
 }> {
   const recipients = await prisma.notificationOutboxRecipient.findMany({
@@ -681,9 +959,40 @@ async function updateOutboxStatusFromRecipients(outboxId: string): Promise<{
     },
   });
 
-  if (recipients.length === 0 || recipients.every((item) => item.status === "SENT")) {
+  const deliveredCount = recipients.filter((item) => item.status === "SENT").length;
+  if (
+    recipients.length > 0 &&
+    recipients.every((item) => item.status === "CANCELED")
+  ) {
     await prisma.notificationOutbox.updateMany({
-      where: { id: outboxId, status: "PROCESSING" },
+      where: {
+        id: outboxId,
+        status: "PROCESSING",
+        attempts: claim.attempts,
+        lockedUntil: claim.lockedUntil,
+      },
+      data: {
+        status: "CANCELED",
+        lastError: "全部收件人已不再具备当前事件的投递资格",
+        lockedUntil: null,
+      },
+    });
+    return { completed: false };
+  }
+  if (
+    recipients.length > 0 &&
+    deliveredCount > 0 &&
+    recipients.every((item) =>
+      item.status === "SENT" || item.status === "CANCELED"
+    )
+  ) {
+    const markedSent = await prisma.notificationOutbox.updateMany({
+      where: {
+        id: outboxId,
+        status: "PROCESSING",
+        attempts: claim.attempts,
+        lockedUntil: claim.lockedUntil,
+      },
       data: {
         status: "SENT",
         sentAt: new Date(),
@@ -691,11 +1000,13 @@ async function updateOutboxStatusFromRecipients(outboxId: string): Promise<{
         lockedUntil: null,
       },
     });
-    return { completed: true };
+    return { completed: markedSent.count === 1 };
   }
 
   const retryableRecipients = recipients.filter(
-    (item) => item.status !== "SENT" && item.attempts < MAX_ATTEMPTS,
+    (item) =>
+      ["PENDING", "FAILED", "PROCESSING"].includes(item.status) &&
+      item.attempts < MAX_ATTEMPTS,
   );
   const recipientsExhausted = retryableRecipients.length === 0;
   const now = new Date();
@@ -720,7 +1031,12 @@ async function updateOutboxStatusFromRecipients(outboxId: string): Promise<{
     recipients.find((item) => item.lastError.trim().length > 0)?.lastError ?? "";
 
   await prisma.notificationOutbox.updateMany({
-    where: { id: outboxId, status: "PROCESSING" },
+    where: {
+      id: outboxId,
+      status: "PROCESSING",
+      attempts: claim.attempts,
+      lockedUntil: claim.lockedUntil,
+    },
     data: {
       status: "FAILED",
       attempts: recipientsExhausted ? MAX_ATTEMPTS : undefined,

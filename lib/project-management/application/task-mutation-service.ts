@@ -17,7 +17,6 @@ import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import {
   associationInvalidError,
   notFoundError,
-  planChronologyInvalidError,
   staleTaskError,
   stateConflictError,
   validationError,
@@ -27,10 +26,7 @@ import {
 } from "@/lib/project-management/application/notification-utils";
 import { hashPlanSnapshot } from "@/lib/project-management/application/plan-snapshot";
 import { lockTaskSegmentAssociationsTx } from "@/lib/project-management/application/task-segment-association-lock";
-import {
-  inspectPlanChronology,
-  type PlanChronologyIssue,
-} from "@/lib/project-management/domain/plan-chronology";
+import { assertPersistedPlanChronologyValid } from "@/lib/project-management/application/persisted-plan-chronology";
 import { taskMemberRoleLabels } from "@/lib/project-management/labels";
 import {
   replaceTaskDraftMembersInputSchema,
@@ -46,6 +42,7 @@ import {
   type UpdateTaskDraftMetadataInput,
   type UpdateTaskMetadataInput,
 } from "@/lib/project-management/validations/task-mutations";
+import { refreshProjectManagementActorTx } from "@/lib/project-management/application/actor-refresh";
 
 type PrismaTx = Prisma.TransactionClient;
 
@@ -654,7 +651,7 @@ async function loadLockedTaskTx(
   const lockedTaskIds = await lockTaskSegmentAssociationsTx(tx, [taskId]);
   if (!lockedTaskIds.has(taskId)) throw notFoundError();
 
-  const refreshedActor = await refreshActorTx(tx, actor);
+  const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
   const task = await tx.task.findUnique({
     where: { id: taskId },
     include: taskMutationInclude,
@@ -667,17 +664,6 @@ async function loadLockedTaskTx(
   });
   if (!visible.allowed) throw notFoundError();
   return { refreshedActor, task };
-}
-
-async function refreshActorTx(
-  tx: PrismaTx,
-  actor: ProjectManagementActor,
-): Promise<ProjectManagementActor> {
-  const roles = await tx.systemRoleAssignment.findMany({
-    where: { accountId: actor.accountId, revokedAt: null },
-    select: { role: true, team: true, techGroup: true },
-  });
-  return { ...actor, systemRoles: roles };
 }
 
 function taskResource(task: TaskForMutation): AuthorizationTaskResource {
@@ -1364,33 +1350,7 @@ async function loadPlanForMutationTx(
 }
 
 function assertAuthoritativePlanValid(plan: PlanForMutation) {
-  const issues = inspectPlanChronology({
-    plannedStartAt: plan.plannedStartAt,
-    nodes: plan.nodes.map((entry) => ({
-      nodeId: entry.nodeId,
-      sequence: entry.sequence,
-      type: entry.node.type,
-      expectedCompletedAt: entry.node.milestone?.expectedCompletedAt ?? null,
-      plannedAt: entry.node.termination?.plannedAt ?? null,
-    })),
-  });
-  if (issues.length > 0) {
-    throw planChronologyInvalidError(
-      issues[0]?.message ?? "计划时间顺序不正确",
-      chronologyFieldErrors(issues),
-    );
-  }
-}
-
-function chronologyFieldErrors(issues: PlanChronologyIssue[]) {
-  const fieldErrors: Record<string, string[]> = {};
-  for (const issue of issues) {
-    fieldErrors[issue.path] = [
-      ...(fieldErrors[issue.path] ?? []),
-      issue.message,
-    ];
-  }
-  return fieldErrors;
+  assertPersistedPlanChronologyValid(plan);
 }
 
 function hashPlan(plan: PlanForMutation) {

@@ -2,12 +2,14 @@
 
 import { revalidatePath } from "next/cache";
 import {
-  currentBudgetPeriod,
   parseBudgetPoolsFromBuffer,
 } from "@/lib/import-procurement-budget";
+import { currentBudgetPeriod } from "@/lib/procurement-budget-period";
 import { requireSuperAdmin } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { routes } from "@/lib/routes";
+import { persistBudgetPoolImport } from "@/lib/procurement-budget-import-service";
+import { validateSpreadsheetFile } from "@/lib/spreadsheet-file";
 
 export async function importBudgetPoolsFromExcel(formData: FormData) {
   await requireSuperAdmin();
@@ -16,6 +18,7 @@ export async function importBudgetPoolsFromExcel(formData: FormData) {
   if (!(file instanceof File) || file.size === 0) {
     throw new Error("请选择 Excel 文件");
   }
+  validateSpreadsheetFile(file);
 
   const mode = formData.get("mode");
   if (mode !== "append" && mode !== "replace") {
@@ -29,42 +32,7 @@ export async function importBudgetPoolsFromExcel(formData: FormData) {
       parsed.errors[0]?.message ?? "未解析到有效预算池数据";
     throw new Error(detail);
   }
-
-  if (mode === "replace") {
-    const periods = [...new Set(parsed.rows.map((row) => row.period))];
-    await prisma.procurementBudgetPool.deleteMany({
-      where: { period: { in: periods } },
-    });
-  }
-
-  let upserted = 0;
-  for (const [index, row] of parsed.rows.entries()) {
-    await prisma.procurementBudgetPool.upsert({
-      where: {
-        description_team_techGroup_period: {
-          description: row.description,
-          team: row.team,
-          techGroup: row.techGroup,
-          period: row.period,
-        },
-      },
-      create: {
-        description: row.description,
-        team: row.team,
-        techGroup: row.techGroup,
-        period: row.period,
-        budgetAmount: row.budgetAmount,
-        sortOrder: index,
-        lastAlertThreshold: 0,
-      },
-      update: {
-        budgetAmount: row.budgetAmount,
-        sortOrder: index,
-        lastAlertThreshold: 0,
-      },
-    });
-    upserted++;
-  }
+  const upserted = await persistBudgetPoolImport(parsed.rows, mode);
 
   revalidatePath("/admin");
   revalidatePath(routes.procurement.dashboard);

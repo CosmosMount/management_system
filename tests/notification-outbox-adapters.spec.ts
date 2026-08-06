@@ -31,6 +31,7 @@ test.describe("notification outbox channel adapters", () => {
     process.env.FEISHU_PROCUREMENT_WEBHOOK_URL;
   const originalProcurementWebhookSecret =
     process.env.FEISHU_PROCUREMENT_WEBHOOK_SECRET;
+  const originalTestLockMs = process.env.NOTIFICATION_OUTBOX_TEST_LOCK_MS;
   let sendAttempts: string[];
   let webhookAttempts: number;
   let failRecipientOnce: string | null;
@@ -137,6 +138,7 @@ test.describe("notification outbox channel adapters", () => {
       "FEISHU_PROCUREMENT_WEBHOOK_SECRET",
       originalProcurementWebhookSecret,
     );
+    restoreEnv("NOTIFICATION_OUTBOX_TEST_LOCK_MS", originalTestLockMs);
     await prisma.notificationOutbox.deleteMany({
       where: { eventKey: { startsWith: EVENT_PREFIX } },
     });
@@ -452,6 +454,276 @@ test.describe("notification outbox channel adapters", () => {
       { status: "SENT", attempts: 2 },
     ]);
     expect(sendAttempts).toEqual(["ou_outbox_success"]);
+  });
+
+  test("扫描后旧 worker 续租时不会被新 claim 覆盖", async () => {
+    const eventKey = `${EVENT_PREFIX}scan-renew-race`;
+    await enqueueNotification({
+      eventKey,
+      channel: "feedback",
+      type: "reply",
+      payload: {
+        kind: "reply",
+        payload: {
+          feedbackId: "feedback-test",
+          actorName: "测试管理员",
+          body: "扫描续租竞态",
+          recipientOpenIds: ["ou_outbox_success"],
+          actorIsAdmin: true,
+        },
+      },
+    });
+    const row = await prisma.notificationOutbox.update({
+      where: { eventKey },
+      data: { status: "PROCESSING", attempts: 1, lockedUntil: new Date(0) },
+    });
+    const delegate = prisma.notificationOutbox as typeof prisma.notificationOutbox & {
+      updateMany: typeof prisma.notificationOutbox.updateMany;
+    };
+    const originalUpdateMany = delegate.updateMany.bind(delegate);
+    const replacementLock = new Date(Date.now() + 60_000);
+    let intercepted = false;
+    delegate.updateMany = (async (args) => {
+      if (!intercepted) {
+        intercepted = true;
+        await prisma.notificationOutbox.update({
+          where: { id: row.id },
+          data: { lockedUntil: replacementLock },
+        });
+      }
+      return originalUpdateMany(args);
+    }) as typeof delegate.updateMany;
+    try {
+      await expect(
+        drainNotificationOutbox(1, { ignoreDeliveryDisabled: true }),
+      ).resolves.toBe(0);
+      await expect(
+        prisma.notificationOutbox.findUniqueOrThrow({
+          where: { id: row.id },
+          select: { status: true, attempts: true, lockedUntil: true },
+        }),
+      ).resolves.toEqual({
+        status: "PROCESSING",
+        attempts: 1,
+        lockedUntil: replacementLock,
+      });
+      expect(sendAttempts).toEqual([]);
+    } finally {
+      delegate.updateMany = originalUpdateMany as typeof delegate.updateMany;
+    }
+  });
+
+  test("外部发送超过初始租约时心跳阻止第二 worker 重复发送", async () => {
+    process.env.NOTIFICATION_OUTBOX_TEST_LOCK_MS = "200";
+    const eventKey = `${EVENT_PREFIX}delivery-heartbeat`;
+    await enqueueNotification({
+      eventKey,
+      channel: "feedback",
+      type: "reply",
+      payload: {
+        kind: "reply",
+        payload: {
+          feedbackId: "feedback-test",
+          actorName: "测试管理员",
+          body: "长发送租约心跳",
+          recipientOpenIds: ["ou_outbox_success"],
+          actorIsAdmin: true,
+        },
+      },
+    });
+    const forwardingFetch = globalThis.fetch;
+    let releaseSend = () => {};
+    let markSendStarted = () => {};
+    const sendRelease = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    const sendStarted = new Promise<void>((resolve) => {
+      markSendStarted = resolve;
+    });
+    globalThis.fetch = (async (input, init) => {
+      if (String(input).includes("/im/v1/messages")) {
+        markSendStarted();
+        await sendRelease;
+      }
+      return forwardingFetch(input, init);
+    }) as typeof fetch;
+    const firstDrain = drainNotificationOutbox(1, {
+      ignoreDeliveryDisabled: true,
+    });
+    try {
+      await sendStarted;
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      await expect(
+        drainNotificationOutbox(1, { ignoreDeliveryDisabled: true }),
+      ).resolves.toBe(0);
+      releaseSend();
+      await expect(firstDrain).resolves.toBe(1);
+      expect(sendAttempts).toEqual(["ou_outbox_success"]);
+    } finally {
+      releaseSend();
+      await firstDrain;
+      globalThis.fetch = forwardingFetch;
+    }
+  });
+
+  test("过期 worker 不会覆盖新 worker 的 outbox 与收件人租约", async () => {
+    const eventKey = `${EVENT_PREFIX}stale-claim-writer`;
+    await enqueueNotification({
+      eventKey,
+      channel: "feedback",
+      type: "reply",
+      payload: {
+        kind: "reply",
+        payload: {
+          feedbackId: "feedback-test",
+          actorName: "测试管理员",
+          body: "租约所有权测试",
+          recipientOpenIds: ["ou_outbox_success"],
+          actorIsAdmin: true,
+        },
+      },
+    });
+
+    const forwardingFetch = globalThis.fetch;
+    let releaseSend = () => {};
+    let markSendStarted = () => {};
+    const sendRelease = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    const sendStarted = new Promise<void>((resolve) => {
+      markSendStarted = resolve;
+    });
+    globalThis.fetch = (async (input, init) => {
+      if (String(input).includes("/im/v1/messages")) {
+        markSendStarted();
+        await sendRelease;
+      }
+      return forwardingFetch(input, init);
+    }) as typeof fetch;
+
+    const staleDrain = drainNotificationOutbox(20, {
+      ignoreDeliveryDisabled: true,
+    });
+    try {
+      await sendStarted;
+      const claimed = await prisma.notificationOutbox.findUniqueOrThrow({
+        where: { eventKey },
+        include: { recipients: true },
+      });
+      const recipient = claimed.recipients[0];
+      expect(recipient).toBeDefined();
+      const replacementLock = new Date(Date.now() + 60_000);
+      await prisma.$transaction([
+        prisma.notificationOutbox.update({
+          where: { id: claimed.id },
+          data: {
+            status: "PROCESSING",
+            attempts: claimed.attempts + 1,
+            lockedUntil: replacementLock,
+          },
+        }),
+        prisma.notificationOutboxRecipient.update({
+          where: { id: recipient!.id },
+          data: {
+            status: "PROCESSING",
+            attempts: recipient!.attempts + 1,
+            lockedUntil: replacementLock,
+          },
+        }),
+      ]);
+
+      releaseSend();
+      await expect(staleDrain).resolves.toBe(0);
+      await expect(
+        prisma.notificationOutbox.findUniqueOrThrow({
+          where: { eventKey },
+          select: { status: true, attempts: true, lockedUntil: true },
+        }),
+      ).resolves.toEqual({
+        status: "PROCESSING",
+        attempts: claimed.attempts + 1,
+        lockedUntil: replacementLock,
+      });
+      await expect(
+        prisma.notificationOutboxRecipient.findUniqueOrThrow({
+          where: { id: recipient!.id },
+          select: { status: true, attempts: true, lockedUntil: true },
+        }),
+      ).resolves.toEqual({
+        status: "PROCESSING",
+        attempts: recipient!.attempts + 1,
+        lockedUntil: replacementLock,
+      });
+    } finally {
+      releaseSend();
+      await staleDrain;
+    }
+  });
+
+  test("收件人解析阻塞到租约过期后旧 worker 不会协调或重复发送", async () => {
+    const eventKey = `${EVENT_PREFIX}stale-recipient-resolution`;
+    await enqueueNotification({
+      eventKey,
+      channel: "feedback",
+      type: "reply",
+      payload: {
+        kind: "reply",
+        payload: {
+          feedbackId: "feedback-test",
+          actorName: "测试管理员",
+          body: "解析租约测试",
+          recipientOpenIds: ["ou_outbox_success"],
+          actorIsAdmin: true,
+        },
+      },
+    });
+
+    let releaseFirstResolution = () => {};
+    let markFirstResolutionStarted = () => {};
+    const firstResolutionRelease = new Promise<void>((resolve) => {
+      releaseFirstResolution = resolve;
+    });
+    const firstResolutionStarted = new Promise<void>((resolve) => {
+      markFirstResolutionStarted = resolve;
+    });
+    let resolutionCount = 0;
+    feedbackNotificationChannel.resolveRecipientPlan = async (row) => {
+      resolutionCount += 1;
+      if (resolutionCount === 1) {
+        markFirstResolutionStarted();
+        await firstResolutionRelease;
+      }
+      return originalFeedbackRecipientResolver(row);
+    };
+
+    const staleDrain = drainNotificationOutbox(1, {
+      ignoreDeliveryDisabled: true,
+    });
+    try {
+      await firstResolutionStarted;
+      await prisma.notificationOutbox.update({
+        where: { eventKey },
+        data: { lockedUntil: new Date(0) },
+      });
+      await expect(
+        drainNotificationOutbox(1, { ignoreDeliveryDisabled: true }),
+      ).resolves.toBe(1);
+
+      releaseFirstResolution();
+      await expect(staleDrain).resolves.toBe(0);
+      const outbox = await prisma.notificationOutbox.findUniqueOrThrow({
+        where: { eventKey },
+        include: { recipients: true },
+      });
+      expect(outbox.status).toBe("SENT");
+      expect(outbox.recipients).toMatchObject([
+        { openId: "ou_outbox_success", status: "SENT", attempts: 1 },
+      ]);
+      expect(sendAttempts).toEqual(["ou_outbox_success"]);
+    } finally {
+      releaseFirstResolution();
+      await staleDrain;
+    }
   });
 
   test("收件人重试耗尽时同步终止父 outbox", async () => {

@@ -21,6 +21,7 @@ import type { NotificationContext } from "@/lib/app-origin";
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/logger";
 import { statusApproverRole, statusLabels } from "@/lib/permissions-client";
+import { drainNotificationOutboxSoon } from "@/lib/notification-outbox";
 
 const REMINDER_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const MANUAL_REMINDER_COOLDOWN_MS = 60 * 1000;
@@ -422,9 +423,11 @@ export async function sendManualProcurementApproverReminder({
   if (order.status === "TEACHER_REVIEW") {
     await sendTeacherReviewEmailsOnce(
       enrichedOrder,
+      order.statusEnteredAt,
       context,
       `procurement:manual_reminder:${order.id}:${Date.now()}`,
     );
+    drainNotificationOutboxSoon();
   }
 
   return {

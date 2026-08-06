@@ -13,7 +13,6 @@ import {
   resolveProcurementFinanceReviewAttachmentOptions,
 } from "@/lib/feishu-procurement-card-assets";
 import { enrichOrderCardPayloadFromDb } from "@/lib/feishu-order-card-payload";
-import { sendTeacherReviewEmailsOnce } from "@/lib/procurement-teacher-email";
 import {
   sendTrackedProcurementCardKitDm,
 } from "@/lib/feishu-procurement-card-sync";
@@ -540,7 +539,6 @@ export async function sendOrderNotification(
   order: OrderCardPayload,
   context?: NotificationContext,
   botKind: FeishuBotKind = resolveProcurementBotKind(order.status),
-  options?: { outboxEventKey?: string },
 ) {
   if (order.status === "MANAGEMENT_REVIEW") {
     await sendManagementReviewNotification(order, context, botKind);
@@ -551,14 +549,8 @@ export async function sendOrderNotification(
     logProcurementWebhookFailure("sendOrderNotification", err);
   });
 
-  const emailTask =
-    order.status === "TEACHER_REVIEW" && options?.outboxEventKey
-      ? sendTeacherReviewEmailsOnce(order, context, options.outboxEventKey)
-      : Promise.resolve();
-
   const openIds = await collectOrderNotificationRecipientOpenIds(order);
   if (openIds.length === 0) {
-    await emailTask;
     const approverRole = statusApproverRole[order.status];
     if (approverRole) {
       logger.warn("feishu.procurement.recipients.empty", {
@@ -573,14 +565,12 @@ export async function sendOrderNotification(
     }
     return;
   }
-  const results = await Promise.allSettled([
-    ...openIds.map((openId) =>
+  const results = await Promise.allSettled(
+    openIds.map((openId) =>
       sendOrderNotificationToOpenId(order, openId, context, botKind),
     ),
-    emailTask,
-  ]);
-  const feishuResults = results.slice(0, openIds.length);
-  const failures = feishuResults.filter(
+  );
+  const failures = results.filter(
     (result): result is PromiseRejectedResult => result.status === "rejected",
   );
   if (failures.length > 0) {
