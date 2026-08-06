@@ -33,6 +33,7 @@ import {
   replaceTaskDraftPlanInputSchema,
   replaceTaskMembersInputSchema,
   replaceTaskTagsInputSchema,
+  updateActiveTaskInputSchema,
   updateTaskDraftInputSchema,
   updateTaskDraftMetadataInputSchema,
   updateTaskMetadataInputSchema,
@@ -106,6 +107,11 @@ export type TaskMembersMutationResult = TaskMutationResult & {
 
 export type TaskTagsMutationResult = TaskMutationResult & {
   tagIds: string[];
+};
+
+export type ActiveTaskUpdateMutationResult = TaskMutationResult & {
+  tagIds: string[];
+  members: Array<{ personId: string; role: TaskMemberRole }>;
 };
 
 export type TaskDraftPlanMutationResult = TaskMutationResult & {
@@ -300,6 +306,157 @@ export async function updateTaskMetadata(
 ): Promise<TaskMetadataMutationResult> {
   const parsed = updateTaskMetadataInputSchema.parse(input);
   return updateTaskMetadataForStatus(actor, parsed, "ACTIVE");
+}
+
+export async function updateActiveTask(
+  actor: ProjectManagementActor,
+  input: unknown,
+): Promise<ActiveTaskUpdateMutationResult> {
+  const parsed = updateActiveTaskInputSchema.parse(input);
+  return prisma.$transaction(async (tx) => {
+    const { refreshedActor, task } = await loadLockedTaskTx(
+      tx,
+      actor,
+      parsed.taskId,
+    );
+    assertTaskStatus(task, "ACTIVE");
+    assertExpectedLockVersion(task, parsed.expectedLockVersion);
+
+    if (parsed.metadata || parsed.tagIds) {
+      assertAuthorizedTaskAction(refreshedActor, task, "task.update_metadata");
+    }
+    if (parsed.metadata) {
+      assertAuthorizedTargetScope(refreshedActor, task, parsed.metadata);
+      await assertRelatedTaskVisibleTx(
+        tx,
+        refreshedActor,
+        task.id,
+        parsed.metadata.relatedTaskId,
+        task.relatedTaskId,
+      );
+    }
+
+    const beforeTagIds = activeTagIds(task);
+    const afterTagIds = parsed.tagIds
+      ? sortedUnique(parsed.tagIds)
+      : beforeTagIds;
+    const tagsChanged = parsed.tagIds
+      ? !sameStringArray(beforeTagIds, afterTagIds)
+      : false;
+    if (parsed.tagIds) {
+      await assertTagReferencesTx(tx, parsed.tagIds, beforeTagIds);
+    }
+
+    let memberChanges: MemberChange[] = [];
+    if (parsed.members) {
+      assertAuthorizedTaskAction(refreshedActor, task, "task.manage_members");
+      assertExistingMemberInvariant(task.members);
+      assertRequestedMemberInvariant(parsed.members);
+      await assertActivePeopleTx(
+        tx,
+        parsed.members.map((member) => member.personId),
+        task.members.map((member) => member.personId),
+      );
+      await assertTaskSegmentMembersIncludedTx(tx, task.id, parsed.members);
+      memberChanges = calculateMemberChanges(task.members, parsed.members);
+    }
+
+    const beforeMetadata = metadataSnapshot(task);
+    const beforeMembers = memberSnapshot(task.members);
+    const afterMembers = parsed.members
+      ? memberSnapshot(parsed.members)
+      : beforeMembers;
+    const metadataChanged = parsed.metadata
+      ? !taskMetadataMatches(task, parsed.metadata)
+      : false;
+    const membersChanged = parsed.members
+      ? !sameStringArray(
+          beforeMembers.map(memberKey),
+          afterMembers.map(memberKey),
+        )
+      : false;
+    if (metadataChanged && parsed.metadata) {
+      await tx.task.update({
+        where: { id: task.id },
+        data: parsed.metadata,
+      });
+    }
+    if (tagsChanged && parsed.tagIds) {
+      await replaceTaskTagsTx(tx, task.id, beforeTagIds, parsed.tagIds);
+    }
+    if (membersChanged && parsed.members) {
+      await applyMemberChangesTx(tx, {
+        taskId: task.id,
+        actorAccountId: refreshedActor.accountId,
+        currentMembers: task.members,
+        requestedMembers: parsed.members,
+      });
+    }
+
+    const updatedTask = metadataChanged || tagsChanged || membersChanged
+      ? await incrementTaskLockTx(tx, task, parsed.expectedLockVersion)
+      : task;
+
+    if (metadataChanged) {
+      await createDomainAuditEventTx(tx, {
+        actorAccountId: refreshedActor.accountId,
+        actorPersonId: refreshedActor.personId,
+        action: "pm.task.metadata.update",
+        entityType: "Task",
+        entityId: task.id,
+        taskId: task.id,
+        before: jsonValue({
+          ...beforeMetadata,
+          lockVersion: task.lockVersion,
+        }),
+        after: jsonValue({
+          ...metadataSnapshot(updatedTask),
+          lockVersion: updatedTask.lockVersion,
+        }),
+        reason: "更新 Task 元数据",
+      });
+    }
+    if (tagsChanged) {
+      await createDomainAuditEventTx(tx, {
+        actorAccountId: refreshedActor.accountId,
+        actorPersonId: refreshedActor.personId,
+        action: "pm.task.tags.replace",
+        entityType: "Task",
+        entityId: task.id,
+        taskId: task.id,
+        before: jsonValue({ tagIds: beforeTagIds, lockVersion: task.lockVersion }),
+        after: jsonValue({ tagIds: afterTagIds, lockVersion: updatedTask.lockVersion }),
+        reason: "更新 Active Task Tag",
+      });
+    }
+    if (membersChanged) {
+      await createDomainAuditEventTx(tx, {
+        actorAccountId: refreshedActor.accountId,
+        actorPersonId: refreshedActor.personId,
+        action: "pm.task.members.replace",
+        entityType: "Task",
+        entityId: task.id,
+        taskId: task.id,
+        before: jsonValue({ members: beforeMembers, lockVersion: task.lockVersion }),
+        after: jsonValue({ members: afterMembers, lockVersion: updatedTask.lockVersion }),
+        reason: "更新 Active Task 成员",
+      });
+    }
+    if (membersChanged && memberChanges.length > 0) {
+      await notifyActiveMemberChangesTx(tx, {
+        actor: refreshedActor,
+        task: updatedTask,
+        lockVersion: updatedTask.lockVersion,
+        changes: memberChanges,
+      });
+    }
+
+    return {
+      ...serializeTaskMutation(updatedTask),
+      tagIds: afterTagIds,
+      members: afterMembers,
+    };
+  });
 }
 
 export async function replaceTaskDraftMembers(
@@ -1541,6 +1698,23 @@ function metadataSnapshot(task: TaskForMutation) {
     relatedTaskId: task.relatedTaskId,
     lockVersion: task.lockVersion,
   };
+}
+
+function taskMetadataMatches(
+  task: TaskForMutation,
+  metadata: Pick<
+    UpdateTaskMetadataInput,
+    "title" | "description" | "team" | "techGroup" | "priority" | "relatedTaskId"
+  >,
+) {
+  return (
+    task.title === metadata.title &&
+    task.description === metadata.description &&
+    task.team === metadata.team &&
+    task.techGroup === metadata.techGroup &&
+    task.priority === metadata.priority &&
+    task.relatedTaskId === metadata.relatedTaskId
+  );
 }
 
 function activeTagIds(task: TaskForMutation) {

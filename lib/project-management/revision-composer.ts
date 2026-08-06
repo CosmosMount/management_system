@@ -45,6 +45,7 @@ export function buildCreateRevisionComposerSeed(
     plan: workspace.currentPlan,
     markerId,
     reason: "",
+    description: "",
     revisionAt: new Date(revisionAt).toISOString(),
     reviewRound: 1,
     lockedMilestoneIds,
@@ -77,6 +78,7 @@ export function buildResubmitRevisionComposerSeed({
           {
             id: entry.nodeId,
             reason: entry.revision.reason,
+            description: entry.businessDescription,
             revisionAt: isoToShanghaiDateTimeLocal(entry.revision.revisionAt),
             status: entry.revision.status,
           },
@@ -88,6 +90,7 @@ export function buildResubmitRevisionComposerSeed({
     plan: targetPlan,
     markerId: revision.taskNodeId,
     reason: revision.reason,
+    description: revision.description,
     revisionAt: revision.revisionAt,
     reviewRound: revision.reviewRound,
     lockedMilestoneIds,
@@ -100,6 +103,7 @@ function baseSeed({
   plan,
   markerId,
   reason,
+  description,
   revisionAt,
   reviewRound,
   lockedMilestoneIds,
@@ -109,6 +113,7 @@ function baseSeed({
   plan: PlanVersionSummary;
   markerId: string;
   reason: string;
+  description: string;
   revisionAt: string;
   reviewRound: number;
   lockedMilestoneIds: string[];
@@ -123,9 +128,13 @@ function baseSeed({
     team: workspace.task.team,
     techGroup: workspace.task.techGroup,
     priority: workspace.task.priority,
-    tagIds: [],
-    relatedTaskId: null,
-    members: [],
+    tagIds: workspace.tags.map((tag) => tag.id),
+    relatedTaskId: workspace.task.relatedTaskId,
+    members: workspace.members.flatMap(({ personId, role }) =>
+      role === "OWNER" || role === "PARTICIPANT"
+        ? [{ personId, role }]
+        : [],
+    ),
     plannedStartAt: isoToShanghaiDateTimeLocal(plan.plannedStartAt),
     milestones: plan.nodes.flatMap((entry) =>
       entry.milestone
@@ -157,6 +166,7 @@ function baseSeed({
     revision: {
       markerId,
       reason,
+      description,
       revisionAt: isoToShanghaiDateTimeLocal(revisionAt),
       reviewRound,
       lockedMilestoneIds,
@@ -172,6 +182,7 @@ function effectiveRevisionAnchors(plan: PlanVersionSummary) {
           {
             id: entry.nodeId,
             reason: entry.revision.reason,
+            description: entry.businessDescription,
             revisionAt: isoToShanghaiDateTimeLocal(entry.revision.revisionAt),
             status: entry.revision.status,
           },

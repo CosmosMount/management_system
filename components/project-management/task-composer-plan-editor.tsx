@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  Copy,
-  Flag,
-  Pencil,
   Plus,
   Trash2,
 } from "lucide-react";
+import {
+  TaskPlanNodeNavigator,
+  type TaskPlanNavigatorNode,
+} from "@/components/project-management/task-plan-node-navigator";
 import { TimeCanvas } from "@/components/project-management/time-canvas/time-canvas";
 import { buildPlanPhaseBands } from "@/components/project-management/time-canvas/plan-phase-bands";
 import type {
@@ -58,9 +59,7 @@ export function TaskComposerPlanEditor({
   onMoveAnchor,
   onMoveTerminal,
   onUpdateInspector,
-  onDuplicateMilestone,
   onDeleteMilestones,
-  onFocusIssue,
   onSubmit,
 }: {
   state: TaskComposerSeed;
@@ -81,20 +80,17 @@ export function TaskComposerPlanEditor({
   onMoveAnchor: (request: TimeCanvasAnchorMoveRequest) => void;
   onMoveTerminal: (at: string) => void;
   onUpdateInspector: (draft: TaskComposerInspectorDraft) => void;
-  onDuplicateMilestone: (milestone: TaskComposerMilestone) => void;
   onDeleteMilestones: (ids: string[]) => void;
-  onFocusIssue: (issue: ValidationIssue) => void;
   onSubmit: () => void;
 }) {
+  const canvasContainerRef = useRef<HTMLDivElement>(null);
   const [quickAt, setQuickAt] = useState<{ atMs: number; snapMs: number } | null>(null);
-  const [bulkSelection, setBulkSelection] = useState<Set<string>>(() => new Set());
   const canvasModel = useMemo(() => buildComposerCanvasModel(state, issues), [issues, state]);
+  const navigatorNodes = useMemo(
+    () => buildComposerNavigatorNodes(state, issues),
+    [issues, state],
+  );
   const temporaryCount = state.milestones.filter((milestone) => isTemporary(state, milestone.id)).length;
-  const allSelected =
-    state.milestones.some((milestone) => !isReadOnlyEntity(state, milestone.id)) &&
-    state.milestones
-      .filter((milestone) => !isReadOnlyEntity(state, milestone.id))
-      .every((milestone) => bulkSelection.has(milestone.id));
   const quickAtLocal = quickAt
     ? isoToShanghaiDateTimeLocal(new Date(quickAt.atMs))
     : null;
@@ -124,6 +120,35 @@ export function TaskComposerPlanEditor({
     window.addEventListener("keydown", closeQuickMenu);
     return () => window.removeEventListener("keydown", closeQuickMenu);
   }, [quickAt]);
+
+  const selectNavigatorNode = (nodeId: string) => {
+    onSelect(nodeId);
+    const anchor = canvasModel.anchors.find((item) => item.id === nodeId);
+    const scroller = canvasContainerRef.current?.querySelector<HTMLElement>(
+      "[data-testid='time-canvas-scroll']",
+    );
+    if (!anchor || !scroller) return;
+    const timelineRow = scroller.querySelector<HTMLElement>(
+      "[data-testid^='timeline-row-']",
+    );
+    const rowHeaderWidth =
+      timelineRow?.firstElementChild instanceof HTMLElement
+        ? timelineRow.firstElementChild.offsetWidth
+        : 0;
+    const rangeDuration = canvasModel.range.endMs - canvasModel.range.startMs;
+    if (rangeDuration <= 0) return;
+    const ratio = Math.max(
+      0,
+      Math.min(1, (anchor.atMs - canvasModel.range.startMs) / rangeDuration),
+    );
+    const timelineWidth = Math.max(0, scroller.scrollWidth - rowHeaderWidth);
+    const targetX = rowHeaderWidth + ratio * timelineWidth;
+    const maximumLeft = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+    scroller.scrollTo({
+      left: Math.max(0, Math.min(maximumLeft, targetX - scroller.clientWidth / 2)),
+      behavior: "smooth",
+    });
+  };
 
   return (
     <>
@@ -159,7 +184,10 @@ export function TaskComposerPlanEditor({
             </Button>
           </div>
 
-          <div className="mt-4 hidden min-w-0 overflow-hidden rounded-lg border border-border lg:block">
+          <div
+            ref={canvasContainerRef}
+            className="mt-4 hidden min-w-0 overflow-hidden rounded-lg border border-border lg:block"
+          >
             <TimeCanvas
               mode="TASK_COMPOSER"
               model={canvasModel}
@@ -237,53 +265,15 @@ export function TaskComposerPlanEditor({
             </div>
           )}
 
-          {state.milestones.length === 0 && (
-            <div
-              className="mt-3 rounded-lg border border-dashed border-border p-4 text-center text-sm text-muted-foreground"
-              data-testid="task-composer-empty-milestones"
-            >
-              当前计划只有 Start 与 Terminal。点击时间轴或“添加 Milestone”开始编排中间节点。
-            </div>
-          )}
-
-          <MobileNodeList state={state} issues={issues} onSelect={onSelect} />
+          <div className="mt-4">
+            <TaskPlanNodeNavigator
+              nodes={navigatorNodes}
+              selectedId={state.selectedEntityId}
+              onSelect={selectNavigatorNode}
+              label="Task 阶段"
+            />
+          </div>
         </section>
-
-        <NodeTable
-          state={state}
-          issues={issues}
-          bulkSelection={bulkSelection}
-          allSelected={allSelected}
-          onSelect={onSelect}
-          onToggleAll={(checked) =>
-            setBulkSelection(
-              checked
-                ? new Set(
-                    state.milestones
-                      .filter((milestone) => !isReadOnlyEntity(state, milestone.id))
-                      .map((milestone) => milestone.id),
-                  )
-                : new Set(),
-            )
-          }
-          onToggle={(id, checked) =>
-            setBulkSelection((current) => {
-              const next = new Set(current);
-              if (checked) next.add(id);
-              else next.delete(id);
-              return next;
-            })
-          }
-          onDuplicate={onDuplicateMilestone}
-          onDelete={(ids) => {
-            onDeleteMilestones(ids);
-            setBulkSelection((current) => {
-              const next = new Set(current);
-              ids.forEach((id) => next.delete(id));
-              return next;
-            });
-          }}
-        />
 
         {notice && (
           <div
@@ -303,41 +293,14 @@ export function TaskComposerPlanEditor({
       </main>
 
       <aside className="min-w-0" aria-label="计划节点检查器">
-        <div className="max-h-[calc(100dvh-10rem)] space-y-4 overflow-y-auto rounded-xl border border-border bg-card p-4 lg:sticky lg:top-36">
+        <div className="space-y-4 rounded-xl border border-border bg-card p-4 sm:p-5">
           <Inspector
             state={state}
             draft={inspectorDraft}
             issues={inspectorIssues}
             onChange={onUpdateInspector}
-            onDuplicate={onDuplicateMilestone}
             onDelete={(milestone) => onDeleteMilestones([milestone.id])}
           />
-
-          <div className="border-t border-border pt-4">
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <h3 className="text-sm font-semibold">问题列表</h3>
-              <Badge variant={issues.length > 0 ? "destructive" : "secondary"}>
-                {issues.length}
-              </Badge>
-            </div>
-            {issues.length === 0 ? (
-              <p className="text-sm text-emerald-700">当前计划内容校验通过</p>
-            ) : (
-              <ol className="max-h-64 space-y-2 overflow-y-auto text-sm">
-                {issues.map((issue, index) => (
-                  <li key={`${issue.key}:${issue.entityId ?? "root"}:${index}`}>
-                    <button
-                      type="button"
-                      className="w-full rounded-md px-2 py-1 text-left text-destructive hover:bg-destructive/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      onClick={() => onFocusIssue(issue)}
-                    >
-                      {issue.message}
-                    </button>
-                  </li>
-                ))}
-              </ol>
-            )}
-          </div>
         </div>
       </aside>
 
@@ -487,245 +450,70 @@ function buildComposerCanvasModel(
   };
 }
 
-function NodeTable({
-  state,
-  issues,
-  bulkSelection,
-  allSelected,
-  onSelect,
-  onToggleAll,
-  onToggle,
-  onDuplicate,
-  onDelete,
-}: {
-  state: TaskComposerSeed;
-  issues: ValidationIssue[];
-  bulkSelection: Set<string>;
-  allSelected: boolean;
-  onSelect: (id: string) => void;
-  onToggleAll: (checked: boolean) => void;
-  onToggle: (id: string, checked: boolean) => void;
-  onDuplicate: (milestone: TaskComposerMilestone) => void;
-  onDelete: (ids: string[]) => void;
-}) {
-  const revisionRows = state.revision
-    ? [
-        ...state.revision.carriedAnchors.map((anchor) => ({
-          id: anchor.id,
-          name: anchor.reason || "Revision",
-          type: "Revision",
-          at: anchor.revisionAt,
-          milestone: null,
-          temporary: false,
-          readOnly: true,
-        })),
-        {
-          id: state.revision.markerId,
-          name: state.revision.reason || "当前 Revision",
-          type: "Revision",
-          at: state.revision.revisionAt,
-          milestone: null,
-          temporary: false,
-          readOnly: false,
-        },
-      ]
-    : [];
-  const milestoneRows = sortMilestonesForDisplay(state).map((milestone) => ({
-    id: milestone.id,
-    name: milestone.goal || "临时 Milestone",
-    type: "Milestone",
-    at: milestone.expectedCompletedAt,
-    milestone,
-    temporary: isTemporary(state, milestone.id),
-    readOnly: isReadOnlyEntity(state, milestone.id),
-  }));
-  const rows = [
-    { id: TASK_COMPOSER_START_ID, name: "Start", type: "Start", at: state.plannedStartAt, milestone: null, temporary: false, readOnly: Boolean(state.revision) },
-    ...[...milestoneRows, ...revisionRows].sort(
-      (left, right) => localMs(left.at) - localMs(right.at) || left.id.localeCompare(right.id),
-    ),
-    { id: state.termination.id, name: state.termination.name || "Terminal", type: "Terminal", at: state.termination.plannedAt, milestone: null, temporary: false, readOnly: false },
-  ];
-  return (
-    <section className="hidden min-w-0 rounded-xl border border-border bg-card p-4 lg:block" aria-label="计划节点列表">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h2 className="font-semibold">节点列表</h2>
-          <p className="mt-1 text-xs text-muted-foreground">严格按计划时间升序；Start 与 Terminal 固定保留。</p>
-        </div>
-        <Button
-          type="button"
-          size="sm"
-          variant="destructive"
-          disabled={bulkSelection.size === 0}
-          onClick={() => onDelete([...bulkSelection])}
-        >
-          批量删除 ({bulkSelection.size})
-        </Button>
-      </div>
-      <div className="max-w-full overflow-x-auto">
-        <table className="w-full min-w-[42rem] table-fixed text-sm">
-          <thead>
-            <tr className="border-b border-border text-left text-xs text-muted-foreground">
-              <th className="w-10 py-2">
-                <input
-                  type="checkbox"
-                  aria-label="选择全部 Milestone"
-                  checked={allSelected}
-                  disabled={state.milestones.every((milestone) => isReadOnlyEntity(state, milestone.id))}
-                  onChange={(event) => onToggleAll(event.target.checked)}
-                />
-              </th>
-              <th className="w-14 py-2">序号</th>
-              <th className="py-2">节点名称</th>
-              <th className="w-28 py-2">类型</th>
-              <th className="w-44 py-2">计划时间</th>
-              <th className="w-36 py-2">操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row, index) => {
-              const hasError = issues.some((issue) => issue.entityId === row.id);
-              return (
-                <tr
-                  key={row.id}
-                  className={cn(
-                    "border-b border-border/70 last:border-0",
-                    state.selectedEntityId === row.id && "bg-primary/5",
-                  )}
-                >
-                  <td className="py-2">
-                    {row.milestone && !row.readOnly && (
-                      <input
-                        type="checkbox"
-                        aria-label={`选择 ${row.name}`}
-                        checked={bulkSelection.has(row.id)}
-                        onChange={(event) => onToggle(row.id, event.target.checked)}
-                      />
-                    )}
-                  </td>
-                  <td className="py-2 tabular-nums">{index + 1}</td>
-                  <td className="min-w-0 py-2 pr-2">
-                    <button
-                      type="button"
-                      className={cn(
-                        "max-w-full truncate text-left font-medium hover:text-primary hover:underline",
-                        hasError && "text-destructive",
-                      )}
-                      title={row.name}
-                      onClick={() => onSelect(row.id)}
-                    >
-                      {row.name}
-                    </button>
-                  </td>
-                  <td className="py-2">
-                    <div className="flex flex-wrap gap-1">
-                      <Badge variant="outline">{row.type}</Badge>
-                      {row.temporary && (
-                        <Badge variant="outline" className="border-amber-500 text-amber-700">临时</Badge>
-                      )}
-                      {row.readOnly && <Badge variant="outline">只读承接</Badge>}
-                      {hasError && !row.temporary && (
-                        <Badge variant="destructive">需修正</Badge>
-                      )}
-                    </div>
-                  </td>
-                  <td className="py-2 tabular-nums">{formatLocalDateTime(row.at)}</td>
-                  <td className="py-2">
-                    <div className="flex gap-1">
-                      <Button type="button" size="icon-xs" variant="ghost" aria-label={`${row.readOnly ? "查看" : "编辑"} ${row.name}`} onClick={() => onSelect(row.id)}>
-                        <Pencil aria-hidden="true" />
-                      </Button>
-                      {row.milestone && !row.readOnly && (
-                        <>
-                          {!row.temporary && (
-                            <Button type="button" size="icon-xs" variant="ghost" aria-label={`复制 ${row.name}`} onClick={() => onDuplicate(row.milestone!)}>
-                              <Copy aria-hidden="true" />
-                            </Button>
-                          )}
-                          <Button type="button" size="icon-xs" variant="ghost" aria-label={`删除 ${row.name}`} onClick={() => onDelete([row.id])}>
-                            <Trash2 aria-hidden="true" />
-                          </Button>
-                        </>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  );
-}
-
-function MobileNodeList({ state, issues, onSelect }: { state: TaskComposerSeed; issues: ValidationIssue[]; onSelect: (id: string) => void }) {
-  const revisionRows = state.revision
-    ? [
-        ...state.revision.carriedAnchors.map((anchor) => ({
-          id: anchor.id,
-          label: anchor.reason || "Revision",
-          at: anchor.revisionAt,
-          icon: "Revision",
-          temporary: false,
-          readOnly: true,
-        })),
-        {
-          id: state.revision.markerId,
-          label: state.revision.reason || "当前 Revision",
-          at: state.revision.revisionAt,
-          icon: "Revision",
-          temporary: false,
-          readOnly: false,
-        },
-      ]
-    : [];
-  const milestoneRows = sortMilestonesForDisplay(state).map((milestone, index) => ({
+function buildComposerNavigatorNodes(
+  state: TaskComposerSeed,
+  issues: ValidationIssue[],
+): TaskPlanNavigatorNode[] {
+  const hasIssue = (entityId: string) =>
+    issues.some((issue) => issue.entityId === entityId);
+  const milestoneNodes: TaskPlanNavigatorNode[] = sortMilestonesForDisplay(state).map(
+    (milestone) => ({
       id: milestone.id,
+      kind: "MILESTONE",
       label: milestone.goal || "临时 Milestone",
       at: milestone.expectedCompletedAt,
-      icon: `M${index + 1}`,
-      temporary: isTemporary(state, milestone.id),
-      readOnly: isReadOnlyEntity(state, milestone.id),
-    }));
-  const rows = [
-    { id: TASK_COMPOSER_START_ID, label: "Start", at: state.plannedStartAt, icon: null, temporary: false, readOnly: Boolean(state.revision) },
-    ...[...milestoneRows, ...revisionRows].sort(
-      (left, right) => localMs(left.at) - localMs(right.at) || left.id.localeCompare(right.id),
-    ),
-    { id: state.termination.id, label: state.termination.name || "Terminal", at: state.termination.plannedAt, icon: "Terminal", temporary: false, readOnly: false },
-  ];
-  return (
-    <div className="mt-4 space-y-2 lg:hidden" aria-label="移动端纵向计划节点">
-      {rows.map((row) => (
-        <button
-          key={row.id}
-          type="button"
-          className={cn(
-            "flex w-full min-w-0 items-start gap-3 rounded-lg border p-3 text-left",
-            state.selectedEntityId === row.id ? "border-primary bg-primary/5" : "border-border",
-          )}
-          onClick={() => onSelect(row.id)}
-        >
-          {row.icon === "Terminal" ? (
-            <Flag className="size-4 text-primary" aria-hidden="true" />
-          ) : (
-            <Badge variant="secondary">{row.icon ?? "Start"}</Badge>
-          )}
-          <span className="min-w-0 flex-1">
-            <span className="block break-words font-medium">{row.label}</span>
-            <span className="mt-1 block text-xs text-muted-foreground">{formatLocalDateTime(row.at)}</span>
-            {row.temporary && <Badge variant="outline" className="mt-1 border-amber-500 text-amber-700">临时</Badge>}
-            {row.readOnly && <Badge variant="outline" className="mt-1">只读承接</Badge>}
-          </span>
-          {issues.some((issue) => issue.entityId === row.id) && (
-            <span className="text-xs text-destructive">需修正</span>
-          )}
-        </button>
-      ))}
-    </div>
+      status: isTemporary(state, milestone.id)
+        ? "临时节点"
+        : isReadOnlyEntity(state, milestone.id)
+          ? "只读承接"
+          : "计划中",
+      completed: isReadOnlyEntity(state, milestone.id),
+      invalid: hasIssue(milestone.id),
+    }),
   );
+  const revisionNodes: TaskPlanNavigatorNode[] = state.revision
+    ? [
+        ...state.revision.carriedAnchors.map((anchor) => ({
+          id: anchor.id,
+          kind: "REVISION" as const,
+          label: anchor.reason || "Revision",
+          at: anchor.revisionAt,
+          status: "已生效",
+          completed: true,
+        })),
+        {
+          id: state.revision.markerId,
+          kind: "REVISION" as const,
+          label: state.revision.reason || "当前 Revision",
+          at: state.revision.revisionAt,
+          status: "当前候选",
+          invalid: hasIssue(state.revision.markerId),
+        },
+      ]
+    : [];
+  return [
+    {
+      id: TASK_COMPOSER_START_ID,
+      kind: "START",
+      label: "Start",
+      at: state.plannedStartAt,
+      status: state.revision ? "只读承接" : "计划开始",
+      completed: Boolean(state.revision),
+      invalid: hasIssue(TASK_COMPOSER_START_ID),
+    },
+    ...[...milestoneNodes, ...revisionNodes].sort(
+      (left, right) =>
+        localMs(left.at) - localMs(right.at) || left.id.localeCompare(right.id),
+    ),
+    {
+      id: state.termination.id,
+      kind: "TERMINAL",
+      label: state.termination.name || "Terminal",
+      at: state.termination.plannedAt,
+      status: "计划结束",
+      invalid: hasIssue(state.termination.id),
+    },
+  ];
 }
 
 function Inspector({
@@ -733,14 +521,12 @@ function Inspector({
   draft,
   issues,
   onChange,
-  onDuplicate,
   onDelete,
 }: {
   state: TaskComposerSeed;
   draft: TaskComposerInspectorDraft | null;
   issues: ValidationIssue[];
   onChange: (draft: TaskComposerInspectorDraft) => void;
-  onDuplicate: (milestone: TaskComposerMilestone) => void;
   onDelete: (milestone: TaskComposerMilestone) => void;
 }) {
   if (!draft) {
@@ -774,6 +560,9 @@ function Inspector({
         )}
         {draft.kind === "MILESTONE" && !draft.isNew && issues.length > 0 && (
           <Badge variant="destructive">需修正</Badge>
+        )}
+        {draft.kind === "REVISION" && draft.isCurrent && !readOnly && (
+          <Badge variant="outline">不可删除</Badge>
         )}
         {readOnly && <Badge variant="outline">只读</Badge>}
       </div>
@@ -811,12 +600,47 @@ function Inspector({
               }
             />
           </PlanField>
-          <div>
-            <p className="mb-1.5 text-sm font-medium">修订原因</p>
-            <p className="break-words rounded-lg border border-input bg-muted/30 px-3 py-2 text-sm">
-              {draft.revision.reason || "请在左侧填写修订原因"}
-            </p>
-          </div>
+          <PlanField label="Revision 名称" required htmlFor="revision-reason">
+            <Input
+              id="revision-reason"
+              value={draft.revision.reason}
+              readOnly={readOnly}
+              maxLength={2_000}
+              aria-invalid={fieldError("revision-reason")}
+              onChange={(event) =>
+                onChange({
+                  ...draft,
+                  revision: {
+                    ...draft.revision,
+                    reason: event.target.value,
+                  },
+                })
+              }
+            />
+          </PlanField>
+          <PlanField
+            label="Revision 详细内容"
+            required
+            htmlFor="revision-description"
+          >
+            <Textarea
+              id="revision-description"
+              value={draft.revision.description}
+              readOnly={readOnly}
+              rows={7}
+              maxLength={2_000}
+              aria-invalid={fieldError("revision-description")}
+              onChange={(event) =>
+                onChange({
+                  ...draft,
+                  revision: {
+                    ...draft.revision,
+                    description: event.target.value,
+                  },
+                })
+              }
+            />
+          </PlanField>
           <p className="text-xs leading-5 text-muted-foreground">
             Revision 是时间标记，不形成阶段，也不能关联人员投入。
           </p>
@@ -925,20 +749,10 @@ function Inspector({
 
       {draft.kind === "MILESTONE" && !readOnly && (
         <div className="flex flex-wrap gap-2 border-t border-border pt-3">
-          {draft.isNew ? (
-            <Button type="button" size="sm" variant="destructive" onClick={() => onDelete(draft.milestone)}>
-              <Trash2 aria-hidden="true" />删除临时节点
-            </Button>
-          ) : (
-            <>
-            <Button type="button" size="sm" variant="outline" onClick={() => onDuplicate(draft.milestone)}>
-              <Copy aria-hidden="true" />复制
-            </Button>
-            <Button type="button" size="sm" variant="destructive" onClick={() => onDelete(draft.milestone)}>
-              <Trash2 aria-hidden="true" />删除
-            </Button>
-            </>
-          )}
+          <Button type="button" size="sm" variant="destructive" onClick={() => onDelete(draft.milestone)}>
+            <Trash2 aria-hidden="true" />
+            {draft.isNew ? "删除临时节点" : "删除节点"}
+          </Button>
         </div>
       )}
     </div>

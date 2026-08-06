@@ -11,10 +11,8 @@ import {
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
-  Plus,
   Redo2,
   Save,
-  Trash2,
   Undo2,
 } from "lucide-react";
 import {
@@ -30,7 +28,7 @@ import {
 } from "@/app/actions/project-management/canvas";
 import { TaskSelect } from "@/components/project-management/task-picker";
 import { TaskComposerPlanEditor } from "@/components/project-management/task-composer-plan-editor";
-import { UserSelect } from "@/components/project-management/user-picker";
+import { TaskMemberRolePicker } from "@/components/project-management/task-member-role-picker";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -74,7 +72,6 @@ import { routes } from "@/lib/routes";
 
 const LOCAL_DRAFT_SCHEMA_VERSION = 3;
 const MAX_HISTORY = 80;
-const DAY_MS = 24 * 60 * 60 * 1_000;
 const NO_LEGAL_ANCHOR_MOVE_MESSAGE =
   "当前吸附粒度没有合法位置，节点已保留在原处；请放大画布或使用 Inspector 精调。";
 const UUID_PATTERN =
@@ -103,6 +100,7 @@ export type TaskComposerNodeMeta = {
 export type TaskComposerRevisionAnchor = {
   id: string;
   reason: string;
+  description: string;
   revisionAt: string;
   status: string;
 };
@@ -110,6 +108,7 @@ export type TaskComposerRevisionAnchor = {
 export type TaskComposerRevisionContext = {
   markerId: string;
   reason: string;
+  description: string;
   revisionAt: string;
   reviewRound: number;
   lockedMilestoneIds: string[];
@@ -309,22 +308,6 @@ export function TaskComposerClient({
   const [tagQuery, setTagQuery] = useState("");
   const [optionError, setOptionError] = useState("");
   const [optionLoading, setOptionLoading] = useState(false);
-  const [memberPersonId, setMemberPersonId] = useState(
-    () => {
-      const ownerId = initialSeed.members.find(
-        (member) => member.role === "OWNER",
-      )?.personId;
-      return (
-        initialPeople.find(
-          (person) => person.id === ownerId && person.status === "ACTIVE",
-        )?.id ??
-        initialPeople.find((person) => person.status === "ACTIVE")?.id ??
-        ""
-      );
-    },
-  );
-  const [memberRole, setMemberRole] =
-    useState<TaskMemberRoleValue>("PARTICIPANT");
   const historyGuardRef = useRef(false);
   const bypassPopStateRef = useRef(false);
   const bypassBeforeUnloadRef = useRef(false);
@@ -774,21 +757,6 @@ export function TaskComposerClient({
     window.setTimeout(() => document.getElementById(`goal-${milestone.id}`)?.focus(), 0);
   };
 
-  const duplicateMilestone = (source: TaskComposerMilestone) => {
-    if (isLockedRevisionMilestone(state, source.id)) {
-      setServerError("已承接的 Milestone 为只读，不能复制或修改。");
-      return;
-    }
-    const savedSource =
-      state.milestones.find((milestone) => milestone.id === source.id) ?? source;
-    const duplicateAt = suggestDuplicateAt(state, savedSource.id);
-    if (!duplicateAt) {
-      setServerError("原节点之后没有合法的分钟级位置，请先移动相邻节点或 Terminal 后再复制。");
-      return;
-    }
-    beginMilestone(duplicateAt, savedSource);
-  };
-
   const removeMilestones = (ids: string[]) => {
     const lockedIds = ids.filter((id) => isLockedRevisionMilestone(state, id));
     if (lockedIds.length > 0) {
@@ -1169,6 +1137,7 @@ export function TaskComposerClient({
         const revisionPayload = {
           revisionAt: shanghaiDateTimeLocalToIso(state.revision.revisionAt),
           reason: state.revision.reason,
+          description: state.revision.description,
           replacementMilestones,
           termination: {
             name: state.termination.name,
@@ -1279,43 +1248,6 @@ export function TaskComposerClient({
     }
   };
 
-  const addMember = () => {
-    if (!memberPersonId) {
-      setOptionError("请先选择人员。");
-      return;
-    }
-    const existing = state.members.find(
-      (member) => member.personId === memberPersonId,
-    );
-    const selectedPerson = people.find((person) => person.id === memberPersonId);
-    if (!selectedPerson || selectedPerson.status !== "ACTIVE") {
-      setOptionError("该人员已停用或不可用，不能新增角色。");
-      return;
-    }
-    if (
-      existing?.role === "OWNER" &&
-      memberRole !== "OWNER" &&
-      state.members.filter((member) => member.role === "OWNER").length === 1
-    ) {
-      setOptionError("至少保留一名负责人。");
-      return;
-    }
-    updateField(
-      "members",
-      existing
-        ? state.members.map((member) =>
-            member.personId === memberPersonId
-              ? { ...member, role: memberRole }
-              : member,
-          )
-        : [
-            ...state.members,
-            { personId: memberPersonId, role: memberRole },
-          ],
-    );
-    setOptionError("");
-  };
-
   const changeTeam = (team: string) => {
     liveEditEntityRef.current = null;
     commit((current) => ({ ...current, team }));
@@ -1392,9 +1324,6 @@ export function TaskComposerClient({
               onClick={redo}
             >
               <Redo2 aria-hidden="true" />
-            </Button>
-            <Button type="button" variant="outline" onClick={runValidation}>
-              校验{issues.length > 0 ? ` (${issues.length})` : ""}
             </Button>
             <Button
               type="button"
@@ -1540,80 +1469,18 @@ export function TaskComposerClient({
         </div>
       )}
 
-      <div className="mx-auto grid w-full min-w-0 max-w-[110rem] gap-4 px-4 py-5 sm:px-6 lg:grid-cols-[19rem_minmax(0,1fr)_22rem] lg:px-8">
+      <div className="mx-auto flex w-full min-w-0 max-w-[110rem] flex-col gap-4 px-4 py-5 sm:px-6 lg:px-8">
         <aside
-          className="min-w-0 space-y-4"
-          aria-label={isRevisionComposer ? "Revision 信息" : "Task 基本信息"}
+          className="min-w-0 space-y-5 rounded-xl border border-border bg-card p-4 sm:p-5 [&>section]:border-0 [&>section]:bg-transparent [&>section]:p-0"
+          aria-label="Task 基本信息"
         >
-          {isRevisionComposer && state.revision ? (
-            <>
-              <ComposerSection title="Revision 信息" issueCount={countIssues(issues, ["revision-reason"])}>
-                <Field label="Task" htmlFor="revision-task-title">
-                  <Input id="revision-task-title" value={state.title} readOnly />
-                </Field>
-                <Field label="修订原因" required htmlFor="revision-reason">
-                  <Textarea
-                    id="revision-reason"
-                    rows={6}
-                    value={state.revision.reason}
-                    maxLength={2_000}
-                    aria-invalid={issues.some((issue) => issue.key === "revision-reason")}
-                    onChange={(event) => {
-                      const mutator = (current: TaskComposerSeed) => current.revision
-                        ? {
-                            ...current,
-                            revision: {
-                              ...current.revision,
-                              reason: event.target.value,
-                            },
-                          }
-                        : current;
-                      if (liveEditEntityRef.current === state.revision?.markerId) {
-                        replacePresent(mutator);
-                      } else {
-                        liveEditEntityRef.current = state.revision?.markerId ?? null;
-                        commit(mutator);
-                      }
-                    }}
-                  />
-                </Field>
-              </ComposerSection>
-              <ComposerSection title="只读基线">
-                <dl className="space-y-2 text-sm">
-                  <div className="flex justify-between gap-3">
-                    <dt className="text-muted-foreground">计划版本</dt>
-                    <dd>v{mode.baseVersionNo}</dd>
-                  </div>
-                  <div className="flex justify-between gap-3">
-                    <dt className="text-muted-foreground">Task 锁版本</dt>
-                    <dd>{mode.baseTaskLockVersion}</dd>
-                  </div>
-                  {mode.kind === "RESUBMIT_REVISION" && (
-                    <>
-                      <div className="flex justify-between gap-3">
-                        <dt className="text-muted-foreground">候选版本</dt>
-                        <dd>v{mode.targetVersionNo}</dd>
-                      </div>
-                      <div className="flex justify-between gap-3">
-                        <dt className="text-muted-foreground">重新送审轮次</dt>
-                        <dd>第 {state.revision.reviewRound + 1} 轮</dd>
-                      </div>
-                    </>
-                  )}
-                </dl>
-                <p className="text-xs leading-5 text-muted-foreground">
-                  Start、已完成 Milestone 与已生效 Revision 由当前计划承接并保持只读；Revision 标记不切割计划阶段。
-                </p>
-              </ComposerSection>
-            </>
-          ) : (
-            <>
           <ComposerSection title="基本信息" issueCount={countIssues(issues, ["title", "team", "techGroup"])}>
             <Field label="Task 名称" required htmlFor="title">
               <Input
                 id="title"
                 value={state.title}
                 maxLength={200}
+                disabled={isRevisionComposer}
                 aria-invalid={issues.some((issue) => issue.key === "title")}
                 onChange={(event) => updateField("title", event.target.value)}
               />
@@ -1624,6 +1491,7 @@ export function TaskComposerClient({
                 rows={3}
                 value={state.description}
                 maxLength={8_000}
+                disabled={isRevisionComposer}
                 onChange={(event) => updateField("description", event.target.value)}
               />
             </Field>
@@ -1632,6 +1500,7 @@ export function TaskComposerClient({
                 id="priority"
                 className={selectClassName}
                 value={state.priority}
+                disabled={isRevisionComposer}
                 onChange={(event) =>
                   updateField("priority", event.target.value as TaskPriorityValue)
                 }
@@ -1652,6 +1521,7 @@ export function TaskComposerClient({
                   id="team"
                   className={selectClassName}
                   value={state.team}
+                  disabled={isRevisionComposer}
                   onChange={(event) => changeTeam(event.target.value)}
                 >
                   {TEAM_OPTIONS.map((team) => (
@@ -1666,6 +1536,7 @@ export function TaskComposerClient({
                   id="techGroup"
                   className={selectClassName}
                   value={state.techGroup}
+                  disabled={isRevisionComposer}
                   onChange={(event) => updateField("techGroup", event.target.value)}
                 >
                   {TECH_GROUP_OPTIONS.map((group) => (
@@ -1676,33 +1547,39 @@ export function TaskComposerClient({
                 </select>
               </Field>
             </div>
-            <Field label="Tags" htmlFor="tag-search">
-              <div className="flex gap-2">
-                <Input
-                  id="tag-search"
-                  value={tagQuery}
-                  placeholder="搜索 Tag"
-                  onChange={(event) => setTagQuery(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      void loadTags();
-                    }
-                  }}
-                />
-                <Button type="button" variant="outline" onClick={() => void loadTags()}>
-                  搜索
-                </Button>
-              </div>
+            <Field
+              label="Tags"
+              htmlFor={isRevisionComposer ? undefined : "tag-search"}
+            >
+              {!isRevisionComposer && (
+                <div className="flex gap-2">
+                  <Input
+                    id="tag-search"
+                    value={tagQuery}
+                    placeholder="搜索 Tag"
+                    onChange={(event) => setTagQuery(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        void loadTags();
+                      }
+                    }}
+                  />
+                  <Button type="button" variant="outline" onClick={() => void loadTags()}>
+                    搜索
+                  </Button>
+                </div>
+              )}
               <div className="mt-2 flex max-h-28 flex-wrap gap-2 overflow-y-auto">
                 {tags.map((tag) => (
                   <label
                     key={tag.id}
-                    className="flex cursor-pointer items-center gap-1 rounded-full border border-border px-2 py-1 text-xs"
+                    className={`flex items-center gap-1 rounded-full border border-border px-2 py-1 text-xs ${isRevisionComposer ? "cursor-default" : "cursor-pointer"}`}
                   >
                     <input
                       type="checkbox"
                       checked={state.tagIds.includes(tag.id)}
+                      disabled={isRevisionComposer}
                       onChange={(event) =>
                         updateField(
                           "tagIds",
@@ -1733,52 +1610,34 @@ export function TaskComposerClient({
                 value={state.relatedTaskId}
                 onValueChange={(nextValue) => updateField("relatedTaskId", nextValue)}
                 initialOptions={initialTasks}
-                excludeIds={mode.kind === "EDIT_DRAFT" ? [mode.taskId] : []}
+                excludeIds={mode.kind === "CREATE" ? [] : [mode.taskId]}
                 placeholder="按标题、描述或拼音首字母搜索"
                 clearable
+                disabled={isRevisionComposer}
               />
             </Field>
           </ComposerSection>
 
           <ComposerSection title="成员" issueCount={countIssues(issues, ["members"])}>
             <div className="space-y-2" id="members" tabIndex={-1}>
-              {state.members.map((member, index) => {
-                const person = people.find((item) => item.id === member.personId);
-                return (
-                  <div
-                    key={`${member.personId}:${member.role}`}
-                    className="flex min-w-0 items-center gap-2 rounded-lg border border-border p-2 text-sm"
-                  >
-                    <span className="min-w-0 flex-1 truncate">
-                      {person?.displayName ?? "已选择成员"}
-                    </span>
-                    <Badge variant={member.role === "OWNER" ? "default" : "secondary"}>
-                      {taskMemberRoleLabels[member.role]}
-                    </Badge>
-                    {canManageMembers && (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        disabled={
-                          member.role === "OWNER" &&
-                          state.members.filter((item) => item.role === "OWNER")
-                            .length === 1
-                        }
-                        aria-label={`移除 ${person?.displayName ?? "成员"} ${taskMemberRoleLabels[member.role]}`}
-                        onClick={() =>
-                          updateField(
-                            "members",
-                            state.members.filter((_, memberIndex) => memberIndex !== index),
-                          )
-                        }
-                      >
-                        <Trash2 aria-hidden="true" />
-                      </Button>
-                    )}
-                  </div>
-                );
-              })}
+              <TaskMemberRolePicker
+                members={state.members}
+                people={people}
+                scope={
+                  mode.kind !== "CREATE"
+                    ? { purpose: "TASK_MEMBERS", taskId: mode.taskId }
+                    : {
+                        purpose: "TASK_CREATE",
+                        team: state.team,
+                        techGroup: state.techGroup,
+                      }
+                }
+                editable={canManageMembers && preservedLegacyMembers.length === 0}
+                onChange={(members) => updateField("members", members)}
+                onPersonResolved={(person) =>
+                  setPeople((current) => mergeOptions(current, [person]))
+                }
+              />
               {preservedLegacyMembers.map((member) => {
                 const person = people.find((item) => item.id === member.personId);
                 return (
@@ -1796,9 +1655,6 @@ export function TaskComposerClient({
                   </div>
                 );
               })}
-              {state.members.length === 0 && preservedLegacyMembers.length === 0 && (
-                <EmptyInline>尚未添加成员</EmptyInline>
-              )}
             </div>
             {preservedLegacyMembers.length > 0 ? (
               <p className="text-xs text-muted-foreground">
@@ -1806,57 +1662,12 @@ export function TaskComposerClient({
               </p>
             ) : !canManageMembers ? (
               <p className="text-xs text-muted-foreground">
-                你可以编辑 Task 内容和计划，成员与角色为只读。
+                {isRevisionComposer
+                  ? "Revision 只调整下方计划节点；Task 基本信息、分类与成员保持只读。"
+                  : "你可以编辑 Task 内容和计划，成员与角色为只读。"}
               </p>
             ) : null}
-            {canManageMembers && (
-              <div className="mt-3 space-y-2 rounded-lg bg-muted/40 p-3">
-                <UserSelect
-                  ariaLabel="成员人员"
-                  scope={
-                    mode.kind === "EDIT_DRAFT"
-                      ? { purpose: "TASK_MEMBERS", taskId: mode.taskId }
-                      : {
-                          purpose: "TASK_CREATE",
-                          team: state.team,
-                          techGroup: state.techGroup,
-                        }
-                  }
-                  value={memberPersonId || null}
-                  onValueChange={(nextValue) => setMemberPersonId(nextValue ?? "")}
-                  onOptionChange={(option) => {
-                    if (option) setPeople((current) => mergeOptions(current, [option]));
-                  }}
-                  initialOptions={initialPeople}
-                  placeholder="按姓名或拼音首字母搜索"
-                />
-                <div className="flex gap-2">
-                  <select
-                    aria-label="成员角色"
-                    className={selectClassName}
-                    value={memberRole}
-                    onChange={(event) =>
-                      setMemberRole(event.target.value as TaskMemberRoleValue)
-                    }
-                  >
-                    {taskMemberRoles.map((role) => (
-                      <option key={role} value={role}>
-                        {taskMemberRoleLabels[role]}
-                      </option>
-                    ))}
-                  </select>
-                  <Button type="button" variant="outline" onClick={addMember}>
-                    <Plus aria-hidden="true" />
-                    添加
-                  </Button>
-                </div>
-              </div>
-            )}
           </ComposerSection>
-
-            </>
-          )}
-
         </aside>
 
         <TaskComposerPlanEditor
@@ -1899,9 +1710,7 @@ export function TaskComposerClient({
           onMoveAnchor={moveAnchor}
           onMoveTerminal={moveTerminal}
           onUpdateInspector={updateInspector}
-          onDuplicateMilestone={duplicateMilestone}
           onDeleteMilestones={removeMilestones}
-          onFocusIssue={focusIssue}
           onSubmit={submit}
         />
       </div>
@@ -2018,7 +1827,7 @@ function Field({
 }: {
   label: string;
   required?: boolean;
-  htmlFor: string;
+  htmlFor?: string;
   className?: string;
   children: ReactNode;
 }) {
@@ -2067,6 +1876,7 @@ function inspectorDraftForEntity(
       revision: {
         id: state.revision.markerId,
         reason: state.revision.reason,
+        description: state.revision.description,
         revisionAt: state.revision.revisionAt,
         status: "当前候选",
       },
@@ -2122,6 +1932,7 @@ function applyLiveInspectorUpdate(
       revision: {
         ...state.revision,
         reason: draft.revision.reason,
+        description: draft.revision.description,
         revisionAt: draft.revision.revisionAt,
       },
       nodeMeta: nextNodeMeta,
@@ -2150,7 +1961,14 @@ function validateInspector(
       issues.push({
         key: "revision-reason",
         entityId: draft.entityId,
-        message: "请输入修订原因。",
+        message: "请输入 Revision 名称。",
+      });
+    }
+    if (!draft.revision.description.trim()) {
+      issues.push({
+        key: "revision-description",
+        entityId: draft.entityId,
+        message: "请输入 Revision 详细内容。",
       });
     }
     if (!validLocalDateTime(draft.revision.revisionAt)) {
@@ -2400,32 +2218,6 @@ function reconcileComposerPlanState(state: TaskComposerSeed) {
     ...nextState,
     milestones: sortMilestonesByRenderTime(nextState),
   };
-}
-
-function suggestDuplicateAt(state: TaskComposerSeed, sourceId: string) {
-  const sorted = sortMilestonesByRenderTime(state);
-  const sourceIndex = sorted.findIndex((milestone) => milestone.id === sourceId);
-  if (sourceIndex < 0) return null;
-  const sourceAt = renderAtMs(state, sourceId);
-  const upperExclusive = sorted[sourceIndex + 1]
-    ? renderAtMs(state, sorted[sourceIndex + 1]!.id)
-    : renderAtMs(state, state.termination.id);
-  const occupied = new Set(
-    state.milestones.map((milestone) => renderAtMs(state, milestone.id)),
-  );
-  const preferredAt = sourceAt + DAY_MS;
-  if (preferredAt < upperExclusive && !occupied.has(preferredAt)) {
-    return isoToShanghaiDateTimeLocal(new Date(preferredAt));
-  }
-  const minuteMs = 60_000;
-  for (let offset = 1; offset <= occupied.size + 1; offset += 1) {
-    const candidateAt = sourceAt + offset * minuteMs;
-    if (candidateAt >= upperExclusive) return null;
-    if (!occupied.has(candidateAt)) {
-      return isoToShanghaiDateTimeLocal(new Date(candidateAt));
-    }
-  }
-  return null;
 }
 
 function promoteTemporaryMilestone(
@@ -2782,13 +2574,26 @@ function validateComposer(
       issues.push({
         key: "revision-reason",
         entityId: state.revision.markerId,
-        message: "请输入修订原因。",
+        message: "请输入 Revision 名称。",
       });
     } else if (state.revision.reason.trim().length > 2_000) {
       issues.push({
         key: "revision-reason",
         entityId: state.revision.markerId,
-        message: "修订原因不能超过 2000 个字符。",
+        message: "Revision 名称不能超过 2000 个字符。",
+      });
+    }
+    if (!state.revision.description.trim()) {
+      issues.push({
+        key: "revision-description",
+        entityId: state.revision.markerId,
+        message: "请输入 Revision 详细内容。",
+      });
+    } else if (state.revision.description.trim().length > 2_000) {
+      issues.push({
+        key: "revision-description",
+        entityId: state.revision.markerId,
+        message: "Revision 详细内容不能超过 2000 个字符。",
       });
     }
     if (!revisionAtValid) {
@@ -2851,6 +2656,7 @@ function serverFieldValidationIssue(
     plannedStartAt: "plannedStartAt",
     revisionAt: "revisionAt",
     reason: "revision-reason",
+    description: "revision-description",
     "termination.name": "termination-name",
     "termination.plannedAt": "termination-plannedAt",
     "termination.plannedOutcomeCriteria": "termination-outcome",
@@ -2862,7 +2668,7 @@ function serverFieldValidationIssue(
       message,
       ...(path === "plannedStartAt"
         ? { entityId: TASK_COMPOSER_START_ID }
-        : path === "revisionAt" || path === "reason"
+        : path === "revisionAt" || path === "reason" || path === "description"
           ? { entityId: state.revision?.markerId }
         : path.startsWith("termination.")
           ? { entityId: state.termination.id }
@@ -3061,8 +2867,17 @@ function parseLocalDraft(raw: string): LocalTaskDraft | null {
       return null;
     }
     const normalizedTask = normalizeComposerSeed(taskSeed);
-    const restoredTask = parsed.inspectorDirty && parsed.inspectorDraft
-      ? mergeStoredInspectorDraft(normalizedTask, parsed.inspectorDraft)
+    const normalizedInspectorDraft = parsed.inspectorDraft?.kind === "REVISION"
+      ? {
+          ...parsed.inspectorDraft,
+          revision: {
+            ...parsed.inspectorDraft.revision,
+            description: parsed.inspectorDraft.revision.description ?? "",
+          },
+        }
+      : parsed.inspectorDraft;
+    const restoredTask = parsed.inspectorDirty && normalizedInspectorDraft
+      ? mergeStoredInspectorDraft(normalizedTask, normalizedInspectorDraft)
       : normalizedTask;
     if (!restoredTask || !hasStrictRenderChronology(restoredTask)) {
       return null;
@@ -3280,6 +3095,8 @@ function isStoredRevisionContext(value: unknown): value is TaskComposerRevisionC
     value.markerId.length <= 160 &&
     typeof value.reason === "string" &&
     value.reason.length <= 2_000 &&
+    (value.description === undefined ||
+      (typeof value.description === "string" && value.description.length <= 2_000)) &&
     typeof value.revisionAt === "string" &&
     value.revisionAt.length <= 32 &&
     Number.isInteger(value.reviewRound) &&
@@ -3302,6 +3119,8 @@ function isStoredRevisionAnchor(value: unknown): value is TaskComposerRevisionAn
     value.id.length <= 160 &&
     typeof value.reason === "string" &&
     value.reason.length <= 2_000 &&
+    (value.description === undefined ||
+      (typeof value.description === "string" && value.description.length <= 2_000)) &&
     typeof value.revisionAt === "string" &&
     value.revisionAt.length <= 32 &&
     typeof value.status === "string" &&
@@ -3414,6 +3233,7 @@ function composerSubmissionFingerprint(state: TaskComposerSeed) {
     revision: state.revision
       ? {
           reason: state.revision.reason,
+          description: state.revision.description,
           revisionAt: state.revision.revisionAt,
         }
       : null,
@@ -3473,6 +3293,16 @@ function normalizeComposerSeed(seed: TaskComposerSeed): TaskComposerSeed {
   normalizedMeta[seed.termination.id]!.lifecycle = "ESTABLISHED";
   const normalized: TaskComposerSeed = {
     ...seed,
+    revision: seed.revision
+      ? {
+          ...seed.revision,
+          description: seed.revision.description ?? "",
+          carriedAnchors: seed.revision.carriedAnchors.map((anchor) => ({
+            ...anchor,
+            description: anchor.description ?? "",
+          })),
+        }
+      : undefined,
     nodeMeta: normalizedMeta,
   };
   const reconciled = reconcileComposerPlanState(normalized);
@@ -3623,6 +3453,7 @@ function sanitizeRecoveredComposerState({
     revision: {
       ...authoritativeRevision,
       reason: recoveredRevision.reason,
+      description: recoveredRevision.description,
       revisionAt: recoveredRevision.revisionAt,
     },
   });

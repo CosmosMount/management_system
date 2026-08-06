@@ -29,6 +29,7 @@ import {
   replaceTaskDraftPlan,
   replaceTaskMembers,
   replaceTaskTags,
+  updateActiveTask,
   updateTaskDraft,
   updateTaskDraftMetadata,
   updateTaskMetadata,
@@ -1466,6 +1467,255 @@ test.describe("project management S2 plan and Task mutation services", () => {
     );
   });
 
+  test("Active Task unified save is atomic and increments the lock once", async () => {
+    const admin = await createAccountPerson("S2 Unified Active Admin");
+    const owner = await createAccountPerson("S2 Unified Active Owner");
+    const reviewer = await createAccountPerson("S2 Unified Active Reviewer");
+    const newcomer = await createAccountPerson("S2 Unified Active Newcomer");
+    const inactive = await createAccountPerson("S2 Unified Active Inactive");
+    const firstTag = await createTag(admin.account.id, "Unified Active Tag A");
+    const secondTag = await createTag(admin.account.id, "Unified Active Tag B");
+    const fixture = await createDraft({
+      creator: admin,
+      owner,
+      reviewer,
+      tagIds: [firstTag.id],
+    });
+    await activateTask(actor(owner), {
+      taskId: fixture.taskId,
+      expectedLockVersion: 0,
+    });
+
+    const result = await updateActiveTask(actor(owner), {
+      taskId: fixture.taskId,
+      expectedLockVersion: 1,
+      metadata: {
+        title: "统一保存后的 Active Task",
+        description: "基本信息、Tags 和成员一次提交",
+        team: "英雄",
+        techGroup: "电控",
+        priority: "LOW",
+        relatedTaskId: null,
+      },
+      tagIds: [secondTag.id],
+      members: [
+        { personId: owner.person.id, role: "OWNER" },
+        { personId: reviewer.person.id, role: "PARTICIPANT" },
+        { personId: newcomer.person.id, role: "PARTICIPANT" },
+      ],
+    });
+    expect(result).toMatchObject({
+      lockVersion: 2,
+      tagIds: [secondTag.id],
+      members: expect.arrayContaining([
+        { personId: newcomer.person.id, role: "PARTICIPANT" },
+      ]),
+    });
+    expect(
+      await prisma.task.findUniqueOrThrow({
+        where: { id: fixture.taskId },
+        select: {
+          title: true,
+          description: true,
+          priority: true,
+          lockVersion: true,
+          tags: { select: { tagId: true } },
+          members: {
+            where: { removedAt: null },
+            select: { personId: true, role: true },
+          },
+        },
+      }),
+    ).toMatchObject({
+      title: "统一保存后的 Active Task",
+      description: "基本信息、Tags 和成员一次提交",
+      priority: "LOW",
+      lockVersion: 2,
+      tags: [{ tagId: secondTag.id }],
+      members: expect.arrayContaining([
+        { personId: owner.person.id, role: "OWNER" },
+        { personId: newcomer.person.id, role: "PARTICIPANT" },
+      ]),
+    });
+    expect(
+      await prisma.domainAuditEvent.count({
+        where: {
+          taskId: fixture.taskId,
+          action: {
+            in: [
+              "pm.task.metadata.update",
+              "pm.task.tags.replace",
+              "pm.task.members.replace",
+            ],
+          },
+        },
+      }),
+    ).toBe(3);
+
+    const unifiedAudits = await prisma.domainAuditEvent.findMany({
+      where: {
+        taskId: fixture.taskId,
+        action: {
+          in: [
+            "pm.task.metadata.update",
+            "pm.task.tags.replace",
+            "pm.task.members.replace",
+          ],
+        },
+      },
+    });
+    expect(unifiedAudits.map((audit) => audit.action).sort()).toEqual([
+      "pm.task.members.replace",
+      "pm.task.metadata.update",
+      "pm.task.tags.replace",
+    ]);
+    for (const audit of unifiedAudits) {
+      expect(jsonRecord(audit.after).lockVersion).toBe(2);
+    }
+    expect(
+      jsonRecord(
+        unifiedAudits.find((audit) => audit.action === "pm.task.metadata.update")
+          ?.after,
+      ),
+    ).toMatchObject({
+      title: "统一保存后的 Active Task",
+      priority: "LOW",
+    });
+    expect(
+      jsonRecord(
+        unifiedAudits.find((audit) => audit.action === "pm.task.tags.replace")
+          ?.after,
+      ),
+    ).toMatchObject({ tagIds: [secondTag.id] });
+    expect(
+      jsonRecord(
+        unifiedAudits.find((audit) => audit.action === "pm.task.members.replace")
+          ?.after,
+      ).members,
+    ).toEqual(
+      expect.arrayContaining([
+        { personId: newcomer.person.id, role: "PARTICIPANT" },
+      ]),
+    );
+
+    const memberEventPrefix = `pm:task:member_changed:${fixture.taskId}:2:`;
+    const memberOutboxes = await prisma.notificationOutbox.findMany({
+      where: { eventKey: { startsWith: memberEventPrefix } },
+    });
+    expect(memberOutboxes).toHaveLength(1);
+    expect(memberOutboxes[0]).toMatchObject({
+      eventKey: `${memberEventPrefix}${newcomer.person.id}`,
+      type: "task_assigned",
+      botKind: "notification",
+    });
+    expect(jsonRecord(JSON.parse(memberOutboxes[0]?.payload ?? "{}"))).toMatchObject({
+      kind: "task_assigned",
+      purpose: "notification",
+      mandatory: true,
+      actorName: owner.person.displayName,
+    });
+    expect(
+      await prisma.inAppNotification.findMany({
+        where: { eventKey: { startsWith: memberEventPrefix } },
+        select: { recipientAccountId: true },
+      }),
+    ).toEqual([{ recipientAccountId: newcomer.account.id }]);
+
+    const unchangedInput = {
+      taskId: fixture.taskId,
+      expectedLockVersion: 2,
+      metadata: {
+        title: "统一保存后的 Active Task",
+        description: "基本信息、Tags 和成员一次提交",
+        team: "英雄" as const,
+        techGroup: "电控" as const,
+        priority: "LOW" as const,
+        relatedTaskId: null,
+      },
+      tagIds: [secondTag.id],
+      members: [
+        { personId: owner.person.id, role: "OWNER" as const },
+        { personId: reviewer.person.id, role: "PARTICIPANT" as const },
+        { personId: newcomer.person.id, role: "PARTICIPANT" as const },
+      ],
+    };
+    const beforeUnchangedSave = await mutationSideEffectCounts(fixture.taskId);
+    expect(await updateActiveTask(actor(owner), unchangedInput)).toMatchObject({
+      lockVersion: 2,
+    });
+    expect(await mutationSideEffectCounts(fixture.taskId)).toEqual(
+      beforeUnchangedSave,
+    );
+
+    const participantResult = await updateActiveTask(actor(reviewer), {
+      taskId: fixture.taskId,
+      expectedLockVersion: 2,
+      metadata: {
+        ...unchangedInput.metadata,
+        description: "Participant 可统一保存元数据与 Tags",
+        priority: "MEDIUM",
+      },
+      tagIds: [firstTag.id],
+    });
+    expect(participantResult).toMatchObject({
+      lockVersion: 3,
+      tagIds: [firstTag.id],
+    });
+
+    const beforeForbiddenMembers = await mutationSideEffectCounts(fixture.taskId);
+    await expectServiceError(
+      updateActiveTask(actor(reviewer), {
+        taskId: fixture.taskId,
+        expectedLockVersion: 3,
+        members: [
+          { personId: owner.person.id, role: "OWNER" },
+          { personId: reviewer.person.id, role: "PARTICIPANT" },
+        ],
+      }),
+      "FORBIDDEN",
+    );
+    expect(await mutationSideEffectCounts(fixture.taskId)).toEqual(
+      beforeForbiddenMembers,
+    );
+
+    await prisma.person.update({
+      where: { id: inactive.person.id },
+      data: { status: "INACTIVE" },
+    });
+    const beforeFailure = await mutationSideEffectCounts(fixture.taskId);
+    await expectServiceError(
+      updateActiveTask(actor(owner), {
+        taskId: fixture.taskId,
+        expectedLockVersion: 3,
+        metadata: {
+          title: "不应部分保存的标题",
+          description: "应随成员校验失败完整回滚",
+          team: "英雄",
+          techGroup: "电控",
+          priority: "HIGH",
+          relatedTaskId: null,
+        },
+        tagIds: [secondTag.id],
+        members: [
+          { personId: owner.person.id, role: "OWNER" },
+          { personId: inactive.person.id, role: "PARTICIPANT" },
+        ],
+      }),
+      "VALIDATION_ERROR",
+    );
+    expect(await mutationSideEffectCounts(fixture.taskId)).toEqual(beforeFailure);
+    expect(
+      await prisma.task.findUniqueOrThrow({
+        where: { id: fixture.taskId },
+        select: { title: true, priority: true, lockVersion: true },
+      }),
+    ).toEqual({
+      title: "统一保存后的 Active Task",
+      priority: "MEDIUM",
+      lockVersion: 3,
+    });
+  });
+
   test("Draft and Active member replacements reject every invalid member set without writes", async () => {
     const admin = await createAccountPerson("S2 Invalid Members Admin");
     const owner = await createAccountPerson("S2 Invalid Members Owner");
@@ -1888,6 +2138,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
         basePlanVersionId: current.id,
         baseTaskLockVersion: task.lockVersion,
         reason: "Revision 时间早于已完成 Milestone",
+        description: "Revision 时间早于已完成 Milestone",
         revisionAt: iso(2026, 8, 1),
         replacementMilestones: [milestoneInput("修订 M2", 6)],
         termination: terminationInput(8),
@@ -1904,6 +2155,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
       basePlanVersionId: current.id,
       baseTaskLockVersion: task.lockVersion,
       reason: "合法完整修订",
+      description: "合法完整修订",
       revisionAt: iso(2026, 8, 2),
       replacementMilestones: [milestoneInput("修订 M2", 6)],
       termination: terminationInput(8),
@@ -2010,6 +2262,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
         basePlanVersionId: appliedPlan.id,
         baseTaskLockVersion: appliedTask.lockVersion,
         reason: "不得早于上一条有效 Revision",
+        description: "不得早于上一条有效 Revision",
         revisionAt: iso(2026, 8, 1),
         replacementMilestones: [milestoneInput("再次修订 M2", 7)],
         termination: terminationInput(9),
@@ -2026,6 +2279,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
       basePlanVersionId: appliedPlan.id,
       baseTaskLockVersion: appliedTask.lockVersion,
       reason: "与上一条有效 Revision 同刻",
+      description: "与上一条有效 Revision 同刻",
       revisionAt: iso(2026, 8, 2),
       replacementMilestones: [milestoneInput("同刻后的 M2", 7)],
       termination: terminationInput(9),
@@ -2076,6 +2330,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
       basePlanVersionId: current.id,
       baseTaskLockVersion: task.lockVersion,
       reason: "Revision 等于 Start",
+      description: "Revision 等于 Start",
       revisionAt: iso(2026, 8, 1),
       replacementMilestones: [milestoneInput("Start 边界后计划", 4)],
       termination: terminationInput(8),
@@ -2092,6 +2347,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
       basePlanVersionId: current.id,
       baseTaskLockVersion: task.lockVersion,
       reason: "Revision 等于 Candidate Terminal",
+      description: "Revision 等于 Candidate Terminal",
       revisionAt: iso(2026, 8, 8),
       replacementMilestones: [milestoneInput("Terminal 边界前计划", 4)],
       termination: terminationInput(8),
@@ -2156,6 +2412,7 @@ test.describe("project management S2 plan and Task mutation services", () => {
         basePlanVersionId: legacy.currentPlanVersionId,
         baseTaskLockVersion: legacyTask.lockVersion,
         reason: "修复 legacy Current chronology",
+        description: "修复 legacy Current chronology",
         revisionAt: iso(2026, 8, 2),
         replacementMilestones: [milestoneInput("Repaired M3", 6)],
         termination: terminationInput(8),

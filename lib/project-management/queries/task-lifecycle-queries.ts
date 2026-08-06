@@ -37,6 +37,7 @@ export type TaskLifecycleViews = {
     id: string;
     taskNodeId: string;
     reason: string;
+    description: string;
     revisionAt: string;
     reviewRound: number;
     createdAt: string;
@@ -80,6 +81,7 @@ export type RevisionComposerRecord = {
   taskNodeId: string;
   taskId: string;
   reason: string;
+  description: string;
   revisionAt: string;
   reviewRound: number;
   status: string;
@@ -151,7 +153,9 @@ export async function getRevisionComposerRecord({
       status: true,
       basePlanVersionId: true,
       baseTaskLockVersion: true,
-      node: { select: { id: true, createdByAccountId: true } },
+      node: {
+        select: { id: true, businessDescription: true, createdByAccountId: true },
+      },
       targetPlanVersion: {
         select: { id: true, versionNo: true, updatedAt: true },
       },
@@ -175,6 +179,7 @@ export async function getRevisionComposerRecord({
     taskNodeId: revision.node.id,
     taskId,
     reason: revision.reason,
+    description: revision.node.businessDescription,
     revisionAt: revision.revisionAt.toISOString(),
     reviewRound: revision.reviewRound,
     status: revision.status,
@@ -203,6 +208,7 @@ export async function getTaskLifecycleViews({
   auditLimit = 50,
   auditEventTypes = [],
   auditActor,
+  currentOnly = false,
 }: {
   actor: ProjectManagementActor;
   taskId: string;
@@ -214,6 +220,7 @@ export async function getTaskLifecycleViews({
   auditLimit?: number;
   auditEventTypes?: string[];
   auditActor?: string;
+  currentOnly?: boolean;
 }): Promise<TaskLifecycleViews> {
   if (!Number.isInteger(reviewLimit) || reviewLimit < 1 || reviewLimit > 100) {
     throw validationError("验收分页数量必须为 1–100");
@@ -259,11 +266,13 @@ export async function getTaskLifecycleViews({
   if (!task) throw notFoundError();
   const resource: AuthorizationTaskResource = { type: "task", ...task };
   assertAuthorized({ actor, action: "task.view", resource });
-  assertAuthorized({
-    actor,
-    action: "audit.view",
-    resource: { type: "audit", task: resource },
-  });
+  if (!currentOnly) {
+    assertAuthorized({
+      actor,
+      action: "audit.view",
+      resource: { type: "audit", task: resource },
+    });
+  }
   const auditWhere: Prisma.DomainAuditEventWhereInput = {
     taskId,
     ...(auditEventTypes.length > 0
@@ -300,16 +309,12 @@ export async function getTaskLifecycleViews({
     if (!cursor) throw validationError("修订分页游标无效");
   }
 
-  const [
-    reviewRows,
-    revisionRows,
-    auditRows,
-    auditEventTypeRows,
-    auditActorRows,
-    systemAuditCount,
-  ] = await Promise.all([
+  const [reviewRows, revisionRows, auditBundle] = await Promise.all([
     prisma.milestoneReview.findMany({
-      where: { milestoneNode: { node: { taskId } } },
+      where: {
+        milestoneNode: { node: { taskId } },
+        ...(currentOnly ? { result: "PENDING" as const, revokedAt: null } : {}),
+      },
       include: {
         milestoneNode: {
           select: { goal: true, nodeId: true },
@@ -327,46 +332,61 @@ export async function getTaskLifecycleViews({
         },
       },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      take: reviewLimit + 1,
+      take: currentOnly ? reviewLimit : reviewLimit + 1,
       ...(reviewCursor ? { cursor: { id: reviewCursor }, skip: 1 } : {}),
     }),
     prisma.revisionNode.findMany({
-      where: { node: { taskId } },
+      where: {
+        node: { taskId },
+        ...(currentOnly
+          ? { status: { in: ["PENDING_APPROVAL", "REJECTED"] as const } }
+          : {}),
+      },
       include: {
         node: {
-          select: { id: true, createdByAccountId: true, createdAt: true },
+          select: {
+            id: true,
+            businessDescription: true,
+            createdByAccountId: true,
+            createdAt: true,
+          },
         },
         targetPlanVersion: { select: { id: true, versionNo: true } },
         reviewedBy: { select: { person: { select: { displayName: true } } } },
       },
       orderBy: [{ node: { createdAt: "desc" } }, { id: "desc" }],
-      take: revisionLimit + 1,
+      take: currentOnly ? revisionLimit : revisionLimit + 1,
       ...(revisionCursor ? { cursor: { id: revisionCursor }, skip: 1 } : {}),
     }),
-    prisma.domainAuditEvent.findMany({
-      where: auditWhere,
-      include: { actorPerson: { select: { displayName: true } } },
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      take: auditLimit + 1,
-      ...(auditCursor ? { cursor: { id: auditCursor }, skip: 1 } : {}),
-    }),
-    prisma.domainAuditEvent.findMany({
-      where: { taskId },
-      select: { action: true },
-      distinct: ["action"],
-      orderBy: { action: "asc" },
-    }),
-    prisma.domainAuditEvent.findMany({
-      where: { taskId, actorPersonId: { not: null } },
-      select: {
-        actorPersonId: true,
-        actorPerson: { select: { displayName: true } },
-      },
-      distinct: ["actorPersonId"],
-      orderBy: { actorPersonId: "asc" },
-    }),
-    prisma.domainAuditEvent.count({ where: { taskId, actorPersonId: null } }),
+    currentOnly
+      ? Promise.resolve([[], [], [], 0] as const)
+      : Promise.all([
+          prisma.domainAuditEvent.findMany({
+            where: auditWhere,
+            include: { actorPerson: { select: { displayName: true } } },
+            orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+            take: auditLimit + 1,
+            ...(auditCursor ? { cursor: { id: auditCursor }, skip: 1 } : {}),
+          }),
+          prisma.domainAuditEvent.findMany({
+            where: { taskId },
+            select: { action: true },
+            distinct: ["action"],
+            orderBy: { action: "asc" },
+          }),
+          prisma.domainAuditEvent.findMany({
+            where: { taskId, actorPersonId: { not: null } },
+            select: {
+              actorPersonId: true,
+              actorPerson: { select: { displayName: true } },
+            },
+            distinct: ["actorPersonId"],
+            orderBy: { actorPersonId: "asc" },
+          }),
+          prisma.domainAuditEvent.count({ where: { taskId, actorPersonId: null } }),
+        ]),
   ]);
+  const [auditRows, auditEventTypeRows, auditActorRows, systemAuditCount] = auditBundle;
   const canCreateRevision = authorize({
     actor,
     action: "revision.create",
@@ -377,7 +397,7 @@ export async function getTaskLifecycleViews({
     action: "task.manage_members",
     resource,
   }).allowed;
-  const visibleAuditRows = auditRows.slice(0, auditLimit);
+  const visibleAuditRows = currentOnly ? [] : auditRows.slice(0, auditLimit);
   const visibleReviewRows = reviewRows.slice(0, reviewLimit);
   const visibleRevisionRows = revisionRows.slice(0, revisionLimit);
 
@@ -413,13 +433,14 @@ export async function getTaskLifecycleViews({
       },
     })),
     nextReviewCursor:
-      reviewRows.length > reviewLimit
+      !currentOnly && reviewRows.length > reviewLimit
         ? visibleReviewRows.at(-1)?.id ?? null
         : null,
     revisions: visibleRevisionRows.map((revision) => ({
       id: revision.id,
       taskNodeId: revision.node.id,
       reason: revision.reason,
+      description: revision.node.businessDescription,
       revisionAt: revision.revisionAt.toISOString(),
       reviewRound: revision.reviewRound,
       createdAt: revision.node.createdAt.toISOString(),
@@ -454,7 +475,7 @@ export async function getTaskLifecycleViews({
       },
     })),
     nextRevisionCursor:
-      revisionRows.length > revisionLimit
+      !currentOnly && revisionRows.length > revisionLimit
         ? visibleRevisionRows.at(-1)?.id ?? null
         : null,
     audits: visibleAuditRows.map((audit) => ({
@@ -469,7 +490,9 @@ export async function getTaskLifecycleViews({
       createdAt: audit.createdAt.toISOString(),
     })),
     nextAuditCursor:
-      auditRows.length > auditLimit ? visibleAuditRows.at(-1)?.id ?? null : null,
+      !currentOnly && auditRows.length > auditLimit
+        ? visibleAuditRows.at(-1)?.id ?? null
+        : null,
     auditFilterOptions: {
       eventTypes: auditEventTypeRows.map((row) => row.action),
       actors: [

@@ -394,6 +394,7 @@ async function createPendingApprovalFixture() {
     basePlanVersionId: currentTask.currentPlanVersionId,
     baseTaskLockVersion: currentTask.lockVersion,
     reason: "验证管理员通知修复",
+    description: "验证管理员通知修复",
     revisionAt: new Date("2026-08-01T00:00:00.000Z").toISOString(),
     replacementMilestones: [milestoneInput("Repair revised milestone", 4)],
     termination: {

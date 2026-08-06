@@ -217,6 +217,22 @@ export const replaceTaskTagsInputSchema = z
   })
   .strict();
 
+export const updateActiveTaskInputSchema = z
+  .object({
+    taskId: idSchema,
+    expectedLockVersion: expectedTaskLockVersionSchema,
+    metadata: z.object(taskMetadataFields).strict().optional(),
+    tagIds: tagIdsSchema.optional(),
+    members: taskMembersMutationSchema.optional(),
+  })
+  .strict()
+  .superRefine((input, ctx) => {
+    if (!input.metadata && !input.tagIds && !input.members) {
+      ctx.addIssue({ code: "custom", message: "没有需要保存的 Task 修改" });
+    }
+    if (input.members) validateTaskMembers(input.members, ctx);
+  });
+
 export type UpdateTaskDraftMetadataInput = z.infer<
   typeof updateTaskDraftMetadataInputSchema
 >;
@@ -234,3 +250,4 @@ export type ReplaceTaskDraftPlanInput = z.infer<
   typeof replaceTaskDraftPlanInputSchema
 >;
 export type ReplaceTaskTagsInput = z.infer<typeof replaceTaskTagsInputSchema>;
+export type UpdateActiveTaskInput = z.infer<typeof updateActiveTaskInputSchema>;

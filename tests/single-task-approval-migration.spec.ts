@@ -76,6 +76,7 @@ test("single Task approval migration withdraws pending Milestone and Revision wi
     basePlanVersionId: created.currentPlanVersionId,
     baseTaskLockVersion: activated.lockVersion,
     reason: "迁移待审批 Revision",
+    description: "迁移待审批 Revision",
     revisionAt: "2026-08-02T01:00:00.000Z",
     replacementMilestones: [
       {

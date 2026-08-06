@@ -1,7 +1,6 @@
 import { notFound } from "next/navigation";
 import { PageCommandBar } from "@/components/project-management/shell/page-command-bar";
 import { TaskWorkbench } from "@/components/project-management/task-workbench";
-import { timeCanvasDataToModel } from "@/components/project-management/time-canvas/adapter";
 import { toProjectManagementServiceError } from "@/lib/project-management/application/errors";
 import {
   listTagOptions,
@@ -11,42 +10,38 @@ import {
   searchTaskOptions,
 } from "@/lib/project-management/queries/option-queries";
 import { getTaskLifecycleViews } from "@/lib/project-management/queries/task-lifecycle-queries";
-import {
-  getTaskWorkspace,
-  listTaskPlanVersions,
-} from "@/lib/project-management/queries/task-queries";
-import { getTimeCanvasData } from "@/lib/project-management/queries/time-canvas-queries";
+import { getTaskWorkspace } from "@/lib/project-management/queries/task-queries";
 import { getProgressActorOrRedirect } from "../../_auth";
 
 export default async function ProgressTaskDetailPage({
   params,
-  searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ tab?: string | string[] }>;
 }) {
   const actor = await getProgressActorOrRedirect();
   const { id } = await params;
-  const initialTab = normalizeTaskTab((await searchParams).tab);
   const workspace = await getTaskWorkspace({ actor, taskId: id }).catch((error) => {
     const mapped = toProjectManagementServiceError(error);
     if (mapped.code === "NOT_FOUND") notFound();
     throw error;
   });
-  const range = taskCanvasRange(workspace);
   const [
     lifecycle,
-    planVersions,
     peoplePage,
     currentPeople,
     taskPage,
-    currentTaskOptions,
+    currentRelatedTaskOptions,
     tagPage,
-    canvasResult,
   ] =
     await Promise.all([
-      getTaskLifecycleViews({ actor, taskId: id, reviewLimit: 50, auditLimit: 50 }),
-      listTaskPlanVersions({ actor, taskId: id }),
+      getTaskLifecycleViews({
+        actor,
+        taskId: id,
+        reviewLimit: 2,
+        revisionLimit: 2,
+        auditLimit: 1,
+        currentOnly: true,
+      }),
       workspace.permissions.canManageMembers
         ? searchPeople({
             actor,
@@ -59,35 +54,12 @@ export default async function ProgressTaskDetailPage({
           }),
       resolveWorkspacePeople(actor, workspace.members.map((member) => member.personId)),
       searchTaskOptions({ actor, input: { limit: 50 } }),
-      resolveTaskOptionsByIds({ actor, input: { ids: [id] } }),
-      listTagOptions({ actor, input: { limit: 50 } }),
-      getTimeCanvasData({
+      resolveTaskOptionsByIds({
         actor,
-        input: {
-          scope: { kind: "TASK_SCOPED", taskId: id },
-          rangeStart: range.startAt,
-          rangeEnd: range.endAt,
-          personIds: [],
-          taskIds: [id],
-          tagIds: [],
-          types: [],
-          statuses: [],
-          groupBy: "PERSON",
-          includeTaskAnchors: true,
-          includeActual: true,
-          includeBusyBlocks: true,
-          rowLimit: 50,
-        },
-      })
-        .then((data) => ({ ok: true as const, data }))
-        .catch((error: unknown) => ({
-          ok: false as const,
-          message: toProjectManagementServiceError(error).message,
-        })),
+        input: { ids: workspace.task.relatedTaskId ? [workspace.task.relatedTaskId] : [] },
+      }),
+      listTagOptions({ actor, input: { limit: 50 } }),
     ]);
-  const canvasModel = canvasResult.ok
-    ? timeCanvasDataToModel(canvasResult.data, "TASK_WORKBENCH")
-    : null;
 
   return (
     <>
@@ -99,13 +71,9 @@ export default async function ProgressTaskDetailPage({
         <TaskWorkbench
           workspace={workspace}
           lifecycle={lifecycle}
-          planVersions={planVersions}
-          canvasModel={canvasModel}
-          canvasError={canvasResult.ok ? null : canvasResult.message}
           people={mergeOptions(currentPeople, peoplePage.items)}
-          taskOptions={mergeOptions(currentTaskOptions, taskPage.items)}
+          taskOptions={mergeOptions(currentRelatedTaskOptions, taskPage.items)}
           tagOptions={tagPage.items}
-          initialTab={initialTab}
         />
       </div>
     </>
@@ -140,51 +108,4 @@ function mergeOptions<T extends { id: string }>(...groups: T[][]) {
     }
   }
   return [...merged.values()];
-}
-
-function normalizeTaskTab(value: string | string[] | undefined) {
-  const tab = Array.isArray(value) ? value[0] : value;
-  if (tab === "review" || tab === "reviews" || tab === "termination") {
-    return "reviews" as const;
-  }
-  if (tab === "revision" || tab === "revisions") return "revisions" as const;
-  if (tab === "overview" || tab === "audit") return tab;
-  return "plan" as const;
-}
-
-function taskCanvasRange(
-  workspace: Awaited<ReturnType<typeof getTaskWorkspace>>,
-) {
-  const planStart = workspace.currentPlan.plannedStartAt
-    ? new Date(workspace.currentPlan.plannedStartAt).getTime()
-    : Date.now();
-  const milestoneTimes = workspace.currentPlan.nodes.flatMap((entry) =>
-    entry.milestone ? [new Date(entry.milestone.expectedCompletedAt).getTime()] : [],
-  );
-  const terminationTime = workspace.currentPlan.nodes.find(
-    (entry) => entry.termination,
-  )?.termination?.plannedAt;
-  const planEnd = terminationTime
-    ? new Date(terminationTime).getTime()
-    : milestoneTimes.at(-1) ?? planStart + 14 * 86_400_000;
-  const activeIndex = workspace.currentPlan.nodes.findIndex(
-    (entry) => entry.nodeId === workspace.task.activeMilestoneNodeId,
-  );
-  const activeAt = activeIndex >= 0
-    ? workspace.currentPlan.nodes[activeIndex]?.milestone?.expectedCompletedAt
-    : null;
-  const center = activeAt ? new Date(activeAt).getTime() : planStart;
-  const paddedStart = planStart - 3 * 86_400_000;
-  const paddedEnd = planEnd + 7 * 86_400_000;
-  const maxRange = 90 * 86_400_000;
-  const startAt = paddedEnd - paddedStart <= maxRange
-    ? paddedStart
-    : center - 21 * 86_400_000;
-  const endAt = paddedEnd - paddedStart <= maxRange
-    ? paddedEnd
-    : center + 45 * 86_400_000;
-  return {
-    startAt: new Date(startAt).toISOString(),
-    endAt: new Date(Math.max(endAt, startAt + 86_400_000)).toISOString(),
-  };
 }

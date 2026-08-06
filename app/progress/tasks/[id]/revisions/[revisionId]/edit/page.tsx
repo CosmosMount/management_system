@@ -4,6 +4,10 @@ import { TaskComposerClient } from "@/components/project-management/task-compose
 import { toProjectManagementServiceError } from "@/lib/project-management/application/errors";
 import { getRevisionComposerRecord } from "@/lib/project-management/queries/task-lifecycle-queries";
 import {
+  resolvePeopleOptionsByIds,
+  resolveTaskOptionsByIds,
+} from "@/lib/project-management/queries/option-queries";
+import {
   getPlanVersion,
   getTaskWorkspace,
 } from "@/lib/project-management/queries/task-queries";
@@ -64,6 +68,15 @@ export default async function ProgressTaskRevisionEditPage({
     revision,
   });
   if (!seed) redirect(routes.progress.taskRevisions(id));
+  const [people, relatedTasks] = await Promise.all([
+    resolveRevisionPeople(actor, workspace.members.map((member) => member.personId)),
+    resolveTaskOptionsByIds({
+      actor,
+      input: {
+        ids: workspace.task.relatedTaskId ? [workspace.task.relatedTaskId] : [],
+      },
+    }),
+  ]);
   const deploymentEnvironment =
     process.env.NEXT_PUBLIC_APP_URL?.trim() || process.env.NODE_ENV || "unknown";
 
@@ -77,9 +90,9 @@ export default async function ProgressTaskRevisionEditPage({
         accountId={actor.accountId}
         deploymentEnvironment={deploymentEnvironment}
         initialSeed={seed}
-        initialPeople={[]}
-        initialTasks={[]}
-        initialTags={[]}
+        initialPeople={people}
+        initialTasks={relatedTasks}
+        initialTags={workspace.tags}
         actorPersonId={actor.personId}
         mode={{
           kind: "RESUBMIT_REVISION",
@@ -94,4 +107,24 @@ export default async function ProgressTaskRevisionEditPage({
       />
     </>
   );
+}
+
+async function resolveRevisionPeople(
+  actor: Awaited<ReturnType<typeof getProgressActorOrRedirect>>,
+  personIds: string[],
+) {
+  const ids = [...new Set(personIds)];
+  const people = [];
+  for (let offset = 0; offset < ids.length; offset += 50) {
+    people.push(
+      ...(await resolvePeopleOptionsByIds({
+        actor,
+        input: {
+          scope: { purpose: "VISIBLE" },
+          ids: ids.slice(offset, offset + 50),
+        },
+      })),
+    );
+  }
+  return people;
 }

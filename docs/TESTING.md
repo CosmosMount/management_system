@@ -225,7 +225,7 @@ npm run pm:identity-backfill
 
 1. 桌面 `1440x1000` 与 Pixel 5 分别打开 `/progress`，应展示“我的工作”总览、可见 Active Task、未来投入、待确认计划和未读通知摘要；导航中不得出现“资源冲突”。
 2. 打开 `/progress/tasks`，按“只看我参与”、状态、优先级和关键词筛选时，只展示当前 actor 可读 Task；不可读 Task 不能通过列表枚举。
-3. 打开 `/progress/tasks/[id]`，成员可看到 Task 工作台、当前计划、成员权限和人员投入；人员投入时间线必须位于 Tab 导航上方，并在桌面与移动端切换任意 Tab 后保持显示及交互状态。非成员或无范围权限账号应看到“页面不存在或无权访问”。
+3. 打开 `/progress/tasks/[id]`，应看到概览、共享节点导航、选中节点详情，以及“Task 风险 / Task 评论 / 最近动态”占位区；不得再出现 Tab、人员投入、计划版本、Revision/验收历史或完整审计列表。Active Task 编辑 Dialog 只显示一个“保存修改”按钮，基本信息、Tags 和成员必须在同一事务中保存；有变化时锁版本只递增一次且仅审计实际变化区域，无变化保存不得写数据或递增锁版本，任一区域校验失败都不得产生部分写入且错误应显示在 Dialog 内。并发冲突后保存按钮必须冻结，关闭并重新打开前不能让旧表单携带刷新后的锁版本再次覆盖。可查看 Task 的非成员只能只读，不能获得修改、审批或结束入口。
 4. 打开 `/progress/resources`，人员计划时间轴应能新增 Planned Segment，并通过 P5 服务端 action 执行确认、部分确认、拆分、合并、顺延和取消；测试需校验 UI 结果和数据库状态。
 5. `/progress/resources/conflicts` 必须返回 404。资源计划、个人时间线、Task 工作台和 Agenda 不得出现冲突标记或投入比例；快速创建与 Inspector 不得提供比例输入。创建、更新、移动、拆分、合并和确认仍需正常工作，重叠 Segment 不得产生冲突待办、通知或 outbox。
 6. 打开 `/progress/notifications`，只展示当前收件人的站内通知；可按类型/未读筛选、标记单条或全部已读，跳转对象前仍要按业务对象权限过滤。
@@ -236,39 +236,39 @@ npm run pm:identity-backfill
 
 专项规格见 [`docs/plan/task-create-ui/README.md`](plan/task-create-ui/README.md)。自动化和人工检查都必须使用隔离测试数据库并保持 `NOTIFICATION_DELIVERY_DISABLED=true`。
 
-1. 桌面 `1440x1000` 打开 `/progress/tasks/new`：页面为 Task 信息、TimeCanvas/节点表、节点 Inspector 三栏，初始计划只有 Start 和名称为 `Terminal` 的 Terminal；不得查询或展示成员 Planned、Actual、Busy 数据，不得出现节点负责人或状态列。
+1. 桌面 `1440x1000` 打开 `/progress/tasks/new`：页面按 Task 信息、TimeCanvas、共享节点导航、节点 Inspector 纵向排列，初始计划只有 Start 和名称为 `Terminal` 的 Terminal；负责人和参与人员分别显示头像胶囊及独立搜索框，不再使用统一人员选择器加角色下拉框；不得出现桌面节点表、节点复制、批量选择/删除、独立校验按钮，也不得查询或展示成员 Planned、Actual、Busy 数据。
 2. 验证 `start`、`relatedTaskId` 和 `templateTaskId` URL 预填不回退。无模板时 Start 为上海时区次日 `09:00`、Terminal 为 Start 后 14 天；模板保留 Milestone 内容、时间和自定义 Terminal 名称。
 3. 分别创建含 0、1、200 个 Milestone 的 Task，并通过服务端和数据库验证 Current Plan、严格 sequence、Terminal 名称、创建者 Owner、审计、站内通知和 outbox；201 个 Milestone 必须在客户端与服务端被拒绝。创建失败保留草稿和幂等键，成功清理本地草稿并跳转工作台。
 4. 构造 Start=首个 Milestone、相邻 Milestone 同刻、最后 Milestone=Terminal 和任意逆序输入；新建、Draft 替换、模板副本与 Revision 目标均不得保存。已有只读/Active 旧同刻计划仍可打开并显示兼容提示，不得被自动改时。
 5. 验证 Terminal 名称 trim 后空白、200/201 字符边界；自定义名称在创建、Draft 编辑、Revision、模板复制、查询、工作台、版本差异、审计和快照中保持一致。默认 `Terminal` 不改变既有 canonical hash，自定义名称及其变更必须改变 hash。
 6. Revision 创建必须直接进入待审批；分别验证 `revisionAt` 等于 Start、Candidate Terminal、最后完成 Milestone 和上一条有效 Revision 时允许，越界时事务零写入。驳回后修改应直接重新送审且 `reviewRound + 1`，不存在 Draft 或单独 Submit。
 7. 批准前 Revision 只出现在历史；批准后才进入 Current Plan 时间轴。Revision anchor 不增加阶段带，所有 Segment 新建、批量新建、更新和重关联入口均拒绝 Revision 节点。
-8. 在画布选择 Start、Milestone、Terminal，再从节点表选择同一批节点；画布高亮、表格选中、Inspector 和所选节点的前置阶段块必须双向同步。阶段块可点击并选择其下一节点；零 Milestone 时点击 Start → Terminal 阶段应选择 Terminal 并高亮整段，同时仍保留可操作空状态。
-9. 从空白画布快捷菜单新增 Milestone、移动 Terminal；非法时刻的操作保持禁用并显示原因。新增 Milestone 应立即以琥珀虚线临时节点进入画布和节点表，前后两段阶段块同时标记临时；补全必填项后自动转正。
+8. 在画布与共享节点导航选择 Start、Milestone、Terminal；画布高亮、节点导航、Inspector 和所选节点的前置阶段块必须双向同步。从节点导航选择节点时，桌面 TimeCanvas 必须自动横向滚动，将对应时间点带入可视区。阶段块可点击并选择其下一节点；零 Milestone 时点击 Start → Terminal 阶段应选择 Terminal 并高亮整段。
+9. 从空白画布快捷菜单新增 Milestone、移动 Terminal；非法时刻的操作保持禁用并显示原因。新增 Milestone 应立即以琥珀虚线临时节点进入画布和共享节点导航，前后两段阶段块同时标记临时；补全必填项后自动转正。
 10. 拖动及键盘移动 Start、Milestone、Terminal，分别验证小时档 30 分钟、日/周档 1 天、月档 7 天吸附和上海时区增量。拖动预览期间节点前后阶段块必须同步伸缩，Milestone 穿越时按预览时间重排连接；Start、Terminal 与 Milestone 的严格边界必须在预览阶段钳制，锚点不得先越界再于松手后回弹。无合法吸附位置时保持原值并提示放大画布或使用 Inspector。
-11. Inspector 不显示保存/取消；Start、Terminal、Milestone 输入实时同步到画布、节点表和校验。清空或输入同刻/越界时间时，字段显示错误而画布保留最后合法位置；同一节点连续修改多个字段只需一次撤销即可整体恢复。
-12. 复制 Milestone 应复制目标、完成条件、验收要求和业务说明；完整合法副本按自动校验规则直接转正，原节点之后没有分钟级合法位置时不得创建。临时节点切换后保留并可显式删除；单删和批量删除只作用于 Milestone，Start/Terminal 永远不可删除、复制或勾选。
+11. Inspector 不显示保存/取消；Start、Terminal、Milestone 输入实时同步到画布、节点导航和自动校验。清空或输入同刻/越界时间时，字段与问题摘要显示错误而画布保留最后合法位置；同一节点连续修改多个字段只需一次撤销即可整体恢复。
+12. Milestone 只能在节点详情中单独删除；临时节点切换后保留并可显式删除，Start/Terminal 永远不可删除。页面不得出现节点复制、勾选或批量删除入口。
 13. 刷新页面后恢复 v3 临时节点、最后合法画布位置与选中节点，并验证旧 v3 Inspector 工作副本转换为实时临时节点。v1/v2 草稿缺少 Terminal 名称时迁移为 `Terminal`，零 Milestone 可恢复，同刻时间保持原值并阻止提交；不兼容草稿继续可导出。另用 200 个 Milestone、每个四项 2,000 字符且包含 JSON 转义字符的极限草稿验证 IndexedDB 正文、`localStorage` 指针、刷新往返、两个同账号标签页并发“保存并离开”、立即“放弃并离开”不会被待触发防抖重新写回，以及创建成功后的双存储清理。
 14. 创建零 Milestone Task 后执行激活：Task 和 Terminal 均为 `ACTIVE`，`activeMilestoneNodeId=null`；工作台和列表使用 Terminal 名称/日期，审计和激活通知使用 Terminal 名称，不显示“当前没有 Active Milestone”。结束确认仍走现有事务、审计和 `project-management` outbox。
-15. Task Composer 与 Task Workbench 的 PLAN 行验证节点符号、阶段块中心线对齐，阶段块显示下一节点名称，节点下方显示上海日期；使用长 Task/Terminal/Milestone/成员/Tag 名称、长错误、慢提交、空列表和 200 节点验证桌面无页面级横向滚动、无 Next.js overlay、无未捕获浏览器错误，Inspector 和表格滚动/换行可用。
-16. Pixel 5 不应显示桌面三栏 TimeCanvas 布局；纵向流程仍能创建零 Milestone Task、编辑 Terminal 名称、修正严格时间错误，并验证无横向滚动、重复焦点、服务器错误或未捕获浏览器错误。
+15. Task Composer 与 Task Workbench 的共享节点导航验证节点符号、选中/完成/错误态和上海日期；使用长 Task/Terminal/Milestone/成员/Tag 名称、长错误、慢提交、空列表和 200 节点验证桌面无页面级横向滚动、无 Next.js overlay、无未捕获浏览器错误，Inspector 和节点导航滚动/换行可用。
+16. Pixel 5 上共享节点导航改为纵向；仍能创建零 Milestone Task、编辑 Terminal 名称、修正严格时间错误，并验证无横向滚动、重复焦点、服务器错误或未捕获浏览器错误。
 
 ### DRAFT Task 统一编辑专项测试
 
 1. Owner 从 DRAFT 工作台右上角进入 `/progress/tasks/[id]/edit`；按钮顺序为“编辑 Task → 激活 Task → 复制链接”，工作台不再出现“编辑 Draft 计划”，DRAFT 的概览、Tag、成员和计划均无保存控件。激活后编辑按钮消失，直达编辑 URL 重定向工作台；不可查看或无 metadata 更新权的用户直达 URL 得到脱敏 404。
-2. 编辑页在 Desktop 复用三栏 Composer、在 Pixel 5 复用纵向 Composer，并回填元数据、当前 Tag、关联 Task、全部现有成员（包括停用人员）、Start、既有 Milestone/Terminal 及节点 ID。迁移后异常残留的 `LEAD/MEMBER/REVIEWER/VIEWER` 四种历史角色必须逐行回显并保留，存在历史角色时成员区整体只读，但仍可保存其他内容。当前归档 Tag 可见且可移除，新选项只含未归档 Tag；关联选择器排除当前 Task。
+2. 编辑页在 Desktop 与 Pixel 5 均复用纵向 Composer，并回填元数据、当前 Tag、关联 Task、全部现有成员（包括停用人员）、Start、既有 Milestone/Terminal 及节点 ID。负责人和参与人员使用与创建页相同的分组头像胶囊和独立搜索框，选择人员即加入对应分组。迁移后异常残留的 `LEAD/MEMBER/REVIEWER/VIEWER` 四种历史角色必须逐行回显并保留，存在历史角色时成员区整体只读，但仍可保存其他内容。当前归档 Tag 可见且可移除，新选项只含未归档 Tag；关联选择器排除当前 Task。
 3. Owner 一次修改基本信息、Tag、关联 Task、成员、既有节点、新 Milestone 和 Terminal 后保存；数据库全部更新、既有 nodeId 保留、新节点产生稳定映射、`snapshotHash` 更新、Task `lockVersion` 仅增加 1，并只产生一条 `pm.task.draft.update` 审计。失败时任一区域都不得部分提交，且不得产生站内通知、outbox 或真实飞书调用。
 4. Participant 可进入编辑页并保存元数据与计划；成员区只读、没有搜索/添加/移除/角色控件，请求省略 `members`，数据库成员保持不变。直接伪造 `members` 或移除有关联 Segment 的成员必须被服务端拒绝并完整回滚；Segment 不再关联节点，因此删除草稿节点不受 Segment 阻挡。
-5. 未修改时桌面和移动主保存按钮均禁用；选择节点不应被视为内容修改。客户端和服务端字段错误定位相应区域，无法映射的业务错误显示中文提示。保存成功清理该 Task 编辑草稿并返回默认“计划与资源”工作台，展示权威最新数据。
+5. 未修改时桌面和移动主保存按钮均禁用；选择节点不应被视为内容修改。客户端和服务端字段错误定位相应区域，无法映射的业务错误显示中文提示。保存成功清理该 Task 编辑草稿并返回新版 Task 工作台，展示权威最新数据。
 6. 编辑草稿按环境、账号和 Task ID 隔离；刷新仅在 Task、Plan Version 和基础 lockVersion 全匹配时允许恢复。失去成员管理权或服务端出现历史角色后，恢复必须以服务端标准成员覆盖本地成员改动，同时保留其他可编辑内容。服务端版本变化后旧草稿不能恢复或覆盖，只能导出或“放弃并加载最新版本”；`STALE_TASK` 保留当前输入，不隐式刷新或合并。
 7. 领域测试覆盖并发相同 lockVersion 只有一次成功、错误 Plan Version、非初始 v1 Current Plan、非 DRAFT、权限拒绝、Tag/关联/成员/计划晚失败回滚和完整审计。UI 在 Desktop/Pixel 5 另覆盖长 Task、节点、成员、Tag、长错误、零/200 Milestone 和窄屏无横向溢出、Next.js overlay 或未捕获浏览器错误。
 
 ### Revision 通用 Composer 专项测试
 
-1. ACTIVE Task 的“发起 Revision”必须进入 `/progress/tasks/[id]/revisions/new`；Revision Tab 不再出现内联候选表单。非成员直达新建 URL 得到脱敏 404；非 ACTIVE 时返回 Task 工作台，已有 Candidate 时返回“修订与历史”。
-2. Desktop 与 Pixel 5 均验证三栏/纵向 Composer、无页面级横向溢出、Start/已完成 Milestone/已生效 Revision 只读、当前 Revision Marker 可调整且不切割阶段带、后续 Milestone 与 Terminal 可编辑。创建按钮为“创建并送审”，成功直接返回 `?tab=revisions` 并持久化 `PENDING_APPROVAL`。
-3. 被驳回记录的“修改候选计划”进入 `/progress/tasks/[id]/revisions/[revisionId]/edit`；仅创建人（仍有 `revision.create`）或 Owner/全局管理员可进入。保存按钮为“修改并重新送审”，成功后 `reviewRound + 1` 且直接回到待审批，不存在 Draft/Submit。
-4. Revision 本地草稿按环境、账号、Task、基线计划/锁或 Revision/候选 `updatedAt` 隔离；刷新后可恢复 reason、revisionAt、节点、选中项与最后合法画布位置。版本冲突不得覆盖服务端，必须保留并允许导出或显式放弃加载最新版本；成功清理失败不得伪装成服务端失败。
+1. ACTIVE Task 的“发起 Revision”必须进入 `/progress/tasks/[id]/revisions/new`；非成员直达新建 URL 得到脱敏 404，非 ACTIVE 时返回 Task 工作台，已有 Candidate 时也返回工作台并展示“当前 Revision 候选”。
+2. Desktop 与 Pixel 5 均验证纵向 Composer：顶部使用与 Task 创建页一致的“基本信息 / 组织与分类 / 成员”结构并只读展示权威 Task 内容，不显示独立“Revision 信息 / 只读基线”；页面自动选中一个不可删除的当前 Revision 节点，Revision 名称、Revision 详细内容和 Revision 时间均在节点详情中填写且必填。Start/已完成 Milestone/已生效 Revision 只读，当前 Revision Marker 可调整且不切割阶段带，后续 Milestone 与 Terminal 可编辑；节点详情只显示红色校验提示框，不再重复显示“问题列表”。创建按钮为“创建并送审”，成功返回 Task 工作台并持久化 `PENDING_APPROVAL`，工作台候选卡片与批准后的 Current Plan 节点详情均回显名称和详细内容。
+3. 被驳回记录的“修改并重新送审”进入 `/progress/tasks/[id]/revisions/[revisionId]/edit`；仅创建人（仍有 `revision.create`）或 Owner/全局管理员可进入。保存按钮同为“修改并重新送审”，成功后 `reviewRound + 1` 且直接回到待审批，不存在 Draft/Submit。
+4. Revision 本地草稿按环境、账号、Task、基线计划/锁或 Revision/候选 `updatedAt` 隔离；刷新后可恢复 Revision 名称、Revision 详细内容、revisionAt、节点、选中项与最后合法画布位置。版本冲突不得覆盖服务端，必须保留并允许导出或显式放弃加载最新版本；成功清理失败不得伪装成服务端失败。
 
 ## 反馈中心测试
 

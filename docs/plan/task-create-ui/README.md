@@ -52,7 +52,7 @@
 
 | 区域 | 内容 | 行为 |
 |---|---|---|
-| 左栏 | 创建/DRAFT 编辑时显示 Task 基础信息、Tag、关联 Task 和成员；Revision 时显示只读 Task 摘要及可编辑修订原因 | 页面正常滚动；复用现有选择器、校验和成员去重规则 |
+| 顶部 | 创建/DRAFT 编辑时显示可编辑 Task 基础信息、Tag、关联 Task 和成员；Revision 时使用相同结构只读展示权威 Task 信息 | 页面正常滚动；复用现有选择器、校验和成员去重规则 |
 | 中栏 | 计划时间范围、`TimeCanvas`、节点表 | 占用主要宽度；画布和表格共享同一节点状态与选中状态 |
 | 右栏 | 当前节点 Inspector | 桌面吸顶、内部滚动；字段实时修改，不显示保存/取消 |
 
@@ -62,7 +62,7 @@
 
 Pixel 5 不显示桌面 `TimeCanvas` 或三栏布局，继续使用纵向的基础信息和节点编辑流程。移动端仍必须支持零 Milestone、Terminal 名称、严格时间校验、模板复制和本地草稿恢复，并且不得出现横向溢出、不可操作控件或隐藏桌面内容带来的重复焦点。
 
-Revision 模式在移动端使用相同纵向结构，并清楚标识只读承接节点；修订原因、当前 Revision Marker、后续 Milestone 和 Terminal 仍可完成编辑与送审。
+Revision 模式在移动端使用相同纵向结构，并清楚标识只读承接节点；Revision 名称、Revision 详细内容、当前 Revision Marker 时间、后续 Milestone 和 Terminal 仍可完成编辑与送审。
 
 ## 4. 初始值、模板与本地草稿
 
@@ -101,7 +101,7 @@ v3 使用分级浏览器存储：普通草稿继续直接写入按环境和账�
 
 ### 4.5 Revision 初始值与本地草稿
 
-Revision Seed 来自 ACTIVE Task 的权威 Current Plan。Start 固定沿用；已完成 Milestone 和已生效 Revision Marker 自动承接并只读；当前 Revision Marker 的时间和修订原因可编辑，但 Marker 只是时间锚点，不形成阶段带，也不能被 Segment 关联；Marker 之后的 Milestone 与 Terminal 可以编辑。创建成功即为 `PENDING_APPROVAL`，被驳回后修改成功直接重新送审并使 `reviewRound + 1`，不存在 DRAFT Revision 或独立 Submit。
+Revision Seed 来自 ACTIVE Task 的权威 Current Plan。Start 固定沿用；已完成 Milestone 和已生效 Revision Marker 自动承接并只读；当前 Revision Marker 的名称、详细内容和时间可编辑且必填，但 Marker 只是时间锚点，不形成阶段带，也不能被 Segment 关联；Marker 之后的 Milestone 与 Terminal 可以编辑。创建成功即为 `PENDING_APPROVAL`，被驳回后修改成功直接重新送审并使 `reviewRound + 1`，不存在 DRAFT Revision 或独立 Submit。
 
 创建草稿使用 `revision-create-draft:{environment}:{accountId}:{taskId}:v1`，重提草稿使用 `revision-resubmit-draft:{environment}:{accountId}:{revisionId}:v1`。正文分别绑定基线计划、Task 锁版本，或候选计划更新时间；稳定实体键保证服务端版本变化后仍能发现旧草稿，envelope 校验不匹配时禁止恢复和覆盖，只允许导出或“放弃并加载最新版本”。恢复会把 SSR 重新生成的 Marker ID 映射到权威 Marker，同时保留选中节点、修订时间、后续节点和最后合法画布位置。创建幂等键绑定 Composer `draftId`；冲突和服务端失败均停留页面并保留输入，成功清理草稿并返回 `?tab=revisions`。
 
@@ -181,7 +181,7 @@ Inspector 直接编辑 Composer 实时状态，不显示“保存”“取消”
 | Milestone | 目标、计划时间、完成条件、验收要求、业务说明 | 前四项必填，业务说明可选；不显示负责人 |
 | Terminal | 名称、计划结束时间、结束条件、业务说明 | 名称、时间、结束条件必填；名称 trim 后 1–200 字符，业务说明可选 |
 
-Revision 模式覆盖上述通用规则：承接的 Start、已完成 Milestone 和已生效 Revision Marker 全部只读；当前 Revision Marker 只编辑时间，修订原因位于左栏；后续 Milestone 和 Terminal 沿用通用 Inspector。
+Revision 模式覆盖上述通用规则：承接的 Start、已完成 Milestone 和已生效 Revision Marker 全部只读；当前 Revision Marker 在节点 Inspector 编辑必填的 Revision 名称、Revision 详细内容和时间；后续 Milestone 和 Terminal 沿用通用 Inspector。
 
 新增 Milestone 立即计入 `0–200` 上限并保持临时状态，直到目标、严格合法时间、完成条件和验收要求全部有效后一次性转为正式节点。转正不可逆；后续字段失效时显示“需修正”并阻止提交。临时节点切换后继续保留，可从 Inspector 或节点表显式删除；普通 Milestone 在 Inspector 保留复制和删除。
 

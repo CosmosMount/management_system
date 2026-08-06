@@ -27,7 +27,10 @@ import {
 import { getActorPersonOption } from "../lib/project-management/queries/option-queries";
 import type { ProjectManagementActor } from "../lib/project-management/identity";
 import { updateNotificationPreference } from "../lib/project-management/application/notification-preference-service";
-import { getTaskLifecycleViews } from "../lib/project-management/queries/task-lifecycle-queries";
+import {
+  getRevisionComposerRecord,
+  getTaskLifecycleViews,
+} from "../lib/project-management/queries/task-lifecycle-queries";
 import {
   milestoneDraftSchema,
   submitMilestoneReviewInputSchema,
@@ -769,6 +772,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       basePlanVersionId: fixture.currentPlanVersionId,
       baseTaskLockVersion: fixture.lockVersion,
       reason: "单一审批门禁 Revision",
+      description: "单一审批门禁 Revision 详细内容",
       revisionAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
       replacementMilestones: [
         milestoneInput("门禁后的 Revision Milestone", "Revision 条件", 4),
@@ -846,6 +850,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         revisionNodeId: revision.revisionNodeId,
         expectedTargetPlanUpdatedAt: targetPlan.updatedAt.toISOString(),
         reason: "Milestone 待审批时不能重新送审",
+        description: "Milestone 待审批时不能重新送审",
         revisionAt: revisionInput.revisionAt,
         replacementMilestones: revisionInput.replacementMilestones,
         termination: revisionInput.termination,
@@ -875,6 +880,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         basePlanVersionId: fixture.currentPlanVersionId,
         baseTaskLockVersion: fixture.lockVersion,
         reason: "并发 Revision",
+        description: "并发 Revision",
         revisionAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
         replacementMilestones: [
           milestoneInput("并发 Revision Milestone", "并发条件", 4),
@@ -985,6 +991,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       basePlanVersionId: fixture.currentPlanVersionId,
       baseTaskLockVersion: 1,
       reason: "计划需要调整",
+      description: "计划需要调整",
       replacementMilestones: [
         milestoneInput("调整后 Milestone", "完成新目标", 4),
       ],
@@ -1060,10 +1067,21 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       basePlanVersionId: fixture.currentPlanVersionId,
       baseTaskLockVersion: 1,
       reason: "Revision 重新送审初始计划",
+      description: "Revision 重新送审初始计划的详细内容",
       replacementMilestones: [milestoneInput("候选节点 A", "候选条件 A", 4)],
       revisionAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
       termination: terminationInput(8),
       idempotencyKey: `revision-update-${randomUUID()}`,
+    });
+    await expect(
+      getRevisionComposerRecord({
+        actor: actor(fixture.owner),
+        taskId: fixture.taskId,
+        revisionNodeId: revision.revisionNodeId,
+      }),
+    ).resolves.toMatchObject({
+      reason: "Revision 重新送审初始计划",
+      description: "Revision 重新送审初始计划的详细内容",
     });
     const targetPlanVersionId = revision.targetPlanVersionId ?? "";
     await rejectRevision(actor(fixture.reviewer), {
@@ -1075,6 +1093,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       revisionNodeId: revision.revisionNodeId,
       expectedTargetPlanUpdatedAt: targetBefore.updatedAt.toISOString(),
       reason: "Revision 重新送审已编辑",
+      description: "Revision 重新送审已编辑后的详细内容",
       revisionAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
       replacementMilestones: [
         {
@@ -1239,6 +1258,19 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     const updated = await reviseRejectedRevision(actor(fixture.owner), validUpdate);
     expect(updated.status).toBe("PENDING_APPROVAL");
     await expect(
+      getTaskLifecycleViews({
+        actor: actor(fixture.owner),
+        taskId: fixture.taskId,
+      }),
+    ).resolves.toMatchObject({
+      revisions: [
+        {
+          reason: "Revision 重新送审已编辑",
+          description: "Revision 重新送审已编辑后的详细内容",
+        },
+      ],
+    });
+    await expect(
       prisma.revisionNode.findUniqueOrThrow({
         where: { id: revision.revisionNodeId },
         select: {
@@ -1320,6 +1352,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       basePlanVersionId: fixture.currentPlanVersionId,
       baseTaskLockVersion: 2,
       reason: "验证合并后的 Milestone 上限",
+      description: "验证合并后的 Milestone 上限详细内容",
       revisionAt: new Date(Date.UTC(2026, 7, 2, 10, 0, 0)).toISOString(),
       termination: terminationInput(203),
     };
@@ -1365,6 +1398,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         revisionNodeId: validRevision.revisionNodeId,
         expectedTargetPlanUpdatedAt: targetBefore.updatedAt.toISOString(),
         reason: "更新后超过 Milestone 上限",
+        description: "更新后超过 Milestone 上限",
         revisionAt: baseInput.revisionAt,
         replacementMilestones: twoHundredReplacementMilestones,
         termination: baseInput.termination,
@@ -1430,6 +1464,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       basePlanVersionId: fixture.currentPlanVersionId,
       baseTaskLockVersion: 1,
       reason: "当前目标变更",
+      description: "当前目标变更",
       replacementMilestones: [
         milestoneInput("新的当前 Milestone", "完成替代目标", 5),
       ],
@@ -1603,6 +1638,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         basePlanVersionId: fixture.currentPlanVersionId,
         baseTaskLockVersion: 1,
         reason: "基线已过期",
+        description: "基线已过期",
         replacementMilestones: [
           milestoneInput("过期修订", "不会生效", 6),
         ],
@@ -1623,6 +1659,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       basePlanVersionId: fixture.currentPlanVersionId,
       baseTaskLockVersion: 1,
       reason: "并发审批测试",
+      description: "并发审批测试",
       replacementMilestones: [
         milestoneInput("并发后计划", "只有一个审批结果", 5),
       ],
@@ -1673,6 +1710,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       basePlanVersionId: fixture.currentPlanVersionId,
       baseTaskLockVersion: 1,
       reason: "Owner 直接调整",
+      description: "Owner 直接调整",
       replacementMilestones: [
         milestoneInput("Owner 新计划", "完成 Owner 目标", 3),
       ],
@@ -1820,6 +1858,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       basePlanVersionId: fixture.currentPlanVersionId,
       baseTaskLockVersion: fixture.lockVersion,
       reason: "审批人可达性门禁",
+      description: "审批人可达性门禁",
       replacementMilestones: [
         milestoneInput("审批人恢复后再提交", "审批链路可达", 4),
       ],

@@ -3,6 +3,10 @@ import { PageCommandBar } from "@/components/project-management/shell/page-comma
 import { TaskComposerClient } from "@/components/project-management/task-composer-client";
 import { toProjectManagementServiceError } from "@/lib/project-management/application/errors";
 import { getOpenRevisionCandidate } from "@/lib/project-management/queries/task-lifecycle-queries";
+import {
+  resolvePeopleOptionsByIds,
+  resolveTaskOptionsByIds,
+} from "@/lib/project-management/queries/option-queries";
 import { getTaskWorkspace } from "@/lib/project-management/queries/task-queries";
 import { buildCreateRevisionComposerSeed } from "@/lib/project-management/revision-composer";
 import { routes } from "@/lib/routes";
@@ -39,6 +43,15 @@ export default async function ProgressTaskRevisionNewPage({
   if (activeCandidate) redirect(routes.progress.taskRevisions(id));
   const seed = buildCreateRevisionComposerSeed(workspace);
   if (!seed) redirect(routes.progress.taskRevisions(id));
+  const [people, relatedTasks] = await Promise.all([
+    resolveRevisionPeople(actor, workspace.members.map((member) => member.personId)),
+    resolveTaskOptionsByIds({
+      actor,
+      input: {
+        ids: workspace.task.relatedTaskId ? [workspace.task.relatedTaskId] : [],
+      },
+    }),
+  ]);
   const deploymentEnvironment =
     process.env.NEXT_PUBLIC_APP_URL?.trim() || process.env.NODE_ENV || "unknown";
 
@@ -52,9 +65,9 @@ export default async function ProgressTaskRevisionNewPage({
         accountId={actor.accountId}
         deploymentEnvironment={deploymentEnvironment}
         initialSeed={seed}
-        initialPeople={[]}
-        initialTasks={[]}
-        initialTags={[]}
+        initialPeople={people}
+        initialTasks={relatedTasks}
+        initialTags={workspace.tags}
         actorPersonId={actor.personId}
         mode={{
           kind: "CREATE_REVISION",
@@ -66,4 +79,24 @@ export default async function ProgressTaskRevisionNewPage({
       />
     </>
   );
+}
+
+async function resolveRevisionPeople(
+  actor: Awaited<ReturnType<typeof getProgressActorOrRedirect>>,
+  personIds: string[],
+) {
+  const ids = [...new Set(personIds)];
+  const people = [];
+  for (let offset = 0; offset < ids.length; offset += 50) {
+    people.push(
+      ...(await resolvePeopleOptionsByIds({
+        actor,
+        input: {
+          scope: { purpose: "VISIBLE" },
+          ids: ids.slice(offset, offset + 50),
+        },
+      })),
+    );
+  }
+  return people;
 }

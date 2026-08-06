@@ -546,7 +546,7 @@ export async function createRevision(
         taskId: task.id,
         type: "REVISION",
         status: "PENDING",
-        businessDescription: parsed.reason,
+        businessDescription: parsed.description,
         createdByAccountId: refreshedActor.accountId,
       },
     });
@@ -605,6 +605,8 @@ export async function createRevision(
         targetPlanVersionId,
         baseTaskLockVersion: task.lockVersion,
         revisionAt: parsed.revisionAt,
+        name: parsed.reason,
+        description: parsed.description,
         reviewRound: 1,
         replacementMilestoneCount: parsed.replacementMilestones.length,
         terminationName: parsed.termination.name,
@@ -720,7 +722,7 @@ export async function reviseRejectedRevision(
     });
     await tx.taskNode.update({
       where: { id: revision.nodeId },
-      data: { businessDescription: parsed.reason },
+      data: { businessDescription: parsed.description },
     });
     await tx.revisionNode.update({
       where: { id: parsed.revisionNodeId },
@@ -775,6 +777,8 @@ export async function reviseRejectedRevision(
       after: jsonValue({
         status: "PENDING_APPROVAL",
         revisionAt: parsed.revisionAt,
+        name: parsed.reason,
+        description: parsed.description,
         reviewRound: revision.reviewRound + 1,
         targetPlanVersionId,
         replacementMilestoneCount: parsed.replacementMilestones.length,

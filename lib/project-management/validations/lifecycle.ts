@@ -174,7 +174,8 @@ export const createRevisionInputSchema = z.object({
     .int("基线锁版本不正确")
     .min(0, "基线锁版本不正确"),
   revisionAt: absoluteDateTimeSchema("请选择带时区的有效 Revision 时间"),
-  reason: requiredText("请输入修订原因", 2_000),
+  reason: requiredText("请输入 Revision 名称", 2_000),
+  description: requiredText("请输入 Revision 详细内容", 2_000),
   replacementMilestones: z
     .array(s2MilestoneDraftSchema, { message: "替换 Milestone 列表格式不正确" })
     .max(200, "单个计划最多 200 个节点")
@@ -187,7 +188,8 @@ export const createRevisionInputSchema = z.object({
 export const reviseRejectedRevisionInputSchema = z
   .object({
     revisionAt: absoluteDateTimeSchema("请选择带时区的有效 Revision 时间"),
-    reason: requiredText("请输入修订原因", 2_000),
+    reason: requiredText("请输入 Revision 名称", 2_000),
+    description: requiredText("请输入 Revision 详细内容", 2_000),
     replacementMilestones: z
       .array(s2MilestoneDraftSchema, { message: "替换 Milestone 列表格式不正确" })
       .max(200, "单个计划最多 200 个节点")

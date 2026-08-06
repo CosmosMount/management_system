@@ -179,10 +179,10 @@ Task 列表、资源计划、个人时间线、待办和通知中心不在本轮
 
 - Start：计划开始时间；Revision 模式中按现有规则只读。
 - Milestone：目标、计划完成时间、完成条件、验收要求、业务说明和单节点删除入口；不再提供节点复制。
-- Revision：修订原因、Revision 时间、轮次/状态和只读基线说明；明确提示“Revision 是时间标记，不形成阶段”。
+- Revision：Revision 名称、Revision 详细内容和 Revision 时间；三个字段均必填。当前 Revision 由页面自动插入且不可删除，已生效 Revision 保持只读；明确提示“Revision 是时间标记，不形成阶段”。
 - Terminal：名称、计划时间、计划结果条件和业务说明。
 
-字段仍采用实时同步：输入变化立即更新画布和节点导航；非法时间保留最后合法绘制位置，同时在字段和全局问题摘要中显示可操作的中文错误。
+字段仍采用实时同步：输入变化立即更新画布和节点导航；非法时间保留最后合法绘制位置，同时在字段和节点详情红色提示框中显示可操作的中文错误。节点详情不再重复展示独立“问题列表”。
 
 ## 6. Task 详情
 
@@ -224,7 +224,7 @@ Task 列表、资源计划、个人时间线、待办和通知中心不在本轮
 
 “结束 Task”入口只负责把用户带到 Terminal 详情和确认操作，不创建另一套 Terminal mutation。
 
-“修改 Task 基本信息”采用与 `main` 项目详情相同的承载方式：点击顶部按钮打开可滚动 Dialog，在 Dialog 内编辑 Task 基本信息。Dialog 只改变页面承载方式，内部继续按当前 metadata、Tags、members 的独立权限与 action 保存，不把多次 mutation 伪装为一次原子提交，也不复用只允许 DRAFT 的 Composer edit route。移动端 Dialog 使用接近全屏的可滚动布局。
+“修改 Task 基本信息”采用与 `main` 项目详情相同的承载方式：点击顶部按钮打开可滚动 Dialog，在 Dialog 内编辑 Task 基本信息。Dialog 使用单一“保存修改”按钮，将 metadata、Tags、members 在一个服务端事务中统一保存；有实际变化时只递增一次 Task 锁版本，仅为发生变化的区域写入审计，无变化保存不写数据、不递增锁版本。事务内部仍分别执行各区域的权限、引用、成员、审计和通知校验，不复用只允许 DRAFT 的 Composer edit route。移动端 Dialog 使用接近全屏的可滚动布局，保存失败信息显示在 Dialog 内；发生并发冲突后冻结本次编辑基线和保存按钮，必须关闭并重新打开以加载权威数据，旧表单不能携带新锁版本重试。
 
 ### 6.3 三列内容区
 
@@ -236,13 +236,13 @@ Task 列表、资源计划、个人时间线、待办和通知中心不在本轮
 
 #### 中列：主要详情
 
-第一层为共享 Task 节点导航，展示 Current Plan 中的 Start、Milestone、已生效 Revision 和 Terminal。待审批/被驳回的 Revision 属于候选计划历史，不应伪装成 Current Plan 已生效节点；可通过明确的候选提示或 Revision 历史入口展示。
+第一层为只读 TimeCanvas 与共享 Task 节点导航，展示 Current Plan 中的 Start、Milestone、已生效 Revision 和 Terminal。桌面显示与 Composer 一致的时间点和阶段带，移动端保留纵向节点导航；选择节点导航时 TimeCanvas 自动横向定位到对应时间点，点击 TimeCanvas 时间点时同步选中下方节点详情。待审批/被驳回的 Revision 属于候选计划历史，不应伪装成 Current Plan 已生效节点；可通过明确的候选提示展示。
 
 第二层为选中节点详情：
 
 - Start：计划开始、版本和只读说明。
 - Milestone：目标、截止、完成条件、验收要求和状态；只有 Active Milestone 且 capability 允许时显示提交验收，只有该节点当前待审批记录且 capability 允许时显示审批操作。本轮不展示验收历史列表。
-- Revision：Current Plan 中已生效 Revision 的原因、时间、轮次、状态、审批人/意见和生效时间。待审批/被驳回候选不进入 Current Plan 节点导航；本轮不展示 Revision 历史、计划版本或候选 Diff 列表。
+- Revision：Current Plan 中已生效 Revision 的名称、详细内容、时间、轮次、状态、审批人/意见和生效时间。待审批/被驳回候选不进入 Current Plan 节点导航；本轮不展示 Revision 历史、计划版本或候选 Diff 列表。
 - Terminal：计划结果条件、计划时间；Terminal Active 且可结束时显示现有四种 outcome、原因、总结和二次确认。
 
 Milestone/Revision 的历史记录和完整审计数据继续在服务端保存，但本轮 Task 详情不提供历史列表或“加载更多”入口。
@@ -269,9 +269,9 @@ Revision 页面复用第 5 节的纵向 Composer 骨架，不另建一套表单�
 
 与 Task 创建的差异：
 
-- 基本信息区替换为 Revision 信息和只读基线，不允许修改 Task 元数据、成员、Tag 或关联 Task。
+- 顶部沿用 Task 创建页的“基本信息 / 组织与分类 / 成员”结构，展示当前 Task 的权威内容并保持只读；Revision 信息不再占用顶部独立卡片。
 - Start、已完成 Milestone 和已生效 Revision 按当前规则只读。
-- 当前 Revision 标记、后续 Milestone 和 Terminal 按现有规则可编辑。
+- 页面自动插入一个不可删除的当前 Revision 节点；Revision 名称、Revision 详细内容和 Revision 时间与其他节点字段一样在下方节点详情中编辑且均必填，后续 Milestone 和 Terminal 按现有规则可编辑。
 - Revision 标记出现在画布和节点导航中，但不形成新的阶段区间。
 - 主按钮分别为“创建并送审”和“修改并重新送审”。
 - 成功后回到 Task 详情的 Revision 上下文，并显示 `PENDING_APPROVAL`；失败保留输入和幂等上下文。
@@ -299,7 +299,7 @@ Revision 页面复用第 5 节的纵向 Composer 骨架，不另建一套表单�
 - 删除人员投入、历史版本、验收/Revision 历史和审计列表的页面查询，只加载概览、Current Plan、当前待审批门禁和选中节点完成当前操作所需的数据。
 - 实现概览 action matrix、三列/移动端布局、Current Plan 节点导航和节点详情。
 - 将现有 Milestone/Revision/Terminal 操作接到选中节点详情，继续复用现有 actions、capability 和审批门禁。
-- 使用与 `main` 项目详情一致的 Dialog 承载 Active Task 基本信息修改，同时保留现有独立 action 的权限和并发语义。
+- 使用与 `main` 项目详情一致的 Dialog 承载 Active Task 基本信息修改，通过聚合 action 原子保存 metadata、Tags 和 members，同时保留各区域的权限、审计、通知和并发语义。
 - 预计修改 `app/progress/tasks/[id]/page.tsx`、`components/project-management/task-workbench.tsx` 及必要的只读适配组件；只有现有查询字段确实不足时才扩展 `lib/project-management/queries/`。
 
 ### 阶段 D：清理与文档
