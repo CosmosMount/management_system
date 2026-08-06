@@ -19,6 +19,11 @@ const nextConfig: NextConfig = {
         hostname: "s1-imfile.feishucdn.com",
         pathname: "/static-resource/**",
       },
+      {
+        protocol: "https",
+        hostname: "s3-imfile.feishucdn.com",
+        pathname: "/static-resource/**",
+      },
     ],
   },
   async redirects() {

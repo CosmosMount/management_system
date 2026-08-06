@@ -300,16 +300,22 @@ test.describe("管理员面板", () => {
       select: { avatar: true },
     });
     const avatarUrl =
-      "https://s1-imfile.feishucdn.com/static-resource/v1/playwright-avatar~?image_size=72x72&format=png";
+      "https://s3-imfile.feishucdn.com/static-resource/v1/playwright-avatar~?image_size=72x72&format=png";
+    const optimizedAvatarRequests: string[] = [];
 
     await page.route("**/_next/image?*", async (route) => {
+      const requestedAvatarUrl = new URL(route.request().url()).searchParams.get(
+        "url",
+      );
+      if (requestedAvatarUrl !== avatarUrl) {
+        await route.continue();
+        return;
+      }
+      optimizedAvatarRequests.push(requestedAvatarUrl);
       await route.fulfill({
         status: 200,
-        contentType: "image/png",
-        body: Buffer.from(
-          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z3p8AAAAASUVORK5CYII=",
-          "base64",
-        ),
+        contentType: "image/svg+xml",
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" fill="#2563eb" /></svg>',
       });
     });
     await prisma.person.update({
@@ -322,9 +328,20 @@ test.describe("管理员面板", () => {
         waitUntil: "networkidle",
       });
       expect(response?.status()).toBe(200);
-      await expect(
-        page.locator('img[src*="s1-imfile.feishucdn.com"]:visible').first(),
-      ).toBeVisible();
+      const avatar = page
+        .locator('img[src*="s3-imfile.feishucdn.com"]:visible')
+        .first();
+      await expect(avatar).toBeVisible();
+      await avatar.scrollIntoViewIfNeeded();
+      await expect.poll(() => optimizedAvatarRequests.length).toBeGreaterThan(0);
+      await expect
+        .poll(() =>
+          avatar.evaluate((element) => {
+            const image = element as HTMLImageElement;
+            return image.complete && image.naturalWidth > 0;
+          }),
+        )
+        .toBe(true);
       await expectHealthyPage(page);
     } finally {
       await prisma.person.update({
