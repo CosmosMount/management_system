@@ -1121,9 +1121,16 @@ test.describe("project management P4/P6 UI integration", () => {
     await expect(page.getByRole("link", { name: "资源冲突" })).toHaveCount(0);
     await expectHealthyPage(page);
 
-    await page.goto("/progress/tasks?mine=1");
+    await page.goto("/progress/tasks");
     await expect(page.getByRole("heading", { name: "全部 Task" })).toBeVisible();
+    await expect(page.getByLabel("Task 状态")).toHaveValue("ACTIVE");
+    await expect(page.getByRole("checkbox", { name: "只看我参与" })).toBeChecked();
     await expect(page.getByText(fixture.taskTitle)).toBeVisible();
+    await page.getByLabel("Task 状态").selectOption("");
+    await page.getByRole("checkbox", { name: "只看我参与" }).uncheck();
+    await page.getByRole("button", { name: "筛选", exact: true }).click();
+    await expect(page.getByLabel("Task 状态")).toHaveValue("");
+    await expect(page.getByRole("checkbox", { name: "只看我参与" })).not.toBeChecked();
     await expectHealthyPage(page);
 
     await page.goto(`/progress/tasks/${fixture.taskId}`);

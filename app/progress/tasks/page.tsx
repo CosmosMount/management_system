@@ -32,9 +32,10 @@ export default async function ProgressTasksPage({
 }) {
   const actor = await getProgressActorOrRedirect();
   const params = (await searchParams) ?? {};
-  const status = firstParam(params.status);
+  const status = params.status === undefined ? "ACTIVE" : firstParam(params.status);
   const priority = firstParam(params.priority);
   const query = firstParam(params.q);
+  const mine = params.mine === undefined ? true : paramValues(params.mine).includes("1");
   const tasks = await listTasks({
     actor,
     input: {
@@ -44,7 +45,7 @@ export default async function ProgressTasksPage({
       priority: priorityValues.includes(priority as (typeof priorityValues)[number])
         ? (priority as (typeof priorityValues)[number])
         : undefined,
-      mine: firstParam(params.mine) === "1",
+      mine,
       query,
       limit: 50,
     },
@@ -96,11 +97,12 @@ export default async function ProgressTasksPage({
               ))}
             </select>
             <label className="flex h-8 items-center gap-2 text-sm text-muted-foreground">
+              <input type="hidden" name="mine" value="0" />
               <input
                 type="checkbox"
                 name="mine"
                 value="1"
-                defaultChecked={firstParam(params.mine) === "1"}
+                defaultChecked={mine}
               />
               只看我参与
             </label>
@@ -119,4 +121,8 @@ export default async function ProgressTasksPage({
 
 function firstParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+}
+
+function paramValues(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value : value === undefined ? [] : [value];
 }
