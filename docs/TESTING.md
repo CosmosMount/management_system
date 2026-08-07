@@ -143,7 +143,7 @@ npm run db:deploy
 项目管理 P1-P6 schema、身份、授权、生命周期、Segment、UI 或通知接入变更应额外执行：
 
 ```bash
-npm run test:e2e -- tests/project-management-p1.spec.ts tests/project-management-lifecycle.spec.ts tests/project-management-segments.spec.ts tests/project-management-resource-removal-migration.spec.ts tests/project-management-ui.spec.ts tests/notification-outbox-adapters.spec.ts tests/feishu-boundaries.spec.ts
+npm run test:e2e -- tests/project-management-p1.spec.ts tests/project-management-lifecycle.spec.ts tests/project-management-segments.spec.ts tests/project-management-resource-removal-migration.spec.ts tests/project-management-ui.spec.ts tests/project-management-collaboration.spec.ts tests/notification-outbox-adapters.spec.ts tests/feishu-boundaries.spec.ts
 npm run pm:identity-backfill
 ```
 
@@ -225,11 +225,11 @@ npm run pm:identity-backfill
 
 1. 桌面 `1440x1000` 与 Pixel 5 分别打开 `/progress`，应展示“我的工作”总览、可见 Active Task、未来投入、待确认计划和未读通知摘要；导航中不得出现“资源冲突”。
 2. 打开 `/progress/tasks`，默认勾选“只看我参与”并选择“进行中”；按人员范围、状态、优先级和关键词筛选时，只展示当前 actor 可读 Task，且仍可手动取消默认筛选；不可读 Task 不能通过列表枚举。
-3. 打开 `/progress/tasks/[id]`，应看到概览、共享节点导航、选中节点详情，以及“Task 风险 / Task 评论 / 最近动态”占位区；不得再出现 Tab、人员投入、计划版本、Revision/验收历史或完整审计列表。Active Task 编辑 Dialog 只显示一个“保存修改”按钮，基本信息、Tags 和成员必须在同一事务中保存；有变化时锁版本只递增一次且仅审计实际变化区域，无变化保存不得写数据或递增锁版本，任一区域校验失败都不得产生部分写入且错误应显示在 Dialog 内。并发冲突后保存按钮必须冻结，关闭并重新打开前不能让旧表单携带刷新后的锁版本再次覆盖。可查看 Task 的非成员只能只读，不能获得修改、审批或结束入口。
+3. 打开 `/progress/tasks/[id]`，应看到概览、共享节点导航、选中节点详情，以及正式启用的“Task 风险 / Task 评论 / 近期动态”；不得再出现 Tab、人员投入、计划版本、Revision/验收历史或 raw 审计列表。Task Owner/Participant 可在 ACTIVE 状态提出和解决风险，普通旁观者只能查看风险但仍可评论；只有全局管理员显示评论删除入口。Active Task 编辑 Dialog 继续使用一次事务保存基本信息、Tags 和成员，并保持原有并发保护。
 4. 打开 `/progress/resources`，人员计划时间轴应能新增 Planned Segment，并通过 P5 服务端 action 执行确认、部分确认、拆分、合并、顺延和取消；测试需校验 UI 结果和数据库状态。
 5. `/progress/resources/conflicts` 必须返回 404。资源计划、个人时间线、Task 工作台和 Agenda 不得出现冲突标记或投入比例；快速创建与 Inspector 不得提供比例输入。创建、更新、移动、拆分、合并和确认仍需正常工作，重叠 Segment 不得产生冲突待办、通知或 outbox。
 6. 打开 `/progress/notifications`，只展示当前收件人的站内通知；可按类型/未读筛选、标记单条或全部已读，跳转对象前仍要按业务对象权限过滤。
-7. 页面不得出现旧项目、阶段、周报、风险、提醒或 `PROJECT_MANAGER` 角色文案；不得出现 500、Next.js error overlay、未处理浏览器错误或横向滚动。
+7. 页面不得出现旧项目、阶段、周报、提醒或 `PROJECT_MANAGER` 角色文案；当前风险区不得出现旧 Stage 风险或计划节点绑定入口。页面不得出现 500、Next.js error overlay、未处理浏览器错误或横向滚动。
 8. 旧 `/progress/task/:id` 应服务端重定向到 `/progress/tasks/:id`；`/progress/projects/*` 是当前正式路由，只有旧 `/progress/kanban` 回到 `/progress`。收缩 migration 集成测试仍需验证历史旧表、旧 enum、`PROJECT_MANAGER` 数据和 `channel=progress` outbox/recipient 被删除；HEAD 还必须证明新 Project 不含 Stage、`ownerOpenId` 等旧签名。
 
 ### Project 立项专项测试
@@ -239,7 +239,23 @@ npm run pm:identity-backfill
 3. 立项提交不改变所选 Task；批准时全部 Task 原子挂载，冲突时零部分写入。Task 成员同步为 Project Participant，Project Owner 不获得 Task 写权限。
 4. 空 Project 可以直接结束；存在关联 Task 时必须全部严格 `COMPLETED`。软删除保留 Task 并清空 `projectId`，删除对象直达返回脱敏 404。
 5. 头像只接受真实 PNG/JPEG/WebP 且不超过 2 MiB；所有自动化测试继续使用禁通知环境，不发送真实飞书消息。
-6. Desktop `1440x1000` 打开 `/progress/projects/[id]`：概览只显示头像、名称、完整内容、状态、负责人、参与人和 Task 完成进度，权限操作位于右上；不得显示立项历史或 raw 审计卡片，但 `#establishment` 仍定位审批区。第二段应显示风险/评论/最近动态占位，并按“草稿 → 进行中 → 所有终态”展示当前 25 条 Task 与对应 Current Plan 时间线；已完成节点使用绿色勾选，未完成节点保留普通圆点；名称打开 Task，定位按钮滚动并选中该 Task 当前进行中的非 Revision 节点，没有 Active 节点时回退到 Start。该详情改造按产品决策不做移动端专项验收。
+6. Desktop `1440x1000` 打开 `/progress/projects/[id]`：概览只显示头像、名称、完整内容、状态、负责人、参与人和 Task 完成进度，权限操作位于右上；不得显示立项历史或 raw 审计卡片，但 `#establishment` 仍定位审批区。第二段左侧将 Project 自身风险与当前所属 Task 风险分组，并只显示 Project 评论；中间按“草稿 → 进行中 → 所有终态”展示当前 25 条 Task、Current Plan 时间线及风险输入；右侧显示服务端筛选和稳定分页的中文近期动态。已完成节点使用绿色勾选，未完成节点保留普通圆点；定位按钮仍选择当前进行中的非 Revision 节点，没有 Active 节点时回退到 Start。本功能按产品决策不设计、不修改、不专项验收移动端。
+
+### 风险、评论和近期动态专项测试
+
+1. ACTIVE Project/Task 的负责人、参与人和两类全局管理员可以提出及解决直接风险；普通旁观者服务端返回 `FORBIDDEN`。DRAFT、待审批和终态不能提出风险，ACTIVE 与终态可解决既有 `ACTIVE` 风险。
+2. 同一对象创建多条未解决风险，逐条解决并验证风险表状态、解决人/说明/时间、领域审计、站内通知、outbox、recipient、非 mandatory 和稳定事件键。并发重复解决只能成功一次。
+3. 所有已登录用户可在未删除 Project/Task 发表评论；只有全局管理员可软删除。删除后普通列表不可见，但正文、删除人、删除时间和删除审计仍在数据库；不得产生删除通知。
+4. 风险和评论首屏及加载更多均为 20 条，游标同时约束 `createdAt + id`，跨目标或筛选游标必须拒绝。Project 自身风险和当前所属 Task 风险分别计数、分页；Task 移出后不再进入原 Project 风险区。
+5. Project 动态包含自身事件和事件发生时所属 Task 的白名单事件；Task 移动事件在新旧 Project 两端可见。既有缺少 `projectId` 的普通 Task 审计不回填且不进入 Project 动态，未知 action 隐藏。
+6. 切换动态分类后必须由服务端重新查询；版本 token 变化触发刷新，页面隐藏暂停、恢复可见立即检查，失败保留当前内容并重试。Desktop `1440x1000` 验证长正文、长姓名、空状态、无 error overlay 和无横向滚动。
+7. 自动化始终由官方 Playwright runner 创建隔离数据库并设置 `NOTIFICATION_DELIVERY_DISABLED=true`；不得使用开发/生产数据库或真实飞书投递。
+
+近期动态 formatter 的无数据库纯映射回归可单独执行：
+
+```bash
+npx tsx --test tests/project-management-recent-activity-formatter.node.ts
+```
 
 ### Task 创建页专项测试
 

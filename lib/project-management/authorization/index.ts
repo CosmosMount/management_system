@@ -20,6 +20,10 @@ export const PROJECT_MANAGEMENT_ACTIONS = [
   "project.review_establishment",
   "project.complete",
   "project.delete",
+  "project.risk.create",
+  "project.risk.resolve",
+  "project.comment.create",
+  "project.comment.delete",
   "task.create",
   "task.view",
   "task.update_metadata",
@@ -27,6 +31,10 @@ export const PROJECT_MANAGEMENT_ACTIONS = [
   "task.activate",
   "task.delete",
   "task.archive",
+  "task.risk.create",
+  "task.risk.resolve",
+  "task.comment.create",
+  "task.comment.delete",
   "plan.view_history",
   "revision.create",
   "revision.review",
@@ -150,6 +158,12 @@ function authorizeProject(
   if (action === "project.create" || action === "project.view") {
     return allow("authenticated_project_access");
   }
+  if (action === "project.comment.create") {
+    return allow("authenticated_project_comment");
+  }
+  if (action === "project.comment.delete") {
+    return deny("global_administrator_required");
+  }
   if (action === "project.review_establishment") {
     return deny("global_administrator_required");
   }
@@ -178,6 +192,15 @@ function authorizeProject(
     ) {
       return allow("project_owner");
     }
+  }
+  const isMember = resource.members?.some(
+    (member) => member.personId === actor.personId && !member.removedAt,
+  );
+  if (
+    isMember &&
+    (action === "project.risk.create" || action === "project.risk.resolve")
+  ) {
+    return allow("project_member_risk");
   }
   return deny("project_policy_denied");
 }
@@ -262,6 +285,18 @@ function authorizeTask(
     action === "audit.view"
   ) {
     return allow("global_task_visibility");
+  }
+
+  if (action === "task.comment.create") {
+    return allow("authenticated_task_comment");
+  }
+  if (action === "task.comment.delete") {
+    return deny("global_administrator_required");
+  }
+  if (action === "task.risk.create" || action === "task.risk.resolve") {
+    return hasTaskRole(actor, resource, ["OWNER", "PARTICIPANT"])
+      ? allow("task_member_risk")
+      : deny("task_member_required");
   }
 
   if (action === "milestone.submit_review") {

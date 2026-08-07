@@ -18,7 +18,7 @@ export function revalidateAdmin() {
   revalidatePath(routes.admin.roles);
 }
 
-export function revalidateProjectManagement(taskId?: string) {
+export function revalidateProjectManagement(taskId?: string, projectId?: string) {
   revalidatePath(routes.progress.root);
   revalidatePath(routes.progress.tasks);
   revalidatePath(routes.progress.projects);
@@ -29,5 +29,8 @@ export function revalidateProjectManagement(taskId?: string) {
   revalidatePath(routes.progress.tags);
   if (taskId) {
     revalidatePath(`/progress/tasks/${taskId}`);
+  }
+  if (projectId) {
+    revalidatePath(`/progress/projects/${projectId}`);
   }
 }

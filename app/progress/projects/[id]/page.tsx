@@ -4,11 +4,24 @@ import { ArrowLeft, Pencil } from "lucide-react";
 import { ProjectActionsClient } from "@/components/project-management/project-actions-client";
 import { ProjectAvatar } from "@/components/project-management/project-avatar";
 import { ProjectTaskTimeline } from "@/components/project-management/project-task-timeline";
+import {
+  CollaborationLeftSidebar,
+  CollaborationRightSidebar,
+  CreateRiskCard,
+  type CollaborationInitialData,
+} from "@/components/project-management/collaboration-panels";
 import { PageCommandBar } from "@/components/project-management/shell/page-command-bar";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { toProjectManagementServiceError } from "@/lib/project-management/application/errors";
 import { getProjectDetail } from "@/lib/project-management/queries/project-queries";
+import {
+  getActivityVersion,
+  getCollaborationCapabilities,
+  getCommentPage,
+  getRecentActivityPage,
+  getRiskPage,
+} from "@/lib/project-management/queries/collaboration-queries";
 import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 import { getProgressActorOrRedirect } from "../../_auth";
@@ -32,17 +45,50 @@ export default async function ProjectDetailPage({
   const actor = await getProgressActorOrRedirect();
   const { id } = await params;
   const query = (await searchParams) ?? {};
-  const project = await getProjectDetail({
+  const projectPromise = getProjectDetail({
     actor,
     projectId: id,
     pagination: {
       taskCursor: first(query.taskCursor) || undefined,
       pageSize: 25,
     },
-  }).catch((error) => {
-    if (toProjectManagementServiceError(error).code === "NOT_FOUND") notFound();
-    throw error;
   });
+  const [
+    project,
+    capabilities,
+    directActiveRisks,
+    directResolvedRisks,
+    taskActiveRisks,
+    taskResolvedRisks,
+    comments,
+    activity,
+    activityVersion,
+  ] = await Promise.all([
+      projectPromise,
+      getCollaborationCapabilities(actor, { targetType: "PROJECT", targetId: id }),
+      getRiskPage(actor, { targetType: "PROJECT", targetId: id, source: "DIRECT", status: "ACTIVE", limit: 20 }),
+      getRiskPage(actor, { targetType: "PROJECT", targetId: id, source: "DIRECT", status: "RESOLVED", limit: 20 }),
+      getRiskPage(actor, { targetType: "PROJECT", targetId: id, source: "TASKS", status: "ACTIVE", limit: 20 }),
+      getRiskPage(actor, { targetType: "PROJECT", targetId: id, source: "TASKS", status: "RESOLVED", limit: 20 }),
+      getCommentPage(actor, { targetType: "PROJECT", targetId: id, limit: 20 }),
+      getRecentActivityPage(actor, { targetType: "PROJECT", targetId: id, category: "ALL", limit: 20 }),
+      getActivityVersion(actor, { targetType: "PROJECT", targetId: id }),
+    ]).catch((error) => {
+      if (toProjectManagementServiceError(error).code === "NOT_FOUND") notFound();
+      throw error;
+    });
+  const collaboration: CollaborationInitialData = {
+    targetType: "PROJECT",
+    targetId: id,
+    capabilities,
+    directActiveRisks,
+    directResolvedRisks,
+    taskActiveRisks,
+    taskResolvedRisks,
+    comments,
+    activity,
+    activityVersion: activityVersion.token,
+  };
   const owners = project.members.filter((member) => member.role === "OWNER");
   const participants = project.members.filter(
     (member) => member.role === "PARTICIPANT",
@@ -135,17 +181,10 @@ export default async function ProjectDetailPage({
 
         <div className="grid min-w-0 gap-5 xl:grid-cols-[300px_minmax(0,1fr)_300px]">
           <aside className="min-w-0 space-y-4 xl:col-start-1 xl:row-start-1">
-            <PlaceholderCard
-              title="Project 风险"
-              description="Project 风险功能暂未开放。"
-            />
-            <PlaceholderCard
-              title="Project 评论"
-              description="Project 评论功能暂未开放。"
-            />
+            <CollaborationLeftSidebar data={collaboration} />
           </aside>
 
-          <main className="min-w-0 xl:col-start-2 xl:row-start-1">
+          <main className="min-w-0 space-y-4 xl:col-start-2 xl:row-start-1">
             <ProjectTaskTimeline
               projectId={project.id}
               projectStatus={project.status}
@@ -159,13 +198,15 @@ export default async function ProjectDetailPage({
                   : null
               }
             />
+            <CreateRiskCard
+              targetType="PROJECT"
+              targetId={project.id}
+              canCreate={collaboration.capabilities.canCreateRisk}
+            />
           </main>
 
           <aside className="min-w-0 xl:col-start-3 xl:row-start-1">
-            <PlaceholderCard
-              title="最近动态"
-              description="最近动态功能暂未开放。"
-            />
+            <CollaborationRightSidebar data={collaboration} />
           </aside>
         </div>
       </div>
@@ -199,23 +240,6 @@ function OverviewItem({ label, value }: { label: string; value: string }) {
       <dt className="text-xs text-muted-foreground">{label}</dt>
       <dd className="mt-1 whitespace-pre-wrap break-words">{value}</dd>
     </div>
-  );
-}
-
-function PlaceholderCard({
-  title,
-  description,
-}: {
-  title: string;
-  description: string;
-}) {
-  return (
-    <section className="rounded-xl border border-border bg-card p-4">
-      <h2 className="font-semibold">{title}</h2>
-      <div className="mt-3 rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-        {description}
-      </div>
-    </section>
   );
 }
 

@@ -1150,8 +1150,8 @@ test.describe("project management P4/P6 UI integration", () => {
     await expect(page.getByTestId("task-plan-node-navigator")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Task 风险" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Task 评论" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "最近动态" })).toBeVisible();
-    await expect(page.getByText("Task 风险功能暂未开放。")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "近期动态" })).toBeVisible();
+    await expect(page.getByText("从未记录风险")).toBeVisible();
     await expect(page.getByRole("tab")).toHaveCount(0);
     await expect(page.getByText("人员投入", { exact: true })).toHaveCount(0);
     if (testInfo.project.name === "desktop") {
@@ -2766,7 +2766,7 @@ test.describe("project management P4/P6 UI integration", () => {
       .toEqual({ status: "CANCELLED" });
     await expect(page.getByRole("heading", { name: "Task 风险" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Task 评论" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "最近动态" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "近期动态" })).toBeVisible();
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,

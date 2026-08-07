@@ -25,6 +25,9 @@ const PROJECT_MANAGEMENT_NOTIFICATION_KINDS = [
   "project_task_changed",
   "project_completed",
   "project_deleted",
+  "risk_created",
+  "risk_resolved",
+  "comment_created",
 ] as const;
 
 const PROJECT_MANAGEMENT_APPROVAL_REQUEST_KINDS = [

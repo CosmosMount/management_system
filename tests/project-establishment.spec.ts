@@ -194,7 +194,7 @@ test.describe("Project 立项与生命周期", () => {
 
     await expect(page.getByRole("heading", { name: "Project 风险" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Project 评论" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "最近动态" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "近期动态" })).toBeVisible();
     await expect(page.getByText("立项申请", { exact: true })).toHaveCount(0);
     await expect(page.getByText("最近审计记录", { exact: true })).toHaveCount(0);
     await expect(page.locator("#establishment")).toBeVisible();

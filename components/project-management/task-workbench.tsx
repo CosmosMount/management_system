@@ -70,6 +70,12 @@ import type { TaskPendingApproval } from "@/lib/project-management/task-approval
 import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 import { ProjectSelect } from "@/components/project-management/project-picker";
+import {
+  CollaborationLeftSidebar,
+  CollaborationRightSidebar,
+  CreateRiskCard,
+  type CollaborationInitialData,
+} from "@/components/project-management/collaboration-panels";
 
 const TASK_DETAIL_START_ID = "task-detail-start";
 const TASK_DETAIL_PLAN_ROW_ID = "task-detail-plan-row";
@@ -102,6 +108,7 @@ export function TaskWorkbench({
   taskOptions,
   tagOptions,
   projectOptions,
+  collaboration,
 }: {
   workspace: TaskWorkspace;
   lifecycle: TaskLifecycleViews;
@@ -109,6 +116,7 @@ export function TaskWorkbench({
   taskOptions: TaskOptionPage["items"];
   tagOptions: TagOptionPage["items"];
   projectOptions: Array<{ id: string; name: string; avatarPath: string | null }>;
+  collaboration: CollaborationInitialData;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -476,15 +484,20 @@ export function TaskWorkbench({
               }
             />
           </section>
+
+          <CreateRiskCard
+            targetType="TASK"
+            targetId={task.id}
+            canCreate={collaboration.capabilities.canCreateRisk}
+          />
         </main>
 
         <aside className="min-w-0 space-y-4 xl:col-start-1 xl:row-start-1">
-          <PlaceholderCard title="Task 风险" description="Task 风险功能暂未开放。" />
-          <PlaceholderCard title="Task 评论" description="Task 评论功能暂未开放。" />
+          <CollaborationLeftSidebar data={collaboration} />
         </aside>
 
         <aside className="min-w-0 xl:col-start-3 xl:row-start-1">
-          <PlaceholderCard title="最近动态" description="最近动态功能暂未开放。" />
+          <CollaborationRightSidebar data={collaboration} />
         </aside>
       </div>
 
@@ -1214,10 +1227,6 @@ function memberNames(workspace: TaskWorkspace, role: ActiveTaskMemberRole) {
 
 function OverviewItem({ label, value }: { label: string; value: string }) {
   return <div className="min-w-0"><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 whitespace-pre-wrap break-words">{value}</dd></div>;
-}
-
-function PlaceholderCard({ title, description }: { title: string; description: string }) {
-  return <section className="rounded-xl border border-border bg-card p-4"><h2 className="font-semibold">{title}</h2><div className="mt-3 rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">{description}</div></section>;
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {

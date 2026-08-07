@@ -100,6 +100,11 @@ enum ProjectStatus {
   COMPLETED
 }
 
+enum RiskRecordStatus {
+  ACTIVE
+  RESOLVED
+}
+
 enum ProjectMemberRole {
   OWNER
   PARTICIPANT
@@ -241,6 +246,10 @@ model Account {
   deletedProjects           Project[]                     @relation("ProjectDeletedBy")
   createdProjectMembers     ProjectMember[]               @relation("ProjectMemberCreatedBy")
   removedProjectMembers     ProjectMember[]               @relation("ProjectMemberRemovedBy")
+  createdRiskRecords        RiskRecord[]                  @relation("RiskRecordCreatedByAccount")
+  resolvedRiskRecords       RiskRecord[]                  @relation("RiskRecordResolvedByAccount")
+  authoredComments          Comment[]                     @relation("CommentAuthorAccount")
+  deletedComments           Comment[]                     @relation("CommentDeletedByAccount")
   submittedProjectRequests  ProjectEstablishmentRequest[] @relation("ProjectRequestSubmittedBy")
   reviewedProjectRequests   ProjectEstablishmentRequest[] @relation("ProjectRequestReviewer")
   createdAt                 DateTime                      @default(now()) @db.Timestamptz(6)
@@ -267,18 +276,22 @@ model AccountIdentity {
 }
 
 model Person {
-  id             String             @id @default(uuid())
-  accountId      String?            @unique
-  account        Account?           @relation(fields: [accountId], references: [id], onDelete: SetNull)
-  displayName    String
-  avatar         String?
-  status         PersonStatus       @default(ACTIVE)
-  taskMembers    TaskMember[]
-  workSegments   WorkSegment[]
-  auditEvents    DomainAuditEvent[] @relation("AuditActorPerson")
-  projectMembers ProjectMember[]
-  createdAt      DateTime           @default(now()) @db.Timestamptz(6)
-  updatedAt      DateTime           @updatedAt @db.Timestamptz(6)
+  id                  String             @id @default(uuid())
+  accountId           String?            @unique
+  account             Account?           @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  displayName         String
+  avatar              String?
+  status              PersonStatus       @default(ACTIVE)
+  taskMembers         TaskMember[]
+  workSegments        WorkSegment[]
+  auditEvents         DomainAuditEvent[] @relation("AuditActorPerson")
+  projectMembers      ProjectMember[]
+  createdRiskRecords  RiskRecord[]       @relation("RiskRecordCreatedByPerson")
+  resolvedRiskRecords RiskRecord[]       @relation("RiskRecordResolvedByPerson")
+  authoredComments    Comment[]          @relation("CommentAuthorPerson")
+  deletedComments     Comment[]          @relation("CommentDeletedByPerson")
+  createdAt           DateTime           @default(now()) @db.Timestamptz(6)
+  updatedAt           DateTime           @updatedAt @db.Timestamptz(6)
 
   @@index([displayName])
   @@index([status])
@@ -536,6 +549,8 @@ model Task {
   workSegments          WorkSegment[]
   inAppNotifications    InAppNotification[]
   auditEvents           DomainAuditEvent[]
+  riskRecords           RiskRecord[]
+  comments              Comment[]
   establishmentRequests ProjectEstablishmentRequestedTask[]
   createdAt             DateTime                            @default(now()) @db.Timestamptz(6)
   updatedAt             DateTime                            @updatedAt @db.Timestamptz(6)
@@ -574,12 +589,74 @@ model Project {
   avatarAssets          FileAsset[]
   inAppNotifications    InAppNotification[]
   auditEvents           DomainAuditEvent[]
+  riskRecords           RiskRecord[]
+  comments              Comment[]
   createdAt             DateTime                      @default(now()) @db.Timestamptz(6)
   updatedAt             DateTime                      @updatedAt @db.Timestamptz(6)
 
   @@index([status, updatedAt, id])
   @@index([requesterAccountId])
   @@index([deletedAt])
+}
+
+model RiskRecord {
+  id                  String           @id @default(uuid())
+  projectId           String?
+  project             Project?         @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  taskId              String?
+  task                Task?            @relation(fields: [taskId], references: [id], onDelete: Restrict)
+  content             String           @db.VarChar(2000)
+  status              RiskRecordStatus @default(ACTIVE)
+  createdByAccountId  String
+  createdByAccount    Account          @relation("RiskRecordCreatedByAccount", fields: [createdByAccountId], references: [id], onDelete: Restrict)
+  createdByPersonId   String?
+  createdByPerson     Person?          @relation("RiskRecordCreatedByPerson", fields: [createdByPersonId], references: [id], onDelete: Restrict)
+  createdByName       String           @db.VarChar(200)
+  resolvedByAccountId String?
+  resolvedByAccount   Account?         @relation("RiskRecordResolvedByAccount", fields: [resolvedByAccountId], references: [id], onDelete: Restrict)
+  resolvedByPersonId  String?
+  resolvedByPerson    Person?          @relation("RiskRecordResolvedByPerson", fields: [resolvedByPersonId], references: [id], onDelete: Restrict)
+  resolvedByName      String?          @db.VarChar(200)
+  resolveNote         String?          @db.VarChar(500)
+  resolvedAt          DateTime?        @db.Timestamptz(6)
+  createdAt           DateTime         @default(now()) @db.Timestamptz(6)
+  updatedAt           DateTime         @updatedAt @db.Timestamptz(6)
+
+  @@index([projectId, status, createdAt, id])
+  @@index([taskId, status, createdAt, id])
+  @@index([createdByAccountId])
+  @@index([createdByPersonId])
+  @@index([resolvedByAccountId])
+  @@index([resolvedByPersonId])
+}
+
+model Comment {
+  id                 String    @id @default(uuid())
+  projectId          String?
+  project            Project?  @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  taskId             String?
+  task               Task?     @relation(fields: [taskId], references: [id], onDelete: Restrict)
+  authorAccountId    String
+  authorAccount      Account   @relation("CommentAuthorAccount", fields: [authorAccountId], references: [id], onDelete: Restrict)
+  authorPersonId     String?
+  authorPerson       Person?   @relation("CommentAuthorPerson", fields: [authorPersonId], references: [id], onDelete: Restrict)
+  authorName         String    @db.VarChar(200)
+  content            String    @db.VarChar(1000)
+  deletedAt          DateTime? @db.Timestamptz(6)
+  deletedByAccountId String?
+  deletedByAccount   Account?  @relation("CommentDeletedByAccount", fields: [deletedByAccountId], references: [id], onDelete: Restrict)
+  deletedByPersonId  String?
+  deletedByPerson    Person?   @relation("CommentDeletedByPerson", fields: [deletedByPersonId], references: [id], onDelete: Restrict)
+  deletedByName      String?   @db.VarChar(200)
+  createdAt          DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime  @updatedAt @db.Timestamptz(6)
+
+  @@index([projectId, deletedAt, createdAt, id])
+  @@index([taskId, deletedAt, createdAt, id])
+  @@index([authorAccountId])
+  @@index([authorPersonId])
+  @@index([deletedByAccountId])
+  @@index([deletedByPersonId])
 }
 
 model ProjectMember {

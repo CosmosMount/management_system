@@ -25,6 +25,15 @@ export async function createDomainAuditEventTx(
   tx: Prisma.TransactionClient,
   input: ProjectManagementAuditInput,
 ) {
+  const projectId =
+    input.projectId === undefined && input.taskId
+      ? (
+          await tx.task.findUnique({
+            where: { id: input.taskId },
+            select: { projectId: true },
+          })
+        )?.projectId ?? null
+      : input.projectId ?? null;
   return tx.domainAuditEvent.create({
     data: {
       actorAccountId: input.actorAccountId ?? null,
@@ -33,7 +42,7 @@ export async function createDomainAuditEventTx(
       entityType: input.entityType,
       entityId: input.entityId,
       taskId: input.taskId ?? null,
-      projectId: input.projectId ?? null,
+      projectId,
       before: sanitizeAuditJson(input.before),
       after: sanitizeAuditJson(input.after),
       reason: input.reason ?? "",

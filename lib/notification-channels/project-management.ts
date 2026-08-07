@@ -156,6 +156,7 @@ function buildProjectManagementCard(
           tag: "lark_md",
           content: [
             `**操作人**：${payload.actorName || "系统"}`,
+            payload.projectName ? `**Project**：${truncate(payload.projectName, 80)}` : null,
             payload.taskTitle ? `**Task**：${truncate(payload.taskTitle, 80)}` : null,
             `**事件**：${truncate(payload.summary || payload.title, 180)}`,
             `**对象**：${payload.entityType}`,
@@ -202,7 +203,10 @@ function contextText(context: Record<string, unknown>) {
   return entries
     .map(
       ([key, value]) =>
-        `**${contextLabel(key)}**：${truncate(contextValue(key, value), 80)}`,
+        `**${contextLabel(key)}**：${truncate(
+          contextValue(key, value),
+          key === "content" ? 2_000 : key === "resolveNote" ? 500 : 80,
+        )}`,
     )
     .join("\n");
 }
@@ -254,6 +258,8 @@ function contextLabel(key: string) {
     decision: "审批结果",
     comment: "审批意见",
     role: "成员角色",
+    content: "内容",
+    resolveNote: "解决说明",
   };
   return labels[key] ?? key;
 }

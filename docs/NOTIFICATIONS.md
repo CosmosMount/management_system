@@ -28,7 +28,7 @@
 
 - `payloadVersion=1`
 - `purpose=notification|approval_request`
-- `category=TASK|MILESTONE|REVIEW|REVISION|WORK_SEGMENT|ACCOUNT_SECURITY`
+- `category=PROJECT|TASK|MILESTONE|REVIEW|REVISION|WORK_SEGMENT|ACCOUNT_SECURITY`
 - `title`、`summary`、`actorName`
 - `entityType/entityId`、可选 `taskId/taskTitle`、`linkPath`
 - `recipientOpenIds` 和 `mandatory`
@@ -57,6 +57,11 @@ Task 生命周期服务和 Segment 服务会在同一业务事务中写站内通
 | Project 提交/重提立项 | `project_establishment_submitted` | 审批请求 | 两类全局管理员 |
 | Project 立项结果 | `project_establishment_result` | 普通通知 | 申请人、提交人和 Project 成员 |
 | Project 结束/删除 | `project_completed` / `project_deleted` | 普通通知 | 申请人和 Project 成员 |
+| Project/Task 提出风险 | `risk_created` | 非 mandatory 普通通知 | 直接目标负责人、参与人和两类全局管理员，排除操作人 |
+| Project/Task 解决风险 | `risk_resolved` | 非 mandatory 普通通知 | 直接目标负责人、参与人和两类全局管理员，排除操作人 |
+| Project/Task 发布评论 | `comment_created` | 非 mandatory 普通通知 | 直接目标负责人、参与人和两类全局管理员，排除操作人 |
+
+风险提出、风险解决和评论发布由 collaboration service 在业务记录与领域审计的同一事务内创建站内通知和 outbox。Project 事件使用 `PROJECT` 偏好，Task 事件使用 `TASK` 偏好；FEISHU 关闭只过滤普通飞书候选，站内通知仍保留。Task 事件不会额外通知仅属于其 Project、但不是 Task 成员的人员。停用 Person 和没有 Account 的成员不会成为收件人，账号按 `accountId` 去重，飞书 `openId` 只在投递边界解析。评论软删除仅写 `pm.project.comment.delete` / `pm.task.comment.delete` 审计并进入近期动态，不创建站内通知或 outbox。
 
 Revision 创建和被驳回后的修改都会直接产生 `revision_pending_review`。事件键包含 `revisionId + reviewRound`；驳回结果键也包含对应 round，因此每轮送审和结果各自 exactly once，不会被上一轮幂等记录吞掉。Revision 不再产生独立 submit 通知或审计事件。
 

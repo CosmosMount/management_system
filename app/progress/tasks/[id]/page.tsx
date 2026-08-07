@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { PageCommandBar } from "@/components/project-management/shell/page-command-bar";
 import { TaskWorkbench } from "@/components/project-management/task-workbench";
+import type { CollaborationInitialData } from "@/components/project-management/collaboration-panels";
 import { toProjectManagementServiceError } from "@/lib/project-management/application/errors";
 import {
   listTagOptions,
@@ -11,6 +12,13 @@ import {
 } from "@/lib/project-management/queries/option-queries";
 import { getTaskLifecycleViews } from "@/lib/project-management/queries/task-lifecycle-queries";
 import { getTaskWorkspace } from "@/lib/project-management/queries/task-queries";
+import {
+  getActivityVersion,
+  getCollaborationCapabilities,
+  getCommentPage,
+  getRecentActivityPage,
+  getRiskPage,
+} from "@/lib/project-management/queries/collaboration-queries";
 import { listActiveProjectOptions } from "@/lib/project-management/queries/project-queries";
 import { getProgressActorOrRedirect } from "../../_auth";
 
@@ -34,6 +42,12 @@ export default async function ProgressTaskDetailPage({
     currentRelatedTaskOptions,
     tagPage,
     projectOptions,
+    capabilities,
+    directActiveRisks,
+    directResolvedRisks,
+    comments,
+    activity,
+    activityVersion,
   ] =
     await Promise.all([
       getTaskLifecycleViews({
@@ -62,7 +76,23 @@ export default async function ProgressTaskDetailPage({
       }),
       listTagOptions({ actor, input: { limit: 50 } }),
       listActiveProjectOptions(workspace.task.projectId),
+      getCollaborationCapabilities(actor, { targetType: "TASK", targetId: id }),
+      getRiskPage(actor, { targetType: "TASK", targetId: id, source: "DIRECT", status: "ACTIVE", limit: 20 }),
+      getRiskPage(actor, { targetType: "TASK", targetId: id, source: "DIRECT", status: "RESOLVED", limit: 20 }),
+      getCommentPage(actor, { targetType: "TASK", targetId: id, limit: 20 }),
+      getRecentActivityPage(actor, { targetType: "TASK", targetId: id, category: "ALL", limit: 20 }),
+      getActivityVersion(actor, { targetType: "TASK", targetId: id }),
     ]);
+  const collaboration: CollaborationInitialData = {
+    targetType: "TASK",
+    targetId: id,
+    capabilities,
+    directActiveRisks,
+    directResolvedRisks,
+    comments,
+    activity,
+    activityVersion: activityVersion.token,
+  };
 
   return (
     <>
@@ -78,6 +108,7 @@ export default async function ProgressTaskDetailPage({
           taskOptions={mergeOptions(currentRelatedTaskOptions, taskPage.items)}
           tagOptions={tagPage.items}
           projectOptions={projectOptions}
+          collaboration={collaboration}
         />
       </div>
     </>
