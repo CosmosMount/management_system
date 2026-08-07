@@ -31,6 +31,7 @@ type CommonProps<TOption extends PickerOption> = {
 };
 
 const NULL_OPTION_VALUE_PREFIX = "__entity_picker_null_option__";
+const EMPTY_INITIAL_OPTIONS: [] = [];
 
 export type AsyncComboboxProps<TOption extends PickerOption> = CommonProps<TOption> & {
   value: string | null;
@@ -50,7 +51,7 @@ export type AsyncMultiComboboxProps<TOption extends PickerOption> =
 export function AsyncCombobox<TOption extends PickerOption>({
   value,
   onValueChange,
-  initialOptions = [],
+  initialOptions = EMPTY_INITIAL_OPTIONS,
   loadOptions,
   resolveOptions,
   scopeKey,
@@ -230,7 +231,7 @@ export function AsyncCombobox<TOption extends PickerOption>({
 export function AsyncMultiCombobox<TOption extends PickerOption>({
   value,
   onValueChange,
-  initialOptions = [],
+  initialOptions = EMPTY_INITIAL_OPTIONS,
   loadOptions,
   resolveOptions,
   scopeKey,
@@ -464,10 +465,16 @@ function PickerPopup<TOption extends PickerOption>({
   return (
     <Combobox.Portal>
       <Combobox.Positioner
+        data-testid="entity-picker-positioner"
         className="z-[100] max-w-[calc(100vw-1rem)] outline-none"
+        side="bottom"
         sideOffset={4}
         align="start"
-        collisionAvoidance={{ side: "flip", align: "shift" }}
+        collisionAvoidance={{
+          side: "flip",
+          align: "shift",
+          fallbackAxisSide: "none",
+        }}
       >
         <Combobox.Popup className="max-h-[min(var(--available-height),22rem)] min-w-[min(var(--anchor-width),calc(100vw-1rem))] max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-lg outline-none data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0">
           {state.loading ? (

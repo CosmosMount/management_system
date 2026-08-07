@@ -142,7 +142,8 @@ test.describe("project management P4/P6 UI integration", () => {
       name: `移除 ${creator.person.displayName} 负责人`,
     });
     await expect(lastOwnerButton).toBeDisabled();
-    await page.getByLabel("搜索负责人", { exact: true }).fill(coOwner.person.displayName);
+    const ownerPicker = page.getByLabel("搜索负责人", { exact: true });
+    await ownerPicker.fill(coOwner.person.displayName);
     await expect(
       page.getByRole("option", { name: new RegExp(coOwner.person.displayName) }),
     ).toBeVisible();
@@ -150,6 +151,16 @@ test.describe("project management P4/P6 UI integration", () => {
       .getByRole("option", { name: new RegExp(coOwner.person.displayName) })
       .click();
     await expect(lastOwnerButton).toBeEnabled();
+
+    const originalViewport = page.viewportSize();
+    if (!originalViewport) throw new Error("人员选择器回归缺少 viewport");
+    await page.setViewportSize({ width: originalViewport.width, height: 529 });
+    await ownerPicker.scrollIntoViewIfNeeded();
+    await ownerPicker.click();
+    const pickerPositioner = page.getByTestId("entity-picker-positioner");
+    await expect(pickerPositioner).toHaveAttribute("data-side", /^(top|bottom)$/);
+    await page.keyboard.press("Escape");
+    await page.setViewportSize(originalViewport);
 
     await expect(page.getByTestId("task-composer-milestone-count")).toHaveText("0/200");
     await expect(page.getByTestId("task-plan-node-navigator").getByRole("button", { name: /Start/ })).toBeVisible();
