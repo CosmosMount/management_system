@@ -7,6 +7,7 @@ export const PROJECT_MANAGEMENT_NOTIFICATION_PAYLOAD_VERSION = 1;
 const PROJECT_MANAGEMENT_NOTIFICATION_KINDS = [
   "task_assigned",
   "task_activated",
+  "task_deleted",
   "milestone_due",
   "milestone_overdue",
   "milestone_review_submitted",

@@ -25,6 +25,7 @@ export const PROJECT_MANAGEMENT_ACTIONS = [
   "task.update_metadata",
   "task.manage_members",
   "task.activate",
+  "task.delete",
   "task.archive",
   "plan.view_history",
   "revision.create",
@@ -277,7 +278,11 @@ function authorizeTask(
     return deny("task_edit_denied");
   }
 
-  if (action === "task.manage_members" || action === "task.activate") {
+  if (
+    action === "task.manage_members" ||
+    action === "task.activate" ||
+    action === "task.delete"
+  ) {
     if (hasTaskRole(actor, resource, ["OWNER"])) return allow("task_owner");
     return deny("task_owner_required");
   }

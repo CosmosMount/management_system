@@ -516,7 +516,8 @@ pm2 start npm --name procurement-cron -- run cron
 - Revision 是可选择时间的非分段标记，创建即待审批，没有 Draft/Submit；驳回后修改即重新送审。每个 Task 只允许一条 Milestone/Revision 待审批，待审批期间不能再次提交 Milestone、发起或重新送审 Revision，也不能确认 Terminal。Milestone 与 Revision 只由统一超级管理员或项目管理员决定，允许管理员自审；界面不再提供流程策略、Reviewer 或自审开关。
 - `/progress` 是“我的工作”驾驶舱，提供指标、个人时间预览、行动待办、Active Task 表和折叠通知。
 - `/progress/tasks/new` 提供新建 Composer；尚未激活的 Task 通过工作台右上角“编辑 Task”进入 `/progress/tasks/[id]/edit`，使用同一 Composer 一次保存基本信息、Tag、关联 Task、成员和完整计划。Participant 可编辑内容与计划，但成员区只读；保存成功后返回工作台。
-- `/progress/tasks` 与 `/progress/tasks/[id]` 提供 Task 列表和 Task 工作台。人员投入时间线位于工作台 Tab 上方，并在“计划与资源”“概览”“修订与历史”“验收”“审计”之间切换时保持显示和交互状态。DRAFT 工作台的“概览”和“计划与资源”均为只读展示；ACTIVE 的既有元数据、Tag 和成员编辑保持不变。发起 Revision 进入 `/progress/tasks/[id]/revisions/new`，被驳回候选通过 `/progress/tasks/[id]/revisions/[revisionId]/edit` 修改；两者与 Task 创建/草稿编辑共用 Composer 的 TimeCanvas、节点表、Inspector、撤销/重做、校验和本地恢复，保存后直接返回“修订与历史”。工作台 Revision Tab 只保留历史、审批、取消和 Diff，不再内联编辑候选计划。
+- `/progress/tasks` 与 `/progress/tasks/[id]` 提供 Task 列表和 Task 工作台。人员投入时间线位于工作台 Tab 上方，并在“计划与资源”“概览”“修订与历史”“验收”“审计”之间切换时保持显示和交互状态。DRAFT 工作台的“概览”和“计划与资源”均为只读展示；Task Owner 或全局管理员可软删除未激活草稿，已激活及终态 Task 不提供该入口。ACTIVE 的既有元数据、Tag 和成员编辑保持不变。发起 Revision 进入 `/progress/tasks/[id]/revisions/new`，被驳回候选通过 `/progress/tasks/[id]/revisions/[revisionId]/edit` 修改；两者与 Task 创建/草稿编辑共用 Composer 的 TimeCanvas、节点表、Inspector、撤销/重做、校验和本地恢复，保存后直接返回“修订与历史”。工作台 Revision Tab 只保留历史、审批、取消和 Diff，不再内联编辑候选计划。
+- DRAFT Task 只能在计划开始时间已到达后激活；校验使用事务内的服务端时间，不追溯检查已经激活或结束的历史 Task。
 - `/progress/resources` 提供人员计划时间轴，可执行 Planned Segment 新增、确认、部分确认、拆分、合并、顺延和取消。
 - `/progress/approvals` 汇总投入确认、Milestone Review、Revision 与 Termination；`/progress/tags` 管理 Tag。
 - `/progress/notifications` 提供站内通知中心和分类飞书偏好；站内通知始终保留，强制事件不受普通关闭偏好影响。

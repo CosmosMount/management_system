@@ -45,6 +45,7 @@ Task 生命周期服务和 Segment 服务会在同一业务事务中写站内通
 |------|-------------|------|--------|
 | Task 草稿成员加入 | `task_assigned` | 普通通知 | 有效 OWNER/PARTICIPANT |
 | Task 激活 | `task_activated` | 普通通知 | 有效 OWNER/PARTICIPANT |
+| Task 草稿删除 | `task_deleted` | 强制普通通知 | 有效 OWNER/PARTICIPANT |
 | Milestone 提交验收 | `milestone_review_submitted` | 审批请求 | 所有活跃全局管理员，按账号去重 |
 | Milestone 验收结果 | `milestone_review_result` | 普通通知 | 提交人 + 所有 OWNER |
 | Revision 待审批 | `revision_pending_review` | 审批请求 | 所有活跃全局管理员，按账号去重 |

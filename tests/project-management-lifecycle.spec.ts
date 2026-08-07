@@ -9,6 +9,7 @@ import {
   confirmTermination,
   createRevision,
   createTaskDraft,
+  deleteTaskDraft,
   rejectRevision,
   reviewMilestone,
   submitMilestoneForReview,
@@ -441,6 +442,161 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     ]);
     expect(attempts.filter((entry) => entry.status === "fulfilled")).toHaveLength(1);
     expect(attempts.filter((entry) => entry.status === "rejected")).toHaveLength(1);
+  });
+
+  test("Task activation rejects a future planned start without side effects", async () => {
+    const fixture = await createDraftFixture(0);
+    const plannedStartAt = new Date(Date.now() + 60 * 60 * 1_000);
+    const plannedEndAt = new Date(plannedStartAt.getTime() + 60 * 60 * 1_000);
+    const termination = await prisma.terminationNode.findFirstOrThrow({
+      where: { node: { taskId: fixture.taskId } },
+      select: { id: true },
+    });
+    await prisma.$transaction([
+      prisma.taskPlanVersion.update({
+        where: { id: fixture.currentPlanVersionId },
+        data: { plannedStartAt },
+      }),
+      prisma.terminationNode.update({
+        where: { id: termination.id },
+        data: { plannedAt: plannedEndAt },
+      }),
+    ]);
+
+    const rejected = await captureServiceError(
+      activateTask(actor(fixture.owner), {
+        taskId: fixture.taskId,
+        expectedLockVersion: 0,
+      }),
+    );
+    expect(rejected).toMatchObject({
+      code: "STATE_CONFLICT",
+      message: "计划开始时间尚未到达，不能激活 Task",
+    });
+    await expect(
+      prisma.task.findUniqueOrThrow({
+        where: { id: fixture.taskId },
+        select: {
+          status: true,
+          lockVersion: true,
+          startedAt: true,
+          activeMilestoneNodeId: true,
+          currentPlanVersion: { select: { activatedAt: true } },
+          nodes: { select: { status: true } },
+        },
+      }),
+    ).resolves.toEqual({
+      status: "DRAFT",
+      lockVersion: 0,
+      startedAt: null,
+      activeMilestoneNodeId: null,
+      currentPlanVersion: { activatedAt: null },
+      nodes: [{ status: "PENDING" }],
+    });
+    await expect(
+      prisma.domainAuditEvent.count({
+        where: { taskId: fixture.taskId, action: "pm.task.activate" },
+      }),
+    ).resolves.toBe(0);
+    await expect(
+      prisma.inAppNotification.count({
+        where: { eventKey: { startsWith: `pm:task:activated:${fixture.taskId}:` } },
+      }),
+    ).resolves.toBe(0);
+    await expect(
+      prisma.notificationOutbox.count({
+        where: { eventKey: { startsWith: `pm:task:activated:${fixture.taskId}:` } },
+      }),
+    ).resolves.toBe(0);
+  });
+
+  test("only an Owner or global administrator can soft-delete an unactivated Task draft", async () => {
+    const fixture = await createDraftFixture();
+
+    await expectServiceError(
+      deleteTaskDraft(actor(fixture.member), {
+        taskId: fixture.taskId,
+        expectedLockVersion: 0,
+      }),
+      "FORBIDDEN",
+    );
+    await expectServiceError(
+      deleteTaskDraft(actor(fixture.owner), {
+        taskId: fixture.taskId,
+        expectedLockVersion: 1,
+      }),
+      "STALE_TASK",
+    );
+    await expect(
+      prisma.task.findUniqueOrThrow({
+        where: { id: fixture.taskId },
+        select: { deletedAt: true, lockVersion: true },
+      }),
+    ).resolves.toEqual({ deletedAt: null, lockVersion: 0 });
+    await expect(
+      prisma.domainAuditEvent.count({
+        where: { taskId: fixture.taskId, action: "pm.task.draft.delete" },
+      }),
+    ).resolves.toBe(0);
+
+    const deleted = await deleteTaskDraft(actor(fixture.owner), {
+      taskId: fixture.taskId,
+      expectedLockVersion: 0,
+    });
+    expect(deleted).toMatchObject({ taskId: fixture.taskId, lockVersion: 1 });
+    expect(Number.isNaN(Date.parse(deleted.deletedAt))).toBe(false);
+    await expect(
+      prisma.task.findUniqueOrThrow({
+        where: { id: fixture.taskId },
+        select: { deletedAt: true, lockVersion: true },
+      }),
+    ).resolves.toEqual({
+      deletedAt: new Date(deleted.deletedAt),
+      lockVersion: 1,
+    });
+    await expectServiceError(
+      getTaskWorkspace({ actor: actor(fixture.owner), taskId: fixture.taskId }),
+      "NOT_FOUND",
+    );
+    await expect(
+      prisma.domainAuditEvent.count({
+        where: { taskId: fixture.taskId, action: "pm.task.draft.delete" },
+      }),
+    ).resolves.toBe(1);
+    const deletedPayload = await expectProjectManagementOutbox(
+      `pm:task:deleted:${fixture.taskId}:1:feishu`,
+      {
+        type: "task_deleted",
+        botKind: "notification",
+        purpose: "notification",
+      },
+    );
+    expect(deletedPayload.recipientOpenIds).toEqual(
+      expect.arrayContaining([
+        fixture.owner.openId,
+        fixture.member.openId,
+        fixture.reviewer.openId,
+      ]),
+    );
+
+    const activeFixture = await createDraftFixture();
+    const activated = await activateTask(actor(activeFixture.owner), {
+      taskId: activeFixture.taskId,
+      expectedLockVersion: 0,
+    });
+    await expectServiceError(
+      deleteTaskDraft(actor(activeFixture.admin), {
+        taskId: activeFixture.taskId,
+        expectedLockVersion: activated.lockVersion,
+      }),
+      "STATE_CONFLICT",
+    );
+    await expect(
+      prisma.task.findUniqueOrThrow({
+        where: { id: activeFixture.taskId },
+        select: { status: true, deletedAt: true },
+      }),
+    ).resolves.toEqual({ status: "ACTIVE", deletedAt: null });
   });
 
   test("Task can activate directly into a named Terminal without Milestones", async () => {

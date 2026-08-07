@@ -167,6 +167,14 @@ export const activateTaskInputSchema = z.object({
     .min(0, "锁版本不正确"),
 });
 
+export const deleteTaskDraftInputSchema = z.object({
+  taskId: idSchema,
+  expectedLockVersion: z
+    .number({ message: "锁版本不正确" })
+    .int("锁版本不正确")
+    .min(0, "锁版本不正确"),
+});
+
 export const createRevisionInputSchema = z.object({
   taskId: idSchema,
   basePlanVersionId: idSchema,
@@ -326,6 +334,7 @@ export type CreateTaskDraftInput = z.infer<
   typeof createTaskDraftInputSchema
 >;
 export type ActivateTaskInput = z.infer<typeof activateTaskInputSchema>;
+export type DeleteTaskDraftInput = z.infer<typeof deleteTaskDraftInputSchema>;
 export type CreateRevisionInput = z.infer<typeof createRevisionInputSchema>;
 export type ReviseRejectedRevisionInput = z.infer<
   typeof reviseRejectedRevisionInputSchema

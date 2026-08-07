@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   activateTask,
+  deleteTaskDraft,
   updateActiveTask,
 } from "@/app/actions/project-management/tasks";
 import {
@@ -303,6 +304,33 @@ export function TaskWorkbench({
                 }}
               >
                 激活 Task
+              </Button>
+            )}
+            {task.status === "DRAFT" && workspace.permissions.canDeleteDraft && (
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={busy}
+                onClick={() => {
+                  if (
+                    !window.confirm(
+                      "确定删除这个 Task 草稿？\n\n删除后将从 Task 和 Project 列表中移除，审计记录仍会保留。",
+                    )
+                  ) {
+                    return;
+                  }
+                  void runAction(
+                    () =>
+                      deleteTaskDraft({
+                        taskId: task.id,
+                        expectedLockVersion: lockVersion,
+                      }),
+                    "Task 草稿已删除。",
+                    () => router.replace(routes.progress.tasks),
+                  );
+                }}
+              >
+                删除草稿
               </Button>
             )}
             {canEditActive && (

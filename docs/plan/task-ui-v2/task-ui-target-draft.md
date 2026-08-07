@@ -216,7 +216,7 @@ Task 列表、资源计划、个人时间线、待办和通知中心不在本轮
 
 按钮必须按服务端 capability 和 Task 状态显示或禁用：
 
-- DRAFT：编辑 Task、激活 Task
+- DRAFT：编辑 Task、激活 Task、删除草稿
 - ACTIVE：发起 Revision、修改 Task 基本信息、结束 Task
 - 存在待审批：保留门禁提示，并禁用会与其竞争的 Revision、验收提交和结束操作
 - COMPLETED / FAILED / CANCELLED / TIMEOUT / ARCHIVED：只读，不展示可写入口

@@ -2030,6 +2030,65 @@ test.describe("project management P4/P6 UI integration", () => {
     await expectHealthyPage(page);
   });
 
+  test("Task Owner can delete an unactivated draft from the workbench", async ({
+    context,
+    page,
+    baseURL,
+  }) => {
+    const fixture = await createDraftWorkbenchFixture();
+
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.reviewer.openId,
+      name: fixture.reviewer.person.displayName,
+    });
+    await page.goto(`/progress/tasks/${fixture.taskId}`);
+    await expect(page.getByRole("button", { name: "删除草稿" })).toHaveCount(0);
+
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.owner.openId,
+      name: fixture.owner.person.displayName,
+    });
+    await page.goto(`/progress/tasks/${fixture.taskId}`);
+    const deleteButton = page.getByRole("button", { name: "删除草稿" });
+    await expect(deleteButton).toBeVisible();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
+      ),
+    ).toBe(true);
+    page.once("dialog", async (dialog) => {
+      expect(dialog.message()).toContain("确定删除这个 Task 草稿");
+      await dialog.accept();
+    });
+    await deleteButton.click();
+    await expect(page).toHaveURL("/progress/tasks");
+    await expect
+      .poll(() =>
+        prisma.task.findUnique({
+          where: { id: fixture.taskId },
+          select: { deletedAt: true, lockVersion: true },
+        }),
+      )
+      .toMatchObject({ deletedAt: expect.any(Date), lockVersion: 1 });
+    await expect(
+      prisma.domainAuditEvent.count({
+        where: { taskId: fixture.taskId, action: "pm.task.draft.delete" },
+      }),
+    ).resolves.toBe(1);
+    await expect(
+      prisma.notificationOutbox.count({
+        where: {
+          eventKey: `pm:task:deleted:${fixture.taskId}:1:feishu`,
+          type: "task_deleted",
+          botKind: "notification",
+        },
+      }),
+    ).resolves.toBe(1);
+    const deletedResponse = await page.goto(`/progress/tasks/${fixture.taskId}`);
+    expect(deletedResponse?.status()).toBe(404);
+    await expectHealthyPage(page);
+  });
+
   test("Draft editor omits unchanged members after a live ownership downgrade", async ({
     context,
     page,

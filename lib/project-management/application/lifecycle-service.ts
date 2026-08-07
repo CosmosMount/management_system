@@ -33,6 +33,7 @@ import {
   confirmTerminationInputSchema,
   createTaskDraftInputSchema,
   createRevisionInputSchema,
+  deleteTaskDraftInputSchema,
   rejectRevisionInputSchema,
   revisionDecisionInputSchema,
   reviseRejectedRevisionInputSchema,
@@ -109,6 +110,12 @@ type LifecycleTaskResult = {
 
 export type CreateTaskDraftResult = LifecycleTaskResult & {
   created: boolean;
+};
+
+export type DeleteTaskDraftResult = {
+  taskId: string;
+  lockVersion: number;
+  deletedAt: string;
 };
 
 export type RevisionMutationResult = {
@@ -346,6 +353,13 @@ export async function activateTask(
 
     const currentPlan = await loadCurrentPlanEntriesTx(tx, task);
     assertAuthoritativePlanValid(currentPlan);
+    const now = new Date();
+    if (!currentPlan.plannedStartAt) {
+      throw stateConflictError("计划缺少开始时间，不能激活 Task");
+    }
+    if (currentPlan.plannedStartAt.getTime() > now.getTime()) {
+      throw stateConflictError("计划开始时间尚未到达，不能激活 Task");
+    }
     if (task.members.every((member) => member.role !== "OWNER")) {
       throw validationError("至少需要一名负责人", {
         members: ["至少需要一名负责人"],
@@ -360,7 +374,6 @@ export async function activateTask(
     const firstActiveNode = firstMilestone ?? termination;
     if (!firstActiveNode) throw stateConflictError("计划缺少结束节点");
 
-    const now = new Date();
     await tx.taskNode.update({
       where: { id: firstActiveNode.nodeId },
       data: { status: "ACTIVE" },
@@ -433,6 +446,79 @@ export async function activateTask(
       status: updated.status,
       lockVersion: updated.lockVersion,
       activeMilestoneNodeId: updated.activeMilestoneNodeId,
+    };
+  });
+}
+
+export async function deleteTaskDraft(
+  actor: ProjectManagementActor,
+  input: unknown,
+): Promise<DeleteTaskDraftResult> {
+  const parsed = deleteTaskDraftInputSchema.parse(input);
+
+  return prisma.$transaction(async (tx) => {
+    await lockTaskTx(tx, parsed.taskId);
+    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
+    const task = await loadTaskForAuthorizationTx(tx, parsed.taskId);
+    assertTaskVisible(refreshedActor, task);
+    assertAuthorized({
+      actor: refreshedActor,
+      action: "task.delete",
+      resource: taskResource(task),
+    });
+
+    if (task.status !== "DRAFT") {
+      throw stateConflictError("只有未激活的草稿 Task 可以删除");
+    }
+    if (task.lockVersion !== parsed.expectedLockVersion) {
+      throw staleTaskError(task);
+    }
+
+    const deletedAt = new Date();
+    const updated = await tx.task.update({
+      where: { id: task.id },
+      data: {
+        deletedAt,
+        lockVersion: { increment: 1 },
+      },
+      select: { lockVersion: true },
+    });
+    await createDomainAuditEventTx(tx, {
+      actorAccountId: refreshedActor.accountId,
+      actorPersonId: refreshedActor.personId,
+      action: "pm.task.draft.delete",
+      entityType: "Task",
+      entityId: task.id,
+      taskId: task.id,
+      before: jsonValue({
+        status: task.status,
+        deletedAt: null,
+        lockVersion: task.lockVersion,
+      }),
+      after: jsonValue({
+        status: task.status,
+        deletedAt: deletedAt.toISOString(),
+        lockVersion: updated.lockVersion,
+      }),
+      reason: "删除未激活的 Task 草稿",
+    });
+    await notifyTaskMembersTx(tx, {
+      actor: refreshedActor,
+      task,
+      kind: "task_deleted",
+      category: "TASK",
+      eventKey: `pm:task:deleted:${task.id}:${updated.lockVersion}`,
+      title: "Task 草稿已删除",
+      summary: `Task 草稿「${task.title}」已删除`,
+      entityType: "Task",
+      entityId: task.id,
+      mandatory: true,
+    });
+
+    return {
+      taskId: task.id,
+      lockVersion: updated.lockVersion,
+      deletedAt: deletedAt.toISOString(),
     };
   });
 }

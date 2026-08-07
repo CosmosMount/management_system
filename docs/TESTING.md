@@ -263,13 +263,14 @@ npm run pm:identity-backfill
 
 ### DRAFT Task 统一编辑专项测试
 
-1. Owner 从 DRAFT 工作台右上角进入 `/progress/tasks/[id]/edit`；按钮顺序为“编辑 Task → 激活 Task → 复制链接”，工作台不再出现“编辑 Draft 计划”，DRAFT 的概览、Tag、成员和计划均无保存控件。激活后编辑按钮消失，直达编辑 URL 重定向工作台；不可查看或无 metadata 更新权的用户直达 URL 得到脱敏 404。
-2. 编辑页在 Desktop 与 Pixel 5 均复用纵向 Composer，并回填元数据、当前 Tag、关联 Task、全部现有成员（包括停用人员）、Start、既有 Milestone/Terminal 及节点 ID。负责人和参与人员使用与创建页相同的分组头像胶囊和独立搜索框，选择人员即加入对应分组。迁移后异常残留的 `LEAD/MEMBER/REVIEWER/VIEWER` 四种历史角色必须逐行回显并保留，存在历史角色时成员区整体只读，但仍可保存其他内容。当前归档 Tag 可见且可移除，新选项只含未归档 Tag；关联选择器排除当前 Task。
-3. Owner 一次修改基本信息、Tag、关联 Task、成员、既有节点、新 Milestone 和 Terminal 后保存；数据库全部更新、既有 nodeId 保留、新节点产生稳定映射、`snapshotHash` 更新、Task `lockVersion` 仅增加 1，并只产生一条 `pm.task.draft.update` 审计。失败时任一区域都不得部分提交，且不得产生站内通知、outbox 或真实飞书调用。
-4. Participant 可进入编辑页并保存元数据与计划；成员区只读、没有搜索/添加/移除/角色控件，请求省略 `members`，数据库成员保持不变。直接伪造 `members` 或移除有关联 Segment 的成员必须被服务端拒绝并完整回滚；Segment 不再关联节点，因此删除草稿节点不受 Segment 阻挡。
-5. 未修改时桌面和移动主保存按钮均禁用；选择节点不应被视为内容修改。客户端和服务端字段错误定位相应区域，无法映射的业务错误显示中文提示。保存成功清理该 Task 编辑草稿并返回新版 Task 工作台，展示权威最新数据。
-6. 编辑草稿按环境、账号和 Task ID 隔离；刷新仅在 Task、Plan Version 和基础 lockVersion 全匹配时允许恢复。失去成员管理权或服务端出现历史角色后，恢复必须以服务端标准成员覆盖本地成员改动，同时保留其他可编辑内容。服务端版本变化后旧草稿不能恢复或覆盖，只能导出或“放弃并加载最新版本”；`STALE_TASK` 保留当前输入，不隐式刷新或合并。
-7. 领域测试覆盖并发相同 lockVersion 只有一次成功、错误 Plan Version、非初始 v1 Current Plan、非 DRAFT、权限拒绝、Tag/关联/成员/计划晚失败回滚和完整审计。UI 在 Desktop/Pixel 5 另覆盖长 Task、节点、成员、Tag、长错误、零/200 Milestone 和窄屏无横向溢出、Next.js overlay 或未捕获浏览器错误。
+1. Owner 从 DRAFT 工作台右上角进入 `/progress/tasks/[id]/edit`；按钮顺序为“编辑 Task → 激活 Task → 删除草稿 → 复制链接”，工作台不再出现“编辑 Draft 计划”，DRAFT 的概览、Tag、成员和计划均无保存控件。删除草稿只对 Owner/全局管理员显示，需二次确认并软删除 Task；激活后编辑与删除草稿按钮都消失，直达编辑 URL 重定向工作台；不可查看或无 metadata 更新权的用户直达 URL 得到脱敏 404。
+2. DRAFT 激活使用事务内服务端时间复核 Current Plan 的 `plannedStartAt`；开始时间在未来时必须拒绝且 Task、节点、审计、通知和 outbox 零写入，开始时间已到达时保持既有激活流程。已经离开 DRAFT 的历史 Task 不追溯处理。
+3. 编辑页在 Desktop 与 Pixel 5 均复用纵向 Composer，并回填元数据、当前 Tag、关联 Task、全部现有成员（包括停用人员）、Start、既有 Milestone/Terminal 及节点 ID。负责人和参与人员使用与创建页相同的分组头像胶囊和独立搜索框，选择人员即加入对应分组。迁移后异常残留的 `LEAD/MEMBER/REVIEWER/VIEWER` 四种历史角色必须逐行回显并保留，存在历史角色时成员区整体只读，但仍可保存其他内容。当前归档 Tag 可见且可移除，新选项只含未归档 Tag；关联选择器排除当前 Task。
+4. Owner 一次修改基本信息、Tag、关联 Task、成员、既有节点、新 Milestone 和 Terminal 后保存；数据库全部更新、既有 nodeId 保留、新节点产生稳定映射、`snapshotHash` 更新、Task `lockVersion` 仅增加 1，并只产生一条 `pm.task.draft.update` 审计。失败时任一区域都不得部分提交，且不得产生站内通知、outbox 或真实飞书调用。
+5. Participant 可进入编辑页并保存元数据与计划；成员区只读、没有搜索/添加/移除/角色控件，请求省略 `members`，数据库成员保持不变。直接伪造 `members` 或移除有关联 Segment 的成员必须被服务端拒绝并完整回滚；Segment 不再关联节点，因此删除草稿节点不受 Segment 阻挡。
+6. 未修改时桌面和移动主保存按钮均禁用；选择节点不应被视为内容修改。客户端和服务端字段错误定位相应区域，无法映射的业务错误显示中文提示。保存成功清理该 Task 编辑草稿并返回新版 Task 工作台，展示权威最新数据。
+7. 编辑草稿按环境、账号和 Task ID 隔离；刷新仅在 Task、Plan Version 和基础 lockVersion 全匹配时允许恢复。失去成员管理权或服务端出现历史角色后，恢复必须以服务端标准成员覆盖本地成员改动，同时保留其他可编辑内容。服务端版本变化后旧草稿不能恢复或覆盖，只能导出或“放弃并加载最新版本”；`STALE_TASK` 保留当前输入，不隐式刷新或合并。
+8. 领域测试覆盖并发相同 lockVersion 只有一次成功、错误 Plan Version、非初始 v1 Current Plan、非 DRAFT、权限拒绝、Tag/关联/成员/计划晚失败回滚和完整审计。UI 在 Desktop/Pixel 5 另覆盖长 Task、节点、成员、Tag、长错误、零/200 Milestone 和窄屏无横向溢出、Next.js overlay 或未捕获浏览器错误。
 
 ### Revision 通用 Composer 专项测试
 

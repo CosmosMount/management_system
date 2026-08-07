@@ -7,6 +7,7 @@ import {
 import {
   activateTask as activateTaskService,
   createTaskDraft as createTaskDraftService,
+  deleteTaskDraft as deleteTaskDraftService,
   type CreateTaskDraftResult,
 } from "@/lib/project-management/application/lifecycle-service";
 import {
@@ -56,6 +57,21 @@ export async function activateTask(
       return result;
     },
   });
+}
+
+export async function deleteTaskDraft(
+  input: unknown,
+): Promise<
+  ProjectManagementActionResult<
+    Awaited<ReturnType<typeof deleteTaskDraftService>>
+  >
+> {
+  return runTaskMutationAction(
+    "pm.task.draft.delete",
+    "deleteTaskDraft",
+    input,
+    deleteTaskDraftService,
+  );
 }
 
 export async function updateTaskDraftMetadata(

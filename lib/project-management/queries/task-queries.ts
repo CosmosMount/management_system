@@ -210,6 +210,7 @@ export type TaskWorkspace = {
     canUpdateMetadata: boolean;
     canManageMembers: boolean;
     canActivate: boolean;
+    canDeleteDraft: boolean;
     canCreateRevision: boolean;
     canSubmitMilestoneReview: boolean;
     canReviewMilestone: boolean;
@@ -474,6 +475,7 @@ export async function getTaskWorkspace({
       canUpdateMetadata: allowed(actor, "task.update_metadata", resource),
       canManageMembers: allowed(actor, "task.manage_members", resource),
       canActivate: allowed(actor, "task.activate", resource),
+      canDeleteDraft: allowed(actor, "task.delete", resource),
       canCreateRevision: allowed(actor, "revision.create", resource),
       canSubmitMilestoneReview: allowed(
         actor,
