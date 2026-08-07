@@ -1369,6 +1369,7 @@ function AnchorMarker({
   const previewBlockedMessageRef = useRef<string | null>(null);
   const suppressClickRef = useRef(false);
   const displayedAtMs = previewAtMs ?? anchor.atMs;
+  const completed = anchor.completed ?? anchor.status === "COMPLETED";
   const left = timeToX(displayedAtMs, scale) + (planRow ? 0 : offset * 2);
   const top = planRow ? PLAN_RAIL_TOP + 2 : 8 + lane * 22;
   const iconKind =
@@ -1378,7 +1379,7 @@ function AnchorMarker({
         ? "BRANCH"
         : mode === "TASK_COMPOSER" && anchor.kind === "MILESTONE"
           ? "DIAMOND"
-          : anchor.status === "COMPLETED"
+          : completed
             ? "CHECK"
             : "CIRCLE";
   const Icon =
@@ -1445,6 +1446,7 @@ function AnchorMarker({
         canMove && "touch-none cursor-grab",
         move && "cursor-grabbing opacity-80",
         selected && "bg-primary/10 ring-2 ring-primary",
+        completed && "text-emerald-700 dark:text-emerald-300",
         anchor.visualState === "TEMPORARY" && "text-amber-700",
         anchor.visualState === "INVALID" && "text-destructive",
       )}
@@ -1561,6 +1563,7 @@ function AnchorMarker({
       data-canvas-object
       data-canvas-object-key={focusKey}
       data-anchor-icon={iconKind}
+      data-anchor-completed={completed ? "true" : "false"}
       data-anchor-visual-state={anchor.visualState ?? "DEFAULT"}
       data-anchor-label-lane={planRow ? lane : undefined}
       data-testid={`milestone-marker-${anchor.id}`}
@@ -1569,6 +1572,7 @@ function AnchorMarker({
         className={cn(
           "size-4 shrink-0",
           anchorToneClassName(anchor),
+          completed && "text-emerald-600 dark:text-emerald-400",
           anchor.status === "ACTIVE" && "fill-primary text-primary",
           anchor.visualState === "TEMPORARY" &&
             "text-amber-600 [stroke-dasharray:3_2] dark:text-amber-400",

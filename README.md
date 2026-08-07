@@ -508,7 +508,7 @@ pm2 start npm --name procurement-cron -- run cron
 
 ## 项目管理重构状态
 
-旧 Project/Stage 工作流已清理；当前重新提供轻量 Project 文件夹和立项流程，不恢复 Stage、周报、风险或旧审批角色。`/progress/projects` 提供默认“只看我参与 + 进行中”的列表、创建、详情、编辑、审批、驳回重提、结束和软删除；Project 列表、详情 Task、立项轮次和审计记录使用稳定游标继续加载，不会在固定数量后静默截断。一个 Task 最多属于一个 ACTIVE Project；Task 加入时会把有效 Task 成员补为 Project Participant，但 Project 身份不授予 Task 权限。
+旧 Project/Stage 工作流已清理；当前重新提供轻量 Project 文件夹和立项流程，不恢复 Stage、周报、风险或旧审批角色。`/progress/projects` 提供默认“只看我参与 + 进行中”的列表、创建、详情、编辑、审批、驳回重提、结束和软删除。Project 详情采用“概览 + 三列工作区”：概览集中展示资料和权限操作，中列按“草稿 → 进行中 → 所有终态”稳定分页展示每页 25 个 Task 及其只读 Current Plan 时间线，左右风险、评论和最近动态暂为占位。立项申请与审计历史继续持久化并保留查询能力，但不再作为详情卡片展示；Project 列表和详情 Task 均不会在固定数量后静默截断。一个 Task 最多属于一个 ACTIVE Project；Task 加入时会把有效 Task 成员补为 Project Participant，但 Project 身份不授予 Task 权限。
 
 - 所有已登录并成功解析到统一 `Account/Person` 的账号可查看全部未删除 Task、计划/审批/审计历史和全员完整 Segment，并可创建 Task；可见性扩大不扩大写权限。
 - Task 成员只分“负责人”和“参与人”。支持多负责人且至少一名，同一 Person 只能有一个有效角色；创建者自动成为负责人。

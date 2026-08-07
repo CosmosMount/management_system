@@ -135,6 +135,8 @@ DRAFT → MANAGEMENT_REVIEW → TEACHER_REVIEW → PENDING_APPLICANT_DOCS
 
 当前项目管理数据模型还包括 `Project`、`ProjectMember`、`ProjectEstablishmentRequest` 和 `ProjectEstablishmentRequestedTask`。`Task.projectId` 可空且最多指向一个 Project；有效 Project 成员和单一待审批轮次由 PostgreSQL partial unique index 保证。Project 删除使用 `deletedAt` 软删除，并在同一事务清空关联 Task 的 `projectId`。
 
+Project 详情查询在 Project 可见性校验后，按 `DRAFT`、`ACTIVE`、所有终态三个状态组读取每页最多 25 个未删除 Task；组内使用 `updatedAt desc, id asc`，游标同时携带状态组、更新时间和 ID。查询只为当前页加载 Current Plan 的 Start、Milestone、Revision 与 Terminal，服务端序列化后由详情页组装只读 TimeCanvas；客户端不能提交任意 Task ID 扩大查询范围。25 行与每个计划最多 200 个节点共同受现有 5,000 节点上限约束；超限时保留 Project 与 Task 列表、停止向客户端下发节点正文，并在时间线区显示明确错误，不能静默截断。立项轮次和领域审计继续保存，详情 UI 只移除其历史卡片，并用概览上的 `#establishment` 锚点保留待办和通知深链。
+
 P2/P3 已补齐 Task 计划生命周期的服务端闭环，入口位于 `lib/project-management/application/lifecycle-service.ts`、`app/actions/project-management/{tasks,plans,revisions,milestones,terminations}.ts` 和 `lib/project-management/queries/task-queries.ts`：
 
 - Task 草稿创建在事务中写入 `Task(status=DRAFT)`、初始 `TaskPlanVersion(status=CURRENT, activatedAt=null)`、`0–200` 个有序 Milestone、末尾 Termination、成员、Tag、审计、站内通知和 `channel=project-management` outbox；Start 固定由 `plannedStartAt` 表示，Terminal 持久化 trim 后 `1–200` 字符的名称（默认 `Terminal`）。Start、每个 Milestone 与 Terminal 时间必须严格递增，不接受同刻。`TaskPlanVersion.idempotencyKey` 与 `creationRequestHash` 支持同账号请求幂等和 payload 冲突检测。任何已登录并成功解析到统一 `Account/Person` 的账号都可创建，服务端把创建者归一化为 Owner；即使创建者 Person 已停用也保留该自动 Owner，其他新增成员必须是活跃 Person。模板成员只复制 Owner/Participant，人员冲突时 Owner 优先，模板计划继续复制 Terminal 名称并按新时间规则重新校验。

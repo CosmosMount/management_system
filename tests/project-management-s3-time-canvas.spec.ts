@@ -529,6 +529,15 @@ test.describe("S3 TimeCanvas controlled browser fixtures", () => {
         page.getByTestId("milestone-marker-workbench-node-0"),
       ).toHaveAttribute("data-anchor-icon", "CHECK");
       await expect(
+        page.getByTestId("milestone-marker-workbench-node-0"),
+      ).toHaveAttribute("data-anchor-completed", "true");
+      await expect(
+        page.getByTestId("milestone-marker-workbench-node-1"),
+      ).toHaveAttribute("data-anchor-icon", "CIRCLE");
+      await expect(
+        page.getByTestId("milestone-marker-workbench-node-1"),
+      ).toHaveAttribute("data-anchor-completed", "false");
+      await expect(
         page.getByTestId("phase-band-workbench-node-0:workbench-node-1"),
       ).toContainText("里程碑 2");
       const workbenchSymbol = await page.getByTestId("anchor-symbol-workbench-node-0").boundingBox();

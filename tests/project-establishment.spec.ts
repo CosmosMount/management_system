@@ -92,6 +92,189 @@ test.describe("Project 立项与生命周期", () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   });
 
+  test("Project 详情使用概览、三列工作区和当前页 Task 时间线", async ({
+    browser,
+    context,
+    page,
+    baseURL,
+  }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop", "本轮按产品决策不做移动端专项验收");
+    const requester = await actor(`Project 详情申请人 ${randomUUID()}`);
+    const admin = await actor(
+      `Project 详情管理员 ${randomUUID()}`,
+      "PROJECT_ADMINISTRATOR",
+    );
+    const participant = await actor(`Project 详情参与人 ${randomUUID()}`);
+    const viewer = await actor(`Project 详情只读用户 ${randomUUID()}`);
+    const draft = await draftTask(
+      requester,
+      participant,
+      `草稿 Task ${"很长的名称".repeat(16)}`,
+    );
+    const active = await draftTask(requester, participant, "进行中 Task 时间线");
+    const completed = await draftTask(requester, participant, "已完成 Task 时间线");
+    const activePlanNodes = await addTaskPlanNodes(
+      active.id,
+      requester,
+      "进行中节点",
+    );
+    const completedPlanNodes = await addTaskPlanNodes(
+      completed.id,
+      requester,
+      "已完成节点",
+    );
+
+    const projectName = `Project 详情 UI ${randomUUID()}`;
+    const projectDescription = `Project 完整内容 ${"需要安全换行的长内容".repeat(18)}`;
+    const created = await createProject(requester, {
+      name: projectName,
+      description: projectDescription,
+      avatarPath: null,
+      members: [
+        { personId: requester.personId, role: "OWNER" },
+        { personId: participant.personId, role: "PARTICIPANT" },
+      ],
+      requestedTaskIds: [completed.id, active.id, draft.id],
+      idempotencyKey: randomUUID(),
+    });
+    const request = await prisma.projectEstablishmentRequest.findFirstOrThrow({
+      where: { projectId: created.projectId, status: "PENDING" },
+    });
+    await reviewProjectEstablishment(admin, {
+      projectId: created.projectId,
+      requestId: request.id,
+      expectedLockVersion: created.lockVersion,
+      decision: "APPROVE",
+      comment: "同意详情页回归项目",
+    });
+    await prisma.task.update({
+      where: { id: active.id },
+      data: {
+        status: "ACTIVE",
+        activeMilestoneNodeId: activePlanNodes.milestoneNodeId,
+      },
+    });
+    await prisma.taskNode.update({
+      where: { id: activePlanNodes.milestoneNodeId },
+      data: { status: "ACTIVE" },
+    });
+    await prisma.task.update({
+      where: { id: completed.id },
+      data: { status: "COMPLETED" },
+    });
+    await prisma.taskNode.updateMany({
+      where: {
+        id: {
+          in: [
+            completedPlanNodes.milestoneNodeId,
+            completedPlanNodes.terminationNodeId,
+          ],
+        },
+      },
+      data: { status: "COMPLETED" },
+    });
+
+    await loginAsTestUser(context, baseURL, {
+      openId: requester.openId,
+      name: "Project 详情申请人",
+    });
+    await page.goto(`/progress/projects/${created.projectId}`);
+
+    await expect(page.getByTestId("project-overview")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Project 详情" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: projectName })).toBeVisible();
+    await expect(page.getByText(projectDescription, { exact: true })).toBeVisible();
+    await expect(page.getByText(requester.personId, { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Task 完成进度", { exact: true })).toBeVisible();
+    await expect(page.getByText("1/3 已完成", { exact: true })).toHaveCount(2);
+    await expect(page.getByRole("link", { name: "编辑" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "结束 Project" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "删除 Project" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "复制链接" })).toBeVisible();
+
+    await expect(page.getByRole("heading", { name: "Project 风险" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Project 评论" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "最近动态" })).toBeVisible();
+    await expect(page.getByText("立项申请", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("最近审计记录", { exact: true })).toHaveCount(0);
+    await expect(page.locator("#establishment")).toBeVisible();
+
+    const taskItems = page
+      .getByRole("list", { name: "Project Task 列表" })
+      .getByRole("listitem");
+    await expect(taskItems).toHaveCount(3);
+    await expect(taskItems.nth(0)).toContainText(draft.title);
+    await expect(taskItems.nth(1)).toContainText(active.title);
+    await expect(taskItems.nth(2)).toContainText(completed.title);
+    await expect(page.getByTestId(`timeline-row-project-plan:${draft.id}`)).toBeVisible();
+    await expect(page.getByTestId(`timeline-row-project-plan:${active.id}`)).toBeVisible();
+    await expect(page.getByTestId(`timeline-row-project-plan:${completed.id}`)).toBeVisible();
+    await expect(
+      page.getByTestId(
+        `milestone-marker-project-node:${completedPlanNodes.milestoneNodeId}`,
+      ),
+    ).toHaveAttribute("data-anchor-completed", "true");
+    await expect(
+      page.getByTestId(
+        `milestone-marker-project-node:${completedPlanNodes.milestoneNodeId}`,
+      ),
+    ).toHaveAttribute("data-anchor-icon", "CHECK");
+    await expect(
+      page.getByTestId(
+        `milestone-marker-project-node:${activePlanNodes.milestoneNodeId}`,
+      ),
+    ).toHaveAttribute("data-anchor-completed", "false");
+    await expect(
+      page.getByTestId(
+        `milestone-marker-project-node:${activePlanNodes.milestoneNodeId}`,
+      ),
+    ).toHaveAttribute("data-anchor-icon", "CIRCLE");
+    const locateActive = page.getByRole("button", {
+      name: `在时间线中定位 ${active.title}`,
+    });
+    await locateActive.click();
+    await expect(locateActive).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      page.getByTestId(
+        `milestone-marker-project-node:${activePlanNodes.milestoneNodeId}`,
+      ),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      page.getByTestId(`milestone-marker-project-start:${active.id}`),
+    ).toHaveAttribute("aria-pressed", "false");
+
+    await expectHealthyPage(page);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+      ),
+    ).toBe(true);
+
+    const viewerContext = await browser.newContext();
+    try {
+      await loginAsTestUser(viewerContext, baseURL, {
+        openId: viewer.openId,
+        name: "Project 详情只读用户",
+      });
+      const viewerPage = await viewerContext.newPage();
+      await viewerPage.goto(`/progress/projects/${created.projectId}`);
+      await expect(viewerPage.getByTestId("project-overview")).toBeVisible();
+      await expect(viewerPage.getByRole("link", { name: "编辑" })).toHaveCount(0);
+      await expect(
+        viewerPage.getByRole("button", { name: "结束 Project" }),
+      ).toHaveCount(0);
+      await expect(
+        viewerPage.getByRole("button", { name: "删除 Project" }),
+      ).toHaveCount(0);
+      await expect(
+        viewerPage.getByRole("button", { name: "复制链接" }),
+      ).toBeVisible();
+      await expectHealthyPage(viewerPage);
+    } finally {
+      await viewerContext.close();
+    }
+  });
+
   test("空 Project 可以直接结束并记录审计与通知", async ({ context, page, baseURL }, testInfo) => {
     const requester = await actor(`空 Project 申请人 ${testInfo.project.name}`);
     const admin = await actor(`空 Project 管理员 ${testInfo.project.name}`, "PROJECT_ADMINISTRATOR");
@@ -236,10 +419,12 @@ test.describe("Project 立项与生命周期", () => {
     const approved = await reviewProjectEstablishment(admin, { projectId: created.projectId, requestId: request.id, expectedLockVersion: 0, decision: "APPROVE", comment: "" });
     expect((await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).projectId).toBe(created.projectId);
     expect((await prisma.task.findUniqueOrThrow({ where: { id: secondTask.id } })).projectId).toBe(created.projectId);
+    await prisma.task.update({ where: { id: secondTask.id }, data: { status: "ACTIVE" } });
     const firstTaskPage = await getProjectDetail({ actor: requester, projectId: created.projectId, pagination: { pageSize: 1 } });
     expect(firstTaskPage.taskNextCursor).not.toBeNull();
     const secondTaskPage = await getProjectDetail({ actor: requester, projectId: created.projectId, pagination: { pageSize: 1, taskCursor: firstTaskPage.taskNextCursor! } });
-    expect(new Set([firstTaskPage.tasks[0]?.id, secondTaskPage.tasks[0]?.id])).toEqual(new Set([task.id, secondTask.id]));
+    expect(firstTaskPage.tasks[0]).toMatchObject({ id: task.id, status: "DRAFT" });
+    expect(secondTaskPage.tasks[0]).toMatchObject({ id: secondTask.id, status: "ACTIVE" });
     expect((await searchTaskOptions({ actor: requester, input: { query: "Project Task", projectCandidates: true, limit: 50 } })).items.map((item) => item.id)).not.toContain(task.id);
     expect(await prisma.projectMember.findFirst({ where: { projectId: created.projectId, personId: participant.personId, role: "PARTICIPANT", removedAt: null } })).not.toBeNull();
     expect(await prisma.projectMember.findFirst({ where: { projectId: created.projectId, personId: legacyViewer.personId, removedAt: null } })).toBeNull();
@@ -292,6 +477,75 @@ async function draftTask(owner: ProjectManagementActor, participant: ProjectMana
     await tx.taskMember.createMany({ data: [{ taskId, personId: owner.personId, role: "OWNER", createdByAccountId: owner.accountId }, { taskId, personId: participant.personId, role: "PARTICIPANT", createdByAccountId: owner.accountId }] });
   });
   return { id: taskId, title };
+}
+
+async function addTaskPlanNodes(
+  taskId: string,
+  owner: ProjectManagementActor,
+  label: string,
+) {
+  const task = await prisma.task.findUniqueOrThrow({
+    where: { id: taskId },
+    select: { currentPlanVersionId: true },
+  });
+  const milestoneNodeId = randomUUID();
+  const terminationNodeId = randomUUID();
+  await prisma.$transaction(async (tx) => {
+    await tx.taskPlanVersion.update({
+      where: { id: task.currentPlanVersionId },
+      data: { plannedStartAt: new Date("2026-08-08T09:00:00+08:00") },
+    });
+    await tx.taskNode.create({
+      data: {
+        id: milestoneNodeId,
+        taskId,
+        type: "MILESTONE",
+        status: "PENDING",
+        businessDescription: `${label}业务说明`,
+        createdByAccountId: owner.accountId,
+        milestone: {
+          create: {
+            goal: label,
+            completionCriteria: `${label}完成条件`,
+            expectedCompletedAt: new Date("2026-08-10T18:00:00+08:00"),
+            reviewRequirements: `${label}验收要求`,
+          },
+        },
+      },
+    });
+    await tx.taskNode.create({
+      data: {
+        id: terminationNodeId,
+        taskId,
+        type: "TERMINATION",
+        status: "PENDING",
+        businessDescription: `${label}结束说明`,
+        createdByAccountId: owner.accountId,
+        termination: {
+          create: {
+            name: `${label} Terminal`,
+            plannedOutcomeCriteria: `${label}结束条件`,
+            plannedAt: new Date("2026-08-12T18:00:00+08:00"),
+          },
+        },
+      },
+    });
+    await tx.planVersionNode.createMany({
+      data: [
+        {
+          planVersionId: task.currentPlanVersionId,
+          nodeId: milestoneNodeId,
+          sequence: 1,
+        },
+        {
+          planVersionId: task.currentPlanVersionId,
+          nodeId: terminationNodeId,
+          sequence: 2,
+        },
+      ],
+    });
+  });
+  return { milestoneNodeId, terminationNodeId };
 }
 
 async function expectCode(promise: Promise<unknown>, code: string) {

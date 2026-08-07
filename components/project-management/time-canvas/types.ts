@@ -41,6 +41,7 @@ export type TimeCanvasAnchor = {
   sequence: number;
   editable: boolean;
   versionToken: string;
+  completed?: boolean;
   tone?: TimeCanvasTone;
   visualState?: "TEMPORARY" | "INVALID";
 };

@@ -239,6 +239,7 @@ npm run pm:identity-backfill
 3. 立项提交不改变所选 Task；批准时全部 Task 原子挂载，冲突时零部分写入。Task 成员同步为 Project Participant，Project Owner 不获得 Task 写权限。
 4. 空 Project 可以直接结束；存在关联 Task 时必须全部严格 `COMPLETED`。软删除保留 Task 并清空 `projectId`，删除对象直达返回脱敏 404。
 5. 头像只接受真实 PNG/JPEG/WebP 且不超过 2 MiB；所有自动化测试继续使用禁通知环境，不发送真实飞书消息。
+6. Desktop `1440x1000` 打开 `/progress/projects/[id]`：概览只显示头像、名称、完整内容、状态、负责人、参与人和 Task 完成进度，权限操作位于右上；不得显示立项历史或 raw 审计卡片，但 `#establishment` 仍定位审批区。第二段应显示风险/评论/最近动态占位，并按“草稿 → 进行中 → 所有终态”展示当前 25 条 Task 与对应 Current Plan 时间线；已完成节点使用绿色勾选，未完成节点保留普通圆点；名称打开 Task，定位按钮滚动并选中该 Task 当前进行中的非 Revision 节点，没有 Active 节点时回退到 Start。该详情改造按产品决策不做移动端专项验收。
 
 ### Task 创建页专项测试
 
@@ -348,7 +349,7 @@ npm run pm:identity-backfill
 18. `tests/revision-time-marker-migration.spec.ts` 在额外随机 `_test` PostgreSQL 中验证空 Revision 表升级、`revisionAt/reviewRound`、新状态枚举、单候选 partial unique index，以及存在旧 Revision 数据时在破坏性字段调整前 fail-fast。
 19. `tests/work-segment-schema-drift-repair.spec.ts` 在 runner 持有的 `_test` PostgreSQL 临时 schema 中重建完整缺失和部分缺失两类 `WorkSegment` 漂移，写入既有 Segment 后连续执行修复与严格 catalog 验证 migration，核对数据保留、默认回填、完整 catalog/OID、约束行为和重复执行 no-op；另构造同名错误字段、列序索引、DESC/operator-class 索引、检查约束和外键动作，验证后置 migration fail-fast 且事务不改变 catalog 或数据。`tests/work-segment-role-node-removal-migration.spec.ts` 还必须从漂移状态按完整合并顺序执行删除准备、历史删除、修复、验证和最终收敛 migration，验证不会在历史删除 migration 前中止；最终删除职责、Node 关联、关联复核和专用通知/历史，同时保留普通 Segment、普通审计、通知、outbox 及 append-only trigger。
 20. `tests/single-task-approval-migration.spec.ts` 在 runner 创建的随机 `_test` PostgreSQL 中人工构造同一 Task 同时存在 Milestone/Revision 待审批的异常数据，验证 Milestone 撤出、Revision/候选计划/非承接未完成节点取消、Current Plan 与 Task 锁版本不变、历史终态和采购数据不变、outbox/recipient 冻结、站内通知已读、确定性迁移审计及最终待审批总数为零。
-21. `tests/project-establishment.spec.ts` 在 Desktop 与 Pixel 5 验证 Project 默认筛选、立项入口、异步 Task 搜索及选中列表（含长名称和移除入口），并在领域层验证驳回重提、批准挂载、稳定游标翻页、候选授权、完成阻塞与删除解绑；该 spec 只能使用 runner 持有的隔离 PostgreSQL。
+21. `tests/project-establishment.spec.ts` 在 Desktop 与 Pixel 5 验证 Project 默认筛选、立项入口、异步 Task 搜索及选中列表（含长名称和移除入口），在 Desktop 验证新版详情概览、三列占位、状态分组、时间线和定位，并在领域层验证驳回重提、批准挂载、跨状态组稳定游标翻页、候选授权、完成阻塞与删除解绑；该 spec 只能使用 runner 持有的隔离 PostgreSQL。
 
 ## 统一账号迁移验证
 

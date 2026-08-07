@@ -1128,6 +1128,7 @@ function buildTaskDetailCanvasModel(workspace: TaskWorkspace): TimeCanvasModel {
       sequence: 0,
       editable: false,
       versionToken: startAt,
+      completed: workspace.task.status !== "DRAFT",
       tone: "BLUE",
     },
     ...workspace.currentPlan.nodes.map((entry, index): TimeCanvasAnchor => {
@@ -1155,6 +1156,9 @@ function buildTaskDetailCanvasModel(workspace: TaskWorkspace): TimeCanvasModel {
         sequence: entry.sequence,
         editable: false,
         versionToken: at,
+        completed:
+          entry.status === "COMPLETED" ||
+          entry.revision?.status === "EFFECTIVE",
         tone: entry.revision
           ? "SLATE"
           : TASK_DETAIL_PHASE_TONES[index % TASK_DETAIL_PHASE_TONES.length],
