@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   activateTask,
@@ -27,13 +27,10 @@ import {
 } from "@/components/project-management/task-plan-node-navigator";
 import { TaskMemberRolePicker } from "@/components/project-management/task-member-role-picker";
 import { TaskSelect } from "@/components/project-management/task-picker";
-import { TimeCanvas } from "@/components/project-management/time-canvas/time-canvas";
-import { buildPlanPhaseBands } from "@/components/project-management/time-canvas/plan-phase-bands";
-import type {
-  TimeCanvasAnchor,
-  TimeCanvasModel,
-  TimeCanvasTone,
-} from "@/components/project-management/time-canvas/types";
+import { ResourcePlannerCanvasClient } from "@/components/project-management/resource-planner-canvas-client";
+import type { TimeCanvasModel } from "@/components/project-management/time-canvas/types";
+
+const TASK_DETAIL_START_ID = "task-detail-start";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -77,17 +74,6 @@ import {
   type CollaborationInitialData,
 } from "@/components/project-management/collaboration-panels";
 
-const TASK_DETAIL_START_ID = "task-detail-start";
-const TASK_DETAIL_PLAN_ROW_ID = "task-detail-plan-row";
-const TASK_DETAIL_DAY_MS = 24 * 60 * 60 * 1_000;
-const TASK_DETAIL_PHASE_TONES: TimeCanvasTone[] = [
-  "BLUE",
-  "VIOLET",
-  "AMBER",
-  "EMERALD",
-  "ROSE",
-  "SLATE",
-];
 type Notice = { kind: "success" | "error" | "info"; message: string } | null;
 type ActiveTaskMemberRole = "OWNER" | "PARTICIPANT";
 type RunAction = (
@@ -109,6 +95,8 @@ export function TaskWorkbench({
   tagOptions,
   projectOptions,
   collaboration,
+  timeCanvasModel,
+  timelineWindow,
 }: {
   workspace: TaskWorkspace;
   lifecycle: TaskLifecycleViews;
@@ -117,6 +105,14 @@ export function TaskWorkbench({
   tagOptions: TagOptionPage["items"];
   projectOptions: Array<{ id: string; name: string; avatarPath: string | null }>;
   collaboration: CollaborationInitialData;
+  timeCanvasModel: TimeCanvasModel;
+  timelineWindow: {
+    date: string;
+    focusId: string | null;
+    previousHref: string;
+    nextHref: string;
+    defaultHref: string;
+  };
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -158,9 +154,15 @@ export function TaskWorkbench({
   const termination = currentWorkspace.currentPlan.nodes.find(
     (entry) => entry.termination,
   );
-  const initialNodeId =
-    task.activeMilestoneNodeId ??
+  const defaultNodeId = task.activeMilestoneNodeId ??
     (termination?.status === "ACTIVE" ? termination.nodeId : TASK_DETAIL_START_ID);
+  const requestedInitialFocusId = timelineWindow.focusId;
+  const initialNodeId = requestedInitialFocusId && (
+    requestedInitialFocusId === TASK_DETAIL_START_ID ||
+    workspace.currentPlan.nodes.some((node) => node.nodeId === requestedInitialFocusId)
+  )
+    ? requestedInitialFocusId
+    : defaultNodeId;
   const [requestedNodeId, setRequestedNodeId] = useState(initialNodeId);
   const selectedNodeId =
     requestedNodeId === TASK_DETAIL_START_ID ||
@@ -426,7 +428,22 @@ export function TaskWorkbench({
             workspace={currentWorkspace}
             nodes={navigatorNodes}
             selectedId={selectedNodeId}
-            onSelect={setRequestedNodeId}
+            onSelect={(nodeId) => {
+              const node = navigatorNodes.find((entry) => entry.id === nodeId);
+              const atMs = node ? Date.parse(node.at) : Number.NaN;
+              if (Number.isFinite(atMs) && (atMs < timeCanvasModel.range.startMs || atMs >= timeCanvasModel.range.endMs)) {
+                const url = new URL(window.location.href);
+                url.searchParams.set("timelineDate", centeredTimelineDate(atMs));
+                url.searchParams.set("timelineFocus", nodeId);
+                router.push(`${url.pathname}?${url.searchParams.toString()}`);
+                return;
+              }
+              setRequestedNodeId(nodeId);
+            }}
+            model={timeCanvasModel}
+            people={people}
+            taskOptions={taskOptions}
+            timelineWindow={timelineWindow}
           />
 
           {openRevision && (
@@ -1050,69 +1067,61 @@ function TaskDetailTimeline({
   nodes,
   selectedId,
   onSelect,
+  model,
+  people,
+  taskOptions,
+  timelineWindow,
 }: {
   workspace: TaskWorkspace;
   nodes: TaskPlanNavigatorNode[];
   selectedId: string;
   onSelect: (nodeId: string) => void;
+  model: TimeCanvasModel;
+  people: PersonOptionDto[];
+  taskOptions: TaskOptionPage["items"];
+  timelineWindow: {
+    date: string;
+    focusId: string | null;
+    previousHref: string;
+    nextHref: string;
+    defaultHref: string;
+  };
 }) {
-  const canvasContainerRef = useRef<HTMLDivElement>(null);
-  const model = buildTaskDetailCanvasModel(workspace);
-  const selectedAnchorAt = model.anchors.find(
-    (item) => item.id === selectedId,
-  )?.atMs;
-  useEffect(() => {
-    if (selectedAnchorAt === undefined) return;
-    const scroller = canvasContainerRef.current?.querySelector<HTMLElement>(
-      "[data-testid='time-canvas-scroll']",
-    );
-    if (!scroller) return;
-    const timelineRow = scroller.querySelector<HTMLElement>(
-      "[data-testid^='timeline-row-']",
-    );
-    const rowHeaderWidth =
-      timelineRow?.firstElementChild instanceof HTMLElement
-        ? timelineRow.firstElementChild.offsetWidth
-        : 0;
-    const duration = model.range.endMs - model.range.startMs;
-    if (duration <= 0) return;
-    const ratio = Math.max(
-      0,
-      Math.min(1, (selectedAnchorAt - model.range.startMs) / duration),
-    );
-    const timelineWidth = Math.max(0, scroller.scrollWidth - rowHeaderWidth);
-    const targetX = rowHeaderWidth + ratio * timelineWidth;
-    const maximumLeft = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
-    scroller.scrollTo({
-      left: Math.max(0, Math.min(maximumLeft, targetX - scroller.clientWidth / 2)),
-      behavior: "smooth",
-    });
-  }, [model.range.endMs, model.range.startMs, selectedAnchorAt]);
-
   return (
     <section className="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5">
-      <div>
-        <h2 className="font-semibold">计划时间轴</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Current Plan v{workspace.currentPlan.versionNo} · Asia/Shanghai
-        </p>
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="font-semibold">计划与人员投入</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Current Plan v{workspace.currentPlan.versionNo} · 31 天窗口 · {timelineWindow.date}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Link className={cn(buttonVariants({ size: "sm", variant: "outline" }))} href={timelineWindow.previousHref}>上一窗口</Link>
+          <Link className={cn(buttonVariants({ size: "sm", variant: "outline" }))} href={timelineWindow.defaultHref}>定位当前节点</Link>
+          <Link className={cn(buttonVariants({ size: "sm", variant: "outline" }))} href={timelineWindow.nextHref}>下一窗口</Link>
+        </div>
       </div>
-      <div
-        ref={canvasContainerRef}
-        className="mt-4 hidden min-w-0 overflow-hidden rounded-lg border border-border lg:block"
-      >
-        <TimeCanvas
-          mode="TASK_WORKBENCH"
-          model={model}
+      <form className="mt-3 flex flex-wrap items-end gap-2">
+        <label className="grid gap-1 text-sm">
+          <span>窗口开始日期</span>
+          <Input name="timelineDate" type="date" defaultValue={timelineWindow.date} />
+        </label>
+        <Button type="submit" size="sm" variant="outline">打开日期</Button>
+      </form>
+      <div className="mt-4 min-w-0">
+        <ResourcePlannerCanvasClient
+          initialModel={model}
+          peopleOptions={people}
+          peopleScope={{ purpose: "TASK_SEGMENT_CREATE", taskId: workspace.task.id }}
+          taskOptions={taskOptions}
+          defaultPersonId={workspace.members.find((member) => member.role === "OWNER")?.personId ?? workspace.members[0]?.personId ?? ""}
+          defaultTaskId={workspace.task.id}
+          allowIndependent={false}
+          allowCreate={false}
           initialZoom="DAY"
-          display={{ showActual: false, showBusy: false, showInspector: false }}
-          selection={{ kind: "ANCHOR", id: selectedId }}
-          interaction={{
-            onAnchorSelectionChange: (anchorId) => {
-              if (anchorId) onSelect(anchorId);
-            },
-          }}
-          emptyMessage="当前计划没有可展示的时间节点"
+          mode="TASK_WORKBENCH"
+          initialFocusId={selectedId}
         />
       </div>
       <div className="mt-4">
@@ -1127,84 +1136,14 @@ function TaskDetailTimeline({
   );
 }
 
-function buildTaskDetailCanvasModel(workspace: TaskWorkspace): TimeCanvasModel {
-  const startAt = workspace.currentPlan.plannedStartAt ?? workspace.task.createdAt;
-  const anchors: TimeCanvasAnchor[] = [
-    {
-      id: TASK_DETAIL_START_ID,
-      rowId: TASK_DETAIL_PLAN_ROW_ID,
-      taskId: workspace.task.id,
-      kind: "PLAN_START",
-      status: workspace.task.status === "DRAFT" ? "草稿" : "已开始",
-      label: "Start",
-      atMs: new Date(startAt).getTime(),
-      sequence: 0,
-      editable: false,
-      versionToken: startAt,
-      completed: workspace.task.status !== "DRAFT",
-      tone: "BLUE",
-    },
-    ...workspace.currentPlan.nodes.map((entry, index): TimeCanvasAnchor => {
-      const at = entry.milestone?.expectedCompletedAt ??
-        entry.revision?.revisionAt ??
-        entry.termination?.plannedAt ??
-        workspace.task.updatedAt;
-      return {
-        id: entry.nodeId,
-        rowId: TASK_DETAIL_PLAN_ROW_ID,
-        taskId: workspace.task.id,
-        kind: entry.milestone
-          ? "MILESTONE"
-          : entry.revision
-            ? "REVISION"
-            : "TERMINATION",
-        status: entry.revision
-          ? revisionStatusLabel(entry.revision.status)
-          : taskNodeStatusLabels[entry.status],
-        label: entry.milestone?.goal ??
-          entry.revision?.reason ??
-          entry.termination?.name ??
-          "未命名节点",
-        atMs: new Date(at).getTime(),
-        sequence: entry.sequence,
-        editable: false,
-        versionToken: at,
-        completed:
-          entry.status === "COMPLETED" ||
-          entry.revision?.status === "EFFECTIVE",
-        tone: entry.revision
-          ? "SLATE"
-          : TASK_DETAIL_PHASE_TONES[index % TASK_DETAIL_PHASE_TONES.length],
-      };
-    }),
-  ];
-  const validTimes = anchors.map((anchor) => anchor.atMs).filter(Number.isFinite);
-  const minimum = Math.min(...validTimes);
-  const maximum = Math.max(...validTimes);
-  const duration = Math.max(TASK_DETAIL_DAY_MS, maximum - minimum);
-  const padding = Math.max(TASK_DETAIL_DAY_MS, duration * 0.08);
-  return {
-    timezone: "Asia/Shanghai",
-    range: { startMs: minimum - padding, endMs: maximum + padding + 1 },
-    rows: [
-      {
-        id: TASK_DETAIL_PLAN_ROW_ID,
-        sourceId: workspace.task.id,
-        kind: "PLAN",
-        label: workspace.task.title,
-        sublabel: `${workspace.currentPlan.nodes.filter((node) => node.milestone).length} 个 Milestone`,
-        editable: false,
-        height: 132,
-        capacity: null,
-      },
-    ],
-    anchors,
-    phaseBands: buildPlanPhaseBands(anchors, TASK_DETAIL_PLAN_ROW_ID).map(
-      (band) => ({ ...band, id: `task-detail-${band.id}` }),
-    ),
-    segments: [],
-    generatedAt: "1970-01-01T00:00:00.000Z",
-  };
+function centeredTimelineDate(atMs: number) {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  return formatter.format(new Date(atMs - 15 * 24 * 60 * 60 * 1_000));
 }
 
 function currentNodeLabel(workspace: TaskWorkspace) {

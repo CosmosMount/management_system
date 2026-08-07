@@ -62,7 +62,6 @@ import {
   createActualSegmentInputSchema,
   createWorkSegmentInputSchema,
   partiallyConfirmSegmentInputSchema,
-  splitPlannedSegmentInputSchema,
   updateWorkSegmentInputSchema,
   workSegmentTypeValues as segmentValidationWorkSegmentTypeValues,
 } from "../lib/project-management/validations/segments";
@@ -1430,23 +1429,6 @@ test("removed allocation and includeConflicts inputs fail strict validation", ()
     updateWorkSegmentInputSchema.safeParse({ ...update, allocation: 50 }).success,
   ).toBe(false);
 
-  const split = {
-    segmentId,
-    expectedUpdatedAt: startAt,
-    reason: "拆分验证",
-    parts: [
-      { startAt, endAt: "2026-08-01T09:30:00.000Z" },
-      { startAt: "2026-08-01T09:30:00.000Z", endAt },
-    ],
-  };
-  expect(splitPlannedSegmentInputSchema.safeParse(split).success).toBe(true);
-  expect(
-    splitPlannedSegmentInputSchema.safeParse({
-      ...split,
-      parts: [{ ...split.parts[0], allocation: 50 }, split.parts[1]],
-    }).success,
-  ).toBe(false);
-
   const fullConfirmation = {
     segmentId,
     expectedUpdatedAt: startAt,
@@ -2087,7 +2069,6 @@ function segmentPermissions() {
     canEdit: true,
     canMove: true,
     canResize: true,
-    canSplit: true,
     canMerge: true,
     canCancel: true,
     canConfirm: true,

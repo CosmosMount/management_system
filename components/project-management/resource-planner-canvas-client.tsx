@@ -1,28 +1,21 @@
 "use client";
 
 import {
-  useCallback,
   useEffect,
   useMemo,
   useState,
   useTransition,
-  type SetStateAction,
 } from "react";
 import { useRouter } from "next/navigation";
 import {
-  batchCancelPlannedSegments,
-  batchConfirmPlannedSegments,
   cancelPlannedSegment,
   confirmPlannedSegment,
   createActualSegment,
   createWorkSegment,
   getWorkSegment,
   listWorkSegmentChanges,
-  mergePlannedSegments,
-  movePlannedSegments,
   partiallyConfirmSegment,
   softDeleteActualSegment,
-  splitPlannedSegment,
   updateWorkSegment,
 } from "@/app/actions/project-management/segments";
 import { TaskSelect } from "@/components/project-management/task-picker";
@@ -35,12 +28,18 @@ import type {
   TimeCanvasBrushRequest,
   TimeCanvasMode,
   TimeCanvasModel,
-  TimeCanvasSegmentTransformRequest,
   TimeCanvasSelection,
   TimeCanvasZoom,
 } from "@/components/project-management/time-canvas/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -49,6 +48,7 @@ import {
   isoToShanghaiDateTimeLocal,
   shanghaiDateTimeLocalToIso,
 } from "@/lib/project-management/date-time";
+import { formatShanghaiDate } from "@/components/project-management/time-canvas/url-state";
 import {
   taskPriorityLabels,
   workSegmentStatusLabels,
@@ -86,7 +86,10 @@ export function ResourcePlannerCanvasClient({
   mode = "RESOURCE_PLANNER",
   defaultTaskId = "",
   allowIndependent = true,
+  allowCreate = true,
+  readOnly = false,
   initialFocusId = null,
+  navigateRangeByDate = false,
 }: {
   initialModel: TimeCanvasModel;
   peopleOptions: PersonOptionDto[];
@@ -97,28 +100,45 @@ export function ResourcePlannerCanvasClient({
   mode?: TimeCanvasMode;
   defaultTaskId?: string;
   allowIndependent?: boolean;
+  allowCreate?: boolean;
+  readOnly?: boolean;
   initialFocusId?: string | null;
+  navigateRangeByDate?: boolean;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
-  const [optimisticModel, setOptimisticModel] = useState<{
-    baseGeneratedAt: string;
-    value: TimeCanvasModel;
-  } | null>(null);
-  const model = optimisticModel?.baseGeneratedAt === initialModel.generatedAt
-    ? optimisticModel.value
-    : initialModel;
-  const setModel = useCallback((update: SetStateAction<TimeCanvasModel>) => {
-    setOptimisticModel((current) => {
-      const base = current?.baseGeneratedAt === initialModel.generatedAt
-        ? current.value
-        : initialModel;
-      return {
-        baseGeneratedAt: initialModel.generatedAt,
-        value: typeof update === "function" ? update(base) : update,
-      };
-    });
-  }, [initialModel]);
+  const model = useMemo(
+    () => ({
+      ...initialModel,
+      rows: readOnly
+        ? initialModel.rows.map((row) => ({ ...row, editable: false }))
+        : initialModel.rows,
+      segments: initialModel.segments
+        .filter(
+          (segment) =>
+            segment.type !== "PLANNED" ||
+            (segment.status !== "CONFIRMED" && segment.status !== "CANCELLED"),
+        )
+        .map((segment) =>
+          readOnly
+            ? {
+                ...segment,
+                permissions: {
+                  canViewDetails: segment.visibility === "FULL",
+                  canEdit: false,
+                  canMove: false,
+                  canResize: false,
+                  canMerge: false,
+                  canCancel: false,
+                  canConfirm: false,
+                  canSoftDelete: false,
+                },
+              }
+            : segment,
+        ),
+    }),
+    [initialModel, readOnly],
+  );
   const initialSelection = useMemo<TimeCanvasSelection>(() => {
     if (!initialFocusId) return null;
     if (initialModel.segments.some((segment) => segment.id === initialFocusId)) {
@@ -130,21 +150,23 @@ export function ResourcePlannerCanvasClient({
     return null;
   }, [initialFocusId, initialModel]);
   const [selection, setSelection] = useState<TimeCanvasSelection>(initialSelection);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [openSegmentId, setOpenSegmentId] = useState<string | null>(null);
+  const [dialogDirty, setDialogDirty] = useState(false);
   const [createDraft, setCreateDraft] = useState<CreateDraft | null>(null);
   const [detail, setDetail] = useState<WorkSegmentDetail | null>(null);
+  const [detailRange, setDetailRange] = useState<{ startMs: number; endMs: number } | null>(null);
   const [changes, setChanges] = useState<SegmentChange[]>([]);
   const [detailState, setDetailState] = useState<"IDLE" | "LOADING" | "READY" | "ERROR">("IDLE");
   const [detailError, setDetailError] = useState("");
   const [notice, setNotice] = useState<Notice>(null);
   const selectedCanvasSegment = useMemo(
     () =>
-      selection?.kind === "SEGMENT"
-        ? model.segments.find((segment) => segment.id === selection.id) ?? null
+      openSegmentId
+        ? model.segments.find((segment) => segment.id === openSegmentId) ?? null
         : null,
-    [model.segments, selection],
+    [model.segments, openSegmentId],
   );
-  const canCreateSegment = model.rows.some(
+  const canCreateSegment = allowCreate && model.rows.some(
     (row) => row.kind !== "PLAN" && row.editable,
   );
   const quickCreatePersonId =
@@ -169,7 +191,7 @@ export function ResourcePlannerCanvasClient({
   useEffect(() => {
     let active = true;
     if (
-      selection?.kind !== "SEGMENT" ||
+      !openSegmentId ||
       !selectedCanvasSegment ||
       selectedCanvasSegment.visibility !== "FULL"
     ) {
@@ -178,8 +200,8 @@ export function ResourcePlannerCanvasClient({
       };
     }
     void Promise.all([
-      getWorkSegment({ segmentId: selection.id }),
-      listWorkSegmentChanges({ segmentId: selection.id, limit: 20 }),
+      getWorkSegment({ segmentId: openSegmentId }),
+      listWorkSegmentChanges({ segmentId: openSegmentId, limit: 20 }),
     ]).then(([detailResult, historyResult]) => {
       if (!active) return;
       if (!detailResult.ok) {
@@ -195,6 +217,10 @@ export function ResourcePlannerCanvasClient({
         return;
       }
       setDetail(detailResult.data);
+      setDetailRange({
+        startMs: Date.parse(detailResult.data.startAt),
+        endMs: Date.parse(detailResult.data.endAt),
+      });
       setChanges(historyResult.data.items);
       setDetailState("READY");
     }).catch(() => {
@@ -207,9 +233,8 @@ export function ResourcePlannerCanvasClient({
     return () => {
       active = false;
     };
-  }, [selectedCanvasSegment, selection]);
-  const runMutation = useCallback(
-    (
+  }, [openSegmentId, selectedCanvasSegment]);
+  const runMutation = (
       action: () => Promise<ProjectManagementActionResult<unknown>>,
       successMessage: string,
       rollback?: () => void,
@@ -243,13 +268,15 @@ export function ResourcePlannerCanvasClient({
           return;
         }
         setNotice({ kind: "success", message: successMessage });
-        setSelectedIds(new Set());
+        if (openSegmentId) {
+          setOpenSegmentId(null);
+          setDialogDirty(false);
+          setSelection(null);
+        }
         onSuccess?.();
         router.refresh();
       });
-    },
-    [router],
-  );
+  };
 
   function handleBrush(request: TimeCanvasBrushRequest) {
     if (isPending) return;
@@ -266,77 +293,6 @@ export function ResourcePlannerCanvasClient({
     setNotice({ kind: "info", message: "已选择时间区间，请补全投入内容。" });
   }
 
-  function handleTransform(request: TimeCanvasSegmentTransformRequest) {
-    if (isPending) return;
-    const current = model.segments.find((segment) => segment.id === request.segmentId);
-    if (!current || current.type !== "PLANNED" || !current.versionToken) return;
-    const previous = model;
-    if (selection?.kind === "SEGMENT" && selection.id === request.segmentId) {
-      setDetail(null);
-      setChanges([]);
-      setDetailError("");
-      setDetailState("LOADING");
-    }
-    setModel((value) => ({
-      ...value,
-      segments: value.segments.map((segment) =>
-        segment.id === request.segmentId
-          ? { ...segment, startMs: request.startMs, endMs: request.endMs }
-          : segment,
-      ),
-    }));
-    runMutation(
-      () =>
-        movePlannedSegments({
-          moves: [
-            {
-              segmentId: request.segmentId,
-              expectedUpdatedAt: current.versionToken,
-              startAt: new Date(request.startMs).toISOString(),
-              endAt: new Date(request.endMs).toISOString(),
-            },
-          ],
-          reason: request.kind === "MOVE" || request.kind === "KEYBOARD_MOVE"
-            ? "时间画布移动"
-            : "时间画布调整区间",
-        }),
-      request.kind === "MOVE" || request.kind === "KEYBOARD_MOVE"
-        ? "已移动计划投入"
-        : "已调整计划投入区间",
-      () => setModel(previous),
-    );
-  }
-
-  const selectedPlanned = model.segments.filter(
-    (segment) =>
-      selectedIds.has(segment.id) &&
-      segment.type === "PLANNED" &&
-      segment.versionToken,
-  );
-  const movableSelected = selectedPlanned.filter(
-    (segment) => segment.permissions.canMove,
-  );
-  const cancelableSelected = selectedPlanned.filter(
-    (segment) => segment.permissions.canCancel,
-  );
-  const confirmableSelected = selectedPlanned.filter(
-    (segment) => segment.permissions.canConfirm,
-  );
-  const mergeableSelected = selectedPlanned.filter(
-    (segment) => segment.permissions.canMerge,
-  );
-
-  const toggleSegmentSelection = useCallback((segmentId: string) => {
-    const segment = model.segments.find((item) => item.id === segmentId);
-    if (!segment || segment.type !== "PLANNED" || !segment.versionToken) return;
-    setSelectedIds((current) => {
-      const next = new Set(current);
-      if (next.has(segmentId)) next.delete(segmentId);
-      else next.add(segmentId);
-      return next;
-    });
-  }, [model.segments]);
-
   return (
     <div className="space-y-4" data-testid="resource-planner-workbench">
       <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-3">
@@ -344,6 +300,7 @@ export function ResourcePlannerCanvasClient({
           <Button
             type="button"
             size="sm"
+            disabled={isPending || Boolean(createDraft)}
             onClick={() =>
               setCreateDraft({
                 rowId: quickCreateRowId,
@@ -357,111 +314,8 @@ export function ResourcePlannerCanvasClient({
           </Button>
         )}
         <span className="text-sm text-muted-foreground">
-          Shift+点击可多选；Shift+方向键移动，Alt+方向键调整结束时间。
+          双击投入打开详情；总览不会直接修改既有投入。
         </span>
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          <span className="text-sm">已选 {selectedIds.size} 条</span>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={isPending || movableSelected.length !== selectedPlanned.length || movableSelected.length === 0}
-            onClick={() => {
-              const previous = model;
-              const delta = 60 * 60 * 1_000;
-              setModel((value) => ({
-                ...value,
-                segments: value.segments.map((segment) =>
-                  selectedIds.has(segment.id)
-                    ? { ...segment, startMs: segment.startMs + delta, endMs: segment.endMs + delta }
-                    : segment,
-                ),
-              }));
-              runMutation(
-                () =>
-                  movePlannedSegments({
-                    moves: movableSelected.map((segment) => ({
-                      segmentId: segment.id,
-                      expectedUpdatedAt: segment.versionToken,
-                      startAt: new Date(segment.startMs + delta).toISOString(),
-                      endAt: new Date(segment.endMs + delta).toISOString(),
-                    })),
-                    reason: "时间画布批量平移 1 小时",
-                  }),
-                "已原子平移所选计划",
-                () => setModel(previous),
-              );
-            }}
-          >
-            批量顺延 1 小时
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={isPending || mergeableSelected.length !== selectedPlanned.length || mergeableSelected.length < 2}
-            onClick={() =>
-              runMutation(
-                () =>
-                  mergePlannedSegments({
-                    segments: mergeableSelected.map((segment) => ({
-                      segmentId: segment.id,
-                      expectedUpdatedAt: segment.versionToken,
-                    })),
-                    reason: "时间画布批量合并",
-                  }),
-                "已合并所选计划",
-              )
-            }
-          >
-            合并所选
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={isPending || confirmableSelected.length !== selectedPlanned.length || confirmableSelected.length === 0}
-            onClick={() => {
-              if (!window.confirm(`确认完整确认所选 ${confirmableSelected.length} 条计划并生成 Actual？`)) return;
-              runMutation(
-                () => batchConfirmPlannedSegments({
-                  segments: confirmableSelected.map((segment) => ({
-                    segmentId: segment.id,
-                    expectedUpdatedAt: segment.versionToken,
-                  })),
-                  reason: "时间画布批量完整确认",
-                }),
-                "已原子确认所选计划并生成 Actual",
-              );
-            }}
-          >
-            批量完整确认
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="destructive"
-            disabled={isPending || cancelableSelected.length !== selectedPlanned.length || cancelableSelected.length === 0}
-            onClick={() => {
-              if (!window.confirm(`确认取消所选 ${cancelableSelected.length} 条计划？该操作会保留完整历史。`)) return;
-              runMutation(
-                () => batchCancelPlannedSegments({
-                  segments: cancelableSelected.map((segment) => ({
-                    segmentId: segment.id,
-                    expectedUpdatedAt: segment.versionToken,
-                  })),
-                  reason: "时间画布批量取消",
-                }),
-                "已原子取消所选计划",
-              );
-            }}
-          >
-            批量取消
-          </Button>
-          <Button type="button" size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())}>
-            清除选择
-          </Button>
-        </div>
       </div>
 
       {notice && (
@@ -478,7 +332,7 @@ export function ResourcePlannerCanvasClient({
         </p>
       )}
 
-      <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
+      <div className="min-w-0">
         <div className="min-w-0 overflow-hidden rounded-xl border border-border bg-background">
           <TimeCanvas
             key={initialFocusId ?? "time-canvas"}
@@ -488,7 +342,7 @@ export function ResourcePlannerCanvasClient({
             initialSelection={initialSelection}
             display={{ showActual: true, showBusy: true, showInspector: false }}
             interaction={{
-              enableBrushCreate: !isPending && canCreateSegment,
+              enableBrushCreate: !isPending && !createDraft && canCreateSegment,
               creationRange: createDraft
                 ? {
                     rowId: createDraft.rowId,
@@ -498,38 +352,75 @@ export function ResourcePlannerCanvasClient({
                     endMs: createDraft.endMs,
                   }
                 : null,
-              selectedSegmentIds: selectedIds,
               onBrushCreate: handleBrush,
-              onSegmentTransform: isPending ? undefined : handleTransform,
-              onSegmentToggleSelection: toggleSegmentSelection,
+              onSegmentOpen: (segmentId) => {
+                if (createDraft) {
+                  setNotice({ kind: "info", message: "请先完成或取消当前投入创建。" });
+                  return;
+                }
+                const segment = model.segments.find((item) => item.id === segmentId);
+                if (!segment || segment.visibility !== "FULL") return;
+                setSelection({ kind: "SEGMENT", id: segmentId });
+                setOpenSegmentId(segmentId);
+                setDialogDirty(false);
+                setDetail(null);
+                setDetailRange(null);
+                setChanges([]);
+                setDetailError("");
+                setDetailState("LOADING");
+              },
               onInvalidDrop: (message) => setNotice({ kind: "error", message }),
             }}
-            onSelectionChange={(next) => {
-              setSelection(next);
-              setDetail(null);
-              setChanges([]);
-              const selected = next?.kind === "SEGMENT"
-                ? model.segments.find((segment) => segment.id === next.id)
-                : null;
-              setDetailState(selected?.visibility === "FULL" ? "LOADING" : "IDLE");
-              setDetailError("");
-            }}
+            selection={selection}
+            onSelectionChange={setSelection}
             emptyMessage="当前筛选和时间范围内没有可见安排。"
+            onRangeChange={navigateRangeByDate ? (range) => {
+              const url = new URL(window.location.href);
+              url.searchParams.set("date", formatShanghaiDate(range.startMs));
+              url.searchParams.delete("focus");
+              router.push(`${url.pathname}?${url.searchParams.toString()}`);
+            } : undefined}
           />
         </div>
-        <SegmentInspector
-          key={`${selectedCanvasSegment?.id ?? "none"}:${detail?.updatedAt ?? detailState}`}
-          canvasSegment={selectedCanvasSegment}
-          detail={detail}
-          detailState={detailState}
-          detailError={detailError}
-          changes={changes}
-          disabled={isPending}
-          onRun={runMutation}
-          onToggleSelected={toggleSegmentSelection}
-          selected={Boolean(selectedCanvasSegment && selectedIds.has(selectedCanvasSegment.id))}
-        />
       </div>
+
+      <Dialog
+        open={Boolean(openSegmentId)}
+        onOpenChange={(open) => {
+          if (open || isPending) return;
+          if (dialogDirty && !window.confirm("有未保存修改，确认放弃并关闭？")) return;
+          setOpenSegmentId(null);
+          setDialogDirty(false);
+          setSelection(null);
+        }}
+      >
+        <DialogContent className="max-h-[94dvh] max-w-[min(96vw,88rem)] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>投入详情</DialogTitle>
+            <DialogDescription>
+              仅当前打开的投入可修改；同一行的其他安排仅作为时间参考。
+            </DialogDescription>
+          </DialogHeader>
+          <SegmentInspector
+            key={`${selectedCanvasSegment?.id ?? "none"}:${detail?.updatedAt ?? detailState}`}
+            canvasSegment={selectedCanvasSegment}
+            model={model}
+            initialZoom={initialZoom}
+            detail={detail}
+            detailRange={detailRange}
+            detailState={detailState}
+            detailError={detailError}
+            changes={changes}
+            disabled={isPending}
+            onRun={runMutation}
+            onDirtyChange={setDialogDirty}
+            onRangeChange={(range) => {
+              setDetailRange(range);
+              setDialogDirty(true);
+            }}
+          />
+        </DialogContent>
+      </Dialog>
 
       {createDraft && (
         <QuickCreatePanel
@@ -682,17 +573,23 @@ function QuickCreatePanel({
 
 function SegmentInspector({
   canvasSegment,
+  model,
+  initialZoom,
   detail,
+  detailRange,
   detailState,
   detailError,
   changes,
   disabled,
   onRun,
-  onToggleSelected,
-  selected,
+  onDirtyChange,
+  onRangeChange,
 }: {
   canvasSegment: TimeCanvasModel["segments"][number] | null;
+  model: TimeCanvasModel;
+  initialZoom: TimeCanvasZoom;
   detail: WorkSegmentDetail | null;
+  detailRange: { startMs: number; endMs: number } | null;
   detailState: "IDLE" | "LOADING" | "READY" | "ERROR";
   detailError: string;
   changes: SegmentChange[];
@@ -702,8 +599,8 @@ function SegmentInspector({
     successMessage: string,
     rollback?: () => void,
   ) => void;
-  onToggleSelected: (segmentId: string) => void;
-  selected: boolean;
+  onDirtyChange: (dirty: boolean) => void;
+  onRangeChange: (range: { startMs: number; endMs: number }) => void;
 }) {
   if (!canvasSegment) {
     return <aside className="rounded-xl border border-dashed border-border p-5 text-sm text-muted-foreground">选择画布中的投入查看 Inspector。</aside>;
@@ -720,11 +617,38 @@ function SegmentInspector({
   if (detailState === "ERROR") {
     return <aside className="rounded-xl border border-destructive/30 bg-destructive/5 p-5 text-sm text-destructive" role="alert">投入详情加载失败：{detailError}</aside>;
   }
-  if (!detail || detailState === "LOADING") {
+  if (!detail || !detailRange || detailState === "LOADING") {
     return <aside className="rounded-xl border border-border bg-card p-5 text-sm text-muted-foreground">正在读取投入详情…</aside>;
   }
   const editable = canvasSegment.permissions.canEdit;
   const plannedEditable = detail.type === "PLANNED" && !["CONFIRMED", "CANCELLED"].includes(detail.status);
+  const detailModel: TimeCanvasModel = {
+    ...model,
+    rows: model.rows.filter((row) => row.id === canvasSegment.rowId),
+    anchors: model.anchors.filter((anchor) => anchor.rowId === canvasSegment.rowId),
+    phaseBands: model.phaseBands?.filter((band) => band.rowId === canvasSegment.rowId),
+    segments: model.segments
+      .filter((segment) => segment.rowId === canvasSegment.rowId)
+      .map((segment) => ({
+        ...segment,
+        ...(segment.id === canvasSegment.id
+          ? { startMs: detailRange.startMs, endMs: detailRange.endMs }
+          : {}),
+        permissions:
+          segment.id === canvasSegment.id
+            ? segment.permissions
+            : {
+                canViewDetails: false,
+                canEdit: false,
+                canMove: false,
+                canResize: false,
+                canMerge: false,
+                canCancel: false,
+                canConfirm: false,
+                canSoftDelete: false,
+              },
+      })),
+  };
   return (
     <aside className="min-w-0 space-y-4 rounded-xl border border-border bg-card p-4" data-testid="segment-inspector">
       <div>
@@ -735,17 +659,30 @@ function SegmentInspector({
         </div>
         <p className="mt-2 text-sm text-muted-foreground">{detail.personName} · {formatRange(Date.parse(detail.startAt), Date.parse(detail.endAt))}</p>
         <p className="mt-1 text-sm text-muted-foreground">{detail.task?.title ?? "独立投入"}</p>
-        {plannedEditable && (
-          <Button type="button" size="sm" variant="outline" className="mt-3" onClick={() => onToggleSelected(detail.id)}>
-            {selected ? "移出多选" : "加入多选"}
-          </Button>
-        )}
+      </div>
+
+      <div className="min-w-0 overflow-hidden rounded-xl border border-border">
+        <TimeCanvas
+          mode="RESOURCE_PLANNER"
+          model={detailModel}
+          initialZoom={initialZoom}
+          selection={{ kind: "SEGMENT", id: detail.id }}
+          display={{ showActual: true, showBusy: true, showInspector: false }}
+          interaction={editable ? {
+            onSegmentTransform: (request) => {
+              if (request.segmentId !== detail.id) return;
+              onRangeChange({ startMs: request.startMs, endMs: request.endMs });
+            },
+          } : undefined}
+          emptyMessage="当前投入没有可显示的时间上下文。"
+        />
       </div>
 
       {editable && (
         <form
           className="grid gap-3"
           aria-label="编辑投入详情"
+          onChange={() => onDirtyChange(true)}
           onSubmit={(event) => {
             event.preventDefault();
             const form = new FormData(event.currentTarget);
@@ -753,9 +690,9 @@ function SegmentInspector({
               () => updateWorkSegment({
                 segmentId: detail.id,
                 expectedUpdatedAt: detail.updatedAt,
-                reason: String(form.get("reason") ?? "Inspector 精确更新"),
-                startAt: shanghaiDateTimeLocalToIso(String(form.get("startAt") ?? "")),
-                endAt: shanghaiDateTimeLocalToIso(String(form.get("endAt") ?? "")),
+                reason: String(form.get("reason") ?? "投入详情更新"),
+                startAt: new Date(detailRange.startMs).toISOString(),
+                endAt: new Date(detailRange.endMs).toISOString(),
                 content: String(form.get("content") ?? ""),
                 priority: String(form.get("priority") ?? detail.priority),
                 expectedOutput: String(form.get("expectedOutput") ?? ""),
@@ -766,8 +703,8 @@ function SegmentInspector({
             );
           }}
         >
-          <Field label="开始" htmlFor="inspect-start"><Input id="inspect-start" name="startAt" type="datetime-local" defaultValue={toLocal(Date.parse(detail.startAt))} required /></Field>
-          <Field label="结束" htmlFor="inspect-end"><Input id="inspect-end" name="endAt" type="datetime-local" defaultValue={toLocal(Date.parse(detail.endAt))} required /></Field>
+          <Field label="开始" htmlFor="inspect-start"><Input id="inspect-start" name="startAt" type="datetime-local" value={toLocal(detailRange.startMs)} onChange={(event) => onRangeChange({ startMs: Date.parse(shanghaiDateTimeLocalToIso(event.target.value)), endMs: detailRange.endMs })} required /></Field>
+          <Field label="结束" htmlFor="inspect-end"><Input id="inspect-end" name="endAt" type="datetime-local" value={toLocal(detailRange.endMs)} onChange={(event) => onRangeChange({ startMs: detailRange.startMs, endMs: Date.parse(shanghaiDateTimeLocalToIso(event.target.value)) })} required /></Field>
           <Field label="内容" htmlFor="inspect-content"><Textarea id="inspect-content" name="content" defaultValue={detail.content} maxLength={2_000} required /></Field>
           <div className="grid gap-2">
             <Field label="完成比例" htmlFor="inspect-completion"><Input id="inspect-completion" name="completionPercent" type="number" min="0" max="100" disabled={detail.type !== "ACTUAL"} defaultValue={detail.completionPercent ?? ""} /></Field>
@@ -776,53 +713,20 @@ function SegmentInspector({
           <Field label="预期输出" htmlFor="inspect-expected"><Textarea id="inspect-expected" name="expectedOutput" defaultValue={detail.expectedOutput} /></Field>
           <Field label="实际输出" htmlFor="inspect-actual"><Textarea id="inspect-actual" name="actualOutput" defaultValue={detail.actualOutput} /></Field>
           <Input name="reason" aria-label="修改原因" placeholder="修改原因（可选）" />
-          <Button type="submit" disabled={disabled}>保存精确修改</Button>
+          <Button type="submit" disabled={disabled}>保存</Button>
         </form>
       )}
 
       {plannedEditable && canvasSegment.permissions.canConfirm && (
         <div className="space-y-3 border-t border-border pt-4">
-          <Button type="button" className="w-full" disabled={disabled} onClick={() => onRun(() => confirmPlannedSegment({ segmentId: detail.id, expectedUpdatedAt: detail.updatedAt, reason: "Inspector 完整确认" }), "已完整确认并生成 Actual")}>完整确认</Button>
-          <form className="grid gap-2" aria-label="部分确认" onSubmit={(event) => {
-            event.preventDefault();
-            const form = new FormData(event.currentTarget);
-            onRun(() => partiallyConfirmSegment({
-              segmentId: detail.id,
-              expectedUpdatedAt: detail.updatedAt,
-              coveredStartAt: shanghaiDateTimeLocalToIso(String(form.get("coveredStartAt") ?? "")),
-              coveredEndAt: shanghaiDateTimeLocalToIso(String(form.get("coveredEndAt") ?? "")),
-              reason: String(form.get("reason") ?? "Inspector 部分确认"),
-            }), "已按所选区间部分确认");
-          }}>
-            <p className="text-sm font-medium">部分确认（必须明确选择区间）</p>
-            <Input name="coveredStartAt" aria-label="确认开始" type="datetime-local" defaultValue={toLocal(Date.parse(detail.startAt))} required />
-            <Input name="coveredEndAt" aria-label="确认结束" type="datetime-local" required />
-            <Input name="reason" aria-label="部分确认原因" defaultValue="Inspector 部分确认" required />
-            <Button type="submit" variant="outline" disabled={disabled}>部分确认</Button>
-          </form>
+          <Button type="button" className="w-full" disabled={disabled} onClick={() => onRun(() => confirmPlannedSegment({ segmentId: detail.id, expectedUpdatedAt: detail.updatedAt, reason: "投入详情完整确认" }), "已完整确认并生成 Actual")}>完整确认</Button>
+          <PartialConfirmForm
+            detail={detail}
+            disabled={disabled}
+            onDirtyChange={onDirtyChange}
+            onRun={onRun}
+          />
         </div>
-      )}
-
-      {plannedEditable && canvasSegment.permissions.canSplit && (
-        <form className="grid gap-2 border-t border-border pt-4" aria-label="拆分计划" onSubmit={(event) => {
-          event.preventDefault();
-          const form = new FormData(event.currentTarget);
-          const splitAt = shanghaiDateTimeLocalToIso(String(form.get("splitAt") ?? ""));
-          onRun(() => splitPlannedSegment({
-            segmentId: detail.id,
-            expectedUpdatedAt: detail.updatedAt,
-            reason: String(form.get("reason") ?? ""),
-            parts: [
-              { startAt: detail.startAt, endAt: splitAt },
-              { startAt: splitAt, endAt: detail.endAt },
-            ],
-          }), "已按指定切分点拆分计划");
-        }}>
-          <p className="text-sm font-medium">拆分（必须明确选择切分点）</p>
-          <Input name="splitAt" aria-label="切分时间" type="datetime-local" required />
-          <Input name="reason" aria-label="拆分原因" defaultValue="Inspector 拆分计划" required />
-          <Button type="submit" variant="outline" disabled={disabled}>拆分</Button>
-        </form>
       )}
 
       {plannedEditable && canvasSegment.permissions.canCancel && (
@@ -880,6 +784,102 @@ function ReasonAction({ label, destructive, disabled, onSubmit }: { label: strin
     }}>
       <Input name="reason" aria-label={`${label}原因`} placeholder={`${label}原因`} required />
       <Button type="submit" variant={destructive ? "destructive" : "outline"} disabled={disabled}>{label}</Button>
+    </form>
+  );
+}
+
+function PartialConfirmForm({
+  detail,
+  disabled,
+  onDirtyChange,
+  onRun,
+}: {
+  detail: WorkSegmentDetail;
+  disabled: boolean;
+  onDirtyChange: (dirty: boolean) => void;
+  onRun: (
+    action: () => Promise<ProjectManagementActionResult<unknown>>,
+    successMessage: string,
+  ) => void;
+}) {
+  const startMs = Date.parse(detail.startAt);
+  const endMs = Date.parse(detail.endAt);
+  const durationMinutes = Math.max(1, Math.round((endMs - startMs) / 60_000));
+  const [coveredMinutes, setCoveredMinutes] = useState(() =>
+    Math.min(durationMinutes, Math.max(1, Math.round(durationMinutes / 2))),
+  );
+  const coveredEndAt = new Date(startMs + coveredMinutes * 60_000).toISOString();
+
+  return (
+    <form
+      className="grid gap-2"
+      aria-label="部分确认"
+      onSubmit={(event) => {
+        event.preventDefault();
+        const form = new FormData(event.currentTarget);
+        const reason = String(form.get("reason") ?? "投入详情部分确认");
+        if (coveredMinutes >= durationMinutes) {
+          onRun(
+            () => confirmPlannedSegment({
+              segmentId: detail.id,
+              expectedUpdatedAt: detail.updatedAt,
+              reason,
+            }),
+            "已完整确认并生成 Actual",
+          );
+          return;
+        }
+        onRun(
+          () => partiallyConfirmSegment({
+            segmentId: detail.id,
+            expectedUpdatedAt: detail.updatedAt,
+            coveredStartAt: detail.startAt,
+            coveredEndAt,
+            reason,
+          }),
+          "已确认计划前段并保留剩余计划",
+        );
+      }}
+    >
+      <p className="text-sm font-medium">确认计划前段</p>
+      <p className="text-xs text-muted-foreground">
+        开始固定为当前计划开头；拖动时间线选择确认结束点，也可直接填写结束时间。
+      </p>
+      <div className="rounded-lg border border-border bg-muted/30 p-3">
+        <input
+          className="w-full accent-primary"
+          type="range"
+          aria-label="在时间线上选择确认结束"
+          min={1}
+          max={durationMinutes}
+          value={coveredMinutes}
+          onChange={(event) => {
+            setCoveredMinutes(Number(event.target.value));
+            onDirtyChange(true);
+          }}
+        />
+        <div className="mt-1 flex justify-between gap-3 text-xs text-muted-foreground">
+          <span>{formatRange(startMs, startMs + 60_000).split(" – ")[0]}</span>
+          <span>{formatRange(startMs, endMs).split(" – ")[1]}</span>
+        </div>
+      </div>
+      <Input aria-label="确认开始" type="datetime-local" value={toLocal(startMs)} readOnly />
+      <Input
+        aria-label="确认结束"
+        type="datetime-local"
+        value={toLocal(Date.parse(coveredEndAt))}
+        onChange={(event) => {
+          const nextMs = Date.parse(shanghaiDateTimeLocalToIso(event.target.value));
+          const nextMinutes = Math.round((nextMs - startMs) / 60_000);
+          setCoveredMinutes(Math.max(1, Math.min(durationMinutes, nextMinutes)));
+          onDirtyChange(true);
+        }}
+        required
+      />
+      <Input name="reason" aria-label="部分确认原因" defaultValue="投入详情部分确认" required />
+      <Button type="submit" variant="outline" disabled={disabled}>
+        {coveredMinutes >= durationMinutes ? "完整确认" : "部分确认"}
+      </Button>
     </form>
   );
 }

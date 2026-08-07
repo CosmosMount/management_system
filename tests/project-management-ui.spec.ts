@@ -1199,18 +1199,12 @@ test.describe("project management P4/P6 UI integration", () => {
         { exact: true },
       ).first(),
     ).toBeVisible();
-    if (testInfo.project.name === "desktop") {
-      await page.getByTestId("time-canvas-scroll").evaluate((element) => {
-        element.scrollLeft = 1_200;
-        element.dispatchEvent(new Event("scroll"));
-      });
-    }
+    await page.getByTestId("time-canvas-scroll").evaluate((element) => {
+      element.scrollLeft = 1_200;
+      element.dispatchEvent(new Event("scroll"));
+    });
     await expect(
-      page.getByTestId(
-        testInfo.project.name === "mobile"
-          ? `agenda-item-${fixture.inactiveHistorySegmentId}`
-          : `segment-block-${fixture.inactiveHistorySegmentId}`,
-      ),
+      page.getByTestId(`segment-block-${fixture.inactiveHistorySegmentId}`),
     ).toBeVisible();
     await page.goto(
       `/progress/resources?from=2026-08-10&to=2026-08-12&people=${fixture.member.person.id},${fixture.owner.person.id}&zoom=hour`,
@@ -1518,7 +1512,7 @@ test.describe("project management P4/P6 UI integration", () => {
         .getByTestId(`segment-block-${fixture.confirmableSegmentId}`)
         .click();
     } else {
-      await expect(page.getByTestId("time-agenda")).toBeVisible();
+      await expect(page.getByTestId("time-canvas-scroll")).toBeVisible();
       await page.getByRole("button", { name: "新增投入" }).click();
       const quickCreate = page.getByRole("form", { name: "投入快速创建" });
       await expect(quickCreate.getByLabel("投入比例")).toHaveCount(0);
@@ -2916,7 +2910,7 @@ test.describe("project management P4/P6 UI integration", () => {
     context,
     page,
     baseURL,
-  }, testInfo) => {
+  }) => {
     test.setTimeout(90_000);
     const fixture = await createUiFixture();
     await prisma.workSegment.update({
@@ -2960,11 +2954,7 @@ test.describe("project management P4/P6 UI integration", () => {
     const dueQueue = page.getByRole("region", { name: "到期计划与确认队列" });
     await expect(dueQueue.getByRole("heading", { name: "到期计划与确认队列" })).toBeVisible();
     await expect(dueQueue.getByText("P6 UI 可确认计划")).toBeVisible();
-    if (testInfo.project.name === "mobile") {
-      await expect(page.getByTestId("time-agenda")).toBeVisible();
-    } else {
-      await expect(page.getByTestId("time-canvas-scroll")).toBeVisible();
-    }
+    await expect(page.getByTestId("time-canvas-scroll")).toBeVisible();
     await dueQueue.getByRole("button", { name: "与计划一致" }).click();
     await expect(page.getByText("已完整确认并生成 Actual")).toBeVisible();
     await expect.poll(() => prisma.workSegment.findUnique({

@@ -17,7 +17,6 @@ import {
   partiallyConfirmSegment as partiallyConfirmSegmentService,
   scanSegmentTransitions as scanSegmentTransitionsService,
   softDeleteActualSegment as softDeleteActualSegmentService,
-  splitPlannedSegment as splitPlannedSegmentService,
   updateWorkSegment as updateWorkSegmentService,
 } from "@/lib/project-management/application/segment-service";
 import { assertAuthorized } from "@/lib/project-management/authorization";
@@ -58,12 +57,6 @@ export async function movePlannedSegments(
   input: unknown,
 ): Promise<ProjectManagementActionResult<Awaited<ReturnType<typeof movePlannedSegmentsService>>>> {
   return runSegmentAction("pm.segment.update", "movePlannedSegments", input, movePlannedSegmentsService);
-}
-
-export async function splitPlannedSegment(
-  input: unknown,
-): Promise<ProjectManagementActionResult<Awaited<ReturnType<typeof splitPlannedSegmentService>>>> {
-  return runSegmentAction("pm.segment.split", "splitPlannedSegment", input, splitPlannedSegmentService);
 }
 
 export async function mergePlannedSegments(

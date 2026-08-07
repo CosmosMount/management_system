@@ -5,9 +5,9 @@ import { PageCommandBar } from "@/components/project-management/shell/page-comma
 import { timeCanvasDataToModel } from "@/components/project-management/time-canvas/adapter";
 import { formatShanghaiDate } from "@/components/project-management/time-canvas/url-state";
 import { toProjectManagementServiceError } from "@/lib/project-management/application/errors";
+import { taskStatusLabels } from "@/lib/project-management/labels";
 import {
   getActorPersonOption,
-  resolveTaskOptionsByIds,
   searchTaskOptions,
 } from "@/lib/project-management/queries/option-queries";
 import { getWorkSegment } from "@/lib/project-management/queries/resource-queries";
@@ -23,6 +23,8 @@ export default async function ProgressMyTimelinePage({ searchParams }: { searchP
   const actor = await getProgressActorOrRedirect();
   const params = (await searchParams) ?? {};
   const mode = firstParam(params.mode) === "day" ? "day" : "week";
+  const taskCursor = firstParam(params.taskCursor) || undefined;
+  const showAllTasks = firstParam(params.tasks) === "all";
   const requestedFocusId = firstParam(params.focus);
   const focusedSegment = isUuid(requestedFocusId)
     ? await getWorkSegment({ actor, input: { segmentId: requestedFocusId } }).catch(
@@ -44,7 +46,15 @@ export default async function ProgressMyTimelinePage({ searchParams }: { searchP
 
   const [actorPerson, taskPage, canvasResult, duePage] = await Promise.all([
     getActorPersonOption(actor),
-    searchTaskOptions({ actor, input: { statuses: ["ACTIVE"], mine: true, limit: 50 } }),
+    searchTaskOptions({
+      actor,
+      input: {
+        mine: true,
+        statuses: showAllTasks ? [] : ["ACTIVE"],
+        cursor: taskCursor,
+        limit: 25,
+      },
+    }),
     getTimeCanvasData({
       actor,
       input: {
@@ -68,16 +78,38 @@ export default async function ProgressMyTimelinePage({ searchParams }: { searchP
     })),
     getPersonalDueSegments({ actor, limit: 100 }),
   ]);
-  const model = canvasResult.ok ? timeCanvasDataToModel(canvasResult.data, "PERSONAL_TIMELINE") : null;
-  const canvasTaskOptions = canvasResult.ok
-    ? (
-        await resolveTaskOptionsByIds({
-          actor,
-          input: { ids: canvasResult.data.anchors.map((task) => task.id) },
-        })
-      ).filter((task) => task.status === "ACTIVE")
-    : [];
-  const taskOptions = mergeOptions(canvasTaskOptions, taskPage.items);
+  const taskPlanResult = taskPage.items.length > 0
+    ? await getTimeCanvasData({
+        actor,
+        input: {
+          scope: { kind: "PERSONAL" },
+          rangeStart: new Date(startMs).toISOString(),
+          rangeEnd: new Date(endMs).toISOString(),
+          personIds: [actor.personId],
+          taskIds: taskPage.items.map((task) => task.id),
+          tagIds: [],
+          types: [],
+          statuses: [],
+          groupBy: "TASK",
+          includeTaskAnchors: true,
+          includeActual: true,
+          includeBusyBlocks: false,
+          rowLimit: 25,
+        },
+      }).then((data) => ({ ok: true as const, data })).catch((error: unknown) => ({
+        ok: false as const,
+        message: toProjectManagementServiceError(error).message,
+      }))
+    : null;
+  const model = canvasResult.ok
+    ? mergePersonalTimelineModels(
+        timeCanvasDataToModel(canvasResult.data, "PERSONAL_TIMELINE"),
+        taskPlanResult?.ok
+          ? timeCanvasDataToModel(taskPlanResult.data, "TASK_WORKBENCH")
+          : null,
+      )
+    : null;
+  const taskOptions = taskPage.items.filter((task) => task.status === "ACTIVE");
   const dueSegments = duePage.items.map((segment) => ({
     id: segment.id,
     title: segment.content,
@@ -105,7 +137,7 @@ export default async function ProgressMyTimelinePage({ searchParams }: { searchP
           <label className="grid gap-1 text-sm">选择日期<input className="h-8 rounded-lg border border-input bg-background px-2" name="date" type="date" defaultValue={date} /></label>
           <input type="hidden" name="mode" value={mode} />
           <button className="rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground" type="submit">打开日期</button>
-          <span className="text-sm text-muted-foreground">移动端使用 Agenda 与精确日期表单，不依赖拖动。</span>
+          <span className="text-sm text-muted-foreground">所有视口使用同一时间画布；双击投入打开详情。</span>
         </form>
         {model ? (
           <ResourcePlannerCanvasClient
@@ -117,28 +149,67 @@ export default async function ProgressMyTimelinePage({ searchParams }: { searchP
             mode="PERSONAL_TIMELINE"
             allowIndependent
             initialFocusId={focusId}
+            navigateRangeByDate
           />
         ) : (
           <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-6 text-sm text-destructive" role="alert">个人时间线加载失败：{canvasResult.ok ? "未知错误" : canvasResult.message}</div>
         )}
+        <section className="rounded-xl border border-border bg-card p-4" aria-labelledby="my-task-list-title">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 id="my-task-list-title" className="font-semibold">参与 Task</h2>
+              <p className="mt-1 text-sm text-muted-foreground">默认只显示进行中的 Task；当前页与上方计划轨道同步，每页最多 25 条。</p>
+            </div>
+            <div className="flex gap-2">
+              <Link className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted" href={timelineHref(date, mode, undefined, !showAllTasks)}>{showAllTasks ? "只看进行中" : "显示全部"}</Link>
+              {taskCursor && <Link className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted" href={timelineHref(date, mode, undefined, showAllTasks)}>返回第一页</Link>}
+              {taskPage.nextCursor && <Link className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted" href={timelineHref(date, mode, taskPage.nextCursor, showAllTasks)}>下一页</Link>}
+            </div>
+          </div>
+          {taskPage.items.length === 0 ? (
+            <p className="mt-4 text-sm text-muted-foreground">当前没有有效参与的 Task。</p>
+          ) : (
+            <ul className="mt-4 divide-y rounded-lg border border-border" aria-label="参与 Task 列表">
+              {taskPage.items.map((task) => (
+                <li key={task.id} className="flex min-w-0 flex-wrap items-center justify-between gap-3 p-3">
+                  <Link className="min-w-0 break-words font-medium hover:underline" href={`/progress/tasks/${task.id}`}>{task.title}</Link>
+                  <span className="shrink-0 rounded-full bg-muted px-2 py-1 text-xs text-muted-foreground">{taskStatusLabels[task.status]}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
         <PersonalDueQueue segments={dueSegments} truncated={Boolean(duePage.nextCursor)} />
       </div>
     </>
   );
 }
 
-function mergeOptions<T extends { id: string }>(...groups: T[][]) {
-  const merged = new Map<string, T>();
-  for (const group of groups) {
-    for (const option of group) {
-      if (!merged.has(option.id)) merged.set(option.id, option);
-    }
-  }
-  return [...merged.values()];
+function timelineHref(
+  date: string,
+  mode: "day" | "week",
+  taskCursor?: string,
+  showAllTasks = false,
+) {
+  const search = new URLSearchParams({ date, mode });
+  if (taskCursor) search.set("taskCursor", taskCursor);
+  if (showAllTasks) search.set("tasks", "all");
+  return `/progress/my-timeline?${search.toString()}`;
 }
 
-function timelineHref(date: string, mode: "day" | "week") {
-  return `/progress/my-timeline?date=${encodeURIComponent(date)}&mode=${mode}`;
+function mergePersonalTimelineModels(
+  personal: ReturnType<typeof timeCanvasDataToModel>,
+  taskPlans: ReturnType<typeof timeCanvasDataToModel> | null,
+) {
+  if (!taskPlans) return personal;
+  return {
+    ...personal,
+    rows: [
+      ...taskPlans.rows.filter((row) => row.kind === "PLAN").map((row) => ({ ...row, editable: false })),
+      ...personal.rows,
+    ],
+    anchors: taskPlans.anchors.map((anchor) => ({ ...anchor, editable: false })),
+  };
 }
 
 function validDate(value: string) {

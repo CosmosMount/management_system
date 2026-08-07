@@ -31,6 +31,15 @@ const projectDetailTaskSelect = {
   activeMilestoneNodeId: true,
   createdAt: true,
   updatedAt: true,
+  members: {
+    where: { removedAt: null },
+    orderBy: [{ role: "asc" as const }, { createdAt: "asc" as const }],
+    select: {
+      personId: true,
+      role: true,
+      person: { select: { displayName: true, avatar: true, status: true } },
+    },
+  },
   currentPlanVersion: {
     select: {
       versionNo: true,
@@ -279,6 +288,13 @@ export async function getProjectDetail({
       activeMilestoneNodeId: task.activeMilestoneNodeId,
       createdAt: task.createdAt.toISOString(),
       updatedAt: task.updatedAt.toISOString(),
+      members: task.members.map((member) => ({
+        personId: member.personId,
+        role: member.role,
+        displayName: member.person.displayName,
+        avatar: member.person.avatar,
+        status: member.person.status,
+      })),
       currentPlan: {
         versionNo: task.currentPlanVersion.versionNo,
         plannedStartAt: task.currentPlanVersion.plannedStartAt?.toISOString() ?? null,

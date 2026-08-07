@@ -21,7 +21,6 @@ import {
   partiallyConfirmSegment,
   scanSegmentTransitions,
   softDeleteActualSegment,
-  splitPlannedSegment,
   updateWorkSegment,
 } from "../lib/project-management/application/segment-service";
 import {
@@ -336,89 +335,6 @@ test.describe("project management P5 work segment services", () => {
     ).toBe(outboxBefore);
   });
 
-  test("Planned Segment split and merge preserve coverage, history and tags", async () => {
-    const fixture = await createActivatedFixture();
-    const tag = await prisma.tag.create({
-      data: {
-        name: `P5-Segment-Tag-${randomUUID()}`,
-        color: "#2563eb",
-        createdByAccountId: fixture.owner.account.id,
-      },
-    });
-    const planned = await createWorkSegment(actor(fixture.member), {
-      ...plannedInput(fixture.member.person.id, 9, 11),
-      taskId: fixture.taskId,
-      tagIds: [tag.id],
-    });
-
-    await expectServiceError(
-      splitPlannedSegment(actor(fixture.member), {
-        segmentId: planned.segment.id,
-        expectedUpdatedAt: planned.segment.updatedAt,
-        reason: "错误拆分",
-        parts: [
-          { startAt: atHour(9), endAt: atHour(9.5) },
-          { startAt: atHour(10), endAt: atHour(11) },
-        ],
-      }),
-      "VALIDATION_ERROR",
-    );
-
-    const split = await splitPlannedSegment(actor(fixture.member), {
-      segmentId: planned.segment.id,
-      expectedUpdatedAt: planned.segment.updatedAt,
-      reason: "按上午两段拆分",
-      parts: [
-        { startAt: atHour(9), endAt: atHour(10) },
-        { startAt: atHour(10), endAt: atHour(11) },
-      ],
-    });
-    expect(split.segments).toHaveLength(2);
-    expect(split.segments.map((segment) => segment.sourceSplitFromId)).toEqual([
-      planned.segment.id,
-      planned.segment.id,
-    ]);
-    expect(split.segments.flatMap((segment) => segment.tagIds)).toEqual([
-      tag.id,
-      tag.id,
-    ]);
-    const originalAfterSplit = await prisma.workSegment.findUniqueOrThrow({
-      where: { id: planned.segment.id },
-      select: { status: true },
-    });
-    expect(originalAfterSplit.status).toBe("CANCELLED");
-    const secondSplit = split.segments[1];
-    if (!secondSplit) throw new Error("缺少第二段拆分结果");
-    const inProgressChild = await prisma.workSegment.update({
-      where: { id: secondSplit.id },
-      data: { status: "IN_PROGRESS" },
-      select: { id: true, updatedAt: true },
-    });
-
-    const merged = await mergePlannedSegments(actor(fixture.member), {
-      segments: split.segments.map((segment) =>
-        segment.id === inProgressChild.id
-          ? {
-              segmentId: segment.id,
-              expectedUpdatedAt: inProgressChild.updatedAt,
-            }
-          : {
-              segmentId: segment.id,
-              expectedUpdatedAt: segment.updatedAt,
-            },
-      ),
-      reason: "恢复为连续计划",
-    });
-    expect(merged.segment.startAt).toBe(atHour(9).toISOString());
-    expect(merged.segment.endAt).toBe(atHour(11).toISOString());
-    expect(merged.segment.tagIds).toEqual([tag.id]);
-    const changeHistory = await listWorkSegmentChanges({
-      actor: actor(fixture.member),
-      input: { segmentId: merged.segment.id },
-    });
-    expect(changeHistory.items.map((item) => item.action)).toContain("MERGE");
-  });
-
   test("Merge rejects a combined range over 31 days without partial writes", async () => {
     const fixture = await createActivatedFixture();
     const startAt = new Date("2026-09-01T00:00:00.000Z");
@@ -586,24 +502,30 @@ test.describe("project management P5 work segment services", () => {
       ...plannedInput(fixture.member.person.id, 11, 13),
       taskId: fixture.taskId,
     });
+    const segmentCountBeforeForgedPartial = await prisma.workSegment.count();
+    const sourceCountBeforeForgedPartial = await prisma.workSegmentSource.count();
     await expectServiceError(
       partiallyConfirmSegment(actor(fixture.member), {
         segmentId: partialPlan.segment.id,
         expectedUpdatedAt: partialPlan.segment.updatedAt,
-        coveredStartAt: atHour(11),
-        coveredEndAt: atHour(13),
+        coveredStartAt: atHour(11.5),
+        coveredEndAt: atHour(12.5),
       }),
       "VALIDATION_ERROR",
     );
+    expect(await prisma.workSegment.count()).toBe(segmentCountBeforeForgedPartial);
+    expect(await prisma.workSegmentSource.count()).toBe(sourceCountBeforeForgedPartial);
     const partial = await partiallyConfirmSegment(actor(fixture.member), {
       segmentId: partialPlan.segment.id,
       expectedUpdatedAt: partialPlan.segment.updatedAt,
-      coveredStartAt: atHour(11.5),
+      coveredStartAt: atHour(11),
       coveredEndAt: atHour(12.5),
-      actual: { content: "实际只完成中间部分" },
+      actual: { content: "实际完成计划前段" },
     });
     expect(partial.segment.status).toBe("CANCELLED");
-    expect(partial.remainingSegments).toHaveLength(2);
+    expect(partial.remainingSegments).toHaveLength(1);
+    expect(partial.remainingSegments[0]?.startAt).toBe(atHour(12.5).toISOString());
+    expect(partial.remainingSegments[0]?.endAt).toBe(atHour(13).toISOString());
 
     const planA = await createWorkSegment(actor(fixture.member), {
       ...plannedInput(fixture.member.person.id, 14, 15),
@@ -1403,7 +1325,7 @@ test.describe("project management P5 work segment services", () => {
     const partialInput = {
       segmentId: partialPlan.segment.id,
       expectedUpdatedAt: partialPlan.segment.updatedAt,
-      coveredStartAt: atHour(11.5),
+      coveredStartAt: atHour(11),
       coveredEndAt: atHour(12.5),
       reason: "并发部分确认",
     };
@@ -1430,7 +1352,7 @@ test.describe("project management P5 work segment services", () => {
       orderBy: { startAt: "asc" },
       select: { id: true, type: true, status: true },
     });
-    expect(remainingPlans).toHaveLength(2);
+    expect(remainingPlans).toHaveLength(1);
     expect(
       remainingPlans.every((segment) => segment.type === "PLANNED"),
     ).toBe(true);
@@ -1447,7 +1369,7 @@ test.describe("project management P5 work segment services", () => {
           action: { in: ["CONFIRM", "SPLIT"] },
         },
       }),
-    ).toBe(4);
+    ).toBe(3);
     expect(
       await prisma.domainAuditEvent.count({
         where: {
@@ -1462,7 +1384,7 @@ test.describe("project management P5 work segment services", () => {
           action: { in: ["pm.segment.confirm", "pm.segment.split"] },
         },
       }),
-    ).toBe(4);
+    ).toBe(3);
     expect(
       await prisma.workSegment.findUniqueOrThrow({
         where: { id: partialPlan.segment.id },

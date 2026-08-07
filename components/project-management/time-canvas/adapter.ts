@@ -18,7 +18,6 @@ const readOnlyPermissions: TimeCanvasSegmentPermissions = {
   canEdit: false,
   canMove: false,
   canResize: false,
-  canSplit: false,
   canMerge: false,
   canCancel: false,
   canConfirm: false,

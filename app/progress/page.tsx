@@ -40,7 +40,7 @@ export default async function ProgressPage() {
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="flex items-center gap-2 font-medium"><CalendarClock className="size-4" aria-hidden="true" />未来 7 天个人时间</h2>
-              <p className="mt-1 text-sm text-muted-foreground">桌面显示时间画布，窄屏自动切换 Agenda。</p>
+              <p className="mt-1 text-sm text-muted-foreground">所有视口使用同一横向时间画布，窄屏可在画布内滚动。</p>
             </div>
             <Link href={routes.progress.myTimeline} className="text-sm text-primary hover:underline">打开个人时间线</Link>
           </div>

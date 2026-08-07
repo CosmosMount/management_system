@@ -6,7 +6,6 @@ import {
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
@@ -25,7 +24,6 @@ import {
   RotateCcw,
   X,
 } from "lucide-react";
-import { TimeAgenda } from "@/components/project-management/time-canvas/time-agenda";
 import {
   DAY_MS,
   axisTicks,
@@ -106,8 +104,9 @@ export function TimeCanvas({
   const selection = controlledSelection === undefined
     ? internalSelection
     : controlledSelection;
-  const mobileAgenda = useMobileAgenda();
   const [scrollState, setScrollState] = useState({ left: 0, width: 900 });
+  const [rangeShiftDays, setRangeShiftDays] = useState(0);
+  const rangeShiftDaysRef = useRef(0);
   const [activeFocusKey, setActiveFocusKey] = useState<string | null>(null);
   const [pendingFocusKey, setPendingFocusKey] = useState<string | null>(null);
   const scrollElementRef = useRef<HTMLDivElement>(null);
@@ -326,6 +325,17 @@ export function TimeCanvas({
   );
 
   const selectedEntity = resolveSelection(model, selection);
+  const commitRangeShift = () => {
+    const days = rangeShiftDaysRef.current;
+    if (!onRangeChange || days === 0) return;
+    const shiftMs = days * DAY_MS;
+    rangeShiftDaysRef.current = 0;
+    setRangeShiftDays(0);
+    onRangeChange({
+      startMs: model.range.startMs + shiftMs,
+      endMs: model.range.endMs + shiftMs,
+    });
+  };
   return (
     <section
       className="min-w-0 max-w-full"
@@ -351,6 +361,37 @@ export function TimeCanvas({
         onZoomChange={setZoom}
       />
 
+      {onRangeChange && (
+        <div className="flex items-center gap-3 border-b border-border bg-card px-3 py-2">
+          <span className="shrink-0 text-xs text-muted-foreground">日期平移</span>
+          <input
+            type="range"
+            min={-31}
+            max={31}
+            step={1}
+            value={rangeShiftDays}
+            className="h-4 min-w-0 flex-1 cursor-ew-resize accent-primary"
+            aria-label="左右拖动切换日期范围"
+            data-testid="time-canvas-range-pan-bar"
+            onChange={(event) => {
+              const days = Number(event.target.value);
+              rangeShiftDaysRef.current = days;
+              setRangeShiftDays(days);
+            }}
+            onPointerUp={commitRangeShift}
+            onBlur={commitRangeShift}
+            onKeyUp={(event) => {
+              if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+                commitRangeShift();
+              }
+            }}
+          />
+          <span className="w-16 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+            {rangeShiftDays === 0 ? "当前窗口" : `${rangeShiftDays > 0 ? "+" : ""}${rangeShiftDays} 天`}
+          </span>
+        </div>
+      )}
+
       <div
         className={cn(
           "min-w-0 gap-0 md:grid",
@@ -360,17 +401,6 @@ export function TimeCanvas({
         )}
       >
         <div className="min-w-0">
-          {mobileAgenda ? (
-          <div className="p-3">
-            <TimeAgenda
-              model={model}
-              display={display}
-              selection={selection}
-              onSelect={select}
-              emptyMessage={emptyMessage}
-            />
-          </div>
-          ) : (
           <div
             ref={scrollElementRef}
             className="relative max-h-[min(68dvh,44rem)] min-h-72 min-w-0 overflow-auto overscroll-contain"
@@ -452,7 +482,6 @@ export function TimeCanvas({
               )}
             </div>
           </div>
-          )}
         </div>
 
         {display.showInspector && selectedEntity && (
@@ -465,10 +494,6 @@ export function TimeCanvas({
       </div>
     </section>
   );
-}
-
-function useMobileAgenda() {
-  return useSyncExternalStore(subscribeMobileAgenda, mobileAgendaSnapshot, () => false);
 }
 
 function useLiveNow(generatedAt: string) {
@@ -494,16 +519,6 @@ function useLiveNow(generatedAt: string) {
   }, []);
 
   return nowMs;
-}
-
-function subscribeMobileAgenda(callback: () => void) {
-  const query = window.matchMedia("(max-width: 767px)");
-  query.addEventListener("change", callback);
-  return () => query.removeEventListener("change", callback);
-}
-
-function mobileAgendaSnapshot() {
-  return window.matchMedia("(max-width: 767px)").matches;
 }
 
 function TimeCanvasToolbar({
@@ -1210,7 +1225,23 @@ function SegmentBlock({
         }
         onSelect(selected ? null : { kind: "SEGMENT", id: segment.id });
       }}
+      onDoubleClick={(event) => {
+        if (!segment.permissions.canViewDetails || !interaction?.onSegmentOpen) return;
+        event.preventDefault();
+        event.stopPropagation();
+        interaction.onSegmentOpen(segment.id);
+      }}
       onKeyDown={(event) => {
+        if (
+          event.key === "Enter" &&
+          segment.permissions.canViewDetails &&
+          interaction?.onSegmentOpen
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          interaction.onSegmentOpen(segment.id);
+          return;
+        }
         if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
         const direction = event.key === "ArrowLeft" ? -1 : 1;
         if (event.shiftKey) {

@@ -304,25 +304,6 @@ export const movePlannedSegmentsInputSchema = z.object({
   reason: optionalText(1_000),
 });
 
-export const splitPlannedSegmentInputSchema = z.object({
-  segmentId: idSchema,
-  expectedUpdatedAt: requiredDate("记录版本不正确"),
-  reason: requiredText("请输入拆分原因", 1_000),
-  parts: z
-    .array(
-      segmentTimeRangeSchema
-        .safeExtend(segmentOverrideFieldsSchema.shape)
-        .safeExtend({ tagIds: z.array(idSchema).max(50).optional() })
-        .strict()
-        .superRefine((input, ctx) => {
-          validateOverrideFields(input, ctx);
-        }),
-      { message: "拆分列表格式不正确" },
-    )
-    .min(2, "至少拆分为两段")
-    .max(100, "单次最多拆分为 100 段"),
-});
-
 export const mergePlannedSegmentsInputSchema = z.object({
   segments: z
     .array(
@@ -461,9 +442,6 @@ export type BatchCreatePlannedSegmentsInput = z.infer<
 export type UpdateWorkSegmentInput = z.infer<typeof updateWorkSegmentInputSchema>;
 export type MovePlannedSegmentsInput = z.infer<
   typeof movePlannedSegmentsInputSchema
->;
-export type SplitPlannedSegmentInput = z.infer<
-  typeof splitPlannedSegmentInputSchema
 >;
 export type MergePlannedSegmentsInput = z.infer<
   typeof mergePlannedSegmentsInputSchema

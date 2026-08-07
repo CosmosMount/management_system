@@ -83,7 +83,6 @@ export const segmentPermissionsDtoSchema = z
     canEdit: z.boolean(),
     canMove: z.boolean(),
     canResize: z.boolean(),
-    canSplit: z.boolean(),
     canMerge: z.boolean(),
     canCancel: z.boolean(),
     canConfirm: z.boolean(),

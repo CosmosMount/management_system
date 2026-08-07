@@ -37,7 +37,6 @@ import {
   movePlannedSegmentsInputSchema,
   partiallyConfirmSegmentInputSchema,
   softDeleteActualSegmentInputSchema,
-  splitPlannedSegmentInputSchema,
   updateWorkSegmentInputSchema,
   type CreateActualSegmentInput,
   type CreateWorkSegmentInput,
@@ -387,121 +386,6 @@ async function movePlannedSegmentsWithAuthorizationTx(
     segments: updatedSegments.map(toWorkSegmentDto),
     affectedSegmentIds: updatedSegments.map((segment) => segment.id),
   };
-}
-
-export async function splitPlannedSegment(
-  actor: ProjectManagementActor,
-  input: unknown,
-): Promise<BatchSegmentMutationResult> {
-  const parsed = splitPlannedSegmentInputSchema.parse(input);
-  return prisma.$transaction(async (tx) => {
-    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
-    const preflightSegment = await loadSegmentForMutationTx(tx, parsed.segmentId);
-    assertSegmentVisible(refreshedActor, preflightSegment);
-    assertCanManageSegment(refreshedActor, preflightSegment);
-    for (const part of parsed.parts) {
-      if (!Object.hasOwn(part, "taskId")) {
-        continue;
-      }
-      await assertSegmentReferenceTx(tx, {
-        actor: refreshedActor,
-        personId: preflightSegment.personId,
-        type: "PLANNED",
-        taskId: Object.hasOwn(part, "taskId")
-          ? part.taskId ?? null
-          : preflightSegment.taskId,
-      });
-    }
-    const associationLocks = await lockSegmentAssociationTasksTx(tx, {
-      segmentIds: [parsed.segmentId],
-      prospectiveTaskIds: parsed.parts.flatMap((part) =>
-        part.taskId ? [part.taskId] : [],
-      ),
-    });
-    await lockWorkSegmentTx(tx, parsed.segmentId);
-    const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
-    assertSegmentAssociationLocatorUnchanged(preflightSegment, segment);
-    assertAssociationTaskLocked(associationLocks, segment);
-    assertSegmentVisible(refreshedActor, segment);
-    assertCanManageSegment(refreshedActor, segment);
-    assertExpectedUpdatedAt(segment, parsed.expectedUpdatedAt);
-    assertPlannedEditable(segment, "只有未确认且未取消的 Planned Segment 可以拆分");
-    const originalTagIds = tagIdsOf(segment);
-    const parts = [...parsed.parts].sort(
-      (left, right) => left.startAt.getTime() - right.startAt.getTime(),
-    );
-    assertSplitCoverage(segment, parts);
-
-    const before = snapshotSegment(segment);
-    const children: SegmentForMutation[] = [];
-    for (const part of parts) {
-      const childTagIds = part.tagIds ?? originalTagIds;
-      const childTaskId =
-        Object.hasOwn(part, "taskId") ? part.taskId ?? null : segment.taskId;
-      await assertSegmentReferenceTx(tx, {
-        actor: refreshedActor,
-        personId: segment.personId,
-        type: "PLANNED",
-        taskId: childTaskId,
-        requireCreatableTask: true,
-      });
-      await assertTagsActiveTx(tx, childTagIds);
-      const child = await tx.workSegment.create({
-        data: {
-          personId: segment.personId,
-          type: "PLANNED",
-          status: plannedStatusForRange(part.startAt, part.endAt),
-          startAt: part.startAt,
-          endAt: part.endAt,
-          content: part.content ?? segment.content,
-          priority: part.priority ?? segment.priority,
-          expectedOutput: part.expectedOutput ?? segment.expectedOutput,
-          actualOutput: "",
-          completionPercent: null,
-          taskId: childTaskId,
-          sourceSplitFromId: segment.id,
-          createdByAccountId: refreshedActor.accountId,
-          updatedByAccountId: refreshedActor.accountId,
-          tags: {
-            create: childTagIds.map((tagId) => ({ tagId })),
-          },
-        },
-        include: segmentInclude,
-      });
-      await recordSegmentChangeTx(tx, {
-        actor: refreshedActor,
-        segmentId: child.id,
-        action: "SPLIT",
-        before: null,
-        after: snapshotSegment(child),
-        reason: parsed.reason,
-      });
-      children.push(child);
-    }
-    const cancelled = await tx.workSegment.update({
-      where: { id: segment.id },
-      data: {
-        status: "CANCELLED",
-        updatedByAccountId: refreshedActor.accountId,
-      },
-      include: segmentInclude,
-    });
-    await recordSegmentChangeTx(tx, {
-      actor: refreshedActor,
-      segmentId: segment.id,
-      action: "SPLIT",
-      before,
-      after: {
-        ...snapshotSegment(cancelled),
-        splitChildIds: children.map((child) => child.id),
-      },
-      reason: parsed.reason,
-    });
-    return {
-      segments: children.map(toWorkSegmentDto),
-      affectedSegmentIds: [segment.id, ...children.map((child) => child.id)],
-    };
-  });
 }
 
 export async function mergePlannedSegments(
@@ -931,6 +815,11 @@ export async function partiallyConfirmSegment(
     assertExpectedUpdatedAt(segment, parsed.expectedUpdatedAt);
     assertPlannedEditable(segment, "只有未确认且未取消的 Planned Segment 可以部分确认");
     assertCoverageInsideSegment(segment, parsed.coveredStartAt, parsed.coveredEndAt);
+    if (parsed.coveredStartAt.getTime() !== segment.startAt.getTime()) {
+      throw validationError("部分确认必须从当前计划开始时间起算", {
+        coveredStartAt: ["部分确认必须从当前计划开始时间起算"],
+      });
+    }
     if (
       parsed.coveredStartAt.getTime() === segment.startAt.getTime() &&
       parsed.coveredEndAt.getTime() === segment.endAt.getTime()
@@ -1866,33 +1755,6 @@ function assertCoverageInsideSegment(
     throw validationError("来源覆盖范围不能超出 Planned Segment", {
       sources: ["来源覆盖范围不能超出 Planned Segment"],
     });
-  }
-}
-
-function assertSplitCoverage(
-  segment: SegmentForMutation,
-  parts: Array<{ startAt: Date; endAt: Date }>,
-) {
-  if (parts[0]?.startAt.getTime() !== segment.startAt.getTime()) {
-    throw validationError("拆分后的时间范围必须完整覆盖原计划", {
-      parts: ["拆分后的时间范围必须完整覆盖原计划"],
-    });
-  }
-  if (parts[parts.length - 1]?.endAt.getTime() !== segment.endAt.getTime()) {
-    throw validationError("拆分后的时间范围必须完整覆盖原计划", {
-      parts: ["拆分后的时间范围必须完整覆盖原计划"],
-    });
-  }
-  for (let index = 0; index < parts.length; index += 1) {
-    const part = parts[index];
-    if (!part) continue;
-    assertValidSegmentRange(part.startAt, part.endAt);
-    const next = parts[index + 1];
-    if (next && part.endAt.getTime() !== next.startAt.getTime()) {
-      throw validationError("拆分后的时间范围必须连续且不重叠", {
-        parts: ["拆分后的时间范围必须连续且不重叠"],
-      });
-    }
   }
 }
 

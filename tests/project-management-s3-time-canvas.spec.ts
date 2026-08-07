@@ -417,8 +417,7 @@ test.describe("S3 TimeCanvas controlled browser fixtures", () => {
     context,
     page,
     baseURL,
-  }, testInfo) => {
-    test.skip(testInfo.project.name !== "desktop", "移动端使用议程视图");
+  }) => {
     const identity = await createCanvasBrowserIdentity();
     await loginAsTestUser(context, baseURL, identity);
     await page.clock.setFixedTime(new Date("2026-08-05T08:00:00.000+08:00"));
@@ -473,22 +472,23 @@ test.describe("S3 TimeCanvas controlled browser fixtures", () => {
         "data-mode",
         mode,
       );
-      if (testInfo.project.name === "desktop") {
-        await expect(page.getByTestId("time-canvas-scroll")).toBeVisible();
-      } else {
-        await expect(page.getByTestId("time-agenda")).toBeVisible();
-      }
+      await expect(page.getByTestId("time-canvas-scroll")).toBeVisible();
       await expectHealthyPage(page);
     }
 
     await page.goto(
       "/progress/time-canvas-fixtures?mode=TASK_COMPOSER",
     );
-    if (testInfo.project.name === "desktop") {
+    {
       await expect(
         page.getByTestId("phase-bands-plan:fixture-composer"),
       ).toBeVisible();
-      await expect(page.locator("[data-canvas-object]")).toHaveCount(200);
+      if (testInfo.project.name === "desktop") {
+        await expect(page.locator("[data-canvas-object]")).toHaveCount(200);
+      } else {
+        await expect.poll(() => page.locator("[data-canvas-object]").count()).toBeGreaterThan(0);
+        expect(await page.locator("[data-canvas-object]").count()).toBeLessThan(200);
+      }
       expect(
         await page.getByTestId("timeline-row-plan:fixture-composer").evaluate((row) => {
           const rowBottom = row.getBoundingClientRect().bottom;
@@ -514,10 +514,6 @@ test.describe("S3 TimeCanvas controlled browser fixtures", () => {
         composerSymbol.y + composerSymbol.height / 2 -
         (composerBand.y + composerBand.height / 2),
       )).toBeLessThanOrEqual(1);
-    } else {
-      await expect(
-        page.locator("[data-testid^='agenda-item-']"),
-      ).toHaveCount(200);
     }
     await expectHealthyPage(page);
 
@@ -563,7 +559,7 @@ test.describe("S3 TimeCanvas controlled browser fixtures", () => {
     await page.goto(
       "/progress/time-canvas-fixtures?mode=RESOURCE_PLANNER",
     );
-    if (testInfo.project.name === "desktop") {
+    {
       const mountedRows = page.locator("[data-testid^='timeline-row-']");
       expect(await mountedRows.count()).toBeLessThan(50);
       const initialTarget = page.locator(
@@ -588,12 +584,6 @@ test.describe("S3 TimeCanvas controlled browser fixtures", () => {
         ),
       ).toContain("fixture-person-12");
       expect(await mountedRows.count()).toBeLessThan(50);
-    } else {
-      await expect
-        .poll(() =>
-          page.getByTestId("time-agenda").getByRole("listitem").count(),
-        )
-        .toBeGreaterThan(200);
     }
     await expectHealthyPage(page);
 
@@ -601,11 +591,7 @@ test.describe("S3 TimeCanvas controlled browser fixtures", () => {
       "/progress/time-canvas-fixtures?mode=RESOURCE_PLANNER&empty=1",
     );
     await expect(
-      page.getByTestId(
-        testInfo.project.name === "desktop"
-          ? "time-canvas-empty"
-          : "time-agenda-empty",
-      ),
+      page.getByTestId("time-canvas-empty"),
     ).toContainText("受控空数据验收状态");
     await expectHealthyPage(page);
     expect(browserErrors).toEqual([]);

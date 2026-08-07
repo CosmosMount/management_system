@@ -562,13 +562,8 @@ function taskUniverseWhere(
       AND: [
         taskReadableWhere(actor),
         {
-          workSegments: {
-            some: {
-              personId: actor.personId,
-              deletedAt: null,
-              startAt: { lt: input.rangeEnd },
-              endAt: { gt: input.rangeStart },
-            },
+          members: {
+            some: { personId: actor.personId, removedAt: null },
           },
         },
       ],
@@ -667,6 +662,12 @@ function segmentFilterWhere(
     AND: [
       {
         deletedAt: null,
+        NOT: {
+          AND: [
+            { type: "PLANNED" },
+            { status: { in: ["CONFIRMED", "CANCELLED"] } },
+          ],
+        },
         startAt: { lt: input.rangeEnd },
         endAt: { gt: input.rangeStart },
       },
@@ -984,7 +985,6 @@ function segmentPermissions(
       canEdit: editable,
       canMove: false,
       canResize: false,
-      canSplit: false,
       canMerge: false,
       canCancel: false,
       canConfirm: false,
@@ -1000,7 +1000,6 @@ function segmentPermissions(
     canEdit: editable,
     canMove: editable,
     canResize: editable,
-    canSplit: editable,
     canMerge: editable,
     canCancel: editable,
     canConfirm: editable,

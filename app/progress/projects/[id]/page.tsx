@@ -4,6 +4,8 @@ import { ArrowLeft, Pencil } from "lucide-react";
 import { ProjectActionsClient } from "@/components/project-management/project-actions-client";
 import { ProjectAvatar } from "@/components/project-management/project-avatar";
 import { ProjectTaskTimeline } from "@/components/project-management/project-task-timeline";
+import { timeCanvasDataToModel } from "@/components/project-management/time-canvas/adapter";
+import { formatShanghaiDate } from "@/components/project-management/time-canvas/url-state";
 import {
   CollaborationLeftSidebar,
   CollaborationRightSidebar,
@@ -15,6 +17,8 @@ import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { toProjectManagementServiceError } from "@/lib/project-management/application/errors";
 import { getProjectDetail } from "@/lib/project-management/queries/project-queries";
+import { resolvePeopleOptionsByIds } from "@/lib/project-management/queries/option-queries";
+import { getTimeCanvasData } from "@/lib/project-management/queries/time-canvas-queries";
 import {
   getActivityVersion,
   getCollaborationCapabilities,
@@ -89,6 +93,49 @@ export default async function ProjectDetailPage({
     activity,
     activityVersion: activityVersion.token,
   };
+  const requestedTimelineDate = first(query.timelineDate);
+  const defaultTimelineDate = projectDefaultTimelineDate(project.tasks);
+  const timelineDate = validDate(requestedTimelineDate)
+    ? requestedTimelineDate
+    : defaultTimelineDate;
+  const timelineStartMs = Date.parse(`${timelineDate}T00:00:00.000+08:00`);
+  const timelineEndMs = timelineStartMs + 31 * 24 * 60 * 60 * 1_000;
+  const timelinePersonIds = [...new Set([
+    ...project.members.map((member) => member.personId),
+    ...project.tasks.flatMap((task) => task.members.map((member) => member.personId)),
+  ])];
+  const resourceTimelineError = timelinePersonIds.length > 50
+    ? "当前页 Project/Task 有效成员超过 50 人，请缩小 Task 页范围后重试。"
+    : null;
+  const [timelinePeople, resourceCanvasResult] = resourceTimelineError
+    ? [[], null]
+    : await Promise.all([
+        resolvePeopleOptionsByIds({
+          actor,
+          input: { scope: { purpose: "VISIBLE" }, ids: timelinePersonIds },
+        }),
+        getTimeCanvasData({
+          actor,
+          input: {
+            scope: { kind: "RESOURCE_PLANNER" },
+            rangeStart: new Date(timelineStartMs).toISOString(),
+            rangeEnd: new Date(timelineEndMs).toISOString(),
+            personIds: timelinePersonIds,
+            taskIds: project.tasks.map((task) => task.id),
+            tagIds: [],
+            types: [],
+            statuses: [],
+            groupBy: "PERSON",
+            includeTaskAnchors: false,
+            includeActual: true,
+            includeBusyBlocks: false,
+            rowLimit: 50,
+          },
+        }).then((data) => ({ ok: true as const, data })).catch((error: unknown) => ({
+          ok: false as const,
+          message: toProjectManagementServiceError(error).message,
+        })),
+      ]);
   const owners = project.members.filter((member) => member.role === "OWNER");
   const participants = project.members.filter(
     (member) => member.role === "PARTICIPANT",
@@ -192,6 +239,25 @@ export default async function ProjectDetailPage({
               timelineError={project.timelineError}
               taskTotalCount={project.taskTotalCount}
               completedTaskTotalCount={project.completedTaskTotalCount}
+              resourceModel={
+                resourceCanvasResult?.ok
+                  ? timeCanvasDataToModel(resourceCanvasResult.data, "RESOURCE_PLANNER")
+                  : null
+              }
+              resourceTimelineError={
+                resourceTimelineError ??
+                (resourceCanvasResult && !resourceCanvasResult.ok
+                  ? resourceCanvasResult.message
+                  : null)
+              }
+              peopleOptions={timelinePeople}
+              timelineWindow={{
+                date: timelineDate,
+                focusId: first(query.timelineFocus) || null,
+                previousHref: projectTimelineHref(project.id, query, shiftDate(timelineDate, -31)),
+                nextHref: projectTimelineHref(project.id, query, shiftDate(timelineDate, 31)),
+                defaultHref: projectTimelineHref(project.id, query, defaultTimelineDate),
+              }}
               nextPageHref={
                 project.taskNextCursor
                   ? detailPageHref(project.id, project.taskNextCursor)
@@ -245,6 +311,42 @@ function OverviewItem({ label, value }: { label: string; value: string }) {
 
 function first(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+}
+
+function projectDefaultTimelineDate(
+  tasks: Awaited<ReturnType<typeof getProjectDetail>>["tasks"],
+) {
+  const activeAt = tasks.flatMap((task) =>
+    task.currentPlan.nodes.flatMap((node) =>
+      node.status === "ACTIVE" && !node.revision
+        ? [node.milestone?.expectedCompletedAt ?? node.termination?.plannedAt]
+        : [],
+    ),
+  ).find(Boolean);
+  const center = Date.parse(activeAt ?? new Date().toISOString());
+  return formatShanghaiDate(center - 15 * 24 * 60 * 60 * 1_000);
+}
+
+function projectTimelineHref(
+  projectId: string,
+  query: SearchParams,
+  timelineDate: string,
+) {
+  const search = new URLSearchParams();
+  const taskCursor = first(query.taskCursor);
+  if (taskCursor) search.set("taskCursor", taskCursor);
+  search.set("timelineDate", timelineDate);
+  return `/progress/projects/${projectId}?${search.toString()}`;
+}
+
+function shiftDate(date: string, days: number) {
+  return formatShanghaiDate(Date.parse(`${date}T00:00:00.000+08:00`) + days * 24 * 60 * 60 * 1_000);
+}
+
+function validDate(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = Date.parse(`${value}T00:00:00.000+08:00`);
+  return Number.isFinite(parsed) && formatShanghaiDate(parsed) === value;
 }
 
 function detailPageHref(projectId: string, taskCursor: string) {

@@ -2,14 +2,16 @@
 
 import Link from "next/link";
 import { useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { LocateFixed, Plus } from "lucide-react";
-import { TimeCanvas } from "@/components/project-management/time-canvas/time-canvas";
+import { ResourcePlannerCanvasClient } from "@/components/project-management/resource-planner-canvas-client";
 import { buildPlanPhaseBands } from "@/components/project-management/time-canvas/plan-phase-bands";
 import type {
   TimeCanvasAnchor,
   TimeCanvasModel,
   TimeCanvasTone,
 } from "@/components/project-management/time-canvas/types";
+import type { PersonOptionDto } from "@/lib/project-management/types/time-canvas";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { taskNodeStatusLabels, taskStatusLabels } from "@/lib/project-management/labels";
@@ -55,6 +57,10 @@ export function ProjectTaskTimeline({
   timelineError,
   taskTotalCount,
   completedTaskTotalCount,
+  resourceModel,
+  resourceTimelineError,
+  peopleOptions,
+  timelineWindow,
   nextPageHref,
 }: {
   projectId: string;
@@ -63,11 +69,25 @@ export function ProjectTaskTimeline({
   timelineError: string | null;
   taskTotalCount: number;
   completedTaskTotalCount: number;
+  resourceModel: TimeCanvasModel | null;
+  resourceTimelineError: string | null;
+  peopleOptions: PersonOptionDto[];
+  timelineWindow: {
+    date: string;
+    focusId: string | null;
+    previousHref: string;
+    nextHref: string;
+    defaultHref: string;
+  };
   nextPageHref: string | null;
 }) {
+  const router = useRouter();
   const timelineContainerRef = useRef<HTMLDivElement>(null);
-  const model = useMemo(() => buildProjectTimelineModel(tasks), [tasks]);
-  const [requestedAnchorId, setRequestedAnchorId] = useState<string | null>(null);
+  const model = useMemo(
+    () => mergeProjectTimelineModel(tasks, resourceModel, timelineWindow.date),
+    [resourceModel, tasks, timelineWindow.date],
+  );
+  const [requestedAnchorId, setRequestedAnchorId] = useState<string | null>(timelineWindow.focusId);
   const selectedAnchorId = model.anchors.some(
     (anchor) => anchor.id === requestedAnchorId,
   )
@@ -89,9 +109,15 @@ export function ProjectTaskTimeline({
     const preferredAnchorId = activeNode
       ? `project-node:${activeNode.id}`
       : `project-start:${task.id}`;
-    const anchor =
-      model.anchors.find((item) => item.id === preferredAnchorId) ??
+    const anchor = model.anchors.find((item) => item.id === preferredAnchorId) ??
       model.anchors.find((item) => item.taskId === task.id);
+    if (anchor && (anchor.atMs < model.range.startMs || anchor.atMs >= model.range.endMs)) {
+      const url = new URL(window.location.href);
+      url.searchParams.set("timelineDate", centeredTimelineDate(anchor.atMs));
+      url.searchParams.set("timelineFocus", anchor.id);
+      router.push(`${url.pathname}?${url.searchParams.toString()}`);
+      return;
+    }
     const rowIndex = model.rows.findIndex((row) => row.sourceId === task.id);
     if (!anchor || rowIndex < 0) return;
     setRequestedAnchorId(anchor.id);
@@ -104,12 +130,7 @@ export function ProjectTaskTimeline({
       const scroller = root?.querySelector<HTMLElement>(
         "[data-testid='time-canvas-scroll']",
       );
-      if (!scroller) {
-        root
-          ?.querySelector<HTMLElement>(`[data-testid="agenda-item-${anchor.id}"]`)
-          ?.focus();
-        return;
-      }
+      if (!scroller) return;
       const rowHeaderWidth =
         scroller
           .querySelector<HTMLElement>("[data-testid^='timeline-row-']")
@@ -216,41 +237,83 @@ export function ProjectTaskTimeline({
       </section>
 
       <section className="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5">
-        <h2 className="font-semibold">Task 时间线</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          当前页 Task · Current Plan · Asia/Shanghai
-        </p>
-        {timelineError ? (
+        <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="font-semibold">Task 与人员投入时间线</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              当前页 Task · 31 天窗口 · {timelineWindow.date}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Link href={timelineWindow.previousHref} className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>上一窗口</Link>
+            <Link href={timelineWindow.defaultHref} className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>定位当前节点</Link>
+            <Link href={timelineWindow.nextHref} className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>下一窗口</Link>
+          </div>
+        </div>
+        <form className="mt-3 flex flex-wrap items-end gap-2">
+          <label className="grid gap-1 text-sm">
+            <span>窗口开始日期</span>
+            <input className="h-8 rounded-lg border border-input bg-background px-2" name="timelineDate" type="date" defaultValue={timelineWindow.date} />
+          </label>
+          <Button type="submit" size="sm" variant="outline">打开日期</Button>
+        </form>
+        {timelineError || resourceTimelineError ? (
           <div
             className="mt-4 rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive"
             role="alert"
           >
-            {timelineError}
+            {timelineError ?? resourceTimelineError}
           </div>
         ) : (
           <div
             ref={timelineContainerRef}
             className="mt-4 min-w-0 scroll-mt-24 overflow-hidden rounded-lg border border-border"
           >
-            <TimeCanvas
-              mode="TASK_WORKBENCH"
-              model={model}
+            <ResourcePlannerCanvasClient
+              initialModel={model}
+              peopleOptions={peopleOptions}
+              taskOptions={[]}
+              defaultPersonId={peopleOptions[0]?.id ?? ""}
               initialZoom="DAY"
-              display={{ showActual: false, showBusy: false, showInspector: false }}
-              selection={
-                selectedAnchorId ? { kind: "ANCHOR", id: selectedAnchorId } : null
-              }
-              interaction={{
-                onAnchorSelectionChange: (anchorId) =>
-                  setRequestedAnchorId(anchorId),
-              }}
-              emptyMessage="当前 Project 没有可展示的 Task 时间线"
+              mode="TASK_WORKBENCH"
+              allowCreate={false}
+              readOnly
+              initialFocusId={selectedAnchorId}
             />
           </div>
         )}
       </section>
     </div>
   );
+}
+
+function centeredTimelineDate(atMs: number) {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  return formatter.format(new Date(atMs - 15 * DAY_MS));
+}
+
+function mergeProjectTimelineModel(
+  tasks: ProjectTimelineTask[],
+  resourceModel: TimeCanvasModel | null,
+  timelineDate: string,
+) {
+  const startMs = Date.parse(`${timelineDate}T00:00:00.000+08:00`);
+  const planModel = buildProjectTimelineModel(tasks);
+  return {
+    ...planModel,
+    range: { startMs, endMs: startMs + 31 * DAY_MS },
+    rows: [
+      ...planModel.rows,
+      ...(resourceModel?.rows.map((row) => ({ ...row, editable: false })) ?? []),
+    ],
+    segments: resourceModel?.segments ?? [],
+    generatedAt: resourceModel?.generatedAt ?? planModel.generatedAt,
+  };
 }
 
 function buildProjectTimelineModel(tasks: ProjectTimelineTask[]): TimeCanvasModel {

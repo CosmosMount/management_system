@@ -1737,7 +1737,6 @@ test.describe("S2 canvas query security", () => {
       canEdit: true,
       canMove: false,
       canResize: false,
-      canSplit: false,
       canMerge: false,
       canCancel: false,
       canConfirm: false,

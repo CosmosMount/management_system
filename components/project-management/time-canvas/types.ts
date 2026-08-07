@@ -61,7 +61,6 @@ export type TimeCanvasSegmentPermissions = {
   canEdit: boolean;
   canMove: boolean;
   canResize: boolean;
-  canSplit: boolean;
   canMerge: boolean;
   canCancel: boolean;
   canConfirm: boolean;
@@ -158,6 +157,7 @@ export type TimeCanvasInteractionOptions = {
   onAnchorSelectionChange?: (anchorId: string | null) => void;
   onSegmentTransform?: (request: TimeCanvasSegmentTransformRequest) => void;
   onSegmentToggleSelection?: (segmentId: string) => void;
+  onSegmentOpen?: (segmentId: string) => void;
   onInvalidDrop?: (message: string) => void;
 };
 

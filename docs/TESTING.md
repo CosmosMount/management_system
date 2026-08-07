@@ -226,8 +226,10 @@ npm run pm:identity-backfill
 1. 桌面 `1440x1000` 与 Pixel 5 分别打开 `/progress`，应展示“我的工作”总览、可见 Active Task、未来投入、待确认计划和未读通知摘要；导航中不得出现“资源冲突”。
 2. 打开 `/progress/tasks`，默认勾选“只看我参与”并选择“进行中”；按人员范围、状态、优先级和关键词筛选时，只展示当前 actor 可读 Task，且仍可手动取消默认筛选；不可读 Task 不能通过列表枚举。
 3. 打开 `/progress/tasks/[id]`，应看到概览、共享节点导航、选中节点详情，以及正式启用的“Task 风险 / Task 评论 / 近期动态”；不得再出现 Tab、人员投入、计划版本、Revision/验收历史或 raw 审计列表。Task Owner/Participant 可在 ACTIVE 状态提出和解决风险，普通旁观者只能查看风险但仍可评论；只有全局管理员显示评论删除入口。Active Task 编辑 Dialog 继续使用一次事务保存基本信息、Tags 和成员，并保持原有并发保护。
-4. 打开 `/progress/resources`，人员计划时间轴应能新增 Planned Segment，并通过 P5 服务端 action 执行确认、部分确认、拆分、合并、顺延和取消；测试需校验 UI 结果和数据库状态。
-5. `/progress/resources/conflicts` 必须返回 404。资源计划、个人时间线、Task 工作台和 Agenda 不得出现冲突标记或投入比例；快速创建与 Inspector 不得提供比例输入。创建、更新、移动、拆分、合并和确认仍需正常工作，重叠 Segment 不得产生冲突待办、通知或 outbox。
+4. Desktop 与 Pixel 5 打开 `/progress/resources`：两者都渲染横向时间画布且页面无横向溢出。总览不能拖动、缩放、批量修改或合并既有投入；双击或聚焦后按 Enter 打开详情 Dialog，只有目标 Segment 可编辑。创建草稿存在时不能打开其他详情，失败时表单必须保留。
+5. Planned 完整确认后只显示 Actual；前缀部分确认固定开始点并只生成一条尾段，伪造中间起点必须在服务端零写入拒绝。直接拆分入口、公开 action 和 capability 不得存在。确认、取消、Actual 软删除仍需验证数据库、来源、change、audit、站内通知与 outbox，测试环境必须禁用真实飞书投递。
+6. `/progress/my-timeline` 默认只显示 ACTIVE 参与 Task；切换“显示全部”后才显示草稿和终态。每页 25 条且列表与 Plan 行同步；无 `date` 时从今天开始，日期平移滑杆向左/右拖动后 URL 与数据窗口应进入过去/未来。Task 详情显示有效成员投入并禁止创建，Project 详情显示 ProjectMember/当前页 TaskMember 并集且投入只读。Task/Project 的 31 天 URL 窗口、上一/下一、日期选择和跨窗口节点定位均需验收。
+7. `/progress/resources/conflicts` 必须返回 404。资源计划、个人时间线和 Task 工作台不得出现冲突标记或投入比例；重叠 Segment 不得产生冲突待办、通知或 outbox。
 6. 打开 `/progress/notifications`，只展示当前收件人的站内通知；可按类型/未读筛选、标记单条或全部已读，跳转对象前仍要按业务对象权限过滤。
 7. 页面不得出现旧项目、阶段、周报、提醒或 `PROJECT_MANAGER` 角色文案；当前风险区不得出现旧 Stage 风险或计划节点绑定入口。页面不得出现 500、Next.js error overlay、未处理浏览器错误或横向滚动。
 8. 旧 `/progress/task/:id` 应服务端重定向到 `/progress/tasks/:id`；`/progress/projects/*` 是当前正式路由，只有旧 `/progress/kanban` 回到 `/progress`。收缩 migration 集成测试仍需验证历史旧表、旧 enum、`PROJECT_MANAGER` 数据和 `channel=progress` outbox/recipient 被删除；HEAD 还必须证明新 Project 不含 Stage、`ownerOpenId` 等旧签名。
