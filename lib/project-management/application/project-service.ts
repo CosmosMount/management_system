@@ -276,7 +276,6 @@ export async function completeProject(actor: ProjectManagementActor, input: unkn
     const pendingRequestCount = await tx.projectEstablishmentRequest.count({ where: { projectId: project.id, status: "PENDING" } });
     if (pendingRequestCount > 0) throw stateConflictError("Project 仍有待审批立项申请，不能结束");
     const tasks = await tx.task.findMany({ where: { projectId: project.id, deletedAt: null }, select: { id: true, title: true, status: true }, orderBy: { id: "asc" } });
-    if (!tasks.length) throw stateConflictError("至少需要一个已完成 Task 才能结束 Project");
     const blocking = tasks.filter((task) => task.status !== "COMPLETED");
     if (blocking.length) throw stateConflictError(`仍有 ${blocking.length} 个 Task 未完成：${blocking.slice(0, 5).map((task) => task.title).join("、")}`);
     const updated = await tx.project.update({ where: { id: project.id }, data: { status: "COMPLETED", completedAt: new Date(), lockVersion: { increment: 1 } } });

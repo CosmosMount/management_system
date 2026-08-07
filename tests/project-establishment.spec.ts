@@ -92,6 +92,77 @@ test.describe("Project 立项与生命周期", () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   });
 
+  test("空 Project 可以直接结束并记录审计与通知", async ({ context, page, baseURL }, testInfo) => {
+    const requester = await actor(`空 Project 申请人 ${testInfo.project.name}`);
+    const admin = await actor(`空 Project 管理员 ${testInfo.project.name}`, "PROJECT_ADMINISTRATOR");
+    const created = await createProject(requester, {
+      name: `空 Project ${randomUUID()}`,
+      description: "验证没有 Task 时仍可结束",
+      avatarPath: null,
+      members: [{ personId: requester.personId, role: "OWNER" }],
+      requestedTaskIds: [],
+      idempotencyKey: randomUUID(),
+    });
+    const request = await prisma.projectEstablishmentRequest.findFirstOrThrow({
+      where: { projectId: created.projectId, status: "PENDING" },
+    });
+    const approved = await reviewProjectEstablishment(admin, {
+      projectId: created.projectId,
+      requestId: request.id,
+      expectedLockVersion: created.lockVersion,
+      decision: "APPROVE",
+      comment: "",
+    });
+
+    await loginAsTestUser(context, baseURL, {
+      openId: requester.openId,
+      name: `空 Project 申请人 ${testInfo.project.name}`,
+    });
+    await page.goto(`/progress/projects/${created.projectId}`);
+    await page.getByRole("button", { name: "结束 Project" }).click();
+    const dialog = page.getByRole("dialog", { name: "结束 Project" });
+    await expect(dialog).toContainText("当前没有关联 Task。");
+    await expect(dialog.getByRole("button", { name: "确认结束" })).toBeEnabled();
+    await dialog.getByRole("button", { name: "确认结束" }).click();
+
+    await expect(page.getByText("已结束", { exact: true })).toBeVisible();
+    await expect
+      .poll(() =>
+        prisma.project.findUnique({
+          where: { id: created.projectId },
+          select: { status: true, completedAt: true, lockVersion: true },
+        }),
+      )
+      .toMatchObject({
+        status: "COMPLETED",
+        completedAt: expect.any(Date),
+        lockVersion: approved.lockVersion + 1,
+      });
+    const audit = await prisma.domainAuditEvent.findFirstOrThrow({
+      where: {
+        projectId: created.projectId,
+        action: "pm.project.complete",
+      },
+    });
+    expect(audit.after).toMatchObject({ status: "COMPLETED", taskCount: 0 });
+    const outbox = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: {
+        eventKey: `pm:project:${created.projectId}:project_completed:${approved.lockVersion + 1}:feishu`,
+      },
+    });
+    expect(outbox).toMatchObject({
+      channel: "project-management",
+      botKind: "notification",
+      type: "project_completed",
+    });
+    expect(JSON.parse(outbox.payload)).toMatchObject({
+      kind: "project_completed",
+      context: { taskCount: 0 },
+    });
+    await expectHealthyPage(page);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  });
+
   test("普通账号提交、管理员驳回、原申请人重提并批准", async () => {
     const requester = await actor("Project 申请人");
     const admin = await actor("Project 管理员", "PROJECT_ADMINISTRATOR");

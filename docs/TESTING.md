@@ -237,7 +237,7 @@ npm run pm:identity-backfill
 1. `/progress/projects` 无参数时默认“只看我参与 + 进行中”，显式 `mine=0&status=` 可取消默认；Desktop 和 Pixel 5 均无横向滚动。
 2. 普通账号可提交完整立项但不能审批；两类全局管理员可通过或驳回。驳回保留同一 Project，原申请人可修改并创建新轮次。
 3. 立项提交不改变所选 Task；批准时全部 Task 原子挂载，冲突时零部分写入。Task 成员同步为 Project Participant，Project Owner 不获得 Task 写权限。
-4. Project 结束要求至少一个关联 Task 且全部严格 `COMPLETED`；软删除保留 Task 并清空 `projectId`，删除对象直达返回脱敏 404。
+4. 空 Project 可以直接结束；存在关联 Task 时必须全部严格 `COMPLETED`。软删除保留 Task 并清空 `projectId`，删除对象直达返回脱敏 404。
 5. 头像只接受真实 PNG/JPEG/WebP 且不超过 2 MiB；所有自动化测试继续使用禁通知环境，不发送真实飞书消息。
 
 ### Task 创建页专项测试

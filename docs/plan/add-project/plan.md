@@ -147,10 +147,9 @@ Project 的负责人和参与人不限制 Project 可见性。Person 为 `INACTI
 
 Project 从 `ACTIVE` 进入 `COMPLETED` 时必须同时满足：
 
-1. 至少关联一个未删除 Task；
-2. 所有关联且未删除 Task 的状态都严格为 `COMPLETED`；
-3. 不存在正在审批的 Project 立项申请；
-4. Project `expectedLockVersion` 未过期。
+1. 可以没有关联且未删除的 Task；如果存在，其状态都必须严格为 `COMPLETED`；
+2. 不存在正在审批的 Project 立项申请；
+3. Project `expectedLockVersion` 未过期。
 
 `FAILED/CANCELLED/TIMEOUT/ARCHIVED/DRAFT/ACTIVE` 均不视为“Task 已完成”。服务端返回
 阻塞 Task 的有界列表和总数，UI 展示名称与状态并链接到 Task；客户端计数不能替代事务内
