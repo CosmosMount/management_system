@@ -1,11 +1,10 @@
 import type { Prisma } from "@prisma/client";
 import { AccountsPanel } from "@/components/admin/accounts-panel";
-import { prisma } from "@/lib/prisma";
-import { rankFuzzyMatches } from "@/lib/search/fuzzy-score";
 import {
-  normalizeSearchText,
-  searchTerms,
-} from "@/lib/search/normalize-search-text";
+  findRankedAdminAccountCandidates,
+} from "@/lib/admin-account-search";
+import { prisma } from "@/lib/prisma";
+import { normalizeSearchText } from "@/lib/search/normalize-search-text";
 
 const PAGE_SIZE = 30;
 const projectRoleValues = [
@@ -26,7 +25,10 @@ const accountRowSelect = {
   person: { select: { displayName: true, avatar: true } },
   identities: {
     where: { provider: "FEISHU" as const, tenantId: "default" },
-    orderBy: { createdAt: "asc" as const },
+    orderBy: [
+      { createdAt: "asc" as const },
+      { id: "asc" as const },
+    ],
     select: { id: true, openId: true, unionId: true },
   },
   reimbursementUser: {
@@ -124,96 +126,46 @@ export default async function AdminAccountsPage({
   const where: Prisma.AccountWhereInput =
     conditions.length > 0 ? { AND: conditions } : {};
 
+  const responsibilitiesPromise = prisma.userRole.findMany({
+    where: {
+      revokedAt: null,
+      role: { in: [...reimbursementRoleValues] },
+      accountId: { not: null },
+    },
+    orderBy: [
+      { team: "asc" },
+      { techGroup: "asc" },
+      { role: "asc" },
+      { createdAt: "asc" },
+      { id: "asc" },
+    ],
+    select: {
+      id: true,
+      role: true,
+      team: true,
+      techGroup: true,
+      account: {
+        select: {
+          id: true,
+          person: { select: { displayName: true, avatar: true } },
+          reimbursementUser: {
+            select: { name: true, avatar: true, email: true },
+          },
+        },
+      },
+    },
+  });
+
   let accounts: Prisma.AccountGetPayload<{ select: typeof accountRowSelect }>[];
   let total: number;
   let hasMoreByQuery = false;
   if (query) {
-    const candidateSelect = {
-      id: true,
-      person: { select: { displayName: true } },
-      identities: {
-        where: { provider: "FEISHU" as const, tenantId: "default" },
-        select: { openId: true, unionId: true },
-      },
-      reimbursementUser: {
-        select: { name: true, email: true, openId: true },
-      },
-    } satisfies Prisma.AccountSelect;
-    const directSearchConditions = searchTerms(query).map(
-      (term): Prisma.AccountWhereInput => ({
-        OR: [
-          { person: { displayName: { contains: term, mode: "insensitive" } } },
-          { reimbursementUser: { name: { contains: term, mode: "insensitive" } } },
-          { reimbursementUser: { email: { contains: term, mode: "insensitive" } } },
-          { reimbursementUser: { openId: { contains: term, mode: "insensitive" } } },
-          {
-            identities: {
-              some: {
-                provider: "FEISHU",
-                tenantId: "default",
-                openId: { contains: term, mode: "insensitive" },
-              },
-            },
-          },
-          {
-            identities: {
-              some: {
-                provider: "FEISHU",
-                tenantId: "default",
-                unionId: { contains: term, mode: "insensitive" },
-              },
-            },
-          },
-        ],
-      }),
-    );
-    const directCandidates = await prisma.account.findMany({
-      where: {
-        AND: [where, ...directSearchConditions],
-      },
-      orderBy: [{ person: { displayName: "asc" } }, { createdAt: "asc" }],
-      take: 501,
-      select: candidateSelect,
-    });
-    const fallbackCandidates = directCandidates.length < 50
-      ? await prisma.account.findMany({
-          where,
-          orderBy: [{ person: { displayName: "asc" } }, { createdAt: "asc" }],
-          take: 501,
-          select: candidateSelect,
-        })
-      : [];
-    const candidates = [...new Map(
-      [...directCandidates, ...fallbackCandidates].map((account) => [account.id, account]),
-    ).values()];
-    const ranked = rankFuzzyMatches(
-      candidates,
-      query,
-      (account) => [
-        { text: account.person?.displayName ?? "", weight: 2, pinyin: true },
-        { text: account.reimbursementUser?.name ?? "", weight: 2, pinyin: true },
-        ...account.identities.flatMap((identity) => [
-          { text: identity.openId ?? "" },
-          { text: identity.unionId ?? "" },
-        ]),
-        { text: account.reimbursementUser?.openId ?? "" },
-        { text: account.reimbursementUser?.email ?? "" },
-      ],
-      (left, right) => {
-        const leftName = left.person?.displayName ?? left.reimbursementUser?.name ?? "";
-        const rightName = right.person?.displayName ?? right.reimbursementUser?.name ?? "";
-        return (
-          leftName.localeCompare(rightName, "zh-CN") ||
-          left.id.localeCompare(right.id)
-        );
-      },
-    );
-    total = ranked.length;
-    hasMoreByQuery =
-      directCandidates.length === 501 || fallbackCandidates.length === 501;
-    const pageIds = ranked
+    const ranked = await findRankedAdminAccountCandidates({ where, query });
+    total = ranked.items.length;
+    hasMoreByQuery = ranked.hasMoreByQuery;
+    const pageIds = ranked.items
       .slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
-      .map(({ item }) => item.id);
+      .map((item) => item.id);
     const rows = pageIds.length
       ? await prisma.account.findMany({
           where: { AND: [where, { id: { in: pageIds } }] },
@@ -291,8 +243,37 @@ export default async function AdminAccountsPage({
     auditsByAccount.set(accountId, existing);
   }
 
+  const responsibilities = (await responsibilitiesPromise).flatMap(
+    (assignment) => {
+      const account = assignment.account;
+      const reimbursementUser = account?.reimbursementUser;
+      if (!account || !reimbursementUser || assignment.role === "SUPER_ADMIN") {
+        return [];
+      }
+      return [{
+        id: assignment.id,
+        role: assignment.role,
+        team: assignment.team,
+        techGroup: assignment.techGroup,
+        account: {
+          id: account.id,
+          displayName:
+            account.person?.displayName || reimbursementUser.name || "未知用户",
+          avatar: account.person?.avatar ?? reimbursementUser.avatar,
+          email: reimbursementUser.email,
+        },
+      }];
+    },
+  );
+  // The client keeps successful matrix mutations visible while the RSC refresh
+  // is in flight. Remount only after the authoritative responsibility snapshot
+  // actually changes, so a stale refresh cannot erase the immediate feedback.
+  const responsibilityViewVersion = JSON.stringify(responsibilities);
+
   return (
     <AccountsPanel
+      key={responsibilityViewVersion}
+      responsibilities={responsibilities}
       accounts={accounts.map((account) => ({
         ...account,
         lastLoginAt: account.lastLoginAt?.toISOString() ?? null,

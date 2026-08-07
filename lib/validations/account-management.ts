@@ -34,6 +34,34 @@ export const revokeRoleInputSchema = z.object({
   assignmentId: z.string().uuid("角色记录参数无效"),
 });
 
+export const adminAccountOptionPurposeSchema = z.enum([
+  "ALL",
+  "REIMBURSEMENT",
+]);
+
+export const searchAdminAccountOptionsInputSchema = z
+  .object({
+    purpose: adminAccountOptionPurposeSchema,
+    query: z.string().trim().max(100, "搜索关键词过长").optional().default(""),
+    cursor: z.string().trim().max(1000, "分页参数无效").optional(),
+    limit: z.number().int().min(1).max(50, "每页最多返回 50 个账号").default(50),
+  })
+  .strict();
+
+export const resolveAdminAccountOptionsInputSchema = z
+  .object({
+    purpose: adminAccountOptionPurposeSchema,
+    ids: z.array(z.string().uuid("账号参数无效")).max(50, "一次最多解析 50 个账号"),
+  })
+  .strict();
+
+export const updateTeacherEmailInputSchema = z
+  .object({
+    accountId: z.string().uuid("账号参数无效"),
+    email: z.string().trim().max(254, "邮箱长度不能超过 254 个字符"),
+  })
+  .strict();
+
 export const assignReimbursementRoleInputSchema = z
   .object({
     targetAccountId: z.string().uuid("账号参数无效"),

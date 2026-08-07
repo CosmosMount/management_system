@@ -42,3 +42,25 @@ export type AdminAccountRow = {
     createdAt: string;
   }>;
 };
+
+export type AdminAccountOption = {
+  id: string;
+  displayName: string;
+  avatar: string | null;
+  openId: string | null;
+  email: string | null;
+  reimbursementReady: boolean;
+};
+
+export type AdminResponsibilityAssignment = {
+  id: string;
+  role: Exclude<UserRoleType, "SUPER_ADMIN">;
+  team: string;
+  techGroup: string;
+  account: {
+    id: string;
+    displayName: string;
+    avatar: string | null;
+    email: string | null;
+  };
+};

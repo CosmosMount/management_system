@@ -82,7 +82,7 @@ export async function assignAccountReimbursementRole(input: {
     const { context } = await requireGlobalSuperAdministrator();
     const result = await assignReimbursementRole(context.accountId, parsed);
     revalidateAdmin();
-    return { changed: result.changed };
+    return { changed: result.changed, assignmentId: result.assignment.id };
   } catch (error) {
     inputError(error);
   }
@@ -99,7 +99,7 @@ export async function revokeAccountReimbursementRole(input: {
       parsed.assignmentId,
     );
     revalidateAdmin();
-    return { changed: result.changed };
+    return { changed: result.changed, assignmentId: result.assignment.id };
   } catch (error) {
     inputError(error);
   }

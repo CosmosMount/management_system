@@ -241,26 +241,44 @@ test.describe("管理员面板", () => {
     }
   });
 
-  test("账号与权限页只授予全局项目角色且没有项目访问状态入口", async ({ page }) => {
+  test("账号与权限页使用三块职责布局并就地管理项目角色", async ({ page }) => {
     await page.goto("/admin/accounts?q=lqx", { waitUntil: "networkidle" });
+    await expect(page.getByRole("heading", { name: "车组职责配置" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "技术组职责配置" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "用户与角色" })).toBeVisible();
     if ((page.viewportSize()?.width ?? 0) < 768) {
-      const accountCard = page.getByRole("button", { name: "管理 李棋轩" });
-      await expect(accountCard).toBeVisible();
-      await accountCard.click();
+      await expect(page.getByTestId("mobile-team-responsibilities")).toBeVisible();
+      await expect(page.getByTestId("mobile-tech-responsibilities")).toBeVisible();
+      await expect(page.getByTestId("mobile-account-list")).toBeVisible();
     } else {
-      await expect(page.getByText("李棋轩").first()).toBeVisible();
-      await page.getByRole("button", { name: "管理" }).first().click();
+      await expect(page.getByTestId("mobile-team-responsibilities")).toBeHidden();
+      await expect(page.getByRole("columnheader", { name: "车组" })).toBeVisible();
+      await expect(page.getByRole("columnheader", { name: "技术组" })).toBeVisible();
     }
-    const detail = page.getByTestId("account-permission-detail");
-    await expect(detail).toBeVisible();
+    const accountsCard = page.getByTestId("accounts-and-roles-card");
+    await expect(accountsCard.getByText("李棋轩", { exact: true }).first()).toBeVisible();
 
-    await expect(page.getByLabel("项目角色").locator("option")).toHaveText([
-      "超级管理员",
-      "项目管理员",
-    ]);
-    await page.getByLabel("项目角色").selectOption("PROJECT_ADMINISTRATOR");
-    await page.getByRole("button", { name: /授予$/ }).click();
-    await expect(detail.getByText("项目管理员").first()).toBeVisible();
+    const accountSelect = accountsCard.getByRole("combobox", {
+      name: "选择要配置角色的用户",
+    });
+    await accountSelect.fill("李棋轩");
+    await page.getByRole("option", { name: "李棋轩", exact: true }).click();
+    await accountsCard.getByRole("button", { name: "选择角色" }).click();
+    await page.getByRole("option", { name: "超级管理员", exact: true }).click();
+    page.once("dialog", (dialog) => dialog.dismiss());
+    await accountsCard.getByRole("button", { name: "添加", exact: true }).click();
+    await expect(
+      prisma.systemRoleAssignment.count({
+        where: {
+          account: { reimbursementUser: { openId: fixtures.normalOpenId } },
+          role: "SUPER_ADMINISTRATOR",
+          revokedAt: null,
+        },
+      }),
+    ).resolves.toBe(0);
+    await accountsCard.getByRole("button", { name: "选择角色" }).click();
+    await page.getByRole("option", { name: "项目管理员", exact: true }).click();
+    await accountsCard.getByRole("button", { name: "添加", exact: true }).click();
 
     const target = await prisma.user.findUniqueOrThrow({
       where: { openId: fixtures.normalOpenId },
@@ -278,15 +296,269 @@ test.describe("管理员面板", () => {
         }),
       )
       .toBe(1);
+    await expect(
+      accountsCard.getByRole("button", {
+        name: "撤销 李棋轩 的 项目管理员 角色",
+      }),
+    ).toBeVisible();
 
     await expect(page.getByText("项目访问状态")).toHaveCount(0);
     await expect(page.getByRole("button", { name: "禁用项目访问" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "启用项目访问" })).toHaveCount(0);
 
     page.once("dialog", (dialog) => dialog.accept());
-    await detail.getByRole("button", { name: "撤销项目管理员" }).click();
-    await expect(detail.getByText("普通成员（无系统角色）")).toBeVisible();
+    await accountsCard
+      .getByRole("button", { name: "撤销 李棋轩 的 项目管理员 角色" })
+      .click();
+    await expect
+      .poll(() =>
+        prisma.systemRoleAssignment.count({
+          where: {
+            accountId: target.accountId!,
+            role: "PROJECT_ADMINISTRATOR",
+            revokedAt: null,
+          },
+        }),
+      )
+      .toBe(0);
+    await expect(
+      accountsCard.getByRole("button", {
+        name: "撤销 李棋轩 的 项目管理员 角色",
+      }),
+    ).toHaveCount(0);
+
+    await accountsCard.getByRole("button", { name: "查看记录" }).click();
+    const historyDialog = page.getByTestId("account-history-dialog");
+    await expect(historyDialog).toBeVisible();
+    await expect(historyDialog.getByText("项目管理员").first()).toBeVisible();
+    await expect(historyDialog.getByText(/授予项目角色/).first()).toBeVisible();
+    await expect(historyDialog.getByText(/撤销项目角色/).first()).toBeVisible();
     await expectHealthyPage(page);
+  });
+
+  test("长姓名记录弹窗不溢出且缺少报销资料会在选择阶段拒绝", async ({ page }) => {
+    const suffix = Date.now().toString(36);
+    const displayName = `超长账号${suffix}${"无空格姓名".repeat(24)}`;
+    const account = await prisma.account.create({
+      data: {
+        person: { create: { displayName } },
+      },
+      select: { id: true },
+    });
+    try {
+      await page.goto(`/admin/accounts?q=${encodeURIComponent(suffix)}`, {
+        waitUntil: "networkidle",
+      });
+      const accountsCard = page.getByTestId("accounts-and-roles-card");
+      await expect(accountsCard.getByText(displayName, { exact: true })).toBeVisible();
+      await expect(accountsCard.getByText("缺少飞书身份")).toBeVisible();
+      await accountsCard.getByRole("button", { name: "查看记录" }).click();
+      await expect(page.getByTestId("account-history-dialog")).toContainText(
+        displayName,
+      );
+      await expectHealthyPage(page);
+      await page.keyboard.press("Escape");
+
+      const accountSelect = accountsCard.getByRole("combobox", {
+        name: "选择要配置角色的用户",
+      });
+      await accountSelect.fill(suffix);
+      await page.getByRole("option", { name: displayName, exact: true }).click();
+      await accountsCard.getByRole("button", { name: "选择角色" }).click();
+      await page.getByRole("option", { name: "报销员", exact: true }).click();
+      await expect(
+        page.getByText("该账号缺少报销用户资料，请重新选择已同步账号"),
+      ).toBeVisible();
+      await expect(accountSelect).toHaveValue("");
+      await expectHealthyPage(page);
+    } finally {
+      await prisma.person.deleteMany({ where: { accountId: account.id } });
+      await prisma.accountIdentity.deleteMany({ where: { accountId: account.id } });
+      await prisma.account.delete({ where: { id: account.id } });
+    }
+  });
+
+  test("账号筛选组合与空结果保持服务端 URL 状态", async ({ page }) => {
+    await page.goto("/admin/accounts", { waitUntil: "networkidle" });
+    await page.getByLabel("角色类型").selectOption("TEAM_ADMIN");
+    await page.getByLabel("车组").selectOption("英雄");
+    await page.getByRole("button", { name: "筛选" }).click();
+    await expect(page).toHaveURL(/role=TEAM_ADMIN/);
+    await expect(page).toHaveURL(/team=%E8%8B%B1%E9%9B%84/);
+    await expect(page.getByTestId("accounts-and-roles-card")).toContainText(
+      "Playwright 管理员",
+    );
+    await expectHealthyPage(page);
+
+    await page.goto("/admin/accounts?q=绝不可能存在的账号名称", {
+      waitUntil: "networkidle",
+    });
+    await expect(page.getByText("没有符合条件的账号。")).toBeVisible();
+    await expectHealthyPage(page);
+  });
+
+  test("职责矩阵可快捷增删报销角色并编辑指导老师邮箱", async ({ page }) => {
+    await page.goto("/admin/accounts?q=李棋轩", { waitUntil: "networkidle" });
+    const target = await prisma.user.findUniqueOrThrow({
+      where: { openId: fixtures.normalOpenId },
+      select: { accountId: true },
+    });
+    if (!target.accountId) throw new Error("职责矩阵测试账号缺少统一账号");
+
+    const financePicker = page.getByRole("combobox", {
+      name: "为工程选择报销员",
+    });
+    await financePicker.fill("李棋轩");
+    await page.getByRole("option", { name: "李棋轩", exact: true }).click();
+    await page.getByRole("button", { name: "添加工程报销员" }).click();
+    await expect(
+      page.getByRole("button", {
+        name: "移除 李棋轩 的 报销员 · 工程",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect
+      .poll(() =>
+        prisma.userRole.findFirst({
+          where: {
+            accountId: target.accountId,
+            role: "FINANCE",
+            team: "工程",
+            techGroup: "",
+            revokedAt: null,
+          },
+          select: { id: true },
+        }),
+      )
+      .not.toBeNull();
+    const activeAssignment = await prisma.userRole.findFirstOrThrow({
+      where: {
+        accountId: target.accountId,
+        role: "FINANCE",
+        team: "工程",
+        revokedAt: null,
+      },
+      select: { id: true },
+    });
+    await expect(
+      prisma.notificationOutbox.findUnique({
+        where: {
+          eventKey: `account-security:account.reimbursement_role.granted:${activeAssignment.id}:feishu`,
+        },
+      }),
+    ).resolves.not.toBeNull();
+
+    await page
+      .getByRole("button", {
+        name: "移除 李棋轩 的 报销员 · 工程",
+        exact: true,
+      })
+      .click();
+    await expect
+      .poll(() =>
+        prisma.userRole.findUnique({
+          where: { id: activeAssignment.id },
+          select: { revokedAt: true },
+        }),
+      )
+      .toEqual({ revokedAt: expect.any(Date) });
+    await expect(
+      page.getByRole("button", {
+        name: "移除 李棋轩 的 报销员 · 工程",
+        exact: true,
+      }),
+    ).toHaveCount(0);
+
+    const adminUser = await prisma.user.findUniqueOrThrow({
+      where: { openId: fixtures.adminOpenId },
+      select: { accountId: true, email: true },
+    });
+    const emailAuditStartedAt = new Date();
+    const normalizedEmail = `admin-ui-${Date.now()}@example.com`;
+    const emailInput = page.locator(
+      'input[aria-label="Playwright 管理员 的指导老师审批邮箱"]:visible',
+    );
+    try {
+      await emailInput.fill(`  ${normalizedEmail.toUpperCase()}  `);
+      await emailInput.locator("..").getByRole("button", { name: "保存" }).click();
+      await expect(emailInput).toHaveValue(normalizedEmail);
+      await expect
+        .poll(() =>
+          prisma.user.findUnique({
+            where: { openId: fixtures.adminOpenId },
+            select: { email: true },
+          }),
+        )
+        .toEqual({ email: normalizedEmail });
+      await emailInput.fill("");
+      await emailInput.locator("..").getByRole("button", { name: "保存" }).click();
+      await expect(emailInput).toHaveValue("");
+      await expect
+        .poll(() =>
+          prisma.user.findUnique({
+            where: { openId: fixtures.adminOpenId },
+            select: { email: true },
+          }),
+        )
+        .toEqual({ email: null });
+      await expect
+        .poll(() =>
+          prisma.domainAuditEvent.findFirst({
+            where: {
+              action: "account.teacher_email.updated",
+              entityType: "Account",
+              entityId: adminUser.accountId,
+              createdAt: { gte: emailAuditStartedAt },
+            },
+            select: { actorAccountId: true },
+          }),
+        )
+        .not.toBeNull();
+    } finally {
+      await prisma.user.update({
+        where: { openId: fixtures.adminOpenId },
+        data: { email: adminUser.email },
+      });
+    }
+
+    const accountsCard = page.getByTestId("accounts-and-roles-card");
+    await accountsCard.getByRole("button", { name: "查看记录" }).click();
+    const historyDialog = page.getByTestId("account-history-dialog");
+    await expect(historyDialog.getByText("报销员 · 工程").first()).toBeVisible();
+    await expect(historyDialog.getByText(/授予报销角色/).first()).toBeVisible();
+    await expect(historyDialog.getByText(/撤销报销角色/).first()).toBeVisible();
+    await expect(page.getByText("项目访问状态")).toHaveCount(0);
+    await expect(page.getByText("组长", { exact: true })).toHaveCount(0);
+    await expectHealthyPage(page);
+  });
+
+  test("同一指导老师跨技术组只显示一个账号级邮箱编辑器", async ({ page }) => {
+    const adminUser = await prisma.user.findUniqueOrThrow({
+      where: { openId: fixtures.adminOpenId },
+      select: { accountId: true },
+    });
+    const extraTeacherRole = await prisma.userRole.create({
+      data: {
+        accountId: adminUser.accountId,
+        openId: fixtures.adminOpenId,
+        role: "TEACHER",
+        techGroup: "机械",
+      },
+    });
+    try {
+      await page.goto("/admin/accounts", { waitUntil: "networkidle" });
+      await expect(
+        page.locator(
+          'input[aria-label="Playwright 管理员 的指导老师审批邮箱"]:visible',
+        ),
+      ).toHaveCount(1);
+      await expect(
+        page.locator("p:visible").filter({ hasText: /审批邮箱与.+职责共用：/ }),
+      ).toBeVisible();
+      await expectHealthyPage(page);
+    } finally {
+      await prisma.userRole.delete({ where: { id: extraTeacherRole.id } });
+    }
   });
 
   test("账号与权限页可显示飞书 CDN 头像", async ({ page }) => {
@@ -351,6 +623,41 @@ test.describe("管理员面板", () => {
     }
   });
 
+});
+
+test("管理员账号与指导老师 Server Action 实际执行会话鉴权", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  await loginAsOtherUser(context, baseURL);
+  await page.goto("/admin-account-action-fixtures", {
+    waitUntil: "networkidle",
+  });
+  await page.getByRole("button", { name: "调用账号搜索" }).click();
+  await expect(page.getByLabel("账号搜索调用结果")).toHaveText("无管理权限");
+  await page.getByRole("button", { name: "调用账号解析" }).click();
+  await expect(page.getByLabel("账号解析调用结果")).toHaveText("无管理权限");
+  await page
+    .getByRole("button", { name: "调用指导老师邮箱更新" })
+    .click();
+  await expect(page.getByLabel("指导老师邮箱调用结果")).toHaveText(
+    "无管理权限",
+  );
+
+  await loginAsAdminUser(context, baseURL);
+  await page.goto("/admin-account-action-fixtures", {
+    waitUntil: "networkidle",
+  });
+  await page.getByRole("button", { name: "调用账号搜索" }).click();
+  await expect(page.getByLabel("账号搜索调用结果")).toHaveText(/^成功：/);
+  await page.getByRole("button", { name: "调用账号解析" }).click();
+  await expect(page.getByLabel("账号解析调用结果")).toHaveText("成功：1");
+  await page
+    .getByRole("button", { name: "调用指导老师邮箱更新" })
+    .click();
+  await expect(page.getByLabel("指导老师邮箱调用结果")).toHaveText(/^成功：/);
+  await expectHealthyPage(page);
 });
 
 test("非管理员访问管理员面板会被重定向到首页", async ({
