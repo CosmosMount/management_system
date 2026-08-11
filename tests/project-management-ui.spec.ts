@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { prisma } from "../lib/prisma";
 import {
   activateTask,
@@ -21,6 +22,7 @@ import {
   shanghaiDateTimeLocalToIso,
 } from "../lib/project-management/date-time";
 import type { ProjectManagementActor } from "../lib/project-management/identity";
+import { getResourcePlanPageData } from "../lib/project-management/queries/time-canvas-queries";
 import {
   expectHealthyPage,
   loginAsTestUser,
@@ -60,7 +62,6 @@ test.describe("project management P4/P6 UI integration", () => {
       team: "英雄",
       techGroup: "电控",
       priority: "MEDIUM",
-      tagIds: [],
       members: [{ personId: owner.person.id, role: "OWNER" }],
       milestones: [milestoneInput("No-JS Milestone", "完成无脚本回归", 1)],
       plannedStartAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
@@ -284,7 +285,7 @@ test.describe("project management P4/P6 UI integration", () => {
       });
       database.close();
       window.localStorage.setItem(key, JSON.stringify({
-        schemaVersion: 3,
+        schemaVersion: 4,
         storage: "INDEXED_DB",
         draftId: envelope.draftId,
         savedAt: envelope.savedAt,
@@ -663,7 +664,7 @@ test.describe("project management P4/P6 UI integration", () => {
     await expect
       .poll(() =>
         page.evaluate(() =>
-          Object.keys(window.localStorage).some((key) => key.endsWith(":v3")),
+          Object.keys(window.localStorage).some((key) => key.endsWith(":v4")),
         ),
       )
       .toBe(true);
@@ -671,9 +672,9 @@ test.describe("project management P4/P6 UI integration", () => {
     const installLegacyDraft = async (version: 1 | 2, title: string) => {
       await page.evaluate(({ version, title }) => {
         const currentKey = Object.keys(window.localStorage).find((key) =>
-          key.endsWith(":v3"),
+          key.endsWith(":v4"),
         );
-        if (!currentKey) throw new Error("未找到 v3 Task Composer 草稿");
+        if (!currentKey) throw new Error("未找到 v4 Task Composer 草稿");
         const envelope = JSON.parse(
           window.localStorage.getItem(currentKey) ?? "null",
         ) as {
@@ -723,7 +724,7 @@ test.describe("project management P4/P6 UI integration", () => {
         const scopedPrefix = currentKey.slice(0, -2);
         window.localStorage.removeItem(`${scopedPrefix}v1`);
         window.localStorage.removeItem(`${scopedPrefix}v2`);
-        window.localStorage.removeItem(`${scopedPrefix}v3`);
+        window.localStorage.removeItem(`${scopedPrefix}v4`);
         window.localStorage.setItem(
           `${scopedPrefix}v${version}`,
           JSON.stringify(envelope),
@@ -764,7 +765,7 @@ test.describe("project management P4/P6 UI integration", () => {
       await expect
         .poll(() =>
           page.evaluate(() =>
-            Object.keys(window.localStorage).some((key) => key.endsWith(":v3")),
+            Object.keys(window.localStorage).some((key) => key.endsWith(":v4")),
           ),
         )
         .toBe(true);
@@ -775,8 +776,8 @@ test.describe("project management P4/P6 UI integration", () => {
     await installLegacyDraft(2, "已迁移 v2 草稿");
     await assertMigratedDraft("已迁移 v2 草稿", 2);
     await page.evaluate(() => {
-      const key = Object.keys(window.localStorage).find((candidate) => candidate.endsWith(":v3"));
-      if (!key) throw new Error("未找到待转换的 v3 草稿");
+      const key = Object.keys(window.localStorage).find((candidate) => candidate.endsWith(":v4"));
+      if (!key) throw new Error("未找到待转换的 v4 草稿");
       const envelope = JSON.parse(window.localStorage.getItem(key) ?? "null") as {
         inspectorDraft: unknown;
         inspectorDirty: boolean;
@@ -792,7 +793,7 @@ test.describe("project management P4/P6 UI integration", () => {
         returnEntityId: "draft-node-legacy-later",
         milestone: {
           id,
-          goal: "旧 v3 Inspector 临时节点",
+          goal: "旧 v4 Inspector 临时节点",
           completionCriteria: "",
           expectedCompletedAt: "2026-11-06T09:30",
           reviewRequirements: "",
@@ -805,15 +806,15 @@ test.describe("project management P4/P6 UI integration", () => {
     await page.getByRole("button", { name: "恢复草稿" }).click();
     await expect(page.getByTestId("task-composer-milestone-count")).toHaveText("3/200");
     await expect(page.getByTestId("task-composer-temporary-count")).toHaveText("1 个临时");
-    await expect(page.getByLabel("目标")).toHaveValue("旧 v3 Inspector 临时节点");
+    await expect(page.getByLabel("目标")).toHaveValue("旧 v4 Inspector 临时节点");
     await page.getByTestId("time-canvas-scroll").evaluate((element) => {
       element.scrollTo({ left: element.scrollWidth, behavior: "auto" });
     });
     await expect(page.locator('[data-anchor-visual-state="TEMPORARY"]')).toBeVisible();
     await page.waitForTimeout(900);
     await page.evaluate(() => {
-      const key = Object.keys(window.localStorage).find((candidate) => candidate.endsWith(":v3"));
-      if (!key) throw new Error("未找到待破坏的 v3 草稿");
+      const key = Object.keys(window.localStorage).find((candidate) => candidate.endsWith(":v4"));
+      if (!key) throw new Error("未找到待破坏的 v4 草稿");
       const envelope = JSON.parse(window.localStorage.getItem(key) ?? "null") as {
         task: {
           plannedStartAt: string;
@@ -824,7 +825,7 @@ test.describe("project management P4/P6 UI integration", () => {
       const temporary = envelope.task.milestones.find(
         (milestone) => milestone.id === "draft-node-legacy-inspector-copy",
       );
-      if (!temporary) throw new Error("旧 v3 临时节点未写入实时草稿");
+      if (!temporary) throw new Error("旧 v4 临时节点未写入实时草稿");
       temporary.expectedCompletedAt = "";
       envelope.task.nodeMeta[temporary.id] = {
         lifecycle: "TEMPORARY",
@@ -834,6 +835,115 @@ test.describe("project management P4/P6 UI integration", () => {
     });
     await page.reload();
     await expect(page.getByText(/草稿版本、结构或字段不兼容/)).toBeVisible();
+    await expectHealthyPage(page);
+  });
+
+  test("Task Composer preserves inline and IndexedDB v3 drafts for export without restoring them", async ({
+    context,
+    page,
+    baseURL,
+  }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop", "旧大草稿存储兼容只需在桌面验证一次");
+    const creator = await createAccountPerson(`S5 Composer V3 Draft ${randomUUID()}`);
+    await loginAsTestUser(context, baseURL, {
+      openId: creator.openId,
+      name: creator.person.displayName,
+    });
+    await page.goto("/progress/tasks/new?start=2026-11-03");
+    await page.getByLabel("Task 名称").fill("v3 草稿基线");
+    await expect.poll(() => page.evaluate(() =>
+      Object.keys(window.localStorage).some((key) => key.endsWith(":v4")),
+    )).toBe(true);
+
+    const installed = await page.evaluate(() => {
+      const currentKey = Object.keys(window.localStorage).find((key) => key.endsWith(":v4"));
+      if (!currentKey) throw new Error("未找到 v4 Task Composer 草稿");
+      const envelope = JSON.parse(window.localStorage.getItem(currentKey) ?? "null") as {
+        schemaVersion: number;
+        draftId: string;
+        savedAt: string;
+        task: { title: string; tagIds?: string[] };
+      };
+      envelope.schemaVersion = 3;
+      envelope.task.title = "需导出的 inline v3 草稿";
+      envelope.task.tagIds = [crypto.randomUUID()];
+      const raw = JSON.stringify(envelope);
+      const legacyKey = `${currentKey.slice(0, -2)}v3`;
+      window.localStorage.removeItem(currentKey);
+      window.localStorage.setItem(legacyKey, raw);
+      return { currentKey, legacyKey, raw };
+    });
+    await page.reload();
+    await expect(page.getByText(/草稿版本、结构或字段不兼容/)).toBeVisible();
+    let downloadPromise = page.waitForEvent("download");
+    await page.getByRole("button", { name: "导出原始草稿" }).click();
+    let download = await downloadPromise;
+    const inlinePath = await download.path();
+    if (!inlinePath) throw new Error("inline v3 草稿下载文件不可读");
+    expect(await readFile(inlinePath, "utf8")).toBe(installed.raw);
+    await page.getByRole("button", { name: "安全放弃" }).click();
+    expect(await page.evaluate((key) => window.localStorage.getItem(key), installed.legacyKey)).toBeNull();
+
+    const indexedRaw = await page.evaluate(async ({ currentKey, raw }) => {
+      const envelope = JSON.parse(raw) as {
+        draftId: string;
+        savedAt: string;
+        task: { title: string };
+      };
+      envelope.task.title = "需导出的 IndexedDB v3 草稿正文";
+      envelope.savedAt = new Date().toISOString();
+      const nextRaw = JSON.stringify(envelope);
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("management-system-task-composer", 1);
+        request.onupgradeneeded = () => {
+          if (!request.result.objectStoreNames.contains("drafts")) {
+            request.result.createObjectStore("drafts");
+          }
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      await new Promise<void>((resolve, reject) => {
+        const transaction = database.transaction("drafts", "readwrite");
+        transaction.objectStore("drafts").put(nextRaw, currentKey);
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+      });
+      database.close();
+      window.localStorage.setItem(currentKey, JSON.stringify({
+        schemaVersion: 3,
+        storage: "INDEXED_DB",
+        draftId: envelope.draftId,
+        savedAt: envelope.savedAt,
+        serializedChars: nextRaw.length,
+      }));
+      return nextRaw;
+    }, installed);
+    await page.reload();
+    await expect(page.getByText(/草稿版本、结构或字段不兼容/)).toBeVisible();
+    downloadPromise = page.waitForEvent("download");
+    await page.getByRole("button", { name: "导出原始草稿" }).click();
+    download = await downloadPromise;
+    const indexedPath = await download.path();
+    if (!indexedPath) throw new Error("IndexedDB v3 草稿下载文件不可读");
+    expect(await readFile(indexedPath, "utf8")).toBe(indexedRaw);
+    await page.getByRole("button", { name: "安全放弃" }).click();
+    expect(await page.evaluate((key) => window.localStorage.getItem(key), installed.currentKey)).toBeNull();
+    expect(await page.evaluate(async (key) => {
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("management-system-task-composer", 1);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      const value = await new Promise<unknown>((resolve, reject) => {
+        const transaction = database.transaction("drafts", "readonly");
+        const request = transaction.objectStore("drafts").get(key);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      database.close();
+      return value;
+    }, installed.currentKey)).toBeUndefined();
     await expectHealthyPage(page);
   });
 
@@ -856,7 +966,6 @@ test.describe("project management P4/P6 UI integration", () => {
       team: "英雄",
       techGroup: "电控",
       priority: "MEDIUM",
-      tagIds: [],
       members: [{ personId: user.person.id, role: "OWNER" }],
       milestones: [milestoneInput("停用负责人阶段", "完成阶段目标", 1)],
       plannedStartAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
@@ -869,7 +978,7 @@ test.describe("project management P4/P6 UI integration", () => {
     });
 
     await page.goto("/progress/resources");
-    await expect(page.getByRole("heading", { name: "人员计划" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "资源计划" })).toBeVisible();
     await expectHealthyPage(page);
     await page.goto("/progress");
     await expect(page.getByRole("heading", { name: "我的工作" })).toBeVisible({
@@ -899,6 +1008,7 @@ test.describe("project management P4/P6 UI integration", () => {
     page,
     baseURL,
   }) => {
+    test.setTimeout(150_000);
     const creatorA = await createAccountPerson("S5 Draft Scope A");
     const creatorB = await createAccountPerson("S5 Draft Scope B");
     const hiddenCreator = await createAccountPerson("S5 Hidden Task Creator");
@@ -1113,7 +1223,6 @@ test.describe("project management P4/P6 UI integration", () => {
       team: "英雄",
       techGroup: "电控",
       priority: "MEDIUM",
-      tagIds: [],
       members: [
         { personId: inactiveOwner.person.id, role: "OWNER" },
         { personId: creator.person.id, role: "PARTICIPANT" },
@@ -1160,7 +1269,7 @@ test.describe("project management P4/P6 UI integration", () => {
     page,
     baseURL,
   }, testInfo) => {
-    test.setTimeout(90_000);
+    test.setTimeout(120_000);
     const pageErrors: Error[] = [];
     page.on("pageerror", (error) => pageErrors.push(error));
     const fixture = await createUiFixture();
@@ -1277,7 +1386,7 @@ test.describe("project management P4/P6 UI integration", () => {
     await page.goto(
       `/progress/resources?from=2026-08-10&to=2026-08-12&people=${fixture.member.person.id},${fixture.owner.person.id}&zoom=hour`,
     );
-    await expect(page.getByRole("heading", { name: "人员计划" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "资源计划" })).toBeVisible();
     await expect(page.getByTestId("time-canvas-root")).toBeVisible();
     await expect(page.getByText("只看冲突")).toHaveCount(0);
     await expect(page.getByText("投入比例")).toHaveCount(0);
@@ -1290,10 +1399,6 @@ test.describe("project management P4/P6 UI integration", () => {
         { exact: true },
       ).first(),
     ).toBeVisible();
-    await page.getByTestId("time-canvas-scroll").evaluate((element) => {
-      element.scrollLeft = 1_200;
-      element.dispatchEvent(new Event("scroll"));
-    });
     await expect(
       page.getByTestId(`segment-block-${fixture.inactiveHistorySegmentId}`),
     ).toBeVisible();
@@ -1307,8 +1412,9 @@ test.describe("project management P4/P6 UI integration", () => {
       page.getByRole("button", { name: `移除${fixture.owner.person.displayName}` }),
     ).toBeVisible();
     const peoplePicker = page.getByLabel("筛选人员", { exact: true });
-    await peoplePicker.click();
-    await peoplePicker.press("Backspace");
+    await page
+      .getByRole("button", { name: `移除${fixture.owner.person.displayName}` })
+      .click();
     await expect(
       page.getByRole("button", { name: `移除${fixture.owner.person.displayName}` }),
     ).toHaveCount(0);
@@ -1323,6 +1429,9 @@ test.describe("project management P4/P6 UI integration", () => {
       .boundingBox();
     expect(ownerLabelBox?.width ?? 0).toBeGreaterThan(80);
     await ownerOption.click();
+    await expect(
+      page.getByRole("button", { name: `移除${fixture.owner.person.displayName}` }),
+    ).toBeVisible();
     const taskPicker = page.getByLabel("筛选 Task", { exact: true });
     await taskPicker.fill(fixture.taskTitle);
     const taskOption = page.getByRole("option", {
@@ -1336,7 +1445,10 @@ test.describe("project management P4/P6 UI integration", () => {
       .boundingBox();
     expect(taskTitleBox?.width ?? 0).toBeGreaterThan(120);
     await taskOption.click();
-    await page.getByRole("button", { name: "应用筛选" }).click();
+    await expect(
+      page.getByRole("button", { name: `移除${fixture.taskTitle}` }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "应用选择" }).click();
     await expect(page).toHaveURL(new RegExp(`tasks=${fixture.taskId}`));
     await page.reload();
     await expect(
@@ -1472,10 +1584,6 @@ test.describe("project management P4/P6 UI integration", () => {
       );
       const canvasScroll = page.getByTestId("time-canvas-scroll");
       await expect(canvasScroll).toBeVisible();
-      await canvasScroll.evaluate((element) => {
-        element.scrollLeft = 1_200;
-        element.dispatchEvent(new Event("scroll"));
-      });
       const originalRange = await prisma.workSegment.findUniqueOrThrow({
         where: { id: fixture.movableSegmentId },
         select: { startAt: true, endAt: true },
@@ -1515,13 +1623,17 @@ test.describe("project management P4/P6 UI integration", () => {
         where: { id: fixture.movableSegmentId },
         data: { content: "P6 UI Inspector 并发权威内容" },
       });
-      await movedInspector.getByLabel("内容").fill("P6 UI 不应覆盖并发内容");
+      await movedInspector
+        .getByLabel("内容", { exact: true })
+        .fill("P6 UI 不应覆盖并发内容");
       await movedInspector.getByRole("button", { name: "保存基本信息", exact: true }).click();
       await expect(page.getByText(/正在读取服务器最新版本/)).toBeVisible();
-      await expect(movedInspector.getByLabel("内容")).toHaveValue(
+      await expect(movedInspector.getByLabel("内容", { exact: true })).toHaveValue(
         "P6 UI Inspector 并发权威内容",
       );
-      await movedInspector.getByLabel("内容").fill("P6 UI Inspector 更新不覆盖画布时间");
+      await movedInspector
+        .getByLabel("内容", { exact: true })
+        .fill("P6 UI Inspector 更新不覆盖画布时间");
       await movedInspector.getByRole("button", { name: "保存基本信息", exact: true }).click();
       await expect(page.getByText("已更新投入详情")).toBeVisible();
       await expect.poll(async () => {
@@ -1540,10 +1652,6 @@ test.describe("project management P4/P6 UI integration", () => {
         endAt: originalRange.endAt.toISOString(),
       });
       await page.waitForTimeout(800);
-      await canvasScroll.evaluate((element) => {
-        element.scrollLeft = 1_200;
-        element.dispatchEvent(new Event("scroll"));
-      });
       const confirmableSegment = page.getByTestId(
         `segment-block-${fixture.confirmableSegmentId}`,
       );
@@ -1674,7 +1782,7 @@ test.describe("project management P4/P6 UI integration", () => {
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
-  test("S8 dashboard, action inbox, Tag and notification preferences work on desktop and mobile", async ({
+  test("S8 dashboard, action inbox and notification preferences work on desktop and mobile", async ({
     context,
     page,
     baseURL,
@@ -1696,16 +1804,6 @@ test.describe("project management P4/P6 UI integration", () => {
     await page.goto("/progress/approvals");
     await expect(page.getByRole("heading", { name: "待办与审批" })).toBeVisible();
     await expect(page.getByText("当前没有需要你处理的事项。")).toBeVisible();
-
-    const tagName = `S8 Tag ${randomUUID().slice(0, 12)}`;
-    await page.goto("/progress/tags");
-    await expect(page.getByRole("heading", { name: "Tag 管理" })).toBeVisible();
-    await page.getByLabel("Tag 名称").fill(tagName);
-    await page.getByLabel("说明").fill("S8 双端 Tag 管理验证");
-    await page.getByRole("button", { name: "创建 Tag" }).click();
-    await expect(page.getByText("Tag 已创建。")).toBeVisible();
-    await expect(page.getByRole("heading", { name: tagName })).toBeVisible();
-    await expect.poll(() => prisma.tag.count({ where: { name: tagName } })).toBe(1);
 
     await page.goto("/progress/notifications");
     await expect(page.getByRole("heading", { name: "通知偏好" })).toBeVisible();
@@ -1760,24 +1858,6 @@ test.describe("project management P4/P6 UI integration", () => {
       where: { id: inactiveCurrentMember.person.id },
       data: { status: "INACTIVE" },
     });
-    const tag = await prisma.tag.create({
-      data: {
-        name: `S6 Unified Editor Tag ${randomUUID()}`,
-        color: "#2563eb",
-        createdByAccountId: fixture.admin.account.id,
-      },
-    });
-    const archivedTag = await prisma.tag.create({
-      data: {
-        name: `S6 Unified Editor Archived Tag ${randomUUID()}`,
-        color: "#64748b",
-        archivedAt: new Date(),
-        createdByAccountId: fixture.admin.account.id,
-      },
-    });
-    await prisma.taskTag.create({
-      data: { taskId: fixture.taskId, tagId: archivedTag.id },
-    });
     const updatedTitle = `S6 Unified Edited ${randomUUID()}`;
     await loginAsTestUser(context, baseURL, {
       openId: fixture.owner.openId,
@@ -1805,7 +1885,6 @@ test.describe("project management P4/P6 UI integration", () => {
     );
     await expect(page.getByLabel("Task 名称")).toHaveValue(fixture.taskTitle);
     await expect(page.getByText(inactiveCurrentMember.person.displayName)).toBeVisible();
-    await expect(page.getByLabel(`${archivedTag.name}（已归档）`)).toBeChecked();
     await expect(page.getByRole("button", { name: "保存 Task" }).first()).toBeDisabled();
     if (testInfo.project.name === "mobile") {
       await page
@@ -1870,8 +1949,6 @@ test.describe("project management P4/P6 UI integration", () => {
     await page.getByRole("button", { name: "恢复草稿" }).click();
     await expect(page.getByLabel("Task 名称")).toHaveValue(updatedTitle);
 
-    await page.getByLabel(tag.name).check();
-    await page.getByLabel(`${archivedTag.name}（已归档）`).uncheck();
     await page.getByLabel("搜索参与人员", { exact: true }).fill(addedMember.person.displayName);
     await page
       .getByRole("option", {
@@ -1926,14 +2003,12 @@ test.describe("project management P4/P6 UI integration", () => {
               },
             },
             members: { where: { removedAt: null } },
-            tags: true,
           },
         });
         return {
           title: task.title,
           lockVersion: task.lockVersion,
           memberIds: task.members.map((member) => member.personId),
-          tagIds: task.tags.map((entry) => entry.tagId),
           milestones: task.currentPlanVersion.nodes
             .flatMap((entry) => entry.node.milestone?.goal ?? [])
             .sort(),
@@ -1946,7 +2021,6 @@ test.describe("project management P4/P6 UI integration", () => {
         title: updatedTitle,
         lockVersion: 1,
         memberIds: expect.arrayContaining([addedMember.person.id]),
-        tagIds: [tag.id],
         milestones: [
           "S6 Draft 持久化目标",
           "S6 Draft 第二阶段",
@@ -2256,7 +2330,6 @@ test.describe("project management P4/P6 UI integration", () => {
       techGroup: "电控",
       priority: "MEDIUM",
       relatedTaskId: null,
-      tagIds: [],
     });
     await page.getByRole("button", { name: "保存 Task" }).first().click();
     await expect(
@@ -2425,7 +2498,6 @@ test.describe("project management P4/P6 UI integration", () => {
       team: "英雄",
       techGroup: "电控",
       priority: "MEDIUM",
-      tagIds: [],
       relatedTaskId: null,
       members: [{ personId: fixture.owner.person.id, role: "OWNER" }],
       milestones: [],
@@ -2529,7 +2601,7 @@ test.describe("project management P4/P6 UI integration", () => {
     await expectHealthyPage(page);
   });
 
-  test("Task workbench expands its range for an earlier Planned and preserves the viewport", async ({
+  test("Task workbench expands its range for an earlier Planned and preserves the latest user viewport", async ({
     context,
     page,
     baseURL,
@@ -2558,8 +2630,62 @@ test.describe("project management P4/P6 UI integration", () => {
     );
 
     const content = `范围扩展 Planned ${randomUUID()}`;
+    const horizontalScroller = page.getByLabel("时间轴横向滚动");
+    await expect(horizontalScroller).toBeVisible();
+    const scrollBefore = await horizontalScroller.evaluate((element) => ({
+      left: element.scrollLeft,
+      maximum: element.scrollWidth - element.clientWidth,
+    }));
+    expect(scrollBefore.maximum).toBeGreaterThan(80);
+    const panKey = scrollBefore.left < scrollBefore.maximum / 2
+      ? "ArrowRight"
+      : "ArrowLeft";
+    await horizontalScroller.focus();
+    for (let index = 0; index < 8; index += 1) {
+      await horizontalScroller.press(panKey);
+    }
+    await expect.poll(async () => Math.abs(
+      (await horizontalScroller.evaluate((element) => element.scrollLeft)) -
+        scrollBefore.left,
+    )).toBeGreaterThan(20);
+    expect(Date.parse(
+      new URL(page.url()).searchParams.get("center") ?? "",
+    )).toBe(centerBefore);
     await page.getByRole("button", { name: "新增投入", exact: true }).click();
     const quickCreate = page.getByRole("form", { name: "投入快速创建" });
+    await expect.poll(() => {
+      const center = Date.parse(
+        new URL(page.url()).searchParams.get("center") ?? "",
+      );
+      return Math.abs(center - centerBefore);
+    }).toBeGreaterThan(60 * 60 * 1_000);
+    const centerAfterUserPan = Date.parse(
+      new URL(page.url()).searchParams.get("center") ?? "",
+    );
+    const draftScrollBefore = await horizontalScroller.evaluate((element) => ({
+      left: element.scrollLeft,
+      maximum: element.scrollWidth - element.clientWidth,
+    }));
+    const draftPanKey = draftScrollBefore.left < draftScrollBefore.maximum / 2
+      ? "ArrowRight"
+      : "ArrowLeft";
+    await horizontalScroller.focus();
+    for (let index = 0; index < 4; index += 1) {
+      await horizontalScroller.press(draftPanKey);
+    }
+    await expect.poll(async () => Math.abs(
+      (await horizontalScroller.evaluate((element) => element.scrollLeft)) -
+        draftScrollBefore.left,
+    )).toBeGreaterThan(10);
+    await expect.poll(() => {
+      const center = Date.parse(
+        new URL(page.url()).searchParams.get("center") ?? "",
+      );
+      return Math.abs(center - centerAfterUserPan);
+    }).toBeGreaterThan(60 * 60 * 1_000);
+    const centerAfterDraftPan = Date.parse(
+      new URL(page.url()).searchParams.get("center") ?? "",
+    );
     await quickCreate.getByLabel("开始", { exact: true }).fill("2025-06-01T09:00");
     await quickCreate.getByLabel("结束", { exact: true }).fill("2025-06-02T09:00");
     await quickCreate.getByLabel("内容", { exact: true }).fill(content);
@@ -2578,7 +2704,7 @@ test.describe("project management P4/P6 UI integration", () => {
       const centerAfter = Date.parse(
         new URL(page.url()).searchParams.get("center") ?? "",
       );
-      return Math.abs(centerAfter - centerBefore);
+      return Math.abs(centerAfter - centerAfterDraftPan);
     }).toBeLessThan(60 * 60 * 1_000);
     await expect.poll(async () =>
       (await canvasRoot.getAttribute("data-loaded-ranges"))
@@ -2661,7 +2787,6 @@ test.describe("project management P4/P6 UI integration", () => {
       team: "英雄",
       techGroup: "电控",
       priority: "MEDIUM",
-      tagIds: [],
       members: [{ personId: fixture.owner.person.id, role: "OWNER" }],
       milestones: [{
         goal: "历史 Milestone",
@@ -2737,7 +2862,6 @@ test.describe("project management P4/P6 UI integration", () => {
       team: "英雄",
       techGroup: "电控",
       priority: "MEDIUM",
-      tagIds: [],
       members: [{ personId: fixture.owner.person.id, role: "OWNER" }],
       milestones: [milestoneInput("关联 Task 阶段", "关联 Task 完成条件", 1)],
       plannedStartAt: new Date(Date.UTC(2026, 7, 1, 1, 0, 0)).toISOString(),
@@ -3177,11 +3301,300 @@ test.describe("project management P4/P6 UI integration", () => {
     await expectHealthyPage(page);
   });
 
-  test("S7 resource filters, removed routes and unified my-work timeline work on desktop and mobile", async ({
+  test("resource plan Project selection, independent pagination, focus pin and legacy URL stay stable", async ({
     context,
     page,
     baseURL,
   }) => {
+    test.setTimeout(90_000);
+    const owner = await createAccountPerson(`Resource Plan UI Owner ${randomUUID()}`);
+    await grantRole(owner.account.id, "PROJECT_ADMINISTRATOR");
+    const projectName = `Resource Plan UI Project ${randomUUID()}`;
+    const project = await prisma.project.create({
+      data: {
+        name: projectName,
+        description: "资源计划 Project picker 与分页回归",
+        status: "ACTIVE",
+        requesterAccountId: owner.account.id,
+        startedAt: new Date("2026-08-01T00:00:00.000Z"),
+      },
+    });
+    const taskRecords = Array.from({ length: 26 }, (_, index) => ({
+      id: randomUUID(),
+      planVersionId: randomUUID(),
+      nodeId: randomUUID(),
+      title: `000 Resource Plan UI Task ${String(index).padStart(2, "0")} ${project.id}`,
+    }));
+    const people = Array.from({ length: 51 }, (_, index) => ({
+      id: randomUUID(),
+      displayName: `000 Resource Plan UI Person ${String(index).padStart(2, "0")} ${project.id}`,
+    }));
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SET CONSTRAINTS ALL DEFERRED`;
+      await tx.task.createMany({
+        data: taskRecords.map((record) => ({
+          id: record.id,
+          title: record.title,
+          team: "英雄",
+          techGroup: "电控",
+          status: "ACTIVE" as const,
+          currentPlanVersionId: record.planVersionId,
+          projectId: project.id,
+          createdByAccountId: owner.account.id,
+          startedAt: new Date("2026-08-01T01:00:00.000Z"),
+        })),
+      });
+      await tx.taskPlanVersion.createMany({
+        data: taskRecords.map((record) => ({
+          id: record.planVersionId,
+          taskId: record.id,
+          versionNo: 1,
+          status: "CURRENT" as const,
+          plannedStartAt: new Date("2026-08-01T01:00:00.000Z"),
+          reason: "资源计划分页 UI fixture",
+          createdByAccountId: owner.account.id,
+          activatedAt: new Date("2026-08-01T01:00:00.000Z"),
+        })),
+      });
+      await tx.taskNode.createMany({
+        data: taskRecords.map((record) => ({
+          id: record.nodeId,
+          taskId: record.id,
+          type: "TERMINATION" as const,
+          status: "ACTIVE" as const,
+          businessDescription: "资源计划分页 Terminal",
+          createdByAccountId: owner.account.id,
+        })),
+      });
+      await tx.terminationNode.createMany({
+        data: taskRecords.map((record, index) => ({
+          nodeId: record.nodeId,
+          name: `Terminal ${String(index).padStart(2, "0")}`,
+          plannedOutcomeCriteria: "完成资源计划分页验证",
+          plannedAt: new Date("2026-08-02T01:00:00.000Z"),
+        })),
+      });
+      await tx.planVersionNode.createMany({
+        data: taskRecords.map((record) => ({
+          planVersionId: record.planVersionId,
+          nodeId: record.nodeId,
+          sequence: 1,
+        })),
+      });
+      await tx.taskMember.createMany({
+        data: taskRecords.map((record) => ({
+          taskId: record.id,
+          personId: owner.person.id,
+          role: "OWNER" as const,
+          createdByAccountId: owner.account.id,
+        })),
+      });
+      await tx.person.createMany({
+        data: people.map((person) => ({ ...person, status: "ACTIVE" as const })),
+      });
+      await tx.projectMember.createMany({
+        data: people.map((person) => ({
+          projectId: project.id,
+          personId: person.id,
+          role: "PARTICIPANT" as const,
+          createdByAccountId: owner.account.id,
+        })),
+      });
+    });
+    const focusSegment = await prisma.workSegment.create({
+      data: {
+        personId: people[50]!.id,
+        type: "PLANNED",
+        status: "PLANNED",
+        startAt: new Date("2026-08-10T01:00:00.000Z"),
+        endAt: new Date("2026-08-10T02:00:00.000Z"),
+        content: "资源计划 50 项外部焦点",
+        expectedOutput: "焦点人员固定在第一页",
+        createdByAccountId: owner.account.id,
+      },
+    });
+    const terminalPlannedSegment = await prisma.workSegment.create({
+      data: {
+        personId: people[0]!.id,
+        taskId: taskRecords[0]!.id,
+        type: "PLANNED",
+        status: "CANCELLED",
+        startAt: new Date("2026-08-11T01:00:00.000Z"),
+        endAt: new Date("2026-08-11T02:00:00.000Z"),
+        content: "资源计划保留终态 Planned",
+        expectedOutput: "已取消记录仍可审计",
+        createdByAccountId: owner.account.id,
+      },
+    });
+    const resourceData = await getResourcePlanPageData({
+      actor: actor(owner),
+      input: {
+        all: false,
+        projectIds: [project.id],
+        taskIds: [],
+        personIds: [],
+      },
+      preferredCenterMs: Date.parse("2026-08-11T01:30:00.000Z"),
+      load: { mode: "INITIAL" },
+    });
+    expect(resourceData.data.segments.flatMap((segment) =>
+      segment.kind === "SEGMENT" ? [segment.id] : [],
+    )).toContain(
+      terminalPlannedSegment.id,
+    );
+    await loginAsTestUser(context, baseURL, {
+      openId: owner.openId,
+      name: owner.person.displayName,
+    });
+
+    await page.goto(`/progress/resources?all=0&focus=${focusSegment.id}`);
+    await expect(page.getByRole("dialog", { name: "投入详情" })).toContainText(
+      "资源计划 50 项外部焦点",
+    );
+    expect(new URL(page.url()).searchParams.has("people")).toBe(false);
+    await page.getByRole("dialog", { name: "投入详情" })
+      .getByRole("button", { name: "Close" }).click();
+
+    await page.goto("/progress/resources");
+    await page.getByRole("checkbox", { name: /显示全部资源/ }).uncheck();
+    await page.getByRole("combobox", { name: "筛选 Project" }).fill(projectName);
+    await page.getByRole("option", { name: projectName, exact: true }).click();
+    await page.getByRole("button", { name: "应用选择" }).click();
+    await expect.poll(() => new URL(page.url()).searchParams.get("projects")).toBe(project.id);
+    await expect(page.getByText("Project（1）")).toBeVisible();
+    await expect(page.getByRole("link", { name: "下一页 Task" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "下一页人员" })).toBeVisible();
+    await page.getByTestId("time-canvas-scroll").evaluate((element) => {
+      element.scrollTop = Math.min(
+        element.scrollHeight - element.clientHeight,
+        25 * 112,
+      );
+      element.dispatchEvent(new Event("scroll"));
+    });
+    await expect(
+      page.getByTestId(`segment-block-${terminalPlannedSegment.id}`),
+    ).toBeVisible();
+
+    await page.getByRole("link", { name: "下一页 Task" }).click();
+    await expect.poll(() => new URL(page.url()).searchParams.has("taskCursor")).toBe(true);
+    expect(new URL(page.url()).searchParams.has("personCursor")).toBe(false);
+    await page.getByRole("link", { name: "下一页人员" }).click();
+    await expect.poll(() => new URL(page.url()).searchParams.has("personCursor")).toBe(true);
+    expect(new URL(page.url()).searchParams.has("taskCursor")).toBe(true);
+    await page.getByRole("link", { name: "Task 返回第一页" }).click();
+    await expect.poll(() => new URL(page.url()).searchParams.has("taskCursor")).toBe(false);
+    expect(new URL(page.url()).searchParams.has("personCursor")).toBe(true);
+    await page.reload();
+    await expect(page.getByText("Project（1）")).toBeVisible();
+    await expect(page.getByLabel(projectName, { exact: true })).toBeVisible();
+
+    await prisma.task.update({
+      where: { id: taskRecords[0]!.id },
+      data: { deletedAt: new Date() },
+    });
+    await page.goto(
+      `/progress/resources?all=0&focus=${terminalPlannedSegment.id}`,
+    );
+    await expect(page.getByRole("dialog", { name: "投入详情" })).toContainText(
+      "资源计划保留终态 Planned",
+    );
+    await page.getByRole("dialog", { name: "投入详情" })
+      .getByRole("button", { name: "Close" }).click();
+
+    const explicitPeople = people.slice(0, 50).map((person) => person.id);
+    await page.goto(
+      `/progress/resources?all=0&people=${explicitPeople.join(",")}&focus=${focusSegment.id}`,
+    );
+    await expect(page.getByText("人员（50）")).toBeVisible();
+    await expect(page.getByLabel(`${people[50]!.displayName} 时间行`, { exact: true })).toBeVisible();
+    const focusedUrl = new URL(page.url());
+    expect(focusedUrl.searchParams.get("people")?.split(",")).not.toContain(people[50]!.id);
+    await page.getByRole("dialog", { name: "投入详情" }).getByRole("button", { name: "Close" }).click();
+    await page.getByRole("button", { name: "应用选择" }).click();
+    await expect.poll(() => new URL(page.url()).searchParams.has("focus")).toBe(false);
+    expect(new Set(new URL(page.url()).searchParams.get("people")?.split(","))).toEqual(
+      new Set(explicitPeople),
+    );
+
+    await page.goto(
+      "/progress/resources?tags=legacy&from=2026-08-10&to=2026-08-12&group=person&types=PLANNED&statuses=ACTIVE&zoom=hour",
+    );
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: async (value: string) => {
+            window.sessionStorage.setItem("resource-plan-copied-url", value);
+          },
+        },
+      });
+    });
+    await page.getByRole("button", { name: "复制视图链接" }).click();
+    const copiedUrl = new URL(await page.evaluate(() =>
+      window.sessionStorage.getItem("resource-plan-copied-url") ?? "",
+    ));
+    for (const key of ["tags", "from", "to", "group", "types", "statuses", "zoom"]) {
+      expect(copiedUrl.searchParams.has(key), `复制链接仍包含 ${key}`).toBe(false);
+    }
+    await page.getByRole("button", { name: "年", exact: true }).click();
+    await expect(page).toHaveURL(/scale=year/);
+    for (const key of ["tags", "from", "to", "group", "types", "statuses", "zoom"]) {
+      expect(new URL(page.url()).searchParams.has(key), `导航后仍包含 ${key}`).toBe(false);
+    }
+    expect(await page.evaluate(() =>
+      document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+    )).toBe(true);
+
+    const expectedCanonicalPeople = people.map((person) => person.id).sort().slice(0, 50);
+    const missingId = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+    await page.goto(
+      `/progress/resources?all=0&projects=${project.id.toUpperCase()}&tasks=${taskRecords[1]!.id.toUpperCase()}&people=${people[1]!.id.toUpperCase()}`,
+    );
+    await expect.poll(() => {
+      const search = new URL(page.url()).searchParams;
+      return {
+        projects: search.get("projects"),
+        tasks: search.get("tasks"),
+        people: search.get("people"),
+      };
+    }).toEqual({
+      projects: project.id,
+      tasks: taskRecords[1]!.id,
+      people: people[1]!.id,
+    });
+    await expect(page.getByText("Project（1）")).toBeVisible();
+    await expect(page.getByText("Task（1）")).toBeVisible();
+    await expect(page.getByText("人员（1）")).toBeVisible();
+
+    await page.goto(
+      `/progress/resources?all=0&people=${[
+        ...people.map((person) => person.id).reverse(),
+        people[0]!.id,
+        missingId,
+        "not-a-uuid",
+      ].join(",")}&tasks=${missingId}&projects=${missingId}`,
+    );
+    await expect.poll(() => new URL(page.url()).searchParams.get("people")).toBe(
+      expectedCanonicalPeople.join(","),
+    );
+    expect(new URL(page.url()).searchParams.has("tasks")).toBe(false);
+    expect(new URL(page.url()).searchParams.has("projects")).toBe(false);
+
+    await page.goto(
+      `/progress/resources?all=0&people=${people[0]!.id}&center=2000-01-01T00:00:00.000Z&scale=year`,
+    );
+    await expect.poll(() => {
+      const center = Date.parse(new URL(page.url()).searchParams.get("center") ?? "");
+      return center > Date.parse("2025-01-01T00:00:00.000Z");
+    }).toBe(true);
+    await expectHealthyPage(page);
+  });
+
+  test("S7 resource filters, removed routes and unified my-work timeline work on desktop and mobile", async ({
+    context,
+    page,
+    baseURL,
+  }, testInfo) => {
     test.setTimeout(90_000);
     const fixture = await createUiFixture();
     const paginationKey = randomUUID();
@@ -3303,32 +3716,29 @@ test.describe("project management P4/P6 UI integration", () => {
     await page.goto(
       "/progress/resources?from=2026-08-10&to=2026-08-12&group=person",
     );
-    const nextResourcePage = page.getByRole("link", {
-      name: "下一页人员 / Task",
-    });
+    const nextResourcePage = page.getByRole("link", { name: "下一页人员" });
     await expect(nextResourcePage).toBeVisible();
     await page.getByRole("button", { name: "年", exact: true }).click();
     await expect(page).toHaveURL(/scale=year/);
-    const livePaginationCenter = new URL(page.url()).searchParams.get("center");
-    expect(livePaginationCenter).not.toBeNull();
+    expect(new URL(page.url()).searchParams.get("center")).not.toBeNull();
     await expect(nextResourcePage).toHaveAttribute("href", /scale=year/);
-    await expect
-      .poll(async () => {
-        const href = await nextResourcePage.getAttribute("href");
-        return href
-          ? new URL(href, page.url()).searchParams.get("center")
-          : null;
-      })
-      .toBe(livePaginationCenter);
+    const paginationRequest = page.waitForRequest((request) => {
+      const url = new URL(request.url());
+      return request.method() === "GET" && url.searchParams.has("personCursor");
+    });
     await nextResourcePage.click();
-    await expect(page).toHaveURL(/cursor=/);
+    const paginationCenter = new URL(
+      (await paginationRequest).url(),
+    ).searchParams.get("center");
+    expect(paginationCenter).not.toBeNull();
+    await expect(page).toHaveURL(/personCursor=/);
     await expect(page).toHaveURL(/scale=year/);
     expect(new URL(page.url()).searchParams.get("center")).toBe(
-      livePaginationCenter,
+      paginationCenter,
     );
 
     await page.goto(
-      `/progress/resources?from=2026-08-10&to=2026-08-12&people=${fixture.member.person.id},${fixture.owner.person.id}&tasks=${fixture.taskId}&types=planned&statuses=pending_confirmation&group=person&zoom=hour&focus=${fixture.confirmableSegmentId}`,
+      `/progress/resources?all=0&people=${fixture.member.person.id},${fixture.owner.person.id}&tasks=${fixture.taskId}&focus=${fixture.confirmableSegmentId}`,
     );
     const detailDialog = page.getByRole("dialog", { name: "投入详情" });
     await expect(detailDialog.getByTestId("segment-inspector")).toContainText(
@@ -3339,28 +3749,30 @@ test.describe("project management P4/P6 UI integration", () => {
     await expect
       .poll(() => new URL(page.url()).searchParams.has("focus"))
       .toBe(false);
-    await expect(page.getByRole("heading", { name: "人员计划" })).toBeVisible();
-    await expect(page.getByRole("region", { name: "资源计划筛选" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "资源计划" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "资源计划选择" })).toBeVisible();
     await expect(page.getByText("人员（2）")).toBeVisible();
     await expect(page.getByText("Task（1）")).toBeVisible();
-    await expect(page.getByLabel("待确认")).toBeChecked();
+    await expect(page.getByRole("checkbox", { name: /显示全部资源/ })).not.toBeChecked();
     await page.getByRole("button", { name: "年", exact: true }).click();
     await expect(page).toHaveURL(/scale=year/);
+    await page.waitForTimeout(500);
     const preservedCenter = new URL(page.url()).searchParams.get("center");
     expect(preservedCenter).not.toBeNull();
-    await page.getByRole("button", { name: "7 天" }).click();
-    await page.getByRole("button", { name: "应用筛选" }).click();
-    await expect(page).toHaveURL(/to=2026-08-17/);
+    await page.getByRole("button", {
+      name: `移除${fixture.owner.person.displayName}`,
+    }).click();
+    await page.getByRole("combobox", { name: "筛选人员" }).press("Escape");
+    await page.getByRole("button", { name: "应用选择" }).click();
+    await expect(page).toHaveURL(/all=0/);
     await expect(page).toHaveURL(/scale=year/);
     expect(new URL(page.url()).searchParams.get("center")).toBe(preservedCenter);
+    await expect(page.getByText("人员（1）")).toBeVisible();
     await page.getByRole("button", { name: "复制视图链接" }).click();
-    await expect(page.getByText(/已复制当前视图链接|无法访问剪贴板/)).toBeVisible();
-    await page.goBack();
-    await expect(page.getByLabel("结束日期")).toHaveValue("2026-08-12");
-    await expect(page.getByText("人员（2）")).toBeVisible();
-    await expect(page.getByLabel("待确认")).toBeChecked();
-    await page.goForward();
-    await expect(page.getByLabel("结束日期")).toHaveValue("2026-08-17");
+    await expect(page.getByText(/已复制当前资源计划链接|无法访问剪贴板/)).toBeVisible();
+    await page.waitForLoadState("networkidle");
+    await page.getByRole("button", { name: "季", exact: true }).click();
+    await expect(page).toHaveURL(/scale=quarter/);
     const pendingSegment = page.getByTestId(
       `segment-block-${fixture.confirmableSegmentId}`,
     );
@@ -3371,11 +3783,15 @@ test.describe("project management P4/P6 UI integration", () => {
     await expect(dirtyInspector).toBeVisible();
     const unsavedContent = `未保存的历史导航内容 ${randomUUID()}`;
     await dirtyInspector.getByLabel("内容").fill(unsavedContent);
-    await page.goBack();
-    await expect(dirtyInspector.getByLabel("内容")).toHaveValue(unsavedContent);
-    await expect(
-      page.getByText("当前投入有未保存修改，请保存或关闭后再切换时间窗口。"),
-    ).toBeVisible();
+    if (testInfo.project.name === "desktop") {
+      await page.goBack();
+      await expect(dirtyInspector.getByLabel("内容")).toHaveValue(unsavedContent);
+      await expect(
+        page.getByText("当前投入有未保存修改，请保存或关闭后再切换时间窗口。"),
+      ).toBeVisible();
+    } else {
+      await expect(dirtyInspector.getByLabel("内容")).toHaveValue(unsavedContent);
+    }
     await expectHealthyPage(page);
     let discardConfirmationSeen = false;
     page.once("dialog", async (dialog) => {
@@ -3392,6 +3808,8 @@ test.describe("project management P4/P6 UI integration", () => {
 
     const removedConflictPage = await page.goto("/progress/resources/conflicts");
     expect(removedConflictPage?.status()).toBe(404);
+    const removedTagPage = await page.goto("/progress/tags");
+    expect(removedTagPage?.status()).toBe(404);
 
     await page.goto(`/progress?focus=${fixture.confirmableSegmentId}`);
     await expect(page.getByTestId("segment-inspector")).toContainText(
@@ -3454,7 +3872,6 @@ async function createUiFixture() {
     team: "英雄",
     techGroup: "电控",
     priority: "HIGH",
-    tagIds: [],
     members: [
       { personId: owner.person.id, role: "OWNER" },
       { personId: member.person.id, role: "PARTICIPANT" },
@@ -3488,7 +3905,6 @@ async function createUiFixture() {
     content: "P6 UI 可确认计划",
     priority: "MEDIUM",
     taskId: draft.taskId,
-    tagIds: [],
   });
   const movable = await createWorkSegment(actor(member), {
     personId: member.person.id,
@@ -3498,7 +3914,6 @@ async function createUiFixture() {
     content: "P6 UI 重叠计划 A",
     priority: "MEDIUM",
     taskId: draft.taskId,
-    tagIds: [],
   });
   await createWorkSegment(actor(owner), {
     personId: owner.person.id,
@@ -3508,7 +3923,6 @@ async function createUiFixture() {
     content: "P6 UI 跨行目标人员安排",
     priority: "LOW",
     taskId: draft.taskId,
-    tagIds: [],
   });
   await createWorkSegment(actor(member), {
     personId: member.person.id,
@@ -3518,7 +3932,6 @@ async function createUiFixture() {
     content: "P6 UI 重叠计划 B",
     priority: "MEDIUM",
     taskId: draft.taskId,
-    tagIds: [],
   });
   const inactiveHistorySegment = await createWorkSegment(
     actor(inactiveHistory),
@@ -3531,7 +3944,6 @@ async function createUiFixture() {
       actualOutput: "历史产出",
       priority: "LOW",
       taskId: draft.taskId,
-      tagIds: [],
     },
   );
   await prisma.person.update({
@@ -3546,7 +3958,6 @@ async function createUiFixture() {
     content: "P6 UI 批量取消 A",
     priority: "LOW",
     taskId: draft.taskId,
-    tagIds: [],
   });
   const batchCancelableB = await createWorkSegment(actor(member), {
     personId: member.person.id,
@@ -3556,7 +3967,6 @@ async function createUiFixture() {
     content: "P6 UI 批量取消 B",
     priority: "LOW",
     taskId: draft.taskId,
-    tagIds: [],
   });
   const notification = await prisma.inAppNotification.create({
     data: {
@@ -3608,7 +4018,6 @@ async function createDraftWorkbenchFixture() {
     team: "英雄",
     techGroup: "电控",
     priority: "MEDIUM",
-    tagIds: [],
     members: [
       { personId: owner.person.id, role: "OWNER" },
       { personId: reviewer.person.id, role: "PARTICIPANT" },

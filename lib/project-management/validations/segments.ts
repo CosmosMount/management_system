@@ -133,14 +133,6 @@ const segmentEditableFieldsSchema = z
     expectedOutput: optionalText(2_000),
     actualOutput: optionalText(2_000),
     taskId: nullableIdSchema,
-    tagIds: z
-      .array(idSchema, { message: "Tag 列表格式不正确" })
-      .max(50, "Tag 数量过多")
-      .optional()
-      .default([]),
-  })
-  .superRefine((input, ctx) => {
-    validateEditableFields(input, ctx);
   });
 
 const segmentOverrideFieldsSchema = z
@@ -150,13 +142,6 @@ const segmentOverrideFieldsSchema = z
     expectedOutput: optionalTextField(2_000),
     actualOutput: optionalTextField(2_000),
     taskId: nullableIdSchema,
-    tagIds: z
-      .array(idSchema, { message: "Tag 列表格式不正确" })
-      .max(50, "Tag 数量过多")
-      .optional(),
-  })
-  .superRefine((input, ctx) => {
-    validateOverrideFields(input, ctx);
   });
 
 export const createWorkSegmentInputSchema = segmentTimeRangeSchema
@@ -165,10 +150,7 @@ export const createWorkSegmentInputSchema = segmentTimeRangeSchema
     personId: idSchema,
     type: z.enum(workSegmentTypeValues, { message: "投入类型不正确" }),
   })
-  .strict()
-  .superRefine((input, ctx) => {
-    validateEditableFields(input, ctx);
-  });
+  .strict();
 
 export const createActualSegmentInputSchema = segmentTimeRangeSchema
   .safeExtend(segmentEditableFieldsSchema.shape)
@@ -198,10 +180,7 @@ export const createActualSegmentInputSchema = segmentTimeRangeSchema
       .optional()
       .default([]),
   })
-  .strict()
-  .superRefine((input, ctx) => {
-    validateEditableFields(input, ctx);
-  });
+  .strict();
 
 export const batchCreatePlannedSegmentsInputSchema = z.object({
   segments: z
@@ -212,10 +191,7 @@ export const batchCreatePlannedSegmentsInputSchema = z.object({
           personId: idSchema,
           type: z.literal("PLANNED").optional(),
         })
-        .strict()
-        .superRefine((input, ctx) => {
-          validateEditableFields(input, ctx);
-        }),
+        .strict(),
       { message: "投入记录列表格式不正确" },
     )
     .min(1, "至少需要一条 Planned Segment")
@@ -233,7 +209,6 @@ export const updateWorkSegmentInputSchema = z
   })
   .strict()
   .superRefine((input, ctx) => {
-    validateOverrideFields(input, ctx);
     if (input.startAt && input.endAt && input.endAt <= input.startAt) {
       ctx.addIssue({
         code: "custom",
@@ -327,11 +302,7 @@ export const confirmPlannedSegmentInputSchema = z.object({
   reason: optionalText(1_000),
   actual: optionalSegmentTimeRangeSchema
     .safeExtend(segmentOverrideFieldsSchema.shape)
-    .safeExtend({ tagIds: z.array(idSchema).max(50).optional() })
     .strict()
-    .superRefine((input, ctx) => {
-      validateOverrideFields(input, ctx);
-    })
     .optional()
     .default({}),
 });
@@ -453,36 +424,4 @@ export type PartiallyConfirmSegmentInput = z.infer<
 >;
 function maxSegmentMs() {
   return MAX_SEGMENT_DAYS * 24 * 60 * 60 * 1_000;
-}
-
-function validateEditableFields(
-  input: {
-    tagIds?: string[];
-  },
-  ctx: z.RefinementCtx,
-) {
-  if (input.tagIds) {
-    ensureUniqueValues(input.tagIds, "tagIds", "不能重复选择同一个 Tag", ctx);
-  }
-}
-
-function validateOverrideFields(
-  input: {
-    tagIds?: string[];
-  },
-  ctx: z.RefinementCtx,
-) {
-  if (input.tagIds) {
-    ensureUniqueValues(input.tagIds, "tagIds", "不能重复选择同一个 Tag", ctx);
-  }
-}
-
-function ensureUniqueValues(
-  values: string[],
-  path: string,
-  message: string,
-  ctx: z.RefinementCtx,
-) {
-  if (new Set(values).size === values.length) return;
-  ctx.addIssue({ code: "custom", path: [path], message });
 }

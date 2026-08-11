@@ -34,6 +34,5 @@ export const routes = {
     resources: "/progress/resources",
     approvals: "/progress/approvals",
     notifications: "/progress/notifications",
-    tags: "/progress/tags",
   },
 } as const;

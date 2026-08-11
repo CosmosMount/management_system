@@ -48,7 +48,6 @@ test.describe("Project/Task 风险、评论与近期动态", () => {
       team: "英雄",
       techGroup: "电控",
       priority: "HIGH",
-      tagIds: [],
       members: [
         { personId: owner.actor.personId, role: "OWNER" },
         { personId: participant.actor.personId, role: "PARTICIPANT" },

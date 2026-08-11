@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
+import { timeCanvasDataToModel } from "../components/project-management/time-canvas/adapter";
 import { prisma } from "../lib/prisma";
 import {
   createActualSegment,
@@ -16,8 +17,8 @@ import type {
 } from "../lib/project-management/identity";
 import { getMyWorkDashboard } from "../lib/project-management/queries/dashboard-queries";
 import { listTasks } from "../lib/project-management/queries/task-queries";
+import { getResourcePlanSelectionPage } from "../lib/project-management/queries/resource-plan-queries";
 import {
-  listTagOptions,
   resolvePeopleOptionsByIds,
   resolveTaskOptionsByIds,
   searchPeople,
@@ -25,6 +26,7 @@ import {
 } from "../lib/project-management/queries/option-queries";
 import {
   getContentDrivenTimeCanvasData,
+  getResourcePlanPageData,
   getTimeCanvasData,
   loadBoundedAdaptiveLeaves,
 } from "../lib/project-management/queries/time-canvas-queries";
@@ -52,7 +54,7 @@ test.describe("S2 canvas query security", () => {
     const endpoint = new URL("/api/project-management/canvas", baseURL).toString();
 
     const unauthenticated = await request.post(endpoint, {
-      data: { operation: "listTagOptions", input: {} },
+      data: { operation: "searchTaskOptions", input: {} },
     });
     expect(unauthenticated.status()).toBe(401);
     expect(unauthenticated.headers()["cache-control"]).toContain("no-store");
@@ -79,7 +81,6 @@ test.describe("S2 canvas query security", () => {
       },
       { operation: "searchPeople", input: { purpose: "VISIBLE" } },
       { operation: "searchTaskOptions", input: { query: "Action 边界" } },
-      { operation: "listTagOptions", input: {} },
       {
         operation: "getMyWorkDashboard",
         input: { rangeStart: RANGE_START, rangeEnd: RANGE_END },
@@ -250,7 +251,7 @@ test.describe("S2 canvas query security", () => {
     ).toBe(0);
   });
 
-  test("People, Task and Tag options use minimal permission-filtered stable cursor pages", async () => {
+  test("People and Task options use minimal permission-filtered stable cursor pages", async () => {
     const optionKey = randomUUID();
     const sameNamePerson = `同名成员 ${optionKey}`;
     const sameNameTask = `同名 Task ${optionKey}`;
@@ -355,26 +356,9 @@ test.describe("S2 canvas query security", () => {
       "VALIDATION_ERROR",
     );
 
-    const activeTag = await createTag(owner.account.id, `活动 Tag ${optionKey}`);
-    const ownArchivedTag = await createTag(
-      owner.account.id,
-      `本人归档 Tag ${optionKey}`,
-      new Date(),
-    );
-    const otherArchivedTag = await createTag(
-      hiddenOwner.account.id,
-      `他人归档 Tag ${optionKey}`,
-      new Date(),
-    );
-    await prisma.taskTag.create({
-      data: { taskId: visibleTask.taskId, tagId: activeTag.id },
-    });
-    await prisma.taskTag.create({
-      data: { taskId: hiddenTask.taskId, tagId: activeTag.id },
-    });
     const taskOptions = await searchTaskOptions({
       actor: ownerActor,
-      input: { query: sameNameTask, tagIds: [activeTag.id] },
+      input: { query: sameNameTask },
     });
     expect(taskOptions.items.map((item) => item.id).sort()).toEqual(
       [visibleTask.taskId, hiddenTask.taskId].sort(),
@@ -408,36 +392,6 @@ test.describe("S2 canvas query security", () => {
       visibleSegmentPerson.person.id,
       visibleMember.person.id,
     ]);
-    const visibleTagIds: string[] = [];
-    let tagCursor: string | undefined;
-    do {
-      const tagPage = await listTagOptions({
-        actor: ownerActor,
-        input: { includeArchived: true, limit: 50, cursor: tagCursor },
-      });
-      visibleTagIds.push(...tagPage.items.map((tag) => tag.id));
-      tagCursor = tagPage.nextCursor ?? undefined;
-    } while (tagCursor);
-    expect(visibleTagIds).toEqual(
-      expect.arrayContaining([activeTag.id, ownArchivedTag.id]),
-    );
-    expect(visibleTagIds).not.toContain(otherArchivedTag.id);
-
-    const adminTagIds: string[] = [];
-    let adminTagCursor: string | undefined;
-    do {
-      const tagPage = await listTagOptions({
-        actor: adminActor,
-        input: {
-          includeArchived: true,
-          limit: 50,
-          cursor: adminTagCursor,
-        },
-      });
-      adminTagIds.push(...tagPage.items.map((tag) => tag.id));
-      adminTagCursor = tagPage.nextCursor ?? undefined;
-    } while (adminTagCursor);
-    expect(adminTagIds).toContain(otherArchivedTag.id);
   });
 
   test("People purposes expose the active directory with safe account binding", async () => {
@@ -825,28 +779,234 @@ test.describe("S2 canvas query security", () => {
     );
   });
 
-  test("People and Task cap fuzzy candidates at 501 while empty queries and Tags retain bound cursors", async () => {
+  test("resource plan expands Project, Task and Person unions and pins focused rows", async () => {
+    const owner = await createAccountPerson("资源计划 Owner");
+    const taskMember = await createAccountPerson("资源计划 Task 成员");
+    const projectMember = await createAccountPerson("资源计划 Project 成员");
+    const selectedPerson = await createAccountPerson("资源计划直接选择人员");
+    const project = await prisma.project.create({
+      data: {
+        name: `资源计划 Project ${randomUUID()}`,
+        description: "资源计划集合展开测试",
+        status: "ACTIVE",
+        requesterAccountId: owner.account.id,
+        startedAt: new Date(),
+      },
+    });
+    await prisma.projectMember.create({
+      data: {
+        projectId: project.id,
+        personId: projectMember.person.id,
+        role: "OWNER",
+        createdByAccountId: owner.account.id,
+      },
+    });
+    const task = await createTask({
+      ownerAccountId: owner.account.id,
+      title: `资源计划 Task ${randomUUID()}`,
+      team: "英雄",
+      techGroup: "电控",
+      members: [
+        { personId: owner.person.id, role: "OWNER" },
+        { personId: taskMember.person.id, role: "PARTICIPANT" },
+      ],
+    });
+    await prisma.task.update({
+      where: { id: task.taskId },
+      data: { projectId: project.id },
+    });
+
+    const expanded = await getResourcePlanSelectionPage({
+      actor: actor(owner),
+      input: {
+        all: false,
+        projectIds: [project.id],
+        taskIds: [],
+        personIds: [selectedPerson.person.id],
+      },
+    });
+    expect(expanded.taskIds).toContain(task.taskId);
+    expect(expanded.personIds).toEqual(expect.arrayContaining([
+      owner.person.id,
+      taskMember.person.id,
+      projectMember.person.id,
+      selectedPerson.person.id,
+    ]));
+
+    const pinned = await getResourcePlanSelectionPage({
+      actor: actor(owner),
+      input: {
+        all: true,
+        projectIds: [],
+        taskIds: [],
+        personIds: [],
+        pinnedTaskIds: [task.taskId],
+        pinnedPersonIds: [selectedPerson.person.id],
+      },
+    });
+    expect(pinned.taskIds[0]).toBe(task.taskId);
+    expect(pinned.personIds[0]).toBe(selectedPerson.person.id);
+  });
+
+  test("resource plan validates independent Task and Person cursors against the current selection", async () => {
+    const owner = await createAccountPerson(`资源计划游标 Owner ${randomUUID()}`);
+    await prisma.systemRoleAssignment.create({
+      data: {
+        accountId: owner.account.id,
+        role: "PROJECT_ADMINISTRATOR",
+        grantedByAccountId: owner.account.id,
+      },
+    });
+    const project = await prisma.project.create({
+      data: {
+        name: `资源计划游标 Project ${randomUUID()}`,
+        description: "独立游标约束回归",
+        status: "ACTIVE",
+        requesterAccountId: owner.account.id,
+        startedAt: new Date(),
+      },
+    });
+    const taskIds = await createTaskOptionFixtures({
+      ownerAccountId: owner.account.id,
+      ownerPersonId: owner.person.id,
+      titlePrefix: `000 资源计划游标 Task ${randomUUID()}`,
+      count: 27,
+      withTerminationNodes: true,
+    });
+    await prisma.task.updateMany({
+      where: { id: { in: taskIds } },
+      data: { projectId: project.id },
+    });
+    const people = Array.from({ length: 52 }, (_, index) => ({
+      id: randomUUID(),
+      displayName: `000 资源计划游标 Person ${String(index).padStart(2, "0")} ${project.id}`,
+      status: "ACTIVE" as const,
+    }));
+    await prisma.person.createMany({ data: people });
+    await prisma.taskMember.createMany({
+      data: people.map((person) => ({
+        taskId: taskIds[0]!,
+        personId: person.id,
+        role: "PARTICIPANT" as const,
+        createdByAccountId: owner.account.id,
+      })),
+    });
+    const input = {
+      all: false,
+      projectIds: [project.id],
+      taskIds: [],
+      personIds: [],
+    };
+    const first = await getResourcePlanSelectionPage({ actor: actor(owner), input });
+    expect(first.taskIds).toHaveLength(25);
+    expect(first.personIds).toHaveLength(50);
+    expect(first.nextTaskCursor).not.toBeNull();
+    expect(first.nextPersonCursor).not.toBeNull();
+
+    const assembled = await getResourcePlanPageData({
+      actor: actor(owner),
+      input,
+      preferredCenterMs: Date.parse(RANGE_START),
+      load: { mode: "INITIAL" },
+    });
+    expect(assembled.selection.taskIds).toEqual(first.taskIds);
+    expect(assembled.selection.personIds).toEqual(first.personIds);
+    expect(assembled.data.anchors).toHaveLength(25);
+    expect(
+      timeCanvasDataToModel(assembled.data, "RESOURCE_PLANNER").rows.filter(
+        (row) => row.kind === "PLAN",
+      ),
+    ).toHaveLength(25);
+    expect(assembled.data.rows.filter((row) => row.kind === "PERSON")).toHaveLength(50);
+
+    const taskSecond = await getResourcePlanSelectionPage({
+      actor: actor(owner),
+      input: { ...input, taskCursor: first.nextTaskCursor },
+    });
+    expect(taskSecond.taskIds).toHaveLength(2);
+    expect(taskSecond.personIds).toEqual(first.personIds);
+    const personSecond = await getResourcePlanSelectionPage({
+      actor: actor(owner),
+      input: { ...input, personCursor: first.nextPersonCursor },
+    });
+    expect(personSecond.taskIds).toEqual(first.taskIds);
+    expect(personSecond.personIds.length).toBeGreaterThan(0);
+    expect(personSecond.personIds.length).toBeLessThanOrEqual(3);
+
+    const forgedTaskCursor = rewriteResourcePlanCursor(
+      first.nextTaskCursor!,
+      randomUUID(),
+    );
+    const forgedPersonCursor = rewriteResourcePlanCursor(
+      first.nextPersonCursor!,
+      randomUUID(),
+    );
+    await expectErrorCode(
+      getResourcePlanSelectionPage({
+        actor: actor(owner),
+        input: { ...input, taskCursor: forgedTaskCursor },
+      }),
+      "VALIDATION_ERROR",
+    );
+    await expectErrorCode(
+      getResourcePlanSelectionPage({
+        actor: actor(owner),
+        input: { ...input, personCursor: forgedPersonCursor },
+      }),
+      "VALIDATION_ERROR",
+    );
+    await expectErrorCode(
+      getResourcePlanSelectionPage({
+        actor: actor(owner),
+        input: {
+          ...input,
+          projectIds: [],
+          taskIds: [taskIds[0]!],
+          taskCursor: first.nextTaskCursor,
+        },
+      }),
+      "VALIDATION_ERROR",
+    );
+
+    const expiredTaskId = resourcePlanCursorId(first.nextTaskCursor!);
+    await prisma.task.update({
+      where: { id: expiredTaskId },
+      data: { deletedAt: new Date() },
+    });
+    await expectErrorCode(
+      getResourcePlanSelectionPage({
+        actor: actor(owner),
+        input: { ...input, taskCursor: first.nextTaskCursor },
+      }),
+      "VALIDATION_ERROR",
+    );
+
+    const expiredPersonId = resourcePlanCursorId(first.nextPersonCursor!);
+    await prisma.taskMember.updateMany({
+      where: { taskId: taskIds[0]!, personId: expiredPersonId, removedAt: null },
+      data: { removedAt: new Date() },
+    });
+    await expectErrorCode(
+      getResourcePlanSelectionPage({
+        actor: actor(owner),
+        input: { ...input, personCursor: first.nextPersonCursor },
+      }),
+      "VALIDATION_ERROR",
+    );
+  });
+
+  test("People and Task cap fuzzy candidates at 501 while empty queries retain bound cursors", async () => {
     const owner = await createAccountPerson("选项游标 Owner");
     const ownerActor = actor(owner);
     const adminActor = actor(owner, [systemAdministratorRole()]);
     const queryKey = randomUUID();
     const peopleQuery = `游标边界 Person ${queryKey}`;
     const taskQuery = `游标边界 Task ${queryKey}`;
-    const tagQuery = `游标边界 Tag ${queryKey}`;
     const taskIds = await createTaskOptionFixtures({
       ownerAccountId: owner.account.id,
       ownerPersonId: owner.person.id,
       titlePrefix: taskQuery,
       count: 502,
-    });
-    const tagIds = Array.from({ length: 51 }, () => randomUUID());
-    await prisma.tag.createMany({
-      data: tagIds.map((id, index) => ({
-        id,
-        name: `${tagQuery} ${String(index).padStart(2, "0")}`,
-        color: "#446688",
-        createdByAccountId: owner.account.id,
-      })),
     });
     const personIds = Array.from({ length: 502 }, () => randomUUID());
     await prisma.person.createMany({
@@ -908,26 +1068,6 @@ test.describe("S2 canvas query security", () => {
     });
     expect(taskCursorPage.nextCursor).not.toBeNull();
 
-    const firstTagPage = await listTagOptions({
-      actor: ownerActor,
-      input: { query: tagQuery, limit: 50 },
-    });
-    expect(firstTagPage.items).toHaveLength(50);
-    expect(firstTagPage.nextCursor).not.toBeNull();
-    const secondTagPage = await listTagOptions({
-      actor: ownerActor,
-      input: {
-        query: tagQuery,
-        limit: 50,
-        cursor: firstTagPage.nextCursor ?? undefined,
-      },
-    });
-    expect(secondTagPage.items).toHaveLength(1);
-    expect(
-      new Set(
-        [...firstTagPage.items, ...secondTagPage.items].map((item) => item.id),
-      ),
-    ).toEqual(new Set(tagIds));
 
     await expectErrorCode(
       searchPeople({
@@ -1003,37 +1143,6 @@ test.describe("S2 canvas query security", () => {
       "VALIDATION_ERROR",
     );
     await expectErrorCode(
-      listTagOptions({
-        actor: adminActor,
-        input: {
-          query: tagQuery,
-          cursor: peopleCursorPage.nextCursor ?? undefined,
-        },
-      }),
-      "VALIDATION_ERROR",
-    );
-
-    await expectErrorCode(
-      listTagOptions({
-        actor: ownerActor,
-        input: {
-          query: tagQuery,
-          cursor: taskCursorPage.nextCursor ?? undefined,
-        },
-      }),
-      "VALIDATION_ERROR",
-    );
-    await expectErrorCode(
-      searchTaskOptions({
-        actor: ownerActor,
-        input: {
-          query: taskQuery,
-          cursor: firstTagPage.nextCursor ?? undefined,
-        },
-      }),
-      "VALIDATION_ERROR",
-    );
-    await expectErrorCode(
       searchTaskOptions({
         actor: ownerActor,
         input: { query: taskQuery, limit: 51 },
@@ -1064,202 +1173,6 @@ test.describe("S2 canvas query security", () => {
       }),
       "QUERY_LIMIT_EXCEEDED",
     );
-    await expectErrorCode(
-      listTagOptions({
-        actor: ownerActor,
-        input: { query: tagQuery, limit: 51 },
-      }),
-      "QUERY_LIMIT_EXCEEDED",
-    );
-  });
-
-  test("Tag filters use the authorized TaskTag-or-SegmentTag union for PERSON and TASK rows", async () => {
-    const teamAdmin = await createAccountPerson("Tag 并集 Team Admin");
-    const target = await createAccountPerson("Tag 并集目标人员");
-    const visibleOwner = await createAccountPerson("Tag 并集可见 Owner");
-    const hiddenOwner = await createAccountPerson("Tag 并集隐藏 Owner");
-    const teamAdminActor = actor(teamAdmin, [
-      scopedRole("GROUP_LEADER", "英雄", "电控"),
-    ]);
-    const tag = await createTag(teamAdmin.account.id, "Tag 并集筛选");
-    const taskTagOnly = await createTask({
-      ownerAccountId: visibleOwner.account.id,
-      title: "Tag 并集 TaskTag-only",
-      team: "英雄",
-      techGroup: "电控",
-      members: [
-        { personId: visibleOwner.person.id, role: "OWNER" },
-        { personId: target.person.id, role: "PARTICIPANT" },
-      ],
-    });
-    const segmentTagOnly = await createTask({
-      ownerAccountId: visibleOwner.account.id,
-      title: "Tag 并集 SegmentTag-only",
-      team: "英雄",
-      techGroup: "电控",
-      members: [
-        { personId: visibleOwner.person.id, role: "OWNER" },
-        { personId: target.person.id, role: "PARTICIPANT" },
-      ],
-    });
-    const both = await createTask({
-      ownerAccountId: visibleOwner.account.id,
-      title: "Tag 并集 Both",
-      team: "英雄",
-      techGroup: "电控",
-      members: [
-        { personId: visibleOwner.person.id, role: "OWNER" },
-        { personId: target.person.id, role: "PARTICIPANT" },
-      ],
-    });
-    const taskTagWithoutSegment = await createTask({
-      ownerAccountId: visibleOwner.account.id,
-      title: "Tag 并集 TaskTag zero Segment",
-      team: "英雄",
-      techGroup: "电控",
-      members: [
-        { personId: visibleOwner.person.id, role: "OWNER" },
-        { personId: target.person.id, role: "PARTICIPANT" },
-      ],
-    });
-    const taskTagOutsideRange = await createTask({
-      ownerAccountId: visibleOwner.account.id,
-      title: "Tag 并集 TaskTag out of range",
-      team: "英雄",
-      techGroup: "电控",
-      members: [
-        { personId: visibleOwner.person.id, role: "OWNER" },
-        { personId: target.person.id, role: "PARTICIPANT" },
-      ],
-    });
-    const hidden = await createTask({
-      ownerAccountId: hiddenOwner.account.id,
-      title: "Tag 并集隐藏 Task",
-      team: "步兵",
-      techGroup: "机械",
-      members: [
-        { personId: hiddenOwner.person.id, role: "OWNER" },
-        { personId: target.person.id, role: "PARTICIPANT" },
-      ],
-    });
-    await prisma.taskTag.createMany({
-      data: [
-        taskTagOnly.taskId,
-        both.taskId,
-        taskTagWithoutSegment.taskId,
-        taskTagOutsideRange.taskId,
-        hidden.taskId,
-      ].map((taskId) => ({ taskId, tagId: tag.id })),
-    });
-    const taskTagOnlySegment = await createSegment({
-      accountId: visibleOwner.account.id,
-      personId: target.person.id,
-      taskId: taskTagOnly.taskId,
-      startAt: atHour(9),
-      endAt: atHour(10),
-      content: "仅 TaskTag 命中",
-    });
-    const segmentTagOnlySegment = await createSegment({
-      accountId: visibleOwner.account.id,
-      personId: target.person.id,
-      taskId: segmentTagOnly.taskId,
-      startAt: atHour(10),
-      endAt: atHour(11),
-      content: "仅 SegmentTag 命中",
-      tagIds: [tag.id],
-    });
-    const bothSegment = await createSegment({
-      accountId: visibleOwner.account.id,
-      personId: target.person.id,
-      taskId: both.taskId,
-      startAt: atHour(11),
-      endAt: atHour(12),
-      content: "TaskTag 与 SegmentTag 同时命中",
-      tagIds: [tag.id],
-    });
-    const hiddenSegment = await createSegment({
-      accountId: hiddenOwner.account.id,
-      personId: target.person.id,
-      taskId: hidden.taskId,
-      startAt: atHour(12),
-      endAt: atHour(13),
-      content: "隐藏 Task 同 Tag",
-      tagIds: [tag.id],
-    });
-    await createSegment({
-      accountId: visibleOwner.account.id,
-      personId: target.person.id,
-      taskId: taskTagOutsideRange.taskId,
-      startAt: new Date("2027-08-10T09:00:00.000Z"),
-      endAt: new Date("2027-08-10T10:00:00.000Z"),
-      content: "TaskTag 范围外 Segment",
-    });
-
-    const expectedSegmentIds = [
-      taskTagOnlySegment.id,
-      segmentTagOnlySegment.id,
-      bothSegment.id,
-      hiddenSegment.id,
-    ].sort();
-    const personGrouped = await getTimeCanvasData({
-      actor: teamAdminActor,
-      input: canvasInput({
-        scope: { kind: "RESOURCE_PLANNER" },
-        groupBy: "PERSON",
-        personIds: [target.person.id],
-        tagIds: [tag.id],
-      }),
-    });
-    expect(personGrouped.rows.map((row) => row.id)).toEqual([target.person.id]);
-    expect(fullSegmentIds(personGrouped).sort()).toEqual(expectedSegmentIds);
-
-    const taskGrouped = await getTimeCanvasData({
-      actor: teamAdminActor,
-      input: canvasInput({
-        scope: { kind: "RESOURCE_PLANNER" },
-        groupBy: "TASK",
-        personIds: [target.person.id],
-        tagIds: [tag.id],
-      }),
-    });
-    expect(taskGrouped.rows.map((row) => row.id).sort()).toEqual(
-      [
-        taskTagOnly.taskId,
-        segmentTagOnly.taskId,
-        both.taskId,
-        taskTagWithoutSegment.taskId,
-        taskTagOutsideRange.taskId,
-        hidden.taskId,
-      ].sort(),
-    );
-    expect(fullSegmentIds(taskGrouped).sort()).toEqual(expectedSegmentIds);
-    expect(taskGrouped.anchors.map((anchor) => anchor.id).sort()).toEqual(
-      taskGrouped.rows.map((row) => row.id).sort(),
-    );
-    const pagedTaskIds: string[] = [];
-    let cursor: string | undefined;
-    do {
-      const page = await getTimeCanvasData({
-        actor: teamAdminActor,
-        input: canvasInput({
-          scope: { kind: "RESOURCE_PLANNER" },
-          groupBy: "TASK",
-          personIds: [target.person.id],
-          tagIds: [tag.id],
-          rowLimit: 1,
-          cursor,
-        }),
-      });
-      pagedTaskIds.push(...page.rows.map((row) => row.id));
-      cursor = page.nextCursor ?? undefined;
-    } while (cursor);
-    expect(pagedTaskIds.sort()).toEqual(
-      taskGrouped.rows.map((row) => row.id).sort(),
-    );
-    expect(new Set(pagedTaskIds).size).toBe(pagedTaskIds.length);
-    expect(JSON.stringify(personGrouped)).toContain(hiddenSegment.id);
-    expect(JSON.stringify(taskGrouped)).toContain(hidden.taskId);
-    expect(JSON.stringify(taskGrouped)).toContain(hiddenSegment.id);
   });
 
   test("PERSON row creation capabilities use eligible Task existence without granting retired leaders write access", async () => {
@@ -1642,10 +1555,6 @@ test.describe("S2 canvas query security", () => {
       endAt: atHour(16),
       content: "停用人员历史投入",
     });
-    const hiddenTag = await createTag(hiddenOwner.account.id, "绝密 Segment Tag");
-    await prisma.segmentTag.create({
-      data: { segmentId: hidden.id, tagId: hiddenTag.id },
-    });
     const hiddenVersionToken = "2026-07-01T01:02:03.456Z";
     await prisma.workSegment.update({
       where: { id: hidden.id },
@@ -1722,8 +1631,6 @@ test.describe("S2 canvas query security", () => {
       hidden.id,
       "绝密 Task B 投入",
       taskB.taskId,
-      hiddenTag.id,
-      hiddenTag.name,
       hiddenVersionToken,
     ]) {
       expect(serializedTaskCanvas).toContain(visible);
@@ -2019,10 +1926,6 @@ test.describe("S2 canvas query security", () => {
       techGroup: "机械",
       members: [{ personId: hiddenOwner.person.id, role: "OWNER" }],
     });
-    const hiddenTag = await createTag(
-      hiddenOwner.account.id,
-      "Busy 稳定排序绝密 Tag",
-    );
     const hiddenIdPrefix = randomUUID().slice(0, -1);
     const hiddenSegmentFixtures = Array.from({ length: 8 }, (_, index) => ({
       id: `${hiddenIdPrefix}${index.toString(16)}`,
@@ -2039,7 +1942,6 @@ test.describe("S2 canvas query security", () => {
           startAt: atHour(9),
           endAt: atHour(10),
           content: fixture.content,
-          tagIds: [hiddenTag.id],
         }),
       );
     }
@@ -2078,8 +1980,6 @@ test.describe("S2 canvas query security", () => {
     for (const visible of [
       ...hiddenSegments.flatMap((segment) => [segment.id, segment.content]),
       hiddenTask.taskId,
-      hiddenTag.id,
-      hiddenTag.name,
     ]) {
       expect(serializedFull).toContain(visible);
     }
@@ -2206,7 +2106,6 @@ test.describe("S2 canvas query security", () => {
         scope: { kind: "TASK_SCOPED" as const, taskId: task.taskId },
         personIds: [],
         taskIds: [],
-        tagIds: [],
         types: [],
         statuses: [],
         groupBy: "PERSON" as const,
@@ -2308,7 +2207,6 @@ test.describe("S2 canvas query security", () => {
         scope: { kind: "TASK_SCOPED", taskId: task.taskId },
         personIds: [],
         taskIds: [],
-        tagIds: [],
         types: [],
         statuses: [],
         groupBy: "PERSON",
@@ -2384,7 +2282,6 @@ test.describe("S2 canvas query security", () => {
         scope: { kind: "TASK_SCOPED", taskId: task.taskId },
         personIds: [],
         taskIds: [],
-        tagIds: [],
         types: [],
         statuses: [],
         groupBy: "PERSON",
@@ -2452,7 +2349,6 @@ test.describe("S2 canvas query security", () => {
         scope: { kind: "TASK_SCOPED", taskId: task.taskId },
         personIds: [],
         taskIds: [],
-        tagIds: [],
         types: [],
         statuses: [],
         groupBy: "PERSON",
@@ -2885,7 +2781,6 @@ async function createSegment({
   endAt,
   content = "S2 查询 Segment",
   priority = "MEDIUM",
-  tagIds = [],
 }: {
   id?: string;
   accountId: string;
@@ -2902,7 +2797,6 @@ async function createSegment({
   endAt: Date;
   content?: string;
   priority?: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
-  tagIds?: string[];
 }) {
   return prisma.workSegment.create({
     data: {
@@ -2917,9 +2811,6 @@ async function createSegment({
       taskId,
       createdByAccountId: accountId,
       updatedByAccountId: accountId,
-      ...(tagIds.length > 0
-        ? { tags: { create: tagIds.map((tagId) => ({ tagId })) } }
-        : {}),
     },
   });
 }
@@ -2929,15 +2820,18 @@ async function createTaskOptionFixtures({
   ownerPersonId,
   titlePrefix,
   count,
+  withTerminationNodes = false,
 }: {
   ownerAccountId: string;
   ownerPersonId: string;
   titlePrefix: string;
   count: number;
+  withTerminationNodes?: boolean;
 }): Promise<string[]> {
   const records = Array.from({ length: count }, (_, index) => ({
     taskId: randomUUID(),
     planVersionId: randomUUID(),
+    nodeId: randomUUID(),
     title: `${titlePrefix} ${String(index).padStart(2, "0")}`,
   }));
   await prisma.$transaction(async (tx) => {
@@ -2966,6 +2860,33 @@ async function createTaskOptionFixtures({
         activatedAt: atHour(8),
       })),
     });
+    if (withTerminationNodes) {
+      await tx.taskNode.createMany({
+        data: records.map((record) => ({
+          id: record.nodeId,
+          taskId: record.taskId,
+          type: "TERMINATION" as const,
+          status: "ACTIVE" as const,
+          businessDescription: "资源计划游标 Terminal",
+          createdByAccountId: ownerAccountId,
+        })),
+      });
+      await tx.terminationNode.createMany({
+        data: records.map((record, index) => ({
+          nodeId: record.nodeId,
+          name: `Terminal ${String(index).padStart(2, "0")}`,
+          plannedOutcomeCriteria: "完成资源计划游标验证",
+          plannedAt: atHour(9),
+        })),
+      });
+      await tx.planVersionNode.createMany({
+        data: records.map((record) => ({
+          planVersionId: record.planVersionId,
+          nodeId: record.nodeId,
+          sequence: 1,
+        })),
+      });
+    }
     await tx.taskMember.createMany({
       data: records.map((record) => ({
         taskId: record.taskId,
@@ -2976,6 +2897,21 @@ async function createTaskOptionFixtures({
     });
   });
   return records.map((record) => record.taskId);
+}
+
+function rewriteResourcePlanCursor(cursor: string, id: string) {
+  const payload = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as
+    Record<string, unknown>;
+  payload.id = id;
+  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+}
+
+function resourcePlanCursorId(cursor: string) {
+  const payload = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as {
+    id?: unknown;
+  };
+  if (typeof payload.id !== "string") throw new Error("资源计划测试游标缺少 ID");
+  return payload.id;
 }
 
 async function createAnchorTaskBatch({
@@ -3093,21 +3029,6 @@ async function createSegmentsInChunks(
       data: rows.slice(offset, offset + 1_000),
     });
   }
-}
-
-async function createTag(
-  accountId: string,
-  name: string,
-  archivedAt: Date | null = null,
-) {
-  return prisma.tag.create({
-    data: {
-      name: `${name}-${randomUUID()}`,
-      color: "#334455",
-      createdByAccountId: accountId,
-      archivedAt,
-    },
-  });
 }
 
 function actor(

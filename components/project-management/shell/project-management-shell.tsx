@@ -10,7 +10,6 @@ import {
   ChevronRight,
   FolderKanban,
   ListChecks,
-  Tags,
   LayoutList,
   Menu,
   X,
@@ -86,12 +85,6 @@ const navigationItems: NavigationItem[] = [
       pathname === routes.progress.notifications ||
       pathname.startsWith(`${routes.progress.notifications}/`),
     notification: true,
-  },
-  {
-    href: routes.progress.tags,
-    label: "Tag",
-    icon: Tags,
-    match: (pathname) => pathname === routes.progress.tags,
   },
 ];
 

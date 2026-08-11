@@ -21,6 +21,8 @@ export type TimeCanvasRange = {
   endMs: number;
 };
 
+export type TimeCanvasViewportChangeSource = "LAYOUT" | "USER";
+
 export type TimeCanvasRow = {
   id: string;
   sourceId: string;
@@ -120,6 +122,18 @@ export type AdaptiveTimeCanvasBlockQuery =
       preferredCenterMs: number;
       projectId: string;
       taskCursor?: string;
+    }
+  | {
+      kind: "RESOURCE_PLAN";
+      preferredCenterMs: number;
+      all: boolean;
+      projectIds: string[];
+      taskIds: string[];
+      personIds: string[];
+      pinnedTaskIds: string[];
+      pinnedPersonIds: string[];
+      taskCursor?: string;
+      personCursor?: string;
     };
 
 export type TimeCanvasSelection =
@@ -216,7 +230,10 @@ export type TimeCanvasProps = {
   onRangeChange?: (range: TimeCanvasRange) => void;
   navigationRange?: TimeCanvasRange;
   onRequestCenter?: (centerMs: number) => void;
-  onViewportChange?: (range: TimeCanvasRange) => void;
+  onViewportChange?: (
+    range: TimeCanvasRange,
+    source: TimeCanvasViewportChangeSource,
+  ) => void;
   onZoomChange?: (zoom: TimeCanvasZoom) => void;
   onSelectionChange?: (selection: TimeCanvasSelection) => void;
 };

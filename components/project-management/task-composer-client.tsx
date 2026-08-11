@@ -23,9 +23,6 @@ import {
   createRevision,
   reviseRejectedRevision,
 } from "@/app/actions/project-management/revisions";
-import {
-  listTagOptions,
-} from "@/app/actions/project-management/canvas";
 import { TaskSelect } from "@/components/project-management/task-picker";
 import { ProjectSelect } from "@/components/project-management/project-picker";
 import { TaskComposerPlanEditor } from "@/components/project-management/task-composer-plan-editor";
@@ -53,7 +50,6 @@ import {
 } from "@/lib/project-management/labels";
 import type {
   PersonOptionDto,
-  TagOptionPage,
   TaskOptionPage,
 } from "@/lib/project-management/types/time-canvas";
 import type {
@@ -71,7 +67,7 @@ import {
 } from "@/components/project-management/task-composer-draft-storage";
 import { routes } from "@/lib/routes";
 
-const LOCAL_DRAFT_SCHEMA_VERSION = 3;
+const LOCAL_DRAFT_SCHEMA_VERSION = 4;
 const MAX_HISTORY = 80;
 const NO_LEGAL_ANCHOR_MOVE_MESSAGE =
   "当前吸附粒度没有合法位置，节点已保留在原处；请放大画布或使用 Inspector 精调。";
@@ -123,7 +119,6 @@ export type TaskComposerSeed = {
   team: string;
   techGroup: string;
   priority: TaskPriorityValue;
-  tagIds: string[];
   relatedTaskId: string | null;
   projectId?: string | null;
   members: Array<{ personId: string; role: TaskMemberRoleValue }>;
@@ -183,7 +178,7 @@ export type ValidationIssue = {
 };
 
 type LocalTaskDraft = {
-  schemaVersion: 3;
+  schemaVersion: 4;
   draftId: string;
   savedAt: string;
   task: TaskComposerSeed;
@@ -216,7 +211,6 @@ type LocalDraftRecovery =
 
 type PersonOption = PersonOptionDto;
 type TaskOption = TaskOptionPage["items"][number];
-type TagOption = TagOptionPage["items"][number];
 type TaskActionError = {
   code: string;
   message: string;
@@ -263,7 +257,6 @@ export function TaskComposerClient({
   initialSeed,
   initialPeople,
   initialTasks,
-  initialTags,
   initialProjects = [],
   actorPersonId,
   mode = CREATE_TASK_COMPOSER_MODE,
@@ -273,7 +266,6 @@ export function TaskComposerClient({
   initialSeed: TaskComposerSeed;
   initialPeople: PersonOption[];
   initialTasks: TaskOption[];
-  initialTags: TagOption[];
   initialProjects?: Array<{ id: string; name: string; avatarPath: string | null }>;
   actorPersonId: string;
   mode?: TaskComposerMode;
@@ -308,10 +300,7 @@ export function TaskComposerClient({
   const [pendingNavigation, setPendingNavigation] = useState<string | null>(null);
   const [historyGuardActive, setHistoryGuardActive] = useState(false);
   const [people, setPeople] = useState<PersonOption[]>(initialPeople);
-  const [tags, setTags] = useState<TagOption[]>(initialTags);
-  const [tagQuery, setTagQuery] = useState("");
   const [optionError, setOptionError] = useState("");
-  const [optionLoading, setOptionLoading] = useState(false);
   const historyGuardRef = useRef(false);
   const bypassPopStateRef = useRef(false);
   const bypassBeforeUnloadRef = useRef(false);
@@ -386,6 +375,13 @@ export function TaskComposerClient({
     () =>
       mode.kind === "CREATE"
         ? `task-draft:${encodeURIComponent(deploymentEnvironment)}:${encodeURIComponent(accountId)}:v2`
+        : null,
+    [accountId, deploymentEnvironment, mode.kind],
+  );
+  const legacyStorageKeyV3 = useMemo(
+    () =>
+      mode.kind === "CREATE"
+        ? `task-draft:${encodeURIComponent(deploymentEnvironment)}:${encodeURIComponent(accountId)}:v3`
         : null,
     [accountId, deploymentEnvironment, mode.kind],
   );
@@ -486,13 +482,16 @@ export function TaskComposerClient({
         try {
           await withTaskComposerDraftLock(storageKey, async () => {
             const currentRaw = window.localStorage.getItem(storageKey);
-            const legacyRawV2 = currentRaw || !legacyStorageKeyV2
+            const legacyRawV3 = currentRaw || !legacyStorageKeyV3
+              ? null
+              : window.localStorage.getItem(legacyStorageKeyV3);
+            const legacyRawV2 = currentRaw || legacyRawV3 || !legacyStorageKeyV2
               ? null
               : window.localStorage.getItem(legacyStorageKeyV2);
-            const legacyRawV1 = currentRaw || legacyRawV2 || !legacyStorageKeyV1
+            const legacyRawV1 = currentRaw || legacyRawV3 || legacyRawV2 || !legacyStorageKeyV1
               ? null
               : window.localStorage.getItem(legacyStorageKeyV1);
-            preservedRaw = currentRaw ?? legacyRawV2 ?? legacyRawV1;
+            preservedRaw = currentRaw ?? legacyRawV3 ?? legacyRawV2 ?? legacyRawV1;
 
             let parsed: LocalTaskDraft | null = null;
             if (currentRaw) {
@@ -500,7 +499,9 @@ export function TaskComposerClient({
               if (pointer) {
                 const indexedRaw = await readIndexedDraft(storageKey);
                 preservedRaw = indexedRaw ?? currentRaw;
-                parsed = indexedRaw ? parseLocalDraft(indexedRaw) : null;
+                parsed = pointer.schemaVersion === LOCAL_DRAFT_SCHEMA_VERSION && indexedRaw
+                  ? parseLocalDraft(indexedRaw)
+                  : null;
                 if (
                   parsed &&
                   (parsed.draftId !== pointer.draftId ||
@@ -515,6 +516,15 @@ export function TaskComposerClient({
               } else {
                 parsed = parseLocalDraft(currentRaw);
               }
+            } else if (legacyRawV3 && legacyStorageKeyV3) {
+              const pointer = parseIndexedDraftPointer(legacyRawV3);
+              if (pointer) {
+                const indexedRaw = await readIndexedDraft(legacyStorageKeyV3);
+                preservedRaw = indexedRaw ?? legacyRawV3;
+                if (!indexedRaw) {
+                  unavailableReason = "旧版本地草稿索引存在，但大草稿内容缺失或不可读取。";
+                }
+              }
             } else if (legacyRawV2) {
               parsed = migrateLegacyLocalDraft(legacyRawV2, actorPersonId, 2);
             } else if (legacyRawV1) {
@@ -524,6 +534,9 @@ export function TaskComposerClient({
               if (indexedRaw) {
                 preservedRaw = indexedRaw;
                 parsed = parseLocalDraft(indexedRaw);
+              } else if (legacyStorageKeyV3) {
+                const legacyIndexedRaw = await readIndexedDraft(legacyStorageKeyV3);
+                if (legacyIndexedRaw) preservedRaw = legacyIndexedRaw;
               }
             }
 
@@ -566,7 +579,7 @@ export function TaskComposerClient({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [actorPersonId, editContext, legacyStorageKeyV1, legacyStorageKeyV2, storageKey]);
+  }, [actorPersonId, editContext, legacyStorageKeyV1, legacyStorageKeyV2, legacyStorageKeyV3, storageKey]);
 
   useEffect(() => {
     if (!storageReady || recovery || !dirty || submitting || storageBusy) return;
@@ -940,7 +953,7 @@ export function TaskComposerClient({
     try {
       await draftWriteChainRef.current.catch(() => undefined);
       await removeTaskComposerDraft(storageKey, [
-        ...[legacyStorageKeyV1, legacyStorageKeyV2].filter(
+        ...[legacyStorageKeyV1, legacyStorageKeyV2, legacyStorageKeyV3].filter(
           (key): key is string => Boolean(key),
         ),
       ]);
@@ -949,7 +962,7 @@ export function TaskComposerClient({
       setServerError("浏览器拒绝删除本地草稿；为避免旧草稿再次出现，当前不会离开页面。");
       return false;
     }
-  }, [cancelPendingAutoSave, legacyStorageKeyV1, legacyStorageKeyV2, storageKey]);
+  }, [cancelPendingAutoSave, legacyStorageKeyV1, legacyStorageKeyV2, legacyStorageKeyV3, storageKey]);
 
   const clearRevertedLocalDraft = useCallback(() => {
     if (cleanDraftCleanupPromiseRef.current) {
@@ -1023,7 +1036,6 @@ export function TaskComposerClient({
         team: state.team,
         techGroup: state.techGroup,
         priority: state.priority,
-        tagIds: state.tagIds,
         relatedTaskId: state.relatedTaskId,
         projectId: state.projectId ?? null,
         plannedStartAt: shanghaiDateTimeLocalToIso(state.plannedStartAt),
@@ -1202,7 +1214,7 @@ export function TaskComposerClient({
       try {
         await draftWriteChainRef.current.catch(() => undefined);
         await removeTaskComposerDraft(storageKey, [
-          ...[legacyStorageKeyV1, legacyStorageKeyV2].filter(
+          ...[legacyStorageKeyV1, legacyStorageKeyV2, legacyStorageKeyV3].filter(
             (key): key is string => Boolean(key),
           ),
         ]);
@@ -1233,23 +1245,6 @@ export function TaskComposerClient({
       );
     } finally {
       setSubmitting(false);
-    }
-  };
-
-  const loadTags = async () => {
-    setOptionLoading(true);
-    setOptionError("");
-    try {
-      const result = await listTagOptions({ query: tagQuery || undefined, limit: 50 });
-      if (!result.ok) {
-        setOptionError(result.error.message);
-        return;
-      }
-      setTags((current) => mergeOptions(current, result.data.items));
-    } catch {
-      setOptionError("Tag 搜索暂时不可用，请稍后重试。");
-    } finally {
-      setOptionLoading(false);
     }
   };
 
@@ -1552,62 +1547,6 @@ export function TaskComposerClient({
                 </select>
               </Field>
             </div>
-            <Field
-              label="Tags"
-              htmlFor={isRevisionComposer ? undefined : "tag-search"}
-            >
-              {!isRevisionComposer && (
-                <div className="flex gap-2">
-                  <Input
-                    id="tag-search"
-                    value={tagQuery}
-                    placeholder="搜索 Tag"
-                    onChange={(event) => setTagQuery(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        event.preventDefault();
-                        void loadTags();
-                      }
-                    }}
-                  />
-                  <Button type="button" variant="outline" onClick={() => void loadTags()}>
-                    搜索
-                  </Button>
-                </div>
-              )}
-              <div className="mt-2 flex max-h-28 flex-wrap gap-2 overflow-y-auto">
-                {tags.map((tag) => (
-                  <label
-                    key={tag.id}
-                    className={`flex items-center gap-1 rounded-full border border-border px-2 py-1 text-xs ${isRevisionComposer ? "cursor-default" : "cursor-pointer"}`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={state.tagIds.includes(tag.id)}
-                      disabled={isRevisionComposer}
-                      onChange={(event) =>
-                        updateField(
-                          "tagIds",
-                          event.target.checked
-                            ? [...state.tagIds, tag.id]
-                            : state.tagIds.filter((id) => id !== tag.id),
-                        )
-                      }
-                    />
-                    <span
-                      className="size-2 rounded-full"
-                      style={{ backgroundColor: tag.color }}
-                      aria-hidden="true"
-                    />
-                    {tag.name}
-                    {tag.isArchived && (
-                      <span className="text-muted-foreground">（已归档）</span>
-                    )}
-                  </label>
-                ))}
-                {tags.length === 0 && <EmptyInline>没有可选 Tag</EmptyInline>}
-              </div>
-            </Field>
             <Field label="关联 Task" htmlFor="related-task">
               <TaskSelect
                 inputId="related-task"
@@ -1691,7 +1630,7 @@ export function TaskComposerClient({
                 }
               : null
           }
-          optionLoading={optionLoading}
+          optionLoading={false}
           submitting={submitting}
           submitDisabled={isEditingDraft && !dirty}
           submitLabel={
@@ -1848,10 +1787,6 @@ function Field({
       {children}
     </div>
   );
-}
-
-function EmptyInline({ children }: { children: ReactNode }) {
-  return <p className="text-xs text-muted-foreground">{children}</p>;
 }
 
 const selectClassName =
@@ -2471,9 +2406,6 @@ function validateComposer(
       message: "Start 必须严格早于全部 Milestone 和 Terminal。",
     });
   }
-  if (!state.revision && new Set(state.tagIds).size !== state.tagIds.length) {
-    issues.push({ key: "tag-search", message: "不能重复选择同一个 Tag。" });
-  }
   if (!state.revision && state.members.length === 0) {
     issues.push({ key: "members", message: "至少添加一名 Task 成员。" });
   }
@@ -2660,7 +2592,6 @@ function serverFieldValidationIssue(
     techGroup: "techGroup",
     relatedTaskId: "related-task",
     projectId: "task-project",
-    tagIds: "tag-search",
     members: "members",
     plannedStartAt: "plannedStartAt",
     revisionAt: "revisionAt",
@@ -2795,10 +2726,6 @@ function parseLocalDraft(raw: string): LocalTaskDraft | null {
       !Array.isArray(task.members) ||
       task.members.length > 500 ||
       !task.members.every(isStoredMember) ||
-      !Array.isArray(task.tagIds) ||
-      task.tagIds.length > 50 ||
-      !task.tagIds.every((tagId) => typeof tagId === "string") ||
-      !task.tagIds.every((tagId) => UUID_PATTERN.test(tagId as string)) ||
       !Array.isArray(task.milestones) ||
       task.milestones.length > 200 ||
       !task.milestones.every(isStoredMilestone) ||
@@ -3232,7 +3159,6 @@ function composerSubmissionFingerprint(state: TaskComposerSeed) {
     team: state.team,
     techGroup: state.techGroup,
     priority: state.priority,
-    tagIds: [...state.tagIds].sort(),
     relatedTaskId: state.relatedTaskId,
     projectId: state.projectId ?? null,
     members: [...state.members].sort(
@@ -3455,7 +3381,6 @@ function sanitizeRecoveredComposerState({
     team: authoritative.team,
     techGroup: authoritative.techGroup,
     priority: authoritative.priority,
-    tagIds: authoritative.tagIds,
     relatedTaskId: authoritative.relatedTaskId,
     projectId: authoritative.projectId ?? null,
     members: authoritative.members,

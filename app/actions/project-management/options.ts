@@ -6,7 +6,6 @@ import {
 } from "@/lib/project-management/application/action-result";
 import { getCurrentProjectManagementActor } from "@/lib/project-management/identity";
 import {
-  listTagOptions as listTagOptionsQuery,
   resolvePeopleOptionsByIds as resolvePeopleOptionsByIdsQuery,
   resolveTaskOptionsByIds as resolveTaskOptionsByIdsQuery,
   searchPeople as searchPeopleQuery,
@@ -15,7 +14,6 @@ import {
 import type {
   PersonOptionDto,
   PersonOptionPage,
-  TagOptionPage,
   TaskOptionPage,
 } from "@/lib/project-management/types/time-canvas";
 
@@ -71,20 +69,6 @@ export async function resolveTaskOptionsByIds(
       const actor = await getCurrentProjectManagementActor();
       log.setActorAccountId(actor.accountId);
       return resolveTaskOptionsByIdsQuery({ actor, input });
-    },
-  });
-}
-
-export async function searchTagOptions(
-  input: unknown,
-): Promise<ProjectManagementActionResult<TagOptionPage>> {
-  return runProjectManagementAction({
-    event: "pm.options.tags.search",
-    action: "searchTagOptions",
-    callback: async (log) => {
-      const actor = await getCurrentProjectManagementActor();
-      log.setActorAccountId(actor.accountId);
-      return listTagOptionsQuery({ actor, input });
     },
   });
 }

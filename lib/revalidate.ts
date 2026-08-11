@@ -26,7 +26,6 @@ export function revalidateProjectManagement(taskId?: string, projectId?: string)
   revalidatePath(routes.progress.resources);
   revalidatePath(routes.progress.notifications);
   revalidatePath(routes.progress.approvals);
-  revalidatePath(routes.progress.tags);
   if (taskId) {
     revalidatePath(`/progress/tasks/${taskId}`);
   }

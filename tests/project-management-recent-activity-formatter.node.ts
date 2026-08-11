@@ -20,7 +20,6 @@ test("全部近期动态白名单 action 都生成用户可读的中文 DTO", ()
         status: "DRAFT",
         priority: "LOW",
         members: [{ personId: internalUuid }],
-        tagIds: [internalUuid],
         descriptionHash: internalHash,
         lockVersion: 17,
       },
@@ -28,7 +27,6 @@ test("全部近期动态白名单 action 都生成用户可读的中文 DTO", ()
         status: "ACTIVE",
         priority: "HIGH",
         members: [{ personId: internalUuid }, { personId: "second-person" }],
-        tagIds: [internalUuid, "second-tag"],
         descriptionHash: internalHash,
         lockVersion: 18,
       },
@@ -56,7 +54,7 @@ test("全部近期动态白名单 action 都生成用户可读的中文 DTO", ()
     assert.doesNotMatch(visibleText, new RegExp(internalHash, "u"));
     assert.doesNotMatch(
       visibleText,
-      /before|after|descriptionHash|lockVersion|personId|tagIds/u,
+      /before|after|descriptionHash|lockVersion|personId/u,
     );
   }
 });

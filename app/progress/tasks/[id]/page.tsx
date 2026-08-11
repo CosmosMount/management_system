@@ -7,7 +7,6 @@ import type { TimeCanvasZoom } from "@/components/project-management/time-canvas
 import type { CollaborationInitialData } from "@/components/project-management/collaboration-panels";
 import { toProjectManagementServiceError } from "@/lib/project-management/application/errors";
 import {
-  listTagOptions,
   resolvePeopleOptionsByIds,
   resolveTaskOptionsByIds,
   searchPeople,
@@ -90,7 +89,6 @@ export default async function ProgressTaskDetailPage({
     currentPeople,
     taskPage,
     currentRelatedTaskOptions,
-    tagPage,
     projectOptions,
     capabilities,
     directActiveRisks,
@@ -125,7 +123,6 @@ export default async function ProgressTaskDetailPage({
         actor,
         input: { ids: workspace.task.relatedTaskId ? [workspace.task.relatedTaskId] : [] },
       }),
-      listTagOptions({ actor, input: { limit: 50 } }),
       listActiveProjectOptions(workspace.task.projectId),
       getCollaborationCapabilities(actor, { targetType: "TASK", targetId: id }),
       getRiskPage(actor, { targetType: "TASK", targetId: id, source: "DIRECT", status: "ACTIVE", limit: 20 }),
@@ -141,7 +138,6 @@ export default async function ProgressTaskDetailPage({
           scope: { kind: "TASK_SCOPED", taskId: id },
           personIds: [],
           taskIds: [],
-          tagIds: [],
           types: [],
           statuses: [],
           groupBy: "PERSON",
@@ -180,7 +176,6 @@ export default async function ProgressTaskDetailPage({
           lifecycle={lifecycle}
           people={mergeOptions(currentPeople, peoplePage.items)}
           taskOptions={mergeOptions(currentRelatedTaskOptions, taskPage.items)}
-          tagOptions={tagPage.items}
           projectOptions={projectOptions}
           collaboration={collaboration}
           timeCanvasModel={{

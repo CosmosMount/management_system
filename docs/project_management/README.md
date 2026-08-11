@@ -4,7 +4,7 @@
 
 当前状态：
 
-- `/progress` 已开放项目管理入口，包含 Project、统一“我的工作”、Task 列表/工作台、人员计划和站内通知中心。个人完整时间线已合并进“我的工作”，旧 `/progress/my-timeline` 返回 404。Project 是 Task 上层文件夹和立项对象，不恢复 Stage。
+- `/progress` 已开放项目管理入口，包含 Project、统一“我的工作”、Task 列表/工作台、资源计划和站内通知中心。个人完整时间线已合并进“我的工作”，旧 `/progress/my-timeline` 返回 404。Project 是 Task 上层文件夹和立项对象，不恢复 Stage。
 - 所有已登录统一账号都可查看全部未删除 Task、计划版本、成员、Milestone/Revision 审批与 Task 审计，也可查看全员完整 Planned/Actual Work Segment 和变更历史；停用 Person 的历史投入继续显示并标记“已停用”。账号级项目访问启用/禁用状态已经删除。
 - 所有已登录统一账号都可创建合法车组/技术组的 Task，创建者自动成为负责人。Task 有效成员只允许 `OWNER`（负责人）和 `PARTICIPANT`（参与人），支持多负责人但至少一名，同一 Person 在同一 Task 中只能有一个有效角色。
 - 非成员只有读取权；Participant 可编辑 Task/计划、提交验收与 Revision 并管理自己的关联投入；Owner 另可管理成员、Task 状态、任意未生效 Revision 和该 Task 全部投入；全局 `SUPER_ADMINISTRATOR/PROJECT_ADMINISTRATOR` 可执行全部项目操作。

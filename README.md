@@ -234,7 +234,7 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 | 角色 | 范围 | 权限 |
 |------|------|------|
 | 统一超级管理员 | 全局 | 报销和项目最高权限；访问 `/admin/accounts` |
-| 项目管理员 | 项目全局 | 与统一超级管理员相同的项目业务权限、审批权、Tag 和项目审计；不能管理账号 |
+| 项目管理员 | 项目全局 | 与统一超级管理员相同的项目业务权限、审批权和项目审计；不能管理账号 |
 | Task 负责人 | 单个 Task | 管理成员、Task 状态、计划、Revision、验收证据和该 Task 全部投入；可有多名 |
 | Task 参与人 | 单个 Task | 编辑 Task 与计划、提交 Revision/验收证据，并管理自己的关联投入 |
 | TEAM_ADMIN | 指定车组 | 管理审核阶段，车组组长通过 |
@@ -517,12 +517,12 @@ pm2 start npm --name procurement-cron -- run cron
 - 参与人可编辑 Task/计划、提交验收并创建自己的 Revision，并管理自己的关联投入；负责人另可管理成员、Task 状态、任意未生效 Revision 和该 Task 全部投入；全局管理员拥有全部项目写权限。
 - Revision 是可选择时间的非分段标记，创建即待审批，没有 Draft/Submit；驳回后修改即重新送审。每个 Task 只允许一条 Milestone/Revision 待审批，待审批期间不能再次提交 Milestone、发起或重新送审 Revision，也不能确认 Terminal。Milestone 与 Revision 只由统一超级管理员或项目管理员决定，允许管理员自审；界面不再提供流程策略、Reviewer 或自审开关。
 - `/progress` 是“我的工作”统一驾驶舱，提供指标、完整个人时间画布、行动待办、到期确认队列、与 Plan 轨道同页分页的参与 Task 表和折叠通知。投入待办统一打开同一详情 Dialog 处理；旧 `/progress/my-timeline` 返回 404。
-- `/progress/tasks/new` 提供新建 Composer；尚未激活的 Task 通过工作台右上角“编辑 Task”进入 `/progress/tasks/[id]/edit`，使用同一 Composer 一次保存基本信息、Tag、关联 Task、成员和完整计划。Participant 可编辑内容与计划，但成员区只读；保存成功后返回工作台。
-- `/progress/tasks` 与 `/progress/tasks/[id]` 提供 Task 列表和 Task 工作台。人员投入时间线位于工作台 Tab 上方，并在“计划与资源”“概览”“修订与历史”“验收”“审计”之间切换时保持显示和交互状态。DRAFT 工作台的“概览”和“计划与资源”均为只读展示；Task Owner 或全局管理员可软删除未激活草稿，已激活及终态 Task 不提供该入口。ACTIVE 的既有元数据、Tag 和成员编辑保持不变。发起 Revision 进入 `/progress/tasks/[id]/revisions/new`，被驳回候选通过 `/progress/tasks/[id]/revisions/[revisionId]/edit` 修改；两者与 Task 创建/草稿编辑共用 Composer 的 TimeCanvas、节点表、Inspector、撤销/重做、校验和本地恢复，保存后直接返回“修订与历史”。工作台 Revision Tab 只保留历史、审批、取消和 Diff，不再内联编辑候选计划。
+- `/progress/tasks/new` 提供新建 Composer；尚未激活的 Task 通过工作台右上角“编辑 Task”进入 `/progress/tasks/[id]/edit`，使用同一 Composer 一次保存基本信息、关联 Task、成员和完整计划。Participant 可编辑内容与计划，但成员区只读；保存成功后返回工作台。
+- `/progress/tasks` 与 `/progress/tasks/[id]` 提供 Task 列表和 Task 工作台。人员投入时间线位于工作台 Tab 上方，并在“计划与资源”“概览”“修订与历史”“验收”“审计”之间切换时保持显示和交互状态。DRAFT 工作台的“概览”和“计划与资源”均为只读展示；Task Owner 或全局管理员可软删除未激活草稿，已激活及终态 Task 不提供该入口。ACTIVE 的既有元数据和成员可在同一事务编辑。发起 Revision 进入 `/progress/tasks/[id]/revisions/new`，被驳回候选通过 `/progress/tasks/[id]/revisions/[revisionId]/edit` 修改；两者与 Task 创建/草稿编辑共用 Composer 的 TimeCanvas、节点表、Inspector、撤销/重做、校验和本地恢复，保存后直接返回“修订与历史”。工作台 Revision Tab 只保留历史、审批、取消和 Diff，不再内联编辑候选计划。
 - DRAFT Task 只能在计划开始时间已到达后激活；校验使用事务内的服务端时间，不追溯检查已经激活或结束的历史 Task。
-- `/progress/resources` 提供人员计划时间轴。总览只用于浏览和创建；未保存的虚线创建草稿可在桌面横移、调整两端或拖到当前可创建的 Person 行，移动端继续使用表单。双击投入或聚焦后按 Enter 会打开包含完整时间线上下文的宽版详情弹窗；既有投入只能在弹窗中保存、确认、取消或软删除。部分确认固定从计划起点开始，要求填写实际内容、预期产出和实际产出，并只保留未确认的尾段。详情历史只返回中文操作人、原因和白名单字段差异，不下发原始审计 JSON。
-- `/progress` 的个人画布同时展示本人投入和有效参与 Task，默认只列进行中 Task，用户可切换显示草稿及全部终态；每页 25 条且 Task 表与 Current Plan 轨道来自同一受约束装配。画布按当前页计划和本人可见投入自动计算范围，在内容两侧增加两个上海日历月，并以不超过 180 天的数据块读取。Task 与 Project 详情同样按当前计划和投入自动确定范围；人员计划的 `from/to` 在创建草稿仍保持不超过 366 天时可自动扩展，否则拒绝草稿日期并回退最后合法值。所有完整和紧凑画布默认使用周尺度，只有 URL 或调用方明确指定时才采用月/季/年；工具栏保留“今天”和独立底部滚动条。有效 Planned 新增或更新时间范围后会重新计算和预加载目标数据块；已确认或已取消 Planned 不扩大范围。Task 详情沿用既有投入权限，Project 详情中的投入只读。
-- `/progress/approvals` 汇总投入确认、Milestone Review、Revision 与 Termination；`/progress/tags` 管理 Tag。
+- `/progress/resources` 统一为“资源计划”。默认显示全部可见资源，也可按 Project、Task、人员多选；Task 集合为直接选择与所选 Project 下 Task 的并集，人员集合再并入所选 Project 成员和 Task 成员。画布混排只读 Current Plan 轨道与可交互人员投入，Task/人员分别按 25/50 条分页，焦点对象固定在第一页；范围由内容自动扩展两个上海日历月并按最多 180 天分块读取。未保存的虚线创建草稿可在桌面横移、调整两端或拖到当前可创建的 Person 行，移动端继续使用表单。
+- `/progress` 的个人画布同时展示本人投入和有效参与 Task，默认只列进行中 Task，用户可切换显示草稿及全部终态；每页 25 条且 Task 表与 Current Plan 轨道来自同一受约束装配。画布按当前页计划和本人可见投入自动计算范围，在内容两侧增加两个上海日历月，并以不超过 180 天的数据块读取。资源计划、Task 与 Project 详情同样按当前计划和投入自动确定范围。所有完整和紧凑画布默认使用周尺度，只有 URL 或调用方明确指定时才采用月/季/年；工具栏保留“今天”和独立底部滚动条。有效 Planned 新增或更新时间范围后会重新计算和预加载目标数据块；个人、Task 与 Project 画布中的已确认或已取消 Planned 不扩大范围，资源计划为保持完整资源事实会把终态 Planned 纳入内容边界。Task 详情沿用既有投入权限，Project 详情中的投入只读。
+- `/progress/approvals` 汇总投入确认、Milestone Review、Revision 与 Termination。Tag 分类能力已整体退役，`/progress/tags` 返回 404。
 - `/progress/notifications` 提供站内通知中心和分类飞书偏好；站内通知始终保留，强制事件不受普通关闭偏好影响。
 - 旧 `/progress/task/:id` 会重定向到 `/progress/tasks/:id`；`/progress/projects/*` 是当前 Project 正式路由，旧 `/progress/kanban` 回到 `/progress`。
 - 飞书登录和通讯录同步先解析统一 `Account/AccountIdentity/Person`，再关联并更新采购 `User`。账号级项目访问禁用机制已移除，历史禁用账号恢复项目入口，但仍受系统角色、TaskMember 和数据范围授权约束。

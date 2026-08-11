@@ -26,15 +26,6 @@ const optionalText = (max: number) =>
     .optional()
     .default("");
 
-const tagIdsSchema = z
-  .array(idSchema, { message: "Tag 列表格式不正确" })
-  .max(50, "Tag 数量不能超过 50 个")
-  .superRefine((tagIds, ctx) => {
-    if (new Set(tagIds).size !== tagIds.length) {
-      ctx.addIssue({ code: "custom", message: "不能重复选择同一个 Tag" });
-    }
-  });
-
 const taskMemberMutationInputSchema = taskMemberInputSchema.strict();
 
 const taskMembersMutationSchema = z
@@ -77,7 +68,6 @@ export const updateTaskDraftMetadataInputSchema = z
     taskId: idSchema,
     expectedLockVersion: expectedTaskLockVersionSchema,
     ...taskMetadataFields,
-    tagIds: tagIdsSchema,
   })
   .strict();
 
@@ -192,7 +182,6 @@ export const updateTaskDraftInputSchema = z
     planVersionId: idSchema,
     expectedLockVersion: expectedTaskLockVersionSchema,
     ...taskMetadataFields,
-    tagIds: tagIdsSchema,
     members: taskMembersMutationSchema.optional(),
     plannedStartAt: absoluteDateTimeSchema(
       "请选择带时区的有效计划开始时间",
@@ -210,25 +199,16 @@ export const updateTaskDraftInputSchema = z
     validateDraftPlanReplacement(input, ctx);
   });
 
-export const replaceTaskTagsInputSchema = z
-  .object({
-    taskId: idSchema,
-    expectedLockVersion: expectedTaskLockVersionSchema,
-    tagIds: tagIdsSchema,
-  })
-  .strict();
-
 export const updateActiveTaskInputSchema = z
   .object({
     taskId: idSchema,
     expectedLockVersion: expectedTaskLockVersionSchema,
     metadata: z.object(taskMetadataFields).strict().optional(),
-    tagIds: tagIdsSchema.optional(),
     members: taskMembersMutationSchema.optional(),
   })
   .strict()
   .superRefine((input, ctx) => {
-    if (!input.metadata && !input.tagIds && !input.members) {
+    if (!input.metadata && !input.members) {
       ctx.addIssue({ code: "custom", message: "没有需要保存的 Task 修改" });
     }
     if (input.members) validateTaskMembers(input.members, ctx);
@@ -250,5 +230,4 @@ export type ReplaceTaskMembersInput = z.infer<
 export type ReplaceTaskDraftPlanInput = z.infer<
   typeof replaceTaskDraftPlanInputSchema
 >;
-export type ReplaceTaskTagsInput = z.infer<typeof replaceTaskTagsInputSchema>;
 export type UpdateActiveTaskInput = z.infer<typeof updateActiveTaskInputSchema>;

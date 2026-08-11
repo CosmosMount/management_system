@@ -47,7 +47,6 @@ test("single Task approval migration withdraws pending Milestone and Revision wi
     team: "英雄",
     techGroup: "电控",
     priority: "HIGH",
-    tagIds: [],
     members: [{ personId: owner.personId, role: "OWNER" }],
     plannedStartAt: "2026-08-01T01:00:00.000Z",
     milestones: [

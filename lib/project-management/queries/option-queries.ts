@@ -17,15 +17,12 @@ import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import {
   personOptionPageSchema,
   personOptionDtoSchema,
-  tagOptionPageSchema,
   taskOptionPageSchema,
   type PersonOptionPage,
   type PersonOptionDto,
-  type TagOptionPage,
   type TaskOptionPage,
 } from "@/lib/project-management/types/time-canvas";
 import {
-  listTagOptionsInputSchema,
   resolvePeopleOptionsByIdsInputSchema,
   resolveTaskOptionsByIdsInputSchema,
   searchPeopleInputSchema,
@@ -39,7 +36,7 @@ import {
   searchTerms,
 } from "@/lib/search/normalize-search-text";
 
-type OptionCursorKind = "people" | "tasks" | "tags";
+type OptionCursorKind = "people" | "tasks";
 
 type OptionCursor = {
   v: 1;
@@ -321,14 +318,10 @@ export async function searchTaskOptions({
   const parsed = searchTaskOptionsInputSchema.parse(input);
   const query = normalizeSearchText(parsed.query ?? "");
   const statuses = [...parsed.statuses].sort();
-  const tagIds = [...parsed.tagIds].sort();
   const baseWhere: Prisma.TaskWhereInput = {
     AND: [
       taskReadableWhere(actor),
       statuses.length > 0 ? { status: { in: statuses } } : {},
-      tagIds.length > 0
-        ? { tags: { some: { tagId: { in: tagIds } } } }
-        : {},
       parsed.mine
         ? {
             members: {
@@ -390,7 +383,7 @@ export async function searchTaskOptions({
     });
   }
   const where = baseWhere;
-  const filter = cursorFilter({ query, statuses, tagIds, mine: parsed.mine, projectCandidates: parsed.projectCandidates });
+  const filter = cursorFilter({ query, statuses, mine: parsed.mine, projectCandidates: parsed.projectCandidates });
   const cursorId = await validateOptionCursor({
     cursor: parsed.cursor,
     kind: "tasks",
@@ -470,64 +463,6 @@ function projectEstablishmentTaskCandidateWhere(actor: ProjectManagementActor): 
     projectId: null,
     ...(isSystemAdministrator(actor) ? {} : { members: { some: { personId: actor.personId, role: { in: ["OWNER", "PARTICIPANT"] }, removedAt: null } } }),
   };
-}
-
-export async function listTagOptions({
-  actor,
-  input,
-}: {
-  actor: ProjectManagementActor;
-  input: unknown;
-}): Promise<TagOptionPage> {
-  const parsed = listTagOptionsInputSchema.parse(input);
-  const query = parsed.query?.trim() ?? "";
-  const visibility: Prisma.TagWhereInput = parsed.includeArchived
-    ? isSystemAdministrator(actor)
-      ? {}
-      : {
-          OR: [
-            { archivedAt: null },
-            {
-              archivedAt: { not: null },
-              createdByAccountId: actor.accountId,
-            },
-          ],
-        }
-    : { archivedAt: null };
-  const where: Prisma.TagWhereInput = {
-    AND: [
-      visibility,
-      query ? { name: { contains: query, mode: "insensitive" } } : {},
-    ],
-  };
-  const filter = cursorFilter({ query, includeArchived: parsed.includeArchived });
-  const cursorId = await validateOptionCursor({
-    cursor: parsed.cursor,
-    kind: "tags",
-    filter,
-    exists: (id) =>
-      prisma.tag.findFirst({ where: { AND: [{ id }, where] }, select: { id: true } }),
-  });
-  const rows = await prisma.tag.findMany({
-    where,
-    select: { id: true, name: true, color: true, archivedAt: true },
-    orderBy: [{ name: "asc" }, { id: "asc" }],
-    take: parsed.limit + 1,
-    ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
-  });
-  const items = rows.slice(0, parsed.limit).map((tag) => ({
-    id: tag.id,
-    name: tag.name,
-    color: tag.color,
-    isArchived: tag.archivedAt !== null,
-  }));
-  return tagOptionPageSchema.parse({
-    items,
-    nextCursor:
-      rows.length > parsed.limit
-        ? nextOptionCursor("tags", filter, items.at(-1)?.id)
-        : null,
-  });
 }
 
 function personOption(person: PersonOptionRow) {
@@ -650,8 +585,7 @@ function decodeOptionCursor(cursor: string): OptionCursor | null {
     if (
       record.v !== 1 ||
       (record.kind !== "people" &&
-        record.kind !== "tasks" &&
-        record.kind !== "tags") ||
+        record.kind !== "tasks") ||
       typeof record.filter !== "string" ||
       typeof record.id !== "string" ||
       !UUID_PATTERN.test(record.id)

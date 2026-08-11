@@ -11,7 +11,6 @@ import {
 } from "@/lib/project-management/date-time";
 import {
   getActorPersonOption,
-  listTagOptions,
   resolvePeopleOptionsByIds,
   searchPeople,
   searchTaskOptions,
@@ -47,7 +46,7 @@ export default async function ProgressTaskNewPage({
 
   const initialScope = chooseInitialScope(actor, template);
 
-  const [actorPerson, peoplePage, templatePeople, taskPage, tagPage, projectOptions, preferredProjects] = await Promise.all([
+  const [actorPerson, peoplePage, templatePeople, taskPage, projectOptions, preferredProjects] = await Promise.all([
     getActorPersonOption(actor),
     searchPeople({
       actor,
@@ -60,7 +59,6 @@ export default async function ProgressTaskNewPage({
     }),
     resolveTemplatePeople(actor, initialScope, template),
     searchTaskOptions({ actor, input: { limit: 50 } }),
-    listTagOptions({ actor, input: { limit: 50 } }),
     listActiveProjectOptions(),
     resolveActiveProjectOptions({ ids: preferredProjectId ? [preferredProjectId] : [] }),
   ]);
@@ -94,7 +92,6 @@ export default async function ProgressTaskNewPage({
         initialSeed={seed}
         initialPeople={people}
         initialTasks={tasks}
-        initialTags={tagPage.items}
         initialProjects={initialProjectOptions}
         actorPersonId={actor.personId}
       />
@@ -177,7 +174,6 @@ function createSeed({
     team: initialScope.team,
     techGroup: initialScope.techGroup,
     priority: template?.task.priority ?? "MEDIUM",
-    tagIds: template?.tags.map((tag) => tag.id) ?? [],
     relatedTaskId:
       requestedRelated?.task.id ?? template?.task.relatedTaskId ?? null,
     projectId,

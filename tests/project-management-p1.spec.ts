@@ -25,7 +25,7 @@ import { getOpenIdsByRole, getUserRoles } from "../lib/permissions";
 import { resolveReimbursementListSignatures } from "../lib/reimbursement-list-signatures";
 
 test.describe("project management P1 schema, identity and authorization", () => {
-  test("schema constraints enforce current plan, tag, segment and review invariants", async () => {
+  test("schema constraints enforce current plan, segment and review invariants", async () => {
     const { account, person } = await createAccountPerson("约束测试用户");
     const task = await createTaskWithCurrentPlan({
       accountId: account.id,
@@ -45,44 +45,6 @@ test.describe("project management P1 schema, identity and authorization", () => 
         },
       }),
     ).rejects.toThrow();
-
-    await prisma.tag.create({
-      data: {
-        name: `P1-Tag-${randomUUID()}`,
-        color: "#2563eb",
-        createdByAccountId: account.id,
-      },
-    });
-    const duplicateTagName = `P1-Dupe-${randomUUID()}`;
-    const duplicateTag = await prisma.tag.create({
-      data: {
-        name: duplicateTagName,
-        color: "#16a34a",
-        createdByAccountId: account.id,
-      },
-    });
-    await expect(
-      prisma.tag.create({
-        data: {
-          name: duplicateTagName,
-          color: "#dc2626",
-          createdByAccountId: account.id,
-        },
-      }),
-    ).rejects.toThrow();
-    await prisma.tag.update({
-      where: { id: duplicateTag.id },
-      data: { archivedAt: new Date() },
-    });
-    await expect(
-      prisma.tag.create({
-        data: {
-          name: duplicateTagName,
-          color: "#f59e0b",
-          createdByAccountId: account.id,
-        },
-      }),
-    ).resolves.toBeTruthy();
 
     await expect(
       prisma.workSegment.create({
@@ -330,15 +292,6 @@ test.describe("project management P1 schema, identity and authorization", () => 
         createdByAccountId: owner.account.id,
       },
     });
-    const tag = await prisma.tag.create({
-      data: {
-        name: `权限标签-${randomUUID()}`,
-        createdByAccountId: outsider.account.id,
-      },
-    });
-    await prisma.taskTag.create({
-      data: { taskId: task.taskId, tagId: tag.id },
-    });
     const ownerActor = actor(owner.account.id, owner.person.id, []);
     const viewerActor = actor(viewer.account.id, viewer.person.id, []);
     const outsiderActor = actor(outsider.account.id, outsider.person.id, []);
@@ -396,14 +349,6 @@ test.describe("project management P1 schema, identity and authorization", () => 
     expect(
       authorize({ actor: globalTeamAdminActor, action: "milestone.review", resource }),
     ).toMatchObject({ allowed: true });
-    expect(
-      authorize({
-        actor: outsiderActor,
-        action: "task.view",
-        resource: { type: "tag", createdByAccountId: outsider.account.id },
-      }),
-    ).toMatchObject({ allowed: false });
-
     const ownerVisible = await prisma.task.findMany({
       where: taskReadableWhere(ownerActor),
       select: { id: true },

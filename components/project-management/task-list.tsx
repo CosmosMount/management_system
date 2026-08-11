@@ -46,13 +46,6 @@ export function TaskList({ tasks }: { tasks: TaskListItem[] }) {
                 {task.team || "未设置战队"} / {task.techGroup || "未设置组别"} ·
                 当前计划 v{task.currentPlanVersionNo}
               </p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {task.tags.map((tag) => (
-                  <Badge key={tag.id} variant="outline">
-                    {tag.name}
-                  </Badge>
-                ))}
-              </div>
             </div>
             <div className="flex shrink-0 flex-col gap-2 text-sm text-muted-foreground lg:w-80">
               {task.activeMilestone ? (

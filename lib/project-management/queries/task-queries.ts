@@ -51,7 +51,6 @@ export type TaskListItem = {
     plannedAt: string;
   } | null;
   members: TaskMemberSummary[];
-  tags: Array<{ id: string; name: string; color: string }>;
   updatedAt: string;
   createdAt: string;
 };
@@ -92,10 +91,6 @@ const taskListInclude = {
     where: { removedAt: null },
     include: { person: { select: { displayName: true } } },
     orderBy: [{ role: "asc" }, { createdAt: "asc" }],
-  },
-  tags: {
-    include: { tag: { select: { id: true, name: true, color: true } } },
-    orderBy: { createdAt: "asc" },
   },
 } satisfies Prisma.TaskInclude;
 
@@ -202,7 +197,6 @@ export type TaskWorkspace = {
     updatedAt: string;
   };
   members: TaskMemberSummary[];
-  tags: Array<{ id: string; name: string; color: string; isArchived: boolean }>;
   currentPlan: PlanVersionSummary;
   pendingApproval: TaskPendingApproval | null;
   pendingApprovalConflict: boolean;
@@ -390,7 +384,6 @@ export async function listTasks({
         role: member.role,
         displayName: member.person.displayName,
       })),
-      tags: task.tags.map((entry) => entry.tag),
       updatedAt: task.updatedAt.toISOString(),
       createdAt: task.createdAt.toISOString(),
     })),
@@ -414,10 +407,6 @@ export async function getTaskWorkspace({
         where: { removedAt: null },
         include: { person: { select: { displayName: true } } },
         orderBy: [{ role: "asc" }, { createdAt: "asc" }],
-      },
-      tags: {
-        include: { tag: { select: { id: true, name: true, color: true, archivedAt: true } } },
-        orderBy: { createdAt: "asc" },
       },
       currentPlanVersion: {
         include: planVersionInclude,
@@ -461,12 +450,6 @@ export async function getTaskWorkspace({
       personId: member.personId,
       role: member.role,
       displayName: member.person.displayName,
-    })),
-    tags: task.tags.map((entry) => ({
-      id: entry.tag.id,
-      name: entry.tag.name,
-      color: entry.tag.color,
-      isArchived: entry.tag.archivedAt !== null,
     })),
     currentPlan: serializePlanVersion(task.currentPlanVersion),
     pendingApproval: approvalGate.pendingApproval,

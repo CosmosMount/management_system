@@ -39,7 +39,7 @@ export default async function HomePage() {
               variant="wide"
               href={routes.progress.root}
               title="项目管理"
-              description="Task 工作台、人员计划与站内通知"
+              description="Task 工作台、资源计划与站内通知"
               icon={FolderKanban}
             />
             {showAdmin && (

@@ -129,13 +129,6 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     const reviewer = await createAccountPerson("生命周期 Reviewer");
     const outsider = await createAccountPerson("生命周期 Outsider");
     await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
-    const tag = await prisma.tag.create({
-      data: {
-        name: `生命周期标签-${randomUUID()}`,
-        color: "#2563eb",
-        createdByAccountId: admin.account.id,
-      },
-    });
     const related = await createTaskDraft(
       actor(admin),
       taskDraftInput({
@@ -150,7 +143,6 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         ownerPersonId: owner.person.id,
         memberPersonId: member.person.id,
         reviewerPersonId: reviewer.person.id,
-        tagIds: [tag.id],
         idempotencyKey: `task-draft-${randomUUID()}`,
       }),
       relatedTaskId: related.taskId,
@@ -211,7 +203,6 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       ownerPersonId: owner.person.id,
       memberPersonId: member.person.id,
       reviewerPersonId: reviewer.person.id,
-      tagIds: [tag.id],
       idempotencyKey: `task-draft-race-${randomUUID()}`,
     });
     const concurrentCreates = await Promise.all([
@@ -2174,7 +2165,6 @@ function taskDraftInput({
   memberPersonId,
   reviewerPersonId,
   idempotencyKey,
-  tagIds = [],
   milestoneCount = 2,
   terminationName = "Terminal",
 }: {
@@ -2182,7 +2172,6 @@ function taskDraftInput({
   memberPersonId: string;
   reviewerPersonId: string;
   idempotencyKey: string;
-  tagIds?: string[];
   milestoneCount?: number;
   terminationName?: string;
 }) {
@@ -2192,7 +2181,6 @@ function taskDraftInput({
     team: "英雄",
     techGroup: "电控",
     priority: "HIGH",
-    tagIds,
     members: [
       { personId: ownerPersonId, role: "OWNER" },
       { personId: memberPersonId, role: "PARTICIPANT" },

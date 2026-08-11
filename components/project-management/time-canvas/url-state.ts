@@ -16,7 +16,6 @@ export type TimeCanvasUrlState = {
   groupBy: "PERSON" | "TASK";
   personIds: string[];
   taskIds: string[];
-  tagIds: string[];
   types: Array<"PLANNED" | "ACTUAL">;
   statuses: Array<
     "PLANNED" | "IN_PROGRESS" | "PENDING_CONFIRMATION" | "CONFIRMED" | "CANCELLED"
@@ -68,7 +67,6 @@ export function parseTimeCanvasUrlState(
   if (taskIds.length === 0 && legacyTaskId && UUID_PATTERN.test(legacyTaskId)) {
     taskIds.push(legacyTaskId);
   }
-  const tagIds = parseIds(readList(searchParams, "tags"), "Tag", issues);
   const types = parseTypes(readList(searchParams, "types"), issues);
   const statuses = parseStatuses(readList(searchParams, "statuses"), issues);
   const focus =
@@ -84,7 +82,6 @@ export function parseTimeCanvasUrlState(
     groupBy,
     personIds,
     taskIds,
-    tagIds,
     types,
     statuses,
     focusId,
@@ -102,7 +99,6 @@ export function serializeTimeCanvasUrlState(
   params.set("group", state.groupBy.toLowerCase());
   setList(params, "people", state.personIds);
   setList(params, "tasks", state.taskIds);
-  setList(params, "tags", state.tagIds);
   if (state.types.length > 0) {
     params.set("types", state.types.map((type) => type.toLowerCase()).join(","));
   }

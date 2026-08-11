@@ -33,7 +33,6 @@ import {
   replaceTaskDraftMembersInputSchema,
   replaceTaskDraftPlanInputSchema,
   replaceTaskMembersInputSchema,
-  replaceTaskTagsInputSchema,
   updateActiveTaskInputSchema,
   updateTaskDraftInputSchema,
   updateTaskDraftMetadataInputSchema,
@@ -56,10 +55,6 @@ const PLAN_AUDIT_NODE_DETAIL_LIMIT = 201;
 const taskMutationInclude = {
   members: {
     where: { removedAt: null },
-    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-  },
-  tags: {
-    include: { tag: { select: { archivedAt: true } } },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   },
 } satisfies Prisma.TaskInclude;
@@ -99,20 +94,13 @@ export type TaskMutationResult = {
   updatedAt: string;
 };
 
-export type TaskMetadataMutationResult = TaskMutationResult & {
-  tagIds?: string[];
-};
+export type TaskMetadataMutationResult = TaskMutationResult;
 
 export type TaskMembersMutationResult = TaskMutationResult & {
   members: Array<{ personId: string; role: TaskMemberRole }>;
 };
 
-export type TaskTagsMutationResult = TaskMutationResult & {
-  tagIds: string[];
-};
-
 export type ActiveTaskUpdateMutationResult = TaskMutationResult & {
-  tagIds: string[];
   members: Array<{ personId: string; role: TaskMemberRole }>;
 };
 
@@ -129,7 +117,6 @@ export type TaskDraftPlanMutationResult = TaskMutationResult & {
 };
 
 export type TaskDraftUpdateMutationResult = TaskDraftPlanMutationResult & {
-  tagIds: string[];
   members: Array<{ personId: string; role: TaskMemberRole }>;
 };
 
@@ -158,9 +145,6 @@ export async function updateTaskDraft(
     );
     const targetProjectId = parsed.projectId === undefined ? task.projectId : parsed.projectId;
     await assertTaskProjectChangeAllowedTx(tx, task.projectId, targetProjectId);
-
-    const beforeTagIds = activeTagIds(task);
-    await assertTagReferencesTx(tx, parsed.tagIds, beforeTagIds);
 
     if (parsed.members) {
       assertAuthorizedTaskAction(refreshedActor, task, "task.manage_members");
@@ -196,7 +180,6 @@ export async function updateTaskDraft(
         projectId: parsed.projectId,
       },
     });
-    await replaceTaskTagsTx(tx, task.id, beforeTagIds, parsed.tagIds);
     if (parsed.members) {
       await applyMemberChangesTx(tx, {
         taskId: task.id,
@@ -250,7 +233,6 @@ export async function updateTaskDraft(
       task,
       parsed.expectedLockVersion,
     );
-    const afterTagIds = sortedUnique(parsed.tagIds);
     const afterMembers = memberSnapshot(parsed.members ?? task.members);
     const afterPlan = auditPlanState({
       ...authoritativePlan,
@@ -265,14 +247,12 @@ export async function updateTaskDraft(
       taskId: task.id,
       before: jsonValue({
         metadata: beforeMetadata,
-        tagIds: beforeTagIds,
         members: beforeMembers,
         plan: beforePlan,
         lockVersion: task.lockVersion,
       }),
       after: jsonValue({
         metadata: metadataSnapshot(updatedTask),
-        tagIds: afterTagIds,
         members: afterMembers,
         plan: afterPlan,
         planChanges: summarizePlanChanges(plan, authoritativePlan),
@@ -284,7 +264,6 @@ export async function updateTaskDraft(
 
     return {
       ...serializeTaskMutation(updatedTask),
-      tagIds: afterTagIds,
       members: afterMembers,
       planVersionId: plan.id,
       plannedStartAt: parsed.plannedStartAt.toISOString(),
@@ -329,7 +308,7 @@ export async function updateActiveTask(
     assertTaskStatus(task, "ACTIVE");
     assertExpectedLockVersion(task, parsed.expectedLockVersion);
 
-    if (parsed.metadata || parsed.tagIds) {
+    if (parsed.metadata) {
       assertAuthorizedTaskAction(refreshedActor, task, "task.update_metadata");
     }
     if (parsed.metadata) {
@@ -343,17 +322,6 @@ export async function updateActiveTask(
       );
       const targetProjectId = parsed.metadata.projectId === undefined ? task.projectId : parsed.metadata.projectId;
       await assertTaskProjectChangeAllowedTx(tx, task.projectId, targetProjectId);
-    }
-
-    const beforeTagIds = activeTagIds(task);
-    const afterTagIds = parsed.tagIds
-      ? sortedUnique(parsed.tagIds)
-      : beforeTagIds;
-    const tagsChanged = parsed.tagIds
-      ? !sameStringArray(beforeTagIds, afterTagIds)
-      : false;
-    if (parsed.tagIds) {
-      await assertTagReferencesTx(tx, parsed.tagIds, beforeTagIds);
     }
 
     let memberChanges: MemberChange[] = [];
@@ -390,9 +358,6 @@ export async function updateActiveTask(
         data: parsed.metadata,
       });
     }
-    if (tagsChanged && parsed.tagIds) {
-      await replaceTaskTagsTx(tx, task.id, beforeTagIds, parsed.tagIds);
-    }
     if (membersChanged && parsed.members) {
       await applyMemberChangesTx(tx, {
         taskId: task.id,
@@ -405,7 +370,7 @@ export async function updateActiveTask(
       await syncTaskMembersToProjectTx(tx, { projectId: parsed.metadata?.projectId === undefined ? task.projectId : parsed.metadata.projectId, taskId: task.id, members: parsed.members ?? task.members, actor: refreshedActor });
     }
 
-    const updatedTask = metadataChanged || tagsChanged || membersChanged
+    const updatedTask = metadataChanged || membersChanged
       ? await incrementTaskLockTx(tx, task, parsed.expectedLockVersion)
       : task;
 
@@ -428,19 +393,6 @@ export async function updateActiveTask(
         reason: "更新 Task 元数据",
       });
       await auditTaskProjectChangeTx(tx, refreshedActor, task, updatedTask);
-    }
-    if (tagsChanged) {
-      await createDomainAuditEventTx(tx, {
-        actorAccountId: refreshedActor.accountId,
-        actorPersonId: refreshedActor.personId,
-        action: "pm.task.tags.replace",
-        entityType: "Task",
-        entityId: task.id,
-        taskId: task.id,
-        before: jsonValue({ tagIds: beforeTagIds, lockVersion: task.lockVersion }),
-        after: jsonValue({ tagIds: afterTagIds, lockVersion: updatedTask.lockVersion }),
-        reason: "更新 Active Task Tag",
-      });
     }
     if (membersChanged) {
       await createDomainAuditEventTx(tx, {
@@ -466,7 +418,6 @@ export async function updateActiveTask(
 
     return {
       ...serializeTaskMutation(updatedTask),
-      tagIds: afterTagIds,
       members: afterMembers,
     };
   });
@@ -486,55 +437,6 @@ export async function replaceTaskMembers(
 ): Promise<TaskMembersMutationResult> {
   const parsed = replaceTaskMembersInputSchema.parse(input);
   return replaceTaskMembersForStatus(actor, parsed, "ACTIVE");
-}
-
-export async function replaceTaskTags(
-  actor: ProjectManagementActor,
-  input: unknown,
-): Promise<TaskTagsMutationResult> {
-  const parsed = replaceTaskTagsInputSchema.parse(input);
-
-  return prisma.$transaction(async (tx) => {
-    const { refreshedActor, task } = await loadLockedTaskTx(
-      tx,
-      actor,
-      parsed.taskId,
-    );
-    assertAuthorizedTaskAction(refreshedActor, task, "task.update_metadata");
-    assertTaskStatus(task, "ACTIVE");
-    assertExpectedLockVersion(task, parsed.expectedLockVersion);
-    const beforeTagIds = activeTagIds(task);
-    await assertTagReferencesTx(tx, parsed.tagIds, beforeTagIds);
-    await replaceTaskTagsTx(tx, task.id, beforeTagIds, parsed.tagIds);
-    const updatedTask = await incrementTaskLockTx(
-      tx,
-      task,
-      parsed.expectedLockVersion,
-    );
-    const afterTagIds = sortedUnique(parsed.tagIds);
-    await createDomainAuditEventTx(tx, {
-      actorAccountId: refreshedActor.accountId,
-      actorPersonId: refreshedActor.personId,
-      action: "pm.task.tags.replace",
-      entityType: "Task",
-      entityId: task.id,
-      taskId: task.id,
-      before: jsonValue({
-        tagIds: beforeTagIds,
-        lockVersion: task.lockVersion,
-      }),
-      after: jsonValue({
-        tagIds: afterTagIds,
-        lockVersion: updatedTask.lockVersion,
-      }),
-      reason: "更新 Active Task Tag",
-    });
-
-    return {
-      ...serializeTaskMutation(updatedTask),
-      tagIds: afterTagIds,
-    };
-  });
 }
 
 export async function replaceTaskDraftPlan(
@@ -663,14 +565,6 @@ async function updateTaskMetadataForStatus(
     );
     const targetProjectId = parsed.projectId === undefined ? task.projectId : parsed.projectId;
     await assertTaskProjectChangeAllowedTx(tx, task.projectId, targetProjectId);
-    if (requiredStatus === "DRAFT") {
-      await assertTagReferencesTx(
-        tx,
-        (parsed as UpdateTaskDraftMetadataInput).tagIds,
-        activeTagIds(task),
-      );
-    }
-
     const before = metadataSnapshot(task);
     const updatedCount = await tx.task.updateMany({
       where: {
@@ -694,17 +588,6 @@ async function updateTaskMetadataForStatus(
       throw staleTaskError(task);
     }
 
-    let tagIds: string[] | undefined;
-    if (requiredStatus === "DRAFT") {
-      const requestedTagIds = (parsed as UpdateTaskDraftMetadataInput).tagIds;
-      await replaceTaskTagsTx(
-        tx,
-        task.id,
-        activeTagIds(task),
-        requestedTagIds,
-      );
-      tagIds = sortedUnique(requestedTagIds);
-    }
     const updatedTask = await loadTaskAfterMutationTx(tx, task.id);
     await syncTaskMembersToProjectTx(tx, { projectId: targetProjectId, taskId: task.id, members: updatedTask.members, actor: refreshedActor });
     await createDomainAuditEventTx(tx, {
@@ -717,23 +600,14 @@ async function updateTaskMetadataForStatus(
       entityType: "Task",
       entityId: task.id,
       taskId: task.id,
-      before: jsonValue({
-        ...before,
-        ...(requiredStatus === "DRAFT"
-          ? { tagIds: activeTagIds(task) }
-          : {}),
-      }),
-      after: jsonValue({
-        ...metadataSnapshot(updatedTask),
-        ...(requiredStatus === "DRAFT" ? { tagIds } : {}),
-      }),
+      before: jsonValue(before),
+      after: jsonValue(metadataSnapshot(updatedTask)),
       reason: "更新 Task 元数据",
     });
     await auditTaskProjectChangeTx(tx, refreshedActor, task, updatedTask);
 
     return {
       ...serializeTaskMutation(updatedTask),
-      ...(tagIds ? { tagIds } : {}),
     };
   });
 }
@@ -924,24 +798,6 @@ async function assertRelatedTaskVisibleTx(
   if (!relatedTask) throw notFoundError();
 }
 
-async function assertTagReferencesTx(
-  tx: PrismaTx,
-  tagIds: string[],
-  currentTagIds: string[] = [],
-) {
-  if (tagIds.length === 0) return;
-  const current = new Set(currentTagIds);
-  const addedTagIds = [...new Set(tagIds)].filter((tagId) => !current.has(tagId));
-  const count = await tx.tag.count({
-    where: { id: { in: addedTagIds }, archivedAt: null },
-  });
-  if (count !== addedTagIds.length) {
-    throw validationError("Tag 不存在或已归档", {
-      tagIds: ["Tag 不存在或已归档"],
-    });
-  }
-}
-
 async function assertActivePeopleTx(
   tx: PrismaTx,
   personIds: string[],
@@ -958,29 +814,6 @@ async function assertActivePeopleTx(
   if (count !== uniquePersonIds.length) {
     throw validationError("成员不存在或已停用", {
       members: ["成员不存在或已停用"],
-    });
-  }
-}
-
-async function replaceTaskTagsTx(
-  tx: PrismaTx,
-  taskId: string,
-  currentTagIds: string[],
-  requestedTagIds: string[],
-) {
-  const requested = new Set(requestedTagIds);
-  const current = new Set(currentTagIds);
-  const removedIds = [...current].filter((tagId) => !requested.has(tagId));
-  const addedIds = [...requested].filter((tagId) => !current.has(tagId));
-  if (removedIds.length > 0) {
-    await tx.taskTag.deleteMany({
-      where: { taskId, tagId: { in: removedIds } },
-    });
-  }
-  if (addedIds.length > 0) {
-    await tx.taskTag.createMany({
-      data: addedIds.map((tagId) => ({ taskId, tagId })),
-      skipDuplicates: true,
     });
   }
 }
@@ -1787,10 +1620,6 @@ function taskMetadataMatches(
   );
 }
 
-function activeTagIds(task: TaskForMutation) {
-  return sortedUnique(task.tags.map((entry) => entry.tagId));
-}
-
 function memberSnapshot(
   members: Array<{ personId: string; role: TaskMemberRole }>,
 ) {
@@ -1830,10 +1659,6 @@ function sameStringArray(left: string[], right: string[]) {
     left.length === right.length &&
     left.every((value, index) => value === right[index])
   );
-}
-
-function sortedUnique(values: string[]) {
-  return [...new Set(values)].sort();
 }
 
 function jsonValue(value: unknown): Prisma.InputJsonValue {

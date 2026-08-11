@@ -41,7 +41,6 @@ const ACTION_DEFINITIONS = {
   "pm.task.draft.delete": ["TASK", "撤回并删除了 Task 草稿"],
   "pm.task.metadata.update": ["TASK", "修改了 Task 信息"],
   "pm.task.members.replace": ["TASK", "调整了 Task 成员"],
-  "pm.task.tags.replace": ["TASK", "调整了 Task Tag"],
   "pm.task.project.assign": ["TASK", "将 Task 加入 Project"],
   "pm.task.project.move": ["TASK", "移动了 Task 所属 Project"],
   "pm.task.project.remove": ["TASK", "将 Task 移出 Project"],
@@ -168,7 +167,6 @@ function activitySummary(
   addChangedText(parts, "验收结果", beforeRecord.result, afterRecord.result, reviewResultLabel);
   addChangedText(parts, "结束结果", beforeRecord.outcome, afterRecord.outcome, terminationLabel);
   addCountChange(parts, "成员", beforeRecord.members, afterRecord.members);
-  addCountChange(parts, "Tag", beforeRecord.tagIds, afterRecord.tagIds);
   addNumberChange(
     parts,
     "计划节点",

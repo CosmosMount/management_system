@@ -51,7 +51,6 @@ test.describe("project management P5 work segment services", () => {
     const names = {
       people: new Map([["person-visible", "可见人员"]]),
       tasks: new Map([["task-visible", "可见 Task"]]),
-      tags: new Map([["tag-visible", "可见标签"]]),
     };
     const baseRow = {
       id: "stable-history-key",
@@ -117,7 +116,6 @@ test.describe("project management P5 work segment services", () => {
           actualOutput: "旧实际",
           taskId: "task-visible",
           status: "PLANNED",
-          tagIds: ["tag-visible"],
           unknownInternalField: "不得下发",
         },
         after: {
@@ -130,7 +128,6 @@ test.describe("project management P5 work segment services", () => {
           actualOutput: "新实际",
           taskId: "task-hidden",
           status: "CONFIRMED",
-          tagIds: ["tag-visible", "tag-hidden"],
           unknownInternalField: "仍不得下发",
         },
       },
@@ -146,7 +143,6 @@ test.describe("project management P5 work segment services", () => {
       "实际输出",
       "Task",
       "状态",
-      "Tag",
     ]);
     expect(update.differences.find(({ label }) => label === "人员")).toMatchObject({
       before: "可见人员",
@@ -156,9 +152,6 @@ test.describe("project management P5 work segment services", () => {
       before: "可见 Task",
       after: "不可见对象",
     });
-    expect(update.differences.find(({ label }) => label === "Tag")?.after).toBe(
-      "可见标签、不可见对象",
-    );
     const truncatedContent = update.differences.find(
       ({ label }) => label === "内容",
     )?.after;
@@ -497,7 +490,6 @@ test.describe("project management P5 work segment services", () => {
       content: "跨月连续计划",
       priority: "MEDIUM" as const,
       taskId: fixture.taskId,
-      tagIds: [],
     };
     const first = await createWorkSegment(actor(fixture.member), {
       ...common,
@@ -557,7 +549,6 @@ test.describe("project management P5 work segment services", () => {
       content: `恰好 31 天计划 ${randomUUID()}`,
       priority: "MEDIUM" as const,
       taskId: fixture.taskId,
-      tagIds: [],
     };
     const first = await createWorkSegment(actor(fixture.member), {
       ...common,
@@ -1769,7 +1760,7 @@ test.describe("project management P5 work segment services", () => {
       },
       select: { payload: true },
     });
-    expect(dueNotification?.payload).toEqual(
+    expect(JSON.parse(dueNotification?.payload ?? "null")).toEqual(
       expect.objectContaining({
         linkPath: `/progress?focus=${duePlan.segment.id}`,
       }),
@@ -1855,7 +1846,6 @@ async function createActivatedFixture(
     team,
     techGroup,
     priority: "HIGH",
-    tagIds: [],
     plannedStartAt: new Date(Date.UTC(2026, 7, 1, 9, 0, 0)).toISOString(),
     members: [
       { personId: owner.person.id, role: "OWNER" },
@@ -1897,7 +1887,6 @@ async function createAdditionalActivatedTask(
     team: fixture.team,
     techGroup: fixture.techGroup,
     priority: "HIGH",
-    tagIds: [],
     plannedStartAt: new Date(Date.UTC(2026, 7, 1, 9, 0, 0)).toISOString(),
     members: [
       { personId: fixture.owner.person.id, role: "OWNER" },
@@ -1923,7 +1912,6 @@ function plannedInput(personId: string, startHour: number, endHour: number) {
     endAt: atHour(endHour),
     content: `计划投入 ${startHour}-${endHour}`,
     priority: "MEDIUM",
-    tagIds: [],
   };
 }
 

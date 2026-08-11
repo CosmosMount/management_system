@@ -225,12 +225,12 @@ npm run pm:identity-backfill
 
 1. 桌面 `1440x1000` 与 Pixel 5 分别打开 `/progress`，应展示“我的工作”指标、完整个人时间画布、行动待办、参与 Task、到期确认队列和折叠通知；导航中不得再出现独立“我的时间”或“资源冲突”。旧 `/progress/my-timeline` 必须返回 404。
 2. 打开 `/progress/tasks`，默认勾选“只看我参与”并选择“进行中”；按人员范围、状态、优先级和关键词筛选时，只展示当前 actor 可读 Task，且仍可手动取消默认筛选；不可读 Task 不能通过列表枚举。
-3. 打开 `/progress/tasks/[id]`，应看到概览、人员投入画布、共享节点导航、选中节点详情，以及正式启用的“Task 风险 / Task 评论 / 近期动态”。有效 TaskMember 按服务端 capability 创建或管理投入，旁观者只读；Project 详情的投入保持只读。页面不得下发 raw 审计列表。Task Owner/Participant 可在 ACTIVE 状态提出和解决风险，普通旁观者只能查看风险但仍可评论；只有全局管理员显示评论删除入口。Active Task 编辑 Dialog 继续使用一次事务保存基本信息、Tags 和成员，并保持原有并发保护。
-4. Desktop 与 Pixel 5 打开 `/progress/resources`：两者都渲染横向时间画布且页面无横向溢出。Desktop 未保存虚线创建草稿可横移、调整两端和拖到当前可创建 Person 行，整个过程中不得调用服务端 transform mutation；Pixel 5 不提供直接拖动，但必须可通过表单改人员、时间、内容和预期产出后创建。既有投入总览只读；双击或 Enter 打开宽版详情，完整上下文可见且只有目标 Segment 可编辑。草稿或详情有未保存修改时 Esc/关闭必须确认，失败时表单必须保留。人员计划草稿日期允许把 `from/to` 扩到 union 366 天，超限必须拒绝并回退最后合法时间。
-5. Planned 完整确认后只显示 Actual；前缀部分确认必须填写实际投入内容、预期产出、实际产出，固定开始点并只生成一条尾段。缺字段或伪造中间起点必须在服务端零写入拒绝。确认、取消、Actual 软删除仍需验证数据库、来源、中文安全 change DTO、audit、站内通知与 outbox；历史分页不得下发 raw `before/after`、账号 ID 或无权读取的 Task/Tag 名称，测试环境必须禁用真实飞书投递。普通 DTO 和表单不得再包含 `completionPercent`，但兼容数据库列保持存在且新写入为 `NULL`。
+3. 打开 `/progress/tasks/[id]`，应看到概览、人员投入画布、共享节点导航、选中节点详情，以及正式启用的“Task 风险 / Task 评论 / 近期动态”。有效 TaskMember 按服务端 capability 创建或管理投入，旁观者只读；Project 详情的投入保持只读。页面不得下发 raw 审计列表。Task Owner/Participant 可在 ACTIVE 状态提出和解决风险，普通旁观者只能查看风险但仍可评论；只有全局管理员显示评论删除入口。Active Task 编辑 Dialog 继续使用一次事务保存基本信息和成员，并保持原有并发保护。
+4. Desktop 与 Pixel 5 打开 `/progress/resources`：两者都渲染横向时间画布且页面无横向溢出。Desktop 未保存虚线创建草稿可横移、调整两端和拖到当前可创建 Person 行，整个过程中不得调用服务端 transform mutation；Pixel 5 不提供直接拖动，但必须可通过表单改人员、时间、内容和预期产出后创建。既有投入总览只读；双击或 Enter 打开宽版详情，完整上下文可见且只有目标 Segment 可编辑。草稿或详情有未保存修改时 Esc/关闭必须确认，失败时表单必须保留。资源选择和视口状态由 URL 保存，时间范围由已选内容自动派生。
+5. Planned 完整确认后只显示 Actual；前缀部分确认必须填写实际投入内容、预期产出、实际产出，固定开始点并只生成一条尾段。缺字段或伪造中间起点必须在服务端零写入拒绝。确认、取消、Actual 软删除仍需验证数据库、来源、中文安全 change DTO、audit、站内通知与 outbox；历史分页不得下发 raw `before/after`、账号 ID 或无权读取的 Task 名称，测试环境必须禁用真实飞书投递。普通 DTO 和表单不得再包含 `completionPercent`，但兼容数据库列保持存在且新写入为 `NULL`。
 6. `/progress` 默认只显示 ACTIVE 参与 Task；切换“显示全部”后才显示草稿和终态。每页 25 条且 Task 表、版本/当前节点和 Plan 行同步；行动待办保留 Segment confirmation 数量但不把它计入 `criticalCount`，到期队列“处理”必须打开统一详情而不是第二套确认表单。页面不再出现日期、日/周视图或日期平移控件。验证所有 TimeCanvas 在没有显式尺度时默认显示周，URL/调用方尺度仍优先；Task 节点聚焦和 Resize 不得出现尺度跳变。工具栏保留周/月/季/年与“今天”，不显示前后箭头，并验证多级上海日期轴及独立底部滚动条。内容驱动页即使全部内容远离今天，也必须能通过“今天”加载并定位今天附近，同时保持尺度。有效 Planned 的创建/更新必须重新计算内容范围、在两端增加两个上海日历月、加载目标及相邻块并保持当前视口；已确认/已取消 Planned 不扩展范围。浏览器前进/后退后筛选控件必须与 URL 一致；投入详情有未保存修改时，服务端刷新或 `rowPageKey` 变化不得直接丢弃表单。
 7. 在 Desktop `1440x1000` 与 Pixel 5 上分别验证响应式冻结行标题、页面无横向溢出、底部滚动与顶部日期轴/时间对象同步。覆盖空数据、超长名称、跨年、超过 366 天、三年裁剪提示、单块自动二分和 20,000 对象/16 块预算错误；测试不得联系真实飞书服务。
-8. `/progress/resources/conflicts` 与 `/progress/my-timeline` 必须返回 404。资源计划、我的工作和 Task 工作台不得出现冲突标记、投入比例或完成比例；重叠 Segment 不得产生冲突待办、通知或 outbox。
+8. `/progress/resources/conflicts`、`/progress/my-timeline` 与 `/progress/tags` 必须返回 404。资源计划默认显示全部，也可按 Project/Task/人员多选；验证集合并集、只读 Plan 与可交互 Person 混排、25/50 独立分页、选择签名游标、防重复焦点固定、空选择，以及内容两侧两个上海日历月和 180 天自适应块。我的工作和 Task 工作台不得出现冲突标记、投入比例或完成比例；重叠 Segment 不得产生冲突待办、通知或 outbox。
 9. 打开 `/progress/notifications`，只展示当前收件人的站内通知；可按类型/未读筛选、标记单条或全部已读，跳转对象前仍要按业务对象权限过滤。
 10. 页面不得出现旧项目、阶段、周报、提醒或 `PROJECT_MANAGER` 角色文案；当前风险区不得出现旧 Stage 风险或计划节点绑定入口。页面不得出现 500、Next.js error overlay、未处理浏览器错误或横向滚动。
 11. 旧 `/progress/task/:id` 应服务端重定向到 `/progress/tasks/:id`；`/progress/projects/*` 是当前正式路由，只有旧 `/progress/kanban` 回到 `/progress`。收缩 migration 集成测试仍需验证历史旧表、旧 enum、`PROJECT_MANAGER` 数据和 `channel=progress` outbox/recipient 被删除；HEAD 还必须证明新 Project 不含 Stage、`ownerOpenId` 等旧签名。
@@ -276,21 +276,21 @@ npx tsx --test tests/project-management-recent-activity-formatter.node.ts
 10. 拖动及键盘移动 Start、Milestone、Terminal，分别验证小时档 30 分钟、日/周档 1 天、月档 7 天吸附和上海时区增量。拖动预览期间节点前后阶段块必须同步伸缩，Milestone 穿越时按预览时间重排连接；Start、Terminal 与 Milestone 的严格边界必须在预览阶段钳制，锚点不得先越界再于松手后回弹。无合法吸附位置时保持原值并提示放大画布或使用 Inspector。
 11. Inspector 不显示保存/取消；Start、Terminal、Milestone 输入实时同步到画布、节点导航和自动校验。清空或输入同刻/越界时间时，字段与问题摘要显示错误而画布保留最后合法位置；同一节点连续修改多个字段只需一次撤销即可整体恢复。
 12. Milestone 只能在节点详情中单独删除；临时节点切换后保留并可显式删除，Start/Terminal 永远不可删除。页面不得出现节点复制、勾选或批量删除入口。
-13. 刷新页面后恢复 v3 临时节点、最后合法画布位置与选中节点，并验证旧 v3 Inspector 工作副本转换为实时临时节点。v1/v2 草稿缺少 Terminal 名称时迁移为 `Terminal`，零 Milestone 可恢复，同刻时间保持原值并阻止提交；不兼容草稿继续可导出。另用 200 个 Milestone、每个四项 2,000 字符且包含 JSON 转义字符的极限草稿验证 IndexedDB 正文、`localStorage` 指针、刷新往返、两个同账号标签页并发“保存并离开”、立即“放弃并离开”不会被待触发防抖重新写回，以及创建成功后的双存储清理。
+13. 刷新页面后恢复 v4 临时节点、最后合法画布位置与选中节点，并验证 v4 Inspector 工作副本转换为实时临时节点。v1/v2 草稿缺少 Terminal 名称时迁移为 `Terminal`，零 Milestone 可恢复，同刻时间保持原值并阻止提交；包含已退役 Tag 契约的 v3 草稿按不兼容草稿处理，可导出但不恢复。另用 200 个 Milestone、每个四项 2,000 字符且包含 JSON 转义字符的极限草稿验证 IndexedDB 正文、`localStorage` 指针、刷新往返、两个同账号标签页并发“保存并离开”、立即“放弃并离开”不会被待触发防抖重新写回，以及创建成功后的双存储清理。
 14. 创建零 Milestone Task 后执行激活：Task 和 Terminal 均为 `ACTIVE`，`activeMilestoneNodeId=null`；工作台和列表使用 Terminal 名称/日期，审计和激活通知使用 Terminal 名称，不显示“当前没有 Active Milestone”。结束确认仍走现有事务、审计和 `project-management` outbox。
-15. Task Composer 与 Task Workbench 的共享节点导航验证节点符号、选中/完成/错误态和上海日期；使用长 Task/Terminal/Milestone/成员/Tag 名称、长错误、慢提交、空列表和 200 节点验证桌面无页面级横向滚动、无 Next.js overlay、无未捕获浏览器错误，Inspector 和节点导航滚动/换行可用。
+15. Task Composer 与 Task Workbench 的共享节点导航验证节点符号、选中/完成/错误态和上海日期；使用长 Task/Terminal/Milestone/成员名称、长错误、慢提交、空列表和 200 节点验证桌面无页面级横向滚动、无 Next.js overlay、无未捕获浏览器错误，Inspector 和节点导航滚动/换行可用。
 16. Pixel 5 上共享节点导航改为纵向；仍能创建零 Milestone Task、编辑 Terminal 名称、修正严格时间错误，并验证无横向滚动、重复焦点、服务器错误或未捕获浏览器错误。
 
 ### DRAFT Task 统一编辑专项测试
 
-1. Owner 从 DRAFT 工作台右上角进入 `/progress/tasks/[id]/edit`；按钮顺序为“编辑 Task → 激活 Task → 删除草稿 → 复制链接”，工作台不再出现“编辑 Draft 计划”，DRAFT 的概览、Tag、成员和计划均无保存控件。删除草稿只对 Owner/全局管理员显示，需二次确认并软删除 Task；激活后编辑与删除草稿按钮都消失，直达编辑 URL 重定向工作台；不可查看或无 metadata 更新权的用户直达 URL 得到脱敏 404。
+1. Owner 从 DRAFT 工作台右上角进入 `/progress/tasks/[id]/edit`；按钮顺序为“编辑 Task → 激活 Task → 删除草稿 → 复制链接”，工作台不再出现“编辑 Draft 计划”，DRAFT 的概览、成员和计划均无保存控件。删除草稿只对 Owner/全局管理员显示，需二次确认并软删除 Task；激活后编辑与删除草稿按钮都消失，直达编辑 URL 重定向工作台；不可查看或无 metadata 更新权的用户直达 URL 得到脱敏 404。
 2. DRAFT 激活使用事务内服务端时间复核 Current Plan 的 `plannedStartAt`；开始时间在未来时必须拒绝且 Task、节点、审计、通知和 outbox 零写入，开始时间已到达时保持既有激活流程。已经离开 DRAFT 的历史 Task 不追溯处理。
-3. 编辑页在 Desktop 与 Pixel 5 均复用纵向 Composer，并回填元数据、当前 Tag、关联 Task、全部现有成员（包括停用人员）、Start、既有 Milestone/Terminal 及节点 ID。负责人和参与人员使用与创建页相同的分组头像胶囊和独立搜索框，选择人员即加入对应分组。迁移后异常残留的 `LEAD/MEMBER/REVIEWER/VIEWER` 四种历史角色必须逐行回显并保留，存在历史角色时成员区整体只读，但仍可保存其他内容。当前归档 Tag 可见且可移除，新选项只含未归档 Tag；关联选择器排除当前 Task。
-4. Owner 一次修改基本信息、Tag、关联 Task、成员、既有节点、新 Milestone 和 Terminal 后保存；数据库全部更新、既有 nodeId 保留、新节点产生稳定映射、`snapshotHash` 更新、Task `lockVersion` 仅增加 1，并只产生一条 `pm.task.draft.update` 审计。失败时任一区域都不得部分提交，且不得产生站内通知、outbox 或真实飞书调用。
+3. 编辑页在 Desktop 与 Pixel 5 均复用纵向 Composer，并回填元数据、关联 Task、全部现有成员（包括停用人员）、Start、既有 Milestone/Terminal 及节点 ID。负责人和参与人员使用与创建页相同的分组头像胶囊和独立搜索框，选择人员即加入对应分组。迁移后异常残留的 `LEAD/MEMBER/REVIEWER/VIEWER` 四种历史角色必须逐行回显并保留，存在历史角色时成员区整体只读，但仍可保存其他内容。关联选择器排除当前 Task。
+4. Owner 一次修改基本信息、关联 Task、成员、既有节点、新 Milestone 和 Terminal 后保存；数据库全部更新、既有 nodeId 保留、新节点产生稳定映射、`snapshotHash` 更新、Task `lockVersion` 仅增加 1，并只产生一条 `pm.task.draft.update` 审计。失败时任一区域都不得部分提交，且不得产生站内通知、outbox 或真实飞书调用。
 5. Participant 可进入编辑页并保存元数据与计划；成员区只读、没有搜索/添加/移除/角色控件，请求省略 `members`，数据库成员保持不变。直接伪造 `members` 或移除有关联 Segment 的成员必须被服务端拒绝并完整回滚；Segment 不再关联节点，因此删除草稿节点不受 Segment 阻挡。
 6. 未修改时桌面和移动主保存按钮均禁用；选择节点不应被视为内容修改。客户端和服务端字段错误定位相应区域，无法映射的业务错误显示中文提示。保存成功清理该 Task 编辑草稿并返回新版 Task 工作台，展示权威最新数据。
 7. 编辑草稿按环境、账号和 Task ID 隔离；刷新仅在 Task、Plan Version 和基础 lockVersion 全匹配时允许恢复。失去成员管理权或服务端出现历史角色后，恢复必须以服务端标准成员覆盖本地成员改动，同时保留其他可编辑内容。服务端版本变化后旧草稿不能恢复或覆盖，只能导出或“放弃并加载最新版本”；`STALE_TASK` 保留当前输入，不隐式刷新或合并。
-8. 领域测试覆盖并发相同 lockVersion 只有一次成功、错误 Plan Version、非初始 v1 Current Plan、非 DRAFT、权限拒绝、Tag/关联/成员/计划晚失败回滚和完整审计。UI 在 Desktop/Pixel 5 另覆盖长 Task、节点、成员、Tag、长错误、零/200 Milestone 和窄屏无横向溢出、Next.js overlay 或未捕获浏览器错误。
+8. 领域测试覆盖并发相同 lockVersion 只有一次成功、错误 Plan Version、非初始 v1 Current Plan、非 DRAFT、权限拒绝、关联/成员/计划晚失败回滚和完整审计。UI 在 Desktop/Pixel 5 另覆盖长 Task、节点、成员、长错误、零/200 Milestone 和窄屏无横向溢出、Next.js overlay 或未捕获浏览器错误。
 
 ### Revision 通用 Composer 专项测试
 
@@ -348,7 +348,7 @@ npx tsx --test tests/project-management-recent-activity-formatter.node.ts
 
 ## 项目管理 P1-P6 测试
 
-1. `tests/project-management-p1.spec.ts` 覆盖核心 schema 约束：单 Task 单 Current Plan、有效 Tag 名称唯一、Segment 时间检查和 Review 幂等键。
+1. `tests/project-management-p1.spec.ts` 覆盖核心 schema 约束：单 Task 单 Current Plan、Segment 时间检查和 Review 幂等键。
 2. 身份测试覆盖 `User -> Account/Identity/Person` 首次解析、重复解析幂等、openId fallback 升级为 unionId、同 unionId 下的 openId 轮换、报销 User 原位更新、角色与收件人不丢失、冲突硬失败和非空 `User.accountId` 关联；账号级项目访问禁用已经移除。
 3. 授权测试覆盖普通非成员、Participant、Owner、统一超级管理员、项目管理员和已退役 `GROUP_LEADER`。所有已登录统一账号都应读取全部未删除 Task、计划、验收、审计与完整 Segment；非成员/组长写入必须零副作用，Participant/Owner/全局管理员按固定矩阵验证允许和拒绝路径。两类全局管理员均可审批且允许自审，Task 不再存在 `allowSelfReview` 分支。
 4. 通知测试覆盖站内通知事务 helper、审计脱敏、审计 append-only、`channel=project-management` outbox 入队、审批用途 allowlist、全局管理员收件人按账号去重、结果通知创建人/提交人加所有 Owner、完整交互卡和通知/审批机器人边界；不得出现 Task Reviewer 或项目组长审批收件人。
@@ -357,8 +357,8 @@ npx tsx --test tests/project-management-recent-activity-formatter.node.ts
 7. `tests/project-management-resource-removal-migration.spec.ts` 从完整前置迁移链创建隔离 PostgreSQL 数据库，写入旧 allocation、Conflict、通知、outbox、checkpoint 和审计数据；应用删除 migration 后验证目标对象消失，普通 Segment、通知、outbox 与审计保留，历史 JSON 只清除顶层 `allocation`。
 8. `tests/project-management-ui.spec.ts` 和 `tests/project-management-s3-shell.spec.ts` 覆盖 `/progress` 统一我的工作、全员 Task 工作台、全员资源计划、站内通知中心、桌面/移动视口、Task 创建/统一 DRAFT 编辑的三栏与移动纵向布局、零 Milestone、Terminal 名称、严格时间顺序、画布/节点表/Inspector 联动、本地草稿恢复与版本冲突，以及 DRAFT 工作台只读、编辑 URL 防护、Participant 成员只读、创建页只显示 Task 级负责人/参与人且无流程策略、非成员只读、Owner/Participant 分层按钮、管理员审批与自审、Milestone 提交后重复提交和 Revision/Terminal 禁用、待审批类型与目标 Tab 引导、Revision 新建/重提直达保护、审批完成恢复、冲突入口消失、旧 URL 404、比例输入与展示消失。所有改动 UI 用例必须同时在 Desktop `1440x1000` 与 Pixel 5 运行，并断言无横向溢出和浏览器异常。
 9. `tests/feishu-boundaries.spec.ts` 必须继续扫描 `app/progress`、`app/actions/project-management`、`components/project-management`、`lib/project-management` 和项目管理 notification adapter，防止项目管理入口或领域服务直接导入飞书传输层。
-10. `tests/project-management-s2-plan-mutations.spec.ts` 覆盖六个兼容 Draft/Active mutation 及统一 `updateTaskDraft`：参数化允许状态、完全不可见与 visible-but-unauthorized、Draft/Active/四个 terminal/Archived、逐 action stale、成员不变量、Participant 成员字段拒绝、错误 Plan Version、一次全量成功、同锁并发 exactly-once、零通知、完整统一审计，以及受控晚失败整事务回滚；Active member 另在 InApp 已写、outbox insert 阶段注入失败并断言成员 active/history、lock、audit、InApp 和 outbox 全部回滚。副作用快照比较 metadata、TaskTag、active/historical members 和节点正文，不只比较计数。该 spec 还覆盖计划自身 raw/foreign `nodeId` 的统一拒绝、legacy Active 修复 Revision/Termination、200 节点长正文的有界审计、公开 absolute date-time 拒绝 `Date` 对象，以及 mandatory recipient 仅使用 default tenant 非空 openId。Segment 不再关联 TaskNode，草稿节点删除不再检查 Segment 引用；Task 行锁仍覆盖成员与 Segment Task 关联的并发权限复核。该 spec 只允许随机本机 `_test` PostgreSQL，并要求 `NOTIFICATION_DELIVERY_DISABLED=true`。
-11. `tests/project-management-s8.spec.ts` 覆盖 Action Inbox 权限/逾期排序、Tag 删除仅移除分类、Tag 写事务内角色撤销复核、普通/强制通知偏好、Asia/Shanghai deadline event key、保留清理和完整性巡检；UI 的 S8 场景在 Desktop/Pixel 5 验证驾驶舱、待办、Tag 与偏好。
+10. `tests/project-management-s2-plan-mutations.spec.ts` 覆盖六个兼容 Draft/Active mutation 及统一 `updateTaskDraft`：参数化允许状态、完全不可见与 visible-but-unauthorized、Draft/Active/四个 terminal/Archived、逐 action stale、成员不变量、Participant 成员字段拒绝、错误 Plan Version、一次全量成功、同锁并发 exactly-once、零通知、完整统一审计，以及受控晚失败整事务回滚；Active member 另在 InApp 已写、outbox insert 阶段注入失败并断言成员 active/history、lock、audit、InApp 和 outbox 全部回滚。副作用快照比较 metadata、active/historical members 和节点正文，不只比较计数。该 spec 还覆盖计划自身 raw/foreign `nodeId` 的统一拒绝、legacy Active 修复 Revision/Termination、200 节点长正文的有界审计、公开 absolute date-time 拒绝 `Date` 对象，以及 mandatory recipient 仅使用 default tenant 非空 openId。Segment 不再关联 TaskNode，草稿节点删除不再检查 Segment 引用；Task 行锁仍覆盖成员与 Segment Task 关联的并发权限复核。该 spec 只允许随机本机 `_test` PostgreSQL，并要求 `NOTIFICATION_DELIVERY_DISABLED=true`。
+11. `tests/project-management-s8.spec.ts` 覆盖 Action Inbox 权限/逾期排序、普通/强制通知偏好、Asia/Shanghai deadline event key、保留清理和完整性巡检；UI 的 S8 场景在 Desktop/Pixel 5 验证驾驶舱、待办与偏好。Tag 删除 migration 由迁移规格验证三张分类表消失且 append-only 审计不被改写。
 12. `tests/project-management-s9-cron.spec.ts` 覆盖保留的 PostgreSQL 跨实例 advisory lock；新增 migration 必须在 runner 随机 target 数据库从空库执行。
 13. `tests/project-management-performance.spec.ts` 默认跳过。仅在受控 runner 中设置 `PM_RUN_SCALE_TESTS=true`，生成 10k Task、100k Segment、50×100 PlanNode 和 100k 站内通知，执行 p95、query plan、响应体积与浏览器 DOM 门禁。不得对开发、共享或生产数据库设置该变量。
 14. `tests/project-management-s10-release.spec.ts` 只在 Desktop 执行运维规格：演练工具 fail-closed、空库 migration、两次共享快照、受保护表 row/hash、identity backfill dry-run/APPLY 幂等、整库/上传恢复和旧 contract/直接飞书发送静态扫描。工具只接受本机 `_test`/`_snapshot` 来源，要求 `PM_RELEASE_REHEARSAL_CONFIRM=LOCAL_ISOLATED_REHEARSAL` 与 `NOTIFICATION_DELIVERY_DISABLED=true`，并只创建/删除随机 `pmrel_*_test` 数据库；不得把生产 URL 伪装成允许名称。

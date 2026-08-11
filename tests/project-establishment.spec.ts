@@ -513,7 +513,6 @@ test.describe("Project 立项与生命周期", () => {
         scope: { kind: "TASK_SCOPED", taskId: task.id },
         personIds: [],
         taskIds: [],
-        tagIds: [],
         types: [],
         statuses: [],
         groupBy: "PERSON",

@@ -261,13 +261,6 @@ export async function createTaskDraft(
       })),
     });
     await syncTaskMembersToProjectTx(tx, { projectId: parsed.projectId, taskId, members: normalizedInput.members, actor: refreshedActor });
-    if (parsed.tagIds.length > 0) {
-      await tx.taskTag.createMany({
-        data: parsed.tagIds.map((tagId) => ({ taskId, tagId })),
-        skipDuplicates: true,
-      });
-    }
-
     await createDomainAuditEventTx(tx, {
       actorAccountId: refreshedActor.accountId,
       actorPersonId: refreshedActor.personId,
@@ -284,7 +277,6 @@ export async function createTaskDraft(
         milestoneCount: parsed.milestones.length,
         terminationName: parsed.termination.name,
         memberCount: normalizedInput.members.length,
-        tagCount: parsed.tagIds.length,
       }),
       reason: "创建 Task 草稿",
     });
@@ -1728,16 +1720,6 @@ async function assertCreateTaskReferencesTx(
     throw validationError("成员不存在或已停用", {
       members: ["成员不存在或已停用"],
     });
-  }
-  if (input.tagIds.length > 0) {
-    const tagCount = await tx.tag.count({
-      where: { id: { in: input.tagIds }, archivedAt: null },
-    });
-    if (tagCount !== new Set(input.tagIds).size) {
-      throw validationError("Tag 不存在或已归档", {
-        tagIds: ["Tag 不存在或已归档"],
-      });
-    }
   }
   if (input.relatedTaskId) {
     const relatedTask = await tx.task.findFirst({

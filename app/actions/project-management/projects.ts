@@ -13,7 +13,7 @@ import {
 import { getCurrentProjectManagementActor } from "@/lib/project-management/identity";
 import { revalidateProjectManagement } from "@/lib/revalidate";
 import { saveProjectAvatarDraft } from "@/lib/file-upload";
-import { resolveActiveProjectOptions as resolveActiveProjectOptionsQuery, searchActiveProjectOptions as searchActiveProjectOptionsQuery, type ProjectOption, type ProjectOptionPage } from "@/lib/project-management/queries/project-queries";
+import { resolveActiveProjectOptions as resolveActiveProjectOptionsQuery, resolveVisibleProjectOptions as resolveVisibleProjectOptionsQuery, searchActiveProjectOptions as searchActiveProjectOptionsQuery, searchVisibleProjectOptions as searchVisibleProjectOptionsQuery, type ProjectOption, type ProjectOptionPage } from "@/lib/project-management/queries/project-queries";
 
 export async function createProject(input: unknown) { return runProjectAction("pm.project.establishment.submit", "createProject", input, createProjectService); }
 export async function resubmitProject(input: unknown) { return runProjectAction("pm.project.establishment.resubmit", "resubmitProject", input, resubmitProjectService); }
@@ -24,6 +24,8 @@ export async function deleteProject(input: unknown) { return runProjectAction("p
 export async function updateTaskProject(input: unknown) { return runProjectAction("pm.task.project.update", "updateTaskProject", input, updateTaskProjectService); }
 export async function searchActiveProjectOptions(input: unknown): Promise<ProjectManagementActionResult<ProjectOptionPage>> { return runProjectQueryAction("pm.project.options.search", "searchActiveProjectOptions", input, searchActiveProjectOptionsQuery); }
 export async function resolveActiveProjectOptions(input: unknown): Promise<ProjectManagementActionResult<ProjectOption[]>> { return runProjectQueryAction("pm.project.options.resolve", "resolveActiveProjectOptions", input, resolveActiveProjectOptionsQuery); }
+export async function searchVisibleProjectOptions(input: unknown): Promise<ProjectManagementActionResult<ProjectOptionPage>> { return runProjectQueryAction("pm.project.visible_options.search", "searchVisibleProjectOptions", input, searchVisibleProjectOptionsQuery); }
+export async function resolveVisibleProjectOptions(input: unknown): Promise<ProjectManagementActionResult<ProjectOption[]>> { return runProjectQueryAction("pm.project.visible_options.resolve", "resolveVisibleProjectOptions", input, resolveVisibleProjectOptionsQuery); }
 
 export async function uploadProjectAvatar(formData: FormData): Promise<{ ok: true; path: string } | { ok: false; message: string }> {
   try {

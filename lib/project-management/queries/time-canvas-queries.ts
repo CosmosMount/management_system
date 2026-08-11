@@ -51,6 +51,7 @@ import {
 import { listPersonalDueSegmentsInputSchema } from "@/lib/project-management/validations/segments";
 import { searchTaskOptions } from "@/lib/project-management/queries/option-queries";
 import { getProjectDetail } from "@/lib/project-management/queries/project-queries";
+import { getResourcePlanSelectionPage } from "@/lib/project-management/queries/resource-plan-queries";
 
 const canvasTaskAuthorizationSelect = {
   id: true,
@@ -85,12 +86,6 @@ const fullSegmentSelect = {
   deletedAt: true,
   updatedAt: true,
   task: { select: { ...canvasTaskAuthorizationSelect, title: true } },
-  tags: {
-    select: {
-      tag: { select: { id: true, name: true, color: true } },
-    },
-    orderBy: { tagId: "asc" },
-  },
 } satisfies Prisma.WorkSegmentSelect;
 
 const busyCandidateSelect = {
@@ -354,7 +349,6 @@ export async function getTimeCanvasData({
           parsed,
           scopeTask,
           rowFilter,
-          authorizedSegmentFilter,
         );
   const fullUniverseWhere = fullSegmentUniverseWhere(
     parsed,
@@ -466,12 +460,7 @@ export async function getContentDrivenTimeCanvasData({
     rangeStart: new Date(seedStart).toISOString(),
     rangeEnd: new Date(seedStart + DAY_MS).toISOString(),
   });
-  const authorizedAllTimeFilter = authorizedSegmentFilterWhere(
-    actor,
-    parsed,
-    true,
-    false,
-  );
+  const authorizedAllTimeFilter = authorizedSegmentFilterWhere(actor, parsed, false);
   const scopeTask = await authorizeScopeAndExplicitFilters(
     actor,
     parsed,
@@ -491,7 +480,6 @@ export async function getContentDrivenTimeCanvasData({
         parsed,
         scopeTask,
         rowFilter,
-        authorizedAllTimeFilter,
       );
   const allTimeUniverseWhere = fullSegmentUniverseWhere(
     parsed,
@@ -674,7 +662,6 @@ export async function getMyTimelinePageData({
       scope: { kind: "PERSONAL" },
       personIds: [actor.personId],
       taskIds: [],
-      tagIds: [],
       types: [],
       statuses: [],
       groupBy: "PERSON",
@@ -685,6 +672,41 @@ export async function getMyTimelinePageData({
     },
   });
   return { taskPage, ...canvas };
+}
+
+export async function getResourcePlanPageData({
+  actor,
+  input,
+  preferredCenterMs,
+  load,
+}: {
+  actor: ProjectManagementActor;
+  input: unknown;
+  preferredCenterMs?: number;
+  load?: Parameters<typeof getContentDrivenTimeCanvasData>[0]["load"];
+}) {
+  const selection = await getResourcePlanSelectionPage({ actor, input });
+  const canvas = await getContentDrivenTimeCanvasData({
+    actor,
+    preferredCenterMs,
+    load,
+    anchorTaskIds: selection.taskIds,
+    input: {
+      scope: { kind: "RESOURCE_PLANNER" },
+      personIds: selection.personIds,
+      taskIds: [],
+      types: [],
+      statuses: [],
+      groupBy: "PERSON",
+      includeTaskAnchors: true,
+      includeActual: true,
+      includeTerminalPlanned: true,
+      emptyPersonIdsMeansNone: true,
+      includeBusyBlocks: false,
+      rowLimit: 50,
+    },
+  });
+  return { selection, ...canvas };
 }
 
 export async function getAdaptiveTimeCanvasBlock({
@@ -720,7 +742,6 @@ export async function getAdaptiveTimeCanvasBlock({
             scope: { kind: "TASK_SCOPED", taskId: parsed.taskId },
             personIds: [],
             taskIds: [],
-            tagIds: [],
             types: [],
             statuses: [],
             groupBy: "PERSON",
@@ -730,7 +751,23 @@ export async function getAdaptiveTimeCanvasBlock({
             rowLimit: 50,
           },
         })
-      : await loadProjectTimeCanvasBlock(actor, parsed, preferredCenterMs, load);
+      : parsed.kind === "PROJECT"
+        ? await loadProjectTimeCanvasBlock(actor, parsed, preferredCenterMs, load)
+        : await getResourcePlanPageData({
+            actor,
+            input: {
+              all: parsed.all,
+              projectIds: parsed.projectIds,
+              taskIds: parsed.taskIds,
+              personIds: parsed.personIds,
+              pinnedTaskIds: parsed.pinnedTaskIds,
+              pinnedPersonIds: parsed.pinnedPersonIds,
+              taskCursor: parsed.taskCursor,
+              personCursor: parsed.personCursor,
+            },
+            preferredCenterMs,
+            load,
+          });
   return {
     rowPageKey: result.data.rowPageKey,
     logicalRange: result.data.range,
@@ -776,7 +813,6 @@ async function loadProjectTimeCanvasBlock(
       scope: { kind: "RESOURCE_PLANNER" },
       personIds,
       taskIds: project.tasks.map((task) => task.id),
-      tagIds: [],
       types: [],
       statuses: [],
       groupBy: "PERSON",
@@ -965,12 +1001,6 @@ async function authorizeScopeAndExplicitFilters(
     });
     if (count !== input.taskIds.length) throw notFoundError();
   }
-  if (input.tagIds.length > 0) {
-    const count = await prisma.tag.count({
-      where: { id: { in: input.tagIds }, archivedAt: null },
-    });
-    if (count !== input.tagIds.length) throw notFoundError();
-  }
   return scopeTask;
 }
 
@@ -987,7 +1017,6 @@ async function loadPersonRows(
       universe,
       personAvailableInRangeWhere(authorizedSegmentFilter),
       input.personIds.length > 0 ? { id: { in: input.personIds } } : {},
-      tagFilteredRowWhere(input, authorizedSegmentFilter),
     ],
   };
   const cursorId = await validateCanvasCursor({
@@ -1070,7 +1099,6 @@ async function loadTaskRows(
   input: GetTimeCanvasDataInput,
   scopeTask: CanvasTask | null,
   filter: string,
-  authorizedSegmentFilter?: Prisma.WorkSegmentWhereInput,
 ): Promise<RowPage> {
   const actorCanCreateSegments = Boolean(
     await prisma.person.findFirst({
@@ -1087,7 +1115,6 @@ async function loadTaskRows(
     AND: [
       universe,
       input.taskIds.length > 0 ? { id: { in: input.taskIds } } : {},
-      taskTagFilteredRowWhere(actor, input, authorizedSegmentFilter),
     ],
   };
   const cursorId = await validateCanvasCursor({
@@ -1210,63 +1237,12 @@ function fullSegmentUniverseWhere(
 function authorizedSegmentFilterWhere(
   actor: ProjectManagementActor,
   input: GetTimeCanvasDataInput,
-  includeTagFilter = true,
   includeRange = true,
 ): Prisma.WorkSegmentWhereInput {
   return {
     AND: [
       segmentReadableWhere(actor),
-      segmentFilterWhere(input, actor.personId, includeTagFilter, includeRange),
-    ],
-  };
-}
-
-function tagFilteredRowWhere(
-  input: GetTimeCanvasDataInput,
-  authorizedSegmentFilter: Prisma.WorkSegmentWhereInput,
-) {
-  return input.tagIds.length > 0
-    ? { workSegments: { some: authorizedSegmentFilter } }
-    : {};
-}
-
-function taskTagFilteredRowWhere(
-  actor: ProjectManagementActor,
-  input: GetTimeCanvasDataInput,
-  authorizedSegmentFilter?: Prisma.WorkSegmentWhereInput,
-): Prisma.TaskWhereInput {
-  if (input.tagIds.length === 0) return {};
-  return {
-    OR: [
-      {
-        AND: [
-          { tags: { some: { tagId: { in: input.tagIds } } } },
-          input.personIds.length > 0
-            ? {
-                members: {
-                  some: {
-                    personId: { in: input.personIds },
-                    removedAt: null,
-                  },
-                },
-              }
-            : {},
-          input.types.length > 0 ||
-          input.statuses.length > 0
-            ? { id: { in: [] } }
-            : {},
-        ],
-      },
-      {
-        workSegments: {
-          some: {
-            AND: [
-              authorizedSegmentFilter ?? authorizedSegmentFilterWhere(actor, input, false),
-              { tags: { some: { tagId: { in: input.tagIds } } } },
-            ],
-          },
-        },
-      },
+      segmentFilterWhere(input, actor.personId, includeRange),
     ],
   };
 }
@@ -1274,19 +1250,22 @@ function taskTagFilteredRowWhere(
 function segmentFilterWhere(
   input: GetTimeCanvasDataInput,
   actorPersonId: string,
-  includeTagFilter = true,
   includeRange = true,
 ): Prisma.WorkSegmentWhereInput {
   return {
     AND: [
       {
         deletedAt: null,
-        NOT: {
-          AND: [
-            { type: "PLANNED" },
-            { status: { in: ["CONFIRMED", "CANCELLED"] } },
-          ],
-        },
+        ...(input.includeTerminalPlanned
+          ? {}
+          : {
+              NOT: {
+                AND: [
+                  { type: "PLANNED" },
+                  { status: { in: ["CONFIRMED", "CANCELLED"] } },
+                ],
+              },
+            }),
         ...(includeRange
           ? {
               startAt: { lt: input.rangeEnd },
@@ -1299,20 +1278,10 @@ function segmentFilterWhere(
         : {},
       input.personIds.length > 0
         ? { personId: { in: input.personIds } }
-        : {},
+        : input.emptyPersonIdsMeansNone
+          ? { personId: { in: [] } }
+          : {},
       input.taskIds.length > 0 ? { taskId: { in: input.taskIds } } : {},
-      includeTagFilter && input.tagIds.length > 0
-        ? {
-            OR: [
-              { tags: { some: { tagId: { in: input.tagIds } } } },
-              {
-                task: {
-                  tags: { some: { tagId: { in: input.tagIds } } },
-                },
-              },
-            ],
-          }
-        : {},
       input.types.length > 0 ? { type: { in: input.types } } : {},
       input.statuses.length > 0 ? { status: { in: input.statuses } } : {},
       input.includeActual ? {} : { type: { not: "ACTUAL" } },
@@ -1469,7 +1438,6 @@ function toTaskAnchorDto(
       canView: true,
       canUpdateMetadata: taskCanEdit,
       canManageMembers,
-      canManageTags: taskCanEdit,
       canActivate:
         task.status === "DRAFT" &&
         authorize({ actor, action: "task.activate", resource }).allowed,
@@ -1573,11 +1541,6 @@ function toFullSegmentDto(
     expectedOutput: segment.expectedOutput,
     actualOutput: segment.actualOutput,
     taskId: segment.taskId,
-    tags: segment.tags.map((entry) => ({
-      id: entry.tag.id,
-      name: entry.tag.name,
-      color: entry.tag.color,
-    })),
     permissions: segmentPermissions(actor, segment),
     updatedAt,
     versionToken: updatedAt,
@@ -1861,7 +1824,6 @@ function canvasCursorFilter(
           : undefined,
         personIds: [...input.personIds].sort(),
         taskIds: [...input.taskIds].sort(),
-        tagIds: [...input.tagIds].sort(),
         types: [...input.types].sort(),
         statuses: [...input.statuses].sort(),
         groupBy: input.groupBy,

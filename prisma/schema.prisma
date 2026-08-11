@@ -215,7 +215,6 @@ model Account {
   lastLoginAt               DateTime?                     @db.Timestamptz(6)
   identities                AccountIdentity[]
   person                    Person?
-  createdTags               Tag[]                         @relation("TagCreatedBy")
   createdTasks              Task[]                        @relation("TaskCreatedBy")
   createdTaskMembers        TaskMember[]                  @relation("TaskMemberCreatedBy")
   createdPlanVersions       TaskPlanVersion[]             @relation("PlanVersionCreatedBy")
@@ -500,24 +499,6 @@ model FileAsset {
   @@index([cleanupRequestedAt, cleanupNextRunAt])
 }
 
-model Tag {
-  id                 String       @id @default(uuid())
-  name               String
-  color              String       @default("")
-  description        String       @default("")
-  createdByAccountId String
-  createdBy          Account      @relation("TagCreatedBy", fields: [createdByAccountId], references: [id], onDelete: Restrict)
-  archivedAt         DateTime?    @db.Timestamptz(6)
-  createdAt          DateTime     @default(now()) @db.Timestamptz(6)
-  updatedAt          DateTime     @updatedAt @db.Timestamptz(6)
-  taskTags           TaskTag[]
-  segmentTags        SegmentTag[]
-
-  @@index([name])
-  @@index([archivedAt])
-  @@index([createdByAccountId])
-}
-
 model Task {
   id                    String                              @id @default(uuid())
   title                 String
@@ -543,7 +524,6 @@ model Task {
   createdByAccountId    String
   createdBy             Account                             @relation("TaskCreatedBy", fields: [createdByAccountId], references: [id], onDelete: Restrict)
   members               TaskMember[]
-  tags                  TaskTag[]
   planVersions          TaskPlanVersion[]                   @relation("TaskPlanVersions")
   nodes                 TaskNode[]
   workSegments          WorkSegment[]
@@ -713,18 +693,6 @@ model ProjectEstablishmentRequestedTask {
 
   @@unique([requestId, taskId])
   @@index([taskId])
-}
-
-model TaskTag {
-  id        String   @id @default(uuid())
-  taskId    String
-  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  tagId     String
-  tag       Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now()) @db.Timestamptz(6)
-
-  @@unique([taskId, tagId])
-  @@index([tagId])
 }
 
 model TaskMember {
@@ -939,7 +907,6 @@ model WorkSegment {
   plannedSources     WorkSegmentSource[] @relation("PlannedSegmentSource")
   actualSources      WorkSegmentSource[] @relation("ActualSegmentSource")
   changes            WorkSegmentChange[]
-  tags               SegmentTag[]
   createdAt          DateTime            @default(now()) @db.Timestamptz(6)
   updatedAt          DateTime            @updatedAt @db.Timestamptz(6)
 
@@ -950,18 +917,6 @@ model WorkSegment {
   @@index([sourceSplitFromId])
   @@index([deletedAt])
   @@index([updatedAt, id])
-}
-
-model SegmentTag {
-  id        String      @id @default(uuid())
-  segmentId String
-  segment   WorkSegment @relation(fields: [segmentId], references: [id], onDelete: Cascade)
-  tagId     String
-  tag       Tag         @relation(fields: [tagId], references: [id], onDelete: Cascade)
-  createdAt DateTime    @default(now()) @db.Timestamptz(6)
-
-  @@unique([segmentId, tagId])
-  @@index([tagId])
 }
 
 model WorkSegmentSource {

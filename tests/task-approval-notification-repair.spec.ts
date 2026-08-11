@@ -344,7 +344,6 @@ async function createPendingApprovalFixture() {
     team: "英雄",
     techGroup: "电控",
     priority: "HIGH",
-    tagIds: [],
     members: [
       { personId: owner.person.id, role: "OWNER" },
       { personId: participant.person.id, role: "PARTICIPANT" },

@@ -178,12 +178,13 @@ export const getTimeCanvasDataInputSchema = z
     ...timeCanvasRangeFields,
     personIds: idListSchema("Person"),
     taskIds: idListSchema("Task"),
-    tagIds: idListSchema("Tag"),
     types: z.array(z.enum(workSegmentTypeValues)).optional().default([]),
     statuses: z.array(z.enum(workSegmentStatusValues)).optional().default([]),
     groupBy: z.enum(timeCanvasGroupByValues),
     includeTaskAnchors: z.boolean().optional().default(true),
     includeActual: z.boolean().optional().default(true),
+    includeTerminalPlanned: z.boolean().optional().default(false),
+    emptyPersonIdsMeansNone: z.boolean().optional().default(false),
     includeBusyBlocks: z.boolean().optional().default(false),
     cursor: timeCanvasRowCursorSchema,
     rowLimit: timeCanvasRowLimitSchema,
@@ -232,6 +233,18 @@ export const getAdaptiveTimeCanvasBlockInputSchema = z
       ...adaptiveBlockCommonFields,
       projectId: idSchema,
       taskCursor: optionCursorSchema,
+    }).strict(),
+    z.object({
+      kind: z.literal("RESOURCE_PLAN"),
+      ...adaptiveBlockCommonFields,
+      all: z.boolean(),
+      projectIds: idListSchema("Project"),
+      taskIds: idListSchema("Task"),
+      personIds: idListSchema("Person"),
+      pinnedTaskIds: z.array(idSchema).max(1).optional().default([]),
+      pinnedPersonIds: z.array(idSchema).max(1).optional().default([]),
+      taskCursor: optionCursorSchema,
+      personCursor: optionCursorSchema,
     }).strict(),
   ])
   .superRefine((input, ctx) => {
@@ -306,7 +319,6 @@ export const searchTaskOptionsInputSchema = z
   .object({
     query: querySchema,
     statuses: z.array(z.enum(taskStatusValues)).optional().default([]),
-    tagIds: idListSchema("Tag"),
     mine: z.boolean().optional().default(false),
     projectCandidates: z.boolean().optional().default(false),
     cursor: optionCursorSchema,
@@ -325,15 +337,6 @@ export const resolveTaskOptionsByIdsInputSchema = z
   .object({ ids: idListSchema("Task"), projectCandidates: z.boolean().optional().default(false) })
   .strict();
 
-export const listTagOptionsInputSchema = z
-  .object({
-    query: querySchema,
-    includeArchived: z.boolean().optional().default(false),
-    cursor: optionCursorSchema,
-    limit: optionPageLimitSchema,
-  })
-  .strict();
-
 export type GetTimeCanvasDataInput = z.infer<
   typeof getTimeCanvasDataInputSchema
 >;
@@ -348,4 +351,3 @@ export type PeopleOptionScope = z.infer<typeof peopleOptionScopeSchema>;
 export type SearchTaskOptionsInput = z.infer<
   typeof searchTaskOptionsInputSchema
 >;
-export type ListTagOptionsInput = z.infer<typeof listTagOptionsInputSchema>;

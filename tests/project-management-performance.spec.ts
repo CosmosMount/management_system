@@ -49,7 +49,6 @@ test.describe("project management S9 scale and performance", () => {
           rangeEnd: rangeEnd.toISOString(),
           personIds: fixture.personIds,
           taskIds: [],
-          tagIds: [],
           types: [],
           statuses: [],
           groupBy: "PERSON",
@@ -141,7 +140,7 @@ test.describe("project management S9 scale and performance", () => {
       zoom: "day",
     });
     await page.goto(`/progress/resources?${query}`);
-    await expect(page.getByRole("heading", { name: "人员计划" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "资源计划" })).toBeVisible();
     await expect(page.getByTestId("time-canvas-root")).toBeVisible();
     const domCount = await page.locator("body *").count();
     const segmentDomCount = await page.locator('[data-testid^="segment-block-"]').count();

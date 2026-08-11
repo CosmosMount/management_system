@@ -58,11 +58,15 @@ export function timeCanvasDataToModel(
     row.height = rowHeightForLaneCount(layout.laneCount);
   }
 
-  const showPlanRows = mode === "TASK_COMPOSER" || mode === "TASK_WORKBENCH";
+  const showPlanRows = mode === "TASK_COMPOSER" ||
+    mode === "TASK_WORKBENCH" ||
+    mode === "RESOURCE_PLANNER";
   const planRows: TimeCanvasRow[] = showPlanRows
     ? data.anchors.map((task) => {
         const canEditDraftPlan =
-          task.status === "DRAFT" && task.capabilities.canUpdateMetadata;
+          mode !== "RESOURCE_PLANNER" &&
+          task.status === "DRAFT" &&
+          task.capabilities.canUpdateMetadata;
         return {
           id: `plan:${task.id}`,
           sourceId: task.id,

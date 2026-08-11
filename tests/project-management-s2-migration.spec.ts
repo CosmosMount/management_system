@@ -45,7 +45,6 @@ import {
   busyBlockDtoSchema,
   personAccountBindingValues,
   personOptionPageSchema,
-  tagOptionPageSchema,
   taskOptionPageSchema,
   timeCanvasDataDtoSchema,
   timeSegmentDtoSchema,
@@ -74,7 +73,6 @@ import {
 import { addStructuredProjectManagementIssue } from "../lib/project-management/validations/issues";
 import {
   getTimeCanvasDataInputSchema,
-  listTagOptionsInputSchema,
   MAX_TIME_CANVAS_VISIBLE_SEGMENTS,
   searchPeopleInputSchema,
   timeCanvasVisibleSegmentCountSchema,
@@ -85,6 +83,172 @@ const S2_MIGRATION_NAME =
   "20260730120000_add_task_plan_version_planned_start_at";
 const TERMINATION_NAME_MIGRATION_NAME =
   "20260804120000_add_termination_node_name";
+const TAG_REMOVAL_MIGRATION_NAME =
+  "20260811190000_remove_project_management_tags";
+
+test("Tag removal migration drops classification tables without rewriting audit history", async () => {
+  test.setTimeout(180_000);
+  const sql = await readFile(
+    path.join(MIGRATIONS_DIR, TAG_REMOVAL_MIGRATION_NAME, "migration.sql"),
+    "utf8",
+  );
+  expect(sql).toContain('DROP TABLE IF EXISTS "SegmentTag"');
+  expect(sql).toContain('DROP TABLE IF EXISTS "TaskTag"');
+  expect(sql).toContain('DROP TABLE IF EXISTS "Tag"');
+  expect(sql).not.toContain('DELETE FROM "DomainAuditEvent"');
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) throw new Error("DATABASE_URL is required");
+  const sourceUrl = new URL(databaseUrl);
+  const sourceDatabaseName = sourceUrl.pathname.replace(/^\//, "");
+  if (
+    !["127.0.0.1", "localhost", "::1"].includes(sourceUrl.hostname) ||
+    !sourceDatabaseName.endsWith("_test") ||
+    /prod(?:uction)?/i.test(sourceDatabaseName)
+  ) {
+    throw new Error("拒绝在非本机测试数据库执行 Tag removal migration 回归");
+  }
+  const randomPart = randomUUID().replaceAll("-", "").slice(0, 12);
+  const temporaryDatabaseName = `${sourceDatabaseName.slice(0, 20)}_${randomPart}_tag_removal_test`;
+  if (!/^[a-zA-Z0-9_]+_tag_removal_test$/.test(temporaryDatabaseName)) {
+    throw new Error("Tag removal 临时数据库名称安全校验失败");
+  }
+  const adminUrl = new URL(sourceUrl);
+  adminUrl.pathname = "/postgres";
+  const temporaryDatabaseUrl = new URL(sourceUrl);
+  temporaryDatabaseUrl.pathname = `/${temporaryDatabaseName}`;
+  const adminClient = new Client({ connectionString: adminUrl.toString() });
+  let migrationClient: Client | null = null;
+  await adminClient.connect();
+  try {
+    const existing = await adminClient.query(
+      "SELECT 1 FROM pg_database WHERE datname = $1",
+      [temporaryDatabaseName],
+    );
+    if (existing.rowCount !== 0) throw new Error("随机 Tag removal 临时数据库已存在，拒绝复用");
+    await adminClient.query(`CREATE DATABASE "${temporaryDatabaseName}"`);
+    migrationClient = new Client({ connectionString: temporaryDatabaseUrl.toString() });
+    await migrationClient.connect();
+    const migrationNames = (await readdir(MIGRATIONS_DIR, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory() && entry.name < TAG_REMOVAL_MIGRATION_NAME)
+      .map((entry) => entry.name)
+      .sort();
+    for (const migrationName of migrationNames) {
+      const migrationSql = await readFile(
+        path.join(MIGRATIONS_DIR, migrationName, "migration.sql"),
+        "utf8",
+      );
+      const requiresOuterTransaction =
+        migrationSql.includes("ON COMMIT DROP") ||
+        (migrationSql.includes("LOCK TABLE") &&
+          !/(?:^|\n)\s*BEGIN\s*;/i.test(migrationSql));
+      if (requiresOuterTransaction) {
+        await executeMigrationSqlAtomically(migrationClient, migrationSql);
+      } else {
+        await executeMigrationSql(migrationClient, migrationSql);
+      }
+    }
+
+    const ids = {
+      account: randomUUID(),
+      identity: randomUUID(),
+      roleAssignment: randomUUID(),
+      person: randomUUID(),
+      task: randomUUID(),
+      plan: randomUUID(),
+      member: randomUUID(),
+      segment: randomUUID(),
+      tag: randomUUID(),
+      taskTag: randomUUID(),
+      segmentTag: randomUUID(),
+      change: randomUUID(),
+      audit: randomUUID(),
+    };
+    await migrationClient.query("BEGIN");
+    try {
+      await migrationClient.query("SET CONSTRAINTS ALL DEFERRED");
+      await migrationClient.query(
+        'INSERT INTO "Account" ("id", "createdAt", "updatedAt") VALUES ($1, NOW(), NOW())',
+        [ids.account],
+      );
+      await migrationClient.query(
+        'INSERT INTO "AccountIdentity" ("id", "accountId", "provider", "providerSubject", "tenantId", "openId", "updatedAt") VALUES ($1, $2, \'FEISHU\', $3, \'default\', $4, NOW())',
+        [ids.identity, ids.account, `open:tag-removal-${ids.account}`, `ou_tag_removal_${ids.account}`],
+      );
+      await migrationClient.query(
+        'INSERT INTO "SystemRoleAssignment" ("id", "accountId", "role", "team", "techGroup") VALUES ($1, $2, \'PROJECT_ADMINISTRATOR\', \'\', \'\')',
+        [ids.roleAssignment, ids.account],
+      );
+      await migrationClient.query(
+        'INSERT INTO "Person" ("id", "accountId", "displayName", "status", "createdAt", "updatedAt") VALUES ($1, $2, $3, \'ACTIVE\', NOW(), NOW())',
+        [ids.person, ids.account, "Tag migration retained Person"],
+      );
+      await migrationClient.query(
+        'INSERT INTO "Task" ("id", "title", "team", "techGroup", "status", "priority", "currentPlanVersionId", "createdByAccountId", "createdAt", "updatedAt") VALUES ($1, $2, \'英雄\', \'电控\', \'ACTIVE\', \'MEDIUM\', $3, $4, NOW(), NOW())',
+        [ids.task, "Tag migration retained Task", ids.plan, ids.account],
+      );
+      await migrationClient.query(
+        'INSERT INTO "TaskPlanVersion" ("id", "taskId", "versionNo", "status", "plannedStartAt", "createdByAccountId", "createdAt", "updatedAt") VALUES ($1, $2, 1, \'CURRENT\', NOW(), $3, NOW(), NOW())',
+        [ids.plan, ids.task, ids.account],
+      );
+      await migrationClient.query(
+        'INSERT INTO "TaskMember" ("id", "taskId", "personId", "role", "createdByAccountId", "createdAt") VALUES ($1, $2, $3, \'OWNER\', $4, NOW())',
+        [ids.member, ids.task, ids.person, ids.account],
+      );
+      await migrationClient.query(
+        'INSERT INTO "WorkSegment" ("id", "personId", "type", "status", "startAt", "endAt", "content", "taskId", "createdByAccountId", "createdAt", "updatedAt") VALUES ($1, $2, \'PLANNED\', \'PLANNED\', NOW(), NOW() + INTERVAL \'1 hour\', $3, $4, $5, NOW(), NOW())',
+        [ids.segment, ids.person, "Tag migration retained Segment", ids.task, ids.account],
+      );
+      await migrationClient.query(
+        'INSERT INTO "Tag" ("id", "name", "color", "description", "createdByAccountId", "createdAt", "updatedAt") VALUES ($1, $2, \'#fff\', \'retired classification\', $3, NOW(), NOW())',
+        [ids.tag, "Tag migration removed Tag", ids.account],
+      );
+      await migrationClient.query(
+        'INSERT INTO "TaskTag" ("id", "taskId", "tagId") VALUES ($1, $2, $3)',
+        [ids.taskTag, ids.task, ids.tag],
+      );
+      await migrationClient.query(
+        'INSERT INTO "SegmentTag" ("id", "segmentId", "tagId") VALUES ($1, $2, $3)',
+        [ids.segmentTag, ids.segment, ids.tag],
+      );
+      await migrationClient.query(
+        'INSERT INTO "WorkSegmentChange" ("id", "segmentId", "action", "before", "after", "reason", "actorAccountId") VALUES ($1, $2, \'UPDATE\', $3::jsonb, $4::jsonb, $5, $6)',
+        [ids.change, ids.segment, JSON.stringify({ tagIds: [ids.tag], content: "before" }), JSON.stringify({ tagIds: [ids.tag], content: "after" }), "append-only change", ids.account],
+      );
+      await migrationClient.query(
+        'INSERT INTO "DomainAuditEvent" ("id", "actorAccountId", "actorPersonId", "action", "entityType", "entityId", "taskId", "before", "after", "reason") VALUES ($1, $2, $3, $4, \'Task\', $5, $5, $6::jsonb, $7::jsonb, $8)',
+        [ids.audit, ids.account, ids.person, "task.tag.history", ids.task, JSON.stringify({ tagIds: [ids.tag] }), JSON.stringify({ tagIds: [ids.tag], title: "retained" }), "append-only audit"],
+      );
+      await migrationClient.query("COMMIT");
+    } catch (error) {
+      await migrationClient.query("ROLLBACK");
+      throw error;
+    }
+
+    const retainedBefore = JSON.stringify((await migrationClient.query(
+      'SELECT t."id" AS "taskId", s."id" AS "segmentId", c."before", c."after", a."before" AS "auditBefore", a."after" AS "auditAfter" FROM "Task" t JOIN "WorkSegment" s ON s."taskId" = t."id" JOIN "WorkSegmentChange" c ON c."segmentId" = s."id" JOIN "DomainAuditEvent" a ON a."taskId" = t."id" WHERE t."id" = $1',
+      [ids.task],
+    )).rows);
+    await migrationClient.query(sql);
+    const tables = await migrationClient.query<{
+      tag: string | null;
+      taskTag: string | null;
+      segmentTag: string | null;
+    }>(`SELECT
+      to_regclass('public."Tag"')::text AS "tag",
+      to_regclass('public."TaskTag"')::text AS "taskTag",
+      to_regclass('public."SegmentTag"')::text AS "segmentTag"`);
+    expect(tables.rows[0]).toEqual({ tag: null, taskTag: null, segmentTag: null });
+    const retainedAfter = JSON.stringify((await migrationClient.query(
+      'SELECT t."id" AS "taskId", s."id" AS "segmentId", c."before", c."after", a."before" AS "auditBefore", a."after" AS "auditAfter" FROM "Task" t JOIN "WorkSegment" s ON s."taskId" = t."id" JOIN "WorkSegmentChange" c ON c."segmentId" = s."id" JOIN "DomainAuditEvent" a ON a."taskId" = t."id" WHERE t."id" = $1',
+      [ids.task],
+    )).rows);
+    expect(retainedAfter).toBe(retainedBefore);
+  } finally {
+    await migrationClient?.end().catch(() => undefined);
+    await adminClient.query(`DROP DATABASE IF EXISTS "${temporaryDatabaseName}"`);
+    await adminClient.end();
+  }
+});
 
 test("Termination name migration provides a non-null 200-character Terminal default", async () => {
   const columns = await prisma.$queryRaw<
@@ -495,7 +659,6 @@ test("S2 Task mutations expose session-bound Server Actions and anchor loads rec
     "replaceTaskDraftPlan",
     "updateTaskMetadata",
     "replaceTaskMembers",
-    "replaceTaskTags",
   ]) {
     expect(taskActionsSource).toMatch(
       new RegExp(`export async function ${actionName}\\(\\s*input: unknown`),
@@ -761,7 +924,6 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
     techGroup: "电控" as const,
     priority: "HIGH" as const,
     relatedTaskId: null,
-    tagIds: [randomUUID()],
     members: [{ personId: randomUUID(), role: "OWNER" as const }],
   };
   const duplicateUnifiedPersonId = randomUUID();
@@ -780,12 +942,6 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
         { personId: duplicateUnifiedPersonId, role: "OWNER" },
         { personId: duplicateUnifiedPersonId, role: "PARTICIPANT" },
       ],
-    }).success,
-  ).toBe(false);
-  expect(
-    updateTaskDraftInputSchema.safeParse({
-      ...unifiedDraftInput,
-      tagIds: Array.from({ length: 51 }, () => randomUUID()),
     }).success,
   ).toBe(false);
   expect(
@@ -1016,17 +1172,15 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
       personIds: Array.from({ length: 51 }, () => randomUUID()),
     }).success,
   ).toBe(false);
-  for (const field of ["taskIds", "tagIds"] as const) {
-    expect(
-      getTimeCanvasDataInputSchema.safeParse({
-        scope: { kind: "DASHBOARD" },
-        rangeStart,
-        rangeEnd,
-        groupBy: "PERSON",
-        [field]: Array.from({ length: 51 }, () => randomUUID()),
-      }).success,
-    ).toBe(false);
-  }
+  expect(
+    getTimeCanvasDataInputSchema.safeParse({
+      scope: { kind: "DASHBOARD" },
+      rangeStart,
+      rangeEnd,
+      groupBy: "PERSON",
+      taskIds: Array.from({ length: 51 }, () => randomUUID()),
+    }).success,
+  ).toBe(false);
   expect(
     getTimeCanvasDataInputSchema.safeParse({
       scope: { kind: "DASHBOARD" },
@@ -1048,7 +1202,6 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
   ]) {
     expect(searchPeopleInputSchema.safeParse(disallowedInput).success).toBe(false);
   }
-  expect(listTagOptionsInputSchema.parse({}).includeArchived).toBe(false);
   expect(MAX_TIME_CANVAS_VISIBLE_SEGMENTS).toBe(5_000);
   expect(timeCanvasVisibleSegmentCountSchema.parse(5_000)).toBe(5_000);
   expect(timeCanvasVisibleSegmentCountSchema.safeParse(5_001).success).toBe(
@@ -1112,7 +1265,6 @@ test("S2 canvas output schemas retain pagination, grouping and privacy invariant
     expectedOutput: "",
     actualOutput: "",
     taskId: segmentTaskId,
-    tags: [],
     permissions: segmentPermissions(),
     updatedAt,
     versionToken: updatedAt,
@@ -1599,38 +1751,6 @@ test("S2 option page schemas expose only minimal public fields", () => {
     }).success,
   ).toBe(false);
 
-  const tagPage = tagOptionPageSchema.parse({
-    items: [
-      {
-        id: randomUUID(),
-        name: "机械",
-        color: "#334455",
-        isArchived: false,
-      },
-    ],
-    nextCursor: "tag-next",
-  });
-  expect(tagPage.nextCursor).toBe("tag-next");
-  for (const forbiddenField of [
-    { createdByAccountId: randomUUID() },
-    { createdAt: "2026-08-01T08:00:00.000Z" },
-    { updatedAt: "2026-08-01T08:00:00.000Z" },
-  ]) {
-    const result = tagOptionPageSchema.safeParse({
-      items: [{ ...tagPage.items[0], ...forbiddenField }],
-      nextCursor: null,
-    });
-    expect(
-      result.success,
-      `Tag option accepted ${Object.keys(forbiddenField)[0]}`,
-    ).toBe(false);
-  }
-  expect(
-    tagOptionPageSchema.safeParse({
-      ...tagPage,
-      cursor: "legacy-cursor",
-    }).success,
-  ).toBe(false);
 });
 
 test("S2 structured errors and stale authoritative DTOs are stable and safe", async () => {
@@ -2109,7 +2229,6 @@ function canvasTaskAnchor(taskId: string, nodeTaskId = taskId) {
       canView: true,
       canUpdateMetadata: false,
       canManageMembers: false,
-      canManageTags: false,
       canActivate: false,
       canArchive: false,
       canCreateRevision: false,

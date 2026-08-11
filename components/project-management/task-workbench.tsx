@@ -20,7 +20,6 @@ import {
   submitMilestoneForReview,
 } from "@/app/actions/project-management/milestones";
 import { confirmTermination } from "@/app/actions/project-management/terminations";
-import { searchTagOptions } from "@/app/actions/project-management/options";
 import {
   TaskPlanNodeNavigator,
   type TaskPlanNavigatorNode,
@@ -60,7 +59,6 @@ import type {
 } from "@/lib/project-management/queries/task-queries";
 import type {
   PersonOptionDto,
-  TagOptionPage,
   TaskOptionPage,
 } from "@/lib/project-management/types/time-canvas";
 import type { TaskPendingApproval } from "@/lib/project-management/task-approval-gate";
@@ -92,7 +90,6 @@ export function TaskWorkbench({
   lifecycle,
   people,
   taskOptions,
-  tagOptions,
   projectOptions,
   collaboration,
   timeCanvasModel,
@@ -102,7 +99,6 @@ export function TaskWorkbench({
   lifecycle: TaskLifecycleViews;
   people: PersonOptionDto[];
   taskOptions: TaskOptionPage["items"];
-  tagOptions: TagOptionPage["items"];
   projectOptions: Array<{ id: string; name: string; avatarPath: string | null }>;
   collaboration: CollaborationInitialData;
   timeCanvasModel: TimeCanvasModel;
@@ -278,7 +274,6 @@ export function TaskWorkbench({
                 label="计划结束"
                 value={formatDateTime(termination?.termination?.plannedAt ?? null)}
               />
-              <OverviewItem label="Tags" value={workspace.tags.map((tag) => tag.name).join("、") || "未配置"} />
               <OverviewItem
                 label="关联 Task"
                 value={
@@ -532,7 +527,7 @@ export function TaskWorkbench({
           <DialogHeader>
             <DialogTitle>修改 Task 基本信息</DialogTitle>
             <DialogDescription>
-              基本信息、Tags 与成员通过一次事务统一保存，并继续使用各自的权限和并发校验。
+              基本信息与成员通过一次事务统一保存，并继续使用各自的权限和并发校验。
             </DialogDescription>
           </DialogHeader>
           <ActiveTaskEditor
@@ -540,7 +535,6 @@ export function TaskWorkbench({
             workspace={currentWorkspace}
             people={people}
             taskOptions={taskOptions}
-              tagOptions={tagOptions}
               projectOptions={projectOptions}
             busy={busy}
             runAction={runAction}
@@ -890,7 +884,6 @@ function ActiveTaskEditor({
   workspace,
   people,
   taskOptions,
-  tagOptions,
   projectOptions,
   busy,
   runAction,
@@ -900,7 +893,6 @@ function ActiveTaskEditor({
   workspace: TaskWorkspace;
   people: PersonOptionDto[];
   taskOptions: TaskOptionPage["items"];
-  tagOptions: TagOptionPage["items"];
   projectOptions: Array<{ id: string; name: string; avatarPath: string | null }>;
   busy: boolean;
   runAction: RunAction;
@@ -919,30 +911,6 @@ function ActiveTaskEditor({
   const [peopleOptions, setPeopleOptions] = useState(people);
   const [relatedTaskId, setRelatedTaskId] = useState(workspace.task.relatedTaskId);
   const [projectId, setProjectId] = useState(workspace.task.projectId);
-  const [selectedTags, setSelectedTags] = useState(workspace.tags.map((tag) => tag.id));
-  const [tagChoices, setTagChoices] = useState(tagOptions);
-  const [tagQuery, setTagQuery] = useState("");
-  const [optionLoading, setOptionLoading] = useState(false);
-  const [optionError, setOptionError] = useState("");
-  const availableTags = mergeById(workspace.tags, tagChoices);
-
-  const loadTags = async () => {
-    setOptionLoading(true);
-    setOptionError("");
-    try {
-      const result = await searchTagOptions({ query: tagQuery, includeArchived: false, limit: 50 });
-      if (!result.ok) {
-        setOptionError(result.error.message);
-        return;
-      }
-      setTagChoices(mergeById(tagChoices, result.data.items));
-    } catch {
-      setOptionError("Tag 搜索失败，请稍后重试。");
-    } finally {
-      setOptionLoading(false);
-    }
-  };
-
   return (
     <form
       className="grid gap-5 lg:grid-cols-2"
@@ -966,7 +934,6 @@ function ActiveTaskEditor({
                   projectId,
                 }
               : undefined,
-            tagIds: editable ? selectedTags : undefined,
             members: canManageMembers ? members : undefined,
           }),
           "Task 修改已保存。",
@@ -1017,13 +984,6 @@ function ActiveTaskEditor({
         <Field label="所属 Project">
           <ProjectSelect value={projectId} onValueChange={setProjectId} initialOptions={projectOptions} disabled={!editable} />
         </Field>
-        <div className="space-y-2">
-          <span className="text-sm font-medium">Tags</span>
-          {editable && <div className="flex gap-2"><Input aria-label="搜索 Tag" value={tagQuery} onChange={(event) => setTagQuery(event.target.value)} /><Button type="button" variant="outline" disabled={optionLoading} onClick={() => void loadTags()}>搜索</Button></div>}
-          <div className="flex flex-wrap gap-2">
-            {availableTags.map((tag) => <label key={tag.id} className="flex items-center gap-1 rounded border border-border px-2 py-1 text-sm"><input type="checkbox" checked={selectedTags.includes(tag.id)} disabled={!editable} onChange={(event) => setSelectedTags(event.target.checked ? [...selectedTags, tag.id] : selectedTags.filter((id) => id !== tag.id))} />{tag.name}</label>)}
-          </div>
-        </div>
       </section>
 
       <section className="space-y-3 rounded-xl border border-border p-4">
@@ -1038,7 +998,6 @@ function ActiveTaskEditor({
             setPeopleOptions((current) => mergeById(current, [person]))
           }
         />
-        {optionError && <p className="text-sm text-destructive" role="alert">{optionError}</p>}
       </section>
 
       <div className="flex justify-end border-t border-border pt-4 lg:col-span-2">

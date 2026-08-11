@@ -9,9 +9,6 @@ import type { Prisma } from "@prisma/client";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 
 export const PROJECT_MANAGEMENT_ACTIONS = [
-  "tag.create",
-  "tag.update",
-  "tag.delete",
   "project.create",
   "project.view",
   "project.update",
@@ -72,11 +69,6 @@ export type AuthorizationTaskResource = {
   members?: AuthorizationMember[];
 };
 
-export type AuthorizationTagResource = {
-  type: "tag";
-  createdByAccountId?: string | null;
-};
-
 export type AuthorizationProjectResource = {
   type: "project";
   id?: string;
@@ -104,7 +96,6 @@ export type AuthorizationAuditResource = {
 export type AuthorizationResource =
   | AuthorizationTaskResource
   | AuthorizationProjectResource
-  | AuthorizationTagResource
   | AuthorizationSegmentResource
   | AuthorizationAuditResource
   | { type: "system"; team?: string; techGroup?: string };
@@ -132,9 +123,6 @@ export function authorize({
     return allow("global_administrator");
   }
 
-  if (resource.type === "tag") {
-    return authorizeTag(actor, action, resource);
-  }
   if (resource.type === "project") {
     return authorizeProject(actor, action, resource);
   }
@@ -214,21 +202,6 @@ export function assertAuthorized(input: {
   if (!decision.allowed) {
     throw new ProjectManagementAuthorizationError(input.action, decision.reason);
   }
-}
-
-function authorizeTag(
-  actor: ProjectManagementActor,
-  action: ProjectManagementAction,
-  resource: AuthorizationTagResource,
-): AuthorizationDecision {
-  if (action === "tag.create") return allow("authenticated");
-  if (
-    (action === "tag.update" || action === "tag.delete") &&
-    resource.createdByAccountId === actor.accountId
-  ) {
-    return allow("tag_creator");
-  }
-  return deny("tag_does_not_grant_task_permission");
 }
 
 function authorizeSegment(
@@ -374,13 +347,6 @@ export function segmentReadableWhere(
 ): Prisma.WorkSegmentWhereInput {
   void actor;
   return { deletedAt: null };
-}
-
-export function tagReadableWhere(
-  actor: ProjectManagementActor,
-): Prisma.TagWhereInput {
-  void actor;
-  return { archivedAt: null };
 }
 
 export function auditReadableWhere(

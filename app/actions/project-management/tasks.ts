@@ -14,7 +14,6 @@ import {
   replaceTaskDraftMembers as replaceTaskDraftMembersService,
   replaceTaskDraftPlan as replaceTaskDraftPlanService,
   replaceTaskMembers as replaceTaskMembersService,
-  replaceTaskTags as replaceTaskTagsService,
   updateActiveTask as updateActiveTaskService,
   updateTaskDraft as updateTaskDraftService,
   updateTaskDraftMetadata as updateTaskDraftMetadataService,
@@ -172,21 +171,6 @@ export async function replaceTaskMembers(
     "replaceTaskMembers",
     input,
     replaceTaskMembersService,
-  );
-}
-
-export async function replaceTaskTags(
-  input: unknown,
-): Promise<
-  ProjectManagementActionResult<
-    Awaited<ReturnType<typeof replaceTaskTagsService>>
-  >
-> {
-  return runTaskMutationAction(
-    "pm.task.tags.replace",
-    "replaceTaskTags",
-    input,
-    replaceTaskTagsService,
   );
 }
 

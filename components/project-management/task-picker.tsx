@@ -27,7 +27,6 @@ const EMPTY_TASK_OPTIONS: TaskPickerOption[] = [];
 
 export type TaskPickerFilters = {
   statuses?: TaskPickerOption["status"][];
-  tagIds?: string[];
   mine?: boolean;
   projectCandidates?: boolean;
 };
@@ -134,8 +133,7 @@ export function TaskMultiSelect({
 function useTaskPicker(filters: TaskPickerFilters, initialOptions: TaskPickerOption[]) {
   const [, setOptionRevision] = useState(0);
   const statusesKey = [...(filters.statuses ?? [])].sort().join(",");
-  const tagIdsKey = [...(filters.tagIds ?? [])].sort().join(",");
-  const scopeKey = `${statusesKey}|${tagIdsKey}|${filters.mine ? "mine" : "all"}|${filters.projectCandidates ? "project-candidates" : "all-projects"}`;
+  const scopeKey = `${statusesKey}|${filters.mine ? "mine" : "all"}|${filters.projectCandidates ? "project-candidates" : "all-projects"}`;
   const decorate = useCallback(
     (options: TaskOptionPage["items"]): TaskPickerOption[] =>
       options.map((option) => {
@@ -171,7 +169,6 @@ function useTaskPicker(filters: TaskPickerFilters, initialOptions: TaskPickerOpt
         statuses: statusesKey
           ? (statusesKey.split(",") as TaskPickerOption["status"][])
           : undefined,
-        tagIds: tagIdsKey ? tagIdsKey.split(",") : undefined,
         mine: filters.mine,
         projectCandidates: filters.projectCandidates,
         cursor,
@@ -185,7 +182,7 @@ function useTaskPicker(filters: TaskPickerFilters, initialOptions: TaskPickerOpt
       setOptionRevision((current) => current + 1);
       return { ...result.data, items };
     },
-    [decorate, filters.mine, filters.projectCandidates, tagIdsKey, statusesKey],
+    [decorate, filters.mine, filters.projectCandidates, statusesKey],
   );
   const resolveOptions = useCallback(async (ids: string[]) => {
     const result = await resolveTaskOptionsByIds({ ids, projectCandidates: filters.projectCandidates });

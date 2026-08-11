@@ -10,7 +10,6 @@ import { toProjectManagementServiceError } from "@/lib/project-management/applic
 import { isoToShanghaiDateTimeLocal } from "@/lib/project-management/date-time";
 import {
   getActorPersonOption,
-  listTagOptions,
   resolvePeopleOptionsByIds,
   resolveTaskOptionsByIds,
   searchPeople,
@@ -53,7 +52,6 @@ export default async function ProgressTaskEditPage({
     currentPeople,
     taskPage,
     currentRelatedTasks,
-    tagPage,
     projectOptions,
   ] = await Promise.all([
     getActorPersonOption(actor),
@@ -70,7 +68,6 @@ export default async function ProgressTaskEditPage({
     resolveVisiblePeople(actor, memberIds),
     searchTaskOptions({ actor, input: { limit: 50 } }),
     resolveTaskOptionsByIds({ actor, input: { ids: relatedTaskIds } }),
-    listTagOptions({ actor, input: { limit: 50 } }),
     listActiveProjectOptions(workspace.task.projectId),
   ]);
   const people = mergeById(
@@ -82,7 +79,6 @@ export default async function ProgressTaskEditPage({
     currentRelatedTasks,
     taskPage.items.filter((task) => task.id !== id),
   );
-  const tags = mergeById(workspace.tags, tagPage.items);
   const seed = editSeed(workspace);
   const deploymentEnvironment =
     process.env.NEXT_PUBLIC_APP_URL?.trim() ||
@@ -101,7 +97,6 @@ export default async function ProgressTaskEditPage({
         initialSeed={seed}
         initialPeople={people}
         initialTasks={tasks}
-        initialTags={tags}
         initialProjects={projectOptions}
         actorPersonId={actor.personId}
         mode={{
@@ -160,7 +155,6 @@ function editSeed(workspace: TaskWorkspace): TaskComposerSeed {
     team: workspace.task.team,
     techGroup: workspace.task.techGroup,
     priority: workspace.task.priority,
-    tagIds: workspace.tags.map((tag) => tag.id),
     relatedTaskId: workspace.task.relatedTaskId,
     projectId: workspace.task.projectId,
     members: workspace.members.flatMap((member) =>

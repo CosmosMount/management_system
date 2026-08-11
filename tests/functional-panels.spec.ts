@@ -53,10 +53,10 @@ test.describe("普通用户主功能面板", () => {
     await page.goto("/", { waitUntil: "networkidle" });
     await page
       .getByRole("link", {
-        name: /项目管理 Task 工作台、人员计划与站内通知/,
+        name: /项目管理 Task 工作台、资源计划与站内通知/,
       })
       .click();
-    await expect(page).toHaveURL(/\/progress$/);
+    await expect.poll(() => new URL(page.url()).pathname).toBe("/progress");
     await expect(page.getByRole("heading", { name: "我的工作" })).toBeVisible();
     await expectHealthyPage(page);
 
@@ -68,7 +68,7 @@ test.describe("普通用户主功能面板", () => {
     await expectHealthyPage(page);
 
     await page.goto("/progress/kanban", { waitUntil: "networkidle" });
-    await expect(page).toHaveURL(/\/progress$/);
+    await expect.poll(() => new URL(page.url()).pathname).toBe("/progress");
     await expect(page.getByRole("heading", { name: "我的工作" })).toBeVisible();
     await expectHealthyPage(page);
 

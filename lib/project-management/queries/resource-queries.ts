@@ -4,7 +4,6 @@ import { prisma } from "@/lib/prisma";
 import {
   authorize,
   segmentReadableWhere,
-  tagReadableWhere,
   taskReadableWhere,
   type AuthorizationTaskResource,
 } from "@/lib/project-management/authorization";
@@ -37,11 +36,6 @@ const segmentTaskSelect = {
 const segmentQueryInclude = {
   person: { select: { displayName: true } },
   task: { select: segmentTaskSelect },
-  tags: {
-    select: {
-      tag: { select: { id: true, name: true, color: true } },
-    },
-  },
   plannedSources: {
     select: {
       id: true,
@@ -170,7 +164,7 @@ export async function listWorkSegmentChanges({
   });
   const page = rows.slice(0, parsed.limit);
   const referencedIds = collectHistoryReferenceIds(page);
-  const [people, tasks, tags] = await Promise.all([
+  const [people, tasks] = await Promise.all([
     prisma.person.findMany({
       where: { id: { in: [...referencedIds.personIds] } },
       select: { id: true, displayName: true },
@@ -184,20 +178,10 @@ export async function listWorkSegmentChanges({
       },
       select: { id: true, title: true },
     }),
-    prisma.tag.findMany({
-      where: {
-        AND: [
-          { id: { in: [...referencedIds.tagIds] } },
-          tagReadableWhere(actor),
-        ],
-      },
-      select: { id: true, name: true },
-    }),
   ]);
   const names: WorkSegmentHistoryNames = {
     people: new Map(people.map((person) => [person.id, person.displayName])),
     tasks: new Map(tasks.map((task) => [task.id, task.title])),
-    tags: new Map(tags.map((tag) => [tag.id, tag.name])),
   };
   return {
     items: page.map((row) => formatWorkSegmentChange(row, names)),
@@ -214,7 +198,6 @@ type HistoryRow = Prisma.WorkSegmentChangeGetPayload<{
 export type WorkSegmentHistoryNames = {
   people: Map<string, string>;
   tasks: Map<string, string>;
-  tags: Map<string, string>;
 };
 
 export type WorkSegmentHistoryFormatterRow = {
@@ -238,7 +221,6 @@ const historyFieldLabels = {
   actualOutput: "实际输出",
   taskId: "Task",
   status: "状态",
-  tagIds: "Tag",
 } as const;
 
 export function formatWorkSegmentChange(
@@ -291,7 +273,6 @@ export function formatWorkSegmentChange(
 function collectHistoryReferenceIds(rows: HistoryRow[]) {
   const personIds = new Set<string>();
   const taskIds = new Set<string>();
-  const tagIds = new Set<string>();
   for (const row of rows) {
     for (const value of [jsonObject(row.before), jsonObject(row.after)]) {
       if (!value) continue;
@@ -299,10 +280,9 @@ function collectHistoryReferenceIds(rows: HistoryRow[]) {
       const taskId = stringValue(value.taskId);
       if (personId) personIds.add(personId);
       if (taskId) taskIds.add(taskId);
-      for (const tagId of stringArray(value.tagIds)) tagIds.add(tagId);
     }
   }
-  return { personIds, taskIds, tagIds };
+  return { personIds, taskIds };
 }
 
 function formatHistoryValue(
@@ -317,10 +297,6 @@ function formatHistoryValue(
   if (field === "taskId") {
     const id = stringValue(value);
     return id ? names.tasks.get(id) ?? "不可见对象" : "独立投入";
-  }
-  if (field === "tagIds") {
-    const values = stringArray(value).map((id) => names.tags.get(id) ?? "不可见对象");
-    return values.length > 0 ? values.join("、") : "无";
   }
   if (field === "startAt" || field === "endAt") {
     const date = stringValue(value);
@@ -351,12 +327,6 @@ function jsonObject(value: Prisma.JsonValue | null): Prisma.JsonObject | null {
 
 function stringValue(value: Prisma.JsonValue | undefined) {
   return typeof value === "string" ? value : "";
-}
-
-function stringArray(value: Prisma.JsonValue | undefined) {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string")
-    : [];
 }
 
 function formatHistoryDate(value: string) {
@@ -435,11 +405,9 @@ function toWorkSegmentDetailDto(
         status: "ACTIVE",
         accountId: null,
       },
-      tags: segment.tags.map((entry) => ({ tagId: entry.tag.id })),
     }),
     personName: segment.person.displayName,
     task,
-    tags: segment.tags.map((entry) => entry.tag),
     plannedSources: segment.plannedSources
       .filter((source) => sourceSegmentVisible(actor, source.actualSegment))
       .map((source) => ({

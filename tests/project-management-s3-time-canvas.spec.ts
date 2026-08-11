@@ -594,7 +594,6 @@ test.describe("S3 TimeCanvas pure core", () => {
             canView: true,
             canUpdateMetadata: true,
             canManageMembers: true,
-            canManageTags: true,
             canActivate: false,
             canArchive: false,
             canCreateRevision: true,

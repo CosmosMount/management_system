@@ -2,10 +2,6 @@ import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import { prisma } from "../lib/prisma";
 import {
-  deleteTag,
-  updateTag,
-} from "../lib/project-management/application/tag-service";
-import {
   runMilestoneDeadlineScan,
   runProjectManagementIntegrityScan,
   runProjectManagementNotificationRetention,
@@ -20,13 +16,12 @@ import { toProjectManagementServiceError } from "../lib/project-management/appli
 import type { ProjectManagementActor } from "../lib/project-management/identity";
 import { getActionInbox } from "../lib/project-management/queries/action-inbox-queries";
 import { getMyWorkDashboard } from "../lib/project-management/queries/dashboard-queries";
-import { listTags } from "../lib/project-management/queries/tag-queries";
 import {
   getPersonalDueSegments,
   getTimeCanvasData,
 } from "../lib/project-management/queries/time-canvas-queries";
 
-test.describe("project management S8 dashboard, tags and notifications", () => {
+test.describe("project management S8 dashboard and notifications", () => {
   test("Action Inbox filters by permission and sorts overdue work first", async () => {
     const user = await createActor("S8 Inbox");
     const other = await createActor("S8 Other");
@@ -276,118 +271,6 @@ test.describe("project management S8 dashboard, tags and notifications", () => {
     expect(dashboard.activeTaskCount).toBe(13);
     expect(inbox.items).toHaveLength(20);
     expect(inbox.totalCount).toBe(21);
-  });
-
-  test("Tag deletion removes only classification links and writes an audit", async () => {
-    const user = await createActor("S8 Tag Owner");
-    const fixture = await createActiveTaskWithMilestone(user, new Date("2026-08-10T02:00:00.000Z"));
-    const tag = await prisma.tag.create({
-      data: {
-        name: `S8-delete-${randomUUID()}`,
-        color: "#64748b",
-        createdByAccountId: user.accountId,
-        taskTags: { create: { taskId: fixture.taskId } },
-      },
-    });
-    const result = await deleteTag(user, {
-      tagId: tag.id,
-      expectedUpdatedAt: tag.updatedAt.toISOString(),
-    });
-    expect(result.removedTaskAssociationCount).toBe(1);
-    await expect(prisma.task.findUnique({ where: { id: fixture.taskId } })).resolves.not.toBeNull();
-    await expect(prisma.tag.findUnique({ where: { id: tag.id } })).resolves.toBeNull();
-    await expect(
-      prisma.domainAuditEvent.count({
-        where: { action: "tag.deleted", entityId: tag.id },
-      }),
-    ).resolves.toBe(1);
-  });
-
-  test("Tag writes recheck current administrator roles inside the transaction", async () => {
-    const administrator = await createActor("S8 revoked tag administrator");
-    const owner = await createActor("S8 other tag owner");
-    const assignment = await prisma.systemRoleAssignment.create({
-      data: {
-        accountId: administrator.accountId,
-        role: "PROJECT_ADMINISTRATOR",
-      },
-    });
-    const staleAdministrator: ProjectManagementActor = {
-      ...administrator,
-      systemRoles: [
-        { role: "PROJECT_ADMINISTRATOR", team: "", techGroup: "" },
-      ],
-    };
-    const tag = await prisma.tag.create({
-      data: {
-        name: `S8-revoked-${randomUUID()}`,
-        color: "#64748b",
-        createdByAccountId: owner.accountId,
-      },
-    });
-    await prisma.systemRoleAssignment.update({
-      where: { id: assignment.id },
-      data: { revokedAt: new Date() },
-    });
-    await expect(
-      updateTag(staleAdministrator, {
-        tagId: tag.id,
-        expectedUpdatedAt: tag.updatedAt.toISOString(),
-        name: "撤权后不应更新",
-        color: "#64748b",
-        description: "",
-      }),
-    ).rejects.toThrow("你没有执行此操作的权限");
-  });
-
-  test("Tag management paginates beyond 100 records and stale deletion is atomic", async () => {
-    const user = await createActor("S8 Tag paging");
-    const prefix = `S8-page-${randomUUID()}`;
-    await prisma.tag.createMany({
-      data: Array.from({ length: 101 }, (_, index) => ({
-        name: `${prefix}-${String(index).padStart(3, "0")}`,
-        color: "#64748b",
-        createdByAccountId: user.accountId,
-      })),
-    });
-    const firstPage = await listTags({
-      actor: user,
-      input: { includeArchived: true, query: prefix, limit: 100 },
-    });
-    expect(firstPage.items).toHaveLength(100);
-    expect(firstPage.nextCursor).toBeTruthy();
-    const secondPage = await listTags({
-      actor: user,
-      input: {
-        includeArchived: true,
-        query: prefix,
-        limit: 100,
-        cursor: firstPage.nextCursor,
-      },
-    });
-    expect(secondPage.items).toHaveLength(1);
-    expect(secondPage.nextCursor).toBeNull();
-
-    const staleTarget = firstPage.items[0];
-    if (!staleTarget) throw new Error("Tag 分页测试缺少首条记录");
-    await prisma.tag.update({
-      where: { id: staleTarget.id },
-      data: { description: "并发更新" },
-    });
-    await expect(
-      deleteTag(user, {
-        tagId: staleTarget.id,
-        expectedUpdatedAt: staleTarget.updatedAt,
-      }),
-    ).rejects.toThrow("Tag 已被他人修改");
-    await expect(
-      prisma.domainAuditEvent.count({
-        where: { action: "tag.deleted", entityId: staleTarget.id },
-      }),
-    ).resolves.toBe(0);
-    await expect(
-      prisma.tag.findUnique({ where: { id: staleTarget.id } }),
-    ).resolves.not.toBeNull();
   });
 
   test("ordinary Feishu preference is honored while in-app and mandatory delivery remain", async () => {

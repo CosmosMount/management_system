@@ -56,7 +56,6 @@ test.describe("project management S3 shell", () => {
           "/progress/resources",
           "/progress/approvals",
           "/progress/notifications",
-          "/progress/tags",
         ]);
 
       const collapseButton = page.getByRole("button", {
@@ -213,7 +212,6 @@ async function createShellFixture() {
       team: "英雄",
       techGroup: "电控",
       priority: "MEDIUM",
-      tagIds: [],
       members: [{ personId: account.person.id, role: "OWNER" }],
       plannedStartAt: plannedStartAt.toISOString(),
       milestones: [

@@ -7,7 +7,6 @@ import {
 import { getCurrentProjectManagementActor } from "@/lib/project-management/identity";
 import { getMyWorkDashboard as getMyWorkDashboardQuery } from "@/lib/project-management/queries/dashboard-queries";
 import {
-  listTagOptions as listTagOptionsQuery,
   searchPeople as searchPeopleQuery,
   searchTaskOptions as searchTaskOptionsQuery,
 } from "@/lib/project-management/queries/option-queries";
@@ -76,16 +75,6 @@ export async function searchTaskOptions(
     "searchTaskOptions",
     input,
     (actor, value) => searchTaskOptionsQuery({ actor, input: value }),
-  );
-}
-
-export async function listTagOptions(
-  input: unknown,
-): Promise<
-  ProjectManagementActionResult<Awaited<ReturnType<typeof listTagOptionsQuery>>>
-> {
-  return runCanvasAction("pm.canvas.tags.list", "listTagOptions", input, (actor, value) =>
-    listTagOptionsQuery({ actor, input: value }),
   );
 }
 

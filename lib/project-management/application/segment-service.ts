@@ -73,7 +73,6 @@ const segmentInclude = {
       },
     },
   },
-  tags: { select: { tagId: true } },
 } satisfies Prisma.WorkSegmentInclude;
 
 type SegmentForMutation = Prisma.WorkSegmentGetPayload<{
@@ -96,7 +95,6 @@ export type WorkSegmentDto = {
   taskId: string | null;
   sourceSplitFromId: string | null;
   deletedAt: string | null;
-  tagIds: string[];
   createdAt: string;
   updatedAt: string;
 };
@@ -258,9 +256,6 @@ export async function updateWorkSegment(
         requireCreatableTask: true,
       });
     }
-    const tagIds = parsed.tagIds ?? tagIdsOf(segment);
-    await assertTagsActiveTx(tx, tagIds);
-
     const before = snapshotSegment(segment);
     const updated = await tx.workSegment.update({
       where: { id: segment.id },
@@ -282,7 +277,6 @@ export async function updateWorkSegment(
       },
       include: segmentInclude,
     });
-    await replaceSegmentTagsTx(tx, updated.id, tagIds);
     const reloaded = await loadSegmentForMutationTx(tx, updated.id);
     await recordSegmentChangeTx(tx, {
       actor: refreshedActor,
@@ -432,7 +426,6 @@ export async function mergePlannedSegments(
       first.endAt,
     );
     assertValidSegmentRange(startAt, endAt);
-    const tagIds = tagIdsOf(first);
     const merged = await tx.workSegment.create({
       data: {
         personId: first.personId,
@@ -448,7 +441,6 @@ export async function mergePlannedSegments(
         taskId: first.taskId,
         createdByAccountId: refreshedActor.accountId,
         updatedByAccountId: refreshedActor.accountId,
-        tags: { create: tagIds.map((tagId) => ({ tagId })) },
       },
       include: segmentInclude,
     });
@@ -982,7 +974,6 @@ async function createWorkSegmentTx(
     taskId: input.taskId ?? null,
     requireCreatableTask: true,
   });
-  await assertTagsActiveTx(tx, input.tagIds);
   await assertCanManageNewSegment(tx, actor, input);
 
   const created = await tx.workSegment.create({
@@ -1000,7 +991,6 @@ async function createWorkSegmentTx(
       taskId: input.taskId ?? null,
       createdByAccountId: actor.accountId,
       updatedByAccountId: actor.accountId,
-      tags: { create: input.tagIds.map((tagId) => ({ tagId })) },
     },
     include: segmentInclude,
   });
@@ -1029,7 +1019,6 @@ async function createActualSegmentTx(
     taskId: input.taskId ?? null,
     requireCreatableTask: true,
   });
-  await assertTagsActiveTx(tx, input.tagIds);
   await assertCanManageNewSegment(tx, actor, input);
 
   const sources = await lockAndValidateActualSourcesTx(
@@ -1053,7 +1042,6 @@ async function createActualSegmentTx(
       taskId: input.taskId ?? null,
       createdByAccountId: actor.accountId,
       updatedByAccountId: actor.accountId,
-      tags: { create: input.tagIds.map((tagId) => ({ tagId })) },
     },
     include: segmentInclude,
   });
@@ -1202,8 +1190,6 @@ async function createActualFromPlannedTx(
     confirmOriginal: "CONFIRMED" | "CANCELLED";
   },
 ): Promise<SegmentForMutation> {
-  const tagIds = input.actualInput.tagIds ?? tagIdsOf(input.planned);
-  await assertTagsActiveTx(tx, tagIds);
   const actualStartAt = input.actualInput.startAt ?? input.coveredStartAt;
   const actualEndAt = input.actualInput.endAt ?? input.coveredEndAt;
   assertValidSegmentRange(actualStartAt, actualEndAt);
@@ -1233,7 +1219,6 @@ async function createActualFromPlannedTx(
       taskId: actualTaskId,
       createdByAccountId: input.actor.accountId,
       updatedByAccountId: input.actor.accountId,
-      tags: { create: tagIds.map((tagId) => ({ tagId })) },
     },
     include: segmentInclude,
   });
@@ -1298,7 +1283,6 @@ async function createRemainingSegmentsAfterPartialConfirmTx(
     { startAt: input.planned.startAt, endAt: input.coveredStartAt },
     { startAt: input.coveredEndAt, endAt: input.planned.endAt },
   ].filter((range) => range.endAt > range.startAt);
-  const tagIds = tagIdsOf(input.planned);
   const remaining: SegmentForMutation[] = [];
   for (const range of ranges) {
     const child = await tx.workSegment.create({
@@ -1317,7 +1301,6 @@ async function createRemainingSegmentsAfterPartialConfirmTx(
         sourceSplitFromId: input.planned.id,
         createdByAccountId: input.actor.accountId,
         updatedByAccountId: input.actor.accountId,
-        tags: { create: tagIds.map((tagId) => ({ tagId })) },
       },
       include: segmentInclude,
     });
@@ -1584,32 +1567,6 @@ async function assertPersonActiveTx(tx: PrismaTx, personId: string) {
   }
 }
 
-async function assertTagsActiveTx(tx: PrismaTx, tagIds: string[]) {
-  const uniqueTagIds = [...new Set(tagIds)];
-  if (uniqueTagIds.length === 0) return;
-  const tagCount = await tx.tag.count({
-    where: { id: { in: uniqueTagIds }, archivedAt: null },
-  });
-  if (tagCount !== uniqueTagIds.length) {
-    throw validationError("Tag 不存在或已归档", {
-      tagIds: ["Tag 不存在或已归档"],
-    });
-  }
-}
-
-async function replaceSegmentTagsTx(
-  tx: PrismaTx,
-  segmentId: string,
-  tagIds: string[],
-) {
-  await tx.segmentTag.deleteMany({ where: { segmentId } });
-  if (tagIds.length === 0) return;
-  await tx.segmentTag.createMany({
-    data: [...new Set(tagIds)].map((tagId) => ({ segmentId, tagId })),
-    skipDuplicates: true,
-  });
-}
-
 async function recordSegmentChangeTx(
   tx: PrismaTx,
   input: {
@@ -1736,7 +1693,6 @@ function assertMergeCompatible(segments: SegmentForMutation[]) {
   const first = segments[0];
   if (!first) throw validationError("至少选择两条 Planned Segment");
   let currentEnd = first.endAt;
-  const firstTagKey = tagIdsOf(first).join("|");
   for (const segment of segments) {
     if (
       segment.personId !== first.personId ||
@@ -1744,11 +1700,10 @@ function assertMergeCompatible(segments: SegmentForMutation[]) {
       segment.content !== first.content ||
       segment.priority !== first.priority ||
       segment.taskId !== first.taskId ||
-      segment.expectedOutput !== first.expectedOutput ||
-      tagIdsOf(segment).join("|") !== firstTagKey
+      segment.expectedOutput !== first.expectedOutput
     ) {
-      throw validationError("只能合并同人同语义且 Tag 一致的 Planned Segment", {
-        segments: ["只能合并同人同语义且 Tag 一致的 Planned Segment"],
+      throw validationError("只能合并同人同语义的 Planned Segment", {
+        segments: ["只能合并同人同语义的 Planned Segment"],
       });
     }
     if (segment !== first && segment.startAt > currentEnd) {
@@ -1787,10 +1742,6 @@ function plannedStatusAfterMove(
   return segment.status;
 }
 
-function tagIdsOf(segment: Pick<SegmentForMutation, "tags">) {
-  return segment.tags.map((tag) => tag.tagId).sort();
-}
-
 function snapshotSegment(segment: SegmentForMutation): Prisma.InputJsonObject {
   return {
     id: segment.id,
@@ -1806,7 +1757,6 @@ function snapshotSegment(segment: SegmentForMutation): Prisma.InputJsonObject {
     taskId: segment.taskId,
     sourceSplitFromId: segment.sourceSplitFromId,
     deletedAt: segment.deletedAt?.toISOString() ?? null,
-    tagIds: tagIdsOf(segment),
     updatedAt: segment.updatedAt.toISOString(),
   };
 }
@@ -1826,7 +1776,6 @@ export function toWorkSegmentDto(segment: SegmentForMutation): WorkSegmentDto {
     taskId: segment.taskId,
     sourceSplitFromId: segment.sourceSplitFromId,
     deletedAt: segment.deletedAt?.toISOString() ?? null,
-    tagIds: tagIdsOf(segment),
     createdAt: segment.createdAt.toISOString(),
     updatedAt: segment.updatedAt.toISOString(),
   };

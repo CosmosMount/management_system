@@ -128,7 +128,6 @@ function baseSeed({
     team: workspace.task.team,
     techGroup: workspace.task.techGroup,
     priority: workspace.task.priority,
-    tagIds: workspace.tags.map((tag) => tag.id),
     relatedTaskId: workspace.task.relatedTaskId,
     projectId: workspace.task.projectId,
     members: workspace.members.flatMap(({ personId, role }) =>

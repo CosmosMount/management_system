@@ -79,6 +79,7 @@ import {
   workSegmentTypeLabels,
 } from "@/lib/project-management/labels";
 import type { WorkSegmentDetail } from "@/lib/project-management/queries/resource-queries";
+import { removeRetiredResourcePlanSearchParams } from "@/lib/project-management/resource-plan-url";
 import type {
   PersonOptionDto,
   TaskOptionPage,
@@ -239,6 +240,7 @@ export function ResourcePlannerCanvasClient({
       segments: cachedSegments
         .filter(
           (segment) =>
+            mode === "RESOURCE_PLANNER" ||
             segment.type !== "PLANNED" ||
             (segment.status !== "CONFIRMED" && segment.status !== "CANCELLED"),
         )
@@ -261,7 +263,7 @@ export function ResourcePlannerCanvasClient({
         ),
     };
     },
-    [adaptiveBlockQuery, cachedBlocks, cachedSegments, createDraft, initialModel, readOnly],
+    [adaptiveBlockQuery, cachedBlocks, cachedSegments, createDraft, initialModel, mode, readOnly],
   );
   const initialSelection = useMemo<TimeCanvasSelection>(() => {
     if (!initialFocusId) return null;
@@ -294,6 +296,8 @@ export function ResourcePlannerCanvasClient({
     initialZoom ?? "WEEK",
   );
   const externalInitialZoomRef = useRef(initialZoom);
+  const externalInitialCenterRef = useRef(initialCenterMs);
+  const initialViewportUrlCenterRef = useRef(initialCenterMs);
   const [pendingPlannedRange, setPendingPlannedRange] =
     useState<PendingPlannedRange | null>(null);
   const [dialogDirty, setDialogDirty] = useState(false);
@@ -323,12 +327,22 @@ export function ResourcePlannerCanvasClient({
   const activeModelRef = useRef(initialModel);
   const incomingModelRef = useRef(incomingModel);
   const dialogDirtyRef = useRef(dialogDirty);
+  const updateDialogDirty = useCallback((dirty: boolean) => {
+    dialogDirtyRef.current = dirty;
+    setDialogDirty(dirty);
+  }, []);
   const adaptiveRefreshStateRef = useRef<"IDLE" | "DEFERRED" | "REFRESHING">("IDLE");
   const previousInitialFocusRef = useRef(initialFocusId);
   const centerNavigationTargetRef = useRef<number | null>(null);
+  const draftViewportCenterRef = useRef<number | null>(null);
+  const plannedMutationViewportCenterRef = useRef<number | null>(null);
   const viewportUrlTimerRef = useRef<number | null>(null);
   const staleRefreshFocusRef = useRef<string | null>(null);
-  const handleViewportChange = useCallback((nextViewport: TimeCanvasRange) => {
+  const handleViewportChange = useCallback((
+    nextViewport: TimeCanvasRange,
+    source: "LAYOUT" | "USER",
+  ) => {
+    viewportRangeRef.current = nextViewport;
     const navigationTarget = centerNavigationTargetRef.current;
     if (
       navigationTarget !== null &&
@@ -336,6 +350,16 @@ export function ResourcePlannerCanvasClient({
       navigationTarget < nextViewport.endMs
     ) {
       centerNavigationTargetRef.current = null;
+    }
+    if (source === "USER") {
+      const nextCenter = (nextViewport.startMs + nextViewport.endMs) / 2;
+      if (draftViewportCenterRef.current !== null) {
+        draftViewportCenterRef.current = nextCenter;
+      }
+      if (plannedMutationViewportCenterRef.current !== null) {
+        plannedMutationViewportCenterRef.current = nextCenter;
+      }
+      initialViewportUrlCenterRef.current = undefined;
     }
     setViewportRange(nextViewport);
   }, []);
@@ -383,6 +407,17 @@ export function ResourcePlannerCanvasClient({
     return () => window.clearTimeout(timer);
   }, [initialZoom]);
   useEffect(() => {
+    if (Object.is(externalInitialCenterRef.current, initialCenterMs)) return;
+    externalInitialCenterRef.current = initialCenterMs;
+    const urlCenter = viewportCenterFromCurrentUrl();
+    initialViewportUrlCenterRef.current = centerFallsWithinRange(
+      urlCenter,
+      incomingModel.fullRange ?? incomingModel.range,
+    )
+      ? urlCenter
+      : initialCenterMs;
+  }, [incomingModel, initialCenterMs]);
+  useEffect(() => {
     if (!createDraft) return;
     const handleEscape = (event: globalThis.KeyboardEvent) => {
       if (
@@ -408,6 +443,7 @@ export function ResourcePlannerCanvasClient({
       }
       event.preventDefault();
       setCreateDraft(null);
+      draftViewportCenterRef.current = null;
       setCreateDraftDirty(false);
       setNotice({ kind: "info", message: "已取消待创建投入。" });
     };
@@ -429,7 +465,7 @@ export function ResourcePlannerCanvasClient({
   }, [dialogDirty, incomingModel, initialModel.rowPageKey, openSegmentId, selection, viewportRange]);
   useEffect(() => {
     if (incomingModel === initialModel) return;
-    if (dialogDirty) {
+    if (dialogDirtyRef.current) {
       const timer = window.setTimeout(() => {
         setNotice({
           kind: "error",
@@ -453,6 +489,15 @@ export function ResourcePlannerCanvasClient({
     handledConflictRef.current = "";
     capacityViewportSignatureRef.current = "";
     rowPageKeyRef.current = initialModel.rowPageKey;
+    if (persistViewportInUrl) {
+      const urlCenter = viewportCenterFromCurrentUrl();
+      initialViewportUrlCenterRef.current = centerFallsWithinRange(
+        urlCenter,
+        initialModel.fullRange ?? initialModel.range,
+      )
+        ? urlCenter
+        : initialCenterMs;
+    }
     setCachedBlocks(nextBlocks);
     setFailedBlocks(createInitialFailedBlocks(initialModel));
     setViewportRange(initialModel.loadedRanges?.[0] ?? initialModel.range);
@@ -476,7 +521,7 @@ export function ResourcePlannerCanvasClient({
         ) ?? null
       : null;
     setOpenSegmentId(focusedSegment?.id ?? null);
-    setDialogDirty(false);
+    updateDialogDirty(false);
     setDetail(null);
     setDetailRange(null);
     setChanges([]);
@@ -486,7 +531,7 @@ export function ResourcePlannerCanvasClient({
     setHistoryError("");
     setDetailError("");
     setDetailState(focusedSegment ? "LOADING" : "IDLE");
-  }, [effectiveInitialSelection, initialModel]);
+  }, [effectiveInitialSelection, initialCenterMs, initialModel, persistViewportInUrl, updateDialogDirty]);
   useEffect(() => {
     if (
       dialogDirty ||
@@ -527,7 +572,7 @@ export function ResourcePlannerCanvasClient({
           ) ?? null
         : null;
       setOpenSegmentId(focusedSegment?.id ?? null);
-      setDialogDirty(false);
+      updateDialogDirty(false);
       setDetail(null);
       setDetailRange(null);
       setChanges([]);
@@ -539,7 +584,7 @@ export function ResourcePlannerCanvasClient({
       setDetailState(focusedSegment ? "LOADING" : "IDLE");
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [dialogDirty, effectiveInitialSelection, incomingModel, initialFocusId, initialModel]);
+  }, [dialogDirty, effectiveInitialSelection, incomingModel, initialFocusId, initialModel, updateDialogDirty]);
   useEffect(() => {
     const signature = cachedMerge.conflictBlockKeys.join("|");
     if (!signature) {
@@ -585,11 +630,19 @@ export function ResourcePlannerCanvasClient({
   }, [cachedMerge.conflictBlockKeys, dialogDirty, incomingModel, initialModel, router]);
   useEffect(() => {
     if (!persistViewportInUrl || centerNavigationTargetRef.current !== null) return;
+    const preservedCenter = createDraft
+      ? draftViewportCenterRef.current ?? viewportCenterFromCurrentUrl()
+      : pendingPlannedRange
+        ? plannedMutationViewportCenterRef.current ?? viewportCenterFromCurrentUrl()
+        : undefined;
     viewportUrlTimerRef.current = window.setTimeout(() => {
       viewportUrlTimerRef.current = null;
       if (centerNavigationTargetRef.current !== null) return;
+      const initialUrlCenter = initialViewportUrlCenterRef.current;
+      initialViewportUrlCenterRef.current = undefined;
       replaceViewportUrl({
-        centerMs: (viewportRange.startMs + viewportRange.endMs) / 2,
+        centerMs: initialUrlCenter ?? preservedCenter ??
+          (viewportRange.startMs + viewportRange.endMs) / 2,
         zoom: currentZoom,
       });
     }, 300);
@@ -598,7 +651,7 @@ export function ResourcePlannerCanvasClient({
       window.clearTimeout(viewportUrlTimerRef.current);
       viewportUrlTimerRef.current = null;
     };
-  }, [currentZoom, persistViewportInUrl, viewportRange]);
+  }, [createDraft, currentZoom, pendingPlannedRange, persistViewportInUrl, viewportRange]);
   useEffect(() => {
     if (
       !adaptiveBlockQuery ||
@@ -822,6 +875,10 @@ export function ResourcePlannerCanvasClient({
     pendingPlannedRange,
   ]);
   useEffect(() => {
+    if (pendingPlannedRange) return;
+    plannedMutationViewportCenterRef.current = null;
+  }, [pendingPlannedRange]);
+  useEffect(() => {
     let active = true;
     if (
       !openSegmentId ||
@@ -902,6 +959,11 @@ export function ResourcePlannerCanvasClient({
       rollback?: () => void,
       onSuccess?: () => void,
     ) => {
+      const preservedViewportCenterMs = persistViewportInUrl
+        ? createDraft
+          ? draftViewportCenterRef.current ?? viewportCenterFromCurrentUrl()
+          : viewportCenterFromCurrentUrl()
+        : undefined;
       setNotice({ kind: "info", message: "正在保存…" });
       startTransition(async () => {
         let result: ProjectManagementActionResult<unknown>;
@@ -927,7 +989,7 @@ export function ResourcePlannerCanvasClient({
               : result.error.message,
           });
           if (stale) {
-            setDialogDirty(false);
+            updateDialogDirty(false);
             setDetail(null);
             setDetailRange(null);
             setDetailError("");
@@ -946,6 +1008,8 @@ export function ResourcePlannerCanvasClient({
         }
         const plannedRange = plannedRangeFromMutation(result.data);
         if (plannedRange) {
+          plannedMutationViewportCenterRef.current =
+            preservedViewportCenterMs ?? viewportCenterFromCurrentUrl() ?? null;
           setPendingPlannedRange({
             range: plannedRange,
             previousRowPageKey: initialModel.rowPageKey,
@@ -956,13 +1020,14 @@ export function ResourcePlannerCanvasClient({
         if (completedSegmentId) {
           setDismissedFocusId(initialFocusId ?? completedSegmentId);
           setOpenSegmentId(null);
-          setDialogDirty(false);
+          updateDialogDirty(false);
           setSelection(null);
         }
         onSuccess?.();
         if (persistViewportInUrl) {
           replaceViewportUrl({
             centerMs:
+              preservedViewportCenterMs ??
               (viewportRangeRef.current.startMs + viewportRangeRef.current.endMs) / 2,
             zoom: currentZoom,
           });
@@ -975,6 +1040,7 @@ export function ResourcePlannerCanvasClient({
           url.searchParams.delete("focus");
           url.searchParams.delete("focusSegmentIds");
         }
+        normalizeResourcePlanUrl(url);
         if (persistViewportInUrl || hadUrlFocus) {
           router.replace(`${url.pathname}?${url.searchParams.toString()}`, {
             scroll: false,
@@ -1022,6 +1088,7 @@ export function ResourcePlannerCanvasClient({
       setNotice({ kind: "error", message: "按 Task 分组时请使用精确表单选择人员。" });
       return;
     }
+    draftViewportCenterRef.current = currentViewportCenter();
     setCreateDraft({
       rowId: request.rowId,
       personId: request.sourceId,
@@ -1032,9 +1099,18 @@ export function ResourcePlannerCanvasClient({
     setNotice({ kind: "info", message: "已选择时间区间，请补全投入内容。" });
   }
 
+  function currentViewportCenter() {
+    const current = viewportRangeRef.current;
+    const center = (current.startMs + current.endMs) / 2;
+    return Number.isFinite(center)
+      ? center
+      : viewportCenterFromCurrentUrl() ?? model.range.startMs;
+  }
+
   function cancelCreateDraft() {
     if (createDraftDirty && !window.confirm("创建内容尚未保存，确认放弃？")) return;
     setCreateDraft(null);
+    draftViewportCenterRef.current = null;
     setCreateDraftDirty(false);
     setNotice({ kind: "info", message: "已取消待创建投入。" });
   }
@@ -1053,7 +1129,7 @@ export function ResourcePlannerCanvasClient({
       if (explicitRange.endMs - explicitRange.startMs > 366 * DAY_MS) {
         setNotice({
           kind: "error",
-          message: "待创建区间会使人员计划超过 366 天，请先缩小或调整资源时间范围。",
+          message: "待创建区间会使资源计划超过 366 天，请先缩小或调整资源时间范围。",
         });
         return false;
       }
@@ -1094,6 +1170,7 @@ export function ResourcePlannerCanvasClient({
     url.searchParams.delete("date");
     url.searchParams.delete("mode");
     url.searchParams.delete("zoom");
+    normalizeResourcePlanUrl(url);
     centerNavigationTargetRef.current = centerMs;
     if (viewportUrlTimerRef.current !== null) {
       window.clearTimeout(viewportUrlTimerRef.current);
@@ -1109,7 +1186,7 @@ export function ResourcePlannerCanvasClient({
     const dismissedId = initialFocusId ?? openSegmentId;
     if (dismissedId) setDismissedFocusId(dismissedId);
     setOpenSegmentId(null);
-    setDialogDirty(false);
+    updateDialogDirty(false);
     setSelection(null);
 
     const url = new URL(window.location.href);
@@ -1118,6 +1195,7 @@ export function ResourcePlannerCanvasClient({
       url.searchParams.has("focusSegmentIds");
     url.searchParams.delete("focus");
     url.searchParams.delete("focusSegmentIds");
+    normalizeResourcePlanUrl(url);
     if (!hadUrlFocus) return;
     startTransition(() => {
       router.replace(`${url.pathname}?${url.searchParams.toString()}`, { scroll: false });
@@ -1133,6 +1211,7 @@ export function ResourcePlannerCanvasClient({
             size="sm"
             disabled={isPending || Boolean(createDraft)}
             onClick={() => {
+              draftViewportCenterRef.current = currentViewportCenter();
               setCreateDraftDirty(false);
               setCreateDraft((() => {
                 const center = (viewportRange.startMs + viewportRange.endMs) / 2;
@@ -1288,7 +1367,7 @@ export function ResourcePlannerCanvasClient({
                 setDismissedFocusId(null);
                 setSelection({ kind: "SEGMENT", id: segmentId });
                 setOpenSegmentId(segmentId);
-                setDialogDirty(false);
+                updateDialogDirty(false);
                 setDetail(null);
                 setDetailRange(null);
                 setChanges([]);
@@ -1376,10 +1455,10 @@ export function ResourcePlannerCanvasClient({
               setHistoryError("");
               setHistoryRetryToken((current) => current + 1);
             }}
-            onDirtyChange={setDialogDirty}
+            onDirtyChange={updateDialogDirty}
             onRangeChange={(range) => {
               setDetailRange(range);
-              setDialogDirty(true);
+              updateDialogDirty(true);
             }}
           />
         </DialogContent>
@@ -1424,6 +1503,7 @@ export function ResourcePlannerCanvasClient({
           onRun={(action) => {
             runMutation(action, "已创建投入记录", undefined, () => {
               setCreateDraft(null);
+              draftViewportCenterRef.current = null;
               setCreateDraftDirty(false);
             });
           }}
@@ -1566,12 +1646,36 @@ function replaceViewportUrl({
   url.searchParams.delete("date");
   url.searchParams.delete("mode");
   url.searchParams.delete("zoom");
+  normalizeResourcePlanUrl(url);
   window.history.replaceState(
     window.history.state,
     "",
     `${url.pathname}?${url.searchParams.toString()}`,
   );
   window.dispatchEvent(new Event(TIME_CANVAS_VIEWPORT_STATE_EVENT));
+}
+
+function normalizeResourcePlanUrl(url: URL) {
+  if (url.pathname === "/progress/resources") {
+    removeRetiredResourcePlanSearchParams(url.searchParams);
+  }
+}
+
+function viewportCenterFromCurrentUrl() {
+  const value = new URL(window.location.href).searchParams.get("center");
+  if (!value) return undefined;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function centerFallsWithinRange(
+  centerMs: number | undefined,
+  range: TimeCanvasRange,
+): centerMs is number {
+  return typeof centerMs === "number" &&
+    Number.isFinite(centerMs) &&
+    centerMs >= range.startMs &&
+    centerMs < range.endMs;
 }
 
 function resizeRowsForSegments(
@@ -1691,7 +1795,6 @@ function QuickCreatePanel({
           priority: String(form.get("priority") ?? "MEDIUM"),
           expectedOutput: String(form.get("expectedOutput") ?? ""),
           taskId: submittedTaskId,
-          tagIds: [],
         };
         onRun(() =>
           type === "ACTUAL"

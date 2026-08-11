@@ -55,7 +55,6 @@ const taskCapabilitiesDtoSchema = z
     canView: z.boolean(),
     canUpdateMetadata: z.boolean(),
     canManageMembers: z.boolean(),
-    canManageTags: z.boolean(),
     canActivate: z.boolean(),
     canArchive: z.boolean(),
     canCreateRevision: z.boolean(),
@@ -184,14 +183,6 @@ export type TimeCanvasTaskAnchorDto = z.infer<
   typeof timeCanvasTaskAnchorDtoSchema
 >;
 
-const segmentTagDtoSchema = z
-  .object({
-    id: dtoIdSchema,
-    name: z.string(),
-    color: z.string(),
-  })
-  .strict();
-
 export const timeSegmentDtoSchema = z
   .object({
     kind: z.literal("SEGMENT"),
@@ -207,7 +198,6 @@ export const timeSegmentDtoSchema = z
     expectedOutput: z.string(),
     actualOutput: z.string(),
     taskId: dtoIdSchema.nullable(),
-    tags: z.array(segmentTagDtoSchema),
     permissions: segmentPermissionsDtoSchema,
     updatedAt: dtoAbsoluteDateTimeSchema,
     versionToken: dtoAbsoluteDateTimeSchema,
@@ -331,24 +321,6 @@ export const taskOptionPageSchema = z
   .strict();
 
 export type TaskOptionPage = z.infer<typeof taskOptionPageSchema>;
-
-export const tagOptionDtoSchema = z
-  .object({
-    id: dtoIdSchema,
-    name: z.string().trim().min(1),
-    color: z.string(),
-    isArchived: z.boolean(),
-  })
-  .strict();
-
-export const tagOptionPageSchema = z
-  .object({
-    items: z.array(tagOptionDtoSchema),
-    nextCursor: pageCursorSchema,
-  })
-  .strict();
-
-export type TagOptionPage = z.infer<typeof tagOptionPageSchema>;
 
 const timeCanvasDataCommonFields = {
   scope: timeCanvasScopeDtoSchema,

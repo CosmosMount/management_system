@@ -118,11 +118,6 @@ export const createTaskDraftInputSchema = z
       .enum(taskPriorityValues, { message: "优先级不正确" })
       .optional()
       .default("MEDIUM"),
-    tagIds: z
-      .array(idSchema, { message: "Tag 列表格式不正确" })
-      .max(50, "Tag 数量不能超过 50 个")
-      .optional()
-      .default([]),
     members: z
       .array(taskMemberInputSchema, { message: "成员列表格式不正确" })
       .min(1, "至少添加一名 Task 成员"),
@@ -137,12 +132,6 @@ export const createTaskDraftInputSchema = z
   })
   .strict()
   .superRefine((input, ctx) => {
-    ensureUniqueValues(
-      input.tagIds,
-      "tagIds",
-      "不能重复选择同一个 Tag",
-      ctx,
-    );
     ensureUniqueValues(
       input.members.map((member) => member.personId),
       "members",

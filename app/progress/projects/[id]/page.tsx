@@ -168,7 +168,6 @@ export default async function ProjectDetailPage({
             scope: { kind: "RESOURCE_PLANNER" },
             personIds: timelinePersonIds,
             taskIds: project.tasks.map((task) => task.id),
-            tagIds: [],
             types: [],
             statuses: [],
             groupBy: "PERSON",

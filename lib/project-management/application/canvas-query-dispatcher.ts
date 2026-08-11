@@ -6,7 +6,6 @@ import {
 import { getCurrentProjectManagementActor } from "@/lib/project-management/identity";
 import { getMyWorkDashboard } from "@/lib/project-management/queries/dashboard-queries";
 import {
-  listTagOptions,
   searchPeople,
   searchTaskOptions,
 } from "@/lib/project-management/queries/option-queries";
@@ -22,7 +21,6 @@ const canvasQueryRequestSchema = z
       "getAdaptiveTimeCanvasBlock",
       "searchPeople",
       "searchTaskOptions",
-      "listTagOptions",
       "getMyWorkDashboard",
     ]),
     input: z.unknown().optional().default({}),
@@ -34,7 +32,6 @@ type CanvasQueryResult =
   | Awaited<ReturnType<typeof getAdaptiveTimeCanvasBlock>>
   | Awaited<ReturnType<typeof searchPeople>>
   | Awaited<ReturnType<typeof searchTaskOptions>>
-  | Awaited<ReturnType<typeof listTagOptions>>
   | Awaited<ReturnType<typeof getMyWorkDashboard>>;
 
 /** Shared application dispatcher used by both HTTP and Server Action transports. */
@@ -57,8 +54,6 @@ export async function dispatchCanvasQueryRequest(
           return searchPeople({ actor, input: parsed.input });
         case "searchTaskOptions":
           return searchTaskOptions({ actor, input: parsed.input });
-        case "listTagOptions":
-          return listTagOptions({ actor, input: parsed.input });
         case "getMyWorkDashboard":
           return getMyWorkDashboard({ actor, input: parsed.input });
       }

@@ -116,6 +116,7 @@ export function TimeCanvas({
   const bottomScrollbarRef = useRef<HTMLDivElement>(null);
   const animationFrameRef = useRef<number | null>(null);
   const layoutScrollLeftRef = useRef<number | null>(null);
+  const viewportChangeSourceRef = useRef<"LAYOUT" | "USER">("LAYOUT");
   const viewportCenterRef = useRef<number | null>(
     Number.isFinite(initialCenterMs) ? (initialCenterMs ?? null) : null,
   );
@@ -287,18 +288,22 @@ export function TimeCanvas({
     );
     const left = scrollLeftForCenter(scale, center, scrollState.width);
     layoutScrollLeftRef.current = left;
+    viewportChangeSourceRef.current = "LAYOUT";
     element.scrollLeft = left;
     const effectiveLeft = element.scrollLeft;
     if (bottomScrollbarRef.current) {
       bottomScrollbarRef.current.scrollLeft = effectiveLeft;
     }
     setScrollState((current) => ({ ...current, left: effectiveLeft }));
-    onViewportChange?.(visibleTimeWindow({
-      scale,
-      scrollLeftPx: effectiveLeft,
-      viewportWidthPx: scrollState.width,
-      overscanPx: 0,
-    }));
+    onViewportChange?.(
+      visibleTimeWindow({
+        scale,
+        scrollLeftPx: effectiveLeft,
+        viewportWidthPx: scrollState.width,
+        overscanPx: 0,
+      }),
+      "LAYOUT",
+    );
   }, [
     liveNowMs,
     initialCenterMs,
@@ -311,6 +316,8 @@ export function TimeCanvas({
   ]);
 
   useEffect(() => {
+    const source = viewportChangeSourceRef.current;
+    viewportChangeSourceRef.current = "LAYOUT";
     onViewportChange?.(
       visibleTimeWindow({
         scale,
@@ -318,6 +325,7 @@ export function TimeCanvas({
         viewportWidthPx: scrollState.width,
         overscanPx: 0,
       }),
+      source,
     );
   }, [onViewportChange, scale, scrollState.left, scrollState.width]);
 
@@ -491,7 +499,11 @@ export function TimeCanvas({
                   const left = element.scrollLeft;
                   const layoutLeft = layoutScrollLeftRef.current;
                   layoutScrollLeftRef.current = null;
-                  if (layoutLeft === null || Math.abs(layoutLeft - left) > 1) {
+                  const source = layoutLeft === null || Math.abs(layoutLeft - left) > 1
+                    ? "USER"
+                    : "LAYOUT";
+                  viewportChangeSourceRef.current = source;
+                  if (source === "USER") {
                     viewportCenterRef.current = viewportCenterTime(
                       scale,
                       left,
