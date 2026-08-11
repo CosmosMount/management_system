@@ -344,6 +344,128 @@ export async function getProjectDetail({
   };
 }
 
+export async function locateProjectTimelineFocus({
+  actor,
+  projectId,
+  focus,
+}: {
+  actor: ProjectManagementActor;
+  projectId: string;
+  focus: string;
+}) {
+  const project = await prisma.project.findFirst({
+    where: { AND: [{ id: projectId }, projectReadableWhere(actor)] },
+    select: { id: true },
+  });
+  if (!project) throw notFoundError();
+  const token = parseProjectTimelineFocus(focus);
+  if (!token) return null;
+  const task = await prisma.task.findFirst({
+    where: {
+      projectId: project.id,
+      deletedAt: null,
+      ...(token.kind === "TASK"
+        ? { id: token.id }
+        : {
+            currentPlanVersion: {
+              nodes: {
+                some: { nodeId: token.id, node: { deletedAt: null } },
+              },
+            },
+          }),
+    },
+    select: {
+      id: true,
+      status: true,
+      updatedAt: true,
+      createdAt: true,
+      currentPlanVersion: {
+        select: {
+          plannedStartAt: true,
+          nodes: {
+            where: token.kind === "NODE" ? { nodeId: token.id } : { nodeId: { in: [] } },
+            take: 1,
+            select: {
+              node: {
+                select: {
+                  id: true,
+                  milestone: { select: { expectedCompletedAt: true } },
+                  revision: { select: { revisionAt: true } },
+                  termination: { select: { plannedAt: true } },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+  if (!task) return null;
+  const node = task.currentPlanVersion.nodes[0]?.node;
+  if (token.kind === "NODE" && !node) return null;
+  const centerAt = token.kind === "TASK"
+    ? (task.currentPlanVersion.plannedStartAt ?? task.createdAt)
+    : (
+        node?.milestone?.expectedCompletedAt ??
+        node?.revision?.revisionAt ??
+        node?.termination?.plannedAt
+      );
+  if (!centerAt) return null;
+
+  const group = projectTaskStatusGroup(task.status);
+  const [groupCounts, precedingInGroup] = await Promise.all([
+    Promise.all(projectTaskStatusGroups.map((statuses) =>
+      prisma.task.count({
+        where: { projectId: project.id, deletedAt: null, status: { in: [...statuses] } },
+      }),
+    )),
+    prisma.task.count({
+      where: {
+        projectId: project.id,
+        deletedAt: null,
+        status: { in: [...projectTaskStatusGroups[group]] },
+        OR: [
+          { updatedAt: { gt: task.updatedAt } },
+          { updatedAt: task.updatedAt, id: { lt: task.id } },
+        ],
+      },
+    }),
+  ]);
+  const targetIndex = groupCounts.slice(0, group).reduce((total, count) => total + count, 0) +
+    precedingInGroup;
+  const pageStart = Math.floor(targetIndex / 25) * 25;
+  let taskCursor: string | null = null;
+  if (pageStart > 0) {
+    const predecessorIndex = pageStart - 1;
+    let groupStart = 0;
+    for (let index = 0; index < projectTaskStatusGroups.length; index += 1) {
+      const count = groupCounts[index] ?? 0;
+      if (predecessorIndex < groupStart + count) {
+        const predecessor = await prisma.task.findFirst({
+          where: {
+            projectId: project.id,
+            deletedAt: null,
+            status: { in: [...projectTaskStatusGroups[index]!] },
+          },
+          orderBy: [{ updatedAt: "desc" }, { id: "asc" }],
+          skip: predecessorIndex - groupStart,
+          select: { id: true, status: true, updatedAt: true },
+        });
+        if (predecessor) taskCursor = encodeProjectTaskCursor(predecessor);
+        break;
+      }
+      groupStart += count;
+    }
+  }
+  return {
+    taskCursor,
+    focusId: token.kind === "TASK"
+      ? `project-start:${task.id}`
+      : `project-node:${token.id}`,
+    centerMs: centerAt.getTime(),
+  };
+}
+
 export type ProjectOption = { id: string; name: string; avatarPath: string | null };
 export type ProjectOptionPage = { items: ProjectOption[]; nextCursor: string | null; hasMoreByQuery: boolean };
 
@@ -388,6 +510,16 @@ type ProjectTaskCursor = {
   timestamp: Date;
   id: string;
 };
+
+function parseProjectTimelineFocus(focus: string) {
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (uuidPattern.test(focus)) return { kind: "NODE" as const, id: focus };
+  const [prefix, id, extra] = focus.split(":");
+  if (extra || !id || !uuidPattern.test(id)) return null;
+  if (prefix === "project-start") return { kind: "TASK" as const, id };
+  if (prefix === "project-node") return { kind: "NODE" as const, id };
+  return null;
+}
 
 async function loadProjectDetailTaskRows(
   projectId: string,

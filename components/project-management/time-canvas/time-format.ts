@@ -23,11 +23,19 @@ const compactDateTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
   minute: "2-digit",
   hourCycle: "h23",
 });
-const hourFormatter = new Intl.DateTimeFormat("zh-CN", {
+const dayTickFormatter = new Intl.DateTimeFormat("zh-CN", {
   timeZone: "Asia/Shanghai",
-  hour: "2-digit",
-  minute: "2-digit",
-  hourCycle: "h23",
+  month: "numeric",
+  day: "numeric",
+});
+const monthTickFormatter = new Intl.DateTimeFormat("zh-CN", {
+  timeZone: "Asia/Shanghai",
+  month: "short",
+});
+const yearMonthFormatter = new Intl.DateTimeFormat("zh-CN", {
+  timeZone: "Asia/Shanghai",
+  year: "numeric",
+  month: "long",
 });
 
 export function formatCanvasDate(timeMs: number) {
@@ -50,9 +58,21 @@ export function formatCanvasRange(startMs: number, endMs: number) {
 }
 
 export function formatCanvasTick(timeMs: number, zoom: TimeCanvasZoom) {
-  return zoom === "HOUR"
-    ? hourFormatter.format(new Date(timeMs))
-    : formatCanvasDate(timeMs);
+  return zoom === "WEEK" || zoom === "MONTH"
+    ? dayTickFormatter.format(new Date(timeMs))
+    : monthTickFormatter.format(new Date(timeMs));
+}
+
+export function formatCanvasAxisGroup(timeMs: number, zoom: TimeCanvasZoom) {
+  if (zoom === "WEEK" || zoom === "MONTH") {
+    return yearMonthFormatter.format(new Date(timeMs));
+  }
+  const local = new Date(timeMs + 8 * 60 * 60 * 1_000);
+  const year = local.getUTCFullYear();
+  if (zoom === "QUARTER") {
+    return `${year}年 第${Math.floor(local.getUTCMonth() / 3) + 1}季度`;
+  }
+  return `${year}年`;
 }
 
 export function isShanghaiWeekend(timeMs: number) {

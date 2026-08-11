@@ -44,11 +44,16 @@ export function parseTimeCanvasUrlState(
     }
   }
 
-  const requestedZoom = searchParams.get("zoom")?.toUpperCase();
-  const zoom = isZoom(requestedZoom)
-    ? requestedZoom
+  const requestedScale = searchParams.get("scale")?.toUpperCase();
+  const requestedLegacyZoom = searchParams.get("zoom")?.toUpperCase();
+  const requestedZoom = requestedScale ?? requestedLegacyZoom;
+  const normalizedZoom = requestedScale
+    ? normalizeZoom(requestedScale)
+    : normalizeLegacyZoom(requestedLegacyZoom);
+  const zoom = normalizedZoom
+    ? normalizedZoom
     : chooseFitZoom(range);
-  if (requestedZoom && !isZoom(requestedZoom)) {
+  if (requestedZoom && !normalizedZoom) {
     issues.push("缩放档位无效，已自动适配");
   }
 
@@ -98,7 +103,7 @@ export function serializeTimeCanvasUrlState(
   const params = new URLSearchParams();
   params.set("from", formatShanghaiDate(state.range.startMs));
   params.set("to", formatShanghaiDate(state.range.endMs));
-  params.set("zoom", state.zoom.toLowerCase());
+  params.set("scale", state.zoom.toLowerCase());
   params.set("group", state.groupBy.toLowerCase());
   setList(params, "people", state.personIds);
   setList(params, "tasks", state.taskIds);
@@ -184,8 +189,21 @@ function parseStatuses(
   return statuses;
 }
 
-function isZoom(value: string | undefined): value is TimeCanvasZoom {
-  return value === "HOUR" || value === "DAY" || value === "WEEK" || value === "MONTH";
+function normalizeZoom(value: string | undefined): TimeCanvasZoom | null {
+  if (value === "WEEK" || value === "MONTH" || value === "QUARTER" || value === "YEAR") {
+    return value;
+  }
+  if (value === "HOUR") return "WEEK";
+  if (value === "DAY") return "MONTH";
+  return null;
+}
+
+function normalizeLegacyZoom(value: string | undefined): TimeCanvasZoom | null {
+  if (value === "HOUR") return "WEEK";
+  if (value === "DAY") return "MONTH";
+  if (value === "WEEK") return "QUARTER";
+  if (value === "MONTH") return "YEAR";
+  return null;
 }
 
 function setList(params: URLSearchParams, key: string, values: string[]) {

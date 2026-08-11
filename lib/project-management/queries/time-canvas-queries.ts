@@ -13,9 +13,17 @@ import {
 } from "@/lib/project-management/authorization";
 import {
   notFoundError,
+  ProjectManagementServiceError,
   queryLimitExceededError,
   validationError,
 } from "@/lib/project-management/application/errors";
+import {
+  DAY_MS,
+  clampLogicalRangeToThreeYears,
+  contentTimeBounds,
+  floorShanghaiDay,
+  padShanghaiCalendarRange,
+} from "@/components/project-management/time-canvas/time-math";
 import {
   isTaskCreatableForSegment,
   TASK_SEGMENT_CREATABLE_STATUSES,
@@ -33,11 +41,15 @@ import {
 } from "@/lib/project-management/types/time-canvas";
 import {
   getTimeCanvasDataInputSchema,
+  getMyTimelinePageInputSchema,
+  getAdaptiveTimeCanvasBlockInputSchema,
   MAX_TIME_CANVAS_ANCHOR_NODES,
   MAX_TIME_CANVAS_ANCHOR_TASKS,
   MAX_TIME_CANVAS_VISIBLE_SEGMENTS,
   type GetTimeCanvasDataInput,
 } from "@/lib/project-management/validations/time-canvas";
+import { searchTaskOptions } from "@/lib/project-management/queries/option-queries";
+import { getProjectDetail } from "@/lib/project-management/queries/project-queries";
 
 const canvasTaskAuthorizationSelect = {
   id: true,
@@ -54,6 +66,7 @@ const canvasTaskAuthorizationSelect = {
 const canvasRowTaskSelect = {
   ...canvasTaskAuthorizationSelect,
   title: true,
+  createdAt: true,
 } satisfies Prisma.TaskSelect;
 
 const fullSegmentSelect = {
@@ -231,6 +244,7 @@ export async function getTimeCanvasData({
           parsed,
           scopeTask,
           rowFilter,
+          authorizedSegmentFilter,
         );
   const fullUniverseWhere = fullSegmentUniverseWhere(
     parsed,
@@ -282,6 +296,14 @@ export async function getTimeCanvasData({
         fullSegments,
       )
     : [];
+  const rowPageKey = createRowPageKey(
+    actor,
+    parsed,
+    rowPage,
+    anchors,
+    undefined,
+    fullSegments.map((segment) => [segment.id, segment.updatedAt.toISOString()]),
+  );
   return timeCanvasDataDtoSchema.parse({
     scope: parsed.scope,
     timezone: "Asia/Shanghai",
@@ -289,12 +311,488 @@ export async function getTimeCanvasData({
       startAt: parsed.rangeStart.toISOString(),
       endAt: parsed.rangeEnd.toISOString(),
     },
+    rowPageKey,
     groupBy: parsed.groupBy,
     rows: rowPage.rows,
     anchors,
     segments,
     nextCursor: rowPage.nextCursor,
     generatedAt: new Date().toISOString(),
+  });
+}
+
+export async function getContentDrivenTimeCanvasData({
+  actor,
+  input,
+  preferredCenterMs,
+  anchorTaskIds = [],
+  load = { mode: "ALL" },
+}: {
+  actor: ProjectManagementActor;
+  input: unknown;
+  preferredCenterMs?: number;
+  anchorTaskIds?: string[];
+  load?:
+    | { mode: "ALL" | "INITIAL" }
+    | {
+        mode: "BLOCK";
+        range: { startMs: number; endMs: number };
+        expectedRowPageKey: string;
+      };
+}) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw validationError("内容驱动画布查询格式不正确");
+  }
+  const record = input as Record<string, unknown>;
+  if ("rangeStart" in record || "rangeEnd" in record || "cursor" in record) {
+    throw validationError("内容驱动画布的范围和行游标必须由服务端派生");
+  }
+  const requestedCenterMs = preferredCenterMs !== undefined && Number.isFinite(preferredCenterMs)
+    ? preferredCenterMs
+    : null;
+  const seedStart = floorShanghaiDay(requestedCenterMs ?? Date.now());
+  const parsed = getTimeCanvasDataInputSchema.parse({
+    ...record,
+    rangeStart: new Date(seedStart).toISOString(),
+    rangeEnd: new Date(seedStart + DAY_MS).toISOString(),
+  });
+  const authorizedAllTimeFilter = authorizedSegmentFilterWhere(
+    actor,
+    parsed,
+    true,
+    false,
+  );
+  const scopeTask = await authorizeScopeAndExplicitFilters(
+    actor,
+    parsed,
+    authorizedAllTimeFilter,
+  );
+  const rowFilter = canvasCursorFilter(parsed, false);
+  const rowPage = parsed.groupBy === "PERSON"
+    ? await loadPersonRows(
+        actor,
+        parsed,
+        scopeTask,
+        rowFilter,
+        authorizedAllTimeFilter,
+      )
+    : await loadTaskRows(
+        actor,
+        parsed,
+        scopeTask,
+        rowFilter,
+        authorizedAllTimeFilter,
+      );
+  const allTimeUniverseWhere = fullSegmentUniverseWhere(
+    parsed,
+    rowPage.rowUniverseWhere,
+    authorizedAllTimeFilter,
+  );
+  const currentPageAllTimeWhere: Prisma.WorkSegmentWhereInput = {
+    AND: [
+      allTimeUniverseWhere,
+      parsed.groupBy === "PERSON"
+        ? { personId: { in: rowPage.rowIds } }
+        : { taskId: { in: rowPage.rowIds } },
+    ],
+  };
+  const [segmentBounds, anchors] = await Promise.all([
+    rowPage.rowIds.length === 0
+      ? Promise.resolve({
+          _min: { startAt: null },
+          _max: { endAt: null, updatedAt: null },
+          _count: { _all: 0 },
+        })
+      : prisma.workSegment.aggregate({
+          where: currentPageAllTimeWhere,
+          _min: { startAt: true },
+          _max: { endAt: true, updatedAt: true },
+          _count: { _all: true },
+        }),
+    parsed.includeTaskAnchors
+      ? loadTaskAnchors(
+          actor,
+          anchorTaskIds.length > 0 ? { ...parsed, taskIds: anchorTaskIds } : parsed,
+          scopeTask,
+          rowPage.rowIds,
+          [],
+        )
+      : Promise.resolve([]),
+  ]);
+  const timestamps: number[] = [];
+  if (segmentBounds._min.startAt) timestamps.push(segmentBounds._min.startAt.getTime());
+  if (segmentBounds._max.endAt) timestamps.push(segmentBounds._max.endAt.getTime() - 1);
+  for (const task of anchors) {
+    timestamps.push(Date.parse(task.plannedStartAt ?? task.createdAt));
+    for (const node of task.nodes) {
+      if (node.plannedAt) timestamps.push(Date.parse(node.plannedAt));
+    }
+  }
+  const contentRange = contentTimeBounds(timestamps);
+  const fullRange = padShanghaiCalendarRange(contentRange, 2, seedStart);
+  const now = Date.now();
+  const fallbackCenterMs = now >= fullRange.startMs && now < fullRange.endMs
+    ? now
+    : (contentRange?.startMs ?? (fullRange.startMs + fullRange.endMs) / 2);
+  const resolvedCenterMs = requestedCenterMs !== null &&
+      requestedCenterMs >= fullRange.startMs &&
+      requestedCenterMs < fullRange.endMs
+    ? requestedCenterMs
+    : fallbackCenterMs;
+  const logical = clampLogicalRangeToThreeYears(fullRange, resolvedCenterMs);
+  const rowPageKey = createRowPageKey(
+    actor,
+    parsed,
+    rowPage,
+    anchors,
+    logical.range,
+    {
+      count: segmentBounds._count._all,
+      latestUpdatedAt: segmentBounds._max.updatedAt?.toISOString() ?? null,
+    },
+  );
+  const loadRange = resolveContentLoadRange(load, logical.range, resolvedCenterMs);
+  if (load.mode === "BLOCK" && load.expectedRowPageKey !== rowPageKey) {
+    throw new ProjectManagementServiceError(
+      "STATE_CONFLICT",
+      "时间画布结构已更新，请刷新后重试",
+    );
+  }
+  const blockResult = await loadContentDrivenSegmentBlocks({
+    actor,
+    input: parsed,
+    where: currentPageAllTimeWhere,
+    rangeStart: loadRange.startMs,
+    rangeEnd: loadRange.endMs,
+  });
+  const data = timeCanvasDataDtoSchema.parse({
+    scope: parsed.scope,
+    timezone: "Asia/Shanghai",
+    range: {
+      startAt: new Date(logical.range.startMs).toISOString(),
+      endAt: new Date(logical.range.endMs).toISOString(),
+    },
+    rowPageKey,
+    groupBy: parsed.groupBy,
+    rows: rowPage.rows,
+    anchors,
+    segments: blockResult.segments,
+    nextCursor: rowPage.nextCursor,
+    generatedAt: new Date().toISOString(),
+  });
+  return {
+    data,
+    contentRange,
+    fullRange,
+    rangeClipped: logical.clipped,
+    resolvedCenterMs,
+    leafBlockCount: blockResult.leafBlockCount,
+    failedRanges: blockResult.failedRanges,
+    loadedRange: loadRange,
+  };
+}
+
+function resolveContentLoadRange(
+  load:
+    | { mode: "ALL" | "INITIAL" }
+    | {
+        mode: "BLOCK";
+        range: { startMs: number; endMs: number };
+        expectedRowPageKey: string;
+      },
+  logicalRange: { startMs: number; endMs: number },
+  preferredCenterMs: number,
+) {
+  if (load.mode === "ALL") return logicalRange;
+  if (load.mode === "BLOCK") {
+    const { startMs, endMs } = load.range;
+    if (
+      !Number.isFinite(startMs) ||
+      !Number.isFinite(endMs) ||
+      endMs <= startMs ||
+      endMs - startMs > 366 * DAY_MS ||
+      startMs < logicalRange.startMs ||
+      endMs > logicalRange.endMs
+    ) {
+      throw validationError("时间数据块必须完整位于当前授权逻辑范围内");
+    }
+    return load.range;
+  }
+  const target = Math.max(
+    logicalRange.startMs,
+    Math.min(preferredCenterMs, logicalRange.endMs - 1),
+  );
+  const blockIndex = Math.floor((target - logicalRange.startMs) / (180 * DAY_MS));
+  const startMs = logicalRange.startMs + blockIndex * 180 * DAY_MS;
+  return { startMs, endMs: Math.min(logicalRange.endMs, startMs + 180 * DAY_MS) };
+}
+
+export async function getMyTimelinePageData({
+  actor,
+  input,
+  preferredCenterMs,
+  load,
+}: {
+  actor: ProjectManagementActor;
+  input: unknown;
+  preferredCenterMs?: number;
+  load?: Parameters<typeof getContentDrivenTimeCanvasData>[0]["load"];
+}) {
+  const selector = getMyTimelinePageInputSchema.parse(input);
+  const taskPage = await searchTaskOptions({
+    actor,
+    input: {
+      mine: true,
+      statuses: selector.showAll ? [] : ["ACTIVE"],
+      cursor: selector.taskCursor,
+      limit: 25,
+    },
+  });
+  const canvas = await getContentDrivenTimeCanvasData({
+    actor,
+    preferredCenterMs,
+    anchorTaskIds: taskPage.items.map((task) => task.id),
+    load,
+    input: {
+      scope: { kind: "PERSONAL" },
+      personIds: [actor.personId],
+      taskIds: [],
+      tagIds: [],
+      types: [],
+      statuses: [],
+      groupBy: "PERSON",
+      includeTaskAnchors: true,
+      includeActual: true,
+      includeBusyBlocks: false,
+      rowLimit: 25,
+    },
+  });
+  return { taskPage, ...canvas };
+}
+
+export async function getAdaptiveTimeCanvasBlock({
+  actor,
+  input,
+}: {
+  actor: ProjectManagementActor;
+  input: unknown;
+}) {
+  const parsed = getAdaptiveTimeCanvasBlockInputSchema.parse(input);
+  const preferredCenterMs = parsed.preferredCenter.getTime();
+  const load = {
+    mode: "BLOCK" as const,
+    range: {
+      startMs: parsed.blockStart.getTime(),
+      endMs: parsed.blockEnd.getTime(),
+    },
+    expectedRowPageKey: parsed.rowPageKey,
+  };
+  const result = parsed.kind === "MY_TIMELINE"
+    ? await getMyTimelinePageData({
+        actor,
+        input: { showAll: parsed.showAll, taskCursor: parsed.taskCursor },
+        preferredCenterMs,
+        load,
+      })
+    : parsed.kind === "TASK"
+      ? await getContentDrivenTimeCanvasData({
+          actor,
+          preferredCenterMs,
+          load,
+          input: {
+            scope: { kind: "TASK_SCOPED", taskId: parsed.taskId },
+            personIds: [],
+            taskIds: [],
+            tagIds: [],
+            types: [],
+            statuses: [],
+            groupBy: "PERSON",
+            includeTaskAnchors: true,
+            includeActual: true,
+            includeBusyBlocks: false,
+            rowLimit: 50,
+          },
+        })
+      : await loadProjectTimeCanvasBlock(actor, parsed, preferredCenterMs, load);
+  return {
+    rowPageKey: result.data.rowPageKey,
+    logicalRange: result.data.range,
+    loadedRange: result.loadedRange,
+    groupBy: result.data.groupBy,
+    segments: result.data.segments,
+    generatedAt: result.data.generatedAt,
+    leafBlockCount: result.leafBlockCount,
+    failedRanges: result.failedRanges,
+  };
+}
+
+async function loadProjectTimeCanvasBlock(
+  actor: ProjectManagementActor,
+  input: Extract<
+    ReturnType<typeof getAdaptiveTimeCanvasBlockInputSchema.parse>,
+    { kind: "PROJECT" }
+  >,
+  preferredCenterMs: number,
+  load: Extract<
+    NonNullable<Parameters<typeof getContentDrivenTimeCanvasData>[0]["load"]>,
+    { mode: "BLOCK" }
+  >,
+) {
+  const project = await getProjectDetail({
+    actor,
+    projectId: input.projectId,
+    pagination: { taskCursor: input.taskCursor, pageSize: 25 },
+  });
+  const personIds = [...new Set([
+    ...project.members.map((member) => member.personId),
+    ...project.tasks.flatMap((task) => task.members.map((member) => member.personId)),
+  ])];
+  if (personIds.length > 50) {
+    throw queryLimitExceededError("当前页 Project/Task 有效成员超过 50 人");
+  }
+  return getContentDrivenTimeCanvasData({
+    actor,
+    preferredCenterMs,
+    load,
+    anchorTaskIds: project.tasks.map((task) => task.id),
+    input: {
+      scope: { kind: "RESOURCE_PLANNER" },
+      personIds,
+      taskIds: project.tasks.map((task) => task.id),
+      tagIds: [],
+      types: [],
+      statuses: [],
+      groupBy: "PERSON",
+      includeTaskAnchors: true,
+      includeActual: true,
+      includeBusyBlocks: false,
+      rowLimit: 50,
+    },
+  });
+}
+
+async function loadContentDrivenSegmentBlocks({
+  actor,
+  input,
+  where,
+  rangeStart,
+  rangeEnd,
+}: {
+  actor: ProjectManagementActor;
+  input: GetTimeCanvasDataInput;
+  where: Prisma.WorkSegmentWhereInput;
+  rangeStart: number;
+  rangeEnd: number;
+}) {
+  const blocks: Array<{ startMs: number; endMs: number }> = [];
+  for (let startMs = rangeStart; startMs < rangeEnd;) {
+    const endMs = Math.min(rangeEnd, startMs + 180 * DAY_MS);
+    blocks.push({ startMs, endMs });
+    startMs = endMs;
+  }
+  const { leaves: leafResults, failedRanges } = await loadBoundedAdaptiveLeaves({
+    ranges: blocks,
+    loadRange: (range) => loadContentDrivenLeaf(where, range.startMs, range.endMs),
+  });
+  const byId = new Map<string, FullSegment>();
+  for (const leaf of leafResults) {
+    for (const segment of leaf) {
+      const current = byId.get(segment.id);
+      if (!current || current.updatedAt < segment.updatedAt) byId.set(segment.id, segment);
+    }
+  }
+  const segments: Array<TimeSegmentDto | BusyBlockDto> = [...byId.values()]
+    .sort((left, right) =>
+      left.startAt.getTime() - right.startAt.getTime() ||
+      left.endAt.getTime() - right.endAt.getTime() ||
+      left.id.localeCompare(right.id),
+    )
+    .map((segment) => toFullSegmentDto(actor, segment));
+  // With the current global Segment visibility policy there are no Busy projections.
+  if (input.includeBusyBlocks && input.groupBy !== "PERSON") {
+    throw validationError("Busy 只允许在按人员分组的画布中返回");
+  }
+  return {
+    segments,
+    failedRanges,
+    leafBlockCount: leafResults.length + failedRanges.length,
+  };
+}
+
+export async function loadBoundedAdaptiveLeaves<T>({
+  ranges,
+  loadRange,
+}: {
+  ranges: Array<{ startMs: number; endMs: number }>;
+  loadRange: (range: { startMs: number; endMs: number }) => Promise<T[]>;
+}) {
+  const pending = [...ranges];
+  const leaves: T[][] = [];
+  const failedRanges: Array<{ startMs: number; endMs: number; message: string }> = [];
+  let objectCount = 0;
+  let queryCount = 0;
+  while (pending.length > 0) {
+    const range = pending.shift()!;
+    if (queryCount >= 31) {
+      throw queryLimitExceededError("时间对象过于密集，自动细分查询超过安全预算");
+    }
+    queryCount += 1;
+    const values = await loadRange(range);
+    if (values.length <= MAX_TIME_CANVAS_VISIBLE_SEGMENTS) {
+      if (leaves.length + failedRanges.length >= 16) {
+        throw queryLimitExceededError("时间对象过于密集，自动细分后超过 16 个数据块");
+      }
+      objectCount += values.length;
+      if (objectCount > 20_000) {
+        throw queryLimitExceededError("时间画布对象超过 20000 条缓存预算，请缩小筛选范围");
+      }
+      leaves.push(values);
+      continue;
+    }
+    if (range.endMs - range.startMs <= DAY_MS) {
+      if (leaves.length + failedRanges.length >= 16) {
+        throw queryLimitExceededError("时间对象过于密集，自动细分后超过 16 个数据块");
+      }
+      failedRanges.push({
+        ...range,
+        message: "单个上海自然日内的时间对象超过 5000 条，请缩小筛选范围",
+      });
+      continue;
+    }
+    if (leaves.length + failedRanges.length + pending.length + 2 > 16) {
+      throw queryLimitExceededError("时间对象过于密集，自动细分后超过 16 个数据块");
+    }
+    const middle = floorShanghaiDay((range.startMs + range.endMs) / 2);
+    const split = middle > range.startMs && middle < range.endMs
+      ? middle
+      : Math.min(range.endMs, range.startMs + DAY_MS);
+    pending.unshift(
+      { startMs: range.startMs, endMs: split },
+      { startMs: split, endMs: range.endMs },
+    );
+  }
+  return {
+    leaves,
+    failedRanges: failedRanges.sort((left, right) => left.startMs - right.startMs),
+    queryCount,
+  };
+}
+
+async function loadContentDrivenLeaf(
+  where: Prisma.WorkSegmentWhereInput,
+  startMs: number,
+  endMs: number,
+): Promise<FullSegment[]> {
+  return prisma.workSegment.findMany({
+    where: {
+      AND: [
+        where,
+        { startAt: { lt: new Date(endMs) }, endAt: { gt: new Date(startMs) } },
+      ],
+    },
+    select: fullSegmentSelect,
+    orderBy: [{ startAt: "asc" }, { endAt: "asc" }, { id: "asc" }],
+    take: MAX_TIME_CANVAS_VISIBLE_SEGMENTS + 1,
   });
 }
 
@@ -455,6 +953,7 @@ async function loadTaskRows(
   input: GetTimeCanvasDataInput,
   scopeTask: CanvasTask | null,
   filter: string,
+  authorizedSegmentFilter?: Prisma.WorkSegmentWhereInput,
 ): Promise<RowPage> {
   const actorCanCreateSegments = Boolean(
     await prisma.person.findFirst({
@@ -471,7 +970,7 @@ async function loadTaskRows(
     AND: [
       universe,
       input.taskIds.length > 0 ? { id: { in: input.taskIds } } : {},
-      taskTagFilteredRowWhere(actor, input),
+      taskTagFilteredRowWhere(actor, input, authorizedSegmentFilter),
     ],
   };
   const cursorId = await validateCanvasCursor({
@@ -595,11 +1094,12 @@ function authorizedSegmentFilterWhere(
   actor: ProjectManagementActor,
   input: GetTimeCanvasDataInput,
   includeTagFilter = true,
+  includeRange = true,
 ): Prisma.WorkSegmentWhereInput {
   return {
     AND: [
       segmentReadableWhere(actor),
-      segmentFilterWhere(input, actor.personId, includeTagFilter),
+      segmentFilterWhere(input, actor.personId, includeTagFilter, includeRange),
     ],
   };
 }
@@ -616,6 +1116,7 @@ function tagFilteredRowWhere(
 function taskTagFilteredRowWhere(
   actor: ProjectManagementActor,
   input: GetTimeCanvasDataInput,
+  authorizedSegmentFilter?: Prisma.WorkSegmentWhereInput,
 ): Prisma.TaskWhereInput {
   if (input.tagIds.length === 0) return {};
   return {
@@ -643,7 +1144,7 @@ function taskTagFilteredRowWhere(
         workSegments: {
           some: {
             AND: [
-              authorizedSegmentFilterWhere(actor, input, false),
+              authorizedSegmentFilter ?? authorizedSegmentFilterWhere(actor, input, false),
               { tags: { some: { tagId: { in: input.tagIds } } } },
             ],
           },
@@ -657,6 +1158,7 @@ function segmentFilterWhere(
   input: GetTimeCanvasDataInput,
   actorPersonId: string,
   includeTagFilter = true,
+  includeRange = true,
 ): Prisma.WorkSegmentWhereInput {
   return {
     AND: [
@@ -668,8 +1170,12 @@ function segmentFilterWhere(
             { status: { in: ["CONFIRMED", "CANCELLED"] } },
           ],
         },
-        startAt: { lt: input.rangeEnd },
-        endAt: { gt: input.rangeStart },
+        ...(includeRange
+          ? {
+              startAt: { lt: input.rangeEnd },
+              endAt: { gt: input.rangeStart },
+            }
+          : {}),
       },
       input.scope.kind === "PERSONAL" || input.scope.kind === "DASHBOARD"
         ? { personId: actorPersonId }
@@ -840,6 +1346,7 @@ function toTaskAnchorDto(
     title: task.title,
     status: task.status,
     priority: task.priority,
+    createdAt: task.createdAt.toISOString(),
     plannedStartAt: task.currentPlanVersion.plannedStartAt?.toISOString() ?? null,
     capabilities: {
       canView: true,
@@ -1229,13 +1736,17 @@ function decimalToNumber(value: Prisma.Decimal | null): number | null {
   return value === null ? null : Number(value.toString());
 }
 
-function canvasCursorFilter(input: GetTimeCanvasDataInput): string {
+function canvasCursorFilter(
+  input: GetTimeCanvasDataInput,
+  includeRange = true,
+): string {
   return createHash("sha256")
     .update(
       JSON.stringify({
         scope: input.scope,
-        rangeStart: input.rangeStart.toISOString(),
-        rangeEnd: input.rangeEnd.toISOString(),
+        range: includeRange
+          ? [input.rangeStart.toISOString(), input.rangeEnd.toISOString()]
+          : undefined,
         personIds: [...input.personIds].sort(),
         taskIds: [...input.taskIds].sort(),
         tagIds: [...input.tagIds].sort(),
@@ -1249,6 +1760,35 @@ function canvasCursorFilter(input: GetTimeCanvasDataInput): string {
     )
     .digest("base64url")
     .slice(0, 22);
+}
+
+function createRowPageKey(
+  actor: ProjectManagementActor,
+  input: GetTimeCanvasDataInput,
+  rowPage: RowPage,
+  anchors: TimeCanvasTaskAnchorDto[],
+  logicalRange?: { startMs: number; endMs: number },
+  segmentEpoch?: unknown,
+) {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        actorAccountId: actor.accountId,
+        semanticFilter: canvasCursorFilter(input, !logicalRange),
+        logicalRange: logicalRange
+          ? [new Date(logicalRange.startMs).toISOString(), new Date(logicalRange.endMs).toISOString()]
+          : [input.rangeStart.toISOString(), input.rangeEnd.toISOString()],
+        rows: rowPage.rows,
+        anchors: anchors.map((task) => [
+          task.id,
+          task.versionToken,
+          task.nodes.map((node) => [node.id, node.versionToken]),
+        ]),
+        segmentEpoch,
+      }),
+    )
+    .digest("base64url")
+    .slice(0, 32);
 }
 
 function encodeCanvasCursor(

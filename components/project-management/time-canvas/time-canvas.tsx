@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  forwardRef,
   useCallback,
   useEffect,
   useMemo,
@@ -19,22 +20,22 @@ import {
   Flag,
   GitBranch,
   Lock,
-  Minus,
-  Plus,
-  RotateCcw,
   X,
 } from "lucide-react";
 import {
   DAY_MS,
   axisTicks,
-  chooseFitZoom,
+  chooseAdaptiveScale,
   createTimeScale,
   intervalToRect,
   moveTimePoint,
   rangesIntersect,
   snapTime,
   snapTimeInRange,
+  scrollLeftForCenter,
+  shiftViewportByRatio,
   timeToX,
+  viewportCenterTime,
   visibleTimeWindow,
   xToTime,
 } from "@/components/project-management/time-canvas/time-math";
@@ -60,35 +61,40 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
-  formatCanvasDate as formatDate,
   formatCanvasDateTime as formatDateTime,
   formatCanvasRange as formatRange,
   formatCanvasTick as formatTick,
+  formatCanvasAxisGroup as formatAxisGroup,
   formatCompactAnchorDate,
   isShanghaiWeekend,
 } from "@/components/project-management/time-canvas/time-format";
 
-const ROW_HEADER_WIDTH = 240;
-const AXIS_HEIGHT = 56;
+const AXIS_HEIGHT = 64;
 const PLAN_RAIL_TOP = 28;
-const zoomOrder: TimeCanvasZoom[] = ["HOUR", "DAY", "WEEK", "MONTH"];
+const zoomOrder: TimeCanvasZoom[] = ["WEEK", "MONTH", "QUARTER", "YEAR"];
 const zoomLabels: Record<TimeCanvasZoom, string> = {
-  HOUR: "小时",
-  DAY: "日",
   WEEK: "周",
   MONTH: "月",
+  QUARTER: "季",
+  YEAR: "年",
 };
 
 export function TimeCanvas({
   mode,
   model,
+  presentation = "FULL",
   initialZoom,
+  initialCenterMs,
   display: displayInput,
   interaction,
   selection: controlledSelection,
   initialSelection = null,
   emptyMessage = "选择人员或 Task 后查看计划",
   onRangeChange,
+  navigationRange,
+  onRequestCenter,
+  onViewportChange,
+  onZoomChange,
   onSelectionChange,
 }: TimeCanvasProps) {
   const display: Required<TimeCanvasDisplayOptions> = {
@@ -96,21 +102,28 @@ export function TimeCanvas({
     showBusy: displayInput?.showBusy ?? true,
     showInspector: displayInput?.showInspector ?? true,
   };
-  const [zoom, setZoom] = useState<TimeCanvasZoom>(
-    initialZoom ?? chooseFitZoom(model.range),
-  );
+  const [zoom, setZoom] = useState<TimeCanvasZoom>(initialZoom ?? "YEAR");
+  const userSelectedZoomRef = useRef(Boolean(initialZoom));
   const [internalSelection, setInternalSelection] =
     useState<TimeCanvasSelection>(initialSelection);
+  const initialSelectionAppliedRef = useRef(false);
   const selection = controlledSelection === undefined
     ? internalSelection
     : controlledSelection;
   const [scrollState, setScrollState] = useState({ left: 0, width: 900 });
-  const [rangeShiftDays, setRangeShiftDays] = useState(0);
-  const rangeShiftDaysRef = useRef(0);
+  const [rowHeaderWidth, setRowHeaderWidth] = useState(240);
   const [activeFocusKey, setActiveFocusKey] = useState<string | null>(null);
   const [pendingFocusKey, setPendingFocusKey] = useState<string | null>(null);
   const scrollElementRef = useRef<HTMLDivElement>(null);
+  const bottomScrollbarRef = useRef<HTMLDivElement>(null);
   const animationFrameRef = useRef<number | null>(null);
+  const layoutScrollLeftRef = useRef<number | null>(null);
+  const viewportCenterRef = useRef<number | null>(
+    Number.isFinite(initialCenterMs) ? (initialCenterMs ?? null) : null,
+  );
+  const externalCenterRef = useRef(initialCenterMs);
+  const externalZoomRef = useRef(initialZoom);
+  const scaleLayoutKeyRef = useRef("");
   const filteredSegments = useMemo(
     () =>
       model.segments.filter(
@@ -173,7 +186,7 @@ export function TimeCanvas({
     [visibleWindow, zoom],
   );
   const dayStripes = useMemo(
-    () => axisTicks({ window: visibleWindow, zoom: "DAY" }),
+    () => axisTicks({ window: visibleWindow, zoom: "WEEK" }),
     [visibleWindow],
   );
 
@@ -192,19 +205,122 @@ export function TimeCanvas({
     .join("|");
 
   useEffect(() => {
+    if (initialSelectionAppliedRef.current || !initialSelection) return;
+    const key = initialSelection.kind === "SEGMENT"
+      ? segmentFocusKey(initialSelection.id)
+      : anchorFocusKey(initialSelection.id);
+    const target = focusTargets.find((item) => item.key === key);
+    if (!target) return;
+    initialSelectionAppliedRef.current = true;
+    viewportCenterRef.current = target.atMs;
+    setActiveFocusKey(key);
+    setPendingFocusKey(key);
+    rowVirtualizer.scrollToIndex(target.rowIndex, { align: "center" });
+    const element = scrollElementRef.current;
+    if (element) {
+      element.scrollLeft = scrollLeftForCenter(scale, target.atMs, scrollState.width);
+    }
+  }, [focusTargets, initialSelection, rowVirtualizer, scale, scrollState.width]);
+
+  useEffect(() => {
+    if (Object.is(externalCenterRef.current, initialCenterMs)) return;
+    externalCenterRef.current = initialCenterMs;
+    viewportCenterRef.current = Number.isFinite(initialCenterMs)
+      ? (initialCenterMs ?? null)
+      : null;
+  }, [initialCenterMs]);
+
+  useEffect(() => {
+    if (externalZoomRef.current === initialZoom) return;
+    externalZoomRef.current = initialZoom;
+    userSelectedZoomRef.current = Boolean(initialZoom);
+    const nextZoom = initialZoom ?? chooseAdaptiveScale(model.range, scrollState.width);
+    setZoom(nextZoom);
+    onZoomChange?.(nextZoom);
+  }, [initialZoom, model.range, onZoomChange, scrollState.width]);
+
+  useEffect(() => {
     const element = scrollElementRef.current;
     if (!element) return;
     const updateWidth = () => {
+      const nextHeaderWidth = responsiveRowHeaderWidth(element.clientWidth);
+      const nextViewportWidth = Math.max(1, element.clientWidth - nextHeaderWidth);
+      setRowHeaderWidth(nextHeaderWidth);
       setScrollState((current) => ({
         ...current,
-        width: Math.max(1, element.clientWidth - ROW_HEADER_WIDTH),
+        width: nextViewportWidth,
       }));
+      if (!userSelectedZoomRef.current) {
+        const adaptiveZoom = chooseAdaptiveScale(model.range, nextViewportWidth);
+        setZoom(adaptiveZoom);
+        onZoomChange?.(adaptiveZoom);
+      }
     };
     updateWidth();
     const observer = new ResizeObserver(updateWidth);
     observer.observe(element);
     return () => observer.disconnect();
-  }, []);
+  }, [model.range, onZoomChange]);
+
+  useEffect(() => {
+    const element = scrollElementRef.current;
+    if (!element) return;
+    const measuredHeaderWidth = responsiveRowHeaderWidth(element.clientWidth);
+    const measuredViewportWidth = Math.max(
+      1,
+      element.clientWidth - measuredHeaderWidth,
+    );
+    if (
+      measuredHeaderWidth !== rowHeaderWidth ||
+      Math.abs(measuredViewportWidth - scrollState.width) > 1
+    ) {
+      return;
+    }
+    const layoutKey = `${model.range.startMs}:${model.range.endMs}:${zoom}:${scrollState.width}:${initialCenterMs ?? "auto"}`;
+    if (scaleLayoutKeyRef.current === layoutKey) return;
+    scaleLayoutKeyRef.current = layoutKey;
+    const fallbackCenter = liveNowMs >= model.range.startMs && liveNowMs < model.range.endMs
+      ? liveNowMs
+      : model.range.startMs;
+    const center = Math.max(
+      model.range.startMs,
+      Math.min(viewportCenterRef.current ?? fallbackCenter, model.range.endMs - 1),
+    );
+    const left = scrollLeftForCenter(scale, center, scrollState.width);
+    layoutScrollLeftRef.current = left;
+    element.scrollLeft = left;
+    const effectiveLeft = element.scrollLeft;
+    if (bottomScrollbarRef.current) {
+      bottomScrollbarRef.current.scrollLeft = effectiveLeft;
+    }
+    setScrollState((current) => ({ ...current, left: effectiveLeft }));
+    onViewportChange?.(visibleTimeWindow({
+      scale,
+      scrollLeftPx: effectiveLeft,
+      viewportWidthPx: scrollState.width,
+      overscanPx: 0,
+    }));
+  }, [
+    liveNowMs,
+    initialCenterMs,
+    model.range,
+    onViewportChange,
+    rowHeaderWidth,
+    scale,
+    scrollState.width,
+    zoom,
+  ]);
+
+  useEffect(() => {
+    onViewportChange?.(
+      visibleTimeWindow({
+        scale,
+        scrollLeftPx: scrollState.left,
+        viewportWidthPx: scrollState.width,
+        overscanPx: 0,
+      }),
+    );
+  }, [onViewportChange, scale, scrollState.left, scrollState.width]);
 
   useEffect(
     () => () => {
@@ -249,6 +365,15 @@ export function TimeCanvas({
   const scrollToToday = useCallback(() => {
     const now = liveNowMs;
     if (now < model.range.startMs || now >= model.range.endMs) {
+      if (
+        onRequestCenter &&
+        navigationRange &&
+        now >= navigationRange.startMs &&
+        now < navigationRange.endMs
+      ) {
+        onRequestCenter(now);
+        return;
+      }
       if (onRangeChange) {
         const duration = model.range.endMs - model.range.startMs;
         onRangeChange({ startMs: now - duration / 2, endMs: now + duration / 2 });
@@ -257,28 +382,66 @@ export function TimeCanvas({
     }
     const element = scrollElementRef.current;
     if (!element) return;
+    viewportCenterRef.current = now;
     element.scrollTo({
-      left: Math.max(0, timeToX(now, scale) - scrollState.width / 2),
+      left: scrollLeftForCenter(scale, now, scrollState.width),
       behavior: prefersReducedMotion() ? "auto" : "smooth",
     });
-  }, [liveNowMs, model.range, onRangeChange, scale, scrollState.width]);
-
-  const fitRange = useCallback(() => {
-    setZoom(chooseFitZoom(model.range));
-    scrollElementRef.current?.scrollTo({ left: 0, behavior: "auto" });
-  }, [model.range]);
+  }, [
+    liveNowMs,
+    model.range,
+    navigationRange,
+    onRangeChange,
+    onRequestCenter,
+    scale,
+    scrollState.width,
+  ]);
 
   const changeRange = useCallback(
     (direction: -1 | 1) => {
-      if (!onRangeChange) return;
-      const duration = model.range.endMs - model.range.startMs;
-      onRangeChange({
-        startMs: model.range.startMs + direction * duration,
-        endMs: model.range.endMs + direction * duration,
+      const element = scrollElementRef.current;
+      if (!element) return;
+      const left = shiftViewportByRatio({
+        scale,
+        scrollLeftPx: element.scrollLeft,
+        viewportWidthPx: scrollState.width,
+        direction,
       });
+      if (left !== element.scrollLeft) {
+        viewportCenterRef.current = viewportCenterTime(scale, left, scrollState.width);
+        element.scrollTo({ left, behavior: prefersReducedMotion() ? "auto" : "smooth" });
+        return;
+      }
+      if (onRequestCenter) {
+        const currentCenter = viewportCenterTime(
+          scale,
+          element.scrollLeft,
+          scrollState.width,
+        );
+        const visibleDuration = scrollState.width * scale.msPerPixel;
+        onRequestCenter(currentCenter + direction * visibleDuration * 0.8);
+        return;
+      }
+      if (onRangeChange) {
+        const duration = model.range.endMs - model.range.startMs;
+        onRangeChange({
+          startMs: model.range.startMs + direction * duration,
+          endMs: model.range.endMs + direction * duration,
+        });
+      }
     },
-    [model.range, onRangeChange],
+    [model.range, onRangeChange, onRequestCenter, scale, scrollState.width],
   );
+
+  const changeZoom = useCallback((nextZoom: TimeCanvasZoom) => {
+    const element = scrollElementRef.current;
+    if (element) {
+      viewportCenterRef.current = viewportCenterTime(scale, element.scrollLeft, scrollState.width);
+    }
+    userSelectedZoomRef.current = true;
+    setZoom(nextZoom);
+    onZoomChange?.(nextZoom);
+  }, [onZoomChange, scale, scrollState.width]);
 
   const handleKeyboard = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
@@ -288,11 +451,6 @@ export function TimeCanvas({
       if (event.key.toLowerCase() === "t") {
         event.preventDefault();
         scrollToToday();
-        return;
-      }
-      if (event.key.toLowerCase() === "f") {
-        event.preventDefault();
-        fitRange();
         return;
       }
       const focusKey = target.dataset.canvasObjectKey;
@@ -321,21 +479,10 @@ export function TimeCanvas({
         }
       }
     },
-    [fitRange, focusTargets, rowVirtualizer, scale, scrollState.width, scrollToToday],
+    [focusTargets, rowVirtualizer, scale, scrollState.width, scrollToToday],
   );
 
   const selectedEntity = resolveSelection(model, selection);
-  const commitRangeShift = () => {
-    const days = rangeShiftDaysRef.current;
-    if (!onRangeChange || days === 0) return;
-    const shiftMs = days * DAY_MS;
-    rangeShiftDaysRef.current = 0;
-    setRangeShiftDays(0);
-    onRangeChange({
-      startMs: model.range.startMs + shiftMs,
-      endMs: model.range.endMs + shiftMs,
-    });
-  };
   return (
     <section
       className="min-w-0 max-w-full"
@@ -345,52 +492,35 @@ export function TimeCanvas({
       onKeyDown={handleKeyboard}
     >
       <TimeCanvasToolbar
-        model={model}
+        presentation={presentation}
         zoom={zoom}
-        canChangeRange={Boolean(onRangeChange)}
+        canGoPrevious={
+          scrollState.left > 1 ||
+          Boolean(onRangeChange) ||
+          Boolean(
+            onRequestCenter &&
+            navigationRange &&
+            navigationRange.startMs < model.range.startMs,
+          )
+        }
+        canGoNext={
+          scrollState.left < scale.contentWidthPx - scrollState.width - 1 ||
+          Boolean(onRangeChange) ||
+          Boolean(
+            onRequestCenter &&
+            navigationRange &&
+            navigationRange.endMs > model.range.endMs,
+          )
+        }
         canGoToday={
-          liveNowMs >= model.range.startMs &&
-          liveNowMs < model.range.endMs
-            ? true
-            : Boolean(onRangeChange)
+          liveNowMs >= (navigationRange?.startMs ?? model.range.startMs) &&
+          liveNowMs < (navigationRange?.endMs ?? model.range.endMs)
         }
         onPrevious={() => changeRange(-1)}
         onNext={() => changeRange(1)}
         onToday={scrollToToday}
-        onFit={fitRange}
-        onZoomChange={setZoom}
+        onZoomChange={changeZoom}
       />
-
-      {onRangeChange && (
-        <div className="flex items-center gap-3 border-b border-border bg-card px-3 py-2">
-          <span className="shrink-0 text-xs text-muted-foreground">日期平移</span>
-          <input
-            type="range"
-            min={-31}
-            max={31}
-            step={1}
-            value={rangeShiftDays}
-            className="h-4 min-w-0 flex-1 cursor-ew-resize accent-primary"
-            aria-label="左右拖动切换日期范围"
-            data-testid="time-canvas-range-pan-bar"
-            onChange={(event) => {
-              const days = Number(event.target.value);
-              rangeShiftDaysRef.current = days;
-              setRangeShiftDays(days);
-            }}
-            onPointerUp={commitRangeShift}
-            onBlur={commitRangeShift}
-            onKeyUp={(event) => {
-              if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
-                commitRangeShift();
-              }
-            }}
-          />
-          <span className="w-16 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-            {rangeShiftDays === 0 ? "当前窗口" : `${rangeShiftDays > 0 ? "+" : ""}${rangeShiftDays} 天`}
-          </span>
-        </div>
-      )}
 
       <div
         className={cn(
@@ -403,23 +533,33 @@ export function TimeCanvas({
         <div className="min-w-0">
           <div
             ref={scrollElementRef}
-            className="relative max-h-[min(68dvh,44rem)] min-h-72 min-w-0 overflow-auto overscroll-contain"
+            className="relative max-h-[min(68dvh,44rem)] min-h-72 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain"
             data-testid="time-canvas-scroll"
             onScroll={(event) => {
               const element = event.currentTarget;
               if (animationFrameRef.current !== null) return;
-              animationFrameRef.current = requestAnimationFrame(() => {
-                animationFrameRef.current = null;
-                setScrollState({
-                  left: element.scrollLeft,
-                  width: Math.max(1, element.clientWidth - ROW_HEADER_WIDTH),
-                });
+                animationFrameRef.current = requestAnimationFrame(() => {
+                  animationFrameRef.current = null;
+                  const left = element.scrollLeft;
+                  const layoutLeft = layoutScrollLeftRef.current;
+                  layoutScrollLeftRef.current = null;
+                  if (layoutLeft === null || Math.abs(layoutLeft - left) > 1) {
+                    viewportCenterRef.current = viewportCenterTime(
+                      scale,
+                      left,
+                      scrollState.width,
+                    );
+                  }
+                  if (bottomScrollbarRef.current && bottomScrollbarRef.current.scrollLeft !== left) {
+                  bottomScrollbarRef.current.scrollLeft = left;
+                }
+                setScrollState((current) => ({ ...current, left }));
               });
             }}
           >
             <div
               className="relative min-w-full"
-              style={{ width: ROW_HEADER_WIDTH + scale.contentWidthPx }}
+              style={{ width: rowHeaderWidth + scale.contentWidthPx }}
             >
               <TimeAxis
                 ticks={ticks}
@@ -427,6 +567,7 @@ export function TimeCanvas({
                 zoom={zoom}
                 timezone={model.timezone}
                 nowMs={liveNowMs}
+                rowHeaderWidth={rowHeaderWidth}
               />
 
               {model.rows.length === 0 ? (
@@ -450,9 +591,9 @@ export function TimeCanvas({
                         key={row.id}
                         className="absolute left-0 top-0 grid border-b border-border/70"
                         style={{
-                          width: ROW_HEADER_WIDTH + scale.contentWidthPx,
+                          width: rowHeaderWidth + scale.contentWidthPx,
                           height: virtualRow.size,
-                          gridTemplateColumns: `${ROW_HEADER_WIDTH}px ${scale.contentWidthPx}px`,
+                          gridTemplateColumns: `${rowHeaderWidth}px ${scale.contentWidthPx}px`,
                           transform: `translateY(${virtualRow.start - AXIS_HEIGHT}px)`,
                         }}
                         data-testid={`timeline-row-${row.id}`}
@@ -482,6 +623,17 @@ export function TimeCanvas({
               )}
             </div>
           </div>
+          <TimeCanvasBottomScrollbar
+            ref={bottomScrollbarRef}
+            hidden={scale.contentWidthPx <= scrollState.width}
+            rowHeaderWidth={rowHeaderWidth}
+            contentWidthPx={scale.contentWidthPx}
+            onScroll={(left) => {
+              const element = scrollElementRef.current;
+              if (!element || element.scrollLeft === left) return;
+              element.scrollLeft = left;
+            }}
+          />
         </div>
 
         {display.showInspector && selectedEntity && (
@@ -522,78 +674,66 @@ function useLiveNow(generatedAt: string) {
 }
 
 function TimeCanvasToolbar({
-  model,
+  presentation,
   zoom,
-  canChangeRange,
+  canGoPrevious,
+  canGoNext,
   canGoToday,
   onPrevious,
   onNext,
   onToday,
-  onFit,
   onZoomChange,
 }: {
-  model: TimeCanvasProps["model"];
+  presentation: TimeCanvasProps["presentation"];
   zoom: TimeCanvasZoom;
-  canChangeRange: boolean;
+  canGoPrevious: boolean;
+  canGoNext: boolean;
   canGoToday: boolean;
   onPrevious: () => void;
   onNext: () => void;
   onToday: () => void;
-  onFit: () => void;
   onZoomChange: (zoom: TimeCanvasZoom) => void;
 }) {
-  const zoomIndex = zoomOrder.indexOf(zoom);
+  if (presentation === "COMPACT") return null;
   return (
-    <div className="flex min-h-14 min-w-0 flex-wrap items-center gap-2 border-b border-border bg-card px-3 py-2" data-testid="time-canvas-toolbar">
-      <div className="mr-auto min-w-0">
-        <p className="truncate text-sm font-medium">
-          {formatDate(model.range.startMs)} – {formatDate(model.range.endMs - 1)}
-        </p>
-        <p className="text-xs text-muted-foreground">{model.timezone} · 半开区间</p>
+    <div className="flex min-h-12 min-w-0 flex-wrap items-center justify-end gap-2 border-b border-border bg-card px-3 py-2" data-testid="time-canvas-toolbar">
+      <div className="flex items-center overflow-hidden rounded-md border border-border" aria-label="显示尺度">
+        {zoomOrder.map((item) => (
+          <Button
+            key={item}
+            type="button"
+            size="sm"
+            variant={zoom === item ? "secondary" : "ghost"}
+            className="rounded-none px-3"
+            aria-label={zoomLabels[item]}
+            aria-pressed={zoom === item}
+            onClick={() => onZoomChange(item)}
+          >
+            {zoomLabels[item]}
+          </Button>
+        ))}
       </div>
-      <Button type="button" size="icon-sm" variant="outline" onClick={onPrevious} disabled={!canChangeRange} aria-label="上一时间范围">
+      <Button type="button" size="icon-sm" variant="outline" onClick={onPrevious} disabled={!canGoPrevious} aria-label="向前浏览时间">
         <ChevronLeft aria-hidden="true" />
       </Button>
-      <Button type="button" size="sm" variant="outline" onClick={onToday} disabled={!canGoToday}>
-        今天
-      </Button>
-      <Button type="button" size="icon-sm" variant="outline" onClick={onNext} disabled={!canChangeRange} aria-label="下一时间范围">
+      <span
+        className="inline-flex"
+        title={canGoToday ? undefined : "今天不在当前时间范围内"}
+      >
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={onToday}
+          disabled={!canGoToday}
+          aria-label={canGoToday ? "今天" : "今天（不在当前时间范围内）"}
+        >
+          今天
+        </Button>
+      </span>
+      <Button type="button" size="icon-sm" variant="outline" onClick={onNext} disabled={!canGoNext} aria-label="向后浏览时间">
         <ChevronRight aria-hidden="true" />
       </Button>
-      <div className="flex items-center rounded-lg border border-border" aria-label="缩放控制">
-        <Button
-          type="button"
-          size="icon-sm"
-          variant="ghost"
-          aria-label="放大时间轴"
-          disabled={zoomIndex === 0}
-          onClick={() => onZoomChange(zoomOrder[Math.max(0, zoomIndex - 1)] ?? zoom)}
-        >
-          <Plus aria-hidden="true" />
-        </Button>
-        <span className="min-w-10 text-center text-xs">{zoomLabels[zoom]}</span>
-        <Button
-          type="button"
-          size="icon-sm"
-          variant="ghost"
-          aria-label="缩小时间轴"
-          disabled={zoomIndex === zoomOrder.length - 1}
-          onClick={() => onZoomChange(zoomOrder[Math.min(zoomOrder.length - 1, zoomIndex + 1)] ?? zoom)}
-        >
-          <Minus aria-hidden="true" />
-        </Button>
-      </div>
-      <Button type="button" size="sm" variant="outline" onClick={onFit}>
-        <RotateCcw aria-hidden="true" />
-        适应范围
-      </Button>
-      <div className="hidden items-center gap-2 text-xs text-muted-foreground xl:flex" aria-label="图例">
-        <span>░ Planned</span>
-        <span>■ Actual</span>
-        <span>▧ Busy</span>
-        <span>◆ Milestone</span>
-        <span>⚑ Termination</span>
-      </div>
     </div>
   );
 }
@@ -604,41 +744,91 @@ function TimeAxis({
   zoom,
   timezone,
   nowMs,
+  rowHeaderWidth,
 }: {
   ticks: number[];
   scale: ReturnType<typeof createTimeScale>;
   zoom: TimeCanvasZoom;
   timezone: string;
   nowMs: number;
+  rowHeaderWidth: number;
 }) {
+  const minorLabelStep = Math.max(
+    1,
+    Math.ceil(48 / Math.max(1, tickPixelDistance(ticks, scale))),
+  );
   return (
     <div
       className="sticky top-0 z-30 grid border-b border-border bg-background/95 backdrop-blur"
       style={{
         height: AXIS_HEIGHT,
-        gridTemplateColumns: `${ROW_HEADER_WIDTH}px ${scale.contentWidthPx}px`,
+        gridTemplateColumns: `${rowHeaderWidth}px ${scale.contentWidthPx}px`,
       }}
     >
-      <div className="sticky left-0 z-40 flex items-center border-r border-border bg-background px-3 text-xs font-medium text-muted-foreground">
-        行标题
+      <div className="sticky left-0 z-40 flex min-w-0 items-center border-r border-border bg-background px-3 text-xs font-medium text-muted-foreground">
+        <span className="truncate">任务 / 人员</span>
       </div>
       <div className="relative overflow-hidden" aria-label={`${timezone} ${zoomLabels[zoom]}级时间轴`} role="img">
-        {ticks.map((tick) => (
+        {ticks.map((tick, index) => {
+          const group = formatAxisGroup(tick, zoom);
+          const previousGroup = index > 0 ? formatAxisGroup(ticks[index - 1] ?? tick, zoom) : null;
+          return (
           <div
             key={tick}
             className="absolute inset-y-0 border-l border-border/80"
             style={{ left: timeToX(tick, scale) }}
           >
-            <span className="ml-1 whitespace-nowrap text-[11px] text-muted-foreground">
-              {formatTick(tick, zoom)}
-            </span>
+            {group !== previousGroup && (
+              <span className="absolute left-1 top-1 whitespace-nowrap text-[11px] font-medium text-foreground">
+                {group}
+              </span>
+            )}
+            {index % minorLabelStep === 0 && (
+              <span className="absolute left-1 top-8 whitespace-nowrap text-[11px] text-muted-foreground">
+                {formatTick(tick, zoom)}
+              </span>
+            )}
           </div>
-        ))}
+          );
+        })}
         <TodayLine scale={scale} nowMs={nowMs} axis />
       </div>
     </div>
   );
 }
+
+const TimeCanvasBottomScrollbar = forwardRef<
+  HTMLDivElement,
+  {
+    hidden: boolean;
+    rowHeaderWidth: number;
+    contentWidthPx: number;
+    onScroll: (left: number) => void;
+  }
+>(function TimeCanvasBottomScrollbar(
+  { hidden, rowHeaderWidth, contentWidthPx, onScroll },
+  ref,
+) {
+  if (hidden) return null;
+  return (
+    <div
+      className="sticky bottom-0 z-40 grid h-4 border-t border-border bg-background"
+      style={{ gridTemplateColumns: `${rowHeaderWidth}px minmax(0,1fr)` }}
+      data-testid="time-canvas-bottom-scrollbar"
+    >
+      <div className="border-r border-border bg-card" aria-hidden="true" />
+      <div
+        ref={ref}
+        className="overflow-x-auto overflow-y-hidden"
+        tabIndex={0}
+        aria-label="时间轴横向滚动"
+        onScroll={(event) => onScroll(event.currentTarget.scrollLeft)}
+      >
+        <div style={{ width: contentWidthPx, height: 1 }} />
+      </div>
+    </div>
+  );
+});
 
 function RowHeader({ row }: { row: TimeCanvasRow }) {
   return (
@@ -850,7 +1040,7 @@ function TimelineRow({
         const rect = event.currentTarget.getBoundingClientRect();
         const atMs = snapTimeInRange(
           xToTime(event.clientX - rect.left, scale),
-          scale.snapMs,
+          scale.anchorSnapMs,
           scale,
         );
         if (atMs === null) {
@@ -864,7 +1054,7 @@ function TimelineRow({
           rowKind: row.kind,
           sourceId: row.sourceId,
           atMs,
-          snapMs: scale.snapMs,
+          snapMs: scale.anchorSnapMs,
         });
       }}
     >
@@ -1436,8 +1626,8 @@ function AnchorMarker({
     if (!canMove) return;
     const canvasResult = moveTimePoint({
       atMs: anchor.atMs,
-      rawDeltaMs: direction * scale.snapMs,
-      snapMs: scale.snapMs,
+      rawDeltaMs: direction * scale.anchorSnapMs,
+      snapMs: scale.anchorSnapMs,
       range: scale,
     });
     const result = constrainMove(canvasResult, "KEYBOARD_MOVE");
@@ -1452,7 +1642,7 @@ function AnchorMarker({
       rowId: anchor.rowId,
       kind: "KEYBOARD_MOVE",
       ...result,
-      snapMs: scale.snapMs,
+      snapMs: scale.anchorSnapMs,
     });
   }
 
@@ -1465,7 +1655,7 @@ function AnchorMarker({
       rowId: anchor.rowId,
       kind,
       ...result,
-      snapMs: scale.snapMs,
+      snapMs: scale.anchorSnapMs,
     }) ?? result;
   }
 
@@ -1536,14 +1726,14 @@ function AnchorMarker({
         const canvasResult = moveTimePoint({
           atMs: anchor.atMs,
           rawDeltaMs: rawDelta,
-          snapMs: scale.snapMs,
+          snapMs: scale.anchorSnapMs,
           range: scale,
         });
         const result = constrainMove(canvasResult, "MOVE");
         setPreviewAtMs(result.atMs);
         previewBlockedMessageRef.current = result.blockedMessage ?? null;
         onPreviewChange(anchor.id, result.atMs);
-        if (Math.abs(rawDelta) >= scale.snapMs) {
+        if (Math.abs(rawDelta) >= scale.anchorSnapMs) {
           suppressClickRef.current = true;
         }
       }}
@@ -1581,7 +1771,7 @@ function AnchorMarker({
             kind: "MOVE",
             atMs: result,
             deltaMs: result - anchor.atMs,
-            snapMs: scale.snapMs,
+            snapMs: scale.anchorSnapMs,
           });
         } else if (attemptedMove) {
           interaction?.onInvalidDrop?.(
@@ -1620,7 +1810,7 @@ function AnchorMarker({
       </span>
       {planRow && (
         <span className="max-w-32 truncate text-[9px] text-muted-foreground">
-          {formatCompactAnchorDate(displayedAtMs, scale.snapMs < DAY_MS)}
+          {formatCompactAnchorDate(displayedAtMs, false)}
         </span>
       )}
     </button>
@@ -1916,6 +2106,21 @@ function edgeScrollCanvas(scroller: HTMLElement, clientX: number) {
   } else if (clientX > bounds.right - edge) {
     scroller.scrollLeft += 24;
   }
+}
+
+function responsiveRowHeaderWidth(containerWidth: number) {
+  if (containerWidth < 640) {
+    return Math.round(Math.max(120, Math.min(140, containerWidth * 0.36)));
+  }
+  return Math.round(Math.max(200, Math.min(280, containerWidth * 0.24)));
+}
+
+function tickPixelDistance(
+  ticks: number[],
+  scale: ReturnType<typeof createTimeScale>,
+) {
+  if (ticks.length < 2) return scale.viewportWidthPx;
+  return Math.abs(timeToX(ticks[1] ?? ticks[0] ?? 0, scale) - timeToX(ticks[0] ?? 0, scale));
 }
 
 function clampTime(value: number, minimum: number, maximum: number) {

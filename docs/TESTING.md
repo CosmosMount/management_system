@@ -61,7 +61,7 @@
 - 项目已安装 `@playwright/test`，固定配置文件为 `playwright.config.ts`。
 - 推荐把登录态保存到 `.tmp/playwright-liqixuan-storage.json`、`.tmp/playwright-admin-storage.json` 等本地文件。
 - `.tmp/` 已被 git 忽略，不要把 cookie、storage state 或请求头写入仓库。
-- 默认测试地址为 `http://127.0.0.1:3002`。配置中包含端口保护，禁止默认打到 3000。
+- 默认测试地址为 `http://127.0.0.1:3003`。配置中包含端口保护，禁止默认打到 3000。
 - Playwright 启动的应用服务强制 `NOTIFICATION_DELIVERY_DISABLED=true`，并默认设置 `FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES="李棋轩"`，防止测试期间误发给其他人；业务 outbox 仍保留完整候选收件人，投递层负责拦截。
 - `npm run test:e2e` 的 POSIX script 先以空 `NODE_OPTIONS` 启动 `tsx`，runner 再无条件为测试 worker、受控 Next.js 服务及所有 Node/Prisma 后代注入 `CHECKPOINT_DISABLE=1`。调用方 `NODE_OPTIONS`（其中的 `--require`/`--import` 会在 guard 前执行）不会传给 runner 后代，而是严格重建为受控 sentinel 与 cwd 绑定官方 guard 的绝对 import；继承 probe output/role 同样清空，仅 runner 直接拥有的 server 进程组可写固定 repo `.tmp` probe。已能控制父 npm 进程的同 UID 主体不属于此 harness 的认证边界。guard 会在标准 `fetch` 及 `node:http` / `node:https` 的 `request`、`get` 入口拦截 `*.feishu.cn` / `*.larksuite.com` / `*.larksuite.cn`，未显式 mock 的测试必须立即失败，且 guard 自测只能使用预取消 signal 或建连前失败的本地 agent，禁止把 DNS、socket 等真实网络错误充当阴性证据。该入口级 guard 是测试禁发的补充防线，不能覆盖先访问非飞书地址后由底层自动重定向、绕过标准入口的 custom transport、原始 socket 或非 Node 外部进程，因此测试仍须保持 `NOTIFICATION_DELIVERY_DISABLED=true` 并显式 mock 外部调用。禁发开关与 guard 不改变生产 callback 的身份读取语义；callback 身份测试必须提供隔离库中的可信假 `union_id`（包括 approval bot 与登录 bot 的跨应用映射）或显式 mock 通讯录查询。
 - 只需提供本机 PostgreSQL 的凭据/authority 模板；URL 路径不会被访问，也不会成为测试库名：
@@ -71,11 +71,11 @@
   npm run test:e2e
   ```
 
-  `npm run test:e2e` 是 POSIX-only 官方入口；Windows 因无法在当前实现中可靠保证整个进程树终止，会在 marker/child 创建前拒绝。每次执行会生成新的密码学随机 token 和独立 secret，以 token 构造一对不同、以 `_test` 结尾的 target/shadow，并用 token 唯一 `O_EXCL` marker 绑定精确 pair 与连接摘要。继承的静态路径/shadow/source/clone/reuse/skip/确认变量均被覆盖。runner 强制官方 config、单 worker、`recreate`、`127.0.0.1:3002`、禁通知/checkpoint 和 guard；所有调用方 short option（包括 `-xcalternate...`、`-xc alternate...`、`-xj4`、`-xj 4` 等 Commander cluster）都会拒绝，危险长参数的分离值/等号形式也全部拒绝。clone 脚本在加载数据库代码前 hard reject。
+  `npm run test:e2e` 是 POSIX-only 官方入口；Windows 因无法在当前实现中可靠保证整个进程树终止，会在 marker/child 创建前拒绝。每次执行会生成新的密码学随机 token 和独立 secret，以 token 构造一对不同、以 `_test` 结尾的 target/shadow，并用 token 唯一 `O_EXCL` marker 绑定精确 pair 与连接摘要。继承的静态路径/shadow/source/clone/reuse/skip/确认变量均被覆盖。runner 强制官方 config、单 worker、`recreate`、`127.0.0.1:3003`、禁通知/checkpoint 和 guard；所有调用方 short option（包括 `-xcalternate...`、`-xc alternate...`、`-xj4`、`-xj 4` 等 Commander cluster）都会拒绝，危险长参数的分离值/等号形式也全部拒绝。clone 脚本在加载数据库代码前 hard reject。
 
   `scripts/setup-playwright-db.ts` 与 `scripts/cleanup-playwright-db.ts` 的直接调用同样 fail-closed：公开 token/确认值不够，仍须匹配当前 marker、secret hash、连接摘要及精确 pair；路径逐层拒绝 symlink/不安全 owner 或 mode，leaf/file 必须精确 `0700`/`0600`，file 还须 single-link、regular、大小受限且 inode 稳定。setup 部分创建失败会补偿两个精确名称；cleanup/补偿仅在全部数据库操作成功后删除 marker，任何 drop/unlink 失败均非零且 marker 保留。普通 `SHADOW_DATABASE_URL` 从不作为输入。marker 防误用、cross-run 和公开 token 单独删除，但同 UID 或已有工作树写权限的恶意主体可读取/篡改文件与进程，不是此机制声称抵御的认证边界。
 
-  runner 不再让 Playwright 通过 built-in `webServer` 创建 runner 看不见的 detached 组：它先在 marker 创建前确认 3002 未被占用，再独立启动并拥有 server 组，确认受控 HTTP readiness 后，启动无 built-in server 的 CLI 组。`SIGINT`、`SIGTERM`、`SIGHUP` 第一次同时转发给已存在的两组，第二次（同/不同信号）或 5 秒超时分别升级 `SIGKILL`；正常结束、CLI/server 自发 exit/error 和 pre-child signal 都必须先确认 server 与 CLI 两组退出。端口检查只辅助 availability/readiness/诊断，不能替代进程组静默证明。任一组无法 quiesce 时，runner 跳过 DB cleanup、非零退出并保留 marker，而不会删除仍被活动后代使用的库。cleanup 错误递归展开叶子原因并经统一 redaction 逐条记录；入口先设置 129/130/143 fallback 再尝试重触发原信号，因此 `tsx`/handler 忽略信号或 kill 抛错也不会返回 0。直接 runner `SIGKILL`、崩溃、OS 故障或断电仍可能跳过 cleanup；此时禁止前缀删除，只能由 DBA 只读确认精确名称后处理。
+  runner 不再让 Playwright 通过 built-in `webServer` 创建 runner 看不见的 detached 组：它先在 marker 创建前确认 3003 未被占用，再独立启动并拥有 server 组，确认受控 HTTP readiness 后，启动无 built-in server 的 CLI 组。`SIGINT`、`SIGTERM`、`SIGHUP` 第一次同时转发给已存在的两组，第二次（同/不同信号）或 5 秒超时分别升级 `SIGKILL`；正常结束、CLI/server 自发 exit/error 和 pre-child signal 都必须先确认 server 与 CLI 两组退出。端口检查只辅助 availability/readiness/诊断，不能替代进程组静默证明。任一组无法 quiesce 时，runner 跳过 DB cleanup、非零退出并保留 marker，而不会删除仍被活动后代使用的库。cleanup 错误递归展开叶子原因并经统一 redaction 逐条记录；入口先设置 129/130/143 fallback 再尝试重触发原信号，因此 `tsx`/handler 忽略信号或 kill 抛错也不会返回 0。直接 runner `SIGKILL`、崩溃、OS 故障或断电仍可能跳过 cleanup；此时禁止前缀删除，只能由 DBA 只读确认精确名称后处理。
 
   修改 Playwright 数据库 harness 后，先运行不连接数据库的 runner/lifecycle 回归，再用同一本机凭据运行 PostgreSQL 安全演练：
 
@@ -88,7 +88,7 @@
     npm run test:playwright-db-safety
   ```
 
-  lifecycle 命令真实启动 `scripts/run-playwright.ts` 验证危险 CLI/short cluster 在 marker/child 前失败，并证明历史 self-test 环境名不能绕过 runner 且不会传给受控后代；正式入口没有 caller 可选择的测试分支。独立的 `verify-playwright-runner-finalizer-entry.ts` 只验证共享 production finalizer 的三种信号内核终止或 129/130/143 fallback、原信号日志、嵌套 cleanup 根因展开与凭据/secret redaction，不宣称它执行了正式 runner 数据库生命周期；clone 是另一个真实 hard-reject 子进程。lifecycle 会真实创建两个独立 POSIX 进程组，以占用 3002 的 detached server 分别覆盖 CLI 自然失败、首次信号超时升级和第二信号强杀，并在 server 尚未静默时断言 cleanup 未调用、marker 与注入的精确 pair 所有权仍保留，静默后才允许清理；另有 parent 自发退出、同组 descendant 继续占端口的回归。marker 的 symlink、mode、owner policy、hardlink、oversize/content、inode swap以及 direct setup 部分补偿、drop/unlink failure 使用 deterministic 文件/注入 seam，不冒充真实数据库故障。PostgreSQL 演练除随机双 pair、相似 sentinel、非法 setup/cleanup、并发 recreate、direct cleanup、pair 隔离外，还用真实随机 target/shadow 重跑上述三种 detached 双组场景，逐次证明活动 server 期间 DB/marker 保留，双组静默后 cleanup 恰好一次且 DB/marker/3002/进程组残留为 0；命令不会访问 source 或发送飞书。
+  lifecycle 命令真实启动 `scripts/run-playwright.ts` 验证危险 CLI/short cluster 在 marker/child 前失败，并证明历史 self-test 环境名不能绕过 runner 且不会传给受控后代；正式入口没有 caller 可选择的测试分支。独立的 `verify-playwright-runner-finalizer-entry.ts` 只验证共享 production finalizer 的三种信号内核终止或 129/130/143 fallback、原信号日志、嵌套 cleanup 根因展开与凭据/secret redaction，不宣称它执行了正式 runner 数据库生命周期；clone 是另一个真实 hard-reject 子进程。lifecycle 会真实创建两个独立 POSIX 进程组，以占用 3003 的 detached server 分别覆盖 CLI 自然失败、首次信号超时升级和第二信号强杀，并在 server 尚未静默时断言 cleanup 未调用、marker 与注入的精确 pair 所有权仍保留，静默后才允许清理；另有 parent 自发退出、同组 descendant 继续占端口的回归。marker 的 symlink、mode、owner policy、hardlink、oversize/content、inode swap以及 direct setup 部分补偿、drop/unlink failure 使用 deterministic 文件/注入 seam，不冒充真实数据库故障。PostgreSQL 演练除随机双 pair、相似 sentinel、非法 setup/cleanup、并发 recreate、direct cleanup、pair 隔离外，还用真实随机 target/shadow 重跑上述三种 detached 双组场景，逐次证明活动 server 期间 DB/marker 保留，双组静默后 cleanup 恰好一次且 DB/marker/3003/进程组残留为 0；命令不会访问 source 或发送飞书。
 
   如需执行登录后的功能冒烟，额外指定本地登录态：
 
@@ -228,11 +228,12 @@ npm run pm:identity-backfill
 3. 打开 `/progress/tasks/[id]`，应看到概览、共享节点导航、选中节点详情，以及正式启用的“Task 风险 / Task 评论 / 近期动态”；不得再出现 Tab、人员投入、计划版本、Revision/验收历史或 raw 审计列表。Task Owner/Participant 可在 ACTIVE 状态提出和解决风险，普通旁观者只能查看风险但仍可评论；只有全局管理员显示评论删除入口。Active Task 编辑 Dialog 继续使用一次事务保存基本信息、Tags 和成员，并保持原有并发保护。
 4. Desktop 与 Pixel 5 打开 `/progress/resources`：两者都渲染横向时间画布且页面无横向溢出。总览不能拖动、缩放、批量修改或合并既有投入；双击或聚焦后按 Enter 打开详情 Dialog，只有目标 Segment 可编辑。创建草稿存在时不能打开其他详情，失败时表单必须保留。
 5. Planned 完整确认后只显示 Actual；前缀部分确认固定开始点并只生成一条尾段，伪造中间起点必须在服务端零写入拒绝。直接拆分入口、公开 action 和 capability 不得存在。确认、取消、Actual 软删除仍需验证数据库、来源、change、audit、站内通知与 outbox，测试环境必须禁用真实飞书投递。
-6. `/progress/my-timeline` 默认只显示 ACTIVE 参与 Task；切换“显示全部”后才显示草稿和终态。每页 25 条且列表与 Plan 行同步；无 `date` 时从今天开始，日期平移滑杆向左/右拖动后 URL 与数据窗口应进入过去/未来。Task 详情显示有效成员投入并禁止创建，Project 详情显示 ProjectMember/当前页 TaskMember 并集且投入只读。Task/Project 的 31 天 URL 窗口、上一/下一、日期选择和跨窗口节点定位均需验收。
-7. `/progress/resources/conflicts` 必须返回 404。资源计划、个人时间线和 Task 工作台不得出现冲突标记或投入比例；重叠 Segment 不得产生冲突待办、通知或 outbox。
-6. 打开 `/progress/notifications`，只展示当前收件人的站内通知；可按类型/未读筛选、标记单条或全部已读，跳转对象前仍要按业务对象权限过滤。
-7. 页面不得出现旧项目、阶段、周报、提醒或 `PROJECT_MANAGER` 角色文案；当前风险区不得出现旧 Stage 风险或计划节点绑定入口。页面不得出现 500、Next.js error overlay、未处理浏览器错误或横向滚动。
-8. 旧 `/progress/task/:id` 应服务端重定向到 `/progress/tasks/:id`；`/progress/projects/*` 是当前正式路由，只有旧 `/progress/kanban` 回到 `/progress`。收缩 migration 集成测试仍需验证历史旧表、旧 enum、`PROJECT_MANAGER` 数据和 `channel=progress` outbox/recipient 被删除；HEAD 还必须证明新 Project 不含 Stage、`ownerOpenId` 等旧签名。
+6. `/progress/my-timeline` 默认只显示 ACTIVE 参与 Task；切换“显示全部”后才显示草稿和终态。每页 25 条且列表与 Plan 行同步；页面不再出现日期、日/周视图或日期平移控件。验证周/月/季/年尺度、今天、按 80% 视口移动的前后导航、多级上海日期轴及独立底部滚动条。Task 详情显示有效成员投入并禁止创建，Project 详情显示 ProjectMember/当前页 TaskMember 并集且投入只读；二者不再显示 31 天窗口控件。旧 `date/mode/timelineDate/timelineFocus` 链接应规范化到 `center/scale/focus`，人员计划的 `from/to` 必须继续作为硬筛选。浏览器前进/后退后筛选控件必须与 URL 一致；投入详情有未保存修改时，服务端刷新或 `rowPageKey` 变化不得直接丢弃表单。
+7. 在 Desktop `1440x1000` 与 Pixel 5 上分别验证响应式冻结行标题、页面无横向溢出、底部滚动与顶部日期轴/时间对象同步。覆盖空数据、超长名称、跨年、超过 366 天、三年裁剪提示、单块自动二分和 20,000 对象/16 块预算错误；测试不得联系真实飞书服务。
+8. `/progress/resources/conflicts` 必须返回 404。资源计划、个人时间线和 Task 工作台不得出现冲突标记或投入比例；重叠 Segment 不得产生冲突待办、通知或 outbox。
+9. 打开 `/progress/notifications`，只展示当前收件人的站内通知；可按类型/未读筛选、标记单条或全部已读，跳转对象前仍要按业务对象权限过滤。
+10. 页面不得出现旧项目、阶段、周报、提醒或 `PROJECT_MANAGER` 角色文案；当前风险区不得出现旧 Stage 风险或计划节点绑定入口。页面不得出现 500、Next.js error overlay、未处理浏览器错误或横向滚动。
+11. 旧 `/progress/task/:id` 应服务端重定向到 `/progress/tasks/:id`；`/progress/projects/*` 是当前正式路由，只有旧 `/progress/kanban` 回到 `/progress`。收缩 migration 集成测试仍需验证历史旧表、旧 enum、`PROJECT_MANAGER` 数据和 `channel=progress` outbox/recipient 被删除；HEAD 还必须证明新 Project 不含 Stage、`ownerOpenId` 等旧签名。
 
 ### Project 立项专项测试
 

@@ -3,8 +3,12 @@ import {
   createEmptyTimeCanvasFixture,
   createTimeCanvasFixture,
 } from "@/components/project-management/time-canvas/fixtures";
-import { TimeCanvas } from "@/components/project-management/time-canvas/time-canvas";
-import type { TimeCanvasMode } from "@/components/project-management/time-canvas/types";
+import { ObservedTimeCanvasFixture } from "@/components/project-management/time-canvas/observed-fixture";
+import { DAY_MS } from "@/components/project-management/time-canvas/time-math";
+import type {
+  TimeCanvasMode,
+  TimeCanvasZoom,
+} from "@/components/project-management/time-canvas/types";
 import { PageCommandBar } from "@/components/project-management/shell/page-command-bar";
 
 const modes = new Set<TimeCanvasMode>([
@@ -25,9 +29,19 @@ export default async function TimeCanvasFixturePage({
   const mode = modes.has(requestedMode as TimeCanvasMode)
     ? (requestedMode as TimeCanvasMode)
     : "RESOURCE_PLANNER";
-  const model = single(params.empty) === "1"
+  const baseModel = single(params.empty) === "1"
     ? createEmptyTimeCanvasFixture()
     : createTimeCanvasFixture(mode);
+  const model = single(params.long) === "1"
+    ? {
+        ...baseModel,
+        range: {
+          startMs: baseModel.range.startMs,
+          endMs: baseModel.range.startMs + 3 * 366 * DAY_MS,
+        },
+      }
+    : baseModel;
+  const initialZoom = parseZoom(single(params.scale));
 
   return (
     <>
@@ -37,15 +51,10 @@ export default async function TimeCanvasFixturePage({
       />
       <main className="mx-auto w-full min-w-0 max-w-[96rem] px-4 py-6 sm:px-6 lg:px-8">
         <div className="min-w-0 overflow-hidden rounded-xl border border-border bg-background">
-          <TimeCanvas
+          <ObservedTimeCanvasFixture
             mode={mode}
             model={model}
-            display={{
-              showActual: true,
-              showBusy: true,
-              showInspector: true,
-            }}
-            emptyMessage="受控空数据验收状态"
+            initialZoom={initialZoom}
           />
         </div>
       </main>
@@ -72,4 +81,14 @@ function isControlledPlaywrightServer() {
 
 function single(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
+}
+
+function parseZoom(value: string | undefined): TimeCanvasZoom | undefined {
+  const normalized = value?.toUpperCase();
+  return normalized === "WEEK" ||
+    normalized === "MONTH" ||
+    normalized === "QUARTER" ||
+    normalized === "YEAR"
+    ? normalized
+    : undefined;
 }

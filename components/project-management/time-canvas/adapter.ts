@@ -86,12 +86,28 @@ export function timeCanvasDataToModel(
       startMs: parseMs(data.range.startAt),
       endMs: parseMs(data.range.endAt),
     },
+    rowPageKey: data.rowPageKey,
     rows: [...planRows, ...regularRows],
     anchors,
     segments,
     nextCursor: data.nextCursor,
     generatedAt: data.generatedAt,
   };
+}
+
+export function timeCanvasSegmentsToModel(
+  segments: TimeCanvasDataDto["segments"],
+  groupBy: TimeCanvasDataDto["groupBy"],
+  rows: TimeCanvasRow[],
+) {
+  const rowIdBySource = new Map(
+    rows
+      .filter((row) => row.kind !== "PLAN")
+      .map((row) => [`${row.kind}:${row.sourceId}`, row.id]),
+  );
+  return segments.map((segment, index) =>
+    adaptSegment(segment, index, groupBy, rowIdBySource),
+  );
 }
 
 function adaptSegment(
@@ -146,20 +162,18 @@ function adaptTaskAnchors(
   const anchors: TimeCanvasAnchor[] = [];
   const canEditDraftPlan =
     task.status === "DRAFT" && task.capabilities.canUpdateMetadata;
-  if (task.plannedStartAt) {
-    anchors.push({
-      id: `plan-start:${task.id}`,
-      rowId,
-      taskId: task.id,
-      kind: "PLAN_START",
-      status: task.status,
-      label: "Start",
-      atMs: parseMs(task.plannedStartAt),
-      sequence: -1,
-      editable: canEditDraftPlan,
-      versionToken: task.versionToken,
-    });
-  }
+  anchors.push({
+    id: `plan-start:${task.id}`,
+    rowId,
+    taskId: task.id,
+    kind: "PLAN_START",
+    status: task.status,
+    label: "Start",
+    atMs: parseMs(task.plannedStartAt ?? task.createdAt),
+    sequence: -1,
+    editable: canEditDraftPlan && task.plannedStartAt !== null,
+    versionToken: task.versionToken,
+  });
   for (const node of task.nodes) {
     if (!node.plannedAt) continue;
     anchors.push({

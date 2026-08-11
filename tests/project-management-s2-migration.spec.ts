@@ -2093,6 +2093,7 @@ function canvasTaskAnchor(taskId: string, nodeTaskId = taskId) {
     title: "画布 Task anchor",
     status: "ACTIVE",
     priority: "HIGH",
+    createdAt: "2026-08-01T07:30:00.000Z",
     plannedStartAt: "2026-08-01T08:00:00.000Z",
     capabilities: {
       canView: true,

@@ -31,18 +31,29 @@ export function TaskPlanNodeNavigator({
     const container = containerRef.current;
     const selected = container?.querySelector<HTMLElement>("[data-node-selected='true']");
     if (!container || !selected) return;
-    const containerRect = container.getBoundingClientRect();
-    const selectedRect = selected.getBoundingClientRect();
-    if (selectedRect.left < containerRect.left) {
-      container.scrollLeft -= containerRect.left - selectedRect.left;
-    } else if (selectedRect.right > containerRect.right) {
-      container.scrollLeft += selectedRect.right - containerRect.right;
-    }
-    if (selectedRect.top < containerRect.top) {
-      container.scrollTop -= containerRect.top - selectedRect.top;
-    } else if (selectedRect.bottom > containerRect.bottom) {
-      container.scrollTop += selectedRect.bottom - containerRect.bottom;
-    }
+    const revealSelected = () => {
+      const containerRect = container.getBoundingClientRect();
+      const selectedRect = selected.getBoundingClientRect();
+      container.scrollLeft = Math.max(
+        0,
+        container.scrollLeft +
+          selectedRect.left -
+          containerRect.left -
+          container.clientLeft -
+          (container.clientWidth - selectedRect.width) / 2,
+      );
+      container.scrollTop = Math.max(
+        0,
+        container.scrollTop +
+          selectedRect.top -
+          containerRect.top -
+          container.clientTop -
+          (container.clientHeight - selectedRect.height) / 2,
+      );
+    };
+    revealSelected();
+    const frame = window.requestAnimationFrame(revealSelected);
+    return () => window.cancelAnimationFrame(frame);
   }, [nodes.length, selectedId]);
 
   return (
@@ -59,7 +70,7 @@ export function TaskPlanNodeNavigator({
           return (
             <div
               key={node.id}
-              className="relative flex min-w-0 flex-1 items-stretch sm:min-w-40 sm:items-start"
+              className="relative flex min-w-0 flex-1 items-stretch sm:w-40 sm:min-w-40 sm:max-w-40 sm:flex-none sm:items-start"
               data-node-selected={selected}
             >
               {index > 0 && (
@@ -88,7 +99,7 @@ export function TaskPlanNodeNavigator({
               >
                 <NodeIcon node={node} selected={selected} />
                 <span className="min-w-0 flex-1 sm:w-full">
-                  <span className="block break-words text-sm font-medium">
+                  <span className="line-clamp-2 block break-all text-sm font-medium">
                     {node.label}
                   </span>
                   <span className="mt-0.5 block text-xs text-muted-foreground">

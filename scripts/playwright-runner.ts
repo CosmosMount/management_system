@@ -34,8 +34,8 @@ import {
   type PlaywrightDatabaseOwnership,
 } from "./playwright-db-safety";
 
-const CONTROLLED_BASE_URL = "http://127.0.0.1:3002";
-const CONTROLLED_SERVER_PORT = "3002";
+const CONTROLLED_BASE_URL = "http://127.0.0.1:3003";
+const CONTROLLED_SERVER_PORT = "3003";
 const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 const DEFAULT_GRACEFUL_SHUTDOWN_MS = 5_000;
 const DEFAULT_FORCED_SHUTDOWN_MS = 5_000;
@@ -599,7 +599,7 @@ async function waitForControlledServerReady(
 
 async function assertControlledServerPortAvailable(): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const socket = net.connect({ host: "127.0.0.1", port: 3002 });
+    const socket = net.connect({ host: "127.0.0.1", port: 3003 });
     let settled = false;
     const finish = (error?: Error) => {
       if (settled) return;
@@ -618,7 +618,7 @@ async function assertControlledServerPortAvailable(): Promise<void> {
     socket.once("connect", () =>
       finish(
         new Error(
-          "127.0.0.1:3002 is already in use; refusing to create Playwright database ownership",
+          "127.0.0.1:3003 is already in use; refusing to create Playwright database ownership",
         ),
       ),
     );

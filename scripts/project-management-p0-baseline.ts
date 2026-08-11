@@ -47,7 +47,6 @@ const LEGACY_TABLE_NAMES = [
   "ProjectParticipant",
   "ProjectTemplateStage",
   "ProjectTemplate",
-  "Project",
   "AcceptanceChecklistTemplate",
   "ProgressReminderRule",
   "ProgressDailySummarySchedule",

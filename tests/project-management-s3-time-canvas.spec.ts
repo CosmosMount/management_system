@@ -2,6 +2,12 @@ import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { timeCanvasDataToModel } from "../components/project-management/time-canvas/adapter";
 import {
+  TIME_CANVAS_CACHE_LEAF_BLOCK_LIMIT,
+  TIME_CANVAS_CACHE_OBJECT_LIMIT,
+  mergeTimeCanvasVersionedSegments,
+  pruneTimeCanvasBlockCache,
+} from "../components/project-management/time-canvas/block-cache";
+import {
   createEmptyTimeCanvasFixture,
   createTimeCanvasFixture,
 } from "../components/project-management/time-canvas/fixtures";
@@ -18,9 +24,15 @@ import {
   DAY_MS,
   HOUR_MS,
   axisTicks,
+  addShanghaiCalendarMonths,
+  addShanghaiCalendarYears,
+  chooseAdaptiveScale,
   chooseFitZoom,
+  contentTimeBounds,
   createTimeScale,
   fitTimeRange,
+  padShanghaiCalendarRange,
+  scrollLeftForCenter,
   intervalToRect,
   moveTimePoint,
   rangesIntersect,
@@ -35,6 +47,7 @@ import {
   serializeTimeCanvasUrlState,
 } from "../components/project-management/time-canvas/url-state";
 import { timeCanvasDataDtoSchema } from "../lib/project-management/types/time-canvas";
+import { getAdaptiveTimeCanvasBlockInputSchema } from "../lib/project-management/validations/time-canvas";
 import { prisma } from "../lib/prisma";
 import {
   expectHealthyPage,
@@ -84,8 +97,8 @@ test.describe("S3 TimeCanvas pure core", () => {
   test("time scale round-trips, clips, snaps, fits and preserves half-open boundaries", () => {
     const scale = createTimeScale({
       range: RANGE,
-      viewportWidthPx: 960,
-      zoom: "DAY",
+      viewportWidthPx: 400,
+      zoom: "WEEK",
     });
     const point = RANGE.startMs + 12.5 * DAY_MS;
     expect(xToTime(timeToX(point, scale), scale)).toBeCloseTo(point, 5);
@@ -129,7 +142,7 @@ test.describe("S3 TimeCanvas pure core", () => {
     ).toBeNull();
     expect(
       intervalToRect(RANGE.startMs - DAY_MS, RANGE.startMs + DAY_MS, scale),
-    ).toEqual({ left: 0, width: 96 });
+    ).toEqual({ left: 0, width: 40 });
     expect(
       rangesIntersect(
         { startMs: RANGE.startMs, endMs: RANGE.startMs + DAY_MS },
@@ -145,12 +158,12 @@ test.describe("S3 TimeCanvas pure core", () => {
       startMs: RANGE.startMs - HOUR_MS,
       endMs: RANGE.startMs + 2 * DAY_MS + HOUR_MS,
     });
-    expect(chooseFitZoom({ startMs: RANGE.startMs, endMs: RANGE.startMs + 3 * DAY_MS })).toBe("HOUR");
+    expect(chooseFitZoom({ startMs: RANGE.startMs, endMs: RANGE.startMs + 3 * DAY_MS })).toBe("WEEK");
     expect(chooseFitZoom(RANGE)).toBe("WEEK");
     const window = visibleTimeWindow({
       scale,
-      scrollLeftPx: 960,
-      viewportWidthPx: 960,
+      scrollLeftPx: 400,
+      viewportWidthPx: 400,
       overscanPx: 0,
     });
     expect(window.startMs).toBe(RANGE.startMs + 10 * DAY_MS);
@@ -158,7 +171,7 @@ test.describe("S3 TimeCanvas pure core", () => {
     const clampedWindow = visibleTimeWindow({
       scale,
       scrollLeftPx: 999_999,
-      viewportWidthPx: 960,
+      viewportWidthPx: 400,
       overscanPx: 0,
     });
     expect(clampedWindow.startMs).toBe(RANGE.startMs + 20 * DAY_MS);
@@ -168,8 +181,187 @@ test.describe("S3 TimeCanvas pure core", () => {
       new Intl.DateTimeFormat("en-US", {
         timeZone: "Asia/Shanghai",
         weekday: "short",
-      }).format(new Date(weekTicks[1] ?? weekTicks[0])),
+      }).format(new Date(weekTicks.find((tick) =>
+        new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Shanghai", weekday: "short" }).format(new Date(tick)) === "Mon",
+      ) ?? weekTicks[0])),
     ).toBe("Mon");
+  });
+
+  test("adaptive calendar ranges use Shanghai month boundaries and preserve viewport centers", () => {
+    const content = {
+      startMs: Date.parse("2026-08-20T10:00:00.000+08:00"),
+      endMs: Date.parse("2026-09-10T18:00:00.000+08:00"),
+    };
+    expect(padShanghaiCalendarRange(content, 2)).toEqual({
+      startMs: Date.parse("2026-06-01T00:00:00.000+08:00"),
+      endMs: Date.parse("2026-12-01T00:00:00.000+08:00"),
+    });
+    const exactMonth = contentTimeBounds([
+      Date.parse("2026-08-20T10:00:00.000+08:00"),
+      Date.parse("2026-10-01T00:00:00.000+08:00") - 1,
+    ]);
+    expect(padShanghaiCalendarRange(exactMonth, 2)).toEqual({
+      startMs: Date.parse("2026-06-01T00:00:00.000+08:00"),
+      endMs: Date.parse("2026-12-01T00:00:00.000+08:00"),
+    });
+    const leapDay = Date.parse("2024-02-29T12:00:00.000+08:00");
+    expect(new Date(addShanghaiCalendarYears(leapDay, 1)).toISOString()).toBe(
+      "2025-02-28T04:00:00.000Z",
+    );
+    expect(addShanghaiCalendarMonths(Date.parse("2026-01-01T00:00:00.000+08:00"), 2)).toBe(
+      Date.parse("2026-03-01T00:00:00.000+08:00"),
+    );
+    expect(chooseAdaptiveScale(RANGE, 400)).toBe("WEEK");
+    const scale = createTimeScale({ range: RANGE, viewportWidthPx: 400, zoom: "WEEK" });
+    const center = RANGE.startMs + 15 * DAY_MS;
+    const left = scrollLeftForCenter(scale, center, 400);
+    expect(xToTime(left + 200, scale)).toBe(center);
+    expect(scale.segmentSnapMs).toBe(30 * 60 * 1_000);
+    expect(scale.anchorSnapMs).toBe(DAY_MS);
+  });
+
+  test("adaptive block input keeps semantic scopes strict and caps blocks at 366 days", () => {
+    const blockStart = "2026-01-01T00:00:00.000+08:00";
+    const validMyTimeline = {
+      kind: "MY_TIMELINE" as const,
+      rowPageKey: "row-page-key",
+      preferredCenter: "2026-06-01T00:00:00.000+08:00",
+      blockStart,
+      blockEnd: "2026-06-30T00:00:00.000+08:00",
+      showAll: false,
+      taskCursor: "task-page-cursor",
+    };
+    expect(getAdaptiveTimeCanvasBlockInputSchema.safeParse(validMyTimeline).success).toBe(true);
+    expect(getAdaptiveTimeCanvasBlockInputSchema.safeParse({
+      ...validMyTimeline,
+      personIds: [uuid(1)],
+    }).success).toBe(false);
+    expect(getAdaptiveTimeCanvasBlockInputSchema.safeParse({
+      ...validMyTimeline,
+      blockEnd: "2027-01-03T00:00:00.000+08:00",
+    }).success).toBe(false);
+
+    const project = getAdaptiveTimeCanvasBlockInputSchema.parse({
+      kind: "PROJECT",
+      rowPageKey: "project-row-page-key",
+      preferredCenter: "2026-06-01T00:00:00.000+08:00",
+      blockStart,
+      blockEnd: "2026-06-30T00:00:00.000+08:00",
+      projectId: uuid(2),
+      taskCursor: "project-task-page-cursor",
+    });
+    expect(project).toMatchObject({
+      kind: "PROJECT",
+      projectId: uuid(2),
+      taskCursor: "project-task-page-cursor",
+    });
+  });
+
+  test("adaptive block cache enforces hard dual budgets and bounded priorities", () => {
+    const block = (
+      key: string,
+      startMs: number,
+      endMs: number,
+      objectCount: number,
+      leafBlockCount = 1,
+      pinnedId?: string,
+    ) => ({
+      key,
+      range: { startMs, endMs },
+      segments: Array.from({ length: objectCount }, (_, index) => ({
+        id: index === 0 && pinnedId ? pinnedId : `${key}-${index}`,
+      })),
+      touchedAt: startMs,
+      leafBlockCount,
+    });
+
+    const objectLimited = pruneTimeCanvasBlockCache({
+      blocks: [
+        block("visible", 0, 180, 15_000),
+        block("candidate", 180, 360, 6_000),
+      ],
+      viewport: { startMs: 100, endMs: 200 },
+      pinnedIds: [],
+      candidateKey: "candidate",
+    });
+    expect(objectLimited.objectCount).toBeLessThanOrEqual(
+      TIME_CANVAS_CACHE_OBJECT_LIMIT,
+    );
+    expect(objectLimited.leafBlockCount).toBeLessThanOrEqual(
+      TIME_CANVAS_CACHE_LEAF_BLOCK_LIMIT,
+    );
+    expect(objectLimited.candidateAccepted).toBe(false);
+    expect(objectLimited.blocks.map((item) => item.key)).toEqual(["visible"]);
+
+    const candidateBecomesVisible = pruneTimeCanvasBlockCache({
+      blocks: [
+        block("old", 0, 180, 15_000),
+        block("candidate", 180, 360, 6_000),
+      ],
+      viewport: { startMs: 200, endMs: 300 },
+      pinnedIds: [],
+      candidateKey: "candidate",
+    });
+    expect(candidateBecomesVisible.candidateAccepted).toBe(true);
+    expect(candidateBecomesVisible.blocks.map((item) => item.key)).toEqual([
+      "candidate",
+    ]);
+
+    const leafLimited = pruneTimeCanvasBlockCache({
+      blocks: [
+        block("visible", 0, 180, 1, 16),
+        block("candidate", 180, 360, 1, 1),
+      ],
+      viewport: { startMs: 100, endMs: 200 },
+      pinnedIds: [],
+      candidateKey: "candidate",
+    });
+    expect(leafLimited.leafBlockCount).toBe(16);
+    expect(leafLimited.candidateAccepted).toBe(false);
+
+    const prioritized = pruneTimeCanvasBlockCache({
+      blocks: [
+        block("visible", 100, 200, 12_000),
+        block("before", 0, 100, 3_000),
+        block("after", 200, 300, 3_000),
+        block("unrelated", 400, 500, 1_000),
+        block("pinned", 500, 600, 2_000, 1, "selected-segment"),
+      ],
+      viewport: { startMs: 100, endMs: 200 },
+      pinnedIds: ["selected-segment"],
+      candidateKey: "pinned",
+    });
+    expect(prioritized.objectCount).toBe(20_000);
+    expect(prioritized.candidateAccepted).toBe(true);
+    expect(prioritized.blocks.map((item) => item.key)).toEqual([
+      "visible",
+      "before",
+      "after",
+      "pinned",
+    ]);
+
+    const merge = mergeTimeCanvasVersionedSegments([
+      {
+        ...block("first", 0, 100, 0),
+        segments: [{ id: "shared", versionToken: "v1", title: "旧内容" }],
+      },
+      {
+        ...block("second", 100, 200, 0),
+        segments: [{ id: "shared", versionToken: "v1", title: "冲突内容" }],
+      },
+      {
+        ...block("latest", 200, 300, 0),
+        segments: [{ id: "newer", versionToken: "v2", title: "最新内容" }],
+      },
+      {
+        ...block("older", 300, 400, 0),
+        segments: [{ id: "newer", versionToken: "v1", title: "过期内容" }],
+      },
+    ]);
+    expect(merge.conflictBlockKeys).toEqual(["first", "second"]);
+    expect(merge.segments.find((item) => item.id === "newer")?.title).toBe(
+      "最新内容",
+    );
   });
 
   test("lane layout is deterministic, reuses adjacent half-open lanes and aggregates dense overlap", () => {
@@ -265,7 +457,7 @@ test.describe("S3 TimeCanvas pure core", () => {
       RANGE,
     );
     expect(parsed.range).toEqual(RANGE);
-    expect(parsed.zoom).toBe("DAY");
+    expect(parsed.zoom).toBe("MONTH");
     expect(parsed.groupBy).toBe("TASK");
     expect(parsed.personIds).toHaveLength(50);
     expect(parsed.types).toEqual(["PLANNED", "ACTUAL"]);
@@ -278,6 +470,10 @@ test.describe("S3 TimeCanvas pure core", () => {
     expect(serialized.get("to")).toBe("2026-08-31");
     expect(serialized.get("group")).toBe("task");
     expect(serialized.get("people")?.split(",")).toHaveLength(50);
+    expect(parseTimeCanvasUrlState(
+      new URLSearchParams({ zoom: "week" }),
+      RANGE,
+    ).zoom).toBe("QUARTER");
 
     const fallback = parseTimeCanvasUrlState(
       new URLSearchParams({ from: "2026-08-31", to: "2026-08-01", zoom: "forever" }),
@@ -387,6 +583,7 @@ test.describe("S3 TimeCanvas pure core", () => {
           title: "Active 计划",
           status: "ACTIVE",
           priority: "MEDIUM",
+          createdAt: versionToken,
           plannedStartAt: new Date(RANGE.startMs + DAY_MS).toISOString(),
           capabilities: {
             canView: true,
@@ -409,10 +606,47 @@ test.describe("S3 TimeCanvas pure core", () => {
     const model = timeCanvasDataToModel(data, "TASK_WORKBENCH");
     expect(model.rows[0]?.editable).toBe(false);
     expect(model.anchors[0]?.editable).toBe(false);
+    const compatibilityModel = timeCanvasDataToModel(
+      {
+        ...data,
+        anchors: data.anchors.map((anchor) => ({
+          ...anchor,
+          plannedStartAt: null,
+        })),
+      },
+      "TASK_WORKBENCH",
+    );
+    expect(compatibilityModel.anchors[0]).toMatchObject({
+      id: `plan-start:${taskId}`,
+      atMs: Date.parse(versionToken),
+      editable: false,
+    });
   });
 });
 
 test.describe("S3 TimeCanvas controlled browser fixtures", () => {
+  test("initial year layout reports the viewport even when scrollLeft remains zero", async ({
+    context,
+    page,
+    baseURL,
+  }) => {
+    const identity = await createCanvasBrowserIdentity();
+    await loginAsTestUser(context, baseURL, identity);
+    await page.goto(
+      "/progress/time-canvas-fixtures?mode=RESOURCE_PLANNER&long=1&scale=year",
+    );
+
+    const scroll = page.getByTestId("time-canvas-scroll");
+    await expect(scroll).toBeVisible();
+    await expect.poll(() => scroll.evaluate((element) => element.scrollLeft)).toBe(0);
+    const viewport = page.getByTestId("time-canvas-observed-viewport");
+    await expect(viewport).not.toHaveText("pending");
+    await expect(viewport).toHaveAttribute("data-start-ms", String(RANGE.startMs));
+    const endMs = Number(await viewport.getAttribute("data-end-ms"));
+    expect(endMs).toBeGreaterThan(RANGE.startMs);
+    await expectHealthyPage(page);
+  });
+
   test("current-time line follows the live browser clock and stays below sticky headers", async ({
     context,
     page,
@@ -477,7 +711,9 @@ test.describe("S3 TimeCanvas controlled browser fixtures", () => {
     }
 
     await page.goto(
-      "/progress/time-canvas-fixtures?mode=TASK_COMPOSER",
+      `/progress/time-canvas-fixtures?mode=TASK_COMPOSER${
+        testInfo.project.name === "mobile" ? "&scale=week" : ""
+      }`,
     );
     {
       await expect(

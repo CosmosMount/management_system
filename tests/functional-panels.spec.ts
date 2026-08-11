@@ -252,19 +252,33 @@ test.describe("管理员面板", () => {
       await expect(page.getByTestId("mobile-account-list")).toBeVisible();
     } else {
       await expect(page.getByTestId("mobile-team-responsibilities")).toBeHidden();
-      await expect(page.getByRole("columnheader", { name: "车组" })).toBeVisible();
-      await expect(page.getByRole("columnheader", { name: "技术组" })).toBeVisible();
+      await expect(
+        page.getByRole("columnheader", { name: "车组", exact: true }),
+      ).toBeVisible();
+      await expect(
+        page.getByRole("columnheader", { name: "技术组", exact: true }),
+      ).toBeVisible();
     }
     const accountsCard = page.getByTestId("accounts-and-roles-card");
-    await expect(accountsCard.getByText("李棋轩", { exact: true }).first()).toBeVisible();
+    const visibleAccountList = (page.viewportSize()?.width ?? 0) < 768
+      ? accountsCard.getByTestId("mobile-account-list")
+      : accountsCard.locator("table");
+    await expect(
+      visibleAccountList.getByText("李棋轩", { exact: true }).first(),
+    ).toBeVisible();
 
     const accountSelect = accountsCard.getByRole("combobox", {
       name: "选择要配置角色的用户",
     });
     await accountSelect.fill("李棋轩");
     await page.getByRole("option", { name: "李棋轩", exact: true }).click();
-    await accountsCard.getByRole("button", { name: "选择角色" }).click();
-    await page.getByRole("option", { name: "超级管理员", exact: true }).click();
+    await accountsCard
+      .getByRole("combobox", { name: "选择角色" })
+      .click();
+    await page
+      .getByRole("listbox")
+      .getByRole("option", { name: "超级管理员", exact: true })
+      .click();
     page.once("dialog", (dialog) => dialog.dismiss());
     await accountsCard.getByRole("button", { name: "添加", exact: true }).click();
     await expect(
@@ -276,8 +290,13 @@ test.describe("管理员面板", () => {
         },
       }),
     ).resolves.toBe(0);
-    await accountsCard.getByRole("button", { name: "选择角色" }).click();
-    await page.getByRole("option", { name: "项目管理员", exact: true }).click();
+    await accountsCard
+      .getByRole("combobox", { name: "选择角色" })
+      .click();
+    await page
+      .getByRole("listbox")
+      .getByRole("option", { name: "项目管理员", exact: true })
+      .click();
     await accountsCard.getByRole("button", { name: "添加", exact: true }).click();
 
     const target = await prisma.user.findUniqueOrThrow({
@@ -350,9 +369,12 @@ test.describe("管理员面板", () => {
         waitUntil: "networkidle",
       });
       const accountsCard = page.getByTestId("accounts-and-roles-card");
-      await expect(accountsCard.getByText(displayName, { exact: true })).toBeVisible();
-      await expect(accountsCard.getByText("缺少飞书身份")).toBeVisible();
-      await accountsCard.getByRole("button", { name: "查看记录" }).click();
+      const visibleAccountList = (page.viewportSize()?.width ?? 0) < 768
+        ? accountsCard.getByTestId("mobile-account-list")
+        : accountsCard.getByRole("table");
+      await expect(visibleAccountList.getByText(displayName, { exact: true })).toBeVisible();
+      await expect(visibleAccountList.getByText("缺少飞书身份")).toBeVisible();
+      await visibleAccountList.getByRole("button", { name: "查看记录" }).click();
       await expect(page.getByTestId("account-history-dialog")).toContainText(
         displayName,
       );
@@ -364,8 +386,13 @@ test.describe("管理员面板", () => {
       });
       await accountSelect.fill(suffix);
       await page.getByRole("option", { name: displayName, exact: true }).click();
-      await accountsCard.getByRole("button", { name: "选择角色" }).click();
-      await page.getByRole("option", { name: "报销员", exact: true }).click();
+      await accountsCard
+        .getByRole("combobox", { name: "选择角色" })
+        .click();
+      await page
+        .getByRole("listbox")
+        .getByRole("option", { name: "报销员", exact: true })
+        .click();
       await expect(
         page.getByText("该账号缺少报销用户资料，请重新选择已同步账号"),
       ).toBeVisible();
@@ -381,7 +408,7 @@ test.describe("管理员面板", () => {
   test("账号筛选组合与空结果保持服务端 URL 状态", async ({ page }) => {
     await page.goto("/admin/accounts", { waitUntil: "networkidle" });
     await page.getByLabel("角色类型").selectOption("TEAM_ADMIN");
-    await page.getByLabel("车组").selectOption("英雄");
+    await page.getByLabel("车组", { exact: true }).selectOption("英雄");
     await page.getByRole("button", { name: "筛选" }).click();
     await expect(page).toHaveURL(/role=TEAM_ADMIN/);
     await expect(page).toHaveURL(/team=%E8%8B%B1%E9%9B%84/);
@@ -521,8 +548,13 @@ test.describe("管理员面板", () => {
       });
     }
 
+    // Wait for all mutation-triggered RSC refreshes before opening local dialog state.
+    await page.reload({ waitUntil: "networkidle" });
     const accountsCard = page.getByTestId("accounts-and-roles-card");
-    await accountsCard.getByRole("button", { name: "查看记录" }).click();
+    const visibleAccountList = (page.viewportSize()?.width ?? 0) < 768
+      ? accountsCard.getByTestId("mobile-account-list")
+      : accountsCard.getByRole("table");
+    await visibleAccountList.getByRole("button", { name: "查看记录" }).click();
     const historyDialog = page.getByTestId("account-history-dialog");
     await expect(historyDialog.getByText("报销员 · 工程").first()).toBeVisible();
     await expect(historyDialog.getByText(/授予报销角色/).first()).toBeVisible();

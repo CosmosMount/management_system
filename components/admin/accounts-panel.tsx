@@ -223,7 +223,7 @@ function TeamResponsibilitiesCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>车组职责配置</CardTitle>
+        <CardTitle role="heading" aria-level={2}>车组职责配置</CardTitle>
         <CardDescription>
           为每个车组指定报销车组组长与报销员；用户需已同步报销资料。
         </CardDescription>
@@ -335,7 +335,7 @@ function TechGroupResponsibilitiesCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>技术组职责配置</CardTitle>
+        <CardTitle role="heading" aria-level={2}>技术组职责配置</CardTitle>
         <CardDescription>
           为每个技术组指定报销技术组组长与指导老师；指导老师可配置审批邮箱。
         </CardDescription>
@@ -709,7 +709,7 @@ function AccountsAndRolesCard({
   return (
     <Card data-testid="accounts-and-roles-card">
       <CardHeader>
-        <CardTitle>用户与角色</CardTitle>
+        <CardTitle role="heading" aria-level={2}>用户与角色</CardTitle>
         <CardDescription>
           分配全局项目角色或范围报销角色，并在账号列表中直接移除当前角色。
         </CardDescription>

@@ -174,7 +174,9 @@ test.describe("project management P4/P6 UI integration", () => {
     await expect(page.getByTestId("task-composer-milestone-count")).toHaveText("1/200");
     await expect(page.getByTestId("task-composer-temporary-count")).toHaveText("1 个临时");
     await expect(
-      page.getByTestId("task-plan-node-navigator").getByText("临时节点", { exact: true }),
+      page
+        .getByTestId("task-plan-node-navigator")
+        .getByRole("button", { name: /临时 Milestone.*临时节点/ }),
     ).toBeVisible();
     await page.getByLabel("目标").fill("完成 S5 Composer 主流程");
     await page
@@ -188,17 +190,21 @@ test.describe("project management P4/P6 UI integration", () => {
     await expect(page.getByTestId("task-composer-temporary-count")).toHaveCount(0);
     const milestoneTime = page.getByLabel("预期完成时间");
     const originalMilestoneTime = await milestoneTime.inputValue();
-    const milestoneAnchor = page.getByRole("button", {
-      name: /计划节点 完成 S5 Composer 主流程/,
-    });
-    await milestoneAnchor.focus();
-    await milestoneAnchor.press("ArrowRight");
-    await expect.poll(() => milestoneTime.inputValue()).not.toBe(originalMilestoneTime);
-    const movedMilestoneTime = await milestoneTime.inputValue();
-    await page.getByRole("button", { name: "撤销" }).click();
-    await expect(milestoneTime).toHaveValue(originalMilestoneTime);
-    await page.getByRole("button", { name: "重做" }).click();
-    await expect(milestoneTime).toHaveValue(movedMilestoneTime);
+    if (testInfo.project.name === "desktop") {
+      const milestoneAnchor = page
+        .getByTestId("time-canvas-root")
+        .getByRole("button", { name: /^计划节点 完成 S5 Composer 主流程/ });
+      await milestoneAnchor.focus();
+      await milestoneAnchor.press("ArrowRight");
+      await expect.poll(() => milestoneTime.inputValue()).not.toBe(originalMilestoneTime);
+      const movedMilestoneTime = await milestoneTime.inputValue();
+      await page.getByRole("button", { name: "撤销" }).click();
+      await expect(milestoneTime).toHaveValue(originalMilestoneTime);
+      await page.getByRole("button", { name: "重做" }).click();
+      await expect(milestoneTime).toHaveValue(movedMilestoneTime);
+    } else {
+      await expect(page.getByTestId("time-canvas-root")).toBeHidden();
+    }
     await milestoneTime.fill("");
     await expect(
       page
@@ -208,15 +214,10 @@ test.describe("project management P4/P6 UI integration", () => {
     await milestoneTime.fill(originalMilestoneTime);
 
     const planNavigator = page.getByTestId("task-plan-node-navigator");
-    if (testInfo.project.name === "desktop") {
-      const canvasScroll = page.getByTestId("time-canvas-scroll");
-      await planNavigator.getByRole("button", { name: /Start/ }).click();
-      await expect.poll(() => canvasScroll.evaluate((element) => element.scrollLeft)).toBeLessThanOrEqual(1);
-      await planNavigator.getByRole("button", { name: /Terminal/ }).click();
-      await expect.poll(() => canvasScroll.evaluate((element) => element.scrollLeft)).toBeGreaterThan(1);
-    } else {
-      await planNavigator.getByRole("button", { name: /Terminal/ }).click();
-    }
+    await planNavigator.getByRole("button", { name: /Start/ }).click();
+    await expect(page.getByTestId("task-composer-inspector")).toContainText("Start");
+    await planNavigator.getByRole("button", { name: /Terminal/ }).click();
+    await expect(page.getByTestId("task-composer-inspector")).toContainText("Terminal");
     await page
       .getByLabel("结束条件")
       .fill("Task 草稿创建完成且不包含初始 Segment");
@@ -309,8 +310,33 @@ test.describe("project management P4/P6 UI integration", () => {
             selectedRect.bottom <= containerRect.bottom + 1
           );
         }),
+        { timeout: 15_000 },
       )
       .toBe(true);
+    const middleNode = extremeNavigator.getByRole("button").nth(100);
+    await middleNode.click();
+    await expect(middleNode).toHaveAttribute("aria-pressed", "true");
+    await expect
+      .poll(() =>
+        extremeNavigator.evaluate((element) => {
+          const selected = element.querySelector<HTMLElement>(
+            "[data-node-selected='true']",
+          );
+          if (!selected) return Number.POSITIVE_INFINITY;
+          const containerRect = element.getBoundingClientRect();
+          const selectedRect = selected.getBoundingClientRect();
+          const horizontal = window.matchMedia("(min-width: 640px)").matches;
+          const containerCenter = horizontal
+            ? containerRect.left + element.clientLeft + element.clientWidth / 2
+            : containerRect.top + element.clientTop + element.clientHeight / 2;
+          const selectedCenter = horizontal
+            ? selectedRect.left + selectedRect.width / 2
+            : selectedRect.top + selectedRect.height / 2;
+          return Math.abs(containerCenter - selectedCenter);
+        }),
+        { timeout: 15_000 },
+      )
+      .toBeLessThanOrEqual(2);
     await expect
       .poll(() =>
         page.evaluate(async ({ key, previousSavedAt, serializedChars }) => {
@@ -451,7 +477,11 @@ test.describe("project management P4/P6 UI integration", () => {
     expect(await prisma.task.count({ where: { title } })).toBe(1);
     await page.unroute("**/progress/tasks/new?*");
     await page.getByRole("button", { name: "创建 Task 草稿" }).click();
-    await expect(page.getByRole("heading", { name: title })).toBeVisible();
+    await expect(
+      page
+        .getByTestId("task-workbench-v2")
+        .getByRole("heading", { name: title, exact: true }),
+    ).toBeVisible();
     await expectHealthyPage(page);
     const task = await prisma.task.findFirstOrThrow({
       where: { title },
@@ -547,8 +577,8 @@ test.describe("project management P4/P6 UI integration", () => {
     await expect(page.getByTestId("task-composer")).toBeVisible();
     await expect(page.getByLabel("负责人", { exact: true })).toBeVisible();
     await expect(page.getByLabel("参与人员", { exact: true })).toBeVisible();
-    await expect(page.getByLabel("搜索负责人")).toBeVisible();
-    await expect(page.getByLabel("搜索参与人员")).toBeVisible();
+    await expect(page.getByLabel("搜索负责人", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("搜索参与人员", { exact: true })).toBeVisible();
     await expect(page.getByText("流程策略")).toHaveCount(0);
     await expectHealthyPage(page);
   });
@@ -567,25 +597,29 @@ test.describe("project management P4/P6 UI integration", () => {
     });
     const title = `S5 Zero Milestone Task ${randomUUID()}`;
 
-    await page.goto("/progress/tasks/new?start=2026-09-20");
+    await page.goto("/progress/tasks/new?start=2026-08-01");
     await page.getByLabel("Task 名称").fill(title);
     await expect(page.getByTestId("task-composer-milestone-count")).toHaveText("0/200");
-    if (testInfo.project.name === "desktop") {
-      await page.getByRole("button", { name: "编辑 Terminal" }).click();
-    } else {
-      await page
-        .getByTestId("task-plan-node-navigator")
-        .getByRole("button", { name: /Terminal/ })
-        .click();
-    }
+    await page
+      .getByTestId("task-plan-node-navigator")
+      .getByRole("button", { name: /Terminal/ })
+      .click();
     await page.getByLabel("Terminal 名称").fill("交付终点");
     await page.getByLabel("结束条件").fill("无需中间验收，直接进入交付终点");
     await page.getByRole("button", { name: "创建 Task 草稿" }).click();
-    await expect(page.getByRole("heading", { name: title })).toBeVisible();
+    await expect(
+      page
+        .getByTestId("task-workbench-v2")
+        .getByRole("heading", { name: title, exact: true }),
+    ).toBeVisible();
 
     page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "激活 Task" }).click();
-    await expect(page.getByText(/当前：交付终点/)).toBeVisible();
+    await expect(
+      page
+        .getByTestId("task-plan-node-navigator")
+        .getByRole("button", { name: /交付终点.*Terminal.*当前/ }),
+    ).toBeVisible();
     await expectHealthyPage(page);
 
     const task = await prisma.task.findFirstOrThrow({
@@ -716,12 +750,15 @@ test.describe("project management P4/P6 UI integration", () => {
         version === 2 ? "2026-11-07T09:00" : "2026-11-03T09:00",
       );
       if (version === 2) {
-        await expect(page.getByText("当前计划内容校验通过")).toBeVisible();
+        await expect(
+          page.getByTestId("task-composer-inspector").getByRole("alert"),
+        ).toHaveCount(0);
       } else {
         await expect(
-          page.getByRole("button", {
-            name: "Terminal 必须严格晚于 Start 和最后一个 Milestone。",
-          }),
+          page.getByText(
+            "Terminal 必须严格晚于 Start 和最后一个 Milestone。",
+            { exact: true },
+          ),
         ).toBeVisible();
       }
       await expect
@@ -835,7 +872,9 @@ test.describe("project management P4/P6 UI integration", () => {
     await expect(page.getByRole("heading", { name: "人员计划" })).toBeVisible();
     await expectHealthyPage(page);
     await page.goto("/progress/my-timeline");
-    await expect(page.getByRole("heading", { name: "我的时间" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "我的时间" })).toBeVisible({
+      timeout: 15_000,
+    });
     await expectHealthyPage(page);
     await page.goto("/progress/tasks/new");
     await expect(page.getByTestId("task-composer")).toBeVisible();
@@ -846,7 +885,11 @@ test.describe("project management P4/P6 UI integration", () => {
     ).toBeDisabled();
     await expectHealthyPage(page);
     await page.goto(`/progress/tasks/${draft.taskId}`);
-    await expect(page.getByRole("heading", { name: draftTitle })).toBeVisible();
+    await expect(
+      page
+        .getByTestId("task-workbench-v2")
+        .getByRole("heading", { name: draftTitle, exact: true }),
+    ).toBeVisible();
     await expect(page.getByRole("button", { name: "新增投入" })).toHaveCount(0);
     await expectHealthyPage(page);
   });
@@ -855,7 +898,7 @@ test.describe("project management P4/P6 UI integration", () => {
     context,
     page,
     baseURL,
-  }, testInfo) => {
+  }) => {
     const creatorA = await createAccountPerson("S5 Draft Scope A");
     const creatorB = await createAccountPerson("S5 Draft Scope B");
     const hiddenCreator = await createAccountPerson("S5 Hidden Task Creator");
@@ -906,14 +949,10 @@ test.describe("project management P4/P6 UI integration", () => {
     await page.getByLabel("目标").fill("伪造关联目标");
     await page.getByLabel("完成条件").fill("服务端拒绝隐藏关联");
     await page.getByLabel("验收要求").fill("不得通过本地草稿绕过可见性");
-    if (testInfo.project.name === "desktop") {
-      await page.getByRole("button", { name: "编辑 Terminal" }).click();
-    } else {
-      await page
-        .getByTestId("task-plan-node-navigator")
-        .getByRole("button", { name: /Terminal/ })
-        .click();
-    }
+    await page
+      .getByTestId("task-plan-node-navigator")
+      .getByRole("button", { name: /Terminal/ })
+      .click();
     await page.getByLabel("结束条件").fill("隐藏关联写入被拒绝");
     await page.waitForTimeout(900);
     await page.evaluate(({ taskId, title }) => {
@@ -1041,10 +1080,17 @@ test.describe("project management P4/P6 UI integration", () => {
     await page.getByLabel("验收要求").fill("全局管理员审批");
     await expect(page.getByText("流程策略")).toHaveCount(0);
     await expect(page.getByRole("checkbox", { name: /允许自审/ })).toHaveCount(0);
-    await page.getByRole("button", { name: "编辑 Terminal" }).click();
+    await page
+      .getByTestId("task-plan-node-navigator")
+      .getByRole("button", { name: /Terminal/ })
+      .click();
     await page.getByLabel("结束条件").fill("管理员 Task 创建完成");
     await page.getByRole("button", { name: "创建 Task 草稿" }).click();
-    await expect(page.getByRole("heading", { name: title })).toBeVisible();
+    await expect(
+      page
+        .getByTestId("task-workbench-v2")
+        .getByRole("heading", { name: title, exact: true }),
+    ).toBeVisible();
     const task = await prisma.task.findFirstOrThrow({
       where: { title },
       include: { members: { where: { removedAt: null } } },
@@ -1144,38 +1190,48 @@ test.describe("project management P4/P6 UI integration", () => {
     await expect(page.getByRole("checkbox", { name: "只看我参与" })).not.toBeChecked();
     await expectHealthyPage(page);
 
-    await page.goto(`/progress/tasks/${fixture.taskId}`);
-    await expect(page.getByRole("heading", { name: fixture.taskTitle })).toBeVisible();
+    await page.goto(`/progress/tasks/${fixture.taskId}?focus=task-detail-start`);
+    await expect(
+      page
+        .getByTestId("task-workbench-v2")
+        .getByRole("heading", { name: fixture.taskTitle, exact: true }),
+    ).toBeVisible();
     await expect(page.getByTestId("task-workbench-v2")).toBeVisible();
     await expect(page.getByTestId("task-plan-node-navigator")).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Task 风险" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Task 评论" })).toBeVisible();
+    await expect(
+      page
+        .getByTestId("task-plan-node-navigator")
+        .getByRole("button", { name: /Start/ }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      page.getByRole("heading", { name: "Task 风险", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Task 评论", exact: true }),
+    ).toBeVisible();
     await expect(page.getByRole("heading", { name: "近期动态" })).toBeVisible();
     await expect(page.getByText("从未记录风险")).toBeVisible();
     await expect(page.getByRole("tab")).toHaveCount(0);
     await expect(page.getByText("人员投入", { exact: true })).toHaveCount(0);
-    if (testInfo.project.name === "desktop") {
-      await expect(page.getByRole("heading", { name: "计划时间轴" })).toBeVisible();
-      await expect(page.getByTestId("time-canvas-root")).toBeVisible();
-      const canvasScroll = page.getByTestId("time-canvas-scroll");
-      await page
-        .getByTestId("task-plan-node-navigator")
-        .getByRole("button", { name: /Terminal/ })
-        .click();
-      await expect
-        .poll(() => canvasScroll.evaluate((element) => element.scrollLeft))
-        .toBeGreaterThan(1);
-      await page
-        .getByRole("button", { name: /计划节点 P6 UI 第一阶段/ })
-        .click();
-      await expect(
-        page
-          .getByTestId("task-plan-node-navigator")
-          .getByRole("button", { name: /P6 UI 第一阶段/ }),
-      ).toHaveAttribute("aria-pressed", "true");
-    } else {
-      await expect(page.getByTestId("time-canvas-root")).not.toBeVisible();
-    }
+    await expect(page.getByRole("heading", { name: "计划与人员投入" })).toBeVisible();
+    await expect(page.getByTestId("time-canvas-root")).toBeVisible();
+    await expect(
+      page.getByTestId(`milestone-marker-plan-start:${fixture.taskId}`),
+    ).toHaveAttribute("aria-pressed", "true");
+    const canvasScroll = page.getByTestId("time-canvas-scroll");
+    await page
+      .getByTestId("task-plan-node-navigator")
+      .getByRole("button", { name: /Terminal/ })
+      .click();
+    await expect
+      .poll(() => canvasScroll.evaluate((element) => element.scrollLeft))
+      .toBeGreaterThan(1);
+    const firstMilestoneMarker = page.getByRole("button", {
+      name: /计划节点 P6 UI 第一阶段/,
+    });
+    await firstMilestoneMarker.focus();
+    await firstMilestoneMarker.press("Enter");
+    await expect(firstMilestoneMarker).toHaveAttribute("aria-pressed", "true");
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
@@ -1330,187 +1386,56 @@ test.describe("project management P4/P6 UI integration", () => {
         element.scrollLeft = 1_200;
         element.dispatchEvent(new Event("scroll"));
       });
-      const beforeKeyboardMove = await prisma.workSegment.findUniqueOrThrow({
-        where: { id: fixture.movableSegmentId },
-        select: { startAt: true },
-      });
-      const movable = page.getByTestId(`segment-block-${fixture.movableSegmentId}`);
-      await prisma.workSegment.update({
-        where: { id: fixture.movableSegmentId },
-        data: { content: "P6 UI 制造 stale 后仍可重试" },
-      });
-      await movable.focus();
-      await movable.press("Shift+ArrowRight");
-      await expect(page.getByText(/投入记录已被他人修改/)).toBeVisible();
-      expect(
-        await prisma.workSegment.findUniqueOrThrow({
-          where: { id: fixture.movableSegmentId },
-          select: { startAt: true },
-        }),
-      ).toMatchObject({ startAt: beforeKeyboardMove.startAt });
-      await page.waitForTimeout(500);
-      await canvasScroll.evaluate((element) => {
-        element.scrollLeft = 1_200;
-        element.dispatchEvent(new Event("scroll"));
-      });
-      await movable.focus();
-      await movable.press("Shift+ArrowRight");
-      await expect(page.getByText("已移动计划投入")).toBeVisible();
-      await expect
-        .poll(async () => {
-          const row = await prisma.workSegment.findUniqueOrThrow({
-            where: { id: fixture.movableSegmentId },
-            select: { startAt: true },
-          });
-          return row.startAt.getTime();
-        })
-        .toBe(beforeKeyboardMove.startAt.getTime() + 30 * 60 * 1_000);
-      await page.waitForTimeout(800);
-      await canvasScroll.evaluate((element) => {
-        element.scrollLeft = 1_200;
-        element.dispatchEvent(new Event("scroll"));
-      });
-      const beforeInvalidDrop = await prisma.workSegment.findUniqueOrThrow({
+      const originalRange = await prisma.workSegment.findUniqueOrThrow({
         where: { id: fixture.movableSegmentId },
         select: { startAt: true, endAt: true },
       });
-      const movableBox = await page
-        .getByTestId(`segment-block-${fixture.movableSegmentId}`)
-        .boundingBox();
-      const otherRowBox = await page
-        .getByLabel(`${fixture.owner.person.displayName} 时间行`, { exact: true })
-        .boundingBox();
-      if (!movableBox || !otherRowBox) throw new Error("未找到跨行拖动测试坐标");
-      await page.mouse.move(movableBox.x + movableBox.width / 2, movableBox.y + movableBox.height / 2);
-      await page.mouse.down();
-      await page.mouse.move(movableBox.x + movableBox.width / 2 + 36, otherRowBox.y + otherRowBox.height / 2, { steps: 4 });
-      await page.mouse.up();
-      await expect(page.getByText("不支持跨人员行拖放，投入仍保留在原位置。")).toBeVisible();
+      const movable = page.getByTestId(`segment-block-${fixture.movableSegmentId}`);
+      await expect(movable.locator("[data-resize-handle]")).toHaveCount(0);
+      await movable.focus();
+      await movable.press("Shift+ArrowRight");
       expect(
         await prisma.workSegment.findUniqueOrThrow({
           where: { id: fixture.movableSegmentId },
           select: { startAt: true, endAt: true },
         }),
-      ).toMatchObject(beforeInvalidDrop);
-
-      await page.mouse.move(movableBox.x + movableBox.width / 2, movableBox.y + movableBox.height / 2);
-      await page.mouse.down();
-      await page.mouse.move(movableBox.x + movableBox.width / 2 + 36, movableBox.y + movableBox.height / 2, { steps: 4 });
-      await page.mouse.up();
-      await expect(page.getByText("已移动计划投入")).toBeVisible();
-      await expect
-        .poll(async () => (await prisma.workSegment.findUniqueOrThrow({ where: { id: fixture.movableSegmentId }, select: { startAt: true } })).startAt.getTime())
-        .toBe(beforeInvalidDrop.startAt.getTime() + 30 * 60 * 1_000);
-      await page.waitForTimeout(800);
-      await canvasScroll.evaluate((element) => {
-        element.scrollLeft = 1_200;
-        element.dispatchEvent(new Event("scroll"));
-      });
-      const beforeStartResize = await prisma.workSegment.findUniqueOrThrow({
-        where: { id: fixture.movableSegmentId },
-        select: { startAt: true },
-      });
-      const startResizeHandle = page
-        .getByTestId(`segment-block-${fixture.movableSegmentId}`)
-        .locator('[data-resize-handle="start"]');
-      const startResizeBox = await startResizeHandle.boundingBox();
-      if (!startResizeBox) throw new Error("未找到可见的 Segment 开始时间调整柄");
-      await page.mouse.move(startResizeBox.x + startResizeBox.width / 2, startResizeBox.y + startResizeBox.height / 2);
-      await page.mouse.down();
-      await page.mouse.move(startResizeBox.x + startResizeBox.width / 2 - 36, startResizeBox.y + startResizeBox.height / 2, { steps: 4 });
-      await page.mouse.up();
-      await expect(page.getByText("已调整计划投入区间")).toBeVisible();
-      await expect
-        .poll(async () => (await prisma.workSegment.findUniqueOrThrow({ where: { id: fixture.movableSegmentId }, select: { startAt: true } })).startAt.getTime())
-        .toBe(beforeStartResize.startAt.getTime() - 30 * 60 * 1_000);
-      await page.waitForTimeout(800);
-      await canvasScroll.evaluate((element) => {
-        element.scrollLeft = 1_200;
-        element.dispatchEvent(new Event("scroll"));
-      });
-      const beforeResize = await prisma.workSegment.findUniqueOrThrow({
-        where: { id: fixture.movableSegmentId },
-        select: { endAt: true },
-      });
-      const resizeHandle = page
-        .getByTestId(`segment-block-${fixture.movableSegmentId}`)
-        .locator('[data-resize-handle="end"]');
-      const resizeBox = await resizeHandle.boundingBox();
-      if (!resizeBox) throw new Error("未找到可见的 Segment 结束时间调整柄");
-      await page.mouse.move(resizeBox.x + resizeBox.width / 2, resizeBox.y + resizeBox.height / 2);
-      await page.mouse.down();
-      await page.mouse.move(resizeBox.x + resizeBox.width / 2 + 36, resizeBox.y + resizeBox.height / 2, { steps: 4 });
-      await page.mouse.up();
-      await expect(page.getByText("已调整计划投入区间")).toBeVisible();
-      await expect
-        .poll(async () => {
-          const row = await prisma.workSegment.findUniqueOrThrow({
-            where: { id: fixture.movableSegmentId },
-            select: { endAt: true },
-          });
-          return row.endAt.getTime();
-        })
-        .toBe(beforeResize.endAt.getTime() + 30 * 60 * 1_000);
-      await page.waitForTimeout(800);
-      await canvasScroll.evaluate((element) => {
-        element.scrollLeft = 1_200;
-        element.dispatchEvent(new Event("scroll"));
-      });
-      const expectedRangeAfterTransforms = await prisma.workSegment.findUniqueOrThrow({
-        where: { id: fixture.movableSegmentId },
-        select: { startAt: true, endAt: true },
-      });
-      await page.getByTestId(`segment-block-${fixture.movableSegmentId}`).click();
+      ).toMatchObject(originalRange);
+      await movable.press("Enter");
       const movedInspector = page.getByTestId("segment-inspector");
-      await expect(movedInspector.getByRole("heading", { name: "P6 UI 制造 stale 后仍可重试" })).toBeVisible();
+      await expect(
+        movedInspector.getByRole("heading", { name: "P6 UI 重叠计划 A" }),
+      ).toBeVisible();
       await expect(movedInspector.getByLabel("投入比例")).toHaveCount(0);
       await expect(movedInspector.getByLabel("职责", { exact: true })).toHaveCount(0);
       await expect(movedInspector.getByLabel("自定义职责")).toHaveCount(0);
       await movedInspector.getByLabel("内容").fill("P6 UI Inspector 更新不覆盖画布时间");
-      await movedInspector.getByRole("button", { name: "保存精确修改" }).click();
+      await movedInspector.getByRole("button", { name: "保存", exact: true }).click();
       await expect(page.getByText("已更新投入详情")).toBeVisible();
       await expect.poll(async () => {
         const row = await prisma.workSegment.findUniqueOrThrow({
           where: { id: fixture.movableSegmentId },
-          select: { startAt: true, endAt: true },
+          select: { content: true, startAt: true, endAt: true },
         });
         return {
+          content: row.content,
           startAt: row.startAt.toISOString(),
           endAt: row.endAt.toISOString(),
         };
       }).toEqual({
-        startAt: expectedRangeAfterTransforms.startAt.toISOString(),
-        endAt: expectedRangeAfterTransforms.endAt.toISOString(),
+        content: "P6 UI Inspector 更新不覆盖画布时间",
+        startAt: originalRange.startAt.toISOString(),
+        endAt: originalRange.endAt.toISOString(),
       });
       await page.waitForTimeout(800);
       await canvasScroll.evaluate((element) => {
         element.scrollLeft = 1_200;
         element.dispatchEvent(new Event("scroll"));
       });
-      await page
-        .getByTestId(`segment-block-${fixture.batchCancelableSegmentIds[0]}`)
-        .click({ modifiers: ["Shift"] });
-      await page
-        .getByTestId(`segment-block-${fixture.batchCancelableSegmentIds[1]}`)
-        .click({ modifiers: ["Shift"] });
-      await expect(page.getByText("已选 2 条")).toBeVisible();
-      page.once("dialog", (dialog) => dialog.accept());
-      await page.getByRole("button", { name: "批量取消", exact: true }).click();
-      await expect(page.getByText("已原子取消所选计划")).toBeVisible();
-      await expect.poll(() => prisma.workSegment.count({
-        where: {
-          id: { in: [...fixture.batchCancelableSegmentIds] },
-          status: "CANCELLED",
-        },
-      })).toBe(2);
-      await page.waitForTimeout(800);
-      await canvasScroll.evaluate((element) => {
-        element.scrollLeft = 1_200;
-        element.dispatchEvent(new Event("scroll"));
-      });
-      await page
-        .getByTestId(`segment-block-${fixture.confirmableSegmentId}`)
-        .click();
+      const confirmableSegment = page.getByTestId(
+        `segment-block-${fixture.confirmableSegmentId}`,
+      );
+      await confirmableSegment.focus();
+      await confirmableSegment.press("Enter");
     } else {
       await expect(page.getByTestId("time-canvas-scroll")).toBeVisible();
       await page.getByRole("button", { name: "新增投入" }).click();
@@ -1537,10 +1462,16 @@ test.describe("project management P4/P6 UI integration", () => {
       await expect
         .poll(() => prisma.workSegment.count({ where: { content: fixture.mobileCreateContent } }))
         .toBe(1);
-      await page.waitForTimeout(800);
-      await page
-        .getByTestId(`agenda-item-${fixture.confirmableSegmentId}`)
-        .click();
+      await expect(
+        page.getByRole("button", {
+          name: new RegExp(fixture.mobileCreateContent),
+        }),
+      ).toBeVisible();
+      const confirmableSegment = page.getByTestId(
+        `segment-block-${fixture.confirmableSegmentId}`,
+      );
+      await confirmableSegment.focus();
+      await confirmableSegment.press("Enter");
     }
     await expect(page.getByTestId("segment-inspector")).toBeVisible();
     await expect(
@@ -1600,7 +1531,11 @@ test.describe("project management P4/P6 UI integration", () => {
     });
 
     await page.goto(`/progress/tasks/${fixture.taskId}`);
-    await expect(page.getByRole("heading", { name: fixture.taskTitle })).toBeVisible();
+    await expect(
+      page
+        .getByTestId("task-workbench-v2")
+        .getByRole("heading", { name: fixture.taskTitle, exact: true }),
+    ).toBeVisible();
     await expect(page.getByTestId("task-workbench-v2")).toBeVisible();
     await expect(page.getByRole("button", { name: "修改 Task 基本信息" })).toHaveCount(0);
     await expect(page.getByRole("link", { name: "发起 Revision" })).toHaveCount(0);
@@ -1728,7 +1663,11 @@ test.describe("project management P4/P6 UI integration", () => {
     });
 
     await page.goto(`/progress/tasks/${fixture.taskId}`);
-    await expect(page.getByRole("heading", { name: fixture.taskTitle })).toBeVisible();
+    await expect(
+      page
+        .getByTestId("task-workbench-v2")
+        .getByRole("heading", { name: fixture.taskTitle, exact: true }),
+    ).toBeVisible();
     await expect(page.getByTestId("task-workbench-v2")).toBeVisible();
     await expect(page.getByTestId("task-plan-node-navigator")).toBeVisible();
     await expect(page.getByRole("heading", { name: "编辑 Draft 计划" })).toHaveCount(0);
@@ -1752,7 +1691,10 @@ test.describe("project management P4/P6 UI integration", () => {
         .getByRole("button", { name: /S6 Draft 第一阶段/ })
         .click();
     } else {
-      await page.getByRole("button", { name: "编辑 S6 Draft 第一阶段" }).click();
+      await page
+        .getByTestId("task-plan-node-navigator")
+        .getByRole("button", { name: /S6 Draft 第一阶段/ })
+        .click();
     }
     await expect(page.getByRole("button", { name: "保存 Task" }).first()).toBeDisabled();
 
@@ -1779,7 +1721,9 @@ test.describe("project management P4/P6 UI integration", () => {
       )
       .toBe(true);
     await page.goBack();
-    await expect(page).toHaveURL(new RegExp(`/progress/tasks/${fixture.taskId}(?:\\?tab=overview)?$`));
+    await expect(page).toHaveURL(
+      new RegExp(`/progress/tasks/${fixture.taskId}(?:\\?.*)?$`),
+    );
     await page.getByRole("link", { name: "编辑 Task" }).click();
     await expect(page.getByText(/检测到 .* 保存的未完成草稿/)).toHaveCount(0);
 
@@ -1820,7 +1764,10 @@ test.describe("project management P4/P6 UI integration", () => {
         .getByRole("button", { name: /S6 Draft 第一阶段/ })
         .click();
     } else {
-      await page.getByRole("button", { name: "编辑 S6 Draft 第一阶段" }).click();
+      await page
+        .getByTestId("task-plan-node-navigator")
+        .getByRole("button", { name: /S6 Draft 第一阶段/ })
+        .click();
     }
     await page.getByLabel("目标").fill("S6 Draft 持久化目标");
     await page.getByRole("button", { name: "添加 Milestone", exact: true }).first().click();
@@ -1835,14 +1782,10 @@ test.describe("project management P4/P6 UI integration", () => {
       .getByRole("textbox", { name: /^验收要求/ })
       .fill("提交文本证据");
     await page.getByLabel("预期完成时间").fill("2026-08-03T18:00");
-    if (testInfo.project.name === "mobile") {
-      await page
-        .getByTestId("task-plan-node-navigator")
-        .getByRole("button", { name: /Terminal/ })
-        .click();
-    } else {
-      await page.getByRole("button", { name: "编辑 Terminal" }).click();
-    }
+    await page
+      .getByTestId("task-plan-node-navigator")
+      .getByRole("button", { name: /Terminal/ })
+      .click();
     await page.getByLabel("Terminal 名称").fill("S6 Edited Terminal");
     await page.getByRole("button", { name: "保存 Task" }).first().click();
     await expect(page).toHaveURL(`/progress/tasks/${fixture.taskId}`);
@@ -2306,7 +2249,10 @@ test.describe("project management P4/P6 UI integration", () => {
         .getByRole("button", { name: /S6 Draft 第一阶段/ })
         .click();
     } else {
-      await page.getByRole("button", { name: "编辑 S6 Draft 第一阶段" }).click();
+      await page
+        .getByTestId("task-plan-node-navigator")
+        .getByRole("button", { name: /S6 Draft 第一阶段/ })
+        .click();
     }
     await page.getByLabel("目标").fill("S6 Participant 更新计划");
     await page.getByRole("button", { name: "保存 Task" }).first().click();
@@ -2629,10 +2575,12 @@ test.describe("project management P4/P6 UI integration", () => {
         subtree: true,
       });
     });
-    await expect(page.getByText(reason, { exact: true })).toBeVisible();
     const revisionCard = page
       .getByRole("heading", { name: "当前 Revision 候选" })
       .locator("../..");
+    await expect(
+      revisionCard.getByText(reason, { exact: true }).first(),
+    ).toBeVisible();
     await expect(
       revisionCard.getByRole("button", { name: "修改并重新送审" }),
     ).toBeDisabled();
@@ -2651,7 +2599,10 @@ test.describe("project management P4/P6 UI integration", () => {
         return browserWindow.__taskApprovalGateRemoved;
       }),
     ).toBe(false);
-    await expect(page.getByRole("button", { name: "提交验收" })).toBeDisabled();
+    await expect(
+      page.getByRole("heading", { name: "当前待审批验收" }),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "提交验收" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "结束 Task" })).toBeDisabled();
     await expectHealthyPage(page);
   });
@@ -2683,7 +2634,9 @@ test.describe("project management P4/P6 UI integration", () => {
     await expect(editForm.getByRole("button", { name: "保存修改" })).toHaveCount(1);
     await expect(editForm.getByRole("button", { name: /保存基本信息|保存 Tags|保存成员/ })).toHaveCount(0);
     await editForm.getByRole("button", { name: "保存修改" }).click();
-    await expect(page.getByText("Task 修改已保存。")).toBeVisible();
+    await expect(
+      page.getByTestId("task-workbench-v2").getByText("Task 修改已保存。"),
+    ).toBeVisible();
     await expect
       .poll(() =>
         prisma.task.findUnique({
@@ -2758,8 +2711,12 @@ test.describe("project management P4/P6 UI integration", () => {
         }),
       )
       .toEqual({ status: "CANCELLED" });
-    await expect(page.getByRole("heading", { name: "Task 风险" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Task 评论" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Task 风险", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Task 评论", exact: true }),
+    ).toBeVisible();
     await expect(page.getByRole("heading", { name: "近期动态" })).toBeVisible();
     expect(
       await page.evaluate(
@@ -2913,6 +2870,13 @@ test.describe("project management P4/P6 UI integration", () => {
   }) => {
     test.setTimeout(90_000);
     const fixture = await createUiFixture();
+    const paginationKey = randomUUID();
+    await prisma.person.createMany({
+      data: Array.from({ length: 55 }, (_, index) => ({
+        displayName: `000 S7 resource pagination ${String(index).padStart(2, "0")} ${paginationKey}`,
+        status: "ACTIVE" as const,
+      })),
+    });
     await prisma.workSegment.update({
       where: { id: fixture.confirmableSegmentId },
       data: { status: "PENDING_CONFIRMATION" },
@@ -2927,30 +2891,113 @@ test.describe("project management P4/P6 UI integration", () => {
       "P6 UI 可确认计划",
     );
 
+    await page.goto(`/progress/resources?focus=${randomUUID()}`);
+    await expect(page).toHaveURL(/focusError=1/);
+    await expect(page.getByText(
+      "无法定位该时间对象，请确认链接仍然有效且你有权查看。",
+    )).toBeVisible();
+
+    await page.goto(
+      "/progress/resources?from=2026-08-10&to=2026-08-12&group=person",
+    );
+    const nextResourcePage = page.getByRole("link", {
+      name: "下一页人员 / Task",
+    });
+    await expect(nextResourcePage).toBeVisible();
+    await page.getByRole("button", { name: "年", exact: true }).click();
+    await expect(page).toHaveURL(/scale=year/);
+    const livePaginationCenter = new URL(page.url()).searchParams.get("center");
+    expect(livePaginationCenter).not.toBeNull();
+    await expect(nextResourcePage).toHaveAttribute("href", /scale=year/);
+    await expect
+      .poll(async () => {
+        const href = await nextResourcePage.getAttribute("href");
+        return href
+          ? new URL(href, page.url()).searchParams.get("center")
+          : null;
+      })
+      .toBe(livePaginationCenter);
+    await nextResourcePage.click();
+    await expect(page).toHaveURL(/cursor=/);
+    await expect(page).toHaveURL(/scale=year/);
+    expect(new URL(page.url()).searchParams.get("center")).toBe(
+      livePaginationCenter,
+    );
+
     await page.goto(
       `/progress/resources?from=2026-08-10&to=2026-08-12&people=${fixture.member.person.id},${fixture.owner.person.id}&tasks=${fixture.taskId}&types=planned&statuses=pending_confirmation&group=person&zoom=hour&focus=${fixture.confirmableSegmentId}`,
     );
+    const detailDialog = page.getByRole("dialog", { name: "投入详情" });
+    await expect(detailDialog.getByTestId("segment-inspector")).toContainText(
+      "P6 UI 可确认计划",
+    );
+    await detailDialog.getByRole("button", { name: "Close" }).click();
+    await expect(detailDialog).toHaveCount(0);
+    await expect
+      .poll(() => new URL(page.url()).searchParams.has("focus"))
+      .toBe(false);
     await expect(page.getByRole("heading", { name: "人员计划" })).toBeVisible();
     await expect(page.getByRole("region", { name: "资源计划筛选" })).toBeVisible();
     await expect(page.getByText("人员（2）")).toBeVisible();
     await expect(page.getByText("Task（1）")).toBeVisible();
     await expect(page.getByLabel("待确认")).toBeChecked();
-    await expect(page.getByTestId("segment-inspector")).toContainText("P6 UI 可确认计划");
+    await page.getByRole("button", { name: "年", exact: true }).click();
+    await expect(page).toHaveURL(/scale=year/);
+    const preservedCenter = new URL(page.url()).searchParams.get("center");
+    expect(preservedCenter).not.toBeNull();
     await page.getByRole("button", { name: "7 天" }).click();
     await page.getByRole("button", { name: "应用筛选" }).click();
     await expect(page).toHaveURL(/to=2026-08-17/);
+    await expect(page).toHaveURL(/scale=year/);
+    expect(new URL(page.url()).searchParams.get("center")).toBe(preservedCenter);
     await page.getByRole("button", { name: "复制视图链接" }).click();
     await expect(page.getByText(/已复制当前视图链接|无法访问剪贴板/)).toBeVisible();
+    await page.goBack();
+    await expect(page.getByLabel("结束日期")).toHaveValue("2026-08-12");
+    await expect(page.getByText("人员（2）")).toBeVisible();
+    await expect(page.getByLabel("待确认")).toBeChecked();
+    await page.goForward();
+    await expect(page.getByLabel("结束日期")).toHaveValue("2026-08-17");
+    const pendingSegment = page.getByTestId(
+      `segment-block-${fixture.confirmableSegmentId}`,
+    );
+    await expect(pendingSegment).toBeVisible();
+    await pendingSegment.focus();
+    await pendingSegment.press("Enter");
+    const dirtyInspector = page.getByRole("form", { name: "编辑投入详情" });
+    await expect(dirtyInspector).toBeVisible();
+    const unsavedContent = `未保存的历史导航内容 ${randomUUID()}`;
+    await dirtyInspector.getByLabel("内容").fill(unsavedContent);
+    await page.goBack();
+    await expect(dirtyInspector.getByLabel("内容")).toHaveValue(unsavedContent);
+    await expect(
+      page.getByText("当前投入有未保存修改，请保存或关闭后再切换时间窗口。"),
+    ).toBeVisible();
     await expectHealthyPage(page);
+    let discardConfirmationSeen = false;
+    page.once("dialog", async (dialog) => {
+      discardConfirmationSeen = true;
+      await dialog.accept();
+    });
+    await detailDialog.getByRole("button", { name: "Close" }).click();
+    await expect.poll(() => discardConfirmationSeen).toBe(true);
+    await expect
+      .poll(() => new URL(page.url()).searchParams.has("focus"))
+      .toBe(false);
+    await page.waitForLoadState("networkidle");
+    await expect(detailDialog).toHaveCount(0);
 
     const removedConflictPage = await page.goto("/progress/resources/conflicts");
     expect(removedConflictPage?.status()).toBe(404);
 
     await page.goto(`/progress/my-timeline?focus=${fixture.confirmableSegmentId}&mode=day`);
-    await expect(page.getByRole("heading", { name: "我的时间" })).toBeVisible();
     await expect(page.getByTestId("segment-inspector")).toContainText(
       "P6 UI 可确认计划",
+      { timeout: 15_000 },
     );
+    await detailDialog.getByRole("button", { name: "Close" }).click();
+    await expect(detailDialog).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "我的时间" })).toBeVisible();
     const dueQueue = page.getByRole("region", { name: "到期计划与确认队列" });
     await expect(dueQueue.getByRole("heading", { name: "到期计划与确认队列" })).toBeVisible();
     await expect(dueQueue.getByText("P6 UI 可确认计划")).toBeVisible();

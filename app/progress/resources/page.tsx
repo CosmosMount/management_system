@@ -1,11 +1,13 @@
-import Link from "next/link";
+import { redirect } from "next/navigation";
 import { ResourcePlannerCanvasClient } from "@/components/project-management/resource-planner-canvas-client";
 import { ResourceFilterBar } from "@/components/project-management/resource-filter-bar";
 import { PageCommandBar } from "@/components/project-management/shell/page-command-bar";
 import { timeCanvasDataToModel } from "@/components/project-management/time-canvas/adapter";
+import { ViewportStateLink } from "@/components/project-management/time-canvas/viewport-state-link";
 import {
   formatShanghaiDate,
   parseTimeCanvasUrlState,
+  serializeTimeCanvasUrlState,
 } from "@/components/project-management/time-canvas/url-state";
 import { toProjectManagementServiceError } from "@/lib/project-management/application/errors";
 import {
@@ -29,10 +31,15 @@ export default async function ProgressResourcesPage({
 }) {
   const actor = await getProgressActorOrRedirect();
   const params = (await searchParams) ?? {};
-  const requestedFocusId = firstParam(params.focus);
+  const requestedFocusId = firstParam(params.focus) ||
+    firstParam(params.focusSegmentIds).split(",")[0] ||
+    "";
   const focusedSegment = isUuid(requestedFocusId)
     ? await getWorkSegment({ actor, input: { segmentId: requestedFocusId } }).catch(
-        () => null,
+        (error: unknown) => {
+          if (toProjectManagementServiceError(error).code === "NOT_FOUND") return null;
+          throw error;
+        },
       )
     : null;
   const defaultStartAt = focusedSegment
@@ -52,6 +59,38 @@ export default async function ProgressResourcesPage({
     },
   );
   const view = focusSegmentView(parsedView, focusedSegment);
+  const hasExplicitScale = hasValidExplicitScale(params);
+  if (requestedFocusId && !focusedSegment) {
+    const normalized = toUrlSearchParams(params);
+    normalized.delete("focus");
+    normalized.delete("focusSegmentIds");
+    normalized.set("focusError", "1");
+    redirect(`/progress/resources?${normalized.toString()}`);
+  }
+  if (focusedSegment) {
+    const normalized = serializeTimeCanvasUrlState({
+      range: view.range,
+      zoom: view.zoom,
+      groupBy: view.groupBy,
+      personIds: view.personIds,
+      taskIds: view.taskIds,
+      tagIds: view.tagIds,
+      types: view.types,
+      statuses: view.statuses,
+      focusId: focusedSegment.id,
+    });
+    normalized.set(
+      "center",
+      new Date(
+        (Date.parse(focusedSegment.startAt) + Date.parse(focusedSegment.endAt)) / 2,
+      ).toISOString(),
+    );
+    if (!hasExplicitScale) normalized.delete("scale");
+    normalized.delete("focusError");
+    if (canonicalSearch(toUrlSearchParams(params)) !== canonicalSearch(normalized)) {
+      redirect(`/progress/resources?${normalized.toString()}`);
+    }
+  }
   const startAt = new Date(view.range.startMs);
   const endAt = new Date(view.range.endMs);
   const cursor = firstParam(params.cursor) || undefined;
@@ -103,6 +142,11 @@ export default async function ProgressResourcesPage({
   const canvasModel = canvasResult.ok
     ? timeCanvasDataToModel(canvasResult.data, "RESOURCE_PLANNER")
     : null;
+  const requestedCanvasCenter = parseCenter(firstParam(params.center));
+  const initialCanvasCenter = canvasModel
+    ? centerWithinRange(requestedCanvasCenter, canvasModel.range) ??
+      defaultExplicitCanvasCenter(canvasModel)
+    : undefined;
   const canvasTasks = canvasResult.ok
     ? (
         await resolveTaskOptionsByIds({
@@ -129,6 +173,16 @@ export default async function ProgressResourcesPage({
       />
       <div className="mx-auto flex w-full min-w-0 max-w-[96rem] flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
           <ResourceFilterBar
+            key={resourceFilterStateKey({
+              from: formatShanghaiDate(startAt.getTime()),
+              to: formatShanghaiDate(endAt.getTime()),
+              groupBy: view.groupBy,
+              personIds: view.personIds,
+              taskIds: view.taskIds,
+              tagIds: view.tagIds,
+              types: view.types,
+              statuses: view.statuses,
+            })}
             initial={{
               from: formatShanghaiDate(startAt.getTime()),
               to: formatShanghaiDate(endAt.getTime()),
@@ -149,14 +203,21 @@ export default async function ProgressResourcesPage({
               {view.issues.join("；")}
             </div>
           )}
+          {firstParam(params.focusError) === "1" && (
+            <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">
+              无法定位该时间对象，请确认链接仍然有效且你有权查看。
+            </div>
+          )}
           {canvasModel ? (
             <ResourcePlannerCanvasClient
               initialModel={canvasModel}
               peopleOptions={pickerPeople}
               taskOptions={pickerTasks}
               defaultPersonId={actor.personId}
-              initialZoom={view.zoom}
+              initialZoom={hasExplicitScale ? view.zoom : undefined}
+              initialCenterMs={initialCanvasCenter}
               initialFocusId={view.focusId}
+              persistViewportInUrl
             />
           ) : (
             <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-6 text-sm text-destructive" role="alert">
@@ -166,14 +227,14 @@ export default async function ProgressResourcesPage({
           {canvasResult.ok && (cursor || canvasResult.data.nextCursor) && (
             <nav className="flex flex-wrap items-center gap-3" aria-label="资源计划行分页">
               {cursor && (
-                <Link className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted" href={resourceHref(params, null)}>
+                <ViewportStateLink className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted" href={resourceHref(params, null)}>
                   返回第一页
-                </Link>
+                </ViewportStateLink>
               )}
               {canvasResult.data.nextCursor && (
-                <Link className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted" href={resourceHref(params, canvasResult.data.nextCursor)}>
+                <ViewportStateLink className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted" href={resourceHref(params, canvasResult.data.nextCursor)}>
                   下一页人员 / Task
-                </Link>
+                </ViewportStateLink>
               )}
               <span className="text-sm text-muted-foreground">每页最多 50 行；分页不会静默截断。</span>
             </nav>
@@ -197,6 +258,15 @@ function mergeOptionsInPreferredOrder<T extends { id: string }>(
 
 function firstParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+}
+
+function hasValidExplicitScale(params: SearchParams) {
+  const scale = firstParam(params.scale).toUpperCase();
+  if (scale) {
+    return ["HOUR", "DAY", "WEEK", "MONTH", "QUARTER", "YEAR"].includes(scale);
+  }
+  const legacyZoom = firstParam(params.zoom).toUpperCase();
+  return ["HOUR", "DAY", "WEEK", "MONTH"].includes(legacyZoom);
 }
 
 function resourceHref(params: SearchParams, cursor: string | null) {
@@ -229,15 +299,18 @@ function focusSegmentView(
     ...view,
     focusId: segment.id,
     range: overlaps ? view.range : { startMs: start, endMs: Math.max(end, start + 86_400_000) },
+    groupBy: view.groupBy === "TASK" && !segment.taskId ? "PERSON" as const : view.groupBy,
     personIds:
-      view.groupBy === "PERSON"
+      view.groupBy === "PERSON" || !segment.taskId
         ? [segment.personId, ...view.personIds.filter((id) => id !== segment.personId)].slice(
             0,
             50,
           )
         : view.personIds,
     taskIds:
-      view.groupBy === "TASK" && segment.taskId
+      !segment.taskId
+        ? []
+        : view.groupBy === "TASK"
         ? [segment.taskId, ...view.taskIds.filter((id) => id !== segment.taskId)].slice(
             0,
             50,
@@ -252,6 +325,62 @@ function isUuid(value: string) {
   );
 }
 
+function parseCenter(value: string) {
+  const parsed = Date.parse(value);
+  return value && Number.isFinite(parsed) ? parsed : null;
+}
+
+function centerWithinRange(
+  centerMs: number | null,
+  range: { startMs: number; endMs: number },
+) {
+  return centerMs !== null && centerMs >= range.startMs && centerMs < range.endMs
+    ? centerMs
+    : null;
+}
+
+function defaultExplicitCanvasCenter(
+  model: ReturnType<typeof timeCanvasDataToModel>,
+) {
+  const candidates = [
+    ...model.segments.flatMap((segment) =>
+      segment.startMs < model.range.endMs && segment.endMs > model.range.startMs
+        ? [Math.max(segment.startMs, model.range.startMs)]
+        : [],
+    ),
+    ...model.anchors.flatMap((anchor) =>
+      anchor.atMs >= model.range.startMs && anchor.atMs < model.range.endMs
+        ? [anchor.atMs]
+        : [],
+    ),
+  ];
+  return candidates.length > 0
+    ? Math.min(...candidates)
+    : (model.range.startMs + model.range.endMs) / 2;
+}
+
+function resourceFilterStateKey(input: {
+  from: string;
+  to: string;
+  groupBy: "PERSON" | "TASK";
+  personIds: string[];
+  taskIds: string[];
+  tagIds: string[];
+  types: string[];
+  statuses: string[];
+}) {
+  return JSON.stringify([
+    input.from,
+    input.to,
+    input.groupBy,
+    input.personIds,
+    input.taskIds,
+    input.tagIds,
+    input.types,
+    input.statuses,
+  ]);
+}
+
 function toUrlSearchParams(params: SearchParams) {
   const result = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -262,4 +391,13 @@ function toUrlSearchParams(params: SearchParams) {
     }
   }
   return result;
+}
+
+function canonicalSearch(params: URLSearchParams) {
+  return [...params.entries()]
+    .sort(([leftKey, leftValue], [rightKey, rightValue]) =>
+      leftKey.localeCompare(rightKey) || leftValue.localeCompare(rightValue),
+    )
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join("&");
 }

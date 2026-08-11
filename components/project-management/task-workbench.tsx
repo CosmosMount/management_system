@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   activateTask,
@@ -107,11 +107,9 @@ export function TaskWorkbench({
   collaboration: CollaborationInitialData;
   timeCanvasModel: TimeCanvasModel;
   timelineWindow: {
-    date: string;
     focusId: string | null;
-    previousHref: string;
-    nextHref: string;
-    defaultHref: string;
+    centerMs?: number;
+    scale?: "WEEK" | "MONTH" | "QUARTER" | "YEAR";
   };
 }) {
   const router = useRouter();
@@ -164,6 +162,15 @@ export function TaskWorkbench({
     ? requestedInitialFocusId
     : defaultNodeId;
   const [requestedNodeId, setRequestedNodeId] = useState(initialNodeId);
+  const externalTimelineFocusRef = useRef(requestedInitialFocusId);
+  useEffect(() => {
+    if (externalTimelineFocusRef.current === requestedInitialFocusId) return;
+    const timer = window.setTimeout(() => {
+      externalTimelineFocusRef.current = requestedInitialFocusId;
+      setRequestedNodeId(initialNodeId);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [initialNodeId, requestedInitialFocusId]);
   const selectedNodeId =
     requestedNodeId === TASK_DETAIL_START_ID ||
     workspace.currentPlan.nodes.some((node) => node.nodeId === requestedNodeId)
@@ -433,8 +440,10 @@ export function TaskWorkbench({
               const atMs = node ? Date.parse(node.at) : Number.NaN;
               if (Number.isFinite(atMs) && (atMs < timeCanvasModel.range.startMs || atMs >= timeCanvasModel.range.endMs)) {
                 const url = new URL(window.location.href);
-                url.searchParams.set("timelineDate", centeredTimelineDate(atMs));
-                url.searchParams.set("timelineFocus", nodeId);
+                url.searchParams.set("center", new Date(atMs).toISOString());
+                url.searchParams.set("focus", nodeId);
+                url.searchParams.delete("timelineDate");
+                url.searchParams.delete("timelineFocus");
                 router.push(`${url.pathname}?${url.searchParams.toString()}`);
                 return;
               }
@@ -1080,35 +1089,19 @@ function TaskDetailTimeline({
   people: PersonOptionDto[];
   taskOptions: TaskOptionPage["items"];
   timelineWindow: {
-    date: string;
     focusId: string | null;
-    previousHref: string;
-    nextHref: string;
-    defaultHref: string;
+    centerMs?: number;
+    scale?: "WEEK" | "MONTH" | "QUARTER" | "YEAR";
   };
 }) {
   return (
     <section className="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5">
-      <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="font-semibold">计划与人员投入</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Current Plan v{workspace.currentPlan.versionNo} · 31 天窗口 · {timelineWindow.date}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Link className={cn(buttonVariants({ size: "sm", variant: "outline" }))} href={timelineWindow.previousHref}>上一窗口</Link>
-          <Link className={cn(buttonVariants({ size: "sm", variant: "outline" }))} href={timelineWindow.defaultHref}>定位当前节点</Link>
-          <Link className={cn(buttonVariants({ size: "sm", variant: "outline" }))} href={timelineWindow.nextHref}>下一窗口</Link>
-        </div>
+      <div>
+        <h2 className="font-semibold">计划与人员投入</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Current Plan v{workspace.currentPlan.versionNo} · 按当前计划和投入自动确定范围
+        </p>
       </div>
-      <form className="mt-3 flex flex-wrap items-end gap-2">
-        <label className="grid gap-1 text-sm">
-          <span>窗口开始日期</span>
-          <Input name="timelineDate" type="date" defaultValue={timelineWindow.date} />
-        </label>
-        <Button type="submit" size="sm" variant="outline">打开日期</Button>
-      </form>
       <div className="mt-4 min-w-0">
         <ResourcePlannerCanvasClient
           initialModel={model}
@@ -1117,11 +1110,22 @@ function TaskDetailTimeline({
           taskOptions={taskOptions}
           defaultPersonId={workspace.members.find((member) => member.role === "OWNER")?.personId ?? workspace.members[0]?.personId ?? ""}
           defaultTaskId={workspace.task.id}
+          defaultTaskTitle={workspace.task.title}
           allowIndependent={false}
-          allowCreate={false}
-          initialZoom="DAY"
+          initialZoom={timelineWindow.scale}
+          initialCenterMs={timelineWindow.centerMs}
+          persistViewportInUrl
+          adaptiveBlockQuery={{
+            kind: "TASK",
+            preferredCenterMs: timelineWindow.centerMs ?? Date.parse(model.generatedAt),
+            taskId: workspace.task.id,
+          }}
           mode="TASK_WORKBENCH"
-          initialFocusId={selectedId}
+          initialFocusId={
+            selectedId === TASK_DETAIL_START_ID
+              ? `plan-start:${workspace.task.id}`
+              : selectedId
+          }
         />
       </div>
       <div className="mt-4">
@@ -1134,16 +1138,6 @@ function TaskDetailTimeline({
       </div>
     </section>
   );
-}
-
-function centeredTimelineDate(atMs: number) {
-  const formatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-  return formatter.format(new Date(atMs - 15 * 24 * 60 * 60 * 1_000));
 }
 
 function currentNodeLabel(workspace: TaskWorkspace) {

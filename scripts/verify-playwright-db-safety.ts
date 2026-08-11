@@ -257,7 +257,7 @@ async function verifyRealDetachedRunnerDatabaseLifecycle(
       process.on("SIGINT", () => onSignal("SIGINT"));
       process.on("SIGTERM", () => onSignal("SIGTERM"));
       process.on("SIGHUP", () => onSignal("SIGHUP"));
-      server.listen(3002, "127.0.0.1", () => {
+      server.listen(3003, "127.0.0.1", () => {
         fs.writeFileSync(readyPath, JSON.stringify({ pid: process.pid }), "utf8");
       });
       setInterval(() => undefined, 1000);
@@ -282,7 +282,7 @@ async function verifyRealDetachedRunnerDatabaseLifecycle(
     "grace-timeout",
     "second-signal",
   ] as const) {
-    assert.equal(await isPortListening(3002), false);
+    assert.equal(await isPortListening(3003), false);
     const runId = randomUUID();
     const serverReadyPath = path.join(
       process.cwd(),
@@ -319,7 +319,7 @@ async function verifyRealDetachedRunnerDatabaseLifecycle(
           cleanupCalls += 1;
           assert.equal(processGroupIsAlive(serverPid), false);
           assert.equal(processGroupIsAlive(cliPid), false);
-          assert.equal(await isPortListening(3002), false);
+          assert.equal(await isPortListening(3003), false);
           assert.deepEqual(
             await listExactDatabases(maintenance, [
               ownedPair.target.databaseName,
@@ -373,7 +373,7 @@ async function verifyRealDetachedRunnerDatabaseLifecycle(
           );
           if (signal.aborted) throw signal.reason;
           serverPid = readPid(serverReadyPath);
-          assert.equal(await isPortListening(3002), true);
+          assert.equal(await isPortListening(3003), true);
         },
       };
       const runPromise = runOfficialPlaywright(
@@ -420,7 +420,7 @@ async function verifyRealDetachedRunnerDatabaseLifecycle(
       assert.equal(cleanupCalls, 0);
       assert.ok(existsSync(marker.markerPath));
       assert.equal(processGroupIsAlive(serverPid), true);
-      assert.equal(await isPortListening(3002), true);
+      assert.equal(await isPortListening(3003), true);
       assert.deepEqual(
         await listExactDatabases(maintenance, [
           ownership.target.databaseName,
@@ -440,7 +440,7 @@ async function verifyRealDetachedRunnerDatabaseLifecycle(
       assert.equal(result.exitCode, mode === "natural-failure" ? 7 : 143);
       assert.equal(processGroupIsAlive(serverPid), false);
       assert.equal(processGroupIsAlive(cliPid), false);
-      assert.equal(await isPortListening(3002), false);
+      assert.equal(await isPortListening(3003), false);
       assert.ok(!existsSync(marker.markerPath));
       assert.deepEqual(
         await listExactDatabases(maintenance, [

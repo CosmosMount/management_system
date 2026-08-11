@@ -23,7 +23,11 @@ import {
   searchPeople,
   searchTaskOptions,
 } from "../lib/project-management/queries/option-queries";
-import { getTimeCanvasData } from "../lib/project-management/queries/time-canvas-queries";
+import {
+  getContentDrivenTimeCanvasData,
+  getTimeCanvasData,
+  loadBoundedAdaptiveLeaves,
+} from "../lib/project-management/queries/time-canvas-queries";
 import { loginAsTestUser } from "./helpers/functional-fixtures";
 
 const RANGE_START = "2026-08-10T00:00:00.000Z";
@@ -2153,6 +2157,174 @@ test.describe("S2 canvas query security", () => {
       getTimeCanvasData({ actor: actor(owner), input }),
       "QUERY_LIMIT_EXCEEDED",
     );
+  });
+
+  test("content-driven blocks split at Shanghai day boundaries and isolate a dense day failure", async () => {
+    test.setTimeout(120_000);
+    const owner = await createAccountPerson("内容驱动自动细分 Owner");
+    const target = await createAccountPerson("内容驱动自动细分目标");
+    const firstDayStart = new Date("2020-08-10T09:00:00.000+08:00");
+    const firstDayEnd = new Date("2020-08-10T10:00:00.000+08:00");
+    const task = await createTask({
+      ownerAccountId: owner.account.id,
+      title: "内容驱动自动细分 Task",
+      team: "英雄",
+      techGroup: "电控",
+      members: [
+        { personId: owner.person.id, role: "OWNER" },
+        { personId: target.person.id, role: "PARTICIPANT" },
+      ],
+      plannedStartAt: firstDayStart,
+    });
+    await prisma.milestoneNode.update({
+      where: { nodeId: task.milestoneNodeId },
+      data: { expectedCompletedAt: firstDayEnd },
+    });
+    const rows = Array.from({ length: 5_001 }, (_, index) => ({
+      id: randomUUID(),
+      personId: target.person.id,
+      type: "PLANNED" as const,
+      status: "PLANNED" as const,
+      startAt: firstDayStart,
+      endAt: firstDayEnd,
+      content: `内容驱动密集投入 ${index}`,
+      priority: "LOW" as const,
+      taskId: task.taskId,
+      createdByAccountId: owner.account.id,
+    }));
+    await createSegmentsInChunks(rows);
+    const normalSegment = await createSegment({
+      accountId: owner.account.id,
+      personId: target.person.id,
+      taskId: task.taskId,
+      startAt: new Date("2020-08-12T09:00:00.000+08:00"),
+      endAt: new Date("2020-08-12T10:00:00.000+08:00"),
+      content: "密集日期外仍可浏览",
+    });
+    try {
+      const input = {
+        scope: { kind: "TASK_SCOPED" as const, taskId: task.taskId },
+        personIds: [],
+        taskIds: [],
+        tagIds: [],
+        types: [],
+        statuses: [],
+        groupBy: "PERSON" as const,
+        includeTaskAnchors: true,
+        includeActual: true,
+        includeBusyBlocks: false,
+        rowLimit: 50,
+      };
+      const denseDay = await getContentDrivenTimeCanvasData({
+        actor: actor(owner),
+        input,
+        load: { mode: "INITIAL" },
+      });
+      expect(denseDay.data.segments.some(
+        (segment) => segment.kind === "SEGMENT" && segment.id === normalSegment.id,
+      )).toBe(true);
+      expect(denseDay.failedRanges).toEqual([
+        {
+          startMs: Date.parse("2020-08-10T00:00:00.000+08:00"),
+          endMs: Date.parse("2020-08-11T00:00:00.000+08:00"),
+          message: "单个上海自然日内的时间对象超过 5000 条，请缩小筛选范围",
+        },
+      ]);
+      expect(denseDay.leafBlockCount).toBeLessThanOrEqual(16);
+
+      const movedIds = rows.slice(2_500).map((row) => row.id);
+      await prisma.workSegment.updateMany({
+        where: { id: { in: movedIds } },
+        data: {
+          startAt: new Date("2020-08-11T09:00:00.000+08:00"),
+          endAt: new Date("2020-08-11T10:00:00.000+08:00"),
+        },
+      });
+      const split = await getContentDrivenTimeCanvasData({
+        actor: actor(owner),
+        input,
+        load: { mode: "INITIAL" },
+      });
+      expect(split.data.segments).toHaveLength(5_002);
+      expect(split.failedRanges).toEqual([]);
+      expect(split.leafBlockCount).toBeGreaterThan(1);
+      expect(split.leafBlockCount).toBeLessThanOrEqual(16);
+      const replay = await getContentDrivenTimeCanvasData({
+        actor: actor(owner),
+        input,
+        preferredCenterMs: split.resolvedCenterMs,
+        load: {
+          mode: "BLOCK",
+          range: split.loadedRange,
+          expectedRowPageKey: split.data.rowPageKey!,
+        },
+      });
+      expect(replay.data.rowPageKey).toBe(split.data.rowPageKey);
+    } finally {
+      await prisma.workSegment.updateMany({
+        where: { taskId: task.taskId },
+        data: { status: "CANCELLED" },
+      });
+    }
+  });
+
+  test("content-driven subdivision stops before exceeding its query and leaf budgets", async () => {
+    let queryCount = 0;
+    await expectErrorCode(
+      loadBoundedAdaptiveLeaves({
+        ranges: [{
+          startMs: Date.parse("2020-01-01T00:00:00.000+08:00"),
+          endMs: Date.parse("2021-01-01T00:00:00.000+08:00"),
+        }],
+        loadRange: async () => {
+          queryCount += 1;
+          return new Array<null>(5_001).fill(null);
+        },
+      }),
+      "QUERY_LIMIT_EXCEEDED",
+    );
+    expect(queryCount).toBeLessThanOrEqual(31);
+  });
+
+  test("content-driven Task uses createdAt for a nullable legacy Start", async () => {
+    const owner = await createAccountPerson("空计划开始兼容 Owner");
+    const task = await createTask({
+      ownerAccountId: owner.account.id,
+      title: "空计划开始兼容 Task",
+      team: "英雄",
+      techGroup: "电控",
+      members: [{ personId: owner.person.id, role: "OWNER" }],
+      plannedStartAt: null,
+    });
+    const compatibilityStart = atHour(7);
+    const taskCreatedAt = await prisma.task.update({
+      where: { id: task.taskId },
+      data: { createdAt: compatibilityStart },
+      select: { createdAt: true },
+    });
+    const result = await getContentDrivenTimeCanvasData({
+      actor: actor(owner),
+      input: {
+        scope: { kind: "TASK_SCOPED", taskId: task.taskId },
+        personIds: [],
+        taskIds: [],
+        tagIds: [],
+        types: [],
+        statuses: [],
+        groupBy: "PERSON",
+        includeTaskAnchors: true,
+        includeActual: true,
+        includeBusyBlocks: false,
+        rowLimit: 50,
+      },
+      load: { mode: "INITIAL" },
+    });
+    expect(result.data.anchors[0]).toMatchObject({
+      id: task.taskId,
+      createdAt: taskCreatedAt.createdAt.toISOString(),
+      plannedStartAt: null,
+    });
+    expect(result.contentRange?.startMs).toBe(taskCreatedAt.createdAt.getTime());
   });
 
   test("time-object limit rejects 5001 Busy-only records without an unbounded response", async () => {

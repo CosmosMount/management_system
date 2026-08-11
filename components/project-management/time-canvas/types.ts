@@ -4,7 +4,9 @@ export type TimeCanvasMode =
   | "RESOURCE_PLANNER"
   | "PERSONAL_TIMELINE";
 
-export type TimeCanvasZoom = "HOUR" | "DAY" | "WEEK" | "MONTH";
+export type TimeCanvasZoom = "WEEK" | "MONTH" | "QUARTER" | "YEAR";
+
+export type TimeCanvasPresentation = "FULL" | "COMPACT";
 
 export type TimeCanvasTone =
   | "BLUE"
@@ -86,6 +88,13 @@ export type TimeCanvasSegment = {
 export type TimeCanvasModel = {
   timezone: string;
   range: TimeCanvasRange;
+  fullRange?: TimeCanvasRange;
+  rowPageKey?: string;
+  contentRange?: TimeCanvasRange | null;
+  rangeClipped?: boolean;
+  loadedRanges?: TimeCanvasRange[];
+  loadedLeafBlockCounts?: number[];
+  failedRanges?: Array<TimeCanvasRange & { message: string }>;
   rows: TimeCanvasRow[];
   anchors: TimeCanvasAnchor[];
   phaseBands?: TimeCanvasPhaseBand[];
@@ -93,6 +102,25 @@ export type TimeCanvasModel = {
   nextCursor?: string | null;
   generatedAt: string;
 };
+
+export type AdaptiveTimeCanvasBlockQuery =
+  | {
+      kind: "MY_TIMELINE";
+      preferredCenterMs: number;
+      showAll: boolean;
+      taskCursor?: string;
+    }
+  | {
+      kind: "TASK";
+      preferredCenterMs: number;
+      taskId: string;
+    }
+  | {
+      kind: "PROJECT";
+      preferredCenterMs: number;
+      projectId: string;
+      taskCursor?: string;
+    };
 
 export type TimeCanvasSelection =
   | { kind: "ANCHOR" | "SEGMENT"; id: string }
@@ -164,7 +192,9 @@ export type TimeCanvasInteractionOptions = {
 export type TimeCanvasProps = {
   mode: TimeCanvasMode;
   model: TimeCanvasModel;
+  presentation?: TimeCanvasPresentation;
   initialZoom?: TimeCanvasZoom;
+  initialCenterMs?: number;
   display?: TimeCanvasDisplayOptions;
   interaction?: TimeCanvasInteractionOptions;
   /** Passing `selection` makes selection controlled; omit it for internal state. */
@@ -172,5 +202,9 @@ export type TimeCanvasProps = {
   initialSelection?: TimeCanvasSelection;
   emptyMessage?: string;
   onRangeChange?: (range: TimeCanvasRange) => void;
+  navigationRange?: TimeCanvasRange;
+  onRequestCenter?: (centerMs: number) => void;
+  onViewportChange?: (range: TimeCanvasRange) => void;
+  onZoomChange?: (zoom: TimeCanvasZoom) => void;
   onSelectionChange?: (selection: TimeCanvasSelection) => void;
 };

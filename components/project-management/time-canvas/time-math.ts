@@ -12,19 +12,28 @@ export type TimeScale = TimeCanvasRange & {
   contentWidthPx: number;
   msPerPixel: number;
   snapMs: number;
+  segmentSnapMs: number;
+  anchorSnapMs: number;
 };
 
 export type TimeRect = { left: number; width: number };
 
 export const zoomConfiguration: Record<
   TimeCanvasZoom,
-  { pixelsPerDay: number; snapMs: number; tickMs: number }
+  { pixelsPerDay: number }
 > = {
-  HOUR: { pixelsPerDay: 24 * 72, snapMs: HOUR_MS / 2, tickMs: HOUR_MS },
-  DAY: { pixelsPerDay: 96, snapMs: DAY_MS, tickMs: DAY_MS },
-  WEEK: { pixelsPerDay: 28, snapMs: DAY_MS, tickMs: 7 * DAY_MS },
-  MONTH: { pixelsPerDay: 8, snapMs: 7 * DAY_MS, tickMs: 7 * DAY_MS },
+  WEEK: { pixelsPerDay: 40 },
+  MONTH: { pixelsPerDay: 12 },
+  QUARTER: { pixelsPerDay: 4 },
+  YEAR: { pixelsPerDay: 1.5 },
 };
+
+export const timeCanvasZoomOrder: TimeCanvasZoom[] = [
+  "WEEK",
+  "MONTH",
+  "QUARTER",
+  "YEAR",
+];
 
 export function createTimeScale(input: {
   range: TimeCanvasRange;
@@ -42,7 +51,10 @@ export function createTimeScale(input: {
     viewportWidthPx,
     contentWidthPx,
     msPerPixel: durationMs / contentWidthPx,
-    snapMs: zoomConfiguration[input.zoom].snapMs,
+    // Kept for callers that edit Segments. Visual density never changes it.
+    snapMs: HOUR_MS / 2,
+    segmentSnapMs: HOUR_MS / 2,
+    anchorSnapMs: DAY_MS,
   };
 }
 
@@ -187,13 +199,19 @@ export function axisTicks(input: {
   zoom: TimeCanvasZoom;
 }): number[] {
   assertRange(input.window);
-  const step = zoomConfiguration[input.zoom].tickMs;
-  const alignedStart =
-    input.zoom === "HOUR"
-      ? Math.floor(input.window.startMs / step) * step
-      : input.zoom === "DAY"
-        ? floorShanghaiDay(input.window.startMs, DAY_MS)
-        : floorShanghaiWeek(input.window.startMs);
+  if (input.zoom === "QUARTER" || input.zoom === "YEAR") {
+    const ticks: number[] = [];
+    let tick = startOfShanghaiMonth(input.window.startMs);
+    while (tick <= input.window.endMs && ticks.length < 1_000) {
+      ticks.push(tick);
+      tick = addShanghaiCalendarMonths(tick, 1);
+    }
+    return ticks;
+  }
+  const step = input.zoom === "WEEK" ? DAY_MS : 7 * DAY_MS;
+  const alignedStart = input.zoom === "WEEK"
+    ? floorShanghaiDay(input.window.startMs)
+    : floorShanghaiWeek(input.window.startMs);
   const ticks: number[] = [];
   for (
     let tick = alignedStart;
@@ -208,13 +226,166 @@ export function axisTicks(input: {
 export function chooseFitZoom(range: TimeCanvasRange): TimeCanvasZoom {
   assertRange(range);
   const days = (range.endMs - range.startMs) / DAY_MS;
-  if (days <= 3) return "HOUR";
-  if (days <= 21) return "DAY";
-  if (days <= 84) return "WEEK";
-  return "MONTH";
+  if (days <= 42) return "WEEK";
+  if (days <= 140) return "MONTH";
+  if (days <= 420) return "QUARTER";
+  return "YEAR";
 }
 
-function floorShanghaiDay(timeMs: number, stepMs: number): number {
+export function chooseAdaptiveScale(
+  range: TimeCanvasRange,
+  viewportWidthPx: number,
+): TimeCanvasZoom {
+  assertRange(range);
+  const width = Math.max(1, finite(viewportWidthPx, 1));
+  const days = (range.endMs - range.startMs) / DAY_MS;
+  return timeCanvasZoomOrder.find(
+    (zoom) => days * zoomConfiguration[zoom].pixelsPerDay <= width * 4,
+  ) ?? "YEAR";
+}
+
+export function contentTimeBounds(
+  timestamps: Iterable<number>,
+): TimeCanvasRange | null {
+  let minimum = Number.POSITIVE_INFINITY;
+  let maximum = Number.NEGATIVE_INFINITY;
+  for (const value of timestamps) {
+    if (!Number.isFinite(value)) continue;
+    minimum = Math.min(minimum, value);
+    maximum = Math.max(maximum, value);
+  }
+  if (!Number.isFinite(minimum) || !Number.isFinite(maximum)) return null;
+  return { startMs: minimum, endMs: maximum + 1 };
+}
+
+export function padShanghaiCalendarRange(
+  bounds: TimeCanvasRange | null,
+  months = 2,
+  fallbackMs = Date.now(),
+): TimeCanvasRange {
+  const count = Math.max(0, Math.trunc(months));
+  if (!bounds) {
+    const month = startOfShanghaiMonth(fallbackMs);
+    return {
+      startMs: addShanghaiCalendarMonths(month, -count),
+      endMs: addShanghaiCalendarMonths(month, count + 1),
+    };
+  }
+  assertRange(bounds);
+  return {
+    startMs: addShanghaiCalendarMonths(startOfShanghaiMonth(bounds.startMs), -count),
+    endMs: addShanghaiCalendarMonths(
+      startOfShanghaiMonth(bounds.endMs - 1),
+      count + 1,
+    ),
+  };
+}
+
+export function startOfShanghaiMonth(timeMs: number): number {
+  if (!Number.isFinite(timeMs)) throw new Error("时间参数无效");
+  const local = new Date(timeMs + SHANGHAI_OFFSET_MS);
+  return Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), 1) - SHANGHAI_OFFSET_MS;
+}
+
+export function startOfShanghaiYear(timeMs: number): number {
+  if (!Number.isFinite(timeMs)) throw new Error("时间参数无效");
+  const local = new Date(timeMs + SHANGHAI_OFFSET_MS);
+  return Date.UTC(local.getUTCFullYear(), 0, 1) - SHANGHAI_OFFSET_MS;
+}
+
+export function addShanghaiCalendarMonths(timeMs: number, months: number): number {
+  const local = new Date(timeMs + SHANGHAI_OFFSET_MS);
+  return Date.UTC(
+    local.getUTCFullYear(),
+    local.getUTCMonth() + Math.trunc(months),
+    local.getUTCDate(),
+    local.getUTCHours(),
+    local.getUTCMinutes(),
+    local.getUTCSeconds(),
+    local.getUTCMilliseconds(),
+  ) - SHANGHAI_OFFSET_MS;
+}
+
+export function addShanghaiCalendarYears(timeMs: number, years: number): number {
+  const local = new Date(timeMs + SHANGHAI_OFFSET_MS);
+  const year = local.getUTCFullYear() + Math.trunc(years);
+  const month = local.getUTCMonth();
+  const day = Math.min(
+    local.getUTCDate(),
+    new Date(Date.UTC(year, month + 1, 0)).getUTCDate(),
+  );
+  return Date.UTC(
+    year,
+    month,
+    day,
+    local.getUTCHours(),
+    local.getUTCMinutes(),
+    local.getUTCSeconds(),
+    local.getUTCMilliseconds(),
+  ) - SHANGHAI_OFFSET_MS;
+}
+
+export function clampLogicalRangeToThreeYears(
+  fullRange: TimeCanvasRange,
+  preferredCenterMs: number,
+): { range: TimeCanvasRange; clipped: boolean } {
+  assertRange(fullRange);
+  const fullMaximumEnd = addShanghaiCalendarYears(fullRange.startMs, 3);
+  if (fullRange.endMs <= fullMaximumEnd) return { range: fullRange, clipped: false };
+  const target = Math.max(fullRange.startMs, Math.min(preferredCenterMs, fullRange.endMs - 1));
+  let startMs = addShanghaiCalendarMonths(startOfShanghaiMonth(target), -18);
+  let endMs = addShanghaiCalendarYears(startMs, 3);
+  if (startMs < fullRange.startMs) {
+    startMs = fullRange.startMs;
+    endMs = addShanghaiCalendarYears(startMs, 3);
+  }
+  if (endMs > fullRange.endMs) {
+    endMs = fullRange.endMs;
+    startMs = addShanghaiCalendarYears(endMs, -3);
+  }
+  return { range: { startMs, endMs }, clipped: true };
+}
+
+export function viewportCenterTime(
+  scale: TimeScale,
+  scrollLeftPx: number,
+  viewportWidthPx: number,
+): number {
+  return xToTime(scrollLeftPx + viewportWidthPx / 2, scale);
+}
+
+export function scrollLeftForCenter(
+  scale: TimeScale,
+  centerMs: number,
+  viewportWidthPx: number,
+): number {
+  return Math.max(
+    0,
+    Math.min(
+      timeToX(centerMs, scale) - viewportWidthPx / 2,
+      Math.max(0, scale.contentWidthPx - viewportWidthPx),
+    ),
+  );
+}
+
+export function shiftViewportByRatio(input: {
+  scale: TimeScale;
+  scrollLeftPx: number;
+  viewportWidthPx: number;
+  direction: -1 | 1;
+  ratio?: number;
+}): number {
+  const maximum = Math.max(0, input.scale.contentWidthPx - input.viewportWidthPx);
+  return Math.max(
+    0,
+    Math.min(
+      input.scrollLeftPx + input.direction * input.viewportWidthPx * (input.ratio ?? 0.8),
+      maximum,
+    ),
+  );
+}
+
+export function floorShanghaiDay(timeMs: number, stepMs = DAY_MS): number {
   const dayIndex = Math.floor((timeMs + SHANGHAI_OFFSET_MS) / stepMs);
   return dayIndex * stepMs - SHANGHAI_OFFSET_MS;
 }

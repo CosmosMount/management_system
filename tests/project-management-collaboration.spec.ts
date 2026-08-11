@@ -161,13 +161,24 @@ test.describe("Project/Task 风险、评论与近期动态", () => {
       name: owner.displayName,
     });
     await page.goto(`/progress/tasks/${draft.taskId}`);
-    await expect(page.getByRole("heading", { name: "Task 风险" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Task 评论" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Task 风险", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Task 评论", exact: true }),
+    ).toBeVisible();
     await expect(page.getByRole("heading", { name: "近期动态" })).toBeVisible();
     const uiRiskContent = `浏览器提出的风险 ${randomUUID()}`;
     await page.getByLabel("风险内容").fill(uiRiskContent);
     await page.getByRole("button", { name: "提出风险", exact: true }).click();
     await expect(page.getByText(uiRiskContent, { exact: true })).toBeVisible();
+    await expect
+      .poll(() =>
+        prisma.riskRecord.count({
+          where: { taskId: draft.taskId, content: uiRiskContent },
+        }),
+      )
+      .toBe(1);
     const uiRisk = await prisma.riskRecord.findFirstOrThrow({
       where: { taskId: draft.taskId, content: uiRiskContent },
     });
@@ -175,7 +186,9 @@ test.describe("Project/Task 风险、评论与近期动态", () => {
     await uiRiskCard.getByRole("button", { name: "解决风险" }).click();
     await page.getByLabel("解决说明").fill("已通过定向回归确认并关闭");
     await page.getByRole("button", { name: "确认解决" }).click();
-    await expect(page.getByText("风险已解决。")).toBeVisible();
+    await expect(
+      page.getByTestId("task-workbench-v2").getByText("风险已解决。"),
+    ).toBeVisible();
     await expect.poll(() => prisma.riskRecord.findUnique({ where: { id: uiRisk.id }, select: { status: true, resolveNote: true } })).toEqual({
       status: "RESOLVED",
       resolveNote: "已通过定向回归确认并关闭",

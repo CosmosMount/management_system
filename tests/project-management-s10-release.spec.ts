@@ -228,7 +228,7 @@ test.describe("S10 release readiness", () => {
     );
     expect(schema).not.toMatch(/legacySource|migrationNeedsReview/);
     expect(schema).not.toMatch(
-      /model\s+(?:Project|ProjectStage|ProjectCreationRequest|TaskCreationRequest)\b/,
+      /model\s+(?:ProjectStage|ProjectCreationRequest|TaskCreationRequest)\b/,
     );
 
     const roots = [

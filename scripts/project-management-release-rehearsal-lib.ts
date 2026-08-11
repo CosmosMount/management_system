@@ -79,6 +79,11 @@ type UploadManifest = {
   stableHash: string;
 };
 
+type FutureProjectNotificationRows = {
+  inAppNotifications: Record<string, unknown>[];
+  notificationPreferences: Record<string, unknown>[];
+};
+
 export type ReleaseRehearsalReport = {
   businessTimezone: "Asia/Shanghai";
   cleanup: {
@@ -495,6 +500,80 @@ async function prepareSharedSnapshotBeforeExpectedMigrations(
   }
 }
 
+async function stageFutureProjectNotificationRows(
+  databaseUrl: string,
+): Promise<FutureProjectNotificationRows> {
+  const client = new pg.Client({ connectionString: databaseUrl });
+  await client.connect();
+  try {
+    await client.query("BEGIN");
+    const notificationPreferences = await client.query<Record<string, unknown>>(
+      `SELECT * FROM "NotificationPreference" WHERE "category"::text = 'PROJECT' ORDER BY "id"`,
+    );
+    const inAppNotifications = await client.query<Record<string, unknown>>(
+      `SELECT * FROM "InAppNotification" WHERE "category"::text = 'PROJECT' ORDER BY "id"`,
+    );
+    await client.query(
+      `DELETE FROM "NotificationPreference" WHERE "category"::text = 'PROJECT'`,
+    );
+    await client.query(
+      `DELETE FROM "InAppNotification" WHERE "category"::text = 'PROJECT'`,
+    );
+    await client.query("COMMIT");
+    return {
+      inAppNotifications: inAppNotifications.rows,
+      notificationPreferences: notificationPreferences.rows,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    await client.end();
+  }
+}
+
+async function restoreFutureProjectNotificationRows(
+  databaseUrl: string,
+  rows: FutureProjectNotificationRows,
+): Promise<void> {
+  const client = new pg.Client({ connectionString: databaseUrl });
+  await client.connect();
+  try {
+    // PROJECT was introduced after the migration being replayed. Re-add the
+    // committed enum value before restoring the protected snapshot rows.
+    await client.query(
+      `ALTER TYPE "ProjectManagementNotificationCategory" ADD VALUE IF NOT EXISTS 'PROJECT'`,
+    );
+    await client.query("BEGIN");
+    if (rows.notificationPreferences.length > 0) {
+      await client.query(
+        `INSERT INTO "NotificationPreference"
+         SELECT * FROM jsonb_populate_recordset(
+           NULL::"NotificationPreference",
+           $1::jsonb
+         )`,
+        [JSON.stringify(rows.notificationPreferences)],
+      );
+    }
+    if (rows.inAppNotifications.length > 0) {
+      await client.query(
+        `INSERT INTO "InAppNotification"
+         SELECT * FROM jsonb_populate_recordset(
+           NULL::"InAppNotification",
+           $1::jsonb
+         )`,
+        [JSON.stringify(rows.inAppNotifications)],
+      );
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    await client.end();
+  }
+}
+
 function protectedTablesEqual(
   before: Record<string, BaselineTable>,
   after: Record<string, BaselineTable>,
@@ -643,6 +722,7 @@ export async function runProjectManagementReleaseRehearsal(
     await recreateDatabase(adminClient, restoredDatabaseName);
 
     let beforeMigration: P0BaselineReport | null = null;
+    let futureProjectNotificationRows: FutureProjectNotificationRows | null = null;
     if (input.scenario === "shared_snapshot") {
       const snapshotDump = path.join(workspace, "shared-snapshot.dump");
       dumpDatabase({
@@ -661,6 +741,9 @@ export async function runProjectManagementReleaseRehearsal(
         repositoryRoot,
         script: "scripts/project-management-p0-baseline.ts",
       });
+      futureProjectNotificationRows = await stageFutureProjectNotificationRows(
+        workingDatabaseUrl,
+      );
     }
 
     const migrationsBefore = await listAppliedMigrations(workingDatabaseUrl);
@@ -670,6 +753,12 @@ export async function runProjectManagementReleaseRehearsal(
       cwd: repositoryRoot,
       env: commandEnvironment(workingDatabaseUrl),
     });
+    if (futureProjectNotificationRows) {
+      await restoreFutureProjectNotificationRows(
+        workingDatabaseUrl,
+        futureProjectNotificationRows,
+      );
+    }
     const migrationsAfter = await listAppliedMigrations(workingDatabaseUrl);
     const appliedMigrations = migrationsAfter.filter(
       (migration) => !migrationsBefore.includes(migration),

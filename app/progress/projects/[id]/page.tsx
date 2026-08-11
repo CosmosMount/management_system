@@ -1,11 +1,12 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { ArrowLeft, Pencil } from "lucide-react";
 import { ProjectActionsClient } from "@/components/project-management/project-actions-client";
 import { ProjectAvatar } from "@/components/project-management/project-avatar";
 import { ProjectTaskTimeline } from "@/components/project-management/project-task-timeline";
 import { timeCanvasDataToModel } from "@/components/project-management/time-canvas/adapter";
 import { formatShanghaiDate } from "@/components/project-management/time-canvas/url-state";
+import type { TimeCanvasZoom } from "@/components/project-management/time-canvas/types";
 import {
   CollaborationLeftSidebar,
   CollaborationRightSidebar,
@@ -16,9 +17,12 @@ import { PageCommandBar } from "@/components/project-management/shell/page-comma
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { toProjectManagementServiceError } from "@/lib/project-management/application/errors";
-import { getProjectDetail } from "@/lib/project-management/queries/project-queries";
+import {
+  getProjectDetail,
+  locateProjectTimelineFocus,
+} from "@/lib/project-management/queries/project-queries";
 import { resolvePeopleOptionsByIds } from "@/lib/project-management/queries/option-queries";
-import { getTimeCanvasData } from "@/lib/project-management/queries/time-canvas-queries";
+import { getContentDrivenTimeCanvasData } from "@/lib/project-management/queries/time-canvas-queries";
 import {
   getActivityVersion,
   getCollaborationCapabilities,
@@ -49,16 +53,49 @@ export default async function ProjectDetailPage({
   const actor = await getProgressActorOrRedirect();
   const { id } = await params;
   const query = (await searchParams) ?? {};
-  const projectPromise = getProjectDetail({
+  const requestedFocus = first(query.focus) || first(query.timelineFocus);
+  const focusLocator = requestedFocus
+    ? await locateProjectTimelineFocus({ actor, projectId: id, focus: requestedFocus })
+        .catch((error: unknown) => {
+          if (toProjectManagementServiceError(error).code === "NOT_FOUND") notFound();
+          throw error;
+        })
+    : null;
+  if (requestedFocus && !focusLocator) {
+    const normalized = searchParamsFromRecord(query);
+    normalized.delete("focus");
+    normalized.delete("timelineFocus");
+    normalized.set("focusError", "1");
+    redirect(`${routes.progress.projectDetail(id)}?${normalized.toString()}`);
+  }
+  if (focusLocator) {
+    const normalized = searchParamsFromRecord(query);
+    normalized.set("focus", focusLocator.focusId);
+    normalized.set("center", new Date(focusLocator.centerMs).toISOString());
+    if (focusLocator.taskCursor) normalized.set("taskCursor", focusLocator.taskCursor);
+    else normalized.delete("taskCursor");
+    normalized.delete("timelineFocus");
+    normalized.delete("timelineDate");
+    normalized.delete("focusError");
+    if (canonicalSearch(searchParamsFromRecord(query)) !== canonicalSearch(normalized)) {
+      redirect(`${routes.progress.projectDetail(id)}?${normalized.toString()}`);
+    }
+  }
+  const taskCursor = focusLocator
+    ? focusLocator.taskCursor ?? undefined
+    : first(query.taskCursor) || undefined;
+  const project = await getProjectDetail({
     actor,
     projectId: id,
     pagination: {
-      taskCursor: first(query.taskCursor) || undefined,
+      taskCursor,
       pageSize: 25,
     },
+  }).catch((error) => {
+    if (toProjectManagementServiceError(error).code === "NOT_FOUND") notFound();
+    throw error;
   });
   const [
-    project,
     capabilities,
     directActiveRisks,
     directResolvedRisks,
@@ -68,7 +105,6 @@ export default async function ProjectDetailPage({
     activity,
     activityVersion,
   ] = await Promise.all([
-      projectPromise,
       getCollaborationCapabilities(actor, { targetType: "PROJECT", targetId: id }),
       getRiskPage(actor, { targetType: "PROJECT", targetId: id, source: "DIRECT", status: "ACTIVE", limit: 20 }),
       getRiskPage(actor, { targetType: "PROJECT", targetId: id, source: "DIRECT", status: "RESOLVED", limit: 20 }),
@@ -93,13 +129,22 @@ export default async function ProjectDetailPage({
     activity,
     activityVersion: activityVersion.token,
   };
-  const requestedTimelineDate = first(query.timelineDate);
-  const defaultTimelineDate = projectDefaultTimelineDate(project.tasks);
-  const timelineDate = validDate(requestedTimelineDate)
-    ? requestedTimelineDate
-    : defaultTimelineDate;
-  const timelineStartMs = Date.parse(`${timelineDate}T00:00:00.000+08:00`);
-  const timelineEndMs = timelineStartMs + 31 * 24 * 60 * 60 * 1_000;
+  const legacyTimelineStart = parseShanghaiDate(first(query.timelineDate));
+  const defaultTimelineCenter = projectDefaultTimelineCenter(project.tasks);
+  const timelineCenter = focusLocator?.centerMs ?? parseCenter(first(query.center))
+    ?? (legacyTimelineStart === null
+      ? defaultTimelineCenter
+      : legacyTimelineStart + 15.5 * 24 * 60 * 60 * 1_000);
+  if (legacyTimelineStart !== null && !focusLocator) {
+    const normalized = searchParamsFromRecord(query);
+    normalized.set("center", new Date(timelineCenter).toISOString());
+    normalized.delete("timelineDate");
+    normalized.delete("timelineFocus");
+    if (canonicalSearch(searchParamsFromRecord(query)) !== canonicalSearch(normalized)) {
+      redirect(`${routes.progress.projectDetail(id)}?${normalized.toString()}`);
+    }
+  }
+  const timelineScale = parseScale(first(query.scale));
   const timelinePersonIds = [...new Set([
     ...project.members.map((member) => member.personId),
     ...project.tasks.flatMap((task) => task.members.map((member) => member.personId)),
@@ -114,19 +159,20 @@ export default async function ProjectDetailPage({
           actor,
           input: { scope: { purpose: "VISIBLE" }, ids: timelinePersonIds },
         }),
-        getTimeCanvasData({
+        getContentDrivenTimeCanvasData({
           actor,
+          preferredCenterMs: timelineCenter,
+          load: { mode: "INITIAL" },
+          anchorTaskIds: project.tasks.map((task) => task.id),
           input: {
             scope: { kind: "RESOURCE_PLANNER" },
-            rangeStart: new Date(timelineStartMs).toISOString(),
-            rangeEnd: new Date(timelineEndMs).toISOString(),
             personIds: timelinePersonIds,
             taskIds: project.tasks.map((task) => task.id),
             tagIds: [],
             types: [],
             statuses: [],
             groupBy: "PERSON",
-            includeTaskAnchors: false,
+            includeTaskAnchors: true,
             includeActual: true,
             includeBusyBlocks: false,
             rowLimit: 50,
@@ -241,7 +287,15 @@ export default async function ProjectDetailPage({
               completedTaskTotalCount={project.completedTaskTotalCount}
               resourceModel={
                 resourceCanvasResult?.ok
-                  ? timeCanvasDataToModel(resourceCanvasResult.data, "RESOURCE_PLANNER")
+                  ? {
+                      ...timeCanvasDataToModel(resourceCanvasResult.data.data, "RESOURCE_PLANNER"),
+                      contentRange: resourceCanvasResult.data.contentRange,
+                      fullRange: resourceCanvasResult.data.fullRange,
+                      rangeClipped: resourceCanvasResult.data.rangeClipped,
+                      loadedRanges: [resourceCanvasResult.data.loadedRange],
+                      loadedLeafBlockCounts: [resourceCanvasResult.data.leafBlockCount],
+                      failedRanges: resourceCanvasResult.data.failedRanges,
+                    }
                   : null
               }
               resourceTimelineError={
@@ -252,15 +306,26 @@ export default async function ProjectDetailPage({
               }
               peopleOptions={timelinePeople}
               timelineWindow={{
-                date: timelineDate,
-                focusId: first(query.timelineFocus) || null,
-                previousHref: projectTimelineHref(project.id, query, shiftDate(timelineDate, -31)),
-                nextHref: projectTimelineHref(project.id, query, shiftDate(timelineDate, 31)),
-                defaultHref: projectTimelineHref(project.id, query, defaultTimelineDate),
+                focusId: focusLocator?.focusId ?? null,
+                centerMs: resourceCanvasResult?.ok
+                  ? resourceCanvasResult.data.resolvedCenterMs
+                  : timelineCenter,
+                scale: timelineScale,
+                taskCursor,
               }}
+              timelineFocusError={first(query.focusError) === "1"
+                ? "无法定位该时间对象，请确认链接仍然有效且你有权查看。"
+                : null}
               nextPageHref={
                 project.taskNextCursor
-                  ? detailPageHref(project.id, project.taskNextCursor)
+                  ? detailPageHref(
+                      project.id,
+                      project.taskNextCursor,
+                      resourceCanvasResult?.ok
+                        ? resourceCanvasResult.data.resolvedCenterMs
+                        : timelineCenter,
+                      timelineScale,
+                    )
                   : null
               }
             />
@@ -313,7 +378,25 @@ function first(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
 }
 
-function projectDefaultTimelineDate(
+function searchParamsFromRecord(params: SearchParams) {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (Array.isArray(value)) value.forEach((item) => search.append(key, item));
+    else if (value !== undefined) search.set(key, value);
+  }
+  return search;
+}
+
+function canonicalSearch(params: URLSearchParams) {
+  return [...params.entries()]
+    .sort(([leftKey, leftValue], [rightKey, rightValue]) =>
+      leftKey.localeCompare(rightKey) || leftValue.localeCompare(rightValue),
+    )
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join("&");
+}
+
+function projectDefaultTimelineCenter(
   tasks: Awaited<ReturnType<typeof getProjectDetail>>["tasks"],
 ) {
   const activeAt = tasks.flatMap((task) =>
@@ -324,32 +407,37 @@ function projectDefaultTimelineDate(
     ),
   ).find(Boolean);
   const center = Date.parse(activeAt ?? new Date().toISOString());
-  return formatShanghaiDate(center - 15 * 24 * 60 * 60 * 1_000);
+  return center;
 }
 
-function projectTimelineHref(
-  projectId: string,
-  query: SearchParams,
-  timelineDate: string,
-) {
-  const search = new URLSearchParams();
-  const taskCursor = first(query.taskCursor);
-  if (taskCursor) search.set("taskCursor", taskCursor);
-  search.set("timelineDate", timelineDate);
-  return `/progress/projects/${projectId}?${search.toString()}`;
+function parseCenter(value: string) {
+  const parsed = Date.parse(value);
+  return value && Number.isFinite(parsed) ? parsed : null;
 }
 
-function shiftDate(date: string, days: number) {
-  return formatShanghaiDate(Date.parse(`${date}T00:00:00.000+08:00`) + days * 24 * 60 * 60 * 1_000);
-}
-
-function validDate(value: string) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+function parseShanghaiDate(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
   const parsed = Date.parse(`${value}T00:00:00.000+08:00`);
-  return Number.isFinite(parsed) && formatShanghaiDate(parsed) === value;
+  return Number.isFinite(parsed) && formatShanghaiDate(parsed) === value ? parsed : null;
 }
 
-function detailPageHref(projectId: string, taskCursor: string) {
+function parseScale(value: string): TimeCanvasZoom | undefined {
+  const normalized = value.toUpperCase();
+  return normalized === "WEEK" || normalized === "MONTH" || normalized === "QUARTER" || normalized === "YEAR"
+    ? normalized
+    : undefined;
+}
+
+function detailPageHref(
+  projectId: string,
+  taskCursor: string,
+  centerMs?: number,
+  scale?: TimeCanvasZoom,
+) {
   const search = new URLSearchParams({ taskCursor });
+  if (Number.isFinite(centerMs)) {
+    search.set("center", new Date(centerMs!).toISOString());
+  }
+  if (scale) search.set("scale", scale.toLowerCase());
   return `${routes.progress.projectDetail(projectId)}?${search.toString()}`;
 }

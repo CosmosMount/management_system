@@ -200,6 +200,47 @@ export const getTimeCanvasDataInputSchema = z
     }
   });
 
+export const getMyTimelinePageInputSchema = z
+  .object({
+    showAll: z.boolean().optional().default(false),
+    taskCursor: optionCursorSchema,
+  })
+  .strict();
+
+const adaptiveBlockCommonFields = {
+  rowPageKey: z.string().trim().min(1).max(100),
+  preferredCenter: absoluteDateTimeSchema("时间画布中心格式不正确"),
+  blockStart: absoluteDateTimeSchema("时间数据块开始格式不正确"),
+  blockEnd: absoluteDateTimeSchema("时间数据块结束格式不正确"),
+} as const;
+
+export const getAdaptiveTimeCanvasBlockInputSchema = z
+  .discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("MY_TIMELINE"),
+      ...adaptiveBlockCommonFields,
+      showAll: z.boolean().optional().default(false),
+      taskCursor: optionCursorSchema,
+    }).strict(),
+    z.object({
+      kind: z.literal("TASK"),
+      ...adaptiveBlockCommonFields,
+      taskId: idSchema,
+    }).strict(),
+    z.object({
+      kind: z.literal("PROJECT"),
+      ...adaptiveBlockCommonFields,
+      projectId: idSchema,
+      taskCursor: optionCursorSchema,
+    }).strict(),
+  ])
+  .superRefine((input, ctx) => {
+    validateHalfOpenRange(
+      { rangeStart: input.blockStart, rangeEnd: input.blockEnd },
+      ctx,
+    );
+  });
+
 const searchPeopleCommonFields = {
   query: querySchema,
   cursor: optionCursorSchema,
@@ -295,6 +336,12 @@ export const listTagOptionsInputSchema = z
 
 export type GetTimeCanvasDataInput = z.infer<
   typeof getTimeCanvasDataInputSchema
+>;
+export type GetMyTimelinePageInput = z.infer<
+  typeof getMyTimelinePageInputSchema
+>;
+export type GetAdaptiveTimeCanvasBlockInput = z.infer<
+  typeof getAdaptiveTimeCanvasBlockInputSchema
 >;
 export type SearchPeopleInput = z.infer<typeof searchPeopleInputSchema>;
 export type PeopleOptionScope = z.infer<typeof peopleOptionScopeSchema>;

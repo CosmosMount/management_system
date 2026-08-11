@@ -116,7 +116,9 @@ test.describe("project management S3 shell", () => {
 
     await page.goto(`/progress/tasks/${fixture.taskId}`);
     await expect(
-      page.getByRole("heading", { name: fixture.taskTitle }),
+      page
+        .getByTestId("task-workbench-v2")
+        .getByRole("heading", { name: fixture.taskTitle, exact: true }),
     ).toBeVisible();
     if (testInfo.project.name === "desktop") {
       await expect(

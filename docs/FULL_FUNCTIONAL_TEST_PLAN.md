@@ -54,7 +54,7 @@ npm run build
 执行：
 
 ```bash
-PLAYWRIGHT_BASE_URL=http://127.0.0.1:3002 \
+PLAYWRIGHT_BASE_URL=http://127.0.0.1:3003 \
 PLAYWRIGHT_STORAGE_STATE=/path/to/playwright-liqixuan-storage.json \
 PLAYWRIGHT_ADMIN_STORAGE_STATE=/path/to/playwright-admin-storage.json \
 npm run test:e2e

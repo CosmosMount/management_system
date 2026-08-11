@@ -1602,24 +1602,60 @@ test.describe("project management S2 plan and Task mutation services", () => {
     const memberOutboxes = await prisma.notificationOutbox.findMany({
       where: { eventKey: { startsWith: memberEventPrefix } },
     });
-    expect(memberOutboxes).toHaveLength(1);
-    expect(memberOutboxes[0]).toMatchObject({
-      eventKey: `${memberEventPrefix}${newcomer.person.id}`,
-      type: "task_assigned",
-      botKind: "notification",
-    });
-    expect(jsonRecord(JSON.parse(memberOutboxes[0]?.payload ?? "{}"))).toMatchObject({
-      kind: "task_assigned",
-      purpose: "notification",
-      mandatory: true,
-      actorName: owner.person.displayName,
-    });
+    expect(memberOutboxes).toHaveLength(2);
+    expect(memberOutboxes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventKey: `${memberEventPrefix}${admin.person.id}:feishu`,
+          type: "task_assigned",
+          botKind: "notification",
+        }),
+        expect.objectContaining({
+          eventKey: `${memberEventPrefix}${newcomer.person.id}:feishu`,
+          type: "task_assigned",
+          botKind: "notification",
+        }),
+      ]),
+    );
     expect(
-      await prisma.inAppNotification.findMany({
-        where: { eventKey: { startsWith: memberEventPrefix } },
-        select: { recipientAccountId: true },
-      }),
-    ).toEqual([{ recipientAccountId: newcomer.account.id }]);
+      memberOutboxes.map((outbox) =>
+        jsonRecord(JSON.parse(outbox.payload)),
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "task_assigned",
+          purpose: "notification",
+          mandatory: true,
+          actorName: owner.person.displayName,
+          context: expect.objectContaining({
+            changeKind: "REMOVED",
+            affectedPersonId: admin.person.id,
+          }),
+        }),
+        expect.objectContaining({
+          kind: "task_assigned",
+          purpose: "notification",
+          mandatory: true,
+          actorName: owner.person.displayName,
+          context: expect.objectContaining({
+            changeKind: "ADDED",
+            affectedPersonId: newcomer.person.id,
+          }),
+        }),
+      ]),
+    );
+    const memberNotifications = await prisma.inAppNotification.findMany({
+      where: { eventKey: { startsWith: memberEventPrefix } },
+      select: { recipientAccountId: true },
+    });
+    expect(memberNotifications).toHaveLength(2);
+    expect(memberNotifications).toEqual(
+      expect.arrayContaining([
+        { recipientAccountId: admin.account.id },
+        { recipientAccountId: newcomer.account.id },
+      ]),
+    );
 
     const unchangedInput = {
       taskId: fixture.taskId,

@@ -430,11 +430,11 @@ async function testUnsupportedPlatformRejectsBeforeMarker(): Promise<void> {
 }
 
 async function testOccupiedServerPortRejectsBeforeMarker(): Promise<void> {
-  assert.equal(await isPortListening(3002), false);
+  assert.equal(await isPortListening(3003), false);
   const listener = net.createServer();
   await new Promise<void>((resolve, reject) => {
     listener.once("error", reject);
-    listener.listen(3002, "127.0.0.1", resolve);
+    listener.listen(3003, "127.0.0.1", resolve);
   });
   const markerFilesBefore = markerRootFiles();
   let markerCreateCalls = 0;
@@ -561,8 +561,8 @@ async function testUniquePairsAndHostileEnvironmentNeutralization(): Promise<voi
     assert.equal(env.CONFIRM_SEND_FEISHU, "");
     assert.equal(env.PLAYWRIGHT_REUSE_SERVER, "");
     assert.equal(env.PLAYWRIGHT_SKIP_WEBSERVER, "");
-    assert.equal(env.PLAYWRIGHT_BASE_URL, "http://127.0.0.1:3002");
-    assert.equal(env.PLAYWRIGHT_SERVER_PORT, "3002");
+    assert.equal(env.PLAYWRIGHT_BASE_URL, "http://127.0.0.1:3003");
+    assert.equal(env.PLAYWRIGHT_SERVER_PORT, "3003");
     assert.equal(env.NOTIFICATION_DELIVERY_DISABLED, "true");
     assert.equal(env.CHECKPOINT_DISABLE, "1");
     assert.equal(env.NODE_OPTIONS, controlledPlaywrightNodeOptions(process.cwd()));
@@ -599,8 +599,8 @@ async function testUniquePairsAndHostileEnvironmentNeutralization(): Promise<voi
     assert.equal(env[PLAYWRIGHT_FEISHU_EGRESS_PROBE_ROLE_ENV], "server");
     assert.equal(env.NOTIFICATION_DELIVERY_DISABLED, "true");
     assert.equal(env.CHECKPOINT_DISABLE, "1");
-    assert.equal(env.PLAYWRIGHT_BASE_URL, "http://127.0.0.1:3002");
-    assert.equal(env.PLAYWRIGHT_SERVER_PORT, "3002");
+    assert.equal(env.PLAYWRIGHT_BASE_URL, "http://127.0.0.1:3003");
+    assert.equal(env.PLAYWRIGHT_SERVER_PORT, "3003");
     assert.equal(env.NODE_OPTIONS, controlledPlaywrightNodeOptions(process.cwd()));
     assert.ok(!env.NODE_OPTIONS.includes("hostile"));
   }
@@ -1665,7 +1665,7 @@ function processGroupIsAlive(pid: number | undefined): boolean {
 }
 
 async function testRealDescendantPortQuiescence(): Promise<void> {
-  assert.equal(await isPortListening(3002), false);
+  assert.equal(await isPortListening(3003), false);
   const readyPath = path.join(
     process.cwd(),
     ".tmp",
@@ -1678,7 +1678,7 @@ async function testRealDescendantPortQuiescence(): Promise<void> {
     const net = require("node:net");
     const readyPath = process.argv[1];
     const server = net.createServer();
-    server.listen(3002, "127.0.0.1", () => {
+    server.listen(3003, "127.0.0.1", () => {
       fs.writeFileSync(readyPath, JSON.stringify({ pid: process.pid }), "utf8");
     });
     setInterval(() => undefined, 1000);
@@ -1713,7 +1713,7 @@ async function testRealDescendantPortQuiescence(): Promise<void> {
           cleanupObserved = true;
           assert.ok(existsSync(readyPath));
           descendantPid = JSON.parse(readFileSync(readyPath, "utf8")).pid as number;
-          assert.equal(await isPortListening(3002), false);
+          assert.equal(await isPortListening(3003), false);
           discardRegisteredMarker(process.cwd(), ownership, env, marker);
         },
         forcedShutdownMs: 2_000,
@@ -1728,7 +1728,7 @@ async function testRealDescendantPortQuiescence(): Promise<void> {
     );
     assert.equal(result.exitCode, 0);
     assert.equal(cleanupObserved, true);
-    assert.equal(await isPortListening(3002), false);
+    assert.equal(await isPortListening(3003), false);
   } finally {
     if (descendantPid) {
       try {
@@ -1759,7 +1759,7 @@ async function testRealDetachedServerLifecycle(): Promise<void> {
     process.on("SIGINT", () => onSignal("SIGINT"));
     process.on("SIGTERM", () => onSignal("SIGTERM"));
     process.on("SIGHUP", () => onSignal("SIGHUP"));
-    server.listen(3002, "127.0.0.1", () => {
+    server.listen(3003, "127.0.0.1", () => {
       fs.writeFileSync(readyPath, JSON.stringify({ pid: process.pid }), "utf8");
     });
     setInterval(() => undefined, 1000);
@@ -1788,7 +1788,7 @@ async function testRealDetachedServerLifecycle(): Promise<void> {
     "grace-timeout",
     "second-signal",
   ] as const) {
-    assert.equal(await isPortListening(3002), false);
+    assert.equal(await isPortListening(3003), false);
     const runId = randomUUID();
     const serverReadyPath = path.join(
       process.cwd(),
@@ -1828,7 +1828,7 @@ async function testRealDetachedServerLifecycle(): Promise<void> {
             assert.ok(existsSync(marker.markerPath));
             assert.equal(processGroupIsAlive(serverPid), false);
             assert.equal(processGroupIsAlive(cliPid), false);
-            assert.equal(await isPortListening(3002), false);
+            assert.equal(await isPortListening(3003), false);
             assert.deepEqual(
               ownedDatabases,
               new Set([
@@ -1884,7 +1884,7 @@ async function testRealDetachedServerLifecycle(): Promise<void> {
             );
             if (signal.aborted) throw signal.reason;
             serverPid = readPid(serverReadyPath);
-            assert.equal(await isPortListening(3002), true);
+            assert.equal(await isPortListening(3003), true);
           },
         }),
       );
@@ -1913,7 +1913,7 @@ async function testRealDetachedServerLifecycle(): Promise<void> {
       assert.ok(existsSync(marker.markerPath));
       assert.equal(ownedDatabases.size, 2);
       assert.equal(processGroupIsAlive(serverPid), true);
-      assert.equal(await isPortListening(3002), true);
+      assert.equal(await isPortListening(3003), true);
 
       if (mode === "second-signal") signalSource.emit("SIGINT");
       const result = await runPromise;
@@ -1925,7 +1925,7 @@ async function testRealDetachedServerLifecycle(): Promise<void> {
       assert.ok(!existsSync(marker.markerPath));
       assert.equal(processGroupIsAlive(serverPid), false);
       assert.equal(processGroupIsAlive(cliPid), false);
-      assert.equal(await isPortListening(3002), false);
+      assert.equal(await isPortListening(3003), false);
     } finally {
       for (const pid of [serverPid, cliPid]) {
         if (!processGroupIsAlive(pid)) continue;

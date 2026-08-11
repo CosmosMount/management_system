@@ -9,6 +9,7 @@ import {
 import { TaskMultiSelect } from "@/components/project-management/task-picker";
 import { UserMultiSelect } from "@/components/project-management/user-picker";
 import { formatShanghaiDate } from "@/components/project-management/time-canvas/url-state";
+import type { TimeCanvasZoom } from "@/components/project-management/time-canvas/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -35,7 +36,7 @@ export function ResourceFilterBar({
     from: string;
     to: string;
     groupBy: "PERSON" | "TASK";
-    zoom: "HOUR" | "DAY" | "WEEK" | "MONTH";
+    zoom: TimeCanvasZoom;
     personIds: string[];
     taskIds: string[];
     tagIds: string[];
@@ -61,11 +62,19 @@ export function ResourceFilterBar({
   const [notice, setNotice] = useState("");
 
   const apply = () => {
+    const current = new URL(window.location.href);
     const params = new URLSearchParams();
     params.set("from", from);
     params.set("to", to);
     params.set("group", groupBy.toLowerCase());
-    params.set("zoom", initial.zoom.toLowerCase());
+    const scale = parseScale(current.searchParams.get("scale")) ?? initial.zoom;
+    params.set("scale", scale.toLowerCase());
+    const center = parseCenterInRange(
+      current.searchParams.get("center"),
+      from,
+      to,
+    );
+    if (center) params.set("center", center);
     setList(params, "people", personIds);
     setList(params, "tasks", taskIds);
     setList(params, "tags", tagIds);
@@ -206,6 +215,34 @@ export function ResourceFilterBar({
       {notice && <p className="text-sm text-muted-foreground" role="status">{notice}</p>}
     </section>
   );
+}
+
+function parseScale(value: string | null): TimeCanvasZoom | null {
+  const normalized = value?.toUpperCase();
+  return normalized === "WEEK" ||
+    normalized === "MONTH" ||
+    normalized === "QUARTER" ||
+    normalized === "YEAR"
+    ? normalized
+    : null;
+}
+
+function parseCenterInRange(
+  value: string | null,
+  from: string,
+  to: string,
+) {
+  if (!value) return null;
+  const centerMs = Date.parse(value);
+  const startMs = Date.parse(`${from}T00:00:00.000+08:00`);
+  const endMs = Date.parse(`${to}T00:00:00.000+08:00`);
+  return Number.isFinite(centerMs) &&
+    Number.isFinite(startMs) &&
+    Number.isFinite(endMs) &&
+    centerMs >= startMs &&
+    centerMs < endMs
+    ? new Date(centerMs).toISOString()
+    : null;
 }
 
 function FilterPicker({ label, query, onQueryChange, options, selectedIds, onToggle, onSearch, disabled }: {

@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { LocateFixed, Plus } from "lucide-react";
 import { ResourcePlannerCanvasClient } from "@/components/project-management/resource-planner-canvas-client";
 import { buildPlanPhaseBands } from "@/components/project-management/time-canvas/plan-phase-bands";
+import { ViewportStateLink } from "@/components/project-management/time-canvas/viewport-state-link";
 import type {
   TimeCanvasAnchor,
   TimeCanvasModel,
@@ -61,6 +62,7 @@ export function ProjectTaskTimeline({
   resourceTimelineError,
   peopleOptions,
   timelineWindow,
+  timelineFocusError,
   nextPageHref,
 }: {
   projectId: string;
@@ -73,21 +75,30 @@ export function ProjectTaskTimeline({
   resourceTimelineError: string | null;
   peopleOptions: PersonOptionDto[];
   timelineWindow: {
-    date: string;
     focusId: string | null;
-    previousHref: string;
-    nextHref: string;
-    defaultHref: string;
+    centerMs?: number;
+    scale?: "WEEK" | "MONTH" | "QUARTER" | "YEAR";
+    taskCursor?: string;
   };
+  timelineFocusError: string | null;
   nextPageHref: string | null;
 }) {
   const router = useRouter();
   const timelineContainerRef = useRef<HTMLDivElement>(null);
   const model = useMemo(
-    () => mergeProjectTimelineModel(tasks, resourceModel, timelineWindow.date),
-    [resourceModel, tasks, timelineWindow.date],
+    () => mergeProjectTimelineModel(tasks, resourceModel),
+    [resourceModel, tasks],
   );
   const [requestedAnchorId, setRequestedAnchorId] = useState<string | null>(timelineWindow.focusId);
+  const externalTimelineFocusRef = useRef(timelineWindow.focusId);
+  useEffect(() => {
+    if (externalTimelineFocusRef.current === timelineWindow.focusId) return;
+    const timer = window.setTimeout(() => {
+      externalTimelineFocusRef.current = timelineWindow.focusId;
+      setRequestedAnchorId(timelineWindow.focusId);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [timelineWindow.focusId]);
   const selectedAnchorId = model.anchors.some(
     (anchor) => anchor.id === requestedAnchorId,
   )
@@ -113,8 +124,10 @@ export function ProjectTaskTimeline({
       model.anchors.find((item) => item.taskId === task.id);
     if (anchor && (anchor.atMs < model.range.startMs || anchor.atMs >= model.range.endMs)) {
       const url = new URL(window.location.href);
-      url.searchParams.set("timelineDate", centeredTimelineDate(anchor.atMs));
-      url.searchParams.set("timelineFocus", anchor.id);
+      url.searchParams.set("center", new Date(anchor.atMs).toISOString());
+      url.searchParams.set("focus", anchor.id);
+      url.searchParams.delete("timelineDate");
+      url.searchParams.delete("timelineFocus");
       router.push(`${url.pathname}?${url.searchParams.toString()}`);
       return;
     }
@@ -222,12 +235,12 @@ export function ProjectTaskTimeline({
             </ul>
             {nextPageHref && (
               <div className="flex justify-end">
-                <Link
+                <ViewportStateLink
                   href={nextPageHref}
                   className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
                 >
                   下一页 Task
-                </Link>
+                </ViewportStateLink>
               </div>
             )}
           </div>
@@ -237,26 +250,17 @@ export function ProjectTaskTimeline({
       </section>
 
       <section className="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5">
-        <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="font-semibold">Task 与人员投入时间线</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              当前页 Task · 31 天窗口 · {timelineWindow.date}
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Link href={timelineWindow.previousHref} className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>上一窗口</Link>
-            <Link href={timelineWindow.defaultHref} className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>定位当前节点</Link>
-            <Link href={timelineWindow.nextHref} className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>下一窗口</Link>
-          </div>
+        <div>
+          <h2 className="font-semibold">Task 与人员投入时间线</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            当前页 Task · 按计划和投入自动确定范围
+          </p>
         </div>
-        <form className="mt-3 flex flex-wrap items-end gap-2">
-          <label className="grid gap-1 text-sm">
-            <span>窗口开始日期</span>
-            <input className="h-8 rounded-lg border border-input bg-background px-2" name="timelineDate" type="date" defaultValue={timelineWindow.date} />
-          </label>
-          <Button type="submit" size="sm" variant="outline">打开日期</Button>
-        </form>
+        {timelineFocusError && (
+          <p className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">
+            {timelineFocusError}
+          </p>
+        )}
         {timelineError || resourceTimelineError ? (
           <div
             className="mt-4 rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive"
@@ -274,7 +278,15 @@ export function ProjectTaskTimeline({
               peopleOptions={peopleOptions}
               taskOptions={[]}
               defaultPersonId={peopleOptions[0]?.id ?? ""}
-              initialZoom="DAY"
+              initialZoom={timelineWindow.scale}
+              initialCenterMs={timelineWindow.centerMs}
+              persistViewportInUrl
+              adaptiveBlockQuery={{
+                kind: "PROJECT",
+                preferredCenterMs: timelineWindow.centerMs ?? Date.parse(model.generatedAt),
+                projectId,
+                taskCursor: timelineWindow.taskCursor,
+              }}
               mode="TASK_WORKBENCH"
               allowCreate={false}
               readOnly
@@ -287,31 +299,27 @@ export function ProjectTaskTimeline({
   );
 }
 
-function centeredTimelineDate(atMs: number) {
-  const formatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-  return formatter.format(new Date(atMs - 15 * DAY_MS));
-}
-
 function mergeProjectTimelineModel(
   tasks: ProjectTimelineTask[],
   resourceModel: TimeCanvasModel | null,
-  timelineDate: string,
 ) {
-  const startMs = Date.parse(`${timelineDate}T00:00:00.000+08:00`);
   const planModel = buildProjectTimelineModel(tasks);
   return {
     ...planModel,
-    range: { startMs, endMs: startMs + 31 * DAY_MS },
+    range: resourceModel?.range ?? planModel.range,
+    fullRange: resourceModel?.fullRange,
+    contentRange: resourceModel?.contentRange,
+    rangeClipped: resourceModel?.rangeClipped,
+    rowPageKey: resourceModel?.rowPageKey,
+    loadedRanges: resourceModel?.loadedRanges,
+    loadedLeafBlockCounts: resourceModel?.loadedLeafBlockCounts,
+    failedRanges: resourceModel?.failedRanges,
     rows: [
       ...planModel.rows,
       ...(resourceModel?.rows.map((row) => ({ ...row, editable: false })) ?? []),
     ],
     segments: resourceModel?.segments ?? [],
+    nextCursor: resourceModel?.nextCursor,
     generatedAt: resourceModel?.generatedAt ?? planModel.generatedAt,
   };
 }

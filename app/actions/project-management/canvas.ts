@@ -11,7 +11,10 @@ import {
   searchPeople as searchPeopleQuery,
   searchTaskOptions as searchTaskOptionsQuery,
 } from "@/lib/project-management/queries/option-queries";
-import { getTimeCanvasData as getTimeCanvasDataQuery } from "@/lib/project-management/queries/time-canvas-queries";
+import {
+  getAdaptiveTimeCanvasBlock as getAdaptiveTimeCanvasBlockQuery,
+  getTimeCanvasData as getTimeCanvasDataQuery,
+} from "@/lib/project-management/queries/time-canvas-queries";
 import { dispatchCanvasQueryRequest } from "@/lib/project-management/application/canvas-query-dispatcher";
 
 export async function dispatchCanvasQuery(
@@ -29,6 +32,15 @@ export async function getTimeCanvasData(
 > {
   return runCanvasAction("pm.canvas.get", "getTimeCanvasData", input, (actor, value) =>
     getTimeCanvasDataQuery({ actor, input: value }),
+  );
+}
+
+export async function getAdaptiveTimeCanvasBlock(input: unknown) {
+  return runCanvasAction(
+    "pm.canvas.block.get",
+    "getAdaptiveTimeCanvasBlock",
+    input,
+    (actor, value) => getAdaptiveTimeCanvasBlockQuery({ actor, input: value }),
   );
 }
 

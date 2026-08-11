@@ -191,7 +191,6 @@ export function TaskComposerPlanEditor({
             <TimeCanvas
               mode="TASK_COMPOSER"
               model={canvasModel}
-              initialZoom="DAY"
               display={{ showActual: false, showBusy: false, showInspector: false }}
               selection={
                 state.selectedEntityId

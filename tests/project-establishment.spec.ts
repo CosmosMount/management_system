@@ -12,7 +12,15 @@ import { toProjectManagementServiceError } from "../lib/project-management/appli
 import type { ProjectManagementActor } from "../lib/project-management/identity";
 import { getActionInbox } from "../lib/project-management/queries/action-inbox-queries";
 import { searchTaskOptions } from "../lib/project-management/queries/option-queries";
-import { getProjectDetail, listProjects } from "../lib/project-management/queries/project-queries";
+import {
+  getProjectDetail,
+  listProjects,
+  locateProjectTimelineFocus,
+} from "../lib/project-management/queries/project-queries";
+import {
+  getAdaptiveTimeCanvasBlock,
+  getContentDrivenTimeCanvasData,
+} from "../lib/project-management/queries/time-canvas-queries";
 import { expectHealthyPage, loginAsTestUser } from "./helpers/functional-fixtures";
 
 test.describe("Project 立项与生命周期", () => {
@@ -181,7 +189,11 @@ test.describe("Project 立项与生命周期", () => {
     await page.goto(`/progress/projects/${created.projectId}`);
 
     await expect(page.getByTestId("project-overview")).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Project 详情" })).toBeVisible();
+    await expect(
+      page
+        .getByTestId("project-management-command-bar")
+        .getByRole("heading", { name: "Project 详情", exact: true }),
+    ).toBeVisible();
     await expect(page.getByRole("heading", { name: projectName })).toBeVisible();
     await expect(page.getByText(projectDescription, { exact: true })).toBeVisible();
     await expect(page.getByText(requester.personId, { exact: true })).toHaveCount(0);
@@ -192,8 +204,12 @@ test.describe("Project 立项与生命周期", () => {
     await expect(page.getByRole("button", { name: "删除 Project" })).toBeVisible();
     await expect(page.getByRole("button", { name: "复制链接" })).toBeVisible();
 
-    await expect(page.getByRole("heading", { name: "Project 风险" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Project 评论" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Project 风险", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Project 评论", exact: true }),
+    ).toBeVisible();
     await expect(page.getByRole("heading", { name: "近期动态" })).toBeVisible();
     await expect(page.getByText("立项申请", { exact: true })).toHaveCount(0);
     await expect(page.getByText("最近审计记录", { exact: true })).toHaveCount(0);
@@ -360,7 +376,7 @@ test.describe("Project 立项与生命周期", () => {
     });
     expect(created.status).toBe("PENDING_APPROVAL");
     const request = await prisma.projectEstablishmentRequest.findFirstOrThrow({ where: { projectId: created.projectId, status: "PENDING" } });
-    const adminInbox = await getActionInbox({ actor: admin });
+    const adminInbox = await getActionInbox({ actor: admin, limit: 200 });
     expect(adminInbox.items).toContainEqual(expect.objectContaining({ kind: "PROJECT_ESTABLISHMENT", href: `/progress/projects/${created.projectId}#establishment` }));
     await expectCode(reviewProjectEstablishment(outsider, { projectId: created.projectId, requestId: request.id, expectedLockVersion: 0, decision: "APPROVE", comment: "" }), "FORBIDDEN");
     const rejected = await reviewProjectEstablishment(admin, { projectId: created.projectId, requestId: request.id, expectedLockVersion: 0, decision: "REJECT", comment: "信息需要补充" });
@@ -403,7 +419,15 @@ test.describe("Project 立项与生命周期", () => {
     const admin = await actor("Project Task 管理员", "SUPER_ADMINISTRATOR");
     const task = await draftTask(requester, participant);
     const secondTask = await draftTask(requester, participant);
-    await prisma.taskMember.create({ data: { taskId: task.id, personId: legacyViewer.personId, role: "VIEWER", createdByAccountId: requester.accountId } });
+    await prisma.taskMember.create({
+      data: {
+        taskId: task.id,
+        personId: legacyViewer.personId,
+        role: "VIEWER",
+        removedAt: new Date(),
+        createdByAccountId: requester.accountId,
+      },
+    });
     expect((await searchTaskOptions({ actor: requester, input: { query: "Project Task", projectCandidates: true, limit: 50 } })).items.map((item) => item.id)).toContain(task.id);
     expect((await searchTaskOptions({ actor: legacyViewer, input: { query: "Project Task", projectCandidates: true, limit: 50 } })).items.map((item) => item.id)).not.toContain(task.id);
     const created = await createProject(requester, {
@@ -425,6 +449,113 @@ test.describe("Project 立项与生命周期", () => {
     const secondTaskPage = await getProjectDetail({ actor: requester, projectId: created.projectId, pagination: { pageSize: 1, taskCursor: firstTaskPage.taskNextCursor! } });
     expect(firstTaskPage.tasks[0]).toMatchObject({ id: task.id, status: "DRAFT" });
     expect(secondTaskPage.tasks[0]).toMatchObject({ id: secondTask.id, status: "ACTIVE" });
+    const fillerTasks = Array.from({ length: 24 }, (_, index) => ({
+      id: randomUUID(),
+      planId: randomUUID(),
+      title: `Project locator filler ${index}`,
+    }));
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SET CONSTRAINTS ALL DEFERRED`;
+      await tx.task.createMany({
+        data: fillerTasks.map((filler) => ({
+          id: filler.id,
+          title: filler.title,
+          team: "英雄",
+          techGroup: "电控",
+          status: "DRAFT",
+          projectId: created.projectId,
+          currentPlanVersionId: filler.planId,
+          createdByAccountId: requester.accountId,
+        })),
+      });
+      await tx.taskPlanVersion.createMany({
+        data: fillerTasks.map((filler) => ({
+          id: filler.planId,
+          taskId: filler.id,
+          versionNo: 1,
+          status: "CURRENT",
+          createdByAccountId: requester.accountId,
+        })),
+      });
+    });
+    const crossPageLocator = await locateProjectTimelineFocus({
+      actor: requester,
+      projectId: created.projectId,
+      focus: `project-start:${secondTask.id}`,
+    });
+    expect(crossPageLocator).toMatchObject({
+      focusId: `project-start:${secondTask.id}`,
+    });
+    expect(crossPageLocator?.taskCursor).not.toBeNull();
+    const focusedTaskPage = await getProjectDetail({
+      actor: requester,
+      projectId: created.projectId,
+      pagination: { pageSize: 25, taskCursor: crossPageLocator!.taskCursor! },
+    });
+    expect(focusedTaskPage.tasks.map((item) => item.id)).toContain(secondTask.id);
+    await expect(locateProjectTimelineFocus({
+      actor: requester,
+      projectId: created.projectId,
+      focus: `project-node:${randomUUID()}`,
+    })).resolves.toBeNull();
+    await expect(locateProjectTimelineFocus({
+      actor: legacyViewer,
+      projectId: created.projectId,
+      focus: `project-start:${secondTask.id}`,
+    })).resolves.toMatchObject({
+      focusId: `project-start:${secondTask.id}`,
+    });
+    const canvas = await getContentDrivenTimeCanvasData({
+      actor: requester,
+      preferredCenterMs: Date.now(),
+      load: { mode: "INITIAL" },
+      input: {
+        scope: { kind: "TASK_SCOPED", taskId: task.id },
+        personIds: [],
+        taskIds: [],
+        tagIds: [],
+        types: [],
+        statuses: [],
+        groupBy: "PERSON",
+        includeTaskAnchors: true,
+        includeActual: true,
+        includeBusyBlocks: false,
+        rowLimit: 50,
+      },
+    });
+    await expect(getAdaptiveTimeCanvasBlock({
+      actor: requester,
+      input: {
+        kind: "TASK",
+        taskId: task.id,
+        rowPageKey: canvas.data.rowPageKey,
+        preferredCenter: new Date(canvas.resolvedCenterMs).toISOString(),
+        blockStart: new Date(canvas.loadedRange.startMs).toISOString(),
+        blockEnd: new Date(canvas.loadedRange.endMs).toISOString(),
+      },
+    })).resolves.toMatchObject({ rowPageKey: canvas.data.rowPageKey });
+    await expectCode(getAdaptiveTimeCanvasBlock({
+      actor: requester,
+      input: {
+        kind: "TASK",
+        taskId: task.id,
+        rowPageKey: `${canvas.data.rowPageKey}-stale`,
+        preferredCenter: new Date(canvas.resolvedCenterMs).toISOString(),
+        blockStart: new Date(canvas.loadedRange.startMs).toISOString(),
+        blockEnd: new Date(canvas.loadedRange.endMs).toISOString(),
+      },
+    }), "STATE_CONFLICT");
+    await expectCode(getAdaptiveTimeCanvasBlock({
+      actor: requester,
+      input: {
+        kind: "TASK",
+        taskId: task.id,
+        rowPageKey: canvas.data.rowPageKey,
+        preferredCenter: new Date(canvas.resolvedCenterMs).toISOString(),
+        blockStart: new Date(canvas.fullRange.startMs - 1).toISOString(),
+        blockEnd: new Date(canvas.fullRange.startMs + 86_400_000).toISOString(),
+      },
+    }), "VALIDATION_ERROR");
     expect((await searchTaskOptions({ actor: requester, input: { query: "Project Task", projectCandidates: true, limit: 50 } })).items.map((item) => item.id)).not.toContain(task.id);
     expect(await prisma.projectMember.findFirst({ where: { projectId: created.projectId, personId: participant.personId, role: "PARTICIPANT", removedAt: null } })).not.toBeNull();
     expect(await prisma.projectMember.findFirst({ where: { projectId: created.projectId, personId: legacyViewer.personId, removedAt: null } })).toBeNull();

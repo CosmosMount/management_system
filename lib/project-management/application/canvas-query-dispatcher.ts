@@ -10,12 +10,16 @@ import {
   searchPeople,
   searchTaskOptions,
 } from "@/lib/project-management/queries/option-queries";
-import { getTimeCanvasData } from "@/lib/project-management/queries/time-canvas-queries";
+import {
+  getAdaptiveTimeCanvasBlock,
+  getTimeCanvasData,
+} from "@/lib/project-management/queries/time-canvas-queries";
 
 const canvasQueryRequestSchema = z
   .object({
     operation: z.enum([
       "getTimeCanvasData",
+      "getAdaptiveTimeCanvasBlock",
       "searchPeople",
       "searchTaskOptions",
       "listTagOptions",
@@ -27,6 +31,7 @@ const canvasQueryRequestSchema = z
 
 type CanvasQueryResult =
   | Awaited<ReturnType<typeof getTimeCanvasData>>
+  | Awaited<ReturnType<typeof getAdaptiveTimeCanvasBlock>>
   | Awaited<ReturnType<typeof searchPeople>>
   | Awaited<ReturnType<typeof searchTaskOptions>>
   | Awaited<ReturnType<typeof listTagOptions>>
@@ -46,6 +51,8 @@ export async function dispatchCanvasQueryRequest(
       switch (parsed.operation) {
         case "getTimeCanvasData":
           return getTimeCanvasData({ actor, input: parsed.input });
+        case "getAdaptiveTimeCanvasBlock":
+          return getAdaptiveTimeCanvasBlock({ actor, input: parsed.input });
         case "searchPeople":
           return searchPeople({ actor, input: parsed.input });
         case "searchTaskOptions":
