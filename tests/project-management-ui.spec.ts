@@ -871,8 +871,8 @@ test.describe("project management P4/P6 UI integration", () => {
     await page.goto("/progress/resources");
     await expect(page.getByRole("heading", { name: "人员计划" })).toBeVisible();
     await expectHealthyPage(page);
-    await page.goto("/progress/my-timeline");
-    await expect(page.getByRole("heading", { name: "我的时间" })).toBeVisible({
+    await page.goto("/progress");
+    await expect(page.getByRole("heading", { name: "我的工作" })).toBeVisible({
       timeout: 15_000,
     });
     await expectHealthyPage(page);
@@ -1354,6 +1354,52 @@ test.describe("project management P4/P6 UI integration", () => {
       `/progress/resources?from=2026-08-10&to=2026-08-12&people=${fixture.member.person.id},${fixture.owner.person.id}&zoom=hour`,
     );
     if (testInfo.project.name === "desktop") {
+      await loginAsTestUser(context, baseURL, {
+        openId: fixture.admin.openId,
+        name: fixture.admin.person.displayName,
+      });
+      await page.goto(
+        `/progress/resources?from=2026-08-10&to=2026-08-12&people=${fixture.member.person.id},${fixture.owner.person.id},${fixture.reviewer.person.id}&zoom=hour`,
+      );
+      await page.getByRole("button", { name: "新增投入" }).click();
+      const crossRowCreate = page.getByRole("form", { name: "投入快速创建" });
+      const crossRowPerson = crossRowCreate.locator('input[name="personId"]');
+      const firstDraftPersonId = await crossRowPerson.inputValue();
+      const crossRowRange = page.getByTestId("time-canvas-creation-range");
+      const pointerTargetRow = page.getByLabel(
+        `${fixture.owner.person.displayName} 时间行`,
+        { exact: true },
+      );
+      const [crossRowRangeBox, pointerTargetRowBox, crossRowScrollBox] =
+        await Promise.all([
+          crossRowRange.boundingBox(),
+          pointerTargetRow.boundingBox(),
+          page.getByTestId("time-canvas-scroll").boundingBox(),
+        ]);
+      if (!crossRowRangeBox || !pointerTargetRowBox || !crossRowScrollBox) {
+        throw new Error("未找到创建草稿跨行拖动坐标");
+      }
+      const pointerX = crossRowRangeBox.x + crossRowRangeBox.width / 2;
+      await page.mouse.move(pointerX, crossRowRangeBox.y + crossRowRangeBox.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(pointerX, pointerTargetRowBox.y + pointerTargetRowBox.height / 2);
+      await expect(pointerTargetRow).toHaveAttribute("data-creation-drop-state", "valid");
+      await page.mouse.move(pointerX, crossRowScrollBox.y + 4);
+      await expect(crossRowRange).toHaveAttribute("data-drop-state", "invalid");
+      await page.mouse.up();
+      await crossRowRange.focus();
+      await crossRowRange.press("Alt+ArrowDown");
+      await expect(crossRowRange).toBeFocused();
+      await expect(crossRowPerson).not.toHaveValue(firstDraftPersonId);
+      const secondDraftPersonId = await crossRowPerson.inputValue();
+      await crossRowRange.press("Alt+ArrowDown");
+      await expect(crossRowRange).toBeFocused();
+      await expect(crossRowPerson).not.toHaveValue(secondDraftPersonId);
+      await crossRowCreate.getByRole("button", { name: "取消", exact: true }).click();
+      await loginAsTestUser(context, baseURL, {
+        openId: fixture.member.openId,
+        name: fixture.member.person.displayName,
+      });
       await page.goto(
         `/progress/resources?from=2026-08-10&to=2026-08-12&people=${fixture.member.person.id}&zoom=hour`,
       );
@@ -1396,12 +1442,18 @@ test.describe("project management P4/P6 UI integration", () => {
         "border-top-style",
         "dashed",
       );
+      const draftStartBeforeMove = await brushCreate.getByLabel("开始").inputValue();
+      await page.getByTestId("time-canvas-creation-range").focus();
+      await page.getByTestId("time-canvas-creation-range").press("Shift+ArrowRight");
+      await expect(brushCreate.getByLabel("开始")).not.toHaveValue(draftStartBeforeMove);
       await expect(brushCreate.getByLabel("投入比例")).toHaveCount(0);
+      await expect(brushCreate.getByLabel("完成比例")).toHaveCount(0);
       await brushCreate.getByLabel("Task", { exact: true }).fill(fixture.taskTitle);
       await page
         .getByRole("option", { name: fixture.taskTitle, exact: true })
         .click();
       await brushCreate.getByLabel("内容").fill(fixture.brushCreateContent);
+      await brushCreate.getByLabel("预期输出").fill("P6 UI 桌面创建预期产出");
       await brushCreate.getByRole("button", { name: "创建", exact: true }).click();
       await expect(page.getByText("已创建投入记录")).toBeVisible();
       await expect(page.getByTestId("time-canvas-creation-range")).toHaveCount(0);
@@ -1410,8 +1462,11 @@ test.describe("project management P4/P6 UI integration", () => {
           personId: fixture.member.person.id,
           content: fixture.brushCreateContent,
         },
-        select: { taskId: true },
-      })).toEqual({ taskId: fixture.taskId });
+        select: { taskId: true, expectedOutput: true },
+      })).toEqual({
+        taskId: fixture.taskId,
+        expectedOutput: "P6 UI 桌面创建预期产出",
+      });
       await page.goto(
         `/progress/resources?from=2026-08-10&to=2026-08-12&people=${fixture.member.person.id},${fixture.owner.person.id}&zoom=hour`,
       );
@@ -1443,8 +1498,31 @@ test.describe("project management P4/P6 UI integration", () => {
       await expect(movedInspector.getByLabel("投入比例")).toHaveCount(0);
       await expect(movedInspector.getByLabel("职责", { exact: true })).toHaveCount(0);
       await expect(movedInspector.getByLabel("自定义职责")).toHaveCount(0);
+      const inspectorStart = movedInspector.getByLabel("开始", { exact: true });
+      const inspectorEnd = movedInspector.getByLabel("结束", { exact: true });
+      const originalStartValue = await inspectorStart.inputValue();
+      const originalEndValue = await inspectorEnd.inputValue();
+      await inspectorStart.fill("2026-08-20T10:00");
+      await expect(inspectorStart).toHaveValue("2026-08-20T10:00");
+      await expect(movedInspector.locator("#inspect-range-error")).toContainText(
+        "结束时间必须晚于开始时间",
+      );
+      await inspectorEnd.fill("2026-08-20T11:00");
+      await expect(movedInspector.locator("#inspect-range-error")).toHaveCount(0);
+      await inspectorStart.fill(originalStartValue);
+      await inspectorEnd.fill(originalEndValue);
+      await prisma.workSegment.update({
+        where: { id: fixture.movableSegmentId },
+        data: { content: "P6 UI Inspector 并发权威内容" },
+      });
+      await movedInspector.getByLabel("内容").fill("P6 UI 不应覆盖并发内容");
+      await movedInspector.getByRole("button", { name: "保存基本信息", exact: true }).click();
+      await expect(page.getByText(/正在读取服务器最新版本/)).toBeVisible();
+      await expect(movedInspector.getByLabel("内容")).toHaveValue(
+        "P6 UI Inspector 并发权威内容",
+      );
       await movedInspector.getByLabel("内容").fill("P6 UI Inspector 更新不覆盖画布时间");
-      await movedInspector.getByRole("button", { name: "保存", exact: true }).click();
+      await movedInspector.getByRole("button", { name: "保存基本信息", exact: true }).click();
       await expect(page.getByText("已更新投入详情")).toBeVisible();
       await expect.poll(async () => {
         const row = await prisma.workSegment.findUniqueOrThrow({
@@ -1476,7 +1554,13 @@ test.describe("project management P4/P6 UI integration", () => {
       await page.getByRole("button", { name: "新增投入" }).click();
       const quickCreate = page.getByRole("form", { name: "投入快速创建" });
       await expect(quickCreate.getByLabel("投入比例")).toHaveCount(0);
+      await expect(quickCreate.getByLabel("完成比例")).toHaveCount(0);
+      await expect(page.getByTestId("time-canvas-creation-range")).toHaveCSS(
+        "pointer-events",
+        "none",
+      );
       await quickCreate.getByLabel("内容").fill(fixture.mobileCreateContent);
+      await quickCreate.getByLabel("预期输出").fill("P6 UI 移动端创建预期产出");
       const actionUrl = "**/progress/resources**";
       let actionAborted = false;
       const abortFirstAction = async (route: import("@playwright/test").Route) => {
@@ -1495,8 +1579,11 @@ test.describe("project management P4/P6 UI integration", () => {
       await quickCreate.getByRole("button", { name: "创建", exact: true }).click();
       await expect(page.getByText("已创建投入记录")).toBeVisible();
       await expect
-        .poll(() => prisma.workSegment.count({ where: { content: fixture.mobileCreateContent } }))
-        .toBe(1);
+        .poll(() => prisma.workSegment.findFirst({
+          where: { content: fixture.mobileCreateContent },
+          select: { expectedOutput: true },
+        }))
+        .toEqual({ expectedOutput: "P6 UI 移动端创建预期产出" });
       await expect(
         page.getByRole("button", {
           name: new RegExp(fixture.mobileCreateContent),
@@ -2529,7 +2616,7 @@ test.describe("project management P4/P6 UI integration", () => {
     );
     await editForm.getByLabel("开始", { exact: true }).fill("2024-06-01T09:00");
     await editForm.getByLabel("结束", { exact: true }).fill("2024-06-02T09:00");
-    await editForm.getByRole("button", { name: "保存", exact: true }).click();
+    await editForm.getByRole("button", { name: "保存基本信息", exact: true }).click();
 
     await expect(page.getByText("已更新投入详情")).toBeVisible();
     const editedExpandedStart = Date.parse("2024-04-01T00:00:00.000+08:00");
@@ -3090,7 +3177,7 @@ test.describe("project management P4/P6 UI integration", () => {
     await expectHealthyPage(page);
   });
 
-  test("S7 resource filters, removed conflict route and personal timeline work on desktop and mobile", async ({
+  test("S7 resource filters, removed routes and unified my-work timeline work on desktop and mobile", async ({
     context,
     page,
     baseURL,
@@ -3108,15 +3195,104 @@ test.describe("project management P4/P6 UI integration", () => {
       where: { id: fixture.confirmableSegmentId },
       data: { status: "PENDING_CONFIRMATION" },
     });
+    await prisma.workSegmentChange.createMany({
+      data: Array.from({ length: 21 }, (_, index) => ({
+        segmentId: fixture.confirmableSegmentId,
+        action: "UPDATE" as const,
+        before: { content: `分页前内容 ${index}` },
+        after: { content: `分页后内容 ${index}` },
+        reason: `历史分页回归 ${index}`,
+        actorAccountId: fixture.member.account.id,
+        createdAt: new Date(Date.UTC(2026, 7, 11, 5, index)),
+      })),
+    });
+    await prisma.workSegmentChange.deleteMany({
+      where: { segmentId: fixture.movableSegmentId },
+    });
     await loginAsTestUser(context, baseURL, {
       openId: fixture.member.openId,
       name: fixture.member.person.displayName,
     });
 
+    await page.goto("/progress?taskCursor=invalid-cursor");
+    await expect(page.getByRole("heading", { name: "我的工作" })).toBeVisible();
+    await expect.poll(() => new URL(page.url()).searchParams.has("taskCursor")).toBe(false);
+    await page.goto("/progress?scale=month");
+    await expect(page.getByTestId("time-canvas-root")).toHaveAttribute("data-zoom", "MONTH");
+    await page.goto("/progress?scale=year");
+    await expect(page.getByTestId("time-canvas-root")).toHaveAttribute("data-zoom", "YEAR");
+    await page.goBack();
+    await expect(page).toHaveURL(/scale=month/);
+    await expect(page.getByTestId("time-canvas-root")).toHaveAttribute("data-zoom", "MONTH");
+
+    let releaseInitialHistoryRequest = () => {};
+    const heldInitialHistoryRequest = new Promise<void>((resolve) => {
+      releaseInitialHistoryRequest = resolve;
+    });
+    let abortedInitialHistoryRequest = false;
+    const abortInitialHistoryRequest = async (
+      route: import("@playwright/test").Route,
+    ) => {
+      const body = route.request().postData() ?? "";
+      if (
+        !abortedInitialHistoryRequest &&
+        route.request().method() === "POST" &&
+        body.includes("limit")
+      ) {
+        abortedInitialHistoryRequest = true;
+        await heldInitialHistoryRequest;
+        await route.abort();
+        return;
+      }
+      await route.continue();
+    };
+    await page.route("**/progress/resources**", abortInitialHistoryRequest);
+    await page.goto(`/progress/resources?focus=${fixture.movableSegmentId}`);
+    const emptyHistoryInspector = page.getByTestId("segment-inspector");
+    await expect(emptyHistoryInspector.getByText("正在加载变更历史…")).toBeVisible();
+    releaseInitialHistoryRequest();
+    await expect(
+      emptyHistoryInspector.getByText(/变更历史加载失败：网络异常/),
+    ).toBeVisible();
+    await page.unroute("**/progress/resources**", abortInitialHistoryRequest);
+    await emptyHistoryInspector.getByRole("button", { name: "重试历史" }).click();
+    await expect(emptyHistoryInspector.getByText("暂无可见变更。")).toBeVisible();
+
     await page.goto(`/progress/resources?focus=${fixture.confirmableSegmentId}`);
-    await expect(page.getByTestId("segment-inspector")).toContainText(
+    const initialInspector = page.getByTestId("segment-inspector");
+    await expect(initialInspector).toContainText(
       "P6 UI 可确认计划",
     );
+    const loadMoreHistory = initialInspector.getByRole("button", {
+      name: "加载更多变更",
+    });
+    await expect(loadMoreHistory).toBeVisible();
+    let releaseHistoryRequest = () => {};
+    const heldHistoryRequest = new Promise<void>((resolve) => {
+      releaseHistoryRequest = resolve;
+    });
+    let abortedHistoryRequest = false;
+    const abortHeldHistoryRequest = async (
+      route: import("@playwright/test").Route,
+    ) => {
+      if (!abortedHistoryRequest && route.request().method() === "POST") {
+        abortedHistoryRequest = true;
+        await heldHistoryRequest;
+        await route.abort();
+        return;
+      }
+      await route.continue();
+    };
+    await page.route("**/progress/resources**", abortHeldHistoryRequest);
+    await loadMoreHistory.click();
+    await expect(
+      initialInspector.getByRole("button", { name: "正在加载更多变更…" }),
+    ).toBeVisible();
+    releaseHistoryRequest();
+    await expect(initialInspector.getByText(/变更历史加载失败：网络异常/)).toBeVisible();
+    await page.unroute("**/progress/resources**", abortHeldHistoryRequest);
+    await initialInspector.getByRole("button", { name: "重试历史" }).click();
+    await expect(initialInspector.getByText("已加载全部变更。")).toBeVisible();
 
     await page.goto(`/progress/resources?focus=${randomUUID()}`);
     await expect(page).toHaveURL(/focusError=1/);
@@ -3217,20 +3393,27 @@ test.describe("project management P4/P6 UI integration", () => {
     const removedConflictPage = await page.goto("/progress/resources/conflicts");
     expect(removedConflictPage?.status()).toBe(404);
 
-    await page.goto(`/progress/my-timeline?focus=${fixture.confirmableSegmentId}&mode=day`);
+    await page.goto(`/progress?focus=${fixture.confirmableSegmentId}`);
     await expect(page.getByTestId("segment-inspector")).toContainText(
       "P6 UI 可确认计划",
       { timeout: 15_000 },
     );
     await detailDialog.getByRole("button", { name: "Close" }).click();
     await expect(detailDialog).toHaveCount(0);
-    await expect(page.getByRole("heading", { name: "我的时间" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "我的工作" })).toBeVisible();
     const dueQueue = page.getByRole("region", { name: "到期计划与确认队列" });
     await expect(dueQueue.getByRole("heading", { name: "到期计划与确认队列" })).toBeVisible();
     await expect(dueQueue.getByText("P6 UI 可确认计划")).toBeVisible();
     await expect(page.getByTestId("time-canvas-scroll")).toBeVisible();
-    await dueQueue.getByRole("button", { name: "与计划一致" }).click();
+    await dueQueue.getByRole("link", { name: "处理" }).click();
+    await expect(page.getByTestId("segment-inspector")).toContainText(
+      "P6 UI 可确认计划",
+    );
+    await page.getByTestId("segment-inspector").getByRole("button", { name: "完整确认" }).click();
     await expect(page.getByText("已完整确认并生成 Actual")).toBeVisible();
+    await expect(detailDialog).toHaveCount(0);
+    await expect.poll(() => new URL(page.url()).searchParams.has("focus")).toBe(false);
+    await expect(dueQueue.getByText("P6 UI 可确认计划")).toHaveCount(0);
     await expect.poll(() => prisma.workSegment.findUnique({
       where: { id: fixture.confirmableSegmentId },
       select: { status: true },
@@ -3346,7 +3529,6 @@ async function createUiFixture() {
       endAt: atHour(16),
       content: "P6 UI 停用人员历史投入",
       actualOutput: "历史产出",
-      completionPercent: 100,
       priority: "LOW",
       taskId: draft.taskId,
       tagIds: [],

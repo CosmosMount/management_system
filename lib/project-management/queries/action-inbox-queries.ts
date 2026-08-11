@@ -71,6 +71,24 @@ export async function getActionInbox({
         type: "PLANNED",
         status: "PENDING_CONFIRMATION",
       },
+      isSystemAdministrator(actor)
+        ? {}
+        : {
+            OR: [
+              { taskId: null },
+              {
+                task: {
+                  members: {
+                    some: {
+                      personId: actor.personId,
+                      role: { in: ["OWNER", "PARTICIPANT"] },
+                      removedAt: null,
+                    },
+                  },
+                },
+              },
+            ],
+          },
     ],
   };
   const milestoneReviewWhere: Prisma.MilestoneReviewWhereInput = {
@@ -230,15 +248,14 @@ export async function getActionInbox({
   for (const segment of confirmationSegments) {
     const task = segment.task;
     const resource = task ? ({ type: "task", ...task } satisfies AuthorizationTaskResource) : null;
-    const canManage =
-      segment.personId === actor.personId ||
-      (resource
-        ? authorize({
-            actor,
-            action: "segment.manage_others",
-            resource: { type: "segment", personId: segment.personId, task: resource },
-          }).allowed
-        : false);
+    const canManage = authorize({
+      actor,
+      action:
+        segment.personId === actor.personId
+          ? "segment.manage_self"
+          : "segment.manage_others",
+      resource: { type: "segment", personId: segment.personId, task: resource },
+    }).allowed;
     if (!canManage) continue;
     if (
       segment.personId === actor.personId &&
@@ -254,7 +271,7 @@ export async function getActionInbox({
         taskTitle: task?.title ?? null,
         dueAt: segment.endAt.toISOString(),
         severity: segment.endAt < now ? "HIGH" : "MEDIUM",
-        href: `/progress/my-timeline?focus=${segment.id}`,
+        href: `/progress?focus=${segment.id}`,
       });
     }
   }

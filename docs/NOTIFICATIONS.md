@@ -81,7 +81,7 @@ Revision 生效事务先把目标 `TaskPlanVersion` 切换为 `CURRENT` 并更�
 
 资源冲突下线 migration 会删除 `RESOURCE_CONFLICT` 偏好与站内通知，以及 `resource_conflict_opened`、`resource_conflict_resolved` outbox；收件人投递行随 outbox 级联删除。已经送达飞书的历史消息无法撤回。
 
-Segment 到期确认事件键保持稳定幂等：`pm:segment:confirmation_due:<segmentId>:<endAt>`。站内通知在业务事件键后追加 `:inapp:<accountId>`，飞书 outbox 追加 `:feishu`；重复提交依赖唯一事件键保持 exactly once，逐收件人失败只重试失败者。`scanSegmentTransitions` 会把到期 Planned 推到 `PENDING_CONFIRMATION`、把进行中的 Planned 置为 `IN_PROGRESS`，但不会自动生成 Actual。
+Segment 到期确认事件键保持稳定幂等：`pm:segment:confirmation_due:<segmentId>:<endAt>`，安全处理链接为 `/progress?focus=<segmentId>`，在统一“我的工作”详情中完成确认。站内通知在业务事件键后追加 `:inapp:<accountId>`，飞书 outbox 追加 `:feishu`；重复提交依赖唯一事件键保持 exactly once，逐收件人失败只重试失败者。`scanSegmentTransitions` 会把到期 Planned 推到 `PENDING_CONFIRMATION`、把进行中的 Planned 置为 `IN_PROGRESS`，但不会自动生成 Actual。
 
 统一账号和 Task 成员/角色数据库迁移只追加 `source=MIGRATION` 的 `DomainAuditEvent`，不创建站内通知或 outbox，不会在上线时批量触达真实用户。单一 Task 审批门禁迁移同样不新建通知：它保留已发送历史，冻结被撤出审批对应仍可重试的 outbox 与未完成 recipient，并把相关未读站内审批通知标记为已读。
 

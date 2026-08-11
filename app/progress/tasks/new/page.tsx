@@ -275,6 +275,9 @@ function workspaceTaskOption(workspace: TaskWorkspace) {
   const active = workspace.currentPlan.nodes.find(
     (entry) => entry.nodeId === workspace.task.activeMilestoneNodeId,
   );
+  const activeTermination = workspace.currentPlan.nodes.find(
+    (entry) => entry.type === "TERMINATION" && entry.status === "ACTIVE",
+  );
   return {
     id: workspace.task.id,
     title: workspace.task.title,
@@ -289,6 +292,14 @@ function workspaceTaskOption(workspace: TaskWorkspace) {
           expectedCompletedAt: active.milestone.expectedCompletedAt,
         }
       : null,
+    activeTermination: activeTermination?.termination
+      ? {
+          nodeId: activeTermination.nodeId,
+          name: activeTermination.termination.name,
+          plannedAt: activeTermination.termination.plannedAt,
+        }
+      : null,
+    currentPlanVersionNo: workspace.currentPlan.versionNo,
     permission: { canView: true },
   };
 }

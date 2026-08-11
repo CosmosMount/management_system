@@ -80,3 +80,23 @@ export async function getMyWorkDashboard({
 }
 
 export type MyWorkDashboard = Awaited<ReturnType<typeof getMyWorkDashboard>>;
+
+export async function getMyWorkMetrics(actor: ProjectManagementActor) {
+  const [activeTaskCount, unreadNotificationCount] = await Promise.all([
+    prisma.task.count({
+      where: {
+        AND: [
+          taskReadableWhere(actor),
+          { status: "ACTIVE" },
+          {
+            members: {
+              some: { personId: actor.personId, removedAt: null },
+            },
+          },
+        ],
+      },
+    }),
+    getUnreadInAppNotificationCount(actor),
+  ]);
+  return { activeTaskCount, unreadNotificationCount };
+}

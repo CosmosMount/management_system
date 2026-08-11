@@ -67,7 +67,7 @@ npm run test:e2e
 场景：
 
 - 反馈中心：点击“全部”，点击反馈项，URL `selected` 与详情保持稳定。
-- 项目管理：`/progress` 总览、Task 工作台、资源计划、个人时间线和站内通知中心可访问；导航不显示资源冲突，`/progress/resources/conflicts` 返回 404，页面和表单不显示投入比例；旧 `/progress/task/:id` 重定向到新 Task 工作台地址。
+- 项目管理：`/progress` 统一展示指标、完整个人时间画布、行动待办、参与 Task、到期确认和通知；Task 工作台、资源计划和站内通知中心可访问。导航不显示独立个人时间线或资源冲突，`/progress/my-timeline` 与 `/progress/resources/conflicts` 返回 404，页面和表单不显示投入比例或完成比例；旧 `/progress/task/:id` 重定向到新 Task 工作台地址。
 - 采购列表：切换状态筛选，进入草稿/订单详情。
 - 管理面板：进入角色、预算池和系统同步页面。
 
@@ -116,7 +116,7 @@ npm run test:e2e
 
 场景：
 
-1. 桌面和 Pixel 5 打开 `/progress`，展示“我的工作”总览，可见 Active Task、未来投入、待确认计划和未读通知。
+1. 桌面和 Pixel 5 打开 `/progress`，展示“我的工作”统一驾驶舱，可见 Active Task 指标、完整个人时间线、行动待办、参与 Task、到期确认和折叠通知；Task 表与 Plan 行使用同一 25 条分页。旧 `/progress/my-timeline` 返回 404。
 2. 打开 `/progress/tasks`、`/progress/tasks/[id]`、`/progress/resources` 和 `/progress/notifications`，验证列表、工作台、资源时间轴和站内通知已按当前 actor 授权过滤；旧 `/progress/resources/conflicts` 必须返回 404。
 3. 打开旧 `/progress/task/legacy-id`，应重定向到 `/progress/tasks/legacy-id` 并因对象不存在显示无权/不存在页面；其他旧项目、阶段、周报、风险或提醒目录没有业务页面。
 4. 管理页面无 `PROJECT_MANAGER`、旧验收条例、项目模板或进度提醒配置。

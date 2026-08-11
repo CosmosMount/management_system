@@ -40,7 +40,12 @@ import {
   layoutIntervalLanes,
   rowHeightForLaneCount,
 } from "@/components/project-management/time-canvas/lane-layout";
-import { DAY_MS } from "@/components/project-management/time-canvas/time-math";
+import {
+  DAY_MS,
+  clampLogicalRangeToThreeYears,
+  padShanghaiCalendarRange,
+} from "@/components/project-management/time-canvas/time-math";
+import { formatShanghaiDate } from "@/components/project-management/time-canvas/url-state";
 import type {
   AdaptiveTimeCanvasBlockQuery,
   TimeCanvasBrushRequest,
@@ -89,10 +94,16 @@ type CreateDraft = {
   endMs: number;
 };
 type SegmentChange = {
-  id: string;
+  key: string;
   action: string;
-  reason: string | null;
+  actorName: string;
+  reason: string;
   createdAt: string;
+  differences: Array<{
+    label: string;
+    before: string;
+    after: string;
+  }>;
 };
 type CachedBlock = TimeCanvasCachedBlock<TimeCanvasModel["segments"][number]>;
 type FailedBlock = {
@@ -144,6 +155,8 @@ export function ResourcePlannerCanvasClient({
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
+  const [createDraft, setCreateDraft] = useState<CreateDraft | null>(null);
+  const [createDraftDirty, setCreateDraftDirty] = useState(false);
   const [initialModel, setInitialModel] = useState(incomingModel);
   const initialBlocks = useMemo(
     () => createInitialBlocks(initialModel),
@@ -162,8 +175,60 @@ export function ResourcePlannerCanvasClient({
   );
   const cachedSegments = cachedMerge.segments;
   const model = useMemo(
-    () => ({
+    () => {
+      const draftRange = createDraft &&
+          Number.isFinite(createDraft.startMs) &&
+          Number.isFinite(createDraft.endMs) &&
+          createDraft.endMs > createDraft.startMs
+        ? { startMs: createDraft.startMs, endMs: createDraft.endMs }
+        : null;
+      const displayContentRange = draftRange
+        ? {
+            startMs: Math.min(
+              initialModel.contentRange?.startMs ?? draftRange.startMs,
+              draftRange.startMs,
+            ),
+            endMs: Math.max(
+              initialModel.contentRange?.endMs ?? draftRange.endMs,
+              draftRange.endMs,
+            ),
+          }
+        : initialModel.contentRange;
+      const draftDisplayRange = draftRange && adaptiveBlockQuery
+        ? padShanghaiCalendarRange(displayContentRange ?? draftRange, 2)
+        : draftRange;
+      const displayFullRange = draftDisplayRange
+        ? {
+            startMs: Math.min(
+              initialModel.fullRange?.startMs ?? initialModel.range.startMs,
+              draftDisplayRange.startMs,
+            ),
+            endMs: Math.max(
+              initialModel.fullRange?.endMs ?? initialModel.range.endMs,
+              draftDisplayRange.endMs,
+            ),
+          }
+        : initialModel.fullRange;
+      const draftLogicalRange = draftRange && adaptiveBlockQuery && displayFullRange
+        ? clampLogicalRangeToThreeYears(
+            displayFullRange,
+            (draftRange.startMs + draftRange.endMs) / 2,
+          )
+        : null;
+      const displayRange = draftLogicalRange
+        ? draftLogicalRange.range
+        : draftDisplayRange
+          ? {
+              startMs: Math.min(initialModel.range.startMs, draftDisplayRange.startMs),
+              endMs: Math.max(initialModel.range.endMs, draftDisplayRange.endMs),
+            }
+          : initialModel.range;
+      return {
       ...initialModel,
+      range: displayRange,
+      contentRange: displayContentRange,
+      fullRange: displayFullRange,
+      rangeClipped: draftLogicalRange?.clipped ?? initialModel.rangeClipped,
       loadedRanges: cachedBlocks.map((block) => block.range),
       rows: resizeRowsForSegments(
         readOnly
@@ -194,8 +259,9 @@ export function ResourcePlannerCanvasClient({
               }
             : segment,
         ),
-    }),
-    [cachedBlocks, cachedSegments, initialModel, readOnly],
+    };
+    },
+    [adaptiveBlockQuery, cachedBlocks, cachedSegments, createDraft, initialModel, readOnly],
   );
   const initialSelection = useMemo<TimeCanvasSelection>(() => {
     if (!initialFocusId) return null;
@@ -227,13 +293,21 @@ export function ResourcePlannerCanvasClient({
   const [currentZoom, setCurrentZoom] = useState<TimeCanvasZoom>(
     initialZoom ?? "WEEK",
   );
+  const externalInitialZoomRef = useRef(initialZoom);
   const [pendingPlannedRange, setPendingPlannedRange] =
     useState<PendingPlannedRange | null>(null);
   const [dialogDirty, setDialogDirty] = useState(false);
-  const [createDraft, setCreateDraft] = useState<CreateDraft | null>(null);
   const [detail, setDetail] = useState<WorkSegmentDetail | null>(null);
   const [detailRange, setDetailRange] = useState<{ startMs: number; endMs: number } | null>(null);
   const [changes, setChanges] = useState<SegmentChange[]>([]);
+  const [changesCursor, setChangesCursor] = useState<string | null>(null);
+  const [historyState, setHistoryState] = useState<
+    "IDLE" | "LOADING" | "READY" | "ERROR"
+  >(openSegmentId ? "LOADING" : "IDLE");
+  const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
+  const [historyError, setHistoryError] = useState("");
+  const [historyRetryToken, setHistoryRetryToken] = useState(0);
+  const [detailRetryToken, setDetailRetryToken] = useState(0);
   const [detailState, setDetailState] = useState<"IDLE" | "LOADING" | "READY" | "ERROR">("IDLE");
   const [detailError, setDetailError] = useState("");
   const [notice, setNotice] = useState<Notice>(null);
@@ -253,6 +327,7 @@ export function ResourcePlannerCanvasClient({
   const previousInitialFocusRef = useRef(initialFocusId);
   const centerNavigationTargetRef = useRef<number | null>(null);
   const viewportUrlTimerRef = useRef<number | null>(null);
+  const staleRefreshFocusRef = useRef<string | null>(null);
   const handleViewportChange = useCallback((nextViewport: TimeCanvasRange) => {
     const navigationTarget = centerNavigationTargetRef.current;
     if (
@@ -300,6 +375,46 @@ export function ResourcePlannerCanvasClient({
     };
   }, []);
   useEffect(() => {
+    if (externalInitialZoomRef.current === initialZoom) return;
+    externalInitialZoomRef.current = initialZoom;
+    const timer = window.setTimeout(() => {
+      setCurrentZoom(initialZoom ?? "WEEK");
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [initialZoom]);
+  useEffect(() => {
+    if (!createDraft) return;
+    const handleEscape = (event: globalThis.KeyboardEvent) => {
+      if (
+        event.key !== "Escape" ||
+        event.defaultPrevented ||
+        event.isComposing ||
+        isPending ||
+        openSegmentId
+      ) {
+        return;
+      }
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        target.closest(
+          "[role='listbox'],[data-radix-popper-content-wrapper],[role='dialog']",
+        )
+      ) {
+        return;
+      }
+      if (createDraftDirty && !window.confirm("创建内容尚未保存，确认放弃？")) {
+        return;
+      }
+      event.preventDefault();
+      setCreateDraft(null);
+      setCreateDraftDirty(false);
+      setNotice({ kind: "info", message: "已取消待创建投入。" });
+    };
+    document.addEventListener("keydown", handleEscape);
+    return () => document.removeEventListener("keydown", handleEscape);
+  }, [createDraft, createDraftDirty, isPending, openSegmentId]);
+  useEffect(() => {
     if (previousInitialFocusRef.current === initialFocusId) return;
     previousInitialFocusRef.current = initialFocusId;
     setDismissedFocusId(null);
@@ -341,11 +456,22 @@ export function ResourcePlannerCanvasClient({
     setCachedBlocks(nextBlocks);
     setFailedBlocks(createInitialFailedBlocks(initialModel));
     setViewportRange(initialModel.loadedRanges?.[0] ?? initialModel.range);
-    setSelection(effectiveInitialSelection);
-    const focusedSegment = effectiveInitialSelection?.kind === "SEGMENT"
+    const staleFocusedSegment = staleRefreshFocusRef.current
       ? initialModel.segments.find(
           (segment) =>
-            segment.id === effectiveInitialSelection.id &&
+            segment.id === staleRefreshFocusRef.current &&
+            segment.visibility === "FULL",
+        ) ?? null
+      : null;
+    staleRefreshFocusRef.current = null;
+    const nextSelection: TimeCanvasSelection = staleFocusedSegment
+      ? { kind: "SEGMENT", id: staleFocusedSegment.id }
+      : effectiveInitialSelection;
+    setSelection(nextSelection);
+    const focusedSegment = nextSelection?.kind === "SEGMENT"
+      ? initialModel.segments.find(
+          (segment) =>
+            segment.id === nextSelection.id &&
             segment.visibility === "FULL",
         ) ?? null
       : null;
@@ -354,6 +480,10 @@ export function ResourcePlannerCanvasClient({
     setDetail(null);
     setDetailRange(null);
     setChanges([]);
+    setChangesCursor(null);
+    setHistoryState(focusedSegment ? "LOADING" : "IDLE");
+    setHistoryLoadingMore(false);
+    setHistoryError("");
     setDetailError("");
     setDetailState(focusedSegment ? "LOADING" : "IDLE");
   }, [effectiveInitialSelection, initialModel]);
@@ -401,6 +531,10 @@ export function ResourcePlannerCanvasClient({
       setDetail(null);
       setDetailRange(null);
       setChanges([]);
+      setChangesCursor(null);
+      setHistoryState(focusedSegment ? "LOADING" : "IDLE");
+      setHistoryLoadingMore(false);
+      setHistoryError("");
       setDetailError("");
       setDetailState(focusedSegment ? "LOADING" : "IDLE");
     }, 0);
@@ -698,41 +832,70 @@ export function ResourcePlannerCanvasClient({
         active = false;
       };
     }
-    void Promise.all([
-      getWorkSegment({ segmentId: openSegmentId }),
-      listWorkSegmentChanges({ segmentId: openSegmentId, limit: 20 }),
-    ]).then(([detailResult, historyResult]) => {
-      if (!active) return;
-      if (!detailResult.ok) {
+    void getWorkSegment({ segmentId: openSegmentId })
+      .then((detailResult) => {
+        if (!active) return;
+        if (!detailResult.ok) {
+          setDetail(null);
+          setDetailError(detailResult.error.message);
+          setDetailState("ERROR");
+          return;
+        }
+        const detailData = detailResult.data;
+        setDetail(detailData);
+        setDetailRange({
+          startMs: Date.parse(detailData.startAt),
+          endMs: Date.parse(detailData.endAt),
+        });
+        setDetailState("READY");
+      })
+      .catch(() => {
+        if (!active) return;
         setDetail(null);
-        setDetailError(detailResult.error.message);
+        setDetailError("网络异常，请稍后重试。");
         setDetailState("ERROR");
-        return;
-      }
-      if (!historyResult.ok) {
-        setDetail(null);
-        setDetailError(`变更历史加载失败：${historyResult.error.message}`);
-        setDetailState("ERROR");
-        return;
-      }
-      setDetail(detailResult.data);
-      setDetailRange({
-        startMs: Date.parse(detailResult.data.startAt),
-        endMs: Date.parse(detailResult.data.endAt),
       });
-      setChanges(historyResult.data.items);
-      setDetailState("READY");
-    }).catch(() => {
-      if (!active) return;
-      setDetail(null);
-      setChanges([]);
-      setDetailError("网络异常，请稍后重试。");
-      setDetailState("ERROR");
-    });
     return () => {
       active = false;
     };
-  }, [openSegmentId, selectedCanvasSegment]);
+  }, [detailRetryToken, openSegmentId, selectedCanvasSegment]);
+  useEffect(() => {
+    let active = true;
+    if (
+      !openSegmentId ||
+      !selectedCanvasSegment ||
+      selectedCanvasSegment.visibility !== "FULL"
+    ) {
+      return () => {
+        active = false;
+      };
+    }
+    void listWorkSegmentChanges({ segmentId: openSegmentId, limit: 20 })
+      .then((historyResult) => {
+        if (!active) return;
+        if (!historyResult.ok) {
+          setChanges([]);
+          setChangesCursor(null);
+          setHistoryState("ERROR");
+          setHistoryError(historyResult.error.message);
+          return;
+        }
+        setChanges(historyResult.data.items);
+        setChangesCursor(historyResult.data.nextCursor);
+        setHistoryState("READY");
+        setHistoryError("");
+      })
+      .catch(() => {
+        if (!active) return;
+        setChanges([]);
+        setChangesCursor(null);
+        setHistoryState("ERROR");
+        setHistoryError("网络异常，请稍后重试。");
+      });
+    return () => {
+      active = false;
+    };
+  }, [historyRetryToken, openSegmentId, selectedCanvasSegment]);
   const runMutation = (
       action: () => Promise<ProjectManagementActionResult<unknown>>,
       successMessage: string,
@@ -763,7 +926,22 @@ export function ResourcePlannerCanvasClient({
               ? `${result.error.message}，正在读取服务器最新版本。`
               : result.error.message,
           });
-          if (stale) router.refresh();
+          if (stale) {
+            setDialogDirty(false);
+            setDetail(null);
+            setDetailRange(null);
+            setDetailError("");
+            setDetailState("LOADING");
+            setChanges([]);
+            setChangesCursor(null);
+            setHistoryState("LOADING");
+            setHistoryLoadingMore(false);
+            setHistoryError("");
+            setDetailRetryToken((current) => current + 1);
+            setHistoryRetryToken((current) => current + 1);
+            staleRefreshFocusRef.current = openSegmentId;
+            router.refresh();
+          }
           return;
         }
         const plannedRange = plannedRangeFromMutation(result.data);
@@ -774,7 +952,9 @@ export function ResourcePlannerCanvasClient({
           });
         }
         setNotice({ kind: "success", message: successMessage });
-        if (openSegmentId) {
+        const completedSegmentId = openSegmentId;
+        if (completedSegmentId) {
+          setDismissedFocusId(initialFocusId ?? completedSegmentId);
           setOpenSegmentId(null);
           setDialogDirty(false);
           setSelection(null);
@@ -786,7 +966,16 @@ export function ResourcePlannerCanvasClient({
               (viewportRangeRef.current.startMs + viewportRangeRef.current.endMs) / 2,
             zoom: currentZoom,
           });
-          const url = new URL(window.location.href);
+        }
+        const url = new URL(window.location.href);
+        const hadUrlFocus =
+          url.searchParams.has("focus") ||
+          url.searchParams.has("focusSegmentIds");
+        if (completedSegmentId) {
+          url.searchParams.delete("focus");
+          url.searchParams.delete("focusSegmentIds");
+        }
+        if (persistViewportInUrl || hadUrlFocus) {
           router.replace(`${url.pathname}?${url.searchParams.toString()}`, {
             scroll: false,
           });
@@ -795,6 +984,37 @@ export function ResourcePlannerCanvasClient({
         }
       });
   };
+
+  function loadMoreChanges() {
+    if (!openSegmentId || !changesCursor || isPending || historyLoadingMore) return;
+    setHistoryLoadingMore(true);
+    setHistoryError("");
+    startTransition(async () => {
+      try {
+        const result = await listWorkSegmentChanges({
+          segmentId: openSegmentId,
+          cursor: changesCursor,
+          limit: 20,
+        });
+        if (!result.ok) {
+          setHistoryState("ERROR");
+          setHistoryError(result.error.message);
+          return;
+        }
+        setChanges((current) => {
+          const seen = new Set(current.map((change) => change.key));
+          return [...current, ...result.data.items.filter((change) => !seen.has(change.key))];
+        });
+        setChangesCursor(result.data.nextCursor);
+        setHistoryState("READY");
+      } catch {
+        setHistoryState("ERROR");
+        setHistoryError("网络异常，请稍后重试。");
+      } finally {
+        setHistoryLoadingMore(false);
+      }
+    });
+  }
 
   function handleBrush(request: TimeCanvasBrushRequest) {
     if (isPending) return;
@@ -808,7 +1028,47 @@ export function ResourcePlannerCanvasClient({
       startMs: request.startMs,
       endMs: request.endMs,
     });
+    setCreateDraftDirty(false);
     setNotice({ kind: "info", message: "已选择时间区间，请补全投入内容。" });
+  }
+
+  function cancelCreateDraft() {
+    if (createDraftDirty && !window.confirm("创建内容尚未保存，确认放弃？")) return;
+    setCreateDraft(null);
+    setCreateDraftDirty(false);
+    setNotice({ kind: "info", message: "已取消待创建投入。" });
+  }
+
+  function updateCreateDraft(next: CreateDraft) {
+    if (next.endMs <= next.startMs || !Number.isFinite(next.startMs + next.endMs)) {
+      setNotice({ kind: "error", message: "结束时间必须晚于开始时间。" });
+      return false;
+    }
+    if (next.endMs - next.startMs > 31 * DAY_MS) {
+      setNotice({ kind: "error", message: "单条投入最长 31 天，请缩短待创建区间。" });
+      return false;
+    }
+    if (!adaptiveBlockQuery) {
+      const explicitRange = explicitRangeForDraft(initialModel.range, next);
+      if (explicitRange.endMs - explicitRange.startMs > 366 * DAY_MS) {
+        setNotice({
+          kind: "error",
+          message: "待创建区间会使人员计划超过 366 天，请先缩小或调整资源时间范围。",
+        });
+        return false;
+      }
+      const url = new URL(window.location.href);
+      url.searchParams.set("from", formatShanghaiDate(explicitRange.startMs));
+      url.searchParams.set("to", formatShanghaiDate(explicitRange.endMs));
+      url.searchParams.delete("cursor");
+      url.searchParams.delete("focus");
+      router.replace(`${url.pathname}?${url.searchParams.toString()}`, {
+        scroll: false,
+      });
+    }
+    setCreateDraft(next);
+    setCreateDraftDirty(true);
+    return true;
   }
 
   function requestContentCenter(candidateMs: number) {
@@ -872,7 +1132,8 @@ export function ResourcePlannerCanvasClient({
             type="button"
             size="sm"
             disabled={isPending || Boolean(createDraft)}
-            onClick={() =>
+            onClick={() => {
+              setCreateDraftDirty(false);
               setCreateDraft((() => {
                 const center = (viewportRange.startMs + viewportRange.endMs) / 2;
                 const duration = 60 * 60 * 1_000;
@@ -888,8 +1149,8 @@ export function ResourcePlannerCanvasClient({
                 startMs,
                 endMs: startMs + duration,
                 };
-              })())
-            }
+              })());
+            }}
           >
             新增投入
           </Button>
@@ -980,7 +1241,7 @@ export function ResourcePlannerCanvasClient({
           <TimeCanvas
             mode={mode}
             model={model}
-            initialZoom={initialZoom}
+            initialZoom={currentZoom}
             initialCenterMs={initialCenterMs}
             initialSelection={effectiveInitialSelection}
             display={{ showActual: true, showBusy: true, showInspector: false }}
@@ -996,6 +1257,27 @@ export function ResourcePlannerCanvasClient({
                   }
                 : null,
               onBrushCreate: handleBrush,
+              onCreationRangeTransform: (request) => {
+                const targetRow = model.rows.find(
+                  (row) =>
+                    row.id === request.targetRowId &&
+                    row.kind === "PERSON" &&
+                    row.editable,
+                );
+                if (!createDraft || !targetRow) {
+                  setNotice({
+                    kind: "error",
+                    message: "待创建投入只能移动到当前已加载且可编辑的人员行。",
+                  });
+                  return;
+                }
+                updateCreateDraft({
+                  rowId: targetRow.id,
+                  personId: targetRow.sourceId,
+                  startMs: request.startMs,
+                  endMs: request.endMs,
+                });
+              },
               onSegmentOpen: (segmentId) => {
                 if (createDraft) {
                   setNotice({ kind: "info", message: "请先完成或取消当前投入创建。" });
@@ -1010,6 +1292,10 @@ export function ResourcePlannerCanvasClient({
                 setDetail(null);
                 setDetailRange(null);
                 setChanges([]);
+                setChangesCursor(null);
+                setHistoryState("LOADING");
+                setHistoryLoadingMore(false);
+                setHistoryError("");
                 setDetailError("");
                 setDetailState("LOADING");
               },
@@ -1036,7 +1322,7 @@ export function ResourcePlannerCanvasClient({
                 });
               }
             }}
-            navigationRange={initialModel.fullRange}
+            navigationRange={model.fullRange}
             onRequestCenter={adaptiveBlockQuery ? requestContentCenter : undefined}
             emptyMessage="当前筛选和时间范围内没有可见安排。"
           />
@@ -1051,25 +1337,45 @@ export function ResourcePlannerCanvasClient({
           closeSegmentDialog();
         }}
       >
-        <DialogContent className="max-h-[94dvh] max-w-[min(96vw,88rem)] overflow-y-auto">
+        <DialogContent className="max-h-[94dvh] overflow-y-auto sm:max-w-[min(96vw,88rem)]">
           <DialogHeader>
             <DialogTitle>投入详情</DialogTitle>
             <DialogDescription>
-              仅当前打开的投入可修改；同一行的其他安排仅作为时间参考。
+              复用打开前的完整时间线上下文；仅当前打开的投入可修改，其他对象只读。
             </DialogDescription>
           </DialogHeader>
           <SegmentInspector
             key={`${selectedCanvasSegment?.id ?? "none"}:${detail?.updatedAt ?? detailState}`}
             canvasSegment={selectedCanvasSegment}
             model={model}
-            initialZoom={initialZoom}
+            initialZoom={currentZoom}
+            initialCenterMs={(viewportRange.startMs + viewportRange.endMs) / 2}
             detail={detail}
             detailRange={detailRange}
             detailState={detailState}
             detailError={detailError}
             changes={changes}
+            historyState={historyState}
+            historyLoadingMore={historyLoadingMore}
+            historyError={historyError}
+            hasMoreChanges={Boolean(changesCursor)}
             disabled={isPending}
             onRun={runMutation}
+            onRetryDetail={() => {
+              setDetailError("");
+              setDetailState("LOADING");
+              setDetailRetryToken((current) => current + 1);
+            }}
+            onLoadMoreChanges={loadMoreChanges}
+            onRetryHistory={() => {
+              if (changes.length > 0 && changesCursor) {
+                loadMoreChanges();
+                return;
+              }
+              setHistoryState("LOADING");
+              setHistoryError("");
+              setHistoryRetryToken((current) => current + 1);
+            }}
             onDirtyChange={setDialogDirty}
             onRangeChange={(range) => {
               setDetailRange(range);
@@ -1081,7 +1387,6 @@ export function ResourcePlannerCanvasClient({
 
       {createDraft && (
         <QuickCreatePanel
-          key={`${createDraft.rowId}:${createDraft.startMs}:${createDraft.endMs}`}
           draft={createDraft}
           peopleOptions={peopleOptions}
           peopleScope={peopleScope}
@@ -1091,9 +1396,36 @@ export function ResourcePlannerCanvasClient({
           lockedTaskId={lockedTaskId}
           allowIndependent={allowIndependent}
           disabled={isPending}
-          onCancel={() => setCreateDraft(null)}
+          onCancel={cancelCreateDraft}
+          onDirtyChange={() => setCreateDraftDirty(true)}
+          onPersonChange={(personId) => {
+            const targetRow = model.rows.find(
+              (row) =>
+                row.kind === "PERSON" &&
+                row.editable &&
+                row.sourceId === personId,
+            );
+            if (!targetRow) {
+              setNotice({
+                kind: "error",
+                message: "该人员不在当前已加载的可编辑行中，请先调整筛选或分页。",
+              });
+              return;
+            }
+            updateCreateDraft({
+              ...createDraft,
+              rowId: targetRow.id,
+              personId: targetRow.sourceId,
+            });
+          }}
+          onRangeChange={(startMs, endMs) =>
+            updateCreateDraft({ ...createDraft, startMs, endMs })
+          }
           onRun={(action) => {
-            runMutation(action, "已创建投入记录", undefined, () => setCreateDraft(null));
+            runMutation(action, "已创建投入记录", undefined, () => {
+              setCreateDraft(null);
+              setCreateDraftDirty(false);
+            });
           }}
         />
       )}
@@ -1272,6 +1604,9 @@ function QuickCreatePanel({
   allowIndependent,
   disabled,
   onCancel,
+  onDirtyChange,
+  onPersonChange,
+  onRangeChange,
   onRun,
 }: {
   draft: CreateDraft;
@@ -1284,28 +1619,77 @@ function QuickCreatePanel({
   allowIndependent: boolean;
   disabled: boolean;
   onCancel: () => void;
+  onDirtyChange: () => void;
+  onPersonChange: (personId: string) => void;
+  onRangeChange: (startMs: number, endMs: number) => boolean;
   onRun: (action: () => Promise<ProjectManagementActionResult<unknown>>) => void;
 }) {
-  const [personId, setPersonId] = useState<string | null>(draft.personId || null);
   const [taskId, setTaskId] = useState<string | null>(defaultTaskId || null);
+  const [rangeInputs, setRangeInputs] = useState<{
+    baseStartMs: number;
+    baseEndMs: number;
+    startValue: string;
+    endValue: string;
+  } | null>(null);
   const lockedTask = lockedTaskId
     ? taskOptions.find((option) => option.id === lockedTaskId) ?? null
     : null;
+  const activeRangeInputs = rangeInputs?.baseStartMs === draft.startMs &&
+      rangeInputs.baseEndMs === draft.endMs
+    ? rangeInputs
+    : null;
+  const startValue = activeRangeInputs?.startValue ?? toLocal(draft.startMs);
+  const endValue = activeRangeInputs?.endValue ?? toLocal(draft.endMs);
+  const pendingRange = validateSegmentRangeInputs(startValue, endValue);
+  const rangeError = activeRangeInputs && !pendingRange.ok
+    ? pendingRange.message
+    : "";
+
+  function updateRangeInputs(nextStartValue: string, nextEndValue: string) {
+    const range = validateSegmentRangeInputs(nextStartValue, nextEndValue);
+    if (!range.ok) {
+      setRangeInputs({
+        baseStartMs: draft.startMs,
+        baseEndMs: draft.endMs,
+        startValue: nextStartValue,
+        endValue: nextEndValue,
+      });
+      return;
+    }
+    if (!onRangeChange(range.startMs, range.endMs)) {
+      setRangeInputs(null);
+      return;
+    }
+    setRangeInputs(null);
+  }
+
   return (
     <form
       className="grid gap-3 rounded-xl border border-primary/30 bg-card p-4 md:grid-cols-2 xl:grid-cols-4"
       aria-label="投入快速创建"
+      onChange={onDirtyChange}
       onSubmit={(event) => {
         event.preventDefault();
+        const range = validateSegmentRangeInputs(startValue, endValue);
+        if (!range.ok) {
+          setRangeInputs({
+            baseStartMs: draft.startMs,
+            baseEndMs: draft.endMs,
+            startValue,
+            endValue,
+          });
+          return;
+        }
         const form = new FormData(event.currentTarget);
         const submittedTaskId = String(form.get("taskId") ?? "") || null;
         const type = String(form.get("type")) === "ACTUAL" ? "ACTUAL" : "PLANNED";
         const base = {
           personId: String(form.get("personId") ?? draft.personId),
-          startAt: shanghaiDateTimeLocalToIso(String(form.get("startAt") ?? "")),
-          endAt: shanghaiDateTimeLocalToIso(String(form.get("endAt") ?? "")),
+          startAt: new Date(range.startMs).toISOString(),
+          endAt: new Date(range.endMs).toISOString(),
           content: String(form.get("content") ?? ""),
           priority: String(form.get("priority") ?? "MEDIUM"),
+          expectedOutput: String(form.get("expectedOutput") ?? ""),
           taskId: submittedTaskId,
           tagIds: [],
         };
@@ -1332,8 +1716,12 @@ function QuickCreatePanel({
           ariaLabel="人员"
           scope={peopleScope}
           name="personId"
-          value={personId}
-          onValueChange={setPersonId}
+          value={draft.personId}
+          onValueChange={(value) => {
+            if (!value) return;
+            onDirtyChange();
+            onPersonChange(value);
+          }}
           initialOptions={peopleOptions}
           required
           clearable={false}
@@ -1342,11 +1730,38 @@ function QuickCreatePanel({
         />
       </Field>
       <Field label="开始" htmlFor="quick-start">
-        <Input id="quick-start" name="startAt" type="datetime-local" defaultValue={toLocal(draft.startMs)} required />
+        <Input
+          id="quick-start"
+          name="startAt"
+          type="datetime-local"
+          value={startValue}
+          aria-invalid={Boolean(rangeError)}
+          aria-describedby={rangeError ? "quick-range-error" : undefined}
+          onChange={(event) => {
+            updateRangeInputs(event.target.value, endValue);
+          }}
+          required
+        />
       </Field>
       <Field label="结束" htmlFor="quick-end">
-        <Input id="quick-end" name="endAt" type="datetime-local" defaultValue={toLocal(draft.endMs)} required />
+        <Input
+          id="quick-end"
+          name="endAt"
+          type="datetime-local"
+          value={endValue}
+          aria-invalid={Boolean(rangeError)}
+          aria-describedby={rangeError ? "quick-range-error" : undefined}
+          onChange={(event) => {
+            updateRangeInputs(startValue, event.target.value);
+          }}
+          required
+        />
       </Field>
+      {rangeError && (
+        <p id="quick-range-error" className="text-sm text-destructive md:col-span-2 xl:col-span-4" role="alert">
+          {rangeError}
+        </p>
+      )}
       <Field label="内容" htmlFor="quick-content" className="md:col-span-2">
         <Input id="quick-content" name="content" defaultValue="计划投入" required maxLength={2_000} />
       </Field>
@@ -1367,7 +1782,10 @@ function QuickCreatePanel({
             ariaLabel="Task"
             name="taskId"
             value={taskId}
-            onValueChange={setTaskId}
+            onValueChange={(value) => {
+              setTaskId(value);
+              onDirtyChange();
+            }}
             initialOptions={taskOptions}
             statuses={["ACTIVE"]}
             allowIndependent={allowIndependent}
@@ -1383,6 +1801,14 @@ function QuickCreatePanel({
           {Object.entries(taskPriorityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select>
       </Field>
+      <Field label="预期输出" htmlFor="quick-expected" className="md:col-span-2 xl:col-span-4">
+        <Textarea
+          id="quick-expected"
+          name="expectedOutput"
+          maxLength={2_000}
+          placeholder="填写本次投入预期形成的结果"
+        />
+      </Field>
       <div className="flex gap-2 md:col-span-2 xl:col-span-4">
         <Button type="submit" disabled={disabled}>创建</Button>
         <Button type="button" variant="outline" onClick={onCancel} disabled={disabled}>取消</Button>
@@ -1395,30 +1821,46 @@ function SegmentInspector({
   canvasSegment,
   model,
   initialZoom,
+  initialCenterMs,
   detail,
   detailRange,
   detailState,
   detailError,
   changes,
+  historyState,
+  historyLoadingMore,
+  historyError,
+  hasMoreChanges,
   disabled,
   onRun,
+  onRetryDetail,
+  onLoadMoreChanges,
+  onRetryHistory,
   onDirtyChange,
   onRangeChange,
 }: {
   canvasSegment: TimeCanvasModel["segments"][number] | null;
   model: TimeCanvasModel;
   initialZoom?: TimeCanvasZoom;
+  initialCenterMs: number;
   detail: WorkSegmentDetail | null;
   detailRange: { startMs: number; endMs: number } | null;
   detailState: "IDLE" | "LOADING" | "READY" | "ERROR";
   detailError: string;
   changes: SegmentChange[];
+  historyState: "IDLE" | "LOADING" | "READY" | "ERROR";
+  historyLoadingMore: boolean;
+  historyError: string;
+  hasMoreChanges: boolean;
   disabled: boolean;
   onRun: (
     action: () => Promise<ProjectManagementActionResult<unknown>>,
     successMessage: string,
     rollback?: () => void,
   ) => void;
+  onRetryDetail: () => void;
+  onLoadMoreChanges: () => void;
+  onRetryHistory: () => void;
   onDirtyChange: (dirty: boolean) => void;
   onRangeChange: (range: { startMs: number; endMs: number }) => void;
 }) {
@@ -1435,7 +1877,14 @@ function SegmentInspector({
     );
   }
   if (detailState === "ERROR") {
-    return <aside className="rounded-xl border border-destructive/30 bg-destructive/5 p-5 text-sm text-destructive" role="alert">投入详情加载失败：{detailError}</aside>;
+    return (
+      <aside className="rounded-xl border border-destructive/30 bg-destructive/5 p-5 text-sm text-destructive" role="alert">
+        <p>投入详情加载失败：{detailError}</p>
+        <Button className="mt-3" type="button" size="sm" variant="outline" disabled={disabled} onClick={onRetryDetail}>
+          重试详情
+        </Button>
+      </aside>
+    );
   }
   if (!detail || !detailRange || detailState === "LOADING") {
     return <aside className="rounded-xl border border-border bg-card p-5 text-sm text-muted-foreground">正在读取投入详情…</aside>;
@@ -1444,11 +1893,7 @@ function SegmentInspector({
   const plannedEditable = detail.type === "PLANNED" && !["CONFIRMED", "CANCELLED"].includes(detail.status);
   const detailModel: TimeCanvasModel = {
     ...model,
-    rows: model.rows.filter((row) => row.id === canvasSegment.rowId),
-    anchors: model.anchors.filter((anchor) => anchor.rowId === canvasSegment.rowId),
-    phaseBands: model.phaseBands?.filter((band) => band.rowId === canvasSegment.rowId),
     segments: model.segments
-      .filter((segment) => segment.rowId === canvasSegment.rowId)
       .map((segment) => ({
         ...segment,
         ...(segment.id === canvasSegment.id
@@ -1482,14 +1927,17 @@ function SegmentInspector({
       </div>
 
       <div className="min-w-0 overflow-hidden rounded-xl border border-border">
+        <h3 className="border-b border-border px-3 py-2 text-sm font-semibold">当前时间线上下文</h3>
         <TimeCanvas
           mode="RESOURCE_PLANNER"
           model={detailModel}
           presentation="COMPACT"
           initialZoom={initialZoom}
+          initialCenterMs={initialCenterMs}
           selection={{ kind: "SEGMENT", id: detail.id }}
           display={{ showActual: true, showBusy: true, showInspector: false }}
           interaction={editable ? {
+            desktopOnlySegmentTransform: true,
             onSegmentTransform: (request) => {
               if (request.segmentId !== detail.id) return;
               onRangeChange({ startMs: request.startMs, endMs: request.endMs });
@@ -1499,9 +1947,11 @@ function SegmentInspector({
         />
       </div>
 
-      {editable && (
+      <section className="space-y-3 border-t border-border pt-4" aria-labelledby="segment-basic-heading">
+        <h3 id="segment-basic-heading" className="text-sm font-semibold">基本信息</h3>
+      {editable ? (
         <form
-          className="grid gap-3"
+          className="grid gap-3 md:grid-cols-2"
           aria-label="编辑投入详情"
           onChange={() => onDirtyChange(true)}
           onSubmit={(event) => {
@@ -1518,28 +1968,34 @@ function SegmentInspector({
                 priority: String(form.get("priority") ?? detail.priority),
                 expectedOutput: String(form.get("expectedOutput") ?? ""),
                 actualOutput: String(form.get("actualOutput") ?? ""),
-                completionPercent: detail.type === "ACTUAL" ? numberOrNull(form.get("completionPercent")) : undefined,
               }),
               "已更新投入详情",
             );
           }}
         >
-          <Field label="开始" htmlFor="inspect-start"><Input id="inspect-start" name="startAt" type="datetime-local" value={toLocal(detailRange.startMs)} onChange={(event) => onRangeChange({ startMs: Date.parse(shanghaiDateTimeLocalToIso(event.target.value)), endMs: detailRange.endMs })} required /></Field>
-          <Field label="结束" htmlFor="inspect-end"><Input id="inspect-end" name="endAt" type="datetime-local" value={toLocal(detailRange.endMs)} onChange={(event) => onRangeChange({ startMs: detailRange.startMs, endMs: Date.parse(shanghaiDateTimeLocalToIso(event.target.value)) })} required /></Field>
-          <Field label="内容" htmlFor="inspect-content"><Textarea id="inspect-content" name="content" defaultValue={detail.content} maxLength={2_000} required /></Field>
-          <div className="grid gap-2">
-            <Field label="完成比例" htmlFor="inspect-completion"><Input id="inspect-completion" name="completionPercent" type="number" min="0" max="100" disabled={detail.type !== "ACTUAL"} defaultValue={detail.completionPercent ?? ""} /></Field>
-          </div>
+          <SegmentRangeFields range={detailRange} onRangeChange={onRangeChange} />
+          <Field label="内容" htmlFor="inspect-content" className="md:col-span-2"><Textarea id="inspect-content" name="content" defaultValue={detail.content} maxLength={2_000} required /></Field>
           <Field label="优先级" htmlFor="inspect-priority"><select id="inspect-priority" name="priority" className={selectClass} defaultValue={detail.priority}>{Object.entries(taskPriorityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>
-          <Field label="预期输出" htmlFor="inspect-expected"><Textarea id="inspect-expected" name="expectedOutput" defaultValue={detail.expectedOutput} /></Field>
-          <Field label="实际输出" htmlFor="inspect-actual"><Textarea id="inspect-actual" name="actualOutput" defaultValue={detail.actualOutput} /></Field>
-          <Input name="reason" aria-label="修改原因" placeholder="修改原因（可选）" />
-          <Button type="submit" disabled={disabled}>保存</Button>
+          <Field label="预期输出" htmlFor="inspect-expected" className="md:col-span-2"><Textarea id="inspect-expected" name="expectedOutput" defaultValue={detail.expectedOutput} maxLength={2_000} /></Field>
+          <Field label="实际输出" htmlFor="inspect-actual" className="md:col-span-2"><Textarea id="inspect-actual" name="actualOutput" defaultValue={detail.actualOutput} maxLength={2_000} /></Field>
+          <Input className="md:col-span-2" name="reason" aria-label="修改原因" placeholder="修改原因（可选）" />
+          <Button className="md:col-span-2 md:w-fit" type="submit" disabled={disabled}>保存基本信息</Button>
         </form>
+      ) : (
+        <dl className="grid gap-3 text-sm md:grid-cols-2">
+          <ReadOnlyValue label="开始" value={formatIsoDateTime(detail.startAt)} />
+          <ReadOnlyValue label="结束" value={formatIsoDateTime(detail.endAt)} />
+          <ReadOnlyValue label="内容" value={detail.content} wide />
+          <ReadOnlyValue label="优先级" value={taskPriorityLabels[detail.priority]} />
+          <ReadOnlyValue label="预期输出" value={detail.expectedOutput || "未填写"} wide />
+          <ReadOnlyValue label="实际输出" value={detail.actualOutput || "未填写"} wide />
+        </dl>
       )}
+      </section>
 
       {plannedEditable && canvasSegment.permissions.canConfirm && (
         <div className="space-y-3 border-t border-border pt-4">
+          <h3 className="text-sm font-semibold">确认、取消与删除</h3>
           <Button type="button" className="w-full" disabled={disabled} onClick={() => onRun(() => confirmPlannedSegment({ segmentId: detail.id, expectedUpdatedAt: detail.updatedAt, reason: "投入详情完整确认" }), "已完整确认并生成 Actual")}>完整确认</Button>
           <PartialConfirmForm
             detail={detail}
@@ -1562,13 +2018,24 @@ function SegmentInspector({
         <p className="mt-2 text-xs text-muted-foreground">
           关联对象：{detail.task?.title ?? "独立投入"}
         </p>
+        {historyState === "LOADING" && (
+          <p className="mt-2 text-sm text-muted-foreground" role="status">
+            正在加载变更历史…
+          </p>
+        )}
+        {historyError && (
+          <div className="mt-2 rounded-lg bg-destructive/10 p-3 text-sm text-destructive" role="alert">
+            <p>变更历史加载失败：{historyError}</p>
+            <Button className="mt-2" type="button" size="sm" variant="outline" disabled={disabled} onClick={onRetryHistory}>重试历史</Button>
+          </div>
+        )}
         {detail.plannedSources.length > 0 && (
           <div className="mt-2 text-xs">
             <p className="font-medium">由本 Planned 生成的 Actual</p>
             <ul className="mt-1 space-y-1 text-muted-foreground">
               {detail.plannedSources.map((source) => (
                 <li key={source.id} className="break-words">
-                  覆盖 {formatIsoRange(source.coveredStartAt, source.coveredEndAt)} · Actual {formatIsoRange(source.actualSegment.startAt, source.actualSegment.endAt)}{source.actualSegment.deletedAt ? "（已删除）" : ""}
+                  覆盖 {formatIsoRange(source.coveredStartAt, source.coveredEndAt)} · Actual {formatIsoRange(source.actualSegment.startAt, source.actualSegment.endAt)}
                 </li>
               ))}
             </ul>
@@ -1586,10 +2053,47 @@ function SegmentInspector({
             </ul>
           </div>
         )}
-        {changes.length === 0 ? <p className="mt-2 text-sm text-muted-foreground">暂无可见变更。</p> : (
+        {changes.length === 0 ? (historyState === "READY" && <p className="mt-2 text-sm text-muted-foreground">暂无可见变更。</p>) : (
           <ol className="mt-2 space-y-2 text-xs">
-            {changes.map((change) => <li key={change.id} className="rounded border border-border p-2"><span className="font-medium">{change.action}</span> · {new Date(change.createdAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}<br />{change.reason || "未填写原因"}</li>)}
+            {changes.map((change) => (
+              <li key={change.key} className="rounded border border-border p-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-medium">{change.action}</span>
+                  <time className="text-muted-foreground" dateTime={change.createdAt}>
+                    {formatIsoDateTime(change.createdAt)}
+                  </time>
+                </div>
+                <p className="mt-1 text-muted-foreground">操作者：{change.actorName}</p>
+                <p className="mt-1 break-words">原因：{change.reason}</p>
+                {change.differences.length > 0 && (
+                  <ul className="mt-2 space-y-1 border-t border-border pt-2">
+                    {change.differences.map((difference, index) => (
+                      <li key={`${difference.label}:${index}`} className="break-words">
+                        {difference.label}：{difference.before} → {difference.after}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </li>
+            ))}
           </ol>
+        )}
+        {hasMoreChanges && (
+          <Button
+            className="mt-3"
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={disabled || historyLoadingMore}
+            onClick={onLoadMoreChanges}
+          >
+            {historyLoadingMore ? "正在加载更多变更…" : "加载更多变更"}
+          </Button>
+        )}
+        {historyState === "READY" && changes.length > 0 && !hasMoreChanges && (
+          <p className="mt-3 text-xs text-muted-foreground" role="status">
+            已加载全部变更。
+          </p>
         )}
       </section>
     </aside>
@@ -1606,6 +2110,89 @@ function ReasonAction({ label, destructive, disabled, onSubmit }: { label: strin
       <Input name="reason" aria-label={`${label}原因`} placeholder={`${label}原因`} required />
       <Button type="submit" variant={destructive ? "destructive" : "outline"} disabled={disabled}>{label}</Button>
     </form>
+  );
+}
+
+function SegmentRangeFields({
+  range,
+  onRangeChange,
+}: {
+  range: TimeCanvasRange;
+  onRangeChange: (range: TimeCanvasRange) => void;
+}) {
+  const [rangeInputs, setRangeInputs] = useState<{
+    baseStartMs: number;
+    baseEndMs: number;
+    startValue: string;
+    endValue: string;
+  } | null>(null);
+  const startInputRef = useRef<HTMLInputElement>(null);
+  const endInputRef = useRef<HTMLInputElement>(null);
+  const activeRangeInputs = rangeInputs?.baseStartMs === range.startMs &&
+      rangeInputs.baseEndMs === range.endMs
+    ? rangeInputs
+    : null;
+  const startValue = activeRangeInputs?.startValue ?? toLocal(range.startMs);
+  const endValue = activeRangeInputs?.endValue ?? toLocal(range.endMs);
+  const pendingRange = validateSegmentRangeInputs(startValue, endValue);
+  const rangeError = activeRangeInputs && !pendingRange.ok
+    ? pendingRange.message
+    : "";
+
+  useEffect(() => {
+    startInputRef.current?.setCustomValidity(rangeError);
+    endInputRef.current?.setCustomValidity(rangeError);
+  }, [rangeError]);
+
+  function updateRangeInputs(nextStartValue: string, nextEndValue: string) {
+    const nextRange = validateSegmentRangeInputs(nextStartValue, nextEndValue);
+    if (!nextRange.ok) {
+      setRangeInputs({
+        baseStartMs: range.startMs,
+        baseEndMs: range.endMs,
+        startValue: nextStartValue,
+        endValue: nextEndValue,
+      });
+      return;
+    }
+    setRangeInputs(null);
+    onRangeChange({ startMs: nextRange.startMs, endMs: nextRange.endMs });
+  }
+
+  return (
+    <>
+      <Field label="开始" htmlFor="inspect-start">
+        <Input
+          ref={startInputRef}
+          id="inspect-start"
+          name="startAt"
+          type="datetime-local"
+          value={startValue}
+          aria-invalid={Boolean(rangeError)}
+          aria-describedby={rangeError ? "inspect-range-error" : undefined}
+          onChange={(event) => updateRangeInputs(event.target.value, endValue)}
+          required
+        />
+      </Field>
+      <Field label="结束" htmlFor="inspect-end">
+        <Input
+          ref={endInputRef}
+          id="inspect-end"
+          name="endAt"
+          type="datetime-local"
+          value={endValue}
+          aria-invalid={Boolean(rangeError)}
+          aria-describedby={rangeError ? "inspect-range-error" : undefined}
+          onChange={(event) => updateRangeInputs(startValue, event.target.value)}
+          required
+        />
+      </Field>
+      {rangeError && (
+        <p id="inspect-range-error" className="text-sm text-destructive md:col-span-2" role="alert">
+          {rangeError}
+        </p>
+      )}
+    </>
   );
 }
 
@@ -1635,6 +2222,7 @@ function PartialConfirmForm({
     <form
       className="grid gap-2"
       aria-label="部分确认"
+      onChange={() => onDirtyChange(true)}
       onSubmit={(event) => {
         event.preventDefault();
         const form = new FormData(event.currentTarget);
@@ -1657,6 +2245,11 @@ function PartialConfirmForm({
             coveredStartAt: detail.startAt,
             coveredEndAt,
             reason,
+            actual: {
+              content: String(form.get("content") ?? ""),
+              expectedOutput: String(form.get("expectedOutput") ?? ""),
+              actualOutput: String(form.get("actualOutput") ?? ""),
+            },
           }),
           "已确认计划前段并保留剩余计划",
         );
@@ -1690,7 +2283,8 @@ function PartialConfirmForm({
         type="datetime-local"
         value={toLocal(Date.parse(coveredEndAt))}
         onChange={(event) => {
-          const nextMs = Date.parse(shanghaiDateTimeLocalToIso(event.target.value));
+          const nextMs = parseShanghaiLocalMs(event.target.value);
+          if (nextMs === null) return;
           const nextMinutes = Math.round((nextMs - startMs) / 60_000);
           setCoveredMinutes(Math.max(1, Math.min(durationMinutes, nextMinutes)));
           onDirtyChange(true);
@@ -1698,6 +2292,32 @@ function PartialConfirmForm({
         required
       />
       <Input name="reason" aria-label="部分确认原因" defaultValue="投入详情部分确认" required />
+      <Field label="实际投入内容" htmlFor={`partial-content-${detail.id}`}>
+        <Textarea
+          id={`partial-content-${detail.id}`}
+          name="content"
+          defaultValue={detail.content}
+          maxLength={2_000}
+          required={coveredMinutes < durationMinutes}
+        />
+      </Field>
+      <Field label="预期输出" htmlFor={`partial-expected-${detail.id}`}>
+        <Textarea
+          id={`partial-expected-${detail.id}`}
+          name="expectedOutput"
+          defaultValue={detail.expectedOutput}
+          maxLength={2_000}
+          required={coveredMinutes < durationMinutes}
+        />
+      </Field>
+      <Field label="实际输出" htmlFor={`partial-actual-${detail.id}`}>
+        <Textarea
+          id={`partial-actual-${detail.id}`}
+          name="actualOutput"
+          maxLength={2_000}
+          required={coveredMinutes < durationMinutes}
+        />
+      </Field>
       <Button type="submit" variant="outline" disabled={disabled}>
         {coveredMinutes >= durationMinutes ? "完整确认" : "部分确认"}
       </Button>
@@ -1709,13 +2329,47 @@ function Field({ label, htmlFor, className, children }: { label: string; htmlFor
   return <div className={cn("grid gap-1.5", className)}><Label htmlFor={htmlFor}>{label}</Label>{children}</div>;
 }
 
-function numberOrNull(value: FormDataEntryValue | null) {
-  const text = String(value ?? "").trim();
-  return text ? Number(text) : null;
+function ReadOnlyValue({
+  label,
+  value,
+  wide = false,
+}: {
+  label: string;
+  value: string;
+  wide?: boolean;
+}) {
+  return (
+    <div className={cn("min-w-0", wide && "md:col-span-2")}>
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="mt-1 break-words">{value}</dd>
+    </div>
+  );
 }
 
 function toLocal(timeMs: number) {
   return isoToShanghaiDateTimeLocal(new Date(timeMs).toISOString());
+}
+
+function parseShanghaiLocalMs(value: string) {
+  const parsed = Date.parse(shanghaiDateTimeLocalToIso(value));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function validateSegmentRangeInputs(startValue: string, endValue: string):
+  | { ok: true; startMs: number; endMs: number }
+  | { ok: false; message: string } {
+  const startMs = parseShanghaiLocalMs(startValue);
+  const endMs = parseShanghaiLocalMs(endValue);
+  if (startMs === null || endMs === null) {
+    return { ok: false, message: "请填写有效的开始和结束时间。" };
+  }
+  if (endMs <= startMs) {
+    return { ok: false, message: "结束时间必须晚于开始时间。" };
+  }
+  if (endMs - startMs > 31 * DAY_MS) {
+    return { ok: false, message: "单条投入最长 31 天，请缩短待创建区间。" };
+  }
+  return { ok: true, startMs, endMs };
 }
 
 function formatRange(startMs: number, endMs: number) {
@@ -1732,6 +2386,28 @@ function formatRange(startMs: number, endMs: number) {
 
 function formatIsoRange(startAt: string, endAt: string) {
   return formatRange(Date.parse(startAt), Date.parse(endAt));
+}
+
+function formatIsoDateTime(value: string) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(new Date(value));
+}
+
+function explicitRangeForDraft(range: TimeCanvasRange, draft: CreateDraft) {
+  const startDayMs = Date.parse(`${formatShanghaiDate(draft.startMs)}T00:00:00.000+08:00`);
+  const endDayMs = Date.parse(`${formatShanghaiDate(draft.endMs)}T00:00:00.000+08:00`);
+  const draftEndExclusive = draft.endMs > endDayMs ? endDayMs + DAY_MS : endDayMs;
+  return {
+    startMs: Math.min(range.startMs, startDayMs),
+    endMs: Math.max(range.endMs, draftEndExclusive),
+  };
 }
 
 const selectClass = "h-8 min-w-0 rounded-lg border border-input bg-background px-2 text-sm";

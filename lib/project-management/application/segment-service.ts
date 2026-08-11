@@ -93,7 +93,6 @@ export type WorkSegmentDto = {
   priority: TaskPriority;
   expectedOutput: string;
   actualOutput: string;
-  completionPercent: number | null;
   taskId: string | null;
   sourceSplitFromId: string | null;
   deletedAt: string | null;
@@ -249,17 +248,7 @@ export async function updateWorkSegment(
       : segment.taskId;
     const nextStartAt = parsed.startAt ?? segment.startAt;
     const nextEndAt = parsed.endAt ?? segment.endAt;
-    const nextCompletionPercent =
-      parsed.completionPercent !== undefined
-        ? parsed.completionPercent
-        : decimalToNumber(segment.completionPercent);
-
     assertValidSegmentRange(nextStartAt, nextEndAt);
-    if (segment.type === "PLANNED" && nextCompletionPercent != null) {
-      throw validationError("Planned Segment 不能填写完成比例", {
-        completionPercent: ["Planned Segment 不能填写完成比例"],
-      });
-    }
     if (Object.hasOwn(parsed, "taskId")) {
       await assertSegmentReferenceTx(tx, {
         actor: refreshedActor,
@@ -288,8 +277,6 @@ export async function updateWorkSegment(
           parsed.actualOutput !== undefined
             ? parsed.actualOutput
             : segment.actualOutput,
-        completionPercent:
-          segment.type === "ACTUAL" ? decimalOrNull(nextCompletionPercent) : null,
         taskId: nextTaskId,
         updatedByAccountId: refreshedActor.accountId,
       },
@@ -642,9 +629,7 @@ export async function confirmPlannedSegment(
         actor: refreshedActor,
         personId: preflightSegment.personId,
         type: "ACTUAL",
-        taskId: Object.hasOwn(parsed.actual, "taskId")
-          ? parsed.actual.taskId ?? null
-          : preflightSegment.taskId,
+        taskId: parsed.actual.taskId ?? null,
       });
     }
     const associationLocks = await lockSegmentAssociationTasksTx(tx, {
@@ -792,19 +777,9 @@ export async function partiallyConfirmSegment(
     const preflightSegment = await loadSegmentForMutationTx(tx, parsed.segmentId);
     assertSegmentVisible(refreshedActor, preflightSegment);
     assertCanManageSegment(refreshedActor, preflightSegment);
-    if (Object.hasOwn(parsed.actual, "taskId")) {
-      await assertSegmentReferenceTx(tx, {
-        actor: refreshedActor,
-        personId: preflightSegment.personId,
-        type: "ACTUAL",
-        taskId: Object.hasOwn(parsed.actual, "taskId")
-          ? parsed.actual.taskId ?? null
-          : preflightSegment.taskId,
-      });
-    }
     const associationLocks = await lockSegmentAssociationTasksTx(tx, {
       segmentIds: [parsed.segmentId],
-      prospectiveTaskIds: parsed.actual.taskId ? [parsed.actual.taskId] : [],
+      prospectiveTaskIds: [],
     });
     await lockWorkSegmentTx(tx, parsed.segmentId);
     const segment = await loadSegmentForMutationTx(tx, parsed.segmentId);
@@ -1021,8 +996,7 @@ async function createWorkSegmentTx(
       priority: input.priority,
       expectedOutput: input.expectedOutput,
       actualOutput: input.actualOutput,
-      completionPercent:
-        input.type === "ACTUAL" ? decimalOrNull(input.completionPercent) : null,
+      completionPercent: null,
       taskId: input.taskId ?? null,
       createdByAccountId: actor.accountId,
       updatedByAccountId: actor.accountId,
@@ -1075,7 +1049,7 @@ async function createActualSegmentTx(
       priority: input.priority,
       expectedOutput: input.expectedOutput,
       actualOutput: input.actualOutput,
-      completionPercent: decimalOrNull(input.completionPercent),
+      completionPercent: null,
       taskId: input.taskId ?? null,
       createdByAccountId: actor.accountId,
       updatedByAccountId: actor.accountId,
@@ -1255,7 +1229,7 @@ async function createActualFromPlannedTx(
       expectedOutput:
         input.actualInput.expectedOutput ?? input.planned.expectedOutput,
       actualOutput: input.actualInput.actualOutput ?? "",
-      completionPercent: decimalOrNull(input.actualInput.completionPercent),
+      completionPercent: null,
       taskId: actualTaskId,
       createdByAccountId: input.actor.accountId,
       updatedByAccountId: input.actor.accountId,
@@ -1385,7 +1359,7 @@ async function notifySegmentConfirmationDueTx(
     summary: `计划投入「${segment.content}」已到结束时间，请确认实际投入`,
     entityType: "WorkSegment",
     entityId: segment.id,
-    linkPath: "/progress",
+    linkPath: `/progress?focus=${segment.id}`,
     mandatory: false,
     recipients,
     context: {
@@ -1817,15 +1791,6 @@ function tagIdsOf(segment: Pick<SegmentForMutation, "tags">) {
   return segment.tags.map((tag) => tag.tagId).sort();
 }
 
-function decimalOrNull(value: number | Prisma.Decimal | null | undefined) {
-  if (value === null || value === undefined) return null;
-  return new Prisma.Decimal(value);
-}
-
-function decimalToNumber(value: Prisma.Decimal | null) {
-  return value == null ? null : Number(value.toString());
-}
-
 function snapshotSegment(segment: SegmentForMutation): Prisma.InputJsonObject {
   return {
     id: segment.id,
@@ -1838,7 +1803,6 @@ function snapshotSegment(segment: SegmentForMutation): Prisma.InputJsonObject {
     priority: segment.priority,
     expectedOutput: segment.expectedOutput,
     actualOutput: segment.actualOutput,
-    completionPercent: decimalToNumber(segment.completionPercent),
     taskId: segment.taskId,
     sourceSplitFromId: segment.sourceSplitFromId,
     deletedAt: segment.deletedAt?.toISOString() ?? null,
@@ -1859,7 +1823,6 @@ export function toWorkSegmentDto(segment: SegmentForMutation): WorkSegmentDto {
     priority: segment.priority,
     expectedOutput: segment.expectedOutput,
     actualOutput: segment.actualOutput,
-    completionPercent: decimalToNumber(segment.completionPercent),
     taskId: segment.taskId,
     sourceSplitFromId: segment.sourceSplitFromId,
     deletedAt: segment.deletedAt?.toISOString() ?? null,

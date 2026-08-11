@@ -4,7 +4,7 @@ import { prisma } from "../lib/prisma";
 import { loginAsTestUser } from "./helpers/functional-fixtures";
 
 test.describe("time segment allocation UI", () => {
-  test("我的时间默认使用周尺度并保留独立底部滚动条", async ({
+  test("我的工作默认使用周尺度并保留独立底部滚动条", async ({
     context,
     page,
     baseURL,
@@ -28,7 +28,7 @@ test.describe("time segment allocation UI", () => {
     });
     await loginAsTestUser(context, baseURL, { openId, name });
 
-    await page.goto("/progress/my-timeline");
+    await page.goto("/progress");
     await expect(page.getByText("当前没有有效参与的 Task。", { exact: true })).toBeVisible();
     await expect(page.getByLabel("选择日期")).toHaveCount(0);
     await expect(page.getByTestId("time-canvas-range-pan-bar")).toHaveCount(0);
@@ -61,10 +61,13 @@ test.describe("time segment allocation UI", () => {
       ),
     ).toBe(true);
 
-    await page.goto(`/progress/my-timeline?focus=${randomUUID()}`);
+    await page.goto(`/progress?focus=${randomUUID()}`);
     await expect(page).toHaveURL(/focusError=1/);
     await expect(page.getByText(
       "无法定位该时间对象，请确认链接仍然有效且你有权查看。",
     )).toBeVisible();
+
+    const retiredPage = await page.goto("/progress/my-timeline");
+    expect(retiredPage?.status()).toBe(404);
   });
 });

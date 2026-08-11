@@ -88,6 +88,25 @@ const taskOptionSelect = {
       },
     },
   },
+  currentPlanVersion: {
+    select: {
+      versionNo: true,
+      nodes: {
+        where: {
+          node: { type: "TERMINATION", status: "ACTIVE", deletedAt: null },
+        },
+        take: 1,
+        select: {
+          node: {
+            select: {
+              id: true,
+              termination: { select: { name: true, plannedAt: true } },
+            },
+          },
+        },
+      },
+    },
+  },
 } satisfies Prisma.TaskSelect;
 
 type PersonOptionRow = Prisma.PersonGetPayload<{
@@ -539,6 +558,15 @@ function taskOption(task: TaskOptionRow) {
               task.activeMilestoneNode.milestone.expectedCompletedAt.toISOString(),
           }
         : null,
+    activeTermination: task.currentPlanVersion.nodes[0]?.node.termination
+      ? {
+          nodeId: task.currentPlanVersion.nodes[0].node.id,
+          name: task.currentPlanVersion.nodes[0].node.termination.name,
+          plannedAt:
+            task.currentPlanVersion.nodes[0].node.termination.plannedAt.toISOString(),
+        }
+      : null,
+    currentPlanVersionNo: task.currentPlanVersion.versionNo,
     permission: { canView: true },
   };
 }

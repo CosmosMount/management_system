@@ -44,10 +44,12 @@ import type {
   TimeCanvasAnchor,
   TimeCanvasAnchorMoveRequest,
   TimeCanvasAnchorMoveResolution,
+  TimeCanvasBrushRequest,
   TimeCanvasDisplayOptions,
   TimeCanvasInteractionOptions,
   TimeCanvasPhaseBand,
   TimeCanvasProps,
+  TimeCanvasRange,
   TimeCanvasRow,
   TimeCanvasSegment,
   TimeCanvasSelection,
@@ -193,7 +195,10 @@ export function TimeCanvas({
     estimateSize: (index) => model.rows[index]?.height ?? 48,
     getItemKey: (index) => model.rows[index]?.id ?? index,
     scrollMargin: AXIS_HEIGHT,
-    overscan: 6,
+    // A creation draft can cross rows while the pointer is captured. Keeping
+    // the bounded current row page mounted prevents virtualization from
+    // discarding the active drag state when vertical edge scrolling.
+    overscan: interaction?.creationRange ? model.rows.length : 6,
   });
   const virtualRows = rowVirtualizer.getVirtualItems();
   const virtualRowSignature = virtualRows
@@ -556,6 +561,13 @@ export function TimeCanvas({
                           selection={selection}
                           activeFocusKey={currentFocusKey}
                           interaction={interaction}
+                          creationRows={model.rows
+                            .filter((candidate) => candidate.kind === "PERSON" && candidate.editable)
+                            .map((candidate) => ({
+                              id: candidate.id,
+                              sourceId: candidate.sourceId,
+                              label: candidate.label,
+                            }))}
                           onSelect={select}
                           onObjectFocus={setActiveFocusKey}
                         />
@@ -798,6 +810,7 @@ function TimelineRow({
   selection,
   activeFocusKey,
   interaction,
+  creationRows,
   onSelect,
   onObjectFocus,
 }: {
@@ -814,6 +827,7 @@ function TimelineRow({
   selection: TimeCanvasSelection;
   activeFocusKey: string | null;
   interaction: TimeCanvasInteractionOptions | undefined;
+  creationRows: Array<{ id: string; sourceId: string; label: string }>;
   onSelect: (selection: TimeCanvasSelection) => void;
   onObjectFocus: (key: string) => void;
 }) {
@@ -897,8 +911,12 @@ function TimelineRow({
         "relative overflow-hidden bg-background",
         canBrush && "cursor-crosshair touch-none",
         canCreateAnchor && "cursor-cell",
+        "data-[creation-drop-state=valid]:bg-emerald-50/70 data-[creation-drop-state=valid]:ring-2 data-[creation-drop-state=valid]:ring-inset data-[creation-drop-state=valid]:ring-emerald-500",
+        "data-[creation-drop-state=invalid]:bg-destructive/10 data-[creation-drop-state=invalid]:ring-2 data-[creation-drop-state=invalid]:ring-inset data-[creation-drop-state=invalid]:ring-destructive",
       )}
       data-canvas-row={row.id}
+      data-canvas-row-source={row.sourceId}
+      data-canvas-row-kind={row.kind}
       data-anchor-preview={anchorPreview?.anchorId ?? ""}
       aria-label={`${row.label} 时间行`}
       onPointerDown={(event) => {
@@ -997,15 +1015,12 @@ function TimelineRow({
         />
       )}
       {!brushRange && creationRange && (
-        <span
-          className="pointer-events-none absolute inset-y-1 z-[15] rounded border-2 border-dashed border-primary bg-primary/15"
-          style={intervalToRect(
-            creationRange.startMs,
-            creationRange.endMs,
-            scale,
-          )}
-          aria-hidden="true"
-          data-testid="time-canvas-creation-range"
+        <CreationRangeBlock
+          range={creationRange}
+          scale={scale}
+          rowTargets={creationRows}
+          onTransform={interaction?.onCreationRangeTransform}
+          onInvalidDrop={interaction?.onInvalidDrop}
         />
       )}
       {row.kind === "PLAN" && (
@@ -1093,6 +1108,255 @@ function TimelineRow({
 
       <TodayLine scale={scale} nowMs={nowMs} />
     </div>
+  );
+}
+
+function CreationRangeBlock({
+  range,
+  scale,
+  rowTargets,
+  onTransform,
+  onInvalidDrop,
+}: {
+  range: TimeCanvasBrushRequest;
+  scale: ReturnType<typeof createTimeScale>;
+  rowTargets: Array<{ id: string; sourceId: string; label: string }>;
+  onTransform: TimeCanvasInteractionOptions["onCreationRangeTransform"];
+  onInvalidDrop: TimeCanvasInteractionOptions["onInvalidDrop"];
+}) {
+  const [drag, setDrag] = useState<{
+    pointerId: number;
+    kind: "MOVE" | "RESIZE_START" | "RESIZE_END";
+    clientX: number;
+    scrollLeft: number;
+    startMs: number;
+    endMs: number;
+  } | null>(null);
+  const [preview, setPreview] = useState<TimeCanvasRange | null>(null);
+  const [dropState, setDropState] = useState<"valid" | "invalid" | null>(null);
+  const previewFrameRef = useRef<number | null>(null);
+  const pendingPointerRef = useRef<{
+    range: TimeCanvasRange;
+    target: ReturnType<typeof creationDropTargetAtPoint>;
+  } | null>(null);
+  const highlightedRowRef = useRef<HTMLElement | null>(null);
+  const displayed = preview ?? range;
+  const rect = intervalToRect(displayed.startMs, displayed.endMs, scale);
+  const currentRowLabel = rowTargets.find((row) => row.id === range.rowId)?.label;
+
+  function submit(
+    kind: "MOVE" | "RESIZE_START" | "RESIZE_END" | "KEYBOARD_MOVE",
+    next: TimeCanvasRange,
+    targetRowId = range.rowId,
+    targetSourceId = range.sourceId,
+  ) {
+    onTransform?.({ kind, ...next, targetRowId, targetSourceId });
+  }
+
+  function applyDropTarget(
+    target: ReturnType<typeof creationDropTargetAtPoint> | null,
+  ) {
+    highlightedRowRef.current?.removeAttribute("data-creation-drop-state");
+    highlightedRowRef.current = target?.element ?? null;
+    if (target?.element) {
+      target.element.dataset.creationDropState = target.valid ? "valid" : "invalid";
+    }
+    setDropState(target ? (target.valid ? "valid" : "invalid") : null);
+  }
+
+  function clearPendingPointerFrame() {
+    if (previewFrameRef.current !== null) {
+      window.cancelAnimationFrame(previewFrameRef.current);
+      previewFrameRef.current = null;
+    }
+    pendingPointerRef.current = null;
+  }
+
+  useEffect(() => () => {
+    if (previewFrameRef.current !== null) {
+      window.cancelAnimationFrame(previewFrameRef.current);
+    }
+    highlightedRowRef.current?.removeAttribute("data-creation-drop-state");
+  }, []);
+
+  return (
+    <button
+      type="button"
+      className={cn(
+        "pointer-events-none absolute inset-y-1 z-[15] rounded border-2 border-dashed border-primary bg-primary/15 text-[10px] font-medium text-primary outline-none focus-visible:ring-2 focus-visible:ring-ring sm:pointer-events-auto sm:touch-none",
+        dropState === "valid" && "border-emerald-600 bg-emerald-100/70 text-emerald-900",
+        dropState === "invalid" && "border-destructive bg-destructive/15 text-destructive",
+      )}
+      style={{ left: rect.left, width: rect.width }}
+      aria-label={`待创建投入${currentRowLabel ? `，${currentRowLabel}` : ""}，${formatRange(displayed.startMs, displayed.endMs)}；可移动、跨行或调整边缘`}
+      data-canvas-object
+      data-testid="time-canvas-creation-range"
+      data-drop-state={dropState ?? undefined}
+      onKeyDown={(event) => {
+        if (
+          event.altKey &&
+          (event.key === "ArrowUp" || event.key === "ArrowDown")
+        ) {
+          const currentIndex = rowTargets.findIndex((row) => row.id === range.rowId);
+          const target = rowTargets[
+            currentIndex + (event.key === "ArrowUp" ? -1 : 1)
+          ];
+          event.preventDefault();
+          event.stopPropagation();
+          if (!target) {
+            onInvalidDrop?.("当前方向没有其他可创建的人员行。");
+            return;
+          }
+          submit(
+            "KEYBOARD_MOVE",
+            { startMs: range.startMs, endMs: range.endMs },
+            target.id,
+            target.sourceId,
+          );
+          window.requestAnimationFrame(() => {
+            document
+              .querySelector<HTMLElement>("[data-testid='time-canvas-creation-range']")
+              ?.focus();
+          });
+          return;
+        }
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        if (!event.shiftKey && !event.altKey) return;
+        const direction = event.key === "ArrowLeft" ? -1 : 1;
+        const kind = event.altKey
+          ? event.shiftKey
+            ? "RESIZE_START"
+            : "RESIZE_END"
+          : "KEYBOARD_MOVE";
+        const deltaMs = direction * scale.snapMs;
+        const next = transformedRange(
+          {
+            kind: kind === "KEYBOARD_MOVE" ? "MOVE" : kind,
+            startMs: range.startMs,
+            endMs: range.endMs,
+          },
+          deltaMs,
+          scale.startMs,
+          scale.endMs,
+          scale.snapMs,
+        );
+        event.preventDefault();
+        event.stopPropagation();
+        submit(kind, next);
+      }}
+      onPointerDown={(event) => {
+        if (event.button !== 0 || !onTransform) return;
+        clearPendingPointerFrame();
+        applyDropTarget(null);
+        const target = event.target;
+        const handle = target instanceof HTMLElement
+          ? target.closest<HTMLElement>("[data-create-resize-handle]")?.dataset
+              .createResizeHandle
+          : undefined;
+        const kind = handle === "start"
+          ? "RESIZE_START"
+          : handle === "end"
+            ? "RESIZE_END"
+            : "MOVE";
+        event.preventDefault();
+        event.stopPropagation();
+        event.currentTarget.setPointerCapture(event.pointerId);
+        const scroller = event.currentTarget.closest<HTMLElement>(
+          "[data-testid='time-canvas-scroll']",
+        );
+        setDrag({
+          pointerId: event.pointerId,
+          kind,
+          clientX: event.clientX,
+          scrollLeft: scroller?.scrollLeft ?? 0,
+          startMs: range.startMs,
+          endMs: range.endMs,
+        });
+        setPreview({ startMs: range.startMs, endMs: range.endMs });
+      }}
+      onPointerMove={(event) => {
+        if (!drag || drag.pointerId !== event.pointerId) return;
+        const scroller = event.currentTarget.closest<HTMLElement>(
+          "[data-testid='time-canvas-scroll']",
+        );
+        if (scroller) edgeScrollCanvas(scroller, event.clientX, event.clientY);
+        const scrollDelta = (scroller?.scrollLeft ?? 0) - drag.scrollLeft;
+        const deltaMs = snapTime(
+          (event.clientX - drag.clientX + scrollDelta) * scale.msPerPixel,
+          scale.snapMs,
+          "round",
+          0,
+        );
+        pendingPointerRef.current = {
+          range: transformedRange(
+            drag,
+            deltaMs,
+            scale.startMs,
+            scale.endMs,
+            scale.snapMs,
+          ),
+          target: creationDropTargetAtPoint(
+            event.clientX,
+            event.clientY,
+            rowTargets,
+          ),
+        };
+        if (previewFrameRef.current !== null) return;
+        previewFrameRef.current = window.requestAnimationFrame(() => {
+          previewFrameRef.current = null;
+          const pending = pendingPointerRef.current;
+          pendingPointerRef.current = null;
+          if (!pending) return;
+          setPreview(pending.range);
+          applyDropTarget(pending.target);
+        });
+      }}
+      onPointerCancel={() => {
+        clearPendingPointerFrame();
+        applyDropTarget(null);
+        setDrag(null);
+        setPreview(null);
+      }}
+      onLostPointerCapture={() => {
+        clearPendingPointerFrame();
+        applyDropTarget(null);
+        setDrag(null);
+        setPreview(null);
+      }}
+      onPointerUp={(event) => {
+        if (!drag || drag.pointerId !== event.pointerId) return;
+        const next = pendingPointerRef.current?.range ?? preview ?? range;
+        const target = creationDropTargetAtPoint(
+          event.clientX,
+          event.clientY,
+          rowTargets,
+        );
+        clearPendingPointerFrame();
+        applyDropTarget(null);
+        setDrag(null);
+        setPreview(null);
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+          event.currentTarget.releasePointerCapture(event.pointerId);
+        }
+        if (!target.valid || !target.rowId || !target.sourceId) {
+          onInvalidDrop?.("待创建投入只能移动到当前已加载且可编辑的人员行。");
+          return;
+        }
+        submit(drag.kind, next, target.rowId, target.sourceId);
+      }}
+    >
+      <span
+        className="absolute inset-y-0 left-0 hidden w-3 cursor-ew-resize sm:block"
+        data-create-resize-handle="start"
+        aria-hidden="true"
+      />
+      <span className="sr-only">待创建投入</span>
+      <span
+        className="absolute inset-y-0 right-0 hidden w-3 cursor-ew-resize sm:block"
+        data-create-resize-handle="end"
+        aria-hidden="true"
+      />
+    </button>
   );
 }
 
@@ -1286,7 +1550,8 @@ function SegmentBlock({
     kind: "KEYBOARD_MOVE" | "RESIZE_END",
     direction: -1 | 1,
   ) {
-    if (!interaction?.onSegmentTransform) return;
+    const onSegmentTransform = interaction?.onSegmentTransform;
+    if (!onSegmentTransform || !directSegmentTransformAllowed(interaction)) return;
     if (kind === "KEYBOARD_MOVE" && !segment.permissions.canMove) return;
     if (kind === "RESIZE_END" && !segment.permissions.canResize) return;
     const duration = segment.endMs - segment.startMs;
@@ -1306,7 +1571,7 @@ function SegmentBlock({
             segment.startMs + scale.snapMs,
             scale.endMs,
           );
-    interaction.onSegmentTransform({
+    onSegmentTransform({
       segmentId: segment.id,
       kind,
       startMs: nextStart,
@@ -1318,7 +1583,8 @@ function SegmentBlock({
     <button
       type="button"
       className={cn(
-        "absolute z-10 flex h-5 min-w-px touch-none items-center gap-1 overflow-hidden rounded px-1 text-left text-[10px] outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
+        "absolute z-10 flex h-5 min-w-px items-center gap-1 overflow-hidden rounded px-1 text-left text-[10px] outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
+        interaction?.desktopOnlySegmentTransform ? "sm:touch-none" : "touch-none",
         segment.type === "PLANNED" &&
           "border border-dashed border-sky-500/70 bg-sky-100/90 text-sky-950 dark:bg-sky-950/60 dark:text-sky-50",
         segment.type === "ACTUAL" &&
@@ -1374,7 +1640,7 @@ function SegmentBlock({
         }
       }}
       onPointerDown={(event) => {
-        if (event.button !== 0 || !interaction?.onSegmentTransform) return;
+        if (event.button !== 0 || !directSegmentTransformAllowed(interaction)) return;
         const target = event.target;
         const handle =
           target instanceof HTMLElement
@@ -1464,7 +1730,10 @@ function SegmentBlock({
     >
       {segment.permissions.canResize && interaction?.onSegmentTransform && (
         <span
-          className="absolute inset-y-0 left-0 w-2 cursor-ew-resize"
+          className={cn(
+            "absolute inset-y-0 left-0 w-2 cursor-ew-resize",
+            interaction.desktopOnlySegmentTransform && "hidden sm:block",
+          )}
           data-resize-handle="start"
           aria-hidden="true"
         />
@@ -1472,7 +1741,10 @@ function SegmentBlock({
       <span className="truncate">{segment.title}</span>
       {segment.permissions.canResize && interaction?.onSegmentTransform && (
         <span
-          className="absolute inset-y-0 right-0 w-2 cursor-ew-resize"
+          className={cn(
+            "absolute inset-y-0 right-0 w-2 cursor-ew-resize",
+            interaction.desktopOnlySegmentTransform && "hidden sm:block",
+          )}
           data-resize-handle="end"
           aria-hidden="true"
         />
@@ -2027,7 +2299,11 @@ function transformedRange(
   return { startMs, endMs: startMs + duration };
 }
 
-function edgeScrollCanvas(scroller: HTMLElement, clientX: number) {
+function edgeScrollCanvas(
+  scroller: HTMLElement,
+  clientX: number,
+  clientY?: number,
+) {
   const bounds = scroller.getBoundingClientRect();
   const edge = 40;
   if (clientX < bounds.left + edge) {
@@ -2035,6 +2311,39 @@ function edgeScrollCanvas(scroller: HTMLElement, clientX: number) {
   } else if (clientX > bounds.right - edge) {
     scroller.scrollLeft += 24;
   }
+  if (clientY === undefined) return;
+  if (clientY < bounds.top + edge) {
+    scroller.scrollTop = Math.max(0, scroller.scrollTop - 24);
+  } else if (clientY > bounds.bottom - edge) {
+    scroller.scrollTop += 24;
+  }
+}
+
+function creationDropTargetAtPoint(
+  clientX: number,
+  clientY: number,
+  rowTargets: Array<{ id: string; sourceId: string }>,
+) {
+  const element = document
+    .elementFromPoint(clientX, clientY)
+    ?.closest<HTMLElement>("[data-canvas-row]") ?? null;
+  const rowId = element?.dataset.canvasRow;
+  const sourceId = element?.dataset.canvasRowSource;
+  const valid = Boolean(
+    element?.dataset.canvasRowKind === "PERSON" &&
+    rowId &&
+    sourceId &&
+    rowTargets.some((row) => row.id === rowId && row.sourceId === sourceId),
+  );
+  return { element, rowId, sourceId, valid };
+}
+
+function directSegmentTransformAllowed(
+  interaction: TimeCanvasInteractionOptions | undefined,
+) {
+  if (!interaction?.onSegmentTransform) return false;
+  return !interaction.desktopOnlySegmentTransform ||
+    window.matchMedia("(min-width: 640px)").matches;
 }
 
 function responsiveRowHeaderWidth(containerWidth: number) {

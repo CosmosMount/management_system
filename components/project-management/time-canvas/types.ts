@@ -147,6 +147,14 @@ export type TimeCanvasSegmentTransformRequest = {
   endMs: number;
 };
 
+export type TimeCanvasCreationRangeTransformRequest = {
+  kind: "MOVE" | "RESIZE_START" | "RESIZE_END" | "KEYBOARD_MOVE";
+  startMs: number;
+  endMs: number;
+  targetRowId: string;
+  targetSourceId: string;
+};
+
 export type TimeCanvasAnchorCreateRequest = {
   rowId: string;
   rowKind: TimeCanvasRow["kind"];
@@ -174,9 +182,13 @@ export type TimeCanvasAnchorMoveResolution = Pick<
 export type TimeCanvasInteractionOptions = {
   enableBrushCreate?: boolean;
   enableAnchorCreate?: boolean;
+  desktopOnlySegmentTransform?: boolean;
   creationRange?: TimeCanvasBrushRequest | null;
   selectedSegmentIds?: ReadonlySet<string>;
   onBrushCreate?: (request: TimeCanvasBrushRequest) => void;
+  onCreationRangeTransform?: (
+    request: TimeCanvasCreationRangeTransformRequest,
+  ) => void;
   onAnchorCreate?: (request: TimeCanvasAnchorCreateRequest) => void;
   constrainAnchorMove?: (
     request: TimeCanvasAnchorMoveRequest,

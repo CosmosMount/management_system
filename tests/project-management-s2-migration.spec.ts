@@ -1111,7 +1111,6 @@ test("S2 canvas output schemas retain pagination, grouping and privacy invariant
     priority: "HIGH",
     expectedOutput: "",
     actualOutput: "",
-    completionPercent: null,
     taskId: segmentTaskId,
     tags: [],
     permissions: segmentPermissions(),
@@ -1400,10 +1399,15 @@ test("removed allocation and includeConflicts inputs fail strict validation", ()
     endAt,
     content: "旧客户端 Actual 创建",
     actualOutput: "完成",
-    completionPercent: 100,
     sources: [],
   };
   expect(createActualSegmentInputSchema.safeParse(actualCreate).success).toBe(true);
+  expect(
+    createActualSegmentInputSchema.safeParse({
+      ...actualCreate,
+      completionPercent: 100,
+    }).success,
+  ).toBe(false);
   expect(
     createActualSegmentInputSchema.safeParse({ ...actualCreate, allocation: 50 })
       .success,
@@ -1449,7 +1453,11 @@ test("removed allocation and includeConflicts inputs fail strict validation", ()
     expectedUpdatedAt: startAt,
     coveredStartAt: startAt,
     coveredEndAt: endAt,
-    actual: { actualOutput: "部分确认" },
+    actual: {
+      content: "部分完成投入",
+      expectedOutput: "部分完成预期",
+      actualOutput: "部分确认",
+    },
   };
   expect(
     partiallyConfirmSegmentInputSchema.safeParse(partialConfirmation).success,
@@ -1562,6 +1570,8 @@ test("S2 option page schemas expose only minimal public fields", () => {
           goal: "当前节点",
           expectedCompletedAt: "2026-08-03T10:00:00.000Z",
         },
+        activeTermination: null,
+        currentPlanVersionNo: 1,
         permission: { canView: true },
       },
     ],

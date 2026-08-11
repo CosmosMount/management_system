@@ -13,6 +13,7 @@ import {
 } from "@/lib/project-management/queries/option-queries";
 import {
   getAdaptiveTimeCanvasBlock as getAdaptiveTimeCanvasBlockQuery,
+  getPersonalDueSegments as getPersonalDueSegmentsQuery,
   getTimeCanvasData as getTimeCanvasDataQuery,
 } from "@/lib/project-management/queries/time-canvas-queries";
 import { dispatchCanvasQueryRequest } from "@/lib/project-management/application/canvas-query-dispatcher";
@@ -41,6 +42,15 @@ export async function getAdaptiveTimeCanvasBlock(input: unknown) {
     "getAdaptiveTimeCanvasBlock",
     input,
     (actor, value) => getAdaptiveTimeCanvasBlockQuery({ actor, input: value }),
+  );
+}
+
+export async function getPersonalDueSegments(input: unknown = {}) {
+  return runCanvasAction(
+    "pm.canvas.personal_due.get",
+    "getPersonalDueSegments",
+    input,
+    (actor, value) => getPersonalDueSegmentsQuery({ actor, input: value }),
   );
 }
 

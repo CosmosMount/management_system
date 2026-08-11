@@ -12,7 +12,6 @@ import {
   ListChecks,
   Tags,
   LayoutList,
-  Clock3,
   Menu,
   X,
   type LucideIcon,
@@ -66,12 +65,6 @@ const navigationItems: NavigationItem[] = [
     match: (pathname) =>
       pathname === routes.progress.tasks ||
       pathname.startsWith(`${routes.progress.tasks}/`),
-  },
-  {
-    href: routes.progress.myTimeline,
-    label: "我的时间",
-    icon: Clock3,
-    match: (pathname) => pathname === routes.progress.myTimeline,
   },
   {
     href: routes.progress.resources,

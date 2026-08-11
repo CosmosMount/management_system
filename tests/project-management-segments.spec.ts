@@ -30,6 +30,7 @@ import {
   runProjectManagementAction,
 } from "../lib/project-management/application/action-result";
 import {
+  formatWorkSegmentChange,
   getWorkSegment,
   listWorkSegmentChanges,
   listWorkSegments,
@@ -46,6 +47,156 @@ import type {
 } from "../lib/project-management/identity";
 
 test.describe("project management P5 work segment services", () => {
+  test("投入历史 formatter 只输出中文安全 DTO 并覆盖所有 action 与组合字段", () => {
+    const names = {
+      people: new Map([["person-visible", "可见人员"]]),
+      tasks: new Map([["task-visible", "可见 Task"]]),
+      tags: new Map([["tag-visible", "可见标签"]]),
+    };
+    const baseRow = {
+      id: "stable-history-key",
+      before: null,
+      after: null,
+      reason: "",
+      actorAccountId: "internal-account-id",
+      createdAt: new Date("2026-08-11T04:30:00.000Z"),
+      actor: { person: { displayName: "测试操作人" } },
+    };
+    const actionLabels = new Map([
+      ["CREATE", "创建投入"],
+      ["UPDATE", "修改投入"],
+      ["MERGE", "合并计划（历史）"],
+      ["CONFIRM", "确认投入"],
+      ["CANCEL", "取消计划"],
+      ["DELETE", "删除实际投入"],
+    ]);
+    for (const [action, label] of actionLabels) {
+      const item = formatWorkSegmentChange({ ...baseRow, action }, names);
+      expect(item).toMatchObject({
+        action: label,
+        actorName: "测试操作人",
+        reason: "未填写原因",
+      });
+    }
+
+    const historicalSplit = formatWorkSegmentChange(
+      { ...baseRow, action: "SPLIT" },
+      names,
+    );
+    expect(historicalSplit.action).toBe("拆分计划（历史）");
+    const partialSplit = formatWorkSegmentChange(
+      {
+        ...baseRow,
+        action: "SPLIT",
+        after: {
+          sourcePartialConfirmSegmentId: "internal-partial-confirm-id",
+        },
+      },
+      names,
+    );
+    expect(partialSplit.action).toBe("部分确认后生成剩余计划");
+    expect(JSON.stringify(partialSplit)).not.toContain(
+      "sourcePartialConfirmSegmentId",
+    );
+    expect(JSON.stringify(partialSplit)).not.toContain(
+      "internal-partial-confirm-id",
+    );
+
+    const longContent = "长文本".repeat(80);
+    const update = formatWorkSegmentChange(
+      {
+        ...baseRow,
+        action: "UPDATE",
+        before: {
+          startAt: "2026-08-11T01:00:00.000Z",
+          endAt: "2026-08-11T02:00:00.000Z",
+          personId: "person-visible",
+          content: "旧内容",
+          priority: "LOW",
+          expectedOutput: "旧预期",
+          actualOutput: "旧实际",
+          taskId: "task-visible",
+          status: "PLANNED",
+          tagIds: ["tag-visible"],
+          unknownInternalField: "不得下发",
+        },
+        after: {
+          startAt: "2026-08-11T03:00:00.000Z",
+          endAt: "2026-08-11T04:00:00.000Z",
+          personId: "person-hidden",
+          content: longContent,
+          priority: "HIGH",
+          expectedOutput: "新预期",
+          actualOutput: "新实际",
+          taskId: "task-hidden",
+          status: "CONFIRMED",
+          tagIds: ["tag-visible", "tag-hidden"],
+          unknownInternalField: "仍不得下发",
+        },
+      },
+      names,
+    );
+    expect(update.differences.map((difference) => difference.label)).toEqual([
+      "开始时间",
+      "结束时间",
+      "人员",
+      "内容",
+      "优先级",
+      "预期输出",
+      "实际输出",
+      "Task",
+      "状态",
+      "Tag",
+    ]);
+    expect(update.differences.find(({ label }) => label === "人员")).toMatchObject({
+      before: "可见人员",
+      after: "不可见对象",
+    });
+    expect(update.differences.find(({ label }) => label === "Task")).toMatchObject({
+      before: "可见 Task",
+      after: "不可见对象",
+    });
+    expect(update.differences.find(({ label }) => label === "Tag")?.after).toBe(
+      "可见标签、不可见对象",
+    );
+    const truncatedContent = update.differences.find(
+      ({ label }) => label === "内容",
+    )?.after;
+    expect(truncatedContent?.endsWith("…")).toBe(true);
+    expect(truncatedContent?.length).toBe(161);
+    expect(JSON.stringify(update)).not.toContain("unknownInternalField");
+    expect(JSON.stringify(update)).not.toContain("不得下发");
+
+    const unknown = formatWorkSegmentChange(
+      {
+        ...baseRow,
+        action: "FUTURE_INTERNAL_ACTION",
+        before: { content: "旧值" },
+        after: { content: "新值", lockVersion: 99 },
+        actorAccountId: null,
+        actor: null,
+      },
+      names,
+    );
+    expect(unknown).toMatchObject({
+      action: "发生了系统变更",
+      actorName: "系统",
+      differences: [],
+    });
+    expect(JSON.stringify(unknown)).not.toContain("FUTURE_INTERNAL_ACTION");
+    expect(JSON.stringify(unknown)).not.toContain("lockVersion");
+
+    const accountWithoutPerson = formatWorkSegmentChange(
+      {
+        ...baseRow,
+        action: "CREATE",
+        actor: null,
+      },
+      names,
+    );
+    expect(accountWithoutPerson.actorName).toBe("管理员或未知操作者");
+  });
+
   test("overlapping Segments are allowed without conflict notifications or outbox", async () => {
     const fixture = await createActivatedFixture();
     const first = await createWorkSegment(actor(fixture.member), {
@@ -510,6 +661,11 @@ test.describe("project management P5 work segment services", () => {
         expectedUpdatedAt: partialPlan.segment.updatedAt,
         coveredStartAt: atHour(11.5),
         coveredEndAt: atHour(12.5),
+        actual: {
+          content: "伪造中段确认",
+          expectedOutput: "不应写入",
+          actualOutput: "不应写入",
+        },
       }),
       "VALIDATION_ERROR",
     );
@@ -520,7 +676,11 @@ test.describe("project management P5 work segment services", () => {
       expectedUpdatedAt: partialPlan.segment.updatedAt,
       coveredStartAt: atHour(11),
       coveredEndAt: atHour(12.5),
-      actual: { content: "实际完成计划前段" },
+      actual: {
+        content: "实际完成计划前段",
+        expectedOutput: "完成计划前段",
+        actualOutput: "已完成计划前段",
+      },
     });
     expect(partial.segment.status).toBe("CANCELLED");
     expect(partial.remainingSegments).toHaveLength(1);
@@ -624,7 +784,42 @@ test.describe("project management P5 work segment services", () => {
         input: { segmentId: actualSegment.id },
       });
       expect(history.items).toEqual([
-        expect.objectContaining({ action: "CREATE" }),
+        expect.objectContaining({
+          action: "创建投入",
+          actorName: fixture.member.person.displayName,
+          differences: [],
+        }),
+      ]);
+      expect(JSON.stringify(history.items)).not.toContain("actorAccountId");
+      expect(JSON.stringify(history.items)).not.toContain('"before"');
+      expect(JSON.stringify(history.items)).not.toContain('"after"');
+    }
+    const foreignHistory = await listWorkSegmentChanges({
+      actor: actor(fixture.member),
+      input: { segmentId: secondActual.segment.id },
+    });
+    await expectServiceError(
+      listWorkSegmentChanges({
+        actor: actor(fixture.member),
+        input: {
+          segmentId: firstActual.segment.id,
+          cursor: foreignHistory.items[0]!.key,
+        },
+      }),
+      "NOT_FOUND",
+    );
+    await softDeleteActualSegment(actor(fixture.member), {
+      segmentId: firstActual.segment.id,
+      expectedUpdatedAt: firstActual.segment.updatedAt,
+      reason: "验证软删除来源不会继续展示",
+    });
+    for (const viewer of [fixture.reviewer, fixture.owner, fixture.admin]) {
+      const planAfterSourceDeletion = await getWorkSegment({
+        actor: actor(viewer),
+        input: { segmentId: onePlanManyActuals.segment.id },
+      });
+      expect(planAfterSourceDeletion.plannedSources).toEqual([
+        expect.objectContaining({ actualSegmentId: secondActual.segment.id }),
       ]);
     }
 
@@ -1328,6 +1523,11 @@ test.describe("project management P5 work segment services", () => {
       coveredStartAt: atHour(11),
       coveredEndAt: atHour(12.5),
       reason: "并发部分确认",
+      actual: {
+        content: "并发部分确认 Actual",
+        expectedOutput: "完成前段",
+        actualOutput: "已完成前段",
+      },
     };
     const partialOutboxBefore = await prisma.notificationOutbox.count({
       where: { channel: "project-management" },
@@ -1563,13 +1763,17 @@ test.describe("project management P5 work segment services", () => {
         },
       }),
     ).toBe(2);
-    expect(
-      await prisma.notificationOutbox.count({
-        where: {
-          eventKey: `pm:segment:confirmation_due:${duePlan.segment.id}:${duePlan.segment.endAt}:feishu`,
-        },
+    const dueNotification = await prisma.notificationOutbox.findUnique({
+      where: {
+        eventKey: `pm:segment:confirmation_due:${duePlan.segment.id}:${duePlan.segment.endAt}:feishu`,
+      },
+      select: { payload: true },
+    });
+    expect(dueNotification?.payload).toEqual(
+      expect.objectContaining({
+        linkPath: `/progress?focus=${duePlan.segment.id}`,
       }),
-    ).toBe(1);
+    );
   });
 
   test("Concurrent transition scans have one winner and no duplicate side effects", async () => {

@@ -48,6 +48,7 @@ import {
   MAX_TIME_CANVAS_VISIBLE_SEGMENTS,
   type GetTimeCanvasDataInput,
 } from "@/lib/project-management/validations/time-canvas";
+import { listPersonalDueSegmentsInputSchema } from "@/lib/project-management/validations/segments";
 import { searchTaskOptions } from "@/lib/project-management/queries/option-queries";
 import { getProjectDetail } from "@/lib/project-management/queries/project-queries";
 
@@ -80,11 +81,10 @@ const fullSegmentSelect = {
   priority: true,
   expectedOutput: true,
   actualOutput: true,
-  completionPercent: true,
   taskId: true,
   deletedAt: true,
   updatedAt: true,
-  task: { select: canvasTaskAuthorizationSelect },
+  task: { select: { ...canvasTaskAuthorizationSelect, title: true } },
   tags: {
     select: {
       tag: { select: { id: true, name: true, color: true } },
@@ -187,32 +187,142 @@ type CanvasCursor = {
   id: string;
 };
 
+type PersonalDueCursor = {
+  v: 1;
+  kind: "PERSONAL_DUE";
+  personId: string;
+  endAt: string;
+  id: string;
+};
+
 export async function getPersonalDueSegments({
   actor,
+  input,
   now = new Date(),
-  limit = 100,
 }: {
   actor: ProjectManagementActor;
+  input?: unknown;
   now?: Date;
-  limit?: number;
 }) {
-  const boundedLimit = Math.min(Math.max(Math.trunc(limit), 1), 200);
+  const parsed = listPersonalDueSegmentsInputSchema.parse(input ?? {});
+  const cursor = parsed.cursor
+    ? decodePersonalDueCursor(parsed.cursor, actor.personId)
+    : null;
+  if (parsed.cursor && !cursor) {
+    throw validationError("分页游标无效或已不再匹配当前到期队列", {
+      cursor: ["分页游标无效或已不再匹配当前到期队列"],
+    });
+  }
+  if (cursor) {
+    const anchor = await prisma.workSegment.findFirst({
+      where: { id: cursor.id, personId: actor.personId },
+      select: { id: true },
+    });
+    if (!anchor) {
+      throw validationError("分页游标无效或已不再匹配当前到期队列", {
+        cursor: ["分页游标无效或已不再匹配当前到期队列"],
+      });
+    }
+  }
   const rows = await prisma.workSegment.findMany({
     where: {
-      personId: actor.personId,
-      type: "PLANNED",
-      status: "PENDING_CONFIRMATION",
-      deletedAt: null,
+      AND: [
+        {
+          personId: actor.personId,
+          type: "PLANNED",
+          status: "PENDING_CONFIRMATION",
+          endAt: { lte: now },
+          deletedAt: null,
+        },
+        isSystemAdministrator(actor)
+          ? {}
+          : {
+              OR: [
+                { taskId: null },
+                {
+                  task: {
+                    members: {
+                      some: {
+                        personId: actor.personId,
+                        role: { in: ["OWNER", "PARTICIPANT"] },
+                        removedAt: null,
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+        cursor
+          ? {
+              OR: [
+                { endAt: { gt: new Date(cursor.endAt) } },
+                {
+                  endAt: new Date(cursor.endAt),
+                  id: { gt: cursor.id },
+                },
+              ],
+            }
+          : {},
+      ],
     },
     select: fullSegmentSelect,
     orderBy: [{ endAt: "asc" }, { id: "asc" }],
-    take: boundedLimit + 1,
+    take: parsed.limit + 1,
   });
+  const page = rows.slice(0, parsed.limit);
   return {
-    items: rows.slice(0, boundedLimit).map((row) => toFullSegmentDto(actor, row)),
-    nextCursor: rows.length > boundedLimit ? rows[boundedLimit]?.id ?? null : null,
+    items: page.map((row) => ({
+      ...toFullSegmentDto(actor, row),
+      taskTitle: row.task?.title ?? null,
+    })),
+    nextCursor: rows.length > parsed.limit
+      ? encodePersonalDueCursor(page.at(-1), actor.personId)
+      : null,
     generatedAt: now.toISOString(),
   };
+}
+
+function encodePersonalDueCursor(
+  row: Pick<FullSegment, "id" | "endAt"> | undefined,
+  personId: string,
+) {
+  if (!row) return null;
+  return Buffer.from(JSON.stringify({
+    v: 1,
+    kind: "PERSONAL_DUE",
+    personId,
+    endAt: row.endAt.toISOString(),
+    id: row.id,
+  } satisfies PersonalDueCursor)).toString("base64url");
+}
+
+function decodePersonalDueCursor(
+  value: string,
+  personId: string,
+): PersonalDueCursor | null {
+  try {
+    const decoded: unknown = JSON.parse(
+      Buffer.from(value, "base64url").toString("utf8"),
+    );
+    if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
+      return null;
+    }
+    const record = decoded as Record<string, unknown>;
+    if (
+      record.v !== 1 ||
+      record.kind !== "PERSONAL_DUE" ||
+      record.personId !== personId ||
+      typeof record.endAt !== "string" ||
+      !Number.isFinite(Date.parse(record.endAt)) ||
+      typeof record.id !== "string" ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(record.id)
+    ) {
+      return null;
+    }
+    return record as PersonalDueCursor;
+  } catch {
+    return null;
+  }
 }
 
 export async function getTimeCanvasData({
@@ -1462,7 +1572,6 @@ function toFullSegmentDto(
     priority: segment.priority,
     expectedOutput: segment.expectedOutput,
     actualOutput: segment.actualOutput,
-    completionPercent: decimalToNumber(segment.completionPercent),
     taskId: segment.taskId,
     tags: segment.tags.map((entry) => ({
       id: entry.tag.id,
@@ -1737,10 +1846,6 @@ function isTerminalTaskStatus(status: Task["status"]): boolean {
     status === "CANCELLED" ||
     status === "TIMEOUT"
   );
-}
-
-function decimalToNumber(value: Prisma.Decimal | null): number | null {
-  return value === null ? null : Number(value.toString());
 }
 
 function canvasCursorFilter(

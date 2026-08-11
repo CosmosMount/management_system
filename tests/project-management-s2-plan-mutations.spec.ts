@@ -2094,7 +2094,6 @@ test.describe("project management S2 plan and Task mutation services", () => {
             ...segmentCreateInput(operator.person.id, "oracle actual", 9),
             taskId,
             actualOutput: "oracle actual output",
-            completionPercent: 100,
             sources: [],
           }),
       },

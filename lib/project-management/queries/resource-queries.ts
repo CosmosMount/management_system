@@ -1,13 +1,20 @@
 import { Prisma } from "@prisma/client";
+import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 import {
   authorize,
   segmentReadableWhere,
+  tagReadableWhere,
+  taskReadableWhere,
   type AuthorizationTaskResource,
 } from "@/lib/project-management/authorization";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import { notFoundError } from "@/lib/project-management/application/errors";
 import { toWorkSegmentDto } from "@/lib/project-management/application/segment-service";
+import {
+  taskPriorityLabels,
+  workSegmentStatusLabels,
+} from "@/lib/project-management/labels";
 import {
   getWorkSegmentInputSchema,
   listWorkSegmentChangesInputSchema,
@@ -103,7 +110,10 @@ export async function listWorkSegments({
     items: rows.slice(0, parsed.limit).map((row) =>
       toWorkSegmentDetailDto(row, actor),
     ),
-    nextCursor: rows.length > parsed.limit ? rows[parsed.limit]?.id ?? null : null,
+    nextCursor:
+      rows.length > parsed.limit
+        ? rows.slice(0, parsed.limit).at(-1)?.id ?? null
+        : null,
   };
 }
 
@@ -140,25 +150,227 @@ export async function listWorkSegmentChanges({
     select: { id: true },
   });
   if (!segment) throw notFoundError();
+  if (parsed.cursor) {
+    const cursor = await prisma.workSegmentChange.findFirst({
+      where: { id: parsed.cursor, segmentId: parsed.segmentId },
+      select: { id: true },
+    });
+    if (!cursor) throw notFoundError();
+  }
   const rows = await prisma.workSegmentChange.findMany({
     where: { segmentId: parsed.segmentId },
+    include: {
+      actor: {
+        select: { person: { select: { displayName: true } } },
+      },
+    },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: parsed.limit + 1,
     ...(parsed.cursor ? { cursor: { id: parsed.cursor }, skip: 1 } : {}),
   });
-  return {
-    items: rows.slice(0, parsed.limit).map((row) => ({
-      id: row.id,
-      segmentId: row.segmentId,
-      action: row.action,
-      before: row.before,
-      after: row.after,
-      reason: row.reason,
-      actorAccountId: row.actorAccountId,
-      createdAt: row.createdAt.toISOString(),
-    })),
-    nextCursor: rows.length > parsed.limit ? rows[parsed.limit]?.id ?? null : null,
+  const page = rows.slice(0, parsed.limit);
+  const referencedIds = collectHistoryReferenceIds(page);
+  const [people, tasks, tags] = await Promise.all([
+    prisma.person.findMany({
+      where: { id: { in: [...referencedIds.personIds] } },
+      select: { id: true, displayName: true },
+    }),
+    prisma.task.findMany({
+      where: {
+        AND: [
+          { id: { in: [...referencedIds.taskIds] } },
+          taskReadableWhere(actor),
+        ],
+      },
+      select: { id: true, title: true },
+    }),
+    prisma.tag.findMany({
+      where: {
+        AND: [
+          { id: { in: [...referencedIds.tagIds] } },
+          tagReadableWhere(actor),
+        ],
+      },
+      select: { id: true, name: true },
+    }),
+  ]);
+  const names: WorkSegmentHistoryNames = {
+    people: new Map(people.map((person) => [person.id, person.displayName])),
+    tasks: new Map(tasks.map((task) => [task.id, task.title])),
+    tags: new Map(tags.map((tag) => [tag.id, tag.name])),
   };
+  return {
+    items: page.map((row) => formatWorkSegmentChange(row, names)),
+    nextCursor: rows.length > parsed.limit ? page.at(-1)?.id ?? null : null,
+  };
+}
+
+type HistoryRow = Prisma.WorkSegmentChangeGetPayload<{
+  include: {
+    actor: { select: { person: { select: { displayName: true } } } };
+  };
+}>;
+
+export type WorkSegmentHistoryNames = {
+  people: Map<string, string>;
+  tasks: Map<string, string>;
+  tags: Map<string, string>;
+};
+
+export type WorkSegmentHistoryFormatterRow = {
+  id: string;
+  action: string;
+  before: Prisma.JsonValue | null;
+  after: Prisma.JsonValue | null;
+  reason: string;
+  actorAccountId: string | null;
+  createdAt: Date;
+  actor: { person: { displayName: string } | null } | null;
+};
+
+const historyFieldLabels = {
+  startAt: "开始时间",
+  endAt: "结束时间",
+  personId: "人员",
+  content: "内容",
+  priority: "优先级",
+  expectedOutput: "预期输出",
+  actualOutput: "实际输出",
+  taskId: "Task",
+  status: "状态",
+  tagIds: "Tag",
+} as const;
+
+export function formatWorkSegmentChange(
+  row: WorkSegmentHistoryFormatterRow,
+  names: WorkSegmentHistoryNames,
+) {
+  const before = jsonObject(row.before);
+  const after = jsonObject(row.after);
+  const splitFromPartialConfirmation = Boolean(
+    stringValue(after?.sourcePartialConfirmSegmentId),
+  );
+  const action = (() => {
+    switch (row.action) {
+      case "CREATE": return "创建投入";
+      case "UPDATE": return "修改投入";
+      case "SPLIT": return splitFromPartialConfirmation
+        ? "部分确认后生成剩余计划"
+        : "拆分计划（历史）";
+      case "MERGE": return "合并计划（历史）";
+      case "CONFIRM": return "确认投入";
+      case "CANCEL": return "取消计划";
+      case "DELETE": return "删除实际投入";
+      default:
+        logger.warn("pm.segment_history.unknown_action", {
+          module: "project-management",
+          action: row.action,
+        });
+        return "发生了系统变更";
+    }
+  })();
+  const differences = row.action === "UPDATE"
+    ? Object.entries(historyFieldLabels).flatMap(([field, label]) => {
+        const previous = formatHistoryValue(field, before?.[field], names);
+        const next = formatHistoryValue(field, after?.[field], names);
+        return previous === next ? [] : [{ label, before: previous, after: next }];
+      })
+    : [];
+  return {
+    key: row.id,
+    action,
+    actorName:
+      row.actor?.person?.displayName ??
+      (row.actorAccountId ? "管理员或未知操作者" : "系统"),
+    reason: row.reason.trim() || "未填写原因",
+    createdAt: row.createdAt.toISOString(),
+    differences,
+  };
+}
+
+function collectHistoryReferenceIds(rows: HistoryRow[]) {
+  const personIds = new Set<string>();
+  const taskIds = new Set<string>();
+  const tagIds = new Set<string>();
+  for (const row of rows) {
+    for (const value of [jsonObject(row.before), jsonObject(row.after)]) {
+      if (!value) continue;
+      const personId = stringValue(value.personId);
+      const taskId = stringValue(value.taskId);
+      if (personId) personIds.add(personId);
+      if (taskId) taskIds.add(taskId);
+      for (const tagId of stringArray(value.tagIds)) tagIds.add(tagId);
+    }
+  }
+  return { personIds, taskIds, tagIds };
+}
+
+function formatHistoryValue(
+  field: string,
+  value: Prisma.JsonValue | undefined,
+  names: WorkSegmentHistoryNames,
+) {
+  if (field === "personId") {
+    const id = stringValue(value);
+    return id ? names.people.get(id) ?? "不可见对象" : "未关联";
+  }
+  if (field === "taskId") {
+    const id = stringValue(value);
+    return id ? names.tasks.get(id) ?? "不可见对象" : "独立投入";
+  }
+  if (field === "tagIds") {
+    const values = stringArray(value).map((id) => names.tags.get(id) ?? "不可见对象");
+    return values.length > 0 ? values.join("、") : "无";
+  }
+  if (field === "startAt" || field === "endAt") {
+    const date = stringValue(value);
+    return date ? formatHistoryDate(date) : "未填写";
+  }
+  if (field === "priority") {
+    const priority = stringValue(value);
+    return priority && priority in taskPriorityLabels
+      ? taskPriorityLabels[priority as keyof typeof taskPriorityLabels]
+      : "未填写";
+  }
+  if (field === "status") {
+    const status = stringValue(value);
+    return status && status in workSegmentStatusLabels
+      ? workSegmentStatusLabels[status as keyof typeof workSegmentStatusLabels]
+      : "未填写";
+  }
+  const text = typeof value === "string" ? value.trim() : value == null ? "" : String(value);
+  if (!text) return "未填写";
+  return text.length > 160 ? `${text.slice(0, 160)}…` : text;
+}
+
+function jsonObject(value: Prisma.JsonValue | null): Prisma.JsonObject | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Prisma.JsonObject
+    : null;
+}
+
+function stringValue(value: Prisma.JsonValue | undefined) {
+  return typeof value === "string" ? value : "";
+}
+
+function stringArray(value: Prisma.JsonValue | undefined) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+function formatHistoryDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "无效时间";
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(date);
 }
 
 export async function listTimelinePeople({

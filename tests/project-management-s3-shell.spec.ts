@@ -53,7 +53,6 @@ test.describe("project management S3 shell", () => {
           "/progress",
           "/progress/projects",
           "/progress/tasks",
-          "/progress/my-timeline",
           "/progress/resources",
           "/progress/approvals",
           "/progress/notifications",

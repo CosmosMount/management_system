@@ -206,7 +206,6 @@ export const timeSegmentDtoSchema = z
     priority: taskPrioritySchema,
     expectedOutput: z.string(),
     actualOutput: z.string(),
-    completionPercent: z.number().min(0).max(100).nullable(),
     taskId: dtoIdSchema.nullable(),
     tags: z.array(segmentTagDtoSchema),
     permissions: segmentPermissionsDtoSchema,
@@ -300,6 +299,14 @@ const activeMilestoneOptionDtoSchema = z
   })
   .strict();
 
+const activeTerminationOptionDtoSchema = z
+  .object({
+    nodeId: dtoIdSchema,
+    name: z.string(),
+    plannedAt: dtoAbsoluteDateTimeSchema,
+  })
+  .strict();
+
 export const taskOptionDtoSchema = z
   .object({
     id: dtoIdSchema,
@@ -309,6 +316,8 @@ export const taskOptionDtoSchema = z
     team: z.string(),
     techGroup: z.string(),
     activeMilestone: activeMilestoneOptionDtoSchema.nullable(),
+    activeTermination: activeTerminationOptionDtoSchema.nullable(),
+    currentPlanVersionNo: z.number().int().positive(),
     permission: taskOptionPermissionDtoSchema,
   })
   .strict();

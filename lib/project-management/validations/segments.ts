@@ -76,13 +76,6 @@ export const requiredDate = (message: string) =>
     { error: message },
   );
 
-const completionPercentSchema = z
-  .number({ message: "完成比例格式不正确" })
-  .min(0, "完成比例不能小于 0")
-  .max(100, "完成比例不能超过 100")
-  .nullable()
-  .optional();
-
 const segmentTimeRangeSchema = z
   .object({
     startAt: requiredDate("请选择有效的开始时间"),
@@ -139,7 +132,6 @@ const segmentEditableFieldsSchema = z
       .default("MEDIUM"),
     expectedOutput: optionalText(2_000),
     actualOutput: optionalText(2_000),
-    completionPercent: completionPercentSchema,
     taskId: nullableIdSchema,
     tagIds: z
       .array(idSchema, { message: "Tag 列表格式不正确" })
@@ -157,7 +149,6 @@ const segmentOverrideFieldsSchema = z
     priority: z.enum(taskPriorityValues, { message: "优先级不正确" }).optional(),
     expectedOutput: optionalTextField(2_000),
     actualOutput: optionalTextField(2_000),
-    completionPercent: completionPercentSchema,
     taskId: nullableIdSchema,
     tagIds: z
       .array(idSchema, { message: "Tag 列表格式不正确" })
@@ -177,13 +168,6 @@ export const createWorkSegmentInputSchema = segmentTimeRangeSchema
   .strict()
   .superRefine((input, ctx) => {
     validateEditableFields(input, ctx);
-    if (input.type === "PLANNED" && input.completionPercent != null) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["completionPercent"],
-        message: "Planned Segment 不能填写完成比例",
-      });
-    }
   });
 
 export const createActualSegmentInputSchema = segmentTimeRangeSchema
@@ -227,7 +211,6 @@ export const batchCreatePlannedSegmentsInputSchema = z.object({
         .safeExtend({
           personId: idSchema,
           type: z.literal("PLANNED").optional(),
-          completionPercent: z.never().optional(),
         })
         .strict()
         .superRefine((input, ctx) => {
@@ -373,15 +356,13 @@ export const partiallyConfirmSegmentInputSchema = z.object({
   coveredStartAt: requiredDate("请选择有效的确认开始时间"),
   coveredEndAt: requiredDate("请选择有效的确认结束时间"),
   reason: optionalText(1_000),
-  actual: optionalSegmentTimeRangeSchema
-    .safeExtend(segmentOverrideFieldsSchema.shape)
-    .safeExtend({ tagIds: z.array(idSchema).max(50).optional() })
-    .strict()
-    .superRefine((input, ctx) => {
-      validateOverrideFields(input, ctx);
+  actual: z
+    .object({
+      content: requiredText("请输入实际投入内容", 2_000),
+      expectedOutput: requiredText("请输入预期输出", 2_000),
+      actualOutput: requiredText("请输入实际输出", 2_000),
     })
-    .optional()
-    .default({}),
+    .strict(),
 }).superRefine((input, ctx) => {
   if (input.coveredEndAt <= input.coveredStartAt) {
     ctx.addIssue({
@@ -431,6 +412,18 @@ export const listWorkSegmentChangesInputSchema = z.object({
     .optional()
     .default(50),
 });
+
+export const listPersonalDueSegmentsInputSchema = z
+  .object({
+    cursor: z
+      .string({ message: "分页游标格式不正确" })
+      .trim()
+      .min(1, "分页游标格式不正确")
+      .max(1_000, "分页游标格式不正确")
+      .optional(),
+    limit: z.number().int().min(1).max(100).optional().default(50),
+  })
+  .strict();
 
 export type CreateWorkSegmentInput = z.infer<typeof createWorkSegmentInputSchema>;
 export type CreateActualSegmentInput = z.infer<

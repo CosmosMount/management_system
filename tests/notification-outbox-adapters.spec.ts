@@ -1057,7 +1057,7 @@ test.describe("notification outbox channel adapters", () => {
         taskTitle: "电控调试 Task",
         entityType: "WorkSegment",
         entityId: "pm-segment-disabled",
-        linkPath: "/progress/my-timeline?focus=pm-segment-disabled",
+        linkPath: "/progress?focus=pm-segment-disabled",
         recipientOpenIds: ["ou_outbox_success"],
         mandatory: true,
         appOrigin: "http://127.0.0.1:3002",

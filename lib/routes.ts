@@ -18,7 +18,6 @@ export const routes = {
   },
   progress: {
     root: "/progress",
-    myTimeline: "/progress/my-timeline",
     projects: "/progress/projects",
     projectNew: "/progress/projects/new",
     projectDetail: (id: string) => `/progress/projects/${id}`,

@@ -16,11 +16,15 @@ import {
   recipientsForPersonIdsTx,
 } from "../lib/project-management/application/notification-utils";
 import { updateNotificationPreference } from "../lib/project-management/application/notification-preference-service";
+import { toProjectManagementServiceError } from "../lib/project-management/application/errors";
 import type { ProjectManagementActor } from "../lib/project-management/identity";
 import { getActionInbox } from "../lib/project-management/queries/action-inbox-queries";
 import { getMyWorkDashboard } from "../lib/project-management/queries/dashboard-queries";
 import { listTags } from "../lib/project-management/queries/tag-queries";
-import { getTimeCanvasData } from "../lib/project-management/queries/time-canvas-queries";
+import {
+  getPersonalDueSegments,
+  getTimeCanvasData,
+} from "../lib/project-management/queries/time-canvas-queries";
 
 test.describe("project management S8 dashboard, tags and notifications", () => {
   test("Action Inbox filters by permission and sorts overdue work first", async () => {
@@ -55,9 +59,88 @@ test.describe("project management S8 dashboard, tags and notifications", () => {
         id: `segment-confirm:${own.id}`,
         kind: "SEGMENT_CONFIRMATION",
         severity: "HIGH",
+        href: `/progress?focus=${own.id}`,
       }),
     );
     expect(inbox.items.some((item) => item.id.includes(hidden.id))).toBe(false);
+    expect(inbox.criticalCount).toBe(0);
+  });
+
+  test("personal due queue paginates without gaps and excludes removed Task members", async () => {
+    const user = await createActor("S8 Due pagination");
+    const now = new Date("2030-08-11T08:00:00.000Z");
+    const dueSegments = [];
+    for (const offsetHours of [6, 4, 2]) {
+      dueSegments.push(await prisma.workSegment.create({
+        data: {
+          personId: user.personId,
+          type: "PLANNED",
+          status: "PENDING_CONFIRMATION",
+          startAt: new Date(now.getTime() - (offsetHours + 1) * 60 * 60_000),
+          endAt: new Date(now.getTime() - offsetHours * 60 * 60_000),
+          content: `S8 分页待确认 ${offsetHours}`,
+          createdByAccountId: user.accountId,
+        },
+      }));
+    }
+    const task = await createActiveTaskWithMilestone(
+      user,
+      new Date("2030-09-01T08:00:00.000Z"),
+    );
+    const removedTaskSegment = await prisma.workSegment.create({
+      data: {
+        personId: user.personId,
+        taskId: task.taskId,
+        type: "PLANNED",
+        status: "PENDING_CONFIRMATION",
+        startAt: new Date(now.getTime() - 9 * 60 * 60_000),
+        endAt: new Date(now.getTime() - 8 * 60 * 60_000),
+        content: "S8 已移出 Task 的待确认",
+        createdByAccountId: user.accountId,
+      },
+    });
+    await prisma.taskMember.updateMany({
+      where: { taskId: task.taskId, personId: user.personId, removedAt: null },
+      data: { removedAt: new Date(now.getTime() - 30_000) },
+    });
+
+    const firstPage = await getPersonalDueSegments({
+      actor: user,
+      input: { limit: 2 },
+      now,
+    });
+    expect(firstPage.items.map((item) => item.id)).toEqual([
+      dueSegments[0]!.id,
+      dueSegments[1]!.id,
+    ]);
+    expect(firstPage.items.some((item) => item.id === removedTaskSegment.id)).toBe(false);
+    expect(firstPage.nextCursor).toEqual(expect.any(String));
+    expect(firstPage.nextCursor).not.toContain(dueSegments[1]!.id);
+
+    await prisma.workSegment.update({
+      where: { id: dueSegments[1]!.id },
+      data: { status: "CONFIRMED" },
+    });
+
+    const secondPage = await getPersonalDueSegments({
+      actor: user,
+      input: { cursor: firstPage.nextCursor, limit: 2 },
+      now,
+    });
+    expect(secondPage.items.map((item) => item.id)).toEqual([dueSegments[2]!.id]);
+    expect(secondPage.nextCursor).toBeNull();
+
+    const other = await createActor("S8 Due cursor other");
+    for (const invalidCursor of ["malformed", firstPage.nextCursor]) {
+      const targetActor = invalidCursor === "malformed" ? user : other;
+      await expect(
+        getPersonalDueSegments({
+          actor: targetActor,
+          input: { cursor: invalidCursor, limit: 2 },
+          now,
+        }).catch((error) => toProjectManagementServiceError(error).code),
+      ).resolves.toBe("VALIDATION_ERROR");
+    }
   });
 
   test("Task approval gate hides Terminal inbox work and disables Canvas actions until release", async () => {
