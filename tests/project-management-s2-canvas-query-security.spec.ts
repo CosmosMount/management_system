@@ -2327,6 +2327,152 @@ test.describe("S2 canvas query security", () => {
     expect(result.contentRange?.startMs).toBe(taskCreatedAt.createdAt.getTime());
   });
 
+  test("active Planned expands content-driven range with Shanghai month padding", async () => {
+    const owner = await createAccountPerson("Planned 范围 Owner");
+    await prisma.systemRoleAssignment.create({
+      data: {
+        accountId: owner.account.id,
+        role: "PROJECT_ADMINISTRATOR",
+        team: "",
+        techGroup: "",
+      },
+    });
+    const task = await createTask({
+      ownerAccountId: owner.account.id,
+      title: "Planned 范围 Task",
+      team: "英雄",
+      techGroup: "电控",
+      members: [{ personId: owner.person.id, role: "OWNER" }],
+      plannedStartAt: new Date("2026-08-01T09:00:00.000+08:00"),
+    });
+    const activeStart = new Date("2026-06-01T09:00:00.000+08:00");
+    const activeEnd = new Date("2026-06-02T09:00:00.000+08:00");
+    const [activeSegment] = await Promise.all([
+      createSegment({
+        accountId: owner.account.id,
+        personId: owner.person.id,
+        taskId: task.taskId,
+        startAt: activeStart,
+        endAt: activeEnd,
+        content: "有效 Planned 范围边界",
+      }),
+      createSegment({
+        accountId: owner.account.id,
+        personId: owner.person.id,
+        taskId: task.taskId,
+        status: "CONFIRMED",
+        startAt: new Date("2026-02-01T09:00:00.000+08:00"),
+        endAt: new Date("2026-02-02T09:00:00.000+08:00"),
+        content: "已确认 Planned 不扩展范围",
+      }),
+      createSegment({
+        accountId: owner.account.id,
+        personId: owner.person.id,
+        taskId: task.taskId,
+        status: "CANCELLED",
+        startAt: new Date("2026-01-01T09:00:00.000+08:00"),
+        endAt: new Date("2026-01-02T09:00:00.000+08:00"),
+        content: "已取消 Planned 不扩展范围",
+      }),
+    ]);
+
+    const beforeQuery = Date.now();
+    const result = await getContentDrivenTimeCanvasData({
+      actor: actor(owner),
+      preferredCenterMs: Date.parse("2026-08-01T09:00:00.000+08:00"),
+      input: {
+        scope: { kind: "TASK_SCOPED", taskId: task.taskId },
+        personIds: [],
+        taskIds: [],
+        tagIds: [],
+        types: [],
+        statuses: [],
+        groupBy: "PERSON",
+        includeTaskAnchors: true,
+        includeActual: true,
+        includeBusyBlocks: false,
+        rowLimit: 50,
+      },
+      load: { mode: "INITIAL" },
+    });
+    const afterQuery = Date.now();
+
+    expect(result.contentRange?.startMs).toBe(activeStart.getTime());
+    expect(result.fullRange.startMs).toBe(
+      Date.parse("2026-04-01T00:00:00.000+08:00"),
+    );
+    expect(result.fullRange.startMs).toBeLessThanOrEqual(beforeQuery);
+    expect(result.fullRange.endMs).toBeGreaterThan(afterQuery);
+    expect(Date.parse(result.data.range.startAt)).toBe(result.fullRange.startMs);
+
+    const explicitResourceRange = await getTimeCanvasData({
+      actor: actor(owner),
+      input: canvasInput({
+        scope: { kind: "RESOURCE_PLANNER" },
+        groupBy: "PERSON",
+        personIds: [owner.person.id],
+      }),
+    });
+    expect(explicitResourceRange.range).toEqual({
+      startAt: RANGE_START,
+      endAt: RANGE_END,
+    });
+    expect(fullSegmentIds(explicitResourceRange)).not.toContain(activeSegment.id);
+  });
+
+  test("content-driven initial range stays on historical content while Today remains navigable", async () => {
+    const owner = await createAccountPerson("历史默认范围 Owner");
+    await prisma.systemRoleAssignment.create({
+      data: {
+        accountId: owner.account.id,
+        role: "PROJECT_ADMINISTRATOR",
+        team: "",
+        techGroup: "",
+      },
+    });
+    const historicalStart = new Date("2020-01-01T09:00:00.000+08:00");
+    const historicalMilestone = new Date("2020-02-01T09:00:00.000+08:00");
+    const task = await createTask({
+      ownerAccountId: owner.account.id,
+      title: "历史默认范围 Task",
+      team: "英雄",
+      techGroup: "电控",
+      members: [{ personId: owner.person.id, role: "OWNER" }],
+      plannedStartAt: historicalStart,
+    });
+    await prisma.milestoneNode.update({
+      where: { nodeId: task.milestoneNodeId },
+      data: { expectedCompletedAt: historicalMilestone },
+    });
+
+    const beforeQuery = Date.now();
+    const result = await getContentDrivenTimeCanvasData({
+      actor: actor(owner),
+      input: {
+        scope: { kind: "TASK_SCOPED", taskId: task.taskId },
+        personIds: [],
+        taskIds: [],
+        tagIds: [],
+        types: [],
+        statuses: [],
+        groupBy: "PERSON",
+        includeTaskAnchors: true,
+        includeActual: true,
+        includeBusyBlocks: false,
+        rowLimit: 50,
+      },
+      load: { mode: "INITIAL" },
+    });
+    const logicalStart = Date.parse(result.data.range.startAt);
+    const logicalEnd = Date.parse(result.data.range.endAt);
+
+    expect(logicalStart).toBeLessThanOrEqual(historicalStart.getTime());
+    expect(logicalEnd).toBeGreaterThan(historicalMilestone.getTime());
+    expect(logicalEnd).toBeLessThan(beforeQuery);
+    expect(result.fullRange.startMs).toBeLessThanOrEqual(historicalStart.getTime());
+    expect(result.fullRange.endMs).toBeGreaterThan(beforeQuery);
+  });
+
   test("time-object limit rejects 5001 Busy-only records without an unbounded response", async () => {
     test.setTimeout(120_000);
     const owner = await createAccountPerson("5001 Busy Owner");

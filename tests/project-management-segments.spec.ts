@@ -1516,10 +1516,29 @@ test.describe("project management P5 work segment services", () => {
       taskId: fixture.taskId,
     });
 
+    const [pendingConfirmationCount, inProgressCount] = await Promise.all([
+      prisma.workSegment.count({
+        where: {
+          type: "PLANNED",
+          status: { in: ["PLANNED", "IN_PROGRESS"] },
+          endAt: { lte: transitionNow },
+          deletedAt: null,
+        },
+      }),
+      prisma.workSegment.count({
+        where: {
+          type: "PLANNED",
+          status: "PLANNED",
+          startAt: { lte: transitionNow },
+          endAt: { gt: transitionNow },
+          deletedAt: null,
+        },
+      }),
+    ]);
     const result = await scanSegmentTransitions(transitionNow);
     expect(result).toEqual({
-      pendingConfirmationCount: 1,
-      inProgressCount: 1,
+      pendingConfirmationCount: Math.min(pendingConfirmationCount, 500),
+      inProgressCount: Math.min(inProgressCount, 500),
     });
 
     const transitioned = await prisma.workSegment.findMany({

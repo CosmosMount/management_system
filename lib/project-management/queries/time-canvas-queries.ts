@@ -429,11 +429,18 @@ export async function getContentDrivenTimeCanvasData({
     }
   }
   const contentRange = contentTimeBounds(timestamps);
-  const fullRange = padShanghaiCalendarRange(contentRange, 2, seedStart);
   const now = Date.now();
-  const fallbackCenterMs = now >= fullRange.startMs && now < fullRange.endMs
+  const contentNavigationRange = padShanghaiCalendarRange(contentRange, 2, seedStart);
+  const todayNavigationRange = padShanghaiCalendarRange(null, 2, now);
+  const fullRange = {
+    startMs: Math.min(contentNavigationRange.startMs, todayNavigationRange.startMs),
+    endMs: Math.max(contentNavigationRange.endMs, todayNavigationRange.endMs),
+  };
+  const fallbackCenterMs = now >= contentNavigationRange.startMs &&
+      now < contentNavigationRange.endMs
     ? now
-    : (contentRange?.startMs ?? (fullRange.startMs + fullRange.endMs) / 2);
+    : (contentRange?.startMs ??
+      (contentNavigationRange.startMs + contentNavigationRange.endMs) / 2);
   const resolvedCenterMs = requestedCenterMs !== null &&
       requestedCenterMs >= fullRange.startMs &&
       requestedCenterMs < fullRange.endMs

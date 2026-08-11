@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -45,6 +46,7 @@ import type {
   TimeCanvasBrushRequest,
   TimeCanvasMode,
   TimeCanvasModel,
+  TimeCanvasRange,
   TimeCanvasSelection,
   TimeCanvasZoom,
 } from "@/components/project-management/time-canvas/types";
@@ -99,6 +101,10 @@ type FailedBlock = {
   requestRange: { startMs: number; endMs: number };
   message: string;
   kind: "LOAD" | "CAPACITY" | "CONFLICT";
+};
+type PendingPlannedRange = {
+  range: TimeCanvasRange;
+  previousRowPageKey?: string;
 };
 
 export function ResourcePlannerCanvasClient({
@@ -158,6 +164,7 @@ export function ResourcePlannerCanvasClient({
   const model = useMemo(
     () => ({
       ...initialModel,
+      loadedRanges: cachedBlocks.map((block) => block.range),
       rows: resizeRowsForSegments(
         readOnly
           ? initialModel.rows.map((row) => ({ ...row, editable: false }))
@@ -188,7 +195,7 @@ export function ResourcePlannerCanvasClient({
             : segment,
         ),
     }),
-    [cachedSegments, initialModel, readOnly],
+    [cachedBlocks, cachedSegments, initialModel, readOnly],
   );
   const initialSelection = useMemo<TimeCanvasSelection>(() => {
     if (!initialFocusId) return null;
@@ -217,7 +224,11 @@ export function ResourcePlannerCanvasClient({
   const [viewportRange, setViewportRange] = useState(
     initialModel.loadedRanges?.[0] ?? initialModel.range,
   );
-  const [currentZoom, setCurrentZoom] = useState(initialZoom);
+  const [currentZoom, setCurrentZoom] = useState<TimeCanvasZoom>(
+    initialZoom ?? "WEEK",
+  );
+  const [pendingPlannedRange, setPendingPlannedRange] =
+    useState<PendingPlannedRange | null>(null);
   const [dialogDirty, setDialogDirty] = useState(false);
   const [createDraft, setCreateDraft] = useState<CreateDraft | null>(null);
   const [detail, setDetail] = useState<WorkSegmentDetail | null>(null);
@@ -240,6 +251,19 @@ export function ResourcePlannerCanvasClient({
   const dialogDirtyRef = useRef(dialogDirty);
   const adaptiveRefreshStateRef = useRef<"IDLE" | "DEFERRED" | "REFRESHING">("IDLE");
   const previousInitialFocusRef = useRef(initialFocusId);
+  const centerNavigationTargetRef = useRef<number | null>(null);
+  const viewportUrlTimerRef = useRef<number | null>(null);
+  const handleViewportChange = useCallback((nextViewport: TimeCanvasRange) => {
+    const navigationTarget = centerNavigationTargetRef.current;
+    if (
+      navigationTarget !== null &&
+      nextViewport.startMs <= navigationTarget &&
+      navigationTarget < nextViewport.endMs
+    ) {
+      centerNavigationTargetRef.current = null;
+    }
+    setViewportRange(nextViewport);
+  }, []);
   const selectedCanvasSegment = useMemo(
     () =>
       openSegmentId
@@ -426,21 +450,20 @@ export function ResourcePlannerCanvasClient({
     router.refresh();
   }, [cachedMerge.conflictBlockKeys, dialogDirty, incomingModel, initialModel, router]);
   useEffect(() => {
-    if (!persistViewportInUrl || !currentZoom) return;
-    const timer = window.setTimeout(() => {
-      const url = new URL(window.location.href);
-      url.searchParams.set(
-        "center",
-        new Date((viewportRange.startMs + viewportRange.endMs) / 2).toISOString(),
-      );
-      url.searchParams.set("scale", currentZoom.toLowerCase());
-      url.searchParams.delete("date");
-      url.searchParams.delete("mode");
-      url.searchParams.delete("zoom");
-      window.history.replaceState(window.history.state, "", `${url.pathname}?${url.searchParams.toString()}`);
-      window.dispatchEvent(new Event(TIME_CANVAS_VIEWPORT_STATE_EVENT));
+    if (!persistViewportInUrl || centerNavigationTargetRef.current !== null) return;
+    viewportUrlTimerRef.current = window.setTimeout(() => {
+      viewportUrlTimerRef.current = null;
+      if (centerNavigationTargetRef.current !== null) return;
+      replaceViewportUrl({
+        centerMs: (viewportRange.startMs + viewportRange.endMs) / 2,
+        zoom: currentZoom,
+      });
     }, 300);
-    return () => window.clearTimeout(timer);
+    return () => {
+      if (viewportUrlTimerRef.current === null) return;
+      window.clearTimeout(viewportUrlTimerRef.current);
+      viewportUrlTimerRef.current = null;
+    };
   }, [currentZoom, persistViewportInUrl, viewportRange]);
   useEffect(() => {
     if (
@@ -453,7 +476,12 @@ export function ResourcePlannerCanvasClient({
       return;
     }
     const requestedRowPageKey = initialModel.rowPageKey;
-    const desiredRanges = blockRangesForViewport(initialModel.range, viewportRange);
+    const desiredRanges = mergeBlockRanges(
+      blockRangesForViewport(initialModel.range, viewportRange),
+      pendingPlannedRange
+        ? blockRangesForViewport(initialModel.range, pendingPlannedRange.range)
+        : [],
+    );
     const desiredSignature = desiredRanges.map(blockKey).join("|");
     if (capacityViewportSignatureRef.current !== desiredSignature) {
       capacityViewportSignatureRef.current = desiredSignature;
@@ -557,7 +585,12 @@ export function ResourcePlannerCanvasClient({
         setCachedBlocks(cacheResult.blocks);
         const retainedKeys = new Set(cacheResult.blocks.map((block) => block.key));
         const desiredKeys = new Set(
-          blockRangesForViewport(initialModel.range, viewportRangeRef.current).map(blockKey),
+          mergeBlockRanges(
+            blockRangesForViewport(initialModel.range, viewportRangeRef.current),
+            pendingPlannedRange
+              ? blockRangesForViewport(initialModel.range, pendingPlannedRange.range)
+              : [],
+          ).map(blockKey),
         );
         const rejectedDesiredBlocks = attemptedBlocks.filter((block) =>
           desiredKeys.has(block.key) && !retainedKeys.has(block.key),
@@ -621,9 +654,38 @@ export function ResourcePlannerCanvasClient({
     initialModel.rowPageKey,
     initialModel.rows,
     openSegmentId,
+    pendingPlannedRange,
     router,
     selection,
     viewportRange,
+  ]);
+  useEffect(() => {
+    if (!pendingPlannedRange) return;
+    if (initialModel.rowPageKey === pendingPlannedRange.previousRowPageKey) return;
+    const targetStart = Math.max(
+      initialModel.range.startMs,
+      pendingPlannedRange.range.startMs,
+    );
+    const targetEnd = Math.min(
+      initialModel.range.endMs,
+      pendingPlannedRange.range.endMs,
+    );
+    const target = targetEnd > targetStart
+      ? { startMs: targetStart, endMs: targetEnd }
+      : null;
+    const targetLoaded = target
+      ? cachedBlocks.some(
+        (block) => block.range.startMs < target.endMs && block.range.endMs > target.startMs,
+      )
+      : true;
+    if (!targetLoaded) return;
+    const timer = window.setTimeout(() => setPendingPlannedRange(null), 0);
+    return () => window.clearTimeout(timer);
+  }, [
+    cachedBlocks,
+    initialModel.range,
+    initialModel.rowPageKey,
+    pendingPlannedRange,
   ]);
   useEffect(() => {
     let active = true;
@@ -704,6 +766,13 @@ export function ResourcePlannerCanvasClient({
           if (stale) router.refresh();
           return;
         }
+        const plannedRange = plannedRangeFromMutation(result.data);
+        if (plannedRange) {
+          setPendingPlannedRange({
+            range: plannedRange,
+            previousRowPageKey: initialModel.rowPageKey,
+          });
+        }
         setNotice({ kind: "success", message: successMessage });
         if (openSegmentId) {
           setOpenSegmentId(null);
@@ -711,7 +780,19 @@ export function ResourcePlannerCanvasClient({
           setSelection(null);
         }
         onSuccess?.();
-        router.refresh();
+        if (persistViewportInUrl) {
+          replaceViewportUrl({
+            centerMs:
+              (viewportRangeRef.current.startMs + viewportRangeRef.current.endMs) / 2,
+            zoom: currentZoom,
+          });
+          const url = new URL(window.location.href);
+          router.replace(`${url.pathname}?${url.searchParams.toString()}`, {
+            scroll: false,
+          });
+        } else {
+          router.refresh();
+        }
       });
   };
 
@@ -753,6 +834,11 @@ export function ResourcePlannerCanvasClient({
     url.searchParams.delete("date");
     url.searchParams.delete("mode");
     url.searchParams.delete("zoom");
+    centerNavigationTargetRef.current = centerMs;
+    if (viewportUrlTimerRef.current !== null) {
+      window.clearTimeout(viewportUrlTimerRef.current);
+      viewportUrlTimerRef.current = null;
+    }
     setNotice({ kind: "info", message: "正在定位新的时间窗口…" });
     startTransition(() => {
       router.replace(`${url.pathname}?${url.searchParams.toString()}`, { scroll: false });
@@ -816,7 +902,7 @@ export function ResourcePlannerCanvasClient({
       {initialModel.rangeClipped && initialModel.fullRange && (
         <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">
           <span className="min-w-0 flex-1">
-            完整内容超过三个上海日历年，当前显示一个三年窗口。
+            可导航时间范围超过三个上海日历年，当前显示一个三年窗口。
           </span>
           <Button
             type="button"
@@ -892,7 +978,6 @@ export function ResourcePlannerCanvasClient({
       <div className="min-w-0">
         <div className="min-w-0 overflow-hidden rounded-xl border border-border bg-background">
           <TimeCanvas
-            key={initialFocusId ?? "time-canvas"}
             mode={mode}
             model={model}
             initialZoom={initialZoom}
@@ -932,8 +1017,25 @@ export function ResourcePlannerCanvasClient({
             }}
             selection={selection}
             onSelectionChange={setSelection}
-            onViewportChange={setViewportRange}
-            onZoomChange={setCurrentZoom}
+            onViewportChange={handleViewportChange}
+            onZoomChange={(nextZoom) => {
+              setCurrentZoom(nextZoom);
+              if (!persistViewportInUrl) return;
+              const pendingCenter = centerNavigationTargetRef.current;
+              replaceViewportUrl({
+                centerMs: pendingCenter ??
+                  (viewportRangeRef.current.startMs + viewportRangeRef.current.endMs) / 2,
+                zoom: nextZoom,
+              });
+              if (pendingCenter !== null) {
+                const url = new URL(window.location.href);
+                startTransition(() => {
+                  router.replace(`${url.pathname}?${url.searchParams.toString()}`, {
+                    scroll: false,
+                  });
+                });
+              }
+            }}
             navigationRange={initialModel.fullRange}
             onRequestCenter={adaptiveBlockQuery ? requestContentCenter : undefined}
             emptyMessage="当前筛选和时间范围内没有可见安排。"
@@ -1083,6 +1185,61 @@ function blockRangesForViewport(
 
 function blockKey(range: { startMs: number; endMs: number }) {
   return `${range.startMs}:${range.endMs}`;
+}
+
+function mergeBlockRanges(
+  primary: TimeCanvasRange[],
+  additional: TimeCanvasRange[],
+) {
+  const ranges = new Map<string, TimeCanvasRange>();
+  for (const range of [...primary, ...additional]) {
+    ranges.set(blockKey(range), range);
+  }
+  return [...ranges.values()];
+}
+
+function plannedRangeFromMutation(data: unknown): TimeCanvasRange | null {
+  if (!data || typeof data !== "object" || !("segment" in data)) return null;
+  const segment = data.segment;
+  if (!segment || typeof segment !== "object") return null;
+  const record = segment as Record<string, unknown>;
+  if (
+    record.type !== "PLANNED" ||
+    record.status === "CONFIRMED" ||
+    record.status === "CANCELLED" ||
+    typeof record.startAt !== "string" ||
+    typeof record.endAt !== "string"
+  ) {
+    return null;
+  }
+  const startMs = Date.parse(record.startAt);
+  const endMs = Date.parse(record.endAt);
+  return Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs
+    ? { startMs, endMs }
+    : null;
+}
+
+function replaceViewportUrl({
+  centerMs,
+  zoom,
+}: {
+  centerMs?: number;
+  zoom: TimeCanvasZoom;
+}) {
+  const url = new URL(window.location.href);
+  if (typeof centerMs === "number" && Number.isFinite(centerMs)) {
+    url.searchParams.set("center", new Date(centerMs).toISOString());
+  }
+  url.searchParams.set("scale", zoom.toLowerCase());
+  url.searchParams.delete("date");
+  url.searchParams.delete("mode");
+  url.searchParams.delete("zoom");
+  window.history.replaceState(
+    window.history.state,
+    "",
+    `${url.pathname}?${url.searchParams.toString()}`,
+  );
+  window.dispatchEvent(new Event(TIME_CANVAS_VIEWPORT_STATE_EVENT));
 }
 
 function resizeRowsForSegments(

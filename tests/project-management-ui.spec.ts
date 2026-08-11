@@ -1218,6 +1218,26 @@ test.describe("project management P4/P6 UI integration", () => {
     await expect(
       page.getByTestId(`milestone-marker-plan-start:${fixture.taskId}`),
     ).toHaveAttribute("aria-pressed", "true");
+    const canvasRoot = page.getByTestId("time-canvas-root");
+    await canvasRoot.getByRole("button", { name: "月", exact: true }).click();
+    await expect(canvasRoot).toHaveAttribute("data-zoom", "MONTH");
+    await canvasRoot.evaluate((element) => {
+      const state = window as typeof window & {
+        __taskCanvasRoot?: Element;
+        __taskCanvasZoomHistory?: string[];
+        __taskCanvasZoomObserver?: MutationObserver;
+      };
+      state.__taskCanvasZoomObserver?.disconnect();
+      state.__taskCanvasRoot = element;
+      state.__taskCanvasZoomHistory = [element.dataset.zoom ?? ""];
+      state.__taskCanvasZoomObserver = new MutationObserver(() => {
+        state.__taskCanvasZoomHistory?.push(element.dataset.zoom ?? "");
+      });
+      state.__taskCanvasZoomObserver.observe(element, {
+        attributes: true,
+        attributeFilter: ["data-zoom"],
+      });
+    });
     const canvasScroll = page.getByTestId("time-canvas-scroll");
     await page
       .getByTestId("task-plan-node-navigator")
@@ -1226,6 +1246,21 @@ test.describe("project management P4/P6 UI integration", () => {
     await expect
       .poll(() => canvasScroll.evaluate((element) => element.scrollLeft))
       .toBeGreaterThan(1);
+    await expect(canvasRoot).toHaveAttribute("data-zoom", "MONTH");
+    expect(
+      await canvasRoot.evaluate(
+        (element) => element === (
+          window as typeof window & { __taskCanvasRoot?: Element }
+        ).__taskCanvasRoot,
+      ),
+    ).toBe(true);
+    await page.waitForTimeout(500);
+    expect(
+      await page.evaluate(() =>
+        (window as typeof window & { __taskCanvasZoomHistory?: string[] })
+          .__taskCanvasZoomHistory ?? [],
+      ),
+    ).toEqual(["MONTH"]);
     const firstMilestoneMarker = page.getByRole("button", {
       name: /计划节点 P6 UI 第一阶段/,
     });
@@ -2407,6 +2442,198 @@ test.describe("project management P4/P6 UI integration", () => {
     await expectHealthyPage(page);
   });
 
+  test("Task workbench expands its range for an earlier Planned and preserves the viewport", async ({
+    context,
+    page,
+    baseURL,
+  }) => {
+    const fixture = await createDraftWorkbenchFixture();
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.owner.openId,
+      name: fixture.owner.person.displayName,
+    });
+
+    await page.goto(`/progress/tasks/${fixture.taskId}`);
+    const canvasRoot = page.getByTestId("time-canvas-root");
+    await expect(canvasRoot).toHaveAttribute("data-zoom", "WEEK");
+    await canvasRoot.getByRole("button", { name: "季", exact: true }).click();
+    await expect(canvasRoot).toHaveAttribute("data-zoom", "QUARTER");
+    await expect(page).toHaveURL(/scale=quarter/);
+    await expect.poll(() => Number.isFinite(Date.parse(
+      new URL(page.url()).searchParams.get("center") ?? "",
+    ))).toBe(true);
+    await page.waitForTimeout(500);
+    const centerBefore = Date.parse(
+      new URL(page.url()).searchParams.get("center") ?? "",
+    );
+    const originalRangeStart = Number(
+      await canvasRoot.getAttribute("data-range-start-ms"),
+    );
+
+    const content = `范围扩展 Planned ${randomUUID()}`;
+    await page.getByRole("button", { name: "新增投入", exact: true }).click();
+    const quickCreate = page.getByRole("form", { name: "投入快速创建" });
+    await quickCreate.getByLabel("开始", { exact: true }).fill("2025-06-01T09:00");
+    await quickCreate.getByLabel("结束", { exact: true }).fill("2025-06-02T09:00");
+    await quickCreate.getByLabel("内容", { exact: true }).fill(content);
+    await quickCreate.getByRole("button", { name: "创建", exact: true }).click();
+
+    await expect(page.getByText("已创建投入记录")).toBeVisible();
+    const expandedStart = Date.parse("2025-04-01T00:00:00.000+08:00");
+    await expect(canvasRoot).toHaveAttribute(
+      "data-range-start-ms",
+      String(expandedStart),
+    );
+    expect(originalRangeStart).toBeGreaterThan(expandedStart);
+    await expect(canvasRoot).toHaveAttribute("data-zoom", "QUARTER");
+    await expect(page).toHaveURL(/scale=quarter/);
+    await expect.poll(() => {
+      const centerAfter = Date.parse(
+        new URL(page.url()).searchParams.get("center") ?? "",
+      );
+      return Math.abs(centerAfter - centerBefore);
+    }).toBeLessThan(60 * 60 * 1_000);
+    await expect.poll(async () =>
+      (await canvasRoot.getAttribute("data-loaded-ranges"))
+        ?.split("|")
+        .some((range) => range.startsWith(`${expandedStart}:`)) ?? false,
+    ).toBe(true);
+    await expect.poll(() => prisma.workSegment.findFirst({
+      where: { taskId: fixture.taskId, content },
+      select: { type: true, status: true, startAt: true, endAt: true },
+    })).toEqual({
+      type: "PLANNED",
+      status: "PLANNED",
+      startAt: new Date("2025-06-01T09:00:00.000+08:00"),
+      endAt: new Date("2025-06-02T09:00:00.000+08:00"),
+    });
+
+    const createdSegment = await prisma.workSegment.findFirstOrThrow({
+      where: { taskId: fixture.taskId, content },
+      select: { id: true },
+    });
+    const editedCanvasRoot = page.getByTestId("time-canvas-root");
+    await page.getByTestId("time-canvas-scroll").evaluate((element) => {
+      element.scrollLeft = 0;
+      element.dispatchEvent(new Event("scroll"));
+    });
+    const segmentBlock = page.getByTestId(`segment-block-${createdSegment.id}`);
+    await expect(segmentBlock).toBeVisible();
+    await segmentBlock.focus();
+    await segmentBlock.press("Enter");
+    const editForm = page.getByRole("form", { name: "编辑投入详情" });
+    await expect(editForm).toBeVisible();
+    await page.waitForTimeout(500);
+    const centerBeforeEdit = Date.parse(
+      new URL(page.url()).searchParams.get("center") ?? "",
+    );
+    await editForm.getByLabel("开始", { exact: true }).fill("2024-06-01T09:00");
+    await editForm.getByLabel("结束", { exact: true }).fill("2024-06-02T09:00");
+    await editForm.getByRole("button", { name: "保存", exact: true }).click();
+
+    await expect(page.getByText("已更新投入详情")).toBeVisible();
+    const editedExpandedStart = Date.parse("2024-04-01T00:00:00.000+08:00");
+    await expect(editedCanvasRoot).toHaveAttribute(
+      "data-range-start-ms",
+      String(editedExpandedStart),
+    );
+    await expect.poll(async () =>
+      (await editedCanvasRoot.getAttribute("data-loaded-ranges"))
+        ?.split("|")
+        .some((range) => range.startsWith(`${editedExpandedStart}:`)) ?? false,
+    ).toBe(true);
+    await expect(editedCanvasRoot).toHaveAttribute("data-zoom", "QUARTER");
+    await expect.poll(() => {
+      const centerAfterEdit = Date.parse(
+        new URL(page.url()).searchParams.get("center") ?? "",
+      );
+      return Math.abs(centerAfterEdit - centerBeforeEdit);
+    }).toBeLessThan(60 * 60 * 1_000);
+    await expect.poll(() => prisma.workSegment.findUnique({
+      where: { id: createdSegment.id },
+      select: { type: true, status: true, startAt: true, endAt: true },
+    })).toEqual({
+      type: "PLANNED",
+      status: "PLANNED",
+      startAt: new Date("2024-06-01T09:00:00.000+08:00"),
+      endAt: new Date("2024-06-02T09:00:00.000+08:00"),
+    });
+    await expectHealthyPage(page);
+  });
+
+  test("Task workbench Today loads the current window without changing scale", async ({
+    context,
+    page,
+    baseURL,
+  }) => {
+    const fixture = await createDraftWorkbenchFixture();
+    const historicalTitle = `S6 Historical Today ${randomUUID()}`;
+    const historicalTask = await createTaskDraft(actor(fixture.admin), {
+      title: historicalTitle,
+      description: "验证历史内容仍可定位今天",
+      team: "英雄",
+      techGroup: "电控",
+      priority: "MEDIUM",
+      tagIds: [],
+      members: [{ personId: fixture.owner.person.id, role: "OWNER" }],
+      milestones: [{
+        goal: "历史 Milestone",
+        completionCriteria: "历史节点完成",
+        expectedCompletedAt: "2020-02-01T10:00:00.000Z",
+        reviewRequirements: "提交历史证据",
+        businessDescription: "历史 Milestone",
+      }],
+      plannedStartAt: "2020-01-01T10:00:00.000Z",
+      termination: {
+        name: "Historical Terminal",
+        plannedOutcomeCriteria: "历史任务结束",
+        plannedAt: "2020-03-01T10:00:00.000Z",
+        businessDescription: "历史结束确认",
+      },
+      idempotencyKey: `s6-historical-today-${randomUUID()}`,
+    });
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.owner.openId,
+      name: fixture.owner.person.displayName,
+    });
+
+    await page.goto(
+      `/progress/tasks/${historicalTask.taskId}?center=${encodeURIComponent("2020-02-01T10:00:00.000Z")}`,
+    );
+    const canvasRoot = page.getByTestId("time-canvas-root");
+    const nowBeforeNavigation = Date.now();
+    expect(Number(await canvasRoot.getAttribute("data-range-end-ms")))
+      .toBeLessThan(nowBeforeNavigation);
+    await canvasRoot.getByRole("button", { name: "季", exact: true }).click();
+    await expect(canvasRoot).toHaveAttribute("data-zoom", "QUARTER");
+
+    await canvasRoot.getByRole("button", { name: "今天", exact: true }).click();
+    await canvasRoot.getByRole("button", { name: "月", exact: true }).click();
+    await expect.poll(() => {
+      const center = Date.parse(new URL(page.url()).searchParams.get("center") ?? "");
+      return Math.abs(center - Date.now());
+    }).toBeLessThan(12 * 60 * 60 * 1_000);
+    await expect.poll(async () => {
+      const now = Date.now();
+      const start = Number(await canvasRoot.getAttribute("data-range-start-ms"));
+      const end = Number(await canvasRoot.getAttribute("data-range-end-ms"));
+      return start <= now && now < end;
+    }).toBe(true);
+    await expect.poll(async () => {
+      const now = Date.now();
+      return (await canvasRoot.getAttribute("data-loaded-ranges"))
+        ?.split("|")
+        .some((value) => {
+          const [start, end] = value.split(":").map(Number);
+          return start <= now && now < end;
+        }) ?? false;
+    }).toBe(true);
+    await expect(canvasRoot).toHaveAttribute("data-zoom", "MONTH");
+    await expect.poll(() => new URL(page.url()).searchParams.get("scale"))
+      .toBe("month");
+    await expectHealthyPage(page);
+  });
+
   test("Task workbench keeps saved related Task and members across authoritative refreshes", async ({
     context,
     page,
@@ -2444,7 +2671,7 @@ test.describe("project management P4/P6 UI integration", () => {
         name: fixture.admin.person.displayName,
         exact: true,
       }),
-    ).toHaveCount(0);
+    ).toBeVisible();
     await expect(
       page.getByRole("option", {
         name: fixture.reviewer.person.displayName,
@@ -3188,9 +3415,10 @@ async function createUiFixture() {
 }
 
 async function createDraftWorkbenchFixture() {
-  const admin = await createAccountPerson("S6 Draft Team Admin");
-  const owner = await createAccountPerson("S6 Draft Owner");
-  const reviewer = await createAccountPerson("S6 Draft Reviewer");
+  const fixtureSuffix = randomUUID();
+  const admin = await createAccountPerson(`S6 Draft Team Admin ${fixtureSuffix}`);
+  const owner = await createAccountPerson(`S6 Draft Owner ${fixtureSuffix}`);
+  const reviewer = await createAccountPerson(`S6 Draft Reviewer ${fixtureSuffix}`);
   const taskTitle = `S6 Draft Workbench ${randomUUID()}`;
   const task = await createTaskDraft(actor(admin), {
     title: taskTitle,

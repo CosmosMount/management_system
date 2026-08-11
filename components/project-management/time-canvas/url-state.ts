@@ -1,7 +1,4 @@
-import {
-  DAY_MS,
-  chooseFitZoom,
-} from "@/components/project-management/time-canvas/time-math";
+import { DAY_MS } from "@/components/project-management/time-canvas/time-math";
 import type {
   TimeCanvasRange,
   TimeCanvasZoom,
@@ -50,11 +47,9 @@ export function parseTimeCanvasUrlState(
   const normalizedZoom = requestedScale
     ? normalizeZoom(requestedScale)
     : normalizeLegacyZoom(requestedLegacyZoom);
-  const zoom = normalizedZoom
-    ? normalizedZoom
-    : chooseFitZoom(range);
+  const zoom = normalizedZoom ?? "WEEK";
   if (requestedZoom && !normalizedZoom) {
-    issues.push("缩放档位无效，已自动适配");
+    issues.push("缩放档位无效，已恢复周视图");
   }
 
   const requestedGroup = searchParams.get("group")?.toUpperCase();

@@ -480,11 +480,16 @@ test.describe("S3 TimeCanvas pure core", () => {
       RANGE,
     );
     expect(fallback.range).toEqual(RANGE);
+    expect(fallback.zoom).toBe("WEEK");
     expect(fallback.issues).toEqual(
       expect.arrayContaining([
         "日期范围无效，已恢复默认范围",
-        "缩放档位无效，已自动适配",
+        "缩放档位无效，已恢复周视图",
       ]),
+    );
+
+    expect(parseTimeCanvasUrlState(new URLSearchParams(), RANGE).zoom).toBe(
+      "WEEK",
     );
 
     const impossibleDate = parseTimeCanvasUrlState(
@@ -647,6 +652,41 @@ test.describe("S3 TimeCanvas controlled browser fixtures", () => {
     await expectHealthyPage(page);
   });
 
+  test("Today immediately centers a distant date without creeping", async ({
+    context,
+    page,
+    baseURL,
+  }) => {
+    const identity = await createCanvasBrowserIdentity();
+    await loginAsTestUser(context, baseURL, identity);
+    const today = new Date("2029-07-01T08:00:00.000+08:00");
+    await page.clock.setFixedTime(today);
+    await page.goto(
+      "/progress/time-canvas-fixtures?mode=RESOURCE_PLANNER&long=1&scale=week",
+    );
+
+    const scroll = page.getByTestId("time-canvas-scroll");
+    await expect.poll(() => scroll.evaluate((element) => element.scrollLeft)).toBe(0);
+    await page.getByRole("button", { name: "今天", exact: true }).click();
+    await page.evaluate(() => new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    }));
+
+    const viewport = page.getByTestId("time-canvas-observed-viewport");
+    const startMs = Number(await viewport.getAttribute("data-start-ms"));
+    const endMs = Number(await viewport.getAttribute("data-end-ms"));
+    expect(startMs).toBeLessThanOrEqual(today.getTime());
+    expect(endMs).toBeGreaterThan(today.getTime());
+    const settledLeft = await scroll.evaluate((element) => element.scrollLeft);
+    expect(settledLeft).toBeGreaterThan(0);
+    await page.waitForTimeout(200);
+    expect(await scroll.evaluate((element) => element.scrollLeft)).toBeCloseTo(
+      settledLeft,
+      0,
+    );
+    await expectHealthyPage(page);
+  });
+
   test("current-time line follows the live browser clock and stays below sticky headers", async ({
     context,
     page,
@@ -706,6 +746,13 @@ test.describe("S3 TimeCanvas controlled browser fixtures", () => {
         "data-mode",
         mode,
       );
+      await expect(page.getByTestId("time-canvas-root")).toHaveAttribute(
+        "data-zoom",
+        "WEEK",
+      );
+      await expect(page.getByRole("button", { name: /^今天/ })).toBeVisible();
+      await expect(page.getByRole("button", { name: "向前浏览时间" })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "向后浏览时间" })).toHaveCount(0);
       await expect(page.getByTestId("time-canvas-scroll")).toBeVisible();
       await expectHealthyPage(page);
     }

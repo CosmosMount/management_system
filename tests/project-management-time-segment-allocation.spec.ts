@@ -4,7 +4,7 @@ import { prisma } from "../lib/prisma";
 import { loginAsTestUser } from "./helpers/functional-fixtures";
 
 test.describe("time segment allocation UI", () => {
-  test("我的时间使用自适应尺度和独立底部滚动条", async ({
+  test("我的时间默认使用周尺度并保留独立底部滚动条", async ({
     context,
     page,
     baseURL,
@@ -32,7 +32,9 @@ test.describe("time segment allocation UI", () => {
     await expect(page.getByText("当前没有有效参与的 Task。", { exact: true })).toBeVisible();
     await expect(page.getByLabel("选择日期")).toHaveCount(0);
     await expect(page.getByTestId("time-canvas-range-pan-bar")).toHaveCount(0);
-    await expect(page.getByTestId("time-canvas-root")).toBeVisible();
+    const canvasRoot = page.getByTestId("time-canvas-root");
+    await expect(canvasRoot).toBeVisible();
+    await expect(canvasRoot).toHaveAttribute("data-zoom", "WEEK");
     await expect(page.getByTestId("time-canvas-bottom-scrollbar")).toBeVisible();
     for (const scale of ["周", "月", "季", "年"]) {
       await expect(page.getByRole("button", { name: scale, exact: true })).toBeVisible();
@@ -40,11 +42,16 @@ test.describe("time segment allocation UI", () => {
     await page.getByRole("button", { name: "年", exact: true }).click();
     await expect(page).toHaveURL(/scale=year/);
     await expect(page.getByTestId("time-canvas-bottom-scrollbar")).toHaveCount(0);
+    await expect.poll(() =>
+      new URL(page.url()).searchParams.get("center"),
+    ).not.toBeNull();
+    await page.waitForTimeout(500);
     const viewportUrl = new URL(page.url());
     const currentCenter = viewportUrl.searchParams.get("center");
     expect(currentCenter).toBeTruthy();
     await page.getByRole("link", { name: "显示全部", exact: true }).click();
     await expect(page).toHaveURL(/tasks=all/);
+    await page.waitForTimeout(500);
     const pagedUrl = new URL(page.url());
     expect(pagedUrl.searchParams.get("center")).toBe(currentCenter);
     expect(pagedUrl.searchParams.get("scale")).toBe("year");

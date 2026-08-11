@@ -521,7 +521,7 @@ pm2 start npm --name procurement-cron -- run cron
 - `/progress/tasks` 与 `/progress/tasks/[id]` 提供 Task 列表和 Task 工作台。人员投入时间线位于工作台 Tab 上方，并在“计划与资源”“概览”“修订与历史”“验收”“审计”之间切换时保持显示和交互状态。DRAFT 工作台的“概览”和“计划与资源”均为只读展示；Task Owner 或全局管理员可软删除未激活草稿，已激活及终态 Task 不提供该入口。ACTIVE 的既有元数据、Tag 和成员编辑保持不变。发起 Revision 进入 `/progress/tasks/[id]/revisions/new`，被驳回候选通过 `/progress/tasks/[id]/revisions/[revisionId]/edit` 修改；两者与 Task 创建/草稿编辑共用 Composer 的 TimeCanvas、节点表、Inspector、撤销/重做、校验和本地恢复，保存后直接返回“修订与历史”。工作台 Revision Tab 只保留历史、审批、取消和 Diff，不再内联编辑候选计划。
 - DRAFT Task 只能在计划开始时间已到达后激活；校验使用事务内的服务端时间，不追溯检查已经激活或结束的历史 Task。
 - `/progress/resources` 提供人员计划时间轴。总览只用于浏览和创建，双击投入或聚焦后按 Enter 会打开详情弹窗；既有投入只能在弹窗中保存、确认、取消或软删除。部分确认固定从计划起点开始，只保留未确认的尾段，不再提供直接拆分、合并或批量修改入口。
-- `/progress/my-timeline` 同时展示本人投入和有效参与 Task，默认只列进行中 Task，用户可切换显示草稿及全部终态；每页 25 条且 Task 列表与 Current Plan 轨道来自同一受约束装配。画布按当前页计划和本人可见投入自动计算范围，在内容两侧增加两个上海日历月，并以不超过 180 天的数据块读取。Task 与 Project 详情同样按当前计划和投入自动确定范围；人员计划仍保留显式 `from/to` 业务筛选。所有完整画布使用周/月/季/年显示尺度和独立底部滚动条，Task 详情沿用既有投入权限，Project 详情中的投入只读。
+- `/progress/my-timeline` 同时展示本人投入和有效参与 Task，默认只列进行中 Task，用户可切换显示草稿及全部终态；每页 25 条且 Task 列表与 Current Plan 轨道来自同一受约束装配。画布按当前页计划和本人可见投入自动计算范围，在内容两侧增加两个上海日历月，并以不超过 180 天的数据块读取。Task 与 Project 详情同样按当前计划和投入自动确定范围；人员计划仍保留显式 `from/to` 业务筛选。所有完整和紧凑画布默认使用周尺度，只有 URL 或调用方明确指定时才采用月/季/年；工具栏保留“今天”和独立底部滚动条，不显示含义不明确的前后箭头。新增或修改有效 Planned 后，内容驱动画布重新计算含两个月缓冲的范围、预加载目标数据块并保持当前视口；已确认或已取消 Planned 不扩大范围。Task 详情沿用既有投入权限，Project 详情中的投入只读。
 - `/progress/approvals` 汇总投入确认、Milestone Review、Revision 与 Termination；`/progress/tags` 管理 Tag。
 - `/progress/notifications` 提供站内通知中心和分类飞书偏好；站内通知始终保留，强制事件不受普通关闭偏好影响。
 - 旧 `/progress/task/:id` 会重定向到 `/progress/tasks/:id`；`/progress/projects/*` 是当前 Project 正式路由，旧 `/progress/kanban` 回到 `/progress`。

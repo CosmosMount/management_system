@@ -13,8 +13,6 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   Check,
-  ChevronLeft,
-  ChevronRight,
   Circle,
   Diamond,
   Flag,
@@ -25,7 +23,6 @@ import {
 import {
   DAY_MS,
   axisTicks,
-  chooseAdaptiveScale,
   createTimeScale,
   intervalToRect,
   moveTimePoint,
@@ -33,7 +30,6 @@ import {
   snapTime,
   snapTimeInRange,
   scrollLeftForCenter,
-  shiftViewportByRatio,
   timeToX,
   viewportCenterTime,
   visibleTimeWindow,
@@ -71,6 +67,7 @@ import {
 
 const AXIS_HEIGHT = 64;
 const PLAN_RAIL_TOP = 28;
+const DEFAULT_ZOOM: TimeCanvasZoom = "WEEK";
 const zoomOrder: TimeCanvasZoom[] = ["WEEK", "MONTH", "QUARTER", "YEAR"];
 const zoomLabels: Record<TimeCanvasZoom, string> = {
   WEEK: "周",
@@ -102,11 +99,10 @@ export function TimeCanvas({
     showBusy: displayInput?.showBusy ?? true,
     showInspector: displayInput?.showInspector ?? true,
   };
-  const [zoom, setZoom] = useState<TimeCanvasZoom>(initialZoom ?? "YEAR");
-  const userSelectedZoomRef = useRef(Boolean(initialZoom));
+  const [zoom, setZoom] = useState<TimeCanvasZoom>(initialZoom ?? DEFAULT_ZOOM);
   const [internalSelection, setInternalSelection] =
     useState<TimeCanvasSelection>(initialSelection);
-  const initialSelectionAppliedRef = useRef(false);
+  const appliedInitialSelectionKeyRef = useRef<string | null>(null);
   const selection = controlledSelection === undefined
     ? internalSelection
     : controlledSelection;
@@ -205,13 +201,17 @@ export function TimeCanvas({
     .join("|");
 
   useEffect(() => {
-    if (initialSelectionAppliedRef.current || !initialSelection) return;
+    if (!initialSelection) {
+      appliedInitialSelectionKeyRef.current = null;
+      return;
+    }
     const key = initialSelection.kind === "SEGMENT"
       ? segmentFocusKey(initialSelection.id)
       : anchorFocusKey(initialSelection.id);
+    if (appliedInitialSelectionKeyRef.current === key) return;
     const target = focusTargets.find((item) => item.key === key);
     if (!target) return;
-    initialSelectionAppliedRef.current = true;
+    appliedInitialSelectionKeyRef.current = key;
     viewportCenterRef.current = target.atMs;
     setActiveFocusKey(key);
     setPendingFocusKey(key);
@@ -233,11 +233,10 @@ export function TimeCanvas({
   useEffect(() => {
     if (externalZoomRef.current === initialZoom) return;
     externalZoomRef.current = initialZoom;
-    userSelectedZoomRef.current = Boolean(initialZoom);
-    const nextZoom = initialZoom ?? chooseAdaptiveScale(model.range, scrollState.width);
+    const nextZoom = initialZoom ?? DEFAULT_ZOOM;
     setZoom(nextZoom);
     onZoomChange?.(nextZoom);
-  }, [initialZoom, model.range, onZoomChange, scrollState.width]);
+  }, [initialZoom, onZoomChange]);
 
   useEffect(() => {
     const element = scrollElementRef.current;
@@ -250,17 +249,12 @@ export function TimeCanvas({
         ...current,
         width: nextViewportWidth,
       }));
-      if (!userSelectedZoomRef.current) {
-        const adaptiveZoom = chooseAdaptiveScale(model.range, nextViewportWidth);
-        setZoom(adaptiveZoom);
-        onZoomChange?.(adaptiveZoom);
-      }
     };
     updateWidth();
     const observer = new ResizeObserver(updateWidth);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [model.range, onZoomChange]);
+  }, []);
 
   useEffect(() => {
     const element = scrollElementRef.current;
@@ -385,7 +379,7 @@ export function TimeCanvas({
     viewportCenterRef.current = now;
     element.scrollTo({
       left: scrollLeftForCenter(scale, now, scrollState.width),
-      behavior: prefersReducedMotion() ? "auto" : "smooth",
+      behavior: "auto",
     });
   }, [
     liveNowMs,
@@ -397,48 +391,11 @@ export function TimeCanvas({
     scrollState.width,
   ]);
 
-  const changeRange = useCallback(
-    (direction: -1 | 1) => {
-      const element = scrollElementRef.current;
-      if (!element) return;
-      const left = shiftViewportByRatio({
-        scale,
-        scrollLeftPx: element.scrollLeft,
-        viewportWidthPx: scrollState.width,
-        direction,
-      });
-      if (left !== element.scrollLeft) {
-        viewportCenterRef.current = viewportCenterTime(scale, left, scrollState.width);
-        element.scrollTo({ left, behavior: prefersReducedMotion() ? "auto" : "smooth" });
-        return;
-      }
-      if (onRequestCenter) {
-        const currentCenter = viewportCenterTime(
-          scale,
-          element.scrollLeft,
-          scrollState.width,
-        );
-        const visibleDuration = scrollState.width * scale.msPerPixel;
-        onRequestCenter(currentCenter + direction * visibleDuration * 0.8);
-        return;
-      }
-      if (onRangeChange) {
-        const duration = model.range.endMs - model.range.startMs;
-        onRangeChange({
-          startMs: model.range.startMs + direction * duration,
-          endMs: model.range.endMs + direction * duration,
-        });
-      }
-    },
-    [model.range, onRangeChange, onRequestCenter, scale, scrollState.width],
-  );
-
   const changeZoom = useCallback((nextZoom: TimeCanvasZoom) => {
     const element = scrollElementRef.current;
     if (element) {
       viewportCenterRef.current = viewportCenterTime(scale, element.scrollLeft, scrollState.width);
     }
-    userSelectedZoomRef.current = true;
     setZoom(nextZoom);
     onZoomChange?.(nextZoom);
   }, [onZoomChange, scale, scrollState.width]);
@@ -488,36 +445,22 @@ export function TimeCanvas({
       className="min-w-0 max-w-full"
       aria-label="时间画布"
       data-mode={mode}
+      data-zoom={zoom}
+      data-range-start-ms={model.range.startMs}
+      data-range-end-ms={model.range.endMs}
+      data-loaded-ranges={model.loadedRanges
+        ?.map((range) => `${range.startMs}:${range.endMs}`)
+        .join("|")}
       data-testid="time-canvas-root"
       onKeyDown={handleKeyboard}
     >
       <TimeCanvasToolbar
         presentation={presentation}
         zoom={zoom}
-        canGoPrevious={
-          scrollState.left > 1 ||
-          Boolean(onRangeChange) ||
-          Boolean(
-            onRequestCenter &&
-            navigationRange &&
-            navigationRange.startMs < model.range.startMs,
-          )
-        }
-        canGoNext={
-          scrollState.left < scale.contentWidthPx - scrollState.width - 1 ||
-          Boolean(onRangeChange) ||
-          Boolean(
-            onRequestCenter &&
-            navigationRange &&
-            navigationRange.endMs > model.range.endMs,
-          )
-        }
         canGoToday={
           liveNowMs >= (navigationRange?.startMs ?? model.range.startMs) &&
           liveNowMs < (navigationRange?.endMs ?? model.range.endMs)
         }
-        onPrevious={() => changeRange(-1)}
-        onNext={() => changeRange(1)}
         onToday={scrollToToday}
         onZoomChange={changeZoom}
       />
@@ -676,21 +619,13 @@ function useLiveNow(generatedAt: string) {
 function TimeCanvasToolbar({
   presentation,
   zoom,
-  canGoPrevious,
-  canGoNext,
   canGoToday,
-  onPrevious,
-  onNext,
   onToday,
   onZoomChange,
 }: {
   presentation: TimeCanvasProps["presentation"];
   zoom: TimeCanvasZoom;
-  canGoPrevious: boolean;
-  canGoNext: boolean;
   canGoToday: boolean;
-  onPrevious: () => void;
-  onNext: () => void;
   onToday: () => void;
   onZoomChange: (zoom: TimeCanvasZoom) => void;
 }) {
@@ -713,9 +648,6 @@ function TimeCanvasToolbar({
           </Button>
         ))}
       </div>
-      <Button type="button" size="icon-sm" variant="outline" onClick={onPrevious} disabled={!canGoPrevious} aria-label="向前浏览时间">
-        <ChevronLeft aria-hidden="true" />
-      </Button>
       <span
         className="inline-flex"
         title={canGoToday ? undefined : "今天不在当前时间范围内"}
@@ -731,9 +663,6 @@ function TimeCanvasToolbar({
           今天
         </Button>
       </span>
-      <Button type="button" size="icon-sm" variant="outline" onClick={onNext} disabled={!canGoNext} aria-label="向后浏览时间">
-        <ChevronRight aria-hidden="true" />
-      </Button>
     </div>
   );
 }
@@ -2185,8 +2114,4 @@ function phaseBandToneClassName(tone: TimeCanvasPhaseBand["tone"]) {
     return "border-rose-500/60 bg-rose-500/15 text-rose-950 dark:text-rose-100";
   }
   return "border-slate-500/60 bg-slate-500/15 text-slate-950 dark:text-slate-100";
-}
-
-function prefersReducedMotion() {
-  return typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
