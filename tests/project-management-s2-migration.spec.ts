@@ -1112,6 +1112,15 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
       rangeStart,
       rangeEnd,
       groupBy: "PERSON",
+      includeTerminalPlanned: true,
+    }).success,
+  ).toBe(false);
+  expect(
+    getTimeCanvasDataInputSchema.safeParse({
+      scope: { kind: "RESOURCE_PLANNER" },
+      rangeStart,
+      rangeEnd,
+      groupBy: "PERSON",
       personLimit: 25,
     }).success,
   ).toBe(false);

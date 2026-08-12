@@ -700,7 +700,6 @@ export async function getResourcePlanPageData({
       groupBy: "PERSON",
       includeTaskAnchors: true,
       includeActual: true,
-      includeTerminalPlanned: true,
       emptyPersonIdsMeansNone: true,
       includeBusyBlocks: false,
       rowLimit: 50,
@@ -1256,16 +1255,12 @@ function segmentFilterWhere(
     AND: [
       {
         deletedAt: null,
-        ...(input.includeTerminalPlanned
-          ? {}
-          : {
-              NOT: {
-                AND: [
-                  { type: "PLANNED" },
-                  { status: { in: ["CONFIRMED", "CANCELLED"] } },
-                ],
-              },
-            }),
+        NOT: {
+          AND: [
+            { type: "PLANNED" },
+            { status: { in: ["CONFIRMED", "CANCELLED"] } },
+          ],
+        },
         ...(includeRange
           ? {
               startAt: { lt: input.rangeEnd },

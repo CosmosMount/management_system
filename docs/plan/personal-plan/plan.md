@@ -29,8 +29,8 @@
 7. 不再提供开始/结束日期、7/14/30 天、类型、状态、待确认或 Tag 筛选。
 8. 时间范围按当前 Task/Person 页实际内容计算，与 Task 工作台一致：内容两侧补两个上海日历月、
    逻辑窗口最多三年、数据按最多 180 天自适应块加载，并保证“今天”可导航。
-9. Person 行显示全部未软删除 Planned/Actual，包括已确认和已取消 Planned；状态继续由既有视觉
-   和详情表达，不删除历史计划事实。
+9. Person 行显示未软删除的有效 Planned 与 Actual；所有时间画布统一隐藏已确认和已取消
+   Planned，状态事实继续保留在数据库、来源和变更历史中。
 10. 所有用户可读取资源计划；服务端继续按现有 capability 决定可创建、编辑、确认、取消或删除
     哪些人员的 Segment，不能因聚合选择扩大写权限。
 11. Desktop 支持既有未保存创建草稿的直接交互；Pixel 5 继续只允许精确表单。Task Plan 行只读，
@@ -186,7 +186,7 @@ Desktop 使用三列选择器；Pixel 5 堆叠为单列，按钮可换行，页�
 - 默认全部模式、显式 Project、Task、Person 以及三者并集；
 - Project Task/成员展开、移出成员、已删除 Task/Project、停用但有历史投入人员；
 - Person 行不因 Task 选择丢失其他 Task/独立投入；
-- Planned/Actual 及终态 Planned 均返回，软删除 Actual 不返回；
+- 有效 Planned/Actual 返回，已确认或已取消 Planned 与软删除 Actual 不返回；
 - Task/Person 独立稳定分页，选择变化后旧 cursor 被拒绝；
 - 内容范围、无内容、超过三年、180 天 block、结构版本冲突；
 - 非管理员只读与允许/拒绝的 Segment mutation；

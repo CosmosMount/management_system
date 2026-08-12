@@ -240,7 +240,6 @@ export function ResourcePlannerCanvasClient({
       segments: cachedSegments
         .filter(
           (segment) =>
-            mode === "RESOURCE_PLANNER" ||
             segment.type !== "PLANNED" ||
             (segment.status !== "CONFIRMED" && segment.status !== "CANCELLED"),
         )
@@ -263,7 +262,7 @@ export function ResourcePlannerCanvasClient({
         ),
     };
     },
-    [adaptiveBlockQuery, cachedBlocks, cachedSegments, createDraft, initialModel, mode, readOnly],
+    [adaptiveBlockQuery, cachedBlocks, cachedSegments, createDraft, initialModel, readOnly],
   );
   const initialSelection = useMemo<TimeCanvasSelection>(() => {
     if (!initialFocusId) return null;

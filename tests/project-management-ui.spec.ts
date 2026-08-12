@@ -3413,16 +3413,40 @@ test.describe("project management P4/P6 UI integration", () => {
         createdByAccountId: owner.account.id,
       },
     });
-    const terminalPlannedSegment = await prisma.workSegment.create({
-      data: {
+    const terminalPlannedSegments = await Promise.all([
+      prisma.workSegment.create({ data: {
         personId: people[0]!.id,
         taskId: taskRecords[0]!.id,
         type: "PLANNED",
         status: "CANCELLED",
         startAt: new Date("2026-08-11T01:00:00.000Z"),
         endAt: new Date("2026-08-11T02:00:00.000Z"),
-        content: "资源计划保留终态 Planned",
+        content: "资源计划隐藏已取消 Planned",
         expectedOutput: "已取消记录仍可审计",
+        createdByAccountId: owner.account.id,
+      } }),
+      prisma.workSegment.create({ data: {
+        personId: people[0]!.id,
+        taskId: taskRecords[0]!.id,
+        type: "PLANNED",
+        status: "CONFIRMED",
+        startAt: new Date("2026-08-11T02:00:00.000Z"),
+        endAt: new Date("2026-08-11T03:00:00.000Z"),
+        content: "资源计划隐藏已确认 Planned",
+        expectedOutput: "已确认记录仍可审计",
+        createdByAccountId: owner.account.id,
+      } }),
+    ]);
+    const deletedTaskPlannedSegment = await prisma.workSegment.create({
+      data: {
+        personId: people[0]!.id,
+        taskId: taskRecords[0]!.id,
+        type: "PLANNED",
+        status: "PLANNED",
+        startAt: new Date("2026-08-12T01:00:00.000Z"),
+        endAt: new Date("2026-08-12T02:00:00.000Z"),
+        content: "资源计划保留已删除 Task 的有效 Planned",
+        expectedOutput: "有效历史投入仍可定位",
         createdByAccountId: owner.account.id,
       },
     });
@@ -3437,11 +3461,13 @@ test.describe("project management P4/P6 UI integration", () => {
       preferredCenterMs: Date.parse("2026-08-11T01:30:00.000Z"),
       load: { mode: "INITIAL" },
     });
-    expect(resourceData.data.segments.flatMap((segment) =>
+    const resourceSegmentIds = resourceData.data.segments.flatMap((segment) =>
       segment.kind === "SEGMENT" ? [segment.id] : [],
-    )).toContain(
-      terminalPlannedSegment.id,
     );
+    expect(resourceSegmentIds).toContain(deletedTaskPlannedSegment.id);
+    for (const segment of terminalPlannedSegments) {
+      expect(resourceSegmentIds).not.toContain(segment.id);
+    }
     await loginAsTestUser(context, baseURL, {
       openId: owner.openId,
       name: owner.person.displayName,
@@ -3471,9 +3497,9 @@ test.describe("project management P4/P6 UI integration", () => {
       );
       element.dispatchEvent(new Event("scroll"));
     });
-    await expect(
-      page.getByTestId(`segment-block-${terminalPlannedSegment.id}`),
-    ).toBeVisible();
+    for (const segment of terminalPlannedSegments) {
+      await expect(page.getByTestId(`segment-block-${segment.id}`)).toHaveCount(0);
+    }
 
     await page.getByRole("link", { name: "下一页 Task" }).click();
     await expect.poll(() => new URL(page.url()).searchParams.has("taskCursor")).toBe(true);
@@ -3493,10 +3519,10 @@ test.describe("project management P4/P6 UI integration", () => {
       data: { deletedAt: new Date() },
     });
     await page.goto(
-      `/progress/resources?all=0&focus=${terminalPlannedSegment.id}`,
+      `/progress/resources?all=0&focus=${deletedTaskPlannedSegment.id}`,
     );
     await expect(page.getByRole("dialog", { name: "投入详情" })).toContainText(
-      "资源计划保留终态 Planned",
+      "资源计划保留已删除 Task 的有效 Planned",
     );
     await page.getByRole("dialog", { name: "投入详情" })
       .getByRole("button", { name: "Close" }).click();

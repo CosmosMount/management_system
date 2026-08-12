@@ -183,7 +183,6 @@ export const getTimeCanvasDataInputSchema = z
     groupBy: z.enum(timeCanvasGroupByValues),
     includeTaskAnchors: z.boolean().optional().default(true),
     includeActual: z.boolean().optional().default(true),
-    includeTerminalPlanned: z.boolean().optional().default(false),
     emptyPersonIdsMeansNone: z.boolean().optional().default(false),
     includeBusyBlocks: z.boolean().optional().default(false),
     cursor: timeCanvasRowCursorSchema,
