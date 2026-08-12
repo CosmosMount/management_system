@@ -316,7 +316,9 @@ function mergeProjectTimelineModel(
     failedRanges: resourceModel?.failedRanges,
     rows: [
       ...planModel.rows,
-      ...(resourceModel?.rows.map((row) => ({ ...row, editable: false })) ?? []),
+      ...(resourceModel?.rows
+        .filter((row) => row.kind === "PERSON")
+        .map((row) => ({ ...row, editable: false })) ?? []),
     ],
     segments: resourceModel?.segments ?? [],
     nextCursor: resourceModel?.nextCursor,

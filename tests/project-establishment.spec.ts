@@ -105,8 +105,7 @@ test.describe("Project 立项与生命周期", () => {
     context,
     page,
     baseURL,
-  }, testInfo) => {
-    test.skip(testInfo.project.name !== "desktop", "本轮按产品决策不做移动端专项验收");
+  }) => {
     const requester = await actor(`Project 详情申请人 ${randomUUID()}`);
     const admin = await actor(
       `Project 详情管理员 ${randomUUID()}`,
@@ -225,6 +224,7 @@ test.describe("Project 立项与生命周期", () => {
     await expect(page.getByTestId(`timeline-row-project-plan:${draft.id}`)).toBeVisible();
     await expect(page.getByTestId(`timeline-row-project-plan:${active.id}`)).toBeVisible();
     await expect(page.getByTestId(`timeline-row-project-plan:${completed.id}`)).toBeVisible();
+    await expect(page.locator('[data-testid^="timeline-row-plan:"]')).toHaveCount(0);
     await expect(
       page.getByTestId(
         `milestone-marker-project-node:${completedPlanNodes.milestoneNodeId}`,
