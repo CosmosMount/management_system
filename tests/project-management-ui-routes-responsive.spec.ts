@@ -485,7 +485,8 @@ test.describe("project management UI project-management-ui-routes-responsive", (
         await commonInspector
           .getByRole("link", { name: fixture.taskTitle, exact: true })
           .click();
-        await expect(page.getByRole("heading", { name: "资源计划" })).toBeVisible();
+        await expect(page).toHaveURL(/\/progress\/resources/);
+        await expect(page.getByRole("dialog", { name: "投入详情" })).toBeVisible();
         await expect(editableContent).toHaveValue("P6 UI 未保存 Task 导航保护");
       }
       expect(

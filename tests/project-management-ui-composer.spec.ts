@@ -67,6 +67,11 @@ test.describe("project management UI project-management-ui-composer", () => {
         .getByRole("button", { name: /Start/ })
         .click();
       await page.getByLabel("计划开始时间").fill("2026-09-01T09:00");
+      await page
+        .getByTestId("task-plan-node-navigator")
+        .getByRole("button", { name: /Terminal/ })
+        .click();
+      await page.getByLabel("计划结束时间").fill("2026-09-16T18:00");
       await page.waitForTimeout(900);
       await expect
         .poll(() =>
@@ -406,7 +411,8 @@ test.describe("project management UI project-management-ui-composer", () => {
       }
 
       let aborted = false;
-      await page.route("**/progress/tasks/new?*", async (route) => {
+      const createTaskActionUrl = "**/progress/tasks/new*";
+      await page.route(createTaskActionUrl, async (route) => {
         if (route.request().method() === "POST" && !aborted) {
           aborted = true;
           await route.fetch();
@@ -418,7 +424,7 @@ test.describe("project management UI project-management-ui-composer", () => {
       await page.getByRole("button", { name: "创建 Task 草稿" }).click();
       await expect(page.getByText(/网络或服务暂时不可用/)).toBeVisible();
       expect(await prisma.task.count({ where: { title } })).toBe(1);
-      await page.unroute("**/progress/tasks/new?*");
+      await page.unroute(createTaskActionUrl);
       await page.getByRole("button", { name: "创建 Task 草稿" }).click();
       await expect(
         page

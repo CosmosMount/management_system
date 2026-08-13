@@ -682,7 +682,7 @@ test("S2 Task mutations expose session-bound Server Actions and anchor loads rec
   );
   const anchorLoaderSource = canvasQuerySource.slice(
     canvasQuerySource.indexOf("async function loadTaskAnchors"),
-    canvasQuerySource.indexOf("function toTaskAnchorDto"),
+    canvasQuerySource.indexOf("async function loadPersonCreateCapabilities"),
   );
   expect(anchorLoaderSource).not.toBe("");
   expect(anchorLoaderSource.match(/taskReadableWhere\(actor\)/g)).toHaveLength(2);

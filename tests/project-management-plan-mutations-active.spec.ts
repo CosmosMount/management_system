@@ -184,14 +184,16 @@ test.describe("project management plan mutations project-management-plan-mutatio
         { expectedCurrentLockVersion: 3 },
       );
       expect(await mutationSideEffectCounts(fixture.taskId)).toEqual(beforeStale);
-      await expectServiceError(
-        updateTaskMembersThroughCurrentInterface(actor(owner), {
-          taskId: fixture.taskId,
-          expectedLockVersion: 3,
-          members: membersResult.members,
-        }),
-        "STATE_CONFLICT",
-      );
+      const noOpResult = await updateTaskMembersThroughCurrentInterface(actor(owner), {
+        taskId: fixture.taskId,
+        expectedLockVersion: 3,
+        members: membersResult.members,
+      });
+      expect(noOpResult).toMatchObject({
+        lockVersion: 3,
+        members: membersResult.members,
+      });
+      expect(await mutationSideEffectCounts(fixture.taskId)).toEqual(beforeStale);
     });
 
   test("Active Task unified save is atomic and increments the lock once", async () => {
