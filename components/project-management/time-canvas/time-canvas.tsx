@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  forwardRef,
   useCallback,
   useEffect,
   useMemo,
@@ -17,8 +16,6 @@ import {
   Diamond,
   Flag,
   GitBranch,
-  Lock,
-  X,
 } from "lucide-react";
 import {
   DAY_MS,
@@ -55,28 +52,38 @@ import type {
   TimeCanvasSelection,
   TimeCanvasZoom,
 } from "@/components/project-management/time-canvas/types";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
   formatCanvasDateTime as formatDateTime,
   formatCanvasRange as formatRange,
-  formatCanvasTick as formatTick,
-  formatCanvasAxisGroup as formatAxisGroup,
   formatCompactAnchorDate,
   isShanghaiWeekend,
 } from "@/components/project-management/time-canvas/time-format";
+import {
+  anchorFocusKey,
+  buildCanvasFocusTargets,
+  clampTime,
+  nextFocusTarget,
+  normalizeBrushRange,
+  overflowFocusKey,
+  segmentFocusKey,
+  transformedRange,
+} from "@/components/project-management/time-canvas/interaction-math";
+import {
+  type SelectedEntity,
+  resolveSelection,
+  TimeCanvasInspector,
+} from "@/components/project-management/time-canvas/time-canvas-inspector";
+import {
+  RowHeader,
+  TimeAxis,
+  TimeCanvasBottomScrollbar,
+  TimeCanvasToolbar,
+} from "@/components/project-management/time-canvas/time-canvas-chrome";
 
 const AXIS_HEIGHT = 64;
 const PLAN_RAIL_TOP = 28;
 const DEFAULT_ZOOM: TimeCanvasZoom = "WEEK";
-const zoomOrder: TimeCanvasZoom[] = ["WEEK", "MONTH", "QUARTER", "YEAR"];
-const zoomLabels: Record<TimeCanvasZoom, string> = {
-  WEEK: "周",
-  MONTH: "月",
-  QUARTER: "季",
-  YEAR: "年",
-};
 
 export function TimeCanvas({
   mode,
@@ -638,174 +645,6 @@ function useLiveNow(generatedAt: string) {
   }, []);
 
   return nowMs;
-}
-
-function TimeCanvasToolbar({
-  presentation,
-  zoom,
-  canGoToday,
-  onToday,
-  onZoomChange,
-}: {
-  presentation: TimeCanvasProps["presentation"];
-  zoom: TimeCanvasZoom;
-  canGoToday: boolean;
-  onToday: () => void;
-  onZoomChange: (zoom: TimeCanvasZoom) => void;
-}) {
-  if (presentation === "COMPACT") return null;
-  return (
-    <div className="flex min-h-12 min-w-0 flex-wrap items-center justify-end gap-2 border-b border-border bg-card px-3 py-2" data-testid="time-canvas-toolbar">
-      <div className="flex items-center overflow-hidden rounded-md border border-border" aria-label="显示尺度">
-        {zoomOrder.map((item) => (
-          <Button
-            key={item}
-            type="button"
-            size="sm"
-            variant={zoom === item ? "secondary" : "ghost"}
-            className="rounded-none px-3"
-            aria-label={zoomLabels[item]}
-            aria-pressed={zoom === item}
-            onClick={() => onZoomChange(item)}
-          >
-            {zoomLabels[item]}
-          </Button>
-        ))}
-      </div>
-      <span
-        className="inline-flex"
-        title={canGoToday ? undefined : "今天不在当前时间范围内"}
-      >
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          onClick={onToday}
-          disabled={!canGoToday}
-          aria-label={canGoToday ? "今天" : "今天（不在当前时间范围内）"}
-        >
-          今天
-        </Button>
-      </span>
-    </div>
-  );
-}
-
-function TimeAxis({
-  ticks,
-  scale,
-  zoom,
-  timezone,
-  nowMs,
-  rowHeaderWidth,
-}: {
-  ticks: number[];
-  scale: ReturnType<typeof createTimeScale>;
-  zoom: TimeCanvasZoom;
-  timezone: string;
-  nowMs: number;
-  rowHeaderWidth: number;
-}) {
-  const minorLabelStep = Math.max(
-    1,
-    Math.ceil(48 / Math.max(1, tickPixelDistance(ticks, scale))),
-  );
-  return (
-    <div
-      className="sticky top-0 z-30 grid border-b border-border bg-background/95 backdrop-blur"
-      style={{
-        height: AXIS_HEIGHT,
-        gridTemplateColumns: `${rowHeaderWidth}px ${scale.contentWidthPx}px`,
-      }}
-    >
-      <div className="sticky left-0 z-40 flex min-w-0 items-center border-r border-border bg-background px-3 text-xs font-medium text-muted-foreground">
-        <span className="truncate">任务 / 人员</span>
-      </div>
-      <div className="relative overflow-hidden" aria-label={`${timezone} ${zoomLabels[zoom]}级时间轴`} role="img">
-        {ticks.map((tick, index) => {
-          const group = formatAxisGroup(tick, zoom);
-          const previousGroup = index > 0 ? formatAxisGroup(ticks[index - 1] ?? tick, zoom) : null;
-          return (
-          <div
-            key={tick}
-            className="absolute inset-y-0 border-l border-border/80"
-            style={{ left: timeToX(tick, scale) }}
-          >
-            {group !== previousGroup && (
-              <span className="absolute left-1 top-1 whitespace-nowrap text-[11px] font-medium text-foreground">
-                {group}
-              </span>
-            )}
-            {index % minorLabelStep === 0 && (
-              <span className="absolute left-1 top-8 whitespace-nowrap text-[11px] text-muted-foreground">
-                {formatTick(tick, zoom)}
-              </span>
-            )}
-          </div>
-          );
-        })}
-        <TodayLine scale={scale} nowMs={nowMs} axis />
-      </div>
-    </div>
-  );
-}
-
-const TimeCanvasBottomScrollbar = forwardRef<
-  HTMLDivElement,
-  {
-    hidden: boolean;
-    rowHeaderWidth: number;
-    contentWidthPx: number;
-    onScroll: (left: number) => void;
-  }
->(function TimeCanvasBottomScrollbar(
-  { hidden, rowHeaderWidth, contentWidthPx, onScroll },
-  ref,
-) {
-  if (hidden) return null;
-  return (
-    <div
-      className="sticky bottom-0 z-40 grid h-4 border-t border-border bg-background"
-      style={{ gridTemplateColumns: `${rowHeaderWidth}px minmax(0,1fr)` }}
-      data-testid="time-canvas-bottom-scrollbar"
-    >
-      <div className="border-r border-border bg-card" aria-hidden="true" />
-      <div
-        ref={ref}
-        className="overflow-x-auto overflow-y-hidden"
-        tabIndex={0}
-        aria-label="时间轴横向滚动"
-        onScroll={(event) => onScroll(event.currentTarget.scrollLeft)}
-      >
-        <div style={{ width: contentWidthPx, height: 1 }} />
-      </div>
-    </div>
-  );
-});
-
-function RowHeader({ row }: { row: TimeCanvasRow }) {
-  return (
-    <div
-      className="sticky left-0 z-[25] flex min-w-0 flex-col justify-center border-r border-border bg-card px-3"
-      data-testid={`time-canvas-row-header-${row.id}`}
-    >
-      <div className="flex min-w-0 items-center gap-2">
-        <span className="min-w-0 flex-1 truncate text-sm font-medium" title={row.label}>
-          {row.label}
-        </span>
-        {row.editable ? (
-          <Badge variant="outline" className="shrink-0 text-[10px]">可编辑</Badge>
-        ) : (
-          <Lock className="size-3.5 shrink-0 text-muted-foreground" aria-label="只读" />
-        )}
-      </div>
-      {row.sublabel && (
-        <p className="mt-1 truncate text-xs text-muted-foreground" title={row.sublabel}>
-          {row.sublabel}
-        </p>
-      )}
-    </div>
-  );
 }
 
 function TimelineRow({
@@ -2053,264 +1892,6 @@ function TodayLine({
   );
 }
 
-type SelectedEntity =
-  | { kind: "ANCHOR"; value: TimeCanvasAnchor }
-  | { kind: "SEGMENT"; value: TimeCanvasSegment };
-
-function TimeCanvasInspector({
-  entity,
-  onClose,
-}: {
-  entity: SelectedEntity;
-  onClose: () => void;
-}) {
-  return (
-    <aside className="border-t border-border bg-card p-4 md:border-l md:border-t-0" aria-label="时间对象详情" data-testid="time-canvas-inspector">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-xs text-muted-foreground">只读 Inspector</p>
-          <h2 className="mt-1 break-words text-base font-semibold">{entityTitle(entity)}</h2>
-        </div>
-        <Button type="button" size="icon-sm" variant="ghost" aria-label="关闭时间对象详情" onClick={onClose}>
-          <X aria-hidden="true" />
-        </Button>
-      </div>
-      <InspectorBody entity={entity} />
-    </aside>
-  );
-}
-
-function InspectorBody({ entity }: { entity: SelectedEntity }) {
-  if (entity.kind === "ANCHOR") {
-    return (
-      <dl className="mt-4 grid gap-3 text-sm">
-        <Detail label="类型" value={entity.value.kind} />
-        <Detail label="状态" value={entity.value.status} />
-        <Detail label="计划时间" value={formatDateTime(entity.value.atMs)} />
-        <Detail label="权限" value={entity.value.editable ? "可编辑" : "只读；修改需按 Task 生命周期进行"} />
-      </dl>
-    );
-  }
-  const segment = entity.value;
-  return (
-    <dl className="mt-4 grid gap-3 text-sm">
-      <Detail label="类型与状态" value={segment.type === "BUSY" ? "其他占用（详情受限）" : `${segment.type} · ${segment.status}`} />
-      <Detail label="区间" value={formatRange(segment.startMs, segment.endMs)} />
-      {segment.visibility === "FULL" && (
-        <>
-          <Detail label="优先级" value={segment.priority ?? "未提供"} />
-          <Detail label="权限" value={segment.permissions.canEdit ? "可编辑" : "只读"} />
-        </>
-      )}
-    </dl>
-  );
-}
-
-function Detail({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="mt-1 break-words">{value}</dd>
-    </div>
-  );
-}
-
-function resolveSelection(
-  model: TimeCanvasProps["model"],
-  selection: TimeCanvasSelection,
-): SelectedEntity | null {
-  if (!selection) return null;
-  if (selection.kind === "ANCHOR") {
-    const value = model.anchors.find((anchor) => anchor.id === selection.id);
-    return value ? { kind: "ANCHOR", value } : null;
-  }
-  if (selection.kind === "SEGMENT") {
-    const value = model.segments.find((segment) => segment.id === selection.id);
-    return value ? { kind: "SEGMENT", value } : null;
-  }
-  return null;
-}
-
-type CanvasFocusTarget = {
-  key: string;
-  rowIndex: number;
-  atMs: number;
-};
-
-function buildCanvasFocusTargets(
-  model: TimeCanvasProps["model"],
-  segments: TimeCanvasSegment[],
-): CanvasFocusTarget[] {
-  const rowIndexById = new Map(
-    model.rows.map((row, rowIndex) => [row.id, rowIndex]),
-  );
-  const targets: CanvasFocusTarget[] = [];
-
-  for (const row of model.rows) {
-    const rowIndex = rowIndexById.get(row.id);
-    if (rowIndex === undefined) continue;
-    const rowSegments = segments.filter(
-      (segment) =>
-        segment.rowId === row.id && rangesIntersect(segment, model.range),
-    );
-    const segmentLayout = layoutIntervalLanes(
-      rowSegments.map((segment) => ({
-        id: segment.id,
-        startMs: segment.startMs,
-        endMs: segment.endMs,
-      })),
-    );
-    for (const placement of segmentLayout.placements) {
-      targets.push({
-        key: placement.aggregated
-          ? overflowFocusKey(row.id, placement.id)
-          : segmentFocusKey(placement.id),
-        rowIndex,
-        atMs: placement.startMs,
-      });
-    }
-  }
-
-  for (const anchor of model.anchors) {
-    const rowIndex = rowIndexById.get(anchor.rowId);
-    if (
-      rowIndex === undefined ||
-      anchor.atMs < model.range.startMs ||
-      anchor.atMs >= model.range.endMs
-    ) {
-      continue;
-    }
-    targets.push({
-      key: anchorFocusKey(anchor.id),
-      rowIndex,
-      atMs: anchor.atMs,
-    });
-  }
-
-  return targets.sort(
-    (left, right) =>
-      left.rowIndex - right.rowIndex ||
-      left.atMs - right.atMs ||
-      left.key.localeCompare(right.key),
-  );
-}
-
-function nextFocusTarget(
-  targets: CanvasFocusTarget[],
-  current: CanvasFocusTarget,
-  key: string,
-) {
-  if (key === "ArrowLeft" || key === "ArrowRight") {
-    const rowTargets = targets.filter(
-      (target) => target.rowIndex === current.rowIndex,
-    );
-    const currentIndex = rowTargets.findIndex(
-      (target) => target.key === current.key,
-    );
-    if (currentIndex === -1) return null;
-    const direction = key === "ArrowLeft" ? -1 : 1;
-    return (
-      rowTargets[
-        (currentIndex + direction + rowTargets.length) % rowTargets.length
-      ] ?? null
-    );
-  }
-
-  const direction = key === "ArrowUp" ? -1 : 1;
-  const rowIndexes = [...new Set(targets.map((target) => target.rowIndex))].sort(
-    (left, right) => left - right,
-  );
-  const currentRowPosition = rowIndexes.indexOf(current.rowIndex);
-  const nextRowIndex = rowIndexes[currentRowPosition + direction];
-  if (nextRowIndex === undefined) return current;
-  return (
-    targets
-      .filter((target) => target.rowIndex === nextRowIndex)
-      .sort(
-        (left, right) =>
-          Math.abs(left.atMs - current.atMs) -
-            Math.abs(right.atMs - current.atMs) ||
-          left.atMs - right.atMs ||
-          left.key.localeCompare(right.key),
-      )[0] ?? current
-  );
-}
-
-function segmentFocusKey(id: string) {
-  return `segment:${id}`;
-}
-
-function anchorFocusKey(id: string) {
-  return `anchor:${id}`;
-}
-
-function overflowFocusKey(rowId: string, placementId: string) {
-  return `overflow:${rowId}:${placementId}`;
-}
-
-function normalizeBrushRange(
-  anchorMs: number,
-  currentMs: number,
-  scale: ReturnType<typeof createTimeScale>,
-) {
-  const lower = Math.min(anchorMs, currentMs);
-  const upper = Math.max(anchorMs, currentMs);
-  const rangeDurationMs = scale.endMs - scale.startMs;
-  const minimumDurationMs = Math.min(scale.snapMs, rangeDurationMs);
-  if (upper - lower >= minimumDurationMs) {
-    return {
-      startMs: clampTime(lower, scale.startMs, scale.endMs - minimumDurationMs),
-      endMs: clampTime(upper, scale.startMs + minimumDurationMs, scale.endMs),
-    };
-  }
-  const startMs = clampTime(
-    lower,
-    scale.startMs,
-    scale.endMs - minimumDurationMs,
-  );
-  return { startMs, endMs: startMs + minimumDurationMs };
-}
-
-function transformedRange(
-  transform: {
-    kind: "MOVE" | "RESIZE_START" | "RESIZE_END";
-    startMs: number;
-    endMs: number;
-  },
-  deltaMs: number,
-  rangeStartMs: number,
-  rangeEndMs: number,
-  minimumDurationMs: number,
-) {
-  if (transform.kind === "RESIZE_START") {
-    return {
-      startMs: clampTime(
-        transform.startMs + deltaMs,
-        rangeStartMs,
-        transform.endMs - minimumDurationMs,
-      ),
-      endMs: transform.endMs,
-    };
-  }
-  if (transform.kind === "RESIZE_END") {
-    return {
-      startMs: transform.startMs,
-      endMs: clampTime(
-        transform.endMs + deltaMs,
-        transform.startMs + minimumDurationMs,
-        rangeEndMs,
-      ),
-    };
-  }
-  const duration = transform.endMs - transform.startMs;
-  const startMs = clampTime(
-    transform.startMs + deltaMs,
-    rangeStartMs,
-    rangeEndMs - duration,
-  );
-  return { startMs, endMs: startMs + duration };
-}
-
 function edgeScrollCanvas(
   scroller: HTMLElement,
   clientX: number,
@@ -2365,18 +1946,6 @@ function responsiveRowHeaderWidth(containerWidth: number) {
   return Math.round(Math.max(200, Math.min(280, containerWidth * 0.24)));
 }
 
-function tickPixelDistance(
-  ticks: number[],
-  scale: ReturnType<typeof createTimeScale>,
-) {
-  if (ticks.length < 2) return scale.viewportWidthPx;
-  return Math.abs(timeToX(ticks[1] ?? ticks[0] ?? 0, scale) - timeToX(ticks[0] ?? 0, scale));
-}
-
-function clampTime(value: number, minimum: number, maximum: number) {
-  return Math.max(minimum, Math.min(value, maximum));
-}
-
 function groupByRow<T extends { rowId: string }>(items: T[]) {
   const grouped = new Map<string, T[]>();
   for (const item of items) {
@@ -2392,11 +1961,6 @@ function selectionAnnouncement(entity: SelectedEntity) {
     return `已选中计划节点 ${entity.value.label}，${formatDateTime(entity.value.atMs)}`;
   }
   return `已选中${entity.value.type === "BUSY" ? "其他占用" : entity.value.title}，${formatRange(entity.value.startMs, entity.value.endMs)}`;
-}
-
-function entityTitle(entity: SelectedEntity) {
-  if (entity.kind === "ANCHOR") return entity.value.label;
-  return entity.value.title;
 }
 
 function segmentAriaLabel(segment: TimeCanvasSegment) {
