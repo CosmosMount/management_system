@@ -527,7 +527,7 @@ pm2 start npm --name procurement-cron -- run cron
 - 旧 `/progress/task/:id` 会重定向到 `/progress/tasks/:id`；`/progress/projects/*` 是当前 Project 正式路由，旧 `/progress/kanban` 回到 `/progress`。
 - 飞书登录和通讯录同步先解析统一 `Account/AccountIdentity/Person`，再关联并更新采购 `User`。账号级项目访问禁用机制已移除，历史禁用账号恢复项目入口，但仍受系统角色、TaskMember 和数据范围授权约束。
 - 人员与 Task 选择统一使用异步模糊选择器，支持 NFKC、拼音首字母、顺序匹配、已选项安全恢复和最多 50 项多选；Task 列表与账号后台使用相同的有界排序规则。
-- 新项目管理的设计和逐阶段真实证据位于 [`docs/plan/`](docs/plan/)；当前完成度以 `project-management-frontend-design-v1.0/13-实施进度台账.md` 为准。
+- 当前项目管理行为以 [`docs/TECH.md`](docs/TECH.md)、[`docs/TESTING.md`](docs/TESTING.md)、ADR、Prisma schema 和实现为准；历史实施计划及截图已归档移除，避免与现行规范冲突。
 - `npm run pm:release-rehearsal` 仅用于本机隔离 `_test`/`_snapshot` 数据库；必须显式设置 `PM_RELEASE_REHEARSAL_CONFIRM=LOCAL_ISOLATED_REHEARSAL` 和 `NOTIFICATION_DELIVERY_DISABLED=true`。它不会执行生产维护窗口，生产发布仍需另行授权与 BO/TL/QA/DBA 签字。
 - 项目管理飞书通知只允许写入 `channel=project-management` 的 notification outbox；adapter 已构造普通交互卡并经统一私信传输层投递。Project 立项、验收和 Revision 待审批事件使用审批机器人用途，其他项目管理事件使用通知机器人。
 - 资源冲突和投入比例能力已完整下线：`/progress/resources/conflicts` 返回 404，Segment 允许时间重叠，系统不再检测、提示、阻止或通知冲突，也没有替代容量模型。

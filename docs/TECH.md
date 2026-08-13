@@ -195,7 +195,9 @@ Task Composer 支持 `CREATE`、`EDIT_DRAFT`、`CREATE_REVISION`、`RESUBMIT_REV
 
 Composer 的浏览器安全契约位于 `lib/project-management/composer-contract.ts`，服务端 seed 构造器不再依赖客户端组件。计划时间与节点变换、校验和提交指纹、v4 草稿解析、提交 payload、撤销历史、自动保存和离开保护分别由独立模块负责；客户端壳只组合表单、计划编辑器、恢复提示和业务命令。当前仍只持久化 v4 envelope，旧版本迁移兼容保持原有行为，等待单独的破坏性退役批次处理。
 
-创建草稿继续使用账号/环境隔离的 v4 存储；编辑草稿使用 `task-edit-draft:{environment}:{accountId}:{taskId}:v1`，正文额外绑定 `taskId`、`planVersionId` 和基础 `lockVersion`。两者对普通内容使用 `localStorage`，对合法 200 节点长文本草稿使用 IndexedDB 并在 `localStorage` 保存校验指针；临时状态和最后合法位置随正文保存。同账号多标签页通过 Web Locks 串行化完整存储事务，离开前取消待触发防抖并等待已入队写入及清理完成。编辑恢复只接受环境、账号、Task、Plan Version 和锁版本完全匹配的内容；版本不匹配时仅允许导出或放弃并加载最新版本，不做字段合并。失去成员管理权后恢复时以服务端成员覆盖本地成员。保存成功后清理本地编辑草稿并返回工作台；浏览器清理失败不改变已提交事务的成功结果。详细规格见 [`docs/plan/task-create-ui/README.md`](plan/task-create-ui/README.md)。
+创建草稿继续使用账号/环境隔离的 v4 存储；编辑草稿使用 `task-edit-draft:{environment}:{accountId}:{taskId}:v1`，正文额外绑定 `taskId`、`planVersionId` 和基础 `lockVersion`。两者对普通内容使用 `localStorage`，对合法 200 节点长文本草稿使用 IndexedDB 并在 `localStorage` 保存校验指针；临时状态和最后合法位置随正文保存。同账号多标签页通过 Web Locks 串行化完整存储事务，离开前取消待触发防抖并等待已入队写入及清理完成。编辑恢复只接受环境、账号、Task、Plan Version 和锁版本完全匹配的内容；版本不匹配时仅允许导出或放弃并加载最新版本，不做字段合并。失去成员管理权后恢复时以服务端成员覆盖本地成员。保存成功后清理本地编辑草稿并返回工作台；浏览器清理失败不改变已提交事务的成功结果。
+
+TimeCanvas 保持统一 `TimeCanvasProps/TimeCanvasModel` 契约：Desktop 支持周/月/季/年缩放、虚拟行、键盘焦点、刷选、Segment 横移/缩放和节点锚点；Pixel 5 不开放直接拖动，使用精确表单。资源计划按不超过 180 天的上海时区块自适应加载并缓存，URL 只使用规范化视口和复数资源选择，mutation 后以权威刷新为准。详情 Dialog 只向目标 Segment 注入可编辑 transform，关联 Task 名称始终随投入详情展示；独立投入显示“未关联 Task”。
 
 统一 `TimeCanvas` 通过显式 adapter 消费 S2 安全 DTO，共享时间坐标、半开区间、上海时区 snap/fit、稳定泳道、选择和 mutation 模型。`TASK_COMPOSER` 模式额外支持外部受控选中、锚点选择、空白位置创建请求、锚点拖动/键盘移动回调和带名称/颜色的阶段带；Start、Milestone、Terminal 都是可操作锚点，阶段带标注下一节点，业务严格边界和 Milestone 自动重排由 Composer 负责。人员投入总览覆盖既有 Segment 的写权限，只保留双击/Enter 打开详情；详情 Dialog 才向目标 Segment 注入 transform 回调，同一行其他 Segment 始终只读。所有视口均使用 `@tanstack/react-virtual` 的横向时间画布，窄屏仅在画布容器内滚动，不再装配 `TimeAgenda`。Busy 在 adapter 后仍不恢复源 Segment、Task、Node 或版本标识。受控 fixture 页面继续只对官方随机 `_test` runner 开放。
 

@@ -2,7 +2,17 @@
 
 本文档用于人工测试、Playwright 仿真测试和 subagent 测试执行。执行测试时不要提交本地 cookie、截图、HTML 快照、数据库文件或 `.tmp/` 内容。
 
-完整业务回归范围见 [全功能测试规划](./FULL_FUNCTIONAL_TEST_PLAN.md)。本文档中的 Playwright smoke 只覆盖主要页面入口和少量浅交互，不能等同于全功能通过。
+本文档同时定义全功能回归范围；页面 smoke 只覆盖主要入口和少量浅交互，不能等同于全功能通过。完整结论必须覆盖下述静态、业务闭环、并发和迁移层级。
+
+## 全功能回归分层
+
+- **L0 静态与构建**：`npm run check`、migration drift 和 `npm run build` 全部通过；warning 必须记录并分级。
+- **L1 页面与权限冒烟**：匿名与登录状态访问首页、采购、反馈、项目管理、管理员和附件入口；Desktop `1440x1000` 与 Pixel 5 均无 500、Next error overlay 或横向溢出。
+- **L2 单账号浅交互**：反馈筛选与 `selected`、采购列表与详情、项目管理规范 URL/筛选/画布、管理员筛选均可刷新复现，且控制台无未处理错误。
+- **L3 业务闭环**：在独立 PostgreSQL 测试库中完成采购申请至报销、反馈创建/回复/关闭、Task/Project/Segment/审批以及管理员角色和预算流程；同时核对数据库、审计、outbox 和文件补偿。
+- **L4 并发与一致性**：覆盖订单号、审批、Task/Segment 锁竞争、outbox claim/heartbeat/逐收件人重试、event key 幂等和飞书禁发/allowlist/机器人边界。
+
+全功能环境至少准备申请人、车组组长、技术组组长、超管和报销员五类账号；采购各状态、开放/处理中/关闭反馈、多个 Task/Segment 状态、部分失败 outbox 与迁移前 fixture。所有写入场景必须使用 runner 创建的随机 `_test` PostgreSQL 和测试上传目录。
 
 ## 测试前准备
 
@@ -143,7 +153,7 @@ npm run db:deploy
 项目管理 P1-P6 schema、身份、授权、生命周期、Segment、UI 或通知接入变更应额外执行：
 
 ```bash
-npm run test:e2e -- tests/project-management-p1.spec.ts tests/project-management-lifecycle.spec.ts tests/project-management-segments.spec.ts tests/project-management-resource-removal-migration.spec.ts tests/project-management-ui.spec.ts tests/project-management-collaboration.spec.ts tests/notification-outbox-adapters.spec.ts tests/feishu-boundaries.spec.ts
+npm run test:e2e -- tests/project-management-p1.spec.ts tests/project-management-lifecycle.spec.ts tests/project-management-segments.spec.ts tests/project-management-resource-removal-migration.spec.ts tests/project-management-ui-composer.spec.ts tests/project-management-ui-workbench.spec.ts tests/project-management-ui-resource-planner.spec.ts tests/project-management-ui-routes-responsive.spec.ts tests/project-management-collaboration.spec.ts tests/notification-outbox-adapters.spec.ts tests/feishu-boundaries.spec.ts
 npm run pm:identity-backfill
 ```
 
@@ -262,7 +272,7 @@ npx tsx --test tests/project-management-recent-activity-formatter.node.ts
 
 ### Task 创建页专项测试
 
-专项规格见 [`docs/plan/task-create-ui/README.md`](plan/task-create-ui/README.md)。自动化和人工检查都必须使用隔离测试数据库并保持 `NOTIFICATION_DELIVERY_DISABLED=true`。
+自动化和人工检查都必须使用隔离测试数据库并保持 `NOTIFICATION_DELIVERY_DISABLED=true`。创建 Composer 必须覆盖 Start/Milestone/Terminal 严格时间顺序、0/200/201 节点、临时与非法节点、Inspector、撤销/重做、Desktop TimeCanvas、移动端纵向编辑，以及 v4 localStorage/IndexedDB 恢复、账号/环境隔离、Web Locks、多标签页离开保护和成功清理。
 
 1. 桌面 `1440x1000` 打开 `/progress/tasks/new`：页面按 Task 信息、TimeCanvas、共享节点导航、节点 Inspector 纵向排列，初始计划只有 Start 和名称为 `Terminal` 的 Terminal；负责人和参与人员分别显示头像胶囊及独立搜索框，不再使用统一人员选择器加角色下拉框；不得出现桌面节点表、节点复制、批量选择/删除、独立校验按钮，也不得查询或展示成员 Planned、Actual、Busy 数据。
 2. 验证 `start`、`relatedTaskId` 和 `templateTaskId` URL 预填不回退。无模板时 Start 为上海时区次日 `09:00`、Terminal 为 Start 后 14 天；模板保留 Milestone 内容、时间和自定义 Terminal 名称。
@@ -355,20 +365,22 @@ npx tsx --test tests/project-management-recent-activity-formatter.node.ts
 5. `tests/project-management-lifecycle.spec.ts` 覆盖 P2/P3 Task 草稿创建、创建者自动 Owner、幂等键冲突、Current Plan 持久化、0/200/201 Milestone 边界、Start/Milestone/Terminal 严格递增、Terminal 名称传播、零 Milestone 激活 Terminal、并发/过期锁拒绝、Revision 创建即待审批、驳回后修改直接重新送审、review round 通知键、Participant/Owner 的 Revision 管理边界、管理员批准/驳回和自审、零活跃审批人或全部管理员无有效飞书身份时整事务回滚、Planned Segment 待确认标记、Revision 生效不改写 Segment、Milestone Review TEXT/LINK 证据、FILE 证据拒绝、相同请求键幂等与不同键冲突、Milestone/Revision/Terminal 跨类型门禁、审批终态释放、重提重新竞争、并发只保留一个待审批、仅管理员审批推进、Termination 四种 outcome、全员查询、审计和 `channel=project-management` outbox。
 6. `tests/project-management-segments.spec.ts` 覆盖 P5 Segment 中文校验、全员完整读取、无 Task 关联本人管理、Task 关联时 Participant 只管本人、Owner 管理全 Task、非成员拒绝、Person 必须是目标 Task 成员、损坏的非成员关联更新零写入、旧职责/Node 字段严格拒绝、乐观锁、真实 100 条批量在末项 stale 时对 Segment/change/audit/outbox 的事务回滚、逆序重叠批量输入的 `id ASC` 行锁顺序、split/merge 时间守恒和完整来源历史、merge 最终范围超过 31 天拒绝且恰好 31 天允许、full/partial confirm、一 Planned 多 Actual、多 Planned 一 Actual、无来源 Actual、并发 full confirm、并发 cron transition、cancel、soft delete，以及 Segment 操作不改变 Task/Milestone。成员降级竞争继续证明降级后的 Owner 不能移动或删除他人投入；其他状态竞争断言最终状态及 change/audit/outbox exactly-once。
 7. `tests/project-management-resource-removal-migration.spec.ts` 从完整前置迁移链创建隔离 PostgreSQL 数据库，写入旧 allocation、Conflict、通知、outbox、checkpoint 和审计数据；应用删除 migration 后验证目标对象消失，普通 Segment、通知、outbox 与审计保留，历史 JSON 只清除顶层 `allocation`。
-8. `tests/project-management-ui.spec.ts` 和 `tests/project-management-s3-shell.spec.ts` 覆盖 `/progress` 统一我的工作、全员 Task 工作台、全员资源计划、站内通知中心、桌面/移动视口、Task 创建/统一 DRAFT 编辑的三栏与移动纵向布局、零 Milestone、Terminal 名称、严格时间顺序、画布/节点表/Inspector 联动、本地草稿恢复与版本冲突，以及 DRAFT 工作台只读、编辑 URL 防护、Participant 成员只读、创建页只显示 Task 级负责人/参与人且无流程策略、非成员只读、Owner/Participant 分层按钮、管理员审批与自审、Milestone 提交后重复提交和 Revision/Terminal 禁用、待审批类型与目标 Tab 引导、Revision 新建/重提直达保护、审批完成恢复、冲突入口消失、旧 URL 404、比例输入与展示消失。所有改动 UI 用例必须同时在 Desktop `1440x1000` 与 Pixel 5 运行，并断言无横向溢出和浏览器异常。
+8. `tests/project-management-ui-composer.spec.ts`、`project-management-ui-workbench.spec.ts`、`project-management-ui-resource-planner.spec.ts`、`project-management-ui-routes-responsive.spec.ts` 和 `project-management-s3-shell.spec.ts` 分别覆盖 Composer、工作台、资源计划、路由/响应式以及共享壳。它们验证 `/progress` 统一我的工作、全员 Task 工作台、全员资源计划、站内通知中心、桌面/移动视口、Task 创建/统一 DRAFT 编辑、严格时间顺序、画布/节点表/Inspector 联动、本地草稿恢复与版本冲突、分层权限、审批门禁、旧 URL 及已退役比例/冲突入口。所有改动 UI 用例必须同时在 Desktop `1440x1000` 与 Pixel 5 运行，并断言无横向溢出和浏览器异常。
 9. `tests/feishu-boundaries.spec.ts` 必须继续扫描 `app/progress`、`app/actions/project-management`、`components/project-management`、`lib/project-management` 和项目管理 notification adapter，防止项目管理入口或领域服务直接导入飞书传输层。
-10. `tests/project-management-s2-plan-mutations.spec.ts` 覆盖六个兼容 Draft/Active mutation 及统一 `updateTaskDraft`：参数化允许状态、完全不可见与 visible-but-unauthorized、Draft/Active/四个 terminal/Archived、逐 action stale、成员不变量、Participant 成员字段拒绝、错误 Plan Version、一次全量成功、同锁并发 exactly-once、零通知、完整统一审计，以及受控晚失败整事务回滚；Active member 另在 InApp 已写、outbox insert 阶段注入失败并断言成员 active/history、lock、audit、InApp 和 outbox 全部回滚。副作用快照比较 metadata、active/historical members 和节点正文，不只比较计数。该 spec 还覆盖计划自身 raw/foreign `nodeId` 的统一拒绝、legacy Active 修复 Revision/Termination、200 节点长正文的有界审计、公开 absolute date-time 拒绝 `Date` 对象，以及 mandatory recipient 仅使用 default tenant 非空 openId。Segment 不再关联 TaskNode，草稿节点删除不再检查 Segment 引用；Task 行锁仍覆盖成员与 Segment Task 关联的并发权限复核。该 spec 只允许随机本机 `_test` PostgreSQL，并要求 `NOTIFICATION_DELIVERY_DISABLED=true`。
-11. `tests/project-management-s8.spec.ts` 覆盖 Action Inbox 权限/逾期排序、普通/强制通知偏好、Asia/Shanghai deadline event key、保留清理和完整性巡检；UI 的 S8 场景在 Desktop/Pixel 5 验证驾驶舱、待办与偏好。Tag 删除 migration 由迁移规格验证三张分类表消失且 append-only 审计不被改写。
-12. `tests/project-management-s9-cron.spec.ts` 覆盖保留的 PostgreSQL 跨实例 advisory lock；新增 migration 必须在 runner 随机 target 数据库从空库执行。
-13. `tests/project-management-performance.spec.ts` 默认跳过。仅在受控 runner 中设置 `PM_RUN_SCALE_TESTS=true`，生成 10k Task、100k Segment、50×100 PlanNode 和 100k 站内通知，执行 p95、query plan、响应体积与浏览器 DOM 门禁。不得对开发、共享或生产数据库设置该变量。
-14. `tests/project-management-s10-release.spec.ts` 只在 Desktop 执行运维规格：演练工具 fail-closed、空库 migration、两次共享快照、受保护表 row/hash、identity backfill dry-run/APPLY 幂等、整库/上传恢复和旧 contract/直接飞书发送静态扫描。工具只接受本机 `_test`/`_snapshot` 来源，要求 `PM_RELEASE_REHEARSAL_CONFIRM=LOCAL_ISOLATED_REHEARSAL` 与 `NOTIFICATION_DELIVERY_DISABLED=true`，并只创建/删除随机 `pmrel_*_test` 数据库；不得把生产 URL 伪装成允许名称。
-15. `tests/task-access-migration.spec.ts` 从完整前置 migration 链构造旧角色组合，覆盖零 Owner 阻断、多 Owner、重复有效成员、Owner 优先、Lead/Member 转 Participant、Reviewer/Viewer 结束、Segment Participant 回填、`GROUP_LEADER` 撤销、旧策略审计、历史成员保留、零通知副作用和后续全局审批人部署门禁。
-16. `tests/task-approval-notification-repair.spec.ts` 覆盖修复脚本 dry-run 零写入、旧 outbox 冻结、管理员账号去重、approval bot、版本化事件键、逐审批对象事务故障注入、管理员均无有效飞书 openId 时冻结前阻断和幂等重跑。
-17. `tests/project-access-status-removal-migration.spec.ts` 从完整前置 migration 链构造 ACTIVE/DISABLED 账号，验证状态列与枚举删除、历史禁用账号迁移审计、通知/outbox 零副作用，以及剩余六个全局管理员数据库门禁均不再引用旧状态字段。
-18. `tests/revision-time-marker-migration.spec.ts` 在额外随机 `_test` PostgreSQL 中验证空 Revision 表升级、`revisionAt/reviewRound`、新状态枚举、单候选 partial unique index，以及存在旧 Revision 数据时在破坏性字段调整前 fail-fast。
-19. `tests/work-segment-schema-drift-repair.spec.ts` 在 runner 持有的 `_test` PostgreSQL 临时 schema 中重建完整缺失和部分缺失两类 `WorkSegment` 漂移，写入既有 Segment 后连续执行修复与严格 catalog 验证 migration，核对数据保留、默认回填、完整 catalog/OID、约束行为和重复执行 no-op；另构造同名错误字段、列序索引、DESC/operator-class 索引、检查约束和外键动作，验证后置 migration fail-fast 且事务不改变 catalog 或数据。`tests/work-segment-role-node-removal-migration.spec.ts` 还必须从漂移状态按完整合并顺序执行删除准备、历史删除、修复、验证和最终收敛 migration，验证不会在历史删除 migration 前中止；最终删除职责、Node 关联、关联复核和专用通知/历史，同时保留普通 Segment、普通审计、通知、outbox 及 append-only trigger。
-20. `tests/single-task-approval-migration.spec.ts` 在 runner 创建的随机 `_test` PostgreSQL 中人工构造同一 Task 同时存在 Milestone/Revision 待审批的异常数据，验证 Milestone 撤出、Revision/候选计划/非承接未完成节点取消、Current Plan 与 Task 锁版本不变、历史终态和采购数据不变、outbox/recipient 冻结、站内通知已读、确定性迁移审计及最终待审批总数为零。
-21. `tests/project-establishment.spec.ts` 在 Desktop 与 Pixel 5 验证 Project 默认筛选、立项入口、异步 Task 搜索及选中列表（含长名称和移除入口），并验证新版详情概览、三列占位、状态分组、时间线、定位及计划轨道不重复；在领域层验证驳回重提、批准挂载、跨状态组稳定游标翻页、候选授权、完成阻塞与删除解绑；该 spec 只能使用 runner 持有的隔离 PostgreSQL。
+10. `tests/project-management-plan-mutations-draft.spec.ts`、`project-management-plan-mutations-active.spec.ts`、`project-management-plan-mutations-concurrency.spec.ts` 和 `project-management-plan-mutations-revision-time.spec.ts` 分别覆盖 Draft、Active、并发回滚与 Revision 时间规则。共享 factory、副作用快照和数据库 barrier 位于 `tests/helpers/project-management-plan-mutation-fixtures.ts`。回归仍覆盖兼容及整包 mutation 的状态/权限/stale 矩阵、成员不变量、计划 ID 与时间边界、有界审计、通知收件人、行锁顺序、exactly-once 和事务晚失败回滚；只允许随机本机 `_test` PostgreSQL，并要求 `NOTIFICATION_DELIVERY_DISABLED=true`。
+
+11. Canvas 安全回归按 `project-management-canvas-route-boundaries.spec.ts`、`project-management-canvas-option-safety.spec.ts`、`project-management-canvas-scope-permissions.spec.ts` 和 `project-management-canvas-adaptive-loading.spec.ts` 拆分；共享账号/Task/Segment factory 位于 `tests/helpers/project-management-canvas-security-fixtures.ts`。四组分别验证路由 session 绑定、选择器最小披露、scope 权限/半开区间和自适应块加载/对象预算。
+12. `tests/project-management-s8.spec.ts` 覆盖 Action Inbox 权限/逾期排序、普通/强制通知偏好、Asia/Shanghai deadline event key、保留清理和完整性巡检；UI 的 S8 场景在 Desktop/Pixel 5 验证驾驶舱、待办与偏好。Tag 删除 migration 由迁移规格验证三张分类表消失且 append-only 审计不被改写。
+13. `tests/project-management-s9-cron.spec.ts` 覆盖保留的 PostgreSQL 跨实例 advisory lock；新增 migration 必须在 runner 随机 target 数据库从空库执行。
+14. `tests/project-management-performance.spec.ts` 默认跳过。仅在受控 runner 中设置 `PM_RUN_SCALE_TESTS=true`，生成 10k Task、100k Segment、50×100 PlanNode 和 100k 站内通知，执行 p95、query plan、响应体积与浏览器 DOM 门禁。不得对开发、共享或生产数据库设置该变量。
+15. `tests/project-management-s10-release.spec.ts` 只在 Desktop 执行运维规格：演练工具 fail-closed、空库 migration、两次共享快照、受保护表 row/hash、identity backfill dry-run/APPLY 幂等、整库/上传恢复和旧 contract/直接飞书发送静态扫描。工具只接受本机 `_test`/`_snapshot` 来源，要求 `PM_RELEASE_REHEARSAL_CONFIRM=LOCAL_ISOLATED_REHEARSAL` 与 `NOTIFICATION_DELIVERY_DISABLED=true`，并只创建/删除随机 `pmrel_*_test` 数据库；不得把生产 URL 伪装成允许名称。
+16. `tests/task-access-migration.spec.ts` 从完整前置 migration 链构造旧角色组合，覆盖零 Owner 阻断、多 Owner、重复有效成员、Owner 优先、Lead/Member 转 Participant、Reviewer/Viewer 结束、Segment Participant 回填、`GROUP_LEADER` 撤销、旧策略审计、历史成员保留、零通知副作用和后续全局审批人部署门禁。
+17. `tests/task-approval-notification-repair.spec.ts` 覆盖修复脚本 dry-run 零写入、旧 outbox 冻结、管理员账号去重、approval bot、版本化事件键、逐审批对象事务故障注入、管理员均无有效飞书 openId 时冻结前阻断和幂等重跑。
+18. `tests/project-access-status-removal-migration.spec.ts` 从完整前置迁移链构造 ACTIVE/DISABLED 账号，验证状态列与枚举删除、历史禁用账号迁移审计、通知/outbox 零副作用，以及剩余六个全局管理员数据库门禁均不再引用旧状态字段。
+19. `tests/revision-time-marker-migration.spec.ts` 在额外随机 `_test` PostgreSQL 中验证空 Revision 表升级、`revisionAt/reviewRound`、新状态枚举、单候选 partial unique index，以及存在旧 Revision 数据时在破坏性字段调整前 fail-fast。
+20. `tests/work-segment-schema-drift-repair.spec.ts` 在 runner 持有的 `_test` PostgreSQL 临时 schema 中重建完整缺失和部分缺失两类 `WorkSegment` 漂移，写入既有 Segment 后连续执行修复与严格 catalog 验证 migration，核对数据保留、默认回填、完整 catalog/OID、约束行为和重复执行 no-op；另构造同名错误字段、列序索引、DESC/operator-class 索引、检查约束和外键动作，验证后置 migration fail-fast 且事务不改变 catalog 或数据。`tests/work-segment-role-node-removal-migration.spec.ts` 还必须从漂移状态按完整合并顺序执行删除准备、历史删除、修复、验证和最终收敛 migration，验证不会在历史删除 migration 前中止；最终删除职责、Node 关联、关联复核和专用通知/历史，同时保留普通 Segment、普通审计、通知、outbox 及 append-only trigger。
+21. `tests/single-task-approval-migration.spec.ts` 在 runner 创建的随机 `_test` PostgreSQL 中人工构造同一 Task 同时存在 Milestone/Revision 待审批的异常数据，验证 Milestone 撤出、Revision/候选计划/非承接未完成节点取消、Current Plan 与 Task 锁版本不变、历史终态和采购数据不变、outbox/recipient 冻结、站内通知已读、确定性迁移审计及最终待审批总数为零。
+22. `tests/project-establishment.spec.ts` 在 Desktop 与 Pixel 5 验证 Project 默认筛选、立项入口、异步 Task 搜索及选中列表（含长名称和移除入口），并验证新版详情概览、三列占位、状态分组、时间线、定位及计划轨道不重复；在领域层验证驳回重提、批准挂载、跨状态组稳定游标翻页、候选授权、完成阻塞与删除解绑；该 spec 只能使用 runner 持有的隔离 PostgreSQL。
 
 ## 统一账号迁移验证
 

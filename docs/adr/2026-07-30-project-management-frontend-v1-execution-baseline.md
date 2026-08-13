@@ -14,7 +14,7 @@
 
 项目管理 P0、P1、P2/P3 的服务端主体已经落地。P5 服务端 handoff 由提交 `2499952` 记录，其实现基线是 `e0317cc`；该 handoff 是 2026-07-29 01:00 CST 时点的历史快照，因此其中“`/progress` 仍为占位页”“项目管理飞书 adapter 未启用”等描述不能代表当前仓库状态。后续提交 `345b5b0` 已加入 `/progress`、Task 列表、Task 工作台、资源列表、冲突中心、通知中心和真实项目管理 notification channel adapter。
 
-`345b5b0` 交付的是首批卡片/列表式 P4/P6 接入基线，不是 `docs/plan/project-management-frontend-design-v1.0/` 所定义的前端完成态。当前仍没有统一 `TimeCanvas`/`TimeAgenda`、Task 单页创建工作台、个人时间线、待我处理和 Tag 管理页面；Task 工作台、资源页和首页也仍需按前端 v1.0 重构。
+`345b5b0` 交付的是首批卡片/列表式 P4/P6 接入基线，不是后来完成的前端形态。统一 TimeCanvas、Task Composer、我的工作、行动待办和资源计划现已落地；本 ADR 保留当时的决策背景，当前行为以代码、schema、后续 ADR、`docs/TECH.md` 和 `docs/TESTING.md` 为准。
 
 本 ADR 解决旧计划与前端 v1.0 之间的冲突，冻结剩余 P4–P8 实施所需的产品、数据、权限、交互和技术默认值。它不表示这些功能已经实现。
 
@@ -23,11 +23,9 @@
 发生冲突时按以下顺序判定：
 
 1. 当前代码、Prisma schema、migration 和实际执行的测试。
-2. P0 ADR、`docs/plan/15-P0规则冻结与安全基线关单.md` 以及 D-001 至 D-013。
+2. 已接受且未被取代的 ADR、`docs/TECH.md` 与 `docs/TESTING.md`。
 3. 已完成阶段 handoff；若与后续提交冲突，以后续实现为准。
-4. `docs/plan/project-management-frontend-design-v1.0/README.md` 与 01 至 12，作为新版前端 UX 基线。
-5. `docs/plan/00` 至 `14`，继续提供领域、权限、测试和发布门禁。
-6. `docs/plan/management_plan/项目管理系统设计 v2.1.md` 仅作参考，其中 Project 模型已被 Task + Tag 决策覆盖。
+4. 本 ADR 的历史决策；其中已被页首状态说明或后续 ADR 取代的内容不再作为现行规范。
 
 所有计划和追踪文档使用三种状态：
 
