@@ -8,6 +8,7 @@ import {
   useState,
   useTransition,
 } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { RefreshCw } from "lucide-react";
 import { getAdaptiveTimeCanvasBlock } from "@/app/actions/project-management/canvas";
@@ -84,6 +85,7 @@ import type {
   PersonOptionDto,
   TaskOptionPage,
 } from "@/lib/project-management/types/time-canvas";
+import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
 type TaskOption = TaskOptionPage["items"][number];
@@ -1455,6 +1457,9 @@ export function ResourcePlannerCanvasClient({
               setHistoryRetryToken((current) => current + 1);
             }}
             onDirtyChange={updateDialogDirty}
+            onTaskNavigation={() =>
+              !dialogDirty || window.confirm("当前投入有未保存修改，确认放弃并离开？")
+            }
             onRangeChange={(range) => {
               setDetailRange(range);
               updateDialogDirty(true);
@@ -1939,6 +1944,7 @@ function SegmentInspector({
   onLoadMoreChanges,
   onRetryHistory,
   onDirtyChange,
+  onTaskNavigation,
   onRangeChange,
 }: {
   canvasSegment: TimeCanvasModel["segments"][number] | null;
@@ -1964,6 +1970,7 @@ function SegmentInspector({
   onLoadMoreChanges: () => void;
   onRetryHistory: () => void;
   onDirtyChange: (dirty: boolean) => void;
+  onTaskNavigation: () => boolean;
   onRangeChange: (range: { startMs: number; endMs: number }) => void;
 }) {
   if (!canvasSegment) {
@@ -2025,7 +2032,6 @@ function SegmentInspector({
           <Badge variant="secondary">{workSegmentStatusLabels[detail.status]}</Badge>
         </div>
         <p className="mt-2 text-sm text-muted-foreground">{detail.personName} · {formatRange(Date.parse(detail.startAt), Date.parse(detail.endAt))}</p>
-        <p className="mt-1 text-sm text-muted-foreground">{detail.task?.title ?? "独立投入"}</p>
       </div>
 
       <div className="min-w-0 overflow-hidden rounded-xl border border-border">
@@ -2051,6 +2057,27 @@ function SegmentInspector({
 
       <section className="space-y-3 border-t border-border pt-4" aria-labelledby="segment-basic-heading">
         <h3 id="segment-basic-heading" className="text-sm font-semibold">基本信息</h3>
+        <dl className="grid gap-3 text-sm md:grid-cols-2">
+          <ReadOnlyValue label="类型" value={workSegmentTypeLabels[detail.type]} />
+          <ReadOnlyValue label="状态" value={workSegmentStatusLabels[detail.status]} />
+          <ReadOnlyValue label="所属人员" value={detail.personName} />
+          <ReadOnlyValue
+            label="关联 Task"
+            value={detail.task?.deleted ? (
+              `${detail.task.title}（已删除）`
+            ) : detail.task ? (
+              <Link
+                href={routes.progress.taskDetail(detail.task.id)}
+                className="font-medium text-primary hover:underline"
+                onClick={(event) => {
+                  if (!onTaskNavigation()) event.preventDefault();
+                }}
+              >
+                {detail.task.title}
+              </Link>
+            ) : "独立投入"}
+          />
+        </dl>
       {editable ? (
         <form
           className="grid gap-3 md:grid-cols-2"
@@ -2118,7 +2145,9 @@ function SegmentInspector({
       <section className="border-t border-border pt-4" aria-label="来源与历史">
         <h3 className="text-sm font-semibold">来源与变更历史</h3>
         <p className="mt-2 text-xs text-muted-foreground">
-          关联对象：{detail.task?.title ?? "独立投入"}
+          关联对象：{detail.task
+            ? `${detail.task.title}${detail.task.deleted ? "（已删除）" : ""}`
+            : "独立投入"}
         </p>
         {historyState === "LOADING" && (
           <p className="mt-2 text-sm text-muted-foreground" role="status">
@@ -2437,7 +2466,7 @@ function ReadOnlyValue({
   wide = false,
 }: {
   label: string;
-  value: string;
+  value: React.ReactNode;
   wide?: boolean;
 }) {
   return (

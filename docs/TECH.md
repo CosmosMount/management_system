@@ -25,7 +25,7 @@
 - 文件上传写入私有目录 `storage/uploads/`，通过 `/uploads/...` 鉴权 route 返回
 - 飞书集成拆分为 OAuth、通讯录、Webhook、统一私信传输层和 notification outbox。`lib/feishu-message.ts` 的 `sendFeishuDirectMessage()` 是 IM 私信唯一出口，支持 `text`、交互卡片和 CardKit；Webhook 保持独立。
 - `lib/notification-channels/{procurement,feedback,project-management}.ts` 分别实现业务 channel adapter，负责校验持久化 payload、计算并去重收件人、构造完整消息和明确消息用途；传输层不查询业务角色，也不理解采购、反馈或项目管理状态。项目管理 adapter 构造交互卡并通过统一私信传输层投递，验收/Revision 待审批使用审批机器人，其他事件使用通知机器人。
-- 通知 outbox 分两层：`NotificationOutbox` 表示业务事件，`NotificationOutboxRecipient` 表示单个收件人的投递状态。核心 drain 按 `channel` 查找 adapter，只调度和更新状态；重试失败收件人时不能把已成功收件人再次发送。临时解析/网络错误退避重试，损坏 payload、未知 channel、非法 `type/botKind` 等确定性配置错误直接冻结，修正后才可人工重置。
+- 通知 outbox 分两层：`NotificationOutbox` 表示业务事件，`NotificationOutboxRecipient` 表示单个收件人的投递状态。通用 outbox 只接受注入的 channel resolver 并负责调度和状态更新，`lib/notification-delivery.ts` 作为组合入口连接 adapter registry；重试失败收件人时不能把已成功收件人再次发送。临时解析/网络错误退避重试，损坏 payload、未知 channel、非法 `type/botKind` 等确定性配置错误直接冻结，修正后才可人工重置。
 - 浏览器共享契约位于 `lib/project-management/composer-contract.ts` 与 `lib/project-management/time-canvas/`，服务端领域和查询不得从 `components/` 或带 `"use client"` 的模块反向导入类型或实现。`npm run check:dependencies` 使用 TypeScript AST 校验传递依赖边界、浏览器契约的服务端依赖、outbox 核心业务依赖，并从 Next 路由、脚本、测试和根配置入口遍历后拒绝 `components/`/`lib/` 中不可达的源码。
 
 ## 结构化日志

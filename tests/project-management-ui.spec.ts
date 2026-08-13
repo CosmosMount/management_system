@@ -1709,6 +1709,27 @@ test.describe("project management P4/P6 UI integration", () => {
         .getByTestId("segment-inspector")
         .getByRole("heading", { name: "P6 UI 可确认计划" }),
     ).toBeVisible();
+    const commonInspector = page.getByTestId("segment-inspector");
+    await expect(commonInspector.getByText("类型", { exact: true })).toBeVisible();
+    await expect(commonInspector.getByText("状态", { exact: true })).toBeVisible();
+    await expect(commonInspector.getByText("所属人员", { exact: true })).toBeVisible();
+    await expect(commonInspector.getByText("关联 Task", { exact: true })).toBeVisible();
+    await expect(
+      commonInspector.getByRole("link", { name: fixture.taskTitle, exact: true }),
+    ).toHaveAttribute("href", `/progress/tasks/${fixture.taskId}`);
+    if (testInfo.project.name === "desktop") {
+      const editableContent = commonInspector.getByLabel("内容", { exact: true });
+      await editableContent.fill("P6 UI 未保存 Task 导航保护");
+      page.once("dialog", (dialog) => {
+        expect(dialog.message()).toContain("当前投入有未保存修改");
+        void dialog.dismiss();
+      });
+      await commonInspector
+        .getByRole("link", { name: fixture.taskTitle, exact: true })
+        .click();
+      await expect(page.getByRole("heading", { name: "资源计划" })).toBeVisible();
+      await expect(editableContent).toHaveValue("P6 UI 未保存 Task 导航保护");
+    }
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
@@ -3474,11 +3495,14 @@ test.describe("project management P4/P6 UI integration", () => {
     });
 
     await page.goto(`/progress/resources?all=0&focus=${focusSegment.id}`);
-    await expect(page.getByRole("dialog", { name: "投入详情" })).toContainText(
+    const independentDetail = page.getByRole("dialog", { name: "投入详情" });
+    await expect(independentDetail).toContainText(
       "资源计划 50 项外部焦点",
     );
+    await expect(independentDetail.getByText("关联 Task", { exact: true })).toBeVisible();
+    await expect(independentDetail.getByText("独立投入", { exact: true })).toBeVisible();
     expect(new URL(page.url()).searchParams.has("people")).toBe(false);
-    await page.getByRole("dialog", { name: "投入详情" })
+    await independentDetail
       .getByRole("button", { name: "Close" }).click();
 
     await page.goto("/progress/resources");
@@ -3524,7 +3548,20 @@ test.describe("project management P4/P6 UI integration", () => {
     await expect(page.getByRole("dialog", { name: "投入详情" })).toContainText(
       "资源计划保留已删除 Task 的有效 Planned",
     );
-    await page.getByRole("dialog", { name: "投入详情" })
+    const deletedTaskDetail = page.getByRole("dialog", { name: "投入详情" });
+    await expect(deletedTaskDetail.getByText("关联 Task", { exact: true })).toBeVisible();
+    await expect(
+      deletedTaskDetail.getByText(`${taskRecords[0]!.title}（已删除）`, {
+        exact: true,
+      }).first(),
+    ).toBeVisible();
+    await expect(
+      deletedTaskDetail.getByRole("link", {
+        name: taskRecords[0]!.title,
+        exact: true,
+      }),
+    ).toHaveCount(0);
+    await deletedTaskDetail
       .getByRole("button", { name: "Close" }).click();
 
     const explicitPeople = people.slice(0, 50).map((person) => person.id);

@@ -27,6 +27,7 @@ const segmentTaskSelect = {
   techGroup: true,
   status: true,
   priority: true,
+  deletedAt: true,
   members: {
     where: { removedAt: null },
     select: { personId: true, role: true, removedAt: true },
@@ -393,6 +394,7 @@ function toWorkSegmentDetailDto(
         title: segment.task.title,
         team: segment.task.team,
         techGroup: segment.task.techGroup,
+        deleted: Boolean(segment.task.deletedAt),
       }
     : null;
   return {
