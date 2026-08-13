@@ -30,6 +30,12 @@ import type {
   TaskComposerValidationIssue as ValidationIssue,
 } from "@/lib/project-management/composer-contract";
 import { TASK_COMPOSER_START_ID } from "@/lib/project-management/composer-contract";
+import {
+  isReadOnlyRevisionEntity,
+  localMs,
+  renderAtMs,
+  sortMilestonesByRenderTime,
+} from "@/components/project-management/task-composer-plan-state";
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const PLAN_ROW_ID = "task-composer-plan-row";
@@ -331,7 +337,7 @@ function buildComposerCanvasModel(
   state: TaskComposerSeed,
   issues: ValidationIssue[],
 ): TimeCanvasModel {
-  const sortedMilestones = sortMilestonesForDisplay(state);
+  const sortedMilestones = sortMilestonesByRenderTime(state);
   const hasIssue = (entityId: string) => issues.some((issue) => issue.entityId === entityId);
   const anchors = [
     {
@@ -357,7 +363,7 @@ function buildComposerCanvasModel(
       label: milestone.goal || "临时 Milestone",
       atMs: renderAtMs(state, milestone.id),
       sequence: index + 1,
-      editable: !isReadOnlyEntity(state, milestone.id),
+      editable: !isReadOnlyRevisionEntity(state, milestone.id),
       versionToken: milestone.expectedCompletedAt,
       tone: phaseTones[index % phaseTones.length],
       visualState: isTemporary(state, milestone.id)
@@ -455,7 +461,7 @@ function buildComposerNavigatorNodes(
 ): TaskPlanNavigatorNode[] {
   const hasIssue = (entityId: string) =>
     issues.some((issue) => issue.entityId === entityId);
-  const milestoneNodes: TaskPlanNavigatorNode[] = sortMilestonesForDisplay(state).map(
+  const milestoneNodes: TaskPlanNavigatorNode[] = sortMilestonesByRenderTime(state).map(
     (milestone) => ({
       id: milestone.id,
       kind: "MILESTONE",
@@ -463,10 +469,10 @@ function buildComposerNavigatorNodes(
       at: milestone.expectedCompletedAt,
       status: isTemporary(state, milestone.id)
         ? "临时节点"
-        : isReadOnlyEntity(state, milestone.id)
+        : isReadOnlyRevisionEntity(state, milestone.id)
           ? "只读承接"
           : "计划中",
-      completed: isReadOnlyEntity(state, milestone.id),
+      completed: isReadOnlyRevisionEntity(state, milestone.id),
       invalid: hasIssue(milestone.id),
     }),
   );
@@ -531,7 +537,7 @@ function Inspector({
   if (!draft) {
     return <p className="text-sm text-muted-foreground">从画布或节点列表选择一个节点进行编辑。</p>;
   }
-  const readOnly = isReadOnlyEntity(state, draft.entityId);
+  const readOnly = isReadOnlyRevisionEntity(state, draft.entityId);
   const fieldError = (key: string) => issues.some((issue) => issue.key === key);
   return (
     <div className="space-y-3" data-testid="task-composer-inspector">
@@ -787,48 +793,8 @@ function isStrictlyInsidePlan(state: TaskComposerSeed, atMs: number) {
   );
 }
 
-function sortMilestonesForDisplay(state: TaskComposerSeed) {
-  return [...state.milestones].sort(
-    (left, right) =>
-      renderAtMs(state, left.id) - renderAtMs(state, right.id) ||
-      left.id.localeCompare(right.id),
-  );
-}
-
 function isTemporary(state: TaskComposerSeed, entityId: string) {
   return state.nodeMeta?.[entityId]?.lifecycle === "TEMPORARY";
-}
-
-function renderAtMs(state: TaskComposerSeed, entityId: string) {
-  const stored = state.nodeMeta?.[entityId]?.lastValidAt;
-  if (stored) return localMs(stored);
-  if (state.revision?.markerId === entityId) {
-    return localMs(state.revision.revisionAt);
-  }
-  const carriedRevision = state.revision?.carriedAnchors.find(
-    (anchor) => anchor.id === entityId,
-  );
-  if (carriedRevision) return localMs(carriedRevision.revisionAt);
-  if (entityId === TASK_COMPOSER_START_ID) return localMs(state.plannedStartAt);
-  if (entityId === state.termination.id) return localMs(state.termination.plannedAt);
-  return localMs(
-    state.milestones.find((milestone) => milestone.id === entityId)
-      ?.expectedCompletedAt ?? "",
-  );
-}
-
-function isReadOnlyEntity(state: TaskComposerSeed, entityId: string) {
-  if (!state.revision) return false;
-  return (
-    entityId === TASK_COMPOSER_START_ID ||
-    state.revision.lockedMilestoneIds.includes(entityId) ||
-    state.revision.carriedAnchors.some((anchor) => anchor.id === entityId)
-  );
-}
-
-function localMs(value: string) {
-  const parsed = new Date(`${value}:00+08:00`).getTime();
-  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function formatLocalDateTime(value: string) {
