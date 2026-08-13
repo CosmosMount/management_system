@@ -6,20 +6,24 @@ import {
   resolveProcurementBotKind,
 } from "@/lib/feishu-bot-routing";
 import {
-  collectOrderNotificationRecipientOpenIds,
-  collectOrderInitiatorOpenIds,
   PROCUREMENT_ORDER_WEBHOOK_RECIPIENT_OPEN_ID,
   sendApplicantResubmitNotification,
   sendApplicantResubmitNotificationToOpenId,
-  sendBudgetThresholdNotification,
-  sendBudgetThresholdNotificationToOpenId,
   sendOrderNotification,
   sendOrderNotificationToOpenId,
   sendProcurementRejectedNotification,
   sendProcurementRejectedNotificationToOpenId,
   sendProcurementReturnDraftNotification,
   sendProcurementReturnDraftNotificationToOpenId,
-} from "@/lib/feishu";
+} from "@/lib/feishu-procurement-order-notifications";
+import {
+  sendBudgetThresholdNotification,
+  sendBudgetThresholdNotificationToOpenId,
+} from "@/lib/feishu-procurement-budget-notifications";
+import {
+  collectOrderInitiatorOpenIds,
+  collectOrderNotificationRecipientOpenIds,
+} from "@/lib/procurement-notification-recipients";
 import {
   orderOutboxPayloadSchema,
   type OrderOutboxPayload,

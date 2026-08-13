@@ -1,7 +1,10 @@
 import type { OrderStatus } from "@prisma/client";
 import { enrichOrderCardPayloadFromDb } from "@/lib/feishu-order-card-payload";
 import { sendTeacherReviewEmailsOnce } from "@/lib/procurement-teacher-email";
-import { mapOrderItems, type OrderCardPayload } from "@/lib/feishu";
+import {
+  mapOrderItems,
+  type OrderCardPayload,
+} from "@/lib/procurement-notification-contract";
 import type { FeishuBotKind } from "@/lib/feishu-app-config";
 import { resolveProcurementBotKind } from "@/lib/feishu-bot-routing";
 import { sendFeishuDirectMessage } from "@/lib/feishu-message";

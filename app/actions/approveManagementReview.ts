@@ -2,7 +2,7 @@
 
 import { auth } from "@/lib/auth";
 import { OrderStatus } from "@prisma/client";
-import { mapOrderItems } from "@/lib/feishu";
+import { mapOrderItems } from "@/lib/procurement-notification-contract";
 import {
   enqueueOrderNotificationTx,
   orderNotificationEventKey,

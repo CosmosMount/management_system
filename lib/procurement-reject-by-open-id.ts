@@ -1,5 +1,5 @@
 import { OrderStatus } from "@prisma/client";
-import { mapOrderItems } from "@/lib/feishu";
+import { mapOrderItems } from "@/lib/procurement-notification-contract";
 import {
   enqueueProcurementRejectedNotificationTx,
   enqueueProcurementReturnDraftNotificationTx,

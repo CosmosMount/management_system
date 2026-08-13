@@ -1,4 +1,4 @@
-import type { OrderItemSummary } from "@/lib/feishu";
+import type { OrderItemSummary } from "@/lib/procurement-notification-contract";
 
 const MAX_TABLE_ROWS = 20;
 

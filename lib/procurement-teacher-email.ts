@@ -1,6 +1,6 @@
 import { buildAppUrl, type NotificationContext } from "@/lib/app-origin";
 import { sendEmail } from "@/lib/email";
-import type { OrderCardPayload } from "@/lib/feishu";
+import type { OrderCardPayload } from "@/lib/procurement-notification-contract";
 import { getOpenIdsByRole } from "@/lib/permissions";
 import { statusLabels } from "@/lib/permissions-client";
 import { prisma } from "@/lib/prisma";

@@ -1,6 +1,9 @@
 import type { Prisma } from "@prisma/client";
 import type { NotificationContext } from "@/lib/app-origin";
-import type { BudgetThresholdPayload, OrderCardPayload } from "@/lib/feishu";
+import type {
+  BudgetThresholdPayload,
+  OrderCardPayload,
+} from "@/lib/procurement-notification-contract";
 import { resolveProcurementBotKind } from "@/lib/feishu-bot-routing";
 import {
   enqueueNotification,

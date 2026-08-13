@@ -1,5 +1,7 @@
-import type { OrderCardPayload } from "@/lib/feishu";
-import { mapOrderItems } from "@/lib/feishu";
+import {
+  mapOrderItems,
+  type OrderCardPayload,
+} from "@/lib/procurement-notification-contract";
 import { prisma } from "@/lib/prisma";
 
 /** 发送卡片前从数据库补全附件字段（兼容旧 outbox 或未重建的 Web 服务）。 */

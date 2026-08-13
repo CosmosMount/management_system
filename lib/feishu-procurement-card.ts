@@ -1,6 +1,6 @@
 import type { OrderStatus } from "@prisma/client";
 import { buildAppUrl } from "@/lib/app-origin";
-import type { OrderCardPayload } from "@/lib/feishu";
+import type { OrderCardPayload } from "@/lib/procurement-notification-contract";
 import type { ApplicantAttachmentCardItem } from "@/lib/feishu-procurement-card-assets";
 import {
   buildOrderItemsTableElement,

@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { mapOrderItems } from "@/lib/feishu";
+import { mapOrderItems } from "@/lib/procurement-notification-contract";
 import { sendManagementReviewNotification } from "@/lib/feishu";
 import { prisma } from "@/lib/prisma";
 

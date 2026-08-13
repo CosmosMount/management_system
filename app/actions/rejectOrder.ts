@@ -2,7 +2,7 @@
 
 import { z } from "zod";
 import { auth } from "@/lib/auth";
-import { mapOrderItems } from "@/lib/feishu";
+import { mapOrderItems } from "@/lib/procurement-notification-contract";
 import {
   enqueueApplicantResubmitNotificationTx,
   enqueueProcurementRejectedNotificationTx,

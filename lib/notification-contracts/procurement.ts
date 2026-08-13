@@ -1,5 +1,8 @@
 import { z } from "zod";
-import type { BudgetThresholdPayload, OrderCardPayload } from "@/lib/feishu";
+import type {
+  BudgetThresholdPayload,
+  OrderCardPayload,
+} from "@/lib/procurement-notification-contract";
 
 export const procurementOrderPayloadSchema = z.object({
   id: z.string().min(1),
