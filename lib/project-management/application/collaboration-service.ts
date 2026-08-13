@@ -49,7 +49,7 @@ type TargetContext =
       priority: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
       members: Array<{
         personId: string;
-        role: "OWNER" | "PARTICIPANT" | "LEAD" | "MEMBER" | "REVIEWER" | "VIEWER";
+        role: "OWNER" | "PARTICIPANT";
         removedAt: Date | null;
       }>;
     };

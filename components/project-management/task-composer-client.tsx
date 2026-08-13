@@ -41,10 +41,7 @@ import {
   type TaskComposerValidationIssue as ValidationIssue,
   type TaskPriorityValue,
 } from "@/lib/project-management/composer-contract";
-import {
-  taskMemberRoleLabels,
-  taskPriorityLabels,
-} from "@/lib/project-management/labels";
+import { taskPriorityLabels } from "@/lib/project-management/labels";
 import type {
   PersonOptionDto,
   TaskOptionPage,
@@ -145,13 +142,9 @@ export function TaskComposerClient({
   const isRevisionComposer =
     mode.kind === "CREATE_REVISION" || mode.kind === "RESUBMIT_REVISION";
   const isResubmittingRevision = mode.kind === "RESUBMIT_REVISION";
-  const preservedLegacyMembers =
-    mode.kind === "EDIT_DRAFT" ? (mode.preservedLegacyMembers ?? []) : [];
   const canManageMembers =
     mode.kind === "CREATE" ||
-    (mode.kind === "EDIT_DRAFT" &&
-      mode.canManageMembers &&
-      preservedLegacyMembers.length === 0);
+    (mode.kind === "EDIT_DRAFT" && mode.canManageMembers);
   const returnPath =
     mode.kind === "CREATE"
       ? routes.progress.tasks
@@ -930,35 +923,14 @@ export function TaskComposerClient({
                         techGroup: state.techGroup,
                       }
                 }
-                editable={canManageMembers && preservedLegacyMembers.length === 0}
+                editable={canManageMembers}
                 onChange={(members) => updateField("members", members)}
                 onPersonResolved={(person) =>
                   setPeople((current) => mergeOptions(current, [person]))
                 }
               />
-              {preservedLegacyMembers.map((member) => {
-                const person = people.find((item) => item.id === member.personId);
-                return (
-                  <div
-                    key={`legacy:${member.personId}:${member.role}`}
-                    className="flex min-w-0 items-center gap-2 rounded-lg border border-border p-2 text-sm"
-                  >
-                    <span className="min-w-0 flex-1 truncate">
-                      {person?.displayName ?? "历史成员"}
-                    </span>
-                    <Badge variant="outline">
-                      {taskMemberRoleLabels[member.role]}
-                    </Badge>
-                    <span className="text-xs text-muted-foreground">只读</span>
-                  </div>
-                );
-              })}
             </div>
-            {preservedLegacyMembers.length > 0 ? (
-              <p className="text-xs text-muted-foreground">
-                此 Task 含历史成员角色。历史成员会保留；在管理员清理历史数据前，成员区保持只读，其他内容仍可保存。
-              </p>
-            ) : !canManageMembers ? (
+            {!canManageMembers ? (
               <p className="text-xs text-muted-foreground">
                 {isRevisionComposer
                   ? "Revision 只调整下方计划节点；Task 基本信息、分类与成员保持只读。"

@@ -212,6 +212,7 @@ export default async function AdminAccountsPage({
           action: true,
           entityId: true,
           source: true,
+          before: true,
           createdAt: true,
           actorAccount: {
             select: { person: { select: { displayName: true } } },
@@ -229,6 +230,17 @@ export default async function AdminAccountsPage({
       createdAt: string;
     }>
   >();
+  const archivedProjectRolesByAccount = new Map<
+    string,
+    Array<{
+      id: string;
+      role: string;
+      team: string;
+      techGroup: string;
+      createdAt: string;
+      revokedAt: string;
+    }>
+  >();
   for (const event of securityAuditEvents) {
     const accountId = entityAccountIds.get(event.entityId);
     if (!accountId) continue;
@@ -241,6 +253,12 @@ export default async function AdminAccountsPage({
       createdAt: event.createdAt.toISOString(),
     });
     auditsByAccount.set(accountId, existing);
+    const archivedRole = archivedProjectRoleFromAudit(event);
+    if (archivedRole) {
+      const archived = archivedProjectRolesByAccount.get(accountId) ?? [];
+      archived.push(archivedRole);
+      archivedProjectRolesByAccount.set(accountId, archived);
+    }
   }
 
   const responsibilities = (await responsibilitiesPromise).flatMap(
@@ -283,6 +301,8 @@ export default async function AdminAccountsPage({
           createdAt: assignment.createdAt.toISOString(),
           revokedAt: assignment.revokedAt?.toISOString() ?? null,
         })),
+        archivedProjectRoles:
+          archivedProjectRolesByAccount.get(account.id) ?? [],
         reimbursementRoles: account.reimbursementRoles.map((assignment) => ({
           ...assignment,
           createdAt: assignment.createdAt.toISOString(),
@@ -297,4 +317,38 @@ export default async function AdminAccountsPage({
       filters={{ query, role, team, techGroup }}
     />
   );
+}
+
+function archivedProjectRoleFromAudit(event: {
+  id: string;
+  action: string;
+  before: Prisma.JsonValue | null;
+}) {
+  if (
+    event.action !== "account.legacy_project_role.archived" ||
+    !event.before ||
+    typeof event.before !== "object" ||
+    Array.isArray(event.before)
+  ) {
+    return null;
+  }
+  const before = event.before as Record<string, Prisma.JsonValue>;
+  if (
+    typeof before.assignmentId !== "string" ||
+    typeof before.role !== "string" ||
+    typeof before.team !== "string" ||
+    typeof before.techGroup !== "string" ||
+    typeof before.createdAt !== "string" ||
+    typeof before.revokedAt !== "string"
+  ) {
+    return null;
+  }
+  return {
+    id: event.id,
+    role: before.role,
+    team: before.team,
+    techGroup: before.techGroup,
+    createdAt: before.createdAt,
+    revokedAt: before.revokedAt,
+  };
 }

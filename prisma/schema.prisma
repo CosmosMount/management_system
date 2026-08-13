@@ -58,13 +58,8 @@ enum PersonStatus {
 }
 
 enum ProjectManagementSystemRole {
-  SYSTEM_ADMINISTRATOR
-  TEAM_ADMINISTRATOR
-  RESOURCE_MANAGER
-  AUDITOR
   SUPER_ADMINISTRATOR
   PROJECT_ADMINISTRATOR
-  GROUP_LEADER
 }
 
 enum TaskStatus {
@@ -87,10 +82,6 @@ enum TaskPriority {
 enum TaskMemberRole {
   OWNER
   PARTICIPANT
-  LEAD
-  MEMBER
-  REVIEWER
-  VIEWER
 }
 
 enum ProjectStatus {
@@ -893,7 +884,6 @@ model WorkSegment {
   priority           TaskPriority        @default(MEDIUM)
   expectedOutput     String              @default("")
   actualOutput       String              @default("")
-  completionPercent  Decimal?            @db.Decimal(5, 2)
   taskId             String?
   task               Task?               @relation(fields: [taskId], references: [id], onDelete: SetNull)
   createdByAccountId String

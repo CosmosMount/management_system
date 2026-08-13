@@ -348,10 +348,43 @@ test.describe("管理员面板", () => {
       }),
     ).toHaveCount(0);
 
-    await accountsCard.getByRole("button", { name: "查看记录" }).click();
+    const archivedAt = new Date().toISOString();
+    await prisma.domainAuditEvent.create({
+      data: {
+        id: `migration:pm-history:v1:system-role:e2e-${Date.now()}`,
+        action: "account.legacy_project_role.archived",
+        entityType: "Account",
+        entityId: target.accountId!,
+        before: {
+          assignmentId: `legacy-assignment-${Date.now()}`,
+          accountId: target.accountId!,
+          role: "GROUP_LEADER",
+          team: "英雄",
+          techGroup: "",
+          createdAt: "2025-01-02T03:04:05.000Z",
+          revokedAt: archivedAt,
+        },
+        after: { archived: true, assignmentDeleted: true },
+        reason: "端到端验证迁移归档角色可查询",
+        source: "MIGRATION",
+      },
+    });
+    await page.reload({ waitUntil: "networkidle" });
+    const refreshedAccountsCard = page.getByTestId("accounts-and-roles-card");
+    const refreshedAccountList = (page.viewportSize()?.width ?? 0) < 768
+      ? refreshedAccountsCard.getByTestId("mobile-account-list")
+      : refreshedAccountsCard.locator("table");
+
+    await refreshedAccountList
+      .getByRole("button", { name: "查看记录" })
+      .click();
     const historyDialog = page.getByTestId("account-history-dialog");
     await expect(historyDialog).toBeVisible();
     await expect(historyDialog.getByText("项目管理员").first()).toBeVisible();
+    await expect(historyDialog.getByText("旧组长 · 英雄").first()).toBeVisible();
+    await expect(historyDialog.getByText(/已于 .* 归档/).first()).toBeVisible();
+    await expect(historyDialog.getByText(/归档旧项目角色 · 系统迁移/).first()).toBeVisible();
+    await expect(historyDialog.getByText(/数据迁移/).first()).toBeVisible();
     await expect(historyDialog.getByText(/授予项目角色/).first()).toBeVisible();
     await expect(historyDialog.getByText(/撤销项目角色/).first()).toBeVisible();
     await expectHealthyPage(page);

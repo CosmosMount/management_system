@@ -9,9 +9,7 @@ async function main() {
     userAccountIdIsRequired,
     superAdministratorCount,
     projectAdministratorCount,
-    groupLeaderCount,
     activeReimbursementRoleCount,
-    activeLegacyProjectRoleCount,
     activeLegacyReimbursementSuperAdminCount,
     migrationAuditCount,
   ] = await Promise.all([
@@ -33,24 +31,8 @@ async function main() {
     prisma.systemRoleAssignment.count({
       where: { role: "PROJECT_ADMINISTRATOR", revokedAt: null },
     }),
-    prisma.systemRoleAssignment.count({
-      where: { role: "GROUP_LEADER", revokedAt: null },
-    }),
     prisma.userRole.count({
       where: { role: { not: "SUPER_ADMIN" }, revokedAt: null },
-    }),
-    prisma.systemRoleAssignment.count({
-      where: {
-        role: {
-          in: [
-            "SYSTEM_ADMINISTRATOR",
-            "TEAM_ADMINISTRATOR",
-            "RESOURCE_MANAGER",
-            "AUDITOR",
-          ],
-        },
-        revokedAt: null,
-      },
     }),
     prisma.userRole.count({
       where: { role: "SUPER_ADMIN", revokedAt: null },
@@ -65,16 +47,12 @@ async function main() {
     userAccountIdIsRequired,
     superAdministratorCount,
     projectAdministratorCount,
-    groupLeaderCount,
     activeReimbursementRoleCount,
-    activeLegacyProjectRoleCount,
     activeLegacyReimbursementSuperAdminCount,
     migrationAuditCount,
     ready:
       linkedUserCount === userCount &&
       userAccountIdIsRequired &&
-      groupLeaderCount === 0 &&
-      activeLegacyProjectRoleCount === 0 &&
       activeLegacyReimbursementSuperAdminCount === 0 &&
       (userCount === 0 || superAdministratorCount > 0),
   };

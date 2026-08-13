@@ -399,21 +399,14 @@ export async function createAccountPerson(displayName: string) {
 export async function grantRole(
   accountId: string,
   role: ProjectManagementSystemRole,
-  scope: { team: string; techGroup: string } = { team: "", techGroup: "" },
 ) {
-  const isGlobalAdministrator =
-    role === "SUPER_ADMINISTRATOR" || role === "PROJECT_ADMINISTRATOR";
   await prisma.systemRoleAssignment.create({
     data: {
       accountId,
       role,
-      team: isGlobalAdministrator ? "" : scope.team,
-      techGroup: isGlobalAdministrator
-        ? ""
-        : role === "GROUP_LEADER" && scope.team
-          ? ""
-          : scope.techGroup,
-      revokedAt: isGlobalAdministrator ? null : new Date(),
+      team: "",
+      techGroup: "",
+      revokedAt: null,
     },
   });
 }

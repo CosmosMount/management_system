@@ -93,10 +93,6 @@ test.describe("project management plan mutations project-management-plan-mutatio
 
       const teamAdmin = await createAccountPerson("S2 Team Admin");
       const teamOwner = await createAccountPerson("S2 Team Owner");
-      await grantRole(teamAdmin.account.id, "GROUP_LEADER", {
-        team: "英雄",
-        techGroup: "电控",
-      });
       const ordinaryCreated = await createTaskDraft(
         actor(teamAdmin),
         taskDraftInput({
@@ -170,10 +166,6 @@ test.describe("project management plan mutations project-management-plan-mutatio
       const owner = await createAccountPerson("S2 Related Reference Owner");
       const reviewer = await createAccountPerson("S2 Related Reference Reviewer");
       await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
-      await grantRole(scopedAdmin.account.id, "GROUP_LEADER", {
-        team: "英雄",
-        techGroup: "电控",
-      });
 
       const hiddenRelated = await createDraft({
         creator: admin,
@@ -321,18 +313,6 @@ test.describe("project management plan mutations project-management-plan-mutatio
         }),
         "STATE_CONFLICT",
       );
-      await expectServiceError(
-        updateTaskMembersThroughCurrentInterface(actor(owner), {
-          taskId: fixture.taskId,
-          expectedLockVersion: 0,
-          members: [
-            { personId: owner.person.id, role: "OWNER" },
-            { personId: reviewer.person.id, role: "PARTICIPANT" },
-          ],
-        }),
-        "STATE_CONFLICT",
-      );
-
       const beforeOutboxCount = await prisma.notificationOutbox.count();
       const metadata = await updateDraftMetadataThroughCurrentInterface(actor(owner), {
         taskId: fixture.taskId,
@@ -857,10 +837,10 @@ test.describe("project management plan mutations project-management-plan-mutatio
         snapshotHash: expect.stringMatching(/^[a-f0-9]{64}$/),
         plannedStartAt: iso(2026, 8, 1),
         nodeCount: 201,
-        changes: {
+      });
+      expect(jsonRecord(audit.after).planChanges).toMatchObject({
           added: { totalCount: 201, truncated: false },
           removed: { totalCount: 3, truncated: false },
-        },
       });
     });
 

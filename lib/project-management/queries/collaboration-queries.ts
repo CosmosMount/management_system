@@ -362,7 +362,7 @@ type ReadableTarget =
       techGroup: string;
       members: Array<{
         personId: string;
-        role: "OWNER" | "PARTICIPANT" | "LEAD" | "MEMBER" | "REVIEWER" | "VIEWER";
+        role: "OWNER" | "PARTICIPANT";
         removedAt: Date | null;
       }>;
     };

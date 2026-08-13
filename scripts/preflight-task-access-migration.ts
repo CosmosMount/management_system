@@ -94,7 +94,7 @@ async function main() {
     prisma.$queryRaw<CountRow[]>`
       SELECT count(*)::bigint AS count
       FROM "SystemRoleAssignment"
-      WHERE role = 'GROUP_LEADER' AND "revokedAt" IS NULL
+      WHERE role::text = 'GROUP_LEADER' AND "revokedAt" IS NULL
     `,
     prisma.$queryRaw<CountRow[]>`
       SELECT count(*)::bigint AS count FROM "Task"
@@ -104,9 +104,9 @@ async function main() {
       FROM "Account" account
       JOIN "SystemRoleAssignment" assignment
         ON assignment."accountId" = account.id
-      WHERE account."projectAccessStatus" = 'ACTIVE'
+      WHERE COALESCE(to_jsonb(account)->>'projectAccessStatus', 'ACTIVE') = 'ACTIVE'
         AND assignment."revokedAt" IS NULL
-        AND assignment.role IN ('SUPER_ADMINISTRATOR', 'PROJECT_ADMINISTRATOR')
+        AND assignment.role::text IN ('SUPER_ADMINISTRATOR', 'PROJECT_ADMINISTRATOR')
         AND btrim(assignment.team) = ''
         AND btrim(assignment."techGroup") = ''
     `,
@@ -115,9 +115,9 @@ async function main() {
       FROM "Account" account
       JOIN "SystemRoleAssignment" assignment
         ON assignment."accountId" = account.id
-      WHERE account."projectAccessStatus" = 'ACTIVE'
+      WHERE COALESCE(to_jsonb(account)->>'projectAccessStatus', 'ACTIVE') = 'ACTIVE'
         AND assignment."revokedAt" IS NULL
-        AND assignment.role IN ('SUPER_ADMINISTRATOR', 'PROJECT_ADMINISTRATOR')
+        AND assignment.role::text IN ('SUPER_ADMINISTRATOR', 'PROJECT_ADMINISTRATOR')
         AND btrim(assignment.team) = ''
         AND btrim(assignment."techGroup") = ''
         AND EXISTS (

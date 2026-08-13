@@ -109,14 +109,6 @@ export default async function ProgressTaskEditPage({
             (entry) => entry.nodeId,
           ),
           canManageMembers: workspace.permissions.canManageMembers,
-          preservedLegacyMembers: workspace.members.flatMap((member) =>
-            member.role === "LEAD" ||
-            member.role === "MEMBER" ||
-            member.role === "REVIEWER" ||
-            member.role === "VIEWER"
-              ? [{ personId: member.personId, role: member.role }]
-              : [],
-          ),
         }}
       />
     </>

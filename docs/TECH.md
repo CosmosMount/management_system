@@ -92,9 +92,9 @@ Auth.js 使用飞书 OAuth。认证配置与完整登录副作用拆分如下：
 
 报销活跃角色为 `TEAM_ADMIN`、`TECH_GROUP_ADMIN`、`TEACHER`、`FINANCE`。授权、审批收件人和角色签名回退均通过 `UserRole.accountId` 读取账号当前身份；`UserRole.openId` 仅为只读历史兼容字段。采购管理审核同时保存审批人的稳定 `accountId` 和当时的 `openId` 快照，验收清单签名优先按 `accountId` 解析，避免飞书身份轮换后错误回退到当前组长。旧 `UserRole.SUPER_ADMIN` 仅保留撤销历史；统一超级管理员在报销权限 helper 中合成兼容的超管语义。
 
-项目活跃系统角色只允许全局 `SUPER_ADMINISTRATOR` 和全局 `PROJECT_ADMINISTRATOR`，二者在项目业务中统一视为全局管理员。`GROUP_LEADER` 与旧 `SYSTEM_ADMINISTRATOR/TEAM_ADMINISTRATOR/RESOURCE_MANAGER/AUDITOR` 只保留已撤销历史；数据库 CHECK 和账号管理 Zod 禁止重新授予。该退役不影响采购报销独立的 `TEAM_ADMIN/TECH_GROUP_ADMIN`。审批提交和全局角色撤销共用全局事务 advisory lock；存在 Task 数据时，账号后台不得撤销最后一名具有 default tenant 非空飞书 `openId` 的全局管理员，审批提交会在事务内重复校验，否则业务状态与通知全部回滚。数据库永久延迟约束覆盖 Task 首次创建、账号删除、全局角色与飞书身份，防止绕过应用层或部署窗口中的并发写入破坏同一不变量。
+项目系统角色枚举只包含全局 `SUPER_ADMINISTRATOR` 和全局 `PROJECT_ADMINISTRATOR`，二者在项目业务中统一视为全局管理员。`GROUP_LEADER` 与旧 `SYSTEM_ADMINISTRATOR/TEAM_ADMINISTRATOR/RESOURCE_MANAGER/AUDITOR` 的已撤销事实只保存在 append-only `DomainAuditEvent`，账号历史页仍可查询；运行时表、Prisma 类型、授权与账号管理输入均不再接受旧角色。该退役不影响采购报销独立的 `TEAM_ADMIN/TECH_GROUP_ADMIN`。审批提交和全局角色撤销共用全局事务 advisory lock；存在 Task 数据时，账号后台不得撤销最后一名具有 default tenant 非空飞书 `openId` 的全局管理员，审批提交会在事务内重复校验，否则业务状态与通知全部回滚。数据库永久延迟约束覆盖 Task 首次创建、账号删除、全局角色与飞书身份，防止绕过应用层或部署窗口中的并发写入破坏同一不变量。
 
-Task 有效成员只允许 `OWNER` 和 `PARTICIPANT`。同一 Person 在同一 Task 中最多一个有效角色，一个 Task 可以有多名 Owner 但至少有一名；整包成员替换先锁 Task，并在同一事务维护成员历史、乐观锁、审计和通知。Task 关联 Segment 的所有用户写路径先锁关联 Task、再按稳定顺序锁 Segment，并基于锁后的成员快照复核操作者权限和 Segment 持有人成员关系，避免 Owner 被并发降级后继续使用旧权限。`LEAD/MEMBER/REVIEWER/VIEWER` 枚举值只用于读取已结束成员历史。Work Segment 不再保存工作职责，也不关联 Task Node。
+Task 成员角色枚举只包含 `OWNER` 和 `PARTICIPANT`。同一 Person 在同一 Task 中最多一个有效角色，一个 Task 可以有多名 Owner 但至少有一名；整包成员替换先锁 Task，并在同一事务维护成员历史、乐观锁、审计和通知。Task 关联 Segment 的所有用户写路径先锁关联 Task、再按稳定顺序锁 Segment，并基于锁后的成员快照复核操作者权限和 Segment 持有人成员关系，避免 Owner 被并发降级后继续使用旧权限。已结束的 `LEAD/MEMBER/REVIEWER/VIEWER` 事实仅保存在 append-only `DomainAuditEvent`，不再参与运行时成员读取或 Composer 恢复。Work Segment 不再保存工作职责，也不关联 Task Node。
 
 所有已登录统一账号都可读取全部未删除 Task、计划、验收、Task 审计和完整 Work Segment，也都可创建合法组织范围的 Task；创建者自动成为 Owner。账号模型不再提供项目访问启用/禁用状态。非成员只有读取权，Participant 可编辑 Task/计划、提交验收与 Revision 并管理自己的关联 Segment，Owner 另可管理成员、Task 状态、任意未生效 Revision 和该 Task 全部 Segment，全局管理员拥有全部项目写权限。所有 capability 由服务端计算，终态、关联和状态机校验不因全员可见而放宽。
 
@@ -172,7 +172,7 @@ P5 Resource Segment 服务端闭环位于 `lib/project-management/application/se
 
 - Segment 服务支持单条/批量 Planned 创建、Actual 创建、更新、批量移动、拆分、合并、取消、完整确认、部分确认和 Actual 逻辑删除。所有写操作继续在事务内写 `WorkSegmentChange` 和 `DomainAuditEvent`，通过 `expectedUpdatedAt` 执行乐观锁，批量写入保持全成全败。
 - 创建或改变 Task 关联的路径继续使用 Task 行锁，并要求 Segment Person 是目标 Task 的有效 Owner/Participant；新建、批量新建、更新、拆分、合并和确认均复核该成员一致性。状态转换继续按稳定 Segment ID 顺序锁行。Segment 不再保存职责、Task Node 关联或关联复核状态。
-- Segment 校验包括 `endAt > startAt`、单条及 merge 最终结果最长 31 天和 Task 成员关联规则。`completionPercent` 已从写入 validation、service DTO 与普通查询 DTO 退役；数据库历史列仅为兼容既有数据保留，新写入固定为 `NULL`。
+- Segment 校验包括 `endAt > startAt`、单条及 merge 最终结果最长 31 天和 Task 成员关联规则。`completionPercent` 已从写入 validation、service DTO、普通查询 DTO 和数据库列完全退役；迁移前的非空数值连同 Segment、Task、类型、状态和历史时间保存在 append-only `DomainAuditEvent`。
 - Segment DTO/审计快照、时间范围与状态规则、定时状态迁移分别位于独立模块；创建/修改、批量移动/取消和确认/来源仍由主服务在单层事务中编排。
 - 所有已登录统一账号可读取全员完整 Planned/Actual Segment 和变更历史。Participant 只能管理自己的 Task 关联 Segment，Owner 可管理该 Task 全部 Segment，全局管理员可管理全部；非成员不能写入已有 Task。无 Task 关联的 Segment 仍由本人管理。停用 Person 的历史 Segment 继续展示，但不能创建新 Segment。状态机、确认生成 Actual、`WorkSegmentSource`、变更历史和审计均保留。多个 Segment 可以时间重叠，服务端不检测、提示、阻止或通知资源冲突。
 - `WorkSegment.allocation`、资源冲突领域模型、扫描器、建议预览、处理 action 和相关 DTO 已删除。旧客户端提交 `allocation` 或 `includeConflicts` 会在 strict Zod 边界返回校验错误。
@@ -208,6 +208,8 @@ TimeCanvas 的键盘焦点、刷选与 Segment 变换数学、只读 Inspector�
 TimeCanvas 的显示尺度为 `WEEK/MONTH/QUARTER/YEAR`，密度分别为 40/12/4/1.5 px/day。所有 presentation 和业务模式默认 `WEEK`，URL 或调用方显式尺度优先；用户选择后 Resize、数据刷新和 Task 节点聚焦均不覆盖。工具栏只保留尺度选择与“今天”，不提供前后箭头；“今天”使用单次即时居中。视觉尺度不参与业务校验：Segment 与创建草稿变换固定吸附 30 分钟，Composer anchor 固定吸附一个上海自然日。桌面端只允许未保存虚线创建草稿横移、调整两端和跨当前可创建 Person 行；移动端不提供直接拖动，继续使用表单。详情 Dialog 使用完整上下文画布且只有目标 Segment 可编辑，变更历史返回中文安全 DTO 和游标分页。有效 Planned 创建或更新时间范围后，客户端在权威 `rowPageKey` 刷新后把目标及相邻块加入预加载集合。部分确认在事务锁行后强制覆盖起点等于权威 Planned 起点，要求实际内容、预期产出和实际产出，只创建 Actual 与最多一条尾部 Planned；既有审计、来源和 notification outbox 语义不变。
 
 `DomainAuditEvent` 由 append-only trigger 保护，应用代码只能追加审计事件，不能更新或删除既有审计行。
+
+`20260814120000_retire_project_management_legacy_history` 在单一事务中完成最终历史收敛。它先阻断仍有效的旧项目系统角色或旧 Task 成员角色，再以稳定 migration ID 归档已撤销/结束角色和非空 `WorkSegment.completionPercent`，删除对应历史行/列并重建最终角色枚举。迁移不访问通知表；回归以通知全行快照验证既有记录不变，并覆盖迁移期间无关通知并发写入可正常提交，不用易受全库并发影响的行数门禁。重复部署不会产生重复审计。迁移回归还必须验证 append-only 保护、完整 migration chain 与 Prisma schema drift。
 
 ### Task 权限迁移与审批通知修复
 

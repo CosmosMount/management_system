@@ -927,8 +927,9 @@ export function ResourcePlannerCanvasClient({
     ) => {
       const preservedViewportCenterMs = persistViewportInUrl
         ? createDraft
-          ? draftViewportCenterRef.current ?? viewportCenterFromCurrentUrl()
-          : viewportCenterFromCurrentUrl()
+          ? viewportCenterFromCurrentUrl() ?? draftViewportCenterRef.current ??
+            currentViewportCenter()
+          : viewportCenterFromCurrentUrl() ?? currentViewportCenter()
         : undefined;
       setNotice({ kind: "info", message: "正在保存…" });
       startTransition(async () => {

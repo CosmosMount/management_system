@@ -12,7 +12,11 @@ export const activeProjectRoles = new Set([
 export const projectRoleLabels: Record<string, string> = {
   SUPER_ADMINISTRATOR: "超级管理员",
   PROJECT_ADMINISTRATOR: "项目管理员",
-  GROUP_LEADER: "组长",
+  SYSTEM_ADMINISTRATOR: "旧系统管理员",
+  TEAM_ADMINISTRATOR: "旧范围管理员",
+  RESOURCE_MANAGER: "旧资源管理员",
+  AUDITOR: "旧审计员",
+  GROUP_LEADER: "旧组长",
 };
 
 export const reimbursementRoleLabels: Record<string, string> = {

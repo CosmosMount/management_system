@@ -250,7 +250,7 @@ Revision 是用户选择时间的计划变化标记，不形成阶段，也不�
 
 存在 Task 数据时，系统要求至少保留一名具有 default tenant 有效飞书 openId 的全局管理员；账号后台会拒绝撤销最后一名可用审批人的角色，数据库永久门禁也会拦截绕过应用层的账号删除、角色和身份写入。空库创建首个 Task 时同样检查该不变量。提交 Milestone 验收或创建/重新送审 Revision 时会在同一事务中再次校验，失败时整事务回滚，不会留下无人处理或无法通知的待审批记录。
 
-项目 `GROUP_LEADER` 已退役，只保留撤销历史且不能继续授予。采购报销的 `TEAM_ADMIN`、`TECH_GROUP_ADMIN` 等独立角色、组长称谓和审批流程不受影响。Work Segment 不再保存独立工作职责，也不再关联 Task Node；投入只可关联 Task。
+项目 `GROUP_LEADER` 已退役；旧角色行会在部署时归档为只读领域审计并从运行时表删除，账号记录仍可查看。活跃旧系统角色或旧 Task 成员角色会阻断迁移，必须先显式撤销或结束，不能静默映射权限。采购报销的 `TEAM_ADMIN`、`TECH_GROUP_ADMIN` 等独立角色、组长称谓和审批流程不受影响。Work Segment 不再保存独立工作职责、Task Node 或完成比例；投入只可关联 Task，历史非空完成比例同样归档到领域审计。
 
 ### 导航栏没有「权限管理」？
 
@@ -261,6 +261,8 @@ Revision 是用户选择时间的计划变化标记，不形成阶段，也不�
 3. **旧数据未通过迁移预检**：升级前先运行 `npm run accounts:preflight`，处理报告中的身份、重复角色或范围冲突。
 
 统一账号历史升级仍按 `npm run accounts:preflight` → `npm run db:deploy` → `npm run accounts:validate` 执行。Task 全员可见改造部署前还必须先运行只读 `npm run pm:task-access-preflight`；若报告零负责人 Task 或孤立的 Task 关联投入，迁移会阻断，必须先人工修复，不能猜测负责人。受控 `npm run db:deploy` 会把不可逆 Task migration 与 Prisma history 记录放入同一 PostgreSQL 事务；不得绕过它直接运行 `prisma migrate deploy`。迁移链还会在不可逆 Task DDL 之前按固定顺序锁定相关表、复检具有有效飞书身份的全局管理员，并安装覆盖账号删除、全局角色、飞书身份和首条 Task 创建的永久串行延迟约束，避免遗漏人工预检、部署中断或旧实例并发写入时留下半升级 schema。该自动门禁不替代发布前报告核对。
+
+`20260814120000_retire_project_management_legacy_history` 是向前迁移：部署前需确认没有仍有效的旧项目系统角色或旧 Task 成员角色。迁移会把已撤销/结束角色及非空投入完成比例写入 append-only `DomainAuditEvent`，随后收窄角色枚举并删除 `WorkSegment.completionPercent`；整个过程不得创建或修改站内通知、outbox 或收件人记录。
 
 ### 完整审批与报销流程
 

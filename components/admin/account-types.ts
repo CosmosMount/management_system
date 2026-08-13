@@ -26,6 +26,14 @@ export type AdminAccountRow = {
     createdAt: string;
     revokedAt: string | null;
   }>;
+  archivedProjectRoles: Array<{
+    id: string;
+    role: string;
+    team: string;
+    techGroup: string;
+    createdAt: string;
+    revokedAt: string;
+  }>;
   reimbursementRoles: Array<{
     id: string;
     role: UserRoleType;

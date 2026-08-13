@@ -25,7 +25,14 @@ export function AccountHistoryDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   if (!account) return null;
-  const assignments = [...account.systemRoles, ...account.reimbursementRoles];
+  const assignments = [
+    ...account.systemRoles,
+    ...account.archivedProjectRoles.map((assignment) => ({
+      ...assignment,
+      archived: true as const,
+    })),
+    ...account.reimbursementRoles,
+  ];
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
@@ -71,7 +78,9 @@ export function AccountHistoryDialog({
                       : reimbursementRoleLabel(assignment)}
                   </span>
                   <span className="text-muted-foreground">
-                    {assignment.revokedAt
+                    {"archived" in assignment
+                      ? `已于 ${new Date(assignment.revokedAt).toLocaleString("zh-CN")} 归档`
+                      : assignment.revokedAt
                       ? `已于 ${new Date(assignment.revokedAt).toLocaleString("zh-CN")} 撤销`
                       : "当前有效"}
                   </span>
@@ -138,6 +147,7 @@ function securityAuditLabel(action: string) {
       "account.teacher_email.updated": "更新指导老师审批邮箱",
       "account.project_access.removed": "移除项目访问禁用机制",
       "account.role.migrated": "迁移账号角色",
+      "account.legacy_project_role.archived": "归档旧项目角色",
     }[action] ?? "账号安全变更"
   );
 }

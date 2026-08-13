@@ -270,6 +270,23 @@ test.describe("project management P1 schema, identity and authorization", () => 
     const outsider = await createAccountPerson("Outsider");
     const teamAdmin = await createAccountPerson("Team Admin");
     const otherTeamAdmin = await createAccountPerson("Other Team Admin");
+    await prisma.accountIdentity.create({
+      data: {
+        accountId: teamAdmin.account.id,
+        provider: "FEISHU",
+        tenantId: "default",
+        providerSubject: `open:ou_pm_p1_admin_${randomUUID()}`,
+        openId: `ou_pm_p1_admin_${randomUUID()}`,
+      },
+    });
+    await prisma.systemRoleAssignment.create({
+      data: {
+        accountId: teamAdmin.account.id,
+        role: "PROJECT_ADMINISTRATOR",
+        team: "",
+        techGroup: "",
+      },
+    });
     const task = await createTaskWithCurrentPlan({
       accountId: owner.account.id,
       title: "权限测试 Task",
@@ -295,19 +312,18 @@ test.describe("project management P1 schema, identity and authorization", () => 
     const ownerActor = actor(owner.account.id, owner.person.id, []);
     const viewerActor = actor(viewer.account.id, viewer.person.id, []);
     const outsiderActor = actor(outsider.account.id, outsider.person.id, []);
-    const teamAdminActor = actor(teamAdmin.account.id, teamAdmin.person.id, [
-      { role: "GROUP_LEADER", team: "英雄", techGroup: "" },
-    ]);
+    const ordinaryTeamAccountActor = actor(
+      teamAdmin.account.id,
+      teamAdmin.person.id,
+      [],
+    );
     const globalTeamAdminActor = actor(teamAdmin.account.id, teamAdmin.person.id, [
       { role: "PROJECT_ADMINISTRATOR", team: "", techGroup: "" },
     ]);
-    const globalAuditorActor = actor(teamAdmin.account.id, teamAdmin.person.id, [
-      { role: "AUDITOR", team: "", techGroup: "" },
-    ]);
-    const otherTeamAdminActor = actor(
+    const otherOrdinaryActor = actor(
       otherTeamAdmin.account.id,
       otherTeamAdmin.person.id,
-      [{ role: "GROUP_LEADER", team: "步兵", techGroup: "" }],
+      [],
     );
     const resource = {
       type: "task" as const,
@@ -329,22 +345,19 @@ test.describe("project management P1 schema, identity and authorization", () => 
       authorize({ actor: outsiderActor, action: "task.view", resource }),
     ).toMatchObject({ allowed: true });
     expect(
-      authorize({ actor: teamAdminActor, action: "task.view", resource }),
+      authorize({ actor: ordinaryTeamAccountActor, action: "task.view", resource }),
     ).toMatchObject({ allowed: true });
     expect(
       authorize({ actor: globalTeamAdminActor, action: "task.view", resource }),
     ).toMatchObject({ allowed: true });
     expect(
-      authorize({ actor: globalAuditorActor, action: "task.view", resource }),
-    ).toMatchObject({ allowed: true });
-    expect(
-      authorize({ actor: otherTeamAdminActor, action: "task.view", resource }),
+      authorize({ actor: otherOrdinaryActor, action: "task.view", resource }),
     ).toMatchObject({ allowed: true });
     expect(
       authorize({ actor: ownerActor, action: "milestone.review", resource }),
     ).toMatchObject({ allowed: false, reason: "global_administrator_required" });
     expect(
-      authorize({ actor: teamAdminActor, action: "task.update_metadata", resource }),
+      authorize({ actor: ordinaryTeamAccountActor, action: "task.update_metadata", resource }),
     ).toMatchObject({ allowed: false });
     expect(
       authorize({ actor: globalTeamAdminActor, action: "milestone.review", resource }),
@@ -360,7 +373,7 @@ test.describe("project management P1 schema, identity and authorization", () => 
     });
     expect(outsiderVisible.map((item) => item.id)).toContain(task.taskId);
     const adminVisible = await prisma.task.findMany({
-      where: taskReadableWhere(teamAdminActor),
+      where: taskReadableWhere(ordinaryTeamAccountActor),
       select: { id: true },
     });
     expect(adminVisible.map((item) => item.id)).toContain(task.taskId);
@@ -373,12 +386,18 @@ test.describe("project management P1 schema, identity and authorization", () => 
       prisma.systemRoleAssignment.create({
         data: {
           accountId: otherTeamAdmin.account.id,
-          role: "GROUP_LEADER",
+          role: "PROJECT_ADMINISTRATOR",
           team: "",
           techGroup: "",
         },
       }),
-    ).rejects.toThrow();
+    ).resolves.toMatchObject({
+      accountId: otherTeamAdmin.account.id,
+      role: "PROJECT_ADMINISTRATOR",
+      team: "",
+      techGroup: "",
+      revokedAt: null,
+    });
     await expect(
       prisma.systemRoleAssignment.create({
         data: {

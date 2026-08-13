@@ -237,7 +237,7 @@ test.describe("project management canvas security project-management-canvas-opti
       });
       const ownerActor = actor(owner);
       const teamAdminActor = actor(teamAdmin, [
-        scopedRole("GROUP_LEADER", "英雄", "电控"),
+        scopedRole("英雄", "电控"),
       ]);
       const ordinaryActor = actor(ordinary);
       const systemActor = actor(owner, [systemAdministratorRole()]);
@@ -963,7 +963,7 @@ test.describe("project management canvas security project-management-canvas-opti
       const unassignedPerson = await createAccountPerson("Capability 未加入 Task");
       const resourceManagerActor = actor(resourceManager, [systemAdministratorRole()]);
       const teamAdminActor = actor(teamAdmin, [
-        scopedRole("GROUP_LEADER", "英雄", "电控"),
+        scopedRole("英雄", "电控"),
       ]);
       await Promise.all([
         prisma.systemRoleAssignment.create({
@@ -972,7 +972,7 @@ test.describe("project management canvas security project-management-canvas-opti
             role: "PROJECT_ADMINISTRATOR",
           },
         }),
-        grantScopedRole(teamAdmin.account.id, "GROUP_LEADER", "英雄", "电控"),
+        grantScopedRole(teamAdmin.account.id, "英雄", "电控"),
       ]);
       const activeTask = await createTask({
         ownerAccountId: owner.account.id,

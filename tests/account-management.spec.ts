@@ -27,7 +27,7 @@ test("统一超管、项目角色、审计和通知保持事务一致", async ()
     prisma.systemRoleAssignment.create({
       data: {
         accountId: target.accountId,
-        role: "GROUP_LEADER",
+        role: "PROJECT_ADMINISTRATOR",
         team: "英雄",
         techGroup: "电控",
       },
@@ -286,7 +286,7 @@ test("最后一名可用全局审批人不能被并发撤销角色或清空飞�
   }
 });
 
-test("项目管理员全局放行并允许自审，退役组长仅保留全员读取权限", async () => {
+test("项目管理员全局放行并允许自审，普通账号保持全员读取权限", async () => {
   const base = { accountId: randomUUID(), personId: randomUUID(), openId: "test", systemRoles: [] };
   const task = {
     type: "task" as const,
@@ -298,23 +298,10 @@ test("项目管理员全局放行并允许自审，退役组长仅保留全员�
     ...base,
     systemRoles: [{ role: "PROJECT_ADMINISTRATOR", team: "", techGroup: "" }],
   };
-  const teamLeader: ProjectManagementActor = {
-    ...base,
-    systemRoles: [{ role: "GROUP_LEADER", team: "英雄", techGroup: "" }],
-  };
-  const techLeader: ProjectManagementActor = {
-    ...base,
-    systemRoles: [{ role: "GROUP_LEADER", team: "", techGroup: "电控" }],
-  };
-  const otherLeader: ProjectManagementActor = {
-    ...base,
-    systemRoles: [{ role: "GROUP_LEADER", team: "步兵", techGroup: "" }],
-  };
-
   expect(authorize({ actor: projectAdmin, action: "task.manage_members", resource: task }).allowed).toBe(true);
-  expect(authorize({ actor: teamLeader, action: "task.terminate", resource: task }).allowed).toBe(false);
-  expect(authorize({ actor: techLeader, action: "segment.manage_others", resource: { type: "segment", task } }).allowed).toBe(false);
-  expect(authorize({ actor: otherLeader, action: "task.view", resource: task }).allowed).toBe(true);
+  expect(authorize({ actor: base, action: "task.terminate", resource: task }).allowed).toBe(false);
+  expect(authorize({ actor: base, action: "segment.manage_others", resource: { type: "segment", task } }).allowed).toBe(false);
+  expect(authorize({ actor: base, action: "task.view", resource: task }).allowed).toBe(true);
   expect(authorize({ actor: projectAdmin, action: "milestone.review", resource: task })).toMatchObject({ allowed: true, reason: "global_administrator" });
 });
 

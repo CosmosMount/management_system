@@ -415,21 +415,21 @@ test.describe("Project 立项与生命周期", () => {
   test("批准时原子挂载 Task、同步成员，并执行结束与删除门禁", async () => {
     const requester = await actor("Project Task 申请人");
     const participant = await actor("Project Task 成员");
-    const legacyViewer = await actor("Project Task 旧只读成员");
+    const formerParticipant = await actor("Project Task 已结束成员");
     const admin = await actor("Project Task 管理员", "SUPER_ADMINISTRATOR");
     const task = await draftTask(requester, participant);
     const secondTask = await draftTask(requester, participant);
     await prisma.taskMember.create({
       data: {
         taskId: task.id,
-        personId: legacyViewer.personId,
-        role: "VIEWER",
+        personId: formerParticipant.personId,
+        role: "PARTICIPANT",
         removedAt: new Date(),
         createdByAccountId: requester.accountId,
       },
     });
     expect((await searchTaskOptions({ actor: requester, input: { query: "Project Task", projectCandidates: true, limit: 50 } })).items.map((item) => item.id)).toContain(task.id);
-    expect((await searchTaskOptions({ actor: legacyViewer, input: { query: "Project Task", projectCandidates: true, limit: 50 } })).items.map((item) => item.id)).not.toContain(task.id);
+    expect((await searchTaskOptions({ actor: formerParticipant, input: { query: "Project Task", projectCandidates: true, limit: 50 } })).items.map((item) => item.id)).not.toContain(task.id);
     const created = await createProject(requester, {
       name: `Project Task ${randomUUID()}`,
       description: "验证 Task 关系",
@@ -499,7 +499,7 @@ test.describe("Project 立项与生命周期", () => {
       focus: `project-node:${randomUUID()}`,
     })).resolves.toBeNull();
     await expect(locateProjectTimelineFocus({
-      actor: legacyViewer,
+      actor: formerParticipant,
       projectId: created.projectId,
       focus: `project-start:${secondTask.id}`,
     })).resolves.toMatchObject({
@@ -557,7 +557,7 @@ test.describe("Project 立项与生命周期", () => {
     }), "VALIDATION_ERROR");
     expect((await searchTaskOptions({ actor: requester, input: { query: "Project Task", projectCandidates: true, limit: 50 } })).items.map((item) => item.id)).not.toContain(task.id);
     expect(await prisma.projectMember.findFirst({ where: { projectId: created.projectId, personId: participant.personId, role: "PARTICIPANT", removedAt: null } })).not.toBeNull();
-    expect(await prisma.projectMember.findFirst({ where: { projectId: created.projectId, personId: legacyViewer.personId, removedAt: null } })).toBeNull();
+    expect(await prisma.projectMember.findFirst({ where: { projectId: created.projectId, personId: formerParticipant.personId, removedAt: null } })).toBeNull();
     await expectCode(completeProject(requester, { projectId: created.projectId, expectedLockVersion: approved.lockVersion }), "STATE_CONFLICT");
     const deleted = await deleteProject(requester, { projectId: created.projectId, expectedLockVersion: approved.lockVersion });
     expect(deleted.lockVersion).toBe(approved.lockVersion + 1);

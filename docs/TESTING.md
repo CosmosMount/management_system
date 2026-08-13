@@ -237,7 +237,7 @@ npm run pm:identity-backfill
 2. 打开 `/progress/tasks`，默认勾选“只看我参与”并选择“进行中”；按人员范围、状态、优先级和关键词筛选时，只展示当前 actor 可读 Task，且仍可手动取消默认筛选；不可读 Task 不能通过列表枚举。
 3. 打开 `/progress/tasks/[id]`，应看到概览、人员投入画布、共享节点导航、选中节点详情，以及正式启用的“Task 风险 / Task 评论 / 近期动态”。有效 TaskMember 按服务端 capability 创建或管理投入，旁观者只读；Project 详情的投入保持只读。页面不得下发 raw 审计列表。Task Owner/Participant 可在 ACTIVE 状态提出和解决风险，普通旁观者只能查看风险但仍可评论；只有全局管理员显示评论删除入口。Active Task 编辑 Dialog 继续使用一次事务保存基本信息和成员，并保持原有并发保护。
 4. Desktop 与 Pixel 5 打开 `/progress/resources`：两者都渲染横向时间画布且页面无横向溢出。Desktop 未保存虚线创建草稿可横移、调整两端和拖到当前可创建 Person 行，整个过程中不得调用服务端 transform mutation；Pixel 5 不提供直接拖动，但必须可通过表单改人员、时间、内容和预期产出后创建。既有投入总览只读；双击或 Enter 打开宽版详情，基本信息必须明确展示类型、状态、所属人员与关联 Task（关联 Task 可直达详情），完整上下文可见且只有目标 Segment 可编辑。草稿或详情有未保存修改时 Esc/关闭必须确认，失败时表单必须保留。资源选择和视口状态由 URL 保存，时间范围由已选内容自动派生。
-5. Planned 完整确认后只显示 Actual；前缀部分确认必须填写实际投入内容、预期产出、实际产出，固定开始点并只生成一条尾段。缺字段或伪造中间起点必须在服务端零写入拒绝。确认、取消、Actual 软删除仍需验证数据库、来源、中文安全 change DTO、audit、站内通知与 outbox；历史分页不得下发 raw `before/after`、账号 ID 或无权读取的 Task 名称，测试环境必须禁用真实飞书投递。普通 DTO 和表单不得再包含 `completionPercent`，但兼容数据库列保持存在且新写入为 `NULL`。
+5. Planned 完整确认后只显示 Actual；前缀部分确认必须填写实际投入内容、预期产出、实际产出，固定开始点并只生成一条尾段。缺字段或伪造中间起点必须在服务端零写入拒绝。确认、取消、Actual 软删除仍需验证数据库、来源、中文安全 change DTO、audit、站内通知与 outbox；历史分页不得下发 raw `before/after`、账号 ID 或无权读取的 Task 名称，测试环境必须禁用真实飞书投递。普通 DTO、表单和最终数据库均不得包含 `completionPercent`；迁移前非空值只能从 append-only 领域审计查询。
 6. `/progress` 默认只显示 ACTIVE 参与 Task；切换“显示全部”后才显示草稿和终态。每页 25 条且 Task 表、版本/当前节点和 Plan 行同步；行动待办保留 Segment confirmation 数量但不把它计入 `criticalCount`，到期队列“处理”必须打开统一详情而不是第二套确认表单。页面不再出现日期、日/周视图或日期平移控件。验证所有 TimeCanvas 在没有显式尺度时默认显示周，URL/调用方尺度仍优先；Task 节点聚焦和 Resize 不得出现尺度跳变。工具栏保留周/月/季/年与“今天”，不显示前后箭头，并验证多级上海日期轴及独立底部滚动条。内容驱动页即使全部内容远离今天，也必须能通过“今天”加载并定位今天附近，同时保持尺度。有效 Planned 的创建/更新必须重新计算内容范围、在两端增加两个上海日历月、加载目标及相邻块并保持当前视口；已确认/已取消 Planned 不扩展范围。浏览器前进/后退后筛选控件必须与 URL 一致；投入详情有未保存修改时，服务端刷新或 `rowPageKey` 变化不得直接丢弃表单。
 7. 在 Desktop `1440x1000` 与 Pixel 5 上分别验证响应式冻结行标题、页面无横向溢出、底部滚动与顶部日期轴/时间对象同步。覆盖空数据、超长名称、跨年、超过 366 天、三年裁剪提示、单块自动二分和 20,000 对象/16 块预算错误；测试不得联系真实飞书服务。
 8. `/progress/task/:id`、`/progress/kanban`、`/progress/my-timeline`、`/progress/resources/conflicts`、`/progress/tags` 与 `/admin/roles` 必须返回 404。资源计划默认显示全部，也可按 Project/Task/人员多选；验证集合并集、只读 Plan 与可交互 Person 混排、25/50 独立分页、选择签名游标、防重复焦点固定、空选择、已确认/已取消 Planned 不返回也不渲染，以及内容两侧两个上海日历月和 180 天自适应块。我的工作和 Task 工作台不得出现冲突标记、投入比例或完成比例；重叠 Segment 不得产生冲突待办、通知或 outbox。
@@ -295,11 +295,11 @@ npx tsx --test tests/project-management-recent-activity-formatter.node.ts
 
 1. Owner 从 DRAFT 工作台右上角进入 `/progress/tasks/[id]/edit`；按钮顺序为“编辑 Task → 激活 Task → 删除草稿 → 复制链接”，工作台不再出现“编辑 Draft 计划”，DRAFT 的概览、成员和计划均无保存控件。删除草稿只对 Owner/全局管理员显示，需二次确认并软删除 Task；激活后编辑与删除草稿按钮都消失，直达编辑 URL 重定向工作台；不可查看或无 metadata 更新权的用户直达 URL 得到脱敏 404。
 2. DRAFT 激活使用事务内服务端时间复核 Current Plan 的 `plannedStartAt`；开始时间在未来时必须拒绝且 Task、节点、审计、通知和 outbox 零写入，开始时间已到达时保持既有激活流程。已经离开 DRAFT 的历史 Task 不追溯处理。
-3. 编辑页在 Desktop 与 Pixel 5 均复用纵向 Composer，并回填元数据、关联 Task、全部现有成员（包括停用人员）、Start、既有 Milestone/Terminal 及节点 ID。负责人和参与人员使用与创建页相同的分组头像胶囊和独立搜索框，选择人员即加入对应分组。迁移后异常残留的 `LEAD/MEMBER/REVIEWER/VIEWER` 四种历史角色必须逐行回显并保留，存在历史角色时成员区整体只读，但仍可保存其他内容。关联选择器排除当前 Task。
+3. 编辑页在 Desktop 与 Pixel 5 均复用纵向 Composer，并回填元数据、关联 Task、全部现有 Owner/Participant（包括停用人员）、Start、既有 Milestone/Terminal 及节点 ID。负责人和参与人员使用与创建页相同的分组头像胶囊和独立搜索框，选择人员即加入对应分组。最终 schema 不存在 `LEAD/MEMBER/REVIEWER/VIEWER` 运行时成员，旧事实仅在领域审计中查询。关联选择器排除当前 Task。
 4. Owner 一次修改基本信息、关联 Task、成员、既有节点、新 Milestone 和 Terminal 后保存；数据库全部更新、既有 nodeId 保留、新节点产生稳定映射、`snapshotHash` 更新、Task `lockVersion` 仅增加 1，并只产生一条 `pm.task.draft.update` 审计。失败时任一区域都不得部分提交，且不得产生站内通知、outbox 或真实飞书调用。
 5. Participant 可进入编辑页并保存元数据与计划；成员区只读、没有搜索/添加/移除/角色控件，请求省略 `members`，数据库成员保持不变。直接伪造 `members` 或移除有关联 Segment 的成员必须被服务端拒绝并完整回滚；Segment 不再关联节点，因此删除草稿节点不受 Segment 阻挡。
 6. 未修改时桌面和移动主保存按钮均禁用；选择节点不应被视为内容修改。客户端和服务端字段错误定位相应区域，无法映射的业务错误显示中文提示。保存成功清理该 Task 编辑草稿并返回新版 Task 工作台，展示权威最新数据。
-7. 编辑草稿按环境、账号和 Task ID 隔离；刷新仅在 Task、Plan Version 和基础 lockVersion 全匹配时允许恢复。失去成员管理权或服务端出现历史角色后，恢复必须以服务端标准成员覆盖本地成员改动，同时保留其他可编辑内容。服务端版本变化后旧草稿不能恢复或覆盖，只能导出或“放弃并加载最新版本”；`STALE_TASK` 保留当前输入，不隐式刷新或合并。
+7. 编辑草稿按环境、账号和 Task ID 隔离；刷新仅在 Task、Plan Version 和基础 lockVersion 全匹配时允许恢复。失去成员管理权后，恢复必须以服务端标准成员覆盖本地成员改动，同时保留其他可编辑内容。服务端版本变化后旧草稿不能恢复或覆盖，只能导出或“放弃并加载最新版本”；`STALE_TASK` 保留当前输入，不隐式刷新或合并。
 8. 领域测试覆盖并发相同 lockVersion 只有一次成功、错误 Plan Version、非初始 v1 Current Plan、非 DRAFT、权限拒绝、关联/成员/计划晚失败回滚和完整审计。UI 在 Desktop/Pixel 5 另覆盖长 Task、节点、成员、长错误、零/200 Milestone 和窄屏无横向溢出、Next.js overlay 或未捕获浏览器错误。
 
 ### Revision 通用 Composer 专项测试
@@ -360,7 +360,7 @@ npx tsx --test tests/project-management-recent-activity-formatter.node.ts
 
 1. `tests/project-management-p1.spec.ts` 覆盖核心 schema 约束：单 Task 单 Current Plan、Segment 时间检查和 Review 幂等键。
 2. 身份测试覆盖 `User -> Account/Identity/Person` 首次解析、重复解析幂等、openId fallback 升级为 unionId、同 unionId 下的 openId 轮换、报销 User 原位更新、角色与收件人不丢失、冲突硬失败和非空 `User.accountId` 关联；账号级项目访问禁用已经移除。
-3. 授权测试覆盖普通非成员、Participant、Owner、统一超级管理员、项目管理员和已退役 `GROUP_LEADER`。所有已登录统一账号都应读取全部未删除 Task、计划、验收、审计与完整 Segment；非成员/组长写入必须零副作用，Participant/Owner/全局管理员按固定矩阵验证允许和拒绝路径。两类全局管理员均可审批且允许自审，Task 不再存在 `allowSelfReview` 分支。
+3. 授权测试覆盖普通非成员、Participant、Owner、统一超级管理员和项目管理员。所有已登录统一账号都应读取全部未删除 Task、计划、验收、审计与完整 Segment；非成员写入必须零副作用，Participant/Owner/全局管理员按固定矩阵验证允许和拒绝路径。归档旧角色不再产生运行时授权。两类全局管理员均可审批且允许自审，Task 不再存在 `allowSelfReview` 分支。
 4. 通知测试覆盖站内通知事务 helper、审计脱敏、审计 append-only、`channel=project-management` outbox 入队、审批用途 allowlist、全局管理员收件人按账号去重、结果通知创建人/提交人加所有 Owner、完整交互卡和通知/审批机器人边界；不得出现 Task Reviewer 或项目组长审批收件人。
 5. `tests/project-management-lifecycle.spec.ts` 覆盖 P2/P3 Task 草稿创建、创建者自动 Owner、幂等键冲突、Current Plan 持久化、0/200/201 Milestone 边界、Start/Milestone/Terminal 严格递增、Terminal 名称传播、零 Milestone 激活 Terminal、并发/过期锁拒绝、Revision 创建即待审批、驳回后修改直接重新送审、review round 通知键、Participant/Owner 的 Revision 管理边界、管理员批准/驳回和自审、零活跃审批人或全部管理员无有效飞书身份时整事务回滚、Planned Segment 待确认标记、Revision 生效不改写 Segment、Milestone Review TEXT/LINK 证据、FILE 证据拒绝、相同请求键幂等与不同键冲突、Milestone/Revision/Terminal 跨类型门禁、审批终态释放、重提重新竞争、并发只保留一个待审批、仅管理员审批推进、Termination 四种 outcome、全员查询、审计和 `channel=project-management` outbox。
 6. `tests/project-management-segments.spec.ts` 覆盖 P5 Segment 中文校验、全员完整读取、无 Task 关联本人管理、Task 关联时 Participant 只管本人、Owner 管理全 Task、非成员拒绝、Person 必须是目标 Task 成员、损坏的非成员关联更新零写入、旧职责/Node 字段严格拒绝、乐观锁、真实 100 条批量在末项 stale 时对 Segment/change/audit/outbox 的事务回滚、逆序重叠批量输入的 `id ASC` 行锁顺序、split/merge 时间守恒和完整来源历史、merge 最终范围超过 31 天拒绝且恰好 31 天允许、full/partial confirm、一 Planned 多 Actual、多 Planned 一 Actual、无来源 Actual、并发 full confirm、并发 cron transition、cancel、soft delete，以及 Segment 操作不改变 Task/Milestone。成员降级竞争继续证明降级后的 Owner 不能移动或删除他人投入；其他状态竞争断言最终状态及 change/audit/outbox exactly-once。
@@ -381,6 +381,7 @@ npx tsx --test tests/project-management-recent-activity-formatter.node.ts
 20. `tests/work-segment-schema-drift-repair.spec.ts` 在 runner 持有的 `_test` PostgreSQL 临时 schema 中重建完整缺失和部分缺失两类 `WorkSegment` 漂移，写入既有 Segment 后连续执行修复与严格 catalog 验证 migration，核对数据保留、默认回填、完整 catalog/OID、约束行为和重复执行 no-op；另构造同名错误字段、列序索引、DESC/operator-class 索引、检查约束和外键动作，验证后置 migration fail-fast 且事务不改变 catalog 或数据。`tests/work-segment-role-node-removal-migration.spec.ts` 还必须从漂移状态按完整合并顺序执行删除准备、历史删除、修复、验证和最终收敛 migration，验证不会在历史删除 migration 前中止；最终删除职责、Node 关联、关联复核和专用通知/历史，同时保留普通 Segment、普通审计、通知、outbox 及 append-only trigger。
 21. `tests/single-task-approval-migration.spec.ts` 在 runner 创建的随机 `_test` PostgreSQL 中人工构造同一 Task 同时存在 Milestone/Revision 待审批的异常数据，验证 Milestone 撤出、Revision/候选计划/非承接未完成节点取消、Current Plan 与 Task 锁版本不变、历史终态和采购数据不变、outbox/recipient 冻结、站内通知已读、确定性迁移审计及最终待审批总数为零。
 22. `tests/project-establishment.spec.ts` 在 Desktop 与 Pixel 5 验证 Project 默认筛选、立项入口、异步 Task 搜索及选中列表（含长名称和移除入口），并验证新版详情概览、三列占位、状态分组、时间线、定位及计划轨道不重复；在领域层验证驳回重提、批准挂载、跨状态组稳定游标翻页、候选授权、完成阻塞与删除解绑；该 spec 只能使用 runner 持有的隔离 PostgreSQL。
+23. `tests/project-management-legacy-history-retirement.spec.ts` 只在 Desktop 创建额外随机本机 `_test` 数据库，从完整 migration chain 升级前状态注入全部旧角色、0/100/小数/空完成比例及既有通知记录；验证活跃异常整事务阻断、迁移等待并发 writer 后归档最终值、迁移期间无关通知写入不被修改且不导致误回滚、显式结束后稳定归档、最终枚举/列、审计不可变、受控 `db:deploy` 记账与重复部署 no-op、旧 preflight 在最终 schema 可执行、current-head preflight 接受 openId 历史快照及撤销后重授和 Prisma schema drift。`tests/functional-panels.spec.ts` 在 Desktop 与 Pixel 5 验证账号历史能显示归档旧角色及 migration 审计来源。
 
 ## 统一账号迁移验证
 
@@ -392,7 +393,7 @@ npm run db:deploy
 npm run accounts:validate
 ```
 
-预检是旧 schema 上的只读命令，应覆盖身份多账号冲突、待创建账号、孤儿角色、重复或非法角色范围、双范围旧项目组长和旧报销超管数量。任何阻断项必须非零退出，不能猜测身份或自动拆分双范围。
+预检是兼容统一账号迁移前后 schema 的只读命令，应覆盖身份多账号冲突、待创建账号、孤儿角色、重复或非法角色范围、双范围旧项目组长和管理员数量。迁移前非空 User 库要求旧报销超管，迁移完成后改为要求有效统一超级管理员，不得因旧超管已归档而误报。任何阻断项必须非零退出，不能猜测身份或自动拆分双范围。
 
 `tests/legacy-project-management-migration.spec.ts` 在额外的随机本机 `_test` PostgreSQL 中从真实前置 migration 链构造旧用户和角色，验证：
 

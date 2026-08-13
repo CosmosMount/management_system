@@ -206,9 +206,7 @@ function normalizeTemplateMembers(
     const role =
       member.role === "OWNER"
         ? "OWNER"
-        : member.role === "PARTICIPANT" ||
-            member.role === "LEAD" ||
-            member.role === "MEMBER"
+        : member.role === "PARTICIPANT"
           ? "PARTICIPANT"
           : null;
     if (!role) continue;

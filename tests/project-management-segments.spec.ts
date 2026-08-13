@@ -1977,21 +1977,15 @@ async function createAccountPerson(displayName: string) {
 
 async function grantRole(
   accountId: string,
-  role: "GROUP_LEADER" | "PROJECT_ADMINISTRATOR",
-  scope: { team?: string; techGroup?: string } = {},
+  role: "PROJECT_ADMINISTRATOR",
 ) {
   await prisma.systemRoleAssignment.create({
     data: {
       accountId,
       role,
-      team: role === "PROJECT_ADMINISTRATOR" ? "" : (scope.team ?? ""),
-      techGroup:
-        role === "PROJECT_ADMINISTRATOR"
-          ? ""
-          : scope.team
-            ? ""
-            : (scope.techGroup ?? ""),
-      revokedAt: role === "GROUP_LEADER" ? new Date() : null,
+      team: "",
+      techGroup: "",
+      revokedAt: null,
     },
   });
 }

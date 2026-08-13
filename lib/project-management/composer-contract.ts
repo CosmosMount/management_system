@@ -1,11 +1,6 @@
 export const TASK_COMPOSER_START_ID = "task-composer-start";
 
 export type TaskMemberRoleValue = "OWNER" | "PARTICIPANT";
-export type LegacyTaskMemberRoleValue =
-  | "LEAD"
-  | "MEMBER"
-  | "REVIEWER"
-  | "VIEWER";
 export type TaskPriorityValue = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
 
 export type TaskComposerMilestone = {
@@ -108,10 +103,6 @@ export type TaskComposerMode =
       expectedLockVersion: number;
       existingNodeIds: string[];
       canManageMembers: boolean;
-      preservedLegacyMembers?: Array<{
-        personId: string;
-        role: LegacyTaskMemberRoleValue;
-      }>;
     }
   | {
       kind: "CREATE_REVISION";
