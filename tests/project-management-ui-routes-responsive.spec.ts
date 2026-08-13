@@ -33,7 +33,10 @@ test.describe("project management UI project-management-ui-routes-responsive", (
         name: fixture.member.person.displayName,
       });
 
-      await page.goto("/progress");
+      await page.goto(
+        `/progress?timelineDate=2026-08-03&timelineFocus=legacy&start=2026-08-01&end=2026-09-01&zoom=month&personId=${fixture.member.person.id}&taskId=${fixture.taskId}&focusSegmentIds=${fixture.taskId}`,
+      );
+      await expect(page).toHaveURL(/\/progress$/);
       await expect(page.getByRole("heading", { name: "我的工作" })).toBeVisible();
       await expect(
         page.getByRole("link", { name: fixture.taskTitle, exact: true }),

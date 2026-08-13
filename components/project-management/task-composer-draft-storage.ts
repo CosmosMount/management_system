@@ -7,7 +7,7 @@ const INLINE_DRAFT_MAX_CHARS = 500_000;
 export const MAX_TASK_COMPOSER_DRAFT_CHARS = 16_000_000;
 
 export type IndexedDraftPointer = {
-  schemaVersion: 3 | 4;
+  schemaVersion: 4;
   storage: "INDEXED_DB";
   draftId: string;
   savedAt: string;
@@ -21,7 +21,7 @@ export function parseIndexedDraftPointer(raw: string): IndexedDraftPointer | nul
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const pointer = value as Record<string, unknown>;
     if (
-      (pointer.schemaVersion !== 3 && pointer.schemaVersion !== 4) ||
+      pointer.schemaVersion !== 4 ||
       pointer.storage !== "INDEXED_DB" ||
       typeof pointer.draftId !== "string" ||
       typeof pointer.savedAt !== "string" ||
@@ -114,17 +114,18 @@ export async function persistTaskComposerDraft(input: {
 
 export async function removeTaskComposerDraft(
   storageKey: string,
-  legacyStorageKeys: string[],
 ) {
   return withTaskComposerDraftLock(storageKey, async () => {
     window.localStorage.removeItem(storageKey);
-    for (const legacyStorageKey of legacyStorageKeys) {
-      window.localStorage.removeItem(legacyStorageKey);
-    }
-    await Promise.all(
-      [storageKey, ...legacyStorageKeys].map((key) => deleteIndexedDraft(key)),
-    );
+    await deleteIndexedDraft(storageKey);
   });
+}
+
+export async function removeTaskComposerDraftKeys(storageKeys: string[]) {
+  for (const storageKey of storageKeys) {
+    window.localStorage.removeItem(storageKey);
+  }
+  await Promise.all(storageKeys.map((storageKey) => deleteIndexedDraft(storageKey)));
 }
 
 async function writeIndexedDraft(storageKey: string, raw: string) {

@@ -70,7 +70,7 @@ Revision 创建和被驳回后的修改都会直接产生 `revision_pending_revi
 
 Task 激活与结束通知使用持久化的 Terminal 名称表示结束节点，不再以结束条件充当节点名称。零 Milestone Task 激活时，`task_activated` 摘要会明确当前 Terminal 名称；`task_terminated` 摘要同时包含 Terminal 名称和本次确认结果。事件键、收件人、通知机器人用途、站内通知和 durable outbox 路径保持不变。
 
-既有 Draft `task_assigned` 入队保持 `mandatory=true`。这里的“普通通知”指 `purpose=notification`、`botKind=notification`，不表示 `mandatory=false`；该事件只使用通知机器人，不得路由到 approval bot。S2 的 Active `replaceTaskMembers` 新增/移除/角色变化沿用同一强制成员变化语义：站内 + `mandatory=true` 的 `project-management` outbox，purpose/botKind 仍为 `notification`。
+既有 Draft `task_assigned` 入队保持 `mandatory=true`。这里的“普通通知”指 `purpose=notification`、`botKind=notification`，不表示 `mandatory=false`；该事件只使用通知机器人，不得路由到 approval bot。Active `updateActiveTask` 的成员新增/移除/角色变化沿用同一强制成员变化语义：站内 + `mandatory=true` 的 `project-management` outbox，purpose/botKind 仍为 `notification`。
 
 账号安全变更由 `lib/account-management.ts` 在角色事务中写入。事件只通知被操作人，站内分类固定为 `ACCOUNT_SECURITY`，outbox 固定 `mandatory=true`、`purpose=notification` 和通知机器人。摘要包含操作人、角色授予/撤销、组织范围和时间。事件键以 `account-security:<action>:<稳定实体或变更 ID>` 开头，站内和飞书后缀分别保证幂等。报销角色通知也通过 `accountId` 解析当前 Identity；历史 `UserRole.openId` 不作为投递目标。删除项目访问禁用机制的 migration 只写 `source=MIGRATION` 审计，不创建站内通知或飞书 outbox。
 

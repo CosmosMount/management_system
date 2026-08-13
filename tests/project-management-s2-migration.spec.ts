@@ -65,9 +65,7 @@ import {
   workSegmentTypeValues as segmentValidationWorkSegmentTypeValues,
 } from "../lib/project-management/validations/segments";
 import {
-  replaceTaskDraftPlanInputSchema,
-  replaceTaskDraftMembersInputSchema,
-  replaceTaskMembersInputSchema,
+  updateActiveTaskInputSchema,
   updateTaskDraftInputSchema,
 } from "../lib/project-management/validations/task-mutations";
 import { addStructuredProjectManagementIssue } from "../lib/project-management/validations/issues";
@@ -654,14 +652,21 @@ test("S2 Task mutations expose session-bound Server Actions and anchor loads rec
   );
   for (const actionName of [
     "updateTaskDraft",
+    "updateActiveTask",
+  ]) {
+    expect(taskActionsSource).toMatch(
+      new RegExp(`export async function ${actionName}\\(\\s*input: unknown`),
+    );
+  }
+  for (const retiredActionName of [
     "updateTaskDraftMetadata",
     "replaceTaskDraftMembers",
     "replaceTaskDraftPlan",
     "updateTaskMetadata",
     "replaceTaskMembers",
   ]) {
-    expect(taskActionsSource).toMatch(
-      new RegExp(`export async function ${actionName}\\(\\s*input: unknown`),
+    expect(taskActionsSource).not.toMatch(
+      new RegExp(`export async function ${retiredActionName}\\(`),
     );
   }
   expect(taskActionsSource).toContain("getCurrentProjectManagementActor()");
@@ -890,6 +895,12 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
     taskId: randomUUID(),
     planVersionId: randomUUID(),
     expectedLockVersion: 3,
+    title: "统一编辑 Task",
+    description: "一次保存元数据、成员与计划",
+    team: "英雄" as const,
+    techGroup: "电控" as const,
+    priority: "HIGH" as const,
+    relatedTaskId: null,
     plannedStartAt: "2026-08-01T09:00:00.000Z",
     milestones: [
       {
@@ -906,11 +917,11 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
       clientKey: "new-termination",
     },
   };
-  const draftPlan = replaceTaskDraftPlanInputSchema.parse(draftPlanInput);
+  const draftPlan = updateTaskDraftInputSchema.parse(draftPlanInput);
   expect(draftPlan.milestones[0]?.nodeId).toBe(retainedNodeId);
   expect(draftPlan.milestones[1]?.clientKey).toBe("new-milestone-1");
   expect(
-    replaceTaskDraftPlanInputSchema.safeParse({
+    updateTaskDraftInputSchema.safeParse({
       ...draftPlanInput,
       plannedStartAt: "2026-08-01T09:00:00",
     }).success,
@@ -918,12 +929,6 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
 
   const unifiedDraftInput = {
     ...draftPlanInput,
-    title: "统一编辑 Task",
-    description: "一次保存元数据、成员与计划",
-    team: "英雄" as const,
-    techGroup: "电控" as const,
-    priority: "HIGH" as const,
-    relatedTaskId: null,
     members: [{ personId: randomUUID(), role: "OWNER" as const }],
   };
   const duplicateUnifiedPersonId = randomUUID();
@@ -957,7 +962,7 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
     }).success,
   ).toBe(false);
   expect(
-    replaceTaskDraftPlanInputSchema.safeParse({
+    updateTaskDraftInputSchema.safeParse({
       ...draftPlanInput,
       milestones: [
         {
@@ -968,7 +973,7 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
     }).success,
   ).toBe(false);
   expect(
-    replaceTaskDraftPlanInputSchema.safeParse({
+    updateTaskDraftInputSchema.safeParse({
       ...draftPlanInput,
       termination: {
         ...termination("2026-08-04"),
@@ -976,19 +981,14 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
       },
     }).success,
   ).toBe(false);
-  for (const forbiddenField of [
-    { title: "计划 replace 不接受 metadata" },
-    { idempotencyKey: randomUUID() },
-  ]) {
-    expect(
-      replaceTaskDraftPlanInputSchema.safeParse({
-        ...draftPlanInput,
-        ...forbiddenField,
-      }).success,
-    ).toBe(false);
-  }
   expect(
-    replaceTaskDraftPlanInputSchema.safeParse({
+    updateTaskDraftInputSchema.safeParse({
+      ...draftPlanInput,
+      idempotencyKey: randomUUID(),
+    }).success,
+  ).toBe(false);
+  expect(
+    updateTaskDraftInputSchema.safeParse({
       ...draftPlanInput,
       milestones: [
         {
@@ -1006,31 +1006,22 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
     expectedLockVersion: 1,
     members: [{ personId: samePersonId, role: "OWNER" as const }],
   };
-  for (const schema of [
-    replaceTaskDraftMembersInputSchema,
-    replaceTaskMembersInputSchema,
+  for (const forbiddenField of [
+    { id: randomUUID() },
+    { accountId: randomUUID() },
+    { removedAt: "2026-08-01T10:00:00.000Z" },
+    { createdAt: "2026-08-01T10:00:00.000Z" },
+    { updatedAt: "2026-08-01T10:00:00.000Z" },
   ]) {
-    for (const forbiddenField of [
-      { id: randomUUID() },
-      { accountId: randomUUID() },
-      { removedAt: "2026-08-01T10:00:00.000Z" },
-      { createdAt: "2026-08-01T10:00:00.000Z" },
-      { updatedAt: "2026-08-01T10:00:00.000Z" },
-    ]) {
-      const result = schema.safeParse({
-        ...memberMutationInput,
-        members: [
-          {
-            ...memberMutationInput.members[0],
-            ...forbiddenField,
-          },
-        ],
-      });
-      expect(
-        result.success,
-        `member mutation accepted ${Object.keys(forbiddenField)[0]}`,
-      ).toBe(false);
-    }
+    const members = [{ ...memberMutationInput.members[0], ...forbiddenField }];
+    expect(updateActiveTaskInputSchema.safeParse({
+      ...memberMutationInput,
+      members,
+    }).success).toBe(false);
+    expect(updateTaskDraftInputSchema.safeParse({
+      ...unifiedDraftInput,
+      members,
+    }).success).toBe(false);
   }
   const compatibleCreateDraft = createTaskDraftInputSchema.parse({
     ...baseDraft,
@@ -1047,7 +1038,7 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
     role: "OWNER",
   });
   expect(
-    replaceTaskMembersInputSchema.safeParse({
+    updateActiveTaskInputSchema.safeParse({
       taskId: randomUUID(),
       expectedLockVersion: 1,
       members: [
@@ -1057,7 +1048,7 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
     }).success,
   ).toBe(false);
   expect(
-    replaceTaskMembersInputSchema.safeParse({
+    updateActiveTaskInputSchema.safeParse({
       taskId: randomUUID(),
       expectedLockVersion: 1,
       members: [
@@ -1067,7 +1058,7 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
     }).success,
   ).toBe(false);
   expect(
-    replaceTaskMembersInputSchema.safeParse({
+    updateActiveTaskInputSchema.safeParse({
       taskId: randomUUID(),
       expectedLockVersion: 1,
       members: [

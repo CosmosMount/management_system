@@ -437,8 +437,6 @@ export function TaskWorkbench({
                 const url = new URL(window.location.href);
                 url.searchParams.set("center", new Date(atMs).toISOString());
                 url.searchParams.set("focus", nodeId);
-                url.searchParams.delete("timelineDate");
-                url.searchParams.delete("timelineFocus");
                 router.push(`${url.pathname}?${url.searchParams.toString()}`);
                 return;
               }

@@ -100,7 +100,6 @@ export default async function ProgressTaskEditPage({
         initialPeople={people}
         initialTasks={tasks}
         initialProjects={projectOptions}
-        actorPersonId={actor.personId}
         mode={{
           kind: "EDIT_DRAFT",
           taskId: workspace.task.id,

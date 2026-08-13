@@ -7,7 +7,7 @@ import {
   activateTask,
   createTaskDraft,
 } from "../lib/project-management/application/lifecycle-service";
-import { replaceTaskMembers } from "../lib/project-management/application/task-mutation-service";
+import { updateActiveTask } from "../lib/project-management/application/task-mutation-service";
 import {
   batchCreatePlannedSegments,
   batchCancelPlannedSegments,
@@ -1012,7 +1012,7 @@ test.describe("project management P5 work segment services", () => {
       );
       if (!ownerMembership) throw new Error("并发回归缺少待降级 Owner 成员行");
       const downgradeOwner = () =>
-        replaceTaskMembers(actor(fixture.admin), {
+        updateActiveTask(actor(fixture.admin), {
           taskId: fixture.taskId,
           expectedLockVersion: task.lockVersion,
           members: task.members.map((member) => ({

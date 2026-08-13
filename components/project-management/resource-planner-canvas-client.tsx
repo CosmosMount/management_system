@@ -999,12 +999,9 @@ export function ResourcePlannerCanvasClient({
           });
         }
         const url = new URL(window.location.href);
-        const hadUrlFocus =
-          url.searchParams.has("focus") ||
-          url.searchParams.has("focusSegmentIds");
+        const hadUrlFocus = url.searchParams.has("focus");
         if (completedSegmentId) {
           url.searchParams.delete("focus");
-          url.searchParams.delete("focusSegmentIds");
         }
         normalizeResourcePlanUrl(url);
         if (persistViewportInUrl || hadUrlFocus) {
@@ -1131,8 +1128,6 @@ export function ResourcePlannerCanvasClient({
     url.searchParams.set("center", new Date(centerMs).toISOString());
     if (currentZoom) url.searchParams.set("scale", currentZoom.toLowerCase());
     url.searchParams.delete("focus");
-    url.searchParams.delete("timelineDate");
-    url.searchParams.delete("timelineFocus");
     url.searchParams.delete("date");
     url.searchParams.delete("mode");
     url.searchParams.delete("zoom");
@@ -1156,11 +1151,8 @@ export function ResourcePlannerCanvasClient({
     setSelection(null);
 
     const url = new URL(window.location.href);
-    const hadUrlFocus =
-      url.searchParams.has("focus") ||
-      url.searchParams.has("focusSegmentIds");
+    const hadUrlFocus = url.searchParams.has("focus");
     url.searchParams.delete("focus");
-    url.searchParams.delete("focusSegmentIds");
     normalizeResourcePlanUrl(url);
     if (!hadUrlFocus) return;
     startTransition(() => {

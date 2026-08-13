@@ -126,8 +126,6 @@ export function ProjectTaskTimeline({
       const url = new URL(window.location.href);
       url.searchParams.set("center", new Date(anchor.atMs).toISOString());
       url.searchParams.set("focus", anchor.id);
-      url.searchParams.delete("timelineDate");
-      url.searchParams.delete("timelineFocus");
       router.push(`${url.pathname}?${url.searchParams.toString()}`);
       return;
     }

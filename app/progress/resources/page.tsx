@@ -19,6 +19,7 @@ import {
 } from "@/lib/project-management/queries/project-queries";
 import { getWorkSegment } from "@/lib/project-management/queries/resource-queries";
 import { resolveResourcePlanExplicitIds } from "@/lib/project-management/queries/resource-plan-queries";
+import { hasRetiredResourcePlanSearchParams } from "@/lib/project-management/resource-plan-url";
 import { getResourcePlanPageData } from "@/lib/project-management/queries/time-canvas-queries";
 import { getProgressActorOrRedirect } from "../_auth";
 
@@ -332,10 +333,22 @@ function resourceSelectionNeedsRedirect(
   params: SearchParams,
   normalized: URLSearchParams,
 ) {
+  if (hasRetiredResourcePlanSearchParams(searchParamsFromRecord(params))) {
+    return true;
+  }
   const keys = ["all", "projects", "tasks", "people"] as const;
   return keys.some(
     (key) => firstParam(params[key]) !== (normalized.get(key) ?? ""),
   );
+}
+
+function searchParamsFromRecord(params: SearchParams) {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (Array.isArray(value)) value.forEach((item) => search.append(key, item));
+    else if (value !== undefined) search.set(key, value);
+  }
+  return search;
 }
 
 function setIdSearchParam(

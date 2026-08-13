@@ -63,37 +63,6 @@ const taskMetadataFields = {
   projectId: z.union([idSchema, z.null()]).optional(),
 } as const;
 
-export const updateTaskDraftMetadataInputSchema = z
-  .object({
-    taskId: idSchema,
-    expectedLockVersion: expectedTaskLockVersionSchema,
-    ...taskMetadataFields,
-  })
-  .strict();
-
-export const updateTaskMetadataInputSchema = z
-  .object({
-    taskId: idSchema,
-    expectedLockVersion: expectedTaskLockVersionSchema,
-    ...taskMetadataFields,
-  })
-  .strict();
-
-const replaceTaskMembersBaseInputSchema = z
-  .object({
-    taskId: idSchema,
-    expectedLockVersion: expectedTaskLockVersionSchema,
-    members: taskMembersMutationSchema,
-  })
-  .strict()
-  .superRefine((input, ctx) => {
-    validateTaskMembers(input.members, ctx);
-  });
-
-export const replaceTaskDraftMembersInputSchema =
-  replaceTaskMembersBaseInputSchema;
-export const replaceTaskMembersInputSchema = replaceTaskMembersBaseInputSchema;
-
 const clientKeySchema = requiredText("缺少新节点 clientKey", 120);
 
 function validateNodeIdentity(
@@ -158,24 +127,6 @@ function validateDraftPlanReplacement(
   }
 }
 
-export const replaceTaskDraftPlanInputSchema = z
-  .object({
-    taskId: idSchema,
-    planVersionId: idSchema,
-    expectedLockVersion: expectedTaskLockVersionSchema,
-    plannedStartAt: absoluteDateTimeSchema("请选择带时区的有效计划开始时间"),
-    milestones: z
-      .array(draftMilestoneReplacementSchema, {
-        message: "Milestone 列表格式不正确",
-      })
-      .max(200, "单个计划最多 200 个节点"),
-    termination: draftTerminationReplacementSchema,
-  })
-  .strict()
-  .superRefine((input, ctx) => {
-    validateDraftPlanReplacement(input, ctx);
-  });
-
 export const updateTaskDraftInputSchema = z
   .object({
     taskId: idSchema,
@@ -214,20 +165,5 @@ export const updateActiveTaskInputSchema = z
     if (input.members) validateTaskMembers(input.members, ctx);
   });
 
-export type UpdateTaskDraftMetadataInput = z.infer<
-  typeof updateTaskDraftMetadataInputSchema
->;
 export type UpdateTaskDraftInput = z.infer<typeof updateTaskDraftInputSchema>;
-export type UpdateTaskMetadataInput = z.infer<
-  typeof updateTaskMetadataInputSchema
->;
-export type ReplaceTaskDraftMembersInput = z.infer<
-  typeof replaceTaskDraftMembersInputSchema
->;
-export type ReplaceTaskMembersInput = z.infer<
-  typeof replaceTaskMembersInputSchema
->;
-export type ReplaceTaskDraftPlanInput = z.infer<
-  typeof replaceTaskDraftPlanInputSchema
->;
 export type UpdateActiveTaskInput = z.infer<typeof updateActiveTaskInputSchema>;

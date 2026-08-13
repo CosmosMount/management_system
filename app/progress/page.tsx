@@ -19,6 +19,7 @@ import {
   searchTaskOptions,
 } from "@/lib/project-management/queries/option-queries";
 import { getWorkSegment } from "@/lib/project-management/queries/resource-queries";
+import { hasRetiredResourcePlanSearchParams } from "@/lib/project-management/resource-plan-url";
 import {
   getMyTimelinePageData,
   getPersonalDueSegments,
@@ -54,13 +55,17 @@ export default async function ProgressPage({
     : parseCenter(firstParam(params.center)) ?? undefined;
   const requestedScale = parseScale(firstParam(params.scale));
 
-  if (requestedFocusId && !focusId) {
+  if (
+    hasRetiredResourcePlanSearchParams(searchParamsFromRecord(params)) ||
+    (requestedFocusId && !focusId)
+  ) {
     redirect(myWorkHref({
       taskCursor,
       showAllTasks,
+      focusId,
       centerMs: requestedCenter,
       scale: requestedScale,
-      focusError: true,
+      focusError: Boolean(requestedFocusId && !focusId),
     }));
   }
 
@@ -335,6 +340,15 @@ function parseScale(value: string): TimeCanvasZoom | undefined {
 
 function firstParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+}
+
+function searchParamsFromRecord(params: SearchParams) {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (Array.isArray(value)) value.forEach((item) => search.append(key, item));
+    else if (value !== undefined) search.set(key, value);
+  }
+  return search;
 }
 
 function isUuid(value: string) {

@@ -11,13 +11,8 @@ import {
   type CreateTaskDraftResult,
 } from "@/lib/project-management/application/lifecycle-service";
 import {
-  replaceTaskDraftMembers as replaceTaskDraftMembersService,
-  replaceTaskDraftPlan as replaceTaskDraftPlanService,
-  replaceTaskMembers as replaceTaskMembersService,
   updateActiveTask as updateActiveTaskService,
   updateTaskDraft as updateTaskDraftService,
-  updateTaskDraftMetadata as updateTaskDraftMetadataService,
-  updateTaskMetadata as updateTaskMetadataService,
 } from "@/lib/project-management/application/task-mutation-service";
 import { getCurrentProjectManagementActor } from "@/lib/project-management/identity";
 import { revalidateProjectManagement } from "@/lib/revalidate";
@@ -73,21 +68,6 @@ export async function deleteTaskDraft(
   );
 }
 
-export async function updateTaskDraftMetadata(
-  input: unknown,
-): Promise<
-  ProjectManagementActionResult<
-    Awaited<ReturnType<typeof updateTaskDraftMetadataService>>
-  >
-> {
-  return runTaskMutationAction(
-    "pm.task.draft_metadata.update",
-    "updateTaskDraftMetadata",
-    input,
-    updateTaskDraftMetadataService,
-  );
-}
-
 export async function updateTaskDraft(
   input: unknown,
 ): Promise<
@@ -101,51 +81,6 @@ export async function updateTaskDraft(
   );
 }
 
-export async function replaceTaskDraftMembers(
-  input: unknown,
-): Promise<
-  ProjectManagementActionResult<
-    Awaited<ReturnType<typeof replaceTaskDraftMembersService>>
-  >
-> {
-  return runTaskMutationAction(
-    "pm.task.draft_members.replace",
-    "replaceTaskDraftMembers",
-    input,
-    replaceTaskDraftMembersService,
-  );
-}
-
-export async function replaceTaskDraftPlan(
-  input: unknown,
-): Promise<
-  ProjectManagementActionResult<
-    Awaited<ReturnType<typeof replaceTaskDraftPlanService>>
-  >
-> {
-  return runTaskMutationAction(
-    "pm.task.draft_plan.replace",
-    "replaceTaskDraftPlan",
-    input,
-    replaceTaskDraftPlanService,
-  );
-}
-
-export async function updateTaskMetadata(
-  input: unknown,
-): Promise<
-  ProjectManagementActionResult<
-    Awaited<ReturnType<typeof updateTaskMetadataService>>
-  >
-> {
-  return runTaskMutationAction(
-    "pm.task.metadata.update",
-    "updateTaskMetadata",
-    input,
-    updateTaskMetadataService,
-  );
-}
-
 export async function updateActiveTask(
   input: unknown,
 ): Promise<
@@ -156,21 +91,6 @@ export async function updateActiveTask(
     "updateActiveTask",
     input,
     updateActiveTaskService,
-  );
-}
-
-export async function replaceTaskMembers(
-  input: unknown,
-): Promise<
-  ProjectManagementActionResult<
-    Awaited<ReturnType<typeof replaceTaskMembersService>>
-  >
-> {
-  return runTaskMutationAction(
-    "pm.task.members.replace",
-    "replaceTaskMembers",
-    input,
-    replaceTaskMembersService,
   );
 }
 

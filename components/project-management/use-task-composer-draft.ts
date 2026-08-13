@@ -14,12 +14,13 @@ import {
   persistTaskComposerDraft,
   readIndexedDraft,
   removeTaskComposerDraft,
+  removeTaskComposerDraftKeys,
   withTaskComposerDraftLock,
 } from "@/components/project-management/task-composer-draft-storage";
+import { removeLegacyTaskComposerDrafts } from "@/components/project-management/task-composer-legacy-draft-tombstone";
 import {
   LOCAL_DRAFT_SCHEMA_VERSION,
   localDraftContextError,
-  migrateLegacyLocalDraft,
   parseLocalDraft,
   type LocalDraftRecovery,
   type LocalTaskDraft,
@@ -27,24 +28,18 @@ import {
 import type { TaskComposerSeed } from "@/lib/project-management/composer-contract";
 
 export function useTaskComposerDraft({
-  actorPersonId,
   dirty,
   editContext,
-  legacyStorageKeyV1,
-  legacyStorageKeyV2,
-  legacyStorageKeyV3,
+  retiredStorageKeys,
   setError,
   state,
   storageBusy,
   storageKey,
   submitting,
 }: {
-  actorPersonId: string;
   dirty: boolean;
   editContext: LocalTaskDraft["editContext"];
-  legacyStorageKeyV1: string | null;
-  legacyStorageKeyV2: string | null;
-  legacyStorageKeyV3: string | null;
+  retiredStorageKeys: string[];
   setError: Dispatch<SetStateAction<string>>;
   state: TaskComposerSeed;
   storageBusy: boolean;
@@ -89,19 +84,23 @@ export function useTaskComposerDraft({
         let preservedRaw: string | null = null;
         let unavailableReason = "";
         try {
+          try {
+            await removeLegacyTaskComposerDrafts(retiredStorageKeys);
+          } catch {
+            if (!cancelled) {
+              setError(
+                "旧版本地草稿清理未完成；当前 v4 草稿仍可使用，下次打开页面时会再次清理。",
+              );
+            }
+          }
           await withTaskComposerDraftLock(storageKey, async () => {
             const currentRaw = window.localStorage.getItem(storageKey);
-            const legacyRawV3 = currentRaw || !legacyStorageKeyV3
-              ? null
-              : window.localStorage.getItem(legacyStorageKeyV3);
-            const legacyRawV2 = currentRaw || legacyRawV3 || !legacyStorageKeyV2
-              ? null
-              : window.localStorage.getItem(legacyStorageKeyV2);
-            const legacyRawV1 =
-              currentRaw || legacyRawV3 || legacyRawV2 || !legacyStorageKeyV1
-                ? null
-                : window.localStorage.getItem(legacyStorageKeyV1);
-            preservedRaw = currentRaw ?? legacyRawV3 ?? legacyRawV2 ?? legacyRawV1;
+            if (currentRaw && isRetiredDraftMarker(currentRaw)) {
+              await removeTaskComposerDraftKeys([storageKey]);
+              if (!cancelled) setStorageReady(true);
+              return;
+            }
+            preservedRaw = currentRaw;
 
             let parsed: LocalTaskDraft | null = null;
             if (currentRaw) {
@@ -109,10 +108,7 @@ export function useTaskComposerDraft({
               if (pointer) {
                 const indexedRaw = await readIndexedDraft(storageKey);
                 preservedRaw = indexedRaw ?? currentRaw;
-                parsed =
-                  pointer.schemaVersion === LOCAL_DRAFT_SCHEMA_VERSION && indexedRaw
-                    ? parseLocalDraft(indexedRaw)
-                    : null;
+                parsed = indexedRaw ? parseLocalDraft(indexedRaw) : null;
                 if (
                   parsed &&
                   (parsed.draftId !== pointer.draftId ||
@@ -128,28 +124,11 @@ export function useTaskComposerDraft({
               } else {
                 parsed = parseLocalDraft(currentRaw);
               }
-            } else if (legacyRawV3 && legacyStorageKeyV3) {
-              const pointer = parseIndexedDraftPointer(legacyRawV3);
-              if (pointer) {
-                const indexedRaw = await readIndexedDraft(legacyStorageKeyV3);
-                preservedRaw = indexedRaw ?? legacyRawV3;
-                if (!indexedRaw) {
-                  unavailableReason =
-                    "旧版本地草稿索引存在，但大草稿内容缺失或不可读取。";
-                }
-              }
-            } else if (legacyRawV2) {
-              parsed = migrateLegacyLocalDraft(legacyRawV2, actorPersonId, 2);
-            } else if (legacyRawV1) {
-              parsed = migrateLegacyLocalDraft(legacyRawV1, actorPersonId, 1);
             } else if (canUseIndexedDraftStorage()) {
               const indexedRaw = await readIndexedDraft(storageKey);
               if (indexedRaw) {
                 preservedRaw = indexedRaw;
                 parsed = parseLocalDraft(indexedRaw);
-              } else if (legacyStorageKeyV3) {
-                const legacyIndexedRaw = await readIndexedDraft(legacyStorageKeyV3);
-                if (legacyIndexedRaw) preservedRaw = legacyIndexedRaw;
               }
             }
 
@@ -196,11 +175,8 @@ export function useTaskComposerDraft({
       window.clearTimeout(timer);
     };
   }, [
-    actorPersonId,
     editContext,
-    legacyStorageKeyV1,
-    legacyStorageKeyV2,
-    legacyStorageKeyV3,
+    retiredStorageKeys,
     setError,
     storageKey,
   ]);
@@ -277,12 +253,7 @@ export function useTaskComposerDraft({
     cancelPendingAutoSave();
     try {
       await draftWriteChainRef.current.catch(() => undefined);
-      await removeTaskComposerDraft(
-        storageKey,
-        [legacyStorageKeyV1, legacyStorageKeyV2, legacyStorageKeyV3].filter(
-          (key): key is string => Boolean(key),
-        ),
-      );
+      await removeTaskComposerDraft(storageKey);
       return true;
     } catch {
       setError(
@@ -292,9 +263,6 @@ export function useTaskComposerDraft({
     }
   }, [
     cancelPendingAutoSave,
-    legacyStorageKeyV1,
-    legacyStorageKeyV2,
-    legacyStorageKeyV3,
     setError,
     storageKey,
   ]);
@@ -302,17 +270,9 @@ export function useTaskComposerDraft({
   const cleanupCommittedDraft = useCallback(async () => {
     cancelPendingAutoSave();
     await draftWriteChainRef.current.catch(() => undefined);
-    await removeTaskComposerDraft(
-      storageKey,
-      [legacyStorageKeyV1, legacyStorageKeyV2, legacyStorageKeyV3].filter(
-        (key): key is string => Boolean(key),
-      ),
-    );
+    await removeTaskComposerDraft(storageKey);
   }, [
     cancelPendingAutoSave,
-    legacyStorageKeyV1,
-    legacyStorageKeyV2,
-    legacyStorageKeyV3,
     storageKey,
   ]);
 
@@ -328,4 +288,18 @@ export function useTaskComposerDraft({
     setStorageReady,
     storageReady,
   };
+}
+
+function isRetiredDraftMarker(raw: string) {
+  if (raw.length > 2_048) return false;
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return false;
+    }
+    const schemaVersion = (value as Record<string, unknown>).schemaVersion;
+    return schemaVersion === 1 || schemaVersion === 2 || schemaVersion === 3;
+  } catch {
+    return false;
+  }
 }

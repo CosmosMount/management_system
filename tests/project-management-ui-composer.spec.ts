@@ -1,6 +1,5 @@
 import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { prisma } from "../lib/prisma";
 import { createTaskDraft } from "../lib/project-management/application/lifecycle-service";
 import { isoToShanghaiDateTimeLocal, shanghaiDateTimeLocalToIso } from "../lib/project-management/date-time";
@@ -53,6 +52,7 @@ test.describe("project management UI project-management-ui-composer", () => {
       const title = `S5 Composer ${randomUUID()}`;
 
       await page.goto("/progress/tasks/new?start=2026-09-01");
+      await expect(page).toHaveURL(/\/progress\/tasks\/new$/);
       await expect(page.getByRole("heading", { name: "新建 Task" })).toBeVisible();
       await expect(page.getByTestId("task-composer")).toBeVisible();
       expect(
@@ -62,6 +62,11 @@ test.describe("project management UI project-management-ui-composer", () => {
       ).toBe(true);
       await expect(page.getByRole("checkbox", { name: /允许自审/ })).toHaveCount(0);
       await page.getByLabel("Task 名称").fill(title);
+      await page
+        .getByTestId("task-plan-node-navigator")
+        .getByRole("button", { name: /Start/ })
+        .click();
+      await page.getByLabel("计划开始时间").fill("2026-09-01T09:00");
       await page.waitForTimeout(900);
       await expect
         .poll(() =>
@@ -536,7 +541,18 @@ test.describe("project management UI project-management-ui-composer", () => {
       const title = `S5 Zero Milestone Task ${randomUUID()}`;
 
       await page.goto("/progress/tasks/new?start=2026-08-01");
+      await expect(page).toHaveURL(/\/progress\/tasks\/new$/);
       await page.getByLabel("Task 名称").fill(title);
+      await page
+        .getByTestId("task-plan-node-navigator")
+        .getByRole("button", { name: /Start/ })
+        .click();
+      await page.getByLabel("计划开始时间").fill("2026-08-01T09:00");
+      await page
+        .getByTestId("task-plan-node-navigator")
+        .getByRole("button", { name: /Terminal/ })
+        .click();
+      await page.getByLabel("计划结束时间").fill("2026-08-15T09:00");
       await expect(page.getByTestId("task-composer-milestone-count")).toHaveText("0/200");
       await page
         .getByTestId("task-plan-node-navigator")
@@ -582,254 +598,42 @@ test.describe("project management UI project-management-ui-composer", () => {
       });
     });
 
-  test("Task Composer preserves v1/v2 draft times while migrating Terminal name and zero Milestones", async ({
+  test("Task Composer deletes v1/v2/v3 drafts without reading or restoring them and keeps v4 recovery", async ({
       context,
       page,
       baseURL,
     }, testInfo) => {
-      test.skip(testInfo.project.name !== "desktop", "本地草稿版本迁移只需在桌面重复一次");
+      test.skip(testInfo.project.name !== "desktop", "草稿 tombstone 只需在桌面验证一次");
       const creator = await createAccountPerson(
-        `S5 Composer Legacy Draft ${randomUUID()}`,
+        `Composer V4 Baseline ${randomUUID()}`,
       );
       await loginAsTestUser(context, baseURL, {
         openId: creator.openId,
         name: creator.person.displayName,
       });
 
-      await page.goto("/progress/tasks/new?start=2026-11-03");
-      await page.getByLabel("Task 名称").fill("待迁移 v1 草稿");
-      await expect
-        .poll(() =>
-          page.evaluate(() =>
-            Object.keys(window.localStorage).some((key) => key.endsWith(":v4")),
-          ),
-        )
-        .toBe(true);
-
-      const installLegacyDraft = async (version: 1 | 2, title: string) => {
-        await page.evaluate(({ version, title }) => {
-          const currentKey = Object.keys(window.localStorage).find((key) =>
-            key.endsWith(":v4"),
-          );
-          if (!currentKey) throw new Error("未找到 v4 Task Composer 草稿");
-          const envelope = JSON.parse(
-            window.localStorage.getItem(currentKey) ?? "null",
-          ) as {
-            schemaVersion: number;
-            inspectorDraft?: unknown;
-            inspectorDirty?: boolean;
-            task: {
-              title: string;
-              plannedStartAt: string;
-              milestones: unknown[];
-              termination: {
-                name?: string;
-                plannedAt: string;
-                plannedOutcomeCriteria: string;
-              };
-            };
-          };
-          envelope.schemaVersion = version;
-          delete envelope.inspectorDraft;
-          delete envelope.inspectorDirty;
-          envelope.task.title = title;
-          envelope.task.milestones = version === 2
-            ? [
-                {
-                  id: "draft-node-legacy-later",
-                  goal: "旧草稿较晚节点",
-                  completionCriteria: "完成较晚节点",
-                  expectedCompletedAt: "2026-11-06T09:00",
-                  reviewRequirements: "验收较晚节点",
-                  businessDescription: "",
-                },
-                {
-                  id: "draft-node-legacy-earlier",
-                  goal: "旧草稿较早节点",
-                  completionCriteria: "完成较早节点",
-                  expectedCompletedAt: "2026-11-05T09:00",
-                  reviewRequirements: "验收较早节点",
-                  businessDescription: "",
-                },
-              ]
-            : [];
-          envelope.task.termination.plannedAt = version === 2
-            ? "2026-11-07T09:00"
-            : envelope.task.plannedStartAt;
-          envelope.task.termination.plannedOutcomeCriteria = "旧草稿结束条件";
-          delete envelope.task.termination.name;
-          const scopedPrefix = currentKey.slice(0, -2);
-          window.localStorage.removeItem(`${scopedPrefix}v1`);
-          window.localStorage.removeItem(`${scopedPrefix}v2`);
-          window.localStorage.removeItem(`${scopedPrefix}v4`);
-          window.localStorage.setItem(
-            `${scopedPrefix}v${version}`,
-            JSON.stringify(envelope),
-          );
-        }, { version, title });
-      };
-
-      const assertMigratedDraft = async (title: string, version: 1 | 2) => {
-        await page.reload();
-        await expect(page.getByText(/检测到 .* 保存的未完成草稿/)).toBeVisible();
-        await page.getByRole("button", { name: "恢复草稿" }).click();
-        await expect(page.getByLabel("Task 名称")).toHaveValue(title);
-        await expect(page.getByTestId("task-composer-milestone-count")).toHaveText(
-          version === 2 ? "2/200" : "0/200",
+      await page.goto("/progress/tasks/new");
+      await page.getByLabel("Task 名称").fill("当前 v4 草稿完整保留");
+      const keys = await expect.poll(() => page.evaluate(() => {
+        const currentKey = Object.keys(window.localStorage).find((key) =>
+          key.endsWith(":v4"),
         );
-        if (version === 2) {
-          const navigator = page.getByTestId("task-plan-node-navigator");
-          await expect(navigator).toContainText("旧草稿较早节点");
-          await expect(navigator).toContainText("旧草稿较晚节点");
-        }
-        await page.getByTestId("task-plan-node-navigator").getByRole("button", { name: /Terminal/ }).click();
-        await expect(page.getByLabel("Terminal 名称")).toHaveValue("Terminal");
-        await expect(page.getByLabel("计划结束时间")).toHaveValue(
-          version === 2 ? "2026-11-07T09:00" : "2026-11-03T09:00",
+        return currentKey ? { currentKey } : null;
+      })).not.toBeNull();
+      void keys;
+      const installed = await page.evaluate(async () => {
+        const currentKey = Object.keys(window.localStorage).find((key) =>
+          key.endsWith(":v4"),
         );
-        if (version === 2) {
-          await expect(
-            page.getByTestId("task-composer-inspector").getByRole("alert"),
-          ).toHaveCount(0);
-        } else {
-          await expect(
-            page.getByText(
-              "Terminal 必须严格晚于 Start 和最后一个 Milestone。",
-              { exact: true },
-            ),
-          ).toBeVisible();
-        }
-        await expect
-          .poll(() =>
-            page.evaluate(() =>
-              Object.keys(window.localStorage).some((key) => key.endsWith(":v4")),
-            ),
-          )
-          .toBe(true);
-      };
-
-      await installLegacyDraft(1, "已迁移 v1 草稿");
-      await assertMigratedDraft("已迁移 v1 草稿", 1);
-      await installLegacyDraft(2, "已迁移 v2 草稿");
-      await assertMigratedDraft("已迁移 v2 草稿", 2);
-      await page.evaluate(() => {
-        const key = Object.keys(window.localStorage).find((candidate) => candidate.endsWith(":v4"));
-        if (!key) throw new Error("未找到待转换的 v4 草稿");
-        const envelope = JSON.parse(window.localStorage.getItem(key) ?? "null") as {
-          inspectorDraft: unknown;
-          inspectorDirty: boolean;
-          task: { selectedEntityId: string | null };
-        };
-        const id = "draft-node-legacy-inspector-copy";
-        envelope.task.selectedEntityId = id;
-        envelope.inspectorDirty = true;
-        envelope.inspectorDraft = {
-          kind: "MILESTONE",
-          entityId: id,
-          isNew: true,
-          returnEntityId: "draft-node-legacy-later",
-          milestone: {
-            id,
-            goal: "旧 v4 Inspector 临时节点",
-            completionCriteria: "",
-            expectedCompletedAt: "2026-11-06T09:30",
-            reviewRequirements: "",
-            businessDescription: "旧工作副本应转换而不是丢失",
-          },
-        };
-        window.localStorage.setItem(key, JSON.stringify(envelope));
-      });
-      await page.reload();
-      await page.getByRole("button", { name: "恢复草稿" }).click();
-      await expect(page.getByTestId("task-composer-milestone-count")).toHaveText("3/200");
-      await expect(page.getByTestId("task-composer-temporary-count")).toHaveText("1 个临时");
-      await expect(page.getByLabel("目标")).toHaveValue("旧 v4 Inspector 临时节点");
-      await page.getByTestId("time-canvas-scroll").evaluate((element) => {
-        element.scrollTo({ left: element.scrollWidth, behavior: "auto" });
-      });
-      await expect(page.locator('[data-anchor-visual-state="TEMPORARY"]')).toBeVisible();
-      await page.waitForTimeout(900);
-      await page.evaluate(() => {
-        const key = Object.keys(window.localStorage).find((candidate) => candidate.endsWith(":v4"));
-        if (!key) throw new Error("未找到待破坏的 v4 草稿");
-        const envelope = JSON.parse(window.localStorage.getItem(key) ?? "null") as {
-          task: {
-            plannedStartAt: string;
-            milestones: Array<{ id: string; expectedCompletedAt: string }>;
-            nodeMeta: Record<string, { lifecycle: string; lastValidAt: string }>;
-          };
-        };
-        const temporary = envelope.task.milestones.find(
-          (milestone) => milestone.id === "draft-node-legacy-inspector-copy",
-        );
-        if (!temporary) throw new Error("旧 v4 临时节点未写入实时草稿");
-        temporary.expectedCompletedAt = "";
-        envelope.task.nodeMeta[temporary.id] = {
-          lifecycle: "TEMPORARY",
-          lastValidAt: envelope.task.plannedStartAt,
-        };
-        window.localStorage.setItem(key, JSON.stringify(envelope));
-      });
-      await page.reload();
-      await expect(page.getByText(/草稿版本、结构或字段不兼容/)).toBeVisible();
-      await expectHealthyPage(page);
-    });
-
-  test("Task Composer preserves inline and IndexedDB v3 drafts for export without restoring them", async ({
-      context,
-      page,
-      baseURL,
-    }, testInfo) => {
-      test.skip(testInfo.project.name !== "desktop", "旧大草稿存储兼容只需在桌面验证一次");
-      const creator = await createAccountPerson(`S5 Composer V3 Draft ${randomUUID()}`);
-      await loginAsTestUser(context, baseURL, {
-        openId: creator.openId,
-        name: creator.person.displayName,
-      });
-      await page.goto("/progress/tasks/new?start=2026-11-03");
-      await page.getByLabel("Task 名称").fill("v3 草稿基线");
-      await expect.poll(() => page.evaluate(() =>
-        Object.keys(window.localStorage).some((key) => key.endsWith(":v4")),
-      )).toBe(true);
-
-      const installed = await page.evaluate(() => {
-        const currentKey = Object.keys(window.localStorage).find((key) => key.endsWith(":v4"));
         if (!currentKey) throw new Error("未找到 v4 Task Composer 草稿");
-        const envelope = JSON.parse(window.localStorage.getItem(currentKey) ?? "null") as {
-          schemaVersion: number;
-          draftId: string;
-          savedAt: string;
-          task: { title: string; tagIds?: string[] };
-        };
-        envelope.schemaVersion = 3;
-        envelope.task.title = "需导出的 inline v3 草稿";
-        envelope.task.tagIds = [crypto.randomUUID()];
-        const raw = JSON.stringify(envelope);
-        const legacyKey = `${currentKey.slice(0, -2)}v3`;
-        window.localStorage.removeItem(currentKey);
-        window.localStorage.setItem(legacyKey, raw);
-        return { currentKey, legacyKey, raw };
-      });
-      await page.reload();
-      await expect(page.getByText(/草稿版本、结构或字段不兼容/)).toBeVisible();
-      let downloadPromise = page.waitForEvent("download");
-      await page.getByRole("button", { name: "导出原始草稿" }).click();
-      let download = await downloadPromise;
-      const inlinePath = await download.path();
-      if (!inlinePath) throw new Error("inline v3 草稿下载文件不可读");
-      expect(await readFile(inlinePath, "utf8")).toBe(installed.raw);
-      await page.getByRole("button", { name: "安全放弃" }).click();
-      expect(await page.evaluate((key) => window.localStorage.getItem(key), installed.legacyKey)).toBeNull();
-
-      const indexedRaw = await page.evaluate(async ({ currentKey, raw }) => {
-        const envelope = JSON.parse(raw) as {
-          draftId: string;
-          savedAt: string;
-          task: { title: string };
-        };
-        envelope.task.title = "需导出的 IndexedDB v3 草稿正文";
-        envelope.savedAt = new Date().toISOString();
-        const nextRaw = JSON.stringify(envelope);
+        const prefix = currentKey.slice(0, -2);
+        const retiredKeys = [1, 2, 3].map((version) => `${prefix}v${version}`);
+        for (const [index, retiredKey] of retiredKeys.entries()) {
+          window.localStorage.setItem(
+            retiredKey,
+            JSON.stringify({ schemaVersion: index + 1, mustNotBeRead: true }),
+          );
+        }
         const database = await new Promise<IDBDatabase>((resolve, reject) => {
           const request = indexedDB.open("management-system-task-composer", 1);
           request.onupgradeneeded = () => {
@@ -842,45 +646,85 @@ test.describe("project management UI project-management-ui-composer", () => {
         });
         await new Promise<void>((resolve, reject) => {
           const transaction = database.transaction("drafts", "readwrite");
-          transaction.objectStore("drafts").put(nextRaw, currentKey);
+          for (const retiredKey of retiredKeys) {
+            transaction.objectStore("drafts").put("retired body", retiredKey);
+          }
           transaction.oncomplete = () => resolve();
           transaction.onerror = () => reject(transaction.error);
         });
         database.close();
-        window.localStorage.setItem(currentKey, JSON.stringify({
-          schemaVersion: 3,
-          storage: "INDEXED_DB",
-          draftId: envelope.draftId,
-          savedAt: envelope.savedAt,
-          serializedChars: nextRaw.length,
-        }));
-        return nextRaw;
-      }, installed);
+        return { currentKey, retiredKeys };
+      });
+
       await page.reload();
-      await expect(page.getByText(/草稿版本、结构或字段不兼容/)).toBeVisible();
-      downloadPromise = page.waitForEvent("download");
-      await page.getByRole("button", { name: "导出原始草稿" }).click();
-      download = await downloadPromise;
-      const indexedPath = await download.path();
-      if (!indexedPath) throw new Error("IndexedDB v3 草稿下载文件不可读");
-      expect(await readFile(indexedPath, "utf8")).toBe(indexedRaw);
-      await page.getByRole("button", { name: "安全放弃" }).click();
-      expect(await page.evaluate((key) => window.localStorage.getItem(key), installed.currentKey)).toBeNull();
-      expect(await page.evaluate(async (key) => {
+      await expect(page.getByText(/检测到 .* 保存的未完成草稿/)).toBeVisible();
+      await page.getByRole("button", { name: "恢复草稿" }).click();
+      await expect(page.getByLabel("Task 名称")).toHaveValue(
+        "当前 v4 草稿完整保留",
+      );
+      await expect.poll(() => page.evaluate(async ({ retiredKeys }) => {
+        const localRemoved = retiredKeys.every(
+          (key) => window.localStorage.getItem(key) === null,
+        );
         const database = await new Promise<IDBDatabase>((resolve, reject) => {
           const request = indexedDB.open("management-system-task-composer", 1);
           request.onsuccess = () => resolve(request.result);
           request.onerror = () => reject(request.error);
         });
-        const value = await new Promise<unknown>((resolve, reject) => {
+        const remaining = await new Promise<unknown[]>((resolve, reject) => {
           const transaction = database.transaction("drafts", "readonly");
-          const request = transaction.objectStore("drafts").get(key);
+          const requests = retiredKeys.map((key) =>
+            transaction.objectStore("drafts").get(key),
+          );
+          transaction.oncomplete = () => resolve(requests.map((request) => request.result));
+          transaction.onerror = () => reject(transaction.error);
+        });
+        database.close();
+        return localRemoved && remaining.every((value) => value === undefined);
+      }, installed)).toBe(true);
+      await expect(page.getByText(/草稿版本、结构或字段不兼容/)).toHaveCount(0);
+
+      await page.evaluate(async ({ currentKey }) => {
+        window.localStorage.setItem(currentKey, JSON.stringify({
+          schemaVersion: 3,
+          storage: "INDEXED_DB",
+          draftId: crypto.randomUUID(),
+          savedAt: new Date().toISOString(),
+          serializedChars: 12,
+        }));
+        const database = await new Promise<IDBDatabase>((resolve, reject) => {
+          const request = indexedDB.open("management-system-task-composer", 1);
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+        await new Promise<void>((resolve, reject) => {
+          const transaction = database.transaction("drafts", "readwrite");
+          transaction.objectStore("drafts").put("v3 body", currentKey);
+          transaction.oncomplete = () => resolve();
+          transaction.onerror = () => reject(transaction.error);
+        });
+        database.close();
+      }, installed);
+      await page.reload();
+      await expect(page.getByText(/检测到 .* 保存的未完成草稿/)).toHaveCount(0);
+      await expect(page.getByText(/草稿版本、结构或字段不兼容/)).toHaveCount(0);
+      await expect(page.getByLabel("Task 名称")).toHaveValue("");
+      await expect.poll(() => page.evaluate(async ({ currentKey }) => {
+        const localRemoved = window.localStorage.getItem(currentKey) === null;
+        const database = await new Promise<IDBDatabase>((resolve, reject) => {
+          const request = indexedDB.open("management-system-task-composer", 1);
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+        const indexed = await new Promise<unknown>((resolve, reject) => {
+          const transaction = database.transaction("drafts", "readonly");
+          const request = transaction.objectStore("drafts").get(currentKey);
           request.onsuccess = () => resolve(request.result);
           request.onerror = () => reject(request.error);
         });
         database.close();
-        return value;
-      }, installed.currentKey)).toBeUndefined();
+        return localRemoved && indexed === undefined;
+      }, installed)).toBe(true);
       await expectHealthyPage(page);
     });
 
@@ -1115,6 +959,7 @@ test.describe("project management UI project-management-ui-composer", () => {
       const title = `S5 system admin ${randomUUID()}`;
 
       await page.goto("/progress/tasks/new?start=2026-10-01");
+      await expect(page).toHaveURL(/\/progress\/tasks\/new$/);
       await expect(
         page.getByRole("button", {
           name: `移除 ${administrator.person.displayName} 负责人`,

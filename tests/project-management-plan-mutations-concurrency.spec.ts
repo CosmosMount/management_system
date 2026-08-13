@@ -3,7 +3,7 @@ import type { TaskMemberRole } from "@prisma/client";
 import { prisma } from "../lib/prisma";
 import { activateTask } from "../lib/project-management/application/lifecycle-service";
 import { createWorkSegment } from "../lib/project-management/application/segment-service";
-import { replaceTaskDraftPlan, replaceTaskMembers } from "../lib/project-management/application/task-mutation-service";
+import { updateActiveTask, updateTaskDraft } from "../lib/project-management/application/task-mutation-service";
 
 import {
   AccountPerson,
@@ -32,7 +32,7 @@ import {
 } from "./helpers/project-management-plan-mutation-fixtures";
 
 test.describe("project management plan mutations project-management-plan-mutations-concurrency", () => {
-  test("all six mutation actions enforce visible authorization, lifecycle and stale matrices with zero rejected effects", async () => {
+  test("both supported mutation actions enforce visible authorization, lifecycle and stale matrices with zero rejected effects", async () => {
       const admin = await createAccountPerson("S2 Matrix Admin");
       const owner = await createAccountPerson("S2 Matrix Owner");
       const reviewer = await createAccountPerson("S2 Matrix Reviewer");
@@ -136,7 +136,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
       }
     });
 
-  test("all six mutation actions serialize the same lock version exactly once", async () => {
+  test("both supported mutation actions serialize the same lock version exactly once", async () => {
       const admin = await createAccountPerson("S2 Exactly Once Admin");
       const owner = await createAccountPerson("S2 Exactly Once Owner");
       const reviewer = await createAccountPerson("S2 Exactly Once Reviewer");
@@ -152,7 +152,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
           personId: string;
           role: TaskMemberRole;
         }> = [];
-        if (mutationCase.name === "replaceTaskMembers") {
+        if (mutationCase.name === "updateActiveTask") {
           const removed = await createAccountPerson("S2 Concurrent Removed");
           const added = await createAccountPerson("S2 Concurrent Added");
           extraMembers.push({ personId: removed.person.id, role: "PARTICIPANT" });
@@ -214,7 +214,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
           beforeSnapshot,
           afterSnapshot,
         );
-        if (mutationCase.name === "replaceTaskMembers") {
+        if (mutationCase.name === "updateActiveTask") {
           const eventPrefix = `pm:task:member_changed:${fixture.taskId}:${beforeTask.lockVersion + 1}:`;
           const outboxes = await prisma.notificationOutbox.findMany({
             where: { eventKey: { startsWith: eventPrefix } },
@@ -241,7 +241,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
       }
     });
 
-  test("all six mutation actions roll back business, audit, lock and notifications on a controlled late failure", async () => {
+  test("both supported mutation actions roll back business, audit, lock and notifications on a controlled late failure", async () => {
       const admin = await createAccountPerson("S2 Late Failure Admin");
       const owner = await createAccountPerson("S2 Late Failure Owner");
       const reviewer = await createAccountPerson("S2 Late Failure Reviewer");
@@ -301,7 +301,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
       await installControlledMemberOutboxFailureTrigger();
       try {
         await expect(
-          replaceTaskMembers(actor(owner), {
+          updateActiveTask(actor(owner), {
             taskId: fixture.taskId,
             expectedLockVersion: 1,
             members: [
@@ -347,10 +347,16 @@ test.describe("project management plan mutations project-management-plan-mutatio
             taskId: fixture.taskId,
           });
         const replace = () =>
-          replaceTaskDraftPlan(actor(owner), {
+          updateTaskDraft(actor(owner), {
             taskId: fixture.taskId,
             planVersionId: fixture.currentPlanVersionId,
             expectedLockVersion: 0,
+            title: `S2 association order ${first}`,
+            description: "Task 关联锁顺序回归",
+            team: "英雄",
+            techGroup: "电控",
+            priority: "MEDIUM",
+            relatedTaskId: null,
             plannedStartAt: iso(2026, 8, 1),
             milestones: [planMilestoneReplacement(retained)],
             termination: planTerminationReplacement(termination),

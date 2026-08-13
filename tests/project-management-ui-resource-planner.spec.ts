@@ -277,7 +277,7 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       );
 
       await page.goto(
-        "/progress/resources?tags=legacy&from=2026-08-10&to=2026-08-12&group=person&types=PLANNED&statuses=ACTIVE&zoom=hour",
+        `/progress/resources?tags=legacy&from=2026-08-10&to=2026-08-12&group=person&types=PLANNED&statuses=ACTIVE&zoom=hour&start=2026-08-01&end=2026-09-01&personId=${people[0]!.id}&taskId=${taskRecords[0]!.id}&timelineDate=2026-08-03&timelineFocus=${focusSegment.id}&focusSegmentIds=${focusSegment.id}`,
       );
       await page.evaluate(() => {
         Object.defineProperty(navigator, "clipboard", {
@@ -293,12 +293,12 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       const copiedUrl = new URL(await page.evaluate(() =>
         window.sessionStorage.getItem("resource-plan-copied-url") ?? "",
       ));
-      for (const key of ["tags", "from", "to", "group", "types", "statuses", "zoom"]) {
+      for (const key of ["tags", "from", "to", "group", "types", "statuses", "zoom", "start", "end", "personId", "taskId", "timelineDate", "timelineFocus", "focusSegmentIds"]) {
         expect(copiedUrl.searchParams.has(key), `复制链接仍包含 ${key}`).toBe(false);
       }
       await page.getByRole("button", { name: "年", exact: true }).click();
       await expect(page).toHaveURL(/scale=year/);
-      for (const key of ["tags", "from", "to", "group", "types", "statuses", "zoom"]) {
+      for (const key of ["tags", "from", "to", "group", "types", "statuses", "zoom", "start", "end", "personId", "taskId", "timelineDate", "timelineFocus", "focusSegmentIds"]) {
         expect(new URL(page.url()).searchParams.has(key), `导航后仍包含 ${key}`).toBe(false);
       }
       expect(await page.evaluate(() =>

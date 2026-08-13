@@ -4,7 +4,7 @@ import type { Client } from "pg";
 import type { ProjectManagementSystemRole, TaskMemberRole, WorkSegmentStatus, WorkSegmentType } from "@prisma/client";
 import { prisma } from "../../lib/prisma";
 import { createTaskDraft, reviewMilestone, submitMilestoneForReview } from "../../lib/project-management/application/lifecycle-service";
-import { replaceTaskDraftMembers, replaceTaskDraftPlan, replaceTaskMembers, updateTaskDraft, updateTaskDraftMetadata, updateTaskMetadata } from "../../lib/project-management/application/task-mutation-service";
+import { updateActiveTask, updateTaskDraft } from "../../lib/project-management/application/task-mutation-service";
 import { toProjectManagementServiceError } from "../../lib/project-management/application/errors";
 import type { ProjectManagementActor } from "../../lib/project-management/identity";
 import { cleanupBarrierResources, connectDatabaseClient, startBarrierOperations, throwBarrierErrors } from "./database-barrier";
@@ -19,29 +19,9 @@ export const MUTATION_ACTION_CASES = [
     auditAction: "pm.task.draft.update",
   },
   {
-    name: "updateTaskDraftMetadata",
-    requiredStatus: "DRAFT",
-    auditAction: "pm.task.draft_metadata.update",
-  },
-  {
-    name: "replaceTaskDraftMembers",
-    requiredStatus: "DRAFT",
-    auditAction: "pm.task.draft_members.replace",
-  },
-  {
-    name: "replaceTaskDraftPlan",
-    requiredStatus: "DRAFT",
-    auditAction: "pm.task.draft_plan.replace",
-  },
-  {
-    name: "updateTaskMetadata",
+    name: "updateActiveTask",
     requiredStatus: "ACTIVE",
     auditAction: "pm.task.metadata.update",
-  },
-  {
-    name: "replaceTaskMembers",
-    requiredStatus: "ACTIVE",
-    auditAction: "pm.task.members.replace",
   },
 ] as const;
 
@@ -78,48 +58,18 @@ export async function invokeMutationAction(
       members: options.members ?? fixtureMembers(fixture),
     });
   }
-  if (name === "updateTaskDraftMetadata") {
-    return updateTaskDraftMetadata(inputActor, {
+  if (name === "updateActiveTask") {
+    return updateActiveTask(inputActor, {
       taskId: fixture.taskId,
       expectedLockVersion,
-      title: `S2 mutation ${name}`,
-      description: "mutation matrix",
-      team: "英雄",
-      techGroup: "电控",
-      priority: "HIGH",
-      relatedTaskId: null,
-    });
-  }
-  if (name === "replaceTaskDraftMembers") {
-    return replaceTaskDraftMembers(inputActor, {
-      taskId: fixture.taskId,
-      expectedLockVersion,
-      members: options.members ?? fixtureMembers(fixture),
-    });
-  }
-  if (name === "replaceTaskDraftPlan") {
-    const planInput = await draftPlanReplaceInput(fixture, expectedLockVersion);
-    const firstMilestone = planInput.milestones[0];
-    if (!firstMilestone) throw new Error("缺少 mutation Milestone");
-    firstMilestone.goal = `${firstMilestone.goal}（mutation）`;
-    return replaceTaskDraftPlan(inputActor, planInput);
-  }
-  if (name === "updateTaskMetadata") {
-    return updateTaskMetadata(inputActor, {
-      taskId: fixture.taskId,
-      expectedLockVersion,
-      title: `S2 mutation ${name}`,
-      description: "mutation matrix",
-      team: "英雄",
-      techGroup: "电控",
-      priority: "HIGH",
-      relatedTaskId: null,
-    });
-  }
-  if (name === "replaceTaskMembers") {
-    return replaceTaskMembers(inputActor, {
-      taskId: fixture.taskId,
-      expectedLockVersion,
+      metadata: {
+        title: `S2 mutation ${name}`,
+        description: "mutation matrix",
+        team: "英雄",
+        techGroup: "电控",
+        priority: "HIGH",
+        relatedTaskId: null,
+      },
       members: options.members ?? fixtureMembers(fixture),
     });
   }
@@ -163,6 +113,151 @@ export async function draftPlanReplaceInput(
           }),
       ...planMilestoneReplacementFields(entry),
     })),
+    termination: planTerminationReplacement(termination),
+  };
+}
+
+export async function updateDraftMetadataThroughCurrentInterface(
+  inputActor: ProjectManagementActor,
+  input: {
+    taskId: string;
+    expectedLockVersion: number;
+    title: string;
+    description: string;
+    team: "英雄" | "工程";
+    techGroup: "电控" | "机械";
+    priority: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
+    relatedTaskId: string | null;
+    projectId?: string | null;
+  },
+) {
+  const task = await taskMutationSource(input.taskId);
+  return updateTaskDraft(inputActor, {
+    ...draftPlanInputFromPlan(input.taskId, task.currentPlanVersion),
+    ...input,
+  });
+}
+
+export function updateActiveMetadataThroughCurrentInterface(
+  inputActor: ProjectManagementActor,
+  input: {
+    taskId: string;
+    expectedLockVersion: number;
+    title: string;
+    description: string;
+    team: "英雄" | "工程";
+    techGroup: "电控" | "机械";
+    priority: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
+    relatedTaskId: string | null;
+    projectId?: string | null;
+  },
+) {
+  const { taskId, expectedLockVersion, ...metadata } = input;
+  return updateActiveTask(inputActor, { taskId, expectedLockVersion, metadata });
+}
+
+export async function updateTaskMembersThroughCurrentInterface(
+  inputActor: ProjectManagementActor,
+  input: {
+    taskId: string;
+    expectedLockVersion: number;
+    members: Array<{ personId: string; role: TaskMemberRole }>;
+  },
+) {
+  const task = await taskMutationSource(input.taskId);
+  if (task.status === "ACTIVE") {
+    return updateActiveTask(inputActor, input);
+  }
+  return updateTaskDraft(inputActor, {
+    ...draftPlanInputFromPlan(input.taskId, task.currentPlanVersion),
+    taskId: input.taskId,
+    expectedLockVersion: input.expectedLockVersion,
+    title: task.title,
+    description: task.description,
+    team: task.team,
+    techGroup: task.techGroup,
+    priority: task.priority,
+    relatedTaskId: task.relatedTaskId,
+    projectId: task.projectId,
+    members: input.members,
+  });
+}
+
+export async function updateDraftPlanThroughCurrentInterface(
+  inputActor: ProjectManagementActor,
+  input: DraftPlanMutationInput,
+) {
+  const task = await taskMutationSource(input.taskId);
+  return updateTaskDraft(inputActor, {
+    ...input,
+    title: task.title,
+    description: task.description,
+    team: task.team,
+    techGroup: task.techGroup,
+    priority: task.priority,
+    relatedTaskId: task.relatedTaskId,
+    projectId: task.projectId,
+  });
+}
+
+type DraftPlanMutationInput = {
+  taskId: string;
+  planVersionId: string;
+  expectedLockVersion: number;
+  plannedStartAt: string;
+  milestones: Array<{
+    nodeId?: string;
+    clientKey?: string;
+    goal: string;
+    completionCriteria: string;
+    expectedCompletedAt: string;
+    reviewRequirements: string;
+    businessDescription: string;
+  }>;
+  termination: {
+    nodeId?: string;
+    clientKey?: string;
+    name: string;
+    plannedOutcomeCriteria: string;
+    plannedAt: string;
+    businessDescription: string;
+  };
+};
+
+async function taskMutationSource(taskId: string) {
+  return prisma.task.findUniqueOrThrow({
+    where: { id: taskId },
+    include: {
+      currentPlanVersion: {
+        include: {
+          nodes: {
+            include: {
+              node: {
+                include: { milestone: true, revision: true, termination: true },
+              },
+            },
+            orderBy: { sequence: "asc" },
+          },
+        },
+      },
+    },
+  });
+}
+
+function draftPlanInputFromPlan(
+  taskId: string,
+  plan: Awaited<ReturnType<typeof taskMutationSource>>["currentPlanVersion"],
+) {
+  const termination = plan.nodes.at(-1);
+  if (!termination?.node.termination) throw new Error("Task 草稿缺少 Terminal");
+  return {
+    taskId,
+    planVersionId: plan.id,
+    expectedLockVersion: 0,
+    plannedStartAt: plan.plannedStartAt?.toISOString() ?? iso(2026, 8, 1),
+    milestones: plan.nodes.flatMap((entry) => entry.node.milestone
+      ? [{ nodeId: entry.nodeId, ...planMilestoneReplacementFields(entry) }]
+      : []),
     termination: planTerminationReplacement(termination),
   };
 }
@@ -625,16 +720,9 @@ export function expectMutationBusinessEffect(
     expect(after.nodeContent).not.toEqual(before.nodeContent);
     return;
   }
-  if (name === "updateTaskDraftMetadata" || name === "updateTaskMetadata") {
+  if (name === "updateActiveTask") {
     expect(after.taskMetadata).not.toEqual(before.taskMetadata);
-    return;
-  }
-  if (name === "replaceTaskDraftMembers" || name === "replaceTaskMembers") {
     expect(after.memberRows).not.toEqual(before.memberRows);
-    return;
-  }
-  if (name === "replaceTaskDraftPlan") {
-    expect(after.nodeContent).not.toEqual(before.nodeContent);
     return;
   }
   throw new Error(`未覆盖 Task mutation：${name satisfies never}`);

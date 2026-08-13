@@ -5,7 +5,6 @@ import { ProjectActionsClient } from "@/components/project-management/project-ac
 import { ProjectAvatar } from "@/components/project-management/project-avatar";
 import { ProjectTaskTimeline } from "@/components/project-management/project-task-timeline";
 import { timeCanvasDataToModel } from "@/components/project-management/time-canvas/adapter";
-import { formatShanghaiDate } from "@/components/project-management/time-canvas/url-state";
 import type { TimeCanvasZoom } from "@/components/project-management/time-canvas/types";
 import {
   CollaborationLeftSidebar,
@@ -53,7 +52,11 @@ export default async function ProjectDetailPage({
   const actor = await getProgressActorOrRedirect();
   const { id } = await params;
   const query = (await searchParams) ?? {};
-  const requestedFocus = first(query.focus) || first(query.timelineFocus);
+  const canonicalQuery = withoutRetiredTimelineParams(query);
+  if (canonicalSearch(searchParamsFromRecord(query)) !== canonicalSearch(canonicalQuery)) {
+    redirect(`${routes.progress.projectDetail(id)}?${canonicalQuery.toString()}`);
+  }
+  const requestedFocus = first(query.focus);
   const focusLocator = requestedFocus
     ? await locateProjectTimelineFocus({ actor, projectId: id, focus: requestedFocus })
         .catch((error: unknown) => {
@@ -64,7 +67,6 @@ export default async function ProjectDetailPage({
   if (requestedFocus && !focusLocator) {
     const normalized = searchParamsFromRecord(query);
     normalized.delete("focus");
-    normalized.delete("timelineFocus");
     normalized.set("focusError", "1");
     redirect(`${routes.progress.projectDetail(id)}?${normalized.toString()}`);
   }
@@ -74,8 +76,6 @@ export default async function ProjectDetailPage({
     normalized.set("center", new Date(focusLocator.centerMs).toISOString());
     if (focusLocator.taskCursor) normalized.set("taskCursor", focusLocator.taskCursor);
     else normalized.delete("taskCursor");
-    normalized.delete("timelineFocus");
-    normalized.delete("timelineDate");
     normalized.delete("focusError");
     if (canonicalSearch(searchParamsFromRecord(query)) !== canonicalSearch(normalized)) {
       redirect(`${routes.progress.projectDetail(id)}?${normalized.toString()}`);
@@ -129,21 +129,9 @@ export default async function ProjectDetailPage({
     activity,
     activityVersion: activityVersion.token,
   };
-  const legacyTimelineStart = parseShanghaiDate(first(query.timelineDate));
   const defaultTimelineCenter = projectDefaultTimelineCenter(project.tasks);
   const timelineCenter = focusLocator?.centerMs ?? parseCenter(first(query.center))
-    ?? (legacyTimelineStart === null
-      ? defaultTimelineCenter
-      : legacyTimelineStart + 15.5 * 24 * 60 * 60 * 1_000);
-  if (legacyTimelineStart !== null && !focusLocator) {
-    const normalized = searchParamsFromRecord(query);
-    normalized.set("center", new Date(timelineCenter).toISOString());
-    normalized.delete("timelineDate");
-    normalized.delete("timelineFocus");
-    if (canonicalSearch(searchParamsFromRecord(query)) !== canonicalSearch(normalized)) {
-      redirect(`${routes.progress.projectDetail(id)}?${normalized.toString()}`);
-    }
-  }
+    ?? defaultTimelineCenter;
   const timelineScale = parseScale(first(query.scale));
   const timelinePersonIds = [...new Set([
     ...project.members.map((member) => member.personId),
@@ -414,17 +402,27 @@ function parseCenter(value: string) {
   return value && Number.isFinite(parsed) ? parsed : null;
 }
 
-function parseShanghaiDate(value: string) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
-  const parsed = Date.parse(`${value}T00:00:00.000+08:00`);
-  return Number.isFinite(parsed) && formatShanghaiDate(parsed) === value ? parsed : null;
-}
-
 function parseScale(value: string): TimeCanvasZoom | undefined {
   const normalized = value.toUpperCase();
   return normalized === "WEEK" || normalized === "MONTH" || normalized === "QUARTER" || normalized === "YEAR"
     ? normalized
     : undefined;
+}
+
+function withoutRetiredTimelineParams(params: SearchParams) {
+  const search = searchParamsFromRecord(params);
+  for (const key of [
+    "timelineDate",
+    "timelineFocus",
+    "start",
+    "end",
+    "zoom",
+    "personId",
+    "taskId",
+  ]) {
+    search.delete(key);
+  }
+  return search;
 }
 
 function detailPageHref(

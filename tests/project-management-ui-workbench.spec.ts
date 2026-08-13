@@ -2,7 +2,6 @@ import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../lib/prisma";
 import { activateTask, createRevision, createTaskDraft, rejectRevision } from "../lib/project-management/application/lifecycle-service";
-import { updateTaskDraftMetadata } from "../lib/project-management/application/task-mutation-service";
 import { expectHealthyPage, loginAsTestUser } from "./helpers/functional-fixtures";
 
 import {
@@ -14,6 +13,7 @@ import {
   milestoneInput,
   terminationInput,
 } from "./helpers/project-management-ui-fixtures";
+import { updateDraftMetadataThroughCurrentInterface } from "./helpers/project-management-plan-mutation-fixtures";
 
 test.describe("project management UI project-management-ui-workbench", () => {
   test.beforeAll(async () => {
@@ -559,7 +559,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
       fixture.taskId);
       expect(storageKey).not.toBeNull();
 
-      await updateTaskDraftMetadata(actor(fixture.owner), {
+      await updateDraftMetadataThroughCurrentInterface(actor(fixture.owner), {
         taskId: fixture.taskId,
         expectedLockVersion: 0,
         title: serverTitle,

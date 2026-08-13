@@ -2,7 +2,6 @@ import { notFound, redirect } from "next/navigation";
 import { PageCommandBar } from "@/components/project-management/shell/page-command-bar";
 import { TaskWorkbench } from "@/components/project-management/task-workbench";
 import { timeCanvasDataToModel } from "@/components/project-management/time-canvas/adapter";
-import { formatShanghaiDate } from "@/components/project-management/time-canvas/url-state";
 import type { TimeCanvasZoom } from "@/components/project-management/time-canvas/types";
 import type { CollaborationInitialData } from "@/components/project-management/collaboration-panels";
 import { toProjectManagementServiceError } from "@/lib/project-management/application/errors";
@@ -40,7 +39,11 @@ export default async function ProgressTaskDetailPage({
     throw error;
   });
   const query = (await searchParams) ?? {};
-  const requestedTimelineFocus = firstParam(query.focus) || firstParam(query.timelineFocus);
+  const canonicalQuery = withoutRetiredTimelineParams(query);
+  if (canonicalSearch(searchParamsFromRecord(query)) !== canonicalSearch(canonicalQuery)) {
+    redirect(`/progress/tasks/${id}?${canonicalQuery.toString()}`);
+  }
+  const requestedTimelineFocus = firstParam(query.focus);
   const focusedNode = requestedTimelineFocus === "task-detail-start"
     ? {
         id: requestedTimelineFocus,
@@ -59,25 +62,19 @@ export default async function ProgressTaskDetailPage({
   if (requestedTimelineFocus && !focusedNode) {
     const normalized = searchParamsFromRecord(query);
     normalized.delete("focus");
-    normalized.delete("timelineFocus");
     normalized.set("focusError", "1");
     redirect(`/progress/tasks/${id}?${normalized.toString()}`);
   }
   const defaultTimelineCenter = taskDefaultTimelineCenter(workspace);
-  const legacyTimelineStart = parseShanghaiDate(firstParam(query.timelineDate));
   const requestedTimelineCenter = focusedNode
     ? Date.parse(focusedNode.at)
     : parseCenter(firstParam(query.center))
-    ?? (legacyTimelineStart === null
-      ? defaultTimelineCenter
-      : legacyTimelineStart + 15.5 * 24 * 60 * 60 * 1_000);
+    ?? defaultTimelineCenter;
   const requestedScale = parseScale(firstParam(query.scale));
-  if (focusedNode || legacyTimelineStart !== null) {
+  if (focusedNode) {
     const normalized = searchParamsFromRecord(query);
     normalized.set("center", new Date(requestedTimelineCenter).toISOString());
     if (focusedNode) normalized.set("focus", focusedNode.id);
-    normalized.delete("timelineFocus");
-    normalized.delete("timelineDate");
     normalized.delete("focusError");
     if (canonicalSearch(searchParamsFromRecord(query)) !== canonicalSearch(normalized)) {
       redirect(`/progress/tasks/${id}?${normalized.toString()}`);
@@ -215,12 +212,6 @@ function parseCenter(value: string) {
   return value && Number.isFinite(parsed) ? parsed : null;
 }
 
-function parseShanghaiDate(value: string) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
-  const parsed = Date.parse(`${value}T00:00:00.000+08:00`);
-  return Number.isFinite(parsed) && formatShanghaiDate(parsed) === value ? parsed : null;
-}
-
 function parseScale(value: string): TimeCanvasZoom | undefined {
   const normalized = value.toUpperCase();
   return normalized === "WEEK" || normalized === "MONTH" || normalized === "QUARTER" || normalized === "YEAR"
@@ -237,6 +228,24 @@ function searchParamsFromRecord(params: Record<string, string | string[] | undef
   for (const [key, value] of Object.entries(params)) {
     if (Array.isArray(value)) value.forEach((item) => search.append(key, item));
     else if (value !== undefined) search.set(key, value);
+  }
+  return search;
+}
+
+function withoutRetiredTimelineParams(
+  params: Record<string, string | string[] | undefined>,
+) {
+  const search = searchParamsFromRecord(params);
+  for (const key of [
+    "timelineDate",
+    "timelineFocus",
+    "start",
+    "end",
+    "zoom",
+    "personId",
+    "taskId",
+  ]) {
+    search.delete(key);
   }
   return search;
 }

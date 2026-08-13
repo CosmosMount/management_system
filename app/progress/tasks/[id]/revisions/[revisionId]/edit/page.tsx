@@ -93,7 +93,6 @@ export default async function ProgressTaskRevisionEditPage({
         initialPeople={people}
         initialTasks={relatedTasks}
         initialProjects={workspace.task.project ? [workspace.task.project] : []}
-        actorPersonId={actor.personId}
         mode={{
           kind: "RESUBMIT_REVISION",
           taskId: id,

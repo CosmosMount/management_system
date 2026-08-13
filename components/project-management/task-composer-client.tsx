@@ -83,6 +83,7 @@ import {
 } from "@/components/project-management/task-composer-validation";
 import { useTaskComposerHistory } from "@/components/project-management/use-task-composer-history";
 import { useTaskComposerDraft } from "@/components/project-management/use-task-composer-draft";
+import { taskComposerLegacyDraftKeys } from "@/components/project-management/task-composer-legacy-draft-tombstone";
 import { useTaskComposerNavigation } from "@/components/project-management/use-task-composer-navigation";
 import { submitTaskComposer } from "@/components/project-management/task-composer-submit";
 import { routes } from "@/lib/routes";
@@ -98,7 +99,6 @@ export function TaskComposerClient({
   initialPeople,
   initialTasks,
   initialProjects = [],
-  actorPersonId,
   mode = CREATE_TASK_COMPOSER_MODE,
 }: {
   accountId: string;
@@ -107,7 +107,6 @@ export function TaskComposerClient({
   initialPeople: PersonOption[];
   initialTasks: TaskOption[];
   initialProjects?: Array<{ id: string; name: string; avatarPath: string | null }>;
-  actorPersonId: string;
   mode?: TaskComposerMode;
 }) {
   const router = useRouter();
@@ -196,25 +195,12 @@ export function TaskComposerClient({
         : `task-draft:${encodeURIComponent(deploymentEnvironment)}:${encodeURIComponent(accountId)}:v${LOCAL_DRAFT_SCHEMA_VERSION}`,
     [accountId, deploymentEnvironment, mode],
   );
-  const legacyStorageKeyV1 = useMemo(
-    () =>
-      mode.kind === "CREATE"
-        ? `task-draft:${encodeURIComponent(deploymentEnvironment)}:${encodeURIComponent(accountId)}:v1`
-        : null,
-    [accountId, deploymentEnvironment, mode.kind],
-  );
-  const legacyStorageKeyV2 = useMemo(
-    () =>
-      mode.kind === "CREATE"
-        ? `task-draft:${encodeURIComponent(deploymentEnvironment)}:${encodeURIComponent(accountId)}:v2`
-        : null,
-    [accountId, deploymentEnvironment, mode.kind],
-  );
-  const legacyStorageKeyV3 = useMemo(
-    () =>
-      mode.kind === "CREATE"
-        ? `task-draft:${encodeURIComponent(deploymentEnvironment)}:${encodeURIComponent(accountId)}:v3`
-        : null,
+  const retiredStorageKeys = useMemo(
+    () => taskComposerLegacyDraftKeys({
+      accountId,
+      deploymentEnvironment,
+      isCreateMode: mode.kind === "CREATE",
+    }),
     [accountId, deploymentEnvironment, mode.kind],
   );
   const issues = useMemo(
@@ -245,12 +231,9 @@ export function TaskComposerClient({
     setStorageReady,
     storageReady,
   } = useTaskComposerDraft({
-    actorPersonId,
     dirty,
     editContext,
-    legacyStorageKeyV1,
-    legacyStorageKeyV2,
-    legacyStorageKeyV3,
+    retiredStorageKeys,
     setError: setServerError,
     state,
     storageBusy,

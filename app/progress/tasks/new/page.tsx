@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { redirect } from "next/navigation";
 import { PageCommandBar } from "@/components/project-management/shell/page-command-bar";
 import {
   TaskComposerClient,
@@ -34,9 +35,12 @@ export default async function ProgressTaskNewPage({
 }) {
   const actor = await getProgressActorOrRedirect();
   const params = (await searchParams) ?? {};
+  const normalizedParams = withoutRetiredTimelineParams(params);
+  if (searchParamsFromRecord(params).toString() !== normalizedParams.toString()) {
+    redirect(`/progress/tasks/new?${normalizedParams.toString()}`);
+  }
   const templateTaskId = firstParam(params.templateTaskId);
   const relatedTaskId = firstParam(params.relatedTaskId);
-  const start = firstParam(params.start);
   const requestedProjectId = firstParam(params.projectId);
   const template = templateTaskId
     ? await getTaskWorkspace({ actor, taskId: templateTaskId }).catch(() => null)
@@ -76,7 +80,6 @@ export default async function ProgressTaskNewPage({
     people,
     template,
     requestedRelated,
-    start,
     projectId: preferredProjects[0]?.id ?? null,
   });
   const deploymentEnvironment =
@@ -95,7 +98,6 @@ export default async function ProgressTaskNewPage({
         initialPeople={people}
         initialTasks={tasks}
         initialProjects={initialProjectOptions}
-        actorPersonId={actor.personId}
       />
     </>
   );
@@ -126,7 +128,6 @@ function createSeed({
   people,
   template,
   requestedRelated,
-  start,
   projectId,
 }: {
   actorPersonId: string;
@@ -134,14 +135,11 @@ function createSeed({
   people: Array<{ id: string; displayName: string }>;
   template: TaskWorkspace | null;
   requestedRelated: TaskWorkspace | null;
-  start: string;
   projectId: string | null;
 }): TaskComposerSeed {
   const now = new Date();
   const shanghaiToday = isoToShanghaiDateTimeLocal(now).slice(0, 10);
-  const defaultStartLocal = validDateParam(start)
-    ? `${start}T09:00`
-    : addDaysLocal(`${shanghaiToday}T09:00`, 1);
+  const defaultStartLocal = addDaysLocal(`${shanghaiToday}T09:00`, 1);
   const templateMilestones = template?.currentPlan.nodes
     .filter((entry) => entry.type === "MILESTONE" && entry.milestone)
     .map((entry) => ({
@@ -157,11 +155,9 @@ function createSeed({
   const templateTermination = template?.currentPlan.nodes.find(
     (entry) => entry.type === "TERMINATION" && entry.termination,
   );
-  const plannedStartAt = start
-    ? defaultStartLocal
-    : template?.currentPlan.plannedStartAt
-      ? isoToShanghaiDateTimeLocal(template.currentPlan.plannedStartAt)
-      : defaultStartLocal;
+  const plannedStartAt = template?.currentPlan.plannedStartAt
+    ? isoToShanghaiDateTimeLocal(template.currentPlan.plannedStartAt)
+    : defaultStartLocal;
   const milestones = templateMilestones ?? [];
   const owner = people.find((person) => person.id === actorPersonId) ?? people[0];
   const templateMembers = normalizeTemplateMembers(
@@ -309,11 +305,31 @@ function addDaysLocal(value: string, days: number) {
   );
 }
 
-function validDateParam(value: string) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(value) &&
-    !Number.isNaN(new Date(`${value}T00:00:00+08:00`).getTime());
-}
-
 function firstParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+}
+
+function searchParamsFromRecord(params: SearchParams) {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (Array.isArray(value)) value.forEach((item) => search.append(key, item));
+    else if (value !== undefined) search.set(key, value);
+  }
+  return search;
+}
+
+function withoutRetiredTimelineParams(params: SearchParams) {
+  const search = searchParamsFromRecord(params);
+  for (const key of [
+    "timelineDate",
+    "timelineFocus",
+    "start",
+    "end",
+    "zoom",
+    "personId",
+    "taskId",
+  ]) {
+    search.delete(key);
+  }
+  return search;
 }

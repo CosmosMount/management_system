@@ -255,49 +255,6 @@ export function parseLocalDraft(raw: string): LocalTaskDraft | null {
   }
 }
 
-export function migrateLegacyLocalDraft(
-  raw: string,
-  creatorPersonId: string,
-  schemaVersion: 1 | 2,
-): LocalTaskDraft | null {
-  if (raw.length > MAX_TASK_COMPOSER_DRAFT_CHARS) return null;
-  try {
-    const value: unknown = JSON.parse(raw);
-    if (!isRecord(value) || value.schemaVersion !== schemaVersion || !isRecord(value.task)) {
-      return null;
-    }
-    const normalized = normalizeLegacyMembers(value.task.members, creatorPersonId);
-    const {
-      revisionApprovalMode: _revisionApprovalMode,
-      allowSelfReview: _allowSelfReview,
-      nodeMeta: _nodeMeta,
-      ...task
-    } = value.task;
-    void _revisionApprovalMode;
-    void _allowSelfReview;
-    void _nodeMeta;
-    const migrated = {
-      ...value,
-      schemaVersion: LOCAL_DRAFT_SCHEMA_VERSION,
-      inspectorDraft: null,
-      inspectorDirty: false,
-      task: {
-        ...task,
-        members: [...normalized].map(([personId, role]) => ({
-          personId,
-          role,
-        })),
-        termination: isRecord(task.termination)
-          ? { ...task.termination, name: "Terminal" }
-          : task.termination,
-      },
-    };
-    return parseLocalDraft(JSON.stringify(migrated));
-  } catch {
-    return null;
-  }
-}
-
 function mergeStoredInspectorDraft(
   state: TaskComposerSeed,
   draft: TaskComposerInspectorDraft,
@@ -353,32 +310,6 @@ function firstAvailableMilestoneAt(state: TaskComposerSeed) {
     }
   }
   return null;
-}
-
-function normalizeLegacyMembers(value: unknown, creatorPersonId: string) {
-  const legacyMembers = Array.isArray(value) ? value : [];
-  const normalized = new Map<string, TaskMemberRoleValue>();
-  for (const member of legacyMembers) {
-    if (
-      !isRecord(member) ||
-      typeof member.personId !== "string" ||
-      !UUID_PATTERN.test(member.personId)
-    ) {
-      continue;
-    }
-    const role =
-      member.role === "OWNER"
-        ? "OWNER"
-        : member.role === "LEAD" ||
-            member.role === "MEMBER" ||
-            member.role === "PARTICIPANT"
-          ? "PARTICIPANT"
-          : null;
-    if (!role || normalized.get(member.personId) === "OWNER") continue;
-    normalized.set(member.personId, role);
-  }
-  normalized.set(creatorPersonId, "OWNER");
-  return normalized;
 }
 
 function isStoredMember(value: unknown) {

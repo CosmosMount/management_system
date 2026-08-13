@@ -1,5 +1,7 @@
 # ADR: 项目管理前端 v1.0 执行基线
 
+> 历史决策说明：本 ADR 中的分拆 Task mutation 接口已由当前整包接口基线取代。现行公共入口只保留 `updateTaskDraft` 与 `updateActiveTask`；旧接口名称仅用于解释历史决策，不再代表可调用契约。
+
 > 状态（2026-08-05）：本文关于 Segment 与 Task Node 关联、节点删除阻断和关联复核的决策已由 [删除 Work Segment 职责与 Task Node 关联](./2026-08-05-remove-work-segment-role-node-association.md) 取代，仅保留历史背景。
 >
 > 状态（2026-08-03）：本文关于单 Owner、多成员角色、Reviewer、自审开关和 Task 流程策略的决策已由 [Task 全员可见、双成员角色与全局管理员审批](./2026-08-03-task-global-visibility-participants-admin-approval.md) 取代，仅保留历史背景。

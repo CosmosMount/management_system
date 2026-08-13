@@ -27,18 +27,10 @@ import {
 import { lockTaskSegmentAssociationsTx } from "@/lib/project-management/application/task-segment-association-lock";
 import { assertPersistedPlanChronologyValid } from "@/lib/project-management/application/persisted-plan-chronology";
 import {
-  replaceTaskDraftMembersInputSchema,
-  replaceTaskDraftPlanInputSchema,
-  replaceTaskMembersInputSchema,
   updateActiveTaskInputSchema,
   updateTaskDraftInputSchema,
-  updateTaskDraftMetadataInputSchema,
-  updateTaskMetadataInputSchema,
-  type ReplaceTaskDraftMembersInput,
-  type ReplaceTaskDraftPlanInput,
-  type ReplaceTaskMembersInput,
-  type UpdateTaskDraftMetadataInput,
-  type UpdateTaskMetadataInput,
+  type UpdateActiveTaskInput,
+  type UpdateTaskDraftInput,
 } from "@/lib/project-management/validations/task-mutations";
 import { refreshProjectManagementActorTx } from "@/lib/project-management/application/actor-refresh";
 import { acquireProjectCrossAggregateLockTx, assertTaskProjectChangeAllowedTx, syncTaskMembersToProjectTx } from "@/lib/project-management/application/project-service";
@@ -72,12 +64,6 @@ export type TaskMutationResult = {
   currentPlanVersionId: string;
   lockVersion: number;
   updatedAt: string;
-};
-
-export type TaskMetadataMutationResult = TaskMutationResult;
-
-export type TaskMembersMutationResult = TaskMutationResult & {
-  members: Array<{ personId: string; role: TaskMemberRole }>;
 };
 
 export type ActiveTaskUpdateMutationResult = TaskMutationResult & {
@@ -258,22 +244,6 @@ export async function updateTaskDraft(
   });
 }
 
-export async function updateTaskDraftMetadata(
-  actor: ProjectManagementActor,
-  input: unknown,
-): Promise<TaskMetadataMutationResult> {
-  const parsed = updateTaskDraftMetadataInputSchema.parse(input);
-  return updateTaskMetadataForStatus(actor, parsed, "DRAFT");
-}
-
-export async function updateTaskMetadata(
-  actor: ProjectManagementActor,
-  input: unknown,
-): Promise<TaskMetadataMutationResult> {
-  const parsed = updateTaskMetadataInputSchema.parse(input);
-  return updateTaskMetadataForStatus(actor, parsed, "ACTIVE");
-}
-
 export async function updateActiveTask(
   actor: ProjectManagementActor,
   input: unknown,
@@ -403,273 +373,6 @@ export async function updateActiveTask(
   });
 }
 
-export async function replaceTaskDraftMembers(
-  actor: ProjectManagementActor,
-  input: unknown,
-): Promise<TaskMembersMutationResult> {
-  const parsed = replaceTaskDraftMembersInputSchema.parse(input);
-  return replaceTaskMembersForStatus(actor, parsed, "DRAFT");
-}
-
-export async function replaceTaskMembers(
-  actor: ProjectManagementActor,
-  input: unknown,
-): Promise<TaskMembersMutationResult> {
-  const parsed = replaceTaskMembersInputSchema.parse(input);
-  return replaceTaskMembersForStatus(actor, parsed, "ACTIVE");
-}
-
-export async function replaceTaskDraftPlan(
-  actor: ProjectManagementActor,
-  input: unknown,
-): Promise<TaskDraftPlanMutationResult> {
-  const parsed = replaceTaskDraftPlanInputSchema.parse(input);
-
-  return prisma.$transaction(async (tx) => {
-    const { refreshedActor, task } = await loadLockedTaskTx(
-      tx,
-      actor,
-      parsed.taskId,
-    );
-    assertAuthorizedTaskAction(refreshedActor, task, "task.update_metadata");
-    assertTaskStatus(task, "DRAFT");
-    assertExpectedLockVersion(task, parsed.expectedLockVersion);
-
-    const plan = await loadInitialDraftPlanTx(tx, task, parsed.planVersionId);
-    const replacement = await resolveDraftPlanReplacementTx(tx, plan, parsed);
-    const beforePlan = auditPlanState(plan);
-
-    await tx.planVersionNode.deleteMany({
-      where: { planVersionId: plan.id },
-    });
-    await deleteOmittedDraftNodesTx(tx, replacement.omittedEntries);
-    await persistReplacementNodesTx(tx, {
-      task,
-      actorAccountId: refreshedActor.accountId,
-      milestones: replacement.milestones,
-      termination: replacement.termination,
-    });
-    await tx.planVersionNode.createMany({
-      data: [
-        ...replacement.milestones.map((milestone, index) => ({
-          planVersionId: plan.id,
-          nodeId: milestone.nodeId,
-          sequence: index + 1,
-          isCarryForward: false,
-        })),
-        {
-          planVersionId: plan.id,
-          nodeId: replacement.termination.nodeId,
-          sequence: replacement.milestones.length + 1,
-          isCarryForward: false,
-        },
-      ],
-    });
-    await tx.taskPlanVersion.update({
-      where: { id: plan.id },
-      data: { plannedStartAt: parsed.plannedStartAt },
-    });
-
-    const authoritativePlan = await loadPlanForMutationTx(tx, plan.id);
-    assertAuthoritativePlanValid(authoritativePlan);
-    const snapshotHash = hashTaskMutationPlan(authoritativePlan);
-    await tx.taskPlanVersion.update({
-      where: { id: plan.id },
-      data: { snapshotHash },
-    });
-    const updatedTask = await incrementTaskLockTx(
-      tx,
-      task,
-      parsed.expectedLockVersion,
-    );
-    const afterPlan = auditPlanState({
-      ...authoritativePlan,
-      snapshotHash,
-    });
-    const planChanges = summarizePlanChanges(plan, authoritativePlan);
-    await createDomainAuditEventTx(tx, {
-      actorAccountId: refreshedActor.accountId,
-      actorPersonId: refreshedActor.personId,
-      action: "pm.task.draft_plan.replace",
-      entityType: "TaskPlanVersion",
-      entityId: plan.id,
-      taskId: task.id,
-      before: jsonValue({
-        ...beforePlan,
-        lockVersion: task.lockVersion,
-      }),
-      after: jsonValue({
-        ...afterPlan,
-        lockVersion: updatedTask.lockVersion,
-        changes: planChanges,
-      }),
-      reason: "更新 Task 草稿计划",
-    });
-
-    return {
-      ...serializeTaskMutation(updatedTask),
-      planVersionId: plan.id,
-      plannedStartAt: parsed.plannedStartAt.toISOString(),
-      snapshotHash,
-      nodeMappings: replacement.nodeMappings,
-      nodes: authoritativePlan.nodes.map((entry) => ({
-        nodeId: entry.nodeId,
-        sequence: entry.sequence,
-        type: entry.node.type,
-      })),
-    };
-  });
-}
-
-async function updateTaskMetadataForStatus(
-  actor: ProjectManagementActor,
-  parsed: UpdateTaskDraftMetadataInput | UpdateTaskMetadataInput,
-  requiredStatus: "DRAFT" | "ACTIVE",
-): Promise<TaskMetadataMutationResult> {
-  return prisma.$transaction(async (tx) => {
-    const { refreshedActor, task } = await loadLockedTaskTx(
-      tx,
-      actor,
-      parsed.taskId,
-    );
-    assertAuthorizedTaskAction(refreshedActor, task, "task.update_metadata");
-    assertTaskStatus(task, requiredStatus);
-    assertExpectedLockVersion(task, parsed.expectedLockVersion);
-    assertAuthorizedTargetScope(refreshedActor, task, parsed);
-    await assertRelatedTaskVisibleTx(
-      tx,
-      refreshedActor,
-      task.id,
-      parsed.relatedTaskId,
-      task.relatedTaskId,
-    );
-    const targetProjectId = parsed.projectId === undefined ? task.projectId : parsed.projectId;
-    await assertTaskProjectChangeAllowedTx(tx, task.projectId, targetProjectId);
-    const before = metadataSnapshot(task);
-    const updatedCount = await tx.task.updateMany({
-      where: {
-        id: task.id,
-        lockVersion: parsed.expectedLockVersion,
-        status: requiredStatus,
-        deletedAt: null,
-      },
-      data: {
-        title: parsed.title,
-        description: parsed.description,
-        team: parsed.team,
-        techGroup: parsed.techGroup,
-        priority: parsed.priority,
-        relatedTaskId: parsed.relatedTaskId,
-        projectId: parsed.projectId,
-        lockVersion: { increment: 1 },
-      },
-    });
-    if (updatedCount.count !== 1) {
-      throw staleTaskError(task);
-    }
-
-    const updatedTask = await loadTaskAfterMutationTx(tx, task.id);
-    await syncTaskMembersToProjectTx(tx, { projectId: targetProjectId, taskId: task.id, members: updatedTask.members, actor: refreshedActor });
-    await createDomainAuditEventTx(tx, {
-      actorAccountId: refreshedActor.accountId,
-      actorPersonId: refreshedActor.personId,
-      action:
-        requiredStatus === "DRAFT"
-          ? "pm.task.draft_metadata.update"
-          : "pm.task.metadata.update",
-      entityType: "Task",
-      entityId: task.id,
-      taskId: task.id,
-      before: jsonValue(before),
-      after: jsonValue(metadataSnapshot(updatedTask)),
-      reason: "更新 Task 元数据",
-    });
-    await auditTaskProjectChangeTx(tx, refreshedActor, task, updatedTask);
-
-    return {
-      ...serializeTaskMutation(updatedTask),
-    };
-  });
-}
-
-async function replaceTaskMembersForStatus(
-  actor: ProjectManagementActor,
-  parsed: ReplaceTaskDraftMembersInput | ReplaceTaskMembersInput,
-  requiredStatus: "DRAFT" | "ACTIVE",
-): Promise<TaskMembersMutationResult> {
-  return prisma.$transaction(async (tx) => {
-    const { refreshedActor, task } = await loadLockedTaskTx(
-      tx,
-      actor,
-      parsed.taskId,
-    );
-    assertAuthorizedTaskAction(refreshedActor, task, "task.manage_members");
-    assertTaskStatus(task, requiredStatus);
-    assertExpectedLockVersion(task, parsed.expectedLockVersion);
-    assertExistingMemberInvariant(task.members);
-    assertRequestedMemberInvariant(parsed.members);
-    await assertActivePeopleTx(
-      tx,
-      parsed.members.map((member) => member.personId),
-      task.members.map((member) => member.personId),
-    );
-    await assertTaskSegmentMembersIncludedTx(tx, task.id, parsed.members);
-
-    const beforeMembers = memberSnapshot(task.members);
-    const changes = calculateMemberChanges(task.members, parsed.members);
-    await applyMemberChangesTx(tx, {
-      taskId: task.id,
-      actorAccountId: refreshedActor.accountId,
-      currentMembers: task.members,
-      requestedMembers: parsed.members,
-    });
-    await syncTaskMembersToProjectTx(tx, { projectId: task.projectId, taskId: task.id, members: parsed.members, actor: refreshedActor });
-    const updatedTask = await incrementTaskLockTx(
-      tx,
-      task,
-      parsed.expectedLockVersion,
-    );
-    const afterMembers = memberSnapshot(parsed.members);
-    await createDomainAuditEventTx(tx, {
-      actorAccountId: refreshedActor.accountId,
-      actorPersonId: refreshedActor.personId,
-      action:
-        requiredStatus === "DRAFT"
-          ? "pm.task.draft_members.replace"
-          : "pm.task.members.replace",
-      entityType: "Task",
-      entityId: task.id,
-      taskId: task.id,
-      before: jsonValue({
-        members: beforeMembers,
-        lockVersion: task.lockVersion,
-      }),
-      after: jsonValue({
-        members: afterMembers,
-        lockVersion: updatedTask.lockVersion,
-      }),
-      reason:
-        requiredStatus === "DRAFT"
-          ? "更新 Task 草稿成员"
-          : "更新 Active Task 成员",
-    });
-
-    if (requiredStatus === "ACTIVE" && changes.length > 0) {
-      await notifyActiveMemberChangesTx(tx, {
-        actor: refreshedActor,
-        task,
-        lockVersion: updatedTask.lockVersion,
-        changes,
-      });
-    }
-
-    return {
-      ...serializeTaskMutation(updatedTask),
-      members: afterMembers,
-    };
-  });
-}
-
 async function loadLockedTaskTx(
   tx: PrismaTx,
   actor: ProjectManagementActor,
@@ -708,7 +411,7 @@ function assertAuthorizedTaskAction(
 function assertAuthorizedTargetScope(
   actor: ProjectManagementActor,
   task: TaskForMutation,
-  input: Pick<UpdateTaskMetadataInput, "team" | "techGroup">,
+  input: Pick<UpdateTaskDraftInput, "team" | "techGroup">,
 ) {
   assertAuthorized({
     actor,
@@ -926,19 +629,19 @@ async function loadInitialDraftPlanTx(
 type ResolvedMilestoneReplacement = {
   nodeId: string;
   existing: boolean;
-  input: ReplaceTaskDraftPlanInput["milestones"][number];
+  input: UpdateTaskDraftInput["milestones"][number];
 };
 
 type ResolvedTerminationReplacement = {
   nodeId: string;
   existing: boolean;
-  input: ReplaceTaskDraftPlanInput["termination"];
+  input: UpdateTaskDraftInput["termination"];
 };
 
 async function resolveDraftPlanReplacementTx(
   tx: PrismaTx,
   plan: PlanForMutation,
-  input: ReplaceTaskDraftPlanInput,
+  input: Pick<UpdateTaskDraftInput, "milestones" | "termination">,
 ): Promise<{
   milestones: ResolvedMilestoneReplacement[];
   termination: ResolvedTerminationReplacement;
@@ -1284,7 +987,7 @@ async function auditTaskProjectChangeTx(
 function taskMetadataMatches(
   task: TaskForMutation,
   metadata: Pick<
-    UpdateTaskMetadataInput,
+    NonNullable<UpdateActiveTaskInput["metadata"]>,
     "title" | "description" | "team" | "techGroup" | "priority" | "relatedTaskId" | "projectId"
   >,
 ) {

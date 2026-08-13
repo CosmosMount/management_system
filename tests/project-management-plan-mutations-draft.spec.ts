@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../lib/prisma";
 import { activateTask, approveRevision, createRevision, createTaskDraft, reviewMilestone, submitMilestoneForReview } from "../lib/project-management/application/lifecycle-service";
-import { replaceTaskDraftMembers, replaceTaskDraftPlan, replaceTaskMembers, updateTaskDraft, updateTaskDraftMetadata, updateTaskMetadata } from "../lib/project-management/application/task-mutation-service";
+import { updateTaskDraft } from "../lib/project-management/application/task-mutation-service";
 import { absoluteDateTimeSchema } from "../lib/project-management/validations/lifecycle";
 
 import {
@@ -27,6 +27,10 @@ import {
   relatedTaskReferenceSideEffectSnapshot,
   taskDraftInput,
   terminationInput,
+  updateActiveMetadataThroughCurrentInterface,
+  updateDraftMetadataThroughCurrentInterface,
+  updateDraftPlanThroughCurrentInterface,
+  updateTaskMembersThroughCurrentInterface,
 } from "./helpers/project-management-plan-mutation-fixtures";
 
 test.describe("project management plan mutations project-management-plan-mutations-draft", () => {
@@ -221,11 +225,11 @@ test.describe("project management plan mutations project-management-plan-mutatio
             ),
         },
         {
-          name: "updateTaskDraftMetadata",
+          name: "updateDraftMetadataThroughCurrentInterface",
           snapshotTaskIds: [draftTarget.taskId, hiddenRelated.taskId],
           includeGlobalCounts: false,
           invoke: (relatedTaskId: string) =>
-            updateTaskDraftMetadata(actor(scopedAdmin), {
+            updateDraftMetadataThroughCurrentInterface(actor(scopedAdmin), {
               taskId: draftTarget.taskId,
               expectedLockVersion: 0,
               title: "拒绝写入的 Draft 元数据差异",
@@ -237,11 +241,11 @@ test.describe("project management plan mutations project-management-plan-mutatio
             }),
         },
         {
-          name: "updateTaskMetadata",
+          name: "updateActiveMetadataThroughCurrentInterface",
           snapshotTaskIds: [activeTarget.taskId, hiddenRelated.taskId],
           includeGlobalCounts: false,
           invoke: (relatedTaskId: string) =>
-            updateTaskMetadata(actor(scopedAdmin), {
+            updateActiveMetadataThroughCurrentInterface(actor(scopedAdmin), {
               taskId: activeTarget.taskId,
               expectedLockVersion: 1,
               title: "拒绝写入的 Active 元数据差异",
@@ -305,7 +309,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
       const fixture = await createDraft({ creator: admin, owner, reviewer });
 
       await expectServiceError(
-        updateTaskMetadata(actor(owner), {
+        updateActiveMetadataThroughCurrentInterface(actor(owner), {
           taskId: fixture.taskId,
           expectedLockVersion: 0,
           title: "Active-only metadata",
@@ -318,7 +322,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
         "STATE_CONFLICT",
       );
       await expectServiceError(
-        replaceTaskMembers(actor(owner), {
+        updateTaskMembersThroughCurrentInterface(actor(owner), {
           taskId: fixture.taskId,
           expectedLockVersion: 0,
           members: [
@@ -330,7 +334,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
       );
 
       const beforeOutboxCount = await prisma.notificationOutbox.count();
-      const metadata = await updateTaskDraftMetadata(actor(owner), {
+      const metadata = await updateDraftMetadataThroughCurrentInterface(actor(owner), {
         taskId: fixture.taskId,
         expectedLockVersion: 0,
         title: "更新后的 Draft Task",
@@ -342,7 +346,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
       });
       expect(metadata).toMatchObject({ lockVersion: 1 });
 
-      const ownerMetadata = await updateTaskDraftMetadata(actor(owner), {
+      const ownerMetadata = await updateDraftMetadataThroughCurrentInterface(actor(owner), {
         taskId: fixture.taskId,
         expectedLockVersion: 1,
         title: "负责人继续编辑",
@@ -354,7 +358,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
       });
       expect(ownerMetadata.lockVersion).toBe(2);
 
-      const adminMetadata = await updateTaskDraftMetadata(actor(admin), {
+      const adminMetadata = await updateDraftMetadataThroughCurrentInterface(actor(admin), {
         taskId: fixture.taskId,
         expectedLockVersion: 2,
         title: "管理员编辑元数据",
@@ -367,7 +371,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
       expect(adminMetadata.lockVersion).toBe(3);
 
       await expectServiceError(
-        updateTaskDraftMetadata(actor(owner), {
+        updateDraftMetadataThroughCurrentInterface(actor(owner), {
           taskId: fixture.taskId,
           expectedLockVersion: 1,
           title: "stale",
@@ -381,7 +385,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
         { expectedCurrentLockVersion: 3 },
       );
       await expectServiceError(
-        updateTaskDraftMetadata(actor(outsider), {
+        updateDraftMetadataThroughCurrentInterface(actor(outsider), {
           taskId: fixture.taskId,
           expectedLockVersion: 3,
           title: "非成员不可写",
@@ -394,7 +398,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
         "FORBIDDEN",
       );
 
-      const multipleOwners = await replaceTaskDraftMembers(actor(owner), {
+      const multipleOwners = await updateTaskMembersThroughCurrentInterface(actor(owner), {
         taskId: fixture.taskId,
         expectedLockVersion: 3,
         members: [
@@ -404,7 +408,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
       });
       expect(multipleOwners.lockVersion).toBe(4);
       await expectServiceError(
-        replaceTaskDraftMembers(actor(owner), {
+        updateTaskMembersThroughCurrentInterface(actor(owner), {
           taskId: fixture.taskId,
           expectedLockVersion: 4,
           members: [
@@ -420,7 +424,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
         data: { status: "INACTIVE" },
       });
       await expectServiceError(
-        replaceTaskDraftMembers(actor(owner), {
+        updateTaskMembersThroughCurrentInterface(actor(owner), {
           taskId: fixture.taskId,
           expectedLockVersion: 4,
           members: [
@@ -432,7 +436,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
         "VALIDATION_ERROR",
       );
       expect((await currentTask(fixture.taskId)).lockVersion).toBe(4);
-      const members = await replaceTaskDraftMembers(actor(owner), {
+      const members = await updateTaskMembersThroughCurrentInterface(actor(owner), {
         taskId: fixture.taskId,
         expectedLockVersion: 4,
         members: [
@@ -455,8 +459,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
             taskId: fixture.taskId,
             action: {
               in: [
-                "pm.task.draft_metadata.update",
-                "pm.task.draft_members.replace",
+                "pm.task.draft.update",
               ],
             },
           },
@@ -479,7 +482,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
         throw new Error("测试计划结构不完整");
       }
 
-      const replacement = await replaceTaskDraftPlan(actor(owner), {
+      const replacement = await updateDraftPlanThroughCurrentInterface(actor(owner), {
         taskId: fixture.taskId,
         planVersionId: fixture.currentPlanVersionId,
         expectedLockVersion: 0,
@@ -526,7 +529,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
         }),
       ).toBeNull();
 
-      const stableMapping = await replaceTaskDraftPlan(actor(owner), {
+      const stableMapping = await updateDraftPlanThroughCurrentInterface(actor(owner), {
         taskId: fixture.taskId,
         planVersionId: fixture.currentPlanVersionId,
         expectedLockVersion: 1,
@@ -564,7 +567,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
 
       const countsBeforeInvalid = await mutationSideEffectCounts(fixture.taskId);
       await expectServiceError(
-        replaceTaskDraftPlan(actor(owner), {
+        updateDraftPlanThroughCurrentInterface(actor(owner), {
           taskId: fixture.taskId,
           planVersionId: fixture.currentPlanVersionId,
           expectedLockVersion: 2,
@@ -813,7 +816,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
       const sensitiveNeedle = `S2_AUDIT_PROSE_${randomUUID()}`;
       const longText = `${sensitiveNeedle}-${"长文本".repeat(550)}`;
 
-      await replaceTaskDraftPlan(actor(owner), {
+      await updateDraftPlanThroughCurrentInterface(actor(owner), {
         taskId: fixture.taskId,
         planVersionId: fixture.currentPlanVersionId,
         expectedLockVersion: 0,
@@ -838,19 +841,19 @@ test.describe("project management plan mutations project-management-plan-mutatio
       const audit = await prisma.domainAuditEvent.findFirstOrThrow({
         where: {
           taskId: fixture.taskId,
-          action: "pm.task.draft_plan.replace",
+          action: "pm.task.draft.update",
         },
         orderBy: { createdAt: "desc" },
       });
       const auditJson = JSON.stringify({ before: audit.before, after: audit.after });
       expect(auditJson).not.toContain(sensitiveNeedle);
       expect(Buffer.byteLength(auditJson, "utf8")).toBeLessThan(100_000);
-      expect(jsonRecord(audit.before)).toMatchObject({
+      expect(jsonRecord(jsonRecord(audit.before).plan)).toMatchObject({
         snapshotHash: expect.stringMatching(/^[a-f0-9]{64}$/),
         plannedStartAt: iso(2026, 8, 1),
         nodeCount: 3,
       });
-      expect(jsonRecord(audit.after)).toMatchObject({
+      expect(jsonRecord(jsonRecord(audit.after).plan)).toMatchObject({
         snapshotHash: expect.stringMatching(/^[a-f0-9]{64}$/),
         plannedStartAt: iso(2026, 8, 1),
         nodeCount: 201,
@@ -880,7 +883,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
         const before = await mutationSideEffectCounts(fixture.taskId);
         errors.push(
           await expectServiceError(
-            replaceTaskDraftPlan(
+            updateDraftPlanThroughCurrentInterface(
               actor(owner),
               await draftPlanReplaceInput(fixture, 0, {
                 firstMilestoneNodeId: rawNodeId,
@@ -896,7 +899,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
         "计划节点不属于当前 Task 草稿计划",
       ]);
 
-      const created = await replaceTaskDraftPlan(
+      const created = await updateDraftPlanThroughCurrentInterface(
         actor(owner),
         await draftPlanReplaceInput(fixture, 0, {
           firstMilestoneClientKey: "only-client-key-creates",
@@ -933,7 +936,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
         },
       });
 
-      await replaceTaskDraftPlan(actor(owner), {
+      await updateDraftPlanThroughCurrentInterface(actor(owner), {
         taskId: fixture.taskId,
         planVersionId: fixture.currentPlanVersionId,
         expectedLockVersion: 0,

@@ -5,7 +5,6 @@ const protectedRoutes = [
   "/",
   "/admin",
   "/admin/budget-pools",
-  "/admin/roles",
   "/admin/system",
   "/feedback",
   "/procurement",
@@ -32,7 +31,6 @@ const authenticatedRoutes = [
 const privilegedRoutes = [
   "/admin",
   "/admin/budget-pools",
-  "/admin/roles",
   "/admin/system",
 ];
 
@@ -142,23 +140,25 @@ test.describe("authenticated smoke", () => {
     expect(errors).toEqual([]);
   });
 
-  test("progress workspace and legacy task redirect stay healthy", async ({ page }) => {
+  test("progress workspace and retired routes stay healthy", async ({ page }) => {
     const errors = await collectBrowserErrors(page);
     await page.goto("/progress", { waitUntil: "networkidle" });
     await expect(page.getByRole("heading", { name: "我的工作" })).toBeVisible();
 
-    await page.goto("/progress/task/legacy-task", {
+    const legacyTaskResponse = await page.goto("/progress/task/legacy-task", {
       waitUntil: "networkidle",
     });
-    await expect(page).toHaveURL(/\/progress\/tasks\/legacy-task$/);
+    expect(legacyTaskResponse?.status()).toBe(404);
+    await expect(page).toHaveURL(/\/progress\/task\/legacy-task$/);
     await expect(
       page.getByRole("heading", { name: "页面不存在或无权访问" }),
     ).toBeVisible();
     await expectHealthyPage(page);
 
-    await page.goto("/progress/kanban", { waitUntil: "networkidle" });
-    await expect(page).toHaveURL(/\/progress$/);
-    await expect(page.getByRole("heading", { name: "我的工作" })).toBeVisible();
+    const legacyKanbanResponse = await page.goto("/progress/kanban", { waitUntil: "networkidle" });
+    expect(legacyKanbanResponse?.status()).toBe(404);
+    await expect(page).toHaveURL(/\/progress\/kanban$/);
+    await expect(page.getByRole("heading", { name: "页面不存在或无权访问" })).toBeVisible();
     await expectHealthyPage(page);
 
     await page.goto("/progress/projects/legacy-project", {
@@ -191,4 +191,11 @@ test.describe("privileged authenticated smoke", () => {
       expect(errors).toEqual([]);
     });
   }
+
+  test("retired admin roles route returns 404", async ({ page }) => {
+    const response = await page.goto("/admin/roles", { waitUntil: "networkidle" });
+    expect(response?.status()).toBe(404);
+    await expect(page).toHaveURL(/\/admin\/roles$/);
+    await expectHealthyPage(page);
+  });
 });

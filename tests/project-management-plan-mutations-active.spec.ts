@@ -4,7 +4,7 @@ import type { TaskMemberRole } from "@prisma/client";
 import { prisma } from "../lib/prisma";
 import { activateTask, confirmTermination, createRevision, createTaskDraft } from "../lib/project-management/application/lifecycle-service";
 import { batchCreatePlannedSegments, createActualSegment, createWorkSegment, updateWorkSegment } from "../lib/project-management/application/segment-service";
-import { replaceTaskDraftMembers, replaceTaskDraftPlan, replaceTaskMembers, updateActiveTask, updateTaskDraftMetadata, updateTaskMetadata } from "../lib/project-management/application/task-mutation-service";
+import { updateActiveTask } from "../lib/project-management/application/task-mutation-service";
 import { getTaskWorkspace } from "../lib/project-management/queries/task-queries";
 
 import {
@@ -25,6 +25,10 @@ import {
   taskDraftInput,
   terminationInput,
   uniqueWhitespaceOpenId,
+  updateActiveMetadataThroughCurrentInterface,
+  updateDraftMetadataThroughCurrentInterface,
+  updateDraftPlanThroughCurrentInterface,
+  updateTaskMembersThroughCurrentInterface,
 } from "./helpers/project-management-plan-mutation-fixtures";
 
 test.describe("project management plan mutations project-management-plan-mutations-active", () => {
@@ -50,7 +54,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
       expect(activated.lockVersion).toBe(1);
 
       await expectServiceError(
-        updateTaskDraftMetadata(actor(owner), {
+        updateDraftMetadataThroughCurrentInterface(actor(owner), {
           taskId: fixture.taskId,
           expectedLockVersion: 1,
           title: "Draft-only metadata",
@@ -63,7 +67,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
         "STATE_CONFLICT",
       );
       await expectServiceError(
-        replaceTaskDraftPlan(actor(owner), {
+        updateDraftPlanThroughCurrentInterface(actor(owner), {
           taskId: fixture.taskId,
           planVersionId: fixture.currentPlanVersionId,
           expectedLockVersion: 1,
@@ -82,7 +86,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
         "STATE_CONFLICT",
       );
 
-      const membersResult = await replaceTaskMembers(actor(owner), {
+      const membersResult = await updateTaskMembersThroughCurrentInterface(actor(owner), {
         taskId: fixture.taskId,
         expectedLockVersion: 1,
         members: [
@@ -144,7 +148,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
         }),
       ).toBe(3);
 
-      const metadataResult = await updateTaskMetadata(actor(admin), {
+      const metadataResult = await updateActiveMetadataThroughCurrentInterface(actor(admin), {
         taskId: fixture.taskId,
         expectedLockVersion: 2,
         title: "Active metadata updated",
@@ -171,7 +175,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
 
       const beforeStale = await mutationSideEffectCounts(fixture.taskId);
       await expectServiceError(
-        replaceTaskMembers(actor(owner), {
+        updateTaskMembersThroughCurrentInterface(actor(owner), {
           taskId: fixture.taskId,
           expectedLockVersion: 2,
           members: membersResult.members,
@@ -181,7 +185,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
       );
       expect(await mutationSideEffectCounts(fixture.taskId)).toEqual(beforeStale);
       await expectServiceError(
-        replaceTaskDraftMembers(actor(owner), {
+        updateTaskMembersThroughCurrentInterface(actor(owner), {
           taskId: fixture.taskId,
           expectedLockVersion: 3,
           members: membersResult.members,
@@ -491,12 +495,12 @@ test.describe("project management plan mutations project-management-plan-mutatio
           const before = await mutationSideEffectCounts(fixture.taskId);
           await expectServiceError(
             requiredStatus === "DRAFT"
-              ? replaceTaskDraftMembers(actor(owner), {
+              ? updateTaskMembersThroughCurrentInterface(actor(owner), {
                   taskId: fixture.taskId,
                   expectedLockVersion: task.lockVersion,
                   members,
                 })
-              : replaceTaskMembers(actor(owner), {
+              : updateTaskMembersThroughCurrentInterface(actor(owner), {
                   taskId: fixture.taskId,
                   expectedLockVersion: task.lockVersion,
                   members,
@@ -587,7 +591,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
         where: { accountId: missingIdentity.account.id },
       });
 
-      const result = await replaceTaskMembers(actor(owner), {
+      const result = await updateTaskMembersThroughCurrentInterface(actor(owner), {
         taskId: fixture.taskId,
         expectedLockVersion: 1,
         members: [

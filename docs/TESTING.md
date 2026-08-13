@@ -240,10 +240,10 @@ npm run pm:identity-backfill
 5. Planned 完整确认后只显示 Actual；前缀部分确认必须填写实际投入内容、预期产出、实际产出，固定开始点并只生成一条尾段。缺字段或伪造中间起点必须在服务端零写入拒绝。确认、取消、Actual 软删除仍需验证数据库、来源、中文安全 change DTO、audit、站内通知与 outbox；历史分页不得下发 raw `before/after`、账号 ID 或无权读取的 Task 名称，测试环境必须禁用真实飞书投递。普通 DTO 和表单不得再包含 `completionPercent`，但兼容数据库列保持存在且新写入为 `NULL`。
 6. `/progress` 默认只显示 ACTIVE 参与 Task；切换“显示全部”后才显示草稿和终态。每页 25 条且 Task 表、版本/当前节点和 Plan 行同步；行动待办保留 Segment confirmation 数量但不把它计入 `criticalCount`，到期队列“处理”必须打开统一详情而不是第二套确认表单。页面不再出现日期、日/周视图或日期平移控件。验证所有 TimeCanvas 在没有显式尺度时默认显示周，URL/调用方尺度仍优先；Task 节点聚焦和 Resize 不得出现尺度跳变。工具栏保留周/月/季/年与“今天”，不显示前后箭头，并验证多级上海日期轴及独立底部滚动条。内容驱动页即使全部内容远离今天，也必须能通过“今天”加载并定位今天附近，同时保持尺度。有效 Planned 的创建/更新必须重新计算内容范围、在两端增加两个上海日历月、加载目标及相邻块并保持当前视口；已确认/已取消 Planned 不扩展范围。浏览器前进/后退后筛选控件必须与 URL 一致；投入详情有未保存修改时，服务端刷新或 `rowPageKey` 变化不得直接丢弃表单。
 7. 在 Desktop `1440x1000` 与 Pixel 5 上分别验证响应式冻结行标题、页面无横向溢出、底部滚动与顶部日期轴/时间对象同步。覆盖空数据、超长名称、跨年、超过 366 天、三年裁剪提示、单块自动二分和 20,000 对象/16 块预算错误；测试不得联系真实飞书服务。
-8. `/progress/resources/conflicts`、`/progress/my-timeline` 与 `/progress/tags` 必须返回 404。资源计划默认显示全部，也可按 Project/Task/人员多选；验证集合并集、只读 Plan 与可交互 Person 混排、25/50 独立分页、选择签名游标、防重复焦点固定、空选择、已确认/已取消 Planned 不返回也不渲染，以及内容两侧两个上海日历月和 180 天自适应块。我的工作和 Task 工作台不得出现冲突标记、投入比例或完成比例；重叠 Segment 不得产生冲突待办、通知或 outbox。
+8. `/progress/task/:id`、`/progress/kanban`、`/progress/my-timeline`、`/progress/resources/conflicts`、`/progress/tags` 与 `/admin/roles` 必须返回 404。资源计划默认显示全部，也可按 Project/Task/人员多选；验证集合并集、只读 Plan 与可交互 Person 混排、25/50 独立分页、选择签名游标、防重复焦点固定、空选择、已确认/已取消 Planned 不返回也不渲染，以及内容两侧两个上海日历月和 180 天自适应块。我的工作和 Task 工作台不得出现冲突标记、投入比例或完成比例；重叠 Segment 不得产生冲突待办、通知或 outbox。
 9. 打开 `/progress/notifications`，只展示当前收件人的站内通知；可按类型/未读筛选、标记单条或全部已读，跳转对象前仍要按业务对象权限过滤。
 10. 页面不得出现旧项目、阶段、周报、提醒或 `PROJECT_MANAGER` 角色文案；当前风险区不得出现旧 Stage 风险或计划节点绑定入口。页面不得出现 500、Next.js error overlay、未处理浏览器错误或横向滚动。
-11. 旧 `/progress/task/:id` 应服务端重定向到 `/progress/tasks/:id`；`/progress/projects/*` 是当前正式路由，只有旧 `/progress/kanban` 回到 `/progress`。收缩 migration 集成测试仍需验证历史旧表、旧 enum、`PROJECT_MANAGER` 数据和 `channel=progress` outbox/recipient 被删除；HEAD 还必须证明新 Project 不含 Stage、`ownerOpenId` 等旧签名。
+11. `/progress/projects/*` 与 `/progress/tasks/*` 是当前正式路由；旧路径不得重定向。带 `timelineDate`、`timelineFocus`、单值 `personId`/`taskId`、`start`/`end` 或 `zoom` 的链接应忽略这些值，并将其从规范 URL 移除；`focus`、`center`、`scale` 与复数资源选择继续保留。收缩 migration 集成测试仍需验证历史旧表、旧 enum、`PROJECT_MANAGER` 数据和 `channel=progress` outbox/recipient 被删除；HEAD 还必须证明新 Project 不含 Stage、`ownerOpenId` 等旧签名。
 
 ### Project 立项专项测试
 
@@ -275,7 +275,7 @@ npx tsx --test tests/project-management-recent-activity-formatter.node.ts
 自动化和人工检查都必须使用隔离测试数据库并保持 `NOTIFICATION_DELIVERY_DISABLED=true`。创建 Composer 必须覆盖 Start/Milestone/Terminal 严格时间顺序、0/200/201 节点、临时与非法节点、Inspector、撤销/重做、Desktop TimeCanvas、移动端纵向编辑，以及 v4 localStorage/IndexedDB 恢复、账号/环境隔离、Web Locks、多标签页离开保护和成功清理。
 
 1. 桌面 `1440x1000` 打开 `/progress/tasks/new`：页面按 Task 信息、TimeCanvas、共享节点导航、节点 Inspector 纵向排列，初始计划只有 Start 和名称为 `Terminal` 的 Terminal；负责人和参与人员分别显示头像胶囊及独立搜索框，不再使用统一人员选择器加角色下拉框；不得出现桌面节点表、节点复制、批量选择/删除、独立校验按钮，也不得查询或展示成员 Planned、Actual、Busy 数据。
-2. 验证 `start`、`relatedTaskId` 和 `templateTaskId` URL 预填不回退。无模板时 Start 为上海时区次日 `09:00`、Terminal 为 Start 后 14 天；模板保留 Milestone 内容、时间和自定义 Terminal 名称。
+2. 验证旧 `start` 参数被忽略并从规范 URL 移除，`relatedTaskId` 和 `templateTaskId` 仍可预填且不回退。无模板时 Start 为上海时区次日 `09:00`、Terminal 为 Start 后 14 天；模板保留 Milestone 内容、时间和自定义 Terminal 名称。
 3. 分别创建含 0、1、200 个 Milestone 的 Task，并通过服务端和数据库验证 Current Plan、严格 sequence、Terminal 名称、创建者 Owner、审计、站内通知和 outbox；201 个 Milestone 必须在客户端与服务端被拒绝。创建失败保留草稿和幂等键，成功清理本地草稿并跳转工作台。
 4. 构造 Start=首个 Milestone、相邻 Milestone 同刻、最后 Milestone=Terminal 和任意逆序输入；新建、Draft 替换、模板副本与 Revision 目标均不得保存。已有只读/Active 旧同刻计划仍可打开并显示兼容提示，不得被自动改时。
 5. 验证 Terminal 名称 trim 后空白、200/201 字符边界；自定义名称在创建、Draft 编辑、Revision、模板复制、查询、工作台、版本差异、审计和快照中保持一致。默认 `Terminal` 不改变既有 canonical hash，自定义名称及其变更必须改变 hash。
@@ -286,7 +286,7 @@ npx tsx --test tests/project-management-recent-activity-formatter.node.ts
 10. 拖动及键盘移动 Start、Milestone、Terminal，分别验证小时档 30 分钟、日/周档 1 天、月档 7 天吸附和上海时区增量。拖动预览期间节点前后阶段块必须同步伸缩，Milestone 穿越时按预览时间重排连接；Start、Terminal 与 Milestone 的严格边界必须在预览阶段钳制，锚点不得先越界再于松手后回弹。无合法吸附位置时保持原值并提示放大画布或使用 Inspector。
 11. Inspector 不显示保存/取消；Start、Terminal、Milestone 输入实时同步到画布、节点导航和自动校验。清空或输入同刻/越界时间时，字段与问题摘要显示错误而画布保留最后合法位置；同一节点连续修改多个字段只需一次撤销即可整体恢复。
 12. Milestone 只能在节点详情中单独删除；临时节点切换后保留并可显式删除，Start/Terminal 永远不可删除。页面不得出现节点复制、勾选或批量删除入口。
-13. 刷新页面后恢复 v4 临时节点、最后合法画布位置与选中节点，并验证 v4 Inspector 工作副本转换为实时临时节点。v1/v2 草稿缺少 Terminal 名称时迁移为 `Terminal`，零 Milestone 可恢复，同刻时间保持原值并阻止提交；包含已退役 Tag 契约的 v3 草稿按不兼容草稿处理，可导出但不恢复。另用 200 个 Milestone、每个四项 2,000 字符且包含 JSON 转义字符的极限草稿验证 IndexedDB 正文、`localStorage` 指针、刷新往返、两个同账号标签页并发“保存并离开”、立即“放弃并离开”不会被待触发防抖重新写回，以及创建成功后的双存储清理。
+13. 刷新页面后恢复 v4 临时节点、最后合法画布位置与选中节点，并验证 v4 Inspector 工作副本转换为实时临时节点。预置 v1/v2/v3 localStorage 与 IndexedDB 数据后不得出现恢复或导出提示，tombstone 最终删除旧数据；当前 v4 草稿仍完整恢复。另用 200 个 Milestone、每个四项 2,000 字符且包含 JSON 转义字符的极限草稿验证 IndexedDB 正文、`localStorage` 指针、刷新往返、两个同账号标签页并发“保存并离开”、立即“放弃并离开”不会被待触发防抖重新写回，以及创建成功后的双存储清理。
 14. 创建零 Milestone Task 后执行激活：Task 和 Terminal 均为 `ACTIVE`，`activeMilestoneNodeId=null`；工作台和列表使用 Terminal 名称/日期，审计和激活通知使用 Terminal 名称，不显示“当前没有 Active Milestone”。结束确认仍走现有事务、审计和 `project-management` outbox。
 15. Task Composer 与 Task Workbench 的共享节点导航验证节点符号、选中/完成/错误态和上海日期；使用长 Task/Terminal/Milestone/成员名称、长错误、慢提交、空列表和 200 节点验证桌面无页面级横向滚动、无 Next.js overlay、无未捕获浏览器错误，Inspector 和节点导航滚动/换行可用。
 16. Pixel 5 上共享节点导航改为纵向；仍能创建零 Milestone Task、编辑 Terminal 名称、修正严格时间错误，并验证无横向滚动、重复焦点、服务器错误或未捕获浏览器错误。
@@ -324,7 +324,7 @@ npx tsx --test tests/project-management-recent-activity-formatter.node.ts
 
 ## 管理员面板测试
 
-1. 统一超级管理员进入 `/admin/accounts`，应看到「车组职责配置」「技术组职责配置」「用户与角色」三块；非超管和项目管理员访问页面或直接调用账号搜索/角色 Server Action 均被拒绝。`/admin/roles` 应服务端重定向到新地址。
+1. 统一超级管理员进入 `/admin/accounts`，应看到「车组职责配置」「技术组职责配置」「用户与角色」三块；非超管和项目管理员访问页面或直接调用账号搜索/角色 Server Action 均被拒绝。`/admin/roles` 必须返回 404。
 2. 在车组和技术组职责矩阵中搜索账号并就地添加/移除四类报销角色；指导老师支持保存和清除审批邮箱，邮箱规范化结果应立即回显并写入安全审计。Desktop 使用职责表格，Pixel 5 使用纵向职责卡片，两种视口均不得横向滚动。
 3. 在「用户与角色」表单中搜索统一账号，授予项目管理员或带范围的报销角色；重复授予显示角色已存在。授予超级管理员以及撤销超级管理员/项目管理员必须确认，报销角色从标签直接移除并显示结果 toast。
 4. 按姓名、角色、车组和技术组筛选账号，验证 30 条服务端分页；空结果显示中文空状态。账号表/移动卡片应展示当前项目与报销角色，并可打开「查看记录」弹窗查看飞书身份、角色历史和安全审计。
@@ -472,7 +472,7 @@ sudo systemctl status pnx-management-cron
 - server service 启动前执行数据库部署命令。
 - cron service 只启动一个实例。
 - reinstall/uninstall 脚本不会删除数据库和上传附件。
-- 重启服务后 `/`、`/feedback`、`/progress`、`/progress/tasks`、`/progress/resources` 和 `/progress/notifications` 可访问；旧 `/progress/task/:id` 正确重定向到 `/progress/tasks/:id`。
+- 重启服务后 `/`、`/feedback`、`/progress`、`/progress/tasks`、`/progress/resources` 和 `/progress/notifications` 可访问；旧 `/progress/task/:id`、`/progress/kanban` 与 `/admin/roles` 返回 404。
 
 ## Subagent 执行提示词
 

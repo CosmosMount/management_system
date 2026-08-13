@@ -42,10 +42,6 @@ import {
   visibleTimeWindow,
   xToTime,
 } from "../components/project-management/time-canvas/time-math";
-import {
-  parseTimeCanvasUrlState,
-  serializeTimeCanvasUrlState,
-} from "../components/project-management/time-canvas/url-state";
 import { timeCanvasDataDtoSchema } from "../lib/project-management/types/time-canvas";
 import { getAdaptiveTimeCanvasBlockInputSchema } from "../lib/project-management/validations/time-canvas";
 import { prisma } from "../lib/prisma";
@@ -440,64 +436,6 @@ test.describe("S3 TimeCanvas pure core", () => {
       4,
     );
     expect([...pointLanes.values()]).toEqual([0, 1, 2, 3, 3, 3, 3, 3, 3, 3]);
-  });
-
-  test("URL adapter bounds range and IDs, restores stable shareable state and rejects malformed input", () => {
-    const ids = Array.from({ length: 52 }, (_, index) => uuid(index + 1));
-    const parsed = parseTimeCanvasUrlState(
-      new URLSearchParams({
-        from: "2026-08-01",
-        to: "2026-08-31",
-        zoom: "day",
-        group: "task",
-        people: ids.join(","),
-        types: "planned,actual",
-        focus: uuid(99),
-      }),
-      RANGE,
-    );
-    expect(parsed.range).toEqual(RANGE);
-    expect(parsed.zoom).toBe("MONTH");
-    expect(parsed.groupBy).toBe("TASK");
-    expect(parsed.personIds).toHaveLength(50);
-    expect(parsed.types).toEqual(["PLANNED", "ACTUAL"]);
-    expect(parsed.issues).toContain("人员筛选最多保留 50 个");
-
-    const { issues: parsedIssues, ...serializable } = parsed;
-    expect(parsedIssues.length).toBeGreaterThan(0);
-    const serialized = serializeTimeCanvasUrlState(serializable);
-    expect(serialized.get("from")).toBe("2026-08-01");
-    expect(serialized.get("to")).toBe("2026-08-31");
-    expect(serialized.get("group")).toBe("task");
-    expect(serialized.get("people")?.split(",")).toHaveLength(50);
-    expect(parseTimeCanvasUrlState(
-      new URLSearchParams({ zoom: "week" }),
-      RANGE,
-    ).zoom).toBe("QUARTER");
-
-    const fallback = parseTimeCanvasUrlState(
-      new URLSearchParams({ from: "2026-08-31", to: "2026-08-01", zoom: "forever" }),
-      RANGE,
-    );
-    expect(fallback.range).toEqual(RANGE);
-    expect(fallback.zoom).toBe("WEEK");
-    expect(fallback.issues).toEqual(
-      expect.arrayContaining([
-        "日期范围无效，已恢复默认范围",
-        "缩放档位无效，已恢复周视图",
-      ]),
-    );
-
-    expect(parseTimeCanvasUrlState(new URLSearchParams(), RANGE).zoom).toBe(
-      "WEEK",
-    );
-
-    const impossibleDate = parseTimeCanvasUrlState(
-      new URLSearchParams({ from: "2026-02-31", to: "2026-03-10" }),
-      RANGE,
-    );
-    expect(impossibleDate.range).toEqual(RANGE);
-    expect(impossibleDate.issues).toContain("日期范围无效，已恢复默认范围");
   });
 
   test("four-mode fixtures cover 200 anchors, 50 rows, dense overlap, long text and empty data", () => {

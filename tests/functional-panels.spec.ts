@@ -60,16 +60,18 @@ test.describe("普通用户主功能面板", () => {
     await expect(page.getByRole("heading", { name: "我的工作" })).toBeVisible();
     await expectHealthyPage(page);
 
-    await page.goto("/progress/task/legacy-task", { waitUntil: "networkidle" });
-    await expect(page).toHaveURL(/\/progress\/tasks\/legacy-task$/);
+    const legacyTaskResponse = await page.goto("/progress/task/legacy-task", { waitUntil: "networkidle" });
+    expect(legacyTaskResponse?.status()).toBe(404);
+    await expect(page).toHaveURL(/\/progress\/task\/legacy-task$/);
     await expect(
       page.getByRole("heading", { name: "页面不存在或无权访问" }),
     ).toBeVisible();
     await expectHealthyPage(page);
 
-    await page.goto("/progress/kanban", { waitUntil: "networkidle" });
-    await expect.poll(() => new URL(page.url()).pathname).toBe("/progress");
-    await expect(page.getByRole("heading", { name: "我的工作" })).toBeVisible();
+    const legacyKanbanResponse = await page.goto("/progress/kanban", { waitUntil: "networkidle" });
+    expect(legacyKanbanResponse?.status()).toBe(404);
+    await expect.poll(() => new URL(page.url()).pathname).toBe("/progress/kanban");
+    await expect(page.getByRole("heading", { name: "页面不存在或无权访问" })).toBeVisible();
     await expectHealthyPage(page);
 
     await page.goto("/progress/projects/legacy-project", {
