@@ -17,8 +17,8 @@ import {
 import type {
   NotificationChannelAdapter,
   NotificationDeliveryTarget,
-} from "@/lib/notification-channels/types";
-import { NonRetryableNotificationError } from "@/lib/notification-channels/types";
+} from "@/lib/notification-channel-adapter";
+import { NonRetryableNotificationError } from "@/lib/notification-channel-adapter";
 
 const appOriginSchema = z.string().nullable().optional();
 const feedbackOutboxPayloadSchema = z.discriminatedUnion("kind", [

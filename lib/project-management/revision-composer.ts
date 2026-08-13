@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import type {
   TaskComposerRevisionAnchor,
   TaskComposerSeed,
-} from "@/components/project-management/task-composer-client";
+} from "@/lib/project-management/composer-contract";
 import { isoToShanghaiDateTimeLocal } from "@/lib/project-management/date-time";
 import type {
   PlanVersionSummary,

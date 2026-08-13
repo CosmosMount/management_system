@@ -41,6 +41,19 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { TEAM_OPTIONS, TECH_GROUP_OPTIONS } from "@/lib/constants";
 import {
+  TASK_COMPOSER_START_ID,
+  type TaskComposerInspectorDraft,
+  type TaskComposerMilestone,
+  type TaskComposerMode,
+  type TaskComposerNodeMeta,
+  type TaskComposerRevisionAnchor,
+  type TaskComposerRevisionContext,
+  type TaskComposerSeed,
+  type TaskComposerValidationIssue as ValidationIssue,
+  type TaskMemberRoleValue,
+  type TaskPriorityValue,
+} from "@/lib/project-management/composer-contract";
+import {
   isoToShanghaiDateTimeLocal,
   shanghaiDateTimeLocalToIso,
 } from "@/lib/project-management/date-time";
@@ -73,108 +86,12 @@ const NO_LEGAL_ANCHOR_MOVE_MESSAGE =
   "当前吸附粒度没有合法位置，节点已保留在原处；请放大画布或使用 Inspector 精调。";
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const taskMemberRoles = ["OWNER", "PARTICIPANT"] as const;
-type TaskMemberRoleValue = (typeof taskMemberRoles)[number];
-type LegacyTaskMemberRoleValue = "LEAD" | "MEMBER" | "REVIEWER" | "VIEWER";
-type TaskPriorityValue = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
-
-export const TASK_COMPOSER_START_ID = "task-composer-start";
-
-export type TaskComposerMilestone = {
-  id: string;
-  goal: string;
-  completionCriteria: string;
-  expectedCompletedAt: string;
-  reviewRequirements: string;
-  businessDescription: string;
-};
-
-export type TaskComposerNodeMeta = {
-  lifecycle: "TEMPORARY" | "ESTABLISHED";
-  lastValidAt: string;
-};
-
-export type TaskComposerRevisionAnchor = {
-  id: string;
-  reason: string;
-  description: string;
-  revisionAt: string;
-  status: string;
-};
-
-export type TaskComposerRevisionContext = {
-  markerId: string;
-  reason: string;
-  description: string;
-  revisionAt: string;
-  reviewRound: number;
-  lockedMilestoneIds: string[];
-  carriedAnchors: TaskComposerRevisionAnchor[];
-};
-
-export type TaskComposerSeed = {
-  draftId: string;
-  title: string;
-  description: string;
-  team: string;
-  techGroup: string;
-  priority: TaskPriorityValue;
-  relatedTaskId: string | null;
-  projectId?: string | null;
-  members: Array<{ personId: string; role: TaskMemberRoleValue }>;
-  plannedStartAt: string;
-  milestones: TaskComposerMilestone[];
-  termination: {
-    id: string;
-    name: string;
-    plannedAt: string;
-    plannedOutcomeCriteria: string;
-    businessDescription: string;
-  };
-  selectedEntityId: string | null;
-  revision?: TaskComposerRevisionContext;
-  /** Composer-only presentation state. It is never included in the server payload. */
-  nodeMeta?: Record<string, TaskComposerNodeMeta>;
-};
-
-export type TaskComposerInspectorDraft =
-  | {
-      kind: "START";
-      entityId: typeof TASK_COMPOSER_START_ID;
-      plannedStartAt: string;
-      returnEntityId: string | null;
-    }
-  | {
-      kind: "MILESTONE";
-      entityId: string;
-      milestone: TaskComposerMilestone;
-      isNew: boolean;
-      returnEntityId: string | null;
-    }
-  | {
-      kind: "TERMINATION";
-      entityId: string;
-      termination: TaskComposerSeed["termination"];
-      returnEntityId: string | null;
-    }
-  | {
-      kind: "REVISION";
-      entityId: string;
-      revision: TaskComposerRevisionAnchor;
-      isCurrent: boolean;
-      returnEntityId: string | null;
-    };
+const taskMemberRoles: readonly TaskMemberRoleValue[] = ["OWNER", "PARTICIPANT"];
 
 type ComposerHistory = {
   past: TaskComposerSeed[];
   present: TaskComposerSeed;
   future: TaskComposerSeed[];
-};
-
-export type ValidationIssue = {
-  key: string;
-  message: string;
-  entityId?: string;
 };
 
 type LocalTaskDraft = {
@@ -216,38 +133,6 @@ type TaskActionError = {
   message: string;
   fieldErrors?: Record<string, string[]>;
 };
-
-export type TaskComposerMode =
-  | { kind: "CREATE" }
-  | {
-      kind: "EDIT_DRAFT";
-      taskId: string;
-      planVersionId: string;
-      expectedLockVersion: number;
-      existingNodeIds: string[];
-      canManageMembers: boolean;
-      preservedLegacyMembers?: Array<{
-        personId: string;
-        role: LegacyTaskMemberRoleValue;
-      }>;
-    }
-  | {
-      kind: "CREATE_REVISION";
-      taskId: string;
-      basePlanVersionId: string;
-      baseVersionNo: number;
-      baseTaskLockVersion: number;
-    }
-  | {
-      kind: "RESUBMIT_REVISION";
-      taskId: string;
-      revisionNodeId: string;
-      basePlanVersionId: string;
-      baseVersionNo: number;
-      baseTaskLockVersion: number;
-      targetVersionNo: number;
-      expectedTargetPlanUpdatedAt: string;
-    };
 
 const CREATE_TASK_COMPOSER_MODE: TaskComposerMode = { kind: "CREATE" };
 

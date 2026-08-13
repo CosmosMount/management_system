@@ -224,25 +224,3 @@ export async function getBudgetGroupForOrder(
     poolIds: pools.map((pool) => pool.id),
   };
 }
-
-/** @deprecated 使用 getBudgetGroupForOrder；同组别可能有多个项目 */
-export async function getBudgetPoolForOrder(
-  team: string,
-  techGroup: string,
-  period?: string,
-): Promise<BudgetPoolView | null> {
-  const group = await getBudgetGroupForOrder(team, techGroup, period);
-  if (!group || group.poolIds.length === 0) return null;
-  return {
-    id: group.poolIds[0]!,
-    description: group.description,
-    team: group.team,
-    techGroup: group.techGroup,
-    label: group.label,
-    period: group.period,
-    budgetAmount: group.budgetAmount,
-    usedAmount: group.usedAmount,
-    usagePercent: group.usagePercent,
-    lastAlertThreshold: group.lastAlertThreshold,
-  };
-}

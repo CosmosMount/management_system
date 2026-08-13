@@ -5,10 +5,10 @@ import { auth } from "@/lib/auth";
 import { OrderStatus } from "@prisma/client";
 import { mapOrderItems } from "@/lib/feishu";
 import {
-  drainNotificationOutboxSoon,
   enqueueOrderNotificationTx,
   orderNotificationEventKey,
-} from "@/lib/notification-outbox";
+} from "@/lib/notification-producers/procurement";
+import { drainNotificationOutboxSoon } from "@/lib/notification-delivery";
 import { refreshProcurementFeishuCards } from "@/lib/feishu-procurement-card-sync";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";

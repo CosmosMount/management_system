@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-mkdir -p /app/storage/uploads /app/public/uploads
+mkdir -p /app/storage/uploads
 
 if [ -z "$DATABASE_URL" ]; then
   echo "[entrypoint] ERROR: DATABASE_URL is required (PostgreSQL connection string)"

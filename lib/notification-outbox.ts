@@ -4,31 +4,15 @@ import type {
   NotificationOutboxStatus,
   Prisma,
 } from "@prisma/client";
-import { resolveProcurementBotKind } from "@/lib/feishu-bot-routing";
-import type { FeishuBotKind } from "@/lib/feishu-app-config";
-import type { BudgetThresholdPayload, OrderCardPayload } from "@/lib/feishu";
-import type {
-  FeedbackCreatedNotificationPayload,
-  FeedbackReplyNotificationPayload,
-  FeedbackStatusNotificationPayload,
-} from "@/lib/feishu-feedback";
-import type { NotificationContext } from "@/lib/app-origin";
-import { getNotificationChannelAdapter } from "@/lib/notification-channels";
 import {
   isCanceledNotificationError,
   isNonRetryableNotificationError,
-} from "@/lib/notification-channels/types";
-import type { FeedbackOutboxPayload } from "@/lib/notification-channels/feedback";
-import type {
-  OrderOutboxPayload,
-  TeacherReviewEmailOutboxPayload,
-} from "@/lib/notification-contracts/procurement";
+  type NotificationChannelResolver,
+} from "@/lib/notification-channel-adapter";
 import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 
 const MAX_ATTEMPTS = 8;
-const NOTIFICATION_DELIVERY_DISABLED =
-  process.env.NOTIFICATION_DELIVERY_DISABLED === "true";
 const DEFAULT_RECIPIENT_LOCK_MS = 2 * 60 * 1000;
 const FROZEN_NEXT_RUN_AT = new Date("9999-12-31T00:00:00.000Z");
 
@@ -144,9 +128,7 @@ export type EnqueueNotificationResult = {
   created: boolean;
 };
 
-type OrderNotificationInput = OrderCardPayload & {
-  statusEnteredAt?: Date;
-};
+export type NotificationBotKind = "notification" | "approval";
 
 export async function enqueueNotification({
   eventKey,
@@ -157,7 +139,7 @@ export async function enqueueNotification({
 }: {
   eventKey: string;
   channel: string;
-  botKind?: FeishuBotKind;
+  botKind?: NotificationBotKind;
   type: string;
   payload: unknown;
 }): Promise<EnqueueNotificationResult> {
@@ -192,7 +174,7 @@ export async function enqueueNotificationTx(
   }: {
     eventKey: string;
     channel: string;
-    botKind?: FeishuBotKind;
+    botKind?: NotificationBotKind;
     type: string;
     payload: unknown;
   },
@@ -316,221 +298,17 @@ export async function resetNotificationOutboxForRetry({
   });
 }
 
-export function orderNotificationEventKey(order: {
-  id: string;
-  status: string;
-  statusEnteredAt: Date;
-}): string {
-  return `procurement:order:${order.id}:${order.status}:${order.statusEnteredAt.toISOString()}`;
-}
-
-export async function enqueueOrderNotificationTx(
-  tx: Prisma.TransactionClient,
-  eventKey: string,
-  order: OrderNotificationInput,
-  context?: NotificationContext,
-) {
-  const result = await enqueueNotificationTx(tx, {
-    eventKey,
-    channel: "procurement",
-    botKind: resolveProcurementBotKind(order.status),
-    type: "order",
-    payload: {
-      kind: "order",
-      order,
-      appOrigin: context?.appOrigin ?? null,
-    } satisfies OrderOutboxPayload,
-  });
-  if (order.status === "TEACHER_REVIEW") {
-    if (!order.statusEnteredAt) {
-      throw new Error("老师审核邮件缺少审批轮次时间");
-    }
-    await enqueueNotificationTx(tx, {
-      eventKey: `${eventKey}:teacher_email`,
-      channel: "email",
-      type: "teacher_review_email",
-      payload: {
-        kind: "teacher_review_email",
-        order: { ...order, status: "TEACHER_REVIEW" },
-        expectedStatusEnteredAt: order.statusEnteredAt.toISOString(),
-        appOrigin: context?.appOrigin ?? null,
-      } satisfies TeacherReviewEmailOutboxPayload,
-    });
-  }
-  return result;
-}
-
-export async function enqueueProcurementRejectedNotificationTx(
-  tx: Prisma.TransactionClient,
-  eventKey: string,
-  order: OrderCardPayload,
-  reason: string,
-  rejectedByName: string,
-  context?: NotificationContext,
-) {
-  return enqueueNotificationTx(tx, {
-    eventKey,
-    channel: "procurement",
-    botKind: "notification",
-    type: "procurement_rejected",
-    payload: {
-      kind: "procurement_rejected",
-      order,
-      reason,
-      rejectedByName,
-      appOrigin: context?.appOrigin ?? null,
-    } satisfies OrderOutboxPayload,
-  });
-}
-
-export async function enqueueApplicantResubmitNotificationTx(
-  tx: Prisma.TransactionClient,
-  eventKey: string,
-  order: OrderCardPayload,
-  reason: string,
-  financeName: string,
-  context?: NotificationContext,
-) {
-  return enqueueNotificationTx(tx, {
-    eventKey,
-    channel: "procurement",
-    botKind: "notification",
-    type: "applicant_resubmit",
-    payload: {
-      kind: "applicant_resubmit",
-      order,
-      reason,
-      financeName,
-      appOrigin: context?.appOrigin ?? null,
-    } satisfies OrderOutboxPayload,
-  });
-}
-
-export async function enqueueProcurementReturnDraftNotificationTx(
-  tx: Prisma.TransactionClient,
-  eventKey: string,
-  order: OrderCardPayload,
-  reason: string,
-  returnedByName: string,
-  context?: NotificationContext,
-) {
-  return enqueueNotificationTx(tx, {
-    eventKey,
-    channel: "procurement",
-    botKind: "notification",
-    type: "procurement_return_draft",
-    payload: {
-      kind: "procurement_return_draft",
-      order,
-      reason,
-      returnedByName,
-      appOrigin: context?.appOrigin ?? null,
-    } satisfies OrderOutboxPayload,
-  });
-}
-
-export async function enqueueBudgetThresholdNotification(
-  eventKey: string,
-  budget: BudgetThresholdPayload,
-  context?: NotificationContext,
-) {
-  return enqueueNotification({
-    eventKey,
-    channel: "procurement",
-    botKind: "notification",
-    type: "budget_threshold",
-    payload: {
-      kind: "budget_threshold",
-      budget,
-      appOrigin: context?.appOrigin ?? null,
-    } satisfies OrderOutboxPayload,
-  });
-}
-
-export async function enqueueFeedbackCreatedNotificationTx(
-  tx: Prisma.TransactionClient,
-  eventKey: string,
-  payload: FeedbackCreatedNotificationPayload,
-  context?: NotificationContext,
-) {
-  return enqueueNotificationTx(tx, {
-    eventKey,
-    channel: "feedback",
-    botKind: "notification",
-    type: "created",
-    payload: {
-      kind: "created",
-      payload,
-      appOrigin: context?.appOrigin ?? null,
-    } satisfies FeedbackOutboxPayload,
-  });
-}
-
-export async function enqueueFeedbackReplyNotificationTx(
-  tx: Prisma.TransactionClient,
-  eventKey: string,
-  payload: FeedbackReplyNotificationPayload,
-  context?: NotificationContext,
-) {
-  if (!hasFeedbackReplyRecipient(payload)) return { created: false };
-  return enqueueNotificationTx(tx, {
-    eventKey,
-    channel: "feedback",
-    botKind: "notification",
-    type: "reply",
-    payload: {
-      kind: "reply",
-      payload,
-      appOrigin: context?.appOrigin ?? null,
-    } satisfies FeedbackOutboxPayload,
-  });
-}
-
-function hasFeedbackReplyRecipient(
-  payload: FeedbackReplyNotificationPayload,
-): boolean {
-  return (
-    !payload.actorIsAdmin ||
-    (payload.recipientOpenIds?.some((openId) => openId.trim().length > 0) ?? false)
-  );
-}
-
-export async function enqueueFeedbackStatusNotificationTx(
-  tx: Prisma.TransactionClient,
-  eventKey: string,
-  payload: FeedbackStatusNotificationPayload,
-  context?: NotificationContext,
-) {
-  return enqueueNotificationTx(tx, {
-    eventKey,
-    channel: "feedback",
-    botKind: "notification",
-    type: "status",
-    payload: {
-      kind: "status",
-      payload,
-      appOrigin: context?.appOrigin ?? null,
-    } satisfies FeedbackOutboxPayload,
-  });
-}
-
-export function drainNotificationOutboxSoon(limit = 5) {
-  if (NOTIFICATION_DELIVERY_DISABLED) return;
-  void drainNotificationOutbox(limit).catch((err) => {
-    logger.error("notification.outbox.drain.failed", {
-      module: "notification",
-      action: "drainNotificationOutboxSoon",
-      result: "failure",
-      error: err,
-    });
-  });
-}
-
-export async function drainNotificationOutbox(
+export async function drainNotificationOutboxWithResolver(
+  resolveChannel: NotificationChannelResolver,
   limit = 20,
   options: DrainNotificationOutboxOptions = {},
 ): Promise<number> {
-  if (NOTIFICATION_DELIVERY_DISABLED && !options.ignoreDeliveryDisabled) return 0;
+  if (
+    process.env.NOTIFICATION_DELIVERY_DISABLED === "true" &&
+    !options.ignoreDeliveryDisabled
+  ) {
+    return 0;
+  }
   const now = new Date();
   const rows = await prisma.notificationOutbox.findMany({
     where: {
@@ -570,13 +348,17 @@ export async function drainNotificationOutbox(
     if (claimed.count !== 1) continue;
 
     try {
-      const recipientResult = await sendOutboxNotificationByRecipient(row, claim);
+      const recipientResult = await sendOutboxNotificationByRecipient(
+        row,
+        claim,
+        resolveChannel,
+      );
       if (recipientResult.supported) {
         if (recipientResult.completed) sent++;
       } else {
         await withClaimHeartbeat(
           () => renewOutboxClaim(row.id, claim),
-          () => sendOutboxNotification(row),
+          () => sendOutboxNotification(row, resolveChannel),
         );
         const markedSent = await prisma.notificationOutbox.updateMany({
           where: {
@@ -622,8 +404,9 @@ export async function drainNotificationOutbox(
 async function sendOutboxNotificationByRecipient(
   row: NotificationOutbox,
   claim: DeliveryClaim,
+  resolveChannel: NotificationChannelResolver,
 ): Promise<{ supported: true; completed: boolean } | { supported: false }> {
-  const adapter = getNotificationChannelAdapter(row.channel);
+  const adapter = resolveChannel(row.channel);
   const plan = await adapter.resolveRecipientPlan(row);
   if (!plan.supported) return { supported: false };
   if (!(await renewOutboxClaim(row.id, claim))) {
@@ -669,7 +452,7 @@ async function sendOutboxNotificationByRecipient(
   });
 
   for (const recipient of recipients) {
-    await sendOutboxRecipient(row, recipient, claim);
+    await sendOutboxRecipient(row, recipient, claim, resolveChannel);
   }
 
   const summary = await updateOutboxStatusFromRecipients(row.id, claim);
@@ -709,6 +492,7 @@ async function sendOutboxRecipient(
   row: NotificationOutbox,
   recipient: NotificationOutboxRecipient,
   outboxClaim: DeliveryClaim,
+  resolveChannel: NotificationChannelResolver,
 ) {
   if (!(await renewOutboxClaim(row.id, outboxClaim))) return;
   const lockedUntil = nextClaimExpiry();
@@ -745,7 +529,7 @@ async function sendOutboxRecipient(
           claim,
         ),
       () =>
-        getNotificationChannelAdapter(row.channel).sendToRecipient(
+        resolveChannel(row.channel).sendToRecipient(
           row,
           recipient.openId,
         ),
@@ -1054,8 +838,11 @@ async function updateOutboxStatusFromRecipients(
   return { completed: false };
 }
 
-async function sendOutboxNotification(row: NotificationOutbox) {
-  await getNotificationChannelAdapter(row.channel).sendComposite(row);
+async function sendOutboxNotification(
+  row: NotificationOutbox,
+  resolveChannel: NotificationChannelResolver,
+) {
+  await resolveChannel(row.channel).sendComposite(row);
 }
 
 function nextRetryAt(attempts: number): Date {

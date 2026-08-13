@@ -1,10 +1,10 @@
 import { OrderStatus } from "@prisma/client";
 import { mapOrderItems } from "@/lib/feishu";
 import {
-  drainNotificationOutboxSoon,
   enqueueProcurementRejectedNotificationTx,
   enqueueProcurementReturnDraftNotificationTx,
-} from "@/lib/notification-outbox";
+} from "@/lib/notification-producers/procurement";
+import { drainNotificationOutboxSoon } from "@/lib/notification-delivery";
 import { getDefaultNotificationContext } from "@/lib/request-origin";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";

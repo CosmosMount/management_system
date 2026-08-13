@@ -5,9 +5,9 @@ import {
   listBudgetPoolViews,
 } from "@/lib/procurement-budget";
 import {
-  drainNotificationOutboxSoon,
   enqueueBudgetThresholdNotification,
-} from "@/lib/notification-outbox";
+} from "@/lib/notification-producers/procurement";
+import { drainNotificationOutboxSoon } from "@/lib/notification-delivery";
 import { prisma } from "@/lib/prisma";
 import { currentBudgetPeriod } from "@/lib/procurement-budget-period";
 import type { NotificationContext } from "@/lib/app-origin";

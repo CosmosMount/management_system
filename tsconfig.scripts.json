@@ -17,7 +17,6 @@
     ".tmp",
     "test-results",
     "playwright-report",
-    "public/uploads",
     "storage/uploads"
   ]
 }

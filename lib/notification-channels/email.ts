@@ -9,7 +9,7 @@ import {
   CanceledNotificationError,
   NonRetryableNotificationError,
   type NotificationChannelAdapter,
-} from "@/lib/notification-channels/types";
+} from "@/lib/notification-channel-adapter";
 import { prisma } from "@/lib/prisma";
 
 const obsoleteTeacherReviewReason = "订单已离开老师审核，取消过期邮件通知";

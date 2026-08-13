@@ -24,30 +24,6 @@ export function formatOrderItemsPlainList(
   return ["**采购明细**", ...lines].join("\n");
 }
 
-/** @deprecated CardKit 请使用 buildOrderItemsTableElement */
-export function formatOrderItemsMarkdownTable(
-  items?: OrderItemSummary[],
-): string {
-  if (!items || items.length === 0) return "";
-
-  const visible = items.slice(0, MAX_TABLE_ROWS);
-  const rows = visible.map((item) => {
-    const subtotal = item.quantity * item.unitPrice;
-    return `| ${escapeMdCell(item.name)} | ${item.quantity} | ¥${item.unitPrice.toFixed(2)} | ¥${subtotal.toFixed(2)} |`;
-  });
-
-  if (items.length > MAX_TABLE_ROWS) {
-    rows.push(`| … | … | … | 共 ${items.length} 项 |`);
-  }
-
-  return [
-    "**采购明细**",
-    "| 名称 | 数量 | 单价 | 小计 |",
-    "| --- | ---: | ---: | ---: |",
-    ...rows,
-  ].join("\n");
-}
-
 /** CardKit JSON 2.0 原生表格组件 */
 export function buildOrderItemsTableElement(
   items?: OrderItemSummary[],

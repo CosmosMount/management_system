@@ -51,8 +51,6 @@ data/
 .vercel
 
 # uploads
-/public/uploads/*
-!/public/uploads/.gitkeep
 /storage/uploads/*
 !/storage/uploads/.gitkeep
 

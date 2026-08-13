@@ -1,10 +1,8 @@
 import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { normalizeEmailAddress, sendEmail } from "../lib/email";
-import {
-  drainNotificationOutbox,
-  enqueueNotification,
-} from "../lib/notification-outbox";
+import { drainNotificationOutbox } from "../lib/notification-delivery";
+import { enqueueNotification } from "../lib/notification-outbox";
 import { buildTeacherReviewEmailContent } from "../lib/procurement-teacher-email";
 import { prisma } from "../lib/prisma";
 import { resolveFeishuIdentityForUser } from "../lib/project-management/identity";

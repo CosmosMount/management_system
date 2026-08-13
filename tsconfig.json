@@ -9,6 +9,8 @@
     "allowJs": true,
     "skipLibCheck": true,
     "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "noEmit": true,
     "esModuleInterop": true,
     "module": "esnext",
@@ -45,7 +47,6 @@
     ".tmp",
     "test-results",
     "playwright-report",
-    "public/uploads",
     "storage/uploads"
   ]
 }

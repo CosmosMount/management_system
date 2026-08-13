@@ -27,11 +27,11 @@ import type {
   TaskComposerInspectorDraft,
   TaskComposerMilestone,
   TaskComposerSeed,
-  ValidationIssue,
-} from "@/components/project-management/task-composer-client";
+  TaskComposerValidationIssue as ValidationIssue,
+} from "@/lib/project-management/composer-contract";
+import { TASK_COMPOSER_START_ID } from "@/lib/project-management/composer-contract";
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
-const TASK_COMPOSER_START_ID = "task-composer-start";
 const PLAN_ROW_ID = "task-composer-plan-row";
 const phaseTones: TimeCanvasTone[] = [
   "BLUE",

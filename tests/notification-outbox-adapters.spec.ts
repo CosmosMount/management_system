@@ -1,8 +1,6 @@
 import { expect, test } from "@playwright/test";
-import {
-  drainNotificationOutbox,
-  enqueueNotification,
-} from "../lib/notification-outbox";
+import { drainNotificationOutbox } from "../lib/notification-delivery";
+import { enqueueNotification } from "../lib/notification-outbox";
 import { getGlobalSuperAdministratorOpenIds } from "../lib/account-authorization";
 import { feedbackNotificationChannel } from "../lib/notification-channels/feedback";
 import { resolveFeishuIdentityForUser } from "../lib/project-management/identity";

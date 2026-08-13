@@ -13,11 +13,11 @@ import {
 } from "@/lib/file-upload";
 import { cleanupUploadPaths } from "@/lib/upload-cleanup";
 import {
-  drainNotificationOutboxSoon,
   enqueueFeedbackCreatedNotificationTx,
   enqueueFeedbackReplyNotificationTx,
   enqueueFeedbackStatusNotificationTx,
-} from "@/lib/notification-outbox";
+} from "@/lib/notification-producers/feedback";
+import { drainNotificationOutboxSoon } from "@/lib/notification-delivery";
 import { isSuperAdmin } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";

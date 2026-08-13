@@ -14,8 +14,8 @@
 ```
 
 - `NotificationOutbox` 表示业务事件，`NotificationOutboxRecipient` 表示单个收件人的投递状态。成功收件人不会因其他人失败而重复发送。
-- `lib/notification-outbox.ts` 只负责入队、claim、按 channel 调度、重试和状态更新，不解析采购或反馈 payload，也不查询业务角色。
-- `lib/notification-channels/types.ts` 定义 adapter 契约；`procurement.ts`、`feedback.ts`、`project-management.ts` 与 `email.ts` 分别校验持久化 payload、`type`、`botKind`，计算并去重收件人、构造完整消息和声明消息用途。老师审核邮件使用独立 `channel=email` 逐收件人投递，不再用预写 `SENT` 的哨兵代替真实结果。
+- `lib/notification-outbox.ts` 只负责通用入队、claim、重试、逐收件人协调和状态更新，不解析采购或反馈 payload，也不查询业务角色。`lib/notification-delivery.ts` 是投递组合入口，把通用 outbox 与 channel registry 连接起来。
+- `lib/notification-channel-adapter.ts` 定义 adapter 契约，`lib/notification-channel-registry.ts` 只注册明确列出的 adapter；`procurement.ts`、`feedback.ts`、`project-management.ts` 与 `email.ts` 分别校验持久化 payload、`type`、`botKind`，计算并去重收件人、构造完整消息和声明消息用途。采购与反馈业务入队 helper 分别位于 `lib/notification-producers/`，不进入通用 outbox 核心。老师审核邮件使用独立 `channel=email` 逐收件人投递，不再用预写 `SENT` 的哨兵代替真实结果。
 - `lib/feishu-message.ts` 是飞书 IM 私信统一传输层，导出 `FeishuMessage`、`FeishuMessagePurpose`、`FeishuSendResult` 和 `sendFeishuDirectMessage()`。它不理解业务状态或业务角色。
 - 采购群 Webhook 由独立模块发送，不接入私信接口。SMTP 老师邮件也不属于飞书传输层。
 - 采购 CardKit 快照、卡片 sequence 和后续更新仍由采购领域维护；统一传输层负责创建并发送卡片，成功结果返回 `cardId`。

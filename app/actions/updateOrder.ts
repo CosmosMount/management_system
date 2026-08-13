@@ -14,7 +14,7 @@ import {
   enqueueProcurementSubmitNotificationTx,
   runProcurementBudgetAlertSideEffects,
 } from "@/lib/procurement-order-side-effects";
-import { drainNotificationOutboxSoon } from "@/lib/notification-outbox";
+import { drainNotificationOutboxSoon } from "@/lib/notification-delivery";
 import { getNotificationContext } from "@/lib/request-origin";
 import { revalidateProcurement } from "@/lib/revalidate";
 import { requireInitiatorSignature } from "@/lib/user-signature";

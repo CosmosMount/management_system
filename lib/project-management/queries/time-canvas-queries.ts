@@ -23,7 +23,7 @@ import {
   contentTimeBounds,
   floorShanghaiDay,
   padShanghaiCalendarRange,
-} from "@/components/project-management/time-canvas/time-math";
+} from "@/lib/project-management/time-canvas/time-math";
 import {
   isTaskCreatableForSegment,
   TASK_SEGMENT_CREATABLE_STATUSES,

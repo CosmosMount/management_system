@@ -27,8 +27,8 @@ import {
 import type {
   NotificationChannelAdapter,
   NotificationDeliveryTarget,
-} from "@/lib/notification-channels/types";
-import { NonRetryableNotificationError } from "@/lib/notification-channels/types";
+} from "@/lib/notification-channel-adapter";
+import { NonRetryableNotificationError } from "@/lib/notification-channel-adapter";
 import type { FeishuSendResult } from "@/lib/feishu-message";
 
 function parseRow(row: NotificationOutbox): {

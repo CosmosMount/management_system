@@ -2,10 +2,12 @@ import { randomUUID } from "node:crypto";
 import { notFound, redirect } from "next/navigation";
 import { PageCommandBar } from "@/components/project-management/shell/page-command-bar";
 import {
-  TASK_COMPOSER_START_ID,
   TaskComposerClient,
-  type TaskComposerSeed,
 } from "@/components/project-management/task-composer-client";
+import {
+  TASK_COMPOSER_START_ID,
+  type TaskComposerSeed,
+} from "@/lib/project-management/composer-contract";
 import { toProjectManagementServiceError } from "@/lib/project-management/application/errors";
 import { isoToShanghaiDateTimeLocal } from "@/lib/project-management/date-time";
 import {

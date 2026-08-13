@@ -5,7 +5,7 @@ import { sendFeishuDailySummary } from "../lib/feishu";
 import { runProcurementStaleReminders } from "../lib/procurement-reminders";
 import { runProcurementBudgetAlerts } from "../lib/procurement-budget-alerts";
 import { syncFeishuContactUsers } from "../lib/feishu-user-sync";
-import { drainNotificationOutbox } from "../lib/notification-outbox";
+import { drainNotificationOutbox } from "../lib/notification-delivery";
 import {
   runLockedProjectManagementDaily,
   runSegmentTransitionCron,

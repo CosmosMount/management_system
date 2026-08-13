@@ -4,11 +4,11 @@ import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { mapOrderItems } from "@/lib/feishu";
 import {
-  drainNotificationOutboxSoon,
   enqueueApplicantResubmitNotificationTx,
   enqueueProcurementRejectedNotificationTx,
   enqueueProcurementReturnDraftNotificationTx,
-} from "@/lib/notification-outbox";
+} from "@/lib/notification-producers/procurement";
+import { drainNotificationOutboxSoon } from "@/lib/notification-delivery";
 import { refreshProcurementFeishuCards } from "@/lib/feishu-procurement-card-sync";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";

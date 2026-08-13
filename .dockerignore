@@ -7,8 +7,6 @@ node_modules
 !.env.example
 dev.db
 *.db-journal
-public/uploads/*
-!public/uploads/.gitkeep
 .cursor
 coverage
 *.md

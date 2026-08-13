@@ -5,7 +5,7 @@ import { approveProcurementByOpenId } from "../lib/procurement-approve-by-open-i
 import {
   enqueueOrderNotificationTx,
   orderNotificationEventKey,
-} from "../lib/notification-outbox";
+} from "../lib/notification-producers/procurement";
 import { prisma } from "../lib/prisma";
 import { resolveFeishuIdentityForUser } from "../lib/project-management/identity";
 import {

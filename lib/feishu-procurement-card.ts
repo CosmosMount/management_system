@@ -474,19 +474,6 @@ export function buildProcurementWebhookCard(
   };
 }
 
-/** @deprecated 使用 buildProcurementCardKitCard 或 buildProcurementWebhookCard */
-export function buildProcurementNotificationCard(
-  order: OrderCardPayload,
-  options: CardOptions = {},
-) {
-  const readOnly =
-    options.readOnly || !supportsProcurementCardApproval(order.status);
-  if (readOnly) {
-    return buildProcurementWebhookCard(order, options);
-  }
-  return buildProcurementCardKitCard(order, options);
-}
-
 export function extractRejectReasonFromForm(
   formValue?: Record<string, unknown>,
 ): string {

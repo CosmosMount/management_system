@@ -3,7 +3,7 @@ import { mapOrderItems } from "@/lib/feishu";
 import {
   enqueueOrderNotificationTx,
   orderNotificationEventKey,
-} from "@/lib/notification-outbox";
+} from "@/lib/notification-producers/procurement";
 import { checkBudgetAlertsForOrder } from "@/lib/procurement-budget-alerts";
 import { getNotificationContext } from "@/lib/request-origin";
 import { logger } from "@/lib/logger";

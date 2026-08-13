@@ -126,7 +126,7 @@ await browser.close();
 npm run check
 ```
 
-`npm run check` 会依次执行 Prisma validate、Prisma generate + TypeScript、脚本 TypeScript、全量 ESLint（含 Playwright tests）和 `git diff --check`。数据库或生产构建相关改动再额外执行：
+`npm run check` 会依次执行 Prisma validate、Prisma generate + TypeScript（含 `noUnusedLocals/noUnusedParameters`）、脚本 TypeScript、源码依赖门禁、全量 ESLint（含 Playwright tests）和 `git diff --check`。源码依赖门禁也可单独运行 `npm run check:dependencies`；它会拒绝 `components/`/`lib/` 中没有已解释入口的模块、项目管理服务端反向依赖客户端、outbox 核心依赖业务实现，以及浏览器安全契约导入 Prisma/Node/server-only 实现。数据库或生产构建相关改动再额外执行：
 
 ```bash
 DATABASE_URL="postgresql://..." npm run db:deploy

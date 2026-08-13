@@ -5,8 +5,10 @@ import { createAsyncOperationGeneration } from "../lib/async-operation-generatio
 import { parseBudgetPoolsFromBuffer } from "../lib/import-procurement-budget";
 import { persistBudgetPoolImport } from "../lib/procurement-budget-import-service";
 import {
-  enqueueFeedbackReplyNotificationTx,
   enqueueOrderNotificationTx,
+} from "../lib/notification-producers/procurement";
+import { enqueueFeedbackReplyNotificationTx } from "../lib/notification-producers/feedback";
+import {
   reconcileOutboxRecipients,
   resetNotificationOutboxForRetry,
 } from "../lib/notification-outbox";

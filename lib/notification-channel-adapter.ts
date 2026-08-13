@@ -1,5 +1,4 @@
 import type { NotificationOutbox } from "@prisma/client";
-import type { FeishuReceiveIdType } from "@/lib/feishu-recipient";
 
 export type NotificationRecipientPlan =
   | {
@@ -40,7 +39,7 @@ export function isNonRetryableNotificationError(
 
 export type NotificationDeliveryTarget = {
   receiveId: string;
-  receiveIdType: FeishuReceiveIdType;
+  receiveIdType: "open_id" | "union_id";
 } | null;
 
 export interface NotificationChannelAdapter {
@@ -55,3 +54,7 @@ export interface NotificationChannelAdapter {
   sendComposite(row: NotificationOutbox): Promise<void>;
   beforeRecipientDelivery?(row: NotificationOutbox): Promise<void>;
 }
+
+export type NotificationChannelResolver = (
+  channel: string,
+) => NotificationChannelAdapter;

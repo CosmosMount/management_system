@@ -178,24 +178,6 @@ export async function buildStageAwareProcurementCard(
   });
 }
 
-/** @deprecated 使用 buildStageAwareProcurementCard */
-export async function buildProcessedProcurementCard(
-  orderId: string,
-  resultMessage: string,
-  options?: {
-    appOrigin?: string | null;
-    botKind?: FeishuBotKind;
-    headerTemplate?: "blue" | "red" | "orange" | "green";
-    cardStage?: OrderStatus;
-  },
-): Promise<Record<string, unknown> | undefined> {
-  return buildStageAwareProcurementCard(orderId, {
-    ...options,
-    notice: resultMessage,
-    headerTemplate: options?.headerTemplate ?? "green",
-  });
-}
-
 export async function recordProcurementFeishuCard(input: {
   orderId: string;
   openId: string;
