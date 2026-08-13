@@ -144,7 +144,7 @@ DRAFT → MANAGEMENT_REVIEW → TEACHER_REVIEW → PENDING_APPLICANT_DOCS
 
 Project 详情查询在 Project 可见性校验后，按 `DRAFT`、`ACTIVE`、所有终态三个状态组读取每页最多 25 个未删除 Task；组内使用 `updatedAt desc, id asc`，游标同时携带状态组、更新时间和 ID。查询只为当前页加载 Current Plan 的 Start、Milestone、Revision 与 Terminal，服务端序列化后由详情页组装只读 TimeCanvas；客户端不能提交任意 Task ID 扩大查询范围。25 行与每个计划最多 200 个节点共同受现有 5,000 节点上限约束；超限时保留 Project 与 Task 列表、停止向客户端下发节点正文，并在时间线区显示明确错误，不能静默截断。立项轮次和领域审计继续保存，详情 UI 只移除其历史卡片，并用概览上的 `#establishment` 锚点保留待办和通知深链。
 
-P2/P3 已补齐 Task 计划生命周期的服务端闭环，入口位于 `lib/project-management/application/lifecycle-service.ts`、`app/actions/project-management/{tasks,plans,revisions,milestones,terminations}.ts` 和 `lib/project-management/queries/task-queries.ts`：
+P2/P3 已补齐 Task 计划生命周期的服务端闭环。`lib/project-management/application/lifecycle-service.ts` 只保留稳定公共出口，Task 草稿/激活、Revision、Milestone Review 与 Termination 的完整事务分别位于独立命令模块；共享行锁、锁后可见性、Current Plan 读取、节点推进、计划哈希/审计和通知收件人解析位于内部领域模块。外部入口仍为 `app/actions/project-management/{tasks,plans,revisions,milestones,terminations}.ts` 和 `lib/project-management/queries/task-queries.ts`：
 
 - Task 草稿创建在事务中写入 `Task(status=DRAFT)`、初始 `TaskPlanVersion(status=CURRENT, activatedAt=null)`、`0–200` 个有序 Milestone、末尾 Termination、成员、审计、站内通知和 `channel=project-management` outbox；Start 固定由 `plannedStartAt` 表示，Terminal 持久化 trim 后 `1–200` 字符的名称（默认 `Terminal`）。Start、每个 Milestone 与 Terminal 时间必须严格递增，不接受同刻。`TaskPlanVersion.idempotencyKey` 与 `creationRequestHash` 支持同账号请求幂等和 payload 冲突检测。任何已登录并成功解析到统一 `Account/Person` 的账号都可创建，服务端把创建者归一化为 Owner；即使创建者 Person 已停用也保留该自动 Owner，其他新增成员必须是活跃 Person。模板成员只复制 Owner/Participant，人员冲突时 Owner 优先，模板计划继续复制 Terminal 名称并按新时间规则重新校验。
 - `activateTask` 锁定 Task 行，校验 Draft 状态、Owner 权限、`expectedLockVersion`、计划开始时间不晚于事务内服务端激活时间、至少一名 OWNER、合法计划、末尾 Termination 和连续序号后递增 `lockVersion`。该规则只作用于新的 DRAFT → ACTIVE 转换，不追溯历史 Task。存在 Milestone 时把首个 Milestone 置为 `ACTIVE` 并写入 `activeMilestoneNodeId`；零 Milestone 时直接激活 Terminal，`activeMilestoneNodeId` 保持 `null`，审计、工作台和通知以 Terminal 名称表示实际活动节点。
@@ -155,6 +155,7 @@ P2/P3 已补齐 Task 计划生命周期的服务端闭环，入口位于 `lib/pr
 - Termination 确认写入 outcome、reason、summary 和 Task 终态。`SUCCESS` 要求所有前置 Milestone 已完成；`FAILED/CANCELLED/TIMEOUT` 可提前结束但必须填写原因，并取消未完成节点。重复相同确认幂等，不同 outcome 返回状态冲突；存在任一 Milestone/Revision 待审批或防御性多审批冲突时不能结束 Task，且 Terminal 本身不创建审批记录。
 - 查询 facade `getTaskWorkspace`、`getPlanVersion`、`listTaskPlanVersions` 和 `comparePlanVersions` 都通过 `taskReadableWhere(actor)` 限定 `deletedAt=null`；所有已登录统一账号共享读取范围，但删除对象仍不能通过显式 ID 枚举。
 - S2 Task mutation service 保留 Draft metadata/member/plan 三个兼容入口，并新增统一 `updateTaskDraft`；统一入口在一个事务内锁定 Task 与节点关联、刷新操作者权限，复核 DRAFT、初始未激活 v1 Current Plan、`planVersionId`、`expectedLockVersion`、组织范围、关联 Task、可选成员和 Segment 引用约束，再整体写入元数据、可选成员和完整计划，重算 `snapshotHash`，只递增一次 Task `lockVersion` 并追加一条 `pm.task.draft.update` 审计。Participant 请求必须省略 `members`，事务保留权威成员；伪造成员字段由服务端拒绝。该路径不创建站内通知或 outbox。Active 直接更新仍使用既有 metadata/member 两个事务，不改变 Revision。
+- Task mutation 的计划记录/差异审计与 Active 成员通知解析已经独立；默认飞书租户身份选择和 Task 授权资源构造由项目管理共享模块提供。各写操作仍只有原来的一层事务，锁顺序、幂等键、审计与 outbox 原子性不变。
 - Draft 计划整包写入接受 `0–200` 个 Milestone，只接受当前计划已有 `nodeId`；新节点必须使用稳定 `clientKey`，随机或外部 `nodeId` 统一返回 `ASSOCIATION_INVALID`。计划写入的公开时间边界只接受带 `Z`/offset 的 string，内部解析后才使用 `Date`，Start/Milestone/Terminal 必须严格递增。计划审计不复制 goal、criteria、reviewRequirements 或 businessDescription 正文，只记录 before/after snapshot hash、planned start、节点数、Terminal 名称变化，以及有界的 retained/added/removed/reordered ID/type 和字段名变化统计。新 Task、激活、新 Revision 目标及 Revision apply 均严格要求固定的 `plannedStartAt` 和合法 chronology；既有只读或 Active Current Plan 的旧同刻/乱序数据不被迁移自动改写，但新 Draft 保存、模板副本或 Revision 目标必须先修正。Revision 标记时间另行校验为 `[Current Start, Candidate Terminal]`，且不得早于最后完成 Milestone 或上一条已生效 Revision；四类边界均允许相等。
 
 `TerminationNode.name` 是 `VARCHAR(200) NOT NULL DEFAULT 'Terminal'` 的计划版本字段，随创建、Draft 替换、Revision、模板复制、查询 DTO、版本差异和有界审计摘要传播。默认名称为 `Terminal` 时计划快照保持旧 canonical 形式；只有自定义名称进入新增 canonical 键，因此既有默认名称计划的 hash 不会全量失效，自定义名称变化会改变快照 hash。
@@ -172,12 +173,13 @@ P5 Resource Segment 服务端闭环位于 `lib/project-management/application/se
 - Segment 服务支持单条/批量 Planned 创建、Actual 创建、更新、批量移动、拆分、合并、取消、完整确认、部分确认和 Actual 逻辑删除。所有写操作继续在事务内写 `WorkSegmentChange` 和 `DomainAuditEvent`，通过 `expectedUpdatedAt` 执行乐观锁，批量写入保持全成全败。
 - 创建或改变 Task 关联的路径继续使用 Task 行锁，并要求 Segment Person 是目标 Task 的有效 Owner/Participant；新建、批量新建、更新、拆分、合并和确认均复核该成员一致性。状态转换继续按稳定 Segment ID 顺序锁行。Segment 不再保存职责、Task Node 关联或关联复核状态。
 - Segment 校验包括 `endAt > startAt`、单条及 merge 最终结果最长 31 天和 Task 成员关联规则。`completionPercent` 已从写入 validation、service DTO 与普通查询 DTO 退役；数据库历史列仅为兼容既有数据保留，新写入固定为 `NULL`。
+- Segment DTO/审计快照、时间范围与状态规则、定时状态迁移分别位于独立模块；创建/修改、批量移动/取消和确认/来源仍由主服务在单层事务中编排。
 - 所有已登录统一账号可读取全员完整 Planned/Actual Segment 和变更历史。Participant 只能管理自己的 Task 关联 Segment，Owner 可管理该 Task 全部 Segment，全局管理员可管理全部；非成员不能写入已有 Task。无 Task 关联的 Segment 仍由本人管理。停用 Person 的历史 Segment 继续展示，但不能创建新 Segment。状态机、确认生成 Actual、`WorkSegmentSource`、变更历史和审计均保留。多个 Segment 可以时间重叠，服务端不检测、提示、阻止或通知资源冲突。
 - `WorkSegment.allocation`、资源冲突领域模型、扫描器、建议预览、处理 action 和相关 DTO 已删除。旧客户端提交 `allocation` 或 `includeConflicts` 会在 strict Zod 边界返回校验错误。
 
 S2 TimeCanvas 查询通过 `app/actions/project-management/canvas.ts` 暴露，并由 strict `POST /api/project-management/canvas` 提供同一可测试边界。五个 operation 都从 Auth.js session 解析当前 actor，再进入 validation、authorization、`ProjectManagementActionResult`、structured logging 和错误脱敏流程；请求不接受 actor、账号、人员或角色注入字段。
 
-TimeCanvas 的请求预算为 Full Segment + Busy 合计 5,000、Task anchor 50、当前计划非删除 anchor Node 合计 5,000。Busy DTO 只包含 `kind`、`visibility`、`personId`、`startAt` 和 `endAt`，不返回源 Segment、Task、内容、版本、比例或冲突摘要。TimeCanvas 请求不接受 Node 过滤，Segment DTO 不包含职责、Node 关联、关联复核、`allocation` 或 `conflictIds`。
+TimeCanvas 的请求预算为 Full Segment + Busy 合计 5,000、Task anchor 50、当前计划非删除 anchor Node 合计 5,000。行游标/`rowPageKey`、Prisma 选择集、DTO/权限映射和自适应 leaf 预算分别由查询内部模块负责，页面级查询只编排 scope、行、Segment、Busy 与 Anchor 加载。Busy DTO 只包含 `kind`、`visibility`、`personId`、`startAt` 和 `endAt`，不返回源 Segment、Task、内容、版本、比例或冲突摘要。TimeCanvas 请求不接受 Node 过滤，Segment DTO 不包含职责、Node 关联、关联复核、`allocation` 或 `conflictIds`。
 
 资源计划使用服务端集合展开：`TaskSet = 直接选择 Task ∪ 所选 Project 的未删除 Task`，`PersonSet = 直接选择 Person ∪ TaskSet 有效成员 ∪ 所选 Project 有效成员`。Task 与 Person 使用绑定选择签名的独立不透明游标，页大小分别为 25 和 50；焦点 Segment 对应的 Task/Person 在第一页固定展示且从后续普通页排除。Current Plan 轨道只读，人员行保留既有 Segment capability；内容范围两侧增加两个上海日历月，并限制在三年逻辑窗口内按最多 180 天自适应读取。
 

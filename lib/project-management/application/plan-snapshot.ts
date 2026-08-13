@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { stableStringify } from "@/lib/project-management/application/stable-serialization";
 
 export type PlanSnapshotNode = {
   sequence: number;
@@ -48,21 +49,4 @@ function normalizeSnapshot(input: {
       return { ...node, termination };
     }),
   };
-}
-
-function stableStringify(value: unknown): string {
-  if (value instanceof Date) return JSON.stringify(value.toISOString());
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.keys(value)
-      .sort()
-      .map(
-        (key) =>
-          `${JSON.stringify(key)}:${stableStringify(
-            (value as Record<string, unknown>)[key],
-          )}`,
-      )
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
 }

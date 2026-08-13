@@ -10,7 +10,6 @@ import {
   assertAuthorized,
   authorize,
   taskReadableWhere,
-  type AuthorizationTaskResource,
 } from "@/lib/project-management/authorization";
 import { createDomainAuditEventTx } from "@/lib/project-management/audit";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
@@ -25,10 +24,8 @@ import {
   createProjectManagementEventNotificationsTx,
   recipientsForPersonIdsTx,
 } from "@/lib/project-management/application/notification-utils";
-import { hashPlanSnapshot } from "@/lib/project-management/application/plan-snapshot";
 import { lockTaskSegmentAssociationsTx } from "@/lib/project-management/application/task-segment-association-lock";
 import { assertPersistedPlanChronologyValid } from "@/lib/project-management/application/persisted-plan-chronology";
-import { taskMemberRoleLabels } from "@/lib/project-management/labels";
 import {
   replaceTaskDraftMembersInputSchema,
   replaceTaskDraftPlanInputSchema,
@@ -45,46 +42,29 @@ import {
 } from "@/lib/project-management/validations/task-mutations";
 import { refreshProjectManagementActorTx } from "@/lib/project-management/application/actor-refresh";
 import { acquireProjectCrossAggregateLockTx, assertTaskProjectChangeAllowedTx, syncTaskMembersToProjectTx } from "@/lib/project-management/application/project-service";
+import { taskAuthorizationResource } from "@/lib/project-management/application/task-authorization-resource";
+import {
+  taskMutationInclude,
+  taskMutationPlanNodeInclude,
+  type PlanForMutation,
+  type TaskForMutation,
+  type TaskMutationPlanEntry,
+} from "@/lib/project-management/application/task-mutation-records";
+import {
+  auditPlanState,
+  hashTaskMutationPlan,
+  summarizePlanChanges,
+} from "@/lib/project-management/application/task-plan-audit";
+import {
+  calculateMemberChanges,
+  notifyActiveMemberChangesTx,
+  type MemberChange,
+} from "@/lib/project-management/application/task-member-notifications";
 
 type PrismaTx = Prisma.TransactionClient;
 
-const PROGRESS_LINK = "/progress";
-const DEFAULT_FEISHU_TENANT_ID = "default";
-const PLAN_AUDIT_NODE_DETAIL_LIMIT = 201;
-
-const taskMutationInclude = {
-  members: {
-    where: { removedAt: null },
-    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-  },
-} satisfies Prisma.TaskInclude;
-
-type TaskForMutation = Prisma.TaskGetPayload<{
-  include: typeof taskMutationInclude;
-}>;
-
-const planNodeInclude = {
-  node: {
-    include: {
-      milestone: true,
-      revision: true,
-      termination: true,
-    },
-  },
-} satisfies Prisma.PlanVersionNodeInclude;
-
-type PlanEntry = Prisma.PlanVersionNodeGetPayload<{
-  include: typeof planNodeInclude;
-}>;
-
-type PlanForMutation = Prisma.TaskPlanVersionGetPayload<{
-  include: {
-    nodes: {
-      include: typeof planNodeInclude;
-      orderBy: { sequence: "asc" };
-    };
-  };
-}>;
+const planNodeInclude = taskMutationPlanNodeInclude;
+type PlanEntry = TaskMutationPlanEntry;
 
 export type TaskMutationResult = {
   taskId: string;
@@ -223,7 +203,7 @@ export async function updateTaskDraft(
 
     const authoritativePlan = await loadPlanForMutationTx(tx, plan.id);
     assertAuthoritativePlanValid(authoritativePlan);
-    const snapshotHash = hashPlan(authoritativePlan);
+    const snapshotHash = hashTaskMutationPlan(authoritativePlan);
     await tx.taskPlanVersion.update({
       where: { id: plan.id },
       data: { snapshotHash },
@@ -492,7 +472,7 @@ export async function replaceTaskDraftPlan(
 
     const authoritativePlan = await loadPlanForMutationTx(tx, plan.id);
     assertAuthoritativePlanValid(authoritativePlan);
-    const snapshotHash = hashPlan(authoritativePlan);
+    const snapshotHash = hashTaskMutationPlan(authoritativePlan);
     await tx.taskPlanVersion.update({
       where: { id: plan.id },
       data: { snapshotHash },
@@ -711,22 +691,10 @@ async function loadLockedTaskTx(
   const visible = authorize({
     actor: refreshedActor,
     action: "task.view",
-    resource: taskResource(task),
+    resource: taskAuthorizationResource(task),
   });
   if (!visible.allowed) throw notFoundError();
   return { refreshedActor, task };
-}
-
-function taskResource(task: TaskForMutation): AuthorizationTaskResource {
-  return {
-    type: "task",
-    id: task.id,
-    team: task.team,
-    techGroup: task.techGroup,
-    status: task.status,
-    priority: task.priority,
-    members: task.members,
-  };
 }
 
 function assertAuthorizedTaskAction(
@@ -734,7 +702,7 @@ function assertAuthorizedTaskAction(
   task: TaskForMutation,
   action: "task.update_metadata" | "task.manage_members",
 ) {
-  assertAuthorized({ actor, action, resource: taskResource(task) });
+  assertAuthorized({ actor, action, resource: taskAuthorizationResource(task) });
 }
 
 function assertAuthorizedTargetScope(
@@ -746,7 +714,7 @@ function assertAuthorizedTargetScope(
     actor,
     action: "task.update_metadata",
     resource: {
-      ...taskResource(task),
+      ...taskAuthorizationResource(task),
       team: input.team,
       techGroup: input.techGroup,
     },
@@ -911,163 +879,6 @@ async function applyMemberChangesTx(
       })),
     });
   }
-}
-
-type MemberChange = {
-  personId: string;
-  beforeRoles: TaskMemberRole[];
-  afterRoles: TaskMemberRole[];
-  kind: "ADDED" | "REMOVED" | "ROLES_CHANGED";
-};
-
-function calculateMemberChanges(
-  currentMembers: Array<{ personId: string; role: TaskMemberRole }>,
-  requestedMembers: Array<{ personId: string; role: TaskMemberRole }>,
-): MemberChange[] {
-  const before = rolesByPerson(currentMembers);
-  const after = rolesByPerson(requestedMembers);
-  const personIds = new Set([...before.keys(), ...after.keys()]);
-  return [...personIds]
-    .sort()
-    .flatMap((personId) => {
-      const beforeRoles = before.get(personId) ?? [];
-      const afterRoles = after.get(personId) ?? [];
-      if (sameStringArray(beforeRoles, afterRoles)) return [];
-      return [
-        {
-          personId,
-          beforeRoles,
-          afterRoles,
-          kind:
-            beforeRoles.length === 0
-              ? "ADDED"
-              : afterRoles.length === 0
-                ? "REMOVED"
-                : "ROLES_CHANGED",
-        } satisfies MemberChange,
-      ];
-    });
-}
-
-async function notifyActiveMemberChangesTx(
-  tx: PrismaTx,
-  input: {
-    actor: ProjectManagementActor;
-    task: TaskForMutation;
-    lockVersion: number;
-    changes: MemberChange[];
-  },
-) {
-  const actorName = await actorDisplayNameTx(tx, input.actor);
-  for (const change of input.changes) {
-    const recipientResolution = await resolveMandatoryMemberRecipientTx(
-      tx,
-      change.personId,
-    );
-    const beforeLabel = roleListLabel(change.beforeRoles);
-    const afterLabel = roleListLabel(change.afterRoles);
-    const actionLabel =
-      change.kind === "ADDED"
-        ? "加入"
-        : change.kind === "REMOVED"
-          ? "移出"
-          : "调整角色";
-    await createProjectManagementEventNotificationsTx(tx, {
-      actor: input.actor,
-      task: {
-        id: input.task.id,
-        title: input.task.title,
-        status: "ACTIVE",
-        currentPlanVersionId: input.task.currentPlanVersionId,
-      },
-      kind: "task_assigned",
-      category: "TASK",
-      eventKey: `pm:task:member_changed:${input.task.id}:${input.lockVersion}:${change.personId}`,
-      title: "Task 成员变更",
-      summary: `${actorName}已将你在 Task「${input.task.title}」中的成员关系${actionLabel}：${beforeLabel} → ${afterLabel}`,
-      entityType: "Task",
-      entityId: input.task.id,
-      linkPath: PROGRESS_LINK,
-      mandatory: true,
-      recipients: recipientResolution.recipients,
-      context: {
-        changeKind: change.kind,
-        affectedPersonId: change.personId,
-        beforeRoles: change.beforeRoles,
-        afterRoles: change.afterRoles,
-        result: "SUCCESS",
-        taskLockVersion: input.lockVersion,
-        recipientResolution: recipientResolution.status,
-      },
-    });
-  }
-}
-
-async function resolveMandatoryMemberRecipientTx(
-  tx: PrismaTx,
-  personId: string,
-): Promise<{
-  status:
-    | "RESOLVED"
-    | "PERSON_INACTIVE"
-    | "ACCOUNT_MISSING"
-    | "DEFAULT_FEISHU_IDENTITY_MISSING"
-    | "FEISHU_OPEN_ID_MISSING";
-  recipients: Array<{ accountId: string; openId: string | null }>;
-}> {
-  const person = await tx.person.findUnique({
-    where: { id: personId },
-    select: {
-      status: true,
-      account: {
-        select: {
-          id: true,
-          identities: {
-            where: {
-              provider: "FEISHU",
-              tenantId: DEFAULT_FEISHU_TENANT_ID,
-            },
-            select: { id: true, openId: true },
-            orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-          },
-        },
-      },
-    },
-  });
-  if (!person?.account) {
-    return { status: "ACCOUNT_MISSING", recipients: [] };
-  }
-  const openId = person.account.identities
-    .map((identity) => identity.openId?.trim() ?? "")
-    .find(Boolean) ?? null;
-  const status =
-    person.status !== "ACTIVE"
-      ? "PERSON_INACTIVE"
-      : person.account.identities.length === 0
-        ? "DEFAULT_FEISHU_IDENTITY_MISSING"
-        : !openId
-          ? "FEISHU_OPEN_ID_MISSING"
-          : "RESOLVED";
-  return {
-    status,
-    recipients: [
-      {
-        accountId: person.account.id,
-        openId: status === "RESOLVED" ? openId : null,
-      },
-    ],
-  };
-}
-
-async function actorDisplayNameTx(
-  tx: PrismaTx,
-  actor: ProjectManagementActor,
-) {
-  const person = await tx.person.findUnique({
-    where: { id: actor.personId },
-    select: { displayName: true },
-  });
-  return person?.displayName ?? "系统用户";
 }
 
 async function loadInitialDraftPlanTx(
@@ -1363,138 +1174,6 @@ function assertAuthoritativePlanValid(plan: PlanForMutation) {
   assertPersistedPlanChronologyValid(plan);
 }
 
-function hashPlan(plan: PlanForMutation) {
-  return hashPlanSnapshot({
-    plannedStartAt: plan.plannedStartAt?.toISOString() ?? null,
-    nodes: plan.nodes.map((entry) => ({
-      sequence: entry.sequence,
-      nodeId: entry.nodeId,
-      type: entry.node.type,
-      businessDescription: entry.node.businessDescription,
-      milestone: entry.node.milestone
-        ? {
-            goal: entry.node.milestone.goal,
-            completionCriteria: entry.node.milestone.completionCriteria,
-            expectedCompletedAt:
-              entry.node.milestone.expectedCompletedAt.toISOString(),
-            reviewRequirements: entry.node.milestone.reviewRequirements,
-          }
-        : null,
-      revision: entry.node.revision
-        ? {
-            reason: entry.node.revision.reason,
-            revisionAt: entry.node.revision.revisionAt.toISOString(),
-            reviewRound: entry.node.revision.reviewRound,
-            basePlanVersionId: entry.node.revision.basePlanVersionId,
-          }
-        : null,
-      termination: entry.node.termination
-        ? {
-            ...(entry.node.termination.name !== "Terminal"
-              ? { name: entry.node.termination.name }
-              : {}),
-            plannedOutcomeCriteria:
-              entry.node.termination.plannedOutcomeCriteria,
-            plannedAt: entry.node.termination.plannedAt.toISOString(),
-          }
-        : null,
-    })),
-  });
-}
-
-function auditPlanState(plan: PlanForMutation) {
-  return {
-    plannedStartAt: plan.plannedStartAt?.toISOString() ?? null,
-    snapshotHash: plan.snapshotHash,
-    nodeCount: plan.nodes.length,
-  };
-}
-
-function summarizePlanChanges(
-  beforePlan: PlanForMutation,
-  afterPlan: PlanForMutation,
-) {
-  const beforeById = new Map(
-    beforePlan.nodes.map((entry) => [entry.nodeId, entry] as const),
-  );
-  const afterById = new Map(
-    afterPlan.nodes.map((entry) => [entry.nodeId, entry] as const),
-  );
-  const retained = afterPlan.nodes.filter((entry) => beforeById.has(entry.nodeId));
-  const added = afterPlan.nodes.filter((entry) => !beforeById.has(entry.nodeId));
-  const removed = beforePlan.nodes.filter((entry) => !afterById.has(entry.nodeId));
-  const reordered = retained.flatMap((entry) => {
-    const before = beforeById.get(entry.nodeId);
-    if (!before || before.sequence === entry.sequence) return [];
-    return [{
-      nodeId: entry.nodeId,
-      type: entry.node.type,
-      beforeSequence: before.sequence,
-      afterSequence: entry.sequence,
-    }];
-  });
-  const changedNodes = retained.flatMap((entry) => {
-    const before = beforeById.get(entry.nodeId);
-    if (!before) return [];
-    const beforeFields = planNodeComparableFields(before);
-    const afterFields = planNodeComparableFields(entry);
-    const fields = Object.keys(afterFields).filter(
-      (field) => beforeFields[field] !== afterFields[field],
-    );
-    return fields.length > 0
-      ? [{ nodeId: entry.nodeId, type: entry.node.type, fields }]
-      : [];
-  });
-  const fieldCounts: Record<string, number> = {};
-  for (const node of changedNodes) {
-    for (const field of node.fields) {
-      fieldCounts[field] = (fieldCounts[field] ?? 0) + 1;
-    }
-  }
-  return {
-    retained: boundedPlanAuditDetails(retained.map(planNodeIdentity)),
-    added: boundedPlanAuditDetails(added.map(planNodeIdentity)),
-    removed: boundedPlanAuditDetails(removed.map(planNodeIdentity)),
-    reordered: boundedPlanAuditDetails(reordered),
-    fieldChanges: {
-      plannedStartAtChanged:
-        beforePlan.plannedStartAt?.toISOString() !==
-        afterPlan.plannedStartAt?.toISOString(),
-      nodeCount: changedNodes.length,
-      byField: fieldCounts,
-      nodes: boundedPlanAuditDetails(changedNodes),
-    },
-  };
-}
-
-function planNodeIdentity(entry: PlanEntry) {
-  return { nodeId: entry.nodeId, type: entry.node.type };
-}
-
-function boundedPlanAuditDetails<T>(entries: T[]) {
-  return {
-    totalCount: entries.length,
-    truncated: entries.length > PLAN_AUDIT_NODE_DETAIL_LIMIT,
-    entries: entries.slice(0, PLAN_AUDIT_NODE_DETAIL_LIMIT),
-  };
-}
-
-function planNodeComparableFields(entry: PlanEntry): Record<string, string | null> {
-  return {
-    type: entry.node.type,
-    businessDescription: entry.node.businessDescription,
-    goal: entry.node.milestone?.goal ?? null,
-    completionCriteria: entry.node.milestone?.completionCriteria ?? null,
-    expectedCompletedAt:
-      entry.node.milestone?.expectedCompletedAt.toISOString() ?? null,
-    reviewRequirements: entry.node.milestone?.reviewRequirements ?? null,
-    plannedOutcomeCriteria:
-      entry.node.termination?.plannedOutcomeCriteria ?? null,
-    terminationName: entry.node.termination?.name ?? null,
-    plannedAt: entry.node.termination?.plannedAt.toISOString() ?? null,
-  };
-}
-
 function stableDraftNodeId(planVersionId: string, clientKey: string) {
   const hex = createHash("sha256")
     .update(`pm:draft-plan-node:${planVersionId}:${clientKey}`)
@@ -1634,24 +1313,6 @@ function memberSnapshot(
 
 function memberKey(member: { personId: string; role: TaskMemberRole }) {
   return `${member.personId}:${member.role}`;
-}
-
-function rolesByPerson(
-  members: Array<{ personId: string; role: TaskMemberRole }>,
-) {
-  const result = new Map<string, TaskMemberRole[]>();
-  for (const member of members) {
-    const roles = result.get(member.personId) ?? [];
-    roles.push(member.role);
-    result.set(member.personId, roles);
-  }
-  for (const roles of result.values()) roles.sort();
-  return result;
-}
-
-function roleListLabel(roles: TaskMemberRole[]) {
-  if (roles.length === 0) return "无";
-  return roles.map((role) => taskMemberRoleLabels[role]).join("、");
 }
 
 function sameStringArray(left: string[], right: string[]) {

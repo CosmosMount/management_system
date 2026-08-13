@@ -1,6 +1,7 @@
 import type {
   Prisma,
   ProjectManagementNotificationCategory,
+  TaskMemberRole,
   TaskStatus,
 } from "@prisma/client";
 import {
@@ -10,6 +11,12 @@ import {
   type ProjectManagementNotificationPayload,
 } from "@/lib/project-management/notifications/events";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
+import {
+  DEFAULT_FEISHU_IDENTITY_WHERE,
+  FEISHU_OPEN_IDENTITY_ORDER,
+  FEISHU_OPEN_IDENTITY_SELECT,
+  firstNonEmptyFeishuOpenId,
+} from "@/lib/project-management/application/feishu-identity";
 
 export type ProjectManagementNotificationRecipient = {
   accountId: string;
@@ -153,9 +160,9 @@ export async function recipientsForPersonIdsTx(
         select: {
           id: true,
           identities: {
-            where: { provider: "FEISHU", tenantId: "default" },
-            select: { id: true, openId: true },
-            orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+            where: DEFAULT_FEISHU_IDENTITY_WHERE,
+            select: FEISHU_OPEN_IDENTITY_SELECT,
+            orderBy: FEISHU_OPEN_IDENTITY_ORDER,
           },
         },
       },
@@ -166,7 +173,7 @@ export async function recipientsForPersonIdsTx(
     return [
       {
         accountId: person.account.id,
-        openId: firstNonEmptyOpenId(person.account.identities),
+        openId: firstNonEmptyFeishuOpenId(person.account.identities),
       },
     ];
   });
@@ -182,24 +189,84 @@ export async function recipientsForAccountIdsTx(
     select: {
       id: true,
       identities: {
-        where: { provider: "FEISHU", tenantId: "default" },
-        select: { id: true, openId: true },
-        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        where: DEFAULT_FEISHU_IDENTITY_WHERE,
+        select: FEISHU_OPEN_IDENTITY_SELECT,
+        orderBy: FEISHU_OPEN_IDENTITY_ORDER,
       },
     },
   });
   return accounts.map((account) => ({
     accountId: account.id,
-    openId: firstNonEmptyOpenId(account.identities),
+    openId: firstNonEmptyFeishuOpenId(account.identities),
   }));
 }
 
-function firstNonEmptyOpenId(
-  identities: Array<{ openId: string | null }>,
-): string | null {
-  return identities
-    .map((identity) => identity.openId?.trim() ?? "")
-    .find(Boolean) ?? null;
+export async function recipientsForTaskMembersTx(
+  tx: Prisma.TransactionClient,
+  input: { taskId: string; roles: TaskMemberRole[] },
+): Promise<ProjectManagementNotificationRecipient[]> {
+  const members = await tx.taskMember.findMany({
+    where: {
+      taskId: input.taskId,
+      removedAt: null,
+      role: { in: input.roles },
+    },
+    select: {
+      person: {
+        select: {
+          account: {
+            select: {
+              id: true,
+              identities: {
+                where: DEFAULT_FEISHU_IDENTITY_WHERE,
+                select: FEISHU_OPEN_IDENTITY_SELECT,
+                orderBy: FEISHU_OPEN_IDENTITY_ORDER,
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+  return members.flatMap((member) => {
+    const account = member.person.account;
+    if (!account) return [];
+    return [{
+      accountId: account.id,
+      openId: firstNonEmptyFeishuOpenId(account.identities),
+    }];
+  });
+}
+
+export async function recipientsForAccountsOrPeopleTx(
+  tx: Prisma.TransactionClient,
+  input: { accountIds: string[]; personIds: string[] },
+): Promise<ProjectManagementNotificationRecipient[]> {
+  if (input.accountIds.length === 0 && input.personIds.length === 0) return [];
+  const accounts = await tx.account.findMany({
+    where: {
+      OR: [
+        ...(input.accountIds.length > 0
+          ? [{ id: { in: input.accountIds } }]
+          : []),
+        ...(input.personIds.length > 0
+          ? [{ person: { id: { in: input.personIds } } }]
+          : []),
+      ],
+    },
+    select: {
+      id: true,
+      identities: {
+        where: DEFAULT_FEISHU_IDENTITY_WHERE,
+        select: FEISHU_OPEN_IDENTITY_SELECT,
+        orderBy: FEISHU_OPEN_IDENTITY_ORDER,
+      },
+    },
+  });
+  return accounts.map((account) => ({
+    accountId: account.id,
+    openId: firstNonEmptyFeishuOpenId(account.identities),
+  }));
 }
 
 export function uniqueRecipientsByAccount(

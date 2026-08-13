@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type {
   Prisma,
   Task,
@@ -9,7 +8,6 @@ import {
   isSystemAdministrator,
   segmentReadableWhere,
   taskReadableWhere,
-  type AuthorizationTaskResource,
 } from "@/lib/project-management/authorization";
 import {
   notFoundError,
@@ -32,9 +30,7 @@ import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import {
   timeCanvasDataDtoSchema,
   type BusyBlockDto,
-  type SegmentPermissionsDto,
   type TimeCanvasDataDto,
-  type TimeCanvasNodeAnchorDto,
   type TimeCanvasRowDto,
   type TimeCanvasTaskAnchorDto,
   type TimeSegmentDto,
@@ -52,142 +48,37 @@ import { listPersonalDueSegmentsInputSchema } from "@/lib/project-management/val
 import { searchTaskOptions } from "@/lib/project-management/queries/option-queries";
 import { getProjectDetail } from "@/lib/project-management/queries/project-queries";
 import { getResourcePlanSelectionPage } from "@/lib/project-management/queries/resource-plan-queries";
+import { taskAuthorizationResource } from "@/lib/project-management/application/task-authorization-resource";
+import {
+  anchorTaskSelect,
+  busyCandidateSelect,
+  canvasRowTaskSelect,
+  fullSegmentSelect,
+  type CanvasTask,
+  type FullSegment,
+} from "@/lib/project-management/queries/time-canvas-records";
+import {
+  canCreateForPerson,
+  toFullSegmentDto,
+  toTaskAnchorDto,
+} from "@/lib/project-management/queries/time-canvas-dto";
+import {
+  canvasCursorFilter,
+  createRowPageKey,
+  decodePersonalDueCursor,
+  encodeCanvasCursor,
+  encodePersonalDueCursor,
+  validateCanvasCursor,
+} from "@/lib/project-management/queries/time-canvas-cursor";
+import { loadBoundedAdaptiveLeaves } from "@/lib/project-management/queries/time-canvas-adaptive-loader";
 
-const canvasTaskAuthorizationSelect = {
-  id: true,
-  team: true,
-  techGroup: true,
-  status: true,
-  priority: true,
-  members: {
-    where: { removedAt: null },
-    select: { personId: true, role: true, removedAt: true },
-  },
-} satisfies Prisma.TaskSelect;
-
-const canvasRowTaskSelect = {
-  ...canvasTaskAuthorizationSelect,
-  title: true,
-  createdAt: true,
-} satisfies Prisma.TaskSelect;
-
-const fullSegmentSelect = {
-  id: true,
-  personId: true,
-  type: true,
-  status: true,
-  startAt: true,
-  endAt: true,
-  content: true,
-  priority: true,
-  expectedOutput: true,
-  actualOutput: true,
-  taskId: true,
-  deletedAt: true,
-  updatedAt: true,
-  task: { select: { ...canvasTaskAuthorizationSelect, title: true } },
-} satisfies Prisma.WorkSegmentSelect;
-
-const busyCandidateSelect = {
-  personId: true,
-  startAt: true,
-  endAt: true,
-} satisfies Prisma.WorkSegmentSelect;
-
-const anchorTaskSelect = {
-  ...canvasRowTaskSelect,
-  updatedAt: true,
-  nodes: {
-    where: {
-      OR: [
-        {
-          milestone: {
-            is: {
-              reviews: {
-                some: { result: "PENDING", revokedAt: null },
-              },
-            },
-          },
-        },
-        { revision: { is: { status: "PENDING_APPROVAL" } } },
-      ],
-    },
-    select: { id: true },
-    take: 2,
-  },
-  currentPlanVersion: {
-    select: {
-      plannedStartAt: true,
-      activatedAt: true,
-      nodes: {
-        where: { node: { deletedAt: null } },
-        orderBy: { sequence: "asc" },
-        select: {
-          sequence: true,
-          node: {
-            select: {
-              id: true,
-              taskId: true,
-              type: true,
-              status: true,
-              businessDescription: true,
-              deletedAt: true,
-              updatedAt: true,
-              milestone: {
-                select: {
-                  goal: true,
-                  expectedCompletedAt: true,
-                },
-              },
-              revision: {
-                select: {
-                  reason: true,
-                  revisionAt: true,
-                },
-              },
-              termination: {
-                select: {
-                  name: true,
-                  plannedOutcomeCriteria: true,
-                  plannedAt: true,
-                },
-              },
-            },
-          },
-        },
-      },
-    },
-  },
-} satisfies Prisma.TaskSelect;
-
-type CanvasTask = Prisma.TaskGetPayload<{
-  select: typeof canvasRowTaskSelect;
-}>;
-type FullSegment = Prisma.WorkSegmentGetPayload<{
-  select: typeof fullSegmentSelect;
-}>;
-type AnchorTask = Prisma.TaskGetPayload<{ select: typeof anchorTaskSelect }>;
+export { loadBoundedAdaptiveLeaves } from "@/lib/project-management/queries/time-canvas-adaptive-loader";
 
 type RowPage = {
   rows: TimeCanvasRowDto[];
   rowIds: string[];
   nextCursor: string | null;
   rowUniverseWhere: Prisma.PersonWhereInput | Prisma.TaskWhereInput;
-};
-
-type CanvasCursor = {
-  v: 1;
-  groupBy: "PERSON" | "TASK";
-  filter: string;
-  id: string;
-};
-
-type PersonalDueCursor = {
-  v: 1;
-  kind: "PERSONAL_DUE";
-  personId: string;
-  endAt: string;
-  id: string;
 };
 
 export async function getPersonalDueSegments({
@@ -277,49 +168,6 @@ export async function getPersonalDueSegments({
   };
 }
 
-function encodePersonalDueCursor(
-  row: Pick<FullSegment, "id" | "endAt"> | undefined,
-  personId: string,
-) {
-  if (!row) return null;
-  return Buffer.from(JSON.stringify({
-    v: 1,
-    kind: "PERSONAL_DUE",
-    personId,
-    endAt: row.endAt.toISOString(),
-    id: row.id,
-  } satisfies PersonalDueCursor)).toString("base64url");
-}
-
-function decodePersonalDueCursor(
-  value: string,
-  personId: string,
-): PersonalDueCursor | null {
-  try {
-    const decoded: unknown = JSON.parse(
-      Buffer.from(value, "base64url").toString("utf8"),
-    );
-    if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
-      return null;
-    }
-    const record = decoded as Record<string, unknown>;
-    if (
-      record.v !== 1 ||
-      record.kind !== "PERSONAL_DUE" ||
-      record.personId !== personId ||
-      typeof record.endAt !== "string" ||
-      !Number.isFinite(Date.parse(record.endAt)) ||
-      typeof record.id !== "string" ||
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(record.id)
-    ) {
-      return null;
-    }
-    return record as PersonalDueCursor;
-  } catch {
-    return null;
-  }
-}
-
 export async function getTimeCanvasData({
   actor,
   input,
@@ -403,7 +251,7 @@ export async function getTimeCanvasData({
   const rowPageKey = createRowPageKey(
     actor,
     parsed,
-    rowPage,
+    rowPage.rows,
     anchors,
     undefined,
     fullSegments.map((segment) => [segment.id, segment.updatedAt.toISOString()]),
@@ -548,7 +396,7 @@ export async function getContentDrivenTimeCanvasData({
   const rowPageKey = createRowPageKey(
     actor,
     parsed,
-    rowPage,
+    rowPage.rows,
     anchors,
     logical.range,
     {
@@ -871,65 +719,6 @@ async function loadContentDrivenSegmentBlocks({
   };
 }
 
-export async function loadBoundedAdaptiveLeaves<T>({
-  ranges,
-  loadRange,
-}: {
-  ranges: Array<{ startMs: number; endMs: number }>;
-  loadRange: (range: { startMs: number; endMs: number }) => Promise<T[]>;
-}) {
-  const pending = [...ranges];
-  const leaves: T[][] = [];
-  const failedRanges: Array<{ startMs: number; endMs: number; message: string }> = [];
-  let objectCount = 0;
-  let queryCount = 0;
-  while (pending.length > 0) {
-    const range = pending.shift()!;
-    if (queryCount >= 31) {
-      throw queryLimitExceededError("时间对象过于密集，自动细分查询超过安全预算");
-    }
-    queryCount += 1;
-    const values = await loadRange(range);
-    if (values.length <= MAX_TIME_CANVAS_VISIBLE_SEGMENTS) {
-      if (leaves.length + failedRanges.length >= 16) {
-        throw queryLimitExceededError("时间对象过于密集，自动细分后超过 16 个数据块");
-      }
-      objectCount += values.length;
-      if (objectCount > 20_000) {
-        throw queryLimitExceededError("时间画布对象超过 20000 条缓存预算，请缩小筛选范围");
-      }
-      leaves.push(values);
-      continue;
-    }
-    if (range.endMs - range.startMs <= DAY_MS) {
-      if (leaves.length + failedRanges.length >= 16) {
-        throw queryLimitExceededError("时间对象过于密集，自动细分后超过 16 个数据块");
-      }
-      failedRanges.push({
-        ...range,
-        message: "单个上海自然日内的时间对象超过 5000 条，请缩小筛选范围",
-      });
-      continue;
-    }
-    if (leaves.length + failedRanges.length + pending.length + 2 > 16) {
-      throw queryLimitExceededError("时间对象过于密集，自动细分后超过 16 个数据块");
-    }
-    const middle = floorShanghaiDay((range.startMs + range.endMs) / 2);
-    const split = middle > range.startMs && middle < range.endMs
-      ? middle
-      : Math.min(range.endMs, range.startMs + DAY_MS);
-    pending.unshift(
-      { startMs: range.startMs, endMs: split },
-      { startMs: split, endMs: range.endMs },
-    );
-  }
-  return {
-    leaves,
-    failedRanges: failedRanges.sort((left, right) => left.startMs - right.startMs),
-    queryCount,
-  };
-}
-
 async function loadContentDrivenLeaf(
   where: Prisma.WorkSegmentWhereInput,
   startMs: number,
@@ -1146,7 +935,7 @@ async function loadTaskRows(
           resource: {
             type: "segment",
             personId: actor.personId,
-            task: taskResource(task),
+            task: taskAuthorizationResource(task),
           },
         }).allowed,
     },
@@ -1409,204 +1198,6 @@ async function loadTaskAnchors(
   return tasks.map((task) => toTaskAnchorDto(actor, task));
 }
 
-function toTaskAnchorDto(
-  actor: ProjectManagementActor,
-  task: AnchorTask,
-): TimeCanvasTaskAnchorDto {
-  const resource = taskResource(task);
-  const taskCanEdit =
-    (task.status === "DRAFT" || task.status === "ACTIVE") &&
-    authorize({ actor, action: "task.update_metadata", resource }).allowed;
-  const canManageMembers =
-    (task.status === "DRAFT" || task.status === "ACTIVE") &&
-    authorize({ actor, action: "task.manage_members", resource }).allowed;
-  const hasPendingApproval = task.nodes.length > 0;
-  const updatedAt = task.updatedAt.toISOString();
-  return {
-    id: task.id,
-    title: task.title,
-    status: task.status,
-    priority: task.priority,
-    createdAt: task.createdAt.toISOString(),
-    plannedStartAt: task.currentPlanVersion.plannedStartAt?.toISOString() ?? null,
-    capabilities: {
-      canView: true,
-      canUpdateMetadata: taskCanEdit,
-      canManageMembers,
-      canActivate:
-        task.status === "DRAFT" &&
-        authorize({ actor, action: "task.activate", resource }).allowed,
-      canArchive:
-        isTerminalTaskStatus(task.status) &&
-        authorize({ actor, action: "task.archive", resource }).allowed,
-      canCreateRevision:
-        task.status === "ACTIVE" &&
-        !hasPendingApproval &&
-        authorize({ actor, action: "revision.create", resource }).allowed,
-    },
-    nodes: task.currentPlanVersion.nodes.flatMap((entry) => {
-      if (entry.node.deletedAt) return [];
-      return [toNodeAnchorDto(actor, task, entry.sequence, entry.node)];
-    }),
-    updatedAt,
-    versionToken: updatedAt,
-  };
-}
-
-function toNodeAnchorDto(
-  actor: ProjectManagementActor,
-  task: AnchorTask,
-  sequence: number,
-  node: AnchorTask["currentPlanVersion"]["nodes"][number]["node"],
-): TimeCanvasNodeAnchorDto {
-  const resource = taskResource(task);
-  const isDraftEditable =
-    task.status === "DRAFT" &&
-    task.currentPlanVersion.activatedAt === null &&
-    authorize({ actor, action: "task.update_metadata", resource }).allowed;
-  const isActivePlannedNode =
-    task.status === "ACTIVE" &&
-    node.status !== "REVISED" &&
-    node.status !== "CANCELLED";
-  const hasPendingApproval = task.nodes.length > 0;
-  const updatedAt = node.updatedAt.toISOString();
-  return {
-    id: node.id,
-    taskId: node.taskId,
-    type: node.type,
-    status: node.status,
-    sequence,
-    label: nodeLabel(node),
-    plannedAt: nodePlannedAt(node)?.toISOString() ?? null,
-    capabilities: {
-      canView: true,
-      canEditDraft: isDraftEditable,
-      canCreateSegment:
-        isTaskCreatableForSegment(task.status) &&
-        (isDraftEditable || isActivePlannedNode) &&
-        authorize({
-          actor,
-          action: "segment.manage_self",
-          resource: {
-            type: "segment",
-            personId: actor.personId,
-            task: resource,
-          },
-        }).allowed,
-      canSubmitReview:
-        node.type === "MILESTONE" &&
-        node.status === "ACTIVE" &&
-        !hasPendingApproval &&
-        authorize({
-          actor,
-          action: "milestone.submit_review",
-          resource,
-        }).allowed,
-      canReview:
-        node.type === "MILESTONE" &&
-        node.status === "ACTIVE" &&
-        authorize({ actor, action: "milestone.review", resource }).allowed,
-      canConfirmTermination:
-        node.type === "TERMINATION" &&
-        task.status === "ACTIVE" &&
-        !hasPendingApproval &&
-        authorize({ actor, action: "task.terminate", resource }).allowed,
-    },
-    updatedAt,
-    versionToken: updatedAt,
-  };
-}
-
-function toFullSegmentDto(
-  actor: ProjectManagementActor,
-  segment: FullSegment,
-): TimeSegmentDto {
-  const updatedAt = segment.updatedAt.toISOString();
-  return {
-    kind: "SEGMENT",
-    visibility: "FULL",
-    id: segment.id,
-    personId: segment.personId,
-    type: segment.type,
-    status: segment.status,
-    startAt: segment.startAt.toISOString(),
-    endAt: segment.endAt.toISOString(),
-    content: segment.content,
-    priority: segment.priority,
-    expectedOutput: segment.expectedOutput,
-    actualOutput: segment.actualOutput,
-    taskId: segment.taskId,
-    permissions: segmentPermissions(actor, segment),
-    updatedAt,
-    versionToken: updatedAt,
-  };
-}
-
-function segmentPermissions(
-  actor: ProjectManagementActor,
-  segment: FullSegment,
-): SegmentPermissionsDto {
-  const canManage = authorize({
-    actor,
-    action:
-      segment.personId === actor.personId
-        ? "segment.manage_self"
-        : "segment.manage_others",
-    resource: {
-      type: "segment",
-      personId: segment.personId,
-      task: segment.task ? taskResource(segment.task) : null,
-    },
-  }).allowed;
-  const available = !segment.deletedAt && segment.status !== "CANCELLED";
-  if (segment.type === "ACTUAL") {
-    const editable = canManage && available && segment.status === "CONFIRMED";
-    return {
-      canViewDetails: true,
-      canEdit: editable,
-      canMove: false,
-      canResize: false,
-      canMerge: false,
-      canCancel: false,
-      canConfirm: false,
-      canSoftDelete: editable,
-    };
-  }
-  const editable =
-    canManage &&
-    available &&
-    segment.status !== "CONFIRMED";
-  return {
-    canViewDetails: true,
-    canEdit: editable,
-    canMove: editable,
-    canResize: editable,
-    canMerge: editable,
-    canCancel: editable,
-    canConfirm: editable,
-    canSoftDelete: false,
-  };
-}
-
-function canCreateForPerson(
-  actor: ProjectManagementActor,
-  personId: string,
-  task: CanvasTask | null,
-) {
-  return authorize({
-    actor,
-    action:
-      personId === actor.personId
-        ? "segment.manage_self"
-        : "segment.manage_others",
-    resource: {
-      type: "segment",
-      personId,
-      task: task ? taskResource(task) : null,
-    },
-  }).allowed;
-}
-
 async function loadPersonCreateCapabilities(
   actor: ProjectManagementActor,
   input: GetTimeCanvasDataInput,
@@ -1756,168 +1347,3 @@ function hasActiveTaskMember(task: CanvasTask, personId: string): boolean {
       (member.role === "OWNER" || member.role === "PARTICIPANT"),
   );
 }
-
-function taskResource(
-  task: Pick<
-    CanvasTask,
-    | "id"
-    | "team"
-    | "techGroup"
-    | "status"
-    | "priority"
-    | "members"
-  >,
-): AuthorizationTaskResource {
-  return {
-    type: "task",
-    id: task.id,
-    team: task.team,
-    techGroup: task.techGroup,
-    status: task.status,
-    priority: task.priority,
-    members: task.members,
-  };
-}
-
-function nodeLabel(
-  node: AnchorTask["currentPlanVersion"]["nodes"][number]["node"],
-): string {
-  if (node.milestone) return node.milestone.goal;
-  if (node.revision) return node.revision.reason;
-  if (node.termination) return node.termination.name;
-  return node.businessDescription.trim() || node.type;
-}
-
-function nodePlannedAt(
-  node: AnchorTask["currentPlanVersion"]["nodes"][number]["node"],
-): Date | null {
-  if (node.milestone) return node.milestone.expectedCompletedAt;
-  if (node.termination) return node.termination.plannedAt;
-  if (node.revision) return node.revision.revisionAt;
-  return null;
-}
-
-function isTerminalTaskStatus(status: Task["status"]): boolean {
-  return (
-    status === "COMPLETED" ||
-    status === "FAILED" ||
-    status === "CANCELLED" ||
-    status === "TIMEOUT"
-  );
-}
-
-function canvasCursorFilter(
-  input: GetTimeCanvasDataInput,
-  includeRange = true,
-): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify({
-        scope: input.scope,
-        range: includeRange
-          ? [input.rangeStart.toISOString(), input.rangeEnd.toISOString()]
-          : undefined,
-        personIds: [...input.personIds].sort(),
-        taskIds: [...input.taskIds].sort(),
-        types: [...input.types].sort(),
-        statuses: [...input.statuses].sort(),
-        groupBy: input.groupBy,
-        includeTaskAnchors: input.includeTaskAnchors,
-        includeActual: input.includeActual,
-        includeBusyBlocks: input.includeBusyBlocks,
-      }),
-    )
-    .digest("base64url")
-    .slice(0, 22);
-}
-
-function createRowPageKey(
-  actor: ProjectManagementActor,
-  input: GetTimeCanvasDataInput,
-  rowPage: RowPage,
-  anchors: TimeCanvasTaskAnchorDto[],
-  logicalRange?: { startMs: number; endMs: number },
-  segmentEpoch?: unknown,
-) {
-  return createHash("sha256")
-    .update(
-      JSON.stringify({
-        actorAccountId: actor.accountId,
-        semanticFilter: canvasCursorFilter(input, !logicalRange),
-        logicalRange: logicalRange
-          ? [new Date(logicalRange.startMs).toISOString(), new Date(logicalRange.endMs).toISOString()]
-          : [input.rangeStart.toISOString(), input.rangeEnd.toISOString()],
-        rows: rowPage.rows,
-        anchors: anchors.map((task) => [
-          task.id,
-          task.versionToken,
-          task.nodes.map((node) => [node.id, node.versionToken]),
-        ]),
-        segmentEpoch,
-      }),
-    )
-    .digest("base64url")
-    .slice(0, 32);
-}
-
-function encodeCanvasCursor(
-  groupBy: "PERSON" | "TASK",
-  filter: string,
-  id: string | undefined,
-): string | null {
-  if (!id) return null;
-  return Buffer.from(
-    JSON.stringify({ v: 1, groupBy, filter, id } satisfies CanvasCursor),
-  ).toString("base64url");
-}
-
-async function validateCanvasCursor({
-  cursor,
-  groupBy,
-  filter,
-  exists,
-}: {
-  cursor: string | undefined;
-  groupBy: "PERSON" | "TASK";
-  filter: string;
-  exists: (id: string) => Promise<{ id: string } | null>;
-}): Promise<string | null> {
-  if (!cursor) return null;
-  const decoded = decodeCanvasCursor(cursor);
-  if (
-    !decoded ||
-    decoded.groupBy !== groupBy ||
-    decoded.filter !== filter ||
-    !(await exists(decoded.id))
-  ) {
-    throw validationError("画布行分页游标无效或已不匹配当前查询", {
-      cursor: ["画布行分页游标无效或已不匹配当前查询"],
-    });
-  }
-  return decoded.id;
-}
-
-function decodeCanvasCursor(cursor: string): CanvasCursor | null {
-  try {
-    const value: unknown = JSON.parse(
-      Buffer.from(cursor, "base64url").toString("utf8"),
-    );
-    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-    const record = value as Record<string, unknown>;
-    if (
-      record.v !== 1 ||
-      (record.groupBy !== "PERSON" && record.groupBy !== "TASK") ||
-      typeof record.filter !== "string" ||
-      typeof record.id !== "string" ||
-      !UUID_PATTERN.test(record.id)
-    ) {
-      return null;
-    }
-    return record as CanvasCursor;
-  } catch {
-    return null;
-  }
-}
-
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;

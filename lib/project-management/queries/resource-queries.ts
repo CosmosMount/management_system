@@ -9,7 +9,7 @@ import {
 } from "@/lib/project-management/authorization";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import { notFoundError } from "@/lib/project-management/application/errors";
-import { toWorkSegmentDto } from "@/lib/project-management/application/segment-service";
+import { toWorkSegmentDto } from "@/lib/project-management/application/segment-record";
 import {
   taskPriorityLabels,
   workSegmentStatusLabels,

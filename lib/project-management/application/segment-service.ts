@@ -1,6 +1,5 @@
 import {
   Prisma,
-  type TaskPriority,
   type WorkSegment,
   type WorkSegmentChangeAction,
 } from "@prisma/client";
@@ -8,14 +7,9 @@ import { prisma } from "@/lib/prisma";
 import {
   assertAuthorized,
   authorize,
-  type AuthorizationTaskResource,
 } from "@/lib/project-management/authorization";
 import { createDomainAuditEventTx } from "@/lib/project-management/audit";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
-import {
-  createProjectManagementEventNotificationsTx,
-  recipientsForPersonIdsTx,
-} from "@/lib/project-management/application/notification-utils";
 import {
   associationInvalidError,
   notFoundError,
@@ -43,61 +37,29 @@ import {
   type MovePlannedSegmentsInput,
 } from "@/lib/project-management/validations/segments";
 import { refreshProjectManagementActorTx } from "@/lib/project-management/application/actor-refresh";
+import { taskAuthorizationResource } from "@/lib/project-management/application/task-authorization-resource";
+import {
+  segmentInclude,
+  snapshotSegment,
+  toWorkSegmentDto,
+  type SegmentForMutation,
+  type TaskForSegmentAuthorization,
+  type WorkSegmentDto,
+} from "@/lib/project-management/application/segment-record";
+import {
+  assertCoverageInsideSegment,
+  assertMergeCompatible,
+  assertPlannedEditable,
+  assertValidSegmentRange,
+  plannedStatusAfterMove,
+  plannedStatusForRange,
+} from "@/lib/project-management/application/segment-rules";
+
+export { toWorkSegmentDto } from "@/lib/project-management/application/segment-record";
+export type { WorkSegmentDto } from "@/lib/project-management/application/segment-record";
+export { scanSegmentTransitions } from "@/lib/project-management/application/segment-transition-service";
 
 type PrismaTx = Prisma.TransactionClient;
-
-const MAX_SEGMENT_MS = 31 * 24 * 60 * 60 * 1_000;
-
-const segmentInclude = {
-  person: {
-    select: {
-      id: true,
-      displayName: true,
-      status: true,
-      accountId: true,
-    },
-  },
-  task: {
-    select: {
-      id: true,
-      title: true,
-      team: true,
-      techGroup: true,
-      status: true,
-      priority: true,
-      currentPlanVersionId: true,
-      deletedAt: true,
-      members: {
-        where: { removedAt: null },
-        select: { personId: true, role: true, removedAt: true },
-      },
-    },
-  },
-} satisfies Prisma.WorkSegmentInclude;
-
-type SegmentForMutation = Prisma.WorkSegmentGetPayload<{
-  include: typeof segmentInclude;
-}>;
-
-type TaskForAuthorization = NonNullable<SegmentForMutation["task"]>;
-
-export type WorkSegmentDto = {
-  id: string;
-  personId: string;
-  type: WorkSegment["type"];
-  status: WorkSegment["status"];
-  startAt: string;
-  endAt: string;
-  content: string;
-  priority: TaskPriority;
-  expectedOutput: string;
-  actualOutput: string;
-  taskId: string | null;
-  sourceSplitFromId: string | null;
-  deletedAt: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
 
 export type SegmentMutationResult = {
   segment: WorkSegmentDto;
@@ -876,91 +838,6 @@ export async function softDeleteActualSegment(
   });
 }
 
-export async function scanSegmentTransitions(now = new Date()) {
-  return prisma.$transaction(async (tx) => {
-    const toPending = await tx.workSegment.findMany({
-      where: {
-        type: "PLANNED",
-        status: { in: ["PLANNED", "IN_PROGRESS"] },
-        endAt: { lte: now },
-        deletedAt: null,
-      },
-      include: segmentInclude,
-      orderBy: { id: "asc" },
-      take: 500,
-    });
-    const toInProgress = await tx.workSegment.findMany({
-      where: {
-        type: "PLANNED",
-        status: "PLANNED",
-        startAt: { lte: now },
-        endAt: { gt: now },
-        deletedAt: null,
-      },
-      include: segmentInclude,
-      orderBy: { id: "asc" },
-      take: 500,
-    });
-    let pendingConfirmationCount = 0;
-    for (const segment of toPending) {
-      const transition = await tx.workSegment.updateMany({
-        where: {
-          id: segment.id,
-          type: "PLANNED",
-          status: { in: ["PLANNED", "IN_PROGRESS"] },
-          endAt: { lte: now },
-          deletedAt: null,
-          updatedAt: segment.updatedAt,
-        },
-        data: { status: "PENDING_CONFIRMATION" },
-      });
-      if (transition.count !== 1) continue;
-      const before = snapshotSegment(segment);
-      const updated = await loadSegmentForMutationTx(tx, segment.id);
-      await recordSystemSegmentChangeTx(tx, {
-        segmentId: updated.id,
-        action: "UPDATE",
-        before,
-        after: snapshotSegment(updated),
-        reason: "Planned Segment 已到期，等待确认",
-      });
-      await notifySegmentConfirmationDueTx(tx, updated);
-      pendingConfirmationCount += 1;
-    }
-
-    let inProgressCount = 0;
-    for (const segment of toInProgress) {
-      const transition = await tx.workSegment.updateMany({
-        where: {
-          id: segment.id,
-          type: "PLANNED",
-          status: "PLANNED",
-          startAt: { lte: now },
-          endAt: { gt: now },
-          deletedAt: null,
-          updatedAt: segment.updatedAt,
-        },
-        data: { status: "IN_PROGRESS" },
-      });
-      if (transition.count !== 1) continue;
-      const before = snapshotSegment(segment);
-      const updated = await loadSegmentForMutationTx(tx, segment.id);
-      await recordSystemSegmentChangeTx(tx, {
-        segmentId: updated.id,
-        action: "UPDATE",
-        before,
-        after: snapshotSegment(updated),
-        reason: "Planned Segment 已开始",
-      });
-      inProgressCount += 1;
-    }
-    return {
-      pendingConfirmationCount,
-      inProgressCount,
-    };
-  });
-}
-
 async function createWorkSegmentTx(
   tx: PrismaTx,
   actor: ProjectManagementActor,
@@ -1087,7 +964,7 @@ async function assertCanManageNewSegment(
     resource: {
       type: "segment",
       personId: input.personId,
-      task: task ? taskResource(task) : null,
+      task: task ? taskAuthorizationResource(task) : null,
     },
   });
   if (task && action === "segment.manage_self") {
@@ -1320,43 +1197,10 @@ async function createRemainingSegmentsAfterPartialConfirmTx(
   return remaining;
 }
 
-async function notifySegmentConfirmationDueTx(
-  tx: PrismaTx,
-  segment: SegmentForMutation,
-) {
-  const recipients = await recipientsForPersonIdsTx(tx, [segment.personId]);
-  await createProjectManagementEventNotificationsTx(tx, {
-    actorName: "系统",
-    task: segment.task
-      ? {
-          id: segment.task.id,
-          title: segment.task.title,
-          status: segment.task.status,
-          currentPlanVersionId: segment.task.currentPlanVersionId,
-        }
-      : null,
-    kind: "segment_confirmation_due",
-    category: "WORK_SEGMENT",
-    eventKey: `pm:segment:confirmation_due:${segment.id}:${segment.endAt.toISOString()}`,
-    title: "Planned Segment 待确认",
-    summary: `计划投入「${segment.content}」已到结束时间，请确认实际投入`,
-    entityType: "WorkSegment",
-    entityId: segment.id,
-    linkPath: `/progress?focus=${segment.id}`,
-    mandatory: false,
-    recipients,
-    context: {
-      segmentId: segment.id,
-      segmentStatus: segment.status,
-      endAt: segment.endAt.toISOString(),
-    },
-  });
-}
-
 async function loadTaskForAuthorizationTx(
   tx: PrismaTx,
   taskId: string,
-): Promise<TaskForAuthorization> {
+): Promise<TaskForSegmentAuthorization> {
   const task = await tx.task.findUnique({
     where: { id: taskId },
     select: {
@@ -1378,30 +1222,21 @@ async function loadTaskForAuthorizationTx(
   return task;
 }
 
-function taskResource(task: TaskForAuthorization): AuthorizationTaskResource {
-  return {
-    type: "task",
-    id: task.id,
-    team: task.team,
-    techGroup: task.techGroup,
-    status: task.status,
-    priority: task.priority,
-    members: task.members,
-  };
-}
-
-function assertTaskVisible(actor: ProjectManagementActor, task: TaskForAuthorization) {
+function assertTaskVisible(
+  actor: ProjectManagementActor,
+  task: TaskForSegmentAuthorization,
+) {
   const decision = authorize({
     actor,
     action: "task.view",
-    resource: taskResource(task),
+    resource: taskAuthorizationResource(task),
   });
   if (!decision.allowed) throw notFoundError();
 }
 
 function assertActorCanReferenceTaskForSegment(
   actor: ProjectManagementActor,
-  input: { personId: string; task: TaskForAuthorization },
+  input: { personId: string; task: TaskForSegmentAuthorization },
 ) {
   assertAuthorized({
     actor,
@@ -1412,7 +1247,7 @@ function assertActorCanReferenceTaskForSegment(
     resource: {
       type: "segment",
       personId: input.personId,
-      task: taskResource(input.task),
+      task: taskAuthorizationResource(input.task),
     },
   });
 }
@@ -1427,7 +1262,7 @@ function assertSegmentVisible(
     resource: {
       type: "segment",
       personId: segment.personId,
-      task: segment.task ? taskResource(segment.task) : null,
+      task: segment.task ? taskAuthorizationResource(segment.task) : null,
     },
   });
   if (!decision.allowed) throw notFoundError();
@@ -1458,7 +1293,7 @@ function assertCanManageSegment(
     resource: {
       type: "segment",
       personId: segment.personId,
-      task: segment.task ? taskResource(segment.task) : null,
+      task: segment.task ? taskAuthorizationResource(segment.task) : null,
     },
   });
 }
@@ -1601,38 +1436,6 @@ async function recordSegmentChangeTx(
   });
 }
 
-async function recordSystemSegmentChangeTx(
-  tx: PrismaTx,
-  input: {
-    segmentId: string;
-    action: WorkSegmentChangeAction;
-    before: Prisma.InputJsonValue | null;
-    after: Prisma.InputJsonValue | null;
-    reason: string;
-  },
-) {
-  await tx.workSegmentChange.create({
-    data: {
-      segmentId: input.segmentId,
-      action: input.action,
-      before: input.before ?? Prisma.JsonNull,
-      after: input.after ?? Prisma.JsonNull,
-      reason: input.reason,
-      actorAccountId: null,
-    },
-  });
-  await createDomainAuditEventTx(tx, {
-    action: `pm.segment.${input.action.toLowerCase()}`,
-    entityType: "WorkSegment",
-    entityId: input.segmentId,
-    taskId: extractTaskId(input.after) ?? extractTaskId(input.before),
-    before: input.before,
-    after: input.after,
-    reason: input.reason,
-    source: "CRON",
-  });
-}
-
 function extractTaskId(value: Prisma.InputJsonValue | null) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const taskId = (value as Record<string, unknown>).taskId;
@@ -1649,134 +1452,7 @@ function assertExpectedUpdatedAt(
   throw staleSegmentError(segment);
 }
 
-function assertPlannedEditable(segment: SegmentForMutation, message: string) {
-  if (
-    segment.type !== "PLANNED" ||
-    segment.deletedAt ||
-    segment.status === "CONFIRMED" ||
-    segment.status === "CANCELLED"
-  ) {
-    throw stateConflictError(message);
-  }
-}
-
-function assertValidSegmentRange(startAt: Date, endAt: Date) {
-  if (endAt <= startAt) {
-    throw validationError("结束时间必须晚于开始时间", {
-      endAt: ["结束时间必须晚于开始时间"],
-    });
-  }
-  if (endAt.getTime() - startAt.getTime() > MAX_SEGMENT_MS) {
-    throw validationError("单条投入记录最长 31 天", {
-      endAt: ["单条投入记录最长 31 天"],
-    });
-  }
-}
-
-function assertCoverageInsideSegment(
-  segment: Pick<WorkSegment, "startAt" | "endAt">,
-  coveredStartAt: Date,
-  coveredEndAt: Date,
-) {
-  if (
-    coveredEndAt <= coveredStartAt ||
-    coveredStartAt < segment.startAt ||
-    coveredEndAt > segment.endAt
-  ) {
-    throw validationError("来源覆盖范围不能超出 Planned Segment", {
-      sources: ["来源覆盖范围不能超出 Planned Segment"],
-    });
-  }
-}
-
-function assertMergeCompatible(segments: SegmentForMutation[]) {
-  const first = segments[0];
-  if (!first) throw validationError("至少选择两条 Planned Segment");
-  let currentEnd = first.endAt;
-  for (const segment of segments) {
-    if (
-      segment.personId !== first.personId ||
-      segment.type !== first.type ||
-      segment.content !== first.content ||
-      segment.priority !== first.priority ||
-      segment.taskId !== first.taskId ||
-      segment.expectedOutput !== first.expectedOutput
-    ) {
-      throw validationError("只能合并同人同语义的 Planned Segment", {
-        segments: ["只能合并同人同语义的 Planned Segment"],
-      });
-    }
-    if (segment !== first && segment.startAt > currentEnd) {
-      throw validationError("只能合并时间相邻或重叠的 Planned Segment", {
-        segments: ["只能合并时间相邻或重叠的 Planned Segment"],
-      });
-    }
-    if (segment.endAt > currentEnd) currentEnd = segment.endAt;
-  }
-}
-
 function assertUniqueIds(ids: string[], message: string) {
   if (new Set(ids).size === ids.length) return;
   throw validationError(message);
-}
-
-function plannedStatusForRange(startAt: Date, endAt: Date): WorkSegment["status"] {
-  const now = new Date();
-  if (endAt <= now) return "PENDING_CONFIRMATION";
-  if (startAt <= now && endAt > now) return "IN_PROGRESS";
-  return "PLANNED";
-}
-
-function plannedStatusAfterMove(
-  segment: SegmentForMutation,
-  startAt: Date,
-  endAt: Date,
-): WorkSegment["status"] {
-  if (
-    segment.status === "PLANNED" ||
-    segment.status === "IN_PROGRESS" ||
-    segment.status === "PENDING_CONFIRMATION"
-  ) {
-    return plannedStatusForRange(startAt, endAt);
-  }
-  return segment.status;
-}
-
-function snapshotSegment(segment: SegmentForMutation): Prisma.InputJsonObject {
-  return {
-    id: segment.id,
-    personId: segment.personId,
-    type: segment.type,
-    status: segment.status,
-    startAt: segment.startAt.toISOString(),
-    endAt: segment.endAt.toISOString(),
-    content: segment.content,
-    priority: segment.priority,
-    expectedOutput: segment.expectedOutput,
-    actualOutput: segment.actualOutput,
-    taskId: segment.taskId,
-    sourceSplitFromId: segment.sourceSplitFromId,
-    deletedAt: segment.deletedAt?.toISOString() ?? null,
-    updatedAt: segment.updatedAt.toISOString(),
-  };
-}
-
-export function toWorkSegmentDto(segment: SegmentForMutation): WorkSegmentDto {
-  return {
-    id: segment.id,
-    personId: segment.personId,
-    type: segment.type,
-    status: segment.status,
-    startAt: segment.startAt.toISOString(),
-    endAt: segment.endAt.toISOString(),
-    content: segment.content,
-    priority: segment.priority,
-    expectedOutput: segment.expectedOutput,
-    actualOutput: segment.actualOutput,
-    taskId: segment.taskId,
-    sourceSplitFromId: segment.sourceSplitFromId,
-    deletedAt: segment.deletedAt?.toISOString() ?? null,
-    createdAt: segment.createdAt.toISOString(),
-    updatedAt: segment.updatedAt.toISOString(),
-  };
 }
