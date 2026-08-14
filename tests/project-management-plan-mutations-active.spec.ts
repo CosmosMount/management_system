@@ -136,7 +136,16 @@ test.describe("project management plan mutations project-management-plan-mutatio
           taskTitle: expect.any(String),
         });
         expect(String(payload.summary)).toContain(owner.person.displayName);
-        expect(jsonRecord(payload.context).result).toBe("SUCCESS");
+        const context = jsonRecord(payload.context);
+        expect(context.result).toBe("SUCCESS");
+        expect(String(payload.summary)).not.toContain("成员关系");
+        if (context.changeKind === "ADDED") {
+          expect(String(payload.summary)).toContain("已将你加入任务");
+        } else if (context.changeKind === "REMOVED") {
+          expect(String(payload.summary)).toContain("已将你移出任务");
+        } else {
+          expect(String(payload.summary)).toContain("已调整你在任务");
+        }
       }
       expect(
         await prisma.inAppNotification.count({

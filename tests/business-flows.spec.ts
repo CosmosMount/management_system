@@ -890,7 +890,7 @@ test("反馈可由普通用户创建回复，并由管理员关闭", async ({
     })
     .toBe("IN_PROGRESS");
 
-  await feedbackDetailHeader.getByRole("button", { name: "开放" }).click();
+  await feedbackDetailHeader.getByRole("button", { name: "待处理" }).click();
   await expect
     .poll(async () => {
       const feedback = await prisma.feedback.findUniqueOrThrow({

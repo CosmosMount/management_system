@@ -436,7 +436,7 @@ async function notifyCollaborationTx(
 }
 
 function targetLabel(target: TargetContext) {
-  return target.type === "PROJECT" ? `Project「${target.name}」` : `Task「${target.title}」`;
+  return target.type === "PROJECT" ? `项目「${target.name}」` : `任务「${target.title}」`;
 }
 
 function boundedPreview(content: string) {

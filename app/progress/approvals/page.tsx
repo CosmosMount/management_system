@@ -10,7 +10,7 @@ export default async function ProgressApprovalsPage() {
     <>
       <PageCommandBar
         title="待办与审批"
-        description="按严重度和逾期时间汇总投入确认、验收、Revision、Termination 与关联复核。"
+        description="按严重度和逾期时间汇总投入确认、里程碑验收、计划修订审核、任务结束确认与关联复核。"
       />
       <div className="mx-auto w-full min-w-0 max-w-[96rem] px-4 py-6 sm:px-6 lg:px-8">
         <ActionInbox items={inbox.items} />

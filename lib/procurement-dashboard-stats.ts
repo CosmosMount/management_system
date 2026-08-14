@@ -1,4 +1,5 @@
 import type { OrderStatus } from "@prisma/client";
+import { statusLabels } from "@/lib/permissions-client";
 import type { BudgetPoolView } from "@/lib/procurement-budget";
 import { routes } from "@/lib/routes";
 
@@ -150,17 +151,6 @@ export function buildDashboardChartsData(
       (statusCounts.get(order.status) ?? 0) + 1,
     );
   }
-
-  const statusLabels: Record<OrderStatus, string> = {
-    DRAFT: "草稿",
-    MANAGEMENT_REVIEW: "管理审核",
-    TEACHER_REVIEW: "老师审核",
-    PENDING_APPLICANT_DOCS: "待上传凭证",
-    PENDING_FINANCE_REVIEW: "待报销截图",
-    PENDING_APPLICANT_CONFIRM: "待确认",
-    COMPLETED: "已完成",
-    REJECTED: "已驳回",
-  };
 
   const completedSpend = buildSpendSeries(completed);
   const allSpend = buildSpendSeries(submitted);

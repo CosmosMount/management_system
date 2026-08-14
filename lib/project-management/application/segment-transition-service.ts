@@ -113,7 +113,7 @@ async function notifySegmentConfirmationDueTx(
     kind: "segment_confirmation_due",
     category: "WORK_SEGMENT",
     eventKey: `pm:segment:confirmation_due:${segment.id}:${segment.endAt.toISOString()}`,
-    title: "Planned Segment 待确认",
+    title: "计划投入待确认",
     summary: `计划投入「${segment.content}」已到结束时间，请确认实际投入`,
     entityType: "WorkSegment",
     entityId: segment.id,

@@ -25,6 +25,30 @@ type CardOptions = {
 
 const REJECT_REASON_FIELD = "Input_procurement_reject_reason";
 
+const PROCUREMENT_NOTIFICATION_TITLES: Record<
+  OrderCardPayload["status"],
+  string
+> = {
+  DRAFT: "采购申请草稿",
+  MANAGEMENT_REVIEW: "采购申请待管理审核",
+  TEACHER_REVIEW: "采购申请待老师审核",
+  PENDING_APPLICANT_DOCS: "请上传采购报销凭证",
+  PENDING_FINANCE_REVIEW: "采购报销资料待报销员处理",
+  PENDING_APPLICANT_CONFIRM: "请确认采购报销结果",
+  COMPLETED: "采购报销已完成",
+  REJECTED: "采购申请已驳回",
+};
+
+export function procurementNotificationTitle(
+  status: OrderCardPayload["status"],
+) {
+  return PROCUREMENT_NOTIFICATION_TITLES[status];
+}
+
+export function procurementTeacherApprovalResult(orderNo: string) {
+  return `老师审核已通过，订单「${orderNo}」已进入待申请人上传凭证环节`;
+}
+
 function buildDetailUrl(
   orderId: string,
   focus?: CardOptions["detailFocus"],
@@ -308,7 +332,7 @@ function buildSummaryMarkdown(
       : order.status === "PENDING_APPLICANT_CONFIRM"
         ? "\n**操作提示**：请核对下方报销截图，确认无误后点击「完成报销」"
         : order.status === "PENDING_APPLICANT_DOCS"
-          ? "\n**操作提示**：请重新上传发票、实物照片"
+          ? "\n**操作提示**：请上传发票、实物照片"
           : supportsProcurementCardApproval(order.status)
             ? "\n**操作提示**：可在下方填写原因，通过或退回修改"
             : "";
@@ -422,7 +446,7 @@ export function buildProcurementCardKitCard(
     header: {
       title: {
         tag: "plain_text",
-        content: options.headerTitle ?? "采购报销审批提醒",
+        content: options.headerTitle ?? procurementNotificationTitle(order.status),
       },
       template: options.headerTemplate ?? "blue",
     },
@@ -446,7 +470,7 @@ export function buildProcurementWebhookCard(
     header: {
       title: {
         tag: "plain_text",
-        content: options.headerTitle ?? "采购报销审批提醒",
+        content: options.headerTitle ?? procurementNotificationTitle(order.status),
       },
       template: options.headerTemplate ?? "blue",
     },

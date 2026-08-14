@@ -8,7 +8,7 @@ import {
 import { createProjectManagementEventNotificationsTx } from "@/lib/project-management/application/notification-utils";
 import type { TaskForMutation } from "@/lib/project-management/application/task-mutation-records";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
-import { taskMemberRoleLabels } from "@/lib/project-management/labels";
+import { taskMemberChangeSummary } from "@/lib/project-management/notifications/user-facing-copy";
 
 type PrismaTx = Prisma.TransactionClient;
 
@@ -63,14 +63,6 @@ export async function notifyActiveMemberChangesTx(
       tx,
       change.personId,
     );
-    const beforeLabel = roleListLabel(change.beforeRoles);
-    const afterLabel = roleListLabel(change.afterRoles);
-    const actionLabel =
-      change.kind === "ADDED"
-        ? "加入"
-        : change.kind === "REMOVED"
-          ? "移出"
-          : "调整角色";
     await createProjectManagementEventNotificationsTx(tx, {
       actor: input.actor,
       task: {
@@ -82,8 +74,14 @@ export async function notifyActiveMemberChangesTx(
       kind: "task_assigned",
       category: "TASK",
       eventKey: `pm:task:member_changed:${input.task.id}:${input.lockVersion}:${change.personId}`,
-      title: "Task 成员变更",
-      summary: `${actorName}已将你在 Task「${input.task.title}」中的成员关系${actionLabel}：${beforeLabel} → ${afterLabel}`,
+      title: "任务成员已变更",
+      summary: taskMemberChangeSummary({
+        actorName,
+        taskTitle: input.task.title,
+        changeKind: change.kind,
+        beforeRoles: change.beforeRoles,
+        afterRoles: change.afterRoles,
+      }),
       entityType: "Task",
       entityId: input.task.id,
       linkPath: "/progress",
@@ -175,11 +173,6 @@ function rolesByPerson(
   }
   for (const roles of result.values()) roles.sort();
   return result;
-}
-
-function roleListLabel(roles: TaskMemberRole[]) {
-  if (roles.length === 0) return "无";
-  return roles.map((role) => taskMemberRoleLabels[role]).join("、");
 }
 
 function sameStringArray(left: string[], right: string[]) {

@@ -22,6 +22,16 @@ import {
 } from "../lib/project-management/queries/time-canvas-queries";
 
 test.describe("project management S8 dashboard and notifications", () => {
+  test.beforeAll(async () => {
+    const approvalAdmin = await createActor("S8 全局审批管理员");
+    await prisma.systemRoleAssignment.create({
+      data: {
+        accountId: approvalAdmin.accountId,
+        role: "PROJECT_ADMINISTRATOR",
+      },
+    });
+  });
+
   test("Action Inbox filters by permission and sorts overdue work first", async () => {
     const user = await createActor("S8 Inbox");
     const other = await createActor("S8 Other");
@@ -159,7 +169,7 @@ test.describe("project management S8 dashboard and notifications", () => {
         termination: {
           create: {
             id: terminationId,
-            name: "S8 Gate Terminal",
+            name: "Terminal",
             plannedAt: new Date("2026-09-20T02:00:00.000Z"),
             plannedOutcomeCriteria: "审批空闲时允许结束",
           },
@@ -199,10 +209,14 @@ test.describe("project management S8 dashboard and notifications", () => {
       canConfirmTermination: true,
     });
     expect(
-      (await getActionInbox({ actor: owner, limit: 100 })).items.some(
+      (await getActionInbox({ actor: owner, limit: 100 })).items.find(
         (item) => item.id === terminalInboxId,
       ),
-    ).toBe(true);
+    ).toEqual(
+      expect.objectContaining({
+        summary: "结束节点：审批空闲时允许结束",
+      }),
+    );
 
     const review = await prisma.milestoneReview.create({
       data: {

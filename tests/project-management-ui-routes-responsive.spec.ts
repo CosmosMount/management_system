@@ -511,6 +511,12 @@ test.describe("project management UI project-management-ui-routes-responsive", (
       await page.goto("/progress/notifications");
       await expect(page.getByRole("heading", { name: "站内通知" })).toBeVisible();
       await expect(page.getByText("P6 UI 通知")).toBeVisible();
+      await expect(
+        page
+          .locator("article")
+          .filter({ hasText: "P6 UI 通知" })
+          .getByText("任务", { exact: true }),
+      ).toBeVisible();
       await page
         .locator("article")
         .filter({ hasText: "P6 UI 通知" })
@@ -587,7 +593,7 @@ test.describe("project management UI project-management-ui-routes-responsive", (
 
       await page.goto("/progress/notifications");
       await expect(page.getByRole("heading", { name: "通知偏好" })).toBeVisible();
-      const taskFeishu = page.getByRole("checkbox", { name: "Task飞书通知" });
+      const taskFeishu = page.getByRole("checkbox", { name: "任务飞书通知" });
       await expect(taskFeishu).toBeChecked();
       await taskFeishu.uncheck();
       await expect(page.getByText(/通知偏好已保存/)).toBeVisible();
@@ -613,4 +619,32 @@ test.describe("project management UI project-management-ui-routes-responsive", (
       ).toBe(true);
       expect(pageErrors).toEqual([]);
     });
+
+  test("action inbox and notification center render Chinese business labels", async ({
+    context,
+    page,
+    baseURL,
+  }) => {
+    test.setTimeout(60_000);
+    const fixture = await createUiFixture();
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.owner.openId,
+      name: fixture.owner.person.displayName,
+    });
+
+    await page.goto("/progress/approvals");
+    await expect(page.getByRole("heading", { name: "待办与审批" })).toBeVisible();
+    await expect(page.getByTestId("action-inbox")).toBeVisible();
+    await expect(page.getByText("任务结束确认", { exact: true })).toBeVisible();
+    await expect(page.getByText("结束节点：所有 Milestone 完成并完成总结")).toBeVisible();
+    await expect(page.getByText("Termination", { exact: true })).toHaveCount(0);
+    await expectHealthyPage(page);
+    expect(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth <=
+          document.documentElement.clientWidth + 1,
+      ),
+    ).toBe(true);
+  });
 });

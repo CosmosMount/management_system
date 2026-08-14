@@ -14,7 +14,8 @@ export async function sendFeishuDailySummary(
   const lines = Object.entries(ordersByStatus)
     .filter(([, count]) => (count ?? 0) > 0)
     .map(([status, count]) => {
-      const label = statusLabels[status as OrderStatus] ?? status;
+      const label =
+        statusLabels[status as OrderStatus] ?? "其他待处理状态";
       return `- **${label}**：${count} 单`;
     });
   const content =

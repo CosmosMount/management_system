@@ -16,7 +16,7 @@ export function procurementRejectOutcomeLabels(stage: ProcurementRejectStage): R
       resubmit: {
         title: "退回重新提交",
         description:
-          "订单退回「待上传凭证」，已上传的发票、清单与照片将清空，采购人需重新提交。",
+          "订单退回「待申请人上传凭证」，已上传的发票、清单与照片将清空，采购人需重新提交。",
         confirmLabel: "确认退回",
       },
     };

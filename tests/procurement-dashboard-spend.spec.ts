@@ -64,6 +64,40 @@ test("看板支出统计同时提供已完成与全部已提交口径", () => {
   );
 });
 
+test("采购看板状态分布与通知使用相同的责任人文案", () => {
+  const now = new Date("2026-07-24T10:00:00.000Z");
+  const statuses = [
+    "PENDING_APPLICANT_DOCS",
+    "PENDING_FINANCE_REVIEW",
+    "PENDING_APPLICANT_CONFIRM",
+  ] as const;
+  const data = buildDashboardChartsData(
+    statuses.map((status, index) => ({
+      id: `status-${index}`,
+      orderNo: `PW-STATUS-${index}`,
+      initiatorName: "测试申请人",
+      team: "英雄",
+      techGroup: "电控",
+      status,
+      totalPrice: 100,
+      statusEnteredAt: now,
+    })),
+    [],
+    "",
+    new Map(statuses.map((_, index) => [`status-${index}`, "当前处理人"])),
+  );
+
+  expect(data.statusDistribution.map((slice) => slice.label).sort()).toEqual(
+    ["待申请人上传凭证", "待报销员处理", "待申请人确认"].sort(),
+  );
+  expect(data.delayRanking.map((row) => row.sublabel).join("\n")).toContain(
+    "待报销员处理 · 处理人：当前处理人",
+  );
+  expect(data.delayRanking.map((row) => row.sublabel).join("\n")).not.toContain(
+    "待报销截图",
+  );
+});
+
 test("采购看板可切换仅已完成与全部支出", async ({ page, context, baseURL }) => {
   const normalAuth = await resolveNormalAuthMaterial();
   await loginAsNormalUser(context, baseURL, normalAuth);

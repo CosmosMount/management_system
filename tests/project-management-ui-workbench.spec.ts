@@ -738,7 +738,9 @@ test.describe("project management UI project-management-ui-workbench", () => {
       });
 
       await page.goto(`/progress/tasks/${fixture.taskId}`);
-      const canvasRoot = page.getByTestId("time-canvas-root");
+      const canvasRoot = page
+        .getByTestId("resource-planner-workbench")
+        .getByTestId("time-canvas-root");
       await expect(canvasRoot).toHaveAttribute("data-zoom", "WEEK");
       await canvasRoot.getByRole("button", { name: "季", exact: true }).click();
       await expect(canvasRoot).toHaveAttribute("data-zoom", "QUARTER");
@@ -831,18 +833,22 @@ test.describe("project management UI project-management-ui-workbench", () => {
         );
         return Math.abs(centerAfter - centerAfterDraftPan);
       }).toBeLessThan(60 * 60 * 1_000);
-      await expect.poll(async () =>
-        (await canvasRoot.getAttribute("data-loaded-ranges"))
-          ?.split("|")
-          .some((range) => range.startsWith(`${expandedStart}:`)) ?? false,
+      await expect.poll(
+        async () =>
+          (await canvasRoot.getAttribute("data-loaded-ranges"))
+            ?.split("|")
+            .some((range) => range.startsWith(`${expandedStart}:`)) ?? false,
+        { timeout: 15_000 },
       ).toBe(true);
       await expect(canvasRoot).toHaveAttribute("data-zoom", "QUARTER");
       await expect(page).toHaveURL(/scale=quarter/);
       const adjacentBlockStart = expandedStart + 180 * 24 * 60 * 60 * 1_000;
-      await expect.poll(async () =>
-        (await canvasRoot.getAttribute("data-loaded-ranges"))
-          ?.split("|")
-          .some((range) => range.startsWith(`${adjacentBlockStart}:`)) ?? false,
+      await expect.poll(
+        async () =>
+          (await canvasRoot.getAttribute("data-loaded-ranges"))
+            ?.split("|")
+            .some((range) => range.startsWith(`${adjacentBlockStart}:`)) ?? false,
+        { timeout: 15_000 },
       ).toBe(true);
       await expect.poll(() => prisma.workSegment.findFirst({
         where: { taskId: fixture.taskId, content },
@@ -858,7 +864,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
         where: { taskId: fixture.taskId, content },
         select: { id: true },
       });
-      const editedCanvasRoot = page.getByTestId("time-canvas-root");
+      const editedCanvasRoot = canvasRoot;
       await page.getByTestId("time-canvas-scroll").evaluate((element) => {
         element.scrollLeft = 0;
         element.dispatchEvent(new Event("scroll"));
@@ -869,7 +875,25 @@ test.describe("project management UI project-management-ui-workbench", () => {
       await segmentBlock.press("Enter");
       const editForm = page.getByRole("form", { name: "编辑投入详情" });
       await expect(editForm).toBeVisible();
-      await page.waitForTimeout(500);
+      await expect.poll(async () => {
+        const viewportStart = Number(
+          await editedCanvasRoot.getAttribute("data-viewport-start-ms"),
+        );
+        const viewportEnd = Number(
+          await editedCanvasRoot.getAttribute("data-viewport-end-ms"),
+        );
+        const urlCenter = Date.parse(
+          new URL(page.url()).searchParams.get("center") ?? "",
+        );
+        if (
+          !Number.isFinite(viewportStart) ||
+          !Number.isFinite(viewportEnd) ||
+          !Number.isFinite(urlCenter)
+        ) {
+          return Number.POSITIVE_INFINITY;
+        }
+        return Math.abs(urlCenter - (viewportStart + viewportEnd) / 2);
+      }, { timeout: 15_000 }).toBeLessThan(60 * 60 * 1_000);
       const centerBeforeEdit = Date.parse(
         new URL(page.url()).searchParams.get("center") ?? "",
       );
@@ -883,10 +907,12 @@ test.describe("project management UI project-management-ui-workbench", () => {
         "data-range-start-ms",
         String(editedExpandedStart),
       );
-      await expect.poll(async () =>
-        (await editedCanvasRoot.getAttribute("data-loaded-ranges"))
-          ?.split("|")
-          .some((range) => range.startsWith(`${editedExpandedStart}:`)) ?? false,
+      await expect.poll(
+        async () =>
+          (await editedCanvasRoot.getAttribute("data-loaded-ranges"))
+            ?.split("|")
+            .some((range) => range.startsWith(`${editedExpandedStart}:`)) ?? false,
+        { timeout: 15_000 },
       ).toBe(true);
       await expect(editedCanvasRoot).toHaveAttribute("data-zoom", "QUARTER");
       await expect.poll(() => {
@@ -894,7 +920,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
           new URL(page.url()).searchParams.get("center") ?? "",
         );
         return Math.abs(centerAfterEdit - centerBeforeEdit);
-      }).toBeLessThan(60 * 60 * 1_000);
+      }, { timeout: 15_000 }).toBeLessThan(60 * 60 * 1_000);
       await expect.poll(() => prisma.workSegment.findUnique({
         where: { id: createdSegment.id },
         select: { type: true, status: true, startAt: true, endAt: true },

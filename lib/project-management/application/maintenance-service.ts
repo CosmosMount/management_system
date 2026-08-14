@@ -75,7 +75,7 @@ export async function runMilestoneDeadlineScan(
           kind,
           category: "MILESTONE",
           eventKey: `pm:milestone:${milestone.id}:${kind}:${localDate}`,
-          title: overdue ? "Milestone 已逾期" : "Milestone 今日到期",
+          title: overdue ? "里程碑已逾期" : "里程碑今日到期",
           summary: `${milestone.goal} · 计划完成时间 ${formatShanghaiDateTime(milestone.expectedCompletedAt)}`,
           entityType: "MilestoneNode",
           entityId: milestone.id,

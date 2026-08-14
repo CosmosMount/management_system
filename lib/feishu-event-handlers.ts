@@ -8,6 +8,7 @@ export function createFeishuEventDispatcher(options?: {
   encryptKey?: string;
   verificationToken?: string;
   botKind?: FeishuBotKind;
+  handleCardAction?: typeof handleFeishuCardAction;
 }): Lark.EventDispatcher {
   const dispatcher = new Lark.EventDispatcher({
     encryptKey: options?.encryptKey ?? process.env.FEISHU_EVENT_ENCRYPT_KEY,
@@ -29,7 +30,7 @@ export function createFeishuEventDispatcher(options?: {
           actionName: data.action?.name,
           actionTag: data.action?.tag,
         });
-        const result = await handleFeishuCardAction(data, {
+        const result = await (options?.handleCardAction ?? handleFeishuCardAction)(data, {
           botKind: options?.botKind,
         });
         logger.info("feishu.ws.card_action.completed", {
@@ -48,10 +49,7 @@ export function createFeishuEventDispatcher(options?: {
           operatorOpenId: data.operator?.open_id,
           error,
         });
-        return cardToast(
-          "error",
-          error instanceof Error ? error.message : "操作失败",
-        );
+        return cardToast("error", "操作失败，请打开系统查看最新状态后重试");
       }
     },
     "im.message.receive_v1": async (data: {

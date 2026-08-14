@@ -12,7 +12,7 @@
 - **L3 业务闭环**：在独立 PostgreSQL 测试库中完成采购申请至报销、反馈创建/回复/关闭、Task/Project/Segment/审批以及管理员角色和预算流程；同时核对数据库、审计、outbox 和文件补偿。
 - **L4 并发与一致性**：覆盖订单号、审批、Task/Segment 锁竞争、outbox claim/heartbeat/逐收件人重试、event key 幂等和飞书禁发/allowlist/机器人边界。
 
-全功能环境至少准备申请人、车组组长、技术组组长、超管和报销员五类账号；采购各状态、开放/处理中/关闭反馈、多个 Task/Segment 状态、部分失败 outbox 与迁移前 fixture。所有写入场景必须使用 runner 创建的随机 `_test` PostgreSQL 和测试上传目录。
+全功能环境至少准备申请人、车组组长、技术组组长、超管和报销员五类账号；采购各状态、待处理/处理中/已关闭反馈、多个 Task/Segment 状态、部分失败 outbox 与迁移前 fixture。所有写入场景必须使用 runner 创建的随机 `_test` PostgreSQL 和测试上传目录。
 
 ## 测试前准备
 
@@ -313,10 +313,10 @@ npx tsx --test tests/project-management-recent-activity-formatter.node.ts
 
 1. 打开 `/feedback`。
 2. 默认筛选应为“活动”，列表只包含 `OPEN` 和 `IN_PROGRESS`。
-3. 筛选顺序应为“活动 / 开放 / 处理中 / 已关闭 / 全部”。
+3. 筛选顺序应为“活动 / 待处理 / 处理中 / 已关闭 / 全部”。
 4. 点击“全部”，滚动列表并点击一个已关闭反馈。
 5. 期望筛选仍保持“全部”，URL 更新 `selected`，右侧详情更新，页面不跳回已关闭筛选。
-6. 再点击开放或处理中反馈，仍保持“全部”。
+6. 再点击待处理或处理中反馈，仍保持“全部”。
 7. 直接打开 `/feedback?selected=<closedId>`，初始应自动进入“已关闭”视图并显示详情。
 8. 新建反馈后应跳到新反馈详情，新反馈出现在“活动”中。
 9. 上传图片超过数量、类型、单张 20MB 或合计 50MB 限制时显示中文错误。
@@ -349,7 +349,7 @@ npx tsx --test tests/project-management-recent-activity-formatter.node.ts
 1. 自动化测试强制 `NOTIFICATION_DELIVERY_DISABLED=true`，并 mock 飞书 HTTP；确认测试过程没有真实网络投递。
 2. 飞书传输层分别验证 text、交互卡片和 CardKit，以及禁发、allowlist、通知/审批凭据、`open_id`/`union_id`、审批 fallback、`cardId` 返回和错误脱敏。
 3. procurement/feedback/project-management adapter 分别验证 payload、`type`、`botKind` 校验，真实/独立传输收件人计算与去重、完整消息内容和明确用途；普通通知不得使用审批机器人，审批事件只有 Webhook 而无真实审批人时不得标记成功。
-4. 创建采购、反馈或项目管理事件后应写入正确 channel 的 `NotificationOutbox`；旧 `progress` channel 必须被拒绝或不存在 adapter。项目管理 adapter 测试应 mock 飞书 HTTP 并验证交互卡包含操作人、Task、事件、对象、时间和上下文。
+4. 创建采购、反馈或项目管理事件后应写入正确 channel 的 `NotificationOutbox`；旧 `progress` channel 必须被拒绝或不存在 adapter。项目管理 adapter 测试应 mock 飞书 HTTP 并验证交互卡包含操作人、项目、任务、通知内容、中文事项名称、时间和中文上下文。卡片与站内通知不得显示 `Task`、`Project`、`MilestoneReview`、`WorkSegment`、原始状态枚举、收件人解析状态或未知 context 键；采购卡片应按各处理环节显示不同的明确中文标题。
 5. 飞书网络失败、临时收件人查询失败或缺少 `union_id` 时 outbox 保留可重试状态，不回滚业务状态；未知 channel、非法 payload/元数据和错误机器人用途应终止重试并保留明确错误。
 6. 重跑 drain 不重复发送相同 `eventKey`，多收件人通知只重试失败的 `NotificationOutboxRecipient`；首次收件人解析失败和 outbox/recipient 锁过期后都可安全恢复。
 7. 同时启动多个 cron 时，应确认不会重复 claim 同一 outbox；如发现重复，记录为并发风险。

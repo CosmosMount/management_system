@@ -7,6 +7,8 @@ import {
 } from "@/lib/project-management/authorization";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import { configurableNotificationCategories } from "@/lib/project-management/application/notification-preference-service";
+import { projectManagementNotificationPayloadSchema } from "@/lib/project-management/notifications/contract";
+import { normalizeProjectManagementNotificationText } from "@/lib/project-management/notifications/user-facing-copy";
 
 const notificationCategoryValues = [
   "TASK",
@@ -83,12 +85,28 @@ export async function listInAppNotifications({
     items: rows.slice(0, parsed.limit).map((row) => {
       const taskTitle = row.taskId ? visibleTaskTitles.get(row.taskId) ?? null : null;
       const entityAvailable = !row.taskId || taskTitle !== null;
+      const storedPayload = parseStoredNotificationPayload(row.payload);
+      const copyOptions = storedPayload
+        ? {
+            kind: storedPayload.kind,
+            taskTitle: storedPayload.taskTitle,
+            projectName: storedPayload.projectName,
+            actorName: storedPayload.actorName,
+            context: storedPayload.context,
+          }
+        : {};
       return {
         id: row.id,
         eventKey: row.eventKey,
         category: row.category,
-        title: row.title,
-        summary: row.summary,
+        title: normalizeProjectManagementNotificationText(row.title, {
+          field: "title",
+          ...copyOptions,
+        }),
+        summary: normalizeProjectManagementNotificationText(row.summary, {
+          field: "summary",
+          ...copyOptions,
+        }),
         entityType: row.entityType,
         entityId: row.entityId,
         taskId: row.taskId,
@@ -101,6 +119,16 @@ export async function listInAppNotifications({
     }),
     nextCursor: rows.length > parsed.limit ? rows[parsed.limit]?.id ?? null : null,
   };
+}
+
+function parseStoredNotificationPayload(
+  payload: Prisma.JsonValue,
+) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+  const result = projectManagementNotificationPayloadSchema.safeParse(payload);
+  return result.success ? result.data : null;
 }
 
 export async function getUnreadInAppNotificationCount(

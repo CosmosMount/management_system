@@ -10,6 +10,7 @@ import {
 } from "@/lib/notification-producers/procurement";
 import { drainNotificationOutboxSoon } from "@/lib/notification-delivery";
 import { refreshProcurementFeishuCards } from "@/lib/feishu-procurement-card-sync";
+import { procurementTeacherApprovalResult } from "@/lib/feishu-procurement-card";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
@@ -96,7 +97,7 @@ export async function updateOrderStatus(orderId: string) {
     if (order.status === OrderStatus.TEACHER_REVIEW) {
       await refreshProcurementFeishuCards(
         orderId,
-        `老师审核已通过，订单 ${updated.orderNo} 待上传凭证`,
+        procurementTeacherApprovalResult(updated.orderNo),
       );
     }
     drainNotificationOutboxSoon();

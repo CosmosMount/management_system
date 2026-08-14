@@ -20,6 +20,7 @@ import {
   reviewSubmitterAndOwnersTx,
 } from "@/lib/project-management/application/lifecycle-notifications";
 import { taskAuthorizationResource } from "@/lib/project-management/application/task-authorization-resource";
+import { milestoneReviewResultLabel } from "@/lib/project-management/notifications/user-facing-copy";
 import { assertTaskApprovalAvailableTx } from "@/lib/project-management/task-approval-gate";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import {
@@ -133,8 +134,8 @@ export async function submitMilestoneForReview(
       kind: "milestone_review_submitted",
       category: "REVIEW",
       eventKey: `pm:milestone:review_submitted:${review.id}`,
-      title: "Milestone 待验收",
-      summary: `Task「${task.title}」有 Milestone 待验收`,
+      title: "里程碑待验收",
+      summary: `任务「${task.title}」有里程碑等待验收`,
       entityType: "MilestoneReview",
       entityId: review.id,
       mandatory: true,
@@ -279,7 +280,9 @@ export async function reviewMilestone(
       task,
       reviewId: review.id,
       result: parsed.result,
-      summary: parsed.comment || `验收结果：${parsed.result}`,
+      summary:
+        parsed.comment || `验收结果：${milestoneReviewResultLabel(parsed.result)}`,
+      systemGeneratedSummary: !parsed.comment,
       recipients: await reviewSubmitterAndOwnersTx(tx, task, review),
     });
     return {

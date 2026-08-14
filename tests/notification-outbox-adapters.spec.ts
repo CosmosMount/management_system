@@ -301,6 +301,32 @@ test.describe("notification outbox channel adapters", () => {
     expect(sendAttempts).toEqual([]);
   });
 
+  test("反馈状态通知使用明确的待处理文案", async () => {
+    const eventKey = `${EVENT_PREFIX}feedback-open-copy`;
+    await enqueueNotification({
+      eventKey,
+      channel: "feedback",
+      type: "status",
+      payload: {
+        kind: "status",
+        payload: {
+          feedbackId: "feedback-test",
+          actorName: "测试管理员",
+          status: "OPEN",
+          submitterOpenId: "ou_outbox_success",
+        },
+      },
+    });
+
+    expect(
+      await drainNotificationOutbox(20, { ignoreDeliveryDisabled: true }),
+    ).toBe(1);
+    expect(sendAttempts).toEqual(["ou_outbox_success"]);
+    const serializedMessages = JSON.stringify(directMessageBodies);
+    expect(serializedMessages).toContain("当前状态**：待处理");
+    expect(serializedMessages).not.toContain("当前状态**：开放");
+  });
+
   test("损坏的 type 和 botKind 元数据会终止失败且不发送", async () => {
     const mismatchedTypeKey = `${EVENT_PREFIX}mismatched-type`;
     const invalidBotKey = `${EVENT_PREFIX}invalid-bot`;
@@ -995,17 +1021,21 @@ test.describe("notification outbox channel adapters", () => {
         purpose: "notification",
         category: "TASK",
         title: "Task 已激活",
-        summary: "李棋轩已激活电控调试 Task",
+        summary: "李棋轩已激活任务「电控调试」",
         actorName: "李棋轩",
         taskId: "pm-task-id",
-        taskTitle: "电控调试 Task",
+        taskTitle: "电控调试",
         entityType: "Task",
         entityId: "pm-task-id",
         linkPath: "/progress/tasks/pm-task-id",
         recipientOpenIds: ["ou_outbox_success", "ou_outbox_success"],
         mandatory: true,
         appOrigin: "http://127.0.0.1:3002",
-        context: { status: "ACTIVE" },
+        context: {
+          taskStatus: "ACTIVE",
+          recipientResolution: "PERSON_INACTIVE",
+          internalDebugName: "GLOBAL_ADMINISTRATORS_V2",
+        },
       },
     });
 
@@ -1018,9 +1048,17 @@ test.describe("notification outbox channel adapters", () => {
       String(directMessageBodies[0]?.content),
     ) as Record<string, unknown>;
     const rendered = JSON.stringify(content);
-    expect(rendered).toContain("Task 已激活");
+    expect(rendered).toContain("任务已开始执行");
     expect(rendered).toContain("李棋轩");
-    expect(rendered).toContain("电控调试 Task");
+    expect(rendered).toContain("电控调试");
+    expect(rendered).toContain("任务状态");
+    expect(rendered).toContain("进行中");
+    expect(rendered).toContain("相关事项");
+    expect(rendered).toContain("查看详情");
+    expect(rendered).not.toContain("Task 已激活");
+    expect(rendered).not.toContain("PERSON_INACTIVE");
+    expect(rendered).not.toContain("GLOBAL_ADMINISTRATORS_V2");
+    expect(rendered).not.toContain("internalDebugName");
     expect(rendered).toContain("/progress/tasks/pm-task-id");
     const row = await prisma.notificationOutbox.findUniqueOrThrow({
       where: { eventKey },

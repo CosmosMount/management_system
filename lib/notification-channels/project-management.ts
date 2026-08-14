@@ -10,6 +10,11 @@ import {
   projectManagementNotificationPayloadSchema,
   type ProjectManagementNotificationPayload,
 } from "@/lib/project-management/notifications/contract";
+import {
+  normalizeProjectManagementNotificationText,
+  projectManagementContextLines,
+  projectManagementEntityLabel,
+} from "@/lib/project-management/notifications/user-facing-copy";
 import type {
   NotificationChannelAdapter,
   NotificationDeliveryTarget,
@@ -143,10 +148,29 @@ function buildProjectManagementCard(
   createdAt: Date,
 ) {
   const url = buildAppUrl(payload.linkPath || "/progress", payload.appOrigin);
+  const title = normalizeProjectManagementNotificationText(payload.title, {
+    field: "title",
+    kind: payload.kind,
+    taskTitle: payload.taskTitle,
+    projectName: payload.projectName,
+    actorName: payload.actorName,
+    context: payload.context,
+  });
+  const summary = normalizeProjectManagementNotificationText(
+    payload.summary || payload.title,
+    {
+      field: "summary",
+      kind: payload.kind,
+      taskTitle: payload.taskTitle,
+      projectName: payload.projectName,
+      actorName: payload.actorName,
+      context: payload.context,
+    },
+  );
   return {
     config: { wide_screen_mode: true },
     header: {
-      title: { tag: "plain_text", content: truncate(payload.title, 80) },
+      title: { tag: "plain_text", content: truncate(title, 80) },
       template: cardTemplate(payload),
     },
     elements: [
@@ -156,11 +180,11 @@ function buildProjectManagementCard(
           tag: "lark_md",
           content: [
             `**操作人**：${payload.actorName || "系统"}`,
-            payload.projectName ? `**Project**：${truncate(payload.projectName, 80)}` : null,
-            payload.taskTitle ? `**Task**：${truncate(payload.taskTitle, 80)}` : null,
-            `**事件**：${truncate(payload.summary || payload.title, 180)}`,
-            `**对象**：${payload.entityType}`,
-            `**时间**：${formatCardDate(createdAt)}`,
+            payload.projectName ? `**项目**：${truncate(payload.projectName, 80)}` : null,
+            payload.taskTitle ? `**任务**：${truncate(payload.taskTitle, 80)}` : null,
+            `**通知内容**：${truncate(summary, 180)}`,
+            `**相关事项**：${projectManagementEntityLabel(payload.entityType)}`,
+            `**通知时间**：${formatCardDate(createdAt)}`,
             contextText(payload.context),
           ]
             .filter((line): line is string => Boolean(line))
@@ -172,7 +196,13 @@ function buildProjectManagementCard(
         actions: [
           {
             tag: "button",
-            text: { tag: "plain_text", content: "打开系统处理" },
+            text: {
+              tag: "plain_text",
+              content:
+                payload.purpose === "approval_request"
+                  ? "查看并审批"
+                  : "查看详情",
+            },
             url,
             type: payload.purpose === "approval_request" ? "primary" : "default",
           },
@@ -190,78 +220,13 @@ function cardTemplate(payload: ProjectManagementNotificationPayload) {
 }
 
 function contextText(context: Record<string, unknown>) {
-  const entries = Object.entries(context)
-    .filter(
-      ([key, value]) =>
-        value !== null &&
-        value !== undefined &&
-        value !== "" &&
-        !isInternalContextKey(key),
-    )
-    .slice(0, 6);
-  if (entries.length === 0) return null;
-  return entries
-    .map(
-      ([key, value]) =>
-        `**${contextLabel(key)}**：${truncate(
-          contextValue(key, value),
-          key === "content" ? 2_000 : key === "resolveNote" ? 500 : 80,
-        )}`,
+  const lines = projectManagementContextLines(context);
+  if (lines.length === 0) return null;
+  return lines
+    .map(({ label, value, maxLength }) =>
+      `**${label}**：${truncate(value, maxLength)}`,
     )
     .join("\n");
-}
-
-function isInternalContextKey(key: string) {
-  return key === "lockVersion" || key.endsWith("Id") || key.endsWith("Ids");
-}
-
-function contextValue(key: string, value: unknown) {
-  if (Array.isArray(value)) {
-    return value.map((item) => String(item)).join("、");
-  }
-  if (key === "beforeStatus" || key === "afterStatus" || key === "taskStatus") {
-    return statusLabel(String(value));
-  }
-  if (key === "decision") {
-    return value === "APPROVED" ? "通过" : value === "REJECTED" ? "驳回" : String(value);
-  }
-  if (key === "role") {
-    return value === "OWNER" ? "负责人" : value === "PARTICIPANT" ? "参与人" : String(value);
-  }
-  return String(value);
-}
-
-function statusLabel(value: string) {
-  const labels: Record<string, string> = {
-    DRAFT: "草稿",
-    PENDING_APPROVAL: "立项审批中",
-    ACTIVE: "进行中",
-    COMPLETED: "已完成",
-    FAILED: "失败",
-    CANCELLED: "已取消",
-    TIMEOUT: "超时",
-    ARCHIVED: "已归档",
-    DELETED: "已删除",
-  };
-  return labels[value] ?? value;
-}
-
-function contextLabel(key: string) {
-  const labels: Record<string, string> = {
-    taskStatus: "Task 状态",
-    segmentStatus: "投入状态",
-    beforeStatus: "变更前状态",
-    afterStatus: "变更后状态",
-    round: "立项轮次",
-    ownerNames: "负责人",
-    taskCount: "Task 数量",
-    decision: "审批结果",
-    comment: "审批意见",
-    role: "成员角色",
-    content: "内容",
-    resolveNote: "解决说明",
-  };
-  return labels[key] ?? key;
 }
 
 function truncate(value: string, maxLength: number) {

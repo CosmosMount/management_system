@@ -6,6 +6,7 @@ import {
 } from "@/lib/notification-producers/procurement";
 import { drainNotificationOutboxSoon } from "@/lib/notification-delivery";
 import { refreshProcurementFeishuCards } from "@/lib/feishu-procurement-card-sync";
+import { procurementTeacherApprovalResult } from "@/lib/feishu-procurement-card";
 import { getDefaultNotificationContext } from "@/lib/request-origin";
 import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { prisma } from "@/lib/prisma";
@@ -200,12 +201,10 @@ export async function approveProcurementByOpenId(
       return record;
     });
 
-    await refreshProcurementFeishuCards(
-      orderId,
-      `老师审核已通过，订单 ${updated.orderNo} 待上传凭证`,
-    );
+    const resultMessage = procurementTeacherApprovalResult(updated.orderNo);
+    await refreshProcurementFeishuCards(orderId, resultMessage);
     drainNotificationOutboxSoon();
-    return { message: `老师审核已通过，订单 ${updated.orderNo} 待上传凭证` };
+    return { message: resultMessage };
   }
 
   throw new Error("当前订单状态不支持在飞书中审批");

@@ -846,7 +846,6 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     const approved = await reviewMilestone(actor(fixture.reviewer), {
       reviewId: submitted.reviewId,
       result: "APPROVED",
-      comment: "通过",
     });
     expect(approved.result).toBe("APPROVED");
     expect(approved.activeMilestoneNodeId).not.toBe(activeNode.nodeId);
@@ -861,6 +860,16 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         purpose: "notification",
       },
     );
+    const approvedNotification = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: {
+        eventKey: `pm:milestone:review_result:${submitted.reviewId}:APPROVED:feishu`,
+      },
+      select: { payload: true },
+    });
+    expect(JSON.parse(approvedNotification.payload)).toMatchObject({
+      summary: "验收结果：已通过",
+      context: { summarySource: "SYSTEM_DEFAULT" },
+    });
     await expect(
       submitMilestoneForReview(actor(fixture.member), {
         milestoneNodeId: activeNode.nodeId,
@@ -1404,6 +1413,15 @@ test.describe("project management P2/P3 task lifecycle services", () => {
 
     const updated = await reviseRejectedRevision(actor(fixture.owner), validUpdate);
     expect(updated.status).toBe("PENDING_APPROVAL");
+    const resubmittedPayload = await expectProjectManagementOutbox(
+      `pm:revision:pending_review:${revision.revisionNodeId}:round:2:feishu`,
+      {
+        type: "revision_pending_review",
+        botKind: "approval",
+        purpose: "approval_request",
+      },
+    );
+    expect(resubmittedPayload.title).toBe("计划修订已重新提交审批");
     await expect(
       getTaskLifecycleViews({
         actor: actor(fixture.owner),

@@ -11,7 +11,7 @@ import {
   resolveNormalAuthMaterial,
 } from "./helpers/functional-fixtures";
 
-test("待报销截图卡片包含发票与清单区域", () => {
+test("待报销员处理卡片包含明确状态、发票与清单区域", () => {
   const card = buildProcurementCardKitCard(
     {
       id: "order-1",
@@ -35,13 +35,14 @@ test("待报销截图卡片包含发票与清单区域", () => {
 
   const serialized = JSON.stringify(card);
   expect(serialized).toContain("发票与清单");
+  expect(serialized).toContain("当前状态**：待报销员处理");
   expect(serialized).toContain("img_v3_invoice_key");
   expect(serialized).toContain("点击查看附件");
   expect(serialized).toContain("请核对下方发票与清单");
   expect(serialized).not.toContain("请打开详情页查看发票与清单");
 });
 
-test("待确认卡片 PDF 截图在卡片内展示链接", () => {
+test("待申请人确认卡片展示明确状态和 PDF 截图链接", () => {
   const card = buildProcurementCardKitCard(
     {
       id: "order-1",
@@ -60,6 +61,7 @@ test("待确认卡片 PDF 截图在卡片内展示链接", () => {
   );
 
   const serialized = JSON.stringify(card);
+  expect(serialized).toContain("当前状态**：待申请人确认");
   expect(serialized).toContain("点击查看 PDF");
   expect(serialized).not.toContain("见上方文件消息");
 });
@@ -87,7 +89,7 @@ test("操作完成后卡片变为只读，隐藏审批按钮", () => {
   expect(serialized).not.toContain("完成报销");
 });
 
-test("待确认卡片包含完成报销按钮与报销截图区域", () => {
+test("待申请人确认卡片包含完成报销按钮与报销截图区域", () => {
   const card = buildProcurementCardKitCard(
     {
       id: "order-1",

@@ -8,10 +8,10 @@ import type {
 
 const kindLabels: Record<ActionInboxKind, string> = {
   SEGMENT_CONFIRMATION: "投入确认",
-  MILESTONE_REVIEW: "Milestone 验收",
-  REVISION_REVIEW: "Revision 审核",
-  PROJECT_ESTABLISHMENT: "Project 立项",
-  TERMINATION: "Termination",
+  MILESTONE_REVIEW: "里程碑验收",
+  REVISION_REVIEW: "计划修订审核",
+  PROJECT_ESTABLISHMENT: "项目立项",
+  TERMINATION: "任务结束确认",
 };
 
 const severityLabels = {

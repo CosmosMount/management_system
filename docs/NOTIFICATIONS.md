@@ -78,7 +78,7 @@ Active 成员强制事件不得因受影响 Person 已停用、缺少飞书 iden
 
 Revision 生效事务先把目标 `TaskPlanVersion` 切换为 `CURRENT` 并更新 `Task.currentPlanVersionId`，随后以更新后的 Task 上下文写 `revision_applied`。Work Segment 仅关联 Task，不再产生节点关联失效通知。
 
-入队 helper 和 adapter 会拒绝 `type/payload.kind` 不一致、payload 结构错误、错误机器人类型和越界审批用途，并对 `recipientOpenIds` 去重。项目管理飞书卡片包含操作人、Task、事件摘要、对象类型、事件时间和最多 6 项上下文；按钮跳转到 payload 的 `linkPath`，没有链接时回到 `/progress`。`approval_request` 使用审批机器人用途；所有普通项目管理事件使用通知机器人，不能把审批机器人作为普通通知 fallback。Milestone 提交验收以及 Revision 创建/重新送审前会在全局审批人事务锁内重新查询收件人；没有有效全局管理员角色，或所有管理员都缺少 default tenant 非空飞书 openId 时，审批状态、审计、站内通知和 outbox 全部回滚，不生成无人可处理或确定无法投递的 pending。
+入队 helper 和 adapter 会拒绝 `type/payload.kind` 不一致、payload 结构错误、错误机器人类型和越界审批用途，并对 `recipientOpenIds` 去重。项目管理飞书卡片包含操作人、项目、任务、通知内容、相关事项、通知时间和最多 6 项中文业务上下文；审批请求按钮显示“查看并审批”，普通通知按钮显示“查看详情”，均跳转到 payload 的 `linkPath`，没有链接时回到 `/progress`。用户可见内容统一使用“项目、任务、里程碑、计划修订、计划投入、结束节点”等中文名称；数据库实体名、枚举值、上下文字段名、收件人解析状态和策略版本不得展示。未知对象统一显示“相关事项”，未知上下文直接省略；旧 outbox 与旧站内通知中能够按完整系统模板识别的内部术语会在投递或读取时转换为中文，模板中的项目名、任务名和正文按原值重建。里程碑验收结果会在 payload 中明确记录摘要来自系统默认文案还是审批人意见；只有系统默认摘要允许做状态中文化，用户意见始终按原文展示。缺少来源标记的早期歧义摘要不做猜测性改写。`approval_request` 使用审批机器人用途；所有普通项目管理事件使用通知机器人，不能把审批机器人作为普通通知 fallback。里程碑提交验收以及计划修订创建/重新送审前会在全局审批人事务锁内重新查询收件人；没有有效全局管理员角色，或所有管理员都缺少 default tenant 非空飞书 openId 时，审批状态、审计、站内通知和 outbox 全部回滚，不生成无人可处理或确定无法投递的待审批记录。
 
 资源冲突下线 migration 会删除 `RESOURCE_CONFLICT` 偏好与站内通知，以及 `resource_conflict_opened`、`resource_conflict_resolved` outbox；收件人投递行随 outbox 级联删除。已经送达飞书的历史消息无法撤回。
 
@@ -149,15 +149,17 @@ Milestone deadline scanner 使用 Asia/Shanghai 业务日期，事件键为 `pm:
 
 订单状态变化通过现有 `enqueueOrderNotification*` façade 入队，内部由 procurement adapter 投递。`orderNotificationEventKey(order)` 继续使用订单 ID、状态和 `statusEnteredAt` 区分审批轮次。
 
+采购卡片标题按当前环节明确区分管理审核、老师审核、凭证上传、报销资料处理、申请人确认、完成和驳回，不再对所有状态使用同一个“审批提醒”标题。卡片正文只显示中文状态、申请人、车组/技术组、单号、金额、操作提示和必要的业务说明；内部订单状态枚举和回调 action 不得出现在用户可见内容中。
+
 ### 订单状态
 
 | 场景/状态 | 用途 | 渠道 | 收件人 |
 |---|---|---|---|
 | `MANAGEMENT_REVIEW` 管理审核 | 审批 | outbox 私信 + 采购群 Webhook | 匹配车组组长和技术组组长；群内发摘要 |
 | `TEACHER_REVIEW` 老师审核 | 审批 | outbox 私信 + Webhook + 邮件 | 匹配技术组指导老师 |
-| `PENDING_APPLICANT_DOCS` 待上传凭证 | 通知 | outbox 私信 | 采购申请人 |
-| `PENDING_FINANCE_REVIEW` 财务审核 | 审批 | outbox 私信 + Webhook | 匹配技术组报销员 |
-| `PENDING_APPLICANT_CONFIRM` 待确认报销 | 审批 | outbox 私信 | 采购申请人 |
+| `PENDING_APPLICANT_DOCS` 待申请人上传凭证 | 通知 | outbox 私信 | 采购申请人 |
+| `PENDING_FINANCE_REVIEW` 待报销员处理 | 审批 | outbox 私信 + Webhook | 匹配技术组报销员 |
+| `PENDING_APPLICANT_CONFIRM` 待申请人确认 | 审批 | outbox 私信 | 采购申请人 |
 | `COMPLETED` 已完成 | 通知 | outbox 触发 Webhook | 采购群摘要，通常无角色私信 |
 
 管理审核的车组组长和技术组组长分别审批；催办只通知尚未完成审批的一侧。

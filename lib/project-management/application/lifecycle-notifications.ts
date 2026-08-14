@@ -26,6 +26,10 @@ import type {
 } from "@/lib/project-management/application/lifecycle-records";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import type { ProjectManagementNotificationPayload } from "@/lib/project-management/notifications/events";
+import {
+  SYSTEM_DEFAULT_NOTIFICATION_SUMMARY,
+  USER_PROVIDED_NOTIFICATION_SUMMARY,
+} from "@/lib/project-management/notifications/user-facing-copy";
 
 type PrismaTx = Prisma.TransactionClient;
 
@@ -85,6 +89,7 @@ export async function notifyMilestoneReviewResultTx(
     reviewId: string;
     result: MilestoneReviewResult;
     summary: string;
+    systemGeneratedSummary: boolean;
     recipients: LifecycleNotificationRecipient[];
   },
 ) {
@@ -94,12 +99,17 @@ export async function notifyMilestoneReviewResultTx(
     kind: "milestone_review_result",
     category: "REVIEW",
     eventKey: `pm:milestone:review_result:${input.reviewId}:${input.result}`,
-    title: "Milestone 验收结果已更新",
+    title: "里程碑验收结果已更新",
     summary: input.summary,
     entityType: "MilestoneReview",
     entityId: input.reviewId,
     mandatory: true,
     recipients: input.recipients,
+    context: {
+      summarySource: input.systemGeneratedSummary
+        ? SYSTEM_DEFAULT_NOTIFICATION_SUMMARY
+        : USER_PROVIDED_NOTIFICATION_SUMMARY,
+    },
   });
 }
 
@@ -125,6 +135,7 @@ export async function createLifecycleNotificationsTx(
     linkPath: "/progress",
     mandatory: input.mandatory,
     recipients: input.recipients,
+    context: input.context,
   });
 }
 
@@ -197,4 +208,5 @@ type NotificationInput = {
   entityType: string;
   entityId: string;
   mandatory: boolean;
+  context?: Record<string, unknown>;
 };

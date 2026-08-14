@@ -18,6 +18,7 @@ import {
 } from "@/lib/project-management/application/lifecycle-domain";
 import { notifyTaskMembersTx } from "@/lib/project-management/application/lifecycle-notifications";
 import { taskAuthorizationResource } from "@/lib/project-management/application/task-authorization-resource";
+import { terminationOutcomeLabel } from "@/lib/project-management/notifications/user-facing-copy";
 import { assertTaskApprovalAvailableTx } from "@/lib/project-management/task-approval-gate";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import { confirmTerminationInputSchema } from "@/lib/project-management/validations/lifecycle";
@@ -163,8 +164,8 @@ export async function confirmTermination(
       kind: "task_terminated",
       category: "TASK",
       eventKey: `pm:task:terminated:${termination.nodeId}`,
-      title: "Task 已结束",
-      summary: `Task「${task.title}」已结束（${termination.name}）：${parsed.outcome}`,
+      title: "任务已结束",
+      summary: `任务「${task.title}」已结束（${termination.name === "Terminal" ? "结束节点" : termination.name}）：${terminationOutcomeLabel(parsed.outcome)}`,
       entityType: "TerminationNode",
       entityId: termination.id,
       mandatory: true,

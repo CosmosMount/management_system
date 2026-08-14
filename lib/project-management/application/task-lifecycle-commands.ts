@@ -56,6 +56,10 @@ export type DeleteTaskDraftResult = {
   deletedAt: string;
 };
 
+function terminationDisplayName(name: string | null | undefined) {
+  return !name || name === "Terminal" ? "结束节点" : name;
+}
+
 export async function createTaskDraft(
   actor: ProjectManagementActor,
   input: unknown,
@@ -225,8 +229,8 @@ export async function createTaskDraft(
       kind: "task_assigned",
       category: "TASK",
       eventKey: `pm:task:assigned:${taskId}:v1`,
-      title: "你已被加入 Task",
-      summary: `Task「${task.title}」已创建为草稿`,
+      title: "你已被加入任务",
+      summary: `任务「${task.title}」已创建为草稿`,
       entityType: "Task",
       entityId: taskId,
       mandatory: true,
@@ -346,10 +350,10 @@ export async function activateTask(
       kind: "task_activated",
       category: "TASK",
       eventKey: `pm:task:activated:${task.id}:${updated.lockVersion}`,
-      title: "Task 已激活",
+      title: "任务已开始执行",
       summary: firstMilestone
-        ? `Task「${task.title}」已开始执行`
-        : `Task「${task.title}」已开始执行，当前节点：${termination?.node.termination?.name ?? "Terminal"}`,
+        ? `任务「${task.title}」已开始执行`
+        : `任务「${task.title}」已开始执行，当前节点：${terminationDisplayName(termination?.node.termination?.name)}`,
       entityType: "Task",
       entityId: task.id,
       mandatory: false,
@@ -418,8 +422,8 @@ export async function deleteTaskDraft(
       kind: "task_deleted",
       category: "TASK",
       eventKey: `pm:task:deleted:${task.id}:${updated.lockVersion}`,
-      title: "Task 草稿已删除",
-      summary: `Task 草稿「${task.title}」已删除`,
+      title: "任务草稿已删除",
+      summary: `任务草稿「${task.title}」已删除`,
       entityType: "Task",
       entityId: task.id,
       mandatory: true,
