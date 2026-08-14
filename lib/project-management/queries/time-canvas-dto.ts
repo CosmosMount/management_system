@@ -138,6 +138,7 @@ export function toFullSegmentDto(
     expectedOutput: segment.expectedOutput,
     actualOutput: segment.actualOutput,
     taskId: segment.taskId,
+    taskTitle: segment.task?.title ?? null,
     permissions: segmentPermissions(actor, segment),
     updatedAt,
     versionToken: updatedAt,

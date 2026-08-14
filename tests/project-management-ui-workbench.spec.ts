@@ -836,6 +836,14 @@ test.describe("project management UI project-management-ui-workbench", () => {
           ?.split("|")
           .some((range) => range.startsWith(`${expandedStart}:`)) ?? false,
       ).toBe(true);
+      await expect(canvasRoot).toHaveAttribute("data-zoom", "QUARTER");
+      await expect(page).toHaveURL(/scale=quarter/);
+      const adjacentBlockStart = expandedStart + 180 * 24 * 60 * 60 * 1_000;
+      await expect.poll(async () =>
+        (await canvasRoot.getAttribute("data-loaded-ranges"))
+          ?.split("|")
+          .some((range) => range.startsWith(`${adjacentBlockStart}:`)) ?? false,
+      ).toBe(true);
       await expect.poll(() => prisma.workSegment.findFirst({
         where: { taskId: fixture.taskId, content },
         select: { type: true, status: true, startAt: true, endAt: true },
@@ -968,6 +976,35 @@ test.describe("project management UI project-management-ui-workbench", () => {
       await expect(canvasRoot).toHaveAttribute("data-zoom", "MONTH");
       await expect.poll(() => new URL(page.url()).searchParams.get("scale"))
         .toBe("month");
+
+      const historicalMilestoneMs = Date.parse("2020-02-01T10:00:00.000Z");
+      await page
+        .getByTestId("task-plan-node-navigator")
+        .getByRole("button", { name: /历史 Milestone/ })
+        .click();
+      await expect.poll(() => {
+        const center = Date.parse(new URL(page.url()).searchParams.get("center") ?? "");
+        return Math.abs(center - historicalMilestoneMs);
+      }).toBeLessThan(60_000);
+      await expect.poll(async () => {
+        const start = Number(await canvasRoot.getAttribute("data-viewport-start-ms"));
+        const end = Number(await canvasRoot.getAttribute("data-viewport-end-ms"));
+        return start <= historicalMilestoneMs && historicalMilestoneMs < end;
+      }).toBe(true);
+
+      await page.goBack();
+      await expect.poll(async () => {
+        const now = Date.now();
+        const start = Number(await canvasRoot.getAttribute("data-viewport-start-ms"));
+        const end = Number(await canvasRoot.getAttribute("data-viewport-end-ms"));
+        return start <= now && now < end;
+      }).toBe(true);
+      await page.goForward();
+      await expect.poll(async () => {
+        const start = Number(await canvasRoot.getAttribute("data-viewport-start-ms"));
+        const end = Number(await canvasRoot.getAttribute("data-viewport-end-ms"));
+        return start <= historicalMilestoneMs && historicalMilestoneMs < end;
+      }).toBe(true);
       await expectHealthyPage(page);
     });
 

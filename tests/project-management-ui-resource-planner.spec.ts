@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { prisma } from "../lib/prisma";
 import { getResourcePlanPageData } from "../lib/project-management/queries/time-canvas-queries";
 import { expectHealthyPage, loginAsTestUser } from "./helpers/functional-fixtures";
+import { createTaskOptionFixtures } from "./helpers/project-management-canvas-security-fixtures";
 
 import {
   actor,
@@ -19,7 +20,74 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       await grantRole(administrator.account.id, "PROJECT_ADMINISTRATOR");
     });
 
-  test("resource plan Project selection, independent pagination, focus pin and legacy URL stay stable", async ({
+  test("my work and Task workbench render rows beyond the retired Task and Person limits", async ({
+      context,
+      page,
+      baseURL,
+    }) => {
+      test.setTimeout(90_000);
+      const fixture = await createUiFixture();
+      const taskTitlePrefix = `ZZZ My timeline Task ${randomUUID()}`;
+      const taskIds = await createTaskOptionFixtures({
+        ownerAccountId: fixture.member.account.id,
+        ownerPersonId: fixture.member.person.id,
+        titlePrefix: taskTitlePrefix,
+        count: 51,
+      });
+      const additionalMembers = Array.from({ length: 51 }, (_, index) => ({
+        id: randomUUID(),
+        displayName: `ZZZ Task workbench Person ${String(index).padStart(2, "0")} ${fixture.taskId}`,
+      }));
+      await prisma.person.createMany({
+        data: additionalMembers.map((person) => ({
+          id: person.id,
+          displayName: person.displayName,
+          status: "ACTIVE" as const,
+        })),
+      });
+      await prisma.taskMember.createMany({
+        data: additionalMembers.map((person) => ({
+          taskId: fixture.taskId,
+          personId: person.id,
+          role: "PARTICIPANT" as const,
+          createdByAccountId: fixture.member.account.id,
+        })),
+      });
+      await loginAsTestUser(context, baseURL, {
+        openId: fixture.member.openId,
+        name: fixture.member.person.displayName,
+      });
+
+      const finalTaskTitle = `${taskTitlePrefix} 50`;
+      await page.goto("/progress");
+      await expect(
+        page.getByRole("link", { name: finalTaskTitle, exact: true }),
+      ).toBeVisible();
+      await page.getByTestId("time-canvas-scroll").evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+        element.dispatchEvent(new Event("scroll"));
+      });
+      await expect(
+        page.getByTestId(`timeline-row-plan:${taskIds[50]}`),
+      ).toBeVisible();
+
+      await page.goto(`/progress/tasks/${fixture.taskId}`);
+      await page.getByTestId("time-canvas-scroll").evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+        element.dispatchEvent(new Event("scroll"));
+      });
+      await expect(
+        page.getByTestId(`timeline-row-person:${additionalMembers[50]!.id}`),
+      ).toBeVisible();
+      await expect(
+        page.getByLabel(`${additionalMembers[50]!.displayName} 时间行`, {
+          exact: true,
+        }),
+      ).toBeVisible();
+      await expectHealthyPage(page);
+    });
+
+  test("resource plan Project selection fully assembles rows, focus pin and legacy URL stay stable", async ({
       context,
       page,
       baseURL,
@@ -31,7 +99,7 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       const project = await prisma.project.create({
         data: {
           name: projectName,
-          description: "资源计划 Project picker 与分页回归",
+          description: "资源计划 Project picker 与全量装配回归",
           status: "ACTIVE",
           requesterAccountId: owner.account.id,
           startedAt: new Date("2026-08-01T00:00:00.000Z"),
@@ -69,7 +137,7 @@ test.describe("project management UI project-management-ui-resource-planner", ()
             versionNo: 1,
             status: "CURRENT" as const,
             plannedStartAt: new Date("2026-08-01T01:00:00.000Z"),
-            reason: "资源计划分页 UI fixture",
+            reason: "资源计划全量 UI fixture",
             createdByAccountId: owner.account.id,
             activatedAt: new Date("2026-08-01T01:00:00.000Z"),
           })),
@@ -80,7 +148,7 @@ test.describe("project management UI project-management-ui-resource-planner", ()
             taskId: record.id,
             type: "TERMINATION" as const,
             status: "ACTIVE" as const,
-            businessDescription: "资源计划分页 Terminal",
+            businessDescription: "资源计划全量 Terminal",
             createdByAccountId: owner.account.id,
           })),
         });
@@ -88,7 +156,7 @@ test.describe("project management UI project-management-ui-resource-planner", ()
           data: taskRecords.map((record, index) => ({
             nodeId: record.nodeId,
             name: `Terminal ${String(index).padStart(2, "0")}`,
-            plannedOutcomeCriteria: "完成资源计划分页验证",
+            plannedOutcomeCriteria: "完成资源计划全量验证",
             plannedAt: new Date("2026-08-02T01:00:00.000Z"),
           })),
         });
@@ -202,35 +270,28 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       await independentDetail
         .getByRole("button", { name: "Close" }).click();
 
-      await page.goto("/progress/resources");
+      await page.goto("/progress/resources?all=0");
       await page.getByRole("checkbox", { name: /显示全部资源/ }).uncheck();
       await page.getByRole("combobox", { name: "筛选 Project" }).fill(projectName);
       await page.getByRole("option", { name: projectName, exact: true }).click();
       await page.getByRole("button", { name: "应用选择" }).click();
       await expect.poll(() => new URL(page.url()).searchParams.get("projects")).toBe(project.id);
       await expect(page.getByText("Project（1）")).toBeVisible();
-      await expect(page.getByRole("link", { name: "下一页 Task" })).toBeVisible();
-      await expect(page.getByRole("link", { name: "下一页人员" })).toBeVisible();
+      await expect(page.getByRole("link", { name: "下一页 Task" })).toHaveCount(0);
+      await expect(page.getByRole("link", { name: "下一页人员" })).toHaveCount(0);
       await page.getByTestId("time-canvas-scroll").evaluate((element) => {
-        element.scrollTop = Math.min(
-          element.scrollHeight - element.clientHeight,
-          25 * 112,
-        );
+        element.scrollTop = 25 * 112;
         element.dispatchEvent(new Event("scroll"));
       });
+      await expect(page.getByTestId(`timeline-row-plan:${taskRecords[25]!.id}`)).toBeVisible();
       for (const segment of terminalPlannedSegments) {
         await expect(page.getByTestId(`segment-block-${segment.id}`)).toHaveCount(0);
       }
-
-      await page.getByRole("link", { name: "下一页 Task" }).click();
-      await expect.poll(() => new URL(page.url()).searchParams.has("taskCursor")).toBe(true);
-      expect(new URL(page.url()).searchParams.has("personCursor")).toBe(false);
-      await page.getByRole("link", { name: "下一页人员" }).click();
-      await expect.poll(() => new URL(page.url()).searchParams.has("personCursor")).toBe(true);
-      expect(new URL(page.url()).searchParams.has("taskCursor")).toBe(true);
-      await page.getByRole("link", { name: "Task 返回第一页" }).click();
-      await expect.poll(() => new URL(page.url()).searchParams.has("taskCursor")).toBe(false);
-      expect(new URL(page.url()).searchParams.has("personCursor")).toBe(true);
+      await page.getByTestId("time-canvas-scroll").evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+        element.dispatchEvent(new Event("scroll"));
+      });
+      await expect(page.getByTestId(`timeline-row-person:${people[50]!.id}`)).toBeVisible();
       await page.reload();
       await expect(page.getByText("Project（1）")).toBeVisible();
       await expect(page.getByLabel(projectName, { exact: true })).toBeVisible();
@@ -277,7 +338,7 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       );
 
       await page.goto(
-        `/progress/resources?tags=legacy&from=2026-08-10&to=2026-08-12&group=person&types=PLANNED&statuses=ACTIVE&zoom=hour&start=2026-08-01&end=2026-09-01&personId=${people[0]!.id}&taskId=${taskRecords[0]!.id}&timelineDate=2026-08-03&timelineFocus=${focusSegment.id}&focusSegmentIds=${focusSegment.id}`,
+        `/progress/resources?all=0&tags=legacy&from=2026-08-10&to=2026-08-12&group=person&types=PLANNED&statuses=ACTIVE&zoom=hour&start=2026-08-01&end=2026-09-01&personId=${people[0]!.id}&taskId=${taskRecords[0]!.id}&timelineDate=2026-08-03&timelineFocus=${focusSegment.id}&focusSegmentIds=${focusSegment.id}`,
       );
       await page.evaluate(() => {
         Object.defineProperty(navigator, "clipboard", {
@@ -305,7 +366,7 @@ test.describe("project management UI project-management-ui-resource-planner", ()
         document.documentElement.scrollWidth <= document.documentElement.clientWidth,
       )).toBe(true);
 
-      const expectedCanonicalPeople = people.map((person) => person.id).sort().slice(0, 50);
+      const expectedCanonicalPeople = people.map((person) => person.id).sort();
       const missingId = "ffffffff-ffff-4fff-8fff-ffffffffffff";
       await page.goto(
         `/progress/resources?all=0&projects=${project.id.toUpperCase()}&tasks=${taskRecords[1]!.id.toUpperCase()}&people=${people[1]!.id.toUpperCase()}`,
@@ -420,7 +481,7 @@ test.describe("project management UI project-management-ui-resource-planner", ()
         await route.continue();
       };
       await page.route("**/progress/resources**", abortInitialHistoryRequest);
-      await page.goto(`/progress/resources?focus=${fixture.movableSegmentId}`);
+      await page.goto(`/progress/resources?all=0&focus=${fixture.movableSegmentId}`);
       const emptyHistoryInspector = page.getByTestId("segment-inspector");
       await expect(emptyHistoryInspector.getByText("正在加载变更历史…")).toBeVisible();
       releaseInitialHistoryRequest();
@@ -431,7 +492,7 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       await emptyHistoryInspector.getByRole("button", { name: "重试历史" }).click();
       await expect(emptyHistoryInspector.getByText("暂无可见变更。")).toBeVisible();
 
-      await page.goto(`/progress/resources?focus=${fixture.confirmableSegmentId}`);
+      await page.goto(`/progress/resources?all=0&focus=${fixture.confirmableSegmentId}`);
       const initialInspector = page.getByTestId("segment-inspector");
       await expect(initialInspector).toContainText(
         "P6 UI 可确认计划",
@@ -467,35 +528,20 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       await initialInspector.getByRole("button", { name: "重试历史" }).click();
       await expect(initialInspector.getByText("已加载全部变更。")).toBeVisible();
 
-      await page.goto(`/progress/resources?focus=${randomUUID()}`);
+      await page.goto(`/progress/resources?all=0&focus=${randomUUID()}`);
       await expect(page).toHaveURL(/focusError=1/);
       await expect(page.getByText(
         "无法定位该时间对象，请确认链接仍然有效且你有权查看。",
       )).toBeVisible();
 
       await page.goto(
-        "/progress/resources?from=2026-08-10&to=2026-08-12&group=person",
+        "/progress/resources?all=0&from=2026-08-10&to=2026-08-12&group=person&taskCursor=old-task&personCursor=old-person",
       );
-      const nextResourcePage = page.getByRole("link", { name: "下一页人员" });
-      await expect(nextResourcePage).toBeVisible();
+      await expect.poll(() => new URL(page.url()).searchParams.has("taskCursor")).toBe(false);
+      expect(new URL(page.url()).searchParams.has("personCursor")).toBe(false);
       await page.getByRole("button", { name: "年", exact: true }).click();
       await expect(page).toHaveURL(/scale=year/);
       expect(new URL(page.url()).searchParams.get("center")).not.toBeNull();
-      await expect(nextResourcePage).toHaveAttribute("href", /scale=year/);
-      const paginationRequest = page.waitForRequest((request) => {
-        const url = new URL(request.url());
-        return request.method() === "GET" && url.searchParams.has("personCursor");
-      });
-      await nextResourcePage.click();
-      const paginationCenter = new URL(
-        (await paginationRequest).url(),
-      ).searchParams.get("center");
-      expect(paginationCenter).not.toBeNull();
-      await expect(page).toHaveURL(/personCursor=/);
-      await expect(page).toHaveURL(/scale=year/);
-      expect(new URL(page.url()).searchParams.get("center")).toBe(
-        paginationCenter,
-      );
 
       await page.goto(
         `/progress/resources?all=0&people=${fixture.member.person.id},${fixture.owner.person.id}&tasks=${fixture.taskId}&focus=${fixture.confirmableSegmentId}`,

@@ -78,7 +78,7 @@ Auth.js 使用飞书 OAuth。认证配置与完整登录副作用拆分如下：
 
 账号与权限后台采用三块职责管理：车组职责、技术组职责以及用户与角色。职责矩阵独立读取全部有效报销角色，不受下方账号列表分页影响；账号列表继续使用服务端筛选和每页 30 条分页。管理员账号选择器及指导老师邮箱更新均使用稳定 `accountId` 定位账号，只允许统一超级管理员调用；邮箱更新和安全审计在同一事务内写入。`REIMBURSEMENT` 范围仅返回已绑定报销 `User` 的账号。空查询使用绑定选择范围的稳定游标，关键词查询在最多 501 个直接/回退候选内按姓名、拼音、`openId`、`unionId` 和邮箱排序并返回前 50 项。页面筛选和选择器共用同一有界模糊匹配实现。
 
-人员与 Task option 查询采用有界两阶段搜索：非空查询在授权 where 内最多读取 501 个直接或回退候选，按 NFKC、前缀、分词前缀、子串、拼音首字母与顺序匹配评分并返回前 50 项；空查询保留绑定 filter hash 的稳定 ID 游标。批量 resolver 最多接收 50 个 ID，按输入顺序恢复且静默丢弃不可见对象。客户端基于 Base UI Combobox，使用 250ms 防抖、scope/filter 缓存和请求序列防止旧响应覆盖。
+人员与 Task option 查询采用有界两阶段搜索：非空查询在授权 where 内最多读取 501 个直接或回退候选，按 NFKC、前缀、分词前缀、子串、拼音首字母与顺序匹配评分并返回前 50 项；空查询保留绑定 filter hash 的稳定 ID 游标。批量 resolver 按输入顺序完整恢复已选 ID 且静默丢弃不可见对象，不再沿用旧 50 项上限。客户端基于 Base UI Combobox，使用 250ms 防抖、scope/filter 缓存和请求序列防止旧响应覆盖。
 
 ## 权限
 
@@ -142,7 +142,7 @@ DRAFT → MANAGEMENT_REVIEW → TEACHER_REVIEW → PENDING_APPLICANT_DOCS
 
 近期动态只读取 `DomainAuditEvent`。白名单 formatter 返回中文标题和有界字段摘要，不把 raw `before/after` 中的内部 ID、hash、锁版本或未知 action 下发浏览器；DTO 只保留分页去重与安全详情链接需要的记录 ID/路径。筛选、`createdAt + id` 游标和 20 条分页均在服务端执行；Revision、Milestone、Terminal 和人员投入名称通过当前页最多 20 条事件的有界批量查询装配。所有新 Task 审计在统一审计写入函数中固化事件发生时的 `projectId`；Task 加入、移出或移动事件以 `before/after.projectId` 支持两个 Project 查询。既有缺少 `projectId` 的普通 Task 审计不回填，也不进入 Project 动态。客户端每 5 秒查询最新可见审计版本 token，隐藏页面暂停，恢复可见立即检查，并用请求序号防止旧结果覆盖。
 
-Project 详情查询在 Project 可见性校验后，按 `DRAFT`、`ACTIVE`、所有终态三个状态组读取每页最多 25 个未删除 Task；组内使用 `updatedAt desc, id asc`，游标同时携带状态组、更新时间和 ID。查询只为当前页加载 Current Plan 的 Start、Milestone、Revision 与 Terminal，服务端序列化后由详情页组装只读 TimeCanvas；客户端不能提交任意 Task ID 扩大查询范围。25 行与每个计划最多 200 个节点共同受现有 5,000 节点上限约束；超限时保留 Project 与 Task 列表、停止向客户端下发节点正文，并在时间线区显示明确错误，不能静默截断。立项轮次和领域审计继续保存，详情 UI 只移除其历史卡片，并用概览上的 `#establishment` 锚点保留待办和通知深链。
+Project 详情查询在 Project 可见性校验后，按 `DRAFT`、`ACTIVE`、所有终态三个状态组读取全部未删除 Task，组内使用 `updatedAt desc, id asc`。查询加载这些 Task 的 Current Plan Start、Milestone、Revision 与 Terminal，服务端序列化后由详情页组装只读 TimeCanvas；客户端不能提交任意 Task ID 扩大计划范围。全部计划共同受 5,000 节点上限约束；超限时保留 Project 与 Task 列表、停止向客户端下发节点正文，并在时间线区显示明确错误，不能静默截断。立项轮次和领域审计继续保存，详情 UI 只移除其历史卡片，并用概览上的 `#establishment` 锚点保留待办和通知深链。
 
 P2/P3 已补齐 Task 计划生命周期的服务端闭环。`lib/project-management/application/lifecycle-service.ts` 只保留稳定公共出口，Task 草稿/激活、Revision、Milestone Review 与 Termination 的完整事务分别位于独立命令模块；共享行锁、锁后可见性、Current Plan 读取、节点推进、计划哈希/审计和通知收件人解析位于内部领域模块。外部入口仍为 `app/actions/project-management/{tasks,plans,revisions,milestones,terminations}.ts` 和 `lib/project-management/queries/task-queries.ts`：
 
@@ -179,9 +179,9 @@ P5 Resource Segment 服务端闭环位于 `lib/project-management/application/se
 
 S2 TimeCanvas 查询通过 `app/actions/project-management/canvas.ts` 暴露，并由 strict `POST /api/project-management/canvas` 提供同一可测试边界。五个 operation 都从 Auth.js session 解析当前 actor，再进入 validation、authorization、`ProjectManagementActionResult`、structured logging 和错误脱敏流程；请求不接受 actor、账号、人员或角色注入字段。
 
-TimeCanvas 的请求预算为 Full Segment + Busy 合计 5,000、Task anchor 50、当前计划非删除 anchor Node 合计 5,000。行游标/`rowPageKey`、Prisma 选择集、DTO/权限映射和自适应 leaf 预算分别由查询内部模块负责，页面级查询只编排 scope、行、Segment、Busy 与 Anchor 加载。Busy DTO 只包含 `kind`、`visibility`、`personId`、`startAt` 和 `endAt`，不返回源 Segment、Task、内容、版本、比例或冲突摘要。TimeCanvas 请求不接受 Node 过滤，Segment DTO 不包含职责、Node 关联、关联复核、`allocation` 或 `conflictIds`。
+TimeCanvas 的请求预算为 Full Segment + Busy 合计 5,000、当前计划非删除 anchor Node 合计 5,000；Task、Person 与 anchor Task 行不设数量分页。`rowPageKey`、Prisma 选择集、DTO/权限映射和自适应 leaf 预算分别由查询内部模块负责，页面级查询只编排 scope、行、Segment、Busy 与 Anchor 加载。Busy DTO 只包含 `kind`、`visibility`、`personId`、`startAt` 和 `endAt`，不返回源 Segment、Task、内容、版本、比例或冲突摘要。TimeCanvas 请求不接受 Node 过滤，Segment DTO 不包含职责、Node 关联、关联复核、`allocation` 或 `conflictIds`。
 
-资源计划使用服务端集合展开：`TaskSet = 直接选择 Task ∪ 所选 Project 的未删除 Task`，`PersonSet = 直接选择 Person ∪ TaskSet 有效成员 ∪ 所选 Project 有效成员`。Task 与 Person 使用绑定选择签名的独立不透明游标，页大小分别为 25 和 50；焦点 Segment 对应的 Task/Person 在第一页固定展示且从后续普通页排除。Current Plan 轨道只读，人员行保留既有 Segment capability；内容范围两侧增加两个上海日历月，并限制在三年逻辑窗口内按最多 180 天自适应读取。
+资源计划使用服务端集合展开：`TaskSet = 直接选择 Task ∪ 所选 Project 的未删除 Task`，`PersonSet = 直接选择 Person ∪ TaskSet 有效成员 ∪ 所选 Project 有效成员`。Task 与 Person 一次完整装配、不使用行游标；焦点 Segment 对应的 Task/Person 固定置前。Current Plan 轨道只读，人员行保留既有 Segment capability；内容范围两侧增加两个上海日历月，并限制在三年逻辑窗口内按最多 180 天自适应读取，单次自适应查询继续受 20,000 个对象和 16 个 leaf block 预算约束。
 
 迁移 `20260811190000_remove_project_management_tags` 删除 `SegmentTag`、`TaskTag` 与 `Tag`。应用同步删除 Tag 路由、查询、Action、Task/Segment 输入和 DTO，不保留兼容入口；既有 `DomainAuditEvent` 继续 append-only 保存，但近期动态不再解释历史 `tagIds`。
 
@@ -197,13 +197,13 @@ Composer 的浏览器安全契约位于 `lib/project-management/composer-contrac
 
 创建草稿继续使用账号/环境隔离的 v4 存储；编辑草稿使用 `task-edit-draft:{environment}:{accountId}:{taskId}:v1`，正文额外绑定 `taskId`、`planVersionId` 和基础 `lockVersion`。两者对普通内容使用 `localStorage`，对合法 200 节点长文本草稿使用 IndexedDB 并在 `localStorage` 保存校验指针；临时状态和最后合法位置随正文保存。同账号多标签页通过 Web Locks 串行化完整存储事务，离开前取消待触发防抖并等待已入队写入及清理完成。编辑恢复只接受环境、账号、Task、Plan Version 和锁版本完全匹配的内容；版本不匹配时仅允许导出或放弃并加载最新版本，不做字段合并。失去成员管理权后恢复时以服务端成员覆盖本地成员。保存成功后清理本地编辑草稿并返回工作台；浏览器清理失败不改变已提交事务的成功结果。
 
-TimeCanvas 保持统一 `TimeCanvasProps/TimeCanvasModel` 契约：Desktop 支持周/月/季/年缩放、虚拟行、键盘焦点、刷选、Segment 横移/缩放和节点锚点；Pixel 5 不开放直接拖动，使用精确表单。资源计划按不超过 180 天的上海时区块自适应加载并缓存，URL 只使用 `focus`、`center`、`scale` 和 `projects`/`tasks`/`people` 等复数资源选择；`timelineDate`、`timelineFocus`、单值 `personId`/`taskId`、`start`/`end`、`zoom` 会被忽略并从规范 URL 移除。mutation 后以权威刷新为准。详情 Dialog 只向目标 Segment 注入可编辑 transform，关联 Task 名称始终随投入详情展示；无 Task 时显示“独立投入”。
+TimeCanvas 保持统一 `TimeCanvasProps/TimeCanvasModel` 契约：Desktop 支持周/月/季/年缩放、虚拟行、键盘焦点、刷选、Segment 横移/缩放和节点锚点；Pixel 5 不开放直接拖动，使用精确表单。资源计划按不超过 180 天的上海时区块自适应加载并缓存，URL 只使用 `focus`、`center`、`scale` 和 `projects`/`tasks`/`people` 等复数资源选择；`timelineDate`、`timelineFocus`、单值 `personId`/`taskId`、`start`/`end`、`zoom` 以及已退役的 `taskCursor`/`personCursor` 会被忽略并从规范 URL 移除。mutation 后以权威刷新为准。详情 Dialog 只向目标 Segment 注入可编辑 transform；详情与悬浮提示都展示关联 Task 名称，无 Task 时显示“独立投入”，Busy 不泄露 Task。
 
 统一 `TimeCanvas` 通过显式 adapter 消费 S2 安全 DTO，共享时间坐标、半开区间、上海时区 snap/fit、稳定泳道、选择和 mutation 模型。`TASK_COMPOSER` 模式额外支持外部受控选中、锚点选择、空白位置创建请求、锚点拖动/键盘移动回调和带名称/颜色的阶段带；Start、Milestone、Terminal 都是可操作锚点，阶段带标注下一节点，业务严格边界和 Milestone 自动重排由 Composer 负责。人员投入总览覆盖既有 Segment 的写权限，只保留双击/Enter 打开详情；详情 Dialog 才向目标 Segment 注入 transform 回调，同一行其他 Segment 始终只读。所有视口均使用 `@tanstack/react-virtual` 的横向时间画布，窄屏仅在画布容器内滚动，不再装配 `TimeAgenda`。Busy 在 adapter 后仍不恢复源 Segment、Task、Node 或版本标识。受控 fixture 页面继续只对官方随机 `_test` runner 开放。
 
 TimeCanvas 的键盘焦点、刷选与 Segment 变换数学、只读 Inspector、工具栏/Axis/底部滚动条已经从主渲染器分离；资源计划客户端的分块缓存与 URL 同步、Quick Create、Segment Inspector 和部分确认表单也各自拥有独立模块。页面继续只依赖稳定的 `TimeCanvasProps`/`TimeCanvasModel`，移动端直接拖动限制与详情内仅目标 Segment 可编辑的规则保持不变。
 
-时间画布查询统一排除 `PLANNED + CONFIRMED/CANCELLED`，不提供按 scope 恢复终态 Planned 的参数，但不删除事实记录、来源和历史。PERSONAL scope 的 Task universe 来自有效 TaskMember；`/progress` 通过 `getMyTimelinePageData` 只接受 `taskCursor/showAll`，服务端按稳定游标派生当前 25 条参与 Task，再把同页 Current Plan 与本人可见投入装配到同一画布和 Task 表，客户端没有注入 Task/Person ID 的入口。内容驱动画布在授权过滤后聚合 `min(startAt)/max(endAt)` 与 Current Plan 时间，向外对齐两个上海日历月；可导航范围额外并入今天两侧的上海日历月窗口，使“今天”始终可用，但无显式中心时仍优先定位内容。单次逻辑窗口最多显示三个上海日历年；兼容数据的 `plannedStartAt=null` 仍保留原值，只用 Task `createdAt` 作为只读 Start marker 和范围边界。查询按 180 天块读取，单块超过 5,000 对象时按上海自然日自动二分，并执行 20,000 对象/16 leaf block 双预算。常规 DTO 返回稳定 `rowPageKey`；它用于识别结构版本，不代替每次查询的鉴权。Task 详情以有效 TaskMember 为人员范围，Project 详情以 ProjectMember 与当前 Task 页 TaskMember 并集为范围；资源计划使用 Project/Task/Person 集合展开和独立游标分页，不再接受 `from/to` 作为业务筛选范围。
+时间画布查询统一排除 `PLANNED + CONFIRMED/CANCELLED`，不提供按 scope 恢复终态 Planned 的参数，但不删除事实记录、来源和历史。PERSONAL scope 的 Task universe 来自有效 TaskMember；`/progress` 通过 `getMyTimelinePageData` 只接受 `showAll`，服务端派生全部参与 Task，再把全部 Current Plan 与本人可见投入装配到同一画布和 Task 表，客户端没有注入 Task/Person ID 的入口。内容驱动画布在授权过滤后聚合 `min(startAt)/max(endAt)` 与 Current Plan 时间，向外对齐两个上海日历月；可导航范围额外并入今天两侧的上海日历月窗口，使“今天”始终可用，但无显式中心时仍优先定位内容。单次逻辑窗口最多显示三个上海日历年；兼容数据的 `plannedStartAt=null` 仍保留原值，只用 Task `createdAt` 作为只读 Start marker 和范围边界。查询按 180 天块读取，单块超过 5,000 对象时按上海自然日自动二分，并执行 20,000 对象/16 leaf block 双预算；计划锚点继续受总计 5,000 Node 预算约束。常规 DTO 返回稳定 `rowPageKey`；它用于识别结构版本，不代替每次查询的鉴权。Task 详情以全部有效 TaskMember 为人员范围并展示这些人员的全部投入；Project 详情以 ProjectMember 与全部所属 TaskMember 的并集为人员范围，人员投入不再按 Project Task 过滤，但计划锚点只取本 Project 全部 Task；资源计划完整展开 Project/Task/Person 集合，不做 Task/人员行分页。
 
 TimeCanvas 的显示尺度为 `WEEK/MONTH/QUARTER/YEAR`，密度分别为 40/12/4/1.5 px/day。所有 presentation 和业务模式默认 `WEEK`，URL 或调用方显式尺度优先；用户选择后 Resize、数据刷新和 Task 节点聚焦均不覆盖。工具栏只保留尺度选择与“今天”，不提供前后箭头；“今天”使用单次即时居中。视觉尺度不参与业务校验：Segment 与创建草稿变换固定吸附 30 分钟，Composer anchor 固定吸附一个上海自然日。桌面端只允许未保存虚线创建草稿横移、调整两端和跨当前可创建 Person 行；移动端不提供直接拖动，继续使用表单。详情 Dialog 使用完整上下文画布且只有目标 Segment 可编辑，变更历史返回中文安全 DTO 和游标分页。有效 Planned 创建或更新时间范围后，客户端在权威 `rowPageKey` 刷新后把目标及相邻块加入预加载集合。部分确认在事务锁行后强制覆盖起点等于权威 Planned 起点，要求实际内容、预期产出和实际产出，只创建 Actual 与最多一条尾部 Planned；既有审计、来源和 notification outbox 语义不变。
 

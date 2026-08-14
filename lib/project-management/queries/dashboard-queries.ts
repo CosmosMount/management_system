@@ -56,7 +56,6 @@ export async function getMyWorkDashboard({
           includeTaskAnchors: true,
           includeActual: true,
           includeBusyBlocks: false,
-          rowLimit: 1,
         },
       }),
       getUnreadInAppNotificationCount(actor),

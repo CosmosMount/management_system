@@ -141,7 +141,6 @@ export default async function ProgressTaskDetailPage({
           includeTaskAnchors: true,
           includeActual: true,
           includeBusyBlocks: false,
-          rowLimit: 50,
         },
       }),
     ]);

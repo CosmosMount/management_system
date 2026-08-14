@@ -94,7 +94,6 @@ export function timeCanvasDataToModel(
     rows: [...planRows, ...regularRows],
     anchors,
     segments,
-    nextCursor: data.nextCursor,
     generatedAt: data.generatedAt,
   };
 }
@@ -126,6 +125,7 @@ function adaptSegment(
       rowId: rowIdBySource.get(`PERSON:${segment.personId}`) ?? `person:${segment.personId}`,
       personId: segment.personId,
       taskId: null,
+      taskTitle: null,
       type: "BUSY",
       status: "BUSY",
       startMs: parseMs(segment.startAt),
@@ -146,6 +146,7 @@ function adaptSegment(
       `${groupBy.toLowerCase()}:${sourceRowId}`,
     personId: segment.personId,
     taskId: segment.taskId,
+    taskTitle: segment.taskTitle,
     type: segment.type,
     status: segment.status,
     startMs: parseMs(segment.startAt),

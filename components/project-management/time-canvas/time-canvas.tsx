@@ -91,6 +91,7 @@ export function TimeCanvas({
   presentation = "FULL",
   initialZoom,
   initialCenterMs,
+  initialCenterRevision = 0,
   display: displayInput,
   interaction,
   selection: controlledSelection,
@@ -127,7 +128,10 @@ export function TimeCanvas({
   const viewportCenterRef = useRef<number | null>(
     Number.isFinite(initialCenterMs) ? (initialCenterMs ?? null) : null,
   );
-  const externalCenterRef = useRef(initialCenterMs);
+  const externalCenterRef = useRef({
+    centerMs: initialCenterMs,
+    revision: initialCenterRevision,
+  });
   const externalZoomRef = useRef(initialZoom);
   const scaleLayoutKeyRef = useRef("");
   const filteredSegments = useMemo(
@@ -236,20 +240,27 @@ export function TimeCanvas({
   }, [focusTargets, initialSelection, rowVirtualizer, scale, scrollState.width]);
 
   useEffect(() => {
-    if (Object.is(externalCenterRef.current, initialCenterMs)) return;
-    externalCenterRef.current = initialCenterMs;
+    if (
+      Object.is(externalCenterRef.current.centerMs, initialCenterMs) &&
+      externalCenterRef.current.revision === initialCenterRevision
+    ) {
+      return;
+    }
+    externalCenterRef.current = {
+      centerMs: initialCenterMs,
+      revision: initialCenterRevision,
+    };
     viewportCenterRef.current = Number.isFinite(initialCenterMs)
       ? (initialCenterMs ?? null)
       : null;
-  }, [initialCenterMs]);
+  }, [initialCenterMs, initialCenterRevision]);
 
   useEffect(() => {
     if (externalZoomRef.current === initialZoom) return;
     externalZoomRef.current = initialZoom;
     const nextZoom = initialZoom ?? DEFAULT_ZOOM;
     setZoom(nextZoom);
-    onZoomChange?.(nextZoom);
-  }, [initialZoom, onZoomChange]);
+  }, [initialZoom]);
 
   useEffect(() => {
     const element = scrollElementRef.current;
@@ -283,7 +294,7 @@ export function TimeCanvas({
     ) {
       return;
     }
-    const layoutKey = `${model.range.startMs}:${model.range.endMs}:${zoom}:${scrollState.width}:${initialCenterMs ?? "auto"}`;
+    const layoutKey = `${model.range.startMs}:${model.range.endMs}:${zoom}:${scrollState.width}:${initialCenterMs ?? "auto"}:${initialCenterRevision}`;
     if (scaleLayoutKeyRef.current === layoutKey) return;
     scaleLayoutKeyRef.current = layoutKey;
     const fallbackCenter = liveNowMs >= model.range.startMs && liveNowMs < model.range.endMs
@@ -314,6 +325,7 @@ export function TimeCanvas({
   }, [
     liveNowMs,
     initialCenterMs,
+    initialCenterRevision,
     model.range,
     onViewportChange,
     rowHeaderWidth,
@@ -468,6 +480,8 @@ export function TimeCanvas({
       data-zoom={zoom}
       data-range-start-ms={model.range.startMs}
       data-range-end-ms={model.range.endMs}
+      data-viewport-start-ms={viewportWindow.startMs}
+      data-viewport-end-ms={viewportWindow.endMs}
       data-loaded-ranges={model.loadedRanges
         ?.map((range) => `${range.startMs}:${range.endMs}`)
         .join("|")}
@@ -1449,7 +1463,7 @@ function SegmentBlock({
       style={{ left: rect.left, width: rect.width, top: 8 + lane * 24 }}
       aria-pressed={selected}
       aria-label={segmentAriaLabel(segment)}
-      title={`${segment.title} · ${formatRange(segment.startMs, segment.endMs)}`}
+      title={segmentHoverTitle(segment)}
       onClick={(event) => {
         if (suppressClickRef.current) {
           suppressClickRef.current = false;
@@ -1965,7 +1979,16 @@ function selectionAnnouncement(entity: SelectedEntity) {
 
 function segmentAriaLabel(segment: TimeCanvasSegment) {
   const type = segment.type === "BUSY" ? "其他占用" : segment.type;
-  return `${type} ${segment.title}，${formatRange(segment.startMs, segment.endMs)}`;
+  const task = segment.type === "BUSY"
+    ? ""
+    : `，Task ${segment.taskTitle ?? "独立投入"}`;
+  return `${type} ${segment.title}${task}，${formatRange(segment.startMs, segment.endMs)}`;
+}
+
+function segmentHoverTitle(segment: TimeCanvasSegment) {
+  const range = formatRange(segment.startMs, segment.endMs);
+  if (segment.type === "BUSY") return `其他占用 · ${range}`;
+  return `${segment.title} · Task：${segment.taskTitle ?? "独立投入"} · ${range}`;
 }
 
 function anchorToneClassName(anchor: TimeCanvasAnchor) {

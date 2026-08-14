@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { Prisma } from "@prisma/client";
+import type { Prisma, TaskStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
   assertAuthorized,
@@ -407,6 +407,31 @@ export async function searchTaskOptions({
         : null,
     hasMoreByQuery: false,
   });
+}
+
+export async function listMyTaskOptions({
+  actor,
+  statuses,
+}: {
+  actor: ProjectManagementActor;
+  statuses: readonly TaskStatus[];
+}): Promise<TaskOptionPage["items"]> {
+  const rows = await prisma.task.findMany({
+    where: {
+      AND: [
+        taskReadableWhere(actor),
+        statuses.length > 0 ? { status: { in: [...statuses] } } : {},
+        {
+          members: {
+            some: { personId: actor.personId, removedAt: null },
+          },
+        },
+      ],
+    },
+    select: taskOptionSelect,
+    orderBy: [{ title: "asc" }, { id: "asc" }],
+  });
+  return rows.map(taskOption);
 }
 
 export async function resolvePeopleOptionsByIds({

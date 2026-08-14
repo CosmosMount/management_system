@@ -4,7 +4,7 @@ import { timeCanvasDataToModel } from "../components/project-management/time-can
 import { prisma } from "../lib/prisma";
 import { createActualSegment, createWorkSegment } from "../lib/project-management/application/segment-service";
 import { listTasks } from "../lib/project-management/queries/task-queries";
-import { getResourcePlanSelectionPage } from "../lib/project-management/queries/resource-plan-queries";
+import { getResourcePlanSelection } from "../lib/project-management/queries/resource-plan-queries";
 import { resolvePeopleOptionsByIds, resolveTaskOptionsByIds, searchPeople, searchTaskOptions } from "../lib/project-management/queries/option-queries";
 import { getResourcePlanPageData, getTimeCanvasData } from "../lib/project-management/queries/time-canvas-queries";
 
@@ -19,8 +19,6 @@ import {
   createTaskOptionFixtures,
   expectErrorCode,
   grantScopedRole,
-  resourcePlanCursorId,
-  rewriteResourcePlanCursor,
   rowCanCreate,
   scopedRole,
   serviceErrorOf,
@@ -41,6 +39,14 @@ test.describe("project management canvas security project-management-canvas-opti
         "INACTIVE",
       );
       const hiddenOwner = await createAccountPerson(`其他 Task Owner ${optionKey}`);
+      await prisma.systemRoleAssignment.create({
+        data: {
+          accountId: owner.account.id,
+          role: "PROJECT_ADMINISTRATOR",
+          team: "",
+          techGroup: "",
+        },
+      });
       const ownerActor = actor(owner);
       const adminActor = actor(owner, [systemAdministratorRole()]);
       const visibleTask = await createTask({
@@ -593,7 +599,7 @@ test.describe("project management canvas security project-management-canvas-opti
         data: { projectId: project.id },
       });
 
-      const expanded = await getResourcePlanSelectionPage({
+      const expanded = await getResourcePlanSelection({
         actor: actor(owner),
         input: {
           all: false,
@@ -610,7 +616,7 @@ test.describe("project management canvas security project-management-canvas-opti
         selectedPerson.person.id,
       ]));
 
-      const pinned = await getResourcePlanSelectionPage({
+      const pinned = await getResourcePlanSelection({
         actor: actor(owner),
         input: {
           all: true,
@@ -625,7 +631,7 @@ test.describe("project management canvas security project-management-canvas-opti
       expect(pinned.personIds[0]).toBe(selectedPerson.person.id);
     });
 
-  test("resource plan validates independent Task and Person cursors against the current selection", async () => {
+  test("resource plan returns every selected Task and Person beyond the retired page limits", async () => {
       const owner = await createAccountPerson(`资源计划游标 Owner ${randomUUID()}`);
       await prisma.systemRoleAssignment.create({
         data: {
@@ -674,11 +680,14 @@ test.describe("project management canvas security project-management-canvas-opti
         taskIds: [],
         personIds: [],
       };
-      const first = await getResourcePlanSelectionPage({ actor: actor(owner), input });
-      expect(first.taskIds).toHaveLength(25);
-      expect(first.personIds).toHaveLength(50);
-      expect(first.nextTaskCursor).not.toBeNull();
-      expect(first.nextPersonCursor).not.toBeNull();
+      const selection = await getResourcePlanSelection({ actor: actor(owner), input });
+      expect(selection.taskIds).toHaveLength(27);
+      expect(selection.taskIds).toEqual(expect.arrayContaining(taskIds));
+      expect(selection.personIds).toHaveLength(53);
+      expect(selection.personIds).toEqual(expect.arrayContaining([
+        owner.person.id,
+        ...people.map((person) => person.id),
+      ]));
 
       const assembled = await getResourcePlanPageData({
         actor: actor(owner),
@@ -686,94 +695,27 @@ test.describe("project management canvas security project-management-canvas-opti
         preferredCenterMs: Date.parse(RANGE_START),
         load: { mode: "INITIAL" },
       });
-      expect(assembled.selection.taskIds).toEqual(first.taskIds);
-      expect(assembled.selection.personIds).toEqual(first.personIds);
-      expect(assembled.data.anchors).toHaveLength(25);
+      expect(assembled.selection.taskIds).toEqual(selection.taskIds);
+      expect(assembled.selection.personIds).toEqual(selection.personIds);
+      expect(assembled.data.anchors).toHaveLength(27);
       expect(
         timeCanvasDataToModel(assembled.data, "RESOURCE_PLANNER").rows.filter(
           (row) => row.kind === "PLAN",
         ),
-      ).toHaveLength(25);
-      expect(assembled.data.rows.filter((row) => row.kind === "PERSON")).toHaveLength(50);
-
-      const taskSecond = await getResourcePlanSelectionPage({
-        actor: actor(owner),
-        input: { ...input, taskCursor: first.nextTaskCursor },
-      });
-      expect(taskSecond.taskIds).toHaveLength(2);
-      expect(taskSecond.personIds).toEqual(first.personIds);
-      const personSecond = await getResourcePlanSelectionPage({
-        actor: actor(owner),
-        input: { ...input, personCursor: first.nextPersonCursor },
-      });
-      expect(personSecond.taskIds).toEqual(first.taskIds);
-      expect(personSecond.personIds.length).toBeGreaterThan(0);
-      expect(personSecond.personIds.length).toBeLessThanOrEqual(3);
-
-      const forgedTaskCursor = rewriteResourcePlanCursor(
-        first.nextTaskCursor!,
-        randomUUID(),
-      );
-      const forgedPersonCursor = rewriteResourcePlanCursor(
-        first.nextPersonCursor!,
-        randomUUID(),
-      );
-      await expectErrorCode(
-        getResourcePlanSelectionPage({
-          actor: actor(owner),
-          input: { ...input, taskCursor: forgedTaskCursor },
-        }),
-        "VALIDATION_ERROR",
-      );
-      await expectErrorCode(
-        getResourcePlanSelectionPage({
-          actor: actor(owner),
-          input: { ...input, personCursor: forgedPersonCursor },
-        }),
-        "VALIDATION_ERROR",
-      );
-      await expectErrorCode(
-        getResourcePlanSelectionPage({
-          actor: actor(owner),
-          input: {
-            ...input,
-            projectIds: [],
-            taskIds: [taskIds[0]!],
-            taskCursor: first.nextTaskCursor,
-          },
-        }),
-        "VALIDATION_ERROR",
-      );
-
-      const expiredTaskId = resourcePlanCursorId(first.nextTaskCursor!);
-      await prisma.task.update({
-        where: { id: expiredTaskId },
-        data: { deletedAt: new Date() },
-      });
-      await expectErrorCode(
-        getResourcePlanSelectionPage({
-          actor: actor(owner),
-          input: { ...input, taskCursor: first.nextTaskCursor },
-        }),
-        "VALIDATION_ERROR",
-      );
-
-      const expiredPersonId = resourcePlanCursorId(first.nextPersonCursor!);
-      await prisma.taskMember.updateMany({
-        where: { taskId: taskIds[0]!, personId: expiredPersonId, removedAt: null },
-        data: { removedAt: new Date() },
-      });
-      await expectErrorCode(
-        getResourcePlanSelectionPage({
-          actor: actor(owner),
-          input: { ...input, personCursor: first.nextPersonCursor },
-        }),
-        "VALIDATION_ERROR",
-      );
+      ).toHaveLength(27);
+      expect(assembled.data.rows.filter((row) => row.kind === "PERSON")).toHaveLength(53);
     });
 
-  test("People and Task cap fuzzy candidates at 501 while empty queries retain bound cursors", async () => {
+  test("People and Task keep search bounds while selected IDs resolve without the retired 50-item cap", async () => {
       const owner = await createAccountPerson("选项游标 Owner");
+      await prisma.systemRoleAssignment.create({
+        data: {
+          accountId: owner.account.id,
+          role: "PROJECT_ADMINISTRATOR",
+          team: "",
+          techGroup: "",
+        },
+      });
       const ownerActor = actor(owner);
       const adminActor = actor(owner, [systemAdministratorRole()]);
       const queryKey = randomUUID();
@@ -926,22 +868,22 @@ test.describe("project management canvas security project-management-canvas-opti
         }),
         "QUERY_LIMIT_EXCEEDED",
       );
-      await expectErrorCode(
-        resolvePeopleOptionsByIds({
-          actor: adminActor,
-          input: {
-            scope: { purpose: "VISIBLE" },
-            ids: personIds.slice(0, 51),
-          },
-        }),
-        "QUERY_LIMIT_EXCEEDED",
+      const resolvedPeopleBeyondOldCap = await resolvePeopleOptionsByIds({
+        actor: adminActor,
+        input: {
+          scope: { purpose: "VISIBLE" },
+          ids: personIds.slice(0, 51),
+        },
+      });
+      expect(resolvedPeopleBeyondOldCap.map((item) => item.id)).toEqual(
+        personIds.slice(0, 51),
       );
-      await expectErrorCode(
-        resolveTaskOptionsByIds({
-          actor: ownerActor,
-          input: { ids: taskIds.slice(0, 51) },
-        }),
-        "QUERY_LIMIT_EXCEEDED",
+      const resolvedTasksBeyondOldCap = await resolveTaskOptionsByIds({
+        actor: ownerActor,
+        input: { ids: taskIds.slice(0, 51) },
+      });
+      expect(resolvedTasksBeyondOldCap.map((item) => item.id)).toEqual(
+        taskIds.slice(0, 51),
       );
       await expectErrorCode(
         searchPeople({

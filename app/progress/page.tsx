@@ -16,7 +16,7 @@ import { getMyWorkMetrics } from "@/lib/project-management/queries/dashboard-que
 import { listInAppNotifications } from "@/lib/project-management/queries/notification-queries";
 import {
   getActorPersonOption,
-  searchTaskOptions,
+  listMyTaskOptions,
 } from "@/lib/project-management/queries/option-queries";
 import { getWorkSegment } from "@/lib/project-management/queries/resource-queries";
 import { hasRetiredResourcePlanSearchParams } from "@/lib/project-management/resource-plan-url";
@@ -36,7 +36,6 @@ export default async function ProgressPage({
 }) {
   const actor = await getProgressActorOrRedirect();
   const params = (await searchParams) ?? {};
-  const taskCursor = firstParam(params.taskCursor) || undefined;
   const showAllTasks = firstParam(params.tasks) === "all";
   const requestedFocusId = firstParam(params.focus);
   const focusedSegment = isUuid(requestedFocusId)
@@ -60,7 +59,6 @@ export default async function ProgressPage({
     (requestedFocusId && !focusId)
   ) {
     redirect(myWorkHref({
-      taskCursor,
       showAllTasks,
       focusId,
       centerMs: requestedCenter,
@@ -74,7 +72,7 @@ export default async function ProgressPage({
       getActorPersonOption(actor),
       getMyTimelinePageData({
         actor,
-        input: { showAll: showAllTasks, taskCursor },
+        input: { showAll: showAllTasks },
         preferredCenterMs: requestedCenter,
         load: { mode: "INITIAL" },
       })
@@ -97,28 +95,11 @@ export default async function ProgressPage({
       getActionInbox({ actor, limit: 20 }),
       listInAppNotifications({ actor, input: { limit: 5 } }),
     ]);
-  if (
-    !timelineResult.ok &&
-    taskCursor &&
-    timelineResult.code === "VALIDATION_ERROR"
-  ) {
-    redirect(myWorkHref({
-      showAllTasks,
-      focusId,
-      centerMs: requestedCenter,
-      scale: requestedScale,
-    }));
-  }
-  const taskPage = timelineResult.ok
-    ? timelineResult.data.taskPage
-    : await searchTaskOptions({
+  const tasks = timelineResult.ok
+    ? timelineResult.data.tasks
+    : await listMyTaskOptions({
         actor,
-        input: {
-          mine: true,
-          statuses: showAllTasks ? [] : ["ACTIVE"],
-          cursor: taskCursor,
-          limit: 25,
-        },
+        statuses: showAllTasks ? [] : ["ACTIVE"],
       });
   const duePage = dueResult.ok
     ? dueResult.data
@@ -143,7 +124,7 @@ export default async function ProgressPage({
   const resolvedCenter = timelineResult.ok
     ? timelineResult.data.resolvedCenterMs
     : requestedCenter;
-  const taskOptions = taskPage.items.filter((task) => task.status === "ACTIVE");
+  const taskOptions = tasks.filter((task) => task.status === "ACTIVE");
   const dueSegments = duePage.items.map((segment) => ({
     id: segment.id,
     title: segment.content,
@@ -196,7 +177,6 @@ export default async function ProgressPage({
               kind: "MY_TIMELINE",
               preferredCenterMs: resolvedCenter ?? 0,
               showAll: showAllTasks,
-              taskCursor,
             }}
           />
         ) : (
@@ -221,7 +201,7 @@ export default async function ProgressPage({
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h2 id="my-task-list-title" className="font-medium">参与 Task</h2>
-                <p className="mt-1 text-sm text-muted-foreground">当前页与上方 Plan 轨道同步，每页最多 25 条。</p>
+                <p className="mt-1 text-sm text-muted-foreground">全部参与 Task 与上方 Plan 轨道同步。</p>
               </div>
               <div className="flex flex-wrap gap-2">
                 <ViewportStateLink
@@ -230,25 +210,9 @@ export default async function ProgressPage({
                 >
                   {showAllTasks ? "只看进行中" : "显示全部"}
                 </ViewportStateLink>
-                {taskCursor && (
-                  <ViewportStateLink
-                    className="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted"
-                    href={myWorkHref(hrefState)}
-                  >
-                    返回第一页
-                  </ViewportStateLink>
-                )}
-                {taskPage.nextCursor && (
-                  <ViewportStateLink
-                    className="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted"
-                    href={myWorkHref({ ...hrefState, taskCursor: taskPage.nextCursor })}
-                  >
-                    下一页
-                  </ViewportStateLink>
-                )}
               </div>
             </div>
-            {taskPage.items.length === 0 ? (
+            {tasks.length === 0 ? (
               <Empty text="当前没有有效参与的 Task。" />
             ) : (
               <div className="mt-4 overflow-x-auto">
@@ -257,7 +221,7 @@ export default async function ProgressPage({
                     <tr><th className="pb-2 font-medium">Task</th><th className="pb-2 font-medium">状态</th><th className="pb-2 font-medium">当前节点</th><th className="pb-2 font-medium">版本</th></tr>
                   </thead>
                   <tbody>
-                    {taskPage.items.map((task) => (
+                    {tasks.map((task) => (
                       <tr key={task.id} className="border-t border-border">
                         <td className="max-w-64 py-3 pr-3"><Link href={routes.progress.taskDetail(task.id)} className="break-words font-medium hover:underline">{task.title}</Link></td>
                         <td className="py-3 pr-3"><Badge variant="secondary">{taskStatusLabels[task.status]}</Badge></td>
@@ -297,14 +261,12 @@ export default async function ProgressPage({
 }
 
 function myWorkHref({
-  taskCursor,
   showAllTasks = false,
   focusId,
   centerMs,
   scale,
   focusError = false,
 }: {
-  taskCursor?: string;
   showAllTasks?: boolean;
   focusId?: string | null;
   centerMs?: number;
@@ -312,7 +274,6 @@ function myWorkHref({
   focusError?: boolean;
 }) {
   const search = new URLSearchParams();
-  if (taskCursor) search.set("taskCursor", taskCursor);
   if (showAllTasks) search.set("tasks", "all");
   if (focusId) search.set("focus", focusId);
   if (Number.isFinite(centerMs)) search.set("center", new Date(centerMs!).toISOString());

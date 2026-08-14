@@ -188,14 +188,12 @@ export async function getProjectDetail({
   actor: ProjectManagementActor;
   projectId: string;
   pagination?: {
-    taskCursor?: string;
     requestCursor?: string;
     auditCursor?: string;
     pageSize?: number;
   };
 }) {
   const pageSize = Math.min(Math.max(pagination?.pageSize ?? 25, 1), 25);
-  const taskCursor = decodeProjectTaskCursor(pagination?.taskCursor);
   const requestCursor = decodeRoundCursor(pagination?.requestCursor);
   const auditCursor = decodeTimestampCursor(pagination?.auditCursor);
   const project = await prisma.project.findFirst({
@@ -209,7 +207,7 @@ export async function getProjectDetail({
   const [completedTaskTotalCount, blockingTasks, taskRows, requestRows, auditRows, pendingRequest] = await Promise.all([
     prisma.task.count({ where: { projectId: project.id, deletedAt: null, status: "COMPLETED" } }),
     prisma.task.findMany({ where: { projectId: project.id, deletedAt: null, status: { not: "COMPLETED" } }, select: { id: true, title: true, status: true }, orderBy: [{ updatedAt: "desc" }, { id: "asc" }], take: 10 }),
-    loadProjectDetailTaskRows(project.id, taskCursor, pageSize + 1),
+    loadProjectDetailTaskRows(project.id),
     prisma.projectEstablishmentRequest.findMany({
       where: {
         projectId: project.id,
@@ -244,19 +242,14 @@ export async function getProjectDetail({
     }),
     prisma.projectEstablishmentRequest.findFirst({ where: { projectId: project.id, status: "PENDING" }, select: { id: true } }),
   ]);
-  const tasks = taskRows.slice(0, pageSize);
+  const tasks = taskRows;
   const visiblePlanNodeCount = tasks.reduce(
     (count, task) => count + task.currentPlanVersion.nodes.length,
     0,
   );
-  const oversizedTaskPlan = tasks.some(
-    (task) => task.currentPlanVersion.nodes.length > 200,
-  );
-  const timelineError = oversizedTaskPlan
-    ? "当前页存在超过 200 个节点的 Task，无法展示时间线。"
-    : visiblePlanNodeCount > 5_000
-      ? "当前页 Task 计划节点超过 5000 个，无法展示时间线。"
-      : null;
+  const timelineError = visiblePlanNodeCount > 5_000
+    ? "Project Task 计划节点超过 5000 个，无法展示时间线。"
+    : null;
   const requests = requestRows.slice(0, pageSize);
   const auditEvents = auditRows.slice(0, pageSize);
   const resource: AuthorizationProjectResource = { type: "project", id: project.id, status: project.status, requesterAccountId: project.requesterAccountId, members: project.members };
@@ -324,10 +317,6 @@ export async function getProjectDetail({
         })),
       },
     })),
-    taskNextCursor:
-      taskRows.length > pageSize && tasks.at(-1)
-        ? encodeProjectTaskCursor(tasks.at(-1)!)
-        : null,
     timelineError,
     taskTotalCount: project._count.tasks,
     completedTaskTotalCount,
@@ -376,8 +365,6 @@ export async function locateProjectTimelineFocus({
     },
     select: {
       id: true,
-      status: true,
-      updatedAt: true,
       createdAt: true,
       currentPlanVersion: {
         select: {
@@ -412,53 +399,7 @@ export async function locateProjectTimelineFocus({
       );
   if (!centerAt) return null;
 
-  const group = projectTaskStatusGroup(task.status);
-  const [groupCounts, precedingInGroup] = await Promise.all([
-    Promise.all(projectTaskStatusGroups.map((statuses) =>
-      prisma.task.count({
-        where: { projectId: project.id, deletedAt: null, status: { in: [...statuses] } },
-      }),
-    )),
-    prisma.task.count({
-      where: {
-        projectId: project.id,
-        deletedAt: null,
-        status: { in: [...projectTaskStatusGroups[group]] },
-        OR: [
-          { updatedAt: { gt: task.updatedAt } },
-          { updatedAt: task.updatedAt, id: { lt: task.id } },
-        ],
-      },
-    }),
-  ]);
-  const targetIndex = groupCounts.slice(0, group).reduce((total, count) => total + count, 0) +
-    precedingInGroup;
-  const pageStart = Math.floor(targetIndex / 25) * 25;
-  let taskCursor: string | null = null;
-  if (pageStart > 0) {
-    const predecessorIndex = pageStart - 1;
-    let groupStart = 0;
-    for (let index = 0; index < projectTaskStatusGroups.length; index += 1) {
-      const count = groupCounts[index] ?? 0;
-      if (predecessorIndex < groupStart + count) {
-        const predecessor = await prisma.task.findFirst({
-          where: {
-            projectId: project.id,
-            deletedAt: null,
-            status: { in: [...projectTaskStatusGroups[index]!] },
-          },
-          orderBy: [{ updatedAt: "desc" }, { id: "asc" }],
-          skip: predecessorIndex - groupStart,
-          select: { id: true, status: true, updatedAt: true },
-        });
-        if (predecessor) taskCursor = encodeProjectTaskCursor(predecessor);
-        break;
-      }
-      groupStart += count;
-    }
-  }
   return {
-    taskCursor,
     focusId: token.kind === "TASK"
       ? `project-start:${task.id}`
       : `project-node:${token.id}`,
@@ -528,12 +469,6 @@ function projectListItem(project: Prisma.ProjectGetPayload<{ include: typeof pro
 
 export function actorCanReviewProjects(actor: ProjectManagementActor) { return isSystemAdministrator(actor); }
 
-type ProjectTaskCursor = {
-  group: ProjectTaskStatusGroup;
-  timestamp: Date;
-  id: string;
-};
-
 function parseProjectTimelineFocus(focus: string) {
   const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   if (uuidPattern.test(focus)) return { kind: "NODE" as const, id: focus };
@@ -546,83 +481,22 @@ function parseProjectTimelineFocus(focus: string) {
 
 async function loadProjectDetailTaskRows(
   projectId: string,
-  cursor: ProjectTaskCursor | null,
-  limit: number,
 ): Promise<ProjectDetailTaskRow[]> {
   const rows: ProjectDetailTaskRow[] = [];
-  const firstGroup = cursor?.group ?? 0;
-  for (let group = firstGroup; group < projectTaskStatusGroups.length; group += 1) {
+  for (let group = 0; group < projectTaskStatusGroups.length; group += 1) {
     const statusGroup = group as ProjectTaskStatusGroup;
-    const remaining = limit - rows.length;
-    if (remaining <= 0) break;
-    const groupCursor = cursor?.group === statusGroup ? cursor : null;
     const groupRows = await prisma.task.findMany({
       where: {
         projectId,
         deletedAt: null,
         status: { in: [...projectTaskStatusGroups[statusGroup]] },
-        ...(groupCursor
-          ? {
-              OR: [
-                { updatedAt: { lt: groupCursor.timestamp } },
-                {
-                  updatedAt: groupCursor.timestamp,
-                  id: { gt: groupCursor.id },
-                },
-              ],
-            }
-          : {}),
       },
       select: projectDetailTaskSelect,
       orderBy: [{ updatedAt: "desc" }, { id: "asc" }],
-      take: remaining,
     });
     rows.push(...groupRows);
   }
   return rows;
-}
-
-function projectTaskStatusGroup(status: TaskStatus): ProjectTaskStatusGroup {
-  if (status === "DRAFT") return 0;
-  if (status === "ACTIVE") return 1;
-  return 2;
-}
-
-function encodeProjectTaskCursor(
-  task: Pick<ProjectDetailTaskRow, "id" | "status" | "updatedAt">,
-) {
-  return Buffer.from(
-    JSON.stringify({
-      group: projectTaskStatusGroup(task.status),
-      timestamp: task.updatedAt.toISOString(),
-      id: task.id,
-    }),
-  ).toString("base64url");
-}
-
-function decodeProjectTaskCursor(value: string | undefined): ProjectTaskCursor | null {
-  if (!value) return null;
-  try {
-    const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as {
-      group?: unknown;
-      timestamp?: unknown;
-      id?: unknown;
-    };
-    const timestamp =
-      typeof parsed.timestamp === "string" ? new Date(parsed.timestamp) : null;
-    if (
-      (parsed.group !== 0 && parsed.group !== 1 && parsed.group !== 2) ||
-      !timestamp ||
-      Number.isNaN(timestamp.getTime()) ||
-      typeof parsed.id !== "string" ||
-      !parsed.id
-    ) {
-      return null;
-    }
-    return { group: parsed.group, timestamp, id: parsed.id };
-  } catch {
-    return null;
-  }
 }
 
 function encodeTimestampCursor(timestamp: Date, id: string) {

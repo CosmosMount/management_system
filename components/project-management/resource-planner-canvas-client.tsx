@@ -17,6 +17,7 @@ import {
 } from "@/app/actions/project-management/segments";
 import type { UserPickerScope } from "@/components/project-management/user-picker";
 import { TimeCanvas } from "@/components/project-management/time-canvas/time-canvas";
+import { TIME_CANVAS_VIEWPORT_STATE_EVENT } from "@/components/project-management/time-canvas/viewport-state-link";
 import { timeCanvasSegmentsToModel } from "@/components/project-management/time-canvas/adapter";
 import {
   TIME_CANVAS_CACHE_LEAF_BLOCK_LIMIT,
@@ -55,18 +56,22 @@ import type {
 } from "@/lib/project-management/types/time-canvas";
 import { cn } from "@/lib/utils";
 import {
+  beginInFlightBlockRequest,
   blockKey,
   blockRangesForViewport,
   centerFallsWithinRange,
   createInitialBlocks,
   createInitialFailedBlocks,
   failedRangeKey,
+  inFlightBlockRequestKey,
   mergeBlockRanges,
   normalizeResourcePlanUrl,
   plannedRangeFromMutation,
   replaceViewportUrl,
   resizeRowsForSegments,
+  settleInFlightBlockRequest,
   viewportCenterFromCurrentUrl,
+  viewportZoomFromCurrentUrl,
   type CachedBlock,
   type FailedBlock,
 } from "@/components/project-management/resource-planner-state";
@@ -131,11 +136,14 @@ export function ResourcePlannerCanvasClient({
     [initialModel],
   );
   const [cachedBlocks, setCachedBlocks] = useState<CachedBlock[]>(initialBlocks);
+  const [cachedBlocksRowPageKey, setCachedBlocksRowPageKey] = useState(
+    initialModel.rowPageKey,
+  );
   const cachedBlocksRef = useRef(initialBlocks);
   const [failedBlocks, setFailedBlocks] = useState<FailedBlock[]>(() =>
     createInitialFailedBlocks(incomingModel),
   );
-  const inFlightBlockKeysRef = useRef(new Set<string>());
+  const inFlightBlockRequestsRef = useRef(new Map<string, symbol>());
   const mountedRef = useRef(true);
   const cachedMerge = useMemo(
     () => mergeTimeCanvasVersionedSegments(cachedBlocks),
@@ -261,11 +269,21 @@ export function ResourcePlannerCanvasClient({
   const [currentZoom, setCurrentZoom] = useState<TimeCanvasZoom>(
     initialZoom ?? "WEEK",
   );
+  const [currentCenterMs, setCurrentCenterMs] = useState(initialCenterMs);
+  const [currentCenterRevision, setCurrentCenterRevision] = useState(0);
   const externalInitialZoomRef = useRef(initialZoom);
   const externalInitialCenterRef = useRef(initialCenterMs);
   const initialViewportUrlCenterRef = useRef(initialCenterMs);
+  const persistedViewportRef = useRef<{
+    centerMs?: number;
+    zoom: TimeCanvasZoom;
+  }>({
+    centerMs: initialCenterMs,
+    zoom: initialZoom ?? "WEEK",
+  });
   const [pendingPlannedRange, setPendingPlannedRange] =
     useState<PendingPlannedRange | null>(null);
+  const pendingPlannedRangeRef = useRef<PendingPlannedRange | null>(null);
   const [dialogDirty, setDialogDirty] = useState(false);
   const [detail, setDetail] = useState<WorkSegmentDetail | null>(null);
   const [detailRange, setDetailRange] = useState<{ startMs: number; endMs: number } | null>(null);
@@ -304,6 +322,20 @@ export function ResourcePlannerCanvasClient({
   const plannedMutationViewportCenterRef = useRef<number | null>(null);
   const viewportUrlTimerRef = useRef<number | null>(null);
   const staleRefreshFocusRef = useRef<string | null>(null);
+  const applyViewportCenter = useCallback((centerMs: number | undefined) => {
+    setCurrentCenterMs(centerMs);
+    setCurrentCenterRevision((current) => current + 1);
+  }, []);
+  const writeViewportUrl = useCallback(({
+    centerMs,
+    zoom,
+  }: {
+    centerMs?: number;
+    zoom: TimeCanvasZoom;
+  }) => {
+    persistedViewportRef.current = { centerMs, zoom };
+    replaceViewportUrl({ centerMs, zoom });
+  }, []);
   const handleViewportChange = useCallback((
     nextViewport: TimeCanvasRange,
     source: "LAYOUT" | "USER",
@@ -325,10 +357,13 @@ export function ResourcePlannerCanvasClient({
       if (plannedMutationViewportCenterRef.current !== null) {
         plannedMutationViewportCenterRef.current = nextCenter;
       }
+      if (persistViewportInUrl) {
+        persistedViewportRef.current.centerMs = nextCenter;
+      }
       initialViewportUrlCenterRef.current = undefined;
     }
     setViewportRange(nextViewport);
-  }, []);
+  }, [persistViewportInUrl]);
   const selectedCanvasSegment = useMemo(
     () =>
       openSegmentId
@@ -367,22 +402,65 @@ export function ResourcePlannerCanvasClient({
   useEffect(() => {
     if (externalInitialZoomRef.current === initialZoom) return;
     externalInitialZoomRef.current = initialZoom;
+    if (persistViewportInUrl) return;
     const timer = window.setTimeout(() => {
       setCurrentZoom(initialZoom ?? "WEEK");
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [initialZoom]);
+  }, [initialZoom, persistViewportInUrl]);
+  useEffect(() => {
+    if (!persistViewportInUrl) return;
+    const syncZoomFromUrl = () => {
+      const zoom = viewportZoomFromCurrentUrl() ?? "WEEK";
+      persistedViewportRef.current.zoom = zoom;
+      setCurrentZoom(zoom);
+    };
+    const syncViewportFromHistory = () => {
+      if (viewportUrlTimerRef.current !== null) {
+        window.clearTimeout(viewportUrlTimerRef.current);
+        viewportUrlTimerRef.current = null;
+      }
+      const zoom = viewportZoomFromCurrentUrl() ?? "WEEK";
+      const centerMs = viewportCenterFromCurrentUrl();
+      centerNavigationTargetRef.current = null;
+      persistedViewportRef.current = { centerMs, zoom };
+      initialViewportUrlCenterRef.current = centerMs;
+      setCurrentZoom(zoom);
+      applyViewportCenter(centerMs);
+    };
+    window.addEventListener("popstate", syncViewportFromHistory);
+    window.addEventListener(
+      TIME_CANVAS_VIEWPORT_STATE_EVENT,
+      syncZoomFromUrl,
+    );
+    return () => {
+      window.removeEventListener("popstate", syncViewportFromHistory);
+      window.removeEventListener(
+        TIME_CANVAS_VIEWPORT_STATE_EVENT,
+        syncZoomFromUrl,
+      );
+    };
+  }, [applyViewportCenter, persistViewportInUrl]);
   useEffect(() => {
     if (Object.is(externalInitialCenterRef.current, initialCenterMs)) return;
     externalInitialCenterRef.current = initialCenterMs;
     const urlCenter = viewportCenterFromCurrentUrl();
+    if (persistViewportInUrl) {
+      if (!Object.is(urlCenter, initialCenterMs)) return;
+      persistedViewportRef.current.centerMs = initialCenterMs;
+      initialViewportUrlCenterRef.current = initialCenterMs;
+      const timer = window.setTimeout(() => {
+        applyViewportCenter(initialCenterMs);
+      }, 0);
+      return () => window.clearTimeout(timer);
+    }
     initialViewportUrlCenterRef.current = centerFallsWithinRange(
       urlCenter,
       incomingModel.fullRange ?? incomingModel.range,
     )
       ? urlCenter
       : initialCenterMs;
-  }, [incomingModel, initialCenterMs]);
+  }, [applyViewportCenter, incomingModel, initialCenterMs, persistViewportInUrl]);
   useEffect(() => {
     if (!createDraft) return;
     const handleEscape = (event: globalThis.KeyboardEvent) => {
@@ -451,12 +529,13 @@ export function ResourcePlannerCanvasClient({
     }
     const nextBlocks = createInitialBlocks(initialModel);
     cachedBlocksRef.current = nextBlocks;
-    inFlightBlockKeysRef.current.clear();
+    inFlightBlockRequestsRef.current.clear();
     handledConflictRef.current = "";
     capacityViewportSignatureRef.current = "";
     rowPageKeyRef.current = initialModel.rowPageKey;
     if (persistViewportInUrl) {
-      const urlCenter = viewportCenterFromCurrentUrl();
+      const urlCenter = persistedViewportRef.current.centerMs ??
+        viewportCenterFromCurrentUrl();
       initialViewportUrlCenterRef.current = centerFallsWithinRange(
         urlCenter,
         initialModel.fullRange ?? initialModel.range,
@@ -465,6 +544,7 @@ export function ResourcePlannerCanvasClient({
         : initialCenterMs;
     }
     setCachedBlocks(nextBlocks);
+    setCachedBlocksRowPageKey(initialModel.rowPageKey);
     setFailedBlocks(createInitialFailedBlocks(initialModel));
     setViewportRange(initialModel.loadedRanges?.[0] ?? initialModel.range);
     const staleFocusedSegment = staleRefreshFocusRef.current
@@ -596,17 +676,20 @@ export function ResourcePlannerCanvasClient({
   }, [cachedMerge.conflictBlockKeys, dialogDirty, incomingModel, initialModel, router]);
   useEffect(() => {
     if (!persistViewportInUrl || centerNavigationTargetRef.current !== null) return;
+    const activePendingPlannedRange = pendingPlannedRangeRef.current ??
+      pendingPlannedRange;
     const preservedCenter = createDraft
-      ? draftViewportCenterRef.current ?? viewportCenterFromCurrentUrl()
-      : pendingPlannedRange
-        ? plannedMutationViewportCenterRef.current ?? viewportCenterFromCurrentUrl()
-        : undefined;
+      ? draftViewportCenterRef.current ?? persistedViewportRef.current.centerMs
+      : activePendingPlannedRange
+        ? plannedMutationViewportCenterRef.current ??
+          persistedViewportRef.current.centerMs
+        : persistedViewportRef.current.centerMs;
     viewportUrlTimerRef.current = window.setTimeout(() => {
       viewportUrlTimerRef.current = null;
       if (centerNavigationTargetRef.current !== null) return;
       const initialUrlCenter = initialViewportUrlCenterRef.current;
       initialViewportUrlCenterRef.current = undefined;
-      replaceViewportUrl({
+      writeViewportUrl({
         centerMs: initialUrlCenter ?? preservedCenter ??
           (viewportRange.startMs + viewportRange.endMs) / 2,
         zoom: currentZoom,
@@ -617,7 +700,14 @@ export function ResourcePlannerCanvasClient({
       window.clearTimeout(viewportUrlTimerRef.current);
       viewportUrlTimerRef.current = null;
     };
-  }, [createDraft, currentZoom, pendingPlannedRange, persistViewportInUrl, viewportRange]);
+  }, [
+    createDraft,
+    currentZoom,
+    pendingPlannedRange,
+    persistViewportInUrl,
+    viewportRange,
+    writeViewportUrl,
+  ]);
   useEffect(() => {
     if (
       !adaptiveBlockQuery ||
@@ -629,10 +719,15 @@ export function ResourcePlannerCanvasClient({
       return;
     }
     const requestedRowPageKey = initialModel.rowPageKey;
+    const activePendingPlannedRange = pendingPlannedRangeRef.current ??
+      pendingPlannedRange;
     const desiredRanges = mergeBlockRanges(
       blockRangesForViewport(initialModel.range, viewportRange),
-      pendingPlannedRange
-        ? blockRangesForViewport(initialModel.range, pendingPlannedRange.range)
+      activePendingPlannedRange
+        ? blockRangesForViewport(
+          initialModel.range,
+          activePendingPlannedRange.range,
+        )
         : [],
     );
     const desiredSignature = desiredRanges.map(blockKey).join("|");
@@ -647,11 +742,18 @@ export function ResourcePlannerCanvasClient({
       const key = blockKey(candidate);
       return !cachedBlocks.some((block) => block.key === key) &&
         !failedBlocks.some((block) => block.key === key) &&
-        !inFlightBlockKeysRef.current.has(key);
+        !inFlightBlockRequestsRef.current.has(
+          inFlightBlockRequestKey(requestedRowPageKey, candidate),
+        );
     });
     if (!range) return;
     const key = blockKey(range);
-    inFlightBlockKeysRef.current.add(key);
+    const inFlightRequest = beginInFlightBlockRequest(
+      inFlightBlockRequestsRef.current,
+      requestedRowPageKey,
+      range,
+    );
+    if (!inFlightRequest) return;
     const { preferredCenterMs, ...semanticInput } = adaptiveBlockQuery;
     void getAdaptiveTimeCanvasBlock({
       ...semanticInput,
@@ -660,7 +762,10 @@ export function ResourcePlannerCanvasClient({
       blockStart: new Date(range.startMs).toISOString(),
       blockEnd: new Date(range.endMs).toISOString(),
     }).then((result) => {
-        inFlightBlockKeysRef.current.delete(key);
+        settleInFlightBlockRequest(
+          inFlightBlockRequestsRef.current,
+          inFlightRequest,
+        );
         if (!mountedRef.current || rowPageKeyRef.current !== requestedRowPageKey) return;
         if (!result.ok) {
           if (result.error.code === "STATE_CONFLICT") {
@@ -737,11 +842,16 @@ export function ResourcePlannerCanvasClient({
         cachedBlocksRef.current = cacheResult.blocks;
         setCachedBlocks(cacheResult.blocks);
         const retainedKeys = new Set(cacheResult.blocks.map((block) => block.key));
+        const activePendingPlannedRange = pendingPlannedRangeRef.current ??
+          pendingPlannedRange;
         const desiredKeys = new Set(
           mergeBlockRanges(
             blockRangesForViewport(initialModel.range, viewportRangeRef.current),
-            pendingPlannedRange
-              ? blockRangesForViewport(initialModel.range, pendingPlannedRange.range)
+            activePendingPlannedRange
+              ? blockRangesForViewport(
+                initialModel.range,
+                activePendingPlannedRange.range,
+              )
               : [],
           ).map(blockKey),
         );
@@ -786,7 +896,10 @@ export function ResourcePlannerCanvasClient({
           }
         }
     }).catch(() => {
-      inFlightBlockKeysRef.current.delete(key);
+      settleInFlightBlockRequest(
+        inFlightBlockRequestsRef.current,
+        inFlightRequest,
+      );
       if (mountedRef.current && rowPageKeyRef.current === requestedRowPageKey) {
         const message = "时间数据块加载失败，请重试";
         setFailedBlocks((current) => [
@@ -813,35 +926,41 @@ export function ResourcePlannerCanvasClient({
     viewportRange,
   ]);
   useEffect(() => {
-    if (!pendingPlannedRange) return;
-    if (initialModel.rowPageKey === pendingPlannedRange.previousRowPageKey) return;
-    const targetStart = Math.max(
-      initialModel.range.startMs,
-      pendingPlannedRange.range.startMs,
+    const activePendingPlannedRange = pendingPlannedRangeRef.current ??
+      pendingPlannedRange;
+    if (!activePendingPlannedRange) return;
+    if (
+      initialModel.rowPageKey ===
+        activePendingPlannedRange.previousRowPageKey
+    ) {
+      return;
+    }
+    if (cachedBlocksRowPageKey !== initialModel.rowPageKey) return;
+    const requiredRanges = blockRangesForViewport(
+      initialModel.range,
+      activePendingPlannedRange.range,
     );
-    const targetEnd = Math.min(
-      initialModel.range.endMs,
-      pendingPlannedRange.range.endMs,
-    );
-    const target = targetEnd > targetStart
-      ? { startMs: targetStart, endMs: targetEnd }
-      : null;
-    const targetLoaded = target
-      ? cachedBlocks.some(
-        (block) => block.range.startMs < target.endMs && block.range.endMs > target.startMs,
-      )
-      : true;
-    if (!targetLoaded) return;
-    const timer = window.setTimeout(() => setPendingPlannedRange(null), 0);
+    const requiredRangesSettled = requiredRanges.every((range) => {
+      const key = blockKey(range);
+      return cachedBlocks.some((block) => block.key === key) ||
+        failedBlocks.some((block) => blockKey(block.requestRange) === key);
+    });
+    if (!requiredRangesSettled) return;
+    const timer = window.setTimeout(() => {
+      pendingPlannedRangeRef.current = null;
+      setPendingPlannedRange(null);
+    }, 0);
     return () => window.clearTimeout(timer);
   }, [
     cachedBlocks,
+    cachedBlocksRowPageKey,
+    failedBlocks,
     initialModel.range,
     initialModel.rowPageKey,
     pendingPlannedRange,
   ]);
   useEffect(() => {
-    if (pendingPlannedRange) return;
+    if (pendingPlannedRangeRef.current ?? pendingPlannedRange) return;
     plannedMutationViewportCenterRef.current = null;
   }, [pendingPlannedRange]);
   useEffect(() => {
@@ -927,9 +1046,9 @@ export function ResourcePlannerCanvasClient({
     ) => {
       const preservedViewportCenterMs = persistViewportInUrl
         ? createDraft
-          ? viewportCenterFromCurrentUrl() ?? draftViewportCenterRef.current ??
-            currentViewportCenter()
-          : viewportCenterFromCurrentUrl() ?? currentViewportCenter()
+          ? persistedViewportRef.current.centerMs ??
+            draftViewportCenterRef.current ?? currentViewportCenter()
+          : persistedViewportRef.current.centerMs ?? currentViewportCenter()
         : undefined;
       setNotice({ kind: "info", message: "正在保存…" });
       startTransition(async () => {
@@ -977,10 +1096,12 @@ export function ResourcePlannerCanvasClient({
         if (plannedRange) {
           plannedMutationViewportCenterRef.current =
             preservedViewportCenterMs ?? viewportCenterFromCurrentUrl() ?? null;
-          setPendingPlannedRange({
+          const nextPendingPlannedRange = {
             range: plannedRange,
             previousRowPageKey: initialModel.rowPageKey,
-          });
+          };
+          pendingPlannedRangeRef.current = nextPendingPlannedRange;
+          setPendingPlannedRange(nextPendingPlannedRange);
         }
         setNotice({ kind: "success", message: successMessage });
         const completedSegmentId = openSegmentId;
@@ -992,7 +1113,7 @@ export function ResourcePlannerCanvasClient({
         }
         onSuccess?.();
         if (persistViewportInUrl) {
-          replaceViewportUrl({
+          writeViewportUrl({
             centerMs:
               preservedViewportCenterMs ??
               (viewportRangeRef.current.startMs + viewportRangeRef.current.endMs) / 2,
@@ -1134,6 +1255,8 @@ export function ResourcePlannerCanvasClient({
     url.searchParams.delete("zoom");
     normalizeResourcePlanUrl(url);
     centerNavigationTargetRef.current = centerMs;
+    persistedViewportRef.current = { centerMs, zoom: currentZoom };
+    applyViewportCenter(centerMs);
     if (viewportUrlTimerRef.current !== null) {
       window.clearTimeout(viewportUrlTimerRef.current);
       viewportUrlTimerRef.current = null;
@@ -1280,7 +1403,8 @@ export function ResourcePlannerCanvasClient({
             mode={mode}
             model={model}
             initialZoom={currentZoom}
-            initialCenterMs={initialCenterMs}
+            initialCenterMs={persistViewportInUrl ? currentCenterMs : initialCenterMs}
+            initialCenterRevision={currentCenterRevision}
             initialSelection={effectiveInitialSelection}
             display={{ showActual: true, showBusy: true, showInspector: false }}
             interaction={{
@@ -1343,10 +1467,14 @@ export function ResourcePlannerCanvasClient({
             onSelectionChange={setSelection}
             onViewportChange={handleViewportChange}
             onZoomChange={(nextZoom) => {
+              if (viewportUrlTimerRef.current !== null) {
+                window.clearTimeout(viewportUrlTimerRef.current);
+                viewportUrlTimerRef.current = null;
+              }
               setCurrentZoom(nextZoom);
               if (!persistViewportInUrl) return;
               const pendingCenter = centerNavigationTargetRef.current;
-              replaceViewportUrl({
+              writeViewportUrl({
                 centerMs: pendingCenter ??
                   (viewportRangeRef.current.startMs + viewportRangeRef.current.endMs) / 2,
                 zoom: nextZoom,

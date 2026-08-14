@@ -198,6 +198,7 @@ export const timeSegmentDtoSchema = z
     expectedOutput: z.string(),
     actualOutput: z.string(),
     taskId: dtoIdSchema.nullable(),
+    taskTitle: z.string().trim().min(1).nullable(),
     permissions: segmentPermissionsDtoSchema,
     updatedAt: dtoAbsoluteDateTimeSchema,
     versionToken: dtoAbsoluteDateTimeSchema,
@@ -328,7 +329,6 @@ const timeCanvasDataCommonFields = {
   range: timeCanvasRangeDtoSchema,
   rowPageKey: z.string().trim().min(1).max(100).default("legacy"),
   anchors: z.array(timeCanvasTaskAnchorDtoSchema),
-  nextCursor: pageCursorSchema,
   generatedAt: dtoAbsoluteDateTimeSchema,
 } as const;
 
@@ -365,7 +365,7 @@ export const timeCanvasDataDtoSchema = z
         ctx.addIssue({
           code: "custom",
           path: ["rows", index, "id"],
-          message: "同一画布页不能重复返回相同 kind 和 id 的行",
+          message: "同一画布不能重复返回相同 kind 和 id 的行",
         });
       }
       rowKeys.add(key);
@@ -377,7 +377,7 @@ export const timeCanvasDataDtoSchema = z
         ctx.addIssue({
           code: "custom",
           path: ["anchors", anchorIndex, "id"],
-          message: "同一画布页不能重复返回相同 Task anchor",
+          message: "同一画布不能重复返回相同 Task anchor",
         });
       }
       anchorIds.add(anchor.id);
@@ -415,7 +415,7 @@ export const timeCanvasDataDtoSchema = z
           ctx.addIssue({
             code: "custom",
             path: ["segments", index, "personId"],
-            message: "按人员分组时对象必须属于当前 Person 行分页",
+            message: "按人员分组时对象必须属于当前 Person 行集合",
           });
         }
       });
@@ -428,7 +428,7 @@ export const timeCanvasDataDtoSchema = z
         ctx.addIssue({
           code: "custom",
           path: ["segments", index, "taskId"],
-          message: "按 Task 分组时对象必须属于当前 Task 行分页",
+          message: "按 Task 分组时对象必须属于当前 Task 行集合",
         });
       }
     });
@@ -437,7 +437,7 @@ export const timeCanvasDataDtoSchema = z
         ctx.addIssue({
           code: "custom",
           path: ["anchors", index, "id"],
-          message: "按 Task 分组时 anchor 必须属于当前 Task 行分页",
+          message: "按 Task 分组时 anchor 必须属于当前 Task 行集合",
         });
       }
     });

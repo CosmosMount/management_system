@@ -6,7 +6,6 @@ import { useRouter } from "next/navigation";
 import { LocateFixed, Plus } from "lucide-react";
 import { ResourcePlannerCanvasClient } from "@/components/project-management/resource-planner-canvas-client";
 import { buildPlanPhaseBands } from "@/components/project-management/time-canvas/plan-phase-bands";
-import { ViewportStateLink } from "@/components/project-management/time-canvas/viewport-state-link";
 import type {
   TimeCanvasAnchor,
   TimeCanvasModel,
@@ -63,7 +62,6 @@ export function ProjectTaskTimeline({
   peopleOptions,
   timelineWindow,
   timelineFocusError,
-  nextPageHref,
 }: {
   projectId: string;
   projectStatus: "DRAFT" | "PENDING_APPROVAL" | "ACTIVE" | "COMPLETED";
@@ -78,10 +76,8 @@ export function ProjectTaskTimeline({
     focusId: string | null;
     centerMs?: number;
     scale?: "WEEK" | "MONTH" | "QUARTER" | "YEAR";
-    taskCursor?: string;
   };
   timelineFocusError: string | null;
-  nextPageHref: string | null;
 }) {
   const router = useRouter();
   const timelineContainerRef = useRef<HTMLDivElement>(null);
@@ -231,16 +227,6 @@ export function ProjectTaskTimeline({
                 );
               })}
             </ul>
-            {nextPageHref && (
-              <div className="flex justify-end">
-                <ViewportStateLink
-                  href={nextPageHref}
-                  className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
-                >
-                  下一页 Task
-                </ViewportStateLink>
-              </div>
-            )}
           </div>
         ) : (
           <p className="mt-4 text-sm text-muted-foreground">尚未关联 Task</p>
@@ -251,7 +237,7 @@ export function ProjectTaskTimeline({
         <div>
           <h2 className="font-semibold">Task 与人员投入时间线</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            当前页 Task · 按计划和投入自动确定范围
+            全部 Project Task 计划 · Project/Task 成员的全部投入
           </p>
         </div>
         {timelineFocusError && (
@@ -283,7 +269,6 @@ export function ProjectTaskTimeline({
                 kind: "PROJECT",
                 preferredCenterMs: timelineWindow.centerMs ?? Date.parse(model.generatedAt),
                 projectId,
-                taskCursor: timelineWindow.taskCursor,
               }}
               mode="TASK_WORKBENCH"
               allowCreate={false}
@@ -319,7 +304,6 @@ function mergeProjectTimelineModel(
         .map((row) => ({ ...row, editable: false })) ?? []),
     ],
     segments: resourceModel?.segments ?? [],
-    nextCursor: resourceModel?.nextCursor,
     generatedAt: resourceModel?.generatedAt ?? planModel.generatedAt,
   };
 }

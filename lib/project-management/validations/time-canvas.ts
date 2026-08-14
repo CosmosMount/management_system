@@ -16,14 +16,9 @@ import { addStructuredProjectManagementIssue } from "@/lib/project-management/va
 import { z } from "zod";
 
 export const MAX_TIME_CANVAS_RANGE_DAYS = 366;
-export const MAX_TIME_CANVAS_FILTER_IDS = 50;
-export const DEFAULT_TIME_CANVAS_ROW_LIMIT = 25;
-export const MAX_TIME_CANVAS_ROW_LIMIT = 50;
 export const DEFAULT_PEOPLE_PAGE_LIMIT = 25;
 export const MAX_PEOPLE_PAGE_LIMIT = 50;
 export const MAX_TIME_CANVAS_VISIBLE_SEGMENTS = 5_000;
-export const MAX_TIME_CANVAS_ANCHOR_TASKS = 50;
-// Twenty-five supported 200-node plans fit exactly in one response.
 export const MAX_TIME_CANVAS_ANCHOR_NODES = 5_000;
 
 // Producers count serialized Full Segment and Busy objects after authorization
@@ -45,13 +40,6 @@ export const timeCanvasVisibleSegmentCountSchema = z
 const MAX_TIME_CANVAS_RANGE_MS =
   MAX_TIME_CANVAS_RANGE_DAYS * 24 * 60 * 60 * 1_000;
 
-const timeCanvasRowCursorSchema = z
-  .string({ message: "画布行分页游标格式不正确" })
-  .trim()
-  .min(1, "画布行分页游标格式不正确")
-  .max(500, "画布行分页游标格式不正确")
-  .optional();
-
 const optionCursorSchema = z
   .string({ message: "分页游标格式不正确" })
   .trim()
@@ -65,19 +53,12 @@ const querySchema = z
   .max(200, "搜索内容过长")
   .optional();
 
-function idListSchema(label: string, enforceFrozenLimit = true) {
+function idListSchema(label: string) {
   return z
     .array(idSchema, { message: `${label}列表格式不正确` })
     .optional()
     .default([])
     .superRefine((ids, ctx) => {
-      if (enforceFrozenLimit && ids.length > MAX_TIME_CANVAS_FILTER_IDS) {
-        addStructuredProjectManagementIssue({
-          ctx,
-          code: "QUERY_LIMIT_EXCEEDED",
-          message: `${label}最多选择 50 个`,
-        });
-      }
       if (new Set(ids).size !== ids.length) {
         ctx.addIssue({ code: "custom", message: `${label}不能重复选择` });
       }
@@ -96,22 +77,6 @@ const peoplePageLimitSchema = z
         ctx,
         code: "QUERY_LIMIT_EXCEEDED",
         message: "人员分页数量不能超过 50",
-      });
-    }
-  });
-
-const timeCanvasRowLimitSchema = z
-  .number({ message: "画布行分页数量不正确" })
-  .int("画布行分页数量不正确")
-  .min(1, "画布行分页数量不正确")
-  .optional()
-  .default(DEFAULT_TIME_CANVAS_ROW_LIMIT)
-  .superRefine((limit, ctx) => {
-    if (limit > MAX_TIME_CANVAS_ROW_LIMIT) {
-      addStructuredProjectManagementIssue({
-        ctx,
-        code: "QUERY_LIMIT_EXCEEDED",
-        message: "画布行分页数量不能超过 50",
       });
     }
   });
@@ -185,8 +150,6 @@ export const getTimeCanvasDataInputSchema = z
     includeActual: z.boolean().optional().default(true),
     emptyPersonIdsMeansNone: z.boolean().optional().default(false),
     includeBusyBlocks: z.boolean().optional().default(false),
-    cursor: timeCanvasRowCursorSchema,
-    rowLimit: timeCanvasRowLimitSchema,
   })
   .strict()
   .superRefine((input, ctx) => {
@@ -203,7 +166,6 @@ export const getTimeCanvasDataInputSchema = z
 export const getMyTimelinePageInputSchema = z
   .object({
     showAll: z.boolean().optional().default(false),
-    taskCursor: optionCursorSchema,
   })
   .strict();
 
@@ -220,7 +182,6 @@ export const getAdaptiveTimeCanvasBlockInputSchema = z
       kind: z.literal("MY_TIMELINE"),
       ...adaptiveBlockCommonFields,
       showAll: z.boolean().optional().default(false),
-      taskCursor: optionCursorSchema,
     }).strict(),
     z.object({
       kind: z.literal("TASK"),
@@ -231,7 +192,6 @@ export const getAdaptiveTimeCanvasBlockInputSchema = z
       kind: z.literal("PROJECT"),
       ...adaptiveBlockCommonFields,
       projectId: idSchema,
-      taskCursor: optionCursorSchema,
     }).strict(),
     z.object({
       kind: z.literal("RESOURCE_PLAN"),
@@ -242,8 +202,6 @@ export const getAdaptiveTimeCanvasBlockInputSchema = z
       personIds: idListSchema("Person"),
       pinnedTaskIds: z.array(idSchema).max(1).optional().default([]),
       pinnedPersonIds: z.array(idSchema).max(1).optional().default([]),
-      taskCursor: optionCursorSchema,
-      personCursor: optionCursorSchema,
     }).strict(),
   ])
   .superRefine((input, ctx) => {

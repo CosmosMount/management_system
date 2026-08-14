@@ -270,17 +270,6 @@ test.describe("project management canvas security project-management-canvas-scop
       ).toContain(hidden.id);
       await expectErrorCode(
         getTimeCanvasData({
-          actor: ownerActor,
-          input: canvasInput({
-            scope: { kind: "PERSONAL" },
-            groupBy: "PERSON",
-            personIds: Array.from({ length: 51 }, () => randomUUID()),
-          }),
-        }),
-        "QUERY_LIMIT_EXCEEDED",
-      );
-      await expectErrorCode(
-        getTimeCanvasData({
           actor: adminActor,
           input: canvasInput({
             scope: { kind: "RESOURCE_PLANNER" },
@@ -309,36 +298,15 @@ test.describe("project management canvas security project-management-canvas-scop
         inactiveHistory.id,
       );
 
-      const firstRowPage = await getTimeCanvasData({
+      const completeTaskRows = await getTimeCanvasData({
         actor: ownerActor,
         input: canvasInput({
           scope: { kind: "TASK_SCOPED", taskId: taskA.taskId },
           groupBy: "PERSON",
-          rowLimit: 1,
         }),
       });
-      const secondRowPage = await getTimeCanvasData({
-        actor: ownerActor,
-        input: canvasInput({
-          scope: { kind: "TASK_SCOPED", taskId: taskA.taskId },
-          groupBy: "PERSON",
-          rowLimit: 1,
-          cursor: firstRowPage.nextCursor ?? undefined,
-        }),
-      });
-      expect(secondRowPage.rows[0]?.id).not.toBe(firstRowPage.rows[0]?.id);
-      await expectErrorCode(
-        getTimeCanvasData({
-          actor: ownerActor,
-          input: canvasInput({
-            scope: { kind: "TASK_SCOPED", taskId: taskA.taskId },
-            groupBy: "PERSON",
-            rowLimit: 1,
-            includeActual: false,
-            cursor: firstRowPage.nextCursor ?? undefined,
-          }),
-        }),
-        "VALIDATION_ERROR",
+      expect(completeTaskRows.rows.map((row) => row.id)).toEqual(
+        expect.arrayContaining([owner.person.id, member.person.id]),
       );
     });
 

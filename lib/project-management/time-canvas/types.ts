@@ -76,6 +76,7 @@ export type TimeCanvasSegment = {
   rowId: string;
   personId: string;
   taskId: string | null;
+  taskTitle: string | null;
   type: "PLANNED" | "ACTUAL" | "BUSY";
   status: string;
   startMs: number;
@@ -101,7 +102,6 @@ export type TimeCanvasModel = {
   anchors: TimeCanvasAnchor[];
   phaseBands?: TimeCanvasPhaseBand[];
   segments: TimeCanvasSegment[];
-  nextCursor?: string | null;
   generatedAt: string;
 };
 
@@ -110,7 +110,6 @@ export type AdaptiveTimeCanvasBlockQuery =
       kind: "MY_TIMELINE";
       preferredCenterMs: number;
       showAll: boolean;
-      taskCursor?: string;
     }
   | {
       kind: "TASK";
@@ -121,7 +120,6 @@ export type AdaptiveTimeCanvasBlockQuery =
       kind: "PROJECT";
       preferredCenterMs: number;
       projectId: string;
-      taskCursor?: string;
     }
   | {
       kind: "RESOURCE_PLAN";
@@ -132,8 +130,6 @@ export type AdaptiveTimeCanvasBlockQuery =
       personIds: string[];
       pinnedTaskIds: string[];
       pinnedPersonIds: string[];
-      taskCursor?: string;
-      personCursor?: string;
     };
 
 export type TimeCanvasSelection =
@@ -221,6 +217,7 @@ export type TimeCanvasProps = {
   presentation?: TimeCanvasPresentation;
   initialZoom?: TimeCanvasZoom;
   initialCenterMs?: number;
+  initialCenterRevision?: number;
   display?: TimeCanvasDisplayOptions;
   interaction?: TimeCanvasInteractionOptions;
   /** Passing `selection` makes selection controlled; omit it for internal state. */

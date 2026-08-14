@@ -8,6 +8,10 @@ import {
   pruneTimeCanvasBlockCache,
 } from "../components/project-management/time-canvas/block-cache";
 import {
+  beginInFlightBlockRequest,
+  settleInFlightBlockRequest,
+} from "../components/project-management/resource-planner-state";
+import {
   createEmptyTimeCanvasFixture,
   createTimeCanvasFixture,
 } from "../components/project-management/time-canvas/fixtures";
@@ -225,7 +229,6 @@ test.describe("S3 TimeCanvas pure core", () => {
       blockStart,
       blockEnd: "2026-06-30T00:00:00.000+08:00",
       showAll: false,
-      taskCursor: "task-page-cursor",
     };
     expect(getAdaptiveTimeCanvasBlockInputSchema.safeParse(validMyTimeline).success).toBe(true);
     expect(getAdaptiveTimeCanvasBlockInputSchema.safeParse({
@@ -244,12 +247,10 @@ test.describe("S3 TimeCanvas pure core", () => {
       blockStart,
       blockEnd: "2026-06-30T00:00:00.000+08:00",
       projectId: uuid(2),
-      taskCursor: "project-task-page-cursor",
     });
     expect(project).toMatchObject({
       kind: "PROJECT",
       projectId: uuid(2),
-      taskCursor: "project-task-page-cursor",
     });
   });
 
@@ -358,6 +359,30 @@ test.describe("S3 TimeCanvas pure core", () => {
     expect(merge.segments.find((item) => item.id === "newer")?.title).toBe(
       "最新内容",
     );
+  });
+
+  test("stale adaptive block completion cannot release a replacement request", () => {
+    const registry = new Map<string, symbol>();
+    const range = { startMs: 1_000, endMs: 2_000 };
+    const stale = beginInFlightBlockRequest(registry, "rows-v1", range);
+    expect(stale).not.toBeNull();
+
+    registry.clear();
+    const current = beginInFlightBlockRequest(registry, "rows-v2", range);
+    expect(current).not.toBeNull();
+    expect(settleInFlightBlockRequest(registry, stale!)).toBe(false);
+    expect(beginInFlightBlockRequest(registry, "rows-v2", range)).toBeNull();
+    expect(settleInFlightBlockRequest(registry, current!)).toBe(true);
+    expect(beginInFlightBlockRequest(registry, "rows-v2", range)).not.toBeNull();
+
+    registry.clear();
+    const replaced = beginInFlightBlockRequest(registry, "rows-v2", range);
+    expect(replaced).not.toBeNull();
+    registry.clear();
+    const replacement = beginInFlightBlockRequest(registry, "rows-v2", range);
+    expect(replacement).not.toBeNull();
+    expect(settleInFlightBlockRequest(registry, replaced!)).toBe(false);
+    expect(beginInFlightBlockRequest(registry, "rows-v2", range)).toBeNull();
   });
 
   test("lane layout is deterministic, reuses adjacent half-open lanes and aggregates dense overlap", () => {
@@ -493,7 +518,6 @@ test.describe("S3 TimeCanvas pure core", () => {
           endAt: new Date(RANGE.startMs + 2 * DAY_MS).toISOString(),
         },
       ],
-      nextCursor: null,
       generatedAt: new Date(RANGE.startMs).toISOString(),
     });
     const model = timeCanvasDataToModel(data, "RESOURCE_PLANNER");
@@ -542,7 +566,6 @@ test.describe("S3 TimeCanvas pure core", () => {
         },
       ],
       segments: [],
-      nextCursor: null,
       generatedAt: versionToken,
     });
     const model = timeCanvasDataToModel(data, "TASK_WORKBENCH");
@@ -782,6 +805,15 @@ test.describe("S3 TimeCanvas controlled browser fixtures", () => {
     {
       const mountedRows = page.locator("[data-testid^='timeline-row-']");
       expect(await mountedRows.count()).toBeLessThan(50);
+      const busyBlock = page.getByTestId("segment-block-resource-segment-0-3");
+      await expect(busyBlock).toBeVisible();
+      await busyBlock.hover();
+      const busyTitle = await busyBlock.getAttribute("title");
+      const busyAriaLabel = await busyBlock.getAttribute("aria-label");
+      expect(busyTitle).toContain("其他占用");
+      expect(busyTitle).not.toContain("Task");
+      expect(busyAriaLabel).toContain("其他占用");
+      expect(busyAriaLabel).not.toContain("Task");
       const initialTarget = page.locator(
         '[data-canvas-object][tabindex="0"]',
       );

@@ -107,6 +107,39 @@ export function blockKey(range: { startMs: number; endMs: number }) {
   return `${range.startMs}:${range.endMs}`;
 }
 
+export type InFlightBlockRequest = {
+  key: string;
+  token: symbol;
+};
+
+export function inFlightBlockRequestKey(
+  rowPageKey: string,
+  range: { startMs: number; endMs: number },
+) {
+  return `${rowPageKey}:${blockKey(range)}`;
+}
+
+export function beginInFlightBlockRequest(
+  registry: Map<string, symbol>,
+  rowPageKey: string,
+  range: { startMs: number; endMs: number },
+): InFlightBlockRequest | null {
+  const key = inFlightBlockRequestKey(rowPageKey, range);
+  if (registry.has(key)) return null;
+  const token = Symbol(key);
+  registry.set(key, token);
+  return { key, token };
+}
+
+export function settleInFlightBlockRequest(
+  registry: Map<string, symbol>,
+  request: InFlightBlockRequest,
+) {
+  if (registry.get(request.key) !== request.token) return false;
+  registry.delete(request.key);
+  return true;
+}
+
 export function mergeBlockRanges(
   primary: TimeCanvasRange[],
   additional: TimeCanvasRange[],
@@ -174,6 +207,15 @@ export function viewportCenterFromCurrentUrl() {
   if (!value) return undefined;
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+export function viewportZoomFromCurrentUrl(): TimeCanvasZoom | undefined {
+  const value = new URL(window.location.href).searchParams.get("scale");
+  if (value === "week") return "WEEK";
+  if (value === "month") return "MONTH";
+  if (value === "quarter") return "QUARTER";
+  if (value === "year") return "YEAR";
+  return undefined;
 }
 
 export function centerFallsWithinRange(

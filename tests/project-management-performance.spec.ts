@@ -55,7 +55,6 @@ test.describe("project management S9 scale and performance", () => {
           includeTaskAnchors: true,
           includeActual: true,
           includeBusyBlocks: true,
-          rowLimit: 50,
         },
       });
       return latestCanvas;

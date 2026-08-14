@@ -40,14 +40,13 @@ import {
   getMyTimelinePageInputSchema,
   getAdaptiveTimeCanvasBlockInputSchema,
   MAX_TIME_CANVAS_ANCHOR_NODES,
-  MAX_TIME_CANVAS_ANCHOR_TASKS,
   MAX_TIME_CANVAS_VISIBLE_SEGMENTS,
   type GetTimeCanvasDataInput,
 } from "@/lib/project-management/validations/time-canvas";
 import { listPersonalDueSegmentsInputSchema } from "@/lib/project-management/validations/segments";
-import { searchTaskOptions } from "@/lib/project-management/queries/option-queries";
+import { listMyTaskOptions } from "@/lib/project-management/queries/option-queries";
 import { getProjectDetail } from "@/lib/project-management/queries/project-queries";
-import { getResourcePlanSelectionPage } from "@/lib/project-management/queries/resource-plan-queries";
+import { getResourcePlanSelection } from "@/lib/project-management/queries/resource-plan-queries";
 import { taskAuthorizationResource } from "@/lib/project-management/application/task-authorization-resource";
 import {
   anchorTaskSelect,
@@ -63,12 +62,9 @@ import {
   toTaskAnchorDto,
 } from "@/lib/project-management/queries/time-canvas-dto";
 import {
-  canvasCursorFilter,
   createRowPageKey,
   decodePersonalDueCursor,
-  encodeCanvasCursor,
   encodePersonalDueCursor,
-  validateCanvasCursor,
 } from "@/lib/project-management/queries/time-canvas-cursor";
 import { loadBoundedAdaptiveLeaves } from "@/lib/project-management/queries/time-canvas-adaptive-loader";
 
@@ -77,7 +73,6 @@ export { loadBoundedAdaptiveLeaves } from "@/lib/project-management/queries/time
 type RowPage = {
   rows: TimeCanvasRowDto[];
   rowIds: string[];
-  nextCursor: string | null;
   rowUniverseWhere: Prisma.PersonWhereInput | Prisma.TaskWhereInput;
 };
 
@@ -182,21 +177,18 @@ export async function getTimeCanvasData({
     parsed,
     authorizedSegmentFilter,
   );
-  const rowFilter = canvasCursorFilter(parsed);
   const rowPage =
     parsed.groupBy === "PERSON"
       ? await loadPersonRows(
           actor,
           parsed,
           scopeTask,
-          rowFilter,
           authorizedSegmentFilter,
         )
       : await loadTaskRows(
           actor,
           parsed,
           scopeTask,
-          rowFilter,
         );
   const fullUniverseWhere = fullSegmentUniverseWhere(
     parsed,
@@ -268,7 +260,6 @@ export async function getTimeCanvasData({
     rows: rowPage.rows,
     anchors,
     segments,
-    nextCursor: rowPage.nextCursor,
     generatedAt: new Date().toISOString(),
   });
 }
@@ -314,20 +305,17 @@ export async function getContentDrivenTimeCanvasData({
     parsed,
     authorizedAllTimeFilter,
   );
-  const rowFilter = canvasCursorFilter(parsed, false);
   const rowPage = parsed.groupBy === "PERSON"
     ? await loadPersonRows(
         actor,
         parsed,
         scopeTask,
-        rowFilter,
         authorizedAllTimeFilter,
       )
     : await loadTaskRows(
         actor,
         parsed,
         scopeTask,
-        rowFilter,
       );
   const allTimeUniverseWhere = fullSegmentUniverseWhere(
     parsed,
@@ -430,7 +418,6 @@ export async function getContentDrivenTimeCanvasData({
     rows: rowPage.rows,
     anchors,
     segments: blockResult.segments,
-    nextCursor: rowPage.nextCursor,
     generatedAt: new Date().toISOString(),
   });
   return {
@@ -492,19 +479,14 @@ export async function getMyTimelinePageData({
   load?: Parameters<typeof getContentDrivenTimeCanvasData>[0]["load"];
 }) {
   const selector = getMyTimelinePageInputSchema.parse(input);
-  const taskPage = await searchTaskOptions({
+  const tasks = await listMyTaskOptions({
     actor,
-    input: {
-      mine: true,
-      statuses: selector.showAll ? [] : ["ACTIVE"],
-      cursor: selector.taskCursor,
-      limit: 25,
-    },
+    statuses: selector.showAll ? [] : ["ACTIVE"],
   });
   const canvas = await getContentDrivenTimeCanvasData({
     actor,
     preferredCenterMs,
-    anchorTaskIds: taskPage.items.map((task) => task.id),
+    anchorTaskIds: tasks.map((task) => task.id),
     load,
     input: {
       scope: { kind: "PERSONAL" },
@@ -516,10 +498,9 @@ export async function getMyTimelinePageData({
       includeTaskAnchors: true,
       includeActual: true,
       includeBusyBlocks: false,
-      rowLimit: 25,
     },
   });
-  return { taskPage, ...canvas };
+  return { tasks, ...canvas };
 }
 
 export async function getResourcePlanPageData({
@@ -533,7 +514,7 @@ export async function getResourcePlanPageData({
   preferredCenterMs?: number;
   load?: Parameters<typeof getContentDrivenTimeCanvasData>[0]["load"];
 }) {
-  const selection = await getResourcePlanSelectionPage({ actor, input });
+  const selection = await getResourcePlanSelection({ actor, input });
   const canvas = await getContentDrivenTimeCanvasData({
     actor,
     preferredCenterMs,
@@ -550,10 +531,47 @@ export async function getResourcePlanPageData({
       includeActual: true,
       emptyPersonIdsMeansNone: true,
       includeBusyBlocks: false,
-      rowLimit: 50,
     },
   });
   return { selection, ...canvas };
+}
+
+export async function resolveProjectTimelinePersonIds({
+  actor,
+  personIds,
+}: {
+  actor: ProjectManagementActor;
+  personIds: string[];
+}) {
+  const uniquePersonIds = [...new Set(personIds)];
+  if (uniquePersonIds.length === 0) return [];
+  const seedStart = floorShanghaiDay(Date.now());
+  const input = getTimeCanvasDataInputSchema.parse({
+    scope: { kind: "RESOURCE_PLANNER" },
+    personIds: uniquePersonIds,
+    taskIds: [],
+    types: [],
+    statuses: [],
+    groupBy: "PERSON",
+    includeTaskAnchors: true,
+    includeActual: true,
+    includeBusyBlocks: false,
+    rangeStart: new Date(seedStart).toISOString(),
+    rangeEnd: new Date(seedStart + DAY_MS).toISOString(),
+  });
+  const authorizedAllTimeFilter = authorizedSegmentFilterWhere(actor, input, false);
+  const people = await prisma.person.findMany({
+    where: {
+      AND: [
+        { id: { in: uniquePersonIds } },
+        personUniverseWhere(actor, input, null),
+        personAvailableInRangeWhere(authorizedAllTimeFilter),
+      ],
+    },
+    select: { id: true },
+  });
+  const availableIds = new Set(people.map((person) => person.id));
+  return uniquePersonIds.filter((personId) => availableIds.has(personId));
 }
 
 export async function getAdaptiveTimeCanvasBlock({
@@ -576,7 +594,7 @@ export async function getAdaptiveTimeCanvasBlock({
   const result = parsed.kind === "MY_TIMELINE"
     ? await getMyTimelinePageData({
         actor,
-        input: { showAll: parsed.showAll, taskCursor: parsed.taskCursor },
+        input: { showAll: parsed.showAll },
         preferredCenterMs,
         load,
       })
@@ -595,7 +613,6 @@ export async function getAdaptiveTimeCanvasBlock({
             includeTaskAnchors: true,
             includeActual: true,
             includeBusyBlocks: false,
-            rowLimit: 50,
           },
         })
       : parsed.kind === "PROJECT"
@@ -609,8 +626,6 @@ export async function getAdaptiveTimeCanvasBlock({
               personIds: parsed.personIds,
               pinnedTaskIds: parsed.pinnedTaskIds,
               pinnedPersonIds: parsed.pinnedPersonIds,
-              taskCursor: parsed.taskCursor,
-              personCursor: parsed.personCursor,
             },
             preferredCenterMs,
             load,
@@ -642,15 +657,14 @@ async function loadProjectTimeCanvasBlock(
   const project = await getProjectDetail({
     actor,
     projectId: input.projectId,
-    pagination: { taskCursor: input.taskCursor, pageSize: 25 },
   });
-  const personIds = [...new Set([
-    ...project.members.map((member) => member.personId),
-    ...project.tasks.flatMap((task) => task.members.map((member) => member.personId)),
-  ])];
-  if (personIds.length > 50) {
-    throw queryLimitExceededError("当前页 Project/Task 有效成员超过 50 人");
-  }
+  const personIds = await resolveProjectTimelinePersonIds({
+    actor,
+    personIds: [
+      ...project.members.map((member) => member.personId),
+      ...project.tasks.flatMap((task) => task.members.map((member) => member.personId)),
+    ],
+  });
   return getContentDrivenTimeCanvasData({
     actor,
     preferredCenterMs,
@@ -659,14 +673,13 @@ async function loadProjectTimeCanvasBlock(
     input: {
       scope: { kind: "RESOURCE_PLANNER" },
       personIds,
-      taskIds: project.tasks.map((task) => task.id),
+      taskIds: [],
       types: [],
       statuses: [],
       groupBy: "PERSON",
       includeTaskAnchors: true,
       includeActual: true,
       includeBusyBlocks: false,
-      rowLimit: 50,
     },
   });
 }
@@ -796,7 +809,6 @@ async function loadPersonRows(
   actor: ProjectManagementActor,
   input: GetTimeCanvasDataInput,
   scopeTask: CanvasTask | null,
-  filter: string,
   authorizedSegmentFilter: Prisma.WorkSegmentWhereInput,
 ): Promise<RowPage> {
   const universe = personUniverseWhere(actor, input, scopeTask);
@@ -807,13 +819,6 @@ async function loadPersonRows(
       input.personIds.length > 0 ? { id: { in: input.personIds } } : {},
     ],
   };
-  const cursorId = await validateCanvasCursor({
-    cursor: input.cursor,
-    groupBy: "PERSON",
-    filter,
-    exists: (id) =>
-      prisma.person.findFirst({ where: { AND: [{ id }, where] }, select: { id: true } }),
-  });
   const people = await prisma.person.findMany({
     where,
     select: {
@@ -830,17 +835,14 @@ async function loadPersonRows(
           : false,
     },
     orderBy: [{ displayName: "asc" }, { id: "asc" }],
-    take: input.rowLimit + 1,
-    ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
   });
-  const page = people.slice(0, input.rowLimit);
   const canCreateByPersonId = await loadPersonCreateCapabilities(
     actor,
     input,
     scopeTask,
-    page.map((person) => person.id),
+    people.map((person) => person.id),
   );
-  const rows = page.map((person) => {
+  const rows = people.map((person) => {
     const taskMembers = "taskMembers" in person ? person.taskMembers : [];
     return {
       kind: "PERSON" as const,
@@ -863,10 +865,6 @@ async function loadPersonRows(
   return {
     rows,
     rowIds: rows.map((row) => row.id),
-    nextCursor:
-      people.length > input.rowLimit
-        ? encodeCanvasCursor("PERSON", filter, rows.at(-1)?.id)
-        : null,
     rowUniverseWhere: where,
   };
 }
@@ -886,7 +884,6 @@ async function loadTaskRows(
   actor: ProjectManagementActor,
   input: GetTimeCanvasDataInput,
   scopeTask: CanvasTask | null,
-  filter: string,
 ): Promise<RowPage> {
   const actorCanCreateSegments = Boolean(
     await prisma.person.findFirst({
@@ -905,22 +902,12 @@ async function loadTaskRows(
       input.taskIds.length > 0 ? { id: { in: input.taskIds } } : {},
     ],
   };
-  const cursorId = await validateCanvasCursor({
-    cursor: input.cursor,
-    groupBy: "TASK",
-    filter,
-    exists: (id) =>
-      prisma.task.findFirst({ where: { AND: [{ id }, where] }, select: { id: true } }),
-  });
   const tasks = await prisma.task.findMany({
     where,
     select: canvasRowTaskSelect,
     orderBy: [{ title: "asc" }, { id: "asc" }],
-    take: input.rowLimit + 1,
-    ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
   });
-  const page = tasks.slice(0, input.rowLimit);
-  const rows = page.map((task) => ({
+  const rows = tasks.map((task) => ({
     kind: "TASK" as const,
     id: task.id,
     label: task.title,
@@ -943,10 +930,6 @@ async function loadTaskRows(
   return {
     rows,
     rowIds: rows.map((row) => row.id),
-    nextCursor:
-      tasks.length > input.rowLimit
-        ? encodeCanvasCursor("TASK", filter, rows.at(-1)?.id)
-        : null,
     rowUniverseWhere: where,
   };
 }
@@ -1156,13 +1139,7 @@ async function loadTaskAnchors(
     where: anchorWhere,
     select: { id: true, currentPlanVersionId: true },
     orderBy: [{ title: "asc" }, { id: "asc" }],
-    take: MAX_TIME_CANVAS_ANCHOR_TASKS + 1,
   });
-  if (candidates.length > MAX_TIME_CANVAS_ANCHOR_TASKS) {
-    throw queryLimitExceededError(
-      "授权过滤后的 Task anchor 超过 50 条，请缩小范围后重试",
-    );
-  }
   const nodeCount = await prisma.planVersionNode.count({
     where: {
       planVersionId: {

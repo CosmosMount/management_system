@@ -1078,8 +1078,9 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
     rangeStart,
     rangeEnd,
     groupBy: "PERSON",
+    personIds: Array.from({ length: 51 }, () => randomUUID()),
   });
-  expect(canvas.rowLimit).toBe(25);
+  expect(canvas.personIds).toHaveLength(51);
   expect(canvas.rangeEnd.getTime() - canvas.rangeStart.getTime()).toBe(
     366 * 24 * 60 * 60 * 1_000,
   );
@@ -1088,14 +1089,10 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
     rangeStart,
     rangeEnd,
     groupBy: "TASK",
-    cursor: "resource-task-row-next",
-    rowLimit: 50,
   });
   expect(resourcePlannerCanvas).toMatchObject({
     scope: { kind: "RESOURCE_PLANNER" },
     groupBy: "TASK",
-    cursor: "resource-task-row-next",
-    rowLimit: 50,
   });
   expect(
     getTimeCanvasDataInputSchema.safeParse({
@@ -1121,7 +1118,7 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
       rangeStart,
       rangeEnd,
       groupBy: "PERSON",
-      rowLimit: 51,
+      rowLimit: 50,
     }).success,
   ).toBe(false);
   expect(
@@ -1164,23 +1161,23 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
     }).success,
   ).toBe(false);
   expect(
-    getTimeCanvasDataInputSchema.safeParse({
+    getTimeCanvasDataInputSchema.parse({
       scope: { kind: "DASHBOARD" },
       rangeStart,
       rangeEnd,
       groupBy: "PERSON",
       personIds: Array.from({ length: 51 }, () => randomUUID()),
-    }).success,
-  ).toBe(false);
+    }).personIds,
+  ).toHaveLength(51);
   expect(
-    getTimeCanvasDataInputSchema.safeParse({
+    getTimeCanvasDataInputSchema.parse({
       scope: { kind: "DASHBOARD" },
       rangeStart,
       rangeEnd,
       groupBy: "PERSON",
       taskIds: Array.from({ length: 51 }, () => randomUUID()),
-    }).success,
-  ).toBe(false);
+    }).taskIds,
+  ).toHaveLength(51);
   expect(
     getTimeCanvasDataInputSchema.safeParse({
       scope: { kind: "DASHBOARD" },
@@ -1247,7 +1244,7 @@ test("Terminal default name preserves snapshot hashes while custom names are ver
   ).not.toBe(legacyHash);
 });
 
-test("S2 canvas output schemas retain pagination, grouping and privacy invariants", () => {
+test("S2 canvas output schemas retain grouping and privacy invariants", () => {
   const updatedAt = "2026-08-01T08:30:00.000Z";
   const segmentPersonId = randomUUID();
   const segmentTaskId = randomUUID();
@@ -1265,6 +1262,7 @@ test("S2 canvas output schemas retain pagination, grouping and privacy invariant
     expectedOutput: "",
     actualOutput: "",
     taskId: segmentTaskId,
+    taskTitle: "可见 Task",
     permissions: segmentPermissions(),
     updatedAt,
     versionToken: updatedAt,
@@ -1337,7 +1335,6 @@ test("S2 canvas output schemas retain pagination, grouping and privacy invariant
       endAt: "2026-08-02T00:00:00.000Z",
     },
     anchors: [],
-    nextCursor: "resource-row-next",
     generatedAt: updatedAt,
   } as const;
   const personGroupedCanvas = timeCanvasDataDtoSchema.parse({
@@ -1349,7 +1346,6 @@ test("S2 canvas output schemas retain pagination, grouping and privacy invariant
     ],
     segments: [segment, busy],
   });
-  expect(personGroupedCanvas.nextCursor).toBe("resource-row-next");
   expect(
     timeCanvasDataDtoSchema.safeParse({
       ...personGroupedCanvas,
@@ -1383,10 +1379,10 @@ test("S2 canvas output schemas retain pagination, grouping and privacy invariant
       timeCanvasDataDtoSchema.safeParse({
         ...canvasResponseFields,
         groupBy: "PERSON",
-        rows: [canvasRow("PERSON", segmentPersonId, "当前 Person 页")],
+        rows: [canvasRow("PERSON", segmentPersonId, "当前 Person 集合")],
         segments: [offPageObject],
       }).success,
-      `${offPageObject.kind} 不得跨 Person 行分页返回`,
+      `${offPageObject.kind} 不得跨 Person 行集合返回`,
     ).toBe(false);
   }
 
@@ -1396,7 +1392,6 @@ test("S2 canvas output schemas retain pagination, grouping and privacy invariant
       startAt: "2026-08-01T09:00:00.000Z",
       endAt: "2026-08-01T11:00:00.000Z",
     },
-    nextCursor: null,
   } as const;
   const currentPersonRows = [
     canvasRow("PERSON", segmentPersonId, "完整可见人员行"),

@@ -1,18 +1,10 @@
 import { createHash } from "node:crypto";
-import { validationError } from "@/lib/project-management/application/errors";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import type {
   TimeCanvasRowDto,
   TimeCanvasTaskAnchorDto,
 } from "@/lib/project-management/types/time-canvas";
 import type { GetTimeCanvasDataInput } from "@/lib/project-management/validations/time-canvas";
-
-type CanvasCursor = {
-  v: 1;
-  groupBy: "PERSON" | "TASK";
-  filter: string;
-  id: string;
-};
 
 type PersonalDueCursor = {
   v: 1;
@@ -122,65 +114,6 @@ export function createRowPageKey(
     )
     .digest("base64url")
     .slice(0, 32);
-}
-
-export function encodeCanvasCursor(
-  groupBy: "PERSON" | "TASK",
-  filter: string,
-  id: string | undefined,
-): string | null {
-  if (!id) return null;
-  return Buffer.from(
-    JSON.stringify({ v: 1, groupBy, filter, id } satisfies CanvasCursor),
-  ).toString("base64url");
-}
-
-export async function validateCanvasCursor({
-  cursor,
-  groupBy,
-  filter,
-  exists,
-}: {
-  cursor: string | undefined;
-  groupBy: "PERSON" | "TASK";
-  filter: string;
-  exists: (id: string) => Promise<{ id: string } | null>;
-}): Promise<string | null> {
-  if (!cursor) return null;
-  const decoded = decodeCanvasCursor(cursor);
-  if (
-    !decoded ||
-    decoded.groupBy !== groupBy ||
-    decoded.filter !== filter ||
-    !(await exists(decoded.id))
-  ) {
-    throw validationError("画布行分页游标无效或已不匹配当前查询", {
-      cursor: ["画布行分页游标无效或已不匹配当前查询"],
-    });
-  }
-  return decoded.id;
-}
-
-function decodeCanvasCursor(cursor: string): CanvasCursor | null {
-  try {
-    const value: unknown = JSON.parse(
-      Buffer.from(cursor, "base64url").toString("utf8"),
-    );
-    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-    const record = value as Record<string, unknown>;
-    if (
-      record.v !== 1 ||
-      (record.groupBy !== "PERSON" && record.groupBy !== "TASK") ||
-      typeof record.filter !== "string" ||
-      typeof record.id !== "string" ||
-      !UUID_PATTERN.test(record.id)
-    ) {
-      return null;
-    }
-    return record as CanvasCursor;
-  } catch {
-    return null;
-  }
 }
 
 const UUID_PATTERN =

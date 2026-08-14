@@ -123,6 +123,7 @@ export function ResourceFilterBar({
             onValueChange={setTaskIds}
             initialOptions={initialTasks}
             disabled={showAll}
+            maxSelected={Number.POSITIVE_INFINITY}
             placeholder="按标题、描述或拼音首字母搜索"
           />
         </fieldset>
@@ -135,6 +136,7 @@ export function ResourceFilterBar({
             onValueChange={setPersonIds}
             initialOptions={initialPeople}
             disabled={showAll}
+            maxSelected={Number.POSITIVE_INFINITY}
             placeholder="按姓名或拼音首字母搜索"
           />
         </fieldset>
@@ -142,7 +144,7 @@ export function ResourceFilterBar({
 
       <p className="text-sm text-muted-foreground" role="status">
         {showAll
-          ? "当前包含全部可见资源；Task 与人员分别分页。"
+          ? "当前完整展示全部可见 Task 和人员。"
           : selectedCount > 0
             ? `已选择 ${projectIds.length} 个 Project、${taskIds.length} 个 Task、${personIds.length} 个人员；关联 Task 和成员会自动并入。`
             : "当前未选择资源，应用后显示空画布。"}

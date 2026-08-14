@@ -147,7 +147,6 @@ test.describe("project management canvas security project-management-canvas-adap
           includeTaskAnchors: true,
           includeActual: true,
           includeBusyBlocks: false,
-          rowLimit: 50,
         };
         const denseDay = await getContentDrivenTimeCanvasData({
           actor: actor(owner),
@@ -248,7 +247,6 @@ test.describe("project management canvas security project-management-canvas-adap
           includeTaskAnchors: true,
           includeActual: true,
           includeBusyBlocks: false,
-          rowLimit: 50,
         },
         load: { mode: "INITIAL" },
       });
@@ -323,7 +321,6 @@ test.describe("project management canvas security project-management-canvas-adap
           includeTaskAnchors: true,
           includeActual: true,
           includeBusyBlocks: false,
-          rowLimit: 50,
         },
         load: { mode: "INITIAL" },
       });
@@ -390,7 +387,6 @@ test.describe("project management canvas security project-management-canvas-adap
           includeTaskAnchors: true,
           includeActual: true,
           includeBusyBlocks: false,
-          rowLimit: 50,
         },
         load: { mode: "INITIAL" },
       });
@@ -516,10 +512,18 @@ test.describe("project management canvas security project-management-canvas-adap
       );
     });
 
-  test("anchor Task and total current-plan Node budgets enforce exact boundaries", async () => {
+  test("anchor Task rows are unpaged while total current-plan Node budget stays bounded", async () => {
       test.setTimeout(180_000);
       const owner = await createAccountPerson("Anchor budget Owner");
       const target = await createAccountPerson("Anchor budget Target");
+      await prisma.systemRoleAssignment.create({
+        data: {
+          accountId: owner.account.id,
+          role: "PROJECT_ADMINISTRATOR",
+          team: "",
+          techGroup: "",
+        },
+      });
       await createAnchorTaskBatch({
         ownerAccountId: owner.account.id,
         ownerPersonId: owner.person.id,
@@ -547,13 +551,11 @@ test.describe("project management canvas security project-management-canvas-adap
         taskCount: 1,
         nodesPerTask: 1,
       });
-      await expectErrorCode(
-        getTimeCanvasData({
-          actor: actor(owner, [systemAdministratorRole()]),
-          input: taskBudgetInput,
-        }),
-        "QUERY_LIMIT_EXCEEDED",
-      );
+      const unpagedTasks = await getTimeCanvasData({
+        actor: actor(owner, [systemAdministratorRole()]),
+        input: taskBudgetInput,
+      });
+      expect(unpagedTasks.anchors).toHaveLength(51);
 
       const nodeOwner = await createAccountPerson("Anchor node budget Owner");
       const nodeTarget = await createAccountPerson("Anchor node budget Target");
@@ -611,7 +613,6 @@ test.describe("project management canvas security project-management-canvas-adap
       expect(personal.rows.map((row) => row.id)).toEqual([person.person.id]);
       expect(personal.segments).toEqual([]);
       expect(personal.anchors).toEqual([]);
-      expect(personal.nextCursor).toBeNull();
 
       const taskGrouped = await getTimeCanvasData({
         actor: actor(person),
@@ -623,6 +624,5 @@ test.describe("project management canvas security project-management-canvas-adap
       expect(taskGrouped.rows).toEqual([]);
       expect(taskGrouped.segments).toEqual([]);
       expect(taskGrouped.anchors).toEqual([]);
-      expect(taskGrouped.nextCursor).toBeNull();
     });
 });

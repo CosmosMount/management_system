@@ -244,21 +244,6 @@ export async function createTaskOptionFixtures({
   return records.map((record) => record.taskId);
 }
 
-export function rewriteResourcePlanCursor(cursor: string, id: string) {
-  const payload = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as
-    Record<string, unknown>;
-  payload.id = id;
-  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
-}
-
-export function resourcePlanCursorId(cursor: string) {
-  const payload = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as {
-    id?: unknown;
-  };
-  if (typeof payload.id !== "string") throw new Error("资源计划测试游标缺少 ID");
-  return payload.id;
-}
-
 export async function createAnchorTaskBatch({
   ownerAccountId,
   ownerPersonId,

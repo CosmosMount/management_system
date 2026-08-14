@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -7,10 +6,10 @@ import {
   segmentReadableWhere,
   taskReadableWhere,
 } from "@/lib/project-management/authorization";
-import { notFoundError, validationError } from "@/lib/project-management/application/errors";
+import { notFoundError } from "@/lib/project-management/application/errors";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 
-const idList = z.array(z.string().uuid()).max(50).default([]).transform((ids) =>
+const idList = z.array(z.string().uuid()).default([]).transform((ids) =>
   [...new Set(ids)].sort(),
 );
 const pinnedIdList = z.array(z.string().uuid()).max(1).default([]).transform((ids) =>
@@ -27,13 +26,11 @@ const resourcePlanSelectionSchema = resourcePlanExplicitIdsSchema.extend({
   all: z.boolean().default(true),
   pinnedTaskIds: pinnedIdList,
   pinnedPersonIds: pinnedIdList,
-  taskCursor: z.string().trim().min(1).max(500).optional(),
-  personCursor: z.string().trim().min(1).max(500).optional(),
 }).strict();
 
 type Selection = z.infer<typeof resourcePlanSelectionSchema>;
 
-export async function getResourcePlanSelectionPage({
+export async function getResourcePlanSelection({
   actor,
   input,
 }: {
@@ -42,17 +39,6 @@ export async function getResourcePlanSelectionPage({
 }) {
   const selection = resourcePlanSelectionSchema.parse(input);
   const { taskSelection, personSelection } = await assertSelectionExists(actor, selection);
-  const signature = selectionSignature(selection);
-  const [taskCursorId, personCursorId] = [
-    decodeCursor(selection.taskCursor, "TASK", signature),
-    decodeCursor(selection.personCursor, "PERSON", signature),
-  ];
-  await assertCursorsBelongToSelection({
-    taskCursorId,
-    personCursorId,
-    taskSelection,
-    personSelection,
-  });
   const explicitEmpty = !selection.all &&
     selection.projectIds.length === 0 &&
     selection.taskIds.length === 0 &&
@@ -60,48 +46,31 @@ export async function getResourcePlanSelectionPage({
     selection.pinnedTaskIds.length === 0 &&
     selection.pinnedPersonIds.length === 0;
   if (explicitEmpty) {
-    return {
-      taskIds: [],
-      personIds: [],
-      nextTaskCursor: null,
-      nextPersonCursor: null,
-      selectionSignature: signature,
-    };
+    return { taskIds: [], personIds: [] };
   }
 
-  const pinnedTaskPageIds = taskCursorId ? [] : selection.pinnedTaskIds;
-  const pinnedPersonPageIds = personCursorId ? [] : selection.pinnedPersonIds;
-  const taskPageSize = 25 - pinnedTaskPageIds.length;
-  const personPageSize = 50 - pinnedPersonPageIds.length;
   const [tasks, people] = await Promise.all([
     prisma.task.findMany({
-      where: { AND: [taskSelection, { id: { notIn: selection.pinnedTaskIds } }] },
+      where: taskSelection,
       select: { id: true },
       orderBy: [{ title: "asc" }, { id: "asc" }],
-      take: taskPageSize + 1,
-      ...(taskCursorId ? { cursor: { id: taskCursorId }, skip: 1 } : {}),
     }),
     prisma.person.findMany({
-      where: { AND: [personSelection, { id: { notIn: selection.pinnedPersonIds } }] },
+      where: personSelection,
       select: { id: true },
       orderBy: [{ displayName: "asc" }, { id: "asc" }],
-      take: personPageSize + 1,
-      ...(personCursorId ? { cursor: { id: personCursorId }, skip: 1 } : {}),
     }),
   ]);
-  const taskPage = tasks.slice(0, taskPageSize);
-  const personPage = people.slice(0, personPageSize);
   return {
-    taskIds: [...pinnedTaskPageIds, ...taskPage.map((task) => task.id)],
-    personIds: [...pinnedPersonPageIds, ...personPage.map((person) => person.id)],
-    nextTaskCursor: tasks.length > taskPageSize
-      ? encodeCursor("TASK", signature, taskPage.at(-1)?.id)
-      : null,
-    nextPersonCursor: people.length > personPageSize
-      ? encodeCursor("PERSON", signature, personPage.at(-1)?.id)
-      : null,
-    selectionSignature: signature,
+    taskIds: pinFirst(tasks.map((task) => task.id), selection.pinnedTaskIds),
+    personIds: pinFirst(people.map((person) => person.id), selection.pinnedPersonIds),
   };
+}
+
+function pinFirst(ids: string[], pinnedIds: string[]) {
+  if (pinnedIds.length === 0) return ids;
+  const pinned = new Set(pinnedIds);
+  return [...ids.filter((id) => pinned.has(id)), ...ids.filter((id) => !pinned.has(id))];
 }
 
 export async function resolveResourcePlanExplicitIds({
@@ -262,83 +231,4 @@ async function assertSelectionExists(
     throw notFoundError();
   }
   return { taskSelection, personSelection };
-}
-
-async function assertCursorsBelongToSelection({
-  taskCursorId,
-  personCursorId,
-  taskSelection,
-  personSelection,
-}: {
-  taskCursorId: string | null;
-  personCursorId: string | null;
-  taskSelection: Prisma.TaskWhereInput;
-  personSelection: Prisma.PersonWhereInput;
-}) {
-  const [taskCursor, personCursor] = await Promise.all([
-    taskCursorId
-      ? prisma.task.findFirst({
-          where: { AND: [taskSelection, { id: taskCursorId }] },
-          select: { id: true },
-        })
-      : null,
-    personCursorId
-      ? prisma.person.findFirst({
-          where: { AND: [personSelection, { id: personCursorId }] },
-          select: { id: true },
-        })
-      : null,
-  ]);
-  if ((taskCursorId && !taskCursor) || (personCursorId && !personCursor)) {
-    throw validationError("资源计划分页游标无效或选择条件已变化");
-  }
-}
-
-function selectionSignature(selection: Selection) {
-  return createHash("sha256").update(JSON.stringify({
-    all: selection.all,
-    projectIds: selection.projectIds,
-    taskIds: selection.taskIds,
-    personIds: selection.personIds,
-    pinnedTaskIds: selection.pinnedTaskIds,
-    pinnedPersonIds: selection.pinnedPersonIds,
-  })).digest("base64url").slice(0, 24);
-}
-
-function encodeCursor(
-  kind: "TASK" | "PERSON",
-  signature: string,
-  id: string | undefined,
-) {
-  if (!id) return null;
-  return Buffer.from(JSON.stringify({ v: 1, kind, signature, id }), "utf8")
-    .toString("base64url");
-}
-
-function decodeCursor(
-  value: string | undefined,
-  kind: "TASK" | "PERSON",
-  signature: string,
-) {
-  if (!value) return null;
-  try {
-    const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as {
-      v?: unknown;
-      kind?: unknown;
-      signature?: unknown;
-      id?: unknown;
-    };
-    if (
-      parsed.v !== 1 ||
-      parsed.kind !== kind ||
-      parsed.signature !== signature ||
-      typeof parsed.id !== "string" ||
-      !z.string().uuid().safeParse(parsed.id).success
-    ) {
-      throw new Error("invalid");
-    }
-    return parsed.id;
-  } catch {
-    throw validationError("资源计划分页游标无效或选择条件已变化");
-  }
 }

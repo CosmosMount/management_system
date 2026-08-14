@@ -518,19 +518,19 @@ pm2 start npm --name procurement-cron -- run cron
 - Task 成员只分“负责人”和“参与人”。支持多负责人且至少一名，同一 Person 只能有一个有效角色；创建者自动成为负责人。
 - 参与人可编辑 Task/计划、提交验收并创建自己的 Revision，并管理自己的关联投入；负责人另可管理成员、Task 状态、任意未生效 Revision 和该 Task 全部投入；全局管理员拥有全部项目写权限。
 - Revision 是可选择时间的非分段标记，创建即待审批，没有 Draft/Submit；驳回后修改即重新送审。每个 Task 只允许一条 Milestone/Revision 待审批，待审批期间不能再次提交 Milestone、发起或重新送审 Revision，也不能确认 Terminal。Milestone 与 Revision 只由统一超级管理员或项目管理员决定，允许管理员自审；界面不再提供流程策略、Reviewer 或自审开关。
-- `/progress` 是“我的工作”统一驾驶舱，提供指标、完整个人时间画布、行动待办、到期确认队列、与 Plan 轨道同页分页的参与 Task 表和折叠通知。投入待办统一打开同一详情 Dialog 处理。
+- `/progress` 是“我的工作”统一驾驶舱，提供指标、完整个人时间画布、行动待办、到期确认队列、全部参与 Task 及对应 Plan 轨道和折叠通知。投入待办统一打开同一详情 Dialog 处理。
 - `/progress/tasks/new` 提供新建 Composer；尚未激活的 Task 通过工作台右上角“编辑 Task”进入 `/progress/tasks/[id]/edit`，使用同一 Composer 一次保存基本信息、关联 Task、成员和完整计划。Participant 可编辑内容与计划，但成员区只读；保存成功后返回工作台。
 - `/progress/tasks` 与 `/progress/tasks/[id]` 提供 Task 列表和 Task 工作台。人员投入时间线位于工作台 Tab 上方，并在“计划与资源”“概览”“修订与历史”“验收”“审计”之间切换时保持显示和交互状态。DRAFT 工作台的“概览”和“计划与资源”均为只读展示；Task Owner 或全局管理员可软删除未激活草稿，已激活及终态 Task 不提供该入口。ACTIVE 的既有元数据和成员可在同一事务编辑。发起 Revision 进入 `/progress/tasks/[id]/revisions/new`，被驳回候选通过 `/progress/tasks/[id]/revisions/[revisionId]/edit` 修改；两者与 Task 创建/草稿编辑共用 Composer 的 TimeCanvas、节点表、Inspector、撤销/重做、校验和本地恢复，保存后直接返回“修订与历史”。工作台 Revision Tab 只保留历史、审批、取消和 Diff，不再内联编辑候选计划。
 - DRAFT Task 只能在计划开始时间已到达后激活；校验使用事务内的服务端时间，不追溯检查已经激活或结束的历史 Task。
-- `/progress/resources` 统一为“资源计划”。默认显示全部可见资源，也可按 Project、Task、人员多选；Task 集合为直接选择与所选 Project 下 Task 的并集，人员集合再并入所选 Project 成员和 Task 成员。画布混排只读 Current Plan 轨道与可交互人员投入，Task/人员分别按 25/50 条分页，焦点对象固定在第一页；范围由内容自动扩展两个上海日历月并按最多 180 天分块读取。未保存的虚线创建草稿可在桌面横移、调整两端或拖到当前可创建的 Person 行，移动端继续使用表单。
-- `/progress` 的个人画布同时展示本人投入和有效参与 Task，默认只列进行中 Task，用户可切换显示草稿及全部终态；每页 25 条且 Task 表与 Current Plan 轨道来自同一受约束装配。画布按当前页计划和本人可见投入自动计算范围，在内容两侧增加两个上海日历月，并以不超过 180 天的数据块读取。资源计划、Task 与 Project 详情同样按当前计划和投入自动确定范围。所有完整和紧凑画布默认使用周尺度，只有 URL 或调用方明确指定时才采用月/季/年；工具栏保留“今天”和独立底部滚动条。有效 Planned 新增或更新时间范围后会重新计算和预加载目标数据块；所有画布都排除已确认或已取消 Planned，它们不显示也不扩大范围，但数据库事实、来源与变更历史仍保留。Task 详情沿用既有投入权限，Project 详情中的投入只读。
+- `/progress/resources` 统一为“资源计划”。默认显示全部可见资源，也可按 Project、Task、人员多选；Task 集合为直接选择与所选 Project 下 Task 的并集，人员集合再并入所选 Project 成员和 Task 成员。画布一次装配完整 Task 与人员集合，混排只读 Current Plan 轨道与可交互人员投入；范围由内容自动扩展两个上海日历月并按最多 180 天分块读取。未保存的虚线创建草稿可在桌面横移、调整两端或拖到当前可创建的 Person 行，移动端继续使用表单。
+- `/progress` 的个人画布同时展示本人投入和全部有效参与 Task，默认只列进行中 Task，用户可切换显示草稿及全部终态；Task 表与 Current Plan 轨道来自同一全量装配。画布按全部计划和本人可见投入自动计算范围，在内容两侧增加两个上海日历月，并以不超过 180 天的数据块读取。Task 工作台展示全部有效成员及这些成员的全部投入；Project 详情展示 Project/所属 Task 全部有效成员的全部投入，但计划轨道仍只包含该 Project 的 Task。投入悬浮信息包含所属 Task，未关联 Task 时显示“独立投入”。所有完整和紧凑画布默认使用周尺度，只有 URL 或调用方明确指定时才采用月/季/年；工具栏保留“今天”和独立底部滚动条。有效 Planned 新增或更新时间范围后会重新计算和预加载目标数据块；所有画布都排除已确认或已取消 Planned，它们不显示也不扩大范围，但数据库事实、来源与变更历史仍保留。Task 详情沿用既有投入权限，Project 详情中的投入只读。
 - `/progress/approvals` 汇总投入确认、Milestone Review、Revision 与 Termination。Tag 分类能力已整体退役，`/progress/tags` 返回 404。
 - `/progress/notifications` 提供站内通知中心和分类飞书偏好；站内通知始终保留，强制事件不受普通关闭偏好影响。
 - 当前项目管理正式路由只保留 `/progress`、`/progress/projects/*`、`/progress/tasks/*`、`/progress/resources`、`/progress/approvals` 与 `/progress/notifications`；`/progress/task/:id`、`/progress/kanban`、`/progress/my-timeline` 和 `/admin/roles` 均返回 404。
 - Task mutation 公共入口只保留 Draft 整包 `updateTaskDraft` 与 Active 整包 `updateActiveTask`。时间视图 URL 使用 `focus`、`center`、`scale` 以及 `projects`/`tasks`/`people` 等复数选择；`timelineDate`、`timelineFocus`、单值 `personId`/`taskId`、`start`/`end` 和 `zoom` 会被忽略并从规范 URL 移除。
 - Composer 只恢复当前 v4 草稿；v1/v2/v3 不读取、不转换也不导出。过渡 tombstone 仅删除旧 key 与 IndexedDB 正文，首次生产发布满 30 天后应删除 tombstone 模块及调用点。
 - 飞书登录和通讯录同步先解析统一 `Account/AccountIdentity/Person`，再关联并更新采购 `User`。账号级项目访问禁用机制已移除，历史禁用账号恢复项目入口，但仍受系统角色、TaskMember 和数据范围授权约束。
-- 人员与 Task 选择统一使用异步模糊选择器，支持 NFKC、拼音首字母、顺序匹配、已选项安全恢复和最多 50 项多选；Task 列表与账号后台使用相同的有界排序规则。
+- 人员与 Task 选择统一使用异步模糊选择器，支持 NFKC、拼音首字母、顺序匹配和已选项安全恢复；搜索建议继续按最多 50 条分页，资源计划中的 Task/人员已选集合不设 50 项上限。Task 列表与账号后台使用相同的有界排序规则。
 - 当前项目管理行为以 [`docs/TECH.md`](docs/TECH.md)、[`docs/TESTING.md`](docs/TESTING.md)、ADR、Prisma schema 和实现为准；历史实施计划及截图已归档移除，避免与现行规范冲突。
 - `npm run pm:release-rehearsal` 仅用于本机隔离 `_test`/`_snapshot` 数据库；必须显式设置 `PM_RELEASE_REHEARSAL_CONFIRM=LOCAL_ISOLATED_REHEARSAL` 和 `NOTIFICATION_DELIVERY_DISABLED=true`。它不会执行生产维护窗口，生产发布仍需另行授权与 BO/TL/QA/DBA 签字。
 - 项目管理飞书通知只允许写入 `channel=project-management` 的 notification outbox；adapter 已构造普通交互卡并经统一私信传输层投递。Project 立项、验收和 Revision 待审批事件使用审批机器人用途，其他项目管理事件使用通知机器人。

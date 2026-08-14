@@ -21,7 +21,10 @@ import {
   locateProjectTimelineFocus,
 } from "@/lib/project-management/queries/project-queries";
 import { resolvePeopleOptionsByIds } from "@/lib/project-management/queries/option-queries";
-import { getContentDrivenTimeCanvasData } from "@/lib/project-management/queries/time-canvas-queries";
+import {
+  getContentDrivenTimeCanvasData,
+  resolveProjectTimelinePersonIds,
+} from "@/lib/project-management/queries/time-canvas-queries";
 import {
   getActivityVersion,
   getCollaborationCapabilities,
@@ -74,23 +77,14 @@ export default async function ProjectDetailPage({
     const normalized = searchParamsFromRecord(query);
     normalized.set("focus", focusLocator.focusId);
     normalized.set("center", new Date(focusLocator.centerMs).toISOString());
-    if (focusLocator.taskCursor) normalized.set("taskCursor", focusLocator.taskCursor);
-    else normalized.delete("taskCursor");
     normalized.delete("focusError");
     if (canonicalSearch(searchParamsFromRecord(query)) !== canonicalSearch(normalized)) {
       redirect(`${routes.progress.projectDetail(id)}?${normalized.toString()}`);
     }
   }
-  const taskCursor = focusLocator
-    ? focusLocator.taskCursor ?? undefined
-    : first(query.taskCursor) || undefined;
   const project = await getProjectDetail({
     actor,
     projectId: id,
-    pagination: {
-      taskCursor,
-      pageSize: 25,
-    },
   }).catch((error) => {
     if (toProjectManagementServiceError(error).code === "NOT_FOUND") notFound();
     throw error;
@@ -133,16 +127,14 @@ export default async function ProjectDetailPage({
   const timelineCenter = focusLocator?.centerMs ?? parseCenter(first(query.center))
     ?? defaultTimelineCenter;
   const timelineScale = parseScale(first(query.scale));
-  const timelinePersonIds = [...new Set([
-    ...project.members.map((member) => member.personId),
-    ...project.tasks.flatMap((task) => task.members.map((member) => member.personId)),
-  ])];
-  const resourceTimelineError = timelinePersonIds.length > 50
-    ? "当前页 Project/Task 有效成员超过 50 人，请缩小 Task 页范围后重试。"
-    : null;
-  const [timelinePeople, resourceCanvasResult] = resourceTimelineError
-    ? [[], null]
-    : await Promise.all([
+  const timelinePersonIds = await resolveProjectTimelinePersonIds({
+    actor,
+    personIds: [
+      ...project.members.map((member) => member.personId),
+      ...project.tasks.flatMap((task) => task.members.map((member) => member.personId)),
+    ],
+  });
+  const [timelinePeople, resourceCanvasResult] = await Promise.all([
         resolvePeopleOptionsByIds({
           actor,
           input: { scope: { purpose: "VISIBLE" }, ids: timelinePersonIds },
@@ -155,14 +147,13 @@ export default async function ProjectDetailPage({
           input: {
             scope: { kind: "RESOURCE_PLANNER" },
             personIds: timelinePersonIds,
-            taskIds: project.tasks.map((task) => task.id),
+            taskIds: [],
             types: [],
             statuses: [],
             groupBy: "PERSON",
             includeTaskAnchors: true,
             includeActual: true,
             includeBusyBlocks: false,
-            rowLimit: 50,
           },
         }).then((data) => ({ ok: true as const, data })).catch((error: unknown) => ({
           ok: false as const,
@@ -286,8 +277,7 @@ export default async function ProjectDetailPage({
                   : null
               }
               resourceTimelineError={
-                resourceTimelineError ??
-                (resourceCanvasResult && !resourceCanvasResult.ok
+                (!resourceCanvasResult.ok
                   ? resourceCanvasResult.message
                   : null)
               }
@@ -298,23 +288,10 @@ export default async function ProjectDetailPage({
                   ? resourceCanvasResult.data.resolvedCenterMs
                   : timelineCenter,
                 scale: timelineScale,
-                taskCursor,
               }}
               timelineFocusError={first(query.focusError) === "1"
                 ? "无法定位该时间对象，请确认链接仍然有效且你有权查看。"
                 : null}
-              nextPageHref={
-                project.taskNextCursor
-                  ? detailPageHref(
-                      project.id,
-                      project.taskNextCursor,
-                      resourceCanvasResult?.ok
-                        ? resourceCanvasResult.data.resolvedCenterMs
-                        : timelineCenter,
-                      timelineScale,
-                    )
-                  : null
-              }
             />
             <CreateRiskCard
               targetType="PROJECT"
@@ -419,22 +396,9 @@ function withoutRetiredTimelineParams(params: SearchParams) {
     "zoom",
     "personId",
     "taskId",
+    "taskCursor",
   ]) {
     search.delete(key);
   }
   return search;
-}
-
-function detailPageHref(
-  projectId: string,
-  taskCursor: string,
-  centerMs?: number,
-  scale?: TimeCanvasZoom,
-) {
-  const search = new URLSearchParams({ taskCursor });
-  if (Number.isFinite(centerMs)) {
-    search.set("center", new Date(centerMs!).toISOString());
-  }
-  if (scale) search.set("scale", scale.toLowerCase());
-  return `${routes.progress.projectDetail(projectId)}?${search.toString()}`;
 }

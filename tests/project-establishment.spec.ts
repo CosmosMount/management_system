@@ -20,6 +20,7 @@ import {
 import {
   getAdaptiveTimeCanvasBlock,
   getContentDrivenTimeCanvasData,
+  resolveProjectTimelinePersonIds,
 } from "../lib/project-management/queries/time-canvas-queries";
 import { expectHealthyPage, loginAsTestUser } from "./helpers/functional-fixtures";
 
@@ -100,7 +101,7 @@ test.describe("Project 立项与生命周期", () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   });
 
-  test("Project 详情使用概览、三列工作区和当前页 Task 时间线", async ({
+  test("Project 详情使用概览、三列工作区和全量 Task/成员投入时间线", async ({
     browser,
     context,
     page,
@@ -180,6 +181,81 @@ test.describe("Project 立项与生命周期", () => {
       },
       data: { status: "COMPLETED" },
     });
+    const externalTask = await draftTask(
+      requester,
+      participant,
+      "Project 外部 Task 投入",
+    );
+    const inactiveMember = await actor(`Project 停用空成员 ${randomUUID()}`);
+    await prisma.taskMember.create({
+      data: {
+        taskId: active.id,
+        personId: inactiveMember.personId,
+        role: "PARTICIPANT",
+        createdByAccountId: requester.accountId,
+      },
+    });
+    await prisma.person.update({
+      where: { id: inactiveMember.personId },
+      data: { status: "INACTIVE" },
+    });
+    await expect(resolveProjectTimelinePersonIds({
+      actor: requester,
+      personIds: [participant.personId, inactiveMember.personId],
+    })).resolves.toEqual([participant.personId]);
+    const [projectTaskSegment, externalTaskSegment, independentSegment, unrelatedSegment] =
+      await Promise.all([
+        prisma.workSegment.create({
+          data: {
+            personId: participant.personId,
+            taskId: active.id,
+            type: "PLANNED",
+            status: "PLANNED",
+            startAt: new Date("2026-08-09T09:00:00+08:00"),
+            endAt: new Date("2026-08-09T11:00:00+08:00"),
+            content: "Project 内 Task 投入",
+            expectedOutput: "Project 内产出",
+            createdByAccountId: requester.accountId,
+          },
+        }),
+        prisma.workSegment.create({
+          data: {
+            personId: participant.personId,
+            taskId: externalTask.id,
+            type: "PLANNED",
+            status: "PLANNED",
+            startAt: new Date("2026-08-09T12:00:00+08:00"),
+            endAt: new Date("2026-08-09T14:00:00+08:00"),
+            content: "Project 成员外部 Task 投入",
+            expectedOutput: "外部 Task 产出",
+            createdByAccountId: requester.accountId,
+          },
+        }),
+        prisma.workSegment.create({
+          data: {
+            personId: participant.personId,
+            type: "PLANNED",
+            status: "PLANNED",
+            startAt: new Date("2026-08-09T15:00:00+08:00"),
+            endAt: new Date("2026-08-09T17:00:00+08:00"),
+            content: "Project 成员独立投入",
+            expectedOutput: "独立产出",
+            createdByAccountId: requester.accountId,
+          },
+        }),
+        prisma.workSegment.create({
+          data: {
+            personId: viewer.personId,
+            type: "PLANNED",
+            status: "PLANNED",
+            startAt: new Date("2026-08-09T09:00:00+08:00"),
+            endAt: new Date("2026-08-09T10:00:00+08:00"),
+            content: "非 Project 成员投入",
+            expectedOutput: "不应展示",
+            createdByAccountId: viewer.accountId,
+          },
+        }),
+      ]);
 
     await loginAsTestUser(context, baseURL, {
       openId: requester.openId,
@@ -224,7 +300,22 @@ test.describe("Project 立项与生命周期", () => {
     await expect(page.getByTestId(`timeline-row-project-plan:${draft.id}`)).toBeVisible();
     await expect(page.getByTestId(`timeline-row-project-plan:${active.id}`)).toBeVisible();
     await expect(page.getByTestId(`timeline-row-project-plan:${completed.id}`)).toBeVisible();
+    await expect(page.getByTestId(`timeline-row-person:${inactiveMember.personId}`)).toHaveCount(0);
     await expect(page.locator('[data-testid^="timeline-row-plan:"]')).toHaveCount(0);
+    await expect(page.getByTestId(`timeline-row-project-plan:${externalTask.id}`)).toHaveCount(0);
+    await expect(page.getByTestId(`segment-block-${projectTaskSegment.id}`)).toHaveAttribute(
+      "title",
+      new RegExp(`Task：${active.title}`),
+    );
+    await expect(page.getByTestId(`segment-block-${externalTaskSegment.id}`)).toHaveAttribute(
+      "title",
+      new RegExp(`Task：${externalTask.title}`),
+    );
+    await expect(page.getByTestId(`segment-block-${independentSegment.id}`)).toHaveAttribute(
+      "title",
+      /Task：独立投入/,
+    );
+    await expect(page.getByTestId(`segment-block-${unrelatedSegment.id}`)).toHaveCount(0);
     await expect(
       page.getByTestId(
         `milestone-marker-project-node:${completedPlanNodes.milestoneNodeId}`,
@@ -444,11 +535,10 @@ test.describe("Project 立项与生命周期", () => {
     expect((await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).projectId).toBe(created.projectId);
     expect((await prisma.task.findUniqueOrThrow({ where: { id: secondTask.id } })).projectId).toBe(created.projectId);
     await prisma.task.update({ where: { id: secondTask.id }, data: { status: "ACTIVE" } });
-    const firstTaskPage = await getProjectDetail({ actor: requester, projectId: created.projectId, pagination: { pageSize: 1 } });
-    expect(firstTaskPage.taskNextCursor).not.toBeNull();
-    const secondTaskPage = await getProjectDetail({ actor: requester, projectId: created.projectId, pagination: { pageSize: 1, taskCursor: firstTaskPage.taskNextCursor! } });
-    expect(firstTaskPage.tasks[0]).toMatchObject({ id: task.id, status: "DRAFT" });
-    expect(secondTaskPage.tasks[0]).toMatchObject({ id: secondTask.id, status: "ACTIVE" });
+    const projectDetail = await getProjectDetail({ actor: requester, projectId: created.projectId, pagination: { pageSize: 1 } });
+    expect(projectDetail.tasks).toHaveLength(2);
+    expect(projectDetail.tasks[0]).toMatchObject({ id: task.id, status: "DRAFT" });
+    expect(projectDetail.tasks[1]).toMatchObject({ id: secondTask.id, status: "ACTIVE" });
     const fillerTasks = Array.from({ length: 24 }, (_, index) => ({
       id: randomUUID(),
       planId: randomUUID(),
@@ -486,13 +576,12 @@ test.describe("Project 立项与生命周期", () => {
     expect(crossPageLocator).toMatchObject({
       focusId: `project-start:${secondTask.id}`,
     });
-    expect(crossPageLocator?.taskCursor).not.toBeNull();
-    const focusedTaskPage = await getProjectDetail({
+    const focusedProject = await getProjectDetail({
       actor: requester,
       projectId: created.projectId,
-      pagination: { pageSize: 25, taskCursor: crossPageLocator!.taskCursor! },
     });
-    expect(focusedTaskPage.tasks.map((item) => item.id)).toContain(secondTask.id);
+    expect(focusedProject.tasks).toHaveLength(26);
+    expect(focusedProject.tasks.map((item) => item.id)).toContain(secondTask.id);
     await expect(locateProjectTimelineFocus({
       actor: requester,
       projectId: created.projectId,
@@ -519,7 +608,6 @@ test.describe("Project 立项与生命周期", () => {
         includeTaskAnchors: true,
         includeActual: true,
         includeBusyBlocks: false,
-        rowLimit: 50,
       },
     });
     await expect(getAdaptiveTimeCanvasBlock({

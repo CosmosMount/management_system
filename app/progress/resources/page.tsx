@@ -4,7 +4,6 @@ import { ResourceFilterBar } from "@/components/project-management/resource-filt
 import { PageCommandBar } from "@/components/project-management/shell/page-command-bar";
 import { timeCanvasDataToModel } from "@/components/project-management/time-canvas/adapter";
 import type { TimeCanvasZoom } from "@/components/project-management/time-canvas/types";
-import { ViewportStateLink } from "@/components/project-management/time-canvas/viewport-state-link";
 import { toProjectManagementServiceError } from "@/lib/project-management/application/errors";
 import {
   getActorPersonOption,
@@ -84,8 +83,6 @@ export default async function ProgressResourcesPage({
   if (resourceSelectionNeedsRedirect(params, normalizedSearch)) {
     redirect(`/progress/resources?${normalizedSearch.toString()}`);
   }
-  const taskCursor = focusedSegment ? undefined : firstParam(params.taskCursor) || undefined;
-  const personCursor = focusedSegment ? undefined : firstParam(params.personCursor) || undefined;
   const pinnedTaskIds = focusedSegment?.taskId && focusedTaskOptions.length > 0
     ? [focusedSegment.taskId]
     : [];
@@ -116,8 +113,6 @@ export default async function ProgressResourcesPage({
           personIds,
           pinnedTaskIds,
           pinnedPersonIds,
-          taskCursor,
-          personCursor,
         },
         preferredCenterMs: requestedCenter,
         load: { mode: "INITIAL" },
@@ -128,17 +123,6 @@ export default async function ProgressResourcesPage({
           error: toProjectManagementServiceError(error),
         })),
     ]);
-
-  if (
-    !canvasResult.ok &&
-    (taskCursor || personCursor) &&
-    canvasResult.error.code === "VALIDATION_ERROR"
-  ) {
-    const search = selectionSearchParams(params);
-    search.delete("taskCursor");
-    search.delete("personCursor");
-    redirect(`/progress/resources?${search.toString()}`);
-  }
 
   const baseModel = canvasResult.ok
     ? timeCanvasDataToModel(canvasResult.data.data, "RESOURCE_PLANNER")
@@ -222,8 +206,6 @@ export default async function ProgressResourcesPage({
               personIds,
               pinnedTaskIds,
               pinnedPersonIds,
-              taskCursor,
-              personCursor,
             }}
           />
         ) : (
@@ -231,42 +213,8 @@ export default async function ProgressResourcesPage({
             资源计划加载失败：{canvasResult.ok ? "未知错误" : canvasResult.error.message}。请调整选择或刷新后重试。
           </div>
         )}
-        {canvasResult.ok && (
-          <ResourcePagination
-            params={params}
-            taskCursor={taskCursor}
-            personCursor={personCursor}
-            nextTaskCursor={canvasResult.data.selection.nextTaskCursor}
-            nextPersonCursor={canvasResult.data.selection.nextPersonCursor}
-          />
-        )}
       </div>
     </>
-  );
-}
-
-function ResourcePagination({
-  params,
-  taskCursor,
-  personCursor,
-  nextTaskCursor,
-  nextPersonCursor,
-}: {
-  params: SearchParams;
-  taskCursor?: string;
-  personCursor?: string;
-  nextTaskCursor: string | null;
-  nextPersonCursor: string | null;
-}) {
-  if (!taskCursor && !personCursor && !nextTaskCursor && !nextPersonCursor) return null;
-  return (
-    <nav className="flex flex-wrap items-center gap-2" aria-label="资源计划分页">
-      {taskCursor && <ViewportStateLink className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted" href={pageHref(params, "taskCursor", null)}>Task 返回第一页</ViewportStateLink>}
-      {nextTaskCursor && <ViewportStateLink className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted" href={pageHref(params, "taskCursor", nextTaskCursor)}>下一页 Task</ViewportStateLink>}
-      {personCursor && <ViewportStateLink className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted" href={pageHref(params, "personCursor", null)}>人员返回第一页</ViewportStateLink>}
-      {nextPersonCursor && <ViewportStateLink className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted" href={pageHref(params, "personCursor", nextPersonCursor)}>下一页人员</ViewportStateLink>}
-      <span className="text-sm text-muted-foreground">每页最多 25 条 Task Plan、50 条人员。</span>
-    </nav>
   );
 }
 
@@ -274,11 +222,10 @@ function parseIdList(value: string) {
   const raw = value.split(",").map((id) => id.trim()).filter(Boolean);
   const valid = raw.filter(isUuid).map((id) => id.toLowerCase());
   const unique = [...new Set(valid)].sort();
-  const ids = unique.slice(0, 50);
+  const ids = unique;
   const issues: string[] = [];
   if (valid.length !== raw.length) issues.push("已忽略格式不正确的资源 ID");
   if (unique.length !== valid.length) issues.push("已忽略重复的资源 ID");
-  if (unique.length > 50) issues.push("每类资源最多选择 50 个，已忽略超出部分");
   return { ids, issues };
 }
 
@@ -288,16 +235,9 @@ function mergeById<T extends { id: string }>(...groups: T[][]) {
   return [...byId.values()];
 }
 
-function pageHref(params: SearchParams, key: "taskCursor" | "personCursor", value: string | null) {
-  const search = selectionSearchParams(params);
-  if (value) search.set(key, value);
-  else search.delete(key);
-  return `/progress/resources?${search.toString()}`;
-}
-
 function selectionSearchParams(params: SearchParams) {
   const search = new URLSearchParams();
-  for (const key of ["all", "projects", "tasks", "people", "taskCursor", "personCursor", "scale", "center", "focus", "focusError"] as const) {
+  for (const key of ["all", "projects", "tasks", "people", "scale", "center", "focus", "focusError"] as const) {
     const value = firstParam(params[key]);
     if (value) search.set(key, value);
   }

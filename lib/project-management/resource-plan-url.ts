@@ -13,6 +13,8 @@ const RETIRED_RESOURCE_PLAN_QUERY_KEYS = [
   "timelineDate",
   "timelineFocus",
   "focusSegmentIds",
+  "taskCursor",
+  "personCursor",
 ] as const;
 
 export function hasRetiredResourcePlanSearchParams(
