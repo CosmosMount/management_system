@@ -674,9 +674,93 @@ test.describe("project management P5 work segment services", () => {
       },
     });
     expect(partial.segment.status).toBe("CANCELLED");
+    expect(partial.actualSegment).toMatchObject({
+      type: "ACTUAL",
+      status: "CONFIRMED",
+      taskId: fixture.taskId,
+      startAt: atHour(11).toISOString(),
+      endAt: atHour(12.5).toISOString(),
+    });
     expect(partial.remainingSegments).toHaveLength(1);
     expect(partial.remainingSegments[0]?.startAt).toBe(atHour(12.5).toISOString());
     expect(partial.remainingSegments[0]?.endAt).toBe(atHour(13).toISOString());
+    const partialSource = await prisma.workSegmentSource.findFirstOrThrow({
+      where: {
+        plannedSegmentId: partialPlan.segment.id,
+        actualSegmentId: partial.actualSegment.id,
+      },
+    });
+    expect(partialSource.coveredStartAt.toISOString()).toBe(atHour(11).toISOString());
+    expect(partialSource.coveredEndAt.toISOString()).toBe(atHour(12.5).toISOString());
+    const partialSegmentIds = [
+      partialPlan.segment.id,
+      partial.actualSegment.id,
+      partial.remainingSegments[0]!.id,
+    ];
+    const partialChanges = await prisma.workSegmentChange.findMany({
+      where: {
+        segmentId: { in: partialSegmentIds },
+        action: { in: ["CONFIRM", "SPLIT"] },
+      },
+      select: { segmentId: true, action: true, reason: true },
+    });
+    expect(partialChanges).toEqual(expect.arrayContaining([
+      {
+        segmentId: partialPlan.segment.id,
+        action: "CONFIRM",
+        reason: "确认计划投入",
+      },
+      {
+        segmentId: partial.actualSegment.id,
+        action: "CONFIRM",
+        reason: "由计划投入确认生成实际投入",
+      },
+      {
+        segmentId: partial.remainingSegments[0]!.id,
+        action: "SPLIT",
+        reason: "部分确认后保留剩余计划",
+      },
+    ]));
+    expect(partialChanges).toHaveLength(3);
+    const partialAuditEvents = await prisma.domainAuditEvent.findMany({
+      where: {
+        entityType: "WorkSegment",
+        entityId: { in: partialSegmentIds },
+        action: { in: ["pm.segment.confirm", "pm.segment.split"] },
+      },
+      select: { entityId: true, action: true, reason: true },
+    });
+    expect(partialAuditEvents).toEqual(expect.arrayContaining([
+      {
+        entityId: partialPlan.segment.id,
+        action: "pm.segment.confirm",
+        reason: "确认计划投入",
+      },
+      {
+        entityId: partial.actualSegment.id,
+        action: "pm.segment.confirm",
+        reason: "由计划投入确认生成实际投入",
+      },
+      {
+        entityId: partial.remainingSegments[0]!.id,
+        action: "pm.segment.split",
+        reason: "部分确认后保留剩余计划",
+      },
+    ]));
+    expect(partialAuditEvents).toHaveLength(3);
+    const partialActualHistory = await listWorkSegmentChanges({
+      actor: actor(fixture.member),
+      input: { segmentId: partial.actualSegment.id },
+    });
+    expect(partialActualHistory.items).toEqual([
+      expect.objectContaining({
+        action: "确认投入",
+        reason: "由计划投入确认生成实际投入",
+      }),
+    ]);
+    expect(JSON.stringify(partialActualHistory.items)).not.toContain(
+      "Planned Segment",
+    );
 
     const planA = await createWorkSegment(actor(fixture.member), {
       ...plannedInput(fixture.member.person.id, 14, 15),

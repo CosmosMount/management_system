@@ -1124,7 +1124,7 @@ async function createActualFromPlannedTx(
       coveredStartAt: input.coveredStartAt.toISOString(),
       coveredEndAt: input.coveredEndAt.toISOString(),
     },
-    reason: input.reason || "确认 Planned Segment",
+    reason: input.reason || "确认计划投入",
   });
   await recordSegmentChangeTx(tx, {
     actor: input.actor,
@@ -1137,7 +1137,7 @@ async function createActualFromPlannedTx(
       coveredStartAt: input.coveredStartAt.toISOString(),
       coveredEndAt: input.coveredEndAt.toISOString(),
     },
-    reason: input.reason || "由 Planned Segment 确认生成",
+    reason: input.reason || "由计划投入确认生成实际投入",
   });
   return actual;
 }

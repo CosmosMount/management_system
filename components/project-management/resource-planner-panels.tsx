@@ -237,7 +237,7 @@ export function QuickCreatePanel({
         </p>
       )}
       <Field label="内容" htmlFor="quick-content" className="md:col-span-2">
-        <Input id="quick-content" name="content" defaultValue="计划投入" required maxLength={2_000} />
+        <Input id="quick-content" name="content" defaultValue="" required maxLength={2_000} />
       </Field>
       <Field label="Task" htmlFor="quick-task">
         {lockedTaskId ? (
@@ -724,13 +724,12 @@ function PartialConfirmForm({
       onSubmit={(event) => {
         event.preventDefault();
         const form = new FormData(event.currentTarget);
-        const reason = String(form.get("reason") ?? "投入详情部分确认");
         if (coveredMinutes >= durationMinutes) {
           onRun(
             () => confirmPlannedSegment({
               segmentId: detail.id,
               expectedUpdatedAt: detail.updatedAt,
-              reason,
+              reason: "投入详情完整确认",
             }),
             "已完整确认并生成 Actual",
           );
@@ -742,7 +741,6 @@ function PartialConfirmForm({
             expectedUpdatedAt: detail.updatedAt,
             coveredStartAt: detail.startAt,
             coveredEndAt,
-            reason,
             actual: {
               content: String(form.get("content") ?? ""),
               expectedOutput: String(form.get("expectedOutput") ?? ""),
@@ -789,7 +787,6 @@ function PartialConfirmForm({
         }}
         required
       />
-      <Input name="reason" aria-label="部分确认原因" defaultValue="投入详情部分确认" required />
       <Field label="实际投入内容" htmlFor={`partial-content-${detail.id}`}>
         <Textarea
           id={`partial-content-${detail.id}`}

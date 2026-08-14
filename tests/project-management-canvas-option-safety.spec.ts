@@ -631,6 +631,177 @@ test.describe("project management canvas security project-management-canvas-opti
       expect(pinned.personIds[0]).toBe(selectedPerson.person.id);
     });
 
+  test("resource plan filters Task plans by status without truncating selected people's investments", async () => {
+      const owner = await createAccountPerson(`资源计划状态 Owner ${randomUUID()}`);
+      await prisma.systemRoleAssignment.create({
+        data: {
+          accountId: owner.account.id,
+          role: "PROJECT_ADMINISTRATOR",
+          grantedByAccountId: owner.account.id,
+        },
+      });
+      const sharedMember = await createAccountPerson(`资源计划状态共享成员 ${randomUUID()}`);
+      const completedOnlyMember = await createAccountPerson(`资源计划状态终态成员 ${randomUUID()}`);
+      const projectMember = await createAccountPerson(`资源计划状态 Project 成员 ${randomUUID()}`);
+      const project = await prisma.project.create({
+        data: {
+          name: `资源计划状态 Project ${randomUUID()}`,
+          description: "资源计划 Task 状态筛选回归",
+          status: "ACTIVE",
+          requesterAccountId: owner.account.id,
+          startedAt: atHour(7),
+        },
+      });
+      await prisma.projectMember.create({
+        data: {
+          projectId: project.id,
+          personId: projectMember.person.id,
+          role: "PARTICIPANT",
+          createdByAccountId: owner.account.id,
+        },
+      });
+      const activeTask = await createTask({
+        ownerAccountId: owner.account.id,
+        title: `资源计划状态进行中 ${randomUUID()}`,
+        team: "英雄",
+        techGroup: "电控",
+        status: "ACTIVE",
+        members: [
+          { personId: owner.person.id, role: "OWNER" },
+          { personId: sharedMember.person.id, role: "PARTICIPANT" },
+        ],
+      });
+      const draftTask = await createTask({
+        ownerAccountId: owner.account.id,
+        title: `资源计划状态草稿 ${randomUUID()}`,
+        team: "英雄",
+        techGroup: "电控",
+        status: "DRAFT",
+        members: [{ personId: owner.person.id, role: "OWNER" }],
+      });
+      const completedTask = await createTask({
+        ownerAccountId: owner.account.id,
+        title: `资源计划状态已完成 ${randomUUID()}`,
+        team: "英雄",
+        techGroup: "电控",
+        status: "COMPLETED",
+        members: [
+          { personId: owner.person.id, role: "OWNER" },
+          { personId: sharedMember.person.id, role: "PARTICIPANT" },
+          { personId: completedOnlyMember.person.id, role: "PARTICIPANT" },
+        ],
+      });
+      await prisma.task.updateMany({
+        where: {
+          id: { in: [activeTask.taskId, draftTask.taskId, completedTask.taskId] },
+        },
+        data: { projectId: project.id },
+      });
+      const completedTaskSegment = await createSegment({
+        accountId: owner.account.id,
+        personId: sharedMember.person.id,
+        taskId: completedTask.taskId,
+        type: "ACTUAL",
+        status: "CONFIRMED",
+        startAt: atHour(10),
+        endAt: atHour(11),
+        content: "状态筛选外 Task 的完整人员投入",
+      });
+
+      const defaultSelection = await getResourcePlanSelection({
+        actor: actor(owner),
+        input: {
+          all: false,
+          projectIds: [project.id],
+          taskIds: [completedTask.taskId],
+          personIds: [],
+        },
+      });
+      expect(defaultSelection.taskStatuses).toEqual(["DRAFT", "ACTIVE"]);
+      expect(defaultSelection.taskIds).toEqual(expect.arrayContaining([
+        activeTask.taskId,
+        draftTask.taskId,
+      ]));
+      expect(defaultSelection.taskIds).not.toContain(completedTask.taskId);
+      expect(defaultSelection.personIds).toEqual(expect.arrayContaining([
+        owner.person.id,
+        sharedMember.person.id,
+        projectMember.person.id,
+      ]));
+      expect(defaultSelection.personIds).not.toContain(completedOnlyMember.person.id);
+
+      const activePage = await getResourcePlanPageData({
+        actor: actor(owner),
+        input: {
+          all: false,
+          taskStatuses: ["ACTIVE"],
+          projectIds: [project.id],
+          taskIds: [],
+          personIds: [],
+        },
+        preferredCenterMs: atHour(10.5).getTime(),
+        load: { mode: "INITIAL" },
+      });
+      expect(activePage.selection.taskIds).toEqual([activeTask.taskId]);
+      expect(new Set(activePage.data.anchors.map((anchor) => anchor.id))).toEqual(
+        new Set([activeTask.taskId]),
+      );
+      expect(activePage.data.segments).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          kind: "SEGMENT",
+          id: completedTaskSegment.id,
+          personId: sharedMember.person.id,
+          taskId: completedTask.taskId,
+        }),
+      ]));
+
+      const completedSelection = await getResourcePlanSelection({
+        actor: actor(owner),
+        input: {
+          all: false,
+          taskStatuses: ["COMPLETED"],
+          projectIds: [project.id],
+          taskIds: [activeTask.taskId],
+          personIds: [],
+        },
+      });
+      expect(completedSelection.taskIds).toEqual([completedTask.taskId]);
+      expect(completedSelection.personIds).toContain(completedOnlyMember.person.id);
+
+      const noTaskPage = await getResourcePlanPageData({
+        actor: actor(owner),
+        input: {
+          all: false,
+          taskStatuses: [],
+          projectIds: [project.id],
+          taskIds: [],
+          personIds: [],
+        },
+        preferredCenterMs: atHour(10.5).getTime(),
+        load: { mode: "INITIAL" },
+      });
+      expect(noTaskPage.selection.taskIds).toEqual([]);
+      expect(noTaskPage.selection.personIds).toEqual([projectMember.person.id]);
+      expect(noTaskPage.data.anchors).toEqual([]);
+
+      const focusedTerminalTask = await getResourcePlanSelection({
+        actor: actor(owner),
+        input: {
+          all: false,
+          taskStatuses: ["ACTIVE"],
+          projectIds: [],
+          taskIds: [],
+          personIds: [],
+          pinnedTaskIds: [completedTask.taskId],
+          pinnedPersonIds: [completedOnlyMember.person.id],
+        },
+      });
+      expect(focusedTerminalTask.taskIds).toEqual([]);
+      expect(focusedTerminalTask.personIds).toEqual([
+        completedOnlyMember.person.id,
+      ]);
+    });
+
   test("resource plan returns every selected Task and Person beyond the retired page limits", async () => {
       const owner = await createAccountPerson(`资源计划游标 Owner ${randomUUID()}`);
       await prisma.systemRoleAssignment.create({

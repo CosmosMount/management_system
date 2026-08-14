@@ -621,6 +621,7 @@ export async function getAdaptiveTimeCanvasBlock({
             actor,
             input: {
               all: parsed.all,
+              taskStatuses: parsed.taskStatuses,
               projectIds: parsed.projectIds,
               taskIds: parsed.taskIds,
               personIds: parsed.personIds,

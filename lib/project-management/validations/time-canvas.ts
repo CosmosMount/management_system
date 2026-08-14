@@ -12,6 +12,7 @@ import {
   workSegmentStatusValues,
   workSegmentTypeValues,
 } from "@/lib/project-management/types/contract-values";
+import { DEFAULT_RESOURCE_PLAN_TASK_STATUSES } from "@/lib/project-management/resource-plan-url";
 import { addStructuredProjectManagementIssue } from "@/lib/project-management/validations/issues";
 import { z } from "zod";
 
@@ -197,6 +198,11 @@ export const getAdaptiveTimeCanvasBlockInputSchema = z
       kind: z.literal("RESOURCE_PLAN"),
       ...adaptiveBlockCommonFields,
       all: z.boolean(),
+      taskStatuses: z
+        .array(z.enum(taskStatusValues))
+        .max(taskStatusValues.length)
+        .optional()
+        .default([...DEFAULT_RESOURCE_PLAN_TASK_STATUSES]),
       projectIds: idListSchema("Project"),
       taskIds: idListSchema("Task"),
       personIds: idListSchema("Person"),

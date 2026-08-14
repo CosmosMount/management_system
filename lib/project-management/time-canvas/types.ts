@@ -1,3 +1,5 @@
+import type { ResourcePlanTaskStatus } from "@/lib/project-management/resource-plan-url";
+
 export type TimeCanvasMode =
   | "TASK_COMPOSER"
   | "TASK_WORKBENCH"
@@ -125,6 +127,7 @@ export type AdaptiveTimeCanvasBlockQuery =
       kind: "RESOURCE_PLAN";
       preferredCenterMs: number;
       all: boolean;
+      taskStatuses: ResourcePlanTaskStatus[];
       projectIds: string[];
       taskIds: string[];
       personIds: string[];

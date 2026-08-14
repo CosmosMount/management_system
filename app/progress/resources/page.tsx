@@ -18,7 +18,14 @@ import {
 } from "@/lib/project-management/queries/project-queries";
 import { getWorkSegment } from "@/lib/project-management/queries/resource-queries";
 import { resolveResourcePlanExplicitIds } from "@/lib/project-management/queries/resource-plan-queries";
-import { hasRetiredResourcePlanSearchParams } from "@/lib/project-management/resource-plan-url";
+import {
+  hasRetiredResourcePlanSearchParams,
+  parseResourcePlanTaskStatusNotices,
+  parseResourcePlanTaskStatuses,
+  serializeResourcePlanTaskStatuses,
+  setResourcePlanTaskStatusNotices,
+  type ResourcePlanTaskStatus,
+} from "@/lib/project-management/resource-plan-url";
 import { getResourcePlanPageData } from "@/lib/project-management/queries/time-canvas-queries";
 import { getProgressActorOrRedirect } from "../_auth";
 
@@ -50,6 +57,15 @@ export default async function ProgressResourcesPage({
   const parsedProjects = parseIdList(firstParam(params.projects));
   const parsedTasks = parseIdList(firstParam(params.tasks));
   const parsedPeople = parseIdList(firstParam(params.people));
+  const parsedTaskStatuses = parseResourcePlanTaskStatuses(
+    hasParam(params, "taskStatuses")
+      ? joinedParam(params.taskStatuses)
+      : undefined,
+  );
+  const taskStatusNotices = parseResourcePlanTaskStatusNotices(
+    firstParam(params.taskStatusNotice),
+  );
+  const taskStatuses = parsedTaskStatuses.statuses;
   const hasExplicitSelection = parsedProjects.ids.length > 0 ||
     parsedTasks.ids.length > 0 ||
     parsedPeople.ids.length > 0;
@@ -79,8 +95,13 @@ export default async function ProgressResourcesPage({
     projectIds,
     taskIds,
     personIds,
+    taskStatuses,
   });
   if (resourceSelectionNeedsRedirect(params, normalizedSearch)) {
+    setResourcePlanTaskStatusNotices(normalizedSearch, [
+      ...taskStatusNotices.codes,
+      ...parsedTaskStatuses.noticeCodes,
+    ]);
     redirect(`/progress/resources?${normalizedSearch.toString()}`);
   }
   const pinnedTaskIds = focusedSegment?.taskId && focusedTaskOptions.length > 0
@@ -96,7 +117,9 @@ export default async function ProgressResourcesPage({
     await Promise.all([
       getActorPersonOption(actor),
       searchPeople({ actor, input: { purpose: "VISIBLE", limit: 50 } }),
-      searchTaskOptions({ actor, input: { limit: 50 } }),
+      taskStatuses.length > 0
+        ? searchTaskOptions({ actor, input: { statuses: taskStatuses, limit: 50 } })
+        : Promise.resolve({ items: [], nextCursor: null, hasMoreByQuery: false }),
       searchVisibleProjectOptions({ limit: 50 }),
       resolvePeopleOptionsByIds({
         actor,
@@ -108,6 +131,7 @@ export default async function ProgressResourcesPage({
         actor,
         input: {
           all: showAll,
+          taskStatuses,
           projectIds,
           taskIds,
           personIds,
@@ -148,10 +172,10 @@ export default async function ProgressResourcesPage({
       })
     : [];
   const canvasTasks = canvasResult.ok
-    ? (await resolveTaskOptionsByIds({
+    ? await resolveTaskOptionsByIds({
         actor,
         input: { ids: canvasResult.data.selection.taskIds },
-      })).filter((task) => task.status === "ACTIVE")
+      })
     : [];
   const resolvedCenterMs = canvasResult.ok ? canvasResult.data.resolvedCenterMs : 0;
   const pickerPeople = mergeById(selectedPeople, canvasPeople, [actorPerson], peoplePage.items);
@@ -161,6 +185,8 @@ export default async function ProgressResourcesPage({
     ...parsedProjects.issues,
     ...parsedTasks.issues,
     ...parsedPeople.issues,
+    ...taskStatusNotices.issues,
+    ...parsedTaskStatuses.issues,
   ];
 
   return (
@@ -171,16 +197,16 @@ export default async function ProgressResourcesPage({
       />
       <div className="mx-auto flex w-full min-w-0 max-w-[96rem] flex-col gap-5 px-4 py-6 sm:px-6 lg:px-8">
         <ResourceFilterBar
-          key={JSON.stringify([showAll, projectIds, taskIds, personIds])}
-          initial={{ all: showAll, projectIds, taskIds, personIds }}
+          key={JSON.stringify([showAll, projectIds, taskIds, personIds, taskStatuses])}
+          initial={{ all: showAll, projectIds, taskIds, personIds, taskStatuses }}
           initialProjects={pickerProjects}
           initialPeople={pickerPeople}
           initialTasks={pickerTasks}
         />
         {issues.length > 0 && (
-          <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">
-            {issues.join("；")}
-          </p>
+          <ul className="rounded-md border border-amber-300 bg-amber-50 px-6 py-2 text-sm text-amber-900" role="status">
+            {issues.map((issue) => <li key={issue}>{issue}</li>)}
+          </ul>
         )}
         {firstParam(params.focusError) === "1" && (
           <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">
@@ -201,6 +227,7 @@ export default async function ProgressResourcesPage({
               kind: "RESOURCE_PLAN",
               preferredCenterMs: resolvedCenterMs,
               all: showAll,
+              taskStatuses,
               projectIds,
               taskIds,
               personIds,
@@ -241,6 +268,9 @@ function selectionSearchParams(params: SearchParams) {
     const value = firstParam(params[key]);
     if (value) search.set(key, value);
   }
+  if (hasParam(params, "taskStatuses")) {
+    search.set("taskStatuses", firstParam(params.taskStatuses));
+  }
   return search;
 }
 
@@ -251,6 +281,7 @@ function normalizedSelectionSearchParams(
     projectIds: string[];
     taskIds: string[];
     personIds: string[];
+    taskStatuses: ResourcePlanTaskStatus[];
   },
 ) {
   const search = selectionSearchParams(params);
@@ -266,6 +297,11 @@ function normalizedSelectionSearchParams(
     setIdSearchParam(search, "tasks", selection.taskIds);
     setIdSearchParam(search, "people", selection.personIds);
   }
+  const serializedTaskStatuses = serializeResourcePlanTaskStatuses(
+    selection.taskStatuses,
+  );
+  if (serializedTaskStatuses === null) search.delete("taskStatuses");
+  else search.set("taskStatuses", serializedTaskStatuses);
   return search;
 }
 
@@ -277,9 +313,12 @@ function resourceSelectionNeedsRedirect(
     return true;
   }
   const keys = ["all", "projects", "tasks", "people"] as const;
-  return keys.some(
+  if (keys.some(
     (key) => firstParam(params[key]) !== (normalized.get(key) ?? ""),
-  );
+  )) return true;
+  return Array.isArray(params.taskStatuses) ||
+    hasParam(params, "taskStatuses") !== normalized.has("taskStatuses") ||
+    firstParam(params.taskStatuses) !== (normalized.get("taskStatuses") ?? "");
 }
 
 function searchParamsFromRecord(params: SearchParams) {
@@ -315,6 +354,14 @@ function parseCenter(value: string) {
 
 function firstParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+}
+
+function joinedParam(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value.join(",") : value;
+}
+
+function hasParam(params: SearchParams, key: string) {
+  return Object.prototype.hasOwnProperty.call(params, key);
 }
 
 function isUuid(value: string) {

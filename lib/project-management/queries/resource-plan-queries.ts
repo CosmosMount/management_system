@@ -8,6 +8,8 @@ import {
 } from "@/lib/project-management/authorization";
 import { notFoundError } from "@/lib/project-management/application/errors";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
+import { DEFAULT_RESOURCE_PLAN_TASK_STATUSES } from "@/lib/project-management/resource-plan-url";
+import { taskStatusValues } from "@/lib/project-management/types/contract-values";
 
 const idList = z.array(z.string().uuid()).default([]).transform((ids) =>
   [...new Set(ids)].sort(),
@@ -15,6 +17,14 @@ const idList = z.array(z.string().uuid()).default([]).transform((ids) =>
 const pinnedIdList = z.array(z.string().uuid()).max(1).default([]).transform((ids) =>
   [...new Set(ids)],
 );
+const taskStatusList = z
+  .array(z.enum(taskStatusValues))
+  .max(taskStatusValues.length)
+  .default([...DEFAULT_RESOURCE_PLAN_TASK_STATUSES])
+  .transform((statuses) => {
+    const selected = new Set(statuses);
+    return taskStatusValues.filter((status) => selected.has(status));
+  });
 
 const resourcePlanExplicitIdsSchema = z.object({
   projectIds: idList,
@@ -24,6 +34,7 @@ const resourcePlanExplicitIdsSchema = z.object({
 
 const resourcePlanSelectionSchema = resourcePlanExplicitIdsSchema.extend({
   all: z.boolean().default(true),
+  taskStatuses: taskStatusList,
   pinnedTaskIds: pinnedIdList,
   pinnedPersonIds: pinnedIdList,
 }).strict();
@@ -46,7 +57,11 @@ export async function getResourcePlanSelection({
     selection.pinnedTaskIds.length === 0 &&
     selection.pinnedPersonIds.length === 0;
   if (explicitEmpty) {
-    return { taskIds: [], personIds: [] };
+    return {
+      taskIds: [],
+      personIds: [],
+      taskStatuses: selection.taskStatuses,
+    };
   }
 
   const [tasks, people] = await Promise.all([
@@ -64,6 +79,7 @@ export async function getResourcePlanSelection({
   return {
     taskIds: pinFirst(tasks.map((task) => task.id), selection.pinnedTaskIds),
     personIds: pinFirst(people.map((person) => person.id), selection.pinnedPersonIds),
+    taskStatuses: selection.taskStatuses,
   };
 }
 
@@ -125,21 +141,26 @@ function taskSelectionWhere(
   return {
     AND: [
       taskReadableWhere(actor),
-      selection.all
-        ? {}
-        : {
-            OR: [
-              selection.taskIds.length > 0
-                ? { id: { in: selection.taskIds } }
-                : { id: { in: [] } },
-              selection.projectIds.length > 0
-                ? { projectId: { in: selection.projectIds } }
-                : { id: { in: [] } },
-              selection.pinnedTaskIds.length > 0
-                ? { id: { in: selection.pinnedTaskIds } }
-                : { id: { in: [] } },
-            ],
-          },
+      {
+        AND: [
+          { status: { in: selection.taskStatuses } },
+          selection.all
+            ? {}
+            : {
+                OR: [
+                  selection.taskIds.length > 0
+                    ? { id: { in: selection.taskIds } }
+                    : { id: { in: [] } },
+                  selection.projectIds.length > 0
+                    ? { projectId: { in: selection.projectIds } }
+                    : { id: { in: [] } },
+                  selection.pinnedTaskIds.length > 0
+                    ? { id: { in: selection.pinnedTaskIds } }
+                    : { id: { in: [] } },
+                ],
+              },
+        ],
+      },
     ],
   };
 }
@@ -215,7 +236,12 @@ async function assertSelectionExists(
       },
     }),
     prisma.task.count({
-      where: { AND: [taskSelection, { id: { in: selection.pinnedTaskIds } }] },
+      where: {
+        AND: [
+          taskReadableWhere(actor),
+          { id: { in: selection.pinnedTaskIds } },
+        ],
+      },
     }),
     prisma.person.count({
       where: { AND: [personSelection, { id: { in: selection.pinnedPersonIds } }] },
