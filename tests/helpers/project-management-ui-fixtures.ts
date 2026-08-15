@@ -156,6 +156,41 @@ export async function createUiFixture() {
   };
 }
 
+export async function createLargeTaskWorkbenchFixture() {
+  const fixtureKey = randomUUID();
+  const owner = await createAccountPerson("超".repeat(256));
+  const taskTitle = "任".repeat(200);
+  const finalMilestoneGoal = "里".repeat(2_000);
+  const terminalName = "终".repeat(200);
+  const task = await createTaskDraft(actor(owner), {
+    title: taskTitle,
+    description: "验证大量节点、超长 Task 和人员名称不会撑破三层详情页布局",
+    team: "英雄",
+    techGroup: "电控",
+    priority: "HIGH",
+    members: [{ personId: owner.person.id, role: "OWNER" }],
+    milestones: Array.from({ length: 200 }, (_, index) =>
+      milestoneInput(
+        index === 199
+          ? finalMilestoneGoal
+          : `压力 Milestone ${String(index + 1).padStart(3, "0")}`,
+        `完成压力 Milestone ${index + 1}`,
+        index + 1,
+      ),
+    ),
+    plannedStartAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
+    termination: { ...terminationInput(202), name: terminalName },
+    idempotencyKey: `p6-large-workbench-${fixtureKey}`,
+  });
+  return {
+    owner,
+    taskId: task.taskId,
+    taskTitle,
+    finalMilestoneGoal,
+    terminalName,
+  };
+}
+
 export async function createDraftWorkbenchFixture() {
   const fixtureSuffix = randomUUID();
   const admin = await createAccountPerson(`S6 Draft Team Admin ${fixtureSuffix}`);

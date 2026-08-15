@@ -1,15 +1,30 @@
 import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../lib/prisma";
+import { createRisk } from "../lib/project-management/application/collaboration-service";
 import { markInAppNotificationRead as markInAppNotificationReadService } from "../lib/project-management/application/notification-service";
-import { expectHealthyPage, loginAsTestUser } from "./helpers/functional-fixtures";
+import {
+  expectHealthyPage,
+  expectThreeLayerDetailLayout,
+  loginAsTestUser,
+} from "./helpers/functional-fixtures";
 
 import {
   actor,
   createAccountPerson,
+  createLargeTaskWorkbenchFixture,
   createUiFixture,
   grantRole,
 } from "./helpers/project-management-ui-fixtures";
+
+const taskDetailLayoutIds = {
+  overview: "task-overview",
+  timeline: "task-timeline-layer",
+  lowerGrid: "task-detail-lower-grid",
+  mainColumn: "task-detail-main-column",
+  leftColumn: "task-detail-left-column",
+  rightColumn: "task-detail-right-column",
+} as const;
 
 test.describe("project management UI project-management-ui-routes-responsive", () => {
   test.beforeAll(async () => {
@@ -64,6 +79,25 @@ test.describe("project management UI project-management-ui-routes-responsive", (
           .getByRole("heading", { name: fixture.taskTitle, exact: true }),
       ).toBeVisible();
       await expect(page.getByTestId("task-workbench-v2")).toBeVisible();
+      await expect(page.getByTestId("task-overview")).toBeVisible();
+      await expect(page.getByTestId("task-timeline-layer")).toBeVisible();
+      await expect(page.getByTestId("task-detail-lower-grid")).toBeVisible();
+      await expect(page.getByTestId("task-detail-main-column")).toBeVisible();
+      await expect(page.getByTestId("task-detail-left-column")).toBeVisible();
+      await expect(page.getByTestId("task-detail-right-column")).toBeVisible();
+      await expectThreeLayerDetailLayout(
+        page,
+        taskDetailLayoutIds,
+        testInfo.project.name === "desktop" ? "columns" : "stacked",
+      );
+      if (testInfo.project.name === "desktop") {
+        await page.setViewportSize({ width: 1279, height: 1000 });
+        await expectThreeLayerDetailLayout(page, taskDetailLayoutIds, "stacked");
+        await page.setViewportSize({ width: 1280, height: 1000 });
+        await expectThreeLayerDetailLayout(page, taskDetailLayoutIds, "columns");
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        await expectThreeLayerDetailLayout(page, taskDetailLayoutIds, "columns");
+      }
       await expect(page.getByTestId("task-plan-node-navigator")).toBeVisible();
       await expect(
         page
@@ -82,6 +116,29 @@ test.describe("project management UI project-management-ui-routes-responsive", (
       await expect(page.getByText("人员投入", { exact: true })).toHaveCount(0);
       await expect(page.getByRole("heading", { name: "计划与人员投入" })).toBeVisible();
       await expect(page.getByTestId("time-canvas-root")).toBeVisible();
+      await page.getByRole("button", { name: "复制链接", exact: true }).click();
+      const globalNotice = page.getByTestId("task-global-notice");
+      await expect(globalNotice).toBeVisible();
+      await globalNotice.evaluate((element) => {
+        element.textContent = "长".repeat(1_000);
+      });
+      const [overviewBox, noticeBox, timelineBox] = await Promise.all([
+        page.getByTestId("task-overview").boundingBox(),
+        globalNotice.boundingBox(),
+        page.getByTestId("task-timeline-layer").boundingBox(),
+      ]);
+      if (!overviewBox || !noticeBox || !timelineBox) {
+        throw new Error("无法读取 Task 全局反馈的布局位置");
+      }
+      expect(noticeBox.y).toBeGreaterThan(overviewBox.y + overviewBox.height);
+      expect(timelineBox.y).toBeGreaterThan(noticeBox.y + noticeBox.height);
+      expect(
+        await page.evaluate(
+          () =>
+            document.documentElement.scrollWidth <=
+            document.documentElement.clientWidth + 1,
+        ),
+      ).toBe(true);
       await expect(
         page.getByTestId(`milestone-marker-plan-start:${fixture.taskId}`),
       ).toHaveAttribute("aria-pressed", "true");
@@ -106,10 +163,16 @@ test.describe("project management UI project-management-ui-routes-responsive", (
         });
       });
       const canvasScroll = page.getByTestId("time-canvas-scroll");
-      await page
+      const terminalNavigatorButton = page
         .getByTestId("task-plan-node-navigator")
-        .getByRole("button", { name: /Terminal/ })
-        .click();
+        .getByRole("button", { name: /Terminal/ });
+      await terminalNavigatorButton.click();
+      await expect(terminalNavigatorButton).toHaveAttribute("aria-pressed", "true");
+      await expect(
+        page
+          .getByTestId("task-detail-main-column")
+          .getByRole("heading", { name: "Terminal", exact: true }),
+      ).toBeVisible();
       await expect
         .poll(() => canvasScroll.evaluate((element) => element.scrollLeft))
         .toBeGreaterThan(1);
@@ -539,8 +602,16 @@ test.describe("project management UI project-management-ui-routes-responsive", (
       context,
       page,
       baseURL,
-    }) => {
+    }, testInfo) => {
       const fixture = await createUiFixture();
+      const pageErrors: string[] = [];
+      page.on("pageerror", (error) => pageErrors.push(error.message));
+      const visibleTaskRisk = `非成员可见 Task 风险 ${randomUUID()}`;
+      await createRisk(actor(fixture.owner), {
+        targetType: "TASK",
+        targetId: fixture.taskId,
+        content: visibleTaskRisk,
+      });
       await loginAsTestUser(context, baseURL, {
         openId: fixture.outsider.openId,
         name: fixture.outsider.person.displayName,
@@ -553,10 +624,49 @@ test.describe("project management UI project-management-ui-routes-responsive", (
           .getByRole("heading", { name: fixture.taskTitle, exact: true }),
       ).toBeVisible();
       await expect(page.getByTestId("task-workbench-v2")).toBeVisible();
+      await expectThreeLayerDetailLayout(
+        page,
+        taskDetailLayoutIds,
+        testInfo.project.name === "desktop" ? "columns" : "stacked",
+      );
+      await expect(page.getByTestId("time-canvas-root")).toBeVisible();
+      await expect(
+        page
+          .getByTestId("task-detail-main-column")
+          .getByRole("heading", { name: "Start", exact: true }),
+      ).toBeVisible();
+      await expect(
+        page.getByRole("heading", { name: "Task 风险", exact: true }),
+      ).toBeVisible();
+      await expect(
+        page.getByRole("heading", { name: "Task 评论", exact: true }),
+      ).toBeVisible();
+      await expect(
+        page.getByRole("heading", { name: "近期动态", exact: true }),
+      ).toBeVisible();
+      await expect(
+        page
+          .getByTestId("task-detail-left-column")
+          .getByText(visibleTaskRisk, { exact: true }),
+      ).toBeVisible();
       await expect(page.getByRole("button", { name: "修改 Task 基本信息" })).toHaveCount(0);
       await expect(page.getByRole("link", { name: "发起 Revision" })).toHaveCount(0);
       await expect(page.getByRole("button", { name: "提交验收" })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "结束 Task" })).toHaveCount(0);
+      await expect(
+        page.getByRole("button", { name: "提出风险", exact: true }),
+      ).toHaveCount(0);
+      await expect(
+        page.getByRole("button", { name: "解决风险", exact: true }),
+      ).toHaveCount(0);
+      const comment = page.getByLabel("发表评论");
+      await expect(comment).toBeEnabled();
+      await comment.fill("非成员仍可发表评论");
+      await expect(
+        page.getByRole("button", { name: "发布评论", exact: true }),
+      ).toBeEnabled();
       await expectHealthyPage(page);
+      expect(pageErrors).toEqual([]);
 
       await page.goto("/progress/notifications");
       await expect(page.getByRole("heading", { name: "站内通知" })).toBeVisible();
@@ -567,6 +677,59 @@ test.describe("project management UI project-management-ui-routes-responsive", (
         }),
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
+
+  test("200 Milestone Task 工作台在桌面与移动端保持可用", async ({
+    context,
+    page,
+    baseURL,
+  }, testInfo) => {
+    test.setTimeout(120_000);
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    const fixture = await createLargeTaskWorkbenchFixture();
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.owner.openId,
+      name: fixture.owner.person.displayName,
+    });
+
+    await page.goto(`/progress/tasks/${fixture.taskId}`);
+    await expect(
+      page.getByRole("heading", { name: fixture.taskTitle, exact: true }),
+    ).toBeVisible();
+    await expectThreeLayerDetailLayout(
+      page,
+      taskDetailLayoutIds,
+      testInfo.project.name === "desktop" ? "columns" : "stacked",
+    );
+    const navigator = page.getByTestId("task-plan-node-navigator");
+    await expect(navigator.getByRole("button")).toHaveCount(202);
+    const finalMilestone = navigator
+      .getByRole("button")
+      .filter({ hasText: fixture.finalMilestoneGoal });
+    await finalMilestone.click();
+    await expect(finalMilestone).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      page
+        .getByTestId("task-detail-main-column")
+        .getByRole("heading", {
+          name: fixture.finalMilestoneGoal,
+          exact: true,
+        }),
+    ).toBeVisible();
+    const terminal = navigator
+      .getByRole("button")
+      .filter({ hasText: fixture.terminalName });
+    await terminal.click();
+    await expect(terminal).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      page
+        .getByTestId("task-detail-main-column")
+        .getByRole("heading", { name: fixture.terminalName, exact: true }),
+    ).toBeVisible();
+    await expect(page.getByTestId("time-canvas-root")).toBeVisible();
+    await expectHealthyPage(page);
+    expect(pageErrors).toEqual([]);
+  });
 
   test("S8 dashboard, action inbox and notification preferences work on desktop and mobile", async ({
       context,

@@ -8,6 +8,7 @@ import {
   resubmitProject,
   reviewProjectEstablishment,
 } from "../lib/project-management/application/project-service";
+import { createRisk } from "../lib/project-management/application/collaboration-service";
 import { toProjectManagementServiceError } from "../lib/project-management/application/errors";
 import type { ProjectManagementActor } from "../lib/project-management/identity";
 import { getActionInbox } from "../lib/project-management/queries/action-inbox-queries";
@@ -22,7 +23,20 @@ import {
   getContentDrivenTimeCanvasData,
   resolveProjectTimelinePersonIds,
 } from "../lib/project-management/queries/time-canvas-queries";
-import { expectHealthyPage, loginAsTestUser } from "./helpers/functional-fixtures";
+import {
+  expectHealthyPage,
+  expectThreeLayerDetailLayout,
+  loginAsTestUser,
+} from "./helpers/functional-fixtures";
+
+const projectDetailLayoutIds = {
+  overview: "project-overview",
+  timeline: "project-timeline-layer",
+  lowerGrid: "project-detail-lower-grid",
+  mainColumn: "project-detail-main-column",
+  leftColumn: "project-detail-left-column",
+  rightColumn: "project-detail-right-column",
+} as const;
 
 test.describe("Project 立项与生命周期", () => {
   test("Project 导航、默认筛选、列表和创建页在桌面与移动端可用", async ({ context, page, baseURL }, testInfo) => {
@@ -101,26 +115,39 @@ test.describe("Project 立项与生命周期", () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   });
 
-  test("Project 详情使用概览、三列工作区和全量 Task/成员投入时间线", async ({
+  test("Project 详情使用概览、全宽时间线和三列协作区", async ({
     browser,
     context,
     page,
     baseURL,
-  }) => {
+  }, testInfo) => {
+    test.setTimeout(120_000);
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
     const requester = await actor(`Project 详情申请人 ${randomUUID()}`);
     const admin = await actor(
       `Project 详情管理员 ${randomUUID()}`,
       "PROJECT_ADMINISTRATOR",
     );
-    const participant = await actor(`Project 详情参与人 ${randomUUID()}`);
+    const participant = await actor("超长人员".repeat(64));
     const viewer = await actor(`Project 详情只读用户 ${randomUUID()}`);
     const draft = await draftTask(
       requester,
       participant,
-      `草稿 Task ${"很长的名称".repeat(16)}`,
+      "草".repeat(200),
     );
     const active = await draftTask(requester, participant, "进行中 Task 时间线");
     const completed = await draftTask(requester, participant, "已完成 Task 时间线");
+    const farTask = await draftTask(
+      requester,
+      participant,
+      "初始加载范围外 Task 时间线",
+    );
+    const farTaskStart = new Date("2032-01-08T09:00:00+08:00");
+    await prisma.taskPlanVersion.updateMany({
+      where: { taskId: farTask.id },
+      data: { plannedStartAt: farTaskStart },
+    });
     const activePlanNodes = await addTaskPlanNodes(
       active.id,
       requester,
@@ -132,8 +159,8 @@ test.describe("Project 立项与生命周期", () => {
       "已完成节点",
     );
 
-    const projectName = `Project 详情 UI ${randomUUID()}`;
-    const projectDescription = `Project 完整内容 ${"需要安全换行的长内容".repeat(18)}`;
+    const projectName = "项".repeat(200);
+    const projectDescription = "描".repeat(8_000);
     const created = await createProject(requester, {
       name: projectName,
       description: projectDescription,
@@ -142,7 +169,7 @@ test.describe("Project 立项与生命周期", () => {
         { personId: requester.personId, role: "OWNER" },
         { personId: participant.personId, role: "PARTICIPANT" },
       ],
-      requestedTaskIds: [completed.id, active.id, draft.id],
+      requestedTaskIds: [completed.id, active.id, draft.id, farTask.id],
       idempotencyKey: randomUUID(),
     });
     const request = await prisma.projectEstablishmentRequest.findFirstOrThrow({
@@ -154,6 +181,12 @@ test.describe("Project 立项与生命周期", () => {
       expectedLockVersion: created.lockVersion,
       decision: "APPROVE",
       comment: "同意详情页回归项目",
+    });
+    const visibleProjectRisk = `旁观者可见 Project 风险 ${randomUUID()}`;
+    await createRisk(requester, {
+      targetType: "PROJECT",
+      targetId: created.projectId,
+      content: visibleProjectRisk,
     });
     await prisma.task.update({
       where: { id: active.id },
@@ -273,7 +306,7 @@ test.describe("Project 立项与生命周期", () => {
     await expect(page.getByText(projectDescription, { exact: true })).toBeVisible();
     await expect(page.getByText(requester.personId, { exact: true })).toHaveCount(0);
     await expect(page.getByText("Task 完成进度", { exact: true })).toBeVisible();
-    await expect(page.getByText("1/3 已完成", { exact: true })).toHaveCount(2);
+    await expect(page.getByText("1/4 已完成", { exact: true })).toHaveCount(2);
     await expect(page.getByRole("link", { name: "编辑" })).toBeVisible();
     await expect(page.getByRole("button", { name: "结束 Project" })).toBeVisible();
     await expect(page.getByRole("button", { name: "删除 Project" })).toBeVisible();
@@ -289,15 +322,56 @@ test.describe("Project 立项与生命周期", () => {
     await expect(page.getByText("立项申请", { exact: true })).toHaveCount(0);
     await expect(page.getByText("最近审计记录", { exact: true })).toHaveCount(0);
     await expect(page.locator("#establishment")).toBeVisible();
+    await expect(page.getByTestId("project-timeline-layer")).toBeVisible();
+    await expect(page.getByTestId("project-detail-lower-grid")).toBeVisible();
+    await expect(page.getByTestId("project-detail-main-column")).toBeVisible();
+    await expect(page.getByTestId("project-detail-left-column")).toBeVisible();
+    await expect(page.getByTestId("project-detail-right-column")).toBeVisible();
+
+    await expectThreeLayerDetailLayout(
+      page,
+      projectDetailLayoutIds,
+      testInfo.project.name === "desktop" ? "columns" : "stacked",
+    );
+    if (testInfo.project.name === "desktop") {
+      await page.setViewportSize({ width: 1279, height: 1000 });
+      await expectThreeLayerDetailLayout(page, projectDetailLayoutIds, "stacked");
+      await page.setViewportSize({ width: 1280, height: 1000 });
+      await expectThreeLayerDetailLayout(page, projectDetailLayoutIds, "columns");
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      await expectThreeLayerDetailLayout(page, projectDetailLayoutIds, "columns");
+    } else {
+      const canvasScroll = page.getByTestId("time-canvas-scroll");
+      const initialScroll = await canvasScroll.evaluate((element) => ({
+        left: element.scrollLeft,
+        maximum: element.scrollWidth - element.clientWidth,
+      }));
+      expect(initialScroll.maximum).toBeGreaterThan(1);
+      await canvasScroll.evaluate((element) => {
+        const maximum = element.scrollWidth - element.clientWidth;
+        element.scrollLeft = element.scrollLeft < maximum
+          ? Math.min(maximum, element.scrollLeft + 50)
+          : Math.max(0, element.scrollLeft - 50);
+        element.dispatchEvent(new Event("scroll"));
+      });
+      await expect
+        .poll(() => canvasScroll.evaluate((element) => element.scrollLeft))
+        .not.toBe(initialScroll.left);
+    }
 
     const taskItems = page
       .getByRole("list", { name: "Project Task 列表" })
       .getByRole("listitem");
-    await expect(taskItems).toHaveCount(3);
-    await expect(taskItems.nth(0)).toContainText(draft.title);
-    await expect(taskItems.nth(1)).toContainText(active.title);
-    await expect(taskItems.nth(2)).toContainText(completed.title);
+    await expect(taskItems).toHaveCount(4);
+    const draftGroupTitles = await Promise.all([
+      taskItems.nth(0).getByRole("link").first().textContent(),
+      taskItems.nth(1).getByRole("link").first().textContent(),
+    ]);
+    expect(new Set(draftGroupTitles)).toEqual(new Set([draft.title, farTask.title]));
+    await expect(taskItems.nth(2)).toContainText(active.title);
+    await expect(taskItems.nth(3)).toContainText(completed.title);
     await expect(page.getByTestId(`timeline-row-project-plan:${draft.id}`)).toBeVisible();
+    await expect(page.getByTestId(`timeline-row-project-plan:${farTask.id}`)).toBeVisible();
     await expect(page.getByTestId(`timeline-row-project-plan:${active.id}`)).toBeVisible();
     await expect(page.getByTestId(`timeline-row-project-plan:${completed.id}`)).toBeVisible();
     await expect(page.getByTestId(`timeline-row-person:${inactiveMember.personId}`)).toHaveCount(0);
@@ -347,8 +421,35 @@ test.describe("Project 立项与生命周期", () => {
       ),
     ).toHaveAttribute("aria-pressed", "true");
     await expect(
+      page.getByTestId(
+        `milestone-marker-project-node:${activePlanNodes.milestoneNodeId}`,
+      ),
+    ).toBeFocused();
+    await expect(page.getByTestId("project-timeline-layer")).toBeInViewport();
+    await expect(
       page.getByTestId(`milestone-marker-project-start:${active.id}`),
     ).toHaveAttribute("aria-pressed", "false");
+
+    const locateFarTask = page.getByRole("button", {
+      name: `在时间线中定位 ${farTask.title}`,
+    });
+    await locateFarTask.click();
+    await expect.poll(() => {
+      const url = new URL(page.url());
+      return {
+        focus: url.searchParams.get("focus"),
+        center: url.searchParams.get("center"),
+      };
+    }).toEqual({
+      focus: `project-start:${farTask.id}`,
+      center: farTaskStart.toISOString(),
+    });
+    const farTaskMarker = page.getByTestId(
+      `milestone-marker-project-start:${farTask.id}`,
+    );
+    await expect(farTaskMarker).toHaveAttribute("aria-pressed", "true");
+    await expect(farTaskMarker).toBeFocused();
+    await expect(page.getByTestId("project-timeline-layer")).toBeInViewport();
 
     await expectHealthyPage(page);
     expect(
@@ -357,15 +458,38 @@ test.describe("Project 立项与生命周期", () => {
       ),
     ).toBe(true);
 
-    const viewerContext = await browser.newContext();
+    const viewerContext = await browser.newContext({
+      viewport: page.viewportSize() ?? { width: 1440, height: 1000 },
+    });
     try {
       await loginAsTestUser(viewerContext, baseURL, {
         openId: viewer.openId,
         name: "Project 详情只读用户",
       });
       const viewerPage = await viewerContext.newPage();
+      const viewerPageErrors: string[] = [];
+      viewerPage.on("pageerror", (error) => viewerPageErrors.push(error.message));
       await viewerPage.goto(`/progress/projects/${created.projectId}`);
       await expect(viewerPage.getByTestId("project-overview")).toBeVisible();
+      await expectThreeLayerDetailLayout(
+        viewerPage,
+        projectDetailLayoutIds,
+        testInfo.project.name === "desktop" ? "columns" : "stacked",
+      );
+      await expect(
+        viewerPage.getByRole("heading", { name: "Project 风险", exact: true }),
+      ).toBeVisible();
+      await expect(
+        viewerPage.getByRole("heading", { name: "Project 评论", exact: true }),
+      ).toBeVisible();
+      await expect(
+        viewerPage.getByRole("heading", { name: "近期动态", exact: true }),
+      ).toBeVisible();
+      await expect(
+        viewerPage
+          .getByTestId("project-detail-left-column")
+          .getByText(visibleProjectRisk, { exact: true }),
+      ).toBeVisible();
       await expect(viewerPage.getByRole("link", { name: "编辑" })).toHaveCount(0);
       await expect(
         viewerPage.getByRole("button", { name: "结束 Project" }),
@@ -376,13 +500,29 @@ test.describe("Project 立项与生命周期", () => {
       await expect(
         viewerPage.getByRole("button", { name: "复制链接" }),
       ).toBeVisible();
+      await expect(
+        viewerPage.getByRole("button", { name: "提出风险", exact: true }),
+      ).toHaveCount(0);
+      await expect(
+        viewerPage.getByRole("button", { name: "解决风险", exact: true }),
+      ).toHaveCount(0);
+      const viewerComment = viewerPage.getByLabel("发表评论");
+      await expect(viewerComment).toBeEnabled();
+      await viewerComment.fill("旁观者仍可发表评论");
+      await expect(
+        viewerPage.getByRole("button", { name: "发布评论", exact: true }),
+      ).toBeEnabled();
       await expectHealthyPage(viewerPage);
+      expect(viewerPageErrors).toEqual([]);
     } finally {
       await viewerContext.close();
     }
+    expect(pageErrors).toEqual([]);
   });
 
   test("空 Project 可以直接结束并记录审计与通知", async ({ context, page, baseURL }, testInfo) => {
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
     const requester = await actor(`空 Project 申请人 ${testInfo.project.name}`);
     const admin = await actor(`空 Project 管理员 ${testInfo.project.name}`, "PROJECT_ADMINISTRATOR");
     const created = await createProject(requester, {
@@ -409,6 +549,14 @@ test.describe("Project 立项与生命周期", () => {
       name: `空 Project 申请人 ${testInfo.project.name}`,
     });
     await page.goto(`/progress/projects/${created.projectId}`);
+    await expect(page.getByTestId("project-timeline-layer")).toBeVisible();
+    await expect(page.getByTestId("project-detail-lower-grid")).toBeVisible();
+    await expect(page.getByText("尚未关联 Task", { exact: true })).toBeVisible();
+    await expectThreeLayerDetailLayout(
+      page,
+      projectDetailLayoutIds,
+      testInfo.project.name === "desktop" ? "columns" : "stacked",
+    );
     await page.getByRole("button", { name: "结束 Project" }).click();
     const dialog = page.getByRole("dialog", { name: "结束 Project" });
     await expect(dialog).toContainText("当前没有关联 Task。");
@@ -451,6 +599,102 @@ test.describe("Project 立项与生命周期", () => {
     });
     await expectHealthyPage(page);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    expect(pageErrors).toEqual([]);
+  });
+
+  test("Project 时间线节点超限时保留三层结构", async ({
+    context,
+    page,
+    baseURL,
+  }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop", "节点预算错误只需在桌面 fixture 覆盖一次");
+    test.setTimeout(180_000);
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    const requester = await actor(`Project 超限申请人 ${randomUUID()}`);
+    const admin = await actor(
+      `Project 超限管理员 ${randomUUID()}`,
+      "PROJECT_ADMINISTRATOR",
+    );
+    const participant = await actor(`Project 超限成员 ${randomUUID()}`);
+    const task = await draftTask(requester, participant, "Project 超过节点预算 Task");
+    const created = await createProject(requester, {
+      name: `Project 时间线超限 ${randomUUID()}`,
+      description: "验证时间线错误仍位于第二层，且第三层保持可用",
+      avatarPath: null,
+      members: [{ personId: requester.personId, role: "OWNER" }],
+      requestedTaskIds: [task.id],
+      idempotencyKey: randomUUID(),
+    });
+    const request = await prisma.projectEstablishmentRequest.findFirstOrThrow({
+      where: { projectId: created.projectId, status: "PENDING" },
+    });
+    await reviewProjectEstablishment(admin, {
+      projectId: created.projectId,
+      requestId: request.id,
+      expectedLockVersion: created.lockVersion,
+      decision: "APPROVE",
+      comment: "批准节点预算错误回归 fixture",
+    });
+    const plan = await prisma.taskPlanVersion.findFirstOrThrow({
+      where: { taskId: task.id, status: "CURRENT" },
+      select: { id: true },
+    });
+    const nodeIds = Array.from({ length: 5_001 }, () => randomUUID());
+    const firstExpectedCompletedAt = Date.parse("2026-08-20T18:00:00+08:00");
+    await prisma.$transaction(async (tx) => {
+      for (let offset = 0; offset < nodeIds.length; offset += 1_000) {
+        const batch = nodeIds.slice(offset, offset + 1_000);
+        await tx.taskNode.createMany({
+          data: batch.map((id, index) => ({
+            id,
+            taskId: task.id,
+            type: "MILESTONE",
+            status: "PENDING",
+            businessDescription: `节点预算错误 fixture ${offset + index + 1}`,
+            createdByAccountId: requester.accountId,
+          })),
+        });
+        await tx.milestoneNode.createMany({
+          data: batch.map((nodeId, index) => ({
+            nodeId,
+            goal: `节点预算错误 Milestone ${offset + index + 1}`,
+            completionCriteria: "完成节点预算错误回归",
+            expectedCompletedAt: new Date(
+              firstExpectedCompletedAt + (offset + index) * 60_000,
+            ),
+            reviewRequirements: "无需提交真实审批",
+          })),
+        });
+        await tx.planVersionNode.createMany({
+          data: batch.map((nodeId, index) => ({
+            planVersionId: plan.id,
+            nodeId,
+            sequence: offset + index + 1,
+          })),
+        });
+      }
+    }, { timeout: 120_000 });
+
+    await loginAsTestUser(context, baseURL, {
+      openId: requester.openId,
+      name: "Project 超限申请人",
+    });
+    await page.goto(`/progress/projects/${created.projectId}`);
+    const timelineLayer = page.getByTestId("project-timeline-layer");
+    await expect(timelineLayer).toBeVisible();
+    await expect(timelineLayer.getByRole("alert")).toContainText(
+      "Project Task 计划节点超过 5000 个，无法展示时间线。",
+    );
+    await expect(timelineLayer.getByTestId("time-canvas-root")).toHaveCount(0);
+    await expect(
+      page
+        .getByTestId("project-detail-main-column")
+        .getByRole("link", { name: task.title, exact: true }),
+    ).toBeVisible();
+    await expectThreeLayerDetailLayout(page, projectDetailLayoutIds, "columns");
+    await expectHealthyPage(page);
+    expect(pageErrors).toEqual([]);
   });
 
   test("普通账号提交、管理员驳回、原申请人重提并批准", async () => {

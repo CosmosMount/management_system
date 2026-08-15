@@ -1177,6 +1177,20 @@ test.describe("project management UI project-management-ui-workbench", () => {
       await expect(page.getByTestId("task-approval-gate")).toContainText(
         "Milestone",
       );
+      const [overviewBox, approvalGateBox, timelineBox] = await Promise.all([
+        page.getByTestId("task-overview").boundingBox(),
+        page.getByTestId("task-approval-gate").boundingBox(),
+        page.getByTestId("task-timeline-layer").boundingBox(),
+      ]);
+      if (!overviewBox || !approvalGateBox || !timelineBox) {
+        throw new Error("无法读取 Task 审批门禁的布局位置");
+      }
+      expect(approvalGateBox.y).toBeGreaterThan(
+        overviewBox.y + overviewBox.height,
+      );
+      expect(timelineBox.y).toBeGreaterThan(
+        approvalGateBox.y + approvalGateBox.height,
+      );
       await page.evaluate(() => {
         const browserWindow = window as Window & {
           __taskApprovalGateRemoved?: boolean;

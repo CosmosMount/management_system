@@ -451,6 +451,71 @@ export async function expectHealthyPage(page: Page) {
   await expectNoHorizontalOverflow(page);
 }
 
+export type ThreeLayerDetailTestIds = {
+  overview: string;
+  timeline: string;
+  lowerGrid: string;
+  mainColumn: string;
+  leftColumn: string;
+  rightColumn: string;
+};
+
+export async function expectThreeLayerDetailLayout(
+  page: Page,
+  ids: ThreeLayerDetailTestIds,
+  mode: "columns" | "stacked",
+) {
+  const [overview, timeline, lowerGrid, mainColumn, leftColumn, rightColumn] =
+    await Promise.all([
+      requiredBoundingBox(page, ids.overview),
+      requiredBoundingBox(page, ids.timeline),
+      requiredBoundingBox(page, ids.lowerGrid),
+      requiredBoundingBox(page, ids.mainColumn),
+      requiredBoundingBox(page, ids.leftColumn),
+      requiredBoundingBox(page, ids.rightColumn),
+    ]);
+
+  expect(Math.abs(overview.x - timeline.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(overview.width - timeline.width)).toBeLessThanOrEqual(1);
+  expect(timeline.y).toBeGreaterThan(overview.y + overview.height);
+  expect(lowerGrid.y).toBeGreaterThan(timeline.y + timeline.height);
+
+  for (const column of [mainColumn, leftColumn, rightColumn]) {
+    expect(column.x).toBeGreaterThanOrEqual(lowerGrid.x - 1);
+    expect(column.x + column.width).toBeLessThanOrEqual(
+      lowerGrid.x + lowerGrid.width + 1,
+    );
+  }
+
+  if (mode === "columns") {
+    expect(Math.abs(leftColumn.y - mainColumn.y)).toBeLessThanOrEqual(1);
+    expect(Math.abs(rightColumn.y - mainColumn.y)).toBeLessThanOrEqual(1);
+    expect(Math.abs(leftColumn.width - 300)).toBeLessThanOrEqual(1);
+    expect(Math.abs(rightColumn.width - 300)).toBeLessThanOrEqual(1);
+    expect(leftColumn.x).toBeLessThan(mainColumn.x);
+    expect(mainColumn.x).toBeLessThan(rightColumn.x);
+  } else {
+    expect(mainColumn.y).toBeLessThan(leftColumn.y);
+    expect(leftColumn.y).toBeLessThan(rightColumn.y);
+  }
+
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth <=
+        document.documentElement.clientWidth + 1,
+    ),
+  ).toBe(true);
+}
+
+async function requiredBoundingBox(page: Page, testId: string) {
+  const locator = page.getByTestId(testId);
+  await expect(locator).toBeVisible();
+  const box = await locator.boundingBox();
+  if (!box) throw new Error(`无法读取布局区域 ${testId} 的位置`);
+  return box;
+}
+
 export async function expectNoHorizontalOverflow(page: Page) {
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth - window.innerWidth,

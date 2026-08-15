@@ -242,7 +242,10 @@ export function TaskWorkbench({
       data-testid="task-workbench-v2"
       data-server-lock-version={workspace.task.lockVersion}
     >
-      <section className="rounded-xl border border-border bg-card p-5">
+      <section
+        className="rounded-xl border border-border bg-card p-5"
+        data-testid="task-overview"
+      >
         <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
@@ -419,35 +422,42 @@ export function TaskWorkbench({
             notice.kind === "info" && "bg-muted text-muted-foreground",
           )}
           role={notice.kind === "error" ? "alert" : "status"}
+          data-testid="task-global-notice"
         >
           {notice.message}
         </p>
       )}
 
-      <div className="grid min-w-0 gap-5 xl:grid-cols-[300px_minmax(0,1fr)_300px]">
-        <main className="min-w-0 space-y-4 xl:col-start-2 xl:row-start-1">
-          <TaskDetailTimeline
-            workspace={currentWorkspace}
-            nodes={navigatorNodes}
-            selectedId={selectedNodeId}
-            onSelect={(nodeId) => {
-              const node = navigatorNodes.find((entry) => entry.id === nodeId);
-              const atMs = node ? Date.parse(node.at) : Number.NaN;
-              if (Number.isFinite(atMs) && (atMs < timeCanvasModel.range.startMs || atMs >= timeCanvasModel.range.endMs)) {
-                const url = new URL(window.location.href);
-                url.searchParams.set("center", new Date(atMs).toISOString());
-                url.searchParams.set("focus", nodeId);
-                router.push(`${url.pathname}?${url.searchParams.toString()}`);
-                return;
-              }
-              setRequestedNodeId(nodeId);
-            }}
-            model={timeCanvasModel}
-            people={people}
-            taskOptions={taskOptions}
-            timelineWindow={timelineWindow}
-          />
+      <TaskDetailTimeline
+        workspace={currentWorkspace}
+        nodes={navigatorNodes}
+        selectedId={selectedNodeId}
+        onSelect={(nodeId) => {
+          const node = navigatorNodes.find((entry) => entry.id === nodeId);
+          const atMs = node ? Date.parse(node.at) : Number.NaN;
+          if (Number.isFinite(atMs) && (atMs < timeCanvasModel.range.startMs || atMs >= timeCanvasModel.range.endMs)) {
+            const url = new URL(window.location.href);
+            url.searchParams.set("center", new Date(atMs).toISOString());
+            url.searchParams.set("focus", nodeId);
+            router.push(`${url.pathname}?${url.searchParams.toString()}`);
+            return;
+          }
+          setRequestedNodeId(nodeId);
+        }}
+        model={timeCanvasModel}
+        people={people}
+        taskOptions={taskOptions}
+        timelineWindow={timelineWindow}
+      />
 
+      <div
+        className="grid min-w-0 gap-5 xl:grid-cols-[300px_minmax(0,1fr)_300px]"
+        data-testid="task-detail-lower-grid"
+      >
+        <main
+          className="min-w-0 space-y-4 xl:col-start-2 xl:row-start-1"
+          data-testid="task-detail-main-column"
+        >
           {openRevision && (
             <OpenRevisionPanel
               taskId={task.id}
@@ -511,11 +521,17 @@ export function TaskWorkbench({
           />
         </main>
 
-        <aside className="min-w-0 space-y-4 xl:col-start-1 xl:row-start-1">
+        <aside
+          className="min-w-0 space-y-4 xl:col-start-1 xl:row-start-1"
+          data-testid="task-detail-left-column"
+        >
           <CollaborationLeftSidebar data={collaboration} />
         </aside>
 
-        <aside className="min-w-0 xl:col-start-3 xl:row-start-1">
+        <aside
+          className="min-w-0 xl:col-start-3 xl:row-start-1"
+          data-testid="task-detail-right-column"
+        >
           <CollaborationRightSidebar data={collaboration} />
         </aside>
       </div>
@@ -533,7 +549,7 @@ export function TaskWorkbench({
             workspace={currentWorkspace}
             people={people}
             taskOptions={taskOptions}
-              projectOptions={projectOptions}
+            projectOptions={projectOptions}
             busy={busy}
             runAction={runAction}
             notice={notice}
@@ -1052,7 +1068,10 @@ function TaskDetailTimeline({
   };
 }) {
   return (
-    <section className="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5">
+    <section
+      className="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5"
+      data-testid="task-timeline-layer"
+    >
       <div>
         <h2 className="font-semibold">计划与人员投入</h2>
         <p className="mt-1 text-sm text-muted-foreground">

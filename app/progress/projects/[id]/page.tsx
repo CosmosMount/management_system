@@ -3,15 +3,10 @@ import { notFound, redirect } from "next/navigation";
 import { ArrowLeft, Pencil } from "lucide-react";
 import { ProjectActionsClient } from "@/components/project-management/project-actions-client";
 import { ProjectAvatar } from "@/components/project-management/project-avatar";
-import { ProjectTaskTimeline } from "@/components/project-management/project-task-timeline";
+import { ProjectDetailWorkspace } from "@/components/project-management/project-detail-workspace";
 import { timeCanvasDataToModel } from "@/components/project-management/time-canvas/adapter";
 import type { TimeCanvasZoom } from "@/components/project-management/time-canvas/types";
-import {
-  CollaborationLeftSidebar,
-  CollaborationRightSidebar,
-  CreateRiskCard,
-  type CollaborationInitialData,
-} from "@/components/project-management/collaboration-panels";
+import type { CollaborationInitialData } from "@/components/project-management/collaboration-panels";
 import { PageCommandBar } from "@/components/project-management/shell/page-command-bar";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
@@ -250,60 +245,44 @@ export default async function ProjectDetailPage({
           </div>
         </section>
 
-        <div className="grid min-w-0 gap-5 xl:grid-cols-[300px_minmax(0,1fr)_300px]">
-          <aside className="min-w-0 space-y-4 xl:col-start-1 xl:row-start-1">
-            <CollaborationLeftSidebar data={collaboration} />
-          </aside>
-
-          <main className="min-w-0 space-y-4 xl:col-start-2 xl:row-start-1">
-            <ProjectTaskTimeline
-              projectId={project.id}
-              projectStatus={project.status}
-              tasks={project.tasks}
-              timelineError={project.timelineError}
-              taskTotalCount={project.taskTotalCount}
-              completedTaskTotalCount={project.completedTaskTotalCount}
-              resourceModel={
-                resourceCanvasResult?.ok
-                  ? {
-                      ...timeCanvasDataToModel(resourceCanvasResult.data.data, "RESOURCE_PLANNER"),
-                      contentRange: resourceCanvasResult.data.contentRange,
-                      fullRange: resourceCanvasResult.data.fullRange,
-                      rangeClipped: resourceCanvasResult.data.rangeClipped,
-                      loadedRanges: [resourceCanvasResult.data.loadedRange],
-                      loadedLeafBlockCounts: [resourceCanvasResult.data.leafBlockCount],
-                      failedRanges: resourceCanvasResult.data.failedRanges,
-                    }
-                  : null
-              }
-              resourceTimelineError={
-                (!resourceCanvasResult.ok
-                  ? resourceCanvasResult.message
-                  : null)
-              }
-              peopleOptions={timelinePeople}
-              timelineWindow={{
-                focusId: focusLocator?.focusId ?? null,
-                centerMs: resourceCanvasResult?.ok
-                  ? resourceCanvasResult.data.resolvedCenterMs
-                  : timelineCenter,
-                scale: timelineScale,
-              }}
-              timelineFocusError={first(query.focusError) === "1"
-                ? "无法定位该时间对象，请确认链接仍然有效且你有权查看。"
-                : null}
-            />
-            <CreateRiskCard
-              targetType="PROJECT"
-              targetId={project.id}
-              canCreate={collaboration.capabilities.canCreateRisk}
-            />
-          </main>
-
-          <aside className="min-w-0 xl:col-start-3 xl:row-start-1">
-            <CollaborationRightSidebar data={collaboration} />
-          </aside>
-        </div>
+        <ProjectDetailWorkspace
+          projectId={project.id}
+          projectStatus={project.status}
+          tasks={project.tasks}
+          timelineError={project.timelineError}
+          taskTotalCount={project.taskTotalCount}
+          completedTaskTotalCount={project.completedTaskTotalCount}
+          resourceModel={
+            resourceCanvasResult?.ok
+              ? {
+                  ...timeCanvasDataToModel(resourceCanvasResult.data.data, "RESOURCE_PLANNER"),
+                  contentRange: resourceCanvasResult.data.contentRange,
+                  fullRange: resourceCanvasResult.data.fullRange,
+                  rangeClipped: resourceCanvasResult.data.rangeClipped,
+                  loadedRanges: [resourceCanvasResult.data.loadedRange],
+                  loadedLeafBlockCounts: [resourceCanvasResult.data.leafBlockCount],
+                  failedRanges: resourceCanvasResult.data.failedRanges,
+                }
+              : null
+          }
+          resourceTimelineError={
+            (!resourceCanvasResult.ok
+              ? resourceCanvasResult.message
+              : null)
+          }
+          peopleOptions={timelinePeople}
+          timelineWindow={{
+            focusId: focusLocator?.focusId ?? null,
+            centerMs: resourceCanvasResult?.ok
+              ? resourceCanvasResult.data.resolvedCenterMs
+              : timelineCenter,
+            scale: timelineScale,
+          }}
+          timelineFocusError={first(query.focusError) === "1"
+            ? "无法定位该时间对象，请确认链接仍然有效且你有权查看。"
+            : null}
+          collaboration={collaboration}
+        />
       </div>
     </>
   );

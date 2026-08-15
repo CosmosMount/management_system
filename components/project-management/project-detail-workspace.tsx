@@ -4,6 +4,12 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { LocateFixed, Plus } from "lucide-react";
+import {
+  CollaborationLeftSidebar,
+  CollaborationRightSidebar,
+  CreateRiskCard,
+  type CollaborationInitialData,
+} from "@/components/project-management/collaboration-panels";
 import { ResourcePlannerCanvasClient } from "@/components/project-management/resource-planner-canvas-client";
 import { buildPlanPhaseBands } from "@/components/project-management/time-canvas/plan-phase-bands";
 import type {
@@ -50,7 +56,7 @@ const phaseTones: TimeCanvasTone[] = [
   "SLATE",
 ];
 
-export function ProjectTaskTimeline({
+export function ProjectDetailWorkspace({
   projectId,
   projectStatus,
   tasks,
@@ -62,6 +68,7 @@ export function ProjectTaskTimeline({
   peopleOptions,
   timelineWindow,
   timelineFocusError,
+  collaboration,
 }: {
   projectId: string;
   projectStatus: "DRAFT" | "PENDING_APPROVAL" | "ACTIVE" | "COMPLETED";
@@ -78,6 +85,7 @@ export function ProjectTaskTimeline({
     scale?: "WEEK" | "MONTH" | "QUARTER" | "YEAR";
   };
   timelineFocusError: string | null;
+  collaboration: CollaborationInitialData;
 }) {
   const router = useRouter();
   const timelineContainerRef = useRef<HTMLDivElement>(null);
@@ -100,6 +108,25 @@ export function ProjectTaskTimeline({
   )
     ? requestedAnchorId
     : null;
+  const handledExternalFocusRef = useRef<string | null>(null);
+  useEffect(() => {
+    const focusId = timelineWindow.focusId;
+    const timelineRoot = timelineContainerRef.current;
+    if (
+      !focusId ||
+      selectedAnchorId !== focusId ||
+      handledExternalFocusRef.current === focusId ||
+      !timelineRoot
+    ) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      if (handledExternalFocusRef.current === focusId) return;
+      handledExternalFocusRef.current = focusId;
+      timelineRoot.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [selectedAnchorId, timelineWindow.focusId]);
 
   function locateTask(task: ProjectTimelineTask) {
     const pointedMilestone = task.currentPlan.nodes.find(
@@ -169,71 +196,11 @@ export function ProjectTaskTimeline({
   }
 
   return (
-    <div className="min-w-0 space-y-4" data-testid="project-task-workspace">
-      <section className="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5">
-        <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h2 className="font-semibold">Task</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {completedTaskTotalCount}/{taskTotalCount} 已完成
-            </p>
-          </div>
-          {projectStatus === "ACTIVE" && (
-            <Link
-              href={`${routes.progress.taskNew}?projectId=${projectId}`}
-              className={cn(buttonVariants({ size: "sm" }))}
-            >
-              <Plus />新建 Task
-            </Link>
-          )}
-        </div>
-
-        {tasks.length ? (
-          <div className="mt-4 space-y-3">
-            <ul className="divide-y rounded-lg border" aria-label="Project Task 列表">
-              {tasks.map((task) => {
-                const selected = model.anchors.some(
-                  (anchor) =>
-                    anchor.taskId === task.id && anchor.id === selectedAnchorId,
-                );
-                return (
-                  <li
-                    key={task.id}
-                    className={cn(
-                      "flex min-w-0 flex-wrap items-center gap-2 p-3",
-                      selected && "bg-primary/5 ring-1 ring-inset ring-primary/30",
-                    )}
-                  >
-                    <Link
-                      href={routes.progress.taskDetail(task.id)}
-                      className="min-w-0 flex-1 break-words font-medium hover:text-primary hover:underline"
-                    >
-                      {task.title}
-                    </Link>
-                    <Badge variant="secondary">{taskStatusLabels[task.status]}</Badge>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      aria-label={`在时间线中定位 ${task.title}`}
-                      aria-pressed={selected}
-                      disabled={Boolean(timelineError)}
-                      title={timelineError ?? undefined}
-                      onClick={() => locateTask(task)}
-                    >
-                      <LocateFixed />定位
-                    </Button>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        ) : (
-          <p className="mt-4 text-sm text-muted-foreground">尚未关联 Task</p>
-        )}
-      </section>
-
-      <section className="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5">
+    <div className="min-w-0 space-y-5" data-testid="project-task-workspace">
+      <section
+        className="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5"
+        data-testid="project-timeline-layer"
+      >
         <div>
           <h2 className="font-semibold">Task 与人员投入时间线</h2>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -278,6 +245,99 @@ export function ProjectTaskTimeline({
           </div>
         )}
       </section>
+
+      <div
+        className="grid min-w-0 gap-5 xl:grid-cols-[300px_minmax(0,1fr)_300px]"
+        data-testid="project-detail-lower-grid"
+      >
+        <main
+          className="min-w-0 space-y-4 xl:col-start-2 xl:row-start-1"
+          data-testid="project-detail-main-column"
+        >
+          <section className="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5">
+            <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h2 className="font-semibold">Task</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {completedTaskTotalCount}/{taskTotalCount} 已完成
+                </p>
+              </div>
+              {projectStatus === "ACTIVE" && (
+                <Link
+                  href={`${routes.progress.taskNew}?projectId=${projectId}`}
+                  className={cn(buttonVariants({ size: "sm" }))}
+                >
+                  <Plus />新建 Task
+                </Link>
+              )}
+            </div>
+
+            {tasks.length ? (
+              <div className="mt-4 space-y-3">
+                <ul className="divide-y rounded-lg border" aria-label="Project Task 列表">
+                  {tasks.map((task) => {
+                    const selected = model.anchors.some(
+                      (anchor) =>
+                        anchor.taskId === task.id && anchor.id === selectedAnchorId,
+                    );
+                    return (
+                      <li
+                        key={task.id}
+                        className={cn(
+                          "flex min-w-0 flex-wrap items-center gap-2 p-3",
+                          selected && "bg-primary/5 ring-1 ring-inset ring-primary/30",
+                        )}
+                      >
+                        <Link
+                          href={routes.progress.taskDetail(task.id)}
+                          className="min-w-0 flex-1 break-words font-medium hover:text-primary hover:underline"
+                        >
+                          {task.title}
+                        </Link>
+                        <Badge variant="secondary">{taskStatusLabels[task.status]}</Badge>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          aria-label={`在时间线中定位 ${task.title}`}
+                          aria-pressed={selected}
+                          disabled={Boolean(timelineError)}
+                          title={timelineError ?? undefined}
+                          onClick={() => locateTask(task)}
+                        >
+                          <LocateFixed />定位
+                        </Button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ) : (
+              <p className="mt-4 text-sm text-muted-foreground">尚未关联 Task</p>
+            )}
+          </section>
+
+          <CreateRiskCard
+            targetType="PROJECT"
+            targetId={projectId}
+            canCreate={collaboration.capabilities.canCreateRisk}
+          />
+        </main>
+
+        <aside
+          className="min-w-0 space-y-4 xl:col-start-1 xl:row-start-1"
+          data-testid="project-detail-left-column"
+        >
+          <CollaborationLeftSidebar data={collaboration} />
+        </aside>
+
+        <aside
+          className="min-w-0 xl:col-start-3 xl:row-start-1"
+          data-testid="project-detail-right-column"
+        >
+          <CollaborationRightSidebar data={collaboration} />
+        </aside>
+      </div>
     </div>
   );
 }
