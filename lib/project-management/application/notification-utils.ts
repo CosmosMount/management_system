@@ -88,6 +88,7 @@ export async function createProjectManagementEventNotificationsTx(
     purpose:
       input.kind === "milestone_review_submitted" ||
       input.kind === "revision_pending_review" ||
+      input.kind === "termination_review_submitted" ||
       input.kind === "project_establishment_submitted"
         ? "approval_request"
         : "notification",

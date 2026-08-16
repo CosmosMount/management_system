@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import type { TaskMemberRole } from "@prisma/client";
 import { prisma } from "../lib/prisma";
-import { activateTask, confirmTermination, createRevision, createTaskDraft } from "../lib/project-management/application/lifecycle-service";
+import { activateTask, createRevision, createTaskDraft, reviewTermination, submitTerminationForReview } from "../lib/project-management/application/lifecycle-service";
 import { batchCreatePlannedSegments, createActualSegment, createWorkSegment, updateWorkSegment } from "../lib/project-management/application/segment-service";
 import { updateActiveTask } from "../lib/project-management/application/task-mutation-service";
 import { getTaskWorkspace } from "../lib/project-management/queries/task-queries";
@@ -883,15 +883,22 @@ test.describe("project management plan mutations project-management-plan-mutatio
         where: { nodeId: closeMilestones[1]?.nodeId },
         data: { expectedCompletedAt: new Date(iso(2026, 8, 3)) },
       });
-      expect(
-        await confirmTermination(actor(closeFixture.owner), {
-          taskId: closeFixture.taskId,
+      const terminationReview = await submitTerminationForReview(
+        actor(closeFixture.owner),
+        {
           terminationNodeId: closeTermination.nodeId,
           outcome: "FAILED",
           reason: "legacy 计划无法继续，安全结束",
           summary: "保留历史后结束",
-          expectedLockVersion: 1,
+          idempotencyKey: `legacy-termination-${randomUUID()}`,
+        },
+      );
+      expect(
+        await reviewTermination(actor(admin), {
+          reviewId: terminationReview.reviewId,
+          result: "APPROVED",
+          comment: "同意安全结束 legacy 计划",
         }),
-      ).toMatchObject({ status: "FAILED", outcome: "FAILED" });
+      ).toMatchObject({ taskStatus: "FAILED", outcome: "FAILED" });
     });
 });

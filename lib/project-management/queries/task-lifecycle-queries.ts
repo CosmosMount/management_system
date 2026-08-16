@@ -33,6 +33,25 @@ export type TaskLifecycleViews = {
     };
   }>;
   nextReviewCursor: string | null;
+  terminationReviews: Array<{
+    id: string;
+    terminationNodeId: string;
+    taskNodeId: string;
+    terminalName: string;
+    outcome: "SUCCESS" | "FAILED" | "CANCELLED" | "TIMEOUT";
+    reason: string;
+    summary: string;
+    result: "PENDING" | "APPROVED" | "REJECTED" | "REVISION_REQUIRED";
+    submittedBy: string;
+    reviewer: string | null;
+    reviewedAt: string | null;
+    comment: string;
+    createdAt: string;
+    capabilities: {
+      canReview: boolean;
+    };
+  }>;
+  nextTerminationReviewCursor: string | null;
   revisions: Array<{
     id: string;
     taskNodeId: string;
@@ -202,6 +221,8 @@ export async function getTaskLifecycleViews({
   taskId,
   reviewCursor,
   reviewLimit = 50,
+  terminationReviewCursor,
+  terminationReviewLimit = 50,
   revisionCursor,
   revisionLimit = 50,
   auditCursor,
@@ -214,6 +235,8 @@ export async function getTaskLifecycleViews({
   taskId: string;
   reviewCursor?: string;
   reviewLimit?: number;
+  terminationReviewCursor?: string;
+  terminationReviewLimit?: number;
   revisionCursor?: string;
   revisionLimit?: number;
   auditCursor?: string;
@@ -224,6 +247,13 @@ export async function getTaskLifecycleViews({
 }): Promise<TaskLifecycleViews> {
   if (!Number.isInteger(reviewLimit) || reviewLimit < 1 || reviewLimit > 100) {
     throw validationError("验收分页数量必须为 1–100");
+  }
+  if (
+    !Number.isInteger(terminationReviewLimit) ||
+    terminationReviewLimit < 1 ||
+    terminationReviewLimit > 100
+  ) {
+    throw validationError("结束审批分页数量必须为 1–100");
   }
   if (!Number.isInteger(auditLimit) || auditLimit < 1 || auditLimit > 100) {
     throw validationError("审计分页数量必须为 1–100");
@@ -301,6 +331,16 @@ export async function getTaskLifecycleViews({
     });
     if (!cursor) throw validationError("审计分页游标无效");
   }
+  if (terminationReviewCursor) {
+    const cursor = await prisma.terminationReview.findFirst({
+      where: {
+        id: terminationReviewCursor,
+        terminationNode: { node: { taskId } },
+      },
+      select: { id: true },
+    });
+    if (!cursor) throw validationError("结束审批分页游标无效");
+  }
   if (revisionCursor) {
     const cursor = await prisma.revisionNode.findFirst({
       where: { id: revisionCursor, node: { taskId } },
@@ -309,7 +349,7 @@ export async function getTaskLifecycleViews({
     if (!cursor) throw validationError("修订分页游标无效");
   }
 
-  const [reviewRows, revisionRows, auditBundle] = await Promise.all([
+  const [reviewRows, terminationReviewRows, revisionRows, auditBundle] = await Promise.all([
     prisma.milestoneReview.findMany({
       where: {
         milestoneNode: { node: { taskId } },
@@ -334,6 +374,30 @@ export async function getTaskLifecycleViews({
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: currentOnly ? reviewLimit : reviewLimit + 1,
       ...(reviewCursor ? { cursor: { id: reviewCursor }, skip: 1 } : {}),
+    }),
+    prisma.terminationReview.findMany({
+      where: {
+        terminationNode: { node: { taskId } },
+        ...(currentOnly
+          ? {
+              result: {
+                in: ["PENDING", "REJECTED", "REVISION_REQUIRED"] as const,
+              },
+            }
+          : {}),
+      },
+      include: {
+        terminationNode: { select: { name: true, nodeId: true } },
+        submittedBy: { select: { person: { select: { displayName: true } } } },
+        reviewer: { select: { person: { select: { displayName: true } } } },
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: currentOnly
+        ? terminationReviewLimit
+        : terminationReviewLimit + 1,
+      ...(terminationReviewCursor
+        ? { cursor: { id: terminationReviewCursor }, skip: 1 }
+        : {}),
     }),
     prisma.revisionNode.findMany({
       where: {
@@ -399,6 +463,10 @@ export async function getTaskLifecycleViews({
   }).allowed;
   const visibleAuditRows = currentOnly ? [] : auditRows.slice(0, auditLimit);
   const visibleReviewRows = reviewRows.slice(0, reviewLimit);
+  const visibleTerminationReviewRows = terminationReviewRows.slice(
+    0,
+    terminationReviewLimit,
+  );
   const visibleRevisionRows = revisionRows.slice(0, revisionLimit);
 
   return {
@@ -435,6 +503,35 @@ export async function getTaskLifecycleViews({
     nextReviewCursor:
       !currentOnly && reviewRows.length > reviewLimit
         ? visibleReviewRows.at(-1)?.id ?? null
+        : null,
+    terminationReviews: visibleTerminationReviewRows.map((review) => ({
+      id: review.id,
+      terminationNodeId: review.terminationNodeId,
+      taskNodeId: review.terminationNode.nodeId,
+      terminalName: review.terminationNode.name,
+      outcome: review.outcome,
+      reason: review.reason,
+      summary: review.summary,
+      result: review.result,
+      submittedBy:
+        review.submittedBy?.person?.displayName ?? "未知提交人",
+      reviewer: review.reviewer?.person?.displayName ?? null,
+      reviewedAt: review.reviewedAt?.toISOString() ?? null,
+      comment: review.comment,
+      createdAt: review.createdAt.toISOString(),
+      capabilities: {
+        canReview:
+          review.result === "PENDING" &&
+          authorize({
+            actor,
+            action: "termination.review",
+            resource,
+          }).allowed,
+      },
+    })),
+    nextTerminationReviewCursor:
+      !currentOnly && terminationReviewRows.length > terminationReviewLimit
+        ? visibleTerminationReviewRows.at(-1)?.id ?? null
         : null,
     revisions: visibleRevisionRows.map((revision) => ({
       id: revision.id,

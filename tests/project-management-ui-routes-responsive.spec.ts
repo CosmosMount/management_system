@@ -212,7 +212,7 @@ test.describe("project management UI project-management-ui-routes-responsive", (
       await expect(page.getByText("只看冲突")).toHaveCount(0);
       await expect(page.getByText("投入比例")).toHaveCount(0);
       await page.goto(
-        `/progress/resources?from=2026-08-10&to=2026-08-12&people=${fixture.inactiveHistory.person.id}&zoom=hour`,
+        `/progress/resources?from=2026-08-10&to=2026-08-12&people=${fixture.inactiveHistory.person.id}&zoom=hour&center=${encodeURIComponent("2026-08-10T15:30:00.000Z")}&scale=week`,
       );
       await expect(
         page.getByText(
@@ -518,9 +518,19 @@ test.describe("project management UI project-management-ui-routes-responsive", (
             name: new RegExp(fixture.mobileCreateContent),
           }),
         ).toBeVisible();
+        const confirmableUrl = new URL(page.url());
+        confirmableUrl.searchParams.set(
+          "center",
+          "2026-08-10T09:30:00.000Z",
+        );
+        confirmableUrl.searchParams.set("scale", "week");
+        await page.goto(
+          `${confirmableUrl.pathname}?${confirmableUrl.searchParams.toString()}`,
+        );
         const confirmableSegment = page.getByTestId(
           `segment-block-${fixture.confirmableSegmentId}`,
         );
+        await expect(confirmableSegment).toBeVisible({ timeout: 15_000 });
         await confirmableSegment.focus();
         await confirmableSegment.press("Enter");
       }
@@ -630,6 +640,10 @@ test.describe("project management UI project-management-ui-routes-responsive", (
         testInfo.project.name === "desktop" ? "columns" : "stacked",
       );
       await expect(page.getByTestId("time-canvas-root")).toBeVisible();
+      await page
+        .getByTestId("task-plan-node-navigator")
+        .getByRole("button", { name: /Start/ })
+        .click();
       await expect(
         page
           .getByTestId("task-detail-main-column")
@@ -652,7 +666,7 @@ test.describe("project management UI project-management-ui-routes-responsive", (
       await expect(page.getByRole("button", { name: "修改 Task 基本信息" })).toHaveCount(0);
       await expect(page.getByRole("link", { name: "发起 Revision" })).toHaveCount(0);
       await expect(page.getByRole("button", { name: "提交验收" })).toHaveCount(0);
-      await expect(page.getByRole("button", { name: "结束 Task" })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "申请结束 Task" })).toHaveCount(0);
       await expect(
         page.getByRole("button", { name: "提出风险", exact: true }),
       ).toHaveCount(0);
@@ -694,7 +708,9 @@ test.describe("project management UI project-management-ui-routes-responsive", (
 
     await page.goto(`/progress/tasks/${fixture.taskId}`);
     await expect(
-      page.getByRole("heading", { name: fixture.taskTitle, exact: true }),
+      page
+        .getByTestId("project-management-command-bar")
+        .getByRole("heading", { name: fixture.taskTitle, exact: true }),
     ).toBeVisible();
     await expectThreeLayerDetailLayout(
       page,
@@ -798,7 +814,7 @@ test.describe("project management UI project-management-ui-routes-responsive", (
     await page.goto("/progress/approvals");
     await expect(page.getByRole("heading", { name: "待办与审批" })).toBeVisible();
     await expect(page.getByTestId("action-inbox")).toBeVisible();
-    await expect(page.getByText("任务结束确认", { exact: true })).toBeVisible();
+    await expect(page.getByText("任务结束申请", { exact: true })).toBeVisible();
     await expect(page.getByText("结束节点：所有 Milestone 完成并完成总结")).toBeVisible();
     await expect(page.getByText("Termination", { exact: true })).toHaveCount(0);
     await expectHealthyPage(page);

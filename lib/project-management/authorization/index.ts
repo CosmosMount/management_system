@@ -38,7 +38,8 @@ export const PROJECT_MANAGEMENT_ACTIONS = [
   "revision.apply",
   "milestone.submit_review",
   "milestone.review",
-  "task.terminate",
+  "termination.submit_review",
+  "termination.review",
   "segment.view",
   "segment.manage_self",
   "segment.manage_others",
@@ -279,6 +280,13 @@ function authorizeTask(
     return deny("milestone_submit_denied");
   }
 
+  if (action === "termination.submit_review") {
+    if (hasTaskRole(actor, resource, ["OWNER", "PARTICIPANT"])) {
+      return allow("termination_submitter");
+    }
+    return deny("termination_submit_denied");
+  }
+
   if (action === "task.update_metadata" || action === "revision.create") {
     if (hasTaskRole(actor, resource, ["OWNER", "PARTICIPANT"])) {
       return allow("task_editor");
@@ -300,18 +308,16 @@ function authorizeTask(
     return deny("task_archive_denied");
   }
 
-  if (action === "revision.review" || action === "milestone.review") {
+  if (
+    action === "revision.review" ||
+    action === "milestone.review" ||
+    action === "termination.review"
+  ) {
     return deny("global_administrator_required");
   }
 
   if (action === "revision.apply") {
     return deny("global_administrator_required");
-  }
-
-  if (action === "task.terminate") {
-    return hasTaskRole(actor, resource, ["OWNER"])
-      ? allow("task_owner")
-      : deny("task_owner_required");
   }
 
   return deny("unsupported_action_for_task");

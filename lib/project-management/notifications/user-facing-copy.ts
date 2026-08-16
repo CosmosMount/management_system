@@ -33,7 +33,8 @@ const ENTITY_LABELS: Record<string, string> = {
   RiskRecord: "风险",
   SystemRoleAssignment: "系统权限",
   Task: "任务",
-  TerminationNode: "任务结束确认",
+  TerminationNode: "任务结束结果",
+  TerminationReview: "任务结束审批",
   UserRole: "报销权限",
   WorkSegment: "投入记录",
 };
@@ -78,6 +79,7 @@ const CONTEXT_LABELS: Record<string, string> = {
   dueAt: "计划完成时间",
   endAt: "计划结束时间",
   ownerNames: "负责人",
+  reason: "结束原因",
   resolveNote: "解决说明",
   role: "成员角色",
   round: "审批轮次",
@@ -85,6 +87,10 @@ const CONTEXT_LABELS: Record<string, string> = {
   targetName: "相关账号",
   taskCount: "任务数量",
   taskStatus: "任务状态",
+  terminalName: "结束节点",
+  requestedOutcome: "拟定结束结果",
+  reviewComment: "审批意见",
+  summary: "结束总结",
 };
 
 export type ProjectManagementContextLine = {
@@ -442,6 +448,10 @@ export function terminationOutcomeLabel(value: string) {
   return STATUS_LABELS[value] ?? "任务已结束";
 }
 
+export function terminationReviewResultLabel(value: string) {
+  return STATUS_LABELS[value] ?? "结束审批结果已更新";
+}
+
 export function projectManagementContextLines(
   context: Record<string, unknown>,
 ): ProjectManagementContextLine[] {
@@ -470,11 +480,23 @@ function contextValue(key: string, value: unknown) {
   if (Array.isArray(value)) {
     return value.map((item) => String(item)).join("、") || "无";
   }
-  if (key === "beforeStatus" || key === "afterStatus" || key === "taskStatus" || key === "segmentStatus") {
+  if (
+    key === "beforeStatus" ||
+    key === "afterStatus" ||
+    key === "taskStatus" ||
+    key === "segmentStatus" ||
+    key === "requestedOutcome"
+  ) {
     return projectManagementStatusLabel(String(value));
   }
   if (key === "decision") {
-    return value === "APPROVED" ? "通过" : value === "REJECTED" ? "驳回" : "审批结果已更新";
+    return value === "APPROVED"
+      ? "通过"
+      : value === "REJECTED"
+        ? "驳回"
+        : value === "REVISION_REQUIRED"
+          ? "要求修订"
+          : "审批结果已更新";
   }
   if (key === "role") return roleLabel(String(value));
   if (key === "changeKind") {

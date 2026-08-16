@@ -4,6 +4,7 @@ import {
   taskMemberRoleValues,
   taskPriorityValues,
   terminationOutcomeValues,
+  terminationReviewDecisionValues,
 } from "@/lib/project-management/types/contract-values";
 import { addStructuredProjectManagementIssue } from "@/lib/project-management/validations/issues";
 import { z } from "zod";
@@ -13,6 +14,7 @@ export {
   taskMemberRoleValues,
   taskPriorityValues,
   terminationOutcomeValues,
+  terminationReviewDecisionValues,
 };
 
 export const idSchema = z
@@ -294,17 +296,13 @@ export const rejectRevisionInputSchema = revisionDecisionInputSchema.superRefine
 
 export const cancelRevisionInputSchema = revisionDecisionInputSchema;
 
-export const confirmTerminationInputSchema = z
+export const submitTerminationReviewInputSchema = z
   .object({
-    taskId: idSchema,
     terminationNodeId: idSchema,
     outcome: z.enum(terminationOutcomeValues, { message: "结束结果不正确" }),
     reason: optionalText(2_000),
     summary: optionalText(4_000),
-    expectedLockVersion: z
-      .number({ message: "锁版本不正确" })
-      .int("锁版本不正确")
-      .min(0, "锁版本不正确"),
+    idempotencyKey: requiredText("缺少请求幂等键", 120),
   })
   .superRefine((input, ctx) => {
     if (
@@ -315,6 +313,24 @@ export const confirmTerminationInputSchema = z
         code: "custom",
         path: ["reason"],
         message: "提前结束或超时时必须填写原因",
+      });
+    }
+  });
+
+export const reviewTerminationDecisionInputSchema = z
+  .object({
+    reviewId: idSchema,
+    result: z.enum(terminationReviewDecisionValues, {
+      message: "结束审批结果不正确",
+    }),
+    comment: optionalText(2_000),
+  })
+  .superRefine((input, ctx) => {
+    if (input.result !== "APPROVED" && input.comment.trim().length === 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["comment"],
+        message: "驳回或要求修订时必须填写说明",
       });
     }
   });
@@ -334,8 +350,11 @@ export type SubmitMilestoneReviewInput = z.infer<
 export type ReviewMilestoneDecisionInput = z.infer<
   typeof reviewMilestoneDecisionInputSchema
 >;
-export type ConfirmTerminationInput = z.infer<
-  typeof confirmTerminationInputSchema
+export type SubmitTerminationReviewInput = z.infer<
+  typeof submitTerminationReviewInputSchema
+>;
+export type ReviewTerminationDecisionInput = z.infer<
+  typeof reviewTerminationDecisionInputSchema
 >;
 export type RevisionDecisionInput = z.infer<typeof revisionDecisionInputSchema>;
 
@@ -348,6 +367,14 @@ export const taskLifecycleViewsInputSchema = z
     taskId: idSchema,
     reviewCursor: idSchema.optional(),
     reviewLimit: z.number().int().min(1).max(100).optional().default(50),
+    terminationReviewCursor: idSchema.optional(),
+    terminationReviewLimit: z
+      .number()
+      .int()
+      .min(1)
+      .max(100)
+      .optional()
+      .default(50),
     revisionCursor: idSchema.optional(),
     revisionLimit: z.number().int().min(1).max(100).optional().default(50),
     auditCursor: idSchema.optional(),

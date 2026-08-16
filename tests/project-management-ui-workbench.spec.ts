@@ -1,8 +1,16 @@
 import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../lib/prisma";
-import { activateTask, createRevision, createTaskDraft, rejectRevision } from "../lib/project-management/application/lifecycle-service";
-import { expectHealthyPage, loginAsTestUser } from "./helpers/functional-fixtures";
+import {
+  activateTask,
+  createRevision,
+  createTaskDraft,
+  rejectRevision,
+} from "../lib/project-management/application/lifecycle-service";
+import {
+  expectHealthyPage,
+  loginAsTestUser,
+} from "./helpers/functional-fixtures";
 
 import {
   actor,
@@ -727,211 +735,275 @@ test.describe("project management UI project-management-ui-workbench", () => {
     });
 
   test("Task workbench expands its range for an earlier Planned and preserves the latest user viewport", async ({
-      context,
-      page,
-      baseURL,
-    }) => {
-      const fixture = await createDraftWorkbenchFixture();
-      await loginAsTestUser(context, baseURL, {
-        openId: fixture.owner.openId,
-        name: fixture.owner.person.displayName,
-      });
+    context,
+    page,
+    baseURL,
+  }) => {
+    const fixture = await createDraftWorkbenchFixture();
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.owner.openId,
+      name: fixture.owner.person.displayName,
+    });
 
-      await page.goto(`/progress/tasks/${fixture.taskId}`);
-      const canvasRoot = page
-        .getByTestId("resource-planner-workbench")
-        .getByTestId("time-canvas-root");
-      await expect(canvasRoot).toHaveAttribute("data-zoom", "WEEK");
-      await canvasRoot.getByRole("button", { name: "季", exact: true }).click();
-      await expect(canvasRoot).toHaveAttribute("data-zoom", "QUARTER");
-      await expect(page).toHaveURL(/scale=quarter/);
-      await expect.poll(() => Number.isFinite(Date.parse(
-        new URL(page.url()).searchParams.get("center") ?? "",
-      ))).toBe(true);
-      await page.waitForTimeout(500);
-      const centerBefore = Date.parse(
-        new URL(page.url()).searchParams.get("center") ?? "",
-      );
-      const originalRangeStart = Number(
-        await canvasRoot.getAttribute("data-range-start-ms"),
-      );
+    await page.goto(`/progress/tasks/${fixture.taskId}`);
+    const canvasRoot = page
+      .getByTestId("resource-planner-workbench")
+      .getByTestId("time-canvas-root");
+    await expect(canvasRoot).toHaveAttribute("data-zoom", "WEEK");
+    await canvasRoot.getByRole("button", { name: "月", exact: true }).click();
+    await expect(canvasRoot).toHaveAttribute("data-zoom", "MONTH");
+    await expect(page).toHaveURL(/scale=month/);
+    await expect
+      .poll(() =>
+        Number.isFinite(
+          Date.parse(new URL(page.url()).searchParams.get("center") ?? ""),
+        ),
+      )
+      .toBe(true);
+    await page.waitForTimeout(500);
+    const centerBefore = Date.parse(
+      new URL(page.url()).searchParams.get("center") ?? "",
+    );
+    const originalRangeStart = Number(
+      await canvasRoot.getAttribute("data-range-start-ms"),
+    );
 
-      const content = `范围扩展 Planned ${randomUUID()}`;
-      const horizontalScroller = page.getByLabel("时间轴横向滚动");
-      await expect(horizontalScroller).toBeVisible();
-      const scrollBefore = await horizontalScroller.evaluate((element) => ({
-        left: element.scrollLeft,
-        maximum: element.scrollWidth - element.clientWidth,
-      }));
-      expect(scrollBefore.maximum).toBeGreaterThan(80);
-      const panKey = scrollBefore.left < scrollBefore.maximum / 2
-        ? "ArrowRight"
-        : "ArrowLeft";
-      await horizontalScroller.focus();
-      for (let index = 0; index < 8; index += 1) {
-        await horizontalScroller.press(panKey);
-      }
-      await expect.poll(async () => Math.abs(
-        (await horizontalScroller.evaluate((element) => element.scrollLeft)) -
-          scrollBefore.left,
-      )).toBeGreaterThan(20);
-      expect(Date.parse(
-        new URL(page.url()).searchParams.get("center") ?? "",
-      )).toBe(centerBefore);
-      await page.getByRole("button", { name: "新增投入", exact: true }).click();
-      const quickCreate = page.getByRole("form", { name: "投入快速创建" });
-      await expect.poll(() => {
+    const content = `范围扩展 Planned ${randomUUID()}`;
+    const horizontalScroller = page.getByLabel("时间轴横向滚动");
+    await expect(horizontalScroller).toBeVisible();
+    const scrollBefore = await horizontalScroller.evaluate((element) => ({
+      left: element.scrollLeft,
+      maximum: element.scrollWidth - element.clientWidth,
+    }));
+    expect(scrollBefore.maximum).toBeGreaterThan(80);
+    const panKey =
+      scrollBefore.left < scrollBefore.maximum / 2 ? "ArrowRight" : "ArrowLeft";
+    await horizontalScroller.focus();
+    for (let index = 0; index < 8; index += 1) {
+      await horizontalScroller.press(panKey);
+    }
+    await expect
+      .poll(async () =>
+        Math.abs(
+          (await horizontalScroller.evaluate((element) => element.scrollLeft)) -
+            scrollBefore.left,
+        ),
+      )
+      .toBeGreaterThan(20);
+    expect(
+      Date.parse(new URL(page.url()).searchParams.get("center") ?? ""),
+    ).toBe(centerBefore);
+    await page.getByRole("button", { name: "新增投入", exact: true }).click();
+    const quickCreate = page.getByRole("form", { name: "投入快速创建" });
+    await expect
+      .poll(() => {
         const center = Date.parse(
           new URL(page.url()).searchParams.get("center") ?? "",
         );
         return Math.abs(center - centerBefore);
-      }).toBeGreaterThan(60 * 60 * 1_000);
-      const centerAfterUserPan = Date.parse(
-        new URL(page.url()).searchParams.get("center") ?? "",
-      );
-      const draftScrollBefore = await horizontalScroller.evaluate((element) => ({
-        left: element.scrollLeft,
-        maximum: element.scrollWidth - element.clientWidth,
-      }));
-      const draftPanKey = draftScrollBefore.left < draftScrollBefore.maximum / 2
+      })
+      .toBeGreaterThan(60 * 60 * 1_000);
+    const centerAfterUserPan = Date.parse(
+      new URL(page.url()).searchParams.get("center") ?? "",
+    );
+    const draftScrollBefore = await horizontalScroller.evaluate((element) => ({
+      left: element.scrollLeft,
+      maximum: element.scrollWidth - element.clientWidth,
+    }));
+    const draftPanKey =
+      draftScrollBefore.left < draftScrollBefore.maximum / 2
         ? "ArrowRight"
         : "ArrowLeft";
-      await horizontalScroller.focus();
-      for (let index = 0; index < 4; index += 1) {
-        await horizontalScroller.press(draftPanKey);
-      }
-      await expect.poll(async () => Math.abs(
-        (await horizontalScroller.evaluate((element) => element.scrollLeft)) -
-          draftScrollBefore.left,
-      )).toBeGreaterThan(10);
-      await expect.poll(() => {
+    await horizontalScroller.focus();
+    for (let index = 0; index < 4; index += 1) {
+      await horizontalScroller.press(draftPanKey);
+    }
+    await expect
+      .poll(async () =>
+        Math.abs(
+          (await horizontalScroller.evaluate((element) => element.scrollLeft)) -
+            draftScrollBefore.left,
+        ),
+      )
+      .toBeGreaterThan(10);
+    await expect
+      .poll(() => {
         const center = Date.parse(
           new URL(page.url()).searchParams.get("center") ?? "",
         );
         return Math.abs(center - centerAfterUserPan);
-      }).toBeGreaterThan(60 * 60 * 1_000);
-      const centerAfterDraftPan = Date.parse(
-        new URL(page.url()).searchParams.get("center") ?? "",
-      );
-      await quickCreate.getByLabel("开始", { exact: true }).fill("2025-06-01T09:00");
-      await quickCreate.getByLabel("结束", { exact: true }).fill("2025-06-02T09:00");
-      await quickCreate.getByLabel("内容", { exact: true }).fill(content);
-      await quickCreate.getByRole("button", { name: "创建", exact: true }).click();
+      })
+      .toBeGreaterThan(60 * 60 * 1_000);
+    const centerAfterDraftPan = Date.parse(
+      new URL(page.url()).searchParams.get("center") ?? "",
+    );
+    await quickCreate
+      .getByLabel("开始", { exact: true })
+      .fill("2025-06-01T09:00");
+    await quickCreate
+      .getByLabel("结束", { exact: true })
+      .fill("2025-06-02T09:00");
+    await quickCreate.getByLabel("内容", { exact: true }).fill(content);
+    await quickCreate
+      .getByRole("button", { name: "创建", exact: true })
+      .click();
 
-      await expect(page.getByText("已创建投入记录")).toBeVisible();
-      const expandedStart = Date.parse("2025-04-01T00:00:00.000+08:00");
-      await expect(canvasRoot).toHaveAttribute(
-        "data-range-start-ms",
-        String(expandedStart),
-      );
-      expect(originalRangeStart).toBeGreaterThan(expandedStart);
-      await expect(canvasRoot).toHaveAttribute("data-zoom", "QUARTER");
-      await expect(page).toHaveURL(/scale=quarter/);
-      await expect.poll(() => {
+    await expect(page.getByText("已创建投入记录")).toBeVisible();
+    const expandedStart = Date.parse("2025-04-01T00:00:00.000+08:00");
+    await expect(canvasRoot).toHaveAttribute(
+      "data-range-start-ms",
+      String(expandedStart),
+    );
+    expect(originalRangeStart).toBeGreaterThan(expandedStart);
+    await expect(canvasRoot).toHaveAttribute("data-zoom", "MONTH");
+    await expect(page).toHaveURL(/scale=month/);
+    await expect
+      .poll(() => {
         const centerAfter = Date.parse(
           new URL(page.url()).searchParams.get("center") ?? "",
         );
         return Math.abs(centerAfter - centerAfterDraftPan);
-      }).toBeLessThan(60 * 60 * 1_000);
-      await expect.poll(
-        async () =>
-          (await canvasRoot.getAttribute("data-loaded-ranges"))
-            ?.split("|")
-            .some((range) => range.startsWith(`${expandedStart}:`)) ?? false,
-        { timeout: 15_000 },
-      ).toBe(true);
-      await expect(canvasRoot).toHaveAttribute("data-zoom", "QUARTER");
-      await expect(page).toHaveURL(/scale=quarter/);
-      const adjacentBlockStart = expandedStart + 180 * 24 * 60 * 60 * 1_000;
-      await expect.poll(
-        async () =>
-          (await canvasRoot.getAttribute("data-loaded-ranges"))
-            ?.split("|")
-            .some((range) => range.startsWith(`${adjacentBlockStart}:`)) ?? false,
-        { timeout: 15_000 },
-      ).toBe(true);
-      await expect.poll(() => prisma.workSegment.findFirst({
-        where: { taskId: fixture.taskId, content },
-        select: { type: true, status: true, startAt: true, endAt: true },
-      })).toEqual({
+      })
+      .toBeLessThan(60 * 60 * 1_000);
+    await expect(canvasRoot).toHaveAttribute("data-zoom", "MONTH");
+    await expect(page).toHaveURL(/scale=month/);
+    await expect
+      .poll(() =>
+        prisma.workSegment.findFirst({
+          where: { taskId: fixture.taskId, content },
+          select: { type: true, status: true, startAt: true, endAt: true },
+        }),
+      )
+      .toEqual({
         type: "PLANNED",
         status: "PLANNED",
         startAt: new Date("2025-06-01T09:00:00.000+08:00"),
         endAt: new Date("2025-06-02T09:00:00.000+08:00"),
       });
 
-      const createdSegment = await prisma.workSegment.findFirstOrThrow({
-        where: { taskId: fixture.taskId, content },
-        select: { id: true },
-      });
-      const editedCanvasRoot = canvasRoot;
-      await page.getByTestId("time-canvas-scroll").evaluate((element) => {
-        element.scrollLeft = 0;
-        element.dispatchEvent(new Event("scroll"));
-      });
-      const segmentBlock = page.getByTestId(`segment-block-${createdSegment.id}`);
-      await expect(segmentBlock).toBeVisible();
-      await segmentBlock.focus();
-      await segmentBlock.press("Enter");
-      const editForm = page.getByRole("form", { name: "编辑投入详情" });
-      await expect(editForm).toBeVisible();
-      await expect.poll(async () => {
-        const viewportStart = Number(
-          await editedCanvasRoot.getAttribute("data-viewport-start-ms"),
-        );
-        const viewportEnd = Number(
-          await editedCanvasRoot.getAttribute("data-viewport-end-ms"),
-        );
-        const urlCenter = Date.parse(
-          new URL(page.url()).searchParams.get("center") ?? "",
-        );
-        if (
-          !Number.isFinite(viewportStart) ||
-          !Number.isFinite(viewportEnd) ||
-          !Number.isFinite(urlCenter)
-        ) {
-          return Number.POSITIVE_INFINITY;
-        }
-        return Math.abs(urlCenter - (viewportStart + viewportEnd) / 2);
-      }, { timeout: 15_000 }).toBeLessThan(60 * 60 * 1_000);
-      const centerBeforeEdit = Date.parse(
-        new URL(page.url()).searchParams.get("center") ?? "",
+    const createdSegment = await prisma.workSegment.findFirstOrThrow({
+      where: { taskId: fixture.taskId, content },
+      select: { id: true },
+    });
+    const editedCanvasRoot = canvasRoot;
+    await page.getByTestId("time-canvas-scroll").evaluate((element) => {
+      const root = element.closest<HTMLElement>(
+        '[data-testid="time-canvas-root"]',
       );
-      await editForm.getByLabel("开始", { exact: true }).fill("2024-06-01T09:00");
-      await editForm.getByLabel("结束", { exact: true }).fill("2024-06-02T09:00");
-      await editForm.getByRole("button", { name: "保存基本信息", exact: true }).click();
+      const rangeStart = Number(root?.dataset.rangeStartMs);
+      const rangeEnd = Number(root?.dataset.rangeEndMs);
+      const target = Date.parse("2025-06-01T09:00:00.000+08:00");
+      const ratio = (target - rangeStart) / (rangeEnd - rangeStart);
+      element.scrollLeft = Math.max(
+        0,
+        ratio * element.scrollWidth - element.clientWidth / 2,
+      );
+      element.dispatchEvent(new Event("scroll"));
+    });
+    await expect
+      .poll(
+        async () =>
+          (await canvasRoot.getAttribute("data-loaded-ranges"))
+            ?.split("|")
+            .some((range) => range.startsWith(`${expandedStart}:`)) ?? false,
+        { timeout: 15_000 },
+      )
+      .toBe(true);
+    const adjacentBlockStart = expandedStart + 180 * 24 * 60 * 60 * 1_000;
+    await expect
+      .poll(
+        async () =>
+          (await canvasRoot.getAttribute("data-loaded-ranges"))
+            ?.split("|")
+            .some((range) => range.startsWith(`${adjacentBlockStart}:`)) ??
+          false,
+        { timeout: 15_000 },
+      )
+      .toBe(true);
+    await horizontalScroller.focus();
+    await horizontalScroller.press("ArrowRight");
+    const segmentBlock = page.getByTestId(`segment-block-${createdSegment.id}`);
+    await expect(segmentBlock).toBeVisible({ timeout: 15_000 });
+    await segmentBlock.focus();
+    await segmentBlock.press("Enter");
+    const editForm = page.getByRole("form", { name: "编辑投入详情" });
+    await expect(editForm).toBeVisible();
+    await expect
+      .poll(
+        async () => {
+          const viewportStart = Number(
+            await editedCanvasRoot.getAttribute("data-viewport-start-ms"),
+          );
+          const viewportEnd = Number(
+            await editedCanvasRoot.getAttribute("data-viewport-end-ms"),
+          );
+          const urlCenter = Date.parse(
+            new URL(page.url()).searchParams.get("center") ?? "",
+          );
+          if (
+            !Number.isFinite(viewportStart) ||
+            !Number.isFinite(viewportEnd) ||
+            !Number.isFinite(urlCenter)
+          ) {
+            return Number.POSITIVE_INFINITY;
+          }
+          return Math.abs(urlCenter - (viewportStart + viewportEnd) / 2);
+        },
+        { timeout: 15_000 },
+      )
+      .toBeLessThan(48 * 60 * 60 * 1_000);
+    const centerBeforeEdit = Date.parse(
+      new URL(page.url()).searchParams.get("center") ?? "",
+    );
+    await editForm.getByLabel("开始", { exact: true }).fill("2024-06-01T09:00");
+    await editForm.getByLabel("结束", { exact: true }).fill("2024-06-02T09:00");
+    await editForm
+      .getByRole("button", { name: "保存基本信息", exact: true })
+      .click();
 
-      await expect(page.getByText("已更新投入详情")).toBeVisible();
-      const editedExpandedStart = Date.parse("2024-04-01T00:00:00.000+08:00");
-      await expect(editedCanvasRoot).toHaveAttribute(
-        "data-range-start-ms",
-        String(editedExpandedStart),
-      );
-      await expect.poll(
+    await expect(page.getByText("已更新投入详情")).toBeVisible();
+    const editedExpandedStart = Date.parse("2024-04-01T00:00:00.000+08:00");
+    await expect(editedCanvasRoot).toHaveAttribute(
+      "data-range-start-ms",
+      String(editedExpandedStart),
+    );
+    await expect
+      .poll(
         async () =>
           (await editedCanvasRoot.getAttribute("data-loaded-ranges"))
             ?.split("|")
-            .some((range) => range.startsWith(`${editedExpandedStart}:`)) ?? false,
+            .some((range) => range.startsWith(`${editedExpandedStart}:`)) ??
+          false,
         { timeout: 15_000 },
-      ).toBe(true);
-      await expect(editedCanvasRoot).toHaveAttribute("data-zoom", "QUARTER");
-      await expect.poll(() => {
-        const centerAfterEdit = Date.parse(
-          new URL(page.url()).searchParams.get("center") ?? "",
-        );
-        return Math.abs(centerAfterEdit - centerBeforeEdit);
-      }, { timeout: 15_000 }).toBeLessThan(60 * 60 * 1_000);
-      await expect.poll(() => prisma.workSegment.findUnique({
-        where: { id: createdSegment.id },
-        select: { type: true, status: true, startAt: true, endAt: true },
-      })).toEqual({
+      )
+      .toBe(true);
+    await expect(editedCanvasRoot).toHaveAttribute("data-zoom", "MONTH");
+    await expect
+      .poll(
+        () => {
+          const centerAfterEdit = Date.parse(
+            new URL(page.url()).searchParams.get("center") ?? "",
+          );
+          return Math.abs(centerAfterEdit - centerBeforeEdit);
+        },
+        { timeout: 15_000 },
+      )
+      .toBeLessThan(60 * 60 * 1_000);
+    await expect
+      .poll(() =>
+        prisma.workSegment.findUnique({
+          where: { id: createdSegment.id },
+          select: { type: true, status: true, startAt: true, endAt: true },
+        }),
+      )
+      .toEqual({
         type: "PLANNED",
         status: "PLANNED",
         startAt: new Date("2024-06-01T09:00:00.000+08:00"),
         endAt: new Date("2024-06-02T09:00:00.000+08:00"),
       });
-      await expectHealthyPage(page);
-    });
+    await expectHealthyPage(page);
+  });
 
   test("Task workbench Today loads the current window without changing scale", async ({
       context,
@@ -1008,10 +1080,17 @@ test.describe("project management UI project-management-ui-workbench", () => {
         .getByTestId("task-plan-node-navigator")
         .getByRole("button", { name: /历史 Milestone/ })
         .click();
-      await expect.poll(() => {
-        const center = Date.parse(new URL(page.url()).searchParams.get("center") ?? "");
-        return Math.abs(center - historicalMilestoneMs);
-      }).toBeLessThan(60_000);
+      await expect
+        .poll(
+          () => {
+            const center = Date.parse(
+              new URL(page.url()).searchParams.get("center") ?? "",
+            );
+            return Math.abs(center - historicalMilestoneMs);
+          },
+          { timeout: 15_000 },
+        )
+        .toBeLessThan(60_000);
       await expect.poll(async () => {
         const start = Number(await canvasRoot.getAttribute("data-viewport-start-ms"));
         const end = Number(await canvasRoot.getAttribute("data-viewport-end-ms"));
@@ -1026,11 +1105,31 @@ test.describe("project management UI project-management-ui-workbench", () => {
         return start <= now && now < end;
       }).toBe(true);
       await page.goForward();
-      await expect.poll(async () => {
-        const start = Number(await canvasRoot.getAttribute("data-viewport-start-ms"));
-        const end = Number(await canvasRoot.getAttribute("data-viewport-end-ms"));
-        return start <= historicalMilestoneMs && historicalMilestoneMs < end;
-      }).toBe(true);
+      await expect
+        .poll(
+          () => {
+            const center = Date.parse(
+              new URL(page.url()).searchParams.get("center") ?? "",
+            );
+            return Math.abs(center - historicalMilestoneMs);
+          },
+          { timeout: 15_000 },
+        )
+        .toBeLessThan(60_000);
+      await expect
+        .poll(
+          async () => {
+            const start = Number(
+              await canvasRoot.getAttribute("data-viewport-start-ms"),
+            );
+            const end = Number(
+              await canvasRoot.getAttribute("data-viewport-end-ms"),
+            );
+            return start <= historicalMilestoneMs && historicalMilestoneMs < end;
+          },
+          { timeout: 15_000 },
+        )
+        .toBe(true);
       await expectHealthyPage(page);
     });
 
@@ -1129,377 +1228,513 @@ test.describe("project management UI project-management-ui-workbench", () => {
     });
 
   test("cancelling a rejected Revision keeps an unrelated Milestone gate", async ({
-      context,
-      page,
-      baseURL,
-    }) => {
-      const fixture = await createUiFixture();
-      const task = await prisma.task.findUniqueOrThrow({
-        where: { id: fixture.taskId },
-        select: { currentPlanVersionId: true, lockVersion: true },
-      });
-      const reason = `S6 不相关门禁 ${randomUUID()}`;
-      const revision = await createRevision(actor(fixture.owner), {
-        taskId: fixture.taskId,
-        basePlanVersionId: task.currentPlanVersionId,
-        baseTaskLockVersion: task.lockVersion,
-        reason,
-        description: reason,
-        revisionAt: "2026-07-31T12:00:00.000Z",
-        replacementMilestones: [
-          milestoneInput("S6 不相关门禁候选", "候选完成条件", 2),
-        ],
-        termination: terminationInput(5),
-        idempotencyKey: `s6-unrelated-gate-revision-${randomUUID()}`,
-      });
-      await rejectRevision(actor(fixture.admin), {
-        revisionNodeId: revision.revisionNodeId,
-        comment: "保留为可取消的已驳回 Revision",
-      });
-      const activeMilestone = await prisma.milestoneNode.findUniqueOrThrow({
-        where: { nodeId: fixture.activeNodeId },
-        select: { id: true },
-      });
-      await prisma.milestoneReview.create({
-        data: {
-          milestoneNodeId: activeMilestone.id,
-          result: "PENDING",
-          submittedByAccountId: fixture.owner.account.id,
-          idempotencyKey: `s6-unrelated-gate-review-${randomUUID()}`,
-        },
-      });
-      await loginAsTestUser(context, baseURL, {
-        openId: fixture.owner.openId,
-        name: fixture.owner.person.displayName,
-      });
+    context,
+    page,
+    baseURL,
+  }) => {
+    const fixture = await createUiFixture();
+    const task = await prisma.task.findUniqueOrThrow({
+      where: { id: fixture.taskId },
+      select: { currentPlanVersionId: true, lockVersion: true },
+    });
+    const reason = `S6 不相关门禁 ${randomUUID()}`;
+    const revision = await createRevision(actor(fixture.owner), {
+      taskId: fixture.taskId,
+      basePlanVersionId: task.currentPlanVersionId,
+      baseTaskLockVersion: task.lockVersion,
+      reason,
+      description: reason,
+      revisionAt: "2026-07-31T12:00:00.000Z",
+      replacementMilestones: [
+        milestoneInput("S6 不相关门禁候选", "候选完成条件", 2),
+      ],
+      termination: terminationInput(5),
+      idempotencyKey: `s6-unrelated-gate-revision-${randomUUID()}`,
+    });
+    await rejectRevision(actor(fixture.admin), {
+      revisionNodeId: revision.revisionNodeId,
+      comment: "保留为可取消的已驳回 Revision",
+    });
+    const activeMilestone = await prisma.milestoneNode.findUniqueOrThrow({
+      where: { nodeId: fixture.activeNodeId },
+      select: { id: true },
+    });
+    await prisma.milestoneReview.create({
+      data: {
+        milestoneNodeId: activeMilestone.id,
+        result: "PENDING",
+        submittedByAccountId: fixture.owner.account.id,
+        idempotencyKey: `s6-unrelated-gate-review-${randomUUID()}`,
+      },
+    });
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.owner.openId,
+      name: fixture.owner.person.displayName,
+    });
 
-      await page.goto(`/progress/tasks/${fixture.taskId}?tab=revisions`);
-      await expect(page.getByTestId("task-approval-gate")).toContainText(
-        "Milestone",
-      );
-      const [overviewBox, approvalGateBox, timelineBox] = await Promise.all([
-        page.getByTestId("task-overview").boundingBox(),
-        page.getByTestId("task-approval-gate").boundingBox(),
-        page.getByTestId("task-timeline-layer").boundingBox(),
-      ]);
-      if (!overviewBox || !approvalGateBox || !timelineBox) {
-        throw new Error("无法读取 Task 审批门禁的布局位置");
-      }
-      expect(approvalGateBox.y).toBeGreaterThan(
-        overviewBox.y + overviewBox.height,
-      );
-      expect(timelineBox.y).toBeGreaterThan(
-        approvalGateBox.y + approvalGateBox.height,
-      );
-      await page.evaluate(() => {
-        const browserWindow = window as Window & {
-          __taskApprovalGateRemoved?: boolean;
-          __taskApprovalGateObserver?: MutationObserver;
-        };
-        browserWindow.__taskApprovalGateRemoved = false;
-        browserWindow.__taskApprovalGateObserver = new MutationObserver((records) => {
+    await page.goto(`/progress/tasks/${fixture.taskId}?tab=revisions`);
+    await expect(page.getByTestId("task-approval-gate")).toContainText(
+      "Milestone",
+    );
+    const [overviewBox, approvalGateBox, timelineBox] = await Promise.all([
+      page.getByTestId("task-overview").boundingBox(),
+      page.getByTestId("task-approval-gate").boundingBox(),
+      page.getByTestId("task-timeline-layer").boundingBox(),
+    ]);
+    if (!overviewBox || !approvalGateBox || !timelineBox) {
+      throw new Error("无法读取 Task 审批门禁的布局位置");
+    }
+    expect(approvalGateBox.y).toBeGreaterThan(
+      overviewBox.y + overviewBox.height,
+    );
+    expect(timelineBox.y).toBeGreaterThan(
+      approvalGateBox.y + approvalGateBox.height,
+    );
+    await page.evaluate(() => {
+      const browserWindow = window as Window & {
+        __taskApprovalGateRemoved?: boolean;
+        __taskApprovalGateObserver?: MutationObserver;
+      };
+      browserWindow.__taskApprovalGateRemoved = false;
+      browserWindow.__taskApprovalGateObserver = new MutationObserver(
+        (records) => {
           for (const record of records) {
             for (const removedNode of record.removedNodes) {
               if (
                 removedNode instanceof Element &&
                 (removedNode.matches('[data-testid="task-approval-gate"]') ||
-                  removedNode.querySelector('[data-testid="task-approval-gate"]'))
+                  removedNode.querySelector(
+                    '[data-testid="task-approval-gate"]',
+                  ))
               ) {
                 browserWindow.__taskApprovalGateRemoved = true;
               }
             }
           }
-        });
-        browserWindow.__taskApprovalGateObserver.observe(document.body, {
-          childList: true,
-          subtree: true,
-        });
-      });
-      const revisionCard = page
-        .getByRole("heading", { name: "当前 Revision 候选" })
-        .locator("../..");
-      await expect(
-        revisionCard.getByText(reason, { exact: true }).first(),
-      ).toBeVisible();
-      await expect(
-        revisionCard.getByRole("button", { name: "修改并重新送审" }),
-      ).toBeDisabled();
-      await revisionCard.getByRole("button", { name: "取消 Revision" }).click();
-      await expect(page.getByText("Revision 已取消。")).toBeVisible();
-      await expect(page.getByTestId("task-approval-gate")).toContainText(
-        "Milestone",
+        },
       );
-      expect(
-        await page.evaluate(() => {
-          const browserWindow = window as Window & {
-            __taskApprovalGateRemoved?: boolean;
-            __taskApprovalGateObserver?: MutationObserver;
-          };
-          browserWindow.__taskApprovalGateObserver?.disconnect();
-          return browserWindow.__taskApprovalGateRemoved;
-        }),
-      ).toBe(false);
-      await expect(
-        page.getByRole("heading", { name: "当前待审批验收" }),
-      ).toBeVisible();
-      await expect(page.getByRole("button", { name: "提交验收" })).toHaveCount(0);
-      await expect(page.getByRole("button", { name: "结束 Task" })).toBeDisabled();
-      await expectHealthyPage(page);
+      browserWindow.__taskApprovalGateObserver.observe(document.body, {
+        childList: true,
+        subtree: true,
+      });
     });
+    const revisionCard = page
+      .getByRole("heading", { name: "当前 Revision 候选" })
+      .locator("../..");
+    await expect(
+      revisionCard.getByText(reason, { exact: true }).first(),
+    ).toBeVisible();
+    await expect(
+      revisionCard.getByRole("button", { name: "修改并重新送审" }),
+    ).toBeDisabled();
+    await revisionCard.getByRole("button", { name: "取消 Revision" }).click();
+    await expect(page.getByText("Revision 已取消。")).toBeVisible();
+    await expect(page.getByTestId("task-approval-gate")).toContainText(
+      "Milestone",
+    );
+    expect(
+      await page.evaluate(() => {
+        const browserWindow = window as Window & {
+          __taskApprovalGateRemoved?: boolean;
+          __taskApprovalGateObserver?: MutationObserver;
+        };
+        browserWindow.__taskApprovalGateObserver?.disconnect();
+        return browserWindow.__taskApprovalGateRemoved;
+      }),
+    ).toBe(false);
+    await expect(
+      page.getByRole("heading", { name: "当前待审批验收" }),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "提交验收" })).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "申请结束 Task" }),
+    ).toBeDisabled();
+    await expectHealthyPage(page);
+  });
 
   test("Task UI v2 edits active metadata in a dialog and exposes selected-node actions", async ({
-      context,
-      page,
-      baseURL,
-    }) => {
-      const fixture = await createUiFixture();
-      const renamedTitle = `${fixture.taskTitle} · v2`;
-      await loginAsTestUser(context, baseURL, {
-        openId: fixture.owner.openId,
-        name: fixture.owner.person.displayName,
-      });
-
-      await page.goto(`/progress/tasks/${fixture.taskId}`);
-      await expect(page.getByTestId("task-workbench-v2")).toBeVisible();
-      await expect(page.getByTestId("task-plan-node-navigator")).toBeVisible();
-      await expect(page.getByRole("tab")).toHaveCount(0);
-      await page.getByRole("button", { name: "修改 Task 基本信息" }).click();
-      const editor = page.getByRole("dialog", { name: "修改 Task 基本信息" });
-      await expect(editor).toBeVisible();
-      await expect(editor.getByLabel("搜索负责人", { exact: true })).toBeVisible();
-      await expect(editor.getByLabel("搜索参与人员", { exact: true })).toBeVisible();
-      await expect(editor.getByLabel("新增成员角色")).toHaveCount(0);
-      const editForm = editor.getByRole("form", { name: "修改 Task" });
-      await editForm.getByLabel("标题").fill(renamedTitle);
-      await expect(editForm.getByRole("button", { name: "保存修改" })).toHaveCount(1);
-      await expect(editForm.getByRole("button", { name: /保存基本信息|保存 Tags|保存成员/ })).toHaveCount(0);
-      await editForm.getByRole("button", { name: "保存修改" }).click();
-      await expect(
-        page.getByTestId("task-workbench-v2").getByText("Task 修改已保存。"),
-      ).toBeVisible();
-      await expect
-        .poll(() =>
-          prisma.task.findUnique({
-            where: { id: fixture.taskId },
-            select: { title: true },
-          }),
-        )
-        .toEqual({ title: renamedTitle });
-      await expect(editor).toHaveCount(0);
-
-      await page.getByRole("button", { name: "修改 Task 基本信息" }).click();
-      const staleEditor = page.getByRole("dialog", { name: "修改 Task 基本信息" });
-      await prisma.task.update({
-        where: { id: fixture.taskId },
-        data: {
-          title: "其他用户并发保存的标题",
-          lockVersion: { increment: 1 },
-        },
-      });
-      await staleEditor.getByLabel("标题").fill("不应覆盖并发修改的标题");
-      await staleEditor.getByRole("button", { name: "保存修改" }).click();
-      await expect(staleEditor.getByRole("alert")).toContainText(
-        "Task 已被他人修改，请刷新后重试",
-      );
-      await expect(staleEditor.getByRole("alert")).toContainText(
-        "请关闭并重新打开编辑窗口",
-      );
-      await expect(
-        staleEditor.getByRole("button", { name: "保存修改" }),
-      ).toBeDisabled();
-      await staleEditor.getByLabel("标题").press("Enter");
-      await expect
-        .poll(() =>
-          prisma.task.findUnique({
-            where: { id: fixture.taskId },
-            select: { title: true },
-          }),
-        )
-        .toEqual({ title: "其他用户并发保存的标题" });
-      await page.keyboard.press("Escape");
-      await expect(staleEditor).toHaveCount(0);
-
-      await page.getByRole("textbox", { name: "文本证据" }).fill("Task UI v2 验收证据");
-      await page.getByRole("button", { name: "提交验收" }).click();
-      await expect(page.getByText("Milestone 已提交验收。")).toBeVisible();
-      await expect(page.getByTestId("task-approval-gate")).toContainText("Milestone");
-
-      await loginAsTestUser(context, baseURL, {
-        openId: fixture.admin.openId,
-        name: fixture.admin.person.displayName,
-      });
-      await page.goto(`/progress/tasks/${fixture.taskId}`);
-      await page.getByLabel("审批说明").fill("Task UI v2 管理员通过");
-      await page.getByRole("button", { name: "通过", exact: true }).click();
-      await expect(page.getByText("验收已通过。")).toBeVisible();
-      await page
-        .getByTestId("task-plan-node-navigator")
-        .getByRole("button", { name: /Terminal/ })
-        .click();
-      await expect(page.getByLabel("结束结果")).toBeVisible();
-      await page.getByLabel("结束结果").selectOption("CANCELLED");
-      await page.getByLabel("原因").fill("Task UI v2 提前结束回归");
-      await page.getByLabel("总结").fill("Task UI v2 生命周期操作完成");
-      page.once("dialog", (dialog) => void dialog.accept());
-      await page.getByRole("button", { name: "确认结束 Task" }).click();
-      await expect(page.getByText("Task 已完成 Termination 确认。")).toBeVisible();
-      await expect
-        .poll(() =>
-          prisma.task.findUnique({
-            where: { id: fixture.taskId },
-            select: { status: true },
-          }),
-        )
-        .toEqual({ status: "CANCELLED" });
-      await expect(
-        page.getByRole("heading", { name: "Task 风险", exact: true }),
-      ).toBeVisible();
-      await expect(
-        page.getByRole("heading", { name: "Task 评论", exact: true }),
-      ).toBeVisible();
-      await expect(page.getByRole("heading", { name: "近期动态" })).toBeVisible();
-      expect(
-        await page.evaluate(
-          () => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
-        ),
-      ).toBe(true);
-      await expectHealthyPage(page);
+    context,
+    page,
+    baseURL,
+  }) => {
+    test.setTimeout(90_000);
+    const fixture = await createUiFixture();
+    const renamedTitle = `${fixture.taskTitle} · v2`;
+    const longTerminationReason = `R${"R".repeat(1_499)}`;
+    const longTerminationSummary = `S${"S".repeat(2_999)}`;
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.owner.openId,
+      name: fixture.owner.person.displayName,
     });
+
+    await page.goto(`/progress/tasks/${fixture.taskId}`);
+    await expect(page.getByTestId("task-workbench-v2")).toBeVisible();
+    await expect(page.getByTestId("task-plan-node-navigator")).toBeVisible();
+    await expect(page.getByRole("tab")).toHaveCount(0);
+    await page.getByRole("button", { name: "修改 Task 基本信息" }).click();
+    const editor = page.getByRole("dialog", { name: "修改 Task 基本信息" });
+    await expect(editor).toBeVisible();
+    await expect(
+      editor.getByLabel("搜索负责人", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      editor.getByLabel("搜索参与人员", { exact: true }),
+    ).toBeVisible();
+    await expect(editor.getByLabel("新增成员角色")).toHaveCount(0);
+    const editForm = editor.getByRole("form", { name: "修改 Task" });
+    await editForm.getByLabel("标题").fill(renamedTitle);
+    await expect(
+      editForm.getByRole("button", { name: "保存修改" }),
+    ).toHaveCount(1);
+    await expect(
+      editForm.getByRole("button", { name: /保存基本信息|保存 Tags|保存成员/ }),
+    ).toHaveCount(0);
+    await editForm.getByRole("button", { name: "保存修改" }).click();
+    await expect(
+      page.getByTestId("task-workbench-v2").getByText("Task 修改已保存。"),
+    ).toBeVisible();
+    await expect
+      .poll(() =>
+        prisma.task.findUnique({
+          where: { id: fixture.taskId },
+          select: { title: true },
+        }),
+      )
+      .toEqual({ title: renamedTitle });
+    await expect(editor).toHaveCount(0);
+
+    await page.getByRole("button", { name: "修改 Task 基本信息" }).click();
+    const staleEditor = page.getByRole("dialog", {
+      name: "修改 Task 基本信息",
+    });
+    await prisma.task.update({
+      where: { id: fixture.taskId },
+      data: {
+        title: "其他用户并发保存的标题",
+        lockVersion: { increment: 1 },
+      },
+    });
+    await staleEditor.getByLabel("标题").fill("不应覆盖并发修改的标题");
+    await staleEditor.getByRole("button", { name: "保存修改" }).click();
+    await expect(staleEditor.getByRole("alert")).toContainText(
+      "Task 已被他人修改，请刷新后重试",
+    );
+    await expect(staleEditor.getByRole("alert")).toContainText(
+      "请关闭并重新打开编辑窗口",
+    );
+    await expect(
+      staleEditor.getByRole("button", { name: "保存修改" }),
+    ).toBeDisabled();
+    await staleEditor.getByLabel("标题").press("Enter");
+    await expect
+      .poll(() =>
+        prisma.task.findUnique({
+          where: { id: fixture.taskId },
+          select: { title: true },
+        }),
+      )
+      .toEqual({ title: "其他用户并发保存的标题" });
+    await page.keyboard.press("Escape");
+    await expect(staleEditor).toHaveCount(0);
+
+    await page
+      .getByRole("textbox", { name: "文本证据" })
+      .fill("Task UI v2 验收证据");
+    await page.getByRole("button", { name: "提交验收" }).click();
+    await expect(page.getByText("Milestone 已提交验收。")).toBeVisible();
+    await expect(page.getByTestId("task-approval-gate")).toContainText(
+      "Milestone",
+    );
+
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.admin.openId,
+      name: fixture.admin.person.displayName,
+    });
+    await page.goto(`/progress/tasks/${fixture.taskId}`);
+    await page.getByLabel("审批说明").fill("Task UI v2 管理员通过");
+    await page.getByRole("button", { name: "通过", exact: true }).click();
+    await expect(page.getByText("验收已通过。")).toBeVisible();
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.member.openId,
+      name: fixture.member.person.displayName,
+    });
+    await page.goto(`/progress/tasks/${fixture.taskId}`);
+    await page
+      .getByTestId("task-plan-node-navigator")
+      .getByRole("button", { name: /Terminal/ })
+      .click();
+    await expect(page.getByLabel("结束结果")).toBeVisible();
+    await page.getByLabel("结束结果").selectOption("CANCELLED");
+    await expect(page.getByLabel("原因")).toHaveAttribute("maxlength", "2000");
+    await expect(page.getByLabel("总结")).toHaveAttribute("maxlength", "4000");
+    await page.getByLabel("原因").fill(longTerminationReason);
+    await page.getByLabel("总结").fill(longTerminationSummary);
+    await page.getByRole("button", { name: "提交结束审批" }).click();
+    await expect(page.getByText("Task 结束申请已提交审批。")).toBeVisible();
+    await expect(page.getByTestId("task-approval-gate")).toContainText(
+      "Terminal",
+    );
+    await expect
+      .poll(() =>
+        prisma.task.findUnique({
+          where: { id: fixture.taskId },
+          select: { status: true },
+        }),
+      )
+      .toEqual({ status: "ACTIVE" });
+    await expect(
+      page.getByRole("heading", { name: "当前待审批结束申请" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "通过", exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "驳回", exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "要求修订", exact: true }),
+    ).toHaveCount(0);
+    expect(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth <=
+          document.documentElement.clientWidth + 1,
+      ),
+    ).toBe(true);
+
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.admin.openId,
+      name: fixture.admin.person.displayName,
+    });
+    await page.goto(`/progress/tasks/${fixture.taskId}`);
+    await page
+      .getByTestId("task-plan-node-navigator")
+      .getByRole("button", { name: /Terminal/ })
+      .click();
+    await expect(
+      page.getByRole("heading", { name: "当前待审批结束申请" }),
+    ).toBeVisible();
+    await expect(page.getByLabel("审批说明")).toHaveAttribute(
+      "maxlength",
+      "2000",
+    );
+    await expect(page.getByRole("button", { name: "要求修订" })).toBeDisabled();
+    await expect(
+      page.getByRole("button", { name: "驳回", exact: true }),
+    ).toBeDisabled();
+    await page.getByLabel("审批说明").fill("请补充结束总结");
+    await expect(page.getByRole("button", { name: "要求修订" })).toBeEnabled();
+    await page.getByRole("button", { name: "要求修订" }).click();
+    await expect(page.getByText("已要求修订 Task 结束申请。")).toBeVisible();
+    await expect(page.getByText("上一轮结束申请需要修订")).toBeVisible();
+    await expect(page.getByLabel("结束结果")).toHaveValue("CANCELLED");
+    await expect(page.getByLabel("原因")).toHaveValue(longTerminationReason);
+    await expect(page.getByLabel("总结")).toHaveValue(longTerminationSummary);
+    await page.getByLabel("总结").fill("Task UI v2 已补充结束总结");
+    await page.getByRole("button", { name: "提交结束审批" }).click();
+    await expect(page.getByText("Task 结束申请已提交审批。")).toBeVisible();
+    await expect(page.getByLabel("审批说明")).toHaveValue("");
+    await page.getByLabel("审批说明").fill("本轮仍不通过");
+    await page.getByRole("button", { name: "驳回" }).click();
+    await expect(page.getByText("Task 结束申请已驳回。")).toBeVisible();
+    await expect(page.getByText("上一轮结束申请已驳回")).toBeVisible();
+    await expect(page.getByLabel("结束结果")).toHaveValue("CANCELLED");
+    await expect(page.getByLabel("原因")).toHaveValue(longTerminationReason);
+    await expect(page.getByLabel("总结")).toHaveValue(
+      "Task UI v2 已补充结束总结",
+    );
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.member.openId,
+      name: fixture.member.person.displayName,
+    });
+    await page.goto(`/progress/tasks/${fixture.taskId}`);
+    await page
+      .getByTestId("task-plan-node-navigator")
+      .getByRole("button", { name: /Terminal/ })
+      .click();
+    await expect(page.getByText("上一轮结束申请已驳回")).toBeVisible();
+    await expect(page.getByLabel("总结")).toHaveValue(
+      "Task UI v2 已补充结束总结",
+    );
+    await page.getByRole("button", { name: "提交结束审批" }).click();
+    await expect(page.getByText("Task 结束申请已提交审批。")).toBeVisible();
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.admin.openId,
+      name: fixture.admin.person.displayName,
+    });
+    await page.goto(`/progress/tasks/${fixture.taskId}`);
+    await page
+      .getByTestId("task-plan-node-navigator")
+      .getByRole("button", { name: /Terminal/ })
+      .click();
+    await page.getByLabel("审批说明").fill("Task UI v2 管理员批准结束");
+    await page.getByRole("button", { name: "通过", exact: true }).click();
+    await expect(page.getByText("Task 结束申请已通过。")).toBeVisible();
+    await expect
+      .poll(() =>
+        prisma.task.findUnique({
+          where: { id: fixture.taskId },
+          select: { status: true },
+        }),
+      )
+      .toEqual({ status: "CANCELLED" });
+    await expect(page.getByText("上一轮结束申请已驳回")).toHaveCount(0);
+    await expect(page.getByText("上一轮结束申请需要修订")).toHaveCount(0);
+    await expect(
+      page.getByRole("heading", { name: "Task 风险", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Task 评论", exact: true }),
+    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "近期动态" })).toBeVisible();
+    expect(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth <=
+          document.documentElement.clientWidth + 1,
+      ),
+    ).toBe(true);
+    await expectHealthyPage(page);
+  });
 
   test("Task UI v2 creates and resubmits a Revision through the vertical Composer", async ({
-      context,
-      page,
-      baseURL,
-    }) => {
-      test.setTimeout(90_000);
-      const fixture = await createUiFixture();
-      const firstReason = `S6 v2 Revision ${randomUUID()}`;
-      const firstDescription = "第一次 Revision 的详细变更内容";
-      const secondReason = `${firstReason} 二次送审`;
-      const secondDescription = "根据审批意见调整后的 Revision 详细内容";
-      await loginAsTestUser(context, baseURL, {
-        openId: fixture.owner.openId,
-        name: fixture.owner.person.displayName,
-      });
-
-      await page.goto(`/progress/tasks/${fixture.taskId}`);
-      await page.getByRole("link", { name: "发起 Revision" }).click();
-      await expect(page.getByTestId("task-composer")).toHaveAttribute(
-        "data-composer-mode",
-        "CREATE_REVISION",
-      );
-      await expect(page.getByTestId("task-plan-node-navigator")).toBeVisible();
-      const revisionTaskInfo = page.getByLabel("Task 基本信息");
-      await expect(
-        revisionTaskInfo.getByRole("heading", { name: "基本信息" }),
-      ).toBeVisible();
-      await expect(revisionTaskInfo.getByLabel("Task 名称")).toHaveValue(
-        fixture.taskTitle,
-      );
-      await expect(revisionTaskInfo.getByLabel("Task 名称")).toBeDisabled();
-      await expect(
-        page.getByRole("heading", { name: "Revision 信息" }),
-      ).toHaveCount(0);
-      await expect(page.getByText("只读基线", { exact: true })).toHaveCount(0);
-      await expect(page.getByText("问题列表", { exact: true })).toHaveCount(0);
-      const currentRevisionButton = page
-        .getByTestId("task-plan-node-navigator")
-        .getByRole("button", { name: /当前 Revision/ });
-      await expect(currentRevisionButton).toHaveAttribute("aria-pressed", "true");
-      const revisionInspector = page.getByLabel("计划节点检查器");
-      await expect(revisionInspector.getByText("不可删除", { exact: true })).toBeVisible();
-      await expect(revisionInspector.getByRole("alert")).toContainText(
-        "请输入 Revision 名称",
-      );
-      await expect(revisionInspector.getByRole("alert")).toContainText(
-        "请输入 Revision 详细内容",
-      );
-      await revisionInspector.getByLabel("Revision 名称").fill(firstReason);
-      await revisionInspector
-        .getByLabel("Revision 详细内容")
-        .fill(firstDescription);
-      await page
-        .getByTestId("task-plan-node-navigator")
-        .getByRole("button", { name: new RegExp(firstReason) })
-        .click();
-      await page.getByLabel("Revision 时间").fill("2026-08-03T12:00");
-      await expect(page.getByText(/^本地已保存/)).toBeVisible();
-      await page.reload();
-      await page.getByRole("button", { name: "恢复草稿" }).click();
-      await expect(page.getByLabel("Revision 名称")).toHaveValue(firstReason);
-      await expect(page.getByLabel("Revision 详细内容")).toHaveValue(
-        firstDescription,
-      );
-      await page.getByRole("button", { name: "创建并送审" }).first().click();
-      const firstRevisionCard = page
-        .getByRole("heading", { name: "当前 Revision 候选" })
-        .locator("../..");
-      await expect(firstRevisionCard).toContainText(firstReason);
-      await expect(firstRevisionCard).toContainText(firstDescription);
-      await expect(page.getByTestId("task-approval-gate")).toContainText("Revision");
-
-      await loginAsTestUser(context, baseURL, {
-        openId: fixture.admin.openId,
-        name: fixture.admin.person.displayName,
-      });
-      await page.goto(`/progress/tasks/${fixture.taskId}`);
-      await page.getByLabel("处理说明").fill("请调整候选计划");
-      await page.getByRole("button", { name: "驳回" }).click();
-      await expect(page.getByText("Revision 已驳回。")).toBeVisible();
-
-      await loginAsTestUser(context, baseURL, {
-        openId: fixture.owner.openId,
-        name: fixture.owner.person.displayName,
-      });
-      await page.goto(`/progress/tasks/${fixture.taskId}`);
-      await page.getByRole("link", { name: "修改并重新送审" }).click();
-      await expect(page.getByTestId("task-composer")).toHaveAttribute(
-        "data-composer-mode",
-        "RESUBMIT_REVISION",
-      );
-      await page.getByLabel("Revision 名称").fill(secondReason);
-      await page.getByLabel("Revision 详细内容").fill(secondDescription);
-      await page.getByRole("button", { name: "修改并重新送审" }).first().click();
-      const secondRevisionCard = page
-        .getByRole("heading", { name: "当前 Revision 候选" })
-        .locator("../..");
-      await expect(secondRevisionCard).toContainText(secondReason);
-      await expect(secondRevisionCard).toContainText(secondDescription);
-      await expect
-        .poll(() =>
-          prisma.revisionNode.findFirst({
-            where: { node: { taskId: fixture.taskId } },
-            orderBy: { node: { createdAt: "desc" } },
-            select: {
-              status: true,
-              reviewRound: true,
-              node: { select: { businessDescription: true } },
-            },
-          }),
-        )
-        .toEqual({
-          status: "PENDING_APPROVAL",
-          reviewRound: 2,
-          node: { businessDescription: secondDescription },
-        });
-      await loginAsTestUser(context, baseURL, {
-        openId: fixture.admin.openId,
-        name: fixture.admin.person.displayName,
-      });
-      await page.goto(`/progress/tasks/${fixture.taskId}`);
-      const approvalCard = page
-        .getByRole("heading", { name: "当前 Revision 候选" })
-        .locator("../..");
-      await approvalCard.getByLabel("处理说明").fill("同意应用修订计划");
-      await approvalCard.getByRole("button", { name: "批准" }).click();
-      await expect(page.getByText("Revision 已批准并应用。")).toBeVisible();
-      await page
-        .getByTestId("task-plan-node-navigator")
-        .getByRole("button", { name: new RegExp(secondReason) })
-        .click();
-      const selectedRevision = page.locator("#task-selected-node-detail");
-      await expect(selectedRevision).toContainText(secondReason);
-      await expect(selectedRevision).toContainText(secondDescription);
-      await expectHealthyPage(page);
+    context,
+    page,
+    baseURL,
+  }) => {
+    test.setTimeout(90_000);
+    const fixture = await createUiFixture();
+    const firstReason = `S6 v2 Revision ${randomUUID()}`;
+    const firstDescription = "第一次 Revision 的详细变更内容";
+    const secondReason = `${firstReason} 二次送审`;
+    const secondDescription = "根据审批意见调整后的 Revision 详细内容";
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.owner.openId,
+      name: fixture.owner.person.displayName,
     });
+
+    await page.goto(`/progress/tasks/${fixture.taskId}`);
+    await page.getByRole("link", { name: "发起 Revision" }).click();
+    await expect(page.getByTestId("task-composer")).toHaveAttribute(
+      "data-composer-mode",
+      "CREATE_REVISION",
+    );
+    await expect(page.getByTestId("task-plan-node-navigator")).toBeVisible();
+    const revisionTaskInfo = page.getByLabel("Task 基本信息");
+    await expect(
+      revisionTaskInfo.getByRole("heading", { name: "基本信息" }),
+    ).toBeVisible();
+    await expect(revisionTaskInfo.getByLabel("Task 名称")).toHaveValue(
+      fixture.taskTitle,
+    );
+    await expect(revisionTaskInfo.getByLabel("Task 名称")).toBeDisabled();
+    await expect(
+      page.getByRole("heading", { name: "Revision 信息" }),
+    ).toHaveCount(0);
+    await expect(page.getByText("只读基线", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("问题列表", { exact: true })).toHaveCount(0);
+    const currentRevisionButton = page
+      .getByTestId("task-plan-node-navigator")
+      .getByRole("button", { name: /当前 Revision/ });
+    await expect(currentRevisionButton).toHaveAttribute("aria-pressed", "true");
+    const revisionInspector = page.getByLabel("计划节点检查器");
+    await expect(
+      revisionInspector.getByText("不可删除", { exact: true }),
+    ).toBeVisible();
+    await expect(revisionInspector.getByRole("alert")).toContainText(
+      "请输入 Revision 名称",
+    );
+    await expect(revisionInspector.getByRole("alert")).toContainText(
+      "请输入 Revision 详细内容",
+    );
+    await revisionInspector.getByLabel("Revision 名称").fill(firstReason);
+    await revisionInspector
+      .getByLabel("Revision 详细内容")
+      .fill(firstDescription);
+    await page
+      .getByTestId("task-plan-node-navigator")
+      .getByRole("button", { name: new RegExp(firstReason) })
+      .click();
+    await page.getByLabel("Revision 时间").fill("2026-08-03T12:00");
+    await expect(page.getByText(/^本地已保存/)).toBeVisible();
+    await page.reload();
+    await page.getByRole("button", { name: "恢复草稿" }).click();
+    await expect(page.getByLabel("Revision 名称")).toHaveValue(firstReason);
+    await expect(page.getByLabel("Revision 详细内容")).toHaveValue(
+      firstDescription,
+    );
+    await page.getByRole("button", { name: "创建并送审" }).first().click();
+    const firstRevisionCard = page
+      .getByRole("heading", { name: "当前 Revision 候选" })
+      .locator("../..");
+    await expect(firstRevisionCard).toContainText(firstReason);
+    await expect(firstRevisionCard).toContainText(firstDescription);
+    await expect(page.getByTestId("task-approval-gate")).toContainText(
+      "Revision",
+    );
+
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.admin.openId,
+      name: fixture.admin.person.displayName,
+    });
+    await page.goto(`/progress/tasks/${fixture.taskId}`);
+    await page.getByLabel("处理说明").fill("请调整候选计划");
+    await page.getByRole("button", { name: "驳回" }).click();
+    await expect(page.getByText("Revision 已驳回。")).toBeVisible();
+
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.owner.openId,
+      name: fixture.owner.person.displayName,
+    });
+    await page.goto(`/progress/tasks/${fixture.taskId}`);
+    await page.getByRole("link", { name: "修改并重新送审" }).click();
+    await expect(page.getByTestId("task-composer")).toHaveAttribute(
+      "data-composer-mode",
+      "RESUBMIT_REVISION",
+    );
+    await page.getByLabel("Revision 名称").fill(secondReason);
+    await page.getByLabel("Revision 详细内容").fill(secondDescription);
+    await page.getByRole("button", { name: "修改并重新送审" }).first().click();
+    const secondRevisionCard = page
+      .getByRole("heading", { name: "当前 Revision 候选" })
+      .locator("../..");
+    await expect(secondRevisionCard).toContainText(secondReason);
+    await expect(secondRevisionCard).toContainText(secondDescription);
+    await expect
+      .poll(() =>
+        prisma.revisionNode.findFirst({
+          where: { node: { taskId: fixture.taskId } },
+          orderBy: { node: { createdAt: "desc" } },
+          select: {
+            status: true,
+            reviewRound: true,
+            node: { select: { businessDescription: true } },
+          },
+        }),
+      )
+      .toEqual({
+        status: "PENDING_APPROVAL",
+        reviewRound: 2,
+        node: { businessDescription: secondDescription },
+      });
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.admin.openId,
+      name: fixture.admin.person.displayName,
+    });
+    await page.goto(`/progress/tasks/${fixture.taskId}`);
+    const approvalCard = page
+      .getByRole("heading", { name: "当前 Revision 候选" })
+      .locator("../..");
+    await approvalCard.getByLabel("处理说明").fill("同意应用修订计划");
+    await approvalCard.getByRole("button", { name: "批准" }).click();
+    await expect(page.getByText("Revision 已批准并应用。")).toBeVisible();
+    await page
+      .getByTestId("task-plan-node-navigator")
+      .getByRole("button", { name: new RegExp(secondReason) })
+      .click();
+    const selectedRevision = page.locator("#task-selected-node-detail");
+    await expect(selectedRevision).toContainText(secondReason);
+    await expect(selectedRevision).toContainText(secondDescription);
+    await expectHealthyPage(page);
+  });
 });

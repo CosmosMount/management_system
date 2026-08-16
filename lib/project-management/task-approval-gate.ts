@@ -3,7 +3,7 @@ import { stateConflictError } from "@/lib/project-management/application/errors"
 
 type ApprovalQueryClient = Pick<
   Prisma.TransactionClient,
-  "milestoneReview" | "revisionNode"
+  "milestoneReview" | "revisionNode" | "terminationReview"
 >;
 
 export type TaskPendingApproval =
@@ -18,6 +18,12 @@ export type TaskPendingApproval =
       id: string;
       title: string;
       submittedAt: string;
+    }
+  | {
+      kind: "TERMINATION_REVIEW";
+      id: string;
+      title: string;
+      submittedAt: string;
     };
 
 export type TaskApprovalGate = {
@@ -29,7 +35,7 @@ export async function loadTaskApprovalGate(
   client: ApprovalQueryClient,
   taskId: string,
 ): Promise<TaskApprovalGate> {
-  const [milestoneReviews, revisions] = await Promise.all([
+  const [milestoneReviews, revisions, terminationReviews] = await Promise.all([
     client.milestoneReview.findMany({
       where: {
         result: "PENDING",
@@ -55,6 +61,19 @@ export async function loadTaskApprovalGate(
       orderBy: [{ node: { createdAt: "asc" } }, { id: "asc" }],
       take: 2,
     }),
+    client.terminationReview.findMany({
+      where: {
+        result: "PENDING",
+        terminationNode: { node: { taskId } },
+      },
+      select: {
+        id: true,
+        createdAt: true,
+        terminationNode: { select: { name: true } },
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: 2,
+    }),
   ]);
   const approvals: TaskPendingApproval[] = [
     ...milestoneReviews.map((review) => ({
@@ -70,6 +89,12 @@ export async function loadTaskApprovalGate(
       submittedAt: (
         revision.targetPlanVersion?.updatedAt ?? revision.node.createdAt
       ).toISOString(),
+    })),
+    ...terminationReviews.map((review) => ({
+      kind: "TERMINATION_REVIEW" as const,
+      id: review.id,
+      title: review.terminationNode.name,
+      submittedAt: review.createdAt.toISOString(),
     })),
   ].sort(
     (left, right) =>
@@ -96,6 +121,8 @@ export async function assertTaskApprovalAvailableTx(
   throw stateConflictError(
     gate.pendingApproval.kind === "MILESTONE_REVIEW"
       ? "当前 Task 已有 Milestone 验收待审批，请先处理后再试"
-      : "当前 Task 已有 Revision 待审批，请先处理后再试",
+      : gate.pendingApproval.kind === "REVISION"
+        ? "当前 Task 已有 Revision 待审批，请先处理后再试"
+        : "当前 Task 已有 Terminal 结束申请待审批，请先处理后再试",
   );
 }

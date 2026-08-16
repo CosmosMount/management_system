@@ -48,15 +48,16 @@
 ### 4. 写权限
 
 | 操作 | 非成员 | 参与人 | 负责人 | 全局管理员 |
-|---|---:|---:|---:|---:|
+| -------------------------------------------------- | -----: | -----: | -----: | ---------: |
 | 查看未删除 Task、计划、验收、审计和投入 | ✓ | ✓ | ✓ | ✓ |
 | 创建 Task | ✓ | ✓ | ✓ | ✓ |
 | 修改 Task 元数据、Tag、Draft 计划 | — | ✓ | ✓ | ✓ |
 | 创建自己的 Revision、修改并重新送审被驳回 Revision | — | ✓ | ✓ | ✓ |
 | 管理该 Task 的任意未生效 Revision | — | — | ✓ | ✓ |
 | 提交 Milestone 验收证据 | — | ✓ | ✓ | ✓ |
-| 管理成员、激活和结束 Task | — | — | ✓ | ✓ |
-| 决定 Milestone 或 Revision | — | — | — | ✓ |
+| 管理成员、激活 Task | — | — | ✓ | ✓ |
+| 提交 Terminal 结束申请                             |      — |      ✓ |      ✓ |          ✓ |
+| 决定 Milestone、Revision 或 Terminal 结束申请 | — | — | — | ✓ |
 | 修改自己的 Task 关联投入 | — | ✓ | ✓ | ✓ |
 | 修改该 Task 其他人的投入 | — | — | ✓ | ✓ |
 
@@ -64,10 +65,11 @@
 
 ### 5. 固定审批策略
 
-- Owner、Participant 和全局管理员可以提交 Milestone 验收证据、创建自己的 Revision，并修改后重新送审被驳回的 Revision。
+- Owner、Participant 和全局管理员可以提交 Milestone 验收证据、Terminal 结束申请、创建自己的 Revision，并修改后重新送审被驳回的 Revision。
 - Revision 创建即进入 `PENDING_APPROVAL`；不存在 Draft、单独 Submit 或 Owner 直接生效路径。
-- 只有两类全局管理员可以批准或驳回 Revision，以及通过、驳回或要求修订 Milestone。
-- 全局管理员可以处理自己提交的 Milestone 或自己创建的 Revision，但必须执行一次显式审批动作。
+- 只有两类全局管理员可以批准或驳回 Revision，以及通过、驳回或要求修订 Milestone 和 Terminal 结束申请。
+- 全局管理员可以处理自己提交的 Milestone、Terminal 结束申请或自己创建的 Revision，但必须执行一次显式审批动作。
+- Terminal 审批通过后才写入结束结果并将 Task 置为终态；驳回或要求修订保留历史并释放 Task 单一待审批门禁。
 - Revision 仅能在批准事务内生效；Current Plan 切换、旧版本历史化和受影响 Segment 待复核标记继续原子提交。
 - 删除 `Task.revisionApprovalMode`、`Task.allowSelfReview` 和 `RevisionApprovalMode`；旧配置先写入 `source=MIGRATION` 的审计记录。
 - 历史 `MilestoneReview`、`RevisionNode`、审批账号、时间、意见和状态全部保留；界面统一称为“审批人”。
@@ -81,11 +83,11 @@
 
 ### 7. 通知与迁移
 
-- Milestone 和 Revision 待审批收件人是所有活跃全局管理员，按账号去重，使用审批机器人用途。
-- Milestone 结果通知发送给提交人和所有负责人；Revision 结果通知发送给创建人和所有负责人。
+- Milestone、Revision 和 Terminal 结束申请的待审批收件人是所有活跃全局管理员，按账号去重，使用审批机器人用途。
+- Milestone 结果通知发送给提交人和所有负责人；Revision 结果通知发送给创建人和所有负责人；Terminal 驳回或要求修订通知发送给提交人和所有负责人，批准通知发送给全部有效 Task 成员。
 - Task 成员事件只面向有效负责人和参与人，使用通知机器人。
 - 已发送给旧 Reviewer 或组长的历史通知保留；尚未发送或正在重试的旧审批 outbox 被明确冻结。
-- 对部署时仍待处理的 Milestone/Revision，以版本化事件键为全局管理员补建站内通知和 outbox。修复脚本必须幂等、逐审批对象事务化并继续经过禁发、allowlist 和 outbox guard。
+- 对部署时仍待处理的 Milestone/Revision，以版本化事件键为全局管理员补建站内通知和 outbox；发布预检同时统计待处理的 Terminal 结束申请。修复脚本必须幂等、逐审批对象事务化并继续经过禁发、allowlist 和 outbox guard。
 - 数据迁移归一化旧成员、回填 Segment 参与人、撤销旧项目角色并保留审计，不产生成员变更通知或 outbox。
 
 ### 8. 客户端兼容

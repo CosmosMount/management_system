@@ -12,6 +12,8 @@ const PROJECT_MANAGEMENT_NOTIFICATION_KINDS = [
   "milestone_overdue",
   "milestone_review_submitted",
   "milestone_review_result",
+  "termination_review_submitted",
+  "termination_review_result",
   "revision_created",
   "revision_pending_review",
   "revision_result",
@@ -33,6 +35,7 @@ const PROJECT_MANAGEMENT_NOTIFICATION_KINDS = [
 const PROJECT_MANAGEMENT_APPROVAL_REQUEST_KINDS = [
   "milestone_review_submitted",
   "revision_pending_review",
+  "termination_review_submitted",
   "project_establishment_submitted",
 ] as const satisfies readonly (typeof PROJECT_MANAGEMENT_NOTIFICATION_KINDS)[number][];
 

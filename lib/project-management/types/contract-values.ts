@@ -52,6 +52,12 @@ export const milestoneReviewDecisionValues = [
   "REVISION_REQUIRED",
 ] as const;
 
+export const terminationReviewDecisionValues = [
+  "APPROVED",
+  "REJECTED",
+  "REVISION_REQUIRED",
+] as const;
+
 export const terminationOutcomeValues = [
   "SUCCESS",
   "FAILED",

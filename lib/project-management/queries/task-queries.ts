@@ -208,7 +208,8 @@ export type TaskWorkspace = {
     canCreateRevision: boolean;
     canSubmitMilestoneReview: boolean;
     canReviewMilestone: boolean;
-    canTerminate: boolean;
+    canSubmitTerminationReview: boolean;
+    canReviewTermination: boolean;
     canViewHistory: boolean;
   };
 };
@@ -466,7 +467,12 @@ export async function getTaskWorkspace({
         resource,
       ),
       canReviewMilestone: allowed(actor, "milestone.review", resource),
-      canTerminate: allowed(actor, "task.terminate", resource),
+      canSubmitTerminationReview: allowed(
+        actor,
+        "termination.submit_review",
+        resource,
+      ),
+      canReviewTermination: allowed(actor, "termination.review", resource),
       canViewHistory: allowed(actor, "plan.view_history", resource),
     },
   };

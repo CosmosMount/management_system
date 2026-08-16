@@ -150,6 +150,17 @@ test.describe("project management S8 dashboard and notifications", () => {
 
   test("Task approval gate hides Terminal inbox work and disables Canvas actions until release", async () => {
     const owner = await createActor("S8 Task approval gate");
+    const approvalAdmin = await createActor("S8 Terminal capability admin");
+    await prisma.systemRoleAssignment.create({
+      data: {
+        accountId: approvalAdmin.accountId,
+        role: "PROJECT_ADMINISTRATOR",
+      },
+    });
+    const approvalAdminActor: ProjectManagementActor = {
+      ...approvalAdmin,
+      systemRoles: [{ role: "PROJECT_ADMINISTRATOR", team: "", techGroup: "" }],
+    };
     const task = await createActiveTaskWithMilestone(
       owner,
       new Date("2026-09-10T02:00:00.000Z"),
@@ -185,9 +196,14 @@ test.describe("project management S8 dashboard and notifications", () => {
       includeActual: true,
       includeBusyBlocks: false,
     };
-    const loadCapabilities = async () => {
-      const canvas = await getTimeCanvasData({ actor: owner, input: canvasInput });
-      const taskAnchor = canvas.anchors.find((anchor) => anchor.id === task.taskId);
+    const loadCapabilities = async (canvasActor = owner) => {
+      const canvas = await getTimeCanvasData({
+        actor: canvasActor,
+        input: canvasInput,
+      });
+      const taskAnchor = canvas.anchors.find(
+        (anchor) => anchor.id === task.taskId,
+      );
       const milestoneAnchor = taskAnchor?.nodes.find(
         (node) => node.id === task.nodeId,
       );
@@ -197,8 +213,9 @@ test.describe("project management S8 dashboard and notifications", () => {
       return {
         canCreateRevision: taskAnchor?.capabilities.canCreateRevision,
         canSubmitReview: milestoneAnchor?.capabilities.canSubmitReview,
-        canConfirmTermination:
-          terminationAnchor?.capabilities.canConfirmTermination,
+        canSubmitTerminationReview:
+          terminationAnchor?.capabilities.canSubmitTerminationReview,
+        canReviewTermination: terminationAnchor?.capabilities.canReview,
       };
     };
     const terminalInboxId = `termination:${terminationId}`;
@@ -206,7 +223,8 @@ test.describe("project management S8 dashboard and notifications", () => {
     await expect(loadCapabilities()).resolves.toEqual({
       canCreateRevision: true,
       canSubmitReview: true,
-      canConfirmTermination: true,
+      canSubmitTerminationReview: true,
+      canReviewTermination: false,
     });
     expect(
       (await getActionInbox({ actor: owner, limit: 100 })).items.find(
@@ -230,7 +248,8 @@ test.describe("project management S8 dashboard and notifications", () => {
     await expect(loadCapabilities()).resolves.toEqual({
       canCreateRevision: false,
       canSubmitReview: false,
-      canConfirmTermination: false,
+      canSubmitTerminationReview: false,
+      canReviewTermination: false,
     });
     expect(
       (await getActionInbox({ actor: owner, limit: 100 })).items.some(
@@ -248,13 +267,57 @@ test.describe("project management S8 dashboard and notifications", () => {
     await expect(loadCapabilities()).resolves.toEqual({
       canCreateRevision: true,
       canSubmitReview: true,
-      canConfirmTermination: true,
+      canSubmitTerminationReview: true,
+      canReviewTermination: false,
     });
     expect(
       (await getActionInbox({ actor: owner, limit: 100 })).items.some(
         (item) => item.id === terminalInboxId,
       ),
     ).toBe(true);
+
+    const terminationReview = await prisma.terminationReview.create({
+      data: {
+        terminationNodeId: terminationId,
+        outcome: "CANCELLED",
+        reason: "验证 Canvas Terminal 审批 capability",
+        summary: "管理员应看到审批能力",
+        submittedByAccountId: owner.accountId,
+        idempotencyKey: `s8-termination-capability-${randomUUID()}`,
+      },
+      select: { id: true },
+    });
+    await expect(loadCapabilities()).resolves.toEqual({
+      canCreateRevision: false,
+      canSubmitReview: false,
+      canSubmitTerminationReview: false,
+      canReviewTermination: false,
+    });
+    await expect(loadCapabilities(approvalAdminActor)).resolves.toEqual({
+      canCreateRevision: false,
+      canSubmitReview: false,
+      canSubmitTerminationReview: false,
+      canReviewTermination: true,
+    });
+
+    await prisma.terminationReview.update({
+      where: { id: terminationReview.id },
+      data: {
+        result: "REJECTED",
+        reviewedAt: new Date(),
+        reviewerAccountId: approvalAdmin.accountId,
+        comment: "结束 capability 验证",
+      },
+    });
+    await prisma.task.update({
+      where: { id: task.taskId },
+      data: { status: "DRAFT" },
+    });
+    expect(
+      (await getActionInbox({ actor: owner, limit: 100 })).items.some(
+        (item) => item.id === terminalInboxId,
+      ),
+    ).toBe(false);
   });
 
   test("dashboard metrics are independent from display limits", async () => {

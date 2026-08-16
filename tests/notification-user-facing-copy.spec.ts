@@ -175,6 +175,12 @@ test.describe("用户可见通知文案", () => {
 
   test("通知对象和上下文只展示中文白名单", () => {
     expect(projectManagementEntityLabel("MilestoneReview")).toBe("里程碑验收");
+    expect(projectManagementEntityLabel("TerminationReview")).toBe(
+      "任务结束审批",
+    );
+    expect(projectManagementEntityLabel("TerminationNode")).toBe(
+      "任务结束结果",
+    );
     expect(projectManagementEntityLabel("UnexpectedInternalEntity")).toBe(
       "相关事项",
     );
@@ -185,6 +191,9 @@ test.describe("用户可见通知文案", () => {
       changeKind: "ROLES_CHANGED",
       beforeRoles: ["OWNER"],
       afterRoles: ["PARTICIPANT"],
+      terminalName: "交付终点",
+      requestedOutcome: "FAILED",
+      decision: "REVISION_REQUIRED",
       recipientResolution: "PERSON_INACTIVE",
       recipientPolicy: "GLOBAL_ADMINISTRATORS_V2",
       internalDebugName: "DO_NOT_RENDER",
@@ -195,10 +204,16 @@ test.describe("用户可见通知文案", () => {
       { label: "成员变更", value: "调整角色", maxLength: 120 },
       { label: "变更前角色", value: "负责人", maxLength: 120 },
       { label: "变更后角色", value: "参与人", maxLength: 120 },
+      { label: "结束节点", value: "交付终点", maxLength: 120 },
     ]);
     expect(JSON.stringify(lines)).not.toContain("PERSON_INACTIVE");
     expect(JSON.stringify(lines)).not.toContain("GLOBAL_ADMINISTRATORS_V2");
     expect(JSON.stringify(lines)).not.toContain("internalDebugName");
+    expect(
+      projectManagementContextLines({ decision: "REVISION_REQUIRED" }),
+    ).toEqual([
+      { label: "审批结果", value: "要求修订", maxLength: 120 },
+    ]);
   });
 
   test("采购通知标题会明确说明当前处理环节", () => {

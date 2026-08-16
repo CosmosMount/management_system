@@ -22,6 +22,7 @@ async function main() {
     feishuReachableGlobalAdministratorRows,
     pendingMilestoneRows,
     pendingRevisionRows,
+    pendingTerminationRows,
     legacyInAppRows,
     retryableLegacyOutboxRows,
   ] = await Promise.all([
@@ -140,6 +141,22 @@ async function main() {
       WHERE status = 'PENDING_APPROVAL'
     `,
     prisma.$queryRaw<CountRow[]>`
+      SELECT CASE
+        WHEN to_regclass('"TerminationReview"') IS NULL THEN 0::bigint
+        ELSE (
+          (xpath(
+            '/table/row/count/text()',
+            query_to_xml(
+              'SELECT count(*) AS count FROM "TerminationReview" WHERE result = ''PENDING''',
+              false,
+              true,
+              ''
+            )
+          ))[1]::text
+        )::bigint
+      END AS count
+    `,
+    prisma.$queryRaw<CountRow[]>`
       SELECT count(*)::bigint AS count
       FROM "InAppNotification"
       WHERE "eventKey" LIKE 'pm:milestone:review_submitted:%'
@@ -160,7 +177,8 @@ async function main() {
   const requiresApprovalAdministrator =
     taskCount > 0 ||
     numberValue(pendingMilestoneRows[0]?.count) > 0 ||
-    numberValue(pendingRevisionRows[0]?.count) > 0;
+    numberValue(pendingRevisionRows[0]?.count) > 0 ||
+    numberValue(pendingTerminationRows[0]?.count) > 0;
 
   const report = {
     zeroOwnerTasks: numberValue(zeroOwnerRows[0]?.count),
@@ -183,6 +201,7 @@ async function main() {
     ),
     pendingMilestoneReviews: numberValue(pendingMilestoneRows[0]?.count),
     pendingRevisions: numberValue(pendingRevisionRows[0]?.count),
+    pendingTerminationReviews: numberValue(pendingTerminationRows[0]?.count),
     legacyApprovalInAppNotifications: numberValue(legacyInAppRows[0]?.count),
     retryableLegacyApprovalOutboxes: numberValue(
       retryableLegacyOutboxRows[0]?.count,

@@ -19,7 +19,12 @@ import {
   requireMilestoneRevision,
   submitMilestoneForReview,
 } from "@/app/actions/project-management/milestones";
-import { confirmTermination } from "@/app/actions/project-management/terminations";
+import {
+  approveTerminationReview,
+  rejectTerminationReview,
+  requireTerminationRevision,
+  submitTerminationForReview,
+} from "@/app/actions/project-management/terminations";
 import {
   TaskPlanNodeNavigator,
   type TaskPlanNavigatorNode,
@@ -372,7 +377,8 @@ export function TaskWorkbench({
                 </Link>
               )
             )}
-            {task.status === "ACTIVE" && workspace.permissions.canTerminate && termination && (
+            {task.status === "ACTIVE" &&
+              workspace.permissions.canSubmitTerminationReview && termination && (
               <Button
                 type="button"
                 variant="destructive"
@@ -380,7 +386,7 @@ export function TaskWorkbench({
                 title={approvalBlocked ? "当前 Task 已有待审批事项" : undefined}
                 onClick={selectTerminal}
               >
-                结束 Task
+                申请结束 Task
               </Button>
             )}
             <Button
@@ -409,7 +415,9 @@ export function TaskWorkbench({
             ? "当前 Task 存在多条待审批记录，相关提交与结束操作已暂停，请联系管理员处理。"
             : approvalGate.pendingApproval?.kind === "MILESTONE_REVIEW"
               ? `Milestone「${approvalGate.pendingApproval.title}」正在等待审批。`
-              : `Revision「${approvalGate.pendingApproval?.title || "未命名修订"}」正在等待审批。`}
+              : approvalGate.pendingApproval?.kind === "REVISION"
+                ? `Revision「${approvalGate.pendingApproval.title || "未命名修订"}」正在等待审批。`
+                : `Terminal「${approvalGate.pendingApproval?.title || "结束节点"}」的结束申请正在等待审批。`}
         </section>
       )}
 
@@ -511,6 +519,30 @@ export function TaskWorkbench({
                   pendingApprovalConflict: false,
                 })
               }
+              onTerminationReviewResolved={(reviewId) => {
+                const pending = approvalGate.pendingApproval;
+                if (
+                  !approvalGate.pendingApprovalConflict &&
+                  pending?.kind === "TERMINATION_REVIEW" &&
+                  pending.id === reviewId
+                ) {
+                  setApprovalGate({
+                    pendingApproval: null,
+                    pendingApprovalConflict: false,
+                  });
+                }
+              }}
+              onTerminationSubmitted={(reviewId, title) =>
+                setApprovalGate({
+                  pendingApproval: {
+                    kind: "TERMINATION_REVIEW",
+                    id: reviewId,
+                    title,
+                    submittedAt: new Date().toISOString(),
+                  },
+                  pendingApprovalConflict: false,
+                })
+              }
             />
           </section>
 
@@ -571,6 +603,8 @@ function SelectedNodeDetail({
   approvalBlocked,
   onApprovalResolved,
   onMilestoneSubmitted,
+  onTerminationReviewResolved,
+  onTerminationSubmitted,
 }: {
   workspace: TaskWorkspace;
   lifecycle: TaskLifecycleViews;
@@ -581,6 +615,8 @@ function SelectedNodeDetail({
   approvalBlocked: boolean;
   onApprovalResolved: (reviewId: string) => void;
   onMilestoneSubmitted: (reviewId: string, title: string) => void;
+  onTerminationReviewResolved: (reviewId: string) => void;
+  onTerminationSubmitted: (reviewId: string, title: string) => void;
 }) {
   if (selectedNodeId === TASK_DETAIL_START_ID || !selectedNode) {
     return (
@@ -633,13 +669,20 @@ function SelectedNodeDetail({
     );
   }
   if (selectedNode.termination) {
+    const latestTerminationReview = lifecycle.terminationReviews.find(
+      (review) => review.taskNodeId === selectedNode.nodeId,
+    );
     return (
       <TerminationDetail
+        key={`${selectedNode.nodeId}:${latestTerminationReview?.id ?? "none"}:${latestTerminationReview?.result ?? "none"}`}
         workspace={workspace}
+        lifecycle={lifecycle}
         node={selectedNode}
         busy={busy}
         runAction={runAction}
         approvalBlocked={approvalBlocked}
+        onReviewResolved={onTerminationReviewResolved}
+        onSubmitted={onTerminationSubmitted}
       />
     );
   }
@@ -824,70 +867,252 @@ function OpenRevisionPanel({
 
 function TerminationDetail({
   workspace,
+  lifecycle,
   node,
   busy,
   runAction,
   approvalBlocked,
+  onReviewResolved,
+  onSubmitted,
 }: {
   workspace: TaskWorkspace;
+  lifecycle: TaskLifecycleViews;
   node: PlanVersionSummary["nodes"][number];
   busy: boolean;
   runAction: RunAction;
   approvalBlocked: boolean;
+  onReviewResolved: (reviewId: string) => void;
+  onSubmitted: (reviewId: string, title: string) => void;
 }) {
   const termination = node.termination!;
-  const [outcome, setOutcome] = useState<"SUCCESS" | "FAILED" | "CANCELLED" | "TIMEOUT">("SUCCESS");
-  const [reason, setReason] = useState("");
-  const [summary, setSummary] = useState("");
-  const canTerminate =
-    workspace.task.status === "ACTIVE" && workspace.permissions.canTerminate;
+  const latestReview = lifecycle.terminationReviews.find(
+    (review) => review.taskNodeId === node.nodeId,
+  );
+  const pendingReview =
+    latestReview?.result === "PENDING" ? latestReview : null;
+  const returnedReview =
+    !termination.outcome &&
+    (latestReview?.result === "REJECTED" ||
+      latestReview?.result === "REVISION_REQUIRED")
+      ? latestReview
+      : null;
+  const [outcome, setOutcome] = useState<
+    "SUCCESS" | "FAILED" | "CANCELLED" | "TIMEOUT"
+  >(returnedReview?.outcome ?? "SUCCESS");
+  const [reason, setReason] = useState(returnedReview?.reason ?? "");
+  const [summary, setSummary] = useState(returnedReview?.summary ?? "");
+  const [comment, setComment] = useState("");
+  const reviewKey = useRef<string | null>(null);
+  const canSubmit =
+    workspace.task.status === "ACTIVE" &&
+    workspace.permissions.canSubmitTerminationReview &&
+    !pendingReview;
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <h2 className="text-lg font-semibold">{termination.name}</h2>
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <h2 className="min-w-0 break-words text-lg font-semibold">
+          {termination.name}
+        </h2>
         <Badge>{taskNodeStatusLabels[node.status]}</Badge>
       </div>
       <dl className="grid gap-3 text-sm sm:grid-cols-2">
-        <OverviewItem label="计划结束" value={formatDateTime(termination.plannedAt)} />
-        <OverviewItem label="结束条件" value={termination.plannedOutcomeCriteria} />
-        <OverviewItem label="业务说明" value={node.businessDescription || "无"} />
-        <OverviewItem label="结束结果" value={termination.outcome ? terminationOutcomeLabel(termination.outcome) : "未确认"} />
+        <OverviewItem
+          label="计划结束"
+          value={formatDateTime(termination.plannedAt)}
+        />
+        <OverviewItem
+          label="结束条件"
+          value={termination.plannedOutcomeCriteria}
+        />
+        <OverviewItem
+          label="业务说明"
+          value={node.businessDescription || "无"}
+        />
+        <OverviewItem
+          label="结束结果"
+          value={
+            termination.outcome
+              ? terminationOutcomeLabel(termination.outcome)
+              : "未确认"
+          }
+        />
       </dl>
-      {canTerminate && (
+      {returnedReview && (
+        <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+          <h3 className="font-medium">
+            上一轮结束申请
+            {returnedReview.result === "REJECTED" ? "已驳回" : "需要修订"}
+          </h3>
+          <p className="whitespace-pre-wrap break-words">
+            审批意见：{returnedReview.comment}
+          </p>
+          <p className="text-xs">
+            已回填上一轮结束结果、原因和总结，可修改后重新提交。
+          </p>
+        </div>
+      )}
+      {canSubmit && (
         <div className="space-y-3 border-t border-border pt-4">
-          <h3 className="font-medium">结束 Task</h3>
-          <p className="text-sm text-muted-foreground">成功完成要求全部前置 Milestone 已完成；其他结果必须填写原因。</p>
+          <h3 className="font-medium">提交 Task 结束申请</h3>
+          <p className="text-sm text-muted-foreground">
+            成功完成要求全部前置 Milestone
+            已完成；其他结果必须填写原因。提交后由全局管理员审批。
+          </p>
           <Field label="结束结果">
-            <select className={selectClass} value={outcome} disabled={approvalBlocked} onChange={(event) => setOutcome(event.target.value as typeof outcome)}>
+            <select
+              className={selectClass}
+              value={outcome}
+              disabled={approvalBlocked}
+              onChange={(event) =>
+                setOutcome(event.target.value as typeof outcome)
+              }
+            >
               <option value="SUCCESS">成功完成</option>
               <option value="FAILED">失败结束</option>
               <option value="CANCELLED">提前取消</option>
               <option value="TIMEOUT">超时结束</option>
             </select>
           </Field>
-          <Field label="原因"><Textarea value={reason} disabled={approvalBlocked} onChange={(event) => setReason(event.target.value)} /></Field>
-          <Field label="总结"><Textarea value={summary} disabled={approvalBlocked} onChange={(event) => setSummary(event.target.value)} /></Field>
+          <Field label="原因">
+            <Textarea
+              value={reason}
+              maxLength={2000}
+              disabled={approvalBlocked}
+              onChange={(event) => setReason(event.target.value)}
+            />
+          </Field>
+          <Field label="总结">
+            <Textarea
+              value={summary}
+              maxLength={4000}
+              disabled={approvalBlocked}
+              onChange={(event) => setSummary(event.target.value)}
+            />
+          </Field>
           <Button
             type="button"
             variant="destructive"
             disabled={busy || approvalBlocked}
             onClick={() => {
-              if (!window.confirm(`确认以“${terminationOutcomeLabel(outcome)}”结束 Task？`)) return;
+              reviewKey.current ??= `termination-workbench:${globalThis.crypto.randomUUID()}`;
               void runAction(
-                () => confirmTermination({
-                  taskId: workspace.task.id,
-                  terminationNodeId: node.nodeId,
-                  outcome,
-                  reason,
-                  summary,
-                  expectedLockVersion: workspace.task.lockVersion,
-                }),
-                "Task 已完成 Termination 确认。",
+                () =>
+                  submitTerminationForReview({
+                    terminationNodeId: node.nodeId,
+                    outcome,
+                    reason,
+                    summary,
+                    idempotencyKey: reviewKey.current,
+                  }),
+                "Task 结束申请已提交审批。",
+                (data) => {
+                  reviewKey.current = null;
+                  const reviewId = recordString(data, "reviewId");
+                  if (reviewId) onSubmitted(reviewId, termination.name);
+                },
+                (error) => {
+                  if (error.code === "STATE_CONFLICT") {
+                    reviewKey.current = null;
+                  }
+                },
               );
             }}
           >
-            确认结束 Task
+            提交结束审批
           </Button>
+        </div>
+      )}
+      {pendingReview && (
+        <div className="space-y-3 border-t border-border pt-4">
+          <h3 className="font-medium">当前待审批结束申请</h3>
+          <p className="whitespace-pre-wrap break-words text-sm text-muted-foreground">
+            {pendingReview.submittedBy} 提交于{" "}
+            {formatDateTime(pendingReview.createdAt)}
+          </p>
+          <dl className="grid gap-3 text-sm sm:grid-cols-2">
+            <OverviewItem
+              label="拟定结束结果"
+              value={terminationOutcomeLabel(pendingReview.outcome)}
+            />
+            <OverviewItem label="原因" value={pendingReview.reason || "无"} />
+            <OverviewItem label="总结" value={pendingReview.summary || "无"} />
+          </dl>
+          {pendingReview.capabilities.canReview && (
+            <>
+              <Field label="审批说明">
+                <Textarea
+                  value={comment}
+                  maxLength={2000}
+                  onChange={(event) => setComment(event.target.value)}
+                />
+              </Field>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  disabled={busy}
+                  onClick={() =>
+                    void runAction(
+                      () =>
+                        approveTerminationReview({
+                          reviewId: pendingReview.id,
+                          comment,
+                        }),
+                      "Task 结束申请已通过。",
+                      () => onReviewResolved(pendingReview.id),
+                    )
+                  }
+                >
+                  通过
+                </Button>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  disabled={busy || comment.trim().length === 0}
+                  title={
+                    comment.trim().length === 0
+                      ? "驳回必须填写审批说明"
+                      : undefined
+                  }
+                  onClick={() =>
+                    void runAction(
+                      () =>
+                        rejectTerminationReview({
+                          reviewId: pendingReview.id,
+                          comment,
+                        }),
+                      "Task 结束申请已驳回。",
+                      () => onReviewResolved(pendingReview.id),
+                    )
+                  }
+                >
+                  驳回
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={busy || comment.trim().length === 0}
+                  title={
+                    comment.trim().length === 0
+                      ? "要求修订必须填写审批说明"
+                      : undefined
+                  }
+                  onClick={() =>
+                    void runAction(
+                      () =>
+                        requireTerminationRevision({
+                          reviewId: pendingReview.id,
+                          comment,
+                        }),
+                      "已要求修订 Task 结束申请。",
+                      () => onReviewResolved(pendingReview.id),
+                    )
+                  }
+                >
+                  要求修订
+                </Button>
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>

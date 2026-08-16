@@ -236,8 +236,8 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 |------|------|------|
 | 统一超级管理员 | 全局 | 报销和项目最高权限；访问 `/admin/accounts` |
 | 项目管理员 | 项目全局 | 与统一超级管理员相同的项目业务权限、审批权和项目审计；不能管理账号 |
-| Task 负责人 | 单个 Task | 管理成员、Task 状态、计划、Revision、验收证据和该 Task 全部投入；可有多名 |
-| Task 参与人 | 单个 Task | 编辑 Task 与计划、提交 Revision/验收证据，并管理自己的关联投入 |
+| Task 负责人 | 单个 Task | 管理成员、Task 状态、计划、Revision、验收证据、结束申请和该 Task 全部投入；可有多名 |
+| Task 参与人 | 单个 Task | 编辑 Task 与计划、提交 Revision/验收证据/结束申请，并管理自己的关联投入 |
 | TEAM_ADMIN | 指定车组 | 管理审核阶段，车组组长通过 |
 | TECH_GROUP_ADMIN | 指定技术组 | 管理审核阶段，技术组组长通过 |
 | TEACHER | 全局 | 「老师审核」阶段通过 |
@@ -247,9 +247,9 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 
 Revision 是用户选择时间的计划变化标记，不形成阶段，也不能关联 Planned/Actual Segment。创建 Revision 时固定沿用 Current Plan 的 Start，自动保留全部已完成 Milestone 和已生效 Revision，并用调用方提供的后续 Milestone 与 Terminal 重建未完成部分。创建即进入 `PENDING_APPROVAL`，不再存在草稿或单独提交动作；驳回后可修改并直接重新送审，取消后释放该 Task 的唯一候选名额，批准后才进入 Current Plan 和正式时间轴。
 
-同一 Task 同时最多只能有一条待审批：未撤出的 `PENDING` Milestone Review 与 `PENDING_APPROVAL` Revision 互斥。Milestone 提交后，在审批通过、驳回、要求修订或撤出前不能用新的请求键重复提交；原 Review 尚未撤出时，相同请求键按原结果幂等重放。撤出后的旧请求键会明确返回冲突，重新提交必须使用新请求键。任一待审批存在时，发起/重新送审 Revision 和确认 Terminal 都会被阻止；被驳回或取消的 Revision 不占用名额。Terminal 仍是直接结束确认，不新增审批记录。
+同一 Task 同时最多只能有一条待审批：未撤出的 `PENDING` Milestone Review、`PENDING_APPROVAL` Revision 与 `PENDING` Termination Review 互斥。Milestone 或 Terminal 提交后，在审批通过、驳回、要求修订或撤出前不能用新的请求键重复提交；相同请求键按原结果幂等重放，重新提交必须使用新请求键。任一待审批存在时，新的 Milestone、Revision 或 Terminal 申请都会被阻止；审批离开待处理状态后释放名额。Terminal 由 OWNER、PARTICIPANT 或全局管理员提交结束结果、原因和总结，只有统一超级管理员或项目管理员批准后才真正结束 Task。
 
-存在 Task 数据时，系统要求至少保留一名具有 default tenant 有效飞书 openId 的全局管理员；账号后台会拒绝撤销最后一名可用审批人的角色，数据库永久门禁也会拦截绕过应用层的账号删除、角色和身份写入。空库创建首个 Task 时同样检查该不变量。提交 Milestone 验收或创建/重新送审 Revision 时会在同一事务中再次校验，失败时整事务回滚，不会留下无人处理或无法通知的待审批记录。
+存在 Task 数据时，系统要求至少保留一名具有 default tenant 有效飞书 openId 的全局管理员；账号后台会拒绝撤销最后一名可用审批人的角色，数据库永久门禁也会拦截绕过应用层的账号删除、角色和身份写入。空库创建首个 Task 时同样检查该不变量。提交 Milestone 验收、Terminal 结束申请或创建/重新送审 Revision 时会在同一事务中再次校验，失败时整事务回滚，不会留下无人处理或无法通知的待审批记录。
 
 项目 `GROUP_LEADER` 已退役；旧角色行会在部署时归档为只读领域审计并从运行时表删除，账号记录仍可查看。活跃旧系统角色或旧 Task 成员角色会阻断迁移，必须先显式撤销或结束，不能静默映射权限。采购报销的 `TEAM_ADMIN`、`TECH_GROUP_ADMIN` 等独立角色、组长称谓和审批流程不受影响。Work Segment 不再保存独立工作职责、Task Node 或完成比例；投入只可关联 Task，历史非空完成比例同样归档到领域审计。
 
@@ -518,7 +518,7 @@ pm2 start npm --name procurement-cron -- run cron
 - 所有已登录并成功解析到统一 `Account/Person` 的账号可查看全部未删除 Task、计划/审批/审计历史和全员完整 Segment，并可创建 Task；可见性扩大不扩大写权限。
 - Task 成员只分“负责人”和“参与人”。支持多负责人且至少一名，同一 Person 只能有一个有效角色；创建者自动成为负责人。
 - 参与人可编辑 Task/计划、提交验收并创建自己的 Revision，并管理自己的关联投入；负责人另可管理成员、Task 状态、任意未生效 Revision 和该 Task 全部投入；全局管理员拥有全部项目写权限。
-- Revision 是可选择时间的非分段标记，创建即待审批，没有 Draft/Submit；驳回后修改即重新送审。每个 Task 只允许一条 Milestone/Revision 待审批，待审批期间不能再次提交 Milestone、发起或重新送审 Revision，也不能确认 Terminal。Milestone 与 Revision 只由统一超级管理员或项目管理员决定，允许管理员自审；界面不再提供流程策略、Reviewer 或自审开关。
+- Revision 是可选择时间的非分段标记，创建即待审批，没有 Draft/Submit；驳回后修改即重新送审。每个 Task 只允许一条 Milestone/Revision/Termination 待审批，待审批期间不能再次提交其他审批申请。Milestone 与 Terminal 均允许 OWNER、PARTICIPANT 或全局管理员提交，三类申请只由统一超级管理员或项目管理员决定，并允许管理员自审；界面不再提供流程策略、Reviewer 或自审开关。
 - `/progress` 是“我的工作”统一驾驶舱，提供指标、完整个人时间画布、行动待办、到期确认队列、全部参与 Task 及对应 Plan 轨道和折叠通知。投入待办统一打开同一详情 Dialog 处理。
 - `/progress/tasks/new` 提供新建 Composer；尚未激活的 Task 通过工作台右上角“编辑 Task”进入 `/progress/tasks/[id]/edit`，使用同一 Composer 一次保存基本信息、关联 Task、成员和完整计划。Participant 可编辑内容与计划，但成员区只读；保存成功后返回工作台。
 - `/progress/tasks` 与 `/progress/tasks/[id]` 提供 Task 列表和 Task 工作台。人员投入时间线位于工作台 Tab 上方，并在“计划与资源”“概览”“修订与历史”“验收”“审计”之间切换时保持显示和交互状态。DRAFT 工作台的“概览”和“计划与资源”均为只读展示；Task Owner 或全局管理员可软删除未激活草稿，已激活及终态 Task 不提供该入口。ACTIVE 的既有元数据和成员可在同一事务编辑。发起 Revision 进入 `/progress/tasks/[id]/revisions/new`，被驳回候选通过 `/progress/tasks/[id]/revisions/[revisionId]/edit` 修改；两者与 Task 创建/草稿编辑共用 Composer 的 TimeCanvas、节点表、Inspector、撤销/重做、校验和本地恢复，保存后直接返回“修订与历史”。工作台 Revision Tab 只保留历史、审批、取消和 Diff，不再内联编辑候选计划。
@@ -536,7 +536,7 @@ pm2 start npm --name procurement-cron -- run cron
 - 人员与 Task 选择统一使用异步模糊选择器，支持 NFKC、拼音首字母、顺序匹配和已选项安全恢复；搜索建议继续按最多 50 条分页，资源计划中的 Task/人员已选集合不设 50 项上限。Task 列表与账号后台使用相同的有界排序规则。
 - 当前项目管理行为以 [`docs/TECH.md`](docs/TECH.md)、[`docs/TESTING.md`](docs/TESTING.md)、ADR、Prisma schema 和实现为准；历史实施计划及截图已归档移除，避免与现行规范冲突。
 - `npm run pm:release-rehearsal` 仅用于本机隔离 `_test`/`_snapshot` 数据库；必须显式设置 `PM_RELEASE_REHEARSAL_CONFIRM=LOCAL_ISOLATED_REHEARSAL` 和 `NOTIFICATION_DELIVERY_DISABLED=true`。它不会执行生产维护窗口，生产发布仍需另行授权与 BO/TL/QA/DBA 签字。
-- 项目管理飞书通知只允许写入 `channel=project-management` 的 notification outbox；adapter 已构造普通交互卡并经统一私信传输层投递。Project 立项、验收和 Revision 待审批事件使用审批机器人用途，其他项目管理事件使用通知机器人。
+- 项目管理飞书通知只允许写入 `channel=project-management` 的 notification outbox；adapter 已构造普通交互卡并经统一私信传输层投递。Project 立项、Milestone 验收、Revision 和 Terminal 待审批事件使用审批机器人用途，其他项目管理事件使用通知机器人。
 - 资源冲突和投入比例能力已完整下线：`/progress/resources/conflicts` 返回 404，Segment 允许时间重叠，系统不再检测、提示、阻止或通知冲突，也没有替代容量模型。
 
 现行成员、可见性和审批决策见 [Task 全员可见、双成员角色与全局管理员审批 ADR](docs/adr/2026-08-03-task-global-visibility-participants-admin-approval.md)，Revision 节点与送审状态机见 [Revision 时间标记 ADR](docs/adr/2026-08-04-revision-time-marker.md)。已有数据的受控发布顺序为：

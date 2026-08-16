@@ -11,13 +11,15 @@ import {
   type AuthorizationTaskResource,
 } from "@/lib/project-management/authorization";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
+import { terminationOutcomeLabel } from "@/lib/project-management/notifications/user-facing-copy";
 
 export type ActionInboxKind =
   | "SEGMENT_CONFIRMATION"
   | "MILESTONE_REVIEW"
   | "REVISION_REVIEW"
   | "PROJECT_ESTABLISHMENT"
-  | "TERMINATION";
+  | "TERMINATION"
+  | "TERMINATION_REVIEW";
 
 export type ActionInboxItem = {
   id: string;
@@ -62,7 +64,7 @@ export async function getActionInbox({
   const reviewableTask = isSystemAdministrator(actor)
     ? { deletedAt: null }
     : { id: { in: [] } };
-  const terminableTask = taskActionableWhere(actor, ["OWNER"]);
+  const terminableTask = taskActionableWhere(actor, ["OWNER", "PARTICIPANT"]);
   const confirmationSegmentWhere: Prisma.WorkSegmentWhereInput = {
     AND: [
       segmentReadableWhere(actor),
@@ -107,6 +109,17 @@ export async function getActionInbox({
     status: "PENDING_APPROVAL",
     node: { task: { AND: [visibleTask, reviewableTask] } },
   };
+  const terminationReviewWhere: Prisma.TerminationReviewWhereInput = {
+    result: "PENDING",
+    terminationNode: {
+      node: {
+        task: { AND: [visibleTask, reviewableTask] },
+        planVersionEntries: {
+          some: { planVersion: { currentForTask: { isNot: null } } },
+        },
+      },
+    },
+  };
   const terminationWhere: Prisma.TerminationNodeWhereInput = {
     outcome: null,
     node: {
@@ -115,6 +128,7 @@ export async function getActionInbox({
         AND: [
           visibleTask,
           terminableTask,
+          { status: "ACTIVE" },
           {
             nodes: {
               none: {
@@ -129,6 +143,11 @@ export async function getActionInbox({
                     },
                   },
                   { revision: { is: { status: "PENDING_APPROVAL" } } },
+                  {
+                    termination: {
+                      is: { reviews: { some: { result: "PENDING" } } },
+                    },
+                  },
                 ],
               },
             },
@@ -145,6 +164,7 @@ export async function getActionInbox({
     reviews,
     revisions,
     terminations,
+    terminationReviews,
     projectRequests,
     counts,
     criticalCounts,
@@ -207,9 +227,30 @@ export async function getActionInbox({
           plannedAt: true,
           name: true,
           plannedOutcomeCriteria: true,
-          node: { select: { task: { select: taskResourceSelect } } },
+          node: { select: { id: true, task: { select: taskResourceSelect } } },
         },
         orderBy: [{ plannedAt: "asc" }, { id: "asc" }],
+        take: boundedLimit,
+      }),
+      prisma.terminationReview.findMany({
+        where: terminationReviewWhere,
+        select: {
+          id: true,
+          outcome: true,
+          reason: true,
+          summary: true,
+          createdAt: true,
+          terminationNode: {
+            select: {
+              name: true,
+              plannedAt: true,
+              node: {
+                select: { id: true, task: { select: taskResourceSelect } },
+              },
+            },
+          },
+        },
+        orderBy: [{ terminationNode: { plannedAt: "asc" } }, { id: "asc" }],
         take: boundedLimit,
       }),
       isSystemAdministrator(actor)
@@ -225,6 +266,7 @@ export async function getActionInbox({
         prisma.milestoneReview.count({ where: milestoneReviewWhere }),
         prisma.revisionNode.count({ where: revisionWhere }),
         prisma.terminationNode.count({ where: terminationWhere }),
+        prisma.terminationReview.count({ where: terminationReviewWhere }),
         isSystemAdministrator(actor)
           ? prisma.projectEstablishmentRequest.count({ where: { status: "PENDING", project: { deletedAt: null, status: "PENDING_APPROVAL" } } })
           : Promise.resolve(0),
@@ -240,6 +282,14 @@ export async function getActionInbox({
         }),
         prisma.terminationNode.count({
           where: { AND: [terminationWhere, { plannedAt: { lt: now } }] },
+        }),
+        prisma.terminationReview.count({
+          where: {
+            AND: [
+              terminationReviewWhere,
+              { terminationNode: { plannedAt: { lt: now } } },
+            ],
+          },
         }),
       ]),
     ]);
@@ -324,7 +374,7 @@ export async function getActionInbox({
   for (const termination of terminations) {
     const task = termination.node.task;
     if (
-      !authorize({ actor, action: "task.terminate", resource: { type: "task", ...task } })
+      !authorize({ actor, action: "termination.submit_review", resource: { type: "task", ...task } })
         .allowed
     ) {
       continue;
@@ -338,7 +388,34 @@ export async function getActionInbox({
       taskTitle: task.title,
       dueAt: termination.plannedAt.toISOString(),
       severity: termination.plannedAt < now ? "CRITICAL" : "MEDIUM",
-      href: `/progress/tasks/${task.id}?tab=reviews`,
+      href: `/progress/tasks/${task.id}?focus=${termination.node.id}`,
+    });
+  }
+  for (const review of terminationReviews) {
+    const task = review.terminationNode.node.task;
+    if (
+      !authorize({
+        actor,
+        action: "termination.review",
+        resource: { type: "task", ...task },
+      }).allowed
+    ) {
+      continue;
+    }
+    const terminalName =
+      review.terminationNode.name === "Terminal"
+        ? "结束节点"
+        : review.terminationNode.name;
+    items.push({
+      id: `termination-review:${review.id}`,
+      kind: "TERMINATION_REVIEW",
+      title: task.title,
+      summary: `${terminalName}申请${terminationOutcomeLabel(review.outcome)}，等待审批${review.reason ? `：${review.reason}` : ""}`,
+      taskId: task.id,
+      taskTitle: task.title,
+      dueAt: review.terminationNode.plannedAt.toISOString(),
+      severity: review.terminationNode.plannedAt < now ? "CRITICAL" : "HIGH",
+      href: `/progress/tasks/${task.id}?focus=${review.terminationNode.node.id}`,
     });
   }
   for (const request of projectRequests) {

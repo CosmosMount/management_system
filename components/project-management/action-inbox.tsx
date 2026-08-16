@@ -11,7 +11,8 @@ const kindLabels: Record<ActionInboxKind, string> = {
   MILESTONE_REVIEW: "里程碑验收",
   REVISION_REVIEW: "计划修订审核",
   PROJECT_ESTABLISHMENT: "项目立项",
-  TERMINATION: "任务结束确认",
+  TERMINATION: "任务结束申请",
+  TERMINATION_REVIEW: "任务结束审批",
 };
 
 const severityLabels = {

@@ -2,6 +2,8 @@ import type {
   MilestoneReviewResult,
   Prisma,
   ProjectManagementNotificationCategory,
+  TerminationOutcome,
+  TerminationReviewResult,
 } from "@prisma/client";
 import {
   ACTIVE_GLOBAL_APPROVAL_ADMINISTRATOR_REQUIRED,
@@ -47,7 +49,10 @@ export async function notifyTaskMembersTx(
 export async function notifyGlobalAdministratorsTx(
   tx: PrismaTx,
   input: NotificationInput & {
-    kind: "milestone_review_submitted" | "revision_pending_review";
+    kind:
+      | "milestone_review_submitted"
+      | "revision_pending_review"
+      | "termination_review_submitted";
   },
 ) {
   const recipients = await globalAdministratorRecipientsTx(tx);
@@ -113,6 +118,50 @@ export async function notifyMilestoneReviewResultTx(
   });
 }
 
+export async function notifyTerminationReviewResultTx(
+  tx: PrismaTx,
+  input: {
+    actor: ProjectManagementActor;
+    task: LifecycleTaskForAuthorization;
+    reviewId: string;
+    terminationNodeId: string;
+    result: TerminationReviewResult;
+    outcome: TerminationOutcome;
+    terminalName: string;
+    reason: string;
+    terminationSummary: string;
+    reviewComment: string;
+    summary: string;
+    recipients: LifecycleNotificationRecipient[];
+  },
+) {
+  await createLifecycleNotificationsTx(tx, {
+    actor: input.actor,
+    task: input.task,
+    kind: "termination_review_result",
+    category: "REVIEW",
+    eventKey: `pm:termination:review_result:${input.reviewId}:${input.result}`,
+    title:
+      input.result === "REJECTED"
+        ? "任务结束申请已驳回"
+        : "任务结束申请需要修订",
+    summary: input.summary,
+    entityType: "TerminationReview",
+    entityId: input.reviewId,
+    linkPath: `/progress/tasks/${input.task.id}?focus=${input.terminationNodeId}`,
+    mandatory: true,
+    recipients: input.recipients,
+    context: {
+      terminalName: input.terminalName,
+      requestedOutcome: input.outcome,
+      decision: input.result,
+      reason: input.reason,
+      summary: input.terminationSummary,
+      reviewComment: input.reviewComment,
+    },
+  });
+}
+
 export async function createLifecycleNotificationsTx(
   tx: PrismaTx,
   input: NotificationInput & { recipients: LifecycleNotificationRecipient[] },
@@ -132,7 +181,7 @@ export async function createLifecycleNotificationsTx(
     summary: input.summary,
     entityType: input.entityType,
     entityId: input.entityId,
-    linkPath: "/progress",
+    linkPath: input.linkPath ?? "/progress",
     mandatory: input.mandatory,
     recipients: input.recipients,
     context: input.context,
@@ -207,6 +256,7 @@ type NotificationInput = {
   summary: string;
   entityType: string;
   entityId: string;
+  linkPath?: string;
   mandatory: boolean;
   context?: Record<string, unknown>;
 };

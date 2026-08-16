@@ -515,9 +515,10 @@ async function loadActivityEntityNames(
     )];
   const revisionIds = idsFor("RevisionNode");
   const milestoneReviewIds = idsFor("MilestoneReview");
+  const terminationReviewIds = idsFor("TerminationReview");
   const terminationIds = idsFor("TerminationNode");
   const segmentIds = idsFor("WorkSegment");
-  const [revisions, milestoneReviews, terminations, segments] = await Promise.all([
+  const [revisions, milestoneReviews, terminationReviews, terminations, segments] = await Promise.all([
     revisionIds.length
       ? prisma.revisionNode.findMany({
           where: { id: { in: revisionIds } },
@@ -530,6 +531,15 @@ async function loadActivityEntityNames(
           select: {
             id: true,
             milestoneNode: { select: { goal: true } },
+          },
+        })
+      : [],
+    terminationReviewIds.length
+      ? prisma.terminationReview.findMany({
+          where: { id: { in: terminationReviewIds } },
+          select: {
+            id: true,
+            terminationNode: { select: { name: true } },
           },
         })
       : [],
@@ -557,6 +567,10 @@ async function loadActivityEntityNames(
     ...milestoneReviews.map((review) => [
       `MilestoneReview:${review.id}`,
       `Milestone：${review.milestoneNode.goal}`,
+    ] as const),
+    ...terminationReviews.map((review) => [
+      `TerminationReview:${review.id}`,
+      `Terminal：${review.terminationNode.name}`,
     ] as const),
     ...terminations.map((termination) => [
       `TerminationNode:${termination.id}`,

@@ -103,16 +103,21 @@ function toNodeAnchorDto(
         node.type === "MILESTONE" &&
         node.status === "ACTIVE" &&
         !hasPendingApproval &&
-        authorize({ actor, action: "milestone.submit_review", resource }).allowed,
+        authorize({ actor, action: "milestone.submit_review", resource })
+          .allowed,
       canReview:
-        node.type === "MILESTONE" &&
-        node.status === "ACTIVE" &&
-        authorize({ actor, action: "milestone.review", resource }).allowed,
-      canConfirmTermination:
+        (node.type === "MILESTONE" &&
+          node.status === "ACTIVE" &&
+          authorize({ actor, action: "milestone.review", resource }).allowed) ||
+        (node.type === "TERMINATION" &&
+          Boolean(node.termination?.reviews.length) &&
+          authorize({ actor, action: "termination.review", resource }).allowed),
+      canSubmitTerminationReview:
         node.type === "TERMINATION" &&
         task.status === "ACTIVE" &&
         !hasPendingApproval &&
-        authorize({ actor, action: "task.terminate", resource }).allowed,
+        authorize({ actor, action: "termination.submit_review", resource })
+          .allowed,
     },
     updatedAt,
     versionToken: updatedAt,

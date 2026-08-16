@@ -1,23 +1,22 @@
 import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
-import { Prisma } from "@prisma/client";
+import { Prisma, type TerminationOutcome } from "@prisma/client";
 import { prisma } from "../lib/prisma";
 import {
   activateTask,
   approveRevision,
   cancelRevision,
-  confirmTermination,
   createRevision,
   createTaskDraft,
   deleteTaskDraft,
   rejectRevision,
   reviewMilestone,
+  reviewTermination,
   submitMilestoneForReview,
+  submitTerminationForReview,
   reviseRejectedRevision,
 } from "../lib/project-management/application/lifecycle-service";
-import {
-  toProjectManagementServiceError,
-} from "../lib/project-management/application/errors";
+import { toProjectManagementServiceError } from "../lib/project-management/application/errors";
 import {
   comparePlanVersions,
   getPlanVersion,
@@ -26,8 +25,10 @@ import {
   listTaskPlanVersions,
 } from "../lib/project-management/queries/task-queries";
 import { getActorPersonOption } from "../lib/project-management/queries/option-queries";
+import { getActionInbox } from "../lib/project-management/queries/action-inbox-queries";
 import type { ProjectManagementActor } from "../lib/project-management/identity";
 import { updateNotificationPreference } from "../lib/project-management/application/notification-preference-service";
+import { firstNonEmptyFeishuOpenId } from "../lib/project-management/application/feishu-identity";
 import {
   getRevisionComposerRecord,
   getTaskLifecycleViews,
@@ -1024,7 +1025,8 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     const fixture = await createActivatedFixture();
     const activeNode = await firstCurrentMilestone(fixture.taskId);
     const terminalNode = (await currentPlanNodes(fixture.taskId)).at(-1);
-    if (!terminalNode?.node.termination) throw new Error("测试计划缺少 Terminal");
+    if (!terminalNode?.node.termination)
+      throw new Error("测试计划缺少 Terminal");
     const outcomes = await Promise.allSettled([
       submitMilestoneForReview(actor(fixture.member), {
         milestoneNodeId: activeNode.nodeId,
@@ -1044,35 +1046,49 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         termination: terminationInput(8),
         idempotencyKey: `single-gate-race-revision-${randomUUID()}`,
       }),
-      confirmTermination(actor(fixture.owner), {
-        taskId: fixture.taskId,
+      submitTerminationForReview(actor(fixture.owner), {
         terminationNodeId: terminalNode.nodeId,
         outcome: "FAILED",
         reason: "并发 Terminal",
         summary: "只能有一个事务成功",
-        expectedLockVersion: fixture.lockVersion,
+        idempotencyKey: `single-gate-race-termination-${randomUUID()}`,
       }),
     ]);
-    expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
-    expect(outcomes.filter((outcome) => outcome.status === "rejected")).toHaveLength(2);
-    const [pendingMilestones, pendingRevisions] = await Promise.all([
-      prisma.milestoneReview.count({
-        where: {
-          result: "PENDING",
-          revokedAt: null,
-          milestoneNode: { node: { taskId: fixture.taskId } },
-        },
+    expect(
+      outcomes.filter((outcome) => outcome.status === "fulfilled"),
+    ).toHaveLength(1);
+    expect(
+      outcomes.filter((outcome) => outcome.status === "rejected"),
+    ).toHaveLength(2);
+    const [pendingMilestones, pendingRevisions, pendingTerminations] =
+      await Promise.all([
+        prisma.milestoneReview.count({
+          where: {
+            result: "PENDING",
+            revokedAt: null,
+            milestoneNode: { node: { taskId: fixture.taskId } },
+          },
+        }),
+        prisma.revisionNode.count({
+          where: {
+            status: "PENDING_APPROVAL",
+            node: { taskId: fixture.taskId },
+          },
+        }),
+        prisma.terminationReview.count({
+          where: {
+            result: "PENDING",
+            terminationNode: { node: { taskId: fixture.taskId } },
+          },
+        }),
+      ]);
+    expect(pendingMilestones + pendingRevisions + pendingTerminations).toBe(1);
+    await expect(
+      prisma.task.findUniqueOrThrow({
+        where: { id: fixture.taskId },
+        select: { status: true },
       }),
-      prisma.revisionNode.count({
-        where: { status: "PENDING_APPROVAL", node: { taskId: fixture.taskId } },
-      }),
-    ]);
-    const finalTask = await prisma.task.findUniqueOrThrow({
-      where: { id: fixture.taskId },
-      select: { status: true },
-    });
-    const terminalWon = finalTask.status === "FAILED" ? 1 : 0;
-    expect(pendingMilestones + pendingRevisions + terminalWon).toBe(1);
+    ).resolves.toEqual({ status: "ACTIVE" });
     expect(
       await prisma.domainAuditEvent.count({
         where: {
@@ -1081,7 +1097,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
             in: [
               "pm.milestone.review.submit",
               "pm.revision.create",
-              "pm.termination.confirm",
+              "pm.termination.review.submit",
             ],
           },
         },
@@ -1095,7 +1111,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
             in: [
               "milestone_review_submitted",
               "revision_pending_review",
-              "task_terminated",
+              "termination_review_submitted",
             ],
           },
           payload: { contains: fixture.taskId },
@@ -1126,12 +1142,16 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       }),
     ]);
     const fulfilled = decisions.filter(
-      (entry): entry is PromiseFulfilledResult<
+      (
+        entry,
+      ): entry is PromiseFulfilledResult<
         Awaited<ReturnType<typeof reviewMilestone>>
       > => entry.status === "fulfilled",
     );
     expect(fulfilled).toHaveLength(1);
-    expect(decisions.filter((entry) => entry.status === "rejected")).toHaveLength(1);
+    expect(
+      decisions.filter((entry) => entry.status === "rejected"),
+    ).toHaveLength(1);
     const persistedReview = await prisma.milestoneReview.findUniqueOrThrow({
       where: { id: submitted.reviewId },
       select: { result: true },
@@ -1895,6 +1915,440 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     expect(approved.currentPlanVersionId).toBe(revision.targetPlanVersionId);
   });
 
+  test("Termination Review matches Milestone submit/review permissions and preserves returned rounds", async () => {
+    const fixture = await createActivatedFixture();
+    const outsider = await createAccountPerson("生命周期 Termination 旁观者");
+    const terminationEntry = (await currentPlanNodes(fixture.taskId)).at(-1);
+    if (!terminationEntry?.node.termination)
+      throw new Error("测试计划缺少 Terminal");
+
+    await expectServiceError(
+      submitTerminationForReview(actor(outsider), {
+        terminationNodeId: terminationEntry.nodeId,
+        outcome: "FAILED",
+        reason: "旁观者不应提交",
+        summary: "权限回归",
+        idempotencyKey: `termination-outsider-${randomUUID()}`,
+      }),
+      "FORBIDDEN",
+    );
+
+    const firstKey = `termination-review-first-${randomUUID()}`;
+    const first = await submitTerminationForReview(actor(fixture.member), {
+      terminationNodeId: terminationEntry.nodeId,
+      outcome: "CANCELLED",
+      reason: "参与人申请提前取消",
+      summary: "第一轮结束申请",
+      idempotencyKey: firstKey,
+    });
+    expect(first).toMatchObject({ result: "PENDING", created: true });
+    const globalAdministratorRecipients =
+      await activeGlobalAdministratorNotificationRecipients();
+    const firstRequestPayload = await expectProjectManagementOutbox(
+      `pm:termination:review_submitted:${first.reviewId}:feishu`,
+      {
+        type: "termination_review_submitted",
+        botKind: "approval",
+        purpose: "approval_request",
+      },
+    );
+    expect(
+      jsonStringArray(firstRequestPayload.recipientOpenIds).sort(),
+    ).toEqual(globalAdministratorRecipients.openIds);
+    await expectNotificationAccountIds(
+      `pm:termination:review_submitted:${first.reviewId}:inapp:`,
+      globalAdministratorRecipients.accountIds,
+    );
+    const adminActor: ProjectManagementActor = {
+      ...actor(fixture.admin),
+      systemRoles: [{ role: "PROJECT_ADMINISTRATOR", team: "", techGroup: "" }],
+    };
+    const [memberInbox, adminInbox, memberLifecycle, adminLifecycle] =
+      await Promise.all([
+        getActionInbox({ actor: actor(fixture.member), limit: 200 }),
+        getActionInbox({ actor: adminActor, limit: 200 }),
+        getTaskLifecycleViews({
+          actor: actor(fixture.member),
+          taskId: fixture.taskId,
+          terminationReviewLimit: 5,
+          currentOnly: true,
+        }),
+        getTaskLifecycleViews({
+          actor: adminActor,
+          taskId: fixture.taskId,
+          terminationReviewLimit: 5,
+          currentOnly: true,
+        }),
+      ]);
+    expect(
+      memberInbox.items.some(
+        (item) => item.id === `termination-review:${first.reviewId}`,
+      ),
+    ).toBe(false);
+    expect(adminInbox.items).toContainEqual(
+      expect.objectContaining({
+        id: `termination-review:${first.reviewId}`,
+        kind: "TERMINATION_REVIEW",
+        taskId: fixture.taskId,
+      }),
+    );
+    expect(memberLifecycle.terminationReviews[0]).toMatchObject({
+      id: first.reviewId,
+      result: "PENDING",
+      capabilities: { canReview: false },
+    });
+    expect(adminLifecycle.terminationReviews[0]).toMatchObject({
+      id: first.reviewId,
+      result: "PENDING",
+      capabilities: { canReview: true },
+    });
+    await expect(
+      submitTerminationForReview(actor(fixture.member), {
+        terminationNodeId: terminationEntry.nodeId,
+        outcome: "CANCELLED",
+        reason: "参与人申请提前取消",
+        summary: "第一轮结束申请",
+        idempotencyKey: firstKey,
+      }),
+    ).resolves.toMatchObject({ reviewId: first.reviewId, created: false });
+    await expectServiceError(
+      submitTerminationForReview(actor(fixture.member), {
+        terminationNodeId: terminationEntry.nodeId,
+        outcome: "CANCELLED",
+        reason: "参与人申请提前取消",
+        summary: "第一轮结束申请",
+        idempotencyKey: `termination-review-conflict-${randomUUID()}`,
+      }),
+      "STATE_CONFLICT",
+    );
+    await expect(
+      prisma.task.findUniqueOrThrow({
+        where: { id: fixture.taskId },
+        select: { status: true, lockVersion: true },
+      }),
+    ).resolves.toEqual({ status: "ACTIVE", lockVersion: 1 });
+    await expect(
+      prisma.terminationNode.findUniqueOrThrow({
+        where: { nodeId: terminationEntry.nodeId },
+        select: { outcome: true, confirmedAt: true },
+      }),
+    ).resolves.toEqual({ outcome: null, confirmedAt: null });
+    await expectServiceError(
+      reviewTermination(actor(fixture.owner), {
+        reviewId: first.reviewId,
+        result: "APPROVED",
+        comment: "Owner 不能审批",
+      }),
+      "FORBIDDEN",
+    );
+    const required = await reviewTermination(actor(fixture.reviewer), {
+      reviewId: first.reviewId,
+      result: "REVISION_REQUIRED",
+      comment: "请补充结束说明",
+    });
+    expect(required).toMatchObject({
+      result: "REVISION_REQUIRED",
+      taskStatus: "ACTIVE",
+      lockVersion: 1,
+    });
+    const returnedRecipients = await taskNotificationRecipients({
+      taskId: fixture.taskId,
+      roles: ["OWNER"],
+      personIds: [fixture.member.person.id],
+    });
+    const requiredPayload = await expectProjectManagementOutbox(
+      `pm:termination:review_result:${first.reviewId}:REVISION_REQUIRED:feishu`,
+      {
+        type: "termination_review_result",
+        botKind: "notification",
+        purpose: "notification",
+      },
+    );
+    expect(jsonStringArray(requiredPayload.recipientOpenIds).sort()).toEqual(
+      returnedRecipients.openIds,
+    );
+    await expectNotificationAccountIds(
+      `pm:termination:review_result:${first.reviewId}:REVISION_REQUIRED:inapp:`,
+      returnedRecipients.accountIds,
+    );
+    await expect(
+      getTaskLifecycleViews({
+        actor: actor(fixture.owner),
+        taskId: fixture.taskId,
+        terminationReviewLimit: 5,
+        currentOnly: true,
+      }),
+    ).resolves.toMatchObject({
+      terminationReviews: [
+        {
+          id: first.reviewId,
+          outcome: "CANCELLED",
+          reason: "参与人申请提前取消",
+          summary: "第一轮结束申请",
+          result: "REVISION_REQUIRED",
+          comment: "请补充结束说明",
+        },
+      ],
+    });
+
+    const second = await submitTerminationForReview(actor(fixture.owner), {
+      terminationNodeId: terminationEntry.nodeId,
+      outcome: "TIMEOUT",
+      reason: "负责人修改为超时结束",
+      summary: "第二轮结束申请",
+      idempotencyKey: `termination-review-second-${randomUUID()}`,
+    });
+    const rejected = await reviewTermination(actor(fixture.admin), {
+      reviewId: second.reviewId,
+      result: "REJECTED",
+      comment: "当前不能按超时结束",
+    });
+    expect(rejected).toMatchObject({
+      result: "REJECTED",
+      taskStatus: "ACTIVE",
+    });
+
+    const third = await submitTerminationForReview(actor(fixture.member), {
+      terminationNodeId: terminationEntry.nodeId,
+      outcome: "FAILED",
+      reason: "最终申请失败结束",
+      summary: "第三轮结束申请",
+      idempotencyKey: `termination-review-third-${randomUUID()}`,
+    });
+    const approved = await reviewTermination(actor(fixture.reviewer), {
+      reviewId: third.reviewId,
+      result: "APPROVED",
+      comment: "同意结束",
+    });
+    expect(approved).toMatchObject({
+      result: "APPROVED",
+      taskStatus: "FAILED",
+      outcome: "FAILED",
+      lockVersion: 2,
+    });
+    await expect(
+      prisma.terminationNode.findUniqueOrThrow({
+        where: { nodeId: terminationEntry.nodeId },
+        select: {
+          outcome: true,
+          reason: true,
+          summary: true,
+          confirmedByAccountId: true,
+        },
+      }),
+    ).resolves.toEqual({
+      outcome: "FAILED",
+      reason: "最终申请失败结束",
+      summary: "第三轮结束申请",
+      confirmedByAccountId: fixture.reviewer.account.id,
+    });
+    await expect(
+      prisma.terminationReview.count({
+        where: { terminationNodeId: terminationEntry.node.termination.id },
+      }),
+    ).resolves.toBe(3);
+    const approvedPayload = await expectProjectManagementOutbox(
+      `pm:task:terminated:${terminationEntry.nodeId}:feishu`,
+      {
+        type: "task_terminated",
+        botKind: "notification",
+        purpose: "notification",
+      },
+    );
+    expect(JSON.stringify(approvedPayload)).toContain("最终申请失败结束");
+    expect(JSON.stringify(approvedPayload)).toContain("第三轮结束申请");
+    const approvedRecipients = await taskNotificationRecipients({
+      taskId: fixture.taskId,
+      roles: ["OWNER", "PARTICIPANT"],
+    });
+    expect(jsonStringArray(approvedPayload.recipientOpenIds).sort()).toEqual(
+      approvedRecipients.openIds,
+    );
+    await expectNotificationAccountIds(
+      `pm:task:terminated:${terminationEntry.nodeId}:inapp:`,
+      approvedRecipients.accountIds,
+    );
+    await expectProjectManagementOutbox(
+      `pm:termination:review_submitted:${third.reviewId}:feishu`,
+      {
+        type: "termination_review_submitted",
+        botKind: "approval",
+        purpose: "approval_request",
+      },
+    );
+    await expectProjectManagementOutbox(
+      `pm:termination:review_result:${second.reviewId}:REJECTED:feishu`,
+      {
+        type: "termination_review_result",
+        botKind: "notification",
+        purpose: "notification",
+      },
+    );
+    const persistedReviewers = await prisma.terminationReview.findMany({
+      where: { id: { in: [first.reviewId, second.reviewId, third.reviewId] } },
+      select: { id: true, reviewerAccountId: true },
+    });
+    expect(persistedReviewers).toHaveLength(3);
+    expect(persistedReviewers).toEqual(
+      expect.arrayContaining([
+        { id: first.reviewId, reviewerAccountId: fixture.reviewer.account.id },
+        { id: second.reviewId, reviewerAccountId: fixture.admin.account.id },
+        { id: third.reviewId, reviewerAccountId: fixture.reviewer.account.id },
+      ]),
+    );
+  });
+
+  test("Termination Review permits administrator self-review and serializes concurrent decisions", async () => {
+    const selfReviewFixture = await createActivatedFixture();
+    const selfReviewTerminal = (
+      await currentPlanNodes(selfReviewFixture.taskId)
+    ).at(-1);
+    if (!selfReviewTerminal?.node.termination) {
+      throw new Error("测试计划缺少 Terminal");
+    }
+    const selfSubmitted = await submitTerminationForReview(
+      actor(selfReviewFixture.admin),
+      {
+        terminationNodeId: selfReviewTerminal.nodeId,
+        outcome: "CANCELLED",
+        reason: "管理员自审结束",
+        summary: "验证管理员可提交并审批自己的申请",
+        idempotencyKey: `termination-self-review-${randomUUID()}`,
+      },
+    );
+    const selfApproved = await reviewTermination(
+      actor(selfReviewFixture.admin),
+      {
+        reviewId: selfSubmitted.reviewId,
+        result: "APPROVED",
+        comment: "管理员自审通过",
+      },
+    );
+    expect(selfApproved).toMatchObject({
+      result: "APPROVED",
+      taskStatus: "CANCELLED",
+    });
+    await expect(
+      prisma.terminationNode.findUniqueOrThrow({
+        where: { nodeId: selfReviewTerminal.nodeId },
+        select: { confirmedByAccountId: true },
+      }),
+    ).resolves.toEqual({
+      confirmedByAccountId: selfReviewFixture.admin.account.id,
+    });
+
+    const concurrentFixture = await createActivatedFixture();
+    const concurrentTerminal = (
+      await currentPlanNodes(concurrentFixture.taskId)
+    ).at(-1);
+    if (!concurrentTerminal?.node.termination) {
+      throw new Error("测试计划缺少 Terminal");
+    }
+    const submitted = await submitTerminationForReview(
+      actor(concurrentFixture.member),
+      {
+        terminationNodeId: concurrentTerminal.nodeId,
+        outcome: "FAILED",
+        reason: "并发审批结束申请",
+        summary: "只有一个审批决定可以生效",
+        idempotencyKey: `termination-decision-race-${randomUUID()}`,
+      },
+    );
+    const decisions = await Promise.allSettled([
+      reviewTermination(actor(concurrentFixture.reviewer), {
+        reviewId: submitted.reviewId,
+        result: "APPROVED",
+        comment: "并发通过",
+      }),
+      reviewTermination(actor(concurrentFixture.admin), {
+        reviewId: submitted.reviewId,
+        result: "REJECTED",
+        comment: "并发驳回",
+      }),
+    ]);
+    const fulfilled = decisions.filter(
+      (
+        entry,
+      ): entry is PromiseFulfilledResult<
+        Awaited<ReturnType<typeof reviewTermination>>
+      > => entry.status === "fulfilled",
+    );
+    expect(fulfilled).toHaveLength(1);
+    expect(
+      decisions.filter((entry) => entry.status === "rejected"),
+    ).toHaveLength(1);
+    const [persistedReview, persistedTask, auditCount] = await Promise.all([
+      prisma.terminationReview.findUniqueOrThrow({
+        where: { id: submitted.reviewId },
+        select: { result: true },
+      }),
+      prisma.task.findUniqueOrThrow({
+        where: { id: concurrentFixture.taskId },
+        select: { status: true },
+      }),
+      prisma.domainAuditEvent.count({
+        where: {
+          action: "pm.termination.review",
+          entityType: "TerminationReview",
+          entityId: submitted.reviewId,
+        },
+      }),
+    ]);
+    expect(persistedReview.result).toBe(fulfilled[0]?.value.result);
+    expect(persistedTask.status).toBe(
+      persistedReview.result === "APPROVED" ? "FAILED" : "ACTIVE",
+    );
+    expect(auditCount).toBe(1);
+  });
+
+  test("Termination negative decisions release the gate even after Task state drift", async () => {
+    const fixture = await createActivatedFixture();
+    const terminationEntry = (await currentPlanNodes(fixture.taskId)).at(-1);
+    if (!terminationEntry?.node.termination) {
+      throw new Error("测试计划缺少 Terminal");
+    }
+    const submitted = await submitTerminationForReview(actor(fixture.member), {
+      terminationNodeId: terminationEntry.nodeId,
+      outcome: "FAILED",
+      reason: "状态漂移后仍需释放审批门禁",
+      summary: "负面决定不得推进 Terminal",
+      idempotencyKey: `termination-negative-drift-${randomUUID()}`,
+    });
+    await prisma.$transaction([
+      prisma.task.update({
+        where: { id: fixture.taskId },
+        data: { status: "CANCELLED" },
+      }),
+      prisma.taskNode.update({
+        where: { id: terminationEntry.nodeId },
+        data: { status: "CANCELLED" },
+      }),
+    ]);
+
+    const rejected = await reviewTermination(actor(fixture.admin), {
+      reviewId: submitted.reviewId,
+      result: "REJECTED",
+      comment: "拒绝漂移状态下的结束申请并释放门禁",
+    });
+    expect(rejected).toMatchObject({
+      result: "REJECTED",
+      taskStatus: "CANCELLED",
+      lockVersion: 1,
+    });
+    await expect(
+      prisma.terminationNode.findUniqueOrThrow({
+        where: { nodeId: terminationEntry.nodeId },
+        select: { outcome: true, confirmedAt: true },
+      }),
+    ).resolves.toEqual({ outcome: null, confirmedAt: null });
+    await expect(
+      getTaskWorkspace({ actor: actor(fixture.owner), taskId: fixture.taskId }),
+    ).resolves.toMatchObject({
+      pendingApproval: null,
+      pendingApprovalConflict: false,
+    });
+  });
+
   test("Termination enforces success prerequisites and supports early failed/cancelled/timeout outcomes", async () => {
     const successFixture = await createActivatedFixture();
     const successNodes = await currentPlanNodes(successFixture.taskId);
@@ -1979,8 +2433,8 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         taskId: reviewerCancelFixture.taskId,
         terminationNodeId: reviewerCancelNodes[2]?.nodeId,
         outcome: "CANCELLED",
-        reason: "Reviewer 确认取消",
-        summary: "Reviewer 可执行结束确认",
+        reason: "管理员申请取消",
+        summary: "全局管理员也可提交并审批结束申请",
         expectedLockVersion: reviewerCancelTask.lockVersion,
       },
     );
@@ -1988,36 +2442,75 @@ test.describe("project management P2/P3 task lifecycle services", () => {
 
     const completedFixture = await createActivatedFixture(1);
     const activeNode = await firstCurrentMilestone(completedFixture.taskId);
-    const review = await submitMilestoneForReview(actor(completedFixture.member), {
-      milestoneNodeId: activeNode.nodeId,
-      idempotencyKey: `review-before-success-${randomUUID()}`,
-      evidences: [{ kind: "TEXT", note: "单 Milestone 已完成" }],
-    });
+    const review = await submitMilestoneForReview(
+      actor(completedFixture.member),
+      {
+        milestoneNodeId: activeNode.nodeId,
+        idempotencyKey: `review-before-success-${randomUUID()}`,
+        evidences: [{ kind: "TEXT", note: "单 Milestone 已完成" }],
+      },
+    );
     const approved = await reviewMilestone(actor(completedFixture.reviewer), {
       reviewId: review.reviewId,
       result: "APPROVED",
       comment: "通过",
     });
     expect(approved.activeMilestoneNodeId).toBeNull();
-    const terminationNode = (await currentPlanNodes(completedFixture.taskId))[1];
+    const terminationNode = (
+      await currentPlanNodes(completedFixture.taskId)
+    )[1];
     const taskBeforeSuccess = await prisma.task.findUniqueOrThrow({
       where: { id: completedFixture.taskId },
       select: { lockVersion: true },
     });
-    const success = await confirmTermination(actor(completedFixture.owner), {
-      taskId: completedFixture.taskId,
-      terminationNodeId: terminationNode?.nodeId,
-      outcome: "SUCCESS",
-      reason: "",
-      summary: "达到结束条件",
-      expectedLockVersion: taskBeforeSuccess.lockVersion,
+    const successSubmission = await submitTerminationForReview(
+      actor(completedFixture.owner),
+      {
+        terminationNodeId: terminationNode?.nodeId,
+        outcome: "SUCCESS",
+        reason: "",
+        summary: "达到结束条件",
+        idempotencyKey: `termination-success-recheck-${randomUUID()}`,
+      },
+    );
+    await prisma.taskNode.update({
+      where: { id: activeNode.nodeId },
+      data: { status: "ACTIVE" },
     });
-    expect(success.status).toBe("COMPLETED");
+    await expectServiceError(
+      reviewTermination(actor(completedFixture.admin), {
+        reviewId: successSubmission.reviewId,
+        result: "APPROVED",
+        comment: "前置 Milestone 回退时不得通过",
+      }),
+      "STATE_CONFLICT",
+    );
+    await expect(
+      prisma.terminationReview.findUniqueOrThrow({
+        where: { id: successSubmission.reviewId },
+        select: { result: true },
+      }),
+    ).resolves.toEqual({ result: "PENDING" });
+    await prisma.taskNode.update({
+      where: { id: activeNode.nodeId },
+      data: { status: "COMPLETED" },
+    });
+    const success = await reviewTermination(actor(completedFixture.admin), {
+      reviewId: successSubmission.reviewId,
+      result: "APPROVED",
+      comment: "前置 Milestone 恢复完成后通过",
+    });
+    expect(success.taskStatus).toBe("COMPLETED");
+    expect(success.lockVersion).toBe(taskBeforeSuccess.lockVersion + 1);
   });
 
   test("没有可用全局审批人或有效飞书身份时提交审批整事务回滚", async () => {
     const fixture = await createActivatedFixture();
     const activeNode = await firstCurrentMilestone(fixture.taskId);
+    const terminationEntry = (await currentPlanNodes(fixture.taskId)).at(-1);
+    if (!terminationEntry?.node.termination)
+      throw new Error("测试计划缺少 Terminal");
+    const terminationReviewKey = `termination-approver-guard-${randomUUID()}`;
     const revisionInput = {
       taskId: fixture.taskId,
       basePlanVersionId: fixture.currentPlanVersionId,
@@ -2027,9 +2520,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       replacementMilestones: [
         milestoneInput("审批人恢复后再提交", "审批链路可达", 4),
       ],
-      revisionAt: new Date(
-        Date.UTC(2026, 6, 31, 10, 0, 0),
-      ).toISOString(),
+      revisionAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
       termination: terminationInput(8),
       idempotencyKey: `revision-approver-guard-${randomUUID()}`,
     };
@@ -2058,19 +2549,30 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         );
         expect(milestoneError).toMatchObject({
           code: "STATE_CONFLICT",
-          message: expect.stringContaining(
-            "至少保留一名全局管理员",
-          ),
+          message: expect.stringContaining("至少保留一名全局管理员"),
         });
-        const revisionError = await captureServiceError(createRevision(
-          actor(fixture.owner),
-          { ...revisionInput, idempotencyKey: `${revisionInput.idempotencyKey}:no-admin` },
-        ));
+        const revisionError = await captureServiceError(
+          createRevision(actor(fixture.owner), {
+            ...revisionInput,
+            idempotencyKey: `${revisionInput.idempotencyKey}:no-admin`,
+          }),
+        );
         expect(revisionError).toMatchObject({
           code: "STATE_CONFLICT",
-          message: expect.stringContaining(
-            "至少保留一名全局管理员",
-          ),
+          message: expect.stringContaining("至少保留一名全局管理员"),
+        });
+        const terminationError = await captureServiceError(
+          submitTerminationForReview(actor(fixture.member), {
+            terminationNodeId: terminationEntry.nodeId,
+            outcome: "FAILED",
+            reason: "没有审批人时不得提交结束申请",
+            summary: "审批人门禁回归",
+            idempotencyKey: terminationReviewKey,
+          }),
+        );
+        expect(terminationError).toMatchObject({
+          code: "STATE_CONFLICT",
+          message: expect.stringContaining("至少保留一名全局管理员"),
         });
       } finally {
         await prisma.systemRoleAssignment.updateMany({
@@ -2109,11 +2611,26 @@ test.describe("project management P2/P3 task lifecycle services", () => {
             }),
           ),
         );
-        const error = await captureServiceError(createRevision(
-          actor(fixture.owner),
-          { ...revisionInput, idempotencyKey: `${revisionInput.idempotencyKey}:no-identity` },
-        ));
+        const error = await captureServiceError(
+          createRevision(actor(fixture.owner), {
+            ...revisionInput,
+            idempotencyKey: `${revisionInput.idempotencyKey}:no-identity`,
+          }),
+        );
         expect(error).toMatchObject({
+          code: "STATE_CONFLICT",
+          message: expect.stringContaining("有效飞书身份"),
+        });
+        const terminationError = await captureServiceError(
+          submitTerminationForReview(actor(fixture.owner), {
+            terminationNodeId: terminationEntry.nodeId,
+            outcome: "FAILED",
+            reason: "没有飞书身份时不得提交结束申请",
+            summary: "审批通知可达性回归",
+            idempotencyKey: `${terminationReviewKey}:no-identity`,
+          }),
+        );
+        expect(terminationError).toMatchObject({
           code: "STATE_CONFLICT",
           message: expect.stringContaining("有效飞书身份"),
         });
@@ -2131,11 +2648,21 @@ test.describe("project management P2/P3 task lifecycle services", () => {
 
     await expect(
       prisma.milestoneReview.count({
-        where: { milestoneNodeId: activeNode.nodeId, idempotencyKey: reviewKey },
+        where: {
+          milestoneNodeId: activeNode.nodeId,
+          idempotencyKey: reviewKey,
+        },
       }),
     ).resolves.toBe(0);
     await expect(
-      prisma.revisionNode.count({ where: { node: { taskId: fixture.taskId } } }),
+      prisma.revisionNode.count({
+        where: { node: { taskId: fixture.taskId } },
+      }),
+    ).resolves.toBe(0);
+    await expect(
+      prisma.terminationReview.count({
+        where: { terminationNodeId: terminationEntry.node.termination.id },
+      }),
     ).resolves.toBe(0);
   });
 });
@@ -2341,6 +2868,66 @@ function actor(input: Awaited<ReturnType<typeof createAccountPerson>>): ProjectM
   };
 }
 
+async function confirmTermination(
+  submitter: ProjectManagementActor,
+  input: {
+    taskId: string;
+    terminationNodeId: string;
+    outcome: TerminationOutcome;
+    reason: string;
+    summary: string;
+    expectedLockVersion: number;
+  },
+) {
+  const submitted = await submitTerminationForReview(submitter, {
+    terminationNodeId: input.terminationNodeId,
+    outcome: input.outcome,
+    reason: input.reason,
+    summary: input.summary,
+    idempotencyKey: `test-termination:${input.terminationNodeId}:${input.outcome}`,
+  });
+  const reviewer = await prisma.account.findFirstOrThrow({
+    where: {
+      person: { isNot: null },
+      systemRoles: {
+        some: {
+          role: { in: ["SUPER_ADMINISTRATOR", "PROJECT_ADMINISTRATOR"] },
+          team: "",
+          techGroup: "",
+          revokedAt: null,
+        },
+      },
+    },
+    select: {
+      id: true,
+      person: { select: { id: true } },
+      identities: {
+        where: { provider: "FEISHU", tenantId: "default" },
+        select: { openId: true },
+        orderBy: { createdAt: "asc" },
+        take: 1,
+      },
+    },
+    orderBy: { id: "asc" },
+  });
+  if (!reviewer.person) throw new Error("测试审批账号缺少 Person");
+  const reviewed = await reviewTermination(
+    {
+      accountId: reviewer.id,
+      personId: reviewer.person.id,
+      openId: reviewer.identities[0]?.openId ?? "",
+      unionId: null,
+      systemRoles: [],
+    },
+    {
+      reviewId: submitted.reviewId,
+      result: "APPROVED",
+      comment: "测试审批通过",
+    },
+  );
+  return { ...reviewed, status: reviewed.taskStatus };
+}
+
 async function expectServiceError(
   promise: Promise<unknown>,
   code: ReturnType<typeof toProjectManagementServiceError>["code"],
@@ -2368,6 +2955,112 @@ function jsonRecord(value: unknown): Record<string, unknown> {
 
 function issueMessages(issues: Array<{ message: string }>) {
   return issues.map((issue) => issue.message);
+}
+
+async function activeGlobalAdministratorNotificationRecipients() {
+  const accounts = await prisma.account.findMany({
+    where: {
+      systemRoles: {
+        some: {
+          role: { in: ["SUPER_ADMINISTRATOR", "PROJECT_ADMINISTRATOR"] },
+          team: "",
+          techGroup: "",
+          revokedAt: null,
+        },
+      },
+    },
+    select: {
+      id: true,
+      identities: {
+        where: { provider: "FEISHU", tenantId: "default" },
+        select: { openId: true },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      },
+    },
+  });
+  return notificationRecipientSets(accounts);
+}
+
+async function taskNotificationRecipients(input: {
+  taskId: string;
+  roles: Array<"OWNER" | "PARTICIPANT">;
+  personIds?: string[];
+}) {
+  const members = await prisma.taskMember.findMany({
+    where: {
+      taskId: input.taskId,
+      removedAt: null,
+      person: { status: "ACTIVE", account: { isNot: null } },
+      OR: [
+        ...(input.roles.length > 0 ? [{ role: { in: input.roles } }] : []),
+        ...(input.personIds?.length
+          ? [{ personId: { in: input.personIds } }]
+          : []),
+      ],
+    },
+    select: {
+      person: {
+        select: {
+          account: {
+            select: {
+              id: true,
+              identities: {
+                where: { provider: "FEISHU", tenantId: "default" },
+                select: { openId: true },
+                orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+  return notificationRecipientSets(
+    members.flatMap((member) =>
+      member.person.account ? [member.person.account] : [],
+    ),
+  );
+}
+
+function notificationRecipientSets(
+  accounts: Array<{
+    id: string;
+    identities: Array<{ openId: string | null }>;
+  }>,
+) {
+  const uniqueAccounts = new Map(
+    accounts.map((account) => [account.id, account]),
+  );
+  return {
+    accountIds: [...uniqueAccounts.keys()].sort(),
+    openIds: [...uniqueAccounts.values()]
+      .map((account) => firstNonEmptyFeishuOpenId(account.identities))
+      .filter((openId): openId is string => Boolean(openId))
+      .sort(),
+  };
+}
+
+async function expectNotificationAccountIds(
+  eventKeyPrefix: string,
+  expectedAccountIds: string[],
+) {
+  const notifications = await prisma.inAppNotification.findMany({
+    where: { eventKey: { startsWith: eventKeyPrefix } },
+    select: { recipientAccountId: true },
+  });
+  expect(
+    notifications.map((notification) => notification.recipientAccountId).sort(),
+  ).toEqual(expectedAccountIds);
+}
+
+function jsonStringArray(value: unknown) {
+  if (
+    Array.isArray(value) &&
+    value.every((entry): entry is string => typeof entry === "string")
+  ) {
+    return value;
+  }
+  throw new Error("测试期望 JSON string array");
 }
 
 async function expectProjectManagementOutbox(

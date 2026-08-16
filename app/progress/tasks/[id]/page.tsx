@@ -100,6 +100,7 @@ export default async function ProgressTaskDetailPage({
         actor,
         taskId: id,
         reviewLimit: 2,
+        terminationReviewLimit: 2,
         revisionLimit: 2,
         auditLimit: 1,
         currentOnly: true,

@@ -2243,7 +2243,7 @@ function canvasTaskAnchor(taskId: string, nodeTaskId = taskId) {
           canCreateSegment: false,
           canSubmitReview: false,
           canReview: false,
-          canConfirmTermination: false,
+          canSubmitTerminationReview: false,
         },
         updatedAt,
         versionToken: updatedAt,

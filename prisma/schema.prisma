@@ -156,6 +156,13 @@ enum TerminationOutcome {
   TIMEOUT
 }
 
+enum TerminationReviewResult {
+  PENDING
+  APPROVED
+  REJECTED
+  REVISION_REQUIRED
+}
+
 enum WorkSegmentType {
   PLANNED
   ACTUAL
@@ -214,6 +221,8 @@ model Account {
   submittedMilestoneReviews MilestoneReview[]             @relation("MilestoneReviewSubmittedBy")
   reviewedMilestones        MilestoneReview[]             @relation("MilestoneReviewReviewer")
   revokedMilestoneReviews   MilestoneReview[]             @relation("MilestoneReviewRevokedBy")
+  submittedTerminationReviews TerminationReview[]           @relation("TerminationReviewSubmittedBy")
+  reviewedTerminationReviews  TerminationReview[]           @relation("TerminationReviewReviewer")
   confirmedTerminations     TerminationNode[]             @relation("TerminationConfirmedBy")
   createdWorkSegments       WorkSegment[]                 @relation("WorkSegmentCreatedBy")
   updatedWorkSegments       WorkSegment[]                 @relation("WorkSegmentUpdatedBy")
@@ -825,9 +834,34 @@ model TerminationNode {
   confirmedByAccountId   String?
   confirmedBy            Account?            @relation("TerminationConfirmedBy", fields: [confirmedByAccountId], references: [id], onDelete: SetNull)
   confirmedAt            DateTime?           @db.Timestamptz(6)
+  reviews                TerminationReview[]
 
   @@index([confirmedByAccountId])
   @@index([outcome])
+}
+
+model TerminationReview {
+  id                   String                  @id @default(uuid())
+  terminationNodeId    String
+  terminationNode      TerminationNode         @relation(fields: [terminationNodeId], references: [id], onDelete: Restrict)
+  outcome              TerminationOutcome
+  reason               String                  @default("")
+  summary              String                  @default("")
+  result               TerminationReviewResult @default(PENDING)
+  submittedByAccountId String?
+  submittedBy          Account?                @relation("TerminationReviewSubmittedBy", fields: [submittedByAccountId], references: [id], onDelete: SetNull)
+  reviewerAccountId    String?
+  reviewer             Account?                @relation("TerminationReviewReviewer", fields: [reviewerAccountId], references: [id], onDelete: SetNull)
+  reviewedAt           DateTime?               @db.Timestamptz(6)
+  comment              String                  @default("")
+  idempotencyKey       String
+  createdAt            DateTime                @default(now()) @db.Timestamptz(6)
+
+  @@unique([terminationNodeId, idempotencyKey])
+  @@index([terminationNodeId, createdAt])
+  @@index([submittedByAccountId])
+  @@index([reviewerAccountId])
+  @@index([result])
 }
 
 model MilestoneReview {

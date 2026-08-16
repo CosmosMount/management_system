@@ -299,7 +299,8 @@ test("项目管理员全局放行并允许自审，普通账号保持全员读�
     systemRoles: [{ role: "PROJECT_ADMINISTRATOR", team: "", techGroup: "" }],
   };
   expect(authorize({ actor: projectAdmin, action: "task.manage_members", resource: task }).allowed).toBe(true);
-  expect(authorize({ actor: base, action: "task.terminate", resource: task }).allowed).toBe(false);
+  expect(authorize({ actor: base, action: "termination.submit_review", resource: task }).allowed).toBe(false);
+  expect(authorize({ actor: base, action: "termination.review", resource: task }).allowed).toBe(false);
   expect(authorize({ actor: base, action: "segment.manage_others", resource: { type: "segment", task } }).allowed).toBe(false);
   expect(authorize({ actor: base, action: "task.view", resource: task }).allowed).toBe(true);
   expect(authorize({ actor: projectAdmin, action: "milestone.review", resource: task })).toMatchObject({ allowed: true, reason: "global_administrator" });

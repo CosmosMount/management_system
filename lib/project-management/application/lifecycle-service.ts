@@ -27,4 +27,10 @@ export type {
   MilestoneReviewMutationResult,
 } from "@/lib/project-management/application/milestone-review-commands";
 
-export { confirmTermination } from "@/lib/project-management/application/termination-commands";
+export {
+  reviewTermination,
+  submitTerminationForReview,
+} from "@/lib/project-management/application/termination-commands";
+export type {
+  TerminationReviewMutationResult,
+} from "@/lib/project-management/application/termination-commands";

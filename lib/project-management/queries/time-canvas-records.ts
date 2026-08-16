@@ -57,6 +57,11 @@ export const anchorTaskSelect = {
           },
         },
         { revision: { is: { status: "PENDING_APPROVAL" } } },
+        {
+          termination: {
+            is: { reviews: { some: { result: "PENDING" } } },
+          },
+        },
       ],
     },
     select: { id: true },
@@ -97,6 +102,11 @@ export const anchorTaskSelect = {
                   name: true,
                   plannedOutcomeCriteria: true,
                   plannedAt: true,
+                  reviews: {
+                    where: { result: "PENDING" },
+                    select: { id: true },
+                    take: 1,
+                  },
                 },
               },
             },

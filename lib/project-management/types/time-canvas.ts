@@ -91,7 +91,7 @@ const nodeCapabilitiesDtoSchema = z
     canCreateSegment: z.boolean(),
     canSubmitReview: z.boolean(),
     canReview: z.boolean(),
-    canConfirmTermination: z.boolean(),
+    canSubmitTerminationReview: z.boolean(),
   })
   .strict();
 
