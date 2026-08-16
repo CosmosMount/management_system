@@ -233,7 +233,7 @@ export default async function ProjectDetailPage({
                   canComplete={project.permissions.canComplete}
                   canDelete={project.permissions.canDelete}
                   hasNoTasks={project.taskTotalCount === 0}
-                  blockingTaskCount={project.taskTotalCount - project.completedTaskTotalCount}
+                  blockingTaskCount={project.blockingTaskTotalCount}
                   blockingTasks={project.blockingTasks.map((task) => ({
                     id: task.id,
                     title: task.title,

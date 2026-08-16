@@ -518,6 +518,7 @@ pm2 start npm --name procurement-cron -- run cron
 - 所有已登录并成功解析到统一 `Account/Person` 的账号可查看全部未删除 Task、计划/审批/审计历史和全员完整 Segment，并可创建 Task；可见性扩大不扩大写权限。
 - Task 成员只分“负责人”和“参与人”。支持多负责人且至少一名，同一 Person 只能有一个有效角色；创建者自动成为负责人。
 - 参与人可编辑 Task/计划、提交验收并创建自己的 Revision，并管理自己的关联投入；负责人另可管理成员、Task 状态、任意未生效 Revision 和该 Task 全部投入；全局管理员拥有全部项目写权限。
+- ACTIVE Project 只在没有未删除的草稿或进行中 Task 时允许结束；空 Project 和仅包含已完成、失败结束、已取消、已超时或已归档 Task 的 Project 均可结束。Project 的 Task 完成进度仍只统计严格 `COMPLETED` 的 Task。
 - Revision 是可选择时间的非分段标记，创建即待审批，没有 Draft/Submit；驳回后修改即重新送审。每个 Task 只允许一条 Milestone/Revision/Termination 待审批，待审批期间不能再次提交其他审批申请。Milestone 与 Terminal 均允许 OWNER、PARTICIPANT 或全局管理员提交，三类申请只由统一超级管理员或项目管理员决定，并允许管理员自审；界面不再提供流程策略、Reviewer 或自审开关。
 - `/progress` 是“我的工作”统一驾驶舱，提供指标、完整个人时间画布、行动待办、到期确认队列、全部参与 Task 及对应 Plan 轨道和折叠通知。投入待办统一打开同一详情 Dialog 处理。
 - `/progress/tasks/new` 提供新建 Composer；尚未激活的 Task 通过工作台右上角“编辑 Task”进入 `/progress/tasks/[id]/edit`，使用同一 Composer 一次保存基本信息、关联 Task、成员和完整计划。Participant 可编辑内容与计划，但成员区只读；保存成功后返回工作台。

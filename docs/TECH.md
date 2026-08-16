@@ -142,6 +142,8 @@ DRAFT → MANAGEMENT_REVIEW → TEACHER_REVIEW → PENDING_APPLICANT_DOCS
 
 当前项目管理数据模型还包括 `Project`、`ProjectMember`、`ProjectEstablishmentRequest` 和 `ProjectEstablishmentRequestedTask`。`Task.projectId` 可空且最多指向一个 Project；有效 Project 成员和单一待审批轮次由 PostgreSQL partial unique index 保证。Project 删除使用 `deletedAt` 软删除，并在同一事务清空关联 Task 的 `projectId`。
 
+Project 结束规则由共享领域策略统一定义。只有 `DRAFT` 和 `ACTIVE` 的未删除关联 Task 会阻止 ACTIVE Project 结束；空 Project 以及仅包含 `COMPLETED/FAILED/CANCELLED/TIMEOUT/ARCHIVED` Task 的 Project 均可结束。详情查询单独返回精确阻塞数量和最多 10 条阻塞明细，不能用“Task 总数减已完成数”推导；完成进度继续只统计 `COMPLETED`。结束事务仍同时执行权限、乐观锁、待审批立项校验，并原子写 Project 状态、领域审计、站内通知和通知 outbox。
+
 `RiskRecord` 和 `Comment` 分别是风险与评论的多目标事实表。两表都有可空 `projectId/taskId`，PostgreSQL XOR 检查约束保证恰好一个目标；外键均为 `Restrict`。风险允许同一目标多条 `ACTIVE`，状态只能由 `ACTIVE` 条件更新为 `RESOLVED`，数据库同时约束解决人、说明和时间的一致性。评论不编辑、不恢复，删除只写 `deletedAt/deletedBy*` 软删除字段并由一致性约束保护。Account 外键和姓名快照保留可解释历史，Person 外键允许为空。
 
 风险与评论 mutation 位于 `lib/project-management/application/collaboration-service.ts`：事务内重新读取系统角色、锁定目标或记录、执行状态和成员权限、写业务表与 `DomainAuditEvent`。风险提出/解决和评论发布在同一事务写站内通知及 `channel=project-management` outbox；评论删除不通知。Project/Task 负责人、参与人和两类全局管理员可操作其直接风险；Project 成员不会继承下属 Task 风险权限。所有已登录用户可评论，只有全局管理员可删除。

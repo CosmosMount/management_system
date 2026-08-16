@@ -27,6 +27,7 @@ import {
   stateConflictError,
   validationError,
 } from "@/lib/project-management/application/errors";
+import { isProjectCompletionBlockingTaskStatus } from "@/lib/project-management/domain/project-lifecycle";
 import {
   createProjectInputSchema,
   projectLifecycleInputSchema,
@@ -276,8 +277,10 @@ export async function completeProject(actor: ProjectManagementActor, input: unkn
     const pendingRequestCount = await tx.projectEstablishmentRequest.count({ where: { projectId: project.id, status: "PENDING" } });
     if (pendingRequestCount > 0) throw stateConflictError("Project 仍有待审批立项申请，不能结束");
     const tasks = await tx.task.findMany({ where: { projectId: project.id, deletedAt: null }, select: { id: true, title: true, status: true }, orderBy: { id: "asc" } });
-    const blocking = tasks.filter((task) => task.status !== "COMPLETED");
-    if (blocking.length) throw stateConflictError(`仍有 ${blocking.length} 个 Task 未完成：${blocking.slice(0, 5).map((task) => task.title).join("、")}`);
+    const blocking = tasks.filter((task) =>
+      isProjectCompletionBlockingTaskStatus(task.status),
+    );
+    if (blocking.length) throw stateConflictError(`仍有 ${blocking.length} 个 Task 处于草稿或进行中：${blocking.slice(0, 5).map((task) => task.title).join("、")}`);
     const updated = await tx.project.update({ where: { id: project.id }, data: { status: "COMPLETED", completedAt: new Date(), lockVersion: { increment: 1 } } });
     await createDomainAuditEventTx(tx, { actorAccountId: refreshedActor.accountId, actorPersonId: refreshedActor.personId, action: "pm.project.complete", entityType: "Project", entityId: project.id, projectId: project.id, before: { status: project.status }, after: { status: updated.status, taskCount: tasks.length } });
     await notifyLifecycleTx(tx, refreshedActor, project, "project_completed", "项目已结束", `项目「${project.name}」已结束`, updated.lockVersion, tasks.length);

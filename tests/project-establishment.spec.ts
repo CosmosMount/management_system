@@ -602,6 +602,180 @@ test.describe("Project 立项与生命周期", () => {
     expect(pageErrors).toEqual([]);
   });
 
+  test("只有草稿和进行中 Task 阻止 Project 结束", async ({ context, page, baseURL }, testInfo) => {
+    test.setTimeout(90_000);
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    const requester = await actor(`Project 结束门禁申请人 ${testInfo.project.name}`);
+    const participant = await actor(`Project 结束门禁成员 ${testInfo.project.name}`);
+    const admin = await actor(
+      `Project 结束门禁管理员 ${testInfo.project.name}`,
+      "PROJECT_ADMINISTRATOR",
+    );
+    const taskCases = [
+      { status: "DRAFT", title: "草稿阻塞 Task", deleted: false },
+      { status: "ACTIVE", title: "进行中阻塞 Task", deleted: false },
+      { status: "COMPLETED", title: "成功完成终态 Task", deleted: false },
+      { status: "FAILED", title: "失败结束终态 Task", deleted: false },
+      { status: "CANCELLED", title: "取消终态 Task", deleted: false },
+      { status: "TIMEOUT", title: "超时终态 Task", deleted: false },
+      { status: "ARCHIVED", title: "归档终态 Task", deleted: false },
+      { status: "DRAFT", title: "已软删除草稿 Task", deleted: true },
+    ] as const;
+    const taskFixtures = await Promise.all(
+      taskCases.map(async (taskCase) => ({
+        ...taskCase,
+        task: await draftTask(
+          requester,
+          participant,
+          `${taskCase.title} ${testInfo.project.name}`,
+        ),
+      })),
+    );
+    const created = await createProject(requester, {
+      name: `Project 结束门禁 ${randomUUID()}`,
+      description: "验证只有草稿和进行中 Task 阻止 Project 结束",
+      avatarPath: null,
+      members: [{ personId: requester.personId, role: "OWNER" }],
+      requestedTaskIds: taskFixtures.map((fixture) => fixture.task.id),
+      idempotencyKey: randomUUID(),
+    });
+    const request = await prisma.projectEstablishmentRequest.findFirstOrThrow({
+      where: { projectId: created.projectId, status: "PENDING" },
+    });
+    const approved = await reviewProjectEstablishment(admin, {
+      projectId: created.projectId,
+      requestId: request.id,
+      expectedLockVersion: created.lockVersion,
+      decision: "APPROVE",
+      comment: "同意结束门禁回归",
+    });
+    await Promise.all(
+      taskFixtures.map((fixture) =>
+        prisma.task.update({
+          where: { id: fixture.task.id },
+          data: {
+            status: fixture.status,
+            ...(fixture.deleted ? { deletedAt: new Date() } : {}),
+          },
+        }),
+      ),
+    );
+
+    const blockedDetail = await getProjectDetail({
+      actor: requester,
+      projectId: created.projectId,
+    });
+    expect(blockedDetail).toMatchObject({
+      taskTotalCount: 7,
+      completedTaskTotalCount: 1,
+      blockingTaskTotalCount: 2,
+    });
+    expect(blockedDetail.blockingTasks).toHaveLength(2);
+    expect(new Set(blockedDetail.blockingTasks.map((task) => task.status))).toEqual(
+      new Set(["DRAFT", "ACTIVE"]),
+    );
+    await expect(
+      completeProject(requester, {
+        projectId: created.projectId,
+        expectedLockVersion: approved.lockVersion,
+      }).catch((error) => {
+        throw toProjectManagementServiceError(error);
+      }),
+    ).rejects.toMatchObject({
+      code: "STATE_CONFLICT",
+      message: expect.stringContaining("2 个 Task 处于草稿或进行中"),
+    });
+    expect(await prisma.project.findUniqueOrThrow({
+      where: { id: created.projectId },
+      select: { status: true, completedAt: true, lockVersion: true },
+    })).toEqual({
+      status: "ACTIVE",
+      completedAt: null,
+      lockVersion: approved.lockVersion,
+    });
+    expect(await prisma.domainAuditEvent.count({
+      where: { projectId: created.projectId, action: "pm.project.complete" },
+    })).toBe(0);
+    expect(await prisma.notificationOutbox.count({
+      where: { eventKey: { startsWith: `pm:project:${created.projectId}:project_completed:` } },
+    })).toBe(0);
+
+    await loginAsTestUser(context, baseURL, {
+      openId: requester.openId,
+      name: `Project 结束门禁申请人 ${testInfo.project.name}`,
+    });
+    await page.goto(`/progress/projects/${created.projectId}`);
+    await expect(page.getByText("1/7 已完成", { exact: true })).toHaveCount(2);
+    await page.getByRole("button", { name: "结束 Project" }).click();
+    let dialog = page.getByRole("dialog", { name: "结束 Project" });
+    await expect(dialog).toContainText("仍有 2 个 Task 处于草稿或进行中，暂时不能结束 Project。");
+    for (const fixture of taskFixtures.filter((item) => !item.deleted && ["DRAFT", "ACTIVE"].includes(item.status))) {
+      await expect(dialog.getByText(fixture.task.title, { exact: true })).toBeVisible();
+    }
+    for (const fixture of taskFixtures.filter((item) => item.deleted || !["DRAFT", "ACTIVE"].includes(item.status))) {
+      await expect(dialog.getByText(fixture.task.title, { exact: true })).toHaveCount(0);
+    }
+    await expect(dialog.getByRole("button", { name: "确认结束" })).toBeDisabled();
+    await dialog.getByRole("button", { name: "取消" }).click();
+
+    const draftBlocker = taskFixtures.find((fixture) => fixture.status === "DRAFT" && !fixture.deleted)!;
+    const activeBlocker = taskFixtures.find((fixture) => fixture.status === "ACTIVE")!;
+    await Promise.all([
+      prisma.task.update({ where: { id: draftBlocker.task.id }, data: { status: "CANCELLED" } }),
+      prisma.task.update({ where: { id: activeBlocker.task.id }, data: { status: "FAILED" } }),
+    ]);
+    const terminalOnlyDetail = await getProjectDetail({
+      actor: requester,
+      projectId: created.projectId,
+    });
+    expect(terminalOnlyDetail).toMatchObject({
+      taskTotalCount: 7,
+      completedTaskTotalCount: 1,
+      blockingTaskTotalCount: 0,
+      blockingTasks: [],
+    });
+
+    await page.reload();
+    await expect(page.getByText("1/7 已完成", { exact: true })).toHaveCount(2);
+    await page.getByRole("button", { name: "结束 Project" }).click();
+    dialog = page.getByRole("dialog", { name: "结束 Project" });
+    await expect(dialog).toContainText("确认结束 Project？结束后 Project 资料、成员和 Task 归属将变为只读。");
+    await expect(dialog.getByRole("button", { name: "确认结束" })).toBeEnabled();
+    await dialog.getByRole("button", { name: "确认结束" }).click();
+
+    await expect(page.getByText("已结束", { exact: true })).toBeVisible();
+    await expect.poll(() => prisma.project.findUnique({
+      where: { id: created.projectId },
+      select: { status: true, completedAt: true, lockVersion: true },
+    })).toMatchObject({
+      status: "COMPLETED",
+      completedAt: expect.any(Date),
+      lockVersion: approved.lockVersion + 1,
+    });
+    const audit = await prisma.domainAuditEvent.findFirstOrThrow({
+      where: { projectId: created.projectId, action: "pm.project.complete" },
+    });
+    expect(audit.after).toMatchObject({ status: "COMPLETED", taskCount: 7 });
+    const outbox = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: {
+        eventKey: `pm:project:${created.projectId}:project_completed:${approved.lockVersion + 1}:feishu`,
+      },
+    });
+    expect(outbox).toMatchObject({
+      channel: "project-management",
+      botKind: "notification",
+      type: "project_completed",
+    });
+    expect(JSON.parse(outbox.payload)).toMatchObject({
+      kind: "project_completed",
+      context: { taskCount: 7 },
+    });
+    await expectHealthyPage(page);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    expect(pageErrors).toEqual([]);
+  });
+
   test("Project 时间线节点超限时保留三层结构", async ({
     context,
     page,
@@ -825,6 +999,9 @@ test.describe("Project 立项与生命周期", () => {
       projectId: created.projectId,
     });
     expect(focusedProject.tasks).toHaveLength(26);
+    expect(focusedProject.blockingTaskTotalCount).toBe(26);
+    expect(focusedProject.blockingTasks).toHaveLength(10);
+    expect(focusedProject.blockingTasks.every((item) => ["DRAFT", "ACTIVE"].includes(item.status))).toBe(true);
     expect(focusedProject.tasks.map((item) => item.id)).toContain(secondTask.id);
     await expect(locateProjectTimelineFocus({
       actor: requester,

@@ -8,6 +8,7 @@ import {
 } from "@/lib/project-management/authorization";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import { notFoundError } from "@/lib/project-management/application/errors";
+import { PROJECT_COMPLETION_BLOCKING_TASK_STATUSES } from "@/lib/project-management/domain/project-lifecycle";
 import { normalizeSearchText, searchTerms } from "@/lib/search/normalize-search-text";
 import { rankFuzzyMatches } from "@/lib/search/fuzzy-score";
 import { resolveActiveProjectOptionsInputSchema, searchActiveProjectOptionsInputSchema } from "@/lib/project-management/validations/project";
@@ -204,9 +205,10 @@ export async function getProjectDetail({
     },
   });
   if (!project) throw notFoundError();
-  const [completedTaskTotalCount, blockingTasks, taskRows, requestRows, auditRows, pendingRequest] = await Promise.all([
+  const [completedTaskTotalCount, blockingTaskTotalCount, blockingTasks, taskRows, requestRows, auditRows, pendingRequest] = await Promise.all([
     prisma.task.count({ where: { projectId: project.id, deletedAt: null, status: "COMPLETED" } }),
-    prisma.task.findMany({ where: { projectId: project.id, deletedAt: null, status: { not: "COMPLETED" } }, select: { id: true, title: true, status: true }, orderBy: [{ updatedAt: "desc" }, { id: "asc" }], take: 10 }),
+    prisma.task.count({ where: { projectId: project.id, deletedAt: null, status: { in: [...PROJECT_COMPLETION_BLOCKING_TASK_STATUSES] } } }),
+    prisma.task.findMany({ where: { projectId: project.id, deletedAt: null, status: { in: [...PROJECT_COMPLETION_BLOCKING_TASK_STATUSES] } }, select: { id: true, title: true, status: true }, orderBy: [{ updatedAt: "desc" }, { id: "asc" }], take: 10 }),
     loadProjectDetailTaskRows(project.id),
     prisma.projectEstablishmentRequest.findMany({
       where: {
@@ -320,6 +322,7 @@ export async function getProjectDetail({
     timelineError,
     taskTotalCount: project._count.tasks,
     completedTaskTotalCount,
+    blockingTaskTotalCount,
     blockingTasks,
     auditEvents: auditEvents.map((event) => ({ id: event.id, action: event.action, reason: event.reason, actorName: event.actorPerson?.displayName ?? "系统", createdAt: event.createdAt.toISOString() })),
     auditNextCursor: auditRows.length > pageSize && auditEvents.at(-1) ? encodeTimestampCursor(auditEvents.at(-1)!.createdAt, auditEvents.at(-1)!.id) : null,
