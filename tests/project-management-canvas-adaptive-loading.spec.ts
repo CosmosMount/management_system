@@ -374,30 +374,75 @@ test.describe("project management canvas security project-management-canvas-adap
         data: { expectedCompletedAt: historicalMilestone },
       });
 
-      const beforeQuery = Date.now();
-      const result = await getContentDrivenTimeCanvasData({
-        actor: actor(owner),
-        input: {
-          scope: { kind: "TASK_SCOPED", taskId: task.taskId },
-          personIds: [],
-          taskIds: [],
-          types: [],
-          statuses: [],
-          groupBy: "PERSON",
-          includeTaskAnchors: true,
-          includeActual: true,
-          includeBusyBlocks: false,
+      const todayMarker = await prisma.globalTimeMarker.create({
+        data: {
+          name: `不抢占历史业务中心 ${randomUUID()}`,
+          markedAt: new Date(),
         },
-        load: { mode: "INITIAL" },
       });
-      const logicalStart = Date.parse(result.data.range.startAt);
-      const logicalEnd = Date.parse(result.data.range.endAt);
+      const extremeMarker = await prisma.globalTimeMarker.create({
+        data: {
+          name: `极远日期仍可定位 ${randomUUID()}`,
+          markedAt: new Date("9999-12-31T15:59:00.000Z"),
+        },
+      });
+      const beforeQuery = Date.now();
+      try {
+        const result = await getContentDrivenTimeCanvasData({
+          actor: actor(owner),
+          input: {
+            scope: { kind: "TASK_SCOPED", taskId: task.taskId },
+            personIds: [],
+            taskIds: [],
+            types: [],
+            statuses: [],
+            groupBy: "PERSON",
+            includeTaskAnchors: true,
+            includeActual: true,
+            includeBusyBlocks: false,
+          },
+          load: { mode: "INITIAL" },
+        });
+        const logicalStart = Date.parse(result.data.range.startAt);
+        const logicalEnd = Date.parse(result.data.range.endAt);
 
-      expect(logicalStart).toBeLessThanOrEqual(historicalStart.getTime());
-      expect(logicalEnd).toBeGreaterThan(historicalMilestone.getTime());
-      expect(logicalEnd).toBeLessThan(beforeQuery);
-      expect(result.fullRange.startMs).toBeLessThanOrEqual(historicalStart.getTime());
-      expect(result.fullRange.endMs).toBeGreaterThan(beforeQuery);
+        expect(logicalStart).toBeLessThanOrEqual(historicalStart.getTime());
+        expect(logicalEnd).toBeGreaterThan(historicalMilestone.getTime());
+        expect(logicalEnd).toBeLessThan(beforeQuery);
+        expect(result.fullRange.startMs).toBeLessThanOrEqual(historicalStart.getTime());
+        expect(result.fullRange.endMs).toBeGreaterThan(beforeQuery);
+
+        const extremeResult = await getContentDrivenTimeCanvasData({
+          actor: actor(owner),
+          input: {
+            scope: { kind: "TASK_SCOPED", taskId: task.taskId },
+            personIds: [],
+            taskIds: [],
+            types: [],
+            statuses: [],
+            groupBy: "PERSON",
+            includeTaskAnchors: true,
+            includeActual: true,
+            includeBusyBlocks: false,
+          },
+          preferredCenterMs: extremeMarker.markedAt.getTime(),
+          load: { mode: "INITIAL" },
+        });
+        expect(extremeResult.resolvedCenterMs).toBe(extremeMarker.markedAt.getTime());
+        expect(extremeResult.data.globalMarkers).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ id: extremeMarker.id }),
+          ]),
+        );
+        expect(extremeResult.data.range.endAt).toBe(
+          "9999-12-31T23:59:59.999Z",
+        );
+      } finally {
+        await prisma.globalTimeMarker.updateMany({
+          where: { id: { in: [todayMarker.id, extremeMarker.id] } },
+          data: { deletedAt: new Date() },
+        });
+      }
     });
 
   test("time-object limit rejects 5001 Busy-only records without an unbounded response", async () => {

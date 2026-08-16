@@ -6,6 +6,10 @@ import type {
 export const HOUR_MS = 60 * 60 * 1_000;
 export const DAY_MS = 24 * HOUR_MS;
 export const SHANGHAI_OFFSET_MS = 8 * HOUR_MS;
+export const MIN_CANVAS_ISO_TIME_MS = Date.parse("0000-01-01T00:00:00.000Z");
+export const MIN_GLOBAL_TIME_MARKER_MS = Date.parse("0001-01-01T00:00:00.000Z");
+export const MAX_CANVAS_ISO_TIME_MS = Date.parse("9999-12-31T23:59:59.999Z");
+export const MAX_GLOBAL_TIME_MARKER_MS = MAX_CANVAS_ISO_TIME_MS - 1;
 
 export type TimeScale = TimeCanvasRange & {
   viewportWidthPx: number;
@@ -266,36 +270,43 @@ export function padShanghaiCalendarRange(
   const count = Math.max(0, Math.trunc(months));
   if (!bounds) {
     const month = startOfShanghaiMonth(fallbackMs);
-    return {
+    return clampToSerializableIsoRange({
       startMs: addShanghaiCalendarMonths(month, -count),
       endMs: addShanghaiCalendarMonths(month, count + 1),
-    };
+    });
   }
   assertRange(bounds);
-  return {
+  return clampToSerializableIsoRange({
     startMs: addShanghaiCalendarMonths(startOfShanghaiMonth(bounds.startMs), -count),
     endMs: addShanghaiCalendarMonths(
       startOfShanghaiMonth(bounds.endMs - 1),
       count + 1,
     ),
-  };
+  });
+}
+
+function clampToSerializableIsoRange(range: TimeCanvasRange): TimeCanvasRange {
+  const startMs = Math.max(MIN_CANVAS_ISO_TIME_MS, range.startMs);
+  const endMs = Math.min(MAX_CANVAS_ISO_TIME_MS, range.endMs);
+  if (startMs >= endMs) throw new Error("时间范围超出可显示边界");
+  return { startMs, endMs };
 }
 
 export function startOfShanghaiMonth(timeMs: number): number {
   if (!Number.isFinite(timeMs)) throw new Error("时间参数无效");
   const local = new Date(timeMs + SHANGHAI_OFFSET_MS);
-  return Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), 1) - SHANGHAI_OFFSET_MS;
+  return utcTimestamp(local.getUTCFullYear(), local.getUTCMonth(), 1) - SHANGHAI_OFFSET_MS;
 }
 
 export function startOfShanghaiYear(timeMs: number): number {
   if (!Number.isFinite(timeMs)) throw new Error("时间参数无效");
   const local = new Date(timeMs + SHANGHAI_OFFSET_MS);
-  return Date.UTC(local.getUTCFullYear(), 0, 1) - SHANGHAI_OFFSET_MS;
+  return utcTimestamp(local.getUTCFullYear(), 0, 1) - SHANGHAI_OFFSET_MS;
 }
 
 export function addShanghaiCalendarMonths(timeMs: number, months: number): number {
   const local = new Date(timeMs + SHANGHAI_OFFSET_MS);
-  return Date.UTC(
+  return utcTimestamp(
     local.getUTCFullYear(),
     local.getUTCMonth() + Math.trunc(months),
     local.getUTCDate(),
@@ -312,9 +323,9 @@ export function addShanghaiCalendarYears(timeMs: number, years: number): number 
   const month = local.getUTCMonth();
   const day = Math.min(
     local.getUTCDate(),
-    new Date(Date.UTC(year, month + 1, 0)).getUTCDate(),
+    new Date(utcTimestamp(year, month + 1, 0)).getUTCDate(),
   );
-  return Date.UTC(
+  return utcTimestamp(
     year,
     month,
     day,
@@ -323,6 +334,21 @@ export function addShanghaiCalendarYears(timeMs: number, years: number): number 
     local.getUTCSeconds(),
     local.getUTCMilliseconds(),
   ) - SHANGHAI_OFFSET_MS;
+}
+
+function utcTimestamp(
+  year: number,
+  month: number,
+  day: number,
+  hours = 0,
+  minutes = 0,
+  seconds = 0,
+  milliseconds = 0,
+) {
+  const date = new Date(0);
+  date.setUTCFullYear(year, month, day);
+  date.setUTCHours(hours, minutes, seconds, milliseconds);
+  return date.getTime();
 }
 
 export function clampLogicalRangeToThreeYears(

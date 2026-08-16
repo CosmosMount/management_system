@@ -83,6 +83,13 @@ export function timeCanvasDataToModel(
   const anchors = showPlanRows
     ? data.anchors.flatMap((task) => adaptTaskAnchors(task, planRowIds.get(task.id)))
     : [];
+  const globalMarkers = data.globalMarkers.map((marker) => ({
+    id: marker.id,
+    label: marker.name,
+    atMs: parseMs(marker.markedAt),
+    editable: false,
+    versionToken: marker.versionToken,
+  }));
 
   return {
     timezone: data.timezone,
@@ -93,6 +100,7 @@ export function timeCanvasDataToModel(
     rowPageKey: data.rowPageKey,
     rows: [...planRows, ...regularRows],
     anchors,
+    globalMarkers,
     segments,
     generatedAt: data.generatedAt,
   };

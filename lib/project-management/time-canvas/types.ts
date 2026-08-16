@@ -4,7 +4,8 @@ export type TimeCanvasMode =
   | "TASK_COMPOSER"
   | "TASK_WORKBENCH"
   | "RESOURCE_PLANNER"
-  | "PERSONAL_TIMELINE";
+  | "PERSONAL_TIMELINE"
+  | "ADMIN_TIME_MARKERS";
 
 export type TimeCanvasZoom = "WEEK" | "MONTH" | "QUARTER" | "YEAR";
 
@@ -62,6 +63,14 @@ export type TimeCanvasPhaseBand = {
   visualState?: "TEMPORARY";
 };
 
+export type TimeCanvasGlobalMarker = {
+  id: string;
+  label: string;
+  atMs: number;
+  editable: boolean;
+  versionToken: string | null;
+};
+
 export type TimeCanvasSegmentPermissions = {
   canViewDetails: boolean;
   canEdit: boolean;
@@ -102,6 +111,7 @@ export type TimeCanvasModel = {
   failedRanges?: Array<TimeCanvasRange & { message: string }>;
   rows: TimeCanvasRow[];
   anchors: TimeCanvasAnchor[];
+  globalMarkers?: TimeCanvasGlobalMarker[];
   phaseBands?: TimeCanvasPhaseBand[];
   segments: TimeCanvasSegment[];
   generatedAt: string;
@@ -192,6 +202,14 @@ export type TimeCanvasAnchorMoveResolution = Pick<
   blockedMessage?: string;
 };
 
+export type TimeCanvasGlobalMarkerMoveRequest = {
+  markerId: string;
+  kind: "MOVE" | "KEYBOARD_MOVE";
+  atMs: number;
+  deltaMs: number;
+  snapMs: number;
+};
+
 export type TimeCanvasInteractionOptions = {
   enableBrushCreate?: boolean;
   enableAnchorCreate?: boolean;
@@ -207,6 +225,7 @@ export type TimeCanvasInteractionOptions = {
     request: TimeCanvasAnchorMoveRequest,
   ) => TimeCanvasAnchorMoveResolution;
   onAnchorMove?: (request: TimeCanvasAnchorMoveRequest) => void;
+  onGlobalMarkerMove?: (request: TimeCanvasGlobalMarkerMoveRequest) => void;
   onAnchorSelectionChange?: (anchorId: string | null) => void;
   onSegmentTransform?: (request: TimeCanvasSegmentTransformRequest) => void;
   onSegmentToggleSelection?: (segmentId: string) => void;

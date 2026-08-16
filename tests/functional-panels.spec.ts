@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { prisma } from "../lib/prisma";
 import {
   expectHealthyPage,
@@ -222,7 +222,7 @@ test.describe("管理员面板", () => {
     await loginAsAdminUser(context, baseURL);
   });
 
-  test("管理员首页和三个子面板都能进入", async ({ page }) => {
+  test("管理员首页和四个子面板都能进入", async ({ page }) => {
     await page.goto("/admin", { waitUntil: "networkidle" });
     await expect(page.getByRole("main").getByText("管理员面板")).toBeVisible();
     await expect(page.getByText("统一账号")).toBeVisible();
@@ -232,6 +232,7 @@ test.describe("管理员面板", () => {
       { name: /系统同步/, url: /\/admin\/system$/, text: /飞书|同步|通讯录/ },
       { name: /账号与权限/, url: /\/admin\/accounts$/, text: /账号|权限/ },
       { name: /采购预算池/, url: /\/admin\/budget-pools$/, text: /预算|导入/ },
+      { name: /关键时间点/, url: /\/admin\/time-markers$/, text: /时间点|时间线/ },
     ];
 
     for (const panel of panels) {
@@ -241,6 +242,269 @@ test.describe("管理员面板", () => {
       await expect(page.getByText(panel.text).first()).toBeVisible();
       await expectHealthyPage(page);
     }
+  });
+
+  test("关键时间点可通过表单和时间线拖动后统一保存", async ({ page }, testInfo) => {
+    test.setTimeout(60_000);
+    const markerName = `PW关键时间点-${Date.now()}`;
+    const denseMarkers = Array.from({ length: 6 }, (_, index) => ({
+      id: crypto.randomUUID(),
+      name: `${`PW密集关键时间点${index + 1}`.repeat(10)}`.slice(0, 100),
+      markedAt: new Date(),
+    }));
+    await prisma.globalTimeMarker.createMany({ data: denseMarkers });
+    try {
+    await page.goto("/admin/time-markers", { waitUntil: "networkidle" });
+    await expect(page.getByTestId("admin-global-time-markers")).toBeVisible();
+    const markerStage = page.getByTestId("time-canvas-global-marker-stage");
+    const stageGrid = markerStage.getByTestId("time-canvas-time-grid");
+    const axisTodayLine = page.getByTestId("time-canvas-today-axis");
+    const stageTodayLine = markerStage.getByTestId("time-canvas-today-line");
+    await expect(stageGrid).toBeVisible();
+    expect(await stageGrid.locator(":scope > span").count()).toBeGreaterThan(1);
+    await expect(axisTodayLine).toBeVisible();
+    await expect(stageTodayLine).toBeVisible();
+    const overflowMarker = markerStage.getByTestId("global-time-marker-overflow");
+    await expect(overflowMarker).toBeVisible();
+    await expect(overflowMarker).toContainText("+3 个关键点");
+    await expect(overflowMarker).toHaveAttribute(
+      "aria-label",
+      /PW密集关键时间点/,
+    );
+    await overflowMarker.click();
+    const overflowDialog = page.getByTestId("global-time-marker-overflow-dialog");
+    const firstOverflowItem = overflowDialog
+      .locator("[data-testid^='global-time-marker-overflow-item-']")
+      .first();
+    const overflowItemTestId = await firstOverflowItem.getAttribute("data-testid");
+    const revealedMarkerId = overflowItemTestId?.replace(
+      "global-time-marker-overflow-item-",
+      "",
+    );
+    if (!revealedMarkerId) throw new Error("重叠关键时间点详情缺少标识");
+    await firstOverflowItem.click();
+    const revealedHandle = page.getByTestId(`global-time-marker-${revealedMarkerId}`);
+    await expect(revealedHandle).toBeVisible();
+    await expect(revealedHandle).toHaveCSS("pointer-events", "auto");
+    const overflowZIndex = await overflowMarker.evaluate((element) =>
+      Number.parseInt(getComputedStyle(element).zIndex, 10),
+    );
+    const initialTodayLineZIndex = await stageTodayLine.evaluate((element) =>
+      Number.parseInt(getComputedStyle(element).zIndex, 10),
+    );
+    expect(initialTodayLineZIndex).toBeGreaterThan(overflowZIndex);
+    const axisTodayBox = await axisTodayLine.boundingBox();
+    const stageTodayBox = await stageTodayLine.boundingBox();
+    if (!axisTodayBox || !stageTodayBox) {
+      throw new Error("无法读取管理员时间线的当前时间位置");
+    }
+    expect(stageTodayBox.x).toBeCloseTo(axisTodayBox.x, 0);
+    expect(
+      Math.abs(stageTodayBox.y - (axisTodayBox.y + axisTodayBox.height)),
+    ).toBeLessThanOrEqual(1);
+    await page.getByRole("button", { name: "新增时间点" }).click();
+    const newEditor = page.getByTestId(/^global-time-marker-editor-/).last();
+    await newEditor.getByLabel(/名称/).fill(markerName);
+    const newTimeInput = newEditor.getByLabel("时间（上海）");
+    await newTimeInput.fill("");
+    await expect(newEditor.getByText("请选择关键时间点时间")).toBeVisible();
+    await expect(page.getByRole("button", { name: "保存全部" })).toBeDisabled();
+    await newTimeInput.fill("2026-09-18T10:30");
+    await newEditor.getByRole("button", { name: /在时间线定位/ }).click();
+    await page.getByRole("button", { name: "保存全部" }).click();
+    await expect(page.getByText("有未保存修改")).toHaveCount(0);
+    const savedToast = page.getByText("关键时间点已保存", { exact: true });
+    await expect(savedToast).toBeVisible();
+    await expect(savedToast).toHaveCount(0, { timeout: 10_000 });
+
+    const persisted = await prisma.globalTimeMarker.findFirstOrThrow({
+      where: { name: markerName, deletedAt: null },
+    });
+    expect(persisted.markedAt.toISOString()).toBe("2026-09-18T02:30:00.000Z");
+
+    const editor = page.getByTestId(`global-time-marker-editor-${persisted.id}`);
+    await expect(editor).toBeVisible();
+    await editor.getByRole("button", { name: /在时间线定位/ }).click();
+    const handle = page.getByTestId(`global-time-marker-${persisted.id}`);
+    await expect(handle).toBeVisible();
+    await expect(handle).toContainText("09-18 10:30");
+    const handleZIndex = await handle.evaluate((element) =>
+      Number.parseInt(getComputedStyle(element).zIndex, 10),
+    );
+    const todayLineZIndex = await stageTodayLine.evaluate((element) =>
+      Number.parseInt(getComputedStyle(element).zIndex, 10),
+    );
+    expect(todayLineZIndex).toBeGreaterThan(handleZIndex);
+    await expect(page.getByText("全局关键节点")).toHaveCount(0);
+    await expect(page.getByTestId(`global-time-marker-line-${persisted.id}`)).toBeVisible();
+    const beforeDrag = await editor.getByLabel("时间（上海）").inputValue();
+    await dragTimelineMarker(page, handle, 45, testInfo.project.name === "mobile");
+    await expect(editor.getByLabel("时间（上海）")).not.toHaveValue(beforeDrag);
+
+    const pendingValue = await editor.getByLabel("时间（上海）").inputValue();
+    await page.route("**/admin/time-markers", async (route) => {
+      if (route.request().method() === "POST") {
+        await new Promise((resolve) => setTimeout(resolve, 600));
+      }
+      await route.continue();
+    });
+    await page.getByRole("button", { name: "保存全部" }).click();
+    await expect(page.getByRole("button", { name: "正在保存…" })).toBeVisible();
+    await expect(editor.getByLabel("时间（上海）")).toBeDisabled();
+    await expect(handle).toHaveCSS("pointer-events", "none");
+    await page.getByRole("link", { name: "概览", exact: true }).click();
+    await expect(page).toHaveURL(/\/admin\/time-markers$/);
+    await page.goBack();
+    await expect(page).toHaveURL(/\/admin\/time-markers$/);
+    await dragTimelineMarker(page, handle, 45, testInfo.project.name === "mobile");
+    await expect(editor.getByLabel("时间（上海）")).toHaveValue(pendingValue);
+    await expect(page.getByText("有未保存修改")).toHaveCount(0);
+    await page.unroute("**/admin/time-markers");
+    const moved = await prisma.globalTimeMarker.findUniqueOrThrow({
+      where: { id: persisted.id },
+    });
+    expect(moved.markedAt.getTime()).not.toBe(persisted.markedAt.getTime());
+
+    const beforeKeyboard = await editor.getByLabel("时间（上海）").inputValue();
+    await handle.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(editor.getByLabel("时间（上海）")).not.toHaveValue(beforeKeyboard);
+    await page.getByRole("button", { name: "保存全部" }).click();
+    await expect(page.getByText("有未保存修改")).toHaveCount(0);
+
+    await editor.getByRole("button", { name: /暂存删除/ }).click();
+    await page.getByRole("button", { name: "保存全部" }).click();
+    await expect(page.getByText("有未保存修改")).toHaveCount(0);
+    await expect
+      .poll(async () =>
+        (await prisma.globalTimeMarker.findUniqueOrThrow({
+          where: { id: persisted.id },
+        })).deletedAt,
+      )
+      .not.toBeNull();
+
+    await page.getByRole("button", { name: "新增时间点" }).click();
+    const extremeEditor = page.getByTestId(/^global-time-marker-editor-/).last();
+    const extremeEditorTestId = await extremeEditor.getAttribute("data-testid");
+    const extremeMarkerId = extremeEditorTestId?.replace(
+      "global-time-marker-editor-",
+      "",
+    );
+    if (!extremeMarkerId) throw new Error("极远日期关键时间点缺少标识");
+    await extremeEditor.getByLabel(/名称/).fill("极远日期范围回归");
+    await extremeEditor.getByLabel("时间（上海）").fill("9999-12-31T23:59");
+    await extremeEditor.getByRole("button", { name: /在时间线定位/ }).click();
+    const canvasRoot = page.getByTestId("time-canvas-root");
+    await expect(extremeEditor.getByText("请选择关键时间点时间")).toHaveCount(0);
+    await expect(page.getByTestId(`global-time-marker-${extremeMarkerId}`)).toBeVisible();
+    const rangeStart = Number(await canvasRoot.getAttribute("data-range-start-ms"));
+    const rangeEnd = Number(await canvasRoot.getAttribute("data-range-end-ms"));
+    expect((rangeEnd - rangeStart) / (24 * 60 * 60 * 1000)).toBeLessThanOrEqual(
+      1_100,
+    );
+    await extremeEditor.getByRole("button", { name: /暂存删除/ }).click();
+    await expect(page.getByText("有未保存修改")).toHaveCount(0);
+    await expectHealthyPage(page);
+    } finally {
+      await prisma.globalTimeMarker.updateMany({
+        where: {
+          OR: [
+            { name: markerName },
+            { id: { in: denseMarkers.map((marker) => marker.id) } },
+          ],
+          deletedAt: null,
+        },
+        data: { deletedAt: new Date() },
+      });
+    }
+  });
+
+  test("关键时间点并发冲突会保留草稿并提供最新集合", async ({ page }) => {
+    test.setTimeout(60_000);
+    const savedName = `PW关键时间点-并发已保存-${Date.now()}`;
+    const conflictingDraftName = `PW关键时间点-并发草稿-${Date.now()}`;
+    const conflictingPage = await page.context().newPage();
+    try {
+      await Promise.all([
+        page.goto("/admin/time-markers", { waitUntil: "networkidle" }),
+        conflictingPage.goto("/admin/time-markers", { waitUntil: "networkidle" }),
+      ]);
+
+      await conflictingPage.getByRole("button", { name: "新增时间点" }).click();
+      const conflictingEditor = conflictingPage
+        .getByTestId(/^global-time-marker-editor-/)
+        .last();
+      await conflictingEditor.getByLabel(/名称/).fill(conflictingDraftName);
+      await expect(conflictingPage.getByText("有未保存修改")).toBeVisible();
+
+      await page.getByRole("button", { name: "新增时间点" }).click();
+      const savedEditor = page.getByTestId(/^global-time-marker-editor-/).last();
+      await savedEditor.getByLabel(/名称/).fill(savedName);
+      await page.getByRole("button", { name: "保存全部" }).click();
+      await expect(page.getByText("有未保存修改")).toHaveCount(0);
+
+      await conflictingPage.getByRole("button", { name: "保存全部" }).click();
+      const conflictAlert = conflictingPage.getByRole("alert").filter({
+        hasText: "关键时间点已被其他管理员修改",
+      });
+      await expect(conflictAlert).toBeVisible();
+      await expect(conflictingEditor.getByLabel(/名称/)).toHaveValue(
+        conflictingDraftName,
+      );
+      await conflictAlert
+        .getByRole("button", { name: "放弃草稿并重新加载" })
+        .click();
+      await expect
+        .poll(() => pageHasInputValue(conflictingPage, conflictingDraftName))
+        .toBe(false);
+      await expect
+        .poll(() => pageHasInputValue(conflictingPage, savedName))
+        .toBe(true);
+      await expect(conflictAlert).toHaveCount(0);
+      await expectHealthyPage(conflictingPage);
+    } finally {
+      await prisma.globalTimeMarker.updateMany({
+        where: {
+          name: { in: [savedName, conflictingDraftName] },
+          deletedAt: null,
+        },
+        data: { deletedAt: new Date() },
+      });
+      await conflictingPage.close();
+    }
+  });
+
+  test("关键时间点未保存草稿会拦截站内链接和浏览器后退", async ({ page }) => {
+    await page.goto("/admin");
+    await page.goto("/admin/time-markers", { waitUntil: "networkidle" });
+    await page.getByRole("button", { name: "新增时间点" }).click();
+    const editor = page.getByTestId(/^global-time-marker-editor-/).last();
+    await editor.getByLabel(/名称/).fill("仅用于导航保护的未保存草稿");
+
+    page.once("dialog", async (dialog) => {
+      expect(dialog.message()).toContain("还有未保存的修改");
+      await dialog.dismiss();
+    });
+    await page.getByRole("link", { name: "概览", exact: true }).click();
+    await expect(page).toHaveURL(/\/admin\/time-markers$/);
+    await expect(editor.getByLabel(/名称/)).toHaveValue(
+      "仅用于导航保护的未保存草稿",
+    );
+
+    page.once("dialog", async (dialog) => {
+      expect(dialog.message()).toContain("还有未保存的修改");
+      await dialog.dismiss();
+    });
+    await page.goBack();
+    await expect(page).toHaveURL(/\/admin\/time-markers$/);
+    await expect(editor.getByLabel(/名称/)).toHaveValue(
+      "仅用于导航保护的未保存草稿",
+    );
+
+    page.once("dialog", async (dialog) => dialog.accept());
+    await page.getByRole("link", { name: "概览", exact: true }).click();
+    await expect(page).toHaveURL(/\/admin$/);
+    await expectHealthyPage(page);
   });
 
   test("账号与权限页使用三块职责布局并就地管理项目角色", async ({ page }) => {
@@ -771,3 +1035,55 @@ test("项目管理员仍不能进入账号与权限后台", async ({
     });
   }
 });
+
+async function dragTimelineMarker(
+  page: Page,
+  marker: Locator,
+  deltaX: number,
+  touch: boolean,
+) {
+  await marker.scrollIntoViewIfNeeded();
+  const box = await marker.boundingBox();
+  if (!box) throw new Error("无法读取关键时间点拖动位置");
+  const start = {
+    x: box.x + box.width / 2,
+    y: box.y + box.height / 2,
+  };
+  if (!touch) {
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(start.x + deltaX, start.y, { steps: 5 });
+    await page.mouse.up();
+    return;
+  }
+
+  const session = await page.context().newCDPSession(page);
+  try {
+    await session.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: [{ ...start, id: 1 }],
+    });
+    for (let step = 1; step <= 5; step += 1) {
+      await session.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: [{ x: start.x + (deltaX * step) / 5, y: start.y, id: 1 }],
+      });
+    }
+    await session.send("Input.dispatchTouchEvent", {
+      type: "touchEnd",
+      touchPoints: [],
+    });
+  } finally {
+    await session.detach();
+  }
+}
+
+async function pageHasInputValue(page: Page, value: string) {
+  return page.locator("input").evaluateAll(
+    (inputs, expected) =>
+      inputs.some(
+        (input) => input instanceof HTMLInputElement && input.value === expected,
+      ),
+    value,
+  );
+}

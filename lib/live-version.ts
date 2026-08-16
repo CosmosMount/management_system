@@ -211,7 +211,7 @@ async function getProfileVersion(userOpenId: string): Promise<string> {
 }
 
 async function getAdminVersion(): Promise<string> {
-  const [users, roles, systemRoles, accounts, budgetAggregate, budgetCount] = await Promise.all([
+  const [users, roles, systemRoles, accounts, budgetAggregate, budgetCount, markerAggregate, markerCount] = await Promise.all([
     prisma.user.findMany({
       orderBy: { openId: "asc" },
       select: {
@@ -247,6 +247,8 @@ async function getAdminVersion(): Promise<string> {
     }),
     prisma.procurementBudgetPool.aggregate({ _max: { updatedAt: true } }),
     prisma.procurementBudgetPool.count(),
+    prisma.globalTimeMarker.aggregate({ _max: { updatedAt: true } }),
+    prisma.globalTimeMarker.count({ where: { deletedAt: null } }),
   ]);
 
   return encodeVersion([
@@ -260,6 +262,7 @@ async function getAdminVersion(): Promise<string> {
     `systemRoles:${JSON.stringify(systemRoles)}`,
     `accounts:${JSON.stringify(accounts)}`,
     encodePart("budgetPools", budgetAggregate._max.updatedAt, budgetCount),
+    encodePart("globalTimeMarkers", markerAggregate._max.updatedAt, markerCount),
   ]);
 }
 

@@ -43,6 +43,7 @@ import {
 } from "@/lib/project-management/composer-contract";
 import { taskPriorityLabels } from "@/lib/project-management/labels";
 import type {
+  GlobalTimeMarkerDto,
   PersonOptionDto,
   TaskOptionPage,
 } from "@/lib/project-management/types/time-canvas";
@@ -96,6 +97,7 @@ export function TaskComposerClient({
   initialPeople,
   initialTasks,
   initialProjects = [],
+  initialGlobalMarkers = [],
   mode = CREATE_TASK_COMPOSER_MODE,
 }: {
   accountId: string;
@@ -104,6 +106,7 @@ export function TaskComposerClient({
   initialPeople: PersonOption[];
   initialTasks: TaskOption[];
   initialProjects?: Array<{ id: string; name: string; avatarPath: string | null }>;
+  initialGlobalMarkers?: GlobalTimeMarkerDto[];
   mode?: TaskComposerMode;
 }) {
   const router = useRouter();
@@ -942,6 +945,7 @@ export function TaskComposerClient({
 
         <TaskComposerPlanEditor
           state={state}
+          globalMarkers={initialGlobalMarkers}
           issues={issues}
           inspectorDraft={inspectorDraft}
           inspectorIssues={inspectorIssues}

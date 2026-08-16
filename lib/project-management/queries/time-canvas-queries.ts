@@ -67,6 +67,7 @@ import {
   encodePersonalDueCursor,
 } from "@/lib/project-management/queries/time-canvas-cursor";
 import { loadBoundedAdaptiveLeaves } from "@/lib/project-management/queries/time-canvas-adaptive-loader";
+import { listGlobalTimeMarkers } from "@/lib/project-management/global-time-markers";
 
 export { loadBoundedAdaptiveLeaves } from "@/lib/project-management/queries/time-canvas-adaptive-loader";
 
@@ -240,13 +241,23 @@ export async function getTimeCanvasData({
         fullSegments,
       )
     : [];
+  const globalMarkers = await listGlobalTimeMarkers();
   const rowPageKey = createRowPageKey(
     actor,
     parsed,
     rowPage.rows,
     anchors,
     undefined,
-    fullSegments.map((segment) => [segment.id, segment.updatedAt.toISOString()]),
+    {
+      segments: fullSegments.map((segment) => [
+        segment.id,
+        segment.updatedAt.toISOString(),
+      ]),
+      globalMarkers: globalMarkers.map((marker) => [
+        marker.id,
+        marker.versionToken,
+      ]),
+    },
   );
   return timeCanvasDataDtoSchema.parse({
     scope: parsed.scope,
@@ -259,6 +270,7 @@ export async function getTimeCanvasData({
     groupBy: parsed.groupBy,
     rows: rowPage.rows,
     anchors,
+    globalMarkers,
     segments,
     generatedAt: new Date().toISOString(),
   });
@@ -330,7 +342,7 @@ export async function getContentDrivenTimeCanvasData({
         : { taskId: { in: rowPage.rowIds } },
     ],
   };
-  const [segmentBounds, anchors] = await Promise.all([
+  const [segmentBounds, anchors, globalMarkers] = await Promise.all([
     rowPage.rowIds.length === 0
       ? Promise.resolve({
           _min: { startAt: null },
@@ -352,28 +364,42 @@ export async function getContentDrivenTimeCanvasData({
           [],
         )
       : Promise.resolve([]),
+    listGlobalTimeMarkers(),
   ]);
-  const timestamps: number[] = [];
-  if (segmentBounds._min.startAt) timestamps.push(segmentBounds._min.startAt.getTime());
-  if (segmentBounds._max.endAt) timestamps.push(segmentBounds._max.endAt.getTime() - 1);
+  const businessTimestamps: number[] = [];
+  if (segmentBounds._min.startAt) {
+    businessTimestamps.push(segmentBounds._min.startAt.getTime());
+  }
+  if (segmentBounds._max.endAt) {
+    businessTimestamps.push(segmentBounds._max.endAt.getTime() - 1);
+  }
   for (const task of anchors) {
-    timestamps.push(Date.parse(task.plannedStartAt ?? task.createdAt));
+    businessTimestamps.push(Date.parse(task.plannedStartAt ?? task.createdAt));
     for (const node of task.nodes) {
-      if (node.plannedAt) timestamps.push(Date.parse(node.plannedAt));
+      if (node.plannedAt) businessTimestamps.push(Date.parse(node.plannedAt));
     }
   }
-  const contentRange = contentTimeBounds(timestamps);
+  const businessContentRange = contentTimeBounds(businessTimestamps);
+  const contentRange = contentTimeBounds([
+    ...businessTimestamps,
+    ...globalMarkers.map((marker) => Date.parse(marker.markedAt)),
+  ]);
   const now = Date.now();
   const contentNavigationRange = padShanghaiCalendarRange(contentRange, 2, seedStart);
+  const businessNavigationRange = businessContentRange
+    ? padShanghaiCalendarRange(businessContentRange, 2, seedStart)
+    : null;
   const todayNavigationRange = padShanghaiCalendarRange(null, 2, now);
   const fullRange = {
     startMs: Math.min(contentNavigationRange.startMs, todayNavigationRange.startMs),
     endMs: Math.max(contentNavigationRange.endMs, todayNavigationRange.endMs),
   };
-  const fallbackCenterMs = now >= contentNavigationRange.startMs &&
-      now < contentNavigationRange.endMs
+  const fallbackCenterMs = businessNavigationRange &&
+      now >= businessNavigationRange.startMs &&
+      now < businessNavigationRange.endMs
     ? now
-    : (contentRange?.startMs ??
+    : (businessContentRange?.startMs ??
+      contentRange?.startMs ??
       (contentNavigationRange.startMs + contentNavigationRange.endMs) / 2);
   const resolvedCenterMs = requestedCenterMs !== null &&
       requestedCenterMs >= fullRange.startMs &&
@@ -390,6 +416,10 @@ export async function getContentDrivenTimeCanvasData({
     {
       count: segmentBounds._count._all,
       latestUpdatedAt: segmentBounds._max.updatedAt?.toISOString() ?? null,
+      globalMarkers: globalMarkers.map((marker) => [
+        marker.id,
+        marker.versionToken,
+      ]),
     },
   );
   const loadRange = resolveContentLoadRange(load, logical.range, resolvedCenterMs);
@@ -417,6 +447,7 @@ export async function getContentDrivenTimeCanvasData({
     groupBy: parsed.groupBy,
     rows: rowPage.rows,
     anchors,
+    globalMarkers,
     segments: blockResult.segments,
     generatedAt: new Date().toISOString(),
   });

@@ -14,6 +14,7 @@ import {
 import { buildResubmitRevisionComposerSeed } from "@/lib/project-management/revision-composer";
 import { routes } from "@/lib/routes";
 import { getProgressActorOrRedirect } from "../../../../../_auth";
+import { listGlobalTimeMarkers } from "@/lib/project-management/global-time-markers";
 
 export default async function ProgressTaskRevisionEditPage({
   params,
@@ -68,7 +69,7 @@ export default async function ProgressTaskRevisionEditPage({
     revision,
   });
   if (!seed) redirect(routes.progress.taskRevisions(id));
-  const [people, relatedTasks] = await Promise.all([
+  const [people, relatedTasks, globalMarkers] = await Promise.all([
     resolveRevisionPeople(actor, workspace.members.map((member) => member.personId)),
     resolveTaskOptionsByIds({
       actor,
@@ -76,6 +77,7 @@ export default async function ProgressTaskRevisionEditPage({
         ids: workspace.task.relatedTaskId ? [workspace.task.relatedTaskId] : [],
       },
     }),
+    listGlobalTimeMarkers(),
   ]);
   const deploymentEnvironment =
     process.env.NEXT_PUBLIC_APP_URL?.trim() || process.env.NODE_ENV || "unknown";
@@ -93,6 +95,7 @@ export default async function ProgressTaskRevisionEditPage({
         initialPeople={people}
         initialTasks={relatedTasks}
         initialProjects={workspace.task.project ? [workspace.task.project] : []}
+        initialGlobalMarkers={globalMarkers}
         mode={{
           kind: "RESUBMIT_REVISION",
           taskId: id,

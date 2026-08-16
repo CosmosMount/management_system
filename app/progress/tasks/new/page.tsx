@@ -25,6 +25,7 @@ import {
 import type { PersonOptionDto } from "@/lib/project-management/types/time-canvas";
 import { listActiveProjectOptions, resolveActiveProjectOptions } from "@/lib/project-management/queries/project-queries";
 import { getProgressActorOrRedirect } from "../../_auth";
+import { listGlobalTimeMarkers } from "@/lib/project-management/global-time-markers";
 
 type SearchParams = Record<string, string | string[] | undefined>;
 
@@ -52,7 +53,7 @@ export default async function ProgressTaskNewPage({
 
   const initialScope = chooseInitialScope(actor, template);
 
-  const [actorPerson, peoplePage, templatePeople, taskPage, projectOptions, preferredProjects] = await Promise.all([
+  const [actorPerson, peoplePage, templatePeople, taskPage, projectOptions, preferredProjects, globalMarkers] = await Promise.all([
     getActorPersonOption(actor),
     searchPeople({
       actor,
@@ -67,6 +68,7 @@ export default async function ProgressTaskNewPage({
     searchTaskOptions({ actor, input: { limit: 50 } }),
     listActiveProjectOptions(),
     resolveActiveProjectOptions({ ids: preferredProjectId ? [preferredProjectId] : [] }),
+    listGlobalTimeMarkers(),
   ]);
   const initialProjectOptions = [...new Map([...preferredProjects, ...projectOptions].map((project) => [project.id, project])).values()];
   const people = mergePersonOptions(
@@ -98,6 +100,7 @@ export default async function ProgressTaskNewPage({
         initialPeople={people}
         initialTasks={tasks}
         initialProjects={initialProjectOptions}
+        initialGlobalMarkers={globalMarkers}
       />
     </>
   );

@@ -1032,6 +1032,17 @@ model DomainAuditEvent {
   @@index([source, createdAt])
 }
 
+model GlobalTimeMarker {
+  id        String    @id @default(uuid())
+  name      String    @db.VarChar(100)
+  markedAt  DateTime  @db.Timestamptz(6)
+  deletedAt DateTime? @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(6)
+
+  @@index([deletedAt, markedAt, id])
+}
+
 model NotificationOutbox {
   id          String                        @id @default(uuid())
   eventKey    String                        @unique

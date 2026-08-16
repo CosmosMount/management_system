@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, RefreshCw, ShieldCheck, Wallet } from "lucide-react";
+import { Flag, LayoutDashboard, RefreshCw, ShieldCheck, Wallet } from "lucide-react";
 import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
@@ -11,13 +11,14 @@ const adminNavItems = [
   { href: routes.admin.system, label: "系统同步", icon: RefreshCw },
   { href: routes.admin.accounts, label: "账号与权限", icon: ShieldCheck },
   { href: routes.admin.budgetPools, label: "采购预算池", icon: Wallet },
+  { href: routes.admin.timeMarkers, label: "关键时间点", icon: Flag },
 ] as const;
 
 export function AdminNav() {
   const pathname = usePathname();
 
   return (
-    <nav className="grid min-w-0 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+    <nav className="grid min-w-0 gap-2 sm:grid-cols-2 lg:grid-cols-5">
       {adminNavItems.map((item) => {
         const Icon = item.icon;
         const active = pathname === item.href;

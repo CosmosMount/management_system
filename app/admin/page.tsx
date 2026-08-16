@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { RefreshCw, ShieldCheck, Users, Wallet } from "lucide-react";
+import { Flag, RefreshCw, ShieldCheck, Users, Wallet } from "lucide-react";
 import { AdminMetric } from "@/components/admin/admin-metric";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { currentBudgetPeriod } from "@/lib/procurement-budget-period";
@@ -13,6 +13,7 @@ export default async function AdminPage() {
     projectAdminCount,
     reimbursementRoleCount,
     budgetPoolCount,
+    globalTimeMarkerCount,
   ] = await Promise.all([
     prisma.account.count(),
     prisma.systemRoleAssignment.count({
@@ -27,6 +28,7 @@ export default async function AdminPage() {
     prisma.procurementBudgetPool.count({
       where: { period: currentBudgetPeriod() },
     }),
+    prisma.globalTimeMarker.count({ where: { deletedAt: null } }),
   ]);
 
   return (
@@ -62,6 +64,12 @@ export default async function AdminPage() {
           value={budgetPoolCount}
           detail={`${currentBudgetPeriod()} 周期`}
         />
+        <AdminMetric
+          icon={Flag}
+          label="关键时间点"
+          value={globalTimeMarkerCount}
+          detail="显示于全部项目时间线"
+        />
       </section>
 
       <section className="grid min-w-0 gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -82,6 +90,12 @@ export default async function AdminPage() {
           icon={Wallet}
           title="采购预算池"
           detail={`导入车组+技术组预算，当前 ${budgetPoolCount} 条。`}
+        />
+        <AdminEntryCard
+          href={routes.admin.timeMarkers}
+          icon={Flag}
+          title="关键时间点"
+          detail={`配置全部时间线共享的参考时间，当前 ${globalTimeMarkerCount} 个。`}
         />
       </section>
     </div>

@@ -60,6 +60,40 @@ const RANGE = {
 };
 
 test.describe("S3 TimeCanvas pure core", () => {
+  test("global marker DTOs adapt to a separate read-only canvas layer", () => {
+    const markerId = randomUUID();
+    const data = timeCanvasDataDtoSchema.parse({
+      scope: { kind: "PERSONAL" },
+      timezone: "Asia/Shanghai",
+      range: {
+        startAt: "2026-08-01T00:00:00.000+08:00",
+        endAt: "2026-09-01T00:00:00.000+08:00",
+      },
+      rowPageKey: "global-marker-fixture",
+      groupBy: "PERSON",
+      rows: [],
+      anchors: [],
+      globalMarkers: [{
+        id: markerId,
+        name: "报名截止",
+        markedAt: "2026-08-18T10:30:00.000+08:00",
+        updatedAt: "2026-08-16T10:00:00.000+08:00",
+        versionToken: "2026-08-16T10:00:00.000+08:00",
+      }],
+      segments: [],
+      generatedAt: "2026-08-16T10:00:00.000+08:00",
+    });
+    const model = timeCanvasDataToModel(data, "PERSONAL_TIMELINE");
+    expect(model.globalMarkers).toEqual([{
+      id: markerId,
+      label: "报名截止",
+      atMs: Date.parse("2026-08-18T10:30:00.000+08:00"),
+      editable: false,
+      versionToken: "2026-08-16T10:00:00.000+08:00",
+    }]);
+    expect(model.anchors).toEqual([]);
+  });
+
   test("Revision markers remain visible anchors without splitting plan phases", () => {
     const rowId = "plan:revision-marker";
     const anchor = (
@@ -204,6 +238,20 @@ test.describe("S3 TimeCanvas pure core", () => {
       startMs: Date.parse("2026-06-01T00:00:00.000+08:00"),
       endMs: Date.parse("2026-12-01T00:00:00.000+08:00"),
     });
+    const maximumRange = padShanghaiCalendarRange({
+      startMs: Date.parse("9999-12-31T15:59:00.000Z"),
+      endMs: Date.parse("9999-12-31T15:59:00.001Z"),
+    }, 2);
+    expect(new Date(maximumRange.endMs).toISOString()).toBe(
+      "9999-12-31T23:59:59.999Z",
+    );
+    const minimumRange = padShanghaiCalendarRange({
+      startMs: Date.parse("0001-01-01T00:00:00.000Z"),
+      endMs: Date.parse("0001-01-01T00:00:00.001Z"),
+    }, 2);
+    expect(new Date(minimumRange.startMs).toISOString()).toBe(
+      "0000-10-31T16:00:00.000Z",
+    );
     const leapDay = Date.parse("2024-02-29T12:00:00.000+08:00");
     expect(new Date(addShanghaiCalendarYears(leapDay, 1)).toISOString()).toBe(
       "2025-02-28T04:00:00.000Z",

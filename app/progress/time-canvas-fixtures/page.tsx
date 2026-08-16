@@ -10,6 +10,7 @@ import type {
   TimeCanvasZoom,
 } from "@/components/project-management/time-canvas/types";
 import { PageCommandBar } from "@/components/project-management/shell/page-command-bar";
+import { listGlobalTimeMarkers } from "@/lib/project-management/global-time-markers";
 
 const modes = new Set<TimeCanvasMode>([
   "TASK_COMPOSER",
@@ -32,7 +33,7 @@ export default async function TimeCanvasFixturePage({
   const baseModel = single(params.empty) === "1"
     ? createEmptyTimeCanvasFixture()
     : createTimeCanvasFixture(mode);
-  const model = single(params.long) === "1"
+  const sizedModel = single(params.long) === "1"
     ? {
         ...baseModel,
         range: {
@@ -41,6 +42,18 @@ export default async function TimeCanvasFixturePage({
         },
       }
     : baseModel;
+  const model = single(params.globalMarkers) === "1"
+    ? {
+        ...sizedModel,
+        globalMarkers: (await listGlobalTimeMarkers()).map((marker) => ({
+          id: marker.id,
+          label: marker.name,
+          atMs: Date.parse(marker.markedAt),
+          editable: false,
+          versionToken: marker.versionToken,
+        })),
+      }
+    : sizedModel;
   const initialZoom = parseZoom(single(params.scale));
 
   return (

@@ -357,6 +357,7 @@ function mergeProjectTimelineModel(
     loadedRanges: resourceModel?.loadedRanges,
     loadedLeafBlockCounts: resourceModel?.loadedLeafBlockCounts,
     failedRanges: resourceModel?.failedRanges,
+    globalMarkers: resourceModel?.globalMarkers ?? [],
     rows: [
       ...planModel.rows,
       ...(resourceModel?.rows

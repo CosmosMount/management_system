@@ -20,6 +20,27 @@ const taskNodeTypeSchema = z.enum(taskNodeTypeValues);
 const taskNodeStatusSchema = z.enum(taskNodeStatusValues);
 const pageCursorSchema = z.string().trim().min(1).max(500).nullable();
 
+export const globalTimeMarkerDtoSchema = z
+  .object({
+    id: dtoIdSchema,
+    name: z.string().trim().min(1).max(100),
+    markedAt: dtoAbsoluteDateTimeSchema,
+    updatedAt: dtoAbsoluteDateTimeSchema,
+    versionToken: dtoAbsoluteDateTimeSchema,
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.versionToken !== value.updatedAt) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["versionToken"],
+        message: "关键时间点版本令牌必须等于 updatedAt",
+      });
+    }
+  });
+
+export type GlobalTimeMarkerDto = z.infer<typeof globalTimeMarkerDtoSchema>;
+
 export const timeCanvasScopeDtoSchema = z.discriminatedUnion("kind", [
   z
     .object({
@@ -329,6 +350,7 @@ const timeCanvasDataCommonFields = {
   range: timeCanvasRangeDtoSchema,
   rowPageKey: z.string().trim().min(1).max(100).default("legacy"),
   anchors: z.array(timeCanvasTaskAnchorDtoSchema),
+  globalMarkers: z.array(globalTimeMarkerDtoSchema).max(200).default([]),
   generatedAt: dtoAbsoluteDateTimeSchema,
 } as const;
 
@@ -390,6 +412,18 @@ export const timeCanvasDataDtoSchema = z
           });
         }
       });
+    });
+
+    const globalMarkerIds = new Set<string>();
+    value.globalMarkers.forEach((marker, index) => {
+      if (globalMarkerIds.has(marker.id)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["globalMarkers", index, "id"],
+          message: "同一画布不能重复返回相同关键时间点",
+        });
+      }
+      globalMarkerIds.add(marker.id);
     });
 
     const responseRangeStart = Date.parse(value.range.startAt);

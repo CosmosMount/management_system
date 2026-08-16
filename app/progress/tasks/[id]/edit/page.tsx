@@ -24,6 +24,7 @@ import {
 import { routes } from "@/lib/routes";
 import { listActiveProjectOptions } from "@/lib/project-management/queries/project-queries";
 import { getProgressActorOrRedirect } from "../../../_auth";
+import { listGlobalTimeMarkers } from "@/lib/project-management/global-time-markers";
 
 export default async function ProgressTaskEditPage({
   params,
@@ -55,6 +56,7 @@ export default async function ProgressTaskEditPage({
     taskPage,
     currentRelatedTasks,
     projectOptions,
+    globalMarkers,
   ] = await Promise.all([
     getActorPersonOption(actor),
     workspace.permissions.canManageMembers
@@ -71,6 +73,7 @@ export default async function ProgressTaskEditPage({
     searchTaskOptions({ actor, input: { limit: 50 } }),
     resolveTaskOptionsByIds({ actor, input: { ids: relatedTaskIds } }),
     listActiveProjectOptions(workspace.task.projectId),
+    listGlobalTimeMarkers(),
   ]);
   const people = mergeById(
     currentPeople,
@@ -100,6 +103,7 @@ export default async function ProgressTaskEditPage({
         initialPeople={people}
         initialTasks={tasks}
         initialProjects={projectOptions}
+        initialGlobalMarkers={globalMarkers}
         mode={{
           kind: "EDIT_DRAFT",
           taskId: workspace.task.id,

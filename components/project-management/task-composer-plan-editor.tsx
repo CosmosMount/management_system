@@ -11,12 +11,19 @@ import {
 } from "@/components/project-management/task-plan-node-navigator";
 import { TimeCanvas } from "@/components/project-management/time-canvas/time-canvas";
 import { buildPlanPhaseBands } from "@/components/project-management/time-canvas/plan-phase-bands";
+import {
+  clampLogicalRangeToThreeYears,
+  contentTimeBounds,
+  padShanghaiCalendarRange,
+} from "@/components/project-management/time-canvas/time-math";
 import type {
+  TimeCanvasGlobalMarker,
   TimeCanvasAnchorMoveRequest,
   TimeCanvasAnchorMoveResolution,
   TimeCanvasModel,
   TimeCanvasTone,
 } from "@/components/project-management/time-canvas/types";
+import type { GlobalTimeMarkerDto } from "@/lib/project-management/types/time-canvas";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -50,6 +57,7 @@ const phaseTones: TimeCanvasTone[] = [
 
 export function TaskComposerPlanEditor({
   state,
+  globalMarkers,
   issues,
   inspectorDraft,
   inspectorIssues,
@@ -69,6 +77,7 @@ export function TaskComposerPlanEditor({
   onSubmit,
 }: {
   state: TaskComposerSeed;
+  globalMarkers: GlobalTimeMarkerDto[];
   issues: ValidationIssue[];
   inspectorDraft: TaskComposerInspectorDraft | null;
   inspectorIssues: ValidationIssue[];
@@ -91,7 +100,36 @@ export function TaskComposerPlanEditor({
 }) {
   const canvasContainerRef = useRef<HTMLDivElement>(null);
   const [quickAt, setQuickAt] = useState<{ atMs: number; snapMs: number } | null>(null);
-  const canvasModel = useMemo(() => buildComposerCanvasModel(state, issues), [issues, state]);
+  const [requestedCanvasCenter, setRequestedCanvasCenter] = useState<{
+    atMs: number;
+    revision: number;
+  } | null>(null);
+  const planCenterMs = useMemo(() => {
+    const times = [
+      renderAtMs(state, TASK_COMPOSER_START_ID),
+      ...state.milestones.map((milestone) => renderAtMs(state, milestone.id)),
+      ...(state.revision
+        ? [
+            localMs(state.revision.revisionAt),
+            ...state.revision.carriedAnchors.map((anchor) =>
+              localMs(anchor.revisionAt),
+            ),
+          ]
+        : []),
+      renderAtMs(state, state.termination.id),
+    ];
+    return (Math.min(...times) + Math.max(...times)) / 2;
+  }, [state]);
+  const canvasModel = useMemo(
+    () =>
+      buildComposerCanvasModel(
+        state,
+        issues,
+        globalMarkers,
+        requestedCanvasCenter?.atMs ?? planCenterMs,
+      ),
+    [globalMarkers, issues, planCenterMs, requestedCanvasCenter?.atMs, state],
+  );
   const navigatorNodes = useMemo(
     () => buildComposerNavigatorNodes(state, issues),
     [issues, state],
@@ -134,6 +172,16 @@ export function TaskComposerPlanEditor({
       "[data-testid='time-canvas-scroll']",
     );
     if (!anchor || !scroller) return;
+    if (
+      anchor.atMs < canvasModel.range.startMs ||
+      anchor.atMs >= canvasModel.range.endMs
+    ) {
+      setRequestedCanvasCenter((current) => ({
+        atMs: anchor.atMs,
+        revision: (current?.revision ?? 0) + 1,
+      }));
+      return;
+    }
     const timelineRow = scroller.querySelector<HTMLElement>(
       "[data-testid^='timeline-row-']",
     );
@@ -197,6 +245,15 @@ export function TaskComposerPlanEditor({
             <TimeCanvas
               mode="TASK_COMPOSER"
               model={canvasModel}
+              initialCenterMs={requestedCanvasCenter?.atMs ?? planCenterMs}
+              initialCenterRevision={requestedCanvasCenter?.revision ?? 0}
+              navigationRange={canvasModel.fullRange}
+              onRequestCenter={(atMs) =>
+                setRequestedCanvasCenter((current) => ({
+                  atMs,
+                  revision: (current?.revision ?? 0) + 1,
+                }))
+              }
               display={{ showActual: false, showBusy: false, showInspector: false }}
               selection={
                 state.selectedEntityId
@@ -336,6 +393,8 @@ export function TaskComposerPlanEditor({
 function buildComposerCanvasModel(
   state: TaskComposerSeed,
   issues: ValidationIssue[],
+  globalMarkerDtos: GlobalTimeMarkerDto[],
+  preferredCenterMs: number,
 ): TimeCanvasModel {
   const sortedMilestones = sortMilestonesByRenderTime(state);
   const hasIssue = (entityId: string) => issues.some((issue) => issue.entityId === entityId);
@@ -424,18 +483,43 @@ function buildComposerCanvasModel(
       visualState: hasIssue(state.termination.id) ? ("INVALID" as const) : undefined,
     },
   ];
-  const validTimes = anchors.map((anchor) => anchor.atMs).filter(Number.isFinite);
-  const start = Math.min(...validTimes);
-  const end = Math.max(...validTimes);
+  const globalMarkers: TimeCanvasGlobalMarker[] = globalMarkerDtos.map((marker) => ({
+    id: marker.id,
+    label: marker.name,
+    atMs: Date.parse(marker.markedAt),
+    editable: false,
+    versionToken: marker.versionToken,
+  }));
+  const anchorTimes = anchors.map((anchor) => anchor.atMs).filter(Number.isFinite);
+  const start = Math.min(...anchorTimes);
+  const end = Math.max(...anchorTimes);
   const duration = Math.max(DAY_MS, end - start);
   const padding = Math.max(DAY_MS, duration * 0.08);
+  const planRange = { startMs: start - padding, endMs: end + padding + 1 };
+  const markerBounds = contentTimeBounds(
+    globalMarkers.map((marker) => marker.atMs),
+  );
+  const markerRange = markerBounds
+    ? padShanghaiCalendarRange(markerBounds, 2, preferredCenterMs)
+    : planRange;
+  const fullRange = {
+    startMs: Math.min(planRange.startMs, markerRange.startMs),
+    endMs: Math.max(planRange.endMs, markerRange.endMs),
+  };
+  const logical = clampLogicalRangeToThreeYears(fullRange, preferredCenterMs);
   const phaseBands = buildPlanPhaseBands(anchors, PLAN_ROW_ID).map((band) => ({
     ...band,
     id: `composer-phase-${band.id}`,
   }));
   return {
     timezone: "Asia/Shanghai",
-    range: { startMs: start - padding, endMs: end + padding + 1 },
+    range: logical.range,
+    fullRange,
+    contentRange: contentTimeBounds([
+      ...anchorTimes,
+      ...globalMarkers.map((marker) => marker.atMs),
+    ]),
+    rangeClipped: logical.clipped,
     rows: [{
       id: PLAN_ROW_ID,
       sourceId: state.draftId,
@@ -447,6 +531,7 @@ function buildComposerCanvasModel(
       capacity: null,
     }],
     anchors,
+    globalMarkers,
     phaseBands,
     segments: [],
     // Composer seeds are server-rendered. A stable value avoids a hydration

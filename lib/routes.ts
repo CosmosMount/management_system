@@ -6,6 +6,7 @@ export const routes = {
     accounts: "/admin/accounts",
     roles: "/admin/accounts",
     budgetPools: "/admin/budget-pools",
+    timeMarkers: "/admin/time-markers",
   },
   procurement: {
     root: "/procurement",

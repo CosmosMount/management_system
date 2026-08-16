@@ -82,6 +82,7 @@ export function TimeAxis({
   timezone,
   nowMs,
   rowHeaderWidth,
+  leadingLabel,
 }: {
   ticks: number[];
   scale: ReturnType<typeof createTimeScale>;
@@ -89,6 +90,7 @@ export function TimeAxis({
   timezone: string;
   nowMs: number;
   rowHeaderWidth: number;
+  leadingLabel: string;
 }) {
   const minorLabelStep = Math.max(
     1,
@@ -103,7 +105,7 @@ export function TimeAxis({
       }}
     >
       <div className="sticky left-0 z-40 flex min-w-0 items-center border-r border-border bg-background px-3 text-xs font-medium text-muted-foreground">
-        <span className="truncate">任务 / 人员</span>
+        <span className="truncate">{leadingLabel}</span>
       </div>
       <div className="relative overflow-hidden" aria-label={`${timezone} ${zoomLabels[zoom]}级时间轴`} role="img">
         {ticks.map((tick, index) => {
