@@ -44,10 +44,10 @@ test.describe("普通用户主功能面板", () => {
     await page
       .getByRole("link", { name: /采购管理 采购申请、订单审批、报销与统计看板/ })
       .click();
-    await expect(page).toHaveURL(/\/procurement$/);
-    await expect(
-      page.getByRole("link", { name: /新建申请 填写采购明细并提交审批/ }),
-    ).toBeVisible();
+    await expect.poll(() => new URL(page.url()).pathname).toBe(
+      "/procurement/dashboard",
+    );
+    await expect(page.getByRole("heading", { name: "采购看板" })).toBeVisible();
     await expectHealthyPage(page);
 
     await page.goto("/", { waitUntil: "networkidle" });
@@ -94,11 +94,22 @@ test.describe("普通用户主功能面板", () => {
     await expectHealthyPage(page);
   });
 
-  test("采购面板能进入新建、列表、详情、看板和工坊加工费", async ({ page }) => {
+  test("采购面板能进入新建、列表、详情、看板和工坊加工费", async ({ page }, testInfo) => {
     await page.goto("/procurement", { waitUntil: "networkidle" });
     await expectHealthyPage(page);
 
-    await page.getByRole("link", { name: /新建申请/ }).click();
+    if (testInfo.project.name === "mobile") {
+      await page.getByRole("button", { name: "打开采购管理导航" }).click();
+      await page
+        .getByTestId("procurement-drawer")
+        .getByRole("link", { name: "新建申请" })
+        .click();
+    } else {
+      await page
+        .getByTestId("procurement-sidebar")
+        .getByRole("link", { name: "新建申请" })
+        .click();
+    }
     await expect(page).toHaveURL(/\/procurement\/new$/);
     await expect(page.getByText("基本信息")).toBeVisible();
     await page.getByRole("button", { name: "提交申请" }).click();
@@ -652,6 +663,70 @@ test.describe("管理员面板", () => {
     await expect(historyDialog.getByText(/授予项目角色/).first()).toBeVisible();
     await expect(historyDialog.getByText(/撤销项目角色/).first()).toBeVisible();
     await expectHealthyPage(page);
+  });
+
+  test("账号后台当前成员与职责矩阵不展示停用人员", async ({ page }) => {
+    const suffix = Date.now().toString(36);
+    const displayName = `已离职后台隐藏-${suffix}`;
+    const openId = `ou_inactive_admin_${suffix}`;
+    const account = await prisma.account.create({
+      data: {
+        identities: {
+          create: {
+            provider: "FEISHU",
+            tenantId: "default",
+            providerSubject: `open:${openId}`,
+            openId,
+          },
+        },
+        person: {
+          create: { displayName, status: "INACTIVE" },
+        },
+        reimbursementUser: {
+          create: { openId, name: displayName },
+        },
+        reimbursementRoles: {
+          create: {
+            openId,
+            role: "TEAM_ADMIN",
+            team: "英雄",
+            techGroup: "",
+          },
+        },
+      },
+    });
+    try {
+      await page.goto(
+        `/admin/accounts?q=${encodeURIComponent(suffix)}`,
+        { waitUntil: "networkidle" },
+      );
+      await expect(page.getByText("没有符合条件的账号。")).toBeVisible();
+      await expect(page.getByText(displayName, { exact: true })).toHaveCount(0);
+      await expect(
+        prisma.account.findUnique({
+          where: { id: account.id },
+          select: {
+            person: { select: { status: true } },
+            reimbursementRoles: {
+              where: { revokedAt: null },
+              select: { role: true, team: true },
+            },
+          },
+        }),
+      ).resolves.toEqual({
+        person: { status: "INACTIVE" },
+        reimbursementRoles: [{ role: "TEAM_ADMIN", team: "英雄" }],
+      });
+      await expectHealthyPage(page);
+    } finally {
+      await prisma.userRole.deleteMany({ where: { accountId: account.id } });
+      await prisma.user.deleteMany({ where: { accountId: account.id } });
+      await prisma.accountIdentity.deleteMany({
+        where: { accountId: account.id },
+      });
+      await prisma.person.deleteMany({ where: { accountId: account.id } });
+      await prisma.account.delete({ where: { id: account.id } });
+    }
   });
 
   test("长姓名记录弹窗不溢出且缺少报销资料会在选择阶段拒绝", async ({ page }) => {

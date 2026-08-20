@@ -8,8 +8,10 @@ import type { NotificationPreferenceItem } from "@/lib/project-management/querie
 
 export function NotificationPreferencesClient({
   preferences,
+  readOnly = false,
 }: {
   preferences: NotificationPreferenceItem[];
+  readOnly?: boolean;
 }) {
   const [values, setValues] = useState(() =>
     new Map(preferences.map((item) => [item.category, item.feishuEnabled])),
@@ -23,10 +25,14 @@ export function NotificationPreferencesClient({
         <div>
           <h2 id="notification-preference-title" className="font-medium">通知偏好</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            站内通知始终保留；关闭飞书后，安全、关键状态变化等强制事件仍会发送。
+            {readOnly
+              ? "人员已停用，通知偏好仅供查看。"
+              : "站内通知始终保留；关闭飞书后，安全、关键状态变化等强制事件仍会发送。"}
           </p>
         </div>
-        <Badge variant="secondary">站内通知始终开启</Badge>
+        <Badge variant="secondary">
+          {readOnly ? "人员已停用" : "站内通知始终开启"}
+        </Badge>
       </div>
       {message && <p className="mt-3 text-sm" role="status">{message}</p>}
       <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
@@ -40,7 +46,7 @@ export function NotificationPreferencesClient({
                 <input
                   type="checkbox"
                   checked={checked}
-                  disabled={isPending}
+                  disabled={readOnly || isPending}
                   aria-label={`${notificationCategoryLabels[preference.category]}飞书通知`}
                   onChange={(event) => {
                     const next = event.currentTarget.checked;

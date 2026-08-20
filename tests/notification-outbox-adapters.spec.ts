@@ -7,6 +7,11 @@ import { resolveFeishuIdentityForUser } from "../lib/project-management/identity
 import { prisma } from "../lib/prisma";
 
 const EVENT_PREFIX = "playwright:notification-adapter:";
+const ACTIVE_RECIPIENT_OPEN_IDS = [
+  "ou_outbox_success",
+  "ou_outbox_retry",
+  "ou_outbox_wrong_bot",
+] as const;
 const originalFeedbackRecipientResolver =
   feedbackNotificationChannel.resolveRecipientPlan;
 
@@ -41,6 +46,9 @@ test.describe("notification outbox channel adapters", () => {
   test.beforeEach(async () => {
     assertTestDatabase();
     await prisma.notificationOutbox.deleteMany();
+    await Promise.all(
+      ACTIVE_RECIPIENT_OPEN_IDS.map(ensureActiveFeishuRecipient),
+    );
     process.env.NOTIFICATION_DELIVERY_DISABLED = "false";
     process.env.FEISHU_DIRECT_MESSAGE_ALLOWED_OPEN_IDS =
       "ou_outbox_success,ou_outbox_retry,ou_outbox_wrong_bot";
@@ -149,6 +157,26 @@ test.describe("notification outbox channel adapters", () => {
     await prisma.user.deleteMany({
       where: { openId: "ou_outbox_approver" },
     });
+  });
+
+  test.afterAll(async () => {
+    const identities = await prisma.accountIdentity.findMany({
+      where: {
+        provider: "FEISHU",
+        tenantId: "default",
+        openId: { in: [...ACTIVE_RECIPIENT_OPEN_IDS] },
+      },
+      select: { accountId: true },
+    });
+    const accountIds = [...new Set(identities.map(({ accountId }) => accountId))];
+    if (accountIds.length === 0) return;
+    await prisma.$transaction([
+      prisma.accountIdentity.deleteMany({
+        where: { accountId: { in: accountIds } },
+      }),
+      prisma.person.deleteMany({ where: { accountId: { in: accountIds } } }),
+      prisma.account.deleteMany({ where: { id: { in: accountIds } } }),
+    ]);
   });
 
   test("event key 幂等且收件人去重，失败收件人重试不重复成功收件人", async () => {
@@ -1199,6 +1227,49 @@ test.describe("notification outbox channel adapters", () => {
     expect(sendAttempts).toEqual([]);
   });
 });
+
+async function ensureActiveFeishuRecipient(openId: string) {
+  const identity = await prisma.accountIdentity.findUnique({
+    where: {
+      provider_tenantId_openId: {
+        provider: "FEISHU",
+        tenantId: "default",
+        openId,
+      },
+    },
+    select: { accountId: true },
+  });
+  if (identity) {
+    await prisma.person.upsert({
+      where: { accountId: identity.accountId },
+      create: {
+        accountId: identity.accountId,
+        displayName: `Outbox recipient ${openId}`,
+        status: "ACTIVE",
+      },
+      update: { status: "ACTIVE" },
+    });
+    return;
+  }
+  await prisma.account.create({
+    data: {
+      identities: {
+        create: {
+          provider: "FEISHU",
+          tenantId: "default",
+          providerSubject: `open:${openId}`,
+          openId,
+        },
+      },
+      person: {
+        create: {
+          displayName: `Outbox recipient ${openId}`,
+          status: "ACTIVE",
+        },
+      },
+    },
+  });
+}
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {

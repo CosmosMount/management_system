@@ -84,8 +84,8 @@ export function AdminBudgetPoolsPanel({ pools }: Props) {
         <div>
           <CardTitle>采购预算池</CardTitle>
           <CardDescription>
-            每行一个项目（含车组、技术组与预算）。相同项目+车组+技术组+周期会合并预算；不同项目即使同组也分行展示，顺序与 Excel 一致。单次最多 {MAX_BUDGET_POOL_IMPORT_ROWS}{" "}
-            行。支持追加或覆盖同周期数据。
+            Excel 每行填写项目、兵种组与预算；系统按兵种组汇总，一个兵种组一栏并列出包含的项目。相同项目+兵种组+周期会合并预算。单次最多{" "}
+            {MAX_BUDGET_POOL_IMPORT_ROWS} 行，支持追加或覆盖同周期数据。
           </CardDescription>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2">
@@ -129,9 +129,8 @@ export function AdminBudgetPoolsPanel({ pools }: Props) {
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead>兵种组</TableHead>
                 <TableHead>项目</TableHead>
-                <TableHead>车组</TableHead>
-                <TableHead>技术组</TableHead>
                 <TableHead>周期</TableHead>
                 <TableHead className="text-right">预算金额</TableHead>
                 <TableHead className="text-right">已提醒阈值</TableHead>
@@ -140,11 +139,10 @@ export function AdminBudgetPoolsPanel({ pools }: Props) {
             <TableBody>
               {pools.map((pool) => (
                 <TableRow key={pool.id}>
-                  <TableCell className="max-w-48 truncate">
-                    {pool.description || "—"}
-                  </TableCell>
                   <TableCell>{pool.team}</TableCell>
-                  <TableCell>{pool.techGroup}</TableCell>
+                  <TableCell className="max-w-72 whitespace-normal break-words">
+                    {pool.projects.join("、") || "—"}
+                  </TableCell>
                   <TableCell>{pool.period}</TableCell>
                   <TableCell className="text-right">
                     ¥{pool.budgetAmount.toLocaleString("zh-CN")}

@@ -4,6 +4,7 @@ import * as XLSX from "xlsx";
 import { createAsyncOperationGeneration } from "../lib/async-operation-generation";
 import { parseBudgetPoolsFromBuffer } from "../lib/import-procurement-budget";
 import { persistBudgetPoolImport } from "../lib/procurement-budget-import-service";
+import { listBudgetPoolViews } from "../lib/procurement-budget";
 import {
   enqueueOrderNotificationTx,
 } from "../lib/notification-producers/procurement";
@@ -44,7 +45,7 @@ test("预算文件混有无效行时保留错误并原子写入有效行", async
 
   expect(parsed.rows).toHaveLength(1);
   expect(parsed.errors).toEqual([
-    { row: 3, message: "无效车组：不存在车组" },
+    { row: 3, message: "无效兵种组：不存在车组" },
   ]);
   try {
     await expect(persistBudgetPoolImport(parsed.rows, "append")).resolves.toBe(1);
@@ -54,6 +55,55 @@ test("预算文件混有无效行时保留错误并原子写入有效行", async
         select: { description: true, budgetAmount: true },
       }),
     ).resolves.toEqual([{ description: "有效预算", budgetAmount: 200 }]);
+  } finally {
+    await prisma.procurementBudgetPool.deleteMany({ where: { period } });
+  }
+});
+
+test("追加兵种组预算时规范行覆盖同项目旧技术方向且不重复累计", async ({}, testInfo) => {
+  const period = `legacy-append-${testInfo.project.name}-${randomUUID()}`;
+  try {
+    await prisma.procurementBudgetPool.create({
+      data: {
+        description: "第一版整车",
+        team: "英雄",
+        techGroup: "机械",
+        period,
+        budgetAmount: 100,
+      },
+    });
+    await expect(
+      persistBudgetPoolImport(
+        [
+          {
+            description: "第一版整车",
+            team: "英雄",
+            techGroup: "旧调用方也会被规范化",
+            period,
+            budgetAmount: 120,
+          },
+        ],
+        "append",
+      ),
+    ).resolves.toBe(1);
+
+    await expect(listBudgetPoolViews(period)).resolves.toMatchObject([
+      {
+        team: "英雄",
+        projects: ["第一版整车"],
+        budgetAmount: 120,
+      },
+    ]);
+    await expect(
+      prisma.procurementBudgetPool.findMany({
+        where: { period },
+        orderBy: { techGroup: "asc" },
+        select: { techGroup: true, budgetAmount: true },
+      }),
+    ).resolves.toEqual([
+      { techGroup: "", budgetAmount: 120 },
+      { techGroup: "机械", budgetAmount: 100 },
+    ]);
   } finally {
     await prisma.procurementBudgetPool.deleteMany({ where: { period } });
   }
@@ -246,6 +296,62 @@ test("反序多周期并发覆盖不会死锁或跨导入混合", async ({}, tes
     await prisma.procurementBudgetPool.deleteMany({
       where: { period: { in: periods } },
     });
+  }
+});
+
+test("事务内会拒绝已撤销超级管理员覆盖预算", async ({}, testInfo) => {
+  const suffix = `${testInfo.project.name}-${randomUUID()}`;
+  const openId = `ou_revoked_budget_admin_${suffix}`;
+  const period = `revoked-budget-${suffix}`;
+  const account = await prisma.account.create({
+    data: {
+      identities: {
+        create: {
+          provider: "FEISHU",
+          tenantId: "default",
+          providerSubject: `open:${openId}`,
+          openId,
+        },
+      },
+      person: {
+        create: { displayName: "已撤权预算管理员", status: "ACTIVE" },
+      },
+      systemRoles: {
+        create: {
+          role: "SUPER_ADMINISTRATOR",
+          team: "",
+          techGroup: "",
+          revokedAt: new Date(),
+        },
+      },
+    },
+  });
+  try {
+    await expect(
+      persistBudgetPoolImport(
+        [{
+          description: "不得写入的预算",
+          team: "英雄",
+          techGroup: "",
+          period,
+          budgetAmount: 100,
+        }],
+        "replace",
+        { accountId: account.id, openId },
+      ),
+    ).rejects.toThrow("无管理权限");
+    await expect(
+      prisma.procurementBudgetPool.count({ where: { period } }),
+    ).resolves.toBe(0);
+  } finally {
+    await prisma.systemRoleAssignment.deleteMany({
+      where: { accountId: account.id },
+    });
+    await prisma.accountIdentity.deleteMany({
+      where: { accountId: account.id },
+    });
+    await prisma.person.deleteMany({ where: { accountId: account.id } });
+    await prisma.account.delete({ where: { id: account.id } });
   }
 });
 

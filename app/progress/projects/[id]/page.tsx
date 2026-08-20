@@ -248,6 +248,7 @@ export default async function ProjectDetailPage({
         <ProjectDetailWorkspace
           projectId={project.id}
           projectStatus={project.status}
+          canCreateTask={actor.isActive !== false}
           tasks={project.tasks}
           timelineError={project.timelineError}
           taskTotalCount={project.taskTotalCount}

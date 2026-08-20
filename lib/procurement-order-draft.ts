@@ -4,6 +4,10 @@ import { stepTimerResetFields } from "@/lib/order-step-timer";
 import { revalidateProcurement } from "@/lib/revalidate";
 import { canEditProcurementOrder } from "@/lib/permissions-client";
 import { prisma } from "@/lib/prisma";
+import {
+  lockActiveProcurementUserTx,
+  requireActiveProcurementUser,
+} from "@/lib/active-account";
 
 export function procurementWithdrawToDraftFields() {
   return {
@@ -38,6 +42,7 @@ export async function ensureProcurementOrderEditableDraft(
   orderId: string,
   userOpenId: string,
 ) {
+  await requireActiveProcurementUser(userOpenId);
   const order = await prisma.purchaseOrder.findUnique({
     where: { id: orderId },
     include: {
@@ -68,9 +73,12 @@ export async function ensureProcurementOrderEditableDraft(
     throw new Error("当前状态不可编辑");
   }
 
-  const updated = await prisma.purchaseOrder.updateMany({
-    where: { id: orderId, status: order.status },
-    data: procurementWithdrawToDraftFields(),
+  const updated = await prisma.$transaction(async (tx) => {
+    await lockActiveProcurementUserTx(tx, userOpenId);
+    return tx.purchaseOrder.updateMany({
+      where: { id: orderId, status: order.status },
+      data: procurementWithdrawToDraftFields(),
+    });
   });
   if (updated.count !== 1) {
     throw new Error("订单状态已更新，请刷新后重试");

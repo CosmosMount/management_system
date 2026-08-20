@@ -205,18 +205,19 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 
 1. 自己先用飞书登录一次或同步通讯录。
 2. 执行 `npm run db:seed -- --super-admin-open-id=<飞书 openId>` 初始化首位统一超级管理员。
-3. 登录后先访问 **`/admin/system` 系统同步**，点击 **「同步飞书通讯录」** 将企业全员录入系统（无需对方先登录）。
+3. 登录后先访问 **`/admin/system` 系统同步**，点击 **「同步飞书通讯录」** 将企业全员录入系统（无需对方先登录）。同步按在职通讯录全量快照核对：缺席或被飞书标记为离职的成员会停用，重新出现在在职快照时恢复。
 4. 访问 **`/admin/accounts` 账号与权限**：
    - 在「车组职责配置」中按车组直接添加或移除报销车组组长和报销员
    - 在「技术组职责配置」中按技术组直接添加或移除报销技术组组长和指导老师，并维护指导老师审批邮箱
    - 在「用户与角色」中搜索统一账号，分配超级管理员、项目管理员或四类报销角色；账号列表支持筛选、分页、就地移除角色和查看角色历史/安全审计
+   - 当前成员列表、职责矩阵和账号选择器只展示在职人员；离职人员的历史账号、角色、订单和审计仍保留
 5. 访问 **`/admin/time-markers` 关键时间点**，可新增、编辑、软删除全局时间点，也可直接在带日期网格的时间线上拖动日期；所有草稿通过「保存全部」一次原子生效。保存期间时间线会锁定，并发版本冲突会保留当前草稿供管理员对照最新集合，未保存时离开页面会二次确认。
 
 项目系统角色不再提供车组/技术组组长。授予超级管理员以及撤销全局项目角色需要二次确认；服务端仍会阻止自撤销或移除最后一名可用全局管理员。
 
-项目模块不再提供账号级启用/禁用开关。账号通过登录身份解析后，项目可见性和写权限只由系统角色、TaskMember 与既有授权规则决定；停用 `Person` 仍不能被新增选择。
+项目模块不再提供账号级启用/禁用开关。停用 `Person` 对应账号仍可读取既有订单、Task、投入和审计历史，但项目与采购的所有新写入都会由服务端拒绝；停用人员也不能被新增选择或成为新业务通知收件人。
 
-用户也可通过飞书登录自动写入/更新 `User` 表；分配角色前需先完成通讯录同步或让对方登录一次。
+用户也可通过飞书登录自动写入/更新 `User` 表；分配角色前需先完成通讯录同步或让对方登录一次。停用人员即使仍能登录读取历史，也不能创建 Project/Task 或执行其他项目与采购业务写入。
 
 ### 飞书通讯录权限（同步全员）
 
@@ -228,7 +229,7 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 | 获取部门基础信息 | `contact:department.base:readonly` |
 | 获取通讯录部门组织架构信息 | `contact:department.organize:readonly` |
 
-同步使用 `tenant_access_token` 调用通讯录 API，将 `open_id`、姓名、头像写入 `User` 表。
+同步使用 `tenant_access_token` 调用通讯录 API，将 `open_id`、姓名、头像写入统一账号及 `User`。同步前会确认应用授权范围包含根部门并严格完成部门/人员分页；已有飞书账号不少于 10 个且单次拟停用超过 30% 时默认阻断，超级管理员必须先确认飞书授权范围完整，再在二次确认对话框继续，同步会写入确认审计。确认令牌绑定稳定的飞书身份快照和待停用账号集合，快照变化后必须重新确认；每次手动同步都会在真正写库前、持有同步与管理员集合锁后复核发起人仍是在职超级管理员；提交高比例停用确认时还会复核确认人，拉取期间被停用或撤权后必须重新发起。离职成员不会物理删除，以保留订单、Task、投入与审计历史；其 `Person` 会标记为 `INACTIVE`，不再参与写权限、角色权限、人员选择或通知收件人解析。普通登录不会自动恢复该状态，只有后续在职通讯录快照会恢复；若快照会停用最后一名有效全局管理员，同步同样会整批回滚。
 
 ### 角色说明
 
@@ -243,7 +244,7 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 | TEACHER | 全局 | 「老师审核」阶段通过 |
 | FINANCE | 指定车组 | 上传报销截图 |
 
-所有已登录统一账号都可查看全部未删除 Project、Task、计划、成员、验收、审计和完整 Planned/Actual Work Segment，也都可提交 Project 立项和创建任意合法车组/技术组的 Task。Project 是 Task 上方的文件夹与立项对象，不包含 Stage；只有统一超级管理员或项目管理员能审批立项。Project Owner 可修改、结束和删除 Project，但不会继承任何 Task 写权限。
+所有已登录统一账号都可查看全部未删除 Project、Task、计划、成员、验收、审计和完整 Planned/Actual Work Segment；只有 `Person.status=ACTIVE` 的在职账号可提交 Project 立项和创建任意合法车组/技术组的 Task。Project 是 Task 上方的文件夹与立项对象，不包含 Stage；只有统一超级管理员或项目管理员能审批立项。Project Owner 可修改、结束和删除 Project，但不会继承任何 Task 写权限。
 
 Revision 是用户选择时间的计划变化标记，不形成阶段，也不能关联 Planned/Actual Segment。创建 Revision 时固定沿用 Current Plan 的 Start，自动保留全部已完成 Milestone 和已生效 Revision，并用调用方提供的后续 Milestone 与 Terminal 重建未完成部分。创建即进入 `PENDING_APPROVAL`，不再存在草稿或单独提交动作；驳回后可修改并直接重新送审，取消后释放该 Task 的唯一候选名额，批准后才进入 Current Plan 和正式时间轴。
 
@@ -266,6 +267,10 @@ Revision 是用户选择时间的计划变化标记，不形成阶段，也不�
 `20260814120000_retire_project_management_legacy_history` 是向前迁移：部署前需确认没有仍有效的旧项目系统角色或旧 Task 成员角色。迁移会把已撤销/结束角色及非空投入完成比例写入 append-only `DomainAuditEvent`，随后收窄角色枚举并删除 `WorkSegment.completionPercent`；整个过程不得创建或修改站内通知、outbox 或收件人记录。
 
 ### 完整审批与报销流程
+
+进入 `/procurement` 会直接打开采购看板。桌面端通过左侧栏、移动端通过导航抽屉在「采购看板、待办与最近、新建申请、订单列表、工坊加工费」之间切换；订单详情和编辑页归属“订单列表”。采购各面板顶部统一使用与项目管理一致的上下文命令栏，不显示返回按钮，状态和业务操作集中在命令栏右侧。停用账号仍可从“订单列表”读取自己的历史订单，但侧栏不显示新建申请和工坊加工费，直达写入页面也会进入只读或无权访问状态。
+
+预算池 Excel 只需填写项目、兵种组、预算和周期（仍兼容旧“车组”表头），不再填写技术方向。预算、已用金额与阈值告警均按兵种组汇总；同组项目会列在该兵种组后，不拆成多栏。
 
 **审批：**
 
@@ -317,7 +322,7 @@ Revision 是用户选择时间的计划变化标记，不形成阶段，也不�
 
 ## 功能测试流程
 
-1. **登录**：访问 `/login`，飞书授权后跳转 `/procurement/list`
+1. **登录**：访问 `/login`，飞书授权后进入 `/procurement/dashboard`
 2. **申请**：`/procurement/new` 填写车组、技术组，添加明细，点击「提交申请」
 3. **通知**：提交后通知群应收到飞书交互卡片（需配置 Webhook）
 4. **管理审核**：车组组长、技术组组长分别点击「通过」
@@ -515,7 +520,7 @@ pm2 start npm --name procurement-cron -- run cron
 
 风险只绑定一个 Project 或 Task，同一对象允许多条未解决风险。只有 ACTIVE 对象可提出风险，成员或全局管理员可以解决 ACTIVE/终态对象的遗留风险；所有已登录用户都可在未删除对象发表评论，只有两类全局管理员可以软删除评论。风险提出/解决和评论发布会原子写入审计、站内通知及非 mandatory 的项目管理 outbox，评论删除只写审计。风险、评论和动态均使用每页 20 条的稳定服务端分页；详情页每 5 秒检查轻量审计版本 token，页面隐藏时暂停。
 
-- 所有已登录并成功解析到统一 `Account/Person` 的账号可查看全部未删除 Task、计划/审批/审计历史和全员完整 Segment，并可创建 Task；可见性扩大不扩大写权限。
+- 所有已登录并成功解析到统一 `Account/Person` 的账号可查看全部未删除 Task、计划/审批/审计历史和全员完整 Segment；只有 `Person.status=ACTIVE` 的账号可创建 Task 或执行其他业务写入，可见性扩大不扩大写权限。
 - Task 成员只分“负责人”和“参与人”。支持多负责人且至少一名，同一 Person 只能有一个有效角色；创建者自动成为负责人。
 - 参与人可编辑 Task/计划、提交验收并创建自己的 Revision，并管理自己的关联投入；负责人另可管理成员、Task 状态、任意未生效 Revision 和该 Task 全部投入；全局管理员拥有全部项目写权限。
 - ACTIVE Project 只在没有未删除的草稿或进行中 Task 时允许结束；空 Project 和仅包含已完成、失败结束、已取消、已超时或已归档 Task 的 Project 均可结束。Project 的 Task 完成进度仍只统计严格 `COMPLETED` 的 Task。
@@ -533,7 +538,7 @@ pm2 start npm --name procurement-cron -- run cron
 - 当前项目管理正式路由只保留 `/progress`、`/progress/projects/*`、`/progress/tasks/*`、`/progress/resources`、`/progress/approvals` 与 `/progress/notifications`；`/progress/task/:id`、`/progress/kanban`、`/progress/my-timeline` 和 `/admin/roles` 均返回 404。
 - Task mutation 公共入口只保留 Draft 整包 `updateTaskDraft` 与 Active 整包 `updateActiveTask`。时间视图 URL 使用 `focus`、`center`、`scale` 以及 `projects`/`tasks`/`people` 等复数选择；资源计划另用 `taskStatuses` 保存 Task 状态多选，缺失时表示默认草稿/进行中，空值表示不显示任何 Task 计划。`timelineDate`、`timelineFocus`、单值 `personId`/`taskId`、`start`/`end` 和 `zoom` 会被忽略并从规范 URL 移除。
 - Composer 只恢复当前 v4 草稿；v1/v2/v3 不读取、不转换也不导出。过渡 tombstone 仅删除旧 key 与 IndexedDB 正文，首次生产发布满 30 天后应删除 tombstone 模块及调用点。
-- 飞书登录和通讯录同步先解析统一 `Account/AccountIdentity/Person`，再关联并更新采购 `User`。账号级项目访问禁用机制已移除，历史禁用账号恢复项目入口，但仍受系统角色、TaskMember 和数据范围授权约束。
+- 飞书登录和通讯录同步先解析统一 `Account/AccountIdentity/Person`，再关联并更新采购 `User`。通讯录全量同步会把缺席或离职人员标记为 `INACTIVE` 并保留历史关联；只有重新进入在职快照才恢复，普通身份解析不会覆盖停用状态。账号级项目访问禁用机制已移除，停用人员仍可读取历史，但不能执行项目或采购写入、取得管理员能力、作为新增成员或收到新业务通知。
 - 人员与 Task 选择统一使用异步模糊选择器，支持 NFKC、拼音首字母、顺序匹配和已选项安全恢复；搜索建议继续按最多 50 条分页，资源计划中的 Task/人员已选集合不设 50 项上限。Task 列表与账号后台使用相同的有界排序规则。
 - 当前项目管理行为以 [`docs/TECH.md`](docs/TECH.md)、[`docs/TESTING.md`](docs/TESTING.md)、ADR、Prisma schema 和实现为准；历史实施计划及截图已归档移除，避免与现行规范冲突。
 - `npm run pm:release-rehearsal` 仅用于本机隔离 `_test`/`_snapshot` 数据库；必须显式设置 `PM_RELEASE_REHEARSAL_CONFIRM=LOCAL_ISOLATED_REHEARSAL` 和 `NOTIFICATION_DELIVERY_DISABLED=true`。它不会执行生产维护窗口，生产发布仍需另行授权与 BO/TL/QA/DBA 签字。

@@ -155,6 +155,15 @@ async function assertSuperAdministratorTx(
   tx: Prisma.TransactionClient,
   actorAccountId: string,
 ) {
+  const people = await tx.$queryRaw<Array<{ status: string }>>`
+    SELECT "status"::text AS "status"
+    FROM "Person"
+    WHERE "accountId" = ${actorAccountId}
+    FOR UPDATE
+  `;
+  if (people.length !== 1 || people[0]?.status !== "ACTIVE") {
+    throw new Error("人员已停用，无法执行此操作");
+  }
   const assignment = await tx.systemRoleAssignment.findFirst({
     where: {
       accountId: actorAccountId,

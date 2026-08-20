@@ -10,6 +10,7 @@ export const routes = {
   },
   procurement: {
     root: "/procurement",
+    pending: "/procurement/pending",
     new: "/procurement/new",
     list: "/procurement/list",
     dashboard: "/procurement/dashboard",

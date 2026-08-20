@@ -59,6 +59,7 @@ const phaseTones: TimeCanvasTone[] = [
 export function ProjectDetailWorkspace({
   projectId,
   projectStatus,
+  canCreateTask,
   tasks,
   timelineError,
   taskTotalCount,
@@ -72,6 +73,7 @@ export function ProjectDetailWorkspace({
 }: {
   projectId: string;
   projectStatus: "DRAFT" | "PENDING_APPROVAL" | "ACTIVE" | "COMPLETED";
+  canCreateTask: boolean;
   tasks: ProjectTimelineTask[];
   timelineError: string | null;
   taskTotalCount: number;
@@ -262,7 +264,7 @@ export function ProjectDetailWorkspace({
                   {completedTaskTotalCount}/{taskTotalCount} 已完成
                 </p>
               </div>
-              {projectStatus === "ACTIVE" && (
+              {projectStatus === "ACTIVE" && canCreateTask && (
                 <Link
                   href={`${routes.progress.taskNew}?projectId=${projectId}`}
                   className={cn(buttonVariants({ size: "sm" }))}

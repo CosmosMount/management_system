@@ -20,12 +20,17 @@ import {
   getStatusTransition,
   getUserRoles,
 } from "@/lib/permissions";
+import {
+  lockActiveProcurementUserTx,
+  requireActiveProcurementUser,
+} from "@/lib/active-account";
 
 export async function updateOrderStatus(orderId: string) {
   const session = await auth();
   if (!session?.user?.openId) {
     throw new Error("未登录");
   }
+  await requireActiveProcurementUser(session.user.openId);
 
   const userRoles = await getUserRoles(session.user.openId);
   if (userRoles.length === 0) {
@@ -61,6 +66,7 @@ export async function updateOrderStatus(orderId: string) {
     OrderStatus.PENDING_APPLICANT_DOCS,
   ];
   const { updated, shouldDrain } = await prisma.$transaction(async (tx) => {
+    await lockActiveProcurementUserTx(tx, session.user.openId);
     const locked = await tx.purchaseOrder.updateMany({
       where: { id: orderId, status: order.status },
       data: { status: transition.next, ...stepTimerResetFields() },

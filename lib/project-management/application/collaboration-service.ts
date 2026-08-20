@@ -60,8 +60,8 @@ export async function createRisk(
 ) {
   const parsed = createRiskInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     const target = await loadLockedTargetTx(tx, parsed.targetType, parsed.targetId);
+    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     assertRiskPermission(refreshedActor, target, "create");
     if (target.status !== "ACTIVE") {
       throw stateConflictError("只有进行中的对象可以提出风险");
@@ -105,7 +105,6 @@ export async function resolveRisk(
 ) {
   const parsed = resolveRiskInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     await tx.$queryRaw`SELECT "id" FROM "RiskRecord" WHERE "id" = ${parsed.riskId} FOR UPDATE`;
     const risk = await tx.riskRecord.findUnique({ where: { id: parsed.riskId } });
     if (!risk || (!risk.projectId && !risk.taskId)) throw notFoundError();
@@ -114,6 +113,7 @@ export async function resolveRisk(
       risk.projectId ? "PROJECT" : "TASK",
       risk.projectId ?? risk.taskId!,
     );
+    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     assertRiskPermission(refreshedActor, target, "resolve");
     if (target.status === "DRAFT" || target.status === "PENDING_APPROVAL") {
       throw stateConflictError("草稿或待审批对象不能解决风险");
@@ -167,8 +167,8 @@ export async function createComment(
 ) {
   const parsed = createCommentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     const target = await loadLockedTargetTx(tx, parsed.targetType, parsed.targetId);
+    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     assertCommentPermission(refreshedActor, target, "create");
     const actorName = await actorNameTx(tx, refreshedActor);
     const comment = await tx.comment.create({
@@ -209,7 +209,6 @@ export async function deleteComment(
 ) {
   const parsed = deleteCommentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     await tx.$queryRaw`SELECT "id" FROM "Comment" WHERE "id" = ${parsed.commentId} FOR UPDATE`;
     const comment = await tx.comment.findUnique({ where: { id: parsed.commentId } });
     if (!comment || (!comment.projectId && !comment.taskId)) throw notFoundError();
@@ -218,6 +217,7 @@ export async function deleteComment(
       comment.projectId ? "PROJECT" : "TASK",
       comment.projectId ?? comment.taskId!,
     );
+    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     assertCommentPermission(refreshedActor, target, "delete");
     if (comment.deletedAt) {
       throw stateConflictError("该评论已被删除，请刷新后查看");

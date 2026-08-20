@@ -404,6 +404,34 @@ test.describe("project management S8 dashboard and notifications", () => {
       mandatory: true,
       recipientOpenIds: [user.openId],
     });
+
+    await prisma.person.update({
+      where: { id: user.personId },
+      data: { status: "INACTIVE" },
+    });
+    await expect(
+      updateNotificationPreference(user, {
+        category: "TASK",
+        feishuEnabled: true,
+      }).catch((error) => {
+        throw toProjectManagementServiceError(error);
+      }),
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: "人员已停用，无法执行此操作",
+    });
+    await expect(
+      prisma.notificationPreference.findUniqueOrThrow({
+        where: {
+          accountId_category_channel: {
+            accountId: user.accountId,
+            category: "TASK",
+            channel: "FEISHU",
+          },
+        },
+        select: { enabled: true },
+      }),
+    ).resolves.toEqual({ enabled: false });
   });
 
   test("notification recipient lookup uses the first non-empty default-tenant identity", async () => {

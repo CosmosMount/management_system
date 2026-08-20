@@ -76,7 +76,7 @@ Auth.js 使用飞书 OAuth。认证配置与完整登录副作用拆分如下：
 
 `Account + AccountIdentity` 是两个业务域共同的账号底座；`Person` 承载项目成员资料，`User` 通过唯一、非空 `accountId` 保留采购订单关系。飞书 `unionId` 优先作为 `providerSubject`，无 `unionId` 时使用 `open:<openId>`。身份解析与报销 User 协调在同一事务中按 `accountId → unionId → openId` 查找；`openId` 轮换会更新原 Identity 和 User，候选指向不同账号或重复 Identity 时硬失败并写脱敏审计，不按姓名自动合并。账号级项目访问禁用字段和 Proxy/Actor gate 已删除；项目可见性与写权限继续由系统角色、TaskMember、`taskReadableWhere` 和各 action 授权规则服务端执行。
 
-账号与权限后台采用三块职责管理：车组职责、技术组职责以及用户与角色。职责矩阵独立读取全部有效报销角色，不受下方账号列表分页影响；账号列表继续使用服务端筛选和每页 30 条分页。管理员账号选择器及指导老师邮箱更新均使用稳定 `accountId` 定位账号，只允许统一超级管理员调用；邮箱更新和安全审计在同一事务内写入。`REIMBURSEMENT` 范围仅返回已绑定报销 `User` 的账号。空查询使用绑定选择范围的稳定游标，关键词查询在最多 501 个直接/回退候选内按姓名、拼音、`openId`、`unionId` 和邮箱排序并返回前 50 项。页面筛选和选择器共用同一有界模糊匹配实现。
+账号与权限后台采用三块职责管理：车组职责、技术组职责以及用户与角色。职责矩阵独立读取全部有效报销角色，不受下方账号列表分页影响；当前成员列表、职责矩阵和管理员账号选择器均只装配 `Person.status=ACTIVE` 的账号，停用人员的历史记录仍可通过既有审计保留。账号列表继续使用服务端筛选和每页 30 条分页。管理员账号选择器及指导老师邮箱更新均使用稳定 `accountId` 定位账号，只允许统一超级管理员调用；邮箱更新和安全审计在同一事务内写入。`REIMBURSEMENT` 范围仅返回已绑定报销 `User` 的账号。空查询使用绑定选择范围的稳定游标，关键词查询在最多 501 个直接/回退候选内按姓名、拼音、`openId`、`unionId` 和邮箱排序并返回前 50 项。页面筛选和选择器共用同一有界模糊匹配实现。
 
 人员与 Task option 查询采用有界两阶段搜索：非空查询在授权 where 内最多读取 501 个直接或回退候选，按 NFKC、前缀、分词前缀、子串、拼音首字母与顺序匹配评分并返回前 50 项；空查询保留绑定 filter hash 的稳定 ID 游标。批量 resolver 按输入顺序完整恢复已选 ID 且静默丢弃不可见对象，不再沿用旧 50 项上限。客户端基于 Base UI Combobox，使用 250ms 防抖、scope/filter 缓存和请求序列防止旧响应覆盖。
 
@@ -96,7 +96,7 @@ Auth.js 使用飞书 OAuth。认证配置与完整登录副作用拆分如下：
 
 Task 成员角色枚举只包含 `OWNER` 和 `PARTICIPANT`。同一 Person 在同一 Task 中最多一个有效角色，一个 Task 可以有多名 Owner 但至少有一名；整包成员替换先锁 Task，并在同一事务维护成员历史、乐观锁、审计和通知。Task 关联 Segment 的所有用户写路径先锁关联 Task、再按稳定顺序锁 Segment，并基于锁后的成员快照复核操作者权限和 Segment 持有人成员关系，避免 Owner 被并发降级后继续使用旧权限。已结束的 `LEAD/MEMBER/REVIEWER/VIEWER` 事实仅保存在 append-only `DomainAuditEvent`，不再参与运行时成员读取或 Composer 恢复。Work Segment 不再保存工作职责，也不关联 Task Node。
 
-所有已登录统一账号都可读取全部未删除 Task、计划、验收、Task 审计和完整 Work Segment，也都可创建合法组织范围的 Task；创建者自动成为 Owner。账号模型不再提供项目访问启用/禁用状态。非成员只有读取权，Participant 可编辑 Task/计划、提交验收与 Revision 并管理自己的关联 Segment，Owner 另可管理成员、Task 状态、任意未生效 Revision 和该 Task 全部 Segment，全局管理员拥有全部项目写权限。所有 capability 由服务端计算，终态、关联和状态机校验不因全员可见而放宽。
+所有已登录统一账号都可读取全部未删除 Task、计划、验收、Task 审计和完整 Work Segment；只有 `Person.status=ACTIVE` 的账号可创建合法组织范围的 Task，创建者自动成为 Owner。账号模型不再提供项目访问启用/禁用状态。非成员只有读取权，Participant 可编辑 Task/计划、提交验收与 Revision 并管理自己的关联 Segment，Owner 另可管理成员、Task 状态、任意未生效 Revision 和该 Task 全部 Segment，全局管理员拥有全部项目写权限。停用账号的 capability 统一降为只读，所有 capability 由服务端计算，终态、关联和状态机校验不因全员可见而放宽。
 
 ## 数据模型
 
@@ -108,7 +108,7 @@ Task 成员角色枚举只包含 `OWNER` 和 `PARTICIPANT`。同一 Person 在�
 | `UserRole` | 报销角色分配、范围及授予/撤销历史 |
 | `PurchaseOrder` | 采购主单 |
 | `PurchaseItem` | 明细（含购买链接） |
-| `ProcurementBudgetPool` | 采购预算池：按项目分行（description）+ 车组+技术组+周期唯一；含导入顺序 |
+| `ProcurementBudgetPool` | 采购预算池存储行：项目（description）+兵种组+兼容技术方向+周期唯一；业务读取按兵种组+周期汇总，技术方向仅兼容历史数据 |
 
 **采购明细 Excel 导入**（`lib/import-procurement-items.ts`）：采购申请页支持从 Excel 导入条目，列包括物品名称、规格、种类、采购链接、加工商、数量、行总价。加工费条目导入后仍需手动上传图片。
 
@@ -116,16 +116,16 @@ Task 成员角色枚举只包含 `OWNER` 和 `PARTICIPANT`。同一 Person 在�
 
 **预算池**（`lib/procurement-budget.ts`、`lib/procurement-budget-alerts.ts`）：
 
-- 超级管理员在 `/admin` 通过 Excel 导入预算（项目、车组、技术组、预算、周期默认 2026）；每行一个项目，同组可有多个项目；仅「项目+车组+技术组+周期」完全相同才合并预算；展示顺序与导入表行序一致；单次最多 300 行；支持追加或覆盖同周期数据。导入会按周期排序获取事务级 advisory lock，删除与 upsert 保持在同一事务，防止并发覆盖交错或多周期导入死锁
-- 已使用金额 = 同一车组且同一技术组、状态非 `DRAFT`/`REJECTED` 的订单 `totalPrice` 之和；同组别多项目按各自预算占比分摊已用金额，使用率按组预算合计计算
+- 超级管理员在 `/admin/budget-pools` 通过 Excel 导入预算（项目、兵种组、预算、周期默认 2026，兼容旧“车组”表头）；每行一个项目，同一兵种组可有多个项目；仅「项目+兵种组+周期」完全相同才合并预算。新导入行的兼容 `techGroup` 固定为空，单次最多 300 行，支持追加或覆盖同周期数据。导入按周期排序获取事务级 advisory lock，覆盖删除与 upsert 保持在同一事务，防止并发覆盖交错或多周期导入死锁
+- 已使用金额 = 同一兵种组、状态非 `DRAFT`/`REJECTED` 的订单 `totalPrice` 之和；预算、使用率和后台列表均按「兵种组+周期」汇总。旧数据中不同技术方向的行仍保留；同一项目出现新空技术方向规范行后，计算只采用规范行，避免追加导入重复累计，其他仅有旧行的项目继续按兵种组合并，项目只作为组内说明列出
 
 ### 全局关键时间点
 
 `GlobalTimeMarker` 保存名称、`TIMESTAMPTZ` 时间、软删除时间和更新时间，`20260816120000_add_global_time_markers` 同时安装名称非空、时间有限值约束及活跃时间排序索引。`lib/project-management/global-time-markers.ts` 只允许统一超级管理员保存：输入最多 200 项，名称 1–100 字；事务先获取固定 advisory lock，再复核角色和集合版本，最后原子完成新增、更新、软删除和逐项 `DomainAuditEvent`。相同目标快照可幂等重放，版本冲突不会覆盖其他管理员的修改。该领域不写站内通知、飞书消息或 notification outbox。
 
 所有内容驱动 TimeCanvas DTO 都包含活跃关键时间点。查询把它们并入内容和可导航范围及 `rowPageKey`，但默认中心只依据业务 Segment/Current Plan；Task Composer 由服务端直接注入同一 DTO。逻辑可视窗口统一限制为最多三年，避免极远时间点制造超宽 Canvas。业务画布不创建独立关键点行，即使业务行为空也只在时间内容区显示名称胶囊及对应竖线，精确时间保留在悬浮提示和无障碍文本中；密集点使用可聚焦的计数入口，详情弹层可选择具体点重新显示。管理员画布仅保留无行标题的拖动区域，复用业务行的上海日期纵向网格，当前时间红线在关键点之上连续贯穿；拖动区继续显示精确时间，拖动按上海自然日吸附并保留时分，精确时间也可由表单编辑。保存 pending 时表单与拖动同时禁用；集合冲突会显式读取最新快照但保留本地草稿，站内链接、浏览器历史和离页均受未保存保护。
-- 使用率首次达到 70%、80%、90%、100% 时向对应车组组长或技术组组长发送飞书私信（按组别去重）
-- 采购看板 `/procurement/dashboard` 按项目分行展示预算占用（副标为车组·技术组），并汇总当前筛选下的预算池总量；支持按车组/技术组筛选
+- 使用率首次达到 70%、80%、90%、100% 时向对应兵种组组长发送飞书私信；事件键按兵种组+周期+阈值去重。规范预算行直接保存最近阈值；仅有旧技术方向行时，从已持久化的兵种组级 outbox 事件键恢复最近已提醒阈值，避免重复入队
+- 采购看板 `/procurement/dashboard` 每个兵种组只展示一栏，在组名后列出项目并汇总当前筛选下的预算池总量；只按兵种组筛选，不再提供技术方向筛选
 
 **状态机：**
 
@@ -154,7 +154,7 @@ Project 详情查询在 Project 可见性校验后，按 `DRAFT`、`ACTIVE`、�
 
 P2/P3 已补齐 Task 计划生命周期的服务端闭环。`lib/project-management/application/lifecycle-service.ts` 只保留稳定公共出口，Task 草稿/激活、Revision、Milestone Review 与 Termination 的完整事务分别位于独立命令模块；共享行锁、锁后可见性、Current Plan 读取、节点推进、计划哈希/审计和通知收件人解析位于内部领域模块。外部入口仍为 `app/actions/project-management/{tasks,plans,revisions,milestones,terminations}.ts` 和 `lib/project-management/queries/task-queries.ts`：
 
-- Task 草稿创建在事务中写入 `Task(status=DRAFT)`、初始 `TaskPlanVersion(status=CURRENT, activatedAt=null)`、`0–200` 个有序 Milestone、末尾 Termination、成员、审计、站内通知和 `channel=project-management` outbox；Start 固定由 `plannedStartAt` 表示，Terminal 持久化 trim 后 `1–200` 字符的名称（默认 `Terminal`）。Start、每个 Milestone 与 Terminal 时间必须严格递增，不接受同刻。`TaskPlanVersion.idempotencyKey` 与 `creationRequestHash` 支持同账号请求幂等和 payload 冲突检测。任何已登录并成功解析到统一 `Account/Person` 的账号都可创建，服务端把创建者归一化为 Owner；即使创建者 Person 已停用也保留该自动 Owner，其他新增成员必须是活跃 Person。模板成员只复制 Owner/Participant，人员冲突时 Owner 优先，模板计划继续复制 Terminal 名称并按新时间规则重新校验。
+- Task 草稿创建在事务中写入 `Task(status=DRAFT)`、初始 `TaskPlanVersion(status=CURRENT, activatedAt=null)`、`0–200` 个有序 Milestone、末尾 Termination、成员、审计、站内通知和 `channel=project-management` outbox；Start 固定由 `plannedStartAt` 表示，Terminal 持久化 trim 后 `1–200` 字符的名称（默认 `Terminal`）。Start、每个 Milestone 与 Terminal 时间必须严格递增，不接受同刻。`TaskPlanVersion.idempotencyKey` 与 `creationRequestHash` 支持同账号请求幂等和 payload 冲突检测。只有绑定活跃 `Person` 的统一账号可以创建，服务端把创建者归一化为 Owner；所有新增成员也必须是活跃 Person。模板成员只复制 Owner/Participant，人员冲突时 Owner 优先，模板计划继续复制 Terminal 名称并按新时间规则重新校验。
 - `activateTask` 锁定 Task 行，校验 Draft 状态、Owner 权限、`expectedLockVersion`、计划开始时间不晚于事务内服务端激活时间、至少一名 OWNER、合法计划、末尾 Termination 和连续序号后递增 `lockVersion`。该规则只作用于新的 DRAFT → ACTIVE 转换，不追溯历史 Task。存在 Milestone 时把首个 Milestone 置为 `ACTIVE` 并写入 `activeMilestoneNodeId`；零 Milestone 时直接激活 Terminal，`activeMilestoneNodeId` 保持 `null`，审计、工作台和通知以 Terminal 名称表示实际活动节点。
 - `deleteTaskDraft` 只允许 Task Owner 或全局管理员对 `DRAFT` 执行，在 Task 行锁内复核权限、未激活状态和 `expectedLockVersion`，递增锁版本并写入 `deletedAt`。删除保留 Task、计划、成员及审计历史，但所有未删除 Task 查询和直达路由不再返回该草稿。
 - Revision 只允许基于当前 Current Plan 和匹配的 `RevisionNode.baseTaskLockVersion` 创建。`revisionAt` 是用户选择的事件时间；它不形成阶段、不参与 Milestone 严格递增，也不能关联 Segment。目标计划固定沿用 Current Start，自动保留全部已完成 Milestone 和已生效 Revision，并重建全部未完成 Milestone 与 Termination。创建即为 `PENDING_APPROVAL`；被驳回记录保留候选计划，修改时递增 `reviewRound` 并直接重新送审，不存在 `DRAFT` Revision 或单独 submit。每个 Task 只允许一个 `status=DRAFT` 的 Revision 候选计划。Participant 可管理自己创建的未生效 Revision，Owner/全局管理员可管理该 Task 任意未生效 Revision。只有全局管理员批准后才原子历史化旧 Current、启用新 Current 并标记被替换节点为 `REVISED`；Segment 仅关联 Task，因此无需关联失效或重关联流程。
@@ -195,9 +195,11 @@ TimeCanvas 的请求预算为 Full Segment + Busy 合计 5,000、当前计划非
 
 `scripts/cron.ts` 每 10 分钟在数据库互斥下运行 Segment transition，并在每日 08:15 执行 deadline/retention/integrity 维护。资源冲突的增量与每日全量扫描、checkpoint、运行状态和日志均已删除。定时任务只处理保留的领域状态、审计、站内通知和 `channel=project-management` outbox，不自动生成 Actual，也不自动调整 Segment 排期。
 
-项目管理浏览器入口覆盖 `/progress` 统一“我的工作”、Task Composer/工作台、资源计划、Action Inbox 和通知偏好；`/progress/task/:id`、`/progress/kanban`、`/progress/my-timeline`、`/progress/resources/conflicts`、`/progress/tags` 与 `/admin/roles` 返回 404。所有页面先解析项目管理 actor；`taskReadableWhere` 和 `segmentReadableWhere` 对所有已登录统一账号返回全部未删除对象，人员列表返回所有活跃 Person，并在所选范围继续展示有历史投入的停用 Person。停用 Person 对应账号仍可进入页面、全局读取并创建 Task，其本人会成为该 Task 的自动 Owner；停用 Person 不可作为其他 Task 的新增成员，也不可创建新 Segment。服务端 action 仍执行成员、Person 状态、状态机、权限、关联和版本校验，DTO capability flags 决定只读或可操作 UI。审批待办和审批按钮只对两类全局管理员可用。
+项目管理浏览器入口覆盖 `/progress` 统一“我的工作”、Task Composer/工作台、资源计划、Action Inbox 和通知偏好；`/progress/task/:id`、`/progress/kanban`、`/progress/my-timeline`、`/progress/resources/conflicts`、`/progress/tags` 与 `/admin/roles` 返回 404。所有页面先解析项目管理 actor；`taskReadableWhere` 和 `segmentReadableWhere` 对所有已登录统一账号返回全部未删除对象，人员列表返回所有活跃 Person，并在所选范围继续展示有历史投入的停用 Person。停用 Person 对应账号仍可进入页面和全局读取历史，但 mutation 在事务内刷新 Actor 时统一返回 `FORBIDDEN`，不能创建 Task、修改业务或新增 Segment。服务端 action 仍执行成员、Person 状态、状态机、权限、关联和版本校验，DTO capability flags 决定只读或可操作 UI。审批待办和审批按钮只对两类有效全局管理员可用。
 
 项目管理浏览器入口统一由 `app/progress/layout.tsx` 渲染全站 `AppHeader`、`PageShell` 和模块 Shell，子页只提供上下文命令栏与业务内容。桌面端使用可折叠的 sticky 左侧导航；移动端使用模态 Drawer。模块 Shell 统一读取通知未读数；不可用对象使用脱敏页面。`--pm-*` 语义变量集中在 `app/globals.css`，适配明暗主题和 reduced motion。`taskNew`、`taskEdit`、`taskRevisionNew`、`taskRevisionEdit`、`approvals`均已有类型安全路由和导航入口；个人时间不再有独立导航项。`/progress/tasks/new`、仅限 DRAFT 的 `/progress/tasks/[id]/edit`、Revision 新建和驳回重提路由共用 Task Composer；权限不足返回脱敏 404，状态变化或已有候选时重定向工作台。DRAFT 工作台只读展示概览与 Current Plan，并在右上角按“编辑 Task → 激活 Task → 删除草稿 → 复制链接”给出能力允许的操作。ACTIVE 工作台右上角“发起 Revision”进入独立新建页；Revision Tab 只保留历史、审批/驳回、取消和三层 Diff，被驳回记录链接到独立编辑页。
+
+采购管理沿用相同的 `PageCommandBar` 上下文命令栏模式，并通过采购模块标签与独立测试标识区分。看板、待办、新建、列表、工坊加工费、订单详情和编辑页均不渲染返回按钮；订单状态与可用业务操作统一放在命令栏右侧，页面切换由桌面侧栏或移动端抽屉承担。
 
 Task Composer 支持 `CREATE`、`EDIT_DRAFT`、`CREATE_REVISION`、`RESUBMIT_REVISION` 四种模式。桌面端采用“Task/Revision 信息 / TimeCanvas 与节点表 / 节点 Inspector”三栏，画布与节点表使用同一受控选择和实时节点状态；Inspector 不设保存/取消，连续编辑按节点合并为一条撤销历史。新增 Milestone 立即成为 Composer 专用临时节点，补全后自动转正；Task 编辑保留既有 `nodeId`，新节点的 Composer ID 作为提交 `clientKey`。Revision 模式固定 Start，把已完成 Milestone 和已生效 Revision 作为只读承接节点，仅提交可替换 Milestone、当前 Revision 时间/原因和 Terminal；Revision Marker 不参与阶段带边界。节点元数据保存临时生命周期和无效时间输入期间的最后合法画布位置，不进入服务端 DTO。Pixel 5 保留纵向实时编辑且不显示桌面画布布局。Composer 只复用时间坐标与交互，不查询成员 Planned/Actual/Busy。
 
@@ -244,7 +246,8 @@ TimeCanvas 的显示尺度为 `WEEK/MONTH/QUARTER/YEAR`，密度分别为 40/12/
 |------|------|
 | `/` | 首页导航 |
 | `/login` | 飞书登录 |
-| `/procurement` | 采购管理首页 |
+| `/procurement` | 重定向到采购看板 |
+| `/procurement/pending` | 待处理订单与最近订单 |
 | `/procurement/new` | 采购申请 |
 | `/procurement/list` | 订单列表 |
 | `/procurement/[id]` | 订单详情与审批 |
@@ -283,7 +286,8 @@ TimeCanvas 的显示尺度为 `WEEK/MONTH/QUARTER/YEAR`，密度分别为 40/12/
 - **私信防误发**：`FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES / OPEN_IDS / UNION_IDS` 为空时不限制；配置后只允许匹配收件人，其他私信会被记录并拦截。Playwright 启动的应用服务默认只允许 `李棋轩`。Docker Compose 默认 `NOTIFICATION_DELIVERY_DISABLED=true` 且 allowlist 为 `李棋轩`；生产真实投递需要显式设置 `NOTIFICATION_DELIVERY_DISABLED=false`，并按需配置或清空 allowlist。
 - **CardKit 回调**：采购审批卡若由审批机器人发送，需要运行审批机器人长连接；生产 `./service/install.sh` 默认安装并启动 `pnx-management-feishu-approval-ws.service`。通知机器人长连接仍可通过 `ENABLE_FEISHU_WS=true` 单独启用。审批机器人回调中的操作人也会通过 `union_id` 映射回系统 `openId` 后再校验权限。
 - **群 Webhook**：采购群通知和日报仍使用 Webhook，独立于统一私信接口
-- **通讯录同步**：手动入口 `app/actions/syncFeishuUsers.ts`，定时入口 `scripts/cron.ts`，共用 `lib/feishu-user-sync.ts`；需 `contact:*` 只读权限。同步继续 upsert 采购 `User`，同时按同一规则初始化/刷新项目管理 Account/Person。
+- **通讯录同步**：手动入口 `app/actions/syncFeishuUsers.ts`，定时入口 `scripts/cron.ts`，共用 `lib/feishu-user-sync.ts`；需 `contact:*` 只读权限。拉取端通过 `/contact/v3/scopes` 确认根部门授权，并对部门和人员分页缺失/重复 token fail closed；同步事务使用 15 分钟显式 timeout 和固定 advisory lock。同步把飞书结果视为在职成员全量快照：在职成员 upsert 采购 `User` 和统一 Account/Person，快照缺席或明确离职的成员标记为 `Person.INACTIVE`，返岗后恢复 `ACTIVE`。停用不物理删除历史关系；普通身份解析不恢复状态，项目/采购 mutation、权限、管理员候选、人员选择与通知收件人只接受在职 Person。项目、采购、采购历史删除、全局关键时间点和账号角色等业务 mutation 在实际写事务内以 `SELECT ... FOR UPDATE` 锁定并复核操作者 Person，使同步停用与并发写线性化。通讯录同步与任何可能同时锁多个 Person 的账号权限或老师邮箱事务统一先取通讯录同步 advisory lock；其中读取/变更全局管理员集合的事务再取全局管理员 advisory lock、超级管理员 mutation lock（如适用），最后按稳定顺序取 Person 行锁。Project 立项提交/重提/审批、Revision 创建/重提、Milestone 验收提交、Terminal 结束提交和全局角色授予/撤销也保持“管理员集合锁→Person”顺序，避免形成反向等待。反馈状态、预算覆盖导入和老师邮箱配置在写事务内再次复核操作者仍是在职超级管理员，撤权先提交后旧请求不得继续写入。同步开始时已有活跃飞书账号至少 10 个且单次拟停用超过 30% 时默认整批回滚并返回二次确认令牌；比例分母固定使用本轮新增或返岗前的活跃账号数，不能被快照中的大量新人稀释。令牌由排序后的稳定飞书身份（优先 `unionId`，否则 `openId`）、待停用既有账号和同步前活跃计数生成，不依赖首次回滚事务中新建账号的 UUID。超级管理员确认授权完整后可继续；每次手动同步都会在持有通讯录同步锁与管理员集合锁后锁定发起人的 Person，并在任何身份或 Person 写入前复核其仍为 `ACTIVE` 且仍有有效 `SUPER_ADMINISTRATOR`；高比例停用还会独立复核确认人，确认与停用随后在同一事务写入审计。定时同步没有人工发起人，继续按系统同步路径执行。快照变化或确认人被停用、撤权都会使确认失败。会移除最后一名有效全局管理员或发生身份冲突时仍无条件整批回滚，冲突在回滚后另写脱敏审计。
+- **停用账号界面**：项目管理和采购详情仍允许读取授权范围内的历史事实，capability 与操作区统一只读。采购模块侧栏/移动抽屉不为停用账号展示“新建申请”和“工坊加工费”；直接访问新建页会重定向看板，编辑页返回脱敏 404。
 
 ## Prisma 与数据库
 

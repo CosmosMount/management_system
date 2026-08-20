@@ -105,9 +105,9 @@ test("getProcurementPendingOrders 返回当前用户需要处理的订单", asyn
   expect(normalOrderNos).not.toContain("PW-FULL-REVIEW");
 });
 
-test("采购首页展示待处理订单汇总", async ({ page, context, baseURL }) => {
+test("采购待办页展示待处理订单汇总", async ({ page, context, baseURL }) => {
   await loginAsAdminUser(context, baseURL);
-  await page.goto("/procurement", { waitUntil: "networkidle" });
+  await page.goto("/procurement/pending", { waitUntil: "networkidle" });
 
   await expect(page.getByText(/待处理订单/)).toBeVisible();
   const pendingList = page.getByTestId("procurement-pending-orders");
@@ -117,9 +117,9 @@ test("采购首页展示待处理订单汇总", async ({ page, context, baseURL 
   ).toBeVisible();
 });
 
-test("采购人首页能看到待上传凭证的订单", async ({ page, context, baseURL }) => {
+test("采购人待办页能看到待上传凭证的订单", async ({ page, context, baseURL }) => {
   await loginAsNormalUser(context, baseURL, normalAuth);
-  await page.goto("/procurement", { waitUntil: "networkidle" });
+  await page.goto("/procurement/pending", { waitUntil: "networkidle" });
 
   const pendingList = page.getByTestId("procurement-pending-orders");
   await expect(

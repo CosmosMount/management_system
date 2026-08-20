@@ -12,10 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  DEFAULT_BUDGET_PERIOD,
-  formatBudgetPoolLabel,
-} from "@/lib/procurement-budget-period";
+import { DEFAULT_BUDGET_PERIOD } from "@/lib/procurement-budget-period";
 import type { BudgetPoolImportResult } from "@/lib/import-procurement-budget";
 import { MAX_BUDGET_POOL_IMPORT_ROWS } from "@/lib/constants";
 import {
@@ -124,7 +121,7 @@ export function BudgetPoolImportDialog({
         <DialogHeader>
           <DialogTitle>导入采购预算池</DialogTitle>
           <DialogDescription>
-            每行对应一条「车组 + 技术组」预算；相同组合将合并求和。周期默认{" "}
+            每行填写项目、兵种组和预算；相同项目与兵种组将合并求和。周期默认{" "}
             {DEFAULT_BUDGET_PERIOD}，单次最多 {MAX_BUDGET_POOL_IMPORT_ROWS} 行，文件不超过 {SPREADSHEET_FILE_SIZE_LABEL}。
           </DialogDescription>
         </DialogHeader>
@@ -184,9 +181,9 @@ export function BudgetPoolImportDialog({
             {result.rows.length > 0 && (
               <ul className="space-y-1 text-muted-foreground">
                 {result.rows.slice(0, 6).map((row) => (
-                  <li key={`${row.description}-${row.team}-${row.techGroup}-${row.period}`}>
+                  <li key={`${row.description}-${row.team}-${row.period}`}>
                     {row.description ? `${row.description} · ` : ""}
-                    {formatBudgetPoolLabel(row.team, row.techGroup)} · ¥
+                    {row.team} · ¥
                     {row.budgetAmount.toLocaleString("zh-CN")} · {row.period}
                   </li>
                 ))}

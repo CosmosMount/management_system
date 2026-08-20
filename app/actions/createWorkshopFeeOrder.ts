@@ -16,6 +16,10 @@ import {
 } from "@/lib/validations/workshop-fee";
 import { generateWorkshopOrderNo } from "@/lib/workshop-order-no";
 import { parseJsonFormField } from "@/lib/validations/form-data-json";
+import {
+  lockActiveProcurementUserTx,
+  requireActiveProcurementUser,
+} from "@/lib/active-account";
 
 function isUniqueConstraintError(err: unknown): boolean {
   return (
@@ -31,6 +35,7 @@ export async function createWorkshopFeeOrder(formData: FormData) {
   if (!session?.user?.openId) {
     throw new Error("未登录");
   }
+  await requireActiveProcurementUser(session.user.openId);
   return withActionLogging(
     {
       event: "procurement.workshop_fee.create",
@@ -70,8 +75,9 @@ async function createWorkshopFeeOrderLogged(formData: FormData, userOpenId: stri
     for (let attempt = 0; attempt < 5; attempt++) {
       const orderNo = await generateWorkshopOrderNo();
       try {
-        order = await prisma.$transaction(async (tx) =>
-          tx.purchaseOrder.create({
+        order = await prisma.$transaction(async (tx) => {
+          await lockActiveProcurementUserTx(tx, userOpenId);
+          return tx.purchaseOrder.create({
           data: {
             id: orderId,
             orderNo,
@@ -96,8 +102,8 @@ async function createWorkshopFeeOrderLogged(formData: FormData, userOpenId: stri
               })),
             },
           },
-          }),
-        );
+          });
+        });
         break;
       } catch (err) {
         if (!isUniqueConstraintError(err) || attempt === 4) throw err;

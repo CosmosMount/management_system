@@ -1,28 +1,32 @@
 import { auth } from "@/lib/auth";
-import { AppHeader } from "@/components/app-header";
 import { LiveAutoRefresh } from "@/components/live-auto-refresh";
 import { OrdersTable } from "@/components/orders-table";
 import { ProcurementListHeader } from "@/components/procurement/procurement-back-link";
 import { ProcurementPageLayout } from "@/components/procurement/procurement-page-layout";
-import { PageShell } from "@/components/page-shell";
 import { prisma } from "@/lib/prisma";
 import { getUserRoles } from "@/lib/permissions";
 import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { procurementListWhere } from "@/lib/procurement-visibility";
 import { userHasSignature } from "@/lib/user-signature";
+import { isActiveFeishuOpenId } from "@/lib/active-account";
 
 export default async function OrdersPage() {
   const liveVersion = await getCurrentUserLiveVersion("procurement");
   const session = await auth();
-  const userRoles = session?.user?.openId
-    ? await getUserRoles(session.user.openId)
+  const viewerOpenId = session?.user?.openId;
+  const actionOpenId =
+    viewerOpenId && (await isActiveFeishuOpenId(viewerOpenId))
+      ? viewerOpenId
+      : undefined;
+  const userRoles = actionOpenId
+    ? await getUserRoles(actionOpenId)
     : [];
-  const hasSignature = session?.user?.openId
-    ? await userHasSignature(session.user.openId)
+  const hasSignature = actionOpenId
+    ? await userHasSignature(actionOpenId)
     : false;
 
   const orders = await prisma.purchaseOrder.findMany({
-    where: procurementListWhere(session?.user?.openId, {
+    where: procurementListWhere(viewerOpenId, {
       includeRejected: true,
     }),
     include: {
@@ -53,23 +57,20 @@ export default async function OrdersPage() {
 
   return (
     <>
-      <AppHeader />
       <LiveAutoRefresh
         scope="procurement"
         initialVersion={liveVersion}
         intervalMs={6000}
       />
-      <PageShell>
-        <ProcurementPageLayout>
-          <ProcurementListHeader />
-          <OrdersTable
-            orders={rows}
-            userRoles={userRoles}
-            userOpenId={session?.user?.openId}
-            hasSignature={hasSignature}
-          />
-        </ProcurementPageLayout>
-      </PageShell>
+      <ProcurementListHeader />
+      <ProcurementPageLayout>
+        <OrdersTable
+          orders={rows}
+          userRoles={userRoles}
+          userOpenId={actionOpenId}
+          hasSignature={hasSignature}
+        />
+      </ProcurementPageLayout>
     </>
   );
 }

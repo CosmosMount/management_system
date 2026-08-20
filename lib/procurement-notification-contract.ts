@@ -42,7 +42,8 @@ export type OrderCardPayload = {
 export type BudgetThresholdPayload = {
   description: string;
   team: string;
-  techGroup: string;
+  /** 旧通知兼容字段；新预算事件只按兵种组聚合。 */
+  techGroup?: string;
   period: string;
   budgetAmount: number;
   usedAmount: number;

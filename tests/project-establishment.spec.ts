@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import { prisma } from "../lib/prisma";
+import { revokeAccountRole } from "../lib/account-management";
 import {
   completeProject,
   createProject,
@@ -919,6 +920,174 @@ test.describe("Project 立项与生命周期", () => {
     await expectCode(reviewProjectEstablishment(admin, { ...approvalInput, decision: "REJECT", comment: "反向决定" }), "STATE_CONFLICT");
     expect(await prisma.projectEstablishmentRequest.count({ where: { projectId: created.projectId } })).toBe(2);
     expect(await prisma.projectEstablishmentRequest.count({ where: { projectId: created.projectId, status: "PENDING" } })).toBe(0);
+  });
+
+  test("立项提交先锁定审批人集合并与全局角色撤销无死锁串行化", async () => {
+    const requester = await actor("Project 立项锁顺序申请人");
+    const operator = await actor(
+      "Project 立项锁顺序超管",
+      "SUPER_ADMINISTRATOR",
+    );
+    const target = await actor(
+      "Project 立项锁顺序审批人",
+      "PROJECT_ADMINISTRATOR",
+    );
+    const targetAssignment = await prisma.systemRoleAssignment.findFirstOrThrow({
+      where: {
+        accountId: target.accountId,
+        role: "PROJECT_ADMINISTRATOR",
+        revokedAt: null,
+      },
+      select: { id: true },
+    });
+
+    let releasePersonLock!: () => void;
+    const personLockGate = new Promise<void>((resolve) => {
+      releasePersonLock = resolve;
+    });
+    let markPersonLocked!: () => void;
+    const personLocked = new Promise<void>((resolve) => {
+      markPersonLocked = resolve;
+    });
+    const personLockHolder = prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`
+        SELECT "id"
+        FROM "Person"
+        WHERE "id" = ${requester.personId}
+        FOR UPDATE
+      `;
+      markPersonLocked();
+      await personLockGate;
+    });
+    await personLocked;
+
+    const idempotencyKey = randomUUID();
+    const submission = createProject(requester, {
+      name: `Project 立项锁顺序 ${randomUUID()}`,
+      description: "验证立项提交与审批角色撤销的统一锁顺序",
+      avatarPath: null,
+      members: [{ personId: requester.personId, role: "OWNER" }],
+      requestedTaskIds: [],
+      idempotencyKey,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 75));
+
+    let revocationSettled = false;
+    const revocation = revokeAccountRole(
+      operator.accountId,
+      targetAssignment.id,
+    ).finally(() => {
+      revocationSettled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 75));
+    expect(revocationSettled).toBe(false);
+
+    releasePersonLock();
+    const [created] = await Promise.all([
+      submission,
+      revocation,
+      personLockHolder,
+    ]);
+    await expect(
+      prisma.project.findUniqueOrThrow({
+        where: { id: created.projectId },
+        select: { status: true },
+      }),
+    ).resolves.toEqual({ status: "PENDING_APPROVAL" });
+    const submittedOutbox = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: {
+        eventKey: `pm:project:${created.projectId}:establishment:1:submitted:feishu`,
+      },
+      select: { payload: true },
+    });
+    expect(JSON.parse(submittedOutbox.payload)).toMatchObject({
+      recipientOpenIds: expect.arrayContaining([
+        operator.openId,
+        target.openId,
+      ]),
+    });
+  });
+
+  test("提交人在审批前停用时批准失败且不产生部分写入", async () => {
+    const requester = await actor("Project 停用提交人");
+    const participant = await actor("Project 停用提交成员");
+    const admin = await actor(
+      "Project 停用提交审批人",
+      "PROJECT_ADMINISTRATOR",
+    );
+    const task = await draftTask(
+      requester,
+      participant,
+      `Project 停用提交 Task ${randomUUID()}`,
+    );
+    const created = await createProject(requester, {
+      name: `Project 停用提交 ${randomUUID()}`,
+      description: "验证提交后离职不会在审批时挂载 Task",
+      avatarPath: null,
+      members: [{ personId: requester.personId, role: "OWNER" }],
+      requestedTaskIds: [task.id],
+      idempotencyKey: randomUUID(),
+    });
+    const request = await prisma.projectEstablishmentRequest.findFirstOrThrow({
+      where: { projectId: created.projectId, status: "PENDING" },
+    });
+    const taskBefore = await prisma.task.findUniqueOrThrow({
+      where: { id: task.id },
+      select: { lockVersion: true },
+    });
+
+    await prisma.person.update({
+      where: { id: requester.personId },
+      data: { status: "INACTIVE" },
+    });
+
+    await expectCode(
+      reviewProjectEstablishment(admin, {
+        projectId: created.projectId,
+        requestId: request.id,
+        expectedLockVersion: created.lockVersion,
+        decision: "APPROVE",
+        comment: "提交人已停用，不应批准",
+      }),
+      "STATE_CONFLICT",
+    );
+    await expect(
+      prisma.project.findUniqueOrThrow({
+        where: { id: created.projectId },
+        select: { status: true, lockVersion: true, reviewedAt: true },
+      }),
+    ).resolves.toEqual({
+      status: "PENDING_APPROVAL",
+      lockVersion: created.lockVersion,
+      reviewedAt: null,
+    });
+    await expect(
+      prisma.projectEstablishmentRequest.findUniqueOrThrow({
+        where: { id: request.id },
+        select: { status: true, reviewerAccountId: true, reviewedAt: true },
+      }),
+    ).resolves.toEqual({
+      status: "PENDING",
+      reviewerAccountId: null,
+      reviewedAt: null,
+    });
+    await expect(
+      prisma.task.findUniqueOrThrow({
+        where: { id: task.id },
+        select: { projectId: true, lockVersion: true },
+      }),
+    ).resolves.toEqual({
+      projectId: null,
+      lockVersion: taskBefore.lockVersion,
+    });
+    await expect(
+      prisma.domainAuditEvent.count({
+        where: {
+          projectId: created.projectId,
+          action: "pm.project.establishment.approve",
+        },
+      }),
+    ).resolves.toBe(0);
   });
 
   test("批准时原子挂载 Task、同步成员，并执行结束与删除门禁", async () => {

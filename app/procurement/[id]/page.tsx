@@ -1,6 +1,5 @@
 import { notFound } from "next/navigation";
 import { auth } from "@/lib/auth";
-import { AppHeader } from "@/components/app-header";
 import { LiveAutoRefresh } from "@/components/live-auto-refresh";
 import { OrderActions } from "@/components/order-actions";
 import { OrderDraftActions } from "@/components/order-draft-actions";
@@ -12,7 +11,6 @@ import { ProcurementNotifyApproverButton } from "@/components/procurement-notify
 import { OrderRejectionNotice } from "@/components/procurement/order-rejection-notice";
 import { OrdersBackHeader } from "@/components/procurement/procurement-back-link";
 import { ProcurementPageLayout } from "@/components/procurement/procurement-page-layout";
-import { PageShell } from "@/components/page-shell";
 import { Badge } from "@/components/ui/badge";
 import {
   CheckCircle2,
@@ -51,6 +49,7 @@ import { canViewProcurementOrder } from "@/lib/procurement-visibility";
 import { resolveProcurementHandlerNames } from "@/lib/procurement-order-handlers";
 import { shouldShowProcurementRejectionNotice } from "@/lib/procurement-rejection";
 import { userHasSignature } from "@/lib/user-signature";
+import { isActiveFeishuOpenId } from "@/lib/active-account";
 
 type Props = {
   params: Promise<{ id: string }>;
@@ -62,14 +61,17 @@ export default async function OrderDetailPage({ params, searchParams }: Props) {
   const liveVersion = await getCurrentUserLiveVersion("procurement-order", id);
   const { focus, from } = await searchParams;
   const session = await auth();
-  const userRoles = session?.user?.openId
-    ? await getUserRoles(session.user.openId)
+  const viewerOpenId = session?.user?.openId;
+  const actionOpenId =
+    viewerOpenId && (await isActiveFeishuOpenId(viewerOpenId))
+      ? viewerOpenId
+      : undefined;
+  const userRoles = actionOpenId
+    ? await getUserRoles(actionOpenId)
     : [];
-  const admin = session?.user?.openId
-    ? await isSuperAdmin(session.user.openId)
-    : false;
-  const hasSignature = session?.user?.openId
-    ? await userHasSignature(session.user.openId)
+  const admin = actionOpenId ? await isSuperAdmin(actionOpenId) : false;
+  const hasSignature = actionOpenId
+    ? await userHasSignature(actionOpenId)
     : false;
 
   const order = await prisma.purchaseOrder.findUnique({
@@ -87,7 +89,7 @@ export default async function OrderDetailPage({ params, searchParams }: Props) {
   if (
     !canViewProcurementOrder(
       order.status,
-      session?.user?.openId,
+      viewerOpenId,
       order.initiator.openId,
       admin,
     )
@@ -105,18 +107,18 @@ export default async function OrderDetailPage({ params, searchParams }: Props) {
     order.status,
     userRoles,
     orderScope,
-    session?.user?.openId,
+    viewerOpenId,
     order.initiator.openId,
   );
 
   const canWithdrawForEdit = canWithdrawProcurementOrder(
     order.status,
-    session?.user?.openId,
+    actionOpenId,
     order.initiator.openId,
   );
   const canNotifyApprover = canNotifyProcurementApprover(
     order.status,
-    session?.user?.openId,
+    actionOpenId,
     order.initiator.openId,
     userRoles,
     orderScope,
@@ -139,7 +141,6 @@ export default async function OrderDetailPage({ params, searchParams }: Props) {
 
   return (
     <>
-      <AppHeader />
       <LiveAutoRefresh
         scope="procurement-order"
         resourceId={order.id}
@@ -147,101 +148,100 @@ export default async function OrderDetailPage({ params, searchParams }: Props) {
         intervalMs={5000}
       />
       <OrderPageFocus focus={focus ?? null} fromNotify={from === "notify"} />
-      <PageShell>
-        <ProcurementPageLayout className="max-w-4xl space-y-3">
-          <div className="space-y-2">
-            <div className="flex items-start justify-between gap-4">
-              <OrdersBackHeader
-                className="mb-0 min-w-0 flex-1"
-                title={`订单 ${order.orderNo}`}
-                description={`${order.initiatorName} · ${order.team} / ${order.techGroup}`}
-              />
-              <div
-                id="approval"
-                className="flex flex-wrap items-center justify-end gap-2 scroll-mt-20"
-              >
-              <Badge variant={order.status === "REJECTED" ? "destructive" : "default"}>
-                {statusLabels[order.status]}
-              </Badge>
-              {order.isWorkshopFee && (
-                <Badge variant="secondary">工坊加工费</Badge>
-              )}
-              {!order.isWorkshopFee && (
-                <>
-                  <OrderActions
+      <OrdersBackHeader
+        title={`订单 ${order.orderNo}`}
+        description={`${order.initiatorName} · ${order.team} / ${order.techGroup}`}
+        actions={
+          <div
+            id="approval"
+            className="flex flex-wrap items-center justify-end gap-2 scroll-mt-20"
+          >
+            <Badge
+              variant={order.status === "REJECTED" ? "destructive" : "default"}
+            >
+              {statusLabels[order.status]}
+            </Badge>
+            {order.isWorkshopFee && (
+              <Badge variant="secondary">工坊加工费</Badge>
+            )}
+            {!order.isWorkshopFee && (
+              <>
+                <OrderActions
+                  orderId={order.id}
+                  status={order.status}
+                  order={orderScope}
+                  userRoles={userRoles}
+                  managementState={managementState}
+                  hasSignature={hasSignature}
+                />
+                <OrderDraftActions
+                  orderId={order.id}
+                  status={order.status}
+                  userOpenId={actionOpenId}
+                  initiatorOpenId={order.initiator.openId}
+                  hasSignature={hasSignature}
+                />
+                {canNotifyApprover ? (
+                  <ProcurementNotifyApproverButton
                     orderId={order.id}
-                    status={order.status}
-                    order={orderScope}
-                    userRoles={userRoles}
-                    managementState={managementState}
-                    hasSignature={hasSignature}
+                    currentHandler={currentHandler}
+                    targetLabel={
+                      order.status === "PENDING_APPLICANT_DOCS"
+                        ? "applicant"
+                        : "approver"
+                    }
                   />
-                  <OrderDraftActions
-                    orderId={order.id}
-                    status={order.status}
-                    userOpenId={session?.user?.openId}
-                    initiatorOpenId={order.initiator.openId}
-                    hasSignature={hasSignature}
-                  />
-                  {canNotifyApprover ? (
-                    <ProcurementNotifyApproverButton
-                      orderId={order.id}
-                      currentHandler={currentHandler}
-                      targetLabel={
-                        order.status === "PENDING_APPLICANT_DOCS"
-                          ? "applicant"
-                          : "approver"
-                      }
-                    />
-                  ) : null}
-                  <OrderReimbursementActions
-                    orderId={order.id}
-                    items={order.items.map((item) => ({
-                      id: item.id,
-                      name: item.name,
-                      spec: item.spec,
-                      quantity: item.quantity,
-                      unitPrice: item.unitPrice,
-                      photoPath: item.photoPath,
-                    }))}
-                    status={order.status}
-                    orderScope={orderScope}
-                    userRoles={userRoles}
-                    userOpenId={session?.user?.openId}
-                    initiatorOpenId={order.initiator.openId}
-                    attachments={attachments}
-                    canViewAttachments={canViewAttachments}
-                    rejectionReason={order.rejectionReason}
-                    orderStatus={order.status}
-                    rejectedByName={order.rejectedByName}
-                    rejectedAt={order.rejectedAt}
-                  />
-                </>
-              )}
+                ) : null}
+                <OrderReimbursementActions
+                  orderId={order.id}
+                  items={order.items.map((item) => ({
+                    id: item.id,
+                    name: item.name,
+                    spec: item.spec,
+                    quantity: item.quantity,
+                    unitPrice: item.unitPrice,
+                    photoPath: item.photoPath,
+                  }))}
+                  status={order.status}
+                  orderScope={orderScope}
+                  userRoles={userRoles}
+                  userOpenId={actionOpenId}
+                  initiatorOpenId={order.initiator.openId}
+                  attachments={attachments}
+                  canViewAttachments={canViewAttachments}
+                  rejectionReason={order.rejectionReason}
+                  orderStatus={order.status}
+                  rejectedByName={order.rejectedByName}
+                  rejectedAt={order.rejectedAt}
+                />
+              </>
+            )}
             <PurchaseOrderDeleteByAdminButton
               orderId={order.id}
               isSuperAdmin={admin}
             />
-            </div>
-            </div>
-            {shouldShowProcurementRejectionNotice(
-              order.status,
-              order.rejectionReason,
-            ) ? (
-              <OrderRejectionNotice
-                reason={order.rejectionReason!}
-                status={order.status}
-                rejectedByName={order.rejectedByName}
-                rejectedAt={order.rejectedAt}
-              />
-            ) : null}
-            {canWithdrawForEdit ? (
-              <p className="text-sm text-muted-foreground">
-                老师审核通过前，你可点击「修改清单」编辑采购明细并重新提交，已进行的审批将清零。
-              </p>
-            ) : null}
           </div>
-
+        }
+      />
+      <ProcurementPageLayout className="max-w-4xl space-y-3">
+        <div className="space-y-2">
+          {shouldShowProcurementRejectionNotice(
+            order.status,
+            order.rejectionReason,
+          ) ? (
+            <OrderRejectionNotice
+              reason={order.rejectionReason!}
+              status={order.status}
+              rejectedByName={order.rejectedByName}
+              rejectedAt={order.rejectedAt}
+            />
+          ) : null}
+          {canWithdrawForEdit ? (
+            <p className="text-sm text-muted-foreground">
+              老师审核通过前，你可点击「修改清单」编辑采购明细并重新提交，已进行的审批将清零。
+            </p>
+          ) : null}
+        </div>
         {order.status === "MANAGEMENT_REVIEW" && (
           <Card className="gap-0 py-0">
             <CardContent className="flex flex-wrap gap-4 py-3 text-sm">
@@ -350,8 +350,7 @@ export default async function OrderDetailPage({ params, searchParams }: Props) {
             </Table>
           </CardContent>
         </Card>
-        </ProcurementPageLayout>
-      </PageShell>
+      </ProcurementPageLayout>
     </>
   );
 }

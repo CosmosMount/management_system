@@ -17,6 +17,9 @@ type UserItem = {
   open_id?: string;
   union_id?: string;
   name?: string;
+  status?: {
+    is_resigned?: boolean;
+  };
   avatar?: {
     avatar_72?: string;
     avatar_origin?: string;
@@ -28,6 +31,7 @@ export type FeishuContactUser = {
   unionId: string | null;
   name: string;
   avatar: string | null;
+  isActive: boolean;
 };
 
 async function feishuGet<T>(
@@ -61,13 +65,44 @@ async function paginate<T>(
 ): Promise<T[]> {
   const items: T[] = [];
   let pageToken = "";
-  do {
+  const seenPageTokens = new Set<string>();
+  while (true) {
     const page = await fetchPage(pageToken);
     items.push(...page.items);
     if (!page.has_more) break;
-    pageToken = page.page_token ?? "";
-  } while (pageToken);
+    const nextPageToken = page.page_token?.trim() ?? "";
+    if (!nextPageToken) {
+      throw new Error("飞书通讯录分页未完成：缺少下一页标记");
+    }
+    if (seenPageTokens.has(nextPageToken)) {
+      throw new Error("飞书通讯录分页未完成：下一页标记重复");
+    }
+    seenPageTokens.add(nextPageToken);
+    pageToken = nextPageToken;
+  }
   return items;
+}
+
+/** 验证应用通讯录授权范围确实覆盖根部门，而非仅覆盖部分可见部门。 */
+async function listAuthorizedDepartmentIds(): Promise<string[]> {
+  return paginate<string>(async (pageToken) => {
+    const params: Record<string, string> = {
+      department_id_type: "open_department_id",
+      user_id_type: "open_id",
+      page_size: "100",
+    };
+    if (pageToken) params.page_token = pageToken;
+    const data = await feishuGet<{
+      department_ids?: string[];
+      has_more: boolean;
+      page_token?: string;
+    }>("/contact/v3/scopes", params);
+    return {
+      items: data.department_ids ?? [],
+      has_more: data.has_more,
+      page_token: data.page_token,
+    };
+  });
 }
 
 /** 获取企业全部部门 ID（含根部门 0） */
@@ -106,7 +141,7 @@ async function listAllDepartmentIds(): Promise<string[]> {
 async function listUsersInDepartment(
   departmentId: string,
 ): Promise<FeishuContactUser[]> {
-  return paginate<UserItem>(async (pageToken) => {
+  const items = await paginate<UserItem>(async (pageToken) => {
     const params: Record<string, string> = {
       department_id: departmentId,
       department_id_type: "open_department_id",
@@ -126,43 +161,71 @@ async function listUsersInDepartment(
       has_more: data.has_more,
       page_token: data.page_token,
     };
-  }).then((items) =>
-    items
-      .filter((u): u is UserItem & { open_id: string } => !!u.open_id)
-      .map((u) => ({
-        openId: u.open_id,
-        unionId: u.union_id ?? null,
-        name: u.name?.trim() || "未知用户",
-        avatar: u.avatar?.avatar_72 ?? u.avatar?.avatar_origin ?? null,
-      })),
-  );
+  });
+  if (items.some((user) => !user.open_id?.trim())) {
+    throw new Error(
+      `飞书部门 ${departmentId} 返回了缺少 openId 的成员，已停止同步`,
+    );
+  }
+  return items.map((user) => ({
+    openId: user.open_id!.trim(),
+    unionId: user.union_id ?? null,
+    name: user.name?.trim() || "未知用户",
+    avatar: user.avatar?.avatar_72 ?? user.avatar?.avatar_origin ?? null,
+    isActive: user.status?.is_resigned !== true,
+  }));
 }
 
-/** 从飞书通讯录拉取全部成员（去重） */
-export async function fetchAllFeishuContactUsers(): Promise<FeishuContactUser[]> {
+export type FeishuContactSnapshot = {
+  contacts: FeishuContactUser[];
+  departmentCount: number;
+  authorizedDepartmentCount: number;
+  includesRootDepartment: boolean;
+};
+
+/** 从飞书通讯录拉取已验证授权范围和完整分页的成员快照。 */
+export async function fetchAllFeishuContactUsers(): Promise<FeishuContactSnapshot> {
+  const authorizedDepartmentIds = await listAuthorizedDepartmentIds();
+  const includesRootDepartment = authorizedDepartmentIds.includes("0");
+  if (!includesRootDepartment) {
+    throw new Error(
+      "飞书通讯录授权范围未覆盖根部门，已停止同步以避免误停未授权部门成员",
+    );
+  }
   const departmentIds = await listAllDepartmentIds();
-  const byOpenId = new Map<string, FeishuContactUser>();
+  const contacts: FeishuContactUser[] = [];
 
   for (const departmentId of departmentIds) {
-    const users = await listUsersInDepartment(departmentId);
-    for (const user of users) {
-      const existing = byOpenId.get(user.openId);
-      if (!existing) {
-        byOpenId.set(user.openId, user);
-        continue;
-      }
-      if (
-        (existing.name === "未知用户" && user.name !== "未知用户") ||
-        (!existing.unionId && user.unionId)
-      ) {
-        byOpenId.set(user.openId, {
-          ...existing,
-          name: existing.name === "未知用户" ? user.name : existing.name,
-          avatar: user.avatar ?? existing.avatar,
-          unionId: user.unionId ?? existing.unionId,
-        });
-      }
+    contacts.push(...(await listUsersInDepartment(departmentId)));
+  }
+
+  return {
+    contacts: mergeFeishuContactUsers(contacts),
+    departmentCount: departmentIds.length,
+    authorizedDepartmentCount: authorizedDepartmentIds.length,
+    includesRootDepartment,
+  };
+}
+
+export function mergeFeishuContactUsers(
+  contacts: Iterable<FeishuContactUser>,
+): FeishuContactUser[] {
+  const byOpenId = new Map<string, FeishuContactUser>();
+
+  for (const user of contacts) {
+    const existing = byOpenId.get(user.openId);
+    if (!existing) {
+      byOpenId.set(user.openId, user);
+      continue;
     }
+    byOpenId.set(user.openId, {
+      ...existing,
+      name: existing.name === "未知用户" ? user.name : existing.name,
+      avatar: user.avatar ?? existing.avatar,
+      unionId: user.unionId ?? existing.unionId,
+      // 同一成员可能属于多个部门；任一记录标记离职都不能被另一条覆盖。
+      isActive: existing.isActive && user.isActive,
+    });
   }
 
   return [...byOpenId.values()].sort((a, b) =>

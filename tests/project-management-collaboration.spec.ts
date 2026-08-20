@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
+import type { Client } from "pg";
 import { prisma } from "../lib/prisma";
 import {
   createComment,
@@ -9,6 +10,7 @@ import {
 } from "../lib/project-management/application/collaboration-service";
 import { toProjectManagementServiceError } from "../lib/project-management/application/errors";
 import { createTaskDraft, activateTask } from "../lib/project-management/application/lifecycle-service";
+import { updateActiveTask } from "../lib/project-management/application/task-mutation-service";
 import { updateTaskProject } from "../lib/project-management/application/project-service";
 import { createDomainAuditEventTx } from "../lib/project-management/audit";
 import type { ProjectManagementActor } from "../lib/project-management/identity";
@@ -18,6 +20,13 @@ import {
   getRiskPage,
 } from "../lib/project-management/queries/collaboration-queries";
 import { expectHealthyPage, loginAsTestUser } from "./helpers/functional-fixtures";
+import {
+  cleanupBarrierResources,
+  connectDatabaseClient,
+  databaseBackendPid,
+  throwBarrierErrors,
+  waitForDirectBlockers,
+} from "./helpers/database-barrier";
 
 test.describe("Project/Task 风险、评论与近期动态", () => {
   test("桌面端完成主要流程并保持权限、审计、通知和 Project 聚合一致", async ({
@@ -307,6 +316,82 @@ test.describe("Project/Task 风险、评论与近期动态", () => {
     });
     expect(activity.items.every((item) => !item.title.includes("unknown"))).toBe(true);
   });
+
+  test("Task 评论与同一操作人的 Task 更新并发时按 Task→Person 顺序完成", async ({}, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop", "数据库锁顺序只需单项目回归");
+    test.setTimeout(90_000);
+
+    await createActor(
+      `协作并发全局管理员 ${randomUUID()}`,
+      "SUPER_ADMINISTRATOR",
+    );
+    const owner = await createActor(`协作并发负责人 ${randomUUID()}`);
+    const participant = await createActor(`协作并发参与人 ${randomUUID()}`);
+    const draft = await createTaskDraft(owner.actor, {
+      title: `协作并发 Task ${randomUUID()}`,
+      description: "验证评论与 Task 更新的锁顺序",
+      team: "英雄",
+      techGroup: "电控",
+      priority: "HIGH",
+      members: [
+        { personId: owner.actor.personId, role: "OWNER" },
+        { personId: participant.actor.personId, role: "PARTICIPANT" },
+      ],
+      milestones: [milestoneInput("协作并发 Milestone", 2)],
+      plannedStartAt: new Date(Date.now() - 24 * 60 * 60 * 1_000).toISOString(),
+      termination: terminationInput(5),
+      idempotencyKey: `collaboration-concurrency-${randomUUID()}`,
+    });
+    await activateTask(owner.actor, {
+      taskId: draft.taskId,
+      expectedLockVersion: draft.lockVersion,
+    });
+    const task = await prisma.task.findUniqueOrThrow({
+      where: { id: draft.taskId },
+      select: { lockVersion: true },
+    });
+    const commentContent = `并发评论 ${randomUUID()}`;
+    const updatedTitle = `并发更新后的 Task ${randomUUID()}`;
+
+    const outcomes = await runBehindPersonLockBarrier({
+      personId: owner.actor.personId,
+      collaborationWrite: () =>
+        createComment(owner.actor, {
+          targetType: "TASK",
+          targetId: draft.taskId,
+          content: commentContent,
+        }),
+      taskWrite: () =>
+        updateActiveTask(owner.actor, {
+          taskId: draft.taskId,
+          expectedLockVersion: task.lockVersion,
+          metadata: {
+            title: updatedTitle,
+            description: "评论并发时仍应完成元数据更新",
+            team: "英雄",
+            techGroup: "电控",
+            priority: "HIGH",
+            relatedTaskId: null,
+          },
+        }),
+    });
+
+    expect(outcomes.map((outcome) => outcome.status)).toEqual([
+      "fulfilled",
+      "fulfilled",
+    ]);
+    await expect(
+      prisma.comment.count({
+        where: { taskId: draft.taskId, content: commentContent },
+      }),
+    ).resolves.toBe(1);
+    await expect(
+      prisma.task.findUniqueOrThrow({
+        where: { id: draft.taskId },
+        select: { title: true },
+      }),
+    ).resolves.toEqual({ title: updatedTitle });
+  });
 });
 
 async function createActor(
@@ -400,4 +485,77 @@ async function expectServiceCode(promise: Promise<unknown>, code: string) {
       throw toProjectManagementServiceError(error);
     }),
   ).rejects.toMatchObject({ code });
+}
+
+async function runBehindPersonLockBarrier(input: {
+  personId: string;
+  collaborationWrite: () => Promise<unknown>;
+  taskWrite: () => Promise<unknown>;
+}): Promise<
+  [PromiseSettledResult<unknown>, PromiseSettledResult<unknown>]
+> {
+  let locker: Client | undefined;
+  let observer: Client | undefined;
+  let transactionMayBeOpen = false;
+  let released = false;
+  let pending: Promise<unknown>[] = [];
+  let pendingSettlement:
+    | Promise<PromiseSettledResult<unknown>[]>
+    | undefined;
+  let pendingBackendPids: number[] = [];
+  let pendingHandled = false;
+  let result:
+    | [PromiseSettledResult<unknown>, PromiseSettledResult<unknown>]
+    | undefined;
+  let primaryError: unknown;
+  let hasPrimaryError = false;
+  try {
+    locker = await connectDatabaseClient("collaboration-person-locker");
+    observer = await connectDatabaseClient("collaboration-person-observer");
+    transactionMayBeOpen = true;
+    const lockerPid = await lockPersonRow(locker, input.personId);
+    const collaborationPromise = Promise.resolve().then(
+      input.collaborationWrite,
+    );
+    void collaborationPromise.catch(() => undefined);
+    pending = [collaborationPromise];
+    pendingSettlement = Promise.allSettled(pending);
+    await waitForDirectBlockers(observer, lockerPid, 1);
+
+    const taskPromise = Promise.resolve().then(input.taskWrite);
+    void taskPromise.catch(() => undefined);
+    pending = [collaborationPromise, taskPromise];
+    pendingSettlement = Promise.allSettled(pending);
+    pendingBackendPids = await waitForDirectBlockers(observer, lockerPid, 2);
+    await locker.query("COMMIT");
+    released = true;
+    const settled = await Promise.allSettled(pending);
+    pendingHandled = true;
+    if (settled.length !== 2) throw new Error("协作并发屏障结果数量错误");
+    result = [settled[0]!, settled[1]!];
+  } catch (error) {
+    primaryError = error;
+    hasPrimaryError = true;
+  }
+  const cleanupErrors = await cleanupBarrierResources({
+    locker,
+    observer,
+    rollbackRequired: Boolean(locker && transactionMayBeOpen && !released),
+    pendingSettlement,
+    pendingBackendPids,
+    pendingHandled,
+    primaryError,
+  });
+  throwBarrierErrors(hasPrimaryError, primaryError, cleanupErrors);
+  if (!result) throw new Error("协作并发屏障未返回结果");
+  return result;
+}
+
+async function lockPersonRow(client: Client, personId: string) {
+  await client.query("BEGIN");
+  const pid = await databaseBackendPid(client);
+  await client.query('SELECT "id" FROM "Person" WHERE "id" = $1 FOR UPDATE', [
+    personId,
+  ]);
+  return pid;
 }

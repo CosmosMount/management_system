@@ -39,7 +39,7 @@ export const procurementOrderPayloadSchema = z.object({
 const budgetSchema = z.object({
   description: z.string(),
   team: z.string(),
-  techGroup: z.string(),
+  techGroup: z.string().optional(),
   period: z.string(),
   budgetAmount: z.number(),
   usedAmount: z.number(),

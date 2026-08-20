@@ -89,7 +89,7 @@ export default async function AdminPage() {
           href={routes.admin.budgetPools}
           icon={Wallet}
           title="采购预算池"
-          detail={`导入车组+技术组预算，当前 ${budgetPoolCount} 条。`}
+          detail={`导入兵种组预算并列出组内项目，当前 ${budgetPoolCount} 条。`}
         />
         <AdminEntryCard
           href={routes.admin.timeMarkers}

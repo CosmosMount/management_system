@@ -67,6 +67,7 @@ export async function createProject(
   const parsed = createProjectInputSchema.parse(input);
   const requestHash = hashRequest(parsed);
   return withProjectAvatarFailureCleanup(parsed.avatarPath, actor.openId, () => prisma.$transaction(async (tx) => {
+    await lockGlobalApprovalAdministratorSetTx(tx);
     await lockCrossAggregateTx(tx);
     const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     assertAuthorized({ actor: refreshedActor, action: "project.create", resource: { type: "project" } });
@@ -129,6 +130,7 @@ export async function resubmitProject(
   const parsed = resubmitProjectInputSchema.parse(input);
   const requestHash = hashRequest(parsed);
   return withProjectAvatarFailureCleanup(parsed.avatarPath, actor.openId, () => prisma.$transaction(async (tx) => {
+    await lockGlobalApprovalAdministratorSetTx(tx);
     await lockCrossAggregateTx(tx);
     const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     const project = await loadLockedProjectTx(tx, parsed.projectId);
@@ -187,8 +189,8 @@ export async function reviewProjectEstablishment(
 ): Promise<ProjectMutationResult> {
   const parsed = reviewProjectEstablishmentInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
-    await lockCrossAggregateTx(tx);
     await lockGlobalApprovalAdministratorSetTx(tx);
+    await lockCrossAggregateTx(tx);
     const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     const project = await loadLockedProjectTx(tx, parsed.projectId);
     assertAuthorized({ actor: refreshedActor, action: "project.review_establishment", resource: projectResource(project) });
@@ -472,9 +474,16 @@ export async function syncTaskMembersToProjectTx(tx: PrismaTx, input: { projectI
 }
 
 async function loadActorForAccountTx(tx: PrismaTx, accountId: string): Promise<ProjectManagementActor> {
-  const account = await tx.account.findUnique({ where: { id: accountId }, select: { person: { select: { id: true } }, identities: { where: { provider: "FEISHU", tenantId: "default" }, select: { openId: true, unionId: true }, take: 1 }, systemRoles: { where: { revokedAt: null }, select: { role: true, team: true, techGroup: true } } } });
+  await tx.$queryRaw`
+    SELECT person."id"
+    FROM "Person" AS person
+    WHERE person."accountId" = ${accountId}
+    FOR UPDATE
+  `;
+  const account = await tx.account.findUnique({ where: { id: accountId }, select: { person: { select: { id: true, status: true } }, identities: { where: { provider: "FEISHU", tenantId: "default" }, select: { openId: true, unionId: true }, take: 1 }, systemRoles: { where: { revokedAt: null }, select: { role: true, team: true, techGroup: true } } } });
   if (!account?.person) throw stateConflictError("本轮提交人账号已不可用，请驳回后重新提交");
-  return { accountId, personId: account.person.id, openId: account.identities[0]?.openId ?? "", unionId: account.identities[0]?.unionId, systemRoles: account.systemRoles };
+  const isActive = account.person.status === "ACTIVE";
+  return { accountId, personId: account.person.id, openId: account.identities[0]?.openId ?? "", unionId: account.identities[0]?.unionId, isActive, systemRoles: isActive ? account.systemRoles : [] };
 }
 
 function taskResource(task: { id: string; team: string; techGroup: string; status: Prisma.TaskGetPayload<object>["status"]; priority: Prisma.TaskGetPayload<object>["priority"]; members: Array<{ personId: string; role: Prisma.TaskMemberGetPayload<object>["role"]; removedAt: Date | null }> }): AuthorizationTaskResource {
@@ -489,6 +498,7 @@ function projectSnapshot(input: { name: string; description: string; avatarPath?
 function auditSnapshot(input: { name: string; description: string; members: ProjectMemberInput[] }, taskCount: number, round: number): Prisma.InputJsonValue { return { name: input.name, descriptionHash: createHash("sha256").update(input.description).digest("hex"), ownerCount: input.members.filter((member) => member.role === "OWNER").length, participantCount: input.members.filter((member) => member.role === "PARTICIPANT").length, taskCount, round, status: "PENDING_APPROVAL" }; }
 
 async function notifyEstablishmentSubmittedTx(tx: PrismaTx, actor: ProjectManagementActor, project: { id: string; name: string }, requestId: string, round: number) {
+  await lockGlobalApprovalAdministratorSetTx(tx);
   const accountIds = await activeGlobalApprovalAdministratorAccountIdsTx(tx, { requireFeishuOpenId: true });
   if (!accountIds.length) throw stateConflictError(USABLE_GLOBAL_APPROVAL_ADMINISTRATOR_REQUIRED);
   const recipients = await recipientsForAccountIdsTx(tx, accountIds);

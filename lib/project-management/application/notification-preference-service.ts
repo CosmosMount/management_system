@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
+import { refreshProjectManagementActorTx } from "@/lib/project-management/application/actor-refresh";
 import { createDomainAuditEventTx } from "@/lib/project-management/audit";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 
@@ -22,10 +23,11 @@ export async function updateNotificationPreference(
 ) {
   const parsed = updatePreferenceSchema.parse(input);
   return prisma.$transaction(async (tx) => {
+    const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     const previous = await tx.notificationPreference.findUnique({
       where: {
         accountId_category_channel: {
-          accountId: actor.accountId,
+          accountId: refreshedActor.accountId,
           category: parsed.category,
           channel: "FEISHU",
         },
@@ -34,13 +36,13 @@ export async function updateNotificationPreference(
     const preference = await tx.notificationPreference.upsert({
       where: {
         accountId_category_channel: {
-          accountId: actor.accountId,
+          accountId: refreshedActor.accountId,
           category: parsed.category,
           channel: "FEISHU",
         },
       },
       create: {
-        accountId: actor.accountId,
+        accountId: refreshedActor.accountId,
         category: parsed.category,
         channel: "FEISHU",
         enabled: parsed.feishuEnabled,
@@ -51,13 +53,13 @@ export async function updateNotificationPreference(
     await tx.notificationPreference.upsert({
       where: {
         accountId_category_channel: {
-          accountId: actor.accountId,
+          accountId: refreshedActor.accountId,
           category: parsed.category,
           channel: "IN_APP",
         },
       },
       create: {
-        accountId: actor.accountId,
+        accountId: refreshedActor.accountId,
         category: parsed.category,
         channel: "IN_APP",
         enabled: true,
@@ -65,8 +67,8 @@ export async function updateNotificationPreference(
       update: { enabled: true },
     });
     await createDomainAuditEventTx(tx, {
-      actorAccountId: actor.accountId,
-      actorPersonId: actor.personId,
+      actorAccountId: refreshedActor.accountId,
+      actorPersonId: refreshedActor.personId,
       action: "notification.preference.updated",
       entityType: "NotificationPreference",
       entityId: preference.id,

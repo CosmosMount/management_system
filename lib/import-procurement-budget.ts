@@ -2,7 +2,6 @@ import * as XLSX from "xlsx";
 import {
   MAX_BUDGET_POOL_IMPORT_ROWS,
   TEAM_OPTIONS,
-  TECH_GROUP_OPTIONS,
 } from "@/lib/constants";
 import {
   DEFAULT_BUDGET_PERIOD,
@@ -38,7 +37,7 @@ const HEADER_ALIASES: Record<string, keyof RawRow> = {
   说明: "description",
   备注: "description",
   车组: "team",
-  技术组: "techGroup",
+  兵种组: "team",
   预算: "budgetAmount",
   预算金额: "budgetAmount",
   金额: "budgetAmount",
@@ -49,7 +48,6 @@ const HEADER_ALIASES: Record<string, keyof RawRow> = {
 type RawRow = {
   description?: string;
   team?: string;
-  techGroup?: string;
   budgetAmount?: string | number;
   period?: string;
 };
@@ -87,10 +85,9 @@ function sheetRowsToRawRows(sheet: XLSX.WorkSheet): RawRow[] {
 
   const hasDescription = columnKeys.includes("description");
   const hasTeam = columnKeys.includes("team");
-  const hasTechGroup = columnKeys.includes("techGroup");
   const hasBudget = columnKeys.includes("budgetAmount");
-  if (!hasDescription || !hasTeam || !hasTechGroup || !hasBudget) {
-    throw new Error("Excel 缺少必填列：项目、车组、技术组、预算");
+  if (!hasDescription || !hasTeam || !hasBudget) {
+    throw new Error("Excel 缺少必填列：项目、兵种组（车组）、预算");
   }
 
   const rows: RawRow[] = [];
@@ -123,7 +120,6 @@ function parseRawRow(
   errors: BudgetPoolImportError[],
 ): BudgetPoolImportRow | null {
   const team = raw.team?.trim() ?? "";
-  const techGroup = raw.techGroup?.trim() ?? "";
   const description = raw.description?.trim() ?? "";
   const period = raw.period?.trim() || DEFAULT_BUDGET_PERIOD;
   const budgetAmount = parseBudgetAmount(raw.budgetAmount);
@@ -133,19 +129,11 @@ function parseRawRow(
     return null;
   }
   if (!team) {
-    errors.push({ row: rowNum, message: "车组不能为空" });
-    return null;
-  }
-  if (!techGroup) {
-    errors.push({ row: rowNum, message: "技术组不能为空" });
+    errors.push({ row: rowNum, message: "兵种组不能为空" });
     return null;
   }
   if (!(TEAM_OPTIONS as readonly string[]).includes(team)) {
-    errors.push({ row: rowNum, message: `无效车组：${team}` });
-    return null;
-  }
-  if (!(TECH_GROUP_OPTIONS as readonly string[]).includes(techGroup)) {
-    errors.push({ row: rowNum, message: `无效技术组：${techGroup}` });
+    errors.push({ row: rowNum, message: `无效兵种组：${team}` });
     return null;
   }
   if (budgetAmount === null) {
@@ -153,16 +141,23 @@ function parseRawRow(
     return null;
   }
 
-  return { description, team, techGroup, budgetAmount, period };
+  return {
+    description,
+    team,
+    // 旧字段仅为数据库兼容保留；预算业务不再按技术方向拆分。
+    techGroup: "",
+    budgetAmount,
+    period,
+  };
 }
 
 function poolMergeKey(
-  row: Pick<BudgetPoolImportRow, "description" | "team" | "techGroup" | "period">,
+  row: Pick<BudgetPoolImportRow, "description" | "team" | "period">,
 ): string {
-  return `${row.description}\0${row.team}\0${row.techGroup}\0${row.period}`;
+  return `${row.description}\0${row.team}\0${row.period}`;
 }
 
-/** 相同项目+车组+技术组+周期合并：预算求和（不同项目即使同组别也分开保留） */
+/** 相同项目+兵种组+周期合并：预算求和，技术方向不再参与预算维度。 */
 export function mergeBudgetPoolImportRows(
   rows: BudgetPoolImportRow[],
 ): BudgetPoolImportRow[] {
@@ -257,23 +252,20 @@ export async function parseBudgetPoolsFromFile(
 export function downloadBudgetPoolTemplate() {
   const rows = [
     {
-      项目: "英雄队机械方向",
-      车组: "英雄",
-      技术组: "机械",
+      项目: "第一版整车",
+      兵种组: "英雄",
       预算: 20000,
       周期: DEFAULT_BUDGET_PERIOD,
     },
     {
-      项目: "英雄队电控方向",
-      车组: "英雄",
-      技术组: "电控",
+      项目: "减重与重画",
+      兵种组: "英雄",
       预算: 15000,
       周期: DEFAULT_BUDGET_PERIOD,
     },
     {
-      项目: "步兵队硬件方向",
-      车组: "步兵",
-      技术组: "硬件",
+      项目: "玻纤验证",
+      兵种组: "步兵",
       预算: 30000,
       周期: DEFAULT_BUDGET_PERIOD,
     },

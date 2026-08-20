@@ -1,11 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
+import { lockFeishuContactSyncTx } from "../lib/active-account";
 import {
+  assignReimbursementRole,
   grantAccountRole,
   revokeAccountRole,
 } from "../lib/account-management";
 import { isGlobalSuperAdministrator } from "../lib/account-authorization";
 import { authorize } from "../lib/project-management/authorization";
+import { lockGlobalApprovalAdministratorSetTx } from "../lib/project-management/approval-administrators";
 import {
   getProjectManagementActorForFeishuUser,
   type ProjectManagementActor,
@@ -13,6 +16,75 @@ import {
 import { prisma } from "../lib/prisma";
 
 test.describe.configure({ mode: "serial" });
+
+test("账号权限写与通讯录反序锁 Person 时不会死锁", async () => {
+  const actor = await createAccount("通讯录锁顺序超管");
+  const target = await createAccount("通讯录锁顺序目标");
+  await prisma.systemRoleAssignment.create({
+    data: { accountId: actor.accountId, role: "SUPER_ADMINISTRATOR" },
+  });
+  await prisma.user.create({
+    data: {
+      accountId: target.accountId,
+      openId: target.openId,
+      name: "通讯录锁顺序目标",
+    },
+  });
+
+  let releaseSync!: () => void;
+  const syncGate = new Promise<void>((resolve) => {
+    releaseSync = resolve;
+  });
+  let markTargetLocked!: () => void;
+  const targetLocked = new Promise<void>((resolve) => {
+    markTargetLocked = resolve;
+  });
+  const simulatedSync = prisma.$transaction(async (tx) => {
+    await lockFeishuContactSyncTx(tx);
+    await tx.$queryRaw`
+      SELECT "id" FROM "Person"
+      WHERE "id" = ${target.personId}
+      FOR UPDATE
+    `;
+    markTargetLocked();
+    await syncGate;
+    await tx.$queryRaw`
+      SELECT "id" FROM "Person"
+      WHERE "id" = ${actor.personId}
+      FOR UPDATE
+    `;
+  });
+
+  let released = false;
+  let roleWrite: ReturnType<typeof assignReimbursementRole> | undefined;
+  try {
+    await targetLocked;
+    roleWrite = assignReimbursementRole(actor.accountId, {
+      targetAccountId: target.accountId,
+      role: "TEAM_ADMIN",
+      team: "英雄",
+      techGroup: "",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 75));
+    releaseSync();
+    released = true;
+    const outcomes = await Promise.race([
+      Promise.allSettled([simulatedSync, roleWrite]),
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error("账号权限与通讯录反序锁超时")), 5_000);
+      }),
+    ]);
+    expect(outcomes.every((outcome) => outcome.status === "fulfilled")).toBe(
+      true,
+    );
+  } finally {
+    if (!released) releaseSync();
+    await Promise.allSettled([
+      simulatedSync,
+      ...(roleWrite ? [roleWrite] : []),
+    ]);
+  }
+});
 
 test("统一超管、项目角色、审计和通知保持事务一致", async () => {
   const actor = await createAccount("权限测试超管");
@@ -145,8 +217,8 @@ test("两名超级管理员并发互撤只能成功一次并保留最后一名",
       (result): result is PromiseRejectedResult => result.status === "rejected",
     );
     expect(rejected?.reason).toBeInstanceOf(Error);
-    expect((rejected?.reason as Error).message).toContain(
-      "至少保留一名超级管理员",
+    expect((rejected?.reason as Error).message).toMatch(
+      /至少保留一名超级管理员|无管理权限/,
     );
     await expect(
       prisma.systemRoleAssignment.count({
@@ -165,6 +237,74 @@ test("两名超级管理员并发互撤只能成功一次并保留最后一名",
       data: { revokedAt: new Date() },
     });
   }
+});
+
+test("全局角色撤销在 Person 行锁前获取管理员集合锁", async () => {
+  const actor = await createAccount("锁顺序测试超管");
+  const target = await createAccount("锁顺序测试项目管理员");
+  await prisma.systemRoleAssignment.create({
+    data: { accountId: actor.accountId, role: "SUPER_ADMINISTRATOR" },
+  });
+  const targetAssignment = await prisma.systemRoleAssignment.create({
+    data: { accountId: target.accountId, role: "PROJECT_ADMINISTRATOR" },
+  });
+
+  let releasePersonLock!: () => void;
+  const personLockGate = new Promise<void>((resolve) => {
+    releasePersonLock = resolve;
+  });
+  let markPersonLocked!: () => void;
+  const personLocked = new Promise<void>((resolve) => {
+    markPersonLocked = resolve;
+  });
+  const personLockHolder = prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`
+      SELECT "id"
+      FROM "Person"
+      WHERE "id" = ${actor.personId}
+      FOR UPDATE
+    `;
+    markPersonLocked();
+    await personLockGate;
+  });
+  await personLocked;
+
+  const revocation = revokeAccountRole(
+    actor.accountId,
+    targetAssignment.id,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 75));
+
+  let probeAcquiredGlobalLock = false;
+  const globalLockProbe = prisma.$transaction(async (tx) => {
+    await lockGlobalApprovalAdministratorSetTx(tx);
+    probeAcquiredGlobalLock = true;
+    await tx.$queryRaw`
+      SELECT "id"
+      FROM "Person"
+      WHERE "id" = ${actor.personId}
+      FOR UPDATE
+    `;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 75));
+
+  const probeAcquiredBeforeRelease = probeAcquiredGlobalLock;
+  releasePersonLock();
+  const outcomes = await Promise.allSettled([
+    personLockHolder,
+    revocation,
+    globalLockProbe,
+  ]);
+  expect(probeAcquiredBeforeRelease).toBe(false);
+  expect(outcomes.every((outcome) => outcome.status === "fulfilled")).toBe(
+    true,
+  );
+  await expect(
+    prisma.systemRoleAssignment.findUniqueOrThrow({
+      where: { id: targetAssignment.id },
+      select: { revokedAt: true },
+    }),
+  ).resolves.toMatchObject({ revokedAt: expect.any(Date) });
 });
 
 test("最后一名可用全局审批人不能被并发撤销角色或清空飞书身份", async () => {
@@ -304,6 +444,111 @@ test("项目管理员全局放行并允许自审，普通账号保持全员读�
   expect(authorize({ actor: base, action: "segment.manage_others", resource: { type: "segment", task } }).allowed).toBe(false);
   expect(authorize({ actor: base, action: "task.view", resource: task }).allowed).toBe(true);
   expect(authorize({ actor: projectAdmin, action: "milestone.review", resource: task })).toMatchObject({ allowed: true, reason: "global_administrator" });
+});
+
+test("停用人员的身份解析不会恢复在职状态或携带项目管理员角色", async () => {
+  const inactive = await createAccount("离职身份解析测试");
+  await prisma.systemRoleAssignment.create({
+    data: {
+      accountId: inactive.accountId,
+      role: "PROJECT_ADMINISTRATOR",
+    },
+  });
+  await prisma.person.update({
+    where: { id: inactive.personId },
+    data: { status: "INACTIVE" },
+  });
+
+  const inactiveActor = await getProjectManagementActorForFeishuUser({
+    openId: inactive.openId,
+  });
+  expect(inactiveActor).toMatchObject({ isActive: false, systemRoles: [] });
+  expect(
+    authorize({
+      actor: inactiveActor,
+      action: "task.view",
+      resource: { type: "task" },
+    }),
+  ).toMatchObject({ allowed: true });
+  expect(
+    authorize({
+      actor: inactiveActor,
+      action: "project.comment.create",
+      resource: { type: "project" },
+    }),
+  ).toMatchObject({ allowed: false, reason: "inactive_person_read_only" });
+  expect(
+    authorize({
+      actor: inactiveActor,
+      action: "task.risk.create",
+      resource: {
+        type: "task",
+        members: [{ personId: inactive.personId, role: "OWNER" }],
+      },
+    }),
+  ).toMatchObject({ allowed: false, reason: "inactive_person_read_only" });
+  expect(
+    authorize({
+      actor: inactiveActor,
+      action: "segment.manage_self",
+      resource: { type: "segment", personId: inactive.personId },
+    }),
+  ).toMatchObject({ allowed: false, reason: "inactive_person_read_only" });
+  await expect(
+    prisma.person.findUnique({
+      where: { id: inactive.personId },
+      select: { status: true },
+    }),
+  ).resolves.toEqual({ status: "INACTIVE" });
+});
+
+test("停用操作人或目标账号不能在角色事务中取得新权限", async () => {
+  const actor = await createAccount("停用角色事务操作人");
+  const target = await createAccount("停用角色事务目标");
+  await prisma.systemRoleAssignment.create({
+    data: {
+      accountId: actor.accountId,
+      role: "SUPER_ADMINISTRATOR",
+    },
+  });
+  await prisma.person.update({
+    where: { id: target.personId },
+    data: { status: "INACTIVE" },
+  });
+
+  await expect(
+    grantAccountRole(actor.accountId, {
+      targetAccountId: target.accountId,
+      role: "PROJECT_ADMINISTRATOR",
+      team: "",
+      techGroup: "",
+    }),
+  ).rejects.toThrow("目标账号已停用，无法授予角色");
+  await expect(
+    assignReimbursementRole(actor.accountId, {
+      targetAccountId: target.accountId,
+      role: "TEAM_ADMIN",
+      team: "英雄",
+      techGroup: "",
+    }),
+  ).rejects.toThrow("目标账号已停用，无法授予角色");
+
+  await prisma.person.update({
+    where: { id: actor.personId },
+    data: { status: "INACTIVE" },
+  });
+  await prisma.person.update({
+    where: { id: target.personId },
+    data: { status: "ACTIVE" },
+  });
+  await expect(
+    grantAccountRole(actor.accountId, {
+      targetAccountId: target.accountId,
+      role: "PROJECT_ADMINISTRATOR",
+      team: "",
+      techGroup: "",
+    }),
+  ).rejects.toThrow("无管理权限");
 });
 
 async function createAccount(name: string) {

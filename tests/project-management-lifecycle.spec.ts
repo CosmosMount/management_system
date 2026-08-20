@@ -26,7 +26,10 @@ import {
 } from "../lib/project-management/queries/task-queries";
 import { getActorPersonOption } from "../lib/project-management/queries/option-queries";
 import { getActionInbox } from "../lib/project-management/queries/action-inbox-queries";
-import type { ProjectManagementActor } from "../lib/project-management/identity";
+import {
+  getProjectManagementActorForFeishuUser,
+  type ProjectManagementActor,
+} from "../lib/project-management/identity";
 import { updateNotificationPreference } from "../lib/project-management/application/notification-preference-service";
 import { firstNonEmptyFeishuOpenId } from "../lib/project-management/application/feishu-identity";
 import {
@@ -322,20 +325,14 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     ).toBe(created.taskId);
   });
 
-  test("an inactive Person account remains readable and can become Owner only as the Task creator", async () => {
+  test("an inactive Person account keeps historical reads but cannot create a Task", async () => {
+    const guardAdmin = await createAccountPerson(
+      "生命周期停用人员写保护管理员",
+    );
+    await grantRole(guardAdmin.account.id, "PROJECT_ADMINISTRATOR");
     const inactiveCreator = await createAccountPerson(
       "生命周期停用人员创建者",
     );
-    await prisma.person.update({
-      where: { id: inactiveCreator.person.id },
-      data: { status: "INACTIVE" },
-    });
-    await expect(getActorPersonOption(actor(inactiveCreator))).resolves.toMatchObject({
-      id: inactiveCreator.person.id,
-      status: "INACTIVE",
-      accountBinding: "BOUND",
-    });
-
     const input = {
       ...taskDraftInput({
         ownerPersonId: inactiveCreator.person.id,
@@ -348,22 +345,44 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       ],
     };
     const created = await createTaskDraft(actor(inactiveCreator), input);
-    await expect(
-      prisma.taskMember.findFirstOrThrow({
-        where: {
-          taskId: created.taskId,
-          personId: inactiveCreator.person.id,
-          removedAt: null,
-        },
-        select: { role: true },
+    await prisma.person.update({
+      where: { id: inactiveCreator.person.id },
+      data: { status: "INACTIVE" },
+    });
+    await expect(getActorPersonOption(actor(inactiveCreator))).resolves.toMatchObject({
+      id: inactiveCreator.person.id,
+      status: "INACTIVE",
+      accountBinding: "BOUND",
+    });
+    const inactiveActor = await getProjectManagementActorForFeishuUser({
+      openId: inactiveCreator.openId,
+    });
+    const inactiveWorkspace = await getTaskWorkspace({
+      actor: inactiveActor,
+      taskId: created.taskId,
+    });
+    expect(inactiveWorkspace).toMatchObject({
+      task: { id: created.taskId },
+      permissions: {
+        canUpdateMetadata: false,
+        canManageMembers: false,
+        canActivate: false,
+        canDeleteDraft: false,
+        canCreateRevision: false,
+        canSubmitMilestoneReview: false,
+        canReviewMilestone: false,
+        canSubmitTerminationReview: false,
+        canReviewTermination: false,
+        canViewHistory: true,
+      },
+    });
+    await expectServiceError(
+      createTaskDraft(actor(inactiveCreator), {
+        ...input,
+        idempotencyKey: `inactive-create-rejected-${randomUUID()}`,
       }),
-    ).resolves.toEqual({ role: "OWNER" });
-    await expect(
-      getTaskWorkspace({
-        actor: actor(inactiveCreator),
-        taskId: created.taskId,
-      }),
-    ).resolves.toMatchObject({ task: { id: created.taskId } });
+      "FORBIDDEN",
+    );
 
     const activeCreator = await createAccountPerson("生命周期活跃创建者");
     const rejected = await captureServiceError(
@@ -2960,6 +2979,7 @@ function issueMessages(issues: Array<{ message: string }>) {
 async function activeGlobalAdministratorNotificationRecipients() {
   const accounts = await prisma.account.findMany({
     where: {
+      person: { is: { status: "ACTIVE" } },
       systemRoles: {
         some: {
           role: { in: ["SUPER_ADMINISTRATOR", "PROJECT_ADMINISTRATOR"] },

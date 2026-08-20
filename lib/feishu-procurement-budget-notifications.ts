@@ -25,8 +25,10 @@ function buildBudgetThresholdCard(
         text: {
           tag: "lark_md",
           content: [
-            payload.description ? `**描述**：${payload.description}` : null,
-            `**车组 / 技术组**：${payload.team} / ${payload.techGroup}`,
+            payload.description ? `**项目**：${payload.description}` : null,
+            payload.techGroup
+              ? `**兵种组 / 历史技术方向**：${payload.team} / ${payload.techGroup}`
+              : `**兵种组**：${payload.team}`,
             `**周期**：${payload.period}`,
             `**预算额度**：¥${payload.budgetAmount.toLocaleString("zh-CN", { minimumFractionDigits: 2 })}`,
             `**已使用**：¥${payload.usedAmount.toLocaleString("zh-CN", { minimumFractionDigits: 2 })}（${payload.usagePercent.toFixed(1)}%）`,

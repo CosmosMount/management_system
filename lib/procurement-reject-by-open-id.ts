@@ -15,6 +15,10 @@ import {
 import type { ProcurementRejectOutcome } from "@/lib/procurement-reject-outcome";
 import { refreshProcurementFeishuCards } from "@/lib/feishu-procurement-card-sync";
 import { requireApproverSignature } from "@/lib/user-signature";
+import {
+  lockActiveProcurementUserTx,
+  requireActiveProcurementUser,
+} from "@/lib/active-account";
 
 function toOrderCardPayload(order: {
   id: string;
@@ -52,6 +56,7 @@ export async function rejectProcurementByOpenId(
   reason: string,
   outcome: ProcurementRejectOutcome,
 ): Promise<{ message: string }> {
+  await requireActiveProcurementUser(openId);
   const trimmedReason = reason.trim();
   if (!trimmedReason) {
     throw new Error("请填写驳回或退回原因");
@@ -84,6 +89,7 @@ export async function rejectProcurementByOpenId(
 
   if (outcome === "terminate") {
     await prisma.$transaction(async (tx) => {
+      await lockActiveProcurementUserTx(tx, openId);
       const locked = await tx.purchaseOrder.updateMany({
         where: { id: orderId, status: order.status },
         data: {
@@ -122,6 +128,7 @@ export async function rejectProcurementByOpenId(
   }
 
   await prisma.$transaction(async (tx) => {
+    await lockActiveProcurementUserTx(tx, openId);
     const updated = await tx.purchaseOrder.updateMany({
       where: { id: orderId, status: order.status },
       data: {

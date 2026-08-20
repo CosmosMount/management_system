@@ -145,7 +145,16 @@ export default async function ProgressPage({
       <PageCommandBar
         title="我的工作"
         description="个人时间、行动待办、参与 Task 与通知集中在一个驾驶舱。"
-        actions={<Link className="rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground" href={routes.progress.taskNew}>新建 Task</Link>}
+        actions={
+          actor.isActive === false ? null : (
+            <Link
+              className="rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground"
+              href={routes.progress.taskNew}
+            >
+              新建 Task
+            </Link>
+          )
+        }
       />
       <div className="mx-auto flex w-full min-w-0 max-w-[96rem] flex-col gap-5 px-4 py-6 sm:px-6 lg:px-8">
         {firstParam(params.focusError) === "1" && (

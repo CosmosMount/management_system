@@ -28,6 +28,10 @@ import {
 } from "@/lib/validations/order";
 import { parseJsonFormField } from "@/lib/validations/form-data-json";
 import { cleanupUploadPaths } from "@/lib/upload-cleanup";
+import {
+  lockActiveProcurementUserTx,
+  requireActiveProcurementUser,
+} from "@/lib/active-account";
 
 async function requireDraftOrder(orderId: string, userOpenId: string) {
   const order = await prisma.purchaseOrder.findUnique({
@@ -58,6 +62,7 @@ export async function updateOrder(formData: FormData) {
   if (!session?.user?.openId) {
     throw new Error("未登录");
   }
+  await requireActiveProcurementUser(session.user.openId);
   return withActionLogging(
     {
       event: "procurement.order.update",
@@ -104,6 +109,7 @@ async function updateOrderLogged(formData: FormData, userOpenId: string) {
   let refreshed;
   try {
     refreshed = await prisma.$transaction(async (tx) => {
+      await lockActiveProcurementUserTx(tx, userOpenId);
       const changed = await tx.purchaseOrder.updateMany({
         where: {
           id: parsed.orderId,
@@ -171,6 +177,7 @@ export async function submitDraftOrder(orderId: string) {
   if (!session?.user?.openId) {
     throw new Error("未登录");
   }
+  await requireActiveProcurementUser(session.user.openId);
   return withActionLogging(
     {
       event: "procurement.order.submit_draft",
@@ -195,6 +202,7 @@ async function submitDraftOrderLogged(orderId: string, userOpenId: string) {
 
   const context = await getNotificationContext();
   const updated = await prisma.$transaction(async (tx) => {
+    await lockActiveProcurementUserTx(tx, userOpenId);
     const changed = await tx.purchaseOrder.updateMany({
       where: {
         id: orderId,

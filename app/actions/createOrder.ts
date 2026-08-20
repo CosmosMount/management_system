@@ -23,6 +23,10 @@ import {
   toStoredPurchaseItem,
 } from "@/lib/validations/order";
 import { parseJsonFormField } from "@/lib/validations/form-data-json";
+import {
+  lockActiveProcurementUserTx,
+  requireActiveProcurementUser,
+} from "@/lib/active-account";
 
 function isUniqueConstraintError(err: unknown): boolean {
   return (
@@ -38,6 +42,7 @@ export async function createOrder(formData: FormData) {
   if (!session?.user?.openId) {
     throw new Error("未登录");
   }
+  await requireActiveProcurementUser(session.user.openId);
   return withActionLogging(
     {
       event: "procurement.order.create",
@@ -99,6 +104,7 @@ async function createOrderLogged(formData: FormData, userOpenId: string) {
       const orderNo = await generateOrderNo();
       try {
         order = await prisma.$transaction(async (tx) => {
+          await lockActiveProcurementUserTx(tx, userOpenId);
           const created = await tx.purchaseOrder.create({
           data: {
             id: orderId,

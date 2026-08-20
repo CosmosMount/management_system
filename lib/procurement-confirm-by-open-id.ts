@@ -4,11 +4,16 @@ import { resolveInvoicePaths } from "@/lib/order-attachments";
 import { prisma } from "@/lib/prisma";
 import { canConfirmReimbursement } from "@/lib/permissions";
 import { refreshProcurementFeishuCards } from "@/lib/feishu-procurement-card-sync";
+import {
+  lockActiveProcurementUserTx,
+  requireActiveProcurementUser,
+} from "@/lib/active-account";
 
 export async function confirmProcurementByOpenId(
   openId: string,
   orderId: string,
 ): Promise<{ message: string }> {
+  await requireActiveProcurementUser(openId);
   const order = await prisma.purchaseOrder.findUnique({
     where: { id: orderId },
     include: { initiator: { select: { openId: true } } },
@@ -37,6 +42,7 @@ export async function confirmProcurementByOpenId(
   }
 
   await prisma.$transaction(async (tx) => {
+    await lockActiveProcurementUserTx(tx, openId);
     const locked = await tx.purchaseOrder.updateMany({
       where: { id: orderId, status: order.status },
       data: { status: OrderStatus.COMPLETED, ...stepTimerResetFields() },

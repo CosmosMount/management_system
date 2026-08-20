@@ -3,7 +3,12 @@
 import { randomUUID } from "crypto";
 import { revalidatePath } from "next/cache";
 import type { FeedbackStatus, Prisma } from "@prisma/client";
+import {
+  assertActiveGlobalSuperAdministratorTx,
+  isActiveGlobalSuperAdministratorTx,
+} from "@/lib/account-authorization";
 import { auth } from "@/lib/auth";
+import { lockGlobalApprovalAdministratorSetTx } from "@/lib/project-management/approval-administrators";
 import { resolveFeishuIdentityForUser } from "@/lib/project-management/identity";
 import {
   FEEDBACK_IMAGE_TOTAL_SIZE_LABEL,
@@ -21,11 +26,13 @@ import { drainNotificationOutboxSoon } from "@/lib/notification-delivery";
 import { isSuperAdmin } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
+import { lockActiveFeedbackUserTx } from "@/lib/active-account";
 
 const MAX_FEEDBACK_TEXT_LENGTH = 5000;
 const feedbackStatuses: FeedbackStatus[] = ["OPEN", "IN_PROGRESS", "CLOSED"];
 
 type FeedbackActionUser = {
+  accountId: string;
   openId: string;
   name: string;
   avatar: string | null;
@@ -83,8 +90,11 @@ async function requireFeedbackUser(): Promise<FeedbackActionUser> {
     name: session.user.name,
     avatar: session.user.image,
   });
+  if (identity.person.status !== "ACTIVE") {
+    throw new Error("人员已停用，无法提交反馈");
+  }
   const { openId, name, avatar } = identity.reimbursementUser;
-  return { openId, name, avatar };
+  return { accountId: identity.account.id, openId, name, avatar };
 }
 
 async function cleanupAttachments(attachments: SavedFeedbackAttachment[]) {
@@ -145,6 +155,7 @@ export async function createFeedback(formData: FormData) {
   let feedback: { id: string };
   try {
     feedback = await prisma.$transaction(async (tx) => {
+      await lockActiveFeedbackUserTx(tx, user.openId);
       const created = await tx.feedback.create({
         data: {
           id: feedbackId,
@@ -228,6 +239,13 @@ export async function replyFeedback(formData: FormData) {
   const attachments = await saveAttachments(feedbackId, files);
   try {
     await prisma.$transaction(async (tx) => {
+      if (actorIsAdmin) {
+        await lockGlobalApprovalAdministratorSetTx(tx);
+      }
+      await lockActiveFeedbackUserTx(tx, user.openId);
+      const currentActorIsAdmin = actorIsAdmin
+        ? await isActiveGlobalSuperAdministratorTx(tx, user.accountId)
+        : false;
       await lockFeedbackTx(tx, feedbackId);
       const current = await tx.feedback.findUniqueOrThrow({
         where: { id: feedbackId },
@@ -236,10 +254,10 @@ export async function replyFeedback(formData: FormData) {
           submitterOpenId: true,
         },
       });
-      if (!actorIsAdmin && current.submitterOpenId !== user.openId) {
+      if (!currentActorIsAdmin && current.submitterOpenId !== user.openId) {
         throw new Error("无权查看或回复该反馈");
       }
-      if (!actorIsAdmin && current.status === "CLOSED") {
+      if (!currentActorIsAdmin && current.status === "CLOSED") {
         throw new Error("该反馈已关闭，无法继续回复");
       }
       await tx.feedback.update({
@@ -257,7 +275,7 @@ export async function replyFeedback(formData: FormData) {
         },
         select: { id: true },
       });
-      const recipientOpenIds = actorIsAdmin
+      const recipientOpenIds = currentActorIsAdmin
         ? [current.submitterOpenId].filter((openId) => openId !== user.openId)
         : undefined;
       await enqueueFeedbackReplyNotificationTx(
@@ -266,7 +284,7 @@ export async function replyFeedback(formData: FormData) {
         {
           feedbackId,
           actorName: user.name,
-          actorIsAdmin,
+          actorIsAdmin: currentActorIsAdmin,
           recipientOpenIds,
           body: notificationBody(body, files.length),
         },
@@ -298,6 +316,9 @@ export async function updateFeedbackStatus(formData: FormData) {
 
   const context = await getNotificationContext();
   const result = await prisma.$transaction(async (tx) => {
+    await lockGlobalApprovalAdministratorSetTx(tx);
+    await lockActiveFeedbackUserTx(tx, user.openId);
+    await assertActiveGlobalSuperAdministratorTx(tx, user.accountId);
     await lockFeedbackTx(tx, feedbackId);
     const current = await tx.feedback.findUniqueOrThrow({
       where: { id: feedbackId },

@@ -85,7 +85,10 @@ export default async function ProgressNotificationsPage({
             notifications={notifications.items}
             unreadCount={unreadCount}
           />
-          <NotificationPreferencesClient preferences={preferences} />
+          <NotificationPreferencesClient
+            preferences={preferences}
+            readOnly={actor.isActive === false}
+          />
       </div>
     </>
   );

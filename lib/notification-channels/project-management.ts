@@ -20,6 +20,8 @@ import type {
   NotificationDeliveryTarget,
 } from "@/lib/notification-channel-adapter";
 import { NonRetryableNotificationError } from "@/lib/notification-channel-adapter";
+import { CanceledNotificationError } from "@/lib/notification-channel-adapter";
+import { filterActiveFeishuOpenIds } from "@/lib/active-account";
 
 function parseProjectManagementNotification(row: NotificationOutbox): {
   payload: ProjectManagementNotificationPayload;
@@ -59,7 +61,7 @@ export const projectManagementNotificationChannel: NotificationChannelAdapter = 
   channel: PROJECT_MANAGEMENT_NOTIFICATION_OUTBOX_CHANNEL,
   async resolveRecipientPlan(row) {
     const { payload } = parseProjectManagementNotification(row);
-    const openIds = uniqueOpenIds(payload);
+    const openIds = await filterActiveFeishuOpenIds(uniqueOpenIds(payload));
     return {
       supported: true,
       openIds,
@@ -71,6 +73,11 @@ export const projectManagementNotificationChannel: NotificationChannelAdapter = 
     row,
     recipientOpenId,
   ): Promise<NotificationDeliveryTarget> {
+    if (
+      (await filterActiveFeishuOpenIds([recipientOpenId])).length === 0
+    ) {
+      throw new CanceledNotificationError("收件人已停用，取消本次投递");
+    }
     const { payload, botKind } = parseProjectManagementNotification(row);
     return deliveryTarget(
       await sendFeishuDirectMessage({

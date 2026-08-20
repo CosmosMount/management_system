@@ -22,6 +22,10 @@ import { getNotificationContext } from "@/lib/request-origin";
 import { revalidateProcurement } from "@/lib/revalidate";
 import { logger } from "@/lib/logger";
 import { OrderStatus } from "@prisma/client";
+import {
+  lockActiveProcurementUserTx,
+  requireActiveProcurementUser,
+} from "@/lib/active-account";
 
 const inputSchema = z.object({
   orderId: z.string().min(1),
@@ -86,6 +90,7 @@ export async function rejectProcurementOrder(input: {
   if (!session?.user?.openId) {
     throw new Error("未登录");
   }
+  await requireActiveProcurementUser(session.user.openId);
 
   const { orderId, reason, outcome } = inputSchema.parse(input);
   const userRoles = await getUserRoles(session.user.openId);
@@ -114,6 +119,7 @@ export async function rejectProcurementOrder(input: {
   ) {
     if (outcome === "terminate") {
       await prisma.$transaction(async (tx) => {
+        await lockActiveProcurementUserTx(tx, session.user.openId);
         const locked = await tx.purchaseOrder.updateMany({
           where: { id: orderId, status: order.status },
           data: {
@@ -146,6 +152,7 @@ export async function rejectProcurementOrder(input: {
       });
     } else {
       await prisma.$transaction(async (tx) => {
+        await lockActiveProcurementUserTx(tx, session.user.openId);
         const updated = await tx.purchaseOrder.updateMany({
           where: { id: orderId, status: order.status },
           data: {
@@ -181,6 +188,7 @@ export async function rejectProcurementOrder(input: {
   } else if (order.status === OrderStatus.PENDING_FINANCE_REVIEW) {
     if (outcome === "terminate") {
       await prisma.$transaction(async (tx) => {
+        await lockActiveProcurementUserTx(tx, session.user.openId);
         const locked = await tx.purchaseOrder.updateMany({
           where: { id: orderId, status: order.status },
           data: {
@@ -207,6 +215,7 @@ export async function rejectProcurementOrder(input: {
       });
     } else {
       await prisma.$transaction(async (tx) => {
+        await lockActiveProcurementUserTx(tx, session.user.openId);
         const locked = await tx.purchaseOrder.updateMany({
           where: { id: orderId, status: order.status },
           data: {

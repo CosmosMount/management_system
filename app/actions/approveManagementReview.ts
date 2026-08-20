@@ -20,12 +20,17 @@ import {
   getUserRoles,
 } from "@/lib/permissions";
 import { requireApproverSignature } from "@/lib/user-signature";
+import {
+  lockActiveProcurementUserTx,
+  requireActiveProcurementUser,
+} from "@/lib/active-account";
 
 export async function approveManagementReview(orderId: string) {
   const session = await auth();
   if (!session?.user?.openId) {
     throw new Error("未登录");
   }
+  await requireActiveProcurementUser(session.user.openId);
   return withActionLogging(
     {
       event: "procurement.management_review.approve",
@@ -78,6 +83,7 @@ async function approveManagementReviewLogged(orderId: string, userOpenId: string
   const context = await getNotificationContext();
   const { updated, advancedToTeacherReview } = await prisma.$transaction(
     async (tx) => {
+      await lockActiveProcurementUserTx(tx, userOpenId);
       const approvalTargets = [
         ...(canTeam ? [{ teamApproved: false }] : []),
         ...(canTech ? [{ techGroupApproved: false }] : []),

@@ -26,6 +26,7 @@ import type { PersonOptionDto } from "@/lib/project-management/types/time-canvas
 import { listActiveProjectOptions, resolveActiveProjectOptions } from "@/lib/project-management/queries/project-queries";
 import { getProgressActorOrRedirect } from "../../_auth";
 import { listGlobalTimeMarkers } from "@/lib/project-management/global-time-markers";
+import { routes } from "@/lib/routes";
 
 type SearchParams = Record<string, string | string[] | undefined>;
 
@@ -35,6 +36,7 @@ export default async function ProgressTaskNewPage({
   searchParams?: Promise<SearchParams>;
 }) {
   const actor = await getProgressActorOrRedirect();
+  if (actor.isActive === false) redirect(routes.progress.tasks);
   const params = (await searchParams) ?? {};
   const normalizedParams = withoutRetiredTimelineParams(params);
   if (searchParamsFromRecord(params).toString() !== normalizedParams.toString()) {

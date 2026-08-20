@@ -298,6 +298,7 @@ async function activeGlobalAdministrators() {
       team: "",
       techGroup: "",
       revokedAt: null,
+      account: { person: { is: { status: "ACTIVE" } } },
     },
     select: {
       account: {

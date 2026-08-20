@@ -1,31 +1,18 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { prisma } from "@/lib/prisma";
 import { requireSuperAdmin } from "@/lib/permissions";
+import { deletePurchaseOrderAsSuperAdministrator } from "@/lib/procurement-order-deletion";
 import { routes } from "@/lib/routes";
 import { cleanupUploadPaths } from "@/lib/upload-cleanup";
 
 export async function deletePurchaseOrder(orderId: string) {
-  await requireSuperAdmin();
-
-  const order = await prisma.purchaseOrder.findUnique({
-    where: { id: orderId },
-    select: { id: true },
-  });
-  if (!order) {
-    throw new Error("订单不存在");
-  }
-
-  const assets = await prisma.fileAsset.findMany({
-    where: { orderId },
-    select: { publicPath: true },
-  });
-  await prisma.purchaseOrder.delete({ where: { id: orderId } });
-  await cleanupUploadPaths(
-    assets.map((asset) => asset.publicPath),
-    "admin_order_delete",
+  const session = await requireSuperAdmin();
+  const assetPaths = await deletePurchaseOrderAsSuperAdministrator(
+    session.user.openId,
+    orderId,
   );
+  await cleanupUploadPaths(assetPaths, "admin_order_delete");
 
   revalidatePath("/");
   revalidatePath(routes.procurement.root);

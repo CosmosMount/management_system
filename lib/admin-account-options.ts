@@ -101,9 +101,12 @@ export async function resolveAdminAccountOptionRecords(input: {
 function accountOptionWhere(
   purpose: AdminAccountOptionPurpose,
 ): Prisma.AccountWhereInput {
+  const activePerson: Prisma.AccountWhereInput = {
+    person: { is: { status: "ACTIVE" } },
+  };
   return purpose === "REIMBURSEMENT"
-    ? { reimbursementUser: { isNot: null } }
-    : {};
+    ? { AND: [activePerson, { reimbursementUser: { isNot: null } }] }
+    : activePerson;
 }
 
 function accountOption(

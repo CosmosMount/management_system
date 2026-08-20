@@ -7,6 +7,10 @@ import { sendManualProcurementApproverReminder } from "@/lib/procurement-reminde
 import { prisma } from "@/lib/prisma";
 import { getNotificationContext } from "@/lib/request-origin";
 import { revalidateProcurement } from "@/lib/revalidate";
+import {
+  lockActiveProcurementUserTx,
+  requireActiveProcurementUser,
+} from "@/lib/active-account";
 
 const notifySchema = z.object({
   orderId: z.string().min(1),
@@ -28,6 +32,11 @@ export async function notifyProcurementApprover(
   const session = await auth();
   if (!session?.user?.openId) {
     return { ok: false, message: "未登录" };
+  }
+  try {
+    await requireActiveProcurementUser(session.user.openId);
+  } catch {
+    return { ok: false, message: "人员已停用，无法执行采购操作" };
   }
 
   const parsed = notifySchema.safeParse(input);
@@ -58,12 +67,18 @@ export async function notifyProcurementApprover(
     return { ok: false, message: "当前状态不可催促处理人" };
   }
 
-  const result = await sendManualProcurementApproverReminder({
-    orderId: order.id,
-    actorName: session.user.name ?? order.initiatorName,
-    message,
-    context: await getNotificationContext(),
-  });
+  const result = await prisma.$transaction(
+    async (tx) => {
+      await lockActiveProcurementUserTx(tx, session.user.openId);
+      return sendManualProcurementApproverReminder({
+        orderId: order.id,
+        actorName: session.user.name ?? order.initiatorName,
+        message,
+        context: await getNotificationContext(),
+      });
+    },
+    { maxWait: 5_000, timeout: 60_000 },
+  );
 
   if (result.ok) {
     revalidateProcurement(order.id);

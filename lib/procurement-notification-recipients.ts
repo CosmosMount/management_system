@@ -42,7 +42,19 @@ export async function collectOrderInitiatorOpenIds(
 ): Promise<string[]> {
   const record = await prisma.purchaseOrder.findUnique({
     where: { id: order.id },
-    include: { initiator: { select: { openId: true } } },
+    include: {
+      initiator: {
+        select: {
+          openId: true,
+          account: {
+            select: { person: { select: { status: true } } },
+          },
+        },
+      },
+    },
   });
-  return record?.initiator.openId ? [record.initiator.openId] : [];
+  return record?.initiator.openId &&
+    record.initiator.account?.person?.status === "ACTIVE"
+    ? [record.initiator.openId]
+    : [];
 }

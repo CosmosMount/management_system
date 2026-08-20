@@ -28,6 +28,7 @@ import {
 import type { LifecyclePlanEntry } from "@/lib/project-management/application/lifecycle-records";
 import { taskAuthorizationResource } from "@/lib/project-management/application/task-authorization-resource";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
+import { lockGlobalApprovalAdministratorSetTx } from "@/lib/project-management/approval-administrators";
 import {
   terminationOutcomeLabel,
   terminationReviewResultLabel,
@@ -55,6 +56,7 @@ export async function submitTerminationForReview(
 ): Promise<TerminationReviewMutationResult & { created: boolean }> {
   const parsed = submitTerminationReviewInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
+    await lockGlobalApprovalAdministratorSetTx(tx);
     const terminationTaskId = await loadTerminationTaskIdTx(
       tx,
       parsed.terminationNodeId,

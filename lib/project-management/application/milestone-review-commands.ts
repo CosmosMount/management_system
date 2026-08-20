@@ -23,6 +23,7 @@ import { taskAuthorizationResource } from "@/lib/project-management/application/
 import { milestoneReviewResultLabel } from "@/lib/project-management/notifications/user-facing-copy";
 import { assertTaskApprovalAvailableTx } from "@/lib/project-management/task-approval-gate";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
+import { lockGlobalApprovalAdministratorSetTx } from "@/lib/project-management/approval-administrators";
 import {
   reviewMilestoneDecisionInputSchema,
   submitMilestoneReviewInputSchema,
@@ -44,6 +45,7 @@ export async function submitMilestoneForReview(
 ): Promise<MilestoneReviewMutationResult & { created: boolean }> {
   const parsed = submitMilestoneReviewInputSchema.parse(input);
   return prisma.$transaction(async (tx) => {
+    await lockGlobalApprovalAdministratorSetTx(tx);
     const milestoneTaskId = await loadMilestoneTaskIdTx(
       tx,
       parsed.milestoneNodeId,

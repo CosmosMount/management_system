@@ -412,6 +412,16 @@ test.describe("project management P1 schema, identity and authorization", () => 
 
   test("project management notifications and audit are transactional and stay inside outbox boundaries", async () => {
     const { account, person } = await createAccountPerson("通知审计用户");
+    const recipientOpenId = `ou_pm_notify_${randomUUID()}`;
+    await prisma.accountIdentity.create({
+      data: {
+        accountId: account.id,
+        provider: "FEISHU",
+        tenantId: "default",
+        providerSubject: `open:${recipientOpenId}`,
+        openId: recipientOpenId,
+      },
+    });
     const eventKey = `pm:p1:test:${randomUUID()}`;
     const payload: ProjectManagementNotificationPayload = {
       kind: "revision_pending_review",
@@ -426,7 +436,7 @@ test.describe("project management P1 schema, identity and authorization", () => 
       entityType: "RevisionNode",
       entityId: `revision-${randomUUID()}`,
       linkPath: "/progress/approvals",
-      recipientOpenIds: ["ou_pm_notify", "ou_pm_notify", ""],
+      recipientOpenIds: [recipientOpenId, recipientOpenId, ""],
       mandatory: true,
       context: { planVersion: "v1" },
     };
@@ -496,8 +506,18 @@ test.describe("project management P1 schema, identity and authorization", () => 
     const adapter = getNotificationChannelAdapter("project-management");
     await expect(adapter.resolveRecipientPlan(outbox)).resolves.toEqual({
       supported: true,
-      openIds: ["ou_pm_notify"],
-      directOpenIds: ["ou_pm_notify"],
+      openIds: [recipientOpenId],
+      directOpenIds: [recipientOpenId],
+      requiresDirectRecipient: true,
+    });
+    await prisma.person.update({
+      where: { id: person.id },
+      data: { status: "INACTIVE" },
+    });
+    await expect(adapter.resolveRecipientPlan(outbox)).resolves.toEqual({
+      supported: true,
+      openIds: [],
+      directOpenIds: [],
       requiresDirectRecipient: true,
     });
     await expect(

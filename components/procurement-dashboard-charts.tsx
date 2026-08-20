@@ -22,10 +22,9 @@ import type {
   ChartSlice,
   DashboardChartsData,
 } from "@/lib/procurement-dashboard-stats";
-import { TEAM_OPTIONS, TECH_GROUP_OPTIONS } from "@/lib/constants";
+import { TEAM_OPTIONS } from "@/lib/constants";
 
 const ALL_TEAMS_VALUE = "__all_teams__";
-const ALL_TECH_GROUPS_VALUE = "__all_tech_groups__";
 
 type SpendScope = "completed" | "all";
 
@@ -215,15 +214,15 @@ function BudgetPoolChart({
           const width = Math.min(100, Math.max(0, row.usagePercent));
           return (
             <li
-              key={`${row.name}-${row.team}-${row.techGroup}`}
+              key={row.team}
               className="space-y-1"
               data-testid="procurement-budget-pool-row"
             >
               <div className="flex items-baseline justify-between gap-2 text-sm">
                 <div className="min-w-0">
                   <span className="truncate font-medium">{row.name}</span>
-                  <p className="truncate text-xs text-muted-foreground">
-                    {row.groupLabel}
+                  <p className="break-words text-xs text-muted-foreground">
+                    项目：{row.projects.join("、") || "暂无项目说明"}
                   </p>
                 </div>
                 <span
@@ -253,7 +252,6 @@ function BudgetPoolChart({
 
 export function ProcurementDashboardCharts({ data }: Props) {
   const [teamFilter, setTeamFilter] = useState(ALL_TEAMS_VALUE);
-  const [techGroupFilter, setTechGroupFilter] = useState(ALL_TECH_GROUPS_VALUE);
   const [spendScope, setSpendScope] = useState<SpendScope>("completed");
 
   const spend = data.spendByScope[spendScope];
@@ -269,15 +267,9 @@ export function ProcurementDashboardCharts({ data }: Props) {
       if (teamFilter !== ALL_TEAMS_VALUE && row.team !== teamFilter) {
         return false;
       }
-      if (
-        techGroupFilter !== ALL_TECH_GROUPS_VALUE &&
-        row.techGroup !== techGroupFilter
-      ) {
-        return false;
-      }
       return true;
     });
-  }, [data.budgetPools, teamFilter, techGroupFilter]);
+  }, [data.budgetPools, teamFilter]);
 
   return (
     <div className="space-y-6">
@@ -338,8 +330,8 @@ export function ProcurementDashboardCharts({ data }: Props) {
             <CardTitle className="text-base">预算池使用率</CardTitle>
             <CardDescription>
               {data.budgetPeriod
-                ? `${data.budgetPeriod} 周期 · 按项目展示，顺序与导入表一致`
-                : "按项目展示，顺序与导入表一致"}
+                ? `${data.budgetPeriod} 周期 · 按兵种组汇总，组名后列出项目`
+                : "按兵种组汇总，组名后列出项目"}
             </CardDescription>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -359,30 +351,6 @@ export function ProcurementDashboardCharts({ data }: Props) {
                 {TEAM_OPTIONS.map((team) => (
                   <SelectItem key={team} value={team}>
                     {team}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select
-              value={techGroupFilter}
-              onValueChange={(value) =>
-                setTechGroupFilter(value ?? ALL_TECH_GROUPS_VALUE)
-              }
-            >
-              <SelectTrigger className="w-36">
-                <SelectValue>
-                  {(value) =>
-                    value === ALL_TECH_GROUPS_VALUE
-                      ? "全部技术组"
-                      : String(value ?? "")
-                  }
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={ALL_TECH_GROUPS_VALUE}>全部技术组</SelectItem>
-                {TECH_GROUP_OPTIONS.map((group) => (
-                  <SelectItem key={group} value={group}>
-                    {group}
                   </SelectItem>
                 ))}
               </SelectContent>

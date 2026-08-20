@@ -57,9 +57,11 @@ export default async function ProgressTasksPage({
         title="全部 Task"
         description="按状态、优先级和关键词查看当前可见 Task。"
         actions={
-          <Link href={routes.progress.taskNew} className={cn(buttonVariants())}>
-            新建 Task
-          </Link>
+          actor.isActive === false ? null : (
+            <Link href={routes.progress.taskNew} className={cn(buttonVariants())}>
+              新建 Task
+            </Link>
+          )
         }
       />
       <div className="mx-auto flex w-full min-w-0 max-w-[96rem] flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">

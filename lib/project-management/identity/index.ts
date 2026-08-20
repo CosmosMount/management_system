@@ -26,6 +26,8 @@ export type ProjectManagementActor = {
   personId: string;
   openId: string;
   unionId?: string | null;
+  /** 运行时身份解析会显式设置；省略仅用于既有领域测试 fixture。 */
+  isActive?: boolean;
   systemRoles: ProjectManagementSystemRoleRecord[];
 };
 
@@ -388,22 +390,26 @@ export async function getProjectManagementActorForFeishuUser(
   input: ProjectManagementIdentityInput,
 ): Promise<ProjectManagementActor> {
   const resolved = await resolveFeishuIdentityForUser(input);
-  const systemRoles = await prisma.systemRoleAssignment.findMany({
-    where: {
-      accountId: resolved.account.id,
-      revokedAt: null,
-    },
-    select: {
-      role: true,
-      team: true,
-      techGroup: true,
-    },
-  });
+  const systemRoles =
+    resolved.person.status === "ACTIVE"
+      ? await prisma.systemRoleAssignment.findMany({
+          where: {
+            accountId: resolved.account.id,
+            revokedAt: null,
+          },
+          select: {
+            role: true,
+            team: true,
+            techGroup: true,
+          },
+        })
+      : [];
   return {
     accountId: resolved.account.id,
     personId: resolved.person.id,
     openId: input.openId,
     unionId: input.unionId,
+    isActive: resolved.person.status === "ACTIVE",
     systemRoles,
   };
 }
@@ -507,7 +513,7 @@ function stableIdentityHash(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 16);
 }
 
-async function recordIdentityConflictAudit(
+export async function recordIdentityConflictAudit(
   input: ProjectManagementIdentityInput,
   reason: string,
 ) {

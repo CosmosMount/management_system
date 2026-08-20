@@ -56,7 +56,11 @@ export async function getOpenIdsByRole(
   }
 
   const records = await prisma.userRole.findMany({
-    where: { ...where, revokedAt: null },
+    where: {
+      ...where,
+      revokedAt: null,
+      account: { person: { is: { status: "ACTIVE" } } },
+    },
     select: {
       account: {
         select: {

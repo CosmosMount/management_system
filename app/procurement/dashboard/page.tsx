@@ -1,4 +1,3 @@
-import { AppHeader } from "@/components/app-header";
 import { LiveAutoRefresh } from "@/components/live-auto-refresh";
 import { ProcurementDashboardCharts } from "@/components/procurement-dashboard-charts";
 import {
@@ -7,7 +6,6 @@ import {
 } from "@/components/procurement-summary-table";
 import { ProcurementDashboardHeader } from "@/components/procurement/procurement-back-link";
 import { ProcurementPageLayout } from "@/components/procurement/procurement-page-layout";
-import { PageShell } from "@/components/page-shell";
 import { Table2 } from "lucide-react";
 import { getCurrentUserLiveVersion } from "@/lib/live-version-current";
 import { buildDashboardChartsData } from "@/lib/procurement-dashboard-stats";
@@ -88,25 +86,22 @@ export default async function DashboardPage() {
 
   return (
     <>
-      <AppHeader />
       <LiveAutoRefresh
         scope="procurement-dashboard"
         initialVersion={liveVersion}
         intervalMs={10000}
       />
-      <PageShell>
-        <ProcurementPageLayout className="space-y-6">
-          <ProcurementDashboardHeader />
-          <ProcurementDashboardCharts data={chartData} />
-          <div>
-            <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold">
-              <Table2 className="h-5 w-5 text-primary" />
-              明细汇总表
-            </h2>
-            <ProcurementSummaryTable rows={rows} />
-          </div>
-        </ProcurementPageLayout>
-      </PageShell>
+      <ProcurementDashboardHeader />
+      <ProcurementPageLayout className="space-y-6">
+        <ProcurementDashboardCharts data={chartData} />
+        <div>
+          <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold">
+            <Table2 className="h-5 w-5 text-primary" />
+            明细汇总表
+          </h2>
+          <ProcurementSummaryTable rows={rows} />
+        </div>
+      </ProcurementPageLayout>
     </>
   );
 }

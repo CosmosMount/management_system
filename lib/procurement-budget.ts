@@ -1,8 +1,5 @@
 import { procurementSummaryWhere } from "@/lib/procurement-visibility";
-import {
-  formatBudgetPoolLabel,
-  currentBudgetPeriod,
-} from "@/lib/procurement-budget-period";
+import { currentBudgetPeriod } from "@/lib/procurement-budget-period";
 import { prisma } from "@/lib/prisma";
 
 export const BUDGET_ALERT_THRESHOLDS = [70, 80, 90, 100] as const;
@@ -10,29 +7,22 @@ export const BUDGET_ALERT_THRESHOLDS = [70, 80, 90, 100] as const;
 export type BudgetPoolView = {
   id: string;
   description: string;
+  projects: string[];
   team: string;
-  techGroup: string;
   label: string;
   period: string;
   budgetAmount: number;
   usedAmount: number;
   usagePercent: number;
   lastAlertThreshold: number;
+  poolIds: string[];
 };
 
-function groupKey(team: string, techGroup: string): string {
-  return `${team}\0${techGroup}`;
-}
-
-export async function getBudgetUsage(
-  team: string,
-  techGroup: string,
-): Promise<number> {
+export async function getBudgetUsage(team: string): Promise<number> {
   const result = await prisma.purchaseOrder.aggregate({
     where: {
       ...procurementSummaryWhere(),
       team,
-      techGroup,
     },
     _sum: { totalPrice: true },
   });
@@ -57,7 +47,7 @@ export function crossedAlertThresholds(
   );
 }
 
-function toBudgetPoolView(pool: {
+type StoredBudgetPool = {
   id: string;
   description: string;
   team: string;
@@ -65,55 +55,92 @@ function toBudgetPoolView(pool: {
   period: string;
   budgetAmount: number;
   lastAlertThreshold: number;
-  usedAmount: number;
-  usagePercent: number;
-}): BudgetPoolView {
-  return {
-    id: pool.id,
-    description: pool.description,
-    team: pool.team,
-    techGroup: pool.techGroup,
-    label: formatBudgetPoolLabel(pool.team, pool.techGroup),
-    period: pool.period,
-    budgetAmount: pool.budgetAmount,
-    usedAmount: pool.usedAmount,
-    usagePercent: pool.usagePercent,
-    lastAlertThreshold: pool.lastAlertThreshold,
-  };
+};
+
+export function selectEffectiveBudgetPools<
+  T extends Pick<StoredBudgetPool, "description" | "techGroup">,
+>(pools: T[]): T[] {
+  const canonicalDescriptions = new Set(
+    pools
+      .filter((pool) => pool.techGroup.trim() === "")
+      .map((pool) => pool.description),
+  );
+  return pools.filter(
+    (pool) =>
+      pool.techGroup.trim() === "" ||
+      !canonicalDescriptions.has(pool.description),
+  );
 }
 
-/** 同组别多项目共享订单占用：按各项目预算占比分摊已用金额 */
-function allocateGroupUsage(args: {
-  pools: Array<{
-    id: string;
-    description: string;
-    team: string;
-    techGroup: string;
-    period: string;
-    budgetAmount: number;
-    lastAlertThreshold: number;
-  }>;
-  groupUsed: number;
-}): BudgetPoolView[] {
-  const groupBudget = args.pools.reduce(
+async function toTeamBudgetView(
+  pools: StoredBudgetPool[],
+): Promise<BudgetPoolView> {
+  const sample = pools[0];
+  if (!sample) throw new Error("预算池分组不能为空");
+  const projects = [
+    ...new Set(
+      pools.flatMap((pool) => {
+        const project = pool.description.trim();
+        return project ? [project] : [];
+      }),
+    ),
+  ];
+  const effectivePools = selectEffectiveBudgetPools(pools);
+  const budgetAmount = effectivePools.reduce(
     (sum, pool) => sum + pool.budgetAmount,
     0,
   );
-  const usagePercent = computeUsagePercent(args.groupUsed, groupBudget);
+  const usedAmount = await getBudgetUsage(sample.team);
 
-  return args.pools.map((pool) => {
-    const usedAmount =
-      groupBudget > 0
-        ? (args.groupUsed * pool.budgetAmount) / groupBudget
-        : 0;
-    return toBudgetPoolView({
-      ...pool,
-      usedAmount,
-      usagePercent,
-    });
-  });
+  return {
+    id: `${sample.team}:${sample.period}`,
+    description: projects.join("；"),
+    projects,
+    team: sample.team,
+    label: sample.team,
+    period: sample.period,
+    budgetAmount,
+    usedAmount,
+    usagePercent: computeUsagePercent(usedAmount, budgetAmount),
+    lastAlertThreshold: await resolveBudgetGroupLastAlertThreshold(
+      sample.team,
+      sample.period,
+      pools,
+    ),
+    poolIds: pools.map((pool) => pool.id),
+  };
 }
 
+/**
+ * 旧技术方向行上的阈值属于旧子组语义，不能直接提升为兵种组阈值。
+ * 对含旧行的组，以当前兵种组 eventKey 事实恢复已提醒阈值；这样首次迁移
+ * 仍会重新计算告警，成功入队后后续定时任务和管理页都能稳定显示该阈值。
+ */
+export async function resolveBudgetGroupLastAlertThreshold(
+  team: string,
+  period: string,
+  pools: Array<Pick<StoredBudgetPool, "lastAlertThreshold" | "techGroup">>,
+): Promise<number> {
+  if (!pools.some((pool) => pool.techGroup.trim() !== "")) {
+    return Math.max(0, ...pools.map((pool) => pool.lastAlertThreshold));
+  }
+  const keys = new Map(
+    BUDGET_ALERT_THRESHOLDS.map((threshold) => [
+      `procurement:budget:${team}:${threshold}:${period}`,
+      threshold,
+    ]),
+  );
+  const outboxRows = await prisma.notificationOutbox.findMany({
+    where: { eventKey: { in: [...keys.keys()] } },
+    select: { eventKey: true },
+  });
+  return Math.max(
+    0,
+    ...outboxRows.map((row) => keys.get(row.eventKey) ?? 0),
+  );
+}
+
+/** 当前周期预算按兵种组汇总；项目名仅作为该兵种组的明细展示。 */
 export async function listBudgetPoolViews(
   period?: string,
 ): Promise<BudgetPoolView[]> {
@@ -123,34 +150,18 @@ export async function listBudgetPoolViews(
     orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
   });
 
-  const usageByGroup = new Map<string, number>();
-  const poolsByGroup = new Map<string, typeof pools>();
+  const poolsByTeam = new Map<string, StoredBudgetPool[]>();
   for (const pool of pools) {
-    const key = groupKey(pool.team, pool.techGroup);
-    const list = poolsByGroup.get(key) ?? [];
-    list.push(pool);
-    poolsByGroup.set(key, list);
+    const teamPools = poolsByTeam.get(pool.team) ?? [];
+    teamPools.push(pool);
+    poolsByTeam.set(pool.team, teamPools);
   }
 
-  for (const [key, groupPools] of poolsByGroup) {
-    const sample = groupPools[0]!;
-    usageByGroup.set(
-      key,
-      await getBudgetUsage(sample.team, sample.techGroup),
-    );
-  }
-
-  const views: BudgetPoolView[] = [];
-  for (const pool of pools) {
-    const key = groupKey(pool.team, pool.techGroup);
-    const groupPools = poolsByGroup.get(key) ?? [pool];
-    const groupUsed = usageByGroup.get(key) ?? 0;
-    const allocated = allocateGroupUsage({ pools: groupPools, groupUsed });
-    const view = allocated.find((item) => item.id === pool.id);
-    if (view) views.push(view);
-  }
-
-  return views;
+  return Promise.all(
+    [...poolsByTeam.values()].map((teamPools) =>
+      toTeamBudgetView(teamPools),
+    ),
+  );
 }
 
 export async function getBudgetPoolView(
@@ -161,66 +172,27 @@ export async function getBudgetPoolView(
   });
   if (!pool) return null;
 
-  const groupPools = await prisma.procurementBudgetPool.findMany({
+  const teamPools = await prisma.procurementBudgetPool.findMany({
     where: {
       team: pool.team,
-      techGroup: pool.techGroup,
       period: pool.period,
     },
     orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
   });
-  const groupUsed = await getBudgetUsage(pool.team, pool.techGroup);
-  return (
-    allocateGroupUsage({ pools: groupPools, groupUsed }).find(
-      (item) => item.id === poolId,
-    ) ?? null
-  );
+  return toTeamBudgetView(teamPools);
 }
 
-export type BudgetGroupView = {
-  team: string;
-  techGroup: string;
-  label: string;
-  period: string;
-  description: string;
-  budgetAmount: number;
-  usedAmount: number;
-  usagePercent: number;
-  lastAlertThreshold: number;
-  poolIds: string[];
-};
+export type BudgetGroupView = BudgetPoolView;
 
 export async function getBudgetGroupForOrder(
   team: string,
-  techGroup: string,
   period?: string,
 ): Promise<BudgetGroupView | null> {
   const resolvedPeriod = period ?? currentBudgetPeriod();
   const pools = await prisma.procurementBudgetPool.findMany({
-    where: { team, techGroup, period: resolvedPeriod },
+    where: { team, period: resolvedPeriod },
     orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
   });
   if (pools.length === 0) return null;
-
-  const budgetAmount = pools.reduce((sum, pool) => sum + pool.budgetAmount, 0);
-  const usedAmount = await getBudgetUsage(team, techGroup);
-  const lastAlertThreshold = Math.max(
-    ...pools.map((pool) => pool.lastAlertThreshold),
-  );
-
-  return {
-    team,
-    techGroup,
-    label: formatBudgetPoolLabel(team, techGroup),
-    period: resolvedPeriod,
-    description: pools
-      .map((pool) => pool.description)
-      .filter(Boolean)
-      .join("；"),
-    budgetAmount,
-    usedAmount,
-    usagePercent: computeUsagePercent(usedAmount, budgetAmount),
-    lastAlertThreshold,
-    poolIds: pools.map((pool) => pool.id),
-  };
+  return toTeamBudgetView(pools);
 }

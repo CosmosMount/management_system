@@ -32,6 +32,7 @@ import {
 import { assertTaskApprovalAvailableTx } from "@/lib/project-management/task-approval-gate";
 import { refreshProjectManagementActorTx } from "@/lib/project-management/application/actor-refresh";
 import { taskAuthorizationResource } from "@/lib/project-management/application/task-authorization-resource";
+import { lockGlobalApprovalAdministratorSetTx } from "@/lib/project-management/approval-administrators";
 import {
   type LifecyclePlanEntry,
   type LifecycleTaskForAuthorization,
@@ -78,6 +79,7 @@ export async function createRevision(
   const requestHash = hashLifecycleRequest("revision.create", parsed);
 
   return prisma.$transaction(async (tx) => {
+    await lockGlobalApprovalAdministratorSetTx(tx);
     await lockTaskTx(tx, parsed.taskId);
     const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
     const task = await loadTaskForAuthorizationTx(tx, parsed.taskId);
@@ -285,6 +287,7 @@ export async function reviseRejectedRevision(
   const parsed = reviseRejectedRevisionInputSchema.parse(input);
 
   return prisma.$transaction(async (tx) => {
+    await lockGlobalApprovalAdministratorSetTx(tx);
     const { refreshedActor, task, revision, targetPlanVersionId } =
       await loadRevisionForMutationTx(tx, actor, parsed.revisionNodeId);
     assertCanManageRevision(refreshedActor, task, revision);

@@ -1,4 +1,5 @@
 import type {
+  Prisma,
   ProjectManagementSystemRole,
   UserRoleType,
 } from "@prisma/client";
@@ -28,6 +29,33 @@ export type AccountAuthorizationContext = {
   reimbursementRoles: AccountReimbursementRoleRecord[];
 };
 
+export async function isActiveGlobalSuperAdministratorTx(
+  tx: Prisma.TransactionClient,
+  accountId: string,
+): Promise<boolean> {
+  const assignment = await tx.systemRoleAssignment.findFirst({
+    where: {
+      accountId,
+      role: "SUPER_ADMINISTRATOR",
+      team: "",
+      techGroup: "",
+      revokedAt: null,
+      account: { person: { is: { status: "ACTIVE" } } },
+    },
+    select: { id: true },
+  });
+  return Boolean(assignment);
+}
+
+export async function assertActiveGlobalSuperAdministratorTx(
+  tx: Prisma.TransactionClient,
+  accountId: string,
+): Promise<void> {
+  if (!(await isActiveGlobalSuperAdministratorTx(tx, accountId))) {
+    throw new Error("无管理权限");
+  }
+}
+
 export async function getAccountAuthorizationContextForOpenId(
   openId: string,
 ): Promise<AccountAuthorizationContext | null> {
@@ -36,6 +64,7 @@ export async function getAccountAuthorizationContextForOpenId(
       provider: FEISHU_PROVIDER,
       tenantId: DEFAULT_TENANT_ID,
       openId,
+      account: { person: { is: { status: "ACTIVE" } } },
     },
     select: {
       account: {
@@ -98,6 +127,7 @@ export async function getGlobalSuperAdministratorOpenIds(): Promise<string[]> {
       team: "",
       techGroup: "",
       revokedAt: null,
+      account: { person: { is: { status: "ACTIVE" } } },
     },
     select: {
       account: {

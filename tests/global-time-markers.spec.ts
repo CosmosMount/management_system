@@ -232,6 +232,42 @@ test.describe("global time markers", () => {
       }),
     ).rejects.toThrow();
   });
+
+  test("停用超级管理员不能保存全局关键时间点", async () => {
+    const administrator = await createAccountPerson(
+      `停用关键时间点管理员 ${randomUUID()}`,
+    );
+    await prisma.systemRoleAssignment.create({
+      data: {
+        accountId: administrator.account.id,
+        role: "SUPER_ADMINISTRATOR",
+      },
+    });
+    await prisma.person.update({
+      where: { id: administrator.person.id },
+      data: { status: "INACTIVE" },
+    });
+    const current = await getGlobalTimeMarkerCollection();
+    const markerId = randomUUID();
+
+    await expect(
+      saveGlobalTimeMarkerCollection(administrator.account.id, {
+        expectedCollectionVersion: current.collectionVersion,
+        markers: [
+          ...current.markers,
+          {
+            id: markerId,
+            name: "停用人员不得创建",
+            markedAt: "2026-09-18T02:30:00.000Z",
+            versionToken: null,
+          },
+        ],
+      }),
+    ).rejects.toThrow("人员已停用，无法执行此操作");
+    await expect(
+      prisma.globalTimeMarker.findUnique({ where: { id: markerId } }),
+    ).resolves.toBeNull();
+  });
 });
 
 async function notificationCounts() {

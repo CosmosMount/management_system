@@ -33,7 +33,9 @@ import type {
   NotificationDeliveryTarget,
 } from "@/lib/notification-channel-adapter";
 import { NonRetryableNotificationError } from "@/lib/notification-channel-adapter";
+import { CanceledNotificationError } from "@/lib/notification-channel-adapter";
 import type { FeishuSendResult } from "@/lib/feishu-message";
+import { filterActiveFeishuOpenIds } from "@/lib/active-account";
 
 function parseRow(row: NotificationOutbox): {
   data: OrderOutboxPayload;
@@ -87,6 +89,12 @@ async function sendToRecipient(
   row: NotificationOutbox,
   recipientOpenId: string,
 ): Promise<NotificationDeliveryTarget> {
+  if (
+    recipientOpenId !== PROCUREMENT_ORDER_WEBHOOK_RECIPIENT_OPEN_ID &&
+    (await filterActiveFeishuOpenIds([recipientOpenId])).length === 0
+  ) {
+    throw new CanceledNotificationError("收件人已停用，取消本次投递");
+  }
   const { data, botKind } = parseRow(row);
   const context = { appOrigin: data.appOrigin ?? defaultAppOrigin() };
   if (data.kind === "order") {
@@ -165,9 +173,12 @@ export const procurementNotificationChannel: NotificationChannelAdapter = {
       };
     }
     if (data.kind === "budget_threshold") {
+      const openIds = await filterActiveFeishuOpenIds(
+        data.budget.recipientOpenIds,
+      );
       return {
         supported: true,
-        openIds: [...new Set(data.budget.recipientOpenIds.filter(Boolean))],
+        openIds,
       };
     }
     return {

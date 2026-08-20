@@ -27,6 +27,7 @@ export async function activeGlobalApprovalAdministratorAccountIdsTx(
       team: "",
       techGroup: "",
       revokedAt: null,
+      account: { person: { is: { status: "ACTIVE" } } },
       ...(input.excludeAssignmentId
         ? { id: { not: input.excludeAssignmentId } }
         : {}),

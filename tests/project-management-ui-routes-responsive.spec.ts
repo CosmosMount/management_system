@@ -790,6 +790,13 @@ test.describe("project management UI project-management-ui-routes-responsive", (
           });
         })
         .toEqual({ enabled: false });
+      await prisma.person.update({
+        where: { id: user.person.id },
+        data: { status: "INACTIVE" },
+      });
+      await page.reload();
+      await expect(page.getByText("人员已停用，通知偏好仅供查看。")).toBeVisible();
+      await expect(taskFeishu).toBeDisabled();
       await expectHealthyPage(page);
       expect(
         await page.evaluate(

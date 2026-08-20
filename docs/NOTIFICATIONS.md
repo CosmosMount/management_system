@@ -76,7 +76,7 @@ Task 激活与结束通知使用持久化的 Terminal 名称表示结束节点�
 
 账号安全变更由 `lib/account-management.ts` 在角色事务中写入。事件只通知被操作人，站内分类固定为 `ACCOUNT_SECURITY`，outbox 固定 `mandatory=true`、`purpose=notification` 和通知机器人。摘要包含操作人、角色授予/撤销、组织范围和时间。事件键以 `account-security:<action>:<稳定实体或变更 ID>` 开头，站内和飞书后缀分别保证幂等。报销角色通知也通过 `accountId` 解析当前 Identity；历史 `UserRole.openId` 不作为投递目标。删除项目访问禁用机制的 migration 只写 `source=MIGRATION` 审计，不创建站内通知或飞书 outbox。
 
-Active 成员强制事件不得因受影响 Person 已停用、缺少飞书 identity 或尚无 Account 而消失。已绑定 Account 仍写按 Account 的站内记录；Person 已停用的 legacy removal 也保留站内记录。飞书候选只允许 `provider=FEISHU`、`tenantId=default` 且 trim 后非空的 `openId`，不会回退其他 tenant，也不会因最早一条 identity 为空而漏掉同一默认 tenant 的后续合法 identity。无法安全解析飞书目标时仍写 `mandatory=true` durable outbox，并在 payload `context.recipientResolution` 记录 `PERSON_INACTIVE`、`DEFAULT_FEISHU_IDENTITY_MISSING`、`FEISHU_OPEN_ID_MISSING` 或 `ACCOUNT_MISSING`；outbox 保留空候选而不猜测、替代或直发任何真实收件人。成员业务审计、站内记录和 outbox 与成员差异处于同一事务，任一晚失败全部回滚。新建和激活 Task 的常规成员收件人只读取有效 OWNER/PARTICIPANT；历史 LEAD/MEMBER/REVIEWER/VIEWER 不再取得成员通知。
+Active 成员强制事件不得因缺少飞书 identity 或尚无 Account 而消失；已绑定活跃 Account 仍写按 Account 的站内记录。停用 Person 不创建新的站内通知或飞书候选。飞书候选只允许 `provider=FEISHU`、`tenantId=default` 且 trim 后非空的 `openId`，不会回退其他 tenant，也不会因最早一条 identity 为空而漏掉同一默认 tenant 的后续合法 identity。无法安全解析飞书目标时仍写 `mandatory=true` durable outbox，并在 payload `context.recipientResolution` 记录 `DEFAULT_FEISHU_IDENTITY_MISSING`、`FEISHU_OPEN_ID_MISSING` 或 `ACCOUNT_MISSING`；outbox 保留空候选而不猜测、替代或直发任何真实收件人。成员业务审计、站内记录和 outbox 与成员差异处于同一事务，任一晚失败全部回滚。新建和激活 Task 的常规成员收件人只读取有效 OWNER/PARTICIPANT；历史 LEAD/MEMBER/REVIEWER/VIEWER 不再取得成员通知。所有项目和采购 adapter 会在每次 outbox 重算及真正私信发送前再次校验 Person 为 `ACTIVE`，因此收件人离职后旧重试会取消而不会发送。
 
 Revision 生效事务先把目标 `TaskPlanVersion` 切换为 `CURRENT` 并更新 `Task.currentPlanVersionId`，随后以更新后的 Task 上下文写 `revision_applied`。Work Segment 仅关联 Task，不再产生节点关联失效通知。
 
@@ -109,7 +109,7 @@ npm run pm:repair-task-approval-notifications -- --apply
 
 该脚本不会调用飞书传输层，也不会绕过 `NOTIFICATION_DELIVERY_DISABLED`、收件人 allowlist、outbox claim 或逐收件人重试。修复完成并核对无真实外发后，才可恢复正常 worker。
 
-项目管理通知偏好按 Task、Milestone、Review、Revision 和 Work Segment 分类。站内通知是审计/待办兜底，始终写入且 UI 不提供关闭；`NotificationPreference(channel=FEISHU, enabled=false)` 只过滤普通飞书候选。`mandatory=true` 的关键状态与安全事件忽略普通关闭偏好，但仍经过 durable outbox、禁发开关、allowlist 和逐收件人重试，不能直发。
+项目管理通知偏好按 Task、Milestone、Review、Revision 和 Work Segment 分类。站内通知是审计/待办兜底，始终写入且 UI 不提供关闭；`NotificationPreference(channel=FEISHU, enabled=false)` 只过滤普通飞书候选。`mandatory=true` 的关键状态与安全事件忽略普通关闭偏好，但仍经过 durable outbox、禁发开关、allowlist 和逐收件人重试，不能直发。停用 Person 仍可查看历史偏好，但页面开关为只读；服务端保存事务会重新锁定并复核 Person，停用后直接调用 Action 也返回 `FORBIDDEN` 且不写偏好或审计。
 
 Milestone deadline scanner 使用 Asia/Shanghai 业务日期，事件键为 `pm:milestone:<milestoneId>:milestone_due|milestone_overdue:<YYYY-MM-DD>`；同一天重跑保持 exactly once。每日保留任务分批删除 90 天前已读站内通知、30 天前已发送项目管理 outbox 和 180 天前失败 outbox；未读站内通知不因该规则删除。所有测试继续设置 `NOTIFICATION_DELIVERY_DISABLED=true`。
 
@@ -175,7 +175,7 @@ Milestone deadline scanner 使用 Asia/Shanghai 业务日期，事件键为 `pm:
 | 采购被驳回 | `procurement_rejected` | 通知；Webhook + 私信 | 群摘要 + 采购申请人 |
 | 审批退回草稿 | `procurement_return_draft` | 通知；Webhook + 私信 | 群摘要 + 采购申请人 |
 | 要求重新提交凭证 | `applicant_resubmit` | 通知；Webhook + 私信 | 群摘要 + 采购申请人 |
-| 预算阈值预警 | `budget_threshold` | 通知；私信 | 对应预算池车组组长和技术组组长 |
+| 预算阈值预警 | `budget_threshold` | 通知；私信 | 对应兵种组组长；按兵种组+周期+阈值生成稳定事件键，不再通知技术方向组长；仅有旧技术方向预算行时，已入队的组级事件键也是恢复最近提醒阈值的持久化事实 |
 | 采购日报 | 无 outbox | Webhook | 采购群 |
 | 在途订单停留催办 | 无 outbox | 当前状态决定的私信 | 当前处理人 |
 | 采购人手动催促 | `manual_reminder` 仅作限流哨兵 | 当前状态决定的私信；老师环节可附加邮件 | 当前处理人 |

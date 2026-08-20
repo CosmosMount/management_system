@@ -676,7 +676,6 @@ test.describe("project management plan mutations project-management-plan-mutatio
       });
       expect(inAppRows.map((row) => row.recipientAccountId).sort()).toEqual(
         [
-          inactive.account.id,
           bound.account.id,
           wrongTenant.account.id,
           firstBlankThenValid.account.id,

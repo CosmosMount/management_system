@@ -19,12 +19,17 @@ import {
 import { prisma } from "@/lib/prisma";
 import { canUploadFinanceScreenshot, getUserRoles } from "@/lib/permissions";
 import { routes } from "@/lib/routes";
+import {
+  lockActiveProcurementUserTx,
+  requireActiveProcurementUser,
+} from "@/lib/active-account";
 
 export async function uploadFinanceScreenshot(formData: FormData) {
   const session = await auth();
   if (!session?.user?.openId) {
     throw new Error("未登录");
   }
+  await requireActiveProcurementUser(session.user.openId);
 
   const userRoles = await getUserRoles(session.user.openId);
   const orderId = String(formData.get("orderId") ?? "");
@@ -62,6 +67,7 @@ export async function uploadFinanceScreenshot(formData: FormData) {
   let updated;
   try {
     updated = await prisma.$transaction(async (tx) => {
+      await lockActiveProcurementUserTx(tx, session.user.openId);
       const locked = await tx.purchaseOrder.updateMany({
         where: { id: orderId, status: order.status },
         data: {

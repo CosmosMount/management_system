@@ -35,6 +35,10 @@ import {
   resolveReimbursementListSignatures,
 } from "@/lib/reimbursement-list-signatures";
 import { revalidateProcurement } from "@/lib/revalidate";
+import {
+  lockActiveProcurementUserTx,
+  requireActiveProcurementUser,
+} from "@/lib/active-account";
 
 const confirmedItemSchema = z.object({
   id: z.string(),
@@ -60,6 +64,7 @@ export async function uploadApplicantDocs(formData: FormData) {
   if (!session?.user?.openId) {
     throw new Error("未登录");
   }
+  await requireActiveProcurementUser(session.user.openId);
 
   const orderId = String(formData.get("orderId") ?? "");
   const confirmedRaw = String(formData.get("confirmedItems") ?? "[]");
@@ -233,6 +238,7 @@ export async function uploadApplicantDocs(formData: FormData) {
     const context = isInitialSubmit ? await getNotificationContext() : null;
 
     await prisma.$transaction(async (tx) => {
+      await lockActiveProcurementUserTx(tx, session.user.openId);
       if (deletedItems.length > 0) {
         await tx.purchaseItem.deleteMany({
           where: {

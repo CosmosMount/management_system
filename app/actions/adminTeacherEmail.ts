@@ -1,8 +1,13 @@
 "use server";
 
 import { ZodError } from "zod";
-import { requireGlobalSuperAdministrator } from "@/lib/account-authorization";
+import {
+  assertActiveGlobalSuperAdministratorTx,
+  requireGlobalSuperAdministrator,
+} from "@/lib/account-authorization";
+import { lockFeishuContactSyncTx } from "@/lib/active-account";
 import { normalizeEmailAddress } from "@/lib/email";
+import { lockGlobalApprovalAdministratorSetTx } from "@/lib/project-management/approval-administrators";
 import { createDomainAuditEventTx } from "@/lib/project-management/audit";
 import { prisma } from "@/lib/prisma";
 import { revalidateAdmin } from "@/lib/revalidate";
@@ -15,6 +20,27 @@ export async function updateTeacherEmail(input: unknown) {
     const email = normalizeEmailAddress(parsed.email);
 
     const result = await prisma.$transaction(async (tx) => {
+      await lockFeishuContactSyncTx(tx);
+      await lockGlobalApprovalAdministratorSetTx(tx);
+      const peopleByAccountId = new Map<string, string>();
+      for (const accountId of [
+        ...new Set([context.accountId, parsed.accountId]),
+      ].sort()) {
+        const people = await tx.$queryRaw<Array<{ status: string }>>`
+          SELECT "status"::text AS "status"
+          FROM "Person"
+          WHERE "accountId" = ${accountId}
+          FOR UPDATE
+        `;
+        if (people[0]) peopleByAccountId.set(accountId, people[0].status);
+      }
+      if (peopleByAccountId.get(context.accountId) !== "ACTIVE") {
+        throw new Error("无管理权限");
+      }
+      await assertActiveGlobalSuperAdministratorTx(tx, context.accountId);
+      if (peopleByAccountId.get(parsed.accountId) !== "ACTIVE") {
+        throw new Error("目标账号已停用，无法配置审批邮箱");
+      }
       const user = await tx.user.findFirst({
         where: {
           accountId: parsed.accountId,

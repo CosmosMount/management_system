@@ -25,6 +25,7 @@ import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/logger";
 import { statusApproverRole, statusLabels } from "@/lib/permissions-client";
 import { drainNotificationOutboxSoon } from "@/lib/notification-delivery";
+import { collectOrderInitiatorOpenIds } from "@/lib/procurement-notification-recipients";
 
 const REMINDER_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const MANUAL_REMINDER_COOLDOWN_MS = 60 * 1000;
@@ -188,13 +189,15 @@ async function notifyInitiatorStale(
   card: Record<string, unknown>,
   botKind: FeishuBotKind,
 ): Promise<number> {
+  const [initiatorOpenId] = await collectOrderInitiatorOpenIds({ id: orderId });
+  if (!initiatorOpenId) return 0;
   const record = await prisma.purchaseOrder.findUnique({
     where: { id: orderId },
-    include: { initiator: { select: { openId: true } } },
+    select: { status: true },
   });
-  if (!record?.initiator.openId) return 0;
+  if (!record) return 0;
   return (await sendDirectStaleCard(
-    record.initiator.openId,
+    initiatorOpenId,
     card,
     botKind,
     orderId,

@@ -49,6 +49,14 @@ export const PROJECT_MANAGEMENT_ACTIONS = [
 export type ProjectManagementAction =
   (typeof PROJECT_MANAGEMENT_ACTIONS)[number];
 
+const PROJECT_MANAGEMENT_READ_ACTIONS = new Set<ProjectManagementAction>([
+  "project.view",
+  "task.view",
+  "plan.view_history",
+  "segment.view",
+  "audit.view",
+]);
+
 export type AuthorizationDecision = {
   allowed: boolean;
   reason: string;
@@ -120,6 +128,12 @@ export function authorize({
   action: ProjectManagementAction;
   resource: AuthorizationResource;
 }): AuthorizationDecision {
+  if (
+    actor.isActive === false &&
+    !PROJECT_MANAGEMENT_READ_ACTIONS.has(action)
+  ) {
+    return deny("inactive_person_read_only");
+  }
   if (isSystemAdministrator(actor)) {
     return allow("global_administrator");
   }

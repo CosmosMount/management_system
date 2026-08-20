@@ -3,12 +3,22 @@ import { prisma } from "@/lib/prisma";
 
 export default async function AdminSystemPage() {
   const [userCount, roleCount, assignedUsers] = await Promise.all([
-    prisma.user.count(),
+    prisma.user.count({
+      where: { account: { person: { is: { status: "ACTIVE" } } } },
+    }),
     prisma.userRole.count({
-      where: { revokedAt: null, role: { not: "SUPER_ADMIN" } },
+      where: {
+        revokedAt: null,
+        role: { not: "SUPER_ADMIN" },
+        account: { person: { is: { status: "ACTIVE" } } },
+      },
     }),
     prisma.userRole.findMany({
-      where: { revokedAt: null, role: { not: "SUPER_ADMIN" } },
+      where: {
+        revokedAt: null,
+        role: { not: "SUPER_ADMIN" },
+        account: { person: { is: { status: "ACTIVE" } } },
+      },
       distinct: ["accountId"],
       select: { accountId: true },
     }),

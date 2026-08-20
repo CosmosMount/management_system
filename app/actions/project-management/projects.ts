@@ -11,6 +11,8 @@ import {
   updateTaskProject as updateTaskProjectService,
 } from "@/lib/project-management/application/project-service";
 import { getCurrentProjectManagementActor } from "@/lib/project-management/identity";
+import { refreshProjectManagementActorTx } from "@/lib/project-management/application/actor-refresh";
+import { prisma } from "@/lib/prisma";
 import { revalidateProjectManagement } from "@/lib/revalidate";
 import { saveProjectAvatarDraft } from "@/lib/file-upload";
 import { resolveActiveProjectOptions as resolveActiveProjectOptionsQuery, resolveVisibleProjectOptions as resolveVisibleProjectOptionsQuery, searchActiveProjectOptions as searchActiveProjectOptionsQuery, searchVisibleProjectOptions as searchVisibleProjectOptionsQuery, type ProjectOption, type ProjectOptionPage } from "@/lib/project-management/queries/project-queries";
@@ -32,12 +34,21 @@ export async function uploadProjectAvatar(formData: FormData): Promise<{ ok: tru
     const actor = await getCurrentProjectManagementActor();
     const file = formData.get("avatar");
     if (!(file instanceof File) || file.size === 0) return { ok: false, message: "请选择头像文件" };
-    const path = await saveProjectAvatarDraft(actor.openId, file);
+    const path = await prisma.$transaction(
+      async (tx) => {
+        await refreshProjectManagementActorTx(tx, actor);
+        return saveProjectAvatarDraft(actor.openId, file);
+      },
+      { maxWait: 5_000, timeout: 60_000 },
+    );
     return { ok: true, path };
   } catch (error) {
-    const message = error instanceof Error && error.message.startsWith("Project 头像")
-      ? error.message
-      : "头像上传失败，请稍后重试";
+    const message =
+      error instanceof Error &&
+      (error.message.startsWith("Project 头像") ||
+        error.message === "人员已停用，无法执行此操作")
+        ? error.message
+        : "头像上传失败，请稍后重试";
     return { ok: false, message };
   }
 }

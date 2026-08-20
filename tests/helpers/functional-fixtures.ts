@@ -82,6 +82,10 @@ export async function ensureFallbackAdminFixture(): Promise<void> {
     unionId: FALLBACK_ADMIN_UNION_ID,
     name: FALLBACK_ADMIN_NAME,
   });
+  await prisma.person.update({
+    where: { id: identity.person.id },
+    data: { status: "ACTIVE" },
+  });
   await prisma.user.upsert({
     where: { openId: FALLBACK_ADMIN_OPEN_ID },
     update: {
@@ -146,6 +150,18 @@ export async function prepareFunctionalFixtures(
       name: FALLBACK_ADMIN_NAME,
     }),
   ]);
+  await prisma.person.updateMany({
+    where: {
+      id: {
+        in: [
+          normalIdentity.person.id,
+          otherIdentity.person.id,
+          adminIdentity.person.id,
+        ],
+      },
+    },
+    data: { status: "ACTIVE" },
+  });
 
   await Promise.all([
     prisma.user.upsert({

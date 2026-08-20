@@ -17,6 +17,10 @@ import {
   getUserRoles,
 } from "@/lib/permissions";
 import { requireApproverSignature } from "@/lib/user-signature";
+import {
+  lockActiveProcurementUserTx,
+  requireActiveProcurementUser,
+} from "@/lib/active-account";
 
 type ApproveOptions = {
   teacherOnly?: boolean;
@@ -27,6 +31,7 @@ export async function approveProcurementByOpenId(
   orderId: string,
   options: ApproveOptions = {},
 ): Promise<{ message: string }> {
+  await requireActiveProcurementUser(openId);
   const userRoles = await getUserRoles(openId);
   if (userRoles.length === 0) {
     throw new Error("当前账号无审批角色，请先在系统中配置角色");
@@ -68,6 +73,7 @@ export async function approveProcurementByOpenId(
 
     const notifyContext = getDefaultNotificationContext();
     const { advancedToTeacherReview } = await prisma.$transaction(async (tx) => {
+      await lockActiveProcurementUserTx(tx, openId);
       const approvalTargets = [
         ...(canTeam ? [{ teamApproved: false }] : []),
         ...(canTech ? [{ techGroupApproved: false }] : []),
@@ -170,6 +176,7 @@ export async function approveProcurementByOpenId(
 
     const notifyContext = getDefaultNotificationContext();
     const updated = await prisma.$transaction(async (tx) => {
+      await lockActiveProcurementUserTx(tx, openId);
       const locked = await tx.purchaseOrder.updateMany({
         where: { id: orderId, status: OrderStatus.TEACHER_REVIEW },
         data: {

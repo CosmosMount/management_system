@@ -1,4 +1,5 @@
 import type { Prisma } from "@prisma/client";
+import { lockFeishuContactSyncTx } from "@/lib/active-account";
 import { prisma } from "@/lib/prisma";
 import {
   USABLE_GLOBAL_APPROVAL_ADMINISTRATOR_REQUIRED,
@@ -22,7 +23,7 @@ type Transaction = Prisma.TransactionClient;
 
 type SecurityTarget = {
   id: string;
-  person: { displayName: string } | null;
+  person: { displayName: string; status: "ACTIVE" | "INACTIVE" } | null;
   identities: Array<{ openId: string | null }>;
 };
 
@@ -37,6 +38,7 @@ async function assertActorIsSuperAdministrator(
       team: "",
       techGroup: "",
       revokedAt: null,
+      account: { person: { is: { status: "ACTIVE" } } },
     },
     select: { id: true },
   });
@@ -47,12 +49,23 @@ async function lockAccountMutations(tx: Transaction, accountId: string) {
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${'account-permissions:' + accountId}))`;
 }
 
+async function lockAccountPeople(tx: Transaction, accountIds: string[]) {
+  for (const accountId of [...new Set(accountIds)].sort()) {
+    await tx.$queryRaw`
+      SELECT "id"
+      FROM "Person"
+      WHERE "accountId" = ${accountId}
+      FOR UPDATE
+    `;
+  }
+}
+
 async function loadSecurityTarget(tx: Transaction, targetAccountId: string) {
   const target = await tx.account.findUnique({
     where: { id: targetAccountId },
     select: {
       id: true,
-      person: { select: { displayName: true } },
+      person: { select: { displayName: true, status: true } },
       identities: {
         where: { provider: "FEISHU", tenantId: "default" },
         orderBy: { createdAt: "asc" },
@@ -63,6 +76,12 @@ async function loadSecurityTarget(tx: Transaction, targetAccountId: string) {
   });
   if (!target) throw new Error("目标账号不存在");
   return target;
+}
+
+function assertSecurityTargetActive(target: SecurityTarget) {
+  if (target.person?.status !== "ACTIVE") {
+    throw new Error("目标账号已停用，无法授予角色");
+  }
 }
 
 async function actorName(tx: Transaction, actorAccountId: string) {
@@ -145,12 +164,21 @@ export async function grantAccountRole(
   input: GrantAccountRoleInput,
 ) {
   return prisma.$transaction(async (tx) => {
-    await assertActorIsSuperAdministrator(tx, actorAccountId);
+    await lockFeishuContactSyncTx(tx);
+    if (
+      input.role === "SUPER_ADMINISTRATOR" ||
+      input.role === "PROJECT_ADMINISTRATOR"
+    ) {
+      await lockGlobalApprovalAdministratorSetTx(tx);
+    }
     if (input.role === "SUPER_ADMINISTRATOR") {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(${SUPER_ADMIN_MUTATION_LOCK})`;
     }
+    await lockAccountPeople(tx, [actorAccountId, input.targetAccountId]);
+    await assertActorIsSuperAdministrator(tx, actorAccountId);
     await lockAccountMutations(tx, input.targetAccountId);
     const target = await loadSecurityTarget(tx, input.targetAccountId);
+    assertSecurityTargetActive(target);
     const team = "";
     const techGroup = "";
     const existing = await tx.systemRoleAssignment.findFirst({
@@ -192,22 +220,26 @@ export async function revokeAccountRole(
   assignmentId: string,
 ) {
   return prisma.$transaction(async (tx) => {
+    await lockFeishuContactSyncTx(tx);
+    const roleForLock = await tx.systemRoleAssignment.findUnique({
+      where: { id: assignmentId },
+      select: { role: true },
+    });
+    if (
+      roleForLock?.role === "SUPER_ADMINISTRATOR" ||
+      roleForLock?.role === "PROJECT_ADMINISTRATOR"
+    ) {
+      await lockGlobalApprovalAdministratorSetTx(tx);
+    }
+    if (roleForLock?.role === "SUPER_ADMINISTRATOR") {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${SUPER_ADMIN_MUTATION_LOCK})`;
+    }
+    await lockAccountPeople(tx, [actorAccountId]);
     await assertActorIsSuperAdministrator(tx, actorAccountId);
     let assignment = await tx.systemRoleAssignment.findUnique({
       where: { id: assignmentId },
     });
     if (!assignment) throw new Error("角色记录不存在");
-    if (assignment.role === "SUPER_ADMINISTRATOR") {
-      // All super-administrator mutations acquire the global lock before the
-      // target-account lock. A stable order avoids a grant/revoke deadlock.
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${SUPER_ADMIN_MUTATION_LOCK})`;
-    }
-    if (
-      assignment.role === "SUPER_ADMINISTRATOR" ||
-      assignment.role === "PROJECT_ADMINISTRATOR"
-    ) {
-      await lockGlobalApprovalAdministratorSetTx(tx);
-    }
     await lockAccountMutations(tx, assignment.accountId);
     assignment = await tx.systemRoleAssignment.findUnique({
       where: { id: assignmentId },
@@ -273,9 +305,12 @@ export async function assignReimbursementRole(
   input: AssignReimbursementRoleInput,
 ) {
   return prisma.$transaction(async (tx) => {
+    await lockFeishuContactSyncTx(tx);
+    await lockAccountPeople(tx, [actorAccountId, input.targetAccountId]);
     await assertActorIsSuperAdministrator(tx, actorAccountId);
     await lockAccountMutations(tx, input.targetAccountId);
     const target = await loadSecurityTarget(tx, input.targetAccountId);
+    assertSecurityTargetActive(target);
     const openId = target.reimbursementUser?.openId;
     if (!openId) throw new Error("该账号缺少报销用户资料，请先同步飞书通讯录");
     const existing = await tx.userRole.findFirst({
@@ -317,6 +352,8 @@ export async function revokeReimbursementRole(
   assignmentId: string,
 ) {
   return prisma.$transaction(async (tx) => {
+    await lockFeishuContactSyncTx(tx);
+    await lockAccountPeople(tx, [actorAccountId]);
     await assertActorIsSuperAdministrator(tx, actorAccountId);
     let assignment = await tx.userRole.findUnique({ where: { id: assignmentId } });
     if (!assignment) throw new Error("角色记录不存在");

@@ -40,6 +40,45 @@ export async function connectDatabaseClient(
   }
 }
 
+export async function databaseBackendPid(client: Client) {
+  const result = await client.query<{ pid: number }>(
+    "SELECT pg_backend_pid() AS pid",
+  );
+  const pid = result.rows[0]?.pid;
+  if (!pid) throw new Error("无法取得 PostgreSQL backend pid");
+  return pid;
+}
+
+export async function waitForDirectBlockers(
+  observer: Client,
+  blockerPid: number,
+  expectedCount: number,
+) {
+  const deadline = Date.now() + 7_500;
+  while (Date.now() < deadline) {
+    const result = await observer.query<{ pid: number }>(
+      `WITH RECURSIVE "blocked"("pid") AS (
+         SELECT "activity"."pid"
+         FROM "pg_stat_activity" AS "activity"
+         WHERE $1::int = ANY(pg_blocking_pids("activity"."pid"))
+         UNION
+         SELECT "activity"."pid"
+         FROM "pg_stat_activity" AS "activity"
+         JOIN "blocked" AS "blocker"
+           ON "blocker"."pid" = ANY(pg_blocking_pids("activity"."pid"))
+       )
+       SELECT "pid" FROM "blocked" ORDER BY "pid" ASC`,
+      [blockerPid],
+    );
+    const pids = [...new Set(result.rows.map((row) => row.pid))];
+    if (pids.length >= expectedCount) return pids;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  throw new Error(
+    `未在期限内观察到 ${expectedCount} 个事务被 backend ${blockerPid} 阻塞`,
+  );
+}
+
 export function startBarrierOperations<T>(
   operations: readonly (() => Promise<T>)[],
 ) {

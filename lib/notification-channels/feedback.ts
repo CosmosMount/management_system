@@ -18,7 +18,11 @@ import type {
   NotificationChannelAdapter,
   NotificationDeliveryTarget,
 } from "@/lib/notification-channel-adapter";
-import { NonRetryableNotificationError } from "@/lib/notification-channel-adapter";
+import {
+  CanceledNotificationError,
+  NonRetryableNotificationError,
+} from "@/lib/notification-channel-adapter";
+import { filterActiveFeishuOpenIds } from "@/lib/active-account";
 
 const appOriginSchema = z.string().nullable().optional();
 const feedbackOutboxPayloadSchema = z.discriminatedUnion("kind", [
@@ -123,20 +127,33 @@ export const feedbackNotificationChannel: NotificationChannelAdapter = {
     if (data.kind === "created") {
       return {
         supported: true,
-        openIds: await getFeedbackSuperAdminOpenIds(),
+        openIds: await filterActiveFeishuOpenIds(
+          await getFeedbackSuperAdminOpenIds(),
+        ),
       };
     }
     if (data.kind === "reply") {
+      const openIds = data.payload.actorIsAdmin
+        ? [...new Set(data.payload.recipientOpenIds ?? [])]
+        : await getFeedbackSuperAdminOpenIds();
       return {
         supported: true,
-        openIds: data.payload.actorIsAdmin
-          ? [...new Set(data.payload.recipientOpenIds ?? [])]
-          : await getFeedbackSuperAdminOpenIds(),
+        openIds: await filterActiveFeishuOpenIds(openIds),
       };
     }
-    return { supported: true, openIds: [data.payload.submitterOpenId] };
+    return {
+      supported: true,
+      openIds: await filterActiveFeishuOpenIds([
+        data.payload.submitterOpenId,
+      ]),
+    };
   },
   async sendToRecipient(row, recipientOpenId) {
+    if (
+      (await filterActiveFeishuOpenIds([recipientOpenId])).length === 0
+    ) {
+      throw new CanceledNotificationError("收件人已停用，取消本次投递");
+    }
     const { data, botKind } = parseRow(row);
     const context = { appOrigin: data.appOrigin ?? defaultAppOrigin() };
     if (data.kind === "created") {

@@ -26,6 +26,7 @@ import { statusLabels } from "@/lib/permissions-client";
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/logger";
 import { getDefaultNotificationContext } from "@/lib/request-origin";
+import { filterActiveFeishuOpenIds } from "@/lib/active-account";
 
 function isActionableProcurementStatus(status: OrderStatus): boolean {
   return (
@@ -230,6 +231,19 @@ export async function refreshProcurementFeishuCards(
   }
 
   for (const snapshot of snapshots) {
+    if (
+      (await filterActiveFeishuOpenIds([snapshot.openId])).length === 0
+    ) {
+      logger.info("feishu.procurement.card_refresh.recipient_inactive", {
+        module: "feishu",
+        action: "refreshProcurementFeishuCards",
+        entityType: "PurchaseOrder",
+        entityId: orderId,
+        recipientOpenId: snapshot.openId,
+        result: "skipped",
+      });
+      continue;
+    }
     const cardStage = (snapshot.cardStage || "") as OrderStatus;
     const card = await buildCardForSnapshot(orderId, cardStage, { notice });
     if (!card) continue;

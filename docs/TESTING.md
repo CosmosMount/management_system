@@ -191,6 +191,9 @@ npm run pm:identity-backfill
 
 ## 采购模块测试
 
+1. `tests/procurement-shell.spec.ts` 在 Desktop 与 Pixel 5 验证 `/procurement` 重定向到看板、五项侧栏/抽屉导航、折叠与关闭焦点、导航后抽屉关闭、订单详情归属“订单列表”；五个导航面板和确定性草稿订单的详情、编辑页还会断言顶部为“采购管理”上下文命令栏、标题正确、不存在返回链接，并检查无横向溢出和浏览器异常；详情页另验证状态与可用操作位于命令栏。`tests/inactive-person-procurement-safety.spec.ts` 另验证停用账号的侧栏/抽屉隐藏两个写入页面、直达路由被重定向或返回 404、历史草稿可读且无继续编辑、提交、上传、确认或催办入口。
+2. `tests/procurement-pending-orders.spec.ts` 验证 `/procurement/pending` 的当前处理人过滤、待办和最近订单；`tests/procurement-budget-pool-dashboard.spec.ts` 验证新 Excel 无技术方向列、同兵种组聚合历史预算行、看板一组一栏及项目说明。
+
 ### 新建申请与草稿
 
 1. 进入 `/procurement/new`。
@@ -329,11 +332,11 @@ npx tsx --test tests/project-management-recent-activity-formatter.node.ts
 3. 在「用户与角色」表单中搜索统一账号，授予项目管理员或带范围的报销角色；重复授予显示角色已存在。授予超级管理员以及撤销超级管理员/项目管理员必须确认，报销角色从标签直接移除并显示结果 toast。
 4. 按姓名、角色、车组和技术组筛选账号，验证 30 条服务端分页；空结果显示中文空状态。账号表/移动卡片应展示当前项目与报销角色，并可打开「查看记录」弹窗查看飞书身份、角色历史和安全审计。
 5. 对角色增删验证 UI、数据库活跃/撤销记录、角色历史、安全审计、站内通知和 mandatory outbox 一致；项目角色 UI 不得提供 `GROUP_LEADER`，直接提交该角色也必须被服务端拒绝。页面不得出现项目访问启用/禁用筛选或操作。
-6. Person 为 `INACTIVE` 的统一账号仍可进入 `/progress`、读取全部未删除业务数据并创建 Task，且创建者自动成为 Owner；该 Person 不可作为其他 Task 的新增成员，也不可创建新 Segment，历史成员和历史 Segment 继续展示。
+6. Person 为 `INACTIVE` 的统一账号仍可进入 `/progress` 并读取全部未删除历史数据，但创建 Task、修改项目业务、新增 Segment 和所有采购写入都必须由服务端拒绝；项目与采购 UI 均呈现只读，该 Person 不可作为新增成员或新通知收件人，历史成员和历史 Segment 继续展示。账号后台当前成员列表、职责矩阵和选择器不展示该 Person，但既有历史事实不得物理删除。
 7. 验证禁止自撤销超级管理员、最后一名超管保护、最后一名可用全局审批人保护、重复提交幂等和可理解的中文错误。
 8. 使用长姓名、多角色、身份缺失、缺少报销 User、空职责和长错误消息验证 Desktop/Pixel 5；选择器弹层、职责卡片、账号列表和记录弹窗均不得造成横向滚动。
 9. 对失败 outbox 执行重试，期望状态变化且不重复发送已成功收件人。
-10. 在 `/admin/system` 触发飞书用户同步，期望同步结果 toast 显示新增/更新数量。
+10. 在 `/admin/system` 触发飞书用户同步，期望同步结果 toast 显示新增、更新、停用和恢复数量。`tests/feishu-user-sync.spec.ts` 验证跨部门离职合并、快照缺席成员停用、返岗成员恢复、历史采购/角色关系保留、领域审计完整和冲突回滚后的脱敏审计；同一套回归还应让快照同时包含新人和超过 30% 的待停用成员，第一次通过公共 API 获得确认令牌并回滚，第二次先证明已撤权确认人携正确令牌仍整批失败且不写确认审计，再由在职超级管理员在独立事务成功创建新人、停用成员并写确认审计；普通比例的手动同步还需在等待管理员集合锁后复核发起人权限，模拟撤权先提交时应拒绝同步，并保证新人身份、返岗 Person 状态和审计零写入。人工另验证根部门授权缺失、分页不完整、快照变化令旧确认失效，以及最后一名有效全局管理员缺失时同步整批拒绝。`tests/inactive-person-procurement-safety.spec.ts` 与项目生命周期回归另验证停用人员只读历史、不能写入、不能删除采购历史订单或成为订单通知收件人；停用反馈账号会在 Desktop/Pixel 5 真实提交新反馈和回复既有反馈，均显示中文拒绝且 Feedback、Message、FileAsset、outbox 零新增。该组还覆盖同步停用与采购写入的 Person 行锁并发顺序；`tests/global-time-markers.spec.ts` 验证停用超级管理员不能保存全局关键时间点；`tests/account-management.spec.ts` 和 `tests/project-establishment.spec.ts` 分别验证通讯录与账号权限反序 Person 锁、全局角色撤销及立项提交的锁顺序，释放后并发操作均完成且不发生死锁；`tests/procurement-budget-import-atomicity.spec.ts` 验证已撤权超级管理员在预算写事务内被拒绝且预算零写入。
 11. 在 `/admin/time-markers` 新增名称和上海时间，保存后从数据库核对 UTC 时间；再用桌面鼠标、Pixel 5 触摸和键盘方向键移动胶囊，确认表单仅产生本地草稿，点击「保存全部」后才原子生效。保存 pending 时输入与拖动必须同时禁用；删除应为软删除并保留逐项审计；非超级管理员直接调用 Server Action 必须被拒绝。重复提交、集合版本冲突、同名/同刻、空列表、200/201 项边界、100/101 字名称、重复 ID 及数据库名称/有限时间约束均需覆盖。两个页面制造集合冲突时应保留旧草稿并展示最新集合；站内链接和浏览器后退都必须确认未保存草稿。
 12. Desktop 与 Pixel 5 均确认管理员画布没有“全局关键节点”独立标题行，拖动区显示名称、上海日期时间和对应竖线；纵向日期网格与业务行一致，当前时间红线从轴贯穿拖动区且层级高于关键点，页面无横向溢出。个人、资源、Task、Project 业务画布不新增独立行，只显示名称和对应竖线，时间仅保留在 `title`/无障碍文本中，空业务行仍显示关键点；密集长名称必须聚合且可通过键盘/鼠标/触摸打开详情、选择具体点，胶囊不得相互遮挡。桌面 Composer 同样可见并对极远日期保持最多三年逻辑窗口，Pixel 5 沿用既有纵向 Composer、无桌面 TimeCanvas。关键时间点不得抢占业务内容初始中心，也不得产生站内通知、飞书消息或 outbox。
 
@@ -372,7 +375,7 @@ npx tsx --test tests/project-management-recent-activity-formatter.node.ts
 10. `tests/project-management-plan-mutations-draft.spec.ts`、`project-management-plan-mutations-active.spec.ts`、`project-management-plan-mutations-concurrency.spec.ts` 和 `project-management-plan-mutations-revision-time.spec.ts` 分别覆盖 Draft、Active、并发回滚与 Revision 时间规则。共享 factory、副作用快照和数据库 barrier 位于 `tests/helpers/project-management-plan-mutation-fixtures.ts`。回归仍覆盖兼容及整包 mutation 的状态/权限/stale 矩阵、成员不变量、计划 ID 与时间边界、有界审计、通知收件人、行锁顺序、exactly-once 和事务晚失败回滚；只允许随机本机 `_test` PostgreSQL，并要求 `NOTIFICATION_DELIVERY_DISABLED=true`。
 
 11. Canvas 安全回归按 `project-management-canvas-route-boundaries.spec.ts`、`project-management-canvas-option-safety.spec.ts`、`project-management-canvas-scope-permissions.spec.ts` 和 `project-management-canvas-adaptive-loading.spec.ts` 拆分；共享账号/Task/Segment factory 位于 `tests/helpers/project-management-canvas-security-fixtures.ts`。四组分别验证路由 session 绑定、选择器最小披露、scope 权限/半开区间和自适应块加载/对象预算。资源计划选择器领域回归必须验证默认/显式/空 Task 状态集合与 Project/Task 的交集、状态外 Task 成员不被派生、直接或 Project 选入人员仍展示状态外 Task 的完整投入，以及焦点 Task 不绕过状态筛选。
-12. `tests/project-management-s8.spec.ts` 覆盖 Action Inbox 权限/逾期排序、普通/强制通知偏好、Asia/Shanghai deadline event key、保留清理和完整性巡检；UI 的 S8 场景在 Desktop/Pixel 5 验证驾驶舱、待办与偏好。Tag 删除 migration 由迁移规格验证三张分类表消失且 append-only 审计不被改写。
+12. `tests/project-management-s8.spec.ts` 覆盖 Action Inbox 权限/逾期排序、普通/强制通知偏好、停用人员保存偏好返回 `FORBIDDEN` 且零写入、Asia/Shanghai deadline event key、保留清理和完整性巡检；UI 的 S8 场景在 Desktop/Pixel 5 验证驾驶舱、待办、可编辑偏好及停用后的只读开关。Tag 删除 migration 由迁移规格验证三张分类表消失且 append-only 审计不被改写。
 13. `tests/project-management-s9-cron.spec.ts` 覆盖保留的 PostgreSQL 跨实例 advisory lock；新增 migration 必须在 runner 随机 target 数据库从空库执行。
 14. `tests/project-management-performance.spec.ts` 默认跳过。仅在受控 runner 中设置 `PM_RUN_SCALE_TESTS=true`，生成 10k Task、100k Segment、50×100 PlanNode 和 100k 站内通知，执行 p95、query plan、响应体积与浏览器 DOM 门禁。不得对开发、共享或生产数据库设置该变量。
 15. `tests/project-management-s10-release.spec.ts` 只在 Desktop 执行运维规格：演练工具 fail-closed、空库 migration、两次共享快照、受保护表 row/hash、identity backfill dry-run/APPLY 幂等、整库/上传恢复和旧 contract/直接飞书发送静态扫描。工具只接受本机 `_test`/`_snapshot` 来源，要求 `PM_RELEASE_REHEARSAL_CONFIRM=LOCAL_ISOLATED_REHEARSAL` 与 `NOTIFICATION_DELIVERY_DISABLED=true`，并只创建/删除随机 `pmrel_*_test` 数据库；不得把生产 URL 伪装成允许名称。

@@ -55,7 +55,23 @@ export async function createProjectManagementEventNotificationsTx(
     context?: Record<string, unknown>;
   },
 ) {
-  const uniqueRecipients = uniqueRecipientsByAccount(input.recipients);
+  const requestedRecipients = uniqueRecipientsByAccount(input.recipients);
+  const activeAccountIds = new Set(
+    (
+      await tx.account.findMany({
+        where: {
+          id: {
+            in: requestedRecipients.map((recipient) => recipient.accountId),
+          },
+          person: { is: { status: "ACTIVE" } },
+        },
+        select: { id: true },
+      })
+    ).map((account) => account.id),
+  );
+  const uniqueRecipients = requestedRecipients.filter((recipient) =>
+    activeAccountIds.has(recipient.accountId),
+  );
   if (uniqueRecipients.length === 0 && !input.mandatory) {
     return { recipientCount: 0 };
   }
@@ -186,7 +202,10 @@ export async function recipientsForAccountIdsTx(
 ): Promise<ProjectManagementNotificationRecipient[]> {
   if (accountIds.length === 0) return [];
   const accounts = await tx.account.findMany({
-    where: { id: { in: [...new Set(accountIds)] } },
+    where: {
+      id: { in: [...new Set(accountIds)] },
+      person: { is: { status: "ACTIVE" } },
+    },
     select: {
       id: true,
       identities: {
@@ -211,6 +230,7 @@ export async function recipientsForTaskMembersTx(
       taskId: input.taskId,
       removedAt: null,
       role: { in: input.roles },
+      person: { status: "ACTIVE" },
     },
     select: {
       person: {
@@ -246,6 +266,7 @@ export async function recipientsForAccountsOrPeopleTx(
   if (input.accountIds.length === 0 && input.personIds.length === 0) return [];
   const accounts = await tx.account.findMany({
     where: {
+      person: { is: { status: "ACTIVE" } },
       OR: [
         ...(input.accountIds.length > 0
           ? [{ id: { in: input.accountIds } }]

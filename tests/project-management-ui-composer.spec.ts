@@ -734,7 +734,7 @@ test.describe("project management UI project-management-ui-composer", () => {
       await expectHealthyPage(page);
     });
 
-  test("an inactive Person account can open global read pages and the Task Composer", async ({
+  test("an inactive Person account can open global read pages but not the Task Composer", async ({
       context,
       page,
       baseURL,
@@ -742,14 +742,10 @@ test.describe("project management UI project-management-ui-composer", () => {
       const guardAdmin = await createAccountPerson("S5 Inactive Owner Guard Admin");
       await grantRole(guardAdmin.account.id, "PROJECT_ADMINISTRATOR");
       const user = await createAccountPerson("S5 Inactive Unified Account");
-      await prisma.person.update({
-        where: { id: user.person.id },
-        data: { status: "INACTIVE" },
-      });
       const draftTitle = `S5 Inactive Owner Draft ${randomUUID()}`;
       const draft = await createTaskDraft(actor(user), {
         title: draftTitle,
-        description: "停用创建者仍可创建 Task，但不能新增投入",
+        description: "停用前创建的历史 Task 仍可读取，但不能新增投入",
         team: "英雄",
         techGroup: "电控",
         priority: "MEDIUM",
@@ -758,6 +754,26 @@ test.describe("project management UI project-management-ui-composer", () => {
         plannedStartAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
         termination: terminationInput(5),
         idempotencyKey: `inactive-owner-draft-${randomUUID()}`,
+      });
+      const project = await prisma.project.create({
+        data: {
+          name: `S5 Inactive Project ${randomUUID()}`,
+          description: "停用成员仍可读取项目，但不能从项目详情新建 Task",
+          status: "ACTIVE",
+          requesterAccountId: user.account.id,
+          startedAt: new Date(),
+          members: {
+            create: {
+              personId: user.person.id,
+              role: "OWNER",
+              createdByAccountId: user.account.id,
+            },
+          },
+        },
+      });
+      await prisma.person.update({
+        where: { id: user.person.id },
+        data: { status: "INACTIVE" },
       });
       await loginAsTestUser(context, baseURL, {
         openId: user.openId,
@@ -771,14 +787,19 @@ test.describe("project management UI project-management-ui-composer", () => {
       await expect(page.getByRole("heading", { name: "我的工作" })).toBeVisible({
         timeout: 15_000,
       });
+      await expect(page.getByRole("link", { name: "新建 Task" })).toHaveCount(0);
       await expectHealthyPage(page);
       await page.goto("/progress/tasks/new");
-      await expect(page.getByTestId("task-composer")).toBeVisible();
+      await expect(page).toHaveURL(/\/progress\/tasks$/);
+      await expect(page.getByRole("heading", { name: "全部 Task" })).toBeVisible();
+      await expect(page.getByTestId("task-composer")).toHaveCount(0);
+      await expect(page.getByRole("link", { name: "新建 Task" })).toHaveCount(0);
+      await expectHealthyPage(page);
+      await page.goto(`/progress/projects/${project.id}`);
       await expect(
-        page.getByRole("button", {
-          name: `移除 ${user.person.displayName} 负责人`,
-        }),
-      ).toBeDisabled();
+        page.getByRole("heading", { name: project.name }),
+      ).toBeVisible();
+      await expect(page.getByRole("link", { name: "新建 Task" })).toHaveCount(0);
       await expectHealthyPage(page);
       await page.goto(`/progress/tasks/${draft.taskId}`);
       await expect(

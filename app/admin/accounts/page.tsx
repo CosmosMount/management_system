@@ -77,7 +77,9 @@ export default async function AdminAccountsPage({
   const requestedPage = Number.parseInt(firstParam(params.page), 10);
   const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
 
-  const conditions: Prisma.AccountWhereInput[] = [];
+  const conditions: Prisma.AccountWhereInput[] = [
+    { person: { is: { status: "ACTIVE" } } },
+  ];
   if (projectRoleValues.includes(role as (typeof projectRoleValues)[number])) {
     conditions.push({
       systemRoles: {
@@ -131,6 +133,7 @@ export default async function AdminAccountsPage({
       revokedAt: null,
       role: { in: [...reimbursementRoleValues] },
       accountId: { not: null },
+      account: { person: { is: { status: "ACTIVE" } } },
     },
     orderBy: [
       { team: "asc" },
