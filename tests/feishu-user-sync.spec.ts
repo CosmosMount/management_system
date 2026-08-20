@@ -266,6 +266,40 @@ test("含新成员的高比例停用可跨事务二次确认并记录审计", as
       },
     },
   });
+  const snapshotAccountIds = [
+    ...new Set(
+      existingIdentities
+        .filter(
+          (identity) =>
+            Boolean(identity.openId?.trim()) && Boolean(identity.account.person),
+        )
+        .map((identity) => identity.accountId),
+    ),
+  ];
+  // The shared Playwright database can contain active unionId-only fixtures,
+  // while a real Feishu contact snapshot always carries openId. Keep those
+  // unrelated rows outside this synthetic snapshot and restore them afterward.
+  const unrelatedActivePeople = await prisma.person.findMany({
+    where: {
+      status: "ACTIVE",
+      accountId: { notIn: snapshotAccountIds },
+      account: {
+        identities: {
+          some: { provider: "FEISHU", tenantId: "default" },
+        },
+      },
+    },
+    select: { id: true },
+  });
+  const unrelatedActivePersonIds = unrelatedActivePeople.map(
+    (person) => person.id,
+  );
+  if (unrelatedActivePersonIds.length > 0) {
+    await prisma.person.updateMany({
+      where: { id: { in: unrelatedActivePersonIds } },
+      data: { status: "INACTIVE" },
+    });
+  }
   const confirmedByAccountId = confirmer.id;
   const retainedContacts = existingIdentities.flatMap((identity) => {
     const openId = identity.openId?.trim();
@@ -394,6 +428,12 @@ test("含新成员的高比例停用可跨事务二次确认并记录审计", as
       }),
     ).resolves.toBe(1);
   } finally {
+    if (unrelatedActivePersonIds.length > 0) {
+      await prisma.person.updateMany({
+        where: { id: { in: unrelatedActivePersonIds } },
+        data: { status: "ACTIVE" },
+      });
+    }
     const fixtureAccounts = await prisma.account.findMany({
       where: {
         identities: {
