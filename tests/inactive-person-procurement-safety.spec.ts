@@ -526,11 +526,6 @@ test("停用人员的采购页面只读且隐藏所有写入口", async ({
   await expect.poll(() => new URL(page.url()).pathname).toBe(
     "/procurement/dashboard",
   );
-  await page.goto("/procurement/workshop-fee", { waitUntil: "networkidle" });
-  await expect.poll(() => new URL(page.url()).pathname).toBe(
-    "/procurement/dashboard",
-  );
-
   if (testInfo.project.name === "desktop") {
     const sidebar = page.getByTestId("procurement-sidebar");
     await expect(sidebar).toBeVisible();

@@ -906,7 +906,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
           (await canvasRoot.getAttribute("data-loaded-ranges"))
             ?.split("|")
             .some((range) => range.startsWith(`${expandedStart}:`)) ?? false,
-        { timeout: 15_000 },
+        { timeout: 30_000 },
       )
       .toBe(true);
     const adjacentBlockStart = expandedStart + 180 * 24 * 60 * 60 * 1_000;

@@ -51,14 +51,19 @@ export function SystemSyncPanel({
           setConfirmation(response);
           return;
         }
+        if (response.status === "failed") {
+          setConfirmation(null);
+          toast.error(response.error.message);
+          return;
+        }
         const result = response.result;
         setConfirmation(null);
         toast.success(
           `已同步 ${result.total} 名在职成员（新增 ${result.created}，更新 ${result.updated}，恢复 ${result.reactivated}，停用 ${result.deactivated}）`,
         );
         router.refresh();
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : "同步失败");
+      } catch {
+        toast.error("同步请求失败，请刷新页面后重试");
       }
     });
   }

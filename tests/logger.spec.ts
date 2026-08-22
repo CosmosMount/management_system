@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { logger, withActionLogging } from "../lib/logger";
 import { withLogContext } from "../lib/log-context";
+import { FeishuContactRequestError } from "../lib/feishu-contact";
 
 function captureConsole(callback: () => Promise<void> | void) {
   const lines: string[] = [];
@@ -120,6 +121,43 @@ test.describe("structured logger", () => {
     expect(JSON.stringify(entry)).not.toContain("error-token");
     expect(JSON.stringify(entry)).not.toContain("error-db-password");
     expect(JSON.stringify(entry)).not.toContain("session-cookie");
+  });
+
+  test("preserves redacted nested causes and the sync failure classification", async () => {
+    const networkError = Object.assign(
+      new Error("socket failed token=private-network-token"),
+      { code: "ECONNRESET token=private-code-secret" },
+    );
+    networkError.stack =
+      "Error: socket failed token=private-stack-secret\n    at request (authorization=private-authorization-secret)";
+    const requestError = new FeishuContactRequestError(
+      "/contact/v3/scopes",
+      networkError,
+    );
+
+    const lines = await captureConsole(() => {
+      logger.error("logger.spec.feishu_sync_failure", {
+        syncFailureCode: "INTERNAL_ERROR",
+        error: requestError,
+      });
+    });
+
+    const [entry] = parseLogLines(lines);
+    expect(entry.syncFailureCode).toBe("INTERNAL_ERROR");
+    expect(entry.errorCode).toBe("FeishuContactRequestError");
+    expect(entry.error).toMatchObject({
+      name: "FeishuContactRequestError",
+      cause: {
+        name: "Error",
+        message: "socket failed token=[REDACTED]",
+        code: "ECONNRESET token=[REDACTED]",
+        stack: expect.stringContaining("token=[REDACTED]"),
+      },
+    });
+    expect(JSON.stringify(entry)).not.toContain("private-network-token");
+    expect(JSON.stringify(entry)).not.toContain("private-code-secret");
+    expect(JSON.stringify(entry)).not.toContain("private-stack-secret");
+    expect(JSON.stringify(entry)).not.toContain("private-authorization-secret");
   });
 
   test("redacts Feishu webhook URLs and signed payload fields without hiding safe origins", async () => {

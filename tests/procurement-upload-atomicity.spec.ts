@@ -424,64 +424,6 @@ test("真实订单更新 action 拒绝跨订单路径并原子处理版本冲突
   }
 });
 
-test("工坊 action 事务失败不留下 COMPLETED 订单、明细或图片", async ({
-  page,
-  context,
-  baseURL,
-}, testInfo) => {
-  const suffix = randomUUID().replaceAll("-", "");
-  const marker = `PW工坊原子性-${testInfo.project.name}-${suffix}`;
-  const vendor = `PW工坊原子性供应商-${suffix}`;
-  const functionName = `test_workshop_order_fail_${suffix}`;
-  const triggerName = `test_workshop_order_fail_trigger_${suffix}`;
-  const filesBefore = await listStoredFiles();
-  await prisma.processingVendor.create({ data: { name: vendor } });
-  try {
-    await prisma.$executeRawUnsafe(`
-      CREATE FUNCTION "${functionName}"() RETURNS trigger AS $$
-      BEGIN
-        IF NEW."isWorkshopFee" = true THEN
-          RAISE EXCEPTION 'injected workshop order failure';
-        END IF;
-        RETURN NEW;
-      END;
-      $$ LANGUAGE plpgsql
-    `);
-    await prisma.$executeRawUnsafe(`
-      CREATE TRIGGER "${triggerName}"
-      BEFORE INSERT ON "PurchaseOrder"
-      FOR EACH ROW EXECUTE FUNCTION "${functionName}"()
-    `);
-    const auth = await resolveNormalAuthMaterial();
-    await loginAsNormalUser(context, baseURL, auth);
-    await page.goto("/procurement/workshop-fee", { waitUntil: "networkidle" });
-    await page.getByLabel("车组").click();
-    await page.getByRole("option", { name: "英雄" }).click();
-    await page.getByLabel("费用名称").fill(marker);
-    await page.getByLabel("说明").fill("原子性失败说明");
-    await page.getByLabel("加工商").click();
-    await page.getByRole("option", { name: vendor }).click();
-    await page.getByLabel("图片").setInputFiles([pngUpload("workshop.png")]);
-    await page.getByLabel("金额").fill("88");
-    await page.getByRole("button", { name: "提交并计入汇总" }).click();
-    await expect(
-      page.getByRole("button", { name: "提交并计入汇总" }),
-    ).toBeEnabled();
-    await expect(
-      prisma.purchaseOrder.count({ where: { items: { some: { name: marker } } } }),
-    ).resolves.toBe(0);
-    await expect(prisma.purchaseItem.count({ where: { name: marker } })).resolves.toBe(0);
-    await expect(listStoredFiles()).resolves.toEqual(filesBefore);
-  } finally {
-    await dropTriggerAndFunction({
-      functionName,
-      tableName: "PurchaseOrder",
-      triggerName,
-    });
-    await prisma.processingVendor.deleteMany({ where: { name: vendor } });
-  }
-});
-
 test("管理员删除 action 的持续附件清理失败会持久化并由 cron 收敛", async ({
   page,
   context,

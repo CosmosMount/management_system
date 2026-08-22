@@ -14,7 +14,6 @@ export const routes = {
     new: "/procurement/new",
     list: "/procurement/list",
     dashboard: "/procurement/dashboard",
-    workshopFee: "/procurement/workshop-fee",
     detail: (id: string) => `/procurement/${id}`,
     edit: (id: string) => `/procurement/${id}/edit`,
   },

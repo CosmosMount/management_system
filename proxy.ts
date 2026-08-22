@@ -4,17 +4,22 @@ import {
   buildAppUrl,
   isAllowedAppOrigin,
 } from "@/lib/app-origin";
+import { isControlledPlaywrightServer } from "@/lib/playwright-fixture-guard";
 import { NextResponse } from "next/server";
 import type { NextFetchEvent, NextRequest } from "next/server";
 
 const authMiddleware = middlewareAuth(async (req) => {
   const { pathname } = req.nextUrl;
+  const isPlaywrightSyncFixture =
+    pathname === "/feishu-sync-action-fixtures" &&
+    isControlledPlaywrightServer();
   const isLoggedIn = !!req.auth;
   const isPublic =
     pathname === "/login" ||
     pathname.startsWith("/api/auth") ||
     pathname.startsWith("/_next") ||
-    pathname === "/favicon.ico";
+    pathname === "/favicon.ico" ||
+    isPlaywrightSyncFixture;
 
   if (isPublic) {
     if (isLoggedIn && pathname === "/login") {

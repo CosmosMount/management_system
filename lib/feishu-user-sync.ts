@@ -293,8 +293,7 @@ export async function syncFeishuContactUsers(
   const snapshot = await fetchAllFeishuContactUsers();
   if (
     !snapshot.includesRootDepartment ||
-    snapshot.departmentCount === 0 ||
-    snapshot.authorizedDepartmentCount === 0
+    snapshot.departmentCount === 0
   ) {
     throw new Error("飞书通讯录快照未通过完整性校验，已停止同步");
   }

@@ -94,7 +94,7 @@ test.describe("普通用户主功能面板", () => {
     await expectHealthyPage(page);
   });
 
-  test("采购面板能进入新建、列表、详情、看板和工坊加工费", async ({ page }, testInfo) => {
+  test("采购面板能进入新建、列表、详情和看板且旧工坊入口已下线", async ({ page }, testInfo) => {
     await page.goto("/procurement", { waitUntil: "networkidle" });
     await expectHealthyPage(page);
 
@@ -146,11 +146,65 @@ test.describe("普通用户主功能面板", () => {
     await expect(page.getByText(/处理人：/).first()).toBeVisible();
     await expectHealthyPage(page);
 
-    await page.goto("/procurement/workshop-fee", { waitUntil: "networkidle" });
-    await expect(page.getByRole("heading", { name: "工坊加工费" })).toBeVisible();
+    const workshopResponse = await page.goto("/procurement/workshop-fee", {
+      waitUntil: "networkidle",
+    });
+    expect(workshopResponse?.status()).toBe(404);
+    await expect(
+      page.getByRole("heading", { name: "页面不存在或无权访问" }),
+    ).toBeVisible();
     await expectHealthyPage(page);
   });
 
+
+  test("既有工坊加工费订单仍按原权限在列表和详情中只读可见", async ({ page }) => {
+    const before = await prisma.purchaseOrder.findUniqueOrThrow({
+      where: { id: fixtures.workshopOrderId },
+      include: { items: true },
+    });
+    expect(before.isWorkshopFee).toBe(true);
+    expect(before.status).toBe("COMPLETED");
+
+    await page.goto("/procurement/list", { waitUntil: "networkidle" });
+    const row = page
+      .getByRole("row")
+      .filter({ hasText: "PW-FULL-WORKSHOP-HISTORY" });
+    await expect(row).toBeVisible();
+    await row.getByRole("button").first().click();
+    await expect(page.getByText("PW全功能-历史工坊加工费")).toBeVisible();
+    await expect(page.getByText("加工费", { exact: true })).toBeVisible();
+
+    await row
+      .getByRole("link", { name: "PW-FULL-WORKSHOP-HISTORY" })
+      .click();
+    await expect(
+      page.getByRole("heading", { name: "订单 PW-FULL-WORKSHOP-HISTORY" }),
+    ).toBeVisible();
+    const commandBar = page.getByTestId("procurement-command-bar");
+    await expect(
+      commandBar.getByText("工坊加工费", { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText("PW全功能-历史工坊加工费")).toBeVisible();
+    await expect(page.getByText("加工费", { exact: true })).toBeVisible();
+    await expect(page.getByText("PW历史工坊", { exact: true })).toBeVisible();
+    for (const actionName of [
+      "修改清单",
+      "确认报销",
+      "上传凭证",
+      "催促当前审批人",
+    ]) {
+      await expect(
+        commandBar.getByRole("button", { name: actionName, exact: true }),
+      ).toHaveCount(0);
+    }
+    await expectHealthyPage(page);
+
+    const after = await prisma.purchaseOrder.findUniqueOrThrow({
+      where: { id: fixtures.workshopOrderId },
+      include: { items: true },
+    });
+    expect(after).toEqual(before);
+  });
   test("采购订单详情能通过 live refresh 自动看到状态变化", async ({ page }) => {
     await page.goto(`/procurement/${fixtures.reviewOrderId}`, {
       waitUntil: "networkidle",
@@ -253,6 +307,27 @@ test.describe("管理员面板", () => {
       await expect(page.getByText(panel.text).first()).toBeVisible();
       await expectHealthyPage(page);
     }
+  });
+
+  test("飞书通讯录请求失败时显示安全提示而不是 Server Components 通用错误", async ({
+    page,
+  }) => {
+    const browserErrors: string[] = [];
+    page.on("pageerror", (error) => browserErrors.push(error.message));
+
+    await page.goto("/admin/system", { waitUntil: "networkidle" });
+    await page.getByRole("button", { name: "同步飞书通讯录" }).click();
+
+    await expect(
+      page.getByText(
+        "无法读取飞书通讯录，请检查应用凭证、通讯录权限和网络连接后重试。",
+      ),
+    ).toBeVisible();
+    await expect(
+      page.getByText(/An error occurred in the Server Components render/i),
+    ).toHaveCount(0);
+    expect(browserErrors).toEqual([]);
+    await expectHealthyPage(page);
   });
 
   test("关键时间点可通过表单和时间线拖动后统一保存", async ({ page }, testInfo) => {

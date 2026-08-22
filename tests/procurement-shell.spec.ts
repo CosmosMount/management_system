@@ -79,8 +79,10 @@ test.describe("采购管理侧栏", () => {
             "/procurement/pending",
             "/procurement/new",
             "/procurement/list",
-            "/procurement/workshop-fee",
           ]);
+        await expect(
+          navigation.getByRole("link", { name: "工坊加工费" }),
+        ).toHaveCount(0);
 
         const collapseButton = page.getByRole("button", {
           name: "折叠采购管理导航",
@@ -109,6 +111,9 @@ test.describe("采购管理侧栏", () => {
         await expect(
           drawer.getByRole("heading", { name: "采购管理导航" }),
         ).toBeVisible();
+        await expect(
+          drawer.getByRole("link", { name: "工坊加工费" }),
+        ).toHaveCount(0);
 
         await page.keyboard.press("Escape");
         await expect(drawer).toBeHidden();
@@ -128,7 +133,6 @@ test.describe("采购管理侧栏", () => {
         { path: "/procurement/pending", heading: "待办与最近" },
         { path: "/procurement/new", heading: "采购申请" },
         { path: "/procurement/list", heading: "订单列表" },
-        { path: "/procurement/workshop-fee", heading: "工坊加工费" },
       ]) {
         await page.goto(panel.path, { waitUntil: "networkidle" });
         const commandBar = page.getByTestId("procurement-command-bar");

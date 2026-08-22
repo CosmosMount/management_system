@@ -11,7 +11,6 @@ const protectedRoutes = [
   "/procurement/dashboard",
   "/procurement/list",
   "/procurement/new",
-  "/procurement/workshop-fee",
   "/profile",
   "/progress",
 ];
@@ -23,7 +22,6 @@ const authenticatedRoutes = [
   "/procurement/dashboard",
   "/procurement/list",
   "/procurement/new",
-  "/procurement/workshop-fee",
   "/profile",
   "/progress",
 ];

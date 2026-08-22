@@ -24,7 +24,6 @@ type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   existingItemCount: number;
-  processingFeeOnly?: boolean;
   onConfirm: (
     items: PurchaseItemInput[],
     mode: "replace" | "append",
@@ -36,7 +35,6 @@ export function ProcurementItemsImportDialog({
   open,
   onOpenChange,
   existingItemCount,
-  processingFeeOnly = false,
   onConfirm,
   parseFile,
 }: Props) {
@@ -61,12 +59,9 @@ export function ProcurementItemsImportDialog({
     try {
       validateSpreadsheetFile(file);
       const importHelpers = await import("@/lib/import-procurement-items");
-      let parsed = parseFile
+      const parsed = parseFile
         ? await parseFile(file)
         : await importHelpers.parseProcurementItemsFromFile(file);
-      if (processingFeeOnly) {
-        parsed = importHelpers.filterProcessingFeeItems(parsed);
-      }
       if (!parseGenerationRef.current.isCurrent(generation)) return;
       setFileName(file.name);
       setResult(parsed);
@@ -135,7 +130,6 @@ export function ProcurementItemsImportDialog({
           <DialogTitle>从 Excel 导入采购明细</DialogTitle>
           <DialogDescription>
             支持 .xlsx / .xls，文件不超过 {SPREADSHEET_FILE_SIZE_LABEL}。加工费条目导入后仍需手动上传参考图片。
-            {processingFeeOnly ? " 本表单仅导入加工费行。" : ""}
           </DialogDescription>
         </DialogHeader>
 

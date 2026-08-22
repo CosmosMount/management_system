@@ -5,7 +5,6 @@ import {
   ClipboardCheck,
   ClipboardList,
   FilePlus2,
-  Hammer,
   LayoutDashboard,
   ShoppingCart,
 } from "lucide-react";
@@ -51,17 +50,6 @@ function procurementNavigationItems(
         pathname === routes.procurement.list ||
         ORDER_DETAIL_PATH.test(pathname),
     },
-    ...(canWrite
-      ? [
-          {
-            href: routes.procurement.workshopFee,
-            label: "工坊加工费",
-            icon: Hammer,
-            match: (pathname: string) =>
-              pathname === routes.procurement.workshopFee,
-          },
-        ]
-      : []),
   ];
 }
 

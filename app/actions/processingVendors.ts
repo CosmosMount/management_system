@@ -44,6 +44,5 @@ export async function createProcessingVendor(name: string) {
   });
 
   revalidatePath(routes.procurement.new);
-  revalidatePath(routes.procurement.workshopFee);
   return vendor;
 }

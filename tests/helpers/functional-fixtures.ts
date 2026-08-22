@@ -44,6 +44,7 @@ export type FunctionalFixtureIds = {
   otherOpenId: string;
   draftOrderId: string;
   reviewOrderId: string;
+  workshopOrderId: string;
   managementRejectOrderId: string;
   teacherRejectOrderId: string;
   reimbursementOrderId: string;
@@ -274,6 +275,7 @@ export async function prepareFunctionalFixtures(
     totalPrice: number,
     status: OrderStatus,
     approved = false,
+    isWorkshopFee = false,
   ) =>
     prisma.purchaseOrder.create({
       data: {
@@ -283,6 +285,7 @@ export async function prepareFunctionalFixtures(
         team: "英雄",
         techGroup: "电控",
         totalPrice,
+        isWorkshopFee,
         status,
         teamApproved: approved,
         techGroupApproved: approved,
@@ -292,7 +295,11 @@ export async function prepareFunctionalFixtures(
           create: {
             name: itemName,
             spec: "PW-SPEC",
-            purchaseLink: "https://example.com/playwright-item",
+            itemKind: isWorkshopFee ? "PROCESSING_FEE" : "COMPONENT",
+            purchaseLink: isWorkshopFee
+              ? ""
+              : "https://example.com/playwright-item",
+            processingVendor: isWorkshopFee ? "PW历史工坊" : "",
             quantity: 1,
             unitPrice: totalPrice,
           },
@@ -306,6 +313,7 @@ export async function prepareFunctionalFixtures(
     managementRejectOrder,
     teacherRejectOrder,
     reimbursementOrder,
+    workshopOrder,
   ] = await Promise.all([
     createOrder(
       "PW-FULL-DRAFT",
@@ -337,6 +345,14 @@ export async function prepareFunctionalFixtures(
       `${TEST_PREFIX}-报销物料`,
       188,
       OrderStatus.PENDING_APPLICANT_DOCS,
+      true,
+    ),
+    createOrder(
+      "PW-FULL-WORKSHOP-HISTORY",
+      `${TEST_PREFIX}-历史工坊加工费`,
+      320,
+      OrderStatus.COMPLETED,
+      true,
       true,
     ),
   ]);
@@ -382,6 +398,7 @@ export async function prepareFunctionalFixtures(
     otherOpenId,
     draftOrderId: draftOrder.id,
     reviewOrderId: reviewOrder.id,
+    workshopOrderId: workshopOrder.id,
     managementRejectOrderId: managementRejectOrder.id,
     teacherRejectOrderId: teacherRejectOrder.id,
     reimbursementOrderId: reimbursementOrder.id,

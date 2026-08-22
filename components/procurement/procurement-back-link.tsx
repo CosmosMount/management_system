@@ -28,15 +28,6 @@ export function ProcurementNewHeader() {
   );
 }
 
-export function WorkshopFeeHeader() {
-  return (
-    <ProcurementPageHeader
-      title="工坊加工费"
-      description="录入加工费并上传图片，直接计入采购汇总"
-    />
-  );
-}
-
 export function OrdersBackHeader({
   title,
   description,

@@ -750,63 +750,6 @@ test("采购报销链路可上传凭证、财务截图并由申请人确认完�
   await expectHealthyPage(page);
 });
 
-test("工坊加工费可录入并直接计入采购汇总", async ({
-  page,
-  context,
-  baseURL,
-}) => {
-  await loginAsNormalUser(context, baseURL, normalAuth);
-  const feeName = `PW全功能-工坊加工费-${Date.now()}`;
-  const vendorName = `PW全功能-加工商-${Date.now()}`;
-
-  await page.goto("/procurement/workshop-fee", { waitUntil: "networkidle" });
-  await expect(page.getByRole("heading", { name: "工坊加工费" })).toBeVisible();
-  await page.getByText("请选择车组").click();
-  await page.getByRole("option", { name: "英雄" }).click();
-  await page.getByLabel("费用名称").fill(feeName);
-  await page.getByLabel("说明").fill("PW全功能-加工说明");
-  await page.getByText("请选择加工商").click();
-  await page.getByRole("option", { name: /添加加工商/ }).click();
-  await page.locator("#processing-vendor-name").fill(vendorName);
-  await page.getByRole("button", { name: "添加", exact: true }).click();
-  await expect(page.getByText("加工商已添加")).toBeVisible();
-  await page.getByLabel("图片").setInputFiles([pngUpload("workshop-fee.png")]);
-  await page.getByLabel("金额").fill("66");
-  await page.getByRole("button", { name: "提交并计入汇总" }).click();
-
-  await expect
-    .poll(async () => {
-      const order = await prisma.purchaseOrder.findFirst({
-        where: {
-          isWorkshopFee: true,
-          items: { some: { name: feeName } },
-        },
-        include: {
-          items: {
-            select: { processingVendor: true, referenceImagePath: true },
-          },
-        },
-      });
-      return order
-        ? {
-            status: order.status,
-            isWorkshopFee: order.isWorkshopFee,
-            totalPrice: order.totalPrice,
-            vendor: order.items[0]?.processingVendor ?? "",
-            hasPhoto: !!order.items[0]?.referenceImagePath,
-          }
-        : null;
-    })
-    .toEqual({
-      status: "COMPLETED",
-      isWorkshopFee: true,
-      totalPrice: 66,
-      vendor: vendorName,
-      hasPhoto: true,
-    });
-  await expectHealthyPage(page);
-});
-
 test("反馈可由普通用户创建回复，并由管理员关闭", async ({
   page,
   context,

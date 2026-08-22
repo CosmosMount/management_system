@@ -78,11 +78,24 @@ function sanitize(value: unknown, key = "", depth = 0, seen = new WeakSet<object
   if (typeof value === "bigint") return value.toString();
   if (value instanceof Date) return value.toISOString();
   if (value instanceof Error) {
-    return {
+    if (seen.has(value)) return "[Circular]";
+    seen.add(value);
+    if (depth >= 5) return "[MaxDepth]";
+    const errorValue: Record<string, unknown> = {
       name: value.name,
       message: redactString(value.message),
       stack: value.stack ? redactString(value.stack).slice(0, 4000) : undefined,
     };
+    const errorCode = (value as Error & { code?: unknown }).code;
+    if (typeof errorCode === "string") {
+      errorValue.code = redactString(errorCode);
+    } else if (typeof errorCode === "number") {
+      errorValue.code = errorCode;
+    }
+    if ("cause" in value && value.cause !== undefined) {
+      errorValue.cause = sanitize(value.cause, "cause", depth + 1, seen);
+    }
+    return errorValue;
   }
   if (Array.isArray(value)) {
     if (depth >= 5) return "[MaxDepth]";

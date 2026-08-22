@@ -34,26 +34,44 @@ export type FeishuContactUser = {
   isActive: boolean;
 };
 
+export class FeishuContactRequestError extends Error {
+  constructor(
+    readonly path: string,
+    cause: unknown,
+  ) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(`飞书通讯录 API 请求失败 (${path}): ${detail}`, { cause });
+    this.name = "FeishuContactRequestError";
+  }
+}
+
 async function feishuGet<T>(
   path: string,
   params: Record<string, string>,
 ): Promise<T> {
-  const token = await getFeishuTenantAccessToken();
-  const url = new URL(`${FEISHU_API}${path}`);
-  for (const [key, value] of Object.entries(params)) {
-    url.searchParams.set(key, value);
-  }
+  try {
+    const token = await getFeishuTenantAccessToken();
+    const url = new URL(`${FEISHU_API}${path}`);
+    for (const [key, value] of Object.entries(params)) {
+      url.searchParams.set(key, value);
+    }
 
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-    cache: "no-store",
-  });
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
 
-  const body = (await res.json()) as FeishuResponse<T>;
-  if (body.code !== 0 || !body.data) {
-    throw new Error(body.msg ?? `飞书通讯录 API 失败: ${path}`);
+    const body = (await res.json()) as FeishuResponse<T>;
+    if (!res.ok || body.code !== 0 || !body.data) {
+      throw new Error(
+        `HTTP ${res.status}, code ${body.code}: ${body.msg ?? "响应缺少 data"}`,
+      );
+    }
+    return body.data;
+  } catch (error) {
+    if (error instanceof FeishuContactRequestError) throw error;
+    throw new FeishuContactRequestError(path, error);
   }
-  return body.data;
 }
 
 async function paginate<T>(
@@ -103,6 +121,24 @@ async function listAuthorizedDepartmentIds(): Promise<string[]> {
       page_token: data.page_token,
     };
   });
+}
+
+/**
+ * 飞书的“全部成员”授权会在 `/scopes` 返回根部门下的一级部门，
+ * 但不会返回虚拟根 ID `0`。官方接口约束规定：应用身份只有在通讯录范围为
+ * “全部成员”时才能读取根部门，因此直接读取根部门可作为完整授权证明。
+ */
+async function assertRootDepartmentAccessible(): Promise<void> {
+  const data = await feishuGet<{ department?: DepartmentItem }>(
+    "/contact/v3/departments/0",
+    { department_id_type: "open_department_id" },
+  );
+  const root = data.department;
+  if (!root || !(root.open_department_id ?? root.department_id)) {
+    throw new Error(
+      "飞书通讯录授权范围未覆盖根部门，已停止同步以避免误停未授权部门成员",
+    );
+  }
 }
 
 /** 获取企业全部部门 ID（含根部门 0） */
@@ -186,12 +222,10 @@ export type FeishuContactSnapshot = {
 /** 从飞书通讯录拉取已验证授权范围和完整分页的成员快照。 */
 export async function fetchAllFeishuContactUsers(): Promise<FeishuContactSnapshot> {
   const authorizedDepartmentIds = await listAuthorizedDepartmentIds();
-  const includesRootDepartment = authorizedDepartmentIds.includes("0");
-  if (!includesRootDepartment) {
-    throw new Error(
-      "飞书通讯录授权范围未覆盖根部门，已停止同步以避免误停未授权部门成员",
-    );
+  if (!authorizedDepartmentIds.includes("0")) {
+    await assertRootDepartmentAccessible();
   }
+  const includesRootDepartment = true;
   const departmentIds = await listAllDepartmentIds();
   const contacts: FeishuContactUser[] = [];
 

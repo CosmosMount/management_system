@@ -2907,7 +2907,7 @@ async function confirmTermination(
   });
   const reviewer = await prisma.account.findFirstOrThrow({
     where: {
-      person: { isNot: null },
+      person: { is: { status: "ACTIVE" } },
       systemRoles: {
         some: {
           role: { in: ["SUPER_ADMINISTRATOR", "PROJECT_ADMINISTRATOR"] },

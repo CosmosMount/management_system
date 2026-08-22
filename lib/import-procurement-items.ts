@@ -262,17 +262,3 @@ export function downloadProcurementItemsTemplate() {
   XLSX.utils.book_append_sheet(workbook, sheet, "采购明细");
   XLSX.writeFile(workbook, "采购明细导入模板.xlsx");
 }
-
-export function filterProcessingFeeItems(
-  result: ImportProcurementItemsResult,
-): ImportProcurementItemsResult {
-  const nonFeeCount = result.items.filter(
-    (item) => item.itemKind !== "PROCESSING_FEE",
-  ).length;
-  const items = result.items.filter((item) => item.itemKind === "PROCESSING_FEE");
-  const errors = [...result.errors];
-  if (items.length === 0 && nonFeeCount > 0 && errors.length === 0) {
-    errors.push({ row: 0, message: "未找到加工费条目（已跳过非加工费行）" });
-  }
-  return { items, errors };
-}

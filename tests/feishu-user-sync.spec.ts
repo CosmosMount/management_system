@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import {
+  FeishuContactRequestError,
+  fetchAllFeishuContactUsers,
   mergeFeishuContactUsers,
   type FeishuContactUser,
 } from "../lib/feishu-contact";
@@ -8,6 +10,7 @@ import {
   FeishuContactSyncConfirmationRequiredError,
   reconcileFeishuContactUsers,
   reconcileFeishuContactUsersTx,
+  syncFeishuContactUsers,
 } from "../lib/feishu-user-sync";
 import { prisma } from "../lib/prisma";
 import {
@@ -16,6 +19,189 @@ import {
   waitForDirectBlockers,
 } from "./helpers/database-barrier";
 import { resolveFeishuIdentityForUserTx } from "../lib/project-management/identity";
+
+test.describe("飞书通讯录根部门授权", () => {
+  const originalFetch = globalThis.fetch;
+  const originalAppId = process.env.FEISHU_APP_ID;
+  const originalAppSecret = process.env.FEISHU_APP_SECRET;
+  let calls: string[];
+
+  test.beforeEach(() => {
+    process.env.FEISHU_APP_ID = "contact-sync-test-app";
+    process.env.FEISHU_APP_SECRET = "contact-sync-test-secret";
+    calls = [];
+  });
+
+  test.afterEach(() => {
+    globalThis.fetch = originalFetch;
+    if (originalAppId === undefined) delete process.env.FEISHU_APP_ID;
+    else process.env.FEISHU_APP_ID = originalAppId;
+    if (originalAppSecret === undefined) delete process.env.FEISHU_APP_SECRET;
+    else process.env.FEISHU_APP_SECRET = originalAppSecret;
+  });
+
+  test("全部成员范围省略虚拟根 ID 但根部门可读时接受全量快照", async () => {
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.includes("/auth/v3/app_access_token/internal")) {
+        return jsonResponse({ code: 0, tenant_access_token: "test-token" });
+      }
+      const parsed = new URL(url);
+      if (parsed.pathname === "/open-apis/contact/v3/scopes") {
+        return jsonResponse({
+          code: 0,
+          data: {
+            department_ids: ["od-team-a", "od-team-b"],
+            has_more: false,
+          },
+        });
+      }
+      if (parsed.pathname === "/open-apis/contact/v3/departments/0") {
+        return jsonResponse({
+          code: 0,
+          data: { department: { open_department_id: "od-root" } },
+        });
+      }
+      if (
+        parsed.pathname === "/open-apis/contact/v3/departments/0/children"
+      ) {
+        return jsonResponse({
+          code: 0,
+          data: {
+            items: [
+              { open_department_id: "od-team-a" },
+              { open_department_id: "od-team-b" },
+            ],
+            has_more: false,
+          },
+        });
+      }
+      if (
+        parsed.pathname === "/open-apis/contact/v3/users/find_by_department"
+      ) {
+        const departmentId = parsed.searchParams.get("department_id") ?? "";
+        return jsonResponse({
+          code: 0,
+          data: {
+            items: [
+              {
+                open_id: `ou-${departmentId}`,
+                name: `成员-${departmentId}`,
+              },
+            ],
+            has_more: false,
+          },
+        });
+      }
+      throw new Error(`测试捕获到未 mock 的飞书请求: ${url}`);
+    }) as typeof fetch;
+
+    const snapshot = await fetchAllFeishuContactUsers();
+
+    expect(snapshot).toMatchObject({
+      departmentCount: 3,
+      authorizedDepartmentCount: 2,
+      includesRootDepartment: true,
+    });
+    expect(snapshot.contacts).toHaveLength(3);
+    expect(
+      calls.filter(
+        (url) =>
+          new URL(url).pathname === "/open-apis/contact/v3/departments/0",
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("授权范围省略根 ID 且根部门不可读时继续拒绝同步", async () => {
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.includes("/auth/v3/app_access_token/internal")) {
+        return jsonResponse({ code: 0, tenant_access_token: "test-token" });
+      }
+      const parsed = new URL(url);
+      if (parsed.pathname === "/open-apis/contact/v3/scopes") {
+        return jsonResponse({
+          code: 0,
+          data: { department_ids: ["od-team-a"], has_more: false },
+        });
+      }
+      if (parsed.pathname === "/open-apis/contact/v3/departments/0") {
+        return jsonResponse(
+          { code: 99991663, msg: "forbidden" },
+          403,
+        );
+      }
+      throw new Error(`测试捕获到未 mock 的飞书请求: ${url}`);
+    }) as typeof fetch;
+
+    await expect(fetchAllFeishuContactUsers()).rejects.toMatchObject({
+      name: "FeishuContactRequestError",
+      path: "/contact/v3/departments/0",
+    } satisfies Partial<FeishuContactRequestError>);
+    expect(
+      calls.some((url) => url.includes("/departments/0/children")),
+    ).toBe(false);
+    expect(calls.some((url) => url.includes("/users/find_by_department"))).toBe(
+      false,
+    );
+  });
+
+  test("全量范围没有一级部门时不把空部门列表误判为部分授权", async () => {
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.includes("/auth/v3/app_access_token/internal")) {
+        return jsonResponse({ code: 0, tenant_access_token: "test-token" });
+      }
+      const parsed = new URL(url);
+      if (parsed.pathname === "/open-apis/contact/v3/scopes") {
+        return jsonResponse({
+          code: 0,
+          data: { department_ids: [], has_more: false },
+        });
+      }
+      if (parsed.pathname === "/open-apis/contact/v3/departments/0") {
+        return jsonResponse({
+          code: 0,
+          data: { department: { open_department_id: "od-root" } },
+        });
+      }
+      if (
+        parsed.pathname === "/open-apis/contact/v3/departments/0/children"
+      ) {
+        return jsonResponse({
+          code: 0,
+          data: { items: [], has_more: false },
+        });
+      }
+      if (
+        parsed.pathname === "/open-apis/contact/v3/users/find_by_department"
+      ) {
+        return jsonResponse({
+          code: 0,
+          data: { items: [], has_more: false },
+        });
+      }
+      throw new Error(`测试捕获到未 mock 的飞书请求: ${url}`);
+    }) as typeof fetch;
+
+    await expect(syncFeishuContactUsers()).rejects.toThrow(
+      "飞书通讯录未返回任何用户",
+    );
+    expect(
+      calls.some((url) => url.includes("/users/find_by_department")),
+    ).toBe(true);
+  });
+});
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
 
 test.describe.configure({ mode: "serial" });
 
