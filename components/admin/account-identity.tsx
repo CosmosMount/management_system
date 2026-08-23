@@ -24,6 +24,10 @@ export function AdminAccountSelect({
   placeholder = "输入姓名或飞书 ID",
   className,
   disabled = false,
+  invalid = false,
+  ariaDescribedBy,
+  inputId,
+  openOnFocus = true,
 }: {
   purpose: "ALL" | "REIMBURSEMENT";
   value: string | null;
@@ -34,6 +38,10 @@ export function AdminAccountSelect({
   placeholder?: string;
   className?: string;
   disabled?: boolean;
+  invalid?: boolean;
+  ariaDescribedBy?: string;
+  inputId?: string;
+  openOnFocus?: boolean;
 }) {
   const optionCache = useRef(new Map<string, AdminAccountOption>());
   const loadOptions = useCallback(
@@ -76,8 +84,12 @@ export function AdminAccountSelect({
       resolveOptions={resolveOptions}
       excludeIds={excludeIds}
       ariaLabel={ariaLabel}
+      inputId={inputId}
       placeholder={placeholder}
       disabled={disabled}
+      invalid={invalid}
+      ariaDescribedBy={ariaDescribedBy}
+      openOnFocus={openOnFocus}
       clearable
       className={className}
       getOptionLabel={(option) => option.displayName}

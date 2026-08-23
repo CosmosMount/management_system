@@ -26,6 +26,7 @@ import type {
 import type { GlobalTimeMarkerDto } from "@/lib/project-management/types/time-canvas";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { FieldError } from "@/components/ui/field-error";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { isoToShanghaiDateTimeLocal } from "@/lib/project-management/date-time";
@@ -624,6 +625,8 @@ function Inspector({
   }
   const readOnly = isReadOnlyRevisionEntity(state, draft.entityId);
   const fieldError = (key: string) => issues.some((issue) => issue.key === key);
+  const fieldMessages = (key: string) =>
+    issues.filter((issue) => issue.key === key).map((issue) => issue.message);
   return (
     <div className="space-y-3" data-testid="task-composer-inspector">
       <div className="flex items-start justify-between gap-2">
@@ -658,13 +661,14 @@ function Inspector({
       </div>
 
       {draft.kind === "START" && (
-        <PlanField label="计划开始时间" required htmlFor="plannedStartAt">
+        <PlanField label="计划开始时间" required htmlFor="plannedStartAt" error={fieldMessages("plannedStartAt")}>
           <Input
             id="plannedStartAt"
             type="datetime-local"
             value={draft.plannedStartAt}
             readOnly={readOnly}
             aria-invalid={fieldError("plannedStartAt")}
+            aria-describedby={fieldError("plannedStartAt") ? "plannedStartAt-error" : undefined}
             onChange={(event) => onChange({ ...draft, plannedStartAt: event.target.value })}
           />
         </PlanField>
@@ -672,13 +676,14 @@ function Inspector({
 
       {draft.kind === "REVISION" && (
         <>
-          <PlanField label="Revision 时间" required htmlFor="revisionAt">
+          <PlanField label="Revision 时间" required htmlFor="revisionAt" error={fieldMessages("revisionAt")}>
             <Input
               id="revisionAt"
               type="datetime-local"
               value={draft.revision.revisionAt}
               readOnly={readOnly}
               aria-invalid={fieldError("revisionAt")}
+              aria-describedby={fieldError("revisionAt") ? "revisionAt-error" : undefined}
               onChange={(event) =>
                 onChange({
                   ...draft,
@@ -690,13 +695,14 @@ function Inspector({
               }
             />
           </PlanField>
-          <PlanField label="Revision 名称" required htmlFor="revision-reason">
+          <PlanField label="Revision 名称" required htmlFor="revision-reason" error={fieldMessages("revision-reason")}>
             <Input
               id="revision-reason"
               value={draft.revision.reason}
               readOnly={readOnly}
               maxLength={2_000}
               aria-invalid={fieldError("revision-reason")}
+              aria-describedby={fieldError("revision-reason") ? "revision-reason-error" : undefined}
               onChange={(event) =>
                 onChange({
                   ...draft,
@@ -712,6 +718,7 @@ function Inspector({
             label="Revision 详细内容"
             required
             htmlFor="revision-description"
+            error={fieldMessages("revision-description")}
           >
             <Textarea
               id="revision-description"
@@ -720,6 +727,7 @@ function Inspector({
               rows={7}
               maxLength={2_000}
               aria-invalid={fieldError("revision-description")}
+              aria-describedby={fieldError("revision-description") ? "revision-description-error" : undefined}
               onChange={(event) =>
                 onChange({
                   ...draft,
@@ -739,52 +747,58 @@ function Inspector({
 
       {draft.kind === "MILESTONE" && (
         <>
-          <PlanField label="目标" required htmlFor={`goal-${draft.entityId}`}>
+          <PlanField label="目标" required htmlFor={`goal-${draft.entityId}`} error={fieldMessages(`goal-${draft.entityId}`)}>
             <Input
               id={`goal-${draft.entityId}`}
               value={draft.milestone.goal}
               readOnly={readOnly}
               maxLength={2_000}
               aria-invalid={fieldError(`goal-${draft.entityId}`)}
+              aria-describedby={fieldError(`goal-${draft.entityId}`) ? `goal-${draft.entityId}-error` : undefined}
               onChange={(event) => onChange({ ...draft, milestone: { ...draft.milestone, goal: event.target.value } })}
             />
           </PlanField>
-          <PlanField label="预期完成时间" required htmlFor={`expected-${draft.entityId}`}>
+          <PlanField label="预期完成时间" required htmlFor={`expected-${draft.entityId}`} error={fieldMessages(`expected-${draft.entityId}`)}>
             <Input
               id={`expected-${draft.entityId}`}
               type="datetime-local"
               value={draft.milestone.expectedCompletedAt}
               readOnly={readOnly}
               aria-invalid={fieldError(`expected-${draft.entityId}`)}
+              aria-describedby={fieldError(`expected-${draft.entityId}`) ? `expected-${draft.entityId}-error` : undefined}
               onChange={(event) => onChange({ ...draft, milestone: { ...draft.milestone, expectedCompletedAt: event.target.value } })}
             />
           </PlanField>
-          <PlanField label="完成条件" required htmlFor={`criteria-${draft.entityId}`}>
+          <PlanField label="完成条件" required htmlFor={`criteria-${draft.entityId}`} error={fieldMessages(`criteria-${draft.entityId}`)}>
             <Textarea
               id={`criteria-${draft.entityId}`}
               value={draft.milestone.completionCriteria}
               readOnly={readOnly}
               maxLength={2_000}
               aria-invalid={fieldError(`criteria-${draft.entityId}`)}
+              aria-describedby={fieldError(`criteria-${draft.entityId}`) ? `criteria-${draft.entityId}-error` : undefined}
               onChange={(event) => onChange({ ...draft, milestone: { ...draft.milestone, completionCriteria: event.target.value } })}
             />
           </PlanField>
-          <PlanField label="验收要求" required htmlFor={`review-${draft.entityId}`}>
+          <PlanField label="验收要求" required htmlFor={`review-${draft.entityId}`} error={fieldMessages(`review-${draft.entityId}`)}>
             <Textarea
               id={`review-${draft.entityId}`}
               value={draft.milestone.reviewRequirements}
               readOnly={readOnly}
               maxLength={2_000}
               aria-invalid={fieldError(`review-${draft.entityId}`)}
+              aria-describedby={fieldError(`review-${draft.entityId}`) ? `review-${draft.entityId}-error` : undefined}
               onChange={(event) => onChange({ ...draft, milestone: { ...draft.milestone, reviewRequirements: event.target.value } })}
             />
           </PlanField>
-          <PlanField label="业务说明" htmlFor={`business-${draft.entityId}`}>
+          <PlanField label="业务说明" htmlFor={`business-${draft.entityId}`} error={fieldMessages(`business-${draft.entityId}`)}>
             <Textarea
               id={`business-${draft.entityId}`}
               value={draft.milestone.businessDescription}
               readOnly={readOnly}
               maxLength={2_000}
+              aria-invalid={fieldError(`business-${draft.entityId}`)}
+              aria-describedby={fieldError(`business-${draft.entityId}`) ? `business-${draft.entityId}-error` : undefined}
               onChange={(event) => onChange({ ...draft, milestone: { ...draft.milestone, businessDescription: event.target.value } })}
             />
           </PlanField>
@@ -793,48 +807,47 @@ function Inspector({
 
       {draft.kind === "TERMINATION" && (
         <>
-          <PlanField label="Terminal 名称" required htmlFor="termination-name">
+          <PlanField label="Terminal 名称" required htmlFor="termination-name" error={fieldMessages("termination-name")}>
             <Input
               id="termination-name"
               value={draft.termination.name}
               maxLength={200}
               aria-invalid={fieldError("termination-name")}
+              aria-describedby={fieldError("termination-name") ? "termination-name-error" : undefined}
               onChange={(event) => onChange({ ...draft, termination: { ...draft.termination, name: event.target.value } })}
             />
           </PlanField>
-          <PlanField label="计划结束时间" required htmlFor="termination-plannedAt">
+          <PlanField label="计划结束时间" required htmlFor="termination-plannedAt" error={fieldMessages("termination-plannedAt")}>
             <Input
               id="termination-plannedAt"
               type="datetime-local"
               value={draft.termination.plannedAt}
               aria-invalid={fieldError("termination-plannedAt")}
+              aria-describedby={fieldError("termination-plannedAt") ? "termination-plannedAt-error" : undefined}
               onChange={(event) => onChange({ ...draft, termination: { ...draft.termination, plannedAt: event.target.value } })}
             />
           </PlanField>
-          <PlanField label="结束条件" required htmlFor="termination-outcome">
+          <PlanField label="结束条件" required htmlFor="termination-outcome" error={fieldMessages("termination-outcome")}>
             <Textarea
               id="termination-outcome"
               value={draft.termination.plannedOutcomeCriteria}
               maxLength={2_000}
               aria-invalid={fieldError("termination-outcome")}
+              aria-describedby={fieldError("termination-outcome") ? "termination-outcome-error" : undefined}
               onChange={(event) => onChange({ ...draft, termination: { ...draft.termination, plannedOutcomeCriteria: event.target.value } })}
             />
           </PlanField>
-          <PlanField label="业务说明" htmlFor="termination-business">
+          <PlanField label="业务说明" htmlFor="termination-business" error={fieldMessages("termination-business")}>
             <Textarea
               id="termination-business"
               value={draft.termination.businessDescription}
               maxLength={2_000}
+              aria-invalid={fieldError("termination-business")}
+              aria-describedby={fieldError("termination-business") ? "termination-business-error" : undefined}
               onChange={(event) => onChange({ ...draft, termination: { ...draft.termination, businessDescription: event.target.value } })}
             />
           </PlanField>
         </>
-      )}
-
-      {issues.length > 0 && (
-        <ul className="space-y-1 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive" role="alert">
-          {issues.map((issue) => <li key={`${issue.key}:${issue.message}`}>{issue.message}</li>)}
-        </ul>
       )}
 
       {draft.kind === "MILESTONE" && !readOnly && (
@@ -849,13 +862,14 @@ function Inspector({
   );
 }
 
-function PlanField({ label, required = false, htmlFor, children }: { label: string; required?: boolean; htmlFor: string; children: ReactNode }) {
+function PlanField({ label, required = false, htmlFor, error, children }: { label: string; required?: boolean; htmlFor: string; error?: readonly string[]; children: ReactNode }) {
   return (
     <div>
       <label htmlFor={htmlFor} className="mb-1.5 block text-sm font-medium">
         {label}{required && <span className="ml-1 text-destructive">*</span>}
       </label>
       {children}
+      <FieldError id={`${htmlFor}-error`} messages={error} className="mt-1.5" />
     </div>
   );
 }

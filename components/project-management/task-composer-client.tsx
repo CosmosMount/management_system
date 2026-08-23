@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { FieldError } from "@/components/ui/field-error";
 import { TEAM_OPTIONS, TECH_GROUP_OPTIONS } from "@/lib/constants";
 import {
   TASK_COMPOSER_START_ID,
@@ -75,7 +76,8 @@ import {
 import {
   actionErrorMessage,
   composerSubmissionFingerprint,
-  serverFieldValidationIssue,
+  serverFieldValidationIssues,
+  serverFieldValidationIssuesFullyMapped,
   validateComposer,
   type TaskActionError,
 } from "@/components/project-management/task-composer-validation";
@@ -199,10 +201,29 @@ export function TaskComposerClient({
     }),
     [accountId, deploymentEnvironment, mode.kind],
   );
-  const issues = useMemo(
+  const validationIssues = useMemo(
     () => validateComposer(state),
     [state],
   );
+  const [validationRevealed, setValidationRevealed] = useState(false);
+  const [serverValidationIssues, setServerValidationIssues] = useState<
+    ValidationIssue[]
+  >([]);
+  const issues = useMemo(
+    () =>
+      validationRevealed
+        ? deduplicateIssues([...validationIssues, ...serverValidationIssues])
+        : serverValidationIssues,
+    [serverValidationIssues, validationIssues, validationRevealed],
+  );
+  const issueMessages = (key: string) =>
+    issues.filter((issue) => issue.key === key).map((issue) => issue.message);
+  const clearServerIssueKeys = useCallback((keys: readonly string[]) => {
+    const keySet = new Set(keys);
+    setServerValidationIssues((current) =>
+      current.filter((issue) => !keySet.has(issue.key)),
+    );
+  }, []);
   const inspectorDraft = useMemo(
     () => inspectorDraftForEntity(state, state.selectedEntityId),
     [state],
@@ -282,6 +303,7 @@ export function TaskComposerClient({
   ) => {
     endLiveEdit();
     commit((current) => ({ ...current, [key]: value }));
+    clearServerIssueKeys([composerFieldIssueKey(key)]);
   };
 
   const selectEntity = (entityId: string) => {
@@ -322,6 +344,7 @@ export function TaskComposerClient({
       };
       return reconcileComposerPlanState(nextState);
     });
+    setServerValidationIssues([]);
     // Adding a node is a structural history entry. The first field edit starts
     // a separate live-edit segment so undo can restore the blank temporary node
     // without removing it.
@@ -353,6 +376,7 @@ export function TaskComposerClient({
         nodeMeta,
       });
     });
+    setServerValidationIssues([]);
     setCleanDraftCleanupError(false);
   };
 
@@ -366,6 +390,7 @@ export function TaskComposerClient({
     setCleanDraftCleanupError(false);
     setServerError("");
     setStatusMessage("");
+    clearServerIssueKeys(changedInspectorIssueKeys(inspectorDraft, next));
   };
 
   const moveAnchor = (request: TimeCanvasAnchorMoveRequest) => {
@@ -380,6 +405,7 @@ export function TaskComposerClient({
     }
     endLiveEdit();
     commit(() => reconcileComposerPlanState(result.state));
+    clearServerIssueKeys([anchorIssueKey(state, request.anchorId)]);
   };
 
   const constrainAnchorMove = (
@@ -419,16 +445,19 @@ export function TaskComposerClient({
         selectedEntityId: current.termination.id,
       }),
     );
+    clearServerIssueKeys(["termination-plannedAt"]);
   };
 
   const undo = () => {
     undoHistory();
     setCleanDraftCleanupError(false);
+    setServerValidationIssues([]);
   };
 
   const redo = () => {
     redoHistory();
     setCleanDraftCleanupError(false);
+    setServerValidationIssues([]);
   };
 
   const focusIssue = (issue: ValidationIssue) => {
@@ -439,9 +468,10 @@ export function TaskComposerClient({
   };
 
   const runValidation = () => {
-    if (issues[0]) focusIssue(issues[0]);
+    setValidationRevealed(true);
+    if (validationIssues[0]) focusIssue(validationIssues[0]);
     setStatusMessage(
-      issues.length === 0
+      validationIssues.length === 0
         ? isEditingDraft
           ? "内容校验通过，可以保存 Task。"
           : isResubmittingRevision
@@ -449,15 +479,21 @@ export function TaskComposerClient({
             : isRevisionComposer
               ? "候选计划校验通过，可以创建并送审。"
               : "计划校验通过，可以创建 Task 草稿。"
-        : `发现 ${issues.length} 个问题。`,
+        : `发现 ${validationIssues.length} 个问题。`,
     );
-    return issues.length === 0;
+    return validationIssues.length === 0;
   };
 
   const applyActionError = (error: TaskActionError) => {
-    setServerError(actionErrorMessage(error));
-    const issue = serverFieldValidationIssue(error.fieldErrors, state);
-    if (issue) focusIssue(issue);
+    const nextIssues = serverFieldValidationIssues(error.fieldErrors, state);
+    setServerError(
+      serverFieldValidationIssuesFullyMapped(error.fieldErrors, nextIssues)
+        ? ""
+        : actionErrorMessage(error),
+    );
+    setServerValidationIssues(nextIssues);
+    setValidationRevealed(true);
+    if (nextIssues[0]) focusIssue(nextIssues[0]);
   };
 
   const clearRevertedLocalDraft = useCallback(() => {
@@ -599,6 +635,7 @@ export function TaskComposerClient({
   const changeTeam = (team: string) => {
     endLiveEdit();
     commit((current) => ({ ...current, team }));
+    clearServerIssueKeys(["team"]);
     setOptionError("");
   };
 
@@ -821,7 +858,7 @@ export function TaskComposerClient({
           className="min-w-0 space-y-5 rounded-xl border border-border bg-card p-4 sm:p-5 [&>section]:border-0 [&>section]:bg-transparent [&>section]:p-0"
           aria-label="Task 基本信息"
         >
-          <ComposerSection title="基本信息" issueCount={countIssues(issues, ["title", "team", "techGroup"])}>
+          <ComposerSection title="基本信息" issueCount={countIssues(issues, ["title", "description", "priority"])}>
             <Field label="Task 名称" required htmlFor="title">
               <Input
                 id="title"
@@ -829,8 +866,10 @@ export function TaskComposerClient({
                 maxLength={200}
                 disabled={isRevisionComposer}
                 aria-invalid={issues.some((issue) => issue.key === "title")}
+                aria-describedby={issueMessages("title").length ? "title-error" : undefined}
                 onChange={(event) => updateField("title", event.target.value)}
               />
+              <FieldError id="title-error" messages={issueMessages("title")} className="mt-1.5" />
             </Field>
             <Field label="描述" htmlFor="description">
               <Textarea
@@ -839,8 +878,11 @@ export function TaskComposerClient({
                 value={state.description}
                 maxLength={8_000}
                 disabled={isRevisionComposer}
+                aria-invalid={issues.some((issue) => issue.key === "description")}
+                aria-describedby={issueMessages("description").length ? "description-error" : undefined}
                 onChange={(event) => updateField("description", event.target.value)}
               />
+              <FieldError id="description-error" messages={issueMessages("description")} className="mt-1.5" />
             </Field>
             <Field label="优先级" htmlFor="priority">
               <select
@@ -848,6 +890,8 @@ export function TaskComposerClient({
                 className={selectClassName}
                 value={state.priority}
                 disabled={isRevisionComposer}
+                aria-invalid={issues.some((issue) => issue.key === "priority")}
+                aria-describedby={issueMessages("priority").length ? "priority-error" : undefined}
                 onChange={(event) =>
                   updateField("priority", event.target.value as TaskPriorityValue)
                 }
@@ -858,10 +902,14 @@ export function TaskComposerClient({
                   </option>
                 ))}
               </select>
+              <FieldError id="priority-error" messages={issueMessages("priority")} className="mt-1.5" />
             </Field>
           </ComposerSection>
 
-          <ComposerSection title="组织与分类">
+          <ComposerSection
+            title="组织与分类"
+            issueCount={countIssues(issues, ["team", "techGroup", "related-task", "task-project"])}
+          >
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
               <Field label="车组" required htmlFor="team">
                 <select
@@ -869,6 +917,8 @@ export function TaskComposerClient({
                   className={selectClassName}
                   value={state.team}
                   disabled={isRevisionComposer}
+                  aria-invalid={issues.some((issue) => issue.key === "team")}
+                  aria-describedby={issueMessages("team").length ? "team-error" : undefined}
                   onChange={(event) => changeTeam(event.target.value)}
                 >
                   {TEAM_OPTIONS.map((team) => (
@@ -877,6 +927,7 @@ export function TaskComposerClient({
                     </option>
                   ))}
                 </select>
+                <FieldError id="team-error" messages={issueMessages("team")} className="mt-1.5" />
               </Field>
               <Field label="技术组" required htmlFor="techGroup">
                 <select
@@ -884,6 +935,8 @@ export function TaskComposerClient({
                   className={selectClassName}
                   value={state.techGroup}
                   disabled={isRevisionComposer}
+                  aria-invalid={issues.some((issue) => issue.key === "techGroup")}
+                  aria-describedby={issueMessages("techGroup").length ? "tech-group-error" : undefined}
                   onChange={(event) => updateField("techGroup", event.target.value)}
                 >
                   {TECH_GROUP_OPTIONS.map((group) => (
@@ -892,6 +945,7 @@ export function TaskComposerClient({
                     </option>
                   ))}
                 </select>
+                <FieldError id="tech-group-error" messages={issueMessages("techGroup")} className="mt-1.5" />
               </Field>
             </div>
             <Field label="关联 Task" htmlFor="related-task">
@@ -905,10 +959,22 @@ export function TaskComposerClient({
                 placeholder="按标题、描述或拼音首字母搜索"
                 clearable
                 disabled={isRevisionComposer}
+                invalid={issues.some((issue) => issue.key === "related-task")}
+                ariaDescribedBy={issueMessages("related-task").length ? "related-task-error" : undefined}
               />
+              <FieldError id="related-task-error" messages={issueMessages("related-task")} className="mt-1.5" />
             </Field>
             <Field label="所属 Project" htmlFor="task-project">
-              <ProjectSelect inputId="task-project" value={state.projectId ?? null} onValueChange={(projectId) => updateField("projectId", projectId)} initialOptions={initialProjects} disabled={isRevisionComposer} />
+              <ProjectSelect
+                inputId="task-project"
+                value={state.projectId ?? null}
+                onValueChange={(projectId) => updateField("projectId", projectId)}
+                initialOptions={initialProjects}
+                disabled={isRevisionComposer}
+                invalid={issues.some((issue) => issue.key === "task-project")}
+                ariaDescribedBy={issueMessages("task-project").length ? "task-project-error" : undefined}
+              />
+              <FieldError id="task-project-error" messages={issueMessages("task-project")} className="mt-1.5" />
             </Field>
           </ComposerSection>
 
@@ -927,6 +993,7 @@ export function TaskComposerClient({
                       }
                 }
                 editable={canManageMembers}
+                error={issueMessages("members")}
                 onChange={(members) => updateField("members", members)}
                 onPersonResolved={(person) =>
                   setPeople((current) => mergeOptions(current, [person]))
@@ -1117,7 +1184,7 @@ function Field({
 }
 
 const selectClassName =
-  "h-8 w-full min-w-0 rounded-lg border border-input bg-background px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50 disabled:opacity-50";
+  "h-8 w-full min-w-0 rounded-lg border border-input bg-background px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50 disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40";
 
 function formatSavedAt(value: string) {
   const parsed = new Date(value);
@@ -1156,4 +1223,80 @@ function mergeOptions<T extends { id: string }>(current: T[], incoming: T[]) {
 
 function countIssues(issues: ValidationIssue[], keys: string[]) {
   return issues.filter((issue) => keys.includes(issue.key)).length;
+}
+
+function deduplicateIssues(issues: ValidationIssue[]) {
+  const seen = new Set<string>();
+  return issues.filter((issue) => {
+    const identity = `${issue.key}:${issue.entityId ?? ""}:${issue.message}`;
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+}
+
+function composerFieldIssueKey(key: keyof TaskComposerSeed) {
+  if (key === "relatedTaskId") return "related-task";
+  if (key === "projectId") return "task-project";
+  return key;
+}
+
+function changedInspectorIssueKeys(
+  current: TaskComposerInspectorDraft | null,
+  next: TaskComposerInspectorDraft,
+) {
+  if (!current || current.kind !== next.kind || current.entityId !== next.entityId) {
+    return [];
+  }
+  if (current.kind === "START" && next.kind === "START") {
+    return current.plannedStartAt === next.plannedStartAt ? [] : ["plannedStartAt"];
+  }
+  if (current.kind === "REVISION" && next.kind === "REVISION") {
+    return [
+      current.revision.revisionAt !== next.revision.revisionAt ? "revisionAt" : null,
+      current.revision.reason !== next.revision.reason ? "revision-reason" : null,
+      current.revision.description !== next.revision.description
+        ? "revision-description"
+        : null,
+    ].filter((key): key is string => key !== null);
+  }
+  if (current.kind === "MILESTONE" && next.kind === "MILESTONE") {
+    return [
+      current.milestone.goal !== next.milestone.goal ? `goal-${next.entityId}` : null,
+      current.milestone.expectedCompletedAt !== next.milestone.expectedCompletedAt
+        ? `expected-${next.entityId}`
+        : null,
+      current.milestone.completionCriteria !== next.milestone.completionCriteria
+        ? `criteria-${next.entityId}`
+        : null,
+      current.milestone.reviewRequirements !== next.milestone.reviewRequirements
+        ? `review-${next.entityId}`
+        : null,
+      current.milestone.businessDescription !== next.milestone.businessDescription
+        ? `business-${next.entityId}`
+        : null,
+    ].filter((key): key is string => key !== null);
+  }
+  if (current.kind === "TERMINATION" && next.kind === "TERMINATION") {
+    return [
+      current.termination.name !== next.termination.name ? "termination-name" : null,
+      current.termination.plannedAt !== next.termination.plannedAt
+        ? "termination-plannedAt"
+        : null,
+      current.termination.plannedOutcomeCriteria !== next.termination.plannedOutcomeCriteria
+        ? "termination-outcome"
+        : null,
+      current.termination.businessDescription !== next.termination.businessDescription
+        ? "termination-business"
+        : null,
+    ].filter((key): key is string => key !== null);
+  }
+  return [];
+}
+
+function anchorIssueKey(state: TaskComposerSeed, anchorId: string) {
+  if (anchorId === TASK_COMPOSER_START_ID) return "plannedStartAt";
+  if (anchorId === state.termination.id) return "termination-plannedAt";
+  if (anchorId === state.revision?.markerId) return "revisionAt";
+  return `expected-${anchorId}`;
 }

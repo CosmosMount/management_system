@@ -104,7 +104,18 @@ test.describe("Project 立项与生命周期", () => {
     await page.getByRole("link", { name: "提交立项" }).click();
     await expect(page).toHaveURL("/progress/projects/new");
     await expect(page.getByRole("heading", { name: "提交 Project 立项" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "提交立项" })).toBeVisible();
+    const submitProject = page.getByRole("button", { name: "提交立项" });
+    const projectNameInput = page.getByLabel("Project 名称");
+    const projectDescriptionInput = page.getByLabel("Project 内容");
+    await expect(projectNameInput).not.toHaveAttribute("aria-invalid", "true");
+    await submitProject.click();
+    await expect(projectNameInput).toHaveAttribute("aria-invalid", "true");
+    await expect(projectNameInput).toBeFocused();
+    await expect(page.getByRole("alert").filter({ hasText: "请输入 Project 名称" })).toBeVisible();
+    await projectNameInput.fill("响应式 Project 草稿");
+    await expect(projectNameInput).not.toHaveAttribute("aria-invalid", "true");
+    await projectDescriptionInput.fill("验证 Project 表单字段错误展示");
+    await expect(projectDescriptionInput).not.toHaveAttribute("aria-invalid", "true");
     const taskSearch = page.getByRole("combobox", { name: "搜索可加入的 Task" });
     await taskSearch.fill(selectableTask.title);
     await page.getByRole("option", { name: new RegExp(selectableTask.title.slice(0, 30)) }).click();
@@ -114,6 +125,38 @@ test.describe("Project 立项与生命周期", () => {
     await expect(selectedTasks.getByRole("button", { name: `移除${selectableTask.title}` })).toBeVisible();
     await expectHealthyPage(page);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  });
+
+  test("立项驳回空意见在桌面与移动端标红并聚焦", async ({
+    context,
+    page,
+    baseURL,
+  }, testInfo) => {
+    const requester = await actor(`Project 驳回校验申请人 ${testInfo.project.name}`);
+    const adminName = `Project 驳回校验管理员 ${testInfo.project.name}`;
+    const admin = await actor(adminName, "PROJECT_ADMINISTRATOR");
+    const created = await createProject(requester, {
+      name: `Project 驳回字段校验 ${randomUUID()}`,
+      description: "验证驳回意见的字段错误",
+      avatarPath: null,
+      members: [{ personId: requester.personId, role: "OWNER" }],
+      requestedTaskIds: [],
+      idempotencyKey: randomUUID(),
+    });
+    await loginAsTestUser(context, baseURL, {
+      openId: admin.openId,
+      name: adminName,
+    });
+    await page.goto(`/progress/projects/${created.projectId}`);
+
+    const comment = page.getByLabel("立项审批意见");
+    await expect(comment).not.toHaveAttribute("aria-invalid", "true");
+    await page.getByRole("button", { name: "驳回", exact: true }).click();
+    await expect(comment).toHaveAttribute("aria-invalid", "true");
+    await expect(comment).toBeFocused();
+    await expect(page.getByRole("alert").filter({ hasText: "驳回立项时请填写审批意见" })).toBeVisible();
+    await comment.fill("已补充驳回意见");
+    await expect(comment).not.toHaveAttribute("aria-invalid", "true");
   });
 
   test("Project 详情使用概览、全宽时间线和三列协作区", async ({

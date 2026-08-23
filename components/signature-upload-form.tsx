@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { uploadUserSignature } from "@/app/actions/userSignature";
 import { ImagePreview } from "@/components/image-preview";
 import { Button } from "@/components/ui/button";
+import { FieldError } from "@/components/ui/field-error";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
@@ -17,11 +18,19 @@ export function SignatureUploadForm({ signaturePath }: Props) {
   const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
   const [loading, setLoading] = useState(false);
+  const [fileError, setFileError] = useState("");
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = formRef.current;
     if (!form) return;
+
+    const input = form.elements.namedItem("signature") as HTMLInputElement | null;
+    if (!input?.files?.length) {
+      setFileError(signaturePath ? "请选择新的签名图片" : "请选择签名图片");
+      input?.focus();
+      return;
+    }
 
     const formData = new FormData(form);
     setLoading(true);
@@ -31,14 +40,20 @@ export function SignatureUploadForm({ signaturePath }: Props) {
       form.reset();
       router.refresh();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "上传失败");
+      const message = err instanceof Error ? err.message : "上传失败";
+      if (message.includes("签名") || message.includes("文件")) {
+        setFileError(message);
+        requestAnimationFrame(() => input?.focus());
+      } else {
+        toast.error(message);
+      }
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <form ref={formRef} onSubmit={handleSubmit} className="space-y-4">
+    <form ref={formRef} onSubmit={handleSubmit} className="space-y-4" noValidate>
       {signaturePath ? (
         <div className="rounded-lg border border-border bg-muted/30 p-4">
           <p className="mb-2 text-sm text-muted-foreground">当前签名</p>
@@ -62,8 +77,12 @@ export function SignatureUploadForm({ signaturePath }: Props) {
           name="signature"
           type="file"
           accept="image/png,image/jpeg"
-          required={!signaturePath}
+          required
+          aria-invalid={Boolean(fileError)}
+          aria-describedby={fileError ? "signature-error" : undefined}
+          onChange={() => setFileError("")}
         />
+        <FieldError id="signature-error" messages={fileError} />
       </div>
 
       <Button type="submit" disabled={loading}>

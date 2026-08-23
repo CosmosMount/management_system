@@ -6,6 +6,7 @@ import { X } from "lucide-react";
 import { toast } from "sonner";
 import { ImagePreview } from "@/components/image-preview";
 import { Button } from "@/components/ui/button";
+import { FieldError } from "@/components/ui/field-error";
 import { Input } from "@/components/ui/input";
 import type {
   FeedbackImageFile,
@@ -26,7 +27,7 @@ const feedbackImageTypeSet = new Set<string>(FEEDBACK_IMAGE_ALLOWED_TYPES);
 
 export function handleFeedbackPaste(
   event: ClipboardEvent,
-  { files, setFiles }: FeedbackImageFiles,
+  { files, setFiles, onError }: FeedbackImageFiles & { onError?: (message: string) => void },
 ) {
   const items = Array.from(event.clipboardData.items);
   if (
@@ -34,6 +35,7 @@ export function handleFeedbackPaste(
   ) {
     return;
   }
+  onError?.("");
   const images = items
     .filter((item) => item.kind === "file")
     .map((item) => item.getAsFile())
@@ -41,12 +43,12 @@ export function handleFeedbackPaste(
   const accepted = acceptedFeedbackImages(images, false);
   if (accepted.length === 0) {
     if (!event.clipboardData.getData("text/plain")) {
-      acceptedFeedbackImages(images);
+      acceptedFeedbackImages(images, true, onError);
     }
     return;
   }
   event.preventDefault();
-  addAcceptedFeedbackImages(files, accepted, setFiles);
+  addAcceptedFeedbackImages(files, accepted, setFiles, onError);
 }
 
 export function buildFeedbackFormData(
@@ -65,16 +67,16 @@ export function revokeFeedbackImages(images: FeedbackImageFile[]) {
   for (const image of images) URL.revokeObjectURL(image.previewUrl);
 }
 
-function acceptedFeedbackImages(files: File[], showErrors = true): File[] {
+function acceptedFeedbackImages(files: File[], showErrors = true, onError?: (message: string) => void): File[] {
   const accepted: File[] = [];
   for (const file of files) {
     if (!feedbackImageTypeSet.has(file.type)) {
-      if (showErrors) toast.error("反馈图片仅支持 PNG/JPG/WebP");
+      if (showErrors) reportImageError("反馈图片仅支持 PNG/JPG/WebP", onError);
       continue;
     }
     if (file.size > MAX_FEEDBACK_IMAGE_SIZE) {
       if (showErrors) {
-        toast.error(`单张反馈图片不能超过 ${FEEDBACK_IMAGE_SIZE_LABEL}`);
+        reportImageError(`单张反馈图片不能超过 ${FEEDBACK_IMAGE_SIZE_LABEL}`, onError);
       }
       continue;
     }
@@ -87,21 +89,22 @@ function addAcceptedFeedbackImages(
   currentFiles: FeedbackImageFile[],
   accepted: File[],
   setFiles: (files: FeedbackImageFile[]) => void,
+  onError?: (message: string) => void,
 ) {
   if (accepted.length === 0) return;
   const remaining = MAX_FEEDBACK_IMAGE_COUNT - currentFiles.length;
   if (remaining <= 0) {
-    toast.error(`最多上传 ${MAX_FEEDBACK_IMAGE_COUNT} 张图片`);
+    reportImageError(`最多上传 ${MAX_FEEDBACK_IMAGE_COUNT} 张图片`, onError);
     return;
   }
   if (accepted.length > remaining) {
-    toast.error(`最多上传 ${MAX_FEEDBACK_IMAGE_COUNT} 张图片`);
+    reportImageError(`最多上传 ${MAX_FEEDBACK_IMAGE_COUNT} 张图片`, onError);
   }
   const totalSize = [...currentFiles.map((image) => image.file), ...accepted]
     .slice(0, currentFiles.length + remaining)
     .reduce((sum, file) => sum + file.size, 0);
   if (totalSize > MAX_FEEDBACK_IMAGE_TOTAL_SIZE) {
-    toast.error(`反馈图片总大小不能超过 ${FEEDBACK_IMAGE_TOTAL_SIZE_LABEL}`);
+    reportImageError(`反馈图片总大小不能超过 ${FEEDBACK_IMAGE_TOTAL_SIZE_LABEL}`, onError);
     return;
   }
   setFiles([
@@ -123,17 +126,24 @@ export function FeedbackImageInput({
   setFiles,
   disabled,
   compact = false,
-}: FeedbackImageFiles & { disabled: boolean; compact?: boolean }) {
+  error,
+  onError,
+  errorId = "feedback-images-error",
+  invalid = false,
+  ariaDescribedBy,
+}: FeedbackImageFiles & { disabled: boolean; compact?: boolean; error?: string; onError?: (message: string) => void; errorId?: string; invalid?: boolean; ariaDescribedBy?: string }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
     if (files.length === 0 && inputRef.current) inputRef.current.value = "";
   }, [files.length]);
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    onError?.("");
     addAcceptedFeedbackImages(
       files,
-      acceptedFeedbackImages(Array.from(event.target.files ?? [])),
+      acceptedFeedbackImages(Array.from(event.target.files ?? []), true, onError),
       setFiles,
+      onError,
     );
     event.target.value = "";
   }
@@ -141,6 +151,7 @@ export function FeedbackImageInput({
   function removeFile(index: number) {
     const removed = files[index];
     if (removed) URL.revokeObjectURL(removed.previewUrl);
+    onError?.("");
     setFiles(files.filter((_, fileIndex) => fileIndex !== index));
   }
 
@@ -190,8 +201,13 @@ export function FeedbackImageInput({
         multiple
         disabled={disabled}
         className={cn(compact ? "max-w-full" : "max-w-md")}
+        aria-invalid={Boolean(error || invalid)}
+        aria-describedby={
+          [error ? errorId : null, ariaDescribedBy].filter(Boolean).join(" ") || undefined
+        }
         onChange={handleFileChange}
       />
+      <FieldError id={errorId} messages={error} />
       <p className="text-xs text-muted-foreground">
         支持 PNG/JPG/WebP，可选择文件或在输入框中粘贴截图；最多{" "}
         {MAX_FEEDBACK_IMAGE_COUNT} 张，单张不超过 {FEEDBACK_IMAGE_SIZE_LABEL}，
@@ -199,4 +215,9 @@ export function FeedbackImageInput({
       </p>
     </div>
   );
+}
+
+function reportImageError(message: string, onError?: (message: string) => void) {
+  if (onError) onError(message);
+  else toast.error(message);
 }

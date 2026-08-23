@@ -8,7 +8,7 @@ import type { ProjectOption } from "@/lib/project-management/queries/project-que
 
 const EMPTY_PROJECT_OPTIONS: ProjectOption[] = [];
 
-export function ProjectSelect({ value, onValueChange, initialOptions = EMPTY_PROJECT_OPTIONS, disabled = false, inputId, ariaLabel = "选择所属 Project", placeholder = "搜索 Project" }: { value: string | null; onValueChange: (value: string | null) => void; initialOptions?: ProjectOption[]; disabled?: boolean; inputId?: string; ariaLabel?: string; placeholder?: string }) {
+export function ProjectSelect({ value, onValueChange, initialOptions = EMPTY_PROJECT_OPTIONS, disabled = false, inputId, ariaLabel = "选择所属 Project", placeholder = "搜索 Project", invalid = false, ariaDescribedBy }: { value: string | null; onValueChange: (value: string | null) => void; initialOptions?: ProjectOption[]; disabled?: boolean; inputId?: string; ariaLabel?: string; placeholder?: string; invalid?: boolean; ariaDescribedBy?: string }) {
   const optionCache = useRef(new Map(initialOptions.map((option) => [option.id, option])));
   useEffect(() => { for (const option of initialOptions) optionCache.current.set(option.id, option); }, [initialOptions]);
   const initialKey = useMemo(() => initialOptions.map((option) => option.id).sort().join(","), [initialOptions]);
@@ -24,7 +24,7 @@ export function ProjectSelect({ value, onValueChange, initialOptions = EMPTY_PRO
     for (const option of result.data) optionCache.current.set(option.id, option);
     return result.data;
   }, []);
-  return <AsyncCombobox scopeKey={`active-projects:${initialKey}`} initialOptions={initialOptions} loadOptions={loadOptions} resolveOptions={resolveOptions} value={value} onValueChange={onValueChange} clearable disabled={disabled} inputId={inputId} ariaLabel={ariaLabel} placeholder={placeholder} nullOptionLabel="无所属 Project" getOptionLabel={(option) => option.name} getOptionDescription={() => "进行中"} renderOption={(option) => <span className="flex min-w-0 items-center gap-2"><ProjectAvatar name={option.name} avatarPath={option.avatarPath} className="size-7" /><span className="truncate">{option.name}</span></span>} />;
+  return <AsyncCombobox scopeKey={`active-projects:${initialKey}`} initialOptions={initialOptions} loadOptions={loadOptions} resolveOptions={resolveOptions} value={value} onValueChange={onValueChange} clearable disabled={disabled} inputId={inputId} ariaLabel={ariaLabel} placeholder={placeholder} invalid={invalid} ariaDescribedBy={ariaDescribedBy} nullOptionLabel="无所属 Project" getOptionLabel={(option) => option.name} getOptionDescription={() => "进行中"} renderOption={(option) => <span className="flex min-w-0 items-center gap-2"><ProjectAvatar name={option.name} avatarPath={option.avatarPath} className="size-7" /><span className="truncate">{option.name}</span></span>} />;
 }
 
 export function ProjectMultiSelect({ value, onValueChange, initialOptions = EMPTY_PROJECT_OPTIONS, disabled = false, ariaLabel = "筛选 Project", placeholder = "按名称或拼音首字母搜索" }: { value: string[]; onValueChange: (value: string[]) => void; initialOptions?: ProjectOption[]; disabled?: boolean; ariaLabel?: string; placeholder?: string }) {

@@ -576,8 +576,16 @@ test("采购管理审核可终止驳回", async ({ page, context, baseURL }) => 
   await expect(page.getByText("PW全功能-管理驳回物料")).toBeVisible();
   await page.getByRole("button", { name: "驳回", exact: true }).click();
   await page.getByRole("button", { name: "终止采购" }).click();
-  await page.getByPlaceholder("请填写具体原因，将通知相关人员").fill(reason);
-  await page.getByRole("button", { name: "确认终止" }).click();
+  const rejectReason = page.getByPlaceholder("请填写具体原因，将通知相关人员");
+  const confirmRejection = page.getByRole("button", { name: "确认终止" });
+  await expect(rejectReason).not.toHaveAttribute("aria-invalid", "true");
+  await confirmRejection.click();
+  await expect(rejectReason).toHaveAttribute("aria-invalid", "true");
+  await expect(rejectReason).toBeFocused();
+  await expect(page.getByRole("alert").filter({ hasText: "请填写驳回说明" })).toBeVisible();
+  await rejectReason.fill(reason);
+  await expect(rejectReason).not.toHaveAttribute("aria-invalid", "true");
+  await confirmRejection.click();
 
   await expect
     .poll(async () => {
@@ -643,13 +651,21 @@ test("采购报销链路可上传凭证、财务截图并由申请人确认完�
 
   const applicantDialog = page.getByRole("dialog", { name: "上传报销凭证" });
   await expect(applicantDialog).toBeVisible();
-  await applicantDialog
-    .locator('input[name="invoices"]')
-    .setInputFiles([pdfUpload("invoice.pdf")]);
-  await applicantDialog
-    .locator(`input[name="photo-${item.id}"]`)
-    .setInputFiles([pngUpload("photo.png")]);
-  await applicantDialog.getByRole("button", { name: "提交给报销员" }).click();
+  const invoiceInput = applicantDialog.locator('input[name="invoices"]');
+  const photoInput = applicantDialog.locator(`input[name="photo-${item.id}"]`);
+  const submitApplicantDocs = applicantDialog.getByRole("button", { name: "提交给报销员" });
+  await expect(invoiceInput).not.toHaveAttribute("aria-invalid", "true");
+  await expect(photoInput).not.toHaveAttribute("aria-invalid", "true");
+  await submitApplicantDocs.click();
+  await expect(invoiceInput).toHaveAttribute("aria-invalid", "true");
+  await expect(photoInput).toHaveAttribute("aria-invalid", "true");
+  await expect(photoInput).toBeFocused();
+  await expect(applicantDialog.getByRole("alert").filter({ hasText: "请至少上传一张发票" })).toBeVisible();
+  await invoiceInput.setInputFiles([pdfUpload("invoice.pdf")]);
+  await photoInput.setInputFiles([pngUpload("photo.png")]);
+  await expect(invoiceInput).not.toHaveAttribute("aria-invalid", "true");
+  await expect(photoInput).not.toHaveAttribute("aria-invalid", "true");
+  await submitApplicantDocs.click();
 
   await expect
     .poll(async () => {
@@ -694,10 +710,16 @@ test("采购报销链路可上传凭证、财务截图并由申请人确认完�
     await adminPage.getByRole("button", { name: "上传截图" }).click();
     const financeDialog = adminPage.getByRole("dialog", { name: "报销截图" });
     await expect(financeDialog).toBeVisible();
-    await financeDialog
-      .locator('input[name="screenshot"]')
-      .setInputFiles([pngUpload("screenshot.png")]);
-    await financeDialog.getByRole("button", { name: "提交" }).click();
+    const screenshotInput = financeDialog.locator('input[name="screenshot"]');
+    const submitScreenshot = financeDialog.getByRole("button", { name: "提交" });
+    await expect(screenshotInput).not.toHaveAttribute("aria-invalid", "true");
+    await submitScreenshot.click();
+    await expect(screenshotInput).toHaveAttribute("aria-invalid", "true");
+    await expect(screenshotInput).toBeFocused();
+    await expect(financeDialog.getByRole("alert").filter({ hasText: "请选择报销截图或文件" })).toBeVisible();
+    await screenshotInput.setInputFiles([pngUpload("screenshot.png")]);
+    await expect(screenshotInput).not.toHaveAttribute("aria-invalid", "true");
+    await submitScreenshot.click();
   } finally {
     await adminContext.close();
   }
@@ -760,7 +782,14 @@ test("反馈可由普通用户创建回复，并由管理员关闭", async ({
   const reply = `PW全功能-反馈补充-${Date.now()}`;
 
   await page.goto("/feedback?new=1", { waitUntil: "networkidle" });
-  await page.getByPlaceholder("请输入反馈内容").fill(body);
+  const feedbackBody = page.getByPlaceholder("请输入反馈内容");
+  await expect(feedbackBody).not.toHaveAttribute("aria-invalid", "true");
+  await page.getByRole("button", { name: "提交反馈" }).click();
+  await expect(feedbackBody).toHaveAttribute("aria-invalid", "true");
+  await expect(feedbackBody).toBeFocused();
+  await expect(page.getByRole("alert").filter({ hasText: "请填写反馈内容" })).toBeVisible();
+  await feedbackBody.fill(body);
+  await expect(feedbackBody).not.toHaveAttribute("aria-invalid", "true");
   await page.getByRole("button", { name: "提交反馈" }).click();
 
   await expect
@@ -778,7 +807,19 @@ test("反馈可由普通用户创建回复，并由管理员关闭", async ({
   });
   const feedbackId = createdFeedback.id;
 
-  await page.getByPlaceholder("继续补充情况，或回复处理结果").fill(reply);
+  const replyBody = page.getByPlaceholder("继续补充情况，或回复处理结果");
+  const replyImageInput = replyBody.locator("xpath=ancestor::form").locator('input[type="file"]');
+  await expect(replyBody).not.toHaveAttribute("aria-invalid", "true");
+  await page.getByRole("button", { name: "发送回复" }).click();
+  await expect(replyBody).toHaveAttribute("aria-invalid", "true");
+  await expect(replyImageInput).toHaveAttribute("aria-invalid", "true");
+  await expect(replyBody).toBeFocused();
+  await expect(
+    page.getByRole("alert").filter({ hasText: "请填写回复或上传图片" }),
+  ).toHaveCount(1);
+  await replyBody.fill(reply);
+  await expect(replyBody).not.toHaveAttribute("aria-invalid", "true");
+  await expect(replyImageInput).not.toHaveAttribute("aria-invalid", "true");
   await page.getByRole("button", { name: "发送回复" }).click();
 
   await expect
@@ -866,6 +907,7 @@ test("反馈图片上传限制会拦截非法类型、超大文件和超数量�
     },
   ]);
   await expect(page.getByText("反馈图片仅支持 PNG/JPG/WebP")).toBeVisible();
+  await expect(imageInput).toHaveAttribute("aria-invalid", "true");
 
   await imageInput.setInputFiles([
     {

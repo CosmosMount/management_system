@@ -15,9 +15,17 @@ test("采购表单字段错误与标签保持可访问关联", async ({
   await ensureNormalUserSignature(auth);
   await loginAsNormalUser(context, baseURL, auth);
   await page.goto("/procurement/new");
+  const team = page.getByLabel("车组");
+  const itemName = page.getByLabel("物品名称");
+  await expect(team).not.toHaveAttribute("aria-invalid", "true");
+  await expect(itemName).not.toHaveAttribute("aria-invalid", "true");
+  const neutralBorderColor = await itemName.evaluate(
+    (element) => getComputedStyle(element).borderColor,
+  );
   await page.getByRole("button", { name: "提交申请" }).click();
 
-  await expect(page.getByLabel("车组")).toHaveAttribute("aria-invalid", "true");
+  await expect(team).toHaveAttribute("aria-invalid", "true");
+  await expect(team).toBeFocused();
   await expect(page.getByLabel("技术组")).toHaveAttribute(
     "aria-invalid",
     "true",
@@ -28,6 +36,41 @@ test("采购表单字段错误与标签保持可访问关联", async ({
   );
   await expect(page.getByLabel("规格")).toHaveAttribute("aria-invalid", "true");
   await expect(page.getByRole("alert").filter({ hasText: "请输入物品名称" })).toBeVisible();
+  await expect
+    .poll(() => itemName.evaluate((element) => getComputedStyle(element).borderColor))
+    .not.toBe(neutralBorderColor);
+  await itemName.fill("已修正的物品名称");
+  await expect(itemName).not.toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByRole("alert").filter({ hasText: "请输入物品名称" })).toHaveCount(0);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
+    ),
+  ).toBe(true);
+});
+
+test("电子签名空提交会标记并聚焦文件输入", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  const auth = await resolveNormalAuthMaterial();
+  await ensureNormalUserSignature(auth);
+  await loginAsNormalUser(context, baseURL, auth);
+  await page.goto("/profile");
+
+  const signatureInput = page.getByLabel("上传新签名（PNG/JPG，≤2MB）");
+  await expect(signatureInput).not.toHaveAttribute("aria-invalid", "true");
+  await page.getByRole("button", { name: "更新签名" }).click();
+  await expect(signatureInput).toHaveAttribute("aria-invalid", "true");
+  await expect(signatureInput).toBeFocused();
+  await expect(page.getByRole("alert").filter({ hasText: "请选择新的签名图片" })).toBeVisible();
+  await signatureInput.setInputFiles({
+    name: "signature.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("not-uploaded-during-validation-test"),
+  });
+  await expect(signatureInput).not.toHaveAttribute("aria-invalid", "true");
 });
 
 async function ensureNormalUserSignature(user: {

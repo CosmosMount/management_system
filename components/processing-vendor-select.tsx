@@ -1,10 +1,11 @@
 "use client";
 
-import { useId, useState, useTransition } from "react";
+import { useId, useState, useTransition, type Ref } from "react";
 import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import type { ProcessingVendorOption } from "@/components/use-processing-vendors";
 import { Button } from "@/components/ui/button";
+import { FieldError } from "@/components/ui/field-error";
 import {
   Dialog,
   DialogContent,
@@ -26,6 +27,7 @@ const ADD_VENDOR = "__add_vendor__";
 
 type Props = {
   id?: string;
+  triggerRef?: Ref<HTMLButtonElement>;
   value: string;
   onChange: (value: string) => void;
   error?: string;
@@ -36,6 +38,7 @@ type Props = {
 
 export function ProcessingVendorSelect({
   id,
+  triggerRef,
   value,
   onChange,
   error,
@@ -49,6 +52,7 @@ export function ProcessingVendorSelect({
   const newVendorInputId = "processing-vendor-name";
   const [addOpen, setAddOpen] = useState(false);
   const [newVendorName, setNewVendorName] = useState("");
+  const [newVendorError, setNewVendorError] = useState("");
   const [pending, startTransition] = useTransition();
 
   function handleSelectChange(next: string | null) {
@@ -63,7 +67,8 @@ export function ProcessingVendorSelect({
   function handleAddVendor() {
     const trimmed = newVendorName.trim();
     if (!trimmed) {
-      toast.error("请输入加工商名称");
+      setNewVendorError("请输入加工商名称");
+      requestAnimationFrame(() => document.getElementById(newVendorInputId)?.focus());
       return;
     }
 
@@ -84,6 +89,7 @@ export function ProcessingVendorSelect({
     <>
       <Select value={value || ""} onValueChange={handleSelectChange}>
         <SelectTrigger
+          ref={triggerRef}
           id={triggerId}
           className="w-full"
           aria-invalid={Boolean(error)}
@@ -105,13 +111,9 @@ export function ProcessingVendorSelect({
           </SelectItem>
         </SelectContent>
       </Select>
-      {error && (
-        <p id={errorId} className="text-sm text-destructive" role="alert">
-          {error}
-        </p>
-      )}
+      <FieldError id={errorId} messages={error} />
 
-      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+      <Dialog open={addOpen} onOpenChange={(open) => { setAddOpen(open); if (open) setNewVendorError(""); }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>添加加工商</DialogTitle>
@@ -121,7 +123,9 @@ export function ProcessingVendorSelect({
             <Input
               id={newVendorInputId}
               value={newVendorName}
-              onChange={(event) => setNewVendorName(event.target.value)}
+              aria-invalid={Boolean(newVendorError)}
+              aria-describedby={newVendorError ? `${newVendorInputId}-error` : undefined}
+              onChange={(event) => { setNewVendorName(event.target.value); if (event.target.value.trim()) setNewVendorError(""); }}
               placeholder="例如：某某工坊"
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
@@ -130,6 +134,7 @@ export function ProcessingVendorSelect({
                 }
               }}
             />
+            <FieldError id={`${newVendorInputId}-error`} messages={newVendorError} />
           </div>
           <DialogFooter>
             <Button

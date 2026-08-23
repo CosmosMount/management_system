@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../lib/prisma";
 import { getResourcePlanPageData } from "../lib/project-management/queries/time-canvas-queries";
@@ -67,22 +67,16 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       await expect(
         page.getByRole("link", { name: finalTaskTitle, exact: true }),
       ).toBeVisible();
-      await page.getByTestId("time-canvas-scroll").evaluate((element) => {
-        element.scrollTop = element.scrollHeight;
-        element.dispatchEvent(new Event("scroll"));
-      });
-      await expect(
-        page.getByTestId(`timeline-row-plan:${taskIds[50]}`),
-      ).toBeVisible();
+      await expectVirtualRowAtBottom(
+        page,
+        `timeline-row-plan:${taskIds[50]}`,
+      );
 
       await page.goto(`/progress/tasks/${fixture.taskId}`);
-      await page.getByTestId("time-canvas-scroll").evaluate((element) => {
-        element.scrollTop = element.scrollHeight;
-        element.dispatchEvent(new Event("scroll"));
-      });
-      await expect(
-        page.getByTestId(`timeline-row-person:${additionalMembers[50]!.id}`),
-      ).toBeVisible();
+      await expectVirtualRowAtBottom(
+        page,
+        `timeline-row-person:${additionalMembers[50]!.id}`,
+      );
       await expect(
         page.getByLabel(`${additionalMembers[50]!.displayName} 时间行`, {
           exact: true,
@@ -926,8 +920,15 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       await expect(
         quickCreate.locator('input[type="hidden"][name="taskId"]'),
       ).toHaveValue("");
-      await expect(quickCreate.getByLabel("内容")).toHaveValue("");
-      await quickCreate.getByLabel("内容").fill(independentContent);
+      const quickContent = quickCreate.getByLabel("内容");
+      await expect(quickContent).toHaveValue("");
+      await expect(quickContent).not.toHaveAttribute("aria-invalid", "true");
+      await quickCreate.getByRole("button", { name: "创建", exact: true }).click();
+      await expect(quickContent).toHaveAttribute("aria-invalid", "true");
+      await expect(quickContent).toBeFocused();
+      await expect(quickCreate.getByRole("alert").filter({ hasText: "请输入工作内容" })).toBeVisible();
+      await quickContent.fill(independentContent);
+      await expect(quickContent).not.toHaveAttribute("aria-invalid", "true");
       await quickCreate.getByRole("button", { name: "创建", exact: true }).click();
       await expect(page.getByText("已创建投入记录")).toBeVisible();
       await expect.poll(() => prisma.workSegment.count({
@@ -937,3 +938,18 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       await expectHealthyPage(page);
     });
 });
+
+async function expectVirtualRowAtBottom(page: Page, testId: string) {
+  const row = page.getByTestId(testId);
+  await expect.poll(
+    async () => {
+      await page.getByTestId("time-canvas-scroll").evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+        element.dispatchEvent(new Event("scroll", { bubbles: true }));
+      });
+      return row.count();
+    },
+    { timeout: 10_000 },
+  ).toBe(1);
+  await expect(row).toBeVisible();
+}

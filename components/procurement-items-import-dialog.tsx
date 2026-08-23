@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { FileSpreadsheet, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { FieldError } from "@/components/ui/field-error";
 import {
   Dialog,
   DialogContent,
@@ -46,6 +47,7 @@ export function ProcurementItemsImportDialog({
   const [fileName, setFileName] = useState("");
   const [parsing, setParsing] = useState(false);
   const [downloadingTemplate, setDownloadingTemplate] = useState(false);
+  const [fileError, setFileError] = useState("");
 
   async function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -55,6 +57,7 @@ export function ProcurementItemsImportDialog({
     const generation = parseGenerationRef.current.begin();
     setFileName("");
     setResult(null);
+    setFileError("");
     setParsing(true);
     try {
       validateSpreadsheetFile(file);
@@ -66,11 +69,11 @@ export function ProcurementItemsImportDialog({
       setFileName(file.name);
       setResult(parsed);
       if (parsed.items.length === 0 && parsed.errors.length === 0) {
-        toast.error("未解析到有效条目");
+        setFileError("未解析到有效条目");
       }
     } catch (err) {
       if (!parseGenerationRef.current.isCurrent(generation)) return;
-      toast.error(err instanceof Error ? err.message : "文件解析失败");
+      setFileError(err instanceof Error ? err.message : "文件解析失败");
       setResult(null);
     } finally {
       if (parseGenerationRef.current.isCurrent(generation)) {
@@ -105,6 +108,7 @@ export function ProcurementItemsImportDialog({
       setParsing(false);
       setFileName("");
       setResult(null);
+      setFileError("");
     }
     onOpenChange(next);
   }
@@ -133,17 +137,23 @@ export function ProcurementItemsImportDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-wrap gap-2">
+        <div className="space-y-2">
+          <div className="flex flex-wrap gap-2">
           <input
             ref={fileInputRef}
             type="file"
             accept=".xlsx,.xls"
             className="hidden"
+            aria-invalid={Boolean(fileError)}
+            aria-describedby={fileError ? "procurement-import-file-error" : undefined}
             onChange={handleFileChange}
           />
           <Button
             type="button"
             variant="outline"
+            className={fileError ? "border-destructive ring-3 ring-destructive/20" : undefined}
+            aria-invalid={Boolean(fileError)}
+            aria-describedby={fileError ? "procurement-import-file-error" : undefined}
             disabled={parsing}
             onClick={() => fileInputRef.current?.click()}
           >
@@ -159,6 +169,8 @@ export function ProcurementItemsImportDialog({
             <FileSpreadsheet className="mr-1 h-4 w-4" />
             {downloadingTemplate ? "下载中…" : "下载模板"}
           </Button>
+          </div>
+          <FieldError id="procurement-import-file-error" messages={fileError} />
         </div>
 
         {result && (

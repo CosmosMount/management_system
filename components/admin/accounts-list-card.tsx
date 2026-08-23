@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { useState } from "react";
 import { History, ShieldCheck, X } from "lucide-react";
-import { toast } from "sonner";
 import {
   assignAccountReimbursementRole,
   grantProjectSystemRole,
@@ -33,6 +32,7 @@ import {
 } from "@/components/admin/accounts-contract";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { FieldError } from "@/components/ui/field-error";
 import {
   Card,
   CardContent,
@@ -231,22 +231,29 @@ function GeneralRoleAssignmentForm({
   const [selectedAccount, setSelectedAccount] = useState<AdminAccountOption | null>(null);
   const [role, setRole] = useState<AssignableRole | "">("");
   const [scope, setScope] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<Partial<Record<"account" | "role" | "scope", string>>>({});
   const teamScoped = role === "TEAM_ADMIN" || role === "FINANCE";
   const techGroupScoped = role === "TECH_GROUP_ADMIN" || role === "TEACHER";
   const reimbursementScoped = teamScoped || techGroupScoped;
 
   function handleAssign() {
-    if (!accountId || !role) {
-      toast.error("请选择用户和角色");
-      return;
-    }
+    const nextErrors: Partial<Record<"account" | "role" | "scope", string>> = {};
+    if (!accountId) nextErrors.account = "请选择用户";
+    if (!role) nextErrors.role = "请选择角色";
     if ((teamScoped || techGroupScoped) && !scope) {
-      toast.error(teamScoped ? "请选择车组" : "请选择技术组");
+      nextErrors.scope = teamScoped ? "请选择车组" : "请选择技术组";
+    }
+    setFieldErrors(nextErrors);
+    const firstError = (["account", "role", "scope"] as const).find((key) => nextErrors[key]);
+    if (firstError) {
+      requestAnimationFrame(() => document.getElementById(`general-role-${firstError}`)?.focus());
       return;
     }
+    if (!accountId || !role) return;
     const resetRole = () => {
       setRole("");
       setScope("");
+      setFieldErrors({});
     };
     if (isProjectRole(role)) {
       if (
@@ -303,11 +310,15 @@ function GeneralRoleAssignmentForm({
         <AdminAccountSelect
           purpose={reimbursementScoped ? "REIMBURSEMENT" : "ALL"}
           value={accountId}
-          onValueChange={setAccountId}
+          onValueChange={(value) => { setAccountId(value); if (value) setFieldErrors((current) => ({ ...current, account: undefined })); }}
           onOptionChange={setSelectedAccount}
           ariaLabel="选择要配置角色的用户"
           disabled={pending}
+          inputId="general-role-account"
+          invalid={Boolean(fieldErrors.account)}
+          ariaDescribedBy={fieldErrors.account ? "general-role-account-error" : undefined}
         />
+        <FieldError id="general-role-account-error" messages={fieldErrors.account} />
       </label>
       <label className="min-w-0 space-y-2">
         <span className="block text-sm font-medium">角色</span>
@@ -327,14 +338,18 @@ function GeneralRoleAssignmentForm({
             ) {
               setAccountId(null);
               setSelectedAccount(null);
-              toast.error("该账号缺少报销用户资料，请重新选择已同步账号");
+              setFieldErrors((current) => ({
+                ...current,
+                account: "该账号缺少报销用户资料，请重新选择已同步账号",
+              }));
             }
             setRole(nextRole);
             setScope("");
+            setFieldErrors((current) => ({ ...current, role: undefined, scope: undefined }));
           }}
           disabled={pending}
         >
-          <SelectTrigger className="w-full" aria-label="选择角色">
+          <SelectTrigger id="general-role-role" className="w-full" aria-label="选择角色" aria-invalid={Boolean(fieldErrors.role)} aria-describedby={fieldErrors.role ? "general-role-role-error" : undefined}>
             <SelectValue>
               {(value) => roleLabel(String(value ?? "")) || "选择角色"}
             </SelectValue>
@@ -348,12 +363,14 @@ function GeneralRoleAssignmentForm({
             <SelectItem value="TEACHER">指导老师</SelectItem>
           </SelectContent>
         </Select>
+        <FieldError id="general-role-role-error" messages={fieldErrors.role} />
       </label>
       <RoleScopeSelect
         role={role}
         scope={scope}
-        onScopeChange={setScope}
+        onScopeChange={(value) => { setScope(value); if (value) setFieldErrors((current) => ({ ...current, scope: undefined })); }}
         disabled={pending}
+        error={fieldErrors.scope}
       />
       <Button
         type="button"
@@ -372,11 +389,13 @@ function RoleScopeSelect({
   scope,
   onScopeChange,
   disabled,
+  error,
 }: {
   role: AssignableRole | "";
   scope: string;
   onScopeChange: (value: string) => void;
   disabled: boolean;
+  error?: string;
 }) {
   const teamScoped = role === "TEAM_ADMIN" || role === "FINANCE";
   const techGroupScoped = role === "TECH_GROUP_ADMIN" || role === "TEACHER";
@@ -393,7 +412,7 @@ function RoleScopeSelect({
         onValueChange={(value) => onScopeChange(value ?? "")}
         disabled={disabled}
       >
-        <SelectTrigger className="w-full" aria-label={`选择${label}`}>
+        <SelectTrigger id="general-role-scope" className="w-full" aria-label={`选择${label}`} aria-invalid={Boolean(error)} aria-describedby={error ? "general-role-scope-error" : undefined}>
           <SelectValue>
             {(value) => (value ? String(value) : `选择${label}`)}
           </SelectValue>
@@ -406,6 +425,7 @@ function RoleScopeSelect({
           ))}
         </SelectContent>
       </Select>
+      <FieldError id="general-role-scope-error" messages={error} />
     </label>
   );
 }
@@ -553,5 +573,3 @@ function AccountFilters({ filters }: { filters: AccountFiltersValue }) {
     </form>
   );
 }
-
-

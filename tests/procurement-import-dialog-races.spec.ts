@@ -28,7 +28,15 @@ async function verifyDialogRace(
   await page.getByRole("button", { name: openButtonName }).click();
   let dialog = page.getByRole("dialog", { name: dialogName });
   let input = dialog.locator('input[type="file"]');
+  const visibleFileTrigger = dialog.getByRole("button", {
+    name: /选择文件|重新选择|解析中…/,
+  });
+  await expect(visibleFileTrigger).not.toHaveAttribute("aria-invalid", "true");
+  await input.setInputFiles(filePayload("invalid.txt"));
+  await expect(visibleFileTrigger).toHaveAttribute("aria-invalid", "true");
+  await expect(dialog.getByRole("alert").filter({ hasText: "仅支持 .xlsx 或 .xls 文件" })).toBeVisible();
   await input.setInputFiles(filePayload("slow-close.xlsx"));
+  await expect(visibleFileTrigger).not.toHaveAttribute("aria-invalid", "true");
   await dialog.getByRole("button", { name: "取消" }).click();
   await page.getByRole("button", { name: openButtonName }).click();
   dialog = page.getByRole("dialog", { name: dialogName });

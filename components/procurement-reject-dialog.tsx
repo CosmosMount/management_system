@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Ban, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { FieldError } from "@/components/ui/field-error";
 import {
   Dialog,
   DialogContent,
@@ -51,10 +52,15 @@ export function ProcurementRejectDialog({
   const [reason, setReason] = useState("");
   const [outcome, setOutcome] = useState<ProcurementRejectOutcome>("resubmit");
   const [loading, setLoading] = useState(false);
+  const [reasonError, setReasonError] = useState("");
   const labels = procurementRejectOutcomeLabels(stage);
 
   async function handleConfirm() {
-    if (!reason.trim()) return;
+    if (!reason.trim()) {
+      setReasonError(`请填写${reasonLabel}`);
+      requestAnimationFrame(() => document.getElementById("procurement-reject-reason")?.focus());
+      return;
+    }
     setLoading(true);
     try {
       await onConfirm(reason.trim(), outcome);
@@ -67,7 +73,7 @@ export function ProcurementRejectDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={(nextOpen) => { setOpen(nextOpen); if (nextOpen) setReasonError(""); }}>
       <DialogTrigger
         render={
           <Button
@@ -123,10 +129,13 @@ export function ProcurementRejectDialog({
             <Textarea
               id="procurement-reject-reason"
               value={reason}
-              onChange={(e) => setReason(e.target.value)}
+              aria-invalid={Boolean(reasonError)}
+              aria-describedby={reasonError ? "procurement-reject-reason-error" : undefined}
+              onChange={(e) => { setReason(e.target.value); if (e.target.value.trim()) setReasonError(""); }}
               placeholder="请填写具体原因，将通知相关人员"
               rows={4}
             />
+            <FieldError id="procurement-reject-reason-error" messages={reasonError} />
           </div>
         </div>
         <DialogFooter>
@@ -141,7 +150,7 @@ export function ProcurementRejectDialog({
           <Button
             type="button"
             variant={outcome === "terminate" ? "destructive" : "default"}
-            disabled={loading || !reason.trim()}
+            disabled={loading}
             onClick={handleConfirm}
           >
             {loading ? "提交中…" : labels[outcome].confirmLabel}

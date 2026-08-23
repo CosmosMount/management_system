@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import {
   Table,
@@ -11,6 +11,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
+import { FieldError } from "@/components/ui/field-error";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { IMAGE_UPLOAD_ACCEPT } from "@/lib/upload-accept";
@@ -51,6 +52,8 @@ type Props = {
   /** 允许增删整行（上传/修改凭证） */
   allowRowEdit?: boolean;
   onChange?: (items: ConfirmedLineItem[]) => void;
+  errors?: Record<string, Partial<Record<"name" | "spec" | "quantity" | "photo", string>>>;
+  onFieldChange?: (itemId: string, field: "name" | "spec" | "quantity" | "photo") => void;
 };
 
 export function isNewPurchaseLineId(id: string): boolean {
@@ -115,10 +118,13 @@ export function PurchaseLineConfirm({
   showPhotoUpload = false,
   allowRowEdit = false,
   onChange,
+  errors = {},
+  onFieldChange,
 }: Props) {
   const [lines, setLines] = useState<EditableLine[]>(() =>
     toEditableLines(items),
   );
+  const onChangeRef = useRef(onChange);
   const itemsRevision = JSON.stringify(
     items.map(({ id, name, spec, quantity, unitPrice, photoPath }) => [
       id,
@@ -137,8 +143,12 @@ export function PurchaseLineConfirm({
   }
 
   useEffect(() => {
-    onChange?.(toConfirmed(lines));
-  }, [lines, onChange]);
+    onChangeRef.current = onChange;
+  }, [onChange]);
+
+  useEffect(() => {
+    onChangeRef.current?.(toConfirmed(lines));
+  }, [lines]);
 
   const rows = useMemo(
     () =>
@@ -161,6 +171,10 @@ export function PurchaseLineConfirm({
     setLines((prev) =>
       prev.map((line) => (line.id === id ? { ...line, ...patch } : line)),
     );
+    const field = Object.keys(patch)[0];
+    if (field === "name" || field === "spec" || field === "quantity") {
+      onFieldChange?.(id, field);
+    }
   }
 
   function addLine() {
@@ -214,49 +228,67 @@ export function PurchaseLineConfirm({
               <TableRow key={row.id}>
                 <TableCell>
                   {editable ? (
-                    <Input
-                      className="h-8 min-w-[8rem]"
-                      value={row.name}
-                      placeholder="物品名称"
-                      onChange={(e) =>
-                        patchLine(row.id, { name: e.target.value })
-                      }
-                    />
+                    <div>
+                      <Input
+                        className="h-8 min-w-[8rem]"
+                        id={`purchase-line-${row.id}-name`}
+                        value={row.name}
+                        placeholder="物品名称"
+                        aria-invalid={Boolean(errors[row.id]?.name)}
+                        aria-describedby={errors[row.id]?.name ? `purchase-line-${row.id}-name-error` : undefined}
+                        onChange={(e) =>
+                          patchLine(row.id, { name: e.target.value })
+                        }
+                      />
+                      <FieldError id={`purchase-line-${row.id}-name-error`} messages={errors[row.id]?.name} className="mt-1" />
+                    </div>
                   ) : (
                     row.name
                   )}
                 </TableCell>
                 <TableCell className="text-muted-foreground">
                   {editable ? (
-                    <Input
-                      className="h-8 min-w-[6rem]"
-                      value={row.spec}
-                      placeholder="规格"
-                      onChange={(e) =>
-                        patchLine(row.id, { spec: e.target.value })
-                      }
-                    />
+                    <div>
+                      <Input
+                        className="h-8 min-w-[6rem]"
+                        id={`purchase-line-${row.id}-spec`}
+                        value={row.spec}
+                        placeholder="规格"
+                        aria-invalid={Boolean(errors[row.id]?.spec)}
+                        aria-describedby={errors[row.id]?.spec ? `purchase-line-${row.id}-spec-error` : undefined}
+                        onChange={(e) =>
+                          patchLine(row.id, { spec: e.target.value })
+                        }
+                      />
+                      <FieldError id={`purchase-line-${row.id}-spec-error`} messages={errors[row.id]?.spec} className="mt-1" />
+                    </div>
                   ) : (
                     row.spec
                   )}
                 </TableCell>
                 <TableCell className="text-right">
                   {editable ? (
-                    <Input
-                      type="number"
-                      min={1}
-                      step={1}
-                      className="ml-auto h-8 w-20 text-right"
-                      value={row.quantity}
-                      onChange={(e) =>
-                        patchLine(row.id, {
-                          quantity: Math.max(
-                            1,
-                            Math.floor(Number(e.target.value) || 1),
-                          ),
-                        })
-                      }
-                    />
+                    <div>
+                      <Input
+                        type="number"
+                        min={1}
+                        step={1}
+                        className="ml-auto h-8 w-20 text-right"
+                        id={`purchase-line-${row.id}-quantity`}
+                        value={row.quantity}
+                        aria-invalid={Boolean(errors[row.id]?.quantity)}
+                        aria-describedby={errors[row.id]?.quantity ? `purchase-line-${row.id}-quantity-error` : undefined}
+                        onChange={(e) =>
+                          patchLine(row.id, {
+                            quantity: Math.max(
+                              1,
+                              Math.floor(Number(e.target.value) || 1),
+                            ),
+                          })
+                        }
+                      />
+                      <FieldError id={`purchase-line-${row.id}-quantity-error`} messages={errors[row.id]?.quantity} className="mt-1 text-left" />
+                    </div>
                   ) : (
                     row.quantity
                   )}
@@ -301,17 +333,22 @@ export function PurchaseLineConfirm({
                         </p>
                       )}
                       <Input
+                        id={`purchase-line-${row.id}-photo`}
                         name={`photo-${row.id}`}
                         type="file"
                         accept={IMAGE_UPLOAD_ACCEPT}
                         className="h-8 w-auto min-w-[14rem]"
                         required={!row.photoPath}
+                        aria-invalid={Boolean(errors[row.id]?.photo)}
+                        aria-describedby={errors[row.id]?.photo ? `purchase-line-${row.id}-photo-error` : undefined}
                         aria-label={
                           row.photoPath
                             ? `更换「${row.name || "新物品"}」实物照片`
                             : `上传「${row.name || "新物品"}」实物照片`
                         }
+                        onChange={() => onFieldChange?.(row.id, "photo")}
                       />
+                      <FieldError id={`purchase-line-${row.id}-photo-error`} messages={errors[row.id]?.photo} className="mt-1" />
                     </div>
                   </TableCell>
                 )}

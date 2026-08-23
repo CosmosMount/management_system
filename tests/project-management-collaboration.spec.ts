@@ -195,7 +195,7 @@ test.describe("Project/Task 风险、评论与近期动态", () => {
     await page.getByLabel("解决说明").fill("已通过定向回归确认并关闭");
     await page.getByRole("button", { name: "确认解决" }).click();
     await expect(
-      page.getByTestId("task-workbench-v2").getByText("风险已解决。"),
+      page.getByRole("status").filter({ hasText: "风险已解决。" }).first(),
     ).toBeVisible();
     await expect.poll(() => prisma.riskRecord.findUnique({ where: { id: uiRisk.id }, select: { status: true, resolveNote: true } })).toEqual({
       status: "RESOLVED",
@@ -266,6 +266,73 @@ test.describe("Project/Task 风险、评论与近期动态", () => {
     expect(await prisma.notificationOutbox.count({ where: { eventKey: { startsWith: `pm:comment:${outsiderComment.commentId}:deleted` } } })).toBe(0);
     expect(await prisma.inAppNotification.count({ where: { entityId: uiRisk.id, recipientAccountId: owner.actor.accountId } })).toBe(0);
     expect(await prisma.inAppNotification.count({ where: { entityId: uiRisk.id, recipientAccountId: admin.actor.accountId } })).toBeGreaterThan(0);
+  });
+
+  test("协作表单空提交在桌面与移动端标红、聚焦并逐字段清错", async ({
+    context,
+    page,
+    baseURL,
+  }, testInfo) => {
+    test.setTimeout(60_000);
+    const owner = await createActor(`协作字段校验 ${testInfo.project.name} ${randomUUID()}`);
+    const draft = await createTaskDraft(owner.actor, {
+      title: `协作字段校验 Task ${randomUUID()}`,
+      description: "验证风险、解决说明和评论的字段错误",
+      team: "英雄",
+      techGroup: "电控",
+      priority: "MEDIUM",
+      members: [{ personId: owner.actor.personId, role: "OWNER" }],
+      milestones: [milestoneInput("协作字段校验 Milestone", 2)],
+      plannedStartAt: new Date(Date.now() - 24 * 60 * 60 * 1_000).toISOString(),
+      termination: terminationInput(5),
+      idempotencyKey: `collaboration-validation-${randomUUID()}`,
+    });
+    await activateTask(owner.actor, {
+      taskId: draft.taskId,
+      expectedLockVersion: draft.lockVersion,
+    });
+    await loginAsTestUser(context, baseURL, {
+      openId: owner.openId,
+      name: owner.displayName,
+    });
+    await page.goto(`/progress/tasks/${draft.taskId}`);
+
+    const riskInput = page.getByLabel("风险内容");
+    await expect(riskInput).not.toHaveAttribute("aria-invalid", "true");
+    await page.getByRole("button", { name: "提出风险", exact: true }).click();
+    await expect(riskInput).toHaveAttribute("aria-invalid", "true");
+    await expect(riskInput).toBeFocused();
+    await expect(page.getByRole("alert").filter({ hasText: "请填写风险内容" })).toBeVisible();
+    const riskContent = `字段校验风险 ${randomUUID()}`;
+    await riskInput.fill(riskContent);
+    await expect(riskInput).not.toHaveAttribute("aria-invalid", "true");
+    await page.getByRole("button", { name: "提出风险", exact: true }).click();
+
+    const riskCard = page.locator("article").filter({ hasText: riskContent });
+    await expect(riskCard).toBeVisible();
+    await riskCard.getByRole("button", { name: "解决风险" }).click();
+    const resolveInput = page.getByLabel("解决说明");
+    await expect(resolveInput).not.toHaveAttribute("aria-invalid", "true");
+    await page.getByRole("button", { name: "确认解决" }).click();
+    await expect(resolveInput).toHaveAttribute("aria-invalid", "true");
+    await expect(resolveInput).toBeFocused();
+    await expect(page.getByRole("alert").filter({ hasText: "请填写解决说明" })).toBeVisible();
+    await resolveInput.fill("已验证解决说明字段错误");
+    await expect(resolveInput).not.toHaveAttribute("aria-invalid", "true");
+    await page.getByRole("button", { name: "确认解决" }).click();
+    await expect(
+      page.getByTestId("task-workbench-v2").getByText("风险已解决。"),
+    ).toBeVisible();
+
+    const commentInput = page.getByLabel("发表评论");
+    await expect(commentInput).not.toHaveAttribute("aria-invalid", "true");
+    await page.getByRole("button", { name: "发布评论" }).click();
+    await expect(commentInput).toHaveAttribute("aria-invalid", "true");
+    await expect(commentInput).toBeFocused();
+    await expect(page.getByRole("alert").filter({ hasText: "请输入评论内容" })).toBeVisible();
+    await commentInput.fill("已验证评论字段错误");
+    await expect(commentInput).not.toHaveAttribute("aria-invalid", "true");
+    await expectHealthyPage(page);
   });
 
   test("评论使用 20 条稳定分页并隐藏未知动态 action", async () => {

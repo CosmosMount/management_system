@@ -55,13 +55,20 @@ test.describe("project management UI project-management-ui-composer", () => {
       await expect(page).toHaveURL(/\/progress\/tasks\/new$/);
       await expect(page.getByRole("heading", { name: "新建 Task" })).toBeVisible();
       await expect(page.getByTestId("task-composer")).toBeVisible();
+      const taskTitle = page.getByLabel("Task 名称");
+      await expect(taskTitle).not.toHaveAttribute("aria-invalid", "true");
+      await page.getByRole("button", { name: "创建 Task 草稿" }).click();
+      await expect(taskTitle).toHaveAttribute("aria-invalid", "true");
+      await expect(taskTitle).toBeFocused();
+      await expect(page.getByRole("alert").filter({ hasText: "请输入 Task 名称" })).toBeVisible();
       expect(
         await page.evaluate(
           () => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
         ),
       ).toBe(true);
       await expect(page.getByRole("checkbox", { name: /允许自审/ })).toHaveCount(0);
-      await page.getByLabel("Task 名称").fill(title);
+      await taskTitle.fill(title);
+      await expect(taskTitle).not.toHaveAttribute("aria-invalid", "true");
       await page
         .getByTestId("task-plan-node-navigator")
         .getByRole("button", { name: /Start/ })
@@ -157,7 +164,7 @@ test.describe("project management UI project-management-ui-composer", () => {
       await expect(
         page
           .getByTestId("task-plan-node-navigator")
-          .getByRole("button", { name: /完成 S5 Composer 主流程.*需修正/ }),
+          .getByRole("button", { name: /完成 S5 Composer 主流程.*时间待修正/ }),
       ).toBeVisible();
       await milestoneTime.fill(originalMilestoneTime);
 
@@ -169,13 +176,25 @@ test.describe("project management UI project-management-ui-composer", () => {
       await page
         .getByLabel("结束条件")
         .fill("Task 草稿创建完成且不包含初始 Segment");
-      await page.getByLabel("计划结束时间").fill("2026-09-07T18:00");
+      const terminationTime = page.getByLabel("计划结束时间");
+      await terminationTime.fill("2026-09-07T18:00");
+      await page.getByRole("button", { name: "创建 Task 草稿" }).click();
+      await expect(milestoneTime).toHaveAttribute("aria-invalid", "true");
+      await expect(milestoneTime).toBeFocused();
+      await expect(
+        page
+          .getByTestId("task-composer-inspector")
+          .getByText("Milestone 必须严格位于 Start 与 Terminal 之间。"),
+      ).toBeVisible();
+      await planNavigator.getByRole("button", { name: /Terminal/ }).click();
+      await expect(terminationTime).toHaveAttribute("aria-invalid", "true");
       await expect(
         page
           .getByTestId("task-composer-inspector")
           .getByText("Terminal 必须严格晚于 Start 和最后一个 Milestone。"),
       ).toBeVisible();
-      await page.getByLabel("计划结束时间").fill("2026-09-16T18:00");
+      await terminationTime.fill("2026-09-16T18:00");
+      await expect(terminationTime).not.toHaveAttribute("aria-invalid", "true");
 
       await page.waitForTimeout(900);
       const extremeDraft = await page.evaluate(async () => {

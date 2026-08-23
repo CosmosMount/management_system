@@ -9,6 +9,7 @@ import { TaskMemberRolePicker } from "@/components/project-management/task-membe
 import { TaskMultiSelect } from "@/components/project-management/task-picker";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { FieldError } from "@/components/ui/field-error";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -53,13 +54,43 @@ export function ProjectFormClient({
   }, [dirty, pending]);
   const avatarPreview = useMemo(() => avatarFile ? URL.createObjectURL(avatarFile) : null, [avatarFile]);
   useEffect(() => () => { if (avatarPreview) URL.revokeObjectURL(avatarPreview); }, [avatarPreview]);
+  function clearFieldError(key: string) {
+    setFieldErrors((current) => {
+      if (!current[key]) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  }
   async function submit() {
-    setError(""); setFieldErrors({});
+    setError("");
+    const localFieldErrors: Record<string, string[]> = {};
+    if (!name.trim()) localFieldErrors.name = ["请输入 Project 名称"];
+    if (!description.trim()) localFieldErrors.description = ["请输入 Project 内容"];
+    if (members.every((member) => member.role !== "OWNER")) {
+      localFieldErrors.members = ["至少需要一名 Project 负责人"];
+    }
+    if (Object.keys(localFieldErrors).length > 0) {
+      setFieldErrors((current) => ({ ...current, ...localFieldErrors }));
+      requestAnimationFrame(() => {
+        const targetId = localFieldErrors.name
+          ? "project-name"
+          : localFieldErrors.description
+            ? "project-description"
+            : "project-members";
+        document.getElementById(targetId)?.focus();
+      });
+      return;
+    }
     let nextAvatarPath = avatarPath;
     if (avatarFile) {
       const data = new FormData(); data.set("avatar", avatarFile);
       const upload = await uploadProjectAvatar(data);
-      if (!upload.ok) { setError(upload.message); return; }
+      if (!upload.ok) {
+        setFieldErrors({ avatarPath: [upload.message] });
+        requestAnimationFrame(() => document.getElementById("project-avatar")?.focus());
+        return;
+      }
       nextAvatarPath = upload.path;
     }
     const common = { name, description, avatarPath: nextAvatarPath, members };
@@ -70,9 +101,29 @@ export function ProjectFormClient({
         : await updateProject({ projectId: project!.id, expectedLockVersion: project!.lockVersion, ...common });
     if (!result.ok) {
       const nextFieldErrors = result.error.fieldErrors ?? {};
-      setError(result.error.message); setFieldErrors(nextFieldErrors);
+      const supportedFieldKeys = new Set([
+        "name",
+        "description",
+        "avatarPath",
+        "members",
+        "requestedTaskIds",
+      ]);
+      const fieldEntries = Object.entries(nextFieldErrors).filter(([, messages]) =>
+        messages.some(Boolean),
+      );
+      const displayedFieldErrors = Object.fromEntries(
+        fieldEntries
+          .filter(([key]) => supportedFieldKeys.has(key))
+          .map(([key, messages]) => [key, messages.filter(Boolean)]),
+      );
+      setError(
+        fieldEntries.length > 0 && fieldEntries.every(([key]) => supportedFieldKeys.has(key))
+          ? ""
+          : result.error.message,
+      );
+      setFieldErrors(displayedFieldErrors);
       requestAnimationFrame(() => {
-        const targetId = Object.keys(nextFieldErrors).map((key) => ({ name: "project-name", description: "project-description", avatarPath: "project-avatar", members: "project-members", requestedTaskIds: "project-tasks" })[key as "name" | "description" | "avatarPath" | "members" | "requestedTaskIds"]).find(Boolean);
+        const targetId = Object.keys(displayedFieldErrors).map((key) => ({ name: "project-name", description: "project-description", avatarPath: "project-avatar", members: "project-members", requestedTaskIds: "project-tasks" })[key as "name" | "description" | "avatarPath" | "members" | "requestedTaskIds"]).find(Boolean);
         if (targetId) document.getElementById(targetId)?.focus();
       });
       return;
@@ -84,17 +135,16 @@ export function ProjectFormClient({
     <div className="space-y-5">
       <Card><CardHeader><CardTitle>Project 头像</CardTitle></CardHeader><CardContent className="flex flex-wrap items-center gap-4">
         <ProjectAvatar name={name || "Project"} avatarPath={avatarPreview ?? avatarPath} className="size-20" />
-        <div className="space-y-2"><Label htmlFor="project-avatar" className="inline-flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2"><ImagePlus className="size-4" />上传头像</Label><input id="project-avatar" type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" onChange={(event) => setAvatarFile(event.target.files?.[0] ?? null)} /><Button type="button" variant="ghost" onClick={() => { setAvatarFile(null); setAvatarPath(null); }}><RotateCcw />恢复默认</Button><p className="text-xs text-muted-foreground">PNG、JPG 或 WebP，不超过 2 MiB</p></div>
+        <div className="space-y-2"><Label htmlFor="project-avatar" className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 ${fieldErrors.avatarPath ? "border-destructive ring-3 ring-destructive/20" : ""}`}><ImagePlus className="size-4" />上传头像</Label><input id="project-avatar" type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" aria-invalid={Boolean(fieldErrors.avatarPath)} aria-describedby={fieldErrors.avatarPath ? "project-avatar-error" : undefined} onChange={(event) => { setAvatarFile(event.target.files?.[0] ?? null); clearFieldError("avatarPath"); }} /><Button type="button" variant="ghost" onClick={() => { setAvatarFile(null); setAvatarPath(null); clearFieldError("avatarPath"); }}><RotateCcw />恢复默认</Button><p className="text-xs text-muted-foreground">PNG、JPG 或 WebP，不超过 2 MiB</p><FieldError id="project-avatar-error" messages={fieldErrors.avatarPath} /></div>
       </CardContent></Card>
       <Card><CardHeader><CardTitle>基本信息</CardTitle></CardHeader><CardContent className="space-y-4">
-        <div className="space-y-2"><Label htmlFor="project-name">Project 名称</Label><Input id="project-name" value={name} maxLength={200} aria-invalid={Boolean(fieldErrors.name)} onChange={(event) => setName(event.target.value)} />{fieldErrors.name?.map((message) => <p key={message} className="text-sm text-destructive">{message}</p>)}</div>
-        <div className="space-y-2"><Label htmlFor="project-description">Project 内容</Label><Textarea id="project-description" value={description} maxLength={8000} rows={8} aria-invalid={Boolean(fieldErrors.description)} onChange={(event) => setDescription(event.target.value)} />{fieldErrors.description?.map((message) => <p key={message} className="text-sm text-destructive">{message}</p>)}</div>
+        <div className="space-y-2"><Label htmlFor="project-name">Project 名称</Label><Input id="project-name" value={name} maxLength={200} aria-invalid={Boolean(fieldErrors.name)} aria-describedby={fieldErrors.name ? "project-name-error" : undefined} onChange={(event) => { setName(event.target.value); if (event.target.value.trim()) clearFieldError("name"); }} /><FieldError id="project-name-error" messages={fieldErrors.name} /></div>
+        <div className="space-y-2"><Label htmlFor="project-description">Project 内容</Label><Textarea id="project-description" value={description} maxLength={8000} rows={8} aria-invalid={Boolean(fieldErrors.description)} aria-describedby={fieldErrors.description ? "project-description-error" : undefined} onChange={(event) => { setDescription(event.target.value); if (event.target.value.trim()) clearFieldError("description"); }} /><FieldError id="project-description-error" messages={fieldErrors.description} /></div>
       </CardContent></Card>
       <Card id="project-members" tabIndex={-1}><CardHeader><CardTitle>成员</CardTitle></CardHeader><CardContent className="space-y-4">
-        <TaskMemberRolePicker members={members} people={people} scope={{ purpose: "VISIBLE" }} editable protectedOwnerId={protectedOwnerId} onChange={setMembers} onPersonResolved={(person) => setPeople((current) => current.some((item) => item.id === person.id) ? current : [...current, person])} />
-        {fieldErrors.members?.map((message) => <p key={message} className="text-sm text-destructive">{message}</p>)}
+        <TaskMemberRolePicker members={members} people={people} scope={{ purpose: "VISIBLE" }} editable protectedOwnerId={protectedOwnerId} error={fieldErrors.members} onChange={(nextMembers) => { setMembers(nextMembers); if (nextMembers.some((member) => member.role === "OWNER")) clearFieldError("members"); }} onPersonResolved={(person) => setPeople((current) => current.some((item) => item.id === person.id) ? current : [...current, person])} />
       </CardContent></Card>
-      {mode !== "active" && <Card id="project-tasks" tabIndex={-1}><CardHeader><CardTitle>纳入已有 Task（可选）</CardTitle></CardHeader><CardContent className="space-y-3"><p className="text-sm text-muted-foreground">Task 会在立项通过后统一加入；审批前不会改变归属。</p><TaskMultiSelect value={taskIds} onValueChange={setTaskIds} projectCandidates maxSelected={50} showSelectedList placeholder="搜索可加入的 Task" ariaLabel="搜索可加入的 Task" />{fieldErrors.requestedTaskIds?.map((message) => <p key={message} className="text-sm text-destructive">{message}</p>)}</CardContent></Card>}
+      {mode !== "active" && <Card id="project-tasks" tabIndex={-1}><CardHeader><CardTitle>纳入已有 Task（可选）</CardTitle></CardHeader><CardContent className="space-y-3"><p className="text-sm text-muted-foreground">Task 会在立项通过后统一加入；审批前不会改变归属。</p><TaskMultiSelect value={taskIds} onValueChange={(nextTaskIds) => { setTaskIds(nextTaskIds); clearFieldError("requestedTaskIds"); }} projectCandidates maxSelected={50} showSelectedList placeholder="搜索可加入的 Task" ariaLabel="搜索可加入的 Task" invalid={Boolean(fieldErrors.requestedTaskIds)} ariaDescribedBy={fieldErrors.requestedTaskIds ? "project-tasks-error" : undefined} /><FieldError id="project-tasks-error" messages={fieldErrors.requestedTaskIds} /></CardContent></Card>}
       {error && <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">{error}</div>}
       <div className="flex justify-end"><Button type="button" size="lg" disabled={pending} onClick={() => startTransition(submit)}>{pending ? "正在保存…" : buttonLabel}</Button></div>
     </div>

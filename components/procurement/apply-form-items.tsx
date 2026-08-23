@@ -159,6 +159,7 @@ export function ApplyFormItems({
                       }
                     >
                       <SelectTrigger
+                        ref={kindField.ref}
                         id={`${itemPrefix}-kind`}
                         className="w-full"
                         aria-invalid={Boolean(itemErrors?.itemKind)}
@@ -217,6 +218,7 @@ export function ApplyFormItems({
                     render={({ field: vendorField }) => (
                       <ProcessingVendorSelect
                         id={`${itemPrefix}-vendor`}
+                        triggerRef={vendorField.ref}
                         value={vendorField.value ?? ""}
                         onChange={vendorField.onChange}
                         error={itemErrors?.processingVendor?.message}

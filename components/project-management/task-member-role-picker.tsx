@@ -2,12 +2,13 @@
 
 import Image from "next/image";
 import { X } from "lucide-react";
-import { useState } from "react";
+import { useId, useState } from "react";
 import {
   UserSelect,
   type UserPickerScope,
 } from "@/components/project-management/user-picker";
 import { Button } from "@/components/ui/button";
+import { FieldError } from "@/components/ui/field-error";
 import type { PersonOptionDto } from "@/lib/project-management/types/time-canvas";
 
 export type EditableTaskMember = {
@@ -23,6 +24,7 @@ export function TaskMemberRolePicker({
   onChange,
   onPersonResolved,
   protectedOwnerId,
+  error,
 }: {
   members: EditableTaskMember[];
   people: PersonOptionDto[];
@@ -31,8 +33,10 @@ export function TaskMemberRolePicker({
   onChange: (members: EditableTaskMember[]) => void;
   onPersonResolved?: (person: PersonOptionDto) => void;
   protectedOwnerId?: string;
+  error?: string | readonly string[];
 }) {
-  const [error, setError] = useState("");
+  const [memberError, setMemberError] = useState("");
+  const externalErrorId = useId();
   const owners = members.filter((member) => member.role === "OWNER");
   const participants = members.filter((member) => member.role === "PARTICIPANT");
 
@@ -44,14 +48,14 @@ export function TaskMemberRolePicker({
     const existing = members.find((member) => member.personId === personId);
     if (existing?.role === role) return;
     if (existing?.role === "OWNER" && role === "PARTICIPANT" && personId === protectedOwnerId) {
-      setError("你当前是 Project 负责人，不能降级自己。");
+      setMemberError("你当前是 Project 负责人，不能降级自己。");
       return;
     }
     if (existing?.role === "OWNER" && owners.length === 1) {
-      setError("至少保留一名负责人。");
+      setMemberError("至少保留一名负责人。");
       return;
     }
-    setError("");
+    setMemberError("");
     onChange(
       existing
         ? members.map((member) =>
@@ -64,7 +68,7 @@ export function TaskMemberRolePicker({
   const removePerson = (personId: string) => {
     const member = members.find((item) => item.personId === personId);
     if (member?.role === "OWNER" && owners.length === 1) return;
-    setError("");
+    setMemberError("");
     onChange(members.filter((item) => item.personId !== personId));
   };
 
@@ -83,6 +87,8 @@ export function TaskMemberRolePicker({
         onSelect={selectPerson}
         onRemove={removePerson}
         onPersonResolved={onPersonResolved}
+        invalid={Boolean(error)}
+        ariaDescribedBy={error ? externalErrorId : undefined}
       />
       <MemberGroup
         label="参与人员"
@@ -95,8 +101,11 @@ export function TaskMemberRolePicker({
         onSelect={selectPerson}
         onRemove={removePerson}
         onPersonResolved={onPersonResolved}
+        invalid={Boolean(error)}
+        ariaDescribedBy={error ? externalErrorId : undefined}
       />
-      {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
+      <FieldError id={externalErrorId} messages={error} />
+      {memberError && <p className="text-sm text-destructive" role="alert">{memberError}</p>}
       {protectedOwnerId && owners.some((member) => member.personId === protectedOwnerId) && <p className="text-xs text-muted-foreground">你当前是 Project 负责人，不能移除或降级自己；请由其他负责人操作。</p>}
     </div>
   );
@@ -115,6 +124,8 @@ function MemberGroup({
   onSelect,
   onRemove,
   onPersonResolved,
+  invalid,
+  ariaDescribedBy,
 }: {
   label: string;
   role: EditableTaskMember["role"];
@@ -128,6 +139,8 @@ function MemberGroup({
   onSelect: (personId: string | null, role: EditableTaskMember["role"]) => void;
   onRemove: (personId: string) => void;
   onPersonResolved?: (person: PersonOptionDto) => void;
+  invalid: boolean;
+  ariaDescribedBy?: string;
 }) {
   return (
     <section className="space-y-2" aria-label={label}>
@@ -175,6 +188,8 @@ function MemberGroup({
           excludeIds={members.map((member) => member.personId)}
           clearable={false}
           placeholder={placeholder}
+          invalid={invalid}
+          ariaDescribedBy={ariaDescribedBy}
         />
       )}
     </section>

@@ -27,6 +27,8 @@ type CommonProps<TOption extends PickerOption> = {
   name?: string;
   inputId?: string;
   ariaLabel: string;
+  invalid?: boolean;
+  ariaDescribedBy?: string;
   className?: string;
 };
 
@@ -38,6 +40,7 @@ export type AsyncComboboxProps<TOption extends PickerOption> = CommonProps<TOpti
   onValueChange: (value: string | null) => void;
   clearable?: boolean;
   nullOptionLabel?: string;
+  openOnFocus?: boolean;
 };
 
 export type AsyncMultiComboboxProps<TOption extends PickerOption> =
@@ -64,9 +67,12 @@ export function AsyncCombobox<TOption extends PickerOption>({
   required = false,
   clearable = true,
   nullOptionLabel,
+  openOnFocus = true,
   name,
   inputId,
   ariaLabel,
+  invalid = false,
+  ariaDescribedBy,
   className,
 }: AsyncComboboxProps<TOption>) {
   const [open, setOpen] = useState(false);
@@ -186,15 +192,20 @@ export function AsyncCombobox<TOption extends PickerOption>({
         disabled={disabled}
         required={required}
       >
-        <Combobox.InputGroup className="flex min-h-9 w-full min-w-0 items-center rounded-md border border-input bg-background shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 data-disabled:cursor-not-allowed data-disabled:opacity-50">
+        <Combobox.InputGroup
+          data-invalid={invalid || undefined}
+          className="flex min-h-9 w-full min-w-0 items-center rounded-md border border-input bg-background shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 data-[invalid=true]:border-destructive data-[invalid=true]:ring-3 data-[invalid=true]:ring-destructive/20 data-disabled:cursor-not-allowed data-disabled:opacity-50 dark:data-[invalid=true]:border-destructive/50 dark:data-[invalid=true]:ring-destructive/40"
+        >
           <Combobox.Input
             id={inputId}
             aria-label={ariaLabel}
+            aria-invalid={invalid}
+            aria-describedby={ariaDescribedBy}
             placeholder={placeholder}
             className="h-8 min-w-0 flex-1 bg-transparent px-3 text-sm outline-none placeholder:text-muted-foreground"
             onFocus={(event) => {
               setQuery("");
-              setOpen(true);
+              if (openOnFocus) setOpen(true);
               event.currentTarget.select();
             }}
           />
@@ -248,6 +259,8 @@ export function AsyncMultiCombobox<TOption extends PickerOption>({
   name,
   inputId,
   ariaLabel,
+  invalid = false,
+  ariaDescribedBy,
   className,
 }: AsyncMultiComboboxProps<TOption>) {
   const [open, setOpen] = useState(false);
@@ -353,7 +366,10 @@ export function AsyncMultiCombobox<TOption extends PickerOption>({
         disabled={disabled}
         required={required}
       >
-        <Combobox.InputGroup className="flex min-h-9 w-full min-w-0 items-center rounded-md border border-input bg-background shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 data-disabled:cursor-not-allowed data-disabled:opacity-50">
+        <Combobox.InputGroup
+          data-invalid={invalid || undefined}
+          className="flex min-h-9 w-full min-w-0 items-center rounded-md border border-input bg-background shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 data-[invalid=true]:border-destructive data-[invalid=true]:ring-3 data-[invalid=true]:ring-destructive/20 data-disabled:cursor-not-allowed data-disabled:opacity-50 dark:data-[invalid=true]:border-destructive/50 dark:data-[invalid=true]:ring-destructive/40"
+        >
           <Combobox.Chips className="flex min-w-0 flex-1 flex-wrap items-center gap-1 p-1">
             <Combobox.Value>
               {(selectedValue: string[]) => (
@@ -382,6 +398,8 @@ export function AsyncMultiCombobox<TOption extends PickerOption>({
                   <Combobox.Input
                     id={inputId}
                     aria-label={ariaLabel}
+                    aria-invalid={invalid}
+                    aria-describedby={ariaDescribedBy}
                     placeholder={selectedValue.length ? "" : placeholder}
                     className="h-7 min-w-24 flex-1 bg-transparent px-1 text-sm outline-none placeholder:text-muted-foreground"
                     onFocus={() => {

@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { FieldError } from "@/components/ui/field-error";
 import {
   Select,
   SelectContent,
@@ -42,6 +43,7 @@ export function ProcurementSummaryTable({ rows }: Props) {
   const [teamFilter, setTeamFilter] = useState(ALL_TEAMS);
   const [techGroupFilter, setTechGroupFilter] = useState(ALL_TECH_GROUPS);
   const [exporting, setExporting] = useState(false);
+  const [teamExportError, setTeamExportError] = useState("");
 
   const filteredRows = useMemo(() => {
     return rows.filter((row) => {
@@ -63,7 +65,8 @@ export function ProcurementSummaryTable({ rows }: Props) {
 
   async function handleExportTeamBom() {
     if (!canExportTeamBom) {
-      toast.error("请先在上方选择要导出的车组");
+      setTeamExportError("请先选择要导出的车组");
+      requestAnimationFrame(() => document.getElementById("procurement-summary-team")?.focus());
       return;
     }
     const teamRows = rows.filter((row) => row.team === teamFilter);
@@ -106,9 +109,9 @@ export function ProcurementSummaryTable({ rows }: Props) {
         <span className="text-sm text-muted-foreground">按组别查看：</span>
         <Select
           value={teamFilter}
-          onValueChange={(value) => value && setTeamFilter(value)}
+          onValueChange={(value) => { if (value) { setTeamFilter(value); if (value !== ALL_TEAMS) setTeamExportError(""); } }}
         >
-          <SelectTrigger className="w-[140px]">
+          <SelectTrigger id="procurement-summary-team" className="w-[140px]" aria-invalid={Boolean(teamExportError)} aria-describedby={teamExportError ? "procurement-summary-team-error" : undefined}>
             <SelectValue placeholder="全部车组" />
           </SelectTrigger>
           <SelectContent>
@@ -120,6 +123,7 @@ export function ProcurementSummaryTable({ rows }: Props) {
             ))}
           </SelectContent>
         </Select>
+        <FieldError id="procurement-summary-team-error" messages={teamExportError} className="w-full sm:order-last" />
         <Select
           value={techGroupFilter}
           onValueChange={(value) => value && setTechGroupFilter(value)}

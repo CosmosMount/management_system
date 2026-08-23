@@ -26,10 +26,15 @@ import type {
 } from "@/components/project-management/time-canvas/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { FieldError } from "@/components/ui/field-error";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import type { ProjectManagementActionResult } from "@/lib/project-management/application/action-result";
+import type { ProjectManagementActionFailure, ProjectManagementActionResult } from "@/lib/project-management/application/action-result";
+import {
+  fieldErrorsFullyHandled,
+  firstFieldErrorMessage,
+} from "@/lib/project-management/field-errors";
 import {
   isoToShanghaiDateTimeLocal,
   shanghaiDateTimeLocalToIso,
@@ -97,9 +102,13 @@ export function QuickCreatePanel({
   onDirtyChange: () => void;
   onPersonChange: (personId: string) => void;
   onRangeChange: (startMs: number, endMs: number) => boolean;
-  onRun: (action: () => Promise<ProjectManagementActionResult<unknown>>) => void;
+  onRun: (
+    action: () => Promise<ProjectManagementActionResult<unknown>>,
+    onFailure?: (error: ProjectManagementActionFailure["error"]) => boolean | void,
+  ) => void;
 }) {
   const [taskId, setTaskId] = useState<string | null>(defaultTaskId || null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   const [rangeInputs, setRangeInputs] = useState<{
     baseStartMs: number;
     baseEndMs: number;
@@ -119,6 +128,14 @@ export function QuickCreatePanel({
   const rangeError = activeRangeInputs && !pendingRange.ok
     ? pendingRange.message
     : "";
+  const clearFieldError = (key: string) => {
+    setFieldErrors((current) => {
+      if (!current[key]) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  };
 
   function updateRangeInputs(nextStartValue: string, nextEndValue: string) {
     const range = validateSegmentRangeInputs(nextStartValue, nextEndValue);
@@ -142,6 +159,7 @@ export function QuickCreatePanel({
     <form
       className="grid gap-3 rounded-xl border border-primary/30 bg-card p-4 md:grid-cols-2 xl:grid-cols-4"
       aria-label="投入快速创建"
+      noValidate
       onChange={onDirtyChange}
       onSubmit={(event) => {
         event.preventDefault();
@@ -153,24 +171,55 @@ export function QuickCreatePanel({
             startValue,
             endValue,
           });
+          requestAnimationFrame(() => document.getElementById("quick-start")?.focus());
           return;
         }
         const form = new FormData(event.currentTarget);
         const submittedTaskId = String(form.get("taskId") ?? "") || null;
+        const nextErrors: Record<string, string[]> = {};
+        const personId = String(form.get("personId") ?? draft.personId);
+        const content = String(form.get("content") ?? "");
+        if (!personId) nextErrors.personId = ["请选择人员"];
+        if (!content.trim()) nextErrors.content = ["请输入工作内容"];
+        if (!allowIndependent && !submittedTaskId) nextErrors.taskId = ["请选择 Task"];
+        if (Object.keys(nextErrors).length > 0) {
+          setFieldErrors((current) => ({ ...current, ...nextErrors }));
+          const first = nextErrors.personId ? "quick-person" : nextErrors.content ? "quick-content" : "quick-task";
+          requestAnimationFrame(() => document.getElementById(first)?.focus());
+          return;
+        }
         const type = String(form.get("type")) === "ACTUAL" ? "ACTUAL" : "PLANNED";
         const base = {
-          personId: String(form.get("personId") ?? draft.personId),
+          personId,
           startAt: new Date(range.startMs).toISOString(),
           endAt: new Date(range.endMs).toISOString(),
-          content: String(form.get("content") ?? ""),
+          content,
           priority: String(form.get("priority") ?? "MEDIUM"),
           expectedOutput: String(form.get("expectedOutput") ?? ""),
           taskId: submittedTaskId,
         };
-        onRun(() =>
-          type === "ACTUAL"
-            ? createActualSegment({ ...base, sources: [] })
-            : createWorkSegment({ ...base, type: "PLANNED" }),
+        onRun(
+          () =>
+            type === "ACTUAL"
+              ? createActualSegment({ ...base, sources: [] })
+              : createWorkSegment({ ...base, type: "PLANNED" }),
+          (error) => {
+            const next = supportedFieldErrors(error.fieldErrors, ["personId", "startAt", "endAt", "content", "priority", "expectedOutput", "taskId"]);
+            if (Object.keys(next).length === 0) return false;
+            setFieldErrors(next);
+            const firstKey = ["personId", "startAt", "endAt", "content", "taskId", "priority", "expectedOutput"].find((key) => next[key]);
+            const id = firstKey === "personId" ? "quick-person" : firstKey === "taskId" ? "quick-task" : firstKey ? `quick-${firstKey === "expectedOutput" ? "expected" : firstKey.replace("At", "")}` : "quick-content";
+            requestAnimationFrame(() => document.getElementById(id)?.focus());
+            return fieldErrorsFullyHandled(error.fieldErrors, [
+              "personId",
+              "startAt",
+              "endAt",
+              "content",
+              "priority",
+              "expectedOutput",
+              "taskId",
+            ]);
+          },
         );
       }}
     >
@@ -193,6 +242,7 @@ export function QuickCreatePanel({
           value={draft.personId}
           onValueChange={(value) => {
             if (!value) return;
+            clearFieldError("personId");
             onDirtyChange();
             onPersonChange(value);
           }}
@@ -201,7 +251,10 @@ export function QuickCreatePanel({
           clearable={false}
           disabled={disabled}
           placeholder="按姓名或拼音首字母搜索"
+          invalid={Boolean(fieldErrors.personId)}
+          ariaDescribedBy={fieldErrors.personId ? "quick-person-error" : undefined}
         />
+        <FieldError id="quick-person-error" messages={fieldErrors.personId} />
       </Field>
       <Field label="开始" htmlFor="quick-start">
         <Input
@@ -209,9 +262,10 @@ export function QuickCreatePanel({
           name="startAt"
           type="datetime-local"
           value={startValue}
-          aria-invalid={Boolean(rangeError)}
-          aria-describedby={rangeError ? "quick-range-error" : undefined}
+          aria-invalid={Boolean(rangeError || fieldErrors.startAt)}
+          aria-describedby={rangeError || fieldErrors.startAt ? "quick-range-error" : undefined}
           onChange={(event) => {
+            clearFieldError("startAt");
             updateRangeInputs(event.target.value, endValue);
           }}
           required
@@ -223,21 +277,23 @@ export function QuickCreatePanel({
           name="endAt"
           type="datetime-local"
           value={endValue}
-          aria-invalid={Boolean(rangeError)}
-          aria-describedby={rangeError ? "quick-range-error" : undefined}
+          aria-invalid={Boolean(rangeError || fieldErrors.endAt)}
+          aria-describedby={rangeError || fieldErrors.endAt ? "quick-range-error" : undefined}
           onChange={(event) => {
+            clearFieldError("endAt");
             updateRangeInputs(startValue, event.target.value);
           }}
           required
         />
       </Field>
-      {rangeError && (
-        <p id="quick-range-error" className="text-sm text-destructive md:col-span-2 xl:col-span-4" role="alert">
-          {rangeError}
-        </p>
-      )}
+      <FieldError
+        id="quick-range-error"
+        messages={rangeError || [...(fieldErrors.startAt ?? []), ...(fieldErrors.endAt ?? [])]}
+        className="md:col-span-2 xl:col-span-4"
+      />
       <Field label="内容" htmlFor="quick-content" className="md:col-span-2">
-        <Input id="quick-content" name="content" defaultValue="" required maxLength={2_000} />
+        <Input id="quick-content" name="content" defaultValue="" required maxLength={2_000} aria-invalid={Boolean(fieldErrors.content)} aria-describedby={fieldErrors.content ? "quick-content-error" : undefined} onChange={() => clearFieldError("content")} />
+        <FieldError id="quick-content-error" messages={fieldErrors.content} />
       </Field>
       <Field label="Task" htmlFor="quick-task">
         {lockedTaskId ? (
@@ -258,6 +314,7 @@ export function QuickCreatePanel({
             value={taskId}
             onValueChange={(value) => {
               setTaskId(value);
+              clearFieldError("taskId");
               onDirtyChange();
             }}
             initialOptions={taskOptions}
@@ -267,13 +324,25 @@ export function QuickCreatePanel({
             clearable={allowIndependent}
             disabled={disabled}
             placeholder="按标题、描述或拼音首字母搜索"
+            invalid={Boolean(fieldErrors.taskId)}
+            ariaDescribedBy={fieldErrors.taskId ? "quick-task-error" : undefined}
           />
         )}
+        <FieldError id="quick-task-error" messages={fieldErrors.taskId} />
       </Field>
       <Field label="优先级" htmlFor="quick-priority">
-        <select id="quick-priority" name="priority" className={selectClass} defaultValue="MEDIUM">
+        <select
+          id="quick-priority"
+          name="priority"
+          className={selectClass}
+          defaultValue="MEDIUM"
+          aria-invalid={Boolean(fieldErrors.priority)}
+          aria-describedby={fieldErrors.priority ? "quick-priority-error" : undefined}
+          onChange={() => clearFieldError("priority")}
+        >
           {Object.entries(taskPriorityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select>
+        <FieldError id="quick-priority-error" messages={fieldErrors.priority} />
       </Field>
       <Field label="预期输出" htmlFor="quick-expected" className="md:col-span-2 xl:col-span-4">
         <Textarea
@@ -281,7 +350,11 @@ export function QuickCreatePanel({
           name="expectedOutput"
           maxLength={2_000}
           placeholder="填写本次投入预期形成的结果"
+          aria-invalid={Boolean(fieldErrors.expectedOutput)}
+          aria-describedby={fieldErrors.expectedOutput ? "quick-expected-error" : undefined}
+          onChange={() => clearFieldError("expectedOutput")}
         />
+        <FieldError id="quick-expected-error" messages={fieldErrors.expectedOutput} />
       </Field>
       <div className="flex gap-2 md:col-span-2 xl:col-span-4">
         <Button type="submit" disabled={disabled}>创建</Button>
@@ -332,6 +405,8 @@ export function SegmentInspector({
     action: () => Promise<ProjectManagementActionResult<unknown>>,
     successMessage: string,
     rollback?: () => void,
+    onSuccess?: () => void,
+    onFailure?: (error: ProjectManagementActionFailure["error"]) => boolean | void,
   ) => void;
   onRetryDetail: () => void;
   onLoadMoreChanges: () => void;
@@ -340,6 +415,15 @@ export function SegmentInspector({
   onTaskNavigation: () => boolean;
   onRangeChange: (range: { startMs: number; endMs: number }) => void;
 }) {
+  const [editErrors, setEditErrors] = useState<Record<string, string[]>>({});
+  const clearEditError = (key: string) => {
+    setEditErrors((current) => {
+      if (!current[key]) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  };
   if (!canvasSegment) {
     return <aside className="rounded-xl border border-dashed border-border p-5 text-sm text-muted-foreground">选择画布中的投入查看 Inspector。</aside>;
   }
@@ -449,10 +533,30 @@ export function SegmentInspector({
         <form
           className="grid gap-3 md:grid-cols-2"
           aria-label="编辑投入详情"
+          noValidate
           onChange={() => onDirtyChange(true)}
           onSubmit={(event) => {
             event.preventDefault();
             const form = new FormData(event.currentTarget);
+            const submittedRange = validateSegmentRangeInputs(
+              String(form.get("startAt") ?? ""),
+              String(form.get("endAt") ?? ""),
+            );
+            if (!submittedRange.ok) {
+              setEditErrors((current) => ({
+                ...current,
+                startAt: [submittedRange.message],
+              }));
+              requestAnimationFrame(() => document.getElementById("inspect-start")?.focus());
+              return;
+            }
+            const content = String(form.get("content") ?? "");
+            if (!content.trim()) {
+              const next = { content: ["请输入工作内容"] };
+              setEditErrors((current) => ({ ...current, ...next }));
+              requestAnimationFrame(() => document.getElementById("inspect-content")?.focus());
+              return;
+            }
             onRun(
               () => updateWorkSegment({
                 segmentId: detail.id,
@@ -460,21 +564,40 @@ export function SegmentInspector({
                 reason: String(form.get("reason") ?? "投入详情更新"),
                 startAt: new Date(detailRange.startMs).toISOString(),
                 endAt: new Date(detailRange.endMs).toISOString(),
-                content: String(form.get("content") ?? ""),
+                content,
                 priority: String(form.get("priority") ?? detail.priority),
                 expectedOutput: String(form.get("expectedOutput") ?? ""),
                 actualOutput: String(form.get("actualOutput") ?? ""),
               }),
               "已更新投入详情",
+              undefined,
+              undefined,
+              (error) => {
+                const next = supportedFieldErrors(error.fieldErrors, ["startAt", "endAt", "content", "priority", "expectedOutput", "actualOutput", "reason"]);
+                if (Object.keys(next).length === 0) return false;
+                setEditErrors(next);
+                const first = ["startAt", "endAt", "content", "priority", "expectedOutput", "actualOutput", "reason"].find((key) => next[key]);
+                const id = first === "startAt" ? "inspect-start" : first === "endAt" ? "inspect-end" : first ? `inspect-${first === "expectedOutput" ? "expected" : first === "actualOutput" ? "actual" : first}` : "inspect-content";
+                requestAnimationFrame(() => document.getElementById(id)?.focus());
+                return fieldErrorsFullyHandled(error.fieldErrors, [
+                  "startAt",
+                  "endAt",
+                  "content",
+                  "priority",
+                  "expectedOutput",
+                  "actualOutput",
+                  "reason",
+                ]);
+              },
             );
           }}
         >
-          <SegmentRangeFields range={detailRange} onRangeChange={onRangeChange} />
-          <Field label="内容" htmlFor="inspect-content" className="md:col-span-2"><Textarea id="inspect-content" name="content" defaultValue={detail.content} maxLength={2_000} required /></Field>
-          <Field label="优先级" htmlFor="inspect-priority"><select id="inspect-priority" name="priority" className={selectClass} defaultValue={detail.priority}>{Object.entries(taskPriorityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>
-          <Field label="预期输出" htmlFor="inspect-expected" className="md:col-span-2"><Textarea id="inspect-expected" name="expectedOutput" defaultValue={detail.expectedOutput} maxLength={2_000} /></Field>
-          <Field label="实际输出" htmlFor="inspect-actual" className="md:col-span-2"><Textarea id="inspect-actual" name="actualOutput" defaultValue={detail.actualOutput} maxLength={2_000} /></Field>
-          <Input className="md:col-span-2" name="reason" aria-label="修改原因" placeholder="修改原因（可选）" />
+          <SegmentRangeFields range={detailRange} onRangeChange={onRangeChange} errors={editErrors} onClearError={clearEditError} />
+          <Field label="内容" htmlFor="inspect-content" className="md:col-span-2"><Textarea id="inspect-content" name="content" defaultValue={detail.content} maxLength={2_000} required aria-invalid={Boolean(editErrors.content)} aria-describedby={editErrors.content ? "inspect-content-error" : undefined} onChange={() => clearEditError("content")} /><FieldError id="inspect-content-error" messages={editErrors.content} /></Field>
+          <Field label="优先级" htmlFor="inspect-priority"><select id="inspect-priority" name="priority" className={selectClass} defaultValue={detail.priority} aria-invalid={Boolean(editErrors.priority)} aria-describedby={editErrors.priority ? "inspect-priority-error" : undefined} onChange={() => clearEditError("priority")}>{Object.entries(taskPriorityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><FieldError id="inspect-priority-error" messages={editErrors.priority} /></Field>
+          <Field label="预期输出" htmlFor="inspect-expected" className="md:col-span-2"><Textarea id="inspect-expected" name="expectedOutput" defaultValue={detail.expectedOutput} maxLength={2_000} aria-invalid={Boolean(editErrors.expectedOutput)} aria-describedby={editErrors.expectedOutput ? "inspect-expected-error" : undefined} onChange={() => clearEditError("expectedOutput")} /><FieldError id="inspect-expected-error" messages={editErrors.expectedOutput} /></Field>
+          <Field label="实际输出" htmlFor="inspect-actual" className="md:col-span-2"><Textarea id="inspect-actual" name="actualOutput" defaultValue={detail.actualOutput} maxLength={2_000} aria-invalid={Boolean(editErrors.actualOutput)} aria-describedby={editErrors.actualOutput ? "inspect-actual-error" : undefined} onChange={() => clearEditError("actualOutput")} /><FieldError id="inspect-actual-error" messages={editErrors.actualOutput} /></Field>
+          <div className="md:col-span-2"><Input id="inspect-reason" name="reason" aria-label="修改原因" placeholder="修改原因（可选）" aria-invalid={Boolean(editErrors.reason)} aria-describedby={editErrors.reason ? "inspect-reason-error" : undefined} onChange={() => clearEditError("reason")} /><FieldError id="inspect-reason-error" messages={editErrors.reason} className="mt-1.5" /></div>
           <Button className="md:col-span-2 md:w-fit" type="submit" disabled={disabled}>保存基本信息</Button>
         </form>
       ) : (
@@ -503,10 +626,10 @@ export function SegmentInspector({
       )}
 
       {plannedEditable && canvasSegment.permissions.canCancel && (
-        <ReasonAction label="取消计划" destructive disabled={disabled} onSubmit={(reason) => onRun(() => cancelPlannedSegment({ segmentId: detail.id, expectedUpdatedAt: detail.updatedAt, reason }), "已取消计划")} />
+        <ReasonAction label="取消计划" destructive disabled={disabled} onSubmit={(reason, onFailure) => onRun(() => cancelPlannedSegment({ segmentId: detail.id, expectedUpdatedAt: detail.updatedAt, reason }), "已取消计划", undefined, undefined, onFailure)} />
       )}
       {detail.type === "ACTUAL" && canvasSegment.permissions.canSoftDelete && (
-        <ReasonAction label="删除 Actual" destructive disabled={disabled} onSubmit={(reason) => onRun(() => softDeleteActualSegment({ segmentId: detail.id, expectedUpdatedAt: detail.updatedAt, reason }), "已软删除 Actual")} />
+        <ReasonAction label="删除 Actual" destructive disabled={disabled} onSubmit={(reason, onFailure) => onRun(() => softDeleteActualSegment({ segmentId: detail.id, expectedUpdatedAt: detail.updatedAt, reason }), "已软删除 Actual", undefined, undefined, onFailure)} />
       )}
 
       <section className="border-t border-border pt-4" aria-label="来源与历史">
@@ -598,14 +721,29 @@ export function SegmentInspector({
   );
 }
 
-function ReasonAction({ label, destructive, disabled, onSubmit }: { label: string; destructive?: boolean; disabled: boolean; onSubmit: (reason: string) => void }) {
+function ReasonAction({ label, destructive, disabled, onSubmit }: { label: string; destructive?: boolean; disabled: boolean; onSubmit: (reason: string, onFailure: (error: ProjectManagementActionFailure["error"]) => boolean) => void }) {
+  const [reasonError, setReasonError] = useState("");
+  const inputId = label === "取消计划" ? "cancel-segment-reason" : "delete-segment-reason";
   return (
-    <form className="grid gap-2 border-t border-border pt-4" onSubmit={(event) => {
+    <form className="grid gap-2 border-t border-border pt-4" noValidate onSubmit={(event) => {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
-      onSubmit(String(form.get("reason") ?? ""));
+      const reason = String(form.get("reason") ?? "");
+      if (!reason.trim()) {
+        setReasonError(label === "取消计划" ? "请输入取消原因" : "请输入删除原因");
+        requestAnimationFrame(() => document.getElementById(inputId)?.focus());
+        return;
+      }
+      onSubmit(reason, (error) => {
+        const message = firstFieldErrorMessage(error.fieldErrors, "reason");
+        if (!message) return false;
+        setReasonError(message);
+        requestAnimationFrame(() => document.getElementById(inputId)?.focus());
+        return fieldErrorsFullyHandled(error.fieldErrors, ["reason"]);
+      });
     }}>
-      <Input name="reason" aria-label={`${label}原因`} placeholder={`${label}原因`} required />
+      <Input id={inputId} name="reason" aria-label={`${label}原因`} placeholder={`${label}原因`} required aria-invalid={Boolean(reasonError)} aria-describedby={reasonError ? `${inputId}-error` : undefined} onChange={(event) => { if (event.target.value.trim()) setReasonError(""); }} />
+      <FieldError id={`${inputId}-error`} messages={reasonError} />
       <Button type="submit" variant={destructive ? "destructive" : "outline"} disabled={disabled}>{label}</Button>
     </form>
   );
@@ -614,9 +752,13 @@ function ReasonAction({ label, destructive, disabled, onSubmit }: { label: strin
 function SegmentRangeFields({
   range,
   onRangeChange,
+  errors,
+  onClearError,
 }: {
   range: TimeCanvasRange;
   onRangeChange: (range: TimeCanvasRange) => void;
+  errors: Record<string, string[]>;
+  onClearError: (key: string) => void;
 }) {
   const [rangeInputs, setRangeInputs] = useState<{
     baseStartMs: number;
@@ -666,9 +808,9 @@ function SegmentRangeFields({
           name="startAt"
           type="datetime-local"
           value={startValue}
-          aria-invalid={Boolean(rangeError)}
-          aria-describedby={rangeError ? "inspect-range-error" : undefined}
-          onChange={(event) => updateRangeInputs(event.target.value, endValue)}
+          aria-invalid={Boolean(rangeError || errors.startAt)}
+          aria-describedby={rangeError || errors.startAt ? "inspect-range-error" : undefined}
+          onChange={(event) => { onClearError("startAt"); updateRangeInputs(event.target.value, endValue); }}
           required
         />
       </Field>
@@ -679,17 +821,17 @@ function SegmentRangeFields({
           name="endAt"
           type="datetime-local"
           value={endValue}
-          aria-invalid={Boolean(rangeError)}
-          aria-describedby={rangeError ? "inspect-range-error" : undefined}
-          onChange={(event) => updateRangeInputs(startValue, event.target.value)}
+          aria-invalid={Boolean(rangeError || errors.endAt)}
+          aria-describedby={rangeError || errors.endAt ? "inspect-range-error" : undefined}
+          onChange={(event) => { onClearError("endAt"); updateRangeInputs(startValue, event.target.value); }}
           required
         />
       </Field>
-      {rangeError && (
-        <p id="inspect-range-error" className="text-sm text-destructive md:col-span-2" role="alert">
-          {rangeError}
-        </p>
-      )}
+      <FieldError
+        id="inspect-range-error"
+        messages={rangeError || [...(errors.startAt ?? []), ...(errors.endAt ?? [])]}
+        className="md:col-span-2"
+      />
     </>
   );
 }
@@ -706,6 +848,9 @@ function PartialConfirmForm({
   onRun: (
     action: () => Promise<ProjectManagementActionResult<unknown>>,
     successMessage: string,
+    rollback?: () => void,
+    onSuccess?: () => void,
+    onFailure?: (error: ProjectManagementActionFailure["error"]) => boolean | void,
   ) => void;
 }) {
   const startMs = Date.parse(detail.startAt);
@@ -714,12 +859,22 @@ function PartialConfirmForm({
   const [coveredMinutes, setCoveredMinutes] = useState(() =>
     Math.min(durationMinutes, Math.max(1, Math.round(durationMinutes / 2))),
   );
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   const coveredEndAt = new Date(startMs + coveredMinutes * 60_000).toISOString();
+  const clearError = (key: string) => {
+    setFieldErrors((current) => {
+      if (!current[key]) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  };
 
   return (
     <form
       className="grid gap-2"
       aria-label="部分确认"
+      noValidate
       onChange={() => onDirtyChange(true)}
       onSubmit={(event) => {
         event.preventDefault();
@@ -735,19 +890,59 @@ function PartialConfirmForm({
           );
           return;
         }
+        const actual = {
+          content: String(form.get("content") ?? ""),
+          expectedOutput: String(form.get("expectedOutput") ?? ""),
+          actualOutput: String(form.get("actualOutput") ?? ""),
+        };
+        const nextErrors: Record<string, string[]> = {};
+        if (!actual.content.trim()) nextErrors.content = ["请输入实际投入内容"];
+        if (!actual.expectedOutput.trim()) nextErrors.expectedOutput = ["请输入预期输出"];
+        if (!actual.actualOutput.trim()) nextErrors.actualOutput = ["请输入实际输出"];
+        if (Object.keys(nextErrors).length > 0) {
+          setFieldErrors((current) => ({ ...current, ...nextErrors }));
+          const first = nextErrors.content ? `partial-content-${detail.id}` : nextErrors.expectedOutput ? `partial-expected-${detail.id}` : `partial-actual-${detail.id}`;
+          requestAnimationFrame(() => document.getElementById(first)?.focus());
+          return;
+        }
         onRun(
           () => partiallyConfirmSegment({
             segmentId: detail.id,
             expectedUpdatedAt: detail.updatedAt,
             coveredStartAt: detail.startAt,
             coveredEndAt,
-            actual: {
-              content: String(form.get("content") ?? ""),
-              expectedOutput: String(form.get("expectedOutput") ?? ""),
-              actualOutput: String(form.get("actualOutput") ?? ""),
-            },
+            actual,
           }),
           "已确认计划前段并保留剩余计划",
+          undefined,
+          undefined,
+          (error) => {
+            const raw = supportedFieldErrors(error.fieldErrors, ["actual.content", "actual.expectedOutput", "actual.actualOutput", "coveredStartAt", "coveredEndAt"]);
+            const next: Record<string, string[]> = {
+              ...(raw["actual.content"] ? { content: raw["actual.content"] } : {}),
+              ...(raw["actual.expectedOutput"] ? { expectedOutput: raw["actual.expectedOutput"] } : {}),
+              ...(raw["actual.actualOutput"] ? { actualOutput: raw["actual.actualOutput"] } : {}),
+              ...(raw.coveredStartAt ? { coveredStartAt: raw.coveredStartAt } : {}),
+              ...(raw.coveredEndAt ? { coveredEndAt: raw.coveredEndAt } : {}),
+            };
+            if (Object.keys(next).length === 0) return false;
+            setFieldErrors(next);
+            const first = next.coveredStartAt || next.coveredEndAt
+              ? `partial-end-${detail.id}`
+              : next.content
+                ? `partial-content-${detail.id}`
+                : next.expectedOutput
+                  ? `partial-expected-${detail.id}`
+                  : `partial-actual-${detail.id}`;
+            requestAnimationFrame(() => document.getElementById(first)?.focus());
+            return fieldErrorsFullyHandled(error.fieldErrors, [
+              "actual.content",
+              "actual.expectedOutput",
+              "actual.actualOutput",
+              "coveredStartAt",
+              "coveredEndAt",
+            ]);
+          },
         );
       }}
     >
@@ -765,6 +960,8 @@ function PartialConfirmForm({
           value={coveredMinutes}
           onChange={(event) => {
             setCoveredMinutes(Number(event.target.value));
+            clearError("coveredStartAt");
+            clearError("coveredEndAt");
             onDirtyChange(true);
           }}
         />
@@ -775,6 +972,7 @@ function PartialConfirmForm({
       </div>
       <Input aria-label="确认开始" type="datetime-local" value={toLocal(startMs)} readOnly />
       <Input
+        id={`partial-end-${detail.id}`}
         aria-label="确认结束"
         type="datetime-local"
         value={toLocal(Date.parse(coveredEndAt))}
@@ -783,9 +981,17 @@ function PartialConfirmForm({
           if (nextMs === null) return;
           const nextMinutes = Math.round((nextMs - startMs) / 60_000);
           setCoveredMinutes(Math.max(1, Math.min(durationMinutes, nextMinutes)));
+          clearError("coveredStartAt");
+          clearError("coveredEndAt");
           onDirtyChange(true);
         }}
         required
+        aria-invalid={Boolean(fieldErrors.coveredStartAt || fieldErrors.coveredEndAt)}
+        aria-describedby={fieldErrors.coveredStartAt || fieldErrors.coveredEndAt ? `partial-range-${detail.id}-error` : undefined}
+      />
+      <FieldError
+        id={`partial-range-${detail.id}-error`}
+        messages={[...(fieldErrors.coveredStartAt ?? []), ...(fieldErrors.coveredEndAt ?? [])]}
       />
       <Field label="实际投入内容" htmlFor={`partial-content-${detail.id}`}>
         <Textarea
@@ -794,7 +1000,11 @@ function PartialConfirmForm({
           defaultValue={detail.content}
           maxLength={2_000}
           required={coveredMinutes < durationMinutes}
+          aria-invalid={Boolean(fieldErrors.content)}
+          aria-describedby={fieldErrors.content ? `partial-content-${detail.id}-error` : undefined}
+          onChange={() => clearError("content")}
         />
+        <FieldError id={`partial-content-${detail.id}-error`} messages={fieldErrors.content} />
       </Field>
       <Field label="预期输出" htmlFor={`partial-expected-${detail.id}`}>
         <Textarea
@@ -803,7 +1013,11 @@ function PartialConfirmForm({
           defaultValue={detail.expectedOutput}
           maxLength={2_000}
           required={coveredMinutes < durationMinutes}
+          aria-invalid={Boolean(fieldErrors.expectedOutput)}
+          aria-describedby={fieldErrors.expectedOutput ? `partial-expected-${detail.id}-error` : undefined}
+          onChange={() => clearError("expectedOutput")}
         />
+        <FieldError id={`partial-expected-${detail.id}-error`} messages={fieldErrors.expectedOutput} />
       </Field>
       <Field label="实际输出" htmlFor={`partial-actual-${detail.id}`}>
         <Textarea
@@ -811,7 +1025,11 @@ function PartialConfirmForm({
           name="actualOutput"
           maxLength={2_000}
           required={coveredMinutes < durationMinutes}
+          aria-invalid={Boolean(fieldErrors.actualOutput)}
+          aria-describedby={fieldErrors.actualOutput ? `partial-actual-${detail.id}-error` : undefined}
+          onChange={() => clearError("actualOutput")}
         />
+        <FieldError id={`partial-actual-${detail.id}-error`} messages={fieldErrors.actualOutput} />
       </Field>
       <Button type="submit" variant="outline" disabled={disabled}>
         {coveredMinutes >= durationMinutes ? "完整确认" : "部分确认"}
@@ -905,4 +1123,17 @@ export function explicitRangeForDraft(range: TimeCanvasRange, draft: CreateDraft
   };
 }
 
-const selectClass = "h-8 min-w-0 rounded-lg border border-input bg-background px-2 text-sm";
+function supportedFieldErrors(
+  fieldErrors: Record<string, string[]> | undefined,
+  supportedPaths: string[],
+) {
+  const supported = new Set(supportedPaths);
+  return Object.fromEntries(
+    Object.entries(fieldErrors ?? {})
+      .filter(([path]) => supported.has(path))
+      .map(([path, messages]) => [path, messages.filter(Boolean)] as const)
+      .filter(([, messages]) => messages.length > 0),
+  );
+}
+
+const selectClass = "h-8 min-w-0 rounded-lg border border-input bg-background px-2 text-sm aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40";

@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { FileSpreadsheet, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { FieldError } from "@/components/ui/field-error";
 import {
   Dialog,
   DialogContent,
@@ -44,6 +45,7 @@ export function BudgetPoolImportDialog({
   const [result, setResult] = useState<BudgetPoolImportResult | null>(null);
   const [parsing, setParsing] = useState(false);
   const [downloadingTemplate, setDownloadingTemplate] = useState(false);
+  const [fileError, setFileError] = useState("");
 
   async function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const selected = event.target.files?.[0];
@@ -53,6 +55,7 @@ export function BudgetPoolImportDialog({
     const generation = parseGenerationRef.current.begin();
     setFile(null);
     setResult(null);
+    setFileError("");
     setParsing(true);
     try {
       validateSpreadsheetFile(selected);
@@ -65,11 +68,11 @@ export function BudgetPoolImportDialog({
       setFile(selected);
       setResult(parsed);
       if (parsed.rows.length === 0 && parsed.errors.length === 0) {
-        toast.error("未解析到有效预算池");
+        setFileError("未解析到有效预算池");
       }
     } catch (err) {
       if (!parseGenerationRef.current.isCurrent(generation)) return;
-      toast.error(err instanceof Error ? err.message : "文件解析失败");
+      setFileError(err instanceof Error ? err.message : "文件解析失败");
       setFile(null);
       setResult(null);
     } finally {
@@ -85,6 +88,7 @@ export function BudgetPoolImportDialog({
       setParsing(false);
       setFile(null);
       setResult(null);
+      setFileError("");
     }
     onOpenChange(next);
   }
@@ -126,17 +130,23 @@ export function BudgetPoolImportDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-wrap gap-2">
+        <div className="space-y-2">
+          <div className="flex flex-wrap gap-2">
           <input
             ref={fileInputRef}
             type="file"
             accept=".xlsx,.xls"
             className="hidden"
+            aria-invalid={Boolean(fileError)}
+            aria-describedby={fileError ? "budget-import-file-error" : undefined}
             onChange={handleFileChange}
           />
           <Button
             type="button"
             variant="outline"
+            className={fileError ? "border-destructive ring-3 ring-destructive/20" : undefined}
+            aria-invalid={Boolean(fileError)}
+            aria-describedby={fileError ? "budget-import-file-error" : undefined}
             disabled={parsing || pending}
             onClick={() => fileInputRef.current?.click()}
           >
@@ -152,6 +162,8 @@ export function BudgetPoolImportDialog({
             <FileSpreadsheet className="mr-1 h-4 w-4" />
             {downloadingTemplate ? "下载中…" : "下载模板"}
           </Button>
+          </div>
+          <FieldError id="budget-import-file-error" messages={fileError} />
         </div>
 
         {result && (

@@ -1518,12 +1518,20 @@ test.describe("project management UI project-management-ui-workbench", () => {
       "maxlength",
       "2000",
     );
-    await expect(page.getByRole("button", { name: "要求修订" })).toBeDisabled();
+    const terminationComment = page.getByLabel("审批说明");
+    await expect(terminationComment).not.toHaveAttribute("aria-invalid", "true");
+    await expect(page.getByRole("button", { name: "要求修订" })).toBeEnabled();
     await expect(
       page.getByRole("button", { name: "驳回", exact: true }),
-    ).toBeDisabled();
-    await page.getByLabel("审批说明").fill("请补充结束总结");
-    await expect(page.getByRole("button", { name: "要求修订" })).toBeEnabled();
+    ).toBeEnabled();
+    await page.getByRole("button", { name: "要求修订" }).click();
+    await expect(terminationComment).toHaveAttribute("aria-invalid", "true");
+    await expect(terminationComment).toBeFocused();
+    await expect(
+      page.getByRole("alert").filter({ hasText: "驳回或要求修订时必须填写说明" }),
+    ).toBeVisible();
+    await terminationComment.fill("请补充结束总结");
+    await expect(terminationComment).not.toHaveAttribute("aria-invalid", "true");
     await page.getByRole("button", { name: "要求修订" }).click();
     await expect(page.getByText("已要求修订 Task 结束申请。")).toBeVisible();
     await expect(page.getByText("上一轮结束申请需要修订")).toBeVisible();
@@ -1641,13 +1649,21 @@ test.describe("project management UI project-management-ui-workbench", () => {
     await expect(
       revisionInspector.getByText("不可删除", { exact: true }),
     ).toBeVisible();
-    await expect(revisionInspector.getByRole("alert")).toContainText(
-      "请输入 Revision 名称",
-    );
-    await expect(revisionInspector.getByRole("alert")).toContainText(
-      "请输入 Revision 详细内容",
-    );
-    await revisionInspector.getByLabel("Revision 名称").fill(firstReason);
+    const revisionReason = revisionInspector.getByLabel("Revision 名称");
+    const revisionDescription = revisionInspector.getByLabel("Revision 详细内容");
+    await expect(revisionReason).not.toHaveAttribute("aria-invalid", "true");
+    await expect(revisionDescription).not.toHaveAttribute("aria-invalid", "true");
+    await page.getByRole("button", { name: "创建并送审" }).first().click();
+    await expect(revisionReason).toHaveAttribute("aria-invalid", "true");
+    await expect(revisionDescription).toHaveAttribute("aria-invalid", "true");
+    await expect(revisionReason).toBeFocused();
+    await expect(
+      revisionInspector.getByRole("alert").filter({ hasText: "请输入 Revision 名称" }),
+    ).toBeVisible();
+    await expect(
+      revisionInspector.getByRole("alert").filter({ hasText: "请输入 Revision 详细内容" }),
+    ).toBeVisible();
+    await revisionReason.fill(firstReason);
     await revisionInspector
       .getByLabel("Revision 详细内容")
       .fill(firstDescription);

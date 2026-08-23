@@ -48,7 +48,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import type { ProjectManagementActionResult } from "@/lib/project-management/application/action-result";
+import type { ProjectManagementActionFailure, ProjectManagementActionResult } from "@/lib/project-management/application/action-result";
 import type { WorkSegmentDetail } from "@/lib/project-management/queries/resource-queries";
 import type {
   PersonOptionDto,
@@ -1043,6 +1043,7 @@ export function ResourcePlannerCanvasClient({
       successMessage: string,
       rollback?: () => void,
       onSuccess?: () => void,
+      onFailure?: (error: ProjectManagementActionFailure["error"]) => boolean | void,
     ) => {
       const preservedViewportCenterMs = persistViewportInUrl
         ? createDraft
@@ -1068,7 +1069,8 @@ export function ResourcePlannerCanvasClient({
         if (!result.ok) {
           rollback?.();
           const stale = result.error.code === "STALE_SEGMENT";
-          setNotice({
+          const fieldErrorHandled = onFailure?.(result.error) === true;
+          setNotice(fieldErrorHandled ? null : {
             kind: "error",
             message: stale
               ? `${result.error.message}，正在读取服务器最新版本。`
@@ -1590,12 +1592,12 @@ export function ResourcePlannerCanvasClient({
           onRangeChange={(startMs, endMs) =>
             updateCreateDraft({ ...createDraft, startMs, endMs })
           }
-          onRun={(action) => {
+          onRun={(action, onFailure) => {
             runMutation(action, "已创建投入记录", undefined, () => {
               setCreateDraft(null);
               draftViewportCenterRef.current = null;
               setCreateDraftDirty(false);
-            });
+            }, onFailure);
           }}
         />
       )}

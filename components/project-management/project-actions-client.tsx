@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Copy } from "lucide-react";
 import { completeProject, deleteProject, reviewProjectEstablishment } from "@/app/actions/project-management/projects";
 import { Button } from "@/components/ui/button";
+import { FieldError } from "@/components/ui/field-error";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { routes } from "@/lib/routes";
@@ -15,6 +16,7 @@ export function ProjectActionsClient({ projectId, lockVersion, requestId, canRev
   const [comment, setComment] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [commentError, setCommentError] = useState("");
   const [dialog, setDialog] = useState<"complete" | "delete" | null>(null);
   function run(operation: () => Promise<{ ok: boolean; error?: { message: string } }>, deleted = false) {
     setError("");
@@ -39,11 +41,11 @@ export function ProjectActionsClient({ projectId, lockVersion, requestId, canRev
   return <div className="min-w-0 space-y-3">
     <div className="flex flex-wrap gap-2">
       <Button type="button" variant="outline" disabled={pending} onClick={() => void copyProjectLink()}><Copy />复制链接</Button>
-      {canReview && requestId && <><Button disabled={pending} onClick={() => run(() => reviewProjectEstablishment({ projectId, requestId, expectedLockVersion: lockVersion, decision: "APPROVE", comment }))}>通过立项</Button><Button variant="destructive" disabled={pending || !comment.trim()} onClick={() => { if (window.confirm("确认驳回该立项申请？")) run(() => reviewProjectEstablishment({ projectId, requestId, expectedLockVersion: lockVersion, decision: "REJECT", comment })); }}>驳回</Button></>}
+      {canReview && requestId && <><Button disabled={pending} onClick={() => run(() => reviewProjectEstablishment({ projectId, requestId, expectedLockVersion: lockVersion, decision: "APPROVE", comment }))}>通过立项</Button><Button variant="destructive" disabled={pending} onClick={() => { if (!comment.trim()) { setCommentError("驳回立项时请填写审批意见"); requestAnimationFrame(() => document.getElementById("project-review-comment")?.focus()); return; } if (window.confirm("确认驳回该立项申请？")) run(() => reviewProjectEstablishment({ projectId, requestId, expectedLockVersion: lockVersion, decision: "REJECT", comment })); }}>驳回</Button></>}
       {canComplete && <Button disabled={pending} onClick={() => setDialog("complete")}>结束 Project</Button>}
       {canDelete && <Button variant="destructive" disabled={pending} onClick={() => setDialog("delete")}>删除 Project</Button>}
     </div>
-    {canReview && <Textarea value={comment} onChange={(event) => setComment(event.target.value)} maxLength={2000} placeholder="审批意见（驳回时必填）" aria-label="立项审批意见" />}
+    {canReview && <><Textarea id="project-review-comment" value={comment} onChange={(event) => { setComment(event.target.value); if (event.target.value.trim()) setCommentError(""); }} maxLength={2000} placeholder="审批意见（驳回时必填）" aria-label="立项审批意见" aria-invalid={Boolean(commentError)} aria-describedby={commentError ? "project-review-comment-error" : undefined} /><FieldError id="project-review-comment-error" messages={commentError} /></>}
     {notice && <p role="status" className="text-sm text-emerald-700">{notice}</p>}
     {error && <p role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">{error}</p>}
     <Dialog open={dialog !== null} onOpenChange={(open) => { if (!open && !pending) setDialog(null); }}><DialogContent><DialogHeader><DialogTitle>{dialog === "delete" ? "删除 Project" : "结束 Project"}</DialogTitle><DialogDescription>{dialog === "delete" ? "Project 会删除，Task 不会删除，只会变为无所属 Project。此操作不会删除 Task 的成员、计划或历史。" : hasNoTasks ? "当前没有关联 Task。确认结束后 Project 资料和成员将变为只读。" : blockingTaskCount > 0 ? `仍有 ${blockingTaskCount} 个 Task 处于草稿或进行中，暂时不能结束 Project。` : "确认结束 Project？结束后 Project 资料、成员和 Task 归属将变为只读。"}</DialogDescription></DialogHeader>

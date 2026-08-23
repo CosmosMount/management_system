@@ -37,6 +37,7 @@ import type { TimeCanvasModel } from "@/components/project-management/time-canva
 const TASK_DETAIL_START_ID = "task-detail-start";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { FieldError } from "@/components/ui/field-error";
 import {
   Dialog,
   DialogContent,
@@ -51,6 +52,10 @@ import type {
   ProjectManagementActionFailure,
   ProjectManagementActionResult,
 } from "@/lib/project-management/application/action-result";
+import {
+  fieldErrorsFullyHandled,
+  firstFieldErrorMessage,
+} from "@/lib/project-management/field-errors";
 import {
   formatDateTime,
   taskNodeStatusLabels,
@@ -83,7 +88,7 @@ type RunAction = (
   action: () => Promise<ProjectManagementActionResult<unknown>>,
   successMessage: string,
   onSuccess?: (data: unknown) => void,
-  onFailure?: (error: ProjectManagementActionFailure["error"]) => void,
+  onFailure?: (error: ProjectManagementActionFailure["error"]) => boolean | void,
 ) => Promise<void>;
 type ApprovalGate = {
   pendingApproval: TaskPendingApproval | null;
@@ -201,8 +206,8 @@ export function TaskWorkbench({
     try {
       const result = await action();
       if (!result.ok) {
-        onFailure?.(result.error);
-        setNotice({
+        const fieldErrorHandled = onFailure?.(result.error) === true;
+        setNotice(fieldErrorHandled ? null : {
           kind: "error",
           message:
             result.error.code === "STALE_TASK"
@@ -634,6 +639,7 @@ function SelectedNodeDetail({
   if (selectedNode.milestone) {
     return (
       <MilestoneDetail
+        key={selectedNode.nodeId}
         workspace={workspace}
         lifecycle={lifecycle}
         node={selectedNode}
@@ -720,7 +726,36 @@ function MilestoneDetail({
   const [evidence, setEvidence] = useState("");
   const [evidenceNote, setEvidenceNote] = useState("");
   const [comment, setComment] = useState("");
+  const [evidenceError, setEvidenceError] = useState("");
+  const [evidenceNoteError, setEvidenceNoteError] = useState("");
+  const [commentError, setCommentError] = useState("");
   const reviewKey = useRef<string | null>(null);
+
+  const submitDecision = (decision: "APPROVE" | "REJECT" | "REVISION") => {
+    if (decision !== "APPROVE" && !comment.trim()) {
+      setCommentError("驳回或要求修订时必须填写说明");
+      requestAnimationFrame(() => document.getElementById(`milestone-review-comment-${pendingReview?.id ?? node.nodeId}`)?.focus());
+      return;
+    }
+    if (!pendingReview) return;
+    const action = decision === "APPROVE"
+      ? () => approveMilestoneReview({ reviewId: pendingReview.id, comment })
+      : decision === "REJECT"
+        ? () => rejectMilestoneReview({ reviewId: pendingReview.id, comment })
+        : () => requireMilestoneRevision({ reviewId: pendingReview.id, comment });
+    void runAction(
+      action,
+      decision === "APPROVE" ? "验收已通过。" : decision === "REJECT" ? "验收已驳回。" : "已要求修订。",
+      () => onApprovalResolved(pendingReview.id),
+      (error) => {
+        const message = firstFieldError(error, ["comment"]);
+        if (!message) return false;
+        setCommentError(message);
+        requestAnimationFrame(() => document.getElementById(`milestone-review-comment-${pendingReview.id}`)?.focus());
+        return fieldErrorsFullyHandled(error.fieldErrors, ["comment"]);
+      },
+    );
+  };
 
   return (
     <div className="space-y-4">
@@ -739,24 +774,34 @@ function MilestoneDetail({
         <div className="space-y-3 border-t border-border pt-4">
           <h3 className="font-medium">提交 Milestone 验收</h3>
           <div className="flex flex-wrap gap-4 text-sm">
-            <label><input type="radio" checked={evidenceKind === "TEXT"} disabled={approvalBlocked} onChange={() => setEvidenceKind("TEXT")} /> 文本证据</label>
-            <label><input type="radio" checked={evidenceKind === "LINK"} disabled={approvalBlocked} onChange={() => setEvidenceKind("LINK")} /> 链接证据</label>
+            <label><input type="radio" checked={evidenceKind === "TEXT"} disabled={approvalBlocked} onChange={() => { setEvidenceKind("TEXT"); setEvidenceError(""); setEvidenceNoteError(""); }} /> 文本证据</label>
+            <label><input type="radio" checked={evidenceKind === "LINK"} disabled={approvalBlocked} onChange={() => { setEvidenceKind("LINK"); setEvidenceError(""); setEvidenceNoteError(""); }} /> 链接证据</label>
           </div>
           <Field label={evidenceKind === "TEXT" ? "文本证据" : "证据链接"}>
             {evidenceKind === "TEXT" ? (
-              <Textarea value={evidence} disabled={approvalBlocked} onChange={(event) => setEvidence(event.target.value)} />
+              <Textarea id={`milestone-evidence-${node.nodeId}`} value={evidence} disabled={approvalBlocked} maxLength={4_000} aria-invalid={Boolean(evidenceError)} aria-describedby={evidenceError ? `milestone-evidence-${node.nodeId}-error` : undefined} onChange={(event) => { setEvidence(event.target.value); setEvidenceError(""); }} />
             ) : (
-              <Input type="url" value={evidence} disabled={approvalBlocked} onChange={(event) => setEvidence(event.target.value)} />
+              <Input id={`milestone-evidence-${node.nodeId}`} type="url" value={evidence} disabled={approvalBlocked} aria-invalid={Boolean(evidenceError)} aria-describedby={evidenceError ? `milestone-evidence-${node.nodeId}-error` : undefined} onChange={(event) => { setEvidence(event.target.value); setEvidenceError(""); }} />
             )}
+            <FieldError id={`milestone-evidence-${node.nodeId}-error`} messages={evidenceError} className="mt-1.5" />
           </Field>
           {evidenceKind === "LINK" && (
-            <Field label="链接说明"><Input value={evidenceNote} disabled={approvalBlocked} onChange={(event) => setEvidenceNote(event.target.value)} /></Field>
+            <Field label="链接说明"><Input id={`milestone-evidence-note-${node.nodeId}`} value={evidenceNote} disabled={approvalBlocked} maxLength={1_000} aria-invalid={Boolean(evidenceNoteError)} aria-describedby={evidenceNoteError ? `milestone-evidence-note-${node.nodeId}-error` : undefined} onChange={(event) => { setEvidenceNote(event.target.value); setEvidenceNoteError(""); }} /><FieldError id={`milestone-evidence-note-${node.nodeId}-error`} messages={evidenceNoteError} className="mt-1.5" /></Field>
           )}
           <Button
             type="button"
             disabled={busy || approvalBlocked}
             title={approvalBlocked ? "当前 Task 已有待审批事项" : undefined}
             onClick={() => {
+              if (evidenceKind === "LINK" && evidence.trim()) {
+                try {
+                  new URL(evidence);
+                } catch {
+                  setEvidenceError("请输入有效链接");
+                  requestAnimationFrame(() => document.getElementById(`milestone-evidence-${node.nodeId}`)?.focus());
+                  return;
+                }
+              }
               reviewKey.current ??= `review-workbench:${globalThis.crypto.randomUUID()}`;
               void runAction(
                 () => submitMilestoneForReview({
@@ -776,6 +821,28 @@ function MilestoneDetail({
                 },
                 (error) => {
                   if (error.code === "STATE_CONFLICT") reviewKey.current = null;
+                  const evidenceMessage = firstFieldError(
+                    error,
+                    evidenceKind === "TEXT"
+                      ? ["evidences.0.note", "evidences"]
+                      : ["evidences.0.externalUrl", "evidences"],
+                  );
+                  const noteMessage = evidenceKind === "LINK"
+                    ? firstFieldError(error, ["evidences.0.note"])
+                    : undefined;
+                  if (!evidenceMessage && !noteMessage) return false;
+                  setEvidenceError(evidenceMessage ?? "");
+                  setEvidenceNoteError(noteMessage ?? "");
+                  requestAnimationFrame(() => document.getElementById(
+                    evidenceMessage
+                      ? `milestone-evidence-${node.nodeId}`
+                      : `milestone-evidence-note-${node.nodeId}`,
+                  )?.focus());
+                  return fieldErrorsFullyHandled(error.fieldErrors, [
+                    "evidences.0.note",
+                    "evidences.0.externalUrl",
+                    "evidences",
+                  ]);
                 },
               );
             }}
@@ -793,11 +860,11 @@ function MilestoneDetail({
           </p>
           {pendingReview.capabilities.canReview && (
             <>
-              <Field label="审批说明"><Textarea value={comment} onChange={(event) => setComment(event.target.value)} /></Field>
+              <Field label="审批说明"><Textarea id={`milestone-review-comment-${pendingReview.id}`} value={comment} maxLength={2_000} aria-invalid={Boolean(commentError)} aria-describedby={commentError ? `milestone-review-comment-${pendingReview.id}-error` : undefined} onChange={(event) => { setComment(event.target.value); if (event.target.value.trim()) setCommentError(""); }} /><FieldError id={`milestone-review-comment-${pendingReview.id}-error`} messages={commentError} className="mt-1.5" /></Field>
               <div className="flex flex-wrap gap-2">
-                <Button type="button" disabled={busy} onClick={() => void runAction(() => approveMilestoneReview({ reviewId: pendingReview.id, comment }), "验收已通过。", () => onApprovalResolved(pendingReview.id))}>通过</Button>
-                <Button type="button" variant="destructive" disabled={busy} onClick={() => void runAction(() => rejectMilestoneReview({ reviewId: pendingReview.id, comment }), "验收已驳回。", () => onApprovalResolved(pendingReview.id))}>驳回</Button>
-                <Button type="button" variant="outline" disabled={busy} onClick={() => void runAction(() => requireMilestoneRevision({ reviewId: pendingReview.id, comment }), "已要求修订。", () => onApprovalResolved(pendingReview.id))}>要求修订</Button>
+                <Button type="button" disabled={busy} onClick={() => submitDecision("APPROVE")}>通过</Button>
+                <Button type="button" variant="destructive" disabled={busy} onClick={() => submitDecision("REJECT")}>驳回</Button>
+                <Button type="button" variant="outline" disabled={busy} onClick={() => submitDecision("REVISION")}>要求修订</Button>
               </div>
             </>
           )}
@@ -823,6 +890,31 @@ function OpenRevisionPanel({
   onResolved: () => void;
 }) {
   const [comment, setComment] = useState("");
+  const [commentError, setCommentError] = useState("");
+  const reviewRevision = (decision: "APPROVE" | "REJECT" | "CANCEL") => {
+    if (decision === "REJECT" && !comment.trim()) {
+      setCommentError("驳回修订时必须填写说明");
+      requestAnimationFrame(() => document.getElementById(`revision-comment-${revision.id}`)?.focus());
+      return;
+    }
+    const action = decision === "APPROVE"
+      ? () => approveRevision({ revisionNodeId: revision.id, comment })
+      : decision === "REJECT"
+        ? () => rejectRevision({ revisionNodeId: revision.id, comment })
+        : () => cancelRevision({ revisionNodeId: revision.id, comment });
+    void runAction(
+      action,
+      decision === "APPROVE" ? "Revision 已批准并应用。" : decision === "REJECT" ? "Revision 已驳回。" : "Revision 已取消。",
+      onResolved,
+      (error) => {
+        const message = firstFieldError(error, ["comment"]);
+        if (!message) return false;
+        setCommentError(message);
+        requestAnimationFrame(() => document.getElementById(`revision-comment-${revision.id}`)?.focus());
+        return fieldErrorsFullyHandled(error.fieldErrors, ["comment"]);
+      },
+    );
+  };
   return (
     <section className="space-y-3 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950">
       <div className="flex flex-wrap items-center gap-2">
@@ -837,7 +929,7 @@ function OpenRevisionPanel({
       />
       <p className="text-xs">Revision 时间：{formatDateTime(revision.revisionAt)}</p>
       {(revision.capabilities.canReview || revision.capabilities.canCancel) && (
-        <Field label="处理说明"><Textarea value={comment} onChange={(event) => setComment(event.target.value)} /></Field>
+        <Field label="处理说明"><Textarea id={`revision-comment-${revision.id}`} value={comment} maxLength={2_000} aria-invalid={Boolean(commentError)} aria-describedby={commentError ? `revision-comment-${revision.id}-error` : undefined} onChange={(event) => { setComment(event.target.value); if (event.target.value.trim()) setCommentError(""); }} /><FieldError id={`revision-comment-${revision.id}-error`} messages={commentError} className="mt-1.5" /></Field>
       )}
       <div className="flex flex-wrap gap-2">
         {revision.capabilities.canEdit && (
@@ -853,12 +945,12 @@ function OpenRevisionPanel({
         )}
         {revision.capabilities.canReview && (
           <>
-            <Button type="button" disabled={busy} onClick={() => void runAction(() => approveRevision({ revisionNodeId: revision.id, comment }), "Revision 已批准并应用。", onResolved)}>批准</Button>
-            <Button type="button" variant="destructive" disabled={busy} onClick={() => void runAction(() => rejectRevision({ revisionNodeId: revision.id, comment }), "Revision 已驳回。", onResolved)}>驳回</Button>
+            <Button type="button" disabled={busy} onClick={() => reviewRevision("APPROVE")}>批准</Button>
+            <Button type="button" variant="destructive" disabled={busy} onClick={() => reviewRevision("REJECT")}>驳回</Button>
           </>
         )}
         {revision.capabilities.canCancel && (
-          <Button type="button" variant="outline" disabled={busy} onClick={() => void runAction(() => cancelRevision({ revisionNodeId: revision.id, comment }), "Revision 已取消。", onResolved)}>取消 Revision</Button>
+          <Button type="button" variant="outline" disabled={busy} onClick={() => reviewRevision("CANCEL")}>取消 Revision</Button>
         )}
       </div>
     </section>
@@ -902,11 +994,38 @@ function TerminationDetail({
   const [reason, setReason] = useState(returnedReview?.reason ?? "");
   const [summary, setSummary] = useState(returnedReview?.summary ?? "");
   const [comment, setComment] = useState("");
+  const [reasonError, setReasonError] = useState("");
+  const [commentError, setCommentError] = useState("");
   const reviewKey = useRef<string | null>(null);
   const canSubmit =
     workspace.task.status === "ACTIVE" &&
     workspace.permissions.canSubmitTerminationReview &&
     !pendingReview;
+  const reviewTermination = (decision: "APPROVE" | "REJECT" | "REVISION") => {
+    if (decision !== "APPROVE" && !comment.trim()) {
+      setCommentError("驳回或要求修订时必须填写说明");
+      requestAnimationFrame(() => document.getElementById(`termination-review-comment-${pendingReview?.id ?? node.nodeId}`)?.focus());
+      return;
+    }
+    if (!pendingReview) return;
+    const action = decision === "APPROVE"
+      ? () => approveTerminationReview({ reviewId: pendingReview.id, comment })
+      : decision === "REJECT"
+        ? () => rejectTerminationReview({ reviewId: pendingReview.id, comment })
+        : () => requireTerminationRevision({ reviewId: pendingReview.id, comment });
+    void runAction(
+      action,
+      decision === "APPROVE" ? "Task 结束申请已通过。" : decision === "REJECT" ? "Task 结束申请已驳回。" : "已要求修订 Task 结束申请。",
+      () => onReviewResolved(pendingReview.id),
+      (error) => {
+        const message = firstFieldError(error, ["comment"]);
+        if (!message) return false;
+        setCommentError(message);
+        requestAnimationFrame(() => document.getElementById(`termination-review-comment-${pendingReview.id}`)?.focus());
+        return fieldErrorsFullyHandled(error.fieldErrors, ["comment"]);
+      },
+    );
+  };
   return (
     <div className="space-y-4">
       <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -963,9 +1082,11 @@ function TerminationDetail({
               className={selectClass}
               value={outcome}
               disabled={approvalBlocked}
-              onChange={(event) =>
-                setOutcome(event.target.value as typeof outcome)
-              }
+              onChange={(event) => {
+                const nextOutcome = event.target.value as typeof outcome;
+                setOutcome(nextOutcome);
+                if (nextOutcome === "SUCCESS") setReasonError("");
+              }}
             >
               <option value="SUCCESS">成功完成</option>
               <option value="FAILED">失败结束</option>
@@ -975,11 +1096,15 @@ function TerminationDetail({
           </Field>
           <Field label="原因">
             <Textarea
+              id={`termination-reason-${node.nodeId}`}
               value={reason}
               maxLength={2000}
               disabled={approvalBlocked}
-              onChange={(event) => setReason(event.target.value)}
+              aria-invalid={Boolean(reasonError)}
+              aria-describedby={reasonError ? `termination-reason-${node.nodeId}-error` : undefined}
+              onChange={(event) => { setReason(event.target.value); if (event.target.value.trim()) setReasonError(""); }}
             />
+            <FieldError id={`termination-reason-${node.nodeId}-error`} messages={reasonError} className="mt-1.5" />
           </Field>
           <Field label="总结">
             <Textarea
@@ -994,6 +1119,11 @@ function TerminationDetail({
             variant="destructive"
             disabled={busy || approvalBlocked}
             onClick={() => {
+              if (outcome !== "SUCCESS" && !reason.trim()) {
+                setReasonError("提前结束或超时时必须填写原因");
+                requestAnimationFrame(() => document.getElementById(`termination-reason-${node.nodeId}`)?.focus());
+                return;
+              }
               reviewKey.current ??= `termination-workbench:${globalThis.crypto.randomUUID()}`;
               void runAction(
                 () =>
@@ -1014,6 +1144,11 @@ function TerminationDetail({
                   if (error.code === "STATE_CONFLICT") {
                     reviewKey.current = null;
                   }
+                  const message = firstFieldError(error, ["reason"]);
+                  if (!message) return false;
+                  setReasonError(message);
+                  requestAnimationFrame(() => document.getElementById(`termination-reason-${node.nodeId}`)?.focus());
+                  return fieldErrorsFullyHandled(error.fieldErrors, ["reason"]);
                 },
               );
             }}
@@ -1041,72 +1176,36 @@ function TerminationDetail({
             <>
               <Field label="审批说明">
                 <Textarea
+                  id={`termination-review-comment-${pendingReview.id}`}
                   value={comment}
                   maxLength={2000}
-                  onChange={(event) => setComment(event.target.value)}
+                  aria-invalid={Boolean(commentError)}
+                  aria-describedby={commentError ? `termination-review-comment-${pendingReview.id}-error` : undefined}
+                  onChange={(event) => { setComment(event.target.value); if (event.target.value.trim()) setCommentError(""); }}
                 />
+                <FieldError id={`termination-review-comment-${pendingReview.id}-error`} messages={commentError} className="mt-1.5" />
               </Field>
               <div className="flex flex-wrap gap-2">
                 <Button
                   type="button"
                   disabled={busy}
-                  onClick={() =>
-                    void runAction(
-                      () =>
-                        approveTerminationReview({
-                          reviewId: pendingReview.id,
-                          comment,
-                        }),
-                      "Task 结束申请已通过。",
-                      () => onReviewResolved(pendingReview.id),
-                    )
-                  }
+                  onClick={() => reviewTermination("APPROVE")}
                 >
                   通过
                 </Button>
                 <Button
                   type="button"
                   variant="destructive"
-                  disabled={busy || comment.trim().length === 0}
-                  title={
-                    comment.trim().length === 0
-                      ? "驳回必须填写审批说明"
-                      : undefined
-                  }
-                  onClick={() =>
-                    void runAction(
-                      () =>
-                        rejectTerminationReview({
-                          reviewId: pendingReview.id,
-                          comment,
-                        }),
-                      "Task 结束申请已驳回。",
-                      () => onReviewResolved(pendingReview.id),
-                    )
-                  }
+                  disabled={busy}
+                  onClick={() => reviewTermination("REJECT")}
                 >
                   驳回
                 </Button>
                 <Button
                   type="button"
                   variant="outline"
-                  disabled={busy || comment.trim().length === 0}
-                  title={
-                    comment.trim().length === 0
-                      ? "要求修订必须填写审批说明"
-                      : undefined
-                  }
-                  onClick={() =>
-                    void runAction(
-                      () =>
-                        requireTerminationRevision({
-                          reviewId: pendingReview.id,
-                          comment,
-                        }),
-                      "已要求修订 Task 结束申请。",
-                      () => onReviewResolved(pendingReview.id),
-                    )
-                  }
+                  disabled={busy}
+                  onClick={() => reviewTermination("REVISION")}
                 >
                   要求修订
                 </Button>
@@ -1150,14 +1249,45 @@ function ActiveTaskEditor({
   const [peopleOptions, setPeopleOptions] = useState(people);
   const [relatedTaskId, setRelatedTaskId] = useState(workspace.task.relatedTaskId);
   const [projectId, setProjectId] = useState(workspace.task.projectId);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
+  const clearFieldError = (key: string) => {
+    setFieldErrors((current) => {
+      if (!current[key]) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  };
+  const focusFirstFieldError = (errors: Record<string, string[]>) => {
+    const keys = ["title", "description", "team", "techGroup", "priority", "relatedTaskId", "projectId", "members"];
+    const first = keys.find((key) => errors[key]);
+    if (!first) return;
+    const id = first === "relatedTaskId" ? "active-task-related" : first === "projectId" ? "active-task-project" : first === "members" ? "active-task-members" : `active-task-${first}`;
+    requestAnimationFrame(() => document.getElementById(id)?.focus());
+  };
   return (
     <form
       className="grid gap-5 lg:grid-cols-2"
       aria-label="修改 Task"
+      noValidate
       onSubmit={(event) => {
         event.preventDefault();
         if (stale) return;
         const form = new FormData(event.currentTarget);
+        const nextErrors: Record<string, string[]> = {};
+        if (editable && !String(form.get("title") ?? "").trim()) {
+          nextErrors.title = ["请输入 Task 名称"];
+        }
+        if (canManageMembers && members.length === 0) {
+          nextErrors.members = ["至少添加一名 Task 成员"];
+        } else if (canManageMembers && members.every((member) => member.role !== "OWNER")) {
+          nextErrors.members = ["至少需要一名负责人"];
+        }
+        if (Object.keys(nextErrors).length > 0) {
+          setFieldErrors((current) => ({ ...current, ...nextErrors }));
+          focusFirstFieldError(nextErrors);
+          return;
+        }
         void runAction(
           () => updateActiveTask({
             taskId: workspace.task.id,
@@ -1179,6 +1309,11 @@ function ActiveTaskEditor({
           onSaved,
           (error) => {
             if (error.code === "STALE_TASK") setStale(true);
+            const next = activeTaskFieldErrors(error.fieldErrors);
+            if (Object.keys(next).length === 0) return false;
+            setFieldErrors(next);
+            focusFirstFieldError(next);
+            return activeTaskFieldErrorsFullyHandled(error.fieldErrors);
           },
         );
       }}
@@ -1202,37 +1337,43 @@ function ActiveTaskEditor({
         aria-label="Task 元数据"
       >
         <h3 className="font-semibold">基本信息</h3>
-        <Field label="标题"><Input name="title" defaultValue={workspace.task.title} disabled={!editable} required maxLength={200} /></Field>
-        <Field label="描述"><Textarea name="description" defaultValue={workspace.task.description} disabled={!editable} maxLength={8_000} /></Field>
+        <Field label="标题"><Input id="active-task-title" name="title" defaultValue={workspace.task.title} disabled={!editable} required maxLength={200} aria-invalid={Boolean(fieldErrors.title)} aria-describedby={fieldErrors.title ? "active-task-title-error" : undefined} onChange={() => clearFieldError("title")} /><FieldError id="active-task-title-error" messages={fieldErrors.title} /></Field>
+        <Field label="描述"><Textarea id="active-task-description" name="description" defaultValue={workspace.task.description} disabled={!editable} maxLength={8_000} aria-invalid={Boolean(fieldErrors.description)} aria-describedby={fieldErrors.description ? "active-task-description-error" : undefined} onChange={() => clearFieldError("description")} /><FieldError id="active-task-description-error" messages={fieldErrors.description} /></Field>
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="车组"><select name="team" defaultValue={workspace.task.team} disabled={!editable} className={selectClass}>{TEAM_OPTIONS.map((value) => <option key={value}>{value}</option>)}</select></Field>
-          <Field label="技术组"><select name="techGroup" defaultValue={workspace.task.techGroup} disabled={!editable} className={selectClass}>{TECH_GROUP_OPTIONS.map((value) => <option key={value}>{value}</option>)}</select></Field>
-          <Field label="优先级"><select name="priority" defaultValue={workspace.task.priority} disabled={!editable} className={selectClass}>{Object.entries(taskPriorityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>
+          <Field label="车组"><select id="active-task-team" name="team" defaultValue={workspace.task.team} disabled={!editable} className={selectClass} aria-invalid={Boolean(fieldErrors.team)} aria-describedby={fieldErrors.team ? "active-task-team-error" : undefined} onChange={() => clearFieldError("team")}>{TEAM_OPTIONS.map((value) => <option key={value}>{value}</option>)}</select><FieldError id="active-task-team-error" messages={fieldErrors.team} /></Field>
+          <Field label="技术组"><select id="active-task-techGroup" name="techGroup" defaultValue={workspace.task.techGroup} disabled={!editable} className={selectClass} aria-invalid={Boolean(fieldErrors.techGroup)} aria-describedby={fieldErrors.techGroup ? "active-task-techGroup-error" : undefined} onChange={() => clearFieldError("techGroup")}>{TECH_GROUP_OPTIONS.map((value) => <option key={value}>{value}</option>)}</select><FieldError id="active-task-techGroup-error" messages={fieldErrors.techGroup} /></Field>
+          <Field label="优先级"><select id="active-task-priority" name="priority" defaultValue={workspace.task.priority} disabled={!editable} className={selectClass} aria-invalid={Boolean(fieldErrors.priority)} aria-describedby={fieldErrors.priority ? "active-task-priority-error" : undefined} onChange={() => clearFieldError("priority")}>{Object.entries(taskPriorityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><FieldError id="active-task-priority-error" messages={fieldErrors.priority} /></Field>
         </div>
         <Field label="关联 Task">
           <TaskSelect
             ariaLabel="关联 Task"
+            inputId="active-task-related"
             value={relatedTaskId}
-            onValueChange={setRelatedTaskId}
+            onValueChange={(value) => { setRelatedTaskId(value); clearFieldError("relatedTaskId"); }}
             initialOptions={taskOptions}
             excludeIds={[workspace.task.id]}
             disabled={!editable}
             placeholder="按标题、描述或拼音首字母搜索"
+            invalid={Boolean(fieldErrors.relatedTaskId)}
+            ariaDescribedBy={fieldErrors.relatedTaskId ? "active-task-related-error" : undefined}
           />
+          <FieldError id="active-task-related-error" messages={fieldErrors.relatedTaskId} />
         </Field>
         <Field label="所属 Project">
-          <ProjectSelect value={projectId} onValueChange={setProjectId} initialOptions={projectOptions} disabled={!editable} />
+          <ProjectSelect inputId="active-task-project" value={projectId} onValueChange={(value) => { setProjectId(value); clearFieldError("projectId"); }} initialOptions={projectOptions} disabled={!editable} invalid={Boolean(fieldErrors.projectId)} ariaDescribedBy={fieldErrors.projectId ? "active-task-project-error" : undefined} />
+          <FieldError id="active-task-project-error" messages={fieldErrors.projectId} />
         </Field>
       </section>
 
-      <section className="space-y-3 rounded-xl border border-border p-4">
+      <section id="active-task-members" tabIndex={-1} className="space-y-3 rounded-xl border border-border p-4">
         <h3 className="font-semibold">成员与角色</h3>
         <TaskMemberRolePicker
           members={members}
           people={peopleOptions}
           scope={{ purpose: "TASK_MEMBERS", taskId: workspace.task.id }}
           editable={canManageMembers}
-          onChange={setMembers}
+          error={fieldErrors.members}
+          onChange={(value) => { setMembers(value); clearFieldError("members"); }}
           onPersonResolved={(person) =>
             setPeopleOptions((current) => mergeById(current, [person]))
           }
@@ -1402,4 +1543,56 @@ function terminationOutcomeLabel(outcome: string) {
   return ({ SUCCESS: "成功完成", FAILED: "失败结束", CANCELLED: "提前取消", TIMEOUT: "超时结束" } as Record<string, string>)[outcome] ?? outcome;
 }
 
-const selectClass = "h-9 w-full min-w-0 rounded-lg border border-input bg-background px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50";
+function firstFieldError(
+  error: ProjectManagementActionFailure["error"],
+  paths: string[],
+) {
+  for (const path of paths) {
+    const message = firstFieldErrorMessage(error.fieldErrors, path);
+    if (message) return message;
+  }
+  return undefined;
+}
+
+const ACTIVE_TASK_FIELD_ERROR_KEYS = new Set([
+  "title",
+  "description",
+  "team",
+  "techGroup",
+  "priority",
+  "relatedTaskId",
+  "projectId",
+  "members",
+]);
+
+function activeTaskFieldErrors(fieldErrors?: Record<string, string[]>) {
+  const result: Record<string, string[]> = {};
+  for (const [path, messages] of Object.entries(fieldErrors ?? {})) {
+    const normalized = path.startsWith("metadata.") ? path.slice("metadata.".length) : path;
+    const key = normalized.startsWith("members.") ? "members" : normalized;
+    if (ACTIVE_TASK_FIELD_ERROR_KEYS.has(key)) {
+      const visibleMessages = messages.filter(Boolean);
+      if (visibleMessages.length > 0) {
+        result[key] = [...(result[key] ?? []), ...visibleMessages];
+      }
+    }
+  }
+  return result;
+}
+
+function activeTaskFieldErrorsFullyHandled(fieldErrors?: Record<string, string[]>) {
+  return fieldErrorsFullyHandled(
+    fieldErrors,
+    ACTIVE_TASK_FIELD_ERROR_KEYS,
+    normalizeActiveTaskFieldErrorPath,
+  );
+}
+
+function normalizeActiveTaskFieldErrorPath(path: string) {
+  const normalized = path.startsWith("metadata.")
+    ? path.slice("metadata.".length)
+    : path;
+  return normalized.startsWith("members.") ? "members" : normalized;
+}
+
+const selectClass = "h-9 w-full min-w-0 rounded-lg border border-input bg-background px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40";

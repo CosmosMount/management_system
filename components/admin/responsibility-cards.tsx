@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useId, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { X } from "lucide-react";
 import { toast } from "sonner";
@@ -22,6 +22,7 @@ import {
   type RunAccountMutation,
 } from "@/components/admin/accounts-contract";
 import { Button } from "@/components/ui/button";
+import { FieldError } from "@/components/ui/field-error";
 import {
   Card,
   CardContent,
@@ -269,10 +270,17 @@ function ResponsibilityCell({
 }: ResponsibilityCellProps) {
   const [accountId, setAccountId] = useState<string | null>(null);
   const [selectedAccount, setSelectedAccount] = useState<AdminAccountOption | null>(null);
+  const [accountError, setAccountError] = useState("");
   const label = reimbursementRoleLabels[role];
+  const pickerId = useId();
+  const pickerErrorId = `${pickerId}-error`;
 
   function handleAdd() {
-    if (!accountId) return;
+    if (!accountId) {
+      setAccountError("请选择要添加的账号");
+      requestAnimationFrame(() => document.getElementById(pickerId)?.focus());
+      return;
+    }
     run(
       () => assignAccountReimbursementRole({
         targetAccountId: accountId,
@@ -295,6 +303,7 @@ function ResponsibilityCell({
           }
           setAccountId(null);
           setSelectedAccount(null);
+          setAccountError("");
         },
       },
     );
@@ -302,29 +311,36 @@ function ResponsibilityCell({
 
   return (
     <div className="grid min-w-0 gap-3 xl:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)] xl:items-start">
-      <div className="flex min-w-0 gap-2">
-        <AdminAccountSelect
-          purpose="REIMBURSEMENT"
-          value={accountId}
-          onValueChange={setAccountId}
-          onOptionChange={setSelectedAccount}
-          excludeIds={entries.map((entry) => entry.account.id)}
-          ariaLabel={`为${scope}选择${label}`}
-          placeholder="搜索添加"
-          className="min-w-0 flex-1"
-          disabled={pending}
-        />
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          className="shrink-0"
-          disabled={!accountId || pending}
-          aria-label={`添加${scope}${label}`}
-          onClick={handleAdd}
-        >
-          确定
-        </Button>
+      <div className="min-w-0 space-y-1">
+        <div className="flex min-w-0 gap-2">
+          <AdminAccountSelect
+            purpose="REIMBURSEMENT"
+            value={accountId}
+            onValueChange={(value) => { setAccountId(value); if (value) setAccountError(""); }}
+            onOptionChange={setSelectedAccount}
+            excludeIds={entries.map((entry) => entry.account.id)}
+            ariaLabel={`为${scope}选择${label}`}
+            placeholder="搜索添加"
+            className="min-w-0 flex-1"
+            disabled={pending}
+            inputId={pickerId}
+            invalid={Boolean(accountError)}
+            ariaDescribedBy={accountError ? pickerErrorId : undefined}
+            openOnFocus={false}
+          />
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="shrink-0"
+            disabled={pending}
+            aria-label={`添加${scope}${label}`}
+            onClick={handleAdd}
+          >
+            确定
+          </Button>
+        </div>
+        <FieldError id={pickerErrorId} messages={accountError} />
       </div>
       <div className="flex min-w-0 flex-wrap gap-2 xl:justify-end">
         {entries.length === 0 ? (
@@ -407,8 +423,25 @@ function TeacherEmailEditor({
   const router = useRouter();
   const [email, setEmail] = useState(initialEmail);
   const [saving, startSaving] = useTransition();
+  const [emailError, setEmailError] = useState("");
+  const emailInputRef = useRef<HTMLInputElement | null>(null);
+  const emailErrorId = `${useId()}-error`;
+
+  function revealEmailError(message: string) {
+    setEmailError(message);
+    requestAnimationFrame(() => emailInputRef.current?.focus());
+  }
 
   function handleSave() {
+    const trimmed = email.trim();
+    if (trimmed.length > 254) {
+      revealEmailError("邮箱长度不能超过 254 个字符");
+      return;
+    }
+    if (trimmed && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+      revealEmailError("邮箱格式不正确");
+      return;
+    }
     startSaving(async () => {
       try {
         const result = await updateTeacherEmail({ accountId, email });
@@ -416,23 +449,29 @@ function TeacherEmailEditor({
         toast.success(result.email ? "审批邮箱已保存" : "审批邮箱已清除");
         router.refresh();
       } catch (error) {
-        toast.error(error instanceof Error ? error.message : "保存失败");
+        const message = error instanceof Error ? error.message : "保存失败";
+        if (message.includes("邮箱")) revealEmailError(message);
+        else toast.error(message);
       }
     });
   }
 
   return (
-    <div className="flex min-w-0 items-center gap-1">
-      <Input
+    <div className="min-w-0 space-y-1">
+      <div className="flex min-w-0 items-center gap-1">
+        <Input
+        ref={emailInputRef}
         type="email"
         value={email}
-        onChange={(event) => setEmail(event.target.value)}
+        onChange={(event) => { setEmail(event.target.value); setEmailError(""); }}
         placeholder="Outlook 邮箱"
         aria-label={`${displayName} 的指导老师审批邮箱`}
         className="h-8 min-w-0 text-xs"
         disabled={pending || saving}
-      />
-      <Button
+        aria-invalid={Boolean(emailError)}
+        aria-describedby={emailError ? emailErrorId : undefined}
+        />
+        <Button
         type="button"
         size="sm"
         variant="outline"
@@ -441,7 +480,9 @@ function TeacherEmailEditor({
         onClick={handleSave}
       >
         保存
-      </Button>
+        </Button>
+      </div>
+      <FieldError id={emailErrorId} messages={emailError} className="text-xs" />
     </div>
   );
 }

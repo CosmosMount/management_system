@@ -1,7 +1,7 @@
 "use client";
 
 import type { FormEventHandler } from "react";
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import { ImageIcon, MessageSquare, Send } from "lucide-react";
 import type { FeedbackStatus } from "@prisma/client";
 import { ImagePreview } from "@/components/image-preview";
@@ -20,6 +20,7 @@ import {
 } from "@/components/feedback/feedback-list";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { FieldError } from "@/components/ui/field-error";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { feedbackStatusLabels } from "@/lib/feedback-labels";
@@ -52,6 +53,22 @@ export function FeedbackConversation({
   onReply: FormEventHandler<HTMLFormElement>;
   onStatus: (status: FeedbackStatus) => void;
 }) {
+  const [replyError, setReplyError] = useState("");
+  const [imageError, setImageError] = useState("");
+
+  function handleReply(event: FormEvent<HTMLFormElement>) {
+    const body = event.currentTarget.elements.namedItem("body") as HTMLTextAreaElement | null;
+    if (!body?.value.trim() && replyImages.length === 0) {
+      event.preventDefault();
+      setReplyError("请填写回复或上传图片");
+      requestAnimationFrame(() => body?.focus());
+      return;
+    }
+    setReplyError("");
+    setImageError("");
+    onReply(event);
+  }
+
   return (
     <Card className="flex min-h-[32rem] min-w-0 flex-col overflow-hidden lg:h-full lg:min-h-0">
       {feedback ? (
@@ -128,24 +145,39 @@ export function FeedbackConversation({
               })}
             </div>
             {canReply ? (
-              <form onSubmit={onReply} className="shrink-0 space-y-3 border-t pt-4">
+              <form onSubmit={handleReply} className="shrink-0 space-y-3 border-t pt-4" noValidate>
                 <input type="hidden" name="feedbackId" value={feedback.id} />
                 <Textarea
+                  id="feedback-reply-body"
                   name="body"
                   placeholder="继续补充情况，或回复处理结果"
                   rows={3}
                   disabled={replyPending}
+                  maxLength={5_000}
+                  aria-invalid={Boolean(replyError)}
+                  aria-describedby={replyError ? "feedback-reply-error" : undefined}
                   className="max-h-24 resize-none overflow-y-auto"
+                  onChange={(event) => { if (event.target.value.trim()) setReplyError(""); }}
                   onPaste={(event) => handleFeedbackPaste(event, {
                     files: replyImages,
-                    setFiles: setReplyImages,
+                    setFiles: (files) => {
+                      setReplyImages(files);
+                      if (files.length) setReplyError("");
+                    },
+                    onError: setImageError,
                   })}
                 />
+                <FieldError id="feedback-reply-error" messages={replyError} />
                 <FeedbackImageInput
                   files={replyImages}
-                  setFiles={setReplyImages}
+                  setFiles={(files) => { setReplyImages(files); if (files.length) setReplyError(""); }}
                   disabled={replyPending}
                   compact
+                  error={imageError}
+                  errorId="feedback-reply-images-error"
+                  invalid={Boolean(replyError)}
+                  ariaDescribedBy={replyError ? "feedback-reply-error" : undefined}
+                  onError={setImageError}
                 />
                 <div className="flex justify-end">
                   <Button type="submit" disabled={replyPending}>

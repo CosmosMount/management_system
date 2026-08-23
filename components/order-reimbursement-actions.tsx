@@ -32,6 +32,7 @@ import {
 } from "@/lib/upload-accept";
 import { shouldShowProcurementRejectionNotice } from "@/lib/procurement-rejection";
 import { Button } from "@/components/ui/button";
+import { FieldError } from "@/components/ui/field-error";
 import {
   Dialog,
   DialogContent,
@@ -222,6 +223,11 @@ function ApplicantDocsDialog({
   const [confirmedItems, setConfirmedItems] = useState<ConfirmedLineItem[]>(
     [],
   );
+  const [lineErrors, setLineErrors] = useState<
+    Record<string, Partial<Record<"name" | "spec" | "quantity" | "photo", string>>>
+  >({});
+  const [invoiceError, setInvoiceError] = useState("");
+  const [listError, setListError] = useState("");
   const hasSavedDocs =
     savedInvoices.length > 0 || items.some((item) => item.photoPath);
   const isSupplement = mode === "supplement";
@@ -248,6 +254,9 @@ function ApplicantDocsDialog({
   function handleOpenChange(nextOpen: boolean) {
     setOpen(nextOpen);
     if (!nextOpen) return;
+    setLineErrors({});
+    setInvoiceError("");
+    setListError("");
     setConfirmedItems(
       items.map((item) => ({
         id: item.id,
@@ -265,23 +274,22 @@ function ApplicantDocsDialog({
     ) as HTMLFormElement | null;
     if (!form) return;
 
-    if (confirmedItems.length === 0) {
-      toast.error("请至少保留一行采购明细");
-      return;
-    }
-
+    const nextLineErrors: Record<
+      string,
+      Partial<Record<"name" | "spec" | "quantity" | "photo", string>>
+    > = {};
+    let nextListError = "";
+    let nextInvoiceError = "";
+    if (confirmedItems.length === 0) nextListError = "请至少保留一行采购明细";
     for (const item of confirmedItems) {
       if (!item.name.trim()) {
-        toast.error("物品名称不能为空");
-        return;
+        nextLineErrors[item.id] = { ...nextLineErrors[item.id], name: "物品名称不能为空" };
       }
       if (!item.spec.trim()) {
-        toast.error(`「${item.name || "未命名物品"}」规格不能为空`);
-        return;
+        nextLineErrors[item.id] = { ...nextLineErrors[item.id], spec: `「${item.name || "未命名物品"}」规格不能为空` };
       }
       if (!Number.isInteger(item.quantity) || item.quantity < 1) {
-        toast.error(`「${item.name}」数量至少为 1`);
-        return;
+        nextLineErrors[item.id] = { ...nextLineErrors[item.id], quantity: `「${item.name || "未命名物品"}」数量至少为 1` };
       }
     }
 
@@ -290,8 +298,7 @@ function ApplicantDocsDialog({
     ) as HTMLInputElement | null;
     const hasNewInvoices = (invoiceInput?.files?.length ?? 0) > 0;
     if (!hasNewInvoices && savedInvoices.length === 0) {
-      toast.error("请至少上传一张发票");
-      return;
+      nextInvoiceError = "请至少上传一张发票";
     }
 
     const existingById = new Map(items.map((item) => [item.id, item]));
@@ -302,9 +309,29 @@ function ApplicantDocsDialog({
       ) as HTMLInputElement | null;
       const hasNewPhoto = (photoInput?.files?.length ?? 0) > 0;
       if (!hasNewPhoto && !existing?.photoPath) {
-        toast.error(`请为「${item.name}」上传一张实物照片`);
-        return;
+        nextLineErrors[item.id] = { ...nextLineErrors[item.id], photo: `请为「${item.name || "未命名物品"}」上传一张实物照片` };
       }
+    }
+
+    setLineErrors(nextLineErrors);
+    setInvoiceError(nextInvoiceError);
+    setListError(nextListError);
+    const firstLineError = confirmedItems.find((item) => nextLineErrors[item.id]);
+    if (nextListError || firstLineError || nextInvoiceError) {
+      requestAnimationFrame(() => {
+        if (nextListError) {
+          document.getElementById(`purchase-lines-${orderId}`)?.focus();
+          return;
+        }
+        if (firstLineError) {
+          const fields = nextLineErrors[firstLineError.id];
+          const field = fields.name ? "name" : fields.spec ? "spec" : fields.quantity ? "quantity" : "photo";
+          document.getElementById(`purchase-line-${firstLineError.id}-${field}`)?.focus();
+          return;
+        }
+        document.getElementById(`invoices-${orderId}`)?.focus();
+      });
+      return;
     }
 
     setLoading(true);
@@ -325,7 +352,8 @@ function ApplicantDocsDialog({
 
   async function handlePreview() {
     if (confirmedItems.length === 0) {
-      toast.error("请先确认采购明细");
+      setListError("请先确认采购明细");
+      requestAnimationFrame(() => document.getElementById(`purchase-lines-${orderId}`)?.focus());
       return;
     }
     setLoading(true);
@@ -382,13 +410,31 @@ function ApplicantDocsDialog({
               rejectedAt={rejectedAt}
             />
           ) : null}
-          <PurchaseLineConfirm
-            items={items}
-            editable
-            showPhotoUpload
-            allowRowEdit
-            onChange={setConfirmedItems}
-          />
+          <div id={`purchase-lines-${orderId}`} tabIndex={-1}>
+            <PurchaseLineConfirm
+              items={items}
+              editable
+              showPhotoUpload
+              allowRowEdit
+              errors={lineErrors}
+              onFieldChange={(itemId, field) =>
+                setLineErrors((current) => {
+                  if (!current[itemId]?.[field]) return current;
+                  const row = { ...current[itemId] };
+                  delete row[field];
+                  const next = { ...current };
+                  if (Object.keys(row).length) next[itemId] = row;
+                  else delete next[itemId];
+                  return next;
+                })
+              }
+              onChange={(nextItems) => {
+                setConfirmedItems(nextItems);
+                if (nextItems.length) setListError("");
+              }}
+            />
+            <FieldError id={`purchase-lines-${orderId}-error`} messages={listError} className="mt-2" />
+          </div>
           <div className="space-y-2">
             <Label htmlFor={`invoices-${orderId}`}>
               发票（可多选
@@ -415,7 +461,11 @@ function ApplicantDocsDialog({
               accept={INVOICE_UPLOAD_ACCEPT}
               multiple
               required={savedInvoices.length === 0}
+              aria-invalid={Boolean(invoiceError)}
+              aria-describedby={invoiceError ? `invoices-${orderId}-error` : undefined}
+              onChange={() => setInvoiceError("")}
             />
+            <FieldError id={`invoices-${orderId}-error`} messages={invoiceError} />
           </div>
           <div className="flex flex-wrap gap-2">
             <Button type="button" variant="outline" disabled={loading} onClick={handlePreview}>
@@ -499,12 +549,19 @@ function FinanceScreenshotDialog({
   onDone: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [fileError, setFileError] = useState("");
 
   async function handleSubmit() {
     const form = document.getElementById(
       `finance-shot-${orderId}`,
     ) as HTMLFormElement | null;
     if (!form) return;
+    const input = form.elements.namedItem("screenshot") as HTMLInputElement | null;
+    if (!input?.files?.length) {
+      setFileError("请选择报销截图或文件");
+      requestAnimationFrame(() => input?.focus());
+      return;
+    }
 
     setLoading(true);
     try {
@@ -522,7 +579,7 @@ function FinanceScreenshotDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={(nextOpen) => { setOpen(nextOpen); if (nextOpen) setFileError(""); }}>
       <DialogTrigger
         render={
           <Button size="sm" variant="secondary">
@@ -551,7 +608,11 @@ function FinanceScreenshotDialog({
               type="file"
               accept={`${INVOICE_UPLOAD_ACCEPT},${IMAGE_UPLOAD_ACCEPT}`}
               required
+              aria-invalid={Boolean(fileError)}
+              aria-describedby={fileError ? `screenshot-${orderId}-error` : undefined}
+              onChange={() => setFileError("")}
             />
+            <FieldError id={`screenshot-${orderId}-error`} messages={fileError} />
           </div>
           <Button type="button" disabled={loading} onClick={handleSubmit}>
             提交

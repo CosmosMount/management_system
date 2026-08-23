@@ -14,6 +14,7 @@ import type {
   TimeCanvasModel,
 } from "@/components/project-management/time-canvas/types";
 import { Button } from "@/components/ui/button";
+import { FieldError } from "@/components/ui/field-error";
 import {
   Card,
   CardContent,
@@ -72,6 +73,7 @@ export function AdminGlobalTimeMarkersPanel({
   const [center, setCenter] = useState<{ atMs: number; revision: number } | null>(
     null,
   );
+  const [validationRevealed, setValidationRevealed] = useState(false);
   const dirty = draftSignature(drafts) !== baselineSignature;
   const hasInvalidDraft = drafts.some((marker) =>
     !marker.name.trim() ||
@@ -239,10 +241,23 @@ export function AdminGlobalTimeMarkersPanel({
     setBaselineVersion(authoritative.collectionVersion);
     setBaselineSignature(draftSignature(next));
     setConflictCollection(null);
+    setValidationRevealed(false);
     router.refresh();
   }
 
   function saveAll() {
+    if (hasInvalidDraft) {
+      setValidationRevealed(true);
+      const invalid = drafts.find((marker) =>
+        !marker.name.trim() ||
+        !Number.isFinite(Date.parse(shanghaiDateTimeLocalToIso(marker.markedAtLocal))),
+      );
+      if (invalid) {
+        const field = invalid.name.trim() ? "time" : "name";
+        requestAnimationFrame(() => document.getElementById(`marker-${field}-${invalid.id}`)?.focus());
+      }
+      return;
+    }
     startTransition(async () => {
       try {
         const result = await saveAdminGlobalTimeMarkers({
@@ -259,6 +274,7 @@ export function AdminGlobalTimeMarkersPanel({
         setBaselineVersion(result.collectionVersion);
         setBaselineSignature(draftSignature(next));
         setConflictCollection(null);
+        setValidationRevealed(false);
         toast.success("关键时间点已保存");
         router.refresh();
       } catch (error) {
@@ -352,8 +368,8 @@ export function AdminGlobalTimeMarkersPanel({
                 const parsedAt = Date.parse(
                   shanghaiDateTimeLocalToIso(marker.markedAtLocal),
                 );
-                const nameInvalid = marker.name.trim().length === 0;
-                const timeInvalid = !Number.isFinite(parsedAt);
+                const nameInvalid = validationRevealed && marker.name.trim().length === 0;
+                const timeInvalid = validationRevealed && !Number.isFinite(parsedAt);
                 return (
                   <div
                     key={marker.id}
@@ -369,6 +385,7 @@ export function AdminGlobalTimeMarkersPanel({
                         value={marker.name}
                         maxLength={MAX_GLOBAL_TIME_MARKER_NAME_LENGTH}
                         aria-invalid={nameInvalid}
+                        aria-describedby={nameInvalid ? `marker-name-${marker.id}-error` : undefined}
                         placeholder="例如：报名截止"
                         disabled={pending}
                         onFocus={() => requestCenter(parsedAt)}
@@ -376,9 +393,7 @@ export function AdminGlobalTimeMarkersPanel({
                           updateDraft(marker.id, { name: event.target.value })
                         }
                       />
-                      {nameInvalid && (
-                        <p className="text-xs text-destructive">请输入关键时间点名称</p>
-                      )}
+                      <FieldError id={`marker-name-${marker.id}-error`} messages={nameInvalid ? "请输入关键时间点名称" : undefined} className="text-xs" />
                     </div>
                     <div className="min-w-0 space-y-1.5">
                       <Label htmlFor={`marker-time-${marker.id}`}>时间（上海）</Label>
@@ -388,6 +403,7 @@ export function AdminGlobalTimeMarkersPanel({
                         step={60}
                         value={marker.markedAtLocal}
                         aria-invalid={timeInvalid}
+                        aria-describedby={timeInvalid ? `marker-time-${marker.id}-error` : undefined}
                         disabled={pending}
                         onFocus={() => requestCenter(parsedAt)}
                         onChange={(event) =>
@@ -396,11 +412,7 @@ export function AdminGlobalTimeMarkersPanel({
                           })
                         }
                       />
-                      {timeInvalid && (
-                        <p className="text-xs text-destructive">
-                          请选择关键时间点时间
-                        </p>
-                      )}
+                      <FieldError id={`marker-time-${marker.id}-error`} messages={timeInvalid ? "请选择关键时间点时间" : undefined} className="text-xs" />
                     </div>
                     <div className="flex flex-wrap gap-2 md:justify-end">
                       <Button
@@ -438,7 +450,7 @@ export function AdminGlobalTimeMarkersPanel({
             {dirty && <span className="mr-auto text-sm text-amber-700">有未保存修改</span>}
             <Button
               type="button"
-              disabled={pending || !dirty || hasInvalidDraft}
+              disabled={pending || !dirty}
               onClick={saveAll}
             >
               <Save aria-hidden="true" />

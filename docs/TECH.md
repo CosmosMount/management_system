@@ -28,6 +28,15 @@
 - 通知 outbox 分两层：`NotificationOutbox` 表示业务事件，`NotificationOutboxRecipient` 表示单个收件人的投递状态。`lib/notification-outbox.ts` 保持稳定 façade，通用入队/重试、claim/heartbeat、逐收件人协调与状态汇总拆入 `lib/notification-outbox/`；核心只接受注入的 channel resolver，`lib/notification-delivery.ts` 作为组合入口连接 adapter registry。重试失败收件人时不能把已成功收件人再次发送；临时解析/网络错误退避重试，损坏 payload、未知 channel、非法 `type/botKind` 等确定性配置错误直接冻结，修正后才可人工重置。
 - 浏览器共享契约位于 `lib/project-management/composer-contract.ts` 与 `lib/project-management/time-canvas/`，服务端领域和查询不得从 `components/` 或带 `"use client"` 的模块反向导入类型或实现。`npm run check:dependencies` 使用 TypeScript AST 校验传递依赖边界、浏览器契约的服务端依赖、outbox 核心业务依赖，并从 Next 路由、脚本、测试和根配置入口遍历后拒绝 `components/`/`lib/` 中不可达的源码。
 
+## 表单字段错误契约
+
+- 表单初次呈现保持中性；只有用户提交或执行对应操作后才揭示字段错误。必填字段不得仅依靠禁用提交按钮阻止空值操作。
+- 可编辑控件使用 `aria-invalid` 触发统一的 destructive 边框与 ring，并通过 `aria-describedby` 关联 `components/ui/field-error.tsx` 渲染的中文行内错误。一个共享约束只渲染一个 `role="alert"`，相关控件可以共同引用该错误。
+- 首次揭示错误时聚焦或展开首个相关控件。用户修改字段后只清除该字段对应错误；结构变化导致服务端字段路径失效时才整体清除旧字段错误。
+- 组合选择器通过 `invalid` 与 `ariaDescribedBy` 接口接入相同契约；隐藏文件输入的错误状态同时体现在可见上传触发控件，不能只标记不可见节点。
+- Server Action 返回的 `fieldErrors` 由表单映射到具体控件。Task Workbench、Task Composer 和资源计划 mutation runner 允许调用方消费已支持的字段路径；被消费的字段错误不再重复显示为全局 notice，未知路径或非字段错误继续使用中文 toast/notice。
+- 客户端字段提示用于即时反馈，不替代 Zod/领域服务在服务端边界的校验、权限检查或状态门禁。
+
 ## 结构化日志
 
 - 统一入口为 `lib/logger.ts`，默认输出 JSON line；开发环境可通过 `LOG_FORMAT=pretty` 使用可读格式，`LOG_LEVEL=debug|info|warn|error|silent` 控制级别。

@@ -9,6 +9,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { FieldError } from "@/components/ui/field-error";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -35,6 +36,7 @@ export function ApplyFormBasics({ form }: { form: UseFormReturn<ApplyFormValues>
             render={({ field }) => (
               <Select value={field.value ?? ""} onValueChange={field.onChange}>
                 <SelectTrigger
+                  ref={field.ref}
                   id="purchase-team"
                   className="w-full"
                   aria-invalid={Boolean(form.formState.errors.team)}
@@ -52,11 +54,10 @@ export function ApplyFormBasics({ form }: { form: UseFormReturn<ApplyFormValues>
               </Select>
             )}
           />
-          {form.formState.errors.team && (
-            <p id="purchase-team-error" className="text-sm text-destructive" role="alert">
-              {form.formState.errors.team.message}
-            </p>
-          )}
+          <FieldError
+            id="purchase-team-error"
+            messages={form.formState.errors.team?.message}
+          />
         </div>
         <div className="space-y-2">
           <Label htmlFor="purchase-tech-group">技术组</Label>
@@ -66,6 +67,7 @@ export function ApplyFormBasics({ form }: { form: UseFormReturn<ApplyFormValues>
             render={({ field }) => (
               <Select value={field.value ?? ""} onValueChange={field.onChange}>
                 <SelectTrigger
+                  ref={field.ref}
                   id="purchase-tech-group"
                   className="w-full"
                   aria-invalid={Boolean(form.formState.errors.techGroup)}
@@ -85,11 +87,10 @@ export function ApplyFormBasics({ form }: { form: UseFormReturn<ApplyFormValues>
               </Select>
             )}
           />
-          {form.formState.errors.techGroup && (
-            <p id="purchase-tech-group-error" className="text-sm text-destructive" role="alert">
-              {form.formState.errors.techGroup.message}
-            </p>
-          )}
+          <FieldError
+            id="purchase-tech-group-error"
+            messages={form.formState.errors.techGroup?.message}
+          />
         </div>
       </CardContent>
     </Card>

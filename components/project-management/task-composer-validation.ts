@@ -238,18 +238,37 @@ export function actionErrorMessage(error: TaskActionError) {
     : error.message;
 }
 
-export function serverFieldValidationIssue(
+export function serverFieldValidationIssues(
   fieldErrors: Record<string, string[]> | undefined,
   state: TaskComposerSeed,
+): ValidationIssue[] {
+  return Object.entries(fieldErrors ?? {})
+    .flatMap(([path, messages]) =>
+      messages
+        .filter(Boolean)
+        .map((message) => serverFieldValidationIssue(path, message, state)),
+    )
+    .filter((issue): issue is ValidationIssue => issue !== null);
+}
+
+export function serverFieldValidationIssuesFullyMapped(
+  fieldErrors: Record<string, string[]> | undefined,
+  mappedIssues: readonly ValidationIssue[],
+) {
+  const fieldMessageCount = Object.values(fieldErrors ?? {})
+    .flatMap((messages) => messages)
+    .filter(Boolean).length;
+  return mappedIssues.length > 0 && mappedIssues.length === fieldMessageCount;
+}
+
+function serverFieldValidationIssue(
+  path: string,
+  message: string,
+  state: TaskComposerSeed,
 ): ValidationIssue | null {
-  const entry = Object.entries(fieldErrors ?? {}).find(
-    ([, messages]) => messages.length > 0,
-  );
-  if (!entry) return null;
-  const [path, messages] = entry;
-  const message = messages[0] ?? "输入内容不符合要求。";
   const directKeys: Record<string, string> = {
     title: "title",
+    priority: "priority",
     team: "team",
     techGroup: "techGroup",
     relatedTaskId: "related-task",
@@ -258,10 +277,11 @@ export function serverFieldValidationIssue(
     plannedStartAt: "plannedStartAt",
     revisionAt: "revisionAt",
     reason: "revision-reason",
-    description: "revision-description",
+    description: state.revision ? "revision-description" : "description",
     "termination.name": "termination-name",
     "termination.plannedAt": "termination-plannedAt",
     "termination.plannedOutcomeCriteria": "termination-outcome",
+    "termination.businessDescription": "termination-business",
   };
   const directKey = directKeys[path];
   if (directKey) {
@@ -270,7 +290,7 @@ export function serverFieldValidationIssue(
       message,
       ...(path === "plannedStartAt"
         ? { entityId: TASK_COMPOSER_START_ID }
-        : path === "revisionAt" || path === "reason" || path === "description"
+        : path === "revisionAt" || path === "reason" || (path === "description" && state.revision)
           ? { entityId: state.revision?.markerId }
         : path.startsWith("termination.")
           ? { entityId: state.termination.id }
@@ -291,8 +311,10 @@ export function serverFieldValidationIssue(
     reviewRequirements: `review-${milestone.id}`,
     businessDescription: `business-${milestone.id}`,
   };
+  const key = milestoneKeys[milestoneMatch[2] ?? ""];
+  if (!key) return null;
   return {
-    key: milestoneKeys[milestoneMatch[2] ?? ""] ?? `goal-${milestone.id}`,
+    key,
     entityId: milestone.id,
     message,
   };

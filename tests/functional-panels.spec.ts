@@ -144,6 +144,15 @@ test.describe("普通用户主功能面板", () => {
     await page.goto("/procurement/dashboard", { waitUntil: "networkidle" });
     await expect(page.getByRole("heading", { name: "采购看板" })).toBeVisible();
     await expect(page.getByText(/处理人：/).first()).toBeVisible();
+    const summaryTeamFilter = page.locator("#procurement-summary-team");
+    await expect(summaryTeamFilter).not.toHaveAttribute("aria-invalid", "true");
+    await page.getByRole("button", { name: "导出该车组 BOM" }).click();
+    await expect(summaryTeamFilter).toHaveAttribute("aria-invalid", "true");
+    await expect(summaryTeamFilter).toBeFocused();
+    await expect(page.getByRole("alert").filter({ hasText: "请先选择要导出的车组" })).toBeVisible();
+    await summaryTeamFilter.click();
+    await page.getByRole("option", { name: "英雄", exact: true }).click();
+    await expect(summaryTeamFilter).not.toHaveAttribute("aria-invalid", "true");
     await expectHealthyPage(page);
 
     const workshopResponse = await page.goto("/procurement/workshop-fee", {
@@ -390,12 +399,21 @@ test.describe("管理员面板", () => {
     ).toBeLessThanOrEqual(1);
     await page.getByRole("button", { name: "新增时间点" }).click();
     const newEditor = page.getByTestId(/^global-time-marker-editor-/).last();
-    await newEditor.getByLabel(/名称/).fill(markerName);
+    const newNameInput = newEditor.getByLabel(/名称/);
+    await expect(newNameInput).not.toHaveAttribute("aria-invalid", "true");
+    await expect(newEditor.getByText("请输入关键时间点名称")).toHaveCount(0);
+    await newNameInput.fill(markerName);
     const newTimeInput = newEditor.getByLabel("时间（上海）");
     await newTimeInput.fill("");
+    await expect(newTimeInput).not.toHaveAttribute("aria-invalid", "true");
+    await expect(page.getByRole("button", { name: "保存全部" })).toBeEnabled();
+    await page.getByRole("button", { name: "保存全部" }).click();
+    await expect(newTimeInput).toHaveAttribute("aria-invalid", "true");
+    await expect(newTimeInput).toBeFocused();
     await expect(newEditor.getByText("请选择关键时间点时间")).toBeVisible();
-    await expect(page.getByRole("button", { name: "保存全部" })).toBeDisabled();
     await newTimeInput.fill("2026-09-18T10:30");
+    await expect(newTimeInput).not.toHaveAttribute("aria-invalid", "true");
+    await expect(newEditor.getByText("请选择关键时间点时间")).toHaveCount(0);
     await newEditor.getByRole("button", { name: /在时间线定位/ }).click();
     await page.getByRole("button", { name: "保存全部" }).click();
     await expect(page.getByText("有未保存修改")).toHaveCount(0);
@@ -833,11 +851,17 @@ test.describe("管理员面板", () => {
       const accountSelect = accountsCard.getByRole("combobox", {
         name: "选择要配置角色的用户",
       });
+      const roleSelect = accountsCard.locator("#general-role-role");
+      await expect(accountSelect).not.toHaveAttribute("aria-invalid", "true");
+      await accountsCard.getByRole("button", { name: "添加", exact: true }).click();
+      await expect(accountSelect).toHaveAttribute("aria-invalid", "true");
+      await expect(roleSelect).toHaveAttribute("aria-invalid", "true");
+      await expect(accountSelect).toBeFocused();
+      await expect(accountsCard.locator("#general-role-account-error")).toHaveText("请选择用户");
       await accountSelect.fill(suffix);
       await page.getByRole("option", { name: displayName, exact: true }).click();
-      await accountsCard
-        .getByRole("combobox", { name: "选择角色" })
-        .click();
+      await expect(accountSelect).not.toHaveAttribute("aria-invalid", "true");
+      await roleSelect.click();
       await page
         .getByRole("listbox")
         .getByRole("option", { name: "报销员", exact: true })
@@ -884,9 +908,18 @@ test.describe("管理员面板", () => {
     const financePicker = page.getByRole("combobox", {
       name: "为工程选择报销员",
     });
+    const addFinanceButton = page.getByRole("button", { name: "添加工程报销员" });
+    await expect(financePicker).not.toHaveAttribute("aria-invalid", "true");
+    await addFinanceButton.click();
+    await expect(financePicker).toHaveAttribute("aria-invalid", "true");
+    await expect(financePicker).toBeFocused();
+    await expect(
+      page.getByRole("alert").filter({ hasText: "请选择要添加的账号" }),
+    ).toBeVisible();
     await financePicker.fill("李棋轩");
     await page.getByRole("option", { name: "李棋轩", exact: true }).click();
-    await page.getByRole("button", { name: "添加工程报销员" }).click();
+    await expect(financePicker).not.toHaveAttribute("aria-invalid", "true");
+    await addFinanceButton.click();
     await expect(
       page.getByRole("button", {
         name: "移除 李棋轩 的 报销员 · 工程",
@@ -955,7 +988,13 @@ test.describe("管理员面板", () => {
       'input[aria-label="Playwright 管理员 的指导老师审批邮箱"]:visible',
     );
     try {
+      await emailInput.fill("not-an-email");
+      await emailInput.locator("..").getByRole("button", { name: "保存" }).click();
+      await expect(emailInput).toHaveAttribute("aria-invalid", "true");
+      await expect(emailInput).toBeFocused();
+      await expect(page.getByRole("alert").filter({ hasText: "邮箱格式不正确" })).toBeVisible();
       await emailInput.fill(`  ${normalizedEmail.toUpperCase()}  `);
+      await expect(emailInput).not.toHaveAttribute("aria-invalid", "true");
       await emailInput.locator("..").getByRole("button", { name: "保存" }).click();
       await expect(emailInput).toHaveValue(normalizedEmail);
       await expect

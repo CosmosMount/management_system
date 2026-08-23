@@ -36,6 +36,8 @@ type CommonProps = {
   className?: string;
   inputId?: string;
   ariaLabel?: string;
+  invalid?: boolean;
+  ariaDescribedBy?: string;
 };
 
 export function UserSelect({

@@ -16,6 +16,11 @@ import {
 } from "@/app/actions/project-management/collaboration";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { FieldError } from "@/components/ui/field-error";
+import {
+  fieldErrorsFullyHandled,
+  firstFieldErrorMessage,
+} from "@/lib/project-management/field-errors";
 import {
   Dialog,
   DialogContent,
@@ -90,6 +95,7 @@ export function CreateRiskCard({
   const [content, setContent] = useState("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
+  const [contentError, setContentError] = useState("");
   if (!canCreate) return null;
   const trimmed = content.trim();
   return (
@@ -104,28 +110,45 @@ export function CreateRiskCard({
         value={content}
         maxLength={2_000}
         disabled={busy}
-        onChange={(event) => setContent(event.target.value)}
+        aria-invalid={Boolean(contentError)}
+        aria-describedby={contentError ? `${targetType}-${targetId}-risk-error` : undefined}
+        onChange={(event) => { setContent(event.target.value); if (event.target.value.trim()) setContentError(""); }}
         placeholder="说明当前风险、影响和需要关注的问题"
       />
+      <FieldError id={`${targetType}-${targetId}-risk-error`} messages={contentError} className="mt-1.5" />
       <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
         <span className="text-xs text-muted-foreground">{content.length}/2000</span>
         <Button
           type="button"
-          disabled={busy || !trimmed || content.length > 2_000}
+          disabled={busy}
           onClick={async () => {
             if (busy) return;
+            if (!trimmed) {
+              setContentError("请填写风险内容");
+              requestAnimationFrame(() => document.getElementById(`${targetType}-${targetId}-risk`)?.focus());
+              return;
+            }
             setBusy(true);
             setNotice({ kind: "info", message: "正在提出风险…" });
             const result = await createRisk({ targetType, targetId, content }).catch(() => null);
             if (!result) {
               setNotice({ kind: "error", message: "网络或服务暂时不可用，请稍后重试。" });
             } else if (!result.ok) {
-              setNotice({
-                kind: "error",
-                message:
-                  result.error.fieldErrors?.content?.[0] ??
-                  result.error.message,
-              });
+              const fieldMessage = firstFieldErrorMessage(
+                result.error.fieldErrors,
+                "content",
+              );
+              if (fieldMessage) {
+                setContentError(fieldMessage);
+                requestAnimationFrame(() =>
+                  document.getElementById(`${targetType}-${targetId}-risk`)?.focus(),
+                );
+                setNotice(
+                  fieldErrorsFullyHandled(result.error.fieldErrors, ["content"])
+                    ? null
+                    : { kind: "error", message: result.error.message },
+                );
+              } else setNotice({ kind: "error", message: result.error.message });
             } else {
               setContent("");
               setNotice({ kind: "success", message: "风险已提出。" });
@@ -196,6 +219,7 @@ function RiskGroup({
   const [notice, setNotice] = useState<Notice>(null);
   const [resolving, setResolving] = useState<RiskItemDto | null>(null);
   const [resolveNote, setResolveNote] = useState("");
+  const [resolveError, setResolveError] = useState("");
   const loadMore = async (status: "ACTIVE" | "RESOLVED") => {
     const page = status === "ACTIVE" ? active : resolved;
     if (!page.nextCursor || busyKey) return;
@@ -231,7 +255,7 @@ function RiskGroup({
           <EmptyBox text={resolved.totalCount > 0 ? "当前无未解决风险" : "从未记录风险"} />
         ) : (
           active.items.map((risk) => (
-            <RiskItem key={risk.id} risk={risk} onResolve={() => { setResolving(risk); setResolveNote(""); setNotice(null); }} />
+            <RiskItem key={risk.id} risk={risk} onResolve={() => { setResolving(risk); setResolveNote(""); setResolveError(""); setNotice(null); }} />
           ))
         )}
         {active.nextCursor && (
@@ -267,20 +291,40 @@ function RiskGroup({
             </DialogDescription>
           </DialogHeader>
           <label className="text-sm font-medium" htmlFor={`resolve-${resolving?.id ?? "risk"}`}>解决说明</label>
-          <Input id={`resolve-${resolving?.id ?? "risk"}`} value={resolveNote} maxLength={500} disabled={busyKey === "resolve"} onChange={(event) => setResolveNote(event.target.value.replace(/[\r\n]/g, ""))} />
+          <Input id={`resolve-${resolving?.id ?? "risk"}`} value={resolveNote} maxLength={500} disabled={busyKey === "resolve"} aria-invalid={Boolean(resolveError)} aria-describedby={resolveError ? `resolve-${resolving?.id ?? "risk"}-error` : undefined} onChange={(event) => { const value = event.target.value.replace(/[\r\n]/g, ""); setResolveNote(value); if (value.trim()) setResolveError(""); }} />
+          <FieldError id={`resolve-${resolving?.id ?? "risk"}-error`} messages={resolveError} />
           <div className="text-right text-xs text-muted-foreground">{resolveNote.length}/500</div>
           <InlineNotice notice={notice} />
           <div className="flex justify-end gap-2">
             <Button type="button" variant="outline" disabled={busyKey === "resolve"} onClick={() => setResolving(null)}>取消</Button>
             <Button
               type="button"
-              disabled={busyKey === "resolve" || !resolveNote.trim()}
+              disabled={busyKey === "resolve"}
               onClick={async () => {
                 if (!resolving || busyKey) return;
+                if (!resolveNote.trim()) {
+                  setResolveError("请填写解决说明");
+                  requestAnimationFrame(() => document.getElementById(`resolve-${resolving.id}`)?.focus());
+                  return;
+                }
                 setBusyKey("resolve");
                 const result = await resolveRisk({ riskId: resolving.id, resolveNote }).catch(() => null);
                 if (!result || !result.ok) {
-                  setNotice({ kind: "error", message: result?.ok === false ? result.error.fieldErrors?.resolveNote?.[0] ?? result.error.message : "风险解决失败，请重试。" });
+                  const fieldMessage = result?.ok === false
+                    ? firstFieldErrorMessage(result.error.fieldErrors, "resolveNote")
+                    : undefined;
+                  if (fieldMessage) {
+                    setResolveError(fieldMessage);
+                    requestAnimationFrame(() =>
+                      document.getElementById(`resolve-${resolving.id}`)?.focus(),
+                    );
+                    setNotice(
+                      result?.ok === false && fieldErrorsFullyHandled(result.error.fieldErrors, ["resolveNote"])
+                        ? null
+                        : { kind: "error", message: result?.ok === false ? result.error.message : "风险解决失败，请重试。" },
+                    );
+                  }
+                  else setNotice({ kind: "error", message: result?.ok === false ? result.error.message : "风险解决失败，请重试。" });
                 } else {
                   setActive((page) => ({ ...page, items: page.items.filter((item) => item.id !== resolving.id), totalCount: Math.max(0, page.totalCount - 1) }));
                   setResolving(null);
@@ -328,13 +372,33 @@ function CommentPanel({ data }: { data: CollaborationInitialData }) {
   const [content, setContent] = useState("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
+  const [contentError, setContentError] = useState("");
   const submit = async () => {
-    if (busy || !content.trim()) return;
+    if (busy) return;
+    if (!content.trim()) {
+      setContentError("请输入评论内容");
+      requestAnimationFrame(() => document.getElementById(`${data.targetType}-${data.targetId}-comment`)?.focus());
+      return;
+    }
     setBusy(true);
     setNotice({ kind: "info", message: "正在发布评论…" });
     const result = await createComment({ targetType: data.targetType, targetId: data.targetId, content }).catch(() => null);
     if (!result || !result.ok) {
-      setNotice({ kind: "error", message: result?.ok === false ? result.error.fieldErrors?.content?.[0] ?? result.error.message : "评论发布失败，请重试。" });
+      const fieldMessage = result?.ok === false
+        ? firstFieldErrorMessage(result.error.fieldErrors, "content")
+        : undefined;
+      if (fieldMessage) {
+        setContentError(fieldMessage);
+        requestAnimationFrame(() =>
+          document.getElementById(`${data.targetType}-${data.targetId}-comment`)?.focus(),
+        );
+        setNotice(
+          result?.ok === false && fieldErrorsFullyHandled(result.error.fieldErrors, ["content"])
+            ? null
+            : { kind: "error", message: result?.ok === false ? result.error.message : "评论发布失败，请重试。" },
+        );
+      }
+      else setNotice({ kind: "error", message: result?.ok === false ? result.error.message : "评论发布失败，请重试。" });
     } else {
       setContent("");
       setNotice({ kind: "success", message: "评论已发布。" });
@@ -361,8 +425,9 @@ function CommentPanel({ data }: { data: CollaborationInitialData }) {
     <section className="min-w-0 rounded-xl border border-border bg-card p-4">
       <div className="flex items-center justify-between gap-2"><h2 className="font-semibold">{data.targetType === "PROJECT" ? "Project" : "Task"} 评论</h2><Badge variant="secondary">{page.totalCount}</Badge></div>
       <label className="mt-3 block text-sm font-medium" htmlFor={`${data.targetType}-${data.targetId}-comment`}>发表评论</label>
-      <Textarea id={`${data.targetType}-${data.targetId}-comment`} className="mt-2 min-h-24" value={content} maxLength={1_000} disabled={busy || !data.capabilities.canCreateComment} onChange={(event) => setContent(event.target.value)} placeholder="输入评论内容" />
-      <div className="mt-2 flex items-center justify-between gap-2"><span className="text-xs text-muted-foreground">{content.length}/1000</span><Button type="button" size="sm" disabled={busy || !content.trim() || !data.capabilities.canCreateComment} onClick={() => void submit()}>{busy ? "处理中…" : "发布评论"}</Button></div>
+      <Textarea id={`${data.targetType}-${data.targetId}-comment`} className="mt-2 min-h-24" value={content} maxLength={1_000} disabled={busy || !data.capabilities.canCreateComment} aria-invalid={Boolean(contentError)} aria-describedby={contentError ? `${data.targetType}-${data.targetId}-comment-error` : undefined} onChange={(event) => { setContent(event.target.value); if (event.target.value.trim()) setContentError(""); }} placeholder="输入评论内容" />
+      <FieldError id={`${data.targetType}-${data.targetId}-comment-error`} messages={contentError} className="mt-1.5" />
+      <div className="mt-2 flex items-center justify-between gap-2"><span className="text-xs text-muted-foreground">{content.length}/1000</span><Button type="button" size="sm" disabled={busy || !data.capabilities.canCreateComment} onClick={() => void submit()}>{busy ? "处理中…" : "发布评论"}</Button></div>
       <InlineNotice notice={notice} />
       <div className="mt-4 space-y-3 border-t border-border pt-4">
         {page.items.length === 0 ? <EmptyBox text="暂无评论" /> : page.items.map((comment) => (

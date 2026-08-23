@@ -41,6 +41,8 @@ type CommonProps = TaskPickerFilters & {
   className?: string;
   inputId?: string;
   ariaLabel?: string;
+  invalid?: boolean;
+  ariaDescribedBy?: string;
 };
 
 export function TaskSelect({

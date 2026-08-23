@@ -218,6 +218,7 @@ export function FeedbackCenter({
         }}
       />
       <FeedbackConversation
+        key={selectedFeedback?.id ?? "none"}
         feedback={selectedFeedback}
         avatarByOpenId={avatarByOpenId}
         currentUserOpenId={currentUserOpenId}
@@ -231,6 +232,7 @@ export function FeedbackCenter({
         onStatus={handleStatus}
       />
       <NewFeedbackDialog
+        key={newOpen ? "new-feedback-open" : "new-feedback-closed"}
         open={newOpen}
         pending={createPending}
         images={createImages}
