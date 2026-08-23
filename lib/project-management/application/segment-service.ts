@@ -61,6 +61,21 @@ export { scanSegmentTransitions } from "@/lib/project-management/application/seg
 
 type PrismaTx = Prisma.TransactionClient;
 
+type PlannedConfirmationActualInput = Pick<
+  CreateActualSegmentInput,
+  "actualOutput"
+> &
+  Partial<
+    Pick<
+      CreateActualSegmentInput,
+      | "startAt"
+      | "endAt"
+      | "content"
+      | "priority"
+      | "taskId"
+    >
+  >;
+
 export type SegmentMutationResult = {
   segment: WorkSegmentDto;
   affectedSegmentIds: string[];
@@ -676,6 +691,12 @@ export async function batchConfirmPlannedSegments(
         segment.expectedUpdatedAt,
       ]),
     );
+    const actualOutputById = new Map(
+      parsed.segments.map((segment) => [
+        segment.segmentId,
+        segment.actualOutput,
+      ]),
+    );
 
     // Confirm only after the whole set has passed visibility, permission,
     // association, version and state checks. The surrounding transaction then
@@ -696,13 +717,19 @@ export async function batchConfirmPlannedSegments(
 
     const actualSegments: SegmentForMutation[] = [];
     for (const planned of segments) {
+      const actualOutput = actualOutputById.get(planned.id);
+      if (actualOutput === undefined) {
+        throw validationError("确认列表缺少实际输出", {
+          segments: ["确认列表缺少实际输出"],
+        });
+      }
       actualSegments.push(
         await createActualFromPlannedTx(tx, {
           actor: refreshedActor,
           planned,
           coveredStartAt: planned.startAt,
           coveredEndAt: planned.endAt,
-          actualInput: {},
+          actualInput: { actualOutput },
           reason: parsed.reason,
           confirmOriginal: "CONFIRMED",
         }),
@@ -1064,7 +1091,7 @@ async function createActualFromPlannedTx(
     planned: SegmentForMutation;
     coveredStartAt: Date;
     coveredEndAt: Date;
-    actualInput: Partial<CreateActualSegmentInput>;
+    actualInput: PlannedConfirmationActualInput;
     reason: string;
     confirmOriginal: "CONFIRMED" | "CANCELLED";
   },
@@ -1091,9 +1118,8 @@ async function createActualFromPlannedTx(
       endAt: actualEndAt,
       content: input.actualInput.content ?? input.planned.content,
       priority: input.actualInput.priority ?? input.planned.priority,
-      expectedOutput:
-        input.actualInput.expectedOutput ?? input.planned.expectedOutput,
-      actualOutput: input.actualInput.actualOutput ?? "",
+      expectedOutput: input.planned.expectedOutput,
+      actualOutput: input.actualInput.actualOutput,
       taskId: actualTaskId,
       createdByAccountId: input.actor.accountId,
       updatedByAccountId: input.actor.accountId,

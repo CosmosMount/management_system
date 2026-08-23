@@ -144,6 +144,26 @@ test.describe("project management UI project-management-ui-resource-planner", ()
         endAt: new Date("2026-08-10T13:00:00.000Z"),
         content: "无需原因的部分确认计划",
       });
+      const shortPartiallyConfirmableSegment = await createSegment({
+        accountId: owner.account.id,
+        personId: owner.person.id,
+        taskId: activeTask.taskId,
+        type: "PLANNED",
+        status: "PENDING_CONFIRMATION",
+        startAt: new Date("2026-08-10T14:00:00.000Z"),
+        endAt: new Date("2026-08-10T14:01:01.000Z"),
+        content: "六十一秒部分确认计划",
+      });
+      await prisma.$transaction([
+        prisma.workSegment.update({
+          where: { id: partiallyConfirmableSegment.id },
+          data: { expectedOutput: "部分确认计划预期输出" },
+        }),
+        prisma.workSegment.update({
+          where: { id: shortPartiallyConfirmableSegment.id },
+          data: { expectedOutput: "六十一秒计划预期输出" },
+        }),
+      ]);
       await loginAsTestUser(context, baseURL, {
         openId: owner.openId,
         name: owner.person.displayName,
@@ -287,16 +307,42 @@ test.describe("project management UI project-management-ui-resource-planner", ()
         `/progress/resources?all=0&people=${owner.person.id}&focus=${partiallyConfirmableSegment.id}`,
       );
       const partialDialog = page.getByRole("dialog", { name: "投入详情" });
-      const partialForm = partialDialog.getByRole("form", { name: "部分确认" });
+      const partialForm = partialDialog.getByRole("form", { name: "确认计划" });
       await expect(partialForm).toBeVisible();
       await expect(partialForm.getByLabel("部分确认原因")).toHaveCount(0);
+      await expect(partialForm.getByLabel("预期输出")).toHaveCount(0);
+      await expect(partialForm.getByText("部分确认计划预期输出")).toBeVisible();
+      const partialContent = partialForm.getByLabel("实际投入内容");
+      const partialActualOutput = partialForm.getByLabel("实际输出");
+      const partialButton = partialForm.getByRole("button", {
+        name: "部分确认",
+        exact: true,
+      });
+      await partialContent.fill("");
+      await partialButton.click();
+      await expect(partialContent).toHaveAttribute("aria-invalid", "true");
+      await expect(partialActualOutput).toHaveAttribute("aria-invalid", "true");
+      await expect(partialContent).toBeFocused();
+      await partialContent.fill("逐字段清错验证");
+      await expect(partialContent).not.toHaveAttribute("aria-invalid", "true");
+      await partialContent.fill("");
+      await partialButton.click();
+      await partialForm.getByRole("button", {
+        name: "完整确认",
+        exact: true,
+      }).click();
+      await expect(partialContent).not.toHaveAttribute("aria-invalid", "true");
+      await expect(
+        partialForm.getByRole("alert").filter({ hasText: "请输入实际投入内容" }),
+      ).toHaveCount(0);
+      await expect(partialActualOutput).toHaveAttribute("aria-invalid", "true");
+      await expect(partialActualOutput).toBeFocused();
       await partialForm
         .getByLabel("确认结束", { exact: true })
         .fill("2026-08-10T20:00");
-      await partialForm.getByLabel("实际投入内容").fill("部分确认后的实际投入");
-      await partialForm.getByLabel("预期输出").fill("部分确认预期输出");
-      await partialForm.getByLabel("实际输出").fill("部分确认实际输出");
-      await partialForm.getByRole("button", { name: "部分确认", exact: true }).click();
+      await partialContent.fill("部分确认后的实际投入");
+      await partialActualOutput.fill("部分确认实际输出");
+      await partialButton.click();
       await expect(page.getByText("已确认计划前段并保留剩余计划")).toBeVisible();
       await expect.poll(async () => {
         const original = await prisma.workSegment.findUniqueOrThrow({
@@ -321,7 +367,12 @@ test.describe("project management UI project-management-ui-resource-planner", ()
         });
         const remaining = await prisma.workSegment.findMany({
           where: { sourceSplitFromId: partiallyConfirmableSegment.id },
-          select: { startAt: true, endAt: true, status: true },
+          select: {
+            startAt: true,
+            endAt: true,
+            status: true,
+            expectedOutput: true,
+          },
         });
         return {
           originalStatus: original.status,
@@ -335,6 +386,7 @@ test.describe("project management UI project-management-ui-resource-planner", ()
             startAt: segment.startAt.toISOString(),
             endAt: segment.endAt.toISOString(),
             status: segment.status,
+            expectedOutput: segment.expectedOutput,
           })),
         };
       }).toEqual({
@@ -342,13 +394,70 @@ test.describe("project management UI project-management-ui-resource-planner", ()
         actual: {
           startAt: "2026-08-10T11:00:00.000Z",
           endAt: "2026-08-10T12:00:00.000Z",
-          expectedOutput: "部分确认预期输出",
+          expectedOutput: "部分确认计划预期输出",
           actualOutput: "部分确认实际输出",
         },
         remaining: [{
           startAt: "2026-08-10T12:00:00.000Z",
           endAt: "2026-08-10T13:00:00.000Z",
           status: "PENDING_CONFIRMATION",
+          expectedOutput: "部分确认计划预期输出",
+        }],
+      });
+
+      await page.goto(
+        `/progress/resources?all=0&people=${owner.person.id}&focus=${shortPartiallyConfirmableSegment.id}`,
+      );
+      const shortDialog = page.getByRole("dialog", { name: "投入详情" });
+      const shortForm = shortDialog.getByRole("form", { name: "确认计划" });
+      const shortPartialButton = shortForm.getByRole("button", {
+        name: "部分确认",
+        exact: true,
+      });
+      await expect(shortPartialButton).toBeEnabled();
+      await expect(shortForm.getByLabel("确认结束", { exact: true })).toHaveValue(
+        "2026-08-10T22:01",
+      );
+      await shortForm.getByLabel("实际投入内容").fill("完成六十秒实际投入");
+      await shortForm.getByLabel("实际输出").fill("完成六十秒实际输出");
+      await shortPartialButton.click();
+      await expect(page.getByText("已确认计划前段并保留剩余计划")).toBeVisible();
+      await expect.poll(async () => {
+        const actual = await prisma.workSegment.findFirst({
+          where: {
+            type: "ACTUAL",
+            actualSources: {
+              some: { plannedSegmentId: shortPartiallyConfirmableSegment.id },
+            },
+          },
+          select: { startAt: true, endAt: true, expectedOutput: true },
+        });
+        const remaining = await prisma.workSegment.findMany({
+          where: { sourceSplitFromId: shortPartiallyConfirmableSegment.id },
+          select: { startAt: true, endAt: true, expectedOutput: true },
+        });
+        return {
+          actual: actual && {
+            startAt: actual.startAt.toISOString(),
+            endAt: actual.endAt.toISOString(),
+            expectedOutput: actual.expectedOutput,
+          },
+          remaining: remaining.map((segment) => ({
+            startAt: segment.startAt.toISOString(),
+            endAt: segment.endAt.toISOString(),
+            expectedOutput: segment.expectedOutput,
+          })),
+        };
+      }).toEqual({
+        actual: {
+          startAt: "2026-08-10T14:00:00.000Z",
+          endAt: "2026-08-10T14:01:00.000Z",
+          expectedOutput: "六十一秒计划预期输出",
+        },
+        remaining: [{
+          startAt: "2026-08-10T14:01:00.000Z",
+          endAt: "2026-08-10T14:01:01.000Z",
+          expectedOutput: "六十一秒计划预期输出",
         }],
       });
       await expectHealthyPage(page);
@@ -818,7 +927,7 @@ test.describe("project management UI project-management-ui-resource-planner", ()
         "P6 UI 可确认计划",
       );
       await expect(
-        detailDialog.getByRole("form", { name: "部分确认" }),
+        detailDialog.getByRole("form", { name: "确认计划" }),
       ).toBeVisible();
       await expect(detailDialog.getByLabel("部分确认原因")).toHaveCount(0);
       await detailDialog.getByRole("button", { name: "Close" }).click();
@@ -904,7 +1013,20 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       await expect(page.getByTestId("segment-inspector")).toContainText(
         "P6 UI 可确认计划",
       );
-      await page.getByTestId("segment-inspector").getByRole("button", { name: "完整确认" }).click();
+      const confirmationForm = page
+        .getByTestId("segment-inspector")
+        .getByRole("form", { name: "确认计划" });
+      const actualOutput = confirmationForm.getByLabel("实际输出");
+      await expect(actualOutput).not.toHaveAttribute("aria-invalid", "true");
+      await confirmationForm.getByRole("button", { name: "完整确认" }).click();
+      await expect(actualOutput).toHaveAttribute("aria-invalid", "true");
+      await expect(actualOutput).toBeFocused();
+      await expect(
+        confirmationForm.getByRole("alert").filter({ hasText: "请输入实际输出" }),
+      ).toBeVisible();
+      await actualOutput.fill("P6 UI 到期计划实际产出");
+      await expect(actualOutput).not.toHaveAttribute("aria-invalid", "true");
+      await confirmationForm.getByRole("button", { name: "完整确认" }).click();
       await expect(page.getByText("已完整确认并生成 Actual")).toBeVisible();
       await expect(detailDialog).toHaveCount(0);
       await expect.poll(() => new URL(page.url()).searchParams.has("focus")).toBe(false);
@@ -913,6 +1035,16 @@ test.describe("project management UI project-management-ui-resource-planner", ()
         where: { id: fixture.confirmableSegmentId },
         select: { status: true },
       })).toEqual({ status: "CONFIRMED" });
+      await expect.poll(() => prisma.workSegment.findFirst({
+        where: {
+          type: "ACTUAL",
+          actualSources: { some: { plannedSegmentId: fixture.confirmableSegmentId } },
+        },
+        select: { expectedOutput: true, actualOutput: true },
+      })).toEqual({
+        expectedOutput: "P6 UI 计划预期产出",
+        actualOutput: "P6 UI 到期计划实际产出",
+      });
 
       const independentContent = `S7 独立安排 ${randomUUID()}`;
       await page.getByRole("button", { name: "新增投入" }).click();

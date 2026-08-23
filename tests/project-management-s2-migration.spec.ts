@@ -57,6 +57,7 @@ import {
 } from "../lib/project-management/validations/lifecycle";
 import {
   batchCreatePlannedSegmentsInputSchema,
+  batchConfirmPlannedSegmentsInputSchema,
   confirmPlannedSegmentInputSchema,
   createActualSegmentInputSchema,
   createWorkSegmentInputSchema,
@@ -1522,7 +1523,7 @@ test("S2 canvas output schemas retain grouping and privacy invariants", () => {
   ).toBe(false);
 });
 
-test("removed allocation and includeConflicts inputs fail strict validation", () => {
+test("Segment schemas reject retired fields and require confirmation actual output", () => {
   const segmentId = randomUUID();
   const personId = randomUUID();
   const startAt = "2026-08-01T09:00:00.000Z";
@@ -1590,8 +1591,39 @@ test("removed allocation and includeConflicts inputs fail strict validation", ()
   );
   expect(
     confirmPlannedSegmentInputSchema.safeParse({
+      segmentId,
+      expectedUpdatedAt: startAt,
+    }).success,
+  ).toBe(false);
+  expect(
+    confirmPlannedSegmentInputSchema.safeParse({
       ...fullConfirmation,
       actual: { ...fullConfirmation.actual, allocation: 50 },
+    }).success,
+  ).toBe(false);
+  expect(
+    confirmPlannedSegmentInputSchema.safeParse({
+      ...fullConfirmation,
+      actual: {
+        ...fullConfirmation.actual,
+        expectedOutput: "不得覆盖计划预期输出",
+      },
+    }).success,
+  ).toBe(false);
+
+  const batchConfirmation = {
+    segments: [{
+      segmentId,
+      expectedUpdatedAt: startAt,
+      actualOutput: "批量完整确认",
+    }],
+  };
+  expect(
+    batchConfirmPlannedSegmentsInputSchema.safeParse(batchConfirmation).success,
+  ).toBe(true);
+  expect(
+    batchConfirmPlannedSegmentsInputSchema.safeParse({
+      segments: [{ segmentId, expectedUpdatedAt: startAt }],
     }).success,
   ).toBe(false);
 
@@ -1602,7 +1634,6 @@ test("removed allocation and includeConflicts inputs fail strict validation", ()
     coveredEndAt: endAt,
     actual: {
       content: "部分完成投入",
-      expectedOutput: "部分完成预期",
       actualOutput: "部分确认",
     },
   };
@@ -1612,7 +1643,22 @@ test("removed allocation and includeConflicts inputs fail strict validation", ()
   expect(
     partiallyConfirmSegmentInputSchema.safeParse({
       ...partialConfirmation,
+      actual: { content: "部分完成投入" },
+    }).success,
+  ).toBe(false);
+  expect(
+    partiallyConfirmSegmentInputSchema.safeParse({
+      ...partialConfirmation,
       actual: { ...partialConfirmation.actual, allocation: 50 },
+    }).success,
+  ).toBe(false);
+  expect(
+    partiallyConfirmSegmentInputSchema.safeParse({
+      ...partialConfirmation,
+      actual: {
+        ...partialConfirmation.actual,
+        expectedOutput: "不得覆盖计划预期输出",
+      },
     }).success,
   ).toBe(false);
 

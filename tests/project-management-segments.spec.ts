@@ -613,13 +613,50 @@ test.describe("project management P5 work segment services", () => {
       taskId: fixture.taskId,
       expectedOutput: "完成计划产出",
     });
+    const segmentCountBeforeMissingOutput = await prisma.workSegment.count();
+    const sourceCountBeforeMissingOutput = await prisma.workSegmentSource.count();
+    const changeCountBeforeMissingOutput = await prisma.workSegmentChange.count();
+    const auditCountBeforeMissingOutput = await prisma.domainAuditEvent.count();
+    const outboxCountBeforeMissingOutput = await prisma.notificationOutbox.count();
+    await expectServiceError(
+      confirmPlannedSegment(actor(fixture.member), {
+        segmentId: planned.segment.id,
+        expectedUpdatedAt: planned.segment.updatedAt,
+      }),
+      "VALIDATION_ERROR",
+    );
+    expect(await prisma.workSegment.count()).toBe(segmentCountBeforeMissingOutput);
+    expect(await prisma.workSegmentSource.count()).toBe(sourceCountBeforeMissingOutput);
+    expect(await prisma.workSegmentChange.count()).toBe(changeCountBeforeMissingOutput);
+    expect(await prisma.domainAuditEvent.count()).toBe(auditCountBeforeMissingOutput);
+    expect(await prisma.notificationOutbox.count()).toBe(outboxCountBeforeMissingOutput);
+    await expectServiceError(
+      confirmPlannedSegment(actor(fixture.member), {
+        segmentId: planned.segment.id,
+        expectedUpdatedAt: planned.segment.updatedAt,
+        actual: {
+          expectedOutput: "伪造的完整确认预期输出",
+          actualOutput: "不应写入",
+        },
+      }),
+      "VALIDATION_ERROR",
+    );
+    expect(await prisma.workSegment.count()).toBe(segmentCountBeforeMissingOutput);
+    expect(await prisma.workSegmentSource.count()).toBe(sourceCountBeforeMissingOutput);
+    expect(await prisma.workSegmentChange.count()).toBe(changeCountBeforeMissingOutput);
+    expect(await prisma.domainAuditEvent.count()).toBe(auditCountBeforeMissingOutput);
+    expect(await prisma.notificationOutbox.count()).toBe(outboxCountBeforeMissingOutput);
     const confirmed = await confirmPlannedSegment(actor(fixture.member), {
       segmentId: planned.segment.id,
       expectedUpdatedAt: planned.segment.updatedAt,
       actual: { actualOutput: "实际完成" },
     });
     expect(confirmed.segment.status).toBe("CONFIRMED");
-    expect(confirmed.actualSegment.type).toBe("ACTUAL");
+    expect(confirmed.actualSegment).toMatchObject({
+      type: "ACTUAL",
+      expectedOutput: "完成计划产出",
+      actualOutput: "实际完成",
+    });
     const source = await prisma.workSegmentSource.findFirstOrThrow({
       where: {
         plannedSegmentId: planned.segment.id,
@@ -638,6 +675,7 @@ test.describe("project management P5 work segment services", () => {
     const repeated = await confirmPlannedSegment(actor(fixture.member), {
       segmentId: planned.segment.id,
       expectedUpdatedAt: confirmed.segment.updatedAt,
+      actual: { actualOutput: "实际完成" },
     });
     expect(repeated.createdActual).toBe(false);
     expect(repeated.actualSegment.id).toBe(confirmed.actualSegment.id);
@@ -645,6 +683,7 @@ test.describe("project management P5 work segment services", () => {
     const partialPlan = await createWorkSegment(actor(fixture.member), {
       ...plannedInput(fixture.member.person.id, 11, 13),
       taskId: fixture.taskId,
+      expectedOutput: "完成计划前段",
     });
     const segmentCountBeforeForgedPartial = await prisma.workSegment.count();
     const sourceCountBeforeForgedPartial = await prisma.workSegmentSource.count();
@@ -656,7 +695,22 @@ test.describe("project management P5 work segment services", () => {
         coveredEndAt: atHour(12.5),
         actual: {
           content: "伪造中段确认",
-          expectedOutput: "不应写入",
+          actualOutput: "不应写入",
+        },
+      }),
+      "VALIDATION_ERROR",
+    );
+    expect(await prisma.workSegment.count()).toBe(segmentCountBeforeForgedPartial);
+    expect(await prisma.workSegmentSource.count()).toBe(sourceCountBeforeForgedPartial);
+    await expectServiceError(
+      partiallyConfirmSegment(actor(fixture.member), {
+        segmentId: partialPlan.segment.id,
+        expectedUpdatedAt: partialPlan.segment.updatedAt,
+        coveredStartAt: atHour(11),
+        coveredEndAt: atHour(12.5),
+        actual: {
+          content: "伪造部分确认预期输出",
+          expectedOutput: "不应覆盖计划预期输出",
           actualOutput: "不应写入",
         },
       }),
@@ -671,7 +725,6 @@ test.describe("project management P5 work segment services", () => {
       coveredEndAt: atHour(12.5),
       actual: {
         content: "实际完成计划前段",
-        expectedOutput: "完成计划前段",
         actualOutput: "已完成计划前段",
       },
     });
@@ -682,10 +735,13 @@ test.describe("project management P5 work segment services", () => {
       taskId: fixture.taskId,
       startAt: atHour(11).toISOString(),
       endAt: atHour(12.5).toISOString(),
+      expectedOutput: "完成计划前段",
+      actualOutput: "已完成计划前段",
     });
     expect(partial.remainingSegments).toHaveLength(1);
     expect(partial.remainingSegments[0]?.startAt).toBe(atHour(12.5).toISOString());
     expect(partial.remainingSegments[0]?.endAt).toBe(atHour(13).toISOString());
+    expect(partial.remainingSegments[0]?.expectedOutput).toBe("完成计划前段");
     const partialSource = await prisma.workSegmentSource.findFirstOrThrow({
       where: {
         plannedSegmentId: partialPlan.segment.id,
@@ -1351,6 +1407,7 @@ test.describe("project management P5 work segment services", () => {
       segments: Array.from({ length: 3 }, (_, index) => ({
         ...plannedInput(fixture.member.person.id, 20 + index, 21 + index),
         content: `批量确认 ${index + 1}`,
+        expectedOutput: `批量预期 ${index + 1}`,
         taskId: fixture.taskId,
       })),
     });
@@ -1367,6 +1424,7 @@ test.describe("project management P5 work segment services", () => {
         segments: created.segments.map((segment) => ({
           segmentId: segment.id,
           expectedUpdatedAt: segment.updatedAt,
+          actualOutput: `批量实际 ${segment.content}`,
         })),
         reason: "验证批量确认回滚",
       }),
@@ -1392,6 +1450,7 @@ test.describe("project management P5 work segment services", () => {
         segments: authoritative.map((segment) => ({
           segmentId: segment.id,
           expectedUpdatedAt: segment.updatedAt,
+          actualOutput: `批量实际 ${segment.content}`,
         })),
       }),
       "FORBIDDEN",
@@ -1400,12 +1459,22 @@ test.describe("project management P5 work segment services", () => {
       segments: authoritative.map((segment) => ({
         segmentId: segment.id,
         expectedUpdatedAt: segment.updatedAt,
+        actualOutput: `批量实际 ${segment.content}`,
       })),
       reason: "批量完整确认",
     });
     expect(confirmed.segments).toHaveLength(3);
     expect(confirmed.actualSegments).toHaveLength(3);
     expect(confirmed.segments.every((segment) => segment.status === "CONFIRMED")).toBe(true);
+    expect(confirmed.actualSegments.map((segment) => ({
+      actualOutput: segment.actualOutput,
+      expectedOutput: segment.expectedOutput,
+    })).sort((left, right) => left.actualOutput.localeCompare(right.actualOutput))).toEqual(
+      authoritative.map((segment) => ({
+        actualOutput: `批量实际 ${segment.content}`,
+        expectedOutput: segment.expectedOutput,
+      })).sort((left, right) => left.actualOutput.localeCompare(right.actualOutput)),
+    );
     expect(
       await prisma.workSegmentSource.count({
         where: { plannedSegmentId: { in: ids } },
@@ -1602,7 +1671,6 @@ test.describe("project management P5 work segment services", () => {
       reason: "并发部分确认",
       actual: {
         content: "并发部分确认 Actual",
-        expectedOutput: "完成前段",
         actualOutput: "已完成前段",
       },
     };

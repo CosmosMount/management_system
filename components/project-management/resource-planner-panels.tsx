@@ -615,8 +615,7 @@ export function SegmentInspector({
       {plannedEditable && canvasSegment.permissions.canConfirm && (
         <div className="space-y-3 border-t border-border pt-4">
           <h3 className="text-sm font-semibold">确认、取消与删除</h3>
-          <Button type="button" className="w-full" disabled={disabled} onClick={() => onRun(() => confirmPlannedSegment({ segmentId: detail.id, expectedUpdatedAt: detail.updatedAt, reason: "投入详情完整确认" }), "已完整确认并生成 Actual")}>完整确认</Button>
-          <PartialConfirmForm
+          <PlannedConfirmationForm
             detail={detail}
             disabled={disabled}
             onDirtyChange={onDirtyChange}
@@ -836,7 +835,7 @@ function SegmentRangeFields({
   );
 }
 
-function PartialConfirmForm({
+function PlannedConfirmationForm({
   detail,
   disabled,
   onDirtyChange,
@@ -855,9 +854,14 @@ function PartialConfirmForm({
 }) {
   const startMs = Date.parse(detail.startAt);
   const endMs = Date.parse(detail.endAt);
-  const durationMinutes = Math.max(1, Math.round((endMs - startMs) / 60_000));
+  const durationMs = endMs - startMs;
+  const canPartiallyConfirm = durationMs > 60_000;
+  const maxPartialMinutes = Math.max(1, Math.ceil(durationMs / 60_000) - 1);
   const [coveredMinutes, setCoveredMinutes] = useState(() =>
-    Math.min(durationMinutes, Math.max(1, Math.round(durationMinutes / 2))),
+    Math.min(
+      maxPartialMinutes,
+      Math.max(1, Math.round(durationMs / 2 / 60_000)),
+    ),
   );
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   const coveredEndAt = new Date(startMs + coveredMinutes * 60_000).toISOString();
@@ -869,42 +873,86 @@ function PartialConfirmForm({
       return next;
     });
   };
+  const handleFailure = (
+    error: ProjectManagementActionFailure["error"],
+    includeRange: boolean,
+  ) => {
+    const supportedPaths = [
+      "actual.content",
+      "actual.actualOutput",
+      ...(includeRange ? ["coveredStartAt", "coveredEndAt"] : []),
+    ];
+    const raw = supportedFieldErrors(error.fieldErrors, supportedPaths);
+    const next: Record<string, string[]> = {
+      ...(raw["actual.content"] ? { content: raw["actual.content"] } : {}),
+      ...(raw["actual.actualOutput"]
+        ? { actualOutput: raw["actual.actualOutput"] }
+        : {}),
+      ...(raw.coveredStartAt ? { coveredStartAt: raw.coveredStartAt } : {}),
+      ...(raw.coveredEndAt ? { coveredEndAt: raw.coveredEndAt } : {}),
+    };
+    if (Object.keys(next).length === 0) return false;
+    setFieldErrors(next);
+    const first = next.coveredStartAt || next.coveredEndAt
+      ? `confirm-end-${detail.id}`
+      : next.content
+        ? `confirm-content-${detail.id}`
+        : `confirm-actual-${detail.id}`;
+    requestAnimationFrame(() => document.getElementById(first)?.focus());
+    return fieldErrorsFullyHandled(error.fieldErrors, supportedPaths);
+  };
 
   return (
     <form
       className="grid gap-2"
-      aria-label="部分确认"
+      aria-label="确认计划"
       noValidate
       onChange={() => onDirtyChange(true)}
       onSubmit={(event) => {
         event.preventDefault();
         const form = new FormData(event.currentTarget);
-        if (coveredMinutes >= durationMinutes) {
+        const submitter = (event.nativeEvent as SubmitEvent).submitter;
+        const fullConfirmation =
+          submitter instanceof HTMLButtonElement && submitter.value === "FULL";
+        const content = String(form.get("content") ?? "");
+        const actualOutput = String(form.get("actualOutput") ?? "");
+        const nextErrors: Record<string, string[]> = {};
+        if (!fullConfirmation && !content.trim()) {
+          nextErrors.content = ["请输入实际投入内容"];
+        }
+        if (!actualOutput.trim()) {
+          nextErrors.actualOutput = ["请输入实际输出"];
+        }
+        setFieldErrors(nextErrors);
+        if (Object.keys(nextErrors).length > 0) {
+          const first = nextErrors.content
+            ? `confirm-content-${detail.id}`
+            : `confirm-actual-${detail.id}`;
+          requestAnimationFrame(() => document.getElementById(first)?.focus());
+          return;
+        }
+        if (fullConfirmation) {
           onRun(
             () => confirmPlannedSegment({
               segmentId: detail.id,
               expectedUpdatedAt: detail.updatedAt,
               reason: "投入详情完整确认",
+              actual: {
+                actualOutput,
+                ...(content.trim() ? { content } : {}),
+              },
             }),
             "已完整确认并生成 Actual",
+            undefined,
+            undefined,
+            (error) => handleFailure(error, false),
           );
           return;
         }
         const actual = {
-          content: String(form.get("content") ?? ""),
-          expectedOutput: String(form.get("expectedOutput") ?? ""),
-          actualOutput: String(form.get("actualOutput") ?? ""),
+          content,
+          actualOutput,
         };
-        const nextErrors: Record<string, string[]> = {};
-        if (!actual.content.trim()) nextErrors.content = ["请输入实际投入内容"];
-        if (!actual.expectedOutput.trim()) nextErrors.expectedOutput = ["请输入预期输出"];
-        if (!actual.actualOutput.trim()) nextErrors.actualOutput = ["请输入实际输出"];
-        if (Object.keys(nextErrors).length > 0) {
-          setFieldErrors((current) => ({ ...current, ...nextErrors }));
-          const first = nextErrors.content ? `partial-content-${detail.id}` : nextErrors.expectedOutput ? `partial-expected-${detail.id}` : `partial-actual-${detail.id}`;
-          requestAnimationFrame(() => document.getElementById(first)?.focus());
-          return;
-        }
         onRun(
           () => partiallyConfirmSegment({
             segmentId: detail.id,
@@ -916,48 +964,27 @@ function PartialConfirmForm({
           "已确认计划前段并保留剩余计划",
           undefined,
           undefined,
-          (error) => {
-            const raw = supportedFieldErrors(error.fieldErrors, ["actual.content", "actual.expectedOutput", "actual.actualOutput", "coveredStartAt", "coveredEndAt"]);
-            const next: Record<string, string[]> = {
-              ...(raw["actual.content"] ? { content: raw["actual.content"] } : {}),
-              ...(raw["actual.expectedOutput"] ? { expectedOutput: raw["actual.expectedOutput"] } : {}),
-              ...(raw["actual.actualOutput"] ? { actualOutput: raw["actual.actualOutput"] } : {}),
-              ...(raw.coveredStartAt ? { coveredStartAt: raw.coveredStartAt } : {}),
-              ...(raw.coveredEndAt ? { coveredEndAt: raw.coveredEndAt } : {}),
-            };
-            if (Object.keys(next).length === 0) return false;
-            setFieldErrors(next);
-            const first = next.coveredStartAt || next.coveredEndAt
-              ? `partial-end-${detail.id}`
-              : next.content
-                ? `partial-content-${detail.id}`
-                : next.expectedOutput
-                  ? `partial-expected-${detail.id}`
-                  : `partial-actual-${detail.id}`;
-            requestAnimationFrame(() => document.getElementById(first)?.focus());
-            return fieldErrorsFullyHandled(error.fieldErrors, [
-              "actual.content",
-              "actual.expectedOutput",
-              "actual.actualOutput",
-              "coveredStartAt",
-              "coveredEndAt",
-            ]);
-          },
+          (error) => handleFailure(error, true),
         );
       }}
     >
-      <p className="text-sm font-medium">确认计划前段</p>
+      <p className="text-sm font-medium">生成 Actual</p>
       <p className="text-xs text-muted-foreground">
-        开始固定为当前计划开头；拖动时间线选择确认结束点，也可直接填写结束时间。
+        完整确认沿用计划时间；部分确认从当前计划开头起算，并保留未确认的尾段。
       </p>
+      <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm">
+        <p className="text-xs text-muted-foreground">预期输出沿用计划</p>
+        <p className="mt-1 break-words">{detail.expectedOutput || "未填写"}</p>
+      </div>
       <div className="rounded-lg border border-border bg-muted/30 p-3">
         <input
           className="w-full accent-primary"
           type="range"
           aria-label="在时间线上选择确认结束"
           min={1}
-          max={durationMinutes}
+          max={maxPartialMinutes}
           value={coveredMinutes}
+          disabled={!canPartiallyConfirm || disabled}
           onChange={(event) => {
             setCoveredMinutes(Number(event.target.value));
             clearError("coveredStartAt");
@@ -972,7 +999,7 @@ function PartialConfirmForm({
       </div>
       <Input aria-label="确认开始" type="datetime-local" value={toLocal(startMs)} readOnly />
       <Input
-        id={`partial-end-${detail.id}`}
+        id={`confirm-end-${detail.id}`}
         aria-label="确认结束"
         type="datetime-local"
         value={toLocal(Date.parse(coveredEndAt))}
@@ -980,60 +1007,60 @@ function PartialConfirmForm({
           const nextMs = parseShanghaiLocalMs(event.target.value);
           if (nextMs === null) return;
           const nextMinutes = Math.round((nextMs - startMs) / 60_000);
-          setCoveredMinutes(Math.max(1, Math.min(durationMinutes, nextMinutes)));
+          setCoveredMinutes(Math.max(1, Math.min(maxPartialMinutes, nextMinutes)));
           clearError("coveredStartAt");
           clearError("coveredEndAt");
           onDirtyChange(true);
         }}
-        required
+        disabled={!canPartiallyConfirm || disabled}
         aria-invalid={Boolean(fieldErrors.coveredStartAt || fieldErrors.coveredEndAt)}
-        aria-describedby={fieldErrors.coveredStartAt || fieldErrors.coveredEndAt ? `partial-range-${detail.id}-error` : undefined}
+        aria-describedby={fieldErrors.coveredStartAt || fieldErrors.coveredEndAt ? `confirm-range-${detail.id}-error` : undefined}
       />
       <FieldError
-        id={`partial-range-${detail.id}-error`}
+        id={`confirm-range-${detail.id}-error`}
         messages={[...(fieldErrors.coveredStartAt ?? []), ...(fieldErrors.coveredEndAt ?? [])]}
       />
-      <Field label="实际投入内容" htmlFor={`partial-content-${detail.id}`}>
+      <Field label="实际投入内容" htmlFor={`confirm-content-${detail.id}`}>
         <Textarea
-          id={`partial-content-${detail.id}`}
+          id={`confirm-content-${detail.id}`}
           name="content"
           defaultValue={detail.content}
           maxLength={2_000}
-          required={coveredMinutes < durationMinutes}
           aria-invalid={Boolean(fieldErrors.content)}
-          aria-describedby={fieldErrors.content ? `partial-content-${detail.id}-error` : undefined}
+          aria-describedby={fieldErrors.content ? `confirm-content-${detail.id}-error` : undefined}
           onChange={() => clearError("content")}
         />
-        <FieldError id={`partial-content-${detail.id}-error`} messages={fieldErrors.content} />
+        <p className="text-xs text-muted-foreground">
+          部分确认必填；完整确认留空时沿用计划内容。
+        </p>
+        <FieldError id={`confirm-content-${detail.id}-error`} messages={fieldErrors.content} />
       </Field>
-      <Field label="预期输出" htmlFor={`partial-expected-${detail.id}`}>
+      <Field label="实际输出" htmlFor={`confirm-actual-${detail.id}`}>
         <Textarea
-          id={`partial-expected-${detail.id}`}
-          name="expectedOutput"
-          defaultValue={detail.expectedOutput}
-          maxLength={2_000}
-          required={coveredMinutes < durationMinutes}
-          aria-invalid={Boolean(fieldErrors.expectedOutput)}
-          aria-describedby={fieldErrors.expectedOutput ? `partial-expected-${detail.id}-error` : undefined}
-          onChange={() => clearError("expectedOutput")}
-        />
-        <FieldError id={`partial-expected-${detail.id}-error`} messages={fieldErrors.expectedOutput} />
-      </Field>
-      <Field label="实际输出" htmlFor={`partial-actual-${detail.id}`}>
-        <Textarea
-          id={`partial-actual-${detail.id}`}
+          id={`confirm-actual-${detail.id}`}
           name="actualOutput"
           maxLength={2_000}
-          required={coveredMinutes < durationMinutes}
+          required
           aria-invalid={Boolean(fieldErrors.actualOutput)}
-          aria-describedby={fieldErrors.actualOutput ? `partial-actual-${detail.id}-error` : undefined}
+          aria-describedby={fieldErrors.actualOutput ? `confirm-actual-${detail.id}-error` : undefined}
           onChange={() => clearError("actualOutput")}
         />
-        <FieldError id={`partial-actual-${detail.id}-error`} messages={fieldErrors.actualOutput} />
+        <FieldError id={`confirm-actual-${detail.id}-error`} messages={fieldErrors.actualOutput} />
       </Field>
-      <Button type="submit" variant="outline" disabled={disabled}>
-        {coveredMinutes >= durationMinutes ? "完整确认" : "部分确认"}
-      </Button>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <Button type="submit" name="confirmationMode" value="FULL" disabled={disabled}>
+          完整确认
+        </Button>
+        <Button
+          type="submit"
+          name="confirmationMode"
+          value="PARTIAL"
+          variant="outline"
+          disabled={disabled || !canPartiallyConfirm}
+        >
+          部分确认
+        </Button>
+      </div>
     </form>
   );
 }

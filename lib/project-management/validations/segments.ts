@@ -301,10 +301,16 @@ export const confirmPlannedSegmentInputSchema = z.object({
   expectedUpdatedAt: requiredDate("记录版本不正确"),
   reason: optionalText(1_000),
   actual: optionalSegmentTimeRangeSchema
-    .safeExtend(segmentOverrideFieldsSchema.shape)
-    .strict()
-    .optional()
-    .default({}),
+    .safeExtend(
+      segmentOverrideFieldsSchema.omit({
+        expectedOutput: true,
+        actualOutput: true,
+      }).shape,
+    )
+    .safeExtend({
+      actualOutput: requiredText("请输入实际输出", 2_000),
+    })
+    .strict(),
 });
 
 export const batchConfirmPlannedSegmentsInputSchema = z.object({
@@ -313,6 +319,7 @@ export const batchConfirmPlannedSegmentsInputSchema = z.object({
       z.object({
         segmentId: idSchema,
         expectedUpdatedAt: requiredDate("记录版本不正确"),
+        actualOutput: requiredText("请输入实际输出", 2_000),
       }),
       { message: "确认列表格式不正确" },
     )
@@ -330,7 +337,6 @@ export const partiallyConfirmSegmentInputSchema = z.object({
   actual: z
     .object({
       content: requiredText("请输入实际投入内容", 2_000),
-      expectedOutput: requiredText("请输入预期输出", 2_000),
       actualOutput: requiredText("请输入实际输出", 2_000),
     })
     .strict(),

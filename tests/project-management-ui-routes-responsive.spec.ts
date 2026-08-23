@@ -567,7 +567,23 @@ test.describe("project management UI project-management-ui-routes-responsive", (
           () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
         ),
       ).toBe(true);
-      await page.getByRole("button", { name: "完整确认", exact: true }).click();
+      const confirmationForm = commonInspector.getByRole("form", {
+        name: "确认计划",
+      });
+      await expect(confirmationForm.getByLabel("预期输出")).toHaveCount(0);
+      await expect(confirmationForm.getByText("P6 UI 计划预期产出")).toBeVisible();
+      const actualOutput = confirmationForm.getByLabel("实际输出");
+      await confirmationForm.getByRole("button", { name: "完整确认", exact: true }).click();
+      await expect(actualOutput).toHaveAttribute("aria-invalid", "true");
+      await expect(actualOutput).toBeFocused();
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+        ),
+      ).toBe(true);
+      await actualOutput.fill(`P6 UI ${testInfo.project.name} 实际产出`);
+      await expect(actualOutput).not.toHaveAttribute("aria-invalid", "true");
+      await confirmationForm.getByRole("button", { name: "完整确认", exact: true }).click();
       await expect(page.getByText("已完整确认并生成 Actual")).toBeVisible();
       await expect
         .poll(async () => {
@@ -578,6 +594,18 @@ test.describe("project management UI project-management-ui-routes-responsive", (
           return row.status;
         })
         .toBe("CONFIRMED");
+      await expect
+        .poll(() => prisma.workSegment.findFirst({
+          where: {
+            type: "ACTUAL",
+            actualSources: { some: { plannedSegmentId: fixture.confirmableSegmentId } },
+          },
+          select: { expectedOutput: true, actualOutput: true },
+        }))
+        .toEqual({
+          expectedOutput: "P6 UI 计划预期产出",
+          actualOutput: `P6 UI ${testInfo.project.name} 实际产出`,
+        });
       await expectHealthyPage(page);
       expect(pageErrors).toEqual([]);
 

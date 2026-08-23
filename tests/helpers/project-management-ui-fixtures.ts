@@ -53,6 +53,7 @@ export async function createUiFixture() {
     startAt: atHour(9),
     endAt: atHour(10),
     content: "P6 UI 可确认计划",
+    expectedOutput: "P6 UI 计划预期产出",
     priority: "MEDIUM",
     taskId: draft.taskId,
   });
