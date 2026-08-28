@@ -255,7 +255,7 @@ export async function updateProject(
     const changed = metadataChanged || avatarChanged || membersChanged;
     if (!changed) return { projectId: project.id, status: project.status, lockVersion: project.lockVersion };
     await claimProjectAvatarTx(tx, project.id, parsed.avatarPath, refreshedActor.openId);
-    await replaceProjectMembersTx(tx, project, refreshedActor, parsed.members, parsed.name);
+    await replaceProjectMembersTx(tx, project, refreshedActor, parsed.members, parsed.name, { notifyAdditions: false });
     const updated = await tx.project.update({ where: { id: project.id }, data: { name: parsed.name, description: parsed.description, avatarPath: parsed.avatarPath, lockVersion: { increment: 1 } } });
     if (metadataChanged) await createDomainAuditEventTx(tx, { actorAccountId: refreshedActor.accountId, actorPersonId: refreshedActor.personId, action: "pm.project.metadata.update", entityType: "Project", entityId: project.id, projectId: project.id, before: { name: project.name, descriptionHash: createHash("sha256").update(project.description).digest("hex") }, after: { name: parsed.name, descriptionHash: createHash("sha256").update(parsed.description).digest("hex"), lockVersion: updated.lockVersion } });
     if (avatarChanged) await createDomainAuditEventTx(tx, { actorAccountId: refreshedActor.accountId, actorPersonId: refreshedActor.personId, action: "pm.project.avatar.update", entityType: "Project", entityId: project.id, projectId: project.id, before: { avatarPath: project.avatarPath }, after: { avatarPath: parsed.avatarPath, lockVersion: updated.lockVersion } });
@@ -263,6 +263,14 @@ export async function updateProject(
       const beforeMembers = project.members.map((member) => ({ personId: member.personId, role: member.role }));
       await createDomainAuditEventTx(tx, { actorAccountId: refreshedActor.accountId, actorPersonId: refreshedActor.personId, action: "pm.project.members.update", entityType: "Project", entityId: project.id, projectId: project.id, before: { members: beforeMembers }, after: { members: parsed.members, lockVersion: updated.lockVersion } });
     }
+    await notifyProjectUpdatedTx(
+      tx,
+      refreshedActor,
+      project,
+      updated,
+      parsed.members,
+      membersChanged,
+    );
     return { projectId: project.id, status: updated.status, lockVersion: updated.lockVersion };
   }));
 }
@@ -403,7 +411,7 @@ async function withProjectAvatarFailureCleanup<T>(avatarPath: string | null | un
   }
 }
 
-async function replaceProjectMembersTx(tx: PrismaTx, project: ProjectForMutation, actor: ProjectManagementActor, requested: ProjectMemberInput[], targetProjectName: string) {
+async function replaceProjectMembersTx(tx: PrismaTx, project: ProjectForMutation, actor: ProjectManagementActor, requested: ProjectMemberInput[], targetProjectName: string, options: { notifyAdditions?: boolean } = {}) {
   const requestedById = new Map(requested.map((member) => [member.personId, member.role]));
   const currentById = new Map(project.members.map((member) => [member.personId, member]));
   const removingIds = project.members.filter((member) => !requestedById.has(member.personId)).map((member) => member.personId);
@@ -421,11 +429,61 @@ async function replaceProjectMembersTx(tx: PrismaTx, project: ProjectForMutation
   const additions = requested.filter((member) => currentById.get(member.personId)?.role !== member.role);
   if (additions.length) {
     await tx.projectMember.createMany({ data: additions.map((member) => ({ projectId: project.id, personId: member.personId, role: member.role, createdByAccountId: actor.accountId })) });
-    for (const member of additions) {
-      const recipients = await recipientsForPersonIdsTx(tx, [member.personId]);
-      await createProjectManagementEventNotificationsTx(tx, { actor, project: { id: project.id, name: targetProjectName }, kind: "project_member_added", category: "PROJECT", eventKey: `pm:project:${project.id}:member:${member.personId}:${member.role}:${project.lockVersion + 1}`, title: "你已被加入项目", summary: `你已作为${member.role === "OWNER" ? "负责人" : "参与人"}加入项目「${targetProjectName}」`, entityType: "ProjectMember", entityId: member.personId, linkPath: `/progress/projects/${project.id}`, mandatory: false, recipients, context: { role: member.role } });
+    if (options.notifyAdditions !== false) {
+      for (const member of additions) {
+        const recipients = await recipientsForPersonIdsTx(tx, [member.personId]);
+        await createProjectManagementEventNotificationsTx(tx, { actor, project: { id: project.id, name: targetProjectName }, kind: "project_member_added", category: "PROJECT", eventKey: `pm:project:${project.id}:member:${member.personId}:${member.role}:${project.lockVersion + 1}`, title: "你已被加入项目", summary: `你已作为${member.role === "OWNER" ? "负责人" : "参与人"}加入项目「${targetProjectName}」`, entityType: "ProjectMember", entityId: member.personId, linkPath: `/progress/projects/${project.id}`, mandatory: false, recipients, context: { role: member.role } });
+      }
     }
   }
+}
+
+async function notifyProjectUpdatedTx(
+  tx: PrismaTx,
+  actor: ProjectManagementActor,
+  beforeProject: ProjectForMutation,
+  afterProject: Pick<
+    ProjectForMutation,
+    "id" | "name" | "description" | "avatarPath" | "status" | "lockVersion"
+  >,
+  afterMembers: ProjectMemberInput[],
+  membersChanged: boolean,
+) {
+  const publicChangedFields = [
+    beforeProject.name !== afterProject.name ? "项目名称" : null,
+    beforeProject.description !== afterProject.description ? "项目内容" : null,
+    beforeProject.avatarPath !== afterProject.avatarPath ? "项目头像" : null,
+    membersChanged ? "项目成员" : null,
+  ].filter((field): field is string => Boolean(field));
+
+  const recipients = [
+    ...(await recipientsForAccountIdsTx(tx, [
+      beforeProject.requesterAccountId,
+      actor.accountId,
+    ])),
+    ...(await recipientsForPersonIdsTx(tx, [
+      ...beforeProject.members.map((member) => member.personId),
+      ...afterMembers.map((member) => member.personId),
+    ])),
+  ];
+  await createProjectManagementEventNotificationsTx(tx, {
+    actor,
+    project: { id: afterProject.id, name: afterProject.name },
+    kind: "project_updated",
+    category: "PROJECT",
+    eventKey: `pm:project:${afterProject.id}:updated:${afterProject.lockVersion}`,
+    title: "项目信息已更新",
+    summary: `项目「${afterProject.name}」的信息已更新：${publicChangedFields.join("、")}`,
+    entityType: "Project",
+    entityId: afterProject.id,
+    linkPath: `/progress/projects/${afterProject.id}`,
+    mandatory: false,
+    recipients,
+    context: {
+      changedFields: publicChangedFields,
+      afterStatus: afterProject.status,
+    },
+  });
 }
 
 async function syncProjectMembersFromTasksTx(tx: PrismaTx, projectId: string, tasks: Array<{ id: string; members: Array<{ personId: string; role: TaskMemberRole; removedAt: Date | null }> }>, actor: ProjectManagementActor) {

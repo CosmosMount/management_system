@@ -11,6 +11,7 @@ import {
   type ProjectManagementNotificationPayload,
 } from "@/lib/project-management/notifications/events";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
+import { resolveProjectManagementNotificationLinkPath } from "@/lib/project-management/notifications/link-path";
 import {
   DEFAULT_FEISHU_IDENTITY_WHERE,
   FEISHU_OPEN_IDENTITY_ORDER,
@@ -98,6 +99,12 @@ export async function createProjectManagementEventNotificationsTx(
   const actorName =
     input.actorName ??
     (input.actor ? await actorDisplayNameTx(tx, input.actor) : "系统");
+  const linkPath = resolveProjectManagementNotificationLinkPath({
+    kind: input.kind,
+    linkPath: input.linkPath,
+    taskId: input.task?.id,
+    projectId: input.project?.id,
+  });
   const payload: ProjectManagementNotificationPayload = {
     kind: input.kind,
     payloadVersion: PROJECT_MANAGEMENT_NOTIFICATION_PAYLOAD_VERSION,
@@ -118,7 +125,7 @@ export async function createProjectManagementEventNotificationsTx(
     projectName: input.project?.name ?? null,
     entityType: input.entityType,
     entityId: input.entityId,
-    linkPath: input.linkPath ?? "/progress",
+    linkPath,
     recipientOpenIds: feishuRecipients
       .map((recipient) => recipient.openId)
       .filter((openId): openId is string => Boolean(openId)),
@@ -147,7 +154,7 @@ export async function createProjectManagementEventNotificationsTx(
       entityId: input.entityId,
       taskId: input.task?.id ?? null,
       projectId: input.project?.id ?? null,
-      linkPath: input.linkPath ?? "/progress",
+      linkPath,
       payload: jsonValue(inAppPayload),
     });
   }

@@ -39,6 +39,7 @@ test.describe("Project/Task 风险、评论与近期动态", () => {
     const owner = await createActor(`协作功能负责人 ${randomUUID()}`);
     const participant = await createActor(`协作功能参与人 ${randomUUID()}`);
     const outsider = await createActor(`协作功能旁观者 ${randomUUID()}`);
+    const projectOnly = await createActor(`仅 Project 协作成员 ${randomUUID()}`);
     const admin = await createActor(
       `协作功能管理员 ${randomUUID()}`,
       "PROJECT_ADMINISTRATOR",
@@ -71,6 +72,14 @@ test.describe("Project/Task 风险、评论与近期动态", () => {
       expectedLockVersion: draft.lockVersion,
     });
     const project = await createActiveProject(owner, participant);
+    await prisma.projectMember.create({
+      data: {
+        projectId: project.id,
+        personId: projectOnly.actor.personId,
+        role: "PARTICIPANT",
+        createdByAccountId: owner.actor.accountId,
+      },
+    });
     await prisma.task.update({
       where: { id: draft.taskId },
       data: { projectId: project.id },
@@ -85,6 +94,23 @@ test.describe("Project/Task 风险、评论与近期动态", () => {
       targetType: "TASK",
       targetId: draft.taskId,
       content: "需要在 Project 汇总区展示的 Task 风险",
+    });
+    await expectCollaborationNotification({
+      eventKey: `pm:risk:${projectRisk.riskId}:created`,
+      kind: "risk_created",
+      linkPath: `/progress/projects/${project.id}`,
+      projectId: project.id,
+      expectedRecipients: [owner, participant, projectOnly, admin],
+      excludedRecipients: [inactiveAdmin],
+    });
+    await expectCollaborationNotification({
+      eventKey: `pm:risk:${taskRisk.riskId}:created`,
+      kind: "risk_created",
+      linkPath: `/progress/tasks/${draft.taskId}`,
+      taskId: draft.taskId,
+      projectId: project.id,
+      expectedRecipients: [owner, participant, admin],
+      excludedRecipients: [projectOnly, inactiveAdmin],
     });
     expect(
       await prisma.inAppNotification.count({
@@ -106,6 +132,50 @@ test.describe("Project/Task 风险、评论与近期动态", () => {
       targetType: "PROJECT",
       targetId: project.id,
       content: "所有已登录用户都可以发布的 Project 评论",
+    });
+    await expectCollaborationNotification({
+      eventKey: `pm:comment:${outsiderComment.commentId}:created`,
+      kind: "comment_created",
+      linkPath: `/progress/projects/${project.id}`,
+      projectId: project.id,
+      expectedRecipients: [owner, participant, outsider, projectOnly, admin],
+      excludedRecipients: [inactiveAdmin],
+    });
+    await prisma.notificationPreference.create({
+      data: {
+        accountId: outsider.actor.accountId,
+        category: "TASK",
+        channel: "FEISHU",
+        enabled: false,
+      },
+    });
+    const outsiderTaskComment = await createComment(outsider.actor, {
+      targetType: "TASK",
+      targetId: draft.taskId,
+      content: "非 Task 成员操作人仍应收到自己的评论通知",
+    });
+    await expectCollaborationNotification({
+      eventKey: `pm:comment:${outsiderTaskComment.commentId}:created`,
+      kind: "comment_created",
+      linkPath: `/progress/tasks/${draft.taskId}`,
+      taskId: draft.taskId,
+      projectId: project.id,
+      expectedRecipients: [owner, participant, outsider, admin],
+      excludedRecipients: [projectOnly, inactiveAdmin],
+    });
+    const adminTaskComment = await createComment(admin.actor, {
+      targetType: "TASK",
+      targetId: draft.taskId,
+      content: "全局管理员操作人应按账号去重收到一次通知",
+    });
+    await expectCollaborationNotification({
+      eventKey: `pm:comment:${adminTaskComment.commentId}:created`,
+      kind: "comment_created",
+      linkPath: `/progress/tasks/${draft.taskId}`,
+      taskId: draft.taskId,
+      projectId: project.id,
+      expectedRecipients: [owner, participant, admin],
+      excludedRecipients: [projectOnly, inactiveAdmin],
     });
     await expectServiceCode(
       deleteComment(owner.actor, { commentId: outsiderComment.commentId }),
@@ -206,6 +276,26 @@ test.describe("Project/Task 风险、评论与近期动态", () => {
     await page.getByLabel("发表评论").fill(uiCommentContent);
     await page.getByRole("button", { name: "发布评论" }).click();
     await expect(page.getByText(uiCommentContent, { exact: true })).toBeVisible();
+    await expect
+      .poll(() =>
+        prisma.comment.count({
+          where: { taskId: draft.taskId, content: uiCommentContent },
+        }),
+      )
+      .toBe(1);
+    const uiComment = await prisma.comment.findFirstOrThrow({
+      where: { taskId: draft.taskId, content: uiCommentContent },
+      select: { id: true },
+    });
+    await expectCollaborationNotification({
+      eventKey: `pm:comment:${uiComment.id}:created`,
+      kind: "comment_created",
+      linkPath: `/progress/tasks/${draft.taskId}`,
+      taskId: draft.taskId,
+      projectId: project.id,
+      expectedRecipients: [owner, participant, admin],
+      excludedRecipients: [projectOnly, inactiveAdmin],
+    });
     await expectHealthyPage(page);
     expect(
       await page.evaluate(
@@ -223,15 +313,61 @@ test.describe("Project/Task 风险、评论与近期动态", () => {
     await expect(page.getByText("Project 自身存在的风险", { exact: true })).toBeVisible();
     await expect(page.getByText("需要在 Project 汇总区展示的 Task 风险", { exact: true })).toBeVisible();
     const commentCard = page.locator("article").filter({ hasText: "所有已登录用户都可以发布的 Project 评论" });
+    const notificationCountsBeforeCommentDelete = await Promise.all([
+      prisma.notificationOutbox.count({
+        where: {
+          eventKey: { startsWith: `pm:comment:${outsiderComment.commentId}:` },
+        },
+      }),
+      prisma.inAppNotification.count({
+        where: { entityId: outsiderComment.commentId },
+      }),
+    ]);
     page.once("dialog", (dialog) => void dialog.accept());
     await commentCard.getByRole("button", { name: "删除" }).click();
     await expect(commentCard).toHaveCount(0);
     await expect.poll(() => prisma.comment.findUnique({ where: { id: outsiderComment.commentId }, select: { deletedAt: true } })).not.toEqual({ deletedAt: null });
+    await expect(
+      Promise.all([
+        prisma.notificationOutbox.count({
+          where: {
+            eventKey: {
+              startsWith: `pm:comment:${outsiderComment.commentId}:`,
+            },
+          },
+        }),
+        prisma.inAppNotification.count({
+          where: { entityId: outsiderComment.commentId },
+        }),
+      ]),
+    ).resolves.toEqual(notificationCountsBeforeCommentDelete);
+
+    await resolveRisk(participant.actor, {
+      riskId: projectRisk.riskId,
+      resolveNote: "Project 风险已完成回归验证",
+    });
+    await expectCollaborationNotification({
+      eventKey: `pm:risk:${projectRisk.riskId}:resolved`,
+      kind: "risk_resolved",
+      linkPath: `/progress/projects/${project.id}`,
+      projectId: project.id,
+      expectedRecipients: [owner, participant, projectOnly, admin],
+      excludedRecipients: [inactiveAdmin],
+    });
 
     await prisma.task.update({ where: { id: draft.taskId }, data: { status: "COMPLETED" } });
     await resolveRisk(owner.actor, {
       riskId: taskRisk.riskId,
       resolveNote: "Task 结束后关闭遗留风险",
+    });
+    await expectCollaborationNotification({
+      eventKey: `pm:risk:${taskRisk.riskId}:resolved`,
+      kind: "risk_resolved",
+      linkPath: `/progress/tasks/${draft.taskId}`,
+      taskId: draft.taskId,
+      projectId: project.id,
+      expectedRecipients: [owner, participant, admin],
+      excludedRecipients: [projectOnly, inactiveAdmin],
     });
     await expectServiceCode(
       createRisk(owner.actor, {
@@ -264,7 +400,7 @@ test.describe("Project/Task 风险、评论与近期动态", () => {
     expect(await prisma.domainAuditEvent.count({ where: { entityId: uiRisk.id, action: { in: ["pm.task.risk.create", "pm.task.risk.resolve"] } } })).toBe(2);
     expect(await prisma.notificationOutbox.count({ where: { eventKey: { startsWith: `pm:risk:${uiRisk.id}:` } } })).toBe(2);
     expect(await prisma.notificationOutbox.count({ where: { eventKey: { startsWith: `pm:comment:${outsiderComment.commentId}:deleted` } } })).toBe(0);
-    expect(await prisma.inAppNotification.count({ where: { entityId: uiRisk.id, recipientAccountId: owner.actor.accountId } })).toBe(0);
+    expect(await prisma.inAppNotification.count({ where: { entityId: uiRisk.id, recipientAccountId: owner.actor.accountId } })).toBe(2);
     expect(await prisma.inAppNotification.count({ where: { entityId: uiRisk.id, recipientAccountId: admin.actor.accountId } })).toBeGreaterThan(0);
   });
 
@@ -310,6 +446,10 @@ test.describe("Project/Task 风险、评论与近期动态", () => {
 
     const riskCard = page.locator("article").filter({ hasText: riskContent });
     await expect(riskCard).toBeVisible();
+    const validationRisk = await prisma.riskRecord.findFirstOrThrow({
+      where: { taskId: draft.taskId, content: riskContent },
+      select: { id: true },
+    });
     await riskCard.getByRole("button", { name: "解决风险" }).click();
     const resolveInput = page.getByLabel("解决说明");
     await expect(resolveInput).not.toHaveAttribute("aria-invalid", "true");
@@ -321,8 +461,19 @@ test.describe("Project/Task 风险、评论与近期动态", () => {
     await expect(resolveInput).not.toHaveAttribute("aria-invalid", "true");
     await page.getByRole("button", { name: "确认解决" }).click();
     await expect(
-      page.getByTestId("task-workbench-v2").getByText("风险已解决。"),
+      page.getByRole("status").filter({ hasText: "风险已解决。" }).first(),
     ).toBeVisible();
+    await expect
+      .poll(() =>
+        prisma.riskRecord.findUnique({
+          where: { id: validationRisk.id },
+          select: { status: true, resolveNote: true },
+        }),
+      )
+      .toEqual({
+        status: "RESOLVED",
+        resolveNote: "已验证解决说明字段错误",
+      });
 
     const commentInput = page.getByLabel("发表评论");
     await expect(commentInput).not.toHaveAttribute("aria-invalid", "true");
@@ -544,6 +695,142 @@ function terminationInput(daysFromNow: number) {
     plannedAt: new Date(Date.now() + daysFromNow * 24 * 60 * 60 * 1_000).toISOString(),
     businessDescription: "结束协作功能测试 Task",
   };
+}
+
+async function expectCollaborationNotification(input: {
+  eventKey: string;
+  kind: "risk_created" | "risk_resolved" | "comment_created";
+  linkPath: string;
+  taskId?: string;
+  projectId?: string;
+  expectedRecipients: Array<Awaited<ReturnType<typeof createActor>>>;
+  excludedRecipients: Array<Awaited<ReturnType<typeof createActor>>>;
+}) {
+  const outboxes = await prisma.notificationOutbox.findMany({
+    where: { eventKey: `${input.eventKey}:feishu` },
+    select: { type: true, botKind: true, payload: true },
+  });
+  expect(outboxes).toHaveLength(1);
+  const payload = jsonRecord(JSON.parse(outboxes[0]!.payload));
+  expect(outboxes[0]!.type).toBe(input.kind);
+  expect(outboxes[0]!.botKind).toBe("notification");
+  expect(payload).toMatchObject({
+    kind: input.kind,
+    purpose: "notification",
+    mandatory: false,
+    linkPath: input.linkPath,
+    taskId: input.taskId ?? null,
+    projectId: input.projectId ?? null,
+  });
+
+  const globalAdministrators = await prisma.account.findMany({
+    where: {
+      person: { is: { status: "ACTIVE" } },
+      systemRoles: {
+        some: {
+          role: { in: ["SUPER_ADMINISTRATOR", "PROJECT_ADMINISTRATOR"] },
+          team: "",
+          techGroup: "",
+          revokedAt: null,
+        },
+      },
+    },
+    select: { id: true },
+  });
+  const excludedAccountIds = new Set(
+    input.excludedRecipients.map((recipient) => recipient.actor.accountId),
+  );
+  const expectedAccountIds = [
+    ...new Set([
+      ...input.expectedRecipients.map(
+        (recipient) => recipient.actor.accountId,
+      ),
+      ...globalAdministrators.map((administrator) => administrator.id),
+    ]),
+  ]
+    .filter((accountId) => !excludedAccountIds.has(accountId))
+    .sort();
+  const disabledFeishuAccountIds = new Set(
+    (
+      await prisma.notificationPreference.findMany({
+        where: {
+          accountId: { in: expectedAccountIds },
+          category: input.taskId ? "TASK" : "PROJECT",
+          channel: "FEISHU",
+          enabled: false,
+        },
+        select: { accountId: true },
+      })
+    ).map((preference) => preference.accountId),
+  );
+  const expectedRecipientAccounts = await prisma.account.findMany({
+    where: { id: { in: expectedAccountIds } },
+    select: {
+      id: true,
+      identities: {
+        where: { provider: "FEISHU", tenantId: "default" },
+        select: { openId: true },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      },
+    },
+  });
+  const expectedOpenIds = expectedRecipientAccounts
+    .filter((account) => !disabledFeishuAccountIds.has(account.id))
+    .flatMap((account) => {
+      const openId = account.identities
+        .map((identity) => identity.openId?.trim())
+        .find((candidate): candidate is string => Boolean(candidate));
+      return openId ? [openId] : [];
+    })
+    .sort();
+
+  const recipientOpenIds = jsonStringArray(payload.recipientOpenIds);
+  expect(recipientOpenIds).toHaveLength(new Set(recipientOpenIds).size);
+  expect([...recipientOpenIds].sort()).toEqual(expectedOpenIds);
+  const inAppNotifications = await prisma.inAppNotification.findMany({
+    where: { eventKey: { startsWith: `${input.eventKey}:inapp:` } },
+    select: {
+      recipientAccountId: true,
+      taskId: true,
+      projectId: true,
+      linkPath: true,
+      payload: true,
+    },
+  });
+  const inAppAccountIds = inAppNotifications.map(
+    (notification) => notification.recipientAccountId,
+  );
+  expect(inAppAccountIds).toHaveLength(new Set(inAppAccountIds).size);
+  expect([...inAppAccountIds].sort()).toEqual(expectedAccountIds);
+  for (const notification of inAppNotifications) {
+    expect(notification).toMatchObject({
+      taskId: input.taskId ?? null,
+      projectId: input.projectId ?? null,
+      linkPath: input.linkPath,
+    });
+    expect(jsonRecord(notification.payload)).toMatchObject({
+      kind: input.kind,
+      linkPath: input.linkPath,
+      recipientOpenIds: [],
+    });
+  }
+}
+
+function jsonRecord(value: unknown): Record<string, unknown> {
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  throw new Error("测试期望 JSON object");
+}
+
+function jsonStringArray(value: unknown): string[] {
+  if (
+    Array.isArray(value) &&
+    value.every((entry): entry is string => typeof entry === "string")
+  ) {
+    return value;
+  }
+  throw new Error("测试期望 JSON string array");
 }
 
 async function expectServiceCode(promise: Promise<unknown>, code: string) {

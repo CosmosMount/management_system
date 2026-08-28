@@ -15,6 +15,7 @@ import {
   notifyRevisionResultTx,
   revisionCreatorAndOwnersTx,
 } from "@/lib/project-management/application/lifecycle-notifications";
+import { recipientsForAccountsOrPeopleTx } from "@/lib/project-management/application/notification-utils";
 import {
   cancelRevisionInputSchema,
   createRevisionInputSchema,
@@ -32,7 +33,10 @@ import {
 import { assertTaskApprovalAvailableTx } from "@/lib/project-management/task-approval-gate";
 import { refreshProjectManagementActorTx } from "@/lib/project-management/application/actor-refresh";
 import { taskAuthorizationResource } from "@/lib/project-management/application/task-authorization-resource";
-import { lockGlobalApprovalAdministratorSetTx } from "@/lib/project-management/approval-administrators";
+import {
+  activeGlobalApprovalAdministratorAccountIdsTx,
+  lockGlobalApprovalAdministratorSetTx,
+} from "@/lib/project-management/approval-administrators";
 import {
   type LifecyclePlanEntry,
   type LifecycleTaskForAuthorization,
@@ -266,6 +270,11 @@ export async function createRevision(
       entityType: "RevisionNode",
       entityId: revisionNodeId,
       mandatory: true,
+      context: {
+        round: 1,
+        beforeStatus: null,
+        afterStatus: "PENDING_APPROVAL",
+      },
     });
 
     return {
@@ -442,6 +451,11 @@ export async function reviseRejectedRevision(
       entityType: "RevisionNode",
       entityId: parsed.revisionNodeId,
       mandatory: true,
+      context: {
+        round: revision.reviewRound + 1,
+        beforeStatus: "REJECTED",
+        afterStatus: "PENDING_APPROVAL",
+      },
     });
     return {
       taskId: task.id,
@@ -638,12 +652,53 @@ export async function cancelRevision(
       entityType: "RevisionNode",
       entityId: parsed.revisionNodeId,
       taskId: task.id,
-      before: jsonValue({ status: revision.status }),
+      before: jsonValue({
+        status: revision.status,
+        reviewRound: revision.reviewRound,
+      }),
       after: jsonValue({
         status: "CANCELLED",
         targetPlanVersionStatus: "ABANDONED",
+        reviewRound: revision.reviewRound,
       }),
       reason: parsed.comment,
+    });
+    await cancelRevisionApprovalNotificationsTx(
+      tx,
+      parsed.revisionNodeId,
+    );
+    const administratorAccountIds =
+      await activeGlobalApprovalAdministratorAccountIdsTx(tx);
+    const recipients = await recipientsForAccountsOrPeopleTx(tx, {
+      accountIds: [
+        revision.node.createdByAccountId,
+        refreshedActor.accountId,
+        ...administratorAccountIds,
+      ],
+      personIds: task.members
+        .filter((member) => member.role === "OWNER" && !member.removedAt)
+        .map((member) => member.personId),
+    });
+    const cancelReason = parsed.comment.trim() || "未填写";
+    await createLifecycleNotificationsTx(tx, {
+      actor: refreshedActor,
+      task,
+      kind: "revision_cancelled",
+      category: "REVISION",
+      eventKey: `pm:revision:cancelled:${parsed.revisionNodeId}:round:${revision.reviewRound}`,
+      title: "计划修订已取消",
+      summary: `任务「${task.title}」的计划修订「${revision.reason}」已取消；取消说明：${cancelReason}`,
+      entityType: "RevisionNode",
+      entityId: parsed.revisionNodeId,
+      mandatory: true,
+      recipients,
+      context: {
+        revisionName: revision.reason,
+        round: revision.reviewRound,
+        beforeStatus: revision.status,
+        afterStatus: "CANCELLED",
+        cancelReason,
+      },
     });
 
     return {
@@ -654,6 +709,72 @@ export async function cancelRevision(
       currentPlanVersionId: task.currentPlanVersionId,
       lockVersion: task.lockVersion,
     };
+  });
+}
+
+async function cancelRevisionApprovalNotificationsTx(
+  tx: PrismaTx,
+  revisionNodeId: string,
+) {
+  const outboxes = await tx.notificationOutbox.findMany({
+    where: {
+      channel: "project-management",
+      type: "revision_pending_review",
+      status: { in: ["PENDING", "PROCESSING", "FAILED"] },
+      OR: [
+        {
+          eventKey: {
+            startsWith: `pm:revision:pending_review:${revisionNodeId}:`,
+          },
+        },
+        {
+          eventKey: {
+            startsWith: `pm:revision:pending_review:global-admin:v2:${revisionNodeId}:`,
+          },
+        },
+      ],
+    },
+    select: { id: true },
+  });
+  const outboxIds = outboxes.map((outbox) => outbox.id);
+  const cancellationReason = "计划修订已取消，原审批请求不再有效";
+  if (outboxIds.length > 0) {
+    // Keep the same parent -> recipient lock order as the delivery worker.
+    // Reversing it can deadlock cancellation against a claim heartbeat.
+    await tx.notificationOutbox.updateMany({
+      where: {
+        id: { in: outboxIds },
+        status: { in: ["PENDING", "PROCESSING", "FAILED"] },
+      },
+      data: {
+        status: "CANCELED",
+        lockedUntil: null,
+        lastError: cancellationReason,
+      },
+    });
+    await tx.notificationOutboxRecipient.updateMany({
+      where: {
+        outboxId: { in: outboxIds },
+        status: { in: ["PENDING", "PROCESSING", "FAILED"] },
+      },
+      data: {
+        status: "CANCELED",
+        lockedUntil: null,
+        lastError: cancellationReason,
+      },
+    });
+  }
+  await tx.inAppNotification.updateMany({
+    where: {
+      entityType: "RevisionNode",
+      entityId: revisionNodeId,
+      readAt: null,
+      payload: {
+        path: ["kind"],
+        equals: "revision_pending_review",
+      },
+    },
+    data: { readAt: new Date() },
   });
 }
 

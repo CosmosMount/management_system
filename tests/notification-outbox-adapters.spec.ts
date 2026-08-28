@@ -1,19 +1,29 @@
 import { expect, test } from "@playwright/test";
-import { drainNotificationOutbox } from "../lib/notification-delivery";
+import { randomUUID } from "node:crypto";
+import {
+  drainNotificationOutbox,
+  drainNotificationOutboxSoon,
+} from "../lib/notification-delivery";
 import { enqueueNotification } from "../lib/notification-outbox";
 import { getGlobalSuperAdministratorOpenIds } from "../lib/account-authorization";
 import { feedbackNotificationChannel } from "../lib/notification-channels/feedback";
+import { projectManagementNotificationChannel } from "../lib/notification-channels/project-management";
 import { resolveFeishuIdentityForUser } from "../lib/project-management/identity";
+import type { ProjectManagementNotificationPayload } from "../lib/project-management/notifications/contract";
 import { prisma } from "../lib/prisma";
+import { withGlobalApprovalAdministratorGuardDisabled } from "./helpers/global-approval-administrator-guard";
 
 const EVENT_PREFIX = "playwright:notification-adapter:";
 const ACTIVE_RECIPIENT_OPEN_IDS = [
   "ou_outbox_success",
   "ou_outbox_retry",
   "ou_outbox_wrong_bot",
+  "ou_outbox_link_approval",
 ] as const;
 const originalFeedbackRecipientResolver =
   feedbackNotificationChannel.resolveRecipientPlan;
+let revisionFixtureAdministratorAccountId: string | null = null;
+const revisionFixtureTaskIds: string[] = [];
 
 test.describe.configure({ mode: "serial" });
 
@@ -51,7 +61,7 @@ test.describe("notification outbox channel adapters", () => {
     );
     process.env.NOTIFICATION_DELIVERY_DISABLED = "false";
     process.env.FEISHU_DIRECT_MESSAGE_ALLOWED_OPEN_IDS =
-      "ou_outbox_success,ou_outbox_retry,ou_outbox_wrong_bot";
+      "ou_outbox_success,ou_outbox_retry,ou_outbox_wrong_bot,ou_outbox_link_approval";
     delete process.env.FEISHU_DIRECT_MESSAGE_ALLOWED_UNION_IDS;
     delete process.env.FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES;
     process.env.FEISHU_NOTIFICATION_APP_ID = "notification-app";
@@ -155,11 +165,14 @@ test.describe("notification outbox channel adapters", () => {
       where: { openId: "ou_outbox_approver" },
     });
     await prisma.user.deleteMany({
-      where: { openId: "ou_outbox_approver" },
+      where: {
+        openId: { in: ["ou_outbox_approver", "ou_outbox_link_approval"] },
+      },
     });
   });
 
   test.afterAll(async () => {
+    assertTestDatabase();
     const identities = await prisma.accountIdentity.findMany({
       where: {
         provider: "FEISHU",
@@ -169,14 +182,27 @@ test.describe("notification outbox channel adapters", () => {
       select: { accountId: true },
     });
     const accountIds = [...new Set(identities.map(({ accountId }) => accountId))];
-    if (accountIds.length === 0) return;
-    await prisma.$transaction([
-      prisma.accountIdentity.deleteMany({
-        where: { accountId: { in: accountIds } },
-      }),
-      prisma.person.deleteMany({ where: { accountId: { in: accountIds } } }),
-      prisma.account.deleteMany({ where: { id: { in: accountIds } } }),
-    ]);
+    await withGlobalApprovalAdministratorGuardDisabled(async () => {
+      if (revisionFixtureTaskIds.length > 0) {
+        await prisma.task.updateMany({
+          where: { id: { in: revisionFixtureTaskIds } },
+          data: { deletedAt: new Date() },
+        });
+      }
+      if (revisionFixtureAdministratorAccountId) {
+        await prisma.systemRoleAssignment.deleteMany({
+          where: { accountId: revisionFixtureAdministratorAccountId },
+        });
+      }
+      if (accountIds.length === 0) return;
+      await prisma.$transaction([
+        prisma.accountIdentity.deleteMany({
+          where: { accountId: { in: accountIds } },
+        }),
+        prisma.person.deleteMany({ where: { accountId: { in: accountIds } } }),
+        prisma.account.deleteMany({ where: { id: { in: accountIds } } }),
+      ]);
+    });
   });
 
   test("event key 幂等且收件人去重，失败收件人重试不重复成功收件人", async () => {
@@ -1036,6 +1062,49 @@ test.describe("notification outbox channel adapters", () => {
     expect(JSON.stringify(content)).toContain("feedback-content-test");
   });
 
+  test("即时 drain 遵守禁发开关并在启用后非阻塞投递", async () => {
+    const eventKey = `${EVENT_PREFIX}drain-soon`;
+    await enqueueNotification({
+      eventKey,
+      channel: "feedback",
+      type: "reply",
+      payload: {
+        kind: "reply",
+        payload: {
+          feedbackId: "feedback-drain-soon",
+          actorName: "即时投递测试管理员",
+          body: "事务提交后立即触发 outbox drain",
+          recipientOpenIds: ["ou_outbox_success"],
+          actorIsAdmin: true,
+        },
+      },
+    });
+
+    process.env.NOTIFICATION_DELIVERY_DISABLED = "true";
+    drainNotificationOutboxSoon(5);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await expect(
+      prisma.notificationOutbox.findUniqueOrThrow({
+        where: { eventKey },
+        select: { status: true },
+      }),
+    ).resolves.toEqual({ status: "PENDING" });
+    expect(directMessageBodies).toHaveLength(0);
+
+    process.env.NOTIFICATION_DELIVERY_DISABLED = "false";
+    drainNotificationOutboxSoon(5);
+    await expect
+      .poll(async () => {
+        const row = await prisma.notificationOutbox.findUniqueOrThrow({
+          where: { eventKey },
+          select: { status: true },
+        });
+        return row.status;
+      })
+      .toBe("SENT");
+    expect(directMessageBodies).toHaveLength(1);
+  });
+
   test("项目管理 adapter 使用通知机器人并生成完整业务卡片", async () => {
     const eventKey = `${EVENT_PREFIX}project-management-content`;
     await enqueueNotification({
@@ -1099,6 +1168,391 @@ test.describe("notification outbox channel adapters", () => {
       status: "SENT",
       receiveIdType: "open_id",
     });
+  });
+
+  test("Revision 取消使用通知机器人并直达 Task 详情", async () => {
+    const eventKey = `${EVENT_PREFIX}revision-cancelled`;
+    await enqueueNotification({
+      eventKey,
+      channel: "project-management",
+      botKind: "notification",
+      type: "revision_cancelled",
+      payload: projectManagementPayload({
+        kind: "revision_cancelled",
+        category: "REVISION",
+        title: "计划修订已取消",
+        summary:
+          "任务「电控调试」的计划修订「调整联调顺序」已取消；取消说明：需求已经撤回",
+        actorName: "李棋轩",
+        taskId: "pm-revision-task",
+        taskTitle: "电控调试",
+        entityType: "RevisionNode",
+        entityId: "pm-revision-cancelled",
+        linkPath: "/progress/tasks/pm-revision-task",
+        mandatory: true,
+        context: {
+          revisionName: "调整联调顺序",
+          round: 2,
+          beforeStatus: "PENDING_APPROVAL",
+          afterStatus: "CANCELLED",
+          cancelReason: "需求已经撤回",
+        },
+      }),
+    });
+
+    expect(
+      await drainNotificationOutbox(20, { ignoreDeliveryDisabled: true }),
+    ).toBe(1);
+    expect(authAppIds).toEqual(["notification-app"]);
+    expect(directMessageBodies).toHaveLength(1);
+    const rendered = JSON.stringify(
+      JSON.parse(String(directMessageBodies[0]?.content)),
+    );
+    expect(rendered).toContain("计划修订已取消");
+    expect(rendered).toContain("李棋轩");
+    expect(rendered).toContain("调整联调顺序");
+    expect(rendered).toContain("取消说明");
+    expect(rendered).toContain("需求已经撤回");
+    expect(rendered).toContain("已取消");
+    expect(
+      projectManagementButton(directMessageBodies[0]).url,
+    ).toBe("http://127.0.0.1:3002/progress/tasks/pm-revision-task");
+    await expect(
+      prisma.notificationOutbox.findUniqueOrThrow({
+        where: { eventKey },
+        select: { status: true, botKind: true },
+      }),
+    ).resolves.toEqual({ status: "SENT", botKind: "notification" });
+  });
+
+  test("Revision 审批在收件人解析后失效时发送前再次取消", async () => {
+    const revision = await createPendingRevisionFixture(1);
+    const eventKey = `${EVENT_PREFIX}revision-stale-before-send`;
+    await enqueueNotification({
+      eventKey,
+      channel: "project-management",
+      botKind: "approval",
+      type: "revision_pending_review",
+      payload: projectManagementPayload({
+        kind: "revision_pending_review",
+        purpose: "approval_request",
+        category: "REVISION",
+        taskId: revision.taskId,
+        taskTitle: "发送前失效 Revision Task",
+        entityType: "RevisionNode",
+        entityId: revision.revisionId,
+        recipientOpenIds: ["ou_outbox_success"],
+        context: { round: 1 },
+      }),
+    });
+    const row = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: { eventKey },
+    });
+    await expect(
+      projectManagementNotificationChannel.resolveRecipientPlan(row),
+    ).resolves.toMatchObject({
+      supported: true,
+      openIds: ["ou_outbox_success"],
+    });
+
+    await prisma.revisionNode.update({
+      where: { id: revision.revisionId },
+      data: { status: "REJECTED" },
+    });
+
+    await expect(
+      projectManagementNotificationChannel.sendToRecipient(
+        row,
+        "ou_outbox_success",
+      ),
+    ).rejects.toThrow("计划修订已不再等待审批");
+    expect(authAppIds).toEqual([]);
+    expect(directMessageBodies).toHaveLength(0);
+  });
+
+  test("无 round 的旧 Revision 审批只兼容首轮且不会在重提后误发", async () => {
+    const staleRevision = await createPendingRevisionFixture(2);
+    const staleEventKey = `pm:revision:pending_review:${staleRevision.revisionId}:feishu`;
+    await enqueueNotification({
+      eventKey: staleEventKey,
+      channel: "project-management",
+      botKind: "approval",
+      type: "revision_pending_review",
+      payload: projectManagementPayload({
+        kind: "revision_pending_review",
+        purpose: "approval_request",
+        category: "REVISION",
+        taskId: staleRevision.taskId,
+        taskTitle: "旧轮次 Revision Task",
+        entityType: "RevisionNode",
+        entityId: staleRevision.revisionId,
+        recipientOpenIds: ["ou_outbox_success"],
+        context: {},
+      }),
+    });
+
+    expect(
+      await drainNotificationOutbox(20, { ignoreDeliveryDisabled: true }),
+    ).toBe(0);
+    await expect(
+      prisma.notificationOutbox.findUniqueOrThrow({
+        where: { eventKey: staleEventKey },
+        select: { status: true, lastError: true },
+      }),
+    ).resolves.toMatchObject({
+      status: "CANCELED",
+      lastError: expect.stringContaining("审批轮次已更新"),
+    });
+    expect(directMessageBodies).toHaveLength(0);
+
+    const firstRoundRevision = await createPendingRevisionFixture(1);
+    await enqueueNotification({
+      eventKey: `pm:revision:pending_review:${firstRoundRevision.revisionId}:feishu`,
+      channel: "project-management",
+      botKind: "approval",
+      type: "revision_pending_review",
+      payload: projectManagementPayload({
+        kind: "revision_pending_review",
+        purpose: "approval_request",
+        category: "REVISION",
+        taskId: firstRoundRevision.taskId,
+        taskTitle: "首轮兼容 Revision Task",
+        entityType: "RevisionNode",
+        entityId: firstRoundRevision.revisionId,
+        recipientOpenIds: ["ou_outbox_success"],
+        context: {},
+      }),
+    });
+
+    expect(
+      await drainNotificationOutbox(20, { ignoreDeliveryDisabled: true }),
+    ).toBe(1);
+    expect(directMessageBodies).toHaveLength(1);
+  });
+
+  test("项目管理 adapter 将旧版 My Work 链接推导为 Task 详情绝对地址", async () => {
+    const eventKey = `${EVENT_PREFIX}project-management-legacy-task-link`;
+    await enqueueNotification({
+      eventKey,
+      channel: "project-management",
+      botKind: "notification",
+      type: "task_activated",
+      payload: {
+        kind: "task_activated",
+        payloadVersion: 1,
+        purpose: "notification",
+        category: "TASK",
+        title: "Task 已激活",
+        summary: "旧版通知链接兼容验证",
+        actorName: "测试操作人",
+        taskId: "pm-legacy-task-id",
+        taskTitle: "旧版链接测试任务",
+        entityType: "Task",
+        entityId: "pm-legacy-task-id",
+        linkPath: "/progress",
+        recipientOpenIds: ["ou_outbox_success"],
+        mandatory: true,
+        appOrigin: "http://127.0.0.1:3002",
+        context: { taskStatus: "ACTIVE" },
+      },
+    });
+
+    expect(
+      await drainNotificationOutbox(20, { ignoreDeliveryDisabled: true }),
+    ).toBe(1);
+    expect(authAppIds).toEqual(["notification-app"]);
+    expect(directMessageBodies).toHaveLength(1);
+    const content = JSON.parse(
+      String(directMessageBodies[0]?.content),
+    ) as {
+      elements?: Array<{
+        tag?: string;
+        actions?: Array<{ tag?: string; url?: string }>;
+      }>;
+    };
+    const detailButton = content.elements
+      ?.find((element) => element.tag === "action")
+      ?.actions?.find((action) => action.tag === "button");
+    expect(detailButton?.url).toBe(
+      "http://127.0.0.1:3002/progress/tasks/pm-legacy-task-id",
+    );
+  });
+
+  test("项目管理 adapter 为实体、删除事件和既有深链生成规范绝对地址", async () => {
+    const cases: Array<{
+      name: string;
+      payload: ProjectManagementNotificationPayload;
+      botKind: "notification" | "approval";
+      expectedUrl: string;
+      expectedButtonText: "查看详情" | "查看并审批";
+    }> = [
+      {
+        name: "Project 目标",
+        payload: projectManagementPayload({
+          kind: "risk_created",
+          category: "PROJECT",
+          projectId: "pm-risk-project",
+          projectName: "风险项目",
+          entityType: "RiskRecord",
+          entityId: "pm-risk-record",
+          linkPath: "",
+        }),
+        botKind: "notification",
+        expectedUrl:
+          "http://127.0.0.1:3002/progress/projects/pm-risk-project",
+        expectedButtonText: "查看详情",
+      },
+      {
+        name: "Task 优先且评论可投递",
+        payload: projectManagementPayload({
+          kind: "comment_created",
+          category: "TASK",
+          taskId: "pm-comment-task",
+          taskTitle: "评论任务",
+          projectId: "pm-comment-project",
+          projectName: "评论项目",
+          entityType: "Comment",
+          entityId: "pm-comment-record",
+          linkPath: "/progress/projects/pm-comment-project",
+        }),
+        botKind: "notification",
+        expectedUrl:
+          "http://127.0.0.1:3002/progress/tasks/pm-comment-task",
+        expectedButtonText: "查看详情",
+      },
+      {
+        name: "Task 删除列表",
+        payload: projectManagementPayload({
+          kind: "task_deleted",
+          category: "TASK",
+          taskId: "pm-deleted-task",
+          taskTitle: "已删除任务",
+          entityType: "Task",
+          entityId: "pm-deleted-task",
+          linkPath: "/progress/tasks/pm-deleted-task",
+        }),
+        botKind: "notification",
+        expectedUrl: "http://127.0.0.1:3002/progress/tasks",
+        expectedButtonText: "查看详情",
+      },
+      {
+        name: "Project 删除列表",
+        payload: projectManagementPayload({
+          kind: "project_deleted",
+          category: "PROJECT",
+          projectId: "pm-deleted-project",
+          projectName: "已删除项目",
+          entityType: "Project",
+          entityId: "pm-deleted-project",
+          linkPath: "/progress/projects/pm-deleted-project",
+        }),
+        botKind: "notification",
+        expectedUrl: "http://127.0.0.1:3002/progress/projects",
+        expectedButtonText: "查看详情",
+      },
+      {
+        name: "Segment focus",
+        payload: projectManagementPayload({
+          kind: "segment_confirmation_due",
+          category: "WORK_SEGMENT",
+          taskId: "pm-segment-task",
+          taskTitle: "投入确认任务",
+          entityType: "WorkSegment",
+          entityId: "pm-segment-card",
+          linkPath: "/progress?focus=pm-segment-card",
+        }),
+        botKind: "notification",
+        expectedUrl:
+          "http://127.0.0.1:3002/progress?focus=pm-segment-card",
+        expectedButtonText: "查看详情",
+      },
+      {
+        name: "Terminal focus",
+        payload: projectManagementPayload({
+          kind: "termination_review_result",
+          category: "REVIEW",
+          taskId: "pm-terminal-task",
+          taskTitle: "结束审批任务",
+          entityType: "TerminationReview",
+          entityId: "pm-terminal-review",
+          linkPath:
+            "/progress/tasks/pm-terminal-task?focus=pm-terminal-node",
+        }),
+        botKind: "notification",
+        expectedUrl:
+          "http://127.0.0.1:3002/progress/tasks/pm-terminal-task?focus=pm-terminal-node",
+        expectedButtonText: "查看详情",
+      },
+      {
+        name: "Project 立项锚点",
+        payload: projectManagementPayload({
+          kind: "project_establishment_submitted",
+          purpose: "approval_request",
+          category: "PROJECT",
+          projectId: "pm-establishment-project",
+          projectName: "立项项目",
+          entityType: "ProjectEstablishmentRequest",
+          entityId: "pm-establishment-request",
+          linkPath:
+            "/progress/projects/pm-establishment-project#establishment",
+          recipientOpenIds: ["ou_outbox_link_approval"],
+        }),
+        botKind: "approval",
+        expectedUrl:
+          "http://127.0.0.1:3002/progress/projects/pm-establishment-project#establishment",
+        expectedButtonText: "查看并审批",
+      },
+    ];
+
+    process.env.FEISHU_APPROVAL_APP_ID = "approval-app";
+    process.env.FEISHU_APPROVAL_APP_SECRET = "approval-secret";
+    const approvalIdentity =
+      await prisma.accountIdentity.findUniqueOrThrow({
+        where: {
+          provider_tenantId_openId: {
+            provider: "FEISHU",
+            tenantId: "default",
+            openId: "ou_outbox_link_approval",
+          },
+        },
+        select: { accountId: true },
+      });
+    await prisma.user.upsert({
+      where: { openId: "ou_outbox_link_approval" },
+      update: {
+        accountId: approvalIdentity.accountId,
+        unionId: "on_outbox_link_approval",
+        name: "项目管理链接审批人",
+      },
+      create: {
+        accountId: approvalIdentity.accountId,
+        openId: "ou_outbox_link_approval",
+        unionId: "on_outbox_link_approval",
+        name: "项目管理链接审批人",
+      },
+    });
+    for (const [index, testCase] of cases.entries()) {
+      await enqueueNotification({
+        eventKey: `${EVENT_PREFIX}project-management-link-${index}`,
+        channel: "project-management",
+        botKind: testCase.botKind,
+        type: testCase.payload.kind,
+        payload: testCase.payload,
+      });
+
+      expect(
+        await drainNotificationOutbox(20, { ignoreDeliveryDisabled: true }),
+        testCase.name,
+      ).toBe(1);
+      const button = projectManagementButton(directMessageBodies.at(-1));
+      expect(
+        button.url,
+        testCase.name,
+      ).toBe(testCase.expectedUrl);
+      expect(button.text, testCase.name).toBe(testCase.expectedButtonText);
+    }
+    expect(authAppIds).toContain("notification-app");
+    expect(authAppIds).toContain("approval-app");
   });
 
   test("项目管理 adapter 遵守禁发 guard 且不会把跳过投递标记为成功", async () => {
@@ -1228,6 +1682,51 @@ test.describe("notification outbox channel adapters", () => {
   });
 });
 
+function projectManagementPayload(
+  input: Pick<
+    ProjectManagementNotificationPayload,
+    "kind" | "category" | "entityType" | "entityId"
+  > &
+    Partial<ProjectManagementNotificationPayload>,
+): ProjectManagementNotificationPayload {
+  return {
+    payloadVersion: 1,
+    purpose: "notification",
+    title: "项目管理通知链接验证",
+    summary: "验证项目管理通知能够通过 mock 飞书传输并直达目标",
+    actorName: "测试操作人",
+    linkPath: "",
+    recipientOpenIds: ["ou_outbox_success"],
+    mandatory: false,
+    appOrigin: "http://127.0.0.1:3002",
+    context: {},
+    ...input,
+  };
+}
+
+function projectManagementButton(
+  body: Record<string, unknown> | undefined,
+): { url: string; text: string } {
+  if (!body) throw new Error("测试期望飞书私信请求体");
+  const content = JSON.parse(String(body.content)) as {
+    elements?: Array<{
+      tag?: string;
+      actions?: Array<{
+        tag?: string;
+        url?: string;
+        text?: { content?: string };
+      }>;
+    }>;
+  };
+  const button = content.elements
+    ?.find((element) => element.tag === "action")
+    ?.actions?.find((action) => action.tag === "button");
+  if (!button?.url || !button.text?.content) {
+    throw new Error("测试期望项目管理卡片详情按钮 URL 与文案");
+  }
+  return { url: button.url, text: button.text.content };
+}
+
 async function ensureActiveFeishuRecipient(openId: string) {
   const identity = await prisma.accountIdentity.findUnique({
     where: {
@@ -1269,6 +1768,98 @@ async function ensureActiveFeishuRecipient(openId: string) {
       },
     },
   });
+}
+
+async function createPendingRevisionFixture(reviewRound: number) {
+  const administratorAccountId =
+    await ensureRevisionFixtureAdministratorAccount();
+  const taskId = randomUUID();
+  const planVersionId = randomUUID();
+  const nodeId = randomUUID();
+  const revisionId = randomUUID();
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SET CONSTRAINTS ALL DEFERRED`;
+    await tx.task.create({
+      data: {
+        id: taskId,
+        title: `Outbox Revision Fixture ${taskId}`,
+        status: "ACTIVE",
+        currentPlanVersionId: planVersionId,
+        createdByAccountId: administratorAccountId,
+        startedAt: new Date(),
+      },
+    });
+    await tx.taskPlanVersion.create({
+      data: {
+        id: planVersionId,
+        taskId,
+        versionNo: 1,
+        status: "CURRENT",
+        reason: "Adapter stale approval fixture",
+        createdByAccountId: administratorAccountId,
+        activatedAt: new Date(),
+      },
+    });
+    await tx.taskNode.create({
+      data: {
+        id: nodeId,
+        taskId,
+        type: "REVISION",
+        status: "ACTIVE",
+        businessDescription: "Adapter stale approval fixture",
+        createdByAccountId: administratorAccountId,
+      },
+    });
+    await tx.revisionNode.create({
+      data: {
+        id: revisionId,
+        nodeId,
+        reason: "Adapter stale approval fixture",
+        revisionAt: new Date(),
+        reviewRound,
+        basePlanVersionId: planVersionId,
+        status: "PENDING_APPROVAL",
+      },
+    });
+  });
+  revisionFixtureTaskIds.push(taskId);
+  return { taskId, revisionId };
+}
+
+async function ensureRevisionFixtureAdministratorAccount() {
+  if (revisionFixtureAdministratorAccountId) {
+    return revisionFixtureAdministratorAccountId;
+  }
+  const openId = `ou_revision_adapter_fixture_${randomUUID()}`;
+  const account = await prisma.account.create({
+    data: {
+      identities: {
+        create: {
+          provider: "FEISHU",
+          tenantId: "default",
+          providerSubject: `open:${openId}`,
+          openId,
+        },
+      },
+      person: {
+        create: {
+          displayName: "Revision adapter fixture administrator",
+          status: "ACTIVE",
+        },
+      },
+    },
+    select: { id: true },
+  });
+  await prisma.systemRoleAssignment.create({
+    data: {
+      accountId: account.id,
+      role: "PROJECT_ADMINISTRATOR",
+      team: "",
+      techGroup: "",
+    },
+  });
+  revisionFixtureAdministratorAccountId = account.id;
+  return account.id;
 }
 
 function jsonResponse(body: unknown): Response {

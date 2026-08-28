@@ -495,7 +495,7 @@ test.describe("project management S8 dashboard and notifications", () => {
         where: { eventKey: `${eventKey}:inapp:${user.accountId}` },
         select: { linkPath: true },
       }),
-    ).toEqual({ linkPath: `/progress/tasks/${fixture.taskId}?tab=reviews` });
+    ).toEqual({ linkPath: `/progress/tasks/${fixture.taskId}` });
 
     const old = new Date("2025-01-01T00:00:00.000Z");
     const oldInApp = await prisma.inAppNotification.create({

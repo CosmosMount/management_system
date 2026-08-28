@@ -15,6 +15,7 @@ import {
   projectManagementContextLines,
   projectManagementEntityLabel,
 } from "@/lib/project-management/notifications/user-facing-copy";
+import { resolveProjectManagementNotificationLinkPath } from "@/lib/project-management/notifications/link-path";
 import type {
   NotificationChannelAdapter,
   NotificationDeliveryTarget,
@@ -22,6 +23,7 @@ import type {
 import { NonRetryableNotificationError } from "@/lib/notification-channel-adapter";
 import { CanceledNotificationError } from "@/lib/notification-channel-adapter";
 import { filterActiveFeishuOpenIds } from "@/lib/active-account";
+import { prisma } from "@/lib/prisma";
 
 function parseProjectManagementNotification(row: NotificationOutbox): {
   payload: ProjectManagementNotificationPayload;
@@ -61,6 +63,17 @@ export const projectManagementNotificationChannel: NotificationChannelAdapter = 
   channel: PROJECT_MANAGEMENT_NOTIFICATION_OUTBOX_CHANNEL,
   async resolveRecipientPlan(row) {
     const { payload } = parseProjectManagementNotification(row);
+    const cancelReason = await staleApprovalCancelReason(
+      payload,
+      row.eventKey,
+    );
+    if (cancelReason) {
+      return {
+        supported: true,
+        openIds: [],
+        cancelReason,
+      };
+    }
     const openIds = await filterActiveFeishuOpenIds(uniqueOpenIds(payload));
     return {
       supported: true,
@@ -73,12 +86,19 @@ export const projectManagementNotificationChannel: NotificationChannelAdapter = 
     row,
     recipientOpenId,
   ): Promise<NotificationDeliveryTarget> {
+    const { payload, botKind } = parseProjectManagementNotification(row);
     if (
       (await filterActiveFeishuOpenIds([recipientOpenId])).length === 0
     ) {
       throw new CanceledNotificationError("收件人已停用，取消本次投递");
     }
-    const { payload, botKind } = parseProjectManagementNotification(row);
+    const cancelReason = await staleApprovalCancelReason(
+      payload,
+      row.eventKey,
+    );
+    if (cancelReason) {
+      throw new CanceledNotificationError(cancelReason);
+    }
     return deliveryTarget(
       await sendFeishuDirectMessage({
         recipientOpenId,
@@ -132,6 +152,48 @@ export const projectManagementNotificationChannel: NotificationChannelAdapter = 
   },
 };
 
+async function staleApprovalCancelReason(
+  payload: ProjectManagementNotificationPayload,
+  eventKey: string,
+) {
+  if (payload.kind !== "revision_pending_review") return null;
+  const revision = await prisma.revisionNode.findUnique({
+    where: { id: payload.entityId },
+    select: { status: true, reviewRound: true },
+  });
+  if (!revision || revision.status !== "PENDING_APPROVAL") {
+    return "计划修订已不再等待审批，取消过期通知";
+  }
+  // Approval events created before reviewRound was persisted belong to round 1.
+  // Treating an unknown round as the current one could revive an old approval
+  // after a rejected Revision is resubmitted.
+  const notifiedRound = revisionNotificationRound(payload, eventKey) ?? 1;
+  if (notifiedRound !== revision.reviewRound) {
+    return "计划修订审批轮次已更新，取消过期通知";
+  }
+  return null;
+}
+
+function revisionNotificationRound(
+  payload: ProjectManagementNotificationPayload,
+  eventKey: string,
+) {
+  const contextRound = payload.context.round;
+  if (
+    typeof contextRound === "number" &&
+    Number.isSafeInteger(contextRound) &&
+    contextRound > 0
+  ) {
+    return contextRound;
+  }
+  const eventRound = eventKey.match(/:round:(\d+)(?::feishu)?$/)?.[1];
+  if (!eventRound) return null;
+  const parsedRound = Number(eventRound);
+  return Number.isSafeInteger(parsedRound) && parsedRound > 0
+    ? parsedRound
+    : null;
+}
+
 function uniqueOpenIds(payload: ProjectManagementNotificationPayload): string[] {
   return [
     ...new Set(
@@ -154,7 +216,15 @@ function buildProjectManagementCard(
   payload: ProjectManagementNotificationPayload,
   createdAt: Date,
 ) {
-  const url = buildAppUrl(payload.linkPath || "/progress", payload.appOrigin);
+  const url = buildAppUrl(
+    resolveProjectManagementNotificationLinkPath({
+      kind: payload.kind,
+      linkPath: payload.linkPath,
+      taskId: payload.taskId,
+      projectId: payload.projectId,
+    }),
+    payload.appOrigin,
+  );
   const title = normalizeProjectManagementNotificationText(payload.title, {
     field: "title",
     kind: payload.kind,

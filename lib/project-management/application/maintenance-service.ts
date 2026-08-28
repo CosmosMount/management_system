@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/logger";
+import { routes } from "@/lib/routes";
 import {
   createProjectManagementEventNotificationsTx,
   recipientsForPersonIdsTx,
@@ -79,7 +80,7 @@ export async function runMilestoneDeadlineScan(
           summary: `${milestone.goal} · 计划完成时间 ${formatShanghaiDateTime(milestone.expectedCompletedAt)}`,
           entityType: "MilestoneNode",
           entityId: milestone.id,
-          linkPath: `/progress/tasks/${task.id}?tab=reviews`,
+          linkPath: routes.progress.taskDetail(task.id),
           mandatory: overdue,
           recipients,
           context: {

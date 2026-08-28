@@ -181,7 +181,7 @@ export async function createLifecycleNotificationsTx(
     summary: input.summary,
     entityType: input.entityType,
     entityId: input.entityId,
-    linkPath: input.linkPath ?? "/progress",
+    linkPath: input.linkPath,
     mandatory: input.mandatory,
     recipients: input.recipients,
     context: input.context,

@@ -11,6 +11,7 @@ import {
   resolveRisk as resolveRiskService,
 } from "@/lib/project-management/application/collaboration-service";
 import { getCurrentProjectManagementActor } from "@/lib/project-management/identity";
+import { drainNotificationOutboxSoon } from "@/lib/notification-delivery";
 import {
   getActivityVersion as getActivityVersionQuery,
   getCommentPage as getCommentPageQuery,
@@ -88,6 +89,7 @@ async function runCollaborationMutation<T>(
       const actor = await getCurrentProjectManagementActor();
       log.setActorAccountId(actor.accountId);
       const result = await service(actor, input);
+      drainNotificationOutboxSoon();
       const taskId = resultTaskId(result);
       const projectId = resultProjectId(result);
       if (taskId) log.setTaskId(taskId);

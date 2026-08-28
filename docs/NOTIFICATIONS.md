@@ -23,6 +23,8 @@
 
 项目管理必须在业务事务中使用稳定 `eventKey` 写入 outbox，由自己的 channel adapter 处理。项目管理 Server Action 和领域 service 不得直接导入飞书传输层。Task 生命周期和 Segment 只允许入队站内通知和 `channel=project-management` outbox；真实飞书消息只能由 `lib/notification-channels/project-management.ts` 通过统一传输层发送。
 
+Task、Project、Revision、风险和评论 mutation 的 Server Action 会在业务事务成功提交后调用非阻塞即时 drain，尽快 claim 新 outbox；`NOTIFICATION_DELIVERY_DISABLED`、allowlist 和 adapter 校验仍在原投递边界生效。独立 cron 继续作为进程提前退出、即时 drain 失败和积压消息的兜底，降低 cron 间隔不能替代业务生产者入队。
+
 ## 项目管理 P1-P6 通知接入
 
 项目管理通知 payload 位于 `lib/project-management/notifications/contract.ts`，固定包含：
@@ -45,6 +47,7 @@ Task 生命周期服务和 Segment 服务会在同一业务事务中写站内通
 | 场景 | outbox type | 用途 | 收件人 |
 |------|-------------|------|--------|
 | Task 草稿成员加入 | `task_assigned` | 普通通知 | 有效 OWNER/PARTICIPANT |
+| Task 基本信息更新 | `task_updated` | 非 mandatory 普通通知 | 操作人和更新前后有效 OWNER/PARTICIPANT，按账号去重 |
 | Task 激活 | `task_activated` | 普通通知 | 有效 OWNER/PARTICIPANT |
 | Task 草稿删除 | `task_deleted` | 强制普通通知 | 有效 OWNER/PARTICIPANT |
 | Milestone 提交验收 | `milestone_review_submitted` | 审批请求 | 所有活跃全局管理员，按账号去重 |
@@ -52,6 +55,7 @@ Task 生命周期服务和 Segment 服务会在同一业务事务中写站内通
 | Revision 待审批 | `revision_pending_review` | 审批请求 | 所有活跃全局管理员，按账号去重 |
 | Revision 驳回 | `revision_result` | 普通通知 | 创建人 + 所有 OWNER |
 | Revision 生效 | `revision_applied` | 普通通知 | 创建人 + 所有 OWNER |
+| Revision 取消 | `revision_cancelled` | 强制普通通知 | 创建人、当前 OWNER、操作人和活跃全局管理员，按账号去重 |
 | Planned Segment 到期待确认 | `segment_confirmation_due` | 普通通知 | Segment Person |
 | Terminal 结束申请 | `termination_review_submitted` | 审批请求 | 所有活跃全局管理员，按账号去重 |
 | Terminal 驳回/要求修订 | `termination_review_result` | 普通通知 | 提交人 + 所有 OWNER |
@@ -60,13 +64,18 @@ Task 生命周期服务和 Segment 服务会在同一业务事务中写站内通
 | Project 提交/重提立项 | `project_establishment_submitted` | 审批请求 | 两类全局管理员 |
 | Project 立项结果 | `project_establishment_result` | 普通通知 | 申请人、提交人和 Project 成员 |
 | Project 结束/删除 | `project_completed` / `project_deleted` | 普通通知 | 申请人和 Project 成员 |
-| Project/Task 提出风险 | `risk_created` | 非 mandatory 普通通知 | 直接目标负责人、参与人和两类全局管理员，排除操作人 |
-| Project/Task 解决风险 | `risk_resolved` | 非 mandatory 普通通知 | 直接目标负责人、参与人和两类全局管理员，排除操作人 |
-| Project/Task 发布评论 | `comment_created` | 非 mandatory 普通通知 | 直接目标负责人、参与人和两类全局管理员，排除操作人 |
+| Project 信息更新 | `project_updated` | 非 mandatory 普通通知 | 申请人、操作人和更新前后有效成员，按账号去重 |
+| Project/Task 提出风险 | `risk_created` | 非 mandatory 普通通知 | 直接目标负责人、参与人、两类全局管理员和操作人，按账号去重 |
+| Project/Task 解决风险 | `risk_resolved` | 非 mandatory 普通通知 | 直接目标负责人、参与人、两类全局管理员和操作人，按账号去重 |
+| Project/Task 发布评论 | `comment_created` | 非 mandatory 普通通知 | 直接目标负责人、参与人、两类全局管理员和操作人，按账号去重 |
 
-风险提出、风险解决和评论发布由 collaboration service 在业务记录与领域审计的同一事务内创建站内通知和 outbox。Project 事件使用 `PROJECT` 偏好，Task 事件使用 `TASK` 偏好；FEISHU 关闭只过滤普通飞书候选，站内通知仍保留。Task 事件不会额外通知仅属于其 Project、但不是 Task 成员的人员。停用 Person 和没有 Account 的成员不会成为收件人，账号按 `accountId` 去重，飞书 `openId` 只在投递边界解析。评论软删除仅写 `pm.project.comment.delete` / `pm.task.comment.delete` 审计并进入近期动态，不创建站内通知或 outbox。
+风险提出、风险解决和评论发布由 collaboration service 在业务记录与领域审计的同一事务内创建站内通知和 outbox。操作人作为普通候选收件人与其他人使用相同的偏好、活跃状态和飞书身份规则；非成员评论者也会收到自己的站内通知，关闭对应飞书偏好时不会获得特殊强制投递。Project 事件使用 `PROJECT` 偏好，Task 事件使用 `TASK` 偏好；FEISHU 关闭只过滤普通飞书候选，站内通知仍保留。除本次操作人外，Task 事件不会额外通知仅属于其 Project、但不是 Task 成员的人员。停用 Person 和没有 Account 的成员不会成为收件人，账号按 `accountId` 去重，飞书 `openId` 只在投递边界解析。评论软删除仅写 `pm.project.comment.delete` / `pm.task.comment.delete` 审计并进入近期动态，不创建站内通知或 outbox。
+
+`updateTaskDraft` 与 `updateActiveTask` 在名称、内容、车组、技术组、优先级或关联 Task 实际变化时产生一条 `task_updated`；成员专属变化继续使用 `task_assigned`，所属 Project 变化继续使用 `project_task_changed`，仅发生这些专属变化时不重复创建 `task_updated`。`updateProject` 对名称、内容、头像和成员的一次组合保存只产生一条 `project_updated`，覆盖更新前后成员并停止在该入口额外产生逐人 `project_member_added`；立项重提和 Task 成员自动同步等其他来源仍保留原成员加入事件。两类更新事件都只记录中文变更项，不把完整描述、内部人员 ID 或头像路径写入消息。
 
 Revision 创建和被驳回后的修改都会直接产生 `revision_pending_review`。事件键包含 `revisionId + reviewRound`；驳回结果键也包含对应 round，因此每轮送审和结果各自 exactly once，不会被上一轮幂等记录吞掉。Revision 不再产生独立 submit 通知或审计事件。
+
+Revision 从 `PENDING_APPROVAL` 或 `REJECTED` 取消时，会在状态、候选计划、审计与新 `revision_cancelled` 通知的同一事务中，把该 Revision 所有轮次仍为 `PENDING/PROCESSING/FAILED` 的审批 outbox 和未完成 recipient 置为 `CANCELED`，并将旧站内审批请求标为已读。冻结时与 worker 一致按 outbox→recipient 加锁，避免处理中取消与 claim heartbeat 形成反向锁序。已发送 recipient 和历史卡片保留。adapter 在收件人规划和真正发送前都会校验 Revision 当前状态与审批轮次，失效轮次不会继续投递；不含 round 的早期 outbox 只按首轮兼容，Revision 已重提时会取消。已经进入飞书网络请求的消息无法撤回。
 
 同一 Task 同时只允许一个未撤出的 `PENDING` Milestone Review、`PENDING_APPROVAL` Revision 或 `PENDING` Termination Review。门禁在 Task 行锁事务内、幂等重放之后检查：原 Review 使用相同请求键时返回原结果，不生成第二份审计或通知；不同请求键以及被其他审批占用的 Revision/Milestone/Terminal 请求均返回状态冲突，且不创建站内通知、outbox 或任何业务写入。审批通过、驳回、要求修订、取消或撤出后才释放门禁。Terminal 申请使用审批机器人；驳回和要求修订使用通知机器人；批准时不重复发送结果通知，而是用既有 `task_terminated` 通知全体有效成员。
 
@@ -80,7 +89,9 @@ Active 成员强制事件不得因缺少飞书 identity 或尚无 Account 而消
 
 Revision 生效事务先把目标 `TaskPlanVersion` 切换为 `CURRENT` 并更新 `Task.currentPlanVersionId`，随后以更新后的 Task 上下文写 `revision_applied`。Work Segment 仅关联 Task，不再产生节点关联失效通知。
 
-入队 helper 和 adapter 会拒绝 `type/payload.kind` 不一致、payload 结构错误、错误机器人类型和越界审批用途，并对 `recipientOpenIds` 去重。项目管理飞书卡片包含操作人、项目、任务、通知内容、相关事项、通知时间和最多 6 项中文业务上下文；审批请求按钮显示“查看并审批”，普通通知按钮显示“查看详情”，均跳转到 payload 的 `linkPath`，没有链接时回到 `/progress`。用户可见内容统一使用“项目、任务、里程碑、计划修订、计划投入、结束节点”等中文名称；数据库实体名、枚举值、上下文字段名、收件人解析状态和策略版本不得展示。未知对象统一显示“相关事项”，未知上下文直接省略；旧 outbox 与旧站内通知中能够按完整系统模板识别的内部术语会在投递或读取时转换为中文，模板中的项目名、任务名和正文按原值重建。里程碑验收结果会在 payload 中明确记录摘要来自系统默认文案还是审批人意见；只有系统默认摘要允许做状态中文化，用户意见始终按原文展示。缺少来源标记的早期歧义摘要不做猜测性改写。`approval_request` 使用审批机器人用途；所有普通项目管理事件使用通知机器人，不能把审批机器人作为普通通知 fallback。里程碑、Terminal 提交以及计划修订创建/重新送审前会在全局审批人事务锁内重新查询收件人；没有有效全局管理员角色，或所有管理员都缺少 default tenant 非空飞书 openId 时，审批状态、审计、站内通知和 outbox 全部回滚，不生成无人可处理或确定无法投递的待审批记录。
+入队 helper 和 adapter 会拒绝 `type/payload.kind` 不一致、payload 结构错误、错误机器人类型和越界审批用途，并对 `recipientOpenIds` 去重。项目管理飞书卡片包含操作人、项目、任务、通知内容、相关事项、通知时间和最多 6 项中文业务上下文；审批请求按钮显示“查看并审批”，普通通知按钮显示“查看详情”。项目管理链接在入队前统一解析，同一结果同时写入飞书 payload 和站内通知：有 Task 目标时进入 `/progress/tasks/<taskId>`，即使 payload 同时包含 `projectId` 也以 Task 为准；只有 Project 目标时进入 `/progress/projects/<projectId>`。既有合法深链继续保留，包括 Terminal 的 `focus`、Project 立项的 `#establishment` 锚点和 Segment 到期确认的 `/progress?focus=<segmentId>`。Task 或 Project 已删除时分别进入 `/progress/tasks` 或 `/progress/projects` 列表，避免详情页 404；只有账号安全等没有 Project/Task 业务目标的通知才允许使用 `/progress` 或其既有入口。adapter 在投递前还会为 `linkPath` 为空或仍为旧 `/progress` 的未发送 outbox 按 `taskId/projectId` 重新推导目标，不修改、不撤回也不重发已发送的历史卡片。
+
+用户可见内容统一使用“项目、任务、里程碑、计划修订、计划投入、结束节点”等中文名称；数据库实体名、枚举值、上下文字段名、收件人解析状态和策略版本不得展示。未知对象统一显示“相关事项”，未知上下文直接省略；旧 outbox 与旧站内通知中能够按完整系统模板识别的内部术语会在投递或读取时转换为中文，模板中的项目名、任务名和正文按原值重建。里程碑验收结果会在 payload 中明确记录摘要来自系统默认文案还是审批人意见；只有系统默认摘要允许做状态中文化，用户意见始终按原文展示。缺少来源标记的早期歧义摘要不做猜测性改写。`approval_request` 使用审批机器人用途；所有普通项目管理事件使用通知机器人，不能把审批机器人作为普通通知 fallback。里程碑、Terminal 提交以及计划修订创建/重新送审前会在全局审批人事务锁内重新查询收件人；没有有效全局管理员角色，或所有管理员都缺少 default tenant 非空飞书 openId 时，审批状态、审计、站内通知和 outbox 全部回滚，不生成无人可处理或确定无法投递的待审批记录。
 
 资源冲突下线 migration 会删除 `RESOURCE_CONFLICT` 偏好与站内通知，以及 `resource_conflict_opened`、`resource_conflict_resolved` outbox；收件人投递行随 outbox 级联删除。已经送达飞书的历史消息无法撤回。
 
@@ -208,4 +219,4 @@ Milestone deadline scanner 使用 Asia/Shanghai 业务日期，事件键为 `pm:
 - adapter 测试覆盖 payload/元数据校验、真实与独立传输收件人、机器人用途、未知 channel、eventKey 幂等、首次解析恢复、锁恢复和逐收件人重试。
 - 传输层使用 mock HTTP 覆盖禁发、allowlist、`open_id`/`union_id`、双机器人凭据、fallback、text/交互卡片/CardKit 和错误脱敏。
 - 采购、反馈回归必须验证收件人、消息信息完整性、机器人用途以及 CardKit 跟踪；测试不得联系真实收件人。
-- 项目管理测试必须验证 outbox 入队、payloadVersion、机器人用途、生命周期事件、收件人去重、完整卡片内容、recipient 级重试和禁发回归；自动化测试必须 mock 飞书 HTTP，不能联系真实收件人。
+- 项目管理测试必须验证 outbox 入队、payloadVersion、机器人用途、生命周期事件、收件人去重、完整卡片内容、recipient 级重试和禁发回归；还必须解析卡片按钮并断言由受信任应用域名与规范 `linkPath` 组成的完整绝对 URL，覆盖旧 `/progress` payload 的投递时推导。自动化测试必须 mock 飞书 HTTP，不能联系真实收件人。

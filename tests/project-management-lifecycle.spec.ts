@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { Prisma, type TerminationOutcome } from "@prisma/client";
+import { Client } from "pg";
 import { prisma } from "../lib/prisma";
 import {
   activateTask,
@@ -26,6 +27,7 @@ import {
 } from "../lib/project-management/queries/task-queries";
 import { getActorPersonOption } from "../lib/project-management/queries/option-queries";
 import { getActionInbox } from "../lib/project-management/queries/action-inbox-queries";
+import { listInAppNotifications } from "../lib/project-management/queries/notification-queries";
 import {
   getProjectManagementActorForFeishuUser,
   type ProjectManagementActor,
@@ -43,6 +45,8 @@ import {
   taskWorkspaceQueryInputSchema,
 } from "../lib/project-management/validations/lifecycle";
 import { withGlobalApprovalAdministratorGuardDisabled } from "./helpers/global-approval-administrator-guard";
+import { projectManagementNotificationChannel } from "../lib/notification-channels/project-management";
+import { waitForDirectBlockers } from "./helpers/database-barrier";
 
 test.describe("project management P2/P3 task lifecycle services", () => {
   test("Lifecycle validation returns Chinese messages for UUID and disabled file evidence errors", async () => {
@@ -249,6 +253,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       },
     );
     expect(assignedPayload.payloadVersion).toBe(1);
+    expect(assignedPayload.linkPath).toBe(`/progress/tasks/${created.taskId}`);
     expect(assignedPayload.recipientOpenIds).toEqual(
       expect.arrayContaining([owner.openId, member.openId, reviewer.openId]),
     );
@@ -259,8 +264,12 @@ test.describe("project management P2/P3 task lifecycle services", () => {
             startsWith: `pm:task:assigned:${created.taskId}:v1:inapp:`,
           },
         },
-        select: { payload: true },
+        select: { linkPath: true, payload: true },
       });
+    expect(inAppNotification.linkPath).toBe(`/progress/tasks/${created.taskId}`);
+    expect(jsonRecord(inAppNotification.payload).linkPath).toBe(
+      `/progress/tasks/${created.taskId}`,
+    );
     expect(jsonRecord(inAppNotification.payload).recipientOpenIds).toEqual([]);
     expect(
       await prisma.domainAuditEvent.count({
@@ -582,6 +591,27 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         purpose: "notification",
       },
     );
+    expect(deletedPayload.linkPath).toBe("/progress/tasks");
+    await expectNotificationLinkPath(
+      `pm:task:deleted:${fixture.taskId}:1:inapp:`,
+      "/progress/tasks",
+    );
+    const notificationCenter = await listInAppNotifications({
+      actor: actor(fixture.owner),
+      input: { category: "TASK", limit: 100 },
+    });
+    expect(
+      notificationCenter.items.find(
+        (notification) =>
+          notification.eventKey ===
+          `pm:task:deleted:${fixture.taskId}:1:inapp:${fixture.owner.account.id}`,
+      ),
+    ).toMatchObject({
+      taskId: fixture.taskId,
+      taskTitle: null,
+      linkPath: "/progress/tasks",
+      entityAvailable: true,
+    });
     expect(deletedPayload.recipientOpenIds).toEqual(
       expect.arrayContaining([
         fixture.owner.openId,
@@ -662,6 +692,9 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     expect(
       String(jsonRecord(JSON.parse(activationOutbox.payload)).summary),
     ).toContain("最终验收");
+    expect(jsonRecord(JSON.parse(activationOutbox.payload)).linkPath).toBe(
+      `/progress/tasks/${fixture.taskId}`,
+    );
 
     const terminated = await confirmTermination(actor(fixture.owner), {
       taskId: fixture.taskId,
@@ -763,13 +796,16 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       where: { eventKey: `${eventKey}:inapp:${fixture.owner.account.id}` },
     });
     expect(jsonRecord(inApp.payload)).toMatchObject({
+      linkPath: `/progress/tasks/${fixture.taskId}`,
       context: { taskStatus: "ACTIVE" },
     });
+    expect(inApp.linkPath).toBe(`/progress/tasks/${fixture.taskId}`);
     const outbox = await prisma.notificationOutbox.findUniqueOrThrow({
       where: { eventKey: `${eventKey}:feishu` },
     });
     const payload = jsonRecord(JSON.parse(outbox.payload));
     expect(payload).toMatchObject({
+      linkPath: `/progress/tasks/${fixture.taskId}`,
       context: { taskStatus: "ACTIVE" },
       recipientOpenIds: expect.arrayContaining([
         fixture.member.openId,
@@ -837,6 +873,13 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       },
     );
     expect(reviewSubmittedPayload.payloadVersion).toBe(1);
+    expect(reviewSubmittedPayload.linkPath).toBe(
+      `/progress/tasks/${fixture.taskId}`,
+    );
+    await expectNotificationLinkPath(
+      `pm:milestone:review_submitted:${submitted.reviewId}:inapp:`,
+      `/progress/tasks/${fixture.taskId}`,
+    );
     expect(reviewSubmittedPayload.recipientOpenIds).toEqual(
       expect.arrayContaining([fixture.reviewer.openId, fixture.admin.openId]),
     );
@@ -1200,6 +1243,36 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       created: true,
       status: "PENDING_APPROVAL",
     });
+    const pendingApprovalOutbox =
+      await prisma.notificationOutbox.findUniqueOrThrow({
+        where: {
+          eventKey: `pm:revision:pending_review:${revision.revisionNodeId}:round:1:feishu`,
+        },
+      });
+    const sentApprovalRecipient =
+      await prisma.notificationOutboxRecipient.create({
+        data: {
+          outboxId: pendingApprovalOutbox.id,
+          openId: fixture.reviewer.openId,
+          status: "SENT",
+          attempts: 1,
+          sentAt: new Date(),
+        },
+      });
+    const failedApprovalRecipient =
+      await prisma.notificationOutboxRecipient.create({
+        data: {
+          outboxId: pendingApprovalOutbox.id,
+          openId: fixture.admin.openId,
+          status: "FAILED",
+          attempts: 1,
+          lastError: "等待重试",
+        },
+      });
+    await prisma.notificationOutbox.update({
+      where: { id: pendingApprovalOutbox.id },
+      data: { status: "FAILED", attempts: 1, lastError: "等待重试" },
+    });
     await expect(
       prisma.$executeRaw`
         UPDATE "RevisionNode"
@@ -1244,6 +1317,257 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     });
     expect(task.currentPlanVersionId).toBe(fixture.currentPlanVersionId);
     expect(task.activeMilestoneNodeId).toBe(activeNode.nodeId);
+    await expect(
+      prisma.notificationOutbox.findUniqueOrThrow({
+        where: { id: pendingApprovalOutbox.id },
+        select: { status: true, lastError: true },
+      }),
+    ).resolves.toMatchObject({
+      status: "CANCELED",
+      lastError: expect.stringContaining("原审批请求不再有效"),
+    });
+    const staleApprovalPlan =
+      await projectManagementNotificationChannel.resolveRecipientPlan(
+        await prisma.notificationOutbox.findUniqueOrThrow({
+          where: { id: pendingApprovalOutbox.id },
+        }),
+      );
+    expect(staleApprovalPlan).toMatchObject({
+      supported: true,
+      openIds: [],
+      cancelReason: expect.stringContaining("不再等待审批"),
+    });
+    await expect(
+      prisma.notificationOutboxRecipient.findUniqueOrThrow({
+        where: { id: sentApprovalRecipient.id },
+        select: { status: true, sentAt: true },
+      }),
+    ).resolves.toMatchObject({ status: "SENT", sentAt: expect.any(Date) });
+    await expect(
+      prisma.notificationOutboxRecipient.findUniqueOrThrow({
+        where: { id: failedApprovalRecipient.id },
+        select: { status: true, lastError: true },
+      }),
+    ).resolves.toMatchObject({
+      status: "CANCELED",
+      lastError: expect.stringContaining("原审批请求不再有效"),
+    });
+    expect(
+      await prisma.inAppNotification.count({
+        where: {
+          entityId: revision.revisionNodeId,
+          readAt: null,
+          payload: {
+            path: ["kind"],
+            equals: "revision_pending_review",
+          },
+        },
+      }),
+    ).toBe(0);
+    const cancelledPayload = await expectProjectManagementOutbox(
+      `pm:revision:cancelled:${revision.revisionNodeId}:round:1:feishu`,
+      {
+        type: "revision_cancelled",
+        botKind: "notification",
+        purpose: "notification",
+      },
+    );
+    expect(cancelledPayload).toMatchObject({
+      mandatory: true,
+      taskId: fixture.taskId,
+      linkPath: `/progress/tasks/${fixture.taskId}`,
+      context: {
+        revisionName: "计划需要调整",
+        round: 1,
+        beforeStatus: "REJECTED",
+        afterStatus: "CANCELLED",
+        cancelReason: "重新整理后再提交",
+      },
+    });
+    expect(new Set(jsonStringArray(cancelledPayload.recipientOpenIds))).toEqual(
+      new Set([
+        fixture.owner.openId,
+        ...(await activeGlobalAdministratorOpenIds()),
+      ]),
+    );
+    const repeated = await cancelRevision(actor(fixture.owner), {
+      revisionNodeId: revision.revisionNodeId,
+      comment: "重复取消不得再次发送",
+    });
+    expect(repeated.status).toBe("CANCELLED");
+    expect(
+      await prisma.notificationOutbox.count({
+        where: {
+          eventKey: `pm:revision:cancelled:${revision.revisionNodeId}:round:1:feishu`,
+        },
+      }),
+    ).toBe(1);
+  });
+
+  test("Pending Revision cancellation notifies stakeholders and retires the approval request", async () => {
+    const fixture = await createActivatedFixture();
+    const revision = await createRevision(actor(fixture.member), {
+      taskId: fixture.taskId,
+      basePlanVersionId: fixture.currentPlanVersionId,
+      baseTaskLockVersion: 1,
+      reason: "取消仍待审批的计划",
+      description: "验证取消审批消息不会继续重试",
+      replacementMilestones: [
+        milestoneInput("取消候选 Milestone", "无需继续审批", 4),
+      ],
+      revisionAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
+      termination: terminationInput(8),
+      idempotencyKey: `revision-cancel-pending-${randomUUID()}`,
+    });
+
+    const result = await cancelRevision(actor(fixture.member), {
+      revisionNodeId: revision.revisionNodeId,
+      comment: "需求已经撤回",
+    });
+    expect(result.status).toBe("CANCELLED");
+    await expect(
+      prisma.notificationOutbox.findUniqueOrThrow({
+        where: {
+          eventKey: `pm:revision:pending_review:${revision.revisionNodeId}:round:1:feishu`,
+        },
+        select: { status: true },
+      }),
+    ).resolves.toEqual({ status: "CANCELED" });
+    const payload = await expectProjectManagementOutbox(
+      `pm:revision:cancelled:${revision.revisionNodeId}:round:1:feishu`,
+      {
+        type: "revision_cancelled",
+        botKind: "notification",
+        purpose: "notification",
+      },
+    );
+    expect(payload.context).toMatchObject({
+      beforeStatus: "PENDING_APPROVAL",
+      afterStatus: "CANCELLED",
+      cancelReason: "需求已经撤回",
+    });
+    expect(new Set(jsonStringArray(payload.recipientOpenIds))).toEqual(
+      new Set([
+        fixture.member.openId,
+        fixture.owner.openId,
+        ...(await activeGlobalAdministratorOpenIds()),
+      ]),
+    );
+  });
+
+  test("Revision cancellation keeps the worker parent-recipient lock order", async () => {
+    const fixture = await createActivatedFixture();
+    const revision = await createRevision(actor(fixture.member), {
+      taskId: fixture.taskId,
+      basePlanVersionId: fixture.currentPlanVersionId,
+      baseTaskLockVersion: 1,
+      reason: "验证取消通知锁顺序",
+      description: "处理中审批与取消并发时不得死锁",
+      replacementMilestones: [
+        milestoneInput("并发取消 Milestone", "取消后不再审批", 4),
+      ],
+      revisionAt: new Date(Date.UTC(2026, 6, 31, 10, 0, 0)).toISOString(),
+      termination: terminationInput(8),
+      idempotencyKey: `revision-cancel-lock-order-${randomUUID()}`,
+    });
+    const outbox = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: {
+        eventKey: `pm:revision:pending_review:${revision.revisionNodeId}:round:1:feishu`,
+      },
+    });
+    const lockedUntil = new Date(Date.now() + 60_000);
+    const recipient = await prisma.notificationOutboxRecipient.create({
+      data: {
+        outboxId: outbox.id,
+        openId: fixture.admin.openId,
+        status: "PROCESSING",
+        attempts: 1,
+        lockedUntil,
+      },
+    });
+    await prisma.notificationOutbox.update({
+      where: { id: outbox.id },
+      data: {
+        status: "PROCESSING",
+        attempts: 1,
+        lockedUntil,
+      },
+    });
+
+    const connectionString = process.env.DATABASE_URL;
+    if (!connectionString || !new URL(connectionString).pathname.endsWith("_test")) {
+      throw new Error("Revision 锁顺序测试只允许 runner 持有的 _test 数据库");
+    }
+    const locker = new Client({
+      connectionString,
+      application_name: "revision-cancel-lock-order-locker",
+    });
+    const observer = new Client({
+      connectionString,
+      application_name: "revision-cancel-lock-order-observer",
+    });
+    let transactionOpen = false;
+    let cancellationSettlement:
+      | Promise<
+          | { status: "fulfilled"; value: Awaited<ReturnType<typeof cancelRevision>> }
+          | { status: "rejected"; reason: unknown }
+        >
+      | null = null;
+    try {
+      await Promise.all([locker.connect(), observer.connect()]);
+      await locker.query("BEGIN");
+      transactionOpen = true;
+      await locker.query("SET LOCAL lock_timeout = '3s'");
+      await locker.query("SET LOCAL statement_timeout = '5s'");
+      const pidResult = await locker.query<{ pid: number }>(
+        "SELECT pg_backend_pid() AS pid",
+      );
+      const lockerPid = pidResult.rows[0]?.pid;
+      if (!lockerPid) throw new Error("无法取得通知锁顺序测试 backend pid");
+      await locker.query(
+        'SELECT "id" FROM "NotificationOutbox" WHERE "id" = $1 FOR UPDATE',
+        [outbox.id],
+      );
+
+      cancellationSettlement = cancelRevision(actor(fixture.member), {
+        revisionNodeId: revision.revisionNodeId,
+        comment: "并发取消锁顺序验证",
+      }).then(
+        (value) => ({ status: "fulfilled" as const, value }),
+        (reason: unknown) => ({ status: "rejected" as const, reason }),
+      );
+      await waitForDirectBlockers(observer, lockerPid, 1);
+
+      await expect(
+        locker.query(
+          'SELECT "id" FROM "NotificationOutboxRecipient" WHERE "id" = $1 FOR UPDATE',
+          [recipient.id],
+        ),
+      ).resolves.toMatchObject({ rowCount: 1 });
+      await locker.query("COMMIT");
+      transactionOpen = false;
+
+      const cancellation = await cancellationSettlement;
+      if (cancellation.status === "rejected") throw cancellation.reason;
+      expect(cancellation.value.status).toBe("CANCELLED");
+    } finally {
+      if (transactionOpen) await locker.query("ROLLBACK").catch(() => undefined);
+      if (cancellationSettlement) await cancellationSettlement;
+      await Promise.allSettled([locker.end(), observer.end()]);
+    }
+
+    await expect(
+      prisma.notificationOutbox.findUniqueOrThrow({
+        where: { id: outbox.id },
+        select: { status: true, lockedUntil: true },
+      }),
+    ).resolves.toEqual({ status: "CANCELED", lockedUntil: null });
+    await expect(
+      prisma.notificationOutboxRecipient.findUniqueOrThrow({
+        where: { id: recipient.id },
+        select: { status: true, lockedUntil: true },
+      }),
+    ).resolves.toEqual({ status: "CANCELED", lockedUntil: null });
   });
 
   test("Rejected Revision resubmit enforces ownership, stale and association safety with auditable atomic updates", async () => {
@@ -1461,6 +1785,21 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       },
     );
     expect(resubmittedPayload.title).toBe("计划修订已重新提交审批");
+    const previousRoundOutbox =
+      await prisma.notificationOutbox.findUniqueOrThrow({
+        where: {
+          eventKey: `pm:revision:pending_review:${revision.revisionNodeId}:round:1:feishu`,
+        },
+      });
+    await expect(
+      projectManagementNotificationChannel.resolveRecipientPlan(
+        previousRoundOutbox,
+      ),
+    ).resolves.toMatchObject({
+      supported: true,
+      openIds: [],
+      cancelReason: expect.stringContaining("审批轮次已更新"),
+    });
     await expect(
       getTaskLifecycleViews({
         actor: actor(fixture.owner),
@@ -1687,6 +2026,13 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       },
     );
     expect(revisionPendingPayload.payloadVersion).toBe(1);
+    expect(revisionPendingPayload.linkPath).toBe(
+      `/progress/tasks/${fixture.taskId}`,
+    );
+    await expectNotificationLinkPath(
+      `pm:revision:pending_review:${revision.revisionNodeId}:round:1:inapp:`,
+      `/progress/tasks/${fixture.taskId}`,
+    );
     const applied = await approveRevision(actor(fixture.reviewer), {
       revisionNodeId: revision.revisionNodeId,
       comment: "同意调整",
@@ -1971,6 +2317,9 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         purpose: "approval_request",
       },
     );
+    expect(firstRequestPayload.linkPath).toBe(
+      `/progress/tasks/${fixture.taskId}?focus=${terminationEntry.nodeId}`,
+    );
     expect(
       jsonStringArray(firstRequestPayload.recipientOpenIds).sort(),
     ).toEqual(globalAdministratorRecipients.openIds);
@@ -2083,6 +2432,9 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         purpose: "notification",
       },
     );
+    expect(requiredPayload.linkPath).toBe(
+      `/progress/tasks/${fixture.taskId}?focus=${terminationEntry.nodeId}`,
+    );
     expect(jsonStringArray(requiredPayload.recipientOpenIds).sort()).toEqual(
       returnedRecipients.openIds,
     );
@@ -2173,6 +2525,9 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         botKind: "notification",
         purpose: "notification",
       },
+    );
+    expect(approvedPayload.linkPath).toBe(
+      `/progress/tasks/${fixture.taskId}?focus=${terminationEntry.nodeId}`,
     );
     expect(JSON.stringify(approvedPayload)).toContain("最终申请失败结束");
     expect(JSON.stringify(approvedPayload)).toContain("第三轮结束申请");
@@ -2695,6 +3050,32 @@ async function createActivatedFixture(milestoneCount = 2) {
   return { ...fixture, lockVersion: activated.lockVersion };
 }
 
+async function activeGlobalAdministratorOpenIds() {
+  const identities = await prisma.accountIdentity.findMany({
+    where: {
+      provider: "FEISHU",
+      tenantId: "default",
+      account: {
+        person: { is: { status: "ACTIVE" } },
+        systemRoles: {
+          some: {
+            role: {
+              in: ["SUPER_ADMINISTRATOR", "PROJECT_ADMINISTRATOR"],
+            },
+            team: "",
+            techGroup: "",
+            revokedAt: null,
+          },
+        },
+      },
+    },
+    select: { openId: true },
+  });
+  return identities
+    .map((identity) => identity.openId?.trim() ?? "")
+    .filter((openId) => openId.length > 0);
+}
+
 async function createDraftFixture(
   milestoneCount = 2,
   terminationName = "Terminal",
@@ -3071,6 +3452,21 @@ async function expectNotificationAccountIds(
   expect(
     notifications.map((notification) => notification.recipientAccountId).sort(),
   ).toEqual(expectedAccountIds);
+}
+
+async function expectNotificationLinkPath(
+  eventKeyPrefix: string,
+  expectedLinkPath: string,
+) {
+  const notifications = await prisma.inAppNotification.findMany({
+    where: { eventKey: { startsWith: eventKeyPrefix } },
+    select: { linkPath: true, payload: true },
+  });
+  expect(notifications.length).toBeGreaterThan(0);
+  for (const notification of notifications) {
+    expect(notification.linkPath).toBe(expectedLinkPath);
+    expect(jsonRecord(notification.payload).linkPath).toBe(expectedLinkPath);
+  }
 }
 
 function jsonStringArray(value: unknown) {

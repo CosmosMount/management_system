@@ -11,6 +11,7 @@ import {
   updateTaskProject as updateTaskProjectService,
 } from "@/lib/project-management/application/project-service";
 import { getCurrentProjectManagementActor } from "@/lib/project-management/identity";
+import { drainNotificationOutboxSoon } from "@/lib/notification-delivery";
 import { refreshProjectManagementActorTx } from "@/lib/project-management/application/actor-refresh";
 import { prisma } from "@/lib/prisma";
 import { revalidateProjectManagement } from "@/lib/revalidate";
@@ -61,6 +62,7 @@ async function runProjectAction<T>(event: string, action: string, input: unknown
       const actor = await getCurrentProjectManagementActor();
       log.setActorAccountId(actor.accountId);
       const result = await service(actor, input);
+      drainNotificationOutboxSoon();
       revalidateProjectManagement();
       return result;
     },

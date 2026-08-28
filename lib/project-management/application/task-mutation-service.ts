@@ -22,6 +22,7 @@ import {
 } from "@/lib/project-management/application/errors";
 import {
   createProjectManagementEventNotificationsTx,
+  recipientsForAccountIdsTx,
   recipientsForPersonIdsTx,
 } from "@/lib/project-management/application/notification-utils";
 import { lockTaskSegmentAssociationsTx } from "@/lib/project-management/application/task-segment-association-lock";
@@ -227,6 +228,7 @@ export async function updateTaskDraft(
       reason: "统一更新 Task 草稿",
     });
     await auditTaskProjectChangeTx(tx, refreshedActor, task, updatedTask);
+    await notifyTaskUpdatedTx(tx, refreshedActor, task, updatedTask);
 
     return {
       ...serializeTaskMutation(updatedTask),
@@ -343,6 +345,7 @@ export async function updateActiveTask(
         reason: "更新 Task 元数据",
       });
       await auditTaskProjectChangeTx(tx, refreshedActor, task, updatedTask);
+      await notifyTaskUpdatedTx(tx, refreshedActor, task, updatedTask);
     }
     if (membersChanged) {
       await createDomainAuditEventTx(tx, {
@@ -982,6 +985,63 @@ async function auditTaskProjectChangeTx(
     recipients,
     context: { beforeProjectId: beforeTask.projectId, afterProjectId: afterTask.projectId },
   });
+}
+
+async function notifyTaskUpdatedTx(
+  tx: PrismaTx,
+  actor: ProjectManagementActor,
+  beforeTask: TaskForMutation,
+  afterTask: TaskForMutation,
+) {
+  const changedFields = taskBasicInformationChangedFields(beforeTask, afterTask);
+  if (changedFields.length === 0) return;
+
+  const memberPersonIds = [
+    ...beforeTask.members,
+    ...afterTask.members,
+  ]
+    .filter(
+      (member) => member.role === "OWNER" || member.role === "PARTICIPANT",
+    )
+    .map((member) => member.personId);
+  const recipients = [
+    ...(await recipientsForAccountIdsTx(tx, [actor.accountId])),
+    ...(await recipientsForPersonIdsTx(tx, memberPersonIds)),
+  ];
+  await createProjectManagementEventNotificationsTx(tx, {
+    actor,
+    task: {
+      id: afterTask.id,
+      title: afterTask.title,
+      status: afterTask.status,
+      currentPlanVersionId: afterTask.currentPlanVersionId,
+    },
+    kind: "task_updated",
+    category: "TASK",
+    eventKey: `pm:task:${afterTask.id}:updated:${afterTask.lockVersion}`,
+    title: "任务信息已更新",
+    summary: `任务「${afterTask.title}」的信息已更新：${changedFields.join("、")}`,
+    entityType: "Task",
+    entityId: afterTask.id,
+    linkPath: `/progress/tasks/${afterTask.id}`,
+    mandatory: false,
+    recipients,
+    context: { changedFields },
+  });
+}
+
+function taskBasicInformationChangedFields(
+  beforeTask: TaskForMutation,
+  afterTask: TaskForMutation,
+) {
+  return [
+    beforeTask.title !== afterTask.title ? "任务名称" : null,
+    beforeTask.description !== afterTask.description ? "任务内容" : null,
+    beforeTask.team !== afterTask.team ? "车组" : null,
+    beforeTask.techGroup !== afterTask.techGroup ? "技术组" : null,
+    beforeTask.priority !== afterTask.priority ? "优先级" : null,
+    beforeTask.relatedTaskId !== afterTask.relatedTaskId ? "关联任务" : null,
+  ].filter((field): field is string => Boolean(field));
 }
 
 function taskMetadataMatches(

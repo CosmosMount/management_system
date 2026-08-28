@@ -9,6 +9,7 @@ import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import { configurableNotificationCategories } from "@/lib/project-management/application/notification-preference-service";
 import { projectManagementNotificationPayloadSchema } from "@/lib/project-management/notifications/contract";
 import { normalizeProjectManagementNotificationText } from "@/lib/project-management/notifications/user-facing-copy";
+import { routes } from "@/lib/routes";
 
 const notificationCategoryValues = [
   "TASK",
@@ -84,8 +85,12 @@ export async function listInAppNotifications({
   return {
     items: rows.slice(0, parsed.limit).map((row) => {
       const taskTitle = row.taskId ? visibleTaskTitles.get(row.taskId) ?? null : null;
-      const entityAvailable = !row.taskId || taskTitle !== null;
       const storedPayload = parseStoredNotificationPayload(row.payload);
+      const deletedTaskListFallback =
+        storedPayload?.kind === "task_deleted" &&
+        row.linkPath === routes.progress.tasks;
+      const entityAvailable =
+        !row.taskId || taskTitle !== null || deletedTaskListFallback;
       const copyOptions = storedPayload
         ? {
             kind: storedPayload.kind,

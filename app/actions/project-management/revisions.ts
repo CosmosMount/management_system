@@ -17,6 +17,7 @@ import {
   type ProjectManagementActor,
 } from "@/lib/project-management/identity";
 import { revalidateProjectManagement } from "@/lib/revalidate";
+import { drainNotificationOutboxSoon } from "@/lib/notification-delivery";
 
 export async function createRevision(
   input: unknown,
@@ -74,6 +75,7 @@ async function runRevisionAction<T extends RevisionMutationResult>(
       const actor = await getCurrentProjectManagementActor();
       log.setActorAccountId(actor.accountId);
       const result = await callback(actor);
+      drainNotificationOutboxSoon();
       log.setTaskId(result.taskId);
       revalidateProjectManagement(result.taskId);
       return result;

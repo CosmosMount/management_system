@@ -403,11 +403,14 @@ async function notifyCollaborationTx(
     ...(await recipientsForPersonIdsTx(tx, memberPersonIds)),
     ...(await recipientsForAccountIdsTx(
       tx,
-      globalAccountIds.filter(
-        (accountId) => !inactiveGlobalAccountIds.has(accountId),
-      ),
+      [
+        ...globalAccountIds.filter(
+          (accountId) => !inactiveGlobalAccountIds.has(accountId),
+        ),
+        actor.accountId,
+      ],
     )),
-  ]).filter((recipient) => recipient.accountId !== actor.accountId);
+  ]);
   await createProjectManagementEventNotificationsTx(tx, {
     actor,
     kind: event.kind,
@@ -425,10 +428,6 @@ async function notifyCollaborationTx(
       target.type === "PROJECT"
         ? { id: target.id, name: target.name }
         : target.project,
-    linkPath:
-      target.type === "PROJECT"
-        ? `/progress/projects/${target.id}`
-        : `/progress/tasks/${target.id}`,
     mandatory: false,
     recipients,
     context: event.context,

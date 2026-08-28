@@ -208,6 +208,13 @@ test.describe("project management plan mutations project-management-plan-mutatio
             where: { taskId: fixture.taskId, action: mutationCase.auditAction },
           }),
         ).toBe(auditBefore + 1);
+        expect(
+          await prisma.notificationOutbox.count({
+            where: {
+              eventKey: `pm:task:${fixture.taskId}:updated:${beforeTask.lockVersion + 1}:feishu`,
+            },
+          }),
+        ).toBe(1);
         const afterSnapshot = await mutationSideEffectCounts(fixture.taskId);
         expectMutationBusinessEffect(
           mutationCase.name,

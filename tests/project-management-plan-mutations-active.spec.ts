@@ -156,6 +156,11 @@ test.describe("project management plan mutations project-management-plan-mutatio
           },
         }),
       ).toBe(3);
+      expect(
+        await prisma.notificationOutbox.count({
+          where: { eventKey: `pm:task:${fixture.taskId}:updated:2:feishu` },
+        }),
+      ).toBe(0);
 
       const metadataResult = await updateActiveMetadataThroughCurrentInterface(actor(admin), {
         taskId: fixture.taskId,
@@ -168,6 +173,45 @@ test.describe("project management plan mutations project-management-plan-mutatio
         relatedTaskId: null,
       });
       expect(metadataResult.lockVersion).toBe(3);
+      const metadataEventKey = `pm:task:${fixture.taskId}:updated:3`;
+      const metadataOutbox = await prisma.notificationOutbox.findUniqueOrThrow({
+        where: { eventKey: `${metadataEventKey}:feishu` },
+      });
+      const metadataPayload = jsonRecord(JSON.parse(metadataOutbox.payload));
+      expect(metadataOutbox).toMatchObject({
+        type: "task_updated",
+        channel: "project-management",
+        botKind: "notification",
+      });
+      expect(metadataPayload).toMatchObject({
+        kind: "task_updated",
+        purpose: "notification",
+        mandatory: false,
+        actorName: admin.person.displayName,
+        taskId: fixture.taskId,
+        taskTitle: "Active metadata updated",
+        linkPath: `/progress/tasks/${fixture.taskId}`,
+      });
+      expect(String(metadataPayload.summary)).toContain(
+        "任务名称、任务内容、优先级",
+      );
+      expect(String(metadataPayload.summary)).not.toContain("计划语义未改变");
+      expect(
+        (metadataPayload.recipientOpenIds as string[]).slice().sort(),
+      ).toEqual(
+        [admin, owner, member, newcomer]
+          .map((recipient) => recipient.openId)
+          .sort(),
+      );
+      const metadataRecipients = await prisma.inAppNotification.findMany({
+        where: { eventKey: { startsWith: `${metadataEventKey}:inapp:` } },
+        select: { recipientAccountId: true },
+      });
+      expect(metadataRecipients.map((row) => row.recipientAccountId).sort()).toEqual(
+        [admin, owner, member, newcomer]
+          .map((recipient) => recipient.account.id)
+          .sort(),
+      );
       expect(
         await prisma.domainAuditEvent.count({
           where: {
@@ -203,6 +247,80 @@ test.describe("project management plan mutations project-management-plan-mutatio
         members: membersResult.members,
       });
       expect(await mutationSideEffectCounts(fixture.taskId)).toEqual(beforeStale);
+    });
+
+  test("Project-only Task updates keep the specialized event without task_updated", async () => {
+      const admin = await createAccountPerson("S2 Project-only Admin");
+      const owner = await createAccountPerson("S2 Project-only Owner");
+      const reviewer = await createAccountPerson("S2 Project-only Reviewer");
+      await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
+      const project = await prisma.project.create({
+        data: {
+          name: "S2 Project-only Target",
+          description: "仅验证 Task 所属项目变化",
+          status: "ACTIVE",
+          requesterAccountId: admin.account.id,
+          members: {
+            create: {
+              personId: owner.person.id,
+              role: "OWNER",
+              createdByAccountId: admin.account.id,
+            },
+          },
+        },
+      });
+
+      const draft = await createDraft({ creator: admin, owner, reviewer });
+      const draftTask = await currentTask(draft.taskId);
+      const draftResult = await updateDraftMetadataThroughCurrentInterface(actor(owner), {
+        taskId: draft.taskId,
+        expectedLockVersion: draftTask.lockVersion,
+        title: draftTask.title,
+        description: draftTask.description,
+        team: draftTask.team as "英雄" | "工程",
+        techGroup: draftTask.techGroup as "电控" | "机械",
+        priority: draftTask.priority,
+        relatedTaskId: draftTask.relatedTaskId,
+        projectId: project.id,
+      });
+      expect(draftResult.lockVersion).toBe(1);
+      expect(
+        await prisma.notificationOutbox.count({
+          where: { eventKey: `pm:task:${draft.taskId}:updated:1:feishu` },
+        }),
+      ).toBe(0);
+      const draftProjectEvent = await prisma.notificationOutbox.findUniqueOrThrow({
+        where: { eventKey: `pm:task:${draft.taskId}:project:1:feishu` },
+      });
+      expect(draftProjectEvent.type).toBe("project_task_changed");
+
+      const active = await createDraft({ creator: admin, owner, reviewer });
+      await activateTask(actor(owner), {
+        taskId: active.taskId,
+        expectedLockVersion: 0,
+      });
+      const activeTask = await currentTask(active.taskId);
+      const activeResult = await updateActiveMetadataThroughCurrentInterface(actor(owner), {
+        taskId: active.taskId,
+        expectedLockVersion: activeTask.lockVersion,
+        title: activeTask.title,
+        description: activeTask.description,
+        team: activeTask.team as "英雄" | "工程",
+        techGroup: activeTask.techGroup as "电控" | "机械",
+        priority: activeTask.priority,
+        relatedTaskId: activeTask.relatedTaskId,
+        projectId: project.id,
+      });
+      expect(activeResult.lockVersion).toBe(2);
+      expect(
+        await prisma.notificationOutbox.count({
+          where: { eventKey: `pm:task:${active.taskId}:updated:2:feishu` },
+        }),
+      ).toBe(0);
+      const activeProjectEvent = await prisma.notificationOutbox.findUniqueOrThrow({
+        where: { eventKey: `pm:task:${active.taskId}:project:2:feishu` },
+      });
+      expect(activeProjectEvent.type).toBe("project_task_changed");
     });
 
   test("Active Task unified save is atomic and increments the lock once", async () => {
@@ -347,6 +465,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
         expect.arrayContaining([
           expect.objectContaining({
             kind: "task_assigned",
+            linkPath: `/progress/tasks/${fixture.taskId}`,
             purpose: "notification",
             mandatory: true,
             actorName: owner.person.displayName,
@@ -357,6 +476,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
           }),
           expect.objectContaining({
             kind: "task_assigned",
+            linkPath: `/progress/tasks/${fixture.taskId}`,
             purpose: "notification",
             mandatory: true,
             actorName: owner.person.displayName,
@@ -367,15 +487,51 @@ test.describe("project management plan mutations project-management-plan-mutatio
           }),
         ]),
       );
+      const taskUpdateEventKey = `pm:task:${fixture.taskId}:updated:2`;
+      const taskUpdateOutbox = await prisma.notificationOutbox.findUniqueOrThrow({
+        where: { eventKey: `${taskUpdateEventKey}:feishu` },
+      });
+      expect(taskUpdateOutbox).toMatchObject({
+        type: "task_updated",
+        channel: "project-management",
+        botKind: "notification",
+      });
+      const taskUpdatePayload = jsonRecord(JSON.parse(taskUpdateOutbox.payload));
+      expect(taskUpdatePayload).toMatchObject({
+        kind: "task_updated",
+        mandatory: false,
+        taskId: fixture.taskId,
+        linkPath: `/progress/tasks/${fixture.taskId}`,
+      });
+      expect(String(taskUpdatePayload.summary)).toContain(
+        "任务名称、任务内容、优先级",
+      );
+      const taskUpdateNotifications = await prisma.inAppNotification.findMany({
+        where: { eventKey: { startsWith: `${taskUpdateEventKey}:inapp:` } },
+        select: { recipientAccountId: true },
+      });
+      expect(
+        taskUpdateNotifications.map((row) => row.recipientAccountId).sort(),
+      ).toEqual(
+        [admin, owner, reviewer, newcomer]
+          .map((recipient) => recipient.account.id)
+          .sort(),
+      );
       const memberNotifications = await prisma.inAppNotification.findMany({
         where: { eventKey: { startsWith: memberEventPrefix } },
-        select: { recipientAccountId: true },
+        select: { recipientAccountId: true, linkPath: true },
       });
       expect(memberNotifications).toHaveLength(2);
       expect(memberNotifications).toEqual(
         expect.arrayContaining([
-          { recipientAccountId: admin.account.id },
-          { recipientAccountId: newcomer.account.id },
+          {
+            recipientAccountId: admin.account.id,
+            linkPath: `/progress/tasks/${fixture.taskId}`,
+          },
+          {
+            recipientAccountId: newcomer.account.id,
+            linkPath: `/progress/tasks/${fixture.taskId}`,
+          },
         ]),
       );
 

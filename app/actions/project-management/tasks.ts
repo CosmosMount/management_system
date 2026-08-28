@@ -15,6 +15,7 @@ import {
   updateTaskDraft as updateTaskDraftService,
 } from "@/lib/project-management/application/task-mutation-service";
 import { getCurrentProjectManagementActor } from "@/lib/project-management/identity";
+import { drainNotificationOutboxSoon } from "@/lib/notification-delivery";
 import { revalidateProjectManagement } from "@/lib/revalidate";
 
 export async function createTaskDraft(
@@ -27,6 +28,7 @@ export async function createTaskDraft(
       const actor = await getCurrentProjectManagementActor();
       log.setActorAccountId(actor.accountId);
       const result = await createTaskDraftService(actor, input);
+      drainNotificationOutboxSoon();
       log.setTaskId(result.taskId);
       revalidateProjectManagement(result.taskId);
       return result;
@@ -46,6 +48,7 @@ export async function activateTask(
       const actor = await getCurrentProjectManagementActor();
       log.setActorAccountId(actor.accountId);
       const result = await activateTaskService(actor, input);
+      drainNotificationOutboxSoon();
       log.setTaskId(result.taskId);
       revalidateProjectManagement(result.taskId);
       return result;
@@ -110,6 +113,7 @@ async function runTaskMutationAction<T>(
       const actor = await getCurrentProjectManagementActor();
       log.setActorAccountId(actor.accountId);
       const result = await service(actor, input);
+      drainNotificationOutboxSoon();
       const taskId = taskIdFromMutationResult(result);
       log.setTaskId(taskId);
       revalidateProjectManagement(taskId);

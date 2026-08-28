@@ -79,6 +79,32 @@ test("项目管理飞书传输只在 notification channel adapter 内启用", as
   ]);
 });
 
+test("通知生产 Server Action 在事务提交后触发即时 outbox drain", async () => {
+  const expectedCalls = new Map([
+    ["app/actions/project-management/tasks.ts", 3],
+    ["app/actions/project-management/projects.ts", 1],
+    ["app/actions/project-management/revisions.ts", 1],
+    ["app/actions/project-management/collaboration.ts", 1],
+  ]);
+  for (const [relativeFilePath, callCount] of expectedCalls) {
+    const content = await readFile(
+      path.join(process.cwd(), relativeFilePath),
+      "utf8",
+    );
+    expect(content, relativeFilePath).toContain(
+      'import { drainNotificationOutboxSoon } from "@/lib/notification-delivery";',
+    );
+    expect(
+      content.match(/\bdrainNotificationOutboxSoon\(\);/g),
+      relativeFilePath,
+    ).toHaveLength(callCount);
+    expect(
+      content.indexOf("drainNotificationOutboxSoon();"),
+      relativeFilePath,
+    ).toBeGreaterThan(content.indexOf("await "));
+  }
+});
+
 async function collectExistingSourceFiles(directories: string[]): Promise<string[]> {
   const files = await Promise.all(
     directories.map(async (directory) => {

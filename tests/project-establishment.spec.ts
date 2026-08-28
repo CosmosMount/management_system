@@ -639,6 +639,7 @@ test.describe("Project 立项与生命周期", () => {
     });
     expect(JSON.parse(outbox.payload)).toMatchObject({
       kind: "project_completed",
+      linkPath: `/progress/projects/${created.projectId}`,
       context: { taskCount: 0 },
     });
     await expectHealthyPage(page);
@@ -1044,6 +1045,7 @@ test.describe("Project 立项与生命周期", () => {
       select: { payload: true },
     });
     expect(JSON.parse(submittedOutbox.payload)).toMatchObject({
+      linkPath: `/progress/projects/${created.projectId}#establishment`,
       recipientOpenIds: expect.arrayContaining([
         operator.openId,
         target.openId,
@@ -1286,6 +1288,16 @@ test.describe("Project 立项与生命周期", () => {
     expect((await prisma.task.findUniqueOrThrow({ where: { id: secondTask.id } })).projectId).toBeNull();
     expect((await prisma.project.findUniqueOrThrow({ where: { id: created.projectId } })).deletedAt).not.toBeNull();
     expect(await prisma.domainAuditEvent.count({ where: { taskId: task.id, action: "pm.task.project.remove" } })).toBe(1);
+    const deletedOutbox = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: {
+        eventKey: `pm:project:${created.projectId}:project_deleted:${deleted.lockVersion}:feishu`,
+      },
+      select: { payload: true },
+    });
+    expect(JSON.parse(deletedOutbox.payload)).toMatchObject({
+      kind: "project_deleted",
+      linkPath: "/progress/projects",
+    });
   });
 
   test("Project 列表使用稳定游标继续加载", async () => {

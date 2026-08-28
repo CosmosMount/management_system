@@ -72,7 +72,9 @@ const CONTEXT_LABELS: Record<string, string> = {
   afterStatus: "变更后状态",
   beforeRoles: "变更前角色",
   beforeStatus: "变更前状态",
+  cancelReason: "取消说明",
   changeKind: "成员变更",
+  changedFields: "变更内容",
   comment: "审批意见",
   content: "相关内容",
   decision: "审批结果",
@@ -89,6 +91,7 @@ const CONTEXT_LABELS: Record<string, string> = {
   taskStatus: "任务状态",
   terminalName: "结束节点",
   requestedOutcome: "拟定结束结果",
+  revisionName: "计划修订",
   reviewComment: "审批意见",
   summary: "结束总结",
 };

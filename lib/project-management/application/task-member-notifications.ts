@@ -84,7 +84,6 @@ export async function notifyActiveMemberChangesTx(
       }),
       entityType: "Task",
       entityId: input.task.id,
-      linkPath: "/progress",
       mandatory: true,
       recipients: recipientResolution.recipients,
       context: {

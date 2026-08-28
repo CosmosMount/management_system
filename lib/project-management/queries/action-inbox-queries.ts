@@ -3,6 +3,7 @@ import type {
   TaskMemberRole,
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { routes } from "@/lib/routes";
 import {
   authorize,
   isSystemAdministrator,
@@ -345,7 +346,7 @@ export async function getActionInbox({
       taskTitle: task.title,
       dueAt: review.milestoneNode.expectedCompletedAt.toISOString(),
       severity: review.milestoneNode.expectedCompletedAt < now ? "CRITICAL" : "HIGH",
-      href: `/progress/tasks/${task.id}?tab=reviews`,
+      href: routes.progress.taskReviews(task.id),
     });
   }
   for (const revision of revisions) {
@@ -368,7 +369,7 @@ export async function getActionInbox({
       taskTitle: task.title,
       dueAt: revision.revisionAt.toISOString(),
       severity: "HIGH",
-      href: `/progress/tasks/${task.id}?tab=revisions`,
+      href: routes.progress.taskRevisions(task.id),
     });
   }
   for (const termination of terminations) {

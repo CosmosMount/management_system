@@ -313,7 +313,10 @@ test.describe("project management plan mutations project-management-plan-mutatio
         }),
         "STATE_CONFLICT",
       );
-      const beforeOutboxCount = await prisma.notificationOutbox.count();
+      const taskUpdateEventPrefix = `pm:task:${fixture.taskId}:updated:`;
+      const beforeTaskUpdateOutboxCount = await prisma.notificationOutbox.count({
+        where: { eventKey: { startsWith: taskUpdateEventPrefix } },
+      });
       const metadata = await updateDraftMetadataThroughCurrentInterface(actor(owner), {
         taskId: fixture.taskId,
         expectedLockVersion: 0,
@@ -432,7 +435,11 @@ test.describe("project management plan mutations project-management-plan-mutatio
           { personId: reviewer.person.id, role: "PARTICIPANT" },
         ]),
       );
-      expect(await prisma.notificationOutbox.count()).toBe(beforeOutboxCount);
+      expect(
+        await prisma.notificationOutbox.count({
+          where: { eventKey: { startsWith: taskUpdateEventPrefix } },
+        }),
+      ).toBe(beforeTaskUpdateOutboxCount + 3);
       expect(
         await prisma.domainAuditEvent.count({
           where: {
@@ -678,8 +685,50 @@ test.describe("project management plan mutations project-management-plan-mutatio
         ]),
       );
       expect(persisted.snapshotHash).toBe(updated.snapshotHash);
-      expect(persisted.notificationRows).toEqual(beforeSnapshot.notificationRows);
-      expect(persisted.outboxRows).toEqual(beforeSnapshot.outboxRows);
+      const updateEventKey = `pm:task:${fixture.taskId}:updated:1`;
+      const updateOutbox = await prisma.notificationOutbox.findUniqueOrThrow({
+        where: { eventKey: `${updateEventKey}:feishu` },
+      });
+      expect(updateOutbox).toMatchObject({
+        type: "task_updated",
+        channel: "project-management",
+        botKind: "notification",
+      });
+      const updatePayload = jsonRecord(JSON.parse(updateOutbox.payload));
+      expect(updatePayload).toMatchObject({
+        kind: "task_updated",
+        purpose: "notification",
+        mandatory: false,
+        taskId: fixture.taskId,
+        taskTitle: "统一保存后的 Draft Task",
+        linkPath: `/progress/tasks/${fixture.taskId}`,
+      });
+      expect(String(updatePayload.summary)).toContain(
+        "任务名称、任务内容、车组、技术组、优先级",
+      );
+      expect(String(updatePayload.summary)).not.toContain(
+        "元数据、成员与计划处于同一事务",
+      );
+      expect(
+        (updatePayload.recipientOpenIds as string[]).slice().sort(),
+      ).toEqual(
+        [admin, owner, participant, addedMember]
+          .map((recipient) => recipient.openId)
+          .sort(),
+      );
+      const updateNotifications = await prisma.inAppNotification.findMany({
+        where: { eventKey: { startsWith: `${updateEventKey}:inapp:` } },
+        select: { recipientAccountId: true, linkPath: true },
+      });
+      expect(updateNotifications).toHaveLength(4);
+      expect(updateNotifications).toEqual(
+        expect.arrayContaining(
+          [admin, owner, participant, addedMember].map((recipient) => ({
+            recipientAccountId: recipient.account.id,
+            linkPath: `/progress/tasks/${fixture.taskId}`,
+          })),
+        ),
+      );
       const audit = await prisma.domainAuditEvent.findFirstOrThrow({
         where: { taskId: fixture.taskId, action: "pm.task.draft.update" },
       });

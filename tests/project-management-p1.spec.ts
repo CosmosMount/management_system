@@ -424,17 +424,17 @@ test.describe("project management P1 schema, identity and authorization", () => 
     });
     const eventKey = `pm:p1:test:${randomUUID()}`;
     const payload: ProjectManagementNotificationPayload = {
-      kind: "revision_pending_review",
+      kind: "milestone_review_submitted",
       payloadVersion: PROJECT_MANAGEMENT_NOTIFICATION_PAYLOAD_VERSION,
       purpose: "approval_request",
-      category: "REVISION",
-      title: "修订待审批",
-      summary: "请审批计划修订",
+      category: "REVIEW",
+      title: "里程碑待验收",
+      summary: "请验收里程碑",
       actorName: "通知审计用户",
       taskId: null,
       taskTitle: "P1 通知 Task",
-      entityType: "RevisionNode",
-      entityId: `revision-${randomUUID()}`,
+      entityType: "MilestoneReview",
+      entityId: `milestone-review-${randomUUID()}`,
       linkPath: "/progress/approvals",
       recipientOpenIds: [recipientOpenId, recipientOpenId, ""],
       mandatory: true,
@@ -446,9 +446,9 @@ test.describe("project management P1 schema, identity and authorization", () => 
         await createInAppNotificationTx(tx, {
           eventKey,
           recipientAccountId: account.id,
-          category: "REVISION",
-          title: "修订待审批",
-          entityType: "RevisionNode",
+          category: "REVIEW",
+          title: "里程碑待验收",
+          entityType: "MilestoneReview",
           entityId: payload.entityId,
           linkPath: "/progress/approvals",
           payload: JSON.parse(JSON.stringify(payload)) as Prisma.InputJsonValue,
@@ -456,8 +456,8 @@ test.describe("project management P1 schema, identity and authorization", () => 
         await createDomainAuditEventTx(tx, {
           actorAccountId: account.id,
           actorPersonId: person.id,
-          action: "pm.revision.create",
-          entityType: "RevisionNode",
+          action: "pm.milestone.review.submit",
+          entityType: "MilestoneReview",
           entityId: payload.entityId,
           before: { token: "should-not-persist", title: "旧标题" },
           after: { title: "新标题" },
@@ -500,7 +500,7 @@ test.describe("project management P1 schema, identity and authorization", () => 
     expect(outbox).toMatchObject({
       channel: "project-management",
       botKind: "approval",
-      type: "revision_pending_review",
+      type: "milestone_review_submitted",
       status: "PENDING",
     });
     const adapter = getNotificationChannelAdapter("project-management");

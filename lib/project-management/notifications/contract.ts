@@ -6,6 +6,7 @@ export const PROJECT_MANAGEMENT_NOTIFICATION_OUTBOX_CHANNEL =
 export const PROJECT_MANAGEMENT_NOTIFICATION_PAYLOAD_VERSION = 1;
 const PROJECT_MANAGEMENT_NOTIFICATION_KINDS = [
   "task_assigned",
+  "task_updated",
   "task_activated",
   "task_deleted",
   "milestone_due",
@@ -18,12 +19,14 @@ const PROJECT_MANAGEMENT_NOTIFICATION_KINDS = [
   "revision_pending_review",
   "revision_result",
   "revision_applied",
+  "revision_cancelled",
   "segment_confirmation_due",
   "task_terminated",
   "account_security",
   "project_establishment_submitted",
   "project_establishment_result",
   "project_member_added",
+  "project_updated",
   "project_task_changed",
   "project_completed",
   "project_deleted",
