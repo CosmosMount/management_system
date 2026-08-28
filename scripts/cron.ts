@@ -1,6 +1,11 @@
 import "dotenv/config";
 import cron from "node-cron";
 import { OrderStatus } from "@prisma/client";
+import {
+  createNonOverlappingCronRunner,
+  NOTIFICATION_OUTBOX_CRON,
+  PROJECT_MANAGEMENT_SEGMENT_TRANSITIONS_CRON,
+} from "./cron-schedule";
 import { sendFeishuDailySummary } from "../lib/feishu";
 import { runProcurementStaleReminders } from "../lib/procurement-reminders";
 import { runProcurementBudgetAlerts } from "../lib/procurement-budget-alerts";
@@ -114,6 +119,16 @@ async function runNotificationOutboxDrain() {
   }
 }
 
+const runNotificationOutboxDrainWithoutOverlap = createNonOverlappingCronRunner(
+  runNotificationOutboxDrain,
+  () =>
+    logger.warn("cron.notification_outbox_drain.skipped_running", {
+      module: "cron",
+      action: "runNotificationOutboxDrain",
+      result: "skipped",
+    }),
+);
+
 async function runUploadCleanupDrain() {
   const [tasks, artifacts] = await Promise.all([
     drainUploadCleanupTasks(50),
@@ -224,9 +239,9 @@ cron.schedule(
 );
 
 cron.schedule(
-  "*/2 * * * *",
+  NOTIFICATION_OUTBOX_CRON,
   () => {
-    runNotificationOutboxDrain().catch((err) =>
+    runNotificationOutboxDrainWithoutOverlap().catch((err) =>
       logger.error("cron.notification_outbox_drain.failed", {
         module: "cron",
         action: "runNotificationOutboxDrain",
@@ -266,7 +281,7 @@ cron.schedule(
 );
 
 cron.schedule(
-  "*/10 * * * *",
+  PROJECT_MANAGEMENT_SEGMENT_TRANSITIONS_CRON,
   () => {
     runProjectManagementSegmentTransitionScan().catch((err) =>
       logger.error("cron.project_management_segment_transitions.failed", {
@@ -312,9 +327,10 @@ logger.info("cron.started", {
   action: "startup",
   timezone: CRON_TIMEZONE,
   contactSyncCron: CONTACT_SYNC_CRON,
-  notificationOutboxCron: "*/2 * * * *",
+  notificationOutboxCron: NOTIFICATION_OUTBOX_CRON,
   procurementBudgetCron: "*/10 * * * *",
-  projectManagementSegmentTransitionsCron: "*/10 * * * *",
+  projectManagementSegmentTransitionsCron:
+    PROJECT_MANAGEMENT_SEGMENT_TRANSITIONS_CRON,
   projectManagementDailyCron: "15 8 * * *",
   procurementDailyCron: "0 9 * * *",
   notificationDeliveryDisabled:

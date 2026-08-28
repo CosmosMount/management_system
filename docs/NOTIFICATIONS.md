@@ -23,7 +23,7 @@
 
 项目管理必须在业务事务中使用稳定 `eventKey` 写入 outbox，由自己的 channel adapter 处理。项目管理 Server Action 和领域 service 不得直接导入飞书传输层。Task 生命周期和 Segment 只允许入队站内通知和 `channel=project-management` outbox；真实飞书消息只能由 `lib/notification-channels/project-management.ts` 通过统一传输层发送。
 
-Task、Project、Revision、风险和评论 mutation 的 Server Action 会在业务事务成功提交后调用非阻塞即时 drain，尽快 claim 新 outbox；`NOTIFICATION_DELIVERY_DISABLED`、allowlist 和 adapter 校验仍在原投递边界生效。独立 cron 继续作为进程提前退出、即时 drain 失败和积压消息的兜底，降低 cron 间隔不能替代业务生产者入队。
+Task、Project、Revision、风险和评论 mutation 的 Server Action 会在业务事务成功提交后调用非阻塞即时 drain，尽快 claim 新 outbox；`NOTIFICATION_DELIVERY_DISABLED`、allowlist 和 adapter 校验仍在原投递边界生效。独立 cron 每 5 秒扫描一次，继续作为进程提前退出、即时 drain 失败和积压消息的兜底；降低 cron 间隔不能替代业务生产者入队。
 
 ## 项目管理 P1-P6 通知接入
 

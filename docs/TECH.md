@@ -296,7 +296,7 @@ TimeCanvas 的显示尺度为 `WEEK/MONTH/QUARTER/YEAR`，密度分别为 40/12/
 - **统一私信传输层**：`lib/feishu-message.ts` 导出 `FeishuMessage`、`FeishuMessagePurpose`、`FeishuSendResult` 和 `sendFeishuDirectMessage()`。调用方传入系统用户 `openId`、明确的 `botKind`、用途和 text/交互卡片/CardKit 消息；传输层统一完成收件人身份解析、机器人凭据、token、HTTP 请求、CardKit 创建、禁发闸、allowlist、结构化日志和错误脱敏。
 - **机器人边界**：普通通知只能使用通知机器人，审批请求才可声明审批用途。审批机器人未独立配置时使用通知机器人凭据；独立审批应用通过 `User.unionId` 使用 `receive_id_type=union_id`，缺少 `union_id` 时失败并由 outbox 重试。保留既有的“用户对审批应用不可用时回退通知机器人”行为，发送结果会标明实际机器人和是否 fallback。
 - **Outbox adapter**：采购、反馈和项目管理业务只能通过 `lib/notification-channels/` adapter 进入统一私信传输边界。adapter 校验 payload 与持久化元数据、计算收件人和构造业务内容；outbox 核心及传输层不包含业务角色查询或状态分支。adapter 的收件人计划可区分真实私信与 Webhook 等独立传输，采购审批必须至少有一个真实私信审批人。项目管理 adapter 会对 `recipientOpenIds` 去重，按 payload purpose 校验 botKind，构造包含操作人、项目、任务、通知内容、中文事项名称、时间和中文业务上下文的交互卡，再交给 `sendFeishuDirectMessage()`；实体类名、枚举值和未知 context 键只保留在内部契约，不进入用户可见卡片。项目管理 Server Action 和领域 service 仍不得直接导入飞书传输层。
-- **即时触发与兜底**：项目管理 mutation 在领域事务内只写站内通知和 durable outbox；对应 Server Action 在事务提交后调用非阻塞即时 drain。独立 cron 继续扫描同一 outbox，依靠 claim 和事件键承担即时任务未执行、进程退出及失败积压的兜底，不通过缩短扫描间隔代替生产事务入队。
+- **即时触发与兜底**：项目管理 mutation 在领域事务内只写站内通知和 durable outbox；对应 Server Action 在事务提交后调用非阻塞即时 drain。独立 cron 每 5 秒扫描 notification outbox 和 Segment 状态转换，依靠 claim 和事件键承担即时任务未执行、进程退出及失败积压的兜底；缩短扫描间隔不代替生产事务入队。
 - **私信防误发**：`FEISHU_DIRECT_MESSAGE_ALLOWED_NAMES / OPEN_IDS / UNION_IDS` 为空时不限制；配置后只允许匹配收件人，其他私信会被记录并拦截。Playwright 启动的应用服务默认只允许 `李棋轩`。Docker Compose 默认 `NOTIFICATION_DELIVERY_DISABLED=true` 且 allowlist 为 `李棋轩`；生产真实投递需要显式设置 `NOTIFICATION_DELIVERY_DISABLED=false`，并按需配置或清空 allowlist。
 - **CardKit 回调**：采购审批卡若由审批机器人发送，需要运行审批机器人长连接；生产 `./service/install.sh` 默认安装并启动 `pnx-management-feishu-approval-ws.service`。通知机器人长连接仍可通过 `ENABLE_FEISHU_WS=true` 单独启用。审批机器人回调中的操作人也会通过 `union_id` 映射回系统 `openId` 后再校验权限。
 - **群 Webhook**：采购群通知和日报仍使用 Webhook，独立于统一私信接口
@@ -370,8 +370,8 @@ npm run cron                   # 启动定时任务（独立进程）
 | 默认每日 08:30 | 从飞书通讯录扫描并同步本地人员（可用 `FEISHU_CONTACT_SYNC_CRON` 调整） |
 | 每日 09:00 | 采购日报、采购停留催办 |
 | 每 10 分钟 | 采购预算阈值扫描 |
-| 每 2 分钟 | drain `NotificationOutbox` |
-| 每 10 分钟 | 项目管理 Planned Segment 状态迁移（数据库 advisory lock） |
+| 每 5 秒 | drain `NotificationOutbox`（进程内防重入） |
+| 每 5 秒 | 项目管理 Planned Segment 状态迁移（数据库 advisory lock） |
 | 每日 08:15 | Milestone 截止提醒、通知保留清理、项目管理完整性巡检 |
 
 与 Next.js 主进程分离，生产环境用 PM2、systemd 或下文 **Docker** 中的 `cron` 服务单独拉起。
