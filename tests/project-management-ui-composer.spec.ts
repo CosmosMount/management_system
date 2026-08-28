@@ -551,6 +551,119 @@ test.describe("project management UI project-management-ui-composer", () => {
       await expectHealthyPage(page);
     });
 
+  test("Task Composer keeps member-group errors off both role search inputs", async ({
+      context,
+      page,
+      baseURL,
+    }) => {
+      const browserErrors: string[] = [];
+      page.on("pageerror", (error) => browserErrors.push(error.message));
+      page.on("console", (message) => {
+        if (message.type() === "error") browserErrors.push(message.text());
+      });
+      const creator = await createAccountPerson(
+        `S5 Member Group Validation ${randomUUID()}`,
+      );
+      const title = `成员集合错误样式回归 ${randomUUID()}`;
+      await loginAsTestUser(context, baseURL, {
+        openId: creator.openId,
+        name: creator.person.displayName,
+      });
+
+      await page.goto("/progress/tasks/new");
+      await page.getByLabel("Task 名称").fill(title);
+      await expect
+        .poll(() =>
+          page.evaluate(() =>
+            Object.keys(window.localStorage).find((key) =>
+              key.startsWith("task-draft:"),
+            ) ?? null,
+          ),
+        )
+        .not.toBeNull();
+      await page.evaluate((personId) => {
+        const storageKey = Object.keys(window.localStorage).find((key) =>
+          key.startsWith("task-draft:"),
+        );
+        if (!storageKey) throw new Error("成员集合回归缺少本地草稿 key");
+        const raw = window.localStorage.getItem(storageKey);
+        if (!raw) throw new Error("成员集合回归缺少本地草稿内容");
+        const draft = JSON.parse(raw) as {
+          savedAt: string;
+          task: { members: Array<{ personId: string; role: string }> };
+        };
+        draft.savedAt = new Date().toISOString();
+        draft.task.members = [{ personId, role: "PARTICIPANT" }];
+        window.localStorage.setItem(storageKey, JSON.stringify(draft));
+      }, creator.person.id);
+
+      await page.reload();
+      await expect(page.getByRole("button", { name: "恢复草稿" })).toBeVisible();
+      await page.getByRole("button", { name: "恢复草稿" }).click();
+      const memberSection = page.locator("#members");
+      const ownerPicker = page.getByLabel("搜索负责人", { exact: true });
+      const participantPicker = page.getByLabel("搜索参与人员", { exact: true });
+      await expect(memberSection).not.toHaveAttribute("aria-describedby");
+      await page.getByRole("button", { name: "创建 Task 草稿" }).click();
+
+      await expect(memberSection).toBeFocused();
+      const memberError = page
+        .getByRole("alert")
+        .filter({ hasText: "至少需要一名负责人" });
+      await expect(memberError).toBeVisible();
+      await expect(memberSection).toHaveAttribute(
+        "aria-describedby",
+        (await memberError.getAttribute("id")) ?? "",
+      );
+      await expect(ownerPicker).not.toHaveAttribute("aria-invalid", "true");
+      await expect(participantPicker).not.toHaveAttribute("aria-invalid", "true");
+
+      await ownerPicker.fill(creator.person.displayName);
+      await page
+        .getByRole("option", { name: creator.person.displayName, exact: true })
+        .click();
+      await expect(memberError).toHaveCount(0);
+      await expect(memberSection).not.toHaveAttribute("aria-describedby");
+      await expect(
+        page.getByRole("button", {
+          name: `移除 ${creator.person.displayName} 参与人员`,
+        }),
+      ).toHaveCount(0);
+      await page
+        .getByTestId("task-plan-node-navigator")
+        .getByRole("button", { name: /Terminal/ })
+        .click();
+      await page.getByLabel("结束条件").fill("负责人修复后允许无参与人员创建");
+      await page.getByRole("button", { name: "创建 Task 草稿" }).click();
+      await expect(
+        page
+          .getByTestId("task-workbench-v2")
+          .getByRole("heading", { name: title, exact: true }),
+      ).toBeVisible();
+      await expect
+        .poll(() =>
+          prisma.task.findFirst({
+            where: { title },
+            select: {
+              members: {
+                where: { removedAt: null },
+                select: { personId: true, role: true },
+              },
+            },
+          }),
+        )
+        .toEqual({
+          members: [{ personId: creator.person.id, role: "OWNER" }],
+        });
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
+        ),
+      ).toBe(true);
+      await expectHealthyPage(page);
+      expect(browserErrors).toEqual([]);
+    });
+
   test("Task Composer creates and activates a Start-to-Terminal-only Task", async ({
       context,
       page,

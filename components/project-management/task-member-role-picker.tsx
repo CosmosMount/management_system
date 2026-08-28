@@ -24,6 +24,7 @@ export function TaskMemberRolePicker({
   onChange,
   onPersonResolved,
   protectedOwnerId,
+  focusTargetId,
   error,
 }: {
   members: EditableTaskMember[];
@@ -33,10 +34,13 @@ export function TaskMemberRolePicker({
   onChange: (members: EditableTaskMember[]) => void;
   onPersonResolved?: (person: PersonOptionDto) => void;
   protectedOwnerId?: string;
+  focusTargetId?: string;
   error?: string | readonly string[];
 }) {
   const [memberError, setMemberError] = useState("");
   const externalErrorId = useId();
+  const hasExternalError =
+    typeof error === "string" ? Boolean(error) : Boolean(error?.some(Boolean));
   const owners = members.filter((member) => member.role === "OWNER");
   const participants = members.filter((member) => member.role === "PARTICIPANT");
 
@@ -73,7 +77,14 @@ export function TaskMemberRolePicker({
   };
 
   return (
-    <div className="space-y-4">
+    <div
+      id={focusTargetId}
+      tabIndex={focusTargetId ? -1 : undefined}
+      className="space-y-4"
+      role="group"
+      aria-label="成员与角色"
+      aria-describedby={hasExternalError ? externalErrorId : undefined}
+    >
       <MemberGroup
         label="负责人"
         role="OWNER"
@@ -87,8 +98,6 @@ export function TaskMemberRolePicker({
         onSelect={selectPerson}
         onRemove={removePerson}
         onPersonResolved={onPersonResolved}
-        invalid={Boolean(error)}
-        ariaDescribedBy={error ? externalErrorId : undefined}
       />
       <MemberGroup
         label="参与人员"
@@ -101,8 +110,6 @@ export function TaskMemberRolePicker({
         onSelect={selectPerson}
         onRemove={removePerson}
         onPersonResolved={onPersonResolved}
-        invalid={Boolean(error)}
-        ariaDescribedBy={error ? externalErrorId : undefined}
       />
       <FieldError id={externalErrorId} messages={error} />
       {memberError && <p className="text-sm text-destructive" role="alert">{memberError}</p>}
@@ -124,8 +131,6 @@ function MemberGroup({
   onSelect,
   onRemove,
   onPersonResolved,
-  invalid,
-  ariaDescribedBy,
 }: {
   label: string;
   role: EditableTaskMember["role"];
@@ -139,8 +144,6 @@ function MemberGroup({
   onSelect: (personId: string | null, role: EditableTaskMember["role"]) => void;
   onRemove: (personId: string) => void;
   onPersonResolved?: (person: PersonOptionDto) => void;
-  invalid: boolean;
-  ariaDescribedBy?: string;
 }) {
   return (
     <section className="space-y-2" aria-label={label}>
@@ -188,8 +191,6 @@ function MemberGroup({
           excludeIds={members.map((member) => member.personId)}
           clearable={false}
           placeholder={placeholder}
-          invalid={invalid}
-          ariaDescribedBy={ariaDescribedBy}
         />
       )}
     </section>

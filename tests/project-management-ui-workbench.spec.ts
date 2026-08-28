@@ -296,6 +296,198 @@ test.describe("project management UI project-management-ui-workbench", () => {
       await expectHealthyPage(page);
     });
 
+  test("member-group errors do not mark Draft or Active role searches invalid", async ({
+      context,
+      page,
+      baseURL,
+    }) => {
+      const browserErrors: string[] = [];
+      page.on("pageerror", (error) => browserErrors.push(error.message));
+      page.on("console", (message) => {
+        if (message.type() === "error") browserErrors.push(message.text());
+      });
+      const editor = await createAccountPerson(
+        `S6 Member Group Validation ${randomUUID()}`,
+      );
+      await grantRole(editor.account.id, "PROJECT_ADMINISTRATOR");
+      const task = await createTaskDraft(actor(editor), {
+        title: `S6 Member Group Task ${randomUUID()}`,
+        description: "验证成员集合错误不会错误标红角色搜索框",
+        team: "英雄",
+        techGroup: "电控",
+        priority: "MEDIUM",
+        members: [{ personId: editor.person.id, role: "OWNER" }],
+        milestones: [],
+        plannedStartAt: new Date(Date.UTC(2026, 7, 1, 10, 0, 0)).toISOString(),
+        termination: terminationInput(5),
+        idempotencyKey: `s6-member-group-${randomUUID()}`,
+      });
+      await loginAsTestUser(context, baseURL, {
+        openId: editor.openId,
+        name: editor.person.displayName,
+      });
+
+      await page.goto(`/progress/tasks/${task.taskId}/edit`);
+      await page
+        .getByLabel("描述", { exact: true })
+        .fill("验证 DRAFT 成员集合错误不会错误标红角色搜索框");
+      await expect
+        .poll(() =>
+          page.evaluate(() =>
+            Object.keys(window.localStorage).find((key) =>
+              key.startsWith("task-edit-draft:"),
+            ) ?? null,
+          ),
+        )
+        .not.toBeNull();
+      await page.evaluate((personId) => {
+        const storageKey = Object.keys(window.localStorage).find((key) =>
+          key.startsWith("task-edit-draft:"),
+        );
+        if (!storageKey) throw new Error("DRAFT 成员集合回归缺少本地草稿 key");
+        const raw = window.localStorage.getItem(storageKey);
+        if (!raw) throw new Error("DRAFT 成员集合回归缺少本地草稿内容");
+        const draft = JSON.parse(raw) as {
+          savedAt: string;
+          task: { members: Array<{ personId: string; role: string }> };
+        };
+        draft.savedAt = new Date().toISOString();
+        draft.task.members = [{ personId, role: "PARTICIPANT" }];
+        window.localStorage.setItem(storageKey, JSON.stringify(draft));
+      }, editor.person.id);
+      await page.reload();
+      await expect(page.getByRole("button", { name: "恢复草稿" })).toBeVisible();
+      await page.getByRole("button", { name: "恢复草稿" }).click();
+      const draftMembers = page.locator("#members");
+      const draftOwnerPicker = page.getByLabel("搜索负责人", { exact: true });
+      const draftParticipantPicker = page.getByLabel("搜索参与人员", {
+        exact: true,
+      });
+      await expect(draftMembers).not.toHaveAttribute("aria-describedby");
+      await page.getByRole("button", { name: "保存 Task" }).first().click();
+
+      await expect(draftMembers).toBeFocused();
+      const draftMemberError = page
+        .getByRole("alert")
+        .filter({ hasText: "至少需要一名负责人" });
+      await expect(draftMemberError).toBeVisible();
+      await expect(draftMembers).toHaveAttribute(
+        "aria-describedby",
+        (await draftMemberError.getAttribute("id")) ?? "",
+      );
+      await expect(draftOwnerPicker).not.toHaveAttribute("aria-invalid", "true");
+      await expect(draftParticipantPicker).not.toHaveAttribute(
+        "aria-invalid",
+        "true",
+      );
+
+      await draftOwnerPicker.fill(editor.person.displayName);
+      await page
+        .getByRole("option", { name: editor.person.displayName, exact: true })
+        .click();
+      await expect(draftMemberError).toHaveCount(0);
+      await expect(draftMembers).not.toHaveAttribute("aria-describedby");
+      await page.getByRole("button", { name: "保存 Task" }).first().click();
+      await expect(page).toHaveURL(`/progress/tasks/${task.taskId}`);
+      await expect
+        .poll(() =>
+          prisma.taskMember.findMany({
+            where: { taskId: task.taskId, removedAt: null },
+            select: { personId: true, role: true },
+          }),
+        )
+        .toEqual([{ personId: editor.person.id, role: "OWNER" }]);
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
+        ),
+      ).toBe(true);
+
+      const savedTask = await prisma.task.findUniqueOrThrow({
+        where: { id: task.taskId },
+        select: { lockVersion: true },
+      });
+      await activateTask(actor(editor), {
+        taskId: task.taskId,
+        expectedLockVersion: savedTask.lockVersion,
+      });
+      await prisma.taskMember.updateMany({
+        where: {
+          taskId: task.taskId,
+          personId: editor.person.id,
+          removedAt: null,
+        },
+        data: { role: "PARTICIPANT" },
+      });
+
+      await page.goto(`/progress/tasks/${task.taskId}`);
+      await page.getByRole("button", { name: "修改 Task 基本信息" }).click();
+      const activeEditor = page.getByRole("dialog", {
+        name: "修改 Task 基本信息",
+      });
+      const activeMembers = activeEditor.locator("#active-task-members");
+      await expect(activeMembers).not.toHaveAttribute("aria-describedby");
+      await activeEditor.getByRole("button", { name: "保存修改" }).click();
+
+      const activeOwnerPicker = activeEditor.getByLabel("搜索负责人", {
+        exact: true,
+      });
+      const activeParticipantPicker = activeEditor.getByLabel("搜索参与人员", {
+        exact: true,
+      });
+      await expect(activeMembers).toBeFocused();
+      const activeMemberError = activeEditor
+        .getByRole("alert")
+        .filter({ hasText: "至少需要一名负责人" });
+      await expect(activeMemberError).toBeVisible();
+      await expect(activeMembers).toHaveAttribute(
+        "aria-describedby",
+        (await activeMemberError.getAttribute("id")) ?? "",
+      );
+      await expect(activeOwnerPicker).not.toHaveAttribute("aria-invalid", "true");
+      await expect(activeParticipantPicker).not.toHaveAttribute(
+        "aria-invalid",
+        "true",
+      );
+
+      await prisma.taskMember.updateMany({
+        where: {
+          taskId: task.taskId,
+          personId: editor.person.id,
+          removedAt: null,
+        },
+        data: { role: "OWNER" },
+      });
+      await activeOwnerPicker.fill(editor.person.displayName);
+      await page
+        .getByRole("option", { name: editor.person.displayName, exact: true })
+        .click();
+      await expect(activeMemberError).toHaveCount(0);
+      await expect(activeMembers).not.toHaveAttribute("aria-describedby");
+      await expect(
+        activeEditor.getByRole("button", {
+          name: `移除 ${editor.person.displayName} 参与人员`,
+        }),
+      ).toHaveCount(0);
+      await activeEditor.getByRole("button", { name: "保存修改" }).click();
+      await expect(activeEditor).toHaveCount(0);
+      await expect
+        .poll(() =>
+          prisma.taskMember.findMany({
+            where: { taskId: task.taskId, removedAt: null },
+            select: { personId: true, role: true },
+          }),
+        )
+        .toEqual([{ personId: editor.person.id, role: "OWNER" }]);
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
+        ),
+      ).toBe(true);
+      await expectHealthyPage(page);
+      expect(browserErrors).toEqual([]);
+    });
+
   test("Task Owner can delete an unactivated draft from the workbench", async ({
       context,
       page,

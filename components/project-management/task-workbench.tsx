@@ -1365,11 +1365,12 @@ function ActiveTaskEditor({
         </Field>
       </section>
 
-      <section id="active-task-members" tabIndex={-1} className="space-y-3 rounded-xl border border-border p-4">
+      <section className="space-y-3 rounded-xl border border-border p-4">
         <h3 className="font-semibold">成员与角色</h3>
         <TaskMemberRolePicker
           members={members}
           people={peopleOptions}
+          focusTargetId="active-task-members"
           scope={{ purpose: "TASK_MEMBERS", taskId: workspace.task.id }}
           editable={canManageMembers}
           error={fieldErrors.members}

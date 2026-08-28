@@ -979,10 +979,11 @@ export function TaskComposerClient({
           </ComposerSection>
 
           <ComposerSection title="成员" issueCount={countIssues(issues, ["members"])}>
-            <div className="space-y-2" id="members" tabIndex={-1}>
+            <div className="space-y-2">
               <TaskMemberRolePicker
                 members={state.members}
                 people={people}
+                focusTargetId="members"
                 scope={
                   mode.kind !== "CREATE"
                     ? { purpose: "TASK_MEMBERS", taskId: mode.taskId }
