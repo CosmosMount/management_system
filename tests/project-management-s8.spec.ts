@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import { prisma } from "../lib/prisma";
 import {
@@ -58,7 +58,7 @@ test.describe("project management S8 dashboard and notifications", () => {
         createdByAccountId: other.accountId,
       },
     });
-    const inbox = await getActionInbox({ actor: user, limit: 100 });
+    const inbox = await getActionInbox({ actor: user, input: { limit: 100 } });
     expect(inbox.items).toContainEqual(
       expect.objectContaining({
         id: `segment-confirm:${own.id}`,
@@ -69,6 +69,324 @@ test.describe("project management S8 dashboard and notifications", () => {
     );
     expect(inbox.items.some((item) => item.id.includes(hidden.id))).toBe(false);
     expect(inbox.criticalCount).toBe(0);
+  });
+
+  test("Action Inbox assigns next-node severity from a stable generated time", async () => {
+    const user = await createActor("S8 Inbox next-node severity");
+    const now = new Date("2030-08-10T08:00:00.000Z");
+    const overdue = await createActiveTaskWithMilestone(
+      user,
+      new Date("2030-08-10T07:00:00.000Z"),
+    );
+    const future = await createActiveTaskWithMilestone(
+      user,
+      new Date("2030-08-10T09:00:00.000Z"),
+    );
+
+    const inbox = await getActionInbox({
+      actor: user,
+      input: { limit: 100 },
+      now,
+    });
+    expect(inbox.totalCount).toBe(2);
+    expect(inbox.criticalCount).toBe(1);
+    expect(inbox.items).toEqual([
+      expect.objectContaining({
+        id: `task-next-node:${overdue.nodeId}`,
+        kind: "TASK_NEXT_NODE",
+        severity: "CRITICAL",
+        nodeType: "MILESTONE",
+        nodeStatus: "ACTIVE",
+      }),
+      expect.objectContaining({
+        id: `task-next-node:${future.nodeId}`,
+        kind: "TASK_NEXT_NODE",
+        severity: "MEDIUM",
+      }),
+    ]);
+  });
+
+  test("Action Inbox next nodes require an active effective Task membership", async () => {
+    const member = await createActor("S8 Inbox member boundary");
+    const outsider = await createActor("S8 Inbox outsider boundary");
+    const administrator = await createActor("S8 Inbox administrator boundary");
+    const task = await createActiveTaskWithMilestone(
+      member,
+      new Date("2030-09-01T08:00:00.000Z"),
+    );
+    const itemId = `task-next-node:${task.nodeId}`;
+    const administratorActor: ProjectManagementActor = {
+      ...administrator,
+      systemRoles: [{ role: "PROJECT_ADMINISTRATOR", team: "", techGroup: "" }],
+    };
+
+    expect(
+      (
+        await getActionInbox({ actor: member, input: { limit: 100 } })
+      ).items.some((item) => item.id === itemId),
+    ).toBe(true);
+    for (const actorUnderTest of [outsider, administratorActor]) {
+      expect(
+        (
+          await getActionInbox({
+            actor: actorUnderTest,
+            input: { limit: 100 },
+          })
+        ).items.some((item) => item.id === itemId),
+      ).toBe(false);
+    }
+
+    const inactiveInbox = await getActionInbox({
+      actor: { ...member, isActive: false },
+      input: { limit: 100 },
+    });
+    expect(inactiveInbox).toMatchObject({
+      items: [],
+      totalCount: 0,
+      criticalCount: 0,
+      nextCursor: null,
+    });
+
+    await prisma.task.update({
+      where: { id: task.taskId },
+      data: { status: "DRAFT" },
+    });
+    expect(
+      (
+        await getActionInbox({ actor: member, input: { limit: 100 } })
+      ).items.some((item) => item.id === itemId),
+    ).toBe(false);
+    await prisma.task.update({
+      where: { id: task.taskId },
+      data: { status: "COMPLETED" },
+    });
+    expect(
+      (
+        await getActionInbox({ actor: member, input: { limit: 100 } })
+      ).items.some((item) => item.id === itemId),
+    ).toBe(false);
+    await prisma.task.update({
+      where: { id: task.taskId },
+      data: { status: "ACTIVE", deletedAt: new Date() },
+    });
+    expect(
+      (
+        await getActionInbox({ actor: member, input: { limit: 100 } })
+      ).items.some((item) => item.id === itemId),
+    ).toBe(false);
+    await prisma.$transaction([
+      prisma.task.update({
+        where: { id: task.taskId },
+        data: { status: "ACTIVE", deletedAt: null },
+      }),
+      prisma.taskMember.updateMany({
+        where: {
+          taskId: task.taskId,
+          personId: member.personId,
+          removedAt: null,
+        },
+        data: { removedAt: new Date() },
+      }),
+    ]);
+    expect(
+      (
+        await getActionInbox({ actor: member, input: { limit: 100 } })
+      ).items.some((item) => item.id === itemId),
+    ).toBe(false);
+  });
+
+  test("Action Inbox cursor merges streams without gaps and rejects invalid ownership", async () => {
+    const user = await createActor("S8 Inbox cursor");
+    const other = await createActor("S8 Inbox cursor other");
+    const now = new Date("2030-10-01T08:00:00.000Z");
+    const expectedIds: string[] = [];
+    for (let index = 0; index < 5; index += 1) {
+      const task = await createActiveTaskWithMilestone(
+        user,
+        new Date(now.getTime() + (index + 1) * 60 * 60_000),
+      );
+      expectedIds.push(`task-next-node:${task.nodeId}`);
+    }
+    const segment = await prisma.workSegment.create({
+      data: {
+        personId: user.personId,
+        type: "PLANNED",
+        status: "PENDING_CONFIRMATION",
+        startAt: new Date(now.getTime() - 2 * 60 * 60_000),
+        endAt: new Date(now.getTime() - 60 * 60_000),
+        content: "S8 Inbox cursor segment",
+        createdByAccountId: user.accountId,
+      },
+    });
+    expectedIds.unshift(`segment-confirm:${segment.id}`);
+
+    const loadedIds: string[] = [];
+    const generatedTimes = new Set<string>();
+    let cursor: string | undefined;
+    let firstCursor: string | null = null;
+    do {
+      const page = await getActionInbox({
+        actor: user,
+        input: { ...(cursor ? { cursor } : {}), limit: 2 },
+        now: cursor ? new Date(now.getTime() + 24 * 60 * 60_000) : now,
+      });
+      generatedTimes.add(page.generatedAt);
+      loadedIds.push(...page.items.map((item) => item.id));
+      if (!firstCursor) firstCursor = page.nextCursor;
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+
+    expect(loadedIds).toEqual(expectedIds);
+    expect(new Set(loadedIds).size).toBe(loadedIds.length);
+    expect(generatedTimes).toEqual(new Set([now.toISOString()]));
+    if (!firstCursor) throw new Error("Action Inbox 测试缺少分页游标");
+    const decoded = JSON.parse(
+      Buffer.from(firstCursor, "base64url").toString("utf8"),
+    ) as { core: { generatedAt: string }; signature: string };
+    decoded.core.generatedAt = "2031-01-01T00:00:00.000Z";
+    decoded.signature = createHash("sha256")
+      .update("action-inbox-cursor:v1\n")
+      .update(JSON.stringify(decoded.core))
+      .digest("base64url")
+      .slice(0, 22);
+    const tampered = Buffer.from(JSON.stringify(decoded)).toString("base64url");
+    await prisma.workSegment.update({
+      where: { id: segment.id },
+      data: { status: "CONFIRMED" },
+    });
+    await expect(
+      getActionInbox({
+        actor: user,
+        input: { cursor: firstCursor, limit: 2 },
+      }).catch((error) => toProjectManagementServiceError(error).code),
+    ).resolves.toBe("VALIDATION_ERROR");
+    for (const [targetActor, invalidCursor] of [
+      [user, "malformed"],
+      [user, tampered],
+      [other, firstCursor],
+    ] as const) {
+      await expect(
+        getActionInbox({
+          actor: targetActor,
+          input: { cursor: invalidCursor, limit: 2 },
+        }).catch((error) => toProjectManagementServiceError(error).code),
+      ).resolves.toBe("VALIDATION_ERROR");
+    }
+    await expect(
+      getActionInbox({
+        actor: user,
+        input: { limit: 2, unexpected: true },
+      }).catch((error) => toProjectManagementServiceError(error).code),
+    ).resolves.toBe("VALIDATION_ERROR");
+  });
+
+  test("Action Inbox paginates equal-priority streams in global stable order", async () => {
+    const administrator = await createActor("S8 Inbox mixed streams");
+    const actor: ProjectManagementActor = {
+      ...administrator,
+      systemRoles: [
+        { role: "PROJECT_ADMINISTRATOR", team: "", techGroup: "" },
+      ],
+    };
+    const relevantAt = new Date("1900-01-01T08:00:00.000Z");
+    const now = new Date("1900-01-02T08:00:00.000Z");
+    const segment = await prisma.workSegment.create({
+      data: {
+        personId: actor.personId,
+        type: "PLANNED",
+        status: "PENDING_CONFIRMATION",
+        startAt: new Date("1900-01-01T07:00:00.000Z"),
+        endAt: relevantAt,
+        content: "S8 混合流投入确认",
+        createdByAccountId: actor.accountId,
+      },
+    });
+    const taskId = randomUUID();
+    const planId = randomUUID();
+    const revisionNodeId = randomUUID();
+    const revisionId = randomUUID();
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SET CONSTRAINTS ALL DEFERRED`;
+      await tx.task.create({
+        data: {
+          id: taskId,
+          title: "S8 混合流 Revision",
+          status: "DRAFT",
+          currentPlanVersionId: planId,
+          createdByAccountId: actor.accountId,
+        },
+      });
+      await tx.taskPlanVersion.create({
+        data: {
+          id: planId,
+          taskId,
+          versionNo: 1,
+          status: "CURRENT",
+          createdByAccountId: actor.accountId,
+        },
+      });
+      await tx.taskNode.create({
+        data: {
+          id: revisionNodeId,
+          taskId,
+          type: "REVISION",
+          status: "ACTIVE",
+          createdByAccountId: actor.accountId,
+          revision: {
+            create: {
+              id: revisionId,
+              reason: "验证全局混合流分页",
+              revisionAt: relevantAt,
+              basePlanVersionId: planId,
+            },
+          },
+        },
+      });
+    });
+    const projectRequestId = randomUUID();
+    await prisma.project.create({
+      data: {
+        name: "S8 混合流立项",
+        description: "验证相同优先级和时间的跨流稳定排序",
+        status: "PENDING_APPROVAL",
+        requesterAccountId: actor.accountId,
+        submittedAt: relevantAt,
+        establishmentRequests: {
+          create: {
+            id: projectRequestId,
+            round: 1,
+            idempotencyKey: randomUUID(),
+            requestHash: "s8-mixed-streams",
+            submittedByAccountId: actor.accountId,
+            submittedAt: relevantAt,
+            snapshot: {},
+          },
+        },
+      },
+    });
+
+    const expectedIds = [
+      `project-establishment:${projectRequestId}`,
+      `revision:${revisionId}`,
+      `segment-confirm:${segment.id}`,
+    ];
+    const loadedIds: string[] = [];
+    const generatedTimes = new Set<string>();
+    let cursor: string | undefined;
+    for (let pageIndex = 0; pageIndex < expectedIds.length; pageIndex += 1) {
+      const page = await getActionInbox({
+        actor,
+        input: { ...(cursor ? { cursor } : {}), limit: 1 },
+        now,
+      });
+      loadedIds.push(...page.items.map((item) => item.id));
+      generatedTimes.add(page.generatedAt);
+      cursor = page.nextCursor ?? undefined;
+    }
+
+    expect(loadedIds).toEqual(expectedIds);
+    expect(new Set(loadedIds).size).toBe(loadedIds.length);
+    expect(generatedTimes).toEqual(new Set([now.toISOString()]));
   });
 
   test("personal due queue paginates without gaps and excludes removed Task members", async () => {
@@ -148,7 +466,7 @@ test.describe("project management S8 dashboard and notifications", () => {
     }
   });
 
-  test("Task approval gate hides Terminal inbox work and disables Canvas actions until release", async () => {
+  test("Action Inbox shows only the active Task node and suppresses an overlapping review", async () => {
     const owner = await createActor("S8 Task approval gate");
     const approvalAdmin = await createActor("S8 Terminal capability admin");
     await prisma.systemRoleAssignment.create({
@@ -218,23 +536,84 @@ test.describe("project management S8 dashboard and notifications", () => {
         canReviewTermination: terminationAnchor?.capabilities.canReview,
       };
     };
-    const terminalInboxId = `termination:${terminationId}`;
+    const milestoneInboxId = `task-next-node:${task.nodeId}`;
+    const terminalInboxId = `task-next-node:${terminationNodeId}`;
 
+    const revisionNodeId = randomUUID();
+    await prisma.taskNode.create({
+      data: {
+        id: revisionNodeId,
+        taskId: task.taskId,
+        type: "REVISION",
+        status: "ACTIVE",
+        createdByAccountId: owner.accountId,
+        revision: {
+          create: {
+            reason: "验证 Revision 不抑制当前节点",
+            revisionAt: new Date("2026-09-12T02:00:00.000Z"),
+            basePlanVersionId: task.planId,
+          },
+        },
+      },
+    });
+
+    expect(
+      (
+        await getActionInbox({ actor: owner, input: { limit: 100 } })
+      ).items.find((item) => item.id === milestoneInboxId),
+    ).toEqual(
+      expect.objectContaining({
+        kind: "TASK_NEXT_NODE",
+        nodeType: "MILESTONE",
+      }),
+    );
+    expect(
+      (
+        await getActionInbox({ actor: owner, input: { limit: 100 } })
+      ).items.some((item) => item.id === terminalInboxId),
+    ).toBe(false);
+    expect(
+      (
+        await getActionInbox({ actor: owner, input: { limit: 100 } })
+      ).items.some((item) => item.id === milestoneInboxId),
+    ).toBe(true);
+    expect(
+      (
+        await getActionInbox({
+          actor: approvalAdminActor,
+          input: { limit: 100 },
+        })
+      ).items,
+    ).toContainEqual(
+      expect.objectContaining({
+        id: expect.stringMatching(/^revision:/),
+        nodeId: revisionNodeId,
+      }),
+    );
+    expect(
+      (
+        await getActionInbox({
+          actor: approvalAdminActor,
+          input: { limit: 100 },
+        })
+      ).items.some((item) => item.id === milestoneInboxId),
+    ).toBe(false);
+    await prisma.$transaction([
+      prisma.revisionNode.update({
+        where: { nodeId: revisionNodeId },
+        data: { status: "CANCELLED" },
+      }),
+      prisma.taskNode.update({
+        where: { id: revisionNodeId },
+        data: { status: "CANCELLED" },
+      }),
+    ]);
     await expect(loadCapabilities()).resolves.toEqual({
       canCreateRevision: true,
       canSubmitReview: true,
       canSubmitTerminationReview: true,
       canReviewTermination: false,
     });
-    expect(
-      (await getActionInbox({ actor: owner, limit: 100 })).items.find(
-        (item) => item.id === terminalInboxId,
-      ),
-    ).toEqual(
-      expect.objectContaining({
-        summary: "结束节点：审批空闲时允许结束",
-      }),
-    );
 
     const review = await prisma.milestoneReview.create({
       data: {
@@ -252,9 +631,9 @@ test.describe("project management S8 dashboard and notifications", () => {
       canReviewTermination: false,
     });
     expect(
-      (await getActionInbox({ actor: owner, limit: 100 })).items.some(
-        (item) => item.id === terminalInboxId,
-      ),
+      (
+        await getActionInbox({ actor: owner, input: { limit: 100 } })
+      ).items.some((item) => item.id === milestoneInboxId),
     ).toBe(false);
 
     await prisma.milestoneReview.update({
@@ -271,10 +650,36 @@ test.describe("project management S8 dashboard and notifications", () => {
       canReviewTermination: false,
     });
     expect(
-      (await getActionInbox({ actor: owner, limit: 100 })).items.some(
-        (item) => item.id === terminalInboxId,
-      ),
+      (
+        await getActionInbox({ actor: owner, input: { limit: 100 } })
+      ).items.some((item) => item.id === milestoneInboxId),
     ).toBe(true);
+
+    await prisma.$transaction([
+      prisma.taskNode.update({
+        where: { id: task.nodeId },
+        data: { status: "COMPLETED" },
+      }),
+      prisma.taskNode.update({
+        where: { id: terminationNodeId },
+        data: { status: "ACTIVE" },
+      }),
+      prisma.task.update({
+        where: { id: task.taskId },
+        data: { activeMilestoneNodeId: null },
+      }),
+    ]);
+    expect(
+      (
+        await getActionInbox({ actor: owner, input: { limit: 100 } })
+      ).items.find((item) => item.id === terminalInboxId),
+    ).toEqual(
+      expect.objectContaining({
+        kind: "TASK_NEXT_NODE",
+        nodeType: "TERMINATION",
+        summary: "计划结束标准：审批空闲时允许结束",
+      }),
+    );
 
     const terminationReview = await prisma.terminationReview.create({
       data: {
@@ -299,6 +704,19 @@ test.describe("project management S8 dashboard and notifications", () => {
       canSubmitTerminationReview: false,
       canReviewTermination: true,
     });
+    expect(
+      (
+        await getActionInbox({ actor: owner, input: { limit: 100 } })
+      ).items.some((item) => item.id === terminalInboxId),
+    ).toBe(false);
+    expect(
+      (
+        await getActionInbox({
+          actor: approvalAdminActor,
+          input: { limit: 100 },
+        })
+      ).items.some((item) => item.id === terminalInboxId),
+    ).toBe(false);
 
     await prisma.terminationReview.update({
       where: { id: terminationReview.id },
@@ -309,14 +727,19 @@ test.describe("project management S8 dashboard and notifications", () => {
         comment: "结束 capability 验证",
       },
     });
+    expect(
+      (
+        await getActionInbox({ actor: owner, input: { limit: 100 } })
+      ).items.some((item) => item.id === terminalInboxId),
+    ).toBe(true);
     await prisma.task.update({
       where: { id: task.taskId },
       data: { status: "DRAFT" },
     });
     expect(
-      (await getActionInbox({ actor: owner, limit: 100 })).items.some(
-        (item) => item.id === terminalInboxId,
-      ),
+      (
+        await getActionInbox({ actor: owner, input: { limit: 100 } })
+      ).items.some((item) => item.id === terminalInboxId),
     ).toBe(false);
   });
 
@@ -342,12 +765,12 @@ test.describe("project management S8 dashboard and notifications", () => {
 
     const [dashboard, inbox] = await Promise.all([
       getMyWorkDashboard({ actor: user }),
-      getActionInbox({ actor: user, limit: 20 }),
+      getActionInbox({ actor: user, input: { limit: 20 } }),
     ]);
     expect(dashboard.activeTasks).toHaveLength(12);
     expect(dashboard.activeTaskCount).toBe(13);
     expect(inbox.items).toHaveLength(20);
-    expect(inbox.totalCount).toBe(21);
+    expect(inbox.totalCount).toBe(34);
   });
 
   test("ordinary Feishu preference is honored while in-app and mandatory delivery remain", async () => {
@@ -632,10 +1055,22 @@ test.describe("project management S8 dashboard and notifications", () => {
       }),
     ).toBe(0);
 
-    const inbox = await getActionInbox({ actor: user, limit: 200 });
-    expect(inbox.items.some((item) => item.id === `termination:${candidateTerminationId}`)).toBe(
-      false,
-    );
+    await prisma.$transaction([
+      prisma.taskNode.update({
+        where: { id: candidateTerminationNodeId },
+        data: { status: "ACTIVE" },
+      }),
+      prisma.task.update({
+        where: { id: current.taskId },
+        data: { activeMilestoneNodeId: null },
+      }),
+    ]);
+
+    const inbox = await getActionInbox({ actor: user, input: { limit: 100 } });
+    expect(
+      inbox.items.some((item) => item.id === `task-next-node:${candidateTerminationNodeId}`),
+    ).toBe(false);
+    expect(inbox.items.map((item) => item.kind)).not.toContain("TERMINATION");
   });
 });
 

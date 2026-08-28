@@ -930,7 +930,7 @@ test.describe("Project 立项与生命周期", () => {
     });
     expect(created.status).toBe("PENDING_APPROVAL");
     const request = await prisma.projectEstablishmentRequest.findFirstOrThrow({ where: { projectId: created.projectId, status: "PENDING" } });
-    const adminInbox = await getActionInbox({ actor: admin, limit: 200 });
+    const adminInbox = await getActionInbox({ actor: admin, input: { limit: 100 } });
     expect(adminInbox.items).toContainEqual(expect.objectContaining({ kind: "PROJECT_ESTABLISHMENT", href: `/progress/projects/${created.projectId}#establishment` }));
     await expectCode(reviewProjectEstablishment(outsider, { projectId: created.projectId, requestId: request.id, expectedLockVersion: 0, decision: "APPROVE", comment: "" }), "FORBIDDEN");
     const rejected = await reviewProjectEstablishment(admin, { projectId: created.projectId, requestId: request.id, expectedLockVersion: 0, decision: "REJECT", comment: "信息需要补充" });

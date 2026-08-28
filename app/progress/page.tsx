@@ -92,7 +92,7 @@ export default async function ProgressPage({
           message: toProjectManagementServiceError(error).message,
         })),
       getMyWorkMetrics(actor),
-      getActionInbox({ actor, limit: 20 }),
+      getActionInbox({ actor, input: { limit: 8 } }),
       listInAppNotifications({ actor, input: { limit: 5 } }),
     ]);
   const tasks = timelineResult.ok
@@ -199,11 +199,11 @@ export default async function ProgressPage({
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
                 <h2 className="font-medium">行动待办</h2>
-                <p className="mt-1 text-sm text-muted-foreground">包含到期投入行动项，但不会改变紧急待办口径。</p>
+                <p className="mt-1 text-sm text-muted-foreground">汇总到期投入、当前节点和需要处理的审批。</p>
               </div>
               <Link href={routes.progress.approvals} className="text-sm text-primary hover:underline">查看全部</Link>
             </div>
-            <ActionInbox items={inbox.items} compact />
+            <ActionInbox initialPage={inbox} compact />
           </section>
 
           <section className="min-w-0 rounded-xl border border-border bg-card p-4" aria-labelledby="my-task-list-title">

@@ -237,18 +237,25 @@ npm run pm:identity-backfill
 
 ## 项目管理 P4/P6 UI 测试
 
-1. 桌面 `1440x1000` 与 Pixel 5 分别打开 `/progress`，应展示“我的工作”指标、完整个人时间画布、行动待办、参与 Task、到期确认队列和折叠通知；导航中不得再出现独立“我的时间”或“资源冲突”。旧 `/progress/my-timeline` 必须返回 404。
+1. 桌面 `1440x1000` 与 Pixel 5 分别打开 `/progress`，应展示“我的工作”指标、完整个人时间画布、最多 8 条行动待办、参与 Task、到期确认队列和折叠通知；导航中不得再出现独立“我的时间”或“资源冲突”。旧 `/progress/my-timeline` 必须返回 404。
 2. 打开 `/progress/tasks`，默认勾选“只看我参与”并选择“进行中”；按人员范围、状态、优先级和关键词筛选时，只展示当前 actor 可读 Task，且仍可手动取消默认筛选；不可读 Task 不能通过列表枚举。
 3. 打开 `/progress/tasks/[id]`，应看到三层详情结构：概览；完整的“计划与人员投入”（时间画布及共享节点导航）；以及桌面端“Task 风险与评论 / 待处理 Revision、选中节点详情和风险录入 / 近期动态”三栏。低于 `xl` 时第三层按“主体详情 → 风险与评论 → 近期动态”单列排列，审批门禁和全局操作反馈保持在概览与时间线之间。全部有效成员及其全部投入继续展示；有效 TaskMember 按服务端 capability 创建或管理投入，旁观者只读；Project 详情的投入保持只读。投入悬浮提示必须显示关联 Task，未关联时显示“独立投入”，Busy 不得显示 Task。页面不得下发 raw 审计列表。Task Owner/Participant 可在 ACTIVE 状态提出和解决风险，普通旁观者只能查看风险但仍可评论；只有全局管理员显示评论删除入口。Active Task 编辑 Dialog 继续使用一次事务保存基本信息和成员，并保持原有并发保护。
 4. Desktop 与 Pixel 5 打开 `/progress/resources`：两者都渲染横向时间画布且页面无横向溢出。Desktop 未保存虚线创建草稿可横移、调整两端和拖到当前可创建 Person 行，整个过程中不得调用服务端 transform mutation；Pixel 5 不提供直接拖动，但必须可通过表单改人员、时间、内容和预期产出后创建。既有投入总览只读；双击或 Enter 打开宽版详情，基本信息必须明确展示类型、状态、所属人员与关联 Task（关联 Task 可直达详情），完整上下文可见且只有目标 Segment 可编辑。草稿或详情有未保存修改时 Esc/关闭必须确认，失败时表单必须保留。资源选择和视口状态由 URL 保存，时间范围由已选内容自动派生。
 5. Planned 完整确认后只显示 Actual；完整确认、前缀部分确认和批量确认都必须填写实际输出，预期输出不重复填写并由 Actual 继承 Planned。前缀部分确认不显示也不要求原因输入，仍须填写实际投入内容、固定开始点并只生成一条尾段；尾段继续保留原预期输出。缺少实际输出、部分确认缺少实际内容或伪造中间起点必须在服务端零写入拒绝。确认、取消、Actual 软删除仍需验证数据库、来源、中文安全 change DTO、audit、站内通知与 outbox；历史分页不得下发 raw `before/after`、账号 ID 或无权读取的 Task 名称，测试环境必须禁用真实飞书投递。普通 DTO、表单和最终数据库均不得包含 `completionPercent`；迁移前非空值只能从 append-only 领域审计查询。
-6. `/progress` 默认只显示全部 ACTIVE 参与 Task；切换“显示全部”后显示全部草稿和终态，Task 表、版本/当前节点和 Plan 行同步且不分页；行动待办保留 Segment confirmation 数量但不把它计入 `criticalCount`，到期队列“处理”必须打开统一详情而不是第二套确认表单。页面不再出现日期、日/周视图或日期平移控件。验证所有 TimeCanvas 在没有显式尺度时默认显示周，URL/调用方尺度仍优先；Task 节点聚焦和 Resize 不得出现尺度跳变。工具栏保留周/月/季/年与“今天”，不显示前后箭头，并验证多级上海日期轴及独立底部滚动条。内容驱动页即使全部内容远离今天，也必须能通过“今天”加载并定位今天附近，同时保持尺度。有效 Planned 的创建/更新必须重新计算内容范围、在两端增加两个上海日历月、加载目标及相邻块并保持当前视口；已确认/已取消 Planned 不扩展范围。浏览器前进/后退后筛选控件必须与 URL 一致；投入详情有未保存修改时，服务端刷新或 `rowPageKey` 变化不得直接丢弃表单。
+6. `/progress` 默认只显示全部 ACTIVE 参与 Task；切换“显示全部”后显示全部草稿和终态，Task 表、版本/当前节点和 Plan 行同步且不分页；行动待办保留 Segment confirmation 数量但不把它计入 `criticalCount`，逾期当前 Task 节点计入 `criticalCount`，到期队列“处理”必须打开统一详情而不是第二套确认表单。页面不再出现日期、日/周视图或日期平移控件。验证所有 TimeCanvas 在没有显式尺度时默认显示周，URL/调用方尺度仍优先；Task 节点聚焦和 Resize 不得出现尺度跳变。工具栏保留周/月/季/年与“今天”，不显示前后箭头，并验证多级上海日期轴及独立底部滚动条。内容驱动页即使全部内容远离今天，也必须能通过“今天”加载并定位今天附近，同时保持尺度。有效 Planned 的创建/更新必须重新计算内容范围、在两端增加两个上海日历月、加载目标及相邻块并保持当前视口；已确认/已取消 Planned 不扩展范围。浏览器前进/后退后筛选控件必须与 URL 一致；投入详情有未保存修改时，服务端刷新或 `rowPageKey` 变化不得直接丢弃表单。
 7. 在 Desktop `1440x1000` 与 Pixel 5 上分别验证响应式冻结行标题、页面无横向溢出、底部滚动与顶部日期轴/时间对象同步。覆盖空数据、超长名称、跨年、超过 366 天、三年裁剪提示、单块自动二分和 20,000 对象/16 块预算错误；测试不得联系真实飞书服务。
 8. `/progress/task/:id`、`/progress/kanban`、`/progress/my-timeline`、`/progress/resources/conflicts`、`/progress/tags` 与 `/admin/roles` 必须返回 404。资源计划默认显示全部，也可按 Project/Task/人员多选；验证集合并集、超过 25 个 Task 和 50 个人员仍一次完整装配、只读 Plan 与可交互 Person 混排、焦点固定、空选择、已确认/已取消 Planned 不返回也不渲染，以及内容两侧两个上海日历月和 180 天自适应块。旧 `taskCursor`/`personCursor` 必须被忽略并从规范 URL 移除。我的工作和 Task 工作台不得出现冲突标记、投入比例或完成比例；重叠 Segment 不得产生冲突待办、通知或 outbox。
 9. 打开 `/progress/notifications`，只展示当前收件人的站内通知；可按类型/未读筛选、标记单条或全部已读，跳转对象前仍要按业务对象权限过滤。
 10. 页面不得出现旧项目、阶段、周报、提醒或 `PROJECT_MANAGER` 角色文案；当前风险区不得出现旧 Stage 风险或计划节点绑定入口。页面不得出现 500、Next.js error overlay、未处理浏览器错误或横向滚动。
 11. `/progress/projects/*` 与 `/progress/tasks/*` 是当前正式路由；旧路径不得重定向。带 `timelineDate`、`timelineFocus`、单值 `personId`/`taskId`、`start`/`end` 或 `zoom` 的链接应忽略这些值，并将其从规范 URL 移除；`focus`、`center`、`scale` 与复数资源选择继续保留。收缩 migration 集成测试仍需验证历史旧表、旧 enum、`PROJECT_MANAGER` 数据和 `channel=progress` outbox/recipient 被删除；HEAD 还必须证明新 Project 不含 Stage、`ownerOpenId` 等旧签名。
 12. Project/Task 生命周期、审批、风险和评论通知的飞书按钮与站内通知必须使用同一个规范目标：Task 使用 `/progress/tasks/[id]`，Project 使用 `/progress/projects/[id]`，同时存在 `taskId/projectId` 时 Task 优先，不得回到“我的工作”。Terminal 的合法 `focus`、Project 立项的 `#establishment` 和 Segment 的 `/progress?focus=[segmentId]` 继续保留；已删除 Task/Project 分别回到对应列表。浏览器冒烟需验证登录后直达详情及未登录认证后的回跳，不要求定位单条风险、评论或审批记录。
+
+### 待办与审批专项测试
+
+1. `tests/project-management-s8.spec.ts` 验证 Action Inbox 不返回 `TERMINATION`/“任务结束申请”，而是为在职有效 OWNER/PARTICIPANT 返回 ACTIVE Task 的 Current Plan 当前节点。Milestone 必须匹配 `activeMilestoneNodeId`；进入结束阶段后返回 ACTIVE Terminal。DRAFT、终态、已删除 Task、已移除成员、旁观者、管理员非成员、候选/历史 Plan 和停用 actor 均不得获得当前节点。
+2. 相同 Milestone 存在未撤出的 `PENDING` Review、相同 Terminal 存在 `PENDING` Termination Review 时，成员当前节点必须隐藏；全局管理员只看到对应审批项。待处理 Revision 不隐藏当前节点。逾期当前节点为 `CRITICAL` 并计入 `criticalCount`，未逾期为 `MEDIUM`。
+3. 混合数据流使用小页循环加载，断言全局顺序、无重复、无缺口且 `generatedAt` 跨页保持不变；格式错误、字段注入、校验被破坏和跨 actor 游标均返回中文 `VALIDATION_ERROR`。游标锚点离开当前队列后同样应拒绝，客户端保留已加载内容并允许重试或刷新。
+4. `tests/project-management-ui-routes-responsive.spec.ts` 在 Desktop `1440x1000` 与 Pixel 5 验证完整行包含类型、严重度、标题、摘要、Project/Task、Node 类型/状态、相关时间和明确操作按钮；空列表、超长内容和无页面级横向溢出均受覆盖。创建 55 条待办时首屏只展示 50 条，首次加载更多网络失败显示可重试错误，重试后恰好展示 55 条及完成状态；返回 `/progress` 只预览 8 条。
 
 ### Project 立项专项测试
 

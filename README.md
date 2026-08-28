@@ -525,7 +525,8 @@ pm2 start npm --name procurement-cron -- run cron
 - 参与人可编辑 Task/计划、提交验收并创建自己的 Revision，并管理自己的关联投入；负责人另可管理成员、Task 状态、任意未生效 Revision 和该 Task 全部投入；全局管理员拥有全部项目写权限。
 - ACTIVE Project 只在没有未删除的草稿或进行中 Task 时允许结束；空 Project 和仅包含已完成、失败结束、已取消、已超时或已归档 Task 的 Project 均可结束。Project 的 Task 完成进度仍只统计严格 `COMPLETED` 的 Task。
 - Revision 是可选择时间的非分段标记，创建即待审批，没有 Draft/Submit；驳回后修改即重新送审。每个 Task 只允许一条 Milestone/Revision/Termination 待审批，待审批期间不能再次提交其他审批申请。Milestone 与 Terminal 均允许 OWNER、PARTICIPANT 或全局管理员提交，三类申请只由统一超级管理员或项目管理员决定，并允许管理员自审；界面不再提供流程策略、Reviewer 或自审开关。
-- `/progress` 是“我的工作”统一驾驶舱，提供指标、完整个人时间画布、行动待办、到期确认队列、全部参与 Task 及对应 Plan 轨道和折叠通知。投入待办统一打开同一详情 Dialog 处理。
+- `/progress` 是“我的工作”统一驾驶舱，提供指标、完整个人时间画布、行动待办、到期确认队列、全部参与 Task 及对应 Plan 轨道和折叠通知。行动待办最多预览全局优先队列的前 8 项，投入待办统一打开同一详情 Dialog 处理。
+- `/progress/approvals` 展示完整的待办与审批全局优先队列，按“紧急 → 高 → 中 → 低”、相关时间和稳定 ID 排序，每次加载 50 项。队列包含本人待确认投入、本人有效参与的 ACTIVE Task 当前节点，以及全局管理员可处理的 Milestone 验收、Revision、Project 立项和 Terminal 结束审批；“任务结束申请”不再作为一条行动待办。当前节点优先使用 Task 的 `activeMilestoneNodeId`，进入结束阶段后使用 Current Plan 中的 ACTIVE Terminal；相同 Milestone/Terminal 已有待处理审批时隐藏当前节点，待审批 Revision 不隐藏。逾期当前节点为“紧急”，其余为“中”。
 - `/progress/tasks/new` 提供新建 Composer；尚未激活的 Task 通过工作台右上角“编辑 Task”进入 `/progress/tasks/[id]/edit`，使用同一 Composer 一次保存基本信息、关联 Task、成员和完整计划。Participant 可编辑内容与计划，但成员区只读；保存成功后返回工作台。
 - `/progress/tasks` 与 `/progress/tasks/[id]` 提供 Task 列表和 Task 工作台。人员投入时间线位于工作台 Tab 上方，并在“计划与资源”“概览”“修订与历史”“验收”“审计”之间切换时保持显示和交互状态。DRAFT 工作台的“概览”和“计划与资源”均为只读展示；Task Owner 或全局管理员可软删除未激活草稿，已激活及终态 Task 不提供该入口。ACTIVE 的既有元数据和成员可在同一事务编辑。发起 Revision 进入 `/progress/tasks/[id]/revisions/new`，被驳回候选通过 `/progress/tasks/[id]/revisions/[revisionId]/edit` 修改；两者与 Task 创建/草稿编辑共用 Composer 的 TimeCanvas、节点表、Inspector、撤销/重做、校验和本地恢复，保存后直接返回“修订与历史”。工作台 Revision Tab 只保留历史、审批、取消和 Diff，不再内联编辑候选计划。
 - DRAFT Task 只能在计划开始时间已到达后激活；校验使用事务内的服务端时间，不追溯检查已经激活或结束的历史 Task。

@@ -847,11 +847,105 @@ test.describe("project management UI project-management-ui-routes-responsive", (
     });
 
     await page.goto("/progress/approvals");
-    await expect(page.getByRole("heading", { name: "待办与审批" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "待办与审批" }),
+    ).toBeVisible();
     await expect(page.getByTestId("action-inbox")).toBeVisible();
-    await expect(page.getByText("任务结束申请", { exact: true })).toBeVisible();
-    await expect(page.getByText("结束节点：所有 Milestone 完成并完成总结")).toBeVisible();
+    await expect(page.getByText("下一个节点", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("P6 UI 第一阶段", { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText("完成标准：完成第一阶段")).toBeVisible();
+    await expect(page.getByText("节点：里程碑 · 进行中")).toBeVisible();
+    await expect(page.getByText(`Task：${fixture.taskTitle}`)).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: "查看节点：P6 UI 第一阶段" }),
+    ).toBeVisible();
+    await expect(page.getByText("任务结束申请", { exact: true })).toHaveCount(
+      0,
+    );
     await expect(page.getByText("Termination", { exact: true })).toHaveCount(0);
+    await expectHealthyPage(page);
+    expect(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth <=
+          document.documentElement.clientWidth + 1,
+      ),
+    ).toBe(true);
+  });
+
+  test("action inbox loads more, retries failures and limits the dashboard preview", async ({
+    context,
+    page,
+    baseURL,
+  }) => {
+    test.setTimeout(90_000);
+    const user = await createAccountPerson(`S8 Inbox UI ${randomUUID()}`);
+    const baseTime = Date.now() - 60 * 60_000;
+    const longContent = "超长待办内容".repeat(80);
+    await prisma.workSegment.createMany({
+      data: Array.from({ length: 55 }, (_, index) => ({
+        personId: user.person.id,
+        type: "PLANNED" as const,
+        status: "PENDING_CONFIRMATION" as const,
+        startAt: new Date(baseTime + index * 60_000),
+        endAt: new Date(baseTime + (index + 1) * 60_000),
+        content:
+          index === 0
+            ? longContent
+            : `分页待办 ${String(index + 1).padStart(2, "0")}`,
+        createdByAccountId: user.account.id,
+      })),
+    });
+    await loginAsTestUser(context, baseURL, {
+      openId: user.openId,
+      name: user.person.displayName,
+    });
+
+    await page.goto("/progress/approvals");
+    const inbox = page.getByTestId("action-inbox");
+    await expect(inbox.getByTestId("action-inbox-item")).toHaveCount(50);
+    await expect(inbox.getByText(longContent, { exact: true })).toBeVisible();
+    await expect(inbox.getByText("全部 55 项", { exact: true })).toBeVisible();
+    await expect(
+      inbox.getByText("已加载 50 / 55", { exact: true }),
+    ).toBeVisible();
+
+    let failedOnce = false;
+    await page.route("**/progress/approvals", async (route) => {
+      if (!failedOnce && route.request().method() === "POST") {
+        failedOnce = true;
+        await route.abort("failed");
+        return;
+      }
+      await route.continue();
+    });
+    const loadMore = inbox.getByRole("button", { name: "加载更多" });
+    await loadMore.focus();
+    await expect(loadMore).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(inbox.getByRole("alert")).toContainText(
+      "网络异常，请稍后重试",
+    );
+    await inbox.getByRole("button", { name: "重试加载" }).click();
+    await expect(inbox.getByTestId("action-inbox-item")).toHaveCount(55);
+    await expect(
+      inbox.getByText("已加载全部 55 项", { exact: true }),
+    ).toBeVisible();
+    await expectHealthyPage(page);
+    expect(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth <=
+          document.documentElement.clientWidth + 1,
+      ),
+    ).toBe(true);
+
+    await page.goto("/progress");
+    await expect(
+      page.getByTestId("action-inbox").getByTestId("action-inbox-item"),
+    ).toHaveCount(8);
     await expectHealthyPage(page);
     expect(
       await page.evaluate(

@@ -2333,8 +2333,8 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     };
     const [memberInbox, adminInbox, memberLifecycle, adminLifecycle] =
       await Promise.all([
-        getActionInbox({ actor: actor(fixture.member), limit: 200 }),
-        getActionInbox({ actor: adminActor, limit: 200 }),
+        getActionInbox({ actor: actor(fixture.member), input: { limit: 100 } }),
+        getActionInbox({ actor: adminActor, input: { limit: 100 } }),
         getTaskLifecycleViews({
           actor: actor(fixture.member),
           taskId: fixture.taskId,
