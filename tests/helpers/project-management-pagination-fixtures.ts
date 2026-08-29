@@ -41,6 +41,28 @@ export async function grantPaginationAdministrator(accountId: string) {
   });
 }
 
+export async function createPaginationProject(
+  actor: ProjectManagementActor,
+  name: string,
+) {
+  return prisma.project.create({
+    data: {
+      name,
+      description: "分页回归测试 Project",
+      status: "ACTIVE",
+      requesterAccountId: actor.accountId,
+      startedAt: new Date(),
+      members: {
+        create: {
+          personId: actor.personId,
+          role: "OWNER",
+          createdByAccountId: actor.accountId,
+        },
+      },
+    },
+  });
+}
+
 export async function createPaginationTaskRows(input: {
   accountId: string;
   personId: string;

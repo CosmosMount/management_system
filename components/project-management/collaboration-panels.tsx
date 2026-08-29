@@ -232,12 +232,42 @@ function RiskGroup({
       cursor: page.nextCursor,
       limit: 20,
     }).catch(() => null);
+    if (
+      result?.ok === false &&
+      result.error.code === "VALIDATION_ERROR" &&
+      result.error.message === "风险分页游标无效"
+    ) {
+      const recovered = await loadRiskPage({
+        targetType,
+        targetId,
+        source,
+        status,
+        cursor: null,
+        limit: 20,
+      }).catch(() => null);
+      if (recovered?.ok) {
+        if (status === "ACTIVE") setActive(recovered.data);
+        else setResolved(recovered.data);
+        setNotice({ kind: "info", message: "风险列表已变化，已重新加载。" });
+      } else {
+        setNotice({
+          kind: "error",
+          message:
+            recovered?.ok === false
+              ? recovered.error.message
+              : "风险加载失败，请重试。",
+        });
+      }
+      setBusyKey(null);
+      return;
+    }
     if (!result || !result.ok) {
       setNotice({ kind: "error", message: result?.error.message ?? "风险加载失败，请重试。" });
     } else {
       const next = mergeRiskPage(page, result.data);
       if (status === "ACTIVE") setActive(next);
       else setResolved(next);
+      setNotice(null);
     }
     setBusyKey(null);
   };

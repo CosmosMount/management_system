@@ -26,6 +26,10 @@ import {
   recentActivityPageInputSchema,
   riskPageInputSchema,
 } from "@/lib/project-management/validations/collaboration";
+import {
+  decodeKeysetCursor,
+  encodeKeysetCursor,
+} from "@/lib/project-management/queries/keyset-cursor";
 
 type TargetType = "PROJECT" | "TASK";
 type TimestampCursor = { createdAt: Date; id: string };
@@ -113,7 +117,20 @@ export async function getRiskPage(
   if (parsed.source === "TASKS" && parsed.targetType !== "PROJECT") {
     throw validationError("只有 Project 可以汇总所属 Task 风险");
   }
-  const cursor = decodeCursor(parsed.cursor);
+  const cursorScope = JSON.stringify({
+    targetType: parsed.targetType,
+    targetId: parsed.targetId,
+    source: parsed.source,
+    status: parsed.status,
+  });
+  const cursor = toTimestampCursor(
+    decodeKeysetCursor(
+      parsed.cursor ?? undefined,
+      "RISK",
+      cursorScope,
+      "风险分页游标无效",
+    ),
+  );
   const baseWhere: Prisma.RiskRecordWhereInput = {
     status: parsed.status,
     ...(parsed.source === "TASKS"
@@ -222,7 +239,10 @@ export async function getRiskPage(
     totalCount,
     nextCursor:
       rows.length > parsed.limit && items.at(-1)
-        ? encodeCursor(items.at(-1)!.createdAt, items.at(-1)!.id)
+        ? encodeKeysetCursor("RISK", cursorScope, {
+            timestamp: new Date(items.at(-1)!.createdAt),
+            id: items.at(-1)!.id,
+          })
         : null,
   };
 }
@@ -233,7 +253,18 @@ export async function getCommentPage(
 ): Promise<CommentPageDto> {
   const parsed = commentPageInputSchema.parse(input);
   await loadReadableTarget(actor, parsed.targetType, parsed.targetId);
-  const cursor = decodeCursor(parsed.cursor);
+  const cursorScope = JSON.stringify({
+    targetType: parsed.targetType,
+    targetId: parsed.targetId,
+  });
+  const cursor = toTimestampCursor(
+    decodeKeysetCursor(
+      parsed.cursor ?? undefined,
+      "COMMENT",
+      cursorScope,
+      "评论分页游标无效",
+    ),
+  );
   const baseWhere: Prisma.CommentWhereInput = {
     deletedAt: null,
     ...(parsed.targetType === "PROJECT"
@@ -263,7 +294,10 @@ export async function getCommentPage(
     totalCount,
     nextCursor:
       rows.length > parsed.limit && items.at(-1)
-        ? encodeCursor(items.at(-1)!.createdAt, items.at(-1)!.id)
+        ? encodeKeysetCursor("COMMENT", cursorScope, {
+            timestamp: new Date(items.at(-1)!.createdAt),
+            id: items.at(-1)!.id,
+          })
         : null,
   };
 }
@@ -274,7 +308,19 @@ export async function getRecentActivityPage(
 ): Promise<RecentActivityPageDto> {
   const parsed = recentActivityPageInputSchema.parse(input);
   await loadReadableTarget(actor, parsed.targetType, parsed.targetId);
-  const cursor = decodeCursor(parsed.cursor);
+  const cursorScope = JSON.stringify({
+    targetType: parsed.targetType,
+    targetId: parsed.targetId,
+    category: parsed.category,
+  });
+  const cursor = toTimestampCursor(
+    decodeKeysetCursor(
+      parsed.cursor ?? undefined,
+      "ACTIVITY",
+      cursorScope,
+      "动态分页游标无效",
+    ),
+  );
   const actionNames = actionsForActivityFilter(
     parsed.targetType,
     parsed.category,
@@ -319,7 +365,10 @@ export async function getRecentActivityPage(
     items,
     nextCursor:
       rows.length > parsed.limit && last
-        ? encodeCursor(last.createdAt.toISOString(), last.id)
+        ? encodeKeysetCursor("ACTIVITY", cursorScope, {
+            timestamp: last.createdAt,
+            id: last.id,
+          })
         : null,
   };
 }
@@ -436,25 +485,10 @@ function cursorWhere(cursor: TimestampCursor | null) {
     : {};
 }
 
-function encodeCursor(createdAt: string, id: string) {
-  return Buffer.from(JSON.stringify({ createdAt, id })).toString("base64url");
-}
-
-function decodeCursor(value: string | null | undefined): TimestampCursor | null {
-  if (!value) return null;
-  try {
-    const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as {
-      createdAt?: unknown;
-      id?: unknown;
-    };
-    const createdAt = typeof parsed.createdAt === "string" ? new Date(parsed.createdAt) : null;
-    if (!createdAt || Number.isNaN(createdAt.getTime()) || typeof parsed.id !== "string") {
-      throw new Error("invalid");
-    }
-    return { createdAt, id: parsed.id };
-  } catch {
-    throw validationError("分页游标无效");
-  }
+function toTimestampCursor(
+  cursor: { timestamp: Date; id: string } | null,
+): TimestampCursor | null {
+  return cursor ? { createdAt: cursor.timestamp, id: cursor.id } : null;
 }
 
 async function validateRiskCursor(

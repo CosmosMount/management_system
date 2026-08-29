@@ -1,7 +1,13 @@
 import { z } from "zod";
 import { validationError } from "@/lib/project-management/application/errors";
 
-const cursorKinds = ["IN_APP_NOTIFICATION", "TASK"] as const;
+const cursorKinds = [
+  "IN_APP_NOTIFICATION",
+  "TASK",
+  "RISK",
+  "COMMENT",
+  "ACTIVITY",
+] as const;
 export type KeysetCursorKind = (typeof cursorKinds)[number];
 
 const cursorSchema = z

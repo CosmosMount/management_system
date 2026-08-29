@@ -4,6 +4,7 @@ import { expect, test } from "@playwright/test";
 import { prisma } from "../lib/prisma";
 import {
   createPaginationActor,
+  createPaginationProject,
   createPaginationTaskRows,
   grantPaginationAdministrator,
 } from "./helpers/project-management-pagination-fixtures";
@@ -12,7 +13,7 @@ import {
   loginAsTestUser,
 } from "./helpers/functional-fixtures";
 
-test("notification and Task records after the first 50 remain reachable", async ({
+test("notification, Task, risk, and activity records beyond the first page remain reachable", async ({
   context,
   page,
   baseURL,
@@ -108,6 +109,68 @@ test("notification and Task records after the first 50 remain reachable", async 
   await expect(
     page.getByRole("alert").getByText("Task 列表已变化，已为你返回第一页。"),
   ).toBeVisible();
+  await expectHealthyPage(page);
+
+  const project = await createPaginationProject(
+    actor,
+    `UI 协作分页 Project ${randomUUID()}`,
+  );
+  const collaborationTimestamp = new Date("2099-08-29T11:00:00.000Z");
+  const riskIds = Array.from({ length: 21 }, () => randomUUID()).sort().reverse();
+  const activityIds = Array.from({ length: 21 }, () => randomUUID())
+    .sort()
+    .reverse();
+  await prisma.riskRecord.createMany({
+    data: riskIds.map((id, index) => ({
+      id,
+      projectId: project.id,
+      content: `UI 分页风险 ${index}`,
+      createdByAccountId: actor.accountId,
+      createdByPersonId: actor.personId,
+      createdByName: "UI 分页用户",
+      createdAt: collaborationTimestamp,
+      updatedAt: collaborationTimestamp,
+    })),
+  });
+  await prisma.domainAuditEvent.createMany({
+    data: activityIds.map((id, index) => ({
+      id,
+      actorAccountId: actor.accountId,
+      actorPersonId: actor.personId,
+      action: "pm.project.metadata.update",
+      entityType: "Project",
+      entityId: project.id,
+      projectId: project.id,
+      before: { name: "旧名称" },
+      after: { name: `UI 分页动态 ${index}` },
+      createdAt: collaborationTimestamp,
+    })),
+  });
+  await page.goto(`/progress/projects/${project.id}`);
+  await expect(page.getByText("UI 分页风险 0", { exact: true })).toBeVisible();
+  await expect(page.getByText("UI 分页风险 20", { exact: true })).toHaveCount(0);
+  await prisma.riskRecord.update({
+    where: { id: riskIds[19]! },
+    data: {
+      status: "RESOLVED",
+      resolvedByAccountId: actor.accountId,
+      resolvedByPersonId: actor.personId,
+      resolvedByName: "UI 分页用户",
+      resolveNote: "模拟游标锚点状态变化",
+      resolvedAt: new Date("2099-08-29T11:00:01.000Z"),
+    },
+  });
+  await page
+    .getByRole("button", { name: "加载更多未解决风险" })
+    .first()
+    .click();
+  await expect(
+    page.getByRole("status").getByText("风险列表已变化，已重新加载。"),
+  ).toBeVisible();
+  await expect(page.getByText("UI 分页风险 20", { exact: true })).toBeVisible();
+  await expect(page.getByText("UI 分页动态 20", { exact: false })).toHaveCount(0);
+  await page.getByRole("button", { name: "加载更早动态" }).click();
+  await expect(page.getByText("UI 分页动态 20", { exact: false })).toBeVisible();
   await expectHealthyPage(page);
   expect(
     await page.evaluate(
