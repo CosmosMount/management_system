@@ -5,11 +5,16 @@ import {
   notificationReadableWhere,
   taskReadableWhere,
 } from "@/lib/project-management/authorization";
+import { validationError } from "@/lib/project-management/application/errors";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import { configurableNotificationCategories } from "@/lib/project-management/application/notification-preference-service";
 import { projectManagementNotificationPayloadSchema } from "@/lib/project-management/notifications/contract";
 import { normalizeProjectManagementNotificationText } from "@/lib/project-management/notifications/user-facing-copy";
 import { routes } from "@/lib/routes";
+import {
+  decodeKeysetCursor,
+  encodeKeysetCursor,
+} from "@/lib/project-management/queries/keyset-cursor";
 
 const notificationCategoryValues = [
   "TASK",
@@ -20,12 +25,10 @@ const notificationCategoryValues = [
   "ACCOUNT_SECURITY",
 ] as const satisfies readonly ProjectManagementNotificationCategory[];
 
-const idSchema = z.string().trim().uuid("对象 ID 格式不正确");
-
 export const listInAppNotificationsInputSchema = z.object({
   unreadOnly: z.boolean().optional().default(false),
   category: z.enum(notificationCategoryValues).optional(),
-  cursor: idSchema.optional(),
+  cursor: z.string().optional(),
   limit: z
     .number({ message: "分页大小不正确" })
     .int("分页大小不正确")
@@ -64,17 +67,51 @@ export async function listInAppNotifications({
   input?: unknown;
 }): Promise<InAppNotificationListResult> {
   const parsed = listInAppNotificationsInputSchema.parse(input ?? {});
+  const cursorScope = JSON.stringify({
+    accountId: actor.accountId,
+    category: parsed.category ?? null,
+    unreadOnly: parsed.unreadOnly,
+  });
+  const cursor = decodeKeysetCursor(
+    parsed.cursor,
+    "IN_APP_NOTIFICATION",
+    cursorScope,
+    "通知分页游标无效",
+  );
+  const where: Prisma.InAppNotificationWhereInput = {
+    AND: [
+      notificationReadableWhere(actor),
+      parsed.unreadOnly ? { readAt: null } : {},
+      parsed.category ? { category: parsed.category } : {},
+    ],
+  };
+  if (cursor) {
+    const anchor = await prisma.inAppNotification.findFirst({
+      where: {
+        AND: [where, { id: cursor.id, createdAt: cursor.timestamp }],
+      },
+      select: { id: true },
+    });
+    if (!anchor) {
+      throw validationError("通知分页游标无效");
+    }
+  }
   const rows = await prisma.inAppNotification.findMany({
     where: {
       AND: [
-        notificationReadableWhere(actor),
-        parsed.unreadOnly ? { readAt: null } : {},
-        parsed.category ? { category: parsed.category } : {},
+        where,
+        cursor
+          ? {
+              OR: [
+                { createdAt: { lt: cursor.timestamp } },
+                { createdAt: cursor.timestamp, id: { lt: cursor.id } },
+              ],
+            }
+          : {},
       ],
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: parsed.limit + 1,
-    ...(parsed.cursor ? { cursor: { id: parsed.cursor }, skip: 1 } : {}),
   });
 
   const visibleTaskTitles = await visibleTaskTitleMap(
@@ -122,7 +159,19 @@ export async function listInAppNotifications({
         createdAt: row.createdAt.toISOString(),
       };
     }),
-    nextCursor: rows.length > parsed.limit ? rows[parsed.limit]?.id ?? null : null,
+    nextCursor:
+      rows.length > parsed.limit
+        ? encodeKeysetCursor(
+            "IN_APP_NOTIFICATION",
+            cursorScope,
+            rows[parsed.limit - 1]
+              ? {
+                  timestamp: rows[parsed.limit - 1]!.createdAt,
+                  id: rows[parsed.limit - 1]!.id,
+                }
+              : undefined,
+          )
+        : null,
   };
 }
 

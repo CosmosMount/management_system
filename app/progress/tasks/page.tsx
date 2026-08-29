@@ -7,9 +7,11 @@ import {
   taskStatusLabels,
 } from "@/lib/project-management/labels";
 import { listTasks } from "@/lib/project-management/queries/task-queries";
+import { toProjectManagementServiceError } from "@/lib/project-management/application/errors";
 import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { getProgressActorOrRedirect } from "../_auth";
 
 const statusValues = [
@@ -36,20 +38,37 @@ export default async function ProgressTasksPage({
   const priority = firstParam(params.priority);
   const query = firstParam(params.q);
   const mine = params.mine === undefined ? true : paramValues(params.mine).includes("1");
-  const tasks = await listTasks({
-    actor,
-    input: {
-      status: statusValues.includes(status as (typeof statusValues)[number])
-        ? (status as (typeof statusValues)[number])
-        : undefined,
-      priority: priorityValues.includes(priority as (typeof priorityValues)[number])
-        ? (priority as (typeof priorityValues)[number])
-        : undefined,
-      mine,
-      query,
-      limit: 50,
-    },
-  });
+  const cursor = firstParam(params.cursor) || undefined;
+  let tasks;
+  try {
+    tasks = await listTasks({
+      actor,
+      input: {
+        status: statusValues.includes(status as (typeof statusValues)[number])
+          ? (status as (typeof statusValues)[number])
+          : undefined,
+        priority: priorityValues.includes(
+          priority as (typeof priorityValues)[number],
+        )
+          ? (priority as (typeof priorityValues)[number])
+          : undefined,
+        mine,
+        query,
+        limit: 50,
+        cursor,
+      },
+    });
+  } catch (error) {
+    const mapped = toProjectManagementServiceError(error);
+    if (
+      cursor &&
+      mapped.code === "VALIDATION_ERROR" &&
+      mapped.message === "Task 分页游标无效"
+    ) {
+      redirect(taskRecoveryHref(params));
+    }
+    throw error;
+  }
 
   return (
     <>
@@ -65,6 +84,11 @@ export default async function ProgressTasksPage({
         }
       />
       <div className="mx-auto flex w-full min-w-0 max-w-[96rem] flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
+          {firstParam(params.cursorError) === "1" && (
+            <p role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+              Task 列表已变化，已为你返回第一页。
+            </p>
+          )}
           <form className="grid gap-3 rounded-lg border border-border bg-card p-4 md:grid-cols-[1fr_160px_160px_auto_auto]">
             <Input
               name="q"
@@ -116,6 +140,16 @@ export default async function ProgressTasksPage({
             </p>
           )}
           <TaskList tasks={tasks.items} />
+          {!query && tasks.nextCursor && (
+            <div className="flex justify-end">
+              <Link
+                href={taskPageHref(params, tasks.nextCursor)}
+                className={cn(buttonVariants({ variant: "outline" }))}
+              >
+                下一页 Task
+              </Link>
+            </div>
+          )}
       </div>
     </>
   );
@@ -127,4 +161,30 @@ function firstParam(value: string | string[] | undefined) {
 
 function paramValues(value: string | string[] | undefined) {
   return Array.isArray(value) ? value : value === undefined ? [] : [value];
+}
+
+function taskPageHref(params: SearchParams, cursor: string) {
+  const search = new URLSearchParams();
+  const query = firstParam(params.q);
+  const status = firstParam(params.status);
+  const priority = firstParam(params.priority);
+  if (query) search.set("q", query);
+  if (params.status !== undefined) search.set("status", status);
+  if (priority) search.set("priority", priority);
+  for (const mine of paramValues(params.mine)) search.append("mine", mine);
+  search.set("cursor", cursor);
+  return `${routes.progress.tasks}?${search.toString()}`;
+}
+
+function taskRecoveryHref(params: SearchParams) {
+  const search = new URLSearchParams();
+  const query = firstParam(params.q);
+  const status = firstParam(params.status);
+  const priority = firstParam(params.priority);
+  if (query) search.set("q", query);
+  if (params.status !== undefined) search.set("status", status);
+  if (priority) search.set("priority", priority);
+  for (const mine of paramValues(params.mine)) search.append("mine", mine);
+  search.set("cursorError", "1");
+  return `${routes.progress.tasks}?${search.toString()}`;
 }

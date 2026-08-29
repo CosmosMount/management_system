@@ -21,11 +21,11 @@ import {
 } from "../scripts/playwright-test-topology";
 import PlaywrightTopologyReporter from "../scripts/playwright-topology-reporter";
 
-test("当前 Playwright spec 唯一归入 29 个 UI 或 45 个 node-db", () => {
+test("当前 Playwright spec 唯一归入 30 个 UI 或 46 个 node-db", () => {
   const topology = discoverPlaywrightTestTopology();
-  assert.equal(topology.ui.length, 29);
-  assert.equal(topology.nodeDb.length, 45);
-  assert.equal(new Set([...topology.ui, ...topology.nodeDb]).size, 74);
+  assert.equal(topology.ui.length, 30);
+  assert.equal(topology.nodeDb.length, 46);
+  assert.equal(new Set([...topology.ui, ...topology.nodeDb]).size, 76);
   assert.ok(
     [...topology.ui, ...topology.nodeDb].every((file) =>
       file.endsWith(".spec.ts"),

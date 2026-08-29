@@ -28,6 +28,11 @@ import {
   normalizeSearchText,
   searchTerms,
 } from "@/lib/search/normalize-search-text";
+import { validationError } from "@/lib/project-management/application/errors";
+import {
+  decodeKeysetCursor,
+  encodeKeysetCursor,
+} from "@/lib/project-management/queries/keyset-cursor";
 
 export type TaskListItem = {
   id: string;
@@ -279,6 +284,12 @@ export async function listTasks({
       : {},
   ];
   const where: Prisma.TaskWhereInput = { AND: filters };
+  const cursorScope = JSON.stringify({
+    accountId: actor.accountId,
+    status: input?.status ?? null,
+    priority: input?.priority ?? null,
+    mine: input?.mine ?? false,
+  });
   let hasMoreByQuery = false;
   let hasNextPage = false;
   let visibleTasks: Prisma.TaskGetPayload<{ include: typeof taskListInclude }>[];
@@ -341,12 +352,38 @@ export async function listTasks({
       directCandidates.length === 501 ||
       fallbackCandidates.length === 501;
   } else {
+    const cursor = decodeKeysetCursor(
+      input?.cursor,
+      "TASK",
+      cursorScope,
+      "Task 分页游标无效",
+    );
+    if (cursor) {
+      const anchor = await prisma.task.findFirst({
+        where: {
+          AND: [where, { id: cursor.id, updatedAt: cursor.timestamp }],
+        },
+        select: { id: true },
+      });
+      if (!anchor) throw validationError("Task 分页游标无效");
+    }
     const tasks = await prisma.task.findMany({
-      where,
+      where: {
+        AND: [
+          where,
+          cursor
+            ? {
+                OR: [
+                  { updatedAt: { lt: cursor.timestamp } },
+                  { updatedAt: cursor.timestamp, id: { lt: cursor.id } },
+                ],
+              }
+            : {},
+        ],
+      },
       include: taskListInclude,
       orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
       take: limit + 1,
-      ...(input?.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
     });
     visibleTasks = tasks.slice(0, limit);
     hasNextPage = tasks.length > limit;
@@ -388,7 +425,18 @@ export async function listTasks({
       updatedAt: task.updatedAt.toISOString(),
       createdAt: task.createdAt.toISOString(),
     })),
-    nextCursor: hasNextPage ? visibleTasks.at(-1)?.id ?? null : null,
+    nextCursor: hasNextPage
+      ? encodeKeysetCursor(
+          "TASK",
+          cursorScope,
+          visibleTasks.at(-1)
+            ? {
+                timestamp: visibleTasks.at(-1)!.updatedAt,
+                id: visibleTasks.at(-1)!.id,
+              }
+            : undefined,
+        )
+      : null,
     hasMoreByQuery,
   };
 }
