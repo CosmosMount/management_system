@@ -1,3 +1,4 @@
+// @playwright-project ui
 import { existsSync } from "fs";
 import { expect, test } from "@playwright/test";
 

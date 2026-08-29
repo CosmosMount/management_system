@@ -1,3 +1,4 @@
+// @playwright-project ui
 import { randomUUID } from "node:crypto";
 import {
   mkdir,

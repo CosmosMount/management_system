@@ -1,3 +1,4 @@
+// @playwright-project node-db
 import { createHash, randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import {

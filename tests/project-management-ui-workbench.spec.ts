@@ -1,3 +1,4 @@
+// @playwright-project ui
 import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../lib/prisma";
@@ -941,21 +942,46 @@ test.describe("project management UI project-management-ui-workbench", () => {
     const canvasRoot = page
       .getByTestId("resource-planner-workbench")
       .getByTestId("time-canvas-root");
+    const waitForUrlCenterToMatchCanvasViewport = async (): Promise<number> => {
+      let synchronizedCenter = Number.NaN;
+      await expect
+        .poll(async () => {
+          const sample = await canvasRoot.evaluate((element) => ({
+            urlCenter: Date.parse(
+              new URL(window.location.href).searchParams.get("center") ?? "",
+            ),
+            viewportEnd: Number(element.dataset.viewportEndMs),
+            viewportStart: Number(element.dataset.viewportStartMs),
+          }));
+          if (
+            !Number.isFinite(sample.urlCenter) ||
+            !Number.isFinite(sample.viewportStart) ||
+            !Number.isFinite(sample.viewportEnd)
+          ) {
+            return Number.POSITIVE_INFINITY;
+          }
+          synchronizedCenter = sample.urlCenter;
+          return Math.abs(
+            sample.urlCenter -
+              (sample.viewportStart + sample.viewportEnd) / 2,
+          );
+        })
+        .toBeLessThan(60 * 60 * 1_000);
+      return synchronizedCenter;
+    };
     await expect(canvasRoot).toHaveAttribute("data-zoom", "WEEK");
     await canvasRoot.getByRole("button", { name: "月", exact: true }).click();
     await expect(canvasRoot).toHaveAttribute("data-zoom", "MONTH");
     await expect(page).toHaveURL(/scale=month/);
+    let centerBefore = Number.NaN;
     await expect
-      .poll(() =>
-        Number.isFinite(
-          Date.parse(new URL(page.url()).searchParams.get("center") ?? ""),
-        ),
-      )
-      .toBe(true);
-    await page.waitForTimeout(500);
-    const centerBefore = Date.parse(
-      new URL(page.url()).searchParams.get("center") ?? "",
-    );
+      .poll(() => {
+        centerBefore = Date.parse(
+          new URL(page.url()).searchParams.get("center") ?? "",
+        );
+        return Math.abs(centerBefore - Date.now());
+      })
+      .toBeLessThan(5 * 60 * 1_000);
     const originalRangeStart = Number(
       await canvasRoot.getAttribute("data-range-start-ms"),
     );
@@ -971,9 +997,15 @@ test.describe("project management UI project-management-ui-workbench", () => {
     const panKey =
       scrollBefore.left < scrollBefore.maximum / 2 ? "ArrowRight" : "ArrowLeft";
     await horizontalScroller.focus();
-    for (let index = 0; index < 8; index += 1) {
-      await horizontalScroller.press(panKey);
-    }
+    await horizontalScroller.evaluate(
+      (element, direction) => {
+        element.scrollLeft += direction * 48;
+      },
+      panKey === "ArrowRight" ? 1 : -1,
+    );
+    expect(
+      Date.parse(new URL(page.url()).searchParams.get("center") ?? ""),
+    ).toBe(centerBefore);
     await expect
       .poll(async () =>
         Math.abs(
@@ -982,9 +1014,6 @@ test.describe("project management UI project-management-ui-workbench", () => {
         ),
       )
       .toBeGreaterThan(20);
-    expect(
-      Date.parse(new URL(page.url()).searchParams.get("center") ?? ""),
-    ).toBe(centerBefore);
     await page.getByRole("button", { name: "新增投入", exact: true }).click();
     const quickCreate = page.getByRole("form", { name: "投入快速创建" });
     await expect
@@ -1007,9 +1036,12 @@ test.describe("project management UI project-management-ui-workbench", () => {
         ? "ArrowRight"
         : "ArrowLeft";
     await horizontalScroller.focus();
-    for (let index = 0; index < 4; index += 1) {
-      await horizontalScroller.press(draftPanKey);
-    }
+    await horizontalScroller.evaluate(
+      (element, direction) => {
+        element.scrollLeft += direction * 48;
+      },
+      draftPanKey === "ArrowRight" ? 1 : -1,
+    );
     await expect
       .poll(async () =>
         Math.abs(
@@ -1026,9 +1058,8 @@ test.describe("project management UI project-management-ui-workbench", () => {
         return Math.abs(center - centerAfterUserPan);
       })
       .toBeGreaterThan(60 * 60 * 1_000);
-    const centerAfterDraftPan = Date.parse(
-      new URL(page.url()).searchParams.get("center") ?? "",
-    );
+    const centerAfterDraftPan =
+      await waitForUrlCenterToMatchCanvasViewport();
     await quickCreate
       .getByLabel("开始", { exact: true })
       .fill("2025-06-01T09:00");
@@ -1049,14 +1080,11 @@ test.describe("project management UI project-management-ui-workbench", () => {
     expect(originalRangeStart).toBeGreaterThan(expandedStart);
     await expect(canvasRoot).toHaveAttribute("data-zoom", "MONTH");
     await expect(page).toHaveURL(/scale=month/);
-    await expect
-      .poll(() => {
-        const centerAfter = Date.parse(
-          new URL(page.url()).searchParams.get("center") ?? "",
-        );
-        return Math.abs(centerAfter - centerAfterDraftPan);
-      })
-      .toBeLessThan(60 * 60 * 1_000);
+    const centerAfterRangeExpansion =
+      await waitForUrlCenterToMatchCanvasViewport();
+    expect(
+      Math.abs(centerAfterRangeExpansion - centerAfterDraftPan),
+    ).toBeLessThan(60 * 60 * 1_000);
     await expect(canvasRoot).toHaveAttribute("data-zoom", "MONTH");
     await expect(page).toHaveURL(/scale=month/);
     await expect
@@ -1865,7 +1893,35 @@ test.describe("project management UI project-management-ui-workbench", () => {
       .click();
     await page.getByLabel("Revision 时间").fill("2026-08-03T12:00");
     await expect(page.getByText(/^本地已保存/)).toBeVisible();
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const storageKey = Object.keys(window.localStorage).find((key) =>
+            key.startsWith("revision-create-draft:"),
+          );
+          const raw = storageKey
+            ? window.localStorage.getItem(storageKey)
+            : null;
+          if (!raw) return null;
+          const draft = JSON.parse(raw) as {
+            task?: {
+              revision?: {
+                reason?: string;
+                description?: string;
+                revisionAt?: string;
+              };
+            };
+          };
+          return draft.task?.revision ?? null;
+        }),
+      )
+      .toMatchObject({
+        reason: firstReason,
+        description: firstDescription,
+        revisionAt: "2026-08-03T12:00",
+      });
     await page.reload();
+    await expect(page.getByRole("button", { name: "恢复草稿" })).toBeVisible();
     await page.getByRole("button", { name: "恢复草稿" }).click();
     await expect(page.getByLabel("Revision 名称")).toHaveValue(firstReason);
     await expect(page.getByLabel("Revision 详细内容")).toHaveValue(

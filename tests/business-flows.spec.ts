@@ -1,3 +1,4 @@
+// @playwright-project ui
 import { expect, test, type Page } from "@playwright/test";
 import { UserRoleType } from "@prisma/client";
 import { handleFeishuCardAction } from "../lib/feishu-card-action-handler";

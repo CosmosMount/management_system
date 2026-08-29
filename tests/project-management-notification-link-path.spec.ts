@@ -1,3 +1,4 @@
+// @playwright-project ui
 import { expect, test } from "@playwright/test";
 import { resolveProjectManagementNotificationLinkPath } from "../lib/project-management/notifications/link-path";
 import type { ProjectManagementNotificationPayload } from "../lib/project-management/notifications/contract";

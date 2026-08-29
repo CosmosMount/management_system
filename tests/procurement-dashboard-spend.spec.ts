@@ -1,3 +1,4 @@
+// @playwright-project ui
 import { expect, test } from "@playwright/test";
 import { buildDashboardChartsData } from "../lib/procurement-dashboard-stats";
 import {

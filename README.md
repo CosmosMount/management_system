@@ -128,7 +128,7 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 |------|------|
 | `DATABASE_URL` | PostgreSQL 连接串，如 `postgresql://postgres:<密码>@localhost:5432/management_system` |
 | `SHADOW_DATABASE_URL` | Prisma migration diff 使用的 shadow 库，建议库名以 `_shadow` 结尾 |
-| `PLAYWRIGHT_DATABASE_URL` | `npm run test:e2e` 的本机 PostgreSQL 凭据/authority 模板。POSIX-only 官方 runner 忽略路径，每次生成随机 target/shadow 和独立 marker，先拥有独立 server 进程组并确认 3003 readiness，再启动另一独立 Playwright CLI 组；两组均证明静默后才按两个精确名称清理。marker 用于防止错误 run/cross-run 和仅凭公开 token 的删除，不是同 UID 或已拥有工作树写权限进程之间的认证边界；调用方不配置 Playwright shadow |
+| `PLAYWRIGHT_DATABASE_URL` | 可选的 `npm run test:e2e` 本机 PostgreSQL 凭据/authority 模板；显式配置时优先，否则 runner 只复用 `DATABASE_URL` 的本机 authority/凭据并忽略其路径。POSIX-only 官方 runner 每次生成随机 target/shadow 和独立 marker，先拥有独立 server 进程组并确认 3003 readiness，再启动另一独立 Playwright CLI 组；两组均证明静默后才按两个精确名称清理。marker 用于防止错误 run/cross-run 和仅凭公开 token 的删除，不是同 UID 或已拥有工作树写权限进程之间的认证边界；调用方不配置 Playwright shadow |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` / `POSTGRES_PORT` | Docker PostgreSQL 用，见 `.env.example` |
 | `AUTH_SECRET` | Auth.js 密钥，可用 `openssl rand -hex 32` 生成 |
 | `FEISHU_APP_ID` | 飞书 OAuth / 通讯录主应用 App ID，也是消息机器人的兼容默认值 |

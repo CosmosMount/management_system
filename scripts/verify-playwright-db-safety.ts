@@ -22,6 +22,7 @@ import {
   assertOfficialPlaywrightEnvironment,
   createOfficialPlaywrightRunContext,
   defaultPlaywrightRunnerDependencies,
+  resolvePlaywrightCredentialSource,
   runOfficialPlaywright,
   spawnControlledPlaywrightChild,
   type OfficialPlaywrightRunContext,
@@ -36,12 +37,7 @@ type ScriptResult = {
   signal: NodeJS.Signals | null;
 };
 
-const credentialSourceUrl = process.env.PLAYWRIGHT_DATABASE_URL?.trim();
-if (!credentialSourceUrl) {
-  throw new Error(
-    "PLAYWRIGHT_DATABASE_URL is required as the credential source for the isolated safety rehearsal",
-  );
-}
+const credentialSourceUrl = resolvePlaywrightCredentialSource(process.env);
 
 function markerRootFiles(): string[] {
   const root = path.join(process.cwd(), ".tmp", "playwright-db-ownership");
@@ -630,7 +626,7 @@ async function main(): Promise<void> {
       {
         ...firstRun.env,
         PLAYWRIGHT_DB_SETUP_MODE: "clone",
-        PLAYWRIGHT_SOURCE_DATABASE_URL: credentialSourceUrl,
+        PLAYWRIGHT_SOURCE_DATABASE_URL: firstRun.ownership.target.url,
       },
       firstRun,
       sentinelDatabaseName,
@@ -692,7 +688,7 @@ async function main(): Promise<void> {
       "scripts/copy-playwright-db-data.ts",
       {
         ...firstRun.env,
-        PLAYWRIGHT_SOURCE_DATABASE_URL: credentialSourceUrl,
+        PLAYWRIGHT_SOURCE_DATABASE_URL: firstRun.ownership.target.url,
       },
     );
     assert.notEqual(cloneResult.exitCode, 0);

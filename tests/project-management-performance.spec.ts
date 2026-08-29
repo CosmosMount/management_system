@@ -1,3 +1,4 @@
+// @playwright-project ui
 import { performance } from "node:perf_hooks";
 import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";

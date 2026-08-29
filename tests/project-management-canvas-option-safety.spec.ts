@@ -1,3 +1,4 @@
+// @playwright-project node-db
 import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { timeCanvasDataToModel } from "../components/project-management/time-canvas/adapter";

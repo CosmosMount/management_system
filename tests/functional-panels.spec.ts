@@ -1,3 +1,4 @@
+// @playwright-project ui
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { prisma } from "../lib/prisma";
 import {
@@ -790,7 +791,7 @@ test.describe("管理员面板", () => {
     });
     try {
       await page.goto(
-        `/admin/accounts?q=${encodeURIComponent(suffix)}`,
+        `/admin/accounts?q=${encodeURIComponent(displayName)}`,
         { waitUntil: "networkidle" },
       );
       await expect(page.getByText("没有符合条件的账号。")).toBeVisible();
@@ -832,7 +833,7 @@ test.describe("管理员面板", () => {
       select: { id: true },
     });
     try {
-      await page.goto(`/admin/accounts?q=${encodeURIComponent(suffix)}`, {
+      await page.goto(`/admin/accounts?q=${encodeURIComponent(displayName)}`, {
         waitUntil: "networkidle",
       });
       const accountsCard = page.getByTestId("accounts-and-roles-card");

@@ -1,3 +1,4 @@
+// @playwright-project node-db
 import { expect, test } from "@playwright/test";
 import { execFile } from "node:child_process";
 import { mkdir, readFile, rm, writeFile } from "fs/promises";

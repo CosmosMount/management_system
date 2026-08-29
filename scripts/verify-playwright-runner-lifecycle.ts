@@ -46,12 +46,14 @@ import {
   defaultPlaywrightRunnerDependencies,
   flattenPlaywrightErrorCauses,
   playwrightSignalExitCode,
+  resolvePlaywrightCredentialSource,
   runOfficialPlaywright,
   spawnControlledPlaywrightChild,
   type PlaywrightChild,
   type PlaywrightRunnerDependencies,
   type PlaywrightSignalSource,
 } from "./playwright-runner";
+import { PLAYWRIGHT_TOPOLOGY_SELECTION_MODE_ENV } from "./playwright-test-topology";
 import {
   PLAYWRIGHT_FEISHU_EGRESS_GUARD_ENV,
   PLAYWRIGHT_FEISHU_EGRESS_GUARD_PATH_ENV,
@@ -232,6 +234,89 @@ function baseDependencies(
   return { ...dependencies, ...overrides };
 }
 
+function testCredentialSourceFallbackAndPrecedence(): void {
+  const fallbackSource =
+    "postgresql://fallback_user:fallback-secret@localhost:5432/development_database";
+  const explicitSource =
+    "postgresql://explicit_user:explicit-secret@127.0.0.1:5432/explicit_template";
+  const fallbackEnvironment: NodeJS.ProcessEnv = {
+    ...process.env,
+    DATABASE_URL: fallbackSource,
+  };
+  delete fallbackEnvironment.PLAYWRIGHT_DATABASE_URL;
+  const missingEnvironment: NodeJS.ProcessEnv = { ...process.env };
+  delete missingEnvironment.DATABASE_URL;
+  delete missingEnvironment.PLAYWRIGHT_DATABASE_URL;
+
+  assert.equal(
+    resolvePlaywrightCredentialSource(fallbackEnvironment),
+    fallbackSource,
+  );
+  assert.equal(
+    resolvePlaywrightCredentialSource({
+      ...fallbackEnvironment,
+      PLAYWRIGHT_DATABASE_URL: explicitSource,
+    }),
+    explicitSource,
+  );
+  assert.throws(
+    () => resolvePlaywrightCredentialSource(missingEnvironment),
+    /DATABASE_URL/,
+  );
+
+  const fallbackContext = createOfficialPlaywrightRunContext(
+    fallbackEnvironment,
+    baseDependencies({ randomBytes: deterministicRandomBytes(30) }),
+  );
+  try {
+    assert.equal(fallbackContext.ownership.target.username, "fallback_user");
+    assert.ok(
+      !fallbackContext.ownership.target.url.includes("development_database"),
+    );
+  } finally {
+    discardRegisteredMarker(
+      process.cwd(),
+      fallbackContext.ownership,
+      fallbackContext.env,
+      fallbackContext.marker,
+    );
+  }
+
+  const explicitContext = createOfficialPlaywrightRunContext(
+    {
+      ...fallbackEnvironment,
+      PLAYWRIGHT_DATABASE_URL: explicitSource,
+    },
+    baseDependencies({ randomBytes: deterministicRandomBytes(31) }),
+  );
+  try {
+    assert.equal(explicitContext.ownership.target.username, "explicit_user");
+    assert.ok(!explicitContext.ownership.target.url.includes("explicit_template"));
+  } finally {
+    discardRegisteredMarker(
+      process.cwd(),
+      explicitContext.ownership,
+      explicitContext.env,
+      explicitContext.marker,
+    );
+  }
+
+  const markerFilesBefore = markerRootFiles();
+  assert.throws(
+    () =>
+      createOfficialPlaywrightRunContext(
+        {
+          ...fallbackEnvironment,
+          PLAYWRIGHT_DATABASE_URL:
+            "postgresql://explicit_user@remote.example/invalid_template",
+        },
+        baseDependencies({ randomBytes: deterministicRandomBytes(32) }),
+      ),
+    /must point to localhost/,
+  );
+  assert.deepEqual(markerRootFiles(), markerFilesBefore);
+}
+
 type EntryResult = {
   exitCode: number | null;
   output: string;
@@ -294,13 +379,26 @@ async function testDangerousCliRejectionAndForcedConfig(): Promise<void> {
     ["-j4"],
     ["--fully-parallel"],
     ["--fully-parallel=true"],
+    ["--reporter", "tests/smoke.spec.ts"],
+    ["--reporter=list"],
+    ["--ui"],
+    ["--ui=true"],
+    ["--ui-host", "127.0.0.1"],
+    ["--ui-host=127.0.0.1"],
+    ["--ui-port", "9323"],
+    ["--ui-port=9323"],
+    ["--browser", "chromium"],
+    ["--browser=chromium"],
+    ["--unknown-option"],
     ["-xcalternate.config.ts"],
     ["-xc", "alternate.config.ts"],
     ["-xj4"],
     ["-xj", "4"],
   ];
   for (const args of dangerousArguments) {
-    let spawnCalls = 0;
+    let markerCreateCalls = 0;
+    let serverSpawnCalls = 0;
+    let playwrightSpawnCalls = 0;
     let cleanupCalls = 0;
     const markerFilesBefore = markerRootFiles();
     await assert.rejects(() =>
@@ -308,17 +406,27 @@ async function testDangerousCliRejectionAndForcedConfig(): Promise<void> {
         { ...process.env, PLAYWRIGHT_DATABASE_URL: credentialSource },
         args,
         baseDependencies({
+          createOwnershipMarker: (...markerArgs) => {
+            markerCreateCalls += 1;
+            return registerMarker(...markerArgs);
+          },
           cleanup: async () => {
             cleanupCalls += 1;
           },
+          spawnServer: () => {
+            serverSpawnCalls += 1;
+            return new FakeChild();
+          },
           spawnPlaywright: () => {
-            spawnCalls += 1;
+            playwrightSpawnCalls += 1;
             return new FakeChild();
           },
         }),
       ),
     );
-    assert.equal(spawnCalls, 0);
+    assert.equal(markerCreateCalls, 0);
+    assert.equal(serverSpawnCalls, 0);
+    assert.equal(playwrightSpawnCalls, 0);
     assert.equal(cleanupCalls, 0);
     assert.deepEqual(markerRootFiles(), markerFilesBefore);
 
@@ -353,6 +461,78 @@ async function testDangerousCliRejectionAndForcedConfig(): Promise<void> {
     "tests/smoke.spec.ts",
     "--project=desktop",
   ]);
+}
+
+async function testUncontrolledPlaywrightEnvironmentRejectsBeforeLifecycle(): Promise<void> {
+  const hostileEnvironments = [
+    ["PWDEBUG", "1"],
+    ["PWPAUSE", "1"],
+    ["PWTEST_WATCH", "1"],
+    ["PWMCP_PROFILES_DIR_FOR_TEST", "/tmp/hostile-profiles"],
+    ["PW_TEST_CONNECT_WS_ENDPOINT", "ws://127.0.0.1:9999/hostile"],
+    ["PW_TEST_CONNECT_HEADERS", "{}"],
+    ["PW_TEST_CONNECT_EXPOSE_NETWORK", "*"],
+    ["PLAYWRIGHT_HTML_REPORT", "hostile-report"],
+    ["PLAYWRIGHT_TEST", "1"],
+    ["PLAYWRIGHT_TEST_BASE_URL", "http://127.0.0.1:9999"],
+  ] as const;
+
+  for (const [environmentName, hostileValue] of hostileEnvironments) {
+    let portCheckCalls = 0;
+    let markerCreateCalls = 0;
+    let serverSpawnCalls = 0;
+    let playwrightSpawnCalls = 0;
+    let cleanupCalls = 0;
+    const markerFilesBefore = markerRootFiles();
+    await assert.rejects(
+      () =>
+        runOfficialPlaywright(
+          {
+            ...process.env,
+            PLAYWRIGHT_DATABASE_URL: credentialSource,
+            [environmentName]: hostileValue,
+          },
+          [],
+          baseDependencies({
+            assertServerPortAvailable: async () => {
+              portCheckCalls += 1;
+            },
+            createOwnershipMarker: (...markerArgs) => {
+              markerCreateCalls += 1;
+              return registerMarker(...markerArgs);
+            },
+            cleanup: async () => {
+              cleanupCalls += 1;
+            },
+            spawnServer: () => {
+              serverSpawnCalls += 1;
+              return new FakeChild();
+            },
+            spawnPlaywright: () => {
+              playwrightSpawnCalls += 1;
+              return new FakeChild();
+            },
+          }),
+        ),
+      new RegExp(environmentName),
+    );
+    assert.equal(portCheckCalls, 0);
+    assert.equal(markerCreateCalls, 0);
+    assert.equal(serverSpawnCalls, 0);
+    assert.equal(playwrightSpawnCalls, 0);
+    assert.equal(cleanupCalls, 0);
+    assert.deepEqual(markerRootFiles(), markerFilesBefore);
+
+    const entryResult = await runTypeScriptEntry(
+      "scripts/run-playwright.ts",
+      [],
+      { ...process.env, [environmentName]: hostileValue },
+    );
+    assert.equal(entryResult.signal, null);
+    assert.notEqual(entryResult.exitCode, 0);
+    assert.ok(entryResult.output.includes(environmentName));
+    assert.deepEqual(markerRootFiles(), markerFilesBefore);
+  }
 }
 
 async function testCloneEntryHardReject(): Promise<void> {
@@ -507,9 +687,15 @@ async function testUniquePairsAndHostileEnvironmentNeutralization(): Promise<voi
       "/tmp/hostile-playwright-feishu-egress-guard.mjs",
     [PLAYWRIGHT_FEISHU_EGRESS_PROBE_OUTPUT_ENV]: "/tmp/hostile-probe.jsonl",
     [PLAYWRIGHT_FEISHU_EGRESS_PROBE_ROLE_ENV]: "hostile",
+    PWDEBUG: "",
+    PW_TEST_CONNECT_EXPOSE_NETWORK: "",
+    PW_TEST_CONNECT_HEADERS: "",
+    PW_TEST_CONNECT_WS_ENDPOINT: "",
+    PLAYWRIGHT_TEST: "",
     PLAYWRIGHT_RUNNER_ENTRY_SIGNAL_SELF_TEST: "SIGINT",
     PLAYWRIGHT_RUNNER_ENTRY_IGNORE_SIGNAL_SELF_TEST: "true",
     PLAYWRIGHT_RUNNER_ENTRY_THROW_SIGNAL_SELF_TEST: "true",
+    [PLAYWRIGHT_TOPOLOGY_SELECTION_MODE_ENV]: "full",
   };
 
   const run = async (byte: number) =>
@@ -561,6 +747,12 @@ async function testUniquePairsAndHostileEnvironmentNeutralization(): Promise<voi
     assert.equal(env.CONFIRM_SEND_FEISHU, "");
     assert.equal(env.PLAYWRIGHT_REUSE_SERVER, "");
     assert.equal(env.PLAYWRIGHT_SKIP_WEBSERVER, "");
+    assert.equal(env.PWDEBUG, undefined);
+    assert.equal(env.PWTEST_WATCH, undefined);
+    assert.equal(env.PW_TEST_CONNECT_EXPOSE_NETWORK, undefined);
+    assert.equal(env.PW_TEST_CONNECT_HEADERS, undefined);
+    assert.equal(env.PW_TEST_CONNECT_WS_ENDPOINT, undefined);
+    assert.equal(env[PLAYWRIGHT_TOPOLOGY_SELECTION_MODE_ENV], "partial");
     assert.equal(env.PLAYWRIGHT_BASE_URL, "http://127.0.0.1:3003");
     assert.equal(env.PLAYWRIGHT_SERVER_PORT, "3003");
     assert.equal(env.NOTIFICATION_DELIVERY_DISABLED, "true");
@@ -857,11 +1049,32 @@ function testMarkerFilesystemSafety(): void {
 function testPublicTokenAndGuardPathCannotForgeContext(): void {
   const dependencies = baseDependencies({ randomBytes: deterministicRandomBytes(8) });
   const context = createOfficialPlaywrightRunContext(
-    { ...process.env, PLAYWRIGHT_DATABASE_URL: credentialSource },
+    {
+      ...process.env,
+      PLAYWRIGHT_DATABASE_URL: credentialSource,
+      PLAYWRIGHT_TEST: "",
+    },
     dependencies,
   );
   try {
+    assert.equal(Object.hasOwn(context.env, "PLAYWRIGHT_TEST"), false);
     assertOfficialPlaywrightEnvironment(context.env);
+    assert.doesNotThrow(() =>
+      assertOfficialPlaywrightEnvironment({
+        ...context.env,
+        PLAYWRIGHT_TEST: "1",
+      }),
+    );
+    for (const hostileValue of ["0", "true", "unexpected"]) {
+      assert.throws(
+        () =>
+          assertOfficialPlaywrightEnvironment({
+            ...context.env,
+            PLAYWRIGHT_TEST: hostileValue,
+          }),
+        /PLAYWRIGHT_TEST/,
+      );
+    }
     const attackerSecret = Buffer.alloc(32, 9).toString("base64url");
     assert.throws(() =>
       dependencies.createOwnershipMarker(
@@ -2079,10 +2292,12 @@ async function main(): Promise<void> {
   let testError: unknown;
   try {
     await testDangerousCliRejectionAndForcedConfig();
+    await testUncontrolledPlaywrightEnvironmentRejectsBeforeLifecycle();
     await testCloneEntryHardReject();
     await testFormerEntryBypassEnvironmentCannotSkipRunner();
     await testUnsupportedPlatformRejectsBeforeMarker();
     await testOccupiedServerPortRejectsBeforeMarker();
+    testCredentialSourceFallbackAndPrecedence();
     await testUniquePairsAndHostileEnvironmentNeutralization();
     await testHostileNodeOptionsNeverExecuteInRealChild();
     testOwnershipAndCredentialValidation();

@@ -33,6 +33,11 @@ import {
   type PlaywrightDatabaseEnvironment,
   type PlaywrightDatabaseOwnership,
 } from "./playwright-db-safety";
+import {
+  PLAYWRIGHT_TOPOLOGY_SELECTION_MODE_ENV,
+  playwrightTopologySelectionMode,
+  type PlaywrightTopologySelectionMode,
+} from "./playwright-test-topology";
 
 const CONTROLLED_BASE_URL = "http://127.0.0.1:3003";
 const CONTROLLED_SERVER_PORT = "3003";
@@ -44,15 +49,47 @@ const SERVER_READY_POLL_MS = 100;
 const SERVER_PROBE_TIMEOUT_MS = 2_000;
 const PROCESS_TREE_POLL_MS = 25;
 const DANGEROUS_LONG_OPTIONS = [
+  "--browser",
   "--config",
-  "--workers",
   "--fully-parallel",
+  "--reporter",
+  "--ui",
+  "--ui-host",
+  "--ui-port",
+  "--workers",
 ] as const;
 const FORMER_ENTRY_BYPASS_ENVIRONMENTS = [
   "PLAYWRIGHT_RUNNER_ENTRY_SIGNAL_SELF_TEST",
   "PLAYWRIGHT_RUNNER_ENTRY_IGNORE_SIGNAL_SELF_TEST",
   "PLAYWRIGHT_RUNNER_ENTRY_THROW_SIGNAL_SELF_TEST",
 ] as const;
+const REPOSITORY_CONTROLLED_PLAYWRIGHT_ENVIRONMENTS = new Set([
+  "PLAYWRIGHT_ADMIN_STORAGE_STATE",
+  "PLAYWRIGHT_BASE_URL",
+  "PLAYWRIGHT_CONFIRM_RECREATE_DB",
+  "PLAYWRIGHT_CONFIRM_RECREATE_SHADOW_DB",
+  "PLAYWRIGHT_DATABASE_URL",
+  "PLAYWRIGHT_DB_OWNERSHIP_MARKER",
+  "PLAYWRIGHT_DB_OWNERSHIP_SECRET",
+  "PLAYWRIGHT_DB_OWNERSHIP_TOKEN",
+  "PLAYWRIGHT_DB_SETUP_MODE",
+  "PLAYWRIGHT_NORMAL_STORAGE_STATE",
+  "PLAYWRIGHT_REUSE_SERVER",
+  "PLAYWRIGHT_SERVER_PORT",
+  "PLAYWRIGHT_SHADOW_DATABASE_URL",
+  "PLAYWRIGHT_SKIP_WEBSERVER",
+  "PLAYWRIGHT_SOURCE_DATABASE_URL",
+  "PLAYWRIGHT_STORAGE_STATE",
+  "PLAYWRIGHT_USE_STORAGE_NORMAL",
+  PLAYWRIGHT_FEISHU_EGRESS_GUARD_ENV,
+  PLAYWRIGHT_FEISHU_EGRESS_GUARD_PATH_ENV,
+  PLAYWRIGHT_FEISHU_EGRESS_ORIGINAL_NODE_OPTIONS_ENV,
+  PLAYWRIGHT_FEISHU_EGRESS_PROBE_OUTPUT_ENV,
+  PLAYWRIGHT_FEISHU_EGRESS_PROBE_ROLE_ENV,
+  PLAYWRIGHT_FEISHU_EGRESS_RUN_ID_ENV,
+  PLAYWRIGHT_TOPOLOGY_SELECTION_MODE_ENV,
+  ...FORMER_ENTRY_BYPASS_ENVIRONMENTS,
+]);
 
 type ForwardedSignal = (typeof FORWARDED_SIGNALS)[number];
 type TimerHandle = ReturnType<typeof setTimeout>;
@@ -208,7 +245,7 @@ export function assertSafePlaywrightArguments(args: string[]): void {
       (arg.startsWith("-") && !arg.startsWith("--"))
     ) {
       throw new Error(
-        "Playwright short options and config, worker, or fully-parallel overrides are disabled",
+        "Playwright short options and config, worker, reporter, UI, browser, or fully-parallel overrides are disabled",
       );
     }
   }
@@ -234,11 +271,48 @@ function assertSupportedPlatform(platform: NodeJS.Platform): void {
   }
 }
 
+function isUncontrolledPlaywrightEnvironmentName(name: string): boolean {
+  if (name.startsWith("PLAYWRIGHT_")) {
+    return !REPOSITORY_CONTROLLED_PLAYWRIGHT_ENVIRONMENTS.has(name);
+  }
+  return name.startsWith("PWDEBUG") ||
+    name === "PWPAUSE" ||
+    name.startsWith("PWTEST_") ||
+    name.startsWith("PWMCP_") ||
+    name.startsWith("PW_");
+}
+
+export function assertNoUncontrolledPlaywrightEnvironment(
+  env: { [key: string]: string | undefined },
+): void {
+  const hostileNames = Object.entries(env)
+    .filter(
+      ([name, value]) =>
+        Boolean(value) && isUncontrolledPlaywrightEnvironmentName(name),
+    )
+    .map(([name]) => name)
+    .sort();
+  if (hostileNames.length > 0) {
+    throw new Error(
+      `Inherited Playwright environment variables must be unset: ${hostileNames.join(", ")}`,
+    );
+  }
+}
+
 export function assertOfficialPlaywrightEnvironment(
   env: PlaywrightDatabaseEnvironment,
   cwd = process.cwd(),
 ): PlaywrightDatabaseOwnership {
   assertSupportedPlatform(process.platform);
+  const playwrightTest = env.PLAYWRIGHT_TEST;
+  if (playwrightTest && playwrightTest !== "1") {
+    throw new Error("PLAYWRIGHT_TEST must be unset or exactly 1");
+  }
+  const environmentWithoutWorkerReloadSentinel = { ...env };
+  delete environmentWithoutWorkerReloadSentinel.PLAYWRIGHT_TEST;
+  assertNoUncontrolledPlaywrightEnvironment(
+    environmentWithoutWorkerReloadSentinel,
+  );
   assertPlaywrightRecreateOnlyEnvironment(env);
   const ownership = resolvePlaywrightDatabaseOwnership(env);
   assertPlaywrightDatabaseConfirmations(ownership, env);
@@ -258,6 +332,17 @@ export function assertOfficialPlaywrightEnvironment(
     throw new Error(
       "NOTIFICATION_DELIVERY_DISABLED=true is required for Playwright",
     );
+  }
+  if (
+    env[PLAYWRIGHT_TOPOLOGY_SELECTION_MODE_ENV] !== "full" &&
+    env[PLAYWRIGHT_TOPOLOGY_SELECTION_MODE_ENV] !== "partial"
+  ) {
+    throw new Error(
+      `${PLAYWRIGHT_TOPOLOGY_SELECTION_MODE_ENV}=full|partial is required for Playwright`,
+    );
+  }
+  if (env.PWTEST_WATCH?.trim()) {
+    throw new Error("PWTEST_WATCH must be unset for Playwright");
   }
   if (env[PLAYWRIGHT_FEISHU_EGRESS_GUARD_ENV] !== "true") {
     throw new Error("The Playwright Feishu egress guard must be enabled");
@@ -309,13 +394,25 @@ export function createOfficialPlaywrightEnvironment(
   sourceEnv: NodeJS.ProcessEnv,
   ownership: PlaywrightDatabaseOwnership,
   marker: PlaywrightOwnershipMarker,
-  options: { cwd: string; runId: string },
+  options: {
+    cwd: string;
+    runId: string;
+    selectionMode: PlaywrightTopologySelectionMode;
+  },
 ): NodeJS.ProcessEnv {
+  assertNoUncontrolledPlaywrightEnvironment(sourceEnv);
   const env: NodeJS.ProcessEnv = { ...sourceEnv };
+  for (const environmentName of Object.keys(env)) {
+    if (isUncontrolledPlaywrightEnvironmentName(environmentName)) {
+      delete env[environmentName];
+    }
+  }
   delete env.NO_COLOR;
   delete env.FORCE_COLOR;
   delete env[PLAYWRIGHT_FEISHU_EGRESS_PROBE_OUTPUT_ENV];
   delete env[PLAYWRIGHT_FEISHU_EGRESS_PROBE_ROLE_ENV];
+  delete env.PLAYWRIGHT_TEST;
+  delete env.PWTEST_WATCH;
   for (const environmentName of FORMER_ENTRY_BYPASS_ENVIRONMENTS) {
     delete env[environmentName];
   }
@@ -350,6 +447,7 @@ export function createOfficialPlaywrightEnvironment(
   env.PLAYWRIGHT_SHADOW_DATABASE_URL = ownership.shadow.url;
   env.PLAYWRIGHT_SKIP_WEBSERVER = "";
   env.PLAYWRIGHT_SOURCE_DATABASE_URL = "";
+  env[PLAYWRIGHT_TOPOLOGY_SELECTION_MODE_ENV] = options.selectionMode;
   env.SHADOW_DATABASE_URL = ownership.shadow.url;
   env[PLAYWRIGHT_FEISHU_EGRESS_GUARD_ENV] = "true";
   env[PLAYWRIGHT_FEISHU_EGRESS_GUARD_PATH_ENV] = path.resolve(
@@ -383,6 +481,18 @@ export function createOfficialPlaywrightServerEnvironment(
   return serverEnv;
 }
 
+export function resolvePlaywrightCredentialSource(
+  sourceEnv: NodeJS.ProcessEnv,
+): string {
+  const explicitCredentialSource = sourceEnv.PLAYWRIGHT_DATABASE_URL?.trim();
+  if (explicitCredentialSource) return explicitCredentialSource;
+  const fallbackCredentialSource = sourceEnv.DATABASE_URL?.trim();
+  if (fallbackCredentialSource) return fallbackCredentialSource;
+  throw new Error(
+    "PLAYWRIGHT_DATABASE_URL or DATABASE_URL is required as a local PostgreSQL credential source",
+  );
+}
+
 export function createOfficialPlaywrightRunContext(
   sourceEnv: NodeJS.ProcessEnv,
   dependencies: Pick<
@@ -393,13 +503,10 @@ export function createOfficialPlaywrightRunContext(
     | "discardOwnershipMarker"
     | "randomBytes"
   >,
+  selectionMode: PlaywrightTopologySelectionMode = "full",
 ): OfficialPlaywrightRunContext {
-  const credentialSourceUrl = sourceEnv.PLAYWRIGHT_DATABASE_URL?.trim();
-  if (!credentialSourceUrl) {
-    throw new Error(
-      "PLAYWRIGHT_DATABASE_URL is required as a local PostgreSQL credential source",
-    );
-  }
+  assertNoUncontrolledPlaywrightEnvironment(sourceEnv);
+  const credentialSourceUrl = resolvePlaywrightCredentialSource(sourceEnv);
   const token = generatePlaywrightDatabaseOwnershipToken(
     dependencies.randomBytes,
   );
@@ -426,6 +533,7 @@ export function createOfficialPlaywrightRunContext(
       {
         cwd: dependencies.cwd,
         runId: dependencies.createRunId(),
+        selectionMode,
       },
     );
     return { env, marker, ownership };
@@ -792,10 +900,13 @@ export async function runOfficialPlaywright(
 ): Promise<PlaywrightRunnerResult> {
   assertSupportedPlatform(dependencies.platform);
   assertSafePlaywrightArguments(args);
+  assertNoUncontrolledPlaywrightEnvironment(sourceEnv);
+  const selectionMode = playwrightTopologySelectionMode(args);
   await dependencies.assertServerPortAvailable();
   const { env, marker, ownership } = createOfficialPlaywrightRunContext(
     sourceEnv,
     dependencies,
+    selectionMode,
   );
 
   const processes: ControlledChild[] = [];

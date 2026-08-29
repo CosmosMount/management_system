@@ -1,3 +1,4 @@
+// @playwright-project node-db
 import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
@@ -152,8 +153,7 @@ function expectSuccessfulReport(report: RehearsalReport): void {
 }
 
 test.describe("S10 release readiness", () => {
-  test("release tooling fails closed before opening a database", async ({}, testInfo) => {
-    test.skip(testInfo.project.name !== "desktop", "operational safety runs once");
+  test("release tooling fails closed before opening a database", async () => {
     const result = spawnSync(
       path.join(process.cwd(), "node_modules", ".bin", "tsx"),
       ["scripts/project-management-release-rehearsal.ts"],
@@ -174,8 +174,7 @@ test.describe("S10 release readiness", () => {
     );
   });
 
-  test("empty schema, two shared snapshot releases, database and upload restore all reconcile", async ({}, testInfo) => {
-    test.skip(testInfo.project.name !== "desktop", "release rehearsal runs once");
+  test("empty schema, two shared snapshot releases, database and upload restore all reconcile", async () => {
     test.setTimeout(600_000);
     const uploadSource = await mkdtemp(path.join(os.tmpdir(), "pm-uat-upload-"));
     const openId = `ou_release_${randomUUID()}`;
@@ -220,8 +219,7 @@ test.describe("S10 release readiness", () => {
     }
   });
 
-  test("static release gate excludes legacy contracts and direct sends from domain code", async ({}, testInfo) => {
-    test.skip(testInfo.project.name !== "desktop", "static release gate runs once");
+  test("static release gate excludes legacy contracts and direct sends from domain code", async () => {
     const schema = await readFile(
       path.join(process.cwd(), "prisma", "schema.prisma"),
       "utf8",

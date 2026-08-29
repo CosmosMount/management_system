@@ -1,3 +1,4 @@
+// @playwright-project node-db
 import { expect, test } from "@playwright/test";
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";

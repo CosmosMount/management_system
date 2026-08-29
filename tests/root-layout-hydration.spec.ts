@@ -1,3 +1,4 @@
+// @playwright-project ui
 import { expect, test } from "@playwright/test";
 
 test("根布局容忍浏览器扩展在 hydration 前注入 html 属性", async ({ page }) => {

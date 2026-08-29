@@ -1,3 +1,4 @@
+// @playwright-project node-db
 import { expect, test } from "@playwright/test";
 import type { UserRoleRecord } from "../lib/permissions-client";
 import {

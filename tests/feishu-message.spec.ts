@@ -1,3 +1,4 @@
+// @playwright-project node-db
 import { expect, test } from "@playwright/test";
 import { sendFeishuDirectMessage } from "../lib/feishu-message";
 import { sendTrackedProcurementCardKitDm } from "../lib/feishu-procurement-card-sync";

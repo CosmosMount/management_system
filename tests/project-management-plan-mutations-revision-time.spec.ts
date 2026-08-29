@@ -1,3 +1,4 @@
+// @playwright-project node-db
 import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { activateTask, cancelRevision, createRevision } from "../lib/project-management/application/lifecycle-service";

@@ -1,3 +1,4 @@
+// @playwright-project node-db
 import { expect, test } from "@playwright/test";
 import { logger, withActionLogging } from "../lib/logger";
 import { withLogContext } from "../lib/log-context";

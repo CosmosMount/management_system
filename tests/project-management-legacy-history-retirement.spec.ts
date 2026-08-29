@@ -1,3 +1,4 @@
+// @playwright-project node-db
 import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import {
@@ -17,11 +18,7 @@ const MIGRATIONS_DIR = path.join(process.cwd(), "prisma/migrations");
 const RETIREMENT_MIGRATION =
   "20260814120000_retire_project_management_legacy_history";
 
-test("legacy history retirement archives old values, blocks active roles and reaches final schema without notifications", async ({}, testInfo) => {
-  test.skip(
-    testInfo.project.name !== "desktop",
-    "数据库迁移回归只需在隔离数据库执行一次",
-  );
+test("legacy history retirement archives old values, blocks active roles and reaches final schema without notifications", async () => {
   test.setTimeout(300_000);
   const sourceUrl = localTestDatabaseUrl();
   const sourceDatabaseName = sourceUrl.pathname.replace(/^\//, "");

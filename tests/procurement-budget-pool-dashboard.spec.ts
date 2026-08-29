@@ -1,3 +1,4 @@
+// @playwright-project ui
 import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import * as XLSX from "xlsx";

@@ -1,3 +1,4 @@
+// @playwright-project node-db
 import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import {
@@ -20,8 +21,7 @@ const ACTIVE_RECIPIENT_OPEN_IDS = [
   "ou_outbox_wrong_bot",
   "ou_outbox_link_approval",
 ] as const;
-const originalFeedbackRecipientResolver =
-  feedbackNotificationChannel.resolveRecipientPlan;
+let originalFeedbackRecipientResolver: typeof feedbackNotificationChannel.resolveRecipientPlan;
 let revisionFixtureAdministratorAccountId: string | null = null;
 const revisionFixtureTaskIds: string[] = [];
 
@@ -52,6 +52,11 @@ test.describe("notification outbox channel adapters", () => {
   let authAppIds: string[];
   let directMessageBodies: Array<Record<string, unknown>>;
   let cardKitCards: Array<Record<string, unknown>>;
+
+  test.beforeAll(() => {
+    originalFeedbackRecipientResolver =
+      feedbackNotificationChannel.resolveRecipientPlan;
+  });
 
   test.beforeEach(async () => {
     assertTestDatabase();

@@ -1,3 +1,4 @@
+// @playwright-project ui
 import { expect, test, type Page } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../lib/prisma";

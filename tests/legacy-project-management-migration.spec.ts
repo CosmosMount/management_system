@@ -1,3 +1,4 @@
+// @playwright-project node-db
 import { expect, test } from "@playwright/test";
 import { Prisma } from "@prisma/client";
 import { spawnSync } from "node:child_process";
