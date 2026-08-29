@@ -14,6 +14,30 @@
 
 全功能环境至少准备申请人、车组组长、技术组组长、超管和报销员五类账号；采购各状态、待处理/处理中/已关闭反馈、多个 Task/Segment 状态、部分失败 outbox 与迁移前 fixture。所有写入场景必须使用 runner 创建的随机 `_test` PostgreSQL 和测试上传目录。
 
+### 自动化测试定义清单
+
+截至 2026-08-29，`tests/` 有两类可执行测试定义：2 个 `tests/*.node.ts` 文件（7 个 `node:test` 用例）和 74 个由 Playwright 收集的 `tests/*.spec.ts` 文件。文件清单按领域归类如下；Playwright 文件名省略统一的 `tests/` 前缀和 `.spec.ts` 后缀，新增、移动或删除测试时必须同步更新本节。
+
+- **Node / 项目管理展示契约（5 个用例）**：`project-management-recent-activity-formatter.node.ts`。
+- **Node / Composer 浏览器存储契约（2 个用例）**：`task-composer-legacy-draft-tombstone.node.ts`。
+- **Playwright / 跨领域、基础设施与冒烟（10 个 spec）**：`business-flows`、`entity-picker`、`form-field-error-mapping`、`functional-panels`、`fuzzy-search`、`logger`、`next-image-config`、`root-layout-hydration`、`security-and-lifecycle`、`smoke`。
+- **Playwright / 账号与管理员（4 个 spec）**：`account-management`、`admin-account-options`、`feishu-user-sync-action-result`、`feishu-user-sync`。
+- **Playwright / 采购、报销与反馈写入（12 个 spec）**：`inactive-person-procurement-safety`、`processing-vendor-hook-races`、`procurement-budget-import-atomicity`、`procurement-budget-pool-dashboard`、`procurement-dashboard-spend`、`procurement-form-accessibility`、`procurement-import-dialog-races`、`procurement-notify-approver`、`procurement-pending-orders`、`procurement-shell`、`procurement-teacher-email`、`procurement-upload-atomicity`。
+- **Playwright / 飞书与通知（7 个 spec）**：`feishu-boundaries`、`feishu-delivery-guard`、`feishu-message`、`feishu-procurement-card-stage`、`feishu-procurement-confirm-card`、`notification-outbox-adapters`、`notification-user-facing-copy`。
+- **Playwright / 项目管理、迁移与发布（41 个 spec）**：`global-time-markers-ui`、`global-time-markers`、`legacy-project-management-migration`、`project-access-status-removal-migration`、`project-establishment`、`project-management-canvas-adaptive-loading`、`project-management-canvas-option-safety`、`project-management-canvas-route-boundaries`、`project-management-canvas-scope-permissions`、`project-management-collaboration`、`project-management-legacy-history-retirement`、`project-management-lifecycle`、`project-management-notification-link-path`、`project-management-p1`、`project-management-performance`、`project-management-plan-mutations-active`、`project-management-plan-mutations-concurrency`、`project-management-plan-mutations-draft`、`project-management-plan-mutations-revision-time`、`project-management-project-updates`、`project-management-resource-removal-migration`、`project-management-s10-release`、`project-management-s2-migration`、`project-management-s3-shell`、`project-management-s3-time-canvas`、`project-management-s8`、`project-management-s9-cron`、`project-management-segments`、`project-management-time-segment-allocation`、`project-management-ui-composer`、`project-management-ui-resource-planner`、`project-management-ui-routes-responsive`、`project-management-ui-workbench`、`revision-time-marker-migration`、`single-task-approval-migration`、`task-access-atomic-deploy`、`task-access-migration`、`task-approval-notification-repair`、`termination-review-migration`、`work-segment-role-node-removal-migration`、`work-segment-schema-drift-repair`。
+
+Playwright 当前只配置两个 project：`desktop`（Desktop Chrome，`1440x1000`）和 `mobile`（Pixel 5）。默认情况下每个 spec 都会在两个 project 各收集一次；`project-management-legacy-history-retirement` 与 `project-management-s10-release` 的用例只在 desktop 执行，`project-management-performance` 还需显式设置 `PM_RUN_SCALE_TESTS=true` 且只在 desktop 执行。`project-management-collaboration`、`project-management-ui-composer` 和 `project-establishment` 另有少量用例通过 `test.skip` 只执行一次。认证与管理员 smoke 分别受 `PLAYWRIGHT_STORAGE_STATE` 和 `PLAYWRIGHT_ADMIN_STORAGE_STATE` 控制。除此之外，数据库/领域规格目前也会随两个 project 重复收集；执行拓扑的拆分不属于本阶段基线。
+
+Playwright 数据库 harness 另有两个独立验证入口：`npm run test:playwright-db-lifecycle` 负责不连接数据库的 runner 生命周期回归，`npm run test:playwright-db-safety` 负责真实随机 PostgreSQL target/shadow 的安全演练；二者不属于上述 74 个 spec，也不会由 `test:node` 重复执行。2026-08-29 使用官方 runner 执行 `--list` 的收集基线为 934 个 project-test（desktop 467、mobile 467，共 74 个文件），命令退出 0、`notificationDeliveryDisabled=true`，随机 target/shadow 清理后残留为 0。该数字只证明测试收集成功，不代表 934 个用例已经执行通过。
+
+用以下命令复核文件层基线和 Playwright 实际收集结果；Playwright 列表仍必须走官方 runner 和随机隔离数据库，不能直接调用 `playwright test` 绕过安全门禁：
+
+```bash
+rg --files tests | sort | rg '\.(node|spec)\.ts$'
+npm run test:node
+PLAYWRIGHT_DATABASE_URL="postgresql://.../credential_template" npm run test:e2e -- --list
+```
+
 ## 测试前准备
 
 ### 环境
@@ -130,13 +154,19 @@ await browser.close();
 
 ## 基础代码测试
 
-每次提交前至少执行：
+Node 测试定向开发时可单独执行：
+
+```bash
+npm run test:node
+```
+
+每次提交前至少执行统一入口（其中已经包含一次 Node 测试，不需要再重复执行）：
 
 ```bash
 npm run check
 ```
 
-`npm run check` 会依次执行 Prisma validate、Prisma generate + TypeScript（含 `noUnusedLocals/noUnusedParameters`）、脚本 TypeScript、源码依赖门禁、全量 ESLint（含 Playwright tests）和 `git diff --check`。源码依赖门禁也可单独运行 `npm run check:dependencies`；它会拒绝 `components/`/`lib/` 中没有已解释入口的模块、项目管理服务端反向依赖客户端、outbox 核心依赖业务实现，以及浏览器安全契约导入 Prisma/Node/server-only 实现。数据库或生产构建相关改动再额外执行：
+`npm run test:node` 会先运行纯 synthetic 安全 verifier，再自动发现、排序并只执行一次当前全部 `tests/*.node.ts`；任一验证失败、用例失败或没有匹配文件都会非零退出。Node runner 会把五个数据库 URL 变量固定为空值，防止测试随后通过 `dotenv/config` 从仓库 `.env` 回填；同时按大小写不敏感规则清除继承的 Playwright、SMTP、dotenv config、数据库及通知/邮件/Node guard 变量，重建仅含仓库 Feishu egress guard 的 `NODE_OPTIONS`，并强制关闭通知与邮件投递。verifier 通过真实 `tsx scripts/run-node-tests.ts` CLI 和多文件 synthetic 工作区覆盖确定性排序、自动发现、零匹配、空格路径、普通失败码、大小写混合 hostile env、可移植信号映射与 fallback；POSIX 还由受监督 runner 子进程覆盖默认信号重触发和退出码 fallback。另以真实 `PLAYWRIGHT_DATABASE_URL=.../soft_bypass_test` 证明底层 `{ ignoreDeliveryDisabled: true }` 虽可放行，preload 仍会让 `fetch`、`node:http`、`node:https` 在建连前以 `PLAYWRIGHT_FEISHU_EGRESS_BLOCKED` 失败。当前 7 个业务用例不启动浏览器、不连接测试数据库。`npm run check` 已包含一次 `test:node`，并依次执行 Prisma validate、Prisma generate + TypeScript（含 `noUnusedLocals/noUnusedParameters`）、脚本 TypeScript、Node 测试、源码依赖门禁、全量 ESLint（含 Playwright tests）和 `git diff --check`。源码依赖门禁也可单独运行 `npm run check:dependencies`；它会拒绝 `components/`/`lib/` 中没有已解释入口的模块、项目管理服务端反向依赖客户端、outbox 核心依赖业务实现，以及浏览器安全契约导入 Prisma/Node/server-only 实现。数据库或生产构建相关改动再额外执行：
 
 ```bash
 DATABASE_URL="postgresql://..." npm run db:deploy
