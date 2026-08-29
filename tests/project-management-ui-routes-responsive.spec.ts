@@ -875,28 +875,36 @@ test.describe("project management UI project-management-ui-routes-responsive", (
     ).toBe(true);
   });
 
-  test("action inbox loads more, retries failures and limits the dashboard preview", async ({
+  test("action inbox recovers invalid cursors, retries network failures and limits the dashboard preview", async ({
     context,
     page,
     baseURL,
   }) => {
-    test.setTimeout(90_000);
+    test.setTimeout(120_000);
+    const pageErrors: string[] = [];
+    const consoleErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    page.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(message.text());
+    });
     const user = await createAccountPerson(`S8 Inbox UI ${randomUUID()}`);
     const baseTime = Date.now() - 60 * 60_000;
     const longContent = "超长待办内容".repeat(80);
+    const segments = Array.from({ length: 55 }, (_, index) => ({
+      id: randomUUID(),
+      personId: user.person.id,
+      type: "PLANNED" as const,
+      status: "PENDING_CONFIRMATION" as const,
+      startAt: new Date(baseTime + index * 60_000),
+      endAt: new Date(baseTime + (index + 1) * 60_000),
+      content:
+        index === 0
+          ? longContent
+          : `分页待办 ${String(index + 1).padStart(2, "0")}`,
+      createdByAccountId: user.account.id,
+    }));
     await prisma.workSegment.createMany({
-      data: Array.from({ length: 55 }, (_, index) => ({
-        personId: user.person.id,
-        type: "PLANNED" as const,
-        status: "PENDING_CONFIRMATION" as const,
-        startAt: new Date(baseTime + index * 60_000),
-        endAt: new Date(baseTime + (index + 1) * 60_000),
-        content:
-          index === 0
-            ? longContent
-            : `分页待办 ${String(index + 1).padStart(2, "0")}`,
-        createdByAccountId: user.account.id,
-      })),
+      data: segments,
     });
     await loginAsTestUser(context, baseURL, {
       openId: user.openId,
@@ -912,28 +920,85 @@ test.describe("project management UI project-management-ui-routes-responsive", (
       inbox.getByText("已加载 50 / 55", { exact: true }),
     ).toBeVisible();
 
-    let failedOnce = false;
-    await page.route("**/progress/approvals", async (route) => {
-      if (!failedOnce && route.request().method() === "POST") {
-        failedOnce = true;
-        await route.abort("failed");
-        return;
-      }
-      await route.continue();
+    const retiredNonAnchor = segments[0]!;
+    await prisma.workSegment.update({
+      where: { id: retiredNonAnchor.id },
+      data: { status: "CONFIRMED" },
     });
+    await inbox.getByRole("button", { name: "加载更多" }).click();
+    await expect(inbox.getByTestId("action-inbox-item")).toHaveCount(55);
+    await expect(inbox.getByText("全部 55 项", { exact: true })).toBeVisible();
+    await expect(
+      inbox.getByText("已加载 55 / 55", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      inbox.getByText("已加载全部 55 项", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      inbox.getByText(retiredNonAnchor.content, { exact: true }),
+    ).toBeVisible();
+    expect(
+      new Set(
+        await inbox
+          .getByRole("link", { name: /^确认投入：/ })
+          .evaluateAll((links) =>
+            links.map((link) => link.getAttribute("aria-label")),
+          ),
+      ).size,
+    ).toBe(55);
+
+    await page.reload();
+    await expect(inbox.getByTestId("action-inbox-item")).toHaveCount(50);
+    await expect(inbox.getByText("全部 54 项", { exact: true })).toBeVisible();
+    await expect(
+      inbox.getByText("已加载 50 / 54", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      inbox.getByText(retiredNonAnchor.content, { exact: true }),
+    ).toHaveCount(0);
+
+    const staleAnchor = segments[50]!;
+    await prisma.workSegment.update({
+      where: { id: staleAnchor.id },
+      data: { status: "CONFIRMED" },
+    });
+    const invalidCursorResponse = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().includes("/progress/approvals"),
+    );
     const loadMore = inbox.getByRole("button", { name: "加载更多" });
     await loadMore.focus();
     await expect(loadMore).toBeFocused();
     await page.keyboard.press("Enter");
-    await expect(inbox.getByRole("alert")).toContainText(
-      "网络异常，请稍后重试",
+    const actionResponse = await invalidCursorResponse;
+    const actionResponseBytes = await actionResponse.body();
+    expect(actionResponse.status()).toBe(200);
+    for (const sensitiveAscii of [
+      "ZodError",
+      "ProjectManagementServiceError",
+      '"stack"',
+      "node_modules",
+      "action-inbox-queries.ts",
+    ]) {
+      expect(
+        actionResponseBytes.includes(Buffer.from(sensitiveAscii, "ascii")),
+        `Flight response leaked ${sensitiveAscii}`,
+      ).toBe(false);
+    }
+    await expect(inbox.getByRole("alert")).toHaveText(
+      "加载失败：分页游标无效或已不再匹配当前待办队列",
     );
-    await inbox.getByRole("button", { name: "重试加载" }).click();
-    await expect(inbox.getByTestId("action-inbox-item")).toHaveCount(55);
+    await expect(inbox.getByTestId("action-inbox-item")).toHaveCount(50);
     await expect(
-      inbox.getByText("已加载全部 55 项", { exact: true }),
+      inbox.getByText(staleAnchor.content, { exact: true }),
     ).toBeVisible();
-    await expectHealthyPage(page);
+    await expect(
+      inbox.getByRole("button", { name: "重新加载队列" }),
+    ).toBeVisible();
+    await expect(
+      inbox.getByRole("button", { name: "重试加载" }),
+    ).toHaveCount(0);
     expect(
       await page.evaluate(
         () =>
@@ -942,6 +1007,62 @@ test.describe("project management UI project-management-ui-routes-responsive", (
       ),
     ).toBe(true);
 
+    await inbox.getByRole("button", { name: "重新加载队列" }).click();
+    await expect(inbox.getByRole("alert")).toHaveCount(0);
+    await expect(inbox.getByTestId("action-inbox-item")).toHaveCount(50);
+    await expect(
+      inbox.getByText(staleAnchor.content, { exact: true }),
+    ).toHaveCount(0);
+    await expect(inbox.getByText("全部 53 项", { exact: true })).toBeVisible();
+    await expect(
+      inbox.getByText("已加载 50 / 53", { exact: true }),
+    ).toBeVisible();
+
+    let failedOnce = false;
+    const abortFirstLoadMore = async (
+      route: import("@playwright/test").Route,
+    ) => {
+      if (!failedOnce && route.request().method() === "POST") {
+        failedOnce = true;
+        await route.abort("failed");
+        return;
+      }
+      await route.continue();
+    };
+    await page.route("**/progress/approvals", abortFirstLoadMore);
+    await inbox.getByRole("button", { name: "加载更多" }).click();
+    await expect(inbox.getByRole("alert")).toContainText(
+      "网络异常，请稍后重试",
+    );
+    await expect(inbox.getByTestId("action-inbox-item")).toHaveCount(50);
+    await page.unroute("**/progress/approvals", abortFirstLoadMore);
+    await inbox.getByRole("button", { name: "重试加载" }).click();
+    await expect(inbox.getByTestId("action-inbox-item")).toHaveCount(53);
+    await expect(
+      inbox.getByText("已加载全部 53 项", { exact: true }),
+    ).toBeVisible();
+    const actionLabels = await inbox
+      .getByRole("link", { name: /^确认投入：/ })
+      .evaluateAll((links) =>
+        links.map((link) => link.getAttribute("aria-label")),
+      );
+    expect(actionLabels).toEqual(
+      segments
+        .filter(
+          (segment) =>
+            segment.id !== retiredNonAnchor.id && segment.id !== staleAnchor.id,
+        )
+        .map((segment) => `确认投入：${segment.content}`),
+    );
+    expect(new Set(actionLabels).size).toBe(actionLabels.length);
+    await expectHealthyPage(page);
+    expect(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth <=
+          document.documentElement.clientWidth + 1,
+      ),
+    ).toBe(true);
     await page.goto("/progress");
     await expect(
       page.getByTestId("action-inbox").getByTestId("action-inbox-item"),
@@ -954,5 +1075,15 @@ test.describe("project management UI project-management-ui-routes-responsive", (
           document.documentElement.clientWidth + 1,
       ),
     ).toBe(true);
+    expect(pageErrors).toEqual([]);
+    expect(
+      consoleErrors.filter(
+        (message) => !message.includes("net::ERR_FAILED"),
+      ),
+    ).toEqual([]);
+    expect(
+      consoleErrors.filter((message) => message.includes("net::ERR_FAILED"))
+        .length,
+    ).toBeLessThanOrEqual(1);
   });
 });

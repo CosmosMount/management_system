@@ -59,14 +59,14 @@ export function encodeActionInboxCursor(
   generatedAt: Date,
   positions: ActionInboxCursorPositions,
 ): string {
-  const core = {
+  const core = cursorCoreSchema.parse({
     v: 1,
     kind: "ACTION_INBOX",
     accountId: actor.accountId,
     personId: actor.personId,
     generatedAt: generatedAt.toISOString(),
     positions,
-  } satisfies ActionInboxCursor;
+  });
   return Buffer.from(
     JSON.stringify({ core, signature: sign(core) }),
   ).toString("base64url");

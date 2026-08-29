@@ -1,6 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
+import {
+  actionInboxLoadRecovery,
+  appendActionInboxPage,
+} from "../components/project-management/action-inbox-state";
 import { prisma } from "../lib/prisma";
+import type { ProjectManagementActionFailure } from "../lib/project-management/application/action-result";
 import {
   runMilestoneDeadlineScan,
   runProjectManagementIntegrityScan,
@@ -14,7 +19,11 @@ import {
 import { updateNotificationPreference } from "../lib/project-management/application/notification-preference-service";
 import { toProjectManagementServiceError } from "../lib/project-management/application/errors";
 import type { ProjectManagementActor } from "../lib/project-management/identity";
-import { getActionInbox } from "../lib/project-management/queries/action-inbox-queries";
+import {
+  getActionInbox,
+  type ActionInboxItem,
+  type ActionInboxPage,
+} from "../lib/project-management/queries/action-inbox-queries";
 import { getMyWorkDashboard } from "../lib/project-management/queries/dashboard-queries";
 import {
   getPersonalDueSegments,
@@ -254,30 +263,92 @@ test.describe("project management S8 dashboard and notifications", () => {
       where: { id: segment.id },
       data: { status: "CONFIRMED" },
     });
+    const expectedCursorFailure = {
+      code: "VALIDATION_ERROR",
+      message: "分页游标无效或已不再匹配当前待办队列",
+      fieldErrors: {
+        cursor: ["分页游标无效或已不再匹配当前待办队列"],
+      },
+    } satisfies ProjectManagementActionFailure["error"];
+    expect(actionInboxLoadRecovery("APPEND", expectedCursorFailure)).toBe(
+      "RELOAD_QUEUE",
+    );
+    expect(
+      actionInboxLoadRecovery("APPEND", {
+        code: "VALIDATION_ERROR",
+        message: "分页大小不正确",
+        fieldErrors: { limit: ["分页大小不正确"] },
+      }),
+    ).toBe("RETRY_CURSOR");
+    expect(
+      actionInboxLoadRecovery("APPEND", {
+        code: "INTERNAL_ERROR",
+        message: "操作失败，请稍后重试",
+        fieldErrors: { cursor: ["不应被识别为游标失效"] },
+      }),
+    ).toBe("RETRY_CURSOR");
+    const retainedItem = actionInboxSnapshotItem("snapshot-retained");
+    const appendedItem = actionInboxSnapshotItem("snapshot-appended");
+    const currentSnapshot = {
+      items: [retainedItem],
+      totalCount: 55,
+      criticalCount: 7,
+      nextCursor: "old-cursor",
+      generatedAt: "2030-10-01T08:00:00.000Z",
+    } satisfies ActionInboxPage;
+    const incomingSnapshot = {
+      items: [retainedItem, appendedItem],
+      totalCount: 54,
+      criticalCount: 3,
+      nextCursor: "next-cursor",
+      generatedAt: "2030-10-02T08:00:00.000Z",
+    } satisfies ActionInboxPage;
+    expect(appendActionInboxPage(currentSnapshot, incomingSnapshot)).toEqual({
+      ...currentSnapshot,
+      items: [retainedItem, appendedItem],
+      nextCursor: incomingSnapshot.nextCursor,
+    });
+    expect(
+      actionInboxLoadRecovery("APPEND", {
+        code: "VALIDATION_ERROR",
+        message: "分页游标格式不正确",
+        fieldErrors: { cursor: [] },
+      }),
+    ).toBe("RETRY_CURSOR");
     await expect(
-      getActionInbox({
-        actor: user,
-        input: { cursor: firstCursor, limit: 2 },
-      }).catch((error) => toProjectManagementServiceError(error).code),
-    ).resolves.toBe("VALIDATION_ERROR");
+      actionInboxFailure(
+        getActionInbox({
+          actor: user,
+          input: { cursor: firstCursor, limit: 2 },
+        }),
+      ),
+    ).resolves.toEqual(expectedCursorFailure);
     for (const [targetActor, invalidCursor] of [
       [user, "malformed"],
       [user, tampered],
       [other, firstCursor],
     ] as const) {
       await expect(
-        getActionInbox({
-          actor: targetActor,
-          input: { cursor: invalidCursor, limit: 2 },
-        }).catch((error) => toProjectManagementServiceError(error).code),
-      ).resolves.toBe("VALIDATION_ERROR");
+        actionInboxFailure(
+          getActionInbox({
+            actor: targetActor,
+            input: { cursor: invalidCursor, limit: 2 },
+          }),
+        ),
+      ).resolves.toEqual(expectedCursorFailure);
     }
     await expect(
-      getActionInbox({
-        actor: user,
-        input: { limit: 2, unexpected: true },
-      }).catch((error) => toProjectManagementServiceError(error).code),
-    ).resolves.toBe("VALIDATION_ERROR");
+      actionInboxFailure(
+        getActionInbox({
+          actor: user,
+          input: { limit: 2, unexpected: true },
+        }),
+      ),
+    ).resolves.toEqual({
+      code: "VALIDATION_ERROR",
+      message: "输入内容不符合要求",
+      fieldErrors: { _form: ["请求包含不支持的字段"] },
+    });
   });
 
   test("Action Inbox paginates equal-priority streams in global stable order", async () => {
@@ -374,11 +445,15 @@ test.describe("project management S8 dashboard and notifications", () => {
     const generatedTimes = new Set<string>();
     let cursor: string | undefined;
     for (let pageIndex = 0; pageIndex < expectedIds.length; pageIndex += 1) {
-      const page = await getActionInbox({
-        actor,
-        input: { ...(cursor ? { cursor } : {}), limit: 1 },
-        now,
-      });
+      const page = await test.step(
+        `加载跨流第 ${pageIndex + 1} 页`,
+        () =>
+          getActionInbox({
+            actor,
+            input: { ...(cursor ? { cursor } : {}), limit: 1 },
+            now,
+          }),
+      );
       loadedIds.push(...page.items.map((item) => item.id));
       generatedTimes.add(page.generatedAt);
       cursor = page.nextCursor ?? undefined;
@@ -1073,6 +1148,43 @@ test.describe("project management S8 dashboard and notifications", () => {
     expect(inbox.items.map((item) => item.kind)).not.toContain("TERMINATION");
   });
 });
+
+function actionInboxFailure(operation: Promise<unknown>) {
+  return operation.then(
+    () => {
+      throw new Error("Action Inbox 错误测试预期查询失败");
+    },
+    (error: unknown) => {
+      const mapped = toProjectManagementServiceError(error);
+      return {
+        code: mapped.code,
+        message: mapped.message,
+        fieldErrors: mapped.fieldErrors,
+      };
+    },
+  );
+}
+
+function actionInboxSnapshotItem(id: string): ActionInboxItem {
+  return {
+    id,
+    kind: "SEGMENT_CONFIRMATION",
+    title: id,
+    summary: "快照合并测试",
+    projectId: null,
+    projectName: null,
+    taskId: null,
+    taskTitle: null,
+    nodeId: null,
+    nodeType: null,
+    nodeStatus: null,
+    relevantAt: "2030-10-01T08:00:00.000Z",
+    timeLabel: "投入结束",
+    severity: "HIGH",
+    href: `/progress?focus=${id}`,
+    actionLabel: "确认投入",
+  };
+}
 
 async function createActor(displayName: string): Promise<ProjectManagementActor> {
   const openId = `ou_s8_${randomUUID()}`;

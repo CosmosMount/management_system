@@ -254,8 +254,8 @@ npm run pm:identity-backfill
 
 1. `tests/project-management-s8.spec.ts` 验证 Action Inbox 不返回 `TERMINATION`/“任务结束申请”，而是为在职有效 OWNER/PARTICIPANT 返回 ACTIVE Task 的 Current Plan 当前节点。Milestone 必须匹配 `activeMilestoneNodeId`；进入结束阶段后返回 ACTIVE Terminal。DRAFT、终态、已删除 Task、已移除成员、旁观者、管理员非成员、候选/历史 Plan 和停用 actor 均不得获得当前节点。
 2. 相同 Milestone 存在未撤出的 `PENDING` Review、相同 Terminal 存在 `PENDING` Termination Review 时，成员当前节点必须隐藏；全局管理员只看到对应审批项。待处理 Revision 不隐藏当前节点。逾期当前节点为 `CRITICAL` 并计入 `criticalCount`，未逾期为 `MEDIUM`。
-3. 混合数据流使用小页循环加载，断言全局顺序、无重复、无缺口且 `generatedAt` 跨页保持不变；格式错误、字段注入、校验被破坏和跨 actor 游标均返回中文 `VALIDATION_ERROR`。游标锚点离开当前队列后同样应拒绝，客户端保留已加载内容并允许重试或刷新。
-4. `tests/project-management-ui-routes-responsive.spec.ts` 在 Desktop `1440x1000` 与 Pixel 5 验证完整行包含类型、严重度、标题、摘要、Project/Task、Node 类型/状态、相关时间和明确操作按钮；空列表、超长内容和无页面级横向溢出均受覆盖。创建 55 条待办时首屏只展示 50 条，首次加载更多网络失败显示可重试错误，重试后恰好展示 55 条及完成状态；返回 `/progress` 只预览 8 条。
+3. 混合数据流使用小页循环加载，断言全局顺序、无重复、无缺口且 `generatedAt` 跨页保持不变；格式错误、字段注入、校验被破坏和跨 actor 游标均返回中文 `VALIDATION_ERROR` 与安全字段错误。只有带非空 `fieldErrors.cursor` 的 `VALIDATION_ERROR` 才表示游标失效；其他校验错误不得误导用户重新加载队列。游标锚点离开当前队列后应拒绝；客户端保留已加载内容，但不再重放失效游标，而是通过“重新加载队列”无游标获取并整体替换为新的权威首屏。普通网络失败仍保留原游标供重试。
+4. `tests/project-management-ui-routes-responsive.spec.ts` 在 Desktop `1440x1000` 与 Pixel 5 验证完整行包含类型、严重度、标题、摘要、Project/Task、Node 类型/状态、相关时间和明确操作按钮；空列表、超长内容和无页面级横向溢出均受覆盖。创建 55 条待办时首屏只展示 50 条；已加载的非锚点退出队列时，游标仍有效且 APPEND 必须保持首屏统计与 `generatedAt` 快照，只追加 items 和更新 `nextCursor`。已消费锚点退出队列后，加载更多必须显示结构化中文错误并保留 50 条旧内容，“重新加载队列”恢复为无该锚点的新首屏，随后网络失败仍可用原游标重试并无重复、无缺口地加载全部剩余项；返回 `/progress` 只预览 8 条。
 
 ### Project 立项专项测试
 

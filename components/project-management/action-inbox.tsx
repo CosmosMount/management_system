@@ -3,6 +3,11 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { loadActionInboxPage } from "@/app/actions/project-management/action-inbox";
+import {
+  actionInboxLoadRecovery,
+  appendActionInboxPage,
+  type ActionInboxLoadMode,
+} from "@/components/project-management/action-inbox-state";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -57,36 +62,62 @@ export function ActionInbox({
   initialPage: ActionInboxPage;
   compact?: boolean;
 }) {
-  const [items, setItems] = useState(initialPage.items);
-  const [nextCursor, setNextCursor] = useState(initialPage.nextCursor);
-  const [error, setError] = useState("");
+  const [inboxPage, setInboxPage] = useState(initialPage);
+  const [loadFailure, setLoadFailure] = useState<{
+    message: string;
+    recovery: ReturnType<typeof actionInboxLoadRecovery>;
+  } | null>(null);
   const [isPending, startTransition] = useTransition();
+  const { items, nextCursor } = inboxPage;
 
   function loadMore() {
     if (!nextCursor || isPending || compact) return;
-    const requestedCursor = nextCursor;
+    requestPage({ cursor: nextCursor, mode: "APPEND" });
+  }
+
+  function reloadQueue() {
+    if (isPending || compact) return;
+    requestPage({ mode: "REPLACE" });
+  }
+
+  function requestPage({
+    cursor,
+    mode,
+  }: {
+    cursor?: string;
+    mode: ActionInboxLoadMode;
+  }) {
     startTransition(async () => {
       let result;
       try {
         result = await loadActionInboxPage({
-          cursor: requestedCursor,
+          ...(cursor ? { cursor } : {}),
           limit: 50,
         });
       } catch {
-        setError("网络异常，请稍后重试。");
+        setLoadFailure({
+          message: "网络异常，请稍后重试。",
+          recovery: mode === "APPEND" ? "RETRY_CURSOR" : "RELOAD_QUEUE",
+        });
         return;
       }
       if (!result.ok) {
-        setError(result.error.message);
+        setLoadFailure({
+          message: result.error.message,
+          recovery: actionInboxLoadRecovery(mode, result.error),
+        });
         return;
       }
-      setItems((current) => mergeUniqueItems(current, result.data.items));
-      setNextCursor(result.data.nextCursor);
-      setError("");
+      setInboxPage((current) =>
+        mode === "REPLACE"
+          ? result.data
+          : appendActionInboxPage(current, result.data),
+      );
+      setLoadFailure(null);
     });
   }
 
-  if (items.length === 0 && !error) {
+  if (items.length === 0 && !loadFailure) {
     return <ListEmpty>当前没有需要你处理的事项。</ListEmpty>;
   }
 
@@ -97,19 +128,19 @@ export function ActionInbox({
           className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted-foreground"
           aria-label="待办统计"
         >
-          <span>全部 {initialPage.totalCount} 项</span>
-          <span>紧急 {initialPage.criticalCount} 项</span>
+          <span>全部 {inboxPage.totalCount} 项</span>
+          <span>紧急 {inboxPage.criticalCount} 项</span>
           <span>
-            已加载 {items.length} / {initialPage.totalCount}
+            已加载 {items.length} / {inboxPage.totalCount}
           </span>
         </div>
       )}
-      {error && (
+      {loadFailure && (
         <p
           className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
           role="alert"
         >
-          加载失败：{error}
+          加载失败：{loadFailure.message}
         </p>
       )}
       {items.length > 0 && (
@@ -119,17 +150,33 @@ export function ActionInbox({
           ))}
         </List>
       )}
-      {!compact && nextCursor && (
+      {!compact && loadFailure?.recovery === "RELOAD_QUEUE" && (
         <Button
           type="button"
           variant="outline"
           disabled={isPending}
-          onClick={loadMore}
+          onClick={reloadQueue}
         >
-          {isPending ? "正在加载…" : error ? "重试加载" : "加载更多"}
+          {isPending ? "正在重新加载…" : "重新加载队列"}
         </Button>
       )}
-      {!compact && items.length > 0 && !nextCursor && !error && (
+      {!compact &&
+        loadFailure?.recovery !== "RELOAD_QUEUE" &&
+        nextCursor && (
+          <Button
+            type="button"
+            variant="outline"
+            disabled={isPending}
+            onClick={loadMore}
+          >
+            {isPending
+              ? "正在加载…"
+              : loadFailure
+                ? "重试加载"
+                : "加载更多"}
+          </Button>
+        )}
+      {!compact && items.length > 0 && !nextCursor && !loadFailure && (
         <p className="text-center text-sm text-muted-foreground" role="status">
           已加载全部 {items.length} 项
         </p>
@@ -198,17 +245,4 @@ function ActionInboxRow({
       </ListActions>
     </ListItem>
   );
-}
-
-function mergeUniqueItems(
-  current: ActionInboxItem[],
-  incoming: ActionInboxItem[],
-) {
-  const seen = new Set(current.map((item) => item.id));
-  const added = incoming.filter((item) => {
-    if (seen.has(item.id)) return false;
-    seen.add(item.id);
-    return true;
-  });
-  return [...current, ...added];
 }
