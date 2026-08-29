@@ -688,11 +688,21 @@ test.describe("S3 TimeCanvas controlled browser fixtures", () => {
     expect(endMs).toBeGreaterThan(today.getTime());
     const settledLeft = await scroll.evaluate((element) => element.scrollLeft);
     expect(settledLeft).toBeGreaterThan(0);
-    await page.waitForTimeout(200);
-    expect(await scroll.evaluate((element) => element.scrollLeft)).toBeCloseTo(
-      settledLeft,
-      0,
-    );
+    const animationFrameSamples = await scroll.evaluate(async (element) => {
+      const samples: number[] = [];
+      for (let frame = 0; frame < 12; frame += 1) {
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => {
+            samples.push(element.scrollLeft);
+            resolve();
+          });
+        });
+      }
+      return samples;
+    });
+    for (const sample of animationFrameSamples) {
+      expect(sample).toBeCloseTo(settledLeft, 0);
+    }
     await expectHealthyPage(page);
   });
 

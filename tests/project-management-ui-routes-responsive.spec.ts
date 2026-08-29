@@ -185,7 +185,14 @@ test.describe("project management UI project-management-ui-routes-responsive", (
           ).__taskCanvasRoot,
         ),
       ).toBe(true);
-      await page.waitForTimeout(500);
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() =>
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+            );
+          }),
+      );
       expect(
         await page.evaluate(() =>
           (window as typeof window & { __taskCanvasZoomHistory?: string[] })
@@ -473,10 +480,10 @@ test.describe("project management UI project-management-ui-routes-responsive", (
           startAt: originalRange.startAt.toISOString(),
           endAt: originalRange.endAt.toISOString(),
         });
-        await page.waitForTimeout(800);
         const confirmableSegment = page.getByTestId(
           `segment-block-${fixture.confirmableSegmentId}`,
         );
+        await expect(confirmableSegment).toBeVisible();
         await confirmableSegment.focus();
         await confirmableSegment.press("Enter");
       } else {

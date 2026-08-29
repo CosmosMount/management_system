@@ -18,8 +18,6 @@ import {
   resolveNormalAuthMaterial,
 } from "./helpers/functional-fixtures";
 
-test.describe.configure({ mode: "serial" });
-
 test("预算池看板按兵种组展示项目并汇总总量", () => {
   const data = buildDashboardChartsData(
     [],

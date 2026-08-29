@@ -33,12 +33,15 @@ test.describe("entity picker controlled regressions", () => {
 
   test("ignores stale main and pagination responses and supports retry", async ({ page }) => {
     const input = page.getByLabel("竞态与重试选择器", { exact: true });
+    const requestEvents = page.getByTestId("entity-picker-request-events");
 
+    await input.click();
+    await expect(requestEvents).toContainText("settled::first");
     await input.fill("slow");
-    await page.waitForTimeout(320);
+    await expect(requestEvents).toContainText("started:slow:first");
     await input.fill("fast");
     await expect(page.getByRole("option", { name: "最新快响应" })).toBeVisible();
-    await page.waitForTimeout(950);
+    await expect(requestEvents).toContainText("settled:slow:first");
     await expect(page.getByRole("option", { name: "过期慢响应" })).toHaveCount(0);
 
     await input.fill("failure");
@@ -53,7 +56,9 @@ test.describe("entity picker controlled regressions", () => {
     await expect(page.getByRole("option", { name: "新查询第一页" })).toBeVisible();
     await page.getByRole("button", { name: "加载更多" }).click();
     await expect(page.getByRole("option", { name: "新查询第二页" })).toBeVisible();
-    await page.waitForTimeout(950);
+    await expect(requestEvents).toContainText(
+      "settled:page-reset:stale-cursor",
+    );
     await expect(page.getByRole("option", { name: "过期分页结果" })).toHaveCount(0);
     await expectHealthyPage(page);
   });

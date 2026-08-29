@@ -210,7 +210,7 @@ test.describe("notification outbox channel adapters", () => {
     });
   });
 
-  test("event key 幂等且收件人去重，失败收件人重试不重复成功收件人", async () => {
+  test("event key 幂等且收件人去重，失败收件人重试不重复成功收件人", { tag: "@smoke" }, async () => {
     const eventKey = `${EVENT_PREFIX}dedupe-retry`;
     const payload = {
       kind: "reply",

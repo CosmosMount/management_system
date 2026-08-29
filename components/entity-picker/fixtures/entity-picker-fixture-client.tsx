@@ -94,47 +94,19 @@ function KeyboardFocusFixture() {
 
 function RaceAndRetryFixture() {
   const [value, setValue] = useState<string | null>(null);
+  const [requestEvents, setRequestEvents] = useState<string[]>([]);
   const attempts = useRef(new Map<string, number>());
   const loadOptions = useCallback<PickerLoadOptions<FixtureOption>>(
     async ({ query, cursor }) => {
       const attempt = (attempts.current.get(query) ?? 0) + 1;
       attempts.current.set(query, attempt);
-
-      if (query === "slow") {
-        await delay(900);
-        return page([{ id: "slow-result", label: "过期慢响应" }]);
+      const requestKey = `${query}:${cursor ?? "first"}`;
+      setRequestEvents((current) => [...current, `started:${requestKey}`]);
+      try {
+        return await loadRaceFixturePage({ attempt, cursor, query });
+      } finally {
+        setRequestEvents((current) => [...current, `settled:${requestKey}`]);
       }
-      if (query === "fast") {
-        await delay(40);
-        return page([{ id: "fast-result", label: "最新快响应" }]);
-      }
-      if (query === "failure") {
-        await delay(30);
-        if (attempt === 1) throw new Error("受控加载失败");
-        return page([{ id: "retry-result", label: "重试恢复结果" }]);
-      }
-      if (query === "page-reset") {
-        if (cursor) {
-          await delay(900);
-          return page([{ id: "stale-page-2", label: "过期分页结果" }]);
-        }
-        await delay(30);
-        return page(
-          [{ id: "stale-page-1", label: "旧查询第一页" }],
-          "stale-cursor",
-        );
-      }
-      if (query === "new-page") {
-        await delay(cursor ? 40 : 30);
-        return cursor
-          ? page([{ id: "new-page-2", label: "新查询第二页" }])
-          : page(
-              [{ id: "new-page-1", label: "新查询第一页" }],
-              "new-cursor",
-            );
-      }
-      await delay(20);
-      return page([{ id: "default-result", label: "默认结果" }]);
     },
     [],
   );
@@ -148,6 +120,9 @@ function RaceAndRetryFixture() {
       <label htmlFor="fixture-race-picker" className="text-sm font-medium">
         竞态与重试选择器
       </label>
+      <output className="sr-only" data-testid="entity-picker-request-events">
+        {requestEvents.join("|")}
+      </output>
       <AsyncCombobox
         inputId="fixture-race-picker"
         ariaLabel="竞态与重试选择器"
@@ -162,6 +137,49 @@ function RaceAndRetryFixture() {
       />
     </FixtureSection>
   );
+}
+
+async function loadRaceFixturePage({
+  attempt,
+  cursor,
+  query,
+}: {
+  attempt: number;
+  cursor?: string | null;
+  query: string;
+}) {
+  if (query === "slow") {
+    await delay(900);
+    return page([{ id: "slow-result", label: "过期慢响应" }]);
+  }
+  if (query === "fast") {
+    await delay(40);
+    return page([{ id: "fast-result", label: "最新快响应" }]);
+  }
+  if (query === "failure") {
+    await delay(30);
+    if (attempt === 1) throw new Error("受控加载失败");
+    return page([{ id: "retry-result", label: "重试恢复结果" }]);
+  }
+  if (query === "page-reset") {
+    if (cursor) {
+      await delay(900);
+      return page([{ id: "stale-page-2", label: "过期分页结果" }]);
+    }
+    await delay(30);
+    return page(
+      [{ id: "stale-page-1", label: "旧查询第一页" }],
+      "stale-cursor",
+    );
+  }
+  if (query === "new-page") {
+    await delay(cursor ? 40 : 30);
+    return cursor
+      ? page([{ id: "new-page-2", label: "新查询第二页" }])
+      : page([{ id: "new-page-1", label: "新查询第一页" }], "new-cursor");
+  }
+  await delay(20);
+  return page([{ id: "default-result", label: "默认结果" }]);
 }
 
 function ResolverFixture() {

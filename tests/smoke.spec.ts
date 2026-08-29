@@ -64,7 +64,7 @@ async function collectBrowserErrors(page: import("@playwright/test").Page) {
   return errors;
 }
 
-test.describe("public and unauthenticated smoke", () => {
+test.describe("public and unauthenticated smoke", { tag: "@smoke" }, () => {
   for (const route of protectedRoutes) {
     test(`route ${route} renders without server error`, async ({ page }) => {
       const errors = await collectBrowserErrors(page);

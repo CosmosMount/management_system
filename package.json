@@ -31,7 +31,11 @@
     "test:playwright-db-lifecycle": "tsx scripts/verify-playwright-runner-lifecycle.ts",
     "test:playwright-db-safety": "tsx scripts/verify-playwright-db-safety.ts",
     "prepare:template": "tsx scripts/prepare-reimbursement-template.ts",
-    "test:e2e": "NODE_OPTIONS='' tsx scripts/run-playwright.ts"
+    "test:e2e": "NODE_OPTIONS='' tsx scripts/run-playwright.ts",
+    "test:e2e:smoke": "NODE_OPTIONS='' tsx scripts/run-playwright.ts --grep=@smoke",
+    "test:e2e:full": "NODE_OPTIONS='' tsx scripts/run-playwright.ts",
+    "test:e2e:nightly": "PM_RUN_SCALE_TESTS=true NODE_OPTIONS='' tsx scripts/run-playwright.ts",
+    "test:nightly": "npm run check && npm run test:playwright-db-lifecycle && npm run test:playwright-db-safety && npm run test:e2e:nightly && npm run build"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",

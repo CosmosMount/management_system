@@ -10,8 +10,6 @@ import {
   type FunctionalFixtureIds,
 } from "./helpers/functional-fixtures";
 
-test.describe.configure({ mode: "serial" });
-
 let fixtures: FunctionalFixtureIds;
 let normalAuth: Awaited<ReturnType<typeof resolveNormalAuthMaterial>>;
 
@@ -24,7 +22,7 @@ test.beforeAll(async () => {
   }
 });
 
-test("上传文件路由要求登录且授权用户可读取文件", async ({
+test("上传文件路由要求登录且授权用户可读取文件", { tag: "@smoke" }, async ({
   page,
   context,
   baseURL,
@@ -42,7 +40,7 @@ test("上传文件路由要求登录且授权用户可读取文件", async ({
   await expect(page.getByText("playwright-owned-file")).toBeVisible();
 });
 
-test("上传文件路由对无关登录用户隐藏文件", async ({
+test("上传文件路由对无关登录用户隐藏文件", { tag: "@smoke" }, async ({
   page,
   context,
   baseURL,

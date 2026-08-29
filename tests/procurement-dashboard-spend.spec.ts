@@ -6,8 +6,6 @@ import {
   resolveNormalAuthMaterial,
 } from "./helpers/functional-fixtures";
 
-test.describe.configure({ mode: "serial" });
-
 test("看板支出统计同时提供已完成与全部已提交口径", () => {
   const now = new Date("2026-07-24T10:00:00.000Z");
   const data = buildDashboardChartsData([

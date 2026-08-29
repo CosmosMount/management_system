@@ -14,8 +14,6 @@ import {
   resolveNormalAuthMaterial,
 } from "./helpers/functional-fixtures";
 
-test.describe.configure({ mode: "serial" });
-
 let normalOpenId: string;
 let normalAuth: Awaited<ReturnType<typeof resolveNormalAuthMaterial>>;
 

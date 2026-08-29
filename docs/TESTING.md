@@ -16,11 +16,15 @@
 
 ### 自动化测试定义清单
 
-截至 2026-08-29，`tests/` 有两类可执行测试定义：3 个 `tests/*.node.ts` 文件（10 个 `node:test` 用例）和 74 个由 Playwright 收集的 `tests/*.spec.ts` 文件。文件清单按领域归类如下；Playwright 文件名省略统一的 `tests/` 前缀和 `.spec.ts` 后缀，新增、移动或删除测试时必须同步更新本节。
+截至 2026-08-29，`tests/` 有两类可执行测试定义：7 个 `tests/*.node.ts` 文件（15 个 `node:test` 用例）和 76 个由 Playwright 收集的 `tests/*.spec.ts` 文件。文件清单按领域归类如下；Playwright 文件名省略统一的 `tests/` 前缀和 `.spec.ts` 后缀，新增、移动或删除测试时必须同步更新本节。
 
+- **Node / cron 调度与处理器映射（2 个用例）**：`cron-schedule-wiring.node.ts`。
 - **Node / 项目管理展示契约（5 个用例）**：`project-management-recent-activity-formatter.node.ts`。
 - **Node / Composer 浏览器存储契约（2 个用例）**：`task-composer-legacy-draft-tombstone.node.ts`。
-- **Node / Playwright topology 契约（3 个用例）**：`playwright-test-topology.node.ts`。
+- **Node / Playwright repository topology 聚合契约（3 个用例）**：`playwright-test-topology.node.ts`。
+- **Node / Playwright AST/spec policy 契约（1 个用例）**：`playwright-spec-policy.node.ts`。
+- **Node / Playwright CLI selection 契约（1 个用例）**：`playwright-cli-selection.node.ts`。
+- **Node / Playwright reporter 与真实 CLI 契约（1 个用例）**：`playwright-topology-reporter.node.ts`。
 - **Playwright / 跨领域、基础设施与冒烟（10 个 spec）**：`business-flows`、`entity-picker`、`form-field-error-mapping`、`functional-panels`、`fuzzy-search`、`logger`、`next-image-config`、`root-layout-hydration`、`security-and-lifecycle`、`smoke`。
 - **Playwright / 账号与管理员（4 个 spec）**：`account-management`、`admin-account-options`、`feishu-user-sync-action-result`、`feishu-user-sync`。
 - **Playwright / 采购、报销与反馈写入（12 个 spec）**：`inactive-person-procurement-safety`、`processing-vendor-hook-races`、`procurement-budget-import-atomicity`、`procurement-budget-pool-dashboard`、`procurement-dashboard-spend`、`procurement-form-accessibility`、`procurement-import-dialog-races`、`procurement-notify-approver`、`procurement-pending-orders`、`procurement-shell`、`procurement-teacher-email`、`procurement-upload-atomicity`。
@@ -38,6 +42,24 @@ rg --files tests | sort | rg '\.(node|spec)\.ts$'
 npm run test:node
 npm run test:e2e -- --list
 ```
+
+### 自动化门禁分层
+
+三层 Playwright 命令都必须经过同一个官方 runner，不允许直接调用 `playwright test`：
+
+```bash
+npm run test:e2e:smoke
+npm run test:e2e:full
+npm run test:e2e:nightly
+```
+
+- `test:e2e:smoke` 使用 Playwright 原生 `@smoke` tag，当前收集 44 个 project-test：1 个匿名/保护路由 suite、采购与项目管理导航、附件允许/拒绝、采购提交、反馈闭环、Project 入口、Task 创建/激活、飞书禁发和 outbox 幂等。UI 在 Desktop 与 Pixel 5 对称执行，且不依赖本地 storage state。该命令使用 `--grep`，属于局部选择，不能用它证明完整 topology 或全量回归通过。
+- `test:e2e:full` 与兼容入口 `test:e2e` 都执行完整 76 个 spec，并保留 reporter 对全文件、全 project 收集完整性的严格校验。PR 合并前以及共享测试基础设施变更后使用这一层。
+- `test:e2e:nightly` 执行同一完整集合，并设置 `PM_RUN_SCALE_TESTS=true` 打开既有 10k/100k 规模用例。聚合门禁 `npm run test:nightly` 还会依次执行 `check`、runner lifecycle、真实 PostgreSQL safety、nightly E2E 和 `build`；仓库不包含 CI 调度文件，定时触发由外部流水线配置。
+
+`tests/` 不使用 `page.waitForTimeout`。普通加载、导航、保存、竞态完成和数据库传播必须使用可观察状态、受控 fixture 事件、`expect.poll`、URL/locator 或持久化状态同步；“完整时间窗内没有迟到副作用”改用 Playwright 虚拟时钟，“连续渲染帧内不漂移”改用 animation-frame 采样，避免真实时间睡眠造成慢测和偶发失败。
+
+仍使用 `serial` 的 8 个 suite 都依赖进程级或跨用例共享状态，不能在未隔离这些依赖前机械并行：`business-flows` 与 `functional-panels` 复用 `beforeAll` 创建的业务主体和连续状态；`feishu-message` 复用全局网络 mock；`notification-outbox-adapters` 复用 adapter/时钟 mock 与 outbox 清理；`feishu-user-sync`、`account-management`、`inactive-person-procurement-safety` 验证并发锁、停用和权限状态；`procurement-upload-atomicity` 验证共享文件存储及补偿清理。后续解除 `serial` 时，必须先把对应全局 mock、数据库状态或文件目录改为逐用例隔离。
 
 ## 测试前准备
 
@@ -170,7 +192,7 @@ npm run test:node
 npm run check
 ```
 
-`npm run test:node` 会先运行纯 synthetic 安全 verifier，再自动发现、排序并只执行一次当前全部 `tests/*.node.ts`；任一验证失败、用例失败或没有匹配文件都会非零退出。Node runner 会清除数据库、通知和邮件等危险继承变量，重建飞书出口 guard，并强制关闭真实投递。当前 12 个 Node 用例不启动浏览器、不连接测试数据库：topology 回归锁定 30/46/76 分类与 reporter 归属，cron wiring 回归锁定七条 schedule→handler 映射、`Asia/Shanghai` 时区和错误路由。`npm run check` 还依次执行 Prisma validate、应用与脚本 TypeScript、源码依赖门禁、全量 ESLint 和 `git diff --check`。数据库或生产构建相关改动再额外执行：
+`npm run test:node` 会先运行纯 synthetic 安全 verifier，再自动发现、排序并只执行一次当前全部 `tests/*.node.ts`；任一验证失败、用例失败或没有匹配文件都会非零退出。Node runner 会清除数据库、通知和邮件等危险继承变量，重建飞书出口 guard，并强制关闭真实投递。当前 15 个 Node 用例不启动浏览器、不连接测试数据库：topology 回归锁定 30/46/76 分类、AST/spec policy、仅单一类别时的 fail-closed 行为、CLI selection 与 reporter 归属，cron wiring 回归锁定七条 schedule→handler 映射、`Asia/Shanghai` 时区和错误路由。`npm run check` 还依次执行 Prisma validate、应用与脚本 TypeScript、源码依赖门禁、全量 ESLint 和 `git diff --check`。数据库或生产构建相关改动再额外执行：
 
 ```bash
 DATABASE_URL="postgresql://..." npm run db:deploy

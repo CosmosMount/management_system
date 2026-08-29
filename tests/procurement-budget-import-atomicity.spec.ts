@@ -16,8 +16,6 @@ import {
 } from "../lib/notification-outbox";
 import { prisma } from "../lib/prisma";
 
-test.describe.configure({ mode: "serial" });
-
 test("已取消的异步解析不能覆盖后续状态", () => {
   const generation = createAsyncOperationGeneration();
   const obsolete = generation.begin();

@@ -131,7 +131,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     }
   });
 
-  test("Task draft creation is open to unified accounts, idempotent and globally readable", async () => {
+  test("Task draft creation is open to unified accounts, idempotent and globally readable", { tag: "@smoke" }, async () => {
     const admin = await createAccountPerson("生命周期 Team Admin");
     const owner = await createAccountPerson("生命周期 Owner");
     const member = await createAccountPerson("生命周期 Member");
@@ -411,7 +411,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     });
   });
 
-  test("Task activation sets the first active milestone and rejects stale or concurrent activation", async () => {
+  test("Task activation sets the first active milestone and rejects stale or concurrent activation", { tag: "@smoke" }, async () => {
     const fixture = await createDraftFixture();
     const draftPlan = await prisma.taskPlanVersion.findUniqueOrThrow({
       where: { id: fixture.currentPlanVersionId },

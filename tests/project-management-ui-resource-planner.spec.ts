@@ -918,7 +918,9 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       expect(new URL(page.url()).searchParams.has("personCursor")).toBe(false);
       await page.getByRole("button", { name: "年", exact: true }).click();
       await expect(page).toHaveURL(/scale=year/);
-      expect(new URL(page.url()).searchParams.get("center")).not.toBeNull();
+      await expect
+        .poll(() => new URL(page.url()).searchParams.get("center"))
+        .not.toBeNull();
 
       await page.goto(
         `/progress/resources?all=0&people=${fixture.member.person.id},${fixture.owner.person.id}&tasks=${fixture.taskId}&focus=${fixture.confirmableSegmentId}`,
@@ -941,9 +943,13 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       await expect(page.getByText("人员（2）")).toBeVisible();
       await expect(page.getByText("Task（1）")).toBeVisible();
       await expect(page.getByRole("checkbox", { name: /显示全部资源/ })).not.toBeChecked();
+      const centerBeforeYearScale = new URL(page.url()).searchParams.get("center");
+      expect(centerBeforeYearScale).not.toBeNull();
       await page.getByRole("button", { name: "年", exact: true }).click();
       await expect(page).toHaveURL(/scale=year/);
-      await page.waitForTimeout(500);
+      await expect
+        .poll(() => new URL(page.url()).searchParams.get("center"))
+        .not.toBe(centerBeforeYearScale);
       const preservedCenter = new URL(page.url()).searchParams.get("center");
       expect(preservedCenter).not.toBeNull();
       await page.getByRole("button", {

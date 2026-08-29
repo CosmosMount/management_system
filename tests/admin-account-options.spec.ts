@@ -14,8 +14,6 @@ import {
   updateTeacherEmailInputSchema,
 } from "../lib/validations/account-management";
 
-test.describe.configure({ mode: "serial" });
-
 test("管理员账号选择和指导老师邮箱输入使用严格边界", async () => {
   expect(
     searchAdminAccountOptionsInputSchema.safeParse({

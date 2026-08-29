@@ -46,13 +46,14 @@ test.describe("time segment allocation UI", () => {
     await expect.poll(() =>
       new URL(page.url()).searchParams.get("center"),
     ).not.toBeNull();
-    await page.waitForTimeout(500);
     const viewportUrl = new URL(page.url());
     const currentCenter = viewportUrl.searchParams.get("center");
     expect(currentCenter).toBeTruthy();
     await page.getByRole("link", { name: "显示全部", exact: true }).click();
     await expect(page).toHaveURL(/tasks=all/);
-    await page.waitForTimeout(500);
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get("center"))
+      .toBe(currentCenter);
     const pagedUrl = new URL(page.url());
     expect(pagedUrl.searchParams.get("center")).toBe(currentCenter);
     expect(pagedUrl.searchParams.get("scale")).toBe("year");

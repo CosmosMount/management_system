@@ -7,7 +7,7 @@ import {
 } from "./helpers/functional-fixtures";
 import { prisma } from "../lib/prisma";
 
-test.describe("采购管理侧栏", () => {
+test.describe("采购管理侧栏", { tag: "@smoke" }, () => {
   test("默认进入看板且桌面侧栏和移动抽屉均可用", async ({
     context,
     page,

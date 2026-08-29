@@ -225,7 +225,7 @@ test("采购草稿可从详情页直接提交到管理审核", async ({
   await expectHealthyPage(page);
 });
 
-test("采购申请可从新建页直接提交到管理审核", async ({
+test("采购申请可从新建页直接提交到管理审核", { tag: "@smoke" }, async ({
   page,
   context,
   baseURL,
@@ -773,7 +773,7 @@ test("采购报销链路可上传凭证、财务截图并由申请人确认完�
   await expectHealthyPage(page);
 });
 
-test("反馈可由普通用户创建回复，并由管理员关闭", async ({
+test("反馈可由普通用户创建回复，并由管理员关闭", { tag: "@smoke" }, async ({
   page,
   context,
   baseURL,

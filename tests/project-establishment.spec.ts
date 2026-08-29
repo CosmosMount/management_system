@@ -41,7 +41,7 @@ const projectDetailLayoutIds = {
 } as const;
 
 test.describe("Project 立项与生命周期", () => {
-  test("Project 导航、默认筛选、列表和创建页在桌面与移动端可用", async ({ context, page, baseURL }, testInfo) => {
+  test("Project 导航、默认筛选、列表和创建页在桌面与移动端可用", { tag: "@smoke" }, async ({ context, page, baseURL }, testInfo) => {
     const requester = await actor(`Project UI ${testInfo.project.name}`);
     const admin = await actor(`Project UI 管理员 ${testInfo.project.name}`, "PROJECT_ADMINISTRATOR");
     const participant = await actor(`Project UI Task 成员 ${testInfo.project.name}`);

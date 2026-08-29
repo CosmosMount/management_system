@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { BudgetPoolImportDialog } from "@/components/budget-pool-import-dialog";
 import { ProcurementItemsImportDialog } from "@/components/procurement-items-import-dialog";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,26 @@ import type { ImportProcurementItemsResult } from "@/lib/import-procurement-item
 export function ProcurementImportDialogFixtureClient() {
   const [budgetOpen, setBudgetOpen] = useState(false);
   const [itemsOpen, setItemsOpen] = useState(false);
+  const [parseEvents, setParseEvents] = useState<string[]>([]);
+  const trackParse = useCallback(
+    async <T,>(file: File, parse: (value: File) => Promise<T>): Promise<T> => {
+      setParseEvents((current) => [...current, `started:${file.name}`]);
+      try {
+        return await parse(file);
+      } finally {
+        setParseEvents((current) => [...current, `settled:${file.name}`]);
+      }
+    },
+    [],
+  );
+  const parseBudgetFile = useCallback(
+    (file: File) => trackParse(file, parseBudgetFixture),
+    [trackParse],
+  );
+  const parseItemsFile = useCallback(
+    (file: File) => trackParse(file, parseItemsFixture),
+    [trackParse],
+  );
 
   return (
     <main className="mx-auto max-w-2xl space-y-4 p-6">
@@ -22,19 +42,22 @@ export function ProcurementImportDialogFixtureClient() {
           打开明细导入
         </Button>
       </div>
+      <output className="sr-only" data-testid="import-dialog-parse-events">
+        {parseEvents.join("|")}
+      </output>
       <BudgetPoolImportDialog
         open={budgetOpen}
         onOpenChange={setBudgetOpen}
         existingPoolCount={1}
         onConfirm={() => {}}
-        parseFile={parseBudgetFixture}
+        parseFile={parseBudgetFile}
       />
       <ProcurementItemsImportDialog
         open={itemsOpen}
         onOpenChange={setItemsOpen}
         existingItemCount={1}
         onConfirm={() => {}}
-        parseFile={parseItemsFixture}
+        parseFile={parseItemsFile}
       />
     </main>
   );

@@ -9,7 +9,7 @@ import {
   loginAsTestUser,
 } from "./helpers/functional-fixtures";
 
-test.describe("project management S3 shell", () => {
+test.describe("project management S3 shell", { tag: "@smoke" }, () => {
   test("desktop sidebar and mobile drawer keep navigation accessible and healthy", async ({
     context,
     page,

@@ -1,5 +1,5 @@
 // @playwright-project ui
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../lib/prisma";
 import { createTaskDraft } from "../lib/project-management/application/lifecycle-service";
@@ -80,14 +80,7 @@ test.describe("project management UI project-management-ui-composer", () => {
         .getByRole("button", { name: /Terminal/ })
         .click();
       await page.getByLabel("计划结束时间").fill("2026-09-16T18:00");
-      await page.waitForTimeout(900);
-      await expect
-        .poll(() =>
-          page.evaluate(() =>
-            Object.keys(window.localStorage).some((key) => key.startsWith("task-draft:")),
-          ),
-        )
-        .toBe(true);
+      await expectLocalTaskDraft(page, { title });
 
       await page.reload();
       await expect(page.getByText(/检测到 .* 保存的未完成草稿/)).toBeVisible();
@@ -197,7 +190,10 @@ test.describe("project management UI project-management-ui-composer", () => {
       await terminationTime.fill("2026-09-16T18:00");
       await expect(terminationTime).not.toHaveAttribute("aria-invalid", "true");
 
-      await page.waitForTimeout(900);
+      await expectLocalTaskDraft(page, {
+        minimumMilestoneCount: 1,
+        title,
+      });
       const extremeDraft = await page.evaluate(async () => {
         const key = Object.keys(window.localStorage).find((candidate) =>
           candidate.startsWith("task-draft:"),
@@ -495,6 +491,7 @@ test.describe("project management UI project-management-ui-composer", () => {
         }, extremeDraft.key),
       ).toBeUndefined();
       if (testInfo.project.name === "desktop") {
+        await page.clock.install();
         await page.goto("/progress/tasks/new");
         await page.getByLabel("Task 名称").fill("立即放弃的防抖草稿");
         expect(
@@ -525,7 +522,7 @@ test.describe("project management UI project-management-ui-composer", () => {
         await expect(leaveDialog).toBeVisible();
         await leaveDialog.getByRole("button", { name: "放弃并离开" }).click();
         await expect(page.getByRole("heading", { name: "全部 Task" })).toBeVisible();
-        await page.waitForTimeout(900);
+        await page.clock.runFor(900);
         await page.goto("/progress/tasks/new");
         await expect(page.getByText(/检测到 .* 保存的未完成草稿/)).toHaveCount(0);
         await expect(page.getByLabel("Task 名称")).toHaveValue("");
@@ -1005,7 +1002,7 @@ test.describe("project management UI project-management-ui-composer", () => {
         .getByRole("button", { name: /Terminal/ })
         .click();
       await page.getByLabel("结束条件").fill("隐藏关联写入被拒绝");
-      await page.waitForTimeout(900);
+      await expectLocalTaskDraft(page, { title: forgedTitle });
       await page.evaluate(({ taskId, title }) => {
         const key = Object.keys(window.localStorage).find((candidate) =>
           candidate.startsWith("task-draft:"),
@@ -1025,7 +1022,7 @@ test.describe("project management UI project-management-ui-composer", () => {
       expect(await prisma.task.count({ where: { title: forgedTitle } })).toBe(0);
       await page.getByRole("button", { name: "清空关联 Task" }).click();
       await page.getByLabel("Task 名称").fill("S5 Account A local draft");
-      await page.waitForTimeout(900);
+      await expectLocalTaskDraft(page, { title: "S5 Account A local draft" });
       const localKey = await page.evaluate(() => {
         const key = Object.keys(window.localStorage).find((candidate) =>
           candidate.startsWith("task-draft:"),
@@ -1073,7 +1070,7 @@ test.describe("project management UI project-management-ui-composer", () => {
       expect(await page.evaluate((key) => window.localStorage.getItem(key), localKey)).toBeNull();
 
       await page.getByLabel("Task 名称").fill("S5 Account A isolated draft");
-      await page.waitForTimeout(900);
+      await expectLocalTaskDraft(page, { title: "S5 Account A isolated draft" });
       await page.getByRole("button", { name: "全部 Task", exact: true }).click();
       await expect(page.getByRole("dialog", { name: "离开 Task Composer？" })).toBeVisible();
       await page.getByRole("button", { name: "保存本地草稿并离开" }).click();
@@ -1206,3 +1203,57 @@ test.describe("project management UI project-management-ui-composer", () => {
       await expectHealthyPage(page);
     });
 });
+
+async function expectLocalTaskDraft(
+  page: Page,
+  expected: {
+    minimumMilestoneCount?: number;
+    terminationPlannedAt?: string;
+    title?: string;
+  },
+) {
+  await expect
+    .poll(() =>
+      page.evaluate((value) => {
+        for (const key of Object.keys(window.localStorage)) {
+          if (!key.startsWith("task-draft:")) continue;
+          const raw = window.localStorage.getItem(key);
+          if (!raw) continue;
+          try {
+            const envelope = JSON.parse(raw) as {
+              task?: {
+                milestones?: unknown[];
+                termination?: { plannedAt?: string };
+                title?: string;
+              };
+            };
+            if (
+              value.title !== undefined &&
+              envelope.task?.title !== value.title
+            ) {
+              continue;
+            }
+            if (
+              value.minimumMilestoneCount !== undefined &&
+              (envelope.task?.milestones?.length ?? 0) <
+                value.minimumMilestoneCount
+            ) {
+              continue;
+            }
+            if (
+              value.terminationPlannedAt !== undefined &&
+              envelope.task?.termination?.plannedAt !==
+                value.terminationPlannedAt
+            ) {
+              continue;
+            }
+            return true;
+          } catch {
+            continue;
+          }
+        }
+        return false;
+      }, expected),
+    )
+    .toBe(true);
+}

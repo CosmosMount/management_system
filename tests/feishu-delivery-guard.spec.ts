@@ -159,7 +159,7 @@ test.describe("Feishu delivery safety guard", () => {
     await rm(storagePathToAbsolute(uploadDir), { recursive: true, force: true });
   });
 
-  test("NOTIFICATION_DELIVERY_DISABLED blocks Feishu webhook fetch", async () => {
+  test("NOTIFICATION_DELIVERY_DISABLED blocks Feishu webhook fetch", { tag: "@smoke" }, async () => {
     await postToFeishuWebhook(
       "https://open.feishu.cn/open-apis/bot/v2/hook/playwright-webhook",
       "playwright-secret",
