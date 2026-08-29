@@ -370,6 +370,7 @@ npm run cron                   # 启动定时任务（独立进程）
 |------|------|
 | 默认每日 08:30 | 从飞书通讯录扫描并同步本地人员（可用 `FEISHU_CONTACT_SYNC_CRON` 调整） |
 | 每日 09:00 | 采购日报、采购停留催办 |
+| 每 10 分钟 | 上传清理队列与残留上传文件协调 |
 | 每 10 分钟 | 采购预算阈值扫描 |
 | 每 5 秒 | drain `NotificationOutbox`（进程内防重入） |
 | 每 5 秒 | 项目管理 Planned Segment 状态迁移（数据库 advisory lock） |

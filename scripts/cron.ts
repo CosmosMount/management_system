@@ -2,9 +2,10 @@ import "dotenv/config";
 import cron from "node-cron";
 import { OrderStatus } from "@prisma/client";
 import {
+  createCronJobDefinitions,
   createNonOverlappingCronRunner,
-  NOTIFICATION_OUTBOX_CRON,
-  PROJECT_MANAGEMENT_SEGMENT_TRANSITIONS_CRON,
+  DEFAULT_CONTACT_SYNC_CRON,
+  registerCronJobs,
 } from "./cron-schedule";
 import { sendFeishuDailySummary } from "../lib/feishu";
 import { runProcurementStaleReminders } from "../lib/procurement-reminders";
@@ -27,8 +28,8 @@ import {
   reconcileStaleUploadArtifacts,
 } from "../lib/upload-cleanup";
 
-const CONTACT_SYNC_CRON = process.env.FEISHU_CONTACT_SYNC_CRON ?? "30 8 * * *";
-const CRON_TIMEZONE = "Asia/Shanghai";
+const CONTACT_SYNC_CRON =
+  process.env.FEISHU_CONTACT_SYNC_CRON ?? DEFAULT_CONTACT_SYNC_CRON;
 let contactSyncRunning = false;
 let budgetScanRunning = false;
 let segmentTransitionScanRunning = false;
@@ -224,115 +225,40 @@ async function runProjectManagementDailyMaintenance() {
   }
 }
 
-cron.schedule(
+const cronJobs = createCronJobDefinitions(
+  {
+    runFeishuContactSync,
+    runNotificationOutboxDrainWithoutOverlap,
+    runUploadCleanupDrain,
+    runProcurementBudgetScan,
+    runProjectManagementSegmentTransitionScan,
+    runProjectManagementDailyMaintenance,
+    runProcurementDaily,
+  },
   CONTACT_SYNC_CRON,
-  () => {
-    runFeishuContactSync().catch((err) =>
-      logger.error("cron.feishu_contact_sync.failed", {
-        module: "cron",
-        action: "runFeishuContactSync",
-        error: err,
-      }),
-    );
-  },
-  { timezone: CRON_TIMEZONE },
 );
 
-cron.schedule(
-  NOTIFICATION_OUTBOX_CRON,
-  () => {
-    runNotificationOutboxDrainWithoutOverlap().catch((err) =>
-      logger.error("cron.notification_outbox_drain.failed", {
-        module: "cron",
-        action: "runNotificationOutboxDrain",
-        error: err,
-      }),
-    );
-  },
-  { timezone: CRON_TIMEZONE },
+registerCronJobs(
+  cronJobs,
+  (expression, callback, options) =>
+    cron.schedule(expression, callback, options),
+  (definition, error) =>
+    logger.error(definition.failureEvent, {
+      module: "cron",
+      action: definition.failureAction,
+      error,
+    }),
 );
 
-cron.schedule(
-  "*/10 * * * *",
-  () => {
-    runUploadCleanupDrain().catch((err) =>
-      logger.error("cron.upload_cleanup.failed", {
-        module: "cron",
-        action: "runUploadCleanupDrain",
-        error: err,
-      }),
-    );
-  },
-  { timezone: CRON_TIMEZONE },
-);
-
-cron.schedule(
-  "*/10 * * * *",
-  () => {
-    runProcurementBudgetScan().catch((err) =>
-      logger.error("cron.procurement_budget_scan.failed", {
-        module: "cron",
-        action: "runProcurementBudgetScan",
-        error: err,
-      }),
-    );
-  },
-  { timezone: CRON_TIMEZONE },
-);
-
-cron.schedule(
-  PROJECT_MANAGEMENT_SEGMENT_TRANSITIONS_CRON,
-  () => {
-    runProjectManagementSegmentTransitionScan().catch((err) =>
-      logger.error("cron.project_management_segment_transitions.failed", {
-        module: "cron",
-        action: "runProjectManagementSegmentTransitionScan",
-        error: err,
-      }),
-    );
-  },
-  { timezone: CRON_TIMEZONE },
-);
-
-cron.schedule(
-  "15 8 * * *",
-  () => {
-    runProjectManagementDailyMaintenance().catch((err) =>
-      logger.error("cron.project_management_daily.failed", {
-        module: "cron",
-        action: "runProjectManagementDailyMaintenance",
-        error: err,
-      }),
-    );
-  },
-  { timezone: CRON_TIMEZONE },
-);
-
-cron.schedule(
-  "0 9 * * *",
-  () => {
-    runProcurementDaily().catch((err) =>
-      logger.error("cron.procurement_daily.failed", {
-        module: "cron",
-        action: "runProcurementDaily",
-        error: err,
-      }),
-    );
-  },
-  { timezone: CRON_TIMEZONE },
+const cronSchedules = Object.fromEntries(
+  cronJobs.map((job) => [job.startupField, job.schedule]),
 );
 
 logger.info("cron.started", {
   module: "cron",
   action: "startup",
-  timezone: CRON_TIMEZONE,
-  contactSyncCron: CONTACT_SYNC_CRON,
-  notificationOutboxCron: NOTIFICATION_OUTBOX_CRON,
-  procurementBudgetCron: "*/10 * * * *",
-  projectManagementSegmentTransitionsCron:
-    PROJECT_MANAGEMENT_SEGMENT_TRANSITIONS_CRON,
-  projectManagementDailyCron: "15 8 * * *",
-  procurementDailyCron: "0 9 * * *",
+  timezone: cronJobs[0]?.timezone,
+  ...cronSchedules,
   notificationDeliveryDisabled:
     process.env.NOTIFICATION_DELIVERY_DISABLED === "true",
 });
