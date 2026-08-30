@@ -163,6 +163,8 @@ Project 详情查询在 Project 可见性校验后，按 `DRAFT`、`ACTIVE`、�
 
 P2/P3 已补齐 Task 计划生命周期的服务端闭环。`lib/project-management/application/lifecycle-service.ts` 只保留稳定公共出口，Task 草稿/激活、Revision、Milestone Review 与 Termination 的完整事务分别位于独立命令模块；共享行锁、锁后可见性、Current Plan 读取、节点推进、计划哈希/审计和通知收件人解析位于内部领域模块。外部入口仍为 `app/actions/project-management/{tasks,plans,revisions,milestones,terminations}.ts` 和 `lib/project-management/queries/task-queries.ts`：
 
+Task 工作台客户端由 `task-workbench.tsx` 协调 action、审批门禁、节点详情和编辑状态；`task-detail-timeline.tsx` 独立负责节点导航、Revision 历史按需读取及候选/历史计划的只读 presentation overlay。两者共享 `lib/project-management/labels.ts` 的 Revision 状态文案，避免 Project 与 Task 时间线各自维护同一映射。
+
 Revision 候选自身及后缀中的 Milestone 与 Termination 必须保持 `PENDING`，且只能归属于当前候选 Plan；基础 Plan 的未完成节点、Historical Plan 中已 `REVISED` 的节点或 ABANDONED 候选中已 `CANCELLED` 的节点即使伪装为 `isCarryForward=false`，Workspace 与批准事务也会按结构异常拒绝。
 
 - Task 草稿创建在事务中写入 `Task(status=DRAFT)`、初始 `TaskPlanVersion(status=CURRENT, activatedAt=null)`、`0–200` 个有序 Milestone、末尾 Termination、显式选择的成员、审计，以及有成员时的站内通知和 `channel=project-management` outbox；Start 固定由 `plannedStartAt` 表示，Terminal 持久化 trim 后 `1–200` 字符的名称（默认 `Terminal`）。Start、每个 Milestone 与 Terminal 时间必须严格递增，不接受同刻。`TaskPlanVersion.idempotencyKey` 与带版本前缀的 `creationRequestHash` 支持同账号请求幂等和 payload 冲突检测；读取无前缀历史 hash 时兼容旧版“创建者归一化为 Owner”语义，但新写入不再隐式增加或改写创建者成员关系。只有绑定活跃 `Person` 的统一账号可以创建，所有显式新增成员也必须是活跃 Person。模板成员只复制 Owner/Participant，人员冲突时 Owner 优先，模板计划继续复制 Terminal 名称并按新时间规则重新校验。

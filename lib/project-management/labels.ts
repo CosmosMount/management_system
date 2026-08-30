@@ -45,6 +45,17 @@ export const taskNodeStatusLabels: Record<TaskNodeStatus, string> = {
   CANCELLED: "已取消",
 };
 
+export function revisionStatusLabel(status: string) {
+  return (
+    {
+      PENDING_APPROVAL: "待审批",
+      REJECTED: "已驳回",
+      CANCELLED: "已取消",
+      EFFECTIVE: "已生效",
+    } as Record<string, string>
+  )[status] ?? status;
+}
+
 export const workSegmentTypeLabels: Record<WorkSegmentType, string> = {
   PLANNED: "计划",
   ACTUAL: "实际",

@@ -28,7 +28,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { taskNodeStatusLabels, taskStatusLabels } from "@/lib/project-management/labels";
+import {
+  revisionStatusLabel,
+  taskNodeStatusLabels,
+  taskStatusLabels,
+} from "@/lib/project-management/labels";
 import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 import type { TaskNodeStatus, TaskStatus } from "@prisma/client";
@@ -739,15 +743,4 @@ function taskAnchors(task: ProjectTimelineTask): TimeCanvasAnchor[] {
       };
     }),
   ];
-}
-
-function revisionStatusLabel(status: string) {
-  return (
-    {
-      PENDING_APPROVAL: "待审批",
-      REJECTED: "已驳回",
-      CANCELLED: "已取消",
-      EFFECTIVE: "已生效",
-    } as Record<string, string>
-  )[status] ?? status;
 }
