@@ -151,7 +151,7 @@ DRAFT → MANAGEMENT_REVIEW → TEACHER_REVIEW → PENDING_APPLICANT_DOCS
 
 当前项目管理数据模型还包括 `Project`、`ProjectMember`、`ProjectEstablishmentRequest` 和 `ProjectEstablishmentRequestedTask`。`Task.projectId` 可空且最多指向一个 Project；有效 Project 成员和单一待审批轮次由 PostgreSQL partial unique index 保证。Project 删除使用 `deletedAt` 软删除，并在同一事务清空关联 Task 的 `projectId`。
 
-Project 结束规则由共享领域策略统一定义。只有 `DRAFT` 和 `ACTIVE` 的未删除关联 Task 会阻止 ACTIVE Project 结束；空 Project 以及仅包含 `COMPLETED/FAILED/CANCELLED/TIMEOUT/ARCHIVED` Task 的 Project 均可结束。详情查询单独返回精确阻塞数量和最多 10 条阻塞明细，不能用“Task 总数减已完成数”推导；完成进度继续只统计 `COMPLETED`。结束事务仍同时执行权限、乐观锁、待审批立项校验，并原子写 Project 状态、领域审计、站内通知和通知 outbox。
+Project 结束规则由共享领域策略统一定义。只有 `DRAFT` 和 `ACTIVE` 的未删除关联 Task 会阻止 ACTIVE Project 结束；空 Project 以及仅包含 `COMPLETED/FAILED/CANCELLED/TIMEOUT/ARCHIVED` Task 的 Project 均可结束。详情查询单独返回精确阻塞数量和最多 10 条阻塞明细，不能用“Task 总数减已完成数”推导；详情完成进度的分子只统计 `COMPLETED`，分母为全部未删除 Task 减去 `CANCELLED`，原始 Task 总数的语义不变。结束事务仍同时执行权限、乐观锁、待审批立项校验，并原子写 Project 状态、领域审计、站内通知和通知 outbox。
 
 `RiskRecord` 和 `Comment` 分别是风险与评论的多目标事实表。两表都有可空 `projectId/taskId`，PostgreSQL XOR 检查约束保证恰好一个目标；外键均为 `Restrict`。风险允许同一目标多条 `ACTIVE`，状态只能由 `ACTIVE` 条件更新为 `RESOLVED`，数据库同时约束解决人、说明和时间的一致性。评论不编辑、不恢复，删除只写 `deletedAt/deletedBy*` 软删除字段并由一致性约束保护。Account 外键和姓名快照保留可解释历史，Person 外键允许为空。
 
@@ -159,7 +159,7 @@ Project 结束规则由共享领域策略统一定义。只有 `DRAFT` 和 `ACTI
 
 近期动态只读取 `DomainAuditEvent`。白名单 formatter 返回中文标题和有界字段摘要，不把 raw `before/after` 中的内部 ID、hash、锁版本或未知 action 下发浏览器；DTO 只保留分页去重与安全详情链接需要的记录 ID/路径。筛选、`createdAt + id` 游标和 20 条分页均在服务端执行；Revision、Milestone、Terminal 和人员投入名称通过当前页最多 20 条事件的有界批量查询装配。所有新 Task 审计在统一审计写入函数中固化事件发生时的 `projectId`；Task 加入、移出或移动事件以 `before/after.projectId` 支持两个 Project 查询。既有缺少 `projectId` 的普通 Task 审计不回填，也不进入 Project 动态。客户端每 5 秒查询最新可见审计版本 token，隐藏页面暂停，恢复可见立即检查，并用请求序号防止旧结果覆盖。
 
-Project 详情查询在 Project 可见性校验后，按 `DRAFT`、`ACTIVE`、所有终态三个状态组读取全部未删除 Task，组内使用 `updatedAt desc, id asc`。查询加载这些 Task 的 Current Plan Start、Milestone、Revision 与 Terminal，服务端序列化后由详情页组装只读 TimeCanvas；客户端不能提交任意 Task ID 扩大计划范围。全部计划共同受 5,000 节点上限约束；超限时保留 Project 与 Task 列表、停止向客户端下发节点正文，并在时间线区显示明确错误，不能静默截断。立项轮次和领域审计继续保存，详情 UI 不恢复历史卡片；`PENDING_APPROVAL` 时根据 `pendingRequestId` 从现有请求 DTO 选择当前轮，展示轮次、提交人、提交时间和有序的请求 Task 及其中文状态，空 Task 请求显示明确空状态。概览上的 `#establishment` 锚点继续承接待办和通知深链。
+Project 详情查询在 Project 可见性校验后，按 `DRAFT`、`ACTIVE`、所有终态三个状态组读取全部未删除 Task，组内使用 `updatedAt desc, id asc`。查询加载这些 Task 的 Current Plan Start、Milestone、Revision 与 Terminal，服务端序列化后由详情页按七种精确状态建立可折叠表格；仅存在数据的状态渲染分组，默认只展开并选择 `ACTIVE`，组级复选框支持全选、全不选和部分选择，表头显示“已展示数量/组内总数”。折叠状态与计划轨道选择相互独立，选择仅是页面内表现状态；显式 `focus` 深链会额外显示并展开目标 Task 的状态组。只读 TimeCanvas 的 Task 计划行由当前选择派生，人员行、Segment 查询范围和 Project/Task 成员全集不随选择收窄；客户端仍不能提交任意 Task ID 扩大服务端计划范围。全部计划共同受 5,000 节点上限约束；超限时保留 Project 与 Task 分组、停止向客户端下发节点正文、禁用计划显示控件，并在时间线区显示明确错误，不能静默截断。立项轮次和领域审计继续保存，详情 UI 不恢复历史卡片；`PENDING_APPROVAL` 时根据 `pendingRequestId` 从现有请求 DTO 选择当前轮，展示轮次、提交人、提交时间和有序的请求 Task 及其中文状态，空 Task 请求显示明确空状态。概览上的 `#establishment` 锚点继续承接待办和通知深链。
 
 P2/P3 已补齐 Task 计划生命周期的服务端闭环。`lib/project-management/application/lifecycle-service.ts` 只保留稳定公共出口，Task 草稿/激活、Revision、Milestone Review 与 Termination 的完整事务分别位于独立命令模块；共享行锁、锁后可见性、Current Plan 读取、节点推进、计划哈希/审计和通知收件人解析位于内部领域模块。外部入口仍为 `app/actions/project-management/{tasks,plans,revisions,milestones,terminations}.ts` 和 `lib/project-management/queries/task-queries.ts`：
 

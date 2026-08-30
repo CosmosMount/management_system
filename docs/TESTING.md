@@ -318,9 +318,9 @@ npm run pm:identity-backfill
 1. `/progress/projects` 无参数时默认“只看我参与 + 进行中”，显式 `mine=0&status=` 可取消默认；Desktop 和 Pixel 5 均无横向滚动。
 2. 普通账号可提交完整立项但不能审批；两类全局管理员可通过或驳回。驳回保留同一 Project，原申请人可修改并创建新轮次。
 3. 立项提交不改变所选 Task；批准时全部 Task 原子挂载，冲突时零部分写入。Task 成员同步为 Project Participant，Project Owner 不获得 Task 写权限。
-4. 空 Project 可以直接结束；未删除的 `DRAFT` 或 `ACTIVE` Task 会阻止结束，仅包含 `COMPLETED/FAILED/CANCELLED/TIMEOUT/ARCHIVED` Task 时允许结束。阻塞请求必须零写入，详情阻塞数必须精确且明细最多 10 条，Task 完成进度仍只统计 `COMPLETED`。软删除保留 Task 并清空 `projectId`，删除对象直达返回脱敏 404。
+4. 空 Project 可以直接结束；未删除的 `DRAFT` 或 `ACTIVE` Task 会阻止结束，仅包含 `COMPLETED/FAILED/CANCELLED/TIMEOUT/ARCHIVED` Task 时允许结束。阻塞请求必须零写入，详情阻塞数必须精确且明细最多 10 条；Task 完成进度必须显示 `COMPLETED /（未删除总数 - CANCELLED）`，同时保留原始总数供空 Project 与结束门禁使用。软删除保留 Task 并清空 `projectId`，删除对象直达返回脱敏 404。
 5. 头像只接受真实 PNG/JPEG/WebP 且不超过 2 MiB；所有自动化测试继续使用禁通知环境，不发送真实飞书消息。
-6. Desktop `1440x1000` 与 Pixel 5 打开 `/progress/projects/[id]`：概览显示头像、名称、完整内容、状态、负责人、参与人和 Task 完成进度，权限操作位于右上；不得显示立项历史或 raw 审计卡片。`PENDING_APPROVAL` 时，`#establishment` 审批区还必须只展示当前轮次、提交人、提交时间和申请 Task 的名称/中文状态，零 Task 时显示明确空状态；管理员可见审批控件，申请人只读。第二层为与概览左右对齐的全宽时间线，只包含本 Project Task 的 Current Plan，同时展示 Project/Task 全部有效成员在其他 Task 和独立投入中的完整时间。第三层在桌面端按“Project 自身及所属 Task 风险与 Project 评论 / 全量 Task 列表和风险录入 / 中文近期动态”三栏展示；低于 `xl` 时按“Task 列表和风险录入 → 风险与评论 → 近期动态”单列排列。Task 列表按“草稿 → 进行中 → 所有终态”展示；已完成节点使用绿色勾选，未完成节点保留普通圆点。定位按钮仍选择当前进行中的非 Revision 节点，没有 Active 节点时回退到 Start；范围外目标通过规范 `focus` / `center` 回载后，应滚动到时间线并聚焦目标。两种视口都要验证无横向溢出、全量 Task/人员投入和投入悬浮 Task 信息。
+6. Desktop `1440x1000` 与 Pixel 5 打开 `/progress/projects/[id]`：概览显示头像、名称、完整内容、状态、负责人、参与人和 Task 完成进度，权限操作位于右上；不得显示立项历史或 raw 审计卡片。`PENDING_APPROVAL` 时，`#establishment` 审批区还必须只展示当前轮次、提交人、提交时间和申请 Task 的名称/中文状态，零 Task 时显示明确空状态；管理员可见审批控件，申请人只读。第二层为与概览左右对齐的全宽时间线，默认只包含本 Project `ACTIVE` Task 的 Current Plan，同时展示 Project/Task 全部有效成员在其他 Task 和独立投入中的完整时间。第三层在桌面端按“Project 自身及所属 Task 风险与 Project 评论 / 全量 Task 列表和风险录入 / 中文近期动态”三栏展示；低于 `xl` 时按“Task 列表和风险录入 → 风险与评论 → 近期动态”单列排列。Task 按七种精确状态进入独立分组，只渲染非空分组；进行中默认展开且全选，其余默认折叠且不选。逐条选择、组级全选/全不选/部分选择和“已展示 X/Y”均须同步计划轨道；折叠或展开不得改变选择，计划筛选不得移除人员行或 Segment。已完成节点使用绿色勾选，未完成节点保留普通圆点。定位按钮仍选择当前进行中的非 Revision 节点，没有 Active 节点时回退到 Start；范围外目标通过规范 `focus` / `center` 回载后，应额外显示并展开目标状态组、滚动到时间线并聚焦目标。节点超限时分组仍可展开查看 Task，但显示控件禁用。两种视口都要验证无横向溢出、长 Task 名称、完整人员投入和投入悬浮 Task 信息。
 
 ### 风险、评论和近期动态专项测试
 

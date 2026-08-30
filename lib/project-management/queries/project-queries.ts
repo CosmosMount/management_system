@@ -75,8 +75,6 @@ const projectTaskStatusGroups = [
   ["COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "ARCHIVED"],
 ] as const satisfies ReadonlyArray<ReadonlyArray<TaskStatus>>;
 
-type ProjectTaskStatusGroup = 0 | 1 | 2;
-
 export type ProjectListItem = {
   id: string;
   name: string;
@@ -205,8 +203,7 @@ export async function getProjectDetail({
     },
   });
   if (!project) throw notFoundError();
-  const [completedTaskTotalCount, blockingTaskTotalCount, blockingTasks, taskRows, requestRows, auditRows, pendingRequest] = await Promise.all([
-    prisma.task.count({ where: { projectId: project.id, deletedAt: null, status: "COMPLETED" } }),
+  const [blockingTaskTotalCount, blockingTasks, taskRows, requestRows, auditRows, pendingRequest] = await Promise.all([
     prisma.task.count({ where: { projectId: project.id, deletedAt: null, status: { in: [...PROJECT_COMPLETION_BLOCKING_TASK_STATUSES] } } }),
     prisma.task.findMany({ where: { projectId: project.id, deletedAt: null, status: { in: [...PROJECT_COMPLETION_BLOCKING_TASK_STATUSES] } }, select: { id: true, title: true, status: true }, orderBy: [{ updatedAt: "desc" }, { id: "asc" }], take: 10 }),
     loadProjectDetailTaskRows(project.id),
@@ -245,6 +242,12 @@ export async function getProjectDetail({
     prisma.projectEstablishmentRequest.findFirst({ where: { projectId: project.id, status: "PENDING" }, select: { id: true } }),
   ]);
   const tasks = taskRows;
+  const completedTaskTotalCount = tasks.filter(
+    (task) => task.status === "COMPLETED",
+  ).length;
+  const completionTaskTotalCount = tasks.filter(
+    (task) => task.status !== "CANCELLED",
+  ).length;
   const visiblePlanNodeCount = tasks.reduce(
     (count, task) => count + task.currentPlanVersion.nodes.length,
     0,
@@ -321,6 +324,7 @@ export async function getProjectDetail({
     })),
     timelineError,
     taskTotalCount: project._count.tasks,
+    completionTaskTotalCount,
     completedTaskTotalCount,
     blockingTaskTotalCount,
     blockingTasks,
@@ -485,21 +489,16 @@ function parseProjectTimelineFocus(focus: string) {
 async function loadProjectDetailTaskRows(
   projectId: string,
 ): Promise<ProjectDetailTaskRow[]> {
-  const rows: ProjectDetailTaskRow[] = [];
-  for (let group = 0; group < projectTaskStatusGroups.length; group += 1) {
-    const statusGroup = group as ProjectTaskStatusGroup;
-    const groupRows = await prisma.task.findMany({
-      where: {
-        projectId,
-        deletedAt: null,
-        status: { in: [...projectTaskStatusGroups[statusGroup]] },
-      },
-      select: projectDetailTaskSelect,
-      orderBy: [{ updatedAt: "desc" }, { id: "asc" }],
-    });
-    rows.push(...groupRows);
-  }
-  return rows;
+  const rows = await prisma.task.findMany({
+    where: { projectId, deletedAt: null },
+    select: projectDetailTaskSelect,
+    orderBy: [{ updatedAt: "desc" }, { id: "asc" }],
+  });
+  return projectTaskStatusGroups.flatMap((statusGroup) =>
+    rows.filter((row) =>
+      statusGroup.some((status) => status === row.status),
+    ),
+  );
 }
 
 function encodeTimestampCursor(timestamp: Date, id: string) {

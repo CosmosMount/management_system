@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { LocateFixed, Plus } from "lucide-react";
+import { ChevronDown, LocateFixed, Plus } from "lucide-react";
 import {
   CollaborationLeftSidebar,
   CollaborationRightSidebar,
@@ -20,6 +20,14 @@ import type {
 import type { PersonOptionDto } from "@/lib/project-management/types/time-canvas";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { taskNodeStatusLabels, taskStatusLabels } from "@/lib/project-management/labels";
 import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";
@@ -47,6 +55,15 @@ type ProjectTimelineTask = {
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const ROW_HEIGHT = 112;
+const projectTaskStatusOrder = [
+  "DRAFT",
+  "ACTIVE",
+  "COMPLETED",
+  "FAILED",
+  "CANCELLED",
+  "TIMEOUT",
+  "ARCHIVED",
+] as const satisfies readonly TaskStatus[];
 const phaseTones: TimeCanvasTone[] = [
   "BLUE",
   "VIOLET",
@@ -62,7 +79,7 @@ export function ProjectDetailWorkspace({
   canCreateTask,
   tasks,
   timelineError,
-  taskTotalCount,
+  completionTaskTotalCount,
   completedTaskTotalCount,
   resourceModel,
   resourceTimelineError,
@@ -76,7 +93,7 @@ export function ProjectDetailWorkspace({
   canCreateTask: boolean;
   tasks: ProjectTimelineTask[];
   timelineError: string | null;
-  taskTotalCount: number;
+  completionTaskTotalCount: number;
   completedTaskTotalCount: number;
   resourceModel: TimeCanvasModel | null;
   resourceTimelineError: string | null;
@@ -91,9 +108,35 @@ export function ProjectDetailWorkspace({
 }) {
   const router = useRouter();
   const timelineContainerRef = useRef<HTMLDivElement>(null);
+  const focusedTask = taskForTimelineFocus(tasks, timelineWindow.focusId);
+  const [visibleTaskIds, setVisibleTaskIds] = useState<string[]>(() =>
+    initialVisibleTaskIds(tasks, focusedTask),
+  );
+  const [expandedTaskStatuses, setExpandedTaskStatuses] = useState<TaskStatus[]>(
+    () => initialExpandedTaskStatuses(tasks, focusedTask),
+  );
+  const taskGroups = useMemo(
+    () =>
+      projectTaskStatusOrder.flatMap((status) => {
+        const statusTasks = tasks.filter((task) => task.status === status);
+        return statusTasks.length > 0 ? [{ status, tasks: statusTasks }] : [];
+      }),
+    [tasks],
+  );
+  const visibleTaskIdSet = useMemo(
+    () => new Set(visibleTaskIds),
+    [visibleTaskIds],
+  );
+  const visibleTasks = useMemo(
+    () =>
+      taskGroups.flatMap((group) =>
+        group.tasks.filter((task) => visibleTaskIdSet.has(task.id)),
+      ),
+    [taskGroups, visibleTaskIdSet],
+  );
   const model = useMemo(
-    () => mergeProjectTimelineModel(tasks, resourceModel),
-    [resourceModel, tasks],
+    () => mergeProjectTimelineModel(visibleTasks, resourceModel),
+    [resourceModel, visibleTasks],
   );
   const [requestedAnchorId, setRequestedAnchorId] = useState<string | null>(timelineWindow.focusId);
   const externalTimelineFocusRef = useRef(timelineWindow.focusId);
@@ -105,6 +148,33 @@ export function ProjectDetailWorkspace({
     }, 0);
     return () => window.clearTimeout(timer);
   }, [timelineWindow.focusId]);
+  const revealedExternalFocusRef = useRef(timelineWindow.focusId);
+  useEffect(() => {
+    const focusId = timelineWindow.focusId;
+    if (revealedExternalFocusRef.current === focusId) return;
+    const externalFocusedTask = taskForTimelineFocus(
+      tasks,
+      focusId,
+    );
+    if (!externalFocusedTask) {
+      revealedExternalFocusRef.current = focusId;
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      revealedExternalFocusRef.current = focusId;
+      setVisibleTaskIds((current) =>
+        current.includes(externalFocusedTask.id)
+          ? current
+          : [...current, externalFocusedTask.id],
+      );
+      setExpandedTaskStatuses((current) =>
+        current.includes(externalFocusedTask.status)
+          ? current
+          : [...current, externalFocusedTask.status],
+      );
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [tasks, timelineWindow.focusId]);
   const selectedAnchorId = model.anchors.some(
     (anchor) => anchor.id === requestedAnchorId,
   )
@@ -129,6 +199,34 @@ export function ProjectDetailWorkspace({
     });
     return () => window.cancelAnimationFrame(frame);
   }, [selectedAnchorId, timelineWindow.focusId]);
+
+  const timelineUnavailableMessage = timelineError ?? resourceTimelineError;
+
+  function setTasksVisible(taskIds: string[], checked: boolean) {
+    const targetTaskIds = new Set(taskIds);
+    setVisibleTaskIds((current) => {
+      const next = new Set(current);
+      for (const taskId of targetTaskIds) {
+        if (checked) next.add(taskId);
+        else next.delete(taskId);
+      }
+      return tasks.flatMap((task) => (next.has(task.id) ? [task.id] : []));
+    });
+    if (
+      !checked &&
+      targetTaskIds.has(taskForTimelineFocus(tasks, requestedAnchorId)?.id ?? "")
+    ) {
+      setRequestedAnchorId(null);
+    }
+  }
+
+  function toggleTaskStatus(status: TaskStatus) {
+    setExpandedTaskStatuses((current) =>
+      current.includes(status)
+        ? current.filter((candidate) => candidate !== status)
+        : [...current, status],
+    );
+  }
 
   function locateTask(task: ProjectTimelineTask) {
     const pointedMilestone = task.currentPlan.nodes.find(
@@ -206,7 +304,7 @@ export function ProjectDetailWorkspace({
         <div>
           <h2 className="font-semibold">Task 与人员投入时间线</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            全部 Project Task 计划 · Project/Task 成员的全部投入
+            已展示 {visibleTasks.length}/{tasks.length} 个 Project Task 计划 · Project/Task 成员的全部投入
           </p>
         </div>
         {timelineFocusError && (
@@ -261,7 +359,7 @@ export function ProjectDetailWorkspace({
               <div className="min-w-0">
                 <h2 className="font-semibold">Task</h2>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  {completedTaskTotalCount}/{taskTotalCount} 已完成
+                  {completedTaskTotalCount}/{completionTaskTotalCount} 已完成
                 </p>
               </div>
               {projectStatus === "ACTIVE" && canCreateTask && (
@@ -275,44 +373,151 @@ export function ProjectDetailWorkspace({
             </div>
 
             {tasks.length ? (
-              <div className="mt-4 space-y-3">
-                <ul className="divide-y rounded-lg border" aria-label="Project Task 列表">
-                  {tasks.map((task) => {
-                    const selected = model.anchors.some(
-                      (anchor) =>
-                        anchor.taskId === task.id && anchor.id === selectedAnchorId,
-                    );
-                    return (
-                      <li
-                        key={task.id}
-                        className={cn(
-                          "flex min-w-0 flex-wrap items-center gap-2 p-3",
-                          selected && "bg-primary/5 ring-1 ring-inset ring-primary/30",
-                        )}
-                      >
-                        <Link
-                          href={routes.progress.taskDetail(task.id)}
-                          className="min-w-0 flex-1 break-words font-medium hover:text-primary hover:underline"
-                        >
-                          {task.title}
-                        </Link>
-                        <Badge variant="secondary">{taskStatusLabels[task.status]}</Badge>
+              <div
+                className="mt-4 space-y-3"
+                aria-label="Project Task 分组列表"
+              >
+                {taskGroups.map((group) => {
+                  const expanded = expandedTaskStatuses.includes(group.status);
+                  const displayedCount = group.tasks.filter((task) =>
+                    visibleTaskIdSet.has(task.id),
+                  ).length;
+                  const statusLabel = taskStatusLabels[group.status];
+                  return (
+                    <section
+                      key={group.status}
+                      className="min-w-0 overflow-hidden rounded-lg border border-border"
+                      data-testid={`project-task-group-${group.status}`}
+                    >
+                      <div className="flex min-w-0 flex-col gap-2 bg-muted/30 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                         <Button
                           type="button"
                           size="sm"
-                          variant="outline"
-                          aria-label={`在时间线中定位 ${task.title}`}
-                          aria-pressed={selected}
-                          disabled={Boolean(timelineError)}
-                          title={timelineError ?? undefined}
-                          onClick={() => locateTask(task)}
+                          variant="ghost"
+                          className="min-w-0 justify-start px-1"
+                          aria-expanded={expanded}
+                          aria-controls={`project-task-group-body-${group.status}`}
+                          aria-label={`${expanded ? "收起" : "展开"}${statusLabel} Task 列表`}
+                          onClick={() => toggleTaskStatus(group.status)}
                         >
-                          <LocateFixed />定位
+                          <ChevronDown
+                            className={cn(
+                              "shrink-0 transition-transform",
+                              !expanded && "-rotate-90",
+                            )}
+                            aria-hidden="true"
+                          />
+                          <span className="min-w-0 break-words text-left">
+                            {statusLabel} Task
+                          </span>
+                          <Badge variant="secondary">{group.tasks.length}</Badge>
                         </Button>
-                      </li>
-                    );
-                  })}
-                </ul>
+                        <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+                          <span
+                            className="tabular-nums text-muted-foreground"
+                            data-testid={`project-task-group-ratio-${group.status}`}
+                          >
+                            已展示 {displayedCount}/{group.tasks.length}
+                          </span>
+                          <label className="inline-flex min-w-0 items-center gap-2">
+                            <StatusVisibilityCheckbox
+                              statusLabel={statusLabel}
+                              displayedCount={displayedCount}
+                              totalCount={group.tasks.length}
+                              disabled={Boolean(timelineUnavailableMessage)}
+                              onCheckedChange={(checked) =>
+                                setTasksVisible(
+                                  group.tasks.map((task) => task.id),
+                                  checked,
+                                )
+                              }
+                            />
+                            <span>全部显示</span>
+                          </label>
+                        </div>
+                      </div>
+
+                      {expanded && (
+                        <div id={`project-task-group-body-${group.status}`}>
+                          <Table
+                            className="table-fixed"
+                            aria-label={`${statusLabel} Task 列表`}
+                          >
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead className="w-16 whitespace-normal text-center">时间线</TableHead>
+                                <TableHead className="whitespace-normal">Task</TableHead>
+                                <TableHead className="w-20 whitespace-normal text-right">操作</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {group.tasks.map((task) => {
+                                const displayed = visibleTaskIdSet.has(task.id);
+                                const selected = model.anchors.some(
+                                  (anchor) =>
+                                    anchor.taskId === task.id &&
+                                    anchor.id === selectedAnchorId,
+                                );
+                                const locateDisabledMessage = timelineUnavailableMessage
+                                  ?? (!displayed ? "请先勾选显示该 Task 时间线" : null);
+                                return (
+                                  <TableRow
+                                    key={task.id}
+                                    className={cn(
+                                      selected && "bg-primary/5 ring-1 ring-inset ring-primary/30",
+                                    )}
+                                  >
+                                    <TableCell className="whitespace-normal text-center">
+                                      <input
+                                        type="checkbox"
+                                        className="size-4 accent-primary"
+                                        checked={displayed}
+                                        disabled={Boolean(timelineUnavailableMessage)}
+                                        aria-label={`在时间线中显示 ${task.title}`}
+                                        title={timelineUnavailableMessage ?? undefined}
+                                        onChange={(event) =>
+                                          setTasksVisible(
+                                            [task.id],
+                                            event.currentTarget.checked,
+                                          )
+                                        }
+                                      />
+                                    </TableCell>
+                                    <TableCell className="whitespace-normal">
+                                      <div className="flex min-w-0 flex-col items-start gap-1.5">
+                                        <Link
+                                          href={routes.progress.taskDetail(task.id)}
+                                          className="max-w-full break-words font-medium hover:text-primary hover:underline"
+                                        >
+                                          {task.title}
+                                        </Link>
+                                        <Badge variant="secondary">{statusLabel}</Badge>
+                                      </div>
+                                    </TableCell>
+                                    <TableCell className="whitespace-normal text-right">
+                                      <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="outline"
+                                        aria-label={`在时间线中定位 ${task.title}`}
+                                        aria-pressed={selected}
+                                        disabled={Boolean(locateDisabledMessage)}
+                                        title={locateDisabledMessage ?? undefined}
+                                        onClick={() => locateTask(task)}
+                                      >
+                                        <LocateFixed />定位
+                                      </Button>
+                                    </TableCell>
+                                  </TableRow>
+                                );
+                              })}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      )}
+                    </section>
+                  );
+                })}
               </div>
             ) : (
               <p className="mt-4 text-sm text-muted-foreground">尚未关联 Task</p>
@@ -342,6 +547,79 @@ export function ProjectDetailWorkspace({
       </div>
     </div>
   );
+}
+
+function StatusVisibilityCheckbox({
+  statusLabel,
+  displayedCount,
+  totalCount,
+  disabled,
+  onCheckedChange,
+}: {
+  statusLabel: string;
+  displayedCount: number;
+  totalCount: number;
+  disabled: boolean;
+  onCheckedChange: (checked: boolean) => void;
+}) {
+  const checkboxRef = useRef<HTMLInputElement>(null);
+  const checked = displayedCount === totalCount;
+  const mixed = displayedCount > 0 && !checked;
+  useEffect(() => {
+    if (checkboxRef.current) checkboxRef.current.indeterminate = mixed;
+  }, [mixed]);
+  return (
+    <input
+      ref={checkboxRef}
+      type="checkbox"
+      className="size-4 shrink-0 accent-primary"
+      checked={checked}
+      disabled={disabled}
+      aria-label={`显示全部${statusLabel} Task 时间线`}
+      aria-checked={mixed ? "mixed" : checked}
+      onChange={(event) => onCheckedChange(event.currentTarget.checked)}
+    />
+  );
+}
+
+function initialVisibleTaskIds(
+  tasks: ProjectTimelineTask[],
+  focusedTask: ProjectTimelineTask | null,
+) {
+  return tasks.flatMap((task) =>
+    task.status === "ACTIVE" || task.id === focusedTask?.id ? [task.id] : [],
+  );
+}
+
+function initialExpandedTaskStatuses(
+  tasks: ProjectTimelineTask[],
+  focusedTask: ProjectTimelineTask | null,
+): TaskStatus[] {
+  const statuses: TaskStatus[] = tasks.some((task) => task.status === "ACTIVE")
+    ? ["ACTIVE"]
+    : [];
+  if (focusedTask && !statuses.includes(focusedTask.status)) {
+    statuses.push(focusedTask.status);
+  }
+  return statuses;
+}
+
+function taskForTimelineFocus(
+  tasks: ProjectTimelineTask[],
+  focusId: string | null,
+) {
+  if (!focusId) return null;
+  const taskId = focusId.startsWith("project-start:")
+    ? focusId.slice("project-start:".length)
+    : null;
+  if (taskId) return tasks.find((task) => task.id === taskId) ?? null;
+  const nodeId = focusId.startsWith("project-node:")
+    ? focusId.slice("project-node:".length)
+    : null;
+  if (!nodeId) return null;
+  return tasks.find((task) =>
+    task.currentPlan.nodes.some((node) => node.id === nodeId),
+  ) ?? null;
 }
 
 function mergeProjectTimelineModel(

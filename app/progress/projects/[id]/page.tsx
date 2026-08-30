@@ -213,7 +213,7 @@ export default async function ProjectDetailPage({
                 />
                 <OverviewItem
                   label="Task 完成进度"
-                  value={`${project.completedTaskTotalCount}/${project.taskTotalCount} 已完成`}
+                  value={`${project.completedTaskTotalCount}/${project.completionTaskTotalCount} 已完成`}
                 />
               </dl>
             </div>
@@ -306,7 +306,7 @@ export default async function ProjectDetailPage({
           canCreateTask={actor.isActive !== false}
           tasks={project.tasks}
           timelineError={project.timelineError}
-          taskTotalCount={project.taskTotalCount}
+          completionTaskTotalCount={project.completionTaskTotalCount}
           completedTaskTotalCount={project.completedTaskTotalCount}
           resourceModel={
             resourceCanvasResult?.ok
