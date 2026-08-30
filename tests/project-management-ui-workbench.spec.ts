@@ -721,6 +721,171 @@ test.describe("project management UI project-management-ui-workbench", () => {
     expect(pageErrors).toEqual([]);
   });
 
+  test("pending Milestone approval shows link, empty, and legacy file evidence to reviewers and submitters", async ({
+    context,
+    page,
+    baseURL,
+  }) => {
+    test.setTimeout(90_000);
+    const pageErrors: Error[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error));
+    const admin = await createAccountPerson(
+      `P6 Pending Material Admin ${randomUUID()}`,
+    );
+    const owner = await createAccountPerson(
+      `P6 Pending Material Owner ${randomUUID()}`,
+    );
+    await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
+
+    const createPendingTask = async ({
+      label,
+      evidences,
+    }: {
+      label: string;
+      evidences: Array<
+        | { kind: "TEXT"; note: string }
+        | { kind: "LINK"; externalUrl: string; note?: string }
+      >;
+    }) => {
+      const draft = await createTaskDraft(actor(owner), {
+        title: `P6 待审批材料 ${label} ${randomUUID()}`,
+        description: `验证待审批${label}`,
+        team: "英雄",
+        techGroup: "电控",
+        priority: "MEDIUM",
+        members: [{ personId: owner.person.id, role: "OWNER" }],
+        milestones: [milestoneInput(label, `完成${label}`, 1)],
+        plannedStartAt: new Date(
+          Date.UTC(2026, 6, 31, 10, 0, 0),
+        ).toISOString(),
+        termination: terminationInput(5),
+        idempotencyKey: `p6-pending-material-${randomUUID()}`,
+      });
+      await activateTask(actor(owner), {
+        taskId: draft.taskId,
+        expectedLockVersion: draft.lockVersion,
+      });
+      const task = await prisma.task.findUniqueOrThrow({
+        where: { id: draft.taskId },
+        select: { activeMilestoneNodeId: true },
+      });
+      if (!task.activeMilestoneNodeId) {
+        throw new Error("待审批材料 UI fixture 缺少 Active Milestone");
+      }
+      const submitted = await submitMilestoneForReview(actor(owner), {
+        milestoneNodeId: task.activeMilestoneNodeId,
+        idempotencyKey: `p6-pending-review-${randomUUID()}`,
+        evidences,
+      });
+      return { taskId: draft.taskId, reviewId: submitted.reviewId };
+    };
+
+    const emptyTask = await createPendingTask({
+      label: "空验收证据 Milestone",
+      evidences: [],
+    });
+    const longLinkNote = `安全链接说明${"很长的补充内容".repeat(100)}`;
+    const linkTask = await createPendingTask({
+      label: "链接验收证据 Milestone",
+      evidences: [
+        {
+          kind: "LINK",
+          externalUrl: "https://example.com/pending-evidence",
+          note: longLinkNote,
+        },
+      ],
+    });
+    const legacyFileAsset = await prisma.fileAsset.create({
+      data: {
+        publicPath: `/uploads/project-management-evidence/${randomUUID()}.txt`,
+        storagePath: `project-management-evidence/${randomUUID()}.txt`,
+        kind: "TEMP_UPLOAD",
+        mimeType: "text/plain",
+        size: 128,
+        ownerOpenId: owner.openId,
+      },
+    });
+    await prisma.reviewEvidence.createMany({
+      data: [
+        {
+          reviewId: linkTask.reviewId,
+          kind: "LINK",
+          externalUrl: "javascript:alert('unsafe')",
+          note: "历史不安全待审批链接",
+          sortOrder: 1,
+        },
+        {
+          reviewId: linkTask.reviewId,
+          kind: "FILE",
+          fileAssetId: legacyFileAsset.id,
+          note: `历史文件材料${"无法在线查看".repeat(100)}`,
+          sortOrder: 2,
+        },
+      ],
+    });
+
+    await loginAsTestUser(context, baseURL, {
+      openId: owner.openId,
+      name: owner.person.displayName,
+    });
+    await page.goto(`/progress/tasks/${linkTask.taskId}`);
+    const submitterMaterials = page.getByTestId(
+      "milestone-pending-review-evidences",
+    );
+    await expect(
+      submitterMaterials.getByRole("heading", { name: "本次提交材料" }),
+    ).toBeVisible();
+    const safeLink = submitterMaterials.getByRole("link", {
+      name: "https://example.com/pending-evidence",
+    });
+    await expect(safeLink).toHaveAttribute(
+      "href",
+      "https://example.com/pending-evidence",
+    );
+    await expect(safeLink).toHaveAttribute("target", "_blank");
+    await expect(safeLink).toHaveAttribute("rel", "noreferrer");
+    await expect(submitterMaterials).toContainText(longLinkNote);
+    await expect(submitterMaterials).toContainText("链接不可用");
+    await expect(submitterMaterials).toContainText("历史不安全待审批链接");
+    await expect(submitterMaterials).toContainText("文件材料当前不可查看");
+    await expect(submitterMaterials).toContainText("历史文件材料");
+    await expect(submitterMaterials.getByRole("link")).toHaveCount(1);
+    await expect(
+      page.getByRole("button", { name: "通过", exact: true }),
+    ).toHaveCount(0);
+    expect(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth <=
+          document.documentElement.clientWidth + 1,
+      ),
+    ).toBe(true);
+    await expectHealthyPage(page);
+
+    await loginAsTestUser(context, baseURL, {
+      openId: admin.openId,
+      name: admin.person.displayName,
+    });
+    await page.goto(`/progress/tasks/${linkTask.taskId}`);
+    const reviewerMaterials = page.getByTestId(
+      "milestone-pending-review-evidences",
+    );
+    await expect(reviewerMaterials).toContainText(longLinkNote);
+    await expect(page.getByLabel("审批说明")).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "通过", exact: true }),
+    ).toBeVisible();
+
+    await page.goto(`/progress/tasks/${emptyTask.taskId}`);
+    const emptyMaterials = page.getByTestId(
+      "milestone-pending-review-evidences",
+    );
+    await expect(emptyMaterials).toContainText("未提交验收证据。");
+    await expect(emptyMaterials.getByRole("list")).toHaveCount(0);
+    await expectHealthyPage(page);
+    expect(pageErrors).toEqual([]);
+  });
+
   test("Task workbench uses the unified Draft editor and locks it after activation", async ({
       context,
       page,
@@ -2321,12 +2486,24 @@ test.describe("project management UI project-management-ui-workbench", () => {
     await expect(page.getByTestId("task-approval-gate")).toContainText(
       "Milestone",
     );
+    const pendingMilestoneMaterials = page.getByTestId(
+      "milestone-pending-review-evidences",
+    );
+    await expect(
+      pendingMilestoneMaterials.getByRole("heading", { name: "本次提交材料" }),
+    ).toBeVisible();
+    await expect(pendingMilestoneMaterials).toContainText(
+      "Task UI v2 验收证据",
+    );
 
     await loginAsTestUser(context, baseURL, {
       openId: fixture.admin.openId,
       name: fixture.admin.person.displayName,
     });
     await page.goto(`/progress/tasks/${fixture.taskId}`);
+    await expect(
+      page.getByTestId("milestone-pending-review-evidences"),
+    ).toContainText("Task UI v2 验收证据");
     await page.getByLabel("审批说明").fill("Task UI v2 管理员通过");
     await page.getByRole("button", { name: "通过", exact: true }).click();
     await expect(page.getByText("验收已通过。")).toBeVisible();

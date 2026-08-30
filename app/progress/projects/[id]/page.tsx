@@ -20,6 +20,7 @@ import {
   getContentDrivenTimeCanvasData,
   resolveProjectTimelinePersonIds,
 } from "@/lib/project-management/queries/time-canvas-queries";
+import { formatDateTime } from "@/lib/project-management/labels";
 import {
   getActivityVersion,
   getCollaborationCapabilities,
@@ -159,6 +160,9 @@ export default async function ProjectDetailPage({
   const participants = project.members.filter(
     (member) => member.role === "PARTICIPANT",
   );
+  const currentEstablishmentRequest = project.pendingRequestId
+    ? project.requests.find((request) => request.id === project.pendingRequestId) ?? null
+    : null;
 
   return (
     <>
@@ -243,6 +247,57 @@ export default async function ProjectDetailPage({
               </div>
             </div>
           </div>
+
+          {currentEstablishmentRequest && (
+            <section
+              className="mt-5 min-w-0 space-y-4 border-t border-border pt-5"
+              data-testid="project-pending-establishment"
+            >
+              <h2 className="text-lg font-semibold">当前立项申请</h2>
+              <dl className="grid min-w-0 gap-4 text-sm sm:grid-cols-3">
+                <OverviewItem
+                  label="申请轮次"
+                  value={`第 ${currentEstablishmentRequest.round} 轮`}
+                />
+                <OverviewItem
+                  label="提交人"
+                  value={currentEstablishmentRequest.submittedByName}
+                />
+                <OverviewItem
+                  label="提交时间"
+                  value={formatDateTime(currentEstablishmentRequest.submittedAt)}
+                />
+              </dl>
+              <div className="min-w-0 space-y-2">
+                <h3 className="text-sm font-medium">本次申请 Task</h3>
+                {currentEstablishmentRequest.tasks.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    本次立项未申请加入 Task。
+                  </p>
+                ) : (
+                  <ul
+                    className="divide-y divide-border overflow-hidden rounded-lg border border-border"
+                    aria-label="本次立项申请的 Task"
+                  >
+                    {currentEstablishmentRequest.tasks.map((task) => (
+                      <li
+                        key={task.id}
+                        className="flex min-w-0 flex-wrap items-center justify-between gap-2 p-3 text-sm"
+                      >
+                        <Link
+                          href={routes.progress.taskDetail(task.id)}
+                          className="min-w-0 break-words font-medium text-primary hover:underline"
+                        >
+                          {task.title}
+                        </Link>
+                        <Badge variant="outline">{taskLabels[task.status]}</Badge>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </section>
+          )}
         </section>
 
         <ProjectDetailWorkspace

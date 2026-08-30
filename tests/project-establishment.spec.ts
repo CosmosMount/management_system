@@ -13,6 +13,7 @@ import {
 import { createRisk } from "../lib/project-management/application/collaboration-service";
 import { toProjectManagementServiceError } from "../lib/project-management/application/errors";
 import type { ProjectManagementActor } from "../lib/project-management/identity";
+import { formatDateTime } from "../lib/project-management/labels";
 import { getActionInbox } from "../lib/project-management/queries/action-inbox-queries";
 import { searchTaskOptions } from "../lib/project-management/queries/option-queries";
 import {
@@ -133,23 +134,45 @@ test.describe("Project 立项与生命周期", () => {
     page,
     baseURL,
   }, testInfo) => {
-    const requester = await actor(`Project 驳回校验申请人 ${testInfo.project.name}`);
+    const requesterName = `Project 驳回校验申请人 ${testInfo.project.name}`;
+    const requester = await actor(requesterName);
     const adminName = `Project 驳回校验管理员 ${testInfo.project.name}`;
     const admin = await actor(adminName, "PROJECT_ADMINISTRATOR");
+    const participant = await actor(`Project 待审批 Task 成员 ${testInfo.project.name}`);
+    const requestedTask = await draftTask(requester, participant, `立项待审批超长 Task ${"很长的名称".repeat(24)}`);
+    const projectName = `Project 驳回字段校验 ${randomUUID()}`;
     const created = await createProject(requester, {
-      name: `Project 驳回字段校验 ${randomUUID()}`,
+      name: projectName,
       description: "验证驳回意见的字段错误",
+      avatarPath: null,
+      members: [{ personId: requester.personId, role: "OWNER" }],
+      requestedTaskIds: [requestedTask.id],
+      idempotencyKey: randomUUID(),
+    });
+    const emptyCreated = await createProject(requester, {
+      name: `Project 空 Task 立项 ${randomUUID()}`,
+      description: "验证当前立项申请的空 Task 状态",
       avatarPath: null,
       members: [{ personId: requester.personId, role: "OWNER" }],
       requestedTaskIds: [],
       idempotencyKey: randomUUID(),
     });
+    const request = await prisma.projectEstablishmentRequest.findFirstOrThrow({ where: { projectId: created.projectId, status: "PENDING" }, select: { id: true, submittedAt: true } });
     await loginAsTestUser(context, baseURL, {
       openId: admin.openId,
       name: adminName,
     });
     await page.goto(`/progress/projects/${created.projectId}`);
 
+    const pendingRequest = page.getByTestId("project-pending-establishment");
+    await expect(pendingRequest.getByRole("heading", { name: "当前立项申请" })).toBeVisible();
+    await expect(pendingRequest.getByText("第 1 轮", { exact: true })).toBeVisible();
+    await expect(pendingRequest.getByText(requesterName, { exact: true })).toBeVisible();
+    await expect(pendingRequest.getByText(formatDateTime(request.submittedAt), { exact: true })).toBeVisible();
+    const requestedTasks = pendingRequest.getByRole("list", { name: "本次立项申请的 Task" });
+    await expect(requestedTasks.getByRole("link", { name: requestedTask.title, exact: true })).toBeVisible();
+    await expect(requestedTasks.getByText("草稿", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "通过立项" })).toBeVisible();
     const comment = page.getByLabel("立项审批意见");
     await expect(comment).not.toHaveAttribute("aria-invalid", "true");
     await page.getByRole("button", { name: "驳回", exact: true }).click();
@@ -158,6 +181,50 @@ test.describe("Project 立项与生命周期", () => {
     await expect(page.getByRole("alert").filter({ hasText: "驳回立项时请填写审批意见" })).toBeVisible();
     await comment.fill("已补充驳回意见");
     await expect(comment).not.toHaveAttribute("aria-invalid", "true");
+    await expectHealthyPage(page);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
+
+    await loginAsTestUser(context, baseURL, { openId: requester.openId, name: requesterName });
+    await page.goto(`/progress/projects/${created.projectId}`);
+    await expect(page.getByTestId("project-pending-establishment")).toContainText(requestedTask.title);
+    await expect(page.getByRole("button", { name: "通过立项" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "驳回", exact: true })).toHaveCount(0);
+    await expect(page.getByLabel("立项审批意见")).toHaveCount(0);
+
+    await reviewProjectEstablishment(admin, { projectId: created.projectId, requestId: request.id, expectedLockVersion: 0, decision: "REJECT", comment: "第一轮信息需补充" });
+    const secondRequestedTask = await draftTask(requester, participant, `立项第二轮 Task ${randomUUID()}`);
+    const resubmitted = await resubmitProject(requester, {
+      projectId: created.projectId,
+      expectedLockVersion: 1,
+      name: projectName,
+      description: "已补充第二轮立项信息",
+      avatarPath: null,
+      members: [{ personId: requester.personId, role: "OWNER" }],
+      requestedTaskIds: [secondRequestedTask.id],
+      idempotencyKey: randomUUID(),
+    });
+    const secondRequest = await prisma.projectEstablishmentRequest.findUniqueOrThrow({ where: { id: resubmitted.requestId }, select: { submittedAt: true } });
+
+    await page.reload();
+    const requesterSecondRequest = page.getByTestId("project-pending-establishment");
+    await expect(requesterSecondRequest.getByText("第 2 轮", { exact: true })).toBeVisible();
+    await expect(requesterSecondRequest).toContainText(secondRequestedTask.title);
+    await expect(requesterSecondRequest.getByText(requestedTask.title, { exact: true })).toHaveCount(0);
+
+    await loginAsTestUser(context, baseURL, { openId: admin.openId, name: adminName });
+    await page.goto(`/progress/projects/${created.projectId}`);
+    const adminSecondRequest = page.getByTestId("project-pending-establishment");
+    await expect(adminSecondRequest).toContainText(secondRequestedTask.title);
+    await expect(adminSecondRequest.getByText(formatDateTime(secondRequest.submittedAt), { exact: true })).toBeVisible();
+    await reviewProjectEstablishment(admin, { projectId: created.projectId, requestId: resubmitted.requestId, expectedLockVersion: 2, decision: "APPROVE", comment: "第二轮信息完整" });
+    await page.reload();
+    await expect(page.getByTestId("project-pending-establishment")).toHaveCount(0);
+
+    await page.goto(`/progress/projects/${emptyCreated.projectId}`);
+    const emptyPendingRequest = page.getByTestId("project-pending-establishment");
+    await expect(emptyPendingRequest).toContainText("本次立项未申请加入 Task。");
+    await expect(emptyPendingRequest.getByRole("list", { name: "本次立项申请的 Task" })).toHaveCount(0);
+    await expectHealthyPage(page);
   });
 
   test("Project 详情使用概览、全宽时间线和三列协作区", async ({

@@ -898,6 +898,12 @@ function MilestoneDetail({
           <p className="text-sm text-muted-foreground">
             {pendingReview.submittedBy} 提交于 {formatDateTime(pendingReview.createdAt)}
           </p>
+          <MilestoneEvidences
+            evidences={pendingReview.evidences}
+            title="本次提交材料"
+            emptyMessage="未提交验收证据。"
+            testId="milestone-pending-review-evidences"
+          />
           {pendingReview.capabilities.canReview && (
             <>
               <Field label="审批说明"><Textarea id={`milestone-review-comment-${pendingReview.id}`} value={comment} maxLength={2_000} aria-invalid={Boolean(commentError)} aria-describedby={commentError ? `milestone-review-comment-${pendingReview.id}-error` : undefined} onChange={(event) => { setComment(event.target.value); if (event.target.value.trim()) setCommentError(""); }} /><FieldError id={`milestone-review-comment-${pendingReview.id}-error`} messages={commentError} className="mt-1.5" /></Field>
@@ -956,7 +962,14 @@ function MilestoneCompletionMaterials({
   }, [attempt, nodeId, taskId]);
 
   if (state.status === "success") {
-    return <MilestoneCompletionEvidences evidences={state.details.evidences} />;
+    return (
+      <MilestoneEvidences
+        evidences={state.details.evidences}
+        title="实际提交材料"
+        emptyMessage="本次验收未提交材料。"
+        testId="milestone-completion-evidences"
+      />
+    );
   }
 
   return (
@@ -991,19 +1004,25 @@ function MilestoneCompletionMaterials({
   );
 }
 
-function MilestoneCompletionEvidences({
+function MilestoneEvidences({
   evidences,
+  title,
+  emptyMessage,
+  testId,
 }: {
   evidences: MilestoneCompletionDetails["evidences"];
+  title: string;
+  emptyMessage: string;
+  testId: string;
 }) {
   return (
     <section
       className="space-y-3 border-t border-border pt-4"
-      data-testid="milestone-completion-evidences"
+      data-testid={testId}
     >
-      <h3 className="font-medium">实际提交材料</h3>
+      <h3 className="font-medium">{title}</h3>
       {evidences.length === 0 ? (
-        <p className="text-sm text-muted-foreground">本次验收未提交材料。</p>
+        <p className="text-sm text-muted-foreground">{emptyMessage}</p>
       ) : (
         <ul className="space-y-3">
           {evidences.map((evidence, index) => (
