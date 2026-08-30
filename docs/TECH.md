@@ -163,7 +163,7 @@ Project 详情查询在 Project 可见性校验后，按 `DRAFT`、`ACTIVE`、�
 
 P2/P3 已补齐 Task 计划生命周期的服务端闭环。`lib/project-management/application/lifecycle-service.ts` 只保留稳定公共出口，Task 草稿/激活、Revision、Milestone Review 与 Termination 的完整事务分别位于独立命令模块；共享行锁、锁后可见性、Current Plan 读取、节点推进、计划哈希/审计和通知收件人解析位于内部领域模块。外部入口仍为 `app/actions/project-management/{tasks,plans,revisions,milestones,terminations}.ts` 和 `lib/project-management/queries/task-queries.ts`：
 
-Task 工作台客户端由 `task-workbench.tsx` 协调 action、审批门禁、节点详情和编辑状态；`task-detail-timeline.tsx` 独立负责节点导航、Revision 历史按需读取及候选/历史计划的只读 presentation overlay。两者共享 `lib/project-management/labels.ts` 的 Revision 状态文案，避免 Project 与 Task 时间线各自维护同一映射。
+Task 工作台客户端由 `task-workbench.tsx` 统一协调 action 执行、锁版本、审批门禁、全局反馈和编辑状态；`task-detail-timeline.tsx` 独立负责节点导航、Revision 历史按需读取及候选/历史计划的只读 presentation overlay；`task-node-details.tsx` 聚合选中节点、Revision 候选、Milestone 验收及 Termination 审批面板，仍通过父协调器提供的 `runAction` 更新全局状态。工作台与节点面板共用 `task-workbench-fields.tsx` 的基础展示字段，并共享 `lib/project-management/labels.ts` 的 Revision 状态文案，避免 Project 与 Task 时间线各自维护同一映射。
 
 Revision 候选自身及后缀中的 Milestone 与 Termination 必须保持 `PENDING`，且只能归属于当前候选 Plan；基础 Plan 的未完成节点、Historical Plan 中已 `REVISED` 的节点或 ABANDONED 候选中已 `CANCELLED` 的节点即使伪装为 `isCarryForward=false`，Workspace 与批准事务也会按结构异常拒绝。
 
