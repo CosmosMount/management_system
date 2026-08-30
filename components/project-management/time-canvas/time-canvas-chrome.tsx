@@ -15,9 +15,9 @@ import {
   formatCanvasTick as formatTick,
   formatCanvasAxisGroup as formatAxisGroup,
 } from "@/components/project-management/time-canvas/time-format";
-import { cn } from "@/lib/utils";
+import { AXIS_HEIGHT } from "@/components/project-management/time-canvas/time-canvas-layout";
+import { TodayLine } from "@/components/project-management/time-canvas/time-canvas-layers";
 
-const AXIS_HEIGHT = 64;
 const zoomOrder: TimeCanvasZoom[] = ["WEEK", "MONTH", "QUARTER", "YEAR"];
 const zoomLabels: Record<TimeCanvasZoom, string> = {
   WEEK: "周",
@@ -214,33 +214,6 @@ export function RowHeader({
     </div>
   );
 }
-
-
-function TodayLine({
-  scale,
-  nowMs,
-  axis = false,
-}: {
-  scale: ReturnType<typeof createTimeScale>;
-  nowMs: number;
-  axis?: boolean;
-}) {
-  if (!Number.isFinite(nowMs) || nowMs < scale.startMs || nowMs >= scale.endMs) {
-    return null;
-  }
-  return (
-    <span
-      className={cn(
-        "pointer-events-none absolute inset-y-0 w-px bg-rose-500",
-        axis ? "z-20" : "z-[5]",
-      )}
-      style={{ left: timeToX(nowMs, scale) }}
-      aria-hidden="true"
-      data-testid={axis ? "time-canvas-today-axis" : "time-canvas-today-line"}
-    />
-  );
-}
-
 function tickPixelDistance(
   ticks: number[],
   scale: ReturnType<typeof createTimeScale>,
