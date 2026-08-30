@@ -994,6 +994,7 @@ export function TaskComposerClient({
                       }
                 }
                 editable={canManageMembers}
+                requireOwner={false}
                 error={issueMessages("members")}
                 onChange={(members) => updateField("members", members)}
                 onPersonResolved={(person) =>
@@ -1007,7 +1008,11 @@ export function TaskComposerClient({
                   ? "Revision 只调整下方计划节点；Task 基本信息、分类与成员保持只读。"
                   : "你可以编辑 Task 内容和计划，成员与角色为只读。"}
               </p>
-            ) : null}
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                草稿阶段可暂不设置成员；激活 Task 前至少需要一名有效负责人。
+              </p>
+            )}
           </ComposerSection>
         </aside>
 

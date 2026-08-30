@@ -1120,7 +1120,7 @@ test.describe("project management P5 work segment services", () => {
     test.setTimeout(90_000);
 
     for (const operation of ["MOVE", "DELETE"] as const) {
-      const fixture = await createActivatedFixture();
+      const fixture = await createActivatedFixture({ adminIsOwner: true });
       const segment =
         operation === "MOVE"
           ? (
@@ -1979,6 +1979,7 @@ async function createActivatedFixture(
   options: {
     team?: string;
     techGroup?: string;
+    adminIsOwner?: boolean;
     extraMembers?: Array<{ personId: string; role: TaskMemberRole }>;
   } = {},
 ) {
@@ -2004,6 +2005,9 @@ async function createActivatedFixture(
     plannedStartAt: new Date(Date.UTC(2026, 7, 1, 9, 0, 0)).toISOString(),
     members: [
       { personId: owner.person.id, role: "OWNER" },
+      ...(options.adminIsOwner
+        ? [{ personId: admin.person.id, role: "OWNER" as const }]
+        : []),
       { personId: member.person.id, role: "PARTICIPANT" },
       { personId: reviewer.person.id, role: "PARTICIPANT" },
       ...(options.extraMembers ?? []),

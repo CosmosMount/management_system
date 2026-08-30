@@ -112,14 +112,14 @@ test.describe("project management plan mutations project-management-plan-mutatio
         await prisma.taskMember.count({
           where: { taskId: fixture.taskId, removedAt: { not: null } },
         }),
-      ).toBe(2);
+      ).toBe(1);
 
       const memberOutbox = await prisma.notificationOutbox.findMany({
         where: {
           eventKey: { startsWith: `pm:task:member_changed:${fixture.taskId}:2:` },
         },
       });
-      expect(memberOutbox).toHaveLength(3);
+      expect(memberOutbox).toHaveLength(2);
       for (const row of memberOutbox) {
         const payload = jsonRecord(JSON.parse(row.payload));
         expect(row).toMatchObject({
@@ -156,7 +156,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
             },
           },
         }),
-      ).toBe(3);
+      ).toBe(2);
       expect(
         await prisma.notificationOutbox.count({
           where: { eventKey: `pm:task:${fixture.taskId}:updated:2:feishu` },
@@ -330,6 +330,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
       const reviewer = await createAccountPerson("S2 Unified Active Reviewer");
       const newcomer = await createAccountPerson("S2 Unified Active Newcomer");
       const inactive = await createAccountPerson("S2 Unified Active Inactive");
+      await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
       const fixture = await createDraft({
         creator: admin,
         owner,
@@ -443,14 +444,9 @@ test.describe("project management plan mutations project-management-plan-mutatio
       const memberOutboxes = await prisma.notificationOutbox.findMany({
         where: { eventKey: { startsWith: memberEventPrefix } },
       });
-      expect(memberOutboxes).toHaveLength(2);
+      expect(memberOutboxes).toHaveLength(1);
       expect(memberOutboxes).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({
-            eventKey: `${memberEventPrefix}${admin.person.id}:feishu`,
-            type: "task_assigned",
-            botKind: "notification",
-          }),
           expect.objectContaining({
             eventKey: `${memberEventPrefix}${newcomer.person.id}:feishu`,
             type: "task_assigned",
@@ -464,17 +460,6 @@ test.describe("project management plan mutations project-management-plan-mutatio
         ),
       ).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({
-            kind: "task_assigned",
-            linkPath: `/progress/tasks/${fixture.taskId}`,
-            purpose: "notification",
-            mandatory: true,
-            actorName: owner.person.displayName,
-            context: expect.objectContaining({
-              changeKind: "REMOVED",
-              affectedPersonId: admin.person.id,
-            }),
-          }),
           expect.objectContaining({
             kind: "task_assigned",
             linkPath: `/progress/tasks/${fixture.taskId}`,
@@ -514,7 +499,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
       expect(
         taskUpdateNotifications.map((row) => row.recipientAccountId).sort(),
       ).toEqual(
-        [admin, owner, reviewer, newcomer]
+        [owner, reviewer, newcomer]
           .map((recipient) => recipient.account.id)
           .sort(),
       );
@@ -522,19 +507,12 @@ test.describe("project management plan mutations project-management-plan-mutatio
         where: { eventKey: { startsWith: memberEventPrefix } },
         select: { recipientAccountId: true, linkPath: true },
       });
-      expect(memberNotifications).toHaveLength(2);
-      expect(memberNotifications).toEqual(
-        expect.arrayContaining([
-          {
-            recipientAccountId: admin.account.id,
-            linkPath: `/progress/tasks/${fixture.taskId}`,
-          },
-          {
-            recipientAccountId: newcomer.account.id,
-            linkPath: `/progress/tasks/${fixture.taskId}`,
-          },
-        ]),
-      );
+      expect(memberNotifications).toEqual([
+        {
+          recipientAccountId: newcomer.account.id,
+          linkPath: `/progress/tasks/${fixture.taskId}`,
+        },
+      ]);
 
       const unchangedInput = {
         taskId: fixture.taskId,
@@ -648,7 +626,6 @@ test.describe("project management plan mutations project-management-plan-mutatio
         }
         const task = await currentTask(fixture.taskId);
         const invalidSets: Array<Array<{ personId: string; role: TaskMemberRole }>> = [
-          [{ personId: reviewer.person.id, role: "PARTICIPANT" }],
           [
             { personId: owner.person.id, role: "OWNER" },
             { personId: reviewer.person.id, role: "PARTICIPANT" },
@@ -659,6 +636,11 @@ test.describe("project management plan mutations project-management-plan-mutatio
             { personId: inactive.person.id, role: "PARTICIPANT" },
           ],
         ];
+        if (requiredStatus === "ACTIVE") {
+          invalidSets.unshift([
+            { personId: reviewer.person.id, role: "PARTICIPANT" },
+          ]);
+        }
         for (const members of invalidSets) {
           const before = await mutationSideEffectCounts(fixture.taskId);
           await expectServiceError(
@@ -774,7 +756,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
         },
         orderBy: { eventKey: "asc" },
       });
-      expect(outboxes).toHaveLength(8);
+      expect(outboxes).toHaveLength(7);
       const payloadByPersonId = new Map<string, Record<string, unknown>>();
       for (const outbox of outboxes) {
         expect(outbox).toMatchObject({
@@ -819,10 +801,6 @@ test.describe("project management plan mutations project-management-plan-mutatio
         recipientOpenIds: [laterValidOpenId],
         context: { recipientResolution: "RESOLVED" },
       });
-      expect(payloadByPersonId.get(admin.person.id)).toMatchObject({
-        recipientOpenIds: [admin.openId],
-        context: { recipientResolution: "RESOLVED" },
-      });
       const inAppRows = await prisma.inAppNotification.findMany({
         where: {
           eventKey: {
@@ -836,7 +814,6 @@ test.describe("project management plan mutations project-management-plan-mutatio
           bound.account.id,
           wrongTenant.account.id,
           firstBlankThenValid.account.id,
-          admin.account.id,
           emptyOpenId.account.id,
           missingIdentity.account.id,
         ].sort(),

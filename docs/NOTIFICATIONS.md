@@ -46,7 +46,7 @@ Task 生命周期服务和 Segment 服务会在同一业务事务中写站内通
 
 | 场景 | outbox type | 用途 | 收件人 |
 |------|-------------|------|--------|
-| Task 草稿成员加入 | `task_assigned` | 普通通知 | 有效 OWNER/PARTICIPANT |
+| Task 草稿创建或成员变化 | `task_assigned` | 强制普通通知 | 本次涉及的有效 OWNER/PARTICIPANT |
 | Task 基本信息更新 | `task_updated` | 非 mandatory 普通通知 | 操作人和更新前后有效 OWNER/PARTICIPANT，按账号去重 |
 | Task 激活 | `task_activated` | 普通通知 | 有效 OWNER/PARTICIPANT |
 | Task 草稿删除 | `task_deleted` | 强制普通通知 | 有效 OWNER/PARTICIPANT |
@@ -81,11 +81,11 @@ Revision 从 `PENDING_APPROVAL` 或 `REJECTED` 取消时，会在状态、候选
 
 Task 激活与结束通知使用持久化的 Terminal 名称表示结束节点，不再以结束条件充当节点名称。零 Milestone Task 激活时，`task_activated` 摘要会明确当前 Terminal 名称；`termination_review_submitted` 包含拟定结束结果、原因和总结，`termination_review_result` 与 `task_terminated` 都包含 Terminal 名称、拟定或批准后的结束结果、原因、总结和审批意见。所有事件继续经过站内通知和 durable outbox，不得直发。
 
-既有 Draft `task_assigned` 入队保持 `mandatory=true`。这里的“普通通知”指 `purpose=notification`、`botKind=notification`，不表示 `mandatory=false`；该事件只使用通知机器人，不得路由到 approval bot。Active `updateActiveTask` 的成员新增/移除/角色变化沿用同一强制成员变化语义：站内 + `mandatory=true` 的 `project-management` outbox，purpose/botKind 仍为 `notification`。
+Task 草稿创建时只通知请求中明确提交的成员；零成员草稿不创建 `task_assigned` 站内通知或 outbox，创建者也不会作为隐式负责人收到该事件。`updateTaskDraft` 与 `updateActiveTask` 的成员新增、移除或角色变化沿用同一强制成员变化语义：站内 + `mandatory=true` 的 `project-management` outbox，`purpose=notification`、`botKind=notification`，只使用通知机器人，不得路由到 approval bot。
 
 账号安全变更由 `lib/account-management.ts` 在角色事务中写入。事件只通知被操作人，站内分类固定为 `ACCOUNT_SECURITY`，outbox 固定 `mandatory=true`、`purpose=notification` 和通知机器人。摘要包含操作人、角色授予/撤销、组织范围和时间。事件键以 `account-security:<action>:<稳定实体或变更 ID>` 开头，站内和飞书后缀分别保证幂等。报销角色通知也通过 `accountId` 解析当前 Identity；历史 `UserRole.openId` 不作为投递目标。删除项目访问禁用机制的 migration 只写 `source=MIGRATION` 审计，不创建站内通知或飞书 outbox。
 
-Active 成员强制事件不得因缺少飞书 identity 或尚无 Account 而消失；已绑定活跃 Account 仍写按 Account 的站内记录。停用 Person 不创建新的站内通知或飞书候选。飞书候选只允许 `provider=FEISHU`、`tenantId=default` 且 trim 后非空的 `openId`，不会回退其他 tenant，也不会因最早一条 identity 为空而漏掉同一默认 tenant 的后续合法 identity。无法安全解析飞书目标时仍写 `mandatory=true` durable outbox，并在 payload `context.recipientResolution` 记录 `DEFAULT_FEISHU_IDENTITY_MISSING`、`FEISHU_OPEN_ID_MISSING` 或 `ACCOUNT_MISSING`；outbox 保留空候选而不猜测、替代或直发任何真实收件人。成员业务审计、站内记录和 outbox 与成员差异处于同一事务，任一晚失败全部回滚。新建和激活 Task 的常规成员收件人只读取有效 OWNER/PARTICIPANT；历史 LEAD/MEMBER/REVIEWER/VIEWER 不再取得成员通知。所有项目和采购 adapter 会在每次 outbox 重算及真正私信发送前再次校验 Person 为 `ACTIVE`，因此收件人离职后旧重试会取消而不会发送。
+Task 成员强制事件不得因缺少飞书 identity 或尚无 Account 而消失；已绑定活跃 Account 仍写按 Account 的站内记录。停用 Person 不创建新的站内通知或飞书候选。飞书候选只允许 `provider=FEISHU`、`tenantId=default` 且 trim 后非空的 `openId`，不会回退其他 tenant，也不会因最早一条 identity 为空而漏掉同一默认 tenant 的后续合法 identity。无法安全解析飞书目标时仍写 `mandatory=true` durable outbox，并在 payload `context.recipientResolution` 记录 `DEFAULT_FEISHU_IDENTITY_MISSING`、`FEISHU_OPEN_ID_MISSING` 或 `ACCOUNT_MISSING`；outbox 保留空候选而不猜测、替代或直发任何真实收件人。成员业务审计、站内记录和 outbox 与成员差异处于同一事务，任一晚失败全部回滚。新建和激活 Task 的常规成员收件人只读取有效 OWNER/PARTICIPANT；历史 LEAD/MEMBER/REVIEWER/VIEWER 不再取得成员通知。所有项目和采购 adapter 会在每次 outbox 重算及真正私信发送前再次校验 Person 为 `ACTIVE`，因此收件人离职后旧重试会取消而不会发送。
 
 Revision 生效事务先把目标 `TaskPlanVersion` 切换为 `CURRENT` 并更新 `Task.currentPlanVersionId`，随后以更新后的 Task 上下文写 `revision_applied`。Work Segment 仅关联 Task，不再产生节点关联失效通知。
 

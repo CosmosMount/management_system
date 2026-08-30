@@ -20,7 +20,6 @@ import {
   assertCreateTaskReferencesTx,
   assertTaskVisible,
   createPlanNodesTx,
-  ensureCreatorOwner,
   loadCurrentPlanEntriesTx,
   loadPlanForValidationTx,
   loadTaskForAuthorizationTx,
@@ -38,6 +37,7 @@ import {
   activateTaskInputSchema,
   createTaskDraftInputSchema,
   deleteTaskDraftInputSchema,
+  type CreateTaskDraftInput,
 } from "@/lib/project-management/validations/lifecycle";
 
 type LifecycleTaskResult = {
@@ -66,11 +66,11 @@ export async function createTaskDraft(
 ): Promise<CreateTaskDraftResult> {
   assertCurrentTaskComposerPayloadVersion(input);
   const parsed = createTaskDraftInputSchema.parse(input);
-  const normalizedInput = {
-    ...parsed,
-    members: ensureCreatorOwner(parsed.members, actor.personId),
-  };
-  const requestHash = hashLifecycleRequest("task.create_draft", normalizedInput);
+  const requestHash = `v2:${hashLifecycleRequest("task.create_draft", parsed)}`;
+  const legacyRequestHash = legacyCreateTaskDraftRequestHash(
+    parsed,
+    actor.personId,
+  );
 
   return prisma.$transaction(async (tx) => {
     await acquireProjectCrossAggregateLockTx(tx);
@@ -111,7 +111,11 @@ export async function createTaskDraft(
       },
     });
     if (existing) {
-      if (existing.creationRequestHash !== requestHash) {
+      if (
+        existing.creationRequestHash !== requestHash &&
+        (existing.creationRequestHash.startsWith("v2:") ||
+          existing.creationRequestHash !== legacyRequestHash)
+      ) {
         throw stateConflictError("相同请求键已用于不同内容，请刷新后重试");
       }
       return {
@@ -124,7 +128,7 @@ export async function createTaskDraft(
       };
     }
 
-    await assertCreateTaskReferencesTx(tx, refreshedActor, normalizedInput);
+    await assertCreateTaskReferencesTx(tx, refreshedActor, parsed);
     await assertActiveProjectTargetTx(tx, parsed.projectId);
     await tx.$executeRaw`SET CONSTRAINTS ALL DEFERRED`;
 
@@ -174,18 +178,20 @@ export async function createTaskDraft(
       where: { id: planVersionId },
       data: { snapshotHash: hashLifecyclePlan(initialPlan) },
     });
-    await tx.taskMember.createMany({
-      data: normalizedInput.members.map((member) => ({
-        taskId,
-        personId: member.personId,
-        role: member.role,
-        createdByAccountId: refreshedActor.accountId,
-      })),
-    });
+    if (parsed.members.length > 0) {
+      await tx.taskMember.createMany({
+        data: parsed.members.map((member) => ({
+          taskId,
+          personId: member.personId,
+          role: member.role,
+          createdByAccountId: refreshedActor.accountId,
+        })),
+      });
+    }
     await syncTaskMembersToProjectTx(tx, {
       projectId: parsed.projectId,
       taskId,
-      members: normalizedInput.members,
+      members: parsed.members,
       actor: refreshedActor,
     });
     await createDomainAuditEventTx(tx, {
@@ -203,7 +209,7 @@ export async function createTaskDraft(
         projectId: parsed.projectId,
         milestoneCount: parsed.milestones.length,
         terminationName: parsed.termination.name,
-        memberCount: normalizedInput.members.length,
+        memberCount: parsed.members.length,
       }),
       reason: "创建 Task 草稿",
     });
@@ -212,7 +218,7 @@ export async function createTaskDraft(
         id: taskId,
         title: parsed.title,
         status: "DRAFT",
-        members: normalizedInput.members.map((member) => ({
+        members: parsed.members.map((member) => ({
           ...member,
           removedAt: null,
         })),
@@ -222,19 +228,21 @@ export async function createTaskDraft(
       });
     }
 
-    const task = await loadTaskForAuthorizationTx(tx, taskId);
-    await notifyTaskMembersTx(tx, {
-      actor: refreshedActor,
-      task,
-      kind: "task_assigned",
-      category: "TASK",
-      eventKey: `pm:task:assigned:${taskId}:v1`,
-      title: "你已被加入任务",
-      summary: `任务「${task.title}」已创建为草稿`,
-      entityType: "Task",
-      entityId: taskId,
-      mandatory: true,
-    });
+    if (parsed.members.length > 0) {
+      const task = await loadTaskForAuthorizationTx(tx, taskId);
+      await notifyTaskMembersTx(tx, {
+        actor: refreshedActor,
+        task,
+        kind: "task_assigned",
+        category: "TASK",
+        eventKey: `pm:task:assigned:${taskId}:v1`,
+        title: "你已被加入任务",
+        summary: `任务「${task.title}」已创建为草稿`,
+        entityType: "Task",
+        entityId: taskId,
+        mandatory: true,
+      });
+    }
 
     return {
       taskId,
@@ -244,6 +252,24 @@ export async function createTaskDraft(
       activeMilestoneNodeId: null,
       created: true,
     };
+  });
+}
+
+function legacyCreateTaskDraftRequestHash(
+  input: CreateTaskDraftInput,
+  creatorPersonId: string,
+): string {
+  // 兼容重构前已落库的幂等请求：旧实现会先把创建者覆盖为 OWNER 再计算 hash。
+  const membersByPersonId = new Map(
+    input.members.map((member) => [member.personId, member] as const),
+  );
+  membersByPersonId.set(creatorPersonId, {
+    personId: creatorPersonId,
+    role: "OWNER",
+  });
+  return hashLifecycleRequest("task.create_draft", {
+    ...input,
+    members: [...membersByPersonId.values()],
   });
 }
 
@@ -279,9 +305,17 @@ export async function activateTask(
     if (currentPlan.plannedStartAt.getTime() > now.getTime()) {
       throw stateConflictError("计划开始时间尚未到达，不能激活 Task");
     }
-    if (task.members.every((member) => member.role !== "OWNER")) {
-      throw validationError("至少需要一名负责人", {
-        members: ["至少需要一名负责人"],
+    const activeOwnerCount = await tx.taskMember.count({
+      where: {
+        taskId: task.id,
+        removedAt: null,
+        role: "OWNER",
+        person: { status: "ACTIVE" },
+      },
+    });
+    if (activeOwnerCount === 0) {
+      throw validationError("激活 Task 前至少需要一名有效负责人", {
+        members: ["激活 Task 前至少需要一名有效负责人"],
       });
     }
     const firstMilestone = currentPlan.nodes.find(

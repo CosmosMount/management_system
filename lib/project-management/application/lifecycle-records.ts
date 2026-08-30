@@ -26,6 +26,7 @@ export type LifecycleTaskForAuthorization = {
   techGroup: string;
   status: TaskStatus;
   priority: TaskPriority;
+  createdByAccountId: string;
   currentPlanVersionId: string;
   activeMilestoneNodeId: string | null;
   lockVersion: number;

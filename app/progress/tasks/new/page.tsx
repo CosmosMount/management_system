@@ -79,9 +79,7 @@ export default async function ProgressTaskNewPage({
   );
   const tasks = mergeRelatedTasks(taskPage.items, template, requestedRelated);
   const seed = createSeed({
-    actorPersonId: actor.personId,
     initialScope,
-    people,
     template,
     requestedRelated,
     projectId: preferredProjects[0]?.id ?? null,
@@ -128,16 +126,12 @@ function chooseInitialScope(
 }
 
 function createSeed({
-  actorPersonId,
   initialScope,
-  people,
   template,
   requestedRelated,
   projectId,
 }: {
-  actorPersonId: string;
   initialScope: { team: string; techGroup: string };
-  people: Array<{ id: string; displayName: string }>;
   template: TaskWorkspace | null;
   requestedRelated: TaskWorkspace | null;
   projectId: string | null;
@@ -164,11 +158,7 @@ function createSeed({
     ? isoToShanghaiDateTimeLocal(template.currentPlan.plannedStartAt)
     : defaultStartLocal;
   const milestones = templateMilestones ?? [];
-  const owner = people.find((person) => person.id === actorPersonId) ?? people[0];
-  const templateMembers = normalizeTemplateMembers(
-    template?.members ?? [],
-    actorPersonId,
-  );
+  const templateMembers = normalizeTemplateMembers(template?.members ?? []);
 
   return {
     draftId: randomUUID(),
@@ -180,12 +170,7 @@ function createSeed({
     relatedTaskId:
       requestedRelated?.task.id ?? template?.task.relatedTaskId ?? null,
     projectId,
-    members:
-      templateMembers.length > 0
-        ? templateMembers
-        : owner
-          ? [{ personId: owner.id, role: "OWNER" }]
-          : [],
+    members: templateMembers,
     plannedStartAt,
     milestones,
     termination: {
@@ -204,7 +189,6 @@ function createSeed({
 
 function normalizeTemplateMembers(
   members: TaskWorkspace["members"],
-  creatorPersonId: string,
 ): Array<{ personId: string; role: "OWNER" | "PARTICIPANT" }> {
   const normalized = new Map<string, "OWNER" | "PARTICIPANT">();
   for (const member of members) {
@@ -218,7 +202,6 @@ function normalizeTemplateMembers(
     if (normalized.get(member.personId) === "OWNER") continue;
     normalized.set(member.personId, role);
   }
-  normalized.set(creatorPersonId, "OWNER");
   return [...normalized].map(([personId, role]) => ({ personId, role }));
 }
 

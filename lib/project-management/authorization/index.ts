@@ -75,6 +75,7 @@ export type AuthorizationTaskResource = {
   techGroup?: string;
   status?: TaskStatus;
   priority?: TaskPriority;
+  createdByAccountId?: string;
   members?: AuthorizationMember[];
 };
 
@@ -285,6 +286,19 @@ function authorizeTask(
     return hasTaskRole(actor, resource, ["OWNER", "PARTICIPANT"])
       ? allow("task_member_risk")
       : deny("task_member_required");
+  }
+
+  const isDraftCreator =
+    resource.status === "DRAFT" &&
+    resource.createdByAccountId === actor.accountId;
+  if (
+    isDraftCreator &&
+    (action === "task.update_metadata" ||
+      action === "task.manage_members" ||
+      action === "task.activate" ||
+      action === "task.delete")
+  ) {
+    return allow("task_draft_creator");
   }
 
   if (action === "milestone.submit_review") {

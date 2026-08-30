@@ -544,8 +544,8 @@ async function loadActorForAccountTx(tx: PrismaTx, accountId: string): Promise<P
   return { accountId, personId: account.person.id, openId: account.identities[0]?.openId ?? "", unionId: account.identities[0]?.unionId, isActive, systemRoles: isActive ? account.systemRoles : [] };
 }
 
-function taskResource(task: { id: string; team: string; techGroup: string; status: Prisma.TaskGetPayload<object>["status"]; priority: Prisma.TaskGetPayload<object>["priority"]; members: Array<{ personId: string; role: Prisma.TaskMemberGetPayload<object>["role"]; removedAt: Date | null }> }): AuthorizationTaskResource {
-  return { type: "task", id: task.id, team: task.team, techGroup: task.techGroup, status: task.status, priority: task.priority, members: task.members };
+function taskResource(task: { id: string; team: string; techGroup: string; status: Prisma.TaskGetPayload<object>["status"]; priority: Prisma.TaskGetPayload<object>["priority"]; createdByAccountId: string; members: Array<{ personId: string; role: Prisma.TaskMemberGetPayload<object>["role"]; removedAt: Date | null }> }): AuthorizationTaskResource {
+  return { type: "task", id: task.id, team: task.team, techGroup: task.techGroup, status: task.status, priority: task.priority, createdByAccountId: task.createdByAccountId, members: task.members };
 }
 function projectResource(project: ProjectForMutation): AuthorizationProjectResource { return { type: "project", id: project.id, status: project.status, requesterAccountId: project.requesterAccountId, members: project.members }; }
 function assertProjectState(project: ProjectForMutation, status: ProjectForMutation["status"]) { if (project.status !== status) throw stateConflictError(`当前 Project 状态为 ${project.status}，不能执行此操作`); }

@@ -26,7 +26,12 @@ import {
   listTasks,
   listTaskPlanVersions,
 } from "../lib/project-management/queries/task-queries";
-import { getActorPersonOption } from "../lib/project-management/queries/option-queries";
+import {
+  getActorPersonOption,
+  listMyTaskOptions,
+  searchTaskOptions,
+} from "../lib/project-management/queries/option-queries";
+import { getContentDrivenTimeCanvasData } from "../lib/project-management/queries/time-canvas-queries";
 import { getActionInbox } from "../lib/project-management/queries/action-inbox-queries";
 import { listInAppNotifications } from "../lib/project-management/queries/notification-queries";
 import {
@@ -34,12 +39,15 @@ import {
   type ProjectManagementActor,
 } from "../lib/project-management/identity";
 import { updateNotificationPreference } from "../lib/project-management/application/notification-preference-service";
+import { updateTaskProject } from "../lib/project-management/application/project-service";
 import { firstNonEmptyFeishuOpenId } from "../lib/project-management/application/feishu-identity";
+import { hashLifecycleRequest } from "../lib/project-management/application/lifecycle-plan-audit";
 import {
   getRevisionComposerRecord,
   getTaskLifecycleViews,
 } from "../lib/project-management/queries/task-lifecycle-queries";
 import {
+  createTaskDraftInputSchema,
   milestoneDraftSchema,
   submitMilestoneReviewInputSchema,
   terminationDraftSchema,
@@ -48,6 +56,7 @@ import {
 import { withGlobalApprovalAdministratorGuardDisabled } from "./helpers/global-approval-administrator-guard";
 import { projectManagementNotificationChannel } from "../lib/notification-channels/project-management";
 import { waitForDirectBlockers } from "./helpers/database-barrier";
+import { updateTaskMembersThroughCurrentInterface } from "./helpers/project-management-plan-mutation-fixtures";
 
 test.describe("project management P2/P3 task lifecycle services", () => {
   test("Lifecycle validation returns Chinese messages for UUID and disabled file evidence errors", async () => {
@@ -182,21 +191,57 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     });
     expect(outsiderCreated.status).toBe("DRAFT");
     await expect(
-      prisma.taskMember.findFirstOrThrow({
+      prisma.taskMember.count({
         where: {
           taskId: outsiderCreated.taskId,
           personId: outsider.person.id,
           removedAt: null,
         },
-        select: { role: true },
       }),
-    ).resolves.toEqual({ role: "OWNER" });
+    ).resolves.toBe(0);
 
     const created = await createTaskDraft(actor(admin), draftInput);
     expect(created).toMatchObject({ created: true, status: "DRAFT" });
 
     const repeated = await createTaskDraft(actor(admin), draftInput);
     expect(repeated).toMatchObject({
+      created: false,
+      taskId: created.taskId,
+      currentPlanVersionId: created.currentPlanVersionId,
+    });
+    await expect(
+      prisma.taskPlanVersion.findUniqueOrThrow({
+        where: { id: created.currentPlanVersionId },
+        select: { creationRequestHash: true },
+      }),
+    ).resolves.toMatchObject({
+      creationRequestHash: expect.stringMatching(/^v2:[a-f0-9]{64}$/),
+    });
+    const parsedDraftInput = createTaskDraftInputSchema.parse(draftInput);
+    const legacyNormalizedInput = {
+      ...parsedDraftInput,
+      members: [
+        ...parsedDraftInput.members,
+        { personId: admin.person.id, role: "OWNER" as const },
+      ],
+    };
+    const legacyRequestHash = hashLifecycleRequest(
+      "task.create_draft",
+      legacyNormalizedInput,
+    );
+    await prisma.taskPlanVersion.update({
+      where: { id: created.currentPlanVersionId },
+      data: { creationRequestHash: legacyRequestHash },
+    });
+    await prisma.taskMember.create({
+      data: {
+        taskId: created.taskId,
+        personId: admin.person.id,
+        role: "OWNER",
+        createdByAccountId: admin.account.id,
+      },
+    });
+    await expect(createTaskDraft(actor(admin), draftInput)).resolves.toMatchObject({
       created: false,
       taskId: created.taskId,
       currentPlanVersionId: created.currentPlanVersionId,
@@ -220,6 +265,30 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     ]);
     expect(new Set(concurrentCreates.map((entry) => entry.taskId)).size).toBe(1);
     expect(concurrentCreates.filter((entry) => entry.created)).toHaveLength(1);
+
+    const creatorRoleInput = {
+      ...taskDraftInput({
+        ownerPersonId: owner.person.id,
+        memberPersonId: member.person.id,
+        reviewerPersonId: reviewer.person.id,
+        idempotencyKey: `task-draft-versioned-hash-${randomUUID()}`,
+      }),
+      members: [
+        { personId: admin.person.id, role: "OWNER" as const },
+        { personId: owner.person.id, role: "OWNER" as const },
+      ],
+    };
+    await createTaskDraft(actor(admin), creatorRoleInput);
+    await expectServiceError(
+      createTaskDraft(actor(admin), {
+        ...creatorRoleInput,
+        members: [
+          { personId: admin.person.id, role: "PARTICIPANT" },
+          { personId: owner.person.id, role: "OWNER" },
+        ],
+      }),
+      "STATE_CONFLICT",
+    );
 
     const planNodes = await prisma.planVersionNode.findMany({
       where: { planVersionId: created.currentPlanVersionId },
@@ -333,6 +402,347 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         })
       ).task.id,
     ).toBe(created.taskId);
+  });
+
+  test("Task drafts defer member completeness without implicitly assigning the creator", async () => {
+    const guardAdmin = await createAccountPerson("生命周期空成员草稿守卫管理员");
+    const creator = await createAccountPerson("生命周期空成员草稿创建者");
+    const participant = await createAccountPerson("生命周期空成员草稿参与人");
+    const outsider = await createAccountPerson("生命周期空成员草稿无权账号");
+    await grantRole(guardAdmin.account.id, "PROJECT_ADMINISTRATOR");
+    const input = {
+      ...taskDraftInput({
+        ownerPersonId: creator.person.id,
+        memberPersonId: participant.person.id,
+        reviewerPersonId: outsider.person.id,
+        idempotencyKey: `memberless-draft-${randomUUID()}`,
+      }),
+      members: [],
+    };
+
+    const created = await createTaskDraft(actor(creator), input);
+    expect(created).toMatchObject({ status: "DRAFT", lockVersion: 0 });
+    await expect(
+      prisma.taskMember.count({ where: { taskId: created.taskId } }),
+    ).resolves.toBe(0);
+    await expect(
+      prisma.notificationOutbox.count({
+        where: { eventKey: `pm:task:assigned:${created.taskId}:v1:feishu` },
+      }),
+    ).resolves.toBe(0);
+    await expect(
+      listTasks({
+        actor: actor(creator),
+        input: { mine: true, query: input.title },
+      }),
+    ).resolves.toMatchObject({
+      items: [expect.objectContaining({ id: created.taskId })],
+    });
+    await expect(
+      listTasks({
+        actor: actor(outsider),
+        input: { mine: true, query: input.title },
+      }),
+    ).resolves.toMatchObject({ items: [] });
+    await expect(
+      searchTaskOptions({
+        actor: actor(creator),
+        input: { query: input.title, mine: true, limit: 50 },
+      }),
+    ).resolves.toMatchObject({
+      items: [expect.objectContaining({ id: created.taskId })],
+    });
+    await expect(
+      listMyTaskOptions({
+        actor: actor(creator),
+        statuses: ["DRAFT"],
+      }),
+    ).resolves.toContainEqual(expect.objectContaining({ id: created.taskId }));
+    await expect(
+      searchTaskOptions({
+        actor: actor(creator),
+        input: {
+          query: input.title,
+          projectCandidates: true,
+          limit: 50,
+        },
+      }),
+    ).resolves.toMatchObject({
+      items: [expect.objectContaining({ id: created.taskId })],
+    });
+    await expect(
+      searchTaskOptions({
+        actor: actor(outsider),
+        input: { query: input.title, mine: true, limit: 50 },
+      }),
+    ).resolves.toMatchObject({ items: [] });
+    await expect(
+      searchTaskOptions({
+        actor: actor(outsider),
+        input: {
+          query: input.title,
+          projectCandidates: true,
+          limit: 50,
+        },
+      }),
+    ).resolves.toMatchObject({ items: [] });
+
+    const creatorCanvas = await getContentDrivenTimeCanvasData({
+      actor: actor(creator),
+      input: memberlessDraftCanvasInput(created.taskId),
+      load: { mode: "INITIAL" },
+    });
+    const creatorAnchor = creatorCanvas.data.anchors.find(
+      (anchor) => anchor.id === created.taskId,
+    );
+    expect(creatorAnchor).toMatchObject({
+      capabilities: {
+        canUpdateMetadata: true,
+        canManageMembers: true,
+        canActivate: true,
+      },
+    });
+    expect(creatorAnchor?.nodes).not.toHaveLength(0);
+    expect(
+      creatorAnchor?.nodes.every((node) => node.capabilities.canEditDraft),
+    ).toBe(true);
+    const outsiderCanvas = await getContentDrivenTimeCanvasData({
+      actor: actor(outsider),
+      input: memberlessDraftCanvasInput(created.taskId),
+      load: { mode: "INITIAL" },
+    });
+    const outsiderAnchor = outsiderCanvas.data.anchors.find(
+      (anchor) => anchor.id === created.taskId,
+    );
+    expect(outsiderAnchor).toMatchObject({
+      capabilities: {
+        canUpdateMetadata: false,
+        canManageMembers: false,
+        canActivate: false,
+      },
+    });
+    expect(
+      outsiderAnchor?.nodes.every((node) => !node.capabilities.canEditDraft),
+    ).toBe(true);
+
+    const associationDraft = await createTaskDraft(actor(creator), {
+      ...input,
+      title: `生命周期零成员归属 Task ${randomUUID()}`,
+      idempotencyKey: `memberless-project-${randomUUID()}`,
+    });
+    const targetProject = await prisma.project.create({
+      data: {
+        name: `生命周期零成员归属 Project ${randomUUID()}`,
+        description: "验证草稿创建者可以修改 Project 归属",
+        status: "ACTIVE",
+        requesterAccountId: creator.account.id,
+      },
+    });
+    await expect(
+      updateTaskProject(actor(creator), {
+        taskId: associationDraft.taskId,
+        expectedLockVersion: 0,
+        projectId: targetProject.id,
+      }),
+    ).resolves.toMatchObject({
+      taskId: associationDraft.taskId,
+      projectId: targetProject.id,
+      lockVersion: 1,
+    });
+    await expect(
+      updateTaskProject(actor(creator), {
+        taskId: associationDraft.taskId,
+        expectedLockVersion: 1,
+        projectId: null,
+      }),
+    ).resolves.toMatchObject({
+      taskId: associationDraft.taskId,
+      projectId: null,
+      lockVersion: 2,
+    });
+
+    const creatorWorkspace = await getTaskWorkspace({
+      actor: actor(creator),
+      taskId: created.taskId,
+    });
+    expect(creatorWorkspace.permissions).toMatchObject({
+      canUpdateMetadata: true,
+      canManageMembers: true,
+      canActivate: true,
+      canDeleteDraft: true,
+    });
+    const outsiderWorkspace = await getTaskWorkspace({
+      actor: actor(outsider),
+      taskId: created.taskId,
+    });
+    expect(outsiderWorkspace.permissions).toMatchObject({
+      canUpdateMetadata: false,
+      canManageMembers: false,
+      canActivate: false,
+      canDeleteDraft: false,
+    });
+    await expectServiceError(
+      updateTaskMembersThroughCurrentInterface(actor(outsider), {
+        taskId: created.taskId,
+        expectedLockVersion: 0,
+        members: [{ personId: participant.person.id, role: "PARTICIPANT" }],
+      }),
+      "FORBIDDEN",
+    );
+
+    const activationError = await captureServiceError(
+      activateTask(actor(creator), {
+        taskId: created.taskId,
+        expectedLockVersion: 0,
+      }),
+    );
+    expect(activationError).toMatchObject({
+      code: "VALIDATION_ERROR",
+      message: "激活 Task 前至少需要一名有效负责人",
+      fieldErrors: {
+        members: ["激活 Task 前至少需要一名有效负责人"],
+      },
+    });
+    await expect(
+      prisma.task.findUniqueOrThrow({
+        where: { id: created.taskId },
+        select: { status: true, lockVersion: true },
+      }),
+    ).resolves.toEqual({ status: "DRAFT", lockVersion: 0 });
+    await expect(
+      prisma.domainAuditEvent.count({
+        where: { taskId: created.taskId, action: "pm.task.activate" },
+      }),
+    ).resolves.toBe(0);
+
+    const participantOnly = await updateTaskMembersThroughCurrentInterface(
+      actor(creator),
+      {
+        taskId: created.taskId,
+        expectedLockVersion: 0,
+        members: [{ personId: participant.person.id, role: "PARTICIPANT" }],
+      },
+    );
+    expect(participantOnly.lockVersion).toBe(1);
+    expect(participantOnly.members).toEqual([
+      { personId: participant.person.id, role: "PARTICIPANT" },
+    ]);
+    await expectProjectManagementOutbox(
+      `pm:task:member_changed:${created.taskId}:1:${participant.person.id}:feishu`,
+      {
+        type: "task_assigned",
+        botKind: "notification",
+        purpose: "notification",
+      },
+    );
+    await expect(
+      prisma.taskMember.count({
+        where: {
+          taskId: created.taskId,
+          personId: creator.person.id,
+          removedAt: null,
+        },
+      }),
+    ).resolves.toBe(0);
+
+    const withOwner = await updateTaskMembersThroughCurrentInterface(
+      actor(creator),
+      {
+        taskId: created.taskId,
+        expectedLockVersion: 1,
+        members: [{ personId: participant.person.id, role: "OWNER" }],
+      },
+    );
+    expect(withOwner.lockVersion).toBe(2);
+    await prisma.person.update({
+      where: { id: participant.person.id },
+      data: { status: "INACTIVE" },
+    });
+    const beforeInactiveOwnerActivation = await taskActivationSnapshot(
+      created.taskId,
+    );
+    const inactiveOwnerActivationError = await captureServiceError(
+      activateTask(actor(creator), {
+        taskId: created.taskId,
+        expectedLockVersion: 2,
+      }),
+    );
+    expect(inactiveOwnerActivationError).toMatchObject({
+      code: "VALIDATION_ERROR",
+      message: "激活 Task 前至少需要一名有效负责人",
+      fieldErrors: {
+        members: ["激活 Task 前至少需要一名有效负责人"],
+      },
+    });
+    await expect(taskActivationSnapshot(created.taskId)).resolves.toEqual(
+      beforeInactiveOwnerActivation,
+    );
+    await prisma.person.update({
+      where: { id: participant.person.id },
+      data: { status: "ACTIVE" },
+    });
+    const activated = await activateTask(actor(creator), {
+      taskId: created.taskId,
+      expectedLockVersion: 2,
+    });
+    expect(activated).toMatchObject({ status: "ACTIVE", lockVersion: 3 });
+
+    const activatedCreatorWorkspace = await getTaskWorkspace({
+      actor: actor(creator),
+      taskId: created.taskId,
+    });
+    expect(activatedCreatorWorkspace.permissions).toMatchObject({
+      canUpdateMetadata: false,
+      canManageMembers: false,
+      canActivate: false,
+      canDeleteDraft: false,
+    });
+    await expect(
+      listTasks({
+        actor: actor(creator),
+        input: { mine: true, query: input.title },
+      }),
+    ).resolves.toMatchObject({ items: [] });
+    await expect(
+      searchTaskOptions({
+        actor: actor(creator),
+        input: { query: input.title, mine: true, limit: 50 },
+      }),
+    ).resolves.toMatchObject({ items: [] });
+    expect(
+      (
+        await listMyTaskOptions({
+          actor: actor(creator),
+          statuses: ["ACTIVE"],
+        })
+      ).map((task) => task.id),
+    ).not.toContain(created.taskId);
+    await expect(
+      searchTaskOptions({
+        actor: actor(creator),
+        input: {
+          query: input.title,
+          projectCandidates: true,
+          limit: 50,
+        },
+      }),
+    ).resolves.toMatchObject({ items: [] });
+    const activatedCreatorCanvas = await getContentDrivenTimeCanvasData({
+      actor: actor(creator),
+      input: memberlessDraftCanvasInput(created.taskId),
+      load: { mode: "INITIAL" },
+    });
+    expect(
+      activatedCreatorCanvas.data.anchors.find(
+        (anchor) => anchor.id === created.taskId,
+      ),
+    ).toMatchObject({
+      capabilities: {
+        canUpdateMetadata: false,
+        canManageMembers: false,
+        canActivate: false,
+      },
+    });
   });
 
   test("an inactive Person account keeps historical reads but cannot create a Task", async () => {
@@ -3143,6 +3553,46 @@ function taskDraftInput({
     termination: terminationInput(milestoneCount + 3, terminationName),
     idempotencyKey,
   };
+}
+
+function memberlessDraftCanvasInput(taskId: string) {
+  return {
+    scope: { kind: "TASK_SCOPED", taskId },
+    personIds: [],
+    taskIds: [],
+    types: [],
+    statuses: [],
+    groupBy: "PERSON",
+    includeTaskAnchors: true,
+    includeActual: true,
+    includeBusyBlocks: false,
+  };
+}
+
+async function taskActivationSnapshot(taskId: string) {
+  const [task, nodes, auditCount, notificationCount, outboxCount] =
+    await Promise.all([
+      prisma.task.findUniqueOrThrow({
+        where: { id: taskId },
+        select: {
+          status: true,
+          lockVersion: true,
+          activeMilestoneNodeId: true,
+          startedAt: true,
+        },
+      }),
+      prisma.taskNode.findMany({
+        where: { taskId },
+        select: { id: true, status: true },
+        orderBy: { id: "asc" },
+      }),
+      prisma.domainAuditEvent.count({ where: { taskId } }),
+      prisma.inAppNotification.count({ where: { taskId } }),
+      prisma.notificationOutbox.count({
+        where: { eventKey: { startsWith: `pm:task:activated:${taskId}:` } },
+      }),
+    ]);
+  return { task, nodes, auditCount, notificationCount, outboxCount };
 }
 
 function milestoneInput(goal: string, criteria: string, daysFromBase: number) {

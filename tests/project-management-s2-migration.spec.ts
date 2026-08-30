@@ -711,6 +711,15 @@ test("S2 plan and canvas validations enforce absolute chronology, identities and
   expect(parsedDraft.relatedTaskId).toBeNull();
   expect(parsedDraft.termination.name).toBe("Terminal");
   expect(
+    createTaskDraftInputSchema.safeParse({ ...baseDraft, members: [] }).success,
+  ).toBe(true);
+  expect(
+    createTaskDraftInputSchema.safeParse({
+      ...baseDraft,
+      members: [{ personId: ownerPersonId, role: "PARTICIPANT" }],
+    }).success,
+  ).toBe(true);
+  expect(
     createTaskDraftInputSchema.safeParse({
       ...baseDraft,
       milestones: Array.from({ length: 201 }, (_, index) =>

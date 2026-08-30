@@ -297,7 +297,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
       await expectHealthyPage(page);
     });
 
-  test("member-group errors do not mark Draft or Active role searches invalid", async ({
+  test("Draft defers OWNER completeness while Active member validation remains strict", async ({
       context,
       page,
       baseURL,
@@ -365,29 +365,57 @@ test.describe("project management UI project-management-ui-workbench", () => {
         exact: true,
       });
       await expect(draftMembers).not.toHaveAttribute("aria-describedby");
-      await page.getByRole("button", { name: "保存 Task" }).first().click();
-
-      await expect(draftMembers).toBeFocused();
       const draftMemberError = page
         .getByRole("alert")
         .filter({ hasText: "至少需要一名负责人" });
-      await expect(draftMemberError).toBeVisible();
-      await expect(draftMembers).toHaveAttribute(
-        "aria-describedby",
-        (await draftMemberError.getAttribute("id")) ?? "",
-      );
+      await expect(draftMemberError).toHaveCount(0);
       await expect(draftOwnerPicker).not.toHaveAttribute("aria-invalid", "true");
       await expect(draftParticipantPicker).not.toHaveAttribute(
         "aria-invalid",
         "true",
       );
+      await page.getByRole("button", { name: "保存 Task" }).first().click();
+      await expect(page).toHaveURL(`/progress/tasks/${task.taskId}`);
+      await expect
+        .poll(() =>
+          prisma.taskMember.findMany({
+            where: { taskId: task.taskId, removedAt: null },
+            select: { personId: true, role: true },
+          }),
+        )
+        .toEqual([{ personId: editor.person.id, role: "PARTICIPANT" }]);
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
+        ),
+      ).toBe(true);
 
-      await draftOwnerPicker.fill(editor.person.displayName);
+      const savedTask = await prisma.task.findUniqueOrThrow({
+        where: { id: task.taskId },
+        select: { status: true, lockVersion: true, activeMilestoneNodeId: true },
+      });
+      page.once("dialog", (dialog) => void dialog.accept());
+      await page.getByRole("button", { name: "激活 Task" }).click();
+      await expect(
+        page.getByRole("alert").filter({
+          hasText: "激活 Task 前至少需要一名有效负责人",
+        }),
+      ).toBeVisible();
+      await expect
+        .poll(() =>
+          prisma.task.findUnique({
+            where: { id: task.taskId },
+            select: { status: true, lockVersion: true, activeMilestoneNodeId: true },
+          }),
+        )
+        .toEqual(savedTask);
+
+      await page.goto(`/progress/tasks/${task.taskId}/edit`);
+      const repairedOwnerPicker = page.getByLabel("搜索负责人", { exact: true });
+      await repairedOwnerPicker.fill(editor.person.displayName);
       await page
         .getByRole("option", { name: editor.person.displayName, exact: true })
         .click();
-      await expect(draftMemberError).toHaveCount(0);
-      await expect(draftMembers).not.toHaveAttribute("aria-describedby");
       await page.getByRole("button", { name: "保存 Task" }).first().click();
       await expect(page).toHaveURL(`/progress/tasks/${task.taskId}`);
       await expect
@@ -398,20 +426,9 @@ test.describe("project management UI project-management-ui-workbench", () => {
           }),
         )
         .toEqual([{ personId: editor.person.id, role: "OWNER" }]);
-      expect(
-        await page.evaluate(
-          () => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
-        ),
-      ).toBe(true);
-
-      const savedTask = await prisma.task.findUniqueOrThrow({
-        where: { id: task.taskId },
-        select: { lockVersion: true },
-      });
-      await activateTask(actor(editor), {
-        taskId: task.taskId,
-        expectedLockVersion: savedTask.lockVersion,
-      });
+      page.once("dialog", (dialog) => void dialog.accept());
+      await page.getByRole("button", { name: "激活 Task" }).click();
+      await expect(page.getByText("Task 已激活。")).toBeVisible();
       await prisma.taskMember.updateMany({
         where: {
           taskId: task.taskId,
@@ -605,7 +622,6 @@ test.describe("project management UI project-management-ui-workbench", () => {
           title: updatedTitle,
           lockVersion: 1,
           members: [
-            { personId: fixture.admin.person.id, role: "OWNER" },
             { personId: fixture.owner.person.id, role: "PARTICIPANT" },
             { personId: fixture.reviewer.person.id, role: "PARTICIPANT" },
             { personId: replacementOwner.person.id, role: "OWNER" },
@@ -1389,7 +1405,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
           name: fixture.admin.person.displayName,
           exact: true,
         }),
-      ).toBeVisible();
+      ).toHaveCount(0);
       await expect(
         page.getByRole("option", {
           name: fixture.reviewer.person.displayName,

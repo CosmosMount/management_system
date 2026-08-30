@@ -24,6 +24,7 @@ export function TaskMemberRolePicker({
   onChange,
   onPersonResolved,
   protectedOwnerId,
+  requireOwner = true,
   focusTargetId,
   error,
 }: {
@@ -34,6 +35,7 @@ export function TaskMemberRolePicker({
   onChange: (members: EditableTaskMember[]) => void;
   onPersonResolved?: (person: PersonOptionDto) => void;
   protectedOwnerId?: string;
+  requireOwner?: boolean;
   focusTargetId?: string;
   error?: string | readonly string[];
 }) {
@@ -55,7 +57,7 @@ export function TaskMemberRolePicker({
       setMemberError("你当前是 Project 负责人，不能降级自己。");
       return;
     }
-    if (existing?.role === "OWNER" && owners.length === 1) {
+    if (requireOwner && existing?.role === "OWNER" && owners.length === 1) {
       setMemberError("至少保留一名负责人。");
       return;
     }
@@ -71,7 +73,7 @@ export function TaskMemberRolePicker({
 
   const removePerson = (personId: string) => {
     const member = members.find((item) => item.personId === personId);
-    if (member?.role === "OWNER" && owners.length === 1) return;
+    if (requireOwner && member?.role === "OWNER" && owners.length === 1) return;
     setMemberError("");
     onChange(members.filter((item) => item.personId !== personId));
   };
@@ -92,7 +94,9 @@ export function TaskMemberRolePicker({
         people={people}
         scope={scope}
         editable={editable}
-        lastOwnerId={owners.length === 1 ? owners[0]?.personId : undefined}
+        lastOwnerId={
+          requireOwner && owners.length === 1 ? owners[0]?.personId : undefined
+        }
         protectedOwnerId={protectedOwnerId}
         placeholder="搜索负责人"
         onSelect={selectPerson}

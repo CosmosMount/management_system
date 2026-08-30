@@ -162,7 +162,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
             { personId: reviewer.person.id, role: "PARTICIPANT" },
             { personId: added.person.id, role: "PARTICIPANT" },
           ];
-          expectedChangedPeople = [admin, removed, added];
+          expectedChangedPeople = [removed, added];
         }
         const fixture = await createDraft({
           creator: admin,
@@ -314,7 +314,6 @@ test.describe("project management plan mutations project-management-plan-mutatio
             expectedLockVersion: 1,
             members: [
               { personId: owner.person.id, role: "OWNER" },
-              { personId: reviewer.person.id, role: "PARTICIPANT" },
             ],
           }),
         ).rejects.toThrow("s2 controlled outbox failure after inapp");

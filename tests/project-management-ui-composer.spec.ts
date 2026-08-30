@@ -43,8 +43,8 @@ test.describe("project management UI project-management-ui-composer", () => {
       const creator = await createAccountPerson(
         `S5 Composer Creator ${testInfo.project.name} ${randomUUID()}`,
       );
-      const coOwner = await createAccountPerson(
-        `S5 Composer Co-Owner ${testInfo.project.name} ${randomUUID()}`,
+      const participant = await createAccountPerson(
+        `S5 Composer Participant ${testInfo.project.name} ${randomUUID()}`,
       );
       await loginAsTestUser(context, baseURL, {
         openId: creator.openId,
@@ -87,25 +87,26 @@ test.describe("project management UI project-management-ui-composer", () => {
       await page.getByRole("button", { name: "恢复草稿" }).click();
       await expect(page.getByLabel("Task 名称")).toHaveValue(title);
 
-      const lastOwnerButton = page.getByRole("button", {
+      await expect(page.getByRole("button", {
         name: `移除 ${creator.person.displayName} 负责人`,
-      });
-      await expect(lastOwnerButton).toBeDisabled();
-      const ownerPicker = page.getByLabel("搜索负责人", { exact: true });
-      await ownerPicker.fill(coOwner.person.displayName);
+      })).toHaveCount(0);
+      const participantPicker = page.getByLabel("搜索参与人员", { exact: true });
+      await participantPicker.fill(participant.person.displayName);
       await expect(
-        page.getByRole("option", { name: new RegExp(coOwner.person.displayName) }),
+        page.getByRole("option", { name: new RegExp(participant.person.displayName) }),
       ).toBeVisible();
       await page
-        .getByRole("option", { name: new RegExp(coOwner.person.displayName) })
+        .getByRole("option", { name: new RegExp(participant.person.displayName) })
         .click();
-      await expect(lastOwnerButton).toBeEnabled();
+      await expect(page.getByRole("button", {
+        name: `移除 ${participant.person.displayName} 参与人员`,
+      })).toBeEnabled();
 
       const originalViewport = page.viewportSize();
       if (!originalViewport) throw new Error("人员选择器回归缺少 viewport");
       await page.setViewportSize({ width: originalViewport.width, height: 529 });
-      await ownerPicker.scrollIntoViewIfNeeded();
-      await ownerPicker.click();
+      await participantPicker.scrollIntoViewIfNeeded();
+      await participantPicker.click();
       const pickerPositioner = page.getByTestId("entity-picker-positioner");
       await expect(pickerPositioner).toHaveAttribute("data-side", /^(top|bottom)$/);
       await page.keyboard.press("Escape");
@@ -457,13 +458,13 @@ test.describe("project management UI project-management-ui-composer", () => {
         },
       });
       expect(task.status).toBe("DRAFT");
-      expect(task.members).toHaveLength(2);
-      expect(task.members).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ personId: creator.person.id, role: "OWNER" }),
-          expect.objectContaining({ personId: coOwner.person.id, role: "OWNER" }),
-        ]),
-      );
+      expect(task.members).toHaveLength(1);
+      expect(task.members).toEqual([
+        expect.objectContaining({
+          personId: participant.person.id,
+          role: "PARTICIPANT",
+        }),
+      ]);
       expect(task.currentPlanVersion.plannedStartAt).not.toBeNull();
       expect(task.currentPlanVersion.nodes).toHaveLength(201);
       expect(task.workSegments).toHaveLength(0);
@@ -549,7 +550,7 @@ test.describe("project management UI project-management-ui-composer", () => {
       await expectHealthyPage(page);
     });
 
-  test("Task Composer keeps member-group errors off both role search inputs", async ({
+  test("Task Composer accepts a participant-only draft without promoting the creator", async ({
       context,
       page,
       baseURL,
@@ -602,36 +603,22 @@ test.describe("project management UI project-management-ui-composer", () => {
       const ownerPicker = page.getByLabel("搜索负责人", { exact: true });
       const participantPicker = page.getByLabel("搜索参与人员", { exact: true });
       await expect(memberSection).not.toHaveAttribute("aria-describedby");
-      await page.getByRole("button", { name: "创建 Task 草稿" }).click();
-
-      await expect(memberSection).toBeFocused();
       const memberError = page
         .getByRole("alert")
         .filter({ hasText: "至少需要一名负责人" });
-      await expect(memberError).toBeVisible();
-      await expect(memberSection).toHaveAttribute(
-        "aria-describedby",
-        (await memberError.getAttribute("id")) ?? "",
-      );
+      await expect(memberError).toHaveCount(0);
       await expect(ownerPicker).not.toHaveAttribute("aria-invalid", "true");
       await expect(participantPicker).not.toHaveAttribute("aria-invalid", "true");
-
-      await ownerPicker.fill(creator.person.displayName);
-      await page
-        .getByRole("option", { name: creator.person.displayName, exact: true })
-        .click();
-      await expect(memberError).toHaveCount(0);
-      await expect(memberSection).not.toHaveAttribute("aria-describedby");
       await expect(
         page.getByRole("button", {
           name: `移除 ${creator.person.displayName} 参与人员`,
         }),
-      ).toHaveCount(0);
+      ).toBeVisible();
       await page
         .getByTestId("task-plan-node-navigator")
         .getByRole("button", { name: /Terminal/ })
         .click();
-      await page.getByLabel("结束条件").fill("负责人修复后允许无参与人员创建");
+      await page.getByLabel("结束条件").fill("草稿阶段允许只有参与人员");
       await page.getByRole("button", { name: "创建 Task 草稿" }).click();
       await expect(
         page
@@ -651,7 +638,7 @@ test.describe("project management UI project-management-ui-composer", () => {
           }),
         )
         .toEqual({
-          members: [{ personId: creator.person.id, role: "OWNER" }],
+          members: [{ personId: creator.person.id, role: "PARTICIPANT" }],
         });
       expect(
         await page.evaluate(
@@ -696,6 +683,11 @@ test.describe("project management UI project-management-ui-composer", () => {
         .click();
       await page.getByLabel("Terminal 名称").fill("交付终点");
       await page.getByLabel("结束条件").fill("无需中间验收，直接进入交付终点");
+      const ownerPicker = page.getByLabel("搜索负责人", { exact: true });
+      await ownerPicker.fill(creator.person.displayName);
+      await page
+        .getByRole("option", { name: creator.person.displayName, exact: true })
+        .click();
       await page.getByRole("button", { name: "创建 Task 草稿" }).click();
       await expect(
         page
@@ -1095,12 +1087,11 @@ test.describe("project management UI project-management-ui-composer", () => {
       await expectHealthyPage(page);
     });
 
-  test("Task Composer keeps the current actor as Owner beyond the first people page and removes workflow policy controls", async ({
+  test("Task Composer leaves the current actor unassigned beyond the first people page and removes workflow policy controls", async ({
       context,
       page,
       baseURL,
-    }, testInfo) => {
-      test.skip(testInfo.project.name !== "desktop", "服务端分页归属路径只需在桌面重复一次");
+    }) => {
       await prisma.person.createMany({
         data: Array.from({ length: 55 }, (_, index) => ({
           displayName: `000 S5 owner pagination ${String(index).padStart(2, "0")}`,
@@ -1121,7 +1112,7 @@ test.describe("project management UI project-management-ui-composer", () => {
         page.getByRole("button", {
           name: `移除 ${administrator.person.displayName} 负责人`,
         }),
-      ).toBeVisible();
+      ).toHaveCount(0);
       await page.getByLabel("Task 名称").fill(title);
       await page.getByRole("button", { name: /添加 Milestone/ }).first().click();
       await page.getByLabel("目标").fill("管理员自审目标");
@@ -1144,9 +1135,7 @@ test.describe("project management UI project-management-ui-composer", () => {
         where: { title },
         include: { members: { where: { removedAt: null } } },
       });
-      expect(task.members).toEqual([
-        expect.objectContaining({ personId: administrator.person.id, role: "OWNER" }),
-      ]);
+      expect(task.members).toEqual([]);
     });
 
   test("Task Composer restores an inactive template owner with the real status", async ({

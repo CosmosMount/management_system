@@ -11,6 +11,7 @@ export type TaskAuthorizationResourceInput = {
   techGroup?: string;
   status?: TaskStatus;
   priority?: TaskPriority;
+  createdByAccountId?: string;
   members?: Array<{
     personId: string;
     role: TaskMemberRole;
@@ -28,6 +29,7 @@ export function taskAuthorizationResource(
     techGroup: task.techGroup,
     status: task.status,
     priority: task.priority,
+    createdByAccountId: task.createdByAccountId,
     members: task.members,
   };
 }

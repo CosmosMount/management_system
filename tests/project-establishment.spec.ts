@@ -1136,6 +1136,62 @@ test.describe("Project 立项与生命周期", () => {
     ).resolves.toBe(0);
   });
 
+  test("零成员草稿创建者可以选择并通过 Project 立项挂载 Task", async () => {
+    const requester = await actor("Project 零成员 Task 申请人");
+    const formerParticipant = await actor("Project 零成员 Task 非成员");
+    const admin = await actor(
+      "Project 零成员 Task 管理员",
+      "PROJECT_ADMINISTRATOR",
+    );
+    const task = await draftTask(
+      requester,
+      formerParticipant,
+      `Project 零成员 Task ${randomUUID()}`,
+    );
+    await prisma.taskMember.deleteMany({ where: { taskId: task.id } });
+
+    await expect(
+      searchTaskOptions({
+        actor: requester,
+        input: { query: task.title, projectCandidates: true, limit: 50 },
+      }),
+    ).resolves.toMatchObject({
+      items: [expect.objectContaining({ id: task.id })],
+    });
+    await expect(
+      searchTaskOptions({
+        actor: formerParticipant,
+        input: { query: task.title, projectCandidates: true, limit: 50 },
+      }),
+    ).resolves.toMatchObject({ items: [] });
+
+    const created = await createProject(requester, {
+      name: `Project 零成员 Task 立项 ${randomUUID()}`,
+      description: "验证草稿创建者权限贯穿立项提交和批准",
+      avatarPath: null,
+      members: [{ personId: requester.personId, role: "OWNER" }],
+      requestedTaskIds: [task.id],
+      idempotencyKey: randomUUID(),
+    });
+    const approved = await reviewProjectEstablishment(admin, {
+      projectId: created.projectId,
+      requestId: created.requestId!,
+      expectedLockVersion: created.lockVersion,
+      decision: "APPROVE",
+      comment: "批准零成员草稿随 Project 立项挂载",
+    });
+    expect(approved.status).toBe("ACTIVE");
+    await expect(
+      prisma.task.findUniqueOrThrow({
+        where: { id: task.id },
+        select: { projectId: true, lockVersion: true },
+      }),
+    ).resolves.toEqual({ projectId: created.projectId, lockVersion: 1 });
+    await expect(
+      prisma.taskMember.count({ where: { taskId: task.id } }),
+    ).resolves.toBe(0);
+  });
+
   test("批准时原子挂载 Task、同步成员，并执行结束与删除门禁", async () => {
     const requester = await actor("Project Task 申请人");
     const participant = await actor("Project Task 成员");

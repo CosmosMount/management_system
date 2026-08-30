@@ -6,6 +6,7 @@ export const canvasTaskAuthorizationSelect = {
   techGroup: true,
   status: true,
   priority: true,
+  createdByAccountId: true,
   members: {
     where: { removedAt: null },
     select: { personId: true, role: true, removedAt: true },

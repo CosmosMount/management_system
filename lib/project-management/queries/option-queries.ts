@@ -51,6 +51,7 @@ const peopleSearchTaskAuthorizationSelect = {
   techGroup: true,
   status: true,
   priority: true,
+  createdByAccountId: true,
   members: {
     where: { removedAt: null },
     select: { personId: true, role: true, removedAt: true },
@@ -304,6 +305,7 @@ function peopleSearchTaskResource(
     techGroup: task.techGroup,
     status: task.status,
     priority: task.priority,
+    createdByAccountId: task.createdByAccountId,
     members: task.members,
   };
 }
@@ -322,13 +324,7 @@ export async function searchTaskOptions({
     AND: [
       taskReadableWhere(actor),
       statuses.length > 0 ? { status: { in: statuses } } : {},
-      parsed.mine
-        ? {
-            members: {
-              some: { personId: actor.personId, removedAt: null },
-            },
-          }
-        : {},
+      parsed.mine ? myTaskOptionWhere(actor) : {},
       parsed.projectCandidates ? projectEstablishmentTaskCandidateWhere(actor) : {},
     ],
   };
@@ -421,11 +417,7 @@ export async function listMyTaskOptions({
       AND: [
         taskReadableWhere(actor),
         statuses.length > 0 ? { status: { in: [...statuses] } } : {},
-        {
-          members: {
-            some: { personId: actor.personId, removedAt: null },
-          },
-        },
+        myTaskOptionWhere(actor),
       ],
     },
     select: taskOptionSelect,
@@ -486,7 +478,35 @@ export async function resolveTaskOptionsByIds({
 function projectEstablishmentTaskCandidateWhere(actor: ProjectManagementActor): Prisma.TaskWhereInput {
   return {
     projectId: null,
-    ...(isSystemAdministrator(actor) ? {} : { members: { some: { personId: actor.personId, role: { in: ["OWNER", "PARTICIPANT"] }, removedAt: null } } }),
+    ...(isSystemAdministrator(actor)
+      ? {}
+      : {
+          OR: [
+            {
+              members: {
+                some: {
+                  personId: actor.personId,
+                  role: { in: ["OWNER", "PARTICIPANT"] },
+                  removedAt: null,
+                },
+              },
+            },
+            { status: "DRAFT", createdByAccountId: actor.accountId },
+          ],
+        }),
+  };
+}
+
+function myTaskOptionWhere(actor: ProjectManagementActor): Prisma.TaskWhereInput {
+  return {
+    OR: [
+      {
+        members: {
+          some: { personId: actor.personId, removedAt: null },
+        },
+      },
+      { status: "DRAFT", createdByAccountId: actor.accountId },
+    ],
   };
 }
 

@@ -50,7 +50,7 @@ import {
 } from "@/lib/project-management/application/task-plan-audit";
 import {
   calculateMemberChanges,
-  notifyActiveMemberChangesTx,
+  notifyTaskMemberChangesTx,
   type MemberChange,
 } from "@/lib/project-management/application/task-member-notifications";
 
@@ -113,16 +113,18 @@ export async function updateTaskDraft(
     const targetProjectId = parsed.projectId === undefined ? task.projectId : parsed.projectId;
     await assertTaskProjectChangeAllowedTx(tx, task.projectId, targetProjectId);
 
+    let memberChanges: MemberChange[] = [];
     if (parsed.members) {
       assertAuthorizedTaskAction(refreshedActor, task, "task.manage_members");
-      assertExistingMemberInvariant(task.members);
-      assertRequestedMemberInvariant(parsed.members);
+      assertExistingMemberStructure(task.members);
+      assertRequestedMemberStructure(parsed.members);
       await assertActivePeopleTx(
         tx,
         parsed.members.map((member) => member.personId),
         task.members.map((member) => member.personId),
       );
       await assertTaskSegmentMembersIncludedTx(tx, task.id, parsed.members);
+      memberChanges = calculateMemberChanges(task.members, parsed.members);
     }
 
     const plan = await loadInitialDraftPlanTx(
@@ -229,6 +231,14 @@ export async function updateTaskDraft(
     });
     await auditTaskProjectChangeTx(tx, refreshedActor, task, updatedTask);
     await notifyTaskUpdatedTx(tx, refreshedActor, task, updatedTask);
+    if (memberChanges.length > 0) {
+      await notifyTaskMemberChangesTx(tx, {
+        actor: refreshedActor,
+        task: updatedTask,
+        lockVersion: updatedTask.lockVersion,
+        changes: memberChanges,
+      });
+    }
 
     return {
       ...serializeTaskMutation(updatedTask),
@@ -279,8 +289,8 @@ export async function updateActiveTask(
     let memberChanges: MemberChange[] = [];
     if (parsed.members) {
       assertAuthorizedTaskAction(refreshedActor, task, "task.manage_members");
-      assertExistingMemberInvariant(task.members);
-      assertRequestedMemberInvariant(parsed.members);
+      assertExistingActiveMemberInvariant(task.members);
+      assertRequestedActiveMemberInvariant(parsed.members);
       await assertActivePeopleTx(
         tx,
         parsed.members.map((member) => member.personId),
@@ -361,7 +371,7 @@ export async function updateActiveTask(
       });
     }
     if (membersChanged && memberChanges.length > 0) {
-      await notifyActiveMemberChangesTx(tx, {
+      await notifyTaskMemberChangesTx(tx, {
         actor: refreshedActor,
         task: updatedTask,
         lockVersion: updatedTask.lockVersion,
@@ -492,7 +502,7 @@ async function assertActivePeopleTx(
   }
 }
 
-function assertExistingMemberInvariant(
+function assertExistingMemberStructure(
   members: Array<{ personId: string; role: TaskMemberRole }>,
 ) {
   const personIds = members.map((member) => member.personId);
@@ -506,12 +516,18 @@ function assertExistingMemberInvariant(
   ) {
     throw stateConflictError("Task 当前成员仍含历史角色，请联系管理员处理");
   }
+}
+
+function assertExistingActiveMemberInvariant(
+  members: Array<{ personId: string; role: TaskMemberRole }>,
+) {
+  assertExistingMemberStructure(members);
   if (members.every((member) => member.role !== "OWNER")) {
     throw stateConflictError("Task 当前没有负责人，请联系管理员处理");
   }
 }
 
-function assertRequestedMemberInvariant(
+function assertRequestedMemberStructure(
   members: Array<{ personId: string; role: TaskMemberRole }>,
 ) {
   const personIds = members.map((member) => member.personId);
@@ -520,6 +536,12 @@ function assertRequestedMemberInvariant(
       members: ["同一成员只能有一个角色"],
     });
   }
+}
+
+function assertRequestedActiveMemberInvariant(
+  members: Array<{ personId: string; role: TaskMemberRole }>,
+) {
+  assertRequestedMemberStructure(members);
   if (members.every((member) => member.role !== "OWNER")) {
     throw validationError("至少需要一名负责人", {
       members: ["至少需要一名负责人"],

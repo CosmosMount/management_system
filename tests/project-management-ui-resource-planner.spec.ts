@@ -943,8 +943,10 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       await expect(page.getByText("人员（2）")).toBeVisible();
       await expect(page.getByText("Task（1）")).toBeVisible();
       await expect(page.getByRole("checkbox", { name: /显示全部资源/ })).not.toBeChecked();
+      await expect
+        .poll(() => new URL(page.url()).searchParams.get("center"))
+        .not.toBeNull();
       const centerBeforeYearScale = new URL(page.url()).searchParams.get("center");
-      expect(centerBeforeYearScale).not.toBeNull();
       await page.getByRole("button", { name: "年", exact: true }).click();
       await expect(page).toHaveURL(/scale=year/);
       await expect
@@ -959,7 +961,9 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       await page.getByRole("button", { name: "应用选择" }).click();
       await expect(page).toHaveURL(/all=0/);
       await expect(page).toHaveURL(/scale=year/);
-      expect(new URL(page.url()).searchParams.get("center")).toBe(preservedCenter);
+      await expect
+        .poll(() => new URL(page.url()).searchParams.get("center"))
+        .toBe(preservedCenter);
       await expect(page.getByText("人员（1）")).toBeVisible();
       await page.getByRole("button", { name: "复制视图链接" }).click();
       await expect(page.getByText(/已复制当前资源计划链接|无法访问剪贴板/)).toBeVisible();

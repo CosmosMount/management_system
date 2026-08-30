@@ -103,15 +103,14 @@ test.describe("project management plan mutations project-management-plan-mutatio
         }),
       );
       await expect(
-        prisma.taskMember.findFirstOrThrow({
+        prisma.taskMember.count({
           where: {
             taskId: ordinaryCreated.taskId,
             personId: teamAdmin.person.id,
             removedAt: null,
           },
-          select: { role: true },
         }),
-      ).resolves.toEqual({ role: "OWNER" });
+      ).resolves.toBe(0);
 
       const hidden = await createDraft({
         creator: admin,
@@ -187,6 +186,9 @@ test.describe("project management plan mutations project-management-plan-mutatio
         owner,
         reviewer,
         title: "relatedTaskId Active 目标",
+        extraMembers: [
+          { personId: scopedAdmin.person.id, role: "PARTICIPANT" },
+        ],
       });
       await activateTask(actor(owner), {
         taskId: activeTarget.taskId,
@@ -713,7 +715,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
       expect(
         (updatePayload.recipientOpenIds as string[]).slice().sort(),
       ).toEqual(
-        [admin, owner, participant, addedMember]
+        [owner, participant, addedMember]
           .map((recipient) => recipient.openId)
           .sort(),
       );
@@ -721,10 +723,10 @@ test.describe("project management plan mutations project-management-plan-mutatio
         where: { eventKey: { startsWith: `${updateEventKey}:inapp:` } },
         select: { recipientAccountId: true, linkPath: true },
       });
-      expect(updateNotifications).toHaveLength(4);
+      expect(updateNotifications).toHaveLength(3);
       expect(updateNotifications).toEqual(
         expect.arrayContaining(
-          [admin, owner, participant, addedMember].map((recipient) => ({
+          [owner, participant, addedMember].map((recipient) => ({
             recipientAccountId: recipient.account.id,
             linkPath: `/progress/tasks/${fixture.taskId}`,
           })),

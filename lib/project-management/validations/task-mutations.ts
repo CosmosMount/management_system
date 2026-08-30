@@ -28,12 +28,17 @@ const optionalText = (max: number) =>
 
 const taskMemberMutationInputSchema = taskMemberInputSchema.strict();
 
-const taskMembersMutationSchema = z
-  .array(taskMemberMutationInputSchema, { message: "成员列表格式不正确" })
-  .min(1, "至少添加一名 Task 成员");
+const draftTaskMembersMutationSchema = z.array(taskMemberMutationInputSchema, {
+  message: "成员列表格式不正确",
+});
 
-function validateTaskMembers(
-  members: z.infer<typeof taskMembersMutationSchema>,
+const activeTaskMembersMutationSchema = draftTaskMembersMutationSchema.min(
+  1,
+  "至少添加一名 Task 成员",
+);
+
+function validateTaskMemberStructure(
+  members: z.infer<typeof draftTaskMembersMutationSchema>,
   ctx: z.RefinementCtx,
 ) {
   const personIds = members.map((member) => member.personId);
@@ -44,7 +49,14 @@ function validateTaskMembers(
       message: "同一成员只能有一个角色",
     });
   }
-  if (members.every((member) => member.role !== "OWNER")) {
+}
+
+function validateActiveTaskMembers(
+  members: z.infer<typeof activeTaskMembersMutationSchema>,
+  ctx: z.RefinementCtx,
+) {
+  validateTaskMemberStructure(members, ctx);
+  if (members.length > 0 && members.every((member) => member.role !== "OWNER")) {
     ctx.addIssue({
       code: "custom",
       path: ["members"],
@@ -133,7 +145,7 @@ export const updateTaskDraftInputSchema = z
     planVersionId: idSchema,
     expectedLockVersion: expectedTaskLockVersionSchema,
     ...taskMetadataFields,
-    members: taskMembersMutationSchema.optional(),
+    members: draftTaskMembersMutationSchema.optional(),
     plannedStartAt: absoluteDateTimeSchema(
       "请选择带时区的有效计划开始时间",
     ),
@@ -146,7 +158,7 @@ export const updateTaskDraftInputSchema = z
   })
   .strict()
   .superRefine((input, ctx) => {
-    if (input.members) validateTaskMembers(input.members, ctx);
+    if (input.members) validateTaskMemberStructure(input.members, ctx);
     validateDraftPlanReplacement(input, ctx);
   });
 
@@ -155,14 +167,14 @@ export const updateActiveTaskInputSchema = z
     taskId: idSchema,
     expectedLockVersion: expectedTaskLockVersionSchema,
     metadata: z.object(taskMetadataFields).strict().optional(),
-    members: taskMembersMutationSchema.optional(),
+    members: activeTaskMembersMutationSchema.optional(),
   })
   .strict()
   .superRefine((input, ctx) => {
     if (!input.metadata && !input.members) {
       ctx.addIssue({ code: "custom", message: "没有需要保存的 Task 修改" });
     }
-    if (input.members) validateTaskMembers(input.members, ctx);
+    if (input.members) validateActiveTaskMembers(input.members, ctx);
   });
 
 export type UpdateTaskDraftInput = z.infer<typeof updateTaskDraftInputSchema>;

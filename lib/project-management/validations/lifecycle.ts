@@ -121,8 +121,7 @@ export const createTaskDraftInputSchema = z
       .optional()
       .default("MEDIUM"),
     members: z
-      .array(taskMemberInputSchema, { message: "成员列表格式不正确" })
-      .min(1, "至少添加一名 Task 成员"),
+      .array(taskMemberInputSchema, { message: "成员列表格式不正确" }),
     milestones: z
       .array(s2MilestoneDraftSchema, { message: "Milestone 列表格式不正确" })
       .max(200, "单个计划最多 200 个节点"),
@@ -140,13 +139,6 @@ export const createTaskDraftInputSchema = z
       "同一成员只能有一个角色",
       ctx,
     );
-    if (input.members.every((member) => member.role !== "OWNER")) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["members"],
-        message: "至少需要一名负责人",
-      });
-    }
     validatePlanChronology(input, ctx);
   });
 

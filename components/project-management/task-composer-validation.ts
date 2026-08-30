@@ -68,15 +68,9 @@ export function validateComposer(
       message: "Start 必须严格早于全部 Milestone 和 Terminal。",
     });
   }
-  if (!state.revision && state.members.length === 0) {
-    issues.push({ key: "members", message: "至少添加一名 Task 成员。" });
-  }
   const memberPersonIds = state.members.map((member) => member.personId);
   if (!state.revision && new Set(memberPersonIds).size !== memberPersonIds.length) {
     issues.push({ key: "members", message: "同一成员只能有一个角色。" });
-  }
-  if (!state.revision && state.members.every((member) => member.role !== "OWNER")) {
-    issues.push({ key: "members", message: "至少需要一名负责人。" });
   }
   if (state.milestones.length > 200) {
     issues.push({ key: "plannedStartAt", entityId: TASK_COMPOSER_START_ID, message: "计划最多包含 200 个 Milestone。" });

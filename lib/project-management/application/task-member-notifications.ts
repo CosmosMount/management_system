@@ -48,7 +48,7 @@ export function calculateMemberChanges(
     });
 }
 
-export async function notifyActiveMemberChangesTx(
+export async function notifyTaskMemberChangesTx(
   tx: PrismaTx,
   input: {
     actor: ProjectManagementActor;
@@ -68,7 +68,7 @@ export async function notifyActiveMemberChangesTx(
       task: {
         id: input.task.id,
         title: input.task.title,
-        status: "ACTIVE",
+        status: input.task.status,
         currentPlanVersionId: input.task.currentPlanVersionId,
       },
       kind: "task_assigned",

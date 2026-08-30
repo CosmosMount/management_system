@@ -130,6 +130,7 @@ export async function loadTaskForAuthorizationTx(
       techGroup: true,
       status: true,
       priority: true,
+      createdByAccountId: true,
       currentPlanVersionId: true,
       activeMilestoneNodeId: true,
       lockVersion: true,
@@ -245,20 +246,6 @@ export function assertRevisionTargetPlanValid(plan: {
   nodes: LifecyclePlanEntry[];
 }) {
   assertPersistedPlanChronologyValid(plan, "STRICT");
-}
-
-export function ensureCreatorOwner(
-  members: CreateTaskDraftInput["members"],
-  creatorPersonId: string,
-): CreateTaskDraftInput["members"] {
-  const normalized = new Map(
-    members.map((member) => [member.personId, member] as const),
-  );
-  normalized.set(creatorPersonId, {
-    personId: creatorPersonId,
-    role: "OWNER",
-  });
-  return [...normalized.values()];
 }
 
 export async function activateNextMilestoneInPlanTx(

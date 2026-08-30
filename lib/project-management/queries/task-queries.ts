@@ -280,7 +280,16 @@ export async function listTasks({
     input?.status ? { status: input.status } : {},
     input?.priority ? { priority: input.priority } : {},
     input?.mine
-      ? { members: { some: { personId: actor.personId, removedAt: null } } }
+      ? {
+          OR: [
+            {
+              members: {
+                some: { personId: actor.personId, removedAt: null },
+              },
+            },
+            { status: "DRAFT", createdByAccountId: actor.accountId },
+          ],
+        }
       : {},
   ];
   const where: Prisma.TaskWhereInput = { AND: filters };
@@ -471,6 +480,7 @@ export async function getTaskWorkspace({
     techGroup: task.techGroup,
     status: task.status,
     priority: task.priority,
+    createdByAccountId: task.createdByAccountId,
     members: task.members,
   });
 
@@ -748,6 +758,7 @@ function taskResource(input: {
   techGroup: string;
   status: TaskStatus;
   priority: TaskPriority;
+  createdByAccountId: string;
   members: Array<{
     personId: string;
     role: TaskMemberRole;
@@ -760,6 +771,7 @@ function taskResource(input: {
     techGroup: input.techGroup,
     status: input.status,
     priority: input.priority,
+    createdByAccountId: input.createdByAccountId,
     members: input.members,
   };
 }
