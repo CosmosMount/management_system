@@ -55,11 +55,49 @@ test.describe("project management UI project-management-ui-routes-responsive", (
       await expect(page).toHaveURL(/\/progress$/);
       await expect(page.getByRole("heading", { name: "我的工作" })).toBeVisible();
       await expect(
-        page.getByRole("link", { name: fixture.taskTitle, exact: true }),
+        page
+          .getByLabel("参与 Task")
+          .getByRole("link", { name: fixture.taskTitle, exact: true }),
       ).toBeVisible();
       await expect(page.getByText("未读通知")).toBeVisible();
       await expect(page.getByRole("link", { name: "资源冲突" })).toHaveCount(0);
       await expectHealthyPage(page);
+
+      const personalTaskPlanLink = page
+        .getByTestId(`time-canvas-row-header-plan:${fixture.taskId}`)
+        .getByRole("link", { name: fixture.taskTitle, exact: true });
+      await expect(personalTaskPlanLink).toHaveAttribute(
+        "href",
+        `/progress/tasks/${fixture.taskId}`,
+      );
+      await page.getByRole("button", { name: "新增投入" }).click();
+      const personalQuickCreate = page.getByRole("form", {
+        name: "投入快速创建",
+      });
+      const unsavedTaskContent = `未保存的 Task 行导航内容 ${randomUUID()}`;
+      await personalQuickCreate.getByLabel("内容").fill(unsavedTaskContent);
+      const personalUrl = page.url();
+      let rowNavigationConfirmation = "";
+      page.once("dialog", async (dialog) => {
+        rowNavigationConfirmation = dialog.message();
+        await dialog.dismiss();
+      });
+      await personalTaskPlanLink.click();
+      await expect.poll(() => rowNavigationConfirmation).toBe(
+        "创建内容尚未保存，确认放弃？",
+      );
+      await expect(page).toHaveURL(personalUrl);
+      await expect(personalQuickCreate.getByLabel("内容")).toHaveValue(
+        unsavedTaskContent,
+      );
+      let acceptedRowNavigation = false;
+      page.once("dialog", async (dialog) => {
+        acceptedRowNavigation = true;
+        await dialog.accept();
+      });
+      await personalTaskPlanLink.click();
+      await expect.poll(() => acceptedRowNavigation).toBe(true);
+      await expect(page).toHaveURL(`/progress/tasks/${fixture.taskId}`);
 
       await page.goto("/progress/tasks");
       await expect(page.getByRole("heading", { name: "全部 Task" })).toBeVisible();
@@ -117,6 +155,13 @@ test.describe("project management UI project-management-ui-routes-responsive", (
       await expect(page.getByText("人员投入", { exact: true })).toHaveCount(0);
       await expect(page.getByRole("heading", { name: "计划与人员投入" })).toBeVisible();
       await expect(page.getByTestId("time-canvas-root")).toBeVisible();
+      const taskCurrentPlanLink = page
+        .getByTestId(`time-canvas-row-header-plan:${fixture.taskId}`)
+        .getByRole("link", { name: fixture.taskTitle, exact: true });
+      await expect(taskCurrentPlanLink).toHaveAttribute(
+        "href",
+        `/progress/tasks/${fixture.taskId}`,
+      );
       await page.getByRole("button", { name: "复制链接", exact: true }).click();
       const globalNotice = page.getByTestId("task-global-notice");
       await expect(globalNotice).toBeVisible();

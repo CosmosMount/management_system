@@ -502,6 +502,11 @@ test.describe("Project 立项与生命周期", () => {
     await expect(page.getByTestId(`timeline-row-project-plan:${draft.id}`)).toHaveCount(0);
     await expect(page.getByTestId(`timeline-row-project-plan:${farTask.id}`)).toHaveCount(0);
     await expect(page.getByTestId(`timeline-row-project-plan:${active.id}`)).toBeVisible();
+    await expect(
+      page
+        .getByTestId(`time-canvas-row-header-project-plan:${active.id}`)
+        .getByRole("link", { name: active.title, exact: true }),
+    ).toHaveAttribute("href", `/progress/tasks/${active.id}`);
     await expect(page.getByTestId(`timeline-row-project-plan:${completed.id}`)).toHaveCount(0);
     await expect(page.getByTestId(`timeline-row-person:${inactiveMember.personId}`)).toHaveCount(0);
     await expect(page.locator('[data-testid^="timeline-row-plan:"]')).toHaveCount(0);
@@ -539,6 +544,11 @@ test.describe("Project 立项与生命周期", () => {
     await expect(page.getByTestId("project-task-group-ratio-DRAFT")).toHaveText("已展示 1/2");
     await expect(allDraftCheckbox).toHaveAttribute("aria-checked", "mixed");
     await expect(page.getByTestId(`timeline-row-project-plan:${draft.id}`)).toBeVisible();
+    await expect(
+      page
+        .getByTestId(`time-canvas-row-header-project-plan:${draft.id}`)
+        .getByRole("link", { name: draft.title, exact: true }),
+    ).toHaveAttribute("href", `/progress/tasks/${draft.id}`);
     await draftGroup.getByRole("button", { name: "收起草稿 Task 列表" }).click();
     await expect(draftTable).toHaveCount(0);
     await expect(page.getByTestId(`timeline-row-project-plan:${draft.id}`)).toBeVisible();
@@ -561,6 +571,11 @@ test.describe("Project 立项与生命周期", () => {
     await completedCheckbox.check();
     await expect(page.getByTestId("project-task-group-ratio-COMPLETED")).toHaveText("已展示 1/1");
     await expect(page.getByTestId(`timeline-row-project-plan:${completed.id}`)).toBeVisible();
+    await expect(
+      page
+        .getByTestId(`time-canvas-row-header-project-plan:${completed.id}`)
+        .getByRole("link", { name: completed.title, exact: true }),
+    ).toHaveAttribute("href", `/progress/tasks/${completed.id}`);
     await expect(
       page.getByTestId(
         `milestone-marker-project-node:${completedPlanNodes.milestoneNodeId}`,

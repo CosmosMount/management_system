@@ -656,6 +656,7 @@ function buildProjectTimelineModel(tasks: ProjectTimelineTask[]): TimeCanvasMode
     kind: "PLAN" as const,
     label: task.title,
     sublabel: `Current Plan v${task.currentPlan.versionNo} · ${taskStatusLabels[task.status]}`,
+    href: routes.progress.taskDetail(task.id),
     editable: false,
     height: ROW_HEIGHT,
     capacity: null,

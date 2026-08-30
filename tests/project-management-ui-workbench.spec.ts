@@ -267,6 +267,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
     );
     await expect(firstHistoryHeader).toContainText("Plan v1");
     await expect(firstHistoryHeader.getByLabel("只读")).toBeVisible();
+    await expect(firstHistoryHeader.getByRole("link")).toHaveCount(0);
     const firstHistoryRow = page.getByTestId(
       `timeline-row-history-plan:${firstRevision.revisionNodeId}`,
     );
@@ -622,6 +623,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
     const candidateHeader = page.getByTestId(candidateHeaderTestId);
     const candidateRow = page.getByTestId(candidateRowTestId);
     await expect(currentHeader).toBeVisible();
+    await expect(candidateHeader.getByRole("link")).toHaveCount(0);
     await expect(candidateHeader).toContainText(
       `Revision「${revisionReason}」修改后`,
     );
@@ -1149,6 +1151,22 @@ test.describe("project management UI project-management-ui-workbench", () => {
       ).toBeVisible();
       await expect(page.getByTestId("task-workbench-v2")).toBeVisible();
       await expect(page.getByTestId("task-plan-node-navigator")).toBeVisible();
+      const taskTimelineHeader = page.getByTestId(
+        `time-canvas-row-header-plan:${fixture.taskId}`,
+      );
+      await expect(
+        taskTimelineHeader.getByRole("link", {
+          name: fixture.taskTitle,
+          exact: true,
+        }),
+      ).toHaveAttribute("href", `/progress/tasks/${fixture.taskId}`);
+      await expect(
+        page
+          .getByTestId(
+            `time-canvas-row-header-person:${fixture.owner.person.id}`,
+          )
+          .getByRole("link"),
+      ).toHaveCount(0);
       await expect(page.getByRole("heading", { name: "编辑 Draft 计划" })).toHaveCount(0);
       await expect(page.getByRole("link", { name: "编辑 Task" })).toBeVisible();
       await expect(page.getByRole("button", { name: "修改 Task 基本信息" })).toHaveCount(0);

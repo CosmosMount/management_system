@@ -604,6 +604,37 @@ test.describe("S3 TimeCanvas pure core", () => {
     expect(model.segments[0]).not.toHaveProperty("tags");
   });
 
+  test("TASK grouping rows expose their explicit Task detail href", () => {
+    const taskId = uuid(29);
+    const versionToken = new Date(RANGE.startMs).toISOString();
+    const data = timeCanvasDataDtoSchema.parse({
+      scope: { kind: "RESOURCE_PLANNER" },
+      timezone: "Asia/Shanghai",
+      range: {
+        startAt: versionToken,
+        endAt: new Date(RANGE.endMs).toISOString(),
+      },
+      groupBy: "TASK",
+      rows: [{
+        id: taskId,
+        kind: "TASK",
+        label: "Task 分组行",
+        sublabel: "进行中",
+        capabilities: { canCreateSegment: true },
+      }],
+      anchors: [],
+      segments: [],
+      generatedAt: versionToken,
+    });
+
+    expect(timeCanvasDataToModel(data, "RESOURCE_PLANNER").rows[0]).toMatchObject({
+      id: `task:${taskId}`,
+      sourceId: taskId,
+      kind: "TASK",
+      href: `/progress/tasks/${taskId}`,
+    });
+  });
+
   test("Active plan rails remain read-only even when metadata is editable", () => {
     const taskId = uuid(30);
     const versionToken = new Date(RANGE.startMs).toISOString();
@@ -825,6 +856,11 @@ test.describe("S3 TimeCanvas controlled browser fixtures", () => {
       const headerZIndex = await page
         .getByTestId("time-canvas-row-header-plan:fixture-composer")
         .evaluate((header) => Number.parseInt(getComputedStyle(header).zIndex, 10));
+      await expect(
+        page
+          .getByTestId("time-canvas-row-header-plan:fixture-composer")
+          .getByRole("link"),
+      ).toHaveCount(0);
       const anchorZIndex = await page
         .getByTestId("milestone-marker-composer-node-0")
         .evaluate((anchor) => Number.parseInt(getComputedStyle(anchor).zIndex, 10));

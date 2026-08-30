@@ -650,7 +650,10 @@ export function TimeCanvas({
                         }}
                         data-testid={`timeline-row-${row.id}`}
                       >
-                        <RowHeader row={row} />
+                        <RowHeader
+                          row={row}
+                          onNavigate={interaction?.onRowNavigation}
+                        />
                         <TimelineRow
                           mode={mode}
                           row={row}

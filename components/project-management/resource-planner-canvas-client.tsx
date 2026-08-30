@@ -1637,6 +1637,8 @@ export function ResourcePlannerCanvasClient({
                 setDetailError("");
                 setDetailState("LOADING");
               },
+              onRowNavigation: () =>
+                !createDraftDirty || window.confirm("创建内容尚未保存，确认放弃？"),
               onInvalidDrop: (message) => setNotice({ kind: "error", message }),
             }}
             selection={selection}

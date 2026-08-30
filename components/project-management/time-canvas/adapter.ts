@@ -12,6 +12,7 @@ import type {
   TimeCanvasDataDto,
   TimeSegmentDto,
 } from "@/lib/project-management/types/time-canvas";
+import { routes } from "@/lib/routes";
 
 const readOnlyPermissions: TimeCanvasSegmentPermissions = {
   canViewDetails: false,
@@ -34,6 +35,10 @@ export function timeCanvasDataToModel(
     kind: row.kind,
     label: row.label,
     sublabel: row.sublabel,
+    href:
+      row.kind === "TASK"
+        ? routes.progress.taskDetail(row.id)
+        : undefined,
     editable: row.capabilities.canCreateSegment,
     height: 48,
     capacity: null,
@@ -73,6 +78,7 @@ export function timeCanvasDataToModel(
           kind: "PLAN",
           label: task.title,
           sublabel: `计划轨道 · ${task.status}`,
+          href: routes.progress.taskDetail(task.id),
           editable: canEditDraftPlan,
           height: 112,
           capacity: null,

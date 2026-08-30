@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { forwardRef } from "react";
 import { Lock } from "lucide-react";
 import { createTimeScale, timeToX } from "@/components/project-management/time-canvas/time-math";
@@ -169,16 +170,36 @@ export const TimeCanvasBottomScrollbar = forwardRef<
   );
 });
 
-export function RowHeader({ row }: { row: TimeCanvasRow }) {
+export function RowHeader({
+  row,
+  onNavigate,
+}: {
+  row: TimeCanvasRow;
+  onNavigate?: (row: TimeCanvasRow) => boolean;
+}) {
   return (
     <div
       className="sticky left-0 z-[25] flex min-w-0 flex-col justify-center border-r border-border bg-card px-3"
       data-testid={`time-canvas-row-header-${row.id}`}
     >
       <div className="flex min-w-0 items-center gap-2">
-        <span className="min-w-0 flex-1 truncate text-sm font-medium" title={row.label}>
-          {row.label}
-        </span>
+        {row.href ? (
+          <Link
+            href={row.href}
+            prefetch={false}
+            className="min-w-0 flex-1 truncate rounded-sm text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            title={row.label}
+            onClick={(event) => {
+              if (onNavigate?.(row) === false) event.preventDefault();
+            }}
+          >
+            {row.label}
+          </Link>
+        ) : (
+          <span className="min-w-0 flex-1 truncate text-sm font-medium" title={row.label}>
+            {row.label}
+          </span>
+        )}
         {row.editable ? (
           <Badge variant="outline" className="shrink-0 text-[10px]">可编辑</Badge>
         ) : (

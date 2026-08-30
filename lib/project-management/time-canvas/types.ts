@@ -32,6 +32,7 @@ export type TimeCanvasRow = {
   kind: "PLAN" | "PERSON" | "TASK";
   label: string;
   sublabel: string | null;
+  href?: string;
   editable: boolean;
   height: number;
   capacity: number | null;
@@ -253,6 +254,7 @@ export type TimeCanvasInteractionOptions = {
   onSegmentTransform?: (request: TimeCanvasSegmentTransformRequest) => void;
   onSegmentToggleSelection?: (segmentId: string) => void;
   onSegmentOpen?: (segmentId: string) => void;
+  onRowNavigation?: (row: TimeCanvasRow) => boolean;
   onInvalidDrop?: (message: string) => void;
 };
 
