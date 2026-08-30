@@ -7,11 +7,13 @@ import {
 import { getCurrentProjectManagementActor } from "@/lib/project-management/identity";
 import {
   comparePlanVersions as comparePlanVersionsQuery,
+  getMilestoneCompletionDetails as getMilestoneCompletionDetailsQuery,
   getPlanVersion as getPlanVersionQuery,
   getTaskWorkspace as getTaskWorkspaceQuery,
   listTaskPlanVersions as listTaskPlanVersionsQuery,
   type PlanVersionDiff,
   type PlanVersionSummary,
+  type MilestoneCompletionDetails,
   type TaskWorkspace,
 } from "@/lib/project-management/queries/task-queries";
 import {
@@ -20,10 +22,27 @@ import {
 } from "@/lib/project-management/queries/task-lifecycle-queries";
 import {
   comparePlanVersionsInputSchema,
+  milestoneCompletionQueryInputSchema,
   planVersionQueryInputSchema,
   taskLifecycleViewsInputSchema,
   taskWorkspaceQueryInputSchema,
 } from "@/lib/project-management/validations/lifecycle";
+
+export async function getMilestoneCompletionDetails(
+  input: unknown,
+): Promise<ProjectManagementActionResult<MilestoneCompletionDetails>> {
+  return runProjectManagementAction({
+    event: "pm.milestone.completion_details.view",
+    action: "getMilestoneCompletionDetails",
+    callback: async (log) => {
+      const parsed = milestoneCompletionQueryInputSchema.parse(input);
+      log.setTaskId(parsed.taskId);
+      const actor = await getCurrentProjectManagementActor();
+      log.setActorAccountId(actor.accountId);
+      return getMilestoneCompletionDetailsQuery({ actor, ...parsed });
+    },
+  });
+}
 
 export async function getTaskWorkspace(
   taskId: string,

@@ -354,6 +354,13 @@ export const taskWorkspaceQueryInputSchema = z.object({
   taskId: idSchema,
 });
 
+export const milestoneCompletionQueryInputSchema = z
+  .object({
+    taskId: idSchema,
+    nodeId: idSchema,
+  })
+  .strict();
+
 export const taskLifecycleViewsInputSchema = z
   .object({
     taskId: idSchema,

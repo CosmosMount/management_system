@@ -33,6 +33,7 @@ import {
   decodeKeysetCursor,
   encodeKeysetCursor,
 } from "@/lib/project-management/queries/keyset-cursor";
+import { safeHttpUrl } from "@/lib/project-management/queries/safe-http-url";
 
 export type TaskListItem = {
   id: string;
@@ -217,6 +218,17 @@ export type TaskWorkspace = {
     canReviewTermination: boolean;
     canViewHistory: boolean;
   };
+};
+
+export type MilestoneCompletionDetails = {
+  nodeId: string;
+  completedAt: string;
+  evidences: Array<{
+    id: string;
+    kind: "TEXT" | "LINK" | "FILE";
+    note: string;
+    externalUrl: string | null;
+  }>;
 };
 
 export type PlanVersionSummary = {
@@ -533,6 +545,75 @@ export async function getTaskWorkspace({
       canReviewTermination: allowed(actor, "termination.review", resource),
       canViewHistory: allowed(actor, "plan.view_history", resource),
     },
+  };
+}
+
+export async function getMilestoneCompletionDetails({
+  actor,
+  taskId,
+  nodeId,
+}: {
+  actor: ProjectManagementActor;
+  taskId: string;
+  nodeId: string;
+}): Promise<MilestoneCompletionDetails> {
+  const task = await prisma.task.findFirst({
+    where: { AND: [{ id: taskId }, taskReadableWhere(actor)] },
+    select: { currentPlanVersionId: true },
+  });
+  if (!task) throw notFoundError();
+
+  const milestone = await prisma.milestoneNode.findFirst({
+    where: {
+      nodeId,
+      node: {
+        taskId,
+        status: "COMPLETED",
+        deletedAt: null,
+        planVersionEntries: {
+          some: { planVersionId: task.currentPlanVersionId },
+        },
+      },
+    },
+    select: {
+      nodeId: true,
+      completedAt: true,
+      reviews: {
+        where: { result: "APPROVED", revokedAt: null },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: 1,
+        select: {
+          evidences: {
+            orderBy: [
+              { sortOrder: "asc" },
+              { createdAt: "asc" },
+              { id: "asc" },
+            ],
+            select: {
+              id: true,
+              kind: true,
+              note: true,
+              externalUrl: true,
+            },
+          },
+        },
+      },
+    },
+  });
+  if (!milestone?.completedAt) throw notFoundError();
+
+  return {
+    nodeId: milestone.nodeId,
+    completedAt: milestone.completedAt.toISOString(),
+    evidences: (milestone.reviews[0]?.evidences ?? []).map((evidence) => ({
+      id: evidence.id,
+      kind: evidence.kind,
+      note: evidence.note,
+      externalUrl:
+        evidence.kind === "LINK" && safeHttpUrl(evidence.externalUrl)
+          ? evidence.externalUrl
+          : null,
+    })),
   };
 }
 

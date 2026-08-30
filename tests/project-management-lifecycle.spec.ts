@@ -21,6 +21,7 @@ import {
 import { toProjectManagementServiceError } from "../lib/project-management/application/errors";
 import {
   comparePlanVersions,
+  getMilestoneCompletionDetails,
   getPlanVersion,
   getTaskWorkspace,
   listTasks,
@@ -1326,6 +1327,94 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     const advancedNodes = await currentPlanNodes(fixture.taskId);
     expect(advancedNodes[0]?.node.status).toBe("COMPLETED");
     expect(advancedNodes[1]?.node.status).toBe("ACTIVE");
+    const secondMilestoneNodeId = advancedNodes[1]?.nodeId;
+    if (!secondMilestoneNodeId) {
+      throw new Error("测试计划缺少第二个 Milestone");
+    }
+    await expectServiceError(
+      getMilestoneCompletionDetails({
+        actor: actor(fixture.member),
+        taskId: fixture.taskId,
+        nodeId: secondMilestoneNodeId,
+      }),
+      "NOT_FOUND",
+    );
+    const otherTask = await createTaskDraft(
+      actor(fixture.admin),
+      taskDraftInput({
+        ownerPersonId: fixture.owner.person.id,
+        memberPersonId: fixture.member.person.id,
+        reviewerPersonId: fixture.reviewer.person.id,
+        idempotencyKey: `completion-details-other-task-${randomUUID()}`,
+        milestoneCount: 1,
+      }),
+    );
+    await expectServiceError(
+      getMilestoneCompletionDetails({
+        actor: actor(fixture.member),
+        taskId: otherTask.taskId,
+        nodeId: activeNode.nodeId,
+      }),
+      "NOT_FOUND",
+    );
+    const [
+      persistedMilestone,
+      completedWorkspace,
+      completionDetails,
+      historicalPlan,
+    ] =
+      await Promise.all([
+        prisma.milestoneNode.findUniqueOrThrow({
+          where: { nodeId: activeNode.nodeId },
+          select: { completedAt: true },
+        }),
+        getTaskWorkspace({
+          actor: actor(fixture.member),
+          taskId: fixture.taskId,
+        }),
+        getMilestoneCompletionDetails({
+          actor: actor(fixture.member),
+          taskId: fixture.taskId,
+          nodeId: activeNode.nodeId,
+        }),
+        getPlanVersion({
+          actor: actor(fixture.member),
+          planVersionId: fixture.currentPlanVersionId,
+        }),
+      ]);
+    const completedMilestone = completedWorkspace.currentPlan.nodes.find(
+      (node) => node.nodeId === activeNode.nodeId,
+    )?.milestone;
+    expect(persistedMilestone.completedAt).not.toBeNull();
+    expect(completionDetails.completedAt).toBe(
+      persistedMilestone.completedAt?.toISOString(),
+    );
+    expect(completionDetails.evidences).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "TEXT",
+          note: "已完成联调",
+          externalUrl: null,
+        }),
+        expect.objectContaining({
+          kind: "LINK",
+          note: "",
+          externalUrl: "https://example.com/evidence",
+        }),
+      ]),
+    );
+    expect(completionDetails.evidences).toHaveLength(2);
+    expect(completedMilestone).not.toBeNull();
+    expect(completedMilestone && "completionEvidences" in completedMilestone).toBe(
+      false,
+    );
+    const historicalMilestone = historicalPlan.nodes.find(
+      (node) => node.nodeId === activeNode.nodeId,
+    )?.milestone;
+    expect(historicalMilestone).not.toBeNull();
+    expect(
+      historicalMilestone && "completionEvidences" in historicalMilestone,
+    ).toBe(false);
     await expectProjectManagementOutbox(
       `pm:milestone:review_result:${submitted.reviewId}:APPROVED:feishu`,
       {
@@ -1358,7 +1447,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
 
     const secondReviewKey = `review-reject-${randomUUID()}`;
     const secondReview = await submitMilestoneForReview(actor(fixture.member), {
-      milestoneNodeId: advancedNodes[1]?.nodeId,
+      milestoneNodeId: secondMilestoneNodeId,
       idempotencyKey: secondReviewKey,
       evidences: [{ kind: "TEXT", note: "第二阶段证据" }],
     });
@@ -1367,11 +1456,11 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       result: "REJECTED",
       comment: "还需要补充数据",
     });
-    expect(rejected.activeMilestoneNodeId).toBe(advancedNodes[1]?.nodeId);
+    expect(rejected.activeMilestoneNodeId).toBe(secondMilestoneNodeId);
     expect((await currentPlanNodes(fixture.taskId))[1]?.node.status).toBe("ACTIVE");
     await expect(
       submitMilestoneForReview(actor(fixture.member), {
-        milestoneNodeId: advancedNodes[1]?.nodeId,
+        milestoneNodeId: secondMilestoneNodeId,
         idempotencyKey: secondReviewKey,
         evidences: [{ kind: "TEXT", note: "终态记录的原请求键重放" }],
       }),
@@ -1385,6 +1474,45 @@ test.describe("project management P2/P3 task lifecycle services", () => {
         where: { milestoneNodeId: advancedNodes[1]?.node.milestone?.id },
       }),
     ).toBe(1);
+
+    const finalReview = await submitMilestoneForReview(actor(fixture.member), {
+      milestoneNodeId: secondMilestoneNodeId,
+      idempotencyKey: `review-final-${randomUUID()}`,
+      evidences: [
+        {
+          kind: "LINK",
+          externalUrl: "https://example.com/final-second",
+          sortOrder: 2,
+        },
+        { kind: "TEXT", note: "最终第二阶段证据", sortOrder: 1 },
+      ],
+    });
+    await reviewMilestone(actor(fixture.reviewer), {
+      reviewId: finalReview.reviewId,
+      result: "APPROVED",
+    });
+    const finalDetails = await getMilestoneCompletionDetails({
+      actor: actor(fixture.member),
+      taskId: fixture.taskId,
+      nodeId: secondMilestoneNodeId,
+    });
+    expect(
+      finalDetails.evidences.map(({ kind, note, externalUrl }) => ({
+        kind,
+        note,
+        externalUrl,
+      })),
+    ).toEqual([
+      { kind: "TEXT", note: "最终第二阶段证据", externalUrl: null },
+      {
+        kind: "LINK",
+        note: "",
+        externalUrl: "https://example.com/final-second",
+      },
+    ]);
+    expect(
+      finalDetails.evidences.some((evidence) => evidence.note === "第二阶段证据"),
+    ).toBe(false);
   });
 
   test("Task permits only one pending Milestone or Revision and blocks Termination until it is released", async () => {

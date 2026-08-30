@@ -2,11 +2,14 @@
 import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../lib/prisma";
+import { formatDateTime } from "../lib/project-management/labels";
 import {
   activateTask,
   createRevision,
   createTaskDraft,
   rejectRevision,
+  reviewMilestone,
+  submitMilestoneForReview,
 } from "../lib/project-management/application/lifecycle-service";
 import {
   expectHealthyPage,
@@ -80,6 +83,178 @@ test.describe("project management UI project-management-ui-workbench", () => {
         await context.close();
       }
     });
+
+  test("completed Milestone details render empty, link, and unsafe material states", async ({
+    context,
+    page,
+    baseURL,
+  }) => {
+    const pageErrors: Error[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error));
+    const admin = await createAccountPerson(
+      `P6 Completed Material Admin ${randomUUID()}`,
+    );
+    const owner = await createAccountPerson(
+      `P6 Completed Material Owner ${randomUUID()}`,
+    );
+    await grantRole(admin.account.id, "PROJECT_ADMINISTRATOR");
+
+    const createCompletedTask = async ({
+      label,
+      evidences,
+    }: {
+      label: string;
+      evidences: Array<
+        | { kind: "TEXT"; note: string }
+        | { kind: "LINK"; externalUrl: string; note?: string }
+      >;
+    }) => {
+      const draft = await createTaskDraft(actor(owner), {
+        title: `P6 ${label} ${randomUUID()}`,
+        description: `验证${label}`,
+        team: "英雄",
+        techGroup: "电控",
+        priority: "MEDIUM",
+        members: [{ personId: owner.person.id, role: "OWNER" }],
+        milestones: [milestoneInput(label, `完成${label}`, 1)],
+        plannedStartAt: new Date(
+          Date.UTC(2026, 6, 31, 10, 0, 0),
+        ).toISOString(),
+        termination: terminationInput(5),
+        idempotencyKey: `p6-completed-material-${randomUUID()}`,
+      });
+      await activateTask(actor(owner), {
+        taskId: draft.taskId,
+        expectedLockVersion: draft.lockVersion,
+      });
+      const activeTask = await prisma.task.findUniqueOrThrow({
+        where: { id: draft.taskId },
+        select: { activeMilestoneNodeId: true },
+      });
+      if (!activeTask.activeMilestoneNodeId) {
+        throw new Error("完成材料 UI fixture 缺少 Active Milestone");
+      }
+      const submitted = await submitMilestoneForReview(actor(owner), {
+        milestoneNodeId: activeTask.activeMilestoneNodeId,
+        idempotencyKey: `p6-completed-review-${randomUUID()}`,
+        evidences,
+      });
+      await reviewMilestone(actor(admin), {
+        reviewId: submitted.reviewId,
+        result: "APPROVED",
+      });
+      return {
+        taskId: draft.taskId,
+        milestoneLabel: label,
+        milestoneNodeId: activeTask.activeMilestoneNodeId,
+        reviewId: submitted.reviewId,
+      };
+    };
+
+    const emptyTask = await createCompletedTask({
+      label: "空验收材料 Milestone",
+      evidences: [],
+    });
+    const linkTask = await createCompletedTask({
+      label: "链接验收材料 Milestone",
+      evidences: [
+        {
+          kind: "LINK",
+          externalUrl: "https://example.com/completed-evidence",
+          note: "安全链接说明",
+        },
+      ],
+    });
+    await prisma.reviewEvidence.create({
+      data: {
+        reviewId: linkTask.reviewId,
+        kind: "LINK",
+        externalUrl: "javascript:alert('unsafe')",
+        note: "历史不安全链接",
+        sortOrder: 1,
+      },
+    });
+
+    await loginAsTestUser(context, baseURL, {
+      openId: owner.openId,
+      name: owner.person.displayName,
+    });
+
+    await page.goto(`/progress/tasks/${emptyTask.taskId}`);
+    let releaseFailedRequest!: () => void;
+    const failedRequestGate = new Promise<void>((resolve) => {
+      releaseFailedRequest = resolve;
+    });
+    let markRequestIntercepted!: () => void;
+    const requestIntercepted = new Promise<void>((resolve) => {
+      markRequestIntercepted = resolve;
+    });
+    let failCompletionRequests = true;
+    const emptyTaskUrl = `**/progress/tasks/${emptyTask.taskId}`;
+    await page.route(emptyTaskUrl, async (route) => {
+      const request = route.request();
+      const isCompletionAction =
+        request.method() === "POST" &&
+        Boolean(request.headers()["next-action"]) &&
+        request.postData()?.includes(emptyTask.milestoneNodeId);
+      if (!isCompletionAction || !failCompletionRequests) {
+        await route.continue();
+        return;
+      }
+      markRequestIntercepted();
+      await failedRequestGate;
+      await route.abort("failed");
+    });
+    await page
+      .getByTestId("task-plan-node-navigator")
+      .getByRole("button", { name: new RegExp(emptyTask.milestoneLabel) })
+      .click();
+    await requestIntercepted;
+    const emptyMaterials = page.getByTestId("milestone-completion-evidences");
+    await expect(emptyMaterials.getByRole("status")).toHaveText(
+      "正在加载实际提交材料…",
+    );
+    releaseFailedRequest();
+    await expect(emptyMaterials.getByRole("alert")).toHaveText(
+      "网络或服务暂时不可用，请重试。",
+    );
+    failCompletionRequests = false;
+    await emptyMaterials.getByRole("button", { name: "重新加载材料" }).click();
+    await expect(emptyMaterials).toContainText(
+      "本次验收未提交材料。",
+    );
+    await page.unroute(emptyTaskUrl);
+    await expectHealthyPage(page);
+
+    await page.goto(`/progress/tasks/${linkTask.taskId}`);
+    await page
+      .getByTestId("task-plan-node-navigator")
+      .getByRole("button", { name: new RegExp(linkTask.milestoneLabel) })
+      .click();
+    const materials = page.getByTestId("milestone-completion-evidences");
+    const safeLink = materials.getByRole("link", {
+      name: "https://example.com/completed-evidence",
+    });
+    await expect(safeLink).toHaveAttribute(
+      "href",
+      "https://example.com/completed-evidence",
+    );
+    await expect(safeLink).toHaveAttribute("target", "_blank");
+    await expect(safeLink).toHaveAttribute("rel", "noreferrer");
+    await expect(materials).toContainText("安全链接说明");
+    await expect(materials).toContainText("链接不可用");
+    await expect(materials).toContainText("历史不安全链接");
+    await expect(materials.getByRole("link")).toHaveCount(1);
+    expect(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth <=
+          document.documentElement.clientWidth + 1,
+      ),
+    ).toBe(true);
+    await expectHealthyPage(page);
+    expect(pageErrors).toEqual([]);
+  });
 
   test("Task workbench uses the unified Draft editor and locks it after activation", async ({
       context,
@@ -1690,6 +1865,25 @@ test.describe("project management UI project-management-ui-workbench", () => {
     await page.getByLabel("审批说明").fill("Task UI v2 管理员通过");
     await page.getByRole("button", { name: "通过", exact: true }).click();
     await expect(page.getByText("验收已通过。")).toBeVisible();
+    await page
+      .getByTestId("task-plan-node-navigator")
+      .getByRole("button", { name: /P6 UI 第一阶段/ })
+      .click();
+    const completedMilestone = await prisma.milestoneNode.findUniqueOrThrow({
+      where: { nodeId: fixture.activeNodeId },
+      select: { completedAt: true },
+    });
+    expect(completedMilestone.completedAt).not.toBeNull();
+    await expect(
+      page.getByText("实际完成", { exact: true }).locator(".."),
+    ).toContainText(formatDateTime(completedMilestone.completedAt));
+    const milestoneMaterials = page.getByTestId(
+      "milestone-completion-evidences",
+    );
+    await expect(
+      milestoneMaterials.getByRole("heading", { name: "实际提交材料" }),
+    ).toBeVisible();
+    await expect(milestoneMaterials).toContainText("Task UI v2 验收证据");
     await loginAsTestUser(context, baseURL, {
       openId: fixture.member.openId,
       name: fixture.member.person.displayName,
@@ -1822,6 +2016,30 @@ test.describe("project management UI project-management-ui-workbench", () => {
         }),
       )
       .toEqual({ status: "CANCELLED" });
+    const completedTermination = await prisma.terminationNode.findFirstOrThrow({
+      where: { node: { taskId: fixture.taskId } },
+      select: {
+        confirmedAt: true,
+        outcome: true,
+        reason: true,
+        summary: true,
+      },
+    });
+    expect(completedTermination.confirmedAt).not.toBeNull();
+    await expect(
+      page.getByText("实际结束", { exact: true }).locator(".."),
+    ).toContainText(formatDateTime(completedTermination.confirmedAt));
+    const terminationMaterials = page.getByTestId(
+      "termination-completion-materials",
+    );
+    await expect(
+      terminationMaterials.getByRole("heading", { name: "实际提交材料" }),
+    ).toBeVisible();
+    await expect(terminationMaterials).toContainText("提前取消");
+    await expect(terminationMaterials).toContainText(longTerminationReason);
+    await expect(terminationMaterials).toContainText(
+      "Task UI v2 已补充结束总结",
+    );
     await expect(page.getByText("上一轮结束申请已驳回")).toHaveCount(0);
     await expect(page.getByText("上一轮结束申请需要修订")).toHaveCount(0);
     await expect(

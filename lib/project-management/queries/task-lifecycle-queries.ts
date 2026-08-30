@@ -8,6 +8,7 @@ import {
 } from "@/lib/project-management/authorization";
 import { notFoundError, validationError } from "@/lib/project-management/application/errors";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
+import { safeHttpUrl } from "@/lib/project-management/queries/safe-http-url";
 
 export type TaskLifecycleViews = {
   reviews: Array<{
@@ -605,16 +606,6 @@ export async function getTaskLifecycleViews({
       ],
     },
   };
-}
-
-function safeHttpUrl(value: string | null) {
-  if (!value) return false;
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
-  }
 }
 
 function redactAuditValue(

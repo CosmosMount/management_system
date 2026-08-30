@@ -25,6 +25,7 @@ import {
   requireTerminationRevision,
   submitTerminationForReview,
 } from "@/app/actions/project-management/terminations";
+import { getMilestoneCompletionDetails } from "@/app/actions/project-management/plans";
 import {
   TaskPlanNodeNavigator,
   type TaskPlanNavigatorNode,
@@ -64,7 +65,7 @@ import {
 } from "@/lib/project-management/labels";
 import type { TaskLifecycleViews } from "@/lib/project-management/queries/task-lifecycle-queries";
 import type {
-  PlanVersionSummary,
+  MilestoneCompletionDetails,
   TaskWorkspace,
 } from "@/lib/project-management/queries/task-queries";
 import type {
@@ -84,6 +85,7 @@ import {
 
 type Notice = { kind: "success" | "error" | "info"; message: string } | null;
 type ActiveTaskMemberRole = "OWNER" | "PARTICIPANT";
+type TaskWorkspaceNode = TaskWorkspace["currentPlan"]["nodes"][number];
 type RunAction = (
   action: () => Promise<ProjectManagementActionResult<unknown>>,
   successMessage: string,
@@ -613,7 +615,7 @@ function SelectedNodeDetail({
 }: {
   workspace: TaskWorkspace;
   lifecycle: TaskLifecycleViews;
-  selectedNode: PlanVersionSummary["nodes"][number] | undefined;
+  selectedNode: TaskWorkspaceNode | undefined;
   selectedNodeId: string;
   busy: boolean;
   runAction: RunAction;
@@ -707,7 +709,7 @@ function MilestoneDetail({
 }: {
   workspace: TaskWorkspace;
   lifecycle: TaskLifecycleViews;
-  node: PlanVersionSummary["nodes"][number];
+  node: TaskWorkspaceNode;
   busy: boolean;
   runAction: RunAction;
   approvalBlocked: boolean;
@@ -722,6 +724,7 @@ function MilestoneDetail({
       review.revokedAt === null,
   );
   const active = workspace.task.activeMilestoneNodeId === node.nodeId;
+  const completed = node.status === "COMPLETED";
   const [evidenceKind, setEvidenceKind] = useState<"TEXT" | "LINK">("TEXT");
   const [evidence, setEvidence] = useState("");
   const [evidenceNote, setEvidenceNote] = useState("");
@@ -765,10 +768,23 @@ function MilestoneDetail({
       </div>
       <dl className="grid gap-3 text-sm sm:grid-cols-2">
         <OverviewItem label="计划完成" value={formatDateTime(milestone.expectedCompletedAt)} />
+        {completed && (
+          <OverviewItem
+            label="实际完成"
+            value={milestone.completedAt ? formatDateTime(milestone.completedAt) : "未记录"}
+          />
+        )}
         <OverviewItem label="完成条件" value={milestone.completionCriteria} />
         <OverviewItem label="验收要求" value={milestone.reviewRequirements} />
         <OverviewItem label="业务说明" value={node.businessDescription || "无"} />
       </dl>
+
+      {completed && (
+        <MilestoneCompletionMaterials
+          taskId={workspace.task.id}
+          nodeId={node.nodeId}
+        />
+      )}
 
       {active && workspace.permissions.canSubmitMilestoneReview && !pendingReview && (
         <div className="space-y-3 border-t border-border pt-4">
@@ -874,6 +890,152 @@ function MilestoneDetail({
   );
 }
 
+type MilestoneCompletionLoadState =
+  | { status: "loading" }
+  | { status: "success"; details: MilestoneCompletionDetails }
+  | { status: "error"; message: string };
+
+function MilestoneCompletionMaterials({
+  taskId,
+  nodeId,
+}: {
+  taskId: string;
+  nodeId: string;
+}) {
+  const [attempt, setAttempt] = useState(0);
+  const [state, setState] = useState<MilestoneCompletionLoadState>({
+    status: "loading",
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    void getMilestoneCompletionDetails({ taskId, nodeId }).then(
+      (result) => {
+        if (cancelled) return;
+        setState(
+          result.ok
+            ? { status: "success", details: result.data }
+            : { status: "error", message: result.error.message },
+        );
+      },
+      () => {
+        if (cancelled) return;
+        setState({
+          status: "error",
+          message: "网络或服务暂时不可用，请重试。",
+        });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [attempt, nodeId, taskId]);
+
+  if (state.status === "success") {
+    return <MilestoneCompletionEvidences evidences={state.details.evidences} />;
+  }
+
+  return (
+    <section
+      className="space-y-3 border-t border-border pt-4"
+      data-testid="milestone-completion-evidences"
+    >
+      <h3 className="font-medium">实际提交材料</h3>
+      {state.status === "loading" ? (
+        <p className="text-sm text-muted-foreground" role="status">
+          正在加载实际提交材料…
+        </p>
+      ) : (
+        <div className="space-y-2">
+          <p className="text-sm text-destructive" role="alert">
+            {state.message}
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setState({ status: "loading" });
+              setAttempt((current) => current + 1);
+            }}
+          >
+            重新加载材料
+          </Button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function MilestoneCompletionEvidences({
+  evidences,
+}: {
+  evidences: MilestoneCompletionDetails["evidences"];
+}) {
+  return (
+    <section
+      className="space-y-3 border-t border-border pt-4"
+      data-testid="milestone-completion-evidences"
+    >
+      <h3 className="font-medium">实际提交材料</h3>
+      {evidences.length === 0 ? (
+        <p className="text-sm text-muted-foreground">本次验收未提交材料。</p>
+      ) : (
+        <ul className="space-y-3">
+          {evidences.map((evidence, index) => (
+            <li
+              key={evidence.id}
+              className="min-w-0 rounded-lg border border-border bg-muted/30 p-3 text-sm"
+            >
+              <p className="text-xs font-medium text-muted-foreground">
+                {evidence.kind === "TEXT"
+                  ? `文本材料 ${index + 1}`
+                  : evidence.kind === "LINK"
+                    ? `链接材料 ${index + 1}`
+                    : `文件材料 ${index + 1}`}
+              </p>
+              {evidence.kind === "TEXT" ? (
+                <p className="mt-1 whitespace-pre-wrap break-words">
+                  {evidence.note || "无"}
+                </p>
+              ) : evidence.kind === "LINK" ? (
+                <div className="mt-1 min-w-0 space-y-1">
+                  {evidence.externalUrl ? (
+                    <a
+                      href={evidence.externalUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block break-all text-primary hover:underline"
+                    >
+                      {evidence.externalUrl}
+                    </a>
+                  ) : (
+                    <p className="text-muted-foreground">链接不可用</p>
+                  )}
+                  {evidence.note && (
+                    <p className="whitespace-pre-wrap break-words">
+                      {evidence.note}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div className="mt-1 space-y-1">
+                  <p className="text-muted-foreground">文件材料当前不可查看</p>
+                  {evidence.note && (
+                    <p className="whitespace-pre-wrap break-words">
+                      {evidence.note}
+                    </p>
+                  )}
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 function OpenRevisionPanel({
   taskId,
   revision,
@@ -969,7 +1131,7 @@ function TerminationDetail({
 }: {
   workspace: TaskWorkspace;
   lifecycle: TaskLifecycleViews;
-  node: PlanVersionSummary["nodes"][number];
+  node: TaskWorkspaceNode;
   busy: boolean;
   runAction: RunAction;
   approvalBlocked: boolean;
@@ -997,6 +1159,7 @@ function TerminationDetail({
   const [reasonError, setReasonError] = useState("");
   const [commentError, setCommentError] = useState("");
   const reviewKey = useRef<string | null>(null);
+  const completed = node.status === "COMPLETED";
   const canSubmit =
     workspace.task.status === "ACTIVE" &&
     workspace.permissions.canSubmitTerminationReview &&
@@ -1039,6 +1202,12 @@ function TerminationDetail({
           label="计划结束"
           value={formatDateTime(termination.plannedAt)}
         />
+        {completed && (
+          <OverviewItem
+            label="实际结束"
+            value={termination.confirmedAt ? formatDateTime(termination.confirmedAt) : "未记录"}
+          />
+        )}
         <OverviewItem
           label="结束条件"
           value={termination.plannedOutcomeCriteria}
@@ -1047,15 +1216,37 @@ function TerminationDetail({
           label="业务说明"
           value={node.businessDescription || "无"}
         />
-        <OverviewItem
-          label="结束结果"
-          value={
-            termination.outcome
-              ? terminationOutcomeLabel(termination.outcome)
-              : "未确认"
-          }
-        />
+        {!completed && (
+          <OverviewItem
+            label="结束结果"
+            value={
+              termination.outcome
+                ? terminationOutcomeLabel(termination.outcome)
+                : "未确认"
+            }
+          />
+        )}
       </dl>
+      {completed && (
+        <section
+          className="space-y-3 border-t border-border pt-4"
+          data-testid="termination-completion-materials"
+        >
+          <h3 className="font-medium">实际提交材料</h3>
+          <dl className="grid gap-3 text-sm sm:grid-cols-2">
+            <OverviewItem
+              label="结束结果"
+              value={
+                termination.outcome
+                  ? terminationOutcomeLabel(termination.outcome)
+                  : "未确认"
+              }
+            />
+            <OverviewItem label="原因" value={termination.reason || "无"} />
+            <OverviewItem label="总结" value={termination.summary || "无"} />
+          </dl>
+        </section>
+      )}
       {returnedReview && (
         <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
           <h3 className="font-medium">
