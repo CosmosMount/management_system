@@ -40,6 +40,7 @@ import {
   scrollLeftForCenter,
   intervalToRect,
   moveTimePoint,
+  moveTimePoints,
   rangesIntersect,
   snapTime,
   snapTimeInRange,
@@ -167,6 +168,28 @@ test.describe("S3 TimeCanvas pure core", () => {
       }),
     ).toEqual({
       atMs: RANGE.endMs - DAY_MS,
+      deltaMs: 0,
+    });
+    expect(
+      moveTimePoints({
+        pointsMs: [RANGE.startMs + DAY_MS, RANGE.startMs + 3 * DAY_MS],
+        rawDeltaMs: -10 * DAY_MS,
+        snapMs: DAY_MS,
+        range: RANGE,
+      }),
+    ).toEqual({
+      pointsMs: [RANGE.startMs, RANGE.startMs + 2 * DAY_MS],
+      deltaMs: -DAY_MS,
+    });
+    expect(
+      moveTimePoints({
+        pointsMs: [RANGE.endMs - 3 * DAY_MS, RANGE.endMs - DAY_MS],
+        rawDeltaMs: 10 * DAY_MS,
+        snapMs: DAY_MS,
+        range: RANGE,
+      }),
+    ).toEqual({
+      pointsMs: [RANGE.endMs - 3 * DAY_MS, RANGE.endMs - DAY_MS],
       deltaMs: 0,
     });
     expect(

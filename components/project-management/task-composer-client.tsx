@@ -59,7 +59,8 @@ import {
 } from "@/components/project-management/task-composer-local-draft";
 import {
   NO_LEGAL_ANCHOR_MOVE_MESSAGE,
-  applyAnchorMove,
+  applyAnchorGroupMove,
+  applyComposerBatchDelay,
   applyLiveInspectorUpdate,
   inspectorDraftForEntity,
   isLockedRevisionMilestone,
@@ -70,7 +71,7 @@ import {
   reconcileComposerPlanState,
   renderAtMs,
   revisionAnchorTimes,
-  resolveAnchorMoveCandidate,
+  resolveAnchorGroupMoveCandidate,
   sortMilestones,
 } from "@/components/project-management/task-composer-plan-state";
 import {
@@ -306,7 +307,7 @@ export function TaskComposerClient({
     clearServerIssueKeys([composerFieldIssueKey(key)]);
   };
 
-  const selectEntity = (entityId: string) => {
+  const selectEntity = (entityId: string | null) => {
     if (entityId === state.selectedEntityId) return;
     endLiveEdit();
     replacePresent((current) => ({ ...current, selectedEntityId: entityId }));
@@ -393,25 +394,35 @@ export function TaskComposerClient({
     clearServerIssueKeys(changedInspectorIssueKeys(inspectorDraft, next));
   };
 
-  const moveAnchor = (request: TimeCanvasAnchorMoveRequest) => {
+  const moveAnchor = (
+    request: TimeCanvasAnchorMoveRequest,
+    selectedEntityIds: readonly string[],
+  ) => {
     if (isReadOnlyRevisionEntity(state, request.anchorId)) {
       setServerError("该节点由当前计划承接，只能查看，不能移动。");
       return;
     }
-    const result = applyAnchorMove(state, request);
+    const result = applyAnchorGroupMove(state, request, selectedEntityIds);
     if (!result.ok) {
       setServerError(result.message);
       return;
     }
     endLiveEdit();
     commit(() => reconcileComposerPlanState(result.state));
-    clearServerIssueKeys([anchorIssueKey(state, request.anchorId)]);
+    clearServerIssueKeys(
+      result.movedEntityIds.map((entityId) => anchorIssueKey(state, entityId)),
+    );
   };
 
   const constrainAnchorMove = (
     request: TimeCanvasAnchorMoveRequest,
+    selectedEntityIds: readonly string[],
   ): TimeCanvasAnchorMoveResolution => {
-    const result = resolveAnchorMoveCandidate(state, request);
+    const result = resolveAnchorGroupMoveCandidate(
+      state,
+      request,
+      selectedEntityIds,
+    );
     const originalAt = renderAtMs(state, request.anchorId);
     const atMs = result.ok ? result.candidateAt : originalAt;
     const blockedMessage = result.ok
@@ -424,6 +435,22 @@ export function TaskComposerClient({
       deltaMs: atMs - originalAt,
       blockedMessage,
     };
+  };
+
+  const batchDelay = (entityId: string, targetAt: string) => {
+    const result = applyComposerBatchDelay(state, entityId, targetAt);
+    if (!result.ok) return result;
+    endLiveEdit();
+    commit(() => result.state);
+    clearServerIssueKeys(
+      result.movedEntityIds.map((movedEntityId) =>
+        anchorIssueKey(state, movedEntityId),
+      ),
+    );
+    setStatusMessage(
+      `已将当前及之后的 ${result.movedEntityIds.length} 个可编辑节点整体推迟。`,
+    );
+    return result;
   };
 
   const moveTerminal = (plannedAt: string) => {
@@ -1056,6 +1083,7 @@ export function TaskComposerClient({
           onConstrainAnchorMove={constrainAnchorMove}
           onMoveAnchor={moveAnchor}
           onMoveTerminal={moveTerminal}
+          onBatchDelay={batchDelay}
           onUpdateInspector={updateInspector}
           onDeleteMilestones={removeMilestones}
           onSubmit={submit}

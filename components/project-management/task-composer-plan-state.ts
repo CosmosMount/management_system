@@ -472,6 +472,276 @@ export function applyAnchorMove(
   };
 }
 
+export type ComposerPlanTimeMutationResult =
+  | {
+      ok: true;
+      state: TaskComposerSeed;
+      movedEntityIds: string[];
+      deltaMs: number;
+    }
+  | { ok: false; message: string };
+
+export function editableComposerEntityIds(state: TaskComposerSeed) {
+  return [
+    TASK_COMPOSER_START_ID,
+    ...state.milestones.map((milestone) => milestone.id),
+    ...(state.revision ? [state.revision.markerId] : []),
+    state.termination.id,
+  ].filter((entityId) => !isReadOnlyRevisionEntity(state, entityId));
+}
+
+export function composerBatchDelayEntityIds(
+  state: TaskComposerSeed,
+  entityId: string,
+) {
+  const selectedAt = renderAtMs(state, entityId);
+  if (
+    !Number.isFinite(selectedAt) ||
+    !editableComposerEntityIds(state).includes(entityId)
+  ) {
+    return [];
+  }
+  return editableComposerEntityIds(state)
+    .filter((candidateId) => renderAtMs(state, candidateId) >= selectedAt)
+    .sort(
+      (left, right) =>
+        renderAtMs(state, left) - renderAtMs(state, right) ||
+        left.localeCompare(right),
+    );
+}
+
+export function resolveAnchorGroupMoveCandidate(
+  state: TaskComposerSeed,
+  request: TimeCanvasAnchorMoveRequest,
+  selectedEntityIds: readonly string[],
+):
+  | {
+      ok: true;
+      originalAt: number;
+      candidateAt: number;
+      movedEntityIds: string[];
+      deltaMs: number;
+    }
+  | { ok: false; message: string } {
+  const editableIds = new Set(editableComposerEntityIds(state));
+  const selectedIds = new Set(selectedEntityIds);
+  const movedEntityIds = selectedIds.has(request.anchorId)
+    ? [...selectedIds].filter((entityId) => editableIds.has(entityId))
+    : [request.anchorId];
+  if (!movedEntityIds.includes(request.anchorId)) {
+    movedEntityIds.push(request.anchorId);
+  }
+  if (movedEntityIds.length <= 1) {
+    const resolved = resolveAnchorMoveCandidate(state, request);
+    return resolved.ok
+      ? {
+          ...resolved,
+          movedEntityIds: [request.anchorId],
+          deltaMs: resolved.candidateAt - resolved.originalAt,
+        }
+      : resolved;
+  }
+  if (movedEntityIds.some((entityId) => !editableIds.has(entityId))) {
+    return { ok: false, message: "选中节点中包含只读节点，无法整体移动。" };
+  }
+
+  const originalAt = renderAtMs(state, request.anchorId);
+  const deltaMs = request.atMs - originalAt;
+  if (
+    !Number.isFinite(originalAt) ||
+    !Number.isFinite(deltaMs) ||
+    !Number.isFinite(request.snapMs) ||
+    request.snapMs <= 0
+  ) {
+    return { ok: false, message: "节点时间无效，请使用 Inspector 重新设置。" };
+  }
+  const shifted = applyEntityTimeDelta(state, movedEntityIds, deltaMs);
+  if (!shifted.ok || !hasLegalRenderedPlanTimes(shifted.state)) {
+    return {
+      ok: false,
+      message: "整组选中节点在此位置不合法，所有节点均已保留在原处。",
+    };
+  }
+  return {
+    ok: true,
+    originalAt,
+    candidateAt: originalAt + deltaMs,
+    movedEntityIds,
+    deltaMs,
+  };
+}
+
+export function applyAnchorGroupMove(
+  state: TaskComposerSeed,
+  request: TimeCanvasAnchorMoveRequest,
+  selectedEntityIds: readonly string[],
+): ComposerPlanTimeMutationResult {
+  const resolved = resolveAnchorGroupMoveCandidate(
+    state,
+    request,
+    selectedEntityIds,
+  );
+  if (!resolved.ok) return resolved;
+  if (resolved.movedEntityIds.length === 1) {
+    const moved = applyAnchorMove(state, {
+      ...request,
+      atMs: resolved.candidateAt,
+      deltaMs: resolved.deltaMs,
+    });
+    return moved.ok
+      ? {
+          ok: true,
+          state: moved.state,
+          movedEntityIds: resolved.movedEntityIds,
+          deltaMs: resolved.deltaMs,
+        }
+      : moved;
+  }
+  const shifted = applyEntityTimeDelta(
+    state,
+    resolved.movedEntityIds,
+    resolved.deltaMs,
+  );
+  if (!shifted.ok) return shifted;
+  return {
+    ok: true,
+    state: reconcileComposerPlanState({
+      ...shifted.state,
+      selectedEntityId: request.anchorId,
+    }),
+    movedEntityIds: resolved.movedEntityIds,
+    deltaMs: resolved.deltaMs,
+  };
+}
+
+export function applyComposerBatchDelay(
+  state: TaskComposerSeed,
+  entityId: string,
+  targetAt: string,
+): ComposerPlanTimeMutationResult {
+  const movedEntityIds = composerBatchDelayEntityIds(state, entityId);
+  if (movedEntityIds.length === 0) {
+    return { ok: false, message: "该节点为只读节点，不能批量推迟。" };
+  }
+  if (!validLocalDateTime(targetAt)) {
+    return { ok: false, message: "请选择有效的新节点时间。" };
+  }
+  const originalAt = renderAtMs(state, entityId);
+  const deltaMs = localMs(targetAt) - originalAt;
+  if (!Number.isFinite(deltaMs) || deltaMs <= 0) {
+    return { ok: false, message: "新的节点时间必须晚于当前时间。" };
+  }
+  const shifted = applyEntityTimeDelta(state, movedEntityIds, deltaMs);
+  if (!shifted.ok || !hasLegalRenderedPlanTimes(shifted.state)) {
+    return {
+      ok: false,
+      message: "推迟后节点时间超出合法范围，计划未发生任何变化。",
+    };
+  }
+  return {
+    ok: true,
+    state: reconcileComposerPlanState({
+      ...shifted.state,
+      selectedEntityId: entityId,
+    }),
+    movedEntityIds,
+    deltaMs,
+  };
+}
+
+function applyEntityTimeDelta(
+  state: TaskComposerSeed,
+  entityIds: readonly string[],
+  deltaMs: number,
+): { ok: true; state: TaskComposerSeed } | { ok: false; message: string } {
+  const updates = new Map<string, string>();
+  for (const entityId of entityIds) {
+    const nextAt = renderAtMs(state, entityId) + deltaMs;
+    const localValue = isoToShanghaiDateTimeLocal(new Date(nextAt));
+    if (!Number.isFinite(nextAt) || !validLocalDateTime(localValue)) {
+      return { ok: false, message: "移动后的节点时间无效，计划未发生任何变化。" };
+    }
+    updates.set(entityId, localValue);
+  }
+
+  let nextState = state;
+  for (const [entityId, localValue] of updates) {
+    if (entityId === TASK_COMPOSER_START_ID) {
+      nextState = { ...nextState, plannedStartAt: localValue };
+    } else if (entityId === nextState.termination.id) {
+      nextState = {
+        ...nextState,
+        termination: { ...nextState.termination, plannedAt: localValue },
+      };
+    } else if (entityId === nextState.revision?.markerId) {
+      nextState = {
+        ...nextState,
+        revision: { ...nextState.revision, revisionAt: localValue },
+      };
+    } else {
+      nextState = {
+        ...nextState,
+        milestones: nextState.milestones.map((milestone) =>
+          milestone.id === entityId
+            ? { ...milestone, expectedCompletedAt: localValue }
+            : milestone,
+        ),
+      };
+    }
+    nextState = {
+      ...nextState,
+      nodeMeta: updateLastValidAt(nextState, entityId, localValue),
+    };
+  }
+  return { ok: true, state: nextState };
+}
+
+function hasLegalRenderedPlanTimes(state: TaskComposerSeed) {
+  const startAt = renderAtMs(state, TASK_COMPOSER_START_ID);
+  const terminalAt = renderAtMs(state, state.termination.id);
+  const milestoneTimes = state.milestones.map((milestone) =>
+    renderAtMs(state, milestone.id),
+  );
+  if (
+    !Number.isFinite(startAt) ||
+    !Number.isFinite(terminalAt) ||
+    startAt >= terminalAt ||
+    milestoneTimes.some(
+      (atMs) =>
+        !Number.isFinite(atMs) || atMs <= startAt || atMs >= terminalAt,
+    ) ||
+    new Set(milestoneTimes).size !== milestoneTimes.length
+  ) {
+    return false;
+  }
+  if (!state.revision) return true;
+  const lockedMilestoneBoundary = Math.max(
+    startAt,
+    ...state.revision.lockedMilestoneIds.map((id) => renderAtMs(state, id)),
+  );
+  if (
+    !Number.isFinite(lockedMilestoneBoundary) ||
+    state.milestones.some(
+      (milestone) =>
+        !state.revision!.lockedMilestoneIds.includes(milestone.id) &&
+        renderAtMs(state, milestone.id) <= lockedMilestoneBoundary,
+    )
+  ) {
+    return false;
+  }
+  const revisionAt = renderAtMs(state, state.revision.markerId);
+  const lowerBoundary = Math.max(
+    startAt,
+    ...state.revision.lockedMilestoneIds.map((id) => renderAtMs(state, id)),
+    ...state.revision.carriedAnchors.map((anchor) => localMs(anchor.revisionAt)),
+  );
+  return (
+    Number.isFinite(revisionAt) &&
+    revisionAt >= lowerBoundary &&
+    revisionAt <= terminalAt
+  );
+}
+
 export function resolveAnchorMoveCandidate(
   state: TaskComposerSeed,
   request: TimeCanvasAnchorMoveRequest,
@@ -519,7 +789,12 @@ export function resolveAnchorMoveCandidate(
   } else {
     const milestone = state.milestones.find((item) => item.id === request.anchorId);
     if (!milestone) return { ok: false, message: "未找到要移动的 Milestone。" };
-    lowerExclusive = renderAtMs(state, TASK_COMPOSER_START_ID);
+    lowerExclusive = Math.max(
+      renderAtMs(state, TASK_COMPOSER_START_ID),
+      ...(state.revision?.lockedMilestoneIds.map((id) =>
+        renderAtMs(state, id),
+      ) ?? []),
+    );
     upperExclusive = renderAtMs(state, state.termination.id);
     occupied = new Set(
       state.milestones

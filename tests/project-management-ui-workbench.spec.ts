@@ -2930,7 +2930,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
     context,
     page,
     baseURL,
-  }) => {
+  }, testInfo) => {
     test.setTimeout(90_000);
     const fixture = await createUiFixture();
     const firstReason = `S6 v2 Revision ${randomUUID()}`;
@@ -2970,6 +2970,48 @@ test.describe("project management UI project-management-ui-workbench", () => {
     await expect(
       revisionInspector.getByText("不可删除", { exact: true }),
     ).toBeVisible();
+    const multiSelection = page.getByTestId(
+      "task-composer-anchor-multi-selection",
+    );
+    if (testInfo.project.name === "desktop") {
+      await expect(multiSelection).toContainText("已选 1 个可编辑节点");
+      const canvas = page.getByTestId("time-canvas-root");
+      const revisionMarker = canvas.getByRole("button", {
+        name: /^计划节点 当前 Revision/,
+      });
+      const editableMilestoneMarker = canvas.getByRole("button", {
+        name: /^计划节点 P6 UI 第一阶段/,
+      });
+      const readOnlyStartMarker = canvas.getByRole("button", {
+        name: /^计划节点 Start/,
+      });
+      await editableMilestoneMarker.click({ modifiers: ["Shift"] });
+      await expect(multiSelection).toContainText("已选 2 个可编辑节点");
+      await expect(revisionMarker).toHaveAttribute(
+        "data-anchor-multi-selected",
+        "true",
+      );
+      await expect(editableMilestoneMarker).toHaveAttribute(
+        "data-anchor-multi-selected",
+        "true",
+      );
+      await expect(readOnlyStartMarker).toHaveAttribute(
+        "data-anchor-editable",
+        "false",
+      );
+      await readOnlyStartMarker.click({ modifiers: ["Shift"] });
+      await expect(multiSelection).toContainText("已选 0 个可编辑节点");
+      await expect(revisionInspector).toContainText("Start");
+      await expect(
+        revisionInspector.getByRole("button", {
+          name: "批量推迟当前及后续节点",
+        }),
+      ).toHaveCount(0);
+      await currentRevisionButton.click();
+    } else {
+      await expect(page.getByTestId("time-canvas-root")).toBeHidden();
+      await expect(multiSelection).toBeHidden();
+    }
     const revisionReason = revisionInspector.getByLabel("Revision 名称");
     const revisionDescription = revisionInspector.getByLabel("Revision 详细内容");
     await expect(revisionReason).not.toHaveAttribute("aria-invalid", "true");

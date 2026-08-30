@@ -23,6 +23,7 @@ import {
   createTimeScale,
   intervalToRect,
   moveTimePoint,
+  moveTimePoints,
   rangesIntersect,
   snapTime,
   snapTimeInRange,
@@ -1239,16 +1240,39 @@ function TimelineRow({
     anchorMs: number;
     currentMs: number;
   };
+  type ActiveAnchorMarquee = {
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    currentClientX: number;
+    currentClientY: number;
+    rowLeft: number;
+    rowTop: number;
+    rowWidth: number;
+    rowHeight: number;
+    additive: boolean;
+    active: boolean;
+  };
   const brushRef = useRef<ActiveBrush | null>(null);
   const [brush, setBrush] = useState<ActiveBrush | null>(null);
+  const anchorMarqueeRef = useRef<ActiveAnchorMarquee | null>(null);
+  const [anchorMarquee, setAnchorMarquee] =
+    useState<ActiveAnchorMarquee | null>(null);
+  const suppressAnchorCreateRef = useRef(false);
   const [anchorPreview, setAnchorPreview] = useState<{
     anchorId: string;
     atMs: number;
+    anchorIds: string[];
   } | null>(null);
+  const anchorById = new Map(anchors.map((anchor) => [anchor.id, anchor]));
+  const previewDeltaMs = anchorPreview
+    ? anchorPreview.atMs - (anchorById.get(anchorPreview.anchorId)?.atMs ?? anchorPreview.atMs)
+    : 0;
+  const previewAnchorIds = new Set(anchorPreview?.anchorIds ?? []);
   const previewAnchors = anchorPreview
     ? anchors.map((anchor) =>
-        anchor.id === anchorPreview.anchorId
-          ? { ...anchor, atMs: anchorPreview.atMs }
+        previewAnchorIds.has(anchor.id)
+          ? { ...anchor, atMs: anchor.atMs + previewDeltaMs }
           : anchor,
       )
     : anchors;
@@ -1265,15 +1289,14 @@ function TimelineRow({
   const segmentById = new Map(segments.map((segment) => [segment.id, segment]));
   const visibleAnchors = anchors.filter(
     (anchor) =>
-      anchor.id === anchorPreview?.anchorId ||
+      previewAnchorIds.has(anchor.id) ||
       (anchor.atMs >= visibleWindow.startMs && anchor.atMs < visibleWindow.endMs),
   );
   const anchorLanes = layoutPointLanes(
     visibleAnchors.map((anchor) => ({
       id: anchor.id,
-      atMs:
-        anchor.id === anchorPreview?.anchorId
-          ? anchorPreview.atMs
+        atMs: previewAnchorIds.has(anchor.id)
+          ? anchor.atMs + previewDeltaMs
           : anchor.atMs,
       sequence: anchor.sequence,
     })),
@@ -1298,6 +1321,38 @@ function TimelineRow({
     Boolean(interaction?.enableAnchorCreate && interaction.onAnchorCreate) &&
     row.editable &&
     row.kind === "PLAN";
+  const canSelectAnchorsWithMarquee =
+    Boolean(
+      interaction?.enableAnchorMarqueeSelection &&
+        interaction.onAnchorMarqueeSelection,
+    ) &&
+    row.editable &&
+    row.kind === "PLAN";
+
+  function marqueeStyle(active: ActiveAnchorMarquee) {
+    const left = Math.max(
+      0,
+      Math.min(active.startClientX, active.currentClientX) - active.rowLeft,
+    );
+    const top = Math.max(
+      0,
+      Math.min(active.startClientY, active.currentClientY) - active.rowTop,
+    );
+    const right = Math.min(
+      active.rowWidth,
+      Math.max(active.startClientX, active.currentClientX) - active.rowLeft,
+    );
+    const bottom = Math.min(
+      active.rowHeight,
+      Math.max(active.startClientY, active.currentClientY) - active.rowTop,
+    );
+    return {
+      left,
+      top,
+      width: Math.max(0, right - left),
+      height: Math.max(0, bottom - top),
+    };
+  }
 
   function pointerTime(event: ReactPointerEvent<HTMLDivElement>) {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -1314,6 +1369,7 @@ function TimelineRow({
         "relative overflow-hidden bg-background",
         canBrush && "cursor-crosshair touch-none",
         canCreateAnchor && "cursor-cell",
+        canSelectAnchorsWithMarquee && "cursor-crosshair touch-none",
         "data-[creation-drop-state=valid]:bg-emerald-50/70 data-[creation-drop-state=valid]:ring-2 data-[creation-drop-state=valid]:ring-inset data-[creation-drop-state=valid]:ring-emerald-500",
         "data-[creation-drop-state=invalid]:bg-destructive/10 data-[creation-drop-state=invalid]:ring-2 data-[creation-drop-state=invalid]:ring-inset data-[creation-drop-state=invalid]:ring-destructive",
       )}
@@ -1321,13 +1377,40 @@ function TimelineRow({
       data-canvas-row-source={row.sourceId}
       data-canvas-row-kind={row.kind}
       data-anchor-preview={anchorPreview?.anchorId ?? ""}
+      data-anchor-preview-ids={anchorPreview?.anchorIds.join(",") ?? ""}
       aria-label={`${row.label} 时间行`}
       onPointerDown={(event) => {
         const target = event.target;
+        const startedOnObject =
+          target instanceof Element && Boolean(target.closest("[data-canvas-object]"));
+        if (
+          canSelectAnchorsWithMarquee &&
+          event.button === 0 &&
+          !startedOnObject
+        ) {
+          const rowRect = event.currentTarget.getBoundingClientRect();
+          const nextMarquee = {
+            pointerId: event.pointerId,
+            startClientX: event.clientX,
+            startClientY: event.clientY,
+            currentClientX: event.clientX,
+            currentClientY: event.clientY,
+            rowLeft: rowRect.left,
+            rowTop: rowRect.top,
+            rowWidth: rowRect.width,
+            rowHeight: rowRect.height,
+            additive: event.shiftKey,
+            active: false,
+          };
+          event.currentTarget.setPointerCapture(event.pointerId);
+          anchorMarqueeRef.current = nextMarquee;
+          setAnchorMarquee(nextMarquee);
+          return;
+        }
         if (
           !canBrush ||
           event.button !== 0 ||
-          (target instanceof Element && target.closest("[data-canvas-object]"))
+          startedOnObject
         ) {
           return;
         }
@@ -1342,6 +1425,25 @@ function TimelineRow({
         setBrush(nextBrush);
       }}
       onPointerMove={(event) => {
+        const activeMarquee = anchorMarqueeRef.current;
+        if (activeMarquee?.pointerId === event.pointerId) {
+          const active =
+            activeMarquee.active ||
+            Math.hypot(
+              event.clientX - activeMarquee.startClientX,
+              event.clientY - activeMarquee.startClientY,
+            ) >= 6;
+          const nextMarquee = {
+            ...activeMarquee,
+            currentClientX: event.clientX,
+            currentClientY: event.clientY,
+            active,
+          };
+          anchorMarqueeRef.current = nextMarquee;
+          setAnchorMarquee(nextMarquee);
+          if (active) event.preventDefault();
+          return;
+        }
         const activeBrush = brushRef.current;
         if (!activeBrush || activeBrush.pointerId !== event.pointerId) return;
         const currentMs = pointerTime(event);
@@ -1350,16 +1452,62 @@ function TimelineRow({
         setBrush(nextBrush);
       }}
       onPointerCancel={(event) => {
+        if (anchorMarqueeRef.current?.pointerId === event.pointerId) {
+          anchorMarqueeRef.current = null;
+          setAnchorMarquee(null);
+          return;
+        }
         if (brushRef.current?.pointerId !== event.pointerId) return;
         brushRef.current = null;
         setBrush(null);
       }}
       onLostPointerCapture={(event) => {
+        if (anchorMarqueeRef.current?.pointerId === event.pointerId) {
+          anchorMarqueeRef.current = null;
+          setAnchorMarquee(null);
+          return;
+        }
         if (brushRef.current?.pointerId !== event.pointerId) return;
         brushRef.current = null;
         setBrush(null);
       }}
       onPointerUp={(event) => {
+        const activeMarquee = anchorMarqueeRef.current;
+        if (activeMarquee?.pointerId === event.pointerId) {
+          anchorMarqueeRef.current = null;
+          setAnchorMarquee(null);
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId);
+          }
+          if (!activeMarquee.active) return;
+          suppressAnchorCreateRef.current = true;
+          const selectionRect = normalizedClientRect(
+            activeMarquee.startClientX,
+            activeMarquee.startClientY,
+            event.clientX,
+            event.clientY,
+          );
+          const anchorIds = [
+            ...event.currentTarget.querySelectorAll<HTMLElement>(
+              '[data-anchor-editable="true"][data-anchor-id]',
+            ),
+          ]
+            .filter((element) => {
+              const rect = element.getBoundingClientRect();
+              return pointInsideRectangle(
+                selectionRect,
+                rect.left + rect.width / 2,
+                rect.top + rect.height / 2,
+              );
+            })
+            .map((element) => element.dataset.anchorId)
+            .filter((anchorId): anchorId is string => Boolean(anchorId));
+          interaction?.onAnchorMarqueeSelection?.({
+            anchorIds,
+            additive: activeMarquee.additive,
+          });
+          return;
+        }
         const activeBrush = brushRef.current;
         if (!activeBrush || activeBrush.pointerId !== event.pointerId) return;
         const range = normalizeBrushRange(
@@ -1380,6 +1528,10 @@ function TimelineRow({
         });
       }}
       onClick={(event) => {
+        if (suppressAnchorCreateRef.current) {
+          suppressAnchorCreateRef.current = false;
+          return;
+        }
         const target = event.target;
         if (
           !canCreateAnchor ||
@@ -1415,6 +1567,14 @@ function TimelineRow({
           style={intervalToRect(brushRange.startMs, brushRange.endMs, scale)}
           aria-hidden="true"
           data-testid="time-canvas-brush-preview"
+        />
+      )}
+      {anchorMarquee?.active && (
+        <span
+          className="pointer-events-none absolute z-[35] rounded border-2 border-dashed border-primary bg-primary/10"
+          style={marqueeStyle(anchorMarquee)}
+          aria-hidden="true"
+          data-testid="time-canvas-anchor-marquee"
         />
       )}
       {!brushRange && creationRange && (
@@ -1499,12 +1659,29 @@ function TimelineRow({
           offset={index % 10}
           scale={scale}
           selected={selection?.kind === "ANCHOR" && selection.id === anchor.id}
+          multiSelected={Boolean(interaction?.selectedAnchorIds?.has(anchor.id))}
+          groupAnchors={
+            interaction?.selectedAnchorIds?.has(anchor.id)
+              ? anchors.filter(
+                  (candidate) =>
+                    candidate.editable &&
+                    interaction.selectedAnchorIds?.has(candidate.id),
+                )
+              : [anchor]
+          }
+          groupPreviewAtMs={
+            previewAnchorIds.has(anchor.id)
+              ? anchor.atMs + previewDeltaMs
+              : null
+          }
           activeFocusKey={activeFocusKey}
           interaction={interaction}
           onSelect={onSelect}
           onObjectFocus={onObjectFocus}
-          onPreviewChange={(anchorId, atMs) =>
-            setAnchorPreview(atMs === null ? null : { anchorId, atMs })
+          onPreviewChange={(anchorId, atMs, anchorIds) =>
+            setAnchorPreview(
+              atMs === null ? null : { anchorId, atMs, anchorIds },
+            )
           }
         />
       ))}
@@ -1913,6 +2090,36 @@ function PhaseBands({
   );
 }
 
+type ClientRectangle = {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+};
+
+function normalizedClientRect(
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number,
+): ClientRectangle {
+  return {
+    left: Math.min(startX, endX),
+    right: Math.max(startX, endX),
+    top: Math.min(startY, endY),
+    bottom: Math.max(startY, endY),
+  };
+}
+
+function pointInsideRectangle(rectangle: ClientRectangle, x: number, y: number) {
+  return (
+    x >= rectangle.left &&
+    x <= rectangle.right &&
+    y >= rectangle.top &&
+    y <= rectangle.bottom
+  );
+}
+
 function SegmentBlock({
   segment,
   lane,
@@ -2168,6 +2375,9 @@ function AnchorMarker({
   offset,
   scale,
   selected,
+  multiSelected,
+  groupAnchors,
+  groupPreviewAtMs,
   activeFocusKey,
   interaction,
   onSelect,
@@ -2181,11 +2391,18 @@ function AnchorMarker({
   offset: number;
   scale: ReturnType<typeof createTimeScale>;
   selected: boolean;
+  multiSelected: boolean;
+  groupAnchors: TimeCanvasAnchor[];
+  groupPreviewAtMs: number | null;
   activeFocusKey: string | null;
   interaction: TimeCanvasInteractionOptions | undefined;
   onSelect: (selection: TimeCanvasSelection) => void;
   onObjectFocus: (key: string) => void;
-  onPreviewChange: (anchorId: string, atMs: number | null) => void;
+  onPreviewChange: (
+    anchorId: string,
+    atMs: number | null,
+    anchorIds: string[],
+  ) => void;
 }) {
   const [move, setMove] = useState<{
     pointerId: number;
@@ -2197,7 +2414,7 @@ function AnchorMarker({
   const [previewAtMs, setPreviewAtMs] = useState<number | null>(null);
   const previewBlockedMessageRef = useRef<string | null>(null);
   const suppressClickRef = useRef(false);
-  const displayedAtMs = previewAtMs ?? anchor.atMs;
+  const displayedAtMs = previewAtMs ?? groupPreviewAtMs ?? anchor.atMs;
   const completed = anchor.completed ?? anchor.status === "COMPLETED";
   const left = timeToX(displayedAtMs, scale) + (planRow ? 0 : offset * 2);
   const top = planRow ? PLAN_RAIL_TOP + 2 : 8 + lane * 22;
@@ -2223,6 +2440,9 @@ function AnchorMarker({
             : Circle;
   const focusKey = anchorFocusKey(anchor.id);
   const canMove = anchor.editable && Boolean(interaction?.onAnchorMove);
+  const selectedForGroup = selected || multiSelected;
+  const movableGroup =
+    selectedForGroup && groupAnchors.length > 0 ? groupAnchors : [anchor];
   const announcedStatus =
     anchor.visualState === "TEMPORARY"
       ? "临时"
@@ -2232,11 +2452,8 @@ function AnchorMarker({
 
   function requestKeyboardMove(direction: -1 | 1) {
     if (!canMove) return;
-    const canvasResult = moveTimePoint({
-      atMs: anchor.atMs,
+    const canvasResult = moveAnchorGroupOnCanvas({
       rawDeltaMs: direction * scale.anchorSnapMs,
-      snapMs: scale.anchorSnapMs,
-      range: scale,
     });
     const result = constrainMove(canvasResult, "KEYBOARD_MOVE");
     if (result.deltaMs === 0) {
@@ -2252,6 +2469,22 @@ function AnchorMarker({
       ...result,
       snapMs: scale.anchorSnapMs,
     });
+  }
+
+  function moveAnchorGroupOnCanvas({ rawDeltaMs }: { rawDeltaMs: number }) {
+    const result = moveTimePoints({
+      pointsMs: movableGroup.map((candidate) => candidate.atMs),
+      rawDeltaMs,
+      snapMs: scale.anchorSnapMs,
+      range: scale,
+    });
+    const anchorIndex = movableGroup.findIndex(
+      (candidate) => candidate.id === anchor.id,
+    );
+    return {
+      atMs: result.pointsMs[anchorIndex < 0 ? 0 : anchorIndex]!,
+      deltaMs: result.deltaMs,
+    };
   }
 
   function constrainMove(
@@ -2274,18 +2507,23 @@ function AnchorMarker({
         "absolute z-20 flex max-w-40 -translate-x-1/2 flex-col items-center rounded px-1 text-[10px] outline-none focus-visible:ring-2 focus-visible:ring-ring",
         canMove && "touch-none cursor-grab",
         move && "cursor-grabbing opacity-80",
-        selected && "bg-primary/10 ring-2 ring-primary",
+        selectedForGroup && "bg-primary/10 ring-2 ring-primary",
+        multiSelected && !selected && "ring-primary/70",
         completed && "text-emerald-700 dark:text-emerald-300",
         anchor.visualState === "TEMPORARY" && "text-amber-700",
         anchor.visualState === "INVALID" && "text-destructive",
       )}
       style={{ left, top }}
-      aria-pressed={selected}
+      aria-pressed={selectedForGroup}
       aria-label={`${anchor.kind === "TERMINATION" ? "终止节点" : "计划节点"} ${anchor.label}，${formatDateTime(displayedAtMs)}，状态 ${announcedStatus}${canMove ? "，按左右方向键可移动" : ""}`}
       title={`${anchor.label} · ${formatDateTime(displayedAtMs)}`}
-      onClick={() => {
+      onClick={(event) => {
         if (suppressClickRef.current) {
           suppressClickRef.current = false;
+          return;
+        }
+        if (interaction?.onAnchorSelect) {
+          interaction.onAnchorSelect(anchor.id, { toggle: event.shiftKey });
           return;
         }
         onSelect(selected ? null : { kind: "ANCHOR", id: anchor.id });
@@ -2303,6 +2541,9 @@ function AnchorMarker({
       }}
       onPointerDown={(event) => {
         if (event.button !== 0 || !canMove) return;
+        if (!event.shiftKey && !multiSelected) {
+          interaction?.onAnchorSelect?.(anchor.id, { toggle: false });
+        }
         const scroller = event.currentTarget.closest<HTMLElement>(
           "[data-testid='time-canvas-scroll']",
         );
@@ -2320,7 +2561,11 @@ function AnchorMarker({
         });
         setPreviewAtMs(anchor.atMs);
         previewBlockedMessageRef.current = null;
-        onPreviewChange(anchor.id, anchor.atMs);
+        onPreviewChange(
+          anchor.id,
+          anchor.atMs,
+          movableGroup.map((candidate) => candidate.id),
+        );
       }}
       onPointerMove={(event) => {
         if (!move || move.pointerId !== event.pointerId) return;
@@ -2331,16 +2576,15 @@ function AnchorMarker({
         const scrollDelta = (scroller?.scrollLeft ?? 0) - move.scrollLeft;
         const rawDelta =
           (event.clientX - move.clientX + scrollDelta) * scale.msPerPixel;
-        const canvasResult = moveTimePoint({
-          atMs: anchor.atMs,
-          rawDeltaMs: rawDelta,
-          snapMs: scale.anchorSnapMs,
-          range: scale,
-        });
+        const canvasResult = moveAnchorGroupOnCanvas({ rawDeltaMs: rawDelta });
         const result = constrainMove(canvasResult, "MOVE");
         setPreviewAtMs(result.atMs);
         previewBlockedMessageRef.current = result.blockedMessage ?? null;
-        onPreviewChange(anchor.id, result.atMs);
+        onPreviewChange(
+          anchor.id,
+          result.atMs,
+          movableGroup.map((candidate) => candidate.id),
+        );
         if (Math.abs(rawDelta) >= scale.anchorSnapMs) {
           suppressClickRef.current = true;
         }
@@ -2349,7 +2593,7 @@ function AnchorMarker({
         setMove(null);
         setPreviewAtMs(null);
         previewBlockedMessageRef.current = null;
-        onPreviewChange(anchor.id, null);
+        onPreviewChange(anchor.id, null, []);
       }}
       onPointerUp={(event) => {
         if (!move || move.pointerId !== event.pointerId) return;
@@ -2361,7 +2605,7 @@ function AnchorMarker({
         setMove(null);
         setPreviewAtMs(null);
         previewBlockedMessageRef.current = null;
-        onPreviewChange(anchor.id, null);
+        onPreviewChange(anchor.id, null, []);
         if (suppressClickRef.current) {
           window.setTimeout(() => {
             suppressClickRef.current = false;
@@ -2393,6 +2637,9 @@ function AnchorMarker({
       data-canvas-object-key={focusKey}
       data-anchor-icon={iconKind}
       data-anchor-completed={completed ? "true" : "false"}
+      data-anchor-id={anchor.id}
+      data-anchor-editable={anchor.editable ? "true" : "false"}
+      data-anchor-multi-selected={multiSelected ? "true" : "false"}
       data-anchor-visual-state={anchor.visualState ?? "DEFAULT"}
       data-anchor-label-lane={planRow ? lane : undefined}
       data-testid={`milestone-marker-${anchor.id}`}

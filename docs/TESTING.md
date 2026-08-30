@@ -340,7 +340,7 @@ npx tsx --test tests/project-management-recent-activity-formatter.node.ts
 
 ### Task 创建页专项测试
 
-自动化和人工检查都必须使用隔离测试数据库并保持 `NOTIFICATION_DELIVERY_DISABLED=true`。创建 Composer 必须覆盖 Start/Milestone/Terminal 严格时间顺序、0/200/201 节点、临时与非法节点、Inspector、撤销/重做、Desktop TimeCanvas、移动端纵向编辑，以及 v4 localStorage/IndexedDB 恢复、账号/环境隔离、Web Locks、多标签页离开保护和成功清理。
+自动化和人工检查都必须使用隔离测试数据库并保持 `NOTIFICATION_DELIVERY_DISABLED=true`。创建 Composer 必须覆盖 Start/Milestone/Terminal 严格时间顺序、0/200/201 节点、临时与非法节点、Inspector、撤销/重做、Desktop TimeCanvas 的 Shift/框选/整组拖动、Desktop 与 Pixel 5 的批量推迟、移动端纵向编辑，以及 v4 localStorage/IndexedDB 恢复、账号/环境隔离、Web Locks、多标签页离开保护和成功清理。
 
 1. 桌面 `1440x1000` 打开 `/progress/tasks/new`：页面按 Task 信息、TimeCanvas、共享节点导航、节点 Inspector 纵向排列，初始计划只有 Start 和名称为 `Terminal` 的 Terminal；负责人和参与人员分别显示头像胶囊及独立搜索框，不再使用统一人员选择器加角色下拉框；不得出现桌面节点表、节点复制、批量选择/删除、独立校验按钮，也不得查询或展示成员 Planned、Actual、Busy 数据。
 2. 验证旧 `start` 参数被忽略并从规范 URL 移除，`relatedTaskId` 和 `templateTaskId` 仍可预填且不回退。无模板时 Start 为上海时区次日 `09:00`、Terminal 为 Start 后 14 天；模板保留 Milestone 内容、时间和自定义 Terminal 名称。
@@ -349,10 +349,10 @@ npx tsx --test tests/project-management-recent-activity-formatter.node.ts
 5. 验证 Terminal 名称 trim 后空白、200/201 字符边界；自定义名称在创建、Draft 编辑、Revision、模板复制、查询、工作台、版本差异、审计和快照中保持一致。默认 `Terminal` 不改变既有 canonical hash，自定义名称及其变更必须改变 hash。
 6. Revision 创建必须直接进入待审批；分别验证 `revisionAt` 等于 Start、Candidate Terminal、最后完成 Milestone 和上一条有效 Revision 时允许，越界时事务零写入。驳回后修改应直接重新送审且 `reviewRound + 1`，不存在 Draft 或单独 Submit。分别从待审批和已驳回状态取消，验证 `revision_cancelled` 使用通知机器人并直达 Task，创建人、OWNER、操作人和活跃全局管理员按账号去重；所有轮次未完成审批 outbox/recipient 置为 `CANCELED`、旧站内审批已读、已发送记录保留，重复取消 exactly once。还要覆盖 PROCESSING outbox/recipient 与 worker 的 outbox→recipient 并发锁序、收件人解析后状态变化的发送前复核，以及无 round 旧消息不得在第 2 轮误发。
 7. 批准前 Revision 只出现在历史；批准后才进入 Current Plan 时间轴。Revision anchor 不增加阶段带，所有 Segment 新建、批量新建、更新和重关联入口均拒绝 Revision 节点。
-8. 在画布与共享节点导航选择 Start、Milestone、Terminal；画布高亮、节点导航、Inspector 和所选节点的前置阶段块必须双向同步。从节点导航选择节点时，桌面 TimeCanvas 必须自动横向滚动，将对应时间点带入可视区。阶段块可点击并选择其下一节点；零 Milestone 时点击 Start → Terminal 阶段应选择 Terminal 并高亮整段。
+8. 在画布与共享节点导航选择 Start、Milestone、Terminal；画布高亮、节点导航、Inspector 和所选节点的前置阶段块必须双向同步。从节点导航选择节点时，桌面 TimeCanvas 必须自动横向滚动，将对应时间点带入可视区。桌面另验证 Shift 点击增减和从空白画布拖动框选，矩形只按可编辑锚点中心命中；普通点击收敛为单选，空白点击仍打开快捷创建。多选数量和高亮不得出现在 Pixel 5，也不得写入本地草稿。阶段块可点击并选择其下一节点；零 Milestone 时点击 Start → Terminal 阶段应选择 Terminal 并高亮整段。
 9. 从空白画布快捷菜单新增 Milestone、移动 Terminal；非法时刻的操作保持禁用并显示原因。新增 Milestone 应立即以琥珀虚线临时节点进入画布和共享节点导航，前后两段阶段块同时标记临时；补全必填项后自动转正。
-10. 拖动及键盘移动 Start、Milestone、Terminal，分别验证小时档 30 分钟、日/周档 1 天、月档 7 天吸附和上海时区增量。拖动预览期间节点前后阶段块必须同步伸缩，Milestone 穿越时按预览时间重排连接；Start、Terminal 与 Milestone 的严格边界必须在预览阶段钳制，锚点不得先越界再于松手后回弹。无合法吸附位置时保持原值并提示放大画布或使用 Inspector。
-11. Inspector 不显示保存/取消；Start、Terminal、Milestone 输入实时同步到画布、节点导航和自动校验。清空或输入同刻/越界时间时，字段与问题摘要显示错误而画布保留最后合法位置；同一节点连续修改多个字段只需一次撤销即可整体恢复。
+10. 拖动及键盘移动 Start、Milestone、Terminal，分别验证小时档 30 分钟、日/周档 1 天、月档 7 天吸附和上海时区增量。桌面选中多个可编辑节点后，鼠标拖动任一已选节点必须以同一时间差预览并移动整组，保持组内相对间隔且不改未选节点；一次撤销/重做覆盖整组。碰撞、严格边界或画布边界非法时整组零修改并给出中文提示。单节点拖动预览期间节点前后阶段块必须同步伸缩，Milestone 穿越时按预览时间重排连接；Start、Terminal 与 Milestone 的严格边界必须在预览阶段钳制，锚点不得先越界再于松手后回弹。无合法吸附位置时保持原值并提示放大画布或使用 Inspector。
+11. Inspector 不显示保存/取消；Start、Terminal、Milestone 输入实时同步到画布、节点导航和自动校验。可编辑节点显示“批量推迟当前及后续节点”，Desktop 与 Pixel 5 都要验证相等/更早/非法目标零修改，合法目标以同一正时间差移动当前及时间线上之后的可编辑节点，较早和只读节点不变，且一次撤销/重做覆盖整批；取消 Dialog 不修改计划。清空或输入同刻/越界时间时，字段与问题摘要显示错误而画布保留最后合法位置；同一节点连续修改多个字段只需一次撤销即可整体恢复。
 12. Milestone 只能在节点详情中单独删除；临时节点切换后保留并可显式删除，Start/Terminal 永远不可删除。页面不得出现节点复制、勾选或批量删除入口。
 13. 刷新页面后恢复 v4 临时节点、最后合法画布位置与选中节点，并验证 v4 Inspector 工作副本转换为实时临时节点。预置 v1/v2/v3 localStorage 与 IndexedDB 数据后不得出现恢复或导出提示，tombstone 最终删除旧数据；当前 v4 草稿仍完整恢复。另用 200 个 Milestone、每个四项 2,000 字符且包含 JSON 转义字符的极限草稿验证 IndexedDB 正文、`localStorage` 指针、刷新往返、两个同账号标签页并发“保存并离开”、立即“放弃并离开”不会被待触发防抖重新写回，以及创建成功后的双存储清理。
 14. 创建零 Milestone Task 后执行激活：Task 和 Terminal 均为 `ACTIVE`，`activeMilestoneNodeId=null`；工作台和列表使用 Terminal 名称/日期，审计和激活通知使用 Terminal 名称，不显示“当前没有 Active Milestone”。OWNER/PARTICIPANT 提交结束申请后 Task 仍为 `ACTIVE`，全局管理员批准才在同一事务结束 Task，并写审计和 `project-management` outbox。
@@ -373,7 +373,7 @@ npx tsx --test tests/project-management-recent-activity-formatter.node.ts
 ### Revision 通用 Composer 专项测试
 
 1. ACTIVE Task 的“发起 Revision”必须进入 `/progress/tasks/[id]/revisions/new`；非成员直达新建 URL 得到脱敏 404，非 ACTIVE 时返回 Task 工作台，已有 Candidate 时也返回工作台并展示“当前 Revision 候选”。
-2. Desktop 与 Pixel 5 均验证纵向 Composer：顶部使用与 Task 创建页一致的“基本信息 / 组织与分类 / 成员”结构并只读展示权威 Task 内容，不显示独立“Revision 信息 / 只读基线”；页面自动选中一个不可删除的当前 Revision 节点，Revision 名称、Revision 详细内容和 Revision 时间均在节点详情中填写且必填。Start/已完成 Milestone/已生效 Revision 只读，当前 Revision Marker 可调整且不切割阶段带，后续 Milestone 与 Terminal 可编辑；节点详情只显示红色校验提示框，不再重复显示“问题列表”。创建按钮为“创建并送审”，成功返回 Task 工作台并持久化 `PENDING_APPROVAL`，工作台候选卡片与批准后的 Current Plan 节点详情均回显名称和详细内容。
+2. Desktop 与 Pixel 5 均验证纵向 Composer：顶部使用与 Task 创建页一致的“基本信息 / 组织与分类 / 成员”结构并只读展示权威 Task 内容，不显示独立“Revision 信息 / 只读基线”；页面自动选中一个不可删除的当前 Revision 节点，Revision 名称、Revision 详细内容和 Revision 时间均在节点详情中填写且必填。Start/已完成 Milestone/已生效 Revision 只读，当前 Revision Marker 可调整且不切割阶段带，后续 Milestone 与 Terminal 可编辑；Desktop 的 Shift/框选只能组合当前 Revision 及后续可编辑节点，点击只读承接节点应切换到单节点查看且不能把它加入选中组，Pixel 5 不显示多选 UI。只读节点不显示批量推迟，可编辑节点在两种视口均可使用批量推迟且只影响当前及之后的可编辑节点。节点详情只显示红色校验提示框，不再重复显示“问题列表”。创建按钮为“创建并送审”，成功返回 Task 工作台并持久化 `PENDING_APPROVAL`，工作台候选卡片与批准后的 Current Plan 节点详情均回显名称和详细内容。
 3. Desktop 与 Pixel 5 在 Revision 等待审批时验证 Current Plan、自动候选 Plan、历史 Plan 和人员投入的顺序；候选行回显修改后的 Milestone/Terminal、使用“待审批候选”语义且无编辑入口。提交人可查看但无批准按钮，管理员比较后批准会持久化目标 Plan 为 Current；异常基线场景显示警告、批准禁用且仍能驳回。两种视口均不得横向溢出、出现 Next.js 错误覆盖层或未捕获浏览器错误。
 4. 被驳回记录的“修改并重新送审”进入 `/progress/tasks/[id]/revisions/[revisionId]/edit`；仅创建人（仍有 `revision.create`）或 Owner/全局管理员可进入。保存按钮同为“修改并重新送审”，成功后 `reviewRound + 1` 且直接回到待审批，不存在 Draft/Submit。
 5. Revision 本地草稿按环境、账号、Task、基线计划/锁或 Revision/候选 `updatedAt` 隔离；刷新后可恢复 Revision 名称、Revision 详细内容、revisionAt、节点、选中项与最后合法画布位置。版本冲突不得覆盖服务端，必须保留并允许导出或显式放弃加载最新版本；成功清理失败不得伪装成服务端失败。

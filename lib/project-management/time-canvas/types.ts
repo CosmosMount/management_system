@@ -207,6 +207,15 @@ export type TimeCanvasAnchorMoveResolution = Pick<
   blockedMessage?: string;
 };
 
+export type TimeCanvasAnchorSelectionOptions = {
+  toggle: boolean;
+};
+
+export type TimeCanvasAnchorMarqueeSelection = {
+  anchorIds: string[];
+  additive: boolean;
+};
+
 export type TimeCanvasGlobalMarkerMoveRequest = {
   markerId: string;
   kind: "MOVE" | "KEYBOARD_MOVE";
@@ -218,8 +227,10 @@ export type TimeCanvasGlobalMarkerMoveRequest = {
 export type TimeCanvasInteractionOptions = {
   enableBrushCreate?: boolean;
   enableAnchorCreate?: boolean;
+  enableAnchorMarqueeSelection?: boolean;
   desktopOnlySegmentTransform?: boolean;
   creationRange?: TimeCanvasBrushRequest | null;
+  selectedAnchorIds?: ReadonlySet<string>;
   selectedSegmentIds?: ReadonlySet<string>;
   onBrushCreate?: (request: TimeCanvasBrushRequest) => void;
   onCreationRangeTransform?: (
@@ -232,6 +243,13 @@ export type TimeCanvasInteractionOptions = {
   onAnchorMove?: (request: TimeCanvasAnchorMoveRequest) => void;
   onGlobalMarkerMove?: (request: TimeCanvasGlobalMarkerMoveRequest) => void;
   onAnchorSelectionChange?: (anchorId: string | null) => void;
+  onAnchorSelect?: (
+    anchorId: string,
+    options: TimeCanvasAnchorSelectionOptions,
+  ) => void;
+  onAnchorMarqueeSelection?: (
+    selection: TimeCanvasAnchorMarqueeSelection,
+  ) => void;
   onSegmentTransform?: (request: TimeCanvasSegmentTransformRequest) => void;
   onSegmentToggleSelection?: (segmentId: string) => void;
   onSegmentOpen?: (segmentId: string) => void;

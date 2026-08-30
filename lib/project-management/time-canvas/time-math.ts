@@ -93,13 +93,32 @@ export function moveTimePoint(input: {
   snapMs: number;
   range: TimeCanvasRange;
 }): { atMs: number; deltaMs: number } {
+  const result = moveTimePoints({
+    pointsMs: [input.atMs],
+    rawDeltaMs: input.rawDeltaMs,
+    snapMs: input.snapMs,
+    range: input.range,
+  });
+  return { atMs: result.pointsMs[0]!, deltaMs: result.deltaMs };
+}
+
+export function moveTimePoints(input: {
+  pointsMs: readonly number[];
+  rawDeltaMs: number;
+  snapMs: number;
+  range: TimeCanvasRange;
+}): { pointsMs: number[]; deltaMs: number } {
   assertRange(input.range);
   if (
-    !Number.isFinite(input.atMs) ||
-    input.atMs < input.range.startMs ||
-    input.atMs >= input.range.endMs
+    input.pointsMs.length === 0 ||
+    input.pointsMs.some(
+      (atMs) =>
+        !Number.isFinite(atMs) ||
+        atMs < input.range.startMs ||
+        atMs >= input.range.endMs,
+    )
   ) {
-    throw new Error("时间点必须位于当前半开区间内");
+    throw new Error("时间点组必须位于当前半开区间内");
   }
   const snappedDeltaMs = snapTime(
     input.rawDeltaMs,
@@ -107,15 +126,20 @@ export function moveTimePoint(input: {
     "round",
     0,
   );
+  const earliestAtMs = Math.min(...input.pointsMs);
+  const latestAtMs = Math.max(...input.pointsMs);
   const minimumDeltaMs =
-    Math.ceil((input.range.startMs - input.atMs) / input.snapMs) * input.snapMs;
+    Math.ceil((input.range.startMs - earliestAtMs) / input.snapMs) * input.snapMs;
   const maximumDeltaMs =
-    Math.floor((input.range.endMs - 1 - input.atMs) / input.snapMs) * input.snapMs;
+    Math.floor((input.range.endMs - 1 - latestAtMs) / input.snapMs) * input.snapMs;
   const deltaMs = Math.max(
     minimumDeltaMs,
     Math.min(snappedDeltaMs, maximumDeltaMs),
   );
-  return { atMs: input.atMs + deltaMs, deltaMs };
+  return {
+    pointsMs: input.pointsMs.map((atMs) => atMs + deltaMs),
+    deltaMs,
+  };
 }
 
 export function snapTimeInRange(

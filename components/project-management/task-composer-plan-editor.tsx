@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
+  CalendarClock,
   Plus,
   Trash2,
 } from "lucide-react";
@@ -26,6 +27,14 @@ import type {
 import type { GlobalTimeMarkerDto } from "@/lib/project-management/types/time-canvas";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { FieldError } from "@/components/ui/field-error";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -39,10 +48,13 @@ import type {
 } from "@/lib/project-management/composer-contract";
 import { TASK_COMPOSER_START_ID } from "@/lib/project-management/composer-contract";
 import {
+  composerBatchDelayEntityIds,
   isReadOnlyRevisionEntity,
   localMs,
   renderAtMs,
+  renderAtLocal,
   sortMilestonesByRenderTime,
+  type ComposerPlanTimeMutationResult,
 } from "@/components/project-management/task-composer-plan-state";
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
@@ -73,6 +85,7 @@ export function TaskComposerPlanEditor({
   onConstrainAnchorMove,
   onMoveAnchor,
   onMoveTerminal,
+  onBatchDelay,
   onUpdateInspector,
   onDeleteMilestones,
   onSubmit,
@@ -88,19 +101,35 @@ export function TaskComposerPlanEditor({
   submitDisabled?: boolean;
   submitLabel: string;
   submittingLabel: string;
-  onSelect: (entityId: string) => void;
+  onSelect: (entityId: string | null) => void;
   onBeginMilestone: (at: string, source?: TaskComposerMilestone) => void;
   onConstrainAnchorMove: (
     request: TimeCanvasAnchorMoveRequest,
+    selectedEntityIds: readonly string[],
   ) => TimeCanvasAnchorMoveResolution;
-  onMoveAnchor: (request: TimeCanvasAnchorMoveRequest) => void;
+  onMoveAnchor: (
+    request: TimeCanvasAnchorMoveRequest,
+    selectedEntityIds: readonly string[],
+  ) => void;
   onMoveTerminal: (at: string) => void;
+  onBatchDelay: (
+    entityId: string,
+    targetAt: string,
+  ) => ComposerPlanTimeMutationResult;
   onUpdateInspector: (draft: TaskComposerInspectorDraft) => void;
   onDeleteMilestones: (ids: string[]) => void;
   onSubmit: () => void;
 }) {
   const canvasContainerRef = useRef<HTMLDivElement>(null);
   const [quickAt, setQuickAt] = useState<{ atMs: number; snapMs: number } | null>(null);
+  const [selectedAnchorIds, setSelectedAnchorIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [batchDelay, setBatchDelay] = useState<{
+    entityId: string;
+    targetAt: string;
+    error: string;
+  } | null>(null);
   const [requestedCanvasCenter, setRequestedCanvasCenter] = useState<{
     atMs: number;
     revision: number;
@@ -156,6 +185,25 @@ export function TaskComposerPlanEditor({
       : []),
   );
   const canMoveTerminalAt = Boolean(quickAt && quickAt.atMs > lastPlanNodeAt);
+  const editableAnchorIds = useMemo(
+    () =>
+      new Set(
+        canvasModel.anchors
+          .filter((anchor) => anchor.editable)
+          .map((anchor) => anchor.id),
+      ),
+    [canvasModel.anchors],
+  );
+
+  const activeSelectedAnchorIds = useMemo(() => {
+    const filtered = new Set(
+      [...selectedAnchorIds].filter((anchorId) => editableAnchorIds.has(anchorId)),
+    );
+    const selectedId = state.selectedEntityId;
+    return selectedId && editableAnchorIds.has(selectedId) && !filtered.has(selectedId)
+      ? new Set([selectedId])
+      : filtered;
+  }, [editableAnchorIds, selectedAnchorIds, state.selectedEntityId]);
 
   useEffect(() => {
     if (!quickAt) return;
@@ -166,8 +214,44 @@ export function TaskComposerPlanEditor({
     return () => window.removeEventListener("keydown", closeQuickMenu);
   }, [quickAt]);
 
-  const selectNavigatorNode = (nodeId: string) => {
+  const selectOnly = (nodeId: string | null) => {
+    setSelectedAnchorIds(
+      nodeId && editableAnchorIds.has(nodeId)
+        ? new Set([nodeId])
+        : new Set(),
+    );
     onSelect(nodeId);
+  };
+
+  const selectCanvasAnchor = (nodeId: string, toggle: boolean) => {
+    if (!editableAnchorIds.has(nodeId) || !toggle) {
+      selectOnly(nodeId);
+      return;
+    }
+    const next = new Set(activeSelectedAnchorIds);
+    if (next.has(nodeId)) next.delete(nodeId);
+    else next.add(nodeId);
+    setSelectedAnchorIds(next);
+    if (next.has(nodeId)) {
+      onSelect(nodeId);
+    } else if (state.selectedEntityId === nodeId) {
+      onSelect(next.values().next().value ?? null);
+    }
+  };
+
+  const selectCanvasMarquee = (anchorIds: string[], additive: boolean) => {
+    const next = additive ? new Set(activeSelectedAnchorIds) : new Set<string>();
+    for (const anchorId of anchorIds) {
+      if (editableAnchorIds.has(anchorId)) next.add(anchorId);
+    }
+    setSelectedAnchorIds(next);
+    const primaryId = anchorIds.findLast((anchorId) => next.has(anchorId));
+    if (primaryId) onSelect(primaryId);
+    else if (!additive || next.size === 0) onSelect(next.values().next().value ?? null);
+  };
+
+  const selectNavigatorNode = (nodeId: string) => {
+    selectOnly(nodeId);
     const anchor = canvasModel.anchors.find((item) => item.id === nodeId);
     const scroller = canvasContainerRef.current?.querySelector<HTMLElement>(
       "[data-testid='time-canvas-scroll']",
@@ -205,6 +289,19 @@ export function TaskComposerPlanEditor({
     });
   };
 
+  const submitBatchDelay = () => {
+    if (!batchDelay) return;
+    const result = onBatchDelay(batchDelay.entityId, batchDelay.targetAt);
+    if (!result.ok) {
+      setBatchDelay({ ...batchDelay, error: result.message });
+      return;
+    }
+    setBatchDelay(null);
+  };
+  const batchDelayAffectedCount = batchDelay
+    ? composerBatchDelayEntityIds(state, batchDelay.entityId).length
+    : 0;
+
   return (
     <>
       <main className="min-w-0 space-y-4">
@@ -240,6 +337,14 @@ export function TaskComposerPlanEditor({
           </div>
 
           <div
+            className="mt-3 hidden flex-wrap items-center gap-2 rounded-lg border border-dashed border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground lg:flex"
+            data-testid="task-composer-anchor-multi-selection"
+          >
+            <Badge variant="outline">已选 {activeSelectedAnchorIds.size} 个可编辑节点</Badge>
+            <span>Shift 点击可增减选择；在画布空白处拖动可框选；拖动任一已选节点会整体移动。</span>
+          </div>
+
+          <div
             ref={canvasContainerRef}
             className="mt-4 hidden min-w-0 overflow-hidden rounded-lg border border-border lg:block"
           >
@@ -264,11 +369,19 @@ export function TaskComposerPlanEditor({
               emptyMessage="点击时间轴或添加按钮创建 Milestone"
               interaction={{
                 enableAnchorCreate: true,
+                enableAnchorMarqueeSelection: true,
+                selectedAnchorIds: activeSelectedAnchorIds,
                 onAnchorCreate: ({ atMs, snapMs }) => setQuickAt({ atMs, snapMs }),
-                constrainAnchorMove: onConstrainAnchorMove,
-                onAnchorMove: onMoveAnchor,
+                constrainAnchorMove: (request) =>
+                  onConstrainAnchorMove(request, [...activeSelectedAnchorIds]),
+                onAnchorMove: (request) =>
+                  onMoveAnchor(request, [...activeSelectedAnchorIds]),
+                onAnchorSelect: (anchorId, options) =>
+                  selectCanvasAnchor(anchorId, options.toggle),
+                onAnchorMarqueeSelection: ({ anchorIds, additive }) =>
+                  selectCanvasMarquee(anchorIds, additive),
                 onAnchorSelectionChange: (anchorId) => {
-                  if (anchorId) onSelect(anchorId);
+                  if (anchorId) selectOnly(anchorId);
                 },
                 onInvalidDrop: (message) => window.alert(message),
               }}
@@ -361,8 +474,16 @@ export function TaskComposerPlanEditor({
             state={state}
             draft={inspectorDraft}
             issues={inspectorIssues}
+            submitting={submitting}
             onChange={onUpdateInspector}
             onDelete={(milestone) => onDeleteMilestones([milestone.id])}
+            onOpenBatchDelay={(entityId) =>
+              setBatchDelay({
+                entityId,
+                targetAt: renderAtLocal(state, entityId),
+                error: "",
+              })
+            }
           />
         </div>
       </aside>
@@ -387,6 +508,55 @@ export function TaskComposerPlanEditor({
           {submitting ? submittingLabel : submitLabel}
         </Button>
       </div>
+
+      <Dialog
+        open={Boolean(batchDelay)}
+        onOpenChange={(open) => {
+          if (!open) setBatchDelay(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md" data-testid="task-composer-batch-delay-dialog">
+          <DialogHeader>
+            <DialogTitle>批量推迟当前及后续节点</DialogTitle>
+            <DialogDescription>
+              指定当前节点的新时间；系统会把当前及时间线上之后共
+              {batchDelayAffectedCount} 个可编辑节点整体推迟相同时间，较早节点和只读承接节点保持不变。
+            </DialogDescription>
+          </DialogHeader>
+          <div>
+            <label htmlFor="task-composer-batch-delay-at" className="mb-1.5 block text-sm font-medium">
+              新的节点时间<span className="ml-1 text-destructive">*</span>
+            </label>
+            <Input
+              id="task-composer-batch-delay-at"
+              type="datetime-local"
+              value={batchDelay?.targetAt ?? ""}
+              aria-invalid={Boolean(batchDelay?.error)}
+              aria-describedby={batchDelay?.error ? "task-composer-batch-delay-at-error" : undefined}
+              onChange={(event) =>
+                setBatchDelay((current) =>
+                  current
+                    ? { ...current, targetAt: event.target.value, error: "" }
+                    : current,
+                )
+              }
+            />
+            <FieldError
+              id="task-composer-batch-delay-at-error"
+              messages={batchDelay?.error ?? ""}
+              className="mt-1.5"
+            />
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setBatchDelay(null)}>
+              取消
+            </Button>
+            <Button type="button" disabled={submitting} onClick={submitBatchDelay}>
+              确认批量推迟
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
@@ -611,14 +781,18 @@ function Inspector({
   state,
   draft,
   issues,
+  submitting,
   onChange,
   onDelete,
+  onOpenBatchDelay,
 }: {
   state: TaskComposerSeed;
   draft: TaskComposerInspectorDraft | null;
   issues: ValidationIssue[];
+  submitting: boolean;
   onChange: (draft: TaskComposerInspectorDraft) => void;
   onDelete: (milestone: TaskComposerMilestone) => void;
+  onOpenBatchDelay: (entityId: string) => void;
 }) {
   if (!draft) {
     return <p className="text-sm text-muted-foreground">从画布或节点列表选择一个节点进行编辑。</p>;
@@ -659,6 +833,19 @@ function Inspector({
         )}
         {readOnly && <Badge variant="outline">只读</Badge>}
       </div>
+
+      {!readOnly && (
+        <Button
+          type="button"
+          variant="outline"
+          className="w-full justify-start"
+          disabled={submitting}
+          onClick={() => onOpenBatchDelay(draft.entityId)}
+        >
+          <CalendarClock aria-hidden="true" />
+          批量推迟当前及后续节点
+        </Button>
+      )}
 
       {draft.kind === "START" && (
         <PlanField label="计划开始时间" required htmlFor="plannedStartAt" error={fieldMessages("plannedStartAt")}>

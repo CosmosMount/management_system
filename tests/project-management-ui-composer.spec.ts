@@ -530,6 +530,285 @@ test.describe("project management UI project-management-ui-composer", () => {
       }
     });
 
+  test("Task Composer atomically moves desktop anchor selections and batch-delays later editable nodes", async ({
+      context,
+      page,
+      baseURL,
+    }, testInfo) => {
+      test.setTimeout(90_000);
+      const browserErrors: string[] = [];
+      page.on("pageerror", (error) => browserErrors.push(error.message));
+      const creator = await createAccountPerson(
+        `S5 Composer Timeline ${testInfo.project.name} ${randomUUID()}`,
+      );
+      await loginAsTestUser(context, baseURL, {
+        openId: creator.openId,
+        name: creator.person.displayName,
+      });
+
+      await page.goto("/progress/tasks/new?start=2026-09-01");
+      await page.getByLabel("Task 名称").fill(`S5 时间线批量编辑 ${randomUUID()}`);
+      const navigator = page.getByTestId("task-plan-node-navigator");
+      const inspector = page.getByTestId("task-composer-inspector");
+      await navigator.getByRole("button", { name: /Start/ }).click();
+      await page.getByLabel("计划开始时间").fill("2026-09-01T09:00");
+      await navigator.getByRole("button", { name: /Terminal/ }).click();
+      await page.getByLabel("计划结束时间").fill("2026-09-20T18:00");
+
+      const addMilestone = async (label: string, plannedAt: string) => {
+        await page
+          .getByRole("button", { name: "添加 Milestone", exact: true })
+          .first()
+          .click();
+        await inspector.getByLabel("目标").fill(label);
+        await inspector.getByLabel("完成条件").fill(`${label} 完成条件`);
+        await inspector.getByLabel("验收要求").fill(`${label} 验收要求`);
+        await inspector.getByLabel("预期完成时间").fill(plannedAt);
+      };
+      await addMilestone("多选节点 M1", "2026-09-05T09:00");
+      await addMilestone("多选节点 M2", "2026-09-09T09:00");
+      await addMilestone("多选节点 M3", "2026-09-13T09:00");
+
+      const readMilestoneTime = async (label: string) => {
+        await navigator
+          .getByRole("button", { name: new RegExp(label) })
+          .click();
+        return inspector.getByLabel("预期完成时间").inputValue();
+      };
+      const readStartTime = async () => {
+        await navigator.getByRole("button", { name: /Start/ }).click();
+        return inspector.getByLabel("计划开始时间").inputValue();
+      };
+      const readTerminalTime = async () => {
+        await navigator.getByRole("button", { name: /Terminal/ }).click();
+        return inspector.getByLabel("计划结束时间").inputValue();
+      };
+      const localTimeMs = (value: string) =>
+        new Date(`${value}:00+08:00`).getTime();
+      const original = {
+        start: "2026-09-01T09:00",
+        m1: "2026-09-05T09:00",
+        m2: "2026-09-09T09:00",
+        m3: "2026-09-13T09:00",
+        terminal: "2026-09-20T18:00",
+      };
+
+      const canvas = page.getByTestId("time-canvas-root");
+      const multiSelection = page.getByTestId(
+        "task-composer-anchor-multi-selection",
+      );
+      if (testInfo.project.name === "desktop") {
+        await expect(canvas).toBeVisible();
+        await expect(multiSelection).toBeVisible();
+        const markerM1 = canvas.getByRole("button", {
+          name: /^计划节点 多选节点 M1/,
+        });
+        const markerM2 = canvas.getByRole("button", {
+          name: /^计划节点 多选节点 M2/,
+        });
+        const markerM3 = canvas.getByRole("button", {
+          name: /^计划节点 多选节点 M3/,
+        });
+        await markerM1.click();
+        await markerM2.click({ modifiers: ["Shift"] });
+        await expect(multiSelection).toContainText("已选 2 个可编辑节点");
+        await expect(markerM1).toHaveAttribute(
+          "data-anchor-multi-selected",
+          "true",
+        );
+        await expect(markerM2).toHaveAttribute(
+          "data-anchor-multi-selected",
+          "true",
+        );
+        await expect(markerM3).toHaveAttribute(
+          "data-anchor-multi-selected",
+          "false",
+        );
+
+        const planRow = canvas.locator('[data-canvas-row-kind="PLAN"]');
+        await markerM2.scrollIntoViewIfNeeded();
+        const markerM2Box = await markerM2.boundingBox();
+        if (!markerM2Box) throw new Error("M2 时间节点不可见");
+        const markerM1Id = await markerM1.getAttribute("data-anchor-id");
+        const markerM2Id = await markerM2.getAttribute("data-anchor-id");
+        if (!markerM1Id || !markerM2Id) {
+          throw new Error("多选时间节点缺少稳定 id");
+        }
+        await page.mouse.move(
+          markerM2Box.x + markerM2Box.width / 2,
+          markerM2Box.y + markerM2Box.height / 2,
+        );
+        await page.mouse.down();
+        await expect(planRow).toHaveAttribute(
+          "data-anchor-preview-ids",
+          new RegExp(`(?=.*${markerM1Id})(?=.*${markerM2Id})`),
+        );
+        await page.mouse.move(
+          markerM2Box.x + markerM2Box.width / 2 + 80,
+          markerM2Box.y + markerM2Box.height / 2,
+          { steps: 8 },
+        );
+        await expect(planRow).toHaveAttribute(
+          "data-anchor-preview-ids",
+          new RegExp(`(?=.*${markerM1Id})(?=.*${markerM2Id})`),
+        );
+        await page.mouse.up();
+
+        const moved = {
+          m1: await readMilestoneTime("多选节点 M1"),
+          m2: await readMilestoneTime("多选节点 M2"),
+          m3: await readMilestoneTime("多选节点 M3"),
+        };
+        const m1Delta = localTimeMs(moved.m1) - localTimeMs(original.m1);
+        const m2Delta = localTimeMs(moved.m2) - localTimeMs(original.m2);
+        expect(m1Delta).toBeGreaterThan(0);
+        expect(m2Delta).toBe(m1Delta);
+        expect(moved.m3).toBe(original.m3);
+
+        await page.getByRole("button", { name: "撤销" }).click();
+        expect(await readMilestoneTime("多选节点 M1")).toBe(original.m1);
+        expect(await readMilestoneTime("多选节点 M2")).toBe(original.m2);
+        expect(await readMilestoneTime("多选节点 M3")).toBe(original.m3);
+        await page.getByRole("button", { name: "重做" }).click();
+        expect(await readMilestoneTime("多选节点 M1")).toBe(moved.m1);
+        expect(await readMilestoneTime("多选节点 M2")).toBe(moved.m2);
+        expect(await readMilestoneTime("多选节点 M3")).toBe(original.m3);
+        await page.getByRole("button", { name: "撤销" }).click();
+
+        await markerM2.scrollIntoViewIfNeeded();
+        const markerM1Box = await markerM1.boundingBox();
+        const resetMarkerM2Box = await markerM2.boundingBox();
+        const planRowBox = await planRow.boundingBox();
+        if (!markerM1Box || !resetMarkerM2Box || !planRowBox) {
+          throw new Error("框选所需的时间节点不可见");
+        }
+        await page.mouse.move(
+          markerM1Box.x - 8,
+          planRowBox.y + planRowBox.height - 3,
+        );
+        await page.mouse.down();
+        await page.mouse.move(
+          resetMarkerM2Box.x + resetMarkerM2Box.width + 8,
+          planRowBox.y + 3,
+          { steps: 8 },
+        );
+        await expect(page.getByTestId("time-canvas-anchor-marquee")).toBeVisible();
+        await page.mouse.up();
+        await expect(multiSelection).toContainText("已选 2 个可编辑节点");
+        await expect(markerM1).toHaveAttribute(
+          "data-anchor-multi-selected",
+          "true",
+        );
+        await expect(markerM2).toHaveAttribute(
+          "data-anchor-multi-selected",
+          "true",
+        );
+        await expect(markerM3).toHaveAttribute(
+          "data-anchor-multi-selected",
+          "false",
+        );
+
+        const invalidDragMarkerBox = await markerM1.boundingBox();
+        const invalidDragRowBox = await planRow.boundingBox();
+        if (!invalidDragMarkerBox || !invalidDragRowBox) {
+          throw new Error("非法整组拖动所需的时间节点不可见");
+        }
+        await page.mouse.move(
+          invalidDragMarkerBox.x + invalidDragMarkerBox.width / 2,
+          invalidDragMarkerBox.y + invalidDragMarkerBox.height / 2,
+        );
+        await page.mouse.down();
+        await page.mouse.move(
+          invalidDragRowBox.x + 2,
+          invalidDragMarkerBox.y + invalidDragMarkerBox.height / 2,
+          { steps: 8 },
+        );
+        let invalidDropMessage = "";
+        page.once("dialog", async (dialog) => {
+          invalidDropMessage = dialog.message();
+          await dialog.dismiss();
+        });
+        await page.mouse.up();
+        await expect.poll(() => invalidDropMessage).toContain(
+          "所有节点均已保留在原处",
+        );
+        expect(await readMilestoneTime("多选节点 M1")).toBe(original.m1);
+        expect(await readMilestoneTime("多选节点 M2")).toBe(original.m2);
+        expect(await readMilestoneTime("多选节点 M3")).toBe(original.m3);
+      } else {
+        await expect(canvas).toBeHidden();
+        await expect(multiSelection).toBeHidden();
+      }
+
+      await navigator
+        .getByRole("button", { name: /多选节点 M2/ })
+        .click();
+      await inspector
+        .getByRole("button", { name: "批量推迟当前及后续节点" })
+        .click();
+      const batchDialog = page.getByRole("dialog", {
+        name: "批量推迟当前及后续节点",
+      });
+      await expect(batchDialog).toContainText("共3 个可编辑节点");
+      await batchDialog
+        .getByRole("button", { name: "确认批量推迟" })
+        .click();
+      await expect(
+        batchDialog.getByRole("alert").filter({
+          hasText: "新的节点时间必须晚于当前时间",
+        }),
+      ).toBeVisible();
+      await batchDialog
+        .getByLabel("新的节点时间")
+        .fill("2026-09-11T09:00");
+      await batchDialog
+        .getByRole("button", { name: "确认批量推迟" })
+        .click();
+      await expect(batchDialog).toHaveCount(0);
+      await expect(page.getByText("已将当前及之后的 3 个可编辑节点整体推迟。"))
+        .toBeVisible();
+      expect(await readStartTime()).toBe(original.start);
+      expect(await readMilestoneTime("多选节点 M1")).toBe(original.m1);
+      expect(await readMilestoneTime("多选节点 M2")).toBe("2026-09-11T09:00");
+      expect(await readMilestoneTime("多选节点 M3")).toBe("2026-09-15T09:00");
+      expect(await readTerminalTime()).toBe("2026-09-22T18:00");
+
+      await page.getByRole("button", { name: "撤销" }).click();
+      expect(await readMilestoneTime("多选节点 M2")).toBe(original.m2);
+      expect(await readMilestoneTime("多选节点 M3")).toBe(original.m3);
+      expect(await readTerminalTime()).toBe(original.terminal);
+      await page.getByRole("button", { name: "重做" }).click();
+      expect(await readMilestoneTime("多选节点 M2")).toBe("2026-09-11T09:00");
+      expect(await readMilestoneTime("多选节点 M3")).toBe("2026-09-15T09:00");
+      expect(await readTerminalTime()).toBe("2026-09-22T18:00");
+
+      await navigator
+        .getByRole("button", { name: /多选节点 M2/ })
+        .click();
+      await inspector
+        .getByRole("button", { name: "批量推迟当前及后续节点" })
+        .click();
+      await page.getByRole("dialog", {
+        name: "批量推迟当前及后续节点",
+      }).getByLabel("新的节点时间").fill("2026-09-12T09:00");
+      await page.getByRole("dialog", {
+        name: "批量推迟当前及后续节点",
+      }).getByRole("button", { name: "取消" }).click();
+      expect(await readMilestoneTime("多选节点 M2")).toBe("2026-09-11T09:00");
+      expect(await readMilestoneTime("多选节点 M3")).toBe("2026-09-15T09:00");
+      expect(await readTerminalTime()).toBe("2026-09-22T18:00");
+
+      expect(
+        await page.evaluate(
+          () =>
+            document.documentElement.scrollWidth <=
+            document.documentElement.clientWidth + 1,
+        ),
+      ).toBe(true);
+      expect(browserErrors).toEqual([]);
+      await expectHealthyPage(page);
+    });
+
   test("ordinary unified accounts can open the Task Composer without an organization role", async ({
       context,
       page,
