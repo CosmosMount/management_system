@@ -361,6 +361,13 @@ export const milestoneCompletionQueryInputSchema = z
   })
   .strict();
 
+export const revisionBasePlanQueryInputSchema = z
+  .object({
+    taskId: idSchema,
+    revisionNodeId: idSchema,
+  })
+  .strict();
+
 export const taskLifecycleViewsInputSchema = z
   .object({
     taskId: idSchema,

@@ -5,6 +5,7 @@ import { prisma } from "../lib/prisma";
 import { formatDateTime } from "../lib/project-management/labels";
 import {
   activateTask,
+  approveRevision,
   createRevision,
   createTaskDraft,
   rejectRevision,
@@ -83,6 +84,470 @@ test.describe("project management UI project-management-ui-workbench", () => {
         await context.close();
       }
     });
+
+  test("Revision nodes toggle cached read-only base-plan rows in the Task timeline", async ({
+    context,
+    page,
+    baseURL,
+  }) => {
+    test.setTimeout(90_000);
+    const pageErrors: Error[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error));
+    const fixture = await createUiFixture();
+    const firstReason = `第一次计划调整 ${randomUUID()}`;
+    const secondReason = `第二次计划调整 ${randomUUID()}`;
+    const firstTaskState = await prisma.task.findUniqueOrThrow({
+      where: { id: fixture.taskId },
+      select: { currentPlanVersionId: true, lockVersion: true },
+    });
+    const originalTerminalEntry = await prisma.planVersionNode.findFirstOrThrow({
+      where: {
+        planVersionId: firstTaskState.currentPlanVersionId,
+        node: { type: "TERMINATION" },
+      },
+      select: {
+        node: { select: { termination: { select: { id: true } } } },
+      },
+    });
+    if (!originalTerminalEntry.node.termination) {
+      throw new Error("Revision 历史 UI fixture 缺少 Terminal");
+    }
+    await prisma.terminationNode.update({
+      where: { id: originalTerminalEntry.node.termination.id },
+      data: { plannedAt: new Date("2035-08-05T12:00:00.000Z") },
+    });
+    await prisma.workSegment.update({
+      where: { id: fixture.confirmableSegmentId },
+      data: {
+        startAt: new Date("2026-10-29T09:00:00.000Z"),
+        endAt: new Date("2026-10-29T10:00:00.000Z"),
+      },
+    });
+    const firstRevision = await createRevision(actor(fixture.owner), {
+      taskId: fixture.taskId,
+      basePlanVersionId: firstTaskState.currentPlanVersionId,
+      baseTaskLockVersion: firstTaskState.lockVersion,
+      reason: firstReason,
+      description: "第一次调整后的候选计划",
+      revisionAt: new Date(Date.UTC(2026, 6, 31, 12, 0, 0)).toISOString(),
+      replacementMilestones: [
+        milestoneInput("第一次调整后的 Milestone", "完成第一次调整", 3),
+      ],
+      termination: terminationInput(6),
+      idempotencyKey: `revision-history-ui-first-${randomUUID()}`,
+    });
+    await approveRevision(actor(fixture.admin), {
+      revisionNodeId: firstRevision.revisionNodeId,
+      comment: "批准第一次调整",
+    });
+    const secondTaskState = await prisma.task.findUniqueOrThrow({
+      where: { id: fixture.taskId },
+      select: { currentPlanVersionId: true, lockVersion: true },
+    });
+    const secondRevision = await createRevision(actor(fixture.owner), {
+      taskId: fixture.taskId,
+      basePlanVersionId: secondTaskState.currentPlanVersionId,
+      baseTaskLockVersion: secondTaskState.lockVersion,
+      reason: secondReason,
+      description: "第二次调整后的候选计划",
+      revisionAt: new Date(Date.UTC(2026, 7, 1, 12, 0, 0)).toISOString(),
+      replacementMilestones: [
+        milestoneInput("第二次调整后的 Milestone", "完成第二次调整", 4),
+      ],
+      termination: terminationInput(8),
+      idempotencyKey: `revision-history-ui-second-${randomUUID()}`,
+    });
+    await approveRevision(actor(fixture.admin), {
+      revisionNodeId: secondRevision.revisionNodeId,
+      comment: "批准第二次调整",
+    });
+
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.owner.openId,
+      name: fixture.owner.person.displayName,
+    });
+    await page.goto(
+      `/progress/tasks/${fixture.taskId}?center=${encodeURIComponent("2026-08-03T09:30:00.000Z")}`,
+    );
+
+    const firstCheckbox = page.getByRole("checkbox", {
+      name: `显示 Revision「${firstReason}」之前的计划`,
+    });
+    const secondCheckbox = page.getByRole("checkbox", {
+      name: `显示 Revision「${secondReason}」之前的计划`,
+    });
+    await expect(firstCheckbox).not.toBeChecked();
+    await expect(secondCheckbox).not.toBeChecked();
+    const secondCheckboxHandle = await secondCheckbox.elementHandle();
+    if (!secondCheckboxHandle) {
+      throw new Error("Revision 历史 UI fixture 缺少第二个复选框");
+    }
+    await expect(
+      page.getByTestId(
+        `time-canvas-row-header-history-plan:${firstRevision.revisionNodeId}`,
+      ),
+    ).toHaveCount(0);
+
+    let releaseFirstRequest!: () => void;
+    const firstRequestGate = new Promise<void>((resolve) => {
+      releaseFirstRequest = resolve;
+    });
+    let markFirstRequestIntercepted!: () => void;
+    const firstRequestIntercepted = new Promise<void>((resolve) => {
+      markFirstRequestIntercepted = resolve;
+    });
+    let failFirstRevisionRequest = true;
+    let historyRequestCount = 0;
+    let historyActionId: string | null = null;
+    let observePresentationNavigation = false;
+    let presentationNavigationActionRequests = 0;
+    const taskUrl = `**/progress/tasks/${fixture.taskId}**`;
+    await page.route(taskUrl, async (route) => {
+      const request = route.request();
+      const nextAction = request.headers()["next-action"] ?? null;
+      const actionRequestBody =
+        request.method() === "POST" && nextAction
+          ? request.postData()
+          : null;
+      if (
+        !historyActionId &&
+        nextAction &&
+        actionRequestBody?.includes(firstRevision.revisionNodeId)
+      ) {
+        historyActionId = nextAction;
+      }
+      if (
+        observePresentationNavigation &&
+        request.method() === "POST" &&
+        nextAction !== historyActionId
+      ) {
+        presentationNavigationActionRequests += 1;
+      }
+      if (!historyActionId || nextAction !== historyActionId) {
+        await route.continue();
+        return;
+      }
+      historyRequestCount += 1;
+      if (historyRequestCount === 1) {
+        markFirstRequestIntercepted();
+        await firstRequestGate;
+      }
+      if (historyRequestCount === 1 && failFirstRevisionRequest) {
+        await route.abort("failed");
+        return;
+      }
+      await route.continue();
+    });
+
+    await firstCheckbox.check();
+    await firstRequestIntercepted;
+    await expect(firstCheckbox).toBeChecked();
+    await expect(firstCheckbox).toBeDisabled();
+    await expect(
+      firstCheckbox.locator("..").getByText("正在加载修订前计划…"),
+    ).toBeVisible();
+    releaseFirstRequest();
+    await expect(
+      page.getByRole("alert").filter({
+        hasText: "网络或服务暂时不可用，请重试。",
+      }),
+    ).toBeVisible();
+
+    failFirstRevisionRequest = false;
+    await page
+      .getByRole("button", {
+        name: `重新加载 Revision「${firstReason}」之前的计划`,
+      })
+      .click();
+    const firstHistoryHeader = page.getByTestId(
+      `time-canvas-row-header-history-plan:${firstRevision.revisionNodeId}`,
+    );
+    await expect(firstHistoryHeader).toContainText(
+      `Revision「${firstReason}」之前`,
+    );
+    await expect(firstHistoryHeader).toContainText("Plan v1");
+    await expect(firstHistoryHeader.getByLabel("只读")).toBeVisible();
+    const firstHistoryRow = page.getByTestId(
+      `timeline-row-history-plan:${firstRevision.revisionNodeId}`,
+    );
+    // The 2035 legacy Terminal must not expand the interactive canvas beyond
+    // its supported three-year window or trigger out-of-range block requests.
+    await expect(
+      firstHistoryRow.getByRole("button", {
+        name: /终止节点 Terminal.+状态 历史计划/,
+      }),
+    ).toHaveCount(0);
+    const canvasRoot = page
+      .getByTestId("resource-planner-workbench")
+      .getByTestId("time-canvas-root");
+    const presentationRange = await canvasRoot.evaluate((element) => ({
+      startMs: Number(element.dataset.rangeStartMs),
+      endMs: Number(element.dataset.rangeEndMs),
+    }));
+    expect(presentationRange.endMs - presentationRange.startMs).toBeLessThanOrEqual(
+      3 * 366 * 24 * 60 * 60 * 1_000,
+    );
+    await page.waitForLoadState("networkidle");
+    const urlBeforeHistoryNavigation = page.url();
+    observePresentationNavigation = true;
+    await page.getByRole("button", { name: "最新内容" }).click();
+    await expect(
+      firstHistoryRow.getByRole("button", {
+        name: /终止节点 Terminal.+状态 历史计划/,
+      }),
+    ).toBeVisible();
+    const remoteHistoryRange = await canvasRoot.evaluate((element) => ({
+      startMs: Number(element.dataset.rangeStartMs),
+      endMs: Number(element.dataset.rangeEndMs),
+    }));
+    expect(Date.parse("2035-08-05T12:00:00.000Z")).toBeGreaterThanOrEqual(
+      remoteHistoryRange.startMs,
+    );
+    expect(Date.parse("2035-08-05T12:00:00.000Z")).toBeLessThan(
+      remoteHistoryRange.endMs,
+    );
+    await page.getByRole("button", { name: "年", exact: true }).click();
+    await expect(canvasRoot).toHaveAttribute("data-zoom", "YEAR");
+    await page.waitForLoadState("networkidle");
+    expect(presentationNavigationActionRequests).toBe(0);
+    expect(page.url()).toBe(urlBeforeHistoryNavigation);
+    observePresentationNavigation = false;
+    await page.getByRole("button", { name: "最早内容" }).click();
+    await expect(firstHistoryHeader).toBeVisible();
+    await expect
+      .poll(async () => {
+        const range = await canvasRoot.evaluate((element) => ({
+          startMs: Number(element.dataset.rangeStartMs),
+          endMs: Number(element.dataset.rangeEndMs),
+        }));
+        const target = Date.parse("2026-10-29T09:30:00.000Z");
+        return range.startMs <= target && target < range.endMs;
+      })
+      .toBe(true);
+
+    await page.getByRole("button", { name: "最新内容" }).click();
+    await expect(
+      firstHistoryRow.getByRole("button", {
+        name: /终止节点 Terminal.+状态 历史计划/,
+      }),
+    ).toBeVisible();
+    const startNodeButton = page
+      .getByTestId("task-plan-node-navigator")
+      .getByRole("button", { name: /^Start，Start，/ });
+    await startNodeButton.click();
+    const currentPlanStartMarker = page.getByTestId(
+      `milestone-marker-plan-start:${fixture.taskId}`,
+    );
+    await expect(startNodeButton).toHaveAttribute("aria-pressed", "true");
+    await expect(currentPlanStartMarker).toBeVisible();
+    await expect(currentPlanStartMarker).toHaveAttribute("aria-pressed", "true");
+    await expect(currentPlanStartMarker).toBeFocused();
+    await expect.poll(async () => {
+      const start = Number(
+        await canvasRoot.getAttribute("data-viewport-start-ms"),
+      );
+      const end = Number(await canvasRoot.getAttribute("data-viewport-end-ms"));
+      const plannedStart = Date.parse("2026-07-31T10:00:00.000Z");
+      return start <= plannedStart && plannedStart < end;
+    }).toBe(true);
+
+    await page.getByRole("button", { name: "最新内容" }).click();
+    await expect(
+      firstHistoryRow.getByRole("button", {
+        name: /终止节点 Terminal.+状态 历史计划/,
+      }),
+    ).toBeVisible();
+    const firstRevisionNodeButton = page
+      .getByTestId("task-plan-node-navigator")
+      .getByRole("button", { name: new RegExp(firstReason) });
+    await firstRevisionNodeButton.click();
+    await expect(
+      firstHistoryRow.getByRole("button", {
+        name: /终止节点 Terminal.+状态 历史计划/,
+      }),
+    ).toHaveCount(0);
+    await expect(firstRevisionNodeButton).toHaveAttribute("aria-pressed", "true");
+
+    await page.getByRole("button", { name: "最新内容" }).click();
+    await expect(
+      firstHistoryRow.getByRole("button", {
+        name: /终止节点 Terminal.+状态 历史计划/,
+      }),
+    ).toBeVisible();
+    await firstRevisionNodeButton.click();
+    await expect(
+      firstHistoryRow.getByRole("button", {
+        name: /终止节点 Terminal.+状态 历史计划/,
+      }),
+    ).toHaveCount(0);
+
+    const urlBeforePopstate = page.url();
+    await page.evaluate(() => {
+      const url = new URL(window.location.href);
+      url.searchParams.set("presentationHistoryProbe", "1");
+      window.history.pushState({}, "", url);
+    });
+    await page.getByRole("button", { name: "最新内容" }).click();
+    await expect(
+      firstHistoryRow.getByRole("button", {
+        name: /终止节点 Terminal.+状态 历史计划/,
+      }),
+    ).toBeVisible();
+    await page.goBack();
+    await expect(page).toHaveURL(urlBeforePopstate);
+    await expect(
+      firstHistoryRow.getByRole("button", {
+        name: /终止节点 Terminal.+状态 历史计划/,
+      }),
+    ).toHaveCount(0);
+
+    await page.getByTestId("time-canvas-scroll").evaluate((element) => {
+      const root = element.closest<HTMLElement>(
+        '[data-testid="time-canvas-root"]',
+      );
+      const rangeStart = Number(root?.dataset.rangeStartMs);
+      const rangeEnd = Number(root?.dataset.rangeEndMs);
+      const target = Date.parse("2026-10-29T09:30:00.000Z");
+      const ratio = (target - rangeStart) / (rangeEnd - rangeStart);
+      element.scrollLeft = Math.max(
+        0,
+        ratio * element.scrollWidth - element.clientWidth / 2,
+      );
+      element.dispatchEvent(new Event("scroll"));
+    });
+    const segmentBlock = page.getByTestId(
+      `segment-block-${fixture.confirmableSegmentId}`,
+    );
+    await expect(segmentBlock).toBeVisible({ timeout: 30_000 });
+    await segmentBlock.focus();
+    await segmentBlock.press("Enter");
+    const detailDialog = page.getByRole("dialog", { name: "投入详情" });
+    const editForm = detailDialog.getByRole("form", {
+      name: "编辑投入详情",
+    });
+    await expect(editForm).toBeVisible();
+    const unsavedContent = `Revision 历史切换未保存内容 ${randomUUID()}`;
+    await editForm.getByLabel("内容").fill(unsavedContent);
+
+    const restoredBrowserCenter = "2026-09-10T09:00:00.000Z";
+    await page.evaluate(
+      ({ restoredCenter, newerCenter }) => {
+        const restoredUrl = new URL(window.location.href);
+        restoredUrl.searchParams.set("center", restoredCenter);
+        restoredUrl.searchParams.set("scale", "week");
+        window.history.pushState({}, "", restoredUrl);
+        window.dispatchEvent(new PopStateEvent("popstate"));
+
+        const newerUrl = new URL(window.location.href);
+        newerUrl.searchParams.set("center", newerCenter);
+        window.history.pushState({}, "", newerUrl);
+        window.dispatchEvent(new PopStateEvent("popstate"));
+      },
+      {
+        restoredCenter: restoredBrowserCenter,
+        newerCenter: "2026-09-20T09:00:00.000Z",
+      },
+    );
+    await expect(canvasRoot).toHaveAttribute("data-zoom", "WEEK");
+    await page
+      .getByTestId("task-plan-node-navigator")
+      .locator("button")
+      .filter({ hasText: firstReason })
+      .evaluate((element) => {
+        if (!(element instanceof HTMLButtonElement)) {
+          throw new Error("Revision 节点控件不是按钮");
+        }
+        element.click();
+      });
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        }),
+    );
+    await page.goBack();
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get("center"))
+      .toBe(restoredBrowserCenter);
+    await expect.poll(async () => {
+      const start = Number(
+        await canvasRoot.getAttribute("data-viewport-start-ms"),
+      );
+      const end = Number(await canvasRoot.getAttribute("data-viewport-end-ms"));
+      return Math.abs((start + end) / 2 - Date.parse(restoredBrowserCenter));
+    }).toBeLessThan(12 * 60 * 60 * 1_000);
+
+    await secondCheckboxHandle.evaluate((element) => {
+      if (!(element instanceof HTMLInputElement)) {
+        throw new Error("Revision 历史控件不是复选框");
+      }
+      element.click();
+    });
+    const secondHistoryHeader = page.getByTestId(
+      `time-canvas-row-header-history-plan:${secondRevision.revisionNodeId}`,
+    );
+    await expect(secondHistoryHeader).toContainText(
+      `Revision「${secondReason}」之前`,
+    );
+    await expect(secondHistoryHeader).toContainText("Plan v2");
+    const historyHeaders = page.locator(
+      '[data-testid^="time-canvas-row-header-history-plan:"]',
+    );
+    await expect(historyHeaders).toHaveCount(2);
+    await expect(historyHeaders.nth(0)).toContainText(secondReason);
+    await expect(historyHeaders.nth(1)).toContainText(firstReason);
+    await expect(detailDialog).toBeVisible();
+    await expect(editForm.getByLabel("内容")).toHaveValue(unsavedContent);
+
+    let discardConfirmed = false;
+    page.once("dialog", async (dialog) => {
+      discardConfirmed = true;
+      await dialog.accept();
+    });
+    await detailDialog.getByRole("button", { name: "Close" }).click();
+    await expect.poll(() => discardConfirmed).toBe(true);
+    await expect(detailDialog).toHaveCount(0);
+    await expect.poll(async () => {
+      const start = Number(
+        await canvasRoot.getAttribute("data-viewport-start-ms"),
+      );
+      const end = Number(await canvasRoot.getAttribute("data-viewport-end-ms"));
+      return Math.abs((start + end) / 2 - Date.parse(restoredBrowserCenter));
+    }).toBeLessThan(12 * 60 * 60 * 1_000);
+
+    await page.getByRole("button", { name: "最新内容" }).click();
+    await expect(
+      firstHistoryRow.getByRole("button", {
+        name: /终止节点 Terminal.+状态 历史计划/,
+      }),
+    ).toBeVisible();
+    await firstCheckbox.uncheck();
+    await expect(firstHistoryHeader).toHaveCount(0);
+    await expect(secondHistoryHeader).toBeVisible();
+    await expect
+      .poll(async () => {
+        const range = await canvasRoot.evaluate((element) => ({
+          startMs: Number(element.dataset.rangeStartMs),
+          endMs: Number(element.dataset.rangeEndMs),
+        }));
+        const target = Date.parse("2026-10-29T09:30:00.000Z");
+        return range.startMs <= target && target < range.endMs;
+      })
+      .toBe(true);
+    await firstCheckbox.check();
+    await expect(firstHistoryHeader).toBeVisible();
+    expect(historyRequestCount).toBe(3);
+    expect(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth <=
+          document.documentElement.clientWidth + 1,
+      ),
+    ).toBe(true);
+    await page.unroute(taskUrl);
+    await expectHealthyPage(page);
+    expect(pageErrors).toEqual([]);
+  });
 
   test("completed Milestone details render empty, link, and unsafe material states", async ({
     context,

@@ -12,6 +12,7 @@ import type {
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
+  assertAuthorized,
   authorize,
   taskReadableWhere,
   type AuthorizationTaskResource,
@@ -229,6 +230,13 @@ export type MilestoneCompletionDetails = {
     note: string;
     externalUrl: string | null;
   }>;
+};
+
+export type RevisionBasePlanDetails = {
+  revisionNodeId: string;
+  revisionReason: string;
+  revisionAt: string;
+  plan: PlanVersionSummary;
 };
 
 export type PlanVersionSummary = {
@@ -614,6 +622,69 @@ export async function getMilestoneCompletionDetails({
           ? evidence.externalUrl
           : null,
     })),
+  };
+}
+
+export async function getRevisionBasePlan({
+  actor,
+  taskId,
+  revisionNodeId,
+}: {
+  actor: ProjectManagementActor;
+  taskId: string;
+  revisionNodeId: string;
+}): Promise<RevisionBasePlanDetails> {
+  const task = await prisma.task.findFirst({
+    where: { AND: [{ id: taskId }, taskReadableWhere(actor)] },
+    select: {
+      id: true,
+      team: true,
+      techGroup: true,
+      status: true,
+      priority: true,
+      createdByAccountId: true,
+      currentPlanVersionId: true,
+      members: {
+        where: { removedAt: null },
+        select: { personId: true, role: true, removedAt: true },
+      },
+    },
+  });
+  if (!task) throw notFoundError();
+  assertAuthorized({
+    actor,
+    action: "plan.view_history",
+    resource: taskResource(task),
+  });
+
+  const revision = await prisma.revisionNode.findFirst({
+    where: {
+      id: revisionNodeId,
+      status: "EFFECTIVE",
+      node: {
+        taskId,
+        deletedAt: null,
+        planVersionEntries: {
+          some: { planVersionId: task.currentPlanVersionId },
+        },
+      },
+    },
+    select: {
+      id: true,
+      reason: true,
+      revisionAt: true,
+      basePlanVersion: { include: planVersionInclude },
+    },
+  });
+  if (!revision || revision.basePlanVersion.taskId !== taskId) {
+    throw notFoundError();
+  }
+
+  return {
+    revisionNodeId: revision.id,
+    revisionReason: revision.reason,
+    revisionAt: revision.revisionAt.toISOString(),
+    plan: serializePlanVersion(revision.basePlanVersion),
   };
 }
 

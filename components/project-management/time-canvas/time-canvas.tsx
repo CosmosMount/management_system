@@ -108,6 +108,7 @@ export function TimeCanvas({
   interaction,
   selection: controlledSelection,
   initialSelection = null,
+  focusRequest = null,
   emptyMessage = "选择人员或 Task 后查看计划",
   onRangeChange,
   navigationRange,
@@ -125,6 +126,7 @@ export function TimeCanvas({
   const [internalSelection, setInternalSelection] =
     useState<TimeCanvasSelection>(initialSelection);
   const appliedInitialSelectionKeyRef = useRef<string | null>(null);
+  const appliedFocusRequestKeyRef = useRef<string | null>(null);
   const selection = controlledSelection === undefined
     ? internalSelection
     : controlledSelection;
@@ -256,6 +258,26 @@ export function TimeCanvas({
       element.scrollLeft = scrollLeftForCenter(scale, target.atMs, scrollState.width);
     }
   }, [focusTargets, initialSelection, rowVirtualizer, scale, scrollState.width]);
+
+  useEffect(() => {
+    if (!focusRequest) return;
+    const key = focusRequest.selection.kind === "SEGMENT"
+      ? segmentFocusKey(focusRequest.selection.id)
+      : anchorFocusKey(focusRequest.selection.id);
+    const requestKey = `${focusRequest.revision}:${key}`;
+    if (appliedFocusRequestKeyRef.current === requestKey) return;
+    const target = focusTargets.find((item) => item.key === key);
+    if (!target) return;
+    appliedFocusRequestKeyRef.current = requestKey;
+    viewportCenterRef.current = target.atMs;
+    setActiveFocusKey(key);
+    setPendingFocusKey(key);
+    rowVirtualizer.scrollToIndex(target.rowIndex, { align: "center" });
+    const element = scrollElementRef.current;
+    if (element) {
+      element.scrollLeft = scrollLeftForCenter(scale, target.atMs, scrollState.width);
+    }
+  }, [focusRequest, focusTargets, rowVirtualizer, scale, scrollState.width]);
 
   useEffect(() => {
     if (

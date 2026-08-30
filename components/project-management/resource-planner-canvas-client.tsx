@@ -34,6 +34,7 @@ import { formatShanghaiDate } from "@/components/project-management/time-canvas/
 import type {
   AdaptiveTimeCanvasBlockQuery,
   TimeCanvasBrushRequest,
+  TimeCanvasFocusRequest,
   TimeCanvasMode,
   TimeCanvasModel,
   TimeCanvasRange,
@@ -91,6 +92,12 @@ type PendingPlannedRange = {
   previousRowPageKey?: string;
 };
 
+export type TimeCanvasPresentationOverlay = {
+  rows: TimeCanvasModel["rows"];
+  anchors: TimeCanvasModel["anchors"];
+  range: TimeCanvasRange;
+};
+
 export function ResourcePlannerCanvasClient({
   initialModel: incomingModel,
   peopleOptions,
@@ -105,9 +112,13 @@ export function ResourcePlannerCanvasClient({
   allowCreate = true,
   readOnly = false,
   initialFocusId = null,
+  initialFocusRevision = 0,
+  initialFocusRequestId = null,
+  initialFocusRequestUrlCenter = null,
   initialCenterMs,
   persistViewportInUrl = false,
   adaptiveBlockQuery,
+  presentationOverlay,
 }: {
   initialModel: TimeCanvasModel;
   peopleOptions: PersonOptionDto[];
@@ -122,9 +133,13 @@ export function ResourcePlannerCanvasClient({
   allowCreate?: boolean;
   readOnly?: boolean;
   initialFocusId?: string | null;
+  initialFocusRevision?: number;
+  initialFocusRequestId?: string | null;
+  initialFocusRequestUrlCenter?: string | null;
   initialCenterMs?: number;
   persistViewportInUrl?: boolean;
   adaptiveBlockQuery?: AdaptiveTimeCanvasBlockQuery;
+  presentationOverlay?: TimeCanvasPresentationOverlay;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -239,6 +254,18 @@ export function ResourcePlannerCanvasClient({
     },
     [adaptiveBlockQuery, cachedBlocks, cachedSegments, createDraft, initialModel, readOnly],
   );
+  const [presentationCenterMs, setPresentationCenterMs] = useState<number | null>(
+    null,
+  );
+  const canvasModel = useMemo(
+    () =>
+      applyPresentationOverlay(
+        model,
+        presentationOverlay,
+        presentationCenterMs ?? undefined,
+      ),
+    [model, presentationCenterMs, presentationOverlay],
+  );
   const initialSelection = useMemo<TimeCanvasSelection>(() => {
     if (!initialFocusId) return null;
     if (initialModel.segments.some((segment) => segment.id === initialFocusId)) {
@@ -253,9 +280,14 @@ export function ResourcePlannerCanvasClient({
   const effectiveInitialSelection = dismissedFocusId === initialFocusId
     ? null
     : initialSelection;
+  const [canvasInitialSelection] = useState<TimeCanvasSelection>(
+    effectiveInitialSelection,
+  );
   const [selection, setSelection] = useState<TimeCanvasSelection>(
     effectiveInitialSelection,
   );
+  const [canvasFocusRequest, setCanvasFocusRequest] =
+    useState<TimeCanvasFocusRequest | null>(null);
   const [openSegmentId, setOpenSegmentId] = useState<string | null>(() =>
     initialFocusId && initialModel.segments.some(
       (segment) => segment.id === initialFocusId && segment.visibility === "FULL",
@@ -306,8 +338,14 @@ export function ResourcePlannerCanvasClient({
   const openSegmentIdRef = useRef(openSegmentId);
   const handledConflictRef = useRef("");
   const capacityViewportSignatureRef = useRef("");
-  const externalFocusRef = useRef(initialFocusId);
-  const blockedExternalFocusRef = useRef<{ focusId: string | null } | null>(null);
+  const externalFocusRef = useRef({
+    focusId: initialFocusId,
+    revision: initialFocusRevision,
+  });
+  const blockedExternalFocusRef = useRef<{
+    focusId: string | null;
+    revision: number;
+  } | null>(null);
   const activeModelRef = useRef(initialModel);
   const incomingModelRef = useRef(incomingModel);
   const dialogDirtyRef = useRef(dialogDirty);
@@ -316,7 +354,10 @@ export function ResourcePlannerCanvasClient({
     setDialogDirty(dirty);
   }, []);
   const adaptiveRefreshStateRef = useRef<"IDLE" | "DEFERRED" | "REFRESHING">("IDLE");
-  const previousInitialFocusRef = useRef(initialFocusId);
+  const previousInitialFocusRef = useRef({
+    focusId: initialFocusId,
+    revision: initialFocusRevision,
+  });
   const centerNavigationTargetRef = useRef<number | null>(null);
   const draftViewportCenterRef = useRef<number | null>(null);
   const plannedMutationViewportCenterRef = useRef<number | null>(null);
@@ -326,6 +367,41 @@ export function ResourcePlannerCanvasClient({
     setCurrentCenterMs(centerMs);
     setCurrentCenterRevision((current) => current + 1);
   }, []);
+  const exitPresentationNavigation = useCallback(() => {
+    centerNavigationTargetRef.current = null;
+    setPresentationCenterMs(null);
+  }, []);
+  useEffect(() => {
+    if (presentationCenterMs === null) return;
+    const authoritativeRange = initialModel.fullRange ?? initialModel.range;
+    const presentationRange = canvasModel.fullRange ?? canvasModel.range;
+    if (
+      centerFallsWithinRange(presentationCenterMs, presentationRange) &&
+      !centerFallsWithinRange(presentationCenterMs, authoritativeRange)
+    ) {
+      return;
+    }
+    const persistedCenter = persistedViewportRef.current.centerMs;
+    const fallbackCenter = centerFallsWithinRange(
+      persistedCenter,
+      authoritativeRange,
+    )
+      ? persistedCenter
+      : authoritativeRange.startMs +
+        (authoritativeRange.endMs - authoritativeRange.startMs) / 2;
+    const timer = window.setTimeout(() => {
+      setPresentationCenterMs(null);
+      applyViewportCenter(fallbackCenter);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [
+    applyViewportCenter,
+    canvasModel.fullRange,
+    canvasModel.range,
+    initialModel.fullRange,
+    initialModel.range,
+    presentationCenterMs,
+  ]);
   const writeViewportUrl = useCallback(({
     centerMs,
     zoom,
@@ -349,7 +425,7 @@ export function ResourcePlannerCanvasClient({
     ) {
       centerNavigationTargetRef.current = null;
     }
-    if (source === "USER") {
+    if (source === "USER" && presentationCenterMs === null) {
       const nextCenter = (nextViewport.startMs + nextViewport.endMs) / 2;
       if (draftViewportCenterRef.current !== null) {
         draftViewportCenterRef.current = nextCenter;
@@ -363,7 +439,7 @@ export function ResourcePlannerCanvasClient({
       initialViewportUrlCenterRef.current = undefined;
     }
     setViewportRange(nextViewport);
-  }, [persistViewportInUrl]);
+  }, [persistViewportInUrl, presentationCenterMs]);
   const selectedCanvasSegment = useMemo(
     () =>
       openSegmentId
@@ -412,6 +488,7 @@ export function ResourcePlannerCanvasClient({
     if (!persistViewportInUrl) return;
     const syncZoomFromUrl = () => {
       const zoom = viewportZoomFromCurrentUrl() ?? "WEEK";
+      setPresentationCenterMs(null);
       persistedViewportRef.current.zoom = zoom;
       setCurrentZoom(zoom);
     };
@@ -422,7 +499,7 @@ export function ResourcePlannerCanvasClient({
       }
       const zoom = viewportZoomFromCurrentUrl() ?? "WEEK";
       const centerMs = viewportCenterFromCurrentUrl();
-      centerNavigationTargetRef.current = null;
+      exitPresentationNavigation();
       persistedViewportRef.current = { centerMs, zoom };
       initialViewportUrlCenterRef.current = centerMs;
       setCurrentZoom(zoom);
@@ -440,7 +517,7 @@ export function ResourcePlannerCanvasClient({
         syncZoomFromUrl,
       );
     };
-  }, [applyViewportCenter, persistViewportInUrl]);
+  }, [applyViewportCenter, exitPresentationNavigation, persistViewportInUrl]);
   useEffect(() => {
     if (Object.is(externalInitialCenterRef.current, initialCenterMs)) return;
     externalInitialCenterRef.current = initialCenterMs;
@@ -450,6 +527,7 @@ export function ResourcePlannerCanvasClient({
       persistedViewportRef.current.centerMs = initialCenterMs;
       initialViewportUrlCenterRef.current = initialCenterMs;
       const timer = window.setTimeout(() => {
+        exitPresentationNavigation();
         applyViewportCenter(initialCenterMs);
       }, 0);
       return () => window.clearTimeout(timer);
@@ -460,7 +538,15 @@ export function ResourcePlannerCanvasClient({
     )
       ? urlCenter
       : initialCenterMs;
-  }, [applyViewportCenter, incomingModel, initialCenterMs, persistViewportInUrl]);
+    const timer = window.setTimeout(exitPresentationNavigation, 0);
+    return () => window.clearTimeout(timer);
+  }, [
+    applyViewportCenter,
+    exitPresentationNavigation,
+    incomingModel,
+    initialCenterMs,
+    persistViewportInUrl,
+  ]);
   useEffect(() => {
     if (!createDraft) return;
     const handleEscape = (event: globalThis.KeyboardEvent) => {
@@ -495,10 +581,18 @@ export function ResourcePlannerCanvasClient({
     return () => document.removeEventListener("keydown", handleEscape);
   }, [createDraft, createDraftDirty, isPending, openSegmentId]);
   useEffect(() => {
-    if (previousInitialFocusRef.current === initialFocusId) return;
-    previousInitialFocusRef.current = initialFocusId;
+    if (
+      previousInitialFocusRef.current.focusId === initialFocusId &&
+      previousInitialFocusRef.current.revision === initialFocusRevision
+    ) {
+      return;
+    }
+    previousInitialFocusRef.current = {
+      focusId: initialFocusId,
+      revision: initialFocusRevision,
+    };
     setDismissedFocusId(null);
-  }, [initialFocusId]);
+  }, [initialFocusId, initialFocusRevision]);
   useEffect(() => {
     incomingModelRef.current = incomingModel;
     dialogDirtyRef.current = dialogDirty;
@@ -593,11 +687,24 @@ export function ResourcePlannerCanvasClient({
     return () => window.clearTimeout(timer);
   }, [dialogDirty, incomingModel, initialModel, router]);
   useEffect(() => {
-    if (externalFocusRef.current === initialFocusId) return;
+    if (
+      externalFocusRef.current.focusId === initialFocusId &&
+      externalFocusRef.current.revision === initialFocusRevision
+    ) {
+      return;
+    }
     if (incomingModel !== initialModel) return;
     if (dialogDirty) {
-      if (blockedExternalFocusRef.current?.focusId === initialFocusId) return;
-      blockedExternalFocusRef.current = { focusId: initialFocusId };
+      if (
+        blockedExternalFocusRef.current?.focusId === initialFocusId &&
+        blockedExternalFocusRef.current.revision === initialFocusRevision
+      ) {
+        return;
+      }
+      blockedExternalFocusRef.current = {
+        focusId: initialFocusId,
+        revision: initialFocusRevision,
+      };
       const timer = window.setTimeout(() => {
         setNotice({
           kind: "error",
@@ -607,16 +714,46 @@ export function ResourcePlannerCanvasClient({
       return () => window.clearTimeout(timer);
     }
     blockedExternalFocusRef.current = null;
+    const shouldApplyFocusCenter =
+      externalFocusRef.current.revision !== initialFocusRevision &&
+      initialFocusRequestId === initialFocusId;
     const timer = window.setTimeout(() => {
-      externalFocusRef.current = initialFocusId;
-      setSelection(effectiveInitialSelection);
-      const focusedSegment = effectiveInitialSelection?.kind === "SEGMENT"
+      exitPresentationNavigation();
+      externalFocusRef.current = {
+        focusId: initialFocusId,
+        revision: initialFocusRevision,
+      };
+      setDismissedFocusId(null);
+      setSelection(initialSelection);
+      const focusedSegment = initialSelection?.kind === "SEGMENT"
         ? initialModel.segments.find(
             (segment) =>
-              segment.id === effectiveInitialSelection.id &&
+              segment.id === initialSelection.id &&
               segment.visibility === "FULL",
           ) ?? null
         : null;
+      const focusCenterMs = initialSelection?.kind === "ANCHOR"
+        ? initialModel.anchors.find((anchor) => anchor.id === initialSelection.id)?.atMs
+        : focusedSegment?.startMs;
+      const currentUrlCenter = new URL(window.location.href).searchParams.get(
+        "center",
+      );
+      const localFocusRequestIsCurrent =
+        !shouldApplyFocusCenter ||
+        initialFocusRequestUrlCenter === currentUrlCenter;
+      if (localFocusRequestIsCurrent && initialSelection) {
+        setCanvasFocusRequest({
+          selection: initialSelection,
+          revision: initialFocusRevision,
+        });
+      }
+      if (
+        shouldApplyFocusCenter &&
+        localFocusRequestIsCurrent &&
+        Number.isFinite(focusCenterMs)
+      ) {
+        applyViewportCenter(focusCenterMs);
+      }
       setOpenSegmentId(focusedSegment?.id ?? null);
       updateDialogDirty(false);
       setDetail(null);
@@ -630,7 +767,19 @@ export function ResourcePlannerCanvasClient({
       setDetailState(focusedSegment ? "LOADING" : "IDLE");
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [dialogDirty, effectiveInitialSelection, incomingModel, initialFocusId, initialModel, updateDialogDirty]);
+  }, [
+    applyViewportCenter,
+    dialogDirty,
+    exitPresentationNavigation,
+    incomingModel,
+    initialFocusId,
+    initialFocusRequestId,
+    initialFocusRequestUrlCenter,
+    initialFocusRevision,
+    initialModel,
+    initialSelection,
+    updateDialogDirty,
+  ]);
   useEffect(() => {
     const signature = cachedMerge.conflictBlockKeys.join("|");
     if (!signature) {
@@ -675,7 +824,13 @@ export function ResourcePlannerCanvasClient({
     router.refresh();
   }, [cachedMerge.conflictBlockKeys, dialogDirty, incomingModel, initialModel, router]);
   useEffect(() => {
-    if (!persistViewportInUrl || centerNavigationTargetRef.current !== null) return;
+    if (
+      !persistViewportInUrl ||
+      centerNavigationTargetRef.current !== null ||
+      presentationCenterMs !== null
+    ) {
+      return;
+    }
     const activePendingPlannedRange = pendingPlannedRangeRef.current ??
       pendingPlannedRange;
     const preservedCenter = createDraft
@@ -705,6 +860,7 @@ export function ResourcePlannerCanvasClient({
     currentZoom,
     pendingPlannedRange,
     persistViewportInUrl,
+    presentationCenterMs,
     viewportRange,
     writeViewportUrl,
   ]);
@@ -712,6 +868,7 @@ export function ResourcePlannerCanvasClient({
     if (
       !adaptiveBlockQuery ||
       !initialModel.rowPageKey ||
+      presentationCenterMs !== null ||
       dialogDirty ||
       incomingModel !== initialModel ||
       adaptiveRefreshStateRef.current !== "IDLE"
@@ -921,6 +1078,7 @@ export function ResourcePlannerCanvasClient({
     initialModel.rows,
     openSegmentId,
     pendingPlannedRange,
+    presentationCenterMs,
     router,
     selection,
     viewportRange,
@@ -1242,12 +1400,27 @@ export function ResourcePlannerCanvasClient({
       });
       return;
     }
-    const fullRange = initialModel.fullRange;
-    if (!adaptiveBlockQuery || !fullRange || fullRange.endMs <= fullRange.startMs) return;
+    const fullRange = canvasModel.fullRange ?? canvasModel.range;
+    if (fullRange.endMs <= fullRange.startMs) return;
     const centerMs = Math.max(
       fullRange.startMs,
       Math.min(candidateMs, fullRange.endMs - 1),
     );
+    const authoritativeRange = initialModel.fullRange ?? initialModel.range;
+    if (!centerFallsWithinRange(centerMs, authoritativeRange)) {
+      if (!presentationOverlay) return;
+      centerNavigationTargetRef.current = centerMs;
+      if (viewportUrlTimerRef.current !== null) {
+        window.clearTimeout(viewportUrlTimerRef.current);
+        viewportUrlTimerRef.current = null;
+      }
+      setPresentationCenterMs(centerMs);
+      applyViewportCenter(centerMs);
+      setNotice({ kind: "info", message: "已定位到历史计划时间窗口。" });
+      return;
+    }
+    if (!adaptiveBlockQuery) return;
+    setPresentationCenterMs(null);
     const url = new URL(window.location.href);
     url.searchParams.set("center", new Date(centerMs).toISOString());
     if (currentZoom) url.searchParams.set("scale", currentZoom.toLowerCase());
@@ -1323,7 +1496,7 @@ export function ResourcePlannerCanvasClient({
         </span>
       </div>
 
-      {initialModel.rangeClipped && initialModel.fullRange && (
+      {canvasModel.rangeClipped && canvasModel.fullRange && (
         <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">
           <span className="min-w-0 flex-1">
             可导航时间范围超过三个上海日历年，当前显示一个三年窗口。
@@ -1334,7 +1507,7 @@ export function ResourcePlannerCanvasClient({
             variant="outline"
             disabled={isPending}
             onClick={() => requestContentCenter(
-              initialModel.contentRange?.startMs ?? initialModel.fullRange!.startMs,
+              canvasModel.contentRange?.startMs ?? canvasModel.fullRange!.startMs,
             )}
           >
             最早内容
@@ -1345,7 +1518,7 @@ export function ResourcePlannerCanvasClient({
             variant="outline"
             disabled={isPending}
             onClick={() => requestContentCenter(
-              (initialModel.contentRange?.endMs ?? initialModel.fullRange!.endMs) - 1,
+              (canvasModel.contentRange?.endMs ?? canvasModel.fullRange!.endMs) - 1,
             )}
           >
             最新内容
@@ -1403,11 +1576,12 @@ export function ResourcePlannerCanvasClient({
         <div className="min-w-0 overflow-hidden rounded-xl border border-border bg-background">
           <TimeCanvas
             mode={mode}
-            model={model}
+            model={canvasModel}
             initialZoom={currentZoom}
             initialCenterMs={persistViewportInUrl ? currentCenterMs : initialCenterMs}
             initialCenterRevision={currentCenterRevision}
-            initialSelection={effectiveInitialSelection}
+            initialSelection={canvasInitialSelection}
+            focusRequest={canvasFocusRequest}
             display={{ showActual: true, showBusy: true, showInspector: false }}
             interaction={{
               enableBrushCreate: !isPending && !createDraft && canCreateSegment,
@@ -1474,7 +1648,7 @@ export function ResourcePlannerCanvasClient({
                 viewportUrlTimerRef.current = null;
               }
               setCurrentZoom(nextZoom);
-              if (!persistViewportInUrl) return;
+              if (!persistViewportInUrl || presentationCenterMs !== null) return;
               const pendingCenter = centerNavigationTargetRef.current;
               writeViewportUrl({
                 centerMs: pendingCenter ??
@@ -1490,8 +1664,12 @@ export function ResourcePlannerCanvasClient({
                 });
               }
             }}
-            navigationRange={model.fullRange}
-            onRequestCenter={adaptiveBlockQuery ? requestContentCenter : undefined}
+            navigationRange={canvasModel.fullRange}
+            onRequestCenter={
+              adaptiveBlockQuery || presentationOverlay
+                ? requestContentCenter
+                : undefined
+            }
             emptyMessage="当前筛选和时间范围内没有可见安排。"
           />
         </div>
@@ -1603,4 +1781,50 @@ export function ResourcePlannerCanvasClient({
       )}
     </div>
   );
+}
+
+function applyPresentationOverlay(
+  model: TimeCanvasModel,
+  overlay: TimeCanvasPresentationOverlay | undefined,
+  preferredCenterMs?: number,
+): TimeCanvasModel {
+  if (!overlay || overlay.rows.length === 0) return model;
+
+  const fullRange = includeRange(model.fullRange ?? model.range, overlay.range);
+  const contentRange = model.contentRange
+    ? includeRange(model.contentRange, overlay.range)
+    : overlay.range;
+  const desiredRange = includeRange(model.range, overlay.range);
+  const logicalRange = clampLogicalRangeToThreeYears(
+    desiredRange,
+    preferredCenterMs ??
+      model.range.startMs + (model.range.endMs - model.range.startMs) / 2,
+  );
+  const firstNonPlanRow = model.rows.findIndex((row) => row.kind !== "PLAN");
+  const insertAt = firstNonPlanRow < 0 ? model.rows.length : firstNonPlanRow;
+
+  return {
+    ...model,
+    range: logicalRange.range,
+    fullRange,
+    contentRange,
+    rangeClipped: model.rangeClipped || logicalRange.clipped,
+    rows: [
+      ...model.rows.slice(0, insertAt),
+      ...overlay.rows,
+      ...model.rows.slice(insertAt),
+    ],
+    anchors: [...model.anchors, ...overlay.anchors],
+  };
+}
+
+function includeRange(
+  range: TimeCanvasRange,
+  included: TimeCanvasRange,
+): TimeCanvasRange {
+  const startMs = Math.min(range.startMs, included.startMs);
+  const endMs = Math.max(range.endMs, included.endMs);
+  return startMs === range.startMs && endMs === range.endMs
+    ? range
+    : { startMs, endMs };
 }

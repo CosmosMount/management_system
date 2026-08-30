@@ -516,7 +516,7 @@ pm2 start npm --name procurement-cron -- run cron
 
 ## 项目管理重构状态
 
-旧 Project/Stage 工作流已清理；当前重新提供轻量 Project 文件夹和立项流程，不恢复 Stage、周报或旧审批角色。`/progress/projects` 提供默认“只看我参与 + 进行中”的列表、创建、详情、编辑、审批、驳回重提、结束和软删除。Project 与 Task 详情采用三层结构：第一层为概览，第二层为与概览左右对齐的完整时间线，第三层在桌面端按“风险与评论 / 主体详情 / 近期动态”三栏展示；低于 `xl` 时按“主体详情 → 风险与评论 → 近期动态”单列排列。Project 主体详情包含 Task 列表和风险录入，Task 主体详情包含待处理 Revision、选中节点详情和风险录入；Task 的审批门禁及全局操作反馈仍位于概览与时间线之间。右栏继续把 `DomainAuditEvent` 格式化为可筛选的中文近期动态。Project 风险明确分为自身风险和当前所属 Task 风险；Project 评论不混入 Task 评论。立项申请与完整审计历史继续持久化，但不再作为详情卡片展示。一个 Task 最多属于一个 ACTIVE Project；Task 加入时会把有效 Task 成员补为 Project Participant，但 Project 身份不授予 Task 权限。
+旧 Project/Stage 工作流已清理；当前重新提供轻量 Project 文件夹和立项流程，不恢复 Stage、周报或旧审批角色。`/progress/projects` 提供默认“只看我参与 + 进行中”的列表、创建、详情、编辑、审批、驳回重提、结束和软删除。Project 与 Task 详情采用三层结构：第一层为概览，第二层为与概览左右对齐的完整时间线，第三层在桌面端按“风险与评论 / 主体详情 / 近期动态”三栏展示；低于 `xl` 时按“主体详情 → 风险与评论 → 近期动态”单列排列。Project 主体详情包含 Task 列表和风险录入，Task 主体详情包含待处理 Revision、选中节点详情和风险录入；Task 的审批门禁及全局操作反馈仍位于概览与时间线之间。Task 节点导航中的每条已生效 Revision 可独立勾选“显示修订前计划”，按需在 Current Plan 与人员投入之间加入对应基础 Plan 的只读历史行；可同时比较多条，取消勾选只隐藏该行。历史内容跨越三年展示上限时，可用“最早内容 / 最新内容”在本地切换历史展示窗口，不会为历史端点请求人员投入。右栏继续把 `DomainAuditEvent` 格式化为可筛选的中文近期动态。Project 风险明确分为自身风险和当前所属 Task 风险；Project 评论不混入 Task 评论。立项申请与完整审计历史继续持久化，但不再作为详情卡片展示。一个 Task 最多属于一个 ACTIVE Project；Task 加入时会把有效 Task 成员补为 Project Participant，但 Project 身份不授予 Task 权限。
 
 风险只绑定一个 Project 或 Task，同一对象允许多条未解决风险。只有 ACTIVE 对象可提出风险，成员或全局管理员可以解决 ACTIVE/终态对象的遗留风险；所有已登录用户都可在未删除对象发表评论，只有两类全局管理员可以软删除评论。风险提出/解决和评论发布会原子写入审计、站内通知及非 mandatory 的项目管理 outbox，评论删除只写审计。风险、评论和动态均使用每页 20 条的稳定服务端分页；详情页每 5 秒检查轻量审计版本 token，页面隐藏时暂停。
 

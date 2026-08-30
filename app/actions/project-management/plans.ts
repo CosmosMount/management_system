@@ -9,11 +9,13 @@ import {
   comparePlanVersions as comparePlanVersionsQuery,
   getMilestoneCompletionDetails as getMilestoneCompletionDetailsQuery,
   getPlanVersion as getPlanVersionQuery,
+  getRevisionBasePlan as getRevisionBasePlanQuery,
   getTaskWorkspace as getTaskWorkspaceQuery,
   listTaskPlanVersions as listTaskPlanVersionsQuery,
   type PlanVersionDiff,
   type PlanVersionSummary,
   type MilestoneCompletionDetails,
+  type RevisionBasePlanDetails,
   type TaskWorkspace,
 } from "@/lib/project-management/queries/task-queries";
 import {
@@ -24,6 +26,7 @@ import {
   comparePlanVersionsInputSchema,
   milestoneCompletionQueryInputSchema,
   planVersionQueryInputSchema,
+  revisionBasePlanQueryInputSchema,
   taskLifecycleViewsInputSchema,
   taskWorkspaceQueryInputSchema,
 } from "@/lib/project-management/validations/lifecycle";
@@ -40,6 +43,22 @@ export async function getMilestoneCompletionDetails(
       const actor = await getCurrentProjectManagementActor();
       log.setActorAccountId(actor.accountId);
       return getMilestoneCompletionDetailsQuery({ actor, ...parsed });
+    },
+  });
+}
+
+export async function getRevisionBasePlan(
+  input: unknown,
+): Promise<ProjectManagementActionResult<RevisionBasePlanDetails>> {
+  return runProjectManagementAction({
+    event: "pm.revision.base_plan.view",
+    action: "getRevisionBasePlan",
+    callback: async (log) => {
+      const parsed = revisionBasePlanQueryInputSchema.parse(input);
+      log.setTaskId(parsed.taskId);
+      const actor = await getCurrentProjectManagementActor();
+      log.setActorAccountId(actor.accountId);
+      return getRevisionBasePlanQuery({ actor, ...parsed });
     },
   });
 }

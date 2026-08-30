@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   activateTask,
@@ -25,14 +25,20 @@ import {
   requireTerminationRevision,
   submitTerminationForReview,
 } from "@/app/actions/project-management/terminations";
-import { getMilestoneCompletionDetails } from "@/app/actions/project-management/plans";
+import {
+  getMilestoneCompletionDetails,
+  getRevisionBasePlan,
+} from "@/app/actions/project-management/plans";
 import {
   TaskPlanNodeNavigator,
   type TaskPlanNavigatorNode,
 } from "@/components/project-management/task-plan-node-navigator";
 import { TaskMemberRolePicker } from "@/components/project-management/task-member-role-picker";
 import { TaskSelect } from "@/components/project-management/task-picker";
-import { ResourcePlannerCanvasClient } from "@/components/project-management/resource-planner-canvas-client";
+import {
+  ResourcePlannerCanvasClient,
+  type TimeCanvasPresentationOverlay,
+} from "@/components/project-management/resource-planner-canvas-client";
 import type { TimeCanvasModel } from "@/components/project-management/time-canvas/types";
 
 const TASK_DETAIL_START_ID = "task-detail-start";
@@ -66,6 +72,7 @@ import {
 import type { TaskLifecycleViews } from "@/lib/project-management/queries/task-lifecycle-queries";
 import type {
   MilestoneCompletionDetails,
+  RevisionBasePlanDetails,
   TaskWorkspace,
 } from "@/lib/project-management/queries/task-queries";
 import type {
@@ -170,6 +177,11 @@ export function TaskWorkbench({
     ? requestedInitialFocusId
     : defaultNodeId;
   const [requestedNodeId, setRequestedNodeId] = useState(initialNodeId);
+  const [requestedNodeFocus, setRequestedNodeFocus] = useState<{
+    nodeId: string | null;
+    revision: number;
+    urlCenter: string | null;
+  }>({ nodeId: null, revision: 0, urlCenter: null });
   const externalTimelineFocusRef = useRef(requestedInitialFocusId);
   useEffect(() => {
     if (externalTimelineFocusRef.current === requestedInitialFocusId) return;
@@ -242,6 +254,11 @@ export function TaskWorkbench({
   const selectTerminal = () => {
     if (!termination) return;
     setRequestedNodeId(termination.nodeId);
+    setRequestedNodeFocus((current) => ({
+      nodeId: termination.nodeId,
+      revision: current.revision + 1,
+      urlCenter: new URL(window.location.href).searchParams.get("center"),
+    }));
     window.setTimeout(
       () => document.getElementById("task-selected-node-detail")?.scrollIntoView({ behavior: "smooth", block: "start" }),
       0,
@@ -444,6 +461,7 @@ export function TaskWorkbench({
       )}
 
       <TaskDetailTimeline
+        key={currentWorkspace.task.id}
         workspace={currentWorkspace}
         nodes={navigatorNodes}
         selectedId={selectedNodeId}
@@ -458,11 +476,17 @@ export function TaskWorkbench({
             return;
           }
           setRequestedNodeId(nodeId);
+          setRequestedNodeFocus((current) => ({
+            nodeId,
+            revision: current.revision + 1,
+            urlCenter: new URL(window.location.href).searchParams.get("center"),
+          }));
         }}
         model={timeCanvasModel}
         people={people}
         taskOptions={taskOptions}
         timelineWindow={timelineWindow}
+        focusRequest={requestedNodeFocus}
       />
 
       <div
@@ -1611,6 +1635,7 @@ function TaskDetailTimeline({
   people,
   taskOptions,
   timelineWindow,
+  focusRequest,
 }: {
   workspace: TaskWorkspace;
   nodes: TaskPlanNavigatorNode[];
@@ -1624,7 +1649,156 @@ function TaskDetailTimeline({
     centerMs?: number;
     scale?: "WEEK" | "MONTH" | "QUARTER" | "YEAR";
   };
+  focusRequest: {
+    nodeId: string | null;
+    revision: number;
+    urlCenter: string | null;
+  };
 }) {
+  const [visibleRevisionTaskNodeIds, setVisibleRevisionTaskNodeIds] = useState<
+    string[]
+  >([]);
+  const [historyPlansByTaskNode, setHistoryPlansByTaskNode] = useState<
+    Record<string, RevisionBasePlanDetails>
+  >({});
+  const [historyLoadStates, setHistoryLoadStates] = useState<
+    Record<
+      string,
+      { status: "loading" } | { status: "error"; message: string }
+    >
+  >({});
+  const revisionNodes = workspace.permissions.canViewHistory
+    ? workspace.currentPlan.nodes.filter(
+        (node) => node.revision?.status === "EFFECTIVE",
+      )
+    : [];
+  const revisionByTaskNodeId = new Map(
+    revisionNodes.flatMap((node) =>
+      node.revision ? [[node.nodeId, node.revision] as const] : [],
+    ),
+  );
+
+  const loadHistoryPlan = (revisionTaskNodeId: string) => {
+    const revision = revisionByTaskNodeId.get(revisionTaskNodeId);
+    if (!revision) return;
+    setHistoryLoadStates((current) => ({
+      ...current,
+      [revisionTaskNodeId]: { status: "loading" },
+    }));
+    void getRevisionBasePlan({
+      taskId: workspace.task.id,
+      revisionNodeId: revision.id,
+    }).then(
+      (result) => {
+        if (!result.ok) {
+          setHistoryLoadStates((current) => ({
+            ...current,
+            [revisionTaskNodeId]: {
+              status: "error",
+              message: result.error.message,
+            },
+          }));
+          return;
+        }
+        if (
+          result.data.revisionNodeId !== revision.id ||
+          result.data.plan.taskId !== workspace.task.id
+        ) {
+          setHistoryLoadStates((current) => ({
+            ...current,
+            [revisionTaskNodeId]: {
+              status: "error",
+              message: "修订前计划与当前 Task 不匹配，请刷新后重试。",
+            },
+          }));
+          return;
+        }
+        setHistoryPlansByTaskNode((current) => ({
+          ...current,
+          [revisionTaskNodeId]: result.data,
+        }));
+        setHistoryLoadStates((current) => {
+          const next = { ...current };
+          delete next[revisionTaskNodeId];
+          return next;
+        });
+      },
+      () => {
+        setHistoryLoadStates((current) => ({
+          ...current,
+          [revisionTaskNodeId]: {
+            status: "error",
+            message: "网络或服务暂时不可用，请重试。",
+          },
+        }));
+      },
+    );
+  };
+
+  const setHistoryVisible = (revisionTaskNodeId: string, checked: boolean) => {
+    if (!revisionByTaskNodeId.has(revisionTaskNodeId)) return;
+    setVisibleRevisionTaskNodeIds((current) =>
+      checked
+        ? current.includes(revisionTaskNodeId)
+          ? current
+          : [...current, revisionTaskNodeId]
+        : current.filter((id) => id !== revisionTaskNodeId),
+    );
+    if (
+      checked &&
+      !historyPlansByTaskNode[revisionTaskNodeId] &&
+      historyLoadStates[revisionTaskNodeId]?.status !== "loading"
+    ) {
+      loadHistoryPlan(revisionTaskNodeId);
+    }
+  };
+
+  const visibleHistoryPlans = useMemo(
+    () =>
+      visibleRevisionTaskNodeIds
+        .flatMap((revisionTaskNodeId) => {
+          const history = historyPlansByTaskNode[revisionTaskNodeId];
+          return history ? [history] : [];
+        })
+        .sort(
+          (left, right) =>
+            Date.parse(right.revisionAt) - Date.parse(left.revisionAt) ||
+            left.revisionNodeId.localeCompare(right.revisionNodeId),
+        ),
+    [historyPlansByTaskNode, visibleRevisionTaskNodeIds],
+  );
+  const historyOverlay = useMemo(
+    () => buildRevisionHistoryTimeCanvasOverlay(visibleHistoryPlans),
+    [visibleHistoryPlans],
+  );
+  const revisionHistoryControls = {
+    byNodeId: Object.fromEntries(
+      revisionNodes.map((node) => {
+        const checked = visibleRevisionTaskNodeIds.includes(node.nodeId);
+        const loadState = historyLoadStates[node.nodeId];
+        return [
+          node.nodeId,
+          {
+            checked,
+            loading: checked && loadState?.status === "loading",
+            ...(checked && loadState?.status === "error"
+              ? { error: loadState.message }
+              : {}),
+          },
+        ];
+      }),
+    ),
+    onCheckedChange: setHistoryVisible,
+    onRetry: (revisionTaskNodeId: string) => {
+      setVisibleRevisionTaskNodeIds((current) =>
+        current.includes(revisionTaskNodeId)
+          ? current
+          : [...current, revisionTaskNodeId],
+      );
+      loadHistoryPlan(revisionTaskNodeId);
+    },
+  };
+
   return (
     <section
       className="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5"
@@ -1639,6 +1813,7 @@ function TaskDetailTimeline({
       <div className="mt-4 min-w-0">
         <ResourcePlannerCanvasClient
           initialModel={model}
+          presentationOverlay={historyOverlay}
           peopleOptions={people}
           peopleScope={{ purpose: "TASK_SEGMENT_CREATE", taskId: workspace.task.id }}
           taskOptions={taskOptions}
@@ -1660,6 +1835,13 @@ function TaskDetailTimeline({
               ? `plan-start:${workspace.task.id}`
               : selectedId
           }
+          initialFocusRevision={focusRequest.revision}
+          initialFocusRequestId={
+            focusRequest.nodeId === TASK_DETAIL_START_ID
+              ? `plan-start:${workspace.task.id}`
+              : focusRequest.nodeId
+          }
+          initialFocusRequestUrlCenter={focusRequest.urlCenter}
         />
       </div>
       <div className="mt-4">
@@ -1668,10 +1850,106 @@ function TaskDetailTimeline({
           selectedId={selectedId}
           onSelect={onSelect}
           label="Task 时间线"
+          revisionHistory={revisionHistoryControls}
         />
       </div>
     </section>
   );
+}
+
+function buildRevisionHistoryTimeCanvasOverlay(
+  histories: RevisionBasePlanDetails[],
+): TimeCanvasPresentationOverlay | undefined {
+  if (histories.length === 0) return undefined;
+
+  const historyRows: TimeCanvasModel["rows"] = histories.map((history) => ({
+    id: `history-plan:${history.revisionNodeId}`,
+    sourceId: history.revisionNodeId,
+    kind: "PLAN",
+    label: `Revision「${history.revisionReason}」之前`,
+    sublabel: `Plan v${history.plan.versionNo} · 历史计划（只读）`,
+    editable: false,
+    height: 112,
+    capacity: null,
+  }));
+  const historyAnchors: TimeCanvasModel["anchors"] = histories.flatMap(
+    (history) => {
+      const rowId = `history-plan:${history.revisionNodeId}`;
+      const versionToken =
+        history.plan.snapshotHash || history.plan.updatedAt;
+      const startAtMs = Date.parse(
+        history.plan.plannedStartAt ?? history.plan.createdAt,
+      );
+      const anchors: TimeCanvasModel["anchors"] = Number.isFinite(startAtMs)
+        ? [
+            {
+              id: `history:${history.revisionNodeId}:start`,
+              rowId,
+              taskId: history.plan.taskId,
+              kind: "PLAN_START",
+              status: "历史计划",
+              label: "Start",
+              atMs: startAtMs,
+              sequence: -1,
+              editable: false,
+              versionToken,
+              tone: "SLATE",
+            },
+          ]
+        : [];
+      for (const node of history.plan.nodes) {
+        const plannedAt =
+          node.milestone?.expectedCompletedAt ??
+          node.revision?.revisionAt ??
+          node.termination?.plannedAt;
+        if (!plannedAt) continue;
+        const atMs = Date.parse(plannedAt);
+        if (!Number.isFinite(atMs)) continue;
+        anchors.push({
+          id: `history:${history.revisionNodeId}:${node.nodeId}`,
+          rowId,
+          taskId: history.plan.taskId,
+          kind: node.type,
+          status: "历史计划",
+          label:
+            node.milestone?.goal ??
+            node.revision?.reason ??
+            node.termination?.name ??
+            "未命名节点",
+          atMs,
+          sequence: node.sequence,
+          editable: false,
+          versionToken,
+          tone: "SLATE",
+        });
+      }
+      return anchors;
+    },
+  );
+  const historyTimes = historyAnchors.map((anchor) => anchor.atMs);
+  const historyRange = rangeForTimes(historyTimes);
+  if (!historyRange) return undefined;
+
+  return {
+    rows: historyRows,
+    anchors: historyAnchors,
+    range: historyRange,
+  };
+}
+
+function rangeForTimes(
+  times: number[],
+): { startMs: number; endMs: number } | null {
+  let startMs = Number.POSITIVE_INFINITY;
+  let endMs = Number.NEGATIVE_INFINITY;
+  for (const time of times) {
+    if (!Number.isFinite(time)) continue;
+    startMs = Math.min(startMs, time);
+    endMs = Math.max(endMs, time + 1);
+  }
+  return Number.isFinite(startMs) && Number.isFinite(endMs)
+    ? { startMs, endMs }
+    : null;
 }
 
 function currentNodeLabel(workspace: TaskWorkspace) {

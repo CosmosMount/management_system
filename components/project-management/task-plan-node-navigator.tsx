@@ -15,16 +15,31 @@ export type TaskPlanNavigatorNode = {
   invalid?: boolean;
 };
 
+export type TaskPlanRevisionHistoryControls = {
+  byNodeId: Record<
+    string,
+    {
+      checked: boolean;
+      loading: boolean;
+      error?: string;
+    }
+  >;
+  onCheckedChange: (nodeId: string, checked: boolean) => void;
+  onRetry: (nodeId: string) => void;
+};
+
 export function TaskPlanNodeNavigator({
   nodes,
   selectedId,
   onSelect,
   label = "Task 节点",
+  revisionHistory,
 }: {
   nodes: TaskPlanNavigatorNode[];
   selectedId: string | null;
   onSelect: (id: string) => void;
   label?: string;
+  revisionHistory?: TaskPlanRevisionHistoryControls;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -67,10 +82,15 @@ export function TaskPlanNodeNavigator({
         {nodes.map((node, index) => {
           const selected = selectedId === node.id;
           const typeLabel = nodeTypeLabel(node.kind);
+          const historyControl =
+            node.kind === "REVISION"
+              ? revisionHistory?.byNodeId[node.id]
+              : undefined;
+          const historyErrorId = `revision-history-${node.id}-error`;
           return (
             <div
               key={node.id}
-              className="relative flex min-w-0 flex-1 items-stretch sm:w-40 sm:min-w-40 sm:max-w-40 sm:flex-none sm:items-start"
+              className="relative flex min-w-0 flex-1 flex-col items-stretch sm:w-40 sm:min-w-40 sm:max-w-40 sm:flex-none"
               data-node-selected={selected}
             >
               {index > 0 && (
@@ -118,6 +138,55 @@ export function TaskPlanNodeNavigator({
                   </span>
                 </span>
               </button>
+              {historyControl && (
+                <div
+                  className="relative z-10 min-w-0 px-2 pb-2 text-xs sm:w-full sm:text-center"
+                  data-testid={`revision-history-control-${node.id}`}
+                >
+                  <label className="inline-flex min-w-0 cursor-pointer items-start gap-1.5 text-left text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 size-4 shrink-0 accent-primary"
+                      checked={historyControl.checked}
+                      disabled={historyControl.loading}
+                      aria-label={`显示 Revision「${node.label}」之前的计划`}
+                      aria-describedby={
+                        historyControl.error ? historyErrorId : undefined
+                      }
+                      onChange={(event) =>
+                        revisionHistory?.onCheckedChange(
+                          node.id,
+                          event.currentTarget.checked,
+                        )
+                      }
+                    />
+                    <span className="min-w-0 break-words">
+                      {historyControl.loading
+                        ? "正在加载修订前计划…"
+                        : "显示修订前计划"}
+                    </span>
+                  </label>
+                  {historyControl.error && (
+                    <div className="mt-1.5 space-y-1 text-left">
+                      <p
+                        id={historyErrorId}
+                        className="break-words text-destructive"
+                        role="alert"
+                      >
+                        {historyControl.error}
+                      </p>
+                      <button
+                        type="button"
+                        className="font-medium text-primary underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        aria-label={`重新加载 Revision「${node.label}」之前的计划`}
+                        onClick={() => revisionHistory?.onRetry(node.id)}
+                      >
+                        重新加载
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           );
         })}

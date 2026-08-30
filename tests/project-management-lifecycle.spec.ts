@@ -23,6 +23,7 @@ import {
   comparePlanVersions,
   getMilestoneCompletionDetails,
   getPlanVersion,
+  getRevisionBasePlan,
   getTaskWorkspace,
   listTasks,
   listTaskPlanVersions,
@@ -2572,12 +2573,71 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       `pm:revision:pending_review:${revision.revisionNodeId}:round:1:inapp:`,
       `/progress/tasks/${fixture.taskId}`,
     );
+    await expectServiceError(
+      getRevisionBasePlan({
+        actor: actor(fixture.owner),
+        taskId: fixture.taskId,
+        revisionNodeId: revision.revisionNodeId,
+      }),
+      "NOT_FOUND",
+    );
     const applied = await approveRevision(actor(fixture.reviewer), {
       revisionNodeId: revision.revisionNodeId,
       comment: "同意调整",
     });
     expect(applied.status).toBe("EFFECTIVE");
     expect(applied.currentPlanVersionId).toBe(revision.targetPlanVersionId);
+    const appliedCurrentPlanVersionId = applied.currentPlanVersionId;
+    if (!appliedCurrentPlanVersionId) {
+      throw new Error("Revision 生效后缺少 Current Plan");
+    }
+    const revisionBasePlan = await getRevisionBasePlan({
+      actor: actor(fixture.owner),
+      taskId: fixture.taskId,
+      revisionNodeId: revision.revisionNodeId,
+    });
+    expect(revisionBasePlan).toMatchObject({
+      revisionNodeId: revision.revisionNodeId,
+      revisionReason: "当前目标变更",
+      plan: {
+        id: fixture.currentPlanVersionId,
+        taskId: fixture.taskId,
+        versionNo: 1,
+      },
+    });
+    expect(
+      revisionBasePlan.plan.nodes.some(
+        (node) => node.nodeId === activeNode.nodeId,
+      ),
+    ).toBe(true);
+    const otherTask = await createDraftFixture(0);
+    await expectServiceError(
+      getRevisionBasePlan({
+        actor: actor(fixture.owner),
+        taskId: otherTask.taskId,
+        revisionNodeId: revision.revisionNodeId,
+      }),
+      "NOT_FOUND",
+    );
+    await prisma.task.update({
+      where: { id: fixture.taskId },
+      data: { currentPlanVersionId: fixture.currentPlanVersionId },
+    });
+    try {
+      await expectServiceError(
+        getRevisionBasePlan({
+          actor: actor(fixture.owner),
+          taskId: fixture.taskId,
+          revisionNodeId: revision.revisionNodeId,
+        }),
+        "NOT_FOUND",
+      );
+    } finally {
+      await prisma.task.update({
+        where: { id: fixture.taskId },
+        data: { currentPlanVersionId: appliedCurrentPlanVersionId },
+      });
+    }
     const plans = await prisma.taskPlanVersion.findMany({
       where: { taskId: fixture.taskId },
       select: { id: true, status: true },

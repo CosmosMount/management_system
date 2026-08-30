@@ -149,6 +149,11 @@ export type TimeCanvasSelection =
   | { kind: "ANCHOR" | "SEGMENT"; id: string }
   | null;
 
+export type TimeCanvasFocusRequest = {
+  selection: Exclude<TimeCanvasSelection, null>;
+  revision: number;
+};
+
 export type TimeCanvasDisplayOptions = {
   showActual?: boolean;
   showBusy?: boolean;
@@ -245,6 +250,7 @@ export type TimeCanvasProps = {
   /** Passing `selection` makes selection controlled; omit it for internal state. */
   selection?: TimeCanvasSelection;
   initialSelection?: TimeCanvasSelection;
+  focusRequest?: TimeCanvasFocusRequest | null;
   emptyMessage?: string;
   onRangeChange?: (range: TimeCanvasRange) => void;
   navigationRange?: TimeCanvasRange;
