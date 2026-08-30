@@ -9,14 +9,16 @@ import {
   useTransition,
 } from "react";
 import { useRouter } from "next/navigation";
-import { RefreshCw } from "lucide-react";
 import { getAdaptiveTimeCanvasBlock } from "@/app/actions/project-management/canvas";
 import {
   getWorkSegment,
   listWorkSegmentChanges,
 } from "@/app/actions/project-management/segments";
 import type { UserPickerScope } from "@/components/project-management/user-picker";
-import { TimeCanvas } from "@/components/project-management/time-canvas/time-canvas";
+import {
+  ResourcePlannerCanvasView,
+  type ResourcePlannerNotice,
+} from "@/components/project-management/resource-planner-canvas-view";
 import { TIME_CANVAS_VIEWPORT_STATE_EVENT } from "@/components/project-management/time-canvas/viewport-state-link";
 import { timeCanvasSegmentsToModel } from "@/components/project-management/time-canvas/adapter";
 import {
@@ -41,21 +43,12 @@ import type {
   TimeCanvasSelection,
   TimeCanvasZoom,
 } from "@/components/project-management/time-canvas/types";
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import type { ProjectManagementActionFailure, ProjectManagementActionResult } from "@/lib/project-management/application/action-result";
 import type { WorkSegmentDetail } from "@/lib/project-management/queries/resource-queries";
 import type {
   PersonOptionDto,
   TaskOptionPage,
 } from "@/lib/project-management/types/time-canvas";
-import { cn } from "@/lib/utils";
 import {
   beginInFlightBlockRequest,
   blockKey,
@@ -78,15 +71,11 @@ import {
 } from "@/components/project-management/resource-planner-state";
 import {
   explicitRangeForDraft,
-  formatPlannerRange,
-  QuickCreatePanel,
-  SegmentInspector,
   type CreateDraft,
   type SegmentChange,
 } from "@/components/project-management/resource-planner-panels";
 
 type TaskOption = TaskOptionPage["items"][number];
-type Notice = { kind: "success" | "error" | "info"; message: string } | null;
 type PendingPlannedRange = {
   range: TimeCanvasRange;
   previousRowPageKey?: string;
@@ -330,7 +319,7 @@ export function ResourcePlannerCanvasClient({
   const [detailRetryToken, setDetailRetryToken] = useState(0);
   const [detailState, setDetailState] = useState<"IDLE" | "LOADING" | "READY" | "ERROR">("IDLE");
   const [detailError, setDetailError] = useState("");
-  const [notice, setNotice] = useState<Notice>(null);
+  const [notice, setNotice] = useState<ResourcePlannerNotice>(null);
   const cacheClockRef = useRef(1);
   const rowPageKeyRef = useRef(initialModel.rowPageKey);
   const viewportRangeRef = useRef(viewportRange);
@@ -1460,328 +1449,237 @@ export function ResourcePlannerCanvasClient({
   }
 
   return (
-    <div className="space-y-4" data-testid="resource-planner-workbench">
-      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-3">
-        {canCreateSegment && (
-          <Button
-            type="button"
-            size="sm"
-            disabled={isPending || Boolean(createDraft)}
-            onClick={() => {
-              draftViewportCenterRef.current = currentViewportCenter();
-              setCreateDraftDirty(false);
-              setCreateDraft((() => {
-                const center = (viewportRange.startMs + viewportRange.endMs) / 2;
-                const duration = 60 * 60 * 1_000;
-                const snappedCenter = Math.floor(center / (30 * 60 * 1_000)) *
-                  30 * 60 * 1_000;
-                const startMs = Math.max(
-                  model.range.startMs,
-                  Math.min(snappedCenter, model.range.endMs - duration),
-                );
-                return {
-                rowId: quickCreateRowId,
-                personId: quickCreatePersonId,
-                startMs,
-                endMs: startMs + duration,
-                };
-              })());
-            }}
-          >
-            新增投入
-          </Button>
-        )}
-        <span className="text-sm text-muted-foreground">
-          双击投入打开详情；总览不会直接修改既有投入。
-        </span>
-      </div>
-
-      {canvasModel.rangeClipped && canvasModel.fullRange && (
-        <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">
-          <span className="min-w-0 flex-1">
-            可导航时间范围超过三个上海日历年，当前显示一个三年窗口。
-          </span>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={isPending}
-            onClick={() => requestContentCenter(
-              canvasModel.contentRange?.startMs ?? canvasModel.fullRange!.startMs,
-            )}
-          >
-            最早内容
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={isPending}
-            onClick={() => requestContentCenter(
-              (canvasModel.contentRange?.endMs ?? canvasModel.fullRange!.endMs) - 1,
-            )}
-          >
-            最新内容
-          </Button>
-        </div>
-      )}
-
-      {failedBlocks.map((block) => (
-        <div
-          key={block.key}
-          className="flex flex-wrap items-center gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
-          role="alert"
-        >
-          <span className="min-w-0 flex-1 break-words">
-            {formatPlannerRange(block.range.startMs, block.range.endMs)}：{block.message}
-          </span>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => {
-              const requestKey = blockKey(block.requestRange);
-              const remaining = cachedBlocksRef.current.filter(
-                (item) => item.key !== requestKey,
-              );
-              cachedBlocksRef.current = remaining;
-              setCachedBlocks(remaining);
-              setFailedBlocks((current) => current.filter(
-                (item) => blockKey(item.requestRange) !== requestKey,
-              ));
-              setNotice({ kind: "info", message: "正在重试时间数据块…" });
-            }}
-          >
-            <RefreshCw aria-hidden="true" />
-            重试
-          </Button>
-        </div>
-      ))}
-
-      {notice && (
-        <p
-          className={cn(
-            "break-words rounded-lg px-3 py-2 text-sm",
-            notice.kind === "error" && "bg-destructive/10 text-destructive",
-            notice.kind === "success" && "bg-emerald-50 text-emerald-800",
-            notice.kind === "info" && "bg-muted text-muted-foreground",
-          )}
-          role={notice.kind === "error" ? "alert" : "status"}
-        >
-          {notice.message}
-        </p>
-      )}
-
-      <div className="min-w-0">
-        <div className="min-w-0 overflow-hidden rounded-xl border border-border bg-background">
-          <TimeCanvas
-            mode={mode}
-            model={canvasModel}
-            initialZoom={currentZoom}
-            initialCenterMs={persistViewportInUrl ? currentCenterMs : initialCenterMs}
-            initialCenterRevision={currentCenterRevision}
-            initialSelection={canvasInitialSelection}
-            focusRequest={canvasFocusRequest}
-            display={{ showActual: true, showBusy: true, showInspector: false }}
-            interaction={{
-              enableBrushCreate: !isPending && !createDraft && canCreateSegment,
-              creationRange: createDraft
-                ? {
-                    rowId: createDraft.rowId,
-                    rowKind: "PERSON",
-                    sourceId: createDraft.personId,
-                    startMs: createDraft.startMs,
-                    endMs: createDraft.endMs,
-                  }
-                : null,
-              onBrushCreate: handleBrush,
-              onCreationRangeTransform: (request) => {
-                const targetRow = model.rows.find(
-                  (row) =>
-                    row.id === request.targetRowId &&
-                    row.kind === "PERSON" &&
-                    row.editable,
-                );
-                if (!createDraft || !targetRow) {
-                  setNotice({
-                    kind: "error",
-                    message: "待创建投入只能移动到当前已加载且可编辑的人员行。",
-                  });
-                  return;
-                }
-                updateCreateDraft({
-                  rowId: targetRow.id,
-                  personId: targetRow.sourceId,
-                  startMs: request.startMs,
-                  endMs: request.endMs,
-                });
-              },
-              onSegmentOpen: (segmentId) => {
-                if (createDraft) {
-                  setNotice({ kind: "info", message: "请先完成或取消当前投入创建。" });
-                  return;
-                }
-                const segment = model.segments.find((item) => item.id === segmentId);
-                if (!segment || segment.visibility !== "FULL") return;
-                setDismissedFocusId(null);
-                setSelection({ kind: "SEGMENT", id: segmentId });
-                setOpenSegmentId(segmentId);
-                updateDialogDirty(false);
-                setDetail(null);
-                setDetailRange(null);
-                setChanges([]);
-                setChangesCursor(null);
-                setHistoryState("LOADING");
-                setHistoryLoadingMore(false);
-                setHistoryError("");
-                setDetailError("");
-                setDetailState("LOADING");
-              },
-              onRowNavigation: () =>
-                !createDraftDirty || window.confirm("创建内容尚未保存，确认放弃？"),
-              onInvalidDrop: (message) => setNotice({ kind: "error", message }),
-            }}
-            selection={selection}
-            onSelectionChange={setSelection}
-            onViewportChange={handleViewportChange}
-            onZoomChange={(nextZoom) => {
-              if (viewportUrlTimerRef.current !== null) {
-                window.clearTimeout(viewportUrlTimerRef.current);
-                viewportUrlTimerRef.current = null;
+    <ResourcePlannerCanvasView
+      canCreateSegment={canCreateSegment}
+      createDraftOpen={Boolean(createDraft)}
+      isPending={isPending}
+      canvasModel={canvasModel}
+      failedBlocks={failedBlocks}
+      notice={notice}
+      onCreate={() => {
+        draftViewportCenterRef.current = currentViewportCenter();
+        setCreateDraftDirty(false);
+        setCreateDraft((() => {
+          const center = (viewportRange.startMs + viewportRange.endMs) / 2;
+          const duration = 60 * 60 * 1_000;
+          const snappedCenter = Math.floor(center / (30 * 60 * 1_000)) *
+            30 * 60 * 1_000;
+          const startMs = Math.max(
+            model.range.startMs,
+            Math.min(snappedCenter, model.range.endMs - duration),
+          );
+          return {
+            rowId: quickCreateRowId,
+            personId: quickCreatePersonId,
+            startMs,
+            endMs: startMs + duration,
+          };
+        })());
+      }}
+      onRequestContentCenter={requestContentCenter}
+      onRetryFailedBlock={(block) => {
+        const requestKey = blockKey(block.requestRange);
+        const remaining = cachedBlocksRef.current.filter(
+          (item) => item.key !== requestKey,
+        );
+        cachedBlocksRef.current = remaining;
+        setCachedBlocks(remaining);
+        setFailedBlocks((current) => current.filter(
+          (item) => blockKey(item.requestRange) !== requestKey,
+        ));
+        setNotice({ kind: "info", message: "正在重试时间数据块…" });
+      }}
+      timeCanvasProps={{
+        mode,
+        model: canvasModel,
+        initialZoom: currentZoom,
+        initialCenterMs: persistViewportInUrl ? currentCenterMs : initialCenterMs,
+        initialCenterRevision: currentCenterRevision,
+        initialSelection: canvasInitialSelection,
+        focusRequest: canvasFocusRequest,
+        display: { showActual: true, showBusy: true, showInspector: false },
+        interaction: {
+          enableBrushCreate: !isPending && !createDraft && canCreateSegment,
+          creationRange: createDraft
+            ? {
+                rowId: createDraft.rowId,
+                rowKind: "PERSON",
+                sourceId: createDraft.personId,
+                startMs: createDraft.startMs,
+                endMs: createDraft.endMs,
               }
-              setCurrentZoom(nextZoom);
-              if (!persistViewportInUrl || presentationCenterMs !== null) return;
-              const pendingCenter = centerNavigationTargetRef.current;
-              writeViewportUrl({
-                centerMs: pendingCenter ??
-                  (viewportRangeRef.current.startMs + viewportRangeRef.current.endMs) / 2,
-                zoom: nextZoom,
-              });
-              if (pendingCenter !== null) {
-                const url = new URL(window.location.href);
-                startTransition(() => {
-                  router.replace(`${url.pathname}?${url.searchParams.toString()}`, {
-                    scroll: false,
-                  });
-                });
-              }
-            }}
-            navigationRange={canvasModel.fullRange}
-            onRequestCenter={
-              adaptiveBlockQuery || presentationOverlay
-                ? requestContentCenter
-                : undefined
-            }
-            emptyMessage="当前筛选和时间范围内没有可见安排。"
-          />
-        </div>
-      </div>
-
-      <Dialog
-        open={Boolean(openSegmentId)}
-        onOpenChange={(open) => {
-          if (open || isPending) return;
-          if (dialogDirty && !window.confirm("有未保存修改，确认放弃并关闭？")) return;
-          closeSegmentDialog();
-        }}
-      >
-        <DialogContent className="max-h-[94dvh] overflow-y-auto sm:max-w-[min(96vw,88rem)]">
-          <DialogHeader>
-            <DialogTitle>投入详情</DialogTitle>
-            <DialogDescription>
-              复用打开前的完整时间线上下文；仅当前打开的投入可修改，其他对象只读。
-            </DialogDescription>
-          </DialogHeader>
-          <SegmentInspector
-            key={`${selectedCanvasSegment?.id ?? "none"}:${detail?.updatedAt ?? detailState}`}
-            canvasSegment={selectedCanvasSegment}
-            model={model}
-            initialZoom={currentZoom}
-            initialCenterMs={(viewportRange.startMs + viewportRange.endMs) / 2}
-            detail={detail}
-            detailRange={detailRange}
-            detailState={detailState}
-            detailError={detailError}
-            changes={changes}
-            historyState={historyState}
-            historyLoadingMore={historyLoadingMore}
-            historyError={historyError}
-            hasMoreChanges={Boolean(changesCursor)}
-            disabled={isPending}
-            onRun={runMutation}
-            onRetryDetail={() => {
-              setDetailError("");
-              setDetailState("LOADING");
-              setDetailRetryToken((current) => current + 1);
-            }}
-            onLoadMoreChanges={loadMoreChanges}
-            onRetryHistory={() => {
-              if (changes.length > 0 && changesCursor) {
-                loadMoreChanges();
-                return;
-              }
-              setHistoryState("LOADING");
-              setHistoryError("");
-              setHistoryRetryToken((current) => current + 1);
-            }}
-            onDirtyChange={updateDialogDirty}
-            onTaskNavigation={() =>
-              !dialogDirty || window.confirm("当前投入有未保存修改，确认放弃并离开？")
-            }
-            onRangeChange={(range) => {
-              setDetailRange(range);
-              updateDialogDirty(true);
-            }}
-          />
-        </DialogContent>
-      </Dialog>
-
-      {createDraft && (
-        <QuickCreatePanel
-          draft={createDraft}
-          peopleOptions={peopleOptions}
-          peopleScope={peopleScope}
-          taskOptions={taskOptions}
-          defaultTaskId={defaultTaskId}
-          defaultTaskTitle={defaultTaskTitle}
-          lockedTaskId={lockedTaskId}
-          allowIndependent={allowIndependent}
-          disabled={isPending}
-          onCancel={cancelCreateDraft}
-          onDirtyChange={() => setCreateDraftDirty(true)}
-          onPersonChange={(personId) => {
+            : null,
+          onBrushCreate: handleBrush,
+          onCreationRangeTransform: (request) => {
             const targetRow = model.rows.find(
               (row) =>
+                row.id === request.targetRowId &&
                 row.kind === "PERSON" &&
-                row.editable &&
-                row.sourceId === personId,
+                row.editable,
             );
-            if (!targetRow) {
+            if (!createDraft || !targetRow) {
               setNotice({
                 kind: "error",
-                message: "该人员不在当前已加载的可编辑行中，请先调整筛选或分页。",
+                message: "待创建投入只能移动到当前已加载且可编辑的人员行。",
               });
               return;
             }
             updateCreateDraft({
-              ...createDraft,
               rowId: targetRow.id,
               personId: targetRow.sourceId,
+              startMs: request.startMs,
+              endMs: request.endMs,
             });
-          }}
-          onRangeChange={(startMs, endMs) =>
-            updateCreateDraft({ ...createDraft, startMs, endMs })
+          },
+          onSegmentOpen: (segmentId) => {
+            if (createDraft) {
+              setNotice({ kind: "info", message: "请先完成或取消当前投入创建。" });
+              return;
+            }
+            const segment = model.segments.find((item) => item.id === segmentId);
+            if (!segment || segment.visibility !== "FULL") return;
+            setDismissedFocusId(null);
+            setSelection({ kind: "SEGMENT", id: segmentId });
+            setOpenSegmentId(segmentId);
+            updateDialogDirty(false);
+            setDetail(null);
+            setDetailRange(null);
+            setChanges([]);
+            setChangesCursor(null);
+            setHistoryState("LOADING");
+            setHistoryLoadingMore(false);
+            setHistoryError("");
+            setDetailError("");
+            setDetailState("LOADING");
+          },
+          onRowNavigation: () =>
+            !createDraftDirty || window.confirm("创建内容尚未保存，确认放弃？"),
+          onInvalidDrop: (message) => setNotice({ kind: "error", message }),
+        },
+        selection,
+        onSelectionChange: setSelection,
+        onViewportChange: handleViewportChange,
+        onZoomChange: (nextZoom) => {
+          if (viewportUrlTimerRef.current !== null) {
+            window.clearTimeout(viewportUrlTimerRef.current);
+            viewportUrlTimerRef.current = null;
           }
-          onRun={(action, onFailure) => {
-            runMutation(action, "已创建投入记录", undefined, () => {
-              setCreateDraft(null);
-              draftViewportCenterRef.current = null;
-              setCreateDraftDirty(false);
-            }, onFailure);
-          }}
-        />
-      )}
-    </div>
+          setCurrentZoom(nextZoom);
+          if (!persistViewportInUrl || presentationCenterMs !== null) return;
+          const pendingCenter = centerNavigationTargetRef.current;
+          writeViewportUrl({
+            centerMs: pendingCenter ??
+              (viewportRangeRef.current.startMs + viewportRangeRef.current.endMs) / 2,
+            zoom: nextZoom,
+          });
+          if (pendingCenter !== null) {
+            const url = new URL(window.location.href);
+            startTransition(() => {
+              router.replace(`${url.pathname}?${url.searchParams.toString()}`, {
+                scroll: false,
+              });
+            });
+          }
+        },
+        navigationRange: canvasModel.fullRange,
+        onRequestCenter: adaptiveBlockQuery || presentationOverlay
+          ? requestContentCenter
+          : undefined,
+        emptyMessage: "当前筛选和时间范围内没有可见安排。",
+      }}
+      segmentDialog={{
+        open: Boolean(openSegmentId),
+        onOpenChange: (open) => {
+          if (open || isPending) return;
+          if (dialogDirty && !window.confirm("有未保存修改，确认放弃并关闭？")) return;
+          closeSegmentDialog();
+        },
+        inspectorKey: `${selectedCanvasSegment?.id ?? "none"}:${detail?.updatedAt ?? detailState}`,
+        inspectorProps: {
+          canvasSegment: selectedCanvasSegment,
+          model,
+          initialZoom: currentZoom,
+          initialCenterMs: (viewportRange.startMs + viewportRange.endMs) / 2,
+          detail,
+          detailRange,
+          detailState,
+          detailError,
+          changes,
+          historyState,
+          historyLoadingMore,
+          historyError,
+          hasMoreChanges: Boolean(changesCursor),
+          disabled: isPending,
+          onRun: runMutation,
+          onRetryDetail: () => {
+            setDetailError("");
+            setDetailState("LOADING");
+            setDetailRetryToken((current) => current + 1);
+          },
+          onLoadMoreChanges: loadMoreChanges,
+          onRetryHistory: () => {
+            if (changes.length > 0 && changesCursor) {
+              loadMoreChanges();
+              return;
+            }
+            setHistoryState("LOADING");
+            setHistoryError("");
+            setHistoryRetryToken((current) => current + 1);
+          },
+          onDirtyChange: updateDialogDirty,
+          onTaskNavigation: () =>
+            !dialogDirty || window.confirm("当前投入有未保存修改，确认放弃并离开？"),
+          onRangeChange: (range) => {
+            setDetailRange(range);
+            updateDialogDirty(true);
+          },
+        },
+      }}
+      quickCreateProps={createDraft
+        ? {
+            draft: createDraft,
+            peopleOptions,
+            peopleScope,
+            taskOptions,
+            defaultTaskId,
+            defaultTaskTitle,
+            lockedTaskId,
+            allowIndependent,
+            disabled: isPending,
+            onCancel: cancelCreateDraft,
+            onDirtyChange: () => setCreateDraftDirty(true),
+            onPersonChange: (personId) => {
+              const targetRow = model.rows.find(
+                (row) =>
+                  row.kind === "PERSON" &&
+                  row.editable &&
+                  row.sourceId === personId,
+              );
+              if (!targetRow) {
+                setNotice({
+                  kind: "error",
+                  message: "该人员不在当前已加载的可编辑行中，请先调整筛选或分页。",
+                });
+                return;
+              }
+              updateCreateDraft({
+                ...createDraft,
+                rowId: targetRow.id,
+                personId: targetRow.sourceId,
+              });
+            },
+            onRangeChange: (startMs, endMs) =>
+              updateCreateDraft({ ...createDraft, startMs, endMs }),
+            onRun: (action, onFailure) => {
+              runMutation(action, "已创建投入记录", undefined, () => {
+                setCreateDraft(null);
+                draftViewportCenterRef.current = null;
+                setCreateDraftDirty(false);
+              }, onFailure);
+            },
+          }
+        : null}
+    />
   );
 }
 
