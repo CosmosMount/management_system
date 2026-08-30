@@ -11,6 +11,10 @@ export const lifecyclePlanNodeInclude = {
       milestone: true,
       revision: true,
       termination: true,
+      planVersionEntries: {
+        take: 2,
+        select: { planVersionId: true },
+      },
     },
   },
 } satisfies Prisma.PlanVersionNodeInclude;

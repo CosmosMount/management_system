@@ -2491,6 +2491,402 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     expect(await revisionTargetSnapshot(targetPlanVersionId)).toEqual(targetBefore);
   });
 
+  test("Revision approval rejects a candidate Plan whose baseline association drifted", async () => {
+    const fixture = await createActivatedFixture();
+    const revision = await createRevision(actor(fixture.owner), {
+      taskId: fixture.taskId,
+      basePlanVersionId: fixture.currentPlanVersionId,
+      baseTaskLockVersion: 1,
+      reason: "候选关联漂移",
+      description: "候选关联异常时不能通过直接 action 绕过页面门禁",
+      replacementMilestones: [
+        milestoneInput("关联校验 Milestone", "完成关联校验", 5),
+      ],
+      revisionAt: new Date(
+        Date.UTC(2026, 6, 31, 11, 0, 0),
+      ).toISOString(),
+      termination: terminationInput(9),
+      idempotencyKey: `revision-association-drift-${randomUUID()}`,
+    });
+    const targetPlanVersionId = revision.targetPlanVersionId ?? "";
+    await prisma.taskPlanVersion.update({
+      where: { id: targetPlanVersionId },
+      data: { baseVersionId: null },
+    });
+
+    await expectServiceError(
+      approveRevision(actor(fixture.reviewer), {
+        revisionNodeId: revision.revisionNodeId,
+        comment: "直接批准异常候选",
+      }),
+      "STATE_CONFLICT",
+    );
+    await expect(
+      prisma.task.findUniqueOrThrow({
+        where: { id: fixture.taskId },
+        select: { currentPlanVersionId: true, lockVersion: true },
+      }),
+    ).resolves.toEqual({
+      currentPlanVersionId: fixture.currentPlanVersionId,
+      lockVersion: 1,
+    });
+    await expect(
+      prisma.revisionNode.findUniqueOrThrow({
+        where: { id: revision.revisionNodeId },
+        select: { status: true },
+      }),
+    ).resolves.toEqual({ status: "PENDING_APPROVAL" });
+    await expect(
+      prisma.taskPlanVersion.findUniqueOrThrow({
+        where: { id: targetPlanVersionId },
+        select: { status: true },
+      }),
+    ).resolves.toEqual({ status: "DRAFT" });
+  });
+
+  test("Revision comparison and approval reject a candidate missing an effective Revision carry-forward", async () => {
+    const fixture = await createActivatedFixture();
+    const firstRevision = await createRevision(actor(fixture.owner), {
+      taskId: fixture.taskId,
+      basePlanVersionId: fixture.currentPlanVersionId,
+      baseTaskLockVersion: 1,
+      reason: "先形成已生效 Revision",
+      description: "后续候选计划必须完整沿用本 Revision",
+      replacementMilestones: [
+        milestoneInput("第一轮候选 Milestone", "完成第一轮候选", 4),
+      ],
+      revisionAt: new Date(Date.UTC(2026, 6, 31, 11, 0, 0)).toISOString(),
+      termination: terminationInput(9),
+      idempotencyKey: `revision-effective-prefix-${randomUUID()}`,
+    });
+    await approveRevision(actor(fixture.reviewer), {
+      revisionNodeId: firstRevision.revisionNodeId,
+      comment: "形成已生效 Revision 前缀",
+    });
+    const currentTask = await prisma.task.findUniqueOrThrow({
+      where: { id: fixture.taskId },
+      select: { currentPlanVersionId: true, lockVersion: true },
+    });
+    const pendingRevision = await createRevision(actor(fixture.owner), {
+      taskId: fixture.taskId,
+      basePlanVersionId: currentTask.currentPlanVersionId,
+      baseTaskLockVersion: currentTask.lockVersion,
+      reason: "缺失已生效 Revision 的异常候选",
+      description: "读取与批准必须使用相同的完整前缀校验",
+      replacementMilestones: [
+        milestoneInput("第二轮候选 Milestone", "完成第二轮候选", 5),
+      ],
+      revisionAt: new Date(Date.UTC(2026, 7, 1, 11, 0, 0)).toISOString(),
+      termination: terminationInput(10),
+      idempotencyKey: `revision-missing-effective-prefix-${randomUUID()}`,
+    });
+    const targetPlanVersionId = pendingRevision.targetPlanVersionId ?? "";
+    const effectiveRevisionEntry = await prisma.planVersionNode.findFirstOrThrow({
+      where: {
+        planVersionId: targetPlanVersionId,
+        node: { revision: { id: firstRevision.revisionNodeId } },
+      },
+      select: { id: true },
+    });
+    await prisma.planVersionNode.delete({
+      where: { id: effectiveRevisionEntry.id },
+    });
+    await prisma.planVersionNode.updateMany({
+      where: { planVersionId: targetPlanVersionId },
+      data: { sequence: { increment: 100 } },
+    });
+    await prisma.planVersionNode.updateMany({
+      where: { planVersionId: targetPlanVersionId },
+      data: { sequence: { decrement: 101 } },
+    });
+
+    const workspace = await getTaskWorkspace({
+      actor: actor(fixture.reviewer),
+      taskId: fixture.taskId,
+    });
+    expect(workspace.pendingRevisionPlanComparison).toMatchObject({
+      status: "UNAVAILABLE",
+      revisionNodeId: pendingRevision.revisionNodeId,
+      message: expect.stringContaining("结构异常"),
+    });
+    expect(workspace.pendingRevisionPlanComparison).not.toHaveProperty("plan");
+    const beforeApproval = await revisionApprovalSnapshot({
+      taskId: fixture.taskId,
+      revisionNodeId: pendingRevision.revisionNodeId,
+      targetPlanVersionId,
+    });
+
+    await expectServiceError(
+      approveRevision(actor(fixture.reviewer), {
+        revisionNodeId: pendingRevision.revisionNodeId,
+        comment: "不得批准缺失沿用 Revision 的候选",
+      }),
+      "STATE_CONFLICT",
+    );
+    expect(
+      await revisionApprovalSnapshot({
+        taskId: fixture.taskId,
+        revisionNodeId: pendingRevision.revisionNodeId,
+        targetPlanVersionId,
+      }),
+    ).toEqual(beforeApproval);
+  });
+
+  test("Revision comparison and approval reject a candidate containing another Revision", async () => {
+    const fixture = await createActivatedFixture();
+    const currentTask = await prisma.task.findUniqueOrThrow({
+      where: { id: fixture.taskId },
+      select: { currentPlanVersionId: true, lockVersion: true },
+    });
+    const pendingRevision = await createRevision(actor(fixture.owner), {
+      taskId: fixture.taskId,
+      basePlanVersionId: currentTask.currentPlanVersionId,
+      baseTaskLockVersion: currentTask.lockVersion,
+      reason: "混入其他 Revision 的异常候选",
+      description: "候选计划只能包含本次待审批 Revision",
+      replacementMilestones: [
+        milestoneInput("正常候选 Milestone", "完成正常候选", 4),
+      ],
+      revisionAt: new Date(Date.UTC(2026, 6, 31, 11, 0, 0)).toISOString(),
+      termination: terminationInput(9),
+      idempotencyKey: `revision-unrelated-node-${randomUUID()}`,
+    });
+    const targetPlanVersionId = pendingRevision.targetPlanVersionId ?? "";
+    const terminalEntry = await prisma.planVersionNode.findFirstOrThrow({
+      where: {
+        planVersionId: targetPlanVersionId,
+        node: { type: "TERMINATION" },
+      },
+      select: { id: true, sequence: true },
+    });
+    const unrelatedTaskNode = await prisma.taskNode.create({
+      data: {
+        taskId: fixture.taskId,
+        type: "REVISION",
+        status: "PENDING",
+        businessDescription: "不属于当前候选的 Revision",
+        createdByAccountId: fixture.owner.account.id,
+      },
+      select: { id: true },
+    });
+    await prisma.revisionNode.create({
+      data: {
+        nodeId: unrelatedTaskNode.id,
+        reason: "不相关 Revision",
+        revisionAt: new Date(Date.UTC(2026, 7, 1, 10, 0, 0)),
+        basePlanVersionId: currentTask.currentPlanVersionId,
+        baseTaskLockVersion: currentTask.lockVersion,
+        status: "REJECTED",
+      },
+    });
+    await prisma.planVersionNode.update({
+      where: { id: terminalEntry.id },
+      data: { sequence: terminalEntry.sequence + 100 },
+    });
+    await prisma.planVersionNode.create({
+      data: {
+        planVersionId: targetPlanVersionId,
+        nodeId: unrelatedTaskNode.id,
+        sequence: terminalEntry.sequence,
+      },
+    });
+    await prisma.planVersionNode.update({
+      where: { id: terminalEntry.id },
+      data: { sequence: terminalEntry.sequence + 1 },
+    });
+
+    const workspace = await getTaskWorkspace({
+      actor: actor(fixture.reviewer),
+      taskId: fixture.taskId,
+    });
+    expect(workspace.pendingRevisionPlanComparison).toMatchObject({
+      status: "UNAVAILABLE",
+      revisionNodeId: pendingRevision.revisionNodeId,
+      message: expect.stringContaining("结构异常"),
+    });
+    expect(workspace.pendingRevisionPlanComparison).not.toHaveProperty("plan");
+    const beforeApproval = await revisionApprovalSnapshot({
+      taskId: fixture.taskId,
+      revisionNodeId: pendingRevision.revisionNodeId,
+      targetPlanVersionId,
+    });
+
+    await expectServiceError(
+      approveRevision(actor(fixture.reviewer), {
+        revisionNodeId: pendingRevision.revisionNodeId,
+        comment: "不得批准混入其他 Revision 的候选",
+      }),
+      "STATE_CONFLICT",
+    );
+    expect(
+      await revisionApprovalSnapshot({
+        taskId: fixture.taskId,
+        revisionNodeId: pendingRevision.revisionNodeId,
+        targetPlanVersionId,
+      }),
+    ).toEqual(beforeApproval);
+  });
+
+  test("Revision comparison and approval reject a candidate reusing an unfinished baseline node", async () => {
+    const fixture = await createActivatedFixture();
+    const currentTask = await prisma.task.findUniqueOrThrow({
+      where: { id: fixture.taskId },
+      select: { currentPlanVersionId: true, lockVersion: true },
+    });
+    const activeBaselineEntry = await prisma.planVersionNode.findFirstOrThrow({
+      where: {
+        planVersionId: currentTask.currentPlanVersionId,
+        node: { type: "MILESTONE", status: "ACTIVE" },
+      },
+      select: { nodeId: true },
+    });
+    const pendingRevision = await createRevision(actor(fixture.owner), {
+      taskId: fixture.taskId,
+      basePlanVersionId: currentTask.currentPlanVersionId,
+      baseTaskLockVersion: currentTask.lockVersion,
+      reason: "复用基线未完成节点的异常候选",
+      description: "候选后缀节点必须与基线节点互斥",
+      replacementMilestones: [
+        milestoneInput("原始新建候选 Milestone", "完成原始候选", 4),
+      ],
+      revisionAt: new Date(Date.UTC(2026, 6, 31, 11, 0, 0)).toISOString(),
+      termination: terminationInput(9),
+      idempotencyKey: `revision-reused-baseline-node-${randomUUID()}`,
+    });
+    const targetPlanVersionId = pendingRevision.targetPlanVersionId ?? "";
+    const replacementEntry = await prisma.planVersionNode.findFirstOrThrow({
+      where: {
+        planVersionId: targetPlanVersionId,
+        node: { type: "MILESTONE" },
+      },
+      select: { id: true },
+    });
+    await prisma.planVersionNode.update({
+      where: { id: replacementEntry.id },
+      data: { nodeId: activeBaselineEntry.nodeId },
+    });
+
+    const workspace = await getTaskWorkspace({
+      actor: actor(fixture.reviewer),
+      taskId: fixture.taskId,
+    });
+    expect(workspace.pendingRevisionPlanComparison).toMatchObject({
+      status: "UNAVAILABLE",
+      revisionNodeId: pendingRevision.revisionNodeId,
+      message: expect.stringContaining("结构异常"),
+    });
+    expect(workspace.pendingRevisionPlanComparison).not.toHaveProperty("plan");
+    const beforeApproval = await revisionApprovalSnapshot({
+      taskId: fixture.taskId,
+      revisionNodeId: pendingRevision.revisionNodeId,
+      targetPlanVersionId,
+    });
+
+    await expectServiceError(
+      approveRevision(actor(fixture.reviewer), {
+        revisionNodeId: pendingRevision.revisionNodeId,
+        comment: "不得批准复用基线未完成节点的候选",
+      }),
+      "STATE_CONFLICT",
+    );
+    expect(
+      await revisionApprovalSnapshot({
+        taskId: fixture.taskId,
+        revisionNodeId: pendingRevision.revisionNodeId,
+        targetPlanVersionId,
+      }),
+    ).toEqual(beforeApproval);
+  });
+
+  test("Revision comparison and approval reject a candidate reusing an abandoned candidate node", async () => {
+    const fixture = await createActivatedFixture();
+    const currentTask = await prisma.task.findUniqueOrThrow({
+      where: { id: fixture.taskId },
+      select: { currentPlanVersionId: true, lockVersion: true },
+    });
+    const cancelledRevision = await createRevision(actor(fixture.owner), {
+      taskId: fixture.taskId,
+      basePlanVersionId: currentTask.currentPlanVersionId,
+      baseTaskLockVersion: currentTask.lockVersion,
+      reason: "即将取消的旧候选",
+      description: "旧候选节点不能被后续候选复用",
+      replacementMilestones: [
+        milestoneInput("旧候选 Milestone", "完成旧候选", 4),
+      ],
+      revisionAt: new Date(Date.UTC(2026, 6, 31, 11, 0, 0)).toISOString(),
+      termination: terminationInput(9),
+      idempotencyKey: `revision-abandoned-node-source-${randomUUID()}`,
+    });
+    const abandonedMilestoneEntry =
+      await prisma.planVersionNode.findFirstOrThrow({
+        where: {
+          planVersionId: cancelledRevision.targetPlanVersionId ?? "",
+          node: { type: "MILESTONE" },
+        },
+        select: { nodeId: true },
+      });
+    await cancelRevision(actor(fixture.owner), {
+      revisionNodeId: cancelledRevision.revisionNodeId,
+      comment: "取消旧候选以验证节点不能复用",
+    });
+    const pendingRevision = await createRevision(actor(fixture.owner), {
+      taskId: fixture.taskId,
+      basePlanVersionId: currentTask.currentPlanVersionId,
+      baseTaskLockVersion: currentTask.lockVersion,
+      reason: "复用已取消节点的异常候选",
+      description: "非当前基线的旧 Plan 节点也不能复用",
+      replacementMilestones: [
+        milestoneInput("新候选 Milestone", "完成新候选", 4),
+      ],
+      revisionAt: new Date(Date.UTC(2026, 6, 31, 12, 0, 0)).toISOString(),
+      termination: terminationInput(9),
+      idempotencyKey: `revision-abandoned-node-target-${randomUUID()}`,
+    });
+    const targetPlanVersionId = pendingRevision.targetPlanVersionId ?? "";
+    const replacementEntry = await prisma.planVersionNode.findFirstOrThrow({
+      where: {
+        planVersionId: targetPlanVersionId,
+        node: { type: "MILESTONE" },
+      },
+      select: { id: true },
+    });
+    await prisma.planVersionNode.update({
+      where: { id: replacementEntry.id },
+      data: { nodeId: abandonedMilestoneEntry.nodeId },
+    });
+
+    const workspace = await getTaskWorkspace({
+      actor: actor(fixture.reviewer),
+      taskId: fixture.taskId,
+    });
+    expect(workspace.pendingRevisionPlanComparison).toMatchObject({
+      status: "UNAVAILABLE",
+      revisionNodeId: pendingRevision.revisionNodeId,
+      message: expect.stringContaining("结构异常"),
+    });
+    expect(workspace.pendingRevisionPlanComparison).not.toHaveProperty("plan");
+    const beforeApproval = await revisionApprovalSnapshot({
+      taskId: fixture.taskId,
+      revisionNodeId: pendingRevision.revisionNodeId,
+      targetPlanVersionId,
+    });
+
+    await expectServiceError(
+      approveRevision(actor(fixture.reviewer), {
+        revisionNodeId: pendingRevision.revisionNodeId,
+        comment: "不得批准复用已取消旧候选节点的计划",
+      }),
+      "STATE_CONFLICT",
+    );
+    expect(
+      await revisionApprovalSnapshot({
+        taskId: fixture.taskId,
+        revisionNodeId: pendingRevision.revisionNodeId,
+        targetPlanVersionId,
+      }),
+    ).toEqual(beforeApproval);
+  });
+
   test("Revision approval atomically switches Current Plan without rewriting Task-associated segments", async () => {
     const fixture = await createActivatedFixture();
     const activeNode = await firstCurrentMilestone(fixture.taskId);
@@ -3846,6 +4242,62 @@ async function revisionTargetSnapshot(planVersionId: string) {
       },
     },
   });
+}
+
+async function revisionApprovalSnapshot({
+  taskId,
+  revisionNodeId,
+  targetPlanVersionId,
+}: {
+  taskId: string;
+  revisionNodeId: string;
+  targetPlanVersionId: string;
+}) {
+  const [task, revision, targetPlan, applyAuditCount] = await Promise.all([
+    prisma.task.findUniqueOrThrow({
+      where: { id: taskId },
+      select: {
+        currentPlanVersionId: true,
+        activeMilestoneNodeId: true,
+        lockVersion: true,
+        updatedAt: true,
+      },
+    }),
+    prisma.revisionNode.findUniqueOrThrow({
+      where: { id: revisionNodeId },
+      select: {
+        status: true,
+        reviewedAt: true,
+        reviewedByAccountId: true,
+        effectiveAt: true,
+        reviewComment: true,
+      },
+    }),
+    prisma.taskPlanVersion.findUniqueOrThrow({
+      where: { id: targetPlanVersionId },
+      select: {
+        status: true,
+        activatedAt: true,
+        updatedAt: true,
+        nodes: {
+          select: {
+            id: true,
+            nodeId: true,
+            sequence: true,
+            isCarryForward: true,
+          },
+          orderBy: { sequence: "asc" },
+        },
+      },
+    }),
+    prisma.domainAuditEvent.count({
+      where: {
+        action: "pm.revision.apply",
+        entityId: revisionNodeId,
+      },
+    }),
+  ]);
+  return { task, revision, targetPlan, applyAuditCount };
 }
 
 async function firstCurrentMilestone(taskId: string) {

@@ -1416,7 +1416,7 @@ export function ResourcePlannerCanvasClient({
       }
       setPresentationCenterMs(centerMs);
       applyViewportCenter(centerMs);
-      setNotice({ kind: "info", message: "已定位到历史计划时间窗口。" });
+      setNotice({ kind: "info", message: "已定位到对比计划时间窗口。" });
       return;
     }
     if (!adaptiveBlockQuery) return;

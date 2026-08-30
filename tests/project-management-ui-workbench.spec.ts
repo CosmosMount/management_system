@@ -549,6 +549,231 @@ test.describe("project management UI project-management-ui-workbench", () => {
     expect(pageErrors).toEqual([]);
   });
 
+  test("pending Revision automatically compares its candidate Plan before approval", async ({
+    context,
+    page,
+    baseURL,
+  }) => {
+    const pageErrors: Error[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error));
+    const fixture = await createUiFixture();
+    const historicalRevisionReason = `已生效计划调整 ${randomUUID()}`;
+    const revisionReason = `待审批计划对比 ${randomUUID()}`;
+    const candidateMilestone = `修改后 Milestone ${randomUUID()}`;
+    const initialTask = await prisma.task.findUniqueOrThrow({
+      where: { id: fixture.taskId },
+      select: { currentPlanVersionId: true, lockVersion: true },
+    });
+    const historicalRevision = await createRevision(actor(fixture.owner), {
+      taskId: fixture.taskId,
+      basePlanVersionId: initialTask.currentPlanVersionId,
+      baseTaskLockVersion: initialTask.lockVersion,
+      reason: historicalRevisionReason,
+      description: "用于验证候选 Plan 与历史 Plan 的稳定顺序",
+      revisionAt: "2026-07-31T12:00:00.000Z",
+      replacementMilestones: [
+        milestoneInput("第一次修改后的 Milestone", "完成第一次修改", 3),
+      ],
+      termination: terminationInput(8),
+      idempotencyKey: `revision-before-candidate-${randomUUID()}`,
+    });
+    await approveRevision(actor(fixture.admin), {
+      revisionNodeId: historicalRevision.revisionNodeId,
+      comment: "先形成一条可选历史计划",
+    });
+    const taskBefore = await prisma.task.findUniqueOrThrow({
+      where: { id: fixture.taskId },
+      select: { currentPlanVersionId: true, lockVersion: true },
+    });
+    const revision = await createRevision(actor(fixture.owner), {
+      taskId: fixture.taskId,
+      basePlanVersionId: taskBefore.currentPlanVersionId,
+      baseTaskLockVersion: taskBefore.lockVersion,
+      reason: revisionReason,
+      description: "审批人需要直接比较 Revision 修改前后的计划",
+      revisionAt: "2026-08-01T12:00:00.000Z",
+      replacementMilestones: [
+        milestoneInput(candidateMilestone, "完成修改后的目标", 4),
+      ],
+      termination: terminationInput(9),
+      idempotencyKey: `revision-candidate-timeline-${randomUUID()}`,
+    });
+    const targetPlan = await prisma.taskPlanVersion.findUniqueOrThrow({
+      where: { id: revision.targetPlanVersionId ?? "" },
+      select: { id: true, versionNo: true },
+    });
+    const candidateHeaderTestId =
+      `time-canvas-row-header-revision-candidate:${revision.revisionNodeId}`;
+    const candidateRowTestId =
+      `timeline-row-revision-candidate:${revision.revisionNodeId}`;
+    const historyHeaderTestId =
+      `time-canvas-row-header-history-plan:${historicalRevision.revisionNodeId}`;
+
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.outsider.openId,
+      name: fixture.outsider.person.displayName,
+    });
+    await page.goto(
+      `/progress/tasks/${fixture.taskId}?center=${encodeURIComponent("2026-08-04T10:00:00.000Z")}&scale=month`,
+    );
+    const currentHeader = page.getByTestId(
+      `time-canvas-row-header-plan:${fixture.taskId}`,
+    );
+    const candidateHeader = page.getByTestId(candidateHeaderTestId);
+    const candidateRow = page.getByTestId(candidateRowTestId);
+    await expect(currentHeader).toBeVisible();
+    await expect(candidateHeader).toContainText(
+      `Revision「${revisionReason}」修改后`,
+    );
+    await expect(candidateHeader).toContainText(
+      `Plan v${targetPlan.versionNo} · 待审批候选（只读）`,
+    );
+    await page
+      .getByRole("checkbox", {
+        name: `显示 Revision「${historicalRevisionReason}」之前的计划`,
+      })
+      .check();
+    await expect(page.getByTestId(historyHeaderTestId)).toBeVisible();
+    const rowHeaderIds = await page
+      .locator('[data-testid^="time-canvas-row-header-"]')
+      .evaluateAll((elements) =>
+        elements.map((element) => element.getAttribute("data-testid")),
+      );
+    expect(rowHeaderIds.indexOf(candidateHeaderTestId)).toBe(
+      rowHeaderIds.indexOf(`time-canvas-row-header-plan:${fixture.taskId}`) + 1,
+    );
+    expect(rowHeaderIds.indexOf(historyHeaderTestId)).toBe(
+      rowHeaderIds.indexOf(candidateHeaderTestId) + 1,
+    );
+    await expect(
+      candidateRow.getByRole("button", {
+        name: new RegExp(`计划节点 ${candidateMilestone}.+状态 待审批候选`),
+      }),
+    ).toBeVisible();
+    await expect(
+      page
+        .getByRole("heading", { name: "当前 Revision 候选" })
+        .locator("../..")
+        .getByRole("button", { name: "批准" }),
+    ).toHaveCount(0);
+    expect(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth <=
+          document.documentElement.clientWidth + 1,
+      ),
+    ).toBe(true);
+
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.admin.openId,
+      name: fixture.admin.person.displayName,
+    });
+    await page.goto(
+      `/progress/tasks/${fixture.taskId}?center=${encodeURIComponent("2026-08-04T10:00:00.000Z")}&scale=month`,
+    );
+    const approvalCard = page
+      .getByRole("heading", { name: "当前 Revision 候选" })
+      .locator("../..");
+    await expect(page.getByTestId(candidateHeaderTestId)).toBeVisible();
+    await approvalCard.getByLabel("处理说明").fill("对比确认后批准候选计划");
+    await approvalCard.getByRole("button", { name: "批准" }).click();
+    await expect(page.getByText("Revision 已批准并应用。")).toBeVisible();
+    await expect(page.getByTestId(candidateHeaderTestId)).toHaveCount(0);
+    await expect(page.getByText(`Current Plan v${targetPlan.versionNo}`)).toBeVisible();
+    await expect(
+      page
+        .getByTestId(`timeline-row-plan:${fixture.taskId}`)
+        .getByRole("button", {
+          name: new RegExp(`计划节点 ${candidateMilestone}`),
+        }),
+    ).toBeVisible();
+    await expect
+      .poll(() =>
+        prisma.task.findUnique({
+          where: { id: fixture.taskId },
+          select: { currentPlanVersionId: true },
+        }),
+      )
+      .toEqual({ currentPlanVersionId: targetPlan.id });
+    await expectHealthyPage(page);
+    expect(pageErrors).toEqual([]);
+  });
+
+  test("invalid pending Revision comparison disables approval but keeps rejection available", async ({
+    context,
+    page,
+    baseURL,
+  }) => {
+    const fixture = await createUiFixture();
+    const taskBefore = await prisma.task.findUniqueOrThrow({
+      where: { id: fixture.taskId },
+      select: { currentPlanVersionId: true, lockVersion: true },
+    });
+    const revision = await createRevision(actor(fixture.owner), {
+      taskId: fixture.taskId,
+      basePlanVersionId: taskBefore.currentPlanVersionId,
+      baseTaskLockVersion: taskBefore.lockVersion,
+      reason: `失效基线 ${randomUUID()}`,
+      description: "验证异常候选计划不会被误批",
+      revisionAt: "2026-07-31T12:00:00.000Z",
+      replacementMilestones: [
+        milestoneInput("失效候选 Milestone", "不得被批准", 4),
+      ],
+      termination: terminationInput(9),
+      idempotencyKey: `revision-invalid-comparison-${randomUUID()}`,
+    });
+    await prisma.revisionNode.update({
+      where: { id: revision.revisionNodeId },
+      data: { baseTaskLockVersion: taskBefore.lockVersion + 1 },
+    });
+
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.admin.openId,
+      name: fixture.admin.person.displayName,
+    });
+    await page.goto(`/progress/tasks/${fixture.taskId}`);
+    await expect(page.getByTestId("pending-revision-plan-warning")).toContainText(
+      "基线已失效",
+    );
+    await expect(page.getByTestId("revision-approval-plan-warning")).toContainText(
+      "批准已禁用",
+    );
+    await expect(
+      page.getByTestId(
+        `time-canvas-row-header-revision-candidate:${revision.revisionNodeId}`,
+      ),
+    ).toHaveCount(0);
+    const approvalCard = page
+      .getByRole("heading", { name: "当前 Revision 候选" })
+      .locator("../..");
+    await expect(
+      approvalCard.getByRole("button", { name: "批准" }),
+    ).toBeDisabled();
+    await expect(
+      approvalCard.getByRole("button", { name: "驳回" }),
+    ).toBeEnabled();
+    await approvalCard.getByLabel("处理说明").fill("候选计划基线失效，请重新提交");
+    await approvalCard.getByRole("button", { name: "驳回" }).click();
+    await expect(page.getByText("Revision 已驳回。")).toBeVisible();
+    await expect(page.getByTestId("pending-revision-plan-warning")).toHaveCount(0);
+    await expect
+      .poll(() =>
+        prisma.revisionNode.findUnique({
+          where: { id: revision.revisionNodeId },
+          select: { status: true },
+        }),
+      )
+      .toEqual({ status: "REJECTED" });
+    expect(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth <=
+          document.documentElement.clientWidth + 1,
+      ),
+    ).toBe(true);
+    await expectHealthyPage(page);
+  });
+
   test("completed Milestone details render empty, link, and unsafe material states", async ({
     context,
     page,

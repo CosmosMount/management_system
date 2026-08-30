@@ -246,7 +246,7 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 
 所有已登录统一账号都可查看全部未删除 Project、Task、计划、成员、验收、审计和完整 Planned/Actual Work Segment；只有 `Person.status=ACTIVE` 的在职账号可提交 Project 立项和创建任意合法车组/技术组的 Task。Project 是 Task 上方的文件夹与立项对象，不包含 Stage；只有统一超级管理员或项目管理员能审批立项。Project Owner 可修改、结束和删除 Project，但不会继承任何 Task 写权限。
 
-Revision 是用户选择时间的计划变化标记，不形成阶段，也不能关联 Planned/Actual Segment。创建 Revision 时固定沿用 Current Plan 的 Start，自动保留全部已完成 Milestone 和已生效 Revision，并用调用方提供的后续 Milestone 与 Terminal 重建未完成部分。创建即进入 `PENDING_APPROVAL`，不再存在草稿或单独提交动作；驳回后可修改并直接重新送审，取消后释放该 Task 的唯一候选名额，批准后才进入 Current Plan 和正式时间轴。
+Revision 是用户选择时间的计划变化标记，不形成阶段，也不能关联 Planned/Actual Segment。创建 Revision 时固定沿用 Current Plan 的 Start，自动保留全部已完成 Milestone 和已生效 Revision，并用调用方提供的后续 Milestone 与 Terminal 重建未完成部分。创建即进入 `PENDING_APPROVAL`，不再存在草稿或单独提交动作；等待审批时，Task 详情会在 Current Plan 下自动加入只读的“Revision 修改后”候选 Plan，供提交人和审批人直接比较。驳回或取消后候选行消失；批准后该候选成为新的 Current Plan。若候选关联或基线异常，页面只展示修改前计划并禁用批准，但仍允许驳回或由有权限的人取消。该能力复用现有计划版本数据，不需要新增数据库字段。驳回后可修改并直接重新送审，取消后释放该 Task 的唯一候选名额，批准后才进入 Current Plan 和正式时间轴。
 
 同一 Task 同时最多只能有一条待审批：未撤出的 `PENDING` Milestone Review、`PENDING_APPROVAL` Revision 与 `PENDING` Termination Review 互斥。Milestone 或 Terminal 提交后，在审批通过、驳回、要求修订或撤出前不能用新的请求键重复提交；相同请求键按原结果幂等重放，重新提交必须使用新请求键。任一待审批存在时，新的 Milestone、Revision 或 Terminal 申请都会被阻止；审批离开待处理状态后释放名额。Terminal 由 OWNER、PARTICIPANT 或全局管理员提交结束结果、原因和总结，只有统一超级管理员或项目管理员批准后才真正结束 Task。
 
@@ -516,7 +516,7 @@ pm2 start npm --name procurement-cron -- run cron
 
 ## 项目管理重构状态
 
-旧 Project/Stage 工作流已清理；当前重新提供轻量 Project 文件夹和立项流程，不恢复 Stage、周报或旧审批角色。`/progress/projects` 提供默认“只看我参与 + 进行中”的列表、创建、详情、编辑、审批、驳回重提、结束和软删除。Project 与 Task 详情采用三层结构：第一层为概览，第二层为与概览左右对齐的完整时间线，第三层在桌面端按“风险与评论 / 主体详情 / 近期动态”三栏展示；低于 `xl` 时按“主体详情 → 风险与评论 → 近期动态”单列排列。Project 主体详情包含 Task 列表和风险录入，Task 主体详情包含待处理 Revision、选中节点详情和风险录入；Task 的审批门禁及全局操作反馈仍位于概览与时间线之间。Task 节点导航中的每条已生效 Revision 可独立勾选“显示修订前计划”，按需在 Current Plan 与人员投入之间加入对应基础 Plan 的只读历史行；可同时比较多条，取消勾选只隐藏该行。历史内容跨越三年展示上限时，可用“最早内容 / 最新内容”在本地切换历史展示窗口，不会为历史端点请求人员投入。右栏继续把 `DomainAuditEvent` 格式化为可筛选的中文近期动态。Project 风险明确分为自身风险和当前所属 Task 风险；Project 评论不混入 Task 评论。立项申请与完整审计历史继续持久化；详情不恢复历史卡片，只在立项审批中展示当前轮的提交人、提交时间和申请加入的 Task。一个 Task 最多属于一个 ACTIVE Project；Task 加入时会把有效 Task 成员补为 Project Participant，但 Project 身份不授予 Task 权限。
+旧 Project/Stage 工作流已清理；当前重新提供轻量 Project 文件夹和立项流程，不恢复 Stage、周报或旧审批角色。`/progress/projects` 提供默认“只看我参与 + 进行中”的列表、创建、详情、编辑、审批、驳回重提、结束和软删除。Project 与 Task 详情采用三层结构：第一层为概览，第二层为与概览左右对齐的完整时间线，第三层在桌面端按“风险与评论 / 主体详情 / 近期动态”三栏展示；低于 `xl` 时按“主体详情 → 风险与评论 → 近期动态”单列排列。Project 主体详情包含 Task 列表和风险录入，Task 主体详情包含待处理 Revision、选中节点详情和风险录入；Task 的审批门禁及全局操作反馈仍位于概览与时间线之间。等待审批的 Revision 会自动在 Current Plan 后加入只读、琥珀色的修改后候选 Plan；其后才是用户勾选的历史 Plan 与人员投入。Task 节点导航中的每条已生效 Revision 可独立勾选“显示修订前计划”，按需加入对应基础 Plan 的只读历史行；可同时比较多条，取消勾选只隐藏该行。对比内容跨越三年展示上限时，可用“最早内容 / 最新内容”在本地切换展示窗口，不会为对比端点请求人员投入。右栏继续把 `DomainAuditEvent` 格式化为可筛选的中文近期动态。Project 风险明确分为自身风险和当前所属 Task 风险；Project 评论不混入 Task 评论。立项申请与完整审计历史继续持久化；详情不恢复历史卡片，只在立项审批中展示当前轮的提交人、提交时间和申请加入的 Task。一个 Task 最多属于一个 ACTIVE Project；Task 加入时会把有效 Task 成员补为 Project Participant，但 Project 身份不授予 Task 权限。
 
 风险只绑定一个 Project 或 Task，同一对象允许多条未解决风险。只有 ACTIVE 对象可提出风险，成员或全局管理员可以解决 ACTIVE/终态对象的遗留风险；所有已登录用户都可在未删除对象发表评论，只有两类全局管理员可以软删除评论。风险提出/解决和评论发布会原子写入审计、站内通知及非 mandatory 的项目管理 outbox，评论删除只写审计。风险、评论和动态均使用每页 20 条的稳定服务端分页；详情页每 5 秒检查轻量审计版本 token，页面隐藏时暂停。
 

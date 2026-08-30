@@ -60,6 +60,10 @@ import {
   lockIdempotencyKeyTx,
   lockTaskTx,
 } from "@/lib/project-management/application/lifecycle-domain";
+import {
+  inspectRevisionTargetStructure,
+  isRevisionCarryForwardEntry,
+} from "@/lib/project-management/domain/revision-target-structure";
 
 type PrismaTx = Prisma.TransactionClient;
 
@@ -812,6 +816,14 @@ async function applyRevisionTx(
   if (revision.targetPlanVersion?.status !== "DRAFT") {
     throw stateConflictError("Revision 目标计划已失效，请刷新后重试");
   }
+  if (
+    revision.node.taskId !== task.id ||
+    revision.targetPlanVersion.taskId !== task.id ||
+    revision.targetPlanVersion.baseVersionId !== revision.basePlanVersionId ||
+    revision.targetPlanVersion.revisionNodeId !== revision.id
+  ) {
+    throw stateConflictError("Revision 目标计划关联异常，请驳回或取消后重新提交");
+  }
   if (revision.basePlanVersionId !== task.currentPlanVersionId) {
     throw planVersionConflictError();
   }
@@ -827,7 +839,14 @@ async function applyRevisionTx(
   const targetPlan = await loadPlanForValidationTx(tx, targetPlanVersionId);
   assertRevisionTargetPlanValid(targetPlan);
   const targetEntries = targetPlan.nodes;
-  assertCompletedPrefixUnchanged(baseEntries, targetEntries);
+  if (
+    targetEntries.some(
+      (entry) => entry.node.taskId !== task.id || entry.node.deletedAt !== null,
+    ) ||
+    !targetEntries.some((entry) => entry.nodeId === revision.nodeId)
+  ) {
+    throw stateConflictError("Revision 目标计划结构异常，请驳回或取消后重新提交");
+  }
   const carriedBaseNodeIds = new Set(
     targetEntries
       .filter((entry) => entry.isCarryForward)
@@ -1018,14 +1037,6 @@ function summarizeRevisionCandidate(
   };
 }
 
-function isRevisionCarryForwardEntry(entry: PlanEntry) {
-  return (
-    (entry.node.type === "MILESTONE" && entry.node.status === "COMPLETED") ||
-    (entry.node.type === "REVISION" &&
-      entry.node.revision?.status === "EFFECTIVE")
-  );
-}
-
 async function loadRevisionForMutationTx(
   tx: PrismaTx,
   actor: ProjectManagementActor,
@@ -1063,6 +1074,8 @@ async function assertRevisionTargetValidTx(
   tx: PrismaTx,
   task: TaskForAuthorization,
   revision: {
+    id: string;
+    nodeId: string;
     basePlanVersionId: string;
     baseTaskLockVersion: number;
     revisionAt: Date;
@@ -1085,6 +1098,19 @@ async function assertRevisionTargetValidTx(
     basePlan.plannedStartAt,
     targetPlan.plannedStartAt,
   );
+  if (
+    inspectRevisionTargetStructure({
+      basePlan,
+      targetPlan,
+      targetPlanVersionId,
+      revisionId: revision.id,
+      revisionTaskNodeId: revision.nodeId,
+    }).length > 0
+  ) {
+    throw stateConflictError(
+      "Revision 目标计划结构异常，请驳回或取消后重新提交",
+    );
+  }
   const terminalAt = targetPlan.nodes.find(
     (entry) => entry.node.type === "TERMINATION",
   )?.node.termination?.plannedAt;
@@ -1161,24 +1187,6 @@ function assertRevisionStartUnchanged(
     basePlannedStartAt.getTime() !== targetPlannedStartAt.getTime()
   ) {
     throw planVersionConflictError("Revision 不能修改计划开始时间");
-  }
-}
-
-function assertCompletedPrefixUnchanged(
-  baseEntries: PlanEntry[],
-  targetEntries: PlanEntry[],
-) {
-  const completedPrefix = baseEntries.filter(
-    (entry) => entry.node.type === "MILESTONE" && entry.node.status === "COMPLETED",
-  );
-  const targetMilestones = targetEntries.filter(
-    (entry) => entry.node.type === "MILESTONE",
-  );
-  for (const [index, baseEntry] of completedPrefix.entries()) {
-    const targetEntry = targetMilestones[index];
-    if (!targetEntry || targetEntry.nodeId !== baseEntry.nodeId) {
-      throw planVersionConflictError("Revision 不能改变已完成 Milestone");
-    }
   }
 }
 

@@ -72,6 +72,8 @@ import {
 import type { TaskLifecycleViews } from "@/lib/project-management/queries/task-lifecycle-queries";
 import type {
   MilestoneCompletionDetails,
+  PendingRevisionPlanComparison,
+  PlanVersionSummary,
   RevisionBasePlanDetails,
   TaskWorkspace,
 } from "@/lib/project-management/queries/task-queries";
@@ -204,6 +206,10 @@ export function TaskWorkbench({
     (revision) =>
       revision.status === "PENDING_APPROVAL" || revision.status === "REJECTED",
   );
+  const pendingRevisionPlanIssue =
+    openRevision?.status === "PENDING_APPROVAL"
+      ? resolvePendingRevisionPlanIssue(currentWorkspace, openRevision.id)
+      : null;
   const canEditActive =
     task.status === "ACTIVE" &&
     (workspace.permissions.canUpdateMetadata || workspace.permissions.canManageMembers);
@@ -487,6 +493,7 @@ export function TaskWorkbench({
         taskOptions={taskOptions}
         timelineWindow={timelineWindow}
         focusRequest={requestedNodeFocus}
+        pendingRevisionPlanIssue={pendingRevisionPlanIssue}
       />
 
       <div
@@ -503,6 +510,7 @@ export function TaskWorkbench({
               revision={openRevision}
               busy={busy}
               approvalBlocked={approvalBlocked}
+              approvalUnavailableReason={pendingRevisionPlanIssue}
               runAction={runAction}
               onResolved={() => {
                 const pending = approvalGate.pendingApproval;
@@ -1084,6 +1092,7 @@ function OpenRevisionPanel({
   revision,
   busy,
   approvalBlocked,
+  approvalUnavailableReason,
   runAction,
   onResolved,
 }: {
@@ -1091,12 +1100,14 @@ function OpenRevisionPanel({
   revision: TaskLifecycleViews["revisions"][number];
   busy: boolean;
   approvalBlocked: boolean;
+  approvalUnavailableReason: string | null;
   runAction: RunAction;
   onResolved: () => void;
 }) {
   const [comment, setComment] = useState("");
   const [commentError, setCommentError] = useState("");
   const reviewRevision = (decision: "APPROVE" | "REJECT" | "CANCEL") => {
+    if (decision === "APPROVE" && approvalUnavailableReason) return;
     if (decision === "REJECT" && !comment.trim()) {
       setCommentError("驳回修订时必须填写说明");
       requestAnimationFrame(() => document.getElementById(`revision-comment-${revision.id}`)?.focus());
@@ -1133,6 +1144,15 @@ function OpenRevisionPanel({
         value={revision.description || "无"}
       />
       <p className="text-xs">Revision 时间：{formatDateTime(revision.revisionAt)}</p>
+      {approvalUnavailableReason && (
+        <p
+          className="rounded-md border border-amber-400 bg-white/70 px-3 py-2 text-sm"
+          role="alert"
+          data-testid="revision-approval-plan-warning"
+        >
+          {approvalUnavailableReason} 批准已禁用；可改为驳回，或由有权限的人取消后重新提交。
+        </p>
+      )}
       {(revision.capabilities.canReview || revision.capabilities.canCancel) && (
         <Field label="处理说明"><Textarea id={`revision-comment-${revision.id}`} value={comment} maxLength={2_000} aria-invalid={Boolean(commentError)} aria-describedby={commentError ? `revision-comment-${revision.id}-error` : undefined} onChange={(event) => { setComment(event.target.value); if (event.target.value.trim()) setCommentError(""); }} /><FieldError id={`revision-comment-${revision.id}-error`} messages={commentError} className="mt-1.5" /></Field>
       )}
@@ -1150,7 +1170,14 @@ function OpenRevisionPanel({
         )}
         {revision.capabilities.canReview && (
           <>
-            <Button type="button" disabled={busy} onClick={() => reviewRevision("APPROVE")}>批准</Button>
+            <Button
+              type="button"
+              disabled={busy || Boolean(approvalUnavailableReason)}
+              title={approvalUnavailableReason ?? undefined}
+              onClick={() => reviewRevision("APPROVE")}
+            >
+              批准
+            </Button>
             <Button type="button" variant="destructive" disabled={busy} onClick={() => reviewRevision("REJECT")}>驳回</Button>
           </>
         )}
@@ -1655,6 +1682,7 @@ function TaskDetailTimeline({
   taskOptions,
   timelineWindow,
   focusRequest,
+  pendingRevisionPlanIssue,
 }: {
   workspace: TaskWorkspace;
   nodes: TaskPlanNavigatorNode[];
@@ -1673,6 +1701,7 @@ function TaskDetailTimeline({
     revision: number;
     urlCenter: string | null;
   };
+  pendingRevisionPlanIssue: string | null;
 }) {
   const [visibleRevisionTaskNodeIds, setVisibleRevisionTaskNodeIds] = useState<
     string[]
@@ -1786,9 +1815,21 @@ function TaskDetailTimeline({
         ),
     [historyPlansByTaskNode, visibleRevisionTaskNodeIds],
   );
-  const historyOverlay = useMemo(
-    () => buildRevisionHistoryTimeCanvasOverlay(visibleHistoryPlans),
-    [visibleHistoryPlans],
+  const pendingRevisionPlan =
+    !workspace.pendingApprovalConflict &&
+    workspace.pendingApproval?.kind === "REVISION" &&
+    workspace.pendingRevisionPlanComparison?.status === "READY" &&
+    workspace.pendingRevisionPlanComparison.revisionNodeId ===
+      workspace.pendingApproval.id
+      ? workspace.pendingRevisionPlanComparison
+      : null;
+  const revisionPlanOverlay = useMemo(
+    () =>
+      buildRevisionPlanTimeCanvasOverlay(
+        pendingRevisionPlan,
+        visibleHistoryPlans,
+      ),
+    [pendingRevisionPlan, visibleHistoryPlans],
   );
   const revisionHistoryControls = {
     byNodeId: Object.fromEntries(
@@ -1829,10 +1870,19 @@ function TaskDetailTimeline({
           Current Plan v{workspace.currentPlan.versionNo} · 按当前计划和投入自动确定范围
         </p>
       </div>
+      {pendingRevisionPlanIssue && (
+        <p
+          className="mt-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+          role="alert"
+          data-testid="pending-revision-plan-warning"
+        >
+          {pendingRevisionPlanIssue} 当前时间线仅展示修改前的 Current Plan。
+        </p>
+      )}
       <div className="mt-4 min-w-0">
         <ResourcePlannerCanvasClient
           initialModel={model}
-          presentationOverlay={historyOverlay}
+          presentationOverlay={revisionPlanOverlay}
           peopleOptions={people}
           peopleScope={{ purpose: "TASK_SEGMENT_CREATE", taskId: workspace.task.id }}
           taskOptions={taskOptions}
@@ -1876,83 +1926,123 @@ function TaskDetailTimeline({
   );
 }
 
-function buildRevisionHistoryTimeCanvasOverlay(
+type ReadyPendingRevisionPlanComparison = Extract<
+  PendingRevisionPlanComparison,
+  { status: "READY" }
+>;
+
+type RevisionPlanOverlayEntry = {
+  rowId: string;
+  sourceId: string;
+  anchorPrefix: string;
+  label: string;
+  sublabel: string;
+  anchorStatus: string;
+  tone: "AMBER" | "SLATE";
+  plan: PlanVersionSummary;
+};
+
+function buildRevisionPlanTimeCanvasOverlay(
+  pendingRevisionPlan: ReadyPendingRevisionPlanComparison | null,
   histories: RevisionBasePlanDetails[],
 ): TimeCanvasPresentationOverlay | undefined {
-  if (histories.length === 0) return undefined;
+  const entries: RevisionPlanOverlayEntry[] = [
+    ...(pendingRevisionPlan
+      ? [
+          {
+            rowId: `revision-candidate:${pendingRevisionPlan.revisionNodeId}`,
+            sourceId: pendingRevisionPlan.revisionNodeId,
+            anchorPrefix: `revision-candidate:${pendingRevisionPlan.revisionNodeId}`,
+            label: `Revision「${pendingRevisionPlan.revisionReason}」修改后`,
+            sublabel: `Plan v${pendingRevisionPlan.plan.versionNo} · 待审批候选（只读）`,
+            anchorStatus: "待审批候选",
+            tone: "AMBER" as const,
+            plan: pendingRevisionPlan.plan,
+          },
+        ]
+      : []),
+    ...histories.map(
+      (history): RevisionPlanOverlayEntry => ({
+        rowId: `history-plan:${history.revisionNodeId}`,
+        sourceId: history.revisionNodeId,
+        anchorPrefix: `history:${history.revisionNodeId}`,
+        label: `Revision「${history.revisionReason}」之前`,
+        sublabel: `Plan v${history.plan.versionNo} · 历史计划（只读）`,
+        anchorStatus: "历史计划",
+        tone: "SLATE",
+        plan: history.plan,
+      }),
+    ),
+  ];
+  if (entries.length === 0) return undefined;
 
-  const historyRows: TimeCanvasModel["rows"] = histories.map((history) => ({
-    id: `history-plan:${history.revisionNodeId}`,
-    sourceId: history.revisionNodeId,
+  const rows: TimeCanvasModel["rows"] = entries.map((entry) => ({
+    id: entry.rowId,
+    sourceId: entry.sourceId,
     kind: "PLAN",
-    label: `Revision「${history.revisionReason}」之前`,
-    sublabel: `Plan v${history.plan.versionNo} · 历史计划（只读）`,
+    label: entry.label,
+    sublabel: entry.sublabel,
     editable: false,
     height: 112,
     capacity: null,
   }));
-  const historyAnchors: TimeCanvasModel["anchors"] = histories.flatMap(
-    (history) => {
-      const rowId = `history-plan:${history.revisionNodeId}`;
-      const versionToken =
-        history.plan.snapshotHash || history.plan.updatedAt;
-      const startAtMs = Date.parse(
-        history.plan.plannedStartAt ?? history.plan.createdAt,
-      );
-      const anchors: TimeCanvasModel["anchors"] = Number.isFinite(startAtMs)
-        ? [
-            {
-              id: `history:${history.revisionNodeId}:start`,
-              rowId,
-              taskId: history.plan.taskId,
-              kind: "PLAN_START",
-              status: "历史计划",
-              label: "Start",
-              atMs: startAtMs,
-              sequence: -1,
-              editable: false,
-              versionToken,
-              tone: "SLATE",
-            },
-          ]
-        : [];
-      for (const node of history.plan.nodes) {
-        const plannedAt =
-          node.milestone?.expectedCompletedAt ??
-          node.revision?.revisionAt ??
-          node.termination?.plannedAt;
-        if (!plannedAt) continue;
-        const atMs = Date.parse(plannedAt);
-        if (!Number.isFinite(atMs)) continue;
-        anchors.push({
-          id: `history:${history.revisionNodeId}:${node.nodeId}`,
-          rowId,
-          taskId: history.plan.taskId,
-          kind: node.type,
-          status: "历史计划",
-          label:
-            node.milestone?.goal ??
-            node.revision?.reason ??
-            node.termination?.name ??
-            "未命名节点",
-          atMs,
-          sequence: node.sequence,
-          editable: false,
-          versionToken,
-          tone: "SLATE",
-        });
-      }
-      return anchors;
-    },
-  );
-  const historyTimes = historyAnchors.map((anchor) => anchor.atMs);
-  const historyRange = rangeForTimes(historyTimes);
-  if (!historyRange) return undefined;
+  const anchors: TimeCanvasModel["anchors"] = entries.flatMap((entry) => {
+    const versionToken = entry.plan.snapshotHash || entry.plan.updatedAt;
+    const startAtMs = Date.parse(
+      entry.plan.plannedStartAt ?? entry.plan.createdAt,
+    );
+    const planAnchors: TimeCanvasModel["anchors"] = Number.isFinite(startAtMs)
+      ? [
+          {
+            id: `${entry.anchorPrefix}:start`,
+            rowId: entry.rowId,
+            taskId: entry.plan.taskId,
+            kind: "PLAN_START",
+            status: entry.anchorStatus,
+            label: "Start",
+            atMs: startAtMs,
+            sequence: -1,
+            editable: false,
+            versionToken,
+            tone: entry.tone,
+          },
+        ]
+      : [];
+    for (const node of entry.plan.nodes) {
+      const plannedAt =
+        node.milestone?.expectedCompletedAt ??
+        node.revision?.revisionAt ??
+        node.termination?.plannedAt;
+      if (!plannedAt) continue;
+      const atMs = Date.parse(plannedAt);
+      if (!Number.isFinite(atMs)) continue;
+      planAnchors.push({
+        id: `${entry.anchorPrefix}:${node.nodeId}`,
+        rowId: entry.rowId,
+        taskId: entry.plan.taskId,
+        kind: node.type,
+        status: entry.anchorStatus,
+        label:
+          node.milestone?.goal ??
+          node.revision?.reason ??
+          node.termination?.name ??
+          "未命名节点",
+        atMs,
+        sequence: node.sequence,
+        editable: false,
+        versionToken,
+        tone: entry.tone,
+      });
+    }
+    return planAnchors;
+  });
+  const range = rangeForTimes(anchors.map((anchor) => anchor.atMs));
+  if (!range) return undefined;
 
   return {
-    rows: historyRows,
-    anchors: historyAnchors,
-    range: historyRange,
+    rows,
+    anchors,
+    range,
   };
 }
 
@@ -2010,6 +2100,23 @@ function approvalGateKey(
   return workspace.pendingApproval
     ? `${workspace.pendingApproval.kind}:${workspace.pendingApproval.id}`
     : "NONE";
+}
+
+function resolvePendingRevisionPlanIssue(
+  workspace: TaskWorkspace,
+  revisionNodeId: string,
+) {
+  if (
+    workspace.pendingApprovalConflict ||
+    workspace.pendingApproval?.kind !== "REVISION" ||
+    workspace.pendingApproval.id !== revisionNodeId ||
+    workspace.pendingRevisionPlanComparison?.revisionNodeId !== revisionNodeId
+  ) {
+    return "待审批 Revision 与当前审批状态不一致，无法安全展示修改后计划。";
+  }
+  return workspace.pendingRevisionPlanComparison.status === "UNAVAILABLE"
+    ? workspace.pendingRevisionPlanComparison.message
+    : null;
 }
 
 function actionLockVersion(value: unknown): number | null {

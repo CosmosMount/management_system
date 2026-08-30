@@ -35,6 +35,7 @@ import {
   encodeKeysetCursor,
 } from "@/lib/project-management/queries/keyset-cursor";
 import { safeHttpUrl } from "@/lib/project-management/queries/safe-http-url";
+import { inspectRevisionTargetStructure } from "@/lib/project-management/domain/revision-target-structure";
 
 export type TaskListItem = {
   id: string;
@@ -122,6 +123,10 @@ const planVersionInclude = {
             },
           },
           termination: true,
+          planVersionEntries: {
+            take: 2,
+            select: { planVersionId: true },
+          },
         },
       },
     },
@@ -207,6 +212,7 @@ export type TaskWorkspace = {
   currentPlan: PlanVersionSummary;
   pendingApproval: TaskPendingApproval | null;
   pendingApprovalConflict: boolean;
+  pendingRevisionPlanComparison: PendingRevisionPlanComparison | null;
   permissions: {
     canUpdateMetadata: boolean;
     canManageMembers: boolean;
@@ -238,6 +244,20 @@ export type RevisionBasePlanDetails = {
   revisionAt: string;
   plan: PlanVersionSummary;
 };
+
+export type PendingRevisionPlanComparison =
+  | {
+      status: "READY";
+      revisionNodeId: string;
+      revisionReason: string;
+      revisionAt: string;
+      plan: PlanVersionSummary;
+    }
+  | {
+      status: "UNAVAILABLE";
+      revisionNodeId: string;
+      message: string;
+    };
 
 export type PlanVersionSummary = {
   id: string;
@@ -494,6 +514,17 @@ export async function getTaskWorkspace({
   if (!task) throw notFoundError();
 
   const approvalGate = await loadTaskApprovalGate(prisma, task.id);
+  const pendingRevisionPlanComparison =
+    !approvalGate.pendingApprovalConflict &&
+    approvalGate.pendingApproval?.kind === "REVISION"
+      ? await loadPendingRevisionPlanComparison({
+          taskId: task.id,
+          currentPlanVersionId: task.currentPlanVersionId,
+          currentPlan: task.currentPlanVersion,
+          lockVersion: task.lockVersion,
+          revisionNodeId: approvalGate.pendingApproval.id,
+        })
+      : null;
 
   const resource = taskResource({
     team: task.team,
@@ -533,6 +564,7 @@ export async function getTaskWorkspace({
     currentPlan: serializePlanVersion(task.currentPlanVersion),
     pendingApproval: approvalGate.pendingApproval,
     pendingApprovalConflict: approvalGate.pendingApprovalConflict,
+    pendingRevisionPlanComparison,
     permissions: {
       canUpdateMetadata: allowed(actor, "task.update_metadata", resource),
       canManageMembers: allowed(actor, "task.manage_members", resource),
@@ -553,6 +585,89 @@ export async function getTaskWorkspace({
       canReviewTermination: allowed(actor, "termination.review", resource),
       canViewHistory: allowed(actor, "plan.view_history", resource),
     },
+  };
+}
+
+async function loadPendingRevisionPlanComparison({
+  taskId,
+  currentPlanVersionId,
+  currentPlan,
+  lockVersion,
+  revisionNodeId,
+}: {
+  taskId: string;
+  currentPlanVersionId: string;
+  currentPlan: PlanVersionWithNodes;
+  lockVersion: number;
+  revisionNodeId: string;
+}): Promise<PendingRevisionPlanComparison> {
+  const unavailable = (message: string): PendingRevisionPlanComparison => ({
+    status: "UNAVAILABLE",
+    revisionNodeId,
+    message,
+  });
+  const revision = await prisma.revisionNode.findFirst({
+    where: {
+      id: revisionNodeId,
+      status: "PENDING_APPROVAL",
+      node: { taskId, deletedAt: null },
+    },
+    select: {
+      id: true,
+      nodeId: true,
+      reason: true,
+      revisionAt: true,
+      basePlanVersionId: true,
+      baseTaskLockVersion: true,
+      targetPlanVersion: { include: planVersionInclude },
+    },
+  });
+  if (!revision) {
+    return unavailable("待审批 Revision 已变化，无法安全展示修改后计划。");
+  }
+  if (
+    revision.basePlanVersionId !== currentPlanVersionId ||
+    revision.baseTaskLockVersion !== lockVersion
+  ) {
+    return unavailable("待审批 Revision 的基线已失效，无法安全展示修改后计划。");
+  }
+
+  const targetPlan = revision.targetPlanVersion;
+  if (!targetPlan) {
+    return unavailable("待审批 Revision 缺少修改后的候选计划。");
+  }
+  if (
+    targetPlan.taskId !== taskId ||
+    targetPlan.status !== "DRAFT" ||
+    targetPlan.baseVersionId !== revision.basePlanVersionId ||
+    targetPlan.revisionNodeId !== revision.id ||
+    targetPlan.nodes.some(
+      (entry) => entry.node.taskId !== taskId || entry.node.deletedAt !== null,
+    )
+  ) {
+    return unavailable("待审批 Revision 的候选计划关联异常，无法安全展示修改后计划。");
+  }
+
+  const serializedTargetPlan = serializePlanVersion(targetPlan);
+  if (
+    serializedTargetPlan.chronologyCompatibilityIssues.length > 0 ||
+    inspectRevisionTargetStructure({
+      basePlan: currentPlan,
+      targetPlan,
+      targetPlanVersionId: targetPlan.id,
+      revisionId: revision.id,
+      revisionTaskNodeId: revision.nodeId,
+    }).length > 0
+  ) {
+    return unavailable("待审批 Revision 的候选计划结构异常，无法安全展示修改后计划。");
+  }
+
+  return {
+    status: "READY",
+    revisionNodeId: revision.id,
+    revisionReason: revision.reason,
+    revisionAt: revision.revisionAt.toISOString(),
+    plan: serializedTargetPlan,
   };
 }
 
