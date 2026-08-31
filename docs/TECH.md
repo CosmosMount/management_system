@@ -83,7 +83,7 @@ Auth.js 使用飞书 OAuth。认证配置与完整登录副作用拆分如下：
 | `lib/auth-edge.ts` | Proxy 使用的轻量 Auth.js 实例 |
 | `lib/auth.ts` | 完整 auth；登录时解析统一账号并更新报销 User |
 
-`Account + AccountIdentity` 是两个业务域共同的账号底座；`Person` 承载项目成员资料，`User` 通过唯一、非空 `accountId` 保留采购订单关系。飞书 `unionId` 优先作为 `providerSubject`，无 `unionId` 时使用 `open:<openId>`。身份解析与报销 User 协调在同一事务中按 `accountId → unionId → openId` 查找；`openId` 轮换会更新原 Identity 和 User，候选指向不同账号或重复 Identity 时硬失败并写脱敏审计，不按姓名自动合并。账号级项目访问禁用字段和 Proxy/Actor gate 已删除；项目可见性与写权限继续由系统角色、TaskMember、`taskReadableWhere` 和各 action 授权规则服务端执行。
+`Account + AccountIdentity` 是两个业务域共同的账号底座；`Person` 承载项目成员资料，`User` 通过唯一、非空 `accountId` 保留采购订单关系。飞书 `unionId` 优先作为 `providerSubject`，无 `unionId` 时使用 `open:<openId>`。身份解析与报销 User 协调在同一事务中按 `accountId → unionId → openId` 查找；`openId` 轮换会更新原 Identity 和 User，候选指向不同账号或重复 Identity 时硬失败并写脱敏审计，不按姓名自动合并。`lib/project-management/identity/index.ts` 保留稳定公共出口；公共身份类型与错误、飞书身份解析、当前 Actor 解析、历史身份回填及共享常量/脱敏 helper 分别位于内部 `identity-types.ts`、`feishu-identity.ts`、`identity-actor.ts`、`identity-backfill.ts` 和 `identity-support.ts`。账号级项目访问禁用字段和 Proxy/Actor gate 已删除；项目可见性与写权限继续由系统角色、TaskMember、`taskReadableWhere` 和各 action 授权规则服务端执行。
 
 账号与权限后台采用三块职责管理：车组职责、技术组职责以及用户与角色。职责矩阵独立读取全部有效报销角色，不受下方账号列表分页影响；当前成员列表、职责矩阵和管理员账号选择器均只装配 `Person.status=ACTIVE` 的账号，停用人员的历史记录仍可通过既有审计保留。账号列表继续使用服务端筛选和每页 30 条分页。管理员账号选择器及指导老师邮箱更新均使用稳定 `accountId` 定位账号，只允许统一超级管理员调用；邮箱更新和安全审计在同一事务内写入。`REIMBURSEMENT` 范围仅返回已绑定报销 `User` 的账号。空查询使用绑定选择范围的稳定游标，关键词查询在最多 501 个直接/回退候选内按姓名、拼音、`openId`、`unionId` 和邮箱排序并返回前 50 项。页面筛选和选择器共用同一有界模糊匹配实现。
 
