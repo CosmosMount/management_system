@@ -194,7 +194,7 @@ P5 Resource Segment 服务端闭环位于 `lib/project-management/application/se
 - Segment 服务支持单条/批量 Planned 创建、Actual 创建、更新、批量移动、拆分、合并、取消、完整确认、部分确认和 Actual 逻辑删除。所有写操作继续在事务内写 `WorkSegmentChange` 和 `DomainAuditEvent`，通过 `expectedUpdatedAt` 执行乐观锁，批量写入保持全成全败。
 - 创建或改变 Task 关联的路径继续使用 Task 行锁，并要求 Segment Person 是目标 Task 的有效 Owner/Participant；新建、批量新建、更新、拆分、合并和确认均复核该成员一致性。状态转换继续按稳定 Segment ID 顺序锁行。Segment 不再保存职责、Task Node 关联或关联复核状态。
 - Segment 校验包括 `endAt > startAt`、单条及 merge 最终结果最长 31 天和 Task 成员关联规则。`completionPercent` 已从写入 validation、service DTO、普通查询 DTO 和数据库列完全退役；迁移前的非空数值连同 Segment、Task、类型、状态和历史时间保存在 append-only `DomainAuditEvent`。
-- Segment DTO/审计快照、时间范围与状态规则、定时状态迁移分别位于独立模块；创建/修改、批量移动/取消和确认/来源仍由主服务在单层事务中编排。
+- Segment DTO/审计快照、时间范围与状态规则、定时状态迁移分别位于独立模块；`segment-service.ts` 保留公开事务编排，访问/关联/并发守卫、创建与确认持久化、变更与领域审计记录分别位于 `segment-access.ts`、`segment-creation.ts` 和 `segment-change-recorder.ts`。
 - 所有已登录统一账号可读取全员完整 Planned/Actual Segment 和变更历史。Participant 只能管理自己的 Task 关联 Segment，Owner 可管理该 Task 全部 Segment，全局管理员可管理全部；非成员不能写入已有 Task。无 Task 关联的 Segment 仍由本人管理。停用 Person 的历史 Segment 继续展示，但不能创建新 Segment。状态机、确认生成 Actual、`WorkSegmentSource`、变更历史和审计均保留。多个 Segment 可以时间重叠，服务端不检测、提示、阻止或通知资源冲突。
 - `WorkSegment.allocation`、资源冲突领域模型、扫描器、建议预览、处理 action 和相关 DTO 已删除。旧客户端提交 `allocation` 或 `includeConflicts` 会在 strict Zod 边界返回校验错误。
 
