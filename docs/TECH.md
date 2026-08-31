@@ -155,7 +155,7 @@ Project 结束规则由共享领域策略统一定义。只有 `DRAFT` 和 `ACTI
 
 `RiskRecord` 和 `Comment` 分别是风险与评论的多目标事实表。两表都有可空 `projectId/taskId`，PostgreSQL XOR 检查约束保证恰好一个目标；外键均为 `Restrict`。风险允许同一目标多条 `ACTIVE`，状态只能由 `ACTIVE` 条件更新为 `RESOLVED`，数据库同时约束解决人、说明和时间的一致性。评论不编辑、不恢复，删除只写 `deletedAt/deletedBy*` 软删除字段并由一致性约束保护。Account 外键和姓名快照保留可解释历史，Person 外键允许为空。
 
-风险与评论 mutation 位于 `lib/project-management/application/collaboration-service.ts`：事务内重新读取系统角色、锁定目标或记录、执行状态和成员权限、写业务表与 `DomainAuditEvent`。风险提出/解决和评论发布在同一事务写站内通知及 `channel=project-management` outbox；评论删除不通知。Project/Task 负责人、参与人和两类全局管理员可操作其直接风险；Project 成员不会继承下属 Task 风险权限。所有已登录用户可评论，只有全局管理员可删除。
+风险与评论 mutation 位于 `lib/project-management/application/collaboration-service.ts`：事务内重新读取系统角色、锁定目标或记录、执行状态和成员权限、写业务表与 `DomainAuditEvent`。风险提出/解决和评论发布在同一事务写站内通知及 `channel=project-management` outbox；评论删除不通知。Project/Task 负责人、参与人和两类全局管理员可操作其直接风险；Project 成员不会继承下属 Task 风险权限。所有已登录用户可评论，只有全局管理员可删除。协作查询继续由 `lib/project-management/queries/collaboration-queries.ts` 提供稳定公共出口，风险、评论和近期动态分页分别位于内部 `collaboration-risk-queries.ts`、`collaboration-comment-queries.ts` 和 `collaboration-activity-queries.ts`，并共用 `collaboration-query-support.ts` 的目标可见性与时间游标逻辑。
 
 近期动态只读取 `DomainAuditEvent`。白名单 formatter 返回中文标题和有界字段摘要，不把 raw `before/after` 中的内部 ID、hash、锁版本或未知 action 下发浏览器；DTO 只保留分页去重与安全详情链接需要的记录 ID/路径。筛选、`createdAt + id` 游标和 20 条分页均在服务端执行；Revision、Milestone、Terminal 和人员投入名称通过当前页最多 20 条事件的有界批量查询装配。所有新 Task 审计在统一审计写入函数中固化事件发生时的 `projectId`；Task 加入、移出或移动事件以 `before/after.projectId` 支持两个 Project 查询。既有缺少 `projectId` 的普通 Task 审计不回填，也不进入 Project 动态。客户端每 5 秒查询最新可见审计版本 token，隐藏页面暂停，恢复可见立即检查，并用请求序号防止旧结果覆盖。
 
