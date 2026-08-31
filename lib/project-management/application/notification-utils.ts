@@ -18,6 +18,7 @@ import {
   FEISHU_OPEN_IDENTITY_SELECT,
   firstNonEmptyFeishuOpenId,
 } from "@/lib/project-management/application/feishu-identity";
+import { jsonValue } from "@/lib/project-management/application/prisma-json";
 
 export type ProjectManagementNotificationRecipient = {
   accountId: string;
@@ -320,8 +321,4 @@ async function actorDisplayNameTx(
     select: { displayName: true },
   });
   return person?.displayName ?? "系统用户";
-}
-
-function jsonValue(value: unknown): Prisma.InputJsonValue {
-  return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 }

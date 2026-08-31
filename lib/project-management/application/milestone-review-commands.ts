@@ -20,6 +20,7 @@ import {
   reviewSubmitterAndOwnersTx,
 } from "@/lib/project-management/application/lifecycle-notifications";
 import { taskAuthorizationResource } from "@/lib/project-management/application/task-authorization-resource";
+import { jsonValue } from "@/lib/project-management/application/prisma-json";
 import { milestoneReviewResultLabel } from "@/lib/project-management/notifications/user-facing-copy";
 import { assertTaskApprovalAvailableTx } from "@/lib/project-management/task-approval-gate";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
@@ -351,8 +352,4 @@ async function loadMilestoneReviewTaskIdTx(
   });
   if (!review || review.milestoneNode.node.deletedAt) throw notFoundError();
   return review.milestoneNode.node.taskId;
-}
-
-function jsonValue(value: unknown): Prisma.InputJsonValue {
-  return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 }

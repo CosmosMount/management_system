@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Prisma, TaskStatus } from "@prisma/client";
+import type { TaskStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { assertAuthorized } from "@/lib/project-management/authorization";
 import { createDomainAuditEventTx } from "@/lib/project-management/audit";
@@ -32,6 +32,7 @@ import {
 } from "@/lib/project-management/application/lifecycle-plan-audit";
 import { notifyTaskMembersTx } from "@/lib/project-management/application/lifecycle-notifications";
 import { taskAuthorizationResource } from "@/lib/project-management/application/task-authorization-resource";
+import { jsonValue } from "@/lib/project-management/application/prisma-json";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import {
   activateTaskInputSchema,
@@ -480,8 +481,4 @@ function assertCurrentTaskComposerPayloadVersion(input: unknown) {
       "页面版本已过期，请刷新页面后重试；本地草稿会继续保留",
     );
   }
-}
-
-function jsonValue(value: unknown): Prisma.InputJsonValue {
-  return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 }

@@ -27,6 +27,7 @@ import {
 } from "@/lib/project-management/application/lifecycle-notifications";
 import type { LifecyclePlanEntry } from "@/lib/project-management/application/lifecycle-records";
 import { taskAuthorizationResource } from "@/lib/project-management/application/task-authorization-resource";
+import { jsonValue } from "@/lib/project-management/application/prisma-json";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import { lockGlobalApprovalAdministratorSetTx } from "@/lib/project-management/approval-administrators";
 import {
@@ -570,8 +571,4 @@ function terminationDecisionSummary(input: {
 
 function terminationDisplayName(name: string) {
   return name === "Terminal" ? "结束节点" : `结束节点「${name}」`;
-}
-
-function jsonValue(value: unknown): Prisma.InputJsonValue {
-  return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 }

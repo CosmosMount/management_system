@@ -16,6 +16,7 @@ import {
   revisionCreatorAndOwnersTx,
 } from "@/lib/project-management/application/lifecycle-notifications";
 import { recipientsForAccountsOrPeopleTx } from "@/lib/project-management/application/notification-utils";
+import { jsonValue } from "@/lib/project-management/application/prisma-json";
 import {
   cancelRevisionInputSchema,
   createRevisionInputSchema,
@@ -1188,8 +1189,4 @@ function assertRevisionStartUnchanged(
   ) {
     throw planVersionConflictError("Revision 不能修改计划开始时间");
   }
-}
-
-function jsonValue(value: unknown): Prisma.InputJsonValue {
-  return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 }

@@ -6,26 +6,13 @@ import type {
   TaskStatus,
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import {
-  assertAuthorized,
-  authorize,
-  taskReadableWhere,
-} from "@/lib/project-management/authorization";
 import { createDomainAuditEventTx } from "@/lib/project-management/audit";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import {
   associationInvalidError,
-  notFoundError,
   staleTaskError,
   stateConflictError,
-  validationError,
 } from "@/lib/project-management/application/errors";
-import {
-  createProjectManagementEventNotificationsTx,
-  recipientsForAccountIdsTx,
-  recipientsForPersonIdsTx,
-} from "@/lib/project-management/application/notification-utils";
-import { lockTaskSegmentAssociationsTx } from "@/lib/project-management/application/task-segment-association-lock";
 import { assertPersistedPlanChronologyValid } from "@/lib/project-management/application/persisted-plan-chronology";
 import {
   updateActiveTaskInputSchema,
@@ -33,9 +20,10 @@ import {
   type UpdateActiveTaskInput,
   type UpdateTaskDraftInput,
 } from "@/lib/project-management/validations/task-mutations";
-import { refreshProjectManagementActorTx } from "@/lib/project-management/application/actor-refresh";
-import { acquireProjectCrossAggregateLockTx, assertTaskProjectChangeAllowedTx, syncTaskMembersToProjectTx } from "@/lib/project-management/application/project-service";
-import { taskAuthorizationResource } from "@/lib/project-management/application/task-authorization-resource";
+import {
+  assertTaskProjectChangeAllowedTx,
+  syncTaskMembersToProjectTx,
+} from "@/lib/project-management/application/project-service";
 import {
   taskMutationInclude,
   taskMutationPlanNodeInclude,
@@ -53,6 +41,31 @@ import {
   notifyTaskMemberChangesTx,
   type MemberChange,
 } from "@/lib/project-management/application/task-member-notifications";
+import {
+  assertAuthorizedTargetScope,
+  assertAuthorizedTaskAction,
+  assertExpectedLockVersion,
+  assertRelatedTaskVisibleTx,
+  assertTaskStatus,
+  loadLockedTaskTx,
+} from "@/lib/project-management/application/task-mutation-context";
+import {
+  applyMemberChangesTx,
+  assertActivePeopleTx,
+  assertExistingActiveMemberInvariant,
+  assertExistingMemberStructure,
+  assertRequestedActiveMemberInvariant,
+  assertRequestedMemberStructure,
+  assertTaskSegmentMembersIncludedTx,
+  memberKey,
+  memberSnapshot,
+} from "@/lib/project-management/application/task-member-mutations";
+import {
+  auditTaskProjectChangeTx,
+  metadataSnapshot,
+  notifyTaskUpdatedTx,
+} from "@/lib/project-management/application/task-metadata-effects";
+import { jsonValue } from "@/lib/project-management/application/prisma-json";
 
 type PrismaTx = Prisma.TransactionClient;
 
@@ -384,229 +397,6 @@ export async function updateActiveTask(
       members: afterMembers,
     };
   });
-}
-
-async function loadLockedTaskTx(
-  tx: PrismaTx,
-  actor: ProjectManagementActor,
-  taskId: string,
-): Promise<{
-  refreshedActor: ProjectManagementActor;
-  task: TaskForMutation;
-}> {
-  await acquireProjectCrossAggregateLockTx(tx);
-  const lockedTaskIds = await lockTaskSegmentAssociationsTx(tx, [taskId]);
-  if (!lockedTaskIds.has(taskId)) throw notFoundError();
-
-  const refreshedActor = await refreshProjectManagementActorTx(tx, actor);
-  const task = await tx.task.findUnique({
-    where: { id: taskId },
-    include: taskMutationInclude,
-  });
-  if (!task || task.deletedAt) throw notFoundError();
-  const visible = authorize({
-    actor: refreshedActor,
-    action: "task.view",
-    resource: taskAuthorizationResource(task),
-  });
-  if (!visible.allowed) throw notFoundError();
-  return { refreshedActor, task };
-}
-
-function assertAuthorizedTaskAction(
-  actor: ProjectManagementActor,
-  task: TaskForMutation,
-  action: "task.update_metadata" | "task.manage_members",
-) {
-  assertAuthorized({ actor, action, resource: taskAuthorizationResource(task) });
-}
-
-function assertAuthorizedTargetScope(
-  actor: ProjectManagementActor,
-  task: TaskForMutation,
-  input: Pick<UpdateTaskDraftInput, "team" | "techGroup">,
-) {
-  assertAuthorized({
-    actor,
-    action: "task.update_metadata",
-    resource: {
-      ...taskAuthorizationResource(task),
-      team: input.team,
-      techGroup: input.techGroup,
-    },
-  });
-}
-
-function assertTaskStatus(
-  task: TaskForMutation,
-  requiredStatus: "DRAFT" | "ACTIVE",
-) {
-  if (task.status !== requiredStatus) {
-    throw stateConflictError(
-      requiredStatus === "DRAFT"
-        ? "只有草稿 Task 可以执行此操作"
-        : "只有执行中的 Task 可以执行此操作",
-    );
-  }
-}
-
-function assertExpectedLockVersion(
-  task: TaskForMutation,
-  expectedLockVersion: number,
-) {
-  if (task.lockVersion !== expectedLockVersion) {
-    throw staleTaskError(task);
-  }
-}
-
-async function assertRelatedTaskVisibleTx(
-  tx: PrismaTx,
-  actor: ProjectManagementActor,
-  taskId: string,
-  relatedTaskId: string | null,
-  currentRelatedTaskId: string | null,
-) {
-  if (!relatedTaskId) return;
-  if (relatedTaskId === taskId) {
-    throw associationInvalidError("Task 不能关联自身", {
-      relatedTaskId: ["Task 不能关联自身"],
-    });
-  }
-  if (relatedTaskId === currentRelatedTaskId) return;
-  const relatedTask = await tx.task.findFirst({
-    where: {
-      AND: [{ id: relatedTaskId }, taskReadableWhere(actor)],
-    },
-    select: { id: true },
-  });
-  if (!relatedTask) throw notFoundError();
-}
-
-async function assertActivePeopleTx(
-  tx: PrismaTx,
-  personIds: string[],
-  existingPersonIds: string[] = [],
-) {
-  const existing = new Set(existingPersonIds);
-  const uniquePersonIds = [...new Set(personIds)].filter(
-    (personId) => !existing.has(personId),
-  );
-  if (uniquePersonIds.length === 0) return;
-  const count = await tx.person.count({
-    where: { id: { in: uniquePersonIds }, status: "ACTIVE" },
-  });
-  if (count !== uniquePersonIds.length) {
-    throw validationError("成员不存在或已停用", {
-      members: ["成员不存在或已停用"],
-    });
-  }
-}
-
-function assertExistingMemberStructure(
-  members: Array<{ personId: string; role: TaskMemberRole }>,
-) {
-  const personIds = members.map((member) => member.personId);
-  if (new Set(personIds).size !== personIds.length) {
-    throw stateConflictError("Task 当前成员数据存在重复成员，请联系管理员处理");
-  }
-  if (
-    members.some(
-      (member) => member.role !== "OWNER" && member.role !== "PARTICIPANT",
-    )
-  ) {
-    throw stateConflictError("Task 当前成员仍含历史角色，请联系管理员处理");
-  }
-}
-
-function assertExistingActiveMemberInvariant(
-  members: Array<{ personId: string; role: TaskMemberRole }>,
-) {
-  assertExistingMemberStructure(members);
-  if (members.every((member) => member.role !== "OWNER")) {
-    throw stateConflictError("Task 当前没有负责人，请联系管理员处理");
-  }
-}
-
-function assertRequestedMemberStructure(
-  members: Array<{ personId: string; role: TaskMemberRole }>,
-) {
-  const personIds = members.map((member) => member.personId);
-  if (new Set(personIds).size !== personIds.length) {
-    throw validationError("同一成员只能有一个角色", {
-      members: ["同一成员只能有一个角色"],
-    });
-  }
-}
-
-function assertRequestedActiveMemberInvariant(
-  members: Array<{ personId: string; role: TaskMemberRole }>,
-) {
-  assertRequestedMemberStructure(members);
-  if (members.every((member) => member.role !== "OWNER")) {
-    throw validationError("至少需要一名负责人", {
-      members: ["至少需要一名负责人"],
-    });
-  }
-}
-
-async function assertTaskSegmentMembersIncludedTx(
-  tx: PrismaTx,
-  taskId: string,
-  requestedMembers: Array<{ personId: string }>,
-) {
-  const retainedPersonIds = requestedMembers.map((member) => member.personId);
-  const orphanedSegment = await tx.workSegment.findFirst({
-    where: {
-      taskId,
-      deletedAt: null,
-      personId: { notIn: retainedPersonIds },
-    },
-    select: { id: true },
-  });
-  if (orphanedSegment) {
-    throw validationError("仍有关联投入的成员不能移出 Task", {
-      members: ["请先处理该成员的 Task 关联投入"],
-    });
-  }
-}
-
-async function applyMemberChangesTx(
-  tx: PrismaTx,
-  input: {
-    taskId: string;
-    actorAccountId: string;
-    currentMembers: Array<{
-      id: string;
-      personId: string;
-      role: TaskMemberRole;
-    }>;
-    requestedMembers: Array<{ personId: string; role: TaskMemberRole }>;
-  },
-) {
-  const requestedKeys = new Set(input.requestedMembers.map(memberKey));
-  const currentKeys = new Set(input.currentMembers.map(memberKey));
-  const removedIds = input.currentMembers
-    .filter((member) => !requestedKeys.has(memberKey(member)))
-    .map((member) => member.id);
-  const added = input.requestedMembers.filter(
-    (member) => !currentKeys.has(memberKey(member)),
-  );
-  if (removedIds.length > 0) {
-    await tx.taskMember.updateMany({
-      where: { id: { in: removedIds }, taskId: input.taskId, removedAt: null },
-      data: { removedAt: new Date() },
-    });
-  }
-  if (added.length > 0) {
-    await tx.taskMember.createMany({
-      data: added.map((member) => ({
-        taskId: input.taskId,
-        personId: member.personId,
-        role: member.role,
-        createdByAccountId: input.actorAccountId,
-      })),
-    });
-  }
 }
 
 async function loadInitialDraftPlanTx(
@@ -948,124 +738,6 @@ function serializeTaskMutation(task: TaskForMutation): TaskMutationResult {
   };
 }
 
-function metadataSnapshot(task: TaskForMutation) {
-  return {
-    title: task.title,
-    description: task.description,
-    team: task.team,
-    techGroup: task.techGroup,
-    priority: task.priority,
-    relatedTaskId: task.relatedTaskId,
-    projectId: task.projectId,
-    lockVersion: task.lockVersion,
-  };
-}
-
-async function auditTaskProjectChangeTx(
-  tx: PrismaTx,
-  actor: ProjectManagementActor,
-  beforeTask: TaskForMutation,
-  afterTask: TaskForMutation,
-) {
-  if (beforeTask.projectId === afterTask.projectId) return;
-  await createDomainAuditEventTx(tx, {
-    actorAccountId: actor.accountId,
-    actorPersonId: actor.personId,
-    action: afterTask.projectId
-      ? beforeTask.projectId
-        ? "pm.task.project.move"
-        : "pm.task.project.assign"
-      : "pm.task.project.remove",
-    entityType: "Task",
-    entityId: afterTask.id,
-    taskId: afterTask.id,
-    projectId: afterTask.projectId ?? beforeTask.projectId,
-    before: jsonValue({ projectId: beforeTask.projectId }),
-    after: jsonValue({ projectId: afterTask.projectId }),
-    reason: "更新 Task 所属 Project",
-  });
-  const projectIds = [beforeTask.projectId, afterTask.projectId].filter((id): id is string => Boolean(id));
-  const projects = projectIds.length
-    ? await tx.project.findMany({ where: { id: { in: projectIds } }, select: { id: true, name: true, members: { where: { removedAt: null, role: "OWNER" }, select: { personId: true } } } })
-    : [];
-  const recipientPersonIds = [...new Set([...afterTask.members.filter((member) => member.role === "OWNER" || member.role === "PARTICIPANT").map((member) => member.personId), ...projects.flatMap((project) => project.members.map((member) => member.personId))])];
-  const recipients = await recipientsForPersonIdsTx(tx, recipientPersonIds);
-  const primaryProject = projects.find((project) => project.id === afterTask.projectId) ?? projects[0];
-  await createProjectManagementEventNotificationsTx(tx, {
-    actor,
-    task: { id: afterTask.id, title: afterTask.title, status: afterTask.status },
-    project: primaryProject ? { id: primaryProject.id, name: primaryProject.name } : null,
-    kind: "project_task_changed",
-    category: "PROJECT",
-    eventKey: `pm:task:${afterTask.id}:project:${afterTask.lockVersion}`,
-    title: "任务所属项目已变更",
-    summary: afterTask.projectId ? `任务「${afterTask.title}」已${beforeTask.projectId ? "移动到" : "加入"}项目「${primaryProject?.name ?? "未命名项目"}」` : `任务「${afterTask.title}」已移出项目`,
-    entityType: "Task",
-    entityId: afterTask.id,
-    linkPath: `/progress/tasks/${afterTask.id}`,
-    mandatory: false,
-    recipients,
-    context: { beforeProjectId: beforeTask.projectId, afterProjectId: afterTask.projectId },
-  });
-}
-
-async function notifyTaskUpdatedTx(
-  tx: PrismaTx,
-  actor: ProjectManagementActor,
-  beforeTask: TaskForMutation,
-  afterTask: TaskForMutation,
-) {
-  const changedFields = taskBasicInformationChangedFields(beforeTask, afterTask);
-  if (changedFields.length === 0) return;
-
-  const memberPersonIds = [
-    ...beforeTask.members,
-    ...afterTask.members,
-  ]
-    .filter(
-      (member) => member.role === "OWNER" || member.role === "PARTICIPANT",
-    )
-    .map((member) => member.personId);
-  const recipients = [
-    ...(await recipientsForAccountIdsTx(tx, [actor.accountId])),
-    ...(await recipientsForPersonIdsTx(tx, memberPersonIds)),
-  ];
-  await createProjectManagementEventNotificationsTx(tx, {
-    actor,
-    task: {
-      id: afterTask.id,
-      title: afterTask.title,
-      status: afterTask.status,
-      currentPlanVersionId: afterTask.currentPlanVersionId,
-    },
-    kind: "task_updated",
-    category: "TASK",
-    eventKey: `pm:task:${afterTask.id}:updated:${afterTask.lockVersion}`,
-    title: "任务信息已更新",
-    summary: `任务「${afterTask.title}」的信息已更新：${changedFields.join("、")}`,
-    entityType: "Task",
-    entityId: afterTask.id,
-    linkPath: `/progress/tasks/${afterTask.id}`,
-    mandatory: false,
-    recipients,
-    context: { changedFields },
-  });
-}
-
-function taskBasicInformationChangedFields(
-  beforeTask: TaskForMutation,
-  afterTask: TaskForMutation,
-) {
-  return [
-    beforeTask.title !== afterTask.title ? "任务名称" : null,
-    beforeTask.description !== afterTask.description ? "任务内容" : null,
-    beforeTask.team !== afterTask.team ? "车组" : null,
-    beforeTask.techGroup !== afterTask.techGroup ? "技术组" : null,
-    beforeTask.priority !== afterTask.priority ? "优先级" : null,
-    beforeTask.relatedTaskId !== afterTask.relatedTaskId ? "关联任务" : null,
-  ].filter((field): field is string => Boolean(field));
-}
-
 function taskMetadataMatches(
   task: TaskForMutation,
   metadata: Pick<
@@ -1084,29 +756,9 @@ function taskMetadataMatches(
   );
 }
 
-function memberSnapshot(
-  members: Array<{ personId: string; role: TaskMemberRole }>,
-) {
-  return members
-    .map((member) => ({ personId: member.personId, role: member.role }))
-    .sort(
-      (left, right) =>
-        left.personId.localeCompare(right.personId) ||
-        left.role.localeCompare(right.role),
-    );
-}
-
-function memberKey(member: { personId: string; role: TaskMemberRole }) {
-  return `${member.personId}:${member.role}`;
-}
-
 function sameStringArray(left: string[], right: string[]) {
   return (
     left.length === right.length &&
     left.every((value, index) => value === right[index])
   );
-}
-
-function jsonValue(value: unknown): Prisma.InputJsonValue {
-  return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 }
