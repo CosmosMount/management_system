@@ -11,6 +11,7 @@ import {
   canvasInput,
   createAccountPerson,
   createTask,
+  grantGlobalProjectAdministrator,
   systemAdministratorRole,
 } from "./helpers/project-management-canvas-security-fixtures";
 
@@ -23,6 +24,7 @@ test.describe("project management canvas security project-management-canvas-rout
       if (!baseURL) throw new Error("Canvas route 测试缺少 baseURL");
       const owner = await createAccountPerson("Action 边界 Owner");
       const outsider = await createAccountPerson("Action 边界 Outsider");
+      await grantGlobalProjectAdministrator(owner.account.id);
       const task = await createTask({
         ownerAccountId: owner.account.id,
         title: "Action 边界可见 Task",
@@ -150,6 +152,7 @@ test.describe("project management canvas security project-management-canvas-rout
       baseURL,
     }) => {
       const owner = await createAccountPerson("Create Action Owner");
+      await grantGlobalProjectAdministrator(owner.account.id);
       const activeTaskTitle = `Create Action Active ${randomUUID()}`;
       const activeTask = await createTask({
         ownerAccountId: owner.account.id,
