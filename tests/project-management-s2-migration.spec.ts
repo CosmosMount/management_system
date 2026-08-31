@@ -675,18 +675,14 @@ test("S2 Task mutations expose session-bound Server Actions and anchor loads rec
   expect(taskActionsSource).toContain("runProjectManagementAction({");
   expect(taskActionsSource).toContain("revalidateProjectManagement(taskId)");
 
-  const canvasQuerySource = await readFile(
+  const anchorLoaderSource = await readFile(
     path.join(
       process.cwd(),
-      "lib/project-management/queries/time-canvas-queries.ts",
+      "lib/project-management/queries/time-canvas-anchor-loader.ts",
     ),
     "utf8",
   );
-  const anchorLoaderSource = canvasQuerySource.slice(
-    canvasQuerySource.indexOf("async function loadTaskAnchors"),
-    canvasQuerySource.indexOf("async function loadPersonCreateCapabilities"),
-  );
-  expect(anchorLoaderSource).not.toBe("");
+  expect(anchorLoaderSource).toContain("export async function loadTaskAnchors");
   expect(anchorLoaderSource.match(/taskReadableWhere\(actor\)/g)).toHaveLength(2);
 });
 
