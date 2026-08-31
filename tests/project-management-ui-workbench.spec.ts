@@ -176,8 +176,18 @@ test.describe("project management UI project-management-ui-workbench", () => {
     const secondCheckbox = page.getByRole("checkbox", {
       name: `显示 Revision「${secondReason}」之前的计划`,
     });
+    const firstSwitchTrack = firstCheckbox
+      .locator("..")
+      .locator('[data-slot="revision-history-switch-track"]');
+    const secondSwitchTrack = secondCheckbox
+      .locator("..")
+      .locator('[data-slot="revision-history-switch-track"]');
     await expect(firstCheckbox).not.toBeChecked();
     await expect(secondCheckbox).not.toBeChecked();
+    await expect(firstSwitchTrack).toBeVisible();
+    await expect(secondSwitchTrack).toBeVisible();
+    await expect(firstSwitchTrack).toHaveAttribute("data-state", "unchecked");
+    await expect(secondSwitchTrack).toHaveAttribute("data-state", "unchecked");
     const secondCheckboxHandle = await secondCheckbox.elementHandle();
     if (!secondCheckboxHandle) {
       throw new Error("Revision 历史 UI fixture 缺少第二个复选框");
@@ -243,6 +253,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
     await firstRequestIntercepted;
     await expect(firstCheckbox).toBeChecked();
     await expect(firstCheckbox).toBeDisabled();
+    await expect(firstSwitchTrack).toHaveAttribute("data-state", "checked");
     await expect(
       firstCheckbox.locator("..").getByText("正在加载修订前计划…"),
     ).toBeVisible();
@@ -484,6 +495,11 @@ test.describe("project management UI project-management-ui-workbench", () => {
       }
       element.click();
     });
+    await expect(
+      page.locator(
+        '[data-slot="revision-history-switch-track"][data-state="checked"]',
+      ),
+    ).toHaveCount(2);
     const secondHistoryHeader = page.getByTestId(
       `time-canvas-row-header-history-plan:${secondRevision.revisionNodeId}`,
     );
@@ -523,6 +539,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
       }),
     ).toBeVisible();
     await firstCheckbox.uncheck();
+    await expect(firstSwitchTrack).toHaveAttribute("data-state", "unchecked");
     await expect(firstHistoryHeader).toHaveCount(0);
     await expect(secondHistoryHeader).toBeVisible();
     await expect
@@ -535,7 +552,11 @@ test.describe("project management UI project-management-ui-workbench", () => {
         return range.startMs <= target && target < range.endMs;
       })
       .toBe(true);
-    await firstCheckbox.check();
+    await firstCheckbox.focus();
+    await expect(firstCheckbox).toBeFocused();
+    await page.keyboard.press("Space");
+    await expect(firstCheckbox).toBeChecked();
+    await expect(firstSwitchTrack).toHaveAttribute("data-state", "checked");
     await expect(firstHistoryHeader).toBeVisible();
     expect(historyRequestCount).toBe(3);
     expect(

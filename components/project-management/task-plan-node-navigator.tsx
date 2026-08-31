@@ -143,10 +143,15 @@ export function TaskPlanNodeNavigator({
                   className="relative z-10 min-w-0 px-2 pb-2 text-xs sm:w-full sm:text-center"
                   data-testid={`revision-history-control-${node.id}`}
                 >
-                  <label className="inline-flex min-w-0 cursor-pointer items-start gap-1.5 text-left text-muted-foreground">
+                  <label
+                    className={cn(
+                      "relative inline-flex min-w-0 items-start gap-1.5 text-left text-muted-foreground",
+                      historyControl.loading ? "cursor-wait" : "cursor-pointer",
+                    )}
+                  >
                     <input
                       type="checkbox"
-                      className="mt-0.5 size-4 shrink-0 accent-primary"
+                      className="peer absolute left-0 top-0 z-10 m-0 h-4 w-7 cursor-pointer appearance-none rounded-full opacity-0 disabled:cursor-wait"
                       checked={historyControl.checked}
                       disabled={historyControl.loading}
                       aria-label={`显示 Revision「${node.label}」之前的计划`}
@@ -159,6 +164,18 @@ export function TaskPlanNodeNavigator({
                           event.currentTarget.checked,
                         )
                       }
+                    />
+                    <span
+                      aria-hidden="true"
+                      data-slot="revision-history-switch-track"
+                      data-state={historyControl.checked ? "checked" : "unchecked"}
+                      className="pointer-events-none h-4 w-7 shrink-0 rounded-full bg-muted-foreground/35 shadow-inner transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-ring peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-card peer-disabled:opacity-60 data-[state=checked]:bg-primary motion-reduce:transition-none"
+                    />
+                    <span
+                      aria-hidden="true"
+                      data-slot="revision-history-switch-thumb"
+                      data-state={historyControl.checked ? "checked" : "unchecked"}
+                      className="pointer-events-none absolute left-0.5 top-0.5 size-3 rounded-full bg-white shadow-sm transition-transform peer-disabled:opacity-80 data-[state=checked]:translate-x-3 motion-reduce:transition-none"
                     />
                     <span className="min-w-0 break-words">
                       {historyControl.loading
