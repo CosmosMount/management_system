@@ -1,10 +1,8 @@
-import { createHash } from "node:crypto";
-import type { Prisma, TaskStatus } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
   assertAuthorized,
   authorize,
-  isSystemAdministrator,
   taskReadableWhere,
   type AuthorizationTaskResource,
 } from "@/lib/project-management/authorization";
@@ -17,16 +15,12 @@ import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import {
   personOptionPageSchema,
   personOptionDtoSchema,
-  taskOptionPageSchema,
   type PersonOptionPage,
   type PersonOptionDto,
-  type TaskOptionPage,
 } from "@/lib/project-management/types/time-canvas";
 import {
   resolvePeopleOptionsByIdsInputSchema,
-  resolveTaskOptionsByIdsInputSchema,
   searchPeopleInputSchema,
-  searchTaskOptionsInputSchema,
   type PeopleOptionScope,
   type SearchPeopleInput,
 } from "@/lib/project-management/validations/time-canvas";
@@ -35,15 +29,20 @@ import {
   normalizeSearchText,
   searchTerms,
 } from "@/lib/search/normalize-search-text";
+import {
+  cursorFilter,
+  FUZZY_CANDIDATE_LIMIT,
+  mergeRowsById,
+  nextOptionCursor,
+  QUERY_RESULT_LIMIT,
+  validateOptionCursor,
+} from "@/lib/project-management/queries/option-query-support";
 
-type OptionCursorKind = "people" | "tasks";
-
-type OptionCursor = {
-  v: 1;
-  kind: OptionCursorKind;
-  filter: string;
-  id: string;
-};
+export {
+  listMyTaskOptions,
+  resolveTaskOptionsByIds,
+  searchTaskOptions,
+} from "@/lib/project-management/queries/task-option-queries";
 
 const peopleSearchTaskAuthorizationSelect = {
   id: true,
@@ -70,52 +69,9 @@ const personOptionSelect = {
   account: { select: { id: true } },
 } satisfies Prisma.PersonSelect;
 
-const taskOptionSelect = {
-  id: true,
-  title: true,
-  description: true,
-  status: true,
-  priority: true,
-  team: true,
-  techGroup: true,
-  activeMilestoneNode: {
-    select: {
-      id: true,
-      milestone: {
-        select: { goal: true, expectedCompletedAt: true },
-      },
-    },
-  },
-  currentPlanVersion: {
-    select: {
-      versionNo: true,
-      nodes: {
-        where: {
-          node: { type: "TERMINATION", status: "ACTIVE", deletedAt: null },
-        },
-        take: 1,
-        select: {
-          node: {
-            select: {
-              id: true,
-              termination: { select: { name: true, plannedAt: true } },
-            },
-          },
-        },
-      },
-    },
-  },
-} satisfies Prisma.TaskSelect;
-
 type PersonOptionRow = Prisma.PersonGetPayload<{
   select: typeof personOptionSelect;
 }>;
-type TaskOptionRow = Prisma.TaskGetPayload<{
-  select: typeof taskOptionSelect;
-}>;
-
-const FUZZY_CANDIDATE_LIMIT = 501;
-const QUERY_RESULT_LIMIT = 50;
 
 export async function getActorPersonOption(
   actor: ProjectManagementActor,
@@ -310,122 +266,6 @@ function peopleSearchTaskResource(
   };
 }
 
-export async function searchTaskOptions({
-  actor,
-  input,
-}: {
-  actor: ProjectManagementActor;
-  input: unknown;
-}): Promise<TaskOptionPage> {
-  const parsed = searchTaskOptionsInputSchema.parse(input);
-  const query = normalizeSearchText(parsed.query ?? "");
-  const statuses = [...parsed.statuses].sort();
-  const baseWhere: Prisma.TaskWhereInput = {
-    AND: [
-      taskReadableWhere(actor),
-      statuses.length > 0 ? { status: { in: statuses } } : {},
-      parsed.mine ? myTaskOptionWhere(actor) : {},
-      parsed.projectCandidates ? projectEstablishmentTaskCandidateWhere(actor) : {},
-    ],
-  };
-  if (query) {
-    if (parsed.cursor) {
-      throw validationError("非空 Task 搜索不支持分页游标，请继续输入关键词", {
-        cursor: ["非空 Task 搜索不支持分页游标，请继续输入关键词"],
-      });
-    }
-    const directRows = await prisma.task.findMany({
-      where: {
-        AND: [
-          baseWhere,
-          ...searchTerms(query).map((term) => ({
-            OR: [
-              { title: { contains: term, mode: "insensitive" as const } },
-              { description: { contains: term, mode: "insensitive" as const } },
-            ],
-          })),
-        ],
-      },
-      select: taskOptionSelect,
-      orderBy: [{ title: "asc" }, { id: "asc" }],
-      take: FUZZY_CANDIDATE_LIMIT,
-    });
-    const fallbackRows =
-      directRows.length < QUERY_RESULT_LIMIT
-        ? await prisma.task.findMany({
-            where: baseWhere,
-            select: taskOptionSelect,
-            orderBy: [{ title: "asc" }, { id: "asc" }],
-            take: FUZZY_CANDIDATE_LIMIT,
-          })
-        : [];
-    const ranked = rankFuzzyMatches(
-      mergeRowsById(directRows, fallbackRows),
-      query,
-      (task) => [
-        { text: task.title, weight: 2, pinyin: true },
-        { text: task.description, weight: 1 },
-      ],
-      compareTaskRows,
-    );
-    const resultLimit = Math.min(parsed.limit, QUERY_RESULT_LIMIT);
-    return taskOptionPageSchema.parse({
-      items: ranked.slice(0, resultLimit).map(({ item }) => taskOption(item)),
-      nextCursor: null,
-      hasMoreByQuery:
-        ranked.length > resultLimit ||
-        directRows.length === FUZZY_CANDIDATE_LIMIT ||
-        fallbackRows.length === FUZZY_CANDIDATE_LIMIT,
-    });
-  }
-  const where = baseWhere;
-  const filter = cursorFilter({ query, statuses, mine: parsed.mine, projectCandidates: parsed.projectCandidates });
-  const cursorId = await validateOptionCursor({
-    cursor: parsed.cursor,
-    kind: "tasks",
-    filter,
-    exists: (id) =>
-      prisma.task.findFirst({ where: { AND: [{ id }, where] }, select: { id: true } }),
-  });
-  const rows = await prisma.task.findMany({
-    where,
-    select: taskOptionSelect,
-    orderBy: [{ title: "asc" }, { id: "asc" }],
-    take: parsed.limit + 1,
-    ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
-  });
-  const items = rows.slice(0, parsed.limit).map(taskOption);
-  return taskOptionPageSchema.parse({
-    items,
-    nextCursor:
-      rows.length > parsed.limit
-        ? nextOptionCursor("tasks", filter, items.at(-1)?.id)
-        : null,
-    hasMoreByQuery: false,
-  });
-}
-
-export async function listMyTaskOptions({
-  actor,
-  statuses,
-}: {
-  actor: ProjectManagementActor;
-  statuses: readonly TaskStatus[];
-}): Promise<TaskOptionPage["items"]> {
-  const rows = await prisma.task.findMany({
-    where: {
-      AND: [
-        taskReadableWhere(actor),
-        statuses.length > 0 ? { status: { in: [...statuses] } } : {},
-        myTaskOptionWhere(actor),
-      ],
-    },
-    select: taskOptionSelect,
-    orderBy: [{ title: "asc" }, { id: "asc" }],
-  });
-  return rows.map(taskOption);
-}
-
 export async function resolvePeopleOptionsByIds({
   actor,
   input,
@@ -455,61 +295,6 @@ export async function resolvePeopleOptionsByIds({
   });
 }
 
-export async function resolveTaskOptionsByIds({
-  actor,
-  input,
-}: {
-  actor: ProjectManagementActor;
-  input: unknown;
-}): Promise<TaskOptionPage["items"]> {
-  const parsed = resolveTaskOptionsByIdsInputSchema.parse(input);
-  if (parsed.ids.length === 0) return [];
-  const rows = await prisma.task.findMany({
-    where: { AND: [{ id: { in: parsed.ids } }, taskReadableWhere(actor), parsed.projectCandidates ? projectEstablishmentTaskCandidateWhere(actor) : {}] },
-    select: taskOptionSelect,
-  });
-  const byId = new Map(rows.map((row) => [row.id, row]));
-  return parsed.ids.flatMap((id) => {
-    const row = byId.get(id);
-    return row ? [taskOption(row)] : [];
-  });
-}
-
-function projectEstablishmentTaskCandidateWhere(actor: ProjectManagementActor): Prisma.TaskWhereInput {
-  return {
-    projectId: null,
-    ...(isSystemAdministrator(actor)
-      ? {}
-      : {
-          OR: [
-            {
-              members: {
-                some: {
-                  personId: actor.personId,
-                  role: { in: ["OWNER", "PARTICIPANT"] },
-                  removedAt: null,
-                },
-              },
-            },
-            { status: "DRAFT", createdByAccountId: actor.accountId },
-          ],
-        }),
-  };
-}
-
-function myTaskOptionWhere(actor: ProjectManagementActor): Prisma.TaskWhereInput {
-  return {
-    OR: [
-      {
-        members: {
-          some: { personId: actor.personId, removedAt: null },
-        },
-      },
-      { status: "DRAFT", createdByAccountId: actor.accountId },
-    ],
-  };
-}
-
 function personOption(person: PersonOptionRow) {
   return {
     id: person.id,
@@ -521,127 +306,9 @@ function personOption(person: PersonOptionRow) {
   };
 }
 
-function taskOption(task: TaskOptionRow) {
-  return {
-    id: task.id,
-    title: task.title,
-    status: task.status,
-    priority: task.priority,
-    team: task.team,
-    techGroup: task.techGroup,
-    activeMilestone:
-      task.activeMilestoneNode?.milestone
-        ? {
-            nodeId: task.activeMilestoneNode.id,
-            goal: task.activeMilestoneNode.milestone.goal,
-            expectedCompletedAt:
-              task.activeMilestoneNode.milestone.expectedCompletedAt.toISOString(),
-          }
-        : null,
-    activeTermination: task.currentPlanVersion.nodes[0]?.node.termination
-      ? {
-          nodeId: task.currentPlanVersion.nodes[0].node.id,
-          name: task.currentPlanVersion.nodes[0].node.termination.name,
-          plannedAt:
-            task.currentPlanVersion.nodes[0].node.termination.plannedAt.toISOString(),
-        }
-      : null,
-    currentPlanVersionNo: task.currentPlanVersion.versionNo,
-    permission: { canView: true },
-  };
-}
-
-function mergeRowsById<T extends { id: string }>(...groups: readonly T[][]): T[] {
-  const rows = new Map<string, T>();
-  for (const group of groups) {
-    for (const row of group) rows.set(row.id, row);
-  }
-  return [...rows.values()];
-}
-
 function comparePeopleRows(left: PersonOptionRow, right: PersonOptionRow) {
   return (
     left.displayName.localeCompare(right.displayName, "zh-CN") ||
     left.id.localeCompare(right.id)
   );
 }
-
-function compareTaskRows(left: TaskOptionRow, right: TaskOptionRow) {
-  const activeOrder =
-    Number(right.status === "ACTIVE") - Number(left.status === "ACTIVE");
-  return (
-    activeOrder ||
-    left.title.localeCompare(right.title, "zh-CN") ||
-    left.id.localeCompare(right.id)
-  );
-}
-
-function cursorFilter(value: unknown): string {
-  return createHash("sha256")
-    .update(JSON.stringify(value))
-    .digest("base64url")
-    .slice(0, 22);
-}
-
-function nextOptionCursor(
-  kind: OptionCursorKind,
-  filter: string,
-  id: string | undefined,
-): string | null {
-  if (!id) return null;
-  return Buffer.from(
-    JSON.stringify({ v: 1, kind, filter, id } satisfies OptionCursor),
-  ).toString("base64url");
-}
-
-async function validateOptionCursor({
-  cursor,
-  kind,
-  filter,
-  exists,
-}: {
-  cursor: string | undefined;
-  kind: OptionCursorKind;
-  filter: string;
-  exists: (id: string) => Promise<{ id: string } | null>;
-}): Promise<string | null> {
-  if (!cursor) return null;
-  const decoded = decodeOptionCursor(cursor);
-  if (
-    !decoded ||
-    decoded.kind !== kind ||
-    decoded.filter !== filter ||
-    !(await exists(decoded.id))
-  ) {
-    throw validationError("分页游标无效或已不再匹配当前查询", {
-      cursor: ["分页游标无效或已不再匹配当前查询"],
-    });
-  }
-  return decoded.id;
-}
-
-function decodeOptionCursor(cursor: string): OptionCursor | null {
-  try {
-    const value: unknown = JSON.parse(
-      Buffer.from(cursor, "base64url").toString("utf8"),
-    );
-    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-    const record = value as Record<string, unknown>;
-    if (
-      record.v !== 1 ||
-      (record.kind !== "people" &&
-        record.kind !== "tasks") ||
-      typeof record.filter !== "string" ||
-      typeof record.id !== "string" ||
-      !UUID_PATTERN.test(record.id)
-    ) {
-      return null;
-    }
-    return record as OptionCursor;
-  } catch {
-    return null;
-  }
-}
-
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
