@@ -1,16 +1,11 @@
-import type {
-  Prisma,
-  Task,
-} from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
-  authorize,
   isSystemAdministrator,
   segmentReadableWhere,
   taskReadableWhere,
 } from "@/lib/project-management/authorization";
 import {
-  notFoundError,
   ProjectManagementServiceError,
   queryLimitExceededError,
   validationError,
@@ -22,16 +17,11 @@ import {
   floorShanghaiDay,
   padShanghaiCalendarRange,
 } from "@/lib/project-management/time-canvas/time-math";
-import {
-  isTaskCreatableForSegment,
-  TASK_SEGMENT_CREATABLE_STATUSES,
-} from "@/lib/project-management/domain/task-segment-policy";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import {
   timeCanvasDataDtoSchema,
   type BusyBlockDto,
   type TimeCanvasDataDto,
-  type TimeCanvasRowDto,
   type TimeCanvasTaskAnchorDto,
   type TimeSegmentDto,
 } from "@/lib/project-management/types/time-canvas";
@@ -47,20 +37,28 @@ import { listPersonalDueSegmentsInputSchema } from "@/lib/project-management/val
 import { listMyTaskOptions } from "@/lib/project-management/queries/option-queries";
 import { getProjectDetail } from "@/lib/project-management/queries/project-queries";
 import { getResourcePlanSelection } from "@/lib/project-management/queries/resource-plan-queries";
-import { taskAuthorizationResource } from "@/lib/project-management/application/task-authorization-resource";
 import {
   anchorTaskSelect,
   busyCandidateSelect,
-  canvasRowTaskSelect,
   fullSegmentSelect,
   type CanvasTask,
   type FullSegment,
 } from "@/lib/project-management/queries/time-canvas-records";
 import {
-  canCreateForPerson,
   toFullSegmentDto,
   toTaskAnchorDto,
 } from "@/lib/project-management/queries/time-canvas-dto";
+import {
+  authorizeScopeAndExplicitFilters,
+  authorizedSegmentFilterWhere,
+  fullSegmentUniverseWhere,
+  personAvailableInRangeWhere,
+  personUniverseWhere,
+} from "@/lib/project-management/queries/time-canvas-query-scope";
+import {
+  loadPersonRows,
+  loadTaskRows,
+} from "@/lib/project-management/queries/time-canvas-row-loader";
 import {
   createRowPageKey,
   decodePersonalDueCursor,
@@ -70,12 +68,6 @@ import { loadBoundedAdaptiveLeaves } from "@/lib/project-management/queries/time
 import { listGlobalTimeMarkers } from "@/lib/project-management/global-time-markers";
 
 export { loadBoundedAdaptiveLeaves } from "@/lib/project-management/queries/time-canvas-adaptive-loader";
-
-type RowPage = {
-  rows: TimeCanvasRowDto[];
-  rowIds: string[];
-  rowUniverseWhere: Prisma.PersonWhereInput | Prisma.TaskWhereInput;
-};
 
 export async function getPersonalDueSegments({
   actor,
@@ -782,312 +774,6 @@ async function loadContentDrivenLeaf(
   });
 }
 
-async function authorizeScopeAndExplicitFilters(
-  actor: ProjectManagementActor,
-  input: GetTimeCanvasDataInput,
-  authorizedSegmentFilter: Prisma.WorkSegmentWhereInput,
-): Promise<CanvasTask | null> {
-  let scopeTask: CanvasTask | null = null;
-  if (input.scope.kind === "TASK_SCOPED") {
-    scopeTask = await prisma.task.findFirst({
-      where: {
-        AND: [{ id: input.scope.taskId }, taskReadableWhere(actor)],
-      },
-      select: canvasRowTaskSelect,
-    });
-    if (!scopeTask) throw notFoundError();
-    if (
-      input.taskIds.length > 0 &&
-      input.taskIds.some((taskId) => taskId !== scopeTask?.id)
-    ) {
-      throw notFoundError();
-    }
-  }
-  if (
-    (input.scope.kind === "PERSONAL" || input.scope.kind === "DASHBOARD") &&
-    input.personIds.some((personId) => personId !== actor.personId)
-  ) {
-    throw notFoundError();
-  }
-
-  if (input.personIds.length > 0) {
-    const personWhere = personUniverseWhere(actor, input, scopeTask);
-    const count = await prisma.person.count({
-      where: {
-        AND: [
-          { id: { in: input.personIds } },
-          personWhere,
-          personAvailableInRangeWhere(authorizedSegmentFilter),
-        ],
-      },
-    });
-    if (count !== input.personIds.length) throw notFoundError();
-  }
-  if (input.taskIds.length > 0) {
-    const count = await prisma.task.count({
-      where: {
-        AND: [
-          { id: { in: input.taskIds } },
-          taskReadableWhere(actor),
-        ],
-      },
-    });
-    if (count !== input.taskIds.length) throw notFoundError();
-  }
-  return scopeTask;
-}
-
-async function loadPersonRows(
-  actor: ProjectManagementActor,
-  input: GetTimeCanvasDataInput,
-  scopeTask: CanvasTask | null,
-  authorizedSegmentFilter: Prisma.WorkSegmentWhereInput,
-): Promise<RowPage> {
-  const universe = personUniverseWhere(actor, input, scopeTask);
-  const where: Prisma.PersonWhereInput = {
-    AND: [
-      universe,
-      personAvailableInRangeWhere(authorizedSegmentFilter),
-      input.personIds.length > 0 ? { id: { in: input.personIds } } : {},
-    ],
-  };
-  const people = await prisma.person.findMany({
-    where,
-    select: {
-      id: true,
-      displayName: true,
-      status: true,
-      taskMembers:
-        input.scope.kind === "TASK_SCOPED"
-          ? {
-              where: { taskId: input.scope.taskId, removedAt: null },
-              select: { role: true },
-              orderBy: { role: "asc" as const },
-            }
-          : false,
-    },
-    orderBy: [{ displayName: "asc" }, { id: "asc" }],
-  });
-  const canCreateByPersonId = await loadPersonCreateCapabilities(
-    actor,
-    input,
-    scopeTask,
-    people.map((person) => person.id),
-  );
-  const rows = people.map((person) => {
-    const taskMembers = "taskMembers" in person ? person.taskMembers : [];
-    return {
-      kind: "PERSON" as const,
-      id: person.id,
-      label:
-        person.status === "INACTIVE"
-          ? `${person.displayName}（已停用）`
-          : person.displayName,
-      sublabel:
-        taskMembers.length > 0
-          ? taskMembers.map((member) => member.role).join(" / ")
-          : null,
-      capabilities: {
-        canCreateSegment:
-          person.status === "ACTIVE" &&
-          (canCreateByPersonId.get(person.id) ?? false),
-      },
-    };
-  });
-  return {
-    rows,
-    rowIds: rows.map((row) => row.id),
-    rowUniverseWhere: where,
-  };
-}
-
-function personAvailableInRangeWhere(
-  authorizedSegmentFilter: Prisma.WorkSegmentWhereInput,
-): Prisma.PersonWhereInput {
-  return {
-    OR: [
-      { status: "ACTIVE" },
-      { workSegments: { some: authorizedSegmentFilter } },
-    ],
-  };
-}
-
-async function loadTaskRows(
-  actor: ProjectManagementActor,
-  input: GetTimeCanvasDataInput,
-  scopeTask: CanvasTask | null,
-): Promise<RowPage> {
-  const actorCanCreateSegments = Boolean(
-    await prisma.person.findFirst({
-      where: {
-        id: actor.personId,
-        accountId: actor.accountId,
-        status: "ACTIVE",
-      },
-      select: { id: true },
-    }),
-  );
-  const universe = taskUniverseWhere(actor, input, scopeTask);
-  const where: Prisma.TaskWhereInput = {
-    AND: [
-      universe,
-      input.taskIds.length > 0 ? { id: { in: input.taskIds } } : {},
-    ],
-  };
-  const tasks = await prisma.task.findMany({
-    where,
-    select: canvasRowTaskSelect,
-    orderBy: [{ title: "asc" }, { id: "asc" }],
-  });
-  const rows = tasks.map((task) => ({
-    kind: "TASK" as const,
-    id: task.id,
-    label: task.title,
-    sublabel: `${task.status} / ${task.priority}`,
-    capabilities: {
-      canCreateSegment:
-        actorCanCreateSegments &&
-        isTaskCreatableForSegment(task.status) &&
-        authorize({
-          actor,
-          action: "segment.manage_self",
-          resource: {
-            type: "segment",
-            personId: actor.personId,
-            task: taskAuthorizationResource(task),
-          },
-        }).allowed,
-    },
-  }));
-  return {
-    rows,
-    rowIds: rows.map((row) => row.id),
-    rowUniverseWhere: where,
-  };
-}
-
-function personUniverseWhere(
-  actor: ProjectManagementActor,
-  input: GetTimeCanvasDataInput,
-  scopeTask: CanvasTask | null,
-): Prisma.PersonWhereInput {
-  if (input.scope.kind === "PERSONAL" || input.scope.kind === "DASHBOARD") {
-    return { id: actor.personId };
-  }
-  if (input.scope.kind === "TASK_SCOPED") {
-    return {
-      taskMembers: {
-        some: { taskId: scopeTask?.id ?? input.scope.taskId, removedAt: null },
-      },
-    };
-  }
-  return {
-    OR: [
-      { status: "ACTIVE" },
-      {
-        workSegments: {
-          some: segmentReadableWhere(actor),
-        },
-      },
-    ],
-  };
-}
-
-function taskUniverseWhere(
-  actor: ProjectManagementActor,
-  input: GetTimeCanvasDataInput,
-  scopeTask: CanvasTask | null,
-): Prisma.TaskWhereInput {
-  if (input.scope.kind === "TASK_SCOPED") {
-    return {
-      AND: [taskReadableWhere(actor), { id: scopeTask?.id ?? input.scope.taskId }],
-    };
-  }
-  if (input.scope.kind === "PERSONAL" || input.scope.kind === "DASHBOARD") {
-    return {
-      AND: [
-        taskReadableWhere(actor),
-        {
-          members: {
-            some: { personId: actor.personId, removedAt: null },
-          },
-        },
-      ],
-    };
-  }
-  return taskReadableWhere(actor);
-}
-
-function fullSegmentUniverseWhere(
-  input: GetTimeCanvasDataInput,
-  rowUniverseWhere: Prisma.PersonWhereInput | Prisma.TaskWhereInput,
-  authorizedSegmentFilter: Prisma.WorkSegmentWhereInput,
-): Prisma.WorkSegmentWhereInput {
-  return {
-    AND: [
-      authorizedSegmentFilter,
-      input.groupBy === "PERSON"
-        ? { person: rowUniverseWhere as Prisma.PersonWhereInput }
-        : {
-            task: {
-              is: rowUniverseWhere as Prisma.TaskWhereInput,
-            },
-          },
-    ],
-  };
-}
-
-function authorizedSegmentFilterWhere(
-  actor: ProjectManagementActor,
-  input: GetTimeCanvasDataInput,
-  includeRange = true,
-): Prisma.WorkSegmentWhereInput {
-  return {
-    AND: [
-      segmentReadableWhere(actor),
-      segmentFilterWhere(input, actor.personId, includeRange),
-    ],
-  };
-}
-
-function segmentFilterWhere(
-  input: GetTimeCanvasDataInput,
-  actorPersonId: string,
-  includeRange = true,
-): Prisma.WorkSegmentWhereInput {
-  return {
-    AND: [
-      {
-        deletedAt: null,
-        NOT: {
-          AND: [
-            { type: "PLANNED" },
-            { status: { in: ["CONFIRMED", "CANCELLED"] } },
-          ],
-        },
-        ...(includeRange
-          ? {
-              startAt: { lt: input.rangeEnd },
-              endAt: { gt: input.rangeStart },
-            }
-          : {}),
-      },
-      input.scope.kind === "PERSONAL" || input.scope.kind === "DASHBOARD"
-        ? { personId: actorPersonId }
-        : {},
-      input.personIds.length > 0
-        ? { personId: { in: input.personIds } }
-        : input.emptyPersonIdsMeansNone
-          ? { personId: { in: [] } }
-          : {},
-      input.taskIds.length > 0 ? { taskId: { in: input.taskIds } } : {},
-      input.types.length > 0 ? { type: { in: input.types } } : {},
-      input.statuses.length > 0 ? { status: { in: input.statuses } } : {},
-      input.includeActual ? {} : { type: { not: "ACTUAL" } },
-    ],
-  };
-}
-
 function assertTimeObjectLimit(count: number) {
   if (count > MAX_TIME_CANVAS_VISIBLE_SEGMENTS) {
     throw queryLimitExceededError(
@@ -1205,154 +891,4 @@ async function loadTaskAnchors(
     );
   }
   return tasks.map((task) => toTaskAnchorDto(actor, task));
-}
-
-async function loadPersonCreateCapabilities(
-  actor: ProjectManagementActor,
-  input: GetTimeCanvasDataInput,
-  scopeTask: CanvasTask | null,
-  personIds: string[],
-): Promise<Map<string, boolean>> {
-  const result = new Map<string, boolean>();
-  if (personIds.length === 0) return result;
-
-  const singleTaskId =
-    scopeTask?.id ?? (input.taskIds.length === 1 ? input.taskIds[0] : undefined);
-  if (singleTaskId) {
-    const task =
-      scopeTask ??
-      (await prisma.task.findFirst({
-        where: {
-          AND: [{ id: singleTaskId }, taskReadableWhere(actor)],
-        },
-        select: canvasRowTaskSelect,
-      }));
-    for (const personId of personIds) {
-      result.set(
-        personId,
-        Boolean(
-          task &&
-            isEligibleSegmentTask(task.status) &&
-            hasActiveTaskMember(task, personId) &&
-            canCreateForPerson(actor, personId, task),
-        ),
-      );
-    }
-    return result;
-  }
-
-  const hasOtherPeople = personIds.some(
-    (personId) => personId !== actor.personId,
-  );
-  const selfRequiresTask = input.taskIds.length > 0;
-  const otherPersonIds = personIds.filter(
-    (personId) => personId !== actor.personId,
-  );
-  const [hasSelfEligibleTask, manageablePersonIds] = await Promise.all([
-    selfRequiresTask && personIds.includes(actor.personId)
-      ? eligibleTaskExists(input, {
-          AND: [
-            taskReadableWhere(actor),
-            {
-              members: {
-                some: {
-                  personId: actor.personId,
-                  role: { in: ["OWNER", "PARTICIPANT"] },
-                  removedAt: null,
-                },
-              },
-            },
-          ],
-        })
-      : Promise.resolve(false),
-    hasOtherPeople
-      ? manageableEligibleTaskPersonIds(actor, input, otherPersonIds)
-      : Promise.resolve(new Set<string>()),
-  ]);
-  for (const personId of personIds) {
-    result.set(
-      personId,
-      personId === actor.personId
-        ? selfRequiresTask
-          ? hasSelfEligibleTask
-          : canCreateForPerson(actor, personId, null)
-        : manageablePersonIds.has(personId),
-    );
-  }
-  return result;
-}
-
-async function manageableEligibleTaskPersonIds(
-  actor: ProjectManagementActor,
-  input: GetTimeCanvasDataInput,
-  personIds: string[],
-): Promise<Set<string>> {
-  const memberships = await prisma.taskMember.findMany({
-    where: {
-      personId: { in: personIds },
-      role: { in: ["OWNER", "PARTICIPANT"] },
-      removedAt: null,
-      task: {
-        AND: [
-          manageableTaskWhere(actor),
-          {
-            status: { in: [...TASK_SEGMENT_CREATABLE_STATUSES] },
-          },
-          input.taskIds.length > 0 ? { id: { in: input.taskIds } } : {},
-        ],
-      },
-    },
-    select: { personId: true },
-    distinct: ["personId"],
-  });
-  return new Set(memberships.map((membership) => membership.personId));
-}
-
-async function eligibleTaskExists(
-  input: GetTimeCanvasDataInput,
-  authorizationWhere: Prisma.TaskWhereInput,
-): Promise<boolean> {
-  const task = await prisma.task.findFirst({
-    where: {
-      AND: [
-        authorizationWhere,
-        {
-          deletedAt: null,
-          status: { in: [...TASK_SEGMENT_CREATABLE_STATUSES] },
-        },
-        input.taskIds.length > 0 ? { id: { in: input.taskIds } } : {},
-      ],
-    },
-    select: { id: true },
-  });
-  return task !== null;
-}
-
-function manageableTaskWhere(
-  actor: ProjectManagementActor,
-): Prisma.TaskWhereInput {
-  if (isSystemAdministrator(actor)) return { deletedAt: null };
-  return {
-    deletedAt: null,
-    members: {
-      some: {
-        personId: actor.personId,
-        role: "OWNER",
-        removedAt: null,
-      },
-    },
-  };
-}
-
-function isEligibleSegmentTask(status: Task["status"]): boolean {
-  return isTaskCreatableForSegment(status);
-}
-
-function hasActiveTaskMember(task: CanvasTask, personId: string): boolean {
-  return task.members.some(
-    (member) =>
-      member.personId === personId &&
-      member.removedAt === null &&
-      (member.role === "OWNER" || member.role === "PARTICIPANT"),
-  );
 }

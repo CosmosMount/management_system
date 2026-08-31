@@ -378,6 +378,17 @@ export function systemAdministratorRole(): ProjectManagementSystemRoleRecord {
   return { role: "PROJECT_ADMINISTRATOR", team: "", techGroup: "" };
 }
 
+export async function grantGlobalProjectAdministrator(accountId: string) {
+  return prisma.systemRoleAssignment.create({
+    data: {
+      accountId,
+      role: "PROJECT_ADMINISTRATOR",
+      team: "",
+      techGroup: "",
+    },
+  });
+}
+
 export function scopedRole(
   team: string,
   techGroup: string,

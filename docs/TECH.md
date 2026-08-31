@@ -200,7 +200,7 @@ P5 Resource Segment 服务端闭环位于 `lib/project-management/application/se
 
 S2 TimeCanvas 查询通过 `app/actions/project-management/canvas.ts` 暴露，并由 strict `POST /api/project-management/canvas` 提供同一可测试边界。五个 operation 都从 Auth.js session 解析当前 actor，再进入 validation、authorization、`ProjectManagementActionResult`、structured logging 和错误脱敏流程；请求不接受 actor、账号、人员或角色注入字段。
 
-TimeCanvas 的请求预算为 Full Segment + Busy 合计 5,000、当前计划非删除 anchor Node 合计 5,000；Task、Person 与 anchor Task 行不设数量分页。`rowPageKey`、Prisma 选择集、DTO/权限映射和自适应 leaf 预算分别由查询内部模块负责，页面级查询只编排 scope、行、Segment、Busy 与 Anchor 加载。Busy DTO 只包含 `kind`、`visibility`、`personId`、`startAt` 和 `endAt`，不返回源 Segment、Task、内容、版本、比例或冲突摘要。TimeCanvas 请求不接受 Node 过滤，Segment DTO 不包含职责、Node 关联、关联复核、`allocation` 或 `conflictIds`。
+TimeCanvas 的请求预算为 Full Segment + Busy 合计 5,000、当前计划非删除 anchor Node 合计 5,000；Task、Person 与 anchor Task 行不设数量分页。`rowPageKey`、Prisma 选择集、DTO/权限映射、自适应 leaf 预算、scope 授权谓词和 Person/Task 行加载分别由查询内部模块负责，页面级查询只编排 scope、行、Segment、Busy 与 Anchor 加载。Busy DTO 只包含 `kind`、`visibility`、`personId`、`startAt` 和 `endAt`，不返回源 Segment、Task、内容、版本、比例或冲突摘要。TimeCanvas 请求不接受 Node 过滤，Segment DTO 不包含职责、Node 关联、关联复核、`allocation` 或 `conflictIds`。
 
 资源计划使用服务端集合展开：`TaskSet = (直接选择 Task ∪ 所选 Project 的未删除 Task) ∩ 所选 Task 状态`，`PersonSet = 直接选择 Person ∪ TaskSet 有效成员 ∪ 所选 Project 有效成员`。状态集合覆盖 `DRAFT/ACTIVE/COMPLETED/FAILED/CANCELLED/TIMEOUT/ARCHIVED`，默认 `DRAFT + ACTIVE`，允许空集合；Task 选项查询使用相同状态条件。状态筛选只影响计划轨道和由 Task 推导的人员，已经由直接选择、Project 成员或焦点进入 `PersonSet` 的人员仍按 Person 范围读取全部可见 Segment，不再按所属 Task 状态过滤。Task 与 Person 一次完整装配、不使用行游标；焦点 Segment 对应 Person 固定置前，焦点 Task 只有符合状态时才进入计划轨道，但始终独立完成可见性校验。Current Plan 轨道只读，人员行保留既有 Segment capability；内容范围两侧增加两个上海日历月，并限制在三年逻辑窗口内按最多 180 天自适应读取，单次自适应查询继续受 20,000 个对象和 16 个 leaf block 预算约束。
 

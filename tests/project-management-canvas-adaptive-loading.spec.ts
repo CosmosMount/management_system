@@ -17,6 +17,7 @@ import {
   createTask,
   expectErrorCode,
   fullSegmentIds,
+  grantGlobalProjectAdministrator,
   systemAdministratorRole,
 } from "./helpers/project-management-canvas-security-fixtures";
 
@@ -26,6 +27,7 @@ test.describe("project management canvas security project-management-canvas-adap
       const owner = await createAccountPerson("5000 Full 上限 Owner");
       const target = await createAccountPerson("5000 Full 上限目标");
       const hiddenOwner = await createAccountPerson("5000 Full 隐藏 Owner");
+      await grantGlobalProjectAdministrator(owner.account.id);
       const visibleTask = await createTask({
         ownerAccountId: owner.account.id,
         title: "5000 Full 可见 Task",
@@ -99,6 +101,7 @@ test.describe("project management canvas security project-management-canvas-adap
       test.setTimeout(120_000);
       const owner = await createAccountPerson("内容驱动自动细分 Owner");
       const target = await createAccountPerson("内容驱动自动细分目标");
+      await grantGlobalProjectAdministrator(owner.account.id);
       const firstDayStart = new Date("2020-08-10T09:00:00.000+08:00");
       const firstDayEnd = new Date("2020-08-10T10:00:00.000+08:00");
       const task = await createTask({
@@ -222,6 +225,7 @@ test.describe("project management canvas security project-management-canvas-adap
 
   test("content-driven Task uses createdAt for a nullable legacy Start", async () => {
       const owner = await createAccountPerson("空计划开始兼容 Owner");
+      await grantGlobalProjectAdministrator(owner.account.id);
       const task = await createTask({
         ownerAccountId: owner.account.id,
         title: "空计划开始兼容 Task",
@@ -261,14 +265,7 @@ test.describe("project management canvas security project-management-canvas-adap
 
   test("active Planned expands content-driven range with Shanghai month padding", async () => {
       const owner = await createAccountPerson("Planned 范围 Owner");
-      await prisma.systemRoleAssignment.create({
-        data: {
-          accountId: owner.account.id,
-          role: "PROJECT_ADMINISTRATOR",
-          team: "",
-          techGroup: "",
-        },
-      });
+      await grantGlobalProjectAdministrator(owner.account.id);
       const task = await createTask({
         ownerAccountId: owner.account.id,
         title: "Planned 范围 Task",
@@ -352,14 +349,7 @@ test.describe("project management canvas security project-management-canvas-adap
 
   test("content-driven initial range stays on historical content while Today remains navigable", async () => {
       const owner = await createAccountPerson("历史默认范围 Owner");
-      await prisma.systemRoleAssignment.create({
-        data: {
-          accountId: owner.account.id,
-          role: "PROJECT_ADMINISTRATOR",
-          team: "",
-          techGroup: "",
-        },
-      });
+      await grantGlobalProjectAdministrator(owner.account.id);
       const historicalStart = new Date("2020-01-01T09:00:00.000+08:00");
       const historicalMilestone = new Date("2020-02-01T09:00:00.000+08:00");
       const task = await createTask({
@@ -562,14 +552,7 @@ test.describe("project management canvas security project-management-canvas-adap
       test.setTimeout(180_000);
       const owner = await createAccountPerson("Anchor budget Owner");
       const target = await createAccountPerson("Anchor budget Target");
-      await prisma.systemRoleAssignment.create({
-        data: {
-          accountId: owner.account.id,
-          role: "PROJECT_ADMINISTRATOR",
-          team: "",
-          techGroup: "",
-        },
-      });
+      await grantGlobalProjectAdministrator(owner.account.id);
       await createAnchorTaskBatch({
         ownerAccountId: owner.account.id,
         ownerPersonId: owner.person.id,

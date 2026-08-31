@@ -946,14 +946,9 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       await expect
         .poll(() => new URL(page.url()).searchParams.get("center"))
         .not.toBeNull();
-      const centerBeforeYearScale = new URL(page.url()).searchParams.get("center");
       await page.getByRole("button", { name: "年", exact: true }).click();
       await expect(page).toHaveURL(/scale=year/);
-      await expect
-        .poll(() => new URL(page.url()).searchParams.get("center"))
-        .not.toBe(centerBeforeYearScale);
-      const preservedCenter = new URL(page.url()).searchParams.get("center");
-      expect(preservedCenter).not.toBeNull();
+      const preservedCenter = await stableUrlSearchParam(page, "center");
       await page.getByRole("button", {
         name: `移除${fixture.owner.person.displayName}`,
       }).click();
@@ -1095,4 +1090,21 @@ async function expectVirtualRowAtBottom(page: Page, testId: string) {
     { timeout: 10_000 },
   ).toBe(1);
   await expect(row).toBeVisible();
+}
+
+async function stableUrlSearchParam(page: Page, key: string) {
+  let candidate = new URL(page.url()).searchParams.get(key);
+  let stableSince = Date.now();
+  await expect.poll(
+    () => {
+      const current = new URL(page.url()).searchParams.get(key);
+      if (current !== candidate) {
+        candidate = current;
+        stableSince = Date.now();
+      }
+      return current !== null && Date.now() - stableSince >= 500;
+    },
+    { timeout: 5_000, intervals: [100, 100, 200, 300] },
+  ).toBe(true);
+  return candidate!;
 }
