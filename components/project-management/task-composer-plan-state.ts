@@ -12,6 +12,8 @@ import {
 } from "@/lib/project-management/date-time";
 import type { TimeCanvasAnchorMoveRequest } from "@/components/project-management/time-canvas/types";
 
+const DAY_MS = 24 * 60 * 60 * 1_000;
+
 export const NO_LEGAL_ANCHOR_MOVE_MESSAGE =
   "当前吸附粒度没有合法位置，节点已保留在原处；请放大画布或使用 Inspector 精调。";
 
@@ -481,6 +483,21 @@ export type ComposerPlanTimeMutationResult =
     }
   | { ok: false; message: string };
 
+export type ComposerBatchMoveTarget =
+  | {
+      mode: "FOLLOWING";
+      referenceEntityId: string;
+    }
+  | {
+      mode: "SELECTED";
+      selectedEntityIds: readonly string[];
+    };
+
+export type ComposerBatchMoveInput = ComposerBatchMoveTarget & {
+  direction: "EARLIER" | "LATER";
+  days: number;
+};
+
 export function editableComposerEntityIds(state: TaskComposerSeed) {
   return [
     TASK_COMPOSER_START_ID,
@@ -490,24 +507,40 @@ export function editableComposerEntityIds(state: TaskComposerSeed) {
   ].filter((entityId) => !isReadOnlyRevisionEntity(state, entityId));
 }
 
-export function composerBatchDelayEntityIds(
+export function composerBatchMoveEntityIds(
   state: TaskComposerSeed,
-  entityId: string,
+  target: ComposerBatchMoveTarget,
 ) {
-  const selectedAt = renderAtMs(state, entityId);
-  if (
-    !Number.isFinite(selectedAt) ||
-    !editableComposerEntityIds(state).includes(entityId)
-  ) {
-    return [];
-  }
-  return editableComposerEntityIds(state)
-    .filter((candidateId) => renderAtMs(state, candidateId) >= selectedAt)
-    .sort(
-      (left, right) =>
-        renderAtMs(state, left) - renderAtMs(state, right) ||
-        left.localeCompare(right),
+  const editableIds = editableComposerEntityIds(state);
+  const editableIdSet = new Set(editableIds);
+  let movedEntityIds: string[];
+
+  if (target.mode === "FOLLOWING") {
+    const selectedAt = renderAtMs(state, target.referenceEntityId);
+    if (
+      !Number.isFinite(selectedAt) ||
+      !editableIdSet.has(target.referenceEntityId)
+    ) {
+      return [];
+    }
+    movedEntityIds = editableIds.filter(
+      (candidateId) => renderAtMs(state, candidateId) >= selectedAt,
     );
+  } else {
+    movedEntityIds = [...new Set(target.selectedEntityIds)];
+    if (
+      movedEntityIds.length === 0 ||
+      movedEntityIds.some((entityId) => !editableIdSet.has(entityId))
+    ) {
+      return [];
+    }
+  }
+
+  return movedEntityIds.sort(
+    (left, right) =>
+      renderAtMs(state, left) - renderAtMs(state, right) ||
+      left.localeCompare(right),
+  );
 }
 
 export function resolveAnchorGroupMoveCandidate(
@@ -614,36 +647,47 @@ export function applyAnchorGroupMove(
   };
 }
 
-export function applyComposerBatchDelay(
+export function applyComposerBatchMove(
   state: TaskComposerSeed,
-  entityId: string,
-  targetAt: string,
+  input: ComposerBatchMoveInput,
 ): ComposerPlanTimeMutationResult {
-  const movedEntityIds = composerBatchDelayEntityIds(state, entityId);
+  const editableIds = new Set(editableComposerEntityIds(state));
+  if (
+    input.mode === "SELECTED" &&
+    [...new Set(input.selectedEntityIds)].some(
+      (entityId) => !editableIds.has(entityId),
+    )
+  ) {
+    return { ok: false, message: "选中节点中包含只读节点，无法整体移动。" };
+  }
+  const movedEntityIds = composerBatchMoveEntityIds(state, input);
   if (movedEntityIds.length === 0) {
-    return { ok: false, message: "该节点为只读节点，不能批量推迟。" };
+    return {
+      ok: false,
+      message:
+        input.mode === "FOLLOWING"
+          ? "当前节点为只读节点，不能批量移动。"
+          : "请至少选择一个可编辑节点。",
+    };
   }
-  if (!validLocalDateTime(targetAt)) {
-    return { ok: false, message: "请选择有效的新节点时间。" };
+  if (!Number.isSafeInteger(input.days) || input.days <= 0) {
+    return { ok: false, message: "移动天数必须是大于 0 的整数。" };
   }
-  const originalAt = renderAtMs(state, entityId);
-  const deltaMs = localMs(targetAt) - originalAt;
-  if (!Number.isFinite(deltaMs) || deltaMs <= 0) {
-    return { ok: false, message: "新的节点时间必须晚于当前时间。" };
+  const deltaMs =
+    input.days * DAY_MS * (input.direction === "EARLIER" ? -1 : 1);
+  if (!Number.isSafeInteger(deltaMs)) {
+    return { ok: false, message: "移动天数超出可处理范围。" };
   }
   const shifted = applyEntityTimeDelta(state, movedEntityIds, deltaMs);
   if (!shifted.ok || !hasLegalRenderedPlanTimes(shifted.state)) {
     return {
       ok: false,
-      message: "推迟后节点时间超出合法范围，计划未发生任何变化。",
+      message: `${input.direction === "EARLIER" ? "前移" : "后移"}后节点时间冲突或超出合法范围，计划未发生任何变化。`,
     };
   }
   return {
     ok: true,
-    state: reconcileComposerPlanState({
-      ...shifted.state,
-      selectedEntityId: entityId,
-    }),
+    state: reconcileComposerPlanState(shifted.state),
     movedEntityIds,
     deltaMs,
   };

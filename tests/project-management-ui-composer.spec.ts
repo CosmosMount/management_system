@@ -530,7 +530,7 @@ test.describe("project management UI project-management-ui-composer", () => {
       }
     });
 
-  test("Task Composer atomically moves desktop anchor selections and batch-delays later editable nodes", async ({
+  test("Task Composer atomically moves desktop anchor selections and explicit batch targets", async ({
       context,
       page,
       baseURL,
@@ -626,7 +626,9 @@ test.describe("project management UI project-management-ui-composer", () => {
         );
 
         const planRow = canvas.locator('[data-canvas-row-kind="PLAN"]');
-        await markerM2.scrollIntoViewIfNeeded();
+        await markerM2.evaluate((element) =>
+          element.scrollIntoView({ block: "center", inline: "center" }),
+        );
         const markerM2Box = await markerM2.boundingBox();
         if (!markerM2Box) throw new Error("M2 时间节点不可见");
         const markerM1Id = await markerM1.getAttribute("data-anchor-id");
@@ -675,7 +677,9 @@ test.describe("project management UI project-management-ui-composer", () => {
         expect(await readMilestoneTime("多选节点 M3")).toBe(original.m3);
         await page.getByRole("button", { name: "撤销" }).click();
 
-        await markerM2.scrollIntoViewIfNeeded();
+        await markerM2.evaluate((element) =>
+          element.scrollIntoView({ block: "center", inline: "center" }),
+        );
         const markerM1Box = await markerM1.boundingBox();
         const resetMarkerM2Box = await markerM2.boundingBox();
         const planRowBox = await planRow.boundingBox();
@@ -735,68 +739,140 @@ test.describe("project management UI project-management-ui-composer", () => {
         expect(await readMilestoneTime("多选节点 M1")).toBe(original.m1);
         expect(await readMilestoneTime("多选节点 M2")).toBe(original.m2);
         expect(await readMilestoneTime("多选节点 M3")).toBe(original.m3);
+
+        await markerM1.click();
+        await markerM2.click({ modifiers: ["Shift"] });
+        await multiSelection
+          .getByRole("button", { name: "批量移动" })
+          .click();
+        const selectedMoveDialog = page.getByRole("dialog", {
+          name: "批量移动计划节点",
+        });
+        await expect(selectedMoveDialog).toContainText("已选 2 个可编辑节点");
+        await selectedMoveDialog
+          .getByRole("button", { name: "确认批量移动" })
+          .click();
+        await expect(
+          selectedMoveDialog.getByRole("alert").filter({
+            hasText: "请选择要移动的节点范围",
+          }),
+        ).toBeVisible();
+        await selectedMoveDialog.getByLabel(/仅已选节点/).check();
+        await selectedMoveDialog.getByLabel("移动天数").fill("0");
+        await selectedMoveDialog
+          .getByRole("button", { name: "确认批量移动" })
+          .click();
+        await expect(
+          selectedMoveDialog.getByRole("alert").filter({
+            hasText: "移动天数必须是大于 0 的整数",
+          }),
+        ).toBeVisible();
+        await selectedMoveDialog.getByLabel("移动天数").fill("1");
+        await selectedMoveDialog
+          .getByRole("button", { name: "确认批量移动" })
+          .click();
+        await expect(selectedMoveDialog).toHaveCount(0);
+        await expect(
+          page.getByText("已将所选 2 个可编辑节点整体后移 1 天。"),
+        ).toBeVisible();
+        await expect(multiSelection).toContainText("已选 2 个可编辑节点");
+        await expect(markerM1).toHaveAttribute(
+          "data-anchor-multi-selected",
+          "true",
+        );
+        await expect(markerM2).toHaveAttribute(
+          "data-anchor-multi-selected",
+          "true",
+        );
+        await page.getByRole("button", { name: "撤销" }).click();
+        await expect(multiSelection).toContainText("已选 2 个可编辑节点");
+        await expect(markerM1).toHaveAttribute(
+          "data-anchor-multi-selected",
+          "true",
+        );
+        await page.getByRole("button", { name: "重做" }).click();
+        await expect(multiSelection).toContainText("已选 2 个可编辑节点");
+        await expect(markerM2).toHaveAttribute(
+          "data-anchor-multi-selected",
+          "true",
+        );
+        expect(await readStartTime()).toBe(original.start);
+        expect(await readMilestoneTime("多选节点 M1")).toBe("2026-09-06T09:00");
+        expect(await readMilestoneTime("多选节点 M2")).toBe("2026-09-10T09:00");
+        expect(await readMilestoneTime("多选节点 M3")).toBe(original.m3);
+        expect(await readTerminalTime()).toBe(original.terminal);
+
+        await page.getByRole("button", { name: "撤销" }).click();
+        expect(await readMilestoneTime("多选节点 M1")).toBe(original.m1);
+        expect(await readMilestoneTime("多选节点 M2")).toBe(original.m2);
+        await page.getByRole("button", { name: "重做" }).click();
+        expect(await readMilestoneTime("多选节点 M1")).toBe("2026-09-06T09:00");
+        expect(await readMilestoneTime("多选节点 M2")).toBe("2026-09-10T09:00");
+        await page.getByRole("button", { name: "撤销" }).click();
+
+        await navigator
+          .getByRole("button", { name: /多选节点 M2/ })
+          .click();
+        await multiSelection
+          .getByRole("button", { name: "批量移动" })
+          .click();
+        const followingMoveDialog = page.getByRole("dialog", {
+          name: "批量移动计划节点",
+        });
+        await followingMoveDialog.getByLabel(/当前及后续节点/).check();
+        await followingMoveDialog.getByLabel("前移").check();
+        await followingMoveDialog.getByLabel("移动天数").fill("4");
+        await followingMoveDialog
+          .getByRole("button", { name: "确认批量移动" })
+          .click();
+        await expect(
+          followingMoveDialog.getByRole("alert").filter({
+            hasText: "前移后节点时间冲突或超出合法范围",
+          }),
+        ).toBeVisible();
+        await followingMoveDialog.getByLabel("移动天数").fill("2");
+        await followingMoveDialog
+          .getByRole("button", { name: "确认批量移动" })
+          .click();
+        await expect(followingMoveDialog).toHaveCount(0);
+        await expect(
+          page.getByText("已将当前及后续 3 个可编辑节点整体前移 2 天。"),
+        ).toBeVisible();
+        expect(await readStartTime()).toBe(original.start);
+        expect(await readMilestoneTime("多选节点 M1")).toBe(original.m1);
+        expect(await readMilestoneTime("多选节点 M2")).toBe("2026-09-07T09:00");
+        expect(await readMilestoneTime("多选节点 M3")).toBe("2026-09-11T09:00");
+        expect(await readTerminalTime()).toBe("2026-09-18T18:00");
+
+        await page.getByRole("button", { name: "撤销" }).click();
+        expect(await readMilestoneTime("多选节点 M2")).toBe(original.m2);
+        expect(await readMilestoneTime("多选节点 M3")).toBe(original.m3);
+        expect(await readTerminalTime()).toBe(original.terminal);
+        await page.getByRole("button", { name: "重做" }).click();
+        expect(await readMilestoneTime("多选节点 M2")).toBe("2026-09-07T09:00");
+        expect(await readMilestoneTime("多选节点 M3")).toBe("2026-09-11T09:00");
+        expect(await readTerminalTime()).toBe("2026-09-18T18:00");
+
+        await navigator
+          .getByRole("button", { name: /多选节点 M2/ })
+          .click();
+        await multiSelection
+          .getByRole("button", { name: "批量移动" })
+          .click();
+        await page
+          .getByRole("dialog", { name: "批量移动计划节点" })
+          .getByRole("button", { name: "取消" })
+          .click();
+        expect(await readMilestoneTime("多选节点 M2")).toBe("2026-09-07T09:00");
+        expect(await readMilestoneTime("多选节点 M3")).toBe("2026-09-11T09:00");
+        expect(await readTerminalTime()).toBe("2026-09-18T18:00");
       } else {
         await expect(canvas).toBeHidden();
         await expect(multiSelection).toBeHidden();
+        await expect(
+          page.getByRole("button", { name: "批量移动" }),
+        ).toBeHidden();
       }
-
-      await navigator
-        .getByRole("button", { name: /多选节点 M2/ })
-        .click();
-      await inspector
-        .getByRole("button", { name: "批量推迟当前及后续节点" })
-        .click();
-      const batchDialog = page.getByRole("dialog", {
-        name: "批量推迟当前及后续节点",
-      });
-      await expect(batchDialog).toContainText("共3 个可编辑节点");
-      await batchDialog
-        .getByRole("button", { name: "确认批量推迟" })
-        .click();
-      await expect(
-        batchDialog.getByRole("alert").filter({
-          hasText: "新的节点时间必须晚于当前时间",
-        }),
-      ).toBeVisible();
-      await batchDialog
-        .getByLabel("新的节点时间")
-        .fill("2026-09-11T09:00");
-      await batchDialog
-        .getByRole("button", { name: "确认批量推迟" })
-        .click();
-      await expect(batchDialog).toHaveCount(0);
-      await expect(page.getByText("已将当前及之后的 3 个可编辑节点整体推迟。"))
-        .toBeVisible();
-      expect(await readStartTime()).toBe(original.start);
-      expect(await readMilestoneTime("多选节点 M1")).toBe(original.m1);
-      expect(await readMilestoneTime("多选节点 M2")).toBe("2026-09-11T09:00");
-      expect(await readMilestoneTime("多选节点 M3")).toBe("2026-09-15T09:00");
-      expect(await readTerminalTime()).toBe("2026-09-22T18:00");
-
-      await page.getByRole("button", { name: "撤销" }).click();
-      expect(await readMilestoneTime("多选节点 M2")).toBe(original.m2);
-      expect(await readMilestoneTime("多选节点 M3")).toBe(original.m3);
-      expect(await readTerminalTime()).toBe(original.terminal);
-      await page.getByRole("button", { name: "重做" }).click();
-      expect(await readMilestoneTime("多选节点 M2")).toBe("2026-09-11T09:00");
-      expect(await readMilestoneTime("多选节点 M3")).toBe("2026-09-15T09:00");
-      expect(await readTerminalTime()).toBe("2026-09-22T18:00");
-
-      await navigator
-        .getByRole("button", { name: /多选节点 M2/ })
-        .click();
-      await inspector
-        .getByRole("button", { name: "批量推迟当前及后续节点" })
-        .click();
-      await page.getByRole("dialog", {
-        name: "批量推迟当前及后续节点",
-      }).getByLabel("新的节点时间").fill("2026-09-12T09:00");
-      await page.getByRole("dialog", {
-        name: "批量推迟当前及后续节点",
-      }).getByRole("button", { name: "取消" }).click();
-      expect(await readMilestoneTime("多选节点 M2")).toBe("2026-09-11T09:00");
-      expect(await readMilestoneTime("多选节点 M3")).toBe("2026-09-15T09:00");
-      expect(await readTerminalTime()).toBe("2026-09-22T18:00");
 
       expect(
         await page.evaluate(

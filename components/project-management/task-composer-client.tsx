@@ -60,7 +60,7 @@ import {
 import {
   NO_LEGAL_ANCHOR_MOVE_MESSAGE,
   applyAnchorGroupMove,
-  applyComposerBatchDelay,
+  applyComposerBatchMove,
   applyLiveInspectorUpdate,
   inspectorDraftForEntity,
   isLockedRevisionMilestone,
@@ -73,6 +73,7 @@ import {
   revisionAnchorTimes,
   resolveAnchorGroupMoveCandidate,
   sortMilestones,
+  type ComposerBatchMoveInput,
 } from "@/components/project-management/task-composer-plan-state";
 import {
   actionErrorMessage,
@@ -437,8 +438,8 @@ export function TaskComposerClient({
     };
   };
 
-  const batchDelay = (entityId: string, targetAt: string) => {
-    const result = applyComposerBatchDelay(state, entityId, targetAt);
+  const batchMove = (input: ComposerBatchMoveInput) => {
+    const result = applyComposerBatchMove(state, input);
     if (!result.ok) return result;
     endLiveEdit();
     commit(() => result.state);
@@ -447,8 +448,9 @@ export function TaskComposerClient({
         anchorIssueKey(state, movedEntityId),
       ),
     );
+    setServerError("");
     setStatusMessage(
-      `已将当前及之后的 ${result.movedEntityIds.length} 个可编辑节点整体推迟。`,
+      `已将${input.mode === "FOLLOWING" ? "当前及后续" : "所选"} ${result.movedEntityIds.length} 个可编辑节点整体${input.direction === "EARLIER" ? "前移" : "后移"} ${input.days} 天。`,
     );
     return result;
   };
@@ -1083,7 +1085,7 @@ export function TaskComposerClient({
           onConstrainAnchorMove={constrainAnchorMove}
           onMoveAnchor={moveAnchor}
           onMoveTerminal={moveTerminal}
-          onBatchDelay={batchDelay}
+          onBatchMove={batchMove}
           onUpdateInspector={updateInspector}
           onDeleteMilestones={removeMilestones}
           onSubmit={submit}

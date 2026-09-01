@@ -48,12 +48,12 @@ import type {
 } from "@/lib/project-management/composer-contract";
 import { TASK_COMPOSER_START_ID } from "@/lib/project-management/composer-contract";
 import {
-  composerBatchDelayEntityIds,
+  composerBatchMoveEntityIds,
   isReadOnlyRevisionEntity,
   localMs,
   renderAtMs,
-  renderAtLocal,
   sortMilestonesByRenderTime,
+  type ComposerBatchMoveInput,
   type ComposerPlanTimeMutationResult,
 } from "@/components/project-management/task-composer-plan-state";
 
@@ -85,7 +85,7 @@ export function TaskComposerPlanEditor({
   onConstrainAnchorMove,
   onMoveAnchor,
   onMoveTerminal,
-  onBatchDelay,
+  onBatchMove,
   onUpdateInspector,
   onDeleteMilestones,
   onSubmit,
@@ -112,9 +112,8 @@ export function TaskComposerPlanEditor({
     selectedEntityIds: readonly string[],
   ) => void;
   onMoveTerminal: (at: string) => void;
-  onBatchDelay: (
-    entityId: string,
-    targetAt: string,
+  onBatchMove: (
+    input: ComposerBatchMoveInput,
   ) => ComposerPlanTimeMutationResult;
   onUpdateInspector: (draft: TaskComposerInspectorDraft) => void;
   onDeleteMilestones: (ids: string[]) => void;
@@ -125,10 +124,17 @@ export function TaskComposerPlanEditor({
   const [selectedAnchorIds, setSelectedAnchorIds] = useState<Set<string>>(
     () => new Set(),
   );
-  const [batchDelay, setBatchDelay] = useState<{
-    entityId: string;
-    targetAt: string;
-    error: string;
+  const [batchMove, setBatchMove] = useState<{
+    mode: "" | ComposerBatchMoveInput["mode"];
+    direction: ComposerBatchMoveInput["direction"];
+    days: string;
+    referenceEntityId: string;
+    selectedEntityIds: string[];
+    errors: {
+      mode?: string;
+      days?: string;
+      form?: string;
+    };
   } | null>(null);
   const [requestedCanvasCenter, setRequestedCanvasCenter] = useState<{
     atMs: number;
@@ -289,18 +295,72 @@ export function TaskComposerPlanEditor({
     });
   };
 
-  const submitBatchDelay = () => {
-    if (!batchDelay) return;
-    const result = onBatchDelay(batchDelay.entityId, batchDelay.targetAt);
-    if (!result.ok) {
-      setBatchDelay({ ...batchDelay, error: result.message });
+  const submitBatchMove = () => {
+    if (!batchMove) return;
+    const errors: NonNullable<typeof batchMove>["errors"] = {};
+    if (!batchMove.mode) errors.mode = "请选择要移动的节点范围。";
+    const days = Number(batchMove.days);
+    if (!Number.isSafeInteger(days) || days <= 0) {
+      errors.days = "移动天数必须是大于 0 的整数。";
+    }
+    if (errors.mode || errors.days) {
+      setBatchMove({ ...batchMove, errors });
+      window.setTimeout(
+        () =>
+          document
+            .getElementById(
+              errors.mode
+                ? "task-composer-batch-move-following"
+                : "task-composer-batch-move-days",
+            )
+            ?.focus(),
+        0,
+      );
       return;
     }
-    setBatchDelay(null);
+    const target = batchMove.mode === "FOLLOWING"
+      ? {
+          mode: "FOLLOWING" as const,
+          referenceEntityId: batchMove.referenceEntityId,
+        }
+      : {
+          mode: "SELECTED" as const,
+          selectedEntityIds: batchMove.selectedEntityIds,
+        };
+    const result = onBatchMove({
+      ...target,
+      direction: batchMove.direction,
+      days,
+    });
+    if (!result.ok) {
+      setBatchMove({
+        ...batchMove,
+        errors: { form: result.message },
+      });
+      return;
+    }
+    setBatchMove(null);
   };
-  const batchDelayAffectedCount = batchDelay
-    ? composerBatchDelayEntityIds(state, batchDelay.entityId).length
+  const followingAffectedCount = batchMove
+    ? composerBatchMoveEntityIds(state, {
+        mode: "FOLLOWING",
+        referenceEntityId: batchMove.referenceEntityId,
+      }).length
     : 0;
+  const selectedAffectedCount = batchMove
+    ? composerBatchMoveEntityIds(state, {
+        mode: "SELECTED",
+        selectedEntityIds: batchMove.selectedEntityIds,
+      }).length
+    : 0;
+  const batchMoveAffectedCount = batchMove?.mode === "FOLLOWING"
+    ? followingAffectedCount
+    : batchMove?.mode === "SELECTED"
+      ? selectedAffectedCount
+      : 0;
+  const batchMoveReferenceLabel = batchMove
+    ? navigatorNodes.find((node) => node.id === batchMove.referenceEntityId)?.label
+    : null;
 
   return (
     <>
@@ -341,7 +401,30 @@ export function TaskComposerPlanEditor({
             data-testid="task-composer-anchor-multi-selection"
           >
             <Badge variant="outline">已选 {activeSelectedAnchorIds.size} 个可编辑节点</Badge>
-            <span>Shift 点击可增减选择；在画布空白处拖动可框选；拖动任一已选节点会整体移动。</span>
+            <span className="min-w-0 flex-1">Shift 点击可增减选择；在画布空白处拖动可框选；拖动任一已选节点会整体移动。</span>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={submitting || activeSelectedAnchorIds.size === 0}
+              onClick={() => {
+                const referenceEntityId = state.selectedEntityId;
+                if (!referenceEntityId || !editableAnchorIds.has(referenceEntityId)) {
+                  return;
+                }
+                setBatchMove({
+                  mode: "",
+                  direction: "LATER",
+                  days: "1",
+                  referenceEntityId,
+                  selectedEntityIds: [...activeSelectedAnchorIds],
+                  errors: {},
+                });
+              }}
+            >
+              <CalendarClock aria-hidden="true" />
+              批量移动
+            </Button>
           </div>
 
           <div
@@ -474,16 +557,8 @@ export function TaskComposerPlanEditor({
             state={state}
             draft={inspectorDraft}
             issues={inspectorIssues}
-            submitting={submitting}
             onChange={onUpdateInspector}
             onDelete={(milestone) => onDeleteMilestones([milestone.id])}
-            onOpenBatchDelay={(entityId) =>
-              setBatchDelay({
-                entityId,
-                targetAt: renderAtLocal(state, entityId),
-                error: "",
-              })
-            }
           />
         </div>
       </aside>
@@ -510,49 +585,159 @@ export function TaskComposerPlanEditor({
       </div>
 
       <Dialog
-        open={Boolean(batchDelay)}
+        open={Boolean(batchMove)}
         onOpenChange={(open) => {
-          if (!open) setBatchDelay(null);
+          if (!open) setBatchMove(null);
         }}
       >
-        <DialogContent className="sm:max-w-md" data-testid="task-composer-batch-delay-dialog">
+        <DialogContent className="sm:max-w-lg" data-testid="task-composer-batch-move-dialog">
           <DialogHeader>
-            <DialogTitle>批量推迟当前及后续节点</DialogTitle>
+            <DialogTitle>批量移动计划节点</DialogTitle>
             <DialogDescription>
-              指定当前节点的新时间；系统会把当前及时间线上之后共
-              {batchDelayAffectedCount} 个可编辑节点整体推迟相同时间，较早节点和只读承接节点保持不变。
+              当前焦点为“{batchMoveReferenceLabel ?? "未命名节点"}”，已选{" "}
+              {batchMove?.selectedEntityIds.length ?? 0} 个可编辑节点。整批节点会保持原有时间间隔。
             </DialogDescription>
           </DialogHeader>
+          <fieldset
+            className="space-y-2"
+            aria-invalid={Boolean(batchMove?.errors.mode)}
+            aria-describedby={batchMove?.errors.mode ? "task-composer-batch-move-mode-error" : undefined}
+          >
+            <legend className="text-sm font-medium">
+              移动范围<span className="ml-1 text-destructive">*</span>
+            </legend>
+            <label className="flex cursor-pointer items-start gap-2 rounded-lg border p-3 text-sm has-[:checked]:border-primary has-[:checked]:bg-primary/5">
+              <input
+                id="task-composer-batch-move-following"
+                type="radio"
+                name="task-composer-batch-move-mode"
+                value="FOLLOWING"
+                checked={batchMove?.mode === "FOLLOWING"}
+                onChange={() =>
+                  setBatchMove((current) =>
+                    current
+                      ? {
+                          ...current,
+                          mode: "FOLLOWING",
+                          errors: { ...current.errors, mode: undefined, form: undefined },
+                        }
+                      : current,
+                  )
+                }
+              />
+              <span>
+                <span className="block font-medium">当前及后续节点</span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  移动当前焦点以及时间不早于它的 {followingAffectedCount} 个可编辑节点。
+                </span>
+              </span>
+            </label>
+            <label className="flex cursor-pointer items-start gap-2 rounded-lg border p-3 text-sm has-[:checked]:border-primary has-[:checked]:bg-primary/5">
+              <input
+                type="radio"
+                name="task-composer-batch-move-mode"
+                value="SELECTED"
+                checked={batchMove?.mode === "SELECTED"}
+                onChange={() =>
+                  setBatchMove((current) =>
+                    current
+                      ? {
+                          ...current,
+                          mode: "SELECTED",
+                          errors: { ...current.errors, mode: undefined, form: undefined },
+                        }
+                      : current,
+                  )
+                }
+              />
+              <span>
+                <span className="block font-medium">仅已选节点</span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  只移动当前显式选中的 {selectedAffectedCount} 个可编辑节点。
+                </span>
+              </span>
+            </label>
+            <FieldError
+              id="task-composer-batch-move-mode-error"
+              messages={batchMove?.errors.mode}
+            />
+          </fieldset>
+          <fieldset className="space-y-2">
+            <legend className="text-sm font-medium">移动方向</legend>
+            <div className="grid grid-cols-2 gap-2">
+              {([
+                ["EARLIER", "前移"],
+                ["LATER", "后移"],
+              ] as const).map(([direction, label]) => (
+                <label
+                  key={direction}
+                  className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border p-2 text-sm font-medium has-[:checked]:border-primary has-[:checked]:bg-primary/5"
+                >
+                  <input
+                    type="radio"
+                    name="task-composer-batch-move-direction"
+                    value={direction}
+                    checked={batchMove?.direction === direction}
+                    onChange={() =>
+                      setBatchMove((current) =>
+                        current
+                          ? { ...current, direction, errors: { ...current.errors, form: undefined } }
+                          : current,
+                      )
+                    }
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+          </fieldset>
           <div>
-            <label htmlFor="task-composer-batch-delay-at" className="mb-1.5 block text-sm font-medium">
-              新的节点时间<span className="ml-1 text-destructive">*</span>
+            <label htmlFor="task-composer-batch-move-days" className="mb-1.5 block text-sm font-medium">
+              移动天数<span className="ml-1 text-destructive">*</span>
             </label>
             <Input
-              id="task-composer-batch-delay-at"
-              type="datetime-local"
-              value={batchDelay?.targetAt ?? ""}
-              aria-invalid={Boolean(batchDelay?.error)}
-              aria-describedby={batchDelay?.error ? "task-composer-batch-delay-at-error" : undefined}
+              id="task-composer-batch-move-days"
+              type="number"
+              inputMode="numeric"
+              min={1}
+              step={1}
+              value={batchMove?.days ?? "1"}
+              aria-invalid={Boolean(batchMove?.errors.days)}
+              aria-describedby={batchMove?.errors.days ? "task-composer-batch-move-days-error" : undefined}
               onChange={(event) =>
-                setBatchDelay((current) =>
+                setBatchMove((current) =>
                   current
-                    ? { ...current, targetAt: event.target.value, error: "" }
+                    ? {
+                        ...current,
+                        days: event.target.value,
+                        errors: { ...current.errors, days: undefined, form: undefined },
+                      }
                     : current,
                 )
               }
             />
             <FieldError
-              id="task-composer-batch-delay-at-error"
-              messages={batchDelay?.error ?? ""}
+              id="task-composer-batch-move-days-error"
+              messages={batchMove?.errors.days}
               className="mt-1.5"
             />
           </div>
+          {batchMove?.mode && (
+            <p className="rounded-lg bg-muted/50 p-3 text-sm" role="status">
+              将把 {batchMoveAffectedCount} 个可编辑节点整体
+              {batchMove.direction === "EARLIER" ? "前移" : "后移"} {batchMove.days || "0"} 天；只读节点保持不变。
+            </p>
+          )}
+          <FieldError
+            id="task-composer-batch-move-form-error"
+            messages={batchMove?.errors.form}
+          />
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setBatchDelay(null)}>
+            <Button type="button" variant="outline" onClick={() => setBatchMove(null)}>
               取消
             </Button>
-            <Button type="button" disabled={submitting} onClick={submitBatchDelay}>
-              确认批量推迟
+            <Button type="button" disabled={submitting} onClick={submitBatchMove}>
+              确认批量移动
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -781,18 +966,14 @@ function Inspector({
   state,
   draft,
   issues,
-  submitting,
   onChange,
   onDelete,
-  onOpenBatchDelay,
 }: {
   state: TaskComposerSeed;
   draft: TaskComposerInspectorDraft | null;
   issues: ValidationIssue[];
-  submitting: boolean;
   onChange: (draft: TaskComposerInspectorDraft) => void;
   onDelete: (milestone: TaskComposerMilestone) => void;
-  onOpenBatchDelay: (entityId: string) => void;
 }) {
   if (!draft) {
     return <p className="text-sm text-muted-foreground">从画布或节点列表选择一个节点进行编辑。</p>;
@@ -833,19 +1014,6 @@ function Inspector({
         )}
         {readOnly && <Badge variant="outline">只读</Badge>}
       </div>
-
-      {!readOnly && (
-        <Button
-          type="button"
-          variant="outline"
-          className="w-full justify-start"
-          disabled={submitting}
-          onClick={() => onOpenBatchDelay(draft.entityId)}
-        >
-          <CalendarClock aria-hidden="true" />
-          批量推迟当前及后续节点
-        </Button>
-      )}
 
       {draft.kind === "START" && (
         <PlanField label="计划开始时间" required htmlFor="plannedStartAt" error={fieldMessages("plannedStartAt")}>

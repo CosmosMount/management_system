@@ -3042,14 +3042,44 @@ test.describe("project management UI project-management-ui-workbench", () => {
       await expect(multiSelection).toContainText("已选 0 个可编辑节点");
       await expect(revisionInspector).toContainText("Start");
       await expect(
-        revisionInspector.getByRole("button", {
-          name: "批量推迟当前及后续节点",
-        }),
-      ).toHaveCount(0);
+        multiSelection.getByRole("button", { name: "批量移动" }),
+      ).toBeDisabled();
       await currentRevisionButton.click();
+      await expect(
+        multiSelection.getByRole("button", { name: "批量移动" }),
+      ).toBeEnabled();
+      await multiSelection
+        .getByRole("button", { name: "批量移动" })
+        .click();
+      const revisionBatchMoveDialog = page.getByRole("dialog", {
+        name: "批量移动计划节点",
+      });
+      await revisionBatchMoveDialog.getByLabel(/当前及后续节点/).check();
+      await expect(revisionBatchMoveDialog).toContainText(
+        /时间不早于它的 \d+ 个可编辑节点/,
+      );
+      await expect(revisionBatchMoveDialog).toContainText(
+        "只读节点保持不变",
+      );
+      await revisionBatchMoveDialog.getByLabel("前移").check();
+      await revisionBatchMoveDialog.getByLabel("移动天数").fill("365");
+      await revisionBatchMoveDialog
+        .getByRole("button", { name: "确认批量移动" })
+        .click();
+      await expect(
+        revisionBatchMoveDialog.getByRole("alert").filter({
+          hasText: "前移后节点时间冲突或超出合法范围",
+        }),
+      ).toBeVisible();
+      await revisionBatchMoveDialog
+        .getByRole("button", { name: "取消" })
+        .click();
     } else {
       await expect(page.getByTestId("time-canvas-root")).toBeHidden();
       await expect(multiSelection).toBeHidden();
+      await expect(
+        page.getByRole("button", { name: "批量移动" }),
+      ).toBeHidden();
     }
     const revisionReason = revisionInspector.getByLabel("Revision 名称");
     const revisionDescription = revisionInspector.getByLabel("Revision 详细内容");
