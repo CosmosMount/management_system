@@ -45,12 +45,14 @@ export async function getContentDrivenTimeCanvasData({
   actor,
   input,
   preferredCenterMs,
+  includePreferredCenterInFullRange = false,
   anchorTaskIds = [],
   load = { mode: "ALL" },
 }: {
   actor: ProjectManagementActor;
   input: unknown;
   preferredCenterMs?: number;
+  includePreferredCenterInFullRange?: boolean;
   anchorTaskIds?: string[];
   load?:
     | { mode: "ALL" | "INITIAL" }
@@ -155,9 +157,21 @@ export async function getContentDrivenTimeCanvasData({
     ? padShanghaiCalendarRange(businessContentRange, 2, seedStart)
     : null;
   const todayNavigationRange = padShanghaiCalendarRange(null, 2, now);
+  const preferredCenterNavigationRange = includePreferredCenterInFullRange &&
+      requestedCenterMs !== null
+    ? padShanghaiCalendarRange(null, 2, requestedCenterMs)
+    : null;
   const fullRange = {
-    startMs: Math.min(contentNavigationRange.startMs, todayNavigationRange.startMs),
-    endMs: Math.max(contentNavigationRange.endMs, todayNavigationRange.endMs),
+    startMs: Math.min(
+      contentNavigationRange.startMs,
+      todayNavigationRange.startMs,
+      preferredCenterNavigationRange?.startMs ?? Number.POSITIVE_INFINITY,
+    ),
+    endMs: Math.max(
+      contentNavigationRange.endMs,
+      todayNavigationRange.endMs,
+      preferredCenterNavigationRange?.endMs ?? Number.NEGATIVE_INFINITY,
+    ),
   };
   const fallbackCenterMs = businessNavigationRange &&
       now >= businessNavigationRange.startMs &&

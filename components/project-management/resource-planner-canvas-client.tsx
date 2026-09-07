@@ -1450,6 +1450,7 @@ export function ResourcePlannerCanvasClient({
 
   return (
     <ResourcePlannerCanvasView
+      readOnly={readOnly}
       canCreateSegment={canCreateSegment}
       createDraftOpen={Boolean(createDraft)}
       isPending={isPending}

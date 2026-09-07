@@ -171,12 +171,48 @@ export async function listMyTaskOptions({
   actor: ProjectManagementActor;
   statuses: readonly TaskStatus[];
 }): Promise<TaskOptionPage["items"]> {
+  return listTaskOptionsByScope({
+    actor,
+    statuses,
+    scope: myTaskOptionWhere(actor),
+  });
+}
+
+export async function listPersonTaskOptions({
+  actor,
+  personId,
+  statuses,
+}: {
+  actor: ProjectManagementActor;
+  personId: string;
+  statuses: readonly TaskStatus[];
+}): Promise<TaskOptionPage["items"]> {
+  return listTaskOptionsByScope({
+    actor,
+    statuses,
+    scope: {
+      members: {
+        some: { personId, removedAt: null },
+      },
+    },
+  });
+}
+
+async function listTaskOptionsByScope({
+  actor,
+  statuses,
+  scope,
+}: {
+  actor: ProjectManagementActor;
+  statuses: readonly TaskStatus[];
+  scope: Prisma.TaskWhereInput;
+}): Promise<TaskOptionPage["items"]> {
   const rows = await prisma.task.findMany({
     where: {
       AND: [
         taskReadableWhere(actor),
         statuses.length > 0 ? { status: { in: [...statuses] } } : {},
-        myTaskOptionWhere(actor),
+        scope,
       ],
     },
     select: taskOptionSelect,

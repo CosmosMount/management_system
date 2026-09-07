@@ -4,12 +4,18 @@ import {
   floorShanghaiDay,
 } from "@/lib/project-management/time-canvas/time-math";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
+import { notFoundError } from "@/lib/project-management/application/errors";
 import {
   getAdaptiveTimeCanvasBlockInputSchema,
   getMyTimelinePageInputSchema,
+  getPersonTimelinePageInputSchema,
   getTimeCanvasDataInputSchema,
 } from "@/lib/project-management/validations/time-canvas";
-import { listMyTaskOptions } from "@/lib/project-management/queries/option-queries";
+import {
+  listMyTaskOptions,
+  listPersonTaskOptions,
+  resolvePeopleOptionsByIds,
+} from "@/lib/project-management/queries/option-queries";
 import { getProjectDetail } from "@/lib/project-management/queries/project-queries";
 import { getResourcePlanSelection } from "@/lib/project-management/queries/resource-plan-queries";
 import {
@@ -53,6 +59,56 @@ export async function getMyTimelinePageData({
     },
   });
   return { tasks, ...canvas };
+}
+
+export async function getPersonTimelinePageData({
+  actor,
+  input,
+  preferredCenterMs,
+  load,
+}: {
+  actor: ProjectManagementActor;
+  input: unknown;
+  preferredCenterMs?: number;
+  load?: Parameters<typeof getContentDrivenTimeCanvasData>[0]["load"];
+}) {
+  const selector = getPersonTimelinePageInputSchema.parse(input);
+  const [person] = await resolvePeopleOptionsByIds({
+    actor,
+    input: {
+      scope: { purpose: "VISIBLE" },
+      ids: [selector.personId],
+    },
+  });
+  if (!person || (person.status !== "ACTIVE" && person.id !== actor.personId)) {
+    throw notFoundError();
+  }
+  const tasks = await listPersonTaskOptions({
+    actor,
+    personId: person.id,
+    statuses: ["ACTIVE"],
+  });
+  const inactiveSelf = person.id === actor.personId && person.status === "INACTIVE";
+  const canvas = await getContentDrivenTimeCanvasData({
+    actor,
+    preferredCenterMs,
+    includePreferredCenterInFullRange: true,
+    anchorTaskIds: tasks.map((task) => task.id),
+    load,
+    input: {
+      scope: { kind: inactiveSelf ? "PERSONAL" : "RESOURCE_PLANNER" },
+      personIds: inactiveSelf ? [] : [person.id],
+      taskIds: [],
+      types: [],
+      statuses: [],
+      groupBy: "PERSON",
+      includeTaskAnchors: true,
+      includeActual: true,
+      emptyPersonIdsMeansNone: false,
+      includeBusyBlocks: false,
+    },
+  });
+  return { person, tasks, ...canvas };
 }
 
 export async function getResourcePlanPageData({
@@ -150,6 +206,13 @@ export async function getAdaptiveTimeCanvasBlock({
         preferredCenterMs,
         load,
       })
+    : parsed.kind === "PERSON_TIMELINE"
+      ? await getPersonTimelinePageData({
+          actor,
+          input: { personId: parsed.personId },
+          preferredCenterMs,
+          load,
+        })
     : parsed.kind === "TASK"
       ? await getContentDrivenTimeCanvasData({
           actor,

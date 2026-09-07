@@ -65,6 +65,10 @@ test.describe("全局关键时间点 UI", () => {
       const routes = [
         { path: `/progress?center=${center}`, desktopOnlyCanvas: false },
         {
+          path: `/progress/kanban?people=${fixture.member.person.id}&center=${center}`,
+          desktopOnlyCanvas: false,
+        },
+        {
           path: `/progress/resources?from=2026-08-10&to=2026-08-12&people=${fixture.member.person.id}&center=${center}`,
           desktopOnlyCanvas: false,
         },

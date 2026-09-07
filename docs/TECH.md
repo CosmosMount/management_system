@@ -206,17 +206,19 @@ TimeCanvas 的请求预算为 Full Segment + Busy 合计 5,000、当前计划非
 
 资源计划使用服务端集合展开：`TaskSet = (直接选择 Task ∪ 所选 Project 的未删除 Task) ∩ 所选 Task 状态`，`PersonSet = 直接选择 Person ∪ TaskSet 有效成员 ∪ 所选 Project 有效成员`。状态集合覆盖 `DRAFT/ACTIVE/COMPLETED/FAILED/CANCELLED/TIMEOUT/ARCHIVED`，默认 `DRAFT + ACTIVE`，允许空集合；Task 选项查询使用相同状态条件。状态筛选只影响计划轨道和由 Task 推导的人员，已经由直接选择、Project 成员或焦点进入 `PersonSet` 的人员仍按 Person 范围读取全部可见 Segment，不再按所属 Task 状态过滤。Task 与 Person 一次完整装配、不使用行游标；焦点 Segment 对应 Person 固定置前，焦点 Task 只有符合状态时才进入计划轨道，但始终独立完成可见性校验。Current Plan 轨道只读，人员行保留既有 Segment capability；内容范围两侧增加两个上海日历月，并限制在三年逻辑窗口内按最多 180 天自适应读取，单次自适应查询继续受 20,000 个对象和 16 个 leaf block 预算约束。
 
+人员工作看板 `/progress/kanban` 使用独立 `PERSON_TIMELINE` 页面/自适应查询语义，不能放宽 `PERSONAL` scope。查询严格接收一个 `personId`，复用全局 Task/Segment 可读规则，只装配该 Person 行、该人员有效参与的 ACTIVE Task Current Plan 和其全部可见投入；后续数据块重新解析同一人员与 Task 集合，并通过 `rowPageKey` 检测结构变化。页面把所有行和 Segment capability 投影为只读，不提供任何 mutation 入口。人员选择以复数 URL 参数 `people` 保存唯一 ID，默认规范化为当前 actor，并保留 `center`、`scale` 便于在同一时间视口比较人员。
+
 迁移 `20260811190000_remove_project_management_tags` 删除 `SegmentTag`、`TaskTag` 与 `Tag`。应用同步删除 Tag 路由、查询、Action、Task/Segment 输入和 DTO，不保留兼容入口；既有 `DomainAuditEvent` 继续 append-only 保存，但近期动态不再解释历史 `tagIds`。
 
 `scripts/cron.ts` 每 10 分钟在数据库互斥下运行 Segment transition，并在每日 08:15 执行 deadline/retention/integrity 维护。资源冲突的增量与每日全量扫描、checkpoint、运行状态和日志均已删除。定时任务只处理保留的领域状态、审计、站内通知和 `channel=project-management` outbox，不自动生成 Actual，也不自动调整 Segment 排期。
 
-项目管理浏览器入口覆盖 `/progress` 统一“我的工作”、Task Composer/工作台、资源计划、Action Inbox 和通知偏好；`/progress/task/:id`、`/progress/kanban`、`/progress/my-timeline`、`/progress/resources/conflicts`、`/progress/tags` 与 `/admin/roles` 返回 404。所有页面先解析项目管理 actor；`taskReadableWhere` 和 `segmentReadableWhere` 对所有已登录统一账号返回全部未删除对象，人员列表返回所有活跃 Person，并在所选范围继续展示有历史投入的停用 Person。停用 Person 对应账号仍可进入页面和全局读取历史，但 mutation 在事务内刷新 Actor 时统一返回 `FORBIDDEN`，不能创建 Task、修改业务或新增 Segment。服务端 action 仍执行成员、Person 状态、状态机、权限、关联和版本校验，DTO capability flags 决定只读或可操作 UI。Milestone、Revision、Project 立项和 Terminal 结束审批及对应按钮只对两类有效全局管理员可用；本人投入确认和有效参与 Task 的当前节点按各自成员范围进入 Action Inbox，不因全局读取权限扩大。
+项目管理浏览器入口覆盖 `/progress` 统一“我的工作”、`/progress/kanban` 人员工作看板、Task Composer/工作台、资源计划、Action Inbox 和通知偏好；`/progress/task/:id`、`/progress/my-timeline`、`/progress/resources/conflicts`、`/progress/tags` 与 `/admin/roles` 返回 404。所有页面先解析项目管理 actor；`taskReadableWhere` 和 `segmentReadableWhere` 对所有已登录统一账号返回全部未删除对象，人员列表返回所有活跃 Person，并在所选范围继续展示有历史投入的停用 Person。停用 Person 对应账号仍可进入页面和全局读取历史，但 mutation 在事务内刷新 Actor 时统一返回 `FORBIDDEN`，不能创建 Task、修改业务或新增 Segment。服务端 action 仍执行成员、Person 状态、状态机、权限、关联和版本校验，DTO capability flags 决定只读或可操作 UI。Milestone、Revision、Project 立项和 Terminal 结束审批及对应按钮只对两类有效全局管理员可用；本人投入确认和有效参与 Task 的当前节点按各自成员范围进入 Action Inbox，不因全局读取权限扩大。
 
 Action Inbox 聚合的稳定公共出口位于 `lib/project-management/queries/action-inbox-queries.ts`，查询读取、候选 DTO 装配、游标锚点复核和公共类型分别由同目录的 `action-inbox-query-loader.ts`、`action-inbox-item-builder.ts`、`action-inbox-cursor-validation.ts` 和 `action-inbox-types.ts` 负责；输入仍由 strict Zod 边界限制为 `cursor/limit`。六条数据流分别是投入确认、Task 当前节点、Milestone 验收、Revision 审核、Project 立项和 Terminal 结束审批；旧 `TERMINATION` 结束申请流已移除。Task 当前节点只读取未删除 ACTIVE Task、有效 OWNER/PARTICIPANT 和 Current Plan：Milestone 必须同时等于 `activeMilestoneNodeId` 且为 `ACTIVE`；`activeMilestoneNodeId=null` 时才读取 `ACTIVE` Terminal。相同节点存在未撤出的待处理 Milestone Review 或待处理 Termination Review 时抑制当前节点，Revision 不参与该抑制。停用 actor 直接返回空队列；全局管理员若不是 Task 成员，也不会仅凭管理员身份获得当前节点。
 
 全局队列按严重度、相关时间和稳定业务 ID 合并。首次查询时间固定为 `generatedAt`，后续页沿用该时间计算逾期和严重度；版本化 Base64URL 游标绑定 `accountId/personId/generatedAt`，保存六条流各自的 `(relevantAt,id)` keyset 位置，并使用 `AUTH_SECRET`（兼容 `NEXTAUTH_SECRET`）进行 HMAC 签名，加载前还会复核游标锚点仍属于当前 actor 的队列。完整页每次读取 50 项并通过只读 Server Action `app/actions/project-management/action-inbox.ts` 加载更多，驾驶舱只请求前 8 项。DTO 显式返回 Project、Task、Node 类型/状态、相关时间和操作文案。通用纵向列表样式由 `components/ui/list.tsx` 提供语义化 `List/ListItem/ListContent/ListActions/ListEmpty`；本次仅迁移 Action Inbox，其他业务可逐步复用同一风格。
 
-项目管理浏览器入口统一由 `app/progress/layout.tsx` 渲染全站 `AppHeader`、`PageShell` 和模块 Shell，子页只提供上下文命令栏与业务内容。桌面端使用可折叠的 sticky 左侧导航；移动端使用模态 Drawer。模块 Shell 统一读取通知未读数；不可用对象使用脱敏页面。`--pm-*` 语义变量集中在 `app/globals.css`，适配明暗主题和 reduced motion。`taskNew`、`taskEdit`、`taskRevisionNew`、`taskRevisionEdit`、`approvals`均已有类型安全路由和导航入口；个人时间不再有独立导航项。`/progress/tasks/new`、仅限 DRAFT 的 `/progress/tasks/[id]/edit`、Revision 新建和驳回重提路由共用 Task Composer；权限不足返回脱敏 404，状态变化或已有候选时重定向工作台。DRAFT 工作台只读展示概览与 Current Plan，并在右上角按“编辑 Task → 激活 Task → 删除草稿 → 复制链接”给出能力允许的操作。ACTIVE 工作台右上角“发起 Revision”进入独立新建页；Revision Tab 只保留历史、审批/驳回、取消和三层 Diff，被驳回记录链接到独立编辑页。
+项目管理浏览器入口统一由 `app/progress/layout.tsx` 渲染全站 `AppHeader`、`PageShell` 和模块 Shell，子页只提供上下文命令栏与业务内容。桌面端使用可折叠的 sticky 左侧导航；移动端使用模态 Drawer。模块 Shell 统一读取通知未读数；不可用对象使用脱敏页面。`--pm-*` 语义变量集中在 `app/globals.css`，适配明暗主题和 reduced motion。`kanban`、`taskNew`、`taskEdit`、`taskRevisionNew`、`taskRevisionEdit`、`approvals` 均已有类型安全路由和导航入口；个人时间不再有独立导航项。`/progress/tasks/new`、仅限 DRAFT 的 `/progress/tasks/[id]/edit`、Revision 新建和驳回重提路由共用 Task Composer；权限不足返回脱敏 404，状态变化或已有候选时重定向工作台。DRAFT 工作台只读展示概览与 Current Plan，并在右上角按“编辑 Task → 激活 Task → 删除草稿 → 复制链接”给出能力允许的操作。ACTIVE 工作台右上角“发起 Revision”进入独立新建页；Revision Tab 只保留历史、审批/驳回、取消和三层 Diff，被驳回记录链接到独立编辑页。
 
 采购管理沿用相同的 `PageCommandBar` 上下文命令栏模式，并通过采购模块标签与独立测试标识区分。看板、待办、新建、列表、订单详情和编辑页均不渲染返回按钮；订单状态与可用业务操作统一放在命令栏右侧，页面切换由桌面侧栏或移动端抽屉承担。独立工坊加工费入口已下线，旧路径返回 404；普通采购明细中的加工费种类与历史 `isWorkshopFee` 订单保持兼容。
 
@@ -281,6 +283,7 @@ TimeCanvas 的显示尺度为 `WEEK/MONTH/QUARTER/YEAR`，密度分别为 40/12/
 | 路径 | 功能 |
 |------|------|
 | `/progress` | 我的工作总览 |
+| `/progress/kanban` | 只读人员工作看板 |
 | `/progress/tasks` | Task 列表 |
 | `/progress/projects` | Project 列表（默认我的 + 进行中；空搜索使用 `updatedAt + id` 稳定游标分页） |
 | `/progress/projects/new` | 提交 Project 立项 |
@@ -293,7 +296,6 @@ TimeCanvas 的显示尺度为 `WEEK/MONTH/QUARTER/YEAR`，密度分别为 40/12/
 | `/progress/resources` | 资源计划时间轴 |
 | `/progress/notifications` | 站内通知中心 |
 | `/progress/task/:id` | 已退役，404 |
-| `/progress/kanban` | 已退役，404 |
 
 ## 飞书集成要点
 

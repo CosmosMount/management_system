@@ -85,9 +85,9 @@ test.describe("Project 立项与生命周期", () => {
     await expect(page.getByText(name, { exact: true })).toBeVisible();
     if (testInfo.project.name === "desktop") {
       const navigation = page.getByRole("navigation", { name: "项目管理导航" });
-      const links = navigation.getByRole("link");
-      await expect(links.nth(1)).toHaveAttribute("href", "/progress/projects");
-      await expect(links.nth(2)).toHaveAttribute("href", "/progress/tasks");
+      await expect(navigation.getByRole("link", { name: "看板", exact: true })).toHaveAttribute("href", "/progress/kanban");
+      await expect(navigation.getByRole("link", { name: "Project", exact: true })).toHaveAttribute("href", "/progress/projects");
+      await expect(navigation.getByRole("link", { name: "Task", exact: true })).toHaveAttribute("href", "/progress/tasks");
     } else {
       await page.getByRole("button", { name: "打开项目管理导航" }).click();
       await expect(page.getByTestId("project-management-drawer").getByRole("link", { name: "Project" })).toHaveAttribute("aria-current", "page");

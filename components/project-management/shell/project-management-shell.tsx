@@ -5,6 +5,7 @@ import {
   Bell,
   CalendarRange,
   FolderKanban,
+  LayoutDashboard,
   LayoutList,
   ListChecks,
 } from "lucide-react";
@@ -28,6 +29,12 @@ function projectNavigationItems(
       label: "我的工作",
       icon: FolderKanban,
       match: (pathname) => pathname === routes.progress.root,
+    },
+    {
+      href: routes.progress.kanban,
+      label: "看板",
+      icon: LayoutDashboard,
+      match: (pathname) => pathname === routes.progress.kanban,
     },
     {
       href: routes.progress.projects,

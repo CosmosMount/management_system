@@ -170,6 +170,12 @@ export const getMyTimelinePageInputSchema = z
   })
   .strict();
 
+export const getPersonTimelinePageInputSchema = z
+  .object({
+    personId: idSchema,
+  })
+  .strict();
+
 const adaptiveBlockCommonFields = {
   rowPageKey: z.string().trim().min(1).max(100),
   preferredCenter: absoluteDateTimeSchema("时间画布中心格式不正确"),
@@ -183,6 +189,11 @@ export const getAdaptiveTimeCanvasBlockInputSchema = z
       kind: z.literal("MY_TIMELINE"),
       ...adaptiveBlockCommonFields,
       showAll: z.boolean().optional().default(false),
+    }).strict(),
+    z.object({
+      kind: z.literal("PERSON_TIMELINE"),
+      ...adaptiveBlockCommonFields,
+      personId: idSchema,
     }).strict(),
     z.object({
       kind: z.literal("TASK"),
@@ -305,6 +316,9 @@ export type GetTimeCanvasDataInput = z.infer<
 >;
 export type GetMyTimelinePageInput = z.infer<
   typeof getMyTimelinePageInputSchema
+>;
+export type GetPersonTimelinePageInput = z.infer<
+  typeof getPersonTimelinePageInputSchema
 >;
 export type GetAdaptiveTimeCanvasBlockInput = z.infer<
   typeof getAdaptiveTimeCanvasBlockInputSchema

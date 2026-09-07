@@ -69,10 +69,9 @@ test.describe("普通用户主功能面板", () => {
     ).toBeVisible();
     await expectHealthyPage(page);
 
-    const legacyKanbanResponse = await page.goto("/progress/kanban", { waitUntil: "networkidle" });
-    expect(legacyKanbanResponse?.status()).toBe(404);
-    await expect.poll(() => new URL(page.url()).pathname).toBe("/progress/kanban");
-    await expect(page.getByRole("heading", { name: "页面不存在或无权访问" })).toBeVisible();
+    await page.goto("/progress/kanban", { waitUntil: "networkidle" });
+    await expect(page).toHaveURL(/\/progress\/kanban\?people=/);
+    await expect(page.getByRole("heading", { name: "看板" })).toBeVisible();
     await expectHealthyPage(page);
 
     await page.goto("/progress/projects/legacy-project", {

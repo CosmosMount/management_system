@@ -40,6 +40,7 @@ import {
 
 export {
   listMyTaskOptions,
+  listPersonTaskOptions,
   resolveTaskOptionsByIds,
   searchTaskOptions,
 } from "@/lib/project-management/queries/task-option-queries";

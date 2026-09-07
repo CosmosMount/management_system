@@ -19,6 +19,7 @@ export const routes = {
   },
   progress: {
     root: "/progress",
+    kanban: "/progress/kanban",
     projects: "/progress/projects",
     projectNew: "/progress/projects/new",
     projectDetail: (id: string) => `/progress/projects/${id}`,

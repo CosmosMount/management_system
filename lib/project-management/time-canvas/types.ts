@@ -125,6 +125,11 @@ export type AdaptiveTimeCanvasBlockQuery =
       showAll: boolean;
     }
   | {
+      kind: "PERSON_TIMELINE";
+      preferredCenterMs: number;
+      personId: string;
+    }
+  | {
       kind: "TASK";
       preferredCenterMs: number;
       taskId: string;

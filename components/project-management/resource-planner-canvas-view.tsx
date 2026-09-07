@@ -25,6 +25,7 @@ export type ResourcePlannerNotice =
   | null;
 
 type ResourcePlannerCanvasViewProps = {
+  readOnly?: boolean;
   canCreateSegment: boolean;
   createDraftOpen: boolean;
   isPending: boolean;
@@ -45,6 +46,7 @@ type ResourcePlannerCanvasViewProps = {
 };
 
 export function ResourcePlannerCanvasView({
+  readOnly = false,
   canCreateSegment,
   createDraftOpen,
   isPending,
@@ -72,7 +74,9 @@ export function ResourcePlannerCanvasView({
           </Button>
         )}
         <span className="text-sm text-muted-foreground">
-          双击投入打开详情；总览不会直接修改既有投入。
+          {readOnly
+            ? "双击投入打开只读详情；此页面不能修改既有投入。"
+            : "双击投入打开详情；总览不会直接修改既有投入。"}
         </span>
       </div>
 
@@ -158,7 +162,9 @@ export function ResourcePlannerCanvasView({
           <DialogHeader>
             <DialogTitle>投入详情</DialogTitle>
             <DialogDescription>
-              复用打开前的完整时间线上下文；仅当前打开的投入可修改，其他对象只读。
+              {readOnly
+                ? "复用打开前的完整时间线上下文；当前投入与其他对象均为只读。"
+                : "复用打开前的完整时间线上下文；仅当前打开的投入可修改，其他对象只读。"}
             </DialogDescription>
           </DialogHeader>
           <SegmentInspector

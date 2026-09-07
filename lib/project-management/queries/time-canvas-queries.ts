@@ -5,6 +5,7 @@ export { getContentDrivenTimeCanvasData } from "@/lib/project-management/queries
 export {
   getAdaptiveTimeCanvasBlock,
   getMyTimelinePageData,
+  getPersonTimelinePageData,
   getResourcePlanPageData,
   resolveProjectTimelinePersonIds,
 } from "@/lib/project-management/queries/time-canvas-page-queries";
