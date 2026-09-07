@@ -454,7 +454,7 @@ test.describe("project management UI project-management-ui-routes-responsive", (
           expectedOutput: "P6 UI 桌面创建预期产出",
         });
         await page.goto(
-          `/progress/resources?from=2026-08-10&to=2026-08-12&people=${fixture.member.person.id},${fixture.owner.person.id}&zoom=hour`,
+          `/progress/resources?people=${fixture.member.person.id},${fixture.owner.person.id}&all=0&center=2026-08-10T10%3A30%3A00.000Z&scale=week`,
         );
         const canvasScroll = page.getByTestId("time-canvas-scroll");
         await expect(canvasScroll).toBeVisible();
