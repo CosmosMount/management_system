@@ -36,13 +36,6 @@ const expectedJobs = [
     "runProcurementBudgetScan",
   ],
   [
-    "runProjectManagementSegmentTransitionScan",
-    "*/5 * * * * *",
-    "projectManagementSegmentTransitionsCron",
-    "cron.project_management_segment_transitions.failed",
-    "runProjectManagementSegmentTransitionScan",
-  ],
-  [
     "runProjectManagementDailyMaintenance",
     "15 8 * * *",
     "projectManagementDailyCron",
@@ -58,7 +51,7 @@ const expectedJobs = [
   ],
 ] as const;
 
-test("seven cron schedules register the matching handler in Asia/Shanghai", async () => {
+test("six cron schedules register the matching handler without retired segment transitions", async () => {
   const calls: string[] = [];
   const handlers = Object.fromEntries(
     expectedJobs.map(([name]) => [name, async () => void calls.push(name)]),
@@ -91,7 +84,7 @@ test("seven cron schedules register the matching handler in Asia/Shanghai", asyn
     ]),
     expectedJobs,
   );
-  assert.equal(scheduled.length, 7);
+  assert.equal(scheduled.length, 6);
   assert.ok(definitions.every((job) => job.timezone === "Asia/Shanghai"));
   assert.ok(scheduled.every((job) => job.timezone === "Asia/Shanghai"));
   for (const job of scheduled) job.callback();

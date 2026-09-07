@@ -5,21 +5,11 @@ import {
   type ProjectManagementActionResult,
 } from "@/lib/project-management/application/action-result";
 import {
-  batchCreatePlannedSegments as batchCreatePlannedSegmentsService,
-  batchCancelPlannedSegments as batchCancelPlannedSegmentsService,
-  batchConfirmPlannedSegments as batchConfirmPlannedSegmentsService,
-  cancelPlannedSegment as cancelPlannedSegmentService,
-  confirmPlannedSegment as confirmPlannedSegmentService,
-  createActualSegment as createActualSegmentService,
   createWorkSegment as createWorkSegmentService,
-  mergePlannedSegments as mergePlannedSegmentsService,
-  movePlannedSegments as movePlannedSegmentsService,
-  partiallyConfirmSegment as partiallyConfirmSegmentService,
-  scanSegmentTransitions as scanSegmentTransitionsService,
-  softDeleteActualSegment as softDeleteActualSegmentService,
   updateWorkSegment as updateWorkSegmentService,
+  softDeleteWorkSegment as softDeleteWorkSegmentService,
+  type SegmentMutationResult,
 } from "@/lib/project-management/application/segment-service";
-import { assertAuthorized } from "@/lib/project-management/authorization";
 import { getCurrentProjectManagementActor } from "@/lib/project-management/identity";
 import {
   getWorkSegment as getWorkSegmentQuery,
@@ -28,107 +18,16 @@ import {
 } from "@/lib/project-management/queries/resource-queries";
 import { revalidateProjectManagement } from "@/lib/revalidate";
 
-export async function createWorkSegment(
-  input: unknown,
-): Promise<ProjectManagementActionResult<Awaited<ReturnType<typeof createWorkSegmentService>>>> {
+export async function createWorkSegment(input: unknown) {
   return runSegmentAction("pm.segment.create", "createWorkSegment", input, createWorkSegmentService);
 }
 
-export async function batchCreatePlannedSegments(
-  input: unknown,
-): Promise<
-  ProjectManagementActionResult<Awaited<ReturnType<typeof batchCreatePlannedSegmentsService>>>
-> {
-  return runSegmentAction(
-    "pm.segment.create",
-    "batchCreatePlannedSegments",
-    input,
-    batchCreatePlannedSegmentsService,
-  );
-}
-
-export async function updateWorkSegment(
-  input: unknown,
-): Promise<ProjectManagementActionResult<Awaited<ReturnType<typeof updateWorkSegmentService>>>> {
+export async function updateWorkSegment(input: unknown) {
   return runSegmentAction("pm.segment.update", "updateWorkSegment", input, updateWorkSegmentService);
 }
 
-export async function movePlannedSegments(
-  input: unknown,
-): Promise<ProjectManagementActionResult<Awaited<ReturnType<typeof movePlannedSegmentsService>>>> {
-  return runSegmentAction("pm.segment.update", "movePlannedSegments", input, movePlannedSegmentsService);
-}
-
-export async function mergePlannedSegments(
-  input: unknown,
-): Promise<ProjectManagementActionResult<Awaited<ReturnType<typeof mergePlannedSegmentsService>>>> {
-  return runSegmentAction("pm.segment.merge", "mergePlannedSegments", input, mergePlannedSegmentsService);
-}
-
-export async function cancelPlannedSegment(
-  input: unknown,
-): Promise<ProjectManagementActionResult<Awaited<ReturnType<typeof cancelPlannedSegmentService>>>> {
-  return runSegmentAction("pm.segment.cancel", "cancelPlannedSegment", input, cancelPlannedSegmentService);
-}
-
-export async function batchCancelPlannedSegments(
-  input: unknown,
-): Promise<ProjectManagementActionResult<Awaited<ReturnType<typeof batchCancelPlannedSegmentsService>>>> {
-  return runSegmentAction(
-    "pm.segment.cancel",
-    "batchCancelPlannedSegments",
-    input,
-    batchCancelPlannedSegmentsService,
-  );
-}
-
-export async function confirmPlannedSegment(
-  input: unknown,
-): Promise<ProjectManagementActionResult<Awaited<ReturnType<typeof confirmPlannedSegmentService>>>> {
-  return runSegmentAction("pm.segment.confirm", "confirmPlannedSegment", input, confirmPlannedSegmentService);
-}
-
-export async function batchConfirmPlannedSegments(
-  input: unknown,
-): Promise<ProjectManagementActionResult<Awaited<ReturnType<typeof batchConfirmPlannedSegmentsService>>>> {
-  return runSegmentAction(
-    "pm.segment.confirm",
-    "batchConfirmPlannedSegments",
-    input,
-    batchConfirmPlannedSegmentsService,
-  );
-}
-
-export async function partiallyConfirmSegment(
-  input: unknown,
-): Promise<
-  ProjectManagementActionResult<Awaited<ReturnType<typeof partiallyConfirmSegmentService>>>
-> {
-  return runSegmentAction(
-    "pm.segment.confirm",
-    "partiallyConfirmSegment",
-    input,
-    partiallyConfirmSegmentService,
-  );
-}
-
-export async function createActualSegment(
-  input: unknown,
-): Promise<ProjectManagementActionResult<Awaited<ReturnType<typeof createActualSegmentService>>>> {
-  return runSegmentAction("pm.segment.create", "createActualSegment", input, createActualSegmentService);
-}
-
-export async function softDeleteActualSegment(
-  input: unknown,
-): Promise<
-  ProjectManagementActionResult<Awaited<ReturnType<typeof softDeleteActualSegmentService>>>
-> {
-  return runSegmentAction(
-    "pm.segment.delete",
-    "softDeleteActualSegment",
-    input,
-    softDeleteActualSegmentService,
-  );
+export async function softDeleteWorkSegment(input: unknown) {
+  return runSegmentAction("pm.segment.delete", "softDeleteWorkSegment", input, softDeleteWorkSegmentService);
 }
 
 export async function listWorkSegments(
@@ -173,28 +72,7 @@ export async function listWorkSegmentChanges(
   });
 }
 
-export async function scanSegmentTransitions(): Promise<
-  ProjectManagementActionResult<Awaited<ReturnType<typeof scanSegmentTransitionsService>>>
-> {
-  return runProjectManagementAction({
-    event: "pm.segment.scan_transitions",
-    action: "scanSegmentTransitions",
-    callback: async (log) => {
-      const actor = await getCurrentProjectManagementActor();
-      log.setActorAccountId(actor.accountId);
-      assertAuthorized({
-        actor,
-        action: "segment.manage_others",
-        resource: { type: "system" },
-      });
-      const result = await scanSegmentTransitionsService();
-      revalidateProjectManagement();
-      return result;
-    },
-  });
-}
-
-async function runSegmentAction<T>(
+async function runSegmentAction<T extends SegmentMutationResult>(
   event: string,
   action: string,
   input: unknown,
@@ -210,28 +88,8 @@ async function runSegmentAction<T>(
       const actor = await getCurrentProjectManagementActor();
       log.setActorAccountId(actor.accountId);
       const result = await service(actor, input);
-      revalidateProjectManagement(firstTaskId(result));
+      revalidateProjectManagement(result.segment.taskId ?? undefined);
       return result;
     },
   });
-}
-
-function firstTaskId(result: unknown) {
-  const record = result && typeof result === "object" ? result : null;
-  if (!record) return undefined;
-  const segment = "segment" in record ? record.segment : null;
-  if (segment && typeof segment === "object" && "taskId" in segment) {
-    const taskId = segment.taskId;
-    return typeof taskId === "string" ? taskId : undefined;
-  }
-  const segments = "segments" in record ? record.segments : null;
-  if (Array.isArray(segments)) {
-    for (const item of segments) {
-      if (item && typeof item === "object" && "taskId" in item) {
-        const taskId = item.taskId;
-        if (typeof taskId === "string") return taskId;
-      }
-    }
-  }
-  return undefined;
 }

@@ -222,7 +222,7 @@ test.describe("project management canvas security project-management-canvas-rout
         "ASSOCIATION_INVALID",
       );
       await expect(
-        page.getByText("当前 Task 状态不允许创建或关联 Segment", {
+        page.getByText("当前任务状态不允许新增或关联投入记录", {
           exact: true,
         }),
       ).toBeVisible();

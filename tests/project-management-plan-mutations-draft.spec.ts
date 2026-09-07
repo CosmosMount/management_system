@@ -801,8 +801,6 @@ test.describe("project management plan mutations project-management-plan-mutatio
         taskId: fixture.taskId,
         personId: addedMember.person.id,
         accountId: owner.account.id,
-        type: "PLANNED",
-        status: "PLANNED",
       });
       const constrainedInput = await draftPlanReplaceInput(fixture, 2);
       const unifiedConstrainedInput = {
@@ -958,8 +956,6 @@ test.describe("project management plan mutations project-management-plan-mutatio
       const segment = await prisma.workSegment.create({
         data: {
           personId: owner.person.id,
-          type: "PLANNED",
-          status: "PLANNED",
           startAt: new Date("2026-08-02T09:00:00.000Z"),
           endAt: new Date("2026-08-02T10:00:00.000Z"),
           content: "仅关联 Task 的投入",
@@ -982,7 +978,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
       ).toBeNull();
       await expect(
         prisma.workSegment.findUniqueOrThrow({ where: { id: segment.id } }),
-      ).resolves.toMatchObject({ taskId: fixture.taskId, status: "PLANNED" });
+      ).resolves.toMatchObject({ taskId: fixture.taskId, deletedAt: null });
     });
 
   test("Revision validates marker bounds and approval cannot bypass authoritative chronology", async () => {

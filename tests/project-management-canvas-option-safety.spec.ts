@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { timeCanvasDataToModel } from "../components/project-management/time-canvas/adapter";
 import { prisma } from "../lib/prisma";
-import { createActualSegment, createWorkSegment } from "../lib/project-management/application/segment-service";
+import { createWorkSegment } from "../lib/project-management/application/segment-service";
 import { listTasks } from "../lib/project-management/queries/task-queries";
 import { getResourcePlanSelection } from "../lib/project-management/queries/resource-plan-queries";
 import { resolvePeopleOptionsByIds, resolveTaskOptionsByIds, searchPeople, searchTaskOptions } from "../lib/project-management/queries/option-queries";
@@ -702,8 +702,6 @@ test.describe("project management canvas security project-management-canvas-opti
         accountId: owner.account.id,
         personId: sharedMember.person.id,
         taskId: completedTask.taskId,
-        type: "ACTUAL",
-        status: "CONFIRMED",
         startAt: atHour(10),
         endAt: atHour(11),
         content: "状态筛选外 Task 的完整人员投入",
@@ -1248,7 +1246,6 @@ test.describe("project management canvas security project-management-canvas-opti
         await expectErrorCode(
           createWorkSegment(resourceManagerActor, {
             personId: target.person.id,
-            type: "PLANNED",
             startAt: atHour(14 + index * 0.1),
             endAt: atHour(14.05 + index * 0.1),
             content: `禁止关联终态 Task ${index}`,
@@ -1257,11 +1254,11 @@ test.describe("project management canvas security project-management-canvas-opti
           "ASSOCIATION_INVALID",
         );
         await expectErrorCode(
-          createActualSegment(teamAdminActor, {
+          createWorkSegment(teamAdminActor, {
             personId: target.person.id,
             startAt: atHour(15 + index * 0.1),
             endAt: atHour(15.05 + index * 0.1),
-            content: `禁止 Actual 关联终态 Task ${index}`,
+            content: `禁止未授权人员关联终态 Task ${index}`,
             taskId: task.taskId,
           }),
           "FORBIDDEN",
@@ -1280,7 +1277,6 @@ test.describe("project management canvas security project-management-canvas-opti
 
       const activeCreated = await createWorkSegment(resourceManagerActor, {
         personId: target.person.id,
-        type: "PLANNED",
         startAt: atHour(15),
         endAt: atHour(16),
         content: "允许关联 Active Task",
@@ -1289,7 +1285,6 @@ test.describe("project management canvas security project-management-canvas-opti
       expect(activeCreated.segment.taskId).toBe(activeTask.taskId);
       const draftCreated = await createWorkSegment(resourceManagerActor, {
         personId: target.person.id,
-        type: "PLANNED",
         startAt: atHour(16),
         endAt: atHour(17),
         content: "允许关联 Draft Task",

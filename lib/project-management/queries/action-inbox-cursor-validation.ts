@@ -20,7 +20,6 @@ export function positionDate(position: ActionInboxCursorPosition) {
 
 export async function assertCursorAnchors({
   positions,
-  confirmationSegmentWhere,
   nextMilestoneWhere,
   nextTerminationWhere,
   milestoneReviewWhere,
@@ -29,7 +28,6 @@ export async function assertCursorAnchors({
   projectRequestWhere,
 }: {
   positions: ActionInboxCursorPositions;
-  confirmationSegmentWhere: Prisma.WorkSegmentWhereInput;
   nextMilestoneWhere: Prisma.TaskNodeWhereInput;
   nextTerminationWhere: Prisma.TaskNodeWhereInput;
   milestoneReviewWhere: Prisma.MilestoneReviewWhereInput;
@@ -38,17 +36,6 @@ export async function assertCursorAnchors({
   projectRequestWhere: Prisma.ProjectEstablishmentRequestWhereInput;
 }) {
   const checks = await Promise.all([
-    anchorExists(positions.SEGMENT_CONFIRMATION, (position, relevantAt) =>
-      prisma.workSegment.findFirst({
-        where: {
-          AND: [
-            confirmationSegmentWhere,
-            { id: position.id, endAt: relevantAt },
-          ],
-        },
-        select: { id: true },
-      }),
-    ),
     anchorExists(positions.TASK_NEXT_NODE, (position, relevantAt) =>
       prisma.taskNode.findFirst({
         where: {

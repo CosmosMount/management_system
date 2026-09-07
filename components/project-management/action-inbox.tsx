@@ -26,7 +26,6 @@ import type {
 } from "@/lib/project-management/queries/action-inbox-queries";
 
 const kindLabels: Record<ActionInboxKind, string> = {
-  SEGMENT_CONFIRMATION: "投入确认",
   TASK_NEXT_NODE: "下一个节点",
   MILESTONE_REVIEW: "里程碑验收",
   REVISION_REVIEW: "计划修订审核",

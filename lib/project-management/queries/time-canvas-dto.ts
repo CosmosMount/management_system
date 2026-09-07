@@ -134,14 +134,10 @@ export function toFullSegmentDto(
     visibility: "FULL",
     id: segment.id,
     personId: segment.personId,
-    type: segment.type,
-    status: segment.status,
+    type: "WORK",
     startAt: segment.startAt.toISOString(),
     endAt: segment.endAt.toISOString(),
     content: segment.content,
-    priority: segment.priority,
-    expectedOutput: segment.expectedOutput,
-    actualOutput: segment.actualOutput,
     taskId: segment.taskId,
     taskTitle: segment.task?.title ?? null,
     permissions: segmentPermissions(actor, segment),
@@ -150,9 +146,9 @@ export function toFullSegmentDto(
   };
 }
 
-function segmentPermissions(
+export function segmentPermissions(
   actor: ProjectManagementActor,
-  segment: FullSegment,
+  segment: Pick<FullSegment, "personId" | "task" | "deletedAt">,
 ): SegmentPermissionsDto {
   const canManage = authorize({
     actor,
@@ -166,30 +162,13 @@ function segmentPermissions(
       task: segment.task ? taskAuthorizationResource(segment.task) : null,
     },
   }).allowed;
-  const available = !segment.deletedAt && segment.status !== "CANCELLED";
-  if (segment.type === "ACTUAL") {
-    const editable = canManage && available && segment.status === "CONFIRMED";
-    return {
-      canViewDetails: true,
-      canEdit: editable,
-      canMove: false,
-      canResize: false,
-      canMerge: false,
-      canCancel: false,
-      canConfirm: false,
-      canSoftDelete: editable,
-    };
-  }
-  const editable = canManage && available && segment.status !== "CONFIRMED";
+  const editable = canManage && !segment.deletedAt;
   return {
     canViewDetails: true,
     canEdit: editable,
     canMove: editable,
     canResize: editable,
-    canMerge: editable,
-    canCancel: editable,
-    canConfirm: editable,
-    canSoftDelete: false,
+    canSoftDelete: editable,
   };
 }
 

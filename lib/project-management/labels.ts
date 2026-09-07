@@ -5,8 +5,6 @@ import type {
   TaskNodeType,
   TaskPriority,
   TaskStatus,
-  WorkSegmentStatus,
-  WorkSegmentType,
 } from "@prisma/client";
 
 export const taskStatusLabels: Record<TaskStatus, string> = {
@@ -55,19 +53,6 @@ export function revisionStatusLabel(status: string) {
     } as Record<string, string>
   )[status] ?? status;
 }
-
-export const workSegmentTypeLabels: Record<WorkSegmentType, string> = {
-  PLANNED: "计划",
-  ACTUAL: "实际",
-};
-
-export const workSegmentStatusLabels: Record<WorkSegmentStatus, string> = {
-  PLANNED: "计划中",
-  IN_PROGRESS: "进行中",
-  PENDING_CONFIRMATION: "待确认",
-  CONFIRMED: "已确认",
-  CANCELLED: "已取消",
-};
 
 export const notificationCategoryLabels: Record<
   ProjectManagementNotificationCategory,

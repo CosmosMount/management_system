@@ -286,8 +286,8 @@ async function expectReadOnlyConfirmableSegment(page: Page, segmentId: string) {
   await expect(
     detail.getByRole("form", { name: "编辑投入详情" }),
   ).toHaveCount(0);
-  await expect(detail.getByRole("form", { name: "确认计划" })).toHaveCount(0);
-  await expect(detail.getByRole("button", { name: "取消计划" })).toHaveCount(0);
+  await expect(detail.getByRole("button", { name: "保存基本信息" })).toHaveCount(0);
+  await expect(detail.getByRole("button", { name: "删除投入" })).toHaveCount(0);
   await detail.getByRole("button", { name: "Close" }).click();
   expect(
     await prisma.workSegment.findUniqueOrThrow({ where: { id: segmentId } }),

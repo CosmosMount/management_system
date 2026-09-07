@@ -1,7 +1,7 @@
 import { expect } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import type { Client } from "pg";
-import type { ProjectManagementSystemRole, TaskMemberRole, WorkSegmentStatus, WorkSegmentType } from "@prisma/client";
+import type { ProjectManagementSystemRole, TaskMemberRole } from "@prisma/client";
 import { prisma } from "../../lib/prisma";
 import { createTaskDraft, reviewMilestone, submitMilestoneForReview } from "../../lib/project-management/application/lifecycle-service";
 import { updateActiveTask, updateTaskDraft } from "../../lib/project-management/application/task-mutation-service";
@@ -465,19 +465,15 @@ export type SegmentReferenceFixture = {
 
 export async function createSegmentReference(
   input: SegmentReferenceFixture & {
-    type: WorkSegmentType;
-    status: WorkSegmentStatus;
     deletedAt?: Date;
   },
 ) {
   await prisma.workSegment.create({
     data: {
       personId: input.personId,
-      type: input.type,
-      status: input.status,
       startAt: new Date("2026-08-02T09:00:00.000Z"),
       endAt: new Date("2026-08-02T10:00:00.000Z"),
-      content: `S2 reference ${input.type}/${input.status}`,
+      content: "S2 关联投入记录",
       taskId: input.taskId,
       deletedAt: input.deletedAt,
       createdByAccountId: input.accountId,
@@ -725,7 +721,6 @@ export async function segmentAssociationSideEffectSnapshot(segmentIds: string[])
   return {
     segmentCount: await prisma.workSegment.count(),
     changeCount: await prisma.workSegmentChange.count(),
-    sourceCount: await prisma.workSegmentSource.count(),
     auditCount: await prisma.domainAuditEvent.count(),
     notificationCount: await prisma.inAppNotification.count(),
     outboxCount: await prisma.notificationOutbox.count(),
@@ -746,7 +741,6 @@ export function segmentCreateInput(personId: string, content: string, hour = 1) 
     startAt: new Date(Date.UTC(2026, 7, 20, hour, 0, 0)),
     endAt: new Date(Date.UTC(2026, 7, 20, hour + 1, 0, 0)),
     content,
-    priority: "MEDIUM" as const,
   };
 }
 

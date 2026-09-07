@@ -163,26 +163,9 @@ enum TerminationReviewResult {
   REVISION_REQUIRED
 }
 
-enum WorkSegmentType {
-  PLANNED
-  ACTUAL
-}
-
-enum WorkSegmentStatus {
-  PLANNED
-  IN_PROGRESS
-  PENDING_CONFIRMATION
-  CONFIRMED
-  CANCELLED
-}
-
 enum WorkSegmentChangeAction {
   CREATE
   UPDATE
-  SPLIT
-  MERGE
-  CONFIRM
-  CANCEL
   DELETE
 }
 
@@ -226,7 +209,6 @@ model Account {
   confirmedTerminations     TerminationNode[]             @relation("TerminationConfirmedBy")
   createdWorkSegments       WorkSegment[]                 @relation("WorkSegmentCreatedBy")
   updatedWorkSegments       WorkSegment[]                 @relation("WorkSegmentUpdatedBy")
-  createdWorkSegmentSources WorkSegmentSource[]           @relation("WorkSegmentSourceCreatedBy")
   workSegmentChanges        WorkSegmentChange[]           @relation("WorkSegmentChangeActor")
   systemRoles               SystemRoleAssignment[]        @relation("SystemRoleAccount")
   grantedSystemRoles        SystemRoleAssignment[]        @relation("SystemRoleGrantedBy")
@@ -906,12 +888,34 @@ model ReviewEvidence {
   @@index([fileAssetId])
 }
 
-model WorkSegment {
-  id                 String              @id @default(uuid())
+enum LegacyWorkSegmentType {
+  PLANNED
+  ACTUAL
+}
+
+enum LegacyWorkSegmentStatus {
+  PLANNED
+  IN_PROGRESS
+  PENDING_CONFIRMATION
+  CONFIRMED
+  CANCELLED
+}
+
+enum LegacyWorkSegmentChangeAction {
+  CREATE
+  UPDATE
+  SPLIT
+  MERGE
+  CONFIRM
+  CANCEL
+  DELETE
+}
+
+model LegacyWorkSegment {
+  id                 String              @id(map: "Legacy_WorkSegment_pkey_17adb498") @default(uuid())
   personId           String
-  person             Person              @relation(fields: [personId], references: [id], onDelete: Restrict)
-  type               WorkSegmentType
-  status             WorkSegmentStatus
+  type               LegacyWorkSegmentType
+  status             LegacyWorkSegmentStatus
   startAt            DateTime            @db.Timestamptz(6)
   endAt              DateTime            @db.Timestamptz(6)
   content            String
@@ -919,45 +923,85 @@ model WorkSegment {
   expectedOutput     String              @default("")
   actualOutput       String              @default("")
   taskId             String?
+  createdByAccountId String
+  updatedByAccountId String?
+  sourceSplitFromId  String?
+  sourceSplitFrom    LegacyWorkSegment?        @relation("WorkSegmentSplit", fields: [sourceSplitFromId], references: [id], onDelete: SetNull, map: "WorkSegment_sourceSplitFromId_fkey")
+  splitChildren      LegacyWorkSegment[]       @relation("WorkSegmentSplit")
+  deletedAt          DateTime?           @db.Timestamptz(6)
+  plannedSources     LegacyWorkSegmentSource[] @relation("PlannedSegmentSource")
+  actualSources      LegacyWorkSegmentSource[] @relation("ActualSegmentSource")
+  changes            LegacyWorkSegmentChange[]
+  createdAt          DateTime            @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime            @updatedAt @db.Timestamptz(6)
+
+  @@index([personId, type, startAt, endAt], map: "Legacy_WorkSegment_personId_type_startAt_endAt_idx_18d82b79")
+  @@index([taskId, startAt], map: "Legacy_WorkSegment_taskId_startAt_idx_5a038df1")
+  @@index([createdByAccountId], map: "Legacy_WorkSegment_createdByAccountId_idx_0d76285a")
+  @@index([updatedByAccountId], map: "Legacy_WorkSegment_updatedByAccountId_idx_7ad00124")
+  @@index([sourceSplitFromId], map: "Legacy_WorkSegment_sourceSplitFromId_idx_a3a57665")
+  @@index([deletedAt], map: "Legacy_WorkSegment_deletedAt_idx_5883d13f")
+  @@index([updatedAt, id], map: "Legacy_WorkSegment_updatedAt_id_idx_31c66ca3")
+  @@ignore
+}
+
+model LegacyWorkSegmentSource {
+  id                 String      @id(map: "Legacy_WorkSegmentSource_pkey_ee300e5d") @default(uuid())
+  plannedSegmentId   String
+  plannedSegment     LegacyWorkSegment @relation("PlannedSegmentSource", fields: [plannedSegmentId], references: [id], onDelete: Restrict, map: "WorkSegmentSource_plannedSegmentId_fkey")
+  actualSegmentId    String
+  actualSegment      LegacyWorkSegment @relation("ActualSegmentSource", fields: [actualSegmentId], references: [id], onDelete: Restrict, map: "WorkSegmentSource_actualSegmentId_fkey")
+  coveredStartAt     DateTime    @db.Timestamptz(6)
+  coveredEndAt       DateTime    @db.Timestamptz(6)
+  createdByAccountId String
+  createdAt          DateTime    @default(now()) @db.Timestamptz(6)
+
+  @@unique([plannedSegmentId, actualSegmentId, coveredStartAt, coveredEndAt], map: "Legacy_WorkSegmentSource_plannedSegmentId_actualSegme_e20e98dd")
+  @@index([actualSegmentId], map: "Legacy_WorkSegmentSource_actualSegmentId_idx_67449cc4")
+  @@index([createdByAccountId], map: "Legacy_WorkSegmentSource_createdByAccountId_idx_31cf2edf")
+  @@ignore
+}
+
+model LegacyWorkSegmentChange {
+  id             String                  @id(map: "Legacy_WorkSegmentChange_pkey_85a05975") @default(uuid())
+  segmentId      String
+  segment        LegacyWorkSegment             @relation(fields: [segmentId], references: [id], onDelete: Restrict, map: "WorkSegmentChange_segmentId_fkey")
+  action         LegacyWorkSegmentChangeAction
+  before         Json?
+  after          Json?
+  reason         String                  @default("")
+  actorAccountId String?
+  createdAt      DateTime                @default(now()) @db.Timestamptz(6)
+
+  @@index([segmentId, createdAt], map: "Legacy_WorkSegmentChange_segmentId_createdAt_idx_1c6b6740")
+  @@index([actorAccountId], map: "Legacy_WorkSegmentChange_actorAccountId_idx_d94ecfc4")
+  @@ignore
+}
+
+model WorkSegment {
+  id                 String              @id @default(uuid())
+  personId           String
+  person             Person              @relation(fields: [personId], references: [id], onDelete: Restrict)
+  startAt            DateTime            @db.Timestamptz(6)
+  endAt              DateTime            @db.Timestamptz(6)
+  content            String
+  taskId             String?
   task               Task?               @relation(fields: [taskId], references: [id], onDelete: SetNull)
   createdByAccountId String
   createdBy          Account             @relation("WorkSegmentCreatedBy", fields: [createdByAccountId], references: [id], onDelete: Restrict)
   updatedByAccountId String?
   updatedBy          Account?            @relation("WorkSegmentUpdatedBy", fields: [updatedByAccountId], references: [id], onDelete: SetNull)
-  sourceSplitFromId  String?
-  sourceSplitFrom    WorkSegment?        @relation("WorkSegmentSplit", fields: [sourceSplitFromId], references: [id], onDelete: SetNull)
-  splitChildren      WorkSegment[]       @relation("WorkSegmentSplit")
   deletedAt          DateTime?           @db.Timestamptz(6)
-  plannedSources     WorkSegmentSource[] @relation("PlannedSegmentSource")
-  actualSources      WorkSegmentSource[] @relation("ActualSegmentSource")
   changes            WorkSegmentChange[]
   createdAt          DateTime            @default(now()) @db.Timestamptz(6)
   updatedAt          DateTime            @updatedAt @db.Timestamptz(6)
 
-  @@index([personId, type, startAt, endAt])
+  @@index([personId, startAt, endAt])
   @@index([taskId, startAt])
   @@index([createdByAccountId])
   @@index([updatedByAccountId])
-  @@index([sourceSplitFromId])
   @@index([deletedAt])
   @@index([updatedAt, id])
-}
-
-model WorkSegmentSource {
-  id                 String      @id @default(uuid())
-  plannedSegmentId   String
-  plannedSegment     WorkSegment @relation("PlannedSegmentSource", fields: [plannedSegmentId], references: [id], onDelete: Restrict)
-  actualSegmentId    String
-  actualSegment      WorkSegment @relation("ActualSegmentSource", fields: [actualSegmentId], references: [id], onDelete: Restrict)
-  coveredStartAt     DateTime    @db.Timestamptz(6)
-  coveredEndAt       DateTime    @db.Timestamptz(6)
-  createdByAccountId String
-  createdBy          Account     @relation("WorkSegmentSourceCreatedBy", fields: [createdByAccountId], references: [id], onDelete: Restrict)
-  createdAt          DateTime    @default(now()) @db.Timestamptz(6)
-
-  @@unique([plannedSegmentId, actualSegmentId, coveredStartAt, coveredEndAt])
-  @@index([actualSegmentId])
-  @@index([createdByAccountId])
 }
 
 model WorkSegmentChange {

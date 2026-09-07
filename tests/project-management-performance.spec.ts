@@ -50,11 +50,8 @@ test.describe("project management S9 scale and performance", () => {
           rangeEnd: rangeEnd.toISOString(),
           personIds: fixture.personIds,
           taskIds: [],
-          types: [],
-          statuses: [],
           groupBy: "PERSON",
           includeTaskAnchors: true,
-          includeActual: true,
           includeBusyBlocks: true,
         },
       });
@@ -70,8 +67,6 @@ test.describe("project management S9 scale and performance", () => {
     const actionSegment = await prisma.workSegment.create({
       data: {
         personId: actor.personId,
-        type: "PLANNED",
-        status: "PLANNED",
         startAt: new Date("2026-08-03T01:00:00.000Z"),
         endAt: new Date("2026-08-03T02:00:00.000Z"),
         content: "S9 real action performance fixture",
@@ -86,7 +81,6 @@ test.describe("project management S9 scale and performance", () => {
         segmentId: actionSegment.id,
         expectedUpdatedAt: actionVersion,
         content: `S9 real action ${actionSequence}`,
-        reason: "S9 普通业务 action 性能门禁",
       });
       actionVersion = result.segment.updatedAt;
       return result;
@@ -228,17 +222,15 @@ async function createScaleFixture() {
   `;
   await prisma.$executeRaw`
     INSERT INTO "WorkSegment" (
-      id, "personId", type, status, "startAt", "endAt", content,
-      priority, "taskId", "createdByAccountId", "createdAt", "updatedAt"
+      id, "personId", "startAt", "endAt", content,
+      "taskId", "createdByAccountId", "createdAt", "updatedAt"
     )
     SELECT
       '84000000-0000-4000-8000-' || lpad(g::text, 12, '0'),
       '83000000-0000-4000-8000-' || lpad((((g - 1) % 50) + 1)::text, 12, '0'),
-      'PLANNED'::"WorkSegmentType", 'CONFIRMED'::"WorkSegmentStatus",
       '2026-08-01T00:00:00Z'::timestamptz + (floor((g - 1) / 50) * interval '5 hours'),
       '2026-08-01T00:00:00Z'::timestamptz + (floor((g - 1) / 50) * interval '5 hours') + interval '90 minutes',
       'S9 Scale Segment ' || g,
-      'MEDIUM'::"TaskPriority",
       '81000000-0000-4000-8000-' || lpad((((g - 1) % 50) + 1)::text, 12, '0'),
       ${accountId}, now(), now()
     FROM generate_series(1, 100000) AS g

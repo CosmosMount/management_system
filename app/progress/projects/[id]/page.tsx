@@ -144,11 +144,8 @@ export default async function ProjectDetailPage({
             scope: { kind: "RESOURCE_PLANNER" },
             personIds: timelinePersonIds,
             taskIds: [],
-            types: [],
-            statuses: [],
             groupBy: "PERSON",
             includeTaskAnchors: true,
-            includeActual: true,
             includeBusyBlocks: false,
           },
         }).then((data) => ({ ok: true as const, data })).catch((error: unknown) => ({

@@ -1,7 +1,12 @@
 // @playwright-project ui
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../lib/prisma";
+import {
+  softDeleteWorkSegment,
+  updateWorkSegment,
+} from "../lib/project-management/application/segment-service";
+import { shanghaiDateTimeLocalToIso } from "../lib/project-management/date-time";
 import { getResourcePlanPageData } from "../lib/project-management/queries/time-canvas-queries";
 import { expectHealthyPage, loginAsTestUser } from "./helpers/functional-fixtures";
 import {
@@ -129,42 +134,18 @@ test.describe("project management UI project-management-ui-resource-planner", ()
         accountId: owner.account.id,
         personId: owner.person.id,
         taskId: completedTask.taskId,
-        type: "ACTUAL",
-        status: "CONFIRMED",
         startAt: new Date("2026-08-10T10:00:00.000Z"),
         endAt: new Date("2026-08-10T11:00:00.000Z"),
         content: "已筛除 Task 的人员完整投入",
       });
-      const partiallyConfirmableSegment = await createSegment({
+      const editableSegment = await createSegment({
         accountId: owner.account.id,
         personId: owner.person.id,
         taskId: activeTask.taskId,
-        type: "PLANNED",
-        status: "PENDING_CONFIRMATION",
         startAt: new Date("2026-08-10T11:00:00.000Z"),
         endAt: new Date("2026-08-10T13:00:00.000Z"),
-        content: "无需原因的部分确认计划",
+        content: "过去的普通投入记录",
       });
-      const shortPartiallyConfirmableSegment = await createSegment({
-        accountId: owner.account.id,
-        personId: owner.person.id,
-        taskId: activeTask.taskId,
-        type: "PLANNED",
-        status: "PENDING_CONFIRMATION",
-        startAt: new Date("2026-08-10T14:00:00.000Z"),
-        endAt: new Date("2026-08-10T14:01:01.000Z"),
-        content: "六十一秒部分确认计划",
-      });
-      await prisma.$transaction([
-        prisma.workSegment.update({
-          where: { id: partiallyConfirmableSegment.id },
-          data: { expectedOutput: "部分确认计划预期输出" },
-        }),
-        prisma.workSegment.update({
-          where: { id: shortPartiallyConfirmableSegment.id },
-          data: { expectedOutput: "六十一秒计划预期输出" },
-        }),
-      ]);
       await loginAsTestUser(context, baseURL, {
         openId: owner.openId,
         name: owner.person.displayName,
@@ -305,162 +286,40 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       )).toBe(true);
 
       await page.goto(
-        `/progress/resources?all=0&people=${owner.person.id}&focus=${partiallyConfirmableSegment.id}`,
+        `/progress/resources?all=0&people=${owner.person.id}&focus=${editableSegment.id}`,
       );
-      const partialDialog = page.getByRole("dialog", { name: "投入详情" });
-      const partialForm = partialDialog.getByRole("form", { name: "确认计划" });
-      await expect(partialForm).toBeVisible();
-      await expect(partialForm.getByLabel("部分确认原因")).toHaveCount(0);
-      await expect(partialForm.getByLabel("预期输出")).toHaveCount(0);
-      await expect(partialForm.getByText("部分确认计划预期输出")).toBeVisible();
-      const partialContent = partialForm.getByLabel("实际投入内容");
-      const partialActualOutput = partialForm.getByLabel("实际输出");
-      const partialButton = partialForm.getByRole("button", {
-        name: "部分确认",
-        exact: true,
+      const detailDialog = page.getByRole("dialog", { name: "投入详情" });
+      const editForm = detailDialog.getByRole("form", { name: "编辑投入详情" });
+      await expect(editForm).toBeVisible();
+      await expectRetiredSegmentControlsAbsent(detailDialog);
+      await editForm.getByLabel("内容", { exact: true }).fill("");
+      await editForm.getByRole("button", { name: "保存基本信息" }).click();
+      await expect(editForm.getByLabel("内容", { exact: true })).toHaveAttribute("aria-invalid", "true");
+      await expect(editForm.getByLabel("内容", { exact: true })).toBeFocused();
+      const updatedContent = `普通投入更新 ${randomUUID()} ${"LongUnbrokenContent".repeat(90)}`;
+      await editForm.getByLabel("内容", { exact: true }).fill(updatedContent);
+      await editForm.getByLabel("开始", { exact: true }).fill("2026-08-10T19:15");
+      await editForm.getByLabel("结束", { exact: true }).fill("2026-08-10T18:00");
+      await editForm.getByRole("button", { name: "保存基本信息" }).click();
+      await expect(editForm.getByLabel("开始", { exact: true })).toBeFocused();
+      expect((await prisma.workSegment.findUniqueOrThrow({ where: { id: editableSegment.id } })).endAt).toEqual(editableSegment.endAt);
+      await editForm.getByLabel("结束", { exact: true }).fill("2026-08-10T20:15");
+      await editForm.getByRole("button", { name: "保存基本信息" }).click();
+      await expect(page.getByText("已更新投入详情")).toBeVisible();
+      await expect(detailDialog).toHaveCount(0);
+      await expect.poll(() => prisma.workSegment.findUniqueOrThrow({
+        where: { id: editableSegment.id },
+        select: { content: true, personId: true, taskId: true, startAt: true, endAt: true },
+      })).toEqual({
+        content: updatedContent,
+        personId: owner.person.id,
+        taskId: activeTask.taskId,
+        startAt: new Date("2026-08-10T11:15:00.000Z"),
+        endAt: new Date("2026-08-10T12:15:00.000Z"),
       });
-      await partialContent.fill("");
-      await partialButton.click();
-      await expect(partialContent).toHaveAttribute("aria-invalid", "true");
-      await expect(partialActualOutput).toHaveAttribute("aria-invalid", "true");
-      await expect(partialContent).toBeFocused();
-      await partialContent.fill("逐字段清错验证");
-      await expect(partialContent).not.toHaveAttribute("aria-invalid", "true");
-      await partialContent.fill("");
-      await partialButton.click();
-      await partialForm.getByRole("button", {
-        name: "完整确认",
-        exact: true,
-      }).click();
-      await expect(partialContent).not.toHaveAttribute("aria-invalid", "true");
-      await expect(
-        partialForm.getByRole("alert").filter({ hasText: "请输入实际投入内容" }),
-      ).toHaveCount(0);
-      await expect(partialActualOutput).toHaveAttribute("aria-invalid", "true");
-      await expect(partialActualOutput).toBeFocused();
-      await partialForm
-        .getByLabel("确认结束", { exact: true })
-        .fill("2026-08-10T20:00");
-      await partialContent.fill("部分确认后的实际投入");
-      await partialActualOutput.fill("部分确认实际输出");
-      await partialButton.click();
-      await expect(page.getByText("已确认计划前段并保留剩余计划")).toBeVisible();
-      await expect.poll(async () => {
-        const original = await prisma.workSegment.findUniqueOrThrow({
-          where: { id: partiallyConfirmableSegment.id },
-          select: { status: true },
-        });
-        const actual = await prisma.workSegment.findFirst({
-          where: {
-            type: "ACTUAL",
-            personId: owner.person.id,
-            content: "部分确认后的实际投入",
-            actualSources: {
-              some: { plannedSegmentId: partiallyConfirmableSegment.id },
-            },
-          },
-          select: {
-            startAt: true,
-            endAt: true,
-            expectedOutput: true,
-            actualOutput: true,
-          },
-        });
-        const remaining = await prisma.workSegment.findMany({
-          where: { sourceSplitFromId: partiallyConfirmableSegment.id },
-          select: {
-            startAt: true,
-            endAt: true,
-            status: true,
-            expectedOutput: true,
-          },
-        });
-        return {
-          originalStatus: original.status,
-          actual: actual && {
-            startAt: actual.startAt.toISOString(),
-            endAt: actual.endAt.toISOString(),
-            expectedOutput: actual.expectedOutput,
-            actualOutput: actual.actualOutput,
-          },
-          remaining: remaining.map((segment) => ({
-            startAt: segment.startAt.toISOString(),
-            endAt: segment.endAt.toISOString(),
-            status: segment.status,
-            expectedOutput: segment.expectedOutput,
-          })),
-        };
-      }).toEqual({
-        originalStatus: "CANCELLED",
-        actual: {
-          startAt: "2026-08-10T11:00:00.000Z",
-          endAt: "2026-08-10T12:00:00.000Z",
-          expectedOutput: "部分确认计划预期输出",
-          actualOutput: "部分确认实际输出",
-        },
-        remaining: [{
-          startAt: "2026-08-10T12:00:00.000Z",
-          endAt: "2026-08-10T13:00:00.000Z",
-          status: "PENDING_CONFIRMATION",
-          expectedOutput: "部分确认计划预期输出",
-        }],
-      });
-
-      await page.goto(
-        `/progress/resources?all=0&people=${owner.person.id}&focus=${shortPartiallyConfirmableSegment.id}`,
-      );
-      const shortDialog = page.getByRole("dialog", { name: "投入详情" });
-      const shortForm = shortDialog.getByRole("form", { name: "确认计划" });
-      const shortPartialButton = shortForm.getByRole("button", {
-        name: "部分确认",
-        exact: true,
-      });
-      await expect(shortPartialButton).toBeEnabled();
-      await expect(shortForm.getByLabel("确认结束", { exact: true })).toHaveValue(
-        "2026-08-10T22:01",
-      );
-      await shortForm.getByLabel("实际投入内容").fill("完成六十秒实际投入");
-      await shortForm.getByLabel("实际输出").fill("完成六十秒实际输出");
-      await shortPartialButton.click();
-      await expect(page.getByText("已确认计划前段并保留剩余计划")).toBeVisible();
-      await expect.poll(async () => {
-        const actual = await prisma.workSegment.findFirst({
-          where: {
-            type: "ACTUAL",
-            actualSources: {
-              some: { plannedSegmentId: shortPartiallyConfirmableSegment.id },
-            },
-          },
-          select: { startAt: true, endAt: true, expectedOutput: true },
-        });
-        const remaining = await prisma.workSegment.findMany({
-          where: { sourceSplitFromId: shortPartiallyConfirmableSegment.id },
-          select: { startAt: true, endAt: true, expectedOutput: true },
-        });
-        return {
-          actual: actual && {
-            startAt: actual.startAt.toISOString(),
-            endAt: actual.endAt.toISOString(),
-            expectedOutput: actual.expectedOutput,
-          },
-          remaining: remaining.map((segment) => ({
-            startAt: segment.startAt.toISOString(),
-            endAt: segment.endAt.toISOString(),
-            expectedOutput: segment.expectedOutput,
-          })),
-        };
-      }).toEqual({
-        actual: {
-          startAt: "2026-08-10T14:00:00.000Z",
-          endAt: "2026-08-10T14:01:00.000Z",
-          expectedOutput: "六十一秒计划预期输出",
-        },
-        remaining: [{
-          startAt: "2026-08-10T14:01:00.000Z",
-          endAt: "2026-08-10T14:01:01.000Z",
-          expectedOutput: "六十一秒计划预期输出",
-        }],
-      });
+      await page.goto(`/progress/resources?all=0&focus=${editableSegment.id}`);
+      await expect(detailDialog.getByRole("heading", { name: updatedContent, exact: true })).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
       await expectHealthyPage(page);
     });
 
@@ -567,49 +426,39 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       const focusSegment = await prisma.workSegment.create({
         data: {
           personId: people[50]!.id,
-          type: "PLANNED",
-          status: "PLANNED",
           startAt: new Date("2026-08-10T01:00:00.000Z"),
           endAt: new Date("2026-08-10T02:00:00.000Z"),
           content: "资源计划 50 项外部焦点",
-          expectedOutput: "焦点人员固定在第一页",
           createdByAccountId: owner.account.id,
         },
       });
-      const terminalPlannedSegments = await Promise.all([
+      const deletedSegments = await Promise.all([
         prisma.workSegment.create({ data: {
           personId: people[0]!.id,
           taskId: taskRecords[0]!.id,
-          type: "PLANNED",
-          status: "CANCELLED",
+          deletedAt: new Date(),
           startAt: new Date("2026-08-11T01:00:00.000Z"),
           endAt: new Date("2026-08-11T02:00:00.000Z"),
-          content: "资源计划隐藏已取消 Planned",
-          expectedOutput: "已取消记录仍可审计",
+          content: "资源计划隐藏已删除投入一",
           createdByAccountId: owner.account.id,
         } }),
         prisma.workSegment.create({ data: {
           personId: people[0]!.id,
           taskId: taskRecords[0]!.id,
-          type: "PLANNED",
-          status: "CONFIRMED",
+          deletedAt: new Date(),
           startAt: new Date("2026-08-11T02:00:00.000Z"),
           endAt: new Date("2026-08-11T03:00:00.000Z"),
-          content: "资源计划隐藏已确认 Planned",
-          expectedOutput: "已确认记录仍可审计",
+          content: "资源计划隐藏已删除投入二",
           createdByAccountId: owner.account.id,
         } }),
       ]);
-      const deletedTaskPlannedSegment = await prisma.workSegment.create({
+      const deletedTaskSegment = await prisma.workSegment.create({
         data: {
           personId: people[0]!.id,
           taskId: taskRecords[0]!.id,
-          type: "PLANNED",
-          status: "PLANNED",
           startAt: new Date("2026-08-12T01:00:00.000Z"),
           endAt: new Date("2026-08-12T02:00:00.000Z"),
-          content: "资源计划保留已删除 Task 的有效 Planned",
-          expectedOutput: "有效历史投入仍可定位",
+          content: "资源计划保留已删除 Task 的有效投入",
           createdByAccountId: owner.account.id,
         },
       });
@@ -627,8 +476,8 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       const resourceSegmentIds = resourceData.data.segments.flatMap((segment) =>
         segment.kind === "SEGMENT" ? [segment.id] : [],
       );
-      expect(resourceSegmentIds).toContain(deletedTaskPlannedSegment.id);
-      for (const segment of terminalPlannedSegments) {
+      expect(resourceSegmentIds).toContain(deletedTaskSegment.id);
+      for (const segment of deletedSegments) {
         expect(resourceSegmentIds).not.toContain(segment.id);
       }
       await loginAsTestUser(context, baseURL, {
@@ -661,7 +510,7 @@ test.describe("project management UI project-management-ui-resource-planner", ()
         element.dispatchEvent(new Event("scroll"));
       });
       await expect(page.getByTestId(`timeline-row-plan:${taskRecords[25]!.id}`)).toBeVisible();
-      for (const segment of terminalPlannedSegments) {
+      for (const segment of deletedSegments) {
         await expect(page.getByTestId(`segment-block-${segment.id}`)).toHaveCount(0);
       }
       await page.getByTestId("time-canvas-scroll").evaluate((element) => {
@@ -678,10 +527,10 @@ test.describe("project management UI project-management-ui-resource-planner", ()
         data: { deletedAt: new Date() },
       });
       await page.goto(
-        `/progress/resources?all=0&focus=${deletedTaskPlannedSegment.id}`,
+        `/progress/resources?all=0&focus=${deletedTaskSegment.id}`,
       );
       await expect(page.getByRole("dialog", { name: "投入详情" })).toContainText(
-        "资源计划保留已删除 Task 的有效 Planned",
+        "资源计划保留已删除 Task 的有效投入",
       );
       const deletedTaskDetail = page.getByRole("dialog", { name: "投入详情" });
       await expect(deletedTaskDetail.getByText("关联 Task", { exact: true })).toBeVisible();
@@ -788,6 +637,201 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       await expectHealthyPage(page);
     });
 
+  test("canvas accessible names use Chinese work and busy labels without internal enums", async ({
+    context,
+    page,
+    baseURL,
+  }) => {
+    const viewer = await createAccountPerson("投入画布无障碍测试成员");
+    await loginAsTestUser(context, baseURL, {
+      openId: viewer.openId,
+      name: viewer.person.displayName,
+    });
+    await page.goto("/progress/time-canvas-fixtures?mode=RESOURCE_PLANNER&scale=week");
+    const workBlock = page.getByTestId("segment-block-resource-segment-0-0");
+    const busyBlock = page.getByTestId("segment-block-resource-segment-0-3");
+    await expect(workBlock).toBeVisible();
+    await expect(workBlock).toHaveAccessibleName(/^投入记录 /);
+    await expect(workBlock).not.toHaveAccessibleName(/\b(?:PLANNED|ACTUAL|WORK)\b/);
+    await expect(busyBlock).toBeVisible();
+    await expect(busyBlock).toHaveAccessibleName(/^其他占用 /);
+    await expect(busyBlock).not.toHaveAccessibleName(/\b(?:PLANNED|ACTUAL|WORK|BUSY|Task)\b/);
+    await expectHealthyPage(page);
+  });
+
+  test("ordinary work records support future drafts, task association, transforms and deletion", async ({
+    context,
+    page,
+    baseURL,
+  }, testInfo) => {
+    test.setTimeout(120_000);
+    const fixture = await createUiFixture();
+    const browserErrors: string[] = [];
+    page.on("pageerror", (error) => browserErrors.push(error.message));
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.member.openId,
+      name: fixture.member.person.displayName,
+    });
+    await page.goto("/progress?scale=week");
+    await page.getByRole("button", { name: "新增投入" }).click();
+    const quickCreate = page.getByRole("form", { name: "投入快速创建" });
+    await expectRetiredSegmentControlsAbsent(quickCreate);
+    await expect(page.getByTestId("time-canvas-creation-range")).toBeVisible();
+    const content = `未来普通投入 ${randomUUID()}`;
+    await quickCreate.getByLabel("内容", { exact: true }).fill(content);
+    await quickCreate.getByLabel("结束", { exact: true }).fill("2027-01-05T18:00");
+    await quickCreate.getByLabel("开始", { exact: true }).fill("2027-01-05T09:00");
+    await expect(quickCreate.getByLabel("开始", { exact: true })).toHaveValue("2027-01-05T09:00");
+    await expect(quickCreate.getByLabel("结束", { exact: true })).toHaveValue("2027-01-05T18:00");
+    await expect(page.getByTestId("time-canvas-creation-range")).toBeVisible();
+    await quickCreate.getByRole("button", { name: "创建", exact: true }).click();
+    await expect(page.getByText("已创建投入记录")).toBeVisible();
+    await expect.poll(() => prisma.workSegment.count({
+      where: { personId: fixture.member.person.id, content, taskId: null },
+    })).toBe(1);
+    const created = await prisma.workSegment.findFirstOrThrow({
+      where: { personId: fixture.member.person.id, content },
+    });
+    expect(created.startAt.toISOString()).toBe("2027-01-05T01:00:00.000Z");
+    expect(created.endAt.toISOString()).toBe("2027-01-05T10:00:00.000Z");
+
+    await page.goto(`/progress?focus=${created.id}&scale=week`);
+    const detailDialog = page.getByRole("dialog", { name: "投入详情" });
+    const editForm = detailDialog.getByRole("form", { name: "编辑投入详情" });
+    await expect(editForm).toBeVisible();
+    await expectRetiredSegmentControlsAbsent(detailDialog);
+    const createdBlock = detailDialog.getByTestId(`segment-block-${created.id}`);
+    await expect(createdBlock).toHaveAccessibleName(/^投入记录 /);
+    await expect(createdBlock).not.toHaveAccessibleName(/\b(?:PLANNED|ACTUAL|WORK)\b/);
+    await editForm.getByRole("combobox", { name: "关联任务", exact: true }).fill(fixture.taskTitle);
+    await page.getByRole("option", { name: fixture.taskTitle, exact: true }).click();
+    const startInput = editForm.getByLabel("开始", { exact: true });
+    const endInput = editForm.getByLabel("结束", { exact: true });
+    if (testInfo.project.name === "desktop") {
+      const block = detailDialog.getByTestId(`segment-block-${created.id}`);
+      await block.scrollIntoViewIfNeeded();
+      await expect.poll(() => block.evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        const target = document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+        return {
+          segmentHit: target?.closest("[data-canvas-object]") === element,
+          resizeHandle: target?.closest("[data-resize-handle]")?.getAttribute("data-resize-handle") ?? null,
+        };
+      })).toEqual({ segmentHit: true, resizeHandle: null });
+      const blockBox = await block.boundingBox();
+      expect(blockBox).not.toBeNull();
+      await page.mouse.move(blockBox!.x + blockBox!.width / 2, blockBox!.y + blockBox!.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(blockBox!.x + blockBox!.width / 2 + 40, blockBox!.y + blockBox!.height / 2, { steps: 8 });
+      await page.mouse.up();
+      await expect(startInput).not.toHaveValue("2027-01-05T09:00");
+      const movedStart = await startInput.inputValue();
+      const movedEnd = await endInput.inputValue();
+      const startDeltaMs = Date.parse(shanghaiDateTimeLocalToIso(movedStart)) - created.startAt.getTime();
+      const endDeltaMs = Date.parse(shanghaiDateTimeLocalToIso(movedEnd)) - created.endAt.getTime();
+      expect(startDeltaMs).toBeGreaterThan(0);
+      expect(endDeltaMs).toBe(startDeltaMs);
+      const resizeHandle = block.locator('[data-resize-handle="end"]');
+      const handleBox = await resizeHandle.boundingBox();
+      expect(handleBox).not.toBeNull();
+      await page.mouse.move(handleBox!.x + handleBox!.width / 2, handleBox!.y + handleBox!.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(handleBox!.x + handleBox!.width / 2 + 30, handleBox!.y + handleBox!.height / 2, { steps: 8 });
+      await page.mouse.up();
+      await expect(endInput).not.toHaveValue(movedEnd);
+      await expect(startInput).toHaveValue(movedStart);
+      expect(Date.parse(shanghaiDateTimeLocalToIso(await endInput.inputValue())))
+        .toBeGreaterThan(Date.parse(shanghaiDateTimeLocalToIso(movedEnd)));
+    } else {
+      await startInput.fill("2027-01-05T10:00");
+      await endInput.fill("2027-01-05T19:00");
+    }
+    const expectedStartAt = new Date(shanghaiDateTimeLocalToIso(await startInput.inputValue()));
+    const expectedEndAt = new Date(shanghaiDateTimeLocalToIso(await endInput.inputValue()));
+    await editForm.getByRole("button", { name: "保存基本信息" }).click();
+    await expect(page.getByText("已更新投入详情")).toBeVisible();
+    await expect.poll(() => prisma.workSegment.findUniqueOrThrow({
+      where: { id: created.id },
+      select: { personId: true, taskId: true, startAt: true, endAt: true },
+    })).toEqual({
+      personId: fixture.member.person.id,
+      taskId: fixture.taskId,
+      startAt: expectedStartAt,
+      endAt: expectedEndAt,
+    });
+    await page.goto(`/progress?focus=${created.id}`);
+    await expect(editForm).toBeVisible();
+    page.once("dialog", (dialog) => dialog.dismiss());
+    await detailDialog.getByRole("button", { name: "删除投入", exact: true }).click();
+    expect((await prisma.workSegment.findUniqueOrThrow({ where: { id: created.id } })).deletedAt).toBeNull();
+    page.once("dialog", (dialog) => dialog.accept());
+    await detailDialog.getByRole("button", { name: "删除投入", exact: true }).click();
+    await expect(page.getByText("已删除投入记录")).toBeVisible();
+    await expect(detailDialog).toHaveCount(0);
+    await expect.poll(async () => (await prisma.workSegment.findUniqueOrThrow({
+      where: { id: created.id },
+    })).deletedAt).not.toBeNull();
+    await page.reload();
+    await expect(page.getByTestId(`segment-block-${created.id}`)).toHaveCount(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    expect(browserErrors).toEqual([]);
+    await expectHealthyPage(page);
+  });
+
+  test("ordinary work records keep read-only, inactive-person and server permission boundaries", async ({
+    context,
+    page,
+    baseURL,
+  }) => {
+    test.setTimeout(90_000);
+    const fixture = await createUiFixture();
+    const original = await prisma.workSegment.findUniqueOrThrow({
+      where: { id: fixture.movableSegmentId },
+    });
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.reviewer.openId,
+      name: fixture.reviewer.person.displayName,
+    });
+    await page.goto(`/progress/resources?all=0&focus=${original.id}`);
+    const detailDialog = page.getByRole("dialog", { name: "投入详情" });
+    await expect(detailDialog.getByTestId("segment-inspector")).toBeVisible();
+    await expect(detailDialog.getByRole("form", { name: "编辑投入详情" })).toHaveCount(0);
+    await expect(detailDialog.getByRole("button", { name: "删除投入" })).toHaveCount(0);
+    await expectRetiredSegmentControlsAbsent(detailDialog);
+    await expect(updateWorkSegment(actor(fixture.reviewer), {
+      segmentId: original.id,
+      expectedUpdatedAt: original.updatedAt.toISOString(),
+      content: "越权修改不得保存",
+    })).rejects.toMatchObject({ name: "ProjectManagementAuthorizationError" });
+    await expect(softDeleteWorkSegment(actor(fixture.reviewer), {
+      segmentId: original.id,
+      expectedUpdatedAt: original.updatedAt.toISOString(),
+    })).rejects.toMatchObject({ name: "ProjectManagementAuthorizationError" });
+    const unchanged = await prisma.workSegment.findUniqueOrThrow({ where: { id: original.id } });
+    expect(unchanged.content).toBe(original.content);
+    expect(unchanged.updatedAt).toEqual(original.updatedAt);
+    expect(unchanged.deletedAt).toBeNull();
+    await page.goto(`/progress/resources?all=0&focus=${fixture.inactiveHistorySegmentId}`);
+    await expect(detailDialog.getByTestId("segment-inspector")).toBeVisible();
+    await expect(detailDialog.getByRole("form", { name: "编辑投入详情" })).toHaveCount(0);
+    await expectHealthyPage(page);
+
+    await loginAsTestUser(context, baseURL, {
+      openId: fixture.outsider.openId,
+      name: fixture.outsider.person.displayName,
+    });
+    await page.goto(`/progress/resources?all=0&focus=${original.id}`);
+    await expect(detailDialog.getByRole("heading", { name: original.content, exact: true })).toBeVisible();
+    await expect(detailDialog.getByRole("form", { name: "编辑投入详情" })).toHaveCount(0);
+    await expect(detailDialog.getByRole("button", { name: "删除投入" })).toHaveCount(0);
+    await expect(softDeleteWorkSegment(actor(fixture.outsider), {
+      segmentId: original.id,
+      expectedUpdatedAt: original.updatedAt.toISOString(),
+    })).rejects.toMatchObject({ name: "ProjectManagementAuthorizationError" });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    await expectHealthyPage(page);
+  });
+
   test("S7 resource filters, removed routes and unified my-work timeline work on desktop and mobile", async ({
       context,
       page,
@@ -804,7 +848,7 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       });
       await prisma.workSegment.update({
         where: { id: fixture.confirmableSegmentId },
-        data: { status: "PENDING_CONFIRMATION" },
+        data: { content: "普通投入历史记录" },
       });
       await prisma.workSegmentChange.createMany({
         data: Array.from({ length: 21 }, (_, index) => ({
@@ -872,7 +916,7 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       await page.goto(`/progress/resources?all=0&focus=${fixture.confirmableSegmentId}`);
       const initialInspector = page.getByTestId("segment-inspector");
       await expect(initialInspector).toContainText(
-        "P6 UI 可确认计划",
+        "普通投入历史记录",
       );
       const loadMoreHistory = initialInspector.getByRole("button", {
         name: "加载更多变更",
@@ -927,12 +971,12 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       );
       const detailDialog = page.getByRole("dialog", { name: "投入详情" });
       await expect(detailDialog.getByTestId("segment-inspector")).toContainText(
-        "P6 UI 可确认计划",
+        "普通投入历史记录",
       );
       await expect(
-        detailDialog.getByRole("form", { name: "确认计划" }),
+        detailDialog.getByRole("form", { name: "编辑投入详情" }),
       ).toBeVisible();
-      await expect(detailDialog.getByLabel("部分确认原因")).toHaveCount(0);
+      await expectRetiredSegmentControlsAbsent(detailDialog);
       await detailDialog.getByRole("button", { name: "Close" }).click();
       await expect(detailDialog).toHaveCount(0);
       await expect
@@ -1005,52 +1049,14 @@ test.describe("project management UI project-management-ui-resource-planner", ()
 
       await page.goto(`/progress?focus=${fixture.confirmableSegmentId}`);
       await expect(page.getByTestId("segment-inspector")).toContainText(
-        "P6 UI 可确认计划",
+        "普通投入历史记录",
         { timeout: 15_000 },
       );
       await detailDialog.getByRole("button", { name: "Close" }).click();
       await expect(detailDialog).toHaveCount(0);
       await expect(page.getByRole("heading", { name: "我的工作" })).toBeVisible();
-      const dueQueue = page.getByRole("region", { name: "到期计划与确认队列" });
-      await expect(dueQueue.getByRole("heading", { name: "到期计划与确认队列" })).toBeVisible();
-      await expect(dueQueue.getByText("P6 UI 可确认计划")).toBeVisible();
+      await expect(page.getByRole("region", { name: "到期计划与确认队列" })).toHaveCount(0);
       await expect(page.getByTestId("time-canvas-scroll")).toBeVisible();
-      await dueQueue.getByRole("link", { name: "处理" }).click();
-      await expect(page.getByTestId("segment-inspector")).toContainText(
-        "P6 UI 可确认计划",
-      );
-      const confirmationForm = page
-        .getByTestId("segment-inspector")
-        .getByRole("form", { name: "确认计划" });
-      const actualOutput = confirmationForm.getByLabel("实际输出");
-      await expect(actualOutput).not.toHaveAttribute("aria-invalid", "true");
-      await confirmationForm.getByRole("button", { name: "完整确认" }).click();
-      await expect(actualOutput).toHaveAttribute("aria-invalid", "true");
-      await expect(actualOutput).toBeFocused();
-      await expect(
-        confirmationForm.getByRole("alert").filter({ hasText: "请输入实际输出" }),
-      ).toBeVisible();
-      await actualOutput.fill("P6 UI 到期计划实际产出");
-      await expect(actualOutput).not.toHaveAttribute("aria-invalid", "true");
-      await confirmationForm.getByRole("button", { name: "完整确认" }).click();
-      await expect(page.getByText("已完整确认并生成 Actual")).toBeVisible();
-      await expect(detailDialog).toHaveCount(0);
-      await expect.poll(() => new URL(page.url()).searchParams.has("focus")).toBe(false);
-      await expect(dueQueue.getByText("P6 UI 可确认计划")).toHaveCount(0);
-      await expect.poll(() => prisma.workSegment.findUnique({
-        where: { id: fixture.confirmableSegmentId },
-        select: { status: true },
-      })).toEqual({ status: "CONFIRMED" });
-      await expect.poll(() => prisma.workSegment.findFirst({
-        where: {
-          type: "ACTUAL",
-          actualSources: { some: { plannedSegmentId: fixture.confirmableSegmentId } },
-        },
-        select: { expectedOutput: true, actualOutput: true },
-      })).toEqual({
-        expectedOutput: "P6 UI 计划预期产出",
-        actualOutput: "P6 UI 到期计划实际产出",
-      });
 
       const independentContent = `S7 独立安排 ${randomUUID()}`;
       await page.getByRole("button", { name: "新增投入" }).click();
@@ -1107,4 +1113,11 @@ async function stableUrlSearchParam(page: Page, key: string) {
     { timeout: 5_000, intervals: [100, 100, 200, 300] },
   ).toBe(true);
   return candidate!;
+}
+
+async function expectRetiredSegmentControlsAbsent(container: Locator) {
+  await expect(container.getByLabel(/^(类型|状态|优先级|预期输出|实际输出|修改原因|删除原因)$/)).toHaveCount(0);
+  await expect(container.getByRole("button", { name: /^(完整确认|部分确认|取消计划|删除 Actual|合并|批量)/ })).toHaveCount(0);
+  await expect(container.getByRole("form", { name: "确认计划" })).toHaveCount(0);
+  await expect(container.getByRole("heading", { name: "来源与变更历史" })).toHaveCount(0);
 }

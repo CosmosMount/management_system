@@ -2,7 +2,6 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { AlertTriangle, Bell, CheckSquare2, ClipboardList } from "lucide-react";
 import { ActionInbox } from "@/components/project-management/action-inbox";
-import { PersonalDueQueue } from "@/components/project-management/personal-due-queue";
 import { ResourcePlannerCanvasClient } from "@/components/project-management/resource-planner-canvas-client";
 import { PageCommandBar } from "@/components/project-management/shell/page-command-bar";
 import { timeCanvasDataToModel } from "@/components/project-management/time-canvas/adapter";
@@ -22,7 +21,6 @@ import { getWorkSegment } from "@/lib/project-management/queries/resource-querie
 import { hasRetiredResourcePlanSearchParams } from "@/lib/project-management/resource-plan-url";
 import {
   getMyTimelinePageData,
-  getPersonalDueSegments,
 } from "@/lib/project-management/queries/time-canvas-queries";
 import { routes } from "@/lib/routes";
 import { getProgressActorOrRedirect } from "./_auth";
@@ -67,7 +65,7 @@ export default async function ProgressPage({
     }));
   }
 
-  const [actorPerson, timelineResult, dueResult, metrics, inbox, notifications] =
+  const [actorPerson, timelineResult, metrics, inbox, notifications] =
     await Promise.all([
       getActorPersonOption(actor),
       getMyTimelinePageData({
@@ -85,12 +83,6 @@ export default async function ProgressPage({
             message: mapped.message,
           };
         }),
-      getPersonalDueSegments({ actor, input: { limit: 50 } })
-        .then((data) => ({ ok: true as const, data }))
-        .catch((error: unknown) => ({
-          ok: false as const,
-          message: toProjectManagementServiceError(error).message,
-        })),
       getMyWorkMetrics(actor),
       getActionInbox({ actor, input: { limit: 8 } }),
       listInAppNotifications({ actor, input: { limit: 5 } }),
@@ -101,9 +93,6 @@ export default async function ProgressPage({
         actor,
         statuses: showAllTasks ? [] : ["ACTIVE"],
       });
-  const duePage = dueResult.ok
-    ? dueResult.data
-    : { items: [], nextCursor: null, generatedAt: "INITIAL_ERROR" };
   const baseModel = timelineResult.ok
     ? timeCanvasDataToModel(timelineResult.data.data, "TASK_WORKBENCH")
     : null;
@@ -125,14 +114,6 @@ export default async function ProgressPage({
     ? timelineResult.data.resolvedCenterMs
     : requestedCenter;
   const taskOptions = tasks.filter((task) => task.status === "ACTIVE");
-  const dueSegments = duePage.items.map((segment) => ({
-    id: segment.id,
-    title: segment.content,
-    taskTitle: segment.taskTitle,
-    startAt: segment.startAt,
-    endAt: segment.endAt,
-    canHandle: segment.permissions.canConfirm || segment.permissions.canCancel,
-  }));
   const hrefState = {
     showAllTasks,
     focusId: null,
@@ -199,7 +180,7 @@ export default async function ProgressPage({
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
                 <h2 className="font-medium">行动待办</h2>
-                <p className="mt-1 text-sm text-muted-foreground">汇总到期投入、当前节点和需要处理的审批。</p>
+                <p className="mt-1 text-sm text-muted-foreground">汇总当前节点和需要处理的审批。</p>
               </div>
               <Link href={routes.progress.approvals} className="text-sm text-primary hover:underline">查看全部</Link>
             </div>
@@ -244,13 +225,6 @@ export default async function ProgressPage({
             )}
           </section>
         </div>
-
-        <PersonalDueQueue
-          key={duePage.generatedAt}
-          segments={dueSegments}
-          initialNextCursor={duePage.nextCursor}
-          initialError={dueResult.ok ? "" : dueResult.message}
-        />
 
         <details className="rounded-xl border border-border bg-card p-4">
           <summary className="cursor-pointer font-medium">最近通知 · {metrics.unreadNotificationCount} 条未读</summary>

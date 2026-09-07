@@ -483,9 +483,6 @@ export function TimelineRow({
             scale={scale}
             selected={selection?.kind === "SEGMENT" && selection.id === segment.id}
             activeFocusKey={activeFocusKey}
-            multiSelected={Boolean(
-              interaction?.selectedSegmentIds?.has(segment.id),
-            )}
             interaction={interaction}
             onSelect={onSelect}
             onObjectFocus={onObjectFocus}

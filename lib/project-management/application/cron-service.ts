@@ -1,5 +1,4 @@
 import { prisma } from "@/lib/prisma";
-import { scanSegmentTransitions } from "@/lib/project-management/application/segment-service";
 
 export type CronLockResult<T> =
   | { acquired: true; result: T }
@@ -21,12 +20,6 @@ export async function withProjectManagementCronLock<T>(
       return { acquired: true, result: await callback() };
     },
     { maxWait: 5_000, timeout: 15 * 60_000 },
-  );
-}
-
-export function runSegmentTransitionCron(now = new Date()) {
-  return withProjectManagementCronLock("segment-transitions", () =>
-    scanSegmentTransitions(now),
   );
 }
 

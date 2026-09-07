@@ -77,9 +77,6 @@ export type TimeCanvasSegmentPermissions = {
   canEdit: boolean;
   canMove: boolean;
   canResize: boolean;
-  canMerge: boolean;
-  canCancel: boolean;
-  canConfirm: boolean;
   canSoftDelete: boolean;
 };
 
@@ -89,12 +86,10 @@ export type TimeCanvasSegment = {
   personId: string;
   taskId: string | null;
   taskTitle: string | null;
-  type: "PLANNED" | "ACTUAL" | "BUSY";
-  status: string;
+  type: "WORK" | "BUSY";
   startMs: number;
   endMs: number;
   title: string;
-  priority: string | null;
   visibility: "FULL" | "BUSY_ONLY";
   permissions: TimeCanvasSegmentPermissions;
   versionToken: string | null;
@@ -161,7 +156,6 @@ export type TimeCanvasFocusRequest = {
 };
 
 export type TimeCanvasDisplayOptions = {
-  showActual?: boolean;
   showBusy?: boolean;
   showInspector?: boolean;
 };
@@ -237,7 +231,6 @@ export type TimeCanvasInteractionOptions = {
   desktopOnlySegmentTransform?: boolean;
   creationRange?: TimeCanvasBrushRequest | null;
   selectedAnchorIds?: ReadonlySet<string>;
-  selectedSegmentIds?: ReadonlySet<string>;
   onBrushCreate?: (request: TimeCanvasBrushRequest) => void;
   onCreationRangeTransform?: (
     request: TimeCanvasCreationRangeTransformRequest,
@@ -257,7 +250,6 @@ export type TimeCanvasInteractionOptions = {
     selection: TimeCanvasAnchorMarqueeSelection,
   ) => void;
   onSegmentTransform?: (request: TimeCanvasSegmentTransformRequest) => void;
-  onSegmentToggleSelection?: (segmentId: string) => void;
   onSegmentOpen?: (segmentId: string) => void;
   onRowNavigation?: (row: TimeCanvasRow) => boolean;
   onInvalidDrop?: (message: string) => void;

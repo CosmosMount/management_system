@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { TaskMemberRole } from "@prisma/client";
 import { prisma } from "../lib/prisma";
 import { activateTask, createRevision, createTaskDraft, reviewTermination, submitTerminationForReview } from "../lib/project-management/application/lifecycle-service";
-import { batchCreatePlannedSegments, createActualSegment, createWorkSegment, updateWorkSegment } from "../lib/project-management/application/segment-service";
+import { createWorkSegment, updateWorkSegment } from "../lib/project-management/application/segment-service";
 import { updateActiveTask } from "../lib/project-management/application/task-mutation-service";
 import { getTaskWorkspace } from "../lib/project-management/queries/task-queries";
 
@@ -841,7 +841,6 @@ test.describe("project management plan mutations project-management-plan-mutatio
       });
       const updateBase = await createWorkSegment(actor(operator), {
         ...segmentCreateInput(operator.person.id, "oracle update base"),
-        type: "PLANNED",
       });
       const reloadedUpdate = await prisma.workSegment.findUniqueOrThrow({
         where: { id: updateBase.segment.id },
@@ -852,35 +851,11 @@ test.describe("project management plan mutations project-management-plan-mutatio
         invoke: (taskId: string) => Promise<unknown>;
       }> = [
         {
-          name: "single Planned",
+          name: "create record",
           invoke: (taskId) =>
             createWorkSegment(actor(operator), {
               ...segmentCreateInput(operator.person.id, "oracle single", 5),
-              type: "PLANNED",
               taskId,
-            }),
-        },
-        {
-          name: "batch Planned",
-          invoke: (taskId) =>
-            batchCreatePlannedSegments(actor(operator), {
-              segments: [
-                {
-                  ...segmentCreateInput(operator.person.id, "oracle batch", 7),
-                  type: "PLANNED",
-                  taskId,
-                },
-              ],
-            }),
-        },
-        {
-          name: "Actual",
-          invoke: (taskId) =>
-            createActualSegment(actor(operator), {
-              ...segmentCreateInput(operator.person.id, "oracle actual", 9),
-              taskId,
-              actualOutput: "oracle actual output",
-              sources: [],
             }),
         },
         {
@@ -890,7 +865,6 @@ test.describe("project management plan mutations project-management-plan-mutatio
               segmentId: reloadedUpdate.id,
               expectedUpdatedAt: reloadedUpdate.updatedAt,
               taskId,
-              reason: "oracle update",
             }),
         },
       ];

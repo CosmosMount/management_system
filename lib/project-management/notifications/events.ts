@@ -12,6 +12,8 @@ import {
   botKindForPayload,
   PROJECT_MANAGEMENT_NOTIFICATION_OUTBOX_CHANNEL,
   PROJECT_MANAGEMENT_NOTIFICATION_PAYLOAD_VERSION,
+  RETIRED_SEGMENT_NOTIFICATION_KIND,
+  RETIRED_SEGMENT_NOTIFICATION_REASON,
   projectManagementNotificationPayloadSchema,
   type ProjectManagementNotificationPayload,
 } from "@/lib/project-management/notifications/contract";
@@ -43,6 +45,9 @@ export async function createInAppNotificationTx(
   tx: Prisma.TransactionClient,
   input: CreateInAppNotificationInput,
 ): Promise<{ created: boolean }> {
+  if (input.category === "WORK_SEGMENT") {
+    throw new Error(RETIRED_SEGMENT_NOTIFICATION_REASON);
+  }
   const result = await tx.inAppNotification.createMany({
     data: [
       {
@@ -136,6 +141,12 @@ function parseProjectManagementNotificationInput({
   botKind?: FeishuBotKind;
 }): ProjectManagementNotificationPayload {
   const normalizedPayload = projectManagementNotificationPayloadSchema.parse(payload);
+  if (
+    normalizedPayload.kind === RETIRED_SEGMENT_NOTIFICATION_KIND ||
+    normalizedPayload.category === "WORK_SEGMENT"
+  ) {
+    throw new Error(RETIRED_SEGMENT_NOTIFICATION_REASON);
+  }
   if (type !== normalizedPayload.kind) {
     throw new Error("项目管理通知 type 与 payload.kind 不一致");
   }

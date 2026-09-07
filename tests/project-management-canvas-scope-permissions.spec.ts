@@ -20,7 +20,19 @@ import {
 } from "./helpers/project-management-canvas-security-fixtures";
 
 test.describe("project management canvas security project-management-canvas-scope-permissions", () => {
-  test("four canvas scopes enforce row domains, half-open filters, global Full visibility and Actual capabilities", async () => {
+  test.beforeAll(async () => {
+    const administrator = await createAccountPerson("画布权限测试全局审批管理员");
+    await prisma.systemRoleAssignment.create({
+      data: {
+        accountId: administrator.account.id,
+        role: "PROJECT_ADMINISTRATOR",
+        team: "",
+        techGroup: "",
+      },
+    });
+  });
+
+  test("four canvas scopes enforce row domains, half-open filters, global Full visibility and ordinary record capabilities", async () => {
       const scopeKey = randomUUID();
       const scopedTeam = `英雄-${scopeKey}`;
       const scopedTechGroup = `电控-${scopeKey}`;
@@ -92,11 +104,9 @@ test.describe("project management canvas security project-management-canvas-scop
         accountId: owner.account.id,
         personId: owner.person.id,
         taskId: taskA.taskId,
-        type: "ACTUAL",
-        status: "CONFIRMED",
         startAt: atHour(13),
         endAt: atHour(14),
-        content: "本人 Actual",
+        content: "本人投入记录",
       });
       const endingAtRangeStart = await createSegment({
         accountId: owner.account.id,
@@ -171,14 +181,11 @@ test.describe("project management canvas security project-management-canvas-scop
         (segment) => segment.kind === "SEGMENT" && segment.id === actual.id,
       );
       expect(actualDto?.kind).toBe("SEGMENT");
-      if (actualDto?.kind !== "SEGMENT") throw new Error("Actual DTO 缺失");
+      if (actualDto?.kind !== "SEGMENT") throw new Error("投入记录 DTO 缺失");
       expect(actualDto.permissions).toMatchObject({
         canEdit: true,
-        canMove: false,
-        canResize: false,
-        canMerge: false,
-        canCancel: false,
-        canConfirm: false,
+        canMove: true,
+        canResize: true,
         canSoftDelete: true,
       });
       for (const scope of ["PERSONAL", "DASHBOARD"] as const) {
@@ -502,10 +509,9 @@ test.describe("project management canvas security project-management-canvas-scop
         accountId: owner.account.id,
         personId: owner.person.id,
         taskId: visibleTask.taskId,
-        status: "PENDING_CONFIRMATION",
         startAt: atHour(9),
         endAt: atHour(10),
-        content: "Dashboard 待确认",
+        content: "Dashboard 普通投入",
       });
       await createSegment({
         accountId: hiddenOwner.account.id,
@@ -548,9 +554,8 @@ test.describe("project management canvas security project-management-canvas-scop
       expect(dashboard.personalTime.rows.map((row) => row.id)).toEqual([
         owner.person.id,
       ]);
-      expect(dashboard.pendingConfirmations.map((segment) => segment.id)).toEqual([
-        pending.id,
-      ]);
+      expect(fullSegmentIds(dashboard.personalTime)).toContain(pending.id);
+      expect(dashboard).not.toHaveProperty("pendingConfirmations");
       expect(dashboard.unreadNotificationCount).toBe(1);
     });
 });

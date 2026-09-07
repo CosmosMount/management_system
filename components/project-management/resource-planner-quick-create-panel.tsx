@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import {
-  createActualSegment,
   createWorkSegment,
 } from "@/app/actions/project-management/segments";
 import { TaskSelect } from "@/components/project-management/task-picker";
@@ -13,7 +12,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { FieldError } from "@/components/ui/field-error";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import type {
   ProjectManagementActionFailure,
   ProjectManagementActionResult,
@@ -21,16 +19,12 @@ import type {
 import {
   fieldErrorsFullyHandled,
 } from "@/lib/project-management/field-errors";
-import {
-  taskPriorityLabels,
-} from "@/lib/project-management/labels";
 import type {
   PersonOptionDto,
   TaskOptionPage,
 } from "@/lib/project-management/types/time-canvas";
 import {
   Field,
-  selectClass,
   supportedFieldErrors,
   toLocal,
   validateSegmentRangeInputs,
@@ -154,35 +148,27 @@ export function QuickCreatePanel({
           requestAnimationFrame(() => document.getElementById(first)?.focus());
           return;
         }
-        const type = String(form.get("type")) === "ACTUAL" ? "ACTUAL" : "PLANNED";
         const base = {
           personId,
           startAt: new Date(range.startMs).toISOString(),
           endAt: new Date(range.endMs).toISOString(),
           content,
-          priority: String(form.get("priority") ?? "MEDIUM"),
-          expectedOutput: String(form.get("expectedOutput") ?? ""),
           taskId: submittedTaskId,
         };
         onRun(
-          () =>
-            type === "ACTUAL"
-              ? createActualSegment({ ...base, sources: [] })
-              : createWorkSegment({ ...base, type: "PLANNED" }),
+          () => createWorkSegment(base),
           (error) => {
-            const next = supportedFieldErrors(error.fieldErrors, ["personId", "startAt", "endAt", "content", "priority", "expectedOutput", "taskId"]);
+            const next = supportedFieldErrors(error.fieldErrors, ["personId", "startAt", "endAt", "content", "taskId"]);
             if (Object.keys(next).length === 0) return false;
             setFieldErrors(next);
-            const firstKey = ["personId", "startAt", "endAt", "content", "taskId", "priority", "expectedOutput"].find((key) => next[key]);
-            const id = firstKey === "personId" ? "quick-person" : firstKey === "taskId" ? "quick-task" : firstKey ? `quick-${firstKey === "expectedOutput" ? "expected" : firstKey.replace("At", "")}` : "quick-content";
+            const firstKey = ["personId", "startAt", "endAt", "content", "taskId"].find((key) => next[key]);
+            const id = firstKey === "personId" ? "quick-person" : firstKey === "taskId" ? "quick-task" : firstKey ? `quick-${firstKey.replace("At", "")}` : "quick-content";
             requestAnimationFrame(() => document.getElementById(id)?.focus());
             return fieldErrorsFullyHandled(error.fieldErrors, [
               "personId",
               "startAt",
               "endAt",
               "content",
-              "priority",
-              "expectedOutput",
               "taskId",
             ]);
           },
@@ -193,12 +179,6 @@ export function QuickCreatePanel({
         <h2 className="font-semibold">投入快速创建</h2>
         <p className="text-sm text-muted-foreground">拖选或精确填写时间；最终规则由服务端校验。</p>
       </div>
-      <Field label="类型" htmlFor="quick-type">
-        <select id="quick-type" name="type" className={selectClass} defaultValue="PLANNED">
-          <option value="PLANNED">Planned</option>
-          <option value="ACTUAL">Actual</option>
-        </select>
-      </Field>
       <Field label="人员" htmlFor="quick-person">
         <UserSelect
           inputId="quick-person"
@@ -225,6 +205,7 @@ export function QuickCreatePanel({
       <Field label="开始" htmlFor="quick-start">
         <Input
           id="quick-start"
+          disabled={disabled}
           name="startAt"
           type="datetime-local"
           value={startValue}
@@ -240,6 +221,7 @@ export function QuickCreatePanel({
       <Field label="结束" htmlFor="quick-end">
         <Input
           id="quick-end"
+          disabled={disabled}
           name="endAt"
           type="datetime-local"
           value={endValue}
@@ -258,7 +240,7 @@ export function QuickCreatePanel({
         className="md:col-span-2 xl:col-span-4"
       />
       <Field label="内容" htmlFor="quick-content" className="md:col-span-2">
-        <Input id="quick-content" name="content" defaultValue="" required maxLength={2_000} aria-invalid={Boolean(fieldErrors.content)} aria-describedby={fieldErrors.content ? "quick-content-error" : undefined} onChange={() => clearFieldError("content")} />
+        <Input id="quick-content" name="content" defaultValue="" required disabled={disabled} maxLength={2_000} aria-invalid={Boolean(fieldErrors.content)} aria-describedby={fieldErrors.content ? "quick-content-error" : undefined} onChange={() => clearFieldError("content")} />
         <FieldError id="quick-content-error" messages={fieldErrors.content} />
       </Field>
       <Field label="Task" htmlFor="quick-task">
@@ -295,32 +277,6 @@ export function QuickCreatePanel({
           />
         )}
         <FieldError id="quick-task-error" messages={fieldErrors.taskId} />
-      </Field>
-      <Field label="优先级" htmlFor="quick-priority">
-        <select
-          id="quick-priority"
-          name="priority"
-          className={selectClass}
-          defaultValue="MEDIUM"
-          aria-invalid={Boolean(fieldErrors.priority)}
-          aria-describedby={fieldErrors.priority ? "quick-priority-error" : undefined}
-          onChange={() => clearFieldError("priority")}
-        >
-          {Object.entries(taskPriorityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-        </select>
-        <FieldError id="quick-priority-error" messages={fieldErrors.priority} />
-      </Field>
-      <Field label="预期输出" htmlFor="quick-expected" className="md:col-span-2 xl:col-span-4">
-        <Textarea
-          id="quick-expected"
-          name="expectedOutput"
-          maxLength={2_000}
-          placeholder="填写本次投入预期形成的结果"
-          aria-invalid={Boolean(fieldErrors.expectedOutput)}
-          aria-describedby={fieldErrors.expectedOutput ? "quick-expected-error" : undefined}
-          onChange={() => clearFieldError("expectedOutput")}
-        />
-        <FieldError id="quick-expected-error" messages={fieldErrors.expectedOutput} />
       </Field>
       <div className="flex gap-2 md:col-span-2 xl:col-span-4">
         <Button type="submit" disabled={disabled}>创建</Button>

@@ -4,6 +4,8 @@ import { z } from "zod";
 export const PROJECT_MANAGEMENT_NOTIFICATION_OUTBOX_CHANNEL =
   "project-management";
 export const PROJECT_MANAGEMENT_NOTIFICATION_PAYLOAD_VERSION = 1;
+export const RETIRED_SEGMENT_NOTIFICATION_KIND = "segment_confirmation_due";
+export const RETIRED_SEGMENT_NOTIFICATION_REASON = "投入确认功能已退役，取消历史提醒";
 const PROJECT_MANAGEMENT_NOTIFICATION_KINDS = [
   "task_assigned",
   "task_updated",
@@ -20,7 +22,7 @@ const PROJECT_MANAGEMENT_NOTIFICATION_KINDS = [
   "revision_result",
   "revision_applied",
   "revision_cancelled",
-  "segment_confirmation_due",
+  RETIRED_SEGMENT_NOTIFICATION_KIND,
   "task_terminated",
   "account_security",
   "project_establishment_submitted",

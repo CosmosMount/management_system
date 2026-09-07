@@ -9,7 +9,6 @@ export const configurableNotificationCategories = [
   "MILESTONE",
   "REVIEW",
   "REVISION",
-  "WORK_SEGMENT",
 ] as const;
 
 const updatePreferenceSchema = z.object({

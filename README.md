@@ -244,9 +244,9 @@ docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" "${POSTGRES
 | TEACHER | 全局 | 「老师审核」阶段通过 |
 | FINANCE | 指定车组 | 上传报销截图 |
 
-所有已登录统一账号都可查看全部未删除 Project、Task、计划、成员、验收、审计和完整 Planned/Actual Work Segment；只有 `Person.status=ACTIVE` 的在职账号可提交 Project 立项和创建任意合法车组/技术组的 Task。Project 是 Task 上方的文件夹与立项对象，不包含 Stage；只有统一超级管理员或项目管理员能审批立项。Project Owner 可修改、结束和删除 Project，但不会继承任何 Task 写权限。
+所有已登录统一账号都可查看全部未删除 Project、Task、计划、成员、验收、审计和完整 投入记录；只有 `Person.status=ACTIVE` 的在职账号可提交 Project 立项和创建任意合法车组/技术组的 Task。Project 是 Task 上方的文件夹与立项对象，不包含 Stage；只有统一超级管理员或项目管理员能审批立项。Project Owner 可修改、结束和删除 Project，但不会继承任何 Task 写权限。
 
-Revision 是用户选择时间的计划变化标记，不形成阶段，也不能关联 Planned/Actual Segment。创建 Revision 时固定沿用 Current Plan 的 Start，自动保留全部已完成 Milestone 和已生效 Revision，并用调用方提供的后续 Milestone 与 Terminal 重建未完成部分。创建即进入 `PENDING_APPROVAL`，不再存在草稿或单独提交动作；等待审批时，Task 详情会在 Current Plan 下自动加入只读的“Revision 修改后”候选 Plan，供提交人和审批人直接比较。驳回或取消后候选行消失；批准后该候选成为新的 Current Plan。若候选关联或基线异常，页面只展示修改前计划并禁用批准，但仍允许驳回或由有权限的人取消。该能力复用现有计划版本数据，不需要新增数据库字段。驳回后可修改并直接重新送审，取消后释放该 Task 的唯一候选名额，批准后才进入 Current Plan 和正式时间轴。
+Revision 是用户选择时间的计划变化标记，不形成阶段，也不能关联 投入记录。创建 Revision 时固定沿用 Current Plan 的 Start，自动保留全部已完成 Milestone 和已生效 Revision，并用调用方提供的后续 Milestone 与 Terminal 重建未完成部分。创建即进入 `PENDING_APPROVAL`，不再存在草稿或单独提交动作；等待审批时，Task 详情会在 Current Plan 下自动加入只读的“Revision 修改后”候选 Plan，供提交人和审批人直接比较。驳回或取消后候选行消失；批准后该候选成为新的 Current Plan。若候选关联或基线异常，页面只展示修改前计划并禁用批准，但仍允许驳回或由有权限的人取消。该能力复用现有计划版本数据，不需要新增数据库字段。驳回后可修改并直接重新送审，取消后释放该 Task 的唯一候选名额，批准后才进入 Current Plan 和正式时间轴。
 
 同一 Task 同时最多只能有一条待审批：未撤出的 `PENDING` Milestone Review、`PENDING_APPROVAL` Revision 与 `PENDING` Termination Review 互斥。Milestone 或 Terminal 提交后，在审批通过、驳回、要求修订或撤出前不能用新的请求键重复提交；相同请求键按原结果幂等重放，重新提交必须使用新请求键。任一待审批存在时，新的 Milestone、Revision 或 Terminal 申请都会被阻止；审批离开待处理状态后释放名额。Terminal 由 OWNER、PARTICIPANT 或全局管理员提交结束结果、原因和总结，只有统一超级管理员或项目管理员批准后才真正结束 Task。
 
@@ -525,17 +525,17 @@ pm2 start npm --name procurement-cron -- run cron
 - 参与人可编辑 Task/计划、提交验收并创建自己的 Revision，并管理自己的关联投入；负责人另可管理成员、Task 状态、任意未生效 Revision 和该 Task 全部投入；全局管理员拥有全部项目写权限。
 - ACTIVE Project 只在没有未删除的草稿或进行中 Task 时允许结束；空 Project 和仅包含已完成、失败结束、已取消、已超时或已归档 Task 的 Project 均可结束。Project 详情的 Task 完成进度为严格 `COMPLETED` 数量除以“未删除 Task 总数减去 `CANCELLED` 数量”；原始 Task 总数仍用于空 Project 与结束门禁判断。
 - Revision 是可选择时间的非分段标记，创建即待审批，没有 Draft/Submit；驳回后修改即重新送审。每个 Task 只允许一条 Milestone/Revision/Termination 待审批，待审批期间不能再次提交其他审批申请。Milestone 与 Terminal 均允许 OWNER、PARTICIPANT 或全局管理员提交，三类申请只由统一超级管理员或项目管理员决定，并允许管理员自审；界面不再提供流程策略、Reviewer 或自审开关。
-- `/progress` 是“我的工作”统一驾驶舱，提供指标、完整个人时间画布、行动待办、到期确认队列、全部参与 Task 及对应 Plan 轨道和折叠通知。行动待办最多预览全局优先队列的前 8 项，投入待办统一打开同一详情 Dialog 处理。
+- `/progress` 是“我的工作”统一驾驶舱，提供指标、完整个人时间画布、行动待办、全部参与 Task 及对应 Plan 轨道和折叠通知。行动待办最多预览任务节点与审批队列的前 8 项；投入只通过时间线详情维护，没有到期确认队列。
 - `/progress/kanban` 是全员可访问的只读人员工作看板。默认选择当前用户，也可通过异步人员选择器切换任一在职人员；画布展示该人员的完整投入、有效参与的进行中 Task Current Plan 和全局关键时间点，不展示或代办其指标、待办、审批和通知。选择使用 `people=<personId>`，并与 `center`、`scale` 一同保存在 URL 中；切换人员保留当前时间视口。
 - `/progress/approvals` 展示完整的待办与审批全局优先队列，按“紧急 → 高 → 中 → 低”、相关时间和稳定 ID 排序，每次加载 50 项。队列包含本人待确认投入、本人有效参与的 ACTIVE Task 当前节点，以及全局管理员可处理的 Milestone 验收、Revision、Project 立项和 Terminal 结束审批；“任务结束申请”不再作为一条行动待办。当前节点优先使用 Task 的 `activeMilestoneNodeId`，进入结束阶段后使用 Current Plan 中的 ACTIVE Terminal；相同 Milestone/Terminal 已有待处理审批时隐藏当前节点，待审批 Revision 不隐藏。逾期当前节点为“紧急”，其余为“中”。
 - `/progress/tasks/new` 提供新建 Composer；尚未激活的 Task 通过工作台右上角“编辑 Task”进入 `/progress/tasks/[id]/edit`，使用同一 Composer 一次保存基本信息、关联 Task、成员和完整计划。Participant 可编辑内容与计划，但成员区只读；保存成功后返回工作台。
 - `/progress/tasks` 与 `/progress/tasks/[id]` 提供 Task 列表和 Task 工作台。人员投入时间线位于工作台 Tab 上方，并在“计划与资源”“概览”“修订与历史”“验收”“审计”之间切换时保持显示和交互状态。DRAFT 工作台的“概览”和“计划与资源”均为只读展示；草稿创建者、Task Owner 或全局管理员可软删除未激活草稿，已激活及终态 Task 不提供该入口。ACTIVE 的既有元数据和成员可在同一事务编辑。发起 Revision 进入 `/progress/tasks/[id]/revisions/new`，被驳回候选通过 `/progress/tasks/[id]/revisions/[revisionId]/edit` 修改；两者与 Task 创建/草稿编辑共用 Composer 的 TimeCanvas、节点表、Inspector、撤销/重做、校验和本地恢复，保存后直接返回“修订与历史”。可编辑 Composer 的桌面 TimeCanvas 支持 Shift 点击、空白框选和鼠标整组移动可编辑节点；选中组只存在于当前页面，不写入本地草稿或服务端，Revision 的 Start、已完成 Milestone 和已生效 Revision 等只读承接节点不会加入选中组。桌面多选状态栏还提供按整数天批量前移/后移，操作时需明确选择“当前及后续”或“仅已选节点”；前者包含当前焦点以及时间不早于它的全部可编辑节点，后者只处理显式选中组，移动端不提供该入口。整组拖动和批量移动都按一次原子修改进入撤销/重做，失败时所有节点保持原值。工作台 Revision Tab 只保留历史、审批、取消和 Diff，不再内联编辑候选计划。
 - DRAFT Task 只能在计划开始时间已到达后激活；校验使用事务内的服务端时间，不追溯检查已经激活或结束的历史 Task。
 - `/progress/resources` 统一为“资源计划”。默认显示全部可见人员和草稿/进行中 Task，也可按 Project、Task、人员多选，并用七个复选框筛选草稿、进行中及五种终态 Task；允许全部取消。Task 集合为“直接选择与所选 Project 下 Task 的并集”和状态选择的交集，Task 搜索建议使用同一状态条件；人员集合再并入符合状态的 Task 成员和所选 Project 成员。状态只决定 Task 计划轨道及由 Task 推导的人员：直接选择或经 Project 进入画布的人员仍展示全部可见投入，包括属于已被筛除 Task 的投入。画布一次装配完整 Task 与人员集合，混排只读 Current Plan 轨道与可交互人员投入；范围由内容自动扩展两个上海日历月并按最多 180 天分块读取。未保存的虚线创建草稿可在桌面横移、调整两端或拖到当前可创建的 Person 行，移动端继续使用表单；快速创建的“内容”默认为空，需由创建人明确填写。
-- `/progress` 的个人画布同时展示本人投入、全部有效参与 Task，以及用户自己创建且仍为 DRAFT 的 Task；默认只列进行中 Task，用户切换显示草稿后可看到自己的零成员草稿，也可切换全部终态。Task 表与 Current Plan 轨道来自同一全量装配。画布按全部计划和本人可见投入自动计算范围，在内容两侧增加两个上海日历月，并以不超过 180 天的数据块读取。Task 工作台展示全部有效成员及这些成员的全部投入；Project 详情展示 Project/所属 Task 全部有效成员的全部投入，计划轨道则只包含用户在状态分组中勾选的本 Project Task。真实 Task 计划轨道和按 Task 分组行的左侧标题可直接进入对应 Task 详情；存在未保存的投入创建内容时，离开前继续要求确认，取消后保留原草稿。Composer 草稿、人员及 Revision 对比行保持非链接文本。投入悬浮信息包含所属 Task，未关联 Task 时显示“独立投入”。所有完整和紧凑画布默认使用周尺度，只有 URL 或调用方明确指定时才采用月/季/年；工具栏保留“今天”和独立底部滚动条。有效 Planned 新增或更新时间范围后会重新计算和预加载目标数据块；所有画布都排除已确认或已取消 Planned，它们不显示也不扩大范围，但数据库事实、来源与变更历史仍保留。Task 详情沿用既有投入权限，Project 详情中的投入只读。
+- `/progress` 的个人画布同时展示本人投入、全部有效参与 Task，以及用户自己创建且仍为 DRAFT 的 Task；默认只列进行中 Task，用户切换显示草稿后可看到自己的零成员草稿，也可切换全部终态。Task 表与 Current Plan 轨道来自同一全量装配。画布按全部计划和本人可见投入自动计算范围，在内容两侧增加两个上海日历月，并以不超过 180 天的数据块读取。Task 工作台展示全部有效成员及这些成员的全部投入；Project 详情展示 Project/所属 Task 全部有效成员的全部投入，计划轨道则只包含用户在状态分组中勾选的本 Project Task。真实 Task 计划轨道和按 Task 分组行的左侧标题可直接进入对应 Task 详情；存在未保存的投入创建内容时，离开前继续要求确认，取消后保留原草稿。Composer 草稿、人员及 Revision 对比行保持非链接文本。投入悬浮信息包含所属 Task，未关联 Task 时显示“独立投入”。所有完整和紧凑画布默认使用周尺度，只有 URL 或调用方明确指定时才采用月/季/年；工具栏保留“今天”和独立底部滚动条。投入新增或更新时间范围后会重新计算和预加载目标数据块；软删除记录不显示也不扩大范围。旧记录按原默认可见集合迁移，完整原数据、来源和变更历史保存在只读归档。Task 详情沿用既有投入权限，Project 详情中的投入只读。
 - 超级管理员配置的关键时间点会出现在个人、资源计划、Task/Project 详情和桌面 Composer 的统一 TimeCanvas 中，即使当前业务行为空也会保留显示。业务画布不为其增加独立行，只在对应日期显示名称和贯穿内容区的细竖线；精确时间保留在悬浮提示和无障碍文本中。密集时间点聚合为可点击计数，打开后可查看并选择具体时间点。它们进入可导航范围，但可视窗口最多三年且不会覆盖业务内容的默认初始中心，也不会产生提醒、站内通知或飞书消息。
-- 投入部分确认不要求填写原因；确认人只需选择确认结束时间，并明确填写实际投入内容、预期输出和实际输出。服务端仍记录部分确认、Actual 来源和剩余计划的完整变更历史。
-- `/progress/approvals` 汇总投入确认、Milestone Review、Revision 与 Termination。Tag 分类能力已整体退役，`/progress/tags` 返回 404。
+- 投入统一为“人员 + 起止时间 + 工作内容 + 可选任务关联”。允许过去、当前、未来及重叠时间，单条最长 31 天、内容最多 2,000 字；没有计划/实际、状态、优先级、输出或确认。保留单条新增、编辑、软删除和桌面拖动/边界调整，移动端通过表单维护；不再提供批量、拆分、合并或确认流程。权限与任务关联限制不变，操作只记录审计，不产生投入通知。
+- `/progress/approvals` 汇总当前任务节点、Milestone Review、Revision、项目立项与 Termination，不再包含投入确认。Tag 分类能力已整体退役，`/progress/tags` 返回 404。
 - Task 工作台的当前 Milestone 验收审批会展示提交人、提交时间及本轮 TEXT/LINK 证据；历史 FILE 或不安全链接以不可查看状态呈现，不生成可点击地址。
 - `/progress/notifications` 提供站内通知中心和分类飞书偏好；站内通知始终保留，强制事件不受普通关闭偏好影响。
 - 当前项目管理正式路由只保留 `/progress`、`/progress/kanban`、`/progress/projects/*`、`/progress/tasks/*`、`/progress/resources`、`/progress/approvals` 与 `/progress/notifications`；`/progress/task/:id`、`/progress/my-timeline` 和 `/admin/roles` 均返回 404。
@@ -560,3 +560,11 @@ npm run accounts:validate
 ```
 
 `20260805120000_single_task_pending_approval` 会统一撤出当前待处理的 Task Milestone/Revision 审批：保留审批、证据和已发送消息历史，取消 Revision 候选计划，冻结尚可投递的对应 outbox/recipient，将相关未读站内审批通知标记为已读，并写 `source=MIGRATION` 审计。迁移末尾会断言全库 Task 待审批数为零；失败则整次回滚。采购、报销、投入确认和关联复核完全不受影响。迁移成功并完成验证后才能恢复应用写入和通知 worker。
+
+### 统一投入记录迁移
+
+`20260907120000_unify_work_segments` 必须在应用停写、通知 worker 暂停的维护窗口部署。备份完整数据库后执行 `npm run db:deploy`，再部署匹配的新应用。旧投入、来源和变更原样保留在 `LegacyWorkSegment`、`LegacyWorkSegmentSource`、`LegacyWorkSegmentChange`；只读触发器禁止写入，Prisma `@@ignore` 保留迁移管理但不生成日常 Client API。归档解除对日常人员、账号和任务的外键依赖，以免业务删除改写历史。
+
+新表仅回填原默认可见记录，保留 ID、人员、时间、内容、任务及创建/修改信息，不按内容或时间去重。已确认/取消的旧计划、软删除记录、输出字段和来源链仅归档，领域审计和已发送消息不删除。迁移取消旧投入确认的待发 outbox/recipient，并将相关未读站内通知标记已读，其他消息不受影响。
+
+恢复服务前核对数量、原定位链接、编辑权限和通知队列。旧应用不能连接新结构；回退必须同时恢复匹配应用与数据库，恢复写入后不得用旧备份直接覆盖新增记录。

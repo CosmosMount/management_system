@@ -3,7 +3,6 @@ import { z } from "zod";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 
 export const actionInboxStreams = [
-  "SEGMENT_CONFIRMATION",
   "TASK_NEXT_NODE",
   "MILESTONE_REVIEW",
   "REVISION_REVIEW",
@@ -29,7 +28,6 @@ const cursorCoreSchema = z
     generatedAt: z.string().datetime({ offset: true }),
     positions: z
       .object({
-        SEGMENT_CONFIRMATION: cursorPositionSchema.optional(),
         TASK_NEXT_NODE: cursorPositionSchema.optional(),
         MILESTONE_REVIEW: cursorPositionSchema.optional(),
         REVISION_REVIEW: cursorPositionSchema.optional(),

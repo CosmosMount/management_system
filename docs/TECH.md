@@ -191,18 +191,18 @@ Revision 候选自身及后缀中的 Milestone 与 Termination 必须保持 `PEN
 
 迁移 `20260805133000_finalize_task_only_work_segments` 在上述历史修复之后收敛最终模型。它兼容旧删除迁移已执行或尚未执行两种路径，再次清理关联失效通知、outbox、重关联和纯关联失效历史，移除历史 JSON 顶层废弃字段，并最终删除职责、TaskNode 关联、关联复核字段、索引、约束、`WorkSegmentRole` 与 `RELINK`。迁移结束前会校验最终枚举、字段和审计 append-only trigger；Task、TaskNode、Milestone、Revision、Termination 以及普通 Segment 数据继续保留。
 
-P5 Resource Segment 服务端闭环位于 `lib/project-management/application/segment-service.ts`、`app/actions/project-management/segments.ts` 和 `lib/project-management/queries/resource-queries.ts`：
+统一投入记录由 `segment-service.ts`、投入 Server Actions 和 `resource-queries.ts` 提供：
 
-- Segment 服务支持单条/批量 Planned 创建、Actual 创建、更新、批量移动、拆分、合并、取消、完整确认、部分确认和 Actual 逻辑删除。所有写操作继续在事务内写 `WorkSegmentChange` 和 `DomainAuditEvent`，通过 `expectedUpdatedAt` 执行乐观锁，批量写入保持全成全败。
-- 创建或改变 Task 关联的路径继续使用 Task 行锁，并要求 Segment Person 是目标 Task 的有效 Owner/Participant；新建、批量新建、更新、拆分、合并和确认均复核该成员一致性。状态转换继续按稳定 Segment ID 顺序锁行。Segment 不再保存职责、Task Node 关联或关联复核状态。
-- Segment 校验包括 `endAt > startAt`、单条及 merge 最终结果最长 31 天和 Task 成员关联规则。`completionPercent` 已从写入 validation、service DTO、普通查询 DTO 和数据库列完全退役；迁移前的非空数值连同 Segment、Task、类型、状态和历史时间保存在 append-only `DomainAuditEvent`。
-- Segment DTO/审计快照、时间范围与状态规则、定时状态迁移分别位于独立模块；`segment-service.ts` 保留公开事务编排，访问/关联/并发守卫、创建与确认持久化、变更与领域审计记录分别位于 `segment-access.ts`、`segment-creation.ts` 和 `segment-change-recorder.ts`。
-- 所有已登录统一账号可读取全员完整 Planned/Actual Segment 和变更历史。Participant 只能管理自己的 Task 关联 Segment，Owner 可管理该 Task 全部 Segment，全局管理员可管理全部；非成员不能写入已有 Task。无 Task 关联的 Segment 仍由本人管理。停用 Person 的历史 Segment 继续展示，但不能创建新 Segment。状态机、确认生成 Actual、`WorkSegmentSource`、变更历史和审计均保留。多个 Segment 可以时间重叠，服务端不检测、提示、阻止或通知资源冲突。
-- `WorkSegment.allocation`、资源冲突领域模型、扫描器、建议预览、处理 action 和相关 DTO 已删除。旧客户端提交 `allocation` 或 `includeConflicts` 会在 strict Zod 边界返回校验错误。
+- `WorkSegment` 仅保留人员、起止时间、内容、可选 Task 和创建/修改/软删除元数据。写入口为 `createWorkSegment`、`updateWorkSegment`、`softDeleteWorkSegment`；严格拒绝类型、状态、优先级、输出、来源和旧批量/确认入参。
+- 所有写入在事务中记录 `WorkSegmentChange` 和 `DomainAuditEvent`，新动作只有 `CREATE/UPDATE/DELETE`。修改/删除必须提供 `expectedUpdatedAt`，更新时间单调递增，重复删除不重复审计。先锁关联 Task，再锁投入并复核关联/权限，保留任务成员变动的并发保护。
+- 全员可读取；本人、任务 Owner、全局管理员沿用现有管理权限；停用人员只读。关联人员须为有效 Owner/Participant，新建或改绑只允许草稿/进行中 Task。编辑已关联终态任务的内容/时间不改变任务关联，重复传相同任务 ID 不视为新关联。
+- 输入要求有效时间、结束晚于开始、单条最长 31 天和最多 2,000 字非空内容；允许过去、当前、未来和重叠。没有状态迁移、确认待办、投入通知或容量模型。桌面拖动及调整边界使用同一单条更新接口。
+- `20260907120000_unify_work_segments` 将旧三表和专用枚举改名 Legacy，按原默认可见集合回填新表并核对完整字段。归档原值/来源/变更不改写，以只读触发器保护；内部关联保留，外部账号/人员/任务外键解除，避免日常业务改写历史。Prisma 精确映射 `@@ignore` 模型，防止后续迁移误删归档。旧领域审计原样保留，迁移另写 `source=MIGRATION` 汇总审计。
+- 迁移在停写及暂停 worker 时取消旧确认消息和未完成收件人、释放投递锁、标记相关站内通知已读。投入状态 cron、到期查询、待办分支及通知偏好入口移除；投递层保留最小退役事件拦截，既不发信也不无限重试旧载荷。
 
 S2 TimeCanvas 查询通过 `app/actions/project-management/canvas.ts` 暴露，并由 strict `POST /api/project-management/canvas` 提供同一可测试边界。五个 operation 都从 Auth.js session 解析当前 actor，再进入 validation、authorization、`ProjectManagementActionResult`、structured logging 和错误脱敏流程；请求不接受 actor、账号、人员或角色注入字段。
 
-TimeCanvas 的请求预算为 Full Segment + Busy 合计 5,000、当前计划非删除 anchor Node 合计 5,000；Task、Person 与 anchor Task 行不设数量分页。`time-canvas-queries.ts` 保留稳定公共出口，个人到期队列、固定范围查询、内容驱动查询、页面/自适应分发和 Task anchor 加载分别位于内部 `personal-due-segment-queries.ts`、`time-canvas-range-query.ts`、`time-canvas-content-query.ts`、`time-canvas-page-queries.ts` 和 `time-canvas-anchor-loader.ts`。`rowPageKey`、Prisma 选择集、DTO/权限映射、自适应 leaf 预算、scope 授权谓词和 Person/Task 行加载继续由既有查询内部模块负责，页面级查询只编排 scope、行、Segment、Busy 与 Anchor 加载。Busy DTO 只包含 `kind`、`visibility`、`personId`、`startAt` 和 `endAt`，不返回源 Segment、Task、内容、版本、比例或冲突摘要。TimeCanvas 请求不接受 Node 过滤，Segment DTO 不包含职责、Node 关联、关联复核、`allocation` 或 `conflictIds`。
+TimeCanvas 的请求预算为 Full Segment + Busy 合计 5,000、当前计划非删除 anchor Node 合计 5,000；Task、Person 与 anchor Task 行不设数量分页。`time-canvas-queries.ts` 保留稳定公共出口，固定范围查询、内容驱动查询、页面/自适应分发和 Task anchor 加载分别位于内部 `time-canvas-range-query.ts`、`time-canvas-content-query.ts`、`time-canvas-page-queries.ts` 和 `time-canvas-anchor-loader.ts`。`rowPageKey`、Prisma 选择集、DTO/权限映射、自适应 leaf 预算、scope 授权谓词和 Person/Task 行加载继续由既有查询内部模块负责，页面级查询只编排 scope、行、Segment、Busy 与 Anchor 加载。Busy DTO 只包含 `kind`、`visibility`、`personId`、`startAt` 和 `endAt`，不返回源 Segment、Task、内容、版本、比例或冲突摘要。TimeCanvas 请求不接受 Node 过滤，Segment DTO 不包含职责、Node 关联、关联复核、`allocation` 或 `conflictIds`。
 
 资源计划使用服务端集合展开：`TaskSet = (直接选择 Task ∪ 所选 Project 的未删除 Task) ∩ 所选 Task 状态`，`PersonSet = 直接选择 Person ∪ TaskSet 有效成员 ∪ 所选 Project 有效成员`。状态集合覆盖 `DRAFT/ACTIVE/COMPLETED/FAILED/CANCELLED/TIMEOUT/ARCHIVED`，默认 `DRAFT + ACTIVE`，允许空集合；Task 选项查询使用相同状态条件。状态筛选只影响计划轨道和由 Task 推导的人员，已经由直接选择、Project 成员或焦点进入 `PersonSet` 的人员仍按 Person 范围读取全部可见 Segment，不再按所属 Task 状态过滤。Task 与 Person 一次完整装配、不使用行游标；焦点 Segment 对应 Person 固定置前，焦点 Task 只有符合状态时才进入计划轨道，但始终独立完成可见性校验。Current Plan 轨道只读，人员行保留既有 Segment capability；内容范围两侧增加两个上海日历月，并限制在三年逻辑窗口内按最多 180 天自适应读取，单次自适应查询继续受 20,000 个对象和 16 个 leaf block 预算约束。
 
@@ -210,7 +210,7 @@ TimeCanvas 的请求预算为 Full Segment + Busy 合计 5,000、当前计划非
 
 迁移 `20260811190000_remove_project_management_tags` 删除 `SegmentTag`、`TaskTag` 与 `Tag`。应用同步删除 Tag 路由、查询、Action、Task/Segment 输入和 DTO，不保留兼容入口；既有 `DomainAuditEvent` 继续 append-only 保存，但近期动态不再解释历史 `tagIds`。
 
-`scripts/cron.ts` 每 10 分钟在数据库互斥下运行 Segment transition，并在每日 08:15 执行 deadline/retention/integrity 维护。资源冲突的增量与每日全量扫描、checkpoint、运行状态和日志均已删除。定时任务只处理保留的领域状态、审计、站内通知和 `channel=project-management` outbox，不自动生成 Actual，也不自动调整 Segment 排期。
+`scripts/cron.ts` 已删除投入状态扫描，在每日 08:15 的数据库互斥任务中继续执行 deadline/retention/integrity 维护。资源冲突的增量与每日全量扫描、checkpoint、运行状态和日志均已删除。定时任务只处理保留的领域状态、审计、站内通知和 `channel=project-management` outbox，不自动生成 Actual，也不自动调整 Segment 排期。
 
 项目管理浏览器入口覆盖 `/progress` 统一“我的工作”、`/progress/kanban` 人员工作看板、Task Composer/工作台、资源计划、Action Inbox 和通知偏好；`/progress/task/:id`、`/progress/my-timeline`、`/progress/resources/conflicts`、`/progress/tags` 与 `/admin/roles` 返回 404。所有页面先解析项目管理 actor；`taskReadableWhere` 和 `segmentReadableWhere` 对所有已登录统一账号返回全部未删除对象，人员列表返回所有活跃 Person，并在所选范围继续展示有历史投入的停用 Person。停用 Person 对应账号仍可进入页面和全局读取历史，但 mutation 在事务内刷新 Actor 时统一返回 `FORBIDDEN`，不能创建 Task、修改业务或新增 Segment。服务端 action 仍执行成员、Person 状态、状态机、权限、关联和版本校验，DTO capability flags 决定只读或可操作 UI。Milestone、Revision、Project 立项和 Terminal 结束审批及对应按钮只对两类有效全局管理员可用；本人投入确认和有效参与 Task 的当前节点按各自成员范围进入 Action Inbox，不因全局读取权限扩大。
 
@@ -234,7 +234,7 @@ TimeCanvas 保持统一 `TimeCanvasProps/TimeCanvasModel` 契约：Desktop 支�
 
 TimeCanvas 的键盘焦点、刷选与 Segment 变换数学、只读 Inspector、工具栏/Axis/底部滚动条、全局关键时间点层、上海日历网格/阶段轨道/今日线以及共享布局常量已经从主渲染器分离；主渲染器继续只负责编排、虚拟化、视口/选择与 Inspector，行级刷选和创建区间位于 `time-canvas-row.tsx`，Segment/Anchor 对象交互位于 `time-canvas-objects.tsx`，内部依赖保持 `time-canvas → row → objects` 单向；资源计划客户端的分块缓存与 URL 同步、展示骨架也各自拥有独立模块。`resource-planner-panels.tsx` 保留 Quick Create、Segment Inspector、范围格式化和草稿范围计算的稳定公共出口，Quick Create 位于 `resource-planner-quick-create-panel.tsx`，两类面板共用的 DTO、字段容器和上海时间范围校验位于 `resource-planner-panel-support.tsx`；Segment Inspector 与计划确认表单继续内聚。Plan 转 Actual 时，完整确认、部分确认和批量确认都必须提交实际输出；预期输出不要求用户重复填写，由 Actual 继承 Planned 的值。部分确认表单不收集原因，除确认范围和实际输出外仍要求实际投入内容；服务端继续生成系统变更说明。页面继续只依赖稳定的 `TimeCanvasProps`/`TimeCanvasModel`，移动端直接拖动限制与详情内仅目标 Segment 可编辑的规则保持不变。
 
-时间画布查询统一排除 `PLANNED + CONFIRMED/CANCELLED`，不提供按 scope 恢复终态 Planned 的参数，但不删除事实记录、来源和历史。PERSONAL scope 的 Task universe 来自有效 TaskMember；`/progress` 通过 `getMyTimelinePageData` 只接受 `showAll`，服务端派生全部参与 Task，再把全部 Current Plan 与本人可见投入装配到同一画布和 Task 表，客户端没有注入 Task/Person ID 的入口。内容驱动画布在授权过滤后聚合 `min(startAt)/max(endAt)` 与 Current Plan 时间，向外对齐两个上海日历月；可导航范围额外并入今天两侧的上海日历月窗口，使“今天”始终可用，但无显式中心时仍优先定位内容。单次逻辑窗口最多显示三个上海日历年；兼容数据的 `plannedStartAt=null` 仍保留原值，只用 Task `createdAt` 作为只读 Start marker 和范围边界。查询按 180 天块读取，单块超过 5,000 对象时按上海自然日自动二分，并执行 20,000 对象/16 leaf block 双预算；计划锚点继续受总计 5,000 Node 预算约束。常规 DTO 返回稳定 `rowPageKey`；它用于识别结构版本，不代替每次查询的鉴权。Task 详情以全部有效 TaskMember 为人员范围并展示这些人员的全部投入；Project 详情以 ProjectMember 与全部所属 TaskMember 的并集为人员范围，人员投入不再按 Project Task 过滤，但计划锚点只取本 Project 全部 Task；资源计划完整展开 Project/Task/Person 集合，不做 Task/人员行分页。
+时间画布只查询未软删除的普通投入，不支持投入类型、状态和 includeActual 筛选；归档不进入业务查询。PERSONAL scope 的 Task universe 来自有效 TaskMember；`/progress` 通过 `getMyTimelinePageData` 只接受 `showAll`，服务端派生全部参与 Task，再把全部 Current Plan 与本人可见投入装配到同一画布和 Task 表，客户端没有注入 Task/Person ID 的入口。内容驱动画布在授权过滤后聚合 `min(startAt)/max(endAt)` 与 Current Plan 时间，向外对齐两个上海日历月；可导航范围额外并入今天两侧的上海日历月窗口，使“今天”始终可用，但无显式中心时仍优先定位内容。单次逻辑窗口最多显示三个上海日历年；兼容数据的 `plannedStartAt=null` 仍保留原值，只用 Task `createdAt` 作为只读 Start marker 和范围边界。查询按 180 天块读取，单块超过 5,000 对象时按上海自然日自动二分，并执行 20,000 对象/16 leaf block 双预算；计划锚点继续受总计 5,000 Node 预算约束。常规 DTO 返回稳定 `rowPageKey`；它用于识别结构版本，不代替每次查询的鉴权。Task 详情以全部有效 TaskMember 为人员范围并展示这些人员的全部投入；Project 详情以 ProjectMember 与全部所属 TaskMember 的并集为人员范围，人员投入不再按 Project Task 过滤，但计划锚点只取本 Project 全部 Task；资源计划完整展开 Project/Task/Person 集合，不做 Task/人员行分页。
 
 TimeCanvas 的显示尺度为 `WEEK/MONTH/QUARTER/YEAR`，密度分别为 40/12/4/1.5 px/day。所有 presentation 和业务模式默认 `WEEK`，URL 或调用方显式尺度优先；用户选择后 Resize、数据刷新和 Task 节点聚焦均不覆盖。工具栏只保留尺度选择与“今天”，不提供前后箭头；“今天”使用单次即时居中。视觉尺度不参与业务校验：Segment 与创建草稿变换固定吸附 30 分钟，Composer anchor 固定吸附一个上海自然日。桌面端只允许未保存虚线创建草稿横移、调整两端和跨当前可创建 Person 行；移动端不提供直接拖动，继续使用表单。详情 Dialog 使用完整上下文画布且只有目标 Segment 可编辑，变更历史返回中文安全 DTO 和游标分页。有效 Planned 创建或更新时间范围后，客户端在权威 `rowPageKey` 刷新后把目标及相邻块加入预加载集合。部分确认在事务锁行后强制覆盖起点等于权威 Planned 起点，要求实际内容和实际输出，Actual 与最多一条尾部 Planned 都继承原 Planned 的预期输出；既有审计、来源和 notification outbox 语义不变。
 
@@ -382,7 +382,6 @@ npm run cron                   # 启动定时任务（独立进程）
 | 每 10 分钟 | 上传清理队列与残留上传文件协调 |
 | 每 10 分钟 | 采购预算阈值扫描 |
 | 每 5 秒 | drain `NotificationOutbox`（进程内防重入） |
-| 每 5 秒 | 项目管理 Planned Segment 状态迁移（数据库 advisory lock） |
 | 每日 08:15 | Milestone 截止提醒、通知保留清理、项目管理完整性巡检 |
 
 与 Next.js 主进程分离，生产环境用 PM2、systemd 或下文 **Docker** 中的 `cron` 服务单独拉起。

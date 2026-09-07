@@ -151,15 +151,13 @@ export function mergeBlockRanges(
   return [...ranges.values()];
 }
 
-export function plannedRangeFromMutation(data: unknown): TimeCanvasRange | null {
+export function segmentRangeFromMutation(data: unknown): TimeCanvasRange | null {
   if (!data || typeof data !== "object" || !("segment" in data)) return null;
   const segment = data.segment;
   if (!segment || typeof segment !== "object") return null;
   const record = segment as Record<string, unknown>;
   if (
-    record.type !== "PLANNED" ||
-    record.status === "CONFIRMED" ||
-    record.status === "CANCELLED" ||
+    record.deletedAt != null ||
     typeof record.startAt !== "string" ||
     typeof record.endAt !== "string"
   ) {

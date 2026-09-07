@@ -78,7 +78,6 @@ export function TimeCanvas({
   onSelectionChange,
 }: TimeCanvasProps) {
   const display: Required<TimeCanvasDisplayOptions> = {
-    showActual: displayInput?.showActual ?? true,
     showBusy: displayInput?.showBusy ?? true,
     showInspector: displayInput?.showInspector ?? true,
   };
@@ -111,11 +110,9 @@ export function TimeCanvas({
   const filteredSegments = useMemo(
     () =>
       model.segments.filter(
-        (segment) =>
-          (display.showActual || segment.type !== "ACTUAL") &&
-          (display.showBusy || segment.type !== "BUSY"),
+        (segment) => display.showBusy || segment.type !== "BUSY",
       ),
-    [display.showActual, display.showBusy, model.segments],
+    [display.showBusy, model.segments],
   );
   const segmentsByRow = useMemo(
     () => groupByRow(filteredSegments),

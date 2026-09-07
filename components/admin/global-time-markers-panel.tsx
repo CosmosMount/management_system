@@ -327,7 +327,7 @@ export function AdminGlobalTimeMarkersPanel({
               model={canvasModel}
               initialCenterMs={center?.atMs}
               initialCenterRevision={center?.revision ?? 0}
-              display={{ showActual: false, showBusy: false, showInspector: false }}
+              display={{ showBusy: false, showInspector: false }}
               navigationRange={canvasModel.fullRange}
               onRequestCenter={requestCenter}
               interaction={pending

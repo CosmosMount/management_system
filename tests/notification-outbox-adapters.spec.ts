@@ -10,7 +10,8 @@ import { getGlobalSuperAdministratorOpenIds } from "../lib/account-authorization
 import { feedbackNotificationChannel } from "../lib/notification-channels/feedback";
 import { projectManagementNotificationChannel } from "../lib/notification-channels/project-management";
 import { resolveFeishuIdentityForUser } from "../lib/project-management/identity";
-import type { ProjectManagementNotificationPayload } from "../lib/project-management/notifications/contract";
+import { projectManagementNotificationPayloadSchema, type ProjectManagementNotificationPayload } from "../lib/project-management/notifications/contract";
+import { enqueueProjectManagementNotification, enqueueProjectManagementNotificationTx } from "../lib/project-management/notifications/events";
 import { prisma } from "../lib/prisma";
 import { withGlobalApprovalAdministratorGuardDisabled } from "./helpers/global-approval-administrator-guard";
 
@@ -1456,22 +1457,6 @@ test.describe("notification outbox channel adapters", () => {
         expectedButtonText: "查看详情",
       },
       {
-        name: "Segment focus",
-        payload: projectManagementPayload({
-          kind: "segment_confirmation_due",
-          category: "WORK_SEGMENT",
-          taskId: "pm-segment-task",
-          taskTitle: "投入确认任务",
-          entityType: "WorkSegment",
-          entityId: "pm-segment-card",
-          linkPath: "/progress?focus=pm-segment-card",
-        }),
-        botKind: "notification",
-        expectedUrl:
-          "http://127.0.0.1:3002/progress?focus=pm-segment-card",
-        expectedButtonText: "查看详情",
-      },
-      {
         name: "Terminal focus",
         payload: projectManagementPayload({
           kind: "termination_review_result",
@@ -1560,6 +1545,60 @@ test.describe("notification outbox channel adapters", () => {
     expect(authAppIds).toContain("approval-app");
   });
 
+  test("退役投入确认事件拒绝入队且历史载荷仍可解析", async () => {
+    const payload = projectManagementPayload({
+      kind: "segment_confirmation_due",
+      category: "WORK_SEGMENT",
+      entityType: "WorkSegment",
+      entityId: "pm-retired-segment",
+      linkPath: "/progress?focus=pm-retired-segment",
+    });
+    expect(projectManagementNotificationPayloadSchema.parse(payload).kind).toBe("segment_confirmation_due");
+    const eventKey = `${EVENT_PREFIX}retired-segment-enqueue`;
+    await expect(enqueueProjectManagementNotification({
+      eventKey,
+      botKind: "notification",
+      type: "segment_confirmation_due",
+      payload,
+    })).rejects.toThrow("投入确认功能已退役");
+    await expect(prisma.$transaction((tx) => enqueueProjectManagementNotificationTx(tx, {
+      eventKey,
+      type: "segment_confirmation_due",
+      payload,
+    }))).rejects.toThrow("投入确认功能已退役");
+    expect(await prisma.notificationOutbox.count({ where: { eventKey } })).toBe(0);
+    expect(authAppIds).toEqual([]);
+    expect(directMessageBodies).toEqual([]);
+  });
+
+  test("遗留投入确认记录在解析和投递前取消且不会重试", async () => {
+    for (const [index, legacy] of [
+      { type: "segment_confirmation_due", payload: "invalid legacy JSON" },
+      { type: "task_updated", payload: JSON.stringify({ kind: "segment_confirmation_due" }) },
+    ].entries()) {
+      const row = await prisma.notificationOutbox.create({
+        data: {
+          eventKey: `${EVENT_PREFIX}retired-segment-delivery-${index}`,
+          channel: "project-management",
+          botKind: "notification",
+          ...legacy,
+          recipients: { create: { openId: "ou_outbox_success", status: "PENDING" } },
+        },
+      });
+      await expect(projectManagementNotificationChannel.sendToRecipient(row, "ou_outbox_success")).rejects.toThrow("投入确认功能已退役");
+      expect(await drainNotificationOutbox(20, { ignoreDeliveryDisabled: true })).toBe(0);
+      const canceled = await prisma.notificationOutbox.findUniqueOrThrow({ where: { id: row.id }, include: { recipients: true } });
+      expect(canceled).toMatchObject({ status: "CANCELED", lockedUntil: null, lastError: expect.stringContaining("投入确认功能已退役") });
+      expect(canceled.payload).toBe(legacy.payload);
+      expect(canceled.recipients).toEqual([expect.objectContaining({ status: "CANCELED" })]);
+      expect(await drainNotificationOutbox(20, { ignoreDeliveryDisabled: true })).toBe(0);
+      expect((await prisma.notificationOutbox.findUniqueOrThrow({ where: { id: row.id } })).attempts).toBe(canceled.attempts);
+    }
+    expect(authAppIds).toEqual([]);
+    expect(directMessageBodies).toEqual([]);
+    expect(sendAttempts).toEqual([]);
+  });
+
   test("项目管理 adapter 遵守禁发 guard 且不会把跳过投递标记为成功", async () => {
     const eventKey = `${EVENT_PREFIX}project-management-delivery-disabled`;
     process.env.NOTIFICATION_DELIVERY_DISABLED = "true";
@@ -1567,24 +1606,24 @@ test.describe("notification outbox channel adapters", () => {
       eventKey,
       channel: "project-management",
       botKind: "notification",
-      type: "segment_confirmation_due",
+      type: "task_updated",
       payload: {
-        kind: "segment_confirmation_due",
+        kind: "task_updated",
         payloadVersion: 1,
         purpose: "notification",
-        category: "WORK_SEGMENT",
-        title: "投入确认禁发验证",
+        category: "TASK",
+        title: "任务更新禁发验证",
         summary: "禁发开关打开时不能将项目管理飞书通知标记为成功",
         actorName: "系统",
         taskId: "pm-task-id",
         taskTitle: "电控调试 Task",
-        entityType: "WorkSegment",
-        entityId: "pm-segment-disabled",
-        linkPath: "/progress?focus=pm-segment-disabled",
+        entityType: "Task",
+        entityId: "pm-task-disabled",
+        linkPath: "/progress/tasks/pm-task-disabled",
         recipientOpenIds: ["ou_outbox_success"],
         mandatory: true,
         appOrigin: "http://127.0.0.1:3002",
-        context: { status: "PENDING_CONFIRMATION" },
+        context: { status: "ACTIVE" },
       },
     });
 

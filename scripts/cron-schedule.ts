@@ -1,5 +1,4 @@
 export const NOTIFICATION_OUTBOX_CRON = "*/5 * * * * *";
-export const PROJECT_MANAGEMENT_SEGMENT_TRANSITIONS_CRON = "*/5 * * * * *";
 export const DEFAULT_CONTACT_SYNC_CRON = "30 8 * * *";
 export const UPLOAD_CLEANUP_CRON = "*/10 * * * *";
 export const PROCUREMENT_BUDGET_CRON = "*/10 * * * *";
@@ -12,7 +11,6 @@ export type CronJobHandlers = {
   runNotificationOutboxDrainWithoutOverlap: () => Promise<unknown>;
   runUploadCleanupDrain: () => Promise<unknown>;
   runProcurementBudgetScan: () => Promise<unknown>;
-  runProjectManagementSegmentTransitionScan: () => Promise<unknown>;
   runProjectManagementDailyMaintenance: () => Promise<unknown>;
   runProcurementDaily: () => Promise<unknown>;
 };
@@ -71,12 +69,6 @@ export function createCronJobDefinitions(
       PROCUREMENT_BUDGET_CRON,
       "cron.procurement_budget_scan.failed",
       "procurementBudgetCron",
-    ),
-    definition(
-      "runProjectManagementSegmentTransitionScan",
-      PROJECT_MANAGEMENT_SEGMENT_TRANSITIONS_CRON,
-      "cron.project_management_segment_transitions.failed",
-      "projectManagementSegmentTransitionsCron",
     ),
     definition(
       "runProjectManagementDailyMaintenance",

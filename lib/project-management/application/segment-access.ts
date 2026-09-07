@@ -52,7 +52,6 @@ export async function assertSegmentReferenceTx(
   input: {
     actor: ProjectManagementActor;
     personId: string;
-    type: WorkSegment["type"];
     taskId?: string | null;
     requireCreatableTask?: boolean;
   },
@@ -66,7 +65,7 @@ export async function assertSegmentReferenceTx(
         (member.role === "OWNER" || member.role === "PARTICIPANT"),
     )
   ) {
-    throw associationInvalidError("Task 关联投入只能属于负责人或参与人", {
+    throw associationInvalidError("任务关联投入只能属于负责人或参与人", {
       personId: ["请先将该人员添加为负责人或参与人"],
     });
   }
@@ -78,8 +77,8 @@ export async function assertSegmentReferenceTx(
     input.requireCreatableTask &&
     !isTaskCreatableForSegment(task.status)
   ) {
-    throw associationInvalidError("当前 Task 状态不允许创建或关联 Segment", {
-      taskId: ["当前 Task 状态不允许创建或关联 Segment"],
+    throw associationInvalidError("当前任务状态不允许新增或关联投入记录", {
+      taskId: ["当前任务状态不允许新增或关联投入记录"],
     });
   }
 }
@@ -112,7 +111,7 @@ export function assertCanManageSegment(
         (member.role === "OWNER" || member.role === "PARTICIPANT"),
     )
   ) {
-    throw associationInvalidError("Task 关联投入只能属于负责人或参与人", {
+    throw associationInvalidError("任务关联投入只能属于负责人或参与人", {
       personId: ["请先将该人员添加为负责人或参与人"],
     });
   }
@@ -135,44 +134,6 @@ export async function lockWorkSegmentTx(tx: PrismaTx, segmentId: string) {
     SELECT "id" FROM "WorkSegment" WHERE "id" = ${segmentId} FOR UPDATE
   `;
   if (rows.length === 0) throw notFoundError();
-}
-
-export async function lockAndLoadSegmentsTx(
-  tx: PrismaTx,
-  segmentIds: string[],
-) {
-  const uniqueIds = [...new Set(segmentIds)].sort();
-  if (uniqueIds.length === 0) return [];
-  await tx.$queryRaw<Array<{ id: string }>>`
-    SELECT "id"
-    FROM "WorkSegment"
-    WHERE "id" IN (${Prisma.join(uniqueIds)})
-    ORDER BY "id" ASC
-    FOR UPDATE
-  `;
-  const segments = await tx.workSegment.findMany({
-    where: { id: { in: uniqueIds } },
-    include: segmentInclude,
-  });
-  if (segments.length !== uniqueIds.length) throw notFoundError();
-  return segments.sort(
-    (left, right) => uniqueIds.indexOf(left.id) - uniqueIds.indexOf(right.id),
-  );
-}
-
-export async function loadSegmentsForPreflightTx(
-  tx: PrismaTx,
-  segmentIds: string[],
-) {
-  const uniqueIds = [...new Set(segmentIds)].sort();
-  const segments = await tx.workSegment.findMany({
-    where: { id: { in: uniqueIds } },
-    include: segmentInclude,
-  });
-  if (segments.length !== uniqueIds.length) throw notFoundError();
-  return segments.sort(
-    (left, right) => uniqueIds.indexOf(left.id) - uniqueIds.indexOf(right.id),
-  );
 }
 
 export async function lockSegmentAssociationTasksTx(
@@ -250,11 +211,6 @@ export function assertExpectedUpdatedAt(
     return;
   }
   throw staleSegmentError(segment);
-}
-
-export function assertUniqueIds(ids: string[], message: string) {
-  if (new Set(ids).size === ids.length) return;
-  throw validationError(message);
 }
 
 async function loadTaskForAuthorizationTx(

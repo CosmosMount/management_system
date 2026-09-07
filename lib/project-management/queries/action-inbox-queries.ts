@@ -1,7 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import {
   isSystemAdministrator,
-  segmentReadableWhere,
   taskReadableWhere,
 } from "@/lib/project-management/authorization";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
@@ -74,34 +73,6 @@ export async function getActionInbox({
         },
       },
     },
-  };
-  const confirmationSegmentWhere: Prisma.WorkSegmentWhereInput = {
-    AND: [
-      segmentReadableWhere(actor),
-      {
-        personId: actor.personId,
-        type: "PLANNED",
-        status: "PENDING_CONFIRMATION",
-      },
-      isSystemAdministrator(actor)
-        ? {}
-        : {
-            OR: [
-              { taskId: null },
-              {
-                task: {
-                  members: {
-                    some: {
-                      personId: actor.personId,
-                      role: { in: ["OWNER", "PARTICIPANT"] },
-                      removedAt: null,
-                    },
-                  },
-                },
-              },
-            ],
-          },
-    ],
   };
   const nextMilestoneWhere: Prisma.TaskNodeWhereInput = {
     AND: [
@@ -181,7 +152,6 @@ export async function getActionInbox({
   if (cursor) {
     await assertCursorAnchors({
       positions,
-      confirmationSegmentWhere,
       nextMilestoneWhere,
       nextTerminationWhere,
       milestoneReviewWhere,
@@ -196,7 +166,6 @@ export async function getActionInbox({
     positions,
     generatedAt,
     take,
-    confirmationSegmentWhere,
     nextMilestoneWhere,
     nextTerminationWhere,
     milestoneReviewWhere,

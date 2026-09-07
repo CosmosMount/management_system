@@ -58,11 +58,10 @@ function InspectorBody({ entity }: { entity: SelectedEntity }) {
   const segment = entity.value;
   return (
     <dl className="mt-4 grid gap-3 text-sm">
-      <Detail label="类型与状态" value={segment.type === "BUSY" ? "其他占用（详情受限）" : `${segment.type} · ${segment.status}`} />
+      <Detail label="投入" value={segment.type === "BUSY" ? "其他占用（详情受限）" : "投入记录"} />
       <Detail label="区间" value={formatRange(segment.startMs, segment.endMs)} />
       {segment.visibility === "FULL" && (
         <>
-          <Detail label="优先级" value={segment.priority ?? "未提供"} />
           <Detail label="权限" value={segment.permissions.canEdit ? "可编辑" : "只读"} />
         </>
       )}

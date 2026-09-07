@@ -75,7 +75,6 @@ test.describe("project management person kanban query", () => {
         accountId: target.account.id,
         personId: target.person.id,
         taskId: completedTask.taskId,
-        type: "ACTUAL",
         startAt: atHour(10),
         endAt: atHour(11),
         content: "看板终态 Task 历史投入",

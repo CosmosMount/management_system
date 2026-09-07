@@ -164,15 +164,6 @@ async function loadBusyBlocks(
           deletedAt: null,
           startAt: { lt: input.rangeEnd },
           endAt: { gt: input.rangeStart },
-          OR: [
-            {
-              type: "PLANNED",
-              status: {
-                in: ["PLANNED", "IN_PROGRESS", "PENDING_CONFIRMATION"],
-              },
-            },
-            { type: "ACTUAL", status: "CONFIRMED" },
-          ],
         },
         { NOT: segmentReadableWhere(actor) },
       ],

@@ -1,6 +1,6 @@
 # 消息发送与投递规则
 
-本文档描述当前通知基础设施、采购、反馈和项目管理通知接入。项目管理使用 `channel=project-management` 的 payload 契约、站内通知、Task 生命周期与 Segment 事件和飞书 adapter。资源冲突通知事件已下线。
+本文档描述当前通知基础设施、采购、反馈和项目管理通知接入。项目管理使用 `channel=project-management` 的 payload 契约、站内通知、Task 生命周期事件和飞书 adapter。资源冲突通知事件已下线。
 
 ## 架构与边界
 
@@ -21,7 +21,7 @@
 - 采购 CardKit 快照、卡片 sequence 和后续更新仍由采购领域维护；统一传输层负责创建并发送卡片，成功结果返回 `cardId`。
 - 采购通知持久化契约、订单明细映射和预算预警 payload 位于纯 `procurement-notification-contract`；采购收件人解析、订单消息、预算预警和每日汇总各自独立，`feishu.ts` 仅保留旧导入路径的兼容 re-export。
 
-项目管理必须在业务事务中使用稳定 `eventKey` 写入 outbox，由自己的 channel adapter 处理。项目管理 Server Action 和领域 service 不得直接导入飞书传输层。Task 生命周期和 Segment 只允许入队站内通知和 `channel=project-management` outbox；真实飞书消息只能由 `lib/notification-channels/project-management.ts` 通过统一传输层发送。
+项目管理必须在业务事务中使用稳定 `eventKey` 写入 outbox，由自己的 channel adapter 处理。项目管理 Server Action 和领域 service 不得直接导入飞书传输层。Task 生命周期只允许入队站内通知和 `channel=project-management` outbox；真实飞书消息只能由 `lib/notification-channels/project-management.ts` 通过统一传输层发送。
 
 Task、Project、Revision、风险和评论 mutation 的 Server Action 会在业务事务成功提交后调用非阻塞即时 drain，尽快 claim 新 outbox；`NOTIFICATION_DELIVERY_DISABLED`、allowlist 和 adapter 校验仍在原投递边界生效。独立 cron 每 5 秒扫描一次，继续作为进程提前退出、即时 drain 失败和积压消息的兜底；降低 cron 间隔不能替代业务生产者入队。
 
@@ -56,7 +56,6 @@ Task 生命周期服务和 Segment 服务会在同一业务事务中写站内通
 | Revision 驳回 | `revision_result` | 普通通知 | 创建人 + 所有 OWNER |
 | Revision 生效 | `revision_applied` | 普通通知 | 创建人 + 所有 OWNER |
 | Revision 取消 | `revision_cancelled` | 强制普通通知 | 创建人、当前 OWNER、操作人和活跃全局管理员，按账号去重 |
-| Planned Segment 到期待确认 | `segment_confirmation_due` | 普通通知 | Segment Person |
 | Terminal 结束申请 | `termination_review_submitted` | 审批请求 | 所有活跃全局管理员，按账号去重 |
 | Terminal 驳回/要求修订 | `termination_review_result` | 普通通知 | 提交人 + 所有 OWNER |
 | Task 结束申请通过 | `task_terminated` | 普通通知 | 有效 OWNER/PARTICIPANT |
@@ -91,11 +90,11 @@ Revision 生效事务先把目标 `TaskPlanVersion` 切换为 `CURRENT` 并更�
 
 入队 helper 和 adapter 会拒绝 `type/payload.kind` 不一致、payload 结构错误、错误机器人类型和越界审批用途，并对 `recipientOpenIds` 去重。项目管理飞书卡片包含操作人、项目、任务、通知内容、相关事项、通知时间和最多 6 项中文业务上下文；审批请求按钮显示“查看并审批”，普通通知按钮显示“查看详情”。项目管理链接在入队前统一解析，同一结果同时写入飞书 payload 和站内通知：有 Task 目标时进入 `/progress/tasks/<taskId>`，即使 payload 同时包含 `projectId` 也以 Task 为准；只有 Project 目标时进入 `/progress/projects/<projectId>`。既有合法深链继续保留，包括 Terminal 的 `focus`、Project 立项的 `#establishment` 锚点和 Segment 到期确认的 `/progress?focus=<segmentId>`。Task 或 Project 已删除时分别进入 `/progress/tasks` 或 `/progress/projects` 列表，避免详情页 404；只有账号安全等没有 Project/Task 业务目标的通知才允许使用 `/progress` 或其既有入口。adapter 在投递前还会为 `linkPath` 为空或仍为旧 `/progress` 的未发送 outbox 按 `taskId/projectId` 重新推导目标，不修改、不撤回也不重发已发送的历史卡片。
 
-用户可见内容统一使用“项目、任务、里程碑、计划修订、计划投入、结束节点”等中文名称；数据库实体名、枚举值、上下文字段名、收件人解析状态和策略版本不得展示。未知对象统一显示“相关事项”，未知上下文直接省略；旧 outbox 与旧站内通知中能够按完整系统模板识别的内部术语会在投递或读取时转换为中文，模板中的项目名、任务名和正文按原值重建。里程碑验收结果会在 payload 中明确记录摘要来自系统默认文案还是审批人意见；只有系统默认摘要允许做状态中文化，用户意见始终按原文展示。缺少来源标记的早期歧义摘要不做猜测性改写。`approval_request` 使用审批机器人用途；所有普通项目管理事件使用通知机器人，不能把审批机器人作为普通通知 fallback。里程碑、Terminal 提交以及计划修订创建/重新送审前会在全局审批人事务锁内重新查询收件人；没有有效全局管理员角色，或所有管理员都缺少 default tenant 非空飞书 openId 时，审批状态、审计、站内通知和 outbox 全部回滚，不生成无人可处理或确定无法投递的待审批记录。
+用户可见内容统一使用“项目、任务、里程碑、计划修订、投入记录、结束节点”等中文名称；数据库实体名、枚举值、上下文字段名、收件人解析状态和策略版本不得展示。未知对象统一显示“相关事项”，未知上下文直接省略；旧 outbox 与旧站内通知中能够按完整系统模板识别的内部术语会在投递或读取时转换为中文，模板中的项目名、任务名和正文按原值重建。里程碑验收结果会在 payload 中明确记录摘要来自系统默认文案还是审批人意见；只有系统默认摘要允许做状态中文化，用户意见始终按原文展示。缺少来源标记的早期歧义摘要不做猜测性改写。`approval_request` 使用审批机器人用途；所有普通项目管理事件使用通知机器人，不能把审批机器人作为普通通知 fallback。里程碑、Terminal 提交以及计划修订创建/重新送审前会在全局审批人事务锁内重新查询收件人；没有有效全局管理员角色，或所有管理员都缺少 default tenant 非空飞书 openId 时，审批状态、审计、站内通知和 outbox 全部回滚，不生成无人可处理或确定无法投递的待审批记录。
 
 资源冲突下线 migration 会删除 `RESOURCE_CONFLICT` 偏好与站内通知，以及 `resource_conflict_opened`、`resource_conflict_resolved` outbox；收件人投递行随 outbox 级联删除。已经送达飞书的历史消息无法撤回。
 
-Segment 到期确认事件键保持稳定幂等：`pm:segment:confirmation_due:<segmentId>:<endAt>`，安全处理链接为 `/progress?focus=<segmentId>`，在统一“我的工作”详情中完成确认。站内通知在业务事件键后追加 `:inapp:<accountId>`，飞书 outbox 追加 `:feishu`；重复提交依赖唯一事件键保持 exactly once，逐收件人失败只重试失败者。`scanSegmentTransitions` 会把到期 Planned 推到 `PENDING_CONFIRMATION`、把进行中的 Planned 置为 `IN_PROGRESS`，但不会自动生成 Actual。
+已退役的投入确认历史使用 `pm:segment:confirmation_due:<segmentId>:<endAt>` 和 `/progress?focus=<segmentId>`；旧链接不再提供确认操作，迁移保留的记录仍可定位，仅归档或已删除记录显示不可定位提示。站内通知在业务事件键后追加 `:inapp:<accountId>`，飞书 outbox 追加 `:feishu`；重复提交依赖唯一事件键保持 exactly once，逐收件人失败只重试失败者。`scanSegmentTransitions` 会把到期 Planned 推到 `PENDING_CONFIRMATION`、把进行中的 Planned 置为 `IN_PROGRESS`，但不会自动生成 Actual。
 
 统一账号和 Task 成员/角色数据库迁移只追加 `source=MIGRATION` 的 `DomainAuditEvent`，不创建站内通知或 outbox，不会在上线时批量触达真实用户。单一 Task 审批门禁迁移同样不新建通知：它保留已发送历史，冻结被撤出审批对应仍可重试的 outbox 与未完成 recipient，并把相关未读站内审批通知标记为已读。
 
@@ -220,3 +219,9 @@ Milestone deadline scanner 使用 Asia/Shanghai 业务日期，事件键为 `pm:
 - 传输层使用 mock HTTP 覆盖禁发、allowlist、`open_id`/`union_id`、双机器人凭据、fallback、text/交互卡片/CardKit 和错误脱敏。
 - 采购、反馈回归必须验证收件人、消息信息完整性、机器人用途以及 CardKit 跟踪；测试不得联系真实收件人。
 - 项目管理测试必须验证 outbox 入队、payloadVersion、机器人用途、生命周期事件、收件人去重、完整卡片内容、recipient 级重试和禁发回归；还必须解析卡片按钮并断言由受信任应用域名与规范 `linkPath` 组成的完整绝对 URL，覆盖旧 `/progress` payload 的投递时推导。自动化测试必须 mock 飞书 HTTP，不能联系真实收件人。
+
+## 投入确认事件退役
+
+普通投入的新增、修改、软删除只记录审计，不产生站内或飞书通知。`segment_confirmation_due` 已停止生产，专属状态扫描 cron 和提醒偏好入口移除，历史消息仍可安全读取。
+
+`20260907120000_unify_work_segments` 在停写并暂停 worker 后，只取消 `channel=project-management`、`type=segment_confirmation_due` 的 `PENDING/PROCESSING/FAILED` outbox 与未完成收件人，清除锁并记录退役原因；对应未读站内通知标记已读，已发送历史及其他事件不变。投递层拦截退役事件，不发信、不因旧载荷无限重试。禁发、allowlist、两类机器人及统一 outbox 保护不变。

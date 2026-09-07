@@ -120,39 +120,28 @@ export async function createSegment({
   accountId,
   personId,
   taskId = null,
-  type = "PLANNED",
-  status = type === "ACTUAL" ? "CONFIRMED" : "PLANNED",
   startAt,
   endAt,
   content = "S2 查询 Segment",
-  priority = "MEDIUM",
+  deletedAt = null,
 }: {
   id?: string;
   accountId: string;
   personId: string;
   taskId?: string | null;
-  type?: "PLANNED" | "ACTUAL";
-  status?:
-    | "PLANNED"
-    | "IN_PROGRESS"
-    | "PENDING_CONFIRMATION"
-    | "CONFIRMED"
-    | "CANCELLED";
   startAt: Date;
   endAt: Date;
   content?: string;
-  priority?: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  deletedAt?: Date | null;
 }) {
   return prisma.workSegment.create({
     data: {
       ...(id ? { id } : {}),
       personId,
-      type,
-      status,
       startAt,
       endAt,
       content,
-      priority,
+      deletedAt,
       taskId,
       createdByAccountId: accountId,
       updatedByAccountId: accountId,
@@ -318,12 +307,9 @@ export async function createAnchorTaskBatch({
       data: tasks.map((task) => ({
         id: randomUUID(),
         personId: targetPersonId,
-        type: "PLANNED" as const,
-        status: "PLANNED" as const,
         startAt: atHour(9),
         endAt: atHour(10),
         content: `${task.title} anchor candidate`,
-        priority: "LOW" as const,
         taskId: task.id,
         createdByAccountId: ownerAccountId,
       })),
@@ -420,7 +406,6 @@ export function canvasInput(
     rangeStart: RANGE_START,
     rangeEnd: RANGE_END,
     includeTaskAnchors: true,
-    includeActual: true,
     includeBusyBlocks: false,
     ...overrides,
   };

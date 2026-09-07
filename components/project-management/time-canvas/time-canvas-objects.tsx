@@ -45,7 +45,6 @@ export function SegmentBlock({
   scale,
   selected,
   activeFocusKey,
-  multiSelected,
   interaction,
   onSelect,
   onObjectFocus,
@@ -55,7 +54,6 @@ export function SegmentBlock({
   scale: ReturnType<typeof createTimeScale>;
   selected: boolean;
   activeFocusKey: string | null;
-  multiSelected: boolean;
   interaction: TimeCanvasInteractionOptions | undefined;
   onSelect: (selection: TimeCanvasSelection) => void;
   onObjectFocus: (key: string) => void;
@@ -118,27 +116,20 @@ export function SegmentBlock({
       className={cn(
         "absolute z-10 flex h-5 min-w-px items-center gap-1 overflow-hidden rounded px-1 text-left text-[10px] outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
         interaction?.desktopOnlySegmentTransform ? "sm:touch-none" : "touch-none",
-        segment.type === "PLANNED" &&
-          "border border-dashed border-sky-500/70 bg-sky-100/90 text-sky-950 dark:bg-sky-950/60 dark:text-sky-50",
-        segment.type === "ACTUAL" &&
-          "border border-emerald-600 bg-emerald-600 text-white",
+        segment.type === "WORK" &&
+          "border border-sky-600 bg-sky-100/90 text-sky-950 dark:bg-sky-950/60 dark:text-sky-50",
         segment.type === "BUSY" &&
           "border border-slate-400 bg-[repeating-linear-gradient(135deg,var(--muted),var(--muted)_4px,var(--background)_4px,var(--background)_8px)] text-foreground",
         selected && "ring-2 ring-primary ring-offset-1",
-        multiSelected && "ring-2 ring-amber-500 ring-offset-1",
         transform && "cursor-grabbing opacity-80",
       )}
       style={{ left: rect.left, width: rect.width, top: 8 + lane * 24 }}
       aria-pressed={selected}
       aria-label={segmentAriaLabel(segment)}
       title={segmentHoverTitle(segment)}
-      onClick={(event) => {
+      onClick={() => {
         if (suppressClickRef.current) {
           suppressClickRef.current = false;
-          return;
-        }
-        if (event.shiftKey && interaction?.onSegmentToggleSelection) {
-          interaction.onSegmentToggleSelection(segment.id);
           return;
         }
         onSelect(selected ? null : { kind: "SEGMENT", id: segment.id });
@@ -264,7 +255,7 @@ export function SegmentBlock({
       {segment.permissions.canResize && interaction?.onSegmentTransform && (
         <span
           className={cn(
-            "absolute inset-y-0 left-0 w-2 cursor-ew-resize",
+            "absolute inset-y-0 left-0 w-2 max-w-[25%] cursor-ew-resize",
             interaction.desktopOnlySegmentTransform && "hidden sm:block",
           )}
           data-resize-handle="start"
@@ -275,7 +266,7 @@ export function SegmentBlock({
       {segment.permissions.canResize && interaction?.onSegmentTransform && (
         <span
           className={cn(
-            "absolute inset-y-0 right-0 w-2 cursor-ew-resize",
+            "absolute inset-y-0 right-0 w-2 max-w-[25%] cursor-ew-resize",
             interaction.desktopOnlySegmentTransform && "hidden sm:block",
           )}
           data-resize-handle="end"
@@ -598,7 +589,7 @@ function directSegmentTransformAllowed(
     window.matchMedia("(min-width: 640px)").matches;
 }
 function segmentAriaLabel(segment: TimeCanvasSegment) {
-  const type = segment.type === "BUSY" ? "其他占用" : segment.type;
+  const type = segment.type === "BUSY" ? "其他占用" : "投入记录";
   const task = segment.type === "BUSY"
     ? ""
     : `，Task ${segment.taskTitle ?? "独立投入"}`;

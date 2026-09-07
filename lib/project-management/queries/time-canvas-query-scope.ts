@@ -171,12 +171,6 @@ function segmentFilterWhere(
     AND: [
       {
         deletedAt: null,
-        NOT: {
-          AND: [
-            { type: "PLANNED" },
-            { status: { in: ["CONFIRMED", "CANCELLED"] } },
-          ],
-        },
         ...(includeRange
           ? {
               startAt: { lt: input.rangeEnd },
@@ -193,9 +187,6 @@ function segmentFilterWhere(
           ? { personId: { in: [] } }
           : {},
       input.taskIds.length > 0 ? { taskId: { in: input.taskIds } } : {},
-      input.types.length > 0 ? { type: { in: input.types } } : {},
-      input.statuses.length > 0 ? { status: { in: input.statuses } } : {},
-      input.includeActual ? {} : { type: { not: "ACTUAL" } },
     ],
   };
 }

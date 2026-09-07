@@ -50,12 +50,9 @@ test.describe("project management canvas security project-management-canvas-adap
       const rows = Array.from({ length: 4_975 }, (_, index) => ({
         id: randomUUID(),
         personId: target.person.id,
-        type: "PLANNED" as const,
-        status: "PLANNED" as const,
         startAt,
         endAt,
         content: `批量可见 ${index}`,
-        priority: "LOW" as const,
         taskId: visibleTask.taskId,
         createdByAccountId: owner.account.id,
       }));
@@ -63,12 +60,9 @@ test.describe("project management canvas security project-management-canvas-adap
       const hiddenRows = Array.from({ length: 25 }, (_, index) => ({
         id: randomUUID(),
         personId: target.person.id,
-        type: "PLANNED" as const,
-        status: "PLANNED" as const,
         startAt,
         endAt,
         content: `批量隐藏 ${index}`,
-        priority: "LOW" as const,
         taskId: hiddenTask.taskId,
         createdByAccountId: hiddenOwner.account.id,
       }));
@@ -122,12 +116,9 @@ test.describe("project management canvas security project-management-canvas-adap
       const rows = Array.from({ length: 5_001 }, (_, index) => ({
         id: randomUUID(),
         personId: target.person.id,
-        type: "PLANNED" as const,
-        status: "PLANNED" as const,
         startAt: firstDayStart,
         endAt: firstDayEnd,
         content: `内容驱动密集投入 ${index}`,
-        priority: "LOW" as const,
         taskId: task.taskId,
         createdByAccountId: owner.account.id,
       }));
@@ -145,11 +136,8 @@ test.describe("project management canvas security project-management-canvas-adap
           scope: { kind: "TASK_SCOPED" as const, taskId: task.taskId },
           personIds: [],
           taskIds: [],
-          types: [],
-          statuses: [],
           groupBy: "PERSON" as const,
           includeTaskAnchors: true,
-          includeActual: true,
           includeBusyBlocks: false,
         };
         const denseDay = await getContentDrivenTimeCanvasData({
@@ -200,7 +188,7 @@ test.describe("project management canvas security project-management-canvas-adap
       } finally {
         await prisma.workSegment.updateMany({
           where: { taskId: task.taskId },
-          data: { status: "CANCELLED" },
+          data: { deletedAt: new Date() },
         });
       }
     });
@@ -246,11 +234,8 @@ test.describe("project management canvas security project-management-canvas-adap
           scope: { kind: "TASK_SCOPED", taskId: task.taskId },
           personIds: [],
           taskIds: [],
-          types: [],
-          statuses: [],
           groupBy: "PERSON",
           includeTaskAnchors: true,
-          includeActual: true,
           includeBusyBlocks: false,
         },
         load: { mode: "INITIAL" },
@@ -263,12 +248,12 @@ test.describe("project management canvas security project-management-canvas-adap
       expect(result.contentRange?.startMs).toBe(taskCreatedAt.createdAt.getTime());
     });
 
-  test("active Planned expands content-driven range with Shanghai month padding", async () => {
-      const owner = await createAccountPerson("Planned 范围 Owner");
+  test("non-deleted records expand content-driven range with Shanghai month padding", async () => {
+      const owner = await createAccountPerson("投入范围 Owner");
       await grantGlobalProjectAdministrator(owner.account.id);
       const task = await createTask({
         ownerAccountId: owner.account.id,
-        title: "Planned 范围 Task",
+        title: "投入范围 Task",
         team: "英雄",
         techGroup: "电控",
         members: [{ personId: owner.person.id, role: "OWNER" }],
@@ -283,25 +268,25 @@ test.describe("project management canvas security project-management-canvas-adap
           taskId: task.taskId,
           startAt: activeStart,
           endAt: activeEnd,
-          content: "有效 Planned 范围边界",
+          content: "未删除投入范围边界",
         }),
         createSegment({
           accountId: owner.account.id,
           personId: owner.person.id,
           taskId: task.taskId,
-          status: "CONFIRMED",
+          deletedAt: new Date(),
           startAt: new Date("2026-02-01T09:00:00.000+08:00"),
           endAt: new Date("2026-02-02T09:00:00.000+08:00"),
-          content: "已确认 Planned 不扩展范围",
+          content: "已删除记录不扩展范围",
         }),
         createSegment({
           accountId: owner.account.id,
           personId: owner.person.id,
           taskId: task.taskId,
-          status: "CANCELLED",
+          deletedAt: new Date(),
           startAt: new Date("2026-01-01T09:00:00.000+08:00"),
           endAt: new Date("2026-01-02T09:00:00.000+08:00"),
-          content: "已取消 Planned 不扩展范围",
+          content: "更早的已删除记录不扩展范围",
         }),
       ]);
 
@@ -313,11 +298,8 @@ test.describe("project management canvas security project-management-canvas-adap
           scope: { kind: "TASK_SCOPED", taskId: task.taskId },
           personIds: [],
           taskIds: [],
-          types: [],
-          statuses: [],
           groupBy: "PERSON",
           includeTaskAnchors: true,
-          includeActual: true,
           includeBusyBlocks: false,
         },
         load: { mode: "INITIAL" },
@@ -385,11 +367,8 @@ test.describe("project management canvas security project-management-canvas-adap
             scope: { kind: "TASK_SCOPED", taskId: task.taskId },
             personIds: [],
             taskIds: [],
-            types: [],
-            statuses: [],
             groupBy: "PERSON",
             includeTaskAnchors: true,
-            includeActual: true,
             includeBusyBlocks: false,
           },
           load: { mode: "INITIAL" },
@@ -409,11 +388,8 @@ test.describe("project management canvas security project-management-canvas-adap
             scope: { kind: "TASK_SCOPED", taskId: task.taskId },
             personIds: [],
             taskIds: [],
-            types: [],
-            statuses: [],
             groupBy: "PERSON",
             includeTaskAnchors: true,
-            includeActual: true,
             includeBusyBlocks: false,
           },
           preferredCenterMs: extremeMarker.markedAt.getTime(),
@@ -462,12 +438,9 @@ test.describe("project management canvas security project-management-canvas-adap
         Array.from({ length: 5_001 }, (_, index) => ({
           id: randomUUID(),
           personId: target.person.id,
-          type: "PLANNED" as const,
-          status: "PLANNED" as const,
           startAt: atHour(9),
           endAt: atHour(10),
           content: `Busy-only 隐藏 ${index}`,
-          priority: "LOW" as const,
           taskId: hiddenTask.taskId,
           createdByAccountId: hiddenOwner.account.id,
         })),
@@ -512,24 +485,18 @@ test.describe("project management canvas security project-management-canvas-adap
         ...Array.from({ length: 4_999 }, (_, index) => ({
           id: randomUUID(),
           personId: target.person.id,
-          type: "PLANNED" as const,
-          status: "PLANNED" as const,
           startAt: atHour(9),
           endAt: atHour(10),
           content: `Full+Busy 可见 ${index}`,
-          priority: "LOW" as const,
           taskId: visibleTask.taskId,
           createdByAccountId: owner.account.id,
         })),
         ...Array.from({ length: 2 }, (_, index) => ({
           id: randomUUID(),
           personId: target.person.id,
-          type: "PLANNED" as const,
-          status: "PLANNED" as const,
           startAt: atHour(9),
           endAt: atHour(10),
           content: `Full+Busy 隐藏 ${index}`,
-          priority: "LOW" as const,
           taskId: hiddenTask.taskId,
           createdByAccountId: hiddenOwner.account.id,
         })),

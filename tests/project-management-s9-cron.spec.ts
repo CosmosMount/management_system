@@ -6,7 +6,6 @@ import { withProjectManagementCronLock } from "../lib/project-management/applica
 import {
   createNonOverlappingCronRunner,
   NOTIFICATION_OUTBOX_CRON,
-  PROJECT_MANAGEMENT_SEGMENT_TRANSITIONS_CRON,
 } from "../scripts/cron-schedule";
 
 test.describe("project management S9 cron operations", () => {
@@ -35,11 +34,15 @@ test.describe("project management S9 cron operations", () => {
     ).resolves.toEqual({ acquired: true, result: "third" });
   });
 
-  test("fast cron schedules are valid six-field expressions", () => {
+  test("notification delivery retains its valid six-field schedule", () => {
     expect(NOTIFICATION_OUTBOX_CRON).toBe("*/5 * * * * *");
-    expect(PROJECT_MANAGEMENT_SEGMENT_TRANSITIONS_CRON).toBe("*/5 * * * * *");
     expect(cron.validate(NOTIFICATION_OUTBOX_CRON)).toBe(true);
-    expect(cron.validate(PROJECT_MANAGEMENT_SEGMENT_TRANSITIONS_CRON)).toBe(true);
+  });
+
+  test("retired segment transitions no longer expose a cron schedule", async () => {
+    expect(await import("../scripts/cron-schedule")).not.toHaveProperty(
+      "PROJECT_MANAGEMENT_SEGMENT_TRANSITIONS_CRON",
+    );
   });
 
   test("in-process cron guard skips overlap and releases after completion", async () => {

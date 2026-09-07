@@ -2890,49 +2890,42 @@ test.describe("project management P2/P3 task lifecycle services", () => {
   test("Revision approval atomically switches Current Plan without rewriting Task-associated segments", async () => {
     const fixture = await createActivatedFixture();
     const activeNode = await firstCurrentMilestone(fixture.taskId);
-    const planned = await prisma.workSegment.create({
+    const associatedRecord = await prisma.workSegment.create({
       data: {
         personId: fixture.member.person.id,
-        type: "PLANNED",
-        status: "PLANNED",
         startAt: new Date("2026-08-01T01:00:00.000Z"),
         endAt: new Date("2026-08-01T03:00:00.000Z"),
-        content: "旧节点计划投入",
+        content: "关联任务的投入记录",
         taskId: fixture.taskId,
         createdByAccountId: fixture.owner.account.id,
       },
     });
-    const overlappingPlanned = await prisma.workSegment.create({
+    const overlappingRecord = await prisma.workSegment.create({
       data: {
         personId: fixture.member.person.id,
-        type: "PLANNED",
-        status: "PLANNED",
         startAt: new Date("2026-08-01T02:00:00.000Z"),
         endAt: new Date("2026-08-01T04:00:00.000Z"),
-        content: "其他计划投入",
+        content: "重叠独立投入记录",
         createdByAccountId: fixture.owner.account.id,
       },
     });
-    const confirmedPlanned = await prisma.workSegment.create({
+    const historicalRecord = await prisma.workSegment.create({
       data: {
         personId: fixture.member.person.id,
-        type: "PLANNED",
-        status: "CONFIRMED",
         startAt: new Date("2026-08-01T04:00:00.000Z"),
         endAt: new Date("2026-08-01T05:00:00.000Z"),
-        content: "已确认旧节点计划投入",
+        content: "历史关联投入记录",
         taskId: fixture.taskId,
         createdByAccountId: fixture.owner.account.id,
       },
     });
-    const cancelledPlanned = await prisma.workSegment.create({
+    const deletedRecord = await prisma.workSegment.create({
       data: {
         personId: fixture.member.person.id,
-        type: "PLANNED",
-        status: "CANCELLED",
         startAt: new Date("2026-08-01T05:00:00.000Z"),
         endAt: new Date("2026-08-01T06:00:00.000Z"),
-        content: "已取消旧节点计划投入",
+        content: "已删除关联投入记录",
+        deletedAt: new Date("2026-08-02T06:00:00.000Z"),
         taskId: fixture.taskId,
         createdByAccountId: fixture.owner.account.id,
       },
@@ -3052,35 +3045,28 @@ test.describe("project management P2/P3 task lifecycle services", () => {
       where: {
         id: {
           in: [
-            planned.id,
-            overlappingPlanned.id,
-            confirmedPlanned.id,
-            cancelledPlanned.id,
+            associatedRecord.id,
+            overlappingRecord.id,
+            historicalRecord.id,
+            deletedRecord.id,
           ],
         },
       },
-      select: { id: true, status: true, updatedAt: true },
     });
-    expect(
-      persistedSegments.map((segment) => ({
-        id: segment.id,
-        status: segment.status,
-        updatedAt: segment.updatedAt.toISOString(),
-      })),
-    ).toEqual(
-      expect.arrayContaining(
-        [planned, overlappingPlanned, confirmedPlanned, cancelledPlanned].map(
-          (segment) => ({
-            id: segment.id,
-            status: segment.status,
-            updatedAt: segment.updatedAt.toISOString(),
-          }),
-        ),
-      ),
-    );
+    expect(persistedSegments).toHaveLength(4);
+    expect(persistedSegments).toEqual(expect.arrayContaining([
+      associatedRecord,
+      overlappingRecord,
+      historicalRecord,
+      deletedRecord,
+    ]));
     expect(
       await prisma.workSegmentChange.count({
-        where: { reason: "Revision 生效后原关联节点失效" },
+        where: {
+          segmentId: {
+            in: [associatedRecord.id, overlappingRecord.id, historicalRecord.id, deletedRecord.id],
+          },
+        },
       }),
     ).toBe(0);
     expect(
@@ -4144,11 +4130,8 @@ function memberlessDraftCanvasInput(taskId: string) {
     scope: { kind: "TASK_SCOPED", taskId },
     personIds: [],
     taskIds: [],
-    types: [],
-    statuses: [],
     groupBy: "PERSON",
     includeTaskAnchors: true,
-    includeActual: true,
     includeBusyBlocks: false,
   };
 }

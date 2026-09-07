@@ -2,18 +2,13 @@ import { Prisma } from "@prisma/client";
 import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 import {
-  authorize,
   segmentReadableWhere,
   taskReadableWhere,
-  type AuthorizationTaskResource,
 } from "@/lib/project-management/authorization";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import { notFoundError } from "@/lib/project-management/application/errors";
 import { toWorkSegmentDto } from "@/lib/project-management/application/segment-record";
-import {
-  taskPriorityLabels,
-  workSegmentStatusLabels,
-} from "@/lib/project-management/labels";
+import { segmentPermissions } from "@/lib/project-management/queries/time-canvas-dto";
 import {
   getWorkSegmentInputSchema,
   listWorkSegmentChangesInputSchema,
@@ -22,6 +17,7 @@ import {
 
 const segmentTaskSelect = {
   id: true,
+  createdByAccountId: true,
   title: true,
   team: true,
   techGroup: true,
@@ -37,43 +33,6 @@ const segmentTaskSelect = {
 const segmentQueryInclude = {
   person: { select: { displayName: true } },
   task: { select: segmentTaskSelect },
-  plannedSources: {
-    select: {
-      id: true,
-      actualSegmentId: true,
-      coveredStartAt: true,
-      coveredEndAt: true,
-      actualSegment: {
-        select: {
-          id: true,
-          personId: true,
-          startAt: true,
-          endAt: true,
-          deletedAt: true,
-          task: { select: segmentTaskSelect },
-        },
-      },
-    },
-  },
-  actualSources: {
-    select: {
-      id: true,
-      plannedSegmentId: true,
-      coveredStartAt: true,
-      coveredEndAt: true,
-      plannedSegment: {
-        select: {
-          id: true,
-          personId: true,
-          startAt: true,
-          endAt: true,
-          status: true,
-          deletedAt: true,
-          task: { select: segmentTaskSelect },
-        },
-      },
-    },
-  },
 } satisfies Prisma.WorkSegmentInclude;
 
 export async function listWorkSegments({
@@ -89,8 +48,6 @@ export async function listWorkSegments({
       segmentReadableWhere(actor),
       parsed.personId ? { personId: parsed.personId } : {},
       parsed.taskId ? { taskId: parsed.taskId } : {},
-      parsed.type ? { type: parsed.type } : {},
-      parsed.status ? { status: parsed.status } : {},
       timeOverlapWhere(parsed.startAt, parsed.endAt),
     ],
   };
@@ -217,11 +174,7 @@ const historyFieldLabels = {
   endAt: "结束时间",
   personId: "人员",
   content: "内容",
-  priority: "优先级",
-  expectedOutput: "预期输出",
-  actualOutput: "实际输出",
-  taskId: "Task",
-  status: "状态",
+  taskId: "任务",
 } as const;
 
 export function formatWorkSegmentChange(
@@ -230,20 +183,11 @@ export function formatWorkSegmentChange(
 ) {
   const before = jsonObject(row.before);
   const after = jsonObject(row.after);
-  const splitFromPartialConfirmation = Boolean(
-    stringValue(after?.sourcePartialConfirmSegmentId),
-  );
   const action = (() => {
     switch (row.action) {
       case "CREATE": return "创建投入";
       case "UPDATE": return "修改投入";
-      case "SPLIT": return splitFromPartialConfirmation
-        ? "部分确认后生成剩余计划"
-        : "拆分计划（历史）";
-      case "MERGE": return "合并计划（历史）";
-      case "CONFIRM": return "确认投入";
-      case "CANCEL": return "取消计划";
-      case "DELETE": return "删除实际投入";
+      case "DELETE": return "删除投入";
       default:
         logger.warn("pm.segment_history.unknown_action", {
           module: "project-management",
@@ -302,18 +246,6 @@ function formatHistoryValue(
   if (field === "startAt" || field === "endAt") {
     const date = stringValue(value);
     return date ? formatHistoryDate(date) : "未填写";
-  }
-  if (field === "priority") {
-    const priority = stringValue(value);
-    return priority && priority in taskPriorityLabels
-      ? taskPriorityLabels[priority as keyof typeof taskPriorityLabels]
-      : "未填写";
-  }
-  if (field === "status") {
-    const status = stringValue(value);
-    return status && status in workSegmentStatusLabels
-      ? workSegmentStatusLabels[status as keyof typeof workSegmentStatusLabels]
-      : "未填写";
   }
   const text = typeof value === "string" ? value.trim() : value == null ? "" : String(value);
   if (!text) return "未填写";
@@ -410,71 +342,7 @@ function toWorkSegmentDetailDto(
     }),
     personName: segment.person.displayName,
     task,
-    plannedSources: segment.plannedSources
-      .filter((source) => sourceSegmentVisible(actor, source.actualSegment))
-      .map((source) => ({
-        id: source.id,
-        actualSegmentId: source.actualSegmentId,
-        coveredStartAt: source.coveredStartAt.toISOString(),
-        coveredEndAt: source.coveredEndAt.toISOString(),
-        actualSegment: {
-          id: source.actualSegment.id,
-          startAt: source.actualSegment.startAt.toISOString(),
-          endAt: source.actualSegment.endAt.toISOString(),
-          deletedAt: source.actualSegment.deletedAt?.toISOString() ?? null,
-        },
-      })),
-    actualSources: segment.actualSources
-      .filter((source) => sourceSegmentVisible(actor, source.plannedSegment))
-      .map((source) => ({
-        id: source.id,
-        plannedSegmentId: source.plannedSegmentId,
-        coveredStartAt: source.coveredStartAt.toISOString(),
-        coveredEndAt: source.coveredEndAt.toISOString(),
-        plannedSegment: {
-          id: source.plannedSegment.id,
-          startAt: source.plannedSegment.startAt.toISOString(),
-          endAt: source.plannedSegment.endAt.toISOString(),
-          status: source.plannedSegment.status,
-        },
-      })),
-  };
-}
-
-type SegmentQueryPayload = Prisma.WorkSegmentGetPayload<{
-  include: typeof segmentQueryInclude;
-}>;
-
-function sourceSegmentVisible(
-  actor: ProjectManagementActor,
-  segment: {
-    personId: string;
-    deletedAt?: Date | null;
-    task: NonNullable<SegmentQueryPayload["task"]> | null;
-  },
-) {
-  if (segment.deletedAt) return false;
-  return authorize({
-    actor,
-    action: "segment.view",
-    resource: {
-      type: "segment",
-      personId: segment.personId,
-      task: segment.task ? taskResource(segment.task) : null,
-    },
-  }).allowed;
-}
-
-function taskResource(
-  task: NonNullable<SegmentQueryPayload["task"]>,
-): AuthorizationTaskResource {
-  return {
-    type: "task",
-    id: task.id,
-    team: task.team,
-    techGroup: task.techGroup,
-    status: task.status,
-    priority: task.priority,
-    members: task.members,
+    taskTitle: segment.task?.title ?? null,
+    permissions: segmentPermissions(actor, segment),
   };
 }

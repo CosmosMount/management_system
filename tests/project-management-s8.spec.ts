@@ -26,10 +26,8 @@ import {
   type ActionInboxPage,
 } from "../lib/project-management/queries/action-inbox-queries";
 import { getMyWorkDashboard } from "../lib/project-management/queries/dashboard-queries";
-import {
-  getPersonalDueSegments,
-  getTimeCanvasData,
-} from "../lib/project-management/queries/time-canvas-queries";
+import { listWorkSegments } from "../lib/project-management/queries/resource-queries";
+import { getTimeCanvasData } from "../lib/project-management/queries/time-canvas-queries";
 
 test.describe("project management S8 dashboard and notifications", () => {
   test.beforeAll(async () => {
@@ -42,41 +40,30 @@ test.describe("project management S8 dashboard and notifications", () => {
     });
   });
 
-  test("Action Inbox filters by permission and sorts overdue work first", async () => {
+  test("elapsed own and other people's records never become Action Inbox items", async () => {
     const user = await createActor("S8 Inbox");
     const other = await createActor("S8 Other");
     const now = new Date();
     const own = await prisma.workSegment.create({
       data: {
         personId: user.personId,
-        type: "PLANNED",
-        status: "PENDING_CONFIRMATION",
         startAt: new Date(now.getTime() - 2 * 60 * 60_000),
         endAt: new Date(now.getTime() - 60 * 60_000),
-        content: `S8 待确认 ${randomUUID()}`,
+        content: `S8 已结束普通投入 ${randomUUID()}`,
         createdByAccountId: user.accountId,
       },
     });
     const hidden = await prisma.workSegment.create({
       data: {
         personId: other.personId,
-        type: "PLANNED",
-        status: "PENDING_CONFIRMATION",
         startAt: new Date(now.getTime() - 2 * 60 * 60_000),
         endAt: new Date(now.getTime() - 60 * 60_000),
-        content: `S8 隐藏待确认 ${randomUUID()}`,
+        content: `S8 其他人员已结束投入 ${randomUUID()}`,
         createdByAccountId: other.accountId,
       },
     });
     const inbox = await getActionInbox({ actor: user, input: { limit: 100 } });
-    expect(inbox.items).toContainEqual(
-      expect.objectContaining({
-        id: `segment-confirm:${own.id}`,
-        kind: "SEGMENT_CONFIRMATION",
-        severity: "HIGH",
-        href: `/progress?focus=${own.id}`,
-      }),
-    );
+    expect(inbox.items.some((item) => item.id.includes(own.id))).toBe(false);
     expect(inbox.items.some((item) => item.id.includes(hidden.id))).toBe(false);
     expect(inbox.criticalCount).toBe(0);
   });
@@ -220,15 +207,12 @@ test.describe("project management S8 dashboard and notifications", () => {
     const segment = await prisma.workSegment.create({
       data: {
         personId: user.personId,
-        type: "PLANNED",
-        status: "PENDING_CONFIRMATION",
         startAt: new Date(now.getTime() - 2 * 60 * 60_000),
         endAt: new Date(now.getTime() - 60 * 60_000),
         content: "S8 Inbox cursor segment",
         createdByAccountId: user.accountId,
       },
     });
-    expectedIds.unshift(`segment-confirm:${segment.id}`);
 
     const loadedIds: string[] = [];
     const generatedTimes = new Set<string>();
@@ -247,6 +231,7 @@ test.describe("project management S8 dashboard and notifications", () => {
     } while (cursor);
 
     expect(loadedIds).toEqual(expectedIds);
+    expect(loadedIds).not.toContain(`segment-confirm:${segment.id}`);
     expect(new Set(loadedIds).size).toBe(loadedIds.length);
     expect(generatedTimes).toEqual(new Set([now.toISOString()]));
     if (!firstCursor) throw new Error("Action Inbox 测试缺少分页游标");
@@ -262,7 +247,16 @@ test.describe("project management S8 dashboard and notifications", () => {
     const tampered = Buffer.from(JSON.stringify(decoded)).toString("base64url");
     await prisma.workSegment.update({
       where: { id: segment.id },
-      data: { status: "CONFIRMED" },
+      data: { content: "普通投入编辑不会生成待办" },
+    });
+    const unchangedQueue = await getActionInbox({
+      actor: user,
+      input: { cursor: firstCursor, limit: 2 },
+    });
+    expect(unchangedQueue.items.map((item) => item.id)).toEqual(expectedIds.slice(2, 4));
+    await prisma.milestoneNode.update({
+      where: { nodeId: expectedIds[1].replace("task-next-node:", "") },
+      data: { expectedCompletedAt: new Date(now.getTime() + 10 * 60 * 60_000) },
     });
     const expectedCursorFailure = {
       code: "VALIDATION_ERROR",
@@ -365,8 +359,6 @@ test.describe("project management S8 dashboard and notifications", () => {
     const segment = await prisma.workSegment.create({
       data: {
         personId: actor.personId,
-        type: "PLANNED",
-        status: "PENDING_CONFIRMATION",
         startAt: new Date("1900-01-01T07:00:00.000Z"),
         endAt: relevantAt,
         content: "S8 混合流投入确认",
@@ -440,7 +432,6 @@ test.describe("project management S8 dashboard and notifications", () => {
     const expectedIds = [
       `project-establishment:${projectRequestId}`,
       `revision:${revisionId}`,
-      `segment-confirm:${segment.id}`,
     ];
     const loadedIds: string[] = [];
     const generatedTimes = new Set<string>();
@@ -461,85 +452,61 @@ test.describe("project management S8 dashboard and notifications", () => {
     }
 
     expect(loadedIds).toEqual(expectedIds);
+    expect(loadedIds).not.toContain(`segment-confirm:${segment.id}`);
     expect(new Set(loadedIds).size).toBe(loadedIds.length);
     expect(generatedTimes).toEqual(new Set([now.toISOString()]));
   });
 
-  test("personal due queue paginates without gaps and excludes removed Task members", async () => {
-    const user = await createActor("S8 Due pagination");
+  test("ordinary record pagination excludes deleted records and preserves person filters", async () => {
+    const user = await createActor("S8 Record pagination");
+    const other = await createActor("S8 Record other person");
     const now = new Date("2030-08-11T08:00:00.000Z");
-    const dueSegments = [];
+    const records = [];
     for (const offsetHours of [6, 4, 2]) {
-      dueSegments.push(await prisma.workSegment.create({
+      records.push(await prisma.workSegment.create({
         data: {
           personId: user.personId,
-          type: "PLANNED",
-          status: "PENDING_CONFIRMATION",
           startAt: new Date(now.getTime() - (offsetHours + 1) * 60 * 60_000),
           endAt: new Date(now.getTime() - offsetHours * 60 * 60_000),
-          content: `S8 分页待确认 ${offsetHours}`,
+          content: `S8 普通分页记录 ${offsetHours}`,
           createdByAccountId: user.accountId,
         },
       }));
     }
-    const task = await createActiveTaskWithMilestone(
-      user,
-      new Date("2030-09-01T08:00:00.000Z"),
-    );
-    const removedTaskSegment = await prisma.workSegment.create({
+    const otherRecord = await prisma.workSegment.create({
       data: {
-        personId: user.personId,
-        taskId: task.taskId,
-        type: "PLANNED",
-        status: "PENDING_CONFIRMATION",
-        startAt: new Date(now.getTime() - 9 * 60 * 60_000),
-        endAt: new Date(now.getTime() - 8 * 60 * 60_000),
-        content: "S8 已移出 Task 的待确认",
-        createdByAccountId: user.accountId,
+        personId: other.personId,
+        startAt: records[0]!.startAt,
+        endAt: records[0]!.endAt,
+        content: "其他人员记录不应混入筛选",
+        createdByAccountId: other.accountId,
       },
     });
-    await prisma.taskMember.updateMany({
-      where: { taskId: task.taskId, personId: user.personId, removedAt: null },
-      data: { removedAt: new Date(now.getTime() - 30_000) },
-    });
-
-    const firstPage = await getPersonalDueSegments({
+    const firstPage = await listWorkSegments({
       actor: user,
-      input: { limit: 2 },
-      now,
+      input: { personId: user.personId, limit: 2 },
     });
-    expect(firstPage.items.map((item) => item.id)).toEqual([
-      dueSegments[0]!.id,
-      dueSegments[1]!.id,
-    ]);
-    expect(firstPage.items.some((item) => item.id === removedTaskSegment.id)).toBe(false);
+    expect(firstPage.items.map((item) => item.id)).toEqual(records.slice(0, 2).map((record) => record.id));
     expect(firstPage.nextCursor).toEqual(expect.any(String));
-    expect(firstPage.nextCursor).not.toContain(dueSegments[1]!.id);
-
-    await prisma.workSegment.update({
-      where: { id: dueSegments[1]!.id },
-      data: { status: "CONFIRMED" },
-    });
-
-    const secondPage = await getPersonalDueSegments({
+    const secondPage = await listWorkSegments({
       actor: user,
-      input: { cursor: firstPage.nextCursor, limit: 2 },
-      now,
+      input: { personId: user.personId, cursor: firstPage.nextCursor, limit: 2 },
     });
-    expect(secondPage.items.map((item) => item.id)).toEqual([dueSegments[2]!.id]);
+    expect(secondPage.items.map((item) => item.id)).toEqual([records[2]!.id]);
     expect(secondPage.nextCursor).toBeNull();
-
-    const other = await createActor("S8 Due cursor other");
-    for (const invalidCursor of ["malformed", firstPage.nextCursor]) {
-      const targetActor = invalidCursor === "malformed" ? user : other;
-      await expect(
-        getPersonalDueSegments({
-          actor: targetActor,
-          input: { cursor: invalidCursor, limit: 2 },
-          now,
-        }).catch((error) => toProjectManagementServiceError(error).code),
-      ).resolves.toBe("VALIDATION_ERROR");
-    }
+    expect([...firstPage.items, ...secondPage.items].map((item) => item.id)).not.toContain(otherRecord.id);
+    await prisma.workSegment.update({
+      where: { id: records[1]!.id },
+      data: { deletedAt: now },
+    });
+    const afterDelete = await listWorkSegments({
+      actor: user,
+      input: { personId: user.personId, limit: 2 },
+    });
+    expect(afterDelete.items.map((item) => item.id)).toEqual([records[0]!.id, records[2]!.id]);
+    expect(afterDelete.nextCursor).toBeNull();
+    const inbox = await getActionInbox({ actor: user, input: { limit: 100 }, now });
+    expect(inbox.items).toEqual([]);
   });
 
   test("Action Inbox shows only the active Task node and suppresses an overlapping review", async () => {
@@ -587,7 +554,6 @@ test.describe("project management S8 dashboard and notifications", () => {
       rangeEnd: "2026-10-01T00:00:00.000Z",
       groupBy: "TASK" as const,
       includeTaskAnchors: true,
-      includeActual: true,
       includeBusyBlocks: false,
     };
     const loadCapabilities = async (canvasActor = owner) => {
@@ -830,8 +796,6 @@ test.describe("project management S8 dashboard and notifications", () => {
     await prisma.workSegment.createMany({
       data: Array.from({ length: 21 }, (_, index) => ({
         personId: user.personId,
-        type: "PLANNED" as const,
-        status: "PENDING_CONFIRMATION" as const,
         startAt: new Date(2026, 8, 1, index),
         endAt: new Date(2026, 8, 1, index + 1),
         content: `S8 dashboard pending ${index}`,
@@ -845,8 +809,9 @@ test.describe("project management S8 dashboard and notifications", () => {
     ]);
     expect(dashboard.activeTasks).toHaveLength(12);
     expect(dashboard.activeTaskCount).toBe(13);
-    expect(inbox.items).toHaveLength(20);
-    expect(inbox.totalCount).toBe(34);
+    expect(inbox.items).toHaveLength(13);
+    expect(inbox.totalCount).toBe(13);
+    expect(dashboard).not.toHaveProperty("pendingConfirmations");
   });
 
   test("ordinary Feishu preference is honored while in-app and mandatory delivery remain", async () => {
@@ -1169,7 +1134,7 @@ function actionInboxFailure(operation: Promise<unknown>) {
 function actionInboxSnapshotItem(id: string): ActionInboxItem {
   return {
     id,
-    kind: "SEGMENT_CONFIRMATION",
+    kind: "TASK_NEXT_NODE",
     title: id,
     summary: "快照合并测试",
     projectId: null,
@@ -1180,10 +1145,10 @@ function actionInboxSnapshotItem(id: string): ActionInboxItem {
     nodeType: null,
     nodeStatus: null,
     relevantAt: "2030-10-01T08:00:00.000Z",
-    timeLabel: "投入结束",
+    timeLabel: "预计完成",
     severity: "HIGH",
     href: `/progress?focus=${id}`,
-    actionLabel: "确认投入",
+    actionLabel: "查看节点",
   };
 }
 

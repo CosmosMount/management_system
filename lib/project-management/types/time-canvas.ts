@@ -7,8 +7,6 @@ import {
   taskNodeTypeValues,
   taskPriorityValues,
   taskStatusValues,
-  workSegmentStatusValues,
-  workSegmentTypeValues,
 } from "@/lib/project-management/types/contract-values";
 import { z } from "zod";
 
@@ -103,9 +101,6 @@ export const segmentPermissionsDtoSchema = z
     canEdit: z.boolean(),
     canMove: z.boolean(),
     canResize: z.boolean(),
-    canMerge: z.boolean(),
-    canCancel: z.boolean(),
-    canConfirm: z.boolean(),
     canSoftDelete: z.boolean(),
   })
   .strict();
@@ -210,14 +205,10 @@ export const timeSegmentDtoSchema = z
     visibility: z.literal("FULL"),
     id: dtoIdSchema,
     personId: dtoIdSchema,
-    type: z.enum(workSegmentTypeValues),
-    status: z.enum(workSegmentStatusValues),
+    type: z.literal("WORK"),
     startAt: dtoAbsoluteDateTimeSchema,
     endAt: dtoAbsoluteDateTimeSchema,
     content: z.string(),
-    priority: taskPrioritySchema,
-    expectedOutput: z.string(),
-    actualOutput: z.string(),
     taskId: dtoIdSchema.nullable(),
     taskTitle: z.string().trim().min(1).nullable(),
     permissions: segmentPermissionsDtoSchema,

@@ -2,6 +2,7 @@
 import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../lib/prisma";
+import { createTask } from "./helpers/project-management-canvas-security-fixtures";
 import { createRisk } from "../lib/project-management/application/collaboration-service";
 import { markInAppNotificationRead as markInAppNotificationReadService } from "../lib/project-management/application/notification-service";
 import {
@@ -60,6 +61,8 @@ test.describe("project management UI project-management-ui-routes-responsive", (
           .getByRole("link", { name: fixture.taskTitle, exact: true }),
       ).toBeVisible();
       await expect(page.getByText("未读通知")).toBeVisible();
+      await expect(page.getByRole("heading", { name: /待确认投入|到期投入/ })).toHaveCount(0);
+      await expect(page.getByRole("link", { name: /^确认投入：/ })).toHaveCount(0);
       await expect(page.getByRole("link", { name: "资源冲突" })).toHaveCount(0);
       await expectHealthyPage(page);
 
@@ -439,7 +442,7 @@ test.describe("project management UI project-management-ui-routes-responsive", (
           .getByRole("option", { name: fixture.taskTitle, exact: true })
           .click();
         await brushCreate.getByLabel("内容").fill(fixture.brushCreateContent);
-        await brushCreate.getByLabel("预期输出").fill("P6 UI 桌面创建预期产出");
+        await expect(brushCreate.getByLabel("预期输出")).toHaveCount(0);
         await brushCreate.getByRole("button", { name: "创建", exact: true }).click();
         await expect(page.getByText("已创建投入记录")).toBeVisible();
         await expect(page.getByTestId("time-canvas-creation-range")).toHaveCount(0);
@@ -448,10 +451,10 @@ test.describe("project management UI project-management-ui-routes-responsive", (
             personId: fixture.member.person.id,
             content: fixture.brushCreateContent,
           },
-          select: { taskId: true, expectedOutput: true },
+          select: { taskId: true, content: true },
         })).toEqual({
           taskId: fixture.taskId,
-          expectedOutput: "P6 UI 桌面创建预期产出",
+          content: fixture.brushCreateContent,
         });
         await page.goto(
           `/progress/resources?people=${fixture.member.person.id},${fixture.owner.person.id}&all=0&center=2026-08-10T10%3A30%3A00.000Z&scale=week`,
@@ -542,7 +545,7 @@ test.describe("project management UI project-management-ui-routes-responsive", (
           "none",
         );
         await quickCreate.getByLabel("内容").fill(fixture.mobileCreateContent);
-        await quickCreate.getByLabel("预期输出").fill("P6 UI 移动端创建预期产出");
+        await expect(quickCreate.getByLabel("预期输出")).toHaveCount(0);
         const actionUrl = "**/progress/resources**";
         let actionAborted = false;
         const abortFirstAction = async (route: import("@playwright/test").Route) => {
@@ -563,9 +566,9 @@ test.describe("project management UI project-management-ui-routes-responsive", (
         await expect
           .poll(() => prisma.workSegment.findFirst({
             where: { content: fixture.mobileCreateContent },
-            select: { expectedOutput: true },
+            select: { content: true },
           }))
-          .toEqual({ expectedOutput: "P6 UI 移动端创建预期产出" });
+          .toEqual({ content: fixture.mobileCreateContent });
         await expect(
           page.getByRole("button", {
             name: new RegExp(fixture.mobileCreateContent),
@@ -594,8 +597,8 @@ test.describe("project management UI project-management-ui-routes-responsive", (
           .getByRole("heading", { name: "P6 UI 可确认计划" }),
       ).toBeVisible();
       const commonInspector = page.getByTestId("segment-inspector");
-      await expect(commonInspector.getByText("类型", { exact: true })).toBeVisible();
-      await expect(commonInspector.getByText("状态", { exact: true })).toBeVisible();
+      await expect(commonInspector.getByText("类型", { exact: true })).toHaveCount(0);
+      await expect(commonInspector.getByText("状态", { exact: true })).toHaveCount(0);
       await expect(commonInspector.getByText("所属人员", { exact: true })).toBeVisible();
       await expect(commonInspector.getByText("关联 Task", { exact: true })).toBeVisible();
       await expect(
@@ -620,45 +623,25 @@ test.describe("project management UI project-management-ui-routes-responsive", (
           () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
         ),
       ).toBe(true);
-      const confirmationForm = commonInspector.getByRole("form", {
-        name: "确认计划",
-      });
-      await expect(confirmationForm.getByLabel("预期输出")).toHaveCount(0);
-      await expect(confirmationForm.getByText("P6 UI 计划预期产出")).toBeVisible();
-      const actualOutput = confirmationForm.getByLabel("实际输出");
-      await confirmationForm.getByRole("button", { name: "完整确认", exact: true }).click();
-      await expect(actualOutput).toHaveAttribute("aria-invalid", "true");
-      await expect(actualOutput).toBeFocused();
-      expect(
-        await page.evaluate(
-          () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
-        ),
-      ).toBe(true);
-      await actualOutput.fill(`P6 UI ${testInfo.project.name} 实际产出`);
-      await expect(actualOutput).not.toHaveAttribute("aria-invalid", "true");
-      await confirmationForm.getByRole("button", { name: "完整确认", exact: true }).click();
-      await expect(page.getByText("已完整确认并生成 Actual")).toBeVisible();
-      await expect
-        .poll(async () => {
-          const row = await prisma.workSegment.findUniqueOrThrow({
-            where: { id: fixture.confirmableSegmentId },
-            select: { status: true },
-          });
-          return row.status;
-        })
-        .toBe("CONFIRMED");
-      await expect
-        .poll(() => prisma.workSegment.findFirst({
-          where: {
-            type: "ACTUAL",
-            actualSources: { some: { plannedSegmentId: fixture.confirmableSegmentId } },
-          },
-          select: { expectedOutput: true, actualOutput: true },
-        }))
-        .toEqual({
-          expectedOutput: "P6 UI 计划预期产出",
-          actualOutput: `P6 UI ${testInfo.project.name} 实际产出`,
-        });
+      const editForm = commonInspector.getByRole("form", { name: "编辑投入详情" });
+      for (const removedLabel of ["预期输出", "实际输出", "优先级", "修改原因"]) {
+        await expect(editForm.getByLabel(removedLabel)).toHaveCount(0);
+      }
+      await expect(commonInspector.getByRole("button", { name: "完整确认", exact: true })).toHaveCount(0);
+      const content = editForm.getByLabel("内容", { exact: true });
+      await content.fill("");
+      await editForm.getByRole("button", { name: "保存基本信息", exact: true }).click();
+      await expect(content).toHaveAttribute("aria-invalid", "true");
+      await expect(content).toBeFocused();
+      const updatedContent = `P6 UI ${testInfo.project.name} 更新工作内容`;
+      await content.fill(updatedContent);
+      await expect(content).not.toHaveAttribute("aria-invalid", "true");
+      await editForm.getByRole("button", { name: "保存基本信息", exact: true }).click();
+      await expect(page.getByText("已更新投入详情")).toBeVisible();
+      await expect.poll(() => prisma.workSegment.findUniqueOrThrow({
+        where: { id: fixture.confirmableSegmentId },
+        select: { content: true, taskId: true, deletedAt: true },
+      })).toEqual({ content: updatedContent, taskId: fixture.taskId, deletedAt: null });
       await expectHealthyPage(page);
       expect(pageErrors).toEqual([]);
 
@@ -904,6 +887,7 @@ test.describe("project management UI project-management-ui-routes-responsive", (
       page.getByRole("heading", { name: "待办与审批" }),
     ).toBeVisible();
     await expect(page.getByTestId("action-inbox")).toBeVisible();
+    await expect(page.getByRole("link", { name: /^确认投入：/ })).toHaveCount(0);
     await expect(page.getByText("下一个节点", { exact: true })).toBeVisible();
     await expect(
       page.getByText("P6 UI 第一阶段", { exact: true }),
@@ -943,22 +927,22 @@ test.describe("project management UI project-management-ui-routes-responsive", (
     const user = await createAccountPerson(`S8 Inbox UI ${randomUUID()}`);
     const baseTime = Date.now() - 60 * 60_000;
     const longContent = "超长待办内容".repeat(80);
-    const segments = Array.from({ length: 55 }, (_, index) => ({
-      id: randomUUID(),
-      personId: user.person.id,
-      type: "PLANNED" as const,
-      status: "PENDING_CONFIRMATION" as const,
-      startAt: new Date(baseTime + index * 60_000),
-      endAt: new Date(baseTime + (index + 1) * 60_000),
-      content:
-        index === 0
-          ? longContent
-          : `分页待办 ${String(index + 1).padStart(2, "0")}`,
-      createdByAccountId: user.account.id,
-    }));
-    await prisma.workSegment.createMany({
-      data: segments,
-    });
+    const tasks = [];
+    for (let index = 0; index < 55; index += 1) {
+      const content = index === 0 ? longContent : `分页待办 ${String(index + 1).padStart(2, "0")}`;
+      const task = await createTask({
+        ownerAccountId: user.account.id,
+        title: `S8 分页 Task ${index}`,
+        team: "英雄",
+        techGroup: "电控",
+        members: [{ personId: user.person.id, role: "OWNER" }],
+      });
+      await prisma.milestoneNode.update({
+        where: { nodeId: task.milestoneNodeId },
+        data: { goal: content, expectedCompletedAt: new Date(baseTime + (index + 1) * 60_000) },
+      });
+      tasks.push({ id: task.taskId, content });
+    }
     await loginAsTestUser(context, baseURL, {
       openId: user.openId,
       name: user.person.displayName,
@@ -973,10 +957,10 @@ test.describe("project management UI project-management-ui-routes-responsive", (
       inbox.getByText("已加载 50 / 55", { exact: true }),
     ).toBeVisible();
 
-    const retiredNonAnchor = segments[0]!;
-    await prisma.workSegment.update({
+    const retiredNonAnchor = tasks[0]!;
+    await prisma.task.update({
       where: { id: retiredNonAnchor.id },
-      data: { status: "CONFIRMED" },
+      data: { status: "COMPLETED" },
     });
     await inbox.getByRole("button", { name: "加载更多" }).click();
     await expect(inbox.getByTestId("action-inbox-item")).toHaveCount(55);
@@ -993,7 +977,7 @@ test.describe("project management UI project-management-ui-routes-responsive", (
     expect(
       new Set(
         await inbox
-          .getByRole("link", { name: /^确认投入：/ })
+          .getByRole("link", { name: /^查看节点：/ })
           .evaluateAll((links) =>
             links.map((link) => link.getAttribute("aria-label")),
           ),
@@ -1010,10 +994,10 @@ test.describe("project management UI project-management-ui-routes-responsive", (
       inbox.getByText(retiredNonAnchor.content, { exact: true }),
     ).toHaveCount(0);
 
-    const staleAnchor = segments[50]!;
-    await prisma.workSegment.update({
+    const staleAnchor = tasks[50]!;
+    await prisma.task.update({
       where: { id: staleAnchor.id },
-      data: { status: "CONFIRMED" },
+      data: { status: "COMPLETED" },
     });
     const invalidCursorResponse = page.waitForResponse(
       (response) =>
@@ -1095,17 +1079,17 @@ test.describe("project management UI project-management-ui-routes-responsive", (
       inbox.getByText("已加载全部 53 项", { exact: true }),
     ).toBeVisible();
     const actionLabels = await inbox
-      .getByRole("link", { name: /^确认投入：/ })
+      .getByRole("link", { name: /^查看节点：/ })
       .evaluateAll((links) =>
         links.map((link) => link.getAttribute("aria-label")),
       );
     expect(actionLabels).toEqual(
-      segments
+      tasks
         .filter(
           (segment) =>
             segment.id !== retiredNonAnchor.id && segment.id !== staleAnchor.id,
         )
-        .map((segment) => `确认投入：${segment.content}`),
+        .map((segment) => `查看节点：${segment.content}`),
     );
     expect(new Set(actionLabels).size).toBe(actionLabels.length);
     await expectHealthyPage(page);

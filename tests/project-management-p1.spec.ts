@@ -51,8 +51,6 @@ test.describe("project management P1 schema, identity and authorization", () => 
       prisma.workSegment.create({
         data: {
           personId: person.id,
-          type: "PLANNED",
-          status: "PLANNED",
           startAt: new Date("2026-07-28T10:00:00.000Z"),
           endAt: new Date("2026-07-28T09:00:00.000Z"),
           content: "非法时间",
@@ -65,11 +63,9 @@ test.describe("project management P1 schema, identity and authorization", () => 
       prisma.workSegment.create({
         data: {
           personId: person.id,
-          type: "ACTUAL",
-          status: "CONFIRMED",
           startAt: new Date("2026-07-28T09:00:00.000Z"),
           endAt: new Date("2026-07-28T10:00:00.000Z"),
-          content: "有效 Actual Segment",
+          content: "有效投入记录",
           createdByAccountId: account.id,
         },
       }),

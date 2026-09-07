@@ -2,7 +2,6 @@ import type { TaskNodeStatus, TaskNodeType } from "@prisma/client";
 import type { ActionInboxStream } from "@/lib/project-management/queries/action-inbox-cursor";
 
 export type ActionInboxKind =
-  | "SEGMENT_CONFIRMATION"
   | "TASK_NEXT_NODE"
   | "MILESTONE_REVIEW"
   | "REVISION_REVIEW"

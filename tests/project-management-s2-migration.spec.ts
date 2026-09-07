@@ -7,8 +7,6 @@ import {
   TaskPriority,
   TaskStatus,
   TerminationOutcome,
-  WorkSegmentStatus,
-  WorkSegmentType,
 } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
@@ -38,8 +36,6 @@ import {
   terminationOutcomeValues,
   timeCanvasGroupByValues,
   timeCanvasScopeKindValues,
-  workSegmentStatusValues,
-  workSegmentTypeValues,
 } from "../lib/project-management/types/contract-values";
 import {
   BUSY_BLOCK_DTO_FIELDS,
@@ -57,14 +53,9 @@ import {
   reviseRejectedRevisionInputSchema,
 } from "../lib/project-management/validations/lifecycle";
 import {
-  batchCreatePlannedSegmentsInputSchema,
-  batchConfirmPlannedSegmentsInputSchema,
-  confirmPlannedSegmentInputSchema,
-  createActualSegmentInputSchema,
   createWorkSegmentInputSchema,
-  partiallyConfirmSegmentInputSchema,
+  softDeleteWorkSegmentInputSchema,
   updateWorkSegmentInputSchema,
-  workSegmentTypeValues as segmentValidationWorkSegmentTypeValues,
 } from "../lib/project-management/validations/segments";
 import {
   updateActiveTaskInputSchema,
@@ -630,8 +621,7 @@ test("S2 contract values are a browser-safe leaf aligned with Prisma enums", asy
     TaskMemberRole.PARTICIPANT,
   ]);
   expect(terminationOutcomeValues).toEqual(Object.values(TerminationOutcome));
-  expect(workSegmentTypeValues).toEqual(Object.values(WorkSegmentType));
-  expect(workSegmentStatusValues).toEqual(Object.values(WorkSegmentStatus));
+  expect(source).not.toMatch(/\bworkSegment(?:Type|Status)Values\b/);
   expect(timeCanvasScopeKindValues).toEqual([
     "TASK_SCOPED",
     "PERSONAL",
@@ -644,7 +634,6 @@ test("S2 contract values are a browser-safe leaf aligned with Prisma enums", asy
     "RESOURCE_PLANNER",
   ]);
   expect(timeCanvasGroupByValues).toEqual(["PERSON", "TASK"]);
-  expect(segmentValidationWorkSegmentTypeValues).toBe(workSegmentTypeValues);
 });
 
 test("S2 Task mutations expose session-bound Server Actions and anchor loads recheck authorization", async () => {
@@ -1260,14 +1249,10 @@ test("S2 canvas output schemas retain grouping and privacy invariants", () => {
     visibility: "FULL",
     id: randomUUID(),
     personId: segmentPersonId,
-    type: "PLANNED",
-    status: "PLANNED",
+    type: "WORK",
     startAt: "2026-08-01T09:00:00.000Z",
     endAt: "2026-08-01T10:00:00.000Z",
     content: "可见投入",
-    priority: "HIGH",
-    expectedOutput: "",
-    actualOutput: "",
     taskId: segmentTaskId,
     taskTitle: "可见 Task",
     permissions: segmentPermissions(),
@@ -1275,11 +1260,21 @@ test("S2 canvas output schemas retain grouping and privacy invariants", () => {
     versionToken: updatedAt,
   });
   expect(segment).toMatchObject({
+    type: "WORK",
     content: "可见投入",
     versionToken: updatedAt,
     permissions: segmentPermissions(),
   });
   for (const forbiddenField of [
+    { type: "PLANNED" },
+    { type: "ACTUAL" },
+    { status: "PLANNED" },
+    { priority: "HIGH" },
+    { expectedOutput: "预期输出" },
+    { actualOutput: "实际输出" },
+    { sourceSplitFromId: randomUUID() },
+    { plannedSources: [] },
+    { actualSources: [] },
     { allocation: 50 },
     { conflictIds: [] },
     { capabilities: segment.permissions },
@@ -1300,6 +1295,12 @@ test("S2 canvas output schemas retain grouping and privacy invariants", () => {
       permissions: { ...segment.permissions, canResolveConflict: true },
     }).success,
   ).toBe(false);
+  for (const permission of ["canMerge", "canCancel", "canConfirm"]) {
+    expect(timeSegmentDtoSchema.safeParse({
+      ...segment,
+      permissions: { ...segment.permissions, [permission]: true },
+    }).success).toBe(false);
+  }
 
   const busyPersonId = randomUUID();
   const busy = busyBlockDtoSchema.parse({
@@ -1529,144 +1530,77 @@ test("S2 canvas output schemas retain grouping and privacy invariants", () => {
   ).toBe(false);
 });
 
-test("Segment schemas reject retired fields and require confirmation actual output", () => {
+test("ordinary Segment CRUD schemas require versions and reject retired workflow fields", () => {
   const segmentId = randomUUID();
   const personId = randomUUID();
   const startAt = "2026-08-01T09:00:00.000Z";
   const endAt = "2026-08-01T10:00:00.000Z";
-  const plannedCreate = {
-    personId,
-    type: "PLANNED" as const,
-    startAt,
-    endAt,
-    content: "旧客户端创建",
-  };
-  expect(createWorkSegmentInputSchema.safeParse(plannedCreate).success).toBe(true);
-  expect(
-    createWorkSegmentInputSchema.safeParse({ ...plannedCreate, allocation: 50 })
-      .success,
-  ).toBe(false);
-
-  const actualCreate = {
-    personId,
-    startAt,
-    endAt,
-    content: "旧客户端 Actual 创建",
-    actualOutput: "完成",
-    sources: [],
-  };
-  expect(createActualSegmentInputSchema.safeParse(actualCreate).success).toBe(true);
-  expect(
-    createActualSegmentInputSchema.safeParse({
-      ...actualCreate,
-      completionPercent: 100,
-    }).success,
-  ).toBe(false);
-  expect(
-    createActualSegmentInputSchema.safeParse({ ...actualCreate, allocation: 50 })
-      .success,
-  ).toBe(false);
-
-  const batchCreate = { segments: [plannedCreate] };
-  expect(batchCreatePlannedSegmentsInputSchema.safeParse(batchCreate).success).toBe(
-    true,
-  );
-  expect(
-    batchCreatePlannedSegmentsInputSchema.safeParse({
-      segments: [{ ...plannedCreate, allocation: 50 }],
-    }).success,
-  ).toBe(false);
-
-  const update = {
-    segmentId,
-    expectedUpdatedAt: startAt,
-    content: "旧客户端更新",
-  };
+  const create = { personId, startAt, endAt, content: "工作内容" };
+  const update = { segmentId, expectedUpdatedAt: startAt, content: "更新工作内容" };
+  const remove = { segmentId, expectedUpdatedAt: startAt };
+  expect(createWorkSegmentInputSchema.safeParse(create).success).toBe(true);
   expect(updateWorkSegmentInputSchema.safeParse(update).success).toBe(true);
-  expect(
-    updateWorkSegmentInputSchema.safeParse({ ...update, allocation: 50 }).success,
-  ).toBe(false);
+  expect(softDeleteWorkSegmentInputSchema.safeParse(remove).success).toBe(true);
 
-  const fullConfirmation = {
-    segmentId,
-    expectedUpdatedAt: startAt,
-    actual: { actualOutput: "完整确认" },
-  };
-  expect(confirmPlannedSegmentInputSchema.safeParse(fullConfirmation).success).toBe(
-    true,
-  );
-  expect(
-    confirmPlannedSegmentInputSchema.safeParse({
-      segmentId,
-      expectedUpdatedAt: startAt,
-    }).success,
-  ).toBe(false);
-  expect(
-    confirmPlannedSegmentInputSchema.safeParse({
-      ...fullConfirmation,
-      actual: { ...fullConfirmation.actual, allocation: 50 },
-    }).success,
-  ).toBe(false);
-  expect(
-    confirmPlannedSegmentInputSchema.safeParse({
-      ...fullConfirmation,
-      actual: {
-        ...fullConfirmation.actual,
-        expectedOutput: "不得覆盖计划预期输出",
-      },
-    }).success,
-  ).toBe(false);
+  for (const taskId of [null, randomUUID()]) {
+    expect(createWorkSegmentInputSchema.safeParse({ ...create, taskId }).success).toBe(true);
+    expect(updateWorkSegmentInputSchema.safeParse({ ...update, taskId }).success).toBe(true);
+  }
+  expect(updateWorkSegmentInputSchema.safeParse({ ...update, personId }).success).toBe(false);
+  for (const expectedUpdatedAt of [undefined, null, "invalid-version"]) {
+    expect(updateWorkSegmentInputSchema.safeParse({ ...update, expectedUpdatedAt }).success).toBe(false);
+    expect(softDeleteWorkSegmentInputSchema.safeParse({ ...remove, expectedUpdatedAt }).success).toBe(false);
+  }
 
-  const batchConfirmation = {
-    segments: [{
-      segmentId,
-      expectedUpdatedAt: startAt,
-      actualOutput: "批量完整确认",
-    }],
-  };
-  expect(
-    batchConfirmPlannedSegmentsInputSchema.safeParse(batchConfirmation).success,
-  ).toBe(true);
-  expect(
-    batchConfirmPlannedSegmentsInputSchema.safeParse({
-      segments: [{ segmentId, expectedUpdatedAt: startAt }],
-    }).success,
-  ).toBe(false);
+  const retiredFields: Array<Record<string, unknown>> = [
+    { type: "PLANNED" },
+    { type: "ACTUAL" },
+    { type: "WORK" },
+    { status: "PENDING_CONFIRMATION" },
+    { priority: "MEDIUM" },
+    { expectedOutput: "预期输出" },
+    { actualOutput: "实际输出" },
+    { sourceSplitFromId: randomUUID() },
+    { plannedSources: [] },
+    { actualSources: [] },
+    { sources: [] },
+    { actual: { actualOutput: "旧确认载荷" } },
+    { coveredStartAt: startAt },
+    { coveredEndAt: endAt },
+    { segments: [create] },
+    { segmentIds: [segmentId] },
+    { moves: [{ ...update, startAt, endAt }] },
+    { reason: "旧操作原因" },
+    { allocation: 50 },
+    { completionPercent: 100 },
+    { createdByAccountId: randomUUID() },
+  ];
+  for (const forbiddenField of retiredFields) {
+    const field = Object.keys(forbiddenField)[0];
+    expect(createWorkSegmentInputSchema.safeParse({ ...create, ...forbiddenField }).success, field).toBe(false);
+    expect(updateWorkSegmentInputSchema.safeParse({ ...update, ...forbiddenField }).success, field).toBe(false);
+    expect(softDeleteWorkSegmentInputSchema.safeParse({ ...remove, ...forbiddenField }).success, field).toBe(false);
+  }
 
-  const partialConfirmation = {
-    segmentId,
-    expectedUpdatedAt: startAt,
-    coveredStartAt: startAt,
-    coveredEndAt: endAt,
-    actual: {
-      content: "部分完成投入",
-      actualOutput: "部分确认",
-    },
-  };
-  expect(
-    partiallyConfirmSegmentInputSchema.safeParse(partialConfirmation).success,
-  ).toBe(true);
-  expect(
-    partiallyConfirmSegmentInputSchema.safeParse({
-      ...partialConfirmation,
-      actual: { content: "部分完成投入" },
-    }).success,
-  ).toBe(false);
-  expect(
-    partiallyConfirmSegmentInputSchema.safeParse({
-      ...partialConfirmation,
-      actual: { ...partialConfirmation.actual, allocation: 50 },
-    }).success,
-  ).toBe(false);
-  expect(
-    partiallyConfirmSegmentInputSchema.safeParse({
-      ...partialConfirmation,
-      actual: {
-        ...partialConfirmation.actual,
-        expectedOutput: "不得覆盖计划预期输出",
-      },
-    }).success,
-  ).toBe(false);
+  for (const content of ["", "   ", "内容".repeat(1_001)]) {
+    expect(createWorkSegmentInputSchema.safeParse({ ...create, content }).success).toBe(false);
+    expect(updateWorkSegmentInputSchema.safeParse({ ...update, content }).success).toBe(false);
+  }
+  expect(createWorkSegmentInputSchema.safeParse({ ...create, content: "文".repeat(2_000) }).success).toBe(true);
+  expect(updateWorkSegmentInputSchema.safeParse({ ...update, content: "文".repeat(2_000) }).success).toBe(true);
+  for (const invalidEnd of [startAt, "2026-08-01T08:00:00.000Z", "2026-09-01T09:00:00.001Z"]) {
+    expect(createWorkSegmentInputSchema.safeParse({ ...create, endAt: invalidEnd }).success).toBe(false);
+    expect(updateWorkSegmentInputSchema.safeParse({ ...update, startAt, endAt: invalidEnd }).success).toBe(false);
+  }
+  expect(createWorkSegmentInputSchema.safeParse({ ...create, endAt: "2026-09-01T09:00:00.000Z" }).success).toBe(true);
+  expect(updateWorkSegmentInputSchema.safeParse({ ...update, startAt, endAt: "2026-09-01T09:00:00.000Z" }).success).toBe(true);
+  for (const year of [2020, 2030]) {
+    expect(createWorkSegmentInputSchema.safeParse({
+      ...create,
+      startAt: new Date(Date.UTC(year, 7, 1, 9)),
+      endAt: new Date(Date.UTC(year, 7, 1, 10)),
+    }).success).toBe(true);
+  }
 
   const canvasInput = {
     scope: { kind: "PERSONAL" as const },
@@ -1675,12 +1609,15 @@ test("Segment schemas reject retired fields and require confirmation actual outp
     groupBy: "PERSON" as const,
   };
   expect(getTimeCanvasDataInputSchema.safeParse(canvasInput).success).toBe(true);
-  expect(
-    getTimeCanvasDataInputSchema.safeParse({
-      ...canvasInput,
-      includeConflicts: true,
-    }).success,
-  ).toBe(false);
+  for (const retiredFilter of [
+    { includeConflicts: true },
+    { includeActual: true },
+    { includeTerminalPlanned: true },
+    { types: ["PLANNED"] },
+    { statuses: ["PENDING_CONFIRMATION"] },
+  ]) {
+    expect(getTimeCanvasDataInputSchema.safeParse({ ...canvasInput, ...retiredFilter }).success).toBe(false);
+  }
 });
 
 test("S2 option page schemas expose only minimal public fields", () => {
@@ -2246,9 +2183,6 @@ function segmentPermissions() {
     canEdit: true,
     canMove: true,
     canResize: true,
-    canMerge: true,
-    canCancel: true,
-    canConfirm: true,
     canSoftDelete: true,
   };
 }

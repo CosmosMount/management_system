@@ -60,7 +60,7 @@ import {
   inFlightBlockRequestKey,
   mergeBlockRanges,
   normalizeResourcePlanUrl,
-  plannedRangeFromMutation,
+  segmentRangeFromMutation,
   replaceViewportUrl,
   resizeRowsForSegments,
   settleInFlightBlockRequest,
@@ -76,7 +76,7 @@ import {
 } from "@/components/project-management/resource-planner-panels";
 
 type TaskOption = TaskOptionPage["items"][number];
-type PendingPlannedRange = {
+type PendingSegmentRange = {
   range: TimeCanvasRange;
   previousRowPageKey?: string;
 };
@@ -217,11 +217,6 @@ export function ResourcePlannerCanvasClient({
         cachedSegments,
       ),
       segments: cachedSegments
-        .filter(
-          (segment) =>
-            segment.type !== "PLANNED" ||
-            (segment.status !== "CONFIRMED" && segment.status !== "CANCELLED"),
-        )
         .map((segment) =>
           readOnly
             ? {
@@ -231,9 +226,6 @@ export function ResourcePlannerCanvasClient({
                   canEdit: false,
                   canMove: false,
                   canResize: false,
-                  canMerge: false,
-                  canCancel: false,
-                  canConfirm: false,
                   canSoftDelete: false,
                 },
               }
@@ -302,9 +294,9 @@ export function ResourcePlannerCanvasClient({
     centerMs: initialCenterMs,
     zoom: initialZoom ?? "WEEK",
   });
-  const [pendingPlannedRange, setPendingPlannedRange] =
-    useState<PendingPlannedRange | null>(null);
-  const pendingPlannedRangeRef = useRef<PendingPlannedRange | null>(null);
+  const [pendingSegmentRange, setPendingSegmentRange] =
+    useState<PendingSegmentRange | null>(null);
+  const pendingSegmentRangeRef = useRef<PendingSegmentRange | null>(null);
   const [dialogDirty, setDialogDirty] = useState(false);
   const [detail, setDetail] = useState<WorkSegmentDetail | null>(null);
   const [detailRange, setDetailRange] = useState<{ startMs: number; endMs: number } | null>(null);
@@ -349,7 +341,7 @@ export function ResourcePlannerCanvasClient({
   });
   const centerNavigationTargetRef = useRef<number | null>(null);
   const draftViewportCenterRef = useRef<number | null>(null);
-  const plannedMutationViewportCenterRef = useRef<number | null>(null);
+  const segmentMutationViewportCenterRef = useRef<number | null>(null);
   const viewportUrlTimerRef = useRef<number | null>(null);
   const staleRefreshFocusRef = useRef<string | null>(null);
   const applyViewportCenter = useCallback((centerMs: number | undefined) => {
@@ -419,8 +411,8 @@ export function ResourcePlannerCanvasClient({
       if (draftViewportCenterRef.current !== null) {
         draftViewportCenterRef.current = nextCenter;
       }
-      if (plannedMutationViewportCenterRef.current !== null) {
-        plannedMutationViewportCenterRef.current = nextCenter;
+      if (segmentMutationViewportCenterRef.current !== null) {
+        segmentMutationViewportCenterRef.current = nextCenter;
       }
       if (persistViewportInUrl) {
         persistedViewportRef.current.centerMs = nextCenter;
@@ -820,12 +812,12 @@ export function ResourcePlannerCanvasClient({
     ) {
       return;
     }
-    const activePendingPlannedRange = pendingPlannedRangeRef.current ??
-      pendingPlannedRange;
+    const activePendingSegmentRange = pendingSegmentRangeRef.current ??
+      pendingSegmentRange;
     const preservedCenter = createDraft
       ? draftViewportCenterRef.current ?? persistedViewportRef.current.centerMs
-      : activePendingPlannedRange
-        ? plannedMutationViewportCenterRef.current ??
+      : activePendingSegmentRange
+        ? segmentMutationViewportCenterRef.current ??
           persistedViewportRef.current.centerMs
         : persistedViewportRef.current.centerMs;
     viewportUrlTimerRef.current = window.setTimeout(() => {
@@ -847,7 +839,7 @@ export function ResourcePlannerCanvasClient({
   }, [
     createDraft,
     currentZoom,
-    pendingPlannedRange,
+    pendingSegmentRange,
     persistViewportInUrl,
     presentationCenterMs,
     viewportRange,
@@ -865,14 +857,14 @@ export function ResourcePlannerCanvasClient({
       return;
     }
     const requestedRowPageKey = initialModel.rowPageKey;
-    const activePendingPlannedRange = pendingPlannedRangeRef.current ??
-      pendingPlannedRange;
+    const activePendingSegmentRange = pendingSegmentRangeRef.current ??
+      pendingSegmentRange;
     const desiredRanges = mergeBlockRanges(
       blockRangesForViewport(initialModel.range, viewportRange),
-      activePendingPlannedRange
+      activePendingSegmentRange
         ? blockRangesForViewport(
           initialModel.range,
-          activePendingPlannedRange.range,
+          activePendingSegmentRange.range,
         )
         : [],
     );
@@ -988,15 +980,15 @@ export function ResourcePlannerCanvasClient({
         cachedBlocksRef.current = cacheResult.blocks;
         setCachedBlocks(cacheResult.blocks);
         const retainedKeys = new Set(cacheResult.blocks.map((block) => block.key));
-        const activePendingPlannedRange = pendingPlannedRangeRef.current ??
-          pendingPlannedRange;
+        const activePendingSegmentRange = pendingSegmentRangeRef.current ??
+          pendingSegmentRange;
         const desiredKeys = new Set(
           mergeBlockRanges(
             blockRangesForViewport(initialModel.range, viewportRangeRef.current),
-            activePendingPlannedRange
+            activePendingSegmentRange
               ? blockRangesForViewport(
                 initialModel.range,
-                activePendingPlannedRange.range,
+                activePendingSegmentRange.range,
               )
               : [],
           ).map(blockKey),
@@ -1066,26 +1058,26 @@ export function ResourcePlannerCanvasClient({
     initialModel.rowPageKey,
     initialModel.rows,
     openSegmentId,
-    pendingPlannedRange,
+    pendingSegmentRange,
     presentationCenterMs,
     router,
     selection,
     viewportRange,
   ]);
   useEffect(() => {
-    const activePendingPlannedRange = pendingPlannedRangeRef.current ??
-      pendingPlannedRange;
-    if (!activePendingPlannedRange) return;
+    const activePendingSegmentRange = pendingSegmentRangeRef.current ??
+      pendingSegmentRange;
+    if (!activePendingSegmentRange) return;
     if (
       initialModel.rowPageKey ===
-        activePendingPlannedRange.previousRowPageKey
+        activePendingSegmentRange.previousRowPageKey
     ) {
       return;
     }
     if (cachedBlocksRowPageKey !== initialModel.rowPageKey) return;
     const requiredRanges = blockRangesForViewport(
       initialModel.range,
-      activePendingPlannedRange.range,
+      activePendingSegmentRange.range,
     );
     const requiredRangesSettled = requiredRanges.every((range) => {
       const key = blockKey(range);
@@ -1094,8 +1086,8 @@ export function ResourcePlannerCanvasClient({
     });
     if (!requiredRangesSettled) return;
     const timer = window.setTimeout(() => {
-      pendingPlannedRangeRef.current = null;
-      setPendingPlannedRange(null);
+      pendingSegmentRangeRef.current = null;
+      setPendingSegmentRange(null);
     }, 0);
     return () => window.clearTimeout(timer);
   }, [
@@ -1104,12 +1096,12 @@ export function ResourcePlannerCanvasClient({
     failedBlocks,
     initialModel.range,
     initialModel.rowPageKey,
-    pendingPlannedRange,
+    pendingSegmentRange,
   ]);
   useEffect(() => {
-    if (pendingPlannedRangeRef.current ?? pendingPlannedRange) return;
-    plannedMutationViewportCenterRef.current = null;
-  }, [pendingPlannedRange]);
+    if (pendingSegmentRangeRef.current ?? pendingSegmentRange) return;
+    segmentMutationViewportCenterRef.current = null;
+  }, [pendingSegmentRange]);
   useEffect(() => {
     let active = true;
     if (
@@ -1241,16 +1233,16 @@ export function ResourcePlannerCanvasClient({
           }
           return;
         }
-        const plannedRange = plannedRangeFromMutation(result.data);
-        if (plannedRange) {
-          plannedMutationViewportCenterRef.current =
+        const segmentRange = segmentRangeFromMutation(result.data);
+        if (segmentRange) {
+          segmentMutationViewportCenterRef.current =
             preservedViewportCenterMs ?? viewportCenterFromCurrentUrl() ?? null;
-          const nextPendingPlannedRange = {
-            range: plannedRange,
+          const nextPendingSegmentRange = {
+            range: segmentRange,
             previousRowPageKey: initialModel.rowPageKey,
           };
-          pendingPlannedRangeRef.current = nextPendingPlannedRange;
-          setPendingPlannedRange(nextPendingPlannedRange);
+          pendingSegmentRangeRef.current = nextPendingSegmentRange;
+          setPendingSegmentRange(nextPendingSegmentRange);
         }
         setNotice({ kind: "success", message: successMessage });
         const completedSegmentId = openSegmentId;
@@ -1498,7 +1490,7 @@ export function ResourcePlannerCanvasClient({
         initialCenterRevision: currentCenterRevision,
         initialSelection: canvasInitialSelection,
         focusRequest: canvasFocusRequest,
-        display: { showActual: true, showBusy: true, showInspector: false },
+        display: { showBusy: true, showInspector: false },
         interaction: {
           enableBrushCreate: !isPending && !createDraft && canCreateSegment,
           creationRange: createDraft

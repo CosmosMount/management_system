@@ -443,7 +443,7 @@ export function TaskComposerPlanEditor({
                   revision: (current?.revision ?? 0) + 1,
                 }))
               }
-              display={{ showActual: false, showBusy: false, showInspector: false }}
+              display={{ showBusy: false, showInspector: false }}
               selection={
                 state.selectedEntityId
                   ? { kind: "ANCHOR", id: state.selectedEntityId }

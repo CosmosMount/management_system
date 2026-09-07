@@ -35,7 +35,6 @@ export function ObservedTimeCanvasFixture({
         initialZoom={initialZoom}
         initialCenterMs={model.range.startMs}
         display={{
-          showActual: true,
           showBusy: true,
           showInspector: true,
         }}

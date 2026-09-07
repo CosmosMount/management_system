@@ -9,8 +9,6 @@ import {
   taskTimeCanvasGrouping,
   timeCanvasGroupByValues,
   taskStatusValues,
-  workSegmentStatusValues,
-  workSegmentTypeValues,
 } from "@/lib/project-management/types/contract-values";
 import { DEFAULT_RESOURCE_PLAN_TASK_STATUSES } from "@/lib/project-management/resource-plan-url";
 import { addStructuredProjectManagementIssue } from "@/lib/project-management/validations/issues";
@@ -144,11 +142,8 @@ export const getTimeCanvasDataInputSchema = z
     ...timeCanvasRangeFields,
     personIds: idListSchema("Person"),
     taskIds: idListSchema("Task"),
-    types: z.array(z.enum(workSegmentTypeValues)).optional().default([]),
-    statuses: z.array(z.enum(workSegmentStatusValues)).optional().default([]),
     groupBy: z.enum(timeCanvasGroupByValues),
     includeTaskAnchors: z.boolean().optional().default(true),
-    includeActual: z.boolean().optional().default(true),
     emptyPersonIdsMeansNone: z.boolean().optional().default(false),
     includeBusyBlocks: z.boolean().optional().default(false),
   })

@@ -54,7 +54,6 @@ export async function getMyWorkDashboard({
           rangeEnd,
           groupBy: "PERSON",
           includeTaskAnchors: true,
-          includeActual: true,
           includeBusyBlocks: false,
         },
       }),
@@ -65,14 +64,6 @@ export async function getMyWorkDashboard({
     activeTasks: activeTasks.items,
     activeTaskCount,
     personalTime,
-    pendingConfirmations: personalTime.segments.flatMap((segment) =>
-      segment.kind === "SEGMENT" &&
-      segment.type === "PLANNED" &&
-      segment.status === "PENDING_CONFIRMATION" &&
-      segment.personId === actor.personId
-        ? [segment]
-        : [],
-    ),
     unreadNotificationCount,
     generatedAt: personalTime.generatedAt,
   };

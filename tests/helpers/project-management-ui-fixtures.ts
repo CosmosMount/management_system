@@ -49,51 +49,39 @@ export async function createUiFixture() {
   }
   const confirmable = await createWorkSegment(actor(member), {
     personId: member.person.id,
-    type: "PLANNED",
     startAt: atHour(9),
     endAt: atHour(10),
     content: "P6 UI 可确认计划",
-    expectedOutput: "P6 UI 计划预期产出",
-    priority: "MEDIUM",
     taskId: draft.taskId,
   });
   const movable = await createWorkSegment(actor(member), {
     personId: member.person.id,
-    type: "PLANNED",
     startAt: atHour(10),
     endAt: atHour(11),
     content: "P6 UI 重叠计划 A",
-    priority: "MEDIUM",
     taskId: draft.taskId,
   });
   await createWorkSegment(actor(owner), {
     personId: owner.person.id,
-    type: "PLANNED",
     startAt: atHour(8),
     endAt: atHour(9),
     content: "P6 UI 跨行目标人员安排",
-    priority: "LOW",
     taskId: draft.taskId,
   });
   await createWorkSegment(actor(member), {
     personId: member.person.id,
-    type: "PLANNED",
     startAt: atHour(10.5),
     endAt: atHour(11.5),
     content: "P6 UI 重叠计划 B",
-    priority: "MEDIUM",
     taskId: draft.taskId,
   });
   const inactiveHistorySegment = await createWorkSegment(
     actor(inactiveHistory),
     {
       personId: inactiveHistory.person.id,
-      type: "ACTUAL",
       startAt: atHour(15),
       endAt: atHour(16),
       content: "P6 UI 停用人员历史投入",
-      actualOutput: "历史产出",
-      priority: "LOW",
       taskId: draft.taskId,
     },
   );
@@ -103,20 +91,16 @@ export async function createUiFixture() {
   });
   const batchCancelableA = await createWorkSegment(actor(member), {
     personId: member.person.id,
-    type: "PLANNED",
     startAt: atHour(12),
     endAt: atHour(13),
     content: "P6 UI 批量取消 A",
-    priority: "LOW",
     taskId: draft.taskId,
   });
   const batchCancelableB = await createWorkSegment(actor(member), {
     personId: member.person.id,
-    type: "PLANNED",
     startAt: atHour(13),
     endAt: atHour(14),
     content: "P6 UI 批量取消 B",
-    priority: "LOW",
     taskId: draft.taskId,
   });
   const notification = await prisma.inAppNotification.create({

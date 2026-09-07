@@ -2176,12 +2176,10 @@ test.describe("project management UI project-management-ui-workbench", () => {
       .poll(() =>
         prisma.workSegment.findFirst({
           where: { taskId: fixture.taskId, content },
-          select: { type: true, status: true, startAt: true, endAt: true },
+          select: { startAt: true, endAt: true },
         }),
       )
       .toEqual({
-        type: "PLANNED",
-        status: "PLANNED",
         startAt: new Date("2025-06-01T09:00:00.000+08:00"),
         endAt: new Date("2025-06-02T09:00:00.000+08:00"),
       });
@@ -2298,12 +2296,10 @@ test.describe("project management UI project-management-ui-workbench", () => {
       .poll(() =>
         prisma.workSegment.findUnique({
           where: { id: createdSegment.id },
-          select: { type: true, status: true, startAt: true, endAt: true },
+          select: { startAt: true, endAt: true },
         }),
       )
       .toEqual({
-        type: "PLANNED",
-        status: "PLANNED",
         startAt: new Date("2024-06-01T09:00:00.000+08:00"),
         endAt: new Date("2024-06-02T09:00:00.000+08:00"),
       });

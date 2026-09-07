@@ -1,13 +1,3 @@
-export const workSegmentTypeValues = ["PLANNED", "ACTUAL"] as const;
-
-export const workSegmentStatusValues = [
-  "PLANNED",
-  "IN_PROGRESS",
-  "PENDING_CONFIRMATION",
-  "CONFIRMED",
-  "CANCELLED",
-] as const;
-
 export const taskPriorityValues = [
   "CRITICAL",
   "HIGH",

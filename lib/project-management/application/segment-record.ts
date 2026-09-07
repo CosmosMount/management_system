@@ -1,7 +1,5 @@
 import {
   Prisma,
-  type TaskPriority,
-  type WorkSegment,
 } from "@prisma/client";
 
 export const segmentInclude = {
@@ -42,16 +40,10 @@ export type TaskForSegmentAuthorization = NonNullable<
 export type WorkSegmentDto = {
   id: string;
   personId: string;
-  type: WorkSegment["type"];
-  status: WorkSegment["status"];
   startAt: string;
   endAt: string;
   content: string;
-  priority: TaskPriority;
-  expectedOutput: string;
-  actualOutput: string;
   taskId: string | null;
-  sourceSplitFromId: string | null;
   deletedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -63,16 +55,10 @@ export function snapshotSegment(
   return {
     id: segment.id,
     personId: segment.personId,
-    type: segment.type,
-    status: segment.status,
     startAt: segment.startAt.toISOString(),
     endAt: segment.endAt.toISOString(),
     content: segment.content,
-    priority: segment.priority,
-    expectedOutput: segment.expectedOutput,
-    actualOutput: segment.actualOutput,
     taskId: segment.taskId,
-    sourceSplitFromId: segment.sourceSplitFromId,
     deletedAt: segment.deletedAt?.toISOString() ?? null,
     updatedAt: segment.updatedAt.toISOString(),
   };
@@ -82,16 +68,10 @@ export function toWorkSegmentDto(segment: SegmentForMutation): WorkSegmentDto {
   return {
     id: segment.id,
     personId: segment.personId,
-    type: segment.type,
-    status: segment.status,
     startAt: segment.startAt.toISOString(),
     endAt: segment.endAt.toISOString(),
     content: segment.content,
-    priority: segment.priority,
-    expectedOutput: segment.expectedOutput,
-    actualOutput: segment.actualOutput,
     taskId: segment.taskId,
-    sourceSplitFromId: segment.sourceSplitFromId,
     deletedAt: segment.deletedAt?.toISOString() ?? null,
     createdAt: segment.createdAt.toISOString(),
     updatedAt: segment.updatedAt.toISOString(),

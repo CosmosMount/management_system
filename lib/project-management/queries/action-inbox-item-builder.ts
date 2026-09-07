@@ -1,8 +1,5 @@
 import { routes } from "@/lib/routes";
-import {
-  authorize,
-  type AuthorizationTaskResource,
-} from "@/lib/project-management/authorization";
+import { authorize } from "@/lib/project-management/authorization";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import { terminationOutcomeLabel } from "@/lib/project-management/notifications/user-facing-copy";
 import type { ActionInboxStream } from "@/lib/project-management/queries/action-inbox-cursor";
@@ -26,7 +23,6 @@ export function buildActionInboxCandidates({
   sources: ActionInboxSources;
 }) {
   const {
-    confirmationSegments,
     nextMilestones,
     nextTerminations,
     reviews,
@@ -35,46 +31,6 @@ export function buildActionInboxCandidates({
     projectRequests,
   } = sources;
   const candidates: StreamItem[] = [];
-  for (const segment of confirmationSegments) {
-    const task = segment.task;
-    const resource = task
-      ? ({ type: "task", ...task } satisfies AuthorizationTaskResource)
-      : null;
-    const canManage = authorize({
-      actor,
-      action:
-        segment.personId === actor.personId
-          ? "segment.manage_self"
-          : "segment.manage_others",
-      resource: { type: "segment", personId: segment.personId, task: resource },
-    }).allowed;
-    if (!canManage) continue;
-    candidates.push(
-      streamItem("SEGMENT_CONFIRMATION", segment.id, segment.endAt, {
-        id: `segment-confirm:${segment.id}`,
-        kind: "SEGMENT_CONFIRMATION",
-        title: segment.content,
-        summary: "计划投入已到期，请确认完整、部分或未执行。",
-        ...(task
-          ? taskContext(task)
-          : {
-              projectId: null,
-              projectName: null,
-              taskId: null,
-              taskTitle: null,
-            }),
-        nodeId: null,
-        nodeType: null,
-        nodeStatus: null,
-        relevantAt: segment.endAt.toISOString(),
-        timeLabel: "投入结束",
-        severity: segment.endAt < generatedAt ? "HIGH" : "MEDIUM",
-        href: `/progress?focus=${segment.id}`,
-        actionLabel: "确认投入",
-      }),
-    );
-  }
-
   const nextNodeCandidates: StreamItem[] = [];
   for (const node of nextMilestones) {
     if (!node.milestone) continue;

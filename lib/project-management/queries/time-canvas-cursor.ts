@@ -6,59 +6,6 @@ import type {
 } from "@/lib/project-management/types/time-canvas";
 import type { GetTimeCanvasDataInput } from "@/lib/project-management/validations/time-canvas";
 
-type PersonalDueCursor = {
-  v: 1;
-  kind: "PERSONAL_DUE";
-  personId: string;
-  endAt: string;
-  id: string;
-};
-
-export function encodePersonalDueCursor(
-  row: { id: string; endAt: Date } | undefined,
-  personId: string,
-): string | null {
-  if (!row) return null;
-  return Buffer.from(
-    JSON.stringify({
-      v: 1,
-      kind: "PERSONAL_DUE",
-      personId,
-      endAt: row.endAt.toISOString(),
-      id: row.id,
-    } satisfies PersonalDueCursor),
-  ).toString("base64url");
-}
-
-export function decodePersonalDueCursor(
-  value: string,
-  personId: string,
-): PersonalDueCursor | null {
-  try {
-    const decoded: unknown = JSON.parse(
-      Buffer.from(value, "base64url").toString("utf8"),
-    );
-    if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
-      return null;
-    }
-    const record = decoded as Record<string, unknown>;
-    if (
-      record.v !== 1 ||
-      record.kind !== "PERSONAL_DUE" ||
-      record.personId !== personId ||
-      typeof record.endAt !== "string" ||
-      !Number.isFinite(Date.parse(record.endAt)) ||
-      typeof record.id !== "string" ||
-      !UUID_PATTERN.test(record.id)
-    ) {
-      return null;
-    }
-    return record as PersonalDueCursor;
-  } catch {
-    return null;
-  }
-}
-
 export function canvasCursorFilter(
   input: GetTimeCanvasDataInput,
   includeRange = true,
@@ -72,11 +19,8 @@ export function canvasCursorFilter(
           : undefined,
         personIds: [...input.personIds].sort(),
         taskIds: [...input.taskIds].sort(),
-        types: [...input.types].sort(),
-        statuses: [...input.statuses].sort(),
         groupBy: input.groupBy,
         includeTaskAnchors: input.includeTaskAnchors,
-        includeActual: input.includeActual,
         includeBusyBlocks: input.includeBusyBlocks,
       }),
     )
@@ -115,6 +59,3 @@ export function createRowPageKey(
     .digest("base64url")
     .slice(0, 32);
 }
-
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;

@@ -347,7 +347,6 @@ test.describe("project management plan mutations project-management-plan-mutatio
         const writer = () =>
           createWorkSegment(actor(owner), {
             personId: owner.person.id,
-            type: "PLANNED",
             startAt: new Date("2026-08-03T01:00:00.000Z"),
             endAt: new Date("2026-08-03T02:00:00.000Z"),
             content: `association writer ${first}`,

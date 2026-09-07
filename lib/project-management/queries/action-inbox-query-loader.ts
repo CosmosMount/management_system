@@ -21,7 +21,6 @@ export async function loadActionInboxSources({
   positions,
   generatedAt,
   take,
-  confirmationSegmentWhere,
   nextMilestoneWhere,
   nextTerminationWhere,
   milestoneReviewWhere,
@@ -32,7 +31,6 @@ export async function loadActionInboxSources({
   positions: ActionInboxCursorPositions;
   generatedAt: Date;
   take: number;
-  confirmationSegmentWhere: Prisma.WorkSegmentWhereInput;
   nextMilestoneWhere: Prisma.TaskNodeWhereInput;
   nextTerminationWhere: Prisma.TaskNodeWhereInput;
   milestoneReviewWhere: Prisma.MilestoneReviewWhereInput;
@@ -40,13 +38,11 @@ export async function loadActionInboxSources({
   terminationReviewWhere: Prisma.TerminationReviewWhereInput;
   projectRequestWhere: Prisma.ProjectEstablishmentRequestWhereInput;
 }) {
-  const segmentPosition = positions.SEGMENT_CONFIRMATION;
   const nextNodePosition = positions.TASK_NEXT_NODE;
   const milestoneReviewPosition = positions.MILESTONE_REVIEW;
   const revisionPosition = positions.REVISION_REVIEW;
   const projectPosition = positions.PROJECT_ESTABLISHMENT;
   const terminationReviewPosition = positions.TERMINATION_REVIEW;
-  const segmentAfter = segmentPosition ? positionDate(segmentPosition) : null;
   const nextNodeAfter = nextNodePosition
     ? positionDate(nextNodePosition)
     : null;
@@ -62,7 +58,6 @@ export async function loadActionInboxSources({
     : null;
 
   const [
-    confirmationSegments,
     nextMilestones,
     nextTerminations,
     reviews,
@@ -72,32 +67,6 @@ export async function loadActionInboxSources({
     counts,
     criticalCounts,
   ] = await Promise.all([
-    prisma.workSegment.findMany({
-      where: {
-        AND: [
-          confirmationSegmentWhere,
-          segmentPosition && segmentAfter
-            ? {
-                OR: [
-                  { endAt: { gt: segmentAfter } },
-                  { endAt: segmentAfter, id: { gt: segmentPosition.id } },
-                ],
-              }
-            : {},
-        ],
-      },
-      select: {
-        id: true,
-        personId: true,
-        type: true,
-        status: true,
-        content: true,
-        endAt: true,
-        task: { select: taskResourceSelect },
-      },
-      orderBy: [{ endAt: "asc" }, { id: "asc" }],
-      take,
-    }),
     prisma.taskNode.findMany({
       where: {
         AND: [
@@ -314,7 +283,6 @@ export async function loadActionInboxSources({
       take,
     }),
     Promise.all([
-      prisma.workSegment.count({ where: confirmationSegmentWhere }),
       prisma.taskNode.count({ where: nextMilestoneWhere }),
       prisma.taskNode.count({ where: nextTerminationWhere }),
       prisma.milestoneReview.count({ where: milestoneReviewWhere }),
@@ -359,7 +327,6 @@ export async function loadActionInboxSources({
   ]);
 
   return {
-    confirmationSegments,
     nextMilestones,
     nextTerminations,
     reviews,

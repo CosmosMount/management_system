@@ -3,19 +3,16 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
-  cancelPlannedSegment,
-  confirmPlannedSegment,
-  partiallyConfirmSegment,
-  softDeleteActualSegment,
+  softDeleteWorkSegment,
   updateWorkSegment,
 } from "@/app/actions/project-management/segments";
 import { TimeCanvas } from "@/components/project-management/time-canvas/time-canvas";
+import { TaskSelect } from "@/components/project-management/task-picker";
 import type {
   TimeCanvasModel,
   TimeCanvasRange,
   TimeCanvasZoom,
 } from "@/components/project-management/time-canvas/types";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { FieldError } from "@/components/ui/field-error";
 import { Input } from "@/components/ui/input";
@@ -23,19 +20,11 @@ import { Textarea } from "@/components/ui/textarea";
 import type { ProjectManagementActionFailure, ProjectManagementActionResult } from "@/lib/project-management/application/action-result";
 import {
   fieldErrorsFullyHandled,
-  firstFieldErrorMessage,
 } from "@/lib/project-management/field-errors";
-import {
-  taskPriorityLabels,
-  workSegmentStatusLabels,
-  workSegmentTypeLabels,
-} from "@/lib/project-management/labels";
 import type { WorkSegmentDetail } from "@/lib/project-management/queries/resource-queries";
 import {
   Field,
   formatPlannerRange,
-  parseShanghaiLocalMs,
-  selectClass,
   supportedFieldErrors,
   toLocal,
   validateSegmentRangeInputs,
@@ -139,8 +128,7 @@ export function SegmentInspector({
   if (!detail || !detailRange || detailState === "LOADING") {
     return <aside className="rounded-xl border border-border bg-card p-5 text-sm text-muted-foreground">正在读取投入详情…</aside>;
   }
-  const editable = canvasSegment.permissions.canEdit;
-  const plannedEditable = detail.type === "PLANNED" && !["CONFIRMED", "CANCELLED"].includes(detail.status);
+  const editable = canvasSegment.permissions.canEdit && detail.permissions.canEdit;
   const detailModel: TimeCanvasModel = {
     ...model,
     segments: model.segments
@@ -157,9 +145,6 @@ export function SegmentInspector({
                 canEdit: false,
                 canMove: false,
                 canResize: false,
-                canMerge: false,
-                canCancel: false,
-                canConfirm: false,
                 canSoftDelete: false,
               },
       })),
@@ -168,11 +153,9 @@ export function SegmentInspector({
     <aside className="min-w-0 space-y-4 rounded-xl border border-border bg-card p-4" data-testid="segment-inspector">
       <div>
         <div className="flex flex-wrap items-center gap-2">
-          <h2 className="break-words font-semibold">{detail.content}</h2>
-          <Badge variant={detail.type === "ACTUAL" ? "default" : "outline"}>{workSegmentTypeLabels[detail.type]}</Badge>
-          <Badge variant="secondary">{workSegmentStatusLabels[detail.status]}</Badge>
+          <h2 className="min-w-0 max-w-full break-words font-semibold [overflow-wrap:anywhere]">{detail.content}</h2>
         </div>
-        <p className="mt-2 text-sm text-muted-foreground">{detail.personName} · {formatPlannerRange(Date.parse(detail.startAt), Date.parse(detail.endAt))}</p>
+        <p className="mt-2 break-words text-sm text-muted-foreground">{detail.personName} · {formatPlannerRange(Date.parse(detail.startAt), Date.parse(detail.endAt))}</p>
       </div>
 
       <div className="min-w-0 overflow-hidden rounded-xl border border-border">
@@ -184,8 +167,8 @@ export function SegmentInspector({
           initialZoom={initialZoom}
           initialCenterMs={initialCenterMs}
           selection={{ kind: "SEGMENT", id: detail.id }}
-          display={{ showActual: true, showBusy: true, showInspector: false }}
-          interaction={editable ? {
+          display={{ showBusy: true, showInspector: false }}
+          interaction={editable && !disabled ? {
             desktopOnlySegmentTransform: true,
             onSegmentTransform: (request) => {
               if (request.segmentId !== detail.id) return;
@@ -199,8 +182,6 @@ export function SegmentInspector({
       <section className="space-y-3 border-t border-border pt-4" aria-labelledby="segment-basic-heading">
         <h3 id="segment-basic-heading" className="text-sm font-semibold">基本信息</h3>
         <dl className="grid gap-3 text-sm md:grid-cols-2">
-          <ReadOnlyValue label="类型" value={workSegmentTypeLabels[detail.type]} />
-          <ReadOnlyValue label="状态" value={workSegmentStatusLabels[detail.status]} />
           <ReadOnlyValue label="所属人员" value={detail.personName} />
           <ReadOnlyValue
             label="关联 Task"
@@ -241,6 +222,7 @@ export function SegmentInspector({
               return;
             }
             const content = String(form.get("content") ?? "");
+            const taskId = String(form.get("taskId") ?? "") || null;
             if (!content.trim()) {
               const next = { content: ["请输入工作内容"] };
               setEditErrors((current) => ({ ...current, ...next }));
@@ -251,43 +233,42 @@ export function SegmentInspector({
               () => updateWorkSegment({
                 segmentId: detail.id,
                 expectedUpdatedAt: detail.updatedAt,
-                reason: String(form.get("reason") ?? "投入详情更新"),
-                startAt: new Date(detailRange.startMs).toISOString(),
-                endAt: new Date(detailRange.endMs).toISOString(),
+                startAt: new Date(submittedRange.startMs).toISOString(),
+                endAt: new Date(submittedRange.endMs).toISOString(),
                 content,
-                priority: String(form.get("priority") ?? detail.priority),
-                expectedOutput: String(form.get("expectedOutput") ?? ""),
-                actualOutput: String(form.get("actualOutput") ?? ""),
+                ...(taskId !== detail.taskId ? { taskId } : {}),
               }),
               "已更新投入详情",
               undefined,
               undefined,
               (error) => {
-                const next = supportedFieldErrors(error.fieldErrors, ["startAt", "endAt", "content", "priority", "expectedOutput", "actualOutput", "reason"]);
+                const next = supportedFieldErrors(error.fieldErrors, ["startAt", "endAt", "content", "taskId"]);
                 if (Object.keys(next).length === 0) return false;
                 setEditErrors(next);
-                const first = ["startAt", "endAt", "content", "priority", "expectedOutput", "actualOutput", "reason"].find((key) => next[key]);
-                const id = first === "startAt" ? "inspect-start" : first === "endAt" ? "inspect-end" : first ? `inspect-${first === "expectedOutput" ? "expected" : first === "actualOutput" ? "actual" : first}` : "inspect-content";
+                const first = ["startAt", "endAt", "content", "taskId"].find((key) => next[key]);
+                const id = first === "startAt" ? "inspect-start" : first === "endAt" ? "inspect-end" : first === "taskId" ? "inspect-task" : "inspect-content";
                 requestAnimationFrame(() => document.getElementById(id)?.focus());
                 return fieldErrorsFullyHandled(error.fieldErrors, [
                   "startAt",
                   "endAt",
                   "content",
-                  "priority",
-                  "expectedOutput",
-                  "actualOutput",
-                  "reason",
+                  "taskId",
                 ]);
               },
             );
           }}
         >
-          <SegmentRangeFields range={detailRange} onRangeChange={onRangeChange} errors={editErrors} onClearError={clearEditError} />
-          <Field label="内容" htmlFor="inspect-content" className="md:col-span-2"><Textarea id="inspect-content" name="content" defaultValue={detail.content} maxLength={2_000} required aria-invalid={Boolean(editErrors.content)} aria-describedby={editErrors.content ? "inspect-content-error" : undefined} onChange={() => clearEditError("content")} /><FieldError id="inspect-content-error" messages={editErrors.content} /></Field>
-          <Field label="优先级" htmlFor="inspect-priority"><select id="inspect-priority" name="priority" className={selectClass} defaultValue={detail.priority} aria-invalid={Boolean(editErrors.priority)} aria-describedby={editErrors.priority ? "inspect-priority-error" : undefined} onChange={() => clearEditError("priority")}>{Object.entries(taskPriorityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><FieldError id="inspect-priority-error" messages={editErrors.priority} /></Field>
-          <Field label="预期输出" htmlFor="inspect-expected" className="md:col-span-2"><Textarea id="inspect-expected" name="expectedOutput" defaultValue={detail.expectedOutput} maxLength={2_000} aria-invalid={Boolean(editErrors.expectedOutput)} aria-describedby={editErrors.expectedOutput ? "inspect-expected-error" : undefined} onChange={() => clearEditError("expectedOutput")} /><FieldError id="inspect-expected-error" messages={editErrors.expectedOutput} /></Field>
-          <Field label="实际输出" htmlFor="inspect-actual" className="md:col-span-2"><Textarea id="inspect-actual" name="actualOutput" defaultValue={detail.actualOutput} maxLength={2_000} aria-invalid={Boolean(editErrors.actualOutput)} aria-describedby={editErrors.actualOutput ? "inspect-actual-error" : undefined} onChange={() => clearEditError("actualOutput")} /><FieldError id="inspect-actual-error" messages={editErrors.actualOutput} /></Field>
-          <div className="md:col-span-2"><Input id="inspect-reason" name="reason" aria-label="修改原因" placeholder="修改原因（可选）" aria-invalid={Boolean(editErrors.reason)} aria-describedby={editErrors.reason ? "inspect-reason-error" : undefined} onChange={() => clearEditError("reason")} /><FieldError id="inspect-reason-error" messages={editErrors.reason} className="mt-1.5" /></div>
+          <SegmentRangeFields range={detailRange} disabled={disabled} onRangeChange={onRangeChange} errors={editErrors} onClearError={clearEditError} />
+          <SegmentTaskField
+            taskId={detail.taskId}
+            disabled={disabled}
+            errors={editErrors.taskId}
+            onChange={() => {
+              clearEditError("taskId");
+              onDirtyChange(true);
+            }}
+          />
+          <Field label="内容" htmlFor="inspect-content" className="md:col-span-2"><Textarea id="inspect-content" name="content" defaultValue={detail.content} maxLength={2_000} required disabled={disabled} aria-invalid={Boolean(editErrors.content)} aria-describedby={editErrors.content ? "inspect-content-error" : undefined} onChange={() => clearEditError("content")} /><FieldError id="inspect-content-error" messages={editErrors.content} /></Field>
           <Button className="md:col-span-2 md:w-fit" type="submit" disabled={disabled}>保存基本信息</Button>
         </form>
       ) : (
@@ -295,34 +276,29 @@ export function SegmentInspector({
           <ReadOnlyValue label="开始" value={formatIsoDateTime(detail.startAt)} />
           <ReadOnlyValue label="结束" value={formatIsoDateTime(detail.endAt)} />
           <ReadOnlyValue label="内容" value={detail.content} wide />
-          <ReadOnlyValue label="优先级" value={taskPriorityLabels[detail.priority]} />
-          <ReadOnlyValue label="预期输出" value={detail.expectedOutput || "未填写"} wide />
-          <ReadOnlyValue label="实际输出" value={detail.actualOutput || "未填写"} wide />
         </dl>
       )}
       </section>
 
-      {plannedEditable && canvasSegment.permissions.canConfirm && (
-        <div className="space-y-3 border-t border-border pt-4">
-          <h3 className="text-sm font-semibold">确认、取消与删除</h3>
-          <PlannedConfirmationForm
-            detail={detail}
-            disabled={disabled}
-            onDirtyChange={onDirtyChange}
-            onRun={onRun}
-          />
-        </div>
+      {canvasSegment.permissions.canSoftDelete && detail.permissions.canSoftDelete && (
+        <Button
+          type="button"
+          variant="destructive"
+          disabled={disabled}
+          onClick={() => {
+            if (!window.confirm("确认删除这条投入记录？")) return;
+            onRun(
+              () => softDeleteWorkSegment({ segmentId: detail.id, expectedUpdatedAt: detail.updatedAt }),
+              "已删除投入记录",
+            );
+          }}
+        >
+          删除投入
+        </Button>
       )}
 
-      {plannedEditable && canvasSegment.permissions.canCancel && (
-        <ReasonAction label="取消计划" destructive disabled={disabled} onSubmit={(reason, onFailure) => onRun(() => cancelPlannedSegment({ segmentId: detail.id, expectedUpdatedAt: detail.updatedAt, reason }), "已取消计划", undefined, undefined, onFailure)} />
-      )}
-      {detail.type === "ACTUAL" && canvasSegment.permissions.canSoftDelete && (
-        <ReasonAction label="删除 Actual" destructive disabled={disabled} onSubmit={(reason, onFailure) => onRun(() => softDeleteActualSegment({ segmentId: detail.id, expectedUpdatedAt: detail.updatedAt, reason }), "已软删除 Actual", undefined, undefined, onFailure)} />
-      )}
-
-      <section className="border-t border-border pt-4" aria-label="来源与历史">
-        <h3 className="text-sm font-semibold">来源与变更历史</h3>
+      <section className="border-t border-border pt-4" aria-label="变更历史">
+        <h3 className="text-sm font-semibold">变更历史</h3>
         <p className="mt-2 text-xs text-muted-foreground">
           关联对象：{detail.task
             ? `${detail.task.title}${detail.task.deleted ? "（已删除）" : ""}`
@@ -339,30 +315,6 @@ export function SegmentInspector({
             <Button className="mt-2" type="button" size="sm" variant="outline" disabled={disabled} onClick={onRetryHistory}>重试历史</Button>
           </div>
         )}
-        {detail.plannedSources.length > 0 && (
-          <div className="mt-2 text-xs">
-            <p className="font-medium">由本 Planned 生成的 Actual</p>
-            <ul className="mt-1 space-y-1 text-muted-foreground">
-              {detail.plannedSources.map((source) => (
-                <li key={source.id} className="break-words">
-                  覆盖 {formatIsoRange(source.coveredStartAt, source.coveredEndAt)} · Actual {formatIsoRange(source.actualSegment.startAt, source.actualSegment.endAt)}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-        {detail.actualSources.length > 0 && (
-          <div className="mt-2 text-xs">
-            <p className="font-medium">本 Actual 的 Planned 来源</p>
-            <ul className="mt-1 space-y-1 text-muted-foreground">
-              {detail.actualSources.map((source) => (
-                <li key={source.id} className="break-words">
-                  覆盖 {formatIsoRange(source.coveredStartAt, source.coveredEndAt)} · Planned {formatIsoRange(source.plannedSegment.startAt, source.plannedSegment.endAt)}（{workSegmentStatusLabels[source.plannedSegment.status]}）
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
         {changes.length === 0 ? (historyState === "READY" && <p className="mt-2 text-sm text-muted-foreground">暂无可见变更。</p>) : (
           <ol className="mt-2 space-y-2 text-xs">
             {changes.map((change) => (
@@ -374,7 +326,6 @@ export function SegmentInspector({
                   </time>
                 </div>
                 <p className="mt-1 text-muted-foreground">操作者：{change.actorName}</p>
-                <p className="mt-1 break-words">原因：{change.reason}</p>
                 {change.differences.length > 0 && (
                   <ul className="mt-2 space-y-1 border-t border-border pt-2">
                     {change.differences.map((difference, index) => (
@@ -410,41 +361,49 @@ export function SegmentInspector({
   );
 }
 
-function ReasonAction({ label, destructive, disabled, onSubmit }: { label: string; destructive?: boolean; disabled: boolean; onSubmit: (reason: string, onFailure: (error: ProjectManagementActionFailure["error"]) => boolean) => void }) {
-  const [reasonError, setReasonError] = useState("");
-  const inputId = label === "取消计划" ? "cancel-segment-reason" : "delete-segment-reason";
+function SegmentTaskField({
+  taskId: initialTaskId,
+  disabled,
+  errors,
+  onChange,
+}: {
+  taskId: string | null;
+  disabled: boolean;
+  errors: string[] | undefined;
+  onChange: () => void;
+}) {
+  const [taskId, setTaskId] = useState(initialTaskId);
   return (
-    <form className="grid gap-2 border-t border-border pt-4" noValidate onSubmit={(event) => {
-      event.preventDefault();
-      const form = new FormData(event.currentTarget);
-      const reason = String(form.get("reason") ?? "");
-      if (!reason.trim()) {
-        setReasonError(label === "取消计划" ? "请输入取消原因" : "请输入删除原因");
-        requestAnimationFrame(() => document.getElementById(inputId)?.focus());
-        return;
-      }
-      onSubmit(reason, (error) => {
-        const message = firstFieldErrorMessage(error.fieldErrors, "reason");
-        if (!message) return false;
-        setReasonError(message);
-        requestAnimationFrame(() => document.getElementById(inputId)?.focus());
-        return fieldErrorsFullyHandled(error.fieldErrors, ["reason"]);
-      });
-    }}>
-      <Input id={inputId} name="reason" aria-label={`${label}原因`} placeholder={`${label}原因`} required aria-invalid={Boolean(reasonError)} aria-describedby={reasonError ? `${inputId}-error` : undefined} onChange={(event) => { if (event.target.value.trim()) setReasonError(""); }} />
-      <FieldError id={`${inputId}-error`} messages={reasonError} />
-      <Button type="submit" variant={destructive ? "destructive" : "outline"} disabled={disabled}>{label}</Button>
-    </form>
+    <Field label="关联任务" htmlFor="inspect-task" className="md:col-span-2">
+      <TaskSelect
+        inputId="inspect-task"
+        ariaLabel="关联任务"
+        name="taskId"
+        value={taskId}
+        onValueChange={(value) => {
+          setTaskId(value);
+          onChange();
+        }}
+        statuses={["ACTIVE"]}
+        allowIndependent
+        disabled={disabled}
+        invalid={Boolean(errors)}
+        ariaDescribedBy={errors ? "inspect-task-error" : undefined}
+      />
+      <FieldError id="inspect-task-error" messages={errors} />
+    </Field>
   );
 }
 
 function SegmentRangeFields({
   range,
+  disabled,
   onRangeChange,
   errors,
   onClearError,
 }: {
   range: TimeCanvasRange;
+  disabled: boolean;
   onRangeChange: (range: TimeCanvasRange) => void;
   errors: Record<string, string[]>;
   onClearError: (key: string) => void;
@@ -485,6 +444,8 @@ function SegmentRangeFields({
       return;
     }
     setRangeInputs(null);
+    onClearError("startAt");
+    onClearError("endAt");
     onRangeChange({ startMs: nextRange.startMs, endMs: nextRange.endMs });
   }
 
@@ -494,6 +455,7 @@ function SegmentRangeFields({
         <Input
           ref={startInputRef}
           id="inspect-start"
+          disabled={disabled}
           name="startAt"
           type="datetime-local"
           value={startValue}
@@ -507,6 +469,7 @@ function SegmentRangeFields({
         <Input
           ref={endInputRef}
           id="inspect-end"
+          disabled={disabled}
           name="endAt"
           type="datetime-local"
           value={endValue}
@@ -525,236 +488,6 @@ function SegmentRangeFields({
   );
 }
 
-function PlannedConfirmationForm({
-  detail,
-  disabled,
-  onDirtyChange,
-  onRun,
-}: {
-  detail: WorkSegmentDetail;
-  disabled: boolean;
-  onDirtyChange: (dirty: boolean) => void;
-  onRun: (
-    action: () => Promise<ProjectManagementActionResult<unknown>>,
-    successMessage: string,
-    rollback?: () => void,
-    onSuccess?: () => void,
-    onFailure?: (error: ProjectManagementActionFailure["error"]) => boolean | void,
-  ) => void;
-}) {
-  const startMs = Date.parse(detail.startAt);
-  const endMs = Date.parse(detail.endAt);
-  const durationMs = endMs - startMs;
-  const canPartiallyConfirm = durationMs > 60_000;
-  const maxPartialMinutes = Math.max(1, Math.ceil(durationMs / 60_000) - 1);
-  const [coveredMinutes, setCoveredMinutes] = useState(() =>
-    Math.min(
-      maxPartialMinutes,
-      Math.max(1, Math.round(durationMs / 2 / 60_000)),
-    ),
-  );
-  const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
-  const coveredEndAt = new Date(startMs + coveredMinutes * 60_000).toISOString();
-  const clearError = (key: string) => {
-    setFieldErrors((current) => {
-      if (!current[key]) return current;
-      const next = { ...current };
-      delete next[key];
-      return next;
-    });
-  };
-  const handleFailure = (
-    error: ProjectManagementActionFailure["error"],
-    includeRange: boolean,
-  ) => {
-    const supportedPaths = [
-      "actual.content",
-      "actual.actualOutput",
-      ...(includeRange ? ["coveredStartAt", "coveredEndAt"] : []),
-    ];
-    const raw = supportedFieldErrors(error.fieldErrors, supportedPaths);
-    const next: Record<string, string[]> = {
-      ...(raw["actual.content"] ? { content: raw["actual.content"] } : {}),
-      ...(raw["actual.actualOutput"]
-        ? { actualOutput: raw["actual.actualOutput"] }
-        : {}),
-      ...(raw.coveredStartAt ? { coveredStartAt: raw.coveredStartAt } : {}),
-      ...(raw.coveredEndAt ? { coveredEndAt: raw.coveredEndAt } : {}),
-    };
-    if (Object.keys(next).length === 0) return false;
-    setFieldErrors(next);
-    const first = next.coveredStartAt || next.coveredEndAt
-      ? `confirm-end-${detail.id}`
-      : next.content
-        ? `confirm-content-${detail.id}`
-        : `confirm-actual-${detail.id}`;
-    requestAnimationFrame(() => document.getElementById(first)?.focus());
-    return fieldErrorsFullyHandled(error.fieldErrors, supportedPaths);
-  };
-
-  return (
-    <form
-      className="grid gap-2"
-      aria-label="确认计划"
-      noValidate
-      onChange={() => onDirtyChange(true)}
-      onSubmit={(event) => {
-        event.preventDefault();
-        const form = new FormData(event.currentTarget);
-        const submitter = (event.nativeEvent as SubmitEvent).submitter;
-        const fullConfirmation =
-          submitter instanceof HTMLButtonElement && submitter.value === "FULL";
-        const content = String(form.get("content") ?? "");
-        const actualOutput = String(form.get("actualOutput") ?? "");
-        const nextErrors: Record<string, string[]> = {};
-        if (!fullConfirmation && !content.trim()) {
-          nextErrors.content = ["请输入实际投入内容"];
-        }
-        if (!actualOutput.trim()) {
-          nextErrors.actualOutput = ["请输入实际输出"];
-        }
-        setFieldErrors(nextErrors);
-        if (Object.keys(nextErrors).length > 0) {
-          const first = nextErrors.content
-            ? `confirm-content-${detail.id}`
-            : `confirm-actual-${detail.id}`;
-          requestAnimationFrame(() => document.getElementById(first)?.focus());
-          return;
-        }
-        if (fullConfirmation) {
-          onRun(
-            () => confirmPlannedSegment({
-              segmentId: detail.id,
-              expectedUpdatedAt: detail.updatedAt,
-              reason: "投入详情完整确认",
-              actual: {
-                actualOutput,
-                ...(content.trim() ? { content } : {}),
-              },
-            }),
-            "已完整确认并生成 Actual",
-            undefined,
-            undefined,
-            (error) => handleFailure(error, false),
-          );
-          return;
-        }
-        const actual = {
-          content,
-          actualOutput,
-        };
-        onRun(
-          () => partiallyConfirmSegment({
-            segmentId: detail.id,
-            expectedUpdatedAt: detail.updatedAt,
-            coveredStartAt: detail.startAt,
-            coveredEndAt,
-            actual,
-          }),
-          "已确认计划前段并保留剩余计划",
-          undefined,
-          undefined,
-          (error) => handleFailure(error, true),
-        );
-      }}
-    >
-      <p className="text-sm font-medium">生成 Actual</p>
-      <p className="text-xs text-muted-foreground">
-        完整确认沿用计划时间；部分确认从当前计划开头起算，并保留未确认的尾段。
-      </p>
-      <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm">
-        <p className="text-xs text-muted-foreground">预期输出沿用计划</p>
-        <p className="mt-1 break-words">{detail.expectedOutput || "未填写"}</p>
-      </div>
-      <div className="rounded-lg border border-border bg-muted/30 p-3">
-        <input
-          className="w-full accent-primary"
-          type="range"
-          aria-label="在时间线上选择确认结束"
-          min={1}
-          max={maxPartialMinutes}
-          value={coveredMinutes}
-          disabled={!canPartiallyConfirm || disabled}
-          onChange={(event) => {
-            setCoveredMinutes(Number(event.target.value));
-            clearError("coveredStartAt");
-            clearError("coveredEndAt");
-            onDirtyChange(true);
-          }}
-        />
-        <div className="mt-1 flex justify-between gap-3 text-xs text-muted-foreground">
-          <span>{formatPlannerRange(startMs, startMs + 60_000).split(" – ")[0]}</span>
-          <span>{formatPlannerRange(startMs, endMs).split(" – ")[1]}</span>
-        </div>
-      </div>
-      <Input aria-label="确认开始" type="datetime-local" value={toLocal(startMs)} readOnly />
-      <Input
-        id={`confirm-end-${detail.id}`}
-        aria-label="确认结束"
-        type="datetime-local"
-        value={toLocal(Date.parse(coveredEndAt))}
-        onChange={(event) => {
-          const nextMs = parseShanghaiLocalMs(event.target.value);
-          if (nextMs === null) return;
-          const nextMinutes = Math.round((nextMs - startMs) / 60_000);
-          setCoveredMinutes(Math.max(1, Math.min(maxPartialMinutes, nextMinutes)));
-          clearError("coveredStartAt");
-          clearError("coveredEndAt");
-          onDirtyChange(true);
-        }}
-        disabled={!canPartiallyConfirm || disabled}
-        aria-invalid={Boolean(fieldErrors.coveredStartAt || fieldErrors.coveredEndAt)}
-        aria-describedby={fieldErrors.coveredStartAt || fieldErrors.coveredEndAt ? `confirm-range-${detail.id}-error` : undefined}
-      />
-      <FieldError
-        id={`confirm-range-${detail.id}-error`}
-        messages={[...(fieldErrors.coveredStartAt ?? []), ...(fieldErrors.coveredEndAt ?? [])]}
-      />
-      <Field label="实际投入内容" htmlFor={`confirm-content-${detail.id}`}>
-        <Textarea
-          id={`confirm-content-${detail.id}`}
-          name="content"
-          defaultValue={detail.content}
-          maxLength={2_000}
-          aria-invalid={Boolean(fieldErrors.content)}
-          aria-describedby={fieldErrors.content ? `confirm-content-${detail.id}-error` : undefined}
-          onChange={() => clearError("content")}
-        />
-        <p className="text-xs text-muted-foreground">
-          部分确认必填；完整确认留空时沿用计划内容。
-        </p>
-        <FieldError id={`confirm-content-${detail.id}-error`} messages={fieldErrors.content} />
-      </Field>
-      <Field label="实际输出" htmlFor={`confirm-actual-${detail.id}`}>
-        <Textarea
-          id={`confirm-actual-${detail.id}`}
-          name="actualOutput"
-          maxLength={2_000}
-          required
-          aria-invalid={Boolean(fieldErrors.actualOutput)}
-          aria-describedby={fieldErrors.actualOutput ? `confirm-actual-${detail.id}-error` : undefined}
-          onChange={() => clearError("actualOutput")}
-        />
-        <FieldError id={`confirm-actual-${detail.id}-error`} messages={fieldErrors.actualOutput} />
-      </Field>
-      <div className="grid gap-2 sm:grid-cols-2">
-        <Button type="submit" name="confirmationMode" value="FULL" disabled={disabled}>
-          完整确认
-        </Button>
-        <Button
-          type="submit"
-          name="confirmationMode"
-          value="PARTIAL"
-          variant="outline"
-          disabled={disabled || !canPartiallyConfirm}
-        >
-          部分确认
-        </Button>
-      </div>
-    </form>
-  );
-}
-
 function ReadOnlyValue({
   label,
   value,
@@ -770,10 +503,6 @@ function ReadOnlyValue({
       <dd className="mt-1 break-words">{value}</dd>
     </div>
   );
-}
-
-function formatIsoRange(startAt: string, endAt: string) {
-  return formatPlannerRange(Date.parse(startAt), Date.parse(endAt));
 }
 
 function formatIsoDateTime(value: string) {

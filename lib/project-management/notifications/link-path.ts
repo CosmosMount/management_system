@@ -23,7 +23,7 @@ export function resolveProjectManagementNotificationLinkPath(
 
   const explicitLinkPath = input.linkPath?.trim() ?? "";
 
-  // Segment confirmation is intentionally handled in the unified My Work view.
+  // Historical segment links still open records in the unified My Work view.
   if (input.kind === "segment_confirmation_due") {
     return explicitLinkPath.startsWith(`${routes.progress.root}?focus=`)
       ? explicitLinkPath

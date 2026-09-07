@@ -10,7 +10,7 @@ export default async function ProgressApprovalsPage() {
     <>
       <PageCommandBar
         title="待办与审批"
-        description="按全局优先级汇总投入确认、当前节点、里程碑验收、计划修订、项目立项与任务结束审批。"
+        description="按全局优先级汇总当前节点、里程碑验收、计划修订、项目立项与任务结束审批。"
       />
       <div className="mx-auto w-full min-w-0 max-w-[96rem] px-4 py-6 sm:px-6 lg:px-8">
         <ActionInbox initialPage={inbox} />

@@ -7,6 +7,8 @@ import {
 } from "@/lib/feishu-message";
 import {
   PROJECT_MANAGEMENT_NOTIFICATION_OUTBOX_CHANNEL,
+  RETIRED_SEGMENT_NOTIFICATION_KIND,
+  RETIRED_SEGMENT_NOTIFICATION_REASON,
   projectManagementNotificationPayloadSchema,
   type ProjectManagementNotificationPayload,
 } from "@/lib/project-management/notifications/contract";
@@ -29,6 +31,9 @@ function parseProjectManagementNotification(row: NotificationOutbox): {
   payload: ProjectManagementNotificationPayload;
   botKind: FeishuBotKind;
 } {
+  if (row.type === RETIRED_SEGMENT_NOTIFICATION_KIND) {
+    throw new CanceledNotificationError(RETIRED_SEGMENT_NOTIFICATION_REASON);
+  }
   let decoded: unknown;
   try {
     decoded = JSON.parse(row.payload);
@@ -36,6 +41,14 @@ function parseProjectManagementNotification(row: NotificationOutbox): {
     throw new NonRetryableNotificationError(
       "项目管理通知 payload 不是有效 JSON",
     );
+  }
+  if (
+    decoded &&
+    typeof decoded === "object" &&
+    "kind" in decoded &&
+    decoded.kind === RETIRED_SEGMENT_NOTIFICATION_KIND
+  ) {
+    throw new CanceledNotificationError(RETIRED_SEGMENT_NOTIFICATION_REASON);
   }
   const result = projectManagementNotificationPayloadSchema.safeParse(decoded);
   if (!result.success) {
@@ -62,7 +75,15 @@ function parseProjectManagementNotification(row: NotificationOutbox): {
 export const projectManagementNotificationChannel: NotificationChannelAdapter = {
   channel: PROJECT_MANAGEMENT_NOTIFICATION_OUTBOX_CHANNEL,
   async resolveRecipientPlan(row) {
-    const { payload } = parseProjectManagementNotification(row);
+    let payload: ProjectManagementNotificationPayload;
+    try {
+      ({ payload } = parseProjectManagementNotification(row));
+    } catch (error) {
+      if (error instanceof CanceledNotificationError) {
+        return { supported: true, openIds: [], cancelReason: error.message };
+      }
+      throw error;
+    }
     const cancelReason = await staleApprovalCancelReason(
       payload,
       row.eventKey,

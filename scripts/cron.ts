@@ -14,7 +14,6 @@ import { syncFeishuContactUsers } from "../lib/feishu-user-sync";
 import { drainNotificationOutbox } from "../lib/notification-delivery";
 import {
   runLockedProjectManagementDaily,
-  runSegmentTransitionCron,
 } from "../lib/project-management/application/cron-service";
 import {
   runMilestoneDeadlineScan,
@@ -32,7 +31,6 @@ const CONTACT_SYNC_CRON =
   process.env.FEISHU_CONTACT_SYNC_CRON ?? DEFAULT_CONTACT_SYNC_CRON;
 let contactSyncRunning = false;
 let budgetScanRunning = false;
-let segmentTransitionScanRunning = false;
 let projectManagementDailyRunning = false;
 
 async function runProcurementDaily() {
@@ -151,40 +149,6 @@ async function runUploadCleanupDrain() {
   }
 }
 
-async function runProjectManagementSegmentTransitionScan() {
-  if (segmentTransitionScanRunning) {
-    logger.warn("cron.project_management_segment_transitions.skipped_running", {
-      module: "cron",
-      action: "runProjectManagementSegmentTransitionScan",
-      result: "skipped",
-    });
-    return;
-  }
-
-  segmentTransitionScanRunning = true;
-  try {
-    const locked = await runSegmentTransitionCron();
-    if (!locked.acquired) {
-      logger.warn("cron.project_management_segment_transitions.skipped_database_lock", {
-        module: "cron",
-        action: "runProjectManagementSegmentTransitionScan",
-        result: "skipped",
-      });
-      return;
-    }
-    const result = locked.result;
-    if (result.pendingConfirmationCount > 0 || result.inProgressCount > 0) {
-      logger.info("cron.project_management_segment_transitions.completed", {
-        module: "cron",
-        action: "runProjectManagementSegmentTransitionScan",
-        ...result,
-      });
-    }
-  } finally {
-    segmentTransitionScanRunning = false;
-  }
-}
-
 async function runProjectManagementDailyMaintenance() {
   if (projectManagementDailyRunning) {
     logger.warn("cron.project_management_daily.skipped_running", {
@@ -231,7 +195,6 @@ const cronJobs = createCronJobDefinitions(
     runNotificationOutboxDrainWithoutOverlap,
     runUploadCleanupDrain,
     runProcurementBudgetScan,
-    runProjectManagementSegmentTransitionScan,
     runProjectManagementDailyMaintenance,
     runProcurementDaily,
   },
