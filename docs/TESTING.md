@@ -46,6 +46,21 @@ npm run test:e2e -- --list
 
 ### 自动化门禁分层
 
+验证政策以根目录 `AGENTS.md` 为准。本节区分日常任务完成与合并/发布验收，不要求每次局部迭代都重跑完整回归：
+
+| 本次变更 | 日常任务完成前的最低验证 |
+| --- | --- |
+| 纯文档或注释，无可执行行为变化 | 本次差异的 `git diff --check`、受影响链接/路径/命令及规则一致性核对；不默认启动应用测试 |
+| 局部、非高风险代码或测试 | `npm run check` 和受影响测试 |
+| 新增或修改 UI 行为 | 代码门槛加相关 UI spec，在 Desktop `1440x1000` 与 Pixel 5 都验证适用的正常、异常和极端状态 |
+| 权限、状态流转、数据库、通知、上传、共享基础设施或跨模块行为 | `npm run check` 和完整 `npm run test:e2e`，保留相关并发、持久化及副作用断言 |
+
+类别叠加时取更严格要求；影响范围无法确认时升级验证。合并/发布验收仍要求 `npm run check`、完整 E2E 和适用的构建、迁移及专项检查，不能把局部通过或文档任务完成表述为全功能/可发布通过。安全规则、验证门槛和审查政策即使只修改文档也需要独立审查，但无可执行变更时不因此触发应用测试。
+
+开发中可通过 `npm run test:e2e -- <相关 spec 路径>` 定向执行，UI 保留 `desktop` 和 `mobile` 两个 project；Node 测试使用 `npm run test:node` 的受控入口。新增浏览器功能仍须覆盖主要工作流，bug 修复在可行时补充修复前失败、修复后通过的回归；浏览器不适用时使用可靠的 Node 或集成测试并说明原因。权限变更覆盖允许/拒绝，状态流转核对适用的 UI 和持久化结果，通知测试只核对 outbox/guard，不联系真实收件人。
+
+先跑定向测试，变更稳定后执行一次适用的完成门禁。只有相关源码、测试、依赖、配置和环境未变化时才复用已有成功结果；修复后重跑受影响检查。不并发执行争用同一端口、数据库或共享 fixture 的测试，不绕过官方 runner、隔离库、禁发或出站保护，包括仅收集测试时。
+
 三层 Playwright 命令都必须经过同一个官方 runner，不允许直接调用 `playwright test`：
 
 ```bash
@@ -187,7 +202,7 @@ Node 测试定向开发时可单独执行：
 npm run test:node
 ```
 
-每次提交前至少执行统一入口（其中已经包含一次 Node 测试，不需要再重复执行）：
+代码或测试变更在任务完成前执行统一入口；纯文档任务按前述静态核对门槛执行。统一入口已包含一次 Node 测试、类型检查和 ESLint，不需要在相同未变化状态上重复执行：
 
 ```bash
 npm run check
@@ -195,28 +210,35 @@ npm run check
 
 `npm run test:node` 会先运行纯 synthetic 安全 verifier，再自动发现、排序并只执行一次当前全部 `tests/*.node.ts`；任一验证失败、用例失败或没有匹配文件都会非零退出。Node runner 会清除数据库、通知和邮件等危险继承变量，重建飞书出口 guard，并强制关闭真实投递。当前 26 个 Node 用例不启动浏览器、不连接测试数据库：topology 回归锁定 31/47/78 分类、AST/spec policy、仅单一类别时的 fail-closed 行为、CLI selection 与 reporter 归属，cron wiring 回归锁定七条 schedule→handler 映射、`Asia/Shanghai` 时区和错误路由，Composer 回归覆盖存储清理和计划移动边界。`npm run check` 还依次执行 Prisma validate、应用与脚本 TypeScript、源码依赖门禁、全量 ESLint 和 `git diff --check`。数据库或生产构建相关改动再额外执行：
 
-```bash
-DATABASE_URL="postgresql://..." npm run db:deploy
-SHADOW_DATABASE_URL="postgresql://..._shadow" npx prisma migrate diff --from-migrations prisma/migrations --to-schema prisma/schema.prisma --exit-code
-npm run build
-```
-
-数据库相关改动额外执行：
+schema/migration 变更只在已确认的隔离 PostgreSQL 验证部署和结构一致性。以下连接占位符必须替换为隔离测试目标和 shadow 库，不可直接执行，也不能使用正常开发或生产连接：
 
 ```bash
-npm run db:deploy
+NOTIFICATION_DELIVERY_DISABLED=true DATABASE_URL="<isolated-test-url>" SHADOW_DATABASE_URL="<isolated-shadow-url>" npm run db:deploy
+NOTIFICATION_DELIVERY_DISABLED=true DATABASE_URL="<isolated-test-url>" SHADOW_DATABASE_URL="<isolated-shadow-url>" npx prisma migrate diff --from-migrations prisma/migrations --to-schema prisma/schema.prisma --exit-code
 ```
 
-项目管理 P1-P6 schema、身份、授权、生命周期、Segment、UI 或通知接入变更应额外执行：
+不要在同一未变化状态上重复执行部署。构建、路由边界、配置、部署或依赖变更执行 `npm run build`。runner 或测试安全机制变更还需执行两个独立安全入口：
+
+```bash
+npm run test:playwright-db-lifecycle
+npm run test:playwright-db-safety
+```
+
+项目管理 P1-P6 开发中从下面的相关 spec 选择实际受影响范围；这是定向入口示例，不要求普通局部 UI 改动运行整组。高风险变更和合并/发布仍按前述门槛执行完整 E2E：
 
 ```bash
 npm run test:e2e -- tests/project-management-p1.spec.ts tests/project-management-lifecycle.spec.ts tests/project-management-segments.spec.ts tests/project-management-resource-removal-migration.spec.ts tests/project-management-ui-composer.spec.ts tests/project-management-ui-workbench.spec.ts tests/project-management-ui-resource-planner.spec.ts tests/project-management-ui-routes-responsive.spec.ts tests/project-management-collaboration.spec.ts tests/notification-outbox-adapters.spec.ts tests/feishu-boundaries.spec.ts
-npm run pm:identity-backfill
+```
+
+仅身份模型、回填脚本或相关迁移变更时，额外在隔离库验证身份回填；普通 UI 改动不触发此项：
+
+```bash
+NOTIFICATION_DELIVERY_DISABLED=true DATABASE_URL="<isolated-test-url>" npm run pm:identity-backfill
 ```
 
 `npm run pm:identity-backfill` 默认只做 dry-run。需要验证写入时只能在隔离库或发布演练库设置 `APPLY_PM_IDENTITY_BACKFILL=true`，并确认重复执行不会新增重复 Account、Identity 或 Person。
 
-如果全量 ESLint 因历史问题失败，测试报告必须记录失败规则和文件，并补跑本次改动文件的定向 ESLint。
+如果全量 ESLint 因历史问题失败，测试报告必须记录失败规则和文件，并补跑本次改动文件的定向 ESLint；不得因此宣称 `npm run check` 通过。任何必需命令失败或无法执行时，记录确切命令、原因、替代验证和剩余风险，区分已有问题与本次回归，不顺手修复无关问题。
 
 ## Playwright 通用检查
 
@@ -337,7 +359,7 @@ npm run pm:identity-backfill
 近期动态 formatter 的无数据库纯映射回归可单独执行：
 
 ```bash
-npx tsx --test tests/project-management-recent-activity-formatter.node.ts
+npm run test:node
 ```
 
 ### Task 创建页专项测试
@@ -559,13 +581,13 @@ sudo systemctl status pnx-management-cron
 ### 测试执行 subagent
 
 ```text
-请在当前仓库按 docs/TESTING.md 执行测试。先记录 commit、Node/npm 版本、PostgreSQL 连接目标（脱敏）、Web 端口和登录态文件。按“基础代码测试 → Playwright 通用检查 → 采购模块 → 项目管理 P4/P6 UI → 反馈中心 → 管理员面板 → 实时同步 → 通知/cron → 部署冒烟”的顺序执行。不要修改代码。每个场景输出 PASS/FAIL/SKIP，FAIL 必须包含复现步骤、实际结果、期望结果、截图或 HTML 保存路径。不要输出 cookie、token、.env 密钥或完整用户敏感信息。
+请按根 AGENTS.md 和 docs/TESTING.md 验证本次任务。先确认给定的变更范围、验收标准、风险等级、基线及已有验证证据，再选择适用门槛；不要把定向测试说成全量回归。只记录与所选验证有关的 commit、Node/npm 版本、脱敏数据库目标、Web 端口和登录态路径。测试一律走官方受控入口；不要并发争用端口、数据库或 fixture，不联系真实飞书收件人。不要修改代码或修复无关失败。每个场景输出 PASS/FAIL/SKIP；失败记录复现步骤、实际/期望结果及已有证据路径，无法运行则说明命令、原因和剩余风险。不要输出 cookie、token、.env 密钥或完整敏感信息。
 ```
 
 ### 代码审查 subagent
 
 ```text
-请对当前仓库做只读代码审查，重点检查旧项目管理残留、权限与数据暴露、迁移删除范围、统一飞书传输层、notification channel adapter、outbox 事务/幂等/逐收件人重试、机器人路由、禁发与 allowlist、文件上传权限、Playwright 可测性和死代码。不要修改代码。输出按严重程度排序的 findings，每条包含文件路径、行号、风险说明、复现或推理依据、建议修复方向。如果没有阻塞问题，明确说明剩余风险和建议补充测试。
+请对给定的本次差异和直接依赖做只读审查，先确认任务/验收标准、风险等级、差异基线和验证证据，区分本次改动与已有未提交工作。按实际影响检查正确性、权限/数据暴露、状态流转与并发、事务与审计、迁移兼容、Feishu/outbox/机器人路由/禁发/allowlist、上传安全、测试可靠性、桌面/移动端极端状态及无关改动。仅发现具体跨模块风险时扩大范围，不例行全仓审计；纯风格偏好不作为问题。不要修改代码。findings 按严重程度排序，包含路径、行号、风险、证据和修复建议；复审只检查修复差异及受影响结论。没有新增可执行问题时明确说明，并列出剩余风险或验证限制；无关发现单独报告，不扩大修复范围。
 ```
 
 ## 测试报告格式
