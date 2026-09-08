@@ -113,18 +113,18 @@ export function NotificationCenterClient({
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    <h2 className="truncate font-medium">{notification.title}</h2>
+                    <h2 className="min-w-0 break-words font-medium [overflow-wrap:anywhere]">{notification.title}</h2>
                     <Badge variant="secondary">
                       {notificationCategoryLabels[notification.category]}
                     </Badge>
                     {!notification.readAt && <Badge>未读</Badge>}
                   </div>
                   {notification.summary && (
-                    <p className="mt-2 text-sm text-muted-foreground">
+                    <p className="mt-2 break-words text-sm text-muted-foreground [overflow-wrap:anywhere]">
                       {notification.summary}
                     </p>
                   )}
-                  <p className="mt-2 text-xs text-muted-foreground">
+                  <p className="mt-2 break-words text-xs text-muted-foreground [overflow-wrap:anywhere]">
                     {formatDateTime(notification.createdAt)}
                     {notification.taskTitle ? ` · ${notification.taskTitle}` : ""}
                   </p>

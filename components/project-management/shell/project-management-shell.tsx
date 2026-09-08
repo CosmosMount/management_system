@@ -5,6 +5,7 @@ import {
   Bell,
   CalendarRange,
   FolderKanban,
+  Users,
   LayoutDashboard,
   LayoutList,
   ListChecks,
@@ -20,25 +21,21 @@ type ProjectManagementShellProps = {
   children: ReactNode;
 };
 
-function projectNavigationItems(
+export function projectNavigationItems(
   unreadCount: number,
 ): ManagementNavigationItem[] {
   return [
     {
       href: routes.progress.root,
-      label: "我的工作",
-      icon: FolderKanban,
+      label: "工作台",
+      group: "工作空间",
+      icon: LayoutDashboard,
       match: (pathname) => pathname === routes.progress.root,
     },
     {
-      href: routes.progress.kanban,
-      label: "看板",
-      icon: LayoutDashboard,
-      match: (pathname) => pathname === routes.progress.kanban,
-    },
-    {
       href: routes.progress.projects,
-      label: "Project",
+      label: "项目",
+      group: "工作空间",
       icon: FolderKanban,
       match: (pathname) =>
         pathname === routes.progress.projects ||
@@ -46,27 +43,38 @@ function projectNavigationItems(
     },
     {
       href: routes.progress.tasks,
-      label: "Task",
+      label: "任务",
+      group: "工作空间",
       icon: LayoutList,
       match: (pathname) =>
         pathname === routes.progress.tasks ||
         pathname.startsWith(`${routes.progress.tasks}/`),
     },
     {
-      href: routes.progress.resources,
-      label: "资源计划",
-      icon: CalendarRange,
-      match: (pathname) => pathname === routes.progress.resources,
-    },
-    {
       href: routes.progress.approvals,
-      label: "待办审批",
+      label: "待办与审批",
+      group: "工作空间",
       icon: ListChecks,
       match: (pathname) => pathname === routes.progress.approvals,
     },
     {
+      href: routes.progress.resources,
+      label: "资源计划",
+      group: "团队排期",
+      icon: CalendarRange,
+      match: (pathname) => pathname === routes.progress.resources,
+    },
+    {
+      href: routes.progress.kanban,
+      label: "人员时间线",
+      group: "团队排期",
+      icon: Users,
+      match: (pathname) => pathname === routes.progress.kanban,
+    },
+    {
       href: routes.progress.notifications,
       label: "通知",
+      group: "消息中心",
       icon: Bell,
       match: (pathname) =>
         pathname === routes.progress.notifications ||

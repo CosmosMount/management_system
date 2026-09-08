@@ -106,7 +106,7 @@ export async function submitTaskComposer({
       ok: false,
       error: {
         code: "INVALID_REVISION_CONTEXT",
-        message: "Revision 编辑上下文缺失，请刷新后重试。",
+        message: "计划修订编辑上下文缺失，请刷新后重试。",
       },
     };
   }

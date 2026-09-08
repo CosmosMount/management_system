@@ -15,7 +15,7 @@ export function TaskList({ tasks }: { tasks: TaskListItem[] }) {
   if (tasks.length === 0) {
     return (
       <div className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-        当前没有可见 Task。
+        当前没有可见任务。
       </div>
     );
   }
@@ -61,7 +61,7 @@ export function TaskList({ tasks }: { tasks: TaskListItem[] }) {
                   {formatDateTime(task.activeTermination.plannedAt)}
                 </p>
               ) : (
-                <p>当前没有 Active Milestone</p>
+                <p>当前没有进行中的里程碑</p>
               )}
               <p>
                 {task.members

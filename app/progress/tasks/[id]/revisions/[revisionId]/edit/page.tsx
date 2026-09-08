@@ -85,7 +85,7 @@ export default async function ProgressTaskRevisionEditPage({
   return (
     <>
       <PageCommandBar
-        title="修改 Revision"
+        title="修改计划修订"
         description="修改被驳回的候选计划并直接重新送审；已承接节点保持只读。"
       />
       <TaskComposerClient

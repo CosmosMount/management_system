@@ -592,14 +592,14 @@ function segmentAriaLabel(segment: TimeCanvasSegment) {
   const type = segment.type === "BUSY" ? "其他占用" : "投入记录";
   const task = segment.type === "BUSY"
     ? ""
-    : `，Task ${segment.taskTitle ?? "独立投入"}`;
+    : `，任务 ${segment.taskTitle ?? "独立投入"}`;
   return `${type} ${segment.title}${task}，${formatRange(segment.startMs, segment.endMs)}`;
 }
 
 function segmentHoverTitle(segment: TimeCanvasSegment) {
   const range = formatRange(segment.startMs, segment.endMs);
   if (segment.type === "BUSY") return `其他占用 · ${range}`;
-  return `${segment.title} · Task：${segment.taskTitle ?? "独立投入"} · ${range}`;
+  return `${segment.title} · 任务：${segment.taskTitle ?? "独立投入"} · ${range}`;
 }
 
 function anchorToneClassName(anchor: TimeCanvasAnchor) {

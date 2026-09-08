@@ -69,7 +69,7 @@ export function TimeCanvas({
   selection: controlledSelection,
   initialSelection = null,
   focusRequest = null,
-  emptyMessage = "选择人员或 Task 后查看计划",
+  emptyMessage = "选择人员或任务后查看计划",
   onRangeChange,
   navigationRange,
   onRequestCenter,

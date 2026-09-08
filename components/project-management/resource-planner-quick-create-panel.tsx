@@ -141,7 +141,7 @@ export function QuickCreatePanel({
         const content = String(form.get("content") ?? "");
         if (!personId) nextErrors.personId = ["请选择人员"];
         if (!content.trim()) nextErrors.content = ["请输入工作内容"];
-        if (!allowIndependent && !submittedTaskId) nextErrors.taskId = ["请选择 Task"];
+        if (!allowIndependent && !submittedTaskId) nextErrors.taskId = ["请选择任务"];
         if (Object.keys(nextErrors).length > 0) {
           setFieldErrors((current) => ({ ...current, ...nextErrors }));
           const first = nextErrors.personId ? "quick-person" : nextErrors.content ? "quick-content" : "quick-task";
@@ -243,12 +243,12 @@ export function QuickCreatePanel({
         <Input id="quick-content" name="content" defaultValue="" required disabled={disabled} maxLength={2_000} aria-invalid={Boolean(fieldErrors.content)} aria-describedby={fieldErrors.content ? "quick-content-error" : undefined} onChange={() => clearFieldError("content")} />
         <FieldError id="quick-content-error" messages={fieldErrors.content} />
       </Field>
-      <Field label="Task" htmlFor="quick-task">
+      <Field label="任务" htmlFor="quick-task">
         {lockedTaskId ? (
           <>
             <Input
               id="quick-task"
-              value={(lockedTask?.title ?? defaultTaskTitle) || "当前 Task"}
+              value={(lockedTask?.title ?? defaultTaskTitle) || "当前任务"}
               readOnly
               aria-readonly="true"
             />
@@ -257,7 +257,7 @@ export function QuickCreatePanel({
         ) : (
           <TaskSelect
             inputId="quick-task"
-            ariaLabel="Task"
+            ariaLabel="任务"
             name="taskId"
             value={taskId}
             onValueChange={(value) => {

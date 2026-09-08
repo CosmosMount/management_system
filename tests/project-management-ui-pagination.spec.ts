@@ -85,17 +85,17 @@ test("notification, Task, risk, and activity records beyond the first page remai
   await expect(page.getByText("UI 分页 Task 0", { exact: true })).toBeVisible();
   await expect(page.getByText("UI 分页 Task 50", { exact: true })).toHaveCount(0);
   const nextTaskHref = await page
-    .getByRole("link", { name: "下一页 Task" })
+    .getByRole("link", { name: "下一页任务" })
     .getAttribute("href");
   expect(nextTaskHref).not.toBeNull();
-  await page.getByRole("link", { name: "下一页 Task" }).click();
+  await page.getByRole("link", { name: "下一页任务" }).click();
   await expect(page).toHaveURL(/cursor=/);
   await expect(page.getByText("UI 分页 Task 50", { exact: true })).toBeVisible();
   await expectHealthyPage(page);
 
   await page.goto("/progress/tasks?q=UI+分页+Task&cursor=malformed");
   await expect(page.getByRole("status")).toContainText("仅显示最相关的 50 条");
-  await expect(page.getByRole("link", { name: "下一页 Task" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "下一页任务" })).toHaveCount(0);
   await expectHealthyPage(page);
 
   const anchorId = cursorIdFromHref(nextTaskHref!);
@@ -107,7 +107,7 @@ test("notification, Task, risk, and activity records beyond the first page remai
   await expect(page).toHaveURL(/cursorError=1/);
   await expect(page).not.toHaveURL(/(?:\?|&)cursor=/);
   await expect(
-    page.getByRole("alert").getByText("Task 列表已变化，已为你返回第一页。"),
+    page.getByRole("alert").getByText("任务列表已变化，已为你返回第一页。"),
   ).toBeVisible();
   await expectHealthyPage(page);
 

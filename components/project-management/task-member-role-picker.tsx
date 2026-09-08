@@ -54,7 +54,7 @@ export function TaskMemberRolePicker({
     const existing = members.find((member) => member.personId === personId);
     if (existing?.role === role) return;
     if (existing?.role === "OWNER" && role === "PARTICIPANT" && personId === protectedOwnerId) {
-      setMemberError("你当前是 Project 负责人，不能降级自己。");
+      setMemberError("你当前是项目负责人，不能降级自己。");
       return;
     }
     if (requireOwner && existing?.role === "OWNER" && owners.length === 1) {
@@ -117,7 +117,7 @@ export function TaskMemberRolePicker({
       />
       <FieldError id={externalErrorId} messages={error} />
       {memberError && <p className="text-sm text-destructive" role="alert">{memberError}</p>}
-      {protectedOwnerId && owners.some((member) => member.personId === protectedOwnerId) && <p className="text-xs text-muted-foreground">你当前是 Project 负责人，不能移除或降级自己；请由其他负责人操作。</p>}
+      {protectedOwnerId && owners.some((member) => member.personId === protectedOwnerId) && <p className="text-xs text-muted-foreground">你当前是项目负责人，不能移除或降级自己；请由其他负责人操作。</p>}
     </div>
   );
 }

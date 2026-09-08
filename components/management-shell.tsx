@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -29,6 +29,7 @@ export type ManagementNavigationItem = {
   icon: LucideIcon;
   match(pathname: string): boolean;
   badgeCount?: number;
+  group?: string;
 };
 
 type ManagementShellProps = {
@@ -142,7 +143,7 @@ function ManagementNavigation({
       aria-label={`${title}导航`}
       className="min-w-0 space-y-1 overflow-y-auto p-2"
     >
-      {navigationItems.map((item) => {
+      {navigationItems.map((item, index) => {
         const Icon = item.icon;
         const active = item.match(pathname);
         const badgeCount = item.badgeCount ?? 0;
@@ -152,8 +153,16 @@ function ManagementNavigation({
             : item.label;
 
         return (
+          <Fragment key={item.href}>
+            {item.group && item.group !== navigationItems[index - 1]?.group && (
+              <div className={cn("px-3 pb-2 pt-5 first:pt-3", collapsed && "px-1")}>
+                <p className={cn("text-xs font-medium text-muted-foreground", collapsed && "sr-only")}>
+                  {item.group}
+                </p>
+                {collapsed && <div className="border-t border-border" aria-hidden="true" />}
+              </div>
+            )}
           <Link
-            key={item.href}
             href={item.href}
             aria-current={active ? "page" : undefined}
             aria-label={accessibleLabel}
@@ -190,6 +199,7 @@ function ManagementNavigation({
               </Badge>
             )}
           </Link>
+          </Fragment>
         );
       })}
     </nav>
@@ -231,10 +241,10 @@ function ManagementMobileNavigation({
         />
         <DialogContent
           showCloseButton={false}
-          className="inset-y-0 left-0 top-0 h-dvh w-[min(20rem,calc(100vw-2rem))] max-w-none translate-x-0 translate-y-0 content-start gap-0 rounded-none border-r border-[var(--pm-shell-border)] bg-[var(--pm-sidebar-bg)] p-0 motion-reduce:animate-none motion-reduce:transition-none data-open:slide-in-from-left data-closed:slide-out-to-left sm:max-w-none"
+          className="inset-y-0 left-0 top-0 flex h-dvh w-[min(20rem,calc(100vw-2rem))] max-w-none translate-x-0 translate-y-0 flex-col gap-0 rounded-none border-r border-[var(--pm-shell-border)] bg-[var(--pm-sidebar-bg)] p-0 motion-reduce:animate-none motion-reduce:transition-none data-open:slide-in-from-left data-closed:slide-out-to-left sm:max-w-none"
           data-testid={`${testIdPrefix}-drawer`}
         >
-          <DialogHeader className="flex-row items-start justify-between gap-3 border-b border-[var(--pm-shell-border)] p-4 text-left">
+          <DialogHeader className="shrink-0 flex-row items-start justify-between gap-3 border-b border-[var(--pm-shell-border)] p-4 text-left">
             <div className="min-w-0">
               <DialogTitle>{title}导航</DialogTitle>
               <DialogDescription className="mt-1">

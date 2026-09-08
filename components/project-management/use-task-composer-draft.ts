@@ -164,7 +164,7 @@ export function useTaskComposerDraft({
           } else {
             setStorageReady(true);
             setError(
-              "浏览器本地草稿不可用；你仍可创建 Task，但刷新后内容可能丢失。",
+              "浏览器本地草稿不可用；你仍可创建任务，但刷新后内容可能丢失。",
             );
           }
         }
@@ -244,7 +244,7 @@ export function useTaskComposerDraft({
       setSavedAt(saved);
       return true;
     } catch {
-      setError("本地草稿保存失败，页面仍停留在 Composer，请不要刷新。");
+      setError("本地草稿保存失败，页面仍停留在编辑器，请不要刷新。");
       return false;
     }
   }, [cancelPendingAutoSave, editContext, queueDraftWrite, setError, state]);

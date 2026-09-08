@@ -241,10 +241,10 @@ test.describe("Project/Task 风险、评论与近期动态", () => {
     });
     await page.goto(`/progress/tasks/${draft.taskId}`);
     await expect(
-      page.getByRole("heading", { name: "Task 风险", exact: true }),
+      page.getByRole("heading", { name: "任务风险", exact: true }),
     ).toBeVisible();
     await expect(
-      page.getByRole("heading", { name: "Task 评论", exact: true }),
+      page.getByRole("heading", { name: "任务评论", exact: true }),
     ).toBeVisible();
     await expect(page.getByRole("heading", { name: "近期动态" })).toBeVisible();
     const uiRiskContent = `浏览器提出的风险 ${randomUUID()}`;
@@ -309,8 +309,8 @@ test.describe("Project/Task 风险、评论与近期动态", () => {
       name: admin.displayName,
     });
     await page.goto(`/progress/projects/${project.id}`);
-    await expect(page.getByText("Project 自身风险", { exact: true })).toBeVisible();
-    await expect(page.getByText("当前所属 Task 风险", { exact: true })).toBeVisible();
+    await expect(page.getByText("项目自身风险", { exact: true })).toBeVisible();
+    await expect(page.getByText("当前所属任务风险", { exact: true })).toBeVisible();
     await expect(page.getByText("Project 自身存在的风险", { exact: true })).toBeVisible();
     await expect(page.getByText("需要在 Project 汇总区展示的 Task 风险", { exact: true })).toBeVisible();
     const commentCard = page.locator("article").filter({ hasText: "所有已登录用户都可以发布的 Project 评论" });

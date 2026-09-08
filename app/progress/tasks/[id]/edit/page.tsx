@@ -93,8 +93,8 @@ export default async function ProgressTaskEditPage({
   return (
     <>
       <PageCommandBar
-        title="编辑 Task"
-        description="统一调整草稿的基本信息、成员和完整计划；保存后返回 Task 工作台。"
+        title="编辑任务"
+        description="统一调整草稿的基本信息、成员和完整计划；保存后返回任务工作台。"
       />
       <TaskComposerClient
         accountId={actor.accountId}

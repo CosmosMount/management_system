@@ -193,7 +193,7 @@ export default async function ProgressResourcesPage({
     <>
       <PageCommandBar
         title="资源计划"
-        description="聚合选中 Project、Task 与人员的 Current Plan 和完整投入时间线。"
+        description="聚合选中项目、任务与人员的当前计划和完整投入时间线。"
       />
       <div className="mx-auto flex w-full min-w-0 max-w-[96rem] flex-col gap-5 px-4 py-6 sm:px-6 lg:px-8">
         <ResourceFilterBar

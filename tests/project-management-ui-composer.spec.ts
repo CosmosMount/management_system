@@ -54,14 +54,14 @@ test.describe("project management UI project-management-ui-composer", () => {
 
       await page.goto("/progress/tasks/new?start=2026-09-01");
       await expect(page).toHaveURL(/\/progress\/tasks\/new$/);
-      await expect(page.getByRole("heading", { name: "新建 Task" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "新建任务" })).toBeVisible();
       await expect(page.getByTestId("task-composer")).toBeVisible();
-      const taskTitle = page.getByLabel("Task 名称");
+      const taskTitle = page.getByLabel("任务名称");
       await expect(taskTitle).not.toHaveAttribute("aria-invalid", "true");
-      await page.getByRole("button", { name: "创建 Task 草稿" }).click();
+      await page.getByRole("button", { name: "创建任务草稿" }).click();
       await expect(taskTitle).toHaveAttribute("aria-invalid", "true");
       await expect(taskTitle).toBeFocused();
-      await expect(page.getByRole("alert").filter({ hasText: "请输入 Task 名称" })).toBeVisible();
+      await expect(page.getByRole("alert").filter({ hasText: "请输入任务名称" })).toBeVisible();
       expect(
         await page.evaluate(
           () => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
@@ -72,7 +72,7 @@ test.describe("project management UI project-management-ui-composer", () => {
       await expect(taskTitle).not.toHaveAttribute("aria-invalid", "true");
       await page
         .getByTestId("task-plan-node-navigator")
-        .getByRole("button", { name: /Start/ })
+        .getByRole("button", { name: /开始节点/ })
         .click();
       await page.getByLabel("计划开始时间").fill("2026-09-01T09:00");
       await page
@@ -85,7 +85,7 @@ test.describe("project management UI project-management-ui-composer", () => {
       await page.reload();
       await expect(page.getByText(/检测到 .* 保存的未完成草稿/)).toBeVisible();
       await page.getByRole("button", { name: "恢复草稿" }).click();
-      await expect(page.getByLabel("Task 名称")).toHaveValue(title);
+      await expect(page.getByLabel("任务名称")).toHaveValue(title);
 
       await expect(page.getByRole("button", {
         name: `移除 ${creator.person.displayName} 负责人`,
@@ -113,20 +113,20 @@ test.describe("project management UI project-management-ui-composer", () => {
       await page.setViewportSize(originalViewport);
 
       await expect(page.getByTestId("task-composer-milestone-count")).toHaveText("0/200");
-      await expect(page.getByTestId("task-plan-node-navigator").getByRole("button", { name: /Start/ })).toBeVisible();
+      await expect(page.getByTestId("task-plan-node-navigator").getByRole("button", { name: /开始节点/ })).toBeVisible();
       await expect(page.getByTestId("task-plan-node-navigator").getByRole("button", { name: /Terminal/ })).toBeVisible();
       await expect(page.getByLabel("计划节点列表")).toHaveCount(0);
-      await expect(page.getByRole("button", { name: /复制 Milestone/ })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: /复制里程碑/ })).toHaveCount(0);
       await expect(page.getByRole("button", { name: /批量删除/ })).toHaveCount(0);
       await expect(page.getByRole("button", { name: "校验", exact: true })).toHaveCount(0);
       await expect(page.getByText("问题列表", { exact: true })).toHaveCount(0);
-      await page.getByRole("button", { name: /添加 Milestone/ }).first().click();
+      await page.getByRole("button", { name: /添加里程碑/ }).first().click();
       await expect(page.getByTestId("task-composer-milestone-count")).toHaveText("1/200");
       await expect(page.getByTestId("task-composer-temporary-count")).toHaveText("1 个临时");
       await expect(
         page
           .getByTestId("task-plan-node-navigator")
-          .getByRole("button", { name: /临时 Milestone.*临时节点/ }),
+          .getByRole("button", { name: /临时里程碑.*临时节点/ }),
       ).toBeVisible();
       await page.getByLabel("目标").fill("完成 S5 Composer 主流程");
       await page
@@ -164,8 +164,8 @@ test.describe("project management UI project-management-ui-composer", () => {
       await milestoneTime.fill(originalMilestoneTime);
 
       const planNavigator = page.getByTestId("task-plan-node-navigator");
-      await planNavigator.getByRole("button", { name: /Start/ }).click();
-      await expect(page.getByTestId("task-composer-inspector")).toContainText("Start");
+      await planNavigator.getByRole("button", { name: /开始节点/ }).click();
+      await expect(page.getByTestId("task-composer-inspector")).toContainText("开始节点");
       await planNavigator.getByRole("button", { name: /Terminal/ }).click();
       await expect(page.getByTestId("task-composer-inspector")).toContainText("Terminal");
       await page
@@ -173,20 +173,20 @@ test.describe("project management UI project-management-ui-composer", () => {
         .fill("Task 草稿创建完成且不包含初始 Segment");
       const terminationTime = page.getByLabel("计划结束时间");
       await terminationTime.fill("2026-09-07T18:00");
-      await page.getByRole("button", { name: "创建 Task 草稿" }).click();
+      await page.getByRole("button", { name: "创建任务草稿" }).click();
       await expect(milestoneTime).toHaveAttribute("aria-invalid", "true");
       await expect(milestoneTime).toBeFocused();
       await expect(
         page
           .getByTestId("task-composer-inspector")
-          .getByText("Milestone 必须严格位于 Start 与 Terminal 之间。"),
+          .getByText("里程碑必须严格位于开始节点与结束节点之间。"),
       ).toBeVisible();
       await planNavigator.getByRole("button", { name: /Terminal/ }).click();
       await expect(terminationTime).toHaveAttribute("aria-invalid", "true");
       await expect(
         page
           .getByTestId("task-composer-inspector")
-          .getByText("Terminal 必须严格晚于 Start 和最后一个 Milestone。"),
+          .getByText("结束节点必须严格晚于开始节点和最后一个里程碑。"),
       ).toBeVisible();
       await terminationTime.fill("2026-09-16T18:00");
       await expect(terminationTime).not.toHaveAttribute("aria-invalid", "true");
@@ -356,14 +356,14 @@ test.describe("project management UI project-management-ui-composer", () => {
         await page.getByLabel("描述").fill(concurrentDescriptionA);
         await concurrentPage.getByLabel("描述").fill(concurrentDescriptionB);
         await Promise.all([
-          page.getByRole("button", { name: "全部 Task", exact: true }).click(),
-          concurrentPage.getByRole("button", { name: "全部 Task", exact: true }).click(),
+          page.getByRole("button", { name: "全部任务", exact: true }).click(),
+          concurrentPage.getByRole("button", { name: "全部任务", exact: true }).click(),
         ]);
         const primaryLeaveDialog = page.getByRole("dialog", {
-          name: "离开 Task Composer？",
+          name: "离开任务编辑器？",
         });
         const concurrentLeaveDialog = concurrentPage.getByRole("dialog", {
-          name: "离开 Task Composer？",
+          name: "离开任务编辑器？",
         });
         await expect(primaryLeaveDialog).toBeVisible();
         await expect(concurrentLeaveDialog).toBeVisible();
@@ -410,9 +410,9 @@ test.describe("project management UI project-management-ui-composer", () => {
             .releaseDraftStorageLock?.();
         });
         await heldDraftLock;
-        await expect(page.getByRole("heading", { name: "全部 Task" })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "全部任务" })).toBeVisible();
         await expect(
-          concurrentPage.getByRole("heading", { name: "全部 Task" }),
+          concurrentPage.getByRole("heading", { name: "全部任务" }),
         ).toBeVisible();
         await concurrentPage.close();
         await lockPage.close();
@@ -438,11 +438,11 @@ test.describe("project management UI project-management-ui-composer", () => {
         }
         await route.continue();
       });
-      await page.getByRole("button", { name: "创建 Task 草稿" }).click();
+      await page.getByRole("button", { name: "创建任务草稿" }).click();
       await expect(page.getByText(/网络或服务暂时不可用/)).toBeVisible();
       expect(await prisma.task.count({ where: { title } })).toBe(1);
       await page.unroute(createTaskActionUrl);
-      await page.getByRole("button", { name: "创建 Task 草稿" }).click();
+      await page.getByRole("button", { name: "创建任务草稿" }).click();
       await expect(
         page
           .getByTestId("task-workbench-v2")
@@ -494,7 +494,7 @@ test.describe("project management UI project-management-ui-composer", () => {
       if (testInfo.project.name === "desktop") {
         await page.clock.install();
         await page.goto("/progress/tasks/new");
-        await page.getByLabel("Task 名称").fill("立即放弃的防抖草稿");
+        await page.getByLabel("任务名称").fill("立即放弃的防抖草稿");
         expect(
           await page.evaluate(async (key) => {
             const localRaw = window.localStorage.getItem(key);
@@ -516,17 +516,17 @@ test.describe("project management UI project-management-ui-composer", () => {
             };
           }, extremeDraft.key),
         ).toEqual({ hasLocalDraft: false, hasIndexedDraft: false });
-        await page.getByRole("button", { name: "全部 Task", exact: true }).click();
+        await page.getByRole("button", { name: "全部任务", exact: true }).click();
         const leaveDialog = page.getByRole("dialog", {
-          name: "离开 Task Composer？",
+          name: "离开任务编辑器？",
         });
         await expect(leaveDialog).toBeVisible();
         await leaveDialog.getByRole("button", { name: "放弃并离开" }).click();
-        await expect(page.getByRole("heading", { name: "全部 Task" })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "全部任务" })).toBeVisible();
         await page.clock.runFor(900);
         await page.goto("/progress/tasks/new");
         await expect(page.getByText(/检测到 .* 保存的未完成草稿/)).toHaveCount(0);
-        await expect(page.getByLabel("Task 名称")).toHaveValue("");
+        await expect(page.getByLabel("任务名称")).toHaveValue("");
       }
     });
 
@@ -547,17 +547,17 @@ test.describe("project management UI project-management-ui-composer", () => {
       });
 
       await page.goto("/progress/tasks/new?start=2026-09-01");
-      await page.getByLabel("Task 名称").fill(`S5 时间线批量编辑 ${randomUUID()}`);
+      await page.getByLabel("任务名称").fill(`S5 时间线批量编辑 ${randomUUID()}`);
       const navigator = page.getByTestId("task-plan-node-navigator");
       const inspector = page.getByTestId("task-composer-inspector");
-      await navigator.getByRole("button", { name: /Start/ }).click();
+      await navigator.getByRole("button", { name: /开始节点/ }).click();
       await page.getByLabel("计划开始时间").fill("2026-09-01T09:00");
       await navigator.getByRole("button", { name: /Terminal/ }).click();
       await page.getByLabel("计划结束时间").fill("2026-09-20T18:00");
 
       const addMilestone = async (label: string, plannedAt: string) => {
         await page
-          .getByRole("button", { name: "添加 Milestone", exact: true })
+          .getByRole("button", { name: "添加里程碑", exact: true })
           .first()
           .click();
         await inspector.getByLabel("目标").fill(label);
@@ -576,7 +576,7 @@ test.describe("project management UI project-management-ui-composer", () => {
         return inspector.getByLabel("预期完成时间").inputValue();
       };
       const readStartTime = async () => {
-        await navigator.getByRole("button", { name: /Start/ }).click();
+        await navigator.getByRole("button", { name: /开始节点/ }).click();
         return inspector.getByLabel("计划开始时间").inputValue();
       };
       const readTerminalTime = async () => {
@@ -925,7 +925,7 @@ test.describe("project management UI project-management-ui-composer", () => {
       });
 
       await page.goto("/progress/tasks/new");
-      await page.getByLabel("Task 名称").fill(title);
+      await page.getByLabel("任务名称").fill(title);
       await expect
         .poll(() =>
           page.evaluate(() =>
@@ -974,7 +974,7 @@ test.describe("project management UI project-management-ui-composer", () => {
         .getByRole("button", { name: /Terminal/ })
         .click();
       await page.getByLabel("结束条件").fill("草稿阶段允许只有参与人员");
-      await page.getByRole("button", { name: "创建 Task 草稿" }).click();
+      await page.getByRole("button", { name: "创建任务草稿" }).click();
       await expect(
         page
           .getByTestId("task-workbench-v2")
@@ -1020,10 +1020,10 @@ test.describe("project management UI project-management-ui-composer", () => {
 
       await page.goto("/progress/tasks/new?start=2026-08-01");
       await expect(page).toHaveURL(/\/progress\/tasks\/new$/);
-      await page.getByLabel("Task 名称").fill(title);
+      await page.getByLabel("任务名称").fill(title);
       await page
         .getByTestId("task-plan-node-navigator")
-        .getByRole("button", { name: /Start/ })
+        .getByRole("button", { name: /开始节点/ })
         .click();
       await page.getByLabel("计划开始时间").fill("2026-08-01T09:00");
       await page
@@ -1036,14 +1036,14 @@ test.describe("project management UI project-management-ui-composer", () => {
         .getByTestId("task-plan-node-navigator")
         .getByRole("button", { name: /Terminal/ })
         .click();
-      await page.getByLabel("Terminal 名称").fill("交付终点");
+      await page.getByLabel("结束节点名称").fill("交付终点");
       await page.getByLabel("结束条件").fill("无需中间验收，直接进入交付终点");
       const ownerPicker = page.getByLabel("搜索负责人", { exact: true });
       await ownerPicker.fill(creator.person.displayName);
       await page
         .getByRole("option", { name: creator.person.displayName, exact: true })
         .click();
-      await page.getByRole("button", { name: "创建 Task 草稿" }).click();
+      await page.getByRole("button", { name: "创建任务草稿" }).click();
       await expect(
         page
           .getByTestId("task-workbench-v2")
@@ -1051,11 +1051,11 @@ test.describe("project management UI project-management-ui-composer", () => {
       ).toBeVisible();
 
       page.once("dialog", (dialog) => dialog.accept());
-      await page.getByRole("button", { name: "激活 Task" }).click();
+      await page.getByRole("button", { name: "激活任务" }).click();
       await expect(
         page
           .getByTestId("task-plan-node-navigator")
-          .getByRole("button", { name: /交付终点.*Terminal.*当前/ }),
+          .getByRole("button", { name: /交付终点.*结束节点.*当前/ }),
       ).toBeVisible();
       await expectHealthyPage(page);
 
@@ -1096,7 +1096,7 @@ test.describe("project management UI project-management-ui-composer", () => {
       });
 
       await page.goto("/progress/tasks/new");
-      await page.getByLabel("Task 名称").fill("当前 v4 草稿完整保留");
+      await page.getByLabel("任务名称").fill("当前 v4 草稿完整保留");
       const keys = await expect.poll(() => page.evaluate(() => {
         const currentKey = Object.keys(window.localStorage).find((key) =>
           key.endsWith(":v4"),
@@ -1142,7 +1142,7 @@ test.describe("project management UI project-management-ui-composer", () => {
       await page.reload();
       await expect(page.getByText(/检测到 .* 保存的未完成草稿/)).toBeVisible();
       await page.getByRole("button", { name: "恢复草稿" }).click();
-      await expect(page.getByLabel("Task 名称")).toHaveValue(
+      await expect(page.getByLabel("任务名称")).toHaveValue(
         "当前 v4 草稿完整保留",
       );
       await expect.poll(() => page.evaluate(async ({ retiredKeys }) => {
@@ -1191,7 +1191,7 @@ test.describe("project management UI project-management-ui-composer", () => {
       await page.reload();
       await expect(page.getByText(/检测到 .* 保存的未完成草稿/)).toHaveCount(0);
       await expect(page.getByText(/草稿版本、结构或字段不兼容/)).toHaveCount(0);
-      await expect(page.getByLabel("Task 名称")).toHaveValue("");
+      await expect(page.getByLabel("任务名称")).toHaveValue("");
       await expect.poll(() => page.evaluate(async ({ currentKey }) => {
         const localRemoved = window.localStorage.getItem(currentKey) === null;
         const database = await new Promise<IDBDatabase>((resolve, reject) => {
@@ -1261,22 +1261,22 @@ test.describe("project management UI project-management-ui-composer", () => {
       await expect(page.getByRole("heading", { name: "资源计划" })).toBeVisible();
       await expectHealthyPage(page);
       await page.goto("/progress");
-      await expect(page.getByRole("heading", { name: "我的工作" })).toBeVisible({
+      await expect(page.getByRole("heading", { name: "工作台" })).toBeVisible({
         timeout: 15_000,
       });
-      await expect(page.getByRole("link", { name: "新建 Task" })).toHaveCount(0);
+      await expect(page.getByRole("link", { name: "新建任务" })).toHaveCount(0);
       await expectHealthyPage(page);
       await page.goto("/progress/tasks/new");
       await expect(page).toHaveURL(/\/progress\/tasks$/);
-      await expect(page.getByRole("heading", { name: "全部 Task" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "全部任务" })).toBeVisible();
       await expect(page.getByTestId("task-composer")).toHaveCount(0);
-      await expect(page.getByRole("link", { name: "新建 Task" })).toHaveCount(0);
+      await expect(page.getByRole("link", { name: "新建任务" })).toHaveCount(0);
       await expectHealthyPage(page);
       await page.goto(`/progress/projects/${project.id}`);
       await expect(
         page.getByRole("heading", { name: project.name }),
       ).toBeVisible();
-      await expect(page.getByRole("link", { name: "新建 Task" })).toHaveCount(0);
+      await expect(page.getByRole("link", { name: "新建任务" })).toHaveCount(0);
       await expectHealthyPage(page);
       await page.goto(`/progress/tasks/${draft.taskId}`);
       await expect(
@@ -1332,15 +1332,15 @@ test.describe("project management UI project-management-ui-composer", () => {
       });
 
       await page.goto("/progress/tasks");
-      await page.getByRole("link", { name: "新建 Task" }).click();
-      await page.getByLabel("关联 Task", { exact: true }).fill(hiddenTitle);
+      await page.getByRole("link", { name: "新建任务" }).click();
+      await page.getByLabel("关联任务", { exact: true }).fill(hiddenTitle);
       await expect(page.getByText("没有匹配项。")).toBeVisible();
       await expect(
         page.getByRole("option", { name: new RegExp(hiddenTitle) }),
       ).toHaveCount(0);
       const forgedTitle = `S5 forged related ${randomUUID()}`;
-      await page.getByLabel("Task 名称").fill(forgedTitle);
-      await page.getByRole("button", { name: /添加 Milestone/ }).first().click();
+      await page.getByLabel("任务名称").fill(forgedTitle);
+      await page.getByRole("button", { name: /添加里程碑/ }).first().click();
       await page.getByLabel("目标").fill("伪造关联目标");
       await page.getByLabel("完成条件").fill("服务端拒绝隐藏关联");
       await page.getByLabel("验收要求").fill("不得通过本地草稿绕过可见性");
@@ -1364,11 +1364,11 @@ test.describe("project management UI project-management-ui-composer", () => {
       }, { taskId: hiddenTask.taskId, title: forgedTitle });
       await page.reload();
       await page.getByRole("button", { name: "恢复草稿" }).click();
-      await page.getByRole("button", { name: "创建 Task 草稿" }).click();
+      await page.getByRole("button", { name: "创建任务草稿" }).click();
       await expect(page.getByText(/对象不存在|无权/)).toBeVisible();
       expect(await prisma.task.count({ where: { title: forgedTitle } })).toBe(0);
-      await page.getByRole("button", { name: "清空关联 Task" }).click();
-      await page.getByLabel("Task 名称").fill("S5 Account A local draft");
+      await page.getByRole("button", { name: "清空关联任务" }).click();
+      await page.getByLabel("任务名称").fill("S5 Account A local draft");
       await expectLocalTaskDraft(page, { title: "S5 Account A local draft" });
       const localKey = await page.evaluate(() => {
         const key = Object.keys(window.localStorage).find((candidate) =>
@@ -1382,10 +1382,10 @@ test.describe("project management UI project-management-ui-composer", () => {
         return key;
       });
 
-      const taskTitleInput = page.getByLabel("Task 名称");
+      const taskTitleInput = page.getByLabel("任务名称");
       await taskTitleInput.focus();
       await page.goBack();
-      const leaveDialog = page.getByRole("dialog", { name: "离开 Task Composer？" });
+      const leaveDialog = page.getByRole("dialog", { name: "离开任务编辑器？" });
       await expect(leaveDialog).toBeVisible();
       await expect(
         leaveDialog.getByRole("button", { name: "继续编辑" }),
@@ -1416,14 +1416,14 @@ test.describe("project management UI project-management-ui-composer", () => {
       await page.getByRole("button", { name: "安全放弃" }).click();
       expect(await page.evaluate((key) => window.localStorage.getItem(key), localKey)).toBeNull();
 
-      await page.getByLabel("Task 名称").fill("S5 Account A isolated draft");
+      await page.getByLabel("任务名称").fill("S5 Account A isolated draft");
       await expectLocalTaskDraft(page, { title: "S5 Account A isolated draft" });
-      await page.getByRole("button", { name: "全部 Task", exact: true }).click();
-      await expect(page.getByRole("dialog", { name: "离开 Task Composer？" })).toBeVisible();
+      await page.getByRole("button", { name: "全部任务", exact: true }).click();
+      await expect(page.getByRole("dialog", { name: "离开任务编辑器？" })).toBeVisible();
       await page.getByRole("button", { name: "保存本地草稿并离开" }).click();
-      await expect(page.getByRole("heading", { name: "全部 Task" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "全部任务" })).toBeVisible();
       await page.goBack();
-      await expect(page.getByRole("heading", { name: "全部 Task" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "全部任务" })).toBeVisible();
       await expect(page.getByTestId("task-composer")).toHaveCount(0);
       await context.clearCookies();
       await loginAsTestUser(context, baseURL, {
@@ -1433,7 +1433,7 @@ test.describe("project management UI project-management-ui-composer", () => {
       await page.goto("/progress/tasks/new");
       await expect(page.getByText(/检测到 .* 保存的未完成草稿/)).toHaveCount(0);
       await expect(page.getByText(/草稿版本、结构或字段不兼容/)).toHaveCount(0);
-      await expect(page.getByLabel("Task 名称")).toHaveValue("");
+      await expect(page.getByLabel("任务名称")).toHaveValue("");
       expect(
         await page.evaluate(() =>
           window.localStorage.getItem("task-draft:other-deployment:other-account:v1"),
@@ -1468,8 +1468,8 @@ test.describe("project management UI project-management-ui-composer", () => {
           name: `移除 ${administrator.person.displayName} 负责人`,
         }),
       ).toHaveCount(0);
-      await page.getByLabel("Task 名称").fill(title);
-      await page.getByRole("button", { name: /添加 Milestone/ }).first().click();
+      await page.getByLabel("任务名称").fill(title);
+      await page.getByRole("button", { name: /添加里程碑/ }).first().click();
       await page.getByLabel("目标").fill("管理员自审目标");
       await page.getByLabel("完成条件").fill("Owner 为当前 actor");
       await page.getByLabel("验收要求").fill("全局管理员审批");
@@ -1480,7 +1480,7 @@ test.describe("project management UI project-management-ui-composer", () => {
         .getByRole("button", { name: /Terminal/ })
         .click();
       await page.getByLabel("结束条件").fill("管理员 Task 创建完成");
-      await page.getByRole("button", { name: "创建 Task 草稿" }).click();
+      await page.getByRole("button", { name: "创建任务草稿" }).click();
       await expect(
         page
           .getByTestId("task-workbench-v2")

@@ -51,7 +51,7 @@ export function TaskSelect({
   clearable = true,
   allowIndependent = false,
   onOptionChange,
-  ariaLabel = "选择 Task",
+  ariaLabel = "选择任务",
   ...props
 }: CommonProps & {
   value: string | null;
@@ -77,7 +77,7 @@ export function TaskSelect({
         );
       }}
       clearable={clearable || allowIndependent}
-      nullOptionLabel={allowIndependent ? "独立投入（不关联 Task）" : undefined}
+      nullOptionLabel={allowIndependent ? "独立投入（不关联任务）" : undefined}
       getOptionLabel={(option) => option.title}
       getOptionDescription={getTaskOptionDescription}
       renderOption={(option) => <TaskOptionContent option={option} />}
@@ -91,7 +91,7 @@ export function TaskMultiSelect({
   clearable = true,
   maxSelected = 50,
   showSelectedList = false,
-  ariaLabel = "选择 Task",
+  ariaLabel = "选择任务",
   ...props
 }: CommonProps & {
   value: string[];
@@ -118,13 +118,13 @@ export function TaskMultiSelect({
         renderOption={(option) => <TaskOptionContent option={option} />}
       />
     {showSelectedList && value.length > 0 && <div className="space-y-2">
-      <p className="text-sm font-medium">已选择 {value.length} 个 Task</p>
-      <ul className="divide-y rounded-lg border" aria-label="已选择的 Task">
+      <p className="text-sm font-medium">已选择 {value.length} 个任务</p>
+      <ul className="divide-y rounded-lg border" aria-label="已选择的任务">
         {value.map((id) => {
           const option = picker.optionById(id);
           return <li key={id} className="flex min-w-0 items-center gap-3 p-3">
-            <div className="min-w-0 flex-1">{option ? <TaskOptionContent option={option} /> : <span className="text-sm text-muted-foreground">正在加载已选择的 Task…</span>}</div>
-            <button type="button" className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label={`移除${option?.title ?? "已选择的 Task"}`} onClick={() => onValueChange(value.filter((taskId) => taskId !== id))}><X className="size-4" aria-hidden="true" /></button>
+            <div className="min-w-0 flex-1">{option ? <TaskOptionContent option={option} /> : <span className="text-sm text-muted-foreground">正在加载已选择的任务…</span>}</div>
+            <button type="button" className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label={`移除${option?.title ?? "已选择的任务"}`} onClick={() => onValueChange(value.filter((taskId) => taskId !== id))}><X className="size-4" aria-hidden="true" /></button>
           </li>;
         })}
       </ul>
@@ -146,7 +146,7 @@ function useTaskPicker(filters: TaskPickerFilters, initialOptions: TaskPickerOpt
           ...option,
           disabled,
           disabledReason: disabled
-            ? "该 Task 不符合当前状态筛选，不能新增选择"
+            ? "该任务不符合当前状态筛选，不能新增选择"
             : undefined,
         };
       }),

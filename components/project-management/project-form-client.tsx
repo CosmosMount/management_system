@@ -65,10 +65,10 @@ export function ProjectFormClient({
   async function submit() {
     setError("");
     const localFieldErrors: Record<string, string[]> = {};
-    if (!name.trim()) localFieldErrors.name = ["请输入 Project 名称"];
-    if (!description.trim()) localFieldErrors.description = ["请输入 Project 内容"];
+    if (!name.trim()) localFieldErrors.name = ["请输入项目名称"];
+    if (!description.trim()) localFieldErrors.description = ["请输入项目内容"];
     if (members.every((member) => member.role !== "OWNER")) {
-      localFieldErrors.members = ["至少需要一名 Project 负责人"];
+      localFieldErrors.members = ["至少需要一名项目负责人"];
     }
     if (Object.keys(localFieldErrors).length > 0) {
       setFieldErrors((current) => ({ ...current, ...localFieldErrors }));
@@ -133,18 +133,18 @@ export function ProjectFormClient({
   const buttonLabel = mode === "create" ? "提交立项" : mode === "draft" ? "修改并重新提交" : "保存修改";
   return <div className="mx-auto w-full min-w-0 max-w-4xl px-4 py-6 sm:px-6">
     <div className="space-y-5">
-      <Card><CardHeader><CardTitle>Project 头像</CardTitle></CardHeader><CardContent className="flex flex-wrap items-center gap-4">
-        <ProjectAvatar name={name || "Project"} avatarPath={avatarPreview ?? avatarPath} className="size-20" />
+      <Card><CardHeader><CardTitle>项目头像</CardTitle></CardHeader><CardContent className="flex flex-wrap items-center gap-4">
+        <ProjectAvatar name={name || "项目"} avatarPath={avatarPreview ?? avatarPath} className="size-20" />
         <div className="space-y-2"><Label htmlFor="project-avatar" className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 ${fieldErrors.avatarPath ? "border-destructive ring-3 ring-destructive/20" : ""}`}><ImagePlus className="size-4" />上传头像</Label><input id="project-avatar" type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" aria-invalid={Boolean(fieldErrors.avatarPath)} aria-describedby={fieldErrors.avatarPath ? "project-avatar-error" : undefined} onChange={(event) => { setAvatarFile(event.target.files?.[0] ?? null); clearFieldError("avatarPath"); }} /><Button type="button" variant="ghost" onClick={() => { setAvatarFile(null); setAvatarPath(null); clearFieldError("avatarPath"); }}><RotateCcw />恢复默认</Button><p className="text-xs text-muted-foreground">PNG、JPG 或 WebP，不超过 2 MiB</p><FieldError id="project-avatar-error" messages={fieldErrors.avatarPath} /></div>
       </CardContent></Card>
       <Card><CardHeader><CardTitle>基本信息</CardTitle></CardHeader><CardContent className="space-y-4">
-        <div className="space-y-2"><Label htmlFor="project-name">Project 名称</Label><Input id="project-name" value={name} maxLength={200} aria-invalid={Boolean(fieldErrors.name)} aria-describedby={fieldErrors.name ? "project-name-error" : undefined} onChange={(event) => { setName(event.target.value); if (event.target.value.trim()) clearFieldError("name"); }} /><FieldError id="project-name-error" messages={fieldErrors.name} /></div>
-        <div className="space-y-2"><Label htmlFor="project-description">Project 内容</Label><Textarea id="project-description" value={description} maxLength={8000} rows={8} aria-invalid={Boolean(fieldErrors.description)} aria-describedby={fieldErrors.description ? "project-description-error" : undefined} onChange={(event) => { setDescription(event.target.value); if (event.target.value.trim()) clearFieldError("description"); }} /><FieldError id="project-description-error" messages={fieldErrors.description} /></div>
+        <div className="space-y-2"><Label htmlFor="project-name">项目名称</Label><Input id="project-name" value={name} maxLength={200} aria-invalid={Boolean(fieldErrors.name)} aria-describedby={fieldErrors.name ? "project-name-error" : undefined} onChange={(event) => { setName(event.target.value); if (event.target.value.trim()) clearFieldError("name"); }} /><FieldError id="project-name-error" messages={fieldErrors.name} /></div>
+        <div className="space-y-2"><Label htmlFor="project-description">项目内容</Label><Textarea id="project-description" value={description} maxLength={8000} rows={8} aria-invalid={Boolean(fieldErrors.description)} aria-describedby={fieldErrors.description ? "project-description-error" : undefined} onChange={(event) => { setDescription(event.target.value); if (event.target.value.trim()) clearFieldError("description"); }} /><FieldError id="project-description-error" messages={fieldErrors.description} /></div>
       </CardContent></Card>
       <Card><CardHeader><CardTitle>成员</CardTitle></CardHeader><CardContent className="space-y-4">
         <TaskMemberRolePicker members={members} people={people} focusTargetId="project-members" scope={{ purpose: "VISIBLE" }} editable protectedOwnerId={protectedOwnerId} error={fieldErrors.members} onChange={(nextMembers) => { setMembers(nextMembers); if (nextMembers.some((member) => member.role === "OWNER")) clearFieldError("members"); }} onPersonResolved={(person) => setPeople((current) => current.some((item) => item.id === person.id) ? current : [...current, person])} />
       </CardContent></Card>
-      {mode !== "active" && <Card id="project-tasks" tabIndex={-1}><CardHeader><CardTitle>纳入已有 Task（可选）</CardTitle></CardHeader><CardContent className="space-y-3"><p className="text-sm text-muted-foreground">Task 会在立项通过后统一加入；审批前不会改变归属。</p><TaskMultiSelect value={taskIds} onValueChange={(nextTaskIds) => { setTaskIds(nextTaskIds); clearFieldError("requestedTaskIds"); }} projectCandidates maxSelected={50} showSelectedList placeholder="搜索可加入的 Task" ariaLabel="搜索可加入的 Task" invalid={Boolean(fieldErrors.requestedTaskIds)} ariaDescribedBy={fieldErrors.requestedTaskIds ? "project-tasks-error" : undefined} /><FieldError id="project-tasks-error" messages={fieldErrors.requestedTaskIds} /></CardContent></Card>}
+      {mode !== "active" && <Card id="project-tasks" tabIndex={-1}><CardHeader><CardTitle>纳入已有任务（可选）</CardTitle></CardHeader><CardContent className="space-y-3"><p className="text-sm text-muted-foreground">任务会在立项通过后统一加入；审批前不会改变归属。</p><TaskMultiSelect value={taskIds} onValueChange={(nextTaskIds) => { setTaskIds(nextTaskIds); clearFieldError("requestedTaskIds"); }} projectCandidates maxSelected={50} showSelectedList placeholder="搜索可加入的任务" ariaLabel="搜索可加入的任务" invalid={Boolean(fieldErrors.requestedTaskIds)} ariaDescribedBy={fieldErrors.requestedTaskIds ? "project-tasks-error" : undefined} /><FieldError id="project-tasks-error" messages={fieldErrors.requestedTaskIds} /></CardContent></Card>}
       {error && <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">{error}</div>}
       <div className="flex justify-end"><Button type="button" size="lg" disabled={pending} onClick={() => startTransition(submit)}>{pending ? "正在保存…" : buttonLabel}</Button></div>
     </div>

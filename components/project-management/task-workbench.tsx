@@ -248,14 +248,14 @@ export function TaskWorkbench({
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <Link href={routes.progress.tasks} className="text-sm text-primary hover:underline">
-                ← 全部 Task
+                ← 全部任务
               </Link>
               <Badge>{taskStatusLabels[task.status]}</Badge>
               <Badge variant="secondary">{taskPriorityLabels[task.priority]}</Badge>
               <Badge variant="outline">计划 v{workspace.currentPlan.versionNo}</Badge>
               {task.project && (
                 <Link href={routes.progress.projectDetail(task.project.id)} className="text-sm font-medium text-primary hover:underline">
-                  Project：{task.project.name}
+                  项目：{task.project.name}
                 </Link>
               )}
             </div>
@@ -276,7 +276,7 @@ export function TaskWorkbench({
                 value={formatDateTime(termination?.termination?.plannedAt ?? null)}
               />
               <OverviewItem
-                label="关联 Task"
+                label="关联任务"
                 value={
                   task.relatedTaskId
                     ? taskOptions.find((option) => option.id === task.relatedTaskId)?.title ?? "已关联"
@@ -284,13 +284,13 @@ export function TaskWorkbench({
                 }
               />
               <OverviewItem
-                label="所属 Project"
+                label="所属项目"
                 value={task.project ? task.project.name : "未设置"}
               />
             </dl>
             {workspace.currentPlan.chronologyCompatibilityIssues.length > 0 && (
               <p className="mt-3 text-sm text-amber-700">
-                当前计划包含旧版时间顺序；可继续只读或结束 Task，新建 Draft/Revision 前必须调整为严格递增。
+                当前计划包含旧版时间顺序；可继续只读或结束任务，新建草稿/计划修订前必须调整为严格递增。
               </p>
             )}
           </div>
@@ -301,7 +301,7 @@ export function TaskWorkbench({
                 href={routes.progress.taskEdit(task.id)}
                 className={cn(buttonVariants({ variant: "outline" }))}
               >
-                编辑 Task
+                编辑任务
               </Link>
             )}
             {task.status === "DRAFT" && workspace.permissions.canActivate && (
@@ -309,14 +309,14 @@ export function TaskWorkbench({
                 type="button"
                 disabled={busy}
                 onClick={() => {
-                  if (!window.confirm("确认激活 Task？激活后计划语义只能通过 Revision 修改。")) return;
+                  if (!window.confirm("确认激活任务？激活后计划语义只能通过计划修订修改。")) return;
                   void runAction(
                     () => activateTask({ taskId: task.id, expectedLockVersion: lockVersion }),
-                    "Task 已激活。",
+                    "任务已激活。",
                   );
                 }}
               >
-                激活 Task
+                激活任务
               </Button>
             )}
             {task.status === "DRAFT" && workspace.permissions.canDeleteDraft && (
@@ -327,7 +327,7 @@ export function TaskWorkbench({
                 onClick={() => {
                   if (
                     !window.confirm(
-                      "确定删除这个 Task 草稿？\n\n删除后将从 Task 和 Project 列表中移除，审计记录仍会保留。",
+                      "确定删除这个任务草稿？\n\n删除后将从任务和项目列表中移除，审计记录仍会保留。",
                     )
                   ) {
                     return;
@@ -338,7 +338,7 @@ export function TaskWorkbench({
                         taskId: task.id,
                         expectedLockVersion: lockVersion,
                       }),
-                    "Task 草稿已删除。",
+                    "任务草稿已删除。",
                     () => router.replace(routes.progress.tasks),
                   );
                 }}
@@ -356,17 +356,17 @@ export function TaskWorkbench({
                   setEditOpen(true);
                 }}
               >
-                修改 Task 基本信息
+                修改任务基本信息
               </Button>
             )}
             {task.status === "ACTIVE" && workspace.permissions.canCreateRevision && (
               approvalBlocked || openRevision ? (
-                <Button type="button" disabled title="当前 Task 已有待处理事项">
-                  发起 Revision
+                <Button type="button" disabled title="当前任务已有待处理事项">
+                  发起计划修订
                 </Button>
               ) : (
                 <Link href={routes.progress.taskRevisionNew(task.id)} className={cn(buttonVariants())}>
-                  发起 Revision
+                  发起计划修订
                 </Link>
               )
             )}
@@ -376,10 +376,10 @@ export function TaskWorkbench({
                 type="button"
                 variant="destructive"
                 disabled={approvalBlocked}
-                title={approvalBlocked ? "当前 Task 已有待审批事项" : undefined}
+                title={approvalBlocked ? "当前任务已有待审批事项" : undefined}
                 onClick={selectTerminal}
               >
-                申请结束 Task
+                申请结束任务
               </Button>
             )}
             <Button
@@ -387,7 +387,7 @@ export function TaskWorkbench({
               variant="outline"
               onClick={() =>
                 void navigator.clipboard.writeText(window.location.href).then(
-                  () => setNotice({ kind: "success", message: "Task 链接已复制。" }),
+                  () => setNotice({ kind: "success", message: "任务链接已复制。" }),
                   () => setNotice({ kind: "error", message: "浏览器拒绝复制，请手动复制地址栏链接。" }),
                 )
               }
@@ -405,12 +405,12 @@ export function TaskWorkbench({
           data-testid="task-approval-gate"
         >
           {approvalGate.pendingApprovalConflict
-            ? "当前 Task 存在多条待审批记录，相关提交与结束操作已暂停，请联系管理员处理。"
+            ? "当前任务存在多条待审批记录，相关提交与结束操作已暂停，请联系管理员处理。"
             : approvalGate.pendingApproval?.kind === "MILESTONE_REVIEW"
-              ? `Milestone「${approvalGate.pendingApproval.title}」正在等待审批。`
+              ? `里程碑「${approvalGate.pendingApproval.title}」正在等待审批。`
               : approvalGate.pendingApproval?.kind === "REVISION"
-                ? `Revision「${approvalGate.pendingApproval.title || "未命名修订"}」正在等待审批。`
-                : `Terminal「${approvalGate.pendingApproval?.title || "结束节点"}」的结束申请正在等待审批。`}
+                ? `计划修订「${approvalGate.pendingApproval.title || "未命名修订"}」正在等待审批。`
+                : `结束节点「${approvalGate.pendingApproval?.title || "结束节点"}」的结束申请正在等待审批。`}
         </section>
       )}
 
@@ -573,7 +573,7 @@ export function TaskWorkbench({
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent className="max-h-[92dvh] overflow-y-auto sm:max-w-5xl">
           <DialogHeader>
-            <DialogTitle>修改 Task 基本信息</DialogTitle>
+            <DialogTitle>修改任务基本信息</DialogTitle>
             <DialogDescription>
               基本信息与成员通过一次事务统一保存，并继续使用各自的权限和并发校验。
             </DialogDescription>
@@ -645,7 +645,7 @@ function ActiveTaskEditor({
   return (
     <form
       className="grid gap-5 lg:grid-cols-2"
-      aria-label="修改 Task"
+      aria-label="修改任务"
       noValidate
       onSubmit={(event) => {
         event.preventDefault();
@@ -653,10 +653,10 @@ function ActiveTaskEditor({
         const form = new FormData(event.currentTarget);
         const nextErrors: Record<string, string[]> = {};
         if (editable && !String(form.get("title") ?? "").trim()) {
-          nextErrors.title = ["请输入 Task 名称"];
+          nextErrors.title = ["请输入任务名称"];
         }
         if (canManageMembers && members.length === 0) {
-          nextErrors.members = ["至少添加一名 Task 成员"];
+          nextErrors.members = ["至少添加一名任务成员"];
         } else if (canManageMembers && members.every((member) => member.role !== "OWNER")) {
           nextErrors.members = ["至少需要一名负责人"];
         }
@@ -682,7 +682,7 @@ function ActiveTaskEditor({
               : undefined,
             members: canManageMembers ? members : undefined,
           }),
-          "Task 修改已保存。",
+          "任务修改已保存。",
           onSaved,
           (error) => {
             if (error.code === "STALE_TASK") setStale(true);
@@ -711,7 +711,7 @@ function ActiveTaskEditor({
       )}
       <section
         className="space-y-3 rounded-xl border border-border p-4"
-        aria-label="Task 元数据"
+        aria-label="任务元数据"
       >
         <h3 className="font-semibold">基本信息</h3>
         <Field label="标题"><Input id="active-task-title" name="title" defaultValue={workspace.task.title} disabled={!editable} required maxLength={200} aria-invalid={Boolean(fieldErrors.title)} aria-describedby={fieldErrors.title ? "active-task-title-error" : undefined} onChange={() => clearFieldError("title")} /><FieldError id="active-task-title-error" messages={fieldErrors.title} /></Field>
@@ -721,9 +721,9 @@ function ActiveTaskEditor({
           <Field label="技术组"><select id="active-task-techGroup" name="techGroup" defaultValue={workspace.task.techGroup} disabled={!editable} className={selectClass} aria-invalid={Boolean(fieldErrors.techGroup)} aria-describedby={fieldErrors.techGroup ? "active-task-techGroup-error" : undefined} onChange={() => clearFieldError("techGroup")}>{TECH_GROUP_OPTIONS.map((value) => <option key={value}>{value}</option>)}</select><FieldError id="active-task-techGroup-error" messages={fieldErrors.techGroup} /></Field>
           <Field label="优先级"><select id="active-task-priority" name="priority" defaultValue={workspace.task.priority} disabled={!editable} className={selectClass} aria-invalid={Boolean(fieldErrors.priority)} aria-describedby={fieldErrors.priority ? "active-task-priority-error" : undefined} onChange={() => clearFieldError("priority")}>{Object.entries(taskPriorityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><FieldError id="active-task-priority-error" messages={fieldErrors.priority} /></Field>
         </div>
-        <Field label="关联 Task">
+        <Field label="关联任务">
           <TaskSelect
-            ariaLabel="关联 Task"
+            ariaLabel="关联任务"
             inputId="active-task-related"
             value={relatedTaskId}
             onValueChange={(value) => { setRelatedTaskId(value); clearFieldError("relatedTaskId"); }}
@@ -736,7 +736,7 @@ function ActiveTaskEditor({
           />
           <FieldError id="active-task-related-error" messages={fieldErrors.relatedTaskId} />
         </Field>
-        <Field label="所属 Project">
+        <Field label="所属项目">
           <ProjectSelect inputId="active-task-project" value={projectId} onValueChange={(value) => { setProjectId(value); clearFieldError("projectId"); }} initialOptions={projectOptions} disabled={!editable} invalid={Boolean(fieldErrors.projectId)} ariaDescribedBy={fieldErrors.projectId ? "active-task-project-error" : undefined} />
           <FieldError id="active-task-project-error" messages={fieldErrors.projectId} />
         </Field>
@@ -810,7 +810,7 @@ function resolvePendingRevisionPlanIssue(
     workspace.pendingApproval.id !== revisionNodeId ||
     workspace.pendingRevisionPlanComparison?.revisionNodeId !== revisionNodeId
   ) {
-    return "待审批 Revision 与当前审批状态不一致，无法安全展示修改后计划。";
+    return "待审批计划修订与当前审批状态不一致，无法安全展示修改后计划。";
   }
   return workspace.pendingRevisionPlanComparison.status === "UNAVAILABLE"
     ? workspace.pendingRevisionPlanComparison.message

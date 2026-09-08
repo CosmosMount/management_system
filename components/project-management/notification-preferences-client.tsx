@@ -20,10 +20,10 @@ export function NotificationPreferencesClient({
   const [message, setMessage] = useState("");
 
   return (
-    <section className="rounded-xl border border-border bg-card p-4" aria-labelledby="notification-preference-title">
+    <section className="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-6" aria-labelledby="notification-preference-title">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 id="notification-preference-title" className="font-medium">通知偏好</h2>
+          <h2 id="notification-preference-title" className="text-base font-semibold">通知偏好</h2>
           <p className="mt-1 text-sm text-muted-foreground">
             {readOnly
               ? "人员已停用，通知偏好仅供查看。"
@@ -39,7 +39,7 @@ export function NotificationPreferencesClient({
         {preferences.map((preference) => {
           const checked = values.get(preference.category) ?? true;
           return (
-            <label key={preference.category} className="flex items-center justify-between gap-4 rounded-lg border border-border px-3 py-3 text-sm">
+            <label key={preference.category} className="flex min-h-14 min-w-0 items-center justify-between gap-4 rounded-lg border border-border px-3 py-3 text-sm">
               <span>{notificationCategoryLabels[preference.category]}</span>
               <span className="flex items-center gap-2 text-muted-foreground">
                 飞书
@@ -47,6 +47,7 @@ export function NotificationPreferencesClient({
                   type="checkbox"
                   checked={checked}
                   disabled={readOnly || isPending}
+                  className="size-4 shrink-0 accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
                   aria-label={`${notificationCategoryLabels[preference.category]}飞书通知`}
                   onChange={(event) => {
                     const next = event.currentTarget.checked;

@@ -128,21 +128,21 @@ export function validateInspector(
       issues.push({
         key: "revision-reason",
         entityId: draft.entityId,
-        message: "请输入 Revision 名称。",
+        message: "请输入计划修订名称。",
       });
     }
     if (!draft.revision.description.trim()) {
       issues.push({
         key: "revision-description",
         entityId: draft.entityId,
-        message: "请输入 Revision 详细内容。",
+        message: "请输入计划修订详细内容。",
       });
     }
     if (!validLocalDateTime(draft.revision.revisionAt)) {
       issues.push({
         key: "revisionAt",
         entityId: draft.entityId,
-        message: "请选择有效的 Revision 时间。",
+        message: "请选择有效的计划修订时间。",
       });
     }
     return issues;
@@ -153,16 +153,16 @@ export function validateInspector(
     }
     return isNodeTimeStrictlyLegal(state, draft.entityId, draft.plannedStartAt)
       ? []
-      : [{ key: "plannedStartAt", entityId: draft.entityId, message: "Start 必须严格早于下一个节点。" }];
+      : [{ key: "plannedStartAt", entityId: draft.entityId, message: "开始节点必须严格早于下一个节点。" }];
   }
 
   if (draft.kind === "TERMINATION") {
     const issues: ValidationIssue[] = [];
     const name = draft.termination.name.trim();
     if (!name) {
-      issues.push({ key: "termination-name", entityId: draft.entityId, message: "请输入 Terminal 名称。" });
+      issues.push({ key: "termination-name", entityId: draft.entityId, message: "请输入结束节点名称。" });
     } else if (name.length > 200) {
-      issues.push({ key: "termination-name", entityId: draft.entityId, message: "Terminal 名称不能超过 200 个字符。" });
+      issues.push({ key: "termination-name", entityId: draft.entityId, message: "结束节点名称不能超过 200 个字符。" });
     }
     if (!validLocalDateTime(draft.termination.plannedAt)) {
       issues.push({ key: "termination-plannedAt", entityId: draft.entityId, message: "请选择有效的计划结束时间。" });
@@ -173,7 +173,7 @@ export function validateInspector(
         draft.termination.plannedAt,
       )
     ) {
-      issues.push({ key: "termination-plannedAt", entityId: draft.entityId, message: "Terminal 必须严格晚于前一个节点。" });
+      issues.push({ key: "termination-plannedAt", entityId: draft.entityId, message: "结束节点必须严格晚于前一个节点。" });
     }
     if (!draft.termination.plannedOutcomeCriteria.trim()) {
       issues.push({ key: "termination-outcome", entityId: draft.entityId, message: "请输入结束条件。" });
@@ -184,10 +184,10 @@ export function validateInspector(
   const issues: ValidationIssue[] = [];
   const milestone = draft.milestone;
   if (!milestone.goal.trim()) {
-    issues.push({ key: `goal-${draft.entityId}`, entityId: draft.entityId, message: "请输入 Milestone 目标。" });
+    issues.push({ key: `goal-${draft.entityId}`, entityId: draft.entityId, message: "请输入里程碑目标。" });
   }
   if (!validLocalDateTime(milestone.expectedCompletedAt)) {
-    issues.push({ key: `expected-${draft.entityId}`, entityId: draft.entityId, message: "请选择有效的 Milestone 完成时间。" });
+    issues.push({ key: `expected-${draft.entityId}`, entityId: draft.entityId, message: "请选择有效的里程碑完成时间。" });
   } else {
     const at = localMs(milestone.expectedCompletedAt);
     const occupied = state.milestones.some(
@@ -199,9 +199,9 @@ export function validateInspector(
       at <= localMs(state.plannedStartAt) ||
       at >= localMs(state.termination.plannedAt)
     ) {
-      issues.push({ key: `expected-${draft.entityId}`, entityId: draft.entityId, message: "Milestone 必须严格位于 Start 与 Terminal 之间。" });
+      issues.push({ key: `expected-${draft.entityId}`, entityId: draft.entityId, message: "里程碑必须严格位于开始节点与结束节点之间。" });
     } else if (occupied) {
-      issues.push({ key: `expected-${draft.entityId}`, entityId: draft.entityId, message: "Milestone 不能与其他节点处于同一时刻。" });
+      issues.push({ key: `expected-${draft.entityId}`, entityId: draft.entityId, message: "里程碑不能与其他节点处于同一时刻。" });
     }
   }
   if (!milestone.completionCriteria.trim()) {
@@ -808,7 +808,7 @@ export function resolveAnchorMoveCandidate(
     );
     const upperInclusive = renderAtMs(state, state.termination.id);
     if (upperInclusive < lowerInclusive) {
-      return { ok: false, message: "当前计划范围内没有合法的 Revision 时间。" };
+      return { ok: false, message: "当前计划范围内没有合法的计划修订时间。" };
     }
     return {
       ok: true,
@@ -832,7 +832,7 @@ export function resolveAnchorMoveCandidate(
     );
   } else {
     const milestone = state.milestones.find((item) => item.id === request.anchorId);
-    if (!milestone) return { ok: false, message: "未找到要移动的 Milestone。" };
+    if (!milestone) return { ok: false, message: "未找到要移动的里程碑。" };
     lowerExclusive = Math.max(
       renderAtMs(state, TASK_COMPOSER_START_ID),
       ...(state.revision?.lockedMilestoneIds.map((id) =>

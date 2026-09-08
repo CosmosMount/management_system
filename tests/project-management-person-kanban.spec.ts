@@ -124,7 +124,7 @@ test.describe("project management person kanban", { tag: "@smoke" }, () => {
     await page.goto(
       "/progress/kanban?scale=month&center=2022-08-10T10:00:00.000Z",
     );
-    await expect(page.getByRole("heading", { name: "看板" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "人员时间线" })).toBeVisible();
     await expect(page).toHaveURL(new RegExp(`people=${fixture.outsider.person.id}`));
     await expect(page.getByTestId("time-canvas-root")).toHaveAttribute(
       "data-zoom",
@@ -143,17 +143,17 @@ test.describe("project management person kanban", { tag: "@smoke" }, () => {
       await expect(
         page
           .getByTestId("project-management-sidebar")
-          .getByRole("link", { name: "看板", exact: true }),
+          .getByRole("link", { name: "人员时间线", exact: true }),
       ).toHaveAttribute("aria-current", "page");
     } else {
       await expect(
-        page.getByTestId("project-management-mobile-bar").getByText("看板"),
+        page.getByTestId("project-management-mobile-bar").getByText("人员时间线"),
       ).toBeVisible();
       await page.getByRole("button", { name: "打开项目管理导航" }).click();
       await expect(
         page
           .getByTestId("project-management-drawer")
-          .getByRole("link", { name: "看板", exact: true }),
+          .getByRole("link", { name: "人员时间线", exact: true }),
       ).toHaveAttribute("aria-current", "page");
       await page.getByRole("button", { name: "关闭项目管理导航" }).click();
     }

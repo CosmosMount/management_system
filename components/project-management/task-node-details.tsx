@@ -87,12 +87,12 @@ export function SelectedNodeDetail({
   if (selectedNodeId === TASK_DETAIL_START_ID || !selectedNode) {
     return (
       <div>
-        <h2 className="text-lg font-semibold">Start</h2>
+        <h2 className="text-lg font-semibold">开始节点</h2>
         <p className="mt-2 text-sm text-muted-foreground">
           计划开始：{formatDateTime(workspace.currentPlan.plannedStartAt)}
         </p>
         <p className="mt-1 text-sm text-muted-foreground">
-          Current Plan v{workspace.currentPlan.versionNo} 的起点，只读展示。
+          当前计划 v{workspace.currentPlan.versionNo} 的起点，只读展示。
         </p>
       </div>
     );
@@ -116,22 +116,22 @@ export function SelectedNodeDetail({
     return (
       <div className="space-y-3">
         <div className="flex flex-wrap items-center gap-2">
-          <h2 className="text-lg font-semibold">Revision</h2>
+          <h2 className="text-lg font-semibold">计划修订</h2>
           <Badge>{revisionStatusLabel(selectedNode.revision.status)}</Badge>
           <Badge variant="outline">第 {selectedNode.revision.reviewRound} 轮</Badge>
         </div>
-        <OverviewItem label="Revision 名称" value={selectedNode.revision.reason} />
+        <OverviewItem label="计划修订名称" value={selectedNode.revision.reason} />
         <OverviewItem
-          label="Revision 详细内容"
+          label="计划修订详细内容"
           value={selectedNode.businessDescription || "无"}
         />
         <dl className="grid gap-3 text-sm sm:grid-cols-2">
-          <OverviewItem label="Revision 时间" value={formatDateTime(selectedNode.revision.revisionAt)} />
+          <OverviewItem label="计划修订时间" value={formatDateTime(selectedNode.revision.revisionAt)} />
           <OverviewItem label="审批时间" value={formatDateTime(selectedNode.revision.reviewedAt)} />
           <OverviewItem label="生效时间" value={formatDateTime(selectedNode.revision.effectiveAt)} />
           <OverviewItem label="审批意见" value={selectedNode.revision.reviewComment || "无"} />
         </dl>
-        <p className="text-xs text-muted-foreground">Revision 是时间标记，不形成阶段。</p>
+        <p className="text-xs text-muted-foreground">计划修订是时间标记，不形成阶段。</p>
       </div>
     );
   }
@@ -247,7 +247,7 @@ function MilestoneDetail({
 
       {active && workspace.permissions.canSubmitMilestoneReview && !pendingReview && (
         <div className="space-y-3 border-t border-border pt-4">
-          <h3 className="font-medium">提交 Milestone 验收</h3>
+          <h3 className="font-medium">提交里程碑验收</h3>
           <div className="flex flex-wrap gap-4 text-sm">
             <label><input type="radio" checked={evidenceKind === "TEXT"} disabled={approvalBlocked} onChange={() => { setEvidenceKind("TEXT"); setEvidenceError(""); setEvidenceNoteError(""); }} /> 文本证据</label>
             <label><input type="radio" checked={evidenceKind === "LINK"} disabled={approvalBlocked} onChange={() => { setEvidenceKind("LINK"); setEvidenceError(""); setEvidenceNoteError(""); }} /> 链接证据</label>
@@ -266,7 +266,7 @@ function MilestoneDetail({
           <Button
             type="button"
             disabled={busy || approvalBlocked}
-            title={approvalBlocked ? "当前 Task 已有待审批事项" : undefined}
+            title={approvalBlocked ? "当前任务已有待审批事项" : undefined}
             onClick={() => {
               if (evidenceKind === "LINK" && evidence.trim()) {
                 try {
@@ -288,7 +288,7 @@ function MilestoneDetail({
                         : { kind: "LINK", externalUrl: evidence, note: evidenceNote, sortOrder: 0 }]
                     : [],
                 }),
-                "Milestone 已提交验收。",
+                "里程碑已提交验收。",
                 (data) => {
                   reviewKey.current = null;
                   const reviewId = recordString(data, "reviewId");
@@ -547,7 +547,7 @@ export function OpenRevisionPanel({
         : () => cancelRevision({ revisionNodeId: revision.id, comment });
     void runAction(
       action,
-      decision === "APPROVE" ? "Revision 已批准并应用。" : decision === "REJECT" ? "Revision 已驳回。" : "Revision 已取消。",
+      decision === "APPROVE" ? "计划修订已批准并应用。" : decision === "REJECT" ? "计划修订已驳回。" : "计划修订已取消。",
       onResolved,
       (error) => {
         const message = firstFieldError(error, ["comment"]);
@@ -561,16 +561,16 @@ export function OpenRevisionPanel({
   return (
     <section className="space-y-3 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950">
       <div className="flex flex-wrap items-center gap-2">
-        <h2 className="font-semibold">当前 Revision 候选</h2>
+        <h2 className="font-semibold">当前计划修订候选</h2>
         <Badge>{revisionStatusLabel(revision.status)}</Badge>
         <Badge variant="outline">第 {revision.reviewRound} 轮</Badge>
       </div>
-      <OverviewItem label="Revision 名称" value={revision.reason} />
+      <OverviewItem label="计划修订名称" value={revision.reason} />
       <OverviewItem
-        label="Revision 详细内容"
+        label="计划修订详细内容"
         value={revision.description || "无"}
       />
-      <p className="text-xs">Revision 时间：{formatDateTime(revision.revisionAt)}</p>
+      <p className="text-xs">计划修订时间：{formatDateTime(revision.revisionAt)}</p>
       {approvalUnavailableReason && (
         <p
           className="rounded-md border border-amber-400 bg-white/70 px-3 py-2 text-sm"
@@ -586,7 +586,7 @@ export function OpenRevisionPanel({
       <div className="flex flex-wrap gap-2">
         {revision.capabilities.canEdit && (
           approvalBlocked ? (
-            <Button type="button" variant="outline" disabled title="当前 Task 已有待审批事项">
+            <Button type="button" variant="outline" disabled title="当前任务已有待审批事项">
               修改并重新送审
             </Button>
           ) : (
@@ -609,7 +609,7 @@ export function OpenRevisionPanel({
           </>
         )}
         {revision.capabilities.canCancel && (
-          <Button type="button" variant="outline" disabled={busy} onClick={() => reviewRevision("CANCEL")}>取消 Revision</Button>
+          <Button type="button" variant="outline" disabled={busy} onClick={() => reviewRevision("CANCEL")}>取消计划修订</Button>
         )}
       </div>
     </section>
@@ -675,7 +675,7 @@ function TerminationDetail({
         : () => requireTerminationRevision({ reviewId: pendingReview.id, comment });
     void runAction(
       action,
-      decision === "APPROVE" ? "Task 结束申请已通过。" : decision === "REJECT" ? "Task 结束申请已驳回。" : "已要求修订 Task 结束申请。",
+      decision === "APPROVE" ? "任务结束申请已通过。" : decision === "REJECT" ? "任务结束申请已驳回。" : "已要求修订任务结束申请。",
       () => onReviewResolved(pendingReview.id),
       (error) => {
         const message = firstFieldError(error, ["comment"]);
@@ -760,9 +760,9 @@ function TerminationDetail({
       )}
       {canSubmit && (
         <div className="space-y-3 border-t border-border pt-4">
-          <h3 className="font-medium">提交 Task 结束申请</h3>
+          <h3 className="font-medium">提交任务结束申请</h3>
           <p className="text-sm text-muted-foreground">
-            成功完成要求全部前置 Milestone
+            成功完成要求全部前置里程碑
             已完成；其他结果必须填写原因。提交后由全局管理员审批。
           </p>
           <Field label="结束结果">
@@ -822,7 +822,7 @@ function TerminationDetail({
                     summary,
                     idempotencyKey: reviewKey.current,
                   }),
-                "Task 结束申请已提交审批。",
+                "任务结束申请已提交审批。",
                 (data) => {
                   reviewKey.current = null;
                   const reviewId = recordString(data, "reviewId");

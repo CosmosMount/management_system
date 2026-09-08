@@ -381,8 +381,8 @@ export function TaskComposerPlanEditor({
               </div>
               <p className="mt-1 text-sm text-muted-foreground">
                 {state.revision
-                  ? "固定 Asia/Shanghai；承接节点只读，Revision 标记不形成计划阶段。"
-                  : "固定 Asia/Shanghai；Composer 只编排节点，不加载成员投入数据。"}
+                  ? "固定 Asia/Shanghai；承接节点只读，计划修订标记不形成计划阶段。"
+                  : "固定 Asia/Shanghai；编辑器只编排节点，不加载成员投入数据。"}
               </p>
             </div>
             <Button
@@ -392,7 +392,7 @@ export function TaskComposerPlanEditor({
               onClick={() => onBeginMilestone(suggestMilestoneAt(state))}
             >
               <Plus aria-hidden="true" />
-              添加 Milestone
+              添加里程碑
             </Button>
           </div>
 
@@ -449,7 +449,7 @@ export function TaskComposerPlanEditor({
                   ? { kind: "ANCHOR", id: state.selectedEntityId }
                   : null
               }
-              emptyMessage="点击时间轴或添加按钮创建 Milestone"
+              emptyMessage="点击时间轴或添加按钮创建里程碑"
               interaction={{
                 enableAnchorCreate: true,
                 enableAnchorMarqueeSelection: true,
@@ -487,38 +487,38 @@ export function TaskComposerPlanEditor({
                 size="sm"
                 variant="outline"
                 disabled={!canAddAt || state.milestones.length >= 200}
-                title={canAddAt ? undefined : "Milestone 必须严格位于 Start 与 Terminal 之间且不能同刻"}
+                title={canAddAt ? undefined : "里程碑必须严格位于开始节点与结束节点之间且不能同刻"}
                 onClick={() => {
                   onBeginMilestone(quickAtLocal);
                   setQuickAt(null);
                 }}
               >
-                在此添加 Milestone
+                在此添加里程碑
               </Button>
               <Button
                 type="button"
                 size="sm"
                 variant="outline"
                 disabled={!canMoveTerminalAt}
-                title={canMoveTerminalAt ? undefined : "Terminal 必须严格晚于所有其他节点"}
+                title={canMoveTerminalAt ? undefined : "结束节点必须严格晚于所有其他节点"}
                 onClick={() => {
                   onMoveTerminal(quickAtLocal);
                   setQuickAt(null);
                 }}
               >
-                移动 Terminal 到此处
+                移动结束节点到此处
               </Button>
               <Button type="button" size="sm" variant="ghost" onClick={() => setQuickAt(null)}>
                 取消
               </Button>
               {!canAddAt && (
                 <span className="w-full text-xs text-muted-foreground">
-                  此处不能添加 Milestone：节点必须严格位于 Start 与 Terminal 之间，且不能与其他节点同刻。
+                  此处不能添加里程碑：节点必须严格位于开始节点与结束节点之间，且不能与其他节点同刻。
                 </span>
               )}
               {!canMoveTerminalAt && (
                 <span className="w-full text-xs text-muted-foreground">
-                  此处不能移动 Terminal：Terminal 必须严格晚于 Start 和全部 Milestone。
+                  此处不能移动结束节点：结束节点必须严格晚于开始节点和全部里程碑。
                 </span>
               )}
             </div>
@@ -529,7 +529,7 @@ export function TaskComposerPlanEditor({
               nodes={navigatorNodes}
               selectedId={state.selectedEntityId}
               onSelect={selectNavigatorNode}
-              label="Task 阶段"
+              label="任务阶段"
             />
           </div>
         </section>
@@ -572,7 +572,7 @@ export function TaskComposerPlanEditor({
           onClick={() => onBeginMilestone(suggestMilestoneAt(state))}
         >
           <Plus aria-hidden="true" />
-          Milestone
+          里程碑
         </Button>
         <Button
           type="button"
@@ -761,7 +761,7 @@ function buildComposerCanvasModel(
       taskId: state.draftId,
       kind: "PLAN_START" as const,
       status: "草稿",
-      label: "Start",
+      label: "开始节点",
       atMs: renderAtMs(state, TASK_COMPOSER_START_ID),
       sequence: 0,
       editable: !state.revision,
@@ -775,7 +775,7 @@ function buildComposerCanvasModel(
       taskId: state.draftId,
       kind: "MILESTONE" as const,
       status: isTemporary(state, milestone.id) ? "临时" : "草稿",
-      label: milestone.goal || "临时 Milestone",
+      label: milestone.goal || "临时里程碑",
       atMs: renderAtMs(state, milestone.id),
       sequence: index + 1,
       editable: !isReadOnlyRevisionEntity(state, milestone.id),
@@ -795,7 +795,7 @@ function buildComposerCanvasModel(
             taskId: state.draftId,
             kind: "REVISION" as const,
             status: anchor.status,
-            label: anchor.reason || "Revision",
+            label: anchor.reason || "计划修订",
             atMs: localMs(anchor.revisionAt),
             sequence: sortedMilestones.length + index + 1,
             editable: false,
@@ -808,7 +808,7 @@ function buildComposerCanvasModel(
             taskId: state.draftId,
             kind: "REVISION" as const,
             status: "当前候选",
-            label: state.revision.reason || "当前 Revision",
+            label: state.revision.reason || "当前计划修订",
             atMs: localMs(state.revision.revisionAt),
             sequence:
               sortedMilestones.length + state.revision.carriedAnchors.length + 1,
@@ -827,7 +827,7 @@ function buildComposerCanvasModel(
       taskId: state.draftId,
       kind: "TERMINATION" as const,
       status: "草稿",
-      label: state.termination.name || "Terminal",
+      label: state.termination.name || "结束节点",
       atMs: renderAtMs(state, state.termination.id),
       sequence:
         sortedMilestones.length +
@@ -880,8 +880,8 @@ function buildComposerCanvasModel(
       id: PLAN_ROW_ID,
       sourceId: state.draftId,
       kind: "PLAN",
-      label: state.title || "新建 Task",
-      sublabel: `${state.milestones.length} 个 Milestone${state.milestones.some((milestone) => isTemporary(state, milestone.id)) ? " · 含临时节点" : ""}`,
+      label: state.title || "新建任务",
+      sublabel: `${state.milestones.length} 个里程碑${state.milestones.some((milestone) => isTemporary(state, milestone.id)) ? " · 含临时节点" : ""}`,
       editable: true,
       height: 132,
       capacity: null,
@@ -906,7 +906,7 @@ function buildComposerNavigatorNodes(
     (milestone) => ({
       id: milestone.id,
       kind: "MILESTONE",
-      label: milestone.goal || "临时 Milestone",
+      label: milestone.goal || "临时里程碑",
       at: milestone.expectedCompletedAt,
       status: isTemporary(state, milestone.id)
         ? "临时节点"
@@ -922,7 +922,7 @@ function buildComposerNavigatorNodes(
         ...state.revision.carriedAnchors.map((anchor) => ({
           id: anchor.id,
           kind: "REVISION" as const,
-          label: anchor.reason || "Revision",
+          label: anchor.reason || "计划修订",
           at: anchor.revisionAt,
           status: "已生效",
           completed: true,
@@ -930,7 +930,7 @@ function buildComposerNavigatorNodes(
         {
           id: state.revision.markerId,
           kind: "REVISION" as const,
-          label: state.revision.reason || "当前 Revision",
+          label: state.revision.reason || "当前计划修订",
           at: state.revision.revisionAt,
           status: "当前候选",
           invalid: hasIssue(state.revision.markerId),
@@ -941,7 +941,7 @@ function buildComposerNavigatorNodes(
     {
       id: TASK_COMPOSER_START_ID,
       kind: "START",
-      label: "Start",
+      label: "开始节点",
       at: state.plannedStartAt,
       status: state.revision ? "只读承接" : "计划开始",
       completed: Boolean(state.revision),
@@ -954,7 +954,7 @@ function buildComposerNavigatorNodes(
     {
       id: state.termination.id,
       kind: "TERMINAL",
-      label: state.termination.name || "Terminal",
+      label: state.termination.name || "结束节点",
       at: state.termination.plannedAt,
       status: "计划结束",
       invalid: hasIssue(state.termination.id),
@@ -995,12 +995,12 @@ function Inspector({
           </p>
           <h2 className="font-semibold">
             {draft.kind === "START"
-              ? "Start"
+              ? "开始节点"
               : draft.kind === "REVISION"
-                ? draft.revision.reason || "Revision"
+                ? draft.revision.reason || "计划修订"
               : draft.kind === "TERMINATION"
-                ? draft.termination.name || "Terminal"
-                : draft.milestone.goal || "未命名 Milestone"}
+                ? draft.termination.name || "结束节点"
+                : draft.milestone.goal || "未命名里程碑"}
           </h2>
         </div>
         {draft.kind === "MILESTONE" && draft.isNew && (
@@ -1031,7 +1031,7 @@ function Inspector({
 
       {draft.kind === "REVISION" && (
         <>
-          <PlanField label="Revision 时间" required htmlFor="revisionAt" error={fieldMessages("revisionAt")}>
+          <PlanField label="计划修订时间" required htmlFor="revisionAt" error={fieldMessages("revisionAt")}>
             <Input
               id="revisionAt"
               type="datetime-local"
@@ -1050,7 +1050,7 @@ function Inspector({
               }
             />
           </PlanField>
-          <PlanField label="Revision 名称" required htmlFor="revision-reason" error={fieldMessages("revision-reason")}>
+          <PlanField label="计划修订名称" required htmlFor="revision-reason" error={fieldMessages("revision-reason")}>
             <Input
               id="revision-reason"
               value={draft.revision.reason}
@@ -1070,7 +1070,7 @@ function Inspector({
             />
           </PlanField>
           <PlanField
-            label="Revision 详细内容"
+            label="计划修订详细内容"
             required
             htmlFor="revision-description"
             error={fieldMessages("revision-description")}
@@ -1095,7 +1095,7 @@ function Inspector({
             />
           </PlanField>
           <p className="text-xs leading-5 text-muted-foreground">
-            Revision 是时间标记，不形成阶段，也不能关联人员投入。
+            计划修订是时间标记，不形成阶段，也不能关联人员投入。
           </p>
         </>
       )}
@@ -1162,7 +1162,7 @@ function Inspector({
 
       {draft.kind === "TERMINATION" && (
         <>
-          <PlanField label="Terminal 名称" required htmlFor="termination-name" error={fieldMessages("termination-name")}>
+          <PlanField label="结束节点名称" required htmlFor="termination-name" error={fieldMessages("termination-name")}>
             <Input
               id="termination-name"
               value={draft.termination.name}

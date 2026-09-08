@@ -217,14 +217,14 @@ test.describe("project management UI project-management-ui-resource-planner", ()
         page.getByTestId(`timeline-row-plan:${completedTask.taskId}`),
       ).toHaveCount(0);
 
-      const taskPicker = filterBar.getByRole("combobox", { name: "筛选 Task" });
+      const taskPicker = filterBar.getByRole("combobox", { name: "筛选任务" });
       await taskPicker.fill(completedTaskTitle);
       await expect(page.getByText("没有匹配项。", { exact: true })).toBeVisible();
       await taskPicker.press("Escape");
       await filterBar.getByRole("checkbox", { name: "草稿", exact: true }).uncheck();
       await filterBar.getByRole("checkbox", { name: "进行中", exact: true }).uncheck();
       await expect(
-        filterBar.getByRole("combobox", { name: "筛选 Project" }),
+        filterBar.getByRole("combobox", { name: "筛选项目" }),
       ).toBeEnabled();
       await expect(taskPicker).toBeDisabled();
       await filterBar.getByRole("button", { name: "应用选择" }).click();
@@ -264,7 +264,7 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       ).toHaveCount(0);
       const completedFilterBar = page.getByRole("region", { name: "资源计划选择" });
       const completedTaskPicker = completedFilterBar.getByRole("combobox", {
-        name: "筛选 Task",
+        name: "筛选任务",
       });
       await completedTaskPicker.fill(completedTaskTitle);
       await expect(
@@ -490,7 +490,7 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       await expect(independentDetail).toContainText(
         "资源计划 50 项外部焦点",
       );
-      await expect(independentDetail.getByText("关联 Task", { exact: true })).toBeVisible();
+      await expect(independentDetail.getByRole("term").filter({ hasText: /^关联任务$/ })).toBeVisible();
       await expect(independentDetail.getByText("独立投入", { exact: true })).toBeVisible();
       expect(new URL(page.url()).searchParams.has("people")).toBe(false);
       await independentDetail
@@ -498,12 +498,12 @@ test.describe("project management UI project-management-ui-resource-planner", ()
 
       await page.goto("/progress/resources?all=0");
       await page.getByRole("checkbox", { name: /显示全部资源/ }).uncheck();
-      await page.getByRole("combobox", { name: "筛选 Project" }).fill(projectName);
+      await page.getByRole("combobox", { name: "筛选项目" }).fill(projectName);
       await page.getByRole("option", { name: projectName, exact: true }).click();
       await page.getByRole("button", { name: "应用选择" }).click();
       await expect.poll(() => new URL(page.url()).searchParams.get("projects")).toBe(project.id);
-      await expect(page.getByText("Project（1）")).toBeVisible();
-      await expect(page.getByRole("link", { name: "下一页 Task" })).toHaveCount(0);
+      await expect(page.getByText("项目（1）")).toBeVisible();
+      await expect(page.getByRole("link", { name: "下一页任务" })).toHaveCount(0);
       await expect(page.getByRole("link", { name: "下一页人员" })).toHaveCount(0);
       await page.getByTestId("time-canvas-scroll").evaluate((element) => {
         element.scrollTop = 25 * 112;
@@ -519,7 +519,7 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       });
       await expect(page.getByTestId(`timeline-row-person:${people[50]!.id}`)).toBeVisible();
       await page.reload();
-      await expect(page.getByText("Project（1）")).toBeVisible();
+      await expect(page.getByText("项目（1）")).toBeVisible();
       await expect(page.getByLabel(projectName, { exact: true })).toBeVisible();
 
       await prisma.task.update({
@@ -533,7 +533,7 @@ test.describe("project management UI project-management-ui-resource-planner", ()
         "资源计划保留已删除 Task 的有效投入",
       );
       const deletedTaskDetail = page.getByRole("dialog", { name: "投入详情" });
-      await expect(deletedTaskDetail.getByText("关联 Task", { exact: true })).toBeVisible();
+      await expect(deletedTaskDetail.getByRole("term").filter({ hasText: /^关联任务$/ })).toBeVisible();
       await expect(
         deletedTaskDetail.getByText(`${taskRecords[0]!.title}（已删除）`, {
           exact: true,
@@ -609,8 +609,8 @@ test.describe("project management UI project-management-ui-resource-planner", ()
         tasks: taskRecords[1]!.id,
         people: people[1]!.id,
       });
-      await expect(page.getByText("Project（1）")).toBeVisible();
-      await expect(page.getByText("Task（1）")).toBeVisible();
+      await expect(page.getByText("项目（1）")).toBeVisible();
+      await expect(page.getByText("任务（1）")).toBeVisible();
       await expect(page.getByText("人员（1）")).toBeVisible();
 
       await page.goto(
@@ -870,7 +870,7 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       });
 
       await page.goto("/progress?taskCursor=invalid-cursor");
-      await expect(page.getByRole("heading", { name: "我的工作" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "工作台" })).toBeVisible();
       await expect.poll(() => new URL(page.url()).searchParams.has("taskCursor")).toBe(false);
       await page.goto("/progress?scale=month");
       await expect(page.getByTestId("time-canvas-root")).toHaveAttribute("data-zoom", "MONTH");
@@ -985,7 +985,7 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       await expect(page.getByRole("heading", { name: "资源计划" })).toBeVisible();
       await expect(page.getByRole("region", { name: "资源计划选择" })).toBeVisible();
       await expect(page.getByText("人员（2）")).toBeVisible();
-      await expect(page.getByText("Task（1）")).toBeVisible();
+      await expect(page.getByText("任务（1）")).toBeVisible();
       await expect(page.getByRole("checkbox", { name: /显示全部资源/ })).not.toBeChecked();
       await expect
         .poll(() => new URL(page.url()).searchParams.get("center"))
@@ -1054,7 +1054,7 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       );
       await detailDialog.getByRole("button", { name: "Close" }).click();
       await expect(detailDialog).toHaveCount(0);
-      await expect(page.getByRole("heading", { name: "我的工作" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "工作台" })).toBeVisible();
       await expect(page.getByRole("region", { name: "到期计划与确认队列" })).toHaveCount(0);
       await expect(page.getByTestId("time-canvas-scroll")).toBeVisible();
 

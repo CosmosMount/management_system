@@ -217,7 +217,7 @@ function ActionInboxRow({
             </span>
           )}
           {item.taskTitle && (
-            <span className="min-w-0 break-words">Task：{item.taskTitle}</span>
+            <span className="min-w-0 break-words">任务：{item.taskTitle}</span>
           )}
           {item.nodeType && item.nodeStatus && (
             <span>

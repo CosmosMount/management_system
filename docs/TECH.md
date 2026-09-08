@@ -242,6 +242,16 @@ TimeCanvas 的显示尺度为 `WEEK/MONTH/QUARTER/YEAR`，密度分别为 40/12/
 
 `20260814120000_retire_project_management_legacy_history` 在单一事务中完成最终历史收敛。它先阻断仍有效的旧项目系统角色或旧 Task 成员角色，再以稳定 migration ID 归档已撤销/结束角色和非空 `WorkSegment.completionPercent`，删除对应历史行/列并重建最终角色枚举。迁移不访问通知表；回归以通知全行快照验证既有记录不变，并覆盖迁移期间无关通知并发写入可正常提交，不用易受全库并发影响的行数门禁。重复部署不会产生重复审计。迁移回归还必须验证 append-only 保护、完整 migration chain 与 Prisma schema drift。
 
+### 项目管理 UI 基础规范
+
+项目域导航通过 `projectNavigationItems` 提供中文名称和可选 `group`。共享 `ManagementShell` 按连续分组显示标题，折叠时保留可访问的链接名称和未读数；采购不传分组，继续保持原顺序。移动抽屉采用固定高度的弹性布局，导航区域独立纵向滚动，短屏仍可访问末尾通知入口和关闭按钮。
+
+共享 `PageCommandBar` 保留服务端传入的标题、说明和操作区域，客户端仅处理当前位置和标题展开。项目域根据现有导航匹配生成面包屑，长标题默认两行，完整标题通过有 `aria-expanded` / `aria-controls` 的按钮展开；采购沿用其自身模块标签，不生成项目面包屑。字体、间距、边框、状态、焦点和按钮继续复用既有 Tailwind 语义颜色、`--pm-*` 变量与 UI primitives，不引入第二套主题或组件库。
+
+`/progress/notifications?view=settings` 是同一受保护页面的设置视图，并非新增权限或 API。服务端根据规范视图分别加载偏好或通知列表，默认列表不再附带加载与渲染偏好。视图链接仅保留现有合法分类、未读条件和游标，不丢失列表上下文；无效列表游标继续走原恢复规则。偏好保存仍复用原 server action，停用限制、通知强制事件和 outbox 语义均不改变。
+
+该阶段只调整入口和展示：不修改工作台排序、项目/任务详情三层布局、数据库状态、业务记录名称或画布引擎。中文文案测试应检查显示标签，不更改用来测试业务数据的原始 Task/Project 名称和内部枚举。
+
 ### Task 权限迁移与审批通知修复
 
 `20260803120000_task_global_visibility_participants_admin_approval` 是不可逆 migration，不得修改已应用历史。它会：

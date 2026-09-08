@@ -77,10 +77,10 @@ export function localDraftContextError(
       actual.taskId !== expected.taskId ||
       actual.planVersionId !== expected.planVersionId
     ) {
-      return "本地编辑草稿不属于当前 Task 或计划版本，不能安全恢复。";
+      return "本地编辑草稿不属于当前任务或计划版本，不能安全恢复。";
     }
     if (actual.baseLockVersion !== expected.baseLockVersion) {
-      return "Task 已在服务端更新，旧本地草稿不能直接覆盖最新版本。";
+      return "任务已在服务端更新，旧本地草稿不能直接覆盖最新版本。";
     }
   } else if (expected.kind === "CREATE_REVISION") {
     if (
@@ -88,14 +88,14 @@ export function localDraftContextError(
       actual.basePlanVersionId !== expected.basePlanVersionId ||
       actual.baseLockVersion !== expected.baseLockVersion
     ) {
-      return "Task 基线已变化，旧 Revision 草稿不能直接覆盖最新版本。";
+      return "任务基线已变化，旧计划修订草稿不能直接覆盖最新版本。";
     }
   } else if (
     actual.taskId !== expected.taskId ||
     actual.revisionNodeId !== expected.revisionNodeId ||
     actual.targetPlanUpdatedAt !== expected.targetPlanUpdatedAt
   ) {
-    return "Revision 候选计划已变化，旧本地草稿不能直接覆盖最新版本。";
+    return "计划修订候选计划已变化，旧本地草稿不能直接覆盖最新版本。";
   }
   return null;
 }

@@ -69,7 +69,7 @@ npm run test:e2e:full
 npm run test:e2e:nightly
 ```
 
-- `test:e2e:smoke` 使用 Playwright 原生 `@smoke` tag，当前收集 50 个 project-test：1 个匿名/保护路由 suite、采购与项目管理导航、单人只读看板、附件允许/拒绝、采购提交、反馈闭环、Project 入口、Task 创建/激活、飞书禁发和 outbox 幂等。UI 在 Desktop 与 Pixel 5 对称执行，且不依赖本地 storage state。该命令使用 `--grep`，属于局部选择，不能用它证明完整 topology 或全量回归通过。
+- `test:e2e:smoke` 使用 Playwright 原生 `@smoke` tag，当前收集 56 个 project-test：1 个匿名/保护路由 suite、采购与项目管理导航、短标题窄屏截断、通知视图与长内容、单人只读看板、附件允许/拒绝、采购提交、反馈闭环、Project 入口、Task 创建/激活、飞书禁发和 outbox 幂等。UI 在 Desktop 与 Pixel 5 对称执行，且不依赖本地 storage state。该命令使用 `--grep`，属于局部选择，不能用它证明完整 topology 或全量回归通过。
 - `test:e2e:full` 与兼容入口 `test:e2e` 都执行完整 79 个 spec，并保留 reporter 对全文件、全 project 收集完整性的严格校验。PR 合并前以及共享测试基础设施变更后使用这一层。
 - `test:e2e:nightly` 执行同一完整集合，并设置 `PM_RUN_SCALE_TESTS=true` 打开既有 10k/100k 规模用例。聚合门禁 `npm run test:nightly` 还会依次执行 `check`、runner lifecycle、真实 PostgreSQL safety、nightly E2E 和 `build`；仓库不包含 CI 调度文件，定时触发由外部流水线配置。
 
@@ -316,7 +316,21 @@ NOTIFICATION_DELIVERY_DISABLED=true DATABASE_URL="<isolated-test-url>" npm run p
 
 ## 项目管理 P4/P6 UI 测试
 
-1. 桌面 `1440x1000` 与 Pixel 5 分别打开 `/progress`，应展示“我的工作”指标、完整个人时间画布、最多 8 条行动待办、参与 Task 和折叠通知；导航中不得再出现独立“我的时间”或“资源冲突”。旧 `/progress/my-timeline` 必须返回 404。
+### 第一阶段导航与通知视图回归
+
+使用官方 runner 执行 `npm run test:e2e -- tests/project-management-s3-shell.spec.ts tests/procurement-shell.spec.ts`，同时保留 Desktop `1440x1000` 与 Pixel 5 项目。测试必须使用 runner 的随机隔离数据库、受控端口和通知禁发保护，不能连接正常开发或生产数据库。
+
+- 项目导航按工作空间、团队排期、消息中心分组，入口顺序、中文可访问名称、当前页面标记和通知未读数正确；折叠导航、移动抽屉、Escape 关闭和焦点返回可用。
+- 页面标题按实际渲染高度判断两行截断，而非字符数；覆盖不足 60 字但窄屏仍溢出的标题、展开收起后的高度和焦点、调整宽度后展开入口的变化。任务详情面包屑仍能回到任务列表。移动补充 `320x568` 短屏，末尾导航可滚动到达，超长通知标题和无空格摘要不产生页面级横向溢出。
+- 通知默认列表不包含偏好表单；`?view=settings` 独立展示偏好。切换视图保留分类、未读条件和分页上下文，刷新与浏览器返回可恢复；保存成功核对数据库，网络失败恢复原值并可重试，停用人员所有偏好开关禁用。
+- Shell fixture 自行创建具备 default-tenant 飞书身份的可用审批管理员，再创建任务，不依赖其他 spec 提前准备管理员，也不弱化数据库约束。
+- 共享 Shell 和命令栏变化同步执行采购导航回归；项目文案变更同时回归相关创建、详情、人员时间线、分页和原有深链。任务导航应验证目标 pathname，同时保留合法 `center`、`scale` 状态，不错误要求详情 URL 不带查询参数。
+
+新增测试不代表原有业务功能已完成重新设计。完成门禁仍按根目录规则运行 `npm run check`、完整 `npm run test:e2e` 和适用的 `npm run build`；定向测试仅用于开发迭代。
+
+### 既有业务场景
+
+1. 桌面 `1440x1000` 与 Pixel 5 分别打开 `/progress`，页面标题为“工作台”，保留个人工作指标、完整个人时间画布、最多 8 条行动待办、参与任务和折叠通知；导航中不得再出现独立“我的时间”或“资源冲突”。旧 `/progress/my-timeline` 必须返回 404。
 2. 桌面与 Pixel 5 打开 `/progress/kanban`，默认人员应为当前用户；普通非成员可通过异步选择器切换任一在职人员，URL 使用唯一 `people` 并在切换时保留 `center`、`scale`。画布只能返回所选 Person 行、其完整投入和有效参与的 ACTIVE Task Current Plan；详情可读且不得出现新增、编辑、确认、取消或删除操作。投入本人、Task Owner 和管理员也必须只读，键盘与拖动交互不得改变投入、变更记录、审计或通知 outbox。覆盖候选加载后停用时选择器与画布均回退本人、无效人员回退、空时间线、超长姓名、浏览器前进/后退、未登录拒绝和无横向溢出。
 3. 打开 `/progress/tasks`，默认勾选“只看我参与”并选择“进行中”；按人员范围、状态、优先级和关键词筛选时，只展示当前 actor 可读 Task，且仍可手动取消默认筛选；不可读 Task 不能通过列表枚举。
 4. 打开 `/progress/tasks/[id]`，应看到三层详情结构：概览；完整的“计划与人员投入”（时间画布及共享节点导航）；以及桌面端“Task 风险与评论 / 待处理 Revision、选中节点详情和风险录入 / 近期动态”三栏。低于 `xl` 时第三层按“主体详情 → 风险与评论 → 近期动态”单列排列，审批门禁和全局操作反馈保持在概览与时间线之间。Current Plan 左侧 Task 标题必须是指向该 Task 详情的链接，人员行以及 Revision 候选/历史行不得被误链接；存在未保存的投入创建内容时，点击标题必须先确认，取消后保留表单。全部有效成员及其全部投入继续展示；有效 TaskMember 按服务端 capability 创建或管理投入，旁观者只读；Project 详情的投入保持只读。`PENDING_APPROVAL` Revision 存在时，修改后的候选 Plan 应自动以只读琥珀色行紧跟 Current Plan 展示，提交人、审批人和普通旁观者均按既有 `task.view` 规则查看，但只有 `revision.review` 审批人显示批准/驳回；批准后候选成为 Current，驳回/取消后候选消失。候选缺失、基线/锁版本不匹配、跨 Task 或结构异常时不得下发候选正文，时间线和审批卡显示中文警告，“批准”禁用而“驳回”及有权限的“取消”仍可用。每个已生效 Revision 节点应有独立的“显示修订前计划”复选框；默认不加载，首次勾选显示 loading，失败可重试，成功后在候选 Plan（如有）与人员投入之间插入对应基础 Plan 的只读历史行。多选按 Revision 时间倒序，取消只隐藏目标行，再次勾选复用页面缓存；跨 Task、未生效或已不在 Current Plan 的 Revision 查询必须返回脱敏错误。对比节点超出初始三年窗口时，“最早内容 / 最新内容”应能在本地切换 presentation 窗口并看到目标节点，同时保持 Task URL、数据块请求范围和未保存投入不变；远期窗口缩放也不得持久化对比中心，点击 Current Plan 节点、浏览器前进后退或取消对应历史行后必须恢复权威窗口。投入悬浮提示必须显示关联 Task，未关联时显示“独立投入”，Busy 不得显示 Task。页面不得下发 raw 审计列表。Task Owner/Participant 可在 ACTIVE 状态提出和解决风险，普通旁观者只能查看风险但仍可评论；只有全局管理员显示评论删除入口。Active Task 编辑 Dialog 继续使用一次事务保存基本信息和成员，并保持原有并发保护。

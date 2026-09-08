@@ -100,7 +100,7 @@ export function CreateRiskCard({
   const trimmed = content.trim();
   return (
     <section className="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5">
-      <h2 className="font-semibold">提出{targetType === "PROJECT" ? " Project" : " Task"} 风险</h2>
+      <h2 className="font-semibold">提出{targetType === "PROJECT" ? "项目" : "任务"}风险</h2>
       <label className="mt-3 block text-sm font-medium" htmlFor={`${targetType}-${targetId}-risk`}>
         风险内容
       </label>
@@ -169,11 +169,11 @@ export function CreateRiskCard({
 function RiskPanel({ data }: { data: CollaborationInitialData }) {
   return (
     <section className="min-w-0 rounded-xl border border-border bg-card p-4">
-      <h2 className="font-semibold">{data.targetType === "PROJECT" ? "Project" : "Task"} 风险</h2>
+      <h2 className="font-semibold">{data.targetType === "PROJECT" ? "项目" : "任务"}风险</h2>
       <div className="mt-3 space-y-5">
         <RiskGroup
           key={`direct:${pageKey(data.directActiveRisks)}:${pageKey(data.directResolvedRisks)}`}
-          heading={data.targetType === "PROJECT" ? "Project 自身风险" : "风险记录"}
+          heading={data.targetType === "PROJECT" ? "项目自身风险" : "风险记录"}
           targetType={data.targetType}
           targetId={data.targetId}
           source="DIRECT"
@@ -183,7 +183,7 @@ function RiskPanel({ data }: { data: CollaborationInitialData }) {
         {data.targetType === "PROJECT" && data.taskActiveRisks && data.taskResolvedRisks && (
           <RiskGroup
             key={`tasks:${pageKey(data.taskActiveRisks)}:${pageKey(data.taskResolvedRisks)}`}
-            heading="当前所属 Task 风险"
+            heading="当前所属任务风险"
             targetType="PROJECT"
             targetId={data.targetId}
             source="TASKS"
@@ -453,7 +453,7 @@ function CommentPanel({ data }: { data: CollaborationInitialData }) {
   };
   return (
     <section className="min-w-0 rounded-xl border border-border bg-card p-4">
-      <div className="flex items-center justify-between gap-2"><h2 className="font-semibold">{data.targetType === "PROJECT" ? "Project" : "Task"} 评论</h2><Badge variant="secondary">{page.totalCount}</Badge></div>
+      <div className="flex items-center justify-between gap-2"><h2 className="font-semibold">{data.targetType === "PROJECT" ? "项目" : "任务"}评论</h2><Badge variant="secondary">{page.totalCount}</Badge></div>
       <label className="mt-3 block text-sm font-medium" htmlFor={`${data.targetType}-${data.targetId}-comment`}>发表评论</label>
       <Textarea id={`${data.targetType}-${data.targetId}-comment`} className="mt-2 min-h-24" value={content} maxLength={1_000} disabled={busy || !data.capabilities.canCreateComment} aria-invalid={Boolean(contentError)} aria-describedby={contentError ? `${data.targetType}-${data.targetId}-comment-error` : undefined} onChange={(event) => { setContent(event.target.value); if (event.target.value.trim()) setContentError(""); }} placeholder="输入评论内容" />
       <FieldError id={`${data.targetType}-${data.targetId}-comment-error`} messages={contentError} className="mt-1.5" />
@@ -480,10 +480,10 @@ function CommentPanel({ data }: { data: CollaborationInitialData }) {
 }
 
 const projectFilters = [
-  ["ALL", "全部"], ["PROJECT", "Project"], ["TASK", "Task"], ["RISK", "风险"], ["COMMENT", "评论"], ["REVIEW", "审批"],
+  ["ALL", "全部"], ["PROJECT", "项目"], ["TASK", "任务"], ["RISK", "风险"], ["COMMENT", "评论"], ["REVIEW", "审批"],
 ] as const;
 const taskFilters = [
-  ["ALL", "全部"], ["TASK", "Task"], ["PLAN_NODE", "计划节点"], ["RISK", "风险"], ["COMMENT", "评论"], ["REVIEW", "审批"],
+  ["ALL", "全部"], ["TASK", "任务"], ["PLAN_NODE", "计划节点"], ["RISK", "风险"], ["COMMENT", "评论"], ["REVIEW", "审批"],
 ] as const;
 
 function RecentActivityPanel({ data }: { data: CollaborationInitialData }) {
@@ -591,4 +591,4 @@ function mergeRiskPage(current: RiskPageDto, next: RiskPageDto): RiskPageDto { c
 function mergeCommentPage(current: CommentPageDto, next: CommentPageDto): CommentPageDto { const byId = new Map(current.items.map((item) => [item.id, item])); for (const item of next.items) byId.set(item.id, item); return { items: [...byId.values()], totalCount: next.totalCount, nextCursor: next.nextCursor }; }
 function mergeActivityPage(current: RecentActivityPageDto, next: RecentActivityPageDto): RecentActivityPageDto { const byId = new Map(current.items.map((item) => [item.id, item])); for (const item of next.items) byId.set(item.id, item); return { items: [...byId.values()], nextCursor: next.nextCursor }; }
 function preview(value: string) { return value.length <= 80 ? value : `${value.slice(0, 80)}…`; }
-function activityCategoryLabel(value: RecentActivityItemDto["category"]) { return ({ PROJECT: "Project", TASK: "Task", PLAN_NODE: "计划节点", RISK: "风险", COMMENT: "评论", REVIEW: "审批" } as const)[value]; }
+function activityCategoryLabel(value: RecentActivityItemDto["category"]) { return ({ PROJECT: "项目", TASK: "任务", PLAN_NODE: "计划节点", RISK: "风险", COMMENT: "评论", REVIEW: "审批" } as const)[value]; }

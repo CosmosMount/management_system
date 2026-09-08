@@ -316,11 +316,11 @@ export function TaskComposerClient({
 
   const beginMilestone = (at: string, source?: TaskComposerMilestone) => {
     if (state.milestones.length >= 200) {
-      setServerError("单个计划最多 200 个 Milestone。");
+      setServerError("单个计划最多 200 个里程碑。");
       return;
     }
     if (!isMilestoneTimeAvailable(state, at)) {
-      setServerError("当前没有可用的分钟级 Milestone 位置，请先调整相邻节点或 Terminal。");
+      setServerError("当前没有可用的分钟级里程碑位置，请先调整相邻节点或结束节点。");
       return;
     }
     const milestone: TaskComposerMilestone = {
@@ -357,12 +357,12 @@ export function TaskComposerClient({
   const removeMilestones = (ids: string[]) => {
     const lockedIds = ids.filter((id) => isLockedRevisionMilestone(state, id));
     if (lockedIds.length > 0) {
-      setServerError("已完成并承接到候选计划的 Milestone 不能删除。");
+      setServerError("已完成并承接到候选计划的里程碑不能删除。");
       return;
     }
     const existingIds = ids.filter((id) => state.milestones.some((item) => item.id === id));
     if (existingIds.length === 0) return;
-    if (!window.confirm(`确认删除选中的 ${existingIds.length} 个 Milestone？`)) return;
+    if (!window.confirm(`确认删除选中的 ${existingIds.length} 个里程碑？`)) return;
     endLiveEdit();
     commit((current) => {
       const remaining = current.milestones.filter((item) => !existingIds.includes(item.id));
@@ -463,7 +463,7 @@ export function TaskComposerClient({
       ...revisionAnchorTimes(state),
     );
     if (!Number.isFinite(at) || at <= boundary) {
-      setServerError("Terminal 必须严格晚于 Start 和全部 Milestone。");
+      setServerError("结束节点必须严格晚于开始节点和全部里程碑。");
       return;
     }
     endLiveEdit();
@@ -502,12 +502,12 @@ export function TaskComposerClient({
     setStatusMessage(
       validationIssues.length === 0
         ? isEditingDraft
-          ? "内容校验通过，可以保存 Task。"
+          ? "内容校验通过，可以保存任务。"
           : isResubmittingRevision
             ? "候选计划校验通过，可以修改并重新送审。"
             : isRevisionComposer
               ? "候选计划校验通过，可以创建并送审。"
-              : "计划校验通过，可以创建 Task 草稿。"
+              : "计划校验通过，可以创建任务草稿。"
         : `发现 ${validationIssues.length} 个问题。`,
     );
     return validationIssues.length === 0;
@@ -585,12 +585,12 @@ export function TaskComposerClient({
     setServerError("");
     setStatusMessage(
       isEditingDraft
-        ? "正在保存 Task…"
+        ? "正在保存任务…"
         : isResubmittingRevision
           ? "正在修改并重新送审…"
           : isRevisionComposer
-            ? "正在创建 Revision 并送审…"
-            : "正在创建 Task 草稿…",
+            ? "正在创建计划修订并送审…"
+            : "正在创建任务草稿…",
     );
     try {
       const result = await submitTaskComposer({
@@ -613,8 +613,8 @@ export function TaskComposerClient({
             raw: JSON.stringify(result.conflictDraft),
             reason:
               mode.kind === "EDIT_DRAFT"
-                ? "Task 已在服务端更新，当前本地修改不会覆盖最新版本。请先导出，或放弃并加载最新版本。"
-                : "Task 或 Revision 候选计划已在服务端变化，当前本地修改不会覆盖最新版本。请先导出，或放弃并加载最新版本。",
+                ? "任务已在服务端更新，当前本地修改不会覆盖最新版本。请先导出，或放弃并加载最新版本。"
+                : "任务或计划修订候选计划已在服务端变化，当前本地修改不会覆盖最新版本。请先导出，或放弃并加载最新版本。",
           });
           setStatusMessage("保存冲突，本地修改已保留；不会自动刷新或合并字段。");
           return;
@@ -637,12 +637,12 @@ export function TaskComposerClient({
       }
       setStatusMessage(
         isEditingDraft
-          ? "Task 已保存，正在返回工作台…"
+          ? "任务已保存，正在返回工作台…"
           : isResubmittingRevision
-            ? "Revision 已修改并重新送审，正在返回工作台…"
+            ? "计划修订已修改并重新送审，正在返回工作台…"
             : isRevisionComposer
-              ? "Revision 已创建并送审，正在返回工作台…"
-              : "Task 草稿已创建，正在进入工作台…",
+              ? "计划修订已创建并送审，正在返回工作台…"
+              : "任务草稿已创建，正在进入工作台…",
       );
       replaceAfterCollapsingHistoryGuard(result.destination);
     } catch {
@@ -705,8 +705,8 @@ export function TaskComposerClient({
             >
               <ArrowLeft aria-hidden="true" />
               {mode.kind === "CREATE"
-                ? "全部 Task"
-                : "返回 Task 工作台"}
+                ? "全部任务"
+                : "返回任务工作台"}
             </Button>
             <span className="text-sm text-muted-foreground" aria-live="polite">
               {savedAt
@@ -754,12 +754,12 @@ export function TaskComposerClient({
                       ? "正在创建并送审…"
                   : "正在创建…"
                 : isEditingDraft
-                  ? "保存 Task"
+                  ? "保存任务"
                   : isResubmittingRevision
                     ? "修改并重新送审"
                     : isRevisionComposer
                       ? "创建并送审"
-                  : "创建 Task 草稿"}
+                  : "创建任务草稿"}
             </Button>
           </div>
         </div>
@@ -885,10 +885,10 @@ export function TaskComposerClient({
       <div className="mx-auto flex w-full min-w-0 max-w-[110rem] flex-col gap-4 px-4 py-5 sm:px-6 lg:px-8">
         <aside
           className="min-w-0 space-y-5 rounded-xl border border-border bg-card p-4 sm:p-5 [&>section]:border-0 [&>section]:bg-transparent [&>section]:p-0"
-          aria-label="Task 基本信息"
+          aria-label="任务基本信息"
         >
           <ComposerSection title="基本信息" issueCount={countIssues(issues, ["title", "description", "priority"])}>
-            <Field label="Task 名称" required htmlFor="title">
+            <Field label="任务名称" required htmlFor="title">
               <Input
                 id="title"
                 value={state.title}
@@ -977,10 +977,10 @@ export function TaskComposerClient({
                 <FieldError id="tech-group-error" messages={issueMessages("techGroup")} className="mt-1.5" />
               </Field>
             </div>
-            <Field label="关联 Task" htmlFor="related-task">
+            <Field label="关联任务" htmlFor="related-task">
               <TaskSelect
                 inputId="related-task"
-                ariaLabel="关联 Task"
+                ariaLabel="关联任务"
                 value={state.relatedTaskId}
                 onValueChange={(nextValue) => updateField("relatedTaskId", nextValue)}
                 initialOptions={initialTasks}
@@ -993,7 +993,7 @@ export function TaskComposerClient({
               />
               <FieldError id="related-task-error" messages={issueMessages("related-task")} className="mt-1.5" />
             </Field>
-            <Field label="所属 Project" htmlFor="task-project">
+            <Field label="所属项目" htmlFor="task-project">
               <ProjectSelect
                 inputId="task-project"
                 value={state.projectId ?? null}
@@ -1034,12 +1034,12 @@ export function TaskComposerClient({
             {!canManageMembers ? (
               <p className="text-xs text-muted-foreground">
                 {isRevisionComposer
-                  ? "Revision 只调整下方计划节点；Task 基本信息、分类与成员保持只读。"
-                  : "你可以编辑 Task 内容和计划，成员与角色为只读。"}
+                  ? "计划修订只调整下方计划节点；任务基本信息、分类与成员保持只读。"
+                  : "你可以编辑任务内容和计划，成员与角色为只读。"}
               </p>
             ) : (
               <p className="text-xs text-muted-foreground">
-                草稿阶段可暂不设置成员；激活 Task 前至少需要一名有效负责人。
+                草稿阶段可暂不设置成员；激活任务前至少需要一名有效负责人。
               </p>
             )}
           </ComposerSection>
@@ -1064,7 +1064,7 @@ export function TaskComposerClient({
           submitDisabled={isEditingDraft && !dirty}
           submitLabel={
             isEditingDraft
-              ? "保存 Task"
+              ? "保存任务"
               : isResubmittingRevision
                 ? "修改并重新送审"
                 : isRevisionComposer
@@ -1101,7 +1101,7 @@ export function TaskComposerClient({
         <DialogContent className="sm:max-w-md" showCloseButton={false}>
           <DialogHeader>
             <DialogTitle>
-              {isEditingDraft ? "离开 Task 编辑？" : "离开 Task Composer？"}
+              {isEditingDraft ? "离开任务编辑？" : "离开任务编辑器？"}
             </DialogTitle>
             <DialogDescription>
               当前修改尚未提交到服务端。你可以保留本地草稿后离开，或放弃草稿。

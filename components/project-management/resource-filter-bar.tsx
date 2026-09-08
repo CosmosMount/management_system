@@ -92,7 +92,7 @@ export function ResourceFilterBar({
           <span className="min-w-0">
             <span className="block font-medium">显示全部资源</span>
             <span className="block text-sm text-muted-foreground">
-              显示全部可见人员投入，以及符合下方状态的 Task Current Plan。
+              显示全部可见人员投入，以及符合下方状态的任务当前计划。
             </span>
           </span>
         </label>
@@ -130,7 +130,7 @@ export function ResourceFilterBar({
 
       <fieldset className="min-w-0 rounded-lg border border-border p-3">
         <legend className="px-1 text-sm font-medium">
-          Task 状态（{taskStatuses.length}）
+          任务状态（{taskStatuses.length}）
         </legend>
         <div className="flex flex-wrap gap-x-5 gap-y-3">
           {RESOURCE_PLAN_TASK_STATUS_OPTIONS.map((status) => (
@@ -157,7 +157,7 @@ export function ResourceFilterBar({
           ))}
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
-          仅筛选 Task 计划轨道；进入画布的人员仍展示全部可见投入。
+          仅筛选任务计划轨道；进入画布的人员仍展示全部可见投入。
         </p>
       </fieldset>
 
@@ -166,7 +166,7 @@ export function ResourceFilterBar({
           className="min-w-0 rounded-lg border border-border p-3 disabled:opacity-60"
           disabled={showAll}
         >
-          <legend className="px-1 text-sm font-medium">Project（{projectIds.length}）</legend>
+          <legend className="px-1 text-sm font-medium">项目（{projectIds.length}）</legend>
           <ProjectMultiSelect
             value={projectIds}
             onValueChange={setProjectIds}
@@ -175,9 +175,9 @@ export function ResourceFilterBar({
           />
         </fieldset>
         <fieldset className="min-w-0 rounded-lg border border-border p-3 disabled:opacity-60" disabled={showAll}>
-          <legend className="px-1 text-sm font-medium">Task（{taskIds.length}）</legend>
+          <legend className="px-1 text-sm font-medium">任务（{taskIds.length}）</legend>
           <TaskMultiSelect
-            ariaLabel="筛选 Task"
+            ariaLabel="筛选任务"
             value={taskIds}
             onValueChange={setTaskIds}
             initialOptions={initialTasks}
@@ -205,10 +205,10 @@ export function ResourceFilterBar({
       <p className="text-sm text-muted-foreground" role="status">
         {showAll
           ? taskStatuses.length > 0
-            ? `当前展示全部可见人员，以及 ${taskStatuses.length} 种状态的 Task 计划。`
-            : "当前展示全部可见人员，不显示 Task 计划。"
+            ? `当前展示全部可见人员，以及 ${taskStatuses.length} 种状态的任务计划。`
+            : "当前展示全部可见人员，不显示任务计划。"
           : selectedCount > 0
-            ? `已选择 ${projectIds.length} 个 Project、${taskIds.length} 个 Task、${personIds.length} 个人员；显示 ${taskStatuses.length} 种状态的 Task 计划，关联成员会自动并入。`
+            ? `已选择 ${projectIds.length} 个项目、${taskIds.length} 个任务、${personIds.length} 个人员；显示 ${taskStatuses.length} 种状态的任务计划，关联成员会自动并入。`
             : "当前未选择资源，应用后显示空画布。"}
         {notice ? ` ${notice}` : ""}
       </p>

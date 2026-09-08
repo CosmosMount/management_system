@@ -90,8 +90,8 @@ export default async function ProgressTaskNewPage({
   return (
     <>
       <PageCommandBar
-        title="新建 Task"
-        description="在一个工作台内编排元数据、成员、Milestone 与 Terminal；创建后再安排人员投入。"
+        title="新建任务"
+        description="在一个工作台内编排元数据、成员、里程碑与结束节点；创建后再安排人员投入。"
       />
       <TaskComposerClient
         accountId={actor.accountId}

@@ -124,15 +124,15 @@ export default async function ProgressPage({
   return (
     <>
       <PageCommandBar
-        title="我的工作"
-        description="个人时间、行动待办、参与 Task 与通知集中在一个驾驶舱。"
+        title="工作台"
+        description="个人时间、行动待办、参与任务与通知集中在一个工作台。"
         actions={
           actor.isActive === false ? null : (
             <Link
               className="rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground"
               href={routes.progress.taskNew}
             >
-              新建 Task
+              新建任务
             </Link>
           )
         }
@@ -145,7 +145,7 @@ export default async function ProgressPage({
         )}
 
         <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="工作指标">
-          <Metric icon={ClipboardList} label="Active Task" value={metrics.activeTaskCount} />
+          <Metric icon={ClipboardList} label="进行中任务" value={metrics.activeTaskCount} />
           <Metric icon={CheckSquare2} label="行动待办" value={inbox.totalCount} />
           <Metric icon={AlertTriangle} label="紧急待办" value={inbox.criticalCount} />
           <Metric icon={Bell} label="未读通知" value={metrics.unreadNotificationCount} />
@@ -190,8 +190,8 @@ export default async function ProgressPage({
           <section className="min-w-0 rounded-xl border border-border bg-card p-4" aria-labelledby="my-task-list-title">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h2 id="my-task-list-title" className="font-medium">参与 Task</h2>
-                <p className="mt-1 text-sm text-muted-foreground">全部参与 Task 与上方 Plan 轨道同步。</p>
+                <h2 id="my-task-list-title" className="font-medium">参与任务</h2>
+                <p className="mt-1 text-sm text-muted-foreground">全部参与任务与上方计划轨道同步。</p>
               </div>
               <div className="flex flex-wrap gap-2">
                 <ViewportStateLink
@@ -203,12 +203,12 @@ export default async function ProgressPage({
               </div>
             </div>
             {tasks.length === 0 ? (
-              <Empty text="当前没有有效参与的 Task。" />
+              <Empty text="当前没有有效参与的任务。" />
             ) : (
               <div className="mt-4 overflow-x-auto">
                 <table className="w-full min-w-[42rem] text-left text-sm">
                   <thead className="text-muted-foreground">
-                    <tr><th className="pb-2 font-medium">Task</th><th className="pb-2 font-medium">状态</th><th className="pb-2 font-medium">当前节点</th><th className="pb-2 font-medium">版本</th></tr>
+                    <tr><th className="pb-2 font-medium">任务</th><th className="pb-2 font-medium">状态</th><th className="pb-2 font-medium">当前节点</th><th className="pb-2 font-medium">版本</th></tr>
                   </thead>
                   <tbody>
                     {tasks.map((task) => (

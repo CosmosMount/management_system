@@ -54,10 +54,10 @@ test.describe("project management UI project-management-ui-routes-responsive", (
         `/progress?timelineDate=2026-08-03&timelineFocus=legacy&start=2026-08-01&end=2026-09-01&zoom=month&personId=${fixture.member.person.id}&taskId=${fixture.taskId}&focusSegmentIds=${fixture.taskId}`,
       );
       await expect(page).toHaveURL(/\/progress$/);
-      await expect(page.getByRole("heading", { name: "我的工作" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "工作台" })).toBeVisible();
       await expect(
         page
-          .getByLabel("参与 Task")
+          .getByLabel("参与任务")
           .getByRole("link", { name: fixture.taskTitle, exact: true }),
       ).toBeVisible();
       await expect(page.getByText("未读通知")).toBeVisible();
@@ -100,17 +100,29 @@ test.describe("project management UI project-management-ui-routes-responsive", (
       });
       await personalTaskPlanLink.click();
       await expect.poll(() => acceptedRowNavigation).toBe(true);
-      await expect(page).toHaveURL(`/progress/tasks/${fixture.taskId}`);
+      await expect(page).toHaveURL((url) => url.pathname === `/progress/tasks/${fixture.taskId}`);
+      await expect.poll(() => {
+        const taskDetailUrl = new URL(page.url());
+        return {
+          pathname: taskDetailUrl.pathname,
+          validCenter: Number.isFinite(Date.parse(taskDetailUrl.searchParams.get("center") ?? "")),
+          validScale: ["week", "month", "quarter", "year"].includes(taskDetailUrl.searchParams.get("scale") ?? ""),
+        };
+      }).toEqual({
+        pathname: `/progress/tasks/${fixture.taskId}`,
+        validCenter: true,
+        validScale: true,
+      });
 
       await page.goto("/progress/tasks");
-      await expect(page.getByRole("heading", { name: "全部 Task" })).toBeVisible();
-      await expect(page.getByLabel("Task 状态")).toHaveValue("ACTIVE");
+      await expect(page.getByRole("heading", { name: "全部任务" })).toBeVisible();
+      await expect(page.getByLabel("任务状态")).toHaveValue("ACTIVE");
       await expect(page.getByRole("checkbox", { name: "只看我参与" })).toBeChecked();
       await expect(page.getByText(fixture.taskTitle)).toBeVisible();
-      await page.getByLabel("Task 状态").selectOption("");
+      await page.getByLabel("任务状态").selectOption("");
       await page.getByRole("checkbox", { name: "只看我参与" }).uncheck();
       await page.getByRole("button", { name: "筛选", exact: true }).click();
-      await expect(page.getByLabel("Task 状态")).toHaveValue("");
+      await expect(page.getByLabel("任务状态")).toHaveValue("");
       await expect(page.getByRole("checkbox", { name: "只看我参与" })).not.toBeChecked();
       await expectHealthyPage(page);
 
@@ -144,13 +156,13 @@ test.describe("project management UI project-management-ui-routes-responsive", (
       await expect(
         page
           .getByTestId("task-plan-node-navigator")
-          .getByRole("button", { name: /Start/ }),
+          .getByRole("button", { name: /开始节点/ }),
       ).toHaveAttribute("aria-pressed", "true");
       await expect(
-        page.getByRole("heading", { name: "Task 风险", exact: true }),
+        page.getByRole("heading", { name: "任务风险", exact: true }),
       ).toBeVisible();
       await expect(
-        page.getByRole("heading", { name: "Task 评论", exact: true }),
+        page.getByRole("heading", { name: "任务评论", exact: true }),
       ).toBeVisible();
       await expect(page.getByRole("heading", { name: "近期动态" })).toBeVisible();
       await expect(page.getByText("从未记录风险")).toBeVisible();
@@ -309,7 +321,7 @@ test.describe("project management UI project-management-ui-routes-responsive", (
       await expect(
         page.getByRole("button", { name: `移除${fixture.owner.person.displayName}` }),
       ).toBeVisible();
-      const taskPicker = page.getByLabel("筛选 Task", { exact: true });
+      const taskPicker = page.getByLabel("筛选任务", { exact: true });
       await taskPicker.fill(fixture.taskTitle);
       const taskOption = page.getByRole("option", {
         name: fixture.taskTitle,
@@ -437,7 +449,7 @@ test.describe("project management UI project-management-ui-routes-responsive", (
         await expect(brushCreate.getByLabel("开始")).not.toHaveValue(draftStartBeforeMove);
         await expect(brushCreate.getByLabel("投入比例")).toHaveCount(0);
         await expect(brushCreate.getByLabel("完成比例")).toHaveCount(0);
-        await brushCreate.getByLabel("Task", { exact: true }).fill(fixture.taskTitle);
+        await brushCreate.getByLabel("任务", { exact: true }).fill(fixture.taskTitle);
         await page
           .getByRole("option", { name: fixture.taskTitle, exact: true })
           .click();
@@ -508,6 +520,8 @@ test.describe("project management UI project-management-ui-routes-responsive", (
         await expect(movedInspector.getByLabel("内容", { exact: true })).toHaveValue(
           "P6 UI Inspector 并发权威内容",
         );
+        await expect(movedInspector.getByRole("heading", { name: "P6 UI Inspector 并发权威内容", exact: true })).toBeVisible();
+        await expect(movedInspector.getByRole("button", { name: "保存基本信息", exact: true })).toBeEnabled();
         await movedInspector
           .getByLabel("内容", { exact: true })
           .fill("P6 UI Inspector 更新不覆盖画布时间");
@@ -528,6 +542,8 @@ test.describe("project management UI project-management-ui-routes-responsive", (
           startAt: originalRange.startAt.toISOString(),
           endAt: originalRange.endAt.toISOString(),
         });
+        await expect(page.getByRole("dialog", { name: "投入详情" })).toBeHidden();
+        await expect(page.getByRole("button", { name: "新增投入", exact: true })).toBeEnabled();
         const confirmableSegment = page.getByTestId(
           `segment-block-${fixture.confirmableSegmentId}`,
         );
@@ -600,7 +616,7 @@ test.describe("project management UI project-management-ui-routes-responsive", (
       await expect(commonInspector.getByText("类型", { exact: true })).toHaveCount(0);
       await expect(commonInspector.getByText("状态", { exact: true })).toHaveCount(0);
       await expect(commonInspector.getByText("所属人员", { exact: true })).toBeVisible();
-      await expect(commonInspector.getByText("关联 Task", { exact: true })).toBeVisible();
+      await expect(commonInspector.getByRole("term").filter({ hasText: /^关联任务$/ })).toBeVisible();
       await expect(
         commonInspector.getByRole("link", { name: fixture.taskTitle, exact: true }),
       ).toHaveAttribute("href", `/progress/tasks/${fixture.taskId}`);
@@ -706,18 +722,18 @@ test.describe("project management UI project-management-ui-routes-responsive", (
       await expect(page.getByTestId("time-canvas-root")).toBeVisible();
       await page
         .getByTestId("task-plan-node-navigator")
-        .getByRole("button", { name: /Start/ })
+        .getByRole("button", { name: /开始节点/ })
         .click();
       await expect(
         page
           .getByTestId("task-detail-main-column")
-          .getByRole("heading", { name: "Start", exact: true }),
+          .getByRole("heading", { name: "开始节点", exact: true }),
       ).toBeVisible();
       await expect(
-        page.getByRole("heading", { name: "Task 风险", exact: true }),
+        page.getByRole("heading", { name: "任务风险", exact: true }),
       ).toBeVisible();
       await expect(
-        page.getByRole("heading", { name: "Task 评论", exact: true }),
+        page.getByRole("heading", { name: "任务评论", exact: true }),
       ).toBeVisible();
       await expect(
         page.getByRole("heading", { name: "近期动态", exact: true }),
@@ -727,10 +743,10 @@ test.describe("project management UI project-management-ui-routes-responsive", (
           .getByTestId("task-detail-left-column")
           .getByText(visibleTaskRisk, { exact: true }),
       ).toBeVisible();
-      await expect(page.getByRole("button", { name: "修改 Task 基本信息" })).toHaveCount(0);
-      await expect(page.getByRole("link", { name: "发起 Revision" })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "修改任务基本信息" })).toHaveCount(0);
+      await expect(page.getByRole("link", { name: "发起计划修订" })).toHaveCount(0);
       await expect(page.getByRole("button", { name: "提交验收" })).toHaveCount(0);
-      await expect(page.getByRole("button", { name: "申请结束 Task" })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "申请结束任务" })).toHaveCount(0);
       await expect(
         page.getByRole("button", { name: "提出风险", exact: true }),
       ).toHaveCount(0);
@@ -825,7 +841,7 @@ test.describe("project management UI project-management-ui-routes-responsive", (
       page.on("pageerror", (error) => pageErrors.push(error.message));
 
       await page.goto("/progress");
-      await expect(page.getByRole("heading", { name: "我的工作" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "工作台" })).toBeVisible();
       await expect(page.getByLabel("工作指标")).toBeVisible();
       await expect(page.getByTestId("action-inbox")).toHaveCount(0);
       await expectHealthyPage(page);
@@ -834,7 +850,7 @@ test.describe("project management UI project-management-ui-routes-responsive", (
       await expect(page.getByRole("heading", { name: "待办与审批" })).toBeVisible();
       await expect(page.getByText("当前没有需要你处理的事项。")).toBeVisible();
 
-      await page.goto("/progress/notifications");
+      await page.goto("/progress/notifications?view=settings");
       await expect(page.getByRole("heading", { name: "通知偏好" })).toBeVisible();
       const taskFeishu = page.getByRole("checkbox", { name: "任务飞书通知" });
       await expect(taskFeishu).toBeChecked();
@@ -894,7 +910,7 @@ test.describe("project management UI project-management-ui-routes-responsive", (
     ).toBeVisible();
     await expect(page.getByText("完成标准：完成第一阶段")).toBeVisible();
     await expect(page.getByText("节点：里程碑 · 进行中")).toBeVisible();
-    await expect(page.getByText(`Task：${fixture.taskTitle}`)).toBeVisible();
+    await expect(page.getByText(`任务：${fixture.taskTitle}`)).toBeVisible();
     await expect(
       page.getByRole("link", { name: "查看节点：P6 UI 第一阶段" }),
     ).toBeVisible();

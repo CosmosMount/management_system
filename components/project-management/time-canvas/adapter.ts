@@ -13,6 +13,9 @@ import type {
   TimeSegmentDto,
 } from "@/lib/project-management/types/time-canvas";
 import { routes } from "@/lib/routes";
+import { taskMemberRoleLabels, taskPriorityLabels, taskStatusLabels } from "@/lib/project-management/labels";
+
+const rowSublabelLabels: Record<string, string> = { ...taskMemberRoleLabels, ...taskPriorityLabels, ...taskStatusLabels };
 
 const readOnlyPermissions: TimeCanvasSegmentPermissions = {
   canViewDetails: false,
@@ -31,7 +34,7 @@ export function timeCanvasDataToModel(
     sourceId: row.id,
     kind: row.kind,
     label: row.label,
-    sublabel: row.sublabel,
+    sublabel: row.sublabel?.split(" / ").map((value) => rowSublabelLabels[value] ?? value).join(" / ") ?? null,
     href:
       row.kind === "TASK"
         ? routes.progress.taskDetail(row.id)
@@ -74,7 +77,7 @@ export function timeCanvasDataToModel(
           sourceId: task.id,
           kind: "PLAN",
           label: task.title,
-          sublabel: `计划轨道 · ${task.status}`,
+          sublabel: `计划轨道 · ${taskStatusLabels[task.status]}`,
           href: routes.progress.taskDetail(task.id),
           editable: canEditDraftPlan,
           height: 112,
@@ -180,7 +183,7 @@ function adaptTaskAnchors(
     taskId: task.id,
     kind: "PLAN_START",
     status: task.status,
-    label: "Start",
+    label: "开始节点",
     atMs: parseMs(task.plannedStartAt ?? task.createdAt),
     sequence: -1,
     editable: canEditDraftPlan && task.plannedStartAt !== null,

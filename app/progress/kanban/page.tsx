@@ -109,8 +109,8 @@ export default async function ProgressKanbanPage({
   return (
     <>
       <PageCommandBar
-        title="看板"
-        description="选择人员，查看其参与 Task 的计划与个人投入时间线。"
+        title="人员时间线"
+        description="选择人员，查看其参与任务的计划与个人投入时间线。"
       />
       <div className="mx-auto flex w-full min-w-0 max-w-[96rem] flex-col gap-5 px-4 py-6 sm:px-6 lg:px-8">
         <PersonTimelineFilter

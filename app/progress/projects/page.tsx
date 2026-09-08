@@ -22,17 +22,17 @@ export default async function ProjectsPage({ searchParams }: { searchParams?: Pr
   const cursor = first(params.cursor) || undefined;
   const projects = await listProjects({ actor, input: { status, mine, query, limit: 50, cursor } });
   return <>
-    <PageCommandBar title="Project" description="Project 是 Task 的文件夹与立项对象。" actions={<Link href={routes.progress.projectNew} className={cn(buttonVariants())}>提交立项</Link>} />
+    <PageCommandBar title="项目" description="项目是任务的文件夹与立项对象。" actions={<Link href={routes.progress.projectNew} className={cn(buttonVariants())}>提交立项</Link>} />
     <div className="mx-auto flex w-full min-w-0 max-w-[96rem] flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
       <form className="grid gap-3 rounded-xl border bg-card p-4 md:grid-cols-[1fr_180px_auto_auto]">
-        <Input name="q" defaultValue={query} placeholder="搜索 Project 名称或内容" aria-label="搜索 Project 名称或内容" />
-        <select name="status" defaultValue={rawStatus} aria-label="Project 状态" className="h-8 rounded-lg border border-input bg-background px-2 text-sm"><option value="">全部状态</option>{statuses.map((value) => <option key={value} value={value}>{labels[value]}</option>)}</select>
+        <Input name="q" defaultValue={query} placeholder="搜索项目名称或内容" aria-label="搜索项目名称或内容" />
+        <select name="status" defaultValue={rawStatus} aria-label="项目状态" className="h-8 rounded-lg border border-input bg-background px-2 text-sm"><option value="">全部状态</option>{statuses.map((value) => <option key={value} value={value}>{labels[value]}</option>)}</select>
         <label className="flex h-8 items-center gap-2 text-sm text-muted-foreground"><input type="hidden" name="mine" value="0" /><input type="checkbox" name="mine" value="1" defaultChecked={mine} />只看我参与</label>
         <Button type="submit">筛选</Button>
       </form>
       {projects.hasMoreByQuery && <p role="status" className="text-sm text-amber-700">搜索结果较多，仅显示最相关的 50 条，请继续输入关键词。</p>}
       <ProjectList projects={projects.items} />
-      {!query && projects.nextCursor && <div className="flex justify-end"><Link href={projectPageHref(params, projects.nextCursor)} className={cn(buttonVariants({ variant: "outline" }))}>下一页 Project</Link></div>}
+      {!query && projects.nextCursor && <div className="flex justify-end"><Link href={projectPageHref(params, projects.nextCursor)} className={cn(buttonVariants({ variant: "outline" }))}>下一页项目</Link></div>}
     </div>
   </>;
 }

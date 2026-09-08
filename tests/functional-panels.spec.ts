@@ -58,7 +58,7 @@ test.describe("普通用户主功能面板", () => {
       })
       .click();
     await expect.poll(() => new URL(page.url()).pathname).toBe("/progress");
-    await expect(page.getByRole("heading", { name: "我的工作" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "工作台" })).toBeVisible();
     await expectHealthyPage(page);
 
     const legacyTaskResponse = await page.goto("/progress/task/legacy-task", { waitUntil: "networkidle" });
@@ -71,7 +71,7 @@ test.describe("普通用户主功能面板", () => {
 
     await page.goto("/progress/kanban", { waitUntil: "networkidle" });
     await expect(page).toHaveURL(/\/progress\/kanban\?people=/);
-    await expect(page.getByRole("heading", { name: "看板" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "人员时间线" })).toBeVisible();
     await expectHealthyPage(page);
 
     await page.goto("/progress/projects/legacy-project", {

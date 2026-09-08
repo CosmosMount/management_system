@@ -33,7 +33,7 @@ export function ProjectActionsClient({ projectId, lockVersion, requestId, canRev
     setNotice("");
     try {
       await navigator.clipboard.writeText(window.location.href);
-      setNotice("Project 链接已复制。");
+      setNotice("项目链接已复制。");
     } catch {
       setError("浏览器拒绝复制，请手动复制地址栏链接。");
     }
@@ -42,13 +42,13 @@ export function ProjectActionsClient({ projectId, lockVersion, requestId, canRev
     <div className="flex flex-wrap gap-2">
       <Button type="button" variant="outline" disabled={pending} onClick={() => void copyProjectLink()}><Copy />复制链接</Button>
       {canReview && requestId && <><Button disabled={pending} onClick={() => run(() => reviewProjectEstablishment({ projectId, requestId, expectedLockVersion: lockVersion, decision: "APPROVE", comment }))}>通过立项</Button><Button variant="destructive" disabled={pending} onClick={() => { if (!comment.trim()) { setCommentError("驳回立项时请填写审批意见"); requestAnimationFrame(() => document.getElementById("project-review-comment")?.focus()); return; } if (window.confirm("确认驳回该立项申请？")) run(() => reviewProjectEstablishment({ projectId, requestId, expectedLockVersion: lockVersion, decision: "REJECT", comment })); }}>驳回</Button></>}
-      {canComplete && <Button disabled={pending} onClick={() => setDialog("complete")}>结束 Project</Button>}
-      {canDelete && <Button variant="destructive" disabled={pending} onClick={() => setDialog("delete")}>删除 Project</Button>}
+      {canComplete && <Button disabled={pending} onClick={() => setDialog("complete")}>结束项目</Button>}
+      {canDelete && <Button variant="destructive" disabled={pending} onClick={() => setDialog("delete")}>删除项目</Button>}
     </div>
     {canReview && <><Textarea id="project-review-comment" value={comment} onChange={(event) => { setComment(event.target.value); if (event.target.value.trim()) setCommentError(""); }} maxLength={2000} placeholder="审批意见（驳回时必填）" aria-label="立项审批意见" aria-invalid={Boolean(commentError)} aria-describedby={commentError ? "project-review-comment-error" : undefined} /><FieldError id="project-review-comment-error" messages={commentError} /></>}
     {notice && <p role="status" className="text-sm text-emerald-700">{notice}</p>}
     {error && <p role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">{error}</p>}
-    <Dialog open={dialog !== null} onOpenChange={(open) => { if (!open && !pending) setDialog(null); }}><DialogContent><DialogHeader><DialogTitle>{dialog === "delete" ? "删除 Project" : "结束 Project"}</DialogTitle><DialogDescription>{dialog === "delete" ? "Project 会删除，Task 不会删除，只会变为无所属 Project。此操作不会删除 Task 的成员、计划或历史。" : hasNoTasks ? "当前没有关联 Task。确认结束后 Project 资料和成员将变为只读。" : blockingTaskCount > 0 ? `仍有 ${blockingTaskCount} 个 Task 处于草稿或进行中，暂时不能结束 Project。` : "确认结束 Project？结束后 Project 资料、成员和 Task 归属将变为只读。"}</DialogDescription></DialogHeader>
+    <Dialog open={dialog !== null} onOpenChange={(open) => { if (!open && !pending) setDialog(null); }}><DialogContent><DialogHeader><DialogTitle>{dialog === "delete" ? "删除项目" : "结束项目"}</DialogTitle><DialogDescription>{dialog === "delete" ? "项目会删除，任务不会删除，只会变为无所属项目。此操作不会删除任务的成员、计划或历史。" : hasNoTasks ? "当前没有关联任务。确认结束后项目资料和成员将变为只读。" : blockingTaskCount > 0 ? `仍有 ${blockingTaskCount} 个任务处于草稿或进行中，暂时不能结束项目。` : "确认结束项目？结束后项目资料、成员和任务归属将变为只读。"}</DialogDescription></DialogHeader>
       {dialog === "complete" && blockingTasks.length > 0 && <div className="max-h-52 divide-y overflow-y-auto rounded-lg border">{blockingTasks.map((task) => <a key={task.id} href={routes.progress.taskDetail(task.id)} className="flex min-w-0 items-center justify-between gap-3 p-3 hover:bg-muted"><span className="min-w-0 break-words">{task.title}</span><span className="shrink-0 text-xs text-muted-foreground">{task.statusLabel}</span></a>)}</div>}
       <DialogFooter><Button type="button" variant="outline" disabled={pending} onClick={() => setDialog(null)}>取消</Button>{dialog === "delete" ? <Button type="button" variant="destructive" disabled={pending} onClick={() => run(() => deleteProject({ projectId, expectedLockVersion: lockVersion }), true)}>确认删除</Button> : <Button type="button" disabled={pending || blockingTaskCount > 0} onClick={() => run(() => completeProject({ projectId, expectedLockVersion: lockVersion }))}>确认结束</Button>}</DialogFooter>
     </DialogContent></Dialog>

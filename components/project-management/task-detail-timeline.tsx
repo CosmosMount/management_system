@@ -35,7 +35,7 @@ export function buildTaskNavigatorNodes(
     {
       id: TASK_DETAIL_START_ID,
       kind: "START",
-      label: "Start",
+      label: "开始节点",
       at: workspace.currentPlan.plannedStartAt ?? workspace.task.createdAt,
       status: workspace.task.status === "DRAFT" ? "草稿" : "已开始",
       completed: workspace.task.status !== "DRAFT",
@@ -135,7 +135,7 @@ export function TaskDetailTimeline({
             ...current,
             [revisionTaskNodeId]: {
               status: "error",
-              message: "修订前计划与当前 Task 不匹配，请刷新后重试。",
+              message: "修订前计划与当前任务不匹配，请刷新后重试。",
             },
           }));
           return;
@@ -246,7 +246,7 @@ export function TaskDetailTimeline({
       <div>
         <h2 className="font-semibold">计划与人员投入</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Current Plan v{workspace.currentPlan.versionNo} · 按当前计划和投入自动确定范围
+          当前计划 v{workspace.currentPlan.versionNo} · 按当前计划和投入自动确定范围
         </p>
       </div>
       {pendingRevisionPlanIssue && (
@@ -255,7 +255,7 @@ export function TaskDetailTimeline({
           role="alert"
           data-testid="pending-revision-plan-warning"
         >
-          {pendingRevisionPlanIssue} 当前时间线仅展示修改前的 Current Plan。
+          {pendingRevisionPlanIssue} 当前时间线仅展示修改前的当前计划。
         </p>
       )}
       <div className="mt-4 min-w-0">
@@ -297,7 +297,7 @@ export function TaskDetailTimeline({
           nodes={nodes}
           selectedId={selectedId}
           onSelect={onSelect}
-          label="Task 时间线"
+          label="任务时间线"
           revisionHistory={revisionHistoryControls}
         />
       </div>
@@ -332,8 +332,8 @@ function buildRevisionPlanTimeCanvasOverlay(
             rowId: `revision-candidate:${pendingRevisionPlan.revisionNodeId}`,
             sourceId: pendingRevisionPlan.revisionNodeId,
             anchorPrefix: `revision-candidate:${pendingRevisionPlan.revisionNodeId}`,
-            label: `Revision「${pendingRevisionPlan.revisionReason}」修改后`,
-            sublabel: `Plan v${pendingRevisionPlan.plan.versionNo} · 待审批候选（只读）`,
+            label: `计划修订「${pendingRevisionPlan.revisionReason}」修改后`,
+            sublabel: `计划 v${pendingRevisionPlan.plan.versionNo} · 待审批候选（只读）`,
             anchorStatus: "待审批候选",
             tone: "AMBER" as const,
             plan: pendingRevisionPlan.plan,
@@ -345,8 +345,8 @@ function buildRevisionPlanTimeCanvasOverlay(
         rowId: `history-plan:${history.revisionNodeId}`,
         sourceId: history.revisionNodeId,
         anchorPrefix: `history:${history.revisionNodeId}`,
-        label: `Revision「${history.revisionReason}」之前`,
-        sublabel: `Plan v${history.plan.versionNo} · 历史计划（只读）`,
+        label: `计划修订「${history.revisionReason}」之前`,
+        sublabel: `计划 v${history.plan.versionNo} · 历史计划（只读）`,
         anchorStatus: "历史计划",
         tone: "SLATE",
         plan: history.plan,
@@ -378,7 +378,7 @@ function buildRevisionPlanTimeCanvasOverlay(
             taskId: entry.plan.taskId,
             kind: "PLAN_START",
             status: entry.anchorStatus,
-            label: "Start",
+            label: "开始节点",
             atMs: startAtMs,
             sequence: -1,
             editable: false,

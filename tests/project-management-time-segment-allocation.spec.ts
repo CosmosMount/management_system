@@ -30,7 +30,7 @@ test.describe("time segment allocation UI", () => {
     await loginAsTestUser(context, baseURL, { openId, name });
 
     await page.goto("/progress");
-    await expect(page.getByText("当前没有有效参与的 Task。", { exact: true })).toBeVisible();
+    await expect(page.getByText("当前没有有效参与的任务。", { exact: true })).toBeVisible();
     await expect(page.getByLabel("选择日期")).toHaveCount(0);
     await expect(page.getByTestId("time-canvas-range-pan-bar")).toHaveCount(0);
     const canvasRoot = page.getByTestId("time-canvas-root");

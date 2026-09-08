@@ -184,7 +184,7 @@ export function SegmentInspector({
         <dl className="grid gap-3 text-sm md:grid-cols-2">
           <ReadOnlyValue label="所属人员" value={detail.personName} />
           <ReadOnlyValue
-            label="关联 Task"
+            label="关联任务"
             value={detail.task?.deleted ? (
               `${detail.task.title}（已删除）`
             ) : detail.task ? (

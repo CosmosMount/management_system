@@ -60,8 +60,8 @@ export default async function ProgressTaskRevisionNewPage({
   return (
     <>
       <PageCommandBar
-        title="发起 Revision"
-        description="在通用 Composer 中调整 Revision 时间、后续 Milestone 与 Terminal；创建后直接进入待审批。"
+        title="发起计划修订"
+        description="在通用编辑器中调整计划修订时间、后续里程碑与结束节点；创建后直接进入待审批。"
       />
       <TaskComposerClient
         accountId={actor.accountId}

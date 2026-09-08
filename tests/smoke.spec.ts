@@ -142,7 +142,7 @@ test.describe("authenticated smoke", () => {
   test("progress workspace and retired routes stay healthy", async ({ page }) => {
     const errors = await collectBrowserErrors(page);
     await page.goto("/progress", { waitUntil: "networkidle" });
-    await expect(page.getByRole("heading", { name: "我的工作" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "工作台" })).toBeVisible();
 
     const legacyTaskResponse = await page.goto("/progress/task/legacy-task", {
       waitUntil: "networkidle",
@@ -156,7 +156,7 @@ test.describe("authenticated smoke", () => {
 
     await page.goto("/progress/kanban", { waitUntil: "networkidle" });
     await expect(page).toHaveURL(/\/progress\/kanban\?people=/);
-    await expect(page.getByRole("heading", { name: "看板" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "人员时间线" })).toBeVisible();
     await expectHealthyPage(page);
 
     await page.goto("/progress/projects/legacy-project", {

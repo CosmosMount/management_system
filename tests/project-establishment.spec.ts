@@ -79,50 +79,50 @@ test.describe("Project 立项与生命周期", () => {
     await reviewProjectEstablishment(admin, { projectId: created.projectId, requestId: request.id, expectedLockVersion: 0, decision: "APPROVE", comment: "" });
     await loginAsTestUser(context, baseURL, { openId: requester.openId, name: `Project UI ${testInfo.project.name}` });
     await page.goto("/progress/projects");
-    await expect(page.getByRole("heading", { name: "Project", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "项目", exact: true })).toBeVisible();
     await expect(page.getByRole("checkbox", { name: "只看我参与" })).toBeChecked();
-    await expect(page.getByRole("combobox", { name: "Project 状态" })).toHaveValue("ACTIVE");
+    await expect(page.getByRole("combobox", { name: "项目状态" })).toHaveValue("ACTIVE");
     await expect(page.getByText(name, { exact: true })).toBeVisible();
     if (testInfo.project.name === "desktop") {
       const navigation = page.getByRole("navigation", { name: "项目管理导航" });
-      await expect(navigation.getByRole("link", { name: "看板", exact: true })).toHaveAttribute("href", "/progress/kanban");
-      await expect(navigation.getByRole("link", { name: "Project", exact: true })).toHaveAttribute("href", "/progress/projects");
-      await expect(navigation.getByRole("link", { name: "Task", exact: true })).toHaveAttribute("href", "/progress/tasks");
+      await expect(navigation.getByRole("link", { name: "人员时间线", exact: true })).toHaveAttribute("href", "/progress/kanban");
+      await expect(navigation.getByRole("link", { name: "项目", exact: true })).toHaveAttribute("href", "/progress/projects");
+      await expect(navigation.getByRole("link", { name: "任务", exact: true })).toHaveAttribute("href", "/progress/tasks");
     } else {
       await page.getByRole("button", { name: "打开项目管理导航" }).click();
-      await expect(page.getByTestId("project-management-drawer").getByRole("link", { name: "Project" })).toHaveAttribute("aria-current", "page");
+      await expect(page.getByTestId("project-management-drawer").getByRole("link", { name: "项目" })).toHaveAttribute("aria-current", "page");
       await page.keyboard.press("Escape");
     }
     await expectHealthyPage(page);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
-    await page.getByRole("combobox", { name: "Project 状态" }).selectOption("");
+    await page.getByRole("combobox", { name: "项目状态" }).selectOption("");
     await page.getByRole("button", { name: "筛选" }).click();
-    await expect(page.getByRole("combobox", { name: "Project 状态" })).toHaveValue("");
-    const nextProjectHref = await page.getByRole("link", { name: "下一页 Project" }).getAttribute("href");
+    await expect(page.getByRole("combobox", { name: "项目状态" })).toHaveValue("");
+    const nextProjectHref = await page.getByRole("link", { name: "下一页项目" }).getAttribute("href");
     expect(nextProjectHref).not.toBeNull();
     const nextProjectUrl = new URL(nextProjectHref!, baseURL!);
     expect(nextProjectUrl.searchParams.has("status")).toBe(true);
     expect(nextProjectUrl.searchParams.get("status")).toBe("");
     await page.getByRole("link", { name: "提交立项" }).click();
     await expect(page).toHaveURL("/progress/projects/new");
-    await expect(page.getByRole("heading", { name: "提交 Project 立项" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "提交项目立项" })).toBeVisible();
     const submitProject = page.getByRole("button", { name: "提交立项" });
-    const projectNameInput = page.getByLabel("Project 名称");
-    const projectDescriptionInput = page.getByLabel("Project 内容");
+    const projectNameInput = page.getByLabel("项目名称");
+    const projectDescriptionInput = page.getByLabel("项目内容");
     await expect(projectNameInput).not.toHaveAttribute("aria-invalid", "true");
     await submitProject.click();
     await expect(projectNameInput).toHaveAttribute("aria-invalid", "true");
     await expect(projectNameInput).toBeFocused();
-    await expect(page.getByRole("alert").filter({ hasText: "请输入 Project 名称" })).toBeVisible();
+    await expect(page.getByRole("alert").filter({ hasText: "请输入项目名称" })).toBeVisible();
     await projectNameInput.fill("响应式 Project 草稿");
     await expect(projectNameInput).not.toHaveAttribute("aria-invalid", "true");
     await projectDescriptionInput.fill("验证 Project 表单字段错误展示");
     await expect(projectDescriptionInput).not.toHaveAttribute("aria-invalid", "true");
-    const taskSearch = page.getByRole("combobox", { name: "搜索可加入的 Task" });
+    const taskSearch = page.getByRole("combobox", { name: "搜索可加入的任务" });
     await taskSearch.fill(selectableTask.title);
     await page.getByRole("option", { name: new RegExp(selectableTask.title.slice(0, 30)) }).click();
-    await expect(page.getByText("已选择 1 个 Task", { exact: true })).toBeVisible();
-    const selectedTasks = page.getByRole("list", { name: "已选择的 Task" });
+    await expect(page.getByText("已选择 1 个任务", { exact: true })).toBeVisible();
+    const selectedTasks = page.getByRole("list", { name: "已选择的任务" });
     await expect(selectedTasks).toContainText(selectableTask.title);
     await expect(selectedTasks.getByRole("button", { name: `移除${selectableTask.title}` })).toBeVisible();
     await expectHealthyPage(page);
@@ -169,7 +169,7 @@ test.describe("Project 立项与生命周期", () => {
     await expect(pendingRequest.getByText("第 1 轮", { exact: true })).toBeVisible();
     await expect(pendingRequest.getByText(requesterName, { exact: true })).toBeVisible();
     await expect(pendingRequest.getByText(formatDateTime(request.submittedAt), { exact: true })).toBeVisible();
-    const requestedTasks = pendingRequest.getByRole("list", { name: "本次立项申请的 Task" });
+    const requestedTasks = pendingRequest.getByRole("list", { name: "本次立项申请的任务" });
     await expect(requestedTasks.getByRole("link", { name: requestedTask.title, exact: true })).toBeVisible();
     await expect(requestedTasks.getByText("草稿", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "通过立项" })).toBeVisible();
@@ -222,8 +222,8 @@ test.describe("Project 立项与生命周期", () => {
 
     await page.goto(`/progress/projects/${emptyCreated.projectId}`);
     const emptyPendingRequest = page.getByTestId("project-pending-establishment");
-    await expect(emptyPendingRequest).toContainText("本次立项未申请加入 Task。");
-    await expect(emptyPendingRequest.getByRole("list", { name: "本次立项申请的 Task" })).toHaveCount(0);
+    await expect(emptyPendingRequest).toContainText("本次立项未申请加入任务。");
+    await expect(emptyPendingRequest.getByRole("list", { name: "本次立项申请的任务" })).toHaveCount(0);
     await expectHealthyPage(page);
   });
 
@@ -400,23 +400,23 @@ test.describe("Project 立项与生命周期", () => {
     await expect(
       page
         .getByTestId("project-management-command-bar")
-        .getByRole("heading", { name: "Project 详情", exact: true }),
+        .getByRole("heading", { name: "项目详情", exact: true }),
     ).toBeVisible();
     await expect(page.getByRole("heading", { name: projectName })).toBeVisible();
     await expect(page.getByText(projectDescription, { exact: true })).toBeVisible();
     await expect(page.getByText(requester.personId, { exact: true })).toHaveCount(0);
-    await expect(page.getByText("Task 完成进度", { exact: true })).toBeVisible();
+    await expect(page.getByText("任务完成进度", { exact: true })).toBeVisible();
     await expect(page.getByText("1/4 已完成", { exact: true })).toHaveCount(2);
     await expect(page.getByRole("link", { name: "编辑" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "结束 Project" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "删除 Project" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "结束项目" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "删除项目" })).toBeVisible();
     await expect(page.getByRole("button", { name: "复制链接" })).toBeVisible();
 
     await expect(
-      page.getByRole("heading", { name: "Project 风险", exact: true }),
+      page.getByRole("heading", { name: "项目风险", exact: true }),
     ).toBeVisible();
     await expect(
-      page.getByRole("heading", { name: "Project 评论", exact: true }),
+      page.getByRole("heading", { name: "项目评论", exact: true }),
     ).toBeVisible();
     await expect(page.getByRole("heading", { name: "近期动态" })).toBeVisible();
     await expect(page.getByText("立项申请", { exact: true })).toHaveCount(0);
@@ -463,20 +463,20 @@ test.describe("Project 立项与生命周期", () => {
     const activeGroup = page.getByTestId("project-task-group-ACTIVE");
     const completedGroup = page.getByTestId("project-task-group-COMPLETED");
     const draftToggle = draftGroup.getByRole("button", {
-      name: "展开草稿 Task 列表",
+      name: "展开草稿任务列表",
     });
     const activeToggle = activeGroup.getByRole("button", {
-      name: "收起进行中 Task 列表",
+      name: "收起进行中任务列表",
     });
     const completedToggle = completedGroup.getByRole("button", {
-      name: "展开已完成 Task 列表",
+      name: "展开已完成任务列表",
     });
     await expect(draftToggle).toHaveAttribute("aria-expanded", "false");
     await expect(activeToggle).toHaveAttribute("aria-expanded", "true");
     await expect(completedToggle).toHaveAttribute("aria-expanded", "false");
-    await expect(page.getByRole("table", { name: "草稿 Task 列表" })).toHaveCount(0);
-    await expect(page.getByRole("table", { name: "进行中 Task 列表" })).toBeVisible();
-    await expect(page.getByRole("table", { name: "已完成 Task 列表" })).toHaveCount(0);
+    await expect(page.getByRole("table", { name: "草稿任务列表" })).toHaveCount(0);
+    await expect(page.getByRole("table", { name: "进行中任务列表" })).toBeVisible();
+    await expect(page.getByRole("table", { name: "已完成任务列表" })).toHaveCount(0);
     await expect(page.getByTestId("project-task-group-ratio-DRAFT")).toHaveText("已展示 0/2");
     await expect(page.getByTestId("project-task-group-ratio-ACTIVE")).toHaveText("已展示 1/1");
     await expect(page.getByTestId("project-task-group-ratio-COMPLETED")).toHaveText("已展示 0/1");
@@ -484,9 +484,9 @@ test.describe("Project 立项与生命周期", () => {
       page.getByRole("checkbox", { name: `在时间线中显示 ${active.title}` }),
     ).toBeChecked();
     await expect(
-      page.getByRole("checkbox", { name: "显示全部进行中 Task 时间线" }),
+      page.getByRole("checkbox", { name: "显示全部进行中任务时间线" }),
     ).toBeChecked();
-    await expect(page.getByText("已展示 1/4 个 Project Task 计划", { exact: false })).toBeVisible();
+    await expect(page.getByText("已展示 1/4 个项目任务计划", { exact: false })).toBeVisible();
     await expect(page.getByTestId(`timeline-row-project-plan:${draft.id}`)).toHaveCount(0);
     await expect(page.getByTestId(`timeline-row-project-plan:${farTask.id}`)).toHaveCount(0);
     await expect(page.getByTestId(`timeline-row-project-plan:${active.id}`)).toBeVisible();
@@ -501,20 +501,20 @@ test.describe("Project 立项与生命周期", () => {
     await expect(page.getByTestId(`timeline-row-project-plan:${externalTask.id}`)).toHaveCount(0);
     await expect(page.getByTestId(`segment-block-${projectTaskSegment.id}`)).toHaveAttribute(
       "title",
-      new RegExp(`Task：${active.title}`),
+      new RegExp(`任务：${active.title}`),
     );
     await expect(page.getByTestId(`segment-block-${externalTaskSegment.id}`)).toHaveAttribute(
       "title",
-      new RegExp(`Task：${externalTask.title}`),
+      new RegExp(`任务：${externalTask.title}`),
     );
     await expect(page.getByTestId(`segment-block-${independentSegment.id}`)).toHaveAttribute(
       "title",
-      /Task：独立投入/,
+      /任务：独立投入/,
     );
     await expect(page.getByTestId(`segment-block-${unrelatedSegment.id}`)).toHaveCount(0);
 
     await draftToggle.click();
-    const draftTable = page.getByRole("table", { name: "草稿 Task 列表" });
+    const draftTable = page.getByRole("table", { name: "草稿任务列表" });
     await expect(draftTable.getByRole("link", { name: draft.title, exact: true })).toBeVisible();
     await expect(draftTable.getByRole("link", { name: farTask.title, exact: true })).toBeVisible();
     const draftCheckbox = page.getByRole("checkbox", {
@@ -524,7 +524,7 @@ test.describe("Project 立项与生命周期", () => {
       name: `在时间线中显示 ${farTask.title}`,
     });
     const allDraftCheckbox = page.getByRole("checkbox", {
-      name: "显示全部草稿 Task 时间线",
+      name: "显示全部草稿任务时间线",
     });
     await expect(draftCheckbox).not.toBeChecked();
     await expect(farTaskCheckbox).not.toBeChecked();
@@ -537,19 +537,19 @@ test.describe("Project 立项与生命周期", () => {
         .getByTestId(`time-canvas-row-header-project-plan:${draft.id}`)
         .getByRole("link", { name: draft.title, exact: true }),
     ).toHaveAttribute("href", `/progress/tasks/${draft.id}`);
-    await draftGroup.getByRole("button", { name: "收起草稿 Task 列表" }).click();
+    await draftGroup.getByRole("button", { name: "收起草稿任务列表" }).click();
     await expect(draftTable).toHaveCount(0);
     await expect(page.getByTestId(`timeline-row-project-plan:${draft.id}`)).toBeVisible();
-    await draftGroup.getByRole("button", { name: "展开草稿 Task 列表" }).click();
+    await draftGroup.getByRole("button", { name: "展开草稿任务列表" }).click();
     await allDraftCheckbox.check();
     await expect(page.getByTestId("project-task-group-ratio-DRAFT")).toHaveText("已展示 2/2");
     await expect(farTaskCheckbox).toBeChecked();
     await expect(page.getByTestId(`timeline-row-project-plan:${farTask.id}`)).toBeVisible();
 
     await activeToggle.click();
-    await expect(page.getByRole("table", { name: "进行中 Task 列表" })).toHaveCount(0);
+    await expect(page.getByRole("table", { name: "进行中任务列表" })).toHaveCount(0);
     await expect(page.getByTestId(`timeline-row-project-plan:${active.id}`)).toBeVisible();
-    await activeGroup.getByRole("button", { name: "展开进行中 Task 列表" }).click();
+    await activeGroup.getByRole("button", { name: "展开进行中任务列表" }).click();
 
     await completedToggle.click();
     const completedCheckbox = page.getByRole("checkbox", {
@@ -641,7 +641,7 @@ test.describe("Project 立项与生命周期", () => {
       );
       const focusedDraftGroup = deepLinkPage.getByTestId("project-task-group-DRAFT");
       await expect(
-        focusedDraftGroup.getByRole("button", { name: "收起草稿 Task 列表" }),
+        focusedDraftGroup.getByRole("button", { name: "收起草稿任务列表" }),
       ).toHaveAttribute("aria-expanded", "true");
       const focusedDraftCheckbox = deepLinkPage.getByRole("checkbox", {
         name: `在时间线中显示 ${draft.title}`,
@@ -650,7 +650,7 @@ test.describe("Project 立项与生命周期", () => {
         name: `在时间线中显示 ${farTask.title}`,
       });
       const focusedAllDraftCheckbox = deepLinkPage.getByRole("checkbox", {
-        name: "显示全部草稿 Task 时间线",
+        name: "显示全部草稿任务时间线",
       });
       await expect(focusedDraftCheckbox).not.toBeChecked();
       await expect(focusedFarTaskCheckbox).toBeChecked();
@@ -671,7 +671,7 @@ test.describe("Project 立项与生命周期", () => {
         deepLinkPage.getByTestId("project-task-group-ratio-DRAFT"),
       ).toHaveText("已展示 0/2");
       await focusedDraftGroup
-        .getByRole("button", { name: "收起草稿 Task 列表" })
+        .getByRole("button", { name: "收起草稿任务列表" })
         .click();
 
       const refreshComment = `刷新后保留时间线选择 ${randomUUID()}`;
@@ -679,7 +679,7 @@ test.describe("Project 立项与生命周期", () => {
       await deepLinkPage.getByRole("button", { name: "发布评论" }).click();
       await expect(deepLinkPage.getByText(refreshComment, { exact: true })).toBeVisible();
       await expect(
-        focusedDraftGroup.getByRole("button", { name: "展开草稿 Task 列表" }),
+        focusedDraftGroup.getByRole("button", { name: "展开草稿任务列表" }),
       ).toHaveAttribute("aria-expanded", "false");
       await expect(
         deepLinkPage.getByTestId("project-task-group-ratio-DRAFT"),
@@ -715,10 +715,10 @@ test.describe("Project 立项与生命周期", () => {
         testInfo.project.name === "desktop" ? "columns" : "stacked",
       );
       await expect(
-        viewerPage.getByRole("heading", { name: "Project 风险", exact: true }),
+        viewerPage.getByRole("heading", { name: "项目风险", exact: true }),
       ).toBeVisible();
       await expect(
-        viewerPage.getByRole("heading", { name: "Project 评论", exact: true }),
+        viewerPage.getByRole("heading", { name: "项目评论", exact: true }),
       ).toBeVisible();
       await expect(
         viewerPage.getByRole("heading", { name: "近期动态", exact: true }),
@@ -730,10 +730,10 @@ test.describe("Project 立项与生命周期", () => {
       ).toBeVisible();
       await expect(viewerPage.getByRole("link", { name: "编辑" })).toHaveCount(0);
       await expect(
-        viewerPage.getByRole("button", { name: "结束 Project" }),
+        viewerPage.getByRole("button", { name: "结束项目" }),
       ).toHaveCount(0);
       await expect(
-        viewerPage.getByRole("button", { name: "删除 Project" }),
+        viewerPage.getByRole("button", { name: "删除项目" }),
       ).toHaveCount(0);
       await expect(
         viewerPage.getByRole("button", { name: "复制链接" }),
@@ -789,15 +789,15 @@ test.describe("Project 立项与生命周期", () => {
     await page.goto(`/progress/projects/${created.projectId}`);
     await expect(page.getByTestId("project-timeline-layer")).toBeVisible();
     await expect(page.getByTestId("project-detail-lower-grid")).toBeVisible();
-    await expect(page.getByText("尚未关联 Task", { exact: true })).toBeVisible();
+    await expect(page.getByText("尚未关联任务", { exact: true })).toBeVisible();
     await expectThreeLayerDetailLayout(
       page,
       projectDetailLayoutIds,
       testInfo.project.name === "desktop" ? "columns" : "stacked",
     );
-    await page.getByRole("button", { name: "结束 Project" }).click();
-    const dialog = page.getByRole("dialog", { name: "结束 Project" });
-    await expect(dialog).toContainText("当前没有关联 Task。");
+    await page.getByRole("button", { name: "结束项目" }).click();
+    const dialog = page.getByRole("dialog", { name: "结束项目" });
+    await expect(dialog).toContainText("当前没有关联任务。");
     await expect(dialog.getByRole("button", { name: "确认结束" })).toBeEnabled();
     await dialog.getByRole("button", { name: "确认结束" }).click();
 
@@ -961,16 +961,16 @@ test.describe("Project 立项与生命周期", () => {
       await expect(group).toBeVisible();
       await expect(
         group.getByRole("button", {
-          name: `${expanded ? "收起" : "展开"}${label} Task 列表`,
+          name: `${expanded ? "收起" : "展开"}${label}任务列表`,
         }),
       ).toHaveAttribute("aria-expanded", String(expanded));
       await expect(
         page.getByTestId(`project-task-group-ratio-${status}`),
       ).toHaveText(`已展示 ${expanded ? 1 : 0}/1`);
     }
-    await page.getByRole("button", { name: "结束 Project" }).click();
-    let dialog = page.getByRole("dialog", { name: "结束 Project" });
-    await expect(dialog).toContainText("仍有 2 个 Task 处于草稿或进行中，暂时不能结束 Project。");
+    await page.getByRole("button", { name: "结束项目" }).click();
+    let dialog = page.getByRole("dialog", { name: "结束项目" });
+    await expect(dialog).toContainText("仍有 2 个任务处于草稿或进行中，暂时不能结束项目。");
     for (const fixture of taskFixtures.filter((item) => !item.deleted && ["DRAFT", "ACTIVE"].includes(item.status))) {
       await expect(dialog.getByText(fixture.task.title, { exact: true })).toBeVisible();
     }
@@ -1000,9 +1000,9 @@ test.describe("Project 立项与生命周期", () => {
 
     await page.reload();
     await expect(page.getByText("1/5 已完成", { exact: true })).toHaveCount(2);
-    await page.getByRole("button", { name: "结束 Project" }).click();
-    dialog = page.getByRole("dialog", { name: "结束 Project" });
-    await expect(dialog).toContainText("确认结束 Project？结束后 Project 资料、成员和 Task 归属将变为只读。");
+    await page.getByRole("button", { name: "结束项目" }).click();
+    dialog = page.getByRole("dialog", { name: "结束项目" });
+    await expect(dialog).toContainText("确认结束项目？结束后项目资料、成员和任务归属将变为只读。");
     await expect(dialog.getByRole("button", { name: "确认结束" })).toBeEnabled();
     await dialog.getByRole("button", { name: "确认结束" }).click();
 
@@ -1125,7 +1125,7 @@ test.describe("Project 立项与生命周期", () => {
     await expect(timelineLayer.getByTestId("time-canvas-root")).toHaveCount(0);
     await page
       .getByTestId("project-task-group-DRAFT")
-      .getByRole("button", { name: "展开草稿 Task 列表" })
+      .getByRole("button", { name: "展开草稿任务列表" })
       .click();
     await expect(
       page
@@ -1136,7 +1136,7 @@ test.describe("Project 立项与生命周期", () => {
       page.getByRole("checkbox", { name: `在时间线中显示 ${task.title}` }),
     ).toBeDisabled();
     await expect(
-      page.getByRole("checkbox", { name: "显示全部草稿 Task 时间线" }),
+      page.getByRole("checkbox", { name: "显示全部草稿任务时间线" }),
     ).toBeDisabled();
     await expectThreeLayerDetailLayout(page, projectDetailLayoutIds, "columns");
     await expectHealthyPage(page);

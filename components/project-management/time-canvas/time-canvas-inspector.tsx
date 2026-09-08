@@ -8,6 +8,7 @@ import type {
   TimeCanvasSelection,
 } from "@/components/project-management/time-canvas/types";
 import { Button } from "@/components/ui/button";
+import { taskNodeStatusLabels, taskNodeTypeLabels, taskStatusLabels } from "@/lib/project-management/labels";
 import {
   formatCanvasDateTime as formatDateTime,
   formatCanvasRange as formatRange,
@@ -32,7 +33,7 @@ export function TimeCanvasInspector({
     <aside className="border-t border-border bg-card p-4 md:border-l md:border-t-0" aria-label="时间对象详情" data-testid="time-canvas-inspector">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-xs text-muted-foreground">只读 Inspector</p>
+          <p className="text-xs text-muted-foreground">只读详情</p>
           <h2 className="mt-1 break-words text-base font-semibold">{entityTitle(entity)}</h2>
         </div>
         <Button type="button" size="icon-sm" variant="ghost" aria-label="关闭时间对象详情" onClick={onClose}>
@@ -46,12 +47,13 @@ export function TimeCanvasInspector({
 
 function InspectorBody({ entity }: { entity: SelectedEntity }) {
   if (entity.kind === "ANCHOR") {
+    const statusLabels: Record<string, string> = entity.value.kind === "PLAN_START" ? taskStatusLabels : taskNodeStatusLabels;
     return (
       <dl className="mt-4 grid gap-3 text-sm">
-        <Detail label="类型" value={entity.value.kind} />
-        <Detail label="状态" value={entity.value.status} />
+        <Detail label="类型" value={entity.value.kind === "PLAN_START" ? "开始节点" : taskNodeTypeLabels[entity.value.kind]} />
+        <Detail label="状态" value={statusLabels[entity.value.status] ?? "未知状态"} />
         <Detail label="计划时间" value={formatDateTime(entity.value.atMs)} />
-        <Detail label="权限" value={entity.value.editable ? "可编辑" : "只读；修改需按 Task 生命周期进行"} />
+        <Detail label="权限" value={entity.value.editable ? "可编辑" : "只读；修改需按任务生命周期进行"} />
       </dl>
     );
   }

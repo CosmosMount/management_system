@@ -179,7 +179,7 @@ test.describe("project management canvas security project-management-canvas-rout
 
       await page.getByRole("button", { name: "新增投入" }).click();
       const quickCreate = page.getByRole("form", { name: "投入快速创建" });
-      await quickCreate.getByLabel("Task", { exact: true }).fill(activeTaskTitle);
+      await quickCreate.getByLabel("任务", { exact: true }).fill(activeTaskTitle);
       await page
         .getByRole("option", { name: activeTaskTitle, exact: true })
         .click();

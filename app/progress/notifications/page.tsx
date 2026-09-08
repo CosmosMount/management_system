@@ -16,6 +16,7 @@ import Link from "next/link";
 import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 import { redirect } from "next/navigation";
+import { Bell, Settings } from "lucide-react";
 
 type SearchParams = Record<string, string | string[] | undefined>;
 
@@ -35,6 +36,21 @@ export default async function ProgressNotificationsPage({
 }) {
   const actor = await getProgressActorOrRedirect();
   const params = (await searchParams) ?? {};
+  if (firstParam(params.view) === "settings") {
+    const preferences = await getNotificationPreferences(actor);
+    return (
+      <>
+        <PageCommandBar
+          title="通知设置"
+          description="管理普通飞书通知偏好。站内通知始终保留，强制事件不受关闭偏好影响。"
+        />
+        <div className="mx-auto flex w-full min-w-0 max-w-[96rem] flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
+          <NotificationViewNavigation params={params} settings />
+          <NotificationPreferencesClient preferences={preferences} readOnly={actor.isActive === false} />
+        </div>
+      </>
+    );
+  }
   const category = firstParam(params.category);
   const unreadOnly = firstParam(params.unread) === "1";
   const cursor = firstParam(params.cursor) || undefined;
@@ -65,10 +81,7 @@ export default async function ProgressNotificationsPage({
     }
     throw error;
   }
-  const [unreadCount, preferences] = await Promise.all([
-    getProgressUnreadNotificationCount(),
-    getNotificationPreferences(actor),
-  ]);
+  const unreadCount = await getProgressUnreadNotificationCount();
 
   return (
     <>
@@ -77,6 +90,7 @@ export default async function ProgressNotificationsPage({
         description="查看项目管理业务通知，标记已读并跳转到仍可访问的业务对象。"
       />
       <div className="mx-auto flex w-full min-w-0 max-w-[96rem] flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
+          <NotificationViewNavigation params={params} />
           {firstParam(params.cursorError) === "1" && (
             <p role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
               通知列表已变化，已为你返回第一页。
@@ -121,12 +135,38 @@ export default async function ProgressNotificationsPage({
               </Link>
             </div>
           )}
-          <NotificationPreferencesClient
-            preferences={preferences}
-            readOnly={actor.isActive === false}
-          />
       </div>
     </>
+  );
+}
+
+function NotificationViewNavigation({ params, settings = false }: { params: SearchParams; settings?: boolean }) {
+  const search = new URLSearchParams();
+  const category = firstParam(params.category);
+  if (categories.includes(category as (typeof categories)[number])) search.set("category", category);
+  if (firstParam(params.unread) === "1") search.set("unread", "1");
+  const cursor = firstParam(params.cursor);
+  if (cursor) search.set("cursor", cursor);
+  const listHref = `${routes.progress.notifications}${search.size ? `?${search.toString()}` : ""}`;
+  search.set("view", "settings");
+  const settingsHref = `${routes.progress.notifications}?${search.toString()}`;
+
+  return (
+    <nav aria-label="通知页面" className="flex flex-wrap gap-1 rounded-xl border border-border bg-card p-1">
+      {[
+        { href: listHref, label: "通知列表", icon: Bell, active: !settings },
+        { href: settingsHref, label: "通知设置", icon: Settings, active: settings },
+      ].map(({ href, label, icon: Icon, active }) => (
+        <Link
+          key={label}
+          href={href}
+          aria-current={active ? "page" : undefined}
+          className={cn("inline-flex min-h-10 items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring", active ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground")}
+        >
+          <Icon className="size-4" aria-hidden="true" />{label}
+        </Link>
+      ))}
+    </nav>
   );
 }
 

@@ -73,12 +73,12 @@ export default async function ProgressTasksPage({
   return (
     <>
       <PageCommandBar
-        title="全部 Task"
-        description="按状态、优先级和关键词查看当前可见 Task。"
+        title="全部任务"
+        description="按状态、优先级和关键词查看当前可见任务。"
         actions={
           actor.isActive === false ? null : (
             <Link href={routes.progress.taskNew} className={cn(buttonVariants())}>
-              新建 Task
+              新建任务
             </Link>
           )
         }
@@ -86,20 +86,20 @@ export default async function ProgressTasksPage({
       <div className="mx-auto flex w-full min-w-0 max-w-[96rem] flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
           {firstParam(params.cursorError) === "1" && (
             <p role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-              Task 列表已变化，已为你返回第一页。
+              任务列表已变化，已为你返回第一页。
             </p>
           )}
           <form className="grid gap-3 rounded-lg border border-border bg-card p-4 md:grid-cols-[1fr_160px_160px_auto_auto]">
             <Input
               name="q"
               defaultValue={query}
-              placeholder="搜索 Task 名称或描述"
-              aria-label="搜索 Task 名称或描述"
+              placeholder="搜索任务名称或描述"
+              aria-label="搜索任务名称或描述"
             />
             <select
               name="status"
               defaultValue={status}
-              aria-label="Task 状态"
+              aria-label="任务状态"
               className="h-8 rounded-lg border border-input bg-background px-2 text-sm"
             >
               <option value="">全部状态</option>
@@ -112,7 +112,7 @@ export default async function ProgressTasksPage({
             <select
               name="priority"
               defaultValue={priority}
-              aria-label="Task 优先级"
+              aria-label="任务优先级"
               className="h-8 rounded-lg border border-input bg-background px-2 text-sm"
             >
               <option value="">全部优先级</option>
@@ -146,7 +146,7 @@ export default async function ProgressTasksPage({
                 href={taskPageHref(params, tasks.nextCursor)}
                 className={cn(buttonVariants({ variant: "outline" }))}
               >
-                下一页 Task
+                下一页任务
               </Link>
             </div>
           )}

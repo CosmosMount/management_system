@@ -32,7 +32,7 @@ export function TaskPlanNodeNavigator({
   nodes,
   selectedId,
   onSelect,
-  label = "Task 节点",
+  label = "任务节点",
   revisionHistory,
 }: {
   nodes: TaskPlanNavigatorNode[];
@@ -154,7 +154,7 @@ export function TaskPlanNodeNavigator({
                       className="peer absolute left-0 top-0 z-10 m-0 h-4 w-7 cursor-pointer appearance-none rounded-full opacity-0 disabled:cursor-wait"
                       checked={historyControl.checked}
                       disabled={historyControl.loading}
-                      aria-label={`显示 Revision「${node.label}」之前的计划`}
+                      aria-label={`显示计划修订「${node.label}」之前的计划`}
                       aria-describedby={
                         historyControl.error ? historyErrorId : undefined
                       }
@@ -195,7 +195,7 @@ export function TaskPlanNodeNavigator({
                       <button
                         type="button"
                         className="font-medium text-primary underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                        aria-label={`重新加载 Revision「${node.label}」之前的计划`}
+                        aria-label={`重新加载计划修订「${node.label}」之前的计划`}
                         onClick={() => revisionHistory?.onRetry(node.id)}
                       >
                         重新加载
@@ -214,10 +214,10 @@ export function TaskPlanNodeNavigator({
 
 function nodeTypeLabel(kind: TaskPlanNavigatorNode["kind"]) {
   return {
-    START: "Start",
-    MILESTONE: "Milestone",
-    REVISION: "Revision",
-    TERMINAL: "Terminal",
+    START: "开始节点",
+    MILESTONE: "里程碑",
+    REVISION: "计划修订",
+    TERMINAL: "结束节点",
   }[kind];
 }
 

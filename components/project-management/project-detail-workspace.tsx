@@ -306,9 +306,9 @@ export function ProjectDetailWorkspace({
         data-testid="project-timeline-layer"
       >
         <div>
-          <h2 className="font-semibold">Task 与人员投入时间线</h2>
+          <h2 className="font-semibold">任务与人员投入时间线</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            已展示 {visibleTasks.length}/{tasks.length} 个 Project Task 计划 · Project/Task 成员的全部投入
+            已展示 {visibleTasks.length}/{tasks.length} 个项目任务计划 · 项目/任务成员的全部投入
           </p>
         </div>
         {timelineFocusError && (
@@ -361,7 +361,7 @@ export function ProjectDetailWorkspace({
           <section className="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5">
             <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
-                <h2 className="font-semibold">Task</h2>
+                <h2 className="font-semibold">任务</h2>
                 <p className="mt-1 text-sm text-muted-foreground">
                   {completedTaskTotalCount}/{completionTaskTotalCount} 已完成
                 </p>
@@ -371,7 +371,7 @@ export function ProjectDetailWorkspace({
                   href={`${routes.progress.taskNew}?projectId=${projectId}`}
                   className={cn(buttonVariants({ size: "sm" }))}
                 >
-                  <Plus />新建 Task
+                  <Plus />新建任务
                 </Link>
               )}
             </div>
@@ -379,7 +379,7 @@ export function ProjectDetailWorkspace({
             {tasks.length ? (
               <div
                 className="mt-4 space-y-3"
-                aria-label="Project Task 分组列表"
+                aria-label="项目任务分组列表"
               >
                 {taskGroups.map((group) => {
                   const expanded = expandedTaskStatuses.includes(group.status);
@@ -401,7 +401,7 @@ export function ProjectDetailWorkspace({
                           className="min-w-0 justify-start px-1"
                           aria-expanded={expanded}
                           aria-controls={`project-task-group-body-${group.status}`}
-                          aria-label={`${expanded ? "收起" : "展开"}${statusLabel} Task 列表`}
+                          aria-label={`${expanded ? "收起" : "展开"}${statusLabel}任务列表`}
                           onClick={() => toggleTaskStatus(group.status)}
                         >
                           <ChevronDown
@@ -412,7 +412,7 @@ export function ProjectDetailWorkspace({
                             aria-hidden="true"
                           />
                           <span className="min-w-0 break-words text-left">
-                            {statusLabel} Task
+                            {statusLabel}任务
                           </span>
                           <Badge variant="secondary">{group.tasks.length}</Badge>
                         </Button>
@@ -445,12 +445,12 @@ export function ProjectDetailWorkspace({
                         <div id={`project-task-group-body-${group.status}`}>
                           <Table
                             className="table-fixed"
-                            aria-label={`${statusLabel} Task 列表`}
+                            aria-label={`${statusLabel}任务列表`}
                           >
                             <TableHeader>
                               <TableRow>
                                 <TableHead className="w-16 whitespace-normal text-center">时间线</TableHead>
-                                <TableHead className="whitespace-normal">Task</TableHead>
+                                <TableHead className="whitespace-normal">任务</TableHead>
                                 <TableHead className="w-20 whitespace-normal text-right">操作</TableHead>
                               </TableRow>
                             </TableHeader>
@@ -463,7 +463,7 @@ export function ProjectDetailWorkspace({
                                     anchor.id === selectedAnchorId,
                                 );
                                 const locateDisabledMessage = timelineUnavailableMessage
-                                  ?? (!displayed ? "请先勾选显示该 Task 时间线" : null);
+                                  ?? (!displayed ? "请先勾选显示该任务时间线" : null);
                                 return (
                                   <TableRow
                                     key={task.id}
@@ -524,7 +524,7 @@ export function ProjectDetailWorkspace({
                 })}
               </div>
             ) : (
-              <p className="mt-4 text-sm text-muted-foreground">尚未关联 Task</p>
+              <p className="mt-4 text-sm text-muted-foreground">尚未关联任务</p>
             )}
           </section>
 
@@ -579,7 +579,7 @@ function StatusVisibilityCheckbox({
       className="size-4 shrink-0 accent-primary"
       checked={checked}
       disabled={disabled}
-      aria-label={`显示全部${statusLabel} Task 时间线`}
+      aria-label={`显示全部${statusLabel}任务时间线`}
       aria-checked={mixed ? "mixed" : checked}
       onChange={(event) => onCheckedChange(event.currentTarget.checked)}
     />
@@ -659,7 +659,7 @@ function buildProjectTimelineModel(tasks: ProjectTimelineTask[]): TimeCanvasMode
     sourceId: task.id,
     kind: "PLAN" as const,
     label: task.title,
-    sublabel: `Current Plan v${task.currentPlan.versionNo} · ${taskStatusLabels[task.status]}`,
+    sublabel: `当前计划 v${task.currentPlan.versionNo} · ${taskStatusLabels[task.status]}`,
     href: routes.progress.taskDetail(task.id),
     editable: false,
     height: ROW_HEIGHT,
@@ -701,7 +701,7 @@ function taskAnchors(task: ProjectTimelineTask): TimeCanvasAnchor[] {
       taskId: task.id,
       kind: "PLAN_START",
       status: task.status === "DRAFT" ? "草稿" : "已开始",
-      label: "Start",
+      label: "开始节点",
       atMs: new Date(startAt).getTime(),
       sequence: 0,
       editable: false,

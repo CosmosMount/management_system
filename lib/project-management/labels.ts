@@ -30,8 +30,8 @@ export const taskMemberRoleLabels: Record<TaskMemberRole, string> = {
 };
 
 export const taskNodeTypeLabels: Record<TaskNodeType, string> = {
-  MILESTONE: "Milestone",
-  REVISION: "Revision",
+  MILESTONE: "里程碑",
+  REVISION: "计划修订",
   TERMINATION: "结束节点",
 };
 

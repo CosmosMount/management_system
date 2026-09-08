@@ -43,7 +43,7 @@ export function validateComposer(
     [...milestoneTimeCounts.keys()].some(
       (milestoneAt) => milestoneAt >= terminationAt,
     );
-  if (!state.title.trim()) issues.push({ key: "title", message: "请输入 Task 名称。" });
+  if (!state.title.trim()) issues.push({ key: "title", message: "请输入任务名称。" });
   if (!state.revision) {
     if (!TEAM_OPTIONS.includes(state.team as (typeof TEAM_OPTIONS)[number])) {
       issues.push({ key: "team", message: "请选择有效车组。" });
@@ -65,7 +65,7 @@ export function validateComposer(
     issues.push({
       key: "plannedStartAt",
       entityId: TASK_COMPOSER_START_ID,
-      message: "Start 必须严格早于全部 Milestone 和 Terminal。",
+      message: "开始节点必须严格早于全部里程碑和结束节点。",
     });
   }
   const memberPersonIds = state.members.map((member) => member.personId);
@@ -73,35 +73,35 @@ export function validateComposer(
     issues.push({ key: "members", message: "同一成员只能有一个角色。" });
   }
   if (state.milestones.length > 200) {
-    issues.push({ key: "plannedStartAt", entityId: TASK_COMPOSER_START_ID, message: "计划最多包含 200 个 Milestone。" });
+    issues.push({ key: "plannedStartAt", entityId: TASK_COMPOSER_START_ID, message: "计划最多包含 200 个里程碑。" });
   }
   for (const milestone of sortMilestones(state.milestones)) {
     if (nodeMetaFor(state, milestone.id).lifecycle === "TEMPORARY") {
       issues.push({
         key: `goal-${milestone.id}`,
         entityId: milestone.id,
-        message: `请完成或删除临时 Milestone「${milestone.goal || "未命名"}」。`,
+        message: `请完成或删除临时里程碑「${milestone.goal || "未命名"}」。`,
       });
     }
     if (!milestone.goal.trim()) {
       issues.push({
         key: `goal-${milestone.id}`,
         entityId: milestone.id,
-        message: "请填写 Milestone 目标。",
+        message: "请填写里程碑目标。",
       });
     }
     if (!milestone.completionCriteria.trim()) {
       issues.push({
         key: `criteria-${milestone.id}`,
         entityId: milestone.id,
-        message: `请填写「${milestone.goal || "未命名 Milestone"}」的完成条件。`,
+        message: `请填写「${milestone.goal || "未命名里程碑"}」的完成条件。`,
       });
     }
     if (!milestone.reviewRequirements.trim()) {
       issues.push({
         key: `review-${milestone.id}`,
         entityId: milestone.id,
-        message: `请填写「${milestone.goal || "未命名 Milestone"}」的验收要求。`,
+        message: `请填写「${milestone.goal || "未命名里程碑"}」的验收要求。`,
       });
     }
     const at = localMs(milestone.expectedCompletedAt);
@@ -109,7 +109,7 @@ export function validateComposer(
       issues.push({
         key: `expected-${milestone.id}`,
         entityId: milestone.id,
-        message: "请选择有效的 Milestone 完成时间。",
+        message: "请选择有效的里程碑完成时间。",
       });
     } else if (
       (startValid && at <= startAt) ||
@@ -118,13 +118,13 @@ export function validateComposer(
       issues.push({
         key: `expected-${milestone.id}`,
         entityId: milestone.id,
-        message: "Milestone 必须严格位于 Start 与 Terminal 之间。",
+        message: "里程碑必须严格位于开始节点与结束节点之间。",
       });
     } else if ((milestoneTimeCounts.get(at) ?? 0) > 1) {
       issues.push({
         key: `expected-${milestone.id}`,
         entityId: milestone.id,
-        message: "Milestone 不能与其他节点处于同一时刻。",
+        message: "里程碑不能与其他节点处于同一时刻。",
       });
     }
   }
@@ -141,20 +141,20 @@ export function validateComposer(
     issues.push({
       key: "termination-plannedAt",
       entityId: state.termination.id,
-      message: "Terminal 必须严格晚于 Start 和最后一个 Milestone。",
+      message: "结束节点必须严格晚于开始节点和最后一个里程碑。",
     });
   }
   if (!state.termination.name.trim()) {
     issues.push({
       key: "termination-name",
       entityId: state.termination.id,
-      message: "请输入 Terminal 名称。",
+      message: "请输入结束节点名称。",
     });
   } else if (state.termination.name.trim().length > 200) {
     issues.push({
       key: "termination-name",
       entityId: state.termination.id,
-      message: "Terminal 名称不能超过 200 个字符。",
+      message: "结束节点名称不能超过 200 个字符。",
     });
   }
   if (!state.termination.plannedOutcomeCriteria.trim()) {
@@ -170,33 +170,33 @@ export function validateComposer(
       issues.push({
         key: "revision-reason",
         entityId: state.revision.markerId,
-        message: "请输入 Revision 名称。",
+        message: "请输入计划修订名称。",
       });
     } else if (state.revision.reason.trim().length > 2_000) {
       issues.push({
         key: "revision-reason",
         entityId: state.revision.markerId,
-        message: "Revision 名称不能超过 2000 个字符。",
+        message: "计划修订名称不能超过 2000 个字符。",
       });
     }
     if (!state.revision.description.trim()) {
       issues.push({
         key: "revision-description",
         entityId: state.revision.markerId,
-        message: "请输入 Revision 详细内容。",
+        message: "请输入计划修订详细内容。",
       });
     } else if (state.revision.description.trim().length > 2_000) {
       issues.push({
         key: "revision-description",
         entityId: state.revision.markerId,
-        message: "Revision 详细内容不能超过 2000 个字符。",
+        message: "计划修订详细内容不能超过 2000 个字符。",
       });
     }
     if (!revisionAtValid) {
       issues.push({
         key: "revisionAt",
         entityId: state.revision.markerId,
-        message: "请选择有效的 Revision 时间。",
+        message: "请选择有效的计划修订时间。",
       });
     } else if (startValid && terminationValid) {
       const revisionAt = localMs(state.revision.revisionAt);
@@ -209,13 +209,13 @@ export function validateComposer(
         issues.push({
           key: "revisionAt",
           entityId: state.revision.markerId,
-          message: "Revision 时间不能早于最后一个已完成 Milestone 或已生效 Revision。",
+          message: "计划修订时间不能早于最后一个已完成里程碑或已生效计划修订。",
         });
       } else if (revisionAt > terminationAt) {
         issues.push({
           key: "revisionAt",
           entityId: state.revision.markerId,
-          message: "Revision 时间不能晚于 Terminal。",
+          message: "计划修订时间不能晚于结束节点。",
         });
       }
     }

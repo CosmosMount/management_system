@@ -1311,7 +1311,7 @@ export function ResourcePlannerCanvasClient({
   function handleBrush(request: TimeCanvasBrushRequest) {
     if (isPending) return;
     if (request.rowKind !== "PERSON") {
-      setNotice({ kind: "error", message: "按 Task 分组时请使用精确表单选择人员。" });
+      setNotice({ kind: "error", message: "按任务分组时请使用精确表单选择人员。" });
       return;
     }
     draftViewportCenterRef.current = currentViewportCenter();

@@ -164,8 +164,8 @@ export default async function ProjectDetailPage({
   return (
     <>
       <PageCommandBar
-        title="Project 详情"
-        description="查看 Project 基本信息、所属 Task 与计划时间线。"
+        title="项目详情"
+        description="查看项目基本信息、所属任务与计划时间线。"
       />
       <div className="mx-auto flex w-full min-w-0 max-w-[96rem] flex-col gap-5 px-4 py-6 sm:px-6 lg:px-8">
         <section
@@ -180,7 +180,7 @@ export default async function ProjectDetailPage({
                   href={routes.progress.projects}
                   className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
                 >
-                  <ArrowLeft className="size-4" aria-hidden="true" />全部 Project
+                  <ArrowLeft className="size-4" aria-hidden="true" />全部项目
                 </Link>
                 <Badge variant="secondary">{statusLabels[project.status]}</Badge>
               </div>
@@ -209,7 +209,7 @@ export default async function ProjectDetailPage({
                   value={memberNames(participants)}
                 />
                 <OverviewItem
-                  label="Task 完成进度"
+                  label="任务完成进度"
                   value={`${project.completedTaskTotalCount}/${project.completionTaskTotalCount} 已完成`}
                 />
               </dl>
@@ -266,15 +266,15 @@ export default async function ProjectDetailPage({
                 />
               </dl>
               <div className="min-w-0 space-y-2">
-                <h3 className="text-sm font-medium">本次申请 Task</h3>
+                <h3 className="text-sm font-medium">本次申请任务</h3>
                 {currentEstablishmentRequest.tasks.length === 0 ? (
                   <p className="text-sm text-muted-foreground">
-                    本次立项未申请加入 Task。
+                    本次立项未申请加入任务。
                   </p>
                 ) : (
                   <ul
                     className="divide-y divide-border overflow-hidden rounded-lg border border-border"
-                    aria-label="本次立项申请的 Task"
+                    aria-label="本次立项申请的任务"
                   >
                     {currentEstablishmentRequest.tasks.map((task) => (
                       <li
