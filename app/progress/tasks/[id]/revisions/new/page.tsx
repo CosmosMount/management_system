@@ -61,7 +61,7 @@ export default async function ProgressTaskRevisionNewPage({
     <>
       <PageCommandBar
         title="发起计划修订"
-        description="在通用编辑器中调整计划修订时间、后续里程碑与结束节点；创建后直接进入待审批。"
+        description="先核对只读任务资料，再填写修订内容与候选计划，检查后创建并送审；审批通过前不替换生效计划。"
       />
       <TaskComposerClient
         accountId={actor.accountId}

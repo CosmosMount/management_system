@@ -2,14 +2,21 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ChevronDown, LocateFixed, Plus } from "lucide-react";
 import {
-  CollaborationLeftSidebar,
-  CollaborationRightSidebar,
+  ActivityVersionPoller,
+  CommentPanel,
   CreateRiskCard,
+  RecentActivityPanel,
+  RiskPanel,
   type CollaborationInitialData,
 } from "@/components/project-management/collaboration-panels";
+import {
+  DetailViewNavigation,
+  DetailViewPanel,
+  useDetailView,
+} from "@/components/project-management/detail-views";
 import { ResourcePlannerCanvasClient } from "@/components/project-management/resource-planner-canvas-client";
 import { buildPlanPhaseBands } from "@/components/project-management/time-canvas/plan-phase-bands";
 import type {
@@ -59,6 +66,14 @@ type ProjectTimelineTask = {
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const ROW_HEIGHT = 112;
+const projectViews = ["overview", "plan", "collaboration", "activity"] as const;
+const projectViewItems = [
+  { value: "overview", label: "任务概览" },
+  { value: "plan", label: "计划与投入" },
+  { value: "collaboration", label: "风险与讨论" },
+  { value: "activity", label: "活动记录" },
+] as const;
+const projectHashViews = { "#establishment": "overview", "#risks": "collaboration" };
 const projectTaskStatusOrder = [
   "DRAFT",
   "ACTIVE",
@@ -79,6 +94,7 @@ const phaseTones: TimeCanvasTone[] = [
 
 export function ProjectDetailWorkspace({
   projectId,
+  initialView,
   projectStatus,
   canCreateTask,
   tasks,
@@ -93,6 +109,7 @@ export function ProjectDetailWorkspace({
   collaboration,
 }: {
   projectId: string;
+  initialView: string;
   projectStatus: "DRAFT" | "PENDING_APPROVAL" | "ACTIVE" | "COMPLETED";
   canCreateTask: boolean;
   tasks: ProjectTimelineTask[];
@@ -111,7 +128,14 @@ export function ProjectDetailWorkspace({
   collaboration: CollaborationInitialData;
 }) {
   const router = useRouter();
-  const timelineContainerRef = useRef<HTMLDivElement>(null);
+  const searchParams = useSearchParams();
+  const { view, selectView } = useDetailView({
+    initialView,
+    views: projectViews,
+    hashViews: projectHashViews,
+  });
+  const [timelineContainer, setTimelineContainer] = useState<HTMLDivElement | null>(null);
+  const [pendingLocationId, setPendingLocationId] = useState<string | null>(null);
   const focusedTask = taskForTimelineFocus(tasks, timelineWindow.focusId);
   const [visibleTaskIds, setVisibleTaskIds] = useState<string[]>(() =>
     initialVisibleTaskIds(tasks, focusedTask),
@@ -148,7 +172,7 @@ export function ProjectDetailWorkspace({
     if (externalTimelineFocusRef.current === timelineWindow.focusId) return;
     const timer = window.setTimeout(() => {
       externalTimelineFocusRef.current = timelineWindow.focusId;
-      setRequestedAnchorId(timelineWindow.focusId);
+      if (timelineWindow.focusId) setRequestedAnchorId(timelineWindow.focusId);
     }, 0);
     return () => window.clearTimeout(timer);
   }, [timelineWindow.focusId]);
@@ -187,8 +211,9 @@ export function ProjectDetailWorkspace({
   const handledExternalFocusRef = useRef<string | null>(null);
   useEffect(() => {
     const focusId = timelineWindow.focusId;
-    const timelineRoot = timelineContainerRef.current;
+    const timelineRoot = timelineContainer;
     if (
+      view !== "plan" ||
       !focusId ||
       selectedAnchorId !== focusId ||
       handledExternalFocusRef.current === focusId ||
@@ -202,9 +227,52 @@ export function ProjectDetailWorkspace({
       timelineRoot.scrollIntoView({ behavior: "smooth", block: "start" });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [selectedAnchorId, timelineWindow.focusId]);
+  }, [selectedAnchorId, timelineWindow.focusId, timelineContainer, view]);
+
+  useEffect(() => {
+    if (view !== "plan" || !pendingLocationId || !timelineContainer) return;
+    const anchor = model.anchors.find((item) => item.id === pendingLocationId);
+    const rowIndex = model.rows.findIndex((row) => row.id === anchor?.rowId);
+    if (!anchor || rowIndex < 0) return;
+    let frame = requestAnimationFrame(() => {
+      const scroller = timelineContainer.querySelector<HTMLElement>(
+        "[data-testid='time-canvas-scroll']",
+      );
+      if (!scroller) return;
+      timelineContainer.scrollIntoView({ behavior: "smooth", block: "start" });
+      const rowHeader = scroller.querySelector<HTMLElement>("[data-testid^='timeline-row-']")
+        ?.firstElementChild;
+      const rowHeaderWidth = rowHeader instanceof HTMLElement ? rowHeader.clientWidth : 0;
+      const duration = model.range.endMs - model.range.startMs;
+      const ratio = duration > 0
+        ? Math.max(0, Math.min(1, (anchor.atMs - model.range.startMs) / duration))
+        : 0;
+      const timelineWidth = Math.max(0, scroller.scrollWidth - rowHeaderWidth);
+      scroller.scrollTo({
+        top: rowIndex * ROW_HEIGHT,
+        left: Math.max(0, rowHeaderWidth + ratio * timelineWidth - scroller.clientWidth / 2),
+        behavior: "smooth",
+      });
+      frame = requestAnimationFrame(() => {
+        timelineContainer
+          .querySelector<HTMLElement>(`[data-canvas-object-key="anchor:${anchor.id}"]`)
+          ?.focus({ preventScroll: true });
+        setPendingLocationId(null);
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [model, pendingLocationId, timelineContainer, view]);
 
   const timelineUnavailableMessage = timelineError ?? resourceTimelineError;
+  const riskCount = collaboration.directActiveRisks.totalCount +
+    (collaboration.taskActiveRisks?.totalCount ?? 0);
+  const riskPreview = [
+    ...collaboration.directActiveRisks.items,
+    ...(collaboration.taskActiveRisks?.items ?? []),
+  ].sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id))
+    .slice(0, 3);
+  const riskViewSearch = new URLSearchParams(searchParams.toString());
+  riskViewSearch.set("section", "collaboration");
 
   function setTasksVisible(taskIds: string[], checked: boolean) {
     const targetTaskIds = new Set(taskIds);
@@ -249,58 +317,30 @@ export function ProjectDetailWorkspace({
       : `project-start:${task.id}`;
     const anchor = model.anchors.find((item) => item.id === preferredAnchorId) ??
       model.anchors.find((item) => item.taskId === task.id);
-    if (anchor && (anchor.atMs < model.range.startMs || anchor.atMs >= model.range.endMs)) {
+    if (!anchor) return;
+    if (anchor.atMs < model.range.startMs || anchor.atMs >= model.range.endMs) {
       const url = new URL(window.location.href);
+      url.searchParams.set("section", "plan");
       url.searchParams.set("center", new Date(anchor.atMs).toISOString());
       url.searchParams.set("focus", anchor.id);
-      router.push(`${url.pathname}?${url.searchParams.toString()}`);
+      url.hash = "";
+      router.replace(`${url.pathname}?${url.searchParams.toString()}`, { scroll: false });
       return;
     }
-    const rowIndex = model.rows.findIndex((row) => row.sourceId === task.id);
-    if (!anchor || rowIndex < 0) return;
+    selectView("plan");
     setRequestedAnchorId(anchor.id);
-    timelineContainerRef.current?.scrollIntoView({
-      behavior: "smooth",
-      block: "start",
-    });
-    requestAnimationFrame(() => {
-      const root = timelineContainerRef.current;
-      const scroller = root?.querySelector<HTMLElement>(
-        "[data-testid='time-canvas-scroll']",
-      );
-      if (!scroller) return;
-      const rowHeaderWidth =
-        scroller
-          .querySelector<HTMLElement>("[data-testid^='timeline-row-']")
-          ?.firstElementChild instanceof HTMLElement
-          ? scroller.querySelector<HTMLElement>("[data-testid^='timeline-row-']")!
-              .firstElementChild!.clientWidth
-          : 0;
-      const duration = model.range.endMs - model.range.startMs;
-      const ratio =
-        duration > 0
-          ? Math.max(
-              0,
-              Math.min(1, (anchor.atMs - model.range.startMs) / duration),
-            )
-          : 0;
-      const timelineWidth = Math.max(0, scroller.scrollWidth - rowHeaderWidth);
-      const targetX = rowHeaderWidth + ratio * timelineWidth;
-      scroller.scrollTo({
-        top: rowIndex * ROW_HEIGHT,
-        left: Math.max(0, targetX - scroller.clientWidth / 2),
-        behavior: "smooth",
-      });
-      requestAnimationFrame(() => {
-        root
-          ?.querySelector<HTMLElement>(`[data-canvas-object-key="anchor:${anchor.id}"]`)
-          ?.focus({ preventScroll: true });
-      });
-    });
+    setPendingLocationId(anchor.id);
   }
 
   return (
     <div className="min-w-0 space-y-5" data-testid="project-task-workspace">
+      <DetailViewNavigation
+        items={projectViewItems}
+        view={view}
+        onSelect={selectView}
+        label="项目详情视图"
+      />
+      <DetailViewPanel value="plan" view={view} testId="project-plan-view">
       <section
         className="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5"
         data-testid="project-timeline-layer"
@@ -325,7 +365,7 @@ export function ProjectDetailWorkspace({
           </div>
         ) : (
           <div
-            ref={timelineContainerRef}
+            ref={setTimelineContainer}
             className="mt-4 min-w-0 scroll-mt-24 overflow-hidden rounded-lg border border-border"
           >
             <ResourcePlannerCanvasClient
@@ -349,16 +389,10 @@ export function ProjectDetailWorkspace({
           </div>
         )}
       </section>
+      </DetailViewPanel>
 
-      <div
-        className="grid min-w-0 gap-5 xl:grid-cols-[300px_minmax(0,1fr)_300px]"
-        data-testid="project-detail-lower-grid"
-      >
-        <main
-          className="min-w-0 space-y-4 xl:col-start-2 xl:row-start-1"
-          data-testid="project-detail-main-column"
-        >
-          <section className="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5">
+      <DetailViewPanel value="overview" view={view} testId="project-summary-view" className="grid min-w-0 items-start gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+          <section className="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5" data-testid="project-tasks">
             <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
                 <h2 className="font-semibold">任务</h2>
@@ -527,28 +561,49 @@ export function ProjectDetailWorkspace({
               <p className="mt-4 text-sm text-muted-foreground">尚未关联任务</p>
             )}
           </section>
+          <section className="min-w-0 rounded-xl border border-border bg-card p-4" data-testid="project-risk-summary">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="font-semibold">需要关注的风险 <span className="text-sm font-normal text-muted-foreground">{riskCount} 条未解决</span></h2>
+              <Link
+                href={`?${riskViewSearch.toString()}#risks`}
+                className="rounded text-sm text-primary hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+              >查看全部风险与讨论</Link>
+            </div>
+            {riskPreview.length > 0 ? (
+              <ul className="mt-3 divide-y divide-border">
+                {riskPreview.map((risk) => (
+                  <li key={risk.id} className="min-w-0 py-2">
+                    <p className="text-xs text-muted-foreground">{risk.target.type === "PROJECT" ? "项目自身风险" : `任务：${risk.target.name}`}</p>
+                    <p className="mt-1 line-clamp-2 break-words text-sm [overflow-wrap:anywhere]">{risk.content}</p>
+                  </li>
+                ))}
+              </ul>
+            ) : <p className="mt-3 text-sm text-muted-foreground">当前没有未解决风险。</p>}
+          </section>
+      </DetailViewPanel>
 
+      <DetailViewPanel value="collaboration" view={view} testId="project-collaboration-view" className="space-y-4">
+          <RiskPanel data={collaboration} />
+          {collaboration.capabilities.canCreateRisk && <details className="min-w-0 rounded-xl border border-border bg-card p-4">
+            <summary className="w-fit cursor-pointer rounded text-sm font-medium text-primary focus-visible:outline-2 focus-visible:outline-ring">提出项目风险</summary>
+            <div className="mt-3">
           <CreateRiskCard
             targetType="PROJECT"
             targetId={projectId}
             canCreate={collaboration.capabilities.canCreateRisk}
           />
-        </main>
-
-        <aside
-          className="min-w-0 space-y-4 xl:col-start-1 xl:row-start-1"
-          data-testid="project-detail-left-column"
-        >
-          <CollaborationLeftSidebar data={collaboration} />
-        </aside>
-
-        <aside
-          className="min-w-0 xl:col-start-3 xl:row-start-1"
-          data-testid="project-detail-right-column"
-        >
-          <CollaborationRightSidebar data={collaboration} />
-        </aside>
-      </div>
+            </div>
+          </details>}
+          <CommentPanel data={collaboration} />
+      </DetailViewPanel>
+      <DetailViewPanel value="activity" view={view} testId="project-activity-view">
+        <RecentActivityPanel data={collaboration} />
+      </DetailViewPanel>
+      <ActivityVersionPoller
+        targetType={collaboration.targetType}
+        targetId={projectId}
+        initialToken={collaboration.activityVersion}
+      />
     </div>
   );
 }

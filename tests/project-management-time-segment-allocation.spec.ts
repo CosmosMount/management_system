@@ -5,7 +5,7 @@ import { prisma } from "../lib/prisma";
 import { loginAsTestUser } from "./helpers/functional-fixtures";
 
 test.describe("time segment allocation UI", () => {
-  test("我的工作默认使用周尺度并保留独立底部滚动条", async ({
+  test("我的工作进入个人日程后默认使用周尺度并保留独立底部滚动条", async ({
     context,
     page,
     baseURL,
@@ -31,6 +31,10 @@ test.describe("time segment allocation UI", () => {
 
     await page.goto("/progress");
     await expect(page.getByText("当前没有有效参与的任务。", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
+    await page.getByRole("navigation", { name: "工作台视图" })
+      .getByRole("link", { name: "个人日程", exact: true }).click();
+    await expect(page).toHaveURL((url) => url.searchParams.get("view") === "schedule");
     await expect(page.getByLabel("选择日期")).toHaveCount(0);
     await expect(page.getByTestId("time-canvas-range-pan-bar")).toHaveCount(0);
     const canvasRoot = page.getByTestId("time-canvas-root");
@@ -55,6 +59,7 @@ test.describe("time segment allocation UI", () => {
       .poll(() => new URL(page.url()).searchParams.get("center"))
       .toBe(currentCenter);
     const pagedUrl = new URL(page.url());
+    expect(pagedUrl.searchParams.get("view")).toBe("schedule");
     expect(pagedUrl.searchParams.get("center")).toBe(currentCenter);
     expect(pagedUrl.searchParams.get("scale")).toBe("year");
     expect(

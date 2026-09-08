@@ -64,7 +64,7 @@ export function CollaborationLeftSidebar({ data }: { data: CollaborationInitialD
   return (
     <div className="min-w-0 space-y-4">
       <RiskPanel data={data} />
-      <CommentPanel key={commentPageKey(data.comments)} data={data} />
+      <CommentPanel data={data} />
     </div>
   );
 }
@@ -166,9 +166,9 @@ export function CreateRiskCard({
   );
 }
 
-function RiskPanel({ data }: { data: CollaborationInitialData }) {
+export function RiskPanel({ data }: { data: CollaborationInitialData }) {
   return (
-    <section className="min-w-0 rounded-xl border border-border bg-card p-4">
+    <section id="risks" className="min-w-0 scroll-mt-20 rounded-xl border border-border bg-card p-4">
       <h2 className="font-semibold">{data.targetType === "PROJECT" ? "项目" : "任务"}风险</h2>
       <div className="mt-3 space-y-5">
         <RiskGroup
@@ -396,9 +396,15 @@ function RiskItem({ risk, onResolve }: { risk: RiskItemDto; onResolve?: () => vo
   );
 }
 
-function CommentPanel({ data }: { data: CollaborationInitialData }) {
+export function CommentPanel({ data }: { data: CollaborationInitialData }) {
   const router = useRouter();
   const [page, setPage] = useState(data.comments);
+  const serverPageKey = commentPageKey(data.comments);
+  const [lastServerPageKey, setLastServerPageKey] = useState(serverPageKey);
+  if (lastServerPageKey !== serverPageKey) {
+    setLastServerPageKey(serverPageKey);
+    setPage(data.comments);
+  }
   const [content, setContent] = useState("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
@@ -486,7 +492,7 @@ const taskFilters = [
   ["ALL", "全部"], ["TASK", "任务"], ["PLAN_NODE", "计划节点"], ["RISK", "风险"], ["COMMENT", "评论"], ["REVIEW", "审批"],
 ] as const;
 
-function RecentActivityPanel({ data }: { data: CollaborationInitialData }) {
+export function RecentActivityPanel({ data }: { data: CollaborationInitialData }) {
   const filters = data.targetType === "PROJECT" ? projectFilters : taskFilters;
   const [category, setCategory] = useState<(typeof filters)[number][0]>("ALL");
   const [page, setPage] = useState(data.activity);
@@ -545,7 +551,7 @@ function ActivityItem({ item }: { item: RecentActivityItemDto }) {
   return item.linkPath ? <Link href={item.linkPath} className="block min-w-0 rounded-lg border border-border p-3 hover:bg-muted/40">{body}</Link> : <article className="min-w-0 rounded-lg border border-border p-3">{body}</article>;
 }
 
-function ActivityVersionPoller({ targetType, targetId, initialToken }: { targetType: TargetType; targetId: string; initialToken: string }) {
+export function ActivityVersionPoller({ targetType, targetId, initialToken }: { targetType: TargetType; targetId: string; initialToken: string }) {
   const router = useRouter();
   const tokenRef = useRef(initialToken);
   const requestRef = useRef(0);
@@ -586,7 +592,7 @@ function InlineNotice({ notice }: { notice: Notice }) {
 
 function EmptyBox({ text }: { text: string }) { return <div className="rounded-lg border border-dashed border-border p-4 text-center text-sm text-muted-foreground">{text}</div>; }
 function pageKey(page: RiskPageDto) { return `${page.totalCount}:${page.nextCursor ?? ""}:${page.items.map((item) => `${item.id}:${item.status}`).join(",")}`; }
-function commentPageKey(page: CommentPageDto) { return `${page.totalCount}:${page.nextCursor ?? ""}:${page.items.map((item) => item.id).join(",")}`; }
+export function commentPageKey(page: CommentPageDto) { return `${page.totalCount}:${page.nextCursor ?? ""}:${page.items.map((item) => item.id).join(",")}`; }
 function mergeRiskPage(current: RiskPageDto, next: RiskPageDto): RiskPageDto { const byId = new Map(current.items.map((item) => [item.id, item])); for (const item of next.items) byId.set(item.id, item); return { items: [...byId.values()], totalCount: next.totalCount, nextCursor: next.nextCursor }; }
 function mergeCommentPage(current: CommentPageDto, next: CommentPageDto): CommentPageDto { const byId = new Map(current.items.map((item) => [item.id, item])); for (const item of next.items) byId.set(item.id, item); return { items: [...byId.values()], totalCount: next.totalCount, nextCursor: next.nextCursor }; }
 function mergeActivityPage(current: RecentActivityPageDto, next: RecentActivityPageDto): RecentActivityPageDto { const byId = new Map(current.items.map((item) => [item.id, item])); for (const item of next.items) byId.set(item.id, item); return { items: [...byId.values()], nextCursor: next.nextCursor }; }

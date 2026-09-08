@@ -189,7 +189,7 @@ export function replaceViewportUrl({
   window.history.replaceState(
     window.history.state,
     "",
-    `${url.pathname}?${url.searchParams.toString()}`,
+    `${url.pathname}?${url.searchParams.toString()}${url.hash}`,
   );
   window.dispatchEvent(new Event(TIME_CANVAS_VIEWPORT_STATE_EVENT));
 }

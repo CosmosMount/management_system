@@ -157,7 +157,6 @@ export default async function ProgressTaskDetailPage({
     <>
       <PageCommandBar
         title={workspace.task.title}
-        description="任务执行工作台：统一计划、人员投入、计划修订、验收与审计。"
       />
       <div className="mx-auto flex w-full min-w-0 max-w-[96rem] flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
         {firstParam(query.focusError) === "1" && (
@@ -166,6 +165,7 @@ export default async function ProgressTaskDetailPage({
           </p>
         )}
         <TaskWorkbench
+          initialView={firstParam(query.section) ?? "execution"}
           workspace={workspace}
           lifecycle={lifecycle}
           people={mergeOptions(currentPeople, peoplePage.items)}

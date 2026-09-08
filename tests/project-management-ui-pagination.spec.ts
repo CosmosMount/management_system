@@ -146,7 +146,7 @@ test("notification, Task, risk, and activity records beyond the first page remai
       createdAt: collaborationTimestamp,
     })),
   });
-  await page.goto(`/progress/projects/${project.id}`);
+  await page.goto(`/progress/projects/${project.id}?section=collaboration`);
   await expect(page.getByText("UI 分页风险 0", { exact: true })).toBeVisible();
   await expect(page.getByText("UI 分页风险 20", { exact: true })).toHaveCount(0);
   await prisma.riskRecord.update({
@@ -168,6 +168,8 @@ test("notification, Task, risk, and activity records beyond the first page remai
     page.getByRole("status").getByText("风险列表已变化，已重新加载。"),
   ).toBeVisible();
   await expect(page.getByText("UI 分页风险 20", { exact: true })).toBeVisible();
+  await page.getByRole("navigation", { name: "项目详情视图" }).getByRole("link", { name: "活动记录", exact: true }).click();
+  await expect(page.getByTestId("project-activity-view")).toBeVisible();
   await expect(page.getByText("UI 分页动态 20", { exact: false })).toHaveCount(0);
   await page.getByRole("button", { name: "加载更早动态" }).click();
   await expect(page.getByText("UI 分页动态 20", { exact: false })).toBeVisible();

@@ -9,6 +9,7 @@ import {
   useTransition,
 } from "react";
 import { useRouter } from "next/navigation";
+import { useDetailViewActive } from "@/components/project-management/detail-views";
 import { getAdaptiveTimeCanvasBlock } from "@/app/actions/project-management/canvas";
 import {
   getWorkSegment,
@@ -131,6 +132,9 @@ export function ResourcePlannerCanvasClient({
   presentationOverlay?: TimeCanvasPresentationOverlay;
 }) {
   const router = useRouter();
+  const viewActive = useDetailViewActive();
+  const viewActiveRef = useRef(viewActive);
+  useEffect(() => { viewActiveRef.current = viewActive; }, [viewActive]);
   const [isPending, startTransition] = useTransition();
   const [createDraft, setCreateDraft] = useState<CreateDraft | null>(null);
   const [createDraftDirty, setCreateDraftDirty] = useState(false);
@@ -390,6 +394,7 @@ export function ResourcePlannerCanvasClient({
     centerMs?: number;
     zoom: TimeCanvasZoom;
   }) => {
+    if (!viewActiveRef.current) return;
     persistedViewportRef.current = { centerMs, zoom };
     replaceViewportUrl({ centerMs, zoom });
   }, []);
@@ -532,6 +537,7 @@ export function ResourcePlannerCanvasClient({
     if (!createDraft) return;
     const handleEscape = (event: globalThis.KeyboardEvent) => {
       if (
+        !viewActiveRef.current ||
         event.key !== "Escape" ||
         event.defaultPrevented ||
         event.isComposing ||
@@ -807,6 +813,7 @@ export function ResourcePlannerCanvasClient({
   useEffect(() => {
     if (
       !persistViewportInUrl ||
+      !viewActive ||
       centerNavigationTargetRef.current !== null ||
       presentationCenterMs !== null
     ) {
@@ -838,6 +845,7 @@ export function ResourcePlannerCanvasClient({
     };
   }, [
     createDraft,
+    viewActive,
     currentZoom,
     pendingSegmentRange,
     persistViewportInUrl,
@@ -848,6 +856,7 @@ export function ResourcePlannerCanvasClient({
   useEffect(() => {
     if (
       !adaptiveBlockQuery ||
+      !viewActive ||
       !initialModel.rowPageKey ||
       presentationCenterMs !== null ||
       dialogDirty ||
@@ -904,7 +913,7 @@ export function ResourcePlannerCanvasClient({
           inFlightBlockRequestsRef.current,
           inFlightRequest,
         );
-        if (!mountedRef.current || rowPageKeyRef.current !== requestedRowPageKey) return;
+        if (!mountedRef.current || !viewActiveRef.current || rowPageKeyRef.current !== requestedRowPageKey) return;
         if (!result.ok) {
           if (result.error.code === "STATE_CONFLICT") {
             if (
@@ -1049,6 +1058,7 @@ export function ResourcePlannerCanvasClient({
     });
   }, [
     adaptiveBlockQuery,
+    viewActive,
     cachedBlocks,
     dialogDirty,
     failedBlocks,

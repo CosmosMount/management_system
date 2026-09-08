@@ -1,4 +1,4 @@
-import { expect } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import type { Client } from "pg";
 import type { ProjectManagementSystemRole, TaskMemberRole } from "@prisma/client";
@@ -11,6 +11,22 @@ import { cleanupBarrierResources, connectDatabaseClient, startBarrierOperations,
 
 export const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export async function openTaskComposerDisclosure(
+  page: Page,
+  label: "补充说明与优先级" | "关联任务与项目（可选）" | "时间画布与批量调整（高级）" | "补充业务说明（可选）",
+) {
+  if (label === "补充说明与优先级" || label === "关联任务与项目（可选）") {
+    await page.getByRole("navigation", { name: "任务表单分区" })
+      .getByRole("button", { name: "1. 基本资料", exact: true }).click();
+  }
+  const summary = page.getByTestId("task-composer").locator("summary").filter({ hasText: label });
+  await expect(summary).toHaveCount(1);
+  if (await summary.locator("..").getAttribute("open") === null) {
+    await summary.click();
+  }
+  await expect(summary.locator("..")).toHaveAttribute("open", "");
+}
 
 export const MUTATION_ACTION_CASES = [
   {

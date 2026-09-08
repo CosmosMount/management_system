@@ -121,7 +121,7 @@ test.describe("project management S3 shell", { tag: "@smoke" }, () => {
     await page.goto(`/progress/tasks/${fixture.taskId}`);
     await expect(
       page
-        .getByTestId("task-workbench-v2")
+        .getByTestId("project-management-command-bar")
         .getByRole("heading", { name: fixture.taskTitle, exact: true }),
     ).toBeVisible();
     if (testInfo.project.name === "desktop") {
@@ -148,6 +148,10 @@ test.describe("project management S3 shell", { tag: "@smoke" }, () => {
     }
     await expectHealthyPage(page);
     const commandBar = page.getByTestId("project-management-command-bar");
+    await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
+    await page.getByRole("navigation", { name: "任务详情分区" })
+      .getByRole("link", { name: "计划与投入", exact: true }).click();
+    await expect(page.getByTestId("time-canvas-root")).toBeVisible();
     await expect(page.getByTestId(`time-canvas-row-header-plan:${fixture.taskId}`)).toContainText("计划轨道 · 草稿");
     await expect(commandBar.getByRole("navigation", { name: "面包屑" }).getByRole("link", { name: "任务", exact: true })).toHaveAttribute("href", "/progress/tasks");
     const heading = commandBar.getByRole("heading", { name: fixture.taskTitle, exact: true });

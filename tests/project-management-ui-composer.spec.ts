@@ -5,6 +5,7 @@ import { prisma } from "../lib/prisma";
 import { createTaskDraft } from "../lib/project-management/application/lifecycle-service";
 import { isoToShanghaiDateTimeLocal, shanghaiDateTimeLocalToIso } from "../lib/project-management/date-time";
 import { expectHealthyPage, loginAsTestUser } from "./helpers/functional-fixtures";
+import { openTaskComposerDisclosure } from "./helpers/project-management-plan-mutation-fixtures";
 
 import {
   actor,
@@ -141,6 +142,7 @@ test.describe("project management UI project-management-ui-composer", () => {
       const milestoneTime = page.getByLabel("预期完成时间");
       const originalMilestoneTime = await milestoneTime.inputValue();
       if (testInfo.project.name === "desktop") {
+        await openTaskComposerDisclosure(page, "时间画布与批量调整（高级）");
         const milestoneAnchor = page
           .getByTestId("time-canvas-root")
           .getByRole("button", { name: /^计划节点 完成 S5 Composer 主流程/ });
@@ -353,7 +355,9 @@ test.describe("project management UI project-management-ui-composer", () => {
         ).toHaveText("200/200");
         const concurrentDescriptionA = `多标签页极限草稿 A ${"A".repeat(137)}`;
         const concurrentDescriptionB = `多标签页极限草稿 B ${"B".repeat(733)}`;
+        await openTaskComposerDisclosure(page, "补充说明与优先级");
         await page.getByLabel("描述").fill(concurrentDescriptionA);
+        await openTaskComposerDisclosure(concurrentPage, "补充说明与优先级");
         await concurrentPage.getByLabel("描述").fill(concurrentDescriptionB);
         await Promise.all([
           page.getByRole("button", { name: "全部任务", exact: true }).click(),
@@ -410,9 +414,9 @@ test.describe("project management UI project-management-ui-composer", () => {
             .releaseDraftStorageLock?.();
         });
         await heldDraftLock;
-        await expect(page.getByRole("heading", { name: "全部任务" })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "任务", exact: true })).toBeVisible();
         await expect(
-          concurrentPage.getByRole("heading", { name: "全部任务" }),
+          concurrentPage.getByRole("heading", { name: "任务", exact: true }),
         ).toBeVisible();
         await concurrentPage.close();
         await lockPage.close();
@@ -445,7 +449,7 @@ test.describe("project management UI project-management-ui-composer", () => {
       await page.getByRole("button", { name: "创建任务草稿" }).click();
       await expect(
         page
-          .getByTestId("task-workbench-v2")
+          .getByTestId("project-management-command-bar")
           .getByRole("heading", { name: title, exact: true }),
       ).toBeVisible();
       await expectHealthyPage(page);
@@ -522,7 +526,7 @@ test.describe("project management UI project-management-ui-composer", () => {
         });
         await expect(leaveDialog).toBeVisible();
         await leaveDialog.getByRole("button", { name: "放弃并离开" }).click();
-        await expect(page.getByRole("heading", { name: "全部任务" })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "任务", exact: true })).toBeVisible();
         await page.clock.runFor(900);
         await page.goto("/progress/tasks/new");
         await expect(page.getByText(/检测到 .* 保存的未完成草稿/)).toHaveCount(0);
@@ -598,6 +602,7 @@ test.describe("project management UI project-management-ui-composer", () => {
         "task-composer-anchor-multi-selection",
       );
       if (testInfo.project.name === "desktop") {
+        await openTaskComposerDisclosure(page, "时间画布与批量调整（高级）");
         await expect(canvas).toBeVisible();
         await expect(multiSelection).toBeVisible();
         const markerM1 = canvas.getByRole("button", {
@@ -677,9 +682,31 @@ test.describe("project management UI project-management-ui-composer", () => {
         expect(await readMilestoneTime("多选节点 M3")).toBe(original.m3);
         await page.getByRole("button", { name: "撤销" }).click();
 
-        await markerM2.evaluate((element) =>
-          element.scrollIntoView({ block: "center", inline: "center" }),
-        );
+        await planRow.scrollIntoViewIfNeeded();
+        await planRow.evaluate((row, anchorIds) => {
+          const scroller = row.closest<HTMLElement>('[data-testid="time-canvas-scroll"]');
+          const header = row.previousElementSibling;
+          const first = row.querySelector(`[data-anchor-id="${anchorIds.first}"]`);
+          const second = row.querySelector(`[data-anchor-id="${anchorIds.second}"]`);
+          if (!scroller || !header || !first || !second) {
+            throw new Error("框选定位缺少画布、行头或节点");
+          }
+          const firstBox = first.getBoundingClientRect();
+          const secondBox = second.getBoundingClientRect();
+          const pairCenter = (firstBox.left + firstBox.width / 2 + secondBox.left + secondBox.width / 2) / 2;
+          const visibleCenter = (header.getBoundingClientRect().right + scroller.getBoundingClientRect().right) / 2;
+          scroller.scrollLeft += pairCenter - visibleCenter;
+        }, { first: markerM1Id, second: markerM2Id });
+        await expect.poll(() => planRow.evaluate((row, anchorIds) => {
+          const first = row.querySelector(`[data-anchor-id="${anchorIds.first}"]`);
+          const second = row.querySelector(`[data-anchor-id="${anchorIds.second}"]`);
+          if (!first || !second) return false;
+          const firstBox = first.getBoundingClientRect();
+          const secondBox = second.getBoundingClientRect();
+          const rowBox = row.getBoundingClientRect();
+          return document.elementFromPoint(firstBox.left - 8, rowBox.bottom - 3) === row &&
+            document.elementFromPoint(secondBox.right + 8, rowBox.top + 3) === row;
+        }, { first: markerM1Id, second: markerM2Id })).toBe(true);
         const markerM1Box = await markerM1.boundingBox();
         const resetMarkerM2Box = await markerM2.boundingBox();
         const planRowBox = await planRow.boundingBox();
@@ -977,7 +1004,7 @@ test.describe("project management UI project-management-ui-composer", () => {
       await page.getByRole("button", { name: "创建任务草稿" }).click();
       await expect(
         page
-          .getByTestId("task-workbench-v2")
+          .getByTestId("project-management-command-bar")
           .getByRole("heading", { name: title, exact: true }),
       ).toBeVisible();
       await expect
@@ -1046,12 +1073,17 @@ test.describe("project management UI project-management-ui-composer", () => {
       await page.getByRole("button", { name: "创建任务草稿" }).click();
       await expect(
         page
-          .getByTestId("task-workbench-v2")
+          .getByTestId("project-management-command-bar")
           .getByRole("heading", { name: title, exact: true }),
       ).toBeVisible();
 
       page.once("dialog", (dialog) => dialog.accept());
       await page.getByRole("button", { name: "激活任务" }).click();
+      await expect(page.getByTestId("task-global-notice")).toContainText("任务已激活。");
+      const taskNavigation = page.getByRole("navigation", { name: "任务详情分区" });
+      await taskNavigation.getByRole("link", { name: "计划与投入", exact: true }).click();
+      await expect(taskNavigation.getByRole("link", { name: "计划与投入", exact: true })).toHaveAttribute("aria-current", "page");
+      await expect(page.getByTestId("task-plan-view")).toBeVisible();
       await expect(
         page
           .getByTestId("task-plan-node-navigator")
@@ -1268,7 +1300,7 @@ test.describe("project management UI project-management-ui-composer", () => {
       await expectHealthyPage(page);
       await page.goto("/progress/tasks/new");
       await expect(page).toHaveURL(/\/progress\/tasks$/);
-      await expect(page.getByRole("heading", { name: "全部任务" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "任务", exact: true })).toBeVisible();
       await expect(page.getByTestId("task-composer")).toHaveCount(0);
       await expect(page.getByRole("link", { name: "新建任务" })).toHaveCount(0);
       await expectHealthyPage(page);
@@ -1281,9 +1313,15 @@ test.describe("project management UI project-management-ui-composer", () => {
       await page.goto(`/progress/tasks/${draft.taskId}`);
       await expect(
         page
-          .getByTestId("task-workbench-v2")
+          .getByTestId("project-management-command-bar")
           .getByRole("heading", { name: draftTitle, exact: true }),
       ).toBeVisible();
+      await page.getByRole("navigation", { name: "任务详情分区" })
+        .getByRole("link", { name: "计划与投入", exact: true }).click();
+      await expect(page.getByRole("navigation", { name: "任务详情分区" })
+        .getByRole("link", { name: "计划与投入", exact: true })).toHaveAttribute("aria-current", "page");
+      await expect(page.getByTestId("task-plan-view")).toBeVisible();
+      await expect(page.getByTestId("time-canvas-root")).toBeVisible();
       await expect(page.getByRole("button", { name: "新增投入" })).toHaveCount(0);
       await expectHealthyPage(page);
     });
@@ -1333,6 +1371,7 @@ test.describe("project management UI project-management-ui-composer", () => {
 
       await page.goto("/progress/tasks");
       await page.getByRole("link", { name: "新建任务" }).click();
+      await openTaskComposerDisclosure(page, "关联任务与项目（可选）");
       await page.getByLabel("关联任务", { exact: true }).fill(hiddenTitle);
       await expect(page.getByText("没有匹配项。")).toBeVisible();
       await expect(
@@ -1367,6 +1406,7 @@ test.describe("project management UI project-management-ui-composer", () => {
       await page.getByRole("button", { name: "创建任务草稿" }).click();
       await expect(page.getByText(/对象不存在|无权/)).toBeVisible();
       expect(await prisma.task.count({ where: { title: forgedTitle } })).toBe(0);
+      await openTaskComposerDisclosure(page, "关联任务与项目（可选）");
       await page.getByRole("button", { name: "清空关联任务" }).click();
       await page.getByLabel("任务名称").fill("S5 Account A local draft");
       await expectLocalTaskDraft(page, { title: "S5 Account A local draft" });
@@ -1421,9 +1461,9 @@ test.describe("project management UI project-management-ui-composer", () => {
       await page.getByRole("button", { name: "全部任务", exact: true }).click();
       await expect(page.getByRole("dialog", { name: "离开任务编辑器？" })).toBeVisible();
       await page.getByRole("button", { name: "保存本地草稿并离开" }).click();
-      await expect(page.getByRole("heading", { name: "全部任务" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "任务", exact: true })).toBeVisible();
       await page.goBack();
-      await expect(page.getByRole("heading", { name: "全部任务" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "任务", exact: true })).toBeVisible();
       await expect(page.getByTestId("task-composer")).toHaveCount(0);
       await context.clearCookies();
       await loginAsTestUser(context, baseURL, {
@@ -1483,7 +1523,7 @@ test.describe("project management UI project-management-ui-composer", () => {
       await page.getByRole("button", { name: "创建任务草稿" }).click();
       await expect(
         page
-          .getByTestId("task-workbench-v2")
+          .getByTestId("project-management-command-bar")
           .getByRole("heading", { name: title, exact: true }),
       ).toBeVisible();
       const task = await prisma.task.findFirstOrThrow({

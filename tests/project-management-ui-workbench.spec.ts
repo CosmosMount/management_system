@@ -1,8 +1,9 @@
 // @playwright-project ui
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../lib/prisma";
 import { formatDateTime } from "../lib/project-management/labels";
+import { createTimeScale } from "../lib/project-management/time-canvas/time-math";
 import {
   activateTask,
   approveRevision,
@@ -26,7 +27,26 @@ import {
   milestoneInput,
   terminationInput,
 } from "./helpers/project-management-ui-fixtures";
-import { updateDraftMetadataThroughCurrentInterface } from "./helpers/project-management-plan-mutation-fixtures";
+import { openTaskComposerDisclosure, updateDraftMetadataThroughCurrentInterface } from "./helpers/project-management-plan-mutation-fixtures";
+
+async function openTaskSection(page: Page, name: "节点执行" | "计划与投入" | "风险与讨论" | "活动记录") {
+  const link = page.getByRole("navigation", { name: "任务详情分区" })
+    .getByRole("link", { name, exact: true });
+  await link.click();
+  await expect(link).toHaveAttribute("aria-current", "page");
+}
+
+async function selectExecutionNode(page: Page, name: RegExp) {
+  await openTaskSection(page, "节点执行");
+  const select = page.getByRole("combobox", { name: "查看计划节点", exact: true });
+  await expect(select).toBeVisible();
+  const option = select.locator("option").filter({ hasText: name });
+  await expect(option).toHaveCount(1);
+  const value = await option.getAttribute("value");
+  if (!value) throw new Error("查看计划节点选项缺少节点标识");
+  await select.selectOption(value);
+  await expect(select.locator("option:checked")).toContainText(name);
+}
 
 test.describe("project management UI project-management-ui-workbench", () => {
   test.beforeAll(async () => {
@@ -36,7 +56,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
       await grantRole(administrator.account.id, "PROJECT_ADMINISTRATOR");
     });
 
-  test("server-rendered Task workbench tabs remain navigable without client JavaScript", async ({
+  test("server-rendered Task workbench sections remain navigable without client JavaScript", async ({
       browser,
       baseURL,
     }, testInfo) => {
@@ -77,8 +97,26 @@ test.describe("project management UI project-management-ui-workbench", () => {
         const page = await context.newPage();
         await page.goto(`/progress/tasks/${task.taskId}`);
         await expect(page.getByTestId("task-workbench-v2")).toBeVisible();
-        await expect(page.getByTestId("task-plan-node-navigator")).toBeVisible();
+        await expect(page.getByTestId("task-execution-view")).toBeVisible();
+        await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
         await expect(page.getByRole("heading", { name: "No-JS Milestone" })).toBeVisible();
+        await openTaskSection(page, "计划与投入");
+        await expect(page).toHaveURL(/section=plan/);
+        await expect(page.getByTestId("task-plan-node-navigator")).toBeVisible();
+        await expect(page.getByTestId("time-canvas-root")).toBeVisible();
+        await openTaskSection(page, "风险与讨论");
+        await expect(page).toHaveURL(/section=collaboration/);
+        await expect(page.getByRole("heading", { name: "任务风险", exact: true })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "任务评论", exact: true })).toBeVisible();
+        await page.locator("summary").filter({ hasText: "提出任务风险" }).click();
+        await expect(page.getByLabel("风险内容")).toBeVisible();
+        await openTaskSection(page, "活动记录");
+        await expect(page).toHaveURL(/section=activity/);
+        await expect(page.getByRole("heading", { name: "近期动态" })).toBeVisible();
+        await openTaskSection(page, "节点执行");
+        await expect(page).toHaveURL(/section=execution/);
+        await expect(page.getByRole("heading", { name: "No-JS Milestone" })).toBeVisible();
+        await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
         await expect(page.getByRole("tab")).toHaveCount(0);
       } finally {
         await context.close();
@@ -169,6 +207,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
     await page.goto(
       `/progress/tasks/${fixture.taskId}?center=${encodeURIComponent("2026-08-03T09:30:00.000Z")}`,
     );
+    await openTaskSection(page, "计划与投入");
 
     const firstCheckbox = page.getByRole("checkbox", {
       name: `显示计划修订「${firstReason}」之前的计划`,
@@ -347,13 +386,15 @@ test.describe("project management UI project-management-ui-workbench", () => {
       .getByTestId("task-plan-node-navigator")
       .getByRole("button", { name: /^开始节点，开始节点，/ });
     await startNodeButton.click();
+    await expect(page.getByTestId("task-execution-view")).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "查看计划节点", exact: true }).locator("option:checked")).toContainText("开始节点");
+    await openTaskSection(page, "计划与投入");
     const currentPlanStartMarker = page.getByTestId(
       `milestone-marker-plan-start:${fixture.taskId}`,
     );
     await expect(startNodeButton).toHaveAttribute("aria-pressed", "true");
     await expect(currentPlanStartMarker).toBeVisible();
     await expect(currentPlanStartMarker).toHaveAttribute("aria-pressed", "true");
-    await expect(currentPlanStartMarker).toBeFocused();
     await expect.poll(async () => {
       const start = Number(
         await canvasRoot.getAttribute("data-viewport-start-ms"),
@@ -373,6 +414,8 @@ test.describe("project management UI project-management-ui-workbench", () => {
       .getByTestId("task-plan-node-navigator")
       .getByRole("button", { name: new RegExp(firstReason) });
     await firstRevisionNodeButton.click();
+    await expect(page.locator("#task-selected-node-detail")).toContainText(firstReason);
+    await openTaskSection(page, "计划与投入");
     await expect(
       firstHistoryRow.getByRole("button", {
         name: /终止节点 Terminal.+状态 历史计划/,
@@ -387,6 +430,8 @@ test.describe("project management UI project-management-ui-workbench", () => {
       }),
     ).toBeVisible();
     await firstRevisionNodeButton.click();
+    await expect(page.locator("#task-selected-node-detail")).toContainText(firstReason);
+    await openTaskSection(page, "计划与投入");
     await expect(
       firstHistoryRow.getByRole("button", {
         name: /终止节点 Terminal.+状态 历史计划/,
@@ -641,6 +686,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
     const currentHeader = page.getByTestId(
       `time-canvas-row-header-plan:${fixture.taskId}`,
     );
+    await openTaskSection(page, "计划与投入");
     const candidateHeader = page.getByTestId(candidateHeaderTestId);
     const candidateRow = page.getByTestId(candidateRowTestId);
     await expect(currentHeader).toBeVisible();
@@ -673,6 +719,8 @@ test.describe("project management UI project-management-ui-workbench", () => {
         name: new RegExp(`计划节点 ${candidateMilestone}.+状态 待审批候选`),
       }),
     ).toBeVisible();
+    await openTaskSection(page, "节点执行");
+    await expect(page.getByRole("heading", { name: "当前计划修订候选" })).toBeVisible();
     await expect(
       page
         .getByRole("heading", { name: "当前计划修订候选" })
@@ -697,11 +745,14 @@ test.describe("project management UI project-management-ui-workbench", () => {
     const approvalCard = page
       .getByRole("heading", { name: "当前计划修订候选" })
       .locator("../..");
+    await openTaskSection(page, "计划与投入");
     await expect(page.getByTestId(candidateHeaderTestId)).toBeVisible();
+    await openTaskSection(page, "节点执行");
     await approvalCard.getByLabel("处理说明").fill("对比确认后批准候选计划");
     await approvalCard.getByRole("button", { name: "批准" }).click();
     await expect(page.getByText("计划修订已批准并应用。")).toBeVisible();
     await expect(page.getByTestId(candidateHeaderTestId)).toHaveCount(0);
+    await openTaskSection(page, "计划与投入");
     await expect(page.getByText(`当前计划 v${targetPlan.versionNo}`)).toBeVisible();
     await expect(
       page
@@ -755,9 +806,11 @@ test.describe("project management UI project-management-ui-workbench", () => {
       name: fixture.admin.person.displayName,
     });
     await page.goto(`/progress/tasks/${fixture.taskId}`);
+    await openTaskSection(page, "计划与投入");
     await expect(page.getByTestId("pending-revision-plan-warning")).toContainText(
       "基线已失效",
     );
+    await openTaskSection(page, "节点执行");
     await expect(page.getByTestId("revision-approval-plan-warning")).toContainText(
       "批准已禁用",
     );
@@ -903,7 +956,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
       markRequestIntercepted = resolve;
     });
     let failCompletionRequests = true;
-    const emptyTaskUrl = `**/progress/tasks/${emptyTask.taskId}`;
+    const emptyTaskUrl = (url: URL) => url.pathname === `/progress/tasks/${emptyTask.taskId}`;
     await page.route(emptyTaskUrl, async (route) => {
       const request = route.request();
       const isCompletionAction =
@@ -918,10 +971,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
       await failedRequestGate;
       await route.abort("failed");
     });
-    await page
-      .getByTestId("task-plan-node-navigator")
-      .getByRole("button", { name: new RegExp(emptyTask.milestoneLabel) })
-      .click();
+    await selectExecutionNode(page, new RegExp(emptyTask.milestoneLabel));
     await requestIntercepted;
     const emptyMaterials = page.getByTestId("milestone-completion-evidences");
     await expect(emptyMaterials.getByRole("status")).toHaveText(
@@ -940,10 +990,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
     await expectHealthyPage(page);
 
     await page.goto(`/progress/tasks/${linkTask.taskId}`);
-    await page
-      .getByTestId("task-plan-node-navigator")
-      .getByRole("button", { name: new RegExp(linkTask.milestoneLabel) })
-      .click();
+    await selectExecutionNode(page, new RegExp(linkTask.milestoneLabel));
     const materials = page.getByTestId("milestone-completion-evidences");
     const safeLink = materials.getByRole("link", {
       name: "https://example.com/completed-evidence",
@@ -1167,10 +1214,13 @@ test.describe("project management UI project-management-ui-workbench", () => {
       await page.goto(`/progress/tasks/${fixture.taskId}`);
       await expect(
         page
-          .getByTestId("task-workbench-v2")
+          .getByTestId("project-management-command-bar")
           .getByRole("heading", { name: fixture.taskTitle, exact: true }),
       ).toBeVisible();
       await expect(page.getByTestId("task-workbench-v2")).toBeVisible();
+      await expect(page.getByTestId("task-execution-view")).toBeVisible();
+      await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
+      await openTaskSection(page, "计划与投入");
       await expect(page.getByTestId("task-plan-node-navigator")).toBeVisible();
       const taskTimelineHeader = page.getByTestId(
         `time-canvas-row-header-plan:${fixture.taskId}`,
@@ -1215,6 +1265,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
       }
       await expect(page.getByRole("button", { name: "保存任务" }).first()).toBeDisabled();
 
+      await openTaskComposerDisclosure(page, "补充说明与优先级");
       await page.getByLabel("描述").fill("会被撤销的本地修改");
       await expect
         .poll(() =>
@@ -1398,6 +1449,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
       });
 
       await page.goto(`/progress/tasks/${task.taskId}/edit`);
+      await openTaskComposerDisclosure(page, "补充说明与优先级");
       await page
         .getByLabel("描述", { exact: true })
         .fill("验证 DRAFT 成员集合错误不会错误标红角色搜索框");
@@ -1981,6 +2033,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
       });
 
       await page.goto(`/progress/tasks/${fixture.taskId}`);
+      await openTaskSection(page, "计划与投入");
       await page.getByRole("button", { name: "新增投入", exact: true }).click();
       const quickCreate = page.getByRole("form", { name: "投入快速创建" });
       await expect(quickCreate.locator('input[name="personId"]')).toHaveValue(
@@ -2024,6 +2077,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
     });
 
     await page.goto(`/progress/tasks/${fixture.taskId}`);
+    await openTaskSection(page, "计划与投入");
     const canvasRoot = page
       .getByTestId("resource-planner-workbench")
       .getByTestId("time-canvas-root");
@@ -2058,6 +2112,15 @@ test.describe("project management UI project-management-ui-workbench", () => {
     await canvasRoot.getByRole("button", { name: "月", exact: true }).click();
     await expect(canvasRoot).toHaveAttribute("data-zoom", "MONTH");
     await expect(page).toHaveURL(/scale=month/);
+    await canvasRoot.getByRole("button", { name: "今天", exact: true }).click();
+    const monthScale = createTimeScale({
+      range: {
+        startMs: Number(await canvasRoot.getAttribute("data-range-start-ms")),
+        endMs: Number(await canvasRoot.getAttribute("data-range-end-ms")),
+      },
+      viewportWidthPx: 1,
+      zoom: "MONTH",
+    });
     let centerBefore = Number.NaN;
     await expect
       .poll(() => {
@@ -2066,7 +2129,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
         );
         return Math.abs(centerBefore - Date.now());
       })
-      .toBeLessThan(5 * 60 * 1_000);
+      .toBeLessThan(monthScale.msPerPixel / 2 + 5_000);
     const originalRangeStart = Number(
       await canvasRoot.getAttribute("data-range-start-ms"),
     );
@@ -2344,6 +2407,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
       await page.goto(
         `/progress/tasks/${historicalTask.taskId}?center=${encodeURIComponent("2020-02-01T10:00:00.000Z")}`,
       );
+      await openTaskSection(page, "计划与投入");
       const canvasRoot = page.getByTestId("time-canvas-root");
       const nowBeforeNavigation = Date.now();
       expect(Number(await canvasRoot.getAttribute("data-range-end-ms")))
@@ -2381,6 +2445,10 @@ test.describe("project management UI project-management-ui-workbench", () => {
         .getByTestId("task-plan-node-navigator")
         .getByRole("button", { name: /历史 Milestone/ })
         .click();
+      await expect(page.getByTestId("task-execution-view")).toBeVisible();
+      await expect(page).toHaveURL((url) => url.searchParams.get("section") === "execution");
+      await expect(page.locator("#task-selected-node-detail")).toContainText("历史 Milestone");
+      await expect(canvasRoot).toBeHidden();
       await expect
         .poll(
           () => {
@@ -2392,6 +2460,8 @@ test.describe("project management UI project-management-ui-workbench", () => {
           { timeout: 15_000 },
         )
         .toBeLessThan(60_000);
+      await openTaskSection(page, "计划与投入");
+      await expect(canvasRoot).toBeVisible();
       await expect.poll(async () => {
         const start = Number(await canvasRoot.getAttribute("data-viewport-start-ms"));
         const end = Number(await canvasRoot.getAttribute("data-viewport-end-ms"));
@@ -2399,6 +2469,17 @@ test.describe("project management UI project-management-ui-workbench", () => {
       }).toBe(true);
 
       await page.goBack();
+      await expect(page).toHaveURL((url) => url.searchParams.get("section") === "execution");
+      await expect(page.getByTestId("task-execution-view")).toBeVisible();
+      await expect(canvasRoot).toBeHidden();
+      await page.goBack();
+      await expect(page.getByRole("navigation", { name: "任务详情分区" })
+        .getByRole("link", { name: "计划与投入", exact: true })).toHaveAttribute("aria-current", "page");
+      await expect(canvasRoot).toBeVisible();
+      await expect.poll(() => {
+        const center = Date.parse(new URL(page.url()).searchParams.get("center") ?? "");
+        return Math.abs(center - Date.now());
+      }).toBeLessThan(12 * 60 * 60 * 1_000);
       await expect.poll(async () => {
         const now = Date.now();
         const start = Number(await canvasRoot.getAttribute("data-viewport-start-ms"));
@@ -2406,6 +2487,9 @@ test.describe("project management UI project-management-ui-workbench", () => {
         return start <= now && now < end;
       }).toBe(true);
       await page.goForward();
+      await expect(page).toHaveURL((url) => url.searchParams.get("section") === "execution");
+      await expect(page.getByTestId("task-execution-view")).toBeVisible();
+      await expect(canvasRoot).toBeHidden();
       await expect
         .poll(
           () => {
@@ -2417,6 +2501,10 @@ test.describe("project management UI project-management-ui-workbench", () => {
           { timeout: 15_000 },
         )
         .toBeLessThan(60_000);
+      await page.goForward();
+      await expect(page.getByRole("navigation", { name: "任务详情分区" })
+        .getByRole("link", { name: "计划与投入", exact: true })).toHaveAttribute("aria-current", "page");
+      await expect(canvasRoot).toBeVisible();
       await expect
         .poll(
           async () => {
@@ -2461,6 +2549,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
         name: fixture.owner.person.displayName,
       });
       await page.goto(`/progress/tasks/${fixture.taskId}`);
+      await openTaskSection(page, "计划与投入");
       await page.getByRole("button", { name: "新增投入", exact: true }).click();
       const quickCreate = page.getByRole("form", { name: "投入快速创建" });
       const segmentPersonPicker = quickCreate.getByLabel("人员", { exact: true });
@@ -2488,6 +2577,8 @@ test.describe("project management UI project-management-ui-workbench", () => {
       );
       await quickCreate.getByRole("button", { name: "取消", exact: true }).click();
       await page.getByRole("link", { name: "编辑任务" }).click();
+      await expect(page).toHaveURL(`/progress/tasks/${fixture.taskId}/edit`);
+      await openTaskComposerDisclosure(page, "关联任务与项目（可选）");
       const relatedPicker = page.getByLabel("关联任务", { exact: true });
       await relatedPicker.fill(relatedTitle);
       await page
@@ -2523,6 +2614,8 @@ test.describe("project management UI project-management-ui-workbench", () => {
           memberCount: 1,
         });
       await page.getByRole("link", { name: "编辑任务" }).click();
+      await expect(page).toHaveURL(`/progress/tasks/${fixture.taskId}/edit`);
+      await openTaskComposerDisclosure(page, "关联任务与项目（可选）");
       await expect(relatedPicker).toHaveValue(relatedTitle);
       await expect(page.getByText(addedMember.person.displayName)).toBeVisible();
       await expectHealthyPage(page);
@@ -2577,18 +2670,18 @@ test.describe("project management UI project-management-ui-workbench", () => {
     await expect(page.getByTestId("task-approval-gate")).toContainText(
       "里程碑",
     );
-    const [overviewBox, approvalGateBox, timelineBox] = await Promise.all([
+    const [overviewBox, approvalGateBox, executionBox] = await Promise.all([
       page.getByTestId("task-overview").boundingBox(),
       page.getByTestId("task-approval-gate").boundingBox(),
-      page.getByTestId("task-timeline-layer").boundingBox(),
+      page.getByTestId("task-execution-view").boundingBox(),
     ]);
-    if (!overviewBox || !approvalGateBox || !timelineBox) {
+    if (!overviewBox || !approvalGateBox || !executionBox) {
       throw new Error("无法读取 Task 审批门禁的布局位置");
     }
     expect(approvalGateBox.y).toBeGreaterThan(
       overviewBox.y + overviewBox.height,
     );
-    expect(timelineBox.y).toBeGreaterThan(
+    expect(executionBox.y).toBeGreaterThan(
       approvalGateBox.y + approvalGateBox.height,
     );
     await page.evaluate(() => {
@@ -2670,7 +2763,8 @@ test.describe("project management UI project-management-ui-workbench", () => {
 
     await page.goto(`/progress/tasks/${fixture.taskId}`);
     await expect(page.getByTestId("task-workbench-v2")).toBeVisible();
-    await expect(page.getByTestId("task-plan-node-navigator")).toBeVisible();
+    await expect(page.getByTestId("task-execution-view")).toBeVisible();
+    await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
     await expect(page.getByRole("tab")).toHaveCount(0);
     await page.getByRole("button", { name: "修改任务基本信息" }).click();
     const editor = page.getByRole("dialog", { name: "修改任务基本信息" });
@@ -2767,10 +2861,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
     await page.getByLabel("审批说明").fill("Task UI v2 管理员通过");
     await page.getByRole("button", { name: "通过", exact: true }).click();
     await expect(page.getByText("验收已通过。")).toBeVisible();
-    await page
-      .getByTestId("task-plan-node-navigator")
-      .getByRole("button", { name: /P6 UI 第一阶段/ })
-      .click();
+    await selectExecutionNode(page, /P6 UI 第一阶段/);
     const completedMilestone = await prisma.milestoneNode.findUniqueOrThrow({
       where: { nodeId: fixture.activeNodeId },
       select: { completedAt: true },
@@ -2791,10 +2882,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
       name: fixture.member.person.displayName,
     });
     await page.goto(`/progress/tasks/${fixture.taskId}`);
-    await page
-      .getByTestId("task-plan-node-navigator")
-      .getByRole("button", { name: /Terminal/ })
-      .click();
+    await selectExecutionNode(page, /Terminal/);
     await expect(page.getByLabel("结束结果")).toBeVisible();
     await page.getByLabel("结束结果").selectOption("CANCELLED");
     await expect(page.getByLabel("原因")).toHaveAttribute("maxlength", "2000");
@@ -2839,10 +2927,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
       name: fixture.admin.person.displayName,
     });
     await page.goto(`/progress/tasks/${fixture.taskId}`);
-    await page
-      .getByTestId("task-plan-node-navigator")
-      .getByRole("button", { name: /Terminal/ })
-      .click();
+    await selectExecutionNode(page, /Terminal/);
     await expect(
       page.getByRole("heading", { name: "当前待审批结束申请" }),
     ).toBeVisible();
@@ -2888,10 +2973,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
       name: fixture.member.person.displayName,
     });
     await page.goto(`/progress/tasks/${fixture.taskId}`);
-    await page
-      .getByTestId("task-plan-node-navigator")
-      .getByRole("button", { name: /Terminal/ })
-      .click();
+    await selectExecutionNode(page, /Terminal/);
     await expect(page.getByText("上一轮结束申请已驳回")).toBeVisible();
     await expect(page.getByLabel("总结")).toHaveValue(
       "Task UI v2 已补充结束总结",
@@ -2903,10 +2985,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
       name: fixture.admin.person.displayName,
     });
     await page.goto(`/progress/tasks/${fixture.taskId}`);
-    await page
-      .getByTestId("task-plan-node-navigator")
-      .getByRole("button", { name: /Terminal/ })
-      .click();
+    await selectExecutionNode(page, /Terminal/);
     await page.getByLabel("审批说明").fill("Task UI v2 管理员批准结束");
     await page.getByRole("button", { name: "通过", exact: true }).click();
     await expect(page.getByText("任务结束申请已通过。")).toBeVisible();
@@ -2928,6 +3007,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
       },
     });
     expect(completedTermination.confirmedAt).not.toBeNull();
+    await page.locator("summary").filter({ hasText: "任务资料与成员" }).click();
     await expect(
       page.getByText("实际结束", { exact: true }).locator(".."),
     ).toContainText(formatDateTime(completedTermination.confirmedAt));
@@ -2944,12 +3024,14 @@ test.describe("project management UI project-management-ui-workbench", () => {
     );
     await expect(page.getByText("上一轮结束申请已驳回")).toHaveCount(0);
     await expect(page.getByText("上一轮结束申请需要修订")).toHaveCount(0);
+    await openTaskSection(page, "风险与讨论");
     await expect(
       page.getByRole("heading", { name: "任务风险", exact: true }),
     ).toBeVisible();
     await expect(
       page.getByRole("heading", { name: "任务评论", exact: true }),
     ).toBeVisible();
+    await openTaskSection(page, "活动记录");
     await expect(page.getByRole("heading", { name: "近期动态" })).toBeVisible();
     expect(
       await page.evaluate(
@@ -2984,6 +3066,8 @@ test.describe("project management UI project-management-ui-workbench", () => {
       "CREATE_REVISION",
     );
     await expect(page.getByTestId("task-plan-node-navigator")).toBeVisible();
+    await page.getByRole("navigation", { name: "任务表单分区" })
+      .getByRole("button", { name: "1. 基本资料", exact: true }).click();
     const revisionTaskInfo = page.getByLabel("任务基本信息");
     await expect(
       revisionTaskInfo.getByRole("heading", { name: "基本信息" }),
@@ -3009,6 +3093,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
       "task-composer-anchor-multi-selection",
     );
     if (testInfo.project.name === "desktop") {
+      await openTaskComposerDisclosure(page, "时间画布与批量调整（高级）");
       await expect(multiSelection).toContainText("已选 1 个可编辑节点");
       const canvas = page.getByTestId("time-canvas-root");
       const revisionMarker = canvas.getByRole("button", {
@@ -3200,10 +3285,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
     await approvalCard.getByLabel("处理说明").fill("同意应用修订计划");
     await approvalCard.getByRole("button", { name: "批准" }).click();
     await expect(page.getByText("计划修订已批准并应用。")).toBeVisible();
-    await page
-      .getByTestId("task-plan-node-navigator")
-      .getByRole("button", { name: new RegExp(secondReason) })
-      .click();
+    await selectExecutionNode(page, new RegExp(secondReason));
     const selectedRevision = page.locator("#task-selected-node-detail");
     await expect(selectedRevision).toContainText(secondReason);
     await expect(selectedRevision).toContainText(secondDescription);

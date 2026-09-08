@@ -1,7 +1,7 @@
 import { PageCommandBar } from "@/components/project-management/shell/page-command-bar";
 import { TaskList } from "@/components/project-management/task-list";
-import { Button, buttonVariants } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { buttonVariants } from "@/components/ui/button";
+import { ListFilterForm } from "@/components/project-management/list-filter-form";
 import {
   taskPriorityLabels,
   taskStatusLabels,
@@ -73,8 +73,7 @@ export default async function ProgressTasksPage({
   return (
     <>
       <PageCommandBar
-        title="全部任务"
-        description="按状态、优先级和关键词查看当前可见任务。"
+        title="任务"
         actions={
           actor.isActive === false ? null : (
             <Link href={routes.progress.taskNew} className={cn(buttonVariants())}>
@@ -83,57 +82,30 @@ export default async function ProgressTasksPage({
           )
         }
       />
-      <div className="mx-auto flex w-full min-w-0 max-w-[96rem] flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
+      <div className="mx-auto flex w-full min-w-0 max-w-[96rem] flex-col gap-4 px-4 py-6 sm:px-6 lg:px-8">
           {firstParam(params.cursorError) === "1" && (
             <p role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
               任务列表已变化，已为你返回第一页。
             </p>
           )}
-          <form className="grid gap-3 rounded-lg border border-border bg-card p-4 md:grid-cols-[1fr_160px_160px_auto_auto]">
-            <Input
-              name="q"
-              defaultValue={query}
-              placeholder="搜索任务名称或描述"
-              aria-label="搜索任务名称或描述"
-            />
-            <select
-              name="status"
-              defaultValue={status}
-              aria-label="任务状态"
-              className="h-8 rounded-lg border border-input bg-background px-2 text-sm"
-            >
-              <option value="">全部状态</option>
-              {statusValues.map((value) => (
-                <option key={value} value={value}>
-                  {taskStatusLabels[value]}
-                </option>
-              ))}
-            </select>
-            <select
-              name="priority"
-              defaultValue={priority}
-              aria-label="任务优先级"
-              className="h-8 rounded-lg border border-input bg-background px-2 text-sm"
-            >
-              <option value="">全部优先级</option>
-              {priorityValues.map((value) => (
-                <option key={value} value={value}>
-                  {taskPriorityLabels[value]}
-                </option>
-              ))}
-            </select>
-            <label className="flex h-8 items-center gap-2 text-sm text-muted-foreground">
-              <input type="hidden" name="mine" value="0" />
-              <input
-                type="checkbox"
-                name="mine"
-                value="1"
-                defaultChecked={mine}
-              />
-              只看我参与
-            </label>
-            <Button type="submit">筛选</Button>
-          </form>
+          <ListFilterForm
+            action={routes.progress.tasks}
+            label="任务筛选"
+            searchLabel="搜索任务名称或描述"
+            query={query}
+            filters={[
+              { name: "mine", label: "任务范围", value: mine ? "1" : "0", options: [{ value: "1", label: "我参与的任务" }, { value: "0", label: "全部可见任务" }] },
+              { name: "status", label: "任务状态", value: statusValues.includes(status as (typeof statusValues)[number]) ? status : "", options: [{ value: "", label: "全部状态" }, ...statusValues.map((value) => ({ value, label: taskStatusLabels[value] }))] },
+              { name: "priority", label: "任务优先级", value: priorityValues.includes(priority as (typeof priorityValues)[number]) ? priority : "", options: [{ value: "", label: "全部优先级" }, ...priorityValues.map((value) => ({ value, label: taskPriorityLabels[value] }))] },
+            ]}
+            className="grid min-w-0 items-center gap-3 rounded-lg border border-border bg-card p-3 lg:grid-cols-[minmax(0,1fr)_150px_130px_130px_auto_auto]"
+          />
+          <details data-testid="task-list-scope" className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+            <summary className="w-fit cursor-pointer rounded focus-visible:outline-2 focus-visible:outline-ring">{query ? "本次搜索" : "本页"}显示 {tasks.items.length} 项 · 筛选说明</summary>
+            <p className="mt-2">
+              当前范围：{mine ? "我参与的任务" : "全部可见任务"} · {statusValues.includes(status as (typeof statusValues)[number]) ? taskStatusLabels[status as (typeof statusValues)[number]] : "全部状态（含终态与归档）"} · {priorityValues.includes(priority as (typeof priorityValues)[number]) ? taskPriorityLabels[priority as (typeof priorityValues)[number]] : "全部优先级"}{query ? ` · 关键词：${query}` : ""}
+            </p>
+          </details>
           {tasks.hasMoreByQuery && (
             <p className="text-sm text-amber-700" role="status">
               搜索结果较多，仅显示最相关的 50 条，请继续输入关键词缩小范围。

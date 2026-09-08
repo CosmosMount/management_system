@@ -222,7 +222,7 @@ Action Inbox 聚合的稳定公共出口位于 `lib/project-management/queries/a
 
 采购管理沿用相同的 `PageCommandBar` 上下文命令栏模式，并通过采购模块标签与独立测试标识区分。看板、待办、新建、列表、订单详情和编辑页均不渲染返回按钮；订单状态与可用业务操作统一放在命令栏右侧，页面切换由桌面侧栏或移动端抽屉承担。独立工坊加工费入口已下线，旧路径返回 404；普通采购明细中的加工费种类与历史 `isWorkshopFee` 订单保持兼容。
 
-Task Composer 支持 `CREATE`、`EDIT_DRAFT`、`CREATE_REVISION`、`RESUBMIT_REVISION` 四种模式。桌面端采用“Task/Revision 信息 / TimeCanvas 与节点表 / 节点 Inspector”三栏，画布与节点表使用同一受控选择和实时节点状态；Inspector 不设保存/取消，连续编辑按节点合并为一条撤销历史。桌面 TimeCanvas 另维护瞬时的可编辑锚点集合，支持 Shift 增减、空白矩形框选和整组拖动；集合不属于 `TaskComposerSeed`，不进入提交 payload、v4 本地草稿、数据库、审计或通知。桌面批量移动要求显式选择“当前及后续”或“仅已选节点”，再按正整数天前移或后移；“当前及后续”以当前焦点的移动前时间为边界并跳过只读承接节点，“仅已选节点”只接受完整的可编辑选中组。整组移动先对所有目标应用同一时间差，再校验完整计划，任一节点冲突、越界或违反 Revision 锁定边界时零修改；成功只提交一个历史项。新增 Milestone 立即成为 Composer 专用临时节点，补全后自动转正；Task 编辑保留既有 `nodeId`，新节点的 Composer ID 作为提交 `clientKey`。Revision 模式固定 Start，把已完成 Milestone 和已生效 Revision 作为只读承接节点，仅提交可替换 Milestone、当前 Revision 时间/原因和 Terminal；这些只读承接节点也不会加入桌面多选，Revision Marker 不参与阶段带边界。节点元数据保存临时生命周期和无效时间输入期间的最后合法画布位置，不进入服务端 DTO。Pixel 5 保留纵向实时编辑，但不显示桌面画布、多选布局或批量移动入口。Composer 只复用时间坐标与交互，不查询成员 Planned/Actual/Busy。
+Task Composer 支持 `CREATE`、`EDIT_DRAFT`、`CREATE_REVISION`、`RESUBMIT_REVISION` 四种模式。桌面端按“基本资料 / 计划节点 / 检查保存或送审”分区，补充说明与可选关联按需展开；计划区由画布和节点编辑组成，画布与节点表使用同一受控选择和实时节点状态；Inspector 不设保存/取消，连续编辑按节点合并为一条撤销历史。桌面 TimeCanvas 另维护瞬时的可编辑锚点集合，支持 Shift 增减、空白矩形框选和整组拖动；集合不属于 `TaskComposerSeed`，不进入提交 payload、v4 本地草稿、数据库、审计或通知。桌面批量移动要求显式选择“当前及后续”或“仅已选节点”，再按正整数天前移或后移；“当前及后续”以当前焦点的移动前时间为边界并跳过只读承接节点，“仅已选节点”只接受完整的可编辑选中组。整组移动先对所有目标应用同一时间差，再校验完整计划，任一节点冲突、越界或违反 Revision 锁定边界时零修改；成功只提交一个历史项。新增 Milestone 立即成为 Composer 专用临时节点，补全后自动转正；Task 编辑保留既有 `nodeId`，新节点的 Composer ID 作为提交 `clientKey`。Revision 模式固定 Start，把已完成 Milestone 和已生效 Revision 作为只读承接节点，仅提交可替换 Milestone、当前 Revision 时间/原因和 Terminal；这些只读承接节点也不会加入桌面多选，Revision Marker 不参与阶段带边界。节点元数据保存临时生命周期和无效时间输入期间的最后合法画布位置，不进入服务端 DTO。Pixel 5 保留纵向实时编辑，但不显示桌面画布、多选布局或批量移动入口。Composer 只复用时间坐标与交互，不查询成员 Planned/Actual/Busy。
 
 Composer 的浏览器安全契约位于 `lib/project-management/composer-contract.ts`，服务端 seed 构造器不再依赖客户端组件。计划时间与节点变换、校验和提交指纹、v4 草稿解析、提交 payload、撤销历史、自动保存和离开保护分别由独立模块负责；客户端壳只组合表单、计划编辑器、恢复提示和业务命令。恢复边界只接受 v4 envelope；v1/v2/v3 不读取、不转换也不导出。`task-composer-legacy-draft-tombstone.ts` 只删除旧 localStorage key 与 IndexedDB 正文，首次生产发布满 30 天后删除该 tombstone 与调用点。
 
@@ -244,13 +244,19 @@ TimeCanvas 的显示尺度为 `WEEK/MONTH/QUARTER/YEAR`，密度分别为 40/12/
 
 ### 项目管理 UI 基础规范
 
+详情深链中的 `focus` 用于首次定位；用户显式切换分区时消费该参数，保留 `center`、`scale` 及当前页面的节点选择，避免旧定位的服务端规范重定向覆盖新的分区导航。浏览器返回原深链仍重新应用定位；项目范围外定位只发起一次带新 `focus` 的导航。
+
+详情使用 `detail-views.tsx` 的原生链接导航：`section` 选择互斥视图，旧 `#risks` 揭示协作区，项目的 `#establishment` 审批上下文始终保留。首次打开才挂载视图，此后隐藏而不卸载，保留验收材料、评论和投入创建输入。隐藏画布的 ResizeObserver、布局与已排队滚动回调均跳过零宽度容器；分区使用 Next router 导航并从 useSearchParams 读取已提交视图；画布中心沿用原有临时 history 写入，不干扰进行中的页面导航。隐藏分区暂停画布 URL 写回与后台数据块加载。服务端仍装配原详情数据，这不是查询延迟加载优化；每个详情仅保留一个活动版本轮询器。
+
+工作台的 `view=management` 分支在认证后独立加载管理概览，不装配个人时间画布。`management-overview-queries.ts` 复用项目/任务可读条件，风险限制为 ACTIVE 且父对象未删除；计数独立于每页 12 条预览，游标按创建时间与 ID 降序，使用当前仍可读的风险锚点重新校验，失效时恢复首页。计数和列表是实时读取，不承诺跨请求快照。个人紧急待办继续来自原 Action Inbox，不扩展成全员审批列表。原 `focus` 深链优先规范化到 `view=schedule`，关闭定位后仍保留日程视图；默认工作台不挂载个人画布。
+
 项目域导航通过 `projectNavigationItems` 提供中文名称和可选 `group`。共享 `ManagementShell` 按连续分组显示标题，折叠时保留可访问的链接名称和未读数；采购不传分组，继续保持原顺序。移动抽屉采用固定高度的弹性布局，导航区域独立纵向滚动，短屏仍可访问末尾通知入口和关闭按钮。
 
 共享 `PageCommandBar` 保留服务端传入的标题、说明和操作区域，客户端仅处理当前位置和标题展开。项目域根据现有导航匹配生成面包屑，长标题默认两行，完整标题通过有 `aria-expanded` / `aria-controls` 的按钮展开；采购沿用其自身模块标签，不生成项目面包屑。字体、间距、边框、状态、焦点和按钮继续复用既有 Tailwind 语义颜色、`--pm-*` 变量与 UI primitives，不引入第二套主题或组件库。
 
 `/progress/notifications?view=settings` 是同一受保护页面的设置视图，并非新增权限或 API。服务端根据规范视图分别加载偏好或通知列表，默认列表不再附带加载与渲染偏好。视图链接仅保留现有合法分类、未读条件和游标，不丢失列表上下文；无效列表游标继续走原恢复规则。偏好保存仍复用原 server action，停用限制、通知强制事件和 outbox 语义均不改变。
 
-该阶段只调整入口和展示：不修改工作台排序、项目/任务详情三层布局、数据库状态、业务记录名称或画布引擎。中文文案测试应检查显示标签，不更改用来测试业务数据的原始 Task/Project 名称和内部枚举。
+第一阶段仅统一入口；当前桌面布局改为行动优先工作台与真正互斥的详情分区。数据库状态、业务记录名称和画布计算语义保持不变。中文文案测试应检查显示标签，不更改用来测试业务数据的原始 Task/Project 名称和内部枚举。
 
 ### Task 权限迁移与审批通知修复
 
@@ -299,7 +305,7 @@ TimeCanvas 的显示尺度为 `WEEK/MONTH/QUARTER/YEAR`，密度分别为 40/12/
 | `/progress/projects/new` | 提交 Project 立项 |
 | `/progress/projects/[id]` | Project 详情与立项审批 |
 | `/progress/projects/[id]/edit` | 驳回重提或 ACTIVE Project 编辑 |
-| `/progress/tasks/new` | Task 创建页（桌面三栏 Composer、移动纵向编辑） |
+| `/progress/tasks/new` | Task 创建页（分区 Composer、按需展开补充资料） |
 | `/progress/tasks/[id]/revisions/new` | Revision 创建并送审 Composer |
 | `/progress/tasks/[id]/revisions/[revisionId]/edit` | 被驳回 Revision 修改并重新送审 Composer |
 | `/progress/tasks/[id]` | Task 工作台 |

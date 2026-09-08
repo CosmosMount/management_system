@@ -240,14 +240,18 @@ test.describe("Project/Task 风险、评论与近期动态", () => {
       name: owner.displayName,
     });
     await page.goto(`/progress/tasks/${draft.taskId}`);
+    const taskSections = page.getByRole("navigation", { name: "任务详情分区" });
+    await taskSections.getByRole("link", { name: "活动记录", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "近期动态" })).toBeVisible();
+    await taskSections.getByRole("link", { name: "风险与讨论", exact: true }).click();
     await expect(
       page.getByRole("heading", { name: "任务风险", exact: true }),
     ).toBeVisible();
     await expect(
       page.getByRole("heading", { name: "任务评论", exact: true }),
     ).toBeVisible();
-    await expect(page.getByRole("heading", { name: "近期动态" })).toBeVisible();
     const uiRiskContent = `浏览器提出的风险 ${randomUUID()}`;
+    await page.locator("summary").filter({ hasText: "提出任务风险" }).click();
     await page.getByLabel("风险内容").fill(uiRiskContent);
     await page.getByRole("button", { name: "提出风险", exact: true }).click();
     await expect(page.getByText(uiRiskContent, { exact: true })).toBeVisible();
@@ -309,11 +313,15 @@ test.describe("Project/Task 风险、评论与近期动态", () => {
       name: admin.displayName,
     });
     await page.goto(`/progress/projects/${project.id}`);
-    await expect(page.getByText("项目自身风险", { exact: true })).toBeVisible();
-    await expect(page.getByText("当前所属任务风险", { exact: true })).toBeVisible();
-    await expect(page.getByText("Project 自身存在的风险", { exact: true })).toBeVisible();
-    await expect(page.getByText("需要在 Project 汇总区展示的 Task 风险", { exact: true })).toBeVisible();
-    const commentCard = page.locator("article").filter({ hasText: "所有已登录用户都可以发布的 Project 评论" });
+    await page.getByRole("navigation", { name: "项目详情视图" })
+      .getByRole("link", { name: "风险与讨论", exact: true }).click();
+    const projectCollaboration = page.getByTestId("project-collaboration-view");
+    await expect(projectCollaboration).toBeVisible();
+    await expect(projectCollaboration.getByRole("heading", { name: "项目自身风险", exact: true })).toBeVisible();
+    await expect(projectCollaboration.getByRole("heading", { name: "当前所属任务风险", exact: true })).toBeVisible();
+    await expect(projectCollaboration.getByText("Project 自身存在的风险", { exact: true })).toBeVisible();
+    await expect(projectCollaboration.getByText("需要在 Project 汇总区展示的 Task 风险", { exact: true })).toBeVisible();
+    const commentCard = projectCollaboration.locator("article").filter({ hasText: "所有已登录用户都可以发布的 Project 评论" });
     const notificationCountsBeforeCommentDelete = await Promise.all([
       prisma.notificationOutbox.count({
         where: {
@@ -434,6 +442,10 @@ test.describe("Project/Task 风险、评论与近期动态", () => {
     });
     await page.goto(`/progress/tasks/${draft.taskId}`);
 
+    await page.getByRole("navigation", { name: "任务详情分区" })
+      .getByRole("link", { name: "风险与讨论", exact: true }).click();
+    await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
+    await page.locator("summary").filter({ hasText: "提出任务风险" }).click();
     const riskInput = page.getByLabel("风险内容");
     await expect(riskInput).not.toHaveAttribute("aria-invalid", "true");
     await page.getByRole("button", { name: "提出风险", exact: true }).click();

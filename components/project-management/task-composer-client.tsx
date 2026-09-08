@@ -493,7 +493,7 @@ export function TaskComposerClient({
     if (issue.entityId) {
       selectEntity(issue.entityId);
     }
-    window.setTimeout(() => document.getElementById(issue.key)?.focus(), 0);
+    window.setTimeout(() => revealComposerTarget(issue.key), 0);
   };
 
   const runValidation = () => {
@@ -763,6 +763,17 @@ export function TaskComposerClient({
             </Button>
           </div>
         </div>
+        <nav aria-label="任务表单分区" className="mx-auto mt-2 flex max-w-[110rem] flex-wrap gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={() => revealComposerTarget("task-composer-basics", "start")}>
+            1. 基本资料
+          </Button>
+          <Button type="button" variant="outline" size="sm" onClick={() => revealComposerTarget("task-composer-plan", "start")}>
+            2. 计划节点
+          </Button>
+          <Button type="button" variant="outline" size="sm" onClick={() => revealComposerTarget("task-composer-review", "start")}>
+            {isRevisionComposer ? "3. 检查送审" : "3. 检查保存"}
+          </Button>
+        </nav>
       </div>
 
       {recovery?.kind === "VALID" && (
@@ -883,8 +894,15 @@ export function TaskComposerClient({
       )}
 
       <div className="mx-auto flex w-full min-w-0 max-w-[110rem] flex-col gap-4 px-4 py-5 sm:px-6 lg:px-8">
+        <details id="task-composer-basics" open={!isRevisionComposer} className="scroll-mt-40 rounded-xl border border-border bg-card" tabIndex={-1}>
+          <summary className="cursor-pointer rounded-xl p-4 font-semibold focus-visible:outline-2 focus-visible:outline-ring sm:px-5">
+            1. 基本资料
+            <span className="ml-3 text-sm font-normal text-muted-foreground">
+              {isRevisionComposer ? "沿用当前任务资料（只读）" : "名称、分类与成员"}
+            </span>
+          </summary>
         <aside
-          className="min-w-0 space-y-5 rounded-xl border border-border bg-card p-4 sm:p-5 [&>section]:border-0 [&>section]:bg-transparent [&>section]:p-0"
+          className="grid min-w-0 gap-5 p-4 pt-0 sm:p-5 sm:pt-0 lg:grid-cols-2 [&>section]:border-0 [&>section]:bg-transparent [&>section]:p-0"
           aria-label="任务基本信息"
         >
           <ComposerSection title="基本信息" issueCount={countIssues(issues, ["title", "description", "priority"])}>
@@ -900,6 +918,13 @@ export function TaskComposerClient({
               />
               <FieldError id="title-error" messages={issueMessages("title")} className="mt-1.5" />
             </Field>
+            <details className="rounded-lg border border-border p-3">
+              <summary className="cursor-pointer text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">
+                补充说明与优先级
+                <span className="ml-2 text-xs text-muted-foreground">{taskPriorityLabels[state.priority]}优先级{state.description ? " · 已填写描述" : ""}</span>
+                {countIssues(issues, ["description", "priority"]) > 0 && <Badge variant="destructive" className="ml-2">需修正</Badge>}
+              </summary>
+              <div className="mt-3 space-y-3">
             <Field label="描述" htmlFor="description">
               <Textarea
                 id="description"
@@ -933,6 +958,8 @@ export function TaskComposerClient({
               </select>
               <FieldError id="priority-error" messages={issueMessages("priority")} className="mt-1.5" />
             </Field>
+              </div>
+            </details>
           </ComposerSection>
 
           <ComposerSection
@@ -977,6 +1004,13 @@ export function TaskComposerClient({
                 <FieldError id="tech-group-error" messages={issueMessages("techGroup")} className="mt-1.5" />
               </Field>
             </div>
+            <details className="rounded-lg border border-border p-3">
+              <summary className="cursor-pointer text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">
+                关联任务与项目（可选）
+                {(state.relatedTaskId || state.projectId) && <Badge variant="secondary" className="ml-2">已设置</Badge>}
+                {countIssues(issues, ["related-task", "task-project"]) > 0 && <Badge variant="destructive" className="ml-2">需修正</Badge>}
+              </summary>
+              <div className="mt-3 space-y-3">
             <Field label="关联任务" htmlFor="related-task">
               <TaskSelect
                 inputId="related-task"
@@ -1005,6 +1039,8 @@ export function TaskComposerClient({
               />
               <FieldError id="task-project-error" messages={issueMessages("task-project")} className="mt-1.5" />
             </Field>
+              </div>
+            </details>
           </ComposerSection>
 
           <ComposerSection title="成员" issueCount={countIssues(issues, ["members"])}>
@@ -1044,7 +1080,13 @@ export function TaskComposerClient({
             )}
           </ComposerSection>
         </aside>
+        </details>
 
+        <section id="task-composer-plan" aria-labelledby="task-composer-plan-title" tabIndex={-1} className="min-w-0 scroll-mt-40 space-y-3">
+          <div>
+            <h2 id="task-composer-plan-title" className="font-semibold">2. 计划节点</h2>
+            <p className="mt-1 text-sm text-muted-foreground">先选择节点，再填写右侧内容；时间画布与批量调整按需展开。</p>
+          </div>
         <TaskComposerPlanEditor
           state={state}
           globalMarkers={initialGlobalMarkers}
@@ -1090,6 +1132,29 @@ export function TaskComposerClient({
           onDeleteMilestones={removeMilestones}
           onSubmit={submit}
         />
+        </section>
+
+        <section id="task-composer-review" aria-labelledby="task-composer-review-title" tabIndex={-1} className="scroll-mt-40 space-y-4 rounded-xl border border-border bg-card p-4 sm:p-5">
+          <h2 id="task-composer-review-title" className="font-semibold">{isRevisionComposer ? "3. 检查与送审" : "3. 检查与保存"}</h2>
+          <dl className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+            <div className="min-w-0"><dt className="text-muted-foreground">任务名称</dt><dd className="mt-1 break-words [overflow-wrap:anywhere]">{state.title || "尚未填写"}</dd></div>
+            <div><dt className="text-muted-foreground">计划节点</dt><dd className="mt-1">开始 → {state.milestones.length} 个里程碑 → 结束</dd></div>
+            <div><dt className="text-muted-foreground">成员</dt><dd className="mt-1">{state.members.filter((member) => member.role === "OWNER").length} 名负责人 · {state.members.length} 名成员</dd></div>
+            <div><dt className="text-muted-foreground">本次操作</dt><dd className="mt-1">{isRevisionComposer ? "提交候选计划审批" : isEditingDraft ? "保存草稿修改" : "创建任务草稿"}</dd></div>
+          </dl>
+          <p className="text-sm text-muted-foreground">
+            {isRevisionComposer
+              ? "提交后进入审批，当前生效计划不会立即被替换；承接节点保持只读。"
+              : "允许不添加里程碑；草稿可暂不设置成员，激活前仍需有效负责人。保存时沿用原有字段与计划校验。"}
+          </p>
+          <p className="text-sm text-muted-foreground">本地自动保存不等于已提交到服务端。若校验未通过，将展开并定位需要修改的字段。</p>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span className="text-sm text-muted-foreground">{issues.length > 0 ? `${issues.length} 项待修正` : "请核对资料、计划时间与本次操作"}</span>
+            <Button type="button" disabled={submitting || (isEditingDraft && !dirty)} onClick={submit}>
+              {submitting ? "正在提交…" : isEditingDraft ? "确认保存任务" : isResubmittingRevision ? "确认修改并重新送审" : isRevisionComposer ? "确认创建并送审" : "确认创建草稿"}
+            </Button>
+          </div>
+        </section>
       </div>
 
       <Dialog
@@ -1173,6 +1238,17 @@ export function TaskComposerClient({
       </Dialog>
     </div>
   );
+}
+
+function revealComposerTarget(targetId: string, block: ScrollLogicalPosition = "center") {
+  const target = document.getElementById(targetId);
+  let ancestor: HTMLElement | null = target;
+  while (ancestor) {
+    if (ancestor instanceof HTMLDetailsElement) ancestor.open = true;
+    ancestor = ancestor.parentElement;
+  }
+  target?.scrollIntoView({ block });
+  target?.focus({ preventScroll: true });
 }
 
 function ComposerSection({

@@ -94,7 +94,7 @@ export default async function ProgressTaskEditPage({
     <>
       <PageCommandBar
         title="编辑任务"
-        description="统一调整草稿的基本信息、成员和完整计划；保存后返回任务工作台。"
+        description="按基本资料、计划节点、检查保存调整草稿；分区切换不会丢弃当前填写内容。"
       />
       <TaskComposerClient
         accountId={actor.accountId}

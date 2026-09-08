@@ -1,6 +1,6 @@
 // @playwright-project ui
 import { randomUUID } from "node:crypto";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { prisma } from "../lib/prisma";
 import { revokeAccountRole } from "../lib/account-management";
 import {
@@ -28,18 +28,8 @@ import {
 } from "../lib/project-management/queries/time-canvas-queries";
 import {
   expectHealthyPage,
-  expectThreeLayerDetailLayout,
   loginAsTestUser,
 } from "./helpers/functional-fixtures";
-
-const projectDetailLayoutIds = {
-  overview: "project-overview",
-  timeline: "project-timeline-layer",
-  lowerGrid: "project-detail-lower-grid",
-  mainColumn: "project-detail-main-column",
-  leftColumn: "project-detail-left-column",
-  rightColumn: "project-detail-right-column",
-} as const;
 
 test.describe("Project 立项与生命周期", () => {
   test("Project 导航、默认筛选、列表和创建页在桌面与移动端可用", { tag: "@smoke" }, async ({ context, page, baseURL }, testInfo) => {
@@ -80,7 +70,7 @@ test.describe("Project 立项与生命周期", () => {
     await loginAsTestUser(context, baseURL, { openId: requester.openId, name: `Project UI ${testInfo.project.name}` });
     await page.goto("/progress/projects");
     await expect(page.getByRole("heading", { name: "项目", exact: true })).toBeVisible();
-    await expect(page.getByRole("checkbox", { name: "只看我参与" })).toBeChecked();
+    await expect(page.getByRole("combobox", { name: "项目范围" })).toHaveValue("1");
     await expect(page.getByRole("combobox", { name: "项目状态" })).toHaveValue("ACTIVE");
     await expect(page.getByText(name, { exact: true })).toBeVisible();
     if (testInfo.project.name === "desktop") {
@@ -118,6 +108,7 @@ test.describe("Project 立项与生命周期", () => {
     await expect(projectNameInput).not.toHaveAttribute("aria-invalid", "true");
     await projectDescriptionInput.fill("验证 Project 表单字段错误展示");
     await expect(projectDescriptionInput).not.toHaveAttribute("aria-invalid", "true");
+    await page.getByTestId("project-form-task-options").locator("summary").click();
     const taskSearch = page.getByRole("combobox", { name: "搜索可加入的任务" });
     await taskSearch.fill(selectableTask.title);
     await page.getByRole("option", { name: new RegExp(selectableTask.title.slice(0, 30)) }).click();
@@ -227,7 +218,7 @@ test.describe("Project 立项与生命周期", () => {
     await expectHealthyPage(page);
   });
 
-  test("Project 详情使用概览、全宽时间线和三列协作区", async ({
+  test("Project 详情默认任务与风险摘要，分区保留计划选择和只读协作", async ({
     browser,
     context,
     page,
@@ -300,6 +291,13 @@ test.describe("Project 立项与生命周期", () => {
       targetId: created.projectId,
       content: visibleProjectRisk,
     });
+    for (const content of ["供应商交期需要确认", "联调场地存在冲突", "验收证据需要补充"]) {
+      await createRisk(requester, {
+        targetType: "PROJECT",
+        targetId: created.projectId,
+        content,
+      });
+    }
     await prisma.task.update({
       where: { id: active.id },
       data: {
@@ -400,47 +398,47 @@ test.describe("Project 立项与生命周期", () => {
     await expect(
       page
         .getByTestId("project-management-command-bar")
-        .getByRole("heading", { name: "项目详情", exact: true }),
+        .getByRole("heading", { name: projectName, exact: true }),
     ).toBeVisible();
-    await expect(page.getByRole("heading", { name: projectName })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
+    await expect(page.getByRole("heading", { name: "项目详情", exact: true })).toHaveCount(0);
+    await expect(page.getByText(projectDescription, { exact: true })).not.toBeVisible();
+    await page.getByTestId("project-information").locator("summary").click();
     await expect(page.getByText(projectDescription, { exact: true })).toBeVisible();
+    await page.getByTestId("project-information").locator("summary").click();
     await expect(page.getByText(requester.personId, { exact: true })).toHaveCount(0);
     await expect(page.getByText("任务完成进度", { exact: true })).toBeVisible();
     await expect(page.getByText("1/4 已完成", { exact: true })).toHaveCount(2);
     await expect(page.getByRole("link", { name: "编辑" })).toBeVisible();
     await expect(page.getByRole("button", { name: "结束项目" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "删除项目" })).toHaveCount(0);
+    await page.locator("summary").filter({ hasText: "更多管理操作" }).click();
     await expect(page.getByRole("button", { name: "删除项目" })).toBeVisible();
+    await page.locator("summary").filter({ hasText: "更多管理操作" }).click();
     await expect(page.getByRole("button", { name: "复制链接" })).toBeVisible();
 
-    await expect(
-      page.getByRole("heading", { name: "项目风险", exact: true }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("heading", { name: "项目评论", exact: true }),
-    ).toBeVisible();
-    await expect(page.getByRole("heading", { name: "近期动态" })).toBeVisible();
+    await expect(page.getByTestId("project-risk-summary")).toContainText("4 条未解决");
+    await expect(page.getByTestId("project-risk-summary").getByRole("listitem")).toHaveCount(3);
+    await expect(page.getByRole("heading", { name: "项目风险", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "项目评论", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "近期动态" })).toHaveCount(0);
     await expect(page.getByText("立项申请", { exact: true })).toHaveCount(0);
     await expect(page.getByText("最近审计记录", { exact: true })).toHaveCount(0);
     await expect(page.locator("#establishment")).toBeVisible();
-    await expect(page.getByTestId("project-timeline-layer")).toBeVisible();
-    await expect(page.getByTestId("project-detail-lower-grid")).toBeVisible();
-    await expect(page.getByTestId("project-detail-main-column")).toBeVisible();
-    await expect(page.getByTestId("project-detail-left-column")).toBeVisible();
-    await expect(page.getByTestId("project-detail-right-column")).toBeVisible();
-
-    await expectThreeLayerDetailLayout(
-      page,
-      projectDetailLayoutIds,
-      testInfo.project.name === "desktop" ? "columns" : "stacked",
-    );
+    await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
+    await expectProjectOverview(page);
     if (testInfo.project.name === "desktop") {
       await page.setViewportSize({ width: 1279, height: 1000 });
-      await expectThreeLayerDetailLayout(page, projectDetailLayoutIds, "stacked");
+      await expectProjectOverview(page);
       await page.setViewportSize({ width: 1280, height: 1000 });
-      await expectThreeLayerDetailLayout(page, projectDetailLayoutIds, "columns");
+      await expectProjectOverview(page);
       await page.setViewportSize({ width: 1440, height: 1000 });
-      await expectThreeLayerDetailLayout(page, projectDetailLayoutIds, "columns");
-    } else {
+      await expectProjectOverview(page);
+    }
+    await selectProjectView(page, "计划与投入");
+    await expect(page.getByTestId("project-timeline-layer")).toBeVisible();
+    await expect(page.getByTestId("project-summary-view")).not.toBeVisible();
+    if (testInfo.project.name === "mobile") {
       const canvasScroll = page.getByTestId("time-canvas-scroll");
       const initialScroll = await canvasScroll.evaluate((element) => ({
         left: element.scrollLeft,
@@ -459,6 +457,7 @@ test.describe("Project 立项与生命周期", () => {
         .not.toBe(initialScroll.left);
     }
 
+    await selectProjectView(page, "任务概览");
     const draftGroup = page.getByTestId("project-task-group-DRAFT");
     const activeGroup = page.getByTestId("project-task-group-ACTIVE");
     const completedGroup = page.getByTestId("project-task-group-COMPLETED");
@@ -486,6 +485,7 @@ test.describe("Project 立项与生命周期", () => {
     await expect(
       page.getByRole("checkbox", { name: "显示全部进行中任务时间线" }),
     ).toBeChecked();
+    await selectProjectView(page, "计划与投入");
     await expect(page.getByText("已展示 1/4 个项目任务计划", { exact: false })).toBeVisible();
     await expect(page.getByTestId(`timeline-row-project-plan:${draft.id}`)).toHaveCount(0);
     await expect(page.getByTestId(`timeline-row-project-plan:${farTask.id}`)).toHaveCount(0);
@@ -513,6 +513,7 @@ test.describe("Project 立项与生命周期", () => {
     );
     await expect(page.getByTestId(`segment-block-${unrelatedSegment.id}`)).toHaveCount(0);
 
+    await selectProjectView(page, "任务概览");
     await draftToggle.click();
     const draftTable = page.getByRole("table", { name: "草稿任务列表" });
     await expect(draftTable.getByRole("link", { name: draft.title, exact: true })).toBeVisible();
@@ -531,24 +532,34 @@ test.describe("Project 立项与生命周期", () => {
     await draftCheckbox.check();
     await expect(page.getByTestId("project-task-group-ratio-DRAFT")).toHaveText("已展示 1/2");
     await expect(allDraftCheckbox).toHaveAttribute("aria-checked", "mixed");
+    await selectProjectView(page, "计划与投入");
     await expect(page.getByTestId(`timeline-row-project-plan:${draft.id}`)).toBeVisible();
     await expect(
       page
         .getByTestId(`time-canvas-row-header-project-plan:${draft.id}`)
         .getByRole("link", { name: draft.title, exact: true }),
     ).toHaveAttribute("href", `/progress/tasks/${draft.id}`);
+    await selectProjectView(page, "任务概览");
     await draftGroup.getByRole("button", { name: "收起草稿任务列表" }).click();
     await expect(draftTable).toHaveCount(0);
+    await expect(page.getByTestId("project-task-group-ratio-DRAFT")).toHaveText("已展示 1/2");
+    await selectProjectView(page, "计划与投入");
     await expect(page.getByTestId(`timeline-row-project-plan:${draft.id}`)).toBeVisible();
+    await selectProjectView(page, "任务概览");
     await draftGroup.getByRole("button", { name: "展开草稿任务列表" }).click();
     await allDraftCheckbox.check();
     await expect(page.getByTestId("project-task-group-ratio-DRAFT")).toHaveText("已展示 2/2");
     await expect(farTaskCheckbox).toBeChecked();
+    await selectProjectView(page, "计划与投入");
     await expect(page.getByTestId(`timeline-row-project-plan:${farTask.id}`)).toBeVisible();
+    await selectProjectView(page, "任务概览");
 
     await activeToggle.click();
     await expect(page.getByRole("table", { name: "进行中任务列表" })).toHaveCount(0);
+    await expect(page.getByTestId("project-task-group-ratio-ACTIVE")).toHaveText("已展示 1/1");
+    await selectProjectView(page, "计划与投入");
     await expect(page.getByTestId(`timeline-row-project-plan:${active.id}`)).toBeVisible();
+    await selectProjectView(page, "任务概览");
     await activeGroup.getByRole("button", { name: "展开进行中任务列表" }).click();
 
     await completedToggle.click();
@@ -558,6 +569,7 @@ test.describe("Project 立项与生命周期", () => {
     await expect(completedCheckbox).not.toBeChecked();
     await completedCheckbox.check();
     await expect(page.getByTestId("project-task-group-ratio-COMPLETED")).toHaveText("已展示 1/1");
+    await selectProjectView(page, "计划与投入");
     await expect(page.getByTestId(`timeline-row-project-plan:${completed.id}`)).toBeVisible();
     await expect(
       page
@@ -584,8 +596,10 @@ test.describe("Project 立项与生命周期", () => {
         `milestone-marker-project-node:${activePlanNodes.milestoneNodeId}`,
       ),
     ).toHaveAttribute("data-anchor-icon", "CIRCLE");
+    await selectProjectView(page, "任务概览");
     const locateActive = page.getByRole("button", {
       name: `在时间线中定位 ${active.title}`,
+      includeHidden: true,
     });
     await locateActive.click();
     await expect(locateActive).toHaveAttribute("aria-pressed", "true");
@@ -604,6 +618,7 @@ test.describe("Project 立项与生命周期", () => {
       page.getByTestId(`milestone-marker-project-start:${active.id}`),
     ).toHaveAttribute("aria-pressed", "false");
 
+    await selectProjectView(page, "任务概览");
     const locateFarTask = page.getByRole("button", {
       name: `在时间线中定位 ${farTask.title}`,
     });
@@ -637,8 +652,12 @@ test.describe("Project 立项与生命周期", () => {
     deepLinkPage.on("pageerror", (error) => deepLinkPageErrors.push(error.message));
     try {
       await deepLinkPage.goto(
-        `/progress/projects/${created.projectId}?focus=${encodeURIComponent(`project-start:${farTask.id}`)}`,
+        `/progress/projects/${created.projectId}?focus=${encodeURIComponent(`project-start:${farTask.id}`)}&scale=quarter`,
       );
+      await expect(deepLinkPage.getByTestId("project-timeline-layer")).toBeVisible();
+      await expect(deepLinkPage.getByTestId(`timeline-row-project-plan:${farTask.id}`)).toBeVisible();
+      await selectProjectView(deepLinkPage, "任务概览");
+      await expect(deepLinkPage).toHaveURL((url) => url.searchParams.get("section") === "overview" && url.searchParams.get("scale") === "quarter");
       const focusedDraftGroup = deepLinkPage.getByTestId("project-task-group-DRAFT");
       await expect(
         focusedDraftGroup.getByRole("button", { name: "收起草稿任务列表" }),
@@ -660,9 +679,11 @@ test.describe("Project 立项与生命周期", () => {
           name: `在时间线中显示 ${active.title}`,
         }),
       ).toBeChecked();
+      await selectProjectView(deepLinkPage, "计划与投入");
       await expect(
         deepLinkPage.getByTestId(`timeline-row-project-plan:${farTask.id}`),
       ).toBeVisible();
+      await selectProjectView(deepLinkPage, "任务概览");
 
       await focusedAllDraftCheckbox.check();
       await expect(focusedDraftCheckbox).toBeChecked();
@@ -675,15 +696,18 @@ test.describe("Project 立项与生命周期", () => {
         .click();
 
       const refreshComment = `刷新后保留时间线选择 ${randomUUID()}`;
+      await selectProjectView(deepLinkPage, "风险与讨论");
       await deepLinkPage.getByLabel("发表评论").fill(refreshComment);
       await deepLinkPage.getByRole("button", { name: "发布评论" }).click();
       await expect(deepLinkPage.getByText(refreshComment, { exact: true })).toBeVisible();
+      await selectProjectView(deepLinkPage, "任务概览");
       await expect(
         focusedDraftGroup.getByRole("button", { name: "展开草稿任务列表" }),
       ).toHaveAttribute("aria-expanded", "false");
       await expect(
         deepLinkPage.getByTestId("project-task-group-ratio-DRAFT"),
       ).toHaveText("已展示 0/2");
+      await selectProjectView(deepLinkPage, "计划与投入");
       await expect(
         deepLinkPage.getByTestId(`timeline-row-project-plan:${farTask.id}`),
       ).toHaveCount(0);
@@ -709,11 +733,8 @@ test.describe("Project 立项与生命周期", () => {
       viewerPage.on("pageerror", (error) => viewerPageErrors.push(error.message));
       await viewerPage.goto(`/progress/projects/${created.projectId}`);
       await expect(viewerPage.getByTestId("project-overview")).toBeVisible();
-      await expectThreeLayerDetailLayout(
-        viewerPage,
-        projectDetailLayoutIds,
-        testInfo.project.name === "desktop" ? "columns" : "stacked",
-      );
+      await expectProjectOverview(viewerPage);
+      await selectProjectView(viewerPage, "风险与讨论");
       await expect(
         viewerPage.getByRole("heading", { name: "项目风险", exact: true }),
       ).toBeVisible();
@@ -721,11 +742,8 @@ test.describe("Project 立项与生命周期", () => {
         viewerPage.getByRole("heading", { name: "项目评论", exact: true }),
       ).toBeVisible();
       await expect(
-        viewerPage.getByRole("heading", { name: "近期动态", exact: true }),
-      ).toBeVisible();
-      await expect(
         viewerPage
-          .getByTestId("project-detail-left-column")
+          .locator("#risks")
           .getByText(visibleProjectRisk, { exact: true }),
       ).toBeVisible();
       await expect(viewerPage.getByRole("link", { name: "编辑" })).toHaveCount(0);
@@ -750,12 +768,144 @@ test.describe("Project 立项与生命周期", () => {
       await expect(
         viewerPage.getByRole("button", { name: "发布评论", exact: true }),
       ).toBeEnabled();
+      await selectProjectView(viewerPage, "活动记录");
+      await expect(viewerPage.getByRole("heading", { name: "近期动态", exact: true })).toBeVisible();
+      await selectProjectView(viewerPage, "风险与讨论");
+      await expect(viewerComment).toHaveValue("旁观者仍可发表评论");
       await expectHealthyPage(viewerPage);
       expect(viewerPageErrors).toEqual([]);
     } finally {
       await viewerContext.close();
     }
     expect(pageErrors).toEqual([]);
+  });
+
+  test("Project 桌面首屏任务在700px内，真实分区保留草稿及审批上下文", async ({ browser, context, page, baseURL }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop", "本轮项目详情以桌面首屏为验收范围");
+    test.setTimeout(120_000);
+    const manager = await actor("项目负责人", "PROJECT_ADMINISTRATOR");
+    const participant = await actor("联调负责人");
+    const task = await draftTask(manager, participant, "整机联调与验收证据整理");
+    const nodes = await addTaskPlanNodes(task.id, manager, "联调验收");
+    const projectName = `整机交付与跨组联调 ${randomUUID()}`;
+    const description = "协调机械、电控和算法完成交付。\n".repeat(30);
+    const created = await createProject(manager, {
+      name: projectName,
+      description,
+      avatarPath: null,
+      members: [{ personId: manager.personId, role: "OWNER" }, { personId: participant.personId, role: "PARTICIPANT" }],
+      requestedTaskIds: [task.id],
+      idempotencyKey: randomUUID(),
+    });
+    const request = await prisma.projectEstablishmentRequest.findFirstOrThrow({ where: { projectId: created.projectId, status: "PENDING" } });
+    await reviewProjectEstablishment(manager, { projectId: created.projectId, requestId: request.id, expectedLockVersion: created.lockVersion, decision: "APPROVE", comment: "同意立项" });
+    await prisma.task.update({ where: { id: task.id }, data: { status: "ACTIVE", activeMilestoneNodeId: nodes.milestoneNodeId } });
+    await prisma.taskNode.update({ where: { id: nodes.milestoneNodeId }, data: { status: "ACTIVE" } });
+    for (const content of ["主控板交期需要确认", "场地排期需要协调", "补齐低照度场景验收证据"]) {
+      await createRisk(manager, { targetType: "PROJECT", targetId: created.projectId, content });
+    }
+    await loginAsTestUser(context, baseURL, { openId: manager.openId, name: "项目负责人" });
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.goto(`/progress/projects/${created.projectId}`);
+    await expectProjectOverview(page);
+    await expect(page.getByRole("heading", { level: 1, name: projectName })).toHaveCount(1);
+    await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
+    await expect(page.getByText(description, { exact: true })).not.toBeVisible();
+    await expect(page.getByTestId("project-risk-summary").getByRole("listitem")).toHaveCount(3);
+    await expect(page.getByTestId("project-tasks").getByRole("heading", { name: "任务", exact: true })).toBeInViewport();
+    const taskTop = await page.getByTestId("project-tasks").evaluate((element) => element.getBoundingClientRect().top + window.scrollY);
+    expect(taskTop).toBeLessThan(700);
+    await page.screenshot({ path: testInfo.outputPath("project-detail-desktop-overview.png"), animations: "disabled" });
+
+    await selectProjectView(page, "风险与讨论");
+    await page.getByLabel("发表评论").fill("切换视图后仍保留的评论草稿");
+    await selectProjectView(page, "活动记录");
+    await expect(page.getByRole("heading", { name: "近期动态" })).toBeVisible();
+    await page.goBack();
+    await expect(page.getByLabel("发表评论")).toHaveValue("切换视图后仍保留的评论草稿");
+    await page.goForward();
+    await expect(page.getByRole("heading", { name: "近期动态" })).toBeVisible();
+    await page.reload();
+    await expect(page.getByRole("navigation", { name: "项目详情视图" }).getByRole("link", { name: "活动记录" })).toHaveAttribute("aria-current", "page");
+    await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
+
+    await page.goto(`/progress/projects/${created.projectId}?section=collaboration#risks`);
+    await expect(page.locator("#risks")).toBeVisible();
+    await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
+    await page.goto(`/progress/projects/${created.projectId}#risks`);
+    await expect(page.locator("#risks")).toBeVisible();
+    await page.goto(`/progress/projects/${created.projectId}?section=unknown`);
+    await expectProjectOverview(page);
+
+    const focusId = `project-node:${nodes.milestoneNodeId}`;
+    await page.goto(`/progress/projects/${created.projectId}?section=unknown&focus=${encodeURIComponent(focusId)}`);
+    await expect(page.getByTestId("project-timeline-layer")).toBeVisible();
+    await expect(page.getByTestId(`milestone-marker-${focusId}`)).toHaveAttribute("aria-pressed", "true");
+    await selectProjectView(page, "任务概览");
+    await expect(page).toHaveURL((url) => url.searchParams.get("section") === "overview" && !url.searchParams.has("focus"));
+    await page.reload();
+    await expectProjectOverview(page);
+    await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
+    await page.goto(`/progress/projects/${created.projectId}?section=collaboration&focus=${encodeURIComponent(focusId)}#risks`);
+    await expect(page.locator("#risks")).toBeVisible();
+    await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
+    await selectProjectView(page, "任务概览");
+
+    await page.getByRole("button", { name: `在时间线中定位 ${task.title}` }).click();
+    await expect(page).toHaveURL(/section=plan/);
+    await expect(page.getByTestId("project-timeline-layer")).toBeVisible();
+    await expect(page.getByTestId(`milestone-marker-project-node:${nodes.milestoneNodeId}`)).toHaveAttribute("aria-pressed", "true");
+    await selectProjectView(page, "任务概览");
+    await expect(page.getByRole("checkbox", { name: `在时间线中显示 ${task.title}` })).toBeChecked();
+    await expect(page.getByTestId("project-plan-view")).not.toBeVisible();
+
+    const requestedTasks = [];
+    for (let taskIndex = 0; taskIndex < 12; taskIndex += 1) {
+      requestedTasks.push(await draftTask(manager, participant, `第${taskIndex + 1}项立项申请任务：${"跨组联调与验收资料".repeat(12)}`));
+    }
+    const pending = await createProject(manager, {
+      name: "待立项专项验证",
+      description: "确认范围和资源冲突后再审批",
+      avatarPath: null,
+      members: [{ personId: manager.personId, role: "OWNER" }],
+      requestedTaskIds: requestedTasks.map((requestedTask) => requestedTask.id),
+      idempotencyKey: randomUUID(),
+    });
+    await page.goto(`/progress/projects/${pending.projectId}#establishment`);
+    const pendingPanel = page.getByTestId("project-pending-establishment");
+    await expect(pendingPanel.getByRole("heading", { name: "当前立项申请" })).toBeInViewport();
+    await expect(pendingPanel.getByRole("button", { name: "通过立项" })).toBeInViewport();
+    await expect(pendingPanel.getByRole("button", { name: "驳回", exact: true })).toBeVisible();
+    const requestedTaskList = pendingPanel.getByRole("list", { name: "本次立项申请的任务" });
+    await expect(requestedTaskList.getByRole("listitem")).toHaveCount(12);
+    const listHeight = await requestedTaskList.evaluate((element) => element.getBoundingClientRect().height);
+    expect(listHeight).toBeLessThanOrEqual(160);
+    await requestedTaskList.getByRole("link", { name: requestedTasks[11].title, exact: true }).scrollIntoViewIfNeeded();
+    await expect(requestedTaskList.getByRole("link", { name: requestedTasks[11].title, exact: true })).toBeInViewport();
+    await pendingPanel.getByRole("button", { name: "通过立项" }).scrollIntoViewIfNeeded();
+    await expect(page.getByRole("button", { name: "删除项目" })).toHaveCount(0);
+    await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath("project-establishment-desktop.png"), animations: "disabled" });
+    await selectProjectView(page, "活动记录");
+    await expect(pendingPanel.getByLabel("立项审批意见")).toBeVisible();
+    await expect(pendingPanel.getByRole("button", { name: "通过立项" })).toBeVisible();
+
+    const noScriptContext = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 1440, height: 1000 } });
+    try {
+      await loginAsTestUser(noScriptContext, baseURL, { openId: manager.openId, name: "项目负责人" });
+      const noScriptPage = await noScriptContext.newPage();
+      await noScriptPage.goto(`/progress/projects/${created.projectId}`);
+      await expect(noScriptPage.getByTestId("project-tasks")).toBeVisible();
+      await expect(noScriptPage.getByTestId("time-canvas-root")).toHaveCount(0);
+      await noScriptPage.getByRole("navigation", { name: "项目详情视图" }).getByRole("link", { name: "风险与讨论" }).click();
+      await expect(noScriptPage).toHaveURL(/section=collaboration/);
+      await expect(noScriptPage.locator("#risks")).toBeVisible();
+    } finally {
+      await noScriptContext.close();
+    }
+    await expectHealthyPage(page);
+    expect(errors).toEqual([]);
   });
 
   test("空 Project 可以直接结束并记录审计与通知", async ({ context, page, baseURL }, testInfo) => {
@@ -787,14 +937,11 @@ test.describe("Project 立项与生命周期", () => {
       name: `空 Project 申请人 ${testInfo.project.name}`,
     });
     await page.goto(`/progress/projects/${created.projectId}`);
-    await expect(page.getByTestId("project-timeline-layer")).toBeVisible();
-    await expect(page.getByTestId("project-detail-lower-grid")).toBeVisible();
+    await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
     await expect(page.getByText("尚未关联任务", { exact: true })).toBeVisible();
-    await expectThreeLayerDetailLayout(
-      page,
-      projectDetailLayoutIds,
-      testInfo.project.name === "desktop" ? "columns" : "stacked",
-    );
+    await expectProjectOverview(page);
+    await selectProjectView(page, "计划与投入");
+    await expect(page.getByTestId("project-timeline-layer")).toBeVisible();
     await page.getByRole("button", { name: "结束项目" }).click();
     const dialog = page.getByRole("dialog", { name: "结束项目" });
     await expect(dialog).toContainText("当前没有关联任务。");
@@ -1038,7 +1185,7 @@ test.describe("Project 立项与生命周期", () => {
     expect(pageErrors).toEqual([]);
   });
 
-  test("Project 时间线节点超限时保留三层结构", async ({
+  test("Project 时间线节点超限只影响计划视图，任务与协作仍可达", async ({
     context,
     page,
     baseURL,
@@ -1056,7 +1203,7 @@ test.describe("Project 立项与生命周期", () => {
     const task = await draftTask(requester, participant, "Project 超过节点预算 Task");
     const created = await createProject(requester, {
       name: `Project 时间线超限 ${randomUUID()}`,
-      description: "验证时间线错误仍位于第二层，且第三层保持可用",
+      description: "验证计划视图展示时间线错误，任务概览和协作仍保持可用",
       avatarPath: null,
       members: [{ personId: requester.personId, role: "OWNER" }],
       requestedTaskIds: [task.id],
@@ -1117,19 +1264,22 @@ test.describe("Project 立项与生命周期", () => {
       name: "Project 超限申请人",
     });
     await page.goto(`/progress/projects/${created.projectId}`);
+    await expectProjectOverview(page);
+    await selectProjectView(page, "计划与投入");
     const timelineLayer = page.getByTestId("project-timeline-layer");
     await expect(timelineLayer).toBeVisible();
     await expect(timelineLayer.getByRole("alert")).toContainText(
       "Project Task 计划节点超过 5000 个，无法展示时间线。",
     );
     await expect(timelineLayer.getByTestId("time-canvas-root")).toHaveCount(0);
+    await selectProjectView(page, "任务概览");
     await page
       .getByTestId("project-task-group-DRAFT")
       .getByRole("button", { name: "展开草稿任务列表" })
       .click();
     await expect(
       page
-        .getByTestId("project-detail-main-column")
+        .getByTestId("project-tasks")
         .getByRole("link", { name: task.title, exact: true }),
     ).toBeVisible();
     await expect(
@@ -1138,7 +1288,9 @@ test.describe("Project 立项与生命周期", () => {
     await expect(
       page.getByRole("checkbox", { name: "显示全部草稿任务时间线" }),
     ).toBeDisabled();
-    await expectThreeLayerDetailLayout(page, projectDetailLayoutIds, "columns");
+    await expectProjectOverview(page);
+    await selectProjectView(page, "风险与讨论");
+    await expect(page.getByLabel("发表评论")).toBeVisible();
     await expectHealthyPage(page);
     expect(pageErrors).toEqual([]);
   });
@@ -1603,6 +1755,31 @@ test.describe("Project 立项与生命周期", () => {
     expect(secondPage.nextCursor).toBeNull();
   });
 });
+
+async function selectProjectView(page: Page, label: string) {
+  const link = page.getByRole("navigation", { name: "项目详情视图" }).getByRole("link", { name: label, exact: true });
+  await link.click();
+  await expect(link).toHaveAttribute("aria-current", "page");
+}
+
+async function expectProjectOverview(page: Page) {
+  await expect(page.getByTestId("project-summary-view")).toBeVisible();
+  await expect(page.getByTestId("project-tasks")).toBeVisible();
+  await expect(page.getByTestId("project-risk-summary")).toBeVisible();
+  await expect(page.getByTestId("project-plan-view")).not.toBeVisible();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
+  await expect(page.getByRole("navigation", { name: "项目详情视图" }).getByRole("link")).toHaveCount(4);
+  if ((page.viewportSize()?.width ?? 0) >= 1200) {
+    const positions = await page.getByTestId("project-summary-view").evaluate((element) => {
+      const tasks = element.querySelector("[data-testid='project-tasks']")!;
+      const risks = element.querySelector("[data-testid='project-risk-summary']")!;
+      return { taskTop: tasks.getBoundingClientRect().top + window.scrollY, riskTop: risks.getBoundingClientRect().top + window.scrollY };
+    });
+    expect(positions.taskTop).toBeLessThan(700);
+    expect(positions.riskTop).toBeLessThan(700);
+  }
+  await expectHealthyPage(page);
+}
 
 async function actor(displayName: string, role?: "SUPER_ADMINISTRATOR" | "PROJECT_ADMINISTRATOR"): Promise<ProjectManagementActor> {
   const openId = `ou_project_${randomUUID()}`;

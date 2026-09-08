@@ -70,15 +70,25 @@ test.describe("project management UI project-management-ui-resource-planner", ()
 
       const finalTaskTitle = `${taskTitlePrefix} 50`;
       await page.goto("/progress");
-      await expect(
-        page.getByRole("link", { name: finalTaskTitle, exact: true }),
-      ).toBeVisible();
+      await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
+      const participatingTasks = page.getByRole("region", { name: "参与任务" });
+      await expect(participatingTasks.locator("tbody tr")).toHaveCount(6);
+      await expect(participatingTasks.getByRole("link", { name: /查看全部参与任务/ }))
+        .toHaveAttribute("href", "/progress/tasks?mine=1&status=ACTIVE");
+      await page.getByRole("navigation", { name: "工作台视图" })
+        .getByRole("link", { name: "个人日程", exact: true }).click();
+      await expect(page).toHaveURL((url) => url.searchParams.get("view") === "schedule");
       await expectVirtualRowAtBottom(
         page,
         `timeline-row-plan:${taskIds[50]}`,
       );
+      await expect(
+        page.getByRole("link", { name: finalTaskTitle, exact: true }),
+      ).toBeVisible();
 
       await page.goto(`/progress/tasks/${fixture.taskId}`);
+      await page.getByRole("navigation", { name: "任务详情分区" })
+        .getByRole("link", { name: "计划与投入", exact: true }).click();
       await expectVirtualRowAtBottom(
         page,
         `timeline-row-person:${additionalMembers[50]!.id}`,
@@ -672,7 +682,7 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       openId: fixture.member.openId,
       name: fixture.member.person.displayName,
     });
-    await page.goto("/progress?scale=week");
+    await page.goto("/progress?view=schedule&scale=week");
     await page.getByRole("button", { name: "新增投入" }).click();
     const quickCreate = page.getByRole("form", { name: "投入快速创建" });
     await expectRetiredSegmentControlsAbsent(quickCreate);
@@ -872,9 +882,9 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       await page.goto("/progress?taskCursor=invalid-cursor");
       await expect(page.getByRole("heading", { name: "工作台" })).toBeVisible();
       await expect.poll(() => new URL(page.url()).searchParams.has("taskCursor")).toBe(false);
-      await page.goto("/progress?scale=month");
+      await page.goto("/progress?view=schedule&scale=month");
       await expect(page.getByTestId("time-canvas-root")).toHaveAttribute("data-zoom", "MONTH");
-      await page.goto("/progress?scale=year");
+      await page.goto("/progress?view=schedule&scale=year");
       await expect(page.getByTestId("time-canvas-root")).toHaveAttribute("data-zoom", "YEAR");
       await page.goBack();
       await expect(page).toHaveURL(/scale=month/);

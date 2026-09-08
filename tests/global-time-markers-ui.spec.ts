@@ -7,6 +7,7 @@ import {
   loginAsTestUser,
 } from "./helpers/functional-fixtures";
 import { createUiFixture } from "./helpers/project-management-ui-fixtures";
+import { openTaskComposerDisclosure } from "./helpers/project-management-plan-mutation-fixtures";
 
 test.describe("全局关键时间点 UI", () => {
   test("个人、资源、Task、Project 和 Composer 时间线直接显示节点与时间线", async ({
@@ -63,7 +64,7 @@ test.describe("全局关键时间点 UI", () => {
       });
 
       const routes = [
-        { path: `/progress?center=${center}`, desktopOnlyCanvas: false },
+        { path: `/progress?view=schedule&center=${center}`, desktopOnlyCanvas: false },
         {
           path: `/progress/kanban?people=${fixture.member.person.id}&center=${center}`,
           desktopOnlyCanvas: false,
@@ -78,11 +79,11 @@ test.describe("全局关键时间点 UI", () => {
           empty: true,
         },
         {
-          path: `/progress/tasks/${fixture.taskId}?center=${center}`,
+          path: `/progress/tasks/${fixture.taskId}?section=plan&center=${center}`,
           desktopOnlyCanvas: false,
         },
         {
-          path: `/progress/projects/${project.id}?center=${center}`,
+          path: `/progress/projects/${project.id}?section=plan&center=${center}`,
           desktopOnlyCanvas: false,
         },
         {
@@ -98,6 +99,9 @@ test.describe("全局关键时间点 UI", () => {
           await expect(page.getByTestId("time-canvas-root")).toBeHidden();
           await expectHealthyPage(page);
           continue;
+        }
+        if (route.desktopOnlyCanvas) {
+          await openTaskComposerDisclosure(page, "时间画布与批量调整（高级）");
         }
         const markerLine = page
           .getByTestId(`global-time-marker-line-${marker.id}`)

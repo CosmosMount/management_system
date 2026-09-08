@@ -363,13 +363,13 @@ export function TaskComposerPlanEditor({
     : null;
 
   return (
-    <>
-      <main className="min-w-0 space-y-4">
+    <div className="grid min-w-0 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+      <div className="min-w-0 space-y-4">
         <section className="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="font-semibold">计划时间画布</h2>
+                <h3 className="font-semibold">选择计划节点</h3>
                 <Badge variant="secondary" data-testid="task-composer-milestone-count">
                   {state.milestones.length}/200
                 </Badge>
@@ -381,8 +381,8 @@ export function TaskComposerPlanEditor({
               </div>
               <p className="mt-1 text-sm text-muted-foreground">
                 {state.revision
-                  ? "固定 Asia/Shanghai；承接节点只读，计划修订标记不形成计划阶段。"
-                  : "固定 Asia/Shanghai；编辑器只编排节点，不加载成员投入数据。"}
+                  ? "时间统一为北京时间（UTC+8）；承接节点只读，修订标记不形成计划阶段。"
+                  : "时间统一为北京时间（UTC+8）；可只保留开始与结束节点，人员投入在创建后安排。"}
               </p>
             </div>
             <Button
@@ -396,6 +396,17 @@ export function TaskComposerPlanEditor({
             </Button>
           </div>
 
+          <div className="mt-4">
+            <TaskPlanNodeNavigator
+              nodes={navigatorNodes}
+              selectedId={state.selectedEntityId}
+              onSelect={selectNavigatorNode}
+              label="任务阶段"
+            />
+          </div>
+
+          <details className="mt-4 rounded-lg border border-border p-3" data-testid="task-composer-advanced-plan">
+            <summary className="cursor-pointer text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">时间画布与批量调整（高级）</summary>
           <div
             className="mt-3 hidden flex-wrap items-center gap-2 rounded-lg border border-dashed border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground lg:flex"
             data-testid="task-composer-anchor-multi-selection"
@@ -524,14 +535,7 @@ export function TaskComposerPlanEditor({
             </div>
           )}
 
-          <div className="mt-4">
-            <TaskPlanNodeNavigator
-              nodes={navigatorNodes}
-              selectedId={state.selectedEntityId}
-              onSelect={selectNavigatorNode}
-              label="任务阶段"
-            />
-          </div>
+          </details>
         </section>
 
         {notice && (
@@ -549,7 +553,7 @@ export function TaskComposerPlanEditor({
             {optionLoading && " 正在加载…"}
           </div>
         )}
-      </main>
+      </div>
 
       <aside className="min-w-0" aria-label="计划节点检查器">
         <div className="space-y-4 rounded-xl border border-border bg-card p-4 sm:p-5">
@@ -742,7 +746,7 @@ export function TaskComposerPlanEditor({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </>
+    </div>
   );
 }
 
@@ -991,7 +995,7 @@ function Inspector({
               ? "待新增节点"
               : readOnly
                 ? "只读承接节点"
-                : "节点 Inspector"}
+                : "节点内容"}
           </p>
           <h2 className="font-semibold">
             {draft.kind === "START"
@@ -1146,6 +1150,9 @@ function Inspector({
               onChange={(event) => onChange({ ...draft, milestone: { ...draft.milestone, reviewRequirements: event.target.value } })}
             />
           </PlanField>
+          <details key={`business-${draft.entityId}`} className="rounded-lg border border-border p-3">
+            <summary className="cursor-pointer text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">补充业务说明（可选）{draft.milestone.businessDescription ? " · 已填写" : ""}{fieldError(`business-${draft.entityId}`) ? " · 需修正" : ""}</summary>
+            <div className="mt-3">
           <PlanField label="业务说明" htmlFor={`business-${draft.entityId}`} error={fieldMessages(`business-${draft.entityId}`)}>
             <Textarea
               id={`business-${draft.entityId}`}
@@ -1157,6 +1164,8 @@ function Inspector({
               onChange={(event) => onChange({ ...draft, milestone: { ...draft.milestone, businessDescription: event.target.value } })}
             />
           </PlanField>
+            </div>
+          </details>
         </>
       )}
 
@@ -1192,6 +1201,9 @@ function Inspector({
               onChange={(event) => onChange({ ...draft, termination: { ...draft.termination, plannedOutcomeCriteria: event.target.value } })}
             />
           </PlanField>
+          <details key="termination-business" className="rounded-lg border border-border p-3">
+            <summary className="cursor-pointer text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">补充业务说明（可选）{draft.termination.businessDescription ? " · 已填写" : ""}{fieldError("termination-business") ? " · 需修正" : ""}</summary>
+            <div className="mt-3">
           <PlanField label="业务说明" htmlFor="termination-business" error={fieldMessages("termination-business")}>
             <Textarea
               id="termination-business"
@@ -1202,6 +1214,8 @@ function Inspector({
               onChange={(event) => onChange({ ...draft, termination: { ...draft.termination, businessDescription: event.target.value } })}
             />
           </PlanField>
+            </div>
+          </details>
         </>
       )}
 

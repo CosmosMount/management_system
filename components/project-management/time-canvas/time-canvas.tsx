@@ -263,6 +263,7 @@ export function TimeCanvas({
     const element = scrollElementRef.current;
     if (!element) return;
     const updateWidth = () => {
+      if (element.clientWidth === 0) return;
       const nextHeaderWidth = responsiveRowHeaderWidth(element.clientWidth);
       const nextViewportWidth = Math.max(1, element.clientWidth - nextHeaderWidth);
       setRowHeaderWidth(nextHeaderWidth);
@@ -279,7 +280,7 @@ export function TimeCanvas({
 
   useEffect(() => {
     const element = scrollElementRef.current;
-    if (!element) return;
+    if (!element || element.clientWidth === 0) return;
     const measuredHeaderWidth = responsiveRowHeaderWidth(element.clientWidth);
     const measuredViewportWidth = Math.max(
       1,
@@ -517,6 +518,7 @@ export function TimeCanvas({
               if (animationFrameRef.current !== null) return;
                 animationFrameRef.current = requestAnimationFrame(() => {
                   animationFrameRef.current = null;
+                  if (element.clientWidth === 0) return;
                   const left = element.scrollLeft;
                   const layoutLeft = layoutScrollLeftRef.current;
                   layoutScrollLeftRef.current = null;

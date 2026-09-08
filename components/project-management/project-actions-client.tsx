@@ -39,13 +39,20 @@ export function ProjectActionsClient({ projectId, lockVersion, requestId, canRev
     }
   }
   return <div className="min-w-0 space-y-3">
+    {canReview && <div className="min-w-0 space-y-2">
+      <label htmlFor="project-review-comment" className="text-sm font-medium">立项审批意见</label>
+      <Textarea id="project-review-comment" value={comment} onChange={(event) => { setComment(event.target.value); if (event.target.value.trim()) setCommentError(""); }} maxLength={2000} placeholder="审批意见（驳回时必填）" aria-label="立项审批意见" aria-invalid={Boolean(commentError)} aria-describedby={commentError ? "project-review-comment-error" : undefined} />
+      <FieldError id="project-review-comment-error" messages={commentError} />
+    </div>}
     <div className="flex flex-wrap gap-2">
-      <Button type="button" variant="outline" disabled={pending} onClick={() => void copyProjectLink()}><Copy />复制链接</Button>
       {canReview && requestId && <><Button disabled={pending} onClick={() => run(() => reviewProjectEstablishment({ projectId, requestId, expectedLockVersion: lockVersion, decision: "APPROVE", comment }))}>通过立项</Button><Button variant="destructive" disabled={pending} onClick={() => { if (!comment.trim()) { setCommentError("驳回立项时请填写审批意见"); requestAnimationFrame(() => document.getElementById("project-review-comment")?.focus()); return; } if (window.confirm("确认驳回该立项申请？")) run(() => reviewProjectEstablishment({ projectId, requestId, expectedLockVersion: lockVersion, decision: "REJECT", comment })); }}>驳回</Button></>}
-      {canComplete && <Button disabled={pending} onClick={() => setDialog("complete")}>结束项目</Button>}
-      {canDelete && <Button variant="destructive" disabled={pending} onClick={() => setDialog("delete")}>删除项目</Button>}
+      {canComplete && <Button variant="outline" disabled={pending} onClick={() => setDialog("complete")}>结束项目</Button>}
+      <Button type="button" variant="outline" disabled={pending} onClick={() => void copyProjectLink()}><Copy />复制链接</Button>
+      {canDelete && <details className="min-w-0">
+        <summary className="cursor-pointer rounded-md border border-border px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-ring">更多管理操作</summary>
+        <div className="mt-2"><Button variant="destructive" disabled={pending} onClick={() => setDialog("delete")}>删除项目</Button></div>
+      </details>}
     </div>
-    {canReview && <><Textarea id="project-review-comment" value={comment} onChange={(event) => { setComment(event.target.value); if (event.target.value.trim()) setCommentError(""); }} maxLength={2000} placeholder="审批意见（驳回时必填）" aria-label="立项审批意见" aria-invalid={Boolean(commentError)} aria-describedby={commentError ? "project-review-comment-error" : undefined} /><FieldError id="project-review-comment-error" messages={commentError} /></>}
     {notice && <p role="status" className="text-sm text-emerald-700">{notice}</p>}
     {error && <p role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">{error}</p>}
     <Dialog open={dialog !== null} onOpenChange={(open) => { if (!open && !pending) setDialog(null); }}><DialogContent><DialogHeader><DialogTitle>{dialog === "delete" ? "删除项目" : "结束项目"}</DialogTitle><DialogDescription>{dialog === "delete" ? "项目会删除，任务不会删除，只会变为无所属项目。此操作不会删除任务的成员、计划或历史。" : hasNoTasks ? "当前没有关联任务。确认结束后项目资料和成员将变为只读。" : blockingTaskCount > 0 ? `仍有 ${blockingTaskCount} 个任务处于草稿或进行中，暂时不能结束项目。` : "确认结束项目？结束后项目资料、成员和任务归属将变为只读。"}</DialogDescription></DialogHeader>

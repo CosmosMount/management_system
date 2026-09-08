@@ -78,22 +78,19 @@ export function ResourceFilterBar({
   const selectedCount = projectIds.length + taskIds.length + personIds.length;
   return (
     <section
-      className="space-y-4 rounded-xl border border-border bg-card p-4"
+      className="space-y-3 rounded-xl border border-border bg-card p-4"
       aria-label="资源计划选择"
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <label className="flex min-w-0 items-start gap-3 rounded-lg border border-border px-3 py-2">
+        <label className="flex min-w-0 items-center gap-2 text-sm">
           <input
-            className="mt-1"
+            className="size-4 accent-primary"
             type="checkbox"
             checked={showAll}
             onChange={(event) => setShowAll(event.target.checked)}
           />
           <span className="min-w-0">
             <span className="block font-medium">显示全部资源</span>
-            <span className="block text-sm text-muted-foreground">
-              显示全部可见人员投入，以及符合下方状态的任务当前计划。
-            </span>
           </span>
         </label>
         <div className="flex flex-wrap gap-2">
@@ -128,8 +125,8 @@ export function ResourceFilterBar({
         </div>
       </div>
 
-      <fieldset className="min-w-0 rounded-lg border border-border p-3">
-        <legend className="px-1 text-sm font-medium">
+      <fieldset className="min-w-0 border-t border-border pt-3">
+        <legend className="pr-3 text-xs font-medium text-muted-foreground">
           任务状态（{taskStatuses.length}）
         </legend>
         <div className="flex flex-wrap gap-x-5 gap-y-3">
@@ -156,12 +153,9 @@ export function ResourceFilterBar({
             </label>
           ))}
         </div>
-        <p className="mt-2 text-xs text-muted-foreground">
-          仅筛选任务计划轨道；进入画布的人员仍展示全部可见投入。
-        </p>
       </fieldset>
 
-      <div className="grid gap-3 lg:grid-cols-3" aria-disabled={showAll}>
+      <div className={showAll ? "hidden" : "grid gap-3 lg:grid-cols-3"} aria-disabled={showAll}>
         <fieldset
           className="min-w-0 rounded-lg border border-border p-3 disabled:opacity-60"
           disabled={showAll}
@@ -202,7 +196,7 @@ export function ResourceFilterBar({
         </fieldset>
       </div>
 
-      <p className="text-sm text-muted-foreground" role="status">
+      <p className="text-xs text-muted-foreground" role="status">
         {showAll
           ? taskStatuses.length > 0
             ? `当前展示全部可见人员，以及 ${taskStatuses.length} 种状态的任务计划。`
@@ -212,6 +206,10 @@ export function ResourceFilterBar({
             : "当前未选择资源，应用后显示空画布。"}
         {notice ? ` ${notice}` : ""}
       </p>
+      <details className="text-xs text-muted-foreground">
+        <summary className="w-fit cursor-pointer rounded-sm focus-visible:outline-2 focus-visible:outline-ring">筛选范围说明</summary>
+        <p className="mt-2">任务状态仅筛选任务计划轨道；进入画布的人员仍展示全部可见投入。取消“显示全部资源”后，可按项目、任务或人员缩小范围。</p>
+      </details>
     </section>
   );
 }
