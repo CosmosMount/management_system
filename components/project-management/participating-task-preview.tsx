@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
-import { DeadlineLegend, NodeDeadline } from "@/components/project-management/node-deadline";
+import { NodeDeadline } from "@/components/project-management/node-deadline";
 import { useProgressNow } from "@/components/project-management/progress-clock";
 import { compareDeadlineTasks } from "@/lib/project-management/current-node-deadline";
 import { formatDateTime, taskStatusLabels } from "@/lib/project-management/labels";
@@ -13,7 +13,6 @@ export function ParticipatingTaskPreview({ tasks }: { tasks: TaskOptionPage["ite
   const nowMs = useProgressNow() ?? Number.NaN;
   const preview = [...tasks].sort((left, right) => compareDeadlineTasks(left, right, nowMs)).slice(0, 6);
   return <div className="space-y-3">
-    <DeadlineLegend />
     <table className="w-full table-fixed text-left text-sm [overflow-wrap:anywhere]">
       <thead className="text-muted-foreground">
         <tr><th className="w-[35%] pb-2 font-medium">任务</th><th className="w-20 pb-2 font-medium">状态</th><th className="pb-2 font-medium">当前节点</th></tr>

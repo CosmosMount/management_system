@@ -1,5 +1,5 @@
 // @playwright-project ui
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../lib/prisma";
 import { createDeadlineTask } from "./helpers/current-node-deadline-fixtures";
@@ -9,6 +9,49 @@ import { expectHealthyPage, loginAsTestUser } from "./helpers/functional-fixture
 test.beforeAll(async () => {
   const administrator = await createAccountPerson(`到期UI门禁 ${randomUUID()}`);
   await grantGlobalProjectAdministrator(administrator.account.id);
+});
+
+async function expectDeadlineRulesInteraction(page: Page) {
+  const region = page.getByRole("region", { name: "参与任务", exact: true });
+  const trigger = region.getByRole("button", { name: "到期规则", exact: true });
+  const legend = region.getByLabel("节点到期图例");
+  await expect(legend).toBeHidden();
+  if (test.info().project.name === "desktop") {
+    await trigger.hover();
+    await expect(legend).toBeVisible();
+    await legend.hover();
+    await expect(legend).toBeVisible();
+    await expectHealthyPage(page);
+    await region.getByRole("heading", { name: "参与任务", exact: true }).hover();
+  } else {
+    await trigger.tap();
+    await expect(legend).toBeVisible();
+    await expectHealthyPage(page);
+    await trigger.tap();
+  }
+  await expect(legend).toBeHidden();
+  await trigger.focus();
+  await page.keyboard.press("Enter");
+  await expect(legend).toBeVisible();
+  await expect(legend).toContainText("72 小时内");
+  await page.keyboard.press("Escape");
+  await expect(legend).toBeHidden();
+  await page.keyboard.press("Enter");
+  await expect(legend).toBeVisible();
+  await page.keyboard.press("Tab");
+  await expect(legend).toBeHidden();
+}
+
+test("空任务工作台仍可悬浮、点击和键盘查看到期规则", async ({ page, context, baseURL }) => {
+  const owner = await createAccountPerson(`到期规则空态 ${randomUUID()}`);
+  const errors: Error[] = [];
+  page.on("pageerror", (error) => errors.push(error));
+  await loginAsTestUser(context, baseURL, { openId: owner.openId, name: owner.person.displayName });
+  await page.goto("/progress");
+  const region = page.getByRole("region", { name: "参与任务", exact: true });
+  await expect(region.getByText("当前没有有效参与的任务。", { exact: true })).toBeVisible();
+  await expectDeadlineRulesInteraction(page);
+  expect(errors).toEqual([]);
 });
 
 test("工作台风险排序先于六项截取，共享时钟跨界和聚焦更新", async ({ page, context, baseURL }) => {
@@ -26,6 +69,7 @@ test("工作台风险排序先于六项截取，共享时钟跨界和聚焦更�
   await loginAsTestUser(context, baseURL, { openId: owner.openId, name: owner.person.displayName });
   await page.goto("/progress");
   const region = page.getByRole("region", { name: "参与任务", exact: true });
+  await expectDeadlineRulesInteraction(page);
   await expect(region.locator("tbody tr")).toHaveCount(6);
   await expect(region.locator("tbody tr").first()).toHaveAttribute("data-testid", `participating-task-${overdue.taskId}`);
   const soonRow = region.getByTestId(`participating-task-${soon.taskId}`);

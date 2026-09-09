@@ -10,6 +10,7 @@ import { ViewportStateLink } from "@/components/project-management/time-canvas/v
 import { Badge } from "@/components/ui/badge";
 import { toProjectManagementServiceError } from "@/lib/project-management/application/errors";
 import { ParticipatingTaskPreview } from "@/components/project-management/participating-task-preview";
+import { DeadlineRules } from "@/components/project-management/deadline-rules";
 import { getActionInbox } from "@/lib/project-management/queries/action-inbox-queries";
 import { getMyWorkMetrics } from "@/lib/project-management/queries/dashboard-queries";
 import { listInAppNotifications } from "@/lib/project-management/queries/notification-queries";
@@ -174,8 +175,9 @@ export default async function ProgressPage({
 
           <section className="min-w-0 rounded-xl border border-border bg-card p-4" aria-labelledby="my-task-list-title">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
+              <div className="relative flex flex-wrap items-center gap-2">
                 <h2 id="my-task-list-title" className="font-semibold">参与任务</h2>
+                <DeadlineRules />
               </div>
               <div className="flex flex-wrap gap-2">
                 <Link
