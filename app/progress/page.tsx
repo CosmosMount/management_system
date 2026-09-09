@@ -155,33 +155,37 @@ export default async function ProgressPage({
         )}
 
         {!schedule && <>
-        <section className="flex flex-wrap gap-x-6 gap-y-2 rounded-lg border bg-card px-4 py-3" aria-label="工作指标">
-          <Metric icon={ClipboardList} label="进行中任务" value={metrics.activeTaskCount} />
-          <Metric icon={CheckSquare2} label="行动待办" value={inbox.totalCount} />
-          <Metric icon={AlertTriangle} label="紧急待办" value={inbox.criticalCount} />
-          <Metric icon={Bell} label="未读通知" value={metrics.unreadNotificationCount} />
+        <section className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="工作指标">
+          <Metric icon={ClipboardList} label="进行中任务" value={metrics.activeTaskCount} description="我参与的进行中任务" />
+          <Metric icon={CheckSquare2} label="我的待办" value={inbox.totalCount} description="任务推进与审批事项" />
+          <Metric icon={AlertTriangle} label="紧急待办" value={inbox.criticalCount} description="建议优先查看" urgent={inbox.criticalCount > 0} />
+          <Metric icon={Bell} label="未读通知" value={metrics.unreadNotificationCount} description="尚未阅读的站内消息" />
         </section>
 
         <div className="grid min-w-0 items-start gap-5 xl:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]" data-testid="workbench-priority-content">
-          <section className="min-w-0 rounded-xl border border-border bg-card p-4">
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <div>
-                <h2 className="font-semibold">下一步</h2>
+          <section className="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5" aria-labelledby="my-action-inbox-title">
+            <div className="mb-4 flex flex-wrap items-start justify-between gap-3 border-b pb-4">
+              <div className="min-w-0 space-y-1">
+                <h2 id="my-action-inbox-title" className="font-semibold">我的待办</h2>
+                <p className="text-xs text-muted-foreground">当前需要推进或审批的事项</p>
               </div>
-              <Link href={routes.progress.approvals} className="text-sm text-primary hover:underline">查看全部</Link>
+              <Link href={routes.progress.approvals} className="shrink-0 rounded text-sm text-primary hover:underline focus-visible:outline-2 focus-visible:outline-ring">查看全部</Link>
             </div>
             <ActionInbox initialPage={inbox} compact />
           </section>
 
-          <section className="min-w-0 rounded-xl border border-border bg-card p-4" aria-labelledby="my-task-list-title">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="relative flex flex-wrap items-center gap-2">
-                <h2 id="my-task-list-title" className="font-semibold">参与任务</h2>
-                <DeadlineRules />
+          <section className="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5" aria-labelledby="my-task-list-title">
+            <div className="flex flex-wrap items-start justify-between gap-3 border-b pb-4">
+              <div className="min-w-0 space-y-1">
+                <div className="relative flex flex-wrap items-center gap-2">
+                  <h2 id="my-task-list-title" className="font-semibold">参与任务</h2>
+                  <DeadlineRules />
+                </div>
+                <p className="text-xs text-muted-foreground">{showAllTasks ? "全部状态" : "进行中"} · 共 {tasks.length} 项 · 优先展示逾期与临期节点</p>
               </div>
               <div className="flex flex-wrap gap-2">
                 <Link
-                  className="text-sm text-primary hover:underline"
+                  className="shrink-0 rounded text-sm text-primary hover:underline focus-visible:outline-2 focus-visible:outline-ring"
                   href={myWorkHref({ ...hrefState, showAllTasks: !showAllTasks })}
                 >
                   {showAllTasks ? "只看进行中" : "显示全部"}
@@ -191,9 +195,11 @@ export default async function ProgressPage({
             {tasks.length === 0 ? (
               <Empty text="当前没有有效参与的任务。" />
             ) : (
-              <div className="mt-4 overflow-x-auto">
+              <div className="mt-1 min-w-0">
                 <ParticipatingTaskPreview tasks={tasks} />
-                <Link href={`${routes.progress.tasks}?mine=1&status=${showAllTasks ? "" : "ACTIVE"}`} className="mt-3 inline-block text-sm text-primary hover:underline">查看全部参与任务{tasks.length > 6 ? "（当前预览 6 项）" : ""}</Link>
+                <div className="border-t pt-4">
+                  <Link href={`${routes.progress.tasks}?mine=1&status=${showAllTasks ? "" : "ACTIVE"}`} className="inline-block rounded text-sm text-primary hover:underline focus-visible:outline-2 focus-visible:outline-ring">查看全部参与任务{tasks.length > 6 ? "（当前预览 6 项）" : ""}</Link>
+                </div>
               </div>
             )}
           </section>
@@ -306,11 +312,14 @@ function isUuid(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
-function Metric({ icon: Icon, label, value }: { icon: typeof ClipboardList; label: string; value: number }) {
+function Metric({ icon: Icon, label, value, description, urgent = false }: { icon: typeof ClipboardList; label: string; value: number; description: string; urgent?: boolean }) {
   return (
-    <div className="flex items-center gap-2 text-sm">
-      <Icon className="size-4 text-muted-foreground" aria-hidden="true" /><span className="text-muted-foreground">{label}</span>
-      <strong className="text-lg tabular-nums">{value}</strong>
+    <div className={`min-w-0 rounded-xl border p-3 sm:p-4 ${urgent ? "border-red-200 bg-red-50/60 dark:border-red-900 dark:bg-red-950/30" : "border-border bg-card"}`}>
+      <div className={`flex items-center gap-2 text-xs sm:text-sm ${urgent ? "text-red-700 dark:text-red-300" : "text-muted-foreground"}`}>
+        <Icon className="size-4 shrink-0" aria-hidden="true" /><span>{label}</span>
+      </div>
+      <strong className={`mt-2 block break-all text-2xl font-semibold tabular-nums sm:text-3xl ${urgent ? "text-red-700 dark:text-red-300" : "text-foreground"}`}>{value}</strong>
+      <p className="mt-1 text-xs text-muted-foreground">{description}</p>
     </div>
   );
 }

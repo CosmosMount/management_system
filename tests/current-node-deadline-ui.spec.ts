@@ -70,12 +70,12 @@ test("工作台风险排序先于六项截取，共享时钟跨界和聚焦更�
   await page.goto("/progress");
   const region = page.getByRole("region", { name: "参与任务", exact: true });
   await expectDeadlineRulesInteraction(page);
-  await expect(region.locator("tbody tr")).toHaveCount(6);
-  await expect(region.locator("tbody tr").first()).toHaveAttribute("data-testid", `participating-task-${overdue.taskId}`);
+  await expect(region.getByRole("listitem")).toHaveCount(6);
+  await expect(region.getByRole("listitem").first()).toHaveAttribute("data-testid", `participating-task-${overdue.taskId}`);
   const soonRow = region.getByTestId(`participating-task-${soon.taskId}`);
   await expect(soonRow.locator('[data-deadline-status="DUE_SOON"]')).toHaveText("即将到期");
-  await expect(region.locator('tbody [data-deadline-status="NOT_DUE"]')).toHaveCount(4);
-  await expect(region.locator('tbody [data-deadline-status="NOT_DUE"]').first()).toHaveText("距到期超过 3 天");
+  await expect(region.getByRole("list").locator('[data-deadline-status="NOT_DUE"]')).toHaveCount(4);
+  await expect(region.getByRole("list").locator('[data-deadline-status="NOT_DUE"]').first()).toHaveText("距到期超过 3 天");
   await expectHealthyPage(page);
   await region.screenshot({ path: test.info().outputPath("deadline-workbench.png"), animations: "disabled" });
   await page.clock.fastForward(25 * 60 * 60_000);

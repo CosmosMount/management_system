@@ -72,7 +72,7 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       await page.goto("/progress");
       await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
       const participatingTasks = page.getByRole("region", { name: "参与任务" });
-      await expect(participatingTasks.locator("tbody tr")).toHaveCount(6);
+      await expect(participatingTasks.getByRole("listitem")).toHaveCount(6);
       await expect(participatingTasks.getByRole("link", { name: /查看全部参与任务/ }))
         .toHaveAttribute("href", "/progress/tasks?mine=1&status=ACTIVE");
       await page.getByRole("navigation", { name: "工作台视图" })

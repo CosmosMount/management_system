@@ -131,11 +131,19 @@ test("my work separates the personal schedule and preserves view history", async
   await page.goto("/progress");
   await expect(page.getByText("当前没有有效参与的任务。", { exact: true })).toBeVisible();
   const content = page.getByTestId("workbench-priority-content");
-  await expect(content.getByRole("heading", { name: "下一步", exact: true })).toBeVisible();
+  await expect(content.getByRole("heading", { name: "我的待办", exact: true })).toBeVisible();
   await expect(content.getByRole("heading", { name: "参与任务", exact: true })).toBeVisible();
+  await expect(content.getByRole("heading", { name: "下一步", exact: true })).toHaveCount(0);
+  const metrics = page.getByLabel("工作指标");
+  for (const label of ["进行中任务", "我的待办", "紧急待办", "未读通知"]) {
+    await expect(metrics.getByText(label, { exact: true })).toBeVisible();
+  }
+  await expect(page.getByRole("region", { name: "我的待办", exact: true }).getByText("当前需要推进或审批的事项", { exact: true })).toBeVisible();
+  await expectHealthyPage(page);
+  await page.screenshot({ path: test.info().outputPath("my-work-empty.png"), animations: "disabled", fullPage: true });
   await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
   if (testInfo.project.name === "desktop") {
-    const nextStep = await content.getByRole("heading", { name: "下一步", exact: true }).boundingBox();
+    const nextStep = await content.getByRole("heading", { name: "我的待办", exact: true }).boundingBox();
     const myTasks = await content.getByRole("heading", { name: "参与任务", exact: true }).boundingBox();
     expect(Math.abs(nextStep!.y - myTasks!.y)).toBeLessThan(10);
     expect(myTasks!.y).toBeLessThan(500);
@@ -178,7 +186,11 @@ test("participating work stays visible and focus links remain in schedule after 
   await page.goto("/progress");
   const tasks = page.getByRole("region", { name: "参与任务", exact: true });
   await expect(tasks.getByRole("link", { name: fixture.taskTitle, exact: true })).toBeVisible();
-  if (test.info().project.name === "desktop") await page.screenshot({ path: test.info().outputPath("my-work-desktop.png"), animations: "disabled" });
+  await expect(tasks.getByRole("list", { name: "参与任务预览", exact: true })).toBeVisible();
+  const inbox = page.getByRole("region", { name: "我的待办", exact: true });
+  await expect(inbox.getByRole("link", { name: "查看全部", exact: true })).toHaveAttribute("href", "/progress/approvals");
+  await expectHealthyPage(page);
+  await page.screenshot({ path: test.info().outputPath("my-work.png"), animations: "disabled", fullPage: true });
   await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
   await expect(tasks.getByRole("link", { name: "查看全部参与任务", exact: true })).toHaveAttribute("href", "/progress/tasks?mine=1&status=ACTIVE");
   await page.getByRole("link", { name: "显示全部", exact: true }).click();
@@ -221,7 +233,7 @@ test("dense workbench previews keep secondary items accessible without crowding 
   await expect(inbox.getByRole("link")).toHaveCount(4);
   await expect(inbox).toContainText("当前预览 8 / 9 项");
   const tasks = page.getByRole("region", { name: "参与任务", exact: true });
-  await expect(tasks.locator("tbody tr")).toHaveCount(6);
+  await expect(tasks.getByRole("listitem")).toHaveCount(6);
   await expect(tasks.getByRole("link", { name: "查看全部参与任务（当前预览 6 项）", exact: true })).toBeVisible();
   await expectHealthyPage(page);
   const firstItem = inbox.getByTestId("action-inbox-item").first();

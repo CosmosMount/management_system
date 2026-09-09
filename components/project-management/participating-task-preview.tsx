@@ -12,26 +12,24 @@ import { routes } from "@/lib/routes";
 export function ParticipatingTaskPreview({ tasks }: { tasks: TaskOptionPage["items"] }) {
   const nowMs = useProgressNow() ?? Number.NaN;
   const preview = [...tasks].sort((left, right) => compareDeadlineTasks(left, right, nowMs)).slice(0, 6);
-  return <div className="space-y-3">
-    <table className="w-full table-fixed text-left text-sm [overflow-wrap:anywhere]">
-      <thead className="text-muted-foreground">
-        <tr><th className="w-[35%] pb-2 font-medium">任务</th><th className="w-20 pb-2 font-medium">状态</th><th className="pb-2 font-medium">当前节点</th></tr>
-      </thead>
-      <tbody>
+  return <ul aria-label="参与任务预览" className="divide-y divide-border text-sm">
         {preview.map((task) => {
           const nodeName = task.activeMilestone?.goal ?? task.activeTermination?.name;
           const dueAt = task.activeMilestone?.expectedCompletedAt ?? task.activeTermination?.plannedAt;
-          return <tr key={task.id} className="border-t border-border" data-testid={`participating-task-${task.id}`}>
-            <td className="py-3 pr-3 align-top"><Link href={routes.progress.taskDetail(task.id)} className="line-clamp-2 break-words font-medium hover:underline" title={task.title}>{task.title}</Link></td>
-            <td className="py-3 pr-2 align-top"><Badge variant="secondary">{taskStatusLabels[task.status]}</Badge></td>
-            <td className="space-y-1 py-3 text-muted-foreground">
-              <span className="line-clamp-2" title={nodeName}>{nodeName ?? "暂无"}</span>
-              {dueAt && <time dateTime={dueAt} className="block text-xs">{formatDateTime(dueAt)}</time>}
+          return <li key={task.id} className="min-w-0 space-y-2 py-4" data-testid={`participating-task-${task.id}`}>
+            <div className="flex items-start gap-3">
+              <Link href={routes.progress.taskDetail(task.id)} className="min-w-0 flex-1 rounded font-medium hover:text-primary hover:underline focus-visible:outline-2 focus-visible:outline-ring" title={task.title}><span className="line-clamp-2 break-words [overflow-wrap:anywhere]">{task.title}</span></Link>
+              <Badge variant="secondary" className="shrink-0">{taskStatusLabels[task.status]}</Badge>
+            </div>
+            <div className="flex min-w-0 items-start gap-2 text-xs text-muted-foreground">
+              <span className="shrink-0">当前节点</span>
+              <span className="line-clamp-2 min-w-0 break-words [overflow-wrap:anywhere]" title={nodeName}>{nodeName ?? "暂无"}</span>
+            </div>
+            {(dueAt || task.currentNodeDeadline) && <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
               <NodeDeadline target={task.currentNodeDeadline} />
-            </td>
-          </tr>;
+              {dueAt && <span className="text-xs text-muted-foreground">截止 <time dateTime={dueAt}>{formatDateTime(dueAt)}</time></span>}
+            </div>}
+          </li>;
         })}
-      </tbody>
-    </table>
-  </div>;
+  </ul>;
 }
