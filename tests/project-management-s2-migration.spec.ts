@@ -1707,6 +1707,7 @@ test("S2 option page schemas expose only minimal public fields", () => {
           expectedCompletedAt: "2026-08-03T10:00:00.000Z",
         },
         activeTermination: null,
+        currentNodeDeadline: null,
         currentPlanVersionNo: 1,
         permission: { canView: true },
       },
@@ -2202,6 +2203,7 @@ function canvasTaskAnchor(taskId: string, nodeTaskId = taskId) {
   return {
     id: taskId,
     title: "画布 Task anchor",
+    currentNodeDeadline: null,
     status: "ACTIVE",
     priority: "HIGH",
     createdAt: "2026-08-01T07:30:00.000Z",

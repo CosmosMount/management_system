@@ -39,6 +39,7 @@ export const busyCandidateSelect = {
 
 export const anchorTaskSelect = {
   ...canvasRowTaskSelect,
+  activeMilestoneNodeId: true,
   updatedAt: true,
   nodes: {
     where: {

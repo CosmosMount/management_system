@@ -1,5 +1,7 @@
 import type { Prisma, TaskStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { resolveCurrentNodeDeadline } from "@/lib/project-management/current-node-deadline";
+import { currentDeadlinePlanNodesSelect } from "@/lib/project-management/queries/current-node-deadline-select";
 import { validationError } from "@/lib/project-management/application/errors";
 import {
   isSystemAdministrator,
@@ -30,6 +32,7 @@ import {
 
 const taskOptionSelect = {
   id: true,
+  activeMilestoneNodeId: true,
   title: true,
   description: true,
   status: true,
@@ -47,20 +50,7 @@ const taskOptionSelect = {
   currentPlanVersion: {
     select: {
       versionNo: true,
-      nodes: {
-        where: {
-          node: { type: "TERMINATION", status: "ACTIVE", deletedAt: null },
-        },
-        take: 1,
-        select: {
-          node: {
-            select: {
-              id: true,
-              termination: { select: { name: true, plannedAt: true } },
-            },
-          },
-        },
-      },
+      nodes: currentDeadlinePlanNodesSelect,
     },
   },
 } satisfies Prisma.TaskSelect;
@@ -277,7 +267,13 @@ function myTaskOptionWhere(actor: ProjectManagementActor): Prisma.TaskWhereInput
 }
 
 function taskOption(task: TaskOptionRow) {
+  const terminationNode = task.currentPlanVersion.nodes.find((entry) => entry.node.type === "TERMINATION")?.node;
   return {
+    currentNodeDeadline: resolveCurrentNodeDeadline({
+      taskStatus: task.status,
+      activeMilestoneNodeId: task.activeMilestoneNodeId,
+      nodes: task.currentPlanVersion.nodes.map((entry) => entry.node),
+    }),
     id: task.id,
     title: task.title,
     status: task.status,
@@ -293,12 +289,12 @@ function taskOption(task: TaskOptionRow) {
               task.activeMilestoneNode.milestone.expectedCompletedAt.toISOString(),
           }
         : null,
-    activeTermination: task.currentPlanVersion.nodes[0]?.node.termination
+    activeTermination: terminationNode?.termination
       ? {
-          nodeId: task.currentPlanVersion.nodes[0].node.id,
-          name: task.currentPlanVersion.nodes[0].node.termination.name,
+          nodeId: terminationNode.id,
+          name: terminationNode.termination.name,
           plannedAt:
-            task.currentPlanVersion.nodes[0].node.termination.plannedAt.toISOString(),
+            terminationNode.termination.plannedAt.toISOString(),
         }
       : null,
     currentPlanVersionNo: task.currentPlanVersion.versionNo,

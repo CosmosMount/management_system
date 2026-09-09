@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
+import { deadlineLabel, NodeDeadline } from "@/components/project-management/node-deadline";
+import { useProgressNow } from "@/components/project-management/progress-clock";
 import {
   resolveTaskOptionsByIds,
   searchTaskOptions,
@@ -64,6 +66,7 @@ export function TaskSelect({
     props,
     props.initialOptions ?? EMPTY_TASK_OPTIONS,
   );
+  const nowMs = useProgressNow() ?? Number.NaN;
   return (
     <AsyncCombobox
       {...props}
@@ -79,7 +82,7 @@ export function TaskSelect({
       clearable={clearable || allowIndependent}
       nullOptionLabel={allowIndependent ? "独立投入（不关联任务）" : undefined}
       getOptionLabel={(option) => option.title}
-      getOptionDescription={getTaskOptionDescription}
+      getOptionDescription={(option) => getTaskOptionDescription(option, nowMs)}
       renderOption={(option) => <TaskOptionContent option={option} />}
     />
   );
@@ -104,6 +107,7 @@ export function TaskMultiSelect({
     props,
     props.initialOptions ?? EMPTY_TASK_OPTIONS,
   );
+  const nowMs = useProgressNow() ?? Number.NaN;
   return <div className="space-y-3">
     <AsyncMultiCombobox
         {...props}
@@ -114,7 +118,7 @@ export function TaskMultiSelect({
         clearable={clearable}
         maxSelected={maxSelected}
         getOptionLabel={(option) => option.title}
-        getOptionDescription={getTaskOptionDescription}
+        getOptionDescription={(option) => getTaskOptionDescription(option, nowMs)}
         renderOption={(option) => <TaskOptionContent option={option} />}
       />
     {showSelectedList && value.length > 0 && <div className="space-y-2">
@@ -218,21 +222,27 @@ function TaskOptionContent({ option }: { option: TaskPickerOption }) {
         <Badge variant="secondary" className="shrink-0 text-[10px]">
           {taskPriorityLabels[option.priority]}
         </Badge>
+        <NodeDeadline target={option.currentNodeDeadline} />
       </div>
       <p className="truncate text-xs text-muted-foreground">
         {option.team || "未设置车组"} / {option.techGroup || "未设置技术组"}
         {option.activeMilestone
           ? ` · ${option.activeMilestone.goal} · ${formatDateTime(option.activeMilestone.expectedCompletedAt)}`
-          : " · 无当前里程碑"}
+          : option.activeTermination
+            ? ` · ${option.activeTermination.name} · ${formatDateTime(option.activeTermination.plannedAt)}`
+            : " · 无当前节点"}
       </p>
     </div>
   );
 }
 
-function getTaskOptionDescription(option: TaskPickerOption) {
+function getTaskOptionDescription(option: TaskPickerOption, nowMs: number) {
   const organization = `${option.team || "未设置车组"} / ${option.techGroup || "未设置技术组"}`;
   const milestone = option.activeMilestone
     ? `${option.activeMilestone.goal} · ${formatDateTime(option.activeMilestone.expectedCompletedAt)}`
-    : "无当前里程碑";
-  return `${taskStatusLabels[option.status]} · ${taskPriorityLabels[option.priority]} · ${organization} · ${milestone}`;
+    : option.activeTermination
+      ? `${option.activeTermination.name} · ${formatDateTime(option.activeTermination.plannedAt)}`
+      : "无当前节点";
+  const dueLabel = deadlineLabel(option.currentNodeDeadline, nowMs);
+  return `${taskStatusLabels[option.status]} · ${taskPriorityLabels[option.priority]} · ${organization} · ${milestone}${dueLabel ? ` · ${dueLabel}` : ""}`;
 }

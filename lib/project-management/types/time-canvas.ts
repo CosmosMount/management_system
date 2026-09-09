@@ -12,6 +12,11 @@ import { z } from "zod";
 
 const dtoIdSchema = z.string().uuid();
 const dtoAbsoluteDateTimeSchema = z.string().datetime({ offset: true });
+export const currentNodeDeadlineDtoSchema = z.object({
+  nodeId: dtoIdSchema,
+  nodeType: z.enum(["MILESTONE", "TERMINATION"]),
+  dueAt: dtoAbsoluteDateTimeSchema,
+}).strict();
 const taskStatusSchema = z.enum(taskStatusValues);
 const taskPrioritySchema = z.enum(taskPriorityValues);
 const taskNodeTypeSchema = z.enum(taskNodeTypeValues);
@@ -173,6 +178,7 @@ export type TimeCanvasNodeAnchorDto = z.infer<
 
 export const timeCanvasTaskAnchorDtoSchema = z
   .object({
+    currentNodeDeadline: currentNodeDeadlineDtoSchema.nullable(),
     id: dtoIdSchema,
     title: z.string().trim().min(1),
     status: taskStatusSchema,
@@ -312,6 +318,7 @@ const activeTerminationOptionDtoSchema = z
 
 export const taskOptionDtoSchema = z
   .object({
+    currentNodeDeadline: currentNodeDeadlineDtoSchema.nullable(),
     id: dtoIdSchema,
     title: z.string().trim().min(1),
     status: taskStatusSchema,

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { NodeDeadline } from "@/components/project-management/node-deadline";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -275,9 +276,9 @@ export function TaskWorkbench({
                 </Link>
               )}
             </div>
-            <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-3 [&_dd]:line-clamp-2 [&_dd]:[overflow-wrap:anywhere]">
-              <OverviewItem label="负责人" value={memberNames(workspace, "OWNER")} />
-              <OverviewItem label="当前节点" value={currentNodeLabel(currentWorkspace)} />
+            <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-3 [&_dd]:[overflow-wrap:anywhere]">
+              <OverviewItem label="负责人" value={<span className="line-clamp-2">{memberNames(workspace, "OWNER")}</span>} />
+              <OverviewItem label="当前节点" value={<span className="space-y-1"><span className="line-clamp-2">{currentNodeLabel(currentWorkspace)}</span><NodeDeadline target={currentWorkspace.task.currentNodeDeadline} showDate /></span>} />
               <OverviewItem label="计划结束" value={formatDateTime(termination?.termination?.plannedAt ?? null)} />
             </dl>
             <details className="mt-3 text-sm">

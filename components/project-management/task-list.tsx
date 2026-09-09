@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { ProjectAvatar } from "@/components/project-management/project-avatar";
+import { NodeDeadline } from "@/components/project-management/node-deadline";
 import {
   formatDateTime,
   taskMemberRoleLabels,
@@ -58,6 +59,7 @@ export function TaskList({ tasks }: { tasks: TaskListItem[] }) {
               {task.members.length > 4 && ` 等 ${task.members.length} 位成员`}
             </p>
             <div className="min-w-0 text-muted-foreground">
+              <NodeDeadline target={task.currentNodeDeadline} className="mb-1" />
               {task.activeMilestone ? (
                 <><p className="line-clamp-2 [overflow-wrap:anywhere]">当前：{task.activeMilestone.goal}</p><p className="mt-1 text-xs">{formatDateTime(task.activeMilestone.expectedCompletedAt)}</p></>
               ) : task.activeTermination ? (

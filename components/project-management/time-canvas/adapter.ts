@@ -193,6 +193,7 @@ function adaptTaskAnchors(
     if (!node.plannedAt) continue;
     anchors.push({
       id: node.id,
+      currentNodeDeadline: task.currentNodeDeadline?.nodeId === node.id ? task.currentNodeDeadline : null,
       rowId,
       taskId: task.id,
       kind: node.type,

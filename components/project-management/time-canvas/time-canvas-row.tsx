@@ -493,6 +493,7 @@ export function TimelineRow({
       {visibleAnchors.map((anchor, index) => (
         <AnchorMarker
           key={anchor.id}
+          nowMs={nowMs}
           mode={mode}
           planRow={row.kind === "PLAN"}
           anchor={anchor}

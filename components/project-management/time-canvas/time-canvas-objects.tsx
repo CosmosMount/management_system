@@ -25,6 +25,8 @@ import type {
   TimeCanvasSelection,
 } from "@/components/project-management/time-canvas/types";
 import { cn } from "@/lib/utils";
+import { evaluateDeadline } from "@/lib/project-management/current-node-deadline";
+import { deadlinePresentation } from "@/components/project-management/node-deadline";
 import {
   formatCanvasDateTime as formatDateTime,
   formatCanvasRange as formatRange,
@@ -278,6 +280,7 @@ export function SegmentBlock({
 }
 
 export function AnchorMarker({
+  nowMs,
   mode,
   planRow,
   anchor,
@@ -294,6 +297,7 @@ export function AnchorMarker({
   onObjectFocus,
   onPreviewChange,
 }: {
+  nowMs: number;
   mode: TimeCanvasProps["mode"];
   planRow: boolean;
   anchor: TimeCanvasAnchor;
@@ -326,6 +330,11 @@ export function AnchorMarker({
   const suppressClickRef = useRef(false);
   const displayedAtMs = previewAtMs ?? groupPreviewAtMs ?? anchor.atMs;
   const completed = anchor.completed ?? anchor.status === "COMPLETED";
+  const deadlineStatus = evaluateDeadline(
+    completed || anchor.visualState || mode === "TASK_COMPOSER" ? null : anchor.currentNodeDeadline,
+    nowMs,
+  );
+  const deadline = deadlineStatus === "NONE" ? null : deadlinePresentation[deadlineStatus];
   const left = timeToX(displayedAtMs, scale) + (planRow ? 0 : offset * 2);
   const top = planRow ? PLAN_RAIL_TOP + 2 : 8 + lane * 22;
   const iconKind =
@@ -425,8 +434,8 @@ export function AnchorMarker({
       )}
       style={{ left, top }}
       aria-pressed={selectedForGroup}
-      aria-label={`${anchor.kind === "TERMINATION" ? "终止节点" : "计划节点"} ${anchor.label}，${formatDateTime(displayedAtMs)}，状态 ${announcedStatus}${canMove ? "，按左右方向键可移动" : ""}`}
-      title={`${anchor.label} · ${formatDateTime(displayedAtMs)}`}
+      aria-label={`${anchor.kind === "TERMINATION" ? "终止节点" : "计划节点"} ${anchor.label}，${formatDateTime(displayedAtMs)}，状态 ${announcedStatus}${deadline ? `，${deadline.label}` : ""}${canMove ? "，按左右方向键可移动" : ""}`}
+      title={`${anchor.label} · ${formatDateTime(displayedAtMs)}${deadline ? ` · ${deadline.label}` : ""}`}
       onClick={(event) => {
         if (suppressClickRef.current) {
           suppressClickRef.current = false;
@@ -548,6 +557,7 @@ export function AnchorMarker({
       data-anchor-icon={iconKind}
       data-anchor-completed={completed ? "true" : "false"}
       data-anchor-id={anchor.id}
+      data-deadline-status={deadlineStatus}
       data-anchor-editable={anchor.editable ? "true" : "false"}
       data-anchor-multi-selected={multiSelected ? "true" : "false"}
       data-anchor-visual-state={anchor.visualState ?? "DEFAULT"}
@@ -573,9 +583,9 @@ export function AnchorMarker({
       >
         {anchor.visualState === "TEMPORARY" ? `临时 · ${anchor.label}` : anchor.label}
       </span>
-      {planRow && (
-        <span className="max-w-32 truncate text-[9px] text-muted-foreground">
-          {formatCompactAnchorDate(displayedAtMs, false)}
+      {(planRow || deadline) && (
+        <span className={cn("max-w-32 truncate rounded border border-transparent px-1 text-[9px] text-muted-foreground", deadline?.className)}>
+          {deadline ? `${deadline.label} · ` : ""}{formatCompactAnchorDate(displayedAtMs, false)}
         </span>
       )}
     </button>

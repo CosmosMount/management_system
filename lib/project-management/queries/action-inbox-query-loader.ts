@@ -1,9 +1,12 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { currentDeadlinePlanNodesSelect } from "@/lib/project-management/queries/current-node-deadline-select";
 import type { ActionInboxCursorPositions } from "@/lib/project-management/queries/action-inbox-cursor";
 import { positionDate } from "@/lib/project-management/queries/action-inbox-cursor-validation";
 
 const taskResourceSelect = {
+  activeMilestoneNodeId: true,
+  currentPlanVersion: { select: { nodes: currentDeadlinePlanNodesSelect } },
   id: true,
   title: true,
   team: true,

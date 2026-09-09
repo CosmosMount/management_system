@@ -41,6 +41,7 @@ export function buildTaskNavigatorNodes(
       completed: workspace.task.status !== "DRAFT",
     },
     ...workspace.currentPlan.nodes.map((node): TaskPlanNavigatorNode => ({
+      currentNodeDeadline: workspace.task.currentNodeDeadline?.nodeId === node.nodeId ? workspace.task.currentNodeDeadline : null,
       id: node.nodeId,
       kind: node.milestone ? "MILESTONE" : node.revision ? "REVISION" : "TERMINAL",
       label: node.milestone?.goal ?? node.revision?.reason ?? node.termination?.name ?? "未命名节点",

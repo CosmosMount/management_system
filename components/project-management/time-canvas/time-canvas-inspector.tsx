@@ -1,6 +1,7 @@
 "use client";
 
 import { X } from "lucide-react";
+import { NodeDeadline } from "@/components/project-management/node-deadline";
 import type {
   TimeCanvasAnchor,
   TimeCanvasProps,
@@ -25,9 +26,11 @@ function entityTitle(entity: SelectedEntity) {
 export function TimeCanvasInspector({
   entity,
   onClose,
+  nowMs,
 }: {
   entity: SelectedEntity;
   onClose: () => void;
+  nowMs?: number;
 }) {
   return (
     <aside className="border-t border-border bg-card p-4 md:border-l md:border-t-0" aria-label="时间对象详情" data-testid="time-canvas-inspector">
@@ -40,12 +43,12 @@ export function TimeCanvasInspector({
           <X aria-hidden="true" />
         </Button>
       </div>
-      <InspectorBody entity={entity} />
+      <InspectorBody entity={entity} nowMs={nowMs} />
     </aside>
   );
 }
 
-function InspectorBody({ entity }: { entity: SelectedEntity }) {
+function InspectorBody({ entity, nowMs }: { entity: SelectedEntity; nowMs?: number }) {
   if (entity.kind === "ANCHOR") {
     const statusLabels: Record<string, string> = entity.value.kind === "PLAN_START" ? taskStatusLabels : taskNodeStatusLabels;
     return (
@@ -53,6 +56,7 @@ function InspectorBody({ entity }: { entity: SelectedEntity }) {
         <Detail label="类型" value={entity.value.kind === "PLAN_START" ? "开始节点" : taskNodeTypeLabels[entity.value.kind]} />
         <Detail label="状态" value={statusLabels[entity.value.status] ?? "未知状态"} />
         <Detail label="计划时间" value={formatDateTime(entity.value.atMs)} />
+        {entity.value.currentNodeDeadline && <div><dt className="text-xs text-muted-foreground">节点到期</dt><dd className="mt-1"><NodeDeadline target={entity.value.currentNodeDeadline} nowMs={nowMs} /></dd></div>}
         <Detail label="权限" value={entity.value.editable ? "可编辑" : "只读；修改需按任务生命周期进行"} />
       </dl>
     );

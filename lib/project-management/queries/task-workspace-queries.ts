@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { resolveCurrentNodeDeadline } from "@/lib/project-management/current-node-deadline";
 import {
   authorize,
   taskReadableWhere,
@@ -67,6 +68,11 @@ export async function getTaskWorkspace({
 
   return {
     task: {
+      currentNodeDeadline: resolveCurrentNodeDeadline({
+        taskStatus: task.status,
+        activeMilestoneNodeId: task.activeMilestoneNodeId,
+        nodes: task.currentPlanVersion.nodes.map((entry) => entry.node),
+      }),
       id: task.id,
       title: task.title,
       description: task.description,

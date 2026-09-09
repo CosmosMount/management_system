@@ -27,6 +27,7 @@ import {
   selectClass,
 } from "@/components/project-management/task-workbench-fields";
 import { Badge } from "@/components/ui/badge";
+import { NodeDeadline } from "@/components/project-management/node-deadline";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { FieldError } from "@/components/ui/field-error";
 import { Input } from "@/components/ui/input";
@@ -224,6 +225,7 @@ function MilestoneDetail({
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="text-lg font-semibold">{milestone.goal}</h2>
         <Badge>{taskNodeStatusLabels[node.status]}</Badge>
+        <NodeDeadline target={workspace.task.currentNodeDeadline?.nodeId === node.nodeId ? workspace.task.currentNodeDeadline : null} />
       </div>
       <dl className="grid gap-3 text-sm sm:grid-cols-2">
         <OverviewItem label="计划完成" value={formatDateTime(milestone.expectedCompletedAt)} />
@@ -693,6 +695,7 @@ function TerminationDetail({
           {termination.name}
         </h2>
         <Badge>{taskNodeStatusLabels[node.status]}</Badge>
+        <NodeDeadline target={workspace.task.currentNodeDeadline?.nodeId === node.nodeId ? workspace.task.currentNodeDeadline : null} />
       </div>
       <dl className="grid gap-3 text-sm sm:grid-cols-2">
         <OverviewItem

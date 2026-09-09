@@ -3,8 +3,12 @@
 import { Check, Circle, Flag, GitCommitHorizontal, Play } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
+import type { CurrentNodeDeadline } from "@/lib/project-management/current-node-deadline";
+import { deadlineLabel, NodeDeadline } from "@/components/project-management/node-deadline";
+import { useProgressNow } from "@/components/project-management/progress-clock";
 
 export type TaskPlanNavigatorNode = {
+  currentNodeDeadline?: CurrentNodeDeadline | null;
   id: string;
   kind: "START" | "MILESTONE" | "REVISION" | "TERMINAL";
   label: string;
@@ -41,6 +45,7 @@ export function TaskPlanNodeNavigator({
   label?: string;
   revisionHistory?: TaskPlanRevisionHistoryControls;
 }) {
+  const nowMs = useProgressNow() ?? Number.NaN;
   const containerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const container = containerRef.current;
@@ -82,6 +87,7 @@ export function TaskPlanNodeNavigator({
         {nodes.map((node, index) => {
           const selected = selectedId === node.id;
           const typeLabel = nodeTypeLabel(node.kind);
+          const dueLabel = deadlineLabel(node.currentNodeDeadline, nowMs);
           const historyControl =
             node.kind === "REVISION"
               ? revisionHistory?.byNodeId[node.id]
@@ -113,7 +119,7 @@ export function TaskPlanNodeNavigator({
                   node.disabled && "cursor-not-allowed opacity-60",
                 )}
                 aria-pressed={selected}
-                aria-label={`${node.label}，${typeLabel}，${node.invalid ? "需修正，" : ""}${node.status}，${formatNodeDate(node.at)}`}
+                aria-label={`${node.label}，${typeLabel}，${node.invalid ? "需修正，" : ""}${node.status}，${formatNodeDate(node.at)}${dueLabel ? `，${dueLabel}` : ""}`}
                 disabled={node.disabled}
                 onClick={() => onSelect(node.id)}
               >
@@ -125,6 +131,7 @@ export function TaskPlanNodeNavigator({
                   <span className="mt-0.5 block text-xs text-muted-foreground">
                     {typeLabel}
                   </span>
+                  <NodeDeadline target={node.currentNodeDeadline} className="mt-1" />
                   <span
                     className={cn(
                       "mt-0.5 block text-xs text-muted-foreground",

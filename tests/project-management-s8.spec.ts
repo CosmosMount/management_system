@@ -1133,6 +1133,7 @@ function actionInboxFailure(operation: Promise<unknown>) {
 
 function actionInboxSnapshotItem(id: string): ActionInboxItem {
   return {
+    currentNodeDeadline: null,
     id,
     kind: "TASK_NEXT_NODE",
     title: id,

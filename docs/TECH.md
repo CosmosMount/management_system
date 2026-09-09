@@ -258,6 +258,16 @@ TimeCanvas 的显示尺度为 `WEEK/MONTH/QUARTER/YEAR`，密度分别为 40/12/
 
 第一阶段仅统一入口；当前桌面布局改为行动优先工作台与真正互斥的详情分区。数据库状态、业务记录名称和画布计算语义保持不变。中文文案测试应检查显示标签，不更改用来测试业务数据的原始 Task/Project 名称和内部枚举。
 
+### 当前节点到期展示
+
+`lib/project-management/current-node-deadline.ts` 是到期展示的唯一业务规则入口：从进行中 Task 的当前计划中按 `activeMilestoneNodeId` 解析有效里程碑；只有指针为空时才回退唯一 ACTIVE 结束节点。指针失配、已完成/取消/修订/删除节点和非法时间返回空目标，不推测替代节点。`evaluateDeadline(target, nowMs)` 为纯函数，截止时间早于 now 为 OVERDUE，距离 now 在 `[0,72h]` 为 DUE_SOON，超过 72h 为 NOT_DUE；无有效目标为 NONE。
+
+任务列表、选项、workspace、项目任务、画布 Task anchor 和待办读模型使用可空 `currentNodeDeadline: { nodeId, nodeType, dueAt }`；它是现有授权查询中计算的只读目标，不是新数据库字段，不保存颜色或随时间过期的状态。列表/选项/待办共用当前计划节点 select，不新增逐任务查询。待办仅保留与该事项 nodeId 匹配的目标，不把修订/立项时间当截止日期，不改变 severity、criticalCount、排序或游标。
+
+`ProgressClockProvider` 位于进度模块 layout，服务端时间初始化，每分钟及 focus/visibility 恢复时更新，隐藏页面不更新时间；TimeCanvas 共用此时钟，独立画布保留本地时钟回退。`NodeDeadline`、图例、导航可访问名称及任务选项描述共用状态标签。当前目标只装配到当前计划对应 anchor，历史/候选 overlay 不继承；画布独立呈现到期文字底色，不覆盖原图标、选中环和焦点样式。业务状态变更仍依靠既有刷新流程更新数据，不新增数据库轮询或飞书提醒。
+
+工作台使用全量授权参与任务的副本按风险和截止时间排序后截取 6 项；其他入口继续原有排序、分页及搜索相关性。此到期口径与按日运行的通知调度彼此独立。
+
 ### Task 权限迁移与审批通知修复
 
 `20260803120000_task_global_visibility_participants_admin_approval` 是不可逆 migration，不得修改已应用历史。它会：

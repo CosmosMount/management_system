@@ -1,4 +1,5 @@
 import type { ResourcePlanTaskStatus } from "@/lib/project-management/resource-plan-url";
+import type { CurrentNodeDeadline } from "@/lib/project-management/current-node-deadline";
 
 export type TimeCanvasMode =
   | "TASK_COMPOSER"
@@ -39,6 +40,7 @@ export type TimeCanvasRow = {
 };
 
 export type TimeCanvasAnchor = {
+  currentNodeDeadline?: CurrentNodeDeadline | null;
   id: string;
   rowId: string;
   taskId: string;

@@ -1,6 +1,6 @@
 import type React from "react";
 
-export function OverviewItem({ label, value }: { label: string; value: string }) {
+export function OverviewItem({ label, value }: { label: string; value: React.ReactNode }) {
   return <div className="min-w-0"><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 whitespace-pre-wrap break-words">{value}</dd></div>;
 }
 

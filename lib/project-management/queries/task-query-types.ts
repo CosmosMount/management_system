@@ -5,6 +5,7 @@ import type {
 } from "@prisma/client";
 import type { TaskPendingApproval } from "@/lib/project-management/task-approval-gate";
 import type { PlanVersionSummary } from "@/lib/project-management/queries/task-plan-queries";
+import type { CurrentNodeDeadline } from "@/lib/project-management/current-node-deadline";
 
 type TaskMemberSummary = {
   personId: string;
@@ -13,6 +14,7 @@ type TaskMemberSummary = {
 };
 
 export type TaskListItem = {
+  currentNodeDeadline: CurrentNodeDeadline | null;
   id: string;
   title: string;
   description: string;
@@ -46,6 +48,7 @@ export type TaskListResult = {
 
 export type TaskWorkspace = {
   task: {
+    currentNodeDeadline: CurrentNodeDeadline | null;
     id: string;
     title: string;
     description: string;

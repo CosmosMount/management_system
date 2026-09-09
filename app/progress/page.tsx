@@ -9,7 +9,7 @@ import type { TimeCanvasZoom } from "@/components/project-management/time-canvas
 import { ViewportStateLink } from "@/components/project-management/time-canvas/viewport-state-link";
 import { Badge } from "@/components/ui/badge";
 import { toProjectManagementServiceError } from "@/lib/project-management/application/errors";
-import { formatDateTime, taskStatusLabels } from "@/lib/project-management/labels";
+import { ParticipatingTaskPreview } from "@/components/project-management/participating-task-preview";
 import { getActionInbox } from "@/lib/project-management/queries/action-inbox-queries";
 import { getMyWorkMetrics } from "@/lib/project-management/queries/dashboard-queries";
 import { listInAppNotifications } from "@/lib/project-management/queries/notification-queries";
@@ -190,20 +190,7 @@ export default async function ProgressPage({
               <Empty text="当前没有有效参与的任务。" />
             ) : (
               <div className="mt-4 overflow-x-auto">
-                <table className="w-full table-fixed text-left text-sm [overflow-wrap:anywhere]">
-                  <thead className="text-muted-foreground">
-                    <tr><th className="w-2/5 pb-2 font-medium">任务</th><th className="w-24 pb-2 font-medium">状态</th><th className="pb-2 font-medium">当前节点</th></tr>
-                  </thead>
-                  <tbody>
-                    {tasks.slice(0, 6).map((task) => (
-                      <tr key={task.id} className="border-t border-border">
-                        <td className="max-w-64 py-3 pr-3"><Link href={routes.progress.taskDetail(task.id)} className="line-clamp-2 break-words font-medium hover:underline" title={task.title}>{task.title}</Link></td>
-                        <td className="py-3 pr-3"><Badge variant="secondary">{taskStatusLabels[task.status]}</Badge></td>
-                        <td className="py-3 text-muted-foreground"><span className="line-clamp-2">{task.activeMilestone ? `${task.activeMilestone.goal} · ${formatDateTime(task.activeMilestone.expectedCompletedAt)}` : task.activeTermination ? `${task.activeTermination.name} · ${formatDateTime(task.activeTermination.plannedAt)}` : "暂无"}</span></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <ParticipatingTaskPreview tasks={tasks} />
                 <Link href={`${routes.progress.tasks}?mine=1&status=${showAllTasks ? "" : "ACTIVE"}`} className="mt-3 inline-block text-sm text-primary hover:underline">查看全部参与任务{tasks.length > 6 ? "（当前预览 6 项）" : ""}</Link>
               </div>
             )}

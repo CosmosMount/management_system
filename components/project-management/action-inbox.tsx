@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import Link from "next/link";
+import { NodeDeadline } from "@/components/project-management/node-deadline";
 import { loadActionInboxPage } from "@/app/actions/project-management/action-inbox";
 import {
   actionInboxLoadRecovery,
@@ -220,6 +221,7 @@ function ActionInboxRow({
             {item.summary}
           </p>
         )}
+        <NodeDeadline target={item.currentNodeDeadline} className="mt-2" />
         {compact && <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground"><span>{kindLabels[item.kind]}</span><span>{item.timeLabel}：{formatDateTime(item.relevantAt)}</span></div>}
         <details open={compact ? undefined : true} className="mt-2 min-w-0">
           <summary className={compact ? "w-fit cursor-pointer rounded text-xs text-primary focus-visible:outline-2 focus-visible:outline-ring" : "hidden"}>待办详情</summary>

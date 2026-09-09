@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import { NodeDeadline } from "@/components/project-management/node-deadline";
+import type { CurrentNodeDeadline } from "@/lib/project-management/current-node-deadline";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ChevronDown, LocateFixed, Plus } from "lucide-react";
@@ -45,6 +47,7 @@ import { cn } from "@/lib/utils";
 import type { TaskNodeStatus, TaskStatus } from "@prisma/client";
 
 type ProjectTimelineTask = {
+  currentNodeDeadline: CurrentNodeDeadline | null;
   id: string;
   title: string;
   status: TaskStatus;
@@ -530,6 +533,7 @@ export function ProjectDetailWorkspace({
                                           {task.title}
                                         </Link>
                                         <Badge variant="secondary">{statusLabel}</Badge>
+                                        <NodeDeadline target={task.currentNodeDeadline} showDate />
                                       </div>
                                     </TableCell>
                                     <TableCell className="whitespace-normal text-right">
@@ -772,6 +776,7 @@ function taskAnchors(task: ProjectTimelineTask): TimeCanvasAnchor[] {
         startAt;
       return {
         id: `project-node:${entry.id}`,
+        currentNodeDeadline: task.currentNodeDeadline?.nodeId === entry.id ? task.currentNodeDeadline : null,
         rowId,
         taskId: task.id,
         kind: entry.milestone

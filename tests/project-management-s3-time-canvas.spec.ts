@@ -651,6 +651,7 @@ test.describe("S3 TimeCanvas pure core", () => {
         {
           id: taskId,
           title: "Active 计划",
+          currentNodeDeadline: null,
           status: "ACTIVE",
           priority: "MEDIUM",
           createdAt: versionToken,

@@ -1,5 +1,7 @@
 import type { Prisma, TaskPriority, TaskStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { resolveCurrentNodeDeadline } from "@/lib/project-management/current-node-deadline";
+import { currentDeadlinePlanNodesSelect } from "@/lib/project-management/queries/current-node-deadline-select";
 import { taskReadableWhere } from "@/lib/project-management/authorization";
 import { validationError } from "@/lib/project-management/application/errors";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
@@ -19,20 +21,7 @@ const taskListInclude = {
   currentPlanVersion: {
     select: {
       versionNo: true,
-      nodes: {
-        where: {
-          node: { type: "TERMINATION", status: "ACTIVE", deletedAt: null },
-        },
-        take: 1,
-        select: {
-          node: {
-            select: {
-              id: true,
-              termination: { select: { name: true, plannedAt: true } },
-            },
-          },
-        },
-      },
+      nodes: currentDeadlinePlanNodesSelect,
     },
   },
   activeMilestoneNode: {
@@ -186,42 +175,49 @@ export async function listTasks({
     hasNextPage = tasks.length > limit;
   }
   return {
-    items: visibleTasks.map((task) => ({
-      id: task.id,
-      title: task.title,
-      description: task.description,
-      team: task.team,
-      techGroup: task.techGroup,
-      status: task.status,
-      priority: task.priority,
-      project: task.project,
-      currentPlanVersionNo: task.currentPlanVersion.versionNo,
-      lockVersion: task.lockVersion,
-      activeMilestone:
-        task.activeMilestoneNode?.milestone
+    items: visibleTasks.map((task) => {
+      const terminationNode = task.currentPlanVersion.nodes.find((entry) => entry.node.type === "TERMINATION")?.node;
+      return {
+        currentNodeDeadline: resolveCurrentNodeDeadline({
+          taskStatus: task.status,
+          activeMilestoneNodeId: task.activeMilestoneNodeId,
+          nodes: task.currentPlanVersion.nodes.map((entry) => entry.node),
+        }),
+        id: task.id,
+        title: task.title,
+        description: task.description,
+        team: task.team,
+        techGroup: task.techGroup,
+        status: task.status,
+        priority: task.priority,
+        project: task.project,
+        currentPlanVersionNo: task.currentPlanVersion.versionNo,
+        lockVersion: task.lockVersion,
+        activeMilestone:
+          task.activeMilestoneNode?.milestone
+            ? {
+                nodeId: task.activeMilestoneNode.id,
+                goal: task.activeMilestoneNode.milestone.goal,
+                expectedCompletedAt:
+                  task.activeMilestoneNode.milestone.expectedCompletedAt.toISOString(),
+              }
+            : null,
+        activeTermination: terminationNode?.termination
           ? {
-              nodeId: task.activeMilestoneNode.id,
-              goal: task.activeMilestoneNode.milestone.goal,
-              expectedCompletedAt:
-                task.activeMilestoneNode.milestone.expectedCompletedAt.toISOString(),
+              nodeId: terminationNode.id,
+              name: terminationNode.termination.name,
+              plannedAt: terminationNode.termination.plannedAt.toISOString(),
             }
           : null,
-      activeTermination: task.currentPlanVersion.nodes[0]?.node.termination
-        ? {
-            nodeId: task.currentPlanVersion.nodes[0].node.id,
-            name: task.currentPlanVersion.nodes[0].node.termination.name,
-            plannedAt:
-              task.currentPlanVersion.nodes[0].node.termination.plannedAt.toISOString(),
-          }
-        : null,
-      members: task.members.map((member) => ({
-        personId: member.personId,
-        role: member.role,
-        displayName: member.person.displayName,
-      })),
-      updatedAt: task.updatedAt.toISOString(),
-      createdAt: task.createdAt.toISOString(),
-    })),
+        members: task.members.map((member) => ({
+          personId: member.personId,
+          role: member.role,
+          displayName: member.person.displayName,
+        })),
+        updatedAt: task.updatedAt.toISOString(),
+        createdAt: task.createdAt.toISOString(),
+      };
+    }),
     nextCursor: hasNextPage
       ? encodeKeysetCursor(
           "TASK",

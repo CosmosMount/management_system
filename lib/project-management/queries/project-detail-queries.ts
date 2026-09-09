@@ -1,5 +1,6 @@
 import type { Prisma, TaskStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { resolveCurrentNodeDeadline } from "@/lib/project-management/current-node-deadline";
 import { notFoundError } from "@/lib/project-management/application/errors";
 import {
   authorize,
@@ -45,6 +46,7 @@ const projectDetailTaskSelect = {
           node: {
             select: {
               id: true,
+              type: true,
               status: true,
               milestone: { select: { goal: true, expectedCompletedAt: true } },
               revision: { select: { reason: true, revisionAt: true, status: true } },
@@ -165,6 +167,11 @@ export async function getProjectDetail({
     requestNextCursor: requestRows.length > pageSize && requests.at(-1) ? encodeRoundCursor(requests.at(-1)!.round, requests.at(-1)!.id) : null,
     pendingRequestId: pendingRequest?.id ?? null,
     tasks: tasks.map((task) => ({
+      currentNodeDeadline: resolveCurrentNodeDeadline({
+        taskStatus: task.status,
+        activeMilestoneNodeId: task.activeMilestoneNodeId,
+        nodes: task.currentPlanVersion.nodes.map((entry) => entry.node),
+      }),
       id: task.id,
       title: task.title,
       description: task.description,

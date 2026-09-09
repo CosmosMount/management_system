@@ -259,6 +259,7 @@ function workspaceTaskOption(workspace: TaskWorkspace) {
     (entry) => entry.type === "TERMINATION" && entry.status === "ACTIVE",
   );
   return {
+    currentNodeDeadline: workspace.task.currentNodeDeadline,
     id: workspace.task.id,
     title: workspace.task.title,
     status: workspace.task.status,

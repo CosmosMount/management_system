@@ -1,4 +1,5 @@
 import { routes } from "@/lib/routes";
+import { resolveCurrentNodeDeadline } from "@/lib/project-management/current-node-deadline";
 import { authorize } from "@/lib/project-management/authorization";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import { terminationOutcomeLabel } from "@/lib/project-management/notifications/user-facing-copy";
@@ -192,6 +193,7 @@ export function buildActionInboxCandidates({
   for (const request of projectRequests) {
     candidates.push(
       streamItem("PROJECT_ESTABLISHMENT", request.id, request.submittedAt, {
+        currentNodeDeadline: null,
         id: `project-establishment:${request.id}`,
         kind: "PROJECT_ESTABLISHMENT",
         title: request.project.name,
@@ -220,15 +222,33 @@ function streamItem(
   relevantAt: Date,
   item: ActionInboxItem,
 ): StreamItem {
-  return { stream, rawId, relevantAt, item };
+  return {
+    stream,
+    rawId,
+    relevantAt,
+    item: {
+      ...item,
+      currentNodeDeadline: item.currentNodeDeadline?.nodeId === item.nodeId
+        ? item.currentNodeDeadline
+        : null,
+    },
+  };
 }
 
 function taskContext(task: {
   id: string;
   title: string;
   project: { id: string; name: string } | null;
+  status: string;
+  activeMilestoneNodeId: string | null;
+  currentPlanVersion: { nodes: Array<{ node: Parameters<typeof resolveCurrentNodeDeadline>[0]["nodes"][number] }> };
 }) {
   return {
+    currentNodeDeadline: resolveCurrentNodeDeadline({
+      taskStatus: task.status,
+      activeMilestoneNodeId: task.activeMilestoneNodeId,
+      nodes: task.currentPlanVersion.nodes.map((entry) => entry.node),
+    }),
     projectId: task.project?.id ?? null,
     projectName: task.project?.name ?? null,
     taskId: task.id,

@@ -1,5 +1,8 @@
 "use client";
 
+import { useCanvasNow } from "@/components/project-management/progress-clock";
+import { DeadlineLegend } from "@/components/project-management/node-deadline";
+
 import {
   useCallback,
   useEffect,
@@ -129,7 +132,7 @@ export function TimeCanvas({
     mode === "ADMIN_TIME_MARKERS" && model.rows.length === 0;
   const canvasChromeHeight =
     AXIS_HEIGHT + (showAdminMarkerStage ? ADMIN_MARKER_STAGE_HEIGHT : 0);
-  const liveNowMs = useLiveNow(model.generatedAt);
+  const liveNowMs = useCanvasNow(model.generatedAt);
   const focusTargets = useMemo(
     () =>
       buildCanvasFocusTargets(model, filteredSegments),
@@ -496,6 +499,7 @@ export function TimeCanvas({
         onToday={scrollToToday}
         onZoomChange={changeZoom}
       />
+      {model.anchors.some((anchor) => anchor.currentNodeDeadline) && <div className="px-3 py-2"><DeadlineLegend /></div>}
 
       <div
         className={cn(
@@ -657,7 +661,7 @@ export function TimeCanvas({
         </div>
 
         {display.showInspector && selectedEntity && (
-          <TimeCanvasInspector entity={selectedEntity} onClose={() => select(null)} />
+          <TimeCanvasInspector entity={selectedEntity} nowMs={liveNowMs} onClose={() => select(null)} />
         )}
       </div>
 
@@ -666,31 +670,6 @@ export function TimeCanvas({
       </div>
     </section>
   );
-}
-
-function useLiveNow(generatedAt: string) {
-  const [nowMs, setNowMs] = useState(() => {
-    const generatedAtMs = Date.parse(generatedAt);
-    return Number.isFinite(generatedAtMs) ? generatedAtMs : 0;
-  });
-
-  useEffect(() => {
-    const refresh = () => setNowMs(Date.now());
-    const refreshWhenVisible = () => {
-      if (document.visibilityState === "visible") refresh();
-    };
-    refresh();
-    const interval = window.setInterval(refresh, 60_000);
-    window.addEventListener("focus", refresh);
-    document.addEventListener("visibilitychange", refreshWhenVisible);
-    return () => {
-      window.clearInterval(interval);
-      window.removeEventListener("focus", refresh);
-      document.removeEventListener("visibilitychange", refreshWhenVisible);
-    };
-  }, []);
-
-  return nowMs;
 }
 
 function responsiveRowHeaderWidth(containerWidth: number) {

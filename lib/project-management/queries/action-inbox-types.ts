@@ -1,5 +1,6 @@
 import type { TaskNodeStatus, TaskNodeType } from "@prisma/client";
 import type { ActionInboxStream } from "@/lib/project-management/queries/action-inbox-cursor";
+import type { CurrentNodeDeadline } from "@/lib/project-management/current-node-deadline";
 
 export type ActionInboxKind =
   | "TASK_NEXT_NODE"
@@ -11,6 +12,7 @@ export type ActionInboxKind =
 export type ActionInboxSeverity = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
 
 export type ActionInboxItem = {
+  currentNodeDeadline: CurrentNodeDeadline | null;
   id: string;
   kind: ActionInboxKind;
   title: string;

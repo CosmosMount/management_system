@@ -1,4 +1,5 @@
 import type { TaskStatus } from "@prisma/client";
+import { resolveCurrentNodeDeadline } from "@/lib/project-management/current-node-deadline";
 import { authorize } from "@/lib/project-management/authorization";
 import { taskAuthorizationResource } from "@/lib/project-management/application/task-authorization-resource";
 import { isTaskCreatableForSegment } from "@/lib/project-management/domain/task-segment-policy";
@@ -29,6 +30,11 @@ export function toTaskAnchorDto(
   const hasPendingApproval = task.nodes.length > 0;
   const updatedAt = task.updatedAt.toISOString();
   return {
+    currentNodeDeadline: resolveCurrentNodeDeadline({
+      taskStatus: task.status,
+      activeMilestoneNodeId: task.activeMilestoneNodeId,
+      nodes: task.currentPlanVersion.nodes.map((entry) => entry.node),
+    }),
     id: task.id,
     title: task.title,
     status: task.status,
