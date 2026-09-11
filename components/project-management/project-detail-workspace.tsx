@@ -327,7 +327,7 @@ export function ProjectDetailWorkspace({
         ) : (
           <div
             ref={setTimelineContainer}
-            className="mt-4 min-w-0 scroll-mt-24 overflow-hidden rounded-lg border border-border"
+            className="mt-4 min-w-0 scroll-mt-24 overflow-hidden rounded-lg border border-border p-3"
           >
             <ResourcePlannerCanvasClient
               initialModel={model}
