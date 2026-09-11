@@ -5,6 +5,7 @@ import { prisma } from "../lib/prisma";
 import { getTaskWorkspace, listTasks } from "../lib/project-management/queries/task-queries";
 import { listMyTaskOptions, searchTaskOptions, resolveTaskOptionsByIds } from "../lib/project-management/queries/task-option-queries";
 import { getProjectDetail } from "../lib/project-management/queries/project-detail-queries";
+import { listProjects } from "../lib/project-management/queries/project-list-queries";
 import { getTimeCanvasData } from "../lib/project-management/queries/time-canvas-queries";
 import { getActionInbox } from "../lib/project-management/queries/action-inbox-queries";
 import { timeCanvasDataToModel } from "../components/project-management/time-canvas/adapter";
@@ -113,6 +114,14 @@ async function expectReadModels(
   for (const task of targets) {
     expect(task).toBeDefined();
     expect(task?.currentNodeDeadline).toEqual(expected);
+  }
+  const projectList = await listProjects({ actor: viewer, input: { mine: true } });
+  const projectTask = projectList.items.find((entry) => entry.id === projectId)?.tasks.find((task) => task.id === fixture.taskId);
+  if (workspace.task.status === "ACTIVE" || workspace.task.status === "DRAFT") {
+    expect(projectTask).toBeDefined();
+    expect(projectTask?.currentNodeDeadline).toEqual(expected);
+  } else {
+    expect(projectTask).toBeUndefined();
   }
   const model = timeCanvasDataToModel(canvas, "TASK_WORKBENCH");
   const marked = model.anchors.filter((anchor) => anchor.currentNodeDeadline);

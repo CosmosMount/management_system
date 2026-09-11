@@ -1,6 +1,8 @@
 import type { Prisma, ProjectStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { projectReadableWhere } from "@/lib/project-management/authorization";
+import { projectReadableWhere, taskReadableWhere } from "@/lib/project-management/authorization";
+import { resolveCurrentNodeDeadline } from "@/lib/project-management/current-node-deadline";
+import { summarizeProjectTaskCounts, type ProjectTaskSummaryItem } from "@/lib/project-management/project-task-summary";
 import type { ProjectManagementActor } from "@/lib/project-management/identity";
 import {
   decodeTimestampCursor,
@@ -18,7 +20,7 @@ const projectCardInclude = {
     include: { person: { select: { displayName: true, avatar: true, status: true } } },
     orderBy: [{ role: "asc" as const }, { createdAt: "asc" as const }],
   },
-  _count: { select: { tasks: { where: { deletedAt: null } }, members: { where: { removedAt: null, role: "PARTICIPANT" } } } },
+  _count: { select: { members: { where: { removedAt: null, role: "PARTICIPANT" } } } },
 } satisfies Prisma.ProjectInclude;
 
 export type ProjectListItem = {
@@ -31,6 +33,9 @@ export type ProjectListItem = {
   participantCount: number;
   taskCount: number;
   completedTaskCount: number;
+  completionTaskTotalCount: number;
+  taskStatusCounts: ReturnType<typeof summarizeProjectTaskCounts>["taskStatusCounts"];
+  tasks: ProjectTaskSummaryItem[];
   updatedAt: string;
 };
 
@@ -110,13 +115,56 @@ export async function listProjects({
     hasMoreUnfiltered = pageRows.length > limit;
     rows = pageRows.slice(0, limit);
   }
-  const completedCounts = rows.length
-    ? await prisma.task.groupBy({ by: ["projectId"], where: { projectId: { in: rows.map((row) => row.id) }, deletedAt: null, status: "COMPLETED" }, _count: { _all: true } })
-    : [];
-  const completedByProject = new Map(completedCounts.flatMap((entry) => entry.projectId ? [[entry.projectId, entry._count._all] as const] : []));
+  const taskWhere: Prisma.TaskWhereInput = { AND: [taskReadableWhere(actor), { projectId: { in: rows.map((row) => row.id) }, deletedAt: null }] };
+  const [counts, tasks] = rows.length ? await Promise.all([
+    prisma.task.groupBy({ by: ["projectId", "status"], where: taskWhere, _count: { _all: true } }),
+    prisma.task.findMany({
+      where: { AND: [taskWhere, { status: { in: ["DRAFT", "ACTIVE"] } }] },
+      select: {
+        id: true, projectId: true, title: true, status: true, activeMilestoneNodeId: true,
+        currentPlanVersion: {
+          select: {
+            nodes: {
+              where: { node: { deletedAt: null, status: "ACTIVE", type: { in: ["MILESTONE", "TERMINATION"] } } },
+              select: {
+                node: {
+                  select: {
+                    id: true, type: true, status: true,
+                    milestone: { select: { expectedCompletedAt: true } },
+                    termination: { select: { plannedAt: true } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    }),
+  ]) : [[], []];
+  const countsByProject = new Map<string, Array<{ status: (typeof counts)[number]["status"]; count: number }>>();
+  for (const entry of counts) {
+    if (!entry.projectId) continue;
+    const projectCounts = countsByProject.get(entry.projectId) ?? [];
+    projectCounts.push({ status: entry.status, count: entry._count._all });
+    countsByProject.set(entry.projectId, projectCounts);
+  }
+  const tasksByProject = new Map<string, ProjectTaskSummaryItem[]>();
+  for (const task of tasks) {
+    if (!task.projectId || (task.status !== "DRAFT" && task.status !== "ACTIVE")) continue;
+    const projectTasks = tasksByProject.get(task.projectId) ?? [];
+    projectTasks.push({
+      id: task.id, title: task.title, status: task.status,
+      currentNodeDeadline: resolveCurrentNodeDeadline({
+        taskStatus: task.status,
+        activeMilestoneNodeId: task.activeMilestoneNodeId,
+        nodes: task.currentPlanVersion.nodes.map((entry) => entry.node),
+      }),
+    });
+    tasksByProject.set(task.projectId, projectTasks);
+  }
   const lastProject = rows.at(-1);
   return {
-    items: rows.map((project) => projectListItem(project, completedByProject.get(project.id) ?? 0)),
+    items: rows.map((project) => projectListItem(project, summarizeProjectTaskCounts(countsByProject.get(project.id) ?? []), tasksByProject.get(project.id) ?? [])),
     hasMoreByQuery,
     nextCursor:
       !query && hasMoreUnfiltered && lastProject
@@ -125,6 +173,6 @@ export async function listProjects({
   };
 }
 
-function projectListItem(project: Prisma.ProjectGetPayload<{ include: typeof projectCardInclude }>, completedTaskCount: number): ProjectListItem {
-  return { id: project.id, name: project.name, description: project.description, avatarPath: project.avatarPath, status: project.status, owners: project.members.map((member) => ({ personId: member.personId, displayName: member.person.displayName, avatar: member.person.avatar })), participantCount: project._count.members, taskCount: project._count.tasks, completedTaskCount, updatedAt: project.updatedAt.toISOString() };
+function projectListItem(project: Prisma.ProjectGetPayload<{ include: typeof projectCardInclude }>, counts: ReturnType<typeof summarizeProjectTaskCounts>, tasks: ProjectTaskSummaryItem[]): ProjectListItem {
+  return { id: project.id, name: project.name, description: project.description, avatarPath: project.avatarPath, status: project.status, owners: project.members.map((member) => ({ personId: member.personId, displayName: member.person.displayName, avatar: member.person.avatar })), participantCount: project._count.members, ...counts, tasks, updatedAt: project.updatedAt.toISOString() };
 }

@@ -81,13 +81,20 @@ for (const domain of ["project", "task"] as const) {
     await expect(page.getByTestId(`${domain}-list-item-${otherId}`)).toHaveCount(0);
     await expectHealthyPage(page);
     if (testInfo.project.name === "desktop") await page.screenshot({ path: testInfo.outputPath(`${domain}-list-desktop.png`), animations: "disabled" });
-    await row.locator("summary").click();
-    await expect(row.locator("details")).toHaveAttribute("open", "");
-    await expect(row.getByText(`${label}名称：${fixture.name}`, { exact: true })).toBeVisible();
-    await expect(row.getByText(`${isProject ? "项目简介" : "任务描述"}：${fixture.description}`, { exact: true })).toBeVisible();
+    if (isProject) {
+      await row.getByRole("link").filter({ has: page.getByRole("heading", { name: fixture.name, exact: true }) }).focus();
+      await expect(page.getByRole("tooltip")).toContainText(fixture.name);
+      await expect(page.getByRole("tooltip")).toContainText(fixture.description);
+      await page.keyboard.press("Escape");
+    } else {
+      await row.locator("summary").click();
+      await expect(row.locator("details")).toHaveAttribute("open", "");
+      await expect(row.getByText(`${label}名称：${fixture.name}`, { exact: true })).toBeVisible();
+      await expect(row.getByText(`任务描述：${fixture.description}`, { exact: true })).toBeVisible();
+    }
     await expectHealthyPage(page);
-    await expect(row).toHaveCSS("grid-template-columns", testInfo.project.name === "desktop" ? /\S+ \S+ \S+ \S+ \S+/ : /^\S+$/);
-    await row.locator("summary").click();
+    await expect(row).toHaveCSS("grid-template-columns", testInfo.project.name === "desktop" ? (isProject ? /^(?:\S+ ){6}\S+$/ : /^(?:\S+ ){4}\S+$/) : /^\S+$/);
+    if (!isProject) await row.locator("summary").click();
 
     await form.getByRole("textbox").fill(fixture.key);
     if (!isProject) await form.getByLabel("任务优先级").selectOption("HIGH");

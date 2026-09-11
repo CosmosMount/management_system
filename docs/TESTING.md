@@ -16,6 +16,8 @@
 
 ### 自动化测试定义清单
 
+项目总览行内 Task 摘要由 `project-task-summary.node.ts` 覆盖取消任务排除、其他终态计数、紧急排序和时钟更新；`project-management-project-list.spec.ts` 验证草稿／进行中摘要、最小 DTO、可见范围、软删除及项目游标分页，`current-node-deadline.spec.ts` 同时校验列表摘要的当前计划期限口径。`project-management-ui-project-list.spec.ts` 在 desktop/mobile 验证两行上限、`+N` 弹层、长名称与多人提示、键盘操作、期限刷新、项目／任务导航、空概览和完成进度。定向命令为 `npm run test:e2e -- tests/project-management-project-list.spec.ts tests/project-management-ui-project-list.spec.ts tests/current-node-deadline.spec.ts`，必须通过官方 runner 使用随机隔离数据库及飞书禁发保护；Node 用例使用 `npm run test:node`。这些定向结果不能替代跨层改动所需的 `npm run check` 和完整 `npm run test:e2e`。
+
 当前节点到期展示由 `current-node-deadline.node.ts` 覆盖准确截止时刻、72 小时边界、里程碑指针优先/结束节点回退、终态与非法数据排除和预览排序；`current-node-deadline.spec.ts` 核对各授权读模型及画布适配的一致性、历史/候选计划隔离、等待审批的当前节点和非当前审批排除；`current-node-deadline-ui.spec.ts` 在 desktop/mobile 覆盖六项预览、分钟更新与 focus 恢复、任务/项目/待办/选择器/各种画布、只读人员时间线、终态与无横向溢出。定向验证使用 `npm run test:e2e -- tests/current-node-deadline.spec.ts tests/current-node-deadline-ui.spec.ts`，由官方 runner 创建隔离数据库并保留飞书禁发保护；Node 用例通过 `npm run test:node` 执行。跨模块交付仍需本节既有完整门禁，定向通过不代表完整 E2E 通过。
 
 截至 2026-09-07，`tests/` 有两类可执行测试定义：8 个 `tests/*.node.ts` 文件（26 个 `node:test` 用例）和 78 个由 Playwright 收集的 `tests/*.spec.ts` 文件。文件清单按领域归类如下；Playwright 文件名省略统一的 `tests/` 前缀和 `.spec.ts` 后缀，新增、移动或删除测试时必须同步更新本节。
