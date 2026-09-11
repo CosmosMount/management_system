@@ -148,9 +148,8 @@ test.describe("project management S3 shell", { tag: "@smoke" }, () => {
     }
     await expectHealthyPage(page);
     const commandBar = page.getByTestId("project-management-command-bar");
-    await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
-    await page.getByRole("navigation", { name: "任务详情分区" })
-      .getByRole("link", { name: "计划与投入", exact: true }).click();
+    await expect(page.getByTestId("time-canvas-root")).toBeVisible();
+    await page.getByTestId("task-plan-view").scrollIntoViewIfNeeded();
     await expect(page.getByTestId("time-canvas-root")).toBeVisible();
     await expect(page.getByTestId(`time-canvas-row-header-plan:${fixture.taskId}`)).toContainText("计划轨道 · 草稿");
     await expect(commandBar.getByRole("navigation", { name: "面包屑" }).getByRole("link", { name: "任务", exact: true })).toHaveAttribute("href", "/progress/tasks");

@@ -62,13 +62,13 @@ test("management overview counts all readable risks, paginates and preserves rea
   await page.locator("#overview-risks").getByRole("link", { name: `项目：${project.name}`, exact: true }).first().click();
   await expect(page).toHaveURL((url) => url.pathname === `/progress/projects/${project.id}` && url.searchParams.get("section") === "collaboration" && url.hash === "#risks");
   await expect(page.locator("#risks")).toBeVisible();
-  await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
+  await expect(page.getByTestId("time-canvas-root")).toBeVisible();
   await page.goto(`/progress?view=management&riskCursor=${risks.find((risk) => nextPageText.includes(risk.content))!.id}`);
   await expect(page.locator("#overview-risks").getByText(taskRisk.content, { exact: true })).toBeVisible();
   await page.locator("#overview-risks").getByRole("link", { name: `任务：${taskFixture.taskTitle}`, exact: true }).click();
   await expect(page).toHaveURL((url) => url.pathname === `/progress/tasks/${taskFixture.taskId}` && url.searchParams.get("section") === "collaboration" && url.hash === "#risks");
   await expect(page.locator("#risks")).toBeVisible();
-  await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
+  await expect(page.getByTestId("time-canvas-root")).toBeVisible();
   await page.goto(`/progress/tasks/${taskFixture.taskId}?section=plan`);
   await expect(page.getByTestId("time-canvas-root")).toBeVisible();
   let previousCenter = new URL(page.url()).searchParams.get("center");

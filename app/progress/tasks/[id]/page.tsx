@@ -165,7 +165,6 @@ export default async function ProgressTaskDetailPage({
           </p>
         )}
         <TaskWorkbench
-          initialView={firstParam(query.section) ?? "execution"}
           workspace={workspace}
           lifecycle={lifecycle}
           people={mergeOptions(currentPeople, peoplePage.items)}

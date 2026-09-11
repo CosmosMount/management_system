@@ -87,8 +87,7 @@ test.describe("project management UI project-management-ui-resource-planner", ()
       ).toBeVisible();
 
       await page.goto(`/progress/tasks/${fixture.taskId}`);
-      await page.getByRole("navigation", { name: "任务详情分区" })
-        .getByRole("link", { name: "计划与投入", exact: true }).click();
+      await page.getByTestId("task-plan-view").scrollIntoViewIfNeeded();
       await expectVirtualRowAtBottom(
         page,
         `timeline-row-person:${additionalMembers[50]!.id}`,

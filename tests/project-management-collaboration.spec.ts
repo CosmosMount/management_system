@@ -240,10 +240,9 @@ test.describe("Project/Task 风险、评论与近期动态", () => {
       name: owner.displayName,
     });
     await page.goto(`/progress/tasks/${draft.taskId}`);
-    const taskSections = page.getByRole("navigation", { name: "任务详情分区" });
-    await taskSections.getByRole("link", { name: "活动记录", exact: true }).click();
+    await page.getByTestId("task-activity-view").scrollIntoViewIfNeeded();
     await expect(page.getByRole("heading", { name: "近期动态" })).toBeVisible();
-    await taskSections.getByRole("link", { name: "风险与讨论", exact: true }).click();
+    await page.getByTestId("task-collaboration-view").scrollIntoViewIfNeeded();
     await expect(
       page.getByRole("heading", { name: "任务风险", exact: true }),
     ).toBeVisible();
@@ -251,7 +250,6 @@ test.describe("Project/Task 风险、评论与近期动态", () => {
       page.getByRole("heading", { name: "任务评论", exact: true }),
     ).toBeVisible();
     const uiRiskContent = `浏览器提出的风险 ${randomUUID()}`;
-    await page.locator("summary").filter({ hasText: "提出任务风险" }).click();
     await page.getByLabel("风险内容").fill(uiRiskContent);
     await page.getByRole("button", { name: "提出风险", exact: true }).click();
     await expect(page.getByText(uiRiskContent, { exact: true })).toBeVisible();
@@ -313,8 +311,7 @@ test.describe("Project/Task 风险、评论与近期动态", () => {
       name: admin.displayName,
     });
     await page.goto(`/progress/projects/${project.id}`);
-    await page.getByRole("navigation", { name: "项目详情视图" })
-      .getByRole("link", { name: "风险与讨论", exact: true }).click();
+    await page.getByTestId("project-collaboration-view").scrollIntoViewIfNeeded();
     const projectCollaboration = page.getByTestId("project-collaboration-view");
     await expect(projectCollaboration).toBeVisible();
     await expect(projectCollaboration.getByRole("heading", { name: "项目自身风险", exact: true })).toBeVisible();
@@ -442,10 +439,8 @@ test.describe("Project/Task 风险、评论与近期动态", () => {
     });
     await page.goto(`/progress/tasks/${draft.taskId}`);
 
-    await page.getByRole("navigation", { name: "任务详情分区" })
-      .getByRole("link", { name: "风险与讨论", exact: true }).click();
-    await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
-    await page.locator("summary").filter({ hasText: "提出任务风险" }).click();
+    await page.getByTestId("task-collaboration-view").scrollIntoViewIfNeeded();
+    await expect(page.getByTestId("time-canvas-root")).toBeVisible();
     const riskInput = page.getByLabel("风险内容");
     await expect(riskInput).not.toHaveAttribute("aria-invalid", "true");
     await page.getByRole("button", { name: "提出风险", exact: true }).click();

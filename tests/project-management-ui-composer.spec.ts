@@ -1080,9 +1080,8 @@ test.describe("project management UI project-management-ui-composer", () => {
       page.once("dialog", (dialog) => dialog.accept());
       await page.getByRole("button", { name: "激活任务" }).click();
       await expect(page.getByTestId("task-global-notice")).toContainText("任务已激活。");
-      const taskNavigation = page.getByRole("navigation", { name: "任务详情分区" });
-      await taskNavigation.getByRole("link", { name: "计划与投入", exact: true }).click();
-      await expect(taskNavigation.getByRole("link", { name: "计划与投入", exact: true })).toHaveAttribute("aria-current", "page");
+
+      await page.getByTestId("task-plan-view").scrollIntoViewIfNeeded();
       await expect(page.getByTestId("task-plan-view")).toBeVisible();
       await expect(
         page
@@ -1316,10 +1315,7 @@ test.describe("project management UI project-management-ui-composer", () => {
           .getByTestId("project-management-command-bar")
           .getByRole("heading", { name: draftTitle, exact: true }),
       ).toBeVisible();
-      await page.getByRole("navigation", { name: "任务详情分区" })
-        .getByRole("link", { name: "计划与投入", exact: true }).click();
-      await expect(page.getByRole("navigation", { name: "任务详情分区" })
-        .getByRole("link", { name: "计划与投入", exact: true })).toHaveAttribute("aria-current", "page");
+      await page.getByTestId("task-plan-view").scrollIntoViewIfNeeded();
       await expect(page.getByTestId("task-plan-view")).toBeVisible();
       await expect(page.getByTestId("time-canvas-root")).toBeVisible();
       await expect(page.getByRole("button", { name: "新增投入" })).toHaveCount(0);

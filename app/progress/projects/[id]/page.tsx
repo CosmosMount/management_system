@@ -160,10 +160,6 @@ export default async function ProjectDetailPage({
   const currentEstablishmentRequest = project.pendingRequestId
     ? project.requests.find((request) => request.id === project.pendingRequestId) ?? null
     : null;
-  const requestedView = first(query.section);
-  const initialView = ["overview", "plan", "collaboration", "activity"].includes(requestedView)
-    ? requestedView
-    : focusLocator || first(query.focusError) === "1" ? "plan" : "overview";
   const projectActions = (
     <ProjectActionsClient
       projectId={project.id}
@@ -308,7 +304,6 @@ export default async function ProjectDetailPage({
 
         <ProjectDetailWorkspace
           projectId={project.id}
-          initialView={initialView}
           projectStatus={project.status}
           canCreateTask={actor.isActive !== false}
           tasks={project.tasks}

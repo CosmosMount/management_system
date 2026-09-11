@@ -29,23 +29,18 @@ import {
 } from "./helpers/project-management-ui-fixtures";
 import { openTaskComposerDisclosure, updateDraftMetadataThroughCurrentInterface } from "./helpers/project-management-plan-mutation-fixtures";
 
-async function openTaskSection(page: Page, name: "节点执行" | "计划与投入" | "风险与讨论" | "活动记录") {
-  const link = page.getByRole("navigation", { name: "任务详情分区" })
-    .getByRole("link", { name, exact: true });
-  await link.click();
-  await expect(link).toHaveAttribute("aria-current", "page");
+async function revealTaskArea(page: Page, name: "节点执行" | "计划与投入" | "风险与讨论" | "活动记录") {
+  const areas = { "节点执行": "task-execution-view", "计划与投入": "task-plan-view", "风险与讨论": "task-collaboration-view", "活动记录": "task-activity-view" };
+  const area = page.getByTestId(areas[name]);
+  await expect(area).toBeVisible();
+  await area.scrollIntoViewIfNeeded();
 }
 
 async function selectExecutionNode(page: Page, name: RegExp) {
-  await openTaskSection(page, "节点执行");
-  const select = page.getByRole("combobox", { name: "查看计划节点", exact: true });
-  await expect(select).toBeVisible();
-  const option = select.locator("option").filter({ hasText: name });
-  await expect(option).toHaveCount(1);
-  const value = await option.getAttribute("value");
-  if (!value) throw new Error("查看计划节点选项缺少节点标识");
-  await select.selectOption(value);
-  await expect(select.locator("option:checked")).toContainText(name);
+  const node = page.getByTestId("task-plan-node-navigator").getByRole("button", { name });
+  await node.click();
+  await expect(node).toHaveAttribute("aria-pressed", "true");
+  await page.locator("#task-selected-node-detail").scrollIntoViewIfNeeded();
 }
 
 test.describe("project management UI project-management-ui-workbench", () => {
@@ -56,7 +51,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
       await grantRole(administrator.account.id, "PROJECT_ADMINISTRATOR");
     });
 
-  test("server-rendered Task workbench sections remain navigable without client JavaScript", async ({
+  test("server-rendered Task workbench shows timeline and all panels without client JavaScript", async ({
       browser,
       baseURL,
     }, testInfo) => {
@@ -98,25 +93,24 @@ test.describe("project management UI project-management-ui-workbench", () => {
         await page.goto(`/progress/tasks/${task.taskId}`);
         await expect(page.getByTestId("task-workbench-v2")).toBeVisible();
         await expect(page.getByTestId("task-execution-view")).toBeVisible();
-        await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
+        await expect(page.getByTestId("time-canvas-root")).toBeVisible();
         await expect(page.getByRole("heading", { name: "No-JS Milestone" })).toBeVisible();
-        await openTaskSection(page, "计划与投入");
-        await expect(page).toHaveURL(/section=plan/);
+        await revealTaskArea(page, "计划与投入");
+
         await expect(page.getByTestId("task-plan-node-navigator")).toBeVisible();
         await expect(page.getByTestId("time-canvas-root")).toBeVisible();
-        await openTaskSection(page, "风险与讨论");
-        await expect(page).toHaveURL(/section=collaboration/);
+        await revealTaskArea(page, "风险与讨论");
+
         await expect(page.getByRole("heading", { name: "任务风险", exact: true })).toBeVisible();
         await expect(page.getByRole("heading", { name: "任务评论", exact: true })).toBeVisible();
-        await page.locator("summary").filter({ hasText: "提出任务风险" }).click();
         await expect(page.getByLabel("风险内容")).toBeVisible();
-        await openTaskSection(page, "活动记录");
-        await expect(page).toHaveURL(/section=activity/);
+        await revealTaskArea(page, "活动记录");
+
         await expect(page.getByRole("heading", { name: "近期动态" })).toBeVisible();
-        await openTaskSection(page, "节点执行");
-        await expect(page).toHaveURL(/section=execution/);
+        await revealTaskArea(page, "节点执行");
+
         await expect(page.getByRole("heading", { name: "No-JS Milestone" })).toBeVisible();
-        await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
+        await expect(page.getByTestId("time-canvas-root")).toBeVisible();
         await expect(page.getByRole("tab")).toHaveCount(0);
       } finally {
         await context.close();
@@ -207,7 +201,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
     await page.goto(
       `/progress/tasks/${fixture.taskId}?center=${encodeURIComponent("2026-08-03T09:30:00.000Z")}`,
     );
-    await openTaskSection(page, "计划与投入");
+    await revealTaskArea(page, "计划与投入");
 
     const firstCheckbox = page.getByRole("checkbox", {
       name: `显示计划修订「${firstReason}」之前的计划`,
@@ -387,8 +381,8 @@ test.describe("project management UI project-management-ui-workbench", () => {
       .getByRole("button", { name: /^开始节点，开始节点，/ });
     await startNodeButton.click();
     await expect(page.getByTestId("task-execution-view")).toBeVisible();
-    await expect(page.getByRole("combobox", { name: "查看计划节点", exact: true }).locator("option:checked")).toContainText("开始节点");
-    await openTaskSection(page, "计划与投入");
+    await expect(page.getByTestId("task-plan-node-navigator").getByRole("button", { name: /开始节点/ })).toHaveAttribute("aria-pressed", "true");
+    await revealTaskArea(page, "计划与投入");
     const currentPlanStartMarker = page.getByTestId(
       `milestone-marker-plan-start:${fixture.taskId}`,
     );
@@ -415,7 +409,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
       .getByRole("button", { name: new RegExp(firstReason) });
     await firstRevisionNodeButton.click();
     await expect(page.locator("#task-selected-node-detail")).toContainText(firstReason);
-    await openTaskSection(page, "计划与投入");
+    await revealTaskArea(page, "计划与投入");
     await expect(
       firstHistoryRow.getByRole("button", {
         name: /终止节点 Terminal.+状态 历史计划/,
@@ -431,7 +425,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
     ).toBeVisible();
     await firstRevisionNodeButton.click();
     await expect(page.locator("#task-selected-node-detail")).toContainText(firstReason);
-    await openTaskSection(page, "计划与投入");
+    await revealTaskArea(page, "计划与投入");
     await expect(
       firstHistoryRow.getByRole("button", {
         name: /终止节点 Terminal.+状态 历史计划/,
@@ -686,7 +680,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
     const currentHeader = page.getByTestId(
       `time-canvas-row-header-plan:${fixture.taskId}`,
     );
-    await openTaskSection(page, "计划与投入");
+    await revealTaskArea(page, "计划与投入");
     const candidateHeader = page.getByTestId(candidateHeaderTestId);
     const candidateRow = page.getByTestId(candidateRowTestId);
     await expect(currentHeader).toBeVisible();
@@ -719,7 +713,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
         name: new RegExp(`计划节点 ${candidateMilestone}.+状态 待审批候选`),
       }),
     ).toBeVisible();
-    await openTaskSection(page, "节点执行");
+    await revealTaskArea(page, "节点执行");
     await expect(page.getByRole("heading", { name: "当前计划修订候选" })).toBeVisible();
     await expect(
       page
@@ -745,14 +739,14 @@ test.describe("project management UI project-management-ui-workbench", () => {
     const approvalCard = page
       .getByRole("heading", { name: "当前计划修订候选" })
       .locator("../..");
-    await openTaskSection(page, "计划与投入");
+    await revealTaskArea(page, "计划与投入");
     await expect(page.getByTestId(candidateHeaderTestId)).toBeVisible();
-    await openTaskSection(page, "节点执行");
+    await revealTaskArea(page, "节点执行");
     await approvalCard.getByLabel("处理说明").fill("对比确认后批准候选计划");
     await approvalCard.getByRole("button", { name: "批准" }).click();
     await expect(page.getByText("计划修订已批准并应用。")).toBeVisible();
     await expect(page.getByTestId(candidateHeaderTestId)).toHaveCount(0);
-    await openTaskSection(page, "计划与投入");
+    await revealTaskArea(page, "计划与投入");
     await expect(page.getByText(`当前计划 v${targetPlan.versionNo}`)).toBeVisible();
     await expect(
       page
@@ -806,11 +800,11 @@ test.describe("project management UI project-management-ui-workbench", () => {
       name: fixture.admin.person.displayName,
     });
     await page.goto(`/progress/tasks/${fixture.taskId}`);
-    await openTaskSection(page, "计划与投入");
+    await revealTaskArea(page, "计划与投入");
     await expect(page.getByTestId("pending-revision-plan-warning")).toContainText(
       "基线已失效",
     );
-    await openTaskSection(page, "节点执行");
+    await revealTaskArea(page, "节点执行");
     await expect(page.getByTestId("revision-approval-plan-warning")).toContainText(
       "批准已禁用",
     );
@@ -1219,8 +1213,8 @@ test.describe("project management UI project-management-ui-workbench", () => {
       ).toBeVisible();
       await expect(page.getByTestId("task-workbench-v2")).toBeVisible();
       await expect(page.getByTestId("task-execution-view")).toBeVisible();
-      await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
-      await openTaskSection(page, "计划与投入");
+      await expect(page.getByTestId("time-canvas-root")).toBeVisible();
+      await revealTaskArea(page, "计划与投入");
       await expect(page.getByTestId("task-plan-node-navigator")).toBeVisible();
       const taskTimelineHeader = page.getByTestId(
         `time-canvas-row-header-plan:${fixture.taskId}`,
@@ -2033,7 +2027,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
       });
 
       await page.goto(`/progress/tasks/${fixture.taskId}`);
-      await openTaskSection(page, "计划与投入");
+      await revealTaskArea(page, "计划与投入");
       await page.getByRole("button", { name: "新增投入", exact: true }).click();
       const quickCreate = page.getByRole("form", { name: "投入快速创建" });
       await expect(quickCreate.locator('input[name="personId"]')).toHaveValue(
@@ -2077,7 +2071,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
     });
 
     await page.goto(`/progress/tasks/${fixture.taskId}`);
-    await openTaskSection(page, "计划与投入");
+    await revealTaskArea(page, "计划与投入");
     const canvasRoot = page
       .getByTestId("resource-planner-workbench")
       .getByTestId("time-canvas-root");
@@ -2407,7 +2401,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
       await page.goto(
         `/progress/tasks/${historicalTask.taskId}?center=${encodeURIComponent("2020-02-01T10:00:00.000Z")}`,
       );
-      await openTaskSection(page, "计划与投入");
+      await revealTaskArea(page, "计划与投入");
       const canvasRoot = page.getByTestId("time-canvas-root");
       const nowBeforeNavigation = Date.now();
       expect(Number(await canvasRoot.getAttribute("data-range-end-ms")))
@@ -2446,9 +2440,8 @@ test.describe("project management UI project-management-ui-workbench", () => {
         .getByRole("button", { name: /历史 Milestone/ })
         .click();
       await expect(page.getByTestId("task-execution-view")).toBeVisible();
-      await expect(page).toHaveURL((url) => url.searchParams.get("section") === "execution");
       await expect(page.locator("#task-selected-node-detail")).toContainText("历史 Milestone");
-      await expect(canvasRoot).toBeHidden();
+      await expect(canvasRoot).toBeVisible();
       await expect
         .poll(
           () => {
@@ -2460,7 +2453,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
           { timeout: 15_000 },
         )
         .toBeLessThan(60_000);
-      await openTaskSection(page, "计划与投入");
+      await revealTaskArea(page, "计划与投入");
       await expect(canvasRoot).toBeVisible();
       await expect.poll(async () => {
         const start = Number(await canvasRoot.getAttribute("data-viewport-start-ms"));
@@ -2469,56 +2462,24 @@ test.describe("project management UI project-management-ui-workbench", () => {
       }).toBe(true);
 
       await page.goBack();
-      await expect(page).toHaveURL((url) => url.searchParams.get("section") === "execution");
       await expect(page.getByTestId("task-execution-view")).toBeVisible();
-      await expect(canvasRoot).toBeHidden();
-      await page.goBack();
-      await expect(page.getByRole("navigation", { name: "任务详情分区" })
-        .getByRole("link", { name: "计划与投入", exact: true })).toHaveAttribute("aria-current", "page");
       await expect(canvasRoot).toBeVisible();
       await expect.poll(() => {
         const center = Date.parse(new URL(page.url()).searchParams.get("center") ?? "");
         return Math.abs(center - Date.now());
       }).toBeLessThan(12 * 60 * 60 * 1_000);
+      await page.goForward();
+      await expect(page.getByTestId("task-execution-view")).toBeVisible();
+      await expect(canvasRoot).toBeVisible();
+      await expect.poll(() => {
+        const center = Date.parse(new URL(page.url()).searchParams.get("center") ?? "");
+        return Math.abs(center - historicalMilestoneMs);
+      }).toBeLessThan(60_000);
       await expect.poll(async () => {
-        const now = Date.now();
         const start = Number(await canvasRoot.getAttribute("data-viewport-start-ms"));
         const end = Number(await canvasRoot.getAttribute("data-viewport-end-ms"));
-        return start <= now && now < end;
+        return start <= historicalMilestoneMs && historicalMilestoneMs < end;
       }).toBe(true);
-      await page.goForward();
-      await expect(page).toHaveURL((url) => url.searchParams.get("section") === "execution");
-      await expect(page.getByTestId("task-execution-view")).toBeVisible();
-      await expect(canvasRoot).toBeHidden();
-      await expect
-        .poll(
-          () => {
-            const center = Date.parse(
-              new URL(page.url()).searchParams.get("center") ?? "",
-            );
-            return Math.abs(center - historicalMilestoneMs);
-          },
-          { timeout: 15_000 },
-        )
-        .toBeLessThan(60_000);
-      await page.goForward();
-      await expect(page.getByRole("navigation", { name: "任务详情分区" })
-        .getByRole("link", { name: "计划与投入", exact: true })).toHaveAttribute("aria-current", "page");
-      await expect(canvasRoot).toBeVisible();
-      await expect
-        .poll(
-          async () => {
-            const start = Number(
-              await canvasRoot.getAttribute("data-viewport-start-ms"),
-            );
-            const end = Number(
-              await canvasRoot.getAttribute("data-viewport-end-ms"),
-            );
-            return start <= historicalMilestoneMs && historicalMilestoneMs < end;
-          },
-          { timeout: 15_000 },
-        )
-        .toBe(true);
       await expectHealthyPage(page);
     });
 
@@ -2549,7 +2510,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
         name: fixture.owner.person.displayName,
       });
       await page.goto(`/progress/tasks/${fixture.taskId}`);
-      await openTaskSection(page, "计划与投入");
+      await revealTaskArea(page, "计划与投入");
       await page.getByRole("button", { name: "新增投入", exact: true }).click();
       const quickCreate = page.getByRole("form", { name: "投入快速创建" });
       const segmentPersonPicker = quickCreate.getByLabel("人员", { exact: true });
@@ -2764,7 +2725,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
     await page.goto(`/progress/tasks/${fixture.taskId}`);
     await expect(page.getByTestId("task-workbench-v2")).toBeVisible();
     await expect(page.getByTestId("task-execution-view")).toBeVisible();
-    await expect(page.getByTestId("time-canvas-root")).toHaveCount(0);
+    await expect(page.getByTestId("time-canvas-root")).toBeVisible();
     await expect(page.getByRole("tab")).toHaveCount(0);
     await page.getByRole("button", { name: "修改任务基本信息" }).click();
     const editor = page.getByRole("dialog", { name: "修改任务基本信息" });
@@ -3024,14 +2985,14 @@ test.describe("project management UI project-management-ui-workbench", () => {
     );
     await expect(page.getByText("上一轮结束申请已驳回")).toHaveCount(0);
     await expect(page.getByText("上一轮结束申请需要修订")).toHaveCount(0);
-    await openTaskSection(page, "风险与讨论");
+    await revealTaskArea(page, "风险与讨论");
     await expect(
       page.getByRole("heading", { name: "任务风险", exact: true }),
     ).toBeVisible();
     await expect(
       page.getByRole("heading", { name: "任务评论", exact: true }),
     ).toBeVisible();
-    await openTaskSection(page, "活动记录");
+    await revealTaskArea(page, "活动记录");
     await expect(page.getByRole("heading", { name: "近期动态" })).toBeVisible();
     expect(
       await page.evaluate(

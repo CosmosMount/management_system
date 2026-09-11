@@ -110,8 +110,8 @@ test("任务、项目、待办、选择器与所有画布显示同一当前节�
     `/progress?view=schedule&center=${center}`,
     `/progress/kanban?people=${owner.person.id}&center=${center}`,
     `/progress/resources?all=0&tasks=${fixture.taskId}&center=${center}`,
-    `/progress/tasks/${fixture.taskId}?section=plan&center=${center}`,
-    `/progress/projects/${project.id}?section=plan&center=${center}`,
+    `/progress/tasks/${fixture.taskId}?center=${center}`,
+    `/progress/projects/${project.id}?center=${center}`,
   ];
   for (const path of canvasPaths) {
     await page.goto(path);
@@ -123,6 +123,24 @@ test("任务、项目、待办、选择器与所有画布显示同一当前节�
     await expect(marker).toHaveAttribute("data-anchor-editable", "false");
     await expect(canvas.locator('[data-deadline-status="OVERDUE"][data-anchor-id]')).toHaveCount(1);
     await expectHealthyPage(page);
+    if (path.includes("/tasks/") || path.includes("/projects/")) {
+      const kind = path.includes("/tasks/") ? "task" : "project";
+      await expect(page.getByTestId(`${kind}-detail-main-column`)).toBeVisible();
+      const deadline = page.getByTestId(`${kind}-detail-main-column`).locator(`[data-deadline-node-id="${fixture.milestoneNodeId}"]`).first();
+      for (const [remaining, status, label, color] of [
+        [72 * 3_600_000 + 1, "NOT_DUE", "距到期超过 3 天", "emerald"],
+        [72 * 3_600_000, "DUE_SOON", "即将到期", "amber"],
+        [0, "DUE_SOON", "即将到期", "amber"],
+        [-1, "OVERDUE", "已逾期", "red"],
+      ] as const) {
+        await page.clock.setFixedTime(new Date(fixture.dueAt.getTime() - remaining));
+        await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+        await expect(marker).toHaveAttribute("data-deadline-status", status);
+        await expect(deadline).toContainText(label);
+        await expect(deadline.locator(`[data-deadline-status="${status}"]`)).toHaveClass(new RegExp(`bg-${color}-50`));
+      }
+      await page.clock.setSystemTime(new Date(fixture.dueAt.getTime() + 60_000));
+    }
     if (path.includes("/tasks/")) {
       await expect(page.getByRole("button", { name: /当前节点.*里程碑.*已逾期/ })).toBeVisible();
       await page.screenshot({ path: test.info().outputPath("deadline-task-canvas.png"), animations: "disabled" });

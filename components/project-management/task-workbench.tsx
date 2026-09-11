@@ -56,13 +56,10 @@ import type { TaskPendingApproval } from "@/lib/project-management/task-approval
 import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 import { ProjectSelect } from "@/components/project-management/project-picker";
-import { DetailViewNavigation, DetailViewPanel, useDetailView } from "@/components/project-management/detail-views";
 import {
-  ActivityVersionPoller,
-  CommentPanel,
+  CollaborationLeftSidebar,
+  CollaborationRightSidebar,
   CreateRiskCard,
-  RecentActivityPanel,
-  RiskPanel,
   type CollaborationInitialData,
 } from "@/components/project-management/collaboration-panels";
 
@@ -73,17 +70,7 @@ type ApprovalGate = {
   pendingApprovalConflict: boolean;
 };
 
-const taskViews = ["execution", "plan", "collaboration", "activity"] as const;
-const taskHashViews = { "#risks": "collaboration", "#task-selected-node-detail": "execution" };
-const taskViewItems = [
-  { value: "execution", label: "节点执行" },
-  { value: "plan", label: "计划与投入" },
-  { value: "collaboration", label: "风险与讨论" },
-  { value: "activity", label: "活动记录" },
-];
-
 export function TaskWorkbench({
-  initialView = "execution",
   workspace,
   lifecycle,
   people,
@@ -93,7 +80,6 @@ export function TaskWorkbench({
   timeCanvasModel,
   timelineWindow,
 }: {
-  initialView?: string;
   workspace: TaskWorkspace;
   lifecycle: TaskLifecycleViews;
   people: PersonOptionDto[];
@@ -108,7 +94,6 @@ export function TaskWorkbench({
   };
 }) {
   const router = useRouter();
-  const { view, selectView } = useDetailView({ initialView, views: taskViews, hashViews: taskHashViews });
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
   const [editOpen, setEditOpen] = useState(false);
@@ -238,7 +223,6 @@ export function TaskWorkbench({
 
   const selectTerminal = () => {
     if (!termination) return;
-    selectView("execution");
     setRequestedNodeId(termination.nodeId);
     setRequestedNodeFocus((current) => ({
       nodeId: termination.nodeId,
@@ -444,9 +428,7 @@ export function TaskWorkbench({
         </p>
       )}
 
-      <DetailViewNavigation items={taskViewItems} view={view} onSelect={selectView} label="任务详情分区" />
-
-      <DetailViewPanel value="plan" view={view} testId="task-plan-view">
+      <div data-testid="task-plan-view">
         <TaskDetailTimeline
         key={currentWorkspace.task.id}
         workspace={currentWorkspace}
@@ -459,11 +441,9 @@ export function TaskWorkbench({
             const url = new URL(window.location.href);
             url.searchParams.set("center", new Date(atMs).toISOString());
             url.searchParams.set("focus", nodeId);
-            url.searchParams.set("section", "execution");
             router.push(`${url.pathname}?${url.searchParams.toString()}`);
             return;
           }
-          selectView("execution");
           setRequestedNodeId(nodeId);
           setRequestedNodeFocus((current) => ({
             nodeId,
@@ -478,18 +458,11 @@ export function TaskWorkbench({
         focusRequest={requestedNodeFocus}
         pendingRevisionPlanIssue={pendingRevisionPlanIssue}
       />
-      </DetailViewPanel>
+      </div>
 
-      <DetailViewPanel value="execution" view={view} testId="task-execution-view" className="space-y-4">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <label className="grid min-w-0 gap-1 text-sm font-medium">
-            查看计划节点
-            <select className={cn(selectClass, "max-w-full sm:min-w-72")} value={selectedNodeId} onChange={(event) => setRequestedNodeId(event.target.value)}>
-              {navigatorNodes.map((node) => <option key={node.id} value={node.id}>{node.label} · {node.status}</option>)}
-            </select>
-          </label>
-          <Button variant="outline" onClick={() => selectView("plan")}>查看完整计划</Button>
-        </div>
+      <div className="grid min-w-0 gap-5 xl:grid-cols-[300px_minmax(0,1fr)_300px]" data-testid="task-detail-lower-grid">
+        <div className="min-w-0 space-y-4 xl:col-start-2 xl:row-start-1" data-testid="task-detail-main-column">
+          <div className="min-w-0 space-y-4" data-testid="task-execution-view">
           {openRevision && (
             <OpenRevisionPanel
               taskId={task.id}
@@ -571,28 +544,20 @@ export function TaskWorkbench({
             />
           </section>
 
-      </DetailViewPanel>
-
-      <DetailViewPanel value="collaboration" view={view} testId="task-collaboration-view">
-        <div className="grid min-w-0 gap-5 lg:grid-cols-2">
-          <div className="min-w-0 space-y-4">
-            <RiskPanel data={collaboration} />
-            {collaboration.capabilities.canCreateRisk && <details className="rounded-xl border border-border bg-card p-4">
-              <summary className="cursor-pointer text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">提出任务风险</summary>
-              <div className="mt-4"><CreateRiskCard
-            targetType="TASK"
-            targetId={task.id}
-            canCreate={collaboration.capabilities.canCreateRisk}
-              /></div>
-            </details>}
           </div>
-          <CommentPanel data={collaboration} />
+          <CreateRiskCard targetType="TASK" targetId={task.id} canCreate={collaboration.capabilities.canCreateRisk} />
         </div>
-      </DetailViewPanel>
-      <DetailViewPanel value="activity" view={view} testId="task-activity-view">
-        <RecentActivityPanel data={collaboration} />
-      </DetailViewPanel>
-      <ActivityVersionPoller targetType="TASK" targetId={task.id} initialToken={collaboration.activityVersion} />
+        <aside className="min-w-0 space-y-4 xl:col-start-1 xl:row-start-1" data-testid="task-detail-left-column">
+          <div data-testid="task-collaboration-view">
+            <CollaborationLeftSidebar data={collaboration} />
+          </div>
+        </aside>
+        <aside className="min-w-0 xl:col-start-3 xl:row-start-1" data-testid="task-detail-right-column">
+          <div data-testid="task-activity-view">
+            <CollaborationRightSidebar data={collaboration} />
+          </div>
+        </aside>
+      </div>
 
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent className="max-h-[92dvh] overflow-y-auto sm:max-w-5xl">
