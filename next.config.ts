@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { FRONTEND_VERSION } from "./lib/frontend-version";
 
 const configuredDevOrigins = [
   process.env.LAN_HOST,
@@ -6,6 +7,8 @@ const configuredDevOrigins = [
 ].filter((origin): origin is string => Boolean(origin));
 
 const nextConfig: NextConfig = {
+  deploymentId: FRONTEND_VERSION.replaceAll(".", "-"),
+
   // The controlled Playwright runner may coexist with a developer server in
   // this workspace. A runner-owned build directory prevents Next.js locks and
   // generated state from crossing those two isolated processes.

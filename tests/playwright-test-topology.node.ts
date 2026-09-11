@@ -14,11 +14,11 @@ import {
   UI_SPEC,
 } from "./helpers/playwright-topology-spec-sources";
 
-test("当前 Playwright spec 唯一归入 38 个 UI 或 51 个 node-db", () => {
+test("当前 Playwright spec 唯一归入 39 个 UI 或 51 个 node-db", () => {
   const topology = discoverPlaywrightTestTopology();
-  assert.equal(topology.ui.length, 38);
+  assert.equal(topology.ui.length, 39);
   assert.equal(topology.nodeDb.length, 51);
-  assert.equal(new Set([...topology.ui, ...topology.nodeDb]).size, 89);
+  assert.equal(new Set([...topology.ui, ...topology.nodeDb]).size, 90);
   assert.ok(
     [...topology.ui, ...topology.nodeDb].every((file) =>
       file.endsWith(".spec.ts"),

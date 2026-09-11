@@ -28,6 +28,14 @@
 - 通知 outbox 分两层：`NotificationOutbox` 表示业务事件，`NotificationOutboxRecipient` 表示单个收件人的投递状态。`lib/notification-outbox.ts` 保持稳定 façade，通用入队/重试、claim/heartbeat、逐收件人协调与状态汇总拆入 `lib/notification-outbox/`；核心只接受注入的 channel resolver，`lib/notification-delivery.ts` 作为组合入口连接 adapter registry。重试失败收件人时不能把已成功收件人再次发送；临时解析/网络错误退避重试，损坏 payload、未知 channel、非法 `type/botKind` 等确定性配置错误直接冻结，修正后才可人工重置。
 - 浏览器共享契约位于 `lib/project-management/composer-contract.ts` 与 `lib/project-management/time-canvas/`，服务端领域和查询不得从 `components/` 或带 `"use client"` 的模块反向导入类型或实现。`npm run check:dependencies` 使用 TypeScript AST 校验传递依赖边界、浏览器契约的服务端依赖、outbox 核心业务依赖，并从 Next 路由、脚本、测试和根配置入口遍历后拒绝 `components/`/`lib/` 中不可达的源码。
 
+## 前端版本与资源更新
+
+- `lib/frontend-version.ts` 是公开前端发布号的唯一来源，`next.config.ts` 将句点替换为连字符后设置合法的 `deploymentId`，根布局输出版本 meta 和 `FrontendVersionMonitor`。发布号不是业务数据版本，不替代既有 `/api/live-version` 的领域数据刷新。
+- `GET /api/frontend-version` 无需登录，仅返回发布号，响应 `Cache-Control: no-store`。客户端额外使用 `cache: no-store` 和时间参数，首次加载、focus、pageshow、恢复可见及可见期间每 60 秒检查一次，单请求 8 秒超时。
+- 版本不同时，客户端通过同源 `POST /api/frontend-version` 请求 `Clear-Site-Data: "cache"`；服务端要求可信 Host 对应的 Origin 和专用请求头，跨站／缺少请求头时返回 403。此接口不访问数据库、不发送通知、不清 Cookie 或业务存储。清缓存头受浏览器安全上下文与实现支持限制，更新正确性同时依赖版本化静态资源地址。
+- 整页刷新仅追加 `__frontend_version` 参数，保留原路径、重复查询参数及 hash，成功加载对应版本后清除此参数。会话内时间戳限流和 URL 版本标记防止旧资源、滚动部署或存储不可用导致无限刷新；失败时保留页面并提供中文重试提示。
+- 输入、拖放、提交及指针／按钮操作会保守地暂停该页面的自动更新；弹窗、编辑焦点和已有 `data-live-refresh-lock` 也会阻止自动刷新。即便检查／清缓存请求期间才开始编辑或页面变为不可见，也不会自动跳转；手动更新须确认已保存当前操作，亦可选择稍后更新收起提示。不对 Local Storage、Session Storage 或 Service Worker 作全量删除。
+
 ## 表单字段错误契约
 
 - 表单初次呈现保持中性；只有用户提交或执行对应操作后才揭示字段错误。必填字段不得仅依靠禁用提交按钮阻止空值操作。

@@ -16,6 +16,7 @@ const authMiddleware = middlewareAuth(async (req) => {
   const isLoggedIn = !!req.auth;
   const isPublic =
     pathname === "/login" ||
+    pathname === "/api/frontend-version" ||
     pathname.startsWith("/api/auth") ||
     pathname.startsWith("/_next") ||
     pathname === "/favicon.ico" ||
