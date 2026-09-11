@@ -3,6 +3,7 @@ import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../lib/prisma";
 import { updateProject } from "../lib/project-management/application/project-service";
+import { expectedProjectManagementRecipients } from "./helpers/project-management-notification-recipients";
 import {
   actor,
   createAccountPerson,
@@ -12,7 +13,7 @@ import {
 } from "./helpers/project-management-plan-mutation-fixtures";
 
 test.describe("project management project update notifications", () => {
-  test("Active Project update sends one aggregate event to requester, actor and before/after members", async () => {
+  test("Active Project update sends one aggregate event to requester, actor, before/after members and super administrators", async () => {
     expect(process.env.NOTIFICATION_DELIVERY_DISABLED).toBe("true");
     expect(new URL(process.env.DATABASE_URL ?? "").pathname).toMatch(/_test$/);
 
@@ -60,6 +61,10 @@ test.describe("project management project update notifications", () => {
       { personId: addedMember.person.id, role: "PARTICIPANT" as const },
     ];
 
+    const administrator = await createAccountPerson("Project Update Super Administrator");
+    const administratorRole = await prisma.systemRoleAssignment.create({
+      data: { accountId: administrator.account.id, role: "SUPER_ADMINISTRATOR" },
+    });
     const updated = await updateProject(actor(owner), {
       projectId: project.id,
       expectedLockVersion: 0,
@@ -67,6 +72,11 @@ test.describe("project management project update notifications", () => {
       description: sensitiveDescription,
       avatarPath,
       members: requestedMembers,
+    }).finally(async () => {
+      await prisma.systemRoleAssignment.update({
+        where: { id: administratorRole.id },
+        data: { revokedAt: new Date() },
+      });
     });
     expect(updated.lockVersion).toBe(1);
 
@@ -96,22 +106,19 @@ test.describe("project management project update notifications", () => {
     expect(JSON.stringify(payload)).not.toContain(avatarPath);
     expect(JSON.stringify(payload)).not.toContain(removedMember.person.id);
     expect(JSON.stringify(payload)).not.toContain(addedMember.person.id);
-    expect(
-      (payload.recipientOpenIds as string[]).slice().sort(),
-    ).toEqual(
-      [requester, owner, removedMember, addedMember]
-        .map((recipient) => recipient.openId)
-        .sort(),
+    const expectedRecipients = await expectedProjectManagementRecipients(
+      [requester, owner, removedMember, addedMember, administrator], "PROJECT",
     );
+    expect((payload.recipientOpenIds as string[]).slice().sort()).toEqual(expectedRecipients.openIds);
 
     const notifications = await prisma.inAppNotification.findMany({
       where: { eventKey: { startsWith: `${eventKey}:inapp:` } },
       select: { recipientAccountId: true, linkPath: true },
     });
-    expect(notifications).toHaveLength(4);
+    expect(notifications.map((notification) => notification.recipientAccountId).sort()).toEqual(expectedRecipients.accountIds);
     expect(notifications).toEqual(
       expect.arrayContaining(
-        [requester, owner, removedMember, addedMember].map((recipient) => ({
+        [requester, owner, removedMember, addedMember, administrator].map((recipient) => ({
           recipientAccountId: recipient.account.id,
           linkPath: `/progress/projects/${project.id}`,
         })),
@@ -226,6 +233,6 @@ test.describe("project management project update notifications", () => {
       await prisma.inAppNotification.count({
         where: { eventKey: { startsWith: eventKeyPrefix } },
       }),
-    ).toBe(2);
+    ).toBe((await expectedProjectManagementRecipients([requester, owner], "PROJECT")).accountIds.length);
   });
 });

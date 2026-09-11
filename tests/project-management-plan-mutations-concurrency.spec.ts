@@ -2,6 +2,7 @@
 import { expect, test } from "@playwright/test";
 import type { TaskMemberRole } from "@prisma/client";
 import { prisma } from "../lib/prisma";
+import { expectedProjectManagementRecipients } from "./helpers/project-management-notification-recipients";
 import { activateTask } from "../lib/project-management/application/lifecycle-service";
 import { createWorkSegment } from "../lib/project-management/application/segment-service";
 import { updateActiveTask, updateTaskDraft } from "../lib/project-management/application/task-mutation-service";
@@ -242,8 +243,9 @@ test.describe("project management plan mutations project-management-plan-mutatio
             where: { eventKey: { startsWith: eventPrefix } },
             select: { recipientAccountId: true },
           });
+          const expectedPerEvent = await Promise.all(expectedChangedPeople.map((person) => expectedProjectManagementRecipients([person], "TASK", true)));
           expect(inAppRows.map((row) => row.recipientAccountId).sort()).toEqual(
-            expectedChangedPeople.map((person) => person.account.id).sort(),
+            expectedPerEvent.flatMap((recipients) => recipients.accountIds).sort(),
           );
         }
       }

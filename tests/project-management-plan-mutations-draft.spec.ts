@@ -5,6 +5,7 @@ import { prisma } from "../lib/prisma";
 import { activateTask, approveRevision, createRevision, createTaskDraft, reviewMilestone, submitMilestoneForReview } from "../lib/project-management/application/lifecycle-service";
 import { updateTaskDraft } from "../lib/project-management/application/task-mutation-service";
 import { absoluteDateTimeSchema } from "../lib/project-management/validations/lifecycle";
+import { expectedProjectManagementRecipients } from "./helpers/project-management-notification-recipients";
 
 import {
   UUID_PATTERN,
@@ -712,18 +713,13 @@ test.describe("project management plan mutations project-management-plan-mutatio
       expect(String(updatePayload.summary)).not.toContain(
         "元数据、成员与计划处于同一事务",
       );
-      expect(
-        (updatePayload.recipientOpenIds as string[]).slice().sort(),
-      ).toEqual(
-        [owner, participant, addedMember]
-          .map((recipient) => recipient.openId)
-          .sort(),
-      );
+      const expectedRecipients = await expectedProjectManagementRecipients([owner, participant, addedMember], "TASK");
+      expect((updatePayload.recipientOpenIds as string[]).slice().sort()).toEqual(expectedRecipients.openIds);
       const updateNotifications = await prisma.inAppNotification.findMany({
         where: { eventKey: { startsWith: `${updateEventKey}:inapp:` } },
         select: { recipientAccountId: true, linkPath: true },
       });
-      expect(updateNotifications).toHaveLength(3);
+      expect(updateNotifications.map((notification) => notification.recipientAccountId).sort()).toEqual(expectedRecipients.accountIds);
       expect(updateNotifications).toEqual(
         expect.arrayContaining(
           [owner, participant, addedMember].map((recipient) => ({

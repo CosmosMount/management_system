@@ -3,6 +3,7 @@ import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import type { TaskMemberRole } from "@prisma/client";
 import { prisma } from "../lib/prisma";
+import { expectedProjectManagementRecipients } from "./helpers/project-management-notification-recipients";
 import { activateTask, createRevision, createTaskDraft, reviewTermination, submitTerminationForReview } from "../lib/project-management/application/lifecycle-service";
 import { createWorkSegment, updateWorkSegment } from "../lib/project-management/application/segment-service";
 import { updateActiveTask } from "../lib/project-management/application/task-mutation-service";
@@ -156,7 +157,10 @@ test.describe("project management plan mutations project-management-plan-mutatio
             },
           },
         }),
-      ).toBe(2);
+      ).toBe(
+        (await expectedProjectManagementRecipients([reviewer], "TASK", true)).accountIds.length +
+        (await expectedProjectManagementRecipients([newcomer], "TASK", true)).accountIds.length,
+      );
       expect(
         await prisma.notificationOutbox.count({
           where: { eventKey: `pm:task:${fixture.taskId}:updated:2:feishu` },
@@ -197,21 +201,14 @@ test.describe("project management plan mutations project-management-plan-mutatio
         "任务名称、任务内容、优先级",
       );
       expect(String(metadataPayload.summary)).not.toContain("计划语义未改变");
-      expect(
-        (metadataPayload.recipientOpenIds as string[]).slice().sort(),
-      ).toEqual(
-        [admin, owner, member, newcomer]
-          .map((recipient) => recipient.openId)
-          .sort(),
-      );
+      const expectedMetadataRecipients = await expectedProjectManagementRecipients([admin, owner, member, newcomer], "TASK");
+      expect((metadataPayload.recipientOpenIds as string[]).slice().sort()).toEqual(expectedMetadataRecipients.openIds);
       const metadataRecipients = await prisma.inAppNotification.findMany({
         where: { eventKey: { startsWith: `${metadataEventKey}:inapp:` } },
         select: { recipientAccountId: true },
       });
       expect(metadataRecipients.map((row) => row.recipientAccountId).sort()).toEqual(
-        [admin, owner, member, newcomer]
-          .map((recipient) => recipient.account.id)
-          .sort(),
+        expectedMetadataRecipients.accountIds,
       );
       expect(
         await prisma.domainAuditEvent.count({
@@ -499,20 +496,18 @@ test.describe("project management plan mutations project-management-plan-mutatio
       expect(
         taskUpdateNotifications.map((row) => row.recipientAccountId).sort(),
       ).toEqual(
-        [owner, reviewer, newcomer]
-          .map((recipient) => recipient.account.id)
-          .sort(),
+        (await expectedProjectManagementRecipients([owner, reviewer, newcomer], "TASK")).accountIds,
       );
       const memberNotifications = await prisma.inAppNotification.findMany({
         where: { eventKey: { startsWith: memberEventPrefix } },
         select: { recipientAccountId: true, linkPath: true },
       });
-      expect(memberNotifications).toEqual([
-        {
-          recipientAccountId: newcomer.account.id,
+      expect(memberNotifications.sort((left, right) => left.recipientAccountId.localeCompare(right.recipientAccountId))).toEqual(
+        (await expectedProjectManagementRecipients([newcomer], "TASK", true)).accountIds.map((recipientAccountId) => ({
+          recipientAccountId,
           linkPath: `/progress/tasks/${fixture.taskId}`,
-        },
-      ]);
+        })),
+      );
 
       const unchangedInput = {
         taskId: fixture.taskId,
@@ -774,33 +769,31 @@ test.describe("project management plan mutations project-management-plan-mutatio
         payloadByPersonId.set(String(context.affectedPersonId), payload);
       }
       expect(payloadByPersonId.get(inactive.person.id)).toMatchObject({
-        recipientOpenIds: [],
         context: { recipientResolution: "PERSON_INACTIVE" },
       });
       expect(payloadByPersonId.get(noAccountPerson.id)).toMatchObject({
-        recipientOpenIds: [],
         context: { recipientResolution: "ACCOUNT_MISSING" },
       });
       expect(payloadByPersonId.get(bound.person.id)).toMatchObject({
-        recipientOpenIds: [bound.openId],
         context: { recipientResolution: "RESOLVED" },
       });
       expect(payloadByPersonId.get(wrongTenant.person.id)).toMatchObject({
-        recipientOpenIds: [],
         context: { recipientResolution: "DEFAULT_FEISHU_IDENTITY_MISSING" },
       });
       expect(payloadByPersonId.get(missingIdentity.person.id)).toMatchObject({
-        recipientOpenIds: [],
         context: { recipientResolution: "DEFAULT_FEISHU_IDENTITY_MISSING" },
       });
       expect(payloadByPersonId.get(emptyOpenId.person.id)).toMatchObject({
-        recipientOpenIds: [],
         context: { recipientResolution: "FEISHU_OPEN_ID_MISSING" },
       });
       expect(payloadByPersonId.get(firstBlankThenValid.person.id)).toMatchObject({
-        recipientOpenIds: [laterValidOpenId],
         context: { recipientResolution: "RESOLVED" },
       });
+      const administrators = await expectedProjectManagementRecipients([], "TASK", true);
+      for (const [personId, payload] of payloadByPersonId) {
+        const memberOpenIds = personId === bound.person.id ? [bound.openId] : personId === firstBlankThenValid.person.id ? [laterValidOpenId] : [];
+        expect((payload.recipientOpenIds as string[]).slice().sort()).toEqual([...new Set([...memberOpenIds, ...administrators.openIds])].sort());
+      }
       const inAppRows = await prisma.inAppNotification.findMany({
         where: {
           eventKey: {
@@ -816,6 +809,7 @@ test.describe("project management plan mutations project-management-plan-mutatio
           firstBlankThenValid.account.id,
           emptyOpenId.account.id,
           missingIdentity.account.id,
+          ...outboxes.flatMap(() => administrators.accountIds),
         ].sort(),
       );
       expect(

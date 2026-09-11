@@ -20,6 +20,36 @@ import {
 } from "@/lib/project-management/application/feishu-identity";
 import { jsonValue } from "@/lib/project-management/application/prisma-json";
 
+const SUPER_ADMINISTRATOR_NOTIFICATION_KINDS = new Set<
+  ProjectManagementNotificationPayload["kind"]
+>([
+  "task_assigned",
+  "task_updated",
+  "task_activated",
+  "task_deleted",
+  "task_terminated",
+  "milestone_due",
+  "milestone_overdue",
+  "milestone_review_submitted",
+  "milestone_review_result",
+  "termination_review_submitted",
+  "termination_review_result",
+  "revision_pending_review",
+  "revision_result",
+  "revision_applied",
+  "revision_cancelled",
+  "project_establishment_submitted",
+  "project_establishment_result",
+  "project_member_added",
+  "project_updated",
+  "project_task_changed",
+  "project_completed",
+  "project_deleted",
+  "risk_created",
+  "risk_resolved",
+  "comment_created",
+]);
+
 export type ProjectManagementNotificationRecipient = {
   accountId: string;
   openId: string | null;
@@ -57,7 +87,36 @@ export async function createProjectManagementEventNotificationsTx(
     context?: Record<string, unknown>;
   },
 ) {
-  const requestedRecipients = uniqueRecipientsByAccount(input.recipients);
+  const includesSuperAdministrators = SUPER_ADMINISTRATOR_NOTIFICATION_KINDS.has(input.kind);
+  const existingNotification = includesSuperAdministrators
+    ? (await tx.notificationOutbox.findUnique({
+        where: { eventKey: `${input.eventKey}:feishu` },
+        select: { id: true },
+      })) ?? (await tx.inAppNotification.findFirst({
+        where: { eventKey: { startsWith: `${input.eventKey}:inapp:` } },
+        select: { id: true },
+      }))
+    : null;
+  const administratorAssignments = includesSuperAdministrators && !existingNotification
+    ? await tx.systemRoleAssignment.findMany({
+        where: {
+          role: "SUPER_ADMINISTRATOR",
+          team: "",
+          techGroup: "",
+          revokedAt: null,
+          account: { person: { is: { status: "ACTIVE" } } },
+        },
+        select: { accountId: true },
+      })
+    : [];
+  const administratorRecipients = await recipientsForAccountIdsTx(
+    tx,
+    administratorAssignments.map((assignment) => assignment.accountId),
+  );
+  const requestedRecipients = uniqueRecipientsByAccount([
+    ...input.recipients,
+    ...administratorRecipients,
+  ]);
   const activeAccountIds = new Set(
     (
       await tx.account.findMany({

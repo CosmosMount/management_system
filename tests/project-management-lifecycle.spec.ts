@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { Prisma, type TerminationOutcome } from "@prisma/client";
 import { Client } from "pg";
 import { prisma } from "../lib/prisma";
+import { expectedProjectManagementRecipients } from "./helpers/project-management-notification-recipients";
 import {
   activateTask,
   approveRevision,
@@ -3094,7 +3095,7 @@ test.describe("project management P2/P3 task lifecycle services", () => {
     expect(revisionAppliedPayload.recipientOpenIds).not.toContain(
       fixture.member.openId,
     );
-    expect(revisionAppliedPayload.recipientOpenIds).not.toContain(
+    expect(revisionAppliedPayload.recipientOpenIds).toContain(
       fixture.reviewer.openId,
     );
     expect(
@@ -4490,10 +4491,13 @@ async function taskNotificationRecipients(input: {
       },
     },
   });
-  return notificationRecipientSets(
-    members.flatMap((member) =>
-      member.person.account ? [member.person.account] : [],
-    ),
+  return expectedProjectManagementRecipients(
+    members.flatMap((member) => member.person.account ? [{
+      account: { id: member.person.account.id },
+      openId: firstNonEmptyFeishuOpenId(member.person.account.identities),
+    }] : []),
+    "REVIEW",
+    true,
   );
 }
 

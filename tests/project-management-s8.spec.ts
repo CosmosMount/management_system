@@ -6,6 +6,7 @@ import {
   appendActionInboxPage,
 } from "../components/project-management/action-inbox-state";
 import { prisma } from "../lib/prisma";
+import { expectedProjectManagementRecipients } from "./helpers/project-management-notification-recipients";
 import type { ProjectManagementActionFailure } from "../lib/project-management/application/action-result";
 import {
   runMilestoneDeadlineScan,
@@ -20,6 +21,7 @@ import {
 import { updateNotificationPreference } from "../lib/project-management/application/notification-preference-service";
 import { toProjectManagementServiceError } from "../lib/project-management/application/errors";
 import type { ProjectManagementActor } from "../lib/project-management/identity";
+import type { ProjectManagementNotificationPayload } from "../lib/project-management/notifications/contract";
 import {
   getActionInbox,
   type ActionInboxItem,
@@ -841,9 +843,14 @@ test.describe("project management S8 dashboard and notifications", () => {
         where: { eventKey: `${ordinaryKey}:inapp:${user.accountId}` },
       }),
     ).toBe(1);
-    expect(
-      await prisma.notificationOutbox.count({ where: { eventKey: `${ordinaryKey}:feishu` } }),
-    ).toBe(0);
+    const expectedOrdinaryRecipients = await expectedProjectManagementRecipients(
+      [{ account: { id: user.accountId }, openId: user.openId }], "TASK",
+    );
+    const ordinaryOutbox = await prisma.notificationOutbox.findUnique({ where: { eventKey: `${ordinaryKey}:feishu` } });
+    expect(ordinaryOutbox !== null).toBe(expectedOrdinaryRecipients.openIds.length > 0);
+    const ordinaryOpenIds = ordinaryOutbox ? (JSON.parse(ordinaryOutbox.payload) as ProjectManagementNotificationPayload).recipientOpenIds : [];
+    expect(ordinaryOpenIds.slice().sort()).toEqual(expectedOrdinaryRecipients.openIds);
+    expect(ordinaryOpenIds).not.toContain(user.openId);
 
     const mandatoryKey = `s8-pref-mandatory-${randomUUID()}`;
     await prisma.$transaction((tx) =>
@@ -866,8 +873,10 @@ test.describe("project management S8 dashboard and notifications", () => {
     expect(mandatory.botKind).toBe("notification");
     expect(JSON.parse(mandatory.payload)).toMatchObject({
       mandatory: true,
-      recipientOpenIds: [user.openId],
     });
+    expect((JSON.parse(mandatory.payload) as ProjectManagementNotificationPayload).recipientOpenIds.slice().sort()).toEqual(
+      (await expectedProjectManagementRecipients([{ account: { id: user.accountId }, openId: user.openId }], "TASK", true)).openIds,
+    );
 
     await prisma.person.update({
       where: { id: user.personId },

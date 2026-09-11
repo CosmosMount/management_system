@@ -42,7 +42,11 @@ Task、Project、Revision、风险和评论 mutation 的 Server Action 会在业
 - `enqueueProjectManagementNotificationTx()` 和非事务版本只写 `NotificationOutbox`，channel 固定为 `project-management`。
 - `approval_request` 自动使用审批机器人；普通通知使用通知机器人。`milestone_review_submitted`、`revision_pending_review`、`termination_review_submitted` 和 `project_establishment_submitted` 可以声明 `approval_request`，其他事件不得持久化为审批机器人通知。
 
-Task 生命周期服务和 Segment 服务会在同一业务事务中写站内通知和 `channel=project-management` outbox，事件包括：
+项目与 Task 生命周期服务会在同一业务事务中写站内通知和 `channel=project-management` outbox，事件包括：
+
+下表列出原业务收件人；所有现行项目/任务事件还会统一追加有效的全局超级管理员（`SUPER_ADMINISTRATOR`，全局范围、角色未撤销、关联 Person 为 ACTIVE），按账号去重。追加范围包括项目立项、成员加入、信息更新、任务归属变化、结束/删除，任务分配/成员变化、更新、激活、删除/结束，里程碑今日到期/逾期及验收，计划修订待审批/结果/生效/取消，结束申请及结果，以及风险提出/解决和评论发布。仅有项目管理员角色的账号不因此新增订阅；原业务收件人不减少。新增超级管理员同样遵守普通飞书分类偏好，原强制事件仍强制，站内通知始终保留；缺少飞书身份不影响站内通知。普通事件没有有效超级管理员时不阻断业务，审批可用管理员校验保持不变。
+
+该规则只作用于新产生的事件，不补发历史或改写既有 outbox 收件人。账号安全仍仅通知被操作账号；零成员草稿创建仍不产生任务分配通知；普通投入增删改、评论删除及已退役事件不新增通知。成员变更等既有逐人事件不合并，超级管理员每个事件收到一份，不因兼具成员/操作人/管理员身份重复收到同一事件。
 
 | 场景 | outbox type | 用途 | 收件人 |
 |------|-------------|------|--------|
