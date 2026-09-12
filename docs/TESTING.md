@@ -202,6 +202,20 @@ await page.screenshot({ path: ".tmp/home.png", fullPage: true });
 await browser.close();
 ```
 
+## 独立会议验证
+
+通过官方隔离 runner 执行：
+
+```bash
+npm run test:e2e -- tests/meeting-records.spec.ts tests/meeting-records-ui.spec.ts tests/meeting-records-migration.spec.ts
+```
+
+- `meeting-records.node.ts` 纳入受控 Node 套件，验证仅全局超管可写、字段／时间范围及输入边界。
+- `meeting-records.spec.ts` 验证项目管理员与普通用户拒绝写、角色撤销、停用人员保留、幂等创建、并发版本冲突、事务审计、无通知、列表游标和跨项目时间线全员一致；包含半开区间、空人员行、软删除过滤、实时更新、伪造人员范围及 5000 条容量边界。
+- `meeting-records-ui.spec.ts` 在 Desktop 1440×1000 和 Pixel 5 验证匿名访问、创建／预览／编辑、非参与人查看、真实 Server Action 重放拒绝、只读工作详情、长主题／纪要、50 位参与人、空工作记录及刷新，另验证完整工作范围内第 31 天以后的记录可通过现有滑块访问且不再出现查看区间控件，检查页面健康和横向溢出。
+- `meeting-records-migration.spec.ts` 只在官方 runner 环境创建随机专属 PostgreSQL 及 shadow 库，验证前置迁移链升级、旧会议表哨兵数据保留、重复部署、数据库约束，以及真实结构和完整迁移链的 schema drift；结束后只清理本用例创建的资源。普通开发库里的旧实验迁移差异不由测试自动修复。
+- 此功能涉及权限、数据库和路由，交付还需 `npm run check`、完整 `npm run test:e2e` 和 `npm run build`；定向结果不能替代完整门禁，测试不得向真实飞书发送消息。
+
 ## 基础代码测试
 
 Node 测试定向开发时可单独执行：

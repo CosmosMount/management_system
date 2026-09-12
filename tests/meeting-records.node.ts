@@ -1,0 +1,39 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { randomUUID } from "node:crypto";
+import { canManageMeetings } from "../lib/project-management/meetings/permissions";
+import { meetingFieldsSchema, meetingTimelineSchema } from "../lib/project-management/meetings/validation";
+import { shanghaiDateTimeLocalToIso } from "../lib/project-management/date-time";
+import type { ProjectManagementActor } from "../lib/project-management/identity";
+
+const fields = {
+  topic: "透明会议", personIds: [randomUUID()], minutes: "",
+  rangeStart: "2026-09-01T00:00:00.000Z", rangeEnd: "2026-09-02T00:00:00.000Z",
+};
+
+test("会议只允许在职全局超管维护，不把项目管理员当作超管", () => {
+  const actor: ProjectManagementActor = { accountId: randomUUID(), personId: randomUUID(), openId: "test", systemRoles: [] };
+  assert.equal(canManageMeetings(actor), false);
+  assert.equal(canManageMeetings({ ...actor, systemRoles: [{ role: "PROJECT_ADMINISTRATOR", team: "", techGroup: "" }] }), false);
+  const admin: ProjectManagementActor = { ...actor, systemRoles: [{ role: "SUPER_ADMINISTRATOR", team: "", techGroup: "" }] };
+  assert.equal(canManageMeetings(admin), true);
+  assert.equal(canManageMeetings({ ...admin, isActive: false }), false);
+  assert.equal(canManageMeetings({ ...actor, systemRoles: [{ role: "SUPER_ADMINISTRATOR", team: "英雄", techGroup: "" }] }), false);
+});
+
+test("会议校验必填字段、重复参与人、时间边界及不接受项目归属", () => {
+  assert.equal(meetingFieldsSchema.safeParse(fields).success, true);
+  for (const invalid of [
+    { topic: "  " }, { topic: "会".repeat(201) }, { personIds: [] },
+    { personIds: [...fields.personIds, ...fields.personIds] },
+    { rangeEnd: fields.rangeStart }, { rangeEnd: "2028-01-01T00:00:00Z" },
+    { rangeStart: "2026-09-01T08:00" }, { minutes: "字".repeat(50_001) }, { projectId: randomUUID() },
+  ]) assert.equal(meetingFieldsSchema.safeParse({ ...fields, ...invalid }).success, false);
+  assert.equal(shanghaiDateTimeLocalToIso("2026-09-01T08:00"), fields.rangeStart);
+});
+
+test("已保存会议时间线输入不接受伪造人员范围", () => {
+  const saved = { kind: "SAVED", meetingId: randomUUID(), rangeStart: fields.rangeStart, rangeEnd: fields.rangeEnd };
+  assert.equal(meetingTimelineSchema.safeParse(saved).success, true);
+  assert.equal(meetingTimelineSchema.safeParse({ ...saved, personIds: fields.personIds }).success, false);
+});

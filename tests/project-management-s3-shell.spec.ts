@@ -54,6 +54,7 @@ test.describe("project management S3 shell", { tag: "@smoke" }, () => {
         .toEqual([
           "/progress",
           "/progress/projects",
+          "/progress/meetings",
           "/progress/tasks",
           "/progress/approvals",
           "/progress/resources",

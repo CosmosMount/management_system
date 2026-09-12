@@ -223,6 +223,7 @@ model Account {
   inAppNotifications        InAppNotification[]
   auditEvents               DomainAuditEvent[]            @relation("AuditActorAccount")
   requestedProjects         Project[]                     @relation("ProjectRequester")
+  createdMeetingRecords     MeetingRecord[]
   reviewedProjects          Project[]                     @relation("ProjectReviewer")
   deletedProjects           Project[]                     @relation("ProjectDeletedBy")
   createdProjectMembers     ProjectMember[]               @relation("ProjectMemberCreatedBy")
@@ -267,6 +268,7 @@ model Person {
   workSegments        WorkSegment[]
   auditEvents         DomainAuditEvent[] @relation("AuditActorPerson")
   projectMembers      ProjectMember[]
+  meetingRecordParticipants MeetingRecordParticipant[]
   createdRiskRecords  RiskRecord[]       @relation("RiskRecordCreatedByPerson")
   resolvedRiskRecords RiskRecord[]       @relation("RiskRecordResolvedByPerson")
   authoredComments    Comment[]          @relation("CommentAuthorPerson")
@@ -276,6 +278,33 @@ model Person {
 
   @@index([displayName])
   @@index([status])
+}
+
+model MeetingRecord {
+  id                 String   @id @default(uuid())
+  topic              String   @db.VarChar(200)
+  rangeStart         DateTime @db.Timestamptz(6)
+  rangeEnd           DateTime @db.Timestamptz(6)
+  minutes            String   @default("")
+  version            Int      @default(0)
+  createdByAccountId String
+  createdBy          Account  @relation(fields: [createdByAccountId], references: [id], onDelete: Restrict)
+  participants       MeetingRecordParticipant[]
+  createdAt          DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime @updatedAt @db.Timestamptz(6)
+
+  @@index([createdAt, id])
+  @@index([createdByAccountId])
+}
+
+model MeetingRecordParticipant {
+  meetingId String
+  personId  String
+  meeting   MeetingRecord @relation(fields: [meetingId], references: [id], onDelete: Restrict)
+  person    Person        @relation(fields: [personId], references: [id], onDelete: Restrict)
+
+  @@id([meetingId, personId])
+  @@index([personId])
 }
 
 model User {
