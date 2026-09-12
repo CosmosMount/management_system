@@ -9,6 +9,7 @@ export const RETIRED_SEGMENT_NOTIFICATION_REASON = "投入确认功能已退役�
 const PROJECT_MANAGEMENT_NOTIFICATION_KINDS = [
   "task_assigned",
   "task_updated",
+  "task_urged",
   "task_activated",
   "task_deleted",
   "milestone_due",

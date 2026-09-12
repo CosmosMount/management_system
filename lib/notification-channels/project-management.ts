@@ -16,6 +16,7 @@ import {
   normalizeProjectManagementNotificationText,
   projectManagementContextLines,
   projectManagementEntityLabel,
+  projectManagementStatusLabel,
 } from "@/lib/project-management/notifications/user-facing-copy";
 import { resolveProjectManagementNotificationLinkPath } from "@/lib/project-management/notifications/link-path";
 import type {
@@ -233,7 +234,7 @@ function deliveryTarget(result: FeishuSendResult): NotificationDeliveryTarget {
   };
 }
 
-function buildProjectManagementCard(
+export function buildProjectManagementCard(
   payload: ProjectManagementNotificationPayload,
   createdAt: Date,
 ) {
@@ -275,8 +276,16 @@ function buildProjectManagementCard(
       {
         tag: "div",
         text: {
-          tag: "lark_md",
-          content: [
+          tag: payload.kind === "task_urged" ? "plain_text" : "lark_md",
+          content: payload.kind === "task_urged" ? [
+            `催促人：${payload.actorName || "未知用户"}`,
+            `项目：${payload.projectName || "未关联项目"}`,
+            `任务：${payload.taskTitle || "任务"}`,
+            `催促时状态：${projectManagementStatusLabel(String(payload.context.taskStatus))}`,
+            `负责人：${Array.isArray(payload.context.ownerNames) && payload.context.ownerNames.length ? payload.context.ownerNames.join("、") : "暂无有效负责人"}`,
+            `催促信息：${summary}`,
+            `催促时间：${formatCardDate(createdAt)}`,
+          ].join("\n") : [
             `**操作人**：${payload.actorName || "系统"}`,
             payload.projectName ? `**项目**：${truncate(payload.projectName, 80)}` : null,
             payload.taskTitle ? `**任务**：${truncate(payload.taskTitle, 80)}` : null,

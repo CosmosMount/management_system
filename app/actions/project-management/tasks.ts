@@ -17,6 +17,11 @@ import {
 import { getCurrentProjectManagementActor } from "@/lib/project-management/identity";
 import { drainNotificationOutboxSoon } from "@/lib/notification-delivery";
 import { revalidateProjectManagement } from "@/lib/revalidate";
+import { urgeTask as urgeTaskService } from "@/lib/project-management/application/task-urge-service";
+
+export async function urgeTask(input: unknown) {
+  return runTaskMutationAction("pm.task.urge", "urgeTask", input, urgeTaskService);
+}
 
 export async function createTaskDraft(
   input: unknown,

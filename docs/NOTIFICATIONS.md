@@ -52,6 +52,7 @@ Task、Project、Revision、风险和评论 mutation 的 Server Action 会在业
 |------|-------------|------|--------|
 | Task 草稿创建或成员变化 | `task_assigned` | 强制普通通知 | 本次涉及的有效 OWNER/PARTICIPANT |
 | Task 基本信息更新 | `task_updated` | 非 mandatory 普通通知 | 操作人和更新前后有效 OWNER/PARTICIPANT，按账号去重 |
+| Task 手动催促 | `task_urged` | 强制普通通知 | 当前有效 OWNER/PARTICIPANT、两类全局管理员及催促人，按账号去重；不扩大到所属 Project 全体成员 |
 | Task 激活 | `task_activated` | 普通通知 | 有效 OWNER/PARTICIPANT |
 | Task 草稿删除 | `task_deleted` | 强制普通通知 | 有效 OWNER/PARTICIPANT |
 | Milestone 提交验收 | `milestone_review_submitted` | 审批请求 | 所有活跃全局管理员，按账号去重 |
@@ -101,6 +102,14 @@ Revision 生效事务先把目标 `TaskPlanVersion` 切换为 `CURRENT` 并更�
 已退役的投入确认历史使用 `pm:segment:confirmation_due:<segmentId>:<endAt>` 和 `/progress?focus=<segmentId>`；旧链接不再提供确认操作，迁移保留的记录仍可定位，仅归档或已删除记录显示不可定位提示。站内通知在业务事件键后追加 `:inapp:<accountId>`，飞书 outbox 追加 `:feishu`；重复提交依赖唯一事件键保持 exactly once，逐收件人失败只重试失败者。`scanSegmentTransitions` 会把到期 Planned 推到 `PENDING_CONFIRMATION`、把进行中的 Planned 置为 `IN_PROGRESS`，但不会自动生成 Actual。
 
 统一账号和 Task 成员/角色数据库迁移只追加 `source=MIGRATION` 的 `DomainAuditEvent`，不创建站内通知或 outbox，不会在上线时批量触达真实用户。单一 Task 审批门禁迁移同样不新建通知：它保留已发送历史，冻结被撤出审批对应仍可重试的 outbox 与未完成 recipient，并把相关未读站内审批通知标记为已读。
+
+### Task 手动催促
+
+`task_urged` 仅允许有效且有任务查看权限的账号对 ACTIVE Task 发起，不要求编辑权限，也不受待审批事项门禁限制。可选信息最多 500 字；空白使用中性跟进提醒。同一 Task 通过任务行锁串行校验，所有人共享 5 分钟冷却；同一账号、任务和请求 ID 的相同正文重试返回原结果，不重复入队，变更正文则拒绝复用请求 ID。
+
+催促服务在一个事务中写 `pm.task.urge` 领域审计、站内通知和 project-management outbox，审计时间作为冷却依据，不修改任务状态。收件人沿用评论范围，缺少飞书身份时仍保留站内通知；`mandatory=true` 绕过 TASK 飞书分类偏好，但不绕过通知机器人、禁发开关、allowlist、有效账号检查及逐收件人重试保护。提交成功仅表示投递已入队。
+
+飞书卡片正文使用 `plain_text`，保留用户输入为文字，不将其解释为提及、Markdown 或操作链接。展示服务端快照中的催促人、任务、所属项目（独立任务显示“未关联项目”）、催促时状态、有效负责人、完整催促信息和时间，附任务详情按钮；不推断逾期或改变审批文案。自动提醒设置及其他通知事件的语义保持不变。
 
 ### 单一 Task 审批门禁迁移
 

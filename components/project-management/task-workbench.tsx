@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { TaskUrgeButton } from "@/components/project-management/task-urge-button";
 import { TaskDraftLeavePrompt } from "@/components/project-management/task-draft-leave-prompt";
 import { NodeDeadline } from "@/components/project-management/node-deadline";
 import { useEffect, useRef, useState } from "react";
@@ -341,6 +342,10 @@ export function TaskWorkbench({
               >
                 删除草稿
               </Button>
+            )}
+            {task.status === "ACTIVE" && (
+              <TaskUrgeButton taskId={task.id} taskTitle={task.title} disabled={busy}
+                onSubmitted={() => setNotice({ kind: "success", message: "催促已提交，飞书消息将由系统投递。" })} />
             )}
             {canEditActive && (
               <Button

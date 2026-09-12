@@ -54,6 +54,8 @@ npm run test:e2e -- --list
 
 项目/任务通知追加超级管理员的数据库回归使用 `npm run test:e2e -- tests/project-management-super-administrator-notifications.spec.ts tests/project-management-project-updates.spec.ts`。官方 runner 使用随机隔离数据库并禁用真实投递；用例覆盖现行事件矩阵、账号去重、角色有效性、普通飞书偏好与强制事件、缺少飞书身份、账号安全排除，以及真实项目更新入口。该变更不新增浏览器交互，核心收件人规则由 node-db 集成用例验证；通知变更完成时仍需完整 E2E 门禁。
 
+Task 手动催促回归使用 `npm run test:e2e -- tests/task-urge.spec.ts`，仅通过官方隔离数据库与受控服务执行。覆盖无编辑权限用户、桌面与窄屏表单、有效收件人及强制飞书偏好、纯文本卡片、共享冷却和并发幂等、待审批任务、非法状态，以及 outbox 受控失败后的事务回滚；测试不发送真实飞书消息。通知变更的完成门禁仍为 `npm run check` 和完整 `npm run test:e2e`。
+
 ### 自动化门禁分层
 
 验证政策以根目录 `AGENTS.md` 为准。本节区分日常任务完成与合并/发布验收，不要求每次局部迭代都重跑完整回归：

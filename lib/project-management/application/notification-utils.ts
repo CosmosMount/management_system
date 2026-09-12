@@ -25,6 +25,7 @@ const SUPER_ADMINISTRATOR_NOTIFICATION_KINDS = new Set<
 >([
   "task_assigned",
   "task_updated",
+  "task_urged",
   "task_activated",
   "task_deleted",
   "task_terminated",
