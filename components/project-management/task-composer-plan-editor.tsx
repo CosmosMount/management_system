@@ -48,12 +48,12 @@ import type {
 } from "@/lib/project-management/composer-contract";
 import { TASK_COMPOSER_START_ID } from "@/lib/project-management/composer-contract";
 import {
-  composerBatchMoveEntityIds,
+  composerBatchDelayEntityIds,
   isReadOnlyRevisionEntity,
   localMs,
   renderAtMs,
+  renderAtLocal,
   sortMilestonesByRenderTime,
-  type ComposerBatchMoveInput,
   type ComposerPlanTimeMutationResult,
 } from "@/components/project-management/task-composer-plan-state";
 
@@ -85,7 +85,7 @@ export function TaskComposerPlanEditor({
   onConstrainAnchorMove,
   onMoveAnchor,
   onMoveTerminal,
-  onBatchMove,
+  onBatchDelay,
   onUpdateInspector,
   onDeleteMilestones,
   onSubmit,
@@ -112,8 +112,9 @@ export function TaskComposerPlanEditor({
     selectedEntityIds: readonly string[],
   ) => void;
   onMoveTerminal: (at: string) => void;
-  onBatchMove: (
-    input: ComposerBatchMoveInput,
+  onBatchDelay: (
+    entityId: string,
+    targetAt: string,
   ) => ComposerPlanTimeMutationResult;
   onUpdateInspector: (draft: TaskComposerInspectorDraft) => void;
   onDeleteMilestones: (ids: string[]) => void;
@@ -124,17 +125,10 @@ export function TaskComposerPlanEditor({
   const [selectedAnchorIds, setSelectedAnchorIds] = useState<Set<string>>(
     () => new Set(),
   );
-  const [batchMove, setBatchMove] = useState<{
-    mode: "" | ComposerBatchMoveInput["mode"];
-    direction: ComposerBatchMoveInput["direction"];
-    days: string;
-    referenceEntityId: string;
-    selectedEntityIds: string[];
-    errors: {
-      mode?: string;
-      days?: string;
-      form?: string;
-    };
+  const [batchDelay, setBatchDelay] = useState<{
+    entityId: string;
+    targetAt: string;
+    error: string;
   } | null>(null);
   const [requestedCanvasCenter, setRequestedCanvasCenter] = useState<{
     atMs: number;
@@ -295,81 +289,27 @@ export function TaskComposerPlanEditor({
     });
   };
 
-  const submitBatchMove = () => {
-    if (!batchMove) return;
-    const errors: NonNullable<typeof batchMove>["errors"] = {};
-    if (!batchMove.mode) errors.mode = "请选择要移动的节点范围。";
-    const days = Number(batchMove.days);
-    if (!Number.isSafeInteger(days) || days <= 0) {
-      errors.days = "移动天数必须是大于 0 的整数。";
-    }
-    if (errors.mode || errors.days) {
-      setBatchMove({ ...batchMove, errors });
-      window.setTimeout(
-        () =>
-          document
-            .getElementById(
-              errors.mode
-                ? "task-composer-batch-move-following"
-                : "task-composer-batch-move-days",
-            )
-            ?.focus(),
-        0,
-      );
-      return;
-    }
-    const target = batchMove.mode === "FOLLOWING"
-      ? {
-          mode: "FOLLOWING" as const,
-          referenceEntityId: batchMove.referenceEntityId,
-        }
-      : {
-          mode: "SELECTED" as const,
-          selectedEntityIds: batchMove.selectedEntityIds,
-        };
-    const result = onBatchMove({
-      ...target,
-      direction: batchMove.direction,
-      days,
-    });
+  const submitBatchDelay = () => {
+    if (!batchDelay) return;
+    const result = onBatchDelay(batchDelay.entityId, batchDelay.targetAt);
     if (!result.ok) {
-      setBatchMove({
-        ...batchMove,
-        errors: { form: result.message },
-      });
+      setBatchDelay({ ...batchDelay, error: result.message });
       return;
     }
-    setBatchMove(null);
+    setBatchDelay(null);
   };
-  const followingAffectedCount = batchMove
-    ? composerBatchMoveEntityIds(state, {
-        mode: "FOLLOWING",
-        referenceEntityId: batchMove.referenceEntityId,
-      }).length
+  const batchDelayAffectedCount = batchDelay
+    ? composerBatchDelayEntityIds(state, batchDelay.entityId).length
     : 0;
-  const selectedAffectedCount = batchMove
-    ? composerBatchMoveEntityIds(state, {
-        mode: "SELECTED",
-        selectedEntityIds: batchMove.selectedEntityIds,
-      }).length
-    : 0;
-  const batchMoveAffectedCount = batchMove?.mode === "FOLLOWING"
-    ? followingAffectedCount
-    : batchMove?.mode === "SELECTED"
-      ? selectedAffectedCount
-      : 0;
-  const batchMoveReferenceLabel = batchMove
-    ? navigatorNodes.find((node) => node.id === batchMove.referenceEntityId)?.label
-    : null;
 
   return (
-    <div className="grid min-w-0 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
-      <div className="min-w-0 space-y-4">
+    <>
+      <main className="min-w-0 space-y-4">
         <section className="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="flex items-center gap-2">
-                <h3 className="font-semibold">选择计划节点</h3>
+                <h2 className="font-semibold">计划时间画布</h2>
                 <Badge variant="secondary" data-testid="task-composer-milestone-count">
                   {state.milestones.length}/200
                 </Badge>
@@ -381,8 +321,8 @@ export function TaskComposerPlanEditor({
               </div>
               <p className="mt-1 text-sm text-muted-foreground">
                 {state.revision
-                  ? "时间统一为北京时间（UTC+8）；承接节点只读，修订标记不形成计划阶段。"
-                  : "时间统一为北京时间（UTC+8）；可只保留开始与结束节点，人员投入在创建后安排。"}
+                  ? "固定 Asia/Shanghai；承接节点只读，Revision 标记不形成计划阶段。"
+                  : "固定 Asia/Shanghai；Composer 只编排节点，不加载成员投入数据。"}
               </p>
             </div>
             <Button
@@ -392,50 +332,16 @@ export function TaskComposerPlanEditor({
               onClick={() => onBeginMilestone(suggestMilestoneAt(state))}
             >
               <Plus aria-hidden="true" />
-              添加里程碑
+              添加 Milestone
             </Button>
           </div>
 
-          <div className="mt-4">
-            <TaskPlanNodeNavigator
-              nodes={navigatorNodes}
-              selectedId={state.selectedEntityId}
-              onSelect={selectNavigatorNode}
-              label="任务阶段"
-            />
-          </div>
-
-          <details className="mt-4 rounded-lg border border-border p-3" data-testid="task-composer-advanced-plan">
-            <summary className="cursor-pointer text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">时间画布与批量调整（高级）</summary>
           <div
             className="mt-3 hidden flex-wrap items-center gap-2 rounded-lg border border-dashed border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground lg:flex"
             data-testid="task-composer-anchor-multi-selection"
           >
             <Badge variant="outline">已选 {activeSelectedAnchorIds.size} 个可编辑节点</Badge>
-            <span className="min-w-0 flex-1">Shift 点击可增减选择；在画布空白处拖动可框选；拖动任一已选节点会整体移动。</span>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={submitting || activeSelectedAnchorIds.size === 0}
-              onClick={() => {
-                const referenceEntityId = state.selectedEntityId;
-                if (!referenceEntityId || !editableAnchorIds.has(referenceEntityId)) {
-                  return;
-                }
-                setBatchMove({
-                  mode: "",
-                  direction: "LATER",
-                  days: "1",
-                  referenceEntityId,
-                  selectedEntityIds: [...activeSelectedAnchorIds],
-                  errors: {},
-                });
-              }}
-            >
-              <CalendarClock aria-hidden="true" />
-              批量移动
-            </Button>
+            <span>Shift 点击可增减选择；在画布空白处拖动可框选；拖动任一已选节点会整体移动。</span>
           </div>
 
           <div
@@ -460,7 +366,7 @@ export function TaskComposerPlanEditor({
                   ? { kind: "ANCHOR", id: state.selectedEntityId }
                   : null
               }
-              emptyMessage="点击时间轴或添加按钮创建里程碑"
+              emptyMessage="点击时间轴或添加按钮创建 Milestone"
               interaction={{
                 enableAnchorCreate: true,
                 enableAnchorMarqueeSelection: true,
@@ -498,44 +404,51 @@ export function TaskComposerPlanEditor({
                 size="sm"
                 variant="outline"
                 disabled={!canAddAt || state.milestones.length >= 200}
-                title={canAddAt ? undefined : "里程碑必须严格位于开始节点与结束节点之间且不能同刻"}
+                title={canAddAt ? undefined : "Milestone 必须严格位于 Start 与 Terminal 之间且不能同刻"}
                 onClick={() => {
                   onBeginMilestone(quickAtLocal);
                   setQuickAt(null);
                 }}
               >
-                在此添加里程碑
+                在此添加 Milestone
               </Button>
               <Button
                 type="button"
                 size="sm"
                 variant="outline"
                 disabled={!canMoveTerminalAt}
-                title={canMoveTerminalAt ? undefined : "结束节点必须严格晚于所有其他节点"}
+                title={canMoveTerminalAt ? undefined : "Terminal 必须严格晚于所有其他节点"}
                 onClick={() => {
                   onMoveTerminal(quickAtLocal);
                   setQuickAt(null);
                 }}
               >
-                移动结束节点到此处
+                移动 Terminal 到此处
               </Button>
               <Button type="button" size="sm" variant="ghost" onClick={() => setQuickAt(null)}>
                 取消
               </Button>
               {!canAddAt && (
                 <span className="w-full text-xs text-muted-foreground">
-                  此处不能添加里程碑：节点必须严格位于开始节点与结束节点之间，且不能与其他节点同刻。
+                  此处不能添加 Milestone：节点必须严格位于 Start 与 Terminal 之间，且不能与其他节点同刻。
                 </span>
               )}
               {!canMoveTerminalAt && (
                 <span className="w-full text-xs text-muted-foreground">
-                  此处不能移动结束节点：结束节点必须严格晚于开始节点和全部里程碑。
+                  此处不能移动 Terminal：Terminal 必须严格晚于 Start 和全部 Milestone。
                 </span>
               )}
             </div>
           )}
 
-          </details>
+          <div className="mt-4">
+            <TaskPlanNodeNavigator
+              nodes={navigatorNodes}
+              selectedId={state.selectedEntityId}
+              onSelect={selectNavigatorNode}
+              label="Task 阶段"
+            />
+          </div>
         </section>
 
         {notice && (
@@ -553,7 +466,7 @@ export function TaskComposerPlanEditor({
             {optionLoading && " 正在加载…"}
           </div>
         )}
-      </div>
+      </main>
 
       <aside className="min-w-0" aria-label="计划节点检查器">
         <div className="space-y-4 rounded-xl border border-border bg-card p-4 sm:p-5">
@@ -561,8 +474,16 @@ export function TaskComposerPlanEditor({
             state={state}
             draft={inspectorDraft}
             issues={inspectorIssues}
+            submitting={submitting}
             onChange={onUpdateInspector}
             onDelete={(milestone) => onDeleteMilestones([milestone.id])}
+            onOpenBatchDelay={(entityId) =>
+              setBatchDelay({
+                entityId,
+                targetAt: renderAtLocal(state, entityId),
+                error: "",
+              })
+            }
           />
         </div>
       </aside>
@@ -576,7 +497,7 @@ export function TaskComposerPlanEditor({
           onClick={() => onBeginMilestone(suggestMilestoneAt(state))}
         >
           <Plus aria-hidden="true" />
-          里程碑
+          Milestone
         </Button>
         <Button
           type="button"
@@ -589,164 +510,54 @@ export function TaskComposerPlanEditor({
       </div>
 
       <Dialog
-        open={Boolean(batchMove)}
+        open={Boolean(batchDelay)}
         onOpenChange={(open) => {
-          if (!open) setBatchMove(null);
+          if (!open) setBatchDelay(null);
         }}
       >
-        <DialogContent className="sm:max-w-lg" data-testid="task-composer-batch-move-dialog">
+        <DialogContent className="sm:max-w-md" data-testid="task-composer-batch-delay-dialog">
           <DialogHeader>
-            <DialogTitle>批量移动计划节点</DialogTitle>
+            <DialogTitle>批量推迟当前及后续节点</DialogTitle>
             <DialogDescription>
-              当前焦点为“{batchMoveReferenceLabel ?? "未命名节点"}”，已选{" "}
-              {batchMove?.selectedEntityIds.length ?? 0} 个可编辑节点。整批节点会保持原有时间间隔。
+              指定当前节点的新时间；系统会把当前及时间线上之后共
+              {batchDelayAffectedCount} 个可编辑节点整体推迟相同时间，较早节点和只读承接节点保持不变。
             </DialogDescription>
           </DialogHeader>
-          <fieldset
-            className="space-y-2"
-            aria-invalid={Boolean(batchMove?.errors.mode)}
-            aria-describedby={batchMove?.errors.mode ? "task-composer-batch-move-mode-error" : undefined}
-          >
-            <legend className="text-sm font-medium">
-              移动范围<span className="ml-1 text-destructive">*</span>
-            </legend>
-            <label className="flex cursor-pointer items-start gap-2 rounded-lg border p-3 text-sm has-[:checked]:border-primary has-[:checked]:bg-primary/5">
-              <input
-                id="task-composer-batch-move-following"
-                type="radio"
-                name="task-composer-batch-move-mode"
-                value="FOLLOWING"
-                checked={batchMove?.mode === "FOLLOWING"}
-                onChange={() =>
-                  setBatchMove((current) =>
-                    current
-                      ? {
-                          ...current,
-                          mode: "FOLLOWING",
-                          errors: { ...current.errors, mode: undefined, form: undefined },
-                        }
-                      : current,
-                  )
-                }
-              />
-              <span>
-                <span className="block font-medium">当前及后续节点</span>
-                <span className="mt-0.5 block text-xs text-muted-foreground">
-                  移动当前焦点以及时间不早于它的 {followingAffectedCount} 个可编辑节点。
-                </span>
-              </span>
-            </label>
-            <label className="flex cursor-pointer items-start gap-2 rounded-lg border p-3 text-sm has-[:checked]:border-primary has-[:checked]:bg-primary/5">
-              <input
-                type="radio"
-                name="task-composer-batch-move-mode"
-                value="SELECTED"
-                checked={batchMove?.mode === "SELECTED"}
-                onChange={() =>
-                  setBatchMove((current) =>
-                    current
-                      ? {
-                          ...current,
-                          mode: "SELECTED",
-                          errors: { ...current.errors, mode: undefined, form: undefined },
-                        }
-                      : current,
-                  )
-                }
-              />
-              <span>
-                <span className="block font-medium">仅已选节点</span>
-                <span className="mt-0.5 block text-xs text-muted-foreground">
-                  只移动当前显式选中的 {selectedAffectedCount} 个可编辑节点。
-                </span>
-              </span>
-            </label>
-            <FieldError
-              id="task-composer-batch-move-mode-error"
-              messages={batchMove?.errors.mode}
-            />
-          </fieldset>
-          <fieldset className="space-y-2">
-            <legend className="text-sm font-medium">移动方向</legend>
-            <div className="grid grid-cols-2 gap-2">
-              {([
-                ["EARLIER", "前移"],
-                ["LATER", "后移"],
-              ] as const).map(([direction, label]) => (
-                <label
-                  key={direction}
-                  className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border p-2 text-sm font-medium has-[:checked]:border-primary has-[:checked]:bg-primary/5"
-                >
-                  <input
-                    type="radio"
-                    name="task-composer-batch-move-direction"
-                    value={direction}
-                    checked={batchMove?.direction === direction}
-                    onChange={() =>
-                      setBatchMove((current) =>
-                        current
-                          ? { ...current, direction, errors: { ...current.errors, form: undefined } }
-                          : current,
-                      )
-                    }
-                  />
-                  {label}
-                </label>
-              ))}
-            </div>
-          </fieldset>
           <div>
-            <label htmlFor="task-composer-batch-move-days" className="mb-1.5 block text-sm font-medium">
-              移动天数<span className="ml-1 text-destructive">*</span>
+            <label htmlFor="task-composer-batch-delay-at" className="mb-1.5 block text-sm font-medium">
+              新的节点时间<span className="ml-1 text-destructive">*</span>
             </label>
             <Input
-              id="task-composer-batch-move-days"
-              type="number"
-              inputMode="numeric"
-              min={1}
-              step={1}
-              value={batchMove?.days ?? "1"}
-              aria-invalid={Boolean(batchMove?.errors.days)}
-              aria-describedby={batchMove?.errors.days ? "task-composer-batch-move-days-error" : undefined}
+              id="task-composer-batch-delay-at"
+              type="datetime-local"
+              value={batchDelay?.targetAt ?? ""}
+              aria-invalid={Boolean(batchDelay?.error)}
+              aria-describedby={batchDelay?.error ? "task-composer-batch-delay-at-error" : undefined}
               onChange={(event) =>
-                setBatchMove((current) =>
+                setBatchDelay((current) =>
                   current
-                    ? {
-                        ...current,
-                        days: event.target.value,
-                        errors: { ...current.errors, days: undefined, form: undefined },
-                      }
+                    ? { ...current, targetAt: event.target.value, error: "" }
                     : current,
                 )
               }
             />
             <FieldError
-              id="task-composer-batch-move-days-error"
-              messages={batchMove?.errors.days}
+              id="task-composer-batch-delay-at-error"
+              messages={batchDelay?.error ?? ""}
               className="mt-1.5"
             />
           </div>
-          {batchMove?.mode && (
-            <p className="rounded-lg bg-muted/50 p-3 text-sm" role="status">
-              将把 {batchMoveAffectedCount} 个可编辑节点整体
-              {batchMove.direction === "EARLIER" ? "前移" : "后移"} {batchMove.days || "0"} 天；只读节点保持不变。
-            </p>
-          )}
-          <FieldError
-            id="task-composer-batch-move-form-error"
-            messages={batchMove?.errors.form}
-          />
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setBatchMove(null)}>
+            <Button type="button" variant="outline" onClick={() => setBatchDelay(null)}>
               取消
             </Button>
-            <Button type="button" disabled={submitting} onClick={submitBatchMove}>
-              确认批量移动
+            <Button type="button" disabled={submitting} onClick={submitBatchDelay}>
+              确认批量推迟
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   );
 }
 
@@ -765,7 +576,7 @@ function buildComposerCanvasModel(
       taskId: state.draftId,
       kind: "PLAN_START" as const,
       status: "草稿",
-      label: "开始节点",
+      label: "Start",
       atMs: renderAtMs(state, TASK_COMPOSER_START_ID),
       sequence: 0,
       editable: !state.revision,
@@ -779,7 +590,7 @@ function buildComposerCanvasModel(
       taskId: state.draftId,
       kind: "MILESTONE" as const,
       status: isTemporary(state, milestone.id) ? "临时" : "草稿",
-      label: milestone.goal || "临时里程碑",
+      label: milestone.goal || "临时 Milestone",
       atMs: renderAtMs(state, milestone.id),
       sequence: index + 1,
       editable: !isReadOnlyRevisionEntity(state, milestone.id),
@@ -799,7 +610,7 @@ function buildComposerCanvasModel(
             taskId: state.draftId,
             kind: "REVISION" as const,
             status: anchor.status,
-            label: anchor.reason || "计划修订",
+            label: anchor.reason || "Revision",
             atMs: localMs(anchor.revisionAt),
             sequence: sortedMilestones.length + index + 1,
             editable: false,
@@ -812,7 +623,7 @@ function buildComposerCanvasModel(
             taskId: state.draftId,
             kind: "REVISION" as const,
             status: "当前候选",
-            label: state.revision.reason || "当前计划修订",
+            label: state.revision.reason || "当前 Revision",
             atMs: localMs(state.revision.revisionAt),
             sequence:
               sortedMilestones.length + state.revision.carriedAnchors.length + 1,
@@ -831,7 +642,7 @@ function buildComposerCanvasModel(
       taskId: state.draftId,
       kind: "TERMINATION" as const,
       status: "草稿",
-      label: state.termination.name || "结束节点",
+      label: state.termination.name || "Terminal",
       atMs: renderAtMs(state, state.termination.id),
       sequence:
         sortedMilestones.length +
@@ -884,8 +695,8 @@ function buildComposerCanvasModel(
       id: PLAN_ROW_ID,
       sourceId: state.draftId,
       kind: "PLAN",
-      label: state.title || "新建任务",
-      sublabel: `${state.milestones.length} 个里程碑${state.milestones.some((milestone) => isTemporary(state, milestone.id)) ? " · 含临时节点" : ""}`,
+      label: state.title || "新建 Task",
+      sublabel: `${state.milestones.length} 个 Milestone${state.milestones.some((milestone) => isTemporary(state, milestone.id)) ? " · 含临时节点" : ""}`,
       editable: true,
       height: 132,
       capacity: null,
@@ -910,7 +721,7 @@ function buildComposerNavigatorNodes(
     (milestone) => ({
       id: milestone.id,
       kind: "MILESTONE",
-      label: milestone.goal || "临时里程碑",
+      label: milestone.goal || "临时 Milestone",
       at: milestone.expectedCompletedAt,
       status: isTemporary(state, milestone.id)
         ? "临时节点"
@@ -926,7 +737,7 @@ function buildComposerNavigatorNodes(
         ...state.revision.carriedAnchors.map((anchor) => ({
           id: anchor.id,
           kind: "REVISION" as const,
-          label: anchor.reason || "计划修订",
+          label: anchor.reason || "Revision",
           at: anchor.revisionAt,
           status: "已生效",
           completed: true,
@@ -934,7 +745,7 @@ function buildComposerNavigatorNodes(
         {
           id: state.revision.markerId,
           kind: "REVISION" as const,
-          label: state.revision.reason || "当前计划修订",
+          label: state.revision.reason || "当前 Revision",
           at: state.revision.revisionAt,
           status: "当前候选",
           invalid: hasIssue(state.revision.markerId),
@@ -945,7 +756,7 @@ function buildComposerNavigatorNodes(
     {
       id: TASK_COMPOSER_START_ID,
       kind: "START",
-      label: "开始节点",
+      label: "Start",
       at: state.plannedStartAt,
       status: state.revision ? "只读承接" : "计划开始",
       completed: Boolean(state.revision),
@@ -958,7 +769,7 @@ function buildComposerNavigatorNodes(
     {
       id: state.termination.id,
       kind: "TERMINAL",
-      label: state.termination.name || "结束节点",
+      label: state.termination.name || "Terminal",
       at: state.termination.plannedAt,
       status: "计划结束",
       invalid: hasIssue(state.termination.id),
@@ -970,14 +781,18 @@ function Inspector({
   state,
   draft,
   issues,
+  submitting,
   onChange,
   onDelete,
+  onOpenBatchDelay,
 }: {
   state: TaskComposerSeed;
   draft: TaskComposerInspectorDraft | null;
   issues: ValidationIssue[];
+  submitting: boolean;
   onChange: (draft: TaskComposerInspectorDraft) => void;
   onDelete: (milestone: TaskComposerMilestone) => void;
+  onOpenBatchDelay: (entityId: string) => void;
 }) {
   if (!draft) {
     return <p className="text-sm text-muted-foreground">从画布或节点列表选择一个节点进行编辑。</p>;
@@ -995,16 +810,16 @@ function Inspector({
               ? "待新增节点"
               : readOnly
                 ? "只读承接节点"
-                : "节点内容"}
+                : "节点 Inspector"}
           </p>
           <h2 className="font-semibold">
             {draft.kind === "START"
-              ? "开始节点"
+              ? "Start"
               : draft.kind === "REVISION"
-                ? draft.revision.reason || "计划修订"
+                ? draft.revision.reason || "Revision"
               : draft.kind === "TERMINATION"
-                ? draft.termination.name || "结束节点"
-                : draft.milestone.goal || "未命名里程碑"}
+                ? draft.termination.name || "Terminal"
+                : draft.milestone.goal || "未命名 Milestone"}
           </h2>
         </div>
         {draft.kind === "MILESTONE" && draft.isNew && (
@@ -1018,6 +833,19 @@ function Inspector({
         )}
         {readOnly && <Badge variant="outline">只读</Badge>}
       </div>
+
+      {!readOnly && (
+        <Button
+          type="button"
+          variant="outline"
+          className="w-full justify-start"
+          disabled={submitting}
+          onClick={() => onOpenBatchDelay(draft.entityId)}
+        >
+          <CalendarClock aria-hidden="true" />
+          批量推迟当前及后续节点
+        </Button>
+      )}
 
       {draft.kind === "START" && (
         <PlanField label="计划开始时间" required htmlFor="plannedStartAt" error={fieldMessages("plannedStartAt")}>
@@ -1035,7 +863,7 @@ function Inspector({
 
       {draft.kind === "REVISION" && (
         <>
-          <PlanField label="计划修订时间" required htmlFor="revisionAt" error={fieldMessages("revisionAt")}>
+          <PlanField label="Revision 时间" required htmlFor="revisionAt" error={fieldMessages("revisionAt")}>
             <Input
               id="revisionAt"
               type="datetime-local"
@@ -1054,7 +882,7 @@ function Inspector({
               }
             />
           </PlanField>
-          <PlanField label="计划修订名称" required htmlFor="revision-reason" error={fieldMessages("revision-reason")}>
+          <PlanField label="Revision 名称" required htmlFor="revision-reason" error={fieldMessages("revision-reason")}>
             <Input
               id="revision-reason"
               value={draft.revision.reason}
@@ -1074,7 +902,7 @@ function Inspector({
             />
           </PlanField>
           <PlanField
-            label="计划修订详细内容"
+            label="Revision 详细内容"
             required
             htmlFor="revision-description"
             error={fieldMessages("revision-description")}
@@ -1099,7 +927,7 @@ function Inspector({
             />
           </PlanField>
           <p className="text-xs leading-5 text-muted-foreground">
-            计划修订是时间标记，不形成阶段，也不能关联人员投入。
+            Revision 是时间标记，不形成阶段，也不能关联人员投入。
           </p>
         </>
       )}
@@ -1150,9 +978,6 @@ function Inspector({
               onChange={(event) => onChange({ ...draft, milestone: { ...draft.milestone, reviewRequirements: event.target.value } })}
             />
           </PlanField>
-          <details key={`business-${draft.entityId}`} className="rounded-lg border border-border p-3">
-            <summary className="cursor-pointer text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">补充业务说明（可选）{draft.milestone.businessDescription ? " · 已填写" : ""}{fieldError(`business-${draft.entityId}`) ? " · 需修正" : ""}</summary>
-            <div className="mt-3">
           <PlanField label="业务说明" htmlFor={`business-${draft.entityId}`} error={fieldMessages(`business-${draft.entityId}`)}>
             <Textarea
               id={`business-${draft.entityId}`}
@@ -1164,14 +989,12 @@ function Inspector({
               onChange={(event) => onChange({ ...draft, milestone: { ...draft.milestone, businessDescription: event.target.value } })}
             />
           </PlanField>
-            </div>
-          </details>
         </>
       )}
 
       {draft.kind === "TERMINATION" && (
         <>
-          <PlanField label="结束节点名称" required htmlFor="termination-name" error={fieldMessages("termination-name")}>
+          <PlanField label="Terminal 名称" required htmlFor="termination-name" error={fieldMessages("termination-name")}>
             <Input
               id="termination-name"
               value={draft.termination.name}
@@ -1201,9 +1024,6 @@ function Inspector({
               onChange={(event) => onChange({ ...draft, termination: { ...draft.termination, plannedOutcomeCriteria: event.target.value } })}
             />
           </PlanField>
-          <details key="termination-business" className="rounded-lg border border-border p-3">
-            <summary className="cursor-pointer text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">补充业务说明（可选）{draft.termination.businessDescription ? " · 已填写" : ""}{fieldError("termination-business") ? " · 需修正" : ""}</summary>
-            <div className="mt-3">
           <PlanField label="业务说明" htmlFor="termination-business" error={fieldMessages("termination-business")}>
             <Textarea
               id="termination-business"
@@ -1214,8 +1034,6 @@ function Inspector({
               onChange={(event) => onChange({ ...draft, termination: { ...draft.termination, businessDescription: event.target.value } })}
             />
           </PlanField>
-            </div>
-          </details>
         </>
       )}
 

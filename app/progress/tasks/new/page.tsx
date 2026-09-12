@@ -90,8 +90,8 @@ export default async function ProgressTaskNewPage({
   return (
     <>
       <PageCommandBar
-        title="新建任务"
-        description="先填写基本资料，再编排计划节点，最后检查并创建草稿；创建后再安排人员投入。"
+        title="新建 Task"
+        description="在一个工作台内编排元数据、成员、Milestone 与 Terminal；创建后再安排人员投入。"
       />
       <TaskComposerClient
         accountId={actor.accountId}
@@ -259,13 +259,13 @@ function workspaceTaskOption(workspace: TaskWorkspace) {
     (entry) => entry.type === "TERMINATION" && entry.status === "ACTIVE",
   );
   return {
-    currentNodeDeadline: workspace.task.currentNodeDeadline,
     id: workspace.task.id,
     title: workspace.task.title,
     status: workspace.task.status,
     priority: workspace.task.priority,
     team: workspace.task.team,
     techGroup: workspace.task.techGroup,
+    currentNodeDeadline: null,
     activeMilestone: active?.milestone
       ? {
           nodeId: active.nodeId,

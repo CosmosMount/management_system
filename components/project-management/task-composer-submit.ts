@@ -19,12 +19,7 @@ import type {
 import { shanghaiDateTimeLocalToIso } from "@/lib/project-management/date-time";
 import { routes } from "@/lib/routes";
 
-type SubmitSuccess = {
-  ok: true;
-  destination: string;
-  taskId?: string;
-  lockVersion?: number;
-};
+type SubmitSuccess = { ok: true; destination: string };
 type SubmitFailure = {
   ok: false;
   error: {
@@ -99,12 +94,7 @@ export async function submitTaskComposer({
       },
     });
     if (result.ok) {
-      return {
-        ok: true,
-        destination: routes.progress.taskDetail(mode.taskId),
-        taskId: result.data.taskId,
-        lockVersion: result.data.lockVersion,
-      };
+      return { ok: true, destination: routes.progress.taskDetail(mode.taskId) };
     }
     return result.error.code === "STALE_TASK"
       ? { ...result, conflictDraft: draftEnvelope(state, editContext) }
@@ -116,7 +106,7 @@ export async function submitTaskComposer({
       ok: false,
       error: {
         code: "INVALID_REVISION_CONTEXT",
-        message: "计划修订编辑上下文缺失，请刷新后重试。",
+        message: "Revision 编辑上下文缺失，请刷新后重试。",
       },
     };
   }
