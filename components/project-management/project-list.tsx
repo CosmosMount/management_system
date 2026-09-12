@@ -1,11 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import Image from "next/image";
 import { Tooltip } from "@base-ui/react/tooltip";
 import { Badge } from "@/components/ui/badge";
 import { TextTooltip } from "@/components/ui/text-tooltip";
 import { ProjectAvatar } from "@/components/project-management/project-avatar";
+import { OwnerAvatarGroup } from "@/components/project-management/owner-avatar-group";
 import { ProjectTaskOverview } from "@/components/project-management/project-task-overview";
 import { useProgressNow } from "@/components/project-management/progress-clock";
 import { getProjectTaskOverview } from "@/lib/project-management/project-task-summary";
@@ -56,7 +56,7 @@ export function ProjectList({ projects }: { projects: ProjectListItem[] }) {
           <ProjectTaskOverview tasks={overview.tasks} projectName={project.name} nowMs={nowMs} />
           <ProjectTaskSummary project={project} overdueCount={overview.overdueCount} dueSoonCount={overview.dueSoonCount} />
           <div className="min-w-0"><span className="mr-2 text-xs text-muted-foreground xl:hidden">项目状态</span><Badge className={cn("h-auto whitespace-normal border-0 px-2.5 py-1 text-sm", statusClasses[project.status])}>{labels[project.status]}</Badge></div>
-          <ProjectOwners owners={project.owners} />
+          <OwnerAvatarGroup owners={project.owners} label="项目负责人" />
           <div className="text-sm tabular-nums">
             <span className="mr-2 text-muted-foreground xl:hidden">更新时间</span>
             <time dateTime={project.updatedAt}>{dateFormatter.format(new Date(project.updatedAt))}</time>
@@ -92,18 +92,6 @@ function ProjectTaskSummary({ project, overdueCount, dueSoonCount }: { project: 
       {dueSoonCount > 0 && <span className="text-amber-800 dark:text-amber-200">即将到期 {dueSoonCount}</span>}
     </p>}
   </div>;
-}
-
-function ProjectOwners({ owners }: { owners: ProjectListItem["owners"] }) {
-  if (!owners.length) return <p className="text-xs text-muted-foreground">负责人未设置</p>;
-  const owner = owners[0];
-  return <TextTooltip text={`项目负责人：${owners.map((entry) => entry.displayName).join("、")}`}>
-    <span tabIndex={0} aria-label={`项目负责人：${owners.map((entry) => entry.displayName).join("、")}`} className="flex min-w-0 items-center gap-2 rounded text-sm focus-visible:outline-2 focus-visible:outline-ring">
-      {owner.avatar ? <Image src={owner.avatar} alt="" width={32} height={32} unoptimized className="size-8 shrink-0 rounded-full object-cover" /> : <span aria-hidden="true" className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 font-medium text-primary">{Array.from(owner.displayName)[0] || "?"}</span>}
-      <span className="truncate">{owner.displayName}</span>
-      {owners.length > 1 && <span className="shrink-0 text-muted-foreground">+{owners.length - 1}</span>}
-    </span>
-  </TextTooltip>;
 }
 
 function LegendDot({ label, className }: { label: string; className: string }) {

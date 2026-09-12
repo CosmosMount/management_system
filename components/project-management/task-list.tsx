@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { ProjectAvatar } from "@/components/project-management/project-avatar";
+import { OwnerAvatarGroup } from "@/components/project-management/owner-avatar-group";
 import { NodeDeadline } from "@/components/project-management/node-deadline";
 import { formatDateTime, taskPriorityLabels, taskStatusLabels } from "@/lib/project-management/labels";
 import type { TaskListItem } from "@/lib/project-management/queries/task-queries";
@@ -33,7 +34,7 @@ export function TaskList({ tasks }: { tasks: TaskListItem[] }) {
         <span>任务信息</span><span>状态</span><span>优先级</span><span>负责人</span><span>当前节点</span><span>计划时间</span><span>操作</span>
       </div>
       {tasks.map((task) => {
-        const lead = task.members[0];
+        const owners = task.members.filter((member) => member.role === "OWNER");
         const node = task.activeMilestone?.goal ?? task.activeTermination?.name ?? "暂无进行中的节点";
         const plannedAt = task.activeMilestone?.expectedCompletedAt ?? task.activeTermination?.plannedAt;
         return (
@@ -51,7 +52,7 @@ export function TaskList({ tasks }: { tasks: TaskListItem[] }) {
             </div>
             <Badge variant="outline" className={statusClass[task.status]}>{taskStatusLabels[task.status]}</Badge>
             <Badge variant="outline" className={priorityClass[task.priority]}>{taskPriorityLabels[task.priority]}</Badge>
-            <div className="flex min-w-0 items-center gap-2"><span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-slate-200 text-xs font-semibold text-slate-700">{lead?.displayName.slice(0, 1) ?? "?"}</span><span className="truncate">{lead ? lead.displayName : "未设置"}</span></div>
+            <OwnerAvatarGroup owners={owners} label="任务负责人" />
             <div className="min-w-0 truncate text-muted-foreground" title={node}>{node}</div>
             <div className="min-w-0 text-muted-foreground"><div>{plannedAt ? formatDateTime(plannedAt) : "未设置"}</div><NodeDeadline target={task.currentNodeDeadline} className="mt-1" /></div>
             <div className="flex items-center gap-2"><Link href={routes.progress.taskDetail(task.id)} className="inline-flex items-center gap-1 whitespace-nowrap font-medium text-primary hover:underline">打开工作台<ArrowRight className="size-4" /></Link></div>

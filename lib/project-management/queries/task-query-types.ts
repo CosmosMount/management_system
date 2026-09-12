@@ -35,7 +35,7 @@ export type TaskListItem = {
     name: string;
     plannedAt: string;
   } | null;
-  members: TaskMemberSummary[];
+  members: Array<TaskMemberSummary & { avatar: string | null; status: "ACTIVE" | "INACTIVE" }>;
   updatedAt: string;
   createdAt: string;
 };

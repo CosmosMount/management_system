@@ -31,7 +31,7 @@ const taskListInclude = {
   },
   members: {
     where: { removedAt: null },
-    include: { person: { select: { displayName: true } } },
+    include: { person: { select: { displayName: true, avatar: true, status: true } } },
     orderBy: [{ role: "asc" }, { createdAt: "asc" }],
   },
 } satisfies Prisma.TaskInclude;
@@ -213,6 +213,8 @@ export async function listTasks({
           personId: member.personId,
           role: member.role,
           displayName: member.person.displayName,
+          avatar: member.person.avatar,
+          status: member.person.status,
         })),
         updatedAt: task.updatedAt.toISOString(),
         createdAt: task.createdAt.toISOString(),
