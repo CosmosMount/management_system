@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { TaskDraftLeavePrompt } from "@/components/project-management/task-draft-leave-prompt";
 import { NodeDeadline } from "@/components/project-management/node-deadline";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -241,6 +242,7 @@ export function TaskWorkbench({
       data-testid="task-workbench-v2"
       data-server-lock-version={workspace.task.lockVersion}
     >
+      <TaskDraftLeavePrompt key={task.id} taskId={task.id} lockVersion={lockVersion} enabled={task.status === "DRAFT" && workspace.permissions.canActivate} />
       <section
         className="rounded-xl border border-border bg-card p-5"
         data-testid="task-overview"
