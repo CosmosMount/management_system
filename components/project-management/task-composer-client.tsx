@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
+import { activateTask } from "@/app/actions/project-management/tasks";
 import {
   ArrowLeft,
   Redo2,
@@ -142,6 +143,12 @@ export function TaskComposerClient({
   const [statusMessage, setStatusMessage] = useState("");
   const [storageBusy, setStorageBusy] = useState(false);
   const [cleanDraftCleanupError, setCleanDraftCleanupError] = useState(false);
+  const [activationPrompt, setActivationPrompt] = useState<{
+    taskId: string;
+    lockVersion: number;
+    destination: string;
+  } | null>(null);
+  const [activationBusy, setActivationBusy] = useState(false);
   const [people, setPeople] = useState<PersonOption[]>(initialPeople);
   const [optionError, setOptionError] = useState("");
   const cleanDraftCleanupPromiseRef = useRef<Promise<boolean> | null>(null);
@@ -642,9 +649,18 @@ export function TaskComposerClient({
             ? "计划修订已修改并重新送审，正在返回工作台…"
             : isRevisionComposer
               ? "计划修订已创建并送审，正在返回工作台…"
-              : "任务草稿已创建，正在进入工作台…",
+        : "任务草稿已创建，正在进入工作台…",
       );
-      replaceAfterCollapsingHistoryGuard(result.destination);
+      if (mode.kind === "EDIT_DRAFT" && result.taskId && result.lockVersion !== undefined) {
+        setStatusMessage("任务已保存，请选择是否立即激活。");
+        setActivationPrompt({
+          taskId: result.taskId,
+          lockVersion: result.lockVersion,
+          destination: result.destination,
+        });
+      } else {
+        replaceAfterCollapsingHistoryGuard(result.destination);
+      }
     } catch {
       setServerError("网络或服务暂时不可用，请稍后重试。草稿不会被清除。");
       setStatusMessage(
@@ -658,6 +674,33 @@ export function TaskComposerClient({
       );
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const continueAfterActivationPrompt = () => {
+    if (!activationPrompt) return;
+    replaceAfterCollapsingHistoryGuard(activationPrompt.destination);
+    setActivationPrompt(null);
+  };
+
+  const activateAfterSave = async () => {
+    if (!activationPrompt || activationBusy) return;
+    setActivationBusy(true);
+    try {
+      const result = await activateTask({
+        taskId: activationPrompt.taskId,
+        expectedLockVersion: activationPrompt.lockVersion,
+      });
+      if (!result.ok) {
+        setServerError(result.error.message);
+        return;
+      }
+      replaceAfterCollapsingHistoryGuard(activationPrompt.destination);
+      setActivationPrompt(null);
+    } catch {
+      setServerError("激活任务失败，请稍后重试。任务仍保持草稿状态。");
+    } finally {
+      setActivationBusy(false);
     }
   };
 
@@ -775,6 +818,35 @@ export function TaskComposerClient({
           </Button>
         </nav>
       </div>
+
+      <Dialog
+        open={activationPrompt !== null}
+        onOpenChange={(open) => {
+          if (!open && !activationBusy) continueAfterActivationPrompt();
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>任务已保存</DialogTitle>
+            <DialogDescription>
+              是否立即激活任务？激活后任务将进入执行阶段，计划内容只能通过计划修订修改。
+            </DialogDescription>
+            {serverError && (
+              <p role="alert" className="text-sm text-destructive">
+                {serverError}
+              </p>
+            )}
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" disabled={activationBusy} onClick={continueAfterActivationPrompt}>
+              暂不激活
+            </Button>
+            <Button type="button" disabled={activationBusy} onClick={() => void activateAfterSave()}>
+              {activationBusy ? "正在激活…" : "立即激活"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {recovery?.kind === "VALID" && (
         <div className="border-b border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950 sm:px-6 lg:px-8">
