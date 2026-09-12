@@ -26,21 +26,24 @@ export default async function MeetingPage({ params, searchParams }: {
   });
   const saved = (await searchParams).saved === "1";
   return <>
-    <PageCommandBar title={meeting.topic} actions={<div className="flex flex-wrap gap-2">{canManageMeetings(actor) && <Link href={routes.progress.meetingEdit(id)} className={buttonVariants()}>编辑会议</Link>}<MeetingExportButton meetingId={id} /></div>} />
+    <PageCommandBar title={`会议纪要：${meeting.topic}`} actions={<div className="flex flex-wrap gap-2">{canManageMeetings(actor) && <Link href={routes.progress.meetingEdit(id)} className={buttonVariants({ variant: "outline" })}>编辑</Link>}<MeetingExportButton meetingId={id} /></div>} />
     <main className="mx-auto min-w-0 max-w-[96rem] space-y-6 px-4 py-6 sm:px-6 lg:px-8">
       {saved && <p role="status">会议已保存，所有登录用户均可查看。</p>}
-      <section className="min-w-0 space-y-2 rounded-lg border bg-card p-4" aria-label="会议基本信息">
-        <p className="break-words [overflow-wrap:anywhere]">参与人：{meeting.participants.map((person) => `${person.displayName}${person.status === "INACTIVE" ? "（已停用）" : ""}`).join("、")}</p>
-        <p>工作区间：{formatDateTime(meeting.rangeStart)} 至 {formatDateTime(meeting.rangeEnd)}（北京时间）</p>
-        <p className="text-sm text-muted-foreground">更新于 {formatDateTime(meeting.updatedAt)}</p>
+      <section className="min-w-0 rounded-xl border bg-card p-6" aria-label="会议基本信息">
+        <h2 className="mb-5 text-xl font-semibold">会议基本信息</h2>
+        <div className="grid gap-4 md:grid-cols-2">
+          <p className="break-words text-sm"><span className="text-muted-foreground">参与人：</span>{meeting.participants.map((person) => `${person.displayName}${person.status === "INACTIVE" ? "（已停用）" : ""}`).join("、")}</p>
+          <p className="text-sm"><span className="text-muted-foreground">工作区间：</span>{formatDateTime(meeting.rangeStart)} 至 {formatDateTime(meeting.rangeEnd)}（北京时间）</p>
+          <p className="text-sm"><span className="text-muted-foreground">更新时间：</span>{formatDateTime(meeting.updatedAt)}</p>
+        </div>
       </section>
       <section className="min-w-0 rounded-xl border bg-card p-6" aria-labelledby="meeting-timeline-heading">
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3"><h2 id="meeting-timeline-heading" className="text-xl font-semibold">相关任务进度</h2>{actor.isActive && meeting.participants.some((person) => person.id === actor.personId) && <MeetingWorkSegmentReminder meetingId={id} />}</div>
-      <MeetingTimeline source={{ kind: "SAVED", meetingId: id, rangeStart: meeting.rangeStart, rangeEnd: meeting.rangeEnd }} />
+        <MeetingTimeline source={{ kind: "SAVED", meetingId: id, rangeStart: meeting.rangeStart, rangeEnd: meeting.rangeEnd }} />
       </section>
-      <section aria-labelledby="meeting-minutes-heading" className="min-w-0 rounded-lg border bg-card p-4">
-        <h2 id="meeting-minutes-heading" className="mb-3 text-lg font-semibold">会议纪要</h2>
-        <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{meeting.minutes || "暂未填写会议纪要"}</p>
+      <section aria-labelledby="meeting-content-heading" className="min-w-0 rounded-xl border bg-card p-6">
+        <h2 id="meeting-content-heading" className="mb-3 text-xl font-semibold">会议内容</h2>
+        <div className="min-h-32 rounded-lg border border-input px-3 py-3 text-sm whitespace-pre-wrap break-words [overflow-wrap:anywhere]" aria-label="会议内容">{meeting.minutes || <span className="text-muted-foreground">暂未填写会议内容</span>}</div>
       </section>
     </main>
   </>;

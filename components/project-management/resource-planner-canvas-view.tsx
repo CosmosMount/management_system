@@ -80,7 +80,7 @@ export function ResourcePlannerCanvasView({
         )}
         <span className="text-xs text-muted-foreground">
           {readOnly
-            ? "双击投入打开只读详情；此页面不能修改既有投入。"
+            ? ""
             : "双击投入打开详情；总览不会直接修改既有投入。"}
         </span>
       </div>

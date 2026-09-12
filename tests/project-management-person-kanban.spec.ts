@@ -189,7 +189,7 @@ test.describe("project management person kanban", { tag: "@smoke" }, () => {
     ).toHaveAttribute("href", `/progress/tasks/${fixture.taskId}`);
     await expect(
       page.getByText("双击投入打开只读详情；此页面不能修改既有投入。"),
-    ).toBeVisible();
+    ).toHaveCount(0);
     await expect(page.getByRole("button", { name: "新增投入" })).toHaveCount(0);
 
     await expectReadOnlyConfirmableSegment(page, fixture.confirmableSegmentId);

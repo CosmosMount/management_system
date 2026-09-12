@@ -157,10 +157,10 @@ test("超管创建独立会议、预览只读时间线、保存及补充纪要�
   const admin = await createAccountPerson(`会议 UI 超管 ${randomUUID()}`);
   const member = await createAccountPerson(`会议 UI 参与人 ${randomUUID()}`);
   const viewer = await createAccountPerson(`会议 UI 旁观者 ${randomUUID()}`);
+  await prisma.systemRoleAssignment.create({ data: { accountId: admin.account.id, role: "SUPER_ADMINISTRATOR", team: "", techGroup: "" } });
   const project = await prisma.project.create({ data: { name: `会议展示 UI ${randomUUID()}`, description: "会议展示", requesterAccountId: admin.account.id } });
   const task = await createTask({ ownerAccountId: admin.account.id, title: `会议任务 UI ${randomUUID()}`, team: "英雄", techGroup: "电控", members: [{ personId: admin.person.id, role: "OWNER" }] });
   const taskRecord = await prisma.task.update({ where: { id: task.taskId }, data: { projectId: project.id } });
-  await prisma.systemRoleAssignment.create({ data: { accountId: admin.account.id, role: "SUPER_ADMINISTRATOR", team: "", techGroup: "" } });
   const segment = await createSegment({ accountId: member.account.id, personId: member.person.id, startAt: atHour(9), endAt: atHour(10), content: "会议只读工作" });
   await loginAsTestUser(context, baseURL, { openId: admin.openId, name: admin.person.displayName });
   await page.goto("/progress/meetings");
@@ -191,9 +191,9 @@ test("超管创建独立会议、预览只读时间线、保存及补充纪要�
   await page.getByRole("button", { name: "创建会议记录", exact: true }).click();
   const createRequest = await createRequestPromise;
   await expect(page).toHaveURL(/\/progress\/meetings\/[a-f0-9-]+\?saved=1$/);
-  await expect(page.getByText("暂未填写会议纪要", { exact: true })).toBeVisible();
+  await expect(page.getByText("暂未填写会议内容", { exact: true })).toBeVisible();
   const detailUrl = page.url().split("?")[0];
-  await page.getByRole("link", { name: "编辑会议", exact: true }).click();
+  await page.getByRole("link", { name: "编辑", exact: true }).click();
   await expect(page).toHaveURL(/\/edit$/);
   await expect(page.getByRole("button", { name: `移除${taskRecord.title}`, exact: true })).toBeVisible();
   await page.getByRole("button", { name: `移除${taskRecord.title}`, exact: true }).click();
@@ -204,8 +204,8 @@ test("超管创建独立会议、预览只读时间线、保存及补充纪要�
   await expectHealthyPage(page);
   await loginAsTestUser(context, baseURL, { openId: viewer.openId, name: viewer.person.displayName });
   await page.goto(detailUrl);
-  await expect(page.getByRole("heading", { name: topic, exact: true })).toBeVisible();
-  await expect(page.getByRole("link", { name: "编辑会议", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: `会议纪要：${topic}`, exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "编辑", exact: true })).toHaveCount(0);
   await expect(page.getByTestId("meeting-timeline")).toBeVisible();
   await expect(page.getByTestId("meeting-display-summary")).toContainText(project.name);
   await expect(page.getByTestId(`timeline-row-plan:${task.taskId}`)).toBeVisible();
