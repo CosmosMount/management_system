@@ -62,7 +62,12 @@ export function ResourcePlannerCanvasView({
 }: ResourcePlannerCanvasViewProps) {
   return (
     <div className="space-y-4" data-testid="resource-planner-workbench">
-      <div className="flex flex-wrap items-center gap-3 px-1">
+      <div className={cn(
+        "flex flex-wrap items-center",
+        timeCanvasProps.mode === "PERSONAL_TIMELINE"
+          ? "gap-2 rounded-xl border border-border bg-card p-3"
+          : "gap-3 px-1",
+      )}>
         {canCreateSegment && (
           <Button
             type="button"

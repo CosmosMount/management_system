@@ -25,8 +25,6 @@ import {
 } from "@/lib/project-management/queries/time-canvas-queries";
 import { routes } from "@/lib/routes";
 import { getProgressActorOrRedirect } from "./_auth";
-import { ManagementOverview } from "@/components/project-management/management-overview";
-import { WorkspaceViewNavigation } from "@/components/project-management/workspace-view-navigation";
 
 type SearchParams = Record<string, string | string[] | undefined>;
 
@@ -37,12 +35,8 @@ export default async function ProgressPage({
 }) {
   const actor = await getProgressActorOrRedirect();
   const params = (await searchParams) ?? {};
-  if (firstParam(params.view) === "management" && params.focus === undefined) {
-    return <ManagementOverview actor={actor} cursor={firstParam(params.riskCursor) || undefined} />;
-  }
   const showAllTasks = firstParam(params.tasks) === "all";
   const requestedFocusId = firstParam(params.focus);
-  const schedule = firstParam(params.view) === "schedule" || params.focus !== undefined;
   const focusedSegment = isUuid(requestedFocusId)
     ? await getWorkSegment({ actor, input: { segmentId: requestedFocusId } }).catch(
         (error: unknown) => {
@@ -61,16 +55,16 @@ export default async function ProgressPage({
 
   if (
     hasRetiredResourcePlanSearchParams(searchParamsFromRecord(params)) ||
-    (params.focus !== undefined && firstParam(params.view) !== "schedule") ||
+    params.view !== undefined ||
+    params.riskCursor !== undefined ||
     (requestedFocusId && !focusId)
   ) {
     redirect(myWorkHref({
-      schedule,
       showAllTasks,
       focusId,
       centerMs: requestedCenter,
       scale: requestedScale,
-      focusError: Boolean(requestedFocusId && !focusId),
+      focusError: Boolean(requestedFocusId && !focusId) || firstParam(params.focusError) === "1",
     }));
   }
 
@@ -124,7 +118,6 @@ export default async function ProgressPage({
     : requestedCenter;
   const taskOptions = tasks.filter((task) => task.status === "ACTIVE");
   const hrefState = {
-    schedule,
     showAllTasks,
     focusId: null,
     centerMs: resolvedCenter,
@@ -147,96 +140,86 @@ export default async function ProgressPage({
         }
       />
       <div className="mx-auto flex w-full min-w-0 max-w-[96rem] flex-col gap-5 px-4 py-6 sm:px-6 lg:px-8">
-        <WorkspaceViewNavigation schedule={schedule} />
         {firstParam(params.focusError) === "1" && (
           <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">
             无法定位该时间对象，请确认链接仍然有效且你有权查看。
           </p>
         )}
 
-        {!schedule && <>
-        <section className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="工作指标">
-          <Metric icon={ClipboardList} label="进行中任务" value={metrics.activeTaskCount} description="我参与的进行中任务" />
-          <Metric icon={CheckSquare2} label="我的待办" value={inbox.totalCount} description="任务推进与审批事项" />
-          <Metric icon={AlertTriangle} label="紧急待办" value={inbox.criticalCount} description="建议优先查看" urgent={inbox.criticalCount > 0} />
-          <Metric icon={Bell} label="未读通知" value={metrics.unreadNotificationCount} description="尚未阅读的站内消息" />
+        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="工作指标">
+          <Metric icon={ClipboardList} label="进行中任务" value={metrics.activeTaskCount} />
+          <Metric icon={CheckSquare2} label="我的待办" value={inbox.totalCount} />
+          <Metric icon={AlertTriangle} label="紧急待办" value={inbox.criticalCount} urgent={inbox.criticalCount > 0} />
+          <Metric icon={Bell} label="未读通知" value={metrics.unreadNotificationCount} />
         </section>
 
-        <div className="grid min-w-0 items-start gap-5 xl:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]" data-testid="workbench-priority-content">
-          <section className="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5" aria-labelledby="my-action-inbox-title">
-            <div className="mb-4 flex flex-wrap items-start justify-between gap-3 border-b pb-4">
-              <div className="min-w-0 space-y-1">
-                <h2 id="my-action-inbox-title" className="font-semibold">我的待办</h2>
-                <p className="text-xs text-muted-foreground">当前需要推进或审批的事项</p>
+        <section aria-labelledby="my-timeline-title" className="min-w-0">
+          <h2 id="my-timeline-title" className="sr-only">我的日程与投入</h2>
+          {model ? (
+            <ResourcePlannerCanvasClient
+              initialModel={model}
+              peopleOptions={[actorPerson]}
+              taskOptions={taskOptions}
+              defaultPersonId={actor.personId}
+              initialZoom={requestedScale}
+              initialCenterMs={resolvedCenter}
+              mode="PERSONAL_TIMELINE"
+              allowIndependent
+              initialFocusId={focusId}
+              persistViewportInUrl
+              adaptiveBlockQuery={{
+                kind: "MY_TIMELINE",
+                preferredCenterMs: resolvedCenter ?? 0,
+                showAll: showAllTasks,
+              }}
+            />
+          ) : (
+            <div className="rounded-md border border-destructive/30 bg-destructive/5 p-6 text-sm text-destructive" role="alert">
+              个人时间线加载失败：{timelineResult.ok ? "未知错误" : timelineResult.message}
+            </div>
+          )}
+        </section>
+
+        <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(24rem,0.9fr)]" data-testid="workbench-priority-content">
+          <section className="min-w-0 rounded-xl border border-border bg-card p-4" aria-labelledby="my-action-inbox-title">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0">
+                <h2 id="my-action-inbox-title" className="font-medium">我的待办</h2>
+                <p className="mt-1 text-sm text-muted-foreground">当前需要推进或审批的事项</p>
               </div>
               <Link href={routes.progress.approvals} className="shrink-0 rounded text-sm text-primary hover:underline focus-visible:outline-2 focus-visible:outline-ring">查看全部</Link>
             </div>
             <ActionInbox initialPage={inbox} compact />
           </section>
 
-          <section className="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5" aria-labelledby="my-task-list-title">
-            <div className="flex flex-wrap items-start justify-between gap-3 border-b pb-4">
-              <div className="min-w-0 space-y-1">
+          <section className="min-w-0 rounded-xl border border-border bg-card p-4" aria-labelledby="my-task-list-title">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0">
                 <div className="relative flex flex-wrap items-center gap-2">
-                  <h2 id="my-task-list-title" className="font-semibold">参与任务</h2>
+                  <h2 id="my-task-list-title" className="font-medium">参与任务</h2>
                   <DeadlineRules />
                 </div>
-                <p className="text-xs text-muted-foreground">{showAllTasks ? "全部状态" : "进行中"} · 共 {tasks.length} 项 · 优先展示逾期与临期节点</p>
+                <p className="mt-1 text-sm text-muted-foreground">全部参与任务与上方计划轨道同步。</p>
               </div>
               <div className="flex flex-wrap gap-2">
-                <Link
-                  className="shrink-0 rounded text-sm text-primary hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+                <ViewportStateLink
+                  className="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
                   href={myWorkHref({ ...hrefState, showAllTasks: !showAllTasks })}
                 >
                   {showAllTasks ? "只看进行中" : "显示全部"}
-                </Link>
+                </ViewportStateLink>
               </div>
             </div>
             {tasks.length === 0 ? (
               <Empty text="当前没有有效参与的任务。" />
             ) : (
-              <div className="mt-1 min-w-0">
+              <div className="min-w-0">
                 <ParticipatingTaskPreview tasks={tasks} />
-                <div className="border-t pt-4">
-                  <Link href={`${routes.progress.tasks}?mine=1&status=${showAllTasks ? "" : "ACTIVE"}`} className="inline-block rounded text-sm text-primary hover:underline focus-visible:outline-2 focus-visible:outline-ring">查看全部参与任务{tasks.length > 6 ? "（当前预览 6 项）" : ""}</Link>
-                </div>
               </div>
             )}
           </section>
         </div>
-        </>}
-
-        {schedule && <section aria-labelledby="my-timeline-title" className="min-w-0">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <h2 id="my-timeline-title" className="font-semibold">我的日程与投入</h2>
-          <ViewportStateLink href={myWorkHref({ ...hrefState, showAllTasks: !showAllTasks })} className="text-sm text-primary hover:underline">{showAllTasks ? "只看进行中" : "显示全部"}</ViewportStateLink>
-        </div>
-        {model ? (
-          <ResourcePlannerCanvasClient
-            initialModel={model}
-            peopleOptions={[actorPerson]}
-            taskOptions={taskOptions}
-            defaultPersonId={actor.personId}
-            initialZoom={requestedScale}
-            initialCenterMs={resolvedCenter}
-            mode="PERSONAL_TIMELINE"
-            allowIndependent
-            initialFocusId={focusId}
-            persistViewportInUrl
-            adaptiveBlockQuery={{
-              kind: "MY_TIMELINE",
-              preferredCenterMs: resolvedCenter ?? 0,
-              showAll: showAllTasks,
-            }}
-          />
-        ) : (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 p-6 text-sm text-destructive" role="alert">
-            个人时间线加载失败：{timelineResult.ok ? "未知错误" : timelineResult.message}
-          </div>
-        )}
-
-        </section>}
-        {!schedule && <details className="rounded-xl border border-border bg-card p-4">
+        <details className="rounded-xl border border-border bg-card p-4">
           <summary className="cursor-pointer font-medium">最近通知 · {metrics.unreadNotificationCount} 条未读</summary>
           <div className="mt-4 grid gap-2">
             {notifications.items.length === 0 ? <Empty text="当前没有站内通知。" /> : notifications.items.map((notification) => (
@@ -247,21 +230,19 @@ export default async function ProgressPage({
             ))}
             <Link href={routes.progress.notifications} className="mt-1 text-sm text-primary hover:underline">打开通知中心与通知偏好</Link>
           </div>
-        </details>}
+        </details>
       </div>
     </>
   );
 }
 
 function myWorkHref({
-  schedule = false,
   showAllTasks = false,
   focusId,
   centerMs,
   scale,
   focusError = false,
 }: {
-  schedule?: boolean;
   showAllTasks?: boolean;
   focusId?: string | null;
   centerMs?: number;
@@ -269,7 +250,6 @@ function myWorkHref({
   focusError?: boolean;
 }) {
   const search = new URLSearchParams();
-  if (schedule) search.set("view", "schedule");
   if (showAllTasks) search.set("tasks", "all");
   if (focusId) search.set("focus", focusId);
   if (Number.isFinite(centerMs)) search.set("center", new Date(centerMs!).toISOString());
@@ -312,14 +292,13 @@ function isUuid(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
-function Metric({ icon: Icon, label, value, description, urgent = false }: { icon: typeof ClipboardList; label: string; value: number; description: string; urgent?: boolean }) {
+function Metric({ icon: Icon, label, value, urgent = false }: { icon: typeof ClipboardList; label: string; value: number; urgent?: boolean }) {
   return (
-    <div className={`min-w-0 rounded-xl border p-3 sm:p-4 ${urgent ? "border-red-200 bg-red-50/60 dark:border-red-900 dark:bg-red-950/30" : "border-border bg-card"}`}>
-      <div className={`flex items-center gap-2 text-xs sm:text-sm ${urgent ? "text-red-700 dark:text-red-300" : "text-muted-foreground"}`}>
+    <div className={`min-w-0 rounded-xl border p-4 ${urgent ? "border-red-200 bg-red-50/60 dark:border-red-900 dark:bg-red-950/30" : "border-border bg-card"}`}>
+      <div className={`flex items-center gap-2 text-sm ${urgent ? "text-red-700 dark:text-red-300" : "text-muted-foreground"}`}>
         <Icon className="size-4 shrink-0" aria-hidden="true" /><span>{label}</span>
       </div>
-      <strong className={`mt-2 block break-all text-2xl font-semibold tabular-nums sm:text-3xl ${urgent ? "text-red-700 dark:text-red-300" : "text-foreground"}`}>{value}</strong>
-      <p className="mt-1 text-xs text-muted-foreground">{description}</p>
+      <strong className={`mt-2 block break-all text-2xl font-semibold tabular-nums ${urgent ? "text-red-700 dark:text-red-300" : "text-foreground"}`}>{value}</strong>
     </div>
   );
 }

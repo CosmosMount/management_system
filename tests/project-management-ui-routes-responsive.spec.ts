@@ -64,15 +64,23 @@ test.describe("project management UI project-management-ui-routes-responsive", (
           .getByRole("link", { name: fixture.taskTitle, exact: true }),
       ).toBeVisible();
       await expect(page.getByText("未读通知")).toBeVisible();
+      const metrics = page.getByRole("region", { name: "工作指标", exact: true });
+      const timeline = page.getByRole("region", { name: "我的日程与投入", exact: true });
+      const workbenchContent = page.getByTestId("workbench-priority-content");
+      await expect(timeline.getByTestId("time-canvas-root")).toBeVisible();
+      const metricBox = await metrics.boundingBox();
+      const workbenchTimelineBox = await timeline.boundingBox();
+      const contentBox = await workbenchContent.boundingBox();
+      if (!metricBox || !workbenchTimelineBox || !contentBox) throw new Error("无法读取工作台布局尺寸");
+      expect(workbenchTimelineBox.y).toBeGreaterThanOrEqual(metricBox.y + metricBox.height);
+      expect(contentBox.y).toBeGreaterThanOrEqual(workbenchTimelineBox.y + workbenchTimelineBox.height);
+      await expect(workbenchContent.getByRole("table", { name: "参与任务列表" })).toBeVisible();
       await expect(page.getByRole("heading", { name: /待确认投入|到期投入/ })).toHaveCount(0);
       await expect(page.getByRole("link", { name: /^确认投入：/ })).toHaveCount(0);
       await expect(page.getByRole("link", { name: "资源冲突" })).toHaveCount(0);
       await expectHealthyPage(page);
 
-      const scheduleLink = page.getByRole("navigation", { name: "工作台视图" })
-        .getByRole("link", { name: "个人日程", exact: true });
-      await scheduleLink.click();
-      await expect(scheduleLink).toHaveAttribute("aria-current", "page");
+      await expect(page.getByRole("navigation", { name: "工作台视图" })).toHaveCount(0);
       await expect(page.getByTestId("time-canvas-root")).toBeVisible();
       const personalTaskPlanLink = page
         .getByTestId(`time-canvas-row-header-plan:${fixture.taskId}`)
