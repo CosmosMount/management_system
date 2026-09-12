@@ -12,7 +12,8 @@ import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { getProgressActorOrRedirect } from "../_auth";
+import { getProgressActorOrRedirect, getProgressRequestTime } from "../_auth";
+import { evaluateDeadline } from "@/lib/project-management/current-node-deadline";
 
 const statusValues = [
   "DRAFT",
@@ -82,7 +83,10 @@ export default async function ProgressTasksPage({
           )
         }
       />
-      <div className="mx-auto flex w-full min-w-0 max-w-[96rem] flex-col gap-4 px-4 py-6 sm:px-6 lg:px-8">
+      <div className="mx-auto flex w-full min-w-0 max-w-[100rem] flex-col gap-5 px-4 py-6 sm:px-6 lg:px-8">
+          <div className="-mt-2">
+            <p className="text-sm text-muted-foreground">在这里查看和管理项目的任务进度，快速了解每个任务的状态。</p>
+          </div>
           {firstParam(params.cursorError) === "1" && (
             <p role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
               任务列表已变化，已为你返回第一页。
@@ -98,8 +102,9 @@ export default async function ProgressTasksPage({
               { name: "status", label: "任务状态", value: statusValues.includes(status as (typeof statusValues)[number]) ? status : "", options: [{ value: "", label: "全部状态" }, ...statusValues.map((value) => ({ value, label: taskStatusLabels[value] }))] },
               { name: "priority", label: "任务优先级", value: priorityValues.includes(priority as (typeof priorityValues)[number]) ? priority : "", options: [{ value: "", label: "全部优先级" }, ...priorityValues.map((value) => ({ value, label: taskPriorityLabels[value] }))] },
             ]}
-            className="grid min-w-0 items-center gap-3 rounded-lg border border-border bg-card p-3 lg:grid-cols-[minmax(0,1fr)_150px_130px_130px_auto_auto]"
+            className="grid min-w-0 items-center gap-3 rounded-2xl border border-border bg-card p-3 shadow-sm lg:grid-cols-[minmax(0,1fr)_170px_140px_140px_auto_auto]"
           />
+          <TaskStats tasks={tasks.items} nowMs={getProgressRequestTime()} />
           <details data-testid="task-list-scope" className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]">
             <summary className="w-fit cursor-pointer rounded focus-visible:outline-2 focus-visible:outline-ring">{query ? "本次搜索" : "本页"}显示 {tasks.items.length} 项 · 筛选说明</summary>
             <p className="mt-2">
@@ -125,6 +130,17 @@ export default async function ProgressTasksPage({
       </div>
     </>
   );
+}
+
+function TaskStats({ tasks, nowMs }: { tasks: Awaited<ReturnType<typeof listTasks>>["items"]; nowMs: number }) {
+  const stats = [
+    { label: "当前结果", value: tasks.length, tone: "text-slate-700", ring: "border-slate-300" },
+    { label: "进行中", value: tasks.filter((task) => task.status === "ACTIVE").length, tone: "text-blue-700", ring: "border-blue-500" },
+    { label: "已完成", value: tasks.filter((task) => task.status === "COMPLETED").length, tone: "text-emerald-700", ring: "border-emerald-500" },
+    { label: "已逾期", value: tasks.filter((task) => evaluateDeadline(task.currentNodeDeadline, nowMs) === "OVERDUE").length, tone: "text-red-700", ring: "border-red-500" },
+    { label: "未开始", value: tasks.filter((task) => task.status === "DRAFT").length, tone: "text-slate-600", ring: "border-slate-300" },
+  ];
+  return <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">{stats.map((stat) => <div key={stat.label} className="flex items-center gap-4 rounded-xl border border-border bg-card px-4 py-3 shadow-sm"><span className={`flex size-12 shrink-0 items-center justify-center rounded-full border-[6px] bg-background text-sm font-semibold ${stat.ring} ${stat.tone}`}>{stat.value}</span><div><p className="text-sm text-muted-foreground">{stat.label}</p><p className={`text-xl font-semibold ${stat.tone}`}>{stat.value}</p></div></div>)}</div>;
 }
 
 function firstParam(value: string | string[] | undefined) {
