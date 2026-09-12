@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
+import { activateTask } from "@/app/actions/project-management/tasks";
 import {
   ArrowLeft,
   Redo2,
@@ -141,6 +142,13 @@ export function TaskComposerClient({
   const [statusMessage, setStatusMessage] = useState("");
   const [storageBusy, setStorageBusy] = useState(false);
   const [cleanDraftCleanupError, setCleanDraftCleanupError] = useState(false);
+  const [activationPrompt, setActivationPrompt] = useState<{
+    taskId: string;
+    lockVersion: number;
+    destination: string;
+  } | null>(null);
+  const [activationBusy, setActivationBusy] = useState(false);
+  const activationPendingRef = useRef(false);
   const [people, setPeople] = useState<PersonOption[]>(initialPeople);
   const [optionError, setOptionError] = useState("");
   const cleanDraftCleanupPromiseRef = useRef<Promise<boolean> | null>(null);
@@ -256,7 +264,7 @@ export function TaskComposerClient({
     state,
     storageBusy,
     storageKey,
-    submitting,
+    submitting: submitting || activationPrompt !== null,
   });
 
   const {
@@ -577,7 +585,7 @@ export function TaskComposerClient({
   ]);
 
   const submit = async () => {
-    if (submitting || (isEditingDraft && !dirty) || !runValidation()) return;
+    if (submitting || activationPrompt || (isEditingDraft && !dirty) || !runValidation()) return;
     cancelPendingAutoSave();
     setSubmitting(true);
     setServerError("");
@@ -642,7 +650,16 @@ export function TaskComposerClient({
               ? "Revision 已创建并送审，正在返回工作台…"
               : "Task 草稿已创建，正在进入工作台…",
       );
-      replaceAfterCollapsingHistoryGuard(result.destination);
+      if (isEditingDraft && result.taskId && result.lockVersion !== undefined) {
+        setStatusMessage("任务已保存，请选择是否立即激活。");
+        setActivationPrompt({
+          taskId: result.taskId,
+          lockVersion: result.lockVersion,
+          destination: result.destination,
+        });
+      } else {
+        replaceAfterCollapsingHistoryGuard(result.destination);
+      }
     } catch {
       setServerError("网络或服务暂时不可用，请稍后重试。草稿不会被清除。");
       setStatusMessage(
@@ -656,6 +673,34 @@ export function TaskComposerClient({
       );
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const continueAfterActivationPrompt = () => {
+    if (!activationPrompt || activationPendingRef.current) return;
+    replaceAfterCollapsingHistoryGuard(activationPrompt.destination);
+  };
+
+  const activateAfterSave = async () => {
+    if (!activationPrompt || activationPendingRef.current) return;
+    activationPendingRef.current = true;
+    setActivationBusy(true);
+    setServerError("");
+    try {
+      const result = await activateTask({
+        taskId: activationPrompt.taskId,
+        expectedLockVersion: activationPrompt.lockVersion,
+      });
+      if (!result.ok) {
+        setServerError(result.error.message);
+        return;
+      }
+      replaceAfterCollapsingHistoryGuard(activationPrompt.destination);
+    } catch {
+      setServerError("激活结果暂时无法确认，请返回任务详情查看最新状态。");
+    } finally {
+      activationPendingRef.current = false;
+      setActivationBusy(false);
     }
   };
 
@@ -762,6 +807,31 @@ export function TaskComposerClient({
           </div>
         </div>
       </div>
+
+      <Dialog
+        open={activationPrompt !== null}
+        onOpenChange={(open) => {
+          if (!open) continueAfterActivationPrompt();
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>任务已保存</DialogTitle>
+            <DialogDescription>
+              是否立即激活任务？激活后任务将进入执行阶段，计划内容只能通过计划修订修改。
+            </DialogDescription>
+          </DialogHeader>
+          {serverError && <p role="alert" className="text-sm text-destructive">{serverError}</p>}
+          <DialogFooter>
+            <Button type="button" variant="outline" disabled={activationBusy} onClick={continueAfterActivationPrompt}>
+              暂不激活
+            </Button>
+            <Button type="button" disabled={activationBusy} onClick={() => void activateAfterSave()}>
+              {activationBusy ? "正在激活…" : "立即激活"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {recovery?.kind === "VALID" && (
         <div className="border-b border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950 sm:px-6 lg:px-8">

@@ -1348,6 +1348,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
         .click();
       await page.getByLabel("结束节点名称").fill("S6 Edited Terminal");
       await page.getByRole("button", { name: "保存任务" }).first().click();
+      await page.getByRole("dialog", { name: "任务已保存" }).getByRole("button", { name: "暂不激活", exact: true }).click();
       await expect(page).toHaveURL(`/progress/tasks/${fixture.taskId}`);
       await expect
         .poll(async () => {
@@ -1490,6 +1491,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
         "true",
       );
       await page.getByRole("button", { name: "保存任务" }).first().click();
+      await page.getByRole("dialog", { name: "任务已保存" }).getByRole("button", { name: "暂不激活", exact: true }).click();
       await expect(page).toHaveURL(`/progress/tasks/${task.taskId}`);
       await expect
         .poll(() =>
@@ -1532,6 +1534,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
         .getByRole("option", { name: editor.person.displayName, exact: true })
         .click();
       await page.getByRole("button", { name: "保存任务" }).first().click();
+      await page.getByRole("dialog", { name: "任务已保存" }).getByRole("button", { name: "暂不激活", exact: true }).click();
       await expect(page).toHaveURL(`/progress/tasks/${task.taskId}`);
       await expect
         .poll(() =>
@@ -1716,6 +1719,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
 
       await page.getByLabel("任务名称").fill(updatedTitle);
       await page.getByRole("button", { name: "保存任务" }).first().click();
+      await page.getByRole("dialog", { name: "任务已保存" }).getByRole("button", { name: "暂不激活", exact: true }).click();
       await expect(page).toHaveURL(`/progress/tasks/${fixture.taskId}`);
       await expect
         .poll(async () => {
@@ -1908,6 +1912,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
       }
       await page.getByLabel("目标").fill("S6 Participant 更新计划");
       await page.getByRole("button", { name: "保存任务" }).first().click();
+      await page.getByRole("dialog", { name: "任务已保存" }).getByRole("button", { name: "暂不激活", exact: true }).click();
       await expect(page).toHaveURL(`/progress/tasks/${fixture.taskId}`);
       await expect
         .poll(async () => {
@@ -2554,6 +2559,7 @@ test.describe("project management UI project-management-ui-workbench", () => {
         })
         .click();
       await page.getByRole("button", { name: "保存任务" }).first().click();
+      await page.getByRole("dialog", { name: "任务已保存" }).getByRole("button", { name: "暂不激活", exact: true }).click();
       await expect(page).toHaveURL(`/progress/tasks/${fixture.taskId}`);
       await expect
         .poll(async () => ({
