@@ -7,6 +7,33 @@ import { shanghaiDateTimeLocalToIso } from "../lib/project-management/date-time"
 import type { ProjectManagementActor } from "../lib/project-management/identity";
 import { resolveContentNavigationWindow } from "../lib/project-management/time-canvas/content-window";
 
+import { formatMeetingMinutes, type MeetingMinutesSource } from "../lib/project-management/meetings/markdown";
+
+test("会议导出模板保留结构、绝对链接、北京时间及安全的多行列表", () => {
+  const source: MeetingMinutesSource = {
+    id: randomUUID(), topic: "周会 [讨论]", rangeStart: "2026-08-10T00:00:00Z", rangeEnd: "2026-08-11T00:00:00Z", minutes: "原有纪要\n第二行",
+    participants: [{ id: "person", displayName: "张*三", status: "ACTIVE" }, { id: "empty", displayName: "李四", status: "INACTIVE" }],
+    tasks: [{ id: randomUUID(), title: "任务 [一]", project: { id: randomUUID(), name: "项目 / 一" } }, { id: randomUUID(), title: "独立任务", project: null }],
+    segments: [{ personId: "person", content: "第一行\n# 第二行", task: null }],
+  };
+  const markdown = formatMeetingMinutes(source);
+  assert.ok(markdown.startsWith("# 周会 \\[讨论\\]"));
+  assert.ok(markdown.includes("2026/08/10 08:00 至 2026/08/11 08:00（工作区间，北京时间）"));
+  for (const heading of ["## 进度汇报", "### 进行中的任务", "### 个人进度汇报", "其他：", "## 下周安排"]) assert.ok(markdown.includes(heading));
+  assert.ok(markdown.includes(`/progress/projects/${source.tasks[0].project?.id})/[任务 \\[一\\]](`));
+  assert.ok(markdown.includes(`/progress/tasks/${source.tasks[1].id})`));
+  assert.match(markdown, /\[系统中的会议链接\]\(https?:\/\//);
+  assert.ok(markdown.includes("* 张\\*三：\n    * 第一行\n      \\# 第二行"));
+  assert.ok(markdown.includes("* 李四（已停用）：\n    * 本工作区间暂无投入记录"));
+  assert.ok(markdown.includes("其他：\n\n原有纪要\n第二行"));
+  assert.ok(markdown.includes("## 下周安排\n\n* 张\\*三\n    * 待补充"));
+  const empty = formatMeetingMinutes({ ...source, tasks: [], participants: [], segments: [], minutes: "" }, "https://untrusted.invalid");
+  assert.ok(empty.includes("暂无进行中的任务"));
+  assert.ok(empty.includes("暂无参与人员"));
+  assert.ok(empty.includes("其他：\n\n待补充"));
+  assert.ok(!empty.includes("untrusted.invalid"));
+});
+
 const fields = {
   topic: "透明会议", personIds: [randomUUID()], minutes: "",
   rangeStart: "2026-09-01T00:00:00.000Z", rangeEnd: "2026-09-02T00:00:00.000Z",

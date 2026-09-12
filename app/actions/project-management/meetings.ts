@@ -1,6 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
+import { appOriginFromHeaders } from "@/lib/app-origin";
+import { exportMeetingMinutes } from "@/lib/project-management/meetings/export";
 import { getCurrentProjectManagementActor } from "@/lib/project-management/identity";
 import { runProjectManagementAction } from "@/lib/project-management/application/action-result";
 import { createMeeting, updateMeeting } from "@/lib/project-management/meetings/service";
@@ -8,6 +11,14 @@ import { getMeetingTimeline } from "@/lib/project-management/meetings/timeline";
 import { drainNotificationOutboxSoon } from "@/lib/notification-delivery";
 import { listMeetingMissingPeople, urgeMeetingWorkSegments } from "@/lib/project-management/application/meeting-urge-service";
 import { routes } from "@/lib/routes";
+
+export async function exportMeetingMinutesAction(input: unknown) {
+  return runProjectManagementAction({ event: "pm.meeting.export", action: "exportMeetingMinutes", callback: async (context) => {
+    const actor = await getCurrentProjectManagementActor();
+    context.setActorAccountId(actor.accountId);
+    return exportMeetingMinutes(actor, input, appOriginFromHeaders(await headers()));
+  } });
+}
 
 export async function createMeetingAction(input: unknown) {
   return runProjectManagementAction({ event: "pm.meeting.create", action: "createMeeting", callback: async (context) => {

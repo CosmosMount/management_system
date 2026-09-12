@@ -1,3 +1,4 @@
+import { MeetingExportButton } from "@/components/project-management/meetings/meeting-export-button";
 import { MeetingWorkSegmentReminder } from "@/components/project-management/meetings/meeting-work-segment-reminder";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -25,7 +26,7 @@ export default async function MeetingPage({ params, searchParams }: {
   });
   const saved = (await searchParams).saved === "1";
   return <>
-    <PageCommandBar title={meeting.topic} actions={canManageMeetings(actor) && <Link href={routes.progress.meetingEdit(id)} className={buttonVariants()}>编辑会议</Link>} />
+    <PageCommandBar title={meeting.topic} actions={<div className="flex flex-wrap gap-2">{canManageMeetings(actor) && <Link href={routes.progress.meetingEdit(id)} className={buttonVariants()}>编辑会议</Link>}<MeetingExportButton meetingId={id} /></div>} />
     <main className="mx-auto min-w-0 max-w-[96rem] space-y-6 px-4 py-6 sm:px-6 lg:px-8">
       {saved && <p role="status">会议已保存，所有登录用户均可查看。</p>}
       <section className="min-w-0 space-y-2 rounded-lg border bg-card p-4" aria-label="会议基本信息">

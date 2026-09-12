@@ -93,6 +93,8 @@ npm run test:e2e:nightly
 
 ## 测试前准备
 
+会议纪要导出定向回归：`npm run test:e2e -- tests/meeting-records.spec.ts tests/meeting-records-ui.spec.ts`，通过官方隔离数据库和受控服务运行，不连接真实飞书。覆盖指定进行中任务去重、项目/任务独立链接、参会人完整区间投入及边界、删除对象过滤、身份拒绝、上限拒绝、普通查看者复制、最新内容、剪贴板拒绝/不可用后的手动回退、请求失败与加载状态；UI 在现有 desktop project 内检查 `1440x1000` 和 Pixel 5 尺寸 `393x851`。模板纯格式化回归纳入 `tests/meeting-records.node.ts`，由 `npm run test:node` 运行。任务完成仍需代码门禁及完整 E2E，不以定向结果代替全量验收。
+
 ### 环境
 
 1. 安装依赖：

@@ -6,6 +6,92 @@ import { createMeeting } from "../lib/project-management/meetings/service";
 import { actor, atHour, createAccountPerson, createSegment, createTask } from "./helpers/project-management-canvas-security-fixtures";
 import { expectHealthyPage, loginAsTestUser } from "./helpers/functional-fixtures";
 
+for (const viewport of [{ width: 1440, height: 1000 }, { width: 393, height: 851 }]) {
+  test(`普通查看者一键复制会议纪要及剪贴板失败回退 ${viewport.width}`, async ({ page, context, baseURL }) => {
+    if (!baseURL) throw new Error("缺少隔离服务地址");
+    await page.setViewportSize(viewport);
+    const admin = await createAccountPerson(`纪要导出超管 ${randomUUID()}`);
+    const viewer = await createAccountPerson(`纪要导出查看者 ${randomUUID()}`);
+    await prisma.systemRoleAssignment.create({ data: { accountId: admin.account.id, role: "SUPER_ADMINISTRATOR", team: "", techGroup: "" } });
+    const meeting = await createMeeting(actor(admin), {
+      requestId: randomUUID(), topic: "纪要复制测试", personIds: [admin.person.id],
+      rangeStart: atHour(8).toISOString(), rangeEnd: atHour(18).toISOString(), minutes: "原有讨论\n待跟进结论",
+    });
+    await createSegment({ accountId: admin.account.id, personId: admin.person.id, content: "已填写的工作投入", startAt: atHour(9), endAt: atHour(10) });
+    await loginAsTestUser(context, baseURL, { openId: viewer.openId, name: viewer.person.displayName });
+    await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: baseURL });
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.goto(`/progress/meetings/${meeting.id}`);
+    await expect(page.getByRole("link", { name: "编辑", exact: true })).toHaveCount(0);
+    const exportRequestPromise = page.waitForRequest((request) => request.method() === "POST" && Boolean(request.headers()["next-action"]) && Boolean(request.postData()?.includes('"meetingId"')) && !request.postData()?.includes('"kind"'));
+    await page.getByRole("button", { name: "导出会议纪要", exact: true }).click();
+    const exportRequest = await exportRequestPromise;
+    await expect(page.getByText("会议纪要已复制，可粘贴到飞书文档中。", { exact: true })).toBeVisible();
+    const copied = await page.evaluate(() => navigator.clipboard.readText());
+    expect(copied).toContain("# 纪要复制测试");
+    expect(copied).toContain(`${baseURL}/progress/meetings/${meeting.id}`);
+    expect(copied).toContain("已填写的工作投入");
+    expect(copied).toContain("其他：\n\n原有讨论\n待跟进结论");
+    await prisma.meetingRecord.update({ where: { id: meeting.id }, data: { minutes: `最新内容\n${"较长会议记录".repeat(1000)}` } });
+    await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => { throw new Error("denied"); } } }));
+    await page.getByRole("button", { name: "导出会议纪要", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "复制会议纪要" });
+    await expect(dialog).toBeVisible();
+    const text = dialog.getByLabel("会议纪要文本", { exact: true });
+    await expect(text).toHaveValue(/最新内容/);
+    await expect(text).toHaveAttribute("readonly", "");
+    await dialog.getByRole("button", { name: "再次复制" }).click();
+    await expect(dialog.getByRole("alert")).toContainText("浏览器未允许复制");
+    await dialog.getByRole("button", { name: "全选文本" }).click();
+    expect(await text.evaluate((element: HTMLTextAreaElement) => element.selectionStart === 0 && element.selectionEnd === element.value.length)).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.evaluate(() => { Reflect.deleteProperty(navigator, "clipboard"); });
+    await dialog.getByRole("button", { name: "再次复制" }).click();
+    await expect(dialog).not.toBeVisible();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toContain("最新内容");
+    await expectHealthyPage(page);
+    expect(errors).toEqual([]);
+    await context.clearCookies();
+    const denied = await context.request.post(exportRequest.url(), {
+      headers: { "next-action": exportRequest.headers()["next-action"], "content-type": exportRequest.headers()["content-type"], origin: baseURL },
+      data: exportRequest.postData() ?? "", maxRedirects: 0,
+    });
+    expect(denied.status()).toBe(307);
+    expect(denied.headers().location).toContain("/login");
+  });
+}
+
+test("会议导出加载期间禁止重复点击且请求失败可重试", async ({ page, context, baseURL }) => {
+  const admin = await createAccountPerson(`纪要请求超管 ${randomUUID()}`);
+  await prisma.systemRoleAssignment.create({ data: { accountId: admin.account.id, role: "SUPER_ADMINISTRATOR", team: "", techGroup: "" } });
+  const meeting = await createMeeting(actor(admin), { requestId: randomUUID(), topic: "纪要失败回退", personIds: [admin.person.id], rangeStart: atHour(8).toISOString(), rangeEnd: atHour(18).toISOString(), minutes: "" });
+  await loginAsTestUser(context, baseURL, { openId: admin.openId, name: admin.person.displayName });
+  await page.goto(`/progress/meetings/${meeting.id}`);
+  await expect(page.getByTestId("meeting-timeline")).toBeVisible();
+  let releaseRequest!: () => void;
+  const released = new Promise<void>((resolve) => { releaseRequest = resolve; });
+  await page.route(`**/progress/meetings/${meeting.id}`, async (route) => {
+    if (route.request().method() !== "POST" || !route.request().postData()?.includes('"meetingId"') || route.request().postData()?.includes('"kind"')) return route.continue();
+    await released;
+    await route.abort("failed");
+  });
+  try {
+    await page.getByRole("button", { name: "导出会议纪要", exact: true }).click();
+    await expect(page.getByRole("button", { name: "正在生成…", exact: true })).toBeDisabled();
+  } finally {
+    releaseRequest();
+  }
+  await expect(page.getByText("生成会议纪要失败，请稍后重试。", { exact: true })).toBeVisible();
+  await page.unroute(`**/progress/meetings/${meeting.id}`);
+  await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined }));
+  await page.getByRole("button", { name: "导出会议纪要", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "复制会议纪要" })).toBeVisible();
+  await expect(page.getByLabel("会议纪要文本", { exact: true })).toHaveValue(/暂无进行中的任务/);
+  await expectHealthyPage(page);
+});
+
+
 test("会议时间线项目名称只展示一次并保留独立任务链接", async ({ page, context, baseURL }) => {
   const admin = await createAccountPerson(`会议表头超管 ${randomUUID()}`);
   await prisma.systemRoleAssignment.create({ data: { accountId: admin.account.id, role: "SUPER_ADMINISTRATOR", team: "", techGroup: "" } });

@@ -5,7 +5,77 @@ import { randomUUID } from "node:crypto";
 import { prisma } from "../lib/prisma";
 import { createMeeting, updateMeeting, getMeeting, listMeetings } from "../lib/project-management/meetings/service";
 import { getMeetingTimeline } from "../lib/project-management/meetings/timeline";
+import { exportMeetingMinutes } from "../lib/project-management/meetings/export";
 import { actor, atHour, createAccountPerson, createSegment, createTask, expectErrorCode } from "./helpers/project-management-canvas-security-fixtures";
+
+test("会议导出仅列指定进行中任务，汇总参会人完整区间投入且不改写会议或发送通知", async () => {
+  const { admin, viewer, participant, input } = await fixture();
+  const project = await prisma.project.create({ data: { name: "导出所属项目", description: "", requesterAccountId: admin.account.id } });
+  const makeTask = (title: string) => createTask({ ownerAccountId: admin.account.id, title, team: "英雄", techGroup: "电控", members: [{ personId: admin.person.id, role: "OWNER" }] });
+  const selected = await makeTask("指定项目任务");
+  const independent = await makeTask("独立指定任务");
+  const unrelated = await makeTask("未指定但有投入的任务");
+  const completed = await makeTask("已经完成的指定任务");
+  const draft = await makeTask("草稿指定任务");
+  const deleted = await makeTask("已删除指定任务");
+  await prisma.task.update({ where: { id: selected.taskId }, data: { projectId: project.id } });
+  const meeting = await createMeeting(actor(admin), { ...input, personIds: [participant.person.id, admin.person.id], timelineDisplay: { projectIds: [project.id], taskIds: [selected.taskId, independent.taskId, completed.taskId, draft.taskId, deleted.taskId] } });
+  await prisma.task.update({ where: { id: completed.taskId }, data: { status: "COMPLETED" } });
+  await prisma.task.update({ where: { id: draft.taskId }, data: { status: "DRAFT" } });
+  await prisma.task.update({ where: { id: deleted.taskId }, data: { deletedAt: new Date() } });
+  const segment = (content: string, start: number, end: number, taskId: string | null = null, deletedAt: Date | null = null) => createSegment({ accountId: participant.account.id, personId: participant.person.id, content, startAt: atHour(start), endAt: atHour(end), taskId, deletedAt });
+  await segment("区间前开始但重叠的投入", 7, 9);
+  await segment("参与人真实投入\n保留第二行", 9, 10, unrelated.taskId);
+  await segment("已完成任务仍保留投入", 10, 11, completed.taskId);
+  await segment("隐藏的删除任务投入", 11, 12, deleted.taskId);
+  await segment("已删除记录不导出", 12, 13, null, new Date());
+  await segment("结束边界不导出", 18, 19);
+  await segment("开始边界不导出", 6, 8);
+  await createSegment({ accountId: viewer.account.id, personId: viewer.person.id, taskId: selected.taskId, content: "非参会人不导出", startAt: atHour(9), endAt: atHour(10) });
+  const { markdown } = await exportMeetingMinutes(actor(viewer), { meetingId: meeting.id });
+  const tasks = markdown.split("### 进行中的任务\n\n")[1].split("### 个人进度汇报")[0];
+  expect(tasks.split(`/progress/tasks/${selected.taskId})`)).toHaveLength(2);
+  expect(tasks).toContain(`[导出所属项目](`);
+  expect(tasks).toContain("[独立指定任务](");
+  for (const name of ["未指定但有投入的任务", "已经完成的指定任务", "草稿指定任务", "已删除指定任务"]) expect(tasks).not.toContain(name);
+  for (const text of ["区间前开始但重叠的投入", "参与人真实投入\n      保留第二行", "已完成任务仍保留投入", "本工作区间暂无投入记录"]) expect(markdown).toContain(text);
+  for (const text of ["隐藏的删除任务投入", "已删除记录不导出", "结束边界不导出", "开始边界不导出", "非参会人不导出"]) expect(markdown).not.toContain(text);
+  expect(markdown.indexOf("区间前开始但重叠的投入")).toBeLessThan(markdown.indexOf("参与人真实投入"));
+  expect(await getMeeting({ meetingId: meeting.id })).toEqual(meeting);
+  expect(await prisma.domainAuditEvent.count({ where: { entityId: meeting.id } })).toBe(1);
+  expect(await prisma.notificationOutbox.count({ where: { payload: { contains: meeting.id } } })).toBe(0);
+  await prisma.project.update({ where: { id: project.id }, data: { deletedAt: new Date() } });
+  const withoutProject = await exportMeetingMinutes(actor(viewer), { meetingId: meeting.id });
+  expect(withoutProject.markdown).not.toContain("导出所属项目");
+  expect(withoutProject.markdown).toContain("[指定项目任务](");
+  await expectErrorCode(exportMeetingMinutes(actor(viewer), { meetingId: randomUUID() }), "NOT_FOUND");
+  await expect(exportMeetingMinutes(actor(viewer), { meetingId: "invalid" })).rejects.toThrow();
+  await prisma.person.update({ where: { id: viewer.person.id }, data: { status: "INACTIVE" } });
+  await expectErrorCode(exportMeetingMinutes(actor(viewer), { meetingId: meeting.id }), "FORBIDDEN");
+});
+
+test("会议导出超过投入上限明确拒绝而非生成截断纪要", async () => {
+  const { admin, viewer, participant, input } = await fixture();
+  const meeting = await createMeeting(actor(admin), input);
+  await prisma.workSegment.createMany({ data: Array.from({ length: 5001 }, (_, index) => ({
+    personId: participant.person.id, content: `投入 ${index}`, startAt: atHour(9), endAt: atHour(10),
+    createdByAccountId: participant.account.id, updatedByAccountId: participant.account.id,
+  })) });
+  await expectErrorCode(exportMeetingMinutes(actor(viewer), { meetingId: meeting.id }), "QUERY_LIMIT_EXCEEDED");
+});
+
+test("会议导出不受31天显示窗口限制，停用参会人历史投入仍保留", async () => {
+  const { admin, viewer, participant, input } = await fixture();
+  const meeting = await createMeeting(actor(admin), {
+    ...input, rangeStart: "2026-01-01T00:00:00Z", rangeEnd: "2026-04-01T00:00:00Z",
+  });
+  await createSegment({ accountId: participant.account.id, personId: participant.person.id,
+    startAt: new Date("2026-03-30T09:00:00Z"), endAt: new Date("2026-03-30T10:00:00Z"), content: "区间末尾历史投入" });
+  await prisma.person.update({ where: { id: participant.person.id }, data: { status: "INACTIVE" } });
+  const { markdown } = await exportMeetingMinutes(actor(viewer), { meetingId: meeting.id });
+  expect(markdown).toContain("区间末尾历史投入");
+  expect(markdown).toContain("（已停用）");
+});
 
 async function fixture() {
   const admin = await createAccountPerson(`会议超管 ${randomUUID()}`);
