@@ -55,7 +55,7 @@ export function MeetingTimeline({ source }: { source: MeetingTimelineInput }) {
     <Button type="button" variant="outline" disabled={!current} onClick={() => setRevision((value) => value + 1)}>刷新时间线</Button>
     {!current && <p role="status">正在加载工作时间线…</p>}
     {current?.error && <p role="alert" className="break-words text-sm text-destructive">{current.error}</p>}
-    {current?.model && <div className="min-w-0 overflow-hidden rounded-lg border" data-testid="meeting-timeline">
+    {current?.model && <div className="min-w-0 overflow-hidden" data-testid="meeting-timeline">
       <ResourcePlannerCanvasClient key={loadKey} mode="PERSONAL_TIMELINE" initialModel={current.model}
         peopleOptions={[]} taskOptions={[]} defaultPersonId="" allowCreate={false} allowIndependent={false} readOnly
         initialCenterMs={(Date.parse(source.rangeStart) + Date.parse(source.rangeEnd)) / 2} />
