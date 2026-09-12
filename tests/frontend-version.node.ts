@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import nextConfig from "../next.config";
+import nextConfig, { frontendVersion } from "../next.config";
 import { FRONTEND_VERSION, frontendReloadBlocked, frontendReloadUrl, isFrontendVersion } from "../lib/frontend-version";
 
 test("前端版本限定为发布标识，不接受空值、地址或任意返回对象", () => {
   assert.equal(isFrontendVersion(FRONTEND_VERSION), true);
-  assert.equal(nextConfig.deploymentId, FRONTEND_VERSION.replaceAll(".", "-"));
+  assert.match(frontendVersion, /^\d{4}\.\d{2}\.\d{2}\.\d+$/);
+  assert.equal(process.env.NEXT_PUBLIC_FRONTEND_VERSION, frontendVersion);
+  assert.equal(nextConfig.env?.NEXT_PUBLIC_FRONTEND_VERSION, frontendVersion);
+  assert.equal(nextConfig.deploymentId, frontendVersion.replaceAll(".", "-"));
   assert.match(nextConfig.deploymentId!, /^[a-zA-Z0-9_-]+$/);
   for (const value of [null, {}, "", "https://example.com", "../login", "2026.09.11.1\n", "x".repeat(65)]) assert.equal(isFrontendVersion(value), false);
 });
