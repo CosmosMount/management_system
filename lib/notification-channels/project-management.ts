@@ -276,8 +276,8 @@ export function buildProjectManagementCard(
       {
         tag: "div",
         text: {
-          tag: payload.kind === "task_urged" ? "plain_text" : "lark_md",
-          content: payload.kind === "task_urged" ? [
+          tag: payload.kind === "meeting_work_segment_reminder" || payload.kind === "task_urged" ? "plain_text" : "lark_md",
+          content: payload.kind === "meeting_work_segment_reminder" ? `提醒人：${payload.actorName}\n${payload.summary}\n提醒时间：${formatCardDate(createdAt)}` : payload.kind === "task_urged" ? [
             `催促人：${payload.actorName || "未知用户"}`,
             `项目：${payload.projectName || "未关联项目"}`,
             `任务：${payload.taskTitle || "任务"}`,

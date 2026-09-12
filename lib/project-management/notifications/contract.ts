@@ -38,6 +38,7 @@ const PROJECT_MANAGEMENT_NOTIFICATION_KINDS = [
   "risk_created",
   "risk_resolved",
   "comment_created",
+  "meeting_work_segment_reminder",
 ] as const;
 
 const PROJECT_MANAGEMENT_APPROVAL_REQUEST_KINDS = [

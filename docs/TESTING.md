@@ -1,5 +1,7 @@
 # 测试手册
 
+会议投入提醒定向验证使用 `npm run test:e2e -- tests/meeting-records.spec.ts tests/meeting-records-ui.spec.ts`，覆盖参会者权限、区间边界、停用/无账号、重复请求与独立重发、站内/通知机器人队列以及桌面和窄窗口弹窗操作。只通过官方隔离数据库和飞书禁发保护执行；完成门禁为 `npm run check` 与完整 `npm run test:e2e`。
+
 本文档用于人工测试、Playwright 仿真测试和 subagent 测试执行。执行测试时不要提交本地 cookie、截图、HTML 快照、数据库文件或 `.tmp/` 内容。
 
 本文档同时定义全功能回归范围；页面 smoke 只覆盖主要入口和少量浅交互，不能等同于全功能通过。完整结论必须覆盖下述静态、业务闭环、并发和迁移层级。

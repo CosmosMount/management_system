@@ -1,3 +1,4 @@
+import { MeetingWorkSegmentReminder } from "@/components/project-management/meetings/meeting-work-segment-reminder";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { PageCommandBar } from "@/components/project-management/shell/page-command-bar";
@@ -32,7 +33,10 @@ export default async function MeetingPage({ params, searchParams }: {
         <p>工作区间：{formatDateTime(meeting.rangeStart)} 至 {formatDateTime(meeting.rangeEnd)}（北京时间）</p>
         <p className="text-sm text-muted-foreground">更新于 {formatDateTime(meeting.updatedAt)}</p>
       </section>
+      <section className="min-w-0 rounded-xl border bg-card p-6" aria-labelledby="meeting-timeline-heading">
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3"><h2 id="meeting-timeline-heading" className="text-xl font-semibold">相关任务进度</h2>{actor.isActive && meeting.participants.some((person) => person.id === actor.personId) && <MeetingWorkSegmentReminder meetingId={id} />}</div>
       <MeetingTimeline source={{ kind: "SAVED", meetingId: id, rangeStart: meeting.rangeStart, rangeEnd: meeting.rangeEnd }} />
+      </section>
       <section aria-labelledby="meeting-minutes-heading" className="min-w-0 rounded-lg border bg-card p-4">
         <h2 id="meeting-minutes-heading" className="mb-3 text-lg font-semibold">会议纪要</h2>
         <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{meeting.minutes || "暂未填写会议纪要"}</p>

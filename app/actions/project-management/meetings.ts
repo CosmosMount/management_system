@@ -5,6 +5,8 @@ import { getCurrentProjectManagementActor } from "@/lib/project-management/ident
 import { runProjectManagementAction } from "@/lib/project-management/application/action-result";
 import { createMeeting, updateMeeting } from "@/lib/project-management/meetings/service";
 import { getMeetingTimeline } from "@/lib/project-management/meetings/timeline";
+import { drainNotificationOutboxSoon } from "@/lib/notification-delivery";
+import { listMeetingMissingPeople, urgeMeetingWorkSegments } from "@/lib/project-management/application/meeting-urge-service";
 import { routes } from "@/lib/routes";
 
 export async function createMeetingAction(input: unknown) {
@@ -33,5 +35,23 @@ export async function getMeetingTimelineAction(input: unknown) {
     const actor = await getCurrentProjectManagementActor();
     context.setActorAccountId(actor.accountId);
     return getMeetingTimeline(actor, input);
+  } });
+}
+
+export async function listMeetingMissingPeopleAction(input: unknown) {
+  return runProjectManagementAction({ event: "pm.meeting.missing_people", action: "listMeetingMissingPeople", callback: async (context) => {
+    const actor = await getCurrentProjectManagementActor();
+    context.setActorAccountId(actor.accountId);
+    return listMeetingMissingPeople(actor, input);
+  } });
+}
+
+export async function urgeMeetingWorkSegmentsAction(input: unknown) {
+  return runProjectManagementAction({ event: "pm.meeting.work_segment_reminder", action: "urgeMeetingWorkSegments", callback: async (context) => {
+    const actor = await getCurrentProjectManagementActor();
+    context.setActorAccountId(actor.accountId);
+    const result = await urgeMeetingWorkSegments(actor, input);
+    drainNotificationOutboxSoon();
+    return result;
   } });
 }
