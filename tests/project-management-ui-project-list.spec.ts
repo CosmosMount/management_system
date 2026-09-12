@@ -5,9 +5,9 @@ import { prisma } from "../lib/prisma";
 import { createDeadlineTask } from "./helpers/current-node-deadline-fixtures";
 import { actor, createAccountPerson, createTask, grantGlobalProjectAdministrator } from "./helpers/project-management-canvas-security-fixtures";
 import { expectHealthyPage, expectNoHorizontalOverflow, loginAsTestUser } from "./helpers/functional-fixtures";
-import { createProjectListFixture } from "./helpers/project-list-fixtures";
 import { listTasks } from "../lib/project-management/queries/task-list-queries";
 import { listProjects } from "../lib/project-management/queries/project-list-queries";
+import { createProjectListFixture } from "./helpers/project-list-fixtures";
 
 test.beforeAll(async () => {
   const administrator = await createAccountPerson(`项目列表UI门禁 ${randomUUID()}`);
