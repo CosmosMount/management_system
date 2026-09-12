@@ -5,6 +5,7 @@ import { canManageMeetings } from "../lib/project-management/meetings/permission
 import { meetingFieldsSchema, meetingTimelineSchema, meetingTimelineDisplaySchema } from "../lib/project-management/meetings/validation";
 import { shanghaiDateTimeLocalToIso } from "../lib/project-management/date-time";
 import type { ProjectManagementActor } from "../lib/project-management/identity";
+import { resolveContentNavigationWindow } from "../lib/project-management/time-canvas/content-window";
 
 const fields = {
   topic: "透明会议", personIds: [randomUUID()], minutes: "",
@@ -45,4 +46,19 @@ test("会议展示配置规范化、数量上限和非法标识", () => {
   for (const config of [{ projectIds: ["invalid"], taskIds: [] }, { projectIds: [], taskIds: Array.from({ length: 51 }, () => randomUUID()) }, { projectIds: [], taskIds: [], projectId }]) {
     assert.equal(meetingTimelineDisplaySchema.safeParse(config).success, false);
   }
+});
+
+test("会议和工作台共用日历范围，保留历史内容、今天和跨年导航", () => {
+  const now = Date.parse("2026-09-12T00:00:00Z");
+  const contentRange = { startMs: Date.parse("2020-01-01T00:00:00Z"), endMs: Date.parse("2035-06-01T00:00:00Z") };
+  const result = resolveContentNavigationWindow({ contentRange, businessContentRange: contentRange, preferredCenterMs: now, now });
+  assert.equal(result.rangeClipped, true);
+  assert.ok(result.fullRange.startMs < contentRange.startMs);
+  assert.ok(result.fullRange.endMs > contentRange.endMs);
+  assert.ok(result.range.startMs <= now && result.range.endMs > now);
+  assert.equal(result.resolvedCenterMs, now);
+  const historical = { startMs: contentRange.startMs, endMs: contentRange.startMs + 3600000 };
+  const fallback = resolveContentNavigationWindow({ contentRange: historical, businessContentRange: historical, now });
+  assert.equal(fallback.resolvedCenterMs, historical.startMs);
+  assert.ok(fallback.fullRange.endMs > now);
 });

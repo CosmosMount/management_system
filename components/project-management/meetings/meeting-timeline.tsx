@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { getMeetingTimelineAction } from "@/app/actions/project-management/meetings";
-import { TimeCanvas } from "@/components/project-management/time-canvas/time-canvas";
+import { ResourcePlannerCanvasClient } from "@/components/project-management/resource-planner-canvas-client";
 import { timeCanvasDataToModel } from "@/components/project-management/time-canvas/adapter";
-import { chooseFitZoom, DAY_MS, fitTimeRange } from "@/components/project-management/time-canvas/time-math";
+import { contentTimeBounds } from "@/components/project-management/time-canvas/time-math";
+import { resolveContentNavigationWindow } from "@/lib/project-management/time-canvas/content-window";
 import type { TimeCanvasModel } from "@/components/project-management/time-canvas/types";
 import { Button } from "@/components/ui/button";
 import type { MeetingTimelineInput } from "@/lib/project-management/meetings/validation";
@@ -25,10 +26,18 @@ export function MeetingTimeline({ source }: { source: MeetingTimelineInput }) {
         return;
       }
       const model = timeCanvasDataToModel(response.data, "RESOURCE_PLANNER");
-      model.range = fitTimeRange([
-        model.range.startMs, model.range.endMs,
+      const businessContentRange = contentTimeBounds([
+        model.range.startMs, model.range.endMs - 1,
         ...model.anchors.map((anchor) => anchor.atMs),
-      ], model.range, { minimumDurationMs: 7 * DAY_MS });
+      ]) ?? model.range;
+      const contentRange = contentTimeBounds([
+        businessContentRange.startMs, businessContentRange.endMs - 1,
+        ...(model.globalMarkers ?? []).map((marker) => marker.atMs),
+      ]);
+      const navigation = resolveContentNavigationWindow({ contentRange, businessContentRange,
+        preferredCenterMs: (model.range.startMs + model.range.endMs) / 2 });
+      Object.assign(model, { range: navigation.range, fullRange: navigation.fullRange,
+        contentRange, rangeClipped: navigation.rangeClipped, loadedRanges: [navigation.fullRange] });
       setResult({ key: loadKey, model, display: response.data.display });
     }).catch(() => {
       if (!canceled) setResult({ key: loadKey, error: "时间线加载失败，请检查网络后重试" });
@@ -47,10 +56,9 @@ export function MeetingTimeline({ source }: { source: MeetingTimelineInput }) {
     {!current && <p role="status">正在加载工作时间线…</p>}
     {current?.error && <p role="alert" className="break-words text-sm text-destructive">{current.error}</p>}
     {current?.model && <div className="min-w-0 overflow-hidden rounded-lg border" data-testid="meeting-timeline">
-      <TimeCanvas key={loadKey} mode="PERSONAL_TIMELINE" model={current.model}
-        initialCenterMs={(current.model.range.startMs + current.model.range.endMs) / 2}
-        initialZoom={chooseFitZoom(current.model.range)} navigationRange={current.model.range}
-        emptyMessage="所选参与人在此区间暂无工作记录" />
+      <ResourcePlannerCanvasClient key={loadKey} mode="PERSONAL_TIMELINE" initialModel={current.model}
+        peopleOptions={[]} taskOptions={[]} defaultPersonId="" allowCreate={false} allowIndependent={false} readOnly
+        initialCenterMs={(Date.parse(source.rangeStart) + Date.parse(source.rangeEnd)) / 2} />
     </div>}
   </section>;
 }
