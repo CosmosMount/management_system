@@ -2974,7 +2974,6 @@ test.describe("project management UI project-management-ui-workbench", () => {
       },
     });
     expect(completedTermination.confirmedAt).not.toBeNull();
-    await page.locator("summary").filter({ hasText: "任务资料与成员" }).click();
     await expect(
       page.getByText("实际结束", { exact: true }).locator(".."),
     ).toContainText(formatDateTime(completedTermination.confirmedAt));

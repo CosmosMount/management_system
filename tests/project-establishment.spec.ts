@@ -399,23 +399,17 @@ test.describe("Project 立项与生命周期", () => {
     await expect(
       page
         .getByTestId("project-management-command-bar")
-        .getByRole("heading", { name: projectName, exact: true }),
+        .getByRole("heading", { name: "Project 详情", exact: true }),
     ).toBeVisible();
     await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
     await expect(page.getByRole("heading", { name: "项目详情", exact: true })).toHaveCount(0);
-    await expect(page.getByText(projectDescription, { exact: true })).not.toBeVisible();
-    await page.getByTestId("project-information").locator("summary").click();
     await expect(page.getByText(projectDescription, { exact: true })).toBeVisible();
-    await page.getByTestId("project-information").locator("summary").click();
     await expect(page.getByText(requester.personId, { exact: true })).toHaveCount(0);
     await expect(page.getByText("任务完成进度", { exact: true })).toBeVisible();
     await expect(page.getByText("1/4 已完成", { exact: true })).toHaveCount(2);
     await expect(page.getByRole("link", { name: "编辑" })).toBeVisible();
     await expect(page.getByRole("button", { name: "结束项目" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "删除项目" })).toHaveCount(0);
-    await page.locator("summary").filter({ hasText: "更多管理操作" }).click();
     await expect(page.getByRole("button", { name: "删除项目" })).toBeVisible();
-    await page.locator("summary").filter({ hasText: "更多管理操作" }).click();
     await expect(page.getByRole("button", { name: "复制链接" })).toBeVisible();
 
     await expect(page.getByTestId("project-risk-summary")).toHaveCount(0);
@@ -808,9 +802,10 @@ test.describe("Project 立项与生命周期", () => {
     page.on("pageerror", (error) => errors.push(error.message));
     await page.goto(`/progress/projects/${created.projectId}`);
     await expectProjectOverview(page);
-    await expect(page.getByRole("heading", { level: 1, name: projectName })).toHaveCount(1);
+    await expect(page.getByRole("heading", { level: 1, name: "Project 详情" })).toHaveCount(1);
+    await expect(page.getByRole("heading", { level: 2, name: projectName })).toHaveCount(1);
     await expect(page.getByTestId("time-canvas-root")).toBeVisible();
-    await expect(page.getByText(description, { exact: true })).not.toBeVisible();
+    await expect(page.getByText(description, { exact: true })).toBeVisible();
     await expect(page.locator("#risks")).toContainText("主控板交期需要确认");
     await expect(page.locator("#risks")).toContainText("场地排期需要协调");
     await expect(page.locator("#risks")).toContainText("补齐低照度场景验收证据");
@@ -885,7 +880,7 @@ test.describe("Project 立项与生命周期", () => {
     await requestedTaskList.getByRole("link", { name: requestedTasks[11].title, exact: true }).scrollIntoViewIfNeeded();
     await expect(requestedTaskList.getByRole("link", { name: requestedTasks[11].title, exact: true })).toBeInViewport();
     await pendingPanel.getByRole("button", { name: "通过立项" }).scrollIntoViewIfNeeded();
-    await expect(page.getByRole("button", { name: "删除项目" })).toHaveCount(0);
+    await expect(pendingPanel.getByRole("button", { name: "删除项目" })).toBeVisible();
     await expect(page.getByTestId("time-canvas-root")).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath("project-establishment-desktop.png"), animations: "disabled" });
     await revealProjectArea(page, "活动记录");

@@ -46,12 +46,9 @@ export function ProjectActionsClient({ projectId, lockVersion, requestId, canRev
     </div>}
     <div className="flex flex-wrap gap-2">
       {canReview && requestId && <><Button disabled={pending} onClick={() => run(() => reviewProjectEstablishment({ projectId, requestId, expectedLockVersion: lockVersion, decision: "APPROVE", comment }))}>通过立项</Button><Button variant="destructive" disabled={pending} onClick={() => { if (!comment.trim()) { setCommentError("驳回立项时请填写审批意见"); requestAnimationFrame(() => document.getElementById("project-review-comment")?.focus()); return; } if (window.confirm("确认驳回该立项申请？")) run(() => reviewProjectEstablishment({ projectId, requestId, expectedLockVersion: lockVersion, decision: "REJECT", comment })); }}>驳回</Button></>}
-      {canComplete && <Button variant="outline" disabled={pending} onClick={() => setDialog("complete")}>结束项目</Button>}
       <Button type="button" variant="outline" disabled={pending} onClick={() => void copyProjectLink()}><Copy />复制链接</Button>
-      {canDelete && <details className="min-w-0">
-        <summary className="cursor-pointer rounded-md border border-border px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-ring">更多管理操作</summary>
-        <div className="mt-2"><Button variant="destructive" disabled={pending} onClick={() => setDialog("delete")}>删除项目</Button></div>
-      </details>}
+      {canComplete && <Button disabled={pending} onClick={() => setDialog("complete")}>结束项目</Button>}
+      {canDelete && <Button variant="outline" className="border-transparent bg-destructive/10 text-destructive hover:bg-destructive/20 hover:text-destructive" disabled={pending} onClick={() => setDialog("delete")}>删除项目</Button>}
     </div>
     {notice && <p role="status" className="text-sm text-emerald-700">{notice}</p>}
     {error && <p role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">{error}</p>}

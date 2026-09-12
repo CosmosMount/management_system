@@ -141,17 +141,13 @@ test.describe("project management UI project-management-ui-routes-responsive", (
       ).toBeVisible();
       await expect(page.getByTestId("task-workbench-v2")).toBeVisible();
       await expect(page.getByTestId("task-overview")).toBeVisible();
-      await expect(page.getByRole("heading", { name: fixture.taskTitle, exact: true })).toHaveCount(1);
+      await expect(page.getByRole("heading", { level: 1, name: fixture.taskTitle, exact: true })).toHaveCount(1);
       await expectTaskExecutionLayout(page);
       await expect(page.getByTestId("time-canvas-root")).toBeVisible();
 
       await expect(page.getByRole("navigation", { name: "任务详情分区" })).toHaveCount(0);
-      const metadata = page.locator("details").filter({ has: page.locator("summary", { hasText: "任务资料与成员" }) });
-      await expect(metadata).not.toHaveAttribute("open", "");
-      await metadata.locator("summary").click();
-      await expect(metadata).toHaveAttribute("open", "");
+      await expect(page.getByTestId("task-overview").getByText("车组/技术组", { exact: true })).toBeVisible();
       await expectHealthyPage(page);
-      await metadata.locator("summary").click();
       if (testInfo.project.name === "desktop") {
         await page.setViewportSize({ width: 1279, height: 1000 });
         await expectTaskExecutionLayout(page);

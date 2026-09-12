@@ -181,35 +181,25 @@ export default async function ProjectDetailPage({
   return (
     <>
       <PageCommandBar
-        title={project.name}
-        actions={
-          <>
-            {(project.permissions.canEdit || project.permissions.canResubmit) && (
-              <Link
-                href={routes.progress.projectEdit(project.id)}
-                className={cn(buttonVariants({ variant: "outline" }))}
-              >
-                <Pencil />
-                {project.status === "DRAFT" ? "修改并重新提交" : "编辑"}
-              </Link>
-            )}
-            {!currentEstablishmentRequest && projectActions}
-          </>
-        }
+        title="Project 详情"
+        description="查看 Project 基本信息、所属 Task 与计划时间线。"
       />
       <div className="mx-auto flex w-full min-w-0 max-w-[96rem] flex-col gap-5 px-4 py-6 sm:px-6 lg:px-8">
-        <section
-          id="establishment"
-          className="min-w-0 scroll-mt-32 rounded-xl border border-border bg-card p-4"
-          data-testid="project-overview"
-        >
-          <div className="flex min-w-0 flex-wrap items-center gap-4">
-            <ProjectAvatar
-              name={project.name}
-              avatarPath={project.avatarPath}
-              className="size-10 shrink-0"
-            />
-            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-6 gap-y-3">
+        <section id="establishment" className="min-w-0 scroll-mt-32 rounded-xl border border-border bg-card p-5" data-testid="project-overview">
+          <div className="flex min-w-0 flex-col gap-5 lg:flex-row-reverse lg:items-start">
+            <div className="flex min-w-0 flex-wrap gap-2 lg:max-w-[40%] lg:justify-end" data-testid="project-overview-actions">
+              {(project.permissions.canEdit || project.permissions.canResubmit) && (
+                <Link
+                  href={routes.progress.projectEdit(project.id)}
+                  className={cn(buttonVariants({ variant: "outline" }))}
+                >
+                  <Pencil />
+                  {project.status === "DRAFT" ? "修改并重新提交" : "编辑"}
+                </Link>
+              )}
+              {!currentEstablishmentRequest && projectActions}
+            </div>
+            <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <Link
                   href={routes.progress.projects}
@@ -219,11 +209,16 @@ export default async function ProjectDetailPage({
                 </Link>
                 <Badge variant="secondary">{statusLabels[project.status]}</Badge>
               </div>
-              <dl className="flex min-w-0 flex-wrap gap-x-6 gap-y-3 text-sm">
-                <div className="min-w-0 max-w-72">
-                  <dt className="text-xs text-muted-foreground">负责人</dt>
-                  <dd className="mt-1 line-clamp-1 break-words">{memberNames(owners)}</dd>
+              <div className="mt-4 flex min-w-0 items-start gap-4">
+                <ProjectAvatar name={project.name} avatarPath={project.avatarPath} className="size-16" />
+                <div className="min-w-0">
+                  <h2 className="text-2xl font-semibold [overflow-wrap:anywhere]">{project.name}</h2>
+                  <p className="mt-2 whitespace-pre-wrap leading-7 [overflow-wrap:anywhere]">{project.description}</p>
                 </div>
+              </div>
+              <dl className="mt-5 grid min-w-0 gap-4 text-sm sm:grid-cols-3 [&_dd]:[overflow-wrap:anywhere]" data-testid="project-information">
+                <OverviewItem label="负责人" value={memberNames(owners)} />
+                <OverviewItem label="参与人员" value={memberNames(participants)} />
                 <OverviewItem
                   label="任务完成进度"
                   value={`${project.completedTaskTotalCount}/${project.completionTaskTotalCount} 已完成`}
@@ -231,22 +226,6 @@ export default async function ProjectDetailPage({
               </dl>
             </div>
           </div>
-
-          <details className="mt-3 min-w-0" data-testid="project-information">
-            <summary className="w-fit cursor-pointer rounded text-sm text-primary focus-visible:outline-2 focus-visible:outline-ring">
-              项目说明与成员
-            </summary>
-            <div className="mt-3 min-w-0 space-y-4 border-t border-border pt-4">
-              <p className="whitespace-pre-wrap break-words text-sm leading-6 [overflow-wrap:anywhere]">
-                {project.description}
-              </p>
-              <dl className="grid min-w-0 gap-4 text-sm sm:grid-cols-2">
-                <OverviewItem label="负责人" value={memberNames(owners)} />
-                <OverviewItem label="参与人员" value={memberNames(participants)} />
-              </dl>
-            </div>
-          </details>
-
           {currentEstablishmentRequest && (
             <section
               className="mt-5 min-w-0 space-y-4 border-t border-border pt-5"
