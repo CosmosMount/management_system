@@ -5,8 +5,9 @@ import { createDomainAuditEventTx } from "@/lib/project-management/audit";
 import { refreshProjectManagementActorTx } from "@/lib/project-management/application/actor-refresh";
 import { notFoundError, ProjectManagementServiceError } from "@/lib/project-management/application/errors";
 import { canManageMeetings } from "./permissions";
-import { createMeetingSchema, listMeetingsSchema, meetingIdSchema, meetingTimelineDisplaySchema, updateMeetingSchema } from "./validation";
+import { createMeetingSchema, listMeetingsSchema, meetingIdSchema, meetingPeopleFilterSchema, meetingTimelineDisplaySchema, parseMeetingListCursor, updateMeetingSchema } from "./validation";
 import { validateMeetingDisplay } from "./display";
+import { projectReadableWhere, taskReadableWhere } from "@/lib/project-management/authorization";
 
 const meetingInclude = {
   participants: {
@@ -54,25 +55,70 @@ export async function getMeeting(input: unknown): Promise<MeetingDto> {
   return serializeMeeting(record);
 }
 
-export async function listMeetings(input: unknown) {
-  const parsed = listMeetingsSchema.parse(input);
-  const cursor = parsed.cursor
-    ? await prisma.meetingRecord.findUnique({ where: { id: parsed.cursor }, select: { id: true, createdAt: true } })
-    : null;
+export async function getMeetingFilterPeople(input: unknown) {
+  const parsed = meetingPeopleFilterSchema.parse(input);
+  const where: Prisma.PersonWhereInput = {
+    OR: [{ status: "ACTIVE" }, { meetingRecordParticipants: { some: {} } }],
+    displayName: { contains: parsed.query, mode: "insensitive" },
+    ...(parsed.ids ? { id: { in: parsed.ids } } : {}),
+  };
+  const cursor = parsed.cursor ? await prisma.person.findFirst({ where: { AND: [where, { id: parsed.cursor }] }, select: { id: true, displayName: true } }) : null;
   if (parsed.cursor && !cursor) throw notFoundError();
+  const rows = await prisma.person.findMany({
+    where: { AND: [where, ...(cursor ? [{ OR: [{ displayName: { gt: cursor.displayName } }, { displayName: cursor.displayName, id: { gt: cursor.id } }] }] : [])] },
+    select: { id: true, displayName: true, status: true },
+    orderBy: [{ displayName: "asc" }, { id: "asc" }], take: 51,
+  });
+  return { items: rows.slice(0, 50), nextCursor: rows.length > 50 ? rows[49].id : null };
+}
+
+export async function listMeetings(input: unknown, actor?: ProjectManagementActor) {
+  const parsed = listMeetingsSchema.parse(input);
+  if ((parsed.mine || parsed.projectId || parsed.taskId) && !actor) {
+    throw new ProjectManagementServiceError("FORBIDDEN", "请登录后筛选会议");
+  }
+  if (parsed.personId && !await prisma.person.findUnique({ where: { id: parsed.personId }, select: { id: true } })) throw notFoundError();
+  if (actor && parsed.projectId && parsed.projectId !== "none" && !await prisma.project.findFirst({ where: { AND: [{ id: parsed.projectId }, projectReadableWhere(actor)] }, select: { id: true } })) throw notFoundError();
+  if (actor && parsed.taskId && parsed.taskId !== "none" && !await prisma.task.findFirst({ where: { AND: [{ id: parsed.taskId }, taskReadableWhere(actor)] }, select: { id: true } })) throw notFoundError();
+  const filterKey = JSON.stringify({ ...parsed, cursor: undefined, accountId: parsed.mine ? actor?.accountId : undefined });
+  const savedCursor = parsed.cursor ? parseMeetingListCursor(parsed.cursor) : null;
+  if (savedCursor && savedCursor.filterKey !== filterKey) {
+    throw new ProjectManagementServiceError("VALIDATION_ERROR", "筛选条件已变化，请重新筛选");
+  }
+  const asOf = savedCursor ? new Date(savedCursor.asOf) : new Date();
+  const conditions: Prisma.MeetingRecordWhereInput[] = [
+    { topic: { contains: parsed.query, mode: "insensitive" } },
+  ];
+  if (parsed.personId) conditions.push({ participants: { some: { personId: parsed.personId } } });
+  if (parsed.mine && actor) conditions.push({ createdByAccountId: actor.accountId });
+  for (const [key, value] of [["projectIds", parsed.projectId], ["taskIds", parsed.taskId]] as const) {
+    if (value) conditions.push({ timelineDisplay: { path: [key], ...(value === "none" ? { equals: [] } : { array_contains: [value] }) } });
+  }
+  if (["7", "30", "90"].includes(parsed.period)) {
+    conditions.push({ rangeStart: { gte: new Date(asOf.getTime() - Number(parsed.period) * 86_400_000), lte: asOf } });
+  } else if (parsed.period === "custom") {
+    if (parsed.dateFrom) conditions.push({ rangeEnd: { gt: new Date(`${parsed.dateFrom}T00:00:00+08:00`) } });
+    if (parsed.dateTo) conditions.push({ rangeStart: { lt: new Date(new Date(`${parsed.dateTo}T00:00:00+08:00`).getTime() + 86_400_000) } });
+  }
+  const where: Prisma.MeetingRecordWhereInput = { AND: conditions };
+  const legacyCursor = parsed.cursor && !savedCursor
+    ? await prisma.meetingRecord.findFirst({ where: { AND: [where, { id: parsed.cursor }] }, select: { id: true, createdAt: true, updatedAt: true, rangeStart: true } })
+    : null;
+  if (parsed.cursor && !savedCursor && !legacyCursor) throw notFoundError();
+  const cursor = savedCursor ? { id: savedCursor.id, at: new Date(savedCursor.at) } : legacyCursor ? { id: legacyCursor.id, at: legacyCursor[parsed.sort] } : null;
   const records = await prisma.meetingRecord.findMany({
     where: {
-      topic: { contains: parsed.query, mode: "insensitive" },
-      ...(cursor ? { OR: [
-        { createdAt: { lt: cursor.createdAt } },
-        { createdAt: cursor.createdAt, id: { lt: cursor.id } },
+      ...where,
+      ...(cursor ? { id: { not: cursor.id }, OR: [
+        { [parsed.sort]: { lt: cursor.at } },
+        { [parsed.sort]: cursor.at, id: { lt: cursor.id } },
       ] } : {}),
     },
     select: {
       id: true, topic: true, rangeStart: true, rangeEnd: true, createdAt: true, updatedAt: true,
       participants: meetingInclude.participants,
     },
-    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    orderBy: [{ [parsed.sort]: "desc" }, { id: "desc" }],
     take: 26,
   });
   return {
@@ -82,7 +128,7 @@ export async function listMeetings(input: unknown) {
       createdAt: record.createdAt.toISOString(), updatedAt: record.updatedAt.toISOString(),
       participants: record.participants.map(({ person }) => serializePerson(person)),
     })),
-    nextCursor: records.length > 25 ? records[24].id : null,
+    nextCursor: records.length > 25 ? JSON.stringify({ version: 1, id: records[24].id, at: records[24][parsed.sort].toISOString(), asOf: asOf.toISOString(), filterKey }) : null,
   };
 }
 

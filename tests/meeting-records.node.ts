@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
 import { canManageMeetings } from "../lib/project-management/meetings/permissions";
-import { meetingFieldsSchema, meetingTimelineSchema, meetingTimelineDisplaySchema } from "../lib/project-management/meetings/validation";
+import { meetingFieldsSchema, meetingTimelineSchema, meetingTimelineDisplaySchema, listMeetingsSchema, meetingPeopleFilterSchema } from "../lib/project-management/meetings/validation";
 import { shanghaiDateTimeLocalToIso } from "../lib/project-management/date-time";
 import type { ProjectManagementActor } from "../lib/project-management/identity";
 import { resolveContentNavigationWindow } from "../lib/project-management/time-canvas/content-window";
@@ -38,6 +38,19 @@ const fields = {
   topic: "透明会议", personIds: [randomUUID()], minutes: "",
   rangeStart: "2026-09-01T00:00:00.000Z", rangeEnd: "2026-09-02T00:00:00.000Z",
 };
+
+test("会议组合筛选校验日期、标识、枚举和拒绝伪造创建人", () => {
+  assert.equal(listMeetingsSchema.parse({}).sort, "createdAt");
+  assert.equal(listMeetingsSchema.safeParse({ personId: randomUUID(), period: "custom", dateFrom: "2026-09-01", dateTo: "2026-09-01", projectId: "none", taskId: randomUUID(), mine: true, sort: "updatedAt" }).success, true);
+  for (const invalid of [
+    { personId: "" }, { personId: "invalid" }, { projectId: "invalid" }, { taskId: "invalid" },
+    { dateFrom: "2026-02-30" }, { dateTo: "2026-09-01T00:00:00Z" },
+    { dateFrom: "2026-09-02", dateTo: "2026-09-01" }, { sort: "topic" }, { period: "15" },
+    { mine: "true" }, { createdByAccountId: randomUUID() }, { cursor: "bad" },
+    { period: "custom" }, { period: "7", dateFrom: "2026-09-01" },
+  ]) assert.equal(listMeetingsSchema.safeParse(invalid).success, false);
+  assert.equal(meetingPeopleFilterSchema.safeParse({ ids: Array.from({ length: 51 }, () => randomUUID()) }).success, false);
+});
 
 test("会议只允许在职全局超管维护，不把项目管理员当作超管", () => {
   const actor: ProjectManagementActor = { accountId: randomUUID(), personId: randomUUID(), openId: "test", systemRoles: [] };

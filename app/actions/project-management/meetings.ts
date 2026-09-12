@@ -6,7 +6,7 @@ import { appOriginFromHeaders } from "@/lib/app-origin";
 import { exportMeetingMinutes } from "@/lib/project-management/meetings/export";
 import { getCurrentProjectManagementActor } from "@/lib/project-management/identity";
 import { runProjectManagementAction } from "@/lib/project-management/application/action-result";
-import { createMeeting, updateMeeting } from "@/lib/project-management/meetings/service";
+import { createMeeting, updateMeeting, getMeetingFilterPeople } from "@/lib/project-management/meetings/service";
 import { getMeetingTimeline } from "@/lib/project-management/meetings/timeline";
 import { drainNotificationOutboxSoon } from "@/lib/notification-delivery";
 import { listMeetingMissingPeople, urgeMeetingWorkSegments } from "@/lib/project-management/application/meeting-urge-service";
@@ -17,6 +17,14 @@ export async function exportMeetingMinutesAction(input: unknown) {
     const actor = await getCurrentProjectManagementActor();
     context.setActorAccountId(actor.accountId);
     return exportMeetingMinutes(actor, input, appOriginFromHeaders(await headers()));
+  } });
+}
+
+export async function getMeetingFilterPeopleAction(input: unknown) {
+  return runProjectManagementAction({ event: "pm.meeting.filter.people", action: "getMeetingFilterPeople", callback: async (context) => {
+    const actor = await getCurrentProjectManagementActor();
+    context.setActorAccountId(actor.accountId);
+    return getMeetingFilterPeople(input);
   } });
 }
 

@@ -45,10 +45,50 @@ export const updateMeetingSchema = meetingFieldsSchema.safeExtend({
 export const createMeetingSchema = meetingFieldsSchema.safeExtend({ requestId: idSchema });
 
 export const meetingIdSchema = z.object({ meetingId: idSchema }).strict();
+export const meetingPeopleFilterSchema = z.object({
+  query: z.string().trim().max(200).default(""),
+  cursor: idSchema.optional(),
+  ids: z.array(idSchema).max(50).optional(),
+}).strict();
+export const meetingListCursorSchema = z.object({
+  version: z.literal(1),
+  id: idSchema,
+  at: z.string().datetime({ offset: true }),
+  asOf: z.string().datetime({ offset: true }),
+  filterKey: z.string().max(2048),
+}).strict();
+
+export function parseMeetingListCursor(value: string) {
+  try {
+    const parsed = meetingListCursorSchema.safeParse(JSON.parse(value));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
 export const listMeetingsSchema = z.object({
   query: z.string().trim().max(200, "搜索内容不能超过 200 字").default(""),
-  cursor: idSchema.optional(),
-}).strict();
+  personId: idSchema.optional(),
+  dateFrom: z.string().date("请选择有效的开始日期").optional(),
+  dateTo: z.string().date("请选择有效的结束日期").optional(),
+  period: z.enum(["all", "7", "30", "90", "custom"]).default("all"),
+  projectId: z.union([idSchema, z.literal("none")]).optional(),
+  taskId: z.union([idSchema, z.literal("none")]).optional(),
+  mine: z.boolean().default(false),
+  sort: z.enum(["createdAt", "updatedAt", "rangeStart"]).default("createdAt"),
+  cursor: z.string().max(4096).refine((value) => idSchema.safeParse(value).success || parseMeetingListCursor(value) !== null, "分页参数不正确，请重新筛选").optional(),
+}).strict().superRefine((value, context) => {
+  if (value.period !== "custom" && (value.dateFrom || value.dateTo)) {
+    context.addIssue({ code: "custom", path: ["period"], message: "填写日期时请选择自定义工作区间" });
+  }
+  if (value.period === "custom" && !value.dateFrom && !value.dateTo) {
+    context.addIssue({ code: "custom", path: ["dateFrom"], message: "请至少选择一个日期" });
+  }
+  if (value.dateFrom && value.dateTo && value.dateFrom > value.dateTo) {
+    context.addIssue({ code: "custom", path: ["dateTo"], message: "结束日期不能早于开始日期" });
+  }
+});
 
 export const meetingTimelineSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("SAVED"), meetingId: idSchema, ...rangeFields }).strict(),

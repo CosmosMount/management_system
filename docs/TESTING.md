@@ -64,6 +64,8 @@ Task 手动催促回归使用 `npm run test:e2e -- tests/task-urge.spec.ts`，�
 
 ### 自动化门禁分层
 
+会议列表筛选定向回归使用 `npm run test:e2e -- tests/meeting-filters.spec.ts tests/meeting-filters-ui.spec.ts`，仅通过官方随机隔离数据库、受控服务和禁发保护运行。覆盖组合条件、停用参会人员、北京时间区间交集、最近 7/30/90 天、直接关联与未关联、创建人身份、稳定排序分页、URL 保留与重置、非法参数、加载状态及 Desktop `1440x1000`/窄窗口。同一变更的完成门禁仍需 `npm run check` 和完整 `npm run test:e2e`；筛选输入纯校验纳入受控 Node 套件。
+
 验证政策以根目录 `AGENTS.md` 为准。本节区分日常任务完成与合并/发布验收，不要求每次局部迭代都重跑完整回归：
 
 | 本次变更 | 日常任务完成前的最低验证 |
