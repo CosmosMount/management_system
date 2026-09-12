@@ -71,3 +71,34 @@ export async function updateNotificationPreference(
     },
   });
 }
+
+import {
+  createReminderSetting as createReminderSettingService,
+  deleteReminderSetting as deleteReminderSettingService,
+  listReminderSettings as listReminderSettingsService,
+  updateReminderSetting as updateReminderSettingService,
+} from "@/lib/project-management/application/reminder-setting-service";
+
+export async function listReminderSettings(): Promise<ProjectManagementActionResult<Awaited<ReturnType<typeof listReminderSettingsService>>>> {
+  return runProjectManagementAction({ event: "pm.reminder_setting.list", action: "listReminderSettings", callback: async (log) => {
+    const actor = await getCurrentProjectManagementActor(); log.setActorAccountId(actor.accountId); return listReminderSettingsService(actor);
+  }});
+}
+
+export async function createReminderSetting(input: unknown): Promise<ProjectManagementActionResult<Awaited<ReturnType<typeof createReminderSettingService>>>> {
+  return runProjectManagementAction({ event: "pm.reminder_setting.create", action: "createReminderSetting", callback: async (log) => {
+    const actor = await getCurrentProjectManagementActor(); log.setActorAccountId(actor.accountId); return createReminderSettingService(actor, input);
+  }});
+}
+
+export async function updateReminderSetting(input: unknown): Promise<ProjectManagementActionResult<Awaited<ReturnType<typeof updateReminderSettingService>>>> {
+  return runProjectManagementAction({ event: "pm.reminder_setting.update", action: "updateReminderSetting", callback: async (log) => {
+    const actor = await getCurrentProjectManagementActor(); log.setActorAccountId(actor.accountId); return updateReminderSettingService(actor, input);
+  }});
+}
+
+export async function deleteReminderSetting(input: unknown): Promise<ProjectManagementActionResult<Awaited<ReturnType<typeof deleteReminderSettingService>>>> {
+  return runProjectManagementAction({ event: "pm.reminder_setting.delete", action: "deleteReminderSetting", callback: async (log) => {
+    const actor = await getCurrentProjectManagementActor(); log.setActorAccountId(actor.accountId); return deleteReminderSettingService(actor, input);
+  }});
+}

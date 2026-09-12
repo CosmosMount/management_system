@@ -30,6 +30,8 @@ const SUPER_ADMINISTRATOR_NOTIFICATION_KINDS = new Set<
   "task_terminated",
   "milestone_due",
   "milestone_overdue",
+  "task_activation_overdue",
+  "task_approval_pending_daily",
   "milestone_review_submitted",
   "milestone_review_result",
   "termination_review_submitted",

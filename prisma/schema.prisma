@@ -184,6 +184,13 @@ enum ProjectManagementNotificationChannel {
   FEISHU
 }
 
+enum ProjectManagementReminderKind {
+  MILESTONE_DUE
+  MILESTONE_OVERDUE
+  TASK_ACTIVATION_OVERDUE
+  TASK_APPROVAL_PENDING
+}
+
 enum AuditSource {
   WEB
   CRON
@@ -220,6 +227,8 @@ model Account {
   teamApprovedOrders        PurchaseOrder[]               @relation("PurchaseOrderTeamApprover")
   techGroupApprovedOrders   PurchaseOrder[]               @relation("PurchaseOrderTechGroupApprover")
   notificationPreferences   NotificationPreference[]
+  createdReminderSettings  ProjectManagementReminderSetting[] @relation("ReminderSettingCreatedBy")
+  updatedReminderSettings  ProjectManagementReminderSetting[] @relation("ReminderSettingUpdatedBy")
   inAppNotifications        InAppNotification[]
   auditEvents               DomainAuditEvent[]            @relation("AuditActorAccount")
   requestedProjects         Project[]                     @relation("ProjectRequester")
@@ -1082,6 +1091,24 @@ model NotificationPreference {
   updatedAt DateTime                              @updatedAt @db.Timestamptz(6)
 
   @@unique([accountId, category, channel])
+}
+
+model ProjectManagementReminderSetting {
+  id                String                          @id @default(uuid())
+  kind              ProjectManagementReminderKind
+  timeOfDay         String                          @db.VarChar(5)
+  enabled           Boolean                         @default(true)
+  timezone          String                          @default("Asia/Shanghai") @db.VarChar(64)
+  sortOrder         Int                             @default(0)
+  createdByAccountId String
+  createdBy         Account                         @relation("ReminderSettingCreatedBy", fields: [createdByAccountId], references: [id], onDelete: Restrict)
+  updatedByAccountId String
+  updatedBy         Account                         @relation("ReminderSettingUpdatedBy", fields: [updatedByAccountId], references: [id], onDelete: Restrict)
+  createdAt         DateTime                        @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime                        @updatedAt @db.Timestamptz(6)
+
+  @@unique([kind, timeOfDay])
+  @@index([kind, enabled, timeOfDay])
 }
 
 model InAppNotification {

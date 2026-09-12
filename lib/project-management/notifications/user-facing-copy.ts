@@ -205,6 +205,9 @@ export function normalizeProjectManagementNotificationText(
       const match = value.match(/^Task「([\s\S]*)」有 Milestone 待验收$/);
       return match ? `任务「${match[1]}」有里程碑等待验收` : value;
     }
+    case "task_activation_overdue":
+    case "task_approval_pending_daily":
+      return value;
     case "milestone_review_result":
       return options.context?.summarySource === SYSTEM_DEFAULT_NOTIFICATION_SUMMARY
         ? legacyMilestoneReviewResult(value)
