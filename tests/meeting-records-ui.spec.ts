@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../lib/prisma";
 import { createMeeting } from "../lib/project-management/meetings/service";
-import { actor, atHour, createAccountPerson, createSegment } from "./helpers/project-management-canvas-security-fixtures";
+import { actor, atHour, createAccountPerson, createSegment, createTask } from "./helpers/project-management-canvas-security-fixtures";
 import { expectHealthyPage, loginAsTestUser } from "./helpers/functional-fixtures";
 
 test("完整会议时间范围直接加载，现有滑块可浏览第31天之后的工作", async ({ page, context, baseURL }) => {
@@ -42,6 +42,9 @@ test("超管创建独立会议、预览只读时间线、保存及补充纪要�
   const admin = await createAccountPerson(`会议 UI 超管 ${randomUUID()}`);
   const member = await createAccountPerson(`会议 UI 参与人 ${randomUUID()}`);
   const viewer = await createAccountPerson(`会议 UI 旁观者 ${randomUUID()}`);
+  const project = await prisma.project.create({ data: { name: `会议展示 UI ${randomUUID()}`, description: "会议展示", requesterAccountId: admin.account.id } });
+  const task = await createTask({ ownerAccountId: admin.account.id, title: `会议任务 UI ${randomUUID()}`, team: "英雄", techGroup: "电控", members: [{ personId: admin.person.id, role: "OWNER" }] });
+  const taskRecord = await prisma.task.update({ where: { id: task.taskId }, data: { projectId: project.id } });
   await prisma.systemRoleAssignment.create({ data: { accountId: admin.account.id, role: "SUPER_ADMINISTRATOR", team: "", techGroup: "" } });
   const segment = await createSegment({ accountId: member.account.id, personId: member.person.id, startAt: atHour(9), endAt: atHour(10), content: "会议只读工作" });
   await loginAsTestUser(context, baseURL, { openId: admin.openId, name: admin.person.displayName });
@@ -58,9 +61,15 @@ test("超管创建独立会议、预览只读时间线、保存及补充纪要�
   await page.getByRole("option").filter({ hasText: member.person.displayName }).click();
   await page.getByLabel("工作开始时间（北京时间）", { exact: true }).fill("2026-08-10T08:00");
   await page.getByLabel("工作结束时间（北京时间）", { exact: true }).fill("2026-08-10T18:00");
+  await page.getByRole("combobox", { name: "展示项目", exact: true }).fill(project.name);
+  await page.getByRole("option").filter({ hasText: project.name }).click();
+  await page.getByRole("combobox", { name: "展示任务", exact: true }).fill(taskRecord.title);
+  await page.getByRole("option").filter({ hasText: taskRecord.title }).click();
   await page.getByRole("button", { name: "预览工作时间线", exact: true }).click();
   await expect(page.getByTestId("meeting-timeline")).toBeVisible();
   await expect(page.getByTestId(`timeline-row-person:${member.person.id}`)).toBeVisible();
+  await expect(page.getByTestId(`timeline-row-plan:${task.taskId}`)).toBeVisible();
+  await expect.poll(async () => Number(await page.getByTestId("time-canvas-root").getAttribute("data-range-end-ms"))).toBeGreaterThan(atHour(18).getTime());
   const createRequestPromise = page.waitForRequest((outgoing) => outgoing.method() === "POST" && Boolean(outgoing.headers()["next-action"]) && Boolean(outgoing.postData()?.includes(topic)));
   await page.getByRole("button", { name: "创建会议记录", exact: true }).click();
   const createRequest = await createRequestPromise;
@@ -69,6 +78,9 @@ test("超管创建独立会议、预览只读时间线、保存及补充纪要�
   const detailUrl = page.url().split("?")[0];
   await page.getByRole("link", { name: "编辑会议", exact: true }).click();
   await expect(page).toHaveURL(/\/edit$/);
+  await expect(page.getByRole("button", { name: `移除${taskRecord.title}`, exact: true })).toBeVisible();
+  await page.getByRole("button", { name: `移除${taskRecord.title}`, exact: true }).click();
+  await page.getByRole("combobox", { name: "展示任务", exact: true }).press("Escape");
   await page.getByRole("textbox", { name: "会议纪要", exact: true }).fill("讨论：公开透明\n结论：后续工作继续跟进");
   await page.getByRole("button", { name: "保存修改", exact: true }).click();
   await expect(page.getByText("讨论：公开透明", { exact: false })).toBeVisible();
@@ -78,6 +90,8 @@ test("超管创建独立会议、预览只读时间线、保存及补充纪要�
   await expect(page.getByRole("heading", { name: topic, exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "编辑会议", exact: true })).toHaveCount(0);
   await expect(page.getByTestId("meeting-timeline")).toBeVisible();
+  await expect(page.getByTestId("meeting-display-summary")).toContainText(project.name);
+  await expect(page.getByTestId(`timeline-row-plan:${task.taskId}`)).toBeVisible();
   await expect(page.getByTestId(`segment-block-${segment.id}`)).toBeVisible();
   await page.getByTestId(`segment-block-${segment.id}`).click();
   await expect(page.getByTestId("time-canvas-inspector")).toContainText("只读详情");
@@ -110,6 +124,18 @@ test("长主题、密集人员及纪要不溢出，空工作行支持刷新", as
   await page.goto(`/progress/meetings/${meeting.id}`);
   await expect(page.getByTestId(`timeline-row-person:${member.person.id}`)).toBeVisible();
   await expectHealthyPage(page);
+  await expect(page.getByTestId("time-canvas-root")).toHaveAttribute("data-zoom", "WEEK");
+  for (const name of ["周", "月", "季", "年"]) {
+    await page.getByRole("button", { name, exact: true }).click();
+    const axis = page.getByRole("img", { name: new RegExp(`Asia/Shanghai ${name}级时间轴`) });
+    await expect.poll(() => axis.evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      return Array.from(element.querySelectorAll("span")).some((label) => {
+        const rectangle = label.getBoundingClientRect();
+        return Boolean(label.textContent?.trim()) && rectangle.right > bounds.left && rectangle.left < Math.min(bounds.right, window.innerWidth);
+      });
+    })).toBe(true);
+  }
   await expect(page.getByLabel("查看结束时间", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "刷新时间线", exact: true }).click();
   await expect(page.getByTestId("meeting-timeline")).toBeVisible();

@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import {
   formatCanvasTick as formatTick,
   formatCanvasAxisGroup as formatAxisGroup,
+  formatCanvasDateTime,
 } from "@/components/project-management/time-canvas/time-format";
 import { AXIS_HEIGHT } from "@/components/project-management/time-canvas/time-canvas-layout";
 import { TodayLine } from "@/components/project-management/time-canvas/time-canvas-layers";
@@ -93,6 +94,9 @@ export function TimeAxis({
   rowHeaderWidth: number;
   leadingLabel: string;
 }) {
+  const inRangeTicks = ticks.filter((tick) => tick >= scale.startMs && tick < scale.endMs);
+  const boundaryOnly = inRangeTicks.length === 0;
+  const displayedTicks = boundaryOnly ? [scale.startMs] : inRangeTicks;
   const minorLabelStep = Math.max(
     1,
     Math.ceil(48 / Math.max(1, tickPixelDistance(ticks, scale))),
@@ -109,9 +113,9 @@ export function TimeAxis({
         <span className="truncate">{leadingLabel}</span>
       </div>
       <div className="relative overflow-hidden" aria-label={`${timezone} ${zoomLabels[zoom]}级时间轴`} role="img">
-        {ticks.map((tick, index) => {
+        {displayedTicks.map((tick, index) => {
           const group = formatAxisGroup(tick, zoom);
-          const previousGroup = index > 0 ? formatAxisGroup(ticks[index - 1] ?? tick, zoom) : null;
+          const previousGroup = index > 0 ? formatAxisGroup(displayedTicks[index - 1] ?? tick, zoom) : null;
           return (
           <div
             key={tick}
@@ -125,7 +129,7 @@ export function TimeAxis({
             )}
             {index % minorLabelStep === 0 && (
               <span className="absolute left-1 top-8 whitespace-nowrap text-[11px] text-muted-foreground">
-                {formatTick(tick, zoom)}
+                {boundaryOnly ? formatCanvasDateTime(tick) : formatTick(tick, zoom)}
               </span>
             )}
           </div>

@@ -5,7 +5,8 @@ import { createDomainAuditEventTx } from "@/lib/project-management/audit";
 import { refreshProjectManagementActorTx } from "@/lib/project-management/application/actor-refresh";
 import { notFoundError, ProjectManagementServiceError } from "@/lib/project-management/application/errors";
 import { canManageMeetings } from "./permissions";
-import { createMeetingSchema, listMeetingsSchema, meetingIdSchema, updateMeetingSchema } from "./validation";
+import { createMeetingSchema, listMeetingsSchema, meetingIdSchema, meetingTimelineDisplaySchema, updateMeetingSchema } from "./validation";
+import { validateMeetingDisplay } from "./display";
 
 const meetingInclude = {
   participants: {
@@ -36,6 +37,7 @@ function serializeMeeting(record: Meeting) {
     rangeStart: record.rangeStart.toISOString(),
     rangeEnd: record.rangeEnd.toISOString(),
     minutes: record.minutes,
+    timelineDisplay: meetingTimelineDisplaySchema.parse(record.timelineDisplay),
     version: record.version,
     participants: record.participants.map(({ person }) => serializePerson(person)),
     createdAt: record.createdAt.toISOString(),
@@ -98,12 +100,14 @@ async function validatePeople(tx: Prisma.TransactionClient, personIds: string[],
 
 export async function createMeeting(actor: ProjectManagementActor, input: unknown): Promise<MeetingDto> {
   const parsed = createMeetingSchema.parse(input);
+  const timelineDisplay = parsed.timelineDisplay ?? { projectIds: [], taskIds: [] };
   return prisma.$transaction(async (tx) => {
     assertCanManageMeetings(await refreshProjectManagementActorTx(tx, actor));
     const existing = await tx.meetingRecord.findUnique({ where: { id: parsed.requestId }, include: meetingInclude });
     if (existing) {
       if (existing.createdByAccountId === actor.accountId && existing.version === 0 &&
         existing.topic === parsed.topic && existing.minutes === parsed.minutes &&
+        JSON.stringify(meetingTimelineDisplaySchema.parse(existing.timelineDisplay)) === JSON.stringify(timelineDisplay) &&
         existing.rangeStart.getTime() === parsed.rangeStart.getTime() && existing.rangeEnd.getTime() === parsed.rangeEnd.getTime() &&
         JSON.stringify(existing.participants.map(({ person }) => person.id).sort()) === JSON.stringify([...parsed.personIds].sort())) {
         return serializeMeeting(existing);
@@ -111,11 +115,13 @@ export async function createMeeting(actor: ProjectManagementActor, input: unknow
       throw new ProjectManagementServiceError("DUPLICATE_OPERATION", "该创建请求已经处理，请从会议列表查看结果");
     }
     await validatePeople(tx, parsed.personIds);
+    await validateMeetingDisplay(tx, actor, timelineDisplay);
     const record = await tx.meetingRecord.create({
       data: {
         id: parsed.requestId,
         topic: parsed.topic, rangeStart: parsed.rangeStart, rangeEnd: parsed.rangeEnd, minutes: parsed.minutes,
         createdByAccountId: actor.accountId,
+        timelineDisplay,
         participants: { create: parsed.personIds.map((personId) => ({ personId })) },
       },
       include: meetingInclude,
@@ -135,12 +141,15 @@ export async function updateMeeting(actor: ProjectManagementActor, input: unknow
     assertCanManageMeetings(await refreshProjectManagementActorTx(tx, actor));
     const before = await tx.meetingRecord.findUnique({ where: { id: parsed.meetingId }, include: meetingInclude });
     if (!before) throw notFoundError();
+    const previousDisplay = meetingTimelineDisplaySchema.parse(before.timelineDisplay);
+    const timelineDisplay = parsed.timelineDisplay ?? previousDisplay;
     await validatePeople(tx, parsed.personIds, before.participants.map(({ person }) => person.id));
+    await validateMeetingDisplay(tx, actor, timelineDisplay, previousDisplay);
     const changed = await tx.meetingRecord.updateMany({
       where: { id: parsed.meetingId, version: parsed.expectedVersion },
       data: {
         topic: parsed.topic, rangeStart: parsed.rangeStart, rangeEnd: parsed.rangeEnd,
-        minutes: parsed.minutes, version: { increment: 1 },
+        minutes: parsed.minutes, timelineDisplay, version: { increment: 1 },
       },
     });
     if (!changed.count) throw new ProjectManagementServiceError("STATE_CONFLICT", "会议已被其他管理员修改，请刷新后重新编辑");

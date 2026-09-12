@@ -286,6 +286,7 @@ model MeetingRecord {
   rangeStart         DateTime @db.Timestamptz(6)
   rangeEnd           DateTime @db.Timestamptz(6)
   minutes            String   @default("")
+  timelineDisplay    Json     @default("{\"projectIds\":[],\"taskIds\":[]}")
   version            Int      @default(0)
   createdByAccountId String
   createdBy          Account  @relation(fields: [createdByAccountId], references: [id], onDelete: Restrict)

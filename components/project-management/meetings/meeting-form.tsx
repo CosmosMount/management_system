@@ -4,6 +4,8 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { createMeetingAction, updateMeetingAction } from "@/app/actions/project-management/meetings";
 import { UserMultiSelect } from "@/components/project-management/user-picker";
+import { ProjectMultiSelect } from "@/components/project-management/project-picker";
+import { TaskMultiSelect } from "@/components/project-management/task-picker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -26,10 +28,14 @@ export function MeetingForm({ meeting }: { meeting?: MeetingDto }) {
   const [rangeStart, setRangeStart] = useState(meeting ? isoToShanghaiDateTimeLocal(meeting.rangeStart) : "");
   const [rangeEnd, setRangeEnd] = useState(meeting ? isoToShanghaiDateTimeLocal(meeting.rangeEnd) : "");
   const [minutes, setMinutes] = useState(meeting?.minutes ?? "");
+  const [projectIds, setProjectIds] = useState(meeting?.timelineDisplay.projectIds ?? []);
+  const [taskIds, setTaskIds] = useState(meeting?.timelineDisplay.taskIds ?? []);
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   const [preview, setPreview] = useState<MeetingTimelineInput | null>(null);
   const dirty = topic !== (meeting?.topic ?? "") || minutes !== (meeting?.minutes ?? "") ||
+    JSON.stringify(projectIds) !== JSON.stringify(meeting?.timelineDisplay.projectIds ?? []) ||
+    JSON.stringify(taskIds) !== JSON.stringify(meeting?.timelineDisplay.taskIds ?? []) ||
     rangeStart !== (meeting ? isoToShanghaiDateTimeLocal(meeting.rangeStart) : "") ||
     rangeEnd !== (meeting ? isoToShanghaiDateTimeLocal(meeting.rangeEnd) : "") ||
     JSON.stringify(personIds) !== JSON.stringify(meeting?.participants.map((person) => person.id) ?? []);
@@ -50,9 +56,9 @@ export function MeetingForm({ meeting }: { meeting?: MeetingDto }) {
     requestAnimationFrame(() => formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus());
   }
 
-  const fields = { topic, personIds, minutes, rangeStart: shanghaiDateTimeLocalToIso(rangeStart), rangeEnd: shanghaiDateTimeLocalToIso(rangeEnd) };
+  const fields = { topic, personIds, minutes, timelineDisplay: { projectIds, taskIds }, rangeStart: shanghaiDateTimeLocalToIso(rangeStart), rangeEnd: shanghaiDateTimeLocalToIso(rangeEnd) };
   function showPreview() {
-    const input = { kind: "PREVIEW" as const, personIds, rangeStart: fields.rangeStart, rangeEnd: fields.rangeEnd };
+    const input = { kind: "PREVIEW" as const, personIds, timelineDisplay: fields.timelineDisplay, rangeStart: fields.rangeStart, rangeEnd: fields.rangeEnd };
     const parsed = meetingTimelineSchema.safeParse(input);
     if (!parsed.success) { showErrors(parsed.error.flatten().fieldErrors); return; }
     setFieldErrors({});
@@ -87,6 +93,9 @@ export function MeetingForm({ meeting }: { meeting?: MeetingDto }) {
         <div className="min-w-0 space-y-2"><Label htmlFor="meeting-range-start">工作开始时间（北京时间）</Label><Input id="meeting-range-start" className="min-w-0 max-w-full" type="datetime-local" value={rangeStart} required aria-invalid={Boolean(fieldErrors.rangeStart)} aria-describedby="meeting-start-error" onChange={(event) => { setRangeStart(event.target.value); setPreview(null); }} /><FieldError id="meeting-start-error" messages={fieldErrors.rangeStart} /></div>
         <div className="min-w-0 space-y-2"><Label htmlFor="meeting-range-end">工作结束时间（北京时间）</Label><Input id="meeting-range-end" className="min-w-0 max-w-full" type="datetime-local" value={rangeEnd} required aria-invalid={Boolean(fieldErrors.rangeEnd)} aria-describedby="meeting-end-error" onChange={(event) => { setRangeEnd(event.target.value); setPreview(null); }} /><FieldError id="meeting-end-error" messages={fieldErrors.rangeEnd} /></div>
       </div>
+      <div className="space-y-2"><Label htmlFor="meeting-projects">展示项目</Label><ProjectMultiSelect inputId="meeting-projects" ariaLabel="展示项目" disabled={pending} value={projectIds} onValueChange={(ids) => { setProjectIds(ids); setPreview(null); }} invalid={Boolean(fieldErrors["timelineDisplay.projectIds"] || fieldErrors.timelineDisplay)} ariaDescribedBy="meeting-projects-error" /><FieldError id="meeting-projects-error" messages={fieldErrors["timelineDisplay.projectIds"] ?? fieldErrors.timelineDisplay} /></div>
+      <div className="space-y-2"><Label htmlFor="meeting-tasks">展示任务</Label><TaskMultiSelect inputId="meeting-tasks" ariaLabel="展示任务" disabled={pending} mine={false} value={taskIds} onValueChange={(ids) => { setTaskIds(ids); setPreview(null); }} invalid={Boolean(fieldErrors["timelineDisplay.taskIds"])} ariaDescribedBy="meeting-tasks-error" /><FieldError id="meeting-tasks-error" messages={fieldErrors["timelineDisplay.taskIds"]} /></div>
+      <p className="text-sm text-muted-foreground">可选，仅用于展示时间线，不改变项目、任务或会议参与人。项目内的任务、计划和工作记录随原数据更新。</p>
       <Button type="button" variant="outline" onClick={showPreview}>预览工作时间线</Button>
       {preview && <MeetingTimeline source={preview} />}
       <div className="space-y-2"><Label htmlFor="meeting-minutes">会议纪要</Label><Textarea id="meeting-minutes" className="min-h-56" value={minutes} maxLength={50_000} aria-invalid={Boolean(fieldErrors.minutes)} aria-describedby="meeting-minutes-error" placeholder="记录讨论内容、结论和后续事项，可稍后补充" onChange={(event) => setMinutes(event.target.value)} /><FieldError id="meeting-minutes-error" messages={fieldErrors.minutes} /></div>

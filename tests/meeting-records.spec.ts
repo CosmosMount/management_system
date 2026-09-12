@@ -18,6 +18,49 @@ async function fixture() {
   return { admin, viewer, participant, role, input };
 }
 
+test("会议展示配置只读、动态展开项目、任务迁移及删除兼容", async () => {
+  const { admin, viewer, participant, input } = await fixture();
+  const project = await prisma.project.create({ data: { name: `展示项目 ${randomUUID()}`, description: "会议展示", requesterAccountId: admin.account.id } });
+  const task = await createTask({ ownerAccountId: viewer.account.id, title: "会议展示任务", team: "英雄", techGroup: "电控", members: [{ personId: viewer.person.id, role: "OWNER" }] });
+  await prisma.task.update({ where: { id: task.taskId }, data: { projectId: project.id } });
+  const timelineDisplay = { projectIds: [project.id], taskIds: [task.taskId] };
+  const created = await createMeeting(actor(admin), { ...input, timelineDisplay });
+  expect(created.timelineDisplay).toEqual(timelineDisplay);
+  expect((await createMeeting(actor(admin), { ...input, timelineDisplay: { ...timelineDisplay, taskIds: [task.taskId, task.taskId] } })).id).toBe(created.id);
+  const query = { kind: "SAVED", meetingId: created.id, rangeStart: input.rangeStart, rangeEnd: input.rangeEnd };
+  const emptyPlan = await getMeetingTimeline(actor(viewer), query);
+  expect(emptyPlan.anchors.map((anchor) => anchor.id)).toEqual([task.taskId]);
+  expect(emptyPlan.segments).toEqual([]);
+  const segment = await createSegment({ accountId: viewer.account.id, personId: viewer.person.id, taskId: task.taskId, startAt: atHour(9), endAt: atHour(10), content: "额外工作人员" });
+  await prisma.person.update({ where: { id: viewer.person.id }, data: { status: "INACTIVE" } });
+  const current = await getMeetingTimeline(actor(admin), query);
+  expect(current.segments.map((record) => record.kind === "SEGMENT" ? record.id : null)).toEqual([segment.id]);
+  expect(current.rows.map((row) => row.id)).toEqual(expect.arrayContaining([participant.person.id, viewer.person.id]));
+  expect(current.anchors[0].capabilities.canUpdateMetadata).toBe(false);
+  expect(current.anchors[0].nodes.every((node) => !node.capabilities.canEditDraft)).toBe(true);
+  expect((await getMeetingTimeline(actor(participant), query)).rowPageKey).toBe(current.rowPageKey);
+  expect((await getMeeting({ meetingId: created.id })).participants.map((person) => person.id)).toEqual([participant.person.id]);
+  await prisma.task.update({ where: { id: task.taskId }, data: { projectId: null } });
+  expect((await getMeetingTimeline(actor(admin), query)).anchors).toHaveLength(1);
+  const extra = await createTask({ ownerAccountId: admin.account.id, title: "动态加入任务", team: "英雄", techGroup: "电控", members: [{ personId: admin.person.id, role: "OWNER" }] });
+  await prisma.task.update({ where: { id: extra.taskId }, data: { projectId: project.id } });
+  expect((await getMeetingTimeline(actor(admin), query)).anchors).toHaveLength(2);
+  await prisma.task.update({ where: { id: extra.taskId }, data: { status: "ARCHIVED" } });
+  expect((await getMeetingTimeline(actor(admin), query)).anchors.find((anchor) => anchor.id === extra.taskId)?.status).toBe("ARCHIVED");
+  await prisma.task.update({ where: { id: task.taskId }, data: { deletedAt: new Date() } });
+  const deleted = await getMeetingTimeline(actor(admin), query);
+  expect(deleted.display.unavailableTaskCount).toBe(1);
+  expect(deleted.anchors).toHaveLength(1);
+  expect(deleted.segments).toEqual([]);
+  const { requestId, ...fields } = input;
+  void requestId;
+  const preserved = await updateMeeting(actor(admin), { ...fields, meetingId: created.id, expectedVersion: 0 });
+  expect(preserved.timelineDisplay).toEqual(timelineDisplay);
+  await expectErrorCode(createMeeting(actor(admin), { ...input, requestId: randomUUID(), timelineDisplay }), "VALIDATION_ERROR");
+  const cleared = await updateMeeting(actor(admin), { ...fields, meetingId: created.id, expectedVersion: 1, timelineDisplay: { projectIds: [], taskIds: [] } });
+  expect(cleared.timelineDisplay).toEqual({ projectIds: [], taskIds: [] });
+});
+
 test("仅全局超管写入；事务审计、幂等创建、角色撤销与停用校验", async () => {
   const { admin, viewer, participant, role, input } = await fixture();
   await expectErrorCode(createMeeting(actor(viewer), input), "FORBIDDEN");
@@ -48,16 +91,18 @@ test("并发更新只成功一次，纪要及参与人不被静默覆盖", async
   const second = await createAccountPerson(`会议第二超管 ${randomUUID()}`);
   await prisma.systemRoleAssignment.create({ data: { accountId: second.account.id, role: "SUPER_ADMINISTRATOR", team: "", techGroup: "" } });
   const meeting = await createMeeting(actor(admin), input);
+  const project = await prisma.project.create({ data: { name: "并发展示选择", description: "会议展示", requesterAccountId: admin.account.id } });
   const base = { topic: input.topic, rangeStart: input.rangeStart, rangeEnd: input.rangeEnd, meetingId: meeting.id, expectedVersion: 0 };
   const results = await Promise.allSettled([
-    updateMeeting(actor(admin), { ...base, minutes: "结论 A", personIds: input.personIds }),
-    updateMeeting(actor(second), { ...base, minutes: "结论 B", personIds: [viewer.person.id] }),
+    updateMeeting(actor(admin), { ...base, minutes: "结论 A", personIds: input.personIds, timelineDisplay: { projectIds: [project.id], taskIds: [] } }),
+    updateMeeting(actor(second), { ...base, minutes: "结论 B", personIds: [viewer.person.id], timelineDisplay: { projectIds: [], taskIds: [] } }),
   ]);
   expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
   const rejected = results.find((result) => result.status === "rejected");
   expect(rejected?.status === "rejected" && rejected.reason.code).toBe("STATE_CONFLICT");
   const final = await getMeeting({ meetingId: meeting.id });
   expect(final.version).toBe(1);
+  expect(final.timelineDisplay.projectIds).toEqual(final.minutes === "结论 A" ? [project.id] : []);
   expect(final.participants.map((person) => person.id)).toEqual(final.minutes === "结论 A" ? input.personIds : [viewer.person.id]);
   expect(await prisma.domainAuditEvent.count({ where: { entityId: meeting.id, action: "meeting.update" } })).toBe(1);
 });

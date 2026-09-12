@@ -9,6 +9,17 @@ const rangeFields = {
 const personIds = z.array(idSchema).min(1, "请至少选择一位参与人").max(50, "参与人不能超过 50 位")
   .refine((values) => new Set(values).size === values.length, "参与人不能重复");
 
+const displayIds = (label: string) => z.array(idSchema)
+  .max(50, `展示${label}不能超过 50 个`)
+  .transform((ids) => [...new Set(ids)].sort());
+
+export const meetingTimelineDisplaySchema = z.object({
+  projectIds: displayIds("项目"),
+  taskIds: displayIds("任务"),
+}).strict();
+
+export type MeetingTimelineDisplay = z.infer<typeof meetingTimelineDisplaySchema>;
+
 function validateRange(value: { rangeStart: Date; rangeEnd: Date }, context: z.RefinementCtx) {
   if (!(value.rangeStart instanceof Date) || !(value.rangeEnd instanceof Date)) return;
   if (value.rangeEnd <= value.rangeStart) {
@@ -23,6 +34,7 @@ export const meetingFieldsSchema = z.object({
   personIds,
   ...rangeFields,
   minutes: z.string().max(50_000, "会议纪要不能超过 50000 字").default(""),
+  timelineDisplay: meetingTimelineDisplaySchema.optional(),
 }).strict().superRefine(validateRange);
 
 export const updateMeetingSchema = meetingFieldsSchema.safeExtend({
@@ -40,7 +52,7 @@ export const listMeetingsSchema = z.object({
 
 export const meetingTimelineSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("SAVED"), meetingId: idSchema, ...rangeFields }).strict(),
-  z.object({ kind: z.literal("PREVIEW"), personIds, ...rangeFields }).strict(),
+  z.object({ kind: z.literal("PREVIEW"), personIds, timelineDisplay: meetingTimelineDisplaySchema.optional(), ...rangeFields }).strict(),
 ]).superRefine(validateRange);
 
 export type MeetingFields = z.input<typeof meetingFieldsSchema>;

@@ -2,7 +2,7 @@ import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
 
-const PRISMA_SCHEMA_REVISION = "independent-meeting-record-v1";
+const PRISMA_SCHEMA_REVISION = "meeting-timeline-display-v1";
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;

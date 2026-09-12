@@ -42,7 +42,7 @@ test("独立会议迁移保留旧表和既有数据，重复部署及完整迁�
     await mkdir(migrations);
     const sourceMigrations = path.join(process.cwd(), "prisma/migrations");
     for (const entry of await readdir(sourceMigrations, { withFileTypes: true })) {
-      if (entry.name === "migration_lock.toml" || (entry.isDirectory() && entry.name < "20260912120000_independent_meeting_records")) {
+      if (entry.name === "migration_lock.toml" || (entry.isDirectory() && entry.name < "20260912150000_meeting_timeline_display")) {
         await cp(path.join(sourceMigrations, entry.name), path.join(migrations, entry.name), { recursive: true });
       }
     }
@@ -53,10 +53,13 @@ test("独立会议迁移保留旧表和既有数据，重复部署及完整迁�
     await target.connect();
     const accountId = randomUUID();
     await target.query('INSERT INTO "Account" (id, "updatedAt") VALUES ($1, NOW())', [accountId]);
+    const oldMeetingId = randomUUID();
+    await target.query(`INSERT INTO "MeetingRecord" (id, topic, minutes, version, "rangeStart", "rangeEnd", "createdByAccountId", "updatedAt") VALUES ($1, '升级前会议', '保留纪要', 3, NOW(), NOW() + INTERVAL '1 day', $2, NOW())`, [oldMeetingId, accountId]);
     await target.query('CREATE TABLE "Meeting" (id TEXT PRIMARY KEY, content TEXT); CREATE TABLE "ProjectMeeting" (id TEXT PRIMARY KEY, content TEXT)');
     await target.query(`INSERT INTO "Meeting" VALUES ('historical-meeting', '保留旧独立会议'); INSERT INTO "ProjectMeeting" VALUES ('historical-project-meeting', '保留旧项目会议')`);
     run("npm", ["run", "db:deploy"]);
     run("npm", ["run", "db:deploy"]);
+    expect((await target.query('SELECT minutes, version, "timelineDisplay" FROM "MeetingRecord" WHERE id=$1', [oldMeetingId])).rows).toEqual([{ minutes: "保留纪要", version: 3, timelineDisplay: { projectIds: [], taskIds: [] } }]);
     expect((await target.query('SELECT content FROM "Meeting"')).rows).toEqual([{ content: "保留旧独立会议" }]);
     expect((await target.query('SELECT content FROM "ProjectMeeting"')).rows).toEqual([{ content: "保留旧项目会议" }]);
     expect((await target.query('SELECT id FROM "Account" WHERE id=$1', [accountId])).rows).toHaveLength(1);

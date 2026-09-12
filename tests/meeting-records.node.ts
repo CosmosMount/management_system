@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
 import { canManageMeetings } from "../lib/project-management/meetings/permissions";
-import { meetingFieldsSchema, meetingTimelineSchema } from "../lib/project-management/meetings/validation";
+import { meetingFieldsSchema, meetingTimelineSchema, meetingTimelineDisplaySchema } from "../lib/project-management/meetings/validation";
 import { shanghaiDateTimeLocalToIso } from "../lib/project-management/date-time";
 import type { ProjectManagementActor } from "../lib/project-management/identity";
 
@@ -36,4 +36,13 @@ test("已保存会议时间线输入不接受伪造人员范围", () => {
   const saved = { kind: "SAVED", meetingId: randomUUID(), rangeStart: fields.rangeStart, rangeEnd: fields.rangeEnd };
   assert.equal(meetingTimelineSchema.safeParse(saved).success, true);
   assert.equal(meetingTimelineSchema.safeParse({ ...saved, personIds: fields.personIds }).success, false);
+  assert.equal(meetingTimelineSchema.safeParse({ ...saved, timelineDisplay: { projectIds: [], taskIds: [] } }).success, false);
+});
+
+test("会议展示配置规范化、数量上限和非法标识", () => {
+  const projectId = randomUUID();
+  assert.deepEqual(meetingTimelineDisplaySchema.parse({ projectIds: [projectId, projectId], taskIds: [] }), { projectIds: [projectId], taskIds: [] });
+  for (const config of [{ projectIds: ["invalid"], taskIds: [] }, { projectIds: [], taskIds: Array.from({ length: 51 }, () => randomUUID()) }, { projectIds: [], taskIds: [], projectId }]) {
+    assert.equal(meetingTimelineDisplaySchema.safeParse(config).success, false);
+  }
 });
